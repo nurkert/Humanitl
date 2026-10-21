@@ -37,11 +37,13 @@ import '../providers/findings_pause.dart';
 import '../providers/flows.dart' show flowDetailProvider;
 import '../providers/note.dart';
 import '../providers/now.dart';
+import '../providers/recorder_health.dart';
 import '../providers/selection.dart';
 import '../rule_sentence.dart';
 import '../../../core/domain/websocket.dart';
 import 'block_button.dart';
 import 'note_field.dart';
+import 'recorder_pause.dart';
 import 'release_valve.dart';
 import 'remember_grid.dart';
 
@@ -266,6 +268,11 @@ class _ActionBarState extends ConsumerState<ActionBar> {
     // The same predicate the keys of the pause read: what is drawn and what
     // `S`, `P` and `Esc` act on can never differ (HUM-049).
     final bool pauseOpen = ref.watch(findingsPauseVisibleProvider);
+    // Die Pause vor der ersten Freigabe während einer Störung der
+    // Aufzeichnung (HUM-250). Die Pause mit offenen Funden kommt zuerst; erst
+    // „Trotzdem senden" dort führt hierher, und diese Pause schließt jene
+    // beim Aufgehen, also steht immer höchstens eine.
+    final RecorderPauseState recorderPause = ref.watch(recorderPauseProvider);
     // The control that acted shows the same 120 ms fill as a mouse click,
     // whether a key or the pointer took the decision (`docs/UX.md` 5.3), and
     // keeps it while the answer is on its way (2.5). Nothing greys out: a
@@ -560,7 +567,22 @@ class _ActionBarState extends ConsumerState<ActionBar> {
               switchInCurve: HMotion.enter,
               switchOutCurve: HMotion.exit,
               transitionBuilder: findingsPauseTransition,
-              child: pauseOpen
+              child: recorderPause.isOpen
+                  ? RecorderPauseView(
+                      key: const ValueKey<String>('recorder-pause'),
+                      onSend:
+                          recorderPause == RecorderPauseState.armed &&
+                              acting == null
+                          ? () => unawaited(
+                              ref
+                                  .read(recorderPauseProvider.notifier)
+                                  .confirm(),
+                            )
+                          : null,
+                      onBack: () =>
+                          ref.read(recorderPauseProvider.notifier).close(),
+                    )
+                  : pauseOpen
                   ? FindingsPause(
                       key: const ValueKey<String>('pause'),
                       count: findings.count,

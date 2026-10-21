@@ -2078,3 +2078,80 @@ async fn a_masked_key_stands_neither_in_the_host_nor_in_a_mixed_encoded_path() {
         .unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(headers_json, r#"[["host","••••.evil.example"]]"#);
 }
+
+/// Ein Schreibfehler, der jede Zeile trifft, meldet sich einmal und nicht je
+/// Flow; schreibt die Aufzeichnung wieder, sagt `RECORDER_005` das, und
+/// `outage` ist wieder leer (HUM-250).
+///
+/// Die Störung kommt aus einem Trigger, der jedes `INSERT` in `flows`
+/// abbricht: von außen gesehen dasselbe wie eine volle Platte, nur ohne eine
+/// zu füllen.
+#[tokio::test]
+async fn a_write_failure_reports_once_and_its_end_once() {
+    let harness = Harness::open();
+    harness.recorder.flush().await;
+    let mut diagnostics = harness.recorder.diagnostics();
+    let conn = rusqlite::Connection::open(&harness.db).unwrap_or_else(|err| panic!("{err}"));
+    conn.execute_batch(
+        "CREATE TRIGGER hum250_fail BEFORE INSERT ON flows \
+         BEGIN SELECT RAISE(ABORT, 'simulated write failure'); END;",
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
+
+    let lost: Vec<FlowId> = (0..3).map(|_| FlowId::new()).collect();
+    for flow in &lost {
+        harness.recorder.apply(&received(
+            *flow,
+            "api.github.com",
+            "/lost",
+            SystemTime::now(),
+        ));
+        harness.recorder.flush().await;
+    }
+    let mut codes = Vec::new();
+    while let Ok(diagnostic) = diagnostics.try_recv() {
+        codes.push(diagnostic.code.as_str());
+    }
+    assert_eq!(codes, ["RECORDER_003"]);
+    let outage = harness.recorder.outage();
+    assert_eq!(outage.len(), 1);
+    assert!(
+        outage[0].1.why.contains("simulated write failure"),
+        "{}",
+        outage[0].1.why
+    );
+
+    conn.execute_batch("DROP TRIGGER hum250_fail;")
+        .unwrap_or_else(|err| panic!("{err}"));
+    let kept = FlowId::new();
+    harness.recorder.apply(&received(
+        kept,
+        "api.github.com",
+        "/kept",
+        SystemTime::now(),
+    ));
+    harness.recorder.flush().await;
+    let mut codes = Vec::new();
+    while let Ok(diagnostic) = diagnostics.try_recv() {
+        codes.push(diagnostic.code.as_str());
+    }
+    assert_eq!(codes, ["RECORDER_005"]);
+    assert!(harness.recorder.outage().is_empty());
+    assert!(
+        harness
+            .recorder
+            .get_flow(kept)
+            .await
+            .unwrap_or_else(|err| panic!("{err}"))
+            .is_some()
+    );
+    // Was während der Störung kam, fehlt; nachgetragen wird es nicht.
+    assert!(
+        harness
+            .recorder
+            .get_flow(lost[0])
+            .await
+            .unwrap_or_else(|err| panic!("{err}"))
+            .is_none()
+    );
+}

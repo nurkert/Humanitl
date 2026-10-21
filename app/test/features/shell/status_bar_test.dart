@@ -1,7 +1,8 @@
 // Die Auslastung der Warteschlange in der Statusleiste (HUM-058, Zeile 16,
 // übernommen von HUM-057): unter 80 % nichts, ab 80 % Warnfarbe, ab 100 % rot mit
-// `LIMIT_002`.
+// `LIMIT_002`. Dazu die Störung der Aufzeichnung (HUM-250).
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -17,6 +18,7 @@ import 'package:humanitl/features/shell/widgets/status_bar.dart';
 import 'package:humanitl/l10n/l10n.dart';
 
 import '../intercept/fixtures.dart';
+import '../intercept/harness.dart' as harness;
 
 /// Die Grenzen dieser Tests: zehn Flüsse, eine Million Bytes.
 const ConfigValues _limits = ConfigValues(
@@ -226,5 +228,89 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Queue 10/10 · 0 B'), findsOneWidget);
+  });
+
+  // HUM-250: Meldet der Daemon, dass die Aufzeichnung nicht schreibt, sagt die
+  // Statusleiste es, jede Karte trägt den Hinweis, und die erste Freigabe der
+  // Sitzung hält an einer Pause. Mit `RECORDER_005` verschwinden die
+  // Hinweise; die Bestätigung gilt für die Sitzung, nicht für die Störung.
+  testWidgets('recorder_failure_marks_cards', (WidgetTester tester) async {
+    const Diagnostic failure = Diagnostic(
+      code: 'RECORDER_003',
+      severity: Severity.error,
+      title: 'Aufzeichnung konnte nicht schreiben',
+      why: 'could not commit a recorder transaction (database or disk is full)',
+    );
+    const Diagnostic recovered = Diagnostic(
+      code: 'RECORDER_005',
+      severity: Severity.info,
+      title: 'Aufzeichnung läuft wieder',
+      why: 'the recording writes again',
+    );
+    final FakeDaemonClient client = harness.fakeDaemon(<ScriptedEvent>[
+      ScriptedEvent(
+        Duration.zero,
+        (FakeSessionState state, DateTime now) =>
+            FlowEvent.diagnostic(at: now, diagnostic: failure),
+      ),
+      ...holdScript(<FlowDetail>[
+        harness.held(1),
+        harness.held(2, host: 'api.github.com', apex: 'github.com'),
+        harness.held(3, host: 'pypi.org', apex: 'pypi.org'),
+      ]),
+      ScriptedEvent(
+        const Duration(seconds: 5),
+        (FakeSessionState state, DateTime now) =>
+            FlowEvent.diagnostic(at: now, diagnostic: recovered),
+      ),
+    ]);
+    await harness.pumpIntercept(tester, client: client);
+    await harness.playScript(tester);
+
+    const Key notRecorded = Key('intercept-card-not-recorded');
+    const Key pause = Key('intercept-recorder-pause');
+    expect(find.byKey(const Key('status-recorder-disrupted')), findsOneWidget);
+    expect(find.text('Recording disrupted'), findsOneWidget);
+    expect(find.text('RECORDER_003'), findsWidgets);
+    expect(find.byKey(notRecorded), findsOneWidget);
+
+    // Die erste Freigabe geht nicht hinaus, sondern hält an der Pause.
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(find.byKey(pause), findsOneWidget);
+    expect(client.decisions, isEmpty);
+
+    // Ein `S` sofort danach überspringt sie nicht: Der Knopf nimmt erst nach
+    // `HMotion.rearm` an.
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyS);
+    await tester.pump();
+    expect(client.decisions, isEmpty);
+    expect(find.byKey(pause), findsOneWidget);
+
+    await tester.pump(HMotion.rearm);
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('intercept-recorder-pause-send')));
+    await tester.pump();
+    await tester.pump();
+    expect(client.decisions, hasLength(1));
+    expect(client.decisions.single.flowId, testFlowId(1));
+
+    // Die nächste Anfrage trägt den Hinweis auch, und ihre Freigabe geht ohne
+    // zweite Pause: einmal je Sitzung.
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pump();
+    expect(find.byKey(notRecorded), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(pause), findsNothing);
+    expect(client.decisions, hasLength(2));
+
+    // `RECORDER_005`: Statusleiste und Hinweis sind weg.
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('status-recorder-disrupted')), findsNothing);
+    expect(find.byKey(notRecorded), findsNothing);
   });
 }

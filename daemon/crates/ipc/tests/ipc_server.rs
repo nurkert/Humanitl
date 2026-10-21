@@ -1328,3 +1328,290 @@ async fn get_flow_carries_the_diagnostics_of_the_flow() {
         daemon.shutdown().await;
     }
 }
+
+/// `GetFlow` über einen gehaltenen Flow, dessen Aufzeichnung nur die Zeile
+/// und keine Nachricht hat, liefert die Kopfzeilen aus der Live-Registry
+/// (HUM-250, aus dem Review von HUM-058).
+///
+/// Ohne sie käme eine nachgebaute Anfrage ohne Kopfzeilen zurück, und ein
+/// `Upgrade: websocket` der gehaltenen bliebe verschwiegen. Die Kopfzeilen
+/// gehen dabei durch dieselben Masken wie in die Aufzeichnung: Der
+/// Zugangsschlüssel steht als `••••` da, nie im Klartext (HUM-140).
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Aufbau, Abfrage und drei Prüfungen gehören zusammen.
+async fn get_flow_of_a_held_flow_takes_the_request_from_the_registry() {
+    use humanitl_core::HeaderMap;
+    use humanitl_core::http::HeaderValue;
+    use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
+
+    const SECRET: &str = "sk-live-0123456789abcdef";
+
+    let dir = tempfile::tempdir().unwrap();
+    let recorder = Recorder::open(
+        &dir.path().join("humanitl.db"),
+        &dir.path().join("blobs"),
+        RecorderSettings::default(),
+    )
+    .unwrap();
+    recorder.mask_secret(SECRET, None);
+    let session = SessionId::new();
+    recorder.start_session(&SessionMeta {
+        id: session,
+        started_at: SystemTime::now(),
+        sandbox_profile: "default".to_owned(),
+        llm_endpoint: None,
+        work_dir: "/work".to_owned(),
+        agent: "opencode".to_owned(),
+    });
+    let daemon = {
+        let recorder = recorder.clone();
+        Daemon::start_with(&Limits::default(), move |server| {
+            server.with_recorder(recorder)
+        })
+        .await
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert("host", HeaderValue::from_static("ws.example.com"));
+    headers.insert("connection", HeaderValue::from_static("Upgrade"));
+    headers.insert("upgrade", HeaderValue::from_static("websocket"));
+    headers.insert(
+        "authorization",
+        HeaderValue::from_str(&format!("Bearer {SECRET}")).unwrap(),
+    );
+    headers.insert(
+        "content-encoding",
+        HeaderValue::from_str(&format!("x-{SECRET}")).unwrap(),
+    );
+    let mut body = BodyRef::detached([0; 32], 0);
+    body.content_type = Some(format!("text/plain; k={SECRET}"));
+    let request = HttpRequest::new(
+        Method::GET,
+        Scheme::Https,
+        Authority::with_scheme(HostName::Dns("ws.example.com".to_owned()), Scheme::Https),
+        "/v1/realtime",
+    )
+    .with_headers(headers)
+    .with_body(body);
+    let mut flow = Flow::new(FlowId::new(), session, SystemTime::now(), request);
+    flow.apply(
+        TransitionInput::Analyze { findings: vec![] },
+        SystemTime::now(),
+    )
+    .unwrap();
+    let id = flow.id;
+    // Nur die Zeile, keine Nachricht: so sieht eine Aufzeichnung aus, deren
+    // Kopfzeilen nicht geschrieben wurden.
+    recorder.apply(&flow.received_event());
+    recorder.flush().await;
+    daemon
+        .queue
+        .registry()
+        .insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+    let held = daemon
+        .queue
+        .hold(&mut flow, Instant::now() + Duration::from_secs(30))
+        .unwrap();
+
+    let mut client = daemon.client().await;
+    let detail = client
+        .get_flow(v1::FlowRef {
+            flow_id: id.to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let request = detail.request.expect("the detail carries the request");
+    let shown: Vec<(String, String)> = request
+        .headers
+        .iter()
+        .map(|header| {
+            (
+                header.name.clone(),
+                String::from_utf8_lossy(&header.value).into_owned(),
+            )
+        })
+        .collect();
+    assert!(
+        shown.contains(&("upgrade".to_owned(), "websocket".to_owned())),
+        "{shown:?}"
+    );
+    assert!(
+        shown.contains(&("authorization".to_owned(), "Bearer ••••".to_owned())),
+        "{shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|(_, value)| value.contains(SECRET)),
+        "the key never leaves in clear: {shown:?}"
+    );
+    // Auch die Angaben zum Body kommen maskiert (HUM-250, Review).
+    let body = request.body.expect("the live body reference");
+    assert_eq!(body.content_type, "text/plain; k=••••");
+    assert_eq!(body.content_encoding, "x-••••");
+
+    drop(held);
+    drop(client);
+    daemon.shutdown().await;
+}
+
+/// Während einer Störung fehlt die Zeile des Flows ganz, und `GetFlow` fällt
+/// auf die Registry zurück. Auch dort verlässt der Zugangsschlüssel den
+/// Daemon nur maskiert: in Kopfzeilen, Pfad und Ziel (HUM-250, Review).
+#[tokio::test]
+async fn get_flow_from_the_registry_alone_is_masked_like_the_recording() {
+    use humanitl_core::HeaderMap;
+    use humanitl_core::http::HeaderValue;
+    use humanitl_recorder::{Recorder, RecorderSettings};
+
+    const SECRET: &str = "sk-live-0123456789abcdef";
+
+    let dir = tempfile::tempdir().unwrap();
+    let recorder = Recorder::open(
+        &dir.path().join("humanitl.db"),
+        &dir.path().join("blobs"),
+        RecorderSettings::default(),
+    )
+    .unwrap();
+    recorder.mask_secret(SECRET, None);
+    let daemon = {
+        let recorder = recorder.clone();
+        Daemon::start_with(&Limits::default(), move |server| {
+            server.with_recorder(recorder)
+        })
+        .await
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_str(&format!("Bearer {SECRET}")).unwrap(),
+    );
+    let request = HttpRequest::new(
+        Method::GET,
+        Scheme::Https,
+        Authority::with_scheme(HostName::Dns("api.example.com".to_owned()), Scheme::Https),
+        format!("/v1/x?key={SECRET}"),
+    )
+    .with_headers(headers)
+    .with_body(BodyRef::detached([0; 32], 0));
+    let session = SessionId::new();
+    let flow = Flow::new(FlowId::new(), session, SystemTime::now(), request);
+    // Keine Zeile in der Aufzeichnung: nur die Registry kennt den Flow.
+    daemon
+        .queue
+        .registry()
+        .insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+
+    let mut client = daemon.client().await;
+    let detail = client
+        .get_flow(v1::FlowRef {
+            flow_id: flow.id.to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let shown = format!("{detail:?}");
+    assert!(!shown.contains(SECRET), "the key leaves in clear: {shown}");
+    let request = detail.request.expect("the detail carries the request");
+    assert_eq!(request.path_and_query, "/v1/x?key=••••");
+    assert!(
+        request.headers.iter().any(
+            |header| header.name == "authorization" && header.value == "Bearer ••••".as_bytes()
+        ),
+        "{:?}",
+        request.headers
+    );
+
+    drop(client);
+    daemon.shutdown().await;
+}
+
+/// Wer sich während einer Störung der Aufzeichnung verbindet, bekommt ihren
+/// Befund als erstes Ereignis, obwohl er im Strom längst vorbei ist
+/// (HUM-250).
+#[tokio::test]
+async fn a_late_subscriber_hears_of_a_running_recorder_outage() {
+    use humanitl_recorder::{Recorder, RecorderSettings};
+
+    let dir = tempfile::tempdir().unwrap();
+    let recorder = Recorder::open(
+        &dir.path().join("humanitl.db"),
+        &dir.path().join("blobs"),
+        RecorderSettings::default(),
+    )
+    .unwrap();
+    // Ein Flow ohne Sitzung: Seine Zeile scheitert, und die Aufzeichnung ist
+    // gestört, bis eine Transaktion wieder ohne Fehler durchgeht.
+    recorder.apply(&received(SessionId::new(), "api.example.com").received_event());
+    recorder.flush().await;
+    assert_eq!(recorder.outage().len(), 1);
+
+    let daemon = {
+        let recorder = recorder.clone();
+        Daemon::start_with(&Limits::default(), move |server| {
+            server.with_recorder(recorder)
+        })
+        .await
+    };
+    let mut client = daemon.client().await;
+    let mut stream = client
+        .subscribe(v1::SubscribeRequest::default())
+        .await
+        .unwrap()
+        .into_inner();
+    let first = next_event(&mut stream).await;
+    let Some(v1::flow_event::Event::Diagnostic(diagnostic)) = first.event else {
+        panic!("the outage comes first, got {first:?}");
+    };
+    assert_eq!(diagnostic.code, "RECORDER_003");
+
+    drop(stream);
+    drop(client);
+    daemon.shutdown().await;
+}
+
+/// Ein Schlüssel als registrierbarer Hostname steht auch im Rückfall von
+/// `GetFlow` in keiner Domain im Klartext: weder in `summary.apex` noch in
+/// `domain.apex` (HUM-250, Review Runde 2).
+#[tokio::test]
+async fn get_flow_from_the_registry_masks_a_secret_in_the_apex() {
+    use humanitl_recorder::{Recorder, RecorderSettings};
+
+    const SECRET: &str = "sk-live-0123456789abcdef";
+
+    let dir = tempfile::tempdir().unwrap();
+    let recorder = Recorder::open(
+        &dir.path().join("humanitl.db"),
+        &dir.path().join("blobs"),
+        RecorderSettings::default(),
+    )
+    .unwrap();
+    recorder.mask_secret(SECRET, None);
+    let daemon = {
+        let recorder = recorder.clone();
+        Daemon::start_with(&Limits::default(), move |server| {
+            server.with_recorder(recorder)
+        })
+        .await
+    };
+    let session = SessionId::new();
+    let flow = received(session, &format!("{SECRET}.com"));
+    daemon
+        .queue
+        .registry()
+        .insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+
+    let mut client = daemon.client().await;
+    let detail = client
+        .get_flow(v1::FlowRef {
+            flow_id: flow.id.to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let shown = format!("{detail:?}");
+    assert!(!shown.contains(SECRET), "the key leaves in clear: {shown}");
+
+    drop(client);
+    daemon.shutdown().await;
+}

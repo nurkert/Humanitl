@@ -939,6 +939,14 @@ Blob-Speicher nicht benutzbar
 
 **Fix.** `CopyCommand` mit `ls -ld` und `df -h` auf das Verzeichnis — Rechte oder Platz.
 
+#### RECORDER_005
+
+Aufzeichnung läuft wieder
+
+**Auslöser.** Der Schreib-Thread hat nach einer gemeldeten Störung wieder eine Transaktion ohne Fehler geschrieben.
+
+**Fix.** Kein Fix: Was während der Störung geschah, fehlt in der History und wird nicht nachgetragen.
+
 ### Bereich limits
 
 #### LIMIT_001

@@ -12,6 +12,7 @@ import '../../../core/text/format.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../../intercept/providers/flows.dart';
+import '../../intercept/providers/recorder_health.dart';
 import '../queue_pressure.dart';
 
 /// The status bar.
@@ -81,6 +82,7 @@ class StatusBar extends ConsumerWidget {
                 ),
               ],
               const Spacer(),
+              const RecorderStatusLabel(),
               const QueuePressureLabel(),
               Text(
                 info.hasSession
@@ -91,6 +93,44 @@ class StatusBar extends ConsumerWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// "Recording disrupted", while the daemon says that nothing is recorded
+/// (HUM-250).
+///
+/// Zeichnet nichts, solange die Aufzeichnung schreibt. Während einer Störung
+/// steht hier der Code des ersten Befunds und der Satz in der Farbe des
+/// Fehlers: das Rot-Orange, das dieses Programm für einen Fehler hat, nicht
+/// das Rot des Blockierens (`docs/UX.md` 3.3). Der Zustand kommt vom Daemon
+/// (`recorderHealthProvider`); hier wird nichts gefolgert.
+class RecorderStatusLabel extends ConsumerWidget {
+  /// Creates the label.
+  const RecorderStatusLabel({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final RecorderOutage? outage = ref.watch(recorderHealthProvider);
+    if (outage == null) {
+      return const SizedBox.shrink();
+    }
+    final HTokens tokens = HTheme.of(context);
+    final Color color = tokens.stateTextColor(HFlowState.error);
+    return Padding(
+      padding: EdgeInsets.only(right: tokens.spacing.x3),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          HBadge(text: outage.diagnostic.code, color: color, mono: true),
+          SizedBox(width: tokens.spacing.x2),
+          Text(
+            context.l10n.shellStatusRecorderDisrupted,
+            key: const Key('status-recorder-disrupted'),
+            style: tokens.typography.ui11.medium.tinted(color),
+          ),
+        ],
       ),
     );
   }

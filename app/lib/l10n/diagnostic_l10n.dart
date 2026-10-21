@@ -183,6 +183,7 @@ abstract final class DiagnosticL10n {
       'RECORDER_002' => (l10n.diagRECORDER002Title, l10n.diagRECORDER002Why),
       'RECORDER_003' => (l10n.diagRECORDER003Title, l10n.diagRECORDER003Why),
       'RECORDER_004' => (l10n.diagRECORDER004Title, l10n.diagRECORDER004Why),
+      'RECORDER_005' => (l10n.diagRECORDER005Title, l10n.diagRECORDER005Why),
       'RULES_001' => (l10n.diagRULES001Title, l10n.diagRULES001Why),
       'RULES_002' => (l10n.diagRULES002Title, l10n.diagRULES002Why),
       'RULES_003' => (l10n.diagRULES003Title, l10n.diagRULES003Why),
