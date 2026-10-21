@@ -4,7 +4,7 @@
 //! Im normalen Lauf übersprungen; gemessen mit
 //!
 //! ```sh
-//! cargo test -p humanitl-audit --release --test bench -- --ignored --nocapture
+//! cargo test -p humanitl-audit-log --release --test bench -- --ignored --nocapture
 //! ```
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -14,8 +14,9 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use humanitl_audit::kinds::FlowReceived;
-use humanitl_audit::query::{self, QueryFilter};
 use humanitl_audit::{Anchor, AuditVerifier, GENESIS_PREV, RecordBody, RecordKind};
+use humanitl_audit_log::VerifyFile as _;
+use humanitl_audit_log::query::{self, QueryFilter};
 use humanitl_core::{Authority, BodyRef, FlowId, HostName, HttpRequest, Method, Scheme};
 
 const RECORDS: u64 = 100_000;

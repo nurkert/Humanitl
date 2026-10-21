@@ -1,4 +1,5 @@
-//! Der Schreiber des Audit-Logs (HUM-050).
+//! Der Schreiber des Audit-Logs (HUM-050, aus `humanitl-audit` hierher
+//! gezogen mit HUM-155).
 //!
 //! Genau ein Thread schreibt, und alle anderen schicken ihm Records über einen
 //! Kanal: Es gibt keinen parallelen Zugriff auf die Datei, und `seq` und der
@@ -50,7 +51,8 @@
 //! `fsync_interval`, außerdem vor jedem Anker und beim Beenden.
 //!
 //! **Aufbewahrung.** [`AuditHandle::prune`] löscht den Anfang der Kette im
-//! selben Thread, der anhängt (HUM-157); wie und mit welchem Beleg, steht in
+//! selben Thread, der anhängt (HUM-157); wie und mit welchem Beleg, beschreibt
+//! `humanitl_audit::retention`, die Schritte auf der Datei stehen in
 //! [`crate::retention`].
 
 use std::fmt;
@@ -74,13 +76,18 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use zeroize::Zeroizing;
 
-use crate::Anchor;
-use crate::canonical::canonical_json;
-use crate::key::{AuditKey, KEY_LEN};
-use crate::kinds::{AnchorData, AuditResumed, DaemonStopped, RecordKind};
-use crate::record::{AuditRecord, GENESIS_PREV, NO_SESSION, RecordBody, format_ts, mac_matches};
-use crate::retention::{self, AuditPruned, Cut, PruneLimits, PruneOutcome, PruneReport};
-use crate::verify::{AuditVerifier, set_aside_fix};
+use humanitl_audit::Anchor;
+use humanitl_audit::canonical::canonical_json;
+use humanitl_audit::key::{AuditKey, KEY_LEN};
+use humanitl_audit::kinds::{AnchorData, AuditResumed, DaemonStopped, RecordKind};
+use humanitl_audit::record::{
+    AuditRecord, GENESIS_PREV, NO_SESSION, RecordBody, format_ts, mac_matches,
+};
+use humanitl_audit::retention::{AuditPruned, PRUNED_KIND, PruneLimits, PruneOutcome, PruneReport};
+use humanitl_audit::verify::{AuditVerifier, set_aside_fix};
+
+use crate::retention::{self, Cut};
+use crate::verify::VerifyFile as _;
 
 /// Vorgabe für `audit.anchor_every`.
 pub const DEFAULT_ANCHOR_EVERY: u32 = 100;
@@ -92,8 +99,7 @@ pub const FSYNC_INTERVAL: Duration = Duration::from_secs(1);
 pub const LOG_MODE: u32 = 0o600;
 /// Rechte des Audit-Verzeichnisses.
 pub const LOG_DIR_MODE: u32 = 0o700;
-/// So lang wird keine Zeile; eine längere am Ende der Datei ist kein Record.
-pub const MAX_LINE_BYTES: u64 = 1024 * 1024;
+pub use humanitl_audit::record::MAX_LINE_BYTES;
 
 /// So viele Befunde warten höchstens im Strom.
 const DIAGNOSTIC_BUFFER: usize = 64;
@@ -205,7 +211,7 @@ impl AuditHandle {
 
     /// Löscht den Anfang der Kette: jeden Record, der vor `before`
     /// geschrieben wurde, und dokumentiert den Schnitt mit `audit.pruned`
-    /// (HUM-157, [`crate::retention`]). Blockiert, bis der Lauf durch ist.
+    /// (HUM-157, `humanitl_audit::retention`). Blockiert, bis der Lauf durch ist.
     ///
     /// `anchors` sind die Anker aus `audit_anchors`; gegen sie und den
     /// Schlüssel wird die Kette vor dem Löschen geprüft. `None`, wenn kein
@@ -682,7 +688,8 @@ impl Chain {
         Some(record)
     }
 
-    /// Ein Lauf der Aufbewahrung; die Schritte stehen in [`crate::retention`].
+    /// Ein Lauf der Aufbewahrung; beschrieben in `humanitl_audit::retention`,
+    /// die Schritte auf der Datei in [`crate::retention`].
     fn prune(
         &mut self,
         cutoff: Option<DateTime<Utc>>,
@@ -723,7 +730,7 @@ impl Chain {
         // hier, damit sein Ergebnis zählt.
         let data = RecordKind::AuditPruned(cut.record(cutoff, max_bytes)).data();
         if self
-            .append(NO_SESSION.to_owned(), retention::PRUNED_KIND, data)
+            .append(NO_SESSION.to_owned(), PRUNED_KIND, data)
             .is_none()
         {
             return Err(not_writable(

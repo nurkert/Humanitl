@@ -29,6 +29,13 @@ pub const GENESIS_PREV: &str = "000000000000000000000000000000000000000000000000
 /// `session` eines Records, der zu keiner Sitzung gehört.
 pub const NO_SESSION: &str = "-";
 
+/// So lang wird keine Zeile; eine längere am Ende der Datei ist kein Record.
+///
+/// Der Schreiber in `humanitl-audit-log` liest das Ende der Datei bis zu
+/// dieser Länge zurück, und die Aufbewahrung rechnet mit ihr
+/// ([`crate::retention::MIN_MAX_BYTES`]).
+pub const MAX_LINE_BYTES: u64 = 1024 * 1024;
+
 /// Das Format jedes Zeitstempels im Log: UTC, Mikrosekunden, immer `Z`.
 ///
 /// Ausdrücklich und nicht über `serde`: `chrono` schreibt je nach Feature mal

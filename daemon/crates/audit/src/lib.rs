@@ -1,4 +1,10 @@
-//! Append-only Audit-Log mit Hash-Kette und Prüfung (HUM-050).
+//! Append-only Audit-Log mit Hash-Kette und Prüfung (HUM-050): der Kern.
+//!
+//! Diese Crate gehört zum Kern (`docs/ARCHITECTURE.md` 2): kein IO, kein
+//! async. Sie öffnet keine Datei; Kanonisierung, Record, Arten und Prüfung
+//! sind reine Funktionen über Werten und Lesern. Den Schreiber, die Datei des
+//! Schlüssels und alles, was `audit.jsonl` öffnet, enthält der Adapter
+//! `humanitl-audit-log` (HUM-155).
 //!
 //! Siehe `docs/ARCHITECTURE.md` für die Schichtung und `backlog/CONVENTIONS.md`
 //! Abschnitt 3.1 für die erlaubten Abhängigkeiten dieser Crate.
@@ -14,13 +20,12 @@
 //! - [`canonical`] die eine Serialisierung, die je in die Datei geht
 //! - [`record`] ein Record, sein Hash, sein MAC, seine Zeile
 //! - [`kinds`] alle Arten von Records und was jede davon tragen darf
-//! - [`key`] der HMAC-Schlüssel, bis HUM-048 den Keyring bringt eine Datei
-//! - [`writer`] der eine Schreiber mit fsync-Politik, Sperre und Wiederaufnahme
+//! - [`key`] der HMAC-Schlüssel, unabhängig davon, woher er kommt
 //! - [`verify`] die Prüfung mit jedem Grund, aus dem eine Kette bricht
 //! - [`query`] das Ende der Kette und Seiten ihrer Records, ohne Prüfung
-//! - [`export`] der Export als JSONL oder CSV, der nie etwas überschreibt
-//! - [`retention`] das Löschen des Anfangs nach `audit.retention_days` und
-//!   `audit.max_bytes` und der Record, der es dokumentiert
+//! - [`export`] die Formate des Exports, JSONL und CSV
+//! - [`retention`] die Grenzen der Aufbewahrung nach `audit.retention_days`
+//!   und `audit.max_bytes` und der Record, der eine Löschung dokumentiert
 //!
 //! Was die Kette beweist und was nicht, steht in `docs/SECURITY.md` unter „Was
 //! die Audit-Kette beweist". Kurz: Sie zeigt eine Änderung, Löschung oder
@@ -41,19 +46,19 @@ pub mod query;
 pub mod record;
 pub mod retention;
 pub mod verify;
-pub mod writer;
 
 pub use crate::canonical::{CanonicalError, canonical_json};
 pub use crate::export::{CSV_COLUMNS, ExportFormat};
 pub use crate::key::AuditKey;
 pub use crate::kinds::{KeyOrigin, RecordKind};
 pub use crate::query::{QueryFilter, TimeRange};
-pub use crate::record::{AuditRecord, GENESIS_PREV, NO_SESSION, RecordBody, format_ts, sha256_hex};
+pub use crate::record::{
+    AuditRecord, GENESIS_PREV, MAX_LINE_BYTES, NO_SESSION, RecordBody, format_ts, sha256_hex,
+};
 pub use crate::retention::{AuditPruned, MIN_MAX_BYTES, PruneLimits, PruneOutcome, PruneReport};
 pub use crate::verify::{
     AuditVerifier, BreakReason, VerifiedHead, VerifyReport, VerifyStatus, VerifyWarning,
 };
-pub use crate::writer::{AnchorMirror, AuditHandle, AuditWriter, Head, WriterOptions};
 
 /// Ein Anker: Nummer und Hash eines Records, außerhalb der Datei abgelegt.
 ///

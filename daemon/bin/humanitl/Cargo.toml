@@ -12,8 +12,10 @@ workspace = true
 [dependencies]
 # `audit verify --file` und `audit export --file` lesen die Kette selbst, wenn
 # der Daemon nicht antwortet; die Pruefung und das Record-Format stehen in
-# `humanitl-audit` und werden hier nicht nachgebaut (HUM-070).
+# `humanitl-audit` und werden hier nicht nachgebaut (HUM-070). Die Datei
+# oeffnet seit HUM-155 `humanitl-audit-log`.
 humanitl-audit.workspace = true
+humanitl-audit-log.workspace = true
 humanitl-config.workspace = true
 humanitl-core.workspace = true
 humanitl-ipc.workspace = true

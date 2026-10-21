@@ -27,15 +27,16 @@
 //! Auskunft.
 //!
 //! Der Export nimmt denselben Weg und schreibt in beiden Fällen dieselbe Datei
-//! (`humanitl_audit::export`): JSONL Byte für Byte die Kette, CSV mit den zwölf
+//! (`humanitl_audit_log::export`): JSONL Byte für Byte die Kette, CSV mit den zwölf
 //! Spalten aus HUM-050.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, DurationRound as _, TimeDelta, Utc};
-use humanitl_audit::export::{self, ExportFormat};
 use humanitl_audit::{AuditVerifier, BreakReason, TimeRange, VerifyStatus, VerifyWarning};
+use humanitl_audit_log::VerifyFile as _;
+use humanitl_audit_log::export::{self, ExportFormat};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_ipc::v1;

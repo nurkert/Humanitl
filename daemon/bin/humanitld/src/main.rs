@@ -46,8 +46,9 @@ use std::time::{Duration, SystemTime};
 
 use clap::Parser;
 use humanitl_audit::kinds::{DaemonStarted, RetentionApplied, SessionStarted};
-use humanitl_audit::{
-    Anchor, AnchorMirror, AuditHandle, AuditKey, AuditWriter, RecordKind, WriterOptions, sha256_hex,
+use humanitl_audit::{Anchor, AuditKey, RecordKind, sha256_hex};
+use humanitl_audit_log::{
+    AnchorMirror, AuditHandle, AuditKeyFile as _, AuditWriter, WriterOptions,
 };
 use humanitl_catalog::Catalog;
 use humanitl_config::private_dir::{ensure_private_dir, with_own_runtime_dir_fix};
@@ -974,7 +975,8 @@ mod retention_record_tests {
 
     use std::time::{Duration, SystemTime};
 
-    use humanitl_audit::{AuditKey, AuditRecord, AuditWriter, KeyOrigin, WriterOptions};
+    use humanitl_audit::{AuditKey, AuditRecord, KeyOrigin};
+    use humanitl_audit_log::{AuditWriter, VerifyFile as _, WriterOptions};
     use humanitl_core::{
         Authority, FlowEvent, FlowId, HostName, HttpRequest, Method, Scheme, SessionId,
     };

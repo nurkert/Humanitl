@@ -7,6 +7,7 @@ members = [
   "crates/findings",
   "crates/recorder",
   "crates/audit",
+  "crates/audit-log",
   "crates/sandbox",
   "crates/catalog",
   "crates/proxy",
@@ -31,6 +32,7 @@ humanitl-rules = { path = "crates/rules" }
 humanitl-findings = { path = "crates/findings" }
 humanitl-recorder = { path = "crates/recorder" }
 humanitl-audit = { path = "crates/audit" }
+humanitl-audit-log = { path = "crates/audit-log" }
 humanitl-sandbox = { path = "crates/sandbox" }
 humanitl-catalog = { path = "crates/catalog" }
 humanitl-proxy = { path = "crates/proxy" }

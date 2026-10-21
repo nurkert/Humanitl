@@ -41,11 +41,10 @@
 //! gekürzt, steht dort die letzte vorhandene.
 
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead};
 use std::path::Path;
 
-use humanitl_core::diagnostics::codes::{AUDIT_001, AUDIT_006};
+use humanitl_core::diagnostics::codes::AUDIT_001;
 use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
@@ -202,7 +201,8 @@ impl VerifyReport {
 
 /// Der Vorschlag für eine gebrochene Kette: die Datei samt Zeitstempel
 /// beiseitelegen. Sie bleibt als Beleg liegen.
-pub(crate) fn set_aside_fix(path: &Path) -> FixAction {
+#[must_use]
+pub fn set_aside_fix(path: &Path) -> FixAction {
     let quoted = shell_path(path);
     FixAction::CopyCommand(format!(
         "mv {quoted} {quoted}.broken-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -214,63 +214,9 @@ pub(crate) fn set_aside_fix(path: &Path) -> FixAction {
 pub struct AuditVerifier;
 
 impl AuditVerifier {
-    /// Prüft die Datei `path` gegen `anchors`, mit Schlüssel, wenn einer da ist.
-    ///
-    /// Eine fehlende Datei ist eine leere Kette; gibt es Anker, ist sie unter
-    /// sie gekürzt.
-    ///
-    /// # Errors
-    ///
-    /// [`AUDIT_006`], wenn sich die Datei nicht lesen lässt. Eine Kette, die
-    /// niemand lesen konnte, ist nicht geprüft, und ein `Ok` wäre gelogen.
-    pub fn verify(
-        path: &Path,
-        hmac_key: Option<&[u8; 32]>,
-        anchors: &[Anchor],
-    ) -> Result<VerifyReport, Diagnostic> {
-        Self::verify_until(path, hmac_key, anchors, None)
-    }
-
-    /// Wie [`AuditVerifier::verify`], aber nur bis zum Record mit der Nummer
-    /// `until`, dem Ende, das der Schreiber zuletzt gemeldet hat (HUM-156).
-    ///
-    /// Ein Daemon, der seine eigene, laufende Kette prüft, liest sie, während
-    /// der Schreiber weiter anhängt. Was hinter `until` steht, ist noch nicht
-    /// geschrieben und kein Bruch: Eine halbe Zeile dort ist eine, die gerade
-    /// entsteht. Anker jenseits von `until` zählen aus demselben Grund nicht.
-    /// `None` liest bis zum Ende der Datei.
-    ///
-    /// # Errors
-    ///
-    /// Wie [`AuditVerifier::verify`].
-    pub fn verify_until(
-        path: &Path,
-        hmac_key: Option<&[u8; 32]>,
-        anchors: &[Anchor],
-        until: Option<u64>,
-    ) -> Result<VerifyReport, Diagnostic> {
-        let result = match File::open(path) {
-            Ok(file) => Self::verify_reader_until(BufReader::new(file), hmac_key, anchors, until),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                Self::verify_reader_until(io::empty(), hmac_key, anchors, until)
-            }
-            Err(err) => Err(err),
-        };
-        result.map_err(|err| {
-            Diagnostic::builder(AUDIT_006, Severity::Error)
-                .why(format!(
-                    "cannot read {} to verify it: {err}",
-                    path.display()
-                ))
-                .fix(FixAction::CopyCommand(format!(
-                    "ls -ln {}",
-                    shell_path(path)
-                )))
-                .build()
-        })
-    }
-
-    /// Wie [`AuditVerifier::verify`], über einem beliebigen Leser.
+    /// Prüft die Kette, die `reader` liefert, gegen `anchors`, mit Schlüssel,
+    /// wenn einer da ist. Die Prüfung über eine Datei steht in
+    /// `humanitl-audit-log` (`VerifyFile::verify`, HUM-155).
     ///
     /// # Errors
     ///
@@ -283,7 +229,15 @@ impl AuditVerifier {
         Self::verify_reader_until(reader, hmac_key, anchors, None)
     }
 
-    /// Wie [`AuditVerifier::verify_until`], über einem beliebigen Leser.
+    /// Wie [`AuditVerifier::verify_reader`], aber nur bis zum Record mit der
+    /// Nummer `until`, dem Ende, das der Schreiber zuletzt gemeldet hat
+    /// (HUM-156).
+    ///
+    /// Ein Daemon, der seine eigene, laufende Kette prüft, liest sie, während
+    /// der Schreiber weiter anhängt. Was hinter `until` steht, ist noch nicht
+    /// geschrieben und kein Bruch: Eine halbe Zeile dort ist eine, die gerade
+    /// entsteht. Anker jenseits von `until` zählen aus demselben Grund nicht.
+    /// `None` liest bis zum Ende des Lesers.
     ///
     /// # Errors
     ///
