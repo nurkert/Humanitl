@@ -114,11 +114,35 @@ fi
 M3_EXPECTED_ASSERTIONS=113
 
 # So viele kommen dazu, wenn die OpenCode-Variante läuft. Der Zweig prüft
-# immer dieselben fünfzehn Dinge — die fünf Verzweigungen darin sind
+# immer dieselben sechsundzwanzig Dinge — die Verzweigungen darin sind
 # Fallunterscheidungen über das Ergebnis, nicht darüber, ob geprüft wird —,
 # damit diese Zahl exakt ist und nicht ungefähr: Der Lauf vergleicht den
 # Zähler vor und nach der Variante mit ihr.
-M3_OPENCODE_ASSERTIONS=22
+M3_OPENCODE_ASSERTIONS=26
+
+# Wie lange der Lauf nach dem ersten Bild des OpenCode-TUI wartet, bevor er
+# tippt, in Sekunden (HUM-152). **Gemessen, nicht geraten: 0.**
+#
+# Gemessen am 2026-10-21 mit OpenCode 1.18.31, in genau der Anordnung, die
+# Schritt 13 fährt: `humanitl sandbox attach` hängt sich an, sobald die Sitzung
+# gestartet ist und bevor das TUI sein erstes Bild malt; das erste Bild ist der
+# Moment, in dem der Platzhalter `Ask anything` im Transkript steht. Ab diesem
+# Moment tippte eine Messfassung des Laufs 52 einzelne Buchstaben, einen alle
+# 0,2 s, und schrieb daneben alle 20 ms die Größe des Transkripts mit. Jeder
+# Buchstabe stand danach im Eingabefeld, in der getippten Reihenfolge, auch
+# der erste, 6 ms nach dem ersten Bild geschickt; zwischen Schicken und Bild
+# lagen höchstens 31 ms. Ein zweiter Lauf mit derselben Folge zeigte dasselbe.
+# Das ist eine Frist von null. Die Beobachtung vom 2026-09-07, OpenCode nehme
+# in den ersten Sekunden nach dem ersten Bild nichts an, gilt für diese
+# Anordnung nicht; ob sie an einer älteren Fassung oder an einem Anhängen nach
+# dem ersten Bild lag, ist nicht gemessen.
+#
+# Die Frist steht trotzdem als Zahl hier, und der Lauf verlässt sich nicht auf
+# sie allein: Bevor er die Eingabetaste schickt, wartet er, bis die Frage im
+# Eingabefeld steht, und scheitert mit einer Meldung, die diese Zahl nennt,
+# wenn sie nicht erscheint. Eine neue Fassung von OpenCode, die wieder Zeit
+# braucht, fällt also dort auf und nicht als halbe Frage zwei Schritte später.
+M3_OC_TUI_SETTLE=0
 
 # Die Ports des Ziels. Im eigenen Netz-Namensraum ist der Lauf root und darf
 # auch die privilegierten binden.
@@ -211,6 +235,9 @@ M3_OC_FETCH_ERR="$E2E_WORKDIR/out/opencode-webfetch.log"
 # Die zweite Sitzung des echten Agenten: sein Vollbild-TUI (HUM-067).
 M3_OC_TUI_OUT="$E2E_WORKDIR/out/opencode-tui.transcript"
 M3_OC_TUI_ERR="$E2E_WORKDIR/out/opencode-tui.log"
+# Das zweite Terminal, über das die Frage ins TUI getippt wird (HUM-152).
+M3_OC_TUI_ATTACH_OUT="$E2E_WORKDIR/out/opencode-tui-attached.transcript"
+M3_OC_TUI_ATTACH_ERR="$E2E_WORKDIR/out/opencode-tui-attached.log"
 M3_RUN_PID=""
 M3_ATTACH_PID=""
 M3_LLM_PID=""
@@ -309,6 +336,46 @@ m3_agent_value() {
 # auf PATTERN passt.
 m3_notice_count() {
     tr -d '\r' < "$M3_ATTACH_OUT" | grep -c -e "$1" || true
+}
+
+# m3_screen_text FILE — der Text eines TUI-Transkripts ohne seine Steuerfolgen.
+#
+# `tr -d` und `sed` werfen weg, womit ein TUI seine Fläche baut; übrig bleibt
+# der Text, wie ihn ein Mensch liest, nur ohne die Positionen.
+m3_screen_text() {
+    tr -d '\r' < "$1" |
+        sed 's/\x1b\[[0-9;?]*[A-Za-z]//g; s/\x1b\][^\x07]*\x07//g; s/\x1b[()][A-Z0-9]//g'
+}
+
+# m3_wait_screen FILE PATTERN SECONDS — warten, bis der Text des Transkripts
+# auf PATTERN (erweiterter regulärer Ausdruck) passt; Rückgabewert 1 nach
+# Ablauf der Frist.
+#
+# Der Text kommt erst ganz in eine Variable und wird dann mit `=~` verglichen,
+# nicht mit `| grep -q`: `grep -q` endet beim ersten Treffer, `sed` davor
+# stirbt dann an `SIGPIPE`, und unter `pipefail` hieße ein Treffer in einem
+# langen Transkript „kein Treffer" (gefunden im Review von Codex).
+m3_wait_screen() {
+    m3_screen_left=$(( $3 * 10 ))
+    while [ "$m3_screen_left" -gt 0 ]; do
+        m3_screen_now=$(m3_screen_text "$1" 2> /dev/null || true)
+        if [[ $m3_screen_now =~ $2 ]]; then
+            return 0
+        fi
+        sleep 0.1
+        m3_screen_left=$((m3_screen_left - 1))
+    done
+    return 1
+}
+
+# m3_attach_alive WHEN — scheitern, wenn das tippende Terminal nicht mehr lebt.
+#
+# Die Fifo, über die der Lauf ins TUI tippt, hält er selbst zum Lesen und
+# Schreiben offen (`exec 8<>`); ein Schreiben ohne `attach` dahinter endete
+# also nicht an `SIGPIPE`, sondern verschwände still im Puffer.
+m3_attach_alive() {
+    kill -0 "$M3_ATTACH_PID" 2> /dev/null ||
+        e2e_die "humanitl sandbox attach ended $1, so no keystroke reaches OpenCode; its log: $(tail -n 20 "$M3_OC_TUI_ATTACH_ERR" 2> /dev/null)"
 }
 
 # m3_llm_hits PATTERN — wie oft das Sprachmodell eine passende Anfrage bediente.
@@ -1393,7 +1460,9 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
     # verlangt: Der Agent startet und malt seinen Prompt. Der Rest des
     # Kriteriums -- ein Werkzeugaufruf, der am `403` der Profilregel scheitert
     # -- braucht ein Modell, das Werkzeugaufrufe liefert; das misst seit
-    # HUM-141 der kopflose Lauf mit `humanitl-webfetch` weiter unten.
+    # HUM-141 der kopflose Lauf mit `humanitl-webfetch` weiter unten, und seit
+    # HUM-152 das TUI am Ende, dem dieselbe Frage über `humanitl sandbox
+    # attach` getippt wird.
     #
     # Eine Sitzung und nicht zwei: Der Daemon führt genau eine
     # (`CLI_005`), und eine zweite müsste warten, bis die erste wirklich
@@ -1585,11 +1654,33 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
     # kopflose (`opencode run …`) fragt das Modell von selbst; daran hängen
     # die beiden Zusicherungen über den Verkehr oben. Das TUI fragt nichts, es
     # wartet auf einen Menschen -- dafür malt es den Prompt, und der steht im
-    # Akzeptanzkriterium von HUM-067. Getippt wird in keinem der beiden:
-    # `humanitl run` reicht ausdrücklich keine Taste weiter (Kopf von
-    # `daemon/bin/humanitl/src/cmd/run.rs`). Den Werkzeugaufruf misst der
-    # kopflose Lauf mit `humanitl-webfetch` oben (HUM-141); ins TUI getippt
-    # wird weiterhin nicht.
+    # Akzeptanzkriterium von HUM-067.
+    #
+    # **Und seit HUM-152 bekommt es die Frage getippt.** `humanitl run` reicht
+    # ausdrücklich keine Taste weiter (Kopf von
+    # `daemon/bin/humanitl/src/cmd/run.rs`); getippt wird deshalb, wie ein
+    # Mensch es täte, über ein zweites Terminal an derselben Sitzung:
+    # `humanitl sandbox attach`. Dessen Standardeingabe ist eine Fifo, die
+    # dieser Lauf offen hält; an einer Pipe gibt es keinen Rohmodus, und das
+    # Ende der Eingabe hängt das Terminal ab (`cmd/attach.rs`,
+    # `spawn_input`). Die Fifo bleibt deshalb offen, bis der Lauf hier fertig
+    # ist, sonst stünde das Terminal nach dem ersten Schreiben schon wieder
+    # ohne Schreiber da.
+    #
+    # Unter `llm-only-webfetch` und nicht unter `llm-only` selbst, aus dem
+    # Grund, der beim kopflosen Lauf oben steht: Unter `llm-only` fragt
+    # OpenCode einen Menschen, ob es `webfetch` benutzen darf, und das TUI
+    # zeigte einen Dialog statt des `403`. Das Profil ist aus `llm-only`
+    # abgeleitet und unterscheidet sich nur in dieser einen Umgebungsvariable;
+    # der Prompt und der Anbieter, die HUM-067 verlangt, sind dieselben.
+    m3_oc_tui_keys="$E2E_WORKDIR/opencode-tui.keys"
+    m3_oc_tui_question="humanitl-webfetch https://$m3_oc_fetch_host/page"
+    m3_oc_tui_fetch_before=$(m3_count "host:$m3_oc_fetch_host")
+    m3_oc_tui_tool_before=$(m3_llm_hits '^mock-llm-note:.* last=tool ')
+    # Die Flüsse zu diesem Host, die es vor dem TUI schon gab (der eine des
+    # kopflosen Laufs). Der neue Fluss unten ist der, der hier nicht steht.
+    m3_oc_tui_prev_flows=$(m3_flow_page "host:$m3_oc_fetch_host" |
+        jq -r '[.flows[].flow_id] | join(" ")' 2> /dev/null || true)
     m3_oc_tui_status=0
     (
         cd "$M3_PROJECT" &&
@@ -1597,34 +1688,169 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
                 XDG_DATA_HOME="$E2E_XDG_DATA" \
                 XDG_CONFIG_HOME="$E2E_XDG_CONFIG" \
                 HOME="$E2E_HOME" \
-                timeout "${M3_OPENCODE_TUI_SECONDS:-30}" \
-                "$E2E_CLI" -v run --profile llm-only --ask none -- "$m3_opencode_path" \
+                exec timeout -k 10 "${M3_OPENCODE_TUI_SECONDS:-120}" \
+                "$E2E_CLI" -v run --profile llm-only-webfetch --ask none -- "$m3_opencode_path" \
                 > "$M3_OC_TUI_OUT" 2> "$M3_OC_TUI_ERR"
-    ) || m3_oc_tui_status=$?
+    ) &
+    M3_RUN_PID=$!
 
-    # Und der Beleg, dass diese Sitzung wirklich unter `llm-only` lief: Die
-    # Zeile steht im Kopf jedes Laufs, und ohne sie bliebe der Zweig auch
-    # dann grün, wenn `--profile llm-only` fehlte -- gefunden im Review.
-    e2e_expect_match "and the session really resolved the llm-only profile" \
-        '^profiles: .*llm-only' "$(cat "$M3_OC_TUI_ERR")"
+    # Erst die Sitzung, dann das zweite Terminal: `attach` braucht eine
+    # laufende Sitzung (`IPC_006`), und wer sich vor dem ersten Bild anhängt,
+    # gibt dem Agenten seine Größe, bevor er sie zum ersten Mal misst.
+    m3_wait_for_started_in "$M3_OC_TUI_ERR" 25 > /dev/null ||
+        e2e_die "the daemon did not report a started TUI session within twenty-five seconds; its log: $(tail -n 20 "$M3_OC_TUI_ERR" 2> /dev/null)"
+    rm -f "$m3_oc_tui_keys"
+    mkfifo "$m3_oc_tui_keys" || e2e_die "cannot create the fifo that carries the keystrokes"
+    humanitl sandbox attach < "$m3_oc_tui_keys" > "$M3_OC_TUI_ATTACH_OUT" 2> "$M3_OC_TUI_ATTACH_ERR" &
+    M3_ATTACH_PID=$!
+    # Öffnet die Fifo zum Lesen und Schreiben. Ein reines `8>` wartete, bis
+    # `attach` sie zum Lesen geöffnet hat, und stirbt `attach` vorher, für
+    # immer; `<>` kehrt unter Linux sofort zurück (gefunden im Review). Der
+    # Preis: Weil der Lauf selbst Leser ist, endet ein Schreiben nach dem Tod
+    # von `attach` nicht mehr an `SIGPIPE`. Deshalb fragt der Lauf vor jedem
+    # Schreiben, ob `attach` noch lebt (`m3_attach_alive`).
+    exec 8<> "$m3_oc_tui_keys"
 
-    # **Das Bild, das ein Mensch sieht.** `tr -d` und `sed` werfen weg, womit
-    # ein TUI seine Fläche baut; übrig bleibt der Text. Zwei Zeilen daraus
-    # sind das Akzeptanzkriterium von HUM-067: der Prompt, und der Anbieter,
-    # den Humanitl für den Agenten gebaut hat.
-    m3_oc_text=$(tr -d '\r' < "$M3_OC_TUI_OUT" |
-        sed 's/\x1b\[[0-9;?]*[A-Za-z]//g; s/\x1b\][^\x07]*\x07//g; s/\x1b[()][A-Z0-9]//g')
-    if printf '%s\n' "$m3_oc_text" | grep -q 'Ask anything'; then
-        e2e_check "the prompt of the agent appears under the llm-only profile" ok
+    # **Das erste Bild.** `Ask anything` ist der Platzhalter des Prompts; ab
+    # ihm steht das Eingabefeld auf dem Bildschirm.
+    m3_wait_screen "$M3_OC_TUI_OUT" 'Ask anything' 30 ||
+        e2e_die "OpenCode drew no prompt within thirty seconds of its start; the transcript is $M3_OC_TUI_OUT"
+
+    # **Die Frist, bis OpenCode Zeichen annimmt.** Gemessen null Sekunden;
+    # Zahl und Messung stehen bei `M3_OC_TUI_SETTLE` oben im Skript.
+    sleep "$M3_OC_TUI_SETTLE"
+
+    # Getippt wird die Frage ohne Eingabetaste, und die Taste kommt erst, wenn
+    # die Frage im Eingabefeld steht. In einem Schreiben zusammen hieße ein
+    # verlorenes Zeichen, dass eine halbe Frage abgeschickt wird, und der Lauf
+    # scheiterte zwei Schritte später an etwas anderem, als passiert ist.
+    m3_attach_alive "before the question"
+    printf '%s' "$m3_oc_tui_question" >&8
+    m3_wait_screen "$M3_OC_TUI_OUT" "$m3_oc_tui_question" 10 ||
+        e2e_die "the question typed through humanitl sandbox attach did not appear in OpenCode's prompt within ten seconds; either OpenCode needs longer than $M3_OC_TUI_SETTLE s before it takes keystrokes, or attach did not forward them ($M3_OC_TUI_ATTACH_ERR)"
+    m3_attach_alive "before the Enter key"
+    printf '\r' >&8
+
+    # **Bis die Antwort des Werkzeugs beim Modell ankommt.** `/_debug/tool`
+    # trägt seit dem kopflosen Lauf oben schon ein `403`; ob dieser Lauf
+    # eines geliefert hat, sagt deshalb erst der Zähler der Anfragen, deren
+    # letzte Nachricht die Antwort eines Werkzeugs ist (`mock-llm-note`).
+    #
+    # **Und erst, wenn der Mock mit dieser Anfrage fertig ist.** Die Zeile
+    # `mock-llm-note` schreibt er, bevor er den Inhalt unter `/_debug/tool`
+    # ablegt; die Zeile `mock-llm: POST /v1/chat/completions …` schreibt er
+    # erst nach der Antwort, also danach (`do_POST`, `_tool_plan`, `_json`
+    # und `_stream` in `mock_llm.py`). Gelesen wird `/_debug/tool` deshalb
+    # erst, wenn es zu jeder Notiz eine solche Zeile gibt. Vorher läse der
+    # Lauf womöglich noch das `403` des kopflosen Laufs (gefunden im Review
+    # von Codex). Der Mock bleibt dabei, wie er ist (Nicht-Ziel des Issues).
+    m3_oc_tui_left=$(( ${M3_OPENCODE_SECONDS:-60} * 10 ))
+    until { [ "$(m3_llm_hits '^mock-llm-note:.* last=tool ')" -gt "$m3_oc_tui_tool_before" ] &&
+        [ "$(m3_llm_hits '^mock-llm: POST /v1/chat/completions ')" -ge "$(m3_llm_hits '^mock-llm-note:')" ]; } ||
+        [ "$m3_oc_tui_left" -le 0 ]; do
+        sleep 0.1
+        m3_oc_tui_left=$((m3_oc_tui_left - 1))
+    done
+    m3_oc_tui_tool=$(curl -sS --max-time 5 "http://$E2E_FAKE_ADDR:$M3_LLM_PORT/_debug/tool" || true)
+    if [ "$m3_oc_tui_left" -gt 0 ] && printf '%s\n' "$m3_oc_tui_tool" | grep -q '403'; then
+        e2e_check "the question typed into the TUI made webfetch hand the 403 of the profile rule to the model" ok
     else
-        e2e_check "the prompt of the agent appears under the llm-only profile" no \
-            "no prompt in $M3_OC_OUT"
+        e2e_check "the question typed into the TUI made webfetch hand the 403 of the profile rule to the model" no \
+            "no finished tool answer reached the mock within ${M3_OPENCODE_SECONDS:-60} s after Enter (tool answers before: $m3_oc_tui_tool_before, now: $(m3_llm_hits '^mock-llm-note:.* last=tool '); notes $(m3_llm_hits '^mock-llm-note:'), finished chat requests $(m3_llm_hits '^mock-llm: POST /v1/chat/completions ')); /_debug/tool says: $m3_oc_tui_tool"
+    fi
+
+    # **Und im Bild des TUI: der gescheiterte Aufruf, in OpenCodes eigener
+    # Zeile.** Was das TUI dafür malt, ist gemessen und steht so in OpenCode
+    # 1.18.31: Ein Werkzeug, dessen Aufruf scheiterte, bekommt seine Zeile
+    # `% WebFetch <url>` in der Fehlerfarbe des Themas (`#e06c75`, als
+    # Farbfolge `38;2;224;108;117`); solange es läuft und wenn es gelingt,
+    # steht dieselbe Zeile in der gedämpften Textfarbe. Den Text des Fehlers,
+    # also das `403`, zeigt das TUI **erst nach einem Mausklick** auf diese
+    # Zeile (`errorExpanded`, umgeschaltet nur in `onMouseUp`), und der Klick
+    # bräuchte eine Position: Die filtert der Daemon aus dem Transkript
+    # (Politik `ColourOnly`, nur Farbfolgen kommen durch), der Lauf kennt sie
+    # also nicht. Das einzige `403` im Transkript des TUI ist deshalb die
+    # Zeile, mit der der Mock die Antwort des Werkzeugs wiederholt
+    # (`tool said: `), und die zählt nicht -- sonst bestünde die Aussage auch
+    # dann, wenn nur der Mock das `403` gesehen hätte.
+    #
+    # Zusammen tragen die drei Zusicherungen dieses Teils die Aussage: Das TUI
+    # zeigt den gescheiterten `webfetch` auf genau diese URL (hier), das
+    # Werkzeug dieses Laufs hat dem Modell das `403` geliefert (oben, am
+    # Zähler und an `/_debug/tool`), und es war die Regel des Profils, die die
+    # eine Anfrage dieses Laufs blockte (unten, in der Historie).
+    #
+    # Gewartet wird, weil das Bild über den Ereignisstrom des Daemons in die
+    # Datei kommt und der Aufruf beim Modell schneller sein kann.
+    m3_oc_esc=$(printf '\033')
+    m3_oc_tui_failed="${m3_oc_esc}\\[38;2;224;108;117m(${m3_oc_esc}\\[48;2;[0-9;]+m)?WebFetch https://$m3_oc_fetch_host/page"
+    m3_oc_tui_left=150
+    until LC_ALL=C grep -aqE -e "$m3_oc_tui_failed" "$M3_OC_TUI_OUT" 2> /dev/null ||
+        [ "$m3_oc_tui_left" -le 0 ]; do
+        sleep 0.1
+        m3_oc_tui_left=$((m3_oc_tui_left - 1))
+    done
+    if LC_ALL=C grep -aqE -e "$m3_oc_tui_failed" "$M3_OC_TUI_OUT" 2> /dev/null; then
+        e2e_check "and the TUI drew that webfetch as failed, in its own line and its error colour" ok
+    else
+        e2e_check "and the TUI drew that webfetch as failed, in its own line and its error colour" no \
+            "no \"WebFetch https://$m3_oc_fetch_host/page\" in OpenCode's error colour within fifteen seconds; the transcript is $M3_OC_TUI_OUT"
+    fi
+
+    # Abhängen und beenden: Die Fifo zu schließen hängt das zweite Terminal ab,
+    # `SIGTERM` an `timeout` reicht es an `humanitl run` weiter, und das
+    # beendet die Sitzung über `Sandbox(Stop)`.
+    exec 8>&-
+    rm -f "$m3_oc_tui_keys"
+    kill -TERM "$M3_RUN_PID" 2> /dev/null || true
+    wait "$M3_RUN_PID" || m3_oc_tui_status=$?
+    M3_RUN_PID=""
+    wait "$M3_ATTACH_PID" 2> /dev/null || true
+    M3_ATTACH_PID=""
+    e2e_say "the TUI session ended with $m3_oc_tui_status"
+
+    # Und der Beleg, dass diese Sitzung wirklich unter dem Profil lief, das aus
+    # `llm-only` abgeleitet ist: Die Zeile steht im Kopf jedes Laufs, und ohne
+    # sie bliebe der Zweig auch dann grün, wenn `--profile` fehlte -- gefunden
+    # im Review.
+    e2e_expect_match "and the session really resolved the llm-only-webfetch profile" \
+        '^profiles: .*llm-only-webfetch' "$(cat "$M3_OC_TUI_ERR")"
+
+    # **Das Bild, das ein Mensch sieht.** Zwei Zeilen daraus sind das
+    # Akzeptanzkriterium von HUM-067: der Prompt, und der Anbieter, den
+    # Humanitl für den Agenten gebaut hat.
+    m3_oc_text=$(m3_screen_text "$M3_OC_TUI_OUT")
+    if printf '%s\n' "$m3_oc_text" | grep -q 'Ask anything'; then
+        e2e_check "the prompt of the agent appears under the llm-only-webfetch profile" ok
+    else
+        e2e_check "the prompt of the agent appears under the llm-only-webfetch profile" no \
+            "no prompt in $M3_OC_TUI_OUT"
     fi
     if printf '%s\n' "$m3_oc_text" | grep -q 'Humanitl local LLM'; then
         e2e_check "and the picture names the provider Humanitl built for it" ok
     else
         e2e_check "and the picture names the provider Humanitl built for it" no \
-            "no provider name in $M3_OC_OUT"
+            "no provider name in $M3_OC_TUI_OUT"
+    fi
+
+    e2e_expect "and the history holds the one request the typed question made" \
+        "$((m3_oc_tui_fetch_before + 1))" "$(m3_count "host:$m3_oc_fetch_host")"
+    # Und genau dieser neue Fluss, nicht der des kopflosen Laufs: eine Regel
+    # hat ihn entschieden (`rule_id` gesetzt), und zwar mit `block`. Das `403`
+    # selbst steht nicht in der Zeile; die Antwort gibt der Proxy, nicht ein
+    # Ziel, und `status` bleibt `0` (gemessen). Dass es beim Agenten als
+    # `403` ankam, sagt `/_debug/tool` oben.
+    m3_oc_tui_row=$(m3_flow_page "host:$m3_oc_fetch_host" |
+        jq -c --arg prev "$m3_oc_tui_prev_flows" \
+            '[.flows[] | select(.flow_id as $id | ($prev | split(" ") | index($id)) | not)][0] // empty' \
+            2> /dev/null || true)
+    if [ -n "$m3_oc_tui_row" ] &&
+        [ "$(printf '%s\n' "$m3_oc_tui_row" | jq -r '.decision // ""')" = block ] &&
+        [ -n "$(printf '%s\n' "$m3_oc_tui_row" | jq -r '.rule_id // ""')" ]; then
+        e2e_check "and a rule of the profile blocked that new request" ok
+    else
+        e2e_check "and a rule of the profile blocked that new request" no \
+            "the new flow to $m3_oc_fetch_host is not a block by a rule: ${m3_oc_tui_row:-no new flow}"
     fi
 
     m3_ran_opencode=$((E2E_ASSERTIONS - m3_before_opencode))
