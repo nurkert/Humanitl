@@ -17,6 +17,10 @@
 
 mod ask_terminal;
 mod cli;
+// Nur der Generator für `docs/reference/cli.md` und seine Prüfung (HUM-059);
+// im Binary hat er keine Aufgabe.
+#[cfg(test)]
+mod cli_docs;
 mod cmd;
 // Nur die Tabelle für `cargo xtask docs` und ihre Prüfung gegen `clap`
 // (HUM-078); im Binary hat sie keine Aufgabe.

@@ -67,7 +67,7 @@ while IFS='|' read -r _ name what status _; do
   [[ "$status" == "delivered" ]] && mark="x"
   expected_milestones+="- [$mark] **$name** ($status): $what"$'\n'
   milestone_rows=$((milestone_rows + 1))
-done < <(awk '/^## Project status and roadmap/ { on = 1; next } /^## / { on = 0 } on' "$root/README.md")
+done < <(awk '/^## Status$/ { on = 1; next } /^## / { on = 0 } on' "$root/README.md")
 expected_milestones="${expected_milestones%$'\n'}"
 [[ "$milestone_rows" -gt 0 ]] || fail "no milestone rows found in README.md"
 

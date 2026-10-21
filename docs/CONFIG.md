@@ -1,5 +1,7 @@
 # Konfiguration
 
+Applies to: Humanitl 0.1
+
 <!-- Erzeugt aus daemon/crates/config/src/model.rs.
      Nicht von Hand ändern: `UPDATE_CONFIG_DOCS=1 cargo test -p humanitl-config --test config_docs` schreibt die Datei neu. -->
 

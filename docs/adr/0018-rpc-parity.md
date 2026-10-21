@@ -1,4 +1,7 @@
 # ADR-0018 · Parität: Jede Fähigkeit ist zuerst ein RPC, UI und CLI sind dünne Clients
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 

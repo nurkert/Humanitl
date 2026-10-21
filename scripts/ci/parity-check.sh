@@ -2,7 +2,10 @@
 # Paritäts-Prüfung (HUM-078, ADR-018): Jede RPC des Vertrags hat ein
 # Unterkommando der Kommandozeile oder eine begründete Ausnahme, und die
 # Tabelle `docs/reference/parity.md` auf der Platte ist die, die aus dem Code
-# entsteht.
+# entsteht. Seit HUM-059 prüft derselbe Lauf auch die übrigen erzeugten
+# Referenzseiten (`docs/CONFIG.md`, `docs/DIAGNOSTICS.md`,
+# `docs/reference/cli.md`); dieser Job ist damit der `docs-check` aus
+# `backlog/sprint-5.md`.
 #
 # `cargo xtask docs --check` erzeugt die Tabelle im Speicher und schreibt
 # nichts. Exit 1, wenn
@@ -12,7 +15,8 @@
 #     keine Begründung hat oder ein Ort der UI-Registry keine Datei,
 #   - eine Zeile der CLI-Tabelle oder der UI-Registry nicht im strengen Format
 #     steht,
-#   - die Datei fehlt oder von der erzeugten abweicht.
+#   - die Datei fehlt oder von der erzeugten abweicht,
+#   - eine der übrigen erzeugten Seiten fehlt oder abweicht.
 # RPCs ohne Ort in der Oberfläche sind nur Warnungen.
 #
 # In der CI ist die Datei auf der Platte die eingecheckte. Ein Vergleich über

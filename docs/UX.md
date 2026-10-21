@@ -1,5 +1,7 @@
 # Humanitl — UX-Leitbild
 
+Applies to: Humanitl 0.1
+
 > Zweck: Die Oberfläche soll eine Entscheidung so leicht machen, dass ein Mensch sie stundenlang trifft, ohne müde zu werden, und so schwer, dass er sie nicht versehentlich trifft. Dieses Dokument legt fest, wie Bewegung, Farbe, Text und Tastatur zusammenspielen, damit jeder Screen von HUM-028 bis HUM-034 dieselbe Sprache spricht. Es ergänzt `BACKLOG.md` Abschnitt 5 (Richtung „Airlock"), `docs/ARCHITECTURE.md` (Schichten) und `app/packages/ui` (Werte).
 
 Bei Widerspruch gilt: `packages/ui` gewinnt für Werte, dieses Dokument für ihre Verwendung. Wo eine Regel hier ein Token bräuchte, das es nicht gibt, steht sie in Abschnitt 9. Token werden nie beiläufig geändert.

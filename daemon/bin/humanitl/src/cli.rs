@@ -194,11 +194,11 @@ pub enum LlmCmd {
     /// /api/tags first on a plain Ollama server without a path prefix), no
     /// credentials and no redirects. Nothing goes through the sandbox.
     Test {
-        /// Die Adresse, wie sie in `llm.endpoint` stünde.
+        /// The address as it would stand in `llm.endpoint`.
         #[arg(value_name = "URL")]
         url: String,
 
-        /// Frist für die ganze Probe; ohne sie die Vorgabe des Daemons.
+        /// Deadline for the whole probe; without it the daemon's default.
         #[arg(long = "timeout-ms", value_name = "N")]
         timeout_ms: Option<u32>,
 
@@ -261,8 +261,10 @@ pub struct DoctorArgs {
 /// Sandbox startet.
 #[derive(Debug, Args)]
 pub struct RunArgs {
-    /// Der Befehl in der Sandbox, hinter `--`; ohne ihn der Agent aus der
-    /// Konfiguration.
+    // Der Text der Doc-Kommentare an den Argumenten ist der Hilfetext von
+    // `clap` und deshalb englisch (CONVENTIONS.md 3.9).
+    /// The command to run in the sandbox, after `--`; without it the agent
+    /// from the configuration.
     #[arg(last = true, value_name = "CMD")]
     pub cmd: Vec<OsString>,
 }
@@ -319,15 +321,15 @@ pub enum SandboxCmd {
         /// Host directory mounted at /tests/escape of the `test` profile.
         #[arg(long, value_name = "DIR")]
         tests_dir: Option<PathBuf>,
-        /// Der Befehl in der Sandbox, hinter `--`.
+        /// The command to run in the sandbox, after `--`.
         #[arg(last = true, value_name = "CMD", required = true)]
         cmd: Vec<OsString>,
     },
 
     /// Print the bwrap command line for the current profile without starting it.
     Argv {
-        /// Der Befehl, der in der Zeile steht; ohne ihn der Agent aus der
-        /// Konfiguration, sonst `/bin/sh`.
+        /// The command the line ends with; without it the agent from the
+        /// configuration, otherwise `/bin/sh`.
         #[arg(last = true, value_name = "CMD")]
         cmd: Vec<OsString>,
     },
@@ -361,7 +363,7 @@ pub enum SessionsCmd {
     /// different names can look the same, so each row carries the first 16 hex
     /// characters of the sha256 of the real name.
     Summary {
-        /// Die Kennung des Sandbox-Laufs.
+        /// The id of the sandbox run.
         #[arg(value_name = "ID")]
         id: String,
     },
@@ -376,15 +378,15 @@ pub enum FlowsCmd {
     /// milliseconds, PATH shortened in the middle to 40 characters. What the
     /// daemon does not know stays a dash.
     List {
-        /// Der Filter, zum Beispiel `host:github.com state:blocked`. Mehrere
-        /// Wörter werden mit einem Leerzeichen verbunden und unverändert an
-        /// den Dienst gereicht.
+        /// The filter, for example `host:github.com state:blocked`. Several
+        /// words are joined with one space and passed to the daemon
+        /// unchanged.
         #[arg(value_name = "FILTER")]
         filter: Vec<String>,
-        /// Wie viele Zeilen höchstens; 0 bedeutet die Vorgabe des Dienstes.
+        /// At most this many rows; 0 means the daemon's default.
         #[arg(long, default_value_t = 0, value_name = "N")]
         limit: u32,
-        /// Wonach sortiert wird.
+        /// The column to sort by.
         #[arg(
             long,
             default_value = "ts",
@@ -392,38 +394,37 @@ pub enum FlowsCmd {
             value_parser = ["ts", "host", "duration", "size"]
         )]
         sort: String,
-        /// Aufsteigend statt absteigend: die älteste Zeile zuerst.
+        /// Ascending instead of descending: the oldest row first.
         #[arg(long)]
         asc: bool,
     },
 
     /// Show one flow, or one of its bodies.
     Show {
-        /// Die Id des Flows.
+        /// The id of the flow.
         #[arg(value_name = "ID")]
         id: String,
-        /// Statt der Felder einen der beiden Bodies ausgeben.
+        /// Print one of the two bodies instead of the fields.
         #[arg(long, value_name = "WHICH", value_parser = ["request", "response"])]
         body: Option<String>,
-        /// Den Body Byte für Byte schreiben statt als Text.
+        /// Write the body byte for byte instead of as text.
         #[arg(long, requires = "body")]
         raw: bool,
     },
 
     /// Decide one waiting flow: allow it or block it.
     ///
-    /// Die Entscheidung des Menschen, wie die Oberfläche sie schickt, nur über
-    /// das Terminal. Sie ist der Vorläufer von `--ask terminal` (HUM-021) und
-    /// bleibt danach, weil ein Skript oder eine Fernsitzung keine Oberfläche
-    /// hat.
+    /// The human decision the window sends, from the terminal. It came before
+    /// `--ask terminal` (HUM-021) and stays, because a script or a remote
+    /// session has no window.
     Decide {
-        /// Die Id des Flows.
+        /// The id of the flow.
         #[arg(value_name = "ID")]
         id: String,
-        /// Was mit ihm geschehen soll.
+        /// What happens to it.
         #[arg(value_name = "VERDICT", value_parser = ["allow", "block"])]
         verdict: String,
-        /// Begründung für den Agenten; sie steht im Block-Body unter `note:`.
+        /// A reason for the agent; it stands in the block body under `note:`.
         #[arg(long, value_name = "TEXT")]
         note: Option<String>,
         /// Die Regel, die die Entscheidung hinterlässt; ohne `--remember` keine.
@@ -450,7 +451,7 @@ pub const RULE_METHODS: [&str; 9] = [
 pub enum RulesCmd {
     /// List the rules in the order in which they are evaluated.
     List {
-        /// Auch mitgelieferte und abgelaufene Regeln zeigen.
+        /// Show bundled and expired rules as well.
         #[arg(long)]
         all: bool,
     },
@@ -464,7 +465,7 @@ pub enum RulesCmd {
 
     /// Change one rule. What is not given stays as it is.
     Update {
-        /// Die Id der Regel.
+        /// The id of the rule.
         #[arg(value_name = "ID")]
         id: String,
         /// Die Felder, die sich ändern sollen.
@@ -474,17 +475,17 @@ pub enum RulesCmd {
 
     /// Remove one rule.
     Remove {
-        /// Die Id der Regel.
+        /// The id of the rule.
         #[arg(value_name = "ID")]
         id: String,
     },
 
     /// Move one rule to another place inside its own group.
     Reorder {
-        /// Die Id der Regel.
+        /// The id of the rule.
         #[arg(value_name = "ID")]
         id: String,
-        /// Der neue Platz, 1-basiert und innerhalb der Gruppe der Regel.
+        /// The new place, 1-based, inside the group of the rule.
         #[arg(value_name = "POSITION", value_parser = clap::value_parser!(u32).range(1..))]
         position: u32,
     },
@@ -495,22 +496,22 @@ pub enum RulesCmd {
         /// Die Felder der Regel; --action und --host sind Pflicht.
         #[command(flatten)]
         rule: RuleArgs,
-        /// Wie viele der zuletzt aufgezeichneten Anfragen geprüft werden;
-        /// 0 bedeutet die Vorgabe des Dienstes.
+        /// How many of the most recently recorded requests to check; 0 means
+        /// the daemon's default.
         #[arg(long, default_value_t = 0, value_name = "N")]
         scan: u32,
     },
 
     /// Switch a bundled rule off. It stays in the list and decides nothing.
     Disable {
-        /// Die Id der mitgelieferten Regel.
+        /// The id of the bundled rule.
         #[arg(value_name = "ID")]
         id: String,
     },
 
     /// Switch a bundled rule back on.
     Enable {
-        /// Die Id der mitgelieferten Regel.
+        /// The id of the bundled rule.
         #[arg(value_name = "ID")]
         id: String,
     },
@@ -520,10 +521,10 @@ pub enum RulesCmd {
 
     /// Evaluate one URL against the rule set; exit 10 block, 11 ask.
     Test {
-        /// Die vollständige URL, zum Beispiel `https://api.github.com/repos/x`.
+        /// The full URL, for example `https://api.github.com/repos/x`.
         #[arg(value_name = "URL")]
         url: String,
-        /// Die Methode der gedachten Anfrage.
+        /// The method of the imagined request.
         #[arg(
             long,
             value_name = "M",
@@ -531,7 +532,7 @@ pub enum RulesCmd {
             ignore_case = true
         )]
         method: Option<String>,
-        /// Ob die gedachte Anfrage ein Upgrade trägt.
+        /// Whether the imagined request carries an upgrade.
         #[arg(long, value_name = "UPGRADE", value_parser = ["websocket"])]
         upgrade: Option<String>,
     },
@@ -692,7 +693,7 @@ impl RememberArgs {
 pub enum ConfigCmd {
     /// Print the resolved value of one key, or of every key without one.
     Get {
-        /// Der Pfad des Feldes, mit Punkten getrennt; ohne ihn alle Blattwerte.
+        /// The path of the key, separated by dots; without it every leaf value.
         #[arg(value_name = "KEY")]
         key: Option<String>,
 
@@ -703,14 +704,14 @@ pub enum ConfigCmd {
 
     /// Write one key into config.toml, after checking it against the schema.
     Set {
-        /// Der Pfad des Feldes, mit Punkten getrennt.
+        /// The path of the key, separated by dots.
         #[arg(value_name = "KEY")]
         key: String,
 
-        /// Der Wert, gelesen nach dem Typ des Feldes: `5m` für eine Dauer,
-        /// `32MiB` für eine Größe, `true`/`false`, JSON für eine Liste,
-        /// `null` oder `-`, um den Schlüssel zu entfernen. Ein Wert, der mit
-        /// `-` beginnt, ist ein Wert und kein Flag.
+        /// The value, read by the type of the key: `5m` for a duration,
+        /// `32MiB` for a size, `true`/`false`, JSON for a list, `null` or `-`
+        /// to remove the key. A value that starts with `-` is a value, not a
+        /// flag.
         #[arg(value_name = "VALUE", allow_hyphen_values = true)]
         value: String,
 

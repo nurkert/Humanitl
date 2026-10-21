@@ -1,5 +1,7 @@
 # Humanitl — Architektur-Leitbild
 
+Applies to: Humanitl 0.1
+
 > Zweck: Die Software soll von Anfang an in eine Form hineinwachsen, die auch bei jahrelangem Hobby-Wachstum nicht historisch wuchert. Gleichzeitig soll der Code so schmal wie möglich bleiben. Dieses Dokument legt fest, wie beides zusammengeht. Es ergänzt `BACKLOG.md` (Entscheidungen, Plan) und `backlog/CONVENTIONS.md` (kanonische Namen).
 
 ## 1. Die drei Sätze

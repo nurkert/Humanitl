@@ -1735,4 +1735,34 @@ mod tests {
         assert!(matches!(no_new_privs(), Some(0 | 1)));
         assert_eq!(status_field(b"\nNoSuchField:"), None);
     }
+
+    // ---- the document ---------------------------------------------------
+
+    /// `docs/SECURITY.md` names every syscall this file can refuse, the floor
+    /// and everything a profile may add, each as a code span (HUM-059).
+    ///
+    /// The document cites this table; when a name is added here and not
+    /// there, the document promises less than the filter does, and when the
+    /// floor changes the reader of the document would not know. Matched as
+    /// `` `name` `` so that `mount` is not found inside `umount2`.
+    #[test]
+    fn security_doc_mentions_syscalls() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../docs/SECURITY.md");
+        let doc = std::fs::read_to_string(path).unwrap_or_else(|err| panic!("{path}: {err}"));
+        let missing: Vec<&str> = SYSCALLS
+            .iter()
+            .map(|syscall| syscall.name)
+            .filter(|name| !doc.contains(&format!("`{name}`")))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "docs/SECURITY.md does not name these syscalls of seccomp.rs: {missing:?}"
+        );
+        for name in FLOOR {
+            assert!(
+                SYSCALLS.iter().any(|syscall| syscall.name == *name),
+                "{name} is in FLOOR but not in SYSCALLS"
+            );
+        }
+    }
 }

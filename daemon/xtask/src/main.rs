@@ -7,6 +7,7 @@
 // Descriptor und der Rust-Code aus derselben Uebersetzung stammen.
 include!("../../crates/ipc/proto_gen.rs");
 
+mod docs;
 mod parity;
 
 /// Wurzel des Repositories, abgeleitet aus dem Ort dieser Crate.
@@ -37,15 +38,18 @@ fn task_proto() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Erzeugt `docs/reference/parity.md` (HUM-078).
+/// Erzeugt die Referenzseiten: `docs/reference/parity.md` (HUM-078) hier,
+/// dazu `docs/CONFIG.md`, `docs/DIAGNOSTICS.md` und `docs/reference/cli.md`
+/// über ihre Generatoren in den Crates ([`docs::GENERATED`], HUM-059).
 ///
+/// Die Paritäts-Tabelle entsteht in diesem Prozess:
 /// Befunde, die die Tabelle verhindern, stehen einzeln auf `stderr`, in der CI
 /// als Annotation; die Datei bleibt dann unberührt. Warnungen (RPCs ohne Ort
 /// in der Oberfläche) verhindern nichts. Wie `task_proto` schreibt der Lauf
 /// nur, wenn sich der Inhalt ändert.
 ///
-/// Mit `check` schreibt der Lauf nichts, sondern vergleicht die erzeugte
-/// Tabelle mit der Datei auf der Platte und scheitert, wenn sie fehlt oder
+/// Mit `check` schreibt der Lauf nichts, sondern vergleicht jede erzeugte
+/// Seite mit der Datei auf der Platte und scheitert, wenn eine fehlt oder
 /// abweicht. In der CI ist die Datei auf der Platte die eingecheckte; so kommt
 /// `scripts/ci/parity-check.sh` ohne Versionsverwaltung aus und läuft auch
 /// lokal in `make check`, wo der Arbeitsbaum Änderungen trägt, die noch
@@ -53,8 +57,17 @@ fn task_proto() -> Result<(), Box<dyn Error>> {
 fn task_docs(check: bool) -> Result<(), Box<dyn Error>> {
     let root = repo_root();
     let github = std::env::var_os("GITHUB_ACTIONS").is_some();
+    // Beide Hälften laufen, auch wenn die erste scheitert: Ein Lauf nennt
+    // jede veraltete Seite auf einmal, nicht eine je Runde.
+    let parity = task_parity(&root, check, github);
+    let generated = docs::run(&root.join("daemon"), check, github);
+    parity.and(generated)
+}
+
+/// Die Paritäts-Tabelle: erzeugen oder mit der Datei vergleichen.
+fn task_parity(root: &Path, check: bool, github: bool) -> Result<(), Box<dyn Error>> {
     let fds = compile_protos(&root.join("proto"), false)?;
-    let table = match parity::generate(&root, fds) {
+    let table = match parity::generate(root, fds) {
         Ok(table) => table,
         Err(error) => {
             for line in error.to_string().lines() {

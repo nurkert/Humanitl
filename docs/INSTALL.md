@@ -1,30 +1,21 @@
-# Installation
+# Installation: maintainer notes
 
-Humanitl kommt als `.deb` für Debian und Ubuntu (amd64), als AppImage und als Archiv
-(`humanitl-<version>-linux-x86_64.tar.gz`). Alle drei enthalten dieselben Programme: die
-Anwendung, die Kommandozeile `humanitl`, den Daemon `humanitld` und den statischen Shim
-`humanitl-shim`, der in der Sandbox läuft. Flatpak, Snap, RPM und arm64 kommen nach dem MVP.
+Applies to: Humanitl 0.1
 
-Der Daemon läuft immer als **Benutzerdienst** von systemd, nie als System-Dienst und nie mit
-`sudo`: Er greift auf Laufzeitverzeichnis, Konfiguration und Aufzeichnung genau eines Menschen zu
-(`docs/SECURITY.md`, Abschnitt 5). Deshalb aktiviert ihn auch kein Paket, sondern jeder Mensch für
-sich, mit einem Befehl oder einem Klick in der Einrichtung.
+**To install Humanitl, read [the install guide](guides/install.md).** It covers
+the prerequisites, the `.deb`, the AppImage, the archive, enabling the user
+service, checking the installation and uninstalling.
 
-## Voraussetzungen
+This page keeps what the guide leaves out: the APT repository, switching
+between install forms, why the systemd unit is hardened the way it is, the
+runtime directory without logind, building the packages and the manual test
+matrix. Shipped code links to two sections of this page (`#hardening` and
+`#xdg_runtime_dir-ohne-logind`); both anchors stay.
 
-- Linux mit systemd und einer Benutzersitzung (`systemctl --user` antwortet).
-- bubblewrap 0.8 oder neuer und unprivilegierte Nutzer-Namensräume.
-- Für die Anwendung GTK 3, GLib und eine Grafikanbindung (EGL, GLES 2).
-- Empfohlen: `libsecret-tools` (`secret-tool`), damit ein Zugangsschlüssel für das Modell im
-  Schlüsselbund des Systems liegt; ohne es liegt er in einer Datei mit `0600` (HUM-140). Das
-  Paket empfiehlt es (`Recommends`).
+## APT repository
 
-`humanitl doctor` prüft alles davon und nennt zu jedem Befund den Befehl, der ihn behebt.
-
-## Paket (.deb)
-
-Aus dem APT-Repository `apt.nurkert.de`, das jedes Release übernimmt; spätere Versionen kommen dann
-mit `apt upgrade`:
+Every release also lands in the APT repository `apt.nurkert.de`, so later
+versions arrive with `apt upgrade`:
 
 ```sh
 curl -fsSL https://apt.nurkert.de/install/humanitl | sudo sh
@@ -32,308 +23,218 @@ humanitl daemon install
 humanitl daemon status
 ```
 
-Das Skript legt den Signaturschlüssel des Repositorys nach
-`/usr/share/keyrings/nurkert-archive-keyring.gpg`, die Quelle nach
-`/etc/apt/sources.list.d/nurkert.list` und installiert das Paket. Wer einer Pipe in eine
-Root-Shell nicht traut, liest es vorher oder nimmt das Paket von der Release-Seite:
+The script places the signing key of the repository at
+`/usr/share/keyrings/nurkert-archive-keyring.gpg`, the source at
+`/etc/apt/sources.list.d/nurkert.list`, and installs the package. Whoever does
+not trust a pipe into a root shell reads the script first, or takes the `.deb`
+from the release page as the guide describes.
 
-```sh
-sudo apt install ./humanitl_<version>_amd64.deb
-humanitl daemon install
-humanitl daemon status
-```
+## The package in detail
 
-Das Paket legt die Anwendung und ihre Programme nach `/usr/lib/humanitl/`, Verweise nach
-`/usr/bin/humanitl` und `/usr/bin/humanitl-app`, Desktop-Eintrag und Symbole nach `/usr/share/`
-und die beiden Units `humanitld.service` und `humanitld.socket` nach `/usr/lib/systemd/user/`.
-Unter `/etc`, `/var` und im Heimatverzeichnis legt es nichts an, und es hat keine
-Maintainer-Skripte: Menü und Symbol-Cache aktualisieren die Trigger von `desktop-file-utils` und
-`hicolor-icon-theme`.
+The package has no maintainer scripts. The menu and the icon cache are updated
+by the triggers of `desktop-file-utils` and `hicolor-icon-theme`.
 
-`humanitl daemon install` erkennt die Units des Pakets und **schreibt dann nichts**. Es führt nur aus,
-was das Paket als root nicht kann:
+`humanitl daemon install` enables only the socket, not the service (HUM-164).
+Whoever ran `humanitl daemon install` before that change enabled the service
+too; a new call does not remove that link, and the service keeps starting with
+the session. That does no harm. To have it start on the first client only, run
+`systemctl --user disable humanitld.service` once; the socket stays enabled.
 
-```sh
-systemctl --user daemon-reload
-systemctl --user enable --now humanitld.socket
-```
+## Switching between install forms
 
-Nur der Socket, nicht der Dienst (HUM-164): Der Dienst startet erst beim ersten Client, nicht mit
-jeder Sitzung. Findet ein Client, also die Kommandozeile oder die Anwendung, kein Token des Daemons,
-öffnet er den Socket trotzdem einmal; diese Verbindung lässt systemd den Dienst starten, und der
-Client wartet höchstens zehn Sekunden auf das Token, das der Dienst beim Start schreibt. Kommt es
-in dieser Frist nicht, endet er mit `DAEMON_001` und verweist auf `humanitl daemon logs`, statt zu
-hängen. Das Token kommt nie über den Socket, es bleibt eine Datei mit `0600`. Die Socket-Unit hält
-den Pfad `$XDG_RUNTIME_DIR/humanitl/daemon.sock` über jeden Neustart des Dienstes hinweg; wer in
-dieser Zeit verbindet, wartet, statt abzuprallen. Wer den Dienst trotzdem mit der Sitzung starten
-will, ruft zusätzlich `systemctl --user enable humanitld.service`.
+Whoever installed from the archive or the AppImage before still has the unit
+that `humanitl daemon install` wrote under `~/.config/systemd/user/`. It hides
+the unit of the package. `humanitl daemon install` from the package recognises
+that unit by its first line, announces it, moves it and its enablement link
+aside as `humanitld.service.bak` (or `.bak.1`, `.bak.2` and so on if the name is
+taken) and restarts the service, so that the unit of the package runs. Under
+`--no-start` or without `systemctl` it stays where it is, and the output says
+that it still hides the packaged unit.
 
-Wer schon vor dieser Änderung `humanitl daemon install` aufgerufen hat, hat den Dienst noch selbst
-aktiviert; ein neuer Aufruf nimmt diesen Verweis nicht weg, und der Dienst startet weiter mit der
-Sitzung. Das schadet nicht. Wer ihn erst beim ersten Client starten lassen will, ruft einmal
-`systemctl --user disable humanitld.service`; der Socket bleibt aktiv.
-
-Wer eine Einstellung der Unit ändern will, kopiert sie nicht, sondern legt eine Ergänzung an:
-`systemctl --user edit humanitld.service`. Eine Kopie unter `~/.config/systemd/user/` verdeckte
-die Fassung des Pakets, und jedes Update liefe an ihr vorbei.
-
-Wer vorher aus dem Archiv oder dem AppImage installiert hatte, hat dort noch die Unit, die
-`humanitl daemon install` damals geschrieben hat. Der Befehl erkennt sie an ihrer ersten Zeile,
-kündigt es an, legt sie samt ihrem Verweis der Aktivierung als `humanitld.service.bak` beiseite (gibt
-es den Namen schon, als `humanitld.service.bak.1`, `.bak.2` und so weiter) und startet den Dienst neu,
-damit die Unit des Pakets läuft. Unter `--no-start` oder ohne `systemctl` bleibt sie liegen, und die
-Ausgabe sagt, dass sie die Unit des Pakets weiter verdeckt. Das Beiseitelegen nutzt
-`renameat2` mit `RENAME_NOREPLACE`; liegt `~/.config` auf NFS, das diesen Aufruf mit `EINVAL`
-ablehnt, bricht der Befehl mit `DAEMON_006` ab und lässt alles, wie es war. Eine Datei ohne diese
-erste Zeile rührt er nicht an und bricht mit `DAEMON_005` ab: Sie gehört dann jemand anderem, und
-wer sie nicht mehr braucht, räumt sie selbst weg oder überführt seine Änderungen in
+Moving it aside uses `renameat2` with `RENAME_NOREPLACE`. If `~/.config` lies on
+NFS, which refuses that call with `EINVAL`, the command stops with `DAEMON_006`
+and leaves everything as it was. A file without the first line of
+`daemon install` is never touched; the command stops with `DAEMON_005`. That
+file belongs to somebody else, who removes it or moves the changes into
 `systemctl --user edit`.
 
-Entfernen: `humanitl daemon uninstall` (meldet Socket und Dienst ab, auch einen Dienst, den ein
-früherer `daemon install` mit aktiviert hat, dasselbe wie
-`systemctl --user disable --now humanitld.socket humanitld.service`), dann
-`sudo apt remove --purge humanitl`. Konfiguration, Aufzeichnung und Audit-Log unter
-`~/.config/humanitl` und `~/.local/share/humanitl` bleiben liegen; sie gehören dem Menschen, nicht
-dem Paket.
+## Hardening
 
-## AppImage
+`packaging/systemd/humanitld.service` is hardened as far as the sandbox allows.
+Every line was measured on 2026-09-18 on Debian 14 with systemd 262 and
+bubblewrap 0.12.0, with `systemd-run --user` and the same properties: the escape
+tests (`tests/escape/run.sh`) pass under it with 124 of 124 cases, including the
+three sandbox guarantees and the agent's terminal; a writable project under
+`$HOME` is writable in the sandbox; node, python3 and java run under it. This
+matters because **every child of the daemon inherits the restrictions of the
+unit**: the sandbox backend, the shim and the agent. What stands here applies to
+the agent as well.
 
-```sh
-chmod +x Humanitl-<version>-x86_64.AppImage
-./Humanitl-<version>-x86_64.AppImage                       # die Anwendung
-./Humanitl-<version>-x86_64.AppImage --cli daemon install  # der Dienst
-```
+`systemd-analyze --user security --offline=true` on the unit with the path of
+the package:
 
-`--cli` reicht alle weiteren Argumente an die Kommandozeile im Bild weiter. `daemon install`
-erkennt das AppImage an `$APPIMAGE` und kopiert Daemon, Shim, Domain-Katalog und Sandbox-Profil
-nach `~/.local/lib/humanitl/<version>.<stempel>/`, denn der Einhängepunkt `/tmp/.mount_*`
-verschwindet mit dem Prozess. `ExecStart` der Unit nennt
-`~/.local/lib/humanitl/current/bin/humanitld` über den Verweis `current`.
-Statt des zweiten Befehls geht auch der Knopf „Installieren und starten" in der Einrichtung der
-Anwendung; er ruft dieselbe Kommandozeile.
+Overall exposure level: 3.7 (systemd 262, Debian 14, 2026-09-18; limit from HUM-053: 4.0)
 
-**Eine neue Fassung erneuert den Dienst beim Start.** Wer später ein neueres AppImage startet,
-muss nichts tun: `AppRun` ruft vor der Anwendung `daemon install --refresh`. Zeigt `current` auf
-eine andere Fassung, kopiert es Daemon, Shim, Katalog und Profil der neuen heraus, hängt
-`current` um und startet den Dienst mit `systemctl --user try-restart humanitld.service` neu.
-Die alte Kopie geht erst, wenn danach ein Daemon der neuen Fassung antwortet und kein Prozess
-mehr aus ihr läuft; sonst bleibt sie liegen, und ein späterer Lauf räumt sie weg. Ist der Dienst nicht eingerichtet oder schon diese Fassung, tut der Aufruf nichts. Die erste
-Einrichtung macht ein Programmstart nie von selbst.
+The test `the_exposure_stays_at_or_below_the_documented_value` in
+`daemon/bin/humanitl/src/cmd/unit.rs` reads the value above and measures the
+unit again on every run where `systemd-analyze` can, and keeps both at 4.0 or
+below.
 
-Entfernen:
+### What is set
 
-```sh
-./Humanitl-<version>-x86_64.AppImage --cli daemon uninstall --purge-binaries
-```
-
-Das meldet den Dienst ab und entfernt die Unit, ihre Verweise, einen liegengebliebenen Socket und
-alles unter `~/.local/lib/humanitl/`, was `daemon install` dort angelegt hat. Danach zeigt
-`humanitl doctor` die Zeile `daemon` mit `DOCTOR_006` und dem Vorschlag, den Dienst wieder
-einzurichten.
-
-Das Bild enthält nur das Flutter-Bundle und die drei Programme. GTK, GLib, Mesa und die
-Wayland-Bibliotheken kommen vom System; ein gebündeltes GTK bricht auf Wayland und bei
-abweichenden Mesa-Fassungen. Auf einem System ohne `libayatana-appindicator3` läuft die
-Anwendung, nur das Tray-Symbol fehlt.
-
-Ein AppImage braucht zum Einhängen `libfuse2`, das neue Distributionen nicht mehr mitbringen.
-Ohne FUSE startet es mit `--appimage-extract-and-run`, das den Inhalt in ein temporäres
-Verzeichnis entpackt:
-
-```sh
-./Humanitl-<version>-x86_64.AppImage --appimage-extract-and-run
-```
-
-## Archiv
-
-```sh
-tar -xzf humanitl-<version>-linux-x86_64.tar.gz
-humanitl-<version>-linux-x86_64/bin/humanitl daemon install
-```
-
-`daemon install` schreibt dann `~/.config/systemd/user/humanitld.service` mit dem Pfad des Daemons
-im Archiv und aktiviert sie. Eine Socket-Unit gibt es auf diesem Weg nicht; der Daemon bindet den
-Socket selbst. Die Datei trägt in der ersten Zeile die Marke von `daemon install`, und nur eine
-Datei mit dieser Marke ersetzt der Befehl je (`DAEMON_005`). Entfernen:
-`humanitl-<version>-linux-x86_64/bin/humanitl daemon uninstall`, dann das Verzeichnis.
-
-## Daemon nicht erreichbar
-
-Findet die Kommandozeile keinen Daemon, nennt `DAEMON_001` einen Befehl, der den Dienst auf Dauer
-einrichtet oder startet: `humanitl daemon install`, wenn noch keine Unit da ist,
-`systemctl --user start humanitld.service` bei der Unit aus `daemon install` und
-`systemctl --user start humanitld.socket` beim Paket. Liegen Paket und Unit aus `daemon install`
-zugleich da, nennt er wieder `humanitl daemon install`.
-
-Zur Fehlersuche läuft `humanitld` auch im Vordergrund eines Terminals. Es schreibt dann seine
-Meldungen dorthin und endet mit dem Terminal; ein Vorschlag für den Alltag ist das nicht.
-
-## Einrichtung in der Anwendung
-
-Die erste Zeile der Einrichtung fragt, ob der Daemon antwortet. Antwortet keiner, bietet sie
-„Installieren und starten" an; der Knopf ruft `humanitl daemon install` neben der laufenden
-Anwendung auf, ohne Shell und nie aus `PATH`, und die Zeile wird grün, sobald der Dienst antwortet.
-Findet die Anwendung keine Kommandozeile neben sich, zeigt sie den Befehl zum Kopieren.
-
-<a id="hardening"></a>
-
-## Härtung der Unit
-
-`packaging/systemd/humanitld.service` ist so weit gehärtet, wie die Sandbox es zulässt. Jede Zeile
-ist gemessen, am 2026-09-18 auf Debian 14 mit systemd 262 und bubblewrap 0.12.0, mit
-`systemd-run --user` und denselben Eigenschaften: Die Escape-Tests (`tests/escape/run.sh`)
-laufen darunter mit 124 von 124 Fällen grün, darunter die drei Sandbox-Garantien und das Terminal
-des Agenten; ein schreibbares Projekt unter `$HOME` ist in der Sandbox schreibbar; node, python3 und
-java laufen darunter. Das ist wichtig, weil **jedes Kind des Daemons die Einschränkungen der Unit erbt**:
-das Sandbox-Backend, der Shim und der Agent. Was hier steht, gilt für den Agenten mit.
-
-`systemd-analyze --user security --offline=true` auf die Unit mit dem Pfad des Pakets:
-
-Overall exposure level: 3.7 (systemd 262, Debian 14, 2026-09-18; Grenze aus HUM-053: 4.0)
-
-Der Test `the_exposure_stays_at_or_below_the_documented_value` in
-`daemon/bin/humanitl/src/cmd/unit.rs` misst den Wert bei jedem Lauf nach, wo `systemd-analyze`
-das kann, und hält ihn bei 4,0 oder darunter.
-
-### Was gesetzt ist
-
-| Zeile | Grund |
+| Line | Reason |
 |---|---|
-| `Type=notify` | Der Daemon meldet `READY=1`, sobald Token und Socket stehen. |
-| `NoNewPrivileges=yes` | bubblewrap läuft ohne setuid über Nutzer-Namensräume und braucht keine neuen Rechte. |
-| `PrivateTmp=yes` | Das `/tmp` des Daemons ist seines. Ein Projekt unter `/tmp` sieht er deshalb nicht. |
-| `ProtectSystem=strict` | In einer Benutzer-Unit ist danach alles schreibgeschützt außer `$HOME`, dem Laufzeitverzeichnis und den API-Dateisystemen (gemessen, nicht gelesen). |
-| `ReadWritePaths=-%h/.local/share/humanitl -%h/.config/humanitl -%t/humanitl` | Die drei Verzeichnisse des Daemons, jeweils mit `-`, weil systemd eine Unit mit einem fehlenden Pfad nicht startet. |
-| `PrivateIPC=yes`, `PrivateMounts=yes`, `PrivateUsers=yes` | Eigene IPC- und Mount-Namensräume, nur der eigene Nutzer sichtbar. |
-| `ProtectClock=yes`, `ProtectControlGroups=yes`, `ProtectKernelModules=yes` | Uhr, cgroups und Kernelmodule sind nicht Sache des Daemons. |
-| `ProtectProc=invisible` | Prozesse anderer Nutzer sind unsichtbar. |
-| `KeyringMode=private`, `LockPersonality=yes`, `RestrictRealtime=yes` | Standard-Härtung ohne Wirkung auf die Sandbox. |
-| `RestrictFileSystems=~@privileged-api` | Keine Dateisysteme wie `bpf` oder `debugfs`. |
-| `CapabilityBoundingSet=CAP_SYS_ADMIN` | Ein Benutzerdienst hat keine Capabilities; die Grenze wirkt auf Programme mit Datei-Capabilities. Leer darf sie nicht sein (siehe unten). |
-| `SystemCallFilter=@system-service @mount @sandbox sethostname`, `SystemCallErrorNumber=EPERM` | `@mount`, weil bubblewrap mountet und `pivot_root`t; `@sandbox`, weil der Shim seinen eigenen seccomp-Filter mit `seccomp(2)` setzt; `sethostname`, weil bubblewrap den UTS-Namensraum der Sandbox `sandbox` nennt („Can't set hostname to sandbox" ohne ihn). Den Namen des Rechners ändert das nicht. |
-| `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK` | `AF_NETLINK` braucht bubblewrap für `lo` im Namensraum, IPv4 und IPv6 der Proxy für den Weg zum Ziel. |
+| `Type=notify` | The daemon sends `READY=1` as soon as token and socket are in place. |
+| `NoNewPrivileges=yes` | bubblewrap runs without setuid through user namespaces and needs no new privileges. |
+| `PrivateTmp=yes` | The daemon's `/tmp` is its own. A project under `/tmp` is therefore invisible to it. |
+| `ProtectSystem=strict` | In a user unit, everything is read-only afterwards except `$HOME`, the runtime directory and the API file systems (measured, not read). |
+| `ReadWritePaths=-%h/.local/share/humanitl -%h/.config/humanitl -%t/humanitl` | The three directories of the daemon, each with `-`, because systemd does not start a unit with a missing path. |
+| `PrivateIPC=yes`, `PrivateMounts=yes`, `PrivateUsers=yes` | Own IPC and mount namespaces, only the own user visible. |
+| `ProtectClock=yes`, `ProtectControlGroups=yes`, `ProtectKernelModules=yes` | Clock, cgroups and kernel modules are none of the daemon's business. |
+| `ProtectProc=invisible` | Processes of other users are invisible. |
+| `KeyringMode=private`, `LockPersonality=yes`, `RestrictRealtime=yes` | Standard hardening without effect on the sandbox. |
+| `RestrictFileSystems=~@privileged-api` | No file systems such as `bpf` or `debugfs`. |
+| `CapabilityBoundingSet=CAP_SYS_ADMIN` | A user service has no capabilities; the bound acts on programs with file capabilities. It must not be empty (see below). |
+| `SystemCallFilter=@system-service @mount @sandbox sethostname`, `SystemCallErrorNumber=EPERM` | `@mount`, because bubblewrap mounts and calls `pivot_root`; `@sandbox`, because the shim sets its own seccomp filter with `seccomp(2)`; `sethostname`, because bubblewrap names the UTS namespace of the sandbox `sandbox` ("Can't set hostname to sandbox" without it). The host name of the machine does not change. |
+| `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK` | bubblewrap needs `AF_NETLINK` for `lo` in the namespace, the proxy needs IPv4 and IPv6 to reach the destination. |
 
-### Was mit Absicht fehlt
+### What is left out on purpose
 
-| Zeile | Gemessene Folge |
+| Line | Measured consequence |
 |---|---|
-| `RestrictNamespaces` | bubblewrap: „No permissions to create a new namespace". Die Sandbox braucht user, mnt, pid, net, ipc und uts. |
-| `ProtectKernelTunables=yes` | bubblewrap: „Can't mount proc on /proc: Operation not permitted". Ein überdecktes `/proc/sys` verbietet ein neues `/proc`. |
-| `ProtectKernelLogs=yes` | Derselbe Fehler, wegen des überdeckten `/proc/kmsg`. |
-| `ProtectHostname=yes` | Allein harmlos, zusammen mit den übrigen Zeilen derselbe Fehler beim Einhängen von `/proc`. |
-| `RestrictSUIDSGID=yes` | bubblewrap: „Can't open source /usr: Function not implemented". |
-| `MemoryDenyWriteExecute=yes` | Vererbt auf den Agenten: node (V8) bricht beim Start mit „Check failed: 12 == (*__errno_location ())" ab, ebenso jede andere JIT-Laufzeit. |
-| `CapabilityBoundingSet=` (leer) | bubblewrap startet nicht. |
-| `SystemCallArchitectures=native` | Der Shim prüft seinen eigenen Filter mit einem x32-Aufruf von `socket` und stirbt dabei an `SIGSYS`; die Sandbox startet nicht (`SANDBOX_016`, „families not reported"). |
-| `PrivateDevices=yes` | Ohne `/dev/ptmx` öffnet der Daemon kein Terminal für den Agenten (`TERM_002`, „cannot open a pseudo terminal"). |
-| `UMask=0077` | Vererbt auf den Agenten: Jede Datei, die er im Projekt anlegt, bekäme andere Rechte als ohne Humanitl. |
-| `ProtectHome=read-only` | Ein Projekt unter `$HOME` wäre in der Sandbox nur lesbar; `sandbox.work_mode = rw` ist die Vorgabe. |
-| `ProcSubset=pid` | `humanitl doctor` liest `/proc/sys/kernel/*` und `/proc/modules`; die Befunde dazu fielen weg. |
-| `PrivateNetwork`, `IPAddressDeny` | Der Proxy muss das Ziel erreichen, das der Mensch freigibt. |
+| `RestrictNamespaces` | bubblewrap: "No permissions to create a new namespace". The sandbox needs user, mnt, pid, net, ipc and uts. |
+| `ProtectKernelTunables=yes` | bubblewrap: "Can't mount proc on /proc: Operation not permitted". A covered `/proc/sys` forbids a new `/proc`. |
+| `ProtectKernelLogs=yes` | The same error, because of the covered `/proc/kmsg`. |
+| `ProtectHostname=yes` | Harmless alone; together with the other lines the same error when `/proc` is mounted. |
+| `RestrictSUIDSGID=yes` | bubblewrap: "Can't open source /usr: Function not implemented". |
+| `MemoryDenyWriteExecute=yes` | Inherited by the agent: node (V8) aborts at start with "Check failed: 12 == (*__errno_location ())", as does every other JIT runtime. |
+| `CapabilityBoundingSet=` (empty) | bubblewrap does not start. |
+| `SystemCallArchitectures=native` | The shim checks its own filter with an x32 call of `socket` and dies of `SIGSYS`; the sandbox does not start (`SANDBOX_016`, "families not reported"). |
+| `PrivateDevices=yes` | Without `/dev/ptmx` the daemon opens no terminal for the agent (`TERM_002`, "cannot open a pseudo terminal"). |
+| `UMask=0077` | Inherited by the agent: every file it creates in the project would get other permissions than without Humanitl. |
+| `ProtectHome=read-only` | A project under `$HOME` would be read-only in the sandbox; `sandbox.work_mode = rw` is the default. |
+| `ProcSubset=pid` | `humanitl doctor` reads `/proc/sys/kernel/*` and `/proc/modules`; those findings would be lost. |
+| `PrivateNetwork`, `IPAddressDeny` | The proxy has to reach the destination that a person approves. |
 
-### Projekte außerhalb von `$HOME`
+### Projects outside `$HOME`
 
-Unter `ProtectSystem=strict` ist ein Projekt außerhalb des Heimatverzeichnisses, etwa unter
-`/srv` oder einem eigenen Datenträger, für den Daemon und damit in der Sandbox nur lesbar. Freigeben
-lässt es sich mit einer Ergänzung der Unit:
+Under `ProtectSystem=strict`, a project outside the home directory, for example
+under `/srv` or on a separate disk, is read-only for the daemon and therefore in
+the sandbox. A drop-in for the unit makes it writable:
 
 ```sh
 systemctl --user edit humanitld.service
 # [Service]
-# ReadWritePaths=/srv/mein-projekt
+# ReadWritePaths=/srv/demo-project
 systemctl --user restart humanitld.service
 ```
 
-Ein Projekt unter `/tmp` sieht der Daemon wegen `PrivateTmp` gar nicht.
+A project under `/tmp` is invisible to the daemon because of `PrivateTmp`.
 
-## XDG_RUNTIME_DIR ohne logind
+<a id="xdg_runtime_dir-ohne-logind"></a>
 
-Socket und Token des Daemons liegen im Laufzeitverzeichnis `$XDG_RUNTIME_DIR/humanitl`. Fehlt
-`XDG_RUNTIME_DIR` und gibt es kein `/run/user/<uid>`, etwa ohne logind, weichen Daemon, CLI und
-Oberfläche auf `$TMPDIR/humanitl-<uid>` aus. Diesen Namen kann jedes andere Konto vorab anlegen.
-Humanitl weist ein solches fremdes Verzeichnis ab (`DAEMON_001`, `DAEMON_004`) und startet dann
-nicht, solange es dort liegt (`docs/SECURITY.md` Abschnitt 10, Punkt 12).
+## XDG_RUNTIME_DIR without logind
 
-Abhilfe ist ein eigenes Laufzeitverzeichnis unter dem Heimatverzeichnis. Daemon, CLI und
-Oberfläche müssen dieselbe Variable sehen; sie gehört deshalb in die Anmeldung und nicht vor
-einen einzelnen Befehl. Das Verzeichnis einmal anlegen:
+Socket and token of the daemon live in the runtime directory
+`$XDG_RUNTIME_DIR/humanitl`. If `XDG_RUNTIME_DIR` is unset and there is no
+`/run/user/<uid>`, for example without logind, daemon, command line and app fall
+back to `$TMPDIR/humanitl-<uid>`. Any other account can create that name first.
+Humanitl refuses such a foreign directory (`DAEMON_001`, `DAEMON_004`) and does
+not start while it is there ([SECURITY.md](SECURITY.md)).
+
+The fix is a runtime directory of your own under your home directory. Daemon,
+command line and app must see the same variable, so it belongs in the login and
+not in front of a single command. Create the directory once:
 
 ```sh
 mkdir -p "$HOME/.cache/humanitl-run"
 chmod 700 "$HOME/.cache/humanitl-run"
 ```
 
-Dann die folgende Zeile in die Datei eintragen, die die eigene Anmeldung liest. Sie setzt die
-Variable nur, wenn sie fehlt und `/run/user/<uid>` nicht existiert; eine spätere Sitzung mit
-logind behält so ihre eigenen Sockets für Wayland, PipeWire und D-Bus.
+Then add the following line to the file your login reads. It sets the variable
+only if it is missing and `/run/user/<uid>` does not exist, so a later session
+with logind keeps its own sockets for Wayland, PipeWire and D-Bus.
 
 ```sh
 [ -n "$XDG_RUNTIME_DIR" ] || [ -d "/run/user/$(id -u)" ] || export XDG_RUNTIME_DIR="$HOME/.cache/humanitl-run"
 ```
 
-Welche Datei das ist, hängt von der Shell ab:
+Which file that is depends on the shell:
 
-- `bash` liest bei der Anmeldung nur die erste vorhandene von `~/.bash_profile`,
-  `~/.bash_login` und `~/.profile`. Die Zeile gehört in genau diese Datei. `~/.profile` nur dann
-  neu anlegen, wenn weder `~/.bash_profile` noch `~/.bash_login` existiert.
-- `zsh` liest `~/.zprofile`, nicht `~/.profile`. Die Zeile gehört nach `~/.zprofile`; die Datei
-  darf dafür neu angelegt werden.
-- Display-Manager ohne systemd-Sitzung lesen meist `~/.profile`. Wer die Oberfläche von dort
-  startet, trägt die Zeile zusätzlich dort ein.
+- `bash` reads at login only the first existing file of `~/.bash_profile`,
+  `~/.bash_login` and `~/.profile`. The line belongs in exactly that file.
+  Create `~/.profile` only if neither `~/.bash_profile` nor `~/.bash_login`
+  exists.
+- `zsh` reads `~/.zprofile`, not `~/.profile`. The line belongs in
+  `~/.zprofile`; the file may be created for it.
+- Display managers without a systemd session usually read `~/.profile`. Whoever
+  starts the app from there adds the line there as well.
 
-Die Zeile wirkt erst nach einer neuen Anmeldung. Danach finden Daemon, CLI und Oberfläche
-dasselbe Verzeichnis. Dass die Clients es ohne diese Zeile selbst finden, ist HUM-222.
+The line takes effect after the next login. From then on daemon, command line
+and app find the same directory. That the clients find it without this line is
+HUM-222.
 
-## Paket bauen
+## Building the packages
 
 ```sh
 make package PACKAGE_VERSION=0.0.N
 ```
 
-Das Ziel baut `humanitld`, `humanitl` und den statischen Shim
-(`packaging/release/build-binaries.sh`) nach `app/linux/bundle-extra/`, dann das Flutter-Bundle
-(`app/linux/CMakeLists.txt` legt die drei nach `bin/`), dann
-`dist/humanitl_<version>_amd64.deb` (`packaging/deb/build-deb.sh`) und
-`dist/Humanitl-<version>-x86_64.AppImage` (`packaging/appimage/build-appimage.sh`), und prüft das
-AppImage (`packaging/appimage/check-appimage.sh`). Gebraucht werden `dpkg-dev`, `patchelf`,
-`curl` und für den statischen Shim `musl-tools`. `appimagetool` und die Laufzeit des AppImage lädt
-das Skript in festgelegter Fassung und prüft ihre SHA-256-Summe, bevor es sie ausführt.
+The target builds `humanitld`, `humanitl` and the static shim
+(`packaging/release/build-binaries.sh`) into `app/linux/bundle-extra/`, then the
+Flutter bundle (`app/linux/CMakeLists.txt` puts the three into `bin/`), then
+`dist/humanitl_<version>_amd64.deb` (`packaging/deb/build-deb.sh`) and
+`dist/Humanitl-<version>-x86_64.AppImage`
+(`packaging/appimage/build-appimage.sh`), and checks the AppImage
+(`packaging/appimage/check-appimage.sh`). It needs `dpkg-dev`, `patchelf`,
+`curl` and, for the static shim, `musl-tools`. The script downloads
+`appimagetool` and the AppImage runtime in pinned versions and checks their
+SHA-256 sums before running them.
 
-Die PNG-Symbole unter `packaging/deb/icons/` sind aus `packaging/deb/humanitl.svg` gerechnet, mit
-Inkscape 1.x. Wer das SVG ändert, rechnet sie neu und checkt die drei Bilder im selben Commit ein:
+`Depends` of the `.deb` is derived, not written by hand: `dpkg-shlibdeps` reads
+the libraries of the built programs, and `build-deb.sh` adds
+`bubblewrap (>= MIN_BWRAP_VERSION)` from `daemon/crates/sandbox/src/bwrap.rs`,
+`libegl1` and `libgles2`. The packages are built on Ubuntu 24.04, so the
+derived library versions are those of that system.
+
+The PNG icons under `packaging/deb/icons/` are rendered from
+`packaging/deb/humanitl.svg` with Inkscape 1.x. Whoever changes the SVG renders
+them again and commits the three images in the same commit:
 
 ```sh
 packaging/deb/icons/render.sh
 ```
 
-Herkunft und Lizenz des Icons (Font Awesome Free, CC BY 4.0) stehen in `THIRD_PARTY.md` und im
-Paket in `/usr/share/doc/humanitl/copyright`.
+Origin and licence of the icon (Font Awesome Free, CC BY 4.0) are in
+`THIRD_PARTY.md` and, in the package, in `/usr/share/doc/humanitl/copyright`.
 
-Das `.deb` wird nie auf einem Arbeitsrechner installiert, sondern in einem Wegwerf-Container
-geprüft, mit `packaging/deb/check-install.sh` (Installation, Bibliotheken, Start der Anwendung
-unter Xvfb, Units, Symbole, `daemon install --print`, Entfernen mit `--purge`) und
-`packaging/deb/lintian.sh` (keine Fehler, keine Warnungen; jede Ausnahme steht mit Grund in
-`packaging/deb/lintian-overrides`).
+The `.deb` is never installed on a workstation but checked in a throwaway
+container, with `packaging/deb/check-install.sh` (installation, libraries, start
+of the app under Xvfb, units, icons, `daemon install --print`, removal with
+`--purge`) and `packaging/deb/lintian.sh` (no errors, no warnings; every
+exception stands with its reason in `packaging/deb/lintian-overrides`).
 
-## Test-Matrix (manuell)
+## Manual test matrix
 
-Was kein Container zeigt, prüft ein Mensch auf echter Hardware, je Vorabversion und vor 0.1.0.
-Ergebnis und Datum stehen in der Tabelle; ein leeres Feld heißt: noch nicht geprüft.
+What no container shows, a person checks on real hardware, for every pre-release
+and before 0.1.0. Result and date go into the table; an empty cell means: not
+checked yet.
 
-| Prüfung | Debian 13 GNOME Wayland (Intel) | Debian 13 KDE Wayland (NVIDIA proprietär) | Ubuntu 24.04 GNOME X11 |
+| Check | Debian 13 GNOME Wayland (Intel) | Debian 13 KDE Wayland (NVIDIA proprietary) | Ubuntu 24.04 GNOME X11 |
 |---|---|---|---|
-| `sudo apt install ./humanitl_…deb` auf frischer VM, dann `humanitl daemon install` und `humanitl daemon status` mit Exit 0 | | | |
-| Anwendung startet, Einrichtung zeigt den Daemon grün | | | |
-| Tray-Symbol (GNOME braucht die Erweiterung „AppIndicator and KStatusNotifierItem Support"; die Einrichtung weist darauf hin) | | | |
-| Fenster bei 200 % Skalierung scharf und vollständig | | | |
-| Benachrichtigung bei einer gehaltenen Anfrage | | | |
-| Sandbox-Start mit schreibbarem Projekt unter `$HOME` unter der Unit | | | |
-| Impeller rendert (Fenster nicht schwarz, `humanitl doctor` ohne `DOCTOR_010`) | | | |
-| AppImage startet ohne gebündeltes GTK | | | |
+| `sudo apt install ./humanitl_…deb` on a fresh VM, then `humanitl daemon install` and `humanitl daemon status` with exit 0 | | | |
+| App starts, setup shows the daemon green | | | |
+| Tray icon (GNOME needs the extension "AppIndicator and KStatusNotifierItem Support"; the setup points it out) | | | |
+| Window sharp and complete at 200 % scaling | | | |
+| Notification for a held request | | | |
+| Sandbox start with a writable project under `$HOME` under the unit | | | |
+| Impeller renders (window not black, `humanitl doctor` without `DOCTOR_010`) | | | |
+| AppImage starts without bundled GTK | | | |
+| [Install guide](guides/install.md) and [first session](guides/first-session.md) followed step by step on a fresh Debian 13 VM with only the `.deb`, until the first held request, in under 15 minutes | | | |
 
-Fällt Impeller auf einem Treiber aus (schwarzes Fenster, Absturz beim Start), gehört der Befund
-mit Treiber und Fassung in diese Tabelle. Einen Rückfall auf einen anderen Renderer gibt es im
-Release-Bau noch nicht: Schalter der Flutter-Engine wie `--no-enable-impeller` reicht der
-Linux-Runner nicht an die Engine weiter, sondern an den Dart-Code, und die Umgebungsvariablen der
-Engine gelten nach ihrem Quelltext nur außerhalb von Release-Bauten. Gemessen ist beides hier
-nicht (HUM-168).
+If Impeller fails on a driver (black window, crash at start), the finding goes
+into this table with driver and version. The release build has no fallback to
+another renderer yet: switches of the Flutter engine such as
+`--no-enable-impeller` are passed by the Linux runner to the Dart code, not to
+the engine, and the engine's environment variables apply, according to its
+source, only outside release builds. Neither is measured here (HUM-168).

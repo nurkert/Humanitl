@@ -1,5 +1,7 @@
 # Die Kommandozeile
 
+Applies to: Humanitl 0.1
+
 `humanitl` ist ein dünner Client des Daemons (ADR-018). Jede Fähigkeit ist
 zuerst ein RPC; die Kommandozeile ruft ihn auf und formatiert die Antwort. Sie
 enthält keine Fachlogik, und sie erfindet nichts dazu.

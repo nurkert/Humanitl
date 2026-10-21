@@ -6,7 +6,7 @@
 # Die Ausgabe ist Englisch (HUM-225): Die Releases lesen Menschen, die kein
 # Deutsch sprechen. Nur diese Kommentare bleiben deutsch.
 #
-# Die Meilensteine kommen aus der Tabelle "Project status and roadmap" in
+# Die Meilensteine kommen aus der Tabelle im Abschnitt "Status" in
 # README.md, nicht aus diesem Skript: Die Zustaende ("delivered", "in
 # progress", "planned") stehen hier so, wie sie dort stehen, und eine
 # Aenderung der Tabelle aendert die naechsten Notes mit. Die Commit-Liste ist
@@ -37,9 +37,9 @@ import re
 import sys
 
 text = open(sys.argv[1], encoding="utf-8").read()
-start = text.find("## Project status and roadmap")
+start = text.find("## Status\n")
 if start < 0:
-    sys.exit("error: README.md has no section 'Project status and roadmap'")
+    sys.exit("error: README.md has no section 'Status'")
 rows = []
 for line in text[start:].splitlines()[1:]:
     if line.startswith("## "):
