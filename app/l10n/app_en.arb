@@ -2524,7 +2524,7 @@
   "@diagLLM002Why": {"description": "Generic cause of LLM_002. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own; the daemon's measured sentence always wins there (docs/UX.md 4.4, HUM-052)."},
   "diagLLM003Title": "LLM endpoint is not a known API",
   "@diagLLM003Title": {"description": "Title of the diagnostic LLM_003 (docs/DIAGNOSTICS.md). Shown instead of the daemon's register title, which is German (DiagnosticL10n.resolve, HUM-052)."},
-  "diagLLM003Why": "The connection works, but neither /api/tags nor /v1/models answers as a known API.",
+  "diagLLM003Why": "The connection works, but the model list of the endpoint does not answer as a known API.",
   "@diagLLM003Why": {"description": "Generic cause of LLM_003. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own; the daemon's measured sentence always wins there (docs/UX.md 4.4, HUM-052)."},
   "diagLLM004Title": "No model configured",
   "@diagLLM004Title": {"description": "Title of the diagnostic LLM_004 (docs/DIAGNOSTICS.md). Shown instead of the daemon's register title, which is German (DiagnosticL10n.resolve, HUM-052)."},
@@ -3127,5 +3127,14 @@
   "shellWindowMaximize": "Maximize or restore",
   "@shellWindowMaximize": {"description": "Hover and screen-reader label of the window button in the header bar that maximizes the window, or restores it when it is maximized (HUM-255). One label for both, because the button does not track the state."},
   "shellWindowClose": "Close",
-  "@shellWindowClose": {"description": "Hover and screen-reader label of the window button in the header bar that closes the window, exactly like the close button of the window manager (HUM-255)."}
+  "@shellWindowClose": {"description": "Hover and screen-reader label of the window button in the header bar that closes the window, exactly like the close button of the window manager (HUM-255)."},
+  "rulesMatchExactPaths": "exact {paths}",
+  "@rulesMatchExactPaths": {
+    "description": "Part of the match summary of a rule that only matches exactly these paths, with any query (HUM-261). `paths` is the list, joined with commas, for example `/v1/models, /v1/chat/completions`.",
+    "placeholders": {"paths": {"type": "String"}}
+  },
+  "rulesFieldExactPaths": "Exact paths",
+  "@rulesFieldExactPaths": {"description": "Label of the read-only line in the rule editor that shows the paths a rule matches exactly, not as prefixes (HUM-261)."},
+  "rulesExactPathsReadOnly": "Only exactly these paths match, with any query; nothing below them. The editor cannot change them; saving keeps them.",
+  "@rulesExactPathsReadOnly": {"description": "Hint under the exact paths in the rule editor: they match only themselves, cannot be edited here, and survive a save (HUM-261)."}
 }

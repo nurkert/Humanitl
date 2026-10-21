@@ -194,7 +194,7 @@ async fn probe_timeout_llm_001() {
         Some(humanitl_core::FixAction::CopyCommand(command)) => assert_eq!(
             command,
             format!("curl -sS http://127.0.0.1:{port}/api/tags"),
-            "the fix is the same question, asked by hand"
+            "the fix asks by hand exactly the path that went unanswered (HUM-261)"
         ),
         other => panic!("expected a copyable curl, got {other:?}"),
     }
@@ -550,4 +550,352 @@ async fn an_endpoint_signed_by_an_unknown_authority_says_so() {
         other => panic!("expected the command that installs the CA, got {other:?}"),
     }
     assert_eq!(endpoint_server.hits(), 0, "the handshake failed first");
+}
+
+/// Ein OpenAI-kompatibler Server hinter dem Pfad-Präfix `/api`, wie ihn ein
+/// Reverse-Proxy vor `Open WebUI` oder `LiteLLM` anbietet (HUM-261).
+///
+/// `GET /api/v1/models` beantwortet er mit dem richtigen Schlüssel mit einer
+/// Modellliste, ohne ihn mit `401`. Jeder andere Pfad ist `404` mit dem Körper,
+/// den der Server des Befunds vom 2026-10-20 schickte. Jede Anfrage schreibt
+/// er als Pfad mit.
+async fn prefixed_server(key: &'static str) -> (u16, Arc<std::sync::Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = Arc::clone(&seen);
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let log = Arc::clone(&log);
+            tokio::spawn(async move {
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    if stream.read(&mut byte).await.unwrap_or(0) == 0 {
+                        return;
+                    }
+                    head.push(byte[0]);
+                }
+                let head = String::from_utf8_lossy(&head).into_owned();
+                let path = head
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or_default()
+                    .to_owned();
+                let auth = head
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .starts_with("authorization:")
+                            .then(|| line["authorization:".len()..].trim().to_owned())
+                    })
+                    .unwrap_or_default();
+                log.lock().unwrap().push(path.clone());
+                let reply = |status: &str, body: &str| {
+                    format!(
+                        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: \
+                         {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                };
+                let reply = if path == "/api/v1/models" {
+                    if auth == format!("Bearer {key}") {
+                        reply(
+                            "200 OK",
+                            r#"{"object":"list","data":[{"id":"prefixed-model"}]}"#,
+                        )
+                    } else {
+                        reply("401 Unauthorized", r#"{"detail":"Not authenticated"}"#)
+                    }
+                } else {
+                    reply("404 Not Found", r#"{"detail":"Not Found"}"#)
+                };
+                let _ignored = stream.write_all(reply.as_bytes()).await;
+            });
+        }
+    });
+    (port, seen)
+}
+
+/// HUM-261: Ein Endpunkt mit Pfad-Präfix ist die Basis der OpenAI-kompatiblen
+/// API. Mit Schlüssel fragt die Probe genau `<Basis>/models` und erkennt den
+/// Server; `/api/tags` fragt sie weder unter dem Präfix (`/api/api/tags`) noch
+/// an der Wurzel des Hosts.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_prefixed_endpoint_is_asked_under_its_base() {
+    const KEY: &str = "sk-prefix-0123456789";
+    let (port, seen) = prefixed_server(KEY).await;
+    let key = humanitl_config::secret::ApiKey::new(KEY).unwrap();
+
+    for written in ["/api/v1/", "/api/v1"] {
+        seen.lock().unwrap().clear();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}{written}")).unwrap();
+        let result = probe()
+            .probe_with_key(&url, None, Some(&key))
+            .await
+            .unwrap();
+        assert_eq!(result.flavor, LlmFlavor::OpenAiCompatible, "for {written}");
+        assert_eq!(result.models, vec!["prefixed-model".to_owned()]);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            ["/api/v1/models"],
+            "for {written}: one GET, under the base, and no Ollama path"
+        );
+    }
+}
+
+/// HUM-261: Ohne Schlüssel sagt der Server `401` unter der Basis. Das ist
+/// `LLM_002` mit der Adresse, die so geantwortet hat, und dem Weg zum
+/// Schlüssel — nie „nicht erreichbar" und nie ein Pfad, den es nicht gibt.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_prefixed_endpoint_without_a_key_asks_for_the_key() {
+    let (port, seen) = prefixed_server("sk-prefix-0123456789").await;
+    let url = Url::parse(&format!("http://127.0.0.1:{port}/api/v1/")).unwrap();
+
+    let diagnostic = probe().probe(&url, None).await.unwrap_err();
+
+    assert_eq!(diagnostic.code.as_str(), "LLM_002");
+    assert!(
+        diagnostic
+            .why
+            .contains(&format!("http://127.0.0.1:{port}/api/v1/models")),
+        "{}",
+        diagnostic.why
+    );
+    assert!(
+        diagnostic.why.contains("none was sent"),
+        "{}",
+        diagnostic.why
+    );
+    assert!(!diagnostic.why.contains("/api/api/"), "{}", diagnostic.why);
+    assert!(
+        !diagnostic.why.contains("could not reach"),
+        "{}",
+        diagnostic.why
+    );
+    assert_eq!(
+        diagnostic.fix,
+        Some(humanitl_core::FixAction::CopyCommand(
+            "humanitl llm key set".to_owned()
+        ))
+    );
+    assert_eq!(seen.lock().unwrap().as_slice(), ["/api/v1/models"]);
+}
+
+/// HUM-261: Ein Endpunkt mit Pfad-Präfix, der schweigt, ist `LLM_001` mit
+/// einem `curl` auf die Modellliste unter seiner Basis — nie auf
+/// `/api/api/tags`, die Adresse aus dem Befund vom 2026-10-20.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_silent_prefixed_endpoint_gets_a_curl_on_its_model_list() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let silent = tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept().await {
+            held.push(stream);
+        }
+    });
+    let url = Url::parse(&format!("http://127.0.0.1:{port}/api/v1/")).unwrap();
+
+    let diagnostic = probe()
+        .probe(&url, Some(Duration::from_millis(200)))
+        .await
+        .unwrap_err();
+    silent.abort();
+
+    assert_eq!(diagnostic.code.as_str(), "LLM_001");
+    match diagnostic.fix {
+        Some(humanitl_core::FixAction::CopyCommand(command)) => {
+            assert_eq!(
+                command,
+                format!("curl -sS http://127.0.0.1:{port}/api/v1/models")
+            );
+            assert!(!command.contains("/api/api/"), "{command}");
+        }
+        other => panic!("expected a copyable curl, got {other:?}"),
+    }
+}
+
+/// HUM-261: Antwortet unter einem Pfad-Präfix auch die Modellliste nicht,
+/// nennt `LLM_003` genau den Pfad, der gefragt wurde, und keinen, der nicht
+/// gefragt wurde.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unknown_prefixed_endpoint_names_only_the_path_it_asked() {
+    let (port, seen) = prefixed_server("sk-prefix-0123456789").await;
+    let url = Url::parse(&format!("http://127.0.0.1:{port}/other/")).unwrap();
+
+    let result = probe().probe(&url, None).await.unwrap();
+
+    assert_eq!(result.flavor, LlmFlavor::Unknown);
+    let llm_003 = result
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code.as_str() == "LLM_003")
+        .expect("LLM_003");
+    assert!(llm_003.why.contains("/other/v1/models"), "{}", llm_003.why);
+    assert!(!llm_003.why.contains("/api/tags"), "{}", llm_003.why);
+    assert_eq!(seen.lock().unwrap().as_slice(), ["/other/v1/models"]);
+}
+
+/// HUM-261: `…/v1` ohne Schrägstrich ist kein Präfix. Ein Server mit nur der
+/// OpenAI-kompatiblen Oberfläche wird über `/v1/models` erkannt, nachdem
+/// `/api/tags` an der Wurzel ins Leere ging.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_trailing_v1_without_a_slash_is_no_prefix() {
+    let upstream = FakeUpstream::openai().await;
+    let url = Url::parse(&format!("http://127.0.0.1:{}/v1", upstream.port())).unwrap();
+    let result = probe().probe(&url, None).await.unwrap();
+    assert_eq!(result.flavor, LlmFlavor::OpenAiCompatible);
+    assert_eq!(
+        result.models,
+        vec!["gpt-oss:20b".to_owned(), "phi-4".to_owned()]
+    );
+}
+
+/// Ein Server, der `/api/tags` mit `404` beantwortet und auf jede andere
+/// Anfrage schweigt.
+async fn tags_404_then_silent() -> u16 {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let mut parked = Vec::new();
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                if stream.read(&mut byte).await.unwrap_or(0) == 0 {
+                    break;
+                }
+                head.push(byte[0]);
+            }
+            if head.starts_with(b"GET /api/tags ") {
+                let _ignored = stream
+                    .write_all(
+                        b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                    )
+                    .await;
+            } else {
+                parked.push(stream);
+            }
+        }
+    });
+    port
+}
+
+/// HUM-261: Der `curl` von `LLM_001` fragt den Pfad, an dem die Probe
+/// scheiterte. Ging `/api/tags` mit `404` durch und schweigt danach die
+/// Modellliste, ist es die Modellliste.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_curl_names_the_path_that_went_unanswered() {
+    let port = tags_404_then_silent().await;
+    let diagnostic = probe()
+        .probe(&endpoint(port), Some(Duration::from_millis(300)))
+        .await
+        .unwrap_err();
+    assert_eq!(diagnostic.code.as_str(), "LLM_001");
+    assert_eq!(
+        diagnostic.fix,
+        Some(humanitl_core::FixAction::CopyCommand(format!(
+            "curl -sS http://127.0.0.1:{port}/v1/models"
+        )))
+    );
+}
+
+/// HUM-261: Scheitert die Probe vor jeder Anfrage, an der Auflösung, nennt
+/// der Befund keinen Pfad, der angeblich gefragt wurde.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_name_that_does_not_resolve_names_no_path() {
+    const NAME: &str = "nowhere.lan";
+    let mock = MockResolver::answering(IpAddr::V4(Ipv4Addr::LOCALHOST)).failing_for(NAME);
+    let config = ResolverConfig {
+        cache_ttl_secs: 0,
+        ..ResolverConfig::default()
+    };
+    let resolver =
+        Arc::new(ResolverPort::over(Arc::new(mock) as Arc<dyn Resolver>, &config).unwrap());
+    let probe = LlmProbe::new(Upstream::new(
+        Arc::new(Direct::default()),
+        resolver as Arc<dyn Resolver>,
+        ClientTls::new(&TrustAnchors::bundled(), &[], false).unwrap(),
+        config.prefer,
+        Duration::from_secs(5),
+    ));
+    let url = Url::parse(&format!("http://{NAME}:11434/api/v1/")).unwrap();
+
+    let diagnostic = probe.probe(&url, None).await.unwrap_err();
+
+    assert_eq!(diagnostic.code.as_str(), "LLM_001");
+    assert!(
+        diagnostic.why.contains("does not resolve"),
+        "{}",
+        diagnostic.why
+    );
+    assert_eq!(
+        diagnostic.fix,
+        Some(humanitl_core::FixAction::CopyCommand(format!(
+            "getent hosts {NAME}"
+        )))
+    );
+}
+
+/// HUM-261: Query und Fragment des eingetragenen Endpunkts gehen mit keiner
+/// Anfrage hinaus und stehen in keinem Befund, weder in `LLM_003` noch im
+/// `curl` von `LLM_001`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_token_in_the_endpoint_appears_in_no_diagnostic() {
+    let (port, seen) = prefixed_server("sk-prefix-0123456789").await;
+    let url = Url::parse(&format!("http://127.0.0.1:{port}/other/?token=geheim#frag")).unwrap();
+    let result = probe().probe(&url, None).await.unwrap();
+    assert_eq!(result.flavor, LlmFlavor::Unknown);
+    assert!(!result.diagnostics.is_empty());
+    for diagnostic in &result.diagnostics {
+        assert!(!diagnostic.why.contains("geheim"), "{}", diagnostic.why);
+        assert!(!format!("{:?}", diagnostic.fix).contains("geheim"));
+    }
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|path| !path.contains("geheim")),
+        "{:?}",
+        seen.lock().unwrap()
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let silent_port = listener.local_addr().unwrap().port();
+    let silent = tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept().await {
+            held.push(stream);
+        }
+    });
+    let url = Url::parse(&format!(
+        "http://127.0.0.1:{silent_port}/api/v1?token=geheim"
+    ))
+    .unwrap();
+    let diagnostic = probe()
+        .probe(&url, Some(Duration::from_millis(200)))
+        .await
+        .unwrap_err();
+    silent.abort();
+    assert_eq!(diagnostic.code.as_str(), "LLM_001");
+    assert!(!diagnostic.why.contains("geheim"), "{}", diagnostic.why);
+    assert_eq!(
+        diagnostic.fix,
+        Some(humanitl_core::FixAction::CopyCommand(format!(
+            "curl -sS http://127.0.0.1:{silent_port}/api/v1/models"
+        )))
+    );
 }
