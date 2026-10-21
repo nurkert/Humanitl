@@ -37,7 +37,8 @@ use humanitl_proxy::registry::{FlowRecord, FlowRegistry};
 use humanitl_proxy::rules_store::StoredRule;
 use humanitl_proxy::{Found, LlmFlavor, ProbeResult};
 use humanitl_recorder::{
-    Dir, FindingRecord, FlowDetail as RecordedDetail, FlowSummary as RecordedSummary, MessageRecord,
+    DiagnosticRecord, Dir, FindingRecord, FlowDetail as RecordedDetail,
+    FlowSummary as RecordedSummary, MessageRecord,
 };
 use humanitl_sandbox::doctor::{CheckOutcome, CheckStatus, DoctorReport};
 use humanitl_sandbox::summary::{
@@ -1226,7 +1227,8 @@ pub fn record_to_detail(record: &FlowRecord, domains: Option<&DomainTable>) -> v
 
 /// Alles, was der Detail-Bereich zu einem aufgezeichneten Flow zeigt.
 ///
-/// Die Zeile, die Nachrichten und die Funde kommen aus der Aufzeichnung; alles
+/// Die Zeile, die Nachrichten, die Funde und die Befunde (HUM-256) kommen aus
+/// der Aufzeichnung; alles
 /// andere reicht der Aufrufer:
 ///
 /// - `domain`, weil die Zähler der Sitzung im Prozess leben ([`DomainTable`]),
@@ -1262,13 +1264,52 @@ pub fn recorded_detail_to_proto(
             .iter()
             .map(recorded_finding_to_proto)
             .collect(),
-        diagnostics: Vec::new(),
+        // Die Befunde, die am Fluss standen (HUM-256): auch nach einem
+        // Neustart des Daemons, wenn die Registry sie nicht mehr kennt.
+        diagnostics: detail
+            .diagnostics
+            .iter()
+            .map(|record| recorded_diagnostic_to_proto(record, detail.summary.session))
+            .collect(),
         domain,
         body_preview,
         findings_truncated,
         // Dieselbe Notiz wie in der Zeile, aus derselben Spalte.
         decision_note: summary.decision_note.clone(),
         summary: Some(summary),
+    }
+}
+
+/// Ein aufgezeichneter Befund in der Wire-Form (HUM-256).
+///
+/// Dieselbe Übersetzung wie für einen Befund aus der Registry
+/// ([`diagnostic_to_proto`]): `why` durch [`sanitize_note`], der Vorschlag
+/// durch [`fix_to_proto`]. Die Regel eines Vorschlags steht in der Form von
+/// `rules.yaml` in der Aufzeichnung und wird mit demselben Leser
+/// zurückgeholt, der die Datei des Nutzers liest
+/// ([`humanitl_rules::parse_rules_for_session`], die Sitzung des Flusses für
+/// `expires: session`). Lässt sie sich nicht mehr lesen, fehlt der Vorschlag,
+/// statt einen anderen anzubieten; eine unbekannte Schwere wird
+/// `UNSPECIFIED` und nicht geraten.
+#[must_use]
+pub fn recorded_diagnostic_to_proto(
+    record: &DiagnosticRecord,
+    session: SessionId,
+) -> v1::Diagnostic {
+    let fix = record.fix(|yaml| {
+        humanitl_rules::parse_rules_for_session(yaml, session)
+            .ok()
+            .and_then(|(set, _warnings)| set.iter().next().cloned())
+    });
+    v1::Diagnostic {
+        code: record.code.clone(),
+        severity: record
+            .severity()
+            .map_or(v1::Severity::Unspecified, severity_to_proto) as i32,
+        title: record.title.clone(),
+        why: sanitize_note(&record.why),
+        fix: fix.as_ref().map(fix_to_proto),
+        docs_url: record.docs.clone().unwrap_or_default(),
     }
 }
 

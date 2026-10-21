@@ -274,6 +274,15 @@ pub struct HoldQueue {
     /// trägt (HUM-057). Ihr Halten reserviert nur den Platz in der Zählung,
     /// keine Bytes ein zweites Mal.
     covered: DashMap<FlowId, ()>,
+    /// Hält Registry und Aufzeichnung in derselben Reihenfolge (HUM-256).
+    ///
+    /// Zwei Threads können für denselben Fluss gleichzeitig veröffentlichen,
+    /// etwa die Wache eines Uploads und der Rumpf der Antwort. Ohne diese
+    /// Sperre über beide Schritte stünden zwei Befunde in der Registry als
+    /// `[A, B]` und in der Aufzeichnung als `[B, A]`, und nach einem Neustart
+    /// zeigte `GetFlow` eine andere Reihenfolge als vorher. Beide Schritte
+    /// sind kurz (eine Map, ein Kanal), also genügt eine Sperre für alle.
+    publish_order: std::sync::Mutex<()>,
 }
 
 impl fmt::Debug for HoldQueue {
@@ -326,6 +335,7 @@ impl HoldQueue {
             domains: None,
             edits: None,
             covered: DashMap::new(),
+            publish_order: std::sync::Mutex::new(()),
         }
     }
 
@@ -691,7 +701,8 @@ impl HoldQueue {
     /// hängen hier auch Aufzeichnung und Domain-Katalog:
     ///
     /// 1. die [`FlowRegistry`], der Zustand dieser Sitzung im Speicher,
-    /// 2. [`Recorder::apply`], die dauerhafte Aufzeichnung (HUM-026),
+    /// 2. [`Recorder::apply`], die dauerhafte Aufzeichnung (HUM-026), dazu
+    ///    [`Recorder::store_diagnostic`] für einen Befund am Flow (HUM-256),
     /// 3. der [`DomainSink`], genau einmal je [`FlowEvent::Received`]
     ///    (HUM-031),
     /// 4. der Rundfunk an die Zuhörer.
@@ -700,10 +711,31 @@ impl HoldQueue {
     /// Flows, bevor der Katalog Apex und Kennung nachträgt, und beide sind
     /// fertig, bevor ein Zuhörer das Ereignis bekommt.
     pub fn publish(&self, event: FlowEvent) {
+        let order = self
+            .publish_order
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.registry.record(&event);
         if let Some(recorder) = &self.recorder {
             recorder.apply(&event);
+            // Ein Befund am Fluss überlebt den Neustart des Daemons nur in der
+            // Aufzeichnung; die Registry ist nach ihm leer (HUM-256). Eine
+            // vorgeschlagene Regel geht in der Form von `rules.yaml` hinein,
+            // denn deren Serialisierer kennt der Recorder nicht.
+            if let FlowEvent::Diagnostic {
+                flow_id: Some(flow),
+                diagnostic,
+                ..
+            } = &event
+            {
+                recorder.store_diagnostic(*flow, diagnostic, |rule| {
+                    humanitl_rules::serialize_rules(&humanitl_rules::RuleSet::from_rules([
+                        rule.clone()
+                    ]))
+                });
+            }
         }
+        drop(order);
         if let (
             Some(domains),
             FlowEvent::Received {
@@ -1285,5 +1317,134 @@ mod tests {
         assert!(!decidable(&Decision::TimedOut, DecisionSource::User));
         assert!(!decidable(&Decision::TimedOut, DecisionSource::Timeout));
         assert!(!decidable(&Decision::Allow, DecisionSource::Timeout));
+    }
+
+    /// Zwei Threads veröffentlichen gleichzeitig je `per_thread` Befunde für
+    /// denselben Fluss, mit `a0`, `a1` ... und `b0`, `b1` ... als `why`.
+    fn publish_from_two_threads(
+        queue: &std::sync::Arc<HoldQueue>,
+        id: humanitl_core::FlowId,
+        per_thread: usize,
+    ) {
+        use std::sync::{Arc, Barrier};
+        use std::time::SystemTime;
+
+        use humanitl_core::diagnostics::codes::LIMIT_004;
+        use humanitl_core::{Diagnostic, Severity};
+
+        let start = Arc::new(Barrier::new(2));
+        let threads: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|name| {
+                let queue = Arc::clone(queue);
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    for n in 0..per_thread {
+                        queue.publish(FlowEvent::Diagnostic {
+                            flow_id: Some(id),
+                            at: SystemTime::now(),
+                            diagnostic: Box::new(
+                                Diagnostic::builder(LIMIT_004, Severity::Warning)
+                                    .why(format!("{name}{n}"))
+                                    .build(),
+                            ),
+                        });
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+    }
+
+    /// Zwei Threads, die für denselben Fluss gleichzeitig Befunde
+    /// veröffentlichen, hinterlassen sie in Registry und Aufzeichnung in
+    /// derselben Reihenfolge (HUM-256, Review). Ohne die Sperre über beide
+    /// Schritte liefe die Aufzeichnung gelegentlich anders herum, und `GetFlow`
+    /// zeigte nach einem Neustart eine andere Reihenfolge als vorher.
+    #[test]
+    fn concurrent_publishers_leave_the_same_order_in_registry_and_recording() {
+        use std::sync::Arc;
+        use std::time::SystemTime;
+
+        use humanitl_core::{
+            Authority, Flow, FlowId, HostName, HttpRequest, Method, Scheme, SessionId,
+        };
+        use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
+
+        use crate::ConnectionContext;
+        use crate::registry::FlowRecord;
+
+        const ROUNDS: usize = 200;
+        const PER_THREAD: usize = humanitl_core::MAX_FLOW_DIAGNOSTICS / 2;
+
+        let dir = tempfile::tempdir().unwrap();
+        let recorder = Recorder::open(
+            &dir.path().join("humanitl.db"),
+            &dir.path().join("blobs"),
+            RecorderSettings::default(),
+        )
+        .unwrap();
+        let session = SessionId::new();
+        recorder.start_session(&SessionMeta {
+            id: session,
+            started_at: SystemTime::now(),
+            sandbox_profile: "default".to_owned(),
+            llm_endpoint: None,
+            work_dir: "/w".to_owned(),
+            agent: "opencode".to_owned(),
+        });
+        let queue = Arc::new(HoldQueue::new(&Limits::default()).recording(recorder.clone()));
+
+        let mut flows = Vec::with_capacity(ROUNDS);
+        for _ in 0..ROUNDS {
+            let request = HttpRequest::new(
+                Method::POST,
+                Scheme::Https,
+                Authority::with_scheme(
+                    HostName::Dns("upload.example.com".to_owned()),
+                    Scheme::Https,
+                ),
+                "/upload",
+            );
+            let flow = Flow::new(FlowId::new(), session, SystemTime::now(), request);
+            queue
+                .registry()
+                .insert(FlowRecord::new(&flow, &ConnectionContext::plain(session)));
+            queue.publish(flow.received_event());
+            publish_from_two_threads(&queue, flow.id, PER_THREAD);
+            flows.push(flow.id);
+        }
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            recorder.flush().await;
+            for id in flows {
+                let live: Vec<String> = queue
+                    .registry()
+                    .get(id)
+                    .unwrap()
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.why.clone())
+                    .collect();
+                let stored: Vec<String> = recorder
+                    .get_flow(id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .diagnostics
+                    .into_iter()
+                    .map(|diagnostic| diagnostic.why)
+                    .collect();
+                assert_eq!(live.len(), 2 * PER_THREAD);
+                assert_eq!(live, stored, "flow {id}");
+            }
+        });
     }
 }

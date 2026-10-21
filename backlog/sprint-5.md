@@ -41,6 +41,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-268 | Zwei Tasten in einem Frame speichern eine nicht gezeichnete Regel (nach 0.1.0) | S | HUM-249 |
 | HUM-269 | Das Senden aus dem Editor übergeht die Pause einer gestörten Aufzeichnung | S | HUM-250, HUM-047 |
 | HUM-270 | Flüsse aus einer Störung tragen keine eigene Markierung (nach 0.1.0) | S | HUM-250 |
+| HUM-271 | Ein Regelvorschlag trägt einen Schlüssel aus Host oder Pfad unmaskiert | S | HUM-140, HUM-256 |
 
 ---
 
@@ -932,6 +933,84 @@ Filtersprache.
 - Ein `fix` mit `AddRule` trägt eine ganze Regel; abgelegt wird die Wire-Form, nicht ein eigenes
   Format, sonst laufen zwei Serialisierungen auseinander.
 - Migration vorwärts, alte Datenbanken bleiben lesbar.
+
+### Umsetzung (HUM-256)
+
+- **Schema.** `V10__flow_diagnostics.sql` legt die Tabelle `diagnostics` an: eine
+  Zeile je Befund, `(flow_id, idx)` als Schlüssel, `code`, `severity`, `title`,
+  `why`, `docs` und der Vorschlag in `fix_kind` (`FixAction::as_str`), `fix_key`,
+  `fix_value`. Die Migration legt nur an, eine Datenbank von vorher bleibt lesbar,
+  ihre Flüsse kommen ohne Befunde. Fremdschlüssel auf `flows(id)` ohne Kaskade,
+  wie `messages` und `findings`.
+- **Wire-Form der Regel.** Weder Recorder noch Proxy kennen die Proto-Typen
+  (`tools/deps-allow.toml`). Eine vorgeschlagene Regel steht deshalb in der Form
+  von `rules.yaml` in `fix_value`, geschrieben von `humanitl_rules::serialize_rules`
+  und gelesen von `parse_rules_for_session` (mit der Sitzung des Flusses für
+  `expires: session`). Das ist die Serialisierung, die schon die Datei des
+  Nutzers schreibt, kein eigenes Format. Beim Lesen baut `DiagnosticRecord::fix`
+  den `FixAction` zurück, und `recorded_diagnostic_to_proto` schickt ihn durch
+  dasselbe `fix_to_proto` wie den Befund aus der Registry. Der Test in
+  `humanitl-ipc` vergleicht die Proto-Nachrichten vor und nach dem Neustart als
+  Ganzes.
+- **Schreiben.** `HoldQueue::publish` reicht jedes `FlowEvent::Diagnostic` mit
+  Flusskennung an `Recorder::store_diagnostic` weiter, mit dem Serialisierer als
+  Closure. Der Schreib-Thread vergibt `idx` als Zahl der schon stehenden Befunde
+  und hält die Grenze in derselben Anweisung ein (`HAVING COUNT(*) < 8`).
+  `MAX_FLOW_DIAGNOSTICS` steht jetzt in `humanitl-core` und gilt für Registry
+  und Aufzeichnung; `humanitl_proxy::registry::MAX_FLOW_DIAGNOSTICS` ist ein
+  Re-Export. Ein Befund zu einem Fluss ohne Zeile fällt still weg, statt als
+  Verstoß gegen den Fremdschlüssel eine Störung der Aufzeichnung auszulösen.
+- **Masken.** `why` geht vor dem Schreiben durch `Recorder::masked_why`
+  (`SecretMasks::apply`, danach `apply_host` für einen Schlüssel als Label in
+  Kleinschreibung). Dieselbe Funktion maskiert die Befunde, die `GetFlow` aus der
+  Registry nimmt, im Rückfall `registry_detail` wie in `with_live_diagnostics`.
+- **Lesen.** `GetFlow` liefert die Befunde aus der Aufzeichnung. Die Registry
+  bleibt der Rückfall der laufenden Sitzung: Kennt sie mehr Befunde als die
+  Aufzeichnung (Bündelung, gescheiterte Zeile), gelten ihre.
+- **Aufbewahrung.** Der Aufräumlauf löscht `diagnostics` ausdrücklich vor dem
+  Fluss und zählt sie in `PurgeReport::diagnostics`. Ohne diese Zeile
+  verweigerte der Fremdschlüssel das Löschen.
+- **Tests.** `a_flow_blocked_at_the_cap_keeps_limit_001_after_a_restart`
+  (Proxy, `restart_of`: dieselben Codes in derselben Reihenfolge, derselbe `why`,
+  dieselbe Regel nach dem Rundweg durch `rules.yaml`);
+  `get_flow_after_a_restart_takes_the_diagnostics_from_the_recording` und
+  `the_registry_stays_the_fallback_and_is_masked_like_the_recording` (ipc);
+  `tests/flow_diagnostics.rs` im Recorder: Neustart mit Reihenfolge und Fix,
+  Grenze, Aufbewahrung ohne Waise, Maskierung bis in die Datei, unbekannter
+  Fluss ohne Störung, Migration einer Datenbank auf Stand 9.
+- **Mutationsbeweise.** Ohne die Grenze im `INSERT` scheitert der Test zur
+  Grenze; ohne das `DELETE` der Aufbewahrung der zur Aufbewahrung; ohne
+  `masked_why` oder ohne `apply_host` der zur Maskierung; mit `ORDER BY idx DESC`
+  die zu Reihenfolge und Grenze; ohne `EXISTS` der zum unbekannten Fluss; ohne
+  den Aufruf in `publish` und mit einer veränderten Regel beim Serialisieren der
+  Test über `restart_of`; mit leerer Liste in `recorded_detail_to_proto` und mit
+  einer nicht gefundenen Regel der Neustart-Test in ipc; ohne Maske im Rückfall
+  und mit der alten Bedingung `is_empty()` der Test zum Rückfall.
+- **Review, Runde 1** (Codex 2 Punkte, Opus 2 kleinere, alle übernommen; die
+  Ablage der Regel in der Form von `rules.yaml` haben beide angenommen):
+  `HoldQueue::publish` hält Registry und Aufzeichnung unter einer Sperre
+  (`publish_order`), sonst konnten zwei Threads für denselben Fluss die Befunde
+  in beiden in verschiedener Reihenfolge hinterlassen. `GetFlow` entscheidet
+  nicht mehr nach der Länge, sondern führt beide Listen nach Gleichheit der
+  Befunde zusammen (`merge_diagnostics`, Reihenfolge erhalten, doppelte einmal,
+  höchstens `MAX_FLOW_DIAGNOSTICS`). Die Befunde des Scans gehen erst nach dem
+  Datensatz der Registry hinaus, vorher fand die Registry keinen Fluss für sie.
+  Tests: `concurrent_publishers_leave_the_same_order_in_registry_and_recording`
+  (200 Runden, zwei Threads), `equal_length_lists_are_merged_by_identity`,
+  `merging_keeps_order_drops_duplicates_and_caps`, Befund am Datensatz in
+  `a_partial_scan_is_never_an_all_clear`, je mit Mutationsbeweis (ohne Sperre,
+  mit der alten Längenregel, ohne Suche nach dem Kopf, ohne Grenze, mit der alten
+  Reihenfolge im Handler). Kommentar der Migration und Verweis im Proxy-Test auf
+  den Test der Wire-Form berichtigt.
+- **Nachtrag aus der Kurzprüfung:** `GetFlow` legt die Masken von jetzt auch
+  über die aufgezeichneten Befunde, bevor es zusammenführt. Ein Schlüssel, der
+  erst nach dem Schreiben dazukam, steht so nicht im Klartext da, und derselbe
+  Befund aus der Registry erscheint nicht ein zweites Mal
+  (`a_mask_added_after_recording_applies_and_keeps_one_copy`, mit
+  Mutationsbeweis).
+- **Offen.** Der Vorschlag selbst geht nicht durch die Masken: Eine Regel aus
+  Host und Pfad der Anfrage trüge einen Schlüssel als Label oder Pfadsegment in
+  `fix_value` und im Detail, siehe HUM-271.
 
 ---
 
@@ -4857,3 +4936,19 @@ Ein Fluss, der während einer Störung ankam, trägt eine eigene Markierung „n
 
 ### Referenzen
 HUM-250 (Umsetzung, Review), HUM-026.
+
+## HUM-271 · Ein Regelvorschlag trägt einen Schlüssel aus Host oder Pfad unmaskiert
+Sprint: 5 · Größe: S · Abhängigkeiten: HUM-140, HUM-256 · Blockiert: nichts
+
+### Kontext
+Seit HUM-256 geht das `why` eines Befunds durch die Masken der Aufzeichnung (`Recorder::masked_why`), bevor es in `diagnostics` steht oder `GetFlow` es aus der Registry liefert. Der Vorschlag daneben nicht: `LIMIT_001` und der Vorschlag zu einer privaten Zieladresse bauen eine Regel aus Host, Port und Pfadpräfix der Anfrage (`stream_rule`, `private_address_rule`). Schreibt der Agent den Zugangsschlüssel des Modells als Label eines Hostnamens oder als Pfadsegment in die Anfrage, steht er im Klartext in `diagnostics.fix_value` und im `fix` des Details, während Zeile, Pfad und Kopfzeilen derselben Anfrage maskiert sind. Ein `CopyCommand` mit einem Pfad hat dieselbe Lücke. Kandidat aus der Umsetzung von HUM-256.
+
+### Ziel
+Kein Geheimnis der Masken verlässt den Daemon oder landet in der Datei über einen Vorschlag. Eine maskierte Regel ist keine gültige Regel mehr; der Vorschlag entfällt dann mit einem Satz im `why`, statt einen Knopf anzubieten, der etwas anderes tut, als er zeigt.
+
+### Akzeptanzkriterien
+- [ ] Ein `LIMIT_001` an einer Anfrage mit dem Schlüssel als Label des Hosts trägt keinen Regelvorschlag mit dem Schlüssel, weder im Strom noch in der Aufzeichnung noch im Detail; Test mit Mutationsbeweis.
+- [ ] Ein Vorschlag ohne Geheimnis bleibt unverändert.
+
+### Referenzen
+HUM-140, HUM-256 (Umsetzung, Offen), `daemon/crates/proxy/src/limits.rs`.

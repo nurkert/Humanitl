@@ -22,6 +22,18 @@ use crate::flow::{Decision, DecisionSource, UpstreamError};
 use crate::http::HttpRequest;
 use crate::ids::{AskId, FlowId};
 
+/// So viele Befunde behält ein Fluss höchstens, in der Registry wie in der
+/// Aufzeichnung (HUM-057, HUM-256).
+///
+/// Ein Fluss bekommt heute zwei oder drei (Scan, Grenze, Aufzeichnung); acht
+/// lassen Luft. Die Grenze steht hier und nicht an einer der beiden Stellen,
+/// die sie einhalten: Registry (`humanitl-proxy`) und Aufzeichnung
+/// (`humanitl-recorder`) kennen einander nicht in beide Richtungen, und zwei
+/// Zahlen liefen auseinander. Was darüber kommt, fällt an beiden Stellen weg,
+/// damit ein Fluss mit vielen Befunden weder den Speicher noch die Datenbank
+/// wachsen lässt.
+pub const MAX_FLOW_DIAGNOSTICS: usize = 8;
+
 /// Was von den Funden einer Anfrage bei der Entscheidung offen blieb (HUM-160).
 ///
 /// Die Spur einer Freigabe mit offenen Funden: wie viele ohne Ersetzung und

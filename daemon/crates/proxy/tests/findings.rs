@@ -189,6 +189,16 @@ async fn a_partial_scan_is_never_an_all_clear() {
         })
         .expect("a Diagnostic event");
     assert_eq!(code, FINDINGS_002);
+    // Der Befund des Scans hängt auch am Datensatz der Registry: Er geht erst
+    // hinaus, wenn es den Datensatz gibt (HUM-256, Review).
+    assert!(
+        record
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == FINDINGS_002),
+        "{:?}",
+        record.diagnostics
+    );
 }
 
 /// Die Befunde `HOLD_004` unter `seen`.

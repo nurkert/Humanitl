@@ -71,7 +71,8 @@ use std::time::SystemTime;
 use bytes::Bytes;
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{
-    BodyRef, Diagnostic, Finding, FlowEvent, FlowId, HeaderMap, RuleId, SecretMasks, SessionId,
+    BodyRef, Diagnostic, Finding, FlowEvent, FlowId, HeaderMap, Rule, RuleId, SecretMasks,
+    SessionId,
 };
 use tokio::sync::{broadcast, oneshot};
 
@@ -90,15 +91,15 @@ pub use crate::schema::{MIGRATIONS, Migration, latest_version};
 pub use crate::settings::RecorderSettings;
 pub use crate::sink::ResponseSink;
 pub use crate::types::{
-    COUNT_CEILING, Cursor, CursorKey, DEFAULT_LIMIT, Dir, FindingRecord, FlowDetail, FlowPage,
-    FlowQuery, FlowSummary, MAX_LIMIT, MessageRecord, PurgeReport, SessionMeta, SessionSummaryRow,
-    SortKey, millis,
+    COUNT_CEILING, Cursor, CursorKey, DEFAULT_LIMIT, DiagnosticRecord, Dir, FindingRecord,
+    FlowDetail, FlowPage, FlowQuery, FlowSummary, MAX_LIMIT, MessageRecord, PurgeReport,
+    SessionMeta, SessionSummaryRow, SortKey, millis,
 };
 pub use crate::writer::{BATCH_COMMANDS, BATCH_INTERVAL, RESERVATION_GRACE};
 
 use crate::error::storage_failed;
 use crate::health::Reporter;
-use crate::writer::{MessageWrite, Writer, WriterCmd, WriterHandle};
+use crate::writer::{DiagnosticWrite, MessageWrite, Writer, WriterCmd, WriterHandle};
 
 /// So viele Befunde warten höchstens im Strom, bevor der langsamste Zuhörer
 /// Ereignisse verliert.
@@ -238,6 +239,21 @@ impl Recorder {
         crate::message::masked_pairs(headers, &self.masks)
     }
 
+    /// Das `why` eines Befunds, so wie diese Aufzeichnung es schreibt: jedes
+    /// Geheimnis der Masken als `••••` (HUM-140, HUM-256).
+    ///
+    /// Ein Befund nennt Host und Pfad der Anfrage. Ein Schlüssel als Label
+    /// eines Hostnamens steht darin klein geschrieben, deshalb läuft der Text
+    /// nach [`SecretMasks::apply`] noch durch [`SecretMasks::apply_host`], das
+    /// ohne Rücksicht auf die Schreibung vergleicht. Für `GetFlow` über einen
+    /// Fluss, dessen Befunde aus der Live-Registry kommen: Sie verlassen den
+    /// Daemon in derselben Form, in der sie aus der Aufzeichnung kämen.
+    #[must_use]
+    pub fn masked_why(&self, why: &str) -> String {
+        let masked = self.masks.apply(why);
+        self.masks.apply_host(&masked).into_owned()
+    }
+
     /// Die Grenzen, nach denen diese Aufzeichnung arbeitet.
     #[must_use]
     pub const fn settings(&self) -> RecorderSettings {
@@ -302,7 +318,8 @@ impl Recorder {
     ///
     /// Aufzurufen für jedes Ereignis des Proxys, in der Reihenfolge, in der es
     /// veröffentlicht wird. `ResponseChunk`, `Lagged` und `Diagnostic` ändern
-    /// nichts; die Größe der Antwort kommt aus dem [`ResponseSink`].
+    /// nichts; die Größe der Antwort kommt aus dem [`ResponseSink`], ein
+    /// Befund am Flow geht über [`Recorder::store_diagnostic`] (HUM-256).
     ///
     /// Der Pfad samt Query und der Host einer angekommenen Anfrage gehen durch
     /// dieselben Masken wie die Kopfzeilen: Ein Schlüssel als `?api_key=…`
@@ -426,6 +443,54 @@ impl Recorder {
             headers,
             &self.masks,
         )
+    }
+
+    /// Zeichnet einen Befund an einem Flow auf (HUM-256).
+    ///
+    /// Aufzurufen für jedes [`FlowEvent::Diagnostic`] mit Flusskennung, in
+    /// der Reihenfolge, in der es veröffentlicht wird, und erst nachdem
+    /// [`FlowEvent::Received`] durch [`Recorder::apply`] gegangen ist; beide
+    /// Wege gehen durch denselben Kanal. Der Daemon tut das im Trichter der
+    /// Halte-Warteschlange (`HoldQueue::publish`). Höchstens
+    /// [`humanitl_core::MAX_FLOW_DIAGNOSTICS`] je Flow wie in der Registry;
+    /// ein Befund zu einem Flow ohne Zeile fällt still weg.
+    ///
+    /// `why` geht durch dieselben Masken wie Kopfzeilen, Pfad und Host
+    /// (HUM-140): Ein Befund nennt Host und Pfad der Anfrage, und ein
+    /// Schlüssel darin stünde sonst im Klartext in `diagnostics`.
+    ///
+    /// Ein Vorschlag mit einer Regel
+    /// ([`humanitl_core::FixAction::AddRule`]) wird mit
+    /// `encode_rule` geschrieben, beim Daemon `humanitl_rules::serialize_rules`
+    /// und damit in der Form von `rules.yaml`: Diese Crate kennt den
+    /// Serialisierer nicht, und ein eigenes Format liefe von dem der Datei
+    /// weg. Gelesen wird er mit [`DiagnosticRecord::fix`].
+    pub fn store_diagnostic(
+        &self,
+        flow: FlowId,
+        diagnostic: &Diagnostic,
+        encode_rule: impl FnOnce(&Rule) -> String,
+    ) {
+        let why = self.masked_why(&diagnostic.why);
+        let (fix_kind, fix_key, fix_value) = match diagnostic
+            .fix
+            .as_ref()
+            .map(|fix| crate::types::fix_columns(fix, encode_rule))
+        {
+            Some((kind, key, value)) => (Some(kind), key, value),
+            None => (None, None, None),
+        };
+        self.send(WriterCmd::Diagnostic(Box::new(DiagnosticWrite {
+            flow,
+            code: diagnostic.code.as_str(),
+            severity: diagnostic.severity.as_str(),
+            title: diagnostic.title.clone(),
+            why,
+            docs: diagnostic.docs.clone(),
+            fix_kind,
+            fix_key,
+            fix_value,
+        })));
     }
 
     /// Zeichnet die Funde eines Flows auf und schreibt ihre Anzahl fort.
