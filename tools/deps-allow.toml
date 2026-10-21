@@ -5,6 +5,13 @@
 # Deviation from CONVENTIONS.md 3.1, agreed 2026-09-02: humanitl-proxy also
 # depends on humanitl-config because the hold limits (limits.*) live there
 # (ADR-005, HUM-016).
+#
+# humanitl-audit-log (HUM-155) is no new port and has no second adapter, so it
+# needs no ADR under ADR-015: it is the file side that moved out of
+# humanitl-audit, which belongs to the core and must not do IO
+# (docs/ARCHITECTURE.md 2). The edges it needs, core and audit, already
+# existed through humanitl-audit; the daemon and ipc reach it where they
+# reached humanitl-audit before.
 
 [allow]
 humanitl-core = []
@@ -14,13 +21,48 @@ humanitl-rules = ["humanitl-core"]
 humanitl-findings = ["humanitl-core"]
 humanitl-recorder = ["humanitl-core"]
 humanitl-audit = ["humanitl-core"]
+humanitl-audit-log = ["humanitl-core", "humanitl-audit"]
 humanitl-catalog = ["humanitl-core"]
 humanitl-sandbox = ["humanitl-core", "humanitl-config"]
 humanitl-proxy = ["humanitl-core", "humanitl-config", "humanitl-rules", "humanitl-findings", "humanitl-recorder"]
 humanitl-ipc = [
   "humanitl-core", "humanitl-config", "humanitl-rules", "humanitl-findings",
-  "humanitl-recorder", "humanitl-audit", "humanitl-sandbox", "humanitl-catalog",
-  "humanitl-proxy",
+  "humanitl-recorder", "humanitl-audit", "humanitl-audit-log", "humanitl-sandbox",
+  "humanitl-catalog", "humanitl-proxy",
+]
+
+# The core (docs/ARCHITECTURE.md 2): no IO, no async. tools/check_deps.py
+# rejects a normal dependency of these crates on one of `forbidden`, and
+# any match of a `source` pattern in their `src/` once comments are removed
+# (HUM-155). The patterns are text, not a parse; the docstring of
+# tools/check_deps.py names what they do not see. humanitl-config sits in the core in the diagram but reads and
+# writes config.toml and its private directories with rustix; it is not in
+# this list until that moves out, which is a separate issue.
+[core]
+crates = ["humanitl-core", "humanitl-rules", "humanitl-findings", "humanitl-audit"]
+forbidden = [
+  "tokio", "rustix", "libc", "tempfile", "nix", "fs-err", "memmap2", "mio", "async-std",
+]
+source = [
+  # Files: the path, a path through an import, grouped or renamed imports
+  # (`use std::{fs as f};`), a glob and an alias of std.
+  '\bstd::fs\b',
+  '\bfs::',
+  '\bstd\s*::\s*\{[^;]*?\b(fs|process|thread)\b',
+  '\buse\s+std\s*::\s*\*',
+  '\buse\s+std\s+as\b',
+  '\bFile::(open|create)\b',
+  '\bOpenOptions\b',
+  # Questions to the file system through a path.
+  '\.(exists|metadata|read_dir|canonicalize)\(\)',
+  # A runtime, threads and processes of their own.
+  '\btokio::',
+  '\bthread::(spawn|Builder)\b',
+  '\bstd::process\b',
+  # Sockets, also inside a group; addresses (`IpAddr` and kin) are values
+  # and stay allowed.
+  '\bstd::net::(?!(\{|IpAddr|Ipv4Addr|Ipv6Addr|SocketAddr|SocketAddrV4|SocketAddrV6|AddrParseError)\b)',
+  '\b(TcpStream|TcpListener|UdpSocket|UnixStream|UnixListener|ToSocketAddrs)\b',
 ]
 
 # Wiring-only crates: they may depend on anything, they must contain no domain logic.

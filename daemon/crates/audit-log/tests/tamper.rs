@@ -12,8 +12,9 @@ mod common;
 
 use humanitl_audit::{
     AuditVerifier, BreakReason, ExportFormat, RecordBody, TimeRange, VerifyReport, VerifyStatus,
-    VerifyWarning, export,
+    VerifyWarning,
 };
+use humanitl_audit_log::{VerifyFile as _, export};
 use humanitl_core::diagnostics::codes::AUDIT_001;
 
 use common::{Chain, KEY};

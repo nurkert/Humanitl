@@ -3081,6 +3081,67 @@ Ein neuer Port. Der Schreiber bleibt der einzige Adapter, und die Aufrufer im Da
 ### Referenzen
 HUM-050 (`backlog/sprint-4.md`), Review von Codex vom 2026-09-11; `docs/ARCHITECTURE.md` 1 und 2.
 
+### Umsetzung (HUM-155)
+
+**Wohin der Schreiber geht.** In eine neue Adapter-Crate `humanitl-audit-log`
+(`daemon/crates/audit-log`), nicht nach `humanitl-recorder`: `backlog/CONVENTIONS.md` 3.1
+erlaubt der Aufzeichnung nur `core`, der Schreiber braucht aber Record, Kanonisierung und Arten aus
+`humanitl-audit`, und in der Aufzeichnung lägen SQLite-`FlowStore` und JSONL-Kette in einer Crate.
+Die neue Crate darf `core` und `audit` (Zeile in 3.1, Eintrag in `tools/deps-allow.toml` mit
+Begründung, warum es ohne ADR geht: kein Port, kein zweiter Adapter, nur die Datei-Seite, die aus
+dem Kern auszog).
+
+**Was im Kern blieb** (`humanitl-audit`, jetzt ohne `tokio`, `rustix`, `libc`, `tempfile`,
+`getrandom`, `tracing`): `canonical`, `record` (neu dort `MAX_LINE_BYTES`), `kinds`, `Anchor`,
+`AuditKey` ohne Datei (neu `AuditKey::from_file` für den Adapter), die Prüfung über einen Leser
+(`verify_reader`, `verify_reader_until`, `VerifyReport::diagnostic`, `set_aside_fix` jetzt
+öffentlich), die Seiten über Leser (`query::query_from` mit einem Öffner, der höchstens zweimal
+gerufen wird, `query::tail_from`), die Formate des Exports (`ExportFormat`, `CSV_COLUMNS`,
+`csv_row`, `csv_field`) und Record und Grenzen der Aufbewahrung (`AuditPruned`, `PruneLimits`,
+`PruneOutcome`, `PruneReport`, `MIN_MAX_BYTES`).
+
+**Was auszog** nach `humanitl-audit-log`: `writer.rs` ganz, die Datei-Seite von `key.rs`
+(`AuditKeyFile::load_or_create_file`), `AuditVerifier::verify` und `verify_until` über einen Pfad
+(`VerifyFile`), `query::query` und `query::tail` über einen Pfad, `export::export` mit Nebendatei,
+Sperre und `hard_link`, und Schnitt und Umschreiben der Aufbewahrung (`find_cut`, `find_byte_cut`,
+`rewrite`, `sync_dir`). `AuditKeyFile` und `VerifyFile` sind Erweiterungs-Traits mit genau einer
+Implementierung, kein Port: Sie halten `AuditKey::load_or_create_file(..)` und
+`AuditVerifier::verify(..)` an ihrer Stelle, die Aufrufer in `humanitld`, `humanitl` und `ipc`
+ändern nur ihre Importe.
+
+**Tests.** Die Tests aus HUM-050 (`tests/writer.rs`, `tamper.rs`, `retention.rs`, `bench.rs`,
+`common/`) zogen mit dem Schreiber nach `daemon/crates/audit-log/tests/`; geändert sind nur die
+Importe, keine Zusicherung. Die Unit-Tests der Datei-Seite von `key`, `export` und `retention`
+zogen mit ihrem Code. `tests/regressions/` bleibt im Kern, es prüft über einen Leser, und das
+Fuzz-Target zeigt weiter darauf. Die Tests von `query/quick.rs` lesen die Kette jetzt aus Bytes
+statt aus einer Datei; Fälle und Zusicherungen sind dieselben.
+
+**Die Prüfung.** `tools/deps-allow.toml` hat einen Abschnitt `[core]`: `humanitl-core`,
+`humanitl-rules`, `humanitl-findings`, `humanitl-audit`. `tools/check_deps.py` weist eine normale
+Abhängigkeit einer dieser Crates auf `tokio`, `rustix`, `libc`, `tempfile`, `nix`, `fs-err`,
+`memmap2`, `mio` oder `async-std` ab und jeden Treffer eines Musters aus `[core].source` in ihrem
+`src/`, nachdem die Kommentare entfernt sind: `std::fs` auch in gruppierten, umbenannten und
+mehrzeiligen Importen, ein nackter Pfad `fs::`, `use std::*`, `use std as`, `File::open`,
+`OpenOptions`, `.exists()`/`.metadata()`/`.read_dir()`/`.canonicalize()`, `tokio::`,
+`thread::spawn`/`thread::Builder`, `std::process`, Sockets aus `std::net` (Adressen bleiben
+erlaubt). Jede Datei wird als Ganzes durchsucht. Absichtlich nicht geprüft: Build-Abhängigkeiten
+und Module, die `#[path]` von außerhalb `src/` holt. Neue Fälle in
+`tools/tests/check_deps_test.py`, einer je Muster; ohne das Muster für Gruppen scheitern vier
+davon. Mutationsbeweis in einer Kopie des Baums: `tokio` zurück in
+`daemon/crates/audit/Cargo.toml` lässt `tools/check-deps.sh` mit Exit 1 und „core crate
+humanitl-audit depends on tokio" scheitern, `rustix` in `humanitl-findings` ebenso, eine Zeile
+`std::fs::metadata` in `audit/src/record.rs` mit „does IO"; zurückgesetzt wieder Exit 0.
+
+`humanitl-config` steht im Bild von `docs/ARCHITECTURE.md` 2 im Kern, liest und schreibt aber
+`config.toml` und seine privaten Verzeichnisse mit `rustix`. Es steht deshalb nicht in `[core]`;
+das gehört in ein eigenes Issue (Kandidat, siehe unten). Der Satz über die Abweichung von `audit`
+in `docs/ARCHITECTURE.md` ist gestrichen, das Adapter-Bild nennt `audit-log/jsonl`.
+
+**Kandidaten für neue Issues.** `humanitl-config` aus dem Kern ziehen oder seine Datei-Seite in
+einen Adapter legen, damit auch es in `[core]` stehen kann. Die Quelltextprüfung von `[core]` über
+den Syntaxbaum (etwa mit `syn`) statt über Textmuster: Die Muster bleiben umgehbar, wer es darauf
+anlegt, und sehen `#[path]`-Module außerhalb von `src/` nicht.
+
 ## HUM-247 · Der Findings-Scan liest nur das erste gzip-Member
 Sprint: 5 · Größe: S · Abhängigkeiten: HUM-025 · Blockiert: nichts
 

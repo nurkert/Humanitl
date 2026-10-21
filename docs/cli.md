@@ -951,7 +951,7 @@ exported 4213 records to audit.csv
 ```
 
 Den Export schreibt der Daemon, wenn einer antwortet, sonst die
-Kommandozeile selbst; beide nehmen denselben Code (`humanitl_audit::export`)
+Kommandozeile selbst; beide nehmen denselben Code (`humanitl_audit_log::export`)
 und schreiben dieselbe Datei. `jsonl` schreibt jede Zeile des Logs wörtlich —
 der Export bleibt damit gegen die Datei nachrechenbar. `csv` schreibt eine
 Kopfzeile und eine Zeile je Record, mit den zwölf Spalten aus HUM-050:

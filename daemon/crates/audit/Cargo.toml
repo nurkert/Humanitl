@@ -12,31 +12,17 @@ workspace = true
 [dependencies]
 humanitl-core.workspace = true
 
+# Kern (`docs/ARCHITECTURE.md` 2): kein `tokio`, kein `rustix`, kein `libc`
+# und nichts, was eine Datei öffnet. Den Schreiber und alles, was
+# `audit.jsonl` oder die Schlüsseldatei anfasst, enthält `humanitl-audit-log`
+# (HUM-155); `tools/check-deps.sh` weist eine solche Abhängigkeit hier ab.
 chrono.workspace = true
-getrandom.workspace = true
 hex.workspace = true
 hmac.workspace = true
-# Der Code nutzt nur `O_NOFOLLOW` beim Anlegen des Schlüssels, wie `ca.rs`.
-libc.workspace = true
-rustix.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-# Der Export schreibt in eine Nebendatei mit zufälligem Namen und gibt ihr
-# erst fertig den Zielnamen (HUM-156, vorher in der Kommandozeile).
-tempfile.workspace = true
 thiserror.workspace = true
-# Nur `tokio::sync::broadcast` für den Strom der Befunde, wie in der
-# Aufzeichnung; der Schreiber selbst ist ein Thread ohne Laufzeit.
-tokio.workspace = true
-tracing.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true
-# Die Tests schreiben die Anker in dieselbe SQLite-Tabelle wie der Daemon.
-# Eine Test-Abhängigkeit zeigt nicht nach außen (`tools/check_deps.py`
-# überspringt `kind = "dev"`); im Bibliothekscode bleibt die Crate bei
-# `humanitl-core`.
-humanitl-recorder.workspace = true
-# Nur für `anchor_tampered_detected`: Der Test ändert einen Anker in SQLite.
-rusqlite.workspace = true

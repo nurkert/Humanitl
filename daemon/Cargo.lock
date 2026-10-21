@@ -919,6 +919,7 @@ dependencies = [
  "clap",
  "hex",
  "humanitl-audit",
+ "humanitl-audit-log",
  "humanitl-config",
  "humanitl-core",
  "humanitl-ipc",
@@ -942,18 +943,31 @@ version = "0.0.0"
 dependencies = [
  "bytes",
  "chrono",
- "getrandom 0.4.3",
  "hex",
  "hmac",
+ "humanitl-core",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
+name = "humanitl-audit-log"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+ "chrono",
+ "getrandom 0.4.3",
+ "hex",
+ "humanitl-audit",
  "humanitl-core",
  "humanitl-recorder",
  "libc",
  "rusqlite",
  "rustix",
  "serde_json",
- "sha2",
  "tempfile",
- "thiserror",
  "tokio",
  "tracing",
  "zeroize",
@@ -1033,6 +1047,7 @@ dependencies = [
  "flate2",
  "hex",
  "humanitl-audit",
+ "humanitl-audit-log",
  "humanitl-catalog",
  "humanitl-config",
  "humanitl-core",
@@ -1175,6 +1190,7 @@ dependencies = [
  "chrono",
  "clap",
  "humanitl-audit",
+ "humanitl-audit-log",
  "humanitl-catalog",
  "humanitl-config",
  "humanitl-core",

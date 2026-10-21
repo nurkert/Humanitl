@@ -59,12 +59,13 @@ BACKLOG.md-Abschnitte, ADRs, externe Quellen mit URL.
 | `humanitl-findings` | `daemon/crates/findings` | core |
 | `humanitl-recorder` | `daemon/crates/recorder` | core |
 | `humanitl-audit` | `daemon/crates/audit` | core |
+| `humanitl-audit-log` | `daemon/crates/audit-log` | core, audit; Adapter des Audit-Logs: Schreiber, Datei der Kette und des Schlüssels (HUM-155) |
 | `humanitl-sandbox` | `daemon/crates/sandbox` | core, config |
 | `humanitl-catalog` | `daemon/crates/catalog` | core |
 | `humanitl-proxy` | `daemon/crates/proxy` | core, rules, findings, recorder |
 | `humanitl-ipc` | `daemon/crates/ipc` | alle oben; einzige Crate mit Protobuf |
 | `humanitld` | `daemon/bin/humanitld` | alle |
-| `humanitl` (CLI) | `daemon/bin/humanitl` | core, config, ipc (als Client) |
+| `humanitl` (CLI) | `daemon/bin/humanitl` | core, config, ipc (als Client); audit und audit-log für `audit verify --file` und `audit export --file`, die eine lokale Kette ohne Daemon lesen (HUM-070, HUM-155) |
 | `humanitl-xtask` | `daemon/xtask` | Hilfs-Crate (`cargo xtask docs`), außerhalb der Abhängigkeitsregeln, nie Laufzeitcode |
 | `humanitl-shim` | `daemon/bin/humanitl-shim` | nur libc, seccompiler; kein tokio. Startet die Bridges aus dem Profil, wendet dann seccomp an (`socket`/`socketpair` nur für `allow_families`, sonst EPERM; `deny_syscalls` EPERM; `PR_SET_NO_NEW_PRIVS`; TSYNC), dann `execvp` |
 

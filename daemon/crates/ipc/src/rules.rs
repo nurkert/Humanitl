@@ -25,8 +25,9 @@
 
 use std::sync::Arc;
 
+use humanitl_audit::RecordKind;
 use humanitl_audit::kinds::{RuleChange, RuleOrigin};
-use humanitl_audit::{AuditHandle, RecordKind};
+use humanitl_audit_log::AuditHandle;
 use humanitl_core::diagnostics::codes;
 use humanitl_core::rule::Rule;
 use humanitl_core::{Diagnostic, HostName, Method, RuleId, Scheme, SessionId, Severity, Upgrade};
@@ -405,7 +406,8 @@ mod tests {
 
     use std::sync::Arc;
 
-    use humanitl_audit::{AuditKey, AuditRecord, AuditWriter, KeyOrigin, WriterOptions};
+    use humanitl_audit::{AuditKey, AuditRecord, KeyOrigin};
+    use humanitl_audit_log::{AuditWriter, WriterOptions};
     use humanitl_core::{RuleId, SessionId};
 
     use super::{RulesService, RulesStore};

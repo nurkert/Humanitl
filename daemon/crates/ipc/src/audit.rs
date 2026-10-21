@@ -54,12 +54,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use humanitl_audit::export::{self, ExportFormat};
-use humanitl_audit::query::{self, Page, QueryFilter, TimeRange};
 use humanitl_audit::{
-    Anchor, AuditHandle, AuditKey, AuditVerifier, VerifyReport, VerifyStatus, VerifyWarning,
-    canonical_json,
+    Anchor, AuditKey, AuditVerifier, VerifyReport, VerifyStatus, VerifyWarning, canonical_json,
 };
+use humanitl_audit_log::export::{self, ExportFormat};
+use humanitl_audit_log::query::{self, Page, QueryFilter, TimeRange};
+use humanitl_audit_log::{AuditHandle, VerifyFile as _};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, Severity};

@@ -13,8 +13,9 @@ mod common;
 use std::time::{Duration, SystemTime};
 
 use humanitl_audit::{
-    Anchor, AuditRecord, AuditVerifier, AuditWriter, BreakReason, VerifyStatus, VerifyWarning,
+    Anchor, AuditRecord, AuditVerifier, BreakReason, VerifyStatus, VerifyWarning,
 };
+use humanitl_audit_log::{AuditWriter, VerifyFile as _};
 
 use common::{Chain, KEY, decided};
 
@@ -321,7 +322,8 @@ fn an_unanchored_record_of_the_run_deletes_nothing() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use humanitl_audit::{AnchorMirror, AuditKey, KeyOrigin, WriterOptions};
+    use humanitl_audit::{AuditKey, KeyOrigin};
+    use humanitl_audit_log::{AnchorMirror, WriterOptions};
     use humanitl_core::diagnostics::codes::RECORDER_001;
     use humanitl_core::{Diagnostic, Severity};
 
@@ -669,8 +671,8 @@ fn the_newest_record_just_under_the_line_limit_fits_below_the_smallest_cap() {
     // Record knapp unter `MAX_LINE_BYTES` und älteren Records davor: Danach
     // liegt das Log samt `audit.pruned` und Anker darunter.
     use humanitl_audit::kinds::DaemonStopped;
-    use humanitl_audit::writer::MAX_LINE_BYTES;
     use humanitl_audit::{MIN_MAX_BYTES, RecordKind};
+    use humanitl_audit_log::writer::MAX_LINE_BYTES;
 
     let long = |len: u64| {
         RecordKind::DaemonStopped(DaemonStopped {

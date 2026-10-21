@@ -31,11 +31,12 @@
 use std::collections::HashMap;
 use std::time::SystemTime;
 
+use humanitl_audit::RecordKind;
 use humanitl_audit::kinds::{
     DecisionKind, FlowBlockedReason, FlowDecided, FlowReceived, FlowResponded, SessionEnded,
     SessionStarted,
 };
-use humanitl_audit::{AuditHandle, RecordKind};
+use humanitl_audit_log::AuditHandle;
 use humanitl_core::{DecidedFindings, Decision, DecisionSource, FlowEvent, FlowId, SessionId};
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{broadcast, oneshot};
@@ -322,7 +323,8 @@ mod tests {
 
     use std::time::{Duration, SystemTime};
 
-    use humanitl_audit::{AuditKey, AuditRecord, AuditWriter, KeyOrigin, WriterOptions};
+    use humanitl_audit::{AuditKey, AuditRecord, KeyOrigin};
+    use humanitl_audit_log::{AuditWriter, WriterOptions};
     use humanitl_core::{
         Authority, BlockReason, BodyRef, Decision, DecisionSource, Finding, FindingKind,
         FindingLocation, FlowEvent, FlowId, HostName, HttpRequest, Method, RuleId, Scheme,
