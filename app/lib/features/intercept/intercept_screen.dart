@@ -834,42 +834,54 @@ class _InspectorPane extends StatelessWidget {
         replaceAll: editorReplaceAll,
       );
     }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        // Der Hinweis liegt **über** der Leiste im selben Stapel und nicht als
-        // Ebene darüber: Er kann die Entscheidung, die er erklärt, damit nicht
-        // verdecken (HUM-044). Er nimmt seinen Platz aus der Fläche der Karte
-        // und nie aus der Leiste, und mehr als [coachMarkMaxShare] davon
-        // bekommt er nicht -- bei doppelter Textgröße wächst er sonst über den
-        // Pane hinaus und schöbe die Entscheidung aus dem Bild, was derselbe
-        // Fehler in Grün wäre. Was über die Schranke hinausgeht, scrollt.
-        Expanded(
-          child: LayoutBuilder(
-            builder: (BuildContext context, BoxConstraints pane) => Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                Expanded(
-                  child: selection.length > 1
-                      ? SelectionCard(flows: selection)
-                      : flow != null
-                      ? RequestCard(flow: flow)
-                      : queueEmpty
-                      ? const SizedBox.shrink()
-                      : const _NothingSelected(),
-                ),
-                ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxHeight: pane.maxHeight * coachMarkMaxShare,
+    // Die Höhe des Panes bestimmt, wie viel Platz die Regelsätze der Leiste
+    // höchstens nehmen: ein Drittel, damit Karte und Entscheidungen auch bei
+    // einem Pfad bleiben, den der Agent beliebig lang machen kann (HUM-249).
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints inspector) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          // Der Hinweis liegt **über** der Leiste im selben Stapel und nicht als
+          // Ebene darüber: Er kann die Entscheidung, die er erklärt, damit nicht
+          // verdecken (HUM-044). Er nimmt seinen Platz aus der Fläche der Karte
+          // und nie aus der Leiste, und mehr als [coachMarkMaxShare] davon
+          // bekommt er nicht -- bei doppelter Textgröße wächst er sonst über den
+          // Pane hinaus und schöbe die Entscheidung aus dem Bild, was derselbe
+          // Fehler in Grün wäre. Was über die Schranke hinausgeht, scrollt.
+          Expanded(
+            child: LayoutBuilder(
+              builder: (BuildContext context, BoxConstraints pane) => Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  Expanded(
+                    child: selection.length > 1
+                        ? SelectionCard(flows: selection)
+                        : flow != null
+                        ? RequestCard(flow: flow)
+                        : queueEmpty
+                        ? const SizedBox.shrink()
+                        : const _NothingSelected(),
                   ),
-                  child: SingleChildScrollView(child: CoachMark(flow: flow)),
-                ),
-              ],
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: pane.maxHeight * coachMarkMaxShare,
+                    ),
+                    child: SingleChildScrollView(child: CoachMark(flow: flow)),
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-        ActionBar(flow: flow, onEdit: onEdit, onPseudonymize: onPseudonymize),
-      ],
+          ActionBar(
+            flow: flow,
+            onEdit: onEdit,
+            onPseudonymize: onPseudonymize,
+            ruleMaxHeight: inspector.maxHeight.isFinite
+                ? inspector.maxHeight / 3
+                : null,
+          ),
+        ],
+      ),
     );
   }
 }

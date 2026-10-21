@@ -35,6 +35,7 @@ class HModal extends StatelessWidget {
     this.onDismiss,
     this.width = 420,
     this.scrimSemanticsLabel,
+    this.bodyScrollController,
     super.key,
   });
 
@@ -55,6 +56,15 @@ class HModal extends StatelessWidget {
 
   /// Screen-reader label of the scrim.
   final String? scrimSemanticsLabel;
+
+  /// Bounds the card to the window and lets the body scroll, driven by this
+  /// controller, while title and actions stay in view.
+  ///
+  /// Null keeps the card as tall as its content, as before: a body with a
+  /// list of its own (the command palette) must not end up inside a second
+  /// scroll view. Whoever passes a controller can read from it whether the
+  /// body was seen to its end (HUM-249).
+  final ScrollController? bodyScrollController;
 
   @override
   Widget build(BuildContext context) {
@@ -100,48 +110,67 @@ class HModal extends StatelessWidget {
           ),
         ),
         Center(
-          child: SizedBox(
-            width: width,
-            child: shad.ModalContainer(
-              filled: true,
-              fillColor: tokens.colors.bg2,
-              borderColor: tokens.colors.lineStrong,
-              borderWidth: HSize.hairline,
-              borderRadius: HRadius.cardRadius,
-              padding: const EdgeInsets.all(HSpace.x4),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: <Widget>[
-                  DefaultTextStyle(
-                    style: tokens.typography.ui16.semibold.tinted(
-                      tokens.colors.fg0,
+          child: Padding(
+            padding: bodyScrollController == null
+                ? EdgeInsets.zero
+                : const EdgeInsets.all(HSpace.x4),
+            child: SizedBox(
+              width: width,
+              child: shad.ModalContainer(
+                filled: true,
+                fillColor: tokens.colors.bg2,
+                borderColor: tokens.colors.lineStrong,
+                borderWidth: HSize.hairline,
+                borderRadius: HRadius.cardRadius,
+                padding: const EdgeInsets.all(HSpace.x4),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    DefaultTextStyle(
+                      style: tokens.typography.ui16.semibold.tinted(
+                        tokens.colors.fg0,
+                      ),
+                      child: title,
                     ),
-                    child: title,
-                  ),
-                  SizedBox(height: tokens.spacing.x2),
-                  DefaultTextStyle(
-                    style: tokens.typography.ui13.tinted(tokens.colors.fg1),
-                    child: child,
-                  ),
-                  if (actions.isNotEmpty) ...<Widget>[
-                    SizedBox(height: tokens.spacing.x4),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: <Widget>[
-                        for (final Widget action in actions) ...<Widget>[
-                          SizedBox(width: tokens.spacing.x2),
-                          action,
+                    SizedBox(height: tokens.spacing.x2),
+                    _body(
+                      DefaultTextStyle(
+                        style: tokens.typography.ui13.tinted(tokens.colors.fg1),
+                        child: child,
+                      ),
+                    ),
+                    if (actions.isNotEmpty) ...<Widget>[
+                      SizedBox(height: tokens.spacing.x4),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: <Widget>[
+                          for (final Widget action in actions) ...<Widget>[
+                            SizedBox(width: tokens.spacing.x2),
+                            action,
+                          ],
                         ],
-                      ],
-                    ),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
           ),
         ),
       ],
+    );
+  }
+
+  /// [body] as it stands in the card: scrolling inside the window when a
+  /// [bodyScrollController] asks for it, otherwise unchanged.
+  Widget _body(Widget body) {
+    final ScrollController? controller = bodyScrollController;
+    if (controller == null) {
+      return body;
+    }
+    return Flexible(
+      child: SingleChildScrollView(controller: controller, child: body),
     );
   }
 }
