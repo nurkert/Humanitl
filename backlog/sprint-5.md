@@ -3059,6 +3059,70 @@ Nach dem ersten Bild wartet der Lauf eine Frist, die gemessen und als Zahl ins S
 ### Referenzen
 HUM-141, HUM-067 (`backlog/sprint-3.md`); `tests/e2e/m3_agent_inside/run.sh` Schritt 13; Messungen vom 2026-09-07 und 2026-09-11.
 
+### Umsetzung (HUM-152)
+
+**Wie getippt wird.** Der TUI-Lauf startet `humanitl -v run` im Hintergrund, wartet auf die
+Startzeile der Sitzung und hängt dann `humanitl sandbox attach` an, dessen Standardeingabe eine
+Fifo ist, die der Lauf zum Lesen und Schreiben offen hält (`exec 8<>`, Deskriptor 8; ein reines
+`8>` hinge für immer, wenn `attach` vor dem Öffnen stirbt). Weil der Lauf damit selbst Leser ist,
+endet ein Schreiben ohne `attach` nicht an `SIGPIPE`; vor jedem Schreiben prüft er deshalb mit
+`kill -0`, ob `attach` lebt, und nennt sonst dessen Protokoll. An einer Pipe gibt es keinen Rohmodus, und das
+Ende der Eingabe hängt das Terminal ab (`cmd/attach.rs`, `spawn_input`); deshalb bleibt die Fifo
+offen, bis der Lauf fertig ist. Angehängt wird vor dem ersten Bild, damit das TUI die Größe des
+Schreibers (ohne Terminal 80 × 24) schon beim ersten Messen hat. Danach: erstes Bild abwarten
+(`Ask anything`, höchstens 30 s), die gemessene Frist, die Frage ohne Eingabetaste tippen, warten,
+bis sie vollständig im Eingabefeld steht (höchstens 10 s, sonst ein Fehlschlag, der die Frist
+nennt), dann `\r`. Beendet wird über `SIGTERM` an `timeout`, das es an `humanitl run` weiterreicht
+(`timeout -k 10`: wer `SIGTERM` überhört, wird zehn Sekunden später hart beendet); die Schranke `M3_OPENCODE_TUI_SECONDS` (jetzt 120 s) ist nur noch die Obergrenze.
+
+**Die Frist: 0 s, gemessen.** Messfassung des Laufs am 2026-10-21 mit OpenCode 1.18.31, in genau
+dieser Anordnung: ab dem ersten Bild 52 einzelne Buchstaben, einer alle 0,2 s, daneben alle 20 ms
+die Größe des Transkripts. Jeder Buchstabe stand im Eingabefeld, in Reihenfolge, auch der erste
+6 ms nach dem ersten Bild; zwischen Schicken und Bild höchstens 31 ms. Ein zweiter Lauf zeigte
+dasselbe. Die Beobachtung vom 2026-09-07 („in den ersten Sekunden nichts") gilt für diese Anordnung
+nicht; ob sie an einer älteren Fassung oder am Anhängen nach dem ersten Bild lag, ist nicht
+gemessen. Zahl und Messung stehen bei `M3_OC_TUI_SETTLE` im Skript.
+
+**Was das TUI vom gescheiterten Aufruf zeigt, und was nicht.** Das TUI malt einen gescheiterten
+Werkzeugaufruf als eigene Zeile `% WebFetch <url>` in der Fehlerfarbe des Themas (`#e06c75`);
+laufend und erfolgreich steht dieselbe Zeile gedämpft. Den Fehlertext, also das `403`, zeigt es
+erst nach einem **Mausklick** auf die Zeile (`errorExpanded`, umgeschaltet nur in `onMouseUp`,
+nachgelesen im Binary von 1.18.31). Eine Klickposition kennt der Lauf nicht: Der Daemon filtert
+das Transkript mit `ColourOnly`, Cursorfolgen kommen nicht durch. Das einzige `403` im
+TUI-Transkript ist darum die Zeile `tool said: …` des Mocks, und die zählt nach der Spezifikation
+nicht. Die Aussage des Kriteriums tragen deshalb drei Zusicherungen zusammen: Die Zeile
+`WebFetch https://humanitl-probe.example/page` steht in der Fehlerfarbe im TUI-Transkript; der
+Zähler der Anfragen mit `last=tool` (`mock-llm-note`) wuchs nach der Eingabetaste, und
+`/_debug/tool` trägt das `403`; die Historie hat genau eine Anfrage mehr an diesen Host, und genau
+diese neue (erkannt an einer `flow_id`, die vor dem TUI nicht da war) hat eine Regel mit `block`
+entschieden. Das `403` selbst steht nicht in der Zeile der Historie: Die Antwort gibt der Proxy,
+`status` bleibt `0` (gemessen).
+
+**`/_debug/tool` gehört zur Anfrage des TUI.** Der Zähler allein reicht nicht, weil `/_debug/tool`
+seit dem kopflosen Lauf schon ein `403` trägt, und der Mock schreibt die Zeile `mock-llm-note`,
+bevor er den Inhalt ablegt (Review von Codex). Der Lauf liest `/_debug/tool` deshalb erst, wenn
+es zu jeder Notiz auch die Zugriffszeile `mock-llm: POST /v1/chat/completions` gibt; die schreibt
+der Mock erst nach der Antwort, also nach dem Ablegen. Der Mock bleibt unverändert (Nicht-Ziel).
+
+**Warten ohne `| grep -q`.** `m3_wait_screen` holt den Text erst ganz in eine Variable und
+vergleicht mit `=~`. Ein `grep -q` am Ende der Pipe ließe `sed` an `SIGPIPE` sterben, und unter
+`pipefail` würde ein Treffer in einem langen Transkript als Fehlschlag gezählt (Review von Codex).
+
+**Profil.** Das TUI läuft jetzt unter `llm-only-webfetch` statt `llm-only`: Unter `llm-only`
+fragt OpenCode einen Menschen, ob es `webfetch` benutzen darf, und das TUI zeigte einen Dialog
+statt des Fehlschlags. Das Profil ist aus `llm-only` abgeleitet und unterscheidet sich nur in
+`OPENCODE_PERMISSION`; Prompt und Anbieter (HUM-067) bleiben geprüft, die Profilzusicherung
+verlangt jetzt `llm-only-webfetch`, und die Texte der Zusicherungen nennen es so.
+
+**Zahlen.** `M3_OPENCODE_ASSERTIONS` von 22 auf 26: der Werkzeugaufruf aus dem TUI, die
+Fehlerzeile im TUI, die eine neue Anfrage in der Historie, die Regel mit `block` an genau dieser. In CI läuft der Zweig weiter nicht
+(kein `opencode` im Image, `M3_OPENCODE=auto` meldet ihn übersprungen); lokal grün mit
+`M3_OPENCODE=1 M3_OPENCODE_BIN=~/.opencode/bin/opencode`.
+
+**Offen.** Das `403` als Text aus OpenCodes eigener Zeile bräuchte entweder den Klick (also eine
+Position, die das gefilterte Transkript nicht hergibt) oder eine Fassung von OpenCode, die Fehler
+ausgeklappt zeigt. Kandidat für ein eigenes Issue, falls das Kriterium wörtlich gemeint ist.
+
 ## HUM-155 · Der Audit-Schreiber lebt im Kern
 Sprint: 5 · Größe: M · Abhängigkeiten: HUM-050 · Blockiert: nichts
 
