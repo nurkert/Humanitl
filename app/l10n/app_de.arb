@@ -1264,5 +1264,6 @@
   "shellWindowClose": "Schließen",
   "rulesMatchExactPaths": "genau {paths}",
   "rulesFieldExactPaths": "Genaue Pfade",
-  "rulesExactPathsReadOnly": "Nur genau diese Pfade treffen, mit beliebiger Query, nichts darunter. Der Editor ändert sie nicht; Speichern behält sie."
+  "rulesExactPathsReadOnly": "Nur genau diese Pfade treffen, mit beliebiger Query, nichts darunter. Der Editor ändert sie nicht; Speichern behält sie.",
+  "setupFixChooseFolder": "Anderen Ordner wählen"
 }
