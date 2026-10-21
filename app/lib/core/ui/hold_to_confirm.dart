@@ -34,6 +34,7 @@ class HoldToConfirm extends StatefulWidget {
     this.enabled = true,
     this.previewProgress,
     this.token,
+    this.onHoldChanged,
     super.key,
   });
 
@@ -68,6 +69,14 @@ class HoldToConfirm extends StatefulWidget {
   /// on. Null means the caller has nothing to tie the hold to.
   final Object? token;
 
+  /// Called with true when a hold starts and with false when it ends, by
+  /// release, cancel, completion or a changed [token].
+  ///
+  /// Whoever lets a hold do more than a click -- the release valve saves a
+  /// rule -- shows what it does while the finger is down, before it fires
+  /// (HUM-249, `docs/UX.md` 4.6).
+  final ValueChanged<bool>? onHoldChanged;
+
   @override
   State<HoldToConfirm> createState() => _HoldToConfirmState();
 }
@@ -87,8 +96,39 @@ class _HoldToConfirmState extends State<HoldToConfirm>
   );
   bool _fired = false;
 
+  /// True between the start of a hold and its end, as last reported to
+  /// [HoldToConfirm.onHoldChanged].
+  bool _holding = false;
+
   /// The token the running hold was started on.
   Object? _startedOn;
+
+  /// Ends the hold from inside a build or a teardown.
+  ///
+  /// `didUpdateWidget` and `dispose` run while the tree is being built or
+  /// torn down, and no ancestor may rebuild then. The end of the hold is
+  /// therefore reported after the frame, so that nobody keeps showing a hold
+  /// that no longer exists.
+  void _endHoldAfterFrame() {
+    final ValueChanged<bool>? onHoldChanged = widget.onHoldChanged;
+    if (!_holding) {
+      return;
+    }
+    _holding = false;
+    if (onHoldChanged != null) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (Duration _) => onHoldChanged(false),
+      );
+    }
+  }
+
+  void _setHolding(bool value) {
+    if (_holding == value) {
+      return;
+    }
+    _holding = value;
+    widget.onHoldChanged?.call(value);
+  }
 
   @override
   void initState() {
@@ -104,11 +144,13 @@ class _HoldToConfirmState extends State<HoldToConfirm>
       // is decided.
       _fired = true;
       _hold.reverse();
+      _endHoldAfterFrame();
     }
   }
 
   @override
   void dispose() {
+    _endHoldAfterFrame();
     _hold
       ..removeStatusListener(_onStatus)
       ..dispose();
@@ -120,6 +162,7 @@ class _HoldToConfirmState extends State<HoldToConfirm>
       return;
     }
     _fired = true;
+    _setHolding(false);
     if (_startedOn != widget.token) {
       // The selection moved under the finger between the last frame and this
       // one; a hold decides what it was started on, or nothing.
@@ -136,6 +179,7 @@ class _HoldToConfirmState extends State<HoldToConfirm>
     _fired = false;
     _startedOn = widget.token;
     _hold.forward(from: 0);
+    _setHolding(true);
   }
 
   void _up(PointerUpEvent event) {
@@ -146,12 +190,16 @@ class _HoldToConfirmState extends State<HoldToConfirm>
     // The fill runs back the way it came; the press duration is the only
     // feedback the design allows itself.
     _hold.reverse();
+    _setHolding(false);
     if (short) {
       widget.onTapShort?.call();
     }
   }
 
-  void _cancel(PointerCancelEvent event) => _hold.reverse();
+  void _cancel(PointerCancelEvent event) {
+    _hold.reverse();
+    _setHolding(false);
+  }
 
   @override
   Widget build(BuildContext context) {

@@ -170,9 +170,11 @@ void main() {
   );
   // Das offene Raster bekommt immer eine eigene Zeile: acht Segmente messen
   // rund 800 px, und die hat kein Pane neben den beiden Entscheidungen frei.
+  // Dazu kommt eine Zeile: Solange das Raster merkt, stehen beide Regelsätze
+  // da, der für Senden und der für Blockieren (HUM-249).
   const BoxConstraints withGrid = BoxConstraints.tightFor(
     width: 900,
-    height: 220,
+    height: 244,
   );
   const BoxConstraints valveBox = BoxConstraints.tightFor(
     width: 260,
@@ -248,7 +250,8 @@ void main() {
   goldenTest(
     'action_bar_text_scale_2',
     fileName: 'action_bar_text_scale_2',
-    constraints: const BoxConstraints.tightFor(width: 900, height: 320),
+    // Bei doppelter Schrift brechen beide Regelsätze um (HUM-249).
+    constraints: const BoxConstraints.tightFor(width: 900, height: 400),
     builder: () => piece(
       mode: HThemeMode.dark,
       gridOpen: true,

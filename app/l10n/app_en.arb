@@ -3138,5 +3138,11 @@
   "rulesExactPathsReadOnly": "Only exactly these paths match, with any query; nothing below them. The editor cannot change them; saving keeps them.",
   "@rulesExactPathsReadOnly": {"description": "Hint under the exact paths in the rule editor: they match only themselves, cannot be edited here, and survive a save (HUM-261)."},
   "setupFixChooseFolder": "Choose another folder",
-  "@setupFixChooseFolder": {"description": "Fix button on the card of a refused project folder (SANDBOX_006, HUM-262). Opens the same folder chooser as the project row of the setup screen, because the only way out of a folder the sandbox will not mount is another folder."}
+  "@setupFixChooseFolder": {"description": "Fix button on the card of a refused project folder (SANDBOX_006, HUM-262). Opens the same folder chooser as the project row of the setup screen, because the only way out of a folder the sandbox will not mount is another folder."},
+  "interceptRefusedRuleChanged": "The rule changed while you held · nothing was sent, hold again",
+  "@interceptRefusedRuleChanged": {"description": "Refusal line: the release valve was held to save the rule shown under it, and the remember draft, the request or its domain changed during the hold, so the rule that would be saved is no longer the one that was shown; nothing went and no rule was saved (HUM-249)."},
+  "interceptBatchScrollToRead": "Scroll to the end to read everything before confirming.",
+  "@interceptBatchScrollToRead": {"description": "Hint at the top of the confirmation modal while its body does not fit the window: the confirm button stays disabled until the body was scrolled to its end, so that the rule sentence and the paths were on screen in full (HUM-249)."},
+  "interceptRefusedRuleNotInView": "Scroll the rule under the controls to its end first · nothing was sent",
+  "@interceptRefusedRuleNotInView": {"description": "Refusal line: a decision would save a rule whose sentence under the controls is longer than the room the bar gives it and was not scrolled to its end; nothing went and no rule was saved (HUM-249)."}
 }
