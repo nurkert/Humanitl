@@ -1,4 +1,7 @@
 # ADR-0013 · CLI als gleichwertiger Client und Headless-Betrieb
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 

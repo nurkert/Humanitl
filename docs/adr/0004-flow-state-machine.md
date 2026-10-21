@@ -1,4 +1,7 @@
 # ADR-0004 · Request-Lebenszyklus als Zustandsautomat, Events werden abgeleitet
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 

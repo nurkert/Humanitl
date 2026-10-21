@@ -891,6 +891,121 @@ Eine Website oder ein Doku-Generator (mdBook, Docusaurus). Markdown im Repo reic
 - clap Markdown-Rendering: https://docs.rs/clap-markdown
 - lychee: https://github.com/lycheeverse/lychee
 
+### Umsetzung (HUM-059)
+
+Alle Dokumente sind englisch, außer `README.de.md` (eine Seite) und den beiden
+erzeugten Registern, deren Quelle deutsch ist (siehe Abweichungen).
+
+- **README.md** mit den zwölf Pflichtabschnitten: Einzeiler und Screenshot vor
+  der ersten `##`-Überschrift, danach die zehn Überschriften `Why` bis
+  `License` in der Reihenfolge der Spezifikation. `README.de.md` als Kurzfassung.
+  `docs/README.md` ist neu, ein Wegweiser über alle Seiten.
+- **docs/SECURITY.md** und **docs/THREAT-MODEL.md** final, englisch, in der
+  Gliederung der Spezifikation (elf Abschnitte; Assets, Attacker, Trust
+  boundaries, Attack surface mit zwölf Zeilen und Status nur
+  `mitigated`/`declared`/`open`, Out of scope, Residual risks). Gegen den Code
+  geprüft: Shim-Reihenfolge (`main.rs`: Brücke, Schließen und Fork,
+  `PR_SET_DUMPABLE` im Elternprozess, `PR_SET_NO_NEW_PRIVS`, Filter mit
+  Zuhörer ohne `TSYNC`, Rückfall mit `TSYNC`, `execvp`), Syscall-Liste aus
+  `seccomp.rs` (`FLOOR` und `SYSCALLS`), Pfade aus `config/src/paths.rs` und
+  dem Sandbox-Profil, HUM-263, HUM-257, HUM-247, HUM-250, systemd-Unit.
+  Korrigiert gegenüber dem Entwurf: Shim liegt in der Sandbox unter
+  `/run/humanitl/humanitl-shim` (nicht `/usr/local/bin`, auch CONVENTIONS 3.4
+  ist hier veraltet), `#![forbid(unsafe_code)]` gilt nicht für alle
+  Bibliotheks-Crates (`humanitl-sandbox/src/inherit.rs`), Toolchain 1.95.0.
+  Root-`SECURITY.md` mit Meldeweg.
+- **docs/DESIGN.md** aus `HTokens` (`app/packages/ui/tool/dump_tokens.dart`
+  gibt die Tabellen aus, `flutter test tool/dump_tokens.dart`), alle 19
+  Hex-Werte aus BACKLOG.md 5 stehen darin; Abweichungen BACKLOG gegen Code
+  stehen im Dokument (Code gewinnt).
+- **docs/reference/rules.md** mit Feldern, Wahrheitstabelle, Auswertung,
+  Rezepten und den gebündelten Regeln. Test `rules_reference_examples` in
+  `daemon/crates/rules/tests/reference_examples.rs`: jeder YAML-Block parst,
+  jede Probe `# humanitl rules test …` / `# verdict: …` läuft durch den echten
+  Evaluator, und der Block der gebündelten Regeln ist gleich `rules/default.yaml`.
+- **docs/reference/cli.md** erzeugt aus `clap` (`bin/humanitl/src/cli_docs.rs`,
+  eigener Renderer über `render_long_help`, kein `clap_markdown`). Dabei 27
+  deutsche Hilfetexte in `cli.rs` ins Englische gebracht (CONVENTIONS 3.9).
+- **`cargo xtask docs`** (`daemon/xtask/src/docs.rs`) erzeugt neben
+  `parity.md` die drei Referenzen über ihre Generatoren in den Crates;
+  `--check` vergleicht alle. Zweiter Lauf ohne Änderung.
+- **docs/guides/**: `install.md`, `first-session.md`, `agent-profiles.md`.
+  `docs/INSTALL.md` bleibt als englische Maintainer-Seite (APT-Repository,
+  Härtung, Bauen, Testmatrix), weil ausgelieferter Code nach
+  `#xdg_runtime_dir-ohne-logind` und `#hardening` verlinkt und `unit.rs` die
+  Zeile `Overall exposure level` liest; `docs/profiles.md` ist eine Zeigerseite.
+  `docs/reference/limits.md` übersetzt.
+- **Prüfungen** in `scripts/ci/lint-docs.sh` (CI-Job `rust-check`): jede Seite
+  unter `docs/` mit H1 und `Applies to: Humanitl 0.1` in Zeile 3 (alle Seiten
+  einschließlich ADRs nachgezogen), README-Abschnitte, Meldeweg in beiden
+  `SECURITY.md`, Links und Anker über `scripts/ci/check-doc-links.py` mit
+  Selbsttest. `security_doc_mentions_syscalls` in `humanitl-shim/src/seccomp.rs`.
+- **Mutationsbeweise:** `userfaultfd` aus `docs/SECURITY.md` entfernt, Test
+  rot; Hilfetext in `cli.rs` geändert, `cargo xtask docs --check` rot; Zeile 3
+  einer Seite, ein README-Abschnitt und ein Anker verändert, `lint-docs.sh` rot;
+  drei Mutationen an `rules.md` (unbekannter Schlüssel, falsches Verdikt,
+  geänderte gebündelte Notiz) je rot.
+
+- **Review (Codex, Opus), übernommen:** Prüfbefehl der zweiten Garantie in
+  README, README.de und SECURITY auf die Form von `esc_find_sockets`
+  (`-xtype s`, kein `-xdev`; die alte Form fand in der Sandbox nichts), mit
+  Lint-Wache in `lint-docs.sh`. Ausnahmen an jeder Halte- und
+  Aufzeichnungsaussage: `allow`-Regeln und Durchreiche ohne Halt, Ausfall der
+  Aufzeichnung (HUM-250) ohne Aufzeichnung. README nennt alle fünf
+  Seitenkanäle, `/work` und Durchreiche als die zwei Datenwege. THREAT-MODEL:
+  Integrität der Historie nur gegen einen Angreifer ohne HMAC-Schlüssel,
+  K-14 entsprechend eingeschränkt, Ausnahmen beim Verfügbarkeitsziel, neuer
+  Kanal K-16 (Ausfall der Aufzeichnung, `declared`) und zwei Restrisiken.
+  hudsucker ist keine Abhängigkeit: eigener Accept-Loop auf hyper 1 mit
+  tokio-rustls und rcgen. Kleinere: Kernel-Minimum 5.4 wie `doctor`,
+  `--cap-drop ALL` und `--disable-userns`, `unsafe` in
+  `bin/humanitld/src/systemd.rs`, veraltete Zahl 124/124 gestrichen,
+  `/proc/net/unix` aus den Prüfaussagen genommen, direkter Link auf das
+  Advisory-Formular. Die zwölf Zeilen der Angriffsflächen-Tabelle bleiben die
+  der Review; K-13 bis K-16 stehen in der zweiten Tabelle.
+
+Abweichungen von der Pfadliste:
+
+- `docs/reference/config.md` und `docs/reference/diagnostics.md` gibt es nicht.
+  Erzeugt und in CI geprüft werden weiter `docs/CONFIG.md` und
+  `docs/DIAGNOSTICS.md` mit ihren Generatoren (`config_docs.rs`,
+  `diag_docs.rs`); `cargo xtask docs` ruft sie auf. Grund: Binaries verlinken
+  `docs/DIAGNOSTICS.md#<code>` (`render.rs`, `doctor.rs`), ausgelieferte
+  Versionen würden sonst ins Leere zeigen. Beide bleiben deutsch, weil Register
+  und Schema-Beschreibungen deutsch sind; das gehört zu HUM-086.
+- `.github/workflows/docs-check.yml` gibt es nicht. Der Pflicht-Job
+  `parity-check` fährt `cargo xtask docs --check` und ist damit der
+  `docs-check`; ein neuer Job wäre nicht im Branch-Schutz. Er vergleicht die
+  Dateien mit dem Erzeugten statt `git diff --exit-code`, gleiches Ergebnis
+  ohne Versionsverwaltung.
+- `scripts/ci/check-doc-links.py` ersetzt `lychee` (offline, Dateien und
+  Anker), ohne zu pinnendes Fremd-Binary in CI.
+- `docs/adr/README.md` hatte den Index schon; ADR-0011 bis 0018 existieren.
+- `docs/img/intercept.png` ist eine Kopie des Goldens
+  `intercept_three_held_dark.png`: 1280 px statt 1600 px, Text als Blöcke
+  (Ahem). Weitere Bilder ebenfalls nur aus Goldens.
+- Beispiele in `rules.md` gegen den Evaluator im Test geprüft, nicht gegen
+  einen laufenden Daemon.
+
+Offen für den Maintainer:
+
+- Meldeweg: `SECURITY.md` nennt bewusst nur die privaten GitHub Security
+  Advisories, keine E-Mail-Adresse und keinen PGP-Fingerprint; das
+  Akzeptanzkriterium „mit E-Mail“ ist damit offen und laut Fallstricke ein
+  Release-Blocker, bis der Maintainer entscheidet.
+- Fresh-VM-Durchlauf (Debian 13, nur `.deb`) von `install.md` und
+  `first-session.md` mit Protokoll; Zeile in der Testmatrix von `docs/INSTALL.md`.
+- Ein echter Screenshot mit Schrift (1600 px, Demo-Sitzung `demo-project`).
+- Spezifikation gegen Code: Debian 13 statt 12 (Build auf Ubuntu 24.04),
+  `OPENCODE_MODELS_PATH` statt `OPENCODE_MODELS_URL`, Dienst über
+  `humanitl daemon install` bzw. `humanitld.socket` statt
+  `systemctl --user enable --now humanitld`.
+- Kandidaten für neue Issues: Kommentar zur Rangfolge in
+  `profiles/default.toml` veraltet; Gleitweg in `queue_pane.dart`
+  (`_LeavingLine`) vermutlich relativ statt 12 px; `R`, `Ctrl+D`, `Ctrl+B` aus
+  CONVENTIONS 3.9 nicht gebunden; Übersetzung von Register und
+  Schema-Beschreibungen (HUM-086).
+
 ---
 
 ## HUM-256 · Befunde eines Flusses überleben den Neustart des Daemons

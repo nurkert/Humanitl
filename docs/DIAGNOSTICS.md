@@ -1,5 +1,7 @@
 # Diagnose-Codes
 
+Applies to: Humanitl 0.1
+
 <!-- Erzeugt aus daemon/crates/core-types/src/diagnostics/codes.rs.
      Nicht von Hand ändern: `UPDATE_DIAG_DOCS=1 cargo test -p humanitl-core --test diag_docs` schreibt die Datei neu. -->
 

@@ -1,4 +1,7 @@
 # ADR-0016 · Browser für den Agenten über CDP, Zuschauen und Eingreifen im UI
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 

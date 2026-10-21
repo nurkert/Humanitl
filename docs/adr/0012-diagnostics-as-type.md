@@ -1,4 +1,7 @@
 # ADR-0012 · Geführte Zustände als Typ: `Diagnostic` statt Fehlerstring
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 

@@ -1,4 +1,7 @@
 # ADR-0011 · Eine Konfigurationsquelle, drei Sichtbarkeitsstufen
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 

@@ -9,6 +9,14 @@
 #   3. Every ESC-N referenced in them names a real escape test under
 #      tests/escape/ (file names per backlog/CONVENTIONS.md 3.11).
 #
+# Since HUM-059 it also enforces, for the release documentation:
+#   4. every page under docs/ starts with an H1 and the line
+#      "Applies to: Humanitl 0.1" on line 3,
+#   5. README.md carries the twelve mandatory sections in order,
+#   6. SECURITY.md and docs/SECURITY.md carry the same reporting line,
+#   7. every relative link and #fragment in README*.md, SECURITY.md and docs/
+#      resolves (scripts/ci/check-doc-links.py, offline).
+#
 # Extension point: HUM-009 adds the ADR heading check to this script.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -85,6 +93,79 @@ if [[ -f "$CATALOG_SCHEMA" && -f "$CATALOG_FILE" ]]; then
     fi
   fi
 fi
+
+# Dokumentation zum Release (HUM-059).
+#
+# 1. Jede Seite unter docs/ beginnt mit einer H1 und nennt in Zeile 3 den
+#    Stand, für den sie gilt. Eine Seite ohne diese Zeile ist eine, die
+#    niemand gegen den Code abgeglichen hat.
+APPLIES_TO="Applies to: Humanitl 0.1"
+while IFS= read -r -d '' page; do
+  first="$(sed -n 1p "$page")"
+  third="$(sed -n 3p "$page")"
+  if [[ "$first" != "# "* ]]; then
+    echo "lint-docs: $page: line 1 must be an H1 ('# Title')" >&2
+    fail=1
+  fi
+  if [[ "$third" != "$APPLIES_TO" ]]; then
+    echo "lint-docs: $page: line 3 must be '$APPLIES_TO'" >&2
+    fail=1
+  fi
+done < <(find docs -name '*.md' -print0 | sort -z)
+
+# 2. Das README hat die zwölf Pflichtabschnitte, in dieser Reihenfolge und
+#    ohne weitere Abschnitte der zweiten Ebene dazwischen. Die ersten beiden,
+#    Einzeiler und Screenshot, stehen vor der ersten Überschrift der zweiten
+#    Ebene; die übrigen zehn sind diese Überschriften.
+ONE_LINER="Humanitl lets a sandboxed AI coding agent use the internet, one approved request at a time."
+head_part="$(sed '/^## /,$d' README.md)"
+if [[ "$head_part" != *"$ONE_LINER"* ]]; then
+  echo "lint-docs: README.md: the one-liner must stand before the first section" >&2
+  fail=1
+fi
+if [[ "$head_part" != *"(docs/img/intercept.png)"* ]]; then
+  echo "lint-docs: README.md: the screenshot docs/img/intercept.png must stand before the first section" >&2
+  fail=1
+fi
+README_SECTIONS=$'Why\nThe three guarantees\nWhat it does not protect against\nInstall\nFirst session\nCLI\nHow it works\nStatus\nContributing\nLicense'
+actual="$(grep '^## ' README.md | sed 's/^## //')"
+if [[ "$actual" != "$README_SECTIONS" ]]; then
+  echo "lint-docs: README.md sections differ from the HUM-059 list:" >&2
+  diff <(printf '%s\n' "$README_SECTIONS") <(printf '%s\n' "$actual") >&2 || true
+  fail=1
+fi
+
+# 3. Der Meldeweg steht im Root-SECURITY.md (GitHub-Konvention) und in
+#    docs/SECURITY.md wortgleich.
+REPORT_LINE="Contact: see GitHub security advisories for this repository (private vulnerability reporting)."
+for doc in SECURITY.md docs/SECURITY.md; do
+  if ! grep -qF "$REPORT_LINE" "$doc" 2>/dev/null; then
+    echo "lint-docs: $doc: missing the reporting line '$REPORT_LINE'" >&2
+    fail=1
+  fi
+done
+
+# 3b. Der Prüfbefehl der zweiten Garantie ist in README und SECURITY derselbe
+#     wie `esc_find_sockets` in tests/escape/lib.sh: `-xtype s` statt `-type s`
+#     (der gebundene Socket liegt über einer leeren Datei) und kein `-xdev`
+#     (/work, /tmp, /dev/shm sind eigene Mounts). Ein Befehl, der in der
+#     Sandbox nichts findet, wäre ein Beleg, der nichts belegt.
+FIND_SOCKETS="find / \\( -path /proc -o -path /sys -o \\( -path '/dev/*' ! -path /dev/shm ! -path '/dev/shm/*' \\) \\) -prune -o -xtype s -print 2>/dev/null"
+for doc in README.md README.de.md docs/SECURITY.md; do
+  if ! grep -qF -- "$FIND_SOCKETS" "$doc"; then
+    echo "lint-docs: $doc: the guarantee-2 check must be the esc_find_sockets form: $FIND_SOCKETS" >&2
+    fail=1
+  fi
+  if grep -nE 'find /[^`]*(-xdev|[^x]-type s)' "$doc" >&2; then
+    echo "lint-docs: $doc: a socket search with -xdev or -type s above finds nothing in the sandbox" >&2
+    fail=1
+  fi
+done
+
+# 4. Relative Links und Anker in README und docs/ zeigen auf etwas, das es
+#    gibt. Erst der Selbsttest, damit ein kaputter Prüfer nicht grün meldet.
+if ! python3 -I scripts/ci/check-doc-links.py --self-test; then fail=1; fi
+if ! python3 -I scripts/ci/check-doc-links.py; then fail=1; fi
 
 if ((fail == 0)); then
   echo "lint-docs: ok (${#DOCS[@]} documents)"

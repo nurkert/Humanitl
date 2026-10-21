@@ -1,4 +1,7 @@
 # ADR-0002 · bubblewrap zuerst, Docker später als zweites Backend
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 

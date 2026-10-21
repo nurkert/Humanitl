@@ -1,4 +1,7 @@
 # ADR-0015 · Ports-and-Adapters mit maschinell erzwungener Abhängigkeitsrichtung
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 

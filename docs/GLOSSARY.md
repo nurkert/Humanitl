@@ -1,5 +1,7 @@
 # Glossar der Oberfläche
 
+Applies to: Humanitl 0.1
+
 Verbindlich für jede Übersetzung in `app/l10n/app_en.arb` (Quelle) und
 `app/l10n/app_de.arb` (HUM-052). Wer einen neuen Text schreibt, nimmt die
 Begriffe von hier; wer einen Begriff ändern will, ändert ihn zuerst hier und

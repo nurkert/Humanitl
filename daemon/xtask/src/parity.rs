@@ -325,6 +325,8 @@ fn render(
     let mut out = String::from(concat!(
         "# Paritäts-Tabelle\n",
         "\n",
+        "Applies to: Humanitl 0.1\n",
+        "\n",
         "<!-- Erzeugt von `cargo xtask docs` (HUM-078). Nicht von Hand ändern. -->\n",
         "\n",
         "Jede Fähigkeit ist zuerst eine RPC; Kommandozeile und Oberfläche sind\n",

@@ -1,4 +1,7 @@
 # ADR-NNNN · Kurzer Titel im Aussagesatz
+
+Applies to: Humanitl 0.1
+
 Status: Accepted | Superseded by ADR-XXXX | Deprecated
 Datum: JJJJ-MM-TT
 

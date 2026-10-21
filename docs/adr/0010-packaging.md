@@ -1,4 +1,7 @@
 # ADR-0010 · Auslieferung als `.deb` und AppImage, Flatpak später und nur für die UI
+
+Applies to: Humanitl 0.1
+
 Status: Accepted
 Datum: 2026-09-02
 

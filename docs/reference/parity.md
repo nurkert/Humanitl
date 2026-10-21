@@ -1,5 +1,7 @@
 # Paritäts-Tabelle
 
+Applies to: Humanitl 0.1
+
 <!-- Erzeugt von `cargo xtask docs` (HUM-078). Nicht von Hand ändern. -->
 
 Jede Fähigkeit ist zuerst eine RPC; Kommandozeile und Oberfläche sind
