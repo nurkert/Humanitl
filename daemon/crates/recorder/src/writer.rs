@@ -47,7 +47,7 @@ use humanitl_core::block::sanitize_note;
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{
     BlockReason, DecidedFindings, Decision, DecisionSource, Finding, FixAction, FlowEvent, FlowId,
-    HeaderMap, HttpRequest, Scheme, SessionId, Severity,
+    HeaderMap, HttpRequest, MAX_FLOW_DIAGNOSTICS, Scheme, SessionId, Severity,
 };
 use rusqlite::Connection;
 use tokio::sync::oneshot;
@@ -156,6 +156,8 @@ pub enum WriterCmd {
         /// Die Funde in der Reihenfolge der Detektoren.
         findings: Vec<Finding>,
     },
+    /// Ein Befund an einem Flow (HUM-256).
+    Diagnostic(Box<DiagnosticWrite>),
     /// Apex und Katalog-Kennung eines Flows.
     Domain {
         /// Der Flow.
@@ -260,6 +262,32 @@ pub struct MessageWrite {
     pub truncated: bool,
     /// Der Status der Antwort; nur bei [`Dir::Response`] gesetzt.
     pub status: Option<u16>,
+}
+
+/// Ein Befund an einem Flow, fertig zum Schreiben (HUM-256).
+///
+/// `why` ist schon durch die Masken gegangen, der Vorschlag steht in den
+/// Spalten von `diagnostics` (`crate::types::fix_columns`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticWrite {
+    /// Der Flow.
+    pub flow: FlowId,
+    /// Der Code, zum Beispiel `LIMIT_001`.
+    pub code: &'static str,
+    /// Die Schwere als Text.
+    pub severity: &'static str,
+    /// Der feste Teil der Meldung.
+    pub title: String,
+    /// Der veränderliche Teil, maskiert.
+    pub why: String,
+    /// Adresse mit mehr Text dazu.
+    pub docs: Option<String>,
+    /// Die Art des Vorschlags.
+    pub fix_kind: Option<String>,
+    /// Der Schlüssel des Vorschlags.
+    pub fix_key: Option<String>,
+    /// Der Wert des Vorschlags.
+    pub fix_value: Option<String>,
 }
 
 /// Der Zustand des Schreib-Threads.
@@ -420,6 +448,7 @@ impl Writer {
             WriterCmd::Event(event) => self.on_event(&event),
             WriterCmd::Message(message) => self.write_message(&message),
             WriterCmd::Findings { flow, findings } => self.write_findings(flow, &findings),
+            WriterCmd::Diagnostic(diagnostic) => self.write_diagnostic(&diagnostic),
             WriterCmd::Domain {
                 flow,
                 apex,
@@ -689,7 +718,9 @@ impl Writer {
             }
             // Nichts davon gehört zu einer Zeile in `flows`: Der Zähler
             // eines Antwortstücks steht dort schon, ein Rückstand ist kein
-            // Zustand, ein Befund hat seine eigene Tabelle, und die Bitte des
+            // Zustand, ein Befund hat seine eigene Tabelle und seinen
+            // eigenen Weg dorthin (`Recorder::store_diagnostic`, HUM-256),
+            // und die Bitte des
             // Agenten aus `humanitl.internal/ask` ist gar kein Flow
             // (HUM-073).
             FlowEvent::ResponseChunk { .. }
@@ -829,6 +860,50 @@ impl Writer {
         Ok(())
     }
 
+    /// Schreibt einen Befund an seinen Flow (HUM-256).
+    ///
+    /// `idx` ist die Zahl der Befunde, die schon dastehen; der Schreib-Thread
+    /// ist der einzige Schreiber, also ergibt das die Reihenfolge des
+    /// Eintreffens ohne Lücke. Stehen schon [`MAX_FLOW_DIAGNOSTICS`] da, fällt
+    /// der Befund weg wie in der Registry, und zwar in derselben Anweisung,
+    /// ohne getrenntes `SELECT`.
+    ///
+    /// Gibt es den Flow nicht, fällt der Befund ebenfalls still weg. Seine
+    /// Zeile kann fehlen, weil ihr Schreiben scheiterte (dann ist die Störung
+    /// schon gemeldet) oder weil ein Befund an einem Flow hängt, der nie eine
+    /// Zeile bekam; ein Verstoß gegen den Fremdschlüssel wäre sonst ein
+    /// zweiter Schreibfehler und hieße in der Oberfläche „Aufzeichnung
+    /// gestört", obwohl nichts verloren ging, was die Historie zeigen könnte.
+    fn write_diagnostic(&self, diagnostic: &DiagnosticWrite) -> Result<(), RecorderError> {
+        let key = diagnostic.flow.to_string();
+        self.conn
+            .execute(
+                "INSERT INTO diagnostics (flow_id, idx, code, severity, title, why, docs, \
+                 fix_kind, fix_key, fix_value) SELECT ?1, COUNT(*), ?2, ?3, ?4, ?5, ?6, ?7, ?8, \
+                 ?9 FROM diagnostics WHERE flow_id = ?1 HAVING COUNT(*) < ?10 \
+                 AND EXISTS (SELECT 1 FROM flows WHERE id = ?1)",
+                rusqlite::params![
+                    key,
+                    diagnostic.code,
+                    diagnostic.severity,
+                    diagnostic.title,
+                    diagnostic.why,
+                    diagnostic.docs,
+                    diagnostic.fix_kind,
+                    diagnostic.fix_key,
+                    diagnostic.fix_value,
+                    i64::try_from(MAX_FLOW_DIAGNOSTICS).unwrap_or(i64::MAX),
+                ],
+            )
+            .map(|_rows| ())
+            .map_err(|err| {
+                storage_failed(format!(
+                    "could not record the diagnostic {} of the flow {key} ({err})",
+                    diagnostic.code
+                ))
+            })
+    }
+
     /// Trägt Apex und Katalog-Kennung nach.
     fn write_domain(
         &self,
@@ -963,8 +1038,8 @@ impl Writer {
     /// Löscht alles, was vor `before` liegt, und die Blobs, auf die danach
     /// niemand mehr zeigt.
     ///
-    /// Gelöscht wird genau das: Flows mit `ts < before` samt ihren Nachrichten
-    /// und Funden, Sitzungen, die danach leer und beendet sind, und
+    /// Gelöscht wird genau das: Flows mit `ts < before` samt ihren Nachrichten,
+    /// Funden und Befunden, Sitzungen, die danach leer und beendet sind, und
     /// Regel-Schnappschüsse, die vor `before` gelöscht wurden. Ein Blob wird
     /// erst entfernt, nachdem die Transaktion committet ist und eine erneute
     /// Abfrage zeigt, dass keine Zeile mehr auf ihn zeigt.
@@ -1039,6 +1114,13 @@ impl Writer {
 
         report.findings = self.delete(
             "DELETE FROM findings WHERE flow_id IN (SELECT id FROM purge_ids)",
+            rusqlite::params![],
+        )?;
+        // Die Befunde fallen mit ihrem Flow (HUM-256). Ohne diese Zeile
+        // verweigerte der Fremdschlüssel das Löschen des Flows, und der ganze
+        // Lauf ginge zurück.
+        report.diagnostics = self.delete(
+            "DELETE FROM diagnostics WHERE flow_id IN (SELECT id FROM purge_ids)",
             rusqlite::params![],
         )?;
         report.messages = self.delete(

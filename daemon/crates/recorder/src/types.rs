@@ -9,7 +9,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use humanitl_core::ids::SandboxId;
-use humanitl_core::{BodyRef, FlowId, SessionId};
+use humanitl_core::{BodyRef, FixAction, FlowId, Rule, SessionId, Severity};
 
 /// So viele Zeilen liefert [`FlowQuery`] ohne eigene Angabe.
 pub const DEFAULT_LIMIT: u32 = 200;
@@ -445,6 +445,109 @@ pub struct FlowDetail {
     pub messages: Vec<MessageRecord>,
     /// Die Funde, sortiert nach `idx`.
     pub findings: Vec<FindingRecord>,
+    /// Die Befunde, die am Fluss standen, in der Reihenfolge ihres
+    /// Eintreffens (HUM-256); leer für eine Zeile aus der Zeit vor
+    /// `V10__flow_diagnostics.sql`.
+    pub diagnostics: Vec<DiagnosticRecord>,
+}
+
+/// Ein aufgezeichneter Befund an einem Fluss, Zeile in `diagnostics`
+/// (HUM-256).
+///
+/// Wie die übrigen Zeilen bleibt er Text: Code und Schwere werden nicht in die
+/// Typen des Kerns zurückverwandelt, weil ein Archiv auch einen Code lesen
+/// muss, den eine spätere Fassung nicht mehr kennt. Der Vorschlag steht in
+/// den Spalten, in denen er geschrieben wurde; [`DiagnosticRecord::fix`] baut
+/// daraus wieder einen [`FixAction`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticRecord {
+    /// Laufende Nummer innerhalb des Flusses, 0-basiert.
+    pub idx: u32,
+    /// Der Code, zum Beispiel `LIMIT_001`.
+    pub code: String,
+    /// Die Schwere, wie [`Severity::as_str`] sie schreibt.
+    pub severity: String,
+    /// Der feste Teil der Meldung.
+    pub title: String,
+    /// Der veränderliche Teil, maskiert wie Kopfzeilen und Pfade (HUM-140).
+    pub why: String,
+    /// Adresse mit mehr Text dazu.
+    pub docs: Option<String>,
+    /// Die Art des Vorschlags, wie [`FixAction::as_str`] sie nennt.
+    pub fix_kind: Option<String>,
+    /// Der Schlüssel des Vorschlags (`set_env`, `change_setting`).
+    pub fix_key: Option<String>,
+    /// Der Wert des Vorschlags; bei `add_rule` die Regel in der Form von
+    /// `rules.yaml`.
+    pub fix_value: Option<String>,
+}
+
+/// Die Spalten `fix_kind`, `fix_key` und `fix_value` zu einem Vorschlag.
+///
+/// Eine Regel schreibt `encode_rule` (beim Daemon
+/// `humanitl_rules::serialize_rules`): Diese Crate kennt den Serialisierer
+/// nicht (`tools/deps-allow.toml`), und ein eigenes Format daneben liefe von
+/// der Datei des Nutzers weg (HUM-256, Fallstricke).
+pub(crate) fn fix_columns(
+    fix: &FixAction,
+    encode_rule: impl FnOnce(&Rule) -> String,
+) -> (String, Option<String>, Option<String>) {
+    let (key, value) = match fix {
+        FixAction::SetEnv { key, value } | FixAction::ChangeSetting { key, value } => {
+            (Some(key.clone()), Some(value.clone()))
+        }
+        FixAction::AddRule(rule) => (None, Some(encode_rule(rule))),
+        FixAction::InstallService => (None, None),
+        FixAction::CopyCommand(text) | FixAction::OpenUrl(text) => (None, Some(text.clone())),
+        FixAction::RemountReadOnly(path) => (None, Some(path.to_string_lossy().into_owned())),
+    };
+    (fix.as_str().to_owned(), key, value)
+}
+
+impl DiagnosticRecord {
+    /// Die Schwere als Wert des Kerns; `None` für eine Textform, die diese
+    /// Fassung nicht kennt.
+    #[must_use]
+    pub fn severity(&self) -> Option<Severity> {
+        [
+            Severity::Info,
+            Severity::Warning,
+            Severity::Error,
+            Severity::Blocking,
+        ]
+        .into_iter()
+        .find(|severity| severity.as_str() == self.severity)
+    }
+
+    /// Der Vorschlag, so wie er geschrieben wurde.
+    ///
+    /// Eine Regel liest `decode_rule` aus der Form von `rules.yaml` zurück
+    /// (beim Daemon `humanitl_rules::parse_rules_for_session`). Lässt sie sich
+    /// nicht lesen, fehlt eine Spalte oder ist die Art unbekannt, gibt es
+    /// keinen Vorschlag: Ein halber wäre ein Knopf, der etwas anderes tut, als
+    /// er sagt.
+    #[must_use]
+    pub fn fix(&self, decode_rule: impl FnOnce(&str) -> Option<Rule>) -> Option<FixAction> {
+        let key = || self.fix_key.clone();
+        let value = || self.fix_value.clone();
+        match self.fix_kind.as_deref()? {
+            "set_env" => Some(FixAction::SetEnv {
+                key: key()?,
+                value: value()?,
+            }),
+            "change_setting" => Some(FixAction::ChangeSetting {
+                key: key()?,
+                value: value()?,
+            }),
+            "add_rule" => decode_rule(self.fix_value.as_deref()?)
+                .map(|rule| FixAction::AddRule(Box::new(rule))),
+            "install_service" => Some(FixAction::InstallService),
+            "copy_command" => value().map(FixAction::CopyCommand),
+            "open_url" => value().map(FixAction::OpenUrl),
+            "remount_read_only" => value().map(|path| FixAction::RemountReadOnly(path.into())),
+            _ => None,
+        }
+    }
 }
 
 /// Was ein Aufräumlauf gelöscht hat.
@@ -456,6 +559,8 @@ pub struct PurgeReport {
     pub messages: u64,
     /// Gelöschte Zeilen in `findings`.
     pub findings: u64,
+    /// Gelöschte Zeilen in `diagnostics` (HUM-256).
+    pub diagnostics: u64,
     /// Gelöschte Zeilen in `sessions`.
     pub sessions: u64,
     /// Gelöschte Dateien im Blob-Speicher.

@@ -192,6 +192,92 @@ async fn body_cap_blocks_with_diagnostic() {
     assert_eq!(row.block_reason.as_deref(), Some("body_cap"));
 }
 
+/// Ein am Cap geblockter Fluss zeigt nach einem Neustart des Daemons
+/// `LIMIT_001` mit dem Regelvorschlag im Detail der Historie (HUM-256).
+///
+/// Der neue Daemon hat eine leere Registry; was er über den Fluss weiß,
+/// kommt aus der Aufzeichnung. Der Vorschlag muss dieselbe Regel sein, die
+/// der laufende Daemon angeboten hat, gelesen mit dem Leser der `rules.yaml`,
+/// in deren Form sie abgelegt ist.
+///
+/// Hier wird der Rundweg im Kern geprüft (`FixAction` gegen `FixAction`); die
+/// Wire-Form, die `GetFlow` nach dem Neustart liefert, prüft
+/// `get_flow_after_a_restart_takes_the_diagnostics_from_the_recording` in
+/// `humanitl-ipc`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_flow_blocked_at_the_cap_keeps_limit_001_after_a_restart() {
+    let upstream = FakeUpstream::plain().await;
+    let port = upstream.port();
+    let first = ProxyBuilder::new()
+        .rules(&rules(port, "allow", false))
+        .recording(true)
+        .start()
+        .await;
+    let mut events = first.events();
+    let answer = first
+        .raw_exchange(
+            &format!(
+                "POST http://127.0.0.1:{port}/sink HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+                 Content-Length: {}\r\n\r\n",
+                40u64 * 1024 * 1024
+            ),
+            b"xxxxxxxxxxxxxxxx",
+        )
+        .await;
+    assert!(answer.starts_with("HTTP/1.1 413 "), "{answer}");
+    events.wait_for("recorded").await;
+    let flow = first_flow(&events.seen);
+    let live = diagnostics_of(&events.seen, flow);
+    let offered = live
+        .iter()
+        .find(|diagnostic| diagnostic.code == LIMIT_001)
+        .unwrap_or_else(|| panic!("LIMIT_001 at the flow, got {live:?}"))
+        .clone();
+    assert!(
+        matches!(offered.fix, Some(FixAction::AddRule(_))),
+        "{offered:?}"
+    );
+    first
+        .recorder
+        .as_ref()
+        .expect("recording is on")
+        .flush()
+        .await;
+
+    let restarted = ProxyBuilder::new().restart_of(&first).start().await;
+    assert_eq!(
+        restarted.queue.registry().get(flow),
+        None,
+        "a fresh daemon starts with an empty registry"
+    );
+    let detail = restarted
+        .recorder
+        .as_ref()
+        .expect("a restart records")
+        .get_flow(flow)
+        .await
+        .unwrap()
+        .expect("the flow is in the history");
+    let codes: Vec<&str> = detail.diagnostics.iter().map(|d| d.code.as_str()).collect();
+    let expected: Vec<&str> = live.iter().map(|d| d.code.as_str()).collect();
+    assert_eq!(codes, expected, "the same diagnostics in the same order");
+
+    let recorded = detail
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "LIMIT_001")
+        .expect("LIMIT_001 survived the restart");
+    assert_eq!(recorded.why, offered.why);
+    assert_eq!(recorded.severity(), Some(Severity::Warning));
+    let session = detail.summary.session;
+    let fix = recorded.fix(|yaml| {
+        humanitl_rules::parse_rules_for_session(yaml, session)
+            .ok()
+            .and_then(|(set, _)| set.iter().next().cloned())
+    });
+    assert_eq!(fix, offered.fix, "the same suggestion, rule for rule");
+}
+
 /// Ohne angekündigte Länge fällt das Cap erst beim Puffern auf; derselbe
 /// Block, und der Befund sagt „mehr als".
 #[tokio::test(flavor = "multi_thread")]
