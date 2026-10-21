@@ -794,15 +794,20 @@ impl Watchers {
         config: &Config,
     ) -> Self {
         Self {
-            diagnostics: tokio::spawn(report_diagnostics(
-                "recorder",
-                recorder.diagnostics(),
-                Arc::clone(queue),
-            )),
+            diagnostics: tokio::spawn({
+                let replay = recorder.clone();
+                report_diagnostics(
+                    "recorder",
+                    recorder.diagnostics(),
+                    Arc::clone(queue),
+                    move || replay.outage(),
+                )
+            }),
             audit: tokio::spawn(report_diagnostics(
                 "audit",
                 audit.diagnostics(),
                 Arc::clone(queue),
+                Vec::new,
             )),
             purge: tokio::spawn(purge_daily(
                 recorder.clone(),
@@ -833,19 +838,23 @@ impl Watchers {
 /// `backlog/CONVENTIONS.md` 4.13). Er gehört zu keinem Flow — der Schreiber
 /// meldet den Zustand seines Threads, nicht den einer Anfrage —, also trägt
 /// das Ereignis `flow_id: None`.
+///
+/// `replay` nennt die Befunde, die noch gelten (bei der Aufzeichnung die
+/// laufende Störung, `Recorder::outage`). Liest die Brücke zu langsam und
+/// verliert Befunde, stellt sie diese danach erneut in den Strom: Der Befund,
+/// mit dem eine Störung beginnt, kommt nur einmal, und ginge er verloren,
+/// bliebe jeder Client grün, während nichts aufgezeichnet wird (HUM-250,
+/// Review).
 async fn report_diagnostics(
     source: &'static str,
     mut diagnostics: tokio::sync::broadcast::Receiver<Diagnostic>,
     queue: Arc<HoldQueue>,
+    replay: impl Fn() -> Vec<(SystemTime, Diagnostic)> + Send + 'static,
 ) {
     loop {
         match diagnostics.recv().await {
             Ok(diagnostic) => {
-                tracing::error!(
-                    code = diagnostic.code.as_str(),
-                    why = %diagnostic.why,
-                    "{source}"
-                );
+                log_diagnostic(source, &diagnostic);
                 queue.publish(FlowEvent::Diagnostic {
                     flow_id: None,
                     at: SystemTime::now(),
@@ -853,12 +862,184 @@ async fn report_diagnostics(
                 });
             }
             // Zu langsam mitgelesen: Die verlorenen Befunde stehen im
-            // Protokoll, und der Strom läuft weiter.
+            // Protokoll, und der Strom läuft weiter, mit dem, was noch gilt.
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                 tracing::warn!(dropped = n, "{source} diagnostics were dropped");
+                for (at, diagnostic) in replay() {
+                    queue.publish(FlowEvent::Diagnostic {
+                        flow_id: None,
+                        at,
+                        diagnostic: Box::new(diagnostic),
+                    });
+                }
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
         }
+    }
+}
+
+/// Schreibt einen Befund eines Schreib-Threads ins Protokoll, auf der Stufe
+/// seiner Schwere: `RECORDER_005` ist eine gute Nachricht und kein Fehler.
+fn log_diagnostic(source: &'static str, diagnostic: &Diagnostic) {
+    let code = diagnostic.code.as_str();
+    match diagnostic.severity {
+        Severity::Info => tracing::info!(code, why = %diagnostic.why, "{source}"),
+        Severity::Warning => tracing::warn!(code, why = %diagnostic.why, "{source}"),
+        Severity::Error | Severity::Blocking => {
+            tracing::error!(code, why = %diagnostic.why, "{source}");
+        }
+    }
+}
+
+/// Die Prüfung von [`report_diagnostics`] mit einer Aufzeichnung, deren
+/// Schreiber scheitert (HUM-250).
+///
+/// Ein eigenes Modul neben der Funktion, aus demselben Grund wie
+/// `retention_record_tests`.
+#[cfg(test)]
+mod recorder_outage_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use std::sync::Arc;
+    use std::time::{Duration, SystemTime};
+
+    use humanitl_config::Limits;
+    use humanitl_core::{
+        Authority, FlowEvent, FlowId, HostName, HttpRequest, Method, Scheme, SessionId,
+    };
+    use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
+
+    use super::{FlowRegistry, HoldQueue, report_diagnostics};
+
+    fn received(host: &str) -> FlowEvent {
+        FlowEvent::Received {
+            flow_id: FlowId::new(),
+            at: SystemTime::now(),
+            request: Box::new(HttpRequest::new(
+                Method::GET,
+                Scheme::Https,
+                Authority::with_scheme(HostName::Dns(host.to_owned()), Scheme::Https),
+                "/x",
+            )),
+        }
+    }
+
+    /// Die Codes der Befunde, die bis jetzt im Strom stehen. Wartet kurz,
+    /// damit die Brücke alles weitergereicht hat, was der Schreiber meldete.
+    async fn diagnostics_on(
+        stream: &mut tokio::sync::broadcast::Receiver<FlowEvent>,
+    ) -> Vec<String> {
+        let mut codes = Vec::new();
+        while let Ok(Ok(event)) =
+            tokio::time::timeout(Duration::from_millis(300), stream.recv()).await
+        {
+            if let FlowEvent::Diagnostic {
+                flow_id: None,
+                diagnostic,
+                ..
+            } = event
+            {
+                codes.push(diagnostic.code.as_str().to_owned());
+            }
+        }
+        codes
+    }
+
+    /// Dreimal scheitert der Schreiber, in drei Transaktionen: Auf dem Strom
+    /// steht genau ein `RECORDER_003`. Danach schreibt er wieder, und genau
+    /// ein `RECORDER_005` sagt das.
+    #[tokio::test]
+    async fn a_failing_writer_shows_once_on_the_stream_and_its_recovery_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let recorder = Recorder::open(
+            &dir.path().join("humanitl.db"),
+            &dir.path().join("blobs"),
+            RecorderSettings::default(),
+        )
+        .unwrap();
+        let limits = Limits::default();
+        let queue = Arc::new(HoldQueue::with_registry(
+            &limits,
+            Arc::new(FlowRegistry::new(&limits)),
+        ));
+        let mut stream = queue.subscribe();
+        let bridge = tokio::spawn({
+            let replay = recorder.clone();
+            report_diagnostics(
+                "recorder",
+                recorder.diagnostics(),
+                Arc::clone(&queue),
+                move || replay.outage(),
+            )
+        });
+
+        // Ohne Sitzung scheitert jede Zeile in `flows`.
+        for host in ["a.example", "b.example", "c.example"] {
+            recorder.apply(&received(host));
+            recorder.flush().await;
+        }
+        assert_eq!(diagnostics_on(&mut stream).await, ["RECORDER_003"]);
+
+        recorder.start_session(&SessionMeta {
+            id: SessionId::new(),
+            started_at: SystemTime::now(),
+            sandbox_profile: "default".to_owned(),
+            llm_endpoint: None,
+            work_dir: "/work".to_owned(),
+            agent: "opencode".to_owned(),
+        });
+        recorder.apply(&received("d.example"));
+        recorder.flush().await;
+        recorder.apply(&received("e.example"));
+        recorder.flush().await;
+        assert_eq!(diagnostics_on(&mut stream).await, ["RECORDER_005"]);
+
+        bridge.abort();
+    }
+
+    /// Verliert die Brücke Befunde, weil sie zu langsam liest, stellt sie
+    /// danach die laufende Störung erneut in den Strom (HUM-250, Review).
+    #[tokio::test]
+    async fn a_lagging_bridge_repeats_the_running_outage() {
+        use humanitl_core::diagnostics::codes::{RECORDER_003, RECORDER_004};
+        use humanitl_core::{Diagnostic, Severity};
+
+        let limits = Limits::default();
+        let queue = Arc::new(HoldQueue::with_registry(
+            &limits,
+            Arc::new(FlowRegistry::new(&limits)),
+        ));
+        let mut stream = queue.subscribe();
+        let (tx, rx) = tokio::sync::broadcast::channel(2);
+        // Fünf Befunde in einen Kanal für zwei, bevor die Brücke liest: Sie
+        // beginnt mit einem Überlauf, und der Befund der Störung ist darunter.
+        tx.send(
+            Diagnostic::builder(RECORDER_003, Severity::Error)
+                .why("disk full".to_owned())
+                .build(),
+        )
+        .unwrap();
+        for _ in 0..4 {
+            tx.send(
+                Diagnostic::builder(RECORDER_004, Severity::Error)
+                    .why("blob".to_owned())
+                    .build(),
+            )
+            .unwrap();
+        }
+        let outage = Diagnostic::builder(RECORDER_003, Severity::Error)
+            .why("disk full".to_owned())
+            .build();
+        let bridge = tokio::spawn(report_diagnostics(
+            "recorder",
+            rx,
+            Arc::clone(&queue),
+            move || vec![(SystemTime::now(), outage.clone())],
+        ));
+        let codes = diagnostics_on(&mut stream).await;
+        assert!(codes.contains(&"RECORDER_003".to_owned()), "{codes:?}");
+        drop(tx);
+        bridge.abort();
     }
 }
 

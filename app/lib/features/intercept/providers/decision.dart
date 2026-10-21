@@ -25,6 +25,7 @@ import 'findings_pause.dart';
 import 'flows.dart';
 import 'timeout_rule.dart';
 import 'note.dart';
+import 'recorder_health.dart';
 import 'selection.dart';
 
 part 'decision.freezed.dart';
@@ -645,6 +646,34 @@ class InterceptDecision extends _$InterceptDecision {
     );
   }
 
+  /// True, after opening the pause, while the recording is disrupted and this
+  /// session has not confirmed that yet (HUM-250).
+  ///
+  /// Asked only at the two places where an allow leaves, [_send] and [_many],
+  /// immediately before the first `Decide`: a decision that asks through the
+  /// modal first stops once, after the modal, and an outage that begins while
+  /// the modal stands or a detail is on its way is still caught (review
+  /// round 2).
+  ///
+  /// The release stops at the pause instead of leaving: what goes now leaves
+  /// no trace in the history, and the person reads that once before the
+  /// first request goes (`docs/UX.md` 5.4). [resume] is the release that
+  /// stopped, with its arguments; "Send unrecorded" in the pause carries it
+  /// out. The findings pause gives way: it confirmed already, or [resume]
+  /// opens it again.
+  ///
+  /// [bound] as in [RecorderPause.open]: a batch passes false, because its
+  /// pause must outlive the cursor moving on after its first request left.
+  bool _recorderPaused(Future<void> Function() resume, {bool bound = true}) {
+    final RecorderPause pause = ref.read(recorderPauseProvider.notifier);
+    if (!pause.owed) {
+      return false;
+    }
+    ref.read(openFindingsPauseProvider.notifier).close();
+    pause.open(resume, bound: bound);
+    return true;
+  }
+
   /// False, after refusing, while [rule] would be saved although its
   /// sentence under the controls was not seen in full (HUM-249).
   bool _ruleInView(Rule? rule) {
@@ -1146,7 +1175,8 @@ class InterceptDecision extends _$InterceptDecision {
     int size = 0;
     final List<Flow> sent = <Flow>[];
     int gone = 0;
-    for (final Flow flow in flows) {
+    for (int index = 0; index < flows.length; index++) {
+      final Flow flow = flows[index];
       final bool isSource = flow.id == source?.id;
       // Während der Details oder der vorigen Entscheidungen kann eine Anfrage
       // die Warteschlange verlassen haben -- entschieden anderswo oder
@@ -1161,6 +1191,39 @@ class InterceptDecision extends _$InterceptDecision {
         gone++;
         continue;
       }
+      // Unmittelbar vor jedem Senden: Ein Modal, das geöffnet wurde, als die
+      // Aufzeichnung noch schrieb, und erst nach Beginn einer Störung
+      // bestätigt wird, hält hier an, ebenso ein Stapel, während dessen
+      // Detail-Abfrage oder mitten in dessen Senden sie begann (HUM-250,
+      // Review). Was schon hinausging, ist verbucht; fortgesetzt wird mit
+      // den übrigen, ohne Regel und ohne Entwürfe, wenn die schon an der
+      // ersten mitgingen. Blockieren bleibt unberührt.
+      if (kind != DecisionKind.block &&
+          _recorderPaused(
+            () => sent.isEmpty
+                ? _many(
+                    asked,
+                    kind,
+                    fromSelection: fromSelection,
+                    acknowledgedFindings: acknowledgedFindings,
+                    cardSeen: cardSeen,
+                    shownRule: shownRule,
+                  )
+                : _many(
+                    flows.sublist(index),
+                    kind,
+                    fromSelection: false,
+                    cardSeen: cardSeen,
+                  ),
+            bound: flows.length == 1,
+          )) {
+        state = const DecisionProgress.idle();
+        if (sent.isNotEmpty) {
+          _record(sent, kind, size, created);
+          _consumeDraftsOf(drafts);
+        }
+        return;
+      }
       try {
         final Rule? back = await client.decide(
           flow.id,
@@ -1173,6 +1236,9 @@ class InterceptDecision extends _$InterceptDecision {
         created ??= back;
         size += flow.requestSize;
         sent.add(flow);
+        if (kind != DecisionKind.block) {
+          ref.read(recorderPauseProvider.notifier).noteAllowSent();
+        }
       } on DaemonException catch (error) {
         if (error.diagnostic.code == DiagnosticCodes.flowNotHeld) {
           if (isSource) {
@@ -1451,6 +1517,14 @@ class InterceptDecision extends _$InterceptDecision {
     if (flowId == null || state.isSending) {
       return;
     }
+    // Unmittelbar vor dem Senden noch einmal: Eine Störung kann begonnen
+    // haben, nachdem die Freigabe ausgelöst wurde, etwa während das Detail
+    // für die Benachrichtigung unterwegs war (HUM-250, Review). Blockieren
+    // bleibt unberührt.
+    if (decision.kind != DecisionKind.block &&
+        _recorderPaused(() => _send(flow, decision, remember, id: id))) {
+      return;
+    }
     // Notiz, Merk-Entwurf und Findings-Pause gehören dem ausgewählten Flow.
     // Eine Antwort aus der Benachrichtigung entscheidet einen anderen, ohne
     // die Auswahl zu ändern; dann bleiben die Entwürfe des ausgewählten
@@ -1468,6 +1542,9 @@ class InterceptDecision extends _$InterceptDecision {
         return;
       }
       state = const DecisionProgress.idle();
+      if (decision.kind != DecisionKind.block) {
+        ref.read(recorderPauseProvider.notifier).noteAllowSent();
+      }
       ref
           .read(lastDecisionProvider.notifier)
           .record(

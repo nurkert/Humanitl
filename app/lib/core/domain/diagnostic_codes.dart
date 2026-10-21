@@ -127,4 +127,18 @@ abstract final class DiagnosticCodes {
   /// one with 503. The status bar shows it at 100 % of either limit, from the
   /// held flows it already has (HUM-057).
   static const String queueFull = 'LIMIT_002';
+
+  /// The recording is not available: the database is locked, cannot be
+  /// opened or is no longer writable. As a session finding of at least
+  /// `error` it means that nothing is recorded until [recorderRecovered]
+  /// arrives (HUM-250).
+  static const String recorderUnavailable = 'RECORDER_001';
+
+  /// The recording could not write. As a session finding of at least `error`
+  /// it means the same as [recorderUnavailable] (HUM-250).
+  static const String recorderWriteFailed = 'RECORDER_003';
+
+  /// The recording writes again after one of the two codes above; the hints
+  /// "not being recorded" go away (HUM-250).
+  static const String recorderRecovered = 'RECORDER_005';
 }

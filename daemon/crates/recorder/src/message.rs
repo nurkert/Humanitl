@@ -15,7 +15,15 @@ use humanitl_core::{HeaderMap, SecretMasks};
 /// Kopfzeilen als `JSON`-Liste von Paaren, mit jedem Geheimnis aus `masks`
 /// durch `••••` ersetzt (HUM-140).
 pub fn encode_headers(headers: &HeaderMap, masks: &SecretMasks) -> String {
-    let pairs: Vec<[String; 2]> = headers
+    let pairs = masked_pairs(headers, masks);
+    serde_json::to_string(&pairs).unwrap_or_else(|_unserializable| "[]".to_owned())
+}
+
+/// Kopfzeilen als Paare aus Name und Text, in Originalreihenfolge, mit jedem
+/// Geheimnis aus `masks` durch `••••` ersetzt: genau so, wie
+/// [`encode_headers`] sie in die Datenbank schreibt.
+pub fn masked_pairs(headers: &HeaderMap, masks: &SecretMasks) -> Vec<[String; 2]> {
+    headers
         .iter()
         .map(|(name, value)| {
             let text = masks
@@ -31,8 +39,7 @@ pub fn encode_headers(headers: &HeaderMap, masks: &SecretMasks) -> String {
             };
             [name.as_str().to_owned(), text]
         })
-        .collect();
-    serde_json::to_string(&pairs).unwrap_or_else(|_unserializable| "[]".to_owned())
+        .collect()
 }
 
 /// Der Wert aus `Content-Type`, falls einer da ist, maskiert wie jede andere

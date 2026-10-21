@@ -18,10 +18,18 @@
 //! # Fehler
 //!
 //! Kein `unwrap` und kein `panic`: der Thread stirbt nicht, wenn eine Zeile
-//! nicht schreibbar ist. Der Fehler wird zu einem [`Diagnostic`] mit
-//! `RECORDER_003` und geht über einen `broadcast`-Kanal an den Daemon, der ihn
-//! in den Ereignisstrom stellt (`FlowEvent::Diagnostic`). So ist eine Lücke in
-//! der Aufzeichnung sichtbar, statt still zu bleiben.
+//! nicht schreibbar ist. Der Fehler wird zu einem
+//! [`Diagnostic`](humanitl_core::Diagnostic) mit `RECORDER_003` und geht über
+//! einen `broadcast`-Kanal an den Daemon, der ihn in den Ereignisstrom stellt
+//! (`FlowEvent::Diagnostic`). So ist eine Lücke in der Aufzeichnung sichtbar,
+//! statt still zu bleiben.
+//!
+//! Scheitert schon `BEGIN` oder `COMMIT`, weil die Datenbank gesperrt, nicht
+//! mehr beschreibbar oder keine Datenbank mehr ist, heißt der Befund
+//! `RECORDER_001`: Dann ist nicht eine Zeile verloren, sondern die
+//! Aufzeichnung als Ganzes nicht verfügbar. Beide Codes gehen einmal je
+//! Störung hinaus, und die erste fehlerfreie Transaktion danach meldet
+//! `RECORDER_005` ([`Reporter`], HUM-250).
 //!
 //! Kein Fehlertext trägt je Inhalte einer Nachricht: nur Kennungen, Spalten,
 //! Pfade und die Meldung von `SQLite`.
@@ -38,14 +46,15 @@ use bytes::Bytes;
 use humanitl_core::block::sanitize_note;
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{
-    BlockReason, DecidedFindings, Decision, DecisionSource, Diagnostic, Finding, FixAction,
-    FlowEvent, FlowId, HeaderMap, HttpRequest, Scheme, SessionId,
+    BlockReason, DecidedFindings, Decision, DecisionSource, Finding, FixAction, FlowEvent, FlowId,
+    HeaderMap, HttpRequest, Scheme, SessionId, Severity,
 };
 use rusqlite::Connection;
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::oneshot;
 
 use crate::blob::BlobStore;
-use crate::error::{RecorderError, storage_failed};
+use crate::error::{RecorderError, storage_failed, unavailable_at};
+use crate::health::Reporter;
 use crate::hostkey::host_key;
 use crate::types::{Dir, PurgeReport, SessionMeta, millis};
 
@@ -258,8 +267,11 @@ pub struct Writer {
     conn: Connection,
     db: PathBuf,
     blobs: Arc<BlobStore>,
-    diagnostics: broadcast::Sender<Diagnostic>,
+    diagnostics: Reporter,
     open: bool,
+    /// Wahr, sobald in der laufenden Transaktion etwas scheiterte; dann ist
+    /// ihr Commit kein Zeichen, dass die Aufzeichnung wieder schreibt.
+    batch_failed: bool,
     opened_at: Instant,
     pending: usize,
     restricted: bool,
@@ -270,18 +282,14 @@ pub struct Writer {
 
 impl Writer {
     /// Ein Schreiber auf dieser Verbindung.
-    pub fn new(
-        conn: Connection,
-        db: &Path,
-        blobs: Arc<BlobStore>,
-        diagnostics: broadcast::Sender<Diagnostic>,
-    ) -> Self {
+    pub fn new(conn: Connection, db: &Path, blobs: Arc<BlobStore>, diagnostics: Reporter) -> Self {
         Self {
             conn,
             db: db.to_path_buf(),
             blobs,
             diagnostics,
             open: false,
+            batch_failed: false,
             opened_at: Instant::now(),
             pending: 0,
             restricted: false,
@@ -344,15 +352,17 @@ impl Writer {
         if self.open {
             return;
         }
+        self.batch_failed = false;
         match self.conn.execute_batch("BEGIN;") {
             Ok(()) => {
                 self.open = true;
                 self.opened_at = Instant::now();
                 self.pending = 0;
             }
-            Err(err) => self.report(storage_failed(format!(
-                "could not begin a recorder transaction ({err})"
-            ))),
+            Err(err) => {
+                let failed = self.transaction_failed(&err, "begin");
+                self.report(failed);
+            }
         }
     }
 
@@ -363,11 +373,16 @@ impl Writer {
         }
         self.open = false;
         self.pending = 0;
-        if let Err(err) = self.conn.execute_batch("COMMIT;") {
-            let _ignored = self.conn.execute_batch("ROLLBACK;");
-            self.report(storage_failed(format!(
-                "could not commit a recorder transaction ({err}); the rows of this batch are lost"
-            )));
+        match self.conn.execute_batch("COMMIT;") {
+            Err(err) => {
+                let _ignored = self.conn.execute_batch("ROLLBACK;");
+                let failed = self.transaction_failed(&err, "commit");
+                self.report(failed);
+            }
+            // Eine Transaktion, in der nichts scheiterte, beendet eine
+            // gemeldete Störung (HUM-250).
+            Ok(()) if !self.batch_failed => self.diagnostics.recovered(),
+            Ok(()) => {}
         }
         self.restrict_once();
     }
@@ -386,7 +401,14 @@ impl Writer {
         }
         self.restricted = true;
         if let Err(err) = crate::schema::restrict(&self.db) {
-            self.report(err);
+            // Eine Warnung, keine Störung: Die Aufzeichnung schreibt weiter,
+            // nur liegt die Datei offener als zugesagt. Als Fehler mit
+            // `RECORDER_001` hieße sie in der Oberfläche „Aufzeichnung
+            // gestört" (HUM-250).
+            let mut diagnostic = err.into_diagnostic();
+            diagnostic.severity = Severity::Warning;
+            tracing::warn!(code = diagnostic.code.as_str(), why = %diagnostic.why, "recorder");
+            let _sent = self.diagnostics.report(diagnostic);
         }
     }
 
@@ -425,10 +447,42 @@ impl Writer {
     }
 
     /// Schickt einen Befund an den Daemon.
-    fn report(&self, err: RecorderError) {
+    ///
+    /// Jeder Fehler steht im Protokoll; in den Strom geht er nur beim ersten
+    /// Mal seiner Ursache in dieser Störung ([`Reporter::report`]). Die
+    /// laufende Transaktion zählt danach nicht mehr als fehlerfrei.
+    fn report(&mut self, err: RecorderError) {
+        self.batch_failed = true;
         let diagnostic = err.into_diagnostic();
         tracing::warn!(code = diagnostic.code.as_str(), why = %diagnostic.why, "recorder");
-        let _ignored = self.diagnostics.send(diagnostic);
+        let _sent = self.diagnostics.report(diagnostic);
+    }
+
+    /// Der Befund zu einem gescheiterten `BEGIN` oder `COMMIT`.
+    ///
+    /// Sagt `SQLite`, dass die Datenbank gesperrt, nicht zu öffnen, nur lesbar
+    /// oder keine Datenbank ist, ist die Aufzeichnung als Ganzes nicht
+    /// verfügbar (`RECORDER_001`, mit dem Pfad zum Nachsehen). Alles andere,
+    /// etwa eine volle Platte, ist ein Schreibfehler (`RECORDER_003`).
+    fn transaction_failed(&self, err: &rusqlite::Error, step: &str) -> RecorderError {
+        let lost = if step == "commit" {
+            "; the rows of this batch are lost"
+        } else {
+            ""
+        };
+        if database_unavailable(err) {
+            unavailable_at(
+                &self.db,
+                format!(
+                    "could not {step} a recorder transaction, the database is not available \
+                     ({err}){lost}"
+                ),
+            )
+        } else {
+            storage_failed(format!(
+                "could not {step} a recorder transaction ({err}){lost}"
+            ))
+        }
     }
 
     /// Trägt eine Sitzung ein und macht sie zur laufenden.
@@ -1024,7 +1078,7 @@ impl Writer {
     /// ihn zeigt: seine Zeile ist unterwegs. Ohne diese Ausnahme gäbe es ein
     /// schmales Fenster, in dem ein Aufräumlauf den Body einer Anfrage löschte,
     /// die denselben Inhalt noch einmal schickt.
-    fn drop_unreferenced(&self, candidates: &[[u8; 32]]) -> u64 {
+    fn drop_unreferenced(&mut self, candidates: &[[u8; 32]]) -> u64 {
         let mut removed = 0;
         for sha256 in candidates {
             if self.reserved.contains_key(sha256) {
@@ -1049,6 +1103,22 @@ impl Writer {
         }
         removed
     }
+}
+
+/// Wahr, wenn `SQLite` mit `err` sagt, dass die Datenbank als Ganzes nicht
+/// verfügbar ist: gesperrt, nicht zu öffnen, nur lesbar oder keine Datenbank.
+fn database_unavailable(err: &rusqlite::Error) -> bool {
+    use rusqlite::ErrorCode;
+    matches!(
+        err.sqlite_error_code(),
+        Some(
+            ErrorCode::CannotOpen
+                | ErrorCode::DatabaseBusy
+                | ErrorCode::DatabaseLocked
+                | ErrorCode::NotADatabase
+                | ErrorCode::ReadOnly
+        )
+    )
 }
 
 /// Der Wert für `flows.upgrade`.
@@ -1228,5 +1298,27 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// Eine gesperrte, nur lesbare oder fremde Datei ist nicht verfügbar
+    /// (`RECORDER_001`); eine volle Platte ist ein Schreibfehler
+    /// (`RECORDER_003`, HUM-250).
+    #[test]
+    fn a_locked_database_is_unavailable_a_full_disk_is_a_write_failure() {
+        use rusqlite::ffi;
+
+        let failure = |code: i32| rusqlite::Error::SqliteFailure(ffi::Error::new(code), None);
+        for code in [
+            ffi::SQLITE_BUSY,
+            ffi::SQLITE_LOCKED,
+            ffi::SQLITE_CANTOPEN,
+            ffi::SQLITE_NOTADB,
+            ffi::SQLITE_READONLY,
+        ] {
+            assert!(super::database_unavailable(&failure(code)), "{code}");
+        }
+        for code in [ffi::SQLITE_FULL, ffi::SQLITE_IOERR, ffi::SQLITE_CONSTRAINT] {
+            assert!(!super::database_unavailable(&failure(code)), "{code}");
+        }
     }
 }

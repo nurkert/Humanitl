@@ -30,6 +30,7 @@ use std::future::Future;
 use std::net::Ipv4Addr;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,8 +45,8 @@ use humanitl_config::secret::{ApiKey, KeyRef, KeyStore};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{
-    BodyRef, Decision, DecisionSource, Diagnostic, FixAction, FlowEvent, FlowId, HostName,
-    SessionId, Severity,
+    BodyRef, Decision, DecisionSource, Diagnostic, FixAction, FlowEvent, FlowId, FlowState,
+    HostName, SessionId, Severity,
 };
 use humanitl_proxy::egress::Egress;
 use humanitl_proxy::hold::NotHeld;
@@ -462,6 +463,78 @@ impl IpcServer {
         &self.info
     }
 
+    /// Setzt in ein aufgezeichnetes Detail die Kopfzeilen der Anfrage aus der
+    /// Live-Registry, solange über den Flow noch nicht entschieden ist
+    /// (HUM-250, aus dem Review von HUM-058).
+    ///
+    /// Die Aufzeichnung eines gehaltenen Flows kann unvollständig sein: Die
+    /// Zeile steht, die Nachricht mit den Kopfzeilen fehlt, weil ihr Schreiben
+    /// scheiterte oder noch im Schreib-Thread wartet. Eine Anfrage ohne
+    /// Kopfzeilen verschwiege ein `Upgrade: websocket`, und die Oberfläche
+    /// hielte sie deshalb auf allen Wegen gehalten (`requestIsReadable`). Die
+    /// Registry kennt die Anfrage, über die entschieden wird, vollständig.
+    ///
+    /// Sie verlässt den Daemon in derselben Form, in der sie aus der
+    /// Aufzeichnung käme: jedes Geheimnis der Masken als `••••`
+    /// ([`Recorder::masked_headers`], HUM-140). Ziel und Pfad bleiben die der
+    /// Zeile, die schon maskiert sind; ein fehlender Body-Verweis kommt aus
+    /// der Registry.
+    fn with_live_request(
+        &self,
+        recorder: &Recorder,
+        id: FlowId,
+        mut detail: v1::FlowDetail,
+    ) -> v1::FlowDetail {
+        let Some(record) = self.registry.get(id) else {
+            return detail;
+        };
+        if !matches!(
+            record.state,
+            FlowState::Received | FlowState::Analyzed { .. } | FlowState::Held { .. }
+        ) {
+            return detail;
+        }
+        let live = masked_request(recorder, &record.request);
+        let request = detail.request.get_or_insert_with(Default::default);
+        request.headers = live.headers;
+        if request.body.is_none() {
+            request.body = live.body;
+        }
+        detail
+    }
+
+    /// Das Detail eines Flows, den nur die Registry kennt, weil seine Zeile
+    /// nie geschrieben wurde: der Rückfall von `GetFlow`, und während einer
+    /// Störung der Aufzeichnung der übliche Weg (HUM-250, Review).
+    ///
+    /// Mit Aufzeichnung verlässt es den Daemon in derselben Form, in der es
+    /// aus der Aufzeichnung käme: Ziel, Pfad, Kopfzeilen und die Angaben zum
+    /// Body gehen durch die Masken (HUM-140). Ohne Aufzeichnung gibt es keine
+    /// Masken, und das Detail bleibt, wie die Registry es kennt.
+    fn registry_detail(
+        &self,
+        mut detail: v1::FlowDetail,
+        request: &humanitl_core::HttpRequest,
+    ) -> v1::FlowDetail {
+        if let Some(recorder) = self.recorder.as_ref() {
+            detail.request = Some(masked_request(recorder, request));
+            let masks = recorder.masks();
+            if let Some(summary) = detail.summary.as_mut() {
+                summary.path = masks.apply(&summary.path).into_owned();
+                // Die registrierbare Domain entsteht aus dem Hostnamen; ein
+                // Schlüssel als Label stünde dort sonst im Klartext (Review).
+                summary.apex = masks.apply_host(&summary.apex).into_owned();
+                if let Some(authority) = summary.authority.as_mut() {
+                    mask_authority(&masks, authority);
+                }
+            }
+            if let Some(domain) = detail.domain.as_mut() {
+                domain.apex = masks.apply_host(&domain.apex).into_owned();
+            }
+        }
+        detail
+    }
+
     /// Hängt an ein aufgezeichnetes Detail die Befunde, die die Registry zu
     /// diesem Fluss kennt (HUM-057, HUM-058 Zeile 9).
     ///
@@ -499,12 +572,32 @@ impl IpcServer {
         let registry = Arc::clone(&self.registry);
         let domains = self.domains.clone();
         let include_passthrough = request.include_passthrough;
-        let live = BroadcastStream::new(self.registry.subscribe()).filter_map(move |item| {
+        let recorder = self.recorder.clone();
+        let live = BroadcastStream::new(self.registry.subscribe()).map(move |item| {
             let event = match item {
                 Ok(event) => event,
                 Err(BroadcastStreamRecvError::Lagged(n)) => {
                     log_lagged(n);
-                    FlowEvent::Lagged { n }
+                    // Unter den verlorenen Ereignissen kann der eine Befund
+                    // sein, mit dem eine Störung der Aufzeichnung begann; er
+                    // kommt nur einmal. Hinter `Lagged` folgt deshalb, was
+                    // noch gestört ist, damit kein Client grün bleibt, während
+                    // nichts aufgezeichnet wird (HUM-250, Review). War der
+                    // erste Befund noch nicht verloren, kommt er so doppelt;
+                    // das ist gewollt und harmlos, denn die Oberfläche hält
+                    // die Störung als Zustand, und ein zweites
+                    // `RECORDER_003` ändert ihn nicht (`recorder_health.dart`).
+                    let mut events = vec![Ok(convert::flow_event_to_proto(
+                        &FlowEvent::Lagged { n },
+                        &registry,
+                        domains.as_deref(),
+                    ))];
+                    events.extend(outage_events(
+                        recorder.as_ref(),
+                        &registry,
+                        domains.as_deref(),
+                    ));
+                    return events;
                 }
             };
             // Ereignisse eines Durchreich-Flows (LLM-Passthrough) sieht nur,
@@ -525,30 +618,52 @@ impl IpcServer {
                         convert::record_to_summary(&record, domains.as_deref()).passthrough
                     })
                 });
-            (!hidden).then(|| {
-                Ok(convert::flow_event_to_proto(
-                    &event,
-                    &registry,
-                    domains.as_deref(),
-                ))
-            })
-        });
-        match self.rules.as_ref().map(RulesService::store) {
-            None => Box::pin(tokio_stream::iter(self.backlog(request)).chain(live)),
-            Some(store) => {
-                let changes = rules_changed_stream(Arc::clone(store));
-                Box::pin(tokio_stream::iter(self.backlog(request)).chain(live.merge(changes)))
+            if hidden {
+                return Vec::new();
             }
-        }
+            vec![Ok(convert::flow_event_to_proto(
+                &event,
+                &registry,
+                domains.as_deref(),
+            ))]
+        });
+        // Erst zusammenführen, dann auflösen: `Lagged` und die nachgelieferte
+        // Störung sind ein Stück und gehen als eines durch `merge`. Würde
+        // vorher aufgelöst, könnte eine Regeländerung zwischen beide fallen
+        // (HUM-250, Review Runde 2).
+        let merged: Pin<Box<dyn tokio_stream::Stream<Item = Vec<_>> + Send>> =
+            match self.rules.as_ref().map(RulesService::store) {
+                None => Box::pin(live),
+                Some(store) => Box::pin(
+                    live.merge(rules_changed_stream(Arc::clone(store)).map(|event| vec![event])),
+                ),
+            };
+        Box::pin(tokio_stream::iter(self.backlog(request)).chain(Flatten::new(merged)))
     }
 
     /// Was ein Abonnent vor dem Strom nachgeliefert bekommt.
     ///
-    /// `since_flow_id` heißt „ich kenne alles bis hierher". Für jeden jüngeren
-    /// Flow kommt ein `Received`; den Rest holt der Client über `ListFlows`.
-    /// Genau so verhält sich der Fake, damit die Oberfläche keinen Unterschied
-    /// sieht.
+    /// Zuerst die Befunde einer laufenden Störung der Aufzeichnung (HUM-250):
+    /// Sie gingen einmal in den Strom, als die Störung begann, und ein Client,
+    /// der sich danach verbindet, hätte sie sonst nie gesehen. Er zeigte dann
+    /// „alles wird aufgezeichnet", während nichts ankommt.
+    ///
+    /// Danach die Flows: `since_flow_id` heißt „ich kenne alles bis hierher".
+    /// Für jeden jüngeren Flow kommt ein `Received`; den Rest holt der Client
+    /// über `ListFlows`. Genau so verhält sich der Fake, damit die Oberfläche
+    /// keinen Unterschied sieht.
     fn backlog(&self, request: &v1::SubscribeRequest) -> Vec<Result<v1::FlowEvent, Status>> {
+        let mut events = outage_events(
+            self.recorder.as_ref(),
+            &self.registry,
+            self.domains.as_deref(),
+        );
+        events.extend(self.received_since(request));
+        events
+    }
+
+    /// Ein `Received` für jeden Flow nach `since_flow_id`.
+    fn received_since(&self, request: &v1::SubscribeRequest) -> Vec<Result<v1::FlowEvent, Status>> {
         if request.since_flow_id.is_empty() {
             return Vec::new();
         }
@@ -847,6 +962,107 @@ impl IpcServer {
             Err(error) => refused(text, not_held(&error)),
         }
     }
+}
+
+/// Die Befunde einer laufenden Störung der Aufzeichnung als Ereignisse des
+/// Stroms, ältester zuerst; leer ohne Aufzeichnung oder ohne Störung
+/// (HUM-250).
+fn outage_events(
+    recorder: Option<&Recorder>,
+    registry: &FlowRegistry,
+    domains: Option<&DomainTable>,
+) -> Vec<Result<v1::FlowEvent, Status>> {
+    recorder
+        .map(Recorder::outage)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(at, diagnostic)| {
+            Ok(convert::flow_event_to_proto(
+                &FlowEvent::Diagnostic {
+                    flow_id: None,
+                    at,
+                    diagnostic: Box::new(diagnostic),
+                },
+                registry,
+                domains,
+            ))
+        })
+        .collect()
+}
+
+/// Ein Strom aus Listen, Element für Element (HUM-250).
+///
+/// `tokio-stream` hat kein `flat_map`; der Ereignisstrom braucht es, weil auf
+/// ein verlorenes Stück (`Lagged`) mehrere Ereignisse folgen können.
+struct Flatten<T> {
+    inner: Pin<Box<dyn tokio_stream::Stream<Item = Vec<T>> + Send>>,
+    pending: std::collections::VecDeque<T>,
+}
+
+impl<T> Flatten<T> {
+    fn new(inner: Pin<Box<dyn tokio_stream::Stream<Item = Vec<T>> + Send>>) -> Self {
+        Self {
+            inner,
+            pending: std::collections::VecDeque::new(),
+        }
+    }
+}
+
+impl<T: Unpin> tokio_stream::Stream for Flatten<T> {
+    type Item = T;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<T>> {
+        loop {
+            if let Some(item) = self.pending.pop_front() {
+                return std::task::Poll::Ready(Some(item));
+            }
+            match self.inner.as_mut().poll_next(cx) {
+                std::task::Poll::Ready(Some(items)) => self.pending.extend(items),
+                std::task::Poll::Ready(None) => return std::task::Poll::Ready(None),
+                std::task::Poll::Pending => return std::task::Poll::Pending,
+            }
+        }
+    }
+}
+
+/// Eine Anfrage aus der Registry in ihrer Wire-Form, so maskiert, wie die
+/// Aufzeichnung sie schriebe (HUM-140, HUM-250).
+///
+/// Kopfzeilen über [`Recorder::masked_headers`], Pfad und Ziel über die
+/// Masken der Aufzeichnung, dazu `content_type` und `content_encoding` des
+/// Body-Verweises: Ein Geheimnis, das der Agent in eine dieser Stellen
+/// schreibt, verließe den Daemon sonst im Klartext, während dieselbe Anfrage
+/// aus der Aufzeichnung maskiert käme.
+fn masked_request(recorder: &Recorder, request: &humanitl_core::HttpRequest) -> v1::HttpRequest {
+    let masks = recorder.masks();
+    let mut wire = convert::request_to_proto(request);
+    wire.headers = recorder
+        .masked_headers(&request.headers)
+        .into_iter()
+        .map(|[name, value]| v1::Header {
+            name,
+            value: value.into_bytes(),
+        })
+        .collect();
+    wire.path_and_query = masks.apply(&wire.path_and_query).into_owned();
+    if let Some(authority) = wire.authority.as_mut() {
+        mask_authority(&masks, authority);
+    }
+    if let Some(body) = wire.body.as_mut() {
+        body.content_type = masks.apply(&body.content_type).into_owned();
+        body.content_encoding = masks.apply(&body.content_encoding).into_owned();
+    }
+    wire
+}
+
+/// Ziel und Anzeigename durch die Masken, wie `flows.host` und
+/// `flows.host_display` in der Aufzeichnung (HUM-140).
+fn mask_authority(masks: &humanitl_core::SecretMasks, authority: &mut v1::Authority) {
+    authority.host = masks.apply_host(&authority.host).into_owned();
+    authority.display_host = masks.apply_host(&authority.display_host).into_owned();
 }
 
 /// Ein unbekannter Flow als `NOT_FOUND`, mit seinem Befund in den Details.
@@ -1262,12 +1478,14 @@ impl v1::humanitl_server::Humanitl for IpcServer {
                 .await
                 .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?
         {
+            let detail = self.with_live_request(recorder, id, detail);
             return Ok(Response::new(self.with_live_diagnostics(id, detail)));
         }
         self.registry
             .get(id)
             .map(|record| {
-                Response::new(convert::record_to_detail(&record, self.domains.as_deref()))
+                let detail = convert::record_to_detail(&record, self.domains.as_deref());
+                Response::new(self.registry_detail(detail, &record.request))
             })
             .ok_or_else(|| unknown_flow(id))
     }
@@ -2593,6 +2811,63 @@ mod tests {
                 .unwrap_or_default();
             assert_eq!(&id, expected);
         }
+    }
+
+    /// Ging der eine Befund einer Störung der Aufzeichnung mit einem
+    /// Überlauf verloren, folgt er hinter `Lagged` erneut (HUM-250, Review):
+    /// Sonst bliebe die Oberfläche grün, während nichts aufgezeichnet wird.
+    #[tokio::test]
+    async fn a_lag_during_a_recorder_outage_repeats_the_outage() {
+        use tokio_stream::StreamExt as _;
+
+        let limits = Limits {
+            event_buffer: 8,
+            ..Limits::default()
+        };
+        let queue = Arc::new(HoldQueue::with_registry(
+            &limits,
+            Arc::new(FlowRegistry::new(&limits)),
+        ));
+        let config = Config {
+            limits,
+            ..Config::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let recorder = humanitl_recorder::Recorder::open(
+            &dir.path().join("humanitl.db"),
+            &dir.path().join("blobs"),
+            humanitl_recorder::RecorderSettings::default(),
+        )
+        .unwrap();
+        let server =
+            IpcServer::new(Arc::clone(&queue), &config, None).with_recorder(recorder.clone());
+        // Der Strom steht, bevor die Störung beginnt: Der Rückstand beim
+        // Abonnieren ist leer, und nur die Wiederholung kann sie bringen.
+        let mut stream = server.event_stream(&v1::SubscribeRequest::default());
+
+        let session = SessionId::new();
+        // Ohne Sitzung scheitert die Zeile: die Störung.
+        recorder.apply(&analyzed(session, "lost.example").received_event());
+        recorder.flush().await;
+        assert_eq!(recorder.outage().len(), 1);
+        for _ in 0..50 {
+            let flow = analyzed(session, "example.com");
+            queue
+                .registry()
+                .insert(FlowRecord::new(&flow, &ConnMeta::plain(session)));
+            queue.publish(flow.received_event());
+        }
+
+        let first = stream.next().await.expect("the stream stays open").unwrap();
+        assert!(
+            matches!(first.event, Some(v1::flow_event::Event::Lagged(_))),
+            "{first:?}"
+        );
+        let second = stream.next().await.expect("the stream stays open").unwrap();
+        let Some(v1::flow_event::Event::Diagnostic(diagnostic)) = second.event else {
+            panic!("the outage follows the lag, got {second:?}");
+        };
+        assert_eq!(diagnostic.code, "RECORDER_003");
     }
 
     /// Das Detail trägt die Befunde, die am Fluss stehen: ein am Cap
