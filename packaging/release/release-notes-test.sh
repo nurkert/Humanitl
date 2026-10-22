@@ -103,11 +103,11 @@ normalized="$(
 
 expected="$(
   cat <<'EOF'
-> **Pre-release before the MVP. Not for productive use.**
-> Humanitl @VERSION@ is an interim state on the way to release 0.1.0. The
-> artefacts are **not signed**; `SHA256SUMS` protects against a damaged
-> download, not against a tampered release. Signed packages, a changelog and
-> an AppImage come with 0.1.0 (HUM-060).
+> **Early release on the way to 0.1.0.**
+> Humanitl @VERSION@ is an interim state before release 0.1.0. The artefacts
+> are **not signed**; `SHA256SUMS` protects against a damaged download,
+> not against a tampered release. A changelog and an AppImage come with 0.1.0
+> (HUM-060); signed packages come with 1.0.0.
 
 Built from commit `@SHA@` on `main`, after its CI run was green.
 
@@ -195,15 +195,22 @@ fi
 # Der Titel des Releases steht im Workflow und ist das Erste, was ein Leser
 # sieht: ebenfalls Englisch.
 workflow="$root/.github/workflows/release.yml"
-grep -qF -- '--title "Humanitl $VERSION (pre-release)"' "$workflow" ||
-  fail "the release title in release.yml is not the English '(pre-release)'"
+grep -qF -- '--title "Humanitl $VERSION" \' "$workflow" ||
+  fail "the release title in release.yml is not 'Humanitl \$VERSION'"
+# Seit HUM-273 erscheinen 0.0.x als regulaere Releases: Weder das Anlegen
+# noch das Veroeffentlichen darf sie als Vorabversion markieren.
+if grep -v '^[[:space:]]*#' "$workflow" | grep -qE -- '--prerelease([^=]|=true|$)'; then
+  fail "release.yml still marks the release as a pre-release"
+fi
+grep -v '^[[:space:]]*#' "$workflow" | grep -qE -- 'gh release edit .*--draft=false --prerelease=false --latest( |$)' ||
+  fail "release.yml does not publish the release as latest"
 if grep -q -- '--title .*Vorabversion' "$workflow"; then
   fail "the release title in release.yml is German"
 fi
 
 # Eine Version ausserhalb des Kanals bricht weiterhin ab.
 if "$notes_script" 0.1.0 HEAD >/dev/null 2>&1; then
-  fail "0.1.0 is accepted by the pre-release channel"
+  fail "0.1.0 is accepted by the 0.0.x channel"
 fi
 
 if [[ "$failures" -gt 0 ]]; then
