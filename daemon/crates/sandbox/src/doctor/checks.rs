@@ -666,6 +666,7 @@ pub(super) fn daemon(facts: &DaemonFacts) -> CheckOutcome {
         DaemonFacts::Reachable {
             socket,
             version,
+            expected_version,
             proto,
             expected_proto,
         } => {
@@ -675,8 +676,29 @@ pub(super) fn daemon(facts: &DaemonFacts) -> CheckOutcome {
                 proto.1,
                 socket.display()
             );
-            if proto.0 == expected_proto.0 {
+            let comparable = known_build(version) && known_build(expected_version);
+            if proto.0 == expected_proto.0 && (!comparable || version == expected_version) {
                 CheckOutcome::ok(CheckId::Daemon, evidence)
+            } else if proto.0 == expected_proto.0 {
+                // Same contract, other build: it still answers, so this is a
+                // warning and not a failure. Still the line says it, because
+                // an old daemon lacks whatever the new package fixed, and
+                // restarting the app does not restart it (HUM-277). The same
+                // code as the rest of this line: one code per line.
+                CheckOutcome::warn(
+                    CheckId::Daemon,
+                    evidence,
+                    finding(
+                        DOCTOR_006,
+                        Severity::Warning,
+                        format!(
+                            "the running daemon is {version}, this client is {expected_version}; \
+                             a package upgrade leaves the running daemon in place until it \
+                             restarts, and restarting the app does not restart it"
+                        ),
+                        FixAction::CopyCommand("systemctl --user restart humanitld".to_owned()),
+                    ),
+                )
             } else {
                 CheckOutcome::fail(
                     CheckId::Daemon,
@@ -696,6 +718,15 @@ pub(super) fn daemon(facts: &DaemonFacts) -> CheckOutcome {
             }
         }
     }
+}
+
+/// Whether a version names a released build (HUM-277).
+///
+/// Empty means the caller does not know or does not compare (the fake
+/// daemon), and `0.0.0` is the unstamped version of a development build. A
+/// mismatch involving either says nothing about a package upgrade.
+fn known_build(version: &str) -> bool {
+    !version.is_empty() && version != "0.0.0"
 }
 
 /// Prüfung 7: Das Kommando des Agenten liegt auf dem Host.
@@ -1674,6 +1705,7 @@ mod tests {
         let other = daemon(&DaemonFacts::Reachable {
             socket: PathBuf::from("/run/user/1000/humanitl/daemon.sock"),
             version: "0.0.0".to_owned(),
+            expected_version: "0.0.0".to_owned(),
             proto: (2, 0),
             expected_proto: (1, 4),
         });
@@ -1682,6 +1714,7 @@ mod tests {
         let same = daemon(&DaemonFacts::Reachable {
             socket: PathBuf::from("/run/user/1000/humanitl/daemon.sock"),
             version: "0.0.0".to_owned(),
+            expected_version: "0.0.0".to_owned(),
             proto: (1, 2),
             expected_proto: (1, 4),
         });
@@ -1692,6 +1725,51 @@ mod tests {
             why: "the report came from the daemon itself".to_owned(),
         });
         assert!(untried.is_unmeasured());
+    }
+
+    /// After `apt install` the old user daemon keeps running (HUM-277): the
+    /// line warns with both versions and the restart command.
+    #[test]
+    fn a_daemon_of_another_version_warns_with_the_restart() {
+        let older = daemon(&DaemonFacts::Reachable {
+            socket: PathBuf::from("/run/user/1000/humanitl/daemon.sock"),
+            version: "0.0.5".to_owned(),
+            expected_version: "0.0.6".to_owned(),
+            proto: (1, 17),
+            expected_proto: (1, 17),
+        });
+        assert_eq!(older.status(), CheckStatus::Warn);
+        let diagnostic = older.diagnostic().expect("a finding");
+        assert_eq!(diagnostic.code.as_str(), "DOCTOR_006");
+        assert_eq!(diagnostic.severity, Severity::Warning);
+        assert!(
+            diagnostic.why.contains("0.0.5") && diagnostic.why.contains("0.0.6"),
+            "{}",
+            diagnostic.why
+        );
+        assert_eq!(
+            diagnostic.fix,
+            Some(FixAction::CopyCommand(
+                "systemctl --user restart humanitld".to_owned()
+            ))
+        );
+
+        // A development build (0.0.0) on either side, or a caller that does
+        // not compare (empty, the fake daemon), is no upgrade to report.
+        for (version, expected) in [("0.0.0", "0.0.6"), ("0.0.5", "0.0.0"), ("0.0.5", "")] {
+            let unknown = daemon(&DaemonFacts::Reachable {
+                socket: PathBuf::from("/run/user/1000/humanitl/daemon.sock"),
+                version: version.to_owned(),
+                expected_version: expected.to_owned(),
+                proto: (1, 17),
+                expected_proto: (1, 17),
+            });
+            assert_eq!(
+                unknown.status(),
+                CheckStatus::Ok,
+                "{version} vs {expected:?}"
+            );
+        }
     }
 
     #[test]

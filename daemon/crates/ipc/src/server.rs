@@ -175,6 +175,31 @@ struct DoctorSetup {
 }
 
 impl DoctorSetup {
+    /// The same setup with the configuration as it stands on disk now
+    /// (HUM-277).
+    ///
+    /// The values above are those of the daemon's start; after `SetConfig`
+    /// the `llm` line still said "llm.endpoint is not set" until the daemon
+    /// restarted. Only when the configuration cannot be resolved do the start
+    /// values stay. Blocking: it reads files.
+    fn refreshed(mut self) -> Self {
+        if let Ok(now) = humanitl_config::resolve(
+            &humanitl_config::ProfileSelection::default(),
+            None,
+            self.paths.env(),
+            &[],
+        ) {
+            self.adapter = now.config.agent.adapter;
+            self.agent_command = now
+                .config
+                .agent
+                .command
+                .and_then(|words| words.into_iter().next());
+            self.llm_endpoint = now.config.llm.endpoint.as_ref().map(ToString::to_string);
+        }
+        self
+    }
+
     /// Was der Daemon über den Endpunkt des Sprachmodells sagen darf.
     ///
     /// Nie mehr als „er steht in der Konfiguration": Gemessen wird er über
@@ -1782,8 +1807,9 @@ impl v1::humanitl_server::Humanitl for IpcServer {
                   reaches it"
                 .to_owned(),
         };
-        let llm = setup.llm_facts();
         let report = tokio::task::spawn_blocking(move || {
+            let setup = setup.refreshed();
+            let llm = setup.llm_facts();
             let probe = DoctorProbe::new(setup.paths.env())
                 .with_agent(setup.adapter.clone(), setup.agent_command.clone());
             humanitl_sandbox::doctor::run(&probe.collect(daemon, llm))
@@ -2390,7 +2416,19 @@ mod tests {
     #[tokio::test]
     async fn doctor_answers_and_never_contacts_the_endpoint_by_itself() {
         let queue = queue();
-        let server = server(&queue);
+        // Its own directories: since HUM-277 the doctor reads config.toml
+        // afresh, and the configuration of the person running the tests is
+        // none of this test's business.
+        let dir = tempfile::tempdir().unwrap();
+        let server = server(&queue).with_paths(humanitl_config::Paths::new(
+            humanitl_config::Env::from_pairs([
+                ("HOME", dir.path().display().to_string()),
+                (
+                    "XDG_CONFIG_HOME",
+                    dir.path().join("config").display().to_string(),
+                ),
+            ]),
+        ));
         let report = server
             .doctor(Request::new(()))
             .await
@@ -2466,6 +2504,66 @@ mod tests {
             .unwrap()
             .into_inner();
         assert!(with_schema.json_schema.contains("api_key_ref"));
+    }
+
+    /// `Doctor` reads the configuration afresh (HUM-277): after
+    /// `SetConfig llm.endpoint` the `llm` line names the new endpoint instead
+    /// of "llm.endpoint is not set" from the daemon's start.
+    #[tokio::test]
+    async fn doctor_names_an_endpoint_saved_after_the_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([
+            ("HOME", dir.path().display().to_string()),
+            (
+                "XDG_CONFIG_HOME",
+                dir.path().join("config").display().to_string(),
+            ),
+            (
+                "XDG_DATA_HOME",
+                dir.path().join("data").display().to_string(),
+            ),
+            (
+                "XDG_RUNTIME_DIR",
+                dir.path().join("run").display().to_string(),
+            ),
+        ]));
+        let queue = queue();
+        // The daemon started without an endpoint (`Config::default()`).
+        let server = server(&queue).with_paths(paths);
+        let llm_line = |report: &v1::DoctorReport| {
+            report
+                .checks
+                .iter()
+                .find(|check| check.id == "llm")
+                .expect("the llm line")
+                .clone()
+        };
+        let before = server.doctor(Request::new(())).await.unwrap().into_inner();
+        assert!(
+            !llm_line(&before).evidence.contains("llm.example.net"),
+            "{:?}",
+            llm_line(&before)
+        );
+
+        server
+            .set_config(Request::new(v1::SetConfigRequest {
+                key: "llm.endpoint".to_owned(),
+                value: "https://llm.example.net/api/v1/".to_owned(),
+            }))
+            .await
+            .expect("SetConfig writes");
+        let after = server.doctor(Request::new(())).await.unwrap().into_inner();
+        let line = llm_line(&after);
+        let said = format!(
+            "{} {}",
+            line.evidence,
+            line.diagnostic
+                .as_ref()
+                .map(|diagnostic| diagnostic.why.as_str())
+                .unwrap_or_default()
+        );
+        assert!(said.contains("llm.example.net"), "{line:?}");
+        assert!(!said.contains("not set"), "{line:?}");
     }
 
     /// Ein Netz, das weiter ist als ein `/24`, wird abgelehnt, bevor irgendein

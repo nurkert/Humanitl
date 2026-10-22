@@ -137,13 +137,22 @@ pub struct SessionResolver {
     paths: Paths,
     /// Was ohne Wunsch gilt: die Auflösung des Daemon-Starts.
     base: Resolved,
+    /// Whether [`SessionResolver::current`] reads the configuration afresh
+    /// from disk (HUM-277). False for a resolver built with
+    /// [`SessionResolver::for_config`]: its base is a hand-made configuration
+    /// that a fresh resolution from empty directories would silently replace.
+    live: bool,
 }
 
 impl SessionResolver {
     /// Ein Resolver über diesen Pfaden und diesem Grundstand.
     #[must_use]
     pub const fn new(paths: Paths, base: Resolved) -> Self {
-        Self { paths, base }
+        Self {
+            paths,
+            base,
+            live: true,
+        }
     }
 
     /// Ein Resolver, dessen Grundstand genau diese Konfiguration ist.
@@ -154,15 +163,18 @@ impl SessionResolver {
     /// Test prüfen soll.
     #[must_use]
     pub fn for_config(paths: Paths, config: Config) -> Self {
-        Self::new(
-            paths,
-            Resolved {
-                config,
-                origins: std::collections::BTreeMap::new(),
-                profiles: Vec::new(),
-                diagnostics: Vec::new(),
-            },
-        )
+        Self {
+            live: false,
+            ..Self::new(
+                paths,
+                Resolved {
+                    config,
+                    origins: std::collections::BTreeMap::new(),
+                    profiles: Vec::new(),
+                    diagnostics: Vec::new(),
+                },
+            )
+        }
     }
 
     /// Die Pfade, gegen die aufgelöst wird.
@@ -181,6 +193,24 @@ impl SessionResolver {
     #[must_use]
     pub const fn base(&self) -> &Resolved {
         &self.base
+    }
+
+    /// The configuration without any wish, as it stands on disk now.
+    ///
+    /// What `SetConfig` and `LlmKey` wrote applies from here on without a
+    /// daemon restart (HUM-277): default profile, no project directory, the
+    /// same resolution `GetConfig` shows. A resolver built with
+    /// [`SessionResolver::for_config`] returns its fixed base.
+    ///
+    /// # Errors
+    ///
+    /// The diagnostics of [`humanitl_config::resolve()`] when `config.toml` or a
+    /// profile cannot be read.
+    pub fn current(&self) -> Result<Resolved, Diagnostic> {
+        if !self.live {
+            return Ok(self.base.clone());
+        }
+        humanitl_config::resolve(&ProfileSelection::default(), None, self.env(), &[])
     }
 
     /// Löst die Konfiguration für diesen Wunsch auf.
@@ -205,10 +235,15 @@ impl SessionResolver {
         // `work_dir` ist der Rückfall für die Suche nach dem Projekt-Profil;
         // gilt ein anderes Verzeichnis, steht es zugleich als Paar auf der
         // Kommandozeilen-Ebene und gewinnt dort.
-        let cwd = request
-            .work_dir
-            .clone()
-            .or_else(|| self.base.config.sandbox.work_dir.clone());
+        // The fallback comes from the configuration as it stands now, not
+        // from the daemon's start (HUM-277): `sandbox.work_dir` is a key of
+        // the settings form.
+        let cwd = request.work_dir.clone().or_else(|| {
+            self.current().map_or_else(
+                |_| self.base.config.sandbox.work_dir.clone(),
+                |now| now.config.sandbox.work_dir,
+            )
+        });
         humanitl_config::resolve(&selection, cwd.as_deref(), self.env(), &request.cli_pairs())
     }
 }
@@ -697,5 +732,65 @@ mod tests {
         );
         let diagnostic = parse_ask_mode("sometimes").expect_err("no such mode");
         assert_eq!(diagnostic.code.as_str(), "CONFIG_003");
+    }
+
+    /// An endpoint saved after the daemon started reaches the next session
+    /// and its passthrough rule, and a project directory saved after the start
+    /// is the fallback of the next one (HUM-277). Without this a new endpoint
+    /// would be held, and the old one would still pass.
+    #[test]
+    fn settings_saved_after_the_start_reach_the_next_session() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let under_test = session_resolver(home.path());
+        assert!(under_test.base().config.llm.endpoint.is_none());
+        let project = home.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+
+        crate::config_rpc::set(
+            under_test.paths(),
+            "llm.endpoint",
+            "https://llm.example.net/api/v1/",
+        )
+        .expect("SetConfig writes");
+        crate::config_rpc::set(
+            under_test.paths(),
+            "sandbox.work_dir",
+            &project.display().to_string(),
+        )
+        .expect("SetConfig writes");
+
+        let now = under_test.current().expect("the file resolves");
+        assert_eq!(
+            now.config.sandbox.work_dir.as_deref(),
+            Some(project.as_path())
+        );
+        let resolved = under_test
+            .resolve(&SessionRequest::default())
+            .expect("resolves");
+        assert_eq!(
+            resolved.config.llm.endpoint.as_ref().map(url::Url::as_str),
+            Some("https://llm.example.net/api/v1/")
+        );
+        let (rules, _) = bundled_rules(&resolved.config, &resolved.profiles, SessionId::new());
+        let passthrough = rules.passthrough().expect("a passthrough rule");
+        assert_eq!(passthrough.matcher.host.to_string(), "llm.example.net");
+    }
+
+    /// A resolver built from a hand-made configuration keeps it: a fresh
+    /// resolution from its empty directories would silently replace it.
+    #[test]
+    fn a_fixed_resolver_keeps_its_configuration() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let mut config = Config::default();
+        config.llm.endpoint = Some(url::Url::parse("https://fixed.example/v1").unwrap());
+        let paths = Paths::new(Env::from_pairs([(
+            "XDG_CONFIG_HOME",
+            home.path().join("cfg").display().to_string(),
+        )]));
+        let fixed = SessionResolver::for_config(paths, config);
+        assert_eq!(
+            fixed.current().expect("fixed").config.llm.endpoint,
+            fixed.base().config.llm.endpoint
+        );
     }
 }
