@@ -130,7 +130,7 @@ commit="$(git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
 {
   echo "humanitl ($version) unstable; urgency=medium"
   echo
-  echo "  * Pre-release $version, built from commit $commit. Not for production use."
+  echo "  * Early release $version, built from commit $commit. Not for production use."
   echo
   echo " -- Niko Burkert <humanitl@nurkert.de>  $(LC_ALL=C date -u -R -d "@$epoch")"
 } | gzip -9n >"$pkg/usr/share/doc/humanitl/changelog.gz"

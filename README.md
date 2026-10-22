@@ -76,7 +76,7 @@ Finally, **you** are the classifier: an approved request goes out, so read what 
 
 ## Install
 
-Pre-releases are on the [releases page](https://github.com/nurkert/Humanitl/releases) as a `.deb`
+Releases are on the [releases page](https://github.com/nurkert/Humanitl/releases) as a `.deb`
 and an AppImage. Linux with unprivileged user namespaces, `bubblewrap` 0.8 or newer and a systemd
 user session are required.
 
@@ -165,7 +165,7 @@ tokio-rustls and rcgen (`daemon/crates/proxy/src/core.rs`), the sandbox is
 | M2 First decision | rules, findings, recorder, intercept and history screens | delivered |
 | M3 Agent inside | OpenCode against a LAN model, terminal, isolation check, `humanitl run` | delivered |
 | M4 Trusted editor | pseudonymisation, audit chain, settings, German and English, packages | delivered |
-| M5 Release 0.1 | fuzzing, limits, error paths, documentation, signed release | in progress |
+| M5 Release 0.1 | fuzzing, limits, error paths, documentation, release | in progress |
 
 A milestone counts as delivered when its demo script runs green in CI against a real daemon and a
 real sandbox (`tests/e2e/`), not when its code exists.
