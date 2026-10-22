@@ -2907,8 +2907,8 @@
   "@settingsLoading": {"description": "While GetConfig has not answered yet."},
   "settingsLoadFailed": "The daemon did not answer with its settings. The form opens as soon as it does.",
   "@settingsLoadFailed": {"description": "GetConfig failed; the sheet shows no values it does not have."},
-  "settingsRestartNote": "Changes are written to config.toml and take effect when the daemon starts next. A running session keeps the settings it started with.",
-  "@settingsRestartNote": {"description": "Top of the settings form: the scope decision of HUM-069 says a change applies after a daemon restart, and the form says so."},
+  "settingsRestartNote": "Changes are written to config.toml and apply from the next agent start and the next check on, without restarting the daemon. A running session keeps the settings it started with.",
+  "@settingsRestartNote": {"description": "Top of the settings form: since HUM-277 a saved value applies from the next agent start on without a daemon restart; a running session keeps its settings."},
   "settingsSectionModel": "Model",
   "@settingsSectionModel": {"description": "Group heading: endpoint, model and access key (HUM-140)."},
   "settingsSectionHolding": "Holding",
@@ -3120,7 +3120,7 @@
   "@settingsTrustSystemStoreLabel": {"description": "Label of tls.trust_system_store (HUM-257)."},
   "settingsTrustSystemStoreHint": "Trust the certificates of this system, for example a company CA",
   "@settingsTrustSystemStoreHint": {"description": "Text of the checkbox of tls.trust_system_store (HUM-257)."},
-  "settingsTrustSystemStoreHelp": "Off: only the public roots built into Humanitl count, and a server with a company or self-installed certificate is refused. The sandbox is not affected.",
+  "settingsTrustSystemStoreHelp": "Off: only the public roots built into Humanitl count, and a server with a company or self-installed certificate is refused. The sandbox is not affected. Takes effect when the daemon restarts: systemctl --user restart humanitld",
   "@settingsTrustSystemStoreHelp": {"description": "Help under tls.trust_system_store: what switching it off means (HUM-257)."},
   "shellWindowMinimize": "Minimize",
   "@shellWindowMinimize": {"description": "Hover and screen-reader label of the window button in the header bar that minimizes the window (HUM-255). A tiling window manager may ignore it."},
@@ -3158,5 +3158,7 @@
   "diagRECORDER005Title": "Recording works again",
   "@diagRECORDER005Title": {"description": "Title of the diagnostic RECORDER_005 (docs/DIAGNOSTICS.md). Shown instead of the daemon's register title, which is German (DiagnosticL10n.resolve, HUM-052)."},
   "diagRECORDER005Why": "The recording writes again; what happened while it was disrupted is missing from the history.",
-  "@diagRECORDER005Why": {"description": "Generic cause of RECORDER_005. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own; the daemon's measured sentence always wins there (docs/UX.md 4.4, HUM-052, HUM-250)."}
+  "@diagRECORDER005Why": {"description": "Generic cause of RECORDER_005. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own; the daemon's measured sentence always wins there (docs/UX.md 4.4, HUM-052, HUM-250)."},
+  "shellStatusDaemonMismatch": "Not the version of this app ({app}) · systemctl --user restart humanitld",
+  "@shellStatusDaemonMismatch": {"description": "Status bar, next to the daemon version: the running daemon has another version than the app, usually because a package upgrade left the old daemon running (HUM-277). The command restarts it and stays untranslated. {app} is the version of the app.", "placeholders": {"app": {"type": "String"}}}
 }

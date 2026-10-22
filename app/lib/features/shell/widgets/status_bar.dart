@@ -11,9 +11,13 @@ import '../../../core/ipc/connection.dart';
 import '../../../core/text/format.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
+import '../../about/about_dialog.dart' as about show appVersion;
 import '../../intercept/providers/flows.dart';
 import '../../intercept/providers/recorder_health.dart';
 import '../queue_pressure.dart';
+
+/// The version of a build nobody stamped (HUM-277).
+const String _devBuild = '0.0.0';
 
 /// The status bar.
 ///
@@ -25,11 +29,40 @@ import '../queue_pressure.dart';
 /// Banner, das sagt, dass niemand antwortet.
 class StatusBar extends ConsumerWidget {
   /// Creates the status bar for the connected [info].
-  const StatusBar({required this.info, super.key});
+  const StatusBar({
+    required this.info,
+    this.appVersion = about.appVersion,
+    super.key,
+  });
 
   /// What `GetInfo` said. Bei einem Bruch ist es die letzte Auskunft, nicht
   /// die aktuelle; der Punkt links davon sagt, welche von beiden.
   final DaemonInfo info;
+
+  /// The version of this build; empty where the build did not set it.
+  ///
+  /// A parameter only so tests can name one: the build stamps it from the
+  /// same tag as the daemon (`packaging/release/stamp-version.sh`).
+  final String appVersion;
+
+  /// Whether the daemon is another build than this app (HUM-277).
+  ///
+  /// A package upgrade replaces the files but leaves the running user daemon
+  /// in place, and restarting the app does not restart it. Without a known
+  /// version of its own the app cannot tell, and the fake daemon is no build
+  /// at all.
+  bool get _otherBuild {
+    // `0.0.0` is the unstamped version of a development build on either side.
+    // An empty version on either side is unknown, not different.
+    if (appVersion.isEmpty ||
+        info.daemonVersion.isEmpty ||
+        appVersion == _devBuild ||
+        info.daemonVersion == _devBuild ||
+        info.isFake) {
+      return false;
+    }
+    return info.daemonVersion != appVersion;
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -74,6 +107,19 @@ class StatusBar extends ConsumerWidget {
                 key: const Key('status-daemon-version'),
                 style: style,
               ),
+              if (_otherBuild) ...<Widget>[
+                SizedBox(width: tokens.spacing.x2),
+                Flexible(
+                  child: Text(
+                    l10n.shellStatusDaemonMismatch(appVersion),
+                    key: const Key('status-daemon-mismatch'),
+                    overflow: TextOverflow.ellipsis,
+                    style: tokens.typography.ui11.medium.tinted(
+                      tokens.colors.warningText,
+                    ),
+                  ),
+                ),
+              ],
               if (info.isFake) ...<Widget>[
                 SizedBox(width: tokens.spacing.x2),
                 HBadge(

@@ -94,6 +94,7 @@ fn healthy() -> MachineFacts {
         daemon: DaemonFacts::Reachable {
             socket: PathBuf::from("/run/user/1000/humanitl/daemon.sock"),
             version: "0.0.0".to_owned(),
+            expected_version: "0.0.0".to_owned(),
             proto: (1, 4),
             expected_proto: (1, 4),
         },

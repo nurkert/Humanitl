@@ -223,6 +223,13 @@ async fn daemon_facts(
             DaemonFacts::Reachable {
                 socket: socket.to_path_buf(),
                 version: info.daemon_version,
+                // The fake daemon replays a recording and is no build of
+                // its own: nothing to compare (HUM-277, as in the app).
+                expected_version: if info.capabilities.iter().any(|name| name == "fake") {
+                    String::new()
+                } else {
+                    env!("CARGO_PKG_VERSION").to_owned()
+                },
                 proto: (info.proto_major, info.proto_minor),
                 expected_proto: (PROTO_MAJOR, PROTO_MINOR),
             }
@@ -578,6 +585,7 @@ mod tests {
             &super::doctor::daemon_line(&DaemonFacts::Reachable {
                 socket: std::path::PathBuf::from("/run/user/1000/humanitl/daemon.sock"),
                 version: "0.0.0".to_owned(),
+                expected_version: "0.0.0".to_owned(),
                 proto: (1, 4),
                 expected_proto: (1, 4),
             }),
