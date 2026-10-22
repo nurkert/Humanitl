@@ -694,6 +694,10 @@ pub enum DaemonFacts {
         socket: PathBuf,
         /// Seine Fassung.
         version: String,
+        /// The version of the caller. A package upgrade replaces the files
+        /// but leaves the running user daemon in place, so after `apt install`
+        /// the two differ until the daemon restarts (HUM-277).
+        expected_version: String,
         /// Die Vertragsversion, die er spricht.
         proto: (u32, u32),
         /// Die Vertragsversion, die der Aufrufer spricht.

@@ -1156,7 +1156,7 @@
   "settingsClose": "Einstellungen schließen",
   "settingsLoading": "Frage den Daemon nach seinen Einstellungen …",
   "settingsLoadFailed": "Der Daemon hat nicht mit seinen Einstellungen geantwortet. Das Formular öffnet, sobald er es tut.",
-  "settingsRestartNote": "Änderungen stehen danach in config.toml und wirken, wenn der Daemon das nächste Mal startet. Eine laufende Session behält die Einstellungen, mit denen sie gestartet ist.",
+  "settingsRestartNote": "Änderungen stehen danach in config.toml und gelten ab dem nächsten Start des Agenten und der nächsten Prüfung, ohne Neustart des Daemons. Eine laufende Session behält die Einstellungen, mit denen sie gestartet ist.",
   "settingsSectionModel": "Modell",
   "settingsSectionHolding": "Anhalten",
   "settingsSectionInterface": "Oberfläche",
@@ -1258,7 +1258,7 @@
   "settingsSectionConnections": "Verbindungen",
   "settingsTrustSystemStoreLabel": "Zertifikate des Systems",
   "settingsTrustSystemStoreHint": "Zertifikaten dieses Systems vertrauen, z. B. einer Firmen-CA",
-  "settingsTrustSystemStoreHelp": "Aus: Es gelten nur die öffentlichen Wurzeln, die Humanitl mitbringt, und ein Server mit einem Firmen- oder selbst installierten Zertifikat wird abgelehnt. Die Sandbox ist davon nicht betroffen.",
+  "settingsTrustSystemStoreHelp": "Aus: Es gelten nur die öffentlichen Wurzeln, die Humanitl mitbringt, und ein Server mit einem Firmen- oder selbst installierten Zertifikat wird abgelehnt. Die Sandbox ist davon nicht betroffen. Wirkt, wenn der Daemon neu startet: systemctl --user restart humanitld",
   "shellWindowMinimize": "Minimieren",
   "shellWindowMaximize": "Maximieren oder wiederherstellen",
   "shellWindowClose": "Schließen",
@@ -1275,5 +1275,6 @@
   "interceptRecorderPauseBody": "Was jetzt gesendet wird, hinterlässt keine Spur in der History. Einmal bestätigen, danach sendet diese Sitzung wie gewohnt.",
   "interceptRecorderPauseSend": "Unaufgezeichnet senden",
   "diagRECORDER005Title": "Aufzeichnung läuft wieder",
-  "diagRECORDER005Why": "Die Aufzeichnung schreibt wieder; was während der Störung geschah, fehlt in der History."
+  "diagRECORDER005Why": "Die Aufzeichnung schreibt wieder; was während der Störung geschah, fehlt in der History.",
+  "shellStatusDaemonMismatch": "Nicht die Version dieser App ({app}) · systemctl --user restart humanitld"
 }

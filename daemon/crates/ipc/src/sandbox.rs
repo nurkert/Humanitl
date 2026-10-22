@@ -403,6 +403,7 @@ struct StartClaim {
 impl Drop for StartClaim {
     fn drop(&mut self) {
         lock(&self.inner.pending).claimed = false;
+        self.inner.bump_generation();
     }
 }
 
@@ -416,6 +417,17 @@ struct Inner {
     /// Sitzung, die läuft, und nicht die Auflösung des Daemon-Starts
     /// (HUM-067).
     config: RwLock<Arc<Config>>,
+    /// Whether the slot holds the configuration a start published for its
+    /// session (HUM-277). Set by [`Inner::apply_session`], cleared when the
+    /// next start takes its claim. A `Plan` answers from the slot only while
+    /// this is set and that session still holds claim or handle; otherwise it
+    /// resolves the configuration afresh ([`Inner::plan_config`]).
+    session_config: std::sync::atomic::AtomicBool,
+    /// Counts every change of who holds the sandbox and which configuration
+    /// is published: claim, release, publication, handle set and cleared
+    /// (HUM-277). A `Plan` built across such a change is built again
+    /// ([`Inner::consistent`]).
+    generation: std::sync::atomic::AtomicU64,
     /// Woher eine neue Auflösung kommt.
     resolver: SessionResolver,
     paths: humanitl_config::Paths,
@@ -544,6 +556,8 @@ impl SandboxService {
         Self {
             inner: Arc::new(Inner {
                 config: RwLock::new(config),
+                session_config: std::sync::atomic::AtomicBool::new(false),
+                generation: std::sync::atomic::AtomicU64::new(0),
                 resolver,
                 paths,
                 session,
@@ -682,6 +696,11 @@ impl Inner {
             return None;
         }
         pending.claimed = true;
+        // The slot still holds the previous session's configuration; until
+        // this start publishes its own, a `Plan` resolves afresh.
+        self.session_config
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.bump_generation();
         Some(StartClaim {
             inner: Arc::clone(self),
         })
@@ -697,6 +716,64 @@ impl Inner {
             |poisoned| Arc::clone(&poisoned.into_inner()),
             |slot| Arc::clone(&slot),
         )
+    }
+
+    /// The configuration a `Plan` or `Argv` answers from, taken once
+    /// (HUM-277).
+    ///
+    /// While a session holds claim or handle and has published its
+    /// configuration, that one: the snapshot shows what runs. Otherwise the
+    /// configuration as it stands on disk now, so a value `SetConfig` or
+    /// `LlmKey` wrote since the daemon started shows without a restart; a
+    /// start that holds its claim but has not published yet resolves the
+    /// same file. The whole snapshot is built from this one value, never from
+    /// a second read of the slot, so endpoint and preview cannot come from two
+    /// configurations. A resolution that fails falls back to the slot; the
+    /// start reports the same diagnostic itself.
+    fn plan_config(&self) -> Arc<Config> {
+        let held = {
+            let pending = lock(&self.pending);
+            let held = pending.claimed || lock(&self.running).is_some();
+            drop(pending);
+            held
+        };
+        if held
+            && self
+                .session_config
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return self.config();
+        }
+        match self.resolver.current() {
+            Ok(now) => Arc::new(now.config),
+            Err(diagnostic) => {
+                tracing::debug!(
+                    code = %diagnostic.code,
+                    why = %diagnostic.why,
+                    "configuration not read afresh; the previous one answers"
+                );
+                self.config()
+            }
+        }
+    }
+
+    /// Puts the configuration as it stands on disk into the slot, for the
+    /// start that holds the claim (HUM-277).
+    ///
+    /// The check of the project directory in [`Inner::remember`] reads the
+    /// slot; without this it would still see the configuration of the
+    /// daemon's start. A handle whose agent has exited does not stop it: the
+    /// claim was granted because nothing runs, and this start replaces that
+    /// session ([`start_may_refresh`]). A resolution that fails keeps the
+    /// slot, and the start reports it.
+    fn refresh_for_start(&self) {
+        if !start_may_refresh(&self.running_facts()) {
+            return;
+        }
+        if let Ok(now) = self.resolver.current() {
+            let mut slot = self.config.write().unwrap_or_else(PoisonError::into_inner);
+            *slot = Arc::new(now.config);
+        }
     }
 
     /// Prüft den Wunsch und merkt ihn sich für den nächsten Start.
@@ -716,6 +793,25 @@ impl Inner {
     /// `CONFIG_003`, wenn der Profilname kein Name ist, `SANDBOX_006`, wenn
     /// das Verzeichnis keines ist, das ein Projekt sein darf.
     fn remember(&self, plan: &v1::sandbox_request::Plan) -> Result<Option<PathBuf>, Diagnostic> {
+        self.remember_with(&self.config(), plan)
+    }
+
+    /// [`Inner::remember`] against this configuration.
+    fn remember_with(
+        &self,
+        config: &Config,
+        plan: &v1::sandbox_request::Plan,
+    ) -> Result<Option<PathBuf>, Diagnostic> {
+        Ok(self.commit(&self.plan_choice(config, plan)?))
+    }
+
+    /// What this wish chooses, checked against `config`, without writing
+    /// anything (HUM-277). Fields the wish leaves empty stay `None`.
+    fn plan_choice(
+        &self,
+        config: &Config,
+        plan: &v1::sandbox_request::Plan,
+    ) -> Result<PlanChoice, Diagnostic> {
         let profile = match plan.profile.trim() {
             "" => None,
             name => {
@@ -725,22 +821,30 @@ impl Inner {
         };
         let work_dir = match plan.work_dir.trim() {
             "" => None,
-            dir => Some(self.check_work_dir(Path::new(dir))?),
+            dir => Some(self.check_work_dir(config, Path::new(dir))?),
         };
         let work_mode = match plan.work_mode.trim().to_ascii_lowercase().as_str() {
             "ro" => Some(WorkMode::Ro),
             "rw" => Some(WorkMode::Rw),
             _ => None,
         };
+        Ok(PlanChoice {
+            profile,
+            work_dir,
+            work_mode,
+        })
+    }
 
+    /// Writes a checked choice into `pending`, in one locked step.
+    fn commit(&self, wish: &PlanChoice) -> Option<PathBuf> {
         let mut pending = lock(&self.pending);
-        if let Some(profile) = profile {
-            pending.profile = Some(profile);
+        if let Some(profile) = &wish.profile {
+            pending.profile = Some(profile.clone());
         }
-        if let Some(dir) = work_dir {
-            pending.work_dir = Some(dir);
+        if let Some(dir) = &wish.work_dir {
+            pending.work_dir = Some(dir.clone());
         }
-        if let Some(mode) = work_mode {
+        if let Some(mode) = wish.work_mode {
             pending.work_mode = Some(mode);
         }
         // Das Verzeichnis, das für **diesen** Wunsch gilt, gelesen unter
@@ -749,7 +853,59 @@ impl Inner {
         // Dazwischen könnte ein anderer Aufruf ein anderes hineingelegt haben,
         // und die Sitzung löste dann gegen ein Verzeichnis auf, das niemand
         // für sie gewählt hat.
-        Ok(pending.work_dir.clone())
+        pending.work_dir.clone()
+    }
+
+    /// The choices in `pending` now.
+    fn pending_choice(&self) -> PlanChoice {
+        let pending = lock(&self.pending);
+        PlanChoice {
+            profile: pending.profile.clone(),
+            work_dir: pending.work_dir.clone(),
+            work_mode: pending.work_mode,
+        }
+    }
+
+    /// `pending` as it would stand after committing `wish`, without writing.
+    fn staged(&self, wish: &PlanChoice) -> PlanChoice {
+        let now = self.pending_choice();
+        PlanChoice {
+            profile: wish.profile.clone().or(now.profile),
+            work_dir: wish.work_dir.clone().or(now.work_dir),
+            work_mode: wish.work_mode.or(now.work_mode),
+        }
+    }
+
+    /// Checks a project directory a start inherits from an earlier `Plan`
+    /// against the configuration this start refreshed (HUM-277).
+    ///
+    /// The `Plan` checked it against the configuration of its time; since then
+    /// `SetConfig` may have moved `sandbox.work_dir`, and a directory outside
+    /// the home directory is only allowed while it is the configured one. A
+    /// directory this start names itself was checked by [`Inner::remember`]
+    /// a moment ago. A refused one leaves `pending`, so the next start does
+    /// not inherit it either.
+    fn revalidate_inherited(
+        &self,
+        plan: &v1::sandbox_request::Plan,
+        dir: Option<PathBuf>,
+    ) -> Result<Option<PathBuf>, Diagnostic> {
+        if !plan.work_dir.trim().is_empty() {
+            return Ok(dir);
+        }
+        let Some(inherited) = dir else {
+            return Ok(None);
+        };
+        match self.check_work_dir(&self.config(), &inherited) {
+            Ok(checked) => Ok(Some(checked)),
+            Err(diagnostic) => {
+                let mut pending = lock(&self.pending);
+                if pending.work_dir.as_ref() == Some(&inherited) {
+                    pending.work_dir = None;
+                }
+                Err(diagnostic)
+            }
+        }
     }
 
     /// Prüft ein Projektverzeichnis, das über die RPC hereinkommt.
@@ -775,7 +931,7 @@ impl Inner {
     /// # Errors
     ///
     /// `SANDBOX_006` mit dem Grund, in der Sprache des Nutzers.
-    fn check_work_dir(&self, dir: &Path) -> Result<PathBuf, Diagnostic> {
+    fn check_work_dir(&self, config: &Config, dir: &Path) -> Result<PathBuf, Diagnostic> {
         if !dir.is_absolute() {
             return Err(work_dir_refused(
                 dir,
@@ -800,8 +956,7 @@ impl Inner {
         MountPolicy::from_paths(&self.paths).check_work_dir(&resolved)?;
 
         let home = self.paths.home();
-        let configured = self
-            .config()
+        let configured = config
             .sandbox
             .work_dir
             .as_ref()
@@ -828,30 +983,113 @@ impl Inner {
         plan: &v1::sandbox_request::Plan,
         tx: &mpsc::Sender<v1::SandboxEvent>,
     ) {
-        if let Err(diagnostic) = self.remember(plan) {
-            let _ = tx.blocking_send(diagnostic_event(&diagnostic));
-            // Der abgelehnte Wunsch steht in keiner Momentaufnahme: Sie zeigte
-            // sonst das Verzeichnis, das gerade verweigert wurde.
-            let _ = tx.blocking_send(status_event(
-                self.failed_status(&v1::sandbox_request::Plan::default(), &diagnostic),
-            ));
-            return;
+        for event in self.consistent_plan(plan, || {}) {
+            let _ = tx.blocking_send(event);
         }
+    }
+
+    /// The events of a `Plan`, built until claim, publication and handle held
+    /// still (HUM-277).
+    ///
+    /// No build writes `pending`: each stages its choice and builds the
+    /// snapshot from it, and only the answered build commits it. A directory
+    /// one configuration allowed and the next refuses is never left for a
+    /// later start to inherit, however many `Plan`s run at once.
+    /// `between` runs after each build; tests use it to change the session at
+    /// exactly that point.
+    fn consistent_plan(
+        &self,
+        plan: &v1::sandbox_request::Plan,
+        mut between: impl FnMut(),
+    ) -> Vec<v1::SandboxEvent> {
+        let (events, wish) = self.consistent(
+            |config| {
+                let built = self.plan_events(config, plan);
+                between();
+                built
+            },
+            drop,
+        );
+        if let Some(wish) = wish {
+            self.commit(&wish);
+        }
+        events
+    }
+
+    /// Builds with one configuration, and again when claim, publication or
+    /// handle changed meanwhile (HUM-277).
+    ///
+    /// Without this a `Plan` could take its configuration before a start
+    /// publishes and its running facts after: a new sandbox id beside the old
+    /// endpoint. At most [`SNAPSHOT_ATTEMPTS`] builds; a daemon that changes
+    /// its session that often answers with the last one.
+    fn consistent<T>(
+        &self,
+        mut build: impl FnMut(&Arc<Config>) -> T,
+        mut discard: impl FnMut(T),
+    ) -> T {
+        let mut attempt = 1;
+        loop {
+            let before = self.generation();
+            let config = self.plan_config();
+            let answer = build(&config);
+            if self.generation() == before || attempt >= SNAPSHOT_ATTEMPTS {
+                return answer;
+            }
+            discard(answer);
+            attempt += 1;
+        }
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn bump_generation(&self) {
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The events of a `Plan`, from this one configuration.
+    fn plan_events(
+        &self,
+        config: &Arc<Config>,
+        plan: &v1::sandbox_request::Plan,
+    ) -> (Vec<v1::SandboxEvent>, Option<PlanChoice>) {
+        let mut events = Vec::new();
+        let wish = match self.plan_choice(config, plan) {
+            Ok(wish) => wish,
+            Err(diagnostic) => {
+                events.push(diagnostic_event(&diagnostic));
+                // Der abgelehnte Wunsch steht in keiner Momentaufnahme: Sie zeigte
+                // sonst das Verzeichnis, das gerade verweigert wurde.
+                events.push(status_event(self.failed_status_with(
+                    config,
+                    &self.pending_choice(),
+                    &v1::sandbox_request::Plan::default(),
+                    &diagnostic,
+                )));
+                return (events, None);
+            }
+        };
+        let staged = self.staged(&wish);
         // Erst die Befunde, dann der Zustand: Der Client trägt die Befunde des
         // laufenden Vorgangs am Zustand mit, und einer, der nach dem Zustand
         // käme, stünde ohne ihn da.
-        for diagnostic in self.preflight() {
-            let _ = tx.blocking_send(diagnostic_event(&diagnostic));
-        }
-        match self.snapshot(plan) {
-            Ok(status) => {
-                let _ = tx.blocking_send(status_event(status));
-            }
+        events.extend(self.preflight().iter().map(diagnostic_event));
+        match self.snapshot_with_config(config, &staged, plan, None) {
+            Ok(status) => events.push(status_event(status)),
             Err(diagnostic) => {
-                let _ = tx.blocking_send(diagnostic_event(&diagnostic));
-                let _ = tx.blocking_send(status_event(self.failed_status(plan, &diagnostic)));
+                events.push(diagnostic_event(&diagnostic));
+                events.push(status_event(self.failed_status_with(
+                    config,
+                    &staged,
+                    plan,
+                    &diagnostic,
+                )));
             }
         }
+        (events, Some(wish))
     }
 
     /// Was einem Start im Weg steht, bevor jemand ihn versucht.
@@ -871,7 +1109,12 @@ impl Inner {
 
     /// Die Kommandozeile, Argument für Argument, als eigene Ereignisse.
     fn argv(&self, plan: &v1::sandbox_request::Plan, tx: &mpsc::Sender<v1::SandboxEvent>) {
-        match self.prepare(plan) {
+        match self.consistent(
+            |config| {
+                self.prepare_keyed_with(config, &self.pending_choice(), plan, &[], KeyNeed::Plan)
+            },
+            drop,
+        ) {
             Ok(prepared) => {
                 for arg in prepared.argv() {
                     let line = arg.to_string_lossy().into_owned();
@@ -935,7 +1178,16 @@ impl Inner {
             return;
         };
 
-        let work_dir = match self.remember(&plan) {
+        // What `SetConfig` wrote since the daemon started counts for the
+        // check of the project directory, too (HUM-277).
+        {
+            let this = Arc::clone(&self);
+            let _ = tokio::task::spawn_blocking(move || this.refresh_for_start()).await;
+        }
+        let work_dir = match self
+            .remember(&plan)
+            .and_then(|dir| self.revalidate_inherited(&plan, dir))
+        {
             Ok(work_dir) => work_dir,
             Err(diagnostic) => {
                 let _ = tx.send(diagnostic_event(&diagnostic)).await;
@@ -1231,6 +1483,10 @@ impl Inner {
 
         let mut slot = self.config.write().unwrap_or_else(PoisonError::into_inner);
         *slot = Arc::new(resolved.config);
+        drop(slot);
+        self.session_config
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.bump_generation();
         Ok(diagnostics)
     }
 
@@ -1790,6 +2046,7 @@ impl Inner {
             self.config().ui.terminal_notices,
         );
         let mut running = lock(&self.running);
+        self.bump_generation();
         *running = Some(Running {
             handle,
             backend,
@@ -1822,7 +2079,19 @@ impl Inner {
         plan: &v1::sandbox_request::Plan,
         state: Option<v1::SandboxState>,
     ) -> Result<v1::sandbox_event::Status, Diagnostic> {
-        let prepared = self.prepare(plan)?;
+        self.snapshot_with_config(&self.config(), &self.pending_choice(), plan, state)
+    }
+
+    /// [`Inner::snapshot_with`] from this one configuration: preview and
+    /// endpoint come from the same value (HUM-277).
+    fn snapshot_with_config(
+        &self,
+        config: &Arc<Config>,
+        choice: &PlanChoice,
+        plan: &v1::sandbox_request::Plan,
+        state: Option<v1::SandboxState>,
+    ) -> Result<v1::sandbox_event::Status, Diagnostic> {
+        let prepared = self.prepare_keyed_with(config, choice, plan, &[], KeyNeed::Plan)?;
         let argv = prepared.argv();
         let Facts {
             id,
@@ -1846,8 +2115,7 @@ impl Inner {
             sandbox_id: id.unwrap_or_default(),
             session_id: self.session.to_string(),
             backend: prepared.backend.name().to_owned(),
-            llm_endpoint: self
-                .config()
+            llm_endpoint: config
                 .llm
                 .endpoint
                 .as_ref()
@@ -1874,9 +2142,19 @@ impl Inner {
     fn failed_status(
         &self,
         plan: &v1::sandbox_request::Plan,
+        diagnostic: &Diagnostic,
+    ) -> v1::sandbox_event::Status {
+        self.failed_status_with(&self.config(), &self.pending_choice(), plan, diagnostic)
+    }
+
+    /// [`Inner::failed_status`] from this configuration.
+    fn failed_status_with(
+        &self,
+        config: &Config,
+        choice: &PlanChoice,
+        plan: &v1::sandbox_request::Plan,
         _diagnostic: &Diagnostic,
     ) -> v1::sandbox_event::Status {
-        let config = self.config();
         let Facts {
             id,
             started_at,
@@ -1894,10 +2172,10 @@ impl Inner {
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_default(),
-            work_dir: self.work_dir(&config, plan).display().to_string(),
-            work_mode: work_mode_name(self.work_mode(&config, plan)).to_owned(),
+            work_dir: self.work_dir(config, choice, plan).display().to_string(),
+            work_mode: work_mode_name(self.work_mode(config, choice, plan)).to_owned(),
             started_at: started_at.map(crate::convert::timestamp),
-            profile: self.profile_name(&config, plan),
+            profile: self.profile_name(config, choice, plan),
             mounts: Vec::new(),
             env: Vec::new(),
             argv_preview: String::new(),
@@ -2066,13 +2344,11 @@ impl Inner {
 
     fn clear_running(&self) {
         *lock(&self.running) = None;
+        self.bump_generation();
     }
 
     /// Profil, Sitzung und Backend für diesen Wunsch.
-    fn prepare(&self, plan: &v1::sandbox_request::Plan) -> Result<Prepared, Diagnostic> {
-        self.prepare_with_command(plan, &[])
-    }
-
+    #[cfg(test)]
     fn prepare_with_command(
         &self,
         plan: &v1::sandbox_request::Plan,
@@ -2081,7 +2357,7 @@ impl Inner {
         self.prepare_keyed(plan, command, KeyNeed::Plan)
     }
 
-    /// Wie [`Self::prepare_with_command`], und für einen Start mit dem
+    /// Wie `prepare_with_command`, und für einen Start mit dem
     /// Zugangsschlüssel des Modells ([`KeyNeed::Start`]).
     fn prepare_keyed(
         &self,
@@ -2092,13 +2368,25 @@ impl Inner {
         // Eine Aufnahme der Konfiguration für den ganzen Aufbau: Ein Start,
         // der dazwischenkommt, darf nicht die Hälfte einer Kommandozeile
         // ersetzen.
-        let config = self.config();
+        self.prepare_keyed_with(&self.config(), &self.pending_choice(), plan, command, need)
+    }
+
+    /// [`Inner::prepare_keyed`] from this one configuration (HUM-277).
+    fn prepare_keyed_with(
+        &self,
+        config: &Arc<Config>,
+        choice: &PlanChoice,
+        plan: &v1::sandbox_request::Plan,
+        command: &[OsString],
+        need: KeyNeed,
+    ) -> Result<Prepared, Diagnostic> {
+        let config = Arc::clone(config);
         let policy = MountPolicy::from_paths(&self.paths);
-        let name = self.profile_name(&config, plan);
+        let name = self.profile_name(&config, choice, plan);
         let (profile_path, profile_origin) = self.profile_path(&name)?;
         let profile = SandboxProfile::load_validated(&profile_path, &policy)?;
 
-        let work_src = self.work_dir(&config, plan);
+        let work_src = self.work_dir(&config, choice, plan);
         // Dieselbe Regel, die das Sandbox-Backend beim Start anlegt (HUM-262),
         // und schon hier, damit `Sandbox(Plan)` und `Sandbox(Status)` einen Ordner nie
         // grün zeigen, den der Start danach verweigert. Ein Wunsch über die
@@ -2109,7 +2397,7 @@ impl Inner {
         if need == KeyNeed::Start || !work_src.as_os_str().is_empty() {
             policy.check_work_dir(&work_src)?;
         }
-        let work_mode = self.work_mode(&config, plan);
+        let work_mode = self.work_mode(&config, choice, plan);
         // Entschieden wird am wirksamen Kommando und nicht daran, ob eines
         // genannt wurde: `humanitl run -- opencode` startet denselben Agenten
         // wie `humanitl run`, und beide brauchen dieselbe Umgebung (HUM-135).
@@ -2340,14 +2628,19 @@ impl Inner {
     /// ist, und das vor dem, was konfiguriert ist. Sonst zeigte der Bildschirm
     /// während einer Sitzung das Profil, das beim nächsten Start gälte, und
     /// nicht das, unter dem der Agent gerade arbeitet.
-    fn profile_name(&self, config: &Config, plan: &v1::sandbox_request::Plan) -> String {
+    fn profile_name(
+        &self,
+        config: &Config,
+        choice: &PlanChoice,
+        plan: &v1::sandbox_request::Plan,
+    ) -> String {
         if !plan.profile.trim().is_empty() {
             return plan.profile.trim().to_owned();
         }
         if let Some(running) = lock(&self.running).as_ref() {
             return running.profile.clone();
         }
-        if let Some(chosen) = lock(&self.pending).profile.clone() {
+        if let Some(chosen) = choice.profile.clone() {
             return chosen;
         }
         config.sandbox.profile.clone()
@@ -2356,8 +2649,18 @@ impl Inner {
     /// Das Projektverzeichnis dieses Wunsches, sonst das der laufenden
     /// Sandbox, sonst das zuletzt gewählte, sonst das der Konfiguration,
     /// sonst [`Self::default_work_dir`].
-    fn work_dir(&self, config: &Config, plan: &v1::sandbox_request::Plan) -> PathBuf {
-        self.work_dir_with_cwd(config, plan, std::env::current_dir().ok().as_deref())
+    fn work_dir(
+        &self,
+        config: &Config,
+        choice: &PlanChoice,
+        plan: &v1::sandbox_request::Plan,
+    ) -> PathBuf {
+        self.work_dir_with_cwd(
+            config,
+            choice,
+            plan,
+            std::env::current_dir().ok().as_deref(),
+        )
     }
 
     /// [`Self::work_dir`] mit dem Arbeitsverzeichnis als Argument statt aus dem
@@ -2366,6 +2669,7 @@ impl Inner {
     fn work_dir_with_cwd(
         &self,
         config: &Config,
+        choice: &PlanChoice,
         plan: &v1::sandbox_request::Plan,
         cwd: Option<&Path>,
     ) -> PathBuf {
@@ -2375,14 +2679,14 @@ impl Inner {
         // der Dienst den aufgelösten Pfad und hängte den geschriebenen ein,
         // und die Prüfung sagte über die Einhängung nichts aus.
         if !plan.work_dir.trim().is_empty()
-            && let Some(checked) = lock(&self.pending).work_dir.clone()
+            && let Some(checked) = choice.work_dir.clone()
         {
             return checked;
         }
         if let Some(running) = lock(&self.running).as_ref() {
             return running.work_dir.clone();
         }
-        if let Some(chosen) = lock(&self.pending).work_dir.clone() {
+        if let Some(chosen) = choice.work_dir.clone() {
             return chosen;
         }
         config
@@ -2414,7 +2718,12 @@ impl Inner {
 
     /// Der Modus dieses Wunsches, sonst der der laufenden Sandbox, sonst der
     /// zuletzt gewählte, sonst der der Konfiguration.
-    fn work_mode(&self, config: &Config, plan: &v1::sandbox_request::Plan) -> WorkMode {
+    fn work_mode(
+        &self,
+        config: &Config,
+        choice: &PlanChoice,
+        plan: &v1::sandbox_request::Plan,
+    ) -> WorkMode {
         match plan.work_mode.trim().to_ascii_lowercase().as_str() {
             "ro" => WorkMode::Ro,
             "rw" => WorkMode::Rw,
@@ -2422,9 +2731,7 @@ impl Inner {
                 if let Some(running) = lock(&self.running).as_ref() {
                     return running.work_mode;
                 }
-                lock(&self.pending)
-                    .work_mode
-                    .unwrap_or(config.sandbox.work_mode)
+                choice.work_mode.unwrap_or(config.sandbox.work_mode)
             }
         }
     }
@@ -2995,6 +3302,30 @@ fn tree_dirs() -> impl Iterator<Item = PathBuf> {
 }
 
 /// Ein Schnappschuss als Ereignis.
+/// Profile, project directory and mode a `Plan` chooses, staged before it is
+/// committed to `pending` (HUM-277).
+#[derive(Debug, Clone, Default)]
+struct PlanChoice {
+    profile: Option<String>,
+    work_dir: Option<PathBuf>,
+    work_mode: Option<WorkMode>,
+}
+
+/// How often a `Plan` is built before it answers with what it has
+/// ([`Inner::consistent`], HUM-277).
+const SNAPSHOT_ATTEMPTS: usize = 3;
+
+/// Whether a start that holds the claim reads the configuration afresh
+/// (HUM-277).
+///
+/// Yes unless an agent still runs, which the claim already rules out. A
+/// handle that is still held after its agent exited is a finished session
+/// this start replaces; checking a new project directory against that
+/// session's configuration would refuse what `SetConfig` just allowed.
+const fn start_may_refresh(facts: &Facts) -> bool {
+    !facts.agent_running
+}
+
 fn status_event(status: v1::sandbox_event::Status) -> v1::SandboxEvent {
     v1::SandboxEvent {
         event: Some(v1::sandbox_event::Event::Status(status)),
@@ -3584,11 +3915,11 @@ mod tests {
         config.sandbox.work_dir = None;
         let plan = v1::sandbox_request::Plan::default();
         assert_eq!(
-            inner.work_dir_with_cwd(&config, &plan, Some(home.path())),
+            inner.work_dir_with_cwd(&config, &inner.pending_choice(), &plan, Some(home.path())),
             PathBuf::new()
         );
         assert_eq!(
-            inner.work_dir_with_cwd(&config, &plan, Some(&project)),
+            inner.work_dir_with_cwd(&config, &inner.pending_choice(), &plan, Some(&project)),
             project
         );
     }
@@ -4118,5 +4449,431 @@ mod tests {
                 .any(|event| matches!(event.event, Some(v1::sandbox_event::Event::Status(_)))),
             "the answer says what the state is: {events:?}"
         );
+    }
+
+    /// A service over a live resolver: the configuration comes from
+    /// `config.toml` in `home`, as in the daemon, and not from a hand-made
+    /// [`Config`] (HUM-277).
+    fn live_service(
+        home: &tempfile::TempDir,
+        ports: SandboxPorts,
+    ) -> (SandboxService, humanitl_config::Paths) {
+        let config_home = home.path().join("config");
+        let profile_dir = config_home.join("humanitl/profiles/sandbox");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../profiles/sandbox");
+        std::fs::copy(shipped.join("default.toml"), profile_dir.join("test.toml")).unwrap();
+        let project = home.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let env = humanitl_config::Env::from_pairs([
+            ("HOME", home.path().display().to_string()),
+            ("XDG_CONFIG_HOME", config_home.display().to_string()),
+            (
+                "XDG_DATA_HOME",
+                home.path().join("data").display().to_string(),
+            ),
+            (
+                "XDG_RUNTIME_DIR",
+                home.path().join("run").display().to_string(),
+            ),
+        ]);
+        let paths = humanitl_config::Paths::new(env);
+        std::fs::write(
+            paths.config_path(),
+            format!(
+                "[sandbox]\nprofile = \"test\"\nwork_dir = {:?}\n\n[agent]\nadapter = \"opencode\"\n",
+                project.display().to_string()
+            ),
+        )
+        .unwrap();
+        // What the daemon read at its start: no endpoint, no key.
+        let at_start = humanitl_config::resolve(
+            &humanitl_config::ProfileSelection::default(),
+            None,
+            paths.env(),
+            &[],
+        )
+        .unwrap();
+        assert!(at_start.config.llm.endpoint.is_none());
+        let service = SandboxService::new(
+            crate::session::SessionResolver::new(paths.clone(), at_start),
+            SessionId::new(),
+            ports,
+        );
+        (service, paths)
+    }
+
+    /// The `llm_endpoint` of the snapshot a `Plan` returns.
+    async fn planned_endpoint(service: &SandboxService) -> String {
+        use tokio_stream::StreamExt as _;
+
+        let events: Vec<v1::SandboxEvent> = service
+            .stream(v1::SandboxRequest {
+                op: Some(v1::sandbox_request::Op::Plan(
+                    v1::sandbox_request::Plan::default(),
+                )),
+            })
+            .collect()
+            .await;
+        events
+            .into_iter()
+            .find_map(|event| match event.event {
+                Some(v1::sandbox_event::Event::Status(status)) => Some(status.llm_endpoint),
+                _ => None,
+            })
+            .expect("a Plan answers with a status")
+    }
+
+    /// The owner's report of 2026-10-22 (HUM-277): endpoint and key saved
+    /// through `SetConfig` and `LlmKey` reach the next `Plan` and the next
+    /// start of the running daemon, without a restart. The start hands the
+    /// new key to the sandbox file and expects its mask at the new endpoint.
+    #[tokio::test]
+    async fn saved_settings_reach_the_next_plan_and_start_without_a_restart() {
+        const KEY: &str = "sk-saved-later-0123456789abcdef";
+        let home = tempfile::TempDir::new().unwrap();
+        let recorder = Recorder::open(
+            &home.path().join("data/humanitl.db"),
+            &home.path().join("data/blobs"),
+            humanitl_recorder::RecorderSettings::default(),
+        )
+        .unwrap();
+        let keys_for = |paths: &humanitl_config::Paths| {
+            KeyStore::for_paths(paths).with_secret_tool(Some(fake_secret_tool(home.path())))
+        };
+        let probe_paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+            "XDG_DATA_HOME",
+            home.path().join("data").display().to_string(),
+        )]));
+        let (service, paths) = live_service(
+            &home,
+            SandboxPorts::none()
+                .with_keys(keys_for(&probe_paths))
+                .with_recorder(recorder.clone()),
+        );
+        assert_eq!(planned_endpoint(&service).await, "", "nothing is set yet");
+
+        // The settings form: endpoint through `SetConfig`, key through `LlmKey`.
+        crate::config_rpc::set(&paths, "llm.endpoint", "https://llm.example.net/api/v1/")
+            .expect("SetConfig writes");
+        crate::llm_key::answer(
+            &paths,
+            &keys_for(&probe_paths),
+            v1::LlmKeyRequest {
+                op: Some(v1::llm_key_request::Op::Set(v1::llm_key_request::Set {
+                    key: KEY.to_owned(),
+                })),
+            },
+        )
+        .expect("LlmKey stores");
+
+        assert_eq!(
+            planned_endpoint(&service).await,
+            "https://llm.example.net/api/v1/",
+            "the next Plan names the saved endpoint"
+        );
+
+        // The next start: its resolution sets the slot the sandbox is built from.
+        service
+            .inner
+            .apply_session(
+                &v1::sandbox_request::Start::default(),
+                Some(home.path().join("project")),
+            )
+            .expect("the session resolves");
+        let prepared = service
+            .inner
+            .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+            .expect("the session is prepared");
+        let secret = prepared
+            .session
+            .files
+            .iter()
+            .find(|file| file.secret)
+            .expect("the key file");
+        assert_eq!(
+            secret.content,
+            KEY.as_bytes(),
+            "the new key reaches the agent"
+        );
+        let hash = humanitl_core::http::sha256(KEY.as_bytes());
+        assert!(
+            recorder.masks().expected_at(&hash, "llm.example.net:443"),
+            "the new key is masked at the new endpoint"
+        );
+    }
+
+    /// The interleaving of the review (HUM-277): endpoint B is saved, a start
+    /// takes its claim but has not published its configuration, and a `Plan`
+    /// arrives. The `Plan` answers with B from one fresh read, not with the
+    /// stale slot, and does not touch the slot. Once the start published its
+    /// session, a `Plan` shows that session even when the file moved on; after
+    /// the claim is gone it reads the file again.
+    #[tokio::test]
+    async fn a_plan_beside_a_claimed_start_answers_from_one_configuration() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, paths) = live_service(&home, SandboxPorts::none());
+        let claim = service.inner.claim_start().expect("the claim is free");
+        crate::config_rpc::set(&paths, "llm.endpoint", "https://b.example.net/v1/")
+            .expect("SetConfig writes");
+
+        assert_eq!(
+            planned_endpoint(&service).await,
+            "https://b.example.net/v1/",
+            "an unpublished start does not hide the saved endpoint"
+        );
+        assert!(
+            service.inner.config().llm.endpoint.is_none(),
+            "the Plan read afresh and left the slot to the start"
+        );
+
+        service
+            .inner
+            .apply_session(
+                &v1::sandbox_request::Start::default(),
+                Some(home.path().join("project")),
+            )
+            .expect("the session resolves");
+        crate::config_rpc::set(&paths, "llm.endpoint", "https://c.example.net/v1/")
+            .expect("SetConfig writes");
+        assert_eq!(
+            planned_endpoint(&service).await,
+            "https://b.example.net/v1/",
+            "a published session shows what it runs with"
+        );
+
+        drop(claim);
+        assert_eq!(
+            planned_endpoint(&service).await,
+            "https://c.example.net/v1/",
+            "without claim or handle the Plan reads the file again"
+        );
+
+        // The next start takes its claim: the previous session's slot no
+        // longer answers, even before this start publishes its own.
+        let again = service.inner.claim_start().expect("the claim is free");
+        crate::config_rpc::set(&paths, "llm.endpoint", "https://d.example.net/v1/")
+            .expect("SetConfig writes");
+        assert_eq!(
+            planned_endpoint(&service).await,
+            "https://d.example.net/v1/",
+            "a new claim retires the previous session's configuration"
+        );
+        drop(again);
+    }
+
+    /// The second interleaving of the review (HUM-277): a `Plan` takes its
+    /// configuration, then a start claims and publishes endpoint B before the
+    /// `Plan` reads its running facts. The build is repeated, and the answer
+    /// comes from B, not from the configuration taken before.
+    #[tokio::test]
+    async fn a_plan_across_a_publication_is_built_again() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, paths) = live_service(&home, SandboxPorts::none());
+        let inner = Arc::clone(&service.inner);
+        let mut claim = None;
+        let mut builds = 0;
+        let endpoint = inner.consistent(
+            |config| {
+                builds += 1;
+                if builds == 1 {
+                    // In the middle of the first build a start claims and
+                    // publishes its session with B.
+                    crate::config_rpc::set(&paths, "llm.endpoint", "https://b.example.net/v1/")
+                        .expect("SetConfig writes");
+                    claim = inner.claim_start();
+                    inner
+                        .apply_session(
+                            &v1::sandbox_request::Start::default(),
+                            Some(home.path().join("project")),
+                        )
+                        .expect("the session resolves");
+                }
+                config.llm.endpoint.as_ref().map(ToString::to_string)
+            },
+            drop,
+        );
+        assert_eq!(builds, 2, "the build across the publication is repeated");
+        assert_eq!(endpoint.as_deref(), Some("https://b.example.net/v1/"));
+        drop(claim);
+
+        // Bounded: a session that changes on every build gets the last one.
+        let mut restless = 0;
+        inner.consistent(
+            |_| {
+                restless += 1;
+                inner.bump_generation();
+            },
+            drop,
+        );
+        assert_eq!(restless, SNAPSHOT_ATTEMPTS);
+    }
+
+    /// A start after an agent that exited, without a Stop in between, reads
+    /// the saved configuration: the exited session is replaced, and only an
+    /// agent that still runs keeps its configuration (HUM-277).
+    #[test]
+    fn a_start_after_an_exited_agent_reads_afresh() {
+        let exited = Facts {
+            id: Some("old".to_owned()),
+            started_at: Some(SystemTime::now()),
+            held: true,
+            agent_running: false,
+        };
+        assert!(
+            start_may_refresh(&exited),
+            "the held handle of an exited agent"
+        );
+        let running = Facts {
+            agent_running: true,
+            ..exited
+        };
+        assert!(!start_may_refresh(&running), "an agent that still runs");
+        assert!(start_may_refresh(&Facts::default()), "nothing held");
+    }
+
+    /// The start that holds the claim puts the saved configuration into the
+    /// slot before it checks the project directory (HUM-277).
+    #[test]
+    fn the_claimed_start_refreshes_the_slot() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, paths) = live_service(&home, SandboxPorts::none());
+        let claim = service.inner.claim_start().expect("the claim is free");
+        crate::config_rpc::set(&paths, "llm.endpoint", "https://b.example.net/v1/")
+            .expect("SetConfig writes");
+        service.inner.refresh_for_start();
+        assert_eq!(
+            service
+                .inner
+                .config()
+                .llm
+                .endpoint
+                .as_ref()
+                .map(url::Url::as_str),
+            Some("https://b.example.net/v1/")
+        );
+        drop(claim);
+    }
+
+    /// A directory outside the home directory, and the `Plan` that names it.
+    fn outside_dir() -> (tempfile::TempDir, PathBuf, v1::sandbox_request::Plan) {
+        let outside = tempfile::TempDir::new().unwrap();
+        let canonical = outside.path().canonicalize().unwrap();
+        let plan = v1::sandbox_request::Plan {
+            work_dir: canonical.display().to_string(),
+            ..v1::sandbox_request::Plan::default()
+        };
+        (outside, canonical, plan)
+    }
+
+    /// The third and fourth interleavings of the review (HUM-277):
+    /// configuration A allows a directory outside the home directory, two
+    /// `Plan`s with different profiles build with A at the same time, and a
+    /// start publishes B, which refuses the directory, before either build is
+    /// answered. Both builds are thrown away; neither profile nor directory
+    /// stays in `pending` for a later start to inherit.
+    #[tokio::test]
+    async fn discarded_plan_builds_leave_no_choice_behind() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, paths) = live_service(&home, SandboxPorts::none());
+        let (_outside, canonical, plan) = outside_dir();
+        crate::config_rpc::set(&paths, "sandbox.work_dir", &canonical.display().to_string())
+            .expect("SetConfig writes");
+        let project = home.path().join("project");
+        let inner = Arc::clone(&service.inner);
+        let first = v1::sandbox_request::Plan {
+            profile: "first".to_owned(),
+            ..plan.clone()
+        };
+        let second = v1::sandbox_request::Plan {
+            profile: "second".to_owned(),
+            ..plan
+        };
+        let mut claim = None;
+        let mut outer_builds = 0;
+        let mut inner_builds = 0;
+        let mut second_events = Vec::new();
+        let first_events = inner.consistent_plan(&first, || {
+            outer_builds += 1;
+            if outer_builds > 1 {
+                return;
+            }
+            // While the first build waits, the second Plan builds, and a
+            // start publishes B in the middle of that build.
+            second_events = inner.consistent_plan(&second, || {
+                inner_builds += 1;
+                if inner_builds == 1 {
+                    crate::config_rpc::set(
+                        &paths,
+                        "sandbox.work_dir",
+                        &project.display().to_string(),
+                    )
+                    .expect("SetConfig writes");
+                    claim = inner.claim_start();
+                    inner
+                        .apply_session(
+                            &v1::sandbox_request::Start::default(),
+                            Some(project.clone()),
+                        )
+                        .expect("the session resolves");
+                }
+            });
+        });
+        assert_eq!(
+            (outer_builds, inner_builds),
+            (2, 2),
+            "both builds are repeated"
+        );
+        for events in [&first_events, &second_events] {
+            assert!(
+                events.iter().any(|event| matches!(
+                    event.event,
+                    Some(v1::sandbox_event::Event::Diagnostic(_))
+                )),
+                "the answered build refuses the directory: {events:?}"
+            );
+        }
+        let pending = inner.pending_choice();
+        assert_eq!(pending.work_dir, None, "no thrown-away directory stays");
+        assert_eq!(pending.profile, None, "no thrown-away profile stays");
+        drop(claim);
+    }
+
+    /// Defence in depth (HUM-277): a start that inherits a directory from an
+    /// earlier `Plan` checks it against its own refreshed configuration and
+    /// drops it from `pending` when that refuses it.
+    #[tokio::test]
+    async fn a_start_revalidates_an_inherited_directory() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, paths) = live_service(&home, SandboxPorts::none());
+        let (_outside, canonical, plan) = outside_dir();
+        crate::config_rpc::set(&paths, "sandbox.work_dir", &canonical.display().to_string())
+            .expect("SetConfig writes");
+        let inner = Arc::clone(&service.inner);
+        assert_eq!(
+            inner
+                .remember_with(&inner.plan_config(), &plan)
+                .expect("A allows it"),
+            Some(canonical.clone())
+        );
+
+        let project = home.path().join("project");
+        crate::config_rpc::set(&paths, "sandbox.work_dir", &project.display().to_string())
+            .expect("SetConfig writes");
+        let claim = inner.claim_start().expect("the claim is free");
+        inner.refresh_for_start();
+        // A start that names the directory itself was checked by `remember`.
+        assert_eq!(
+            inner
+                .revalidate_inherited(&plan, Some(canonical.clone()))
+                .expect("named"),
+            Some(canonical.clone())
+        );
+        let start = v1::sandbox_request::Plan::default();
+        inner
+            .revalidate_inherited(&start, Some(canonical))
+            .expect_err("B refuses the inherited directory");
+        assert_eq!(lock(&inner.pending).work_dir, None, "and it leaves pending");
+        drop(claim);
     }
 }

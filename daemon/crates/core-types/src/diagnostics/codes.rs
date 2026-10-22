@@ -1075,7 +1075,10 @@ registry! {
     /// Code davor; der Doctor führt je Zeile genau einen Code, damit Zeile und
     /// Befund zusammenbleiben. Eine andere Major-Version ist blockierend, eine
     /// fehlende Verbindung nur eine Warnung: Der Doctor selbst läuft auch ohne
-    /// Daemon, und genau dafür ist er da (HUM-075).
+    /// Daemon, und genau dafür ist er da (HUM-075). A daemon of the same major
+    /// but another version than the client is a warning as well, with the
+    /// restart as fix: a package upgrade leaves the running user daemon in
+    /// place (HUM-277).
     DOCTOR_006 => "doctor", "Daemon nicht erreichbar oder anderer Vertrag", "#doctor_006",
         "Der Daemon antwortet nicht oder spricht einen anderen Vertrag.",
         "`CopyCommand` mit dem Startbefehl.";

@@ -18,10 +18,16 @@
 //! Geschrieben wird in beiden Fällen über [`humanitl_config::edit::set_value`],
 //! den einen Weg in `config.toml`: nur der eine Wert ändert sich, Kommentare und
 //! Reihenfolge bleiben, nie eine halbe Datei. Vor dem Ersetzen lädt die
-//! Gegenprobe die Nebendatei mit allen übrigen Ebenen (`probe`). Der
-//! laufende Daemon liest den neuen Wert erst bei seinem nächsten Start; das
-//! sagt die Oberfläche, und Live-Neuladen ist nach dem MVP verschoben
-//! (BACKLOG.md Abschnitt 9, Punkt 17).
+//! Gegenprobe die Nebendatei mit allen übrigen Ebenen (`probe`).
+//!
+//! The running daemon uses a written value without a restart (HUM-277):
+//! every sandbox start resolves its configuration afresh (passthrough rule,
+//! key mask, hold mode), `Sandbox(Plan)` refreshes while no session holds the
+//! sandbox, and `Doctor` reads the file again. A running session keeps the
+//! configuration it started with. Only what the daemon builds once at its own
+//! start (the proxy's TLS stack, hence `tls.trust_system_store`, limits,
+//! recording) waits for its next start; the settings form says so. General
+//! live reload stays deferred (BACKLOG.md section 9, item 17).
 
 use std::path::{Path, PathBuf};
 
