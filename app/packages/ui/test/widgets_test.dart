@@ -175,6 +175,95 @@ void main() {
         variant: TargetPlatformVariant.only(TargetPlatform.linux),
       );
 
+      testWidgets('HButton primary press paints the ring without moving', (
+        WidgetTester tester,
+      ) async {
+        // HUM-272, Variante V2: der Druck trägt seinen Schritt aus Farbe und
+        // Ring. Der Ring liegt im Rahmen, der in jedem Zustand einen Pixel
+        // breit da ist; nur seine Farbe wechselt. Geprüft am gemalten Baum,
+        // mit derselben Beschriftung in allen drei Zuständen, damit Größe
+        // und Lage des Worts vergleichbar sind.
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        final HSurfaceColors c = tokens.colors;
+        await tester.pumpWidget(
+          harness(
+            brightness: brightness,
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                for (final HButtonPreview? preview in <HButtonPreview?>[
+                  null,
+                  HButtonPreview.hovered,
+                  HButtonPreview.pressed,
+                ])
+                  HButton(
+                    key: Key(preview?.name ?? 'rest'),
+                    variant: HButtonVariant.primary,
+                    preview: preview,
+                    onPressed: () {},
+                    child: const Text('Allow'),
+                  ),
+                HButton(
+                  key: const Key('real'),
+                  variant: HButtonVariant.primary,
+                  onPressed: () {},
+                  child: const Text('Allow'),
+                ),
+              ],
+            ),
+          ),
+        );
+        Color border(String key) =>
+            paintedDecoration(tester, find.byKey(Key(key))).border!.top.color;
+        double borderWidth(String key) =>
+            paintedDecoration(tester, find.byKey(Key(key))).border!.top.width;
+        Offset wordOffset(String key) =>
+            tester.getTopLeft(
+              find.descendant(
+                of: find.byKey(Key(key)),
+                matching: find.text('Allow'),
+              ),
+            ) -
+            tester.getTopLeft(find.byKey(Key(key)));
+
+        expect(border('rest'), c.accentFill);
+        expect(border('hovered'), c.accentFillHover);
+        expect(border('pressed'), c.accentPressedRing);
+        expect(border('pressed'), isNot(c.accentFillPressed));
+        for (final String key in <String>['rest', 'hovered', 'pressed']) {
+          expect(borderWidth(key), 1.0, reason: key);
+          expect(
+            tester.getSize(find.byKey(Key(key))),
+            tester.getSize(find.byKey(const Key('rest'))),
+            reason: key,
+          );
+          expect(wordOffset(key), wordOffset('rest'), reason: key);
+        }
+
+        // Ein echter Druck, kein Vorschau-Zustand: Füllung und Ring kommen
+        // wirklich an, und nichts verschiebt sich.
+        final Size restingSize = tester.getSize(find.byKey(const Key('real')));
+        final Offset restingWord = wordOffset('real');
+        expect(border('real'), c.accentFill);
+        final TestGesture gesture = await tester.startGesture(
+          tester.getCenter(find.byKey(const Key('real'))),
+        );
+        await tester.pump();
+        await tester.pump(HMotion.press * 2);
+        expect(
+          paintedDecoration(tester, find.byKey(const Key('real'))).color,
+          c.accentFillPressed,
+        );
+        expect(border('real'), c.accentPressedRing);
+        expect(tester.getSize(find.byKey(const Key('real'))), restingSize);
+        expect(wordOffset('real'), restingWord);
+        await gesture.up();
+        await tester.pumpAndSettle();
+        expect(border('real'), c.accentFill);
+        expect(tester.takeException(), isNull);
+      });
+
       testWidgets('HButton primary hover steps away from the surface', (
         WidgetTester tester,
       ) async {

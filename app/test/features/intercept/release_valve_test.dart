@@ -1,6 +1,7 @@
 // Die Release Valve und der Block-Button (HUM-028): Tippen, Halten,
 // Trefferflächen, Fokusring und die Ablehnung eines zu kurzen Drucks.
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/ui/focus_ring.dart';
@@ -58,6 +59,52 @@ ReleaseValve valve({
 );
 
 void main() {
+  testWidgets('a finger on the valve paints the press, not the hover', (
+    WidgetTester tester,
+  ) async {
+    // HUM-272, Befund aus dem Review: die Druckfläche stand nur bei einer
+    // Ablehnung oder wenn die Aktionsleiste `pressed` setzte. Unter einem
+    // Finger, der noch hält, blieb die Hälfte auf der Hover-Stufe, und der
+    // Schritt vom Hover in den Druck war null.
+    await pumpControl(tester, valve(onAllow: () {}, onAllowRemembered: () {}));
+    final HTokens tokens = HTokens.dark;
+    Color surface() {
+      final AnimatedContainer box = tester.widget<AnimatedContainer>(
+        find.descendant(
+          of: find.byKey(const Key('intercept-valve-hold')),
+          matching: find.byType(AnimatedContainer),
+        ),
+      );
+      return (box.decoration! as BoxDecoration).color!;
+    }
+
+    final Color hover = tokens.colors.accent.withValues(
+      alpha: valveHoverAlpha(tokens.brightness),
+    );
+    final Color press = tokens.colors.accent.withValues(
+      alpha: valvePressAlpha(tokens.brightness),
+    );
+    expect(surface(), const Color(0x00000000));
+    final TestGesture mouse = await tester.createGesture(
+      kind: PointerDeviceKind.mouse,
+    );
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(
+      tester.getCenter(find.byKey(const Key('intercept-valve-hold'))),
+    );
+    await tester.pump();
+    expect(surface(), hover);
+    await mouse.down(
+      tester.getCenter(find.byKey(const Key('intercept-valve-hold'))),
+    );
+    await tester.pump();
+    expect(surface(), press);
+    await mouse.up();
+    await tester.pumpAndSettle();
+    expect(surface(), hover);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
   testWidgets('the hold keeps its full time when animations are off', (
     WidgetTester tester,
   ) async {
