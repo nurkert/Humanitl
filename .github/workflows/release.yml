@@ -1,5 +1,6 @@
-# Vorabversionen 0.0.x: vom Tag auf einem gruenen `main`-Commit zum
-# GitHub-Release mit .deb, Archiv und Pruefsummen.
+# Releases 0.0.x: from a tag on a green `main` commit to a GitHub release
+# with .deb, archive and checksums. Since HUM-273 they are published as
+# regular releases (marked latest), no longer as pre-releases.
 #
 #   guard -> build -> check-deb -> release
 #
@@ -10,7 +11,7 @@
 #            .deb und tar.gz bauen, SHA256SUMS, Release-Notes.
 # check-deb  Das .deb in einem frischen Ubuntu-24.04-Container installieren,
 #            pruefen, mit --purge entfernen; lintian ohne Fehler und Warnungen.
-# release    Nur fuer Tags: GitHub-Release, als Vorabversion markiert.
+# release    Tags only: GitHub release, regular (not a pre-release), latest.
 #
 # `workflow_dispatch` ist der Probelauf: Er baut und prueft alles mit der
 # eingegebenen Version, laedt die Artefakte als Workflow-Artefakt hoch und
@@ -111,7 +112,7 @@ jobs:
           # Das enge Muster ist die eigentliche Sperre gegen einen praeparierten
           # Tag-Namen: Nach dieser Zeile ist die Version nur noch Ziffern und Punkte.
           if [[ ! "$candidate" =~ ^0\.0\.(0|[123456789][0123456789]{0,5})$ ]]; then
-            echo "::error::'$candidate' is not a 0.0.N version. This workflow publishes 0.0.x pre-releases only; 0.1.0 is HUM-060."
+            echo "::error::'$candidate' is not a 0.0.N version. This workflow publishes 0.0.x releases only; 0.1.0 is HUM-060."
             exit 1
           fi
           if [[ ! "$SHA" =~ ^[0123456789abcdef]{40}$ ]]; then
@@ -353,7 +354,7 @@ jobs:
         with:
           name: ${{ needs.guard.outputs.artifact }}
           path: artefacts
-      - name: Create the pre-release, if the tag still points at the checked commit
+      - name: Create the release, if the tag still points at the checked commit
         # Pruefung und Anlegen in einem Schritt, damit zwischen beiden nichts
         # liegt. Zwischen guard und hier liegt der ganze Bau: Wer den Tag in der
         # Zeit verschiebt oder einen alten Lauf neu startet, bekaeme sonst ein
@@ -411,8 +412,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --draft \
-            --prerelease \
-            --title "Humanitl $VERSION (pre-release)" \
+            --title "Humanitl $VERSION" \
             --notes-file ../dist-meta/RELEASE_NOTES.md \
             "humanitl_${VERSION}_amd64.deb" \
             "humanitl-${VERSION}-linux-x86_64.tar.gz" \
@@ -432,6 +432,6 @@ jobs:
           fi
           echo "after creating the draft, tag $tag still points at $CHECKED_SHA"
 
-          # Erst jetzt veroeffentlichen, als Vorabversion.
-          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
-          echo "published $tag as a pre-release"
+          # Only now publish it, as a regular release marked latest.
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
+          echo "published $tag as a release"

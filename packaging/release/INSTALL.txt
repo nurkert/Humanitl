@@ -1,120 +1,120 @@
-Humanitl @VERSION@ (Vorabversion) - Archiv fuer Linux x86_64
-=============================================================
+Humanitl @VERSION@ - archive for Linux x86_64
+=============================================
 
-Das ist eine Vorabversion vor dem ersten richtigen Release 0.1.0. Sie ist
-nicht fuer den produktiven Einsatz gedacht, nicht signiert und nur mit einer
-SHA-256-Pruefsumme versehen. Bevorzugter Weg ist das Paket
-humanitl_@VERSION@_amd64.deb aus demselben Release; dieses Archiv ist fuer
-Systeme ohne dpkg oder zum Ausprobieren ohne Installation gedacht.
+This is an early release on the way to the first full release 0.1.0. It is
+not meant for productive use, it is not signed, and it carries only a
+SHA-256 checksum; signatures come with 1.0.0. The preferred way is the
+package humanitl_@VERSION@_amd64.deb from the same release; this archive is
+meant for systems without dpkg or for trying Humanitl without installing it.
 
 
-Zum Vergleich: das Paket (.deb)
-------------------------------
+For comparison: the package (.deb)
+----------------------------------
 
     sudo apt install ./humanitl_@VERSION@_amd64.deb
     humanitl daemon install
     humanitl daemon status
     humanitl-app
 
-Entfernen, in dieser Reihenfolge:
+To remove, in this order:
 
     humanitl daemon uninstall
     sudo apt purge humanitl
 
-Das Paket richtet den Dienst fuer niemanden von selbst ein. Der Befehl
-`humanitl daemon install` aktiviert die Socket-Unit des Pakets
-(humanitld.socket); der Daemon startet dann beim ersten Zugriff. Der erste der
-beiden Entfernen-Befehle meldet Socket und Dienst wieder ab; das Paket selbst
-hinterlaesst nach `apt purge` keine Datei.
+The package sets up the service for nobody by itself. The command
+`humanitl daemon install` activates the socket unit of the package
+(humanitld.socket); the daemon then starts on first access. The first of the
+two removal commands unregisters socket and service again; after
+`apt purge` the package itself leaves no file behind.
 
 
-Voraussetzungen fuer dieses Archiv
-----------------------------------
+Requirements for this archive
+-----------------------------
 
-- Linux x86_64 mit glibc und GTK 3 (zum Beispiel Debian 13 oder Ubuntu 24.04).
-- bubblewrap 0.8 oder neuer (Paket `bubblewrap`): ohne `bwrap` startet
-  keine Sandbox.
-- Unprivilegierte User-Namespaces. Ein frisches Ubuntu 24.04 sperrt sie ueber
-  AppArmor (kernel.apparmor_restrict_unprivileged_userns=1); dann scheitert
-  jede Sandbox mit der Diagnose SANDBOX_003. `bin/humanitl doctor` prueft
-  das und nennt die Abhilfe, `bin/humanitl sandbox check` zeigt, ob die
-  Sandbox danach steht.
+- Linux x86_64 with glibc and GTK 3 (for example Debian 13 or Ubuntu 24.04).
+- bubblewrap 0.8 or newer (package `bubblewrap`): without `bwrap` no
+  sandbox starts.
+- Unprivileged user namespaces. A fresh Ubuntu 24.04 blocks them through
+  AppArmor (kernel.apparmor_restrict_unprivileged_userns=1); every sandbox
+  then fails with the diagnostic SANDBOX_003. `bin/humanitl doctor` checks
+  this and names the fix, `bin/humanitl sandbox check` shows whether the
+  sandbox works afterwards.
 
 
-Pruefsumme
-----------
+Checksum
+--------
 
     sha256sum -c SHA256SUMS --ignore-missing
 
 
-Starten
--------
+Starting
+--------
 
-Im entpackten Verzeichnis humanitl-@VERSION@-linux-x86_64/:
+In the unpacked directory humanitl-@VERSION@-linux-x86_64/:
 
-1. Den Daemon als Dienst einrichten und starten:
+1. Set up and start the daemon as a service:
 
        ./bin/humanitl daemon install
 
-   Das legt eine systemd-Nutzer-Unit unter ~/.config/systemd/user/ an. Sie
-   zeigt auf den Daemon in genau diesem Verzeichnis und startet ihn mit jeder
-   Anmeldung. Das gilt fuer ein System ohne installiertes .deb: Ist das Paket
-   da, aktiviert derselbe Befehl dessen Units und nicht den Daemon aus diesem
-   Archiv. Eine Unit unter ~/.config/systemd/user/, die nicht von
-   `humanitl daemon install` stammt, ersetzt der Befehl nie (DAEMON_005); wer
-   sie nicht mehr braucht, raeumt sie selbst weg.
+   This writes a systemd user unit under ~/.config/systemd/user/. It points
+   at the daemon in exactly this directory and starts it with every login.
+   That holds for a system without the .deb installed: if the package is
+   there, the same command activates its units and not the daemon from this
+   archive. A unit under ~/.config/systemd/user/ that does not come from
+   `humanitl daemon install` is never replaced by the command (DAEMON_005);
+   whoever no longer needs it removes it themselves.
 
-2. Pruefen, ob der Daemon antwortet und die Sandbox auf diesem Rechner geht:
+2. Check that the daemon answers and the sandbox works on this machine:
 
        ./bin/humanitl daemon status
        ./bin/humanitl sandbox check
 
-3. Die Anwendung starten:
+3. Start the application:
 
        ./app/humanitl
 
-Entfernen: zuerst den Dienst abmelden, dann das Verzeichnis loeschen. Wer das
-Verzeichnis loescht oder verschiebt, ohne vorher abzumelden, laesst eine Unit
-zurueck, die auf einen Daemon zeigt, den es nicht mehr gibt.
+To remove: first unregister the service, then delete the directory. Deleting
+or moving the directory without unregistering first leaves a unit behind
+that points at a daemon that no longer exists.
 
     ./bin/humanitl daemon uninstall
 
-Ohne systemd, oder um dem Daemon bei der Fehlersuche zuzusehen, laeuft er auch
-im Vordergrund eines Terminals, das offen bleiben muss:
+Without systemd, or to watch the daemon while debugging, it also runs in the
+foreground of a terminal that has to stay open:
 
     ./bin/humanitld
 
 
-Was noch nicht dabei ist
+What is not included yet
 ------------------------
 
-- Kein AppImage. Das .deb liegt dem Release bei, dieses Archiv installiert
-  nichts.
-- Nichts wird automatisch aktiviert. Das .deb installiert humanitld.service
-  und humanitld.socket nach /usr/lib/systemd/user/, aktiviert sie aber nicht;
-  das tut erst `humanitl daemon install`. Aus dem Archiv schreibt derselbe
-  Befehl die Unit selbst. Danach startet der Daemon aus dem Archiv mit jeder
-  Anmeldung, der aus dem .deb beim ersten Zugriff ueber den Socket.
-- Keine Socket-Aktivierung (humanitld.socket) und kein Menueeintrag im
-  Archiv; beides bringt nur das .deb mit. Aus dem Archiv bindet der Daemon
-  seinen Socket selbst.
-- Die Nutzer-Unit ist so weit gehaertet, wie die Sandbox es zulaesst
-  (HUM-053). Einzelne Schutzzeilen fehlen mit Absicht, weil die Sandbox oder
-  der Agent in ihr sonst nicht laeuft; welche und warum, steht
-  im Abschnitt zur Haertung der Unit in docs/INSTALL.md im Repository
+- No AppImage. The .deb is attached to the release; this archive installs
+  nothing.
+- Nothing is activated automatically. The .deb installs humanitld.service
+  and humanitld.socket to /usr/lib/systemd/user/ but does not activate them;
+  only `humanitl daemon install` does. From the archive the same command
+  writes the unit itself. Afterwards the daemon from the archive starts with
+  every login, the one from the .deb on first access through the socket.
+- No socket activation (humanitld.socket) and no menu entry in the archive;
+  only the .deb brings both. From the archive the daemon binds its socket
+  itself.
+- The user unit is hardened as far as the sandbox allows (HUM-053). Some
+  protection lines are left out on purpose, because otherwise the sandbox or
+  the agent inside it does not run; which ones and why is in the section on
+  hardening the unit in docs/INSTALL.md in the repository
   (https://github.com/nurkert/Humanitl/blob/main/docs/INSTALL.md).
-- Keine Signatur. Die Pruefsumme schuetzt vor einem beschaedigten Download,
-  nicht vor einem manipulierten Release. Signierte Artefakte kommen mit 0.1.0.
-- Keine automatischen Updates; das Programm telefoniert nicht nach Hause.
+- No signature. The checksum protects against a damaged download, not
+  against a tampered release. Signed artefacts come with 1.0.0.
+- No automatic updates; the program does not phone home.
 
 
-Inhalt
-------
+Contents
+--------
 
-    bin/          humanitld (Daemon), humanitl (Kommandozeile), humanitl-shim
-    app/          die Flutter-Anwendung (./app/humanitl)
-    share/        Domain-Katalog, den der Daemon neben bin/ sucht
-    profiles/     das mitgelieferte Sandbox-Profil
-    README.md     Projektbeschreibung
-    LICENSE       GNU General Public License, Version 3
-    INSTALL.txt   diese Datei
+    bin/          humanitld (daemon), humanitl (command line), humanitl-shim
+    app/          the Flutter application (./app/humanitl)
+    share/        domain catalogue the daemon looks for next to bin/
+    profiles/     the bundled sandbox profile
+    README.md     project description
+    LICENSE       GNU General Public License, version 3
+    INSTALL.txt   this file
