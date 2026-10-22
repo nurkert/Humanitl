@@ -1,157 +1,158 @@
-# ADR-0008 · Speicherung: SQLite, Blob-Store, Audit-Kette, getrenntes Pseudonym-Mapping
+# ADR-0008 · Storage: SQLite, blob store, audit chain, separate pseudonym mapping
 
 Applies to: Humanitl 0.1
 
 Status: Accepted
-Datum: 2026-09-02
+Date: 2026-09-02
 
-## Kontext
+## Context
 
-Humanitl zeichnet auf, was durch den Proxy geht: Metadaten jedes Flows, Header,
-Bodies von Request und Response, Findings, Entscheidungen, Regeln. Diese Daten
-sind gleichzeitig das Nachweismittel für die DSGVO-Pflichten der Zielgruppe
-(„was ist an wen gegangen?") und die sensibelste Datensammlung auf dem Rechner:
-Sie enthält per Konstruktion alles, was der Agent je verschickt hat, inklusive
-Kundendaten.
+Humanitl records what goes through the proxy: metadata of every flow, headers,
+bodies of request and response, findings, decisions, rules. This data is at
+the same time the means of evidence for the GDPR obligations of the audience
+("what went to whom?") and the most sensitive data collection on the machine:
+by construction it contains everything the agent has ever sent, including
+customer data.
 
-Daraus folgen drei getrennte Anforderungen. Erstens eine abfragbare Datenbank
-für Metadaten (History-Screen mit Filter, Sortierung und Cursor, serverseitig).
-Zweitens ein Ablageort für Bodies, der bei einem 40-MB-Upload nicht die
-Datenbankdatei aufbläht. Drittens ein Nachweis darüber, dass die Aufzeichnung
-nachträglich nicht verändert wurde — und dabei eine ehrliche Aussage darüber,
-was dieser Nachweis wert ist.
+Three separate requirements follow from this. First, a queryable database for
+metadata (history screen with filter, sorting and cursor, server-side).
+Second, a storage place for bodies that does not bloat the database file with
+a 40 MB upload. Third, evidence that the recording was not altered
+afterwards — and with it an honest statement about what this evidence is
+worth.
 
-Randbedingungen: Ein Desktop-Programm ohne Server. Kein Datenbankdienst, den der
-Nutzer installieren muss. Ein Nutzer, ein Prozess, gleichzeitige Schreibvorgänge
-aus dem Proxy und Lesevorgänge aus dem UI.
+Constraints: a desktop program without a server. No database service the user
+has to install. One user, one process, concurrent writes from the proxy and
+reads from the UI.
 
-## Entscheidung
+## Decision
 
-**Metadaten in SQLite** im WAL-Modus, mit versionierten Migrationen
-(`refinery`, eingebettet aus `daemon/crates/recorder/migrations/`), unter
-`$XDG_DATA_HOME/humanitl/humanitl.db`. Ein eigener Writer-Thread schreibt,
-Lesezugriffe laufen auf einer getrennten Nur-Lese-Verbindung; Filter,
-Sortierung und Cursor-Paging der History werden serverseitig in SQL
-ausgeführt. Gespeichert werden Sitzungen, Flows, Messages (Header und Body je
-Richtung), Findings und ein Schnappschuss gelöschter Regeln, damit die History
-eine Entscheidung auch dann noch erklären kann, wenn die Regel in `rules.yaml`
-nicht mehr steht — `rules.yaml` bleibt die Quelle der Wahrheit für Regeln.
+**Metadata in SQLite** in WAL mode, with versioned migrations
+(`refinery`, embedded from `daemon/crates/recorder/migrations/`), at
+`$XDG_DATA_HOME/humanitl/humanitl.db`. A dedicated writer thread writes,
+reads run on a separate read-only connection; filtering, sorting and cursor
+paging of the history are executed server-side in SQL. Stored are sessions,
+flows, messages (headers and body per direction), findings and a snapshot of
+deleted rules, so that the history can still explain a decision even when the
+rule no longer stands in `rules.yaml` — `rules.yaml` remains the source of
+truth for rules.
 
-Das verbindliche Schema steht nicht in dieser Datei, sondern in den
-Migrationen: `V1__init.sql` und `V2__rules_snapshot.sql` in HUM-026
-(`backlog/sprint-2.md`) sowie die Pseudonym-Migration in HUM-048
-(`backlog/sprint-4.md`). Die Kurzfassung in `BACKLOG.md` 3.4 ist eine frühe
-Skizze; wo sie von den Migrationen abweicht, gelten die Migrationen.
+The binding schema does not stand in this file but in the migrations:
+`V1__init.sql` and `V2__rules_snapshot.sql` in HUM-026
+(`backlog/sprint-2.md`) as well as the pseudonym migration in HUM-048
+(`backlog/sprint-4.md`). The short version in `BACKLOG.md` 3.4 is an early
+sketch; where it deviates from the migrations, the migrations apply.
 
-**Bodies** bis 256 KB (`recorder.inline_max_bytes`) liegen inline als BLOB in
-`messages`. Größere Bodies gehen content-addressed in den Blob-Store unter
-`$XDG_DATA_HOME/humanitl/blobs/<hex[0..2]>/<sha256-hex>`; in der Datenbank steht
-nur die Referenz.
+**Bodies** up to 256 KB (`recorder.inline_max_bytes`) lie inline as a BLOB in
+`messages`. Larger bodies go content-addressed into the blob store at
+`$XDG_DATA_HOME/humanitl/blobs/<hex[0..2]>/<sha256-hex>`; the database holds
+only the reference.
 
-**Audit-Log** als append-only JSONL unter
-`$XDG_DATA_HOME/humanitl/audit/audit.jsonl`, mit einer Hash-Kette. Jeder Eintrag
-trägt `seq`, `ts`, `prev_hash` und `hash` über die kanonische JSON-Form des
-Eintrags, dazu einen HMAC mit einem Installationsschlüssel aus dem System-Keyring.
-Der Head-Hash wird periodisch verankert: Anzeige im UI, Ablage an einem zweiten
-Speicherort und zusätzlich per `logger` ins systemd-Journal.
+**Audit log** as append-only JSONL at
+`$XDG_DATA_HOME/humanitl/audit/audit.jsonl`, with a hash chain. Every entry
+carries `seq`, `ts`, `prev_hash` and `hash` over the canonical JSON form of
+the entry, plus an HMAC with an installation key from the system keyring.
+The head hash is anchored periodically: display in the UI, storage in a second
+location and additionally via `logger` in the systemd journal.
 
-**Was die Kette beweist, wird ausgeschrieben, nicht angedeutet.** Sie schützt
-gegen nachträgliches Editieren durch Dritte mit Dateizugriff. Sie schützt
-**nicht** gegen einen Angreifer, der als derselbe Nutzer läuft und sowohl den
-Schlüssel als auch die Datei hat — der kann die Kette neu schreiben. Der Schutz
-gegen diesen Fall wäre ein externer Anker (Zeitstempeldienst, fremder Rechner)
-und ist ausdrücklich Post-MVP.
+**What the chain proves is spelled out, not hinted at.** It protects against
+subsequent editing by third parties with file access. It does **not** protect
+against an attacker who runs as the same user and has both the key and the
+file — they can rewrite the chain. The protection against this case would be
+an external anchor (timestamping service, foreign machine) and is explicitly
+post-MVP.
 
-**Pseudonymisierungs-Mapping getrennt.** Die Zuordnung von Pseudonym zu
-Originalwert liegt in einer eigenen Tabelle, verschlüsselt mit einem
-Keyring-Schlüssel, ausschließlich host-seitig. Sie geht nie in die Sandbox und
-nie in eine Anfrage. Secrets werden nur als Hash plus Anzeigepräfix gespeichert,
-nie im Klartext. Ein Export ist verschlüsselt.
+**Pseudonymisation mapping separate.** The mapping from pseudonym to original
+value lives in a table of its own, encrypted with a keyring key, exclusively
+on the host side. It never goes into the sandbox and never into a request.
+Secrets are stored only as a hash plus a display prefix, never in plain text.
+An export is encrypted.
 
-## Begründung
+## Rationale
 
-SQLite ist für diesen Fall die naheliegende und richtige Wahl: eingebettet, kein
-Dienst, eine Datei, transaktional, und im WAL-Modus laufen der schreibende
-Recorder und das lesende UI nebeneinander, ohne sich zu blockieren. Migrationen
-sind ab dem ersten Tag da, weil ein Werkzeug, das Nachweise speichert, seine
-alten Daten beim Update nicht verlieren darf.
+SQLite is the obvious and right choice for this case: embedded, no service,
+one file, transactional, and in WAL mode the writing recorder and the reading
+UI run side by side without blocking each other. Migrations are there from day
+one, because a tool that stores evidence must not lose its old data on update.
 
-Die Grenze bei 256 KB trennt zwei Zugriffsmuster. Kleine Bodies (JSON-Payloads,
-LLM-Prompts) will man zusammen mit den Metadaten in einer Abfrage haben; große
-Bodies will man weder in der Datenbankdatei noch beim Auflisten der History im
-Speicher. Content-Addressing über SHA-256 dedupliziert nebenbei: Ein Agent, der
-dieselbe Datei zehnmal hochlädt, belegt den Platz einmal. Der zweistufige Pfad
-(`<hex[0..2]>/<sha256>`) hält die Verzeichnisse klein genug für jedes
-Dateisystem.
+The limit at 256 KB separates two access patterns. Small bodies (JSON
+payloads, LLM prompts) are wanted together with the metadata in one query;
+large bodies are wanted neither in the database file nor in memory when
+listing the history. Content addressing via SHA-256 deduplicates as a side
+effect: an agent that uploads the same file ten times occupies the space once.
+The two-level path (`<hex[0..2]>/<sha256>`) keeps the directories small enough
+for any file system.
 
-JSONL für das Audit-Log statt einer weiteren Tabelle, weil append-only genau die
-Eigenschaft ist, die eine Hash-Kette braucht, und weil eine Textdatei ohne
-Humanitl lesbar und mit Standardwerkzeugen prüfbar bleibt. Die kanonische
-JSON-Form ist Bedingung dafür, dass der Hash reproduzierbar ist. Der HMAC hindert
-jemanden ohne Schlüssel daran, eine plausible Kette neu zu berechnen; die
-Verankerung des Head-Hash an mehreren Orten macht ein Kürzen des Endes
-(Truncation) auffällig.
+JSONL for the audit log instead of another table, because append-only is
+exactly the property a hash chain needs, and because a text file stays
+readable without Humanitl and verifiable with standard tools. The canonical
+JSON form is the precondition for the hash being reproducible. The HMAC
+prevents someone without the key from recomputing a plausible chain; anchoring
+the head hash in several places makes cutting off the end (truncation)
+conspicuous.
 
-Die Ehrlichkeit über die Grenzen der Kette ist Teil der Entscheidung, nicht ein
-Zusatz. Ein Sicherheitsversprechen, das mehr behauptet als es hält, ist
-schlimmer als keines, weil der Nutzer sein Verhalten danach richtet. Prinzip 3
-(„ehrlich über Grenzen") gilt hier wörtlich.
+Honesty about the limits of the chain is part of the decision, not an
+addition. A security promise that claims more than it keeps is worse than
+none, because the user adjusts their behaviour to it. Principle 3
+("honest about limits") applies here literally.
 
-Das Pseudonym-Mapping ist der einzige Datenbestand, der die Wiederherstellung
-der Originaldaten aus pseudonymisierten Aufzeichnungen erlaubt. Er wird deshalb
-verschlüsselt, getrennt gehalten und niemals in der Sandbox sichtbar — sonst
-wäre die Pseudonymisierung ein Ritual statt einer Maßnahme.
+The pseudonym mapping is the only data set that allows restoring the original
+data from pseudonymised recordings. It is therefore encrypted, kept separate
+and never visible in the sandbox — otherwise pseudonymisation would be a
+ritual instead of a measure.
 
-## Verworfene Alternativen
+## Rejected alternatives
 
-- **PostgreSQL.** Bräuchte einen Dienst, den der Nutzer installiert, konfiguriert
-  und aktualisiert. Für eine Einzelplatzanwendung eine unbegründete Hürde.
-  Vorgemerkt als möglicher zweiter `FlowStore`-Adapter für einen Team-Modus.
-- **Alles in Dateien (ein Verzeichnis pro Flow).** Einfach zu schreiben, aber
-  jede Filterung im History-Screen wäre ein Scan über alle Flows. Serverseitiges
-  Filtern, Sortieren und Cursor-Paging ist eine Anforderung, kein Extra.
-- **Bodies immer inline in der Datenbank.** Eine Datenbankdatei, die mit
-  40-MB-Uploads wächst, wird beim `VACUUM` und beim Backup zum Problem, und ein
-  `SELECT *` im UI zieht Hunderte Megabyte.
-- **Bodies immer im Blob-Store.** Zwei IO-Operationen für jedes kleine
-  JSON-Objekt und eine Menge winziger Dateien. Die Schwelle bei 256 KB nimmt von
-  beiden Wegen den nützlichen Teil.
-- **Audit-Log in derselben SQLite-Datenbank.** Bequem, aber eine Datenbank ist
-  editierbar; append-only ist bei ihr eine Konvention, keine Eigenschaft. Und ein
-  Prüfer soll die Kette ohne Humanitl nachrechnen können.
-- **Signatur statt HMAC (asymmetrisch).** Wäre stärker, wenn der private
-  Schlüssel woanders läge — genau das ist im MVP nicht der Fall. Solange der
-  Schlüssel auf derselben Maschine liegt, kauft die Asymmetrie nichts, außer
-  Komplexität. Bei einem externen Anker ändert sich das.
-- **Blockchain-Anker oder externer Zeitstempeldienst im MVP.** Der einzige echte
-  Schutz gegen den Angreifer mit Schlüssel und Datei, aber er setzt eine
-  Netzwerkverbindung und einen Dienst voraus. Post-MVP, und bis dahin klar
-  benannt als das, was fehlt.
-- **Pseudonym-Mapping unverschlüsselt neben den Flows.** Hätte die
-  Pseudonymisierung entwertet: Wer Zugriff auf die Aufzeichnung hat, hätte auch
-  die Auflösung.
+- **PostgreSQL.** Would need a service the user installs, configures and
+  updates. For a single-seat application an unjustified hurdle.
+  Earmarked as a possible second `FlowStore` adapter for a team mode.
+- **Everything in files (one directory per flow).** Simple to write, but
+  every filter in the history screen would be a scan over all flows.
+  Server-side filtering, sorting and cursor paging is a requirement, not an
+  extra.
+- **Bodies always inline in the database.** A database file that grows with
+  40 MB uploads becomes a problem for `VACUUM` and for backups, and a
+  `SELECT *` in the UI pulls hundreds of megabytes.
+- **Bodies always in the blob store.** Two IO operations for every small
+  JSON object and a lot of tiny files. The threshold at 256 KB takes the useful
+  part of both paths.
+- **Audit log in the same SQLite database.** Convenient, but a database is
+  editable; append-only is a convention for it, not a property. And an auditor
+  should be able to recompute the chain without Humanitl.
+- **Signature instead of HMAC (asymmetric).** Would be stronger if the private
+  key lived elsewhere — which is exactly not the case in the MVP. As long as
+  the key lives on the same machine, the asymmetry buys nothing except
+  complexity. With an external anchor that changes.
+- **Blockchain anchor or external timestamping service in the MVP.** The only
+  real protection against the attacker with key and file, but it presupposes a
+  network connection and a service. Post-MVP, and until then clearly named as
+  what is missing.
+- **Pseudonym mapping unencrypted next to the flows.** Would have devalued
+  pseudonymisation: whoever has access to the recording would also have the
+  resolution.
 
-## Konsequenzen
+## Consequences
 
-- Der Port `FlowStore` (Adapter: SQLite) und der Port `AuditSink` (Adapter:
-  JSONL-Hash-Kette) sind getrennt. Ein späterer Remote-Anker ist ein zweiter
-  `AuditSink`, kein Umbau (ADR-0015).
-- Migrationen sind ab HUM-026 Pflicht, auch für die erste Version des Schemas.
-- `recorder.retention_days` steuert die Löschung; die Löschung wird dokumentiert,
-  weil sie eine Lücke in der Kette erzeugt, die die Prüfung kennen muss.
-- Der Blob-Store braucht eine Aufräumroutine, die verwaiste Blobs entfernt,
-  sobald die zugehörigen Flows gelöscht sind.
-- `humanitl audit verify` prüft die Kette und ist auch ohne UI verfügbar; die
-  Tamper-Tests aus `BACKLOG.md` 4.5 (Eintrag löschen, Ende kürzen) sind
-  Bestandteil der Abnahme. Der Truncation-Fall bleibt rot, bis das
-  Head-Anchoring existiert — auch das wird so dokumentiert.
-- M1 zeichnet noch nicht dauerhaft auf. Die Aussage „alles wird aufgezeichnet"
-  gilt erst ab HUM-026 (`backlog/CONVENTIONS.md` 4.10) und wird bis dahin nicht
-  behauptet.
+- The port `FlowStore` (adapter: SQLite) and the port `AuditSink` (adapter:
+  JSONL hash chain) are separate. A later remote anchor is a second
+  `AuditSink`, not a rebuild (ADR-0015).
+- Migrations are mandatory from HUM-026 onwards, even for the first version of
+  the schema.
+- `recorder.retention_days` controls deletion; deletion is documented,
+  because it creates a gap in the chain that the verification must know about.
+- The blob store needs a clean-up routine that removes orphaned blobs as soon
+  as the associated flows are deleted.
+- `humanitl audit verify` checks the chain and is available without the UI as
+  well; the tamper tests from `BACKLOG.md` 4.5 (delete an entry, cut the end)
+  are part of acceptance. The truncation case stays red until head anchoring
+  exists — this too is documented as such.
+- M1 does not yet record persistently. The statement "everything is recorded"
+  applies only from HUM-026 onwards (`backlog/CONVENTIONS.md` 4.10) and is not
+  claimed until then.
 
-## Betroffene Issues
+## Affected issues
 
-`HUM-026` (Recorder: SQLite, WAL, Migrationen, Blob-Store, `ListFlows`),
-`HUM-050` (Audit-Hash-Kette und `verify`), `HUM-051` (Audit-Screen, Export,
-Retention), `HUM-048` (Pseudonym-Mapping, verschlüsselt, Keyring),
-`HUM-032` (History-Screen und Export).
+`HUM-026` (recorder: SQLite, WAL, migrations, blob store, `ListFlows`),
+`HUM-050` (audit hash chain and `verify`), `HUM-051` (audit screen, export,
+retention), `HUM-048` (pseudonym mapping, encrypted, keyring),
+`HUM-032` (history screen and export).

@@ -1,153 +1,153 @@
-# ADR-0011 · Eine Konfigurationsquelle, drei Sichtbarkeitsstufen
+# ADR-0011 · One configuration source, three visibility tiers
 
 Applies to: Humanitl 0.1
 
 Status: Accepted
-Datum: 2026-09-02
+Date: 2026-09-02
 
-## Kontext
+## Context
 
-Humanitl ist konfigurierbar bis in die Sandbox hinein: LLM-Endpunkt,
-Agent-Adapter, Sandbox-Profil, Mounts, Umgebungsvariablen, Timeouts, Caps,
-Detektoren, Katalogquellen, Regeln. Gleichzeitig soll der Standardweg drei
-Entscheidungen brauchen: LLM-Server, Projektordner, Start (Prinzip 8, „wenig tun
-müssen, viel tun können").
+Humanitl is configurable down into the sandbox: LLM endpoint,
+agent adapter, sandbox profile, mounts, environment variables, timeouts, caps,
+detectors, catalogue sources, rules. At the same time the standard path should need three
+decisions: LLM server, project folder, start (principle 8, "have to do little,
+be able to do a lot").
 
-Diese beiden Anforderungen kollidieren auf zwei Arten. Erstens droht die
-klassische Doppelpflege: Ein Wert existiert in einer TOML-Datei, als CLI-Flag und
-als Häkchen im Einstellungsdialog, mit drei verschiedenen Namen, drei
-Beschreibungen und einem Default, der an zwei Stellen abweicht. Zweitens droht
-die Überforderung: Ein Einstellungsdialog mit achtzig Feldern hilft niemandem,
-auch wenn jedes einzelne Feld nötig ist.
+These two requirements collide in two ways. First, the classic
+double maintenance looms: a value exists in a TOML file, as a CLI flag and
+as a checkbox in the settings dialogue, with three different names, three
+descriptions and a default that differs in two places. Second, overload
+looms: a settings dialogue with eighty fields helps nobody,
+even if every single field is necessary.
 
-Dazu kommt eine dritte Anforderung aus Prinzip 10: Das UI darf nie der einzige
-Weg sein. Was im UI einstellbar ist, muss auch in einer Datei und auf der
-Kommandozeile einstellbar sein — sonst ist der Headless-Betrieb (ADR-0013) eine
-Teilmenge statt einer Alternative.
+On top of that comes a third requirement from principle 10: the UI must never be the only
+way. What can be set in the UI must also be settable in a file and on the
+command line — otherwise headless operation (ADR-0013) is a
+subset instead of an alternative.
 
-## Entscheidung
+## Decision
 
-**Es gibt genau eine Quelle für jede Einstellung: einen Rust-Typ.** Alle
-Einstellungen sind `serde`-Typen mit `schemars`-Ableitung in der Crate
-`humanitl-config`, mit `Config` als Wurzel. Daraus entstehen — generiert, nicht
-parallel gepflegt:
+**There is exactly one source for every setting: a Rust type.** All
+settings are `serde` types with a `schemars` derivation in the crate
+`humanitl-config`, with `Config` as the root. From it arise — generated, not
+maintained in parallel:
 
-- das TOML-Schema und dessen Validierung,
-- die CLI-Flags (`clap`, mit denselben Namen),
-- die Einstellungsoberfläche im UI (aus dem JSON-Schema, mit Beschreibung,
-  Default und Reset),
-- die Dokumentation.
+- the TOML schema and its validation,
+- the CLI flags (`clap`, with the same names),
+- the settings interface in the UI (from the JSON schema, with description,
+  default and reset),
+- the documentation.
 
-**Kein Setting existiert nur im UI.**
+**No setting exists only in the UI.**
 
-**Drei Sichtbarkeitsstufen.** Jedes Feld trägt ein Attribut
+**Three visibility tiers.** Every field carries an attribute
 `#[humanitl(tier = "basic" | "advanced" | "expert")]`:
 
-| Stufe | Ort | Verhalten |
+| Tier | Place | Behaviour |
 |---|---|---|
-| `basic` | Setup-Checkliste | die drei Entscheidungen des Standardwegs |
-| `advanced` | Einstellungsbildschirm | standardmäßig sichtbar |
-| `expert` | Einstellungsbildschirm | eingeklappt, mit Warnhinweis bei Sicherheitsrelevanz |
+| `basic` | setup checklist | the three decisions of the standard path |
+| `advanced` | settings screen | visible by default |
+| `expert` | settings screen | collapsed, with a warning where security-relevant |
 
-Die Suche geht immer über alle Stufen; nichts ist unauffindbar, nur
-standardmäßig eingeklappt.
+Search always covers all tiers; nothing is unfindable, only
+collapsed by default.
 
-**Präzedenz, von niedrig nach hoch:** eingebaute Defaults → globale
-`config.toml` → globales Profil → Projekt-Profil → Umgebungsvariablen
-`HUMANITL_*` (Pfadtrennung mit `__`, etwa `HUMANITL_HOLD__TIMEOUT_SECS`) →
-CLI-Flag. Jede Auflösung merkt sich pro Feld die **Herkunft** (`Origin`), damit
-das UI „dieser Wert kommt aus dem Projekt-Profil" anzeigen kann.
+**Precedence, from low to high:** built-in defaults → global
+`config.toml` → global profile → project profile → environment variables
+`HUMANITL_*` (path separator `__`, for example `HUMANITL_HOLD__TIMEOUT_SECS`) →
+CLI flag. Every resolution records the **origin** (`Origin`) per field, so that
+the UI can show "this value comes from the project profile".
 
-**Profile bündeln** Sandbox-Profil, Regelsatz, Agent-Adapter, LLM-Endpunkt,
-Timeout, Mounts und Umgebung zu einer Datei. Sie liegen global unter
-`$XDG_CONFIG_HOME/humanitl/profiles/` oder pro Projekt unter
-`.humanitl/profile.toml`; das Projekt gewinnt. `humanitl run --profile llm-only`
-und das UI benutzen dieselben Profildateien.
+**Profiles bundle** sandbox profile, rule set, agent adapter, LLM endpoint,
+timeout, mounts and environment into one file. They live globally under
+`$XDG_CONFIG_HOME/humanitl/profiles/` or per project under
+`.humanitl/profile.toml`; the project wins. `humanitl run --profile llm-only`
+and the UI use the same profile files.
 
-**Regeln haben zwei Ablageorte** (ADR-0007): gespeichert in `rules.yaml`
-(überlebt den Neustart) und temporär mit `expires: session` (nur im Speicher des
-Daemons). Das UI zeigt beide in getrennten Tabs; temporäre Regeln haben eine
-Restlaufzeit und eine Aktion „dauerhaft machen".
+**Rules have two storage places** (ADR-0007): saved in `rules.yaml`
+(survives the restart) and temporary with `expires: session` (only in the daemon's
+memory). The UI shows both in separate tabs; temporary rules have a
+remaining lifetime and an action "make permanent".
 
-## Begründung
+## Rationale
 
-Aus einem Typ zu generieren statt drei Repräsentationen zu pflegen, ist der
-einzige Weg, der auf Dauer nicht auseinanderläuft. Ein neues Feld erscheint
-automatisch im Schema, in der CLI, im UI und in der Dokumentation — und wenn die
-Beschreibung fehlt, fällt das beim Erzeugen auf, nicht beim Nutzer. Die Definition
-of Done verlangt für jedes neue Feld Stufe, Beschreibung und Default; damit ist
-die Vollständigkeit prüfbar statt erhofft.
+Generating from one type instead of maintaining three representations is the
+only way that does not drift apart over time. A new field appears
+automatically in the schema, in the CLI, in the UI and in the documentation — and if the
+description is missing, that shows up during generation, not with the user. The Definition
+of Done demands tier, description and default for every new field; that makes
+completeness checkable instead of hoped for.
 
-Die drei Stufen lösen die Überforderung, ohne etwas zu verstecken. Progressive
-Disclosure heißt hier: Der Standardweg zeigt drei Felder, der
-Einstellungsbildschirm zeigt die nützlichen, und die gefährlichen sind einen
-Klick entfernt und mit einem Warnhinweis versehen. Weil die Suche über alle
-Stufen geht, muss niemand raten, ob eine Einstellung existiert.
+The three tiers resolve the overload without hiding anything. Progressive
+disclosure here means: the standard path shows three fields, the
+settings screen shows the useful ones, and the dangerous ones are one
+click away and carry a warning. Because search covers all
+tiers, nobody has to guess whether a setting exists.
 
-Die Herkunft pro Feld ist die Antwort auf die häufigste Verwirrung bei
-geschichteter Konfiguration: „Ich habe das doch eingestellt, warum gilt es
-nicht?" Wenn das UI sagt, dass der Wert aus dem Projekt-Profil kommt und den
-globalen überschreibt, erledigt sich die Frage selbst.
+The origin per field is the answer to the most common confusion with
+layered configuration: "But I did set that, why does it not
+apply?" When the UI says that the value comes from the project profile and overrides the
+global one, the question answers itself.
 
-Profile sind die Einheit, in der Menschen tatsächlich denken: nicht „Timeout 300
-Sekunden und Mount `/work` als `ro`", sondern „mein Setup für Kundenprojekte".
-Dass ein Profil eine Datei ist, macht es teilbar, versionierbar und im
-Fehlerfall lesbar.
+Profiles are the unit in which people actually think: not "timeout 300
+seconds and mount `/work` as `ro`", but "my setup for client projects".
+That a profile is a file makes it shareable, versionable and, in case of an
+error, readable.
 
-Die Trennung von gespeicherten und temporären Regeln bildet die zwei realen
-Vertrauensarten ab: „das soll immer gelten" und „das gilt jetzt gerade, weil ich
-hier arbeite". Ohne diese Trennung sammelt eine `rules.yaml` innerhalb von zwei
-Wochen dreißig Einträge, die niemand mehr überblickt — und jede davon ist eine
-dauerhaft offene Tür.
+The separation of saved and temporary rules maps the two real
+kinds of trust: "this should always apply" and "this applies right now because I
+am working here". Without this separation a `rules.yaml` collects, within two
+weeks, thirty entries that nobody can keep track of any more — and each of them is a
+permanently open door.
 
-## Verworfene Alternativen
+## Rejected alternatives
 
-- **Konfiguration nur im UI, Datei als Implementierungsdetail.** Der bequemste
-  Weg für die UI-Entwicklung und ein Bruch mit Prinzip 10: Headless-Betrieb,
-  Skripting und Versionierung der Konfiguration wären ausgeschlossen.
-- **Konfiguration nur in Dateien, kein Einstellungsbildschirm.** Für die
-  Zielgruppe (keine Security-Experten, kein Terminal-Zwang) unzumutbar.
-- **Handgeschriebene CLI-Flags neben handgeschriebenem UI.** Der Normalfall in
-  vielen Projekten und der Grund, warum Defaults dort auseinanderlaufen. Ein
-  Generator kostet einmal Aufwand und danach nichts.
-- **JSON oder YAML statt TOML für die Hauptkonfiguration.** JSON kennt keine
-  Kommentare, was für eine handbearbeitete Datei disqualifizierend ist. YAML hat
-  bekannte Fußangeln bei impliziten Typen. TOML ist für flache bis mittlere
-  Verschachtelung die klarste Wahl. Regeln bleiben YAML, weil sie eine geordnete
-  Liste mit Verschachtelung sind (ADR-0007).
-- **Nur zwei Stufen (einfach/erweitert).** Hätte die sicherheitsrelevanten
-  Einstellungen mit den bloß selten benutzten vermischt. Die dritte Stufe
-  existiert, damit ein Warnhinweis eine Bedeutung hat.
-- **Eine flache Einstellungsliste ohne Profile.** Hätte den häufigsten
-  Anwendungsfall („anderes Projekt, andere Regeln") auf manuelles Umstellen von
-  sechs Werten reduziert.
-- **Regeln nur persistent.** Wäre einfacher, aber jede Ad-hoc-Freigabe wäre
-  dauerhaft. Das ist genau der schleichende Verlust von Kontrolle, den das
-  Werkzeug verhindern soll.
+- **Configuration only in the UI, file as an implementation detail.** The most convenient
+  way for UI development and a break with principle 10: headless operation,
+  scripting and versioning of the configuration would be ruled out.
+- **Configuration only in files, no settings screen.** Unreasonable for the
+  target audience (no security experts, no forced terminal).
+- **Hand-written CLI flags beside a hand-written UI.** The normal case in
+  many projects and the reason why defaults drift apart there. A
+  generator costs effort once and nothing afterwards.
+- **JSON or YAML instead of TOML for the main configuration.** JSON has no
+  comments, which is disqualifying for a hand-edited file. YAML has
+  known pitfalls with implicit types. TOML is the clearest choice for flat to medium
+  nesting. Rules stay YAML because they are an ordered
+  list with nesting (ADR-0007).
+- **Only two tiers (simple/advanced).** Would have mixed the security-relevant
+  settings with the merely rarely used ones. The third tier
+  exists so that a warning has a meaning.
+- **A flat settings list without profiles.** Would have reduced the most common
+  use case ("different project, different rules") to manually changing
+  six values.
+- **Persistent rules only.** Would be simpler, but every ad hoc approval would be
+  permanent. That is exactly the creeping loss of control that the
+  tool is meant to prevent.
 
-## Konsequenzen
+## Consequences
 
-- `humanitl-config` gehört zum Kern: `serde` und `schemars`, kein IO im Typ
-  selbst, tabellengetriebene Tests für die Präzedenz.
-- Jedes Feld braucht `#[schemars(description = "…")]` und ein Tier-Attribut. Ohne
-  beides ist ein Feld unvollständig und wird im Review beanstandet.
-- `humanitl config schema` gibt das JSON-Schema aus. Der Einstellungsbildschirm
-  wird daraus erzeugt; er enthält keine Feldliste im Dart-Code.
-- Die Gruppe `limits` ist die Heimat aller Caps und Timeouts
-  (`backlog/CONVENTIONS.md` 4.4); ältere Schlüssel wie `hold.body_cap_bytes`
-  bleiben als Alias erhalten, damit vorhandene Dateien weiter funktionieren.
-- `humanitl config set` validiert gegen das Schema und liefert bei einem Fehler
-  ein `Diagnostic` statt einer Fehlermeldung (ADR-0012).
-- Live-Reload der Konfigurationsdatei ist möglich, weil die Auflösung eine reine
-  Funktion über die Schichten ist.
-- Die generierte Oberfläche ist gut genug für achtzig Felder, aber nicht für
-  Sonderfälle. Wo ein Feld eine eigene Interaktion braucht (LLM-Server suchen,
-  Projektordner wählen), gibt es ein handgebautes Widget für dieses Feld — nicht
-  für den ganzen Bildschirm.
+- `humanitl-config` belongs to the core: `serde` and `schemars`, no IO in the type
+  itself, table-driven tests for the precedence.
+- Every field needs `#[schemars(description = "…")]` and a tier attribute. Without
+  both, a field is incomplete and is objected to in review.
+- `humanitl config schema` prints the JSON schema. The settings screen
+  is generated from it; it contains no field list in the Dart code.
+- The group `limits` is the home of all caps and timeouts
+  (`backlog/CONVENTIONS.md` 4.4); older keys such as `hold.body_cap_bytes`
+  are kept as aliases so that existing files keep working.
+- `humanitl config set` validates against the schema and on an error returns
+  a `Diagnostic` instead of an error message (ADR-0012).
+- Live reload of the configuration file is possible because resolution is a pure
+  function over the layers.
+- The generated interface is good enough for eighty fields, but not for
+  special cases. Where a field needs its own interaction (search for an LLM server,
+  choose the project folder), there is a hand-built widget for that field — not
+  for the whole screen.
 
-## Betroffene Issues
+## Affected issues
 
-`HUM-062` (config-Crate mit Schema, Stufen und Präzedenz-Tests), `HUM-066`
-(Profile, global und pro Projekt), `HUM-069` (Einstellungsbildschirm mit
-Progressive Disclosure), `HUM-070` (`humanitl config get|set|schema|edit`),
-`HUM-033` (Rules-Screen mit Tabs für gespeicherte und temporäre Regeln).
+`HUM-062` (config crate with schema, tiers and precedence tests), `HUM-066`
+(profiles, global and per project), `HUM-069` (settings screen with
+progressive disclosure), `HUM-070` (`humanitl config get|set|schema|edit`),
+`HUM-033` (rules screen with tabs for saved and temporary rules).

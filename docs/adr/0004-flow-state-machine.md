@@ -1,32 +1,31 @@
-# ADR-0004 · Request-Lebenszyklus als Zustandsautomat, Events werden abgeleitet
+# ADR-0004 · Request lifecycle as a state machine, events are derived
 
 Applies to: Humanitl 0.1
 
 Status: Accepted
-Datum: 2026-09-02
+Date: 2026-09-02
 
-## Kontext
+## Context
 
-Ein Request durchläuft in Humanitl mehr Stationen als in einem gewöhnlichen
-Proxy: Er kommt an, wird auf Findings untersucht, gegen Regeln bewertet,
-möglicherweise minutenlang angehalten, entschieden, weitergeleitet,
-beantwortet und aufgezeichnet. Fünf Verbraucher wollen zu jedem Zeitpunkt
-wissen, wo er steht: der Proxy-Handler selbst, die Hold-Queue, das UI, der
-Recorder und das Audit-Log.
+In Humanitl a request passes through more stations than in an ordinary
+proxy: it arrives, is examined for findings, evaluated against rules,
+possibly held for minutes, decided, forwarded, answered and recorded. Five
+consumers want to know at any moment where it stands: the proxy handler
+itself, the hold queue, the UI, the recorder and the audit log.
 
-Ohne eine explizite Modellierung entsteht genau die Sorte Code, die nach zwei
-Jahren nicht mehr korrigierbar ist: verstreute Boolean-Flags (`is_held`,
-`was_decided`, `response_started`), deren erlaubte Kombinationen niemand
-aufschreibt, und Zustände, die im UI existieren, aber im Daemon nicht. Dazu
-kommt die Frage, ob Fehler nach der Freigabe (DNS schlägt fehl, TCP-Connect
-schlägt fehl, TLS-Handshake schlägt fehl) als „Antwort" gelten. Wenn ja, sieht
-ein Audit-Leser einen `502` und kann nicht unterscheiden, ob der Server das
-gesagt hat oder wir.
+Without explicit modelling, exactly the kind of code emerges that can no
+longer be corrected after two years: scattered boolean flags (`is_held`,
+`was_decided`, `response_started`) whose allowed combinations nobody writes
+down, and states that exist in the UI but not in the daemon. On top of that
+comes the question of whether failures after the release (DNS fails, TCP
+connect fails, TLS handshake fails) count as a "response". If they do, an
+audit reader sees a `502` and cannot tell whether the server said that or we
+did.
 
-## Entscheidung
+## Decision
 
-Der Lebenszyklus ist ein `enum FlowState` in `humanitl-core` mit genau einer
-Methode, die ihn ändert. `Flow` hält Zustand und Historie und ruft sie auf:
+The lifecycle is an `enum FlowState` in `humanitl-core` with exactly one
+method that changes it. `Flow` holds state and history and calls it:
 
 ```rust
 pub struct Transition {
@@ -45,170 +44,168 @@ impl Flow {
 }
 ```
 
-`Transition` ist ein Umschlag: `TransitionInput` sagt, was geschehen soll;
-`flow_id` und `at` kommen vom Aufrufer, weil der reine Automat weder IDs
-erfinden noch eine Uhr lesen darf, das erzeugte Ereignis aber beides trägt.
-`TransitionInput` hat die Varianten `Analyze` (mit den Findings der
-Detektoren), `Hold { deadline, queue_bytes, queue_count }`,
+`Transition` is an envelope: `TransitionInput` says what is to happen;
+`flow_id` and `at` come from the caller, because the pure state machine may
+neither invent IDs nor read a clock, yet the generated event carries both.
+`TransitionInput` has the variants `Analyze` (with the findings of the
+detectors), `Hold { deadline, queue_bytes, queue_count }`,
 `Decide { decision, source }`, `Forward`, `Respond { status }`, `Record`,
-`Answer(MetaAnswer)`, `Timeout` und `Fail { error }`; dazu Konstruktoren `Transition::analyze(..)`
-usw. `Flow::apply` kennt die eigene ID, ruft `on` und ersetzt Zustand und
-Historie; bei einem ungültigen Übergang bleiben beide unverändert
-(`backlog/CONVENTIONS.md` 4.11). `FlowEvent` ist die abgeleitete Ausgabe.
-Zustände:
+`Answer(MetaAnswer)`, `Timeout` and `Fail { error }`; plus constructors `Transition::analyze(..)`
+etc. `Flow::apply` knows its own ID, calls `on` and replaces state and
+history; on an invalid transition both stay unchanged
+(`backlog/CONVENTIONS.md` 4.11). `FlowEvent` is the derived output.
+States:
 
 ```
 Received → Analyzed{findings} → Held{deadline} → Decided(Allow | AllowEdited | Block | TimedOut)
          → Forwarded → Responded{status} → Recorded
 ```
 
-Zusätzlich `Failed{error: UpstreamError}` mit
+In addition `Failed{error: UpstreamError}` with
 `UpstreamError = Dns | Connect | Tls | PrivateAddress(IpAddr) | Timeout`,
-erreichbar aus `Decided(Allow | AllowEdited)` und aus `Forwarded`, also aus
-allen Zuständen nach der Freigabe. `Failed` geht nach `Recorded`.
+reachable from `Decided(Allow | AllowEdited)` and from `Forwarded`, that is,
+from all states after the release. `Failed` goes to `Recorded`.
 
-Erlaubt sind genau: `Received→Analyzed→Held→Decided→Forwarded→Responded→Recorded`,
+Allowed are exactly: `Received→Analyzed→Held→Decided→Forwarded→Responded→Recorded`,
 `Held→Decided(TimedOut)→Recorded`, `Decided(Block)→Recorded`,
-`Analyzed→Decided` (Regel-Auto-Entscheidung, überspringt `Held`),
+`Analyzed→Decided` (automatic rule decision, skips `Held`),
 `Decided(Allow|AllowEdited)→Failed`, `Forwarded→Failed`, `Failed→Recorded`.
-Alles andere liefert `InvalidTransition { from, input }`.
+Everything else returns `InvalidTransition { from, input }`.
 
-### Nachtrag (HUM-103, 2026-09-05): `Received→Recorded` für den Meta-Endpunkt
+### Addendum (HUM-103, 2026-09-05): `Received→Recorded` for the meta endpoint
 
-Es gibt genau einen weiteren erlaubten Übergang: `Received→Recorded` über
-`Answer(MetaAnswer)`. Er gilt für Anfragen an den reservierten Namen
-`humanitl.internal`, den der Proxy selbst beantwortet (ADR-0014). Eine solche
-Anfrage geht nirgendwo hin, hält nichts auf, und niemand entscheidet über sie.
-Sie hat deshalb keinen Weg über `Held` und keinen über `Decided`: `decision`
-sagt aus, wie ein Mensch oder eine Regel über eine Anfrage entschieden hat, und
-ein Datensatz mit einer erfundenen Entscheidung wäre eine Behauptung über einen
-Menschen, der nichts getan hat (`backlog/CONVENTIONS.md` 4.13). Ohne diesen
-Übergang bliebe die Anfrage unsichtbar, und die Historie zeigte weniger, als
-wirklich geschehen ist.
+There is exactly one further allowed transition: `Received→Recorded` via
+`Answer(MetaAnswer)`. It applies to requests to the reserved name
+`humanitl.internal`, which the proxy answers itself (ADR-0014). Such a
+request goes nowhere, holds nothing up, and nobody decides about it.
+It therefore has no path via `Held` and none via `Decided`: `decision`
+states how a human or a rule decided about a request, and a record with an
+invented decision would be a claim about a human who did nothing
+(`backlog/CONVENTIONS.md` 4.13). Without this transition the request would
+remain invisible, and the history would show less than really happened.
 
-Der Übergang ist keine Aufweichung der Zusage, dass jede gewöhnliche Anfrage
-einem Menschen gezeigt wird. Er gilt allein für den Fluss, **dessen eigene
-Anfrage** an den reservierten Namen ging, und geprüft wird das an diesem Fluss,
-im Augenblick des Abschließens: `Flow::apply` lehnt `Answer` ab, sobald
-`Flow::is_meta` nicht gilt. Die einzige Tür dorthin ist `Flow::answer`; sie
-nennt den Grund (`PROXY_009` für den falschen Host, `InvalidTransition` für den
-falschen Zustand) und gibt den Nachweis nicht heraus. `MetaAnswer` selbst ist
-`#[non_exhaustive]`, außerhalb der Crate also nicht baubar, und trägt keine
-Angaben.
+The transition does not soften the promise that every ordinary request is
+shown to a human. It applies solely to the flow **whose own request** went to
+the reserved name, and this is checked on that flow, at the moment of
+completion: `Flow::apply` rejects `Answer` as soon as `Flow::is_meta` does not
+hold. The only door there is `Flow::answer`; it names the reason (`PROXY_009`
+for the wrong host, `InvalidTransition` for the wrong state) and does not hand
+out the witness. `MetaAnswer` itself is `#[non_exhaustive]`, so it cannot be
+built outside the crate, and carries no data.
 
-Dass der Nachweis nicht reisen darf, ist der Kern: Ein Wert, der nur belegt,
-dass *irgendeine* Anfrage an den reservierten Namen ging, ließe sich auf einen
-fremden Fluss anwenden, der noch in `Received` steht — jede Anfrage steht dort
-nach der Ankunft, und der Fluss landete in `Recorded`, ohne dass ein Mensch ihn
-je gesehen hätte. `flow_state_table.rs` zählt beide Hälften auf (aus welchem
-Zustand der Weg öffnet und für welchen Fluss), die crate-interne Gegenprobe mit
-einem echten Nachweis an einem fremden Fluss steht in
+That the witness must not travel is the core: a value that only proves that
+*some* request went to the reserved name could be applied to a foreign flow
+still standing in `Received` — every request stands there after arrival, and
+the flow would land in `Recorded` without a human ever having seen it.
+`flow_state_table.rs` enumerates both halves (from which state the path opens
+and for which flow); the crate-internal counter-check with a real witness on a
+foreign flow is in
 `flow.rs::tests::a_witness_does_not_open_a_foreign_flow`.
 
-Der Datensatz eines Meta-Flusses trägt die Spalte `flows.meta` und **keine**
-`decision`. Er zählt in keiner Auswertung mit, die über Entscheidungen spricht;
-der Filterterm `meta:` trennt ihn von den übrigen.
+The record of a meta flow carries the column `flows.meta` and **no**
+`decision`. It counts in no evaluation that talks about decisions;
+the filter term `meta:` separates it from the others.
 
-Wer entscheiden darf, hängt von der `DecisionSource` ab. `DecisionSource::System`
-(der Daemon selbst, etwa bei erschöpftem Budget) darf aus `Analyzed` und `Held`
-nur ablehnen (`Block`, `TimedOut`), nie erlauben. Nur so sind `HoldMemory`,
-`HoldMaxFlows`, `BodyCap` und `ClientTimeout` ausdrückbar
+Who may decide depends on the `DecisionSource`. `DecisionSource::System`
+(the daemon itself, for instance when the budget is exhausted) may only refuse
+from `Analyzed` and `Held` (`Block`, `TimedOut`), never allow. Only in this way
+can `HoldMemory`, `HoldMaxFlows`, `BodyCap` and `ClientTimeout` be expressed
 (`backlog/CONVENTIONS.md` 4.11).
 
-Ein Upstream-Fehler wird nie als `Responded` verbucht. Der Client bekommt in
-diesem Fall `502` mit dem einheitlichen `Blocked by Humanitl.`-Body und
-`reason: upstream_*`. Die Statuscodes je Blockgrund gehören zu dieser
-Modellierung und sind mit ADR-0005 identisch:
+An upstream failure is never booked as `Responded`. In this case the client
+gets `502` with the uniform `Blocked by Humanitl.` body and
+`reason: upstream_*`. The status codes per block reason belong to this
+modelling and are identical to ADR-0005:
 
-| Grund | Status |
+| Reason | Status |
 |---|---|
 | `User`, `Rule`, `AuthorityMismatch`, `PrivateAddress` | `403` |
 | `BodyCap` | `413` |
-| `Timeout` (Hold-Timeout) | `504` |
+| `Timeout` (hold timeout) | `504` |
 | `HoldMemory`, `HoldMaxFlows` | `503` |
 | `NoRoute` | `502` |
 | `ClientTimeout` | `408` |
-| Upstream-Fehler (`FlowState::Failed`) | `502` |
+| Upstream failure (`FlowState::Failed`) | `502` |
 
-Aus jedem Übergang entsteht ein `FlowEvent`, der zugleich den gRPC-Stream und
-das Audit-Log speist. Das ist bewusst *kein* Event Sourcing: Der In-Memory-Zustand
-wird nicht aus Events rekonstruiert. Wahrheit ist der Automat plus SQLite; Events
-sind Ausgabe.
+Every transition produces a `FlowEvent`, which feeds both the gRPC stream and
+the audit log. This is deliberately *not* event sourcing: the in-memory state
+is not reconstructed from events. The truth is the state machine plus SQLite;
+events are output.
 
-Gehaltene Requests blockieren nie auf das UI. Die Hold-Queue ist eine
-`DashMap<FlowId, oneshot::Sender<Decision>>` mit einem Deadline-Timer; der
-Proxy-Handler `await`et auf den Empfänger.
+Held requests never block on the UI. The hold queue is a
+`DashMap<FlowId, oneshot::Sender<Decision>>` with a deadline timer; the
+proxy handler `await`s the receiver.
 
-## Begründung
+## Rationale
 
-Ein `enum` mit einer einzigen Änderungsmethode macht ungültige Zustände nicht
-nur unwahrscheinlich, sondern unkonstruierbar. Die Liste der erlaubten Übergänge
-ist endlich und klein genug, um sie in einem tabellengetriebenen Test vollständig
-aufzuzählen — inklusive aller verbotenen Kombinationen. Ein Bug in diesem Bereich
-ist damit ein fehlender Testfall, kein Rätsel.
+An `enum` with a single changing method makes invalid states not merely
+unlikely but unconstructible. The list of allowed transitions is finite and
+small enough to enumerate it completely in a table-driven test — including
+all forbidden combinations. A bug in this area is therefore a missing test
+case, not a riddle.
 
-Dass das Event die *Ausgabe* des Übergangs ist und nicht seine Eingabe, ist der
-Punkt, an dem sich die Sache entscheidet. Wäre das Event die Eingabe, könnte ein
-Aufrufer ein Ereignis erfinden, das nie stattgefunden hat, und der Zustand würde
-folgen. So kann er nur einen Übergang *versuchen*; das Ereignis entsteht
-nachweislich aus einem stattgefundenen Übergang. Für ein Audit-Log, dessen
-ganzer Zweck die Nachvollziehbarkeit ist, ist diese Richtung die einzig
-vertretbare.
+That the event is the *output* of the transition and not its input is the
+point on which the matter turns. If the event were the input, a caller could
+invent an event that never took place, and the state would follow. As it is,
+the caller can only *attempt* a transition; the event demonstrably arises
+from a transition that took place. For an audit log whose entire purpose is
+traceability, this direction is the only defensible one.
 
-Der Handler *treibt* den Automaten, er *besitzt* ihn nicht: Er ruft
-`Flow::apply`, veröffentlicht das Ereignis und wartet gegebenenfalls auf die
-Entscheidung. Damit bleibt der Handler dünn und die Logik ohne Netzwerk
-testbar.
+The handler *drives* the state machine, it does not *own* it: it calls
+`Flow::apply`, publishes the event and, if needed, waits for the decision.
+The handler thereby stays thin and the logic testable without a network.
 
-`Failed` als eigener Zustand statt als `Responded{502}` hält die Aufzeichnung
-ehrlich. Im UI und im Export ist unterscheidbar, ob ein Server geantwortet hat
-oder ob wir gar nicht hingekommen sind — und wenn ja, woran es lag (DNS,
-Connect, TLS, private Zieladresse, Timeout). Für die Diagnose beim Nutzer ist das
-der Unterschied zwischen „der Dienst ist kaputt" und „dein DNS ist kaputt".
+`Failed` as a state of its own instead of `Responded{502}` keeps the recording
+honest. In the UI and in the export it is distinguishable whether a server
+answered or whether we never got there — and if so, what caused it (DNS,
+connect, TLS, private destination address, timeout). For diagnosis on the
+user's side, that is the difference between "the service is broken" and "your
+DNS is broken".
 
-Timeouts sind ein Übergang wie jeder andere (`TransitionInput::Timeout` →
-`Decided(TimedOut)`), kein Sonderpfad. Damit gilt für sie automatisch dieselbe
-Aufzeichnung, dieselbe Audit-Zeile und dieselbe UI-Darstellung.
+Timeouts are a transition like any other (`TransitionInput::Timeout` →
+`Decided(TimedOut)`), not a special path. The same recording, the same audit
+line and the same UI presentation therefore apply to them automatically.
 
-## Verworfene Alternativen
+## Rejected alternatives
 
-- **Boolean-Flags und `Option`-Felder auf einer `Flow`-Struktur.** Der
-  naheliegende Weg. Verliert, weil die Menge der gültigen Kombinationen nirgends
-  steht und mit jedem neuen Flag exponentiell wächst.
-- **Vollständiges Event Sourcing.** Der In-Memory-Zustand wäre eine Faltung über
-  den Ereignisstrom. Klingt sauber, kostet aber Replay-Logik, Snapshot-Verwaltung
-  und Schema-Migrationen für Ereignisse — für einen Prozess, der pro Sitzung
-  einige hundert Flows hält und beim Neustart ohnehin keinen In-Memory-Zustand
-  wiederherstellen soll. Der Ereignisstrom bleibt trotzdem vollständig, nur eben
-  nach außen und nicht nach innen.
-- **Zustand nur in SQLite, jeder Schritt ein `UPDATE`.** Jeder Übergang würde
-  IO kosten, der Kern wäre nicht mehr IO-frei (Verstoß gegen ADR-0015), und ein
-  gehaltener Request hinge an einer Datenbanktransaktion.
-- **Upstream-Fehler als `Responded{502}`.** Wäre weniger Code, macht die
-  Aufzeichnung aber mehrdeutig. Ausdrücklich verworfen im Review vom
-  2026-09-02 (`backlog/CONVENTIONS.md` 4.10).
-- **Übergangsmethode nimmt das Event entgegen (`on(self, &FlowEvent)`).** Diese
-  Form stand in einer frühen Fassung von `docs/ARCHITECTURE.md` 3 und wurde
-  korrigiert: Das Event ist Ausgabe, nicht Eingabe
+- **Boolean flags and `Option` fields on a `Flow` struct.** The obvious path.
+  Loses because the set of valid combinations is written down nowhere and grows
+  exponentially with every new flag.
+- **Full event sourcing.** The in-memory state would be a fold over the event
+  stream. Sounds clean, but costs replay logic, snapshot management and schema
+  migrations for events — for a process that holds a few hundred flows per
+  session and is not supposed to restore any in-memory state on restart
+  anyway. The event stream remains complete nonetheless, only outwards and not
+  inwards.
+- **State only in SQLite, every step an `UPDATE`.** Every transition would
+  cost IO, the core would no longer be IO-free (violation of ADR-0015), and a
+  held request would hang on a database transaction.
+- **Upstream failures as `Responded{502}`.** Would be less code, but makes the
+  recording ambiguous. Explicitly rejected in the review of 2026-09-02
+  (`backlog/CONVENTIONS.md` 4.10).
+- **The transition method takes the event as input (`on(self, &FlowEvent)`).**
+  This form stood in an early version of `docs/ARCHITECTURE.md` 3 and was
+  corrected: the event is output, not input
   (`backlog/CONVENTIONS.md` 4.2).
 
-## Konsequenzen
+## Consequences
 
-- Der Automat lebt in `humanitl-core`, ohne IO, ohne async, ohne Protobuf. Er ist
-  in einem Unit-Test vollständig durchlaufbar.
-- Der Test für verbotene Übergänge ist Pflichtbestandteil von HUM-004: Jede
-  Kombination aus Zustand und `TransitionInput`, die nicht in der Liste steht,
-  muss `InvalidTransition` liefern.
-- `FlowEvent` ist der einzige Weg, an dem UI, Recorder und Audit hängen. Ein
-  neuer Zustand ohne neues Ereignis ist unmöglich.
-- Der `Held`-Event trägt zusätzlich `queue_bytes` und `queue_count`, damit das
-  Hold-Budget im UI sichtbar ist (`backlog/CONVENTIONS.md` 4.2, HUM-057).
-- Die Statuscodes für die einzelnen Blockgründe stehen in der Tabelle oben und
-  noch einmal in ADR-0005; beide Tabellen müssen gleich bleiben.
+- The state machine lives in `humanitl-core`, without IO, without async,
+  without Protobuf. It can be run through completely in a unit test.
+- The test for forbidden transitions is a mandatory part of HUM-004: every
+  combination of state and `TransitionInput` that is not in the list
+  must return `InvalidTransition`.
+- `FlowEvent` is the only path that UI, recorder and audit hang on. A new
+  state without a new event is impossible.
+- The `Held` event additionally carries `queue_bytes` and `queue_count`, so
+  that the hold budget is visible in the UI (`backlog/CONVENTIONS.md` 4.2,
+  HUM-057).
+- The status codes for the individual block reasons are in the table above and
+  once more in ADR-0005; both tables must stay identical.
 
-## Betroffene Issues
+## Affected issues
 
-`HUM-004` (core-types mit Automat und Übergangstests), `HUM-016` (Hold-Queue,
-durchläuft den Automaten), `HUM-024` (DNS-/Connect-Fehler als `Failed`),
-`HUM-026` (Recorder als Ereignis-Verbraucher), `HUM-018` (`Subscribe`-Stream),
-`HUM-057` (`queue_bytes`/`queue_count` im `Held`-Event).
+`HUM-004` (core-types with state machine and transition tests), `HUM-016`
+(hold queue, runs through the state machine), `HUM-024` (DNS/connect failures
+as `Failed`), `HUM-026` (recorder as event consumer), `HUM-018` (`Subscribe`
+stream), `HUM-057` (`queue_bytes`/`queue_count` in the `Held` event).
