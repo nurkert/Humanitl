@@ -1,146 +1,146 @@
-# ADR-0003 · gRPC über Unix Domain Socket als einzige Schnittstelle zum Daemon
+# ADR-0003 · gRPC over a Unix domain socket as the only interface to the daemon
 
 Applies to: Humanitl 0.1
 
 Status: Accepted
-Datum: 2026-09-02
+Date: 2026-09-02
 
-## Kontext
+## Context
 
-Humanitl besteht aus drei Programmen: dem Daemon `humanitld` (Rust), der
-Oberfläche `humanitl` (Flutter/GTK) und dem Kommandozeilenwerkzeug `humanitl`
-(Rust). Die Oberfläche muss einen Live-Strom von Ereignissen bekommen (jeder
-angehaltene Request erscheint sofort), Entscheidungen zurückschicken, Regeln und
-Aufzeichnungen abfragen und ein Terminal bidirektional durchreichen. Das
-Kommandozeilenwerkzeug braucht dieselben Fähigkeiten.
+Humanitl consists of three programs: the daemon `humanitld` (Rust), the
+interface `humanitl` (Flutter/GTK) and the command-line tool `humanitl`
+(Rust). The interface must receive a live stream of events (every held
+request appears immediately), send decisions back, query rules and
+recordings and pass a terminal through bidirectionally. The command-line tool
+needs the same capabilities.
 
-Die Verbindung darf nur lokal sein. Sie darf für andere Nutzer der Maschine
-nicht erreichbar sein, und sie darf unter keinen Umständen aus der Sandbox
-heraus erreichbar sein — wer den Daemon steuern kann, kann sich selbst
-freigeben. Gleichzeitig soll die Schnittstelle langlebig sein: Sie ist der Ort,
-an dem später Plugins andocken (`BACKLOG.md` 6).
+The connection may only be local. It must not be reachable for other users of
+the machine, and under no circumstances may it be reachable from inside the
+sandbox — whoever can control the daemon can release themselves. At the same
+time the interface is meant to be long-lived: it is the place where plugins
+will dock later (`BACKLOG.md` 6).
 
-## Entscheidung
+## Decision
 
-Die einzige Schnittstelle zum Daemon ist gRPC über einen Unix Domain Socket.
-Der Vertrag besteht aus drei Dateien unter `proto/humanitl/v1/`, alle im
-Package `humanitl.v1`: `common.proto` mit den Enums `Method`, `Scheme` und
-`Upgrade`, `rules.proto` mit dem Regel-Modell, und `humanitl.proto`, das beide
-importiert und den Service `Humanitl` deklariert. Auf Rust-Seite ist das ein
-einziges Modul `humanitl_ipc::v1`. Server ist `tonic` in der Crate
-`humanitl-ipc` — der einzigen Crate im Workspace, die Protobuf kennt. Sie
-exportiert außerdem die Konstanten `PROTO_MAJOR`, `PROTO_MINOR` und
-`TOKEN_METADATA_KEY` (`x-humanitl-token`), damit weder Daemon noch CLI diese
-Werte ein zweites Mal buchstabieren. Clients sind die Flutter-App (Dart `grpc`
-5.x über `InternetAddress.unix`), das CLI und die Tests.
+The only interface to the daemon is gRPC over a Unix domain socket.
+The contract consists of three files under `proto/humanitl/v1/`, all in the
+package `humanitl.v1`: `common.proto` with the enums `Method`, `Scheme` and
+`Upgrade`, `rules.proto` with the rule model, and `humanitl.proto`, which
+imports both and declares the service `Humanitl`. On the Rust side this is a
+single module `humanitl_ipc::v1`. The server is `tonic` in the crate
+`humanitl-ipc` — the only crate in the workspace that knows Protobuf. It also
+exports the constants `PROTO_MAJOR`, `PROTO_MINOR` and
+`TOKEN_METADATA_KEY` (`x-humanitl-token`), so that neither daemon nor CLI
+spell these values a second time. Clients are the Flutter app (Dart `grpc`
+5.x via `InternetAddress.unix`), the CLI and the tests.
 
-Der Socket liegt unter `$XDG_RUNTIME_DIR/humanitl/daemon.sock` mit Modus `0600`
-in einem Verzeichnis mit Modus `0700`. Zusätzlich trägt jeder Aufruf den
-Metadata-Header `x-humanitl-token` mit dem Session-Token aus
-`$XDG_RUNTIME_DIR/humanitl/token` (`0600`). Der Socket wird niemals in die
-Sandbox gemountet; die Sandbox sieht ausschließlich den Proxy-Socket
-(ADR-0002, Garantie 2).
+The socket lives at `$XDG_RUNTIME_DIR/humanitl/daemon.sock` with mode `0600`
+in a directory with mode `0700`. In addition, every call carries the
+metadata header `x-humanitl-token` with the session token from
+`$XDG_RUNTIME_DIR/humanitl/token` (`0600`). The socket is never mounted into
+the sandbox; the sandbox sees only the proxy socket
+(ADR-0002, guarantee 2).
 
-Regeln für die Proto:
+Rules for the proto:
 
-- Langweilig halten: kein `google.protobuf.Any`, wenig verschachtelte `oneof`.
-- IDs als `string` (UUID-Text), Zeitstempel als `google.protobuf.Timestamp`,
-  Enums immer mit `_UNSPECIFIED = 0`.
-- Bodies stehen nie inline in Events, nur als
-  `BodyRef { bytes sha256; uint64 size; bool truncated }`; der Inhalt kommt über
-  den eigenen Stream `GetBody`.
-- `GetInfo` liefert Daemon-Version, Proto-Version und Capabilities. Das UI
-  verweigert die Verbindung zu einer höheren Major-Version, statt zu raten.
-- Rust-Codegen läuft im Build-Skript über `protox` und `tonic-prost-build`
-  nach `OUT_DIR`; ein installiertes `protoc` ist dafür nicht nötig. Der
-  Deskriptor `proto/descriptor.binpb` ist committet und deterministisch;
-  `cargo xtask proto` schreibt ihn neu, und nur ihn.
-- Der Dart-Codegen läuft nur, wenn `protoc` und `protoc-gen-dart` vorhanden
-  sind, in CI mit gepinntem Plugin; die erzeugten Dateien sind gitignored, Drift
-  bricht den Build.
+- Keep it boring: no `google.protobuf.Any`, few nested `oneof`s.
+- IDs as `string` (UUID text), timestamps as `google.protobuf.Timestamp`,
+  enums always with `_UNSPECIFIED = 0`.
+- Bodies never stand inline in events, only as
+  `BodyRef { bytes sha256; uint64 size; bool truncated }`; the content comes via
+  its own stream `GetBody`.
+- `GetInfo` returns daemon version, proto version and capabilities. The UI
+  refuses the connection to a higher major version instead of guessing.
+- Rust codegen runs in the build script via `protox` and `tonic-prost-build`
+  into `OUT_DIR`; an installed `protoc` is not needed for it. The
+  descriptor `proto/descriptor.binpb` is committed and deterministic;
+  `cargo xtask proto` rewrites it, and only it.
+- The Dart codegen runs only if `protoc` and `protoc-gen-dart` are present,
+  in CI with a pinned plugin; the generated files are gitignored, drift
+  breaks the build.
 
-Erweiterungen gegenüber der Kurzfassung in `BACKLOG.md` 3.3
-(`backlog/CONVENTIONS.md` 4.3 und 4.11):
+Extensions compared with the short version in `BACKLOG.md` 3.3
+(`backlog/CONVENTIONS.md` 4.3 and 4.11):
 
-- RPCs `GetConfig` und `SetConfig`; deshalb darf `humanitl-ipc` von
-  `humanitl-config` abhängen.
-- `FlowEvent` hat zusätzlich die Varianten `Failed { flow_id, error,
-  resolved_ip }`, `Diagnostic`, `RulesChanged` und `AgentAsk`.
-- `FlowEvent.Received` ist `{ summary, domain }`; die Domain-Information reist
-  mit dem ersten Ereignis.
-- `DecideRequest.block` ist `Block { note }`: die Notiz des Nutzers beim Blocken
+- RPCs `GetConfig` and `SetConfig`; therefore `humanitl-ipc` may depend on
+  `humanitl-config`.
+- `FlowEvent` additionally has the variants `Failed { flow_id, error,
+  resolved_ip }`, `Diagnostic`, `RulesChanged` and `AgentAsk`.
+- `FlowEvent.Received` is `{ summary, domain }`; the domain information travels
+  with the first event.
+- `DecideRequest.block` is `Block { note }`: the user's note when blocking
   (ADR-0014).
-- `DecideResponse.created_rule` trägt die volle Regel; `created_rule_id`
-  (Feld 2) wird bei der nächsten Proto-Änderung `reserved`.
+- `DecideResponse.created_rule` carries the full rule; `created_rule_id`
+  (field 2) becomes `reserved` at the next proto change.
 
-Der Daemon bleibt ein eigener Prozess, obwohl Rust per FFI in die Flutter-App
-einbettbar wäre.
+The daemon remains a separate process, although Rust could be embedded into
+the Flutter app via FFI.
 
-## Begründung
+## Rationale
 
-Server-Streaming ist genau die Form, die der Ereignisstrom braucht:
-`Subscribe` liefert `stream FlowEvent`, und die Flusskontrolle von HTTP/2 sorgt
-für Backpressure, ohne dass wir sie selbst bauen. Ein langsames UI bremst den
-Strom, statt Speicher im Daemon volllaufen zu lassen. Bei Überlauf des
-Broadcast-Puffers (Kapazität 1024) schickt der Daemon ein `Lagged{n}`-Ereignis,
-und das UI synchronisiert über `ListFlows(since)` nach — ein sichtbarer,
-behandelter Zustand statt stillen Datenverlusts.
+Server streaming is exactly the form the event stream needs:
+`Subscribe` returns `stream FlowEvent`, and HTTP/2 flow control provides
+backpressure without us building it ourselves. A slow UI slows down the
+stream instead of letting memory in the daemon fill up. When the broadcast
+buffer overflows (capacity 1024), the daemon sends a `Lagged{n}` event,
+and the UI resynchronises via `ListFlows(since)` — a visible, handled state
+instead of silent data loss.
 
-Ein Unix Domain Socket mit `0600` schließt andere Nutzer der Maschine über
-Dateirechte aus, ohne Netzwerkkonfiguration und ohne Portkollisionen. Das
-Session-Token ist der zweite Riegel für den Fall, dass die Dateirechte durch
-eine Fehlkonfiguration nicht greifen.
+A Unix domain socket with `0600` excludes other users of the machine via file
+permissions, without network configuration and without port collisions. The
+session token is the second bolt in case the file permissions do not take
+effect because of a misconfiguration.
 
-Die `.proto` ist gleichzeitig drei Dinge: ausführbare Dokumentation der
-Fähigkeiten, Versionsvertrag zwischen UI und Daemon, und die spätere
-Plugin-Schnittstelle. Ein Plugin ist damit einfach ein weiterer gRPC-Client, es
-braucht keinen neuen Mechanismus.
+The `.proto` is three things at once: executable documentation of the
+capabilities, version contract between UI and daemon, and the later
+plugin interface. A plugin is thus simply another gRPC client; it
+needs no new mechanism.
 
-Der Daemon bleibt aus vier Gründen ein eigener Prozess. Erstens muss der Proxy
-die UI überleben: Wer die UI schließt, während der Agent arbeitet, darf den
-Agenten nicht ins Leere laufen lassen. Zweitens kann ein Flatpak kein `bwrap`
-starten, die spätere Flatpak-Auslieferung der UI (ADR-0010) braucht den Daemon
-also ohnehin außerhalb. Drittens nutzt der Headless-Betrieb (ADR-0013)
-denselben Vertrag. Viertens ist die Prozessgrenze eine Sicherheitsgrenze: Der
-CA-Schlüssel liegt nicht im Adressraum eines UI-Toolkits.
+The daemon remains a separate process for four reasons. First, the proxy must
+outlive the UI: whoever closes the UI while the agent works must not leave the
+agent running into the void. Second, a Flatpak cannot start `bwrap`, so the
+later Flatpak delivery of the UI (ADR-0010) needs the daemon outside anyway.
+Third, headless operation (ADR-0013) uses the same contract. Fourth, the
+process boundary is a security boundary: the CA key does not live in the
+address space of a UI toolkit.
 
-## Verworfene Alternativen
+## Rejected alternatives
 
-- **REST/JSON über HTTP auf Loopback.** Bräuchte einen TCP-Port auf dem Host,
-  den jeder lokale Prozess erreicht — genau das, was ADR-0001 für den Proxy
-  ausschließt. Streaming wäre SSE oder WebSocket, also ein zweiter Mechanismus
-  neben den unären Aufrufen, und der Schema-Vertrag müsste separat gepflegt
-  werden (OpenAPI), statt aus derselben Datei zu kommen.
-- **Rust per FFI in die Flutter-App einbetten.** Spart einen Prozess, verliert
-  aber alle vier oben genannten Eigenschaften: Der Proxy stirbt mit der UI,
-  Flatpak scheidet aus, Headless bräuchte einen zweiten Pfad, und der
-  CA-Schlüssel läge im UI-Prozess.
-- **D-Bus.** Auf dem Linux-Desktop naheliegend, aber Streaming großer
-  Ereignismengen ist unbequem, die Typisierung ist schwächer, es gibt keine
-  brauchbare Bindung für die spätere Plugin-Nutzung, und die Kopplung an den
-  Session-Bus macht Tests aufwändiger.
-- **Cap'n Proto oder ein eigenes Längenpräfix-Protokoll.** Schneller, aber ohne
-  ausgereifte Dart-Bindung. Der Engpass ist nicht die Serialisierung.
-- **Named Pipes plus JSON-Lines.** Einfach zu bauen, aber ohne Schema, ohne
-  Backpressure, ohne Versionierung. Genau die drei Dinge, die diese
-  Schnittstelle langfristig braucht.
+- **REST/JSON over HTTP on loopback.** Would need a TCP port on the host that
+  every local process can reach — exactly what ADR-0001 rules out for the
+  proxy. Streaming would be SSE or WebSocket, i.e. a second mechanism next to
+  the unary calls, and the schema contract would have to be maintained
+  separately (OpenAPI) instead of coming from the same file.
+- **Embed Rust into the Flutter app via FFI.** Saves a process, but loses all
+  four properties named above: the proxy dies with the UI, Flatpak is out,
+  headless would need a second path, and the CA key would live in the UI
+  process.
+- **D-Bus.** Obvious on the Linux desktop, but streaming large volumes of
+  events is awkward, the typing is weaker, there is no usable binding for the
+  later plugin use, and the coupling to the session bus makes tests more
+  laborious.
+- **Cap'n Proto or our own length-prefix protocol.** Faster, but without a
+  mature Dart binding. The bottleneck is not serialisation.
+- **Named pipes plus JSON lines.** Simple to build, but without schema,
+  without backpressure, without versioning. Exactly the three things this
+  interface needs in the long run.
 
-## Konsequenzen
+## Consequences
 
-- Jede Fähigkeit des Systems muss zuerst als RPC existieren. Diese Konsequenz ist
-  so tragend, dass sie einen eigenen ADR bekommen hat: ADR-0018 (Parität).
-- Die Rust-Seite braucht kein `protoc`; die Toolchain wächst nur für Dart um
-  `protoc` und `protoc-gen-dart`. Beides läuft in CI mit gepinnten Versionen,
-  lokal ist es optional; `make check` darf nicht davon abhängen.
-- Ein Versionsbruch der Proto ist ein sichtbares Ereignis: `GetInfo` meldet die
-  Major-Version, das UI zeigt einen Setup-Screen statt veralteter Daten.
-- Der Fake-Daemon (HUM-005) implementiert dieselbe Proto in Rust und spielt eine
-  JSONL-Session ab. Damit ist die UI-Entwicklung vollständig vom Proxy
-  entkoppelt, ohne einen zweiten Vertrag zu erfinden.
+- Every capability of the system must exist as an RPC first. This consequence
+  is so load-bearing that it got its own ADR: ADR-0018 (parity).
+- The Rust side needs no `protoc`; the toolchain grows by `protoc` and
+  `protoc-gen-dart` only for Dart. Both run in CI with pinned versions,
+  locally they are optional; `make check` must not depend on them.
+- A version break of the proto is a visible event: `GetInfo` reports the
+  major version, the UI shows a setup screen instead of stale data.
+- The fake daemon (HUM-005) implements the same proto in Rust and replays a
+  JSONL session. UI development is thereby fully decoupled from the proxy,
+  without inventing a second contract.
 
-## Betroffene Issues
+## Affected issues
 
-`HUM-003` (Proto v1 definieren), `HUM-018` (gRPC-Server-Grundgerüst),
-`HUM-005` (Fake-Daemon), `HUM-013` (Proxy-Socket-Bind, Abgrenzung zum
-gRPC-Socket), `HUM-019` (Flutter-Shell mit `GetInfo`-Versionscheck),
-`HUM-078` (Paritäts-Tabelle).
+`HUM-003` (define proto v1), `HUM-018` (gRPC server skeleton),
+`HUM-005` (fake daemon), `HUM-013` (proxy socket bind, delimitation from the
+gRPC socket), `HUM-019` (Flutter shell with `GetInfo` version check),
+`HUM-078` (parity table).

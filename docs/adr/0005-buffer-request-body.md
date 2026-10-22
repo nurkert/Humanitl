@@ -1,145 +1,140 @@
-# ADR-0005 · Request-Body vollständig puffern, bevor der Mensch entscheidet
+# ADR-0005 · Buffer the request body completely before the human decides
 
 Applies to: Humanitl 0.1
 
 Status: Accepted
-Datum: 2026-09-02
+Date: 2026-09-02
 
-## Kontext
+## Context
 
-Der Mensch entscheidet über einen Request. Damit diese Entscheidung etwas wert
-ist, muss er sehen, worüber er entscheidet. Bei einem Exfiltrationsversuch steht
-das Interessante fast nie in den Headern: Der Host ist `api.github.com`, die
-Methode ist `POST`, der Pfad ist unauffällig — und im Body steht der Inhalt von
-`.env`, base64-kodiert.
+The human decides about a request. For this decision to be worth anything,
+they must see what they are deciding about. In an exfiltration attempt, the
+interesting part almost never stands in the headers: the host is
+`api.github.com`, the method is `POST`, the path is inconspicuous — and the
+body holds the content of `.env`, base64-encoded.
 
-Ein Proxy, der nur die Header prüft und den Body durchstreamt, während der
-Mensch noch liest, gibt also genau den Teil frei, um dessentwillen es das
-Werkzeug gibt. Die Freigabe muss vor dem ersten Byte Body liegen, das den Host
-verlässt.
+A proxy that checks only the headers and streams the body through while the
+human is still reading therefore releases exactly the part for whose sake the
+tool exists. The release must come before the first byte of body that leaves
+the host.
 
-Dem steht Speicher entgegen: Ein gepufferter 40-MB-Upload liegt im Daemon, und
-zweihundert gleichzeitig gehaltene Requests können den Rechner an die Wand
-fahren. Außerdem gibt es `Expect: 100-continue`: Ein Client, der so fragt,
-schickt den Body erst nach einer Zwischenantwort — wer diese Zwischenantwort
-zurückhält, bekommt den Body nie zu sehen und kann ihn folglich auch nicht
-anzeigen.
+Memory stands against this: a buffered 40 MB upload sits in the daemon, and
+two hundred simultaneously held requests can run the machine into the wall.
+There is also `Expect: 100-continue`: a client that asks this way sends the
+body only after an interim response — whoever withholds this interim response
+never gets to see the body and consequently cannot display it either.
 
-## Entscheidung
+## Decision
 
-Der Request-Body wird vollständig gepuffert, bevor der Flow in `Held` geht. Erst
-danach wird der Request im UI angezeigt. Nichts erreicht den Upstream vor der
-Entscheidung.
+The request body is buffered completely before the flow goes into `Held`. Only
+then is the request shown in the UI. Nothing reaches the upstream before the
+decision.
 
-- **Body-Cap** `limits.hold_body_cap_bytes` (Alias `hold.body_cap_bytes`),
-  Default 32 MiB. Über dem Cap wird mit `413` geblockt
-  (`BlockReason::BodyCap`), außer eine matchende Regel setzt ausdrücklich
+- **Body cap** `limits.hold_body_cap_bytes` (alias `hold.body_cap_bytes`),
+  default 32 MiB. Above the cap the request is blocked with `413`
+  (`BlockReason::BodyCap`), unless a matching rule explicitly sets
   `stream: true`.
-- **`Expect: 100-continue`** beantwortet der Proxy sofort mit `100 Continue`.
-  Der Body fließt dann in den Hold-Puffer des Proxys, nicht zum Upstream. Erst
-  die Entscheidung öffnet den Weg nach draußen.
-- **Hold-Speicherbudget** ist global: `limits.hold_max_bytes` (Default 256 MiB)
-  und `limits.hold_max_flows` (Default 200), als atomare Zähler in der
-  `HoldQueue`. Wird ein Budget überschritten, wird der *neue* Request mit `503`
-  abgewiesen (`BlockReason::HoldMemory` beziehungsweise
-  `BlockReason::HoldMaxFlows`). Ein bereits gehaltener Request wird nie
-  verworfen.
-- **Responses** werden immer gestreamt (LLM-Streaming, SSE funktionieren) und
-  parallel in den Recorder gespiegelt.
+- **`Expect: 100-continue`** is answered by the proxy immediately with
+  `100 Continue`. The body then flows into the proxy's hold buffer, not to the
+  upstream. Only the decision opens the way out.
+- **Hold memory budget** is global: `limits.hold_max_bytes` (default 256 MiB)
+  and `limits.hold_max_flows` (default 200), as atomic counters in the
+  `HoldQueue`. If a budget is exceeded, the *new* request is turned away with
+  `503` (`BlockReason::HoldMemory` or `BlockReason::HoldMaxFlows`
+  respectively). A request that is already held is never discarded.
+- **Responses** are always streamed (LLM streaming and SSE work) and mirrored
+  to the recorder in parallel.
 
-Statuscodes je Blockgrund, verbindlich:
+Status codes per block reason, binding:
 
-| Grund | Status |
+| Reason | Status |
 |---|---|
 | `User`, `Rule`, `AuthorityMismatch`, `PrivateAddress` | `403` |
 | `BodyCap` | `413` |
-| `Timeout` (Hold-Timeout) | `504` |
+| `Timeout` (hold timeout) | `504` |
 | `HoldMemory`, `HoldMaxFlows` | `503` |
-| Upstream-Fehler (`FlowState::Failed`) | `502` |
+| Upstream failure (`FlowState::Failed`) | `502` |
 | `NoRoute` | `502` |
 | `ClientTimeout` | `408` |
 
-Der Antwort-Body ist in allen Fällen gleich aufgebaut, `text/plain`:
+The response body has the same structure in all cases, `text/plain`:
 
 ```
 Blocked by Humanitl.
-reason: <BlockReason als snake_case>
+reason: <BlockReason as snake_case>
 flow: <FlowId>
 host: <host>
 ```
 
-## Begründung
+## Rationale
 
-Wer nur Header freigibt und den Body streamt, sieht genau den Teil nicht, in dem
-exfiltriert wird. Das ist der ganze Grund. Alles andere in dieser Entscheidung
-sind Folgekosten, die man bezahlt, damit dieser Satz stimmt.
+Whoever releases only headers and streams the body does not see exactly the
+part in which exfiltration happens. That is the whole reason. Everything else
+in this decision is follow-on cost, paid so that this sentence holds.
 
-Der Cap begrenzt die Kosten. 32 MiB decken normale API-Aufrufe, Datei-Uploads
-mittlerer Größe und LLM-Prompts mit Kontext ab. Darüber ist ein Block mit `413`
-die ehrliche Antwort: „Ich kann dir das nicht zeigen, also lasse ich es nicht
-durch." Der Ausweg `stream: true` ist eine bewusste, benannte Regel — der Nutzer
-gibt eine Route explizit frei, statt dass das System still eine Ausnahme macht.
+The cap limits the cost. 32 MiB covers normal API calls, file uploads of
+medium size and LLM prompts with context. Above that, a block with `413` is
+the honest answer: "I cannot show you this, so I do not let it through." The
+way out, `stream: true`, is a deliberate, named rule — the user releases a
+route explicitly instead of the system silently making an exception.
 
-Das globale Budget schützt gegen die zweite Angriffsform: nicht ein großer
-Request, sondern tausend mittlere. Zähler statt Verdrängung, weil das Verwerfen
-eines gehaltenen Requests eine Entscheidung wäre, die der Nutzer nicht getroffen
-hat.
+The global budget protects against the second form of attack: not one large
+request, but a thousand medium ones. Counters instead of eviction, because
+discarding a held request would be a decision the user did not make.
 
-Der einheitliche Body-Aufbau ist Agent-Ergonomie. Ein Agent, der lernt, dass
-`Blocked by Humanitl.` endgültig ist, muss das genau einmal lernen und nicht
-einmal pro Fehlerklasse. Er kann die Zeile `reason:` maschinell auswerten und
-seinem Nutzer sagen, was los ist. ADR-0014 baut darauf auf und erweitert den
-Body um `note:`.
+The uniform body structure is agent ergonomics. An agent that learns that
+`Blocked by Humanitl.` is final has to learn it exactly once, not once per
+error class. It can evaluate the `reason:` line by machine and tell its user
+what is going on. ADR-0014 builds on this and extends the body with `note:`.
 
-Die Behandlung von `Expect: 100-continue` ist eine **Korrektur** einer früheren
-Fassung dieses ADR. Dort stand „`100 Continue` erst nach der Entscheidung". Das
-wäre in sich widersprüchlich gewesen: Ohne `100 Continue` schickt der Client den
-Body nicht, ohne Body gibt es nichts anzuzeigen, ohne Anzeige keine
-Entscheidung. Das sofortige `100 Continue` ist sicher, weil es nur bedeutet
-„schick mir den Body", nicht „ich leite ihn weiter". Die Formulierung in
-`backlog/CONVENTIONS.md` 4.10 ist maßgeblich.
+The handling of `Expect: 100-continue` is a **correction** of an earlier
+version of this ADR. It said "`100 Continue` only after the decision". That
+would have been self-contradictory: without `100 Continue` the client does not
+send the body, without a body there is nothing to display, without display no
+decision. The immediate `100 Continue` is safe because it only means
+"send me the body", not "I am forwarding it". The wording in
+`backlog/CONVENTIONS.md` 4.10 is authoritative.
 
-## Verworfene Alternativen
+## Rejected alternatives
 
-- **Nur Header halten, Body streamen.** Der bequeme Weg, und der einzige, der
-  ohne Speicherbudget auskommt. Verliert, weil er das Kernversprechen bricht:
-  Der Mensch entschiede über eine Zusammenfassung, während der Inhalt bereits
-  unterwegs ist.
-- **Body streamen und nachträglich analysieren.** Ein Alarm nach dem Abfluss ist
-  kein Schutz, sondern ein Protokoll. Für die DSGVO-Situation der Zielgruppe ist
-  „wir haben gemerkt, dass Kundendaten abgeflossen sind" der Schadensfall, nicht
-  seine Vermeidung.
-- **Nur die ersten N Kilobyte puffern und anzeigen.** Ein Angreifer legt seine
-  Nutzlast hinter Byte N+1. Für die *Anzeige* großer Bodies gibt es eine
-  gestaffelte Darstellung (Größe, erste 64 KB, Scan-Status, HUM-030), aber die
-  *Freigabe* bezieht sich immer auf den vollständig vorliegenden Body.
-- **Auf Platte puffern statt im Speicher.** Hebt den Cap, kostet aber IO im
-  heißen Pfad, schreibt potenziell sensible Bodies unverschlüsselt auf die Platte
-  und verschiebt das Problem nur. Bei Bedarf später, hinter demselben Budget.
-- **Gehaltene Requests bei Speichernot verdrängen.** Verworfen: Der Nutzer würde
-  Requests aus seiner Warteschlange verschwinden sehen, ohne sie entschieden zu
-  haben. `503` für den Neuankömmling ist die verständlichere Regel.
+- **Hold only headers, stream the body.** The comfortable path, and the only
+  one that gets by without a memory budget. Loses because it breaks the core
+  promise: the human would decide about a summary while the content is already
+  on its way.
+- **Stream the body and analyse it afterwards.** An alarm after the outflow is
+  not protection but a log. For the GDPR situation of the audience, "we noticed
+  that customer data flowed out" is the damage case, not its prevention.
+- **Buffer and display only the first N kilobytes.** An attacker puts their
+  payload behind byte N+1. For the *display* of large bodies there is a
+  staggered presentation (size, first 64 KB, scan status, HUM-030), but the
+  *release* always refers to the body as it is completely present.
+- **Buffer on disk instead of in memory.** Lifts the cap, but costs IO in the
+  hot path, potentially writes sensitive bodies unencrypted to disk and only
+  shifts the problem. Later if needed, behind the same budget.
+- **Evict held requests under memory pressure.** Rejected: the user would see
+  requests disappear from their queue without having decided them. `503` for
+  the newcomer is the more understandable rule.
 
-## Konsequenzen
+## Consequences
 
-- Der Speicherbedarf des Daemons ist durch `limits.hold_max_bytes` nach oben
-  begrenzt und damit vorhersagbar. Die Zähler entstehen bereits in HUM-016, nicht
-  erst in der Härtungsphase; HUM-057 tunt sie nur noch.
-- Sehr große Uploads funktionieren nur mit einer ausdrücklichen `stream`-Regel.
-  Das ist eine bewusste Reibung, die im UI erklärt wird.
-- `Expect: 100-continue` ist ein eigener Testfall der Konformitäts-Matrix
-  (HUM-017): `100 Continue` geht sofort raus, aber der Upstream sieht bis zur
-  Entscheidung nichts.
-- Der Block-Body ist Teil des öffentlichen Verhaltens und damit
-  regressionsgetestet. Änderungen daran sind Vertragsänderungen.
-- Dekompression von Bodies für die Vorschau braucht ein eigenes Ratio-Limit
-  (`limits.max_decompress_ratio`, Default 100) und einen eigenen Vorschau-Cap
-  (`limits.preview_cap_bytes`, Default 8 MiB), sonst wäre der Cap über eine
-  Zip-Bombe umgehbar.
+- The daemon's memory requirement is bounded above by `limits.hold_max_bytes`
+  and therefore predictable. The counters already arise in HUM-016, not only
+  in the hardening phase; HUM-057 merely tunes them.
+- Very large uploads work only with an explicit `stream` rule. That is
+  deliberate friction, which is explained in the UI.
+- `Expect: 100-continue` is a test case of its own in the conformance matrix
+  (HUM-017): `100 Continue` goes out immediately, but the upstream sees nothing
+  until the decision.
+- The block body is part of the public behaviour and therefore
+  regression-tested. Changes to it are contract changes.
+- Decompressing bodies for the preview needs its own ratio limit
+  (`limits.max_decompress_ratio`, default 100) and its own preview cap
+  (`limits.preview_cap_bytes`, default 8 MiB), otherwise the cap could be
+  circumvented with a zip bomb.
 
-## Betroffene Issues
+## Affected issues
 
-`HUM-015` (MITM-Proxy-Kern mit Pufferung und `Expect`-Behandlung), `HUM-016`
-(Hold-Queue mit Budget-Zählern), `HUM-017` (Konformitäts-Matrix, große Bodies
-und `Expect`), `HUM-030` (Body-Ansichten für große Bodies), `HUM-057`
-(Ressourcen-Limits und Dekompressions-Ratio).
+`HUM-015` (MITM proxy core with buffering and `Expect` handling), `HUM-016`
+(hold queue with budget counters), `HUM-017` (conformance matrix, large bodies
+and `Expect`), `HUM-030` (body views for large bodies), `HUM-057`
+(resource limits and decompression ratio).

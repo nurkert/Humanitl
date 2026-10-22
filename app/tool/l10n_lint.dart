@@ -29,10 +29,10 @@
 // 4. `diagnostic`: Jeder Code des Registers
 //    (`daemon/crates/core-types/src/diagnostics/codes.rs`) hat
 //    `diag<CODE>Title` und `diag<CODE>Why`, der Code ohne Unterstrich.
-// 5. `glossary`: Jede Zeile der Tabelle „Begriffe“ in `docs/GLOSSARY.md` nennt
+// 5. `glossary`: Jede Zeile der Tabelle „UI terms“ in `docs/GLOSSARY.md` nennt
 //    einen Schlüssel, der in beiden Dateien steht und den Begriff der Sprache
 //    als ganzes Wort enthält; kein deutscher Text enthält ein Wort der Tabelle
-//    „Verbotene Wörter“.
+//    „Forbidden words“.
 //
 // Exit-Code 0 ohne Befund, 1 mit Befund, 2 bei einem Fehler des Aufrufs.
 
@@ -1056,16 +1056,16 @@ List<List<String>> _table(String markdown, String heading) {
   return rows.skip(1).toList();
 }
 
-/// Die Zeilen der Tabelle „Begriffe“ in `docs/GLOSSARY.md`.
+/// Die Zeilen der Tabelle „UI terms“ in `docs/GLOSSARY.md`.
 List<GlossaryEntry> glossaryEntries(String markdown) => <GlossaryEntry>[
-  for (final List<String> row in _table(markdown, 'Begriffe'))
+  for (final List<String> row in _table(markdown, 'UI terms'))
     if (row.length >= 4)
       GlossaryEntry(row[0], row[1], row[2], row[3].replaceAll('`', '')),
 ];
 
-/// Die Wörter der Tabelle „Verbotene Wörter“ in `docs/GLOSSARY.md`.
+/// Die Wörter der Tabelle „Forbidden words“ in `docs/GLOSSARY.md`.
 List<String> forbiddenWords(String markdown) => <String>[
-  for (final List<String> row in _table(markdown, 'Verbotene Wörter'))
+  for (final List<String> row in _table(markdown, 'Forbidden words'))
     if (row.isNotEmpty && row.first.isNotEmpty) row.first,
 ];
 
@@ -1090,7 +1090,7 @@ List<L10nFinding> checkGlossary(
     found.add(
       const L10nFinding(
         'glossary',
-        'docs/GLOSSARY.md has no rows under "## Begriffe"',
+        'docs/GLOSSARY.md has no rows under "## UI terms"',
       ),
     );
   }

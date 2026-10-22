@@ -1,34 +1,34 @@
-# ADR-0013 · CLI als gleichwertiger Client und Headless-Betrieb
+# ADR-0013 · CLI as an equal client and headless operation
 
 Applies to: Humanitl 0.1
 
 Status: Accepted
-Datum: 2026-09-02
+Date: 2026-09-02
 
-## Kontext
+## Context
 
-Der naheliegende Entwurf für Humanitl ist eine Anwendung mit Oberfläche, die
-nebenbei einen Proxy startet. Dieser Entwurf hat drei Probleme.
+The obvious design for Humanitl is an application with an interface that
+starts a proxy on the side. This design has three problems.
 
-Erstens: Ein Agentenlauf dauert Stunden. Wer die Oberfläche schließt oder wessen
-Sitzung abstürzt, darf den Agenten nicht mitreißen. Zweitens: Es gibt legitime
-Einsätze ohne Bildschirm — ein Skript, das einen Agenten in einem Verzeichnis
-laufen lässt, oder eine reine Inferenz-Instanz, die nur den LLM-Verkehr
-durchlässt. Drittens: Wenn die Oberfläche der einzige Weg ist, wird sie zum
-Gatekeeper, und jede Fähigkeit muss dort gebaut werden, bevor sie existiert
-(Prinzip 10: „CLI ist erstklassig").
+First: an agent run takes hours. Whoever closes the interface, or whose
+session crashes, must not drag the agent down with it. Second: there are legitimate
+uses without a screen — a script that runs an agent in a directory,
+or a pure inference instance that only lets the LLM traffic
+through. Third: if the interface is the only way, it becomes the
+gatekeeper, and every capability has to be built there before it exists
+(principle 10: "CLI is first-class").
 
-Die schwierige Frage ist der angehaltene Request ohne Oberfläche. Halten ergibt
-nur Sinn, wenn jemand entscheidet. Ohne Oberfläche muss es entweder einen
-anderen Menschen-Kanal geben oder eine ehrliche Vorgabe.
+The difficult question is the held request without an interface. Holding only makes
+sense if someone decides. Without an interface there must either be another
+human channel or an honest default.
 
-## Entscheidung
+## Decision
 
-Es gibt zwei Binaries: `humanitld` (Daemon) und `humanitl` (CLI). Beide sind
-gleichrangig; die Oberfläche und die CLI sind gleichwertige gRPC-Clients
-desselben Daemons (ADR-0003).
+There are two binaries: `humanitld` (daemon) and `humanitl` (CLI). Both are
+of equal rank; the interface and the CLI are equal gRPC clients
+of the same daemon (ADR-0003).
 
-Subkommandos:
+Subcommands:
 
 ```
 humanitl run [--profile NAME] [--work DIR] [--ask ui|terminal|none] [--llm URL] [-- CMD...]
@@ -42,102 +42,101 @@ humanitl config get KEY | set KEY VALUE | schema | edit
 humanitl daemon install|status|logs
 ```
 
-Exit-Codes, verbindlich: `0` ok, `1` Nutzerfehler (mit Diagnostic), `2` Daemon
-nicht erreichbar, `3` Sandbox-Check fehlgeschlagen, `4` Sicherheitsverletzung
-(etwa Authority-Mismatch im Test), `10` `rules test` ergibt `block`, `11`
-`rules test` ergibt `ask`.
+Exit codes, binding: `0` ok, `1` user error (with Diagnostic), `2` daemon
+not reachable, `3` sandbox check failed, `4` security violation
+(for example an authority mismatch in the test), `10` `rules test` yields `block`, `11`
+`rules test` yields `ask`.
 
-**Zwei Modi für gehaltene Requests ohne verbundene Oberfläche:**
+**Two modes for held requests without a connected interface:**
 
-- `--ask terminal` — Eingabeaufforderung im Terminal nach dem Muster von
-  `pipelock`: Host, Methode, Größe, Findings, dann `[a]llow [b]lock [r]ule`.
-- `--ask none` — alles, wofür keine Regel gilt, wird geblockt.
+- `--ask terminal` — a prompt in the terminal following the pattern of
+  `pipelock`: host, method, size, findings, then `[a]llow [b]lock [r]ule`.
+- `--ask none` — everything for which no rule applies is blocked.
 
-`--ask terminal` funktioniert nur für zeilenorientierte Kommandos
-(`humanitl sandbox run -- curl …`, Skripte, Aider im Basic-Mode). Bei einem
-Vollbild-TUI-Agenten wie OpenCode verweigert `humanitl run --ask terminal` den
-Start mit Diagnostic `CLI_002` und schlägt `--ask ui` (Oberfläche wird gestartet
-oder angehängt) oder `--ask none` vor. Die Erkennung läuft über
+`--ask terminal` only works for line-oriented commands
+(`humanitl sandbox run -- curl …`, scripts, Aider in basic mode). With a
+full-screen TUI agent such as OpenCode, `humanitl run --ask terminal` refuses to
+start with Diagnostic `CLI_002` and suggests `--ask ui` (the interface is started
+or attached) or `--ask none`. Detection runs via
 `AgentAdapter::is_fullscreen_tui()`.
 
-Das mitgelieferte Profil `llm-only` setzt `--ask none` plus die
-LLM-Passthrough-Regel. Das ist die „nur Inferenz"-Instanz.
+The bundled profile `llm-only` sets `--ask none` plus the
+LLM passthrough rule. That is the "inference only" instance.
 
-**Übernahme durch die Oberfläche.** Verbindet sich später eine Oberfläche,
-übernimmt sie die Hold-Queue nahtlos, weil beide nur gRPC-Clients des Daemons
-sind. Der Zustand liegt im Daemon, nicht im Client.
+**Takeover by the interface.** If an interface connects later,
+it takes over the hold queue seamlessly, because both are only gRPC clients of the daemon.
+The state lives in the daemon, not in the client.
 
-## Begründung
+## Rationale
 
-Dass die Hold-Queue im Daemon lebt und nicht im Client, ist die Entscheidung, aus
-der alles andere folgt. Der Daemon hält den Request, der Client zeigt ihn an. Ein
-Client kann kommen und gehen; der Request bleibt gehalten, bis er entschieden ist
-oder die Frist abläuft. Deshalb ist „Oberfläche schließen" harmlos und deshalb
-kann eine Oberfläche eine laufende Terminal-Sitzung übernehmen, ohne dass dafür
-ein Übergabemechanismus nötig wäre.
+That the hold queue lives in the daemon and not in the client is the decision from
+which everything else follows. The daemon holds the request, the client displays it. A
+client can come and go; the request stays held until it is decided
+or the deadline expires. That is why "close the interface" is harmless and why
+an interface can take over a running terminal session without a
+handover mechanism being necessary for it.
 
-Die zwei Ask-Modi sind die zwei ehrlichen Antworten auf „niemand schaut hin".
-`terminal` ist der Mensch an einer anderen Stelle. `none` ist die klare Ansage:
-Ohne Regel geht nichts durch. Ein dritter Modus „alles durchlassen" wäre die
-Aufhebung des Produkts und existiert nicht.
+The two ask modes are the two honest answers to "nobody is watching".
+`terminal` is the human at another place. `none` is the clear statement:
+without a rule nothing goes through. A third mode "let everything through" would be the
+abolition of the product and does not exist.
 
-Die Verweigerung von `--ask terminal` bei Vollbild-TUI-Agenten ist eine
-Entscheidung gegen einen kaputten Zustand. OpenCode zeichnet auf denselben
-Bildschirm, auf dem die Eingabeaufforderung erscheinen müsste; das Ergebnis wäre
-ein zerstörtes Terminal und eine Frage, die der Nutzer nicht lesen kann. Lieber
-ein sauberer Fehlschlag mit zwei benannten Auswegen als ein unbrauchbarer
-Zustand.
+Refusing `--ask terminal` for full-screen TUI agents is a
+decision against a broken state. OpenCode draws on the same
+screen on which the prompt would have to appear; the result would be
+a wrecked terminal and a question that the user cannot read. Better
+a clean failure with two named ways out than an unusable
+state.
 
-Die festgelegten Exit-Codes machen die CLI skriptfähig. `10` und `11` für
-`rules test` sind bewusst getrennt: Ein Skript kann `block` und `ask`
-unterscheiden, ohne die Ausgabe zu parsen. `4` für eine Sicherheitsverletzung ist
-absichtlich ein eigener Code, damit eine CI-Pipeline daran anhalten kann.
+The fixed exit codes make the CLI scriptable. `10` and `11` for
+`rules test` are deliberately separate: a script can distinguish `block` and `ask`
+without parsing the output. `4` for a security violation is
+intentionally a code of its own, so that a CI pipeline can stop on it.
 
-`llm-only` als mitgeliefertes Profil zeigt, dass diese Betriebsart kein Sonderfall
-ist, sondern eine Konfiguration: ein Agent, der ausschließlich mit dem lokalen
-Modell spricht, vollständig aufgezeichnet, ohne Internet und ohne jemanden, der
-zuschauen muss.
+`llm-only` as a bundled profile shows that this mode of operation is not a special case
+but a configuration: an agent that talks exclusively to the local
+model, fully recorded, without internet and without anyone who
+has to watch.
 
-## Verworfene Alternativen
+## Rejected alternatives
 
-- **Nur eine Anwendung mit Oberfläche.** Verliert alle drei Eigenschaften aus dem
-  Kontext: keine Überlebensfähigkeit über die Oberfläche hinaus, kein
-  Headless-Betrieb, Oberfläche als Gatekeeper.
-- **CLI als dünner Wrapper um `humanitld`-Unterkommandos.** Hätte zwei Wege in
-  den Kern erzeugt, einen über gRPC und einen direkt. Genau das schließt
-  ADR-0018 aus.
-- **Ask im Terminal über eine separate TTY oder ein zweites Fenster.** Löst das
-  Vollbild-Problem technisch und erzeugt einen Kanal, den der Nutzer nicht
-  erwartet. `CLI_002` mit zwei benannten Auswegen ist verständlicher.
-- **`--ask none` als Vorgabe für alle Headless-Läufe.** Wäre sicher, macht aber
-  Skripte mit `curl` unbrauchbar, in denen ein Mensch danebensitzt.
-- **Ein Modus „alles erlauben" für automatisierte Läufe.** Ausdrücklich
-  verworfen: Er hebt das Produkt auf. Wer alles erlauben will, braucht Humanitl
-  nicht.
-- **Interaktive Entscheidungen über eine Datei oder einen Named Pipe.** Wäre
-  skriptbar, aber niemand will einen angehaltenen Request per `echo` freigeben.
-  Für Automatisierung sind Regeln der richtige Mechanismus.
+- **Only an application with an interface.** Loses all three properties from the
+  context: no survival beyond the interface, no
+  headless operation, interface as gatekeeper.
+- **CLI as a thin wrapper around `humanitld` subcommands.** Would have created two ways into
+  the core, one via gRPC and one direct. That is exactly what
+  ADR-0018 rules out.
+- **Ask in the terminal via a separate TTY or a second window.** Solves the
+  full-screen problem technically and creates a channel that the user does not
+  expect. `CLI_002` with two named ways out is more understandable.
+- **`--ask none` as the default for all headless runs.** Would be safe, but makes
+  scripts with `curl` unusable in which a human sits alongside.
+- **A mode "allow everything" for automated runs.** Expressly
+  rejected: it abolishes the product. Whoever wants to allow everything does not need Humanitl.
+- **Interactive decisions via a file or a named pipe.** Would be
+  scriptable, but nobody wants to release a held request via `echo`.
+  For automation, rules are the right mechanism.
 
-## Konsequenzen
+## Consequences
 
-- Der Zustand einer Sitzung lebt im Daemon. Clients sind zustandslos genug, um
-  jederzeit zu verschwinden und wiederzukommen.
-- Jede Fähigkeit braucht ein CLI-Subkommando, auch wenn es nur `--json` ausgibt.
-  Diese Regel ist so wichtig, dass sie einen eigenen ADR hat: ADR-0018.
-- Die Exit-Codes sind öffentliches Verhalten und regressionsgetestet. Die
-  Escape-Tests und die Demo-Skripte benutzen die CLI statt Ad-hoc-Skripten und
-  sind damit gleichzeitig ihr Test.
-- `AgentAdapter` braucht `is_fullscreen_tui()`, damit `--ask terminal` seine
-  Vorbedingung prüfen kann.
-- `humanitl run` ist der Standardweg ohne Flags: aktuelles Verzeichnis als
-  `/work`, gefundener LLM-Server, OpenCode aus dem `PATH`.
-- Die CLI-Flags werden aus dem Config-Schema erzeugt (ADR-0011), damit
-  Flag-Name und Konfigurationsschlüssel nie auseinanderlaufen.
+- The state of a session lives in the daemon. Clients are stateless enough to
+  disappear and come back at any time.
+- Every capability needs a CLI subcommand, even if it only prints `--json`.
+  This rule is so important that it has its own ADR: ADR-0018.
+- The exit codes are public behaviour and regression-tested. The
+  escape tests and the demo scripts use the CLI instead of ad hoc scripts and
+  are thus its test at the same time.
+- `AgentAdapter` needs `is_fullscreen_tui()` so that `--ask terminal` can check its
+  precondition.
+- `humanitl run` is the standard path without flags: current directory as
+  `/work`, discovered LLM server, OpenCode from the `PATH`.
+- The CLI flags are generated from the config schema (ADR-0011), so that
+  flag name and configuration key never drift apart.
 
-## Betroffene Issues
+## Affected issues
 
-`HUM-064` (CLI-Grundgerüst mit clap und Sandbox-Unterkommandos), `HUM-067`
-(`humanitl run` mit `--ask terminal`/`--ask none` und Übernahme durch die
-Oberfläche), `HUM-065` (`humanitl rules|flows`), `HUM-070` (`humanitl
-config|audit|daemon`), `HUM-066` (Profile `default` und `llm-only`),
+`HUM-064` (CLI skeleton with clap and sandbox subcommands), `HUM-067`
+(`humanitl run` with `--ask terminal`/`--ask none` and takeover by the
+interface), `HUM-065` (`humanitl rules|flows`), `HUM-070` (`humanitl
+config|audit|daemon`), `HUM-066` (profiles `default` and `llm-only`),
 `HUM-075` (`humanitl doctor --json`).

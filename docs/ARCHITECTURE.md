@@ -1,125 +1,125 @@
-# Humanitl — Architektur-Leitbild
+# Humanitl — Architecture principles
 
 Applies to: Humanitl 0.1
 
-> Zweck: Die Software soll von Anfang an in eine Form hineinwachsen, die auch bei jahrelangem Hobby-Wachstum nicht historisch wuchert. Gleichzeitig soll der Code so schmal wie möglich bleiben. Dieses Dokument legt fest, wie beides zusammengeht. Es ergänzt `BACKLOG.md` (Entscheidungen, Plan) und `backlog/CONVENTIONS.md` (kanonische Namen).
+> Purpose: From the start, the software should grow into a shape that does not sprawl historically even after years of hobby growth. At the same time the code should stay as lean as possible. This document fixes how both go together. It complements `BACKLOG.md` (decisions, plan) and `backlog/CONVENTIONS.md` (canonical names).
 
-## 1. Die drei Sätze
+## 1. The three sentences
 
-1. **Ein Kern, der nichts von der Welt weiß.** Alles, was Humanitl *bedeutet* (Flow-Lebenszyklus, Regeln, Findings, Diagnostics, Audit-Kette), lebt in Crates ohne IO, ohne async, ohne Protobuf. Diese Crates sind pure Funktionen über Werttypen und lassen sich tabellengetrieben testen.
-2. **Ein Ereignisstrom als Rückgrat.** Jede Zustandsänderung eines Flows wird zu einem `FlowEvent`. UI, CLI, Recorder, Audit und spätere Plugins sind Konsumenten dieses Stroms. Niemand fragt den Proxy nach seinem Zustand, alle hören zu.
-3. **Eine öffentliche Schnittstelle.** Die gRPC-Proto `humanitl.v1` ist die einzige Art, mit dem Daemon zu reden. UI, CLI, Tests und Plugins sind gleichberechtigte Clients. Es gibt keinen Hintereingang für „nur mal schnell".
+1. **A core that knows nothing about the world.** Everything Humanitl *means* (flow lifecycle, rules, findings, Diagnostics, audit chain) lives in crates without IO, without async, without Protobuf. These crates are pure functions over value types and can be tested table-driven.
+2. **An event stream as the backbone.** Every state change of a flow becomes a `FlowEvent`. UI, CLI, recorder, audit and later plugins are consumers of this stream. Nobody asks the proxy for its state; everyone listens.
+3. **One public interface.** The gRPC proto `humanitl.v1` is the only way to talk to the daemon. UI, CLI, tests and plugins are clients with equal rights. There is no back door for "just quickly".
 
-## 2. Schichten und Abhängigkeitsrichtung
+## 2. Layers and dependency direction
 
 ```
                     ┌────────────────────────────────────────────┐
-  Adapter (außen)   │ ipc (tonic)  sandbox/bwrap  proxy/hudsucker │  IO, async, Fremdbibliotheken
+  Adapters (outer)  │ ipc (tonic)  sandbox/bwrap  proxy/hudsucker │  IO, async, third-party libraries
                     │ recorder/sqlite  catalog/files  cli/clap    │
                     │ audit-log/jsonl                             │
                     └───────────────────┬────────────────────────┘
-                                        │ darf nach innen
+                                        │ may point inwards
                     ┌───────────────────▼────────────────────────┐
-  Anwendung         │ Session-Orchestrierung, Hold-Queue,         │  async, aber nur über Ports
-                    │ Policy-Entscheidung (Regel → Verdict → Hold)│
+  Application       │ session orchestration, hold queue,          │  async, but only via ports
+                    │ policy decision (rule → verdict → hold)     │
                     └───────────────────┬────────────────────────┘
                                         │
                     ┌───────────────────▼────────────────────────┐
-  Kern (innen)      │ core-types  rules  findings  audit  config  │  kein IO, kein async, kein Proto
+  Core (inner)      │ core-types  rules  findings  audit  config  │  no IO, no async, no proto
                     └────────────────────────────────────────────┘
 ```
 
-Regeln:
+Rules:
 
-- Abhängigkeiten zeigen nur nach innen. Der Kern importiert nichts aus Anwendung oder Adaptern. Die Anwendung kennt Adapter nur als Traits (Ports).
-- Ein Port ist ein Trait im Kern oder in der Anwendung; ein Adapter ist seine Implementierung außen. Im MVP hat jeder Port genau eine Implementierung. Ein zweiter Adapter (Docker, macOS, externes Plugin) berührt Kern und Anwendung nicht.
-- Erzwungen durch CI: `cargo deny` für Lizenzen und Duplikate, ein Skript `tools/check-deps.sh`, das den Cargo-Graphen gegen die erlaubte Richtung prüft (aus `backlog/CONVENTIONS.md` 3.1), `#![deny(missing_docs)]` in allen Bibliotheks-Crates und, für die Kern-Crates in `[core]` von `tools/deps-allow.toml`, das Verbot der Abhängigkeiten in `[core].forbidden` samt einer Quelltextprüfung gegen die Muster in `[core].source` (Dateien, Laufzeit, eigene Threads und Prozesse, Sockets; HUM-155).
+- Dependencies point inwards only. The core imports nothing from the application or the adapters. The application knows adapters only as traits (ports).
+- A port is a trait in the core or in the application; an adapter is its implementation outside. In the MVP every port has exactly one implementation. A second adapter (Docker, macOS, external plugin) touches neither core nor application.
+- Enforced by CI: `cargo deny` for licences and duplicates, a script `tools/check-deps.sh` that checks the Cargo graph against the allowed direction (from `backlog/CONVENTIONS.md` 3.1), `#![deny(missing_docs)]` in all library crates and, for the core crates in `[core]` of `tools/deps-allow.toml`, the ban on the dependencies in `[core].forbidden` together with a source check against the patterns in `[core].source` (files, runtime, own threads and processes, sockets; HUM-155).
 
-Ports (verbindliche Liste, vollständig für den MVP):
+Ports (binding list, complete for the MVP):
 
-| Port | Wo definiert | MVP-Adapter | Spätere Adapter |
+| Port | Defined in | MVP adapter | Later adapters |
 |---|---|---|---|
 | `SandboxBackend` | sandbox | bwrap | docker, seatbelt, microvm |
 | `AgentAdapter` | core | opencode | aider, codex, claude-code |
 | `Detector` | findings | regex/checksum | presidio-grpc, wasm |
-| `FlowStore` | recorder | sqlite | postgres (Team) |
+| `FlowStore` | recorder | sqlite | postgres (team) |
 | `AuditSink` | audit | jsonl-hashchain | remote-anchor |
 | `CatalogSource` | catalog | bundled-yaml | user-yaml, team-url |
-| `Resolver` | proxy | hickory (nach Allow) | doh |
+| `Resolver` | proxy | hickory (after allow) | doh |
 | `Egress` | proxy | direct | http-proxy, socks5h (Tor) |
-| `Bridge` (Shim) | sandbox | proxy-socket | cdp-socket (Browser) |
-| `AskChannel` | Anwendung | grpc-ui, terminal, none | plugin |
+| `Bridge` (shim) | sandbox | proxy-socket | cdp-socket (browser) |
+| `AskChannel` | application | grpc-ui, terminal, none | plugin |
 
-## 3. Der Flow-Lebenszyklus als Zustandsautomat
+## 3. The flow lifecycle as a state machine
 
 ```
 Received ──analyze──▶ Analyzed ──evaluate──▶ Held ──decide──▶ Decided ──▶ Forwarded ──▶ Responded ──▶ Recorded
                           │                    │                 ▲
-                          │ (Regel: allow)     │ (Timeout)       │
+                          │ (rule: allow)      │ (timeout)       │
                           └────────────────────┴─────────────────┘
-                          (Regel: block) ─────────────────────────▶ Decided(Block) ──▶ Recorded
+                          (rule: block) ──────────────────────────▶ Decided(Block) ──▶ Recorded
 ```
 
-- Der Automat ist ein `enum` mit einer Methode `on(self, &FlowEvent) -> Result<Self, InvalidTransition>`. Es gibt keinen anderen Weg, den Zustand zu ändern. Ungültige Übergänge sind Bugs und werden im Test vollständig aufgezählt.
-- Der Proxy-Handler *treibt* den Automaten, er *besitzt* ihn nicht. Er ruft `on`, veröffentlicht das Event, und wartet gegebenenfalls auf die Entscheidung. Damit ist der Handler dünn und die Logik testbar ohne Netzwerk.
-- Timeouts sind Events (`TimedOut`), keine Sonderpfade.
+- The state machine is an `enum` with a method `on(self, &FlowEvent) -> Result<Self, InvalidTransition>`. There is no other way to change the state. Invalid transitions are bugs and are enumerated completely in the test.
+- The proxy handler *drives* the state machine; it does not *own* it. It calls `on`, publishes the event and, where needed, waits for the decision. This keeps the handler thin and the logic testable without a network.
+- Timeouts are events (`TimedOut`), not special paths.
 
-## 3b. Parität von UI und CLI
+## 3b. Parity of UI and CLI
 
-Jede Fähigkeit existiert genau einmal, als RPC im Daemon. UI und CLI sind austauschbare, dünne Clients derselben Proto. Regeln: ein neuer RPC bringt sein CLI-Subkommando im selben Issue mit; die UI-Entsprechung folgt spätestens im nächsten Sprint; `docs/reference/parity.md` wird generiert und in CI geprüft (ADR-018). Fachlogik in `app/` oder `bin/humanitl` ist ein Architekturverstoß, auch wenn sie klein ist. Der gängige Anwendungsfall ist als Profil `default` vollständig beschrieben; Anpassung ändert Werte, nie Code.
+Every capability exists exactly once, as an RPC in the daemon. UI and CLI are interchangeable, thin clients of the same proto. Rules: a new RPC brings its CLI subcommand along in the same issue; the UI counterpart follows in the next sprint at the latest; `docs/reference/parity.md` is generated and checked in CI (ADR-018). Domain logic in `app/` or `bin/humanitl` is an architecture violation, even when it is small. The common use case is fully described as the profile `default`; customisation changes values, never code.
 
-## 4. Code-Sparsamkeit, konkret
+## 4. Code frugality, concretely
 
-Wachstum ist erlaubt, Wucherung nicht. Die Unterscheidung:
+Growth is allowed, sprawl is not. The distinction:
 
-- **Kein Trait ohne zweiten Nutzer in Sicht.** Die Port-Liste oben ist abgeschlossen. Wer einen neuen Port will, schreibt zuerst einen ADR mit dem konkreten zweiten Adapter.
-- **Keine Abstraktion über Fremdbibliotheken.** hudsucker, tonic, rusqlite werden direkt benutzt, in *einer* Crate. Wenn die Bibliothek wechselt, wechselt diese eine Crate.
-- **Werttypen statt Strings.** `HostName`, `FlowId`, `DiagnosticCode` sind Typen. Ein `String` an einer Signatur ist ein Code-Smell, außer er ist wirklich Freitext.
-- **Fehler sind Werte mit Bedeutung.** `Diagnostic` überall, wo ein Mensch die Ursache sehen könnte. `thiserror` pro Crate, kein `anyhow` in Bibliotheks-Crates, `anyhow` nur in `main`.
-- **Eine Konfigurationsquelle.** Settings sind Rust-Typen mit Schema. UI, CLI und Doku werden daraus erzeugt, nie parallel gepflegt.
-- **Dünne Binaries.** `humanitld` und `humanitl` sind Verdrahtung, keine Logik. Wenn in `main.rs` ein `if` steht, das eine Fachentscheidung trifft, ist es am falschen Ort.
-- **Generierter Code ist kein Quellcode.** Proto-Ausgaben, riverpod- und freezed-Ausgaben sind gitignored und werden in CI erzeugt. Drift bricht den Build.
-- **Löschen ist eine Feature.** Jeder Sprint endet mit einem Blick auf `experimental`-Flags und ungenutzte Pfade. Was seit zwei Sprints niemand nutzt, fliegt.
+- **No trait without a second user in sight.** The port list above is closed. Anyone who wants a new port first writes an ADR with the concrete second adapter.
+- **No abstraction over third-party libraries.** hudsucker, tonic, rusqlite are used directly, in *one* crate. If the library changes, that one crate changes.
+- **Value types instead of strings.** `HostName`, `FlowId`, `DiagnosticCode` are types. A `String` in a signature is a code smell, unless it really is free text.
+- **Errors are values with meaning.** `Diagnostic` everywhere a human could see the cause. `thiserror` per crate, no `anyhow` in library crates, `anyhow` only in `main`.
+- **One configuration source.** Settings are Rust types with a schema. UI, CLI and docs are generated from them, never maintained in parallel.
+- **Thin binaries.** `humanitld` and `humanitl` are wiring, not logic. If `main.rs` contains an `if` that makes a domain decision, it is in the wrong place.
+- **Generated code is not source code.** Proto output, riverpod and freezed output are gitignored and generated in CI. Drift breaks the build.
+- **Deleting is a feature.** Every sprint ends with a look at `experimental` flags and unused paths. What nobody has used for two sprints goes.
 
-## 5. Flutter-Seite, dieselben Regeln
+## 5. Flutter side, same rules
 
-- `core/domain` sind freezed-Werttypen, Spiegel der Rust-Kerntypen, ohne Flutter-Import.
-- `core/ipc` ist ein Interface `DaemonClient` mit zwei Implementierungen: gRPC und Fake. Jeder Screen ist gegen das Interface gebaut, jeder Widget-Test läuft gegen Fake.
-- Dort liegt seit HUM-044 auch der **Zustand der Leitung** (`core/ipc/connection.dart`): `ConnectionStatus` und das Prädikat `linkLiveProvider`, das sagt, ob der Daemon gerade antwortet. Er lag vorher unter `features/shell`, aber die Warteschlange und der Ereignisstrom brauchen dieselbe Frage und dürfen `features/shell` nicht importieren (Abschnitt 5, erzwungen von `tools/check-deps.sh`). Eine Frage, die mehr als ein Feature stellt, gehört nach `core` — sonst wird sie an jeder Stelle neu und ein bisschen anders beantwortet, und genau das hatte fünf Befunde zur Folge.
-- Aus demselben Grund steht seit HUM-044 auch die **UI-Uhr** in `core` (`core/time/now.dart`): `nowProvider` ist der eine Ticker, aus dem jedes Label, jeder Countdown und jede Laufzeit ihre Sekunde liest (`docs/UX.md` 7, „Zwei Uhren, nicht eine"). Sie lag unter `features/intercept`, solange nur die Warteschlange sie brauchte; die Laufzeit der Sandbox liest jetzt dieselbe, damit beide zugleich stehenbleiben, wenn die Verbindung bricht. Der alte Pfad exportiert die Datei weiter.
-- Seit HUM-116 steht auch die **Rumpf-Ansicht** in `core` (`core/body/`): `BodyView` mit Baum, Formular, Roh und Hex, samt Auspacken und Zerlegen. Die Warteschlange zeigt damit den Rumpf der Anfrage, die History Anfrage und Antwort, und beide holen die Bytes über `flowBodyProvider` (`core/body/flow_body_provider.dart`), den einen Rumpf-Provider (`backlog/CONVENTIONS.md` 3.9). Er liegt bei der Ansicht und nicht in `core/ipc`, weil er deren Typen liefert (`RawBody`, `BodyKind`); `core/ipc` bleibt der Transport und importiert nichts aus `core/body`. Was die Bildschirme unterscheidet, reichen sie herein: die Kopfzeilen der Seite, zu der der Rumpf gehört, und die Funde. Ihr Detail lesen sie weiter aus je eigenem Provider.
-- Features sind Verzeichnisse mit Screen, Providern, Widgets. Ein Feature importiert kein anderes Feature, nur `core`. Übergreifende Widgets liegen in `packages/ui`.
-- Zustand fließt in eine Richtung: Event-Stream → Provider → Widget. Widgets rufen `DaemonClient` nur über Provider-Methoden auf (Mutationen), nie direkt.
-- Das Widget-Vokabular steht in `packages/ui` und baut auf `shadcn_flutter` (ADR-0009, Abschnitt „Revidiert am 2026-09-04 durch den Projekteigentümer"). Nur dieses Paket importiert die Bibliothek; ein Feature importiert `lib/core/ui/ui.dart`, nie ein fremdes Widget-Paket. `tools/check-deps.sh` prüft beides.
+- `core/domain` are freezed value types, mirrors of the Rust core types, without a Flutter import.
+- `core/ipc` is an interface `DaemonClient` with two implementations: gRPC and fake. Every screen is built against the interface, every widget test runs against the fake.
+- Since HUM-044 the **state of the connection** also lives there (`core/ipc/connection.dart`): `ConnectionStatus` and the predicate `linkLiveProvider`, which says whether the daemon is answering right now. It used to live under `features/shell`, but the queue and the event stream need the same question answered and may not import `features/shell` (section 5, enforced by `tools/check-deps.sh`). A question that more than one feature asks belongs in `core` — otherwise it is answered anew, and a little differently, in every place, and exactly that had led to five findings.
+- For the same reason the **UI clock** has also lived in `core` since HUM-044 (`core/time/now.dart`): `nowProvider` is the one ticker from which every label, every countdown and every running time reads its second (`docs/UX.md` 7, "Two clocks, not one"). It lived under `features/intercept` as long as only the queue needed it; the sandbox's running time now reads the same one, so that both stop at the same moment when the connection breaks. The old path still exports the file.
+- Since HUM-116 the **body view** also lives in `core` (`core/body/`): `BodyView` with tree, form, raw and hex, including unpacking and parsing. With it the queue shows the body of the request, the history request and response, and both fetch the bytes through `flowBodyProvider` (`core/body/flow_body_provider.dart`), the one body provider (`backlog/CONVENTIONS.md` 3.9). It lives with the view and not in `core/ipc`, because it delivers the view's types (`RawBody`, `BodyKind`); `core/ipc` stays the transport and imports nothing from `core/body`. What distinguishes the screens they pass in: the headers of the side the body belongs to, and the findings. They keep reading their detail from a provider of their own.
+- Features are directories with screen, providers, widgets. A feature imports no other feature, only `core`. Cross-cutting widgets live in `packages/ui`.
+- State flows in one direction: event stream → provider → widget. Widgets call `DaemonClient` only through provider methods (mutations), never directly.
+- The widget vocabulary lives in `packages/ui` and builds on `shadcn_flutter` (ADR-0009, section "Revised on 2026-09-04 by the project owner"). Only this package imports the library; a feature imports `lib/core/ui/ui.dart`, never a third-party widget package. `tools/check-deps.sh` checks both.
 
-## 6. Tests als Architektur-Wächter
+## 6. Tests as architecture guards
 
-| Ebene | Was sie schützt | Wo |
+| Level | What it protects | Where |
 |---|---|---|
-| Unit, tabellengetrieben | Kern-Semantik (Globs, Übergänge, Hash-Kette, Config-Präzedenz) | `crates/*/src`, `#[cfg(test)]` |
-| Integration in-process | Proxy-Handler gegen axum-Fake-Upstream, kein Subprozess | `crates/proxy/tests` |
-| Escape (privilegiert) | Die drei Garantien | `tests/escape`, eigener CI-Job |
-| Widget + Golden | UI-Zustände gegen Fake-Daemon | `app/test` |
-| e2e | Ein Nutzerweg pro Milestone | `tests/e2e`, xvfb |
-| Fuzz (nightly) | Parser und Decoder | `daemon/fuzz` |
-| Dependency-Lint | Abhängigkeitsrichtung | `tools/check-deps.sh` |
+| Unit, table-driven | Core semantics (globs, transitions, hash chain, config precedence) | `crates/*/src`, `#[cfg(test)]` |
+| Integration in-process | Proxy handler against an axum fake upstream, no subprocess | `crates/proxy/tests` |
+| Escape (privileged) | The three guarantees | `tests/escape`, own CI job |
+| Widget + golden | UI states against the fake daemon | `app/test` |
+| e2e | One user path per milestone | `tests/e2e`, xvfb |
+| Fuzz (nightly) | Parsers and decoders | `daemon/fuzz` |
+| Dependency lint | Dependency direction | `tools/check-deps.sh` |
 
-Regel: Ein Bug bekommt zuerst einen Test auf der niedrigsten Ebene, auf der er reproduzierbar ist.
+Rule: a bug first gets a test on the lowest level at which it can be reproduced.
 
-## 7. Was wir bewusst nicht tun
+## 7. What we deliberately do not do
 
-- Kein Event Sourcing des In-Memory-Zustands. Events sind Ausgabe, nicht Wahrheit. Wahrheit ist der Automat plus SQLite.
-- Kein Plugin-System im MVP. Nur die Ports. Plugins kommen als externe gRPC-Clients, wenn drei echte Bedarfe dokumentiert sind.
-- Keine Mikroservices. Ein Daemon, ein UI, ein CLI. Trennung durch Crates, nicht durch Prozesse, mit einer Ausnahme: der Shim in der Sandbox, weil er ohne tokio und ohne Abhängigkeiten sein muss.
-- Keine eigene Kryptographie. rustls, rcgen, sha2, hmac, aes-gcm aus RustCrypto, keyring.
+- No event sourcing of the in-memory state. Events are output, not truth. Truth is the state machine plus SQLite.
+- No plugin system in the MVP. Only the ports. Plugins come as external gRPC clients once three real needs are documented.
+- No microservices. One daemon, one UI, one CLI. Separation by crates, not by processes, with one exception: the shim in the sandbox, because it has to be without tokio and without dependencies.
+- No home-grown cryptography. rustls, rcgen, sha2, hmac, aes-gcm from RustCrypto, keyring.
 
-## 8. Der Agent in der Sandbox (Bewusstsein und Feedback)
+## 8. The agent in the sandbox (awareness and feedback)
 
-Der Agent soll mit möglichst wenigen Token wissen, wo er ist, und auf Rückmeldungen reagieren können. Alles läuft über den einen vorhandenen Kanal, den Proxy-Socket. Kein neuer Kanal, keine neue Garantie-Lücke.
+The agent should know where it is with as few tokens as possible and be able to react to feedback. Everything runs over the one existing channel, the proxy socket. No new channel, no new gap in the guarantees.
 
-1. **Briefing.** Der `AgentAdapter` legt in der Sandbox eine globale Instruktionsdatei an (OpenCode: `~/.config/opencode/AGENTS.md`, Claude Code: `~/.claude/CLAUDE.md`), nie im Projektverzeichnis. Inhalt ist eine gebündelte Vorlage von etwa 150 Token, in der Sprache des Nutzers. Kernaussagen: kein direkter Internetzugang; jede HTTP-Anfrage geht durch einen Proxy, ein Mensch entscheidet; Warten ist normal, nicht abbrechen; eine Antwort `403` mit `Blocked by Humanitl` ist endgültig, nicht wiederholen, stattdessen den Nutzer informieren und eine Alternative vorschlagen; Statusabfrage unter `http://humanitl.internal/`.
-2. **Feedback beim Blocken.** Die Aktionsleiste hat ein optionales Notizfeld. Der Text landet im 403-Body unter `note:` und im Header `X-Humanitl-Note`. Der Agent sieht ihn im Tool-Ergebnis und kann reagieren („Nutze PyPI statt GitHub").
-3. **Meta-Endpoint.** Der Proxy bedient den virtuellen Host `humanitl.internal` selbst, ohne Upstream, nur `GET` und `POST` mit kleinen Text-Antworten: `/` Kurzstatus und die aktuell gültigen Regeln in einer Zeile pro Regel; `/why/<flow-id>` Begründung einer Entscheidung; `/ask` mit Freitext-Body, erscheint im UI als Karte „Der Agent bittet um …" mit Regel-Vorschlag. Der Endpoint ist read-mostly, `/ask` erzeugt nur eine UI-Karte, nie eine Regel.
-4. **Sichtbarkeit im Terminal.** Wenn ein Request gehalten wird, schreibt der Daemon eine Zeile in das Terminal des Agenten (über den PTY-Stream, als Statuszeile, nicht in stdin). So sieht der Mensch am Agenten, was gerade hängt.
+1. **Briefing.** The `AgentAdapter` places a global instruction file in the sandbox (OpenCode: `~/.config/opencode/AGENTS.md`, Claude Code: `~/.claude/CLAUDE.md`), never in the project directory. Its content is a bundled template of about 150 tokens, in the user's language. Key statements: no direct internet access; every HTTP request goes through a proxy, a human decides; waiting is normal, do not abort; a response `403` with `Blocked by Humanitl` is final, do not retry, inform the user instead and suggest an alternative; status query at `http://humanitl.internal/`.
+2. **Feedback on blocking.** The action bar has an optional note field. The text ends up in the 403 body under `note:` and in the header `X-Humanitl-Note`. The agent sees it in the tool result and can react ("Use PyPI instead of GitHub").
+3. **Meta endpoint.** The proxy serves the virtual host `humanitl.internal` itself, without an upstream, only `GET` and `POST` with small text responses: `/` short status and the currently valid rules, one line per rule; `/why/<flow-id>` the reason for a decision; `/ask` with a free-text body, appears in the UI as a card "The agent asks for …" with a rule suggestion. The endpoint is read-mostly; `/ask` only creates a UI card, never a rule.
+4. **Visibility in the terminal.** When a request is held, the daemon writes a line into the agent's terminal (over the PTY stream, as a status line, not into stdin). This way the human at the agent sees what is currently pending.
 
-Was das nicht ist: Der Agent bekommt keine Möglichkeit, Regeln anzulegen, Entscheidungen zu beeinflussen oder den Nutzer zu umgehen. `/ask` ist eine Bitte, keine Aktion.
+What this is not: the agent gets no way to create rules, influence decisions or bypass the user. `/ask` is a request, not an action.
