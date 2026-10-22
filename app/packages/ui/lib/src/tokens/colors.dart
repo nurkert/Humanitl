@@ -211,6 +211,16 @@ abstract final class HColors {
   /// Zustandsfarbe als Text steht (`docs/UX.md` 6).
   static const double fillHoldAlpha = 0.20;
 
+  /// Deckkraft des Rings, den ein gedrücktes Akzent-Control innen an seiner
+  /// Kante trägt (HUM-272).
+  ///
+  /// Der Ring ist [onAccent] in dieser Deckkraft über der Druckfüllung. Der
+  /// Entwurf des Owners nannte 50 Prozent; das misst auf dem hellen Druck
+  /// nur 2,23:1 und auf dem dunklen 2,82:1, und ein Ring, der einen Zustand
+  /// trägt, ist ein Bestandteil einer Bedienung und braucht 3:1 (WCAG
+  /// 1.4.11). Bei 75 Prozent misst er 3,35:1 hell und 5,19:1 dunkel.
+  static const double pressedRingAlpha = 0.75;
+
   // --- Method hues (never a state) ------------------------------------------
 
   /// `GET` and `HEAD`.
@@ -479,6 +489,291 @@ abstract final class HColorDerivation {
     assert(beneath < 1, 'nothing composes over an opaque layer');
     return (target - beneath) / (1 - beneath);
   }
+
+  // --- Hover und Druck gefüllter Controls (HUM-272) -------------------------
+
+  /// Der kleinste Abstand in OKLab zwischen Ruhe und Hover eines gefüllten
+  /// Controls.
+  ///
+  /// Rund 0,02 ist die kleinste Differenz, die man nebeneinander noch sieht;
+  /// ein Zustandswechsel unter dem Zeiger steht nicht neben seinem Vorgänger,
+  /// sondern folgt ihm, und braucht deshalb das Doppelte. Bis HUM-272 lag der
+  /// Primärbutton im hellen Theme bei 0,011 und 0,012 und im dunklen beim
+  /// Hover bei 0,020: der Ocker sitzt in einem schmalen Helligkeitsfenster
+  /// (4,5:1 für [HColors.onAccent], 3:1 als Fläche auf `lBg3`), und ein
+  /// Schritt, der nur die Helligkeit verschiebt, findet darin keinen Platz.
+  static const double interactionStepMin = 0.04;
+
+  /// Der kleinste Abstand in OKLab, den der Druck als Farbe von Hover und
+  /// von Ruhe hält.
+  ///
+  /// Kleiner als [interactionStepMin], und das ist eine Entscheidung, kein
+  /// Nachlass: den Schritt in den Druck trägt der Ring
+  /// ([HColors.pressedRingAlpha]), die Farbe trägt nur einen Teil. Der Owner
+  /// hat am 2026-10-22 einen Druck nahe am Ocker mit Ring einem Druck in
+  /// Orange ohne Ring vorgezogen (HUM-272, Variante V2). Die Untergrenze hält
+  /// die Farbe trotzdem über der Sichtbarkeitsschwelle, auch für eine Taste,
+  /// die ohne Hover von der Ruhe in den Druck springt.
+  static const double interactionJumpMin = 0.025;
+
+  /// Wie weit Hover und Druck die OKLab-Helligkeit verschieben wollen: der
+  /// Hover vom Wort weg, der Druck zum Wort hin.
+  ///
+  /// Ein Wunsch, keine Zusage: [fillHover] und [fillPressed] nehmen die
+  /// Helligkeit, die diesem Wunsch am nächsten liegt und Wort und Fläche ihre
+  /// Grenzen lässt.
+  static const double fillStepLightness = 0.04;
+
+  /// Der Faktor auf die Buntheit beim Hover: kräftiger, nicht blasser.
+  ///
+  /// Ein blasser Hover (Faktor 0,75, der erste Entwurf von HUM-272) wirkte im
+  /// hellen Theme khakifarben, fast wie ein abgeschaltetes Control.
+  static const double fillHoverChroma = 1.15;
+
+  /// Der Faktor auf die Buntheit beim Druck: noch einmal satter.
+  static const double fillPressedChroma = 1.3;
+
+  /// Wie viel Grad der Druck über die Drehung des Hovers hinaus zum Warmen
+  /// dreht: eine Spur, damit er tiefer wirkt und nahe am Ocker bleibt.
+  static const double fillPressedHueStep = 4;
+
+  /// Die größte Drehung des Farbtons zum Warmen hin, in Grad.
+  ///
+  /// Die Ableitung dreht nur so weit, wie der Schritt es braucht: im dunklen
+  /// Theme reicht die Helligkeit, und der Hover bleibt gelb (0°); im engen
+  /// Fenster des Ockers muss der Ton zum Orange hin (rund 13° beim Hover,
+  /// 17° beim Druck).
+  static const double fillMaxHueShift = 40;
+
+  /// Die Reserve über [interactionStepMin] und [interactionJumpMin], damit
+  /// das Runden auf acht Bit einen Schritt nicht unter die Grenze drückt.
+  static const double _stepMargin = 0.002;
+
+  /// Die Schrittweite der Helligkeitssuche.
+  static const double _lightnessStep = 0.001;
+
+  /// Wie weit die Helligkeitssuche höchstens von der Ruhe weggeht.
+  static const double _lightnessReach = 0.1;
+
+  /// Die Füllung eines überfahrenen Controls, das [text] auf [fill] schreibt.
+  ///
+  /// Heller, vom Wort weg, und satter. Die Helligkeit allein reicht nicht: im
+  /// hellen Theme lässt das Fenster zwischen 4,5:1 für das Wort und 3:1 als
+  /// Fläche auf [surfaces] nur rund 0,03 OKLab-Helligkeit. Buntheit und Ton
+  /// gehen in keine der beiden Kontrastgrenzen ein und geben den Rest: der
+  /// Ton dreht Grad um Grad zum Warmen, bis der Abstand zur Ruhe
+  /// [interactionStepMin] erreicht.
+  ///
+  /// Findet sich kein solcher Schritt, kommt [fill] unverändert zurück. Der
+  /// Token-Test meldet das laut, statt dass ein Hover still aussieht wie die
+  /// Ruhe.
+  static Color fillHover(Color fill, Color text, List<Color> surfaces) =>
+      _hover(fill, text, surfaces).$1;
+
+  /// Die Füllung eines gedrückten Controls, das [text] auf [fill] schreibt.
+  ///
+  /// Zum Wort hin, so weit es die 4,5:1 zulassen, satter als der Hover und
+  /// [fillPressedHueStep] wärmer; weiter nur, wenn es braucht, um
+  /// [interactionJumpMin] von Hover und Ruhe entfernt zu liegen. Den Rest des
+  /// Schritts trägt der Ring. Ohne solchen Schritt kommt [fill] zurück, wie
+  /// bei [fillHover].
+  static Color fillPressed(Color fill, Color text, List<Color> surfaces) {
+    final (Color hover, double hoverHue) = _hover(fill, text, surfaces);
+    if (hover == fill) {
+      return fill;
+    }
+    final double away = _awayFromText(fill, text);
+    for (
+      double hue = hoverHue + fillPressedHueStep;
+      hue <= fillMaxHueShift;
+      hue++
+    ) {
+      final Color? candidate = _fillStep(
+        fill,
+        text,
+        surfaces,
+        lightness: -fillStepLightness * away,
+        chroma: fillPressedChroma,
+        hue: -hue,
+      );
+      if (candidate != null &&
+          perceivedDistance(hover, candidate) >=
+              interactionJumpMin + _stepMargin &&
+          perceivedDistance(fill, candidate) >=
+              interactionJumpMin + _stepMargin) {
+        return candidate;
+      }
+    }
+    return fill;
+  }
+
+  /// Der Ring eines gedrückten Controls: [text] mit
+  /// [HColors.pressedRingAlpha] über [pressed], opak gerechnet.
+  static Color pressedRing(Color pressed, Color text) =>
+      flatten(text.withValues(alpha: HColors.pressedRingAlpha), pressed);
+
+  /// [fillHover] samt der Drehung des Tons in Grad, die er gebraucht hat.
+  static (Color, double) _hover(Color fill, Color text, List<Color> surfaces) {
+    final double away = _awayFromText(fill, text);
+    for (double hue = 0; hue <= fillMaxHueShift; hue++) {
+      final Color? candidate = _fillStep(
+        fill,
+        text,
+        surfaces,
+        lightness: fillStepLightness * away,
+        chroma: fillHoverChroma,
+        hue: -hue,
+      );
+      if (candidate != null &&
+          perceivedDistance(fill, candidate) >=
+              interactionStepMin + _stepMargin) {
+        return (candidate, hue);
+      }
+    }
+    return (fill, 0);
+  }
+
+  /// Der Abstand von [a] und [b] in OKLab (Björn Ottosson, 2020).
+  static double perceivedDistance(Color a, Color b) {
+    final List<double> pa = toOklab(a);
+    final List<double> pb = toOklab(b);
+    double sum = 0;
+    for (int i = 0; i < 3; i++) {
+      sum += (pa[i] - pb[i]) * (pa[i] - pb[i]);
+    }
+    return math.sqrt(sum);
+  }
+
+  /// [color] in OKLab als `[L, a, b]`; das Alpha zählt nicht.
+  static List<double> toOklab(Color color) {
+    final double r = _decode(color.r);
+    final double g = _decode(color.g);
+    final double b = _decode(color.b);
+    final double l = _cbrt(
+      0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b,
+    );
+    final double m = _cbrt(
+      0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b,
+    );
+    final double s = _cbrt(
+      0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b,
+    );
+    return <double>[
+      0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+      1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+      0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+    ];
+  }
+
+  /// +1, wenn das Wort dunkler ist als die Füllung (Hover hellt dann auf),
+  /// sonst −1. Gemessen und nicht übergeben, wie in [textVariant].
+  static double _awayFromText(Color fill, Color text) =>
+      text.computeLuminance() < fill.computeLuminance() ? 1 : -1;
+
+  /// [fill] in OKLCh um [chroma] (Faktor) und [hue] (Grad) gedreht, mit der
+  /// Helligkeit, die der Ruhe plus [lightness] am nächsten liegt und auf der
+  /// [text] 4,5:1 und die Füllung auf jeder der [surfaces] 3:1 hält.
+  ///
+  /// Gesucht wird nach beiden Seiten des Wunsches, weil ein wärmerer Ton bei
+  /// derselben OKLab-Helligkeit eine andere Leuchtdichte hat: das Fenster
+  /// liegt für Orange woanders als für Ocker. `null`, wenn keine Helligkeit
+  /// im Abstand [_lightnessReach] von der Ruhe passt.
+  static Color? _fillStep(
+    Color fill,
+    Color text,
+    List<Color> surfaces, {
+    required double lightness,
+    required double chroma,
+    required double hue,
+  }) {
+    final List<double> lab = toOklab(fill);
+    final double l0 = lab[0];
+    final double c = math.sqrt(lab[1] * lab[1] + lab[2] * lab[2]) * chroma;
+    final double h = math.atan2(lab[2], lab[1]) + hue * math.pi / 180;
+    final double target = l0 + lightness;
+    final int steps = (2 * _lightnessReach / _lightnessStep).round();
+    for (int k = 0; k <= steps; k++) {
+      for (final int side in k == 0 ? const <int>[0] : const <int>[-1, 1]) {
+        final double l = target + side * k * _lightnessStep;
+        // Außerhalb von 0 bis 1 gibt es keine Farbe; eine schwarze Füllung
+        // unter weißer Schrift will beim Hover genau dorthin.
+        if ((l - l0).abs() > _lightnessReach + 1e-9 || l < 0 || l > 1) {
+          continue;
+        }
+        final Color? candidate = _fromOklch(l, c, h);
+        if (candidate != null &&
+            contrast(candidate, text) >= textMinContrast &&
+            worstContrast(candidate, surfaces) >= areaMinContrast) {
+          return candidate;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Eine opake Farbe aus OKLCh; eine Buntheit außerhalb von sRGB wird auf
+  /// den Rand des Farbraums gekürzt, Helligkeit und Ton bleiben. `null`, wenn
+  /// selbst das Grau dieser Helligkeit nicht in sRGB liegt.
+  static Color? _fromOklch(double l, double chroma, double hue) {
+    List<double>? rgb = _oklabToSrgb(
+      l,
+      chroma * math.cos(hue),
+      chroma * math.sin(hue),
+    );
+    if (rgb == null) {
+      double lo = 0;
+      double hi = chroma;
+      for (int i = 0; i < 32; i++) {
+        final double mid = (lo + hi) / 2;
+        if (_oklabToSrgb(l, mid * math.cos(hue), mid * math.sin(hue)) == null) {
+          hi = mid;
+        } else {
+          lo = mid;
+        }
+      }
+      rgb = _oklabToSrgb(l, lo * math.cos(hue), lo * math.sin(hue));
+      if (rgb == null) {
+        return null;
+      }
+    }
+    int channel(double v) => (v * 255).round().clamp(0, 255);
+    return Color.fromARGB(
+      255,
+      channel(rgb[0]),
+      channel(rgb[1]),
+      channel(rgb[2]),
+    );
+  }
+
+  /// OKLab nach gamma-kodiertem sRGB in 0..1, oder `null` außerhalb von sRGB.
+  static List<double>? _oklabToSrgb(double l, double a, double b) {
+    final double l1 = l + 0.3963377774 * a + 0.2158037573 * b;
+    final double m1 = l - 0.1055613458 * a - 0.0638541728 * b;
+    final double s1 = l - 0.0894841775 * a - 1.2914855480 * b;
+    final double lc = l1 * l1 * l1;
+    final double mc = m1 * m1 * m1;
+    final double sc = s1 * s1 * s1;
+    final List<double> linear = <double>[
+      4.0767416621 * lc - 3.3077115913 * mc + 0.2309699292 * sc,
+      -1.2684380046 * lc + 2.6097574011 * mc - 0.3413193965 * sc,
+      -0.0041960863 * lc - 0.7034186147 * mc + 1.7076147010 * sc,
+    ];
+    const double eps = 1e-6;
+    if (linear.any((double v) => v < -eps || v > 1 + eps)) {
+      return null;
+    }
+    return <double>[for (final double v in linear) _encode(v.clamp(0, 1))];
+  }
+
+  static double _decode(double c) =>
+      c <= 0.04045 ? c / 12.92 : math.pow((c + 0.055) / 1.055, 2.4).toDouble();
+
+  static double _encode(double c) => c <= 0.0031308
+      ? 12.92 * c
+      : 1.055 * math.pow(c, 1 / 2.4).toDouble() - 0.055;
+
+  static double _cbrt(double x) =>
+      x < 0 ? -math.pow(-x, 1 / 3).toDouble() : math.pow(x, 1 / 3).toDouble();
 
   /// [color] as a background tint, at most [HColors.tintAlpha] of area alpha.
   static Color tint(Color color, [double alpha = HColors.tintAlpha]) =>

@@ -674,8 +674,16 @@ abstract final class HShadcnButtonStyle {
         return BoxDecoration(
           color: background,
           borderRadius: HRadius.controlRadius,
+          // Der Rahmen ist in jedem Zustand da, ein Pixel breit, und
+          // wechselt nur die Farbe: in Ruhe und unter dem Zeiger die Füllung
+          // selbst, im Druck der Ring (HUM-272). Eine Breite, die erst beim
+          // Druck entstünde, verschöbe die Beschriftung um einen Pixel.
           border: Border.all(
-            color: states.contains(WidgetState.disabled) ? c.line : background,
+            color: states.contains(WidgetState.disabled)
+                ? c.line
+                : states.contains(WidgetState.pressed)
+                ? c.accentPressedRing
+                : background,
           ),
         );
       case HShadcnButtonRole.secondary:
@@ -735,73 +743,19 @@ abstract final class HShadcnButtonStyle {
     }
   }
 
-  /// Die Schrittweite, in der Hover und Druck des Primärbuttons zurückweichen.
-  static const double _primaryStepBack = 0.005;
-
-  /// Wie weit sich die Füllung des Primärbuttons in Richtung [direction]
-  /// (`darken`-Vorzeichen: positiv dunkler, negativ heller) höchstens
-  /// verschieben darf, beginnend bei [limit]: so weit, wie das Wort darauf
-  /// 4,5:1 und die Füllung auf jeder Fläche der Leiter 3:1 behält. Null, wenn
-  /// schon der kleinste Schritt eine der beiden Grenzen bricht.
-  static double _primaryReach(
-    HSurfaceColors c,
-    double direction,
-    double limit,
-  ) {
-    for (
-      double a = limit;
-      a >= _primaryStepBack - 1e-9;
-      a -= _primaryStepBack
-    ) {
-      final Color candidate = HColorDerivation.darken(
-        c.accentFill,
-        direction * a,
-      );
-      if (HColorDerivation.contrast(candidate, c.onAccent) >=
-              HColorDerivation.textMinContrast &&
-          HColorDerivation.worstContrast(candidate, c.ladder) >=
-              HColorDerivation.areaMinContrast) {
-        return a;
-      }
-    }
-    return 0;
-  }
-
-  /// Die Richtung „vom Wort weg" als `darken`-Vorzeichen: gegen ein dunkles
-  /// Wort aufhellen (−1), gegen ein helles abdunkeln (+1).
-  static double _awayFromWord(HSurfaceColors c) =>
-      c.onAccent.computeLuminance() < c.accentFill.computeLuminance() ? -1 : 1;
-
-  /// Hover und Druck des Primärbuttons als `darken`-Beträge mit Vorzeichen.
-  ///
-  /// Seit HUM-260 steht in beiden Themes dunkler Text auf Gelb bzw. Ocker.
-  /// Die alte Regel „im hellen Theme beim Hover abdunkeln" setzte weißen Text
-  /// voraus und nahm dem dunklen Wort dort die 4,5:1 (gemessen 3,84:1).
-  ///
-  /// Der Druck geht zum Wort hin, wenn dort Platz für einen sichtbaren
-  /// Schritt ist (dunkles Theme: 0,06); der Hover geht vom Wort weg (0,04).
-  /// Im hellen Theme ist das Fenster eng — der Ocker muss als Fläche 3:1 auf
-  /// `lBg3` und für das Wort 4,5:1 halten —, und zum Wort hin bleibt kaum
-  /// Platz. Dort gehen beide vom Wort weg, der Druck so weit, wie die
-  /// Flächengrenze erlaubt, der Hover halb so weit, damit Hover und Druck nie
-  /// dieselbe Farbe tragen.
-  static (double hover, double pressed) _primarySteps(HSurfaceColors c) {
-    final double away = _awayFromWord(c);
-    final double towards = _primaryReach(c, -away, 0.06);
-    if (towards >= 0.03) {
-      return (away * _primaryReach(c, away, 0.04), -away * towards);
-    }
-    final double far = _primaryReach(c, away, 0.08);
-    return (away * far / 2, away * far);
-  }
-
   /// Die Füllung des überfahrenen Primärbuttons.
-  static Color _primaryHovered(HSurfaceColors c) =>
-      HColorDerivation.darken(c.accentFill, _primarySteps(c).$1);
+  ///
+  /// Seit HUM-260 steht in beiden Themes dunkler Text auf Gelb bzw. Ocker;
+  /// die alte Regel „im hellen Theme beim Hover abdunkeln" setzte weißen Text
+  /// voraus und nahm dem dunklen Wort dort die 4,5:1 (gemessen 3,84:1). Bis
+  /// HUM-272 verschob der Button nur die Helligkeit und fand im engen Fenster
+  /// des Ockers kaum Platz (OKLab 0,011 zwischen Ruhe und Hover). Seither
+  /// ändern Hover und Druck auch Buntheit und Ton; die Ableitung steht im
+  /// Token ([HSurfaceColors.accentFillHover]).
+  static Color _primaryHovered(HSurfaceColors c) => c.accentFillHover;
 
   /// Die Füllung des gedrückten Primärbuttons.
-  static Color _primaryPressed(HSurfaceColors c) =>
-      HColorDerivation.darken(c.accentFill, _primarySteps(c).$2);
+  static Color _primaryPressed(HSurfaceColors c) => c.accentFillPressed;
 
   /// Die Füllung, die [decoration] in [states] ohne Übergang nähme.
   ///

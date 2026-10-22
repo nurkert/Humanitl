@@ -24,6 +24,8 @@ class HSurfaceColors {
     required this.accent,
     required this.accentText,
     required this.accentFill,
+    required this.accentFillHover,
+    required this.accentFillPressed,
     required this.onAccent,
     required this.warning,
     required this.warningText,
@@ -51,6 +53,16 @@ class HSurfaceColors {
       surfaces: HColorDerivation.darkSurfaces,
     ),
     accentFill: HColorDerivation.readableFill(HColors.accent, HColors.onAccent),
+    accentFillHover: HColorDerivation.fillHover(
+      HColorDerivation.readableFill(HColors.accent, HColors.onAccent),
+      HColors.onAccent,
+      HColorDerivation.darkSurfaces,
+    ),
+    accentFillPressed: HColorDerivation.fillPressed(
+      HColorDerivation.readableFill(HColors.accent, HColors.onAccent),
+      HColors.onAccent,
+      HColorDerivation.darkSurfaces,
+    ),
     onAccent: HColors.onAccent,
     warning: HColors.warning,
     warningText: HColorDerivation.textVariant(
@@ -83,6 +95,16 @@ class HSurfaceColors {
     accentFill: HColorDerivation.readableFill(
       HColors.lAccent,
       HColors.onAccent,
+    ),
+    accentFillHover: HColorDerivation.fillHover(
+      HColorDerivation.readableFill(HColors.lAccent, HColors.onAccent),
+      HColors.onAccent,
+      HColorDerivation.lightSurfaces,
+    ),
+    accentFillPressed: HColorDerivation.fillPressed(
+      HColorDerivation.readableFill(HColors.lAccent, HColors.onAccent),
+      HColors.onAccent,
+      HColorDerivation.lightSurfaces,
     ),
     onAccent: HColors.onAccent,
     warning: HColors.lWarning,
@@ -146,6 +168,23 @@ class HSurfaceColors {
   /// Akzent die 4,5:1, wiche die Füllung zurück, nicht das Wort
   /// ([HColorDerivation.readableFill]).
   final Color accentFill;
+
+  /// [accentFill] unter dem Zeiger: heller und satter, im hellen Theme
+  /// wärmer ([HColorDerivation.fillHover], HUM-272).
+  final Color accentFillHover;
+
+  /// [accentFill] unter einem Druck: noch satter, dunkler, wo das Wort es
+  /// zulässt, und eine Spur wärmer als der Hover, nahe am Ocker
+  /// ([HColorDerivation.fillPressed], HUM-272). Den Schritt vom Hover trägt
+  /// zusammen mit der Farbe [accentPressedRing].
+  final Color accentFillPressed;
+
+  /// Der Ring innen an der Kante eines gedrückten Akzent-Controls:
+  /// [onAccent] mit [HColors.pressedRingAlpha] über [accentFillPressed]
+  /// (HUM-272). In Ruhe und unter dem Zeiger trägt die Kante die Füllung
+  /// selbst; der Rahmen ist immer da und ändert nur die Farbe, nie die Breite.
+  Color get accentPressedRing =>
+      HColorDerivation.pressedRing(accentFillPressed, onAccent);
 
   /// Text and glyphs drawn on top of [accentFill] or [accent]: dunkel in
   /// beiden Themes, [HColors.onAccent]. Wer auf Gelb schreibt, schreibt
