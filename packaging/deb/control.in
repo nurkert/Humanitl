@@ -13,5 +13,5 @@ Description: Human-in-the-loop network moderation for AI coding agents
  Runs an AI coding agent in a sandbox without a network interface and
  holds every outbound request for human review.
  .
- This is a 0.0.x pre-release ahead of the 0.1.0 MVP. It is unsigned and
+ This is a 0.0.x early release ahead of the 0.1.0 MVP. It is unsigned and
  not meant for production use.

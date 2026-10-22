@@ -56,11 +56,11 @@ PY
 )"
 
 cat <<EOF
-> **Pre-release before the MVP. Not for productive use.**
-> Humanitl $version is an interim state on the way to release 0.1.0. The
-> artefacts are **not signed**; \`SHA256SUMS\` protects against a damaged
-> download, not against a tampered release. Signed packages, a changelog and
-> an AppImage come with 0.1.0 (HUM-060).
+> **Early release on the way to 0.1.0.**
+> Humanitl $version is an interim state before release 0.1.0. The artefacts
+> are **not signed**; \`SHA256SUMS\` protects against a damaged download,
+> not against a tampered release. A changelog and an AppImage come with 0.1.0
+> (HUM-060); signed packages come with 1.0.0.
 
 Built from commit \`$short\` on \`main\`, after its CI run was green.
 

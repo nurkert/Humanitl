@@ -260,8 +260,9 @@ Bis zum ersten richtigen Release 0.1.0 gibt es Vorabversionen mit der Nummer
 0.0.N. Sie entstehen aus einem Tag und dem Workflow
 `.github/workflows/release.yml`. Das Release enthält das Paket
 `humanitl_0.0.N_amd64.deb`, das Archiv `humanitl-0.0.N-linux-x86_64.tar.gz`
-und `SHA256SUMS`. Es ist auf GitHub als Vorabversion markiert, nicht signiert
-und nicht für den produktiven Einsatz gedacht.
+und `SHA256SUMS`. Seit HUM-273 erscheint es auf GitHub als reguläres Release
+(„Latest“), nicht mehr als Pre-Release; es ist weiterhin nicht signiert und
+nicht für den produktiven Einsatz gedacht. Signaturen kommen mit 1.0.0.
 
 So wird eine Vorabversion geschnitten:
 

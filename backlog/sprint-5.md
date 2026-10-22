@@ -42,6 +42,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-269 | Das Senden aus dem Editor übergeht die Pause einer gestörten Aufzeichnung | S | HUM-250, HUM-047 |
 | HUM-270 | Flüsse aus einer Störung tragen keine eigene Markierung (nach 0.1.0) | S | HUM-250 |
 | HUM-271 | Ein Regelvorschlag trägt einen Schlüssel aus Host oder Pfad unmaskiert | S | HUM-140, HUM-256 |
+| HUM-273 | Releases 0.0.x appear as regular releases, not as pre-releases | S | HUM-053, HUM-225 |
 
 ---
 
@@ -5067,3 +5068,26 @@ Kein Geheimnis der Masken verlässt den Daemon oder landet in der Datei über ei
 
 ### Referenzen
 HUM-140, HUM-256 (Umsetzung, Offen), `daemon/crates/proxy/src/limits.rs`.
+
+---
+
+## HUM-273 · Releases 0.0.x appear as regular releases, not as pre-releases
+Sprint: 5 · Size: S · Dependencies: HUM-053, HUM-225 · Blocks: none
+
+### Context
+On 2026-10-22 the project owner asked for 0.0.6 as a proper release, not a pre-release ("mach ein gescheiten 0.0.6 nicht pre release"). Until now `.github/workflows/release.yml` created every `v0.0.N` with `--prerelease` and the title "Humanitl 0.0.N (pre-release)", so GitHub never marked any of them "Latest", and the release notes, the Debian changelog entry and the package description called each one a pre-release. In the same conversation the owner decided that releases stay unsigned until 1.0.0; the notes promised signed packages with 0.1.0.
+
+### Goal
+A `v0.0.N` tag publishes a regular GitHub release marked latest, titled "Humanitl 0.0.N". The notes, the package description and the Debian changelog speak of an early release on the way to 0.1.0 and say that signatures come with 1.0.0.
+
+### Non-goal
+No change to guard, build, check-deb or the draft-then-publish window; no change to the 0.0.N channel (0.1.0 is still HUM-060). No signing.
+
+### Affected paths
+`.github/workflows/release.yml`, `packaging/release/release-notes.sh`, `packaging/release/release-notes-test.sh`, `packaging/deb/control.in`, `packaging/deb/build-deb.sh`, `packaging/release/INSTALL.txt` (shipped in the archive; translated to English along the way, like the notes since HUM-225), `README.md`, `CONTRIBUTING.md`.
+
+### Acceptance criteria
+- [x] `gh release create` runs without `--prerelease` and with the title `Humanitl $VERSION`; the publish step runs `--draft=false --prerelease=false --latest`.
+- [x] `release-notes-test.sh` fails when either `--prerelease` comes back or `--latest` is missing (mutation: restoring the old publish line gives two failures).
+- [x] Notes banner, package description and changelog entry no longer say pre-release; the notes say signatures come with 1.0.0.
+
