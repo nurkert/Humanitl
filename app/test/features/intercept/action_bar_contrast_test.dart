@@ -5,6 +5,8 @@
 // Der Test im Design-System prüft nur Farbe auf Fläche; diese Kombinationen
 // entstehen erst hier, in den Controls dieses Screens.
 
+import 'dart:math' as math;
+
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/ui/hold_to_confirm.dart';
@@ -21,6 +23,43 @@ double contrastOn(Color foreground, List<Color> layers, Color base) {
     HColorDerivation.flatten(foreground, surface),
     surface,
   );
+}
+
+/// Der Abstand von [a] und [b] in OKLab (Björn Ottosson, 2020), hier
+/// ausgeschrieben und nicht aus `HColorDerivation` geliehen: ein Fehler in
+/// der Ableitung verschöbe sonst beide Seiten des Vergleichs zugleich.
+double oklabDistance(Color a, Color b) {
+  List<double> lab(Color c) {
+    double lin(double v) => v <= 0.04045
+        ? v / 12.92
+        : math.pow((v + 0.055) / 1.055, 2.4).toDouble();
+    double cbrt(double x) => math.pow(x, 1 / 3).toDouble();
+    final double r = lin(c.r);
+    final double g = lin(c.g);
+    final double bl = lin(c.b);
+    final double l = cbrt(
+      0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * bl,
+    );
+    final double m = cbrt(
+      0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * bl,
+    );
+    final double s = cbrt(
+      0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * bl,
+    );
+    return <double>[
+      0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+      1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+      0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+    ];
+  }
+
+  final List<double> pa = lab(a);
+  final List<double> pb = lab(b);
+  double sum = 0;
+  for (int i = 0; i < 3; i++) {
+    sum += (pa[i] - pb[i]) * (pa[i] - pb[i]);
+  }
+  return math.sqrt(sum);
 }
 
 void main() {
@@ -47,7 +86,10 @@ void main() {
         greaterThanOrEqualTo(4.5),
       );
       // Und im gedrückten wie im schwebenden Zustand.
-      for (final double alpha in <double>[valveHoverAlpha, valvePressAlpha]) {
+      for (final double alpha in <double>[
+        valveHoverAlpha(tokens.brightness),
+        valvePressAlpha(tokens.brightness),
+      ]) {
         expect(
           contrastOn(tokens.colors.fg0, <Color>[
             valveFill,
@@ -57,6 +99,28 @@ void main() {
           reason: 'alpha $alpha',
         );
       }
+    });
+
+    test('$theme: the valve steps visibly on hover and on press', () {
+      // HUM-272: im hellen Theme lagen Ruhe, Hover und Druck des Ventils
+      // 0,022 auseinander, kaum über der Sichtbarkeitsschwelle.
+      Color layered(double? alpha) => HColorDerivation.flatten(
+        alpha == null
+            ? const Color(0x00000000)
+            : tokens.colors.accent.withValues(alpha: alpha),
+        HColorDerivation.flatten(valveFill, bar),
+      );
+      final Color rest = layered(null);
+      final Color hover = layered(valveHoverAlpha(tokens.brightness));
+      final Color pressed = layered(valvePressAlpha(tokens.brightness));
+      expect(
+        oklabDistance(rest, hover),
+        greaterThanOrEqualTo(HColorDerivation.interactionStepMin),
+      );
+      expect(
+        oklabDistance(hover, pressed),
+        greaterThanOrEqualTo(HColorDerivation.interactionStepMin),
+      );
     });
 
     test('$theme: the block label stays readable, resting and held', () {

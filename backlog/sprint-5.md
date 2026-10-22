@@ -42,6 +42,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-269 | Das Senden aus dem Editor übergeht die Pause einer gestörten Aufzeichnung | S | HUM-250, HUM-047 |
 | HUM-270 | Flüsse aus einer Störung tragen keine eigene Markierung (nach 0.1.0) | S | HUM-250 |
 | HUM-271 | Ein Regelvorschlag trägt einen Schlüssel aus Host oder Pfad unmaskiert | S | HUM-140, HUM-256 |
+| HUM-272 | Accent-filled controls react too weakly to hover and press | S | HUM-260 |
 | HUM-273 | Releases 0.0.x appear as regular releases, not as pre-releases | S | HUM-053, HUM-225 |
 
 ---
@@ -5091,3 +5092,56 @@ No change to guard, build, check-deb or the draft-then-publish window; no change
 - [x] `release-notes-test.sh` fails when either `--prerelease` comes back or `--latest` is missing (mutation: restoring the old publish line gives two failures).
 - [x] Notes banner, package description and changelog entry no longer say pre-release; the notes say signatures come with 1.0.0.
 
+---
+
+## HUM-272 · Accent-filled controls react too weakly to hover and press in the light theme
+Sprint: 5 · Size: S · Depends on: HUM-260 · Blocks: nothing
+
+### Context
+Owner decision 2026-10-22: in the light theme the primary button barely changes on hover and press. Since HUM-260 the accent is the brand yellow with a dark word (`HColors.onAccent`). The light ocher `lAccent` sits in a narrow window: at least 4.5:1 for the word and at least 3:1 as an area on `lBg3`, roughly relative luminance 0.210 to 0.245, about 0.03 of OKLab lightness. The derivation of HUM-260 only moved the HSL lightness. Measured on `main`: light rest `#A57A1C`, hover `#A97D1D`, pressed `#AE801D`, OKLab distance 0.011 rest to hover and 0.012 hover to pressed; dark hover `#EABF5D` 0.020 from rest. About 0.02 is the smallest difference visible side by side. The release valve has the same problem in the light theme (hover and press alpha 0.06/0.12 over its tint: 0.022 per step on `bg1`; dark 0.038), and during a pointer hold it stayed at the hover alpha, so its press step was zero.
+
+### Decision
+The owner reviewed three variants on 2026-10-22: a pale hover (rejected as khaki), a saturated colour-only step that turns the light press orange (V1), and a saturated hover with a press close to the ocher plus an inset ring (V2). The owner chose V2.
+
+### Goal
+Every accent-filled control steps visibly from rest to hover and from hover to pressed, in both themes, without breaking a contrast floor and without moving anything.
+
+### Non-goal
+No change of `lAccent` or `accent`. No size change, no shadow. Secondary, ghost and danger buttons stay as they are. The release valve gets no ring: it is a tint pill whose colour step already reaches 0.04.
+
+### Affected paths
+`app/packages/ui/lib/src/tokens/colors.dart`, `app/packages/ui/lib/src/tokens/tokens.dart`, `app/packages/ui/lib/src/theme/shadcn_theme.dart`, `app/lib/features/intercept/widgets/release_valve.dart`, their tests, `docs/UX.md` 2.9 and 3.3.
+
+### Specification
+- Thresholds (OKLab distance): rest to hover at least `HColorDerivation.interactionStepMin = 0.04`; hover to pressed and rest to pressed at least `interactionJumpMin = 0.025` as colour, because the ring carries the rest of the press step. The derivation keeps a margin of 0.002.
+- Hover (`accentFillHover`, `HColorDerivation.fillHover`): OKLCh, lightness wish +0.04 away from the word, chroma times 1.15, hue turned warmer one degree at a time (at most 40) until rest to hover reaches the threshold. Per hue, the lightness nearest the wish that keeps the word at 4.5:1 and the fill at 3:1 on all four surfaces; lightness outside 0..1 is skipped, chroma is clipped to sRGB. Light `#BE7812`, dark `#FBC33B`.
+- Pressed (`accentFillPressed`, `fillPressed`): lightness wish 0.04 towards the word, chroma times 1.3, hue 4 degrees past the hover's turn, further only if the colour floor needs it. Light `#B96D00` (0.029 from hover), dark `#E6A600`.
+- Ring (`HSurfaceColors.accentPressedRing`): `onAccent` at `HColors.pressedRingAlpha = 0.75` over the pressed fill, painted in the button's 1 px border, which exists in every state and only changes colour (rest and hover: the fill itself). The owner's sketch said 50 percent; that measures 2.23:1 light and 2.82:1 dark, below the 3:1 a state-carrying UI component needs (WCAG 1.4.11). At 75 percent: 3.35:1 light, 5.18:1 dark.
+- No fitting step returns the resting fill; a test fails loudly on that.
+- Release valve: hover and press alpha per theme, light 0.12/0.24, dark 0.07/0.14; a pointer down on the left half paints the press alpha while the hold runs.
+
+### Tests
+- `tokens_test.dart`: "the primary button steps visibly on hover and on press" (OKLab of the test file, saturation order, word and area floors); "only the pressed primary button carries the ring" (border colour per state, width 1 in every state, ring at least 3:1 on the pressed fill); "the OKLab of the derivation matches the reference"; "a closed window never passes silently as an unchanged fill" (including black/white and white/black fills).
+- `widgets_test.dart`: "HButton primary press paints the ring without moving": previews and a real pointer press, painted fill and ring, identical size and word position in rest, hover and pressed.
+- `release_valve_test.dart`: "a finger on the valve paints the press, not the hover".
+- `action_bar_contrast_test.dart`: "the valve steps visibly on hover and on press", own OKLab.
+- Mutation proofs: HUM-260 derivation restored, red (dark rest to hover 0.020); ring colour replaced by the fill, red (ring test, both widget tests); pointer-down term removed from the valve, red (press alpha 0.07 instead of 0.14); lightness guard and null handling reverted, red (null check thrown for black/white); valve alphas back to 0.06/0.12, red.
+
+### Acceptance criteria
+- [ ] Rest to hover at least 0.04 OKLab, hover to pressed and rest to pressed at least 0.025 as colour, both themes; test with mutation proof.
+- [ ] Pressed carries the ring, rest and hover do not; ring at least 3:1 on the pressed fill; test with mutation proof.
+- [ ] Size and word position identical in rest, hover and pressed, also under a real press.
+- [ ] `onAccent` at least 4.5:1 on every state, fill at least 3:1 as area on `bg0` to `bg3` of its theme in every state.
+- [ ] A closed window fails a test; extreme fills do not throw.
+- [ ] Release valve: at least 0.04 per step in both themes, and a held finger paints the press; tests with mutation proof.
+- [ ] `docs/UX.md` names the thresholds and the ring.
+
+### Pitfalls
+- Darkening on hover breaks the dark word in the light theme (HUM-260 measured 3.84:1). Lightness alone cannot reach the threshold in the light window; the step comes from chroma and hue.
+- At the same OKLab lightness a warmer hue has a different luminance, so the lightness search goes to both sides of the wish.
+- The OKLab-to-sRGB matrix has to be the exact inverse; a wrong blue row shifted every derived hue in the first draft while all contrast tests stayed green.
+- A ring that only appears on press must not add width; the border is always there.
+- Measure with an OKLab that is independent of the derivation.
+
+### References
+HUM-260 (accent, pitfalls), `docs/UX.md` 2.9, 3.3 and 6, WCAG 2.1 SC 1.4.11.

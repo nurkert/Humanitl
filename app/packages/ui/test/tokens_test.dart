@@ -877,6 +877,232 @@ void main() {
       }
     });
 
+    test('the primary button steps visibly on hover and on press', () {
+      // HUM-272: im hellen Theme lagen Ruhe, Hover und Druck 0,011 und 0,012
+      // auseinander, unter der Schwelle dessen, was man überhaupt sieht. Der
+      // Abstand wird hier mit dem OKLab dieser Datei gemessen und nicht mit
+      // dem der Ableitung, damit ein Fehler dort nicht beide Seiten zugleich
+      // verschiebt.
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        final HSurfaceColors c = tokens.colors;
+        Color fill(Set<WidgetState> states) => HShadcnButtonStyle.fillOf(
+          tokens,
+          HShadcnButtonRole.primary,
+          states,
+        );
+        final Color rest = fill(const <WidgetState>{});
+        final Color hover = fill(const <WidgetState>{WidgetState.hovered});
+        final Color pressed = fill(const <WidgetState>{WidgetState.pressed});
+        expect(hover, c.accentFillHover, reason: brightness.name);
+        expect(pressed, c.accentFillPressed, reason: brightness.name);
+        expect(
+          perceivedDistance(rest, hover, null),
+          greaterThanOrEqualTo(HColorDerivation.interactionStepMin),
+          reason: '${brightness.name} rest to hover',
+        );
+        // Vom Hover in den Druck trägt die Farbe nur einen Teil des Schritts,
+        // den Rest der Ring (Variante V2, Owner 2026-10-22). Die Farbe hält
+        // trotzdem eine Untergrenze über der Sichtbarkeitsschwelle; den Ring
+        // prüft der Test darunter.
+        expect(
+          perceivedDistance(hover, pressed, null),
+          greaterThanOrEqualTo(HColorDerivation.interactionJumpMin),
+          reason: '${brightness.name} hover to pressed',
+        );
+        // Ein Tastendruck springt ohne Hover von der Ruhe in den Druck; auch
+        // dieser Schritt muss über der Sichtbarkeitsschwelle liegen.
+        expect(
+          perceivedDistance(rest, pressed, null),
+          greaterThanOrEqualTo(HColorDerivation.interactionJumpMin),
+          reason: '${brightness.name} rest to pressed',
+        );
+        // Kräftig, nicht blass: der erste Entwurf nahm dem Hover Buntheit,
+        // und der Ocker wurde khakifarben (Owner, 2026-10-22). Hover ist
+        // satter als die Ruhe, der Druck mindestens so satt wie der Hover.
+        double chroma(Color color) {
+          final List<double> lab = oklab(seenAs(color, null));
+          return math.sqrt(lab[1] * lab[1] + lab[2] * lab[2]);
+        }
+
+        expect(
+          chroma(hover),
+          greaterThan(chroma(rest)),
+          reason: '${brightness.name} hover is not more saturated than rest',
+        );
+        expect(
+          chroma(pressed),
+          greaterThanOrEqualTo(chroma(hover)),
+          reason: '${brightness.name} pressed is not more saturated than hover',
+        );
+        for (final Color state in <Color>[rest, hover, pressed]) {
+          final String hex = HColorDerivation.toHex(state);
+          expect(state.a, 1.0, reason: '${brightness.name} $hex');
+          expect(
+            wcagContrast(c.onAccent, state),
+            greaterThanOrEqualTo(HColorDerivation.textMinContrast),
+            reason: '${brightness.name} word on $hex',
+          );
+          for (final Color surface in c.ladder) {
+            expect(
+              wcagContrast(state, surface),
+              greaterThanOrEqualTo(HColorDerivation.areaMinContrast),
+              reason:
+                  '${brightness.name} $hex as area on '
+                  '${HColorDerivation.toHex(surface)}',
+            );
+          }
+        }
+      }
+    });
+
+    test('only the pressed primary button carries the ring', () {
+      // HUM-272, V2: der Ring ist der zweite Träger des Druckschritts. Er
+      // steht nur im Druck, ist ein Bestandteil einer Bedienung und braucht
+      // deshalb 3:1 gegen die Füllung, auf der er liegt (WCAG 1.4.11).
+      for (final Brightness brightness in Brightness.values) {
+        final HTokens tokens = HTokens.forBrightness(brightness);
+        final HSurfaceColors c = tokens.colors;
+        BoxDecoration paint(Set<WidgetState> states) =>
+            HShadcnButtonStyle.decoration(
+              tokens,
+              HShadcnButtonRole.primary,
+              states,
+            ) as BoxDecoration;
+        final BoxDecoration rest = paint(const <WidgetState>{});
+        final BoxDecoration hover = paint(const <WidgetState>{
+          WidgetState.hovered,
+        });
+        final BoxDecoration pressed = paint(const <WidgetState>{
+          WidgetState.pressed,
+        });
+        expect(rest.border!.top.color, rest.color, reason: brightness.name);
+        expect(hover.border!.top.color, hover.color, reason: brightness.name);
+        expect(
+          pressed.border!.top.color,
+          c.accentPressedRing,
+          reason: brightness.name,
+        );
+        expect(
+          pressed.border!.top.color,
+          isNot(pressed.color),
+          reason: '${brightness.name}: the pressed button has no ring',
+        );
+        // Eine Breite für alle Zustände: der Ring darf nichts verschieben.
+        for (final BoxDecoration d in <BoxDecoration>[rest, hover, pressed]) {
+          expect(d.border!.top.width, 1.0, reason: brightness.name);
+        }
+        expect(
+          wcagContrast(c.accentPressedRing, pressed.color!),
+          greaterThanOrEqualTo(HColorDerivation.areaMinContrast),
+          reason:
+              '${brightness.name} ring '
+              '${HColorDerivation.toHex(c.accentPressedRing)} on '
+              '${HColorDerivation.toHex(pressed.color!)}',
+        );
+      }
+    });
+
+    test('the OKLab of the derivation matches the reference', () {
+      // Die Ableitung trägt ihr eigenes OKLab; es muss dasselbe messen wie
+      // das dieser Datei, sonst stünde die Schwelle auf zwei Maßstäben.
+      for (final Color color in <Color>[
+        HColors.accent,
+        HColors.lAccent,
+        HColors.onAccent,
+        HColors.info,
+        HColors.lBg3,
+      ]) {
+        expect(
+          HColorDerivation.perceivedDistance(color, HColors.bg0),
+          closeTo(perceivedDistance(color, HColors.bg0, null), 1e-9),
+          reason: HColorDerivation.toHex(color),
+        );
+      }
+      // Und genau auf den Paaren, an denen die Schwelle hängt.
+      for (final Brightness brightness in Brightness.values) {
+        final HSurfaceColors c = HTokens.forBrightness(brightness).colors;
+        for (final (Color a, Color b) in <(Color, Color)>[
+          (c.accentFill, c.accentFillHover),
+          (c.accentFillHover, c.accentFillPressed),
+          (c.accentFill, c.accentFillPressed),
+        ]) {
+          expect(
+            HColorDerivation.perceivedDistance(a, b),
+            closeTo(perceivedDistance(a, b, null), 1e-9),
+            reason:
+                '${brightness.name} ${HColorDerivation.toHex(a)} '
+                'to ${HColorDerivation.toHex(b)}',
+          );
+        }
+      }
+    });
+
+    test('a closed window never passes silently as an unchanged fill', () {
+      // Findet die Ableitung keinen Schritt, der Wort und Fläche hält, gibt
+      // sie die Ruhefarbe zurück. Das darf nie still durchgehen: ein Hover,
+      // der aussieht wie die Ruhe, ist genau der Fehler aus HUM-272.
+      for (final Brightness brightness in Brightness.values) {
+        final HSurfaceColors c = HTokens.forBrightness(brightness).colors;
+        expect(
+          c.accentFillHover,
+          isNot(c.accentFill),
+          reason: '${brightness.name}: hover fill equals the resting fill',
+        );
+        expect(
+          c.accentFillPressed,
+          isNot(c.accentFill),
+          reason: '${brightness.name}: pressed fill equals the resting fill',
+        );
+        expect(
+          c.accentFillPressed,
+          isNot(c.accentFillHover),
+          reason: '${brightness.name}: pressed fill equals the hover fill',
+        );
+      }
+      // Und die Ableitung meldet ein geschlossenes Fenster wirklich mit der
+      // Ruhefarbe: ein Wort, das schon auf der Ruhefarbe unter 4,5:1 liegt,
+      // lässt keinen Schritt zu.
+      const Color fill = Color(0xFF808080);
+      const Color word = Color(0xFF909090);
+      expect(
+        HColorDerivation.fillHover(fill, word, HColorDerivation.lightSurfaces),
+        fill,
+      );
+      // Die Ränder der Helligkeit: Schwarz unter Weiß will beim Hover unter
+      // null, Weiß unter Schwarz über eins. Die Ableitung überspringt, was
+      // es nicht gibt, statt daran zu scheitern: heraus kommt die Ruhefarbe
+      // oder ein Schritt, der Wort und Fläche hält.
+      const Color black = Color(0xFF000000);
+      const Color white = Color(0xFFFFFFFF);
+      for (final (Color f, Color w) in <(Color, Color)>[
+        (black, white),
+        (white, black),
+      ]) {
+        for (final List<Color> surfaces in <List<Color>>[
+          HColorDerivation.darkSurfaces,
+          HColorDerivation.lightSurfaces,
+        ]) {
+          for (final Color step in <Color>[
+            HColorDerivation.fillHover(f, w, surfaces),
+            HColorDerivation.fillPressed(f, w, surfaces),
+          ]) {
+            if (step == f) {
+              continue;
+            }
+            expect(
+              wcagContrast(w, step),
+              greaterThanOrEqualTo(HColorDerivation.textMinContrast),
+            );
+            expect(
+              worstOf(step, surfaces),
+              greaterThanOrEqualTo(HColorDerivation.areaMinContrast),
+            );
+          }
+        }
+      }
+    });
+
     test('warning is the brand yellow, info the old blue', () {
       expect(HColors.warning, HColors.accent);
       expect(HColors.lWarning, HColors.lAccent);

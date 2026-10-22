@@ -22,11 +22,17 @@ const double valveChevronWidth = HSize.hitMin;
 /// Area alpha the left half adds while the pointer rests on it.
 ///
 /// The pill already carries the accent at the tint cap; hover steps above it
-/// the way the secondary button steps from `bg2` to `bg3`.
-const double valveHoverAlpha = 0.06;
+/// the way the secondary button steps from `bg2` to `bg3`. Each step is at
+/// least [HColorDerivation.interactionStepMin] apart in OKLab on the bar
+/// (HUM-272). The light theme needs about twice the alpha of the dark one:
+/// the ocher over a near-white panel changes far less per percent than the
+/// yellow over a near-black one (0.06 measured 0.022 there, 0.038 in dark).
+double valveHoverAlpha(Brightness brightness) =>
+    brightness == Brightness.light ? 0.12 : 0.07;
 
 /// Area alpha the left half shows for one press, and for one refusal.
-const double valvePressAlpha = 0.12;
+double valvePressAlpha(Brightness brightness) =>
+    brightness == Brightness.light ? 0.24 : 0.14;
 
 /// The release valve.
 class ReleaseValve extends StatefulWidget {
@@ -148,6 +154,7 @@ class _ReleaseValveState extends State<ReleaseValve> {
   bool _leftFocused = false;
   bool _rightFocused = false;
   bool _hovered = false;
+  bool _pointerDown = false;
   bool _refusing = false;
   Timer? _refusal;
 
@@ -224,10 +231,10 @@ class _ReleaseValveState extends State<ReleaseValve> {
 
   Widget _left(HTokens tokens) {
     final Color accent = widget.accent ?? tokens.colors.accent;
-    final Color surface = _refusing || widget.pressed
-        ? accent.withValues(alpha: valvePressAlpha)
+    final Color surface = _refusing || widget.pressed || _pointerDown
+        ? accent.withValues(alpha: valvePressAlpha(tokens.brightness))
         : _hovered
-        ? accent.withValues(alpha: valveHoverAlpha)
+        ? accent.withValues(alpha: valveHoverAlpha(tokens.brightness))
         : const Color(0x00000000);
     return FocusableActionDetector(
       enabled: widget.enabled,
@@ -256,70 +263,89 @@ class _ReleaseValveState extends State<ReleaseValve> {
         enabled: widget.enabled,
         label: widget.label,
         value: widget.semanticsValue,
-        child: HoldToConfirm(
-          key: const Key('intercept-valve-hold'),
-          duration: HMotion.holdToConfirm,
-          fill: holdFill(tokens.state.allowed),
-          enabled: widget.enabled,
-          token: widget.holdToken,
-          previewProgress: widget.previewHold,
-          onHoldChanged: widget.onHoldChanged,
-          // While a finding is unresolved the hold *is* the send, and a click
-          // only says why it did nothing (`docs/UX.md` 4.7). Otherwise the
-          // click sends and the hold sends and remembers.
-          onConfirmed: widget.holdRequired
-              ? widget.onAllow
-              : widget.onAllowRemembered,
-          onTapShort: widget.holdRequired
-              ? widget.onShortPress
-              : widget.onAllow,
-          builder: (BuildContext context, double progress) => AnimatedContainer(
-            duration: HMotion.press,
-            curve: HMotion.enter,
-            color: surface,
-            constraints: BoxConstraints(
-              minHeight: tokens.sizes.hitDecision.height,
-            ),
-            padding: EdgeInsets.symmetric(horizontal: tokens.spacing.x3),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                if (widget.warned) ...<Widget>[
-                  // Excluded from semantics: the label already says "with n
-                  // findings", and a second announcement of the same fact
-                  // would only be longer.
-                  ExcludeSemantics(
-                    child: HGlyphIcon(
-                      HGlyph.triangleAlert,
-                      key: const Key('intercept-valve-warning'),
-                      size: 14,
-                      color: tokens.colors.warningText,
-                    ),
+        // Ein Finger auf der Hälfte ist ein Druck, auch während das Halten
+        // noch läuft: ohne das bliebe die Fläche beim Halten auf der
+        // Hover-Stufe, und der Schritt in den Druck wäre null (HUM-272).
+        // `Listener` nimmt an keiner Gestenarena teil; das Halten darunter
+        // bekommt dieselben Zeigerereignisse.
+        child: Listener(
+          onPointerDown: (PointerDownEvent event) {
+            if (widget.enabled) {
+              setState(() => _pointerDown = true);
+            }
+          },
+          onPointerUp: (PointerUpEvent event) =>
+              setState(() => _pointerDown = false),
+          onPointerCancel: (PointerCancelEvent event) =>
+              setState(() => _pointerDown = false),
+          child: HoldToConfirm(
+            key: const Key('intercept-valve-hold'),
+            duration: HMotion.holdToConfirm,
+            fill: holdFill(tokens.state.allowed),
+            enabled: widget.enabled,
+            token: widget.holdToken,
+            previewProgress: widget.previewHold,
+            onHoldChanged: widget.onHoldChanged,
+            // While a finding is unresolved the hold *is* the send, and a click
+            // only says why it did nothing (`docs/UX.md` 4.7). Otherwise the
+            // click sends and the hold sends and remembers.
+            onConfirmed: widget.holdRequired
+                ? widget.onAllow
+                : widget.onAllowRemembered,
+            onTapShort: widget.holdRequired
+                ? widget.onShortPress
+                : widget.onAllow,
+            builder: (BuildContext context, double progress) =>
+                AnimatedContainer(
+                  duration: HMotion.press,
+                  curve: HMotion.enter,
+                  color: surface,
+                  constraints: BoxConstraints(
+                    minHeight: tokens.sizes.hitDecision.height,
                   ),
-                  SizedBox(width: tokens.spacing.x2),
-                ],
-                Flexible(
-                  child: ExcludeSemantics(
-                    child: Text(
-                      progress > 0 ? widget.holdLabel : widget.label,
-                      key: const Key('intercept-valve-label'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: tokens.typography.ui13.medium.tinted(
-                        tokens.colors.fg0,
+                  padding: EdgeInsets.symmetric(horizontal: tokens.spacing.x3),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      if (widget.warned) ...<Widget>[
+                        // Excluded from semantics: the label already says "with n
+                        // findings", and a second announcement of the same fact
+                        // would only be longer.
+                        ExcludeSemantics(
+                          child: HGlyphIcon(
+                            HGlyph.triangleAlert,
+                            key: const Key('intercept-valve-warning'),
+                            size: 14,
+                            color: tokens.colors.warningText,
+                          ),
+                        ),
+                        SizedBox(width: tokens.spacing.x2),
+                      ],
+                      Flexible(
+                        child: ExcludeSemantics(
+                          child: Text(
+                            progress > 0 ? widget.holdLabel : widget.label,
+                            key: const Key('intercept-valve-label'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: tokens.typography.ui13.medium.tinted(
+                              tokens.colors.fg0,
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
+                      SizedBox(width: tokens.spacing.x2),
+                      ExcludeSemantics(
+                        child: Text(
+                          widget.shortcutHint,
+                          style: tokens.typography.mono11.tinted(
+                            tokens.colors.fg1,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                SizedBox(width: tokens.spacing.x2),
-                ExcludeSemantics(
-                  child: Text(
-                    widget.shortcutHint,
-                    style: tokens.typography.mono11.tinted(tokens.colors.fg1),
-                  ),
-                ),
-              ],
-            ),
           ),
         ),
       ),
