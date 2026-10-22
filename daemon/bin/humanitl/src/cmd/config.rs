@@ -1002,7 +1002,9 @@ async fn reach(ctx: &Context, file: &Path) -> String {
         Ok(Some(_))
     ) {
         format!(
-            "{} carries the value; the running daemon takes it at its next start",
+            "{} carries the value; the running daemon uses it from the next sandbox start on, \
+             and settings of the proxy, the recording and the limits after \
+             `systemctl --user restart humanitld`",
             file.display()
         )
     } else {

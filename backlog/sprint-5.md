@@ -44,6 +44,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-271 | Ein Regelvorschlag trägt einen Schlüssel aus Host oder Pfad unmaskiert | S | HUM-140, HUM-256 |
 | HUM-272 | Accent-filled controls react too weakly to hover and press | S | HUM-260 |
 | HUM-273 | Releases 0.0.x appear as regular releases, not as pre-releases | S | HUM-053, HUM-225 |
+| HUM-277 | Saved settings take effect without restarting the daemon (before HUM-060) | M | HUM-069, HUM-140, HUM-151 |
 
 ---
 
@@ -5145,3 +5146,135 @@ No change of `lAccent` or `accent`. No size change, no shadow. Secondary, ghost 
 
 ### References
 HUM-260 (accent, pitfalls), `docs/UX.md` 2.9, 3.3 and 6, WCAG 2.1 SC 1.4.11.
+
+## HUM-277 · Saved settings take effect without restarting the daemon (before HUM-060)
+
+### Context
+Owner report from 2026-10-22, real machine, package v0.0.6: endpoint, model and
+access key were saved in the settings sheet and land correctly in `config.toml`
+(`humanitl config get llm`) and in the keyring (`humanitl llm key status`). The
+agent still could not use them, also after restarting the app. `humanitl doctor`
+showed two things:
+
+- `[ok] daemon humanitld 0.0.5` while the CLI is 0.0.6: `apt install` of the new
+  package left the old, socket-activated user daemon running, and restarting the
+  app does not restart it.
+- `[warn] llm llm.endpoint is not set`: the running daemon answered from the
+  configuration it read at its own start.
+
+Where the start snapshot is cached: `IpcServer::new` copies `llm.endpoint`,
+`agent.adapter` and `agent.command` into `DoctorSetup` (the `llm` and `agent`
+lines of `Doctor`), and `SandboxService::new` copies the start configuration
+into the slot `Inner::config` that `Plan`/`Argv` snapshots (`llm_endpoint` in
+`Sandbox(Status)`, which feeds the setup screen) and the `sandbox.work_dir`
+check of `remember` read until the first session start replaces it. The
+fallback of `SessionResolver::resolve` for the project directory also came from
+the start snapshot. A session start itself already resolved afresh (HUM-067):
+the LLM passthrough rule (`llm_passthrough_rule`), the key mask
+(`Recorder::mask_secret`), hold mode and deadline. The header of
+`config_rpc.rs` and the note of the settings form claimed a restart for all of
+them.
+
+### Goal
+A value saved through `SetConfig` (the form keys) or `LlmKey` applies without a
+manual daemon restart: at the latest at the next sandbox start, at the next
+`Doctor` and at the next `Sandbox(Plan)`. A daemon whose version differs from
+the client's is visible in `humanitl doctor` and in the app.
+
+### Non-goal
+- General live reload with a file watcher (BACKLOG.md section 9, item 17).
+- Swapping the proxy's upstream TLS stack at runtime: `tls.trust_system_store`
+  keeps applying at the next daemon start, for proxy and probe alike, and the
+  form says so. The same holds for keys outside the form (limits, recorder,
+  resolver, audit), which the form does not write.
+- Restarting user daemons from the package's maintainer scripts. A system
+  package does not reach into the running user managers of logged-in users
+  (`deb-systemd-invoke --user` enables units, it does not restart them per
+  user). The clients say it instead.
+
+### Affected paths
+`daemon/crates/ipc/src/{session.rs,sandbox.rs,server.rs,config_rpc.rs}`,
+`daemon/crates/sandbox/src/doctor.rs`, `daemon/crates/sandbox/src/doctor/checks.rs`,
+`daemon/crates/sandbox/tests/doctor.rs`, `daemon/bin/humanitl/src/cmd/doctor.rs`,
+`daemon/crates/core-types/src/diagnostics/codes.rs` (comment of `DOCTOR_006`
+only), `app/lib/features/shell/widgets/status_bar.dart`,
+`app/l10n/app_{en,de}.arb`.
+
+### Specification
+1. `SessionResolver::current()` resolves the configuration without a wish
+   (default profile, no project directory) afresh from disk. A resolver built
+   with `for_config` (fake mode, tests) keeps returning its fixed base. The
+   fallback for the project directory in `resolve` comes from `current()`.
+2. `Plan` and `Argv` take their configuration once (`Inner::plan_config`) and
+   build the whole snapshot from that one value: the slot while a session
+   holds claim or handle and has published its configuration
+   (`apply_session` sets the mark, the next claim clears it), otherwise
+   `current()`. They never write the slot. A start refreshes the slot from
+   `current()` right after taking its claim (`refresh_for_start`), before the
+   project directory is checked, also when the handle of an agent that
+   exited is still held (that session is being replaced). A session
+   generation counts claim, release, publication and handle changes; a `Plan`
+   built across a change is built again, at most three times; no build writes
+   the pending choice: each stages profile, directory and mode and builds its
+   snapshot from them, only the answered build commits them, and a
+   start checks an inherited project directory again against its refreshed
+   configuration. A running
+   session keeps the configuration it started with; a failed resolution
+   falls back to the slot.
+3. `Doctor` resolves `llm.endpoint`, `agent.adapter` and `agent.command` afresh
+   from its paths; only when that fails it falls back to the start values.
+4. Passthrough rule, key mask, hold mode and deadline stay as they are: they
+   come from the resolution of each start (HUM-039, HUM-067, HUM-140).
+5. `DaemonFacts::Reachable` carries `expected_version`. Same major, different
+   version: the `daemon` line is a warning with `DOCTOR_006` (one code per
+   line). An empty version (the CLI against a daemon announcing `fake`) or
+   `0.0.0` (unstamped development build) on either side is not compared; `why` naming both versions and the cause (an upgrade leaves the old
+   daemon running), `fix` `CopyCommand("systemctl --user restart humanitld")`.
+6. The status bar of the app shows a warning next to the daemon version when
+   the build version of the app is known and differs from
+   `GetInfo.daemon_version`, with the restart command. Not for the fake daemon
+   and not when either side is `0.0.0`.
+7. The settings note and the help of `tls.trust_system_store` say what applies
+   when; the header of `config_rpc.rs` is corrected.
+
+### Tests
+- `ipc` unit: after `config_rpc::set` of `llm.endpoint` and `LlmKey` set, the
+  next `Plan` snapshot names the new endpoint without a restart, and the next
+  session start installs the passthrough rule for the new host, hands the new
+  key to the sandbox file and expects its mask at the new authority.
+- `ipc` unit: `Doctor` after `SetConfig llm.endpoint` names the new endpoint.
+- `sandbox` unit: a daemon of the same major and another version is a warning
+  with `DOCTOR_006` and the restart fix; the same version stays green.
+- App widget test: the status bar shows the mismatch notice and hides it for an
+  equal version, an unknown app version and the fake daemon.
+- One mutation proof per test.
+
+### Acceptance criteria
+1. `SetConfig llm.endpoint` followed by `Sandbox(Plan)`, `Doctor` and a session
+   start uses the new value without restarting the daemon.
+2. `LlmKey` set followed by a session start hands the new key to the agent and
+   masks it at the new endpoint's authority; the passthrough rule follows the
+   new endpoint.
+3. A running session keeps its configuration, and the UI text says so.
+4. `humanitl doctor` warns about a daemon whose version differs from the CLI's,
+   with why and the restart command; the app shows the same.
+5. The adapter coupling counts do not grow.
+
+### Pitfalls
+- A `Plan` beside a start that holds its claim but has not published must not
+  answer from the stale slot, and one snapshot must not mix two reads of the
+  slot (endpoint from one configuration, preview from another; review of
+  HUM-277). Test the interleaving deterministically.
+- An agent that exited still holds the session (state `running`); it keeps its
+  configuration until it is stopped.
+- Test resolvers built with `for_config` carry hand-made configurations; a
+  fresh resolution from their empty XDG directories would silently replace
+  them.
+- Versions are compared as strings: CLI, daemon and app are stamped from the
+  same tag (`packaging/release/stamp-version.sh`).
+
+### References
+HUM-039, HUM-067, HUM-069, HUM-075, HUM-140, HUM-151, HUM-257,
+BACKLOG.md section 9 item 17. `docs/SECURITY.md` and `docs/THREAT-MODEL.md`
+stay unchanged: no guarantee moves, the passthrough rule and the key mask
+followed every start already.

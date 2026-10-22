@@ -1,6 +1,7 @@
 // Die Auslastung der Warteschlange in der Statusleiste (HUM-058, Zeile 16,
 // übernommen von HUM-057): unter 80 % nichts, ab 80 % Warnfarbe, ab 100 % rot mit
 // `LIMIT_002`. Dazu die Störung der Aufzeichnung (HUM-250).
+// And the notice for a daemon of another version than the app (HUM-277).
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Flow;
@@ -312,5 +313,74 @@ void main() {
     await tester.pump();
     expect(find.byKey(const Key('status-recorder-disrupted')), findsNothing);
     expect(find.byKey(notRecorded), findsNothing);
+  });
+
+  // HUM-277: After a package upgrade the old user daemon keeps running, and
+  // restarting the app does not restart it. The status bar says so next to the
+  // daemon version, with the command that restarts it.
+  testWidgets('daemon_version_mismatch_notice', (WidgetTester tester) async {
+    Future<void> pumpBar({
+      required String daemon,
+      required String app,
+      List<String> capabilities = const <String>[],
+    }) async {
+      await _pump(
+        tester,
+        const <Flow>[],
+        child: Align(
+          alignment: Alignment.bottomCenter,
+          child: StatusBar(
+            info: DaemonInfo(
+              daemonVersion: daemon,
+              protoMajor: 1,
+              protoMinor: 17,
+              capabilities: capabilities,
+            ),
+            appVersion: app,
+          ),
+        ),
+      );
+    }
+
+    const Key notice = Key('status-daemon-mismatch');
+
+    await pumpBar(daemon: '0.0.5', app: '0.0.6');
+    expect(find.byKey(notice), findsOneWidget);
+    expect(
+      find.text(
+        'Not the version of this app (0.0.6) · systemctl --user restart humanitld',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester.widget<Text>(find.byKey(notice)).style?.color,
+      HTokens.dark.colors.warningText,
+    );
+
+    // The same build: nothing to say.
+    await pumpBar(daemon: '0.0.6', app: '0.0.6');
+    expect(find.byKey(notice), findsNothing);
+
+    // A build without a version of its own cannot tell.
+    await pumpBar(daemon: '0.0.5', app: '');
+    expect(find.byKey(notice), findsNothing);
+
+    // A development build (0.0.0) on either side is no upgrade to report.
+    await pumpBar(daemon: '0.0.0', app: '0.0.6');
+    expect(find.byKey(notice), findsNothing);
+    await pumpBar(daemon: '0.0.5', app: '0.0.0');
+    expect(find.byKey(notice), findsNothing);
+
+    // A daemon that reports no version is unknown, not different.
+    await pumpBar(daemon: '', app: '0.0.6');
+    expect(find.byKey(notice), findsNothing);
+
+    // The fake daemon is no build at all.
+    await pumpBar(
+      daemon: '0.0.0-fake',
+      app: '0.0.6',
+      capabilities: const <String>[DaemonInfo.fakeCapability],
+    );
+    expect(find.byKey(notice), findsNothing);
   });
 }

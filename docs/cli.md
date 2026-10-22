@@ -817,8 +817,9 @@ If the value is already there like this, nothing is written; `--json` then says
 `"written": "unchanged"`.
 
 Afterwards `stderr` says when the new value takes effect: if a daemon is
-running, it picks it up at its next start; if none is running, it reads it as
-soon as it starts. Both are correct, and that is why the output says which
+running, it uses it from the next sandbox start on (settings of the proxy, the
+recording and the limits only after `systemctl --user restart humanitld`); if
+none is running, it reads it as soon as it starts. Both are correct, and that is why the output says which
 case applies.
 
 `--project` writes instead into `<project>/.humanitl/profile.toml` under
