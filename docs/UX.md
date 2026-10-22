@@ -1,770 +1,782 @@
-# Humanitl — UX-Leitbild
+# Humanitl — UX guidelines
 
 Applies to: Humanitl 0.1
 
-> Zweck: Die Oberfläche soll eine Entscheidung so leicht machen, dass ein Mensch sie stundenlang trifft, ohne müde zu werden, und so schwer, dass er sie nicht versehentlich trifft. Dieses Dokument legt fest, wie Bewegung, Farbe, Text und Tastatur zusammenspielen, damit jeder Screen von HUM-028 bis HUM-034 dieselbe Sprache spricht. Es ergänzt `BACKLOG.md` Abschnitt 5 (Richtung „Airlock"), `docs/ARCHITECTURE.md` (Schichten) und `app/packages/ui` (Werte).
+> Purpose: the interface should make a decision so easy that a human can make it for hours without tiring, and so hard that they cannot make it by accident. This document fixes how motion, colour, text and keyboard work together, so that every screen from HUM-028 to HUM-034 speaks the same language. It complements `BACKLOG.md` section 5 (direction "Airlock"), `docs/ARCHITECTURE.md` (layers) and `app/packages/ui` (values).
 
-Bei Widerspruch gilt: `packages/ui` gewinnt für Werte, dieses Dokument für ihre Verwendung. Wo eine Regel hier ein Token bräuchte, das es nicht gibt, steht sie in Abschnitt 9. Token werden nie beiläufig geändert.
+In case of conflict: `packages/ui` wins for values, this document for their use. Where a rule here would need a token that does not exist, it stands in section 9. Tokens are never changed in passing.
 
-## 1. Warum es dieses Dokument gibt
+## 1. Why this document exists
 
-Ein Mensch entscheidet hier über fremden Netzwerkverkehr, unter einer laufenden Uhr, über Stunden. Jede Bewegung, jede Farbe und jedes Wort auf dem Schirm kostet Aufmerksamkeit, die er für die nächste Entscheidung braucht. Dieses Dokument legt fest, wofür diese Aufmerksamkeit ausgegeben werden darf, und macht jede Festlegung prüfbar.
+A human decides here about someone else's network traffic, under a running clock, for hours. Every movement, every colour and every word on the screen costs attention that they need for the next decision. This document fixes what this attention may be spent on, and makes every such decision checkable.
 
-Es steht neben `backlog/CONVENTIONS.md` 4.13, wo festgehalten ist, warum dieses Programm Vertrauen ausstrahlen muss und woran man das misst: nie mehr behaupten als bewiesen ist, Genauigkeit dort, wo sie zählt, Zurückhaltung, Vorhersagbarkeit, keine dunklen Muster in beide Richtungen, Fehler mit Grund und Abhilfe, sichtbares Handwerk. Was hier steht, ist die gestalterische Ausführung jener Zusage; wo beide Dokumente dasselbe berühren, gewinnt 4.13 in der Aussage und dieses Dokument in der Ausführung.
+It stands next to `backlog/CONVENTIONS.md` 4.13, which records why this program must radiate trust and how that is measured: never claim more than is proven, precision where it counts, restraint, predictability, no dark patterns in either direction, errors with why and fix, visible craft. What stands here is the design execution of that promise; where both documents touch the same thing, 4.13 wins on the statement and this document on the execution.
 
-### 1.1 Wofür die gesparte Aufmerksamkeit ausgegeben wird
+### 1.1 What the saved attention is spent on
 
-Die meisten Regeln hier verbieten etwas. Das ist die halbe Arbeit; die andere Hälfte ist, den frei gewordenen Etat an einer Stelle je Screen auszugeben, statt ihn zu sparen. Ein Programm, das nur spart, wird ein sauberes Derivat ohne eigene Handschrift.
+Most rules here forbid something. That is half the work; the other half is to spend the freed budget in one place per screen instead of saving it. A program that only saves becomes a clean derivative without a hand of its own.
 
-Jeder Screen hat deshalb einen benannten Moment, an dem er schön sein darf. Genau einen:
+Every screen therefore has one named moment at which it may be beautiful. Exactly one:
 
-| Screen | Der Moment | Woran man ihn erkennt |
+| Screen | The moment | How you recognise it |
 |---|---|---|
-| Intercept | die Schleusenkammer im Augenblick der Entscheidung | Der Rail der entschiedenen Zeile wischt auf volle Sättigung und ist für 200 ms die einzige gesättigte Fläche im ganzen Pane. Alles andere bleibt neutral, damit dieser eine Wisch etwas bedeutet. |
-| Rules | die Reihenfolge als lesbare Kette | Die Regeln stehen als Sätze untereinander und werden von oben nach unten gelesen wie ein Text; die erste, die zutrifft, gewinnt, und das sieht man, ohne es zu wissen. Der Dry-Run macht diese Kette an echtem Verkehr sichtbar. |
-| History | die Dichte als Beleg | Zehntausend Zeilen in gleichmäßiger 28-px-Kadenz, ohne Lücke, ohne Ladefläche. Die Menge selbst ist die Aussage: nichts ist unbeobachtet durchgegangen. |
-| Domain-Panel | die Antwort in einer Zeile | „Bekannt" oder „unbekannt" steht als erstes Wort, in der größten Type des Panes, bevor irgendein Detail folgt. |
-| Setup und Sandbox | das Urteil über die drei Garantien | Drei Zeilen, drei Zustände, keine Erklärung davor. Die Erklärung steht darunter, für den, der sie will. |
+| Intercept | the airlock chamber at the instant of the decision | The rail of the decided row sweeps to full saturation and is, for 200 ms, the only saturated surface in the whole pane. Everything else stays neutral, so that this one sweep means something. |
+| Rules | the order as a readable chain | The rules stand as sentences one below the other and are read from top to bottom like a text; the first one that matches wins, and you see that without knowing it. The dry run makes this chain visible on real traffic. |
+| History | density as evidence | Ten thousand rows in an even 28 px cadence, without a gap, without a loading area. The quantity itself is the statement: nothing went through unobserved. |
+| Domain panel | the answer in one line | "Known" or "unknown" stands as the first word, in the largest type of the pane, before any detail follows. |
+| Setup and Sandbox | the verdict on the three guarantees | Three rows, three states, no explanation before them. The explanation stands below, for whoever wants it. |
 
-Was in diesen fünf Momenten nicht vorkommt, bekommt keine Sättigung, keine Bewegung und keine große Type. Das ist der Handel.
+Whatever does not occur in these five moments gets no saturation, no motion and no large type. That is the trade.
 
 ---
 
-## 2. Die Bewegungssprache
+## 2. The motion language
 
-### 2.1 Die Prüffrage
+### 2.1 The test question
 
-Jede Animation beantwortet genau eine von vier Fragen: Was ist angekommen? Was ist gegangen? Was hat sich an Ort und Stelle geändert? Was habe ich gerade ausgelöst? Eine Animation, die keine dieser Fragen beantwortet, wird gelöscht, nicht abgestimmt. Diese Frage ist das Review-Gate für HUM-029 bis HUM-034.
+Every animation answers exactly one of four questions: What has arrived? What has left? What has changed in place? What have I just triggered? An animation that answers none of these questions is deleted, not tuned. This question is the review gate for HUM-029 to HUM-034.
 
-Jede Dauer, jede Kurve und jede Strecke kommt aus `HMotion`. Eine `Duration`, eine `Curve` oder ein Pixelversatz als Literal in einer Feature-Datei ist ein Defekt, auch wenn die Zahl stimmt: eine Tabelle ist der einzige Weg, auf dem fünf ungebaute Screens dieselbe Sprache behalten.
+Every duration, every curve and every distance comes from `HMotion`. A `Duration`, a `Curve` or a pixel offset as a literal in a feature file is a defect, even if the number is right: one table is the only way in which five unbuilt screens keep the same language.
 
-### 2.2 Die Tabelle
+### 2.2 The table
 
-| Änderung auf dem Schirm | Was sie erklärt | Dauer | Kurve | Token | Weg |
+| Change on the screen | What it explains | Duration | Curve | Token | Path |
 |---|---|---|---|---|---|
-| Zeile kommt in der Queue an | „Ein Paket ist von außen eingetroffen" | 180 ms | `enter` | `HMotion.arrive` | 8 px von oben, `HMotion.arriveOffset`, plus Einblenden |
-| Mehrere Zeilen im selben Frame | „Es sind mehrere, nacheinander" | +30 ms je Zeile, höchstens 5 | `enter` | `HMotion.stagger`, `HMotion.staggerMax` | wie oben, versetzt |
-| Der Queue-Zähler erhält eine Ankunft | „Es ist etwas gekommen, auch wenn du es nicht siehst" | 2 × 120 ms, ein Hin und Zurück | `easeInOut` | `HMotion.press` | Tönung des `HBadge` im Queue-Kopf von `held` 10 % auf `held` 20 % und zurück; genau dieses eine Widget, auch bei eingefrorener Queue. Die Ziffer darin springt, sie animiert nie (2.9). |
-| Control wird gedrückt (Maus oder Taste) | „Dein Griff ist angekommen" | 120 ms | `enter` | `HMotion.press` | Füllung |
-| Rail wechselt den Zustand | „Der Zustand hat sich geändert" | 200 ms | `enter` | `HMotion.sweep` | Wisch von oben nach unten, nie eine Überblendung |
-| Halten bestätigt eine Blockierung | „Das war gewollt" | 250 ms | linear | `HMotion.holdToBlock` | Füllung von links |
-| Halten füllt die Release Valve | „Das gilt für die ganze Sitzung" | 400 ms | linear | `HMotion.holdToConfirm` | Füllung von links |
-| Entscheidung unterwegs | „Ich habe gegriffen, die Antwort steht aus" | — | — | — | keine Bewegung. Der Rail hält seinen gewischten Zustand, das Glyph ist getauscht, der Streifen fehlt noch. Bleibt die Antwort über `HMotion.confirm` aus, nimmt das inline-`Diagnostic` aus 4.4 den Platz des Streifens. |
-| Abgelehnter Tastendruck | „Diese Taste gilt hier gerade nicht" | 120 ms | `enter` | `HMotion.press` | Das Control, das gehandelt hätte, zeigt seine Füllung und läuft wieder leer; der Grund steht daneben (5.3). Nie ein Rütteln, nie ein rotes Blitzen. |
-| Entschiedene Zeile geht | „Diese Anfrage ist erlaubt bzw. blockiert draußen" | 220 ms | `exit` | `HMotion.leave` | 12 px zur Seite (`HMotion.leaveOffset`), dann Höhe auf null |
-| Auswahl wechselt | „Ich sehe jetzt diese Zeile an" | ein Frame | — | — | Füllungswechsel, keine Höhenänderung |
-| Abschnitt oder Gruppe klappt auf | „Darunter liegt mehr" | 180 ms | `enter` | `HMotion.arrive` | Höhe |
-| Seitenleiste klappt auf oder zu | „Hier stehen die Namen" bzw. „wieder nur die Zeichen" | 180 ms | `enter` auf, `exit` zu | `HMotion.arrive` | Breite der Icon-Rail von 48 auf 200 px; die Beschriftung wird in voller Breite gesetzt, nur aufgedeckt und ab halber Breite eingeblendet. Unter reduzierter Bewegung springt die Breite, das Einblenden behält seine Dauer (2.10, HUM-254). |
-| Absperrband läuft | „Hier steht die Absperrung" bzw. „die Suche läuft" | 1200 ms je Periode, endlos, solange der Anlass besteht | linear | `HMotion.cautionTape`, `HMotion.cautionTapePeriod` | Streifenmuster seitwärts um 16 px je Periode; das Widget selbst steht. Unter reduzierter Bewegung stehen die Streifen still (3.6, HUM-260). |
-| Sheet fährt von rechts ein | „Das gehört zu dem, was links steht" | 180 ms | `enter` | `HMotion.arrive` | 8 px von rechts (`HMotion.arriveOffset`) plus Einblenden; der Hintergrund bleibt stehen |
-| Modal erscheint | „Hier musst du erst antworten" | 180 ms | `enter` | `HMotion.arrive` | kein Weg, nur Einblenden des Modals und Abdunkeln des Hintergrunds; ein Modal, das hereinfliegt, behauptet eine Richtung, die es nicht hat |
-| Command Palette öffnet | „Das Handbuch ist da" | ein Frame | — | — | keine Bewegung. Wer sie ruft, tippt bereits. |
-| Sektionswechsel (`Ctrl+1..5`) und Tabwechsel | „Ich bin jetzt woanders" | ein Frame | — | — | keine Überblendung im `IndexedStack`, keine Verschiebung. Der Wechsel ist Navigation, kein Ereignis. |
-| Rückkehr-Banner erscheint | „Während du weg warst, ist etwas passiert" | 180 ms | `enter` | `HMotion.arrive` | wie eine Ankunft: 8 px von oben plus Einblenden |
-| Neue Regel erscheint in der Liste | „Diese Regel gibt es jetzt" | 240 ms | `enter` | `HMotion.ruleDraw` | Zeichnen der Zeile |
-| Countdown unterhalb einer Schwelle | „Sieh jetzt hin" | 1200 ms je Zug, 3 Züge | `easeInOut` | `HMotion.breathe`, `HMotion.breatheCycles` | Deckkraft zwischen `HMotion.breatheMinOpacity` und 1,0 |
-| Fehler | „Hier ist etwas schiefgegangen" | — | — | — | keine Bewegung; das Diagnostic blendet über `HMotion.arrive` in einen reservierten Slot ein |
+| Row arrives in the queue | "A packet has arrived from outside" | 180 ms | `enter` | `HMotion.arrive` | 8 px from above, `HMotion.arriveOffset`, plus fade-in |
+| Several rows in the same frame | "There are several, one after another" | +30 ms per row, at most 5 | `enter` | `HMotion.stagger`, `HMotion.staggerMax` | as above, staggered |
+| The queue counter receives an arrival | "Something has come, even if you do not see it" | 2 × 120 ms, one there and back | `easeInOut` | `HMotion.press` | Tint of the `HBadge` in the queue header from `held` 10 % to `held` 20 % and back; exactly this one widget, even with the queue frozen. The digit inside it jumps, it never animates (2.9). |
+| Control is pressed (mouse or key) | "Your grip has arrived" | 120 ms | `enter` | `HMotion.press` | Fill |
+| Rail changes state | "The state has changed" | 200 ms | `enter` | `HMotion.sweep` | Sweep from top to bottom, never a cross-fade |
+| Holding confirms a block | "That was intended" | 250 ms | linear | `HMotion.holdToBlock` | Fill from the left |
+| Holding fills the release valve | "This applies to the whole session" | 400 ms | linear | `HMotion.holdToConfirm` | Fill from the left |
+| Decision in transit | "I have acted, the answer is pending" | — | — | — | no motion. The rail keeps its swept state, the glyph is swapped, the strip is still missing. If the answer does not come within `HMotion.confirm`, the inline `Diagnostic` from 4.4 takes the place of the strip. |
+| Rejected key press | "This key does not apply here right now" | 120 ms | `enter` | `HMotion.press` | The control that would have acted shows its fill and drains again; the reason stands next to it (5.3). Never a shake, never a red flash. |
+| Decided row leaves | "This request is allowed or blocked outside" | 220 ms | `exit` | `HMotion.leave` | 12 px to the side (`HMotion.leaveOffset`), then height to zero |
+| Selection changes | "I am now looking at this row" | one frame | — | — | Change of fill, no change of height |
+| Section or group expands | "There is more below" | 180 ms | `enter` | `HMotion.arrive` | Height |
+| Sidebar expands or collapses | "Here are the names" or "back to only the symbols" | 180 ms | `enter` open, `exit` closed | `HMotion.arrive` | Width of the icon rail from 48 to 200 px; the label is laid out at full width, only uncovered, and faded in from half width. Under reduced motion the width jumps, the fade-in keeps its duration (2.10, HUM-254). |
+| Caution tape runs | "Here is the barrier" or "the search is running" | 1200 ms per period, endless, as long as the cause persists | linear | `HMotion.cautionTape`, `HMotion.cautionTapePeriod` | Stripe pattern sideways by 16 px per period; the widget itself stands still. Under reduced motion the stripes stand still (3.6, HUM-260). |
+| Sheet slides in from the right | "This belongs to what stands on the left" | 180 ms | `enter` | `HMotion.arrive` | 8 px from the right (`HMotion.arriveOffset`) plus fade-in; the background stays put |
+| Modal appears | "You have to answer here first" | 180 ms | `enter` | `HMotion.arrive` | no path, only fade-in of the modal and dimming of the background; a modal that flies in claims a direction it does not have |
+| Command palette opens | "The manual is here" | one frame | — | — | no motion. Whoever calls it is already typing. |
+| Section change (`Ctrl+1..5`) and tab change | "I am somewhere else now" | one frame | — | — | no cross-fade in the `IndexedStack`, no shift. The change is navigation, not an event. |
+| Return banner appears | "Something happened while you were away" | 180 ms | `enter` | `HMotion.arrive` | like an arrival: 8 px from above plus fade-in |
+| New rule appears in the list | "This rule exists now" | 240 ms | `enter` | `HMotion.ruleDraw` | Drawing of the row |
+| Countdown below a threshold | "Look now" | 1200 ms per breath, 3 breaths | `easeInOut` | `HMotion.breathe`, `HMotion.breatheCycles` | Opacity between `HMotion.breatheMinOpacity` and 1.0 |
+| Error | "Something has gone wrong here" | — | — | — | no motion; the Diagnostic fades in via `HMotion.arrive` into a reserved slot |
 
-### 2.3 Richtung ist Bedeutung
+### 2.3 Direction is meaning
 
-Erlaubt und erlaubt-nach-Bearbeitung gleiten nach rechts, blockiert, abgelaufen und Fehler nach links. Sonst bewegt sich nirgends im Programm ein Widget waagerecht — außer dem Sheet, das aus der Kante kommt, an der es hängt. Das Absperrband (3.6) ist keine Ausnahme: es steht, nur sein Streifenmuster läuft, und ein Muster ist eine Füllung, keine Position (nächster Absatz).
+Allowed and allowed-after-editing glide to the right, blocked, timed out and error to the left. Otherwise no widget anywhere in the program moves horizontally — except the sheet, which comes from the edge it is attached to. The caution tape (3.6) is no exception: it stands still, only its stripe pattern runs, and a pattern is a fill, not a position (next paragraph).
 
-Die Achsenregel bindet die **Position** eines Widgets, nicht seine **Füllung**. Eine Füllung, die von links wächst, ist Fortschritt und keine Richtung: sie sagt „so weit bin ich", nicht „dorthin geht es". Deshalb dürfen beide Halte-Füllungen von links laufen, ohne die Regel zu brechen, und deshalb füllt nichts im Programm von rechts, von oben oder aus der Mitte — eine zweite Füllrichtung wäre eine zweite Bedeutung für dieselbe Geste.
+The axis rule binds the **position** of a widget, not its **fill**. A fill that grows from the left is progress and not direction: it says "this far have I got", not "that is where it goes". That is why both hold fills may run from the left without breaking the rule, and that is why nothing in the program fills from the right, from the top or from the middle — a second fill direction would be a second meaning for the same gesture.
 
-Eine einzige Bedeutung für eine einzige Bewegungsachse ist am Rand des Blickfelds lesbar, und dort steht die Queue meistens.
+A single meaning for a single axis of motion is readable at the edge of the field of view, and that is where the queue usually stands.
 
-### 2.4 Der Abgang hat zwei Phasen
+### 2.4 The exit has two phases
 
-Gleiten und Ausblenden laufen in den ersten sechzig Prozent von `HMotion.leave`, das Zusammenfallen der Höhe in den letzten sechzig (`HMotion.leaveGlideFraction`, die Phasen überlappen). Auf einer gemeinsamen `easeIn`-Kurve steht die Zeile rund 170 ms still und springt erst in den letzten Frames zur Seite; genau die Richtung, die die ganze Bedeutung trägt, ist dann unsichtbar.
+Gliding and fading out run in the first sixty per cent of `HMotion.leave`, the collapse of the height in the last sixty (`HMotion.leaveGlideFraction`, the phases overlap). On a shared `easeIn` curve the row stands still for about 170 ms and only jumps to the side in the last frames; exactly the direction that carries the whole meaning is then invisible.
 
-Der Kollaps bleibt, und er kostet: eine Liste, deren Zeilen ihre Höhe animieren, kann ihre Zeilenhöhe nicht vorab kennen. Die Queue behält deshalb `AnimatedList` und verzichtet auf `itemExtent`; die Extent-Pflicht aus Abschnitt 7 gilt dort nicht, sondern in History und in den Body-Ansichten, wo n groß ist und keine Zeile die Höhe wechselt. `AnimatedList` und `SliverAnimatedList` kennen weder `itemExtent` noch `prototypeItem`; wer beides zugleich verlangt, verlangt etwas, das Flutter nicht anbietet. Die Rechnung geht auf, weil die Queue durch das Haltebudget beschränkt ist, während History zehntausend Zeilen trägt (Abweichung in Abschnitt 8).
+The collapse stays, and it costs: a list whose rows animate their height cannot know its row height in advance. The queue therefore keeps `AnimatedList` and does without `itemExtent`; the extent obligation from section 7 does not apply there, but in History and in the body views, where n is large and no row changes its height. `AnimatedList` and `SliverAnimatedList` know neither `itemExtent` nor `prototypeItem`; whoever demands both at once demands something Flutter does not offer. The sums work out because the queue is bounded by the hold budget, while History carries ten thousand rows (deviation in section 8).
 
-Eine gehende Zeile ist ein eingefrorenes Abbild: sie beobachtet keinen Provider, lädt kein Detail, ihr Countdown steht ab dem Augenblick der Entscheidung, und sie behält die Höhe, die sie in diesem Augenblick hatte. Eine Zeile, die während ihres Abgangs weiterzählt, behauptet etwas Falsches. „Eingefroren" ist wörtlich gemeint und braucht ein eigenes Widget mit aufgelösten Werten statt eines `ref` (Abschnitt 9).
+A leaving row is a frozen image: it observes no provider, loads no detail, its countdown stops from the instant of the decision, and it keeps the height it had at that instant. A row that keeps counting during its exit claims something false. "Frozen" is meant literally and needs a widget of its own with resolved values instead of a `ref` (section 9).
 
-### 2.5 Der Wisch gehört dem Griff, der Streifen der Antwort
+### 2.5 The sweep belongs to the grip, the strip to the answer
 
-Der Rail-Wisch startet mit der Entscheidung selbst und läuft die vollen 200 ms durch, unabhängig davon, wann der Daemon antwortet. Der Bestätigungsstreifen erscheint erst, wenn die Antwort da ist. Zwei Gutachten widersprechen sich hier — „zeige die Wirkung sofort" gegen „behaupte nichts vor der Antwort" —, und beide behalten recht, weil sie von zwei verschiedenen Dingen sprechen: der Wisch sagt „dein Griff ist angekommen", der Streifen sagt „das ist passiert". Über einen Unix-Socket dauert `Decide` wenige Millisekunden; an `DecisionSending` gekoppelt füllt der Rail rund zwei Prozent und läuft wieder leer, also findet der eine Moment, für den das Produkt existiert, ohne sichtbare Bewegung statt.
+The rail sweep starts with the decision itself and runs the full 200 ms, regardless of when the daemon answers. The confirmation strip appears only once the answer is there. Two expert opinions contradict each other here — "show the effect at once" against "claim nothing before the answer" — and both are right, because they speak of two different things: the sweep says "your grip has arrived", the strip says "this has happened". Over a Unix socket `Decide` takes a few milliseconds; coupled to `DecisionSending`, the rail fills about two per cent and drains again, so the one moment the product exists for takes place without visible motion.
 
-Zwischen Wisch und Streifen liegt der Zustand, der am längsten dauert, wenn etwas schiefgeht: die Entscheidung ist unterwegs. Er hat bewusst keine eigene Bewegung. Der Rail steht gewischt, das Glyph ist getauscht, der Streifen fehlt. Kommt innerhalb von `HMotion.confirm` keine Antwort, nimmt das `Diagnostic` aus 4.4 den Platz ein, den der Streifen bekommen hätte, und die Zeile geht nicht.
+Between sweep and strip lies the state that lasts longest when something goes wrong: the decision is in transit. It deliberately has no motion of its own. The rail stands swept, the glyph is swapped, the strip is missing. If no answer comes within `HMotion.confirm`, the `Diagnostic` from 4.4 takes the place the strip would have had, and the row does not leave.
 
-### 2.6 Die Wirkung steht in 400 ms, nicht in 3 s
+### 2.6 The effect stands within 400 ms, not 3 s
 
-Was die App allein entscheidet, steht innerhalb von 400 ms nach dem Tastendruck: Rail gewischt, Zustands-Glyph getauscht, Countdown eingefroren. Was von der Antwort abhängt, steht innerhalb von 400 ms nach der Antwort: der Bestätigungssatz. Die Trennung ist nicht kosmetisch — die App kontrolliert die Latenz des Daemons nicht und darf deshalb keine Frist versprechen, die sie nicht halten kann.
+What the app decides on its own stands within 400 ms of the key press: rail swept, state glyph swapped, countdown frozen. What depends on the answer stands within 400 ms of the answer: the confirmation sentence. The separation is not cosmetic — the app does not control the latency of the daemon and therefore must not promise a deadline it cannot keep.
 
-Die drei Sekunden bis zum Abgang der Zeile (`HMotion.confirm`) sind ein Ruhezustand und kein Wartezustand. Drei Sekunden Totzeit zwischen Griff und Bewegung zerreißen den Zusammenhang: wenn die Zeile fällt, ist der Mensch schon weiter, und die Bewegung hat keinen sichtbaren Anlass mehr.
+The three seconds until the row leaves (`HMotion.confirm`) are a resting state and not a waiting state. Three seconds of dead time between grip and motion tear the connection apart: when the row drops, the human has already moved on, and the motion no longer has a visible cause.
 
-### 2.7 Der Atem ist eine Flagge, keine Skala
+### 2.7 The breath is a flag, not a scale
 
-Die verbleibende Zeit steht in der Bogenlänge des Rings. Der Atem sagt nur „jetzt hinsehen": drei Züge, wenn der Flow 20 % seines Budgets unterschreitet, drei weitere bei 5 %, dann Ruhe. Er läuft über `Curves.easeInOut`, nicht auf einem linearen Controller mit `repeat(reverse: true)` — eine Dreieckwelle hat an beiden Enden eine Ecke, und die liest das Auge als Blinken. Er nimmt das Glyph nie unter `HMotion.breatheMinOpacity` (0,72); heute fällt es auf 0,45, was die dringendste Anfrage zur am schlechtesten sichtbaren macht.
+The remaining time stands in the arc length of the ring. The breath only says "look now": three breaths when the flow drops below 20 % of its budget, three more at 5 %, then quiet. It runs over `Curves.easeInOut`, not on a linear controller with `repeat(reverse: true)` — a triangle wave has a corner at both ends, and the eye reads that as blinking. It never takes the glyph below `HMotion.breatheMinOpacity` (0.72); today it drops to 0.45, which makes the most urgent request the least visible one.
 
-Die Phase kommt aus der Uhrzeit modulo `HMotion.breathe`, damit Gruppenkopf und Zeilen im Takt atmen, ohne dass es einen anwendungsweiten Ticker braucht. Ein Glyph, das die Schwelle gerade überschreitet, übernimmt diese Phase aber **nicht sofort**: es startet seinen ersten Zug bei Deckkraft 1,0 und läuft erst danach in die gemeinsame Phase ein. Sonst beginnt die Flagge, je nach Sekunde, mit einem Sprung von 1,0 auf 0,72 in einem Frame — genau das Blinken, das dieser Abschnitt verbietet, und ausgerechnet an der dringendsten Zeile.
+The phase comes from the clock time modulo `HMotion.breathe`, so that group header and rows breathe in step without needing an application-wide ticker. A glyph that is just crossing the threshold does **not take over** this phase **at once**, though: it starts its first breath at opacity 1.0 and only then runs into the shared phase. Otherwise the flag begins, depending on the second, with a jump from 1.0 to 0.72 in one frame — exactly the blinking this section forbids, and on the most urgent row of all.
 
-Fällt eine Schwelle, während die Sektion unsichtbar ist, verfallen die drei Züge. Sie werden nicht nachgeholt. Der Atem sagt „jetzt hinsehen", und dieses Jetzt ist vorbei; was bleiben muss, bleibt im Bogen, im Semantics-Value und in der Warnung aus 4.8.
+If a threshold falls while the section is invisible, the three breaths lapse. They are not made up for. The breath says "look now", and that now is over; what must remain remains in the arc, in the Semantics value and in the warning from 4.8.
 
-### 2.8 Nichts bewegt sich unter dem lesenden Auge
+### 2.8 Nothing moves under the reading eye
 
-Eine Ankunft darf nie eine Zeile über dem Zeiger oder über dem Scroll-Anker einfügen. Solange der Zeiger im Queue-Pane steht, die letzte Tastaturnavigation weniger als `HMotion.freezeAfterKey` (2 s) her ist oder eine Mehrfachauswahl besteht, bleibt die Reihenfolge eingefroren; neue Flows erhöhen nur die Pille „+n neu". Die Pille liegt über der obersten Zeile, halbtransparent, und wird nie in die Spalte eingefügt — eine Pille im Kopf schöbe jede Zeile um ihre eigene Höhe nach unten, also genau das, wogegen das Einfrieren existiert. Zusammengeführt wird bei Klick oder `HMotion.freezeAfterPointer` (500 ms) nach dem Verlassen des Panes.
+An arrival may never insert a row above the pointer or above the scroll anchor. As long as the pointer is in the queue pane, the last keyboard navigation was less than `HMotion.freezeAfterKey` (2 s) ago or a multiple selection exists, the order stays frozen; new flows only increase the pill "+n new". The pill lies over the topmost row, semi-transparent, and is never inserted into the column — a pill in the header would push every row down by its own height, which is exactly what freezing exists against. Merging happens on click or `HMotion.freezeAfterPointer` (500 ms) after leaving the pane.
 
-Die Pille ist erreichbar, nicht nur sichtbar: sie ist ein Fokusstopp und hat eine Taste (`Shift+J`, „zu den neuen"). Ohne Taste kann ein Tastaturnutzer die Ankünfte nie zusammenführen, ohne zur Maus zu greifen. Während des Einfrierens bleibt die Auswahl auf ihrer Zeile und wandert beim Zusammenführen nicht mit; der Mensch hat sie dorthin gesetzt, nicht die Liste.
+The pill is reachable, not only visible: it is a focus stop and has a key (`Shift+J`, "to the new ones"). Without a key a keyboard user could never merge the arrivals without reaching for the mouse. While frozen, the selection stays on its row and does not move along when merging; the human put it there, not the list.
 
-**Entschieden ist nicht entfernt.** Die beiden Wörter bezeichnen zwei verschiedene Ereignisse, und nur eines gibt Platz frei:
+**Decided is not removed.** The two words name two different events, and only one of them frees space:
 
-- **Entschieden** heißt: die Zeile bleibt an ihrem Platz im Schnappschuss, bis `HMotion.confirm` abgelaufen ist. Sie zählt nicht als entfernt, sie schiebt nichts, und sie trägt in dieser Zeit den Bestätigungsstreifen (3.4). Der Beleg gehört zur Zeile, die ihn erzeugt hat, also muss die Zeile so lange stehen bleiben.
-- **Entfernt** heißt: die Zeile verlässt den Schnappschuss sofort und nimmt den Abgang aus 2.4. Das gilt für den Ablauf des Bestätigungsfensters, für einen Timeout und für eine Fremdentscheidung (Regel, Notification, zweites Fenster). Entfernte Zeilen geben unterhalb des Zeigers nur Platz frei und schieben nichts hinein.
+- **Decided** means: the row stays in its place in the snapshot until `HMotion.confirm` has elapsed. It does not count as removed, it pushes nothing, and during this time it carries the confirmation strip (3.4). The evidence belongs to the row that produced it, so the row has to stay that long.
+- **Removed** means: the row leaves the snapshot at once and takes the exit from 2.4. That applies to the end of the confirmation window, to a timeout and to a decision from elsewhere (rule, notification, second window). Removed rows only free space below the pointer and push nothing in.
 
-Höchstens drei entschiedene Zeilen ruhen gleichzeitig. Trifft eine vierte Entscheidung ein, geht die älteste sofort, ohne ihr Fenster auszusitzen. Ohne diese Grenze belegt ein schnell abgearbeiteter Schwall die halbe sichtbare Liste mit Belegen für bereits Erledigtes. Ruhende Belege behalten ihre Position; sie sortieren sich weder nach oben noch nach unten, weil das eine Bewegung wäre, die keine der vier Fragen aus 2.1 beantwortet.
+At most three decided rows rest at the same time. If a fourth decision arrives, the oldest leaves at once without sitting out its window. Without this limit a quickly worked-off burst would fill half the visible list with evidence for things already done. Resting evidence keeps its position; it sorts neither up nor down, because that would be a motion that answers none of the four questions from 2.1.
 
-### 2.9 Was nie animiert
+### 2.9 What never animates
 
-- **Text, den jemand liest.** URL, Pfad, Header-Tabellen, Body-Ansichten, Regelsatz, Diff. Sie wechseln sofort oder gar nicht. Dieses Programm verlangt, eine URL zu lesen, bevor über sie entschieden wird; bewegter Text kostet eine zweite Fixation.
-- **Zahlen.** Countdown, Queue-Zähler, Tray-Zähler, Fenstertitel. Ziffern springen, sie rollen, kippen und skalieren nicht. Die Fläche um eine Zahl darf pulsen (2.2), die Zahl selbst nie.
-- **Fokusringe.** Ein Frame. Ein einblendender Ring liest sich als Eingabeverzögerung.
-- **Zeilenhöhen.** Eine Zeile wechselt ihre Höhe nicht, weil sich ihr Zustand ändert: 36 px als Mindesthöhe in jedem Zustand, siehe 3.4. Dass dieselbe Zeile bei größerer Textskalierung höher ist, ist keine Animation, sondern Layout.
-- **Direkte Manipulation.** Splitter, Scrollen, Textauswahl und Drag-Reorder folgen dem Zeiger eins zu eins. Nur die freigewordene Lücke animiert. Jede Dämpfung zwischen Hand und Pixel liest sich, als widerspräche das Programm der Hand.
-- **Hover.** Hover färbt (`HMotion.press`) und deckt Affordanzen in bereits reserviertem Platz auf. Hover verschiebt nichts und ändert keine Größe.
-- **Leerlauf.** Es gibt keine Ambient-, Idle- oder Dauerbewegung außer dem begrenzten Atem aus 2.7 und dem Absperrband aus 3.6, das nur läuft, solange sein Anlass besteht. Kein Spinner, nirgends (2.11).
+- **Text someone is reading.** URL, path, header tables, body views, rule sentence, diff. They change at once or not at all. This program demands that a URL is read before it is decided on; moving text costs a second fixation.
+- **Numbers.** Countdown, queue counter, tray counter, window title. Digits jump; they do not roll, flip or scale. The surface around a number may pulse (2.2), the number itself never.
+- **Focus rings.** One frame. A ring that fades in reads as input lag.
+- **Row heights.** A row does not change its height because its state changes: 36 px as the minimum height in every state, see 3.4. That the same row is taller at a larger text scale is not animation but layout.
+- **Direct manipulation.** Splitter, scrolling, text selection and drag reorder follow the pointer one to one. Only the gap that has been freed animates. Any damping between hand and pixel reads as if the program were contradicting the hand.
+- **Hover.** Hover tints (`HMotion.press`) and uncovers affordances in space that is already reserved. Hover moves nothing and changes no size.
+- **Idle.** There is no ambient, idle or continuous motion except the bounded breath from 2.7 and the caution tape from 3.6, which only runs as long as its cause persists. No spinner, anywhere (2.11).
 
-### 2.9b Der geteilte Übergang
+### 2.9b The shared transition
 
-Ein `Hero` wird nicht erzwungen. Er beantwortet genau eine Frage — „wohin ist das gegangen, was ich eben angesehen habe?" — und gehört deshalb an die zwei Stellen, an denen der Blick sonst springt:
+A `Hero` is not forced. It answers exactly one question — "where did the thing I was just looking at go?" — and therefore belongs in the two places where the eye would otherwise jump:
 
-| Von | Nach | Was fliegt |
+| From | To | What flies |
 |---|---|---|
-| Zeile in der Queue | Karte im Detail-Pane | der Host-Chip mit seinem Rail-Streifen |
-| entschiedene Karte | Zeile in der History | derselbe Chip, sobald beide Screens sichtbar nebeneinander stehen |
+| Row in the queue | Card in the detail pane | the host chip with its rail strip |
+| decided card | Row in the History | the same chip, as soon as both screens are visible side by side |
 
-Alles andere kommt mit den Tokens aus Abschnitt 2.2 aus. Drei Bedingungen, sonst entfällt der Übergang ersatzlos: Quelle und Ziel sind gleichzeitig auf dem Schirm, das fliegende Element trägt in beiden Zuständen dieselbe Bedeutung, und die Strecke ist kürzer als eine Bildschirmdiagonale. Unter reduzierter Bewegung entfällt er immer; die Ankunft am Ziel zeigt dann derselbe Wisch wie jede andere Auswahl.
+Everything else makes do with the tokens from section 2.2. Three conditions, otherwise the transition is dropped without replacement: source and target are on the screen at the same time, the flying element carries the same meaning in both states, and the distance is shorter than a screen diagonal. Under reduced motion it is always dropped; the arrival at the target is then shown by the same sweep as any other selection.
 
-Ein geteilter Übergang darf nie das einzige Zeichen für einen Zustandswechsel sein: Wer den Screen erst nach der Animation ansieht, muss dieselbe Aussage noch in Farbe, Glyph und Text finden. Eine Animation, die keine Frage des Nutzers beantwortet, ist ein Fehler, kein Schmuck.
+A shared transition may never be the only sign of a state change: whoever looks at the screen only after the animation must still find the same statement in colour, glyph and text. An animation that answers no question of the user is a defect, not decoration.
 
-### 2.10 Reduzierte Bewegung
+### 2.10 Reduced motion
 
-Alle Strecken und alle Schleifen laufen über `HReducedMotion` in `motion.dart`; kein Widget entscheidet für sich, ob es sich bewegen darf. Unter reduzierter Bewegung fällt der Weg weg, nicht die Rückmeldung: `arriveOffset` und `leaveOffset` werden null, während Ausblenden, Tastenfüllung und Rail-Wisch ihre vollen Dauern behalten.
+All distances and all loops run through `HReducedMotion` in `motion.dart`; no widget decides for itself whether it may move. Under reduced motion the path is dropped, not the feedback: `arriveOffset` and `leaveOffset` become zero, while fade-out, key fill and rail sweep keep their full durations.
 
-Der Abgang ist der Fall, in dem „weniger Weg" die Rückmeldung versehentlich mitnimmt. Eine Zeile, deren Höhe sofort auf null fällt, hat nichts mehr, was ausblenden könnte; das Ausblenden liefe 220 ms lang über nichts. Unter reduzierter Bewegung behält die gehende Zeile deshalb ihre volle Höhe und blendet an Ort und Stelle über `HMotion.leave` aus; erst danach wird sie in einem Frame entfernt. Der Kollaps entfällt, das Ausblenden bleibt — das ist die Regel, nicht ihre Ausnahme.
+The exit is the case in which "less path" accidentally takes the feedback along with it. A row whose height drops to zero at once has nothing left that could fade out; the fade-out would run for 220 ms over nothing. Under reduced motion the leaving row therefore keeps its full height and fades out in place via `HMotion.leave`; only then is it removed in one frame. The collapse is dropped, the fade-out stays — that is the rule, not its exception.
 
-Jede Schleife bekommt einen ruhenden Ersatz statt gar nichts: aus dem atmenden Glyph wird ein dauerhaft doppelter Ring bei `HMotion.reducedRingAlpha`. Die 20-%-Schwelle ist Information, und wer Animationen abgeschaltet hat, darf sie nicht verlieren.
+Every loop gets a resting substitute instead of nothing at all: the breathing glyph becomes a permanently doubled ring at `HMotion.reducedRingAlpha`. The 20 % threshold is information, and whoever has switched animations off must not lose it.
 
-### 2.11 Warten
+### 2.11 Waiting
 
-Warten ist ein Zustand wie jeder andere und bekommt deshalb eine Sprache, nicht ein Symbol. Die Regel gilt überall gleich:
+Waiting is a state like any other and therefore gets a language, not a symbol. The rule applies the same everywhere:
 
-- Unter `HMotion.waitVisible` (150 ms) passiert nichts. Eine Anzeige, die kürzer sichtbar ist als eine Reaktionszeit, wird als Flackern gelesen.
-- Ab 150 ms behält der Pane sein Layout und zeichnet die Haarlinien-Skelette der erwarteten Zeilen: die Höhe der Zieldichte, `fg2`, keine Bewegung. Das Skelett sagt, wie viel gleich kommt und wo es stehen wird. Ein Spinner sagt nur, dass etwas läuft.
-- Was einmal erschienen ist, bleibt mindestens `HMotion.waitMinVisible` (400 ms) stehen. Sonst erzeugt eine Antwort kurz nach der Schwelle genau das Flackern, das die Schwelle verhindern soll.
-- Beim Eintreffen wird nichts verschoben: das Skelett wird durch die Zeile ersetzt, die es beschrieben hat, an derselben Stelle, in einem Frame.
-- Ein Fehlschlag beim Warten ist ein Fehler und landet nach 4.4 am selben Ort, an dem das Skelett stand — nie als Toast, nie ganzflächig, solange der Rest des Screens gilt.
+- Below `HMotion.waitVisible` (150 ms) nothing happens. An indicator that is visible for less than a reaction time is read as flicker.
+- From 150 ms the pane keeps its layout and draws the hairline skeletons of the expected rows: the height of the target density, `fg2`, no motion. The skeleton says how much is about to come and where it will stand. A spinner only says that something is running.
+- Whatever has appeared once stays for at least `HMotion.waitMinVisible` (400 ms). Otherwise an answer shortly after the threshold produces exactly the flicker the threshold is meant to prevent.
+- On arrival nothing is shifted: the skeleton is replaced by the row it described, in the same place, in one frame.
+- A failure while waiting is an error and lands, per 4.4, in the same place where the skeleton stood — never as a toast, never full-screen, as long as the rest of the screen is valid.
 
-Wo das im Einzelnen sitzt:
+Where that sits in detail:
 
-| Wartender Vorgang | Ort | Skelett |
+| Waiting operation | Place | Skeleton |
 |---|---|---|
-| Body wird geladen und geparst (bis 8 MiB, HUM-030) | im Body-Pane, unter dem bereits sichtbaren Umschalter | zehn Zeilen der Zieldichte 24 px; bei `tooLarge` erscheint stattdessen sofort die Karte mit Größe und Findings |
-| Dry-Run einer Regel (HUM-033) | im Dry-Run-Panel, nie global | drei Ergebniszeilen 28 px unter der unveränderten Überschrift; der Editor bleibt bedienbar |
-| History lädt nach (HUM-032) | unter der letzten geladenen Zeile | so viele 28-px-Skelette, wie die Seite groß ist; die Tabelle springt beim Eintreffen nicht |
-| Export (HUM-032) | im Export-Menü, am auslösenden Eintrag | kein Skelett, sondern Fortschritt in Zeilen („1.284 von 5.000"), weil die Zahl bekannt ist |
-| Entscheidung unterwegs | in der Zeile und in der Aktionsleiste | keines. Der Rail steht gewischt; das ist die Anzeige (2.5). |
-| Daemon antwortet beim Start noch nicht | ganzflächig | Splash nach denselben zwei Schwellen (4.2) |
+| Body is loaded and parsed (up to 8 MiB, HUM-030) | in the body pane, below the switcher that is already visible | ten rows of the target density 24 px; with `tooLarge` the card with size and findings appears instead at once |
+| Dry run of a rule (HUM-033) | in the dry-run panel, never global | three result rows of 28 px below the unchanged heading; the editor stays usable |
+| History loads more (HUM-032) | below the last loaded row | as many 28 px skeletons as the page is large; the table does not jump on arrival |
+| Export (HUM-032) | in the export menu, at the triggering entry | no skeleton, but progress in rows ("1,284 of 5,000"), because the number is known |
+| Decision in transit | in the row and in the action bar | none. The rail stands swept; that is the indicator (2.5). |
+| Daemon does not answer yet at start-up | full-screen | Splash after the same two thresholds (4.2) |
 
 ---
 
-## 3. Hierarchie und Farbe
+## 3. Hierarchy and colour
 
-### 3.1 Das eine Wichtige pro Screen
+### 3.1 The one important thing per screen
 
-Ein Screen hat genau ein größtes Textelement, genau ein gefülltes Control und genau einen Leerzustand. Alles andere ist Ghost, getönt oder neutral.
+A screen has exactly one largest text element, exactly one filled control and exactly one empty state. Everything else is ghost, tinted or neutral.
 
-„Gefüllt" heißt: das Control trägt den Akzent als Fläche, nicht als Umriss — entweder als volle Akzentfläche mit `onAccent`-Text (`HButtonVariant.primary`) oder als Akzent-Tönung am Token-Deckel (`HColors.tintAlpha`, 10 %), wie die Release Valve. Alles andere ist Ghost: Rahmen oder Text, keine Fläche.
+"Filled" means: the control carries the accent as a surface, not as an outline — either as a full accent surface with `onAccent` text (`HButtonVariant.primary`) or as an accent tint at the token cap (`HColors.tintAlpha`, 10 %), like the release valve. Everything else is ghost: border or text, no surface.
 
-| Screen | Das eine Wichtige | Größte Type | Einziges gefülltes Control |
+| Screen | The one important thing | Largest type | Only filled control |
 |---|---|---|---|
-| Intercept | die URL der ausgewählten Anfrage | `mono14` im Kartenkopf | Release Valve |
-| History | die gefilterte Liste | `mono14` im Detailkopf | keines; der Akzent gehört dem Filterfeld im Fokus |
-| Rules | die Reihenfolge der Regeln | `ui14` für die Regel als Satz | `+ New rule`, solange die Liste leer ist, sonst `Save` im Editor |
-| Setup und Sandbox | der Zustand der drei Garantien | `ui16` für das Urteil | die Aktion des obersten Diagnostics |
+| Intercept | the URL of the selected request | `mono14` in the card header | Release valve |
+| History | the filtered list | `mono14` in the detail header | none; the accent belongs to the filter field in focus |
+| Rules | the order of the rules | `ui14` for the rule as a sentence | `+ New rule`, as long as the list is empty, otherwise `Save` in the editor |
+| Setup and Sandbox | the state of the three guarantees | `ui16` for the verdict | the action of the topmost Diagnostic |
 
-Die Regel gilt je **Screen**, nicht je Pane. Ein Pane hat kein eigenes Wichtigstes, das mit dem des Screens konkurrieren dürfte: die erste Zeile des Kontext-Panes im Intercept trägt die Antwort „bekannt oder unbekannt" auf `ui14` und bleibt damit unter der URL im Kartenkopf. Auf `ui16` läge sie über dem Gegenstand der Entscheidung, und zwar auch dann, wenn `mono14` und `ui16` sich nicht allein an der Zahl vergleichen lassen — im Zweifel gewinnt die URL, weil der Screen von ihr handelt.
+The rule applies per **screen**, not per pane. A pane has no most important thing of its own that could compete with that of the screen: the first row of the context pane in Intercept carries the answer "known or unknown" in `ui14` and thus stays below the URL in the card header. In `ui16` it would stand above the subject of the decision, and that even if `mono14` and `ui16` cannot be compared by the number alone — in doubt the URL wins, because the screen is about it.
 
-Ein leerer Screen ist die Ausnahme, die die Regel braucht: solange ein Screen keinen Inhalt hat, ist seine primäre Erzeugungsaktion gefüllt, damit überhaupt ein Weg sichtbar ist; sobald er Inhalt hat, wird sie Ghost und die Füllung geht an das Control der Entscheidung. Genauer: **ein gefülltes Control je Entscheidungskontext**. Ein Modal, ein Sheet und der Screen darunter sind drei Kontexte, aber nie gleichzeitig aktiv.
+An empty screen is the exception the rule needs: as long as a screen has no content, its primary creation action is filled, so that a way forward is visible at all; as soon as it has content, it becomes ghost and the fill goes to the control of the decision. More precisely: **one filled control per decision context**. A modal, a sheet and the screen below are three contexts, but never active at the same time.
 
-Die Skala fällt heute auf 11/12/13 zusammen: `ui20` steht nur auf Platzhaltern, `ui14` und `mono14` nirgends, und die URL — der Gegenstand der Entscheidung — läuft auf `mono13`. `ui16` und `ui20` gehören ab jetzt dem jeweils Wichtigsten, nicht dem Unfertigsten.
+Today the scale collapses to 11/12/13: `ui20` stands only on placeholders, `ui14` and `mono14` nowhere, and the URL — the subject of the decision — runs in `mono13`. From now on `ui16` and `ui20` belong to the most important thing in each case, not to the most unfinished.
 
-### 3.2 Der Dichte-Rhythmus
+### 3.2 The density rhythm
 
-- Basis 4 px. Jeder Abstand ist ein Vielfaches davon; `x1/2 = 2 px` gibt es nicht.
-- Panel-Padding 12 px. Jede rechte Rinne endet bei 12 px, auch die des Queue-Kopfs, damit Zähler und Countdowns in einer Spalte fluchten.
-- Drei Zeilendichten, nicht mehr: 36 px in Queue und Rules, 28 px in der History-Tabelle, 24 px in Body-Ansichten. Alle drei sind Mindesthöhen (Abschnitt 6, Textskalierung), und alle drei brauchen ein Token (Abschnitt 9).
-- **Textmaß höchstens 90 Monospace-Zeichen** — für Fließtext und für einzeilige URL- und Pfadfelder. Überschüssige Panebreite wird Rinne, nie Zeilenlänge. Bei 2560 px läuft eine URL sonst über 137 Zeichen, und das Auge sucht den nächsten Zeilenanfang.
-- **Code, Hex und Tabellen brechen nie um.** Raw-Body, Hex-Ansicht und die History-Tabelle scrollen waagerecht und bekommen kein Maß. Ein Umbruch erzeugt dort visuelle Zeilen, die die Byte-Offsets der Findings verschieben (HUM-030, Fallstrick „Wrap aus"); eine falsch platzierte Fundstelle ist schlimmer als eine lange Zeile.
-- Panes 28/44/28 bis 1800 px Fensterbreite. Darüber friert der Inspector bei Maß plus Rinne ein, Queue und Kontext nehmen den Rest. Unter 1280 px klappt der Kontext-Pane zu und ist über `Ctrl+D` erreichbar.
-- Die Naht zwischen zwei Panes gehört dem Splitter. Ein Pane zeichnet keinen linken und keinen rechten Rand; heute stehen an jeder Naht zwei Haarlinien 3 px auseinander.
-- Ein Screen zeigt einen Leerzustand, nicht einen pro Pane. Solange der Hauptpane leer ist, bleiben die Nebenpanes still.
+- Base 4 px. Every spacing is a multiple of it; `x1/2 = 2 px` does not exist.
+- Panel padding 12 px. Every right gutter ends at 12 px, including that of the queue header, so that counters and countdowns align in one column.
+- Three row densities, no more: 36 px in Queue and Rules, 28 px in the History table, 24 px in body views. All three are minimum heights (section 6, text scaling), and all three need a token (section 9).
+- **Measure at most 90 monospace characters** — for running text and for single-line URL and path fields. Surplus pane width becomes gutter, never line length. At 2560 px a URL would otherwise run over 137 characters, and the eye searches for the start of the next line.
+- **Code, hex and tables never wrap.** Raw body, hex view and the History table scroll horizontally and get no measure. A wrap there produces visual lines that shift the byte offsets of the findings (HUM-030, pitfall "wrap off"); a misplaced finding is worse than a long line.
+- Panes 28/44/28 up to 1800 px window width. Above that the inspector freezes at measure plus gutter, queue and context take the rest. Below 1280 px the context pane collapses and is reachable via `Ctrl+D`.
+- The seam between two panes belongs to the splitter. A pane draws neither a left nor a right border; today every seam has two hairlines 3 px apart.
+- A screen shows one empty state, not one per pane. As long as the main pane is empty, the side panes stay quiet.
 
-Das Maß steht als Zeichenzahl, nicht als Pixelbreite, weil die Breite von der installierten Schrift abhängt. Wer trotzdem rechnet: JetBrains Mono und jeder Fallback der Kette laufen auf rund 0,6 em Vorschub, also rund 700 px bei `mono13` und rund 650 px bei `mono12`; `queue_row.dart` rechnet mit 7,3 px je Zeichen bei 12 px. Diese Zahlen sind Illustration, normativ ist die Zeichenzahl (Abschnitt 9).
+The measure is given as a character count, not as a pixel width, because the width depends on the installed font. For whoever calculates anyway: JetBrains Mono and every fallback of the chain run at about 0.6 em advance, so about 700 px at `mono13` and about 650 px at `mono12`; `queue_row.dart` calculates with 7.3 px per character at 12 px. These numbers are illustration; the character count is normative (section 9).
 
-### 3.3 Farbe bedeutet Zustand
+### 3.3 Colour means state
 
-Der Akzent markiert, was Fokus nehmen oder geklickt werden kann: `HColors.accent` (#E8B84B) und `HColors.lAccent` (#A57A1C). Seit HUM-260 ist er das Gelb der Marke — das App-Icon ist eine schwarze Faust auf einer gelben Kachel (#EBC05A bis #D49E34) —, im hellen Theme als Ocker, weil Gelb auf Weiß unlesbar ist. Was auf dem Akzent steht, Text wie Glyph, ist dunkel: `HColors.onAccent` (#14161C), in beiden Themes, nie Weiß. Die Zahlen: Akzent auf `bg0` bis `bg3` mindestens 7,95:1, Ocker auf `lBg0` bis `lBg3` mindestens 3,29:1 (Flächengrenze), `onAccent` auf dem Akzent 9,81:1, auf dem Ocker 4,65:1. Ein Wort in Akzentfarbe steht in `accentText`, nie in `accent`. Inerter Text ist nie Akzent — eine akzentfarbene URL, die niemand öffnen kann, bringt dem Auge bei, dass Akzent nichts bedeutet, und dann bricht Fokus, Auswahl und Primärbutton gleich mit.
+The accent marks what can take focus or be clicked: `HColors.accent` (#E8B84B) and `HColors.lAccent` (#A57A1C). Since HUM-260 it is the yellow of the brand — the app icon is a black fist on a yellow tile (#EBC05A to #D49E34) —, in the light theme as ochre, because yellow on white is unreadable. Whatever stands on the accent, text as well as glyph, is dark: `HColors.onAccent` (#14161C), in both themes, never white. The numbers: accent on `bg0` to `bg3` at least 7.95:1, ochre on `lBg0` to `lBg3` at least 3.29:1 (surface threshold), `onAccent` on the accent 9.81:1, on the ochre 4.65:1. A word in accent colour stands in `accentText`, never in `accent`. Inert text is never accent — an accent-coloured URL that nobody can open teaches the eye that accent means nothing, and then focus, selection and primary button break along with it.
 
-Zustandsfarben stehen nur an Zustand, aus `HStateColors` über `HTheme.of(context).state` bzw. `tokens.stateColor(state)`:
+State colours stand only on state, from `HStateColors` via `HTheme.of(context).state` or `tokens.stateColor(state)`:
 
-| Zustand | Token | Dunkel | Hell |
+| State | Token | Dark | Light |
 |---|---|---|---|
-| `held` | `HColors.held` | #79C9EC (bis HUM-260 #E0B24A) | abgeleitet, `HStateColors.light` (#1C91C5) |
-| `allowed` | `HColors.allowed` | #4FBF8C | abgeleitet |
-| `allowedEdited` | `HColors.allowedEdited` | #57B99F plus Akzentpunkt | abgeleitet |
-| `blocked` | `HColors.blocked` | #E5646E | abgeleitet |
-| `timedOut` | `HColors.timedOut` | #8A90A2 | abgeleitet |
-| `autoRule` | `HColors.autoRule` | `allowed` bei 60 % | abgeleitet |
-| `passthroughLlm` | `HColors.passthrough` | #B48AF0 | abgeleitet |
-| `error` und Secret | `HColors.secret` | #F0784F | abgeleitet |
+| `held` | `HColors.held` | #79C9EC (until HUM-260 #E0B24A) | derived, `HStateColors.light` (#1C91C5) |
+| `allowed` | `HColors.allowed` | #4FBF8C | derived |
+| `allowedEdited` | `HColors.allowedEdited` | #57B99F plus accent dot | derived |
+| `blocked` | `HColors.blocked` | #E5646E | derived |
+| `timedOut` | `HColors.timedOut` | #8A90A2 | derived |
+| `autoRule` | `HColors.autoRule` | `allowed` at 60 % | derived |
+| `passthroughLlm` | `HColors.passthrough` | #B48AF0 | derived |
+| `error` and Secret | `HColors.secret` | #F0784F | derived |
 
-Neben den Zuständen gibt es seit HUM-260 zwei Töne, die kein Zustand eines Flows sind und deshalb nicht in `HStateColors`, sondern in `HSurfaceColors` stehen:
+Besides the states there are, since HUM-260, two tones that are not a state of a flow and therefore stand not in `HStateColors` but in `HSurfaceColors`:
 
-| Bedeutung | Token | Dunkel | Hell |
+| Meaning | Token | Dark | Light |
 |---|---|---|---|
-| Achtung: Warnung, offene Funde, beschreibbarer Mount, ein Vorgang, der noch nicht steht | `colors.warning`, Wort `colors.warningText` | #E8B84B (gleich dem Akzent) | #A57A1C (gleich dem Akzent) |
-| Auskunft: Diagnostic der Stufe `info` | `colors.info`, Wort `colors.infoText` | #7C9CF5 | #5B7FE6 |
+| Attention: warning, open findings, writable mount, an operation that is not settled yet | `colors.warning`, word `colors.warningText` | #E8B84B (equal to the accent) | #A57A1C (equal to the accent) |
+| Information: Diagnostic of level `info` | `colors.info`, word `colors.infoText` | #7C9CF5 | #5B7FE6 |
 
-Regeln dazu:
+Rules for this:
 
-1. **Volle Sättigung nur, wo zwei Zustände nebeneinander stehen.** In der Intercept-Queue steht per Konstruktion nur `held`; fünfzehn volle `held`-Rails wiederholen eine Tatsache und werden das Lauteste auf dem Schirm, während die eigentliche Entscheidung neutral bleibt. Dort trägt die Rail `tokens.tint(tokens.stateColor(state))` (10 % Alpha). Im Augenblick der Entscheidung wischt sie auf volle Sättigung — dann ist sie die einzige gesättigte Fläche im Pane. History behält volle Sättigung, weil dort acht Zustände gemischt stehen.
-2. **Farbe ist nie der einzige Kanal.** Jede Zeile, die Zustand trägt, trägt Glyph und Farbe. Im hellen Theme messen `allowed` und `blocked` unter Deuteranopie 1,01:1; eine 4 px breite Farbe allein sagt dort nichts. Die Glyph-Tabelle existiert bereits in `flow_state.dart` und wird bisher nicht benutzt.
-3. **Kein Farbwechsel durch Interpolation.** `held` #79C9EC nach `blocked` #E5646E gelerpt liefe durch ein fahles Mauve (#AF96AD), das zwischen `timedOut` und `passthrough` liegt, und zeigte einen Zustand, den es nie gab. Deshalb wischt der Rail, statt zu überblenden.
-4. **Method-Badges sind in Listen neutral** (`fg1` auf `bg2`). Die Methoden-Hues borgen sich Zustandsfarben (PUT/PATCH ist `held`, DELETE ist `blocked` bei 70 %, POST ist `passthrough`); in einer Liste liest das Auge ein rötliches Badge neben einer roten Rail als zwei Blöcke, nicht als ein Verb und einen Zustand. Hue bekommt nur das eine Badge im Kartenkopf.
-5. **Chrome, das sich nicht ändern kann, trägt `fg1` oder `fg2`.** Ein Zustandsanzeiger hat mindestens zwei Werte, sonst ist er keiner. „Intercept an" und der Verbindungspunkt sind heute immer grün, weil die Shell nur im verbundenen Zustand baut; zwei dauerhaft grüne Marken bringen dem Auge bei, Grün zu übersehen, und Grün ist die Farbe der einen Handlung, auf die es ankommt. Entweder verdrahten oder entfernen.
-6. **Rot heißt blockiert.** Fehler und Findings sind Orange (`HColors.secret`). Rot als Ambiente gibt es nicht.
-7. **In Body-Ansichten sind Findings die einzige Chroma.** JSON-Schlüssel, Werte und Hex bleiben auf der `fg`-Leiter. Ein Body ist der Ort, an dem ein Secret in Sekunden auffallen muss; drei Farben für Datentypen lassen die Fundstelle mit der Syntax konkurrieren. Das weicht von HUM-030 ab, siehe Abschnitt 8.
-8. **Ein Control, das Zustand zählt, ist trotzdem Akzent.** `+n neu`, der Findings-Chip, der Gruppenzähler und der Batch-Button tragen alle eine Zahl über gehaltene Anfragen — und sie bleiben Akzent, weil man sie anfassen kann. Der Zustand, den sie zählen, steht als Glyph darin, nie als Füllung. Sonst zerfällt der Akzent in so viele Bedeutungen, wie es Zähler gibt.
-9. **Was nur anzeigt und nichts auslöst, trägt Zustandsfarbe.** Das Tray-Icon ist kein Control, sondern der einzige Zustandsanzeiger der Sitzung, solange das Fenster nicht sichtbar ist; sein Zähler steht deshalb in der Farbe von `held`, nicht im Akzent (Abweichung von HUM-034, siehe Abschnitt 8). Regel 8 und Regel 9 zusammen: Fläche zum Anfassen ist Akzent, Fläche zum Ablesen ist Zustand.
-10. **Die ruhende `held`-Rail ist von der 3:1-Regel ausgenommen.** Eine 10-%-Tönung von `held` auf `bg1` misst gemessene 1,21:1; auf 3:1 käme sie erst bei 46 % Alpha, und bei 50 % ist sie keine Tönung mehr, sondern die gesättigte Fläche, die Regel 1 der Entscheidung vorbehält. Die Rail gruppiert dort nur; Zustand und Frist tragen Glyph, Label und Semantik. Die Ausnahme gilt namentlich für die ruhende Zustands-Rail in der Queue und für nichts sonst — die gewischte Rail, die Auswahl-Rail und jede Rail in History erreichen 3:1. `HColorDerivation.tint` deckelt bei `HColors.tintAlpha`; eine stärkere Rail wäre kein Aufruf, sondern ein neues Token (Abschnitt 9).
+1. **Full saturation only where two states stand side by side.** In the Intercept queue, by construction, only `held` stands; fifteen full `held` rails repeat a fact and become the loudest thing on the screen, while the actual decision stays neutral. There the rail carries `tokens.tint(tokens.stateColor(state))` (10 % alpha). At the instant of the decision it sweeps to full saturation — then it is the only saturated surface in the pane. History keeps full saturation, because eight states stand mixed there.
+2. **Colour is never the only channel.** Every row that carries state carries glyph and colour. In the light theme `allowed` and `blocked` measure 1.01:1 under deuteranopia; a 4 px wide colour alone says nothing there. The glyph table already exists in `flow_state.dart` and has not been used so far.
+3. **No colour change by interpolation.** `held` #79C9EC lerped to `blocked` #E5646E would run through a pale mauve (#AF96AD) that lies between `timedOut` and `passthrough`, and would show a state that never existed. That is why the rail sweeps instead of cross-fading.
+4. **Method badges are neutral in lists** (`fg1` on `bg2`). The method hues borrow state colours (PUT/PATCH is `held`, DELETE is `blocked` at 70 %, POST is `passthrough`); in a list the eye reads a reddish badge next to a red rail as two blocks, not as a verb and a state. Only the one badge in the card header gets a hue.
+5. **Chrome that cannot change carries `fg1` or `fg2`.** A state indicator has at least two values, otherwise it is none. "Intercept on" and the connection dot are always green today, because the shell only builds in the connected state; two permanently green marks teach the eye to overlook green, and green is the colour of the one action that matters. Either wire them up or remove them.
+6. **Red means blocked.** Errors and findings are orange (`HColors.secret`). Red as ambience does not exist.
+7. **In body views findings are the only chroma.** JSON keys, values and hex stay on the `fg` ladder. A body is the place where a secret must stand out within seconds; three colours for data types make the finding compete with the syntax. This deviates from HUM-030, see section 8.
+8. **A control that counts state is still accent.** `+n new`, the findings chip, the group counter and the batch button all carry a number about held requests — and they stay accent, because you can touch them. The state they count stands as a glyph inside, never as a fill. Otherwise the accent falls apart into as many meanings as there are counters.
+9. **What only displays and triggers nothing carries state colour.** The tray icon is not a control but the only state indicator of the session as long as the window is not visible; its counter therefore stands in the colour of `held`, not in the accent (deviation from HUM-034, see section 8). Rule 8 and rule 9 together: a surface to touch is accent, a surface to read is state.
+10. **The resting `held` rail is exempt from the 3:1 rule.** A 10 % tint of `held` on `bg1` measures 1.21:1; it would only reach 3:1 at 46 % alpha, and at 50 % it is no longer a tint but the saturated surface that rule 1 reserves for the decision. There the rail only groups; state and deadline are carried by glyph, label and semantics. The exception applies by name to the resting state rail in the queue and to nothing else — the swept rail, the selection rail and every rail in History reach 3:1. `HColorDerivation.tint` caps at `HColors.tintAlpha`; a stronger rail would not be a call but a new token (section 9).
 
-11. **Akzent und `held` sind nie dieselbe Farbfamilie.** Bis HUM-260 war `held` Amber und der Akzent Blau; seit der Akzent das Gelb der Marke ist, trägt `held` ein kühles Himmelscyan. Ein gelber Zähler, der „hier anfassen" heißt, und eine gelbe Rail, die „wartet" heißt, wären genau die Verwechslung, die Regel 8 und 9 ausschließen. Der Abstand von `held` zu jeder anderen Zustandsfarbe und zum Akzent ist in `tokens_test.dart` gemessen, in OKLab, normal und unter simulierter Protanopie und Deuteranopie (Machado 2009), und liegt überall bei mindestens 0,08; das alte Amber läge neben dem neuen Akzent bei 0,02. Unter Deuteranopie fallen Cyan und das Violett von `passthrough` auf dasselbe Blau; dort trennt sie nur die Helligkeit, und `held` ist deshalb heller als `passthrough`.
+11. **Accent and `held` are never the same colour family.** Until HUM-260 `held` was amber and the accent blue; since the accent is the yellow of the brand, `held` carries a cool sky cyan. A yellow counter that means "touch here" and a yellow rail that means "waiting" would be exactly the confusion that rules 8 and 9 rule out. The distance from `held` to every other state colour and to the accent is measured in `tokens_test.dart`, in OKLab, normal and under simulated protanopia and deuteranopia (Machado 2009), and is at least 0.08 everywhere; the old amber would be at 0.02 next to the new accent. Under deuteranopia cyan and the violet of `passthrough` fall onto the same blue; there only lightness separates them, and `held` is therefore lighter than `passthrough`.
 
-12. **Gelb heißt Achtung, Blau heißt Auskunft, Cyan heißt gehalten.** Warnungen tragen `warning`, das Gelb der Marke, wie das Absperrband (3.6); Diagnostics der Stufe `info` tragen `info`, das Blau, das bis HUM-260 der Akzent war; `held` steht nur noch an einer gehaltenen Anfrage. Vorher trugen Warnungen das Amber von `held`, und nach dem Wechsel von `held` auf Cyan hätte eine cyanfarbene Warnung neben einer gelben Information verkehrt herum gelesen. Weil `warning` im Wert mit dem Akzent zusammenfällt, steht eine Warnung **nie als Farbe allein**: immer mit Glyph (`triangleAlert`) oder Text, eine Fundstelle im Text mit der Welle statt der geraden Linie der Ersetzung. Ein gelbes Control mit Warnung ist trotzdem ein Control (Regel 8); die Release Valve mit offenem Fund ist es, und Beschriftung und Glyph sagen, warum sie anders aussieht.
+12. **Yellow means attention, blue means information, cyan means held.** Warnings carry `warning`, the yellow of the brand, like the caution tape (3.6); Diagnostics of level `info` carry `info`, the blue that was the accent until HUM-260; `held` now stands only on a held request. Before, warnings carried the amber of `held`, and after the change of `held` to cyan a cyan warning next to a yellow piece of information would have read the wrong way round. Because `warning` coincides in value with the accent, a warning **never stands as colour alone**: always with a glyph (`triangleAlert`) or text, a finding in the text with the wave instead of the straight line of the replacement. A yellow control with a warning is still a control (rule 8); the release valve with an open finding is one, and label and glyph say why it looks different.
 
-### 3.4 Die Queue-Zeile, ausgeschrieben
+### 3.4 The queue row, written out
 
-Weil hier die meisten Regeln zusammenlaufen, steht sie einmal vollständig da:
+Because most rules converge here, it stands written out in full once:
 
 ```
-| 4 Rail | 8 | 16 Zustands-Glyph mit Countdown-Ring | 8 | Method neutral | 8 |
-  Host ui13/500 | 8 | Pfad mono12, mittig gekürzt | 8 | Findings-Chip | 8 | Aktionsslot 28 | 12 |
+| 4 Rail | 8 | 16 state glyph with countdown ring | 8 | Method neutral | 8 |
+  Host ui13/500 | 8 | Path mono12, shortened in the middle | 8 | Findings chip | 8 | Action slot 28 | 12 |
 ```
 
-- **Höhe: mindestens 36 px, in jedem Zustand, ohne zweite Zeile.** Eine Auswahl, die von 36 auf 56 px wächst, schiebt bei jedem `J` alles darunter um 20 px; die zweite Zeile wiederholt außerdem Größe, Content-Type und Wartezeit, die die Karte zwei Panes weiter ohnehin zeigt. 36 px ist eine Mindesthöhe und keine feste: bei `TextScaler.linear(2.0)` misst `ui13` allein 40 px Zeilenhöhe, und eine feste Höhe schluckte den Overflow still. Die Zeile wächst also mit der Skalierung, aber nie mit ihrem Zustand.
-- **Was wann weicht.** Feste Breite verbrauchen 108 px Chrome plus Method-Badge (GET rund 36 px, DELETE rund 56 px) plus Findings-Chip (rund 24 px); bei `HSize.paneMinQueue` (280 px) bleiben für Host und Pfad zusammen rund 100 px. Deshalb steht die Reihenfolge, in der gekürzt wird, hier und nicht im Ermessen des Layouts: der Host bekommt eine Untergrenze von 12 em und wird darüber hinaus mittig gekürzt; der Pfad gibt zuerst nach und verschwindet unter rund 360 px Panebreite ganz; der Findings-Chip fällt unter rund 320 px auf einen 4-px-Punkt in `HColors.secret` zusammen. Der Host ist das Letzte, was geht — er ist die Antwort auf „wohin".
-- **Die Rail:** `held` als Tönung, entschieden in voller Farbe, ausgewählt in Akzent über die vollen 4 px. Die Auswahl **ersetzt** die Zustands-Rail, sie überlagert nicht ihre linke Hälfte; das steht so bereits in der Doku von `spacing.dart` und funktioniert, sobald die Zeile ihr Glyph trägt.
-- **Die Füllung:** Hover `bg2`, Auswahl `bg3`. Nie dieselbe Farbe. `Enter` und `A` erlauben die ausgewählte Zeile, und Erlauben ist unumkehrbar; wenn eine überfahrene Zeile genauso aussieht wie die ausgewählte, liest jemand die eine und sendet die andere. `bg2` steht für genau diese Zwischenstufe in der Leiter und wird in Zeilen bisher nicht benutzt.
-- **Kein `mm:ss` in der Zeile.** Die verbleibende Zeit steht im Bogen des Rings und im Semantics-Value; die Ziffern gehören der ausgewählten Anfrage in der Karte. Fünfzehn gleichzeitig laufende Ziffern sind das Gegenteil eines ruhigen Kontrollraums.
-- **Der Aktionsslot** ist immer 28 px breit und bei Ruhe leer. Hover **und** Fokus blenden dort das Blockieren ein; er ersetzt nichts, verschiebt nichts und lässt keinen Text neu umbrechen. Heute tauscht die Zeile bei Hover rund 33 px Countdown gegen rund 97 px Aktionen, bricht dabei die Titelzeile neu um und stellt „Erlauben" direkt unter den Zeiger.
-- **Aus der Zeile heraus wird nur blockiert, nie erlaubt**, und Blockieren verlangt 250 ms Halten. Erlauben ist unumkehrbar und braucht die URL; die steht in der Karte. Das hält zugleich die Regel ein, dass Erlauben und Blockieren nie nebeneinander stehen — im schmalsten Pane wären 280 px sonst zu wenig für einen ehrlichen Abstand.
-- **Der Bestätigungsstreifen ist die Zeile, nicht ein Kasten darüber.** Während des Bestätigungsfensters (`HMotion.confirm`) tauscht die entschiedene Zeile ihren Inhalt gegen den Streifentext, auf derselben Grundlinie, in derselben Höhe: Rail in voller Zustandsfarbe, Zustands-Glyph voll gesättigt links, dann der Satz in `mono12`. Keine zweite Zeile, kein zusätzlicher Kasten, keine Höhenänderung, kein neuer Umbruch. Danach geht die Zeile nach 2.4.
+- **Height: at least 36 px, in every state, without a second line.** A selection that grows from 36 to 56 px pushes everything below it down by 20 px on every `J`; the second line also repeats size, content type and waiting time, which the card two panes further on shows anyway. 36 px is a minimum height and not a fixed one: at `TextScaler.linear(2.0)` `ui13` alone measures 40 px line height, and a fixed height would silently swallow the overflow. So the row grows with the scaling, but never with its state.
+- **What gives way when.** Fixed widths use up 108 px of chrome plus method badge (GET about 36 px, DELETE about 56 px) plus findings chip (about 24 px); at `HSize.paneMinQueue` (280 px) about 100 px remain for host and path together. That is why the order in which things are shortened stands here and not at the discretion of the layout: the host gets a lower bound of 12 em and is shortened in the middle beyond that; the path gives way first and disappears entirely below about 360 px pane width; the findings chip collapses below about 320 px to a 4 px dot in `HColors.secret`. The host is the last thing to go — it is the answer to "where to".
+- **The rail:** `held` as a tint, decided in full colour, selected in accent across the full 4 px. The selection **replaces** the state rail, it does not overlay its left half; that is already stated in the documentation of `spacing.dart` and works as soon as the row carries its glyph.
+- **The fill:** hover `bg2`, selection `bg3`. Never the same colour. `Enter` and `A` allow the selected row, and allowing is irreversible; if a row under the pointer looks exactly like the selected one, someone reads the one and sends the other. `bg2` stands for exactly this intermediate step in the ladder and has not been used in rows so far.
+- **No `mm:ss` in the row.** The remaining time stands in the arc of the ring and in the Semantics value; the digits belong to the selected request in the card. Fifteen digits running at the same time are the opposite of a calm control room.
+- **The action slot** is always 28 px wide and empty at rest. Hover **and** focus fade in blocking there; it replaces nothing, shifts nothing and makes no text re-wrap. Today the row swaps about 33 px of countdown for about 97 px of actions on hover, re-wraps the title line in doing so and puts "Allow" directly under the pointer.
+- **From the row only blocking is possible, never allowing**, and blocking demands 250 ms of holding. Allowing is irreversible and needs the URL; that stands in the card. This also keeps the rule that allow and block never stand side by side — in the narrowest pane, 280 px would otherwise be too little for an honest spacing.
+- **The confirmation strip is the row, not a box above it.** During the confirmation window (`HMotion.confirm`) the decided row swaps its content for the strip text, on the same baseline, at the same height: rail in full state colour, state glyph fully saturated on the left, then the sentence in `mono12`. No second line, no extra box, no change of height, no new wrap. Afterwards the row leaves per 2.4.
 
-### 3.5 Auswahl, Mehrfachauswahl, Gruppenkopf
+### 3.5 Selection, multiple selection, group header
 
-Die Mehrfachauswahl ist zugleich eine Einfrierbedingung (2.8) und eine Schutzstufe (5.4). Sie braucht deshalb eine eigene, eindeutige Erscheinung, und sie bekommt sie über die Rail, nicht über die Füllung:
+The multiple selection is at once a freeze condition (2.8) and a protection level (5.4). It therefore needs an appearance of its own that is unambiguous, and it gets it via the rail, not via the fill:
 
-- **Die Rail sagt, was ausgewählt ist.** Jedes Mitglied einer Auswahl trägt die Akzent-Rail über die vollen 4 px, ob eines oder zwölf.
-- **Die Füllung sagt, wo der Cursor steht.** Hover `bg2`, die zuletzt angeklickte oder mit `J`/`K` erreichte Zeile `bg3` — genau eine Zeile im ganzen Pane. Ein Mitglied ohne Cursor bleibt ungefüllt; die Rail allein trägt die Mitgliedschaft.
-- **Es erscheint kein zweites gefülltes Control.** Bei einer Auswahl größer eins beschriftet sich die Release Valve um („Allow 5 selected" / „5 ausgewählte senden") und bleibt das eine gefüllte Control des Screens (3.1). Ein zusätzlicher Batch-Button neben ihr wäre der zweite.
+- **The rail says what is selected.** Every member of a selection carries the accent rail across the full 4 px, whether one or twelve.
+- **The fill says where the cursor is.** Hover `bg2`, the row last clicked or reached with `J`/`K` `bg3` — exactly one row in the whole pane. A member without the cursor stays unfilled; the rail alone carries the membership.
+- **No second filled control appears.** With a selection larger than one, the release valve relabels itself ("Allow 5 selected" / "5 ausgewählte senden") and stays the one filled control of the screen (3.1). An extra batch button next to it would be the second.
 
-Der Gruppenkopf ist eine Zeile und hält die Zeilenregel ein: er zeigt im 28-px-Aktionsslot nur `Block {n}`. `Allow {n}` steht dort nicht — dieselbe Begründung wie in 3.4, verstärkt um den Faktor n. Sobald eine Gruppe ausgewählt ist, übernimmt die Aktionsleiste das Erlauben, und die Karte daneben zeigt, worüber entschieden wird: Host, Methodenmix, Pfade, Findings-Summe. Das weicht von HUM-029 ab, siehe Abschnitt 8.
+The group header is a row and keeps the row rule: in the 28 px action slot it shows only `Block {n}`. `Allow {n}` does not stand there — the same reasoning as in 3.4, amplified by a factor of n. As soon as a group is selected, the action bar takes over allowing, and the card next to it shows what is being decided on: host, method mix, paths, findings total. This deviates from HUM-029, see section 8.
 
-### 3.6 Das Absperrband
+### 3.6 The caution tape
 
-Humanitl ist die Absperrung, an der der Verkehr hält. Ihr Zeichen ist ein gelb-schwarzes Absperrband: diagonale Streifen in Markengelb (`HColors.accent`) und `HColors.onAccent`, die gleichmäßig seitwärts laufen (`HCautionTape`, HUM-260). Es ist das einzige Element des Programms, das endlos läuft, und darf deshalb nur dort stehen, wo es etwas bedeutet.
+Humanitl is the barrier at which the traffic stops. Its sign is a yellow-and-black caution tape: diagonal stripes in brand yellow (`HColors.accent`) and `HColors.onAccent` that run evenly sideways (`HCautionTape`, HUM-260). It is the only element of the program that runs endlessly, and may therefore only stand where it means something.
 
-**Wo es steht.** An genau zwei Stellen:
+**Where it stands.** In exactly two places:
 
-1. **Über der Warteschlange, solange mindestens eine Anfrage gehalten ist.** Vier Pixel hoch (`HSize.cautionTape`) unter dem Kopf des Queue-Panes. Es kommt mit der ersten gehaltenen Anfrage und geht mit der letzten. Die Absperrung steht, solange jemand an ihr wartet.
-2. **Als unbestimmte Fortschrittsanzeige der Netzsuche im Setup** („Suche läuft"), solange die Suche läuft. Dort ersetzt es die Haarlinie, die vorher hin- und herlief, und sagt dasselbe: es arbeitet, ohne einen Stand zu behaupten.
+1. **Above the queue, as long as at least one request is held.** Four pixels high (`HSize.cautionTape`) below the header of the queue pane. It comes with the first held request and goes with the last. The barrier stands as long as someone is waiting at it.
+2. **As the indeterminate progress indicator of the network search in setup** ("search running"), as long as the search is running. There it replaces the hairline that used to run back and forth, and says the same thing: it is working, without claiming a progress level.
 
-**Wo es nie steht.**
+**Where it never stands.**
 
-- Nie in einer Zeile, auf einer Karte, in einem Body oder über Text, den jemand liest (2.8, 2.9). Es ist Rand, nie Inhalt.
-- Nie als Zustandsanzeiger. Das Band zeigt nicht an, *wie viele* warten oder *welche*; das tun Zähler, Rail und Glyph. Es darf nie der einzige Kanal einer Aussage sein: wer es nicht sieht, verliert nichts, was nicht im Zähler im Queue-Kopf steht.
-- Nie als Control. Es nimmt keinen Fokus, hat keine Semantik (`ExcludeSemantics`) und reagiert auf keinen Zeiger. Dass es gelb ist wie der Akzent, ist die Marke, nicht die Aufforderung zum Anfassen (3.3, Regel 8); deshalb trägt es immer die schwarzen Streifen dazu und nie eine Akzentfläche allein.
-- Nie in einer Zustandsfarbe und nie in einer Farbe, die je Theme wechselt. Es ist ein Band, kein Token der Leiter; im hellen Theme ist es dasselbe Gelb und Schwarz wie im dunklen.
-- Nie als dritte Stelle, ohne dass dieser Abschnitt sie nennt. Ein Band an jeder Ecke ist Tapete.
+- Never in a row, on a card, in a body or over text someone is reading (2.8, 2.9). It is edge, never content.
+- Never as a state indicator. The tape does not show *how many* are waiting or *which*; counters, rail and glyph do that. It may never be the only channel of a statement: whoever does not see it loses nothing that is not in the counter in the queue header.
+- Never as a control. It takes no focus, has no semantics (`ExcludeSemantics`) and reacts to no pointer. That it is yellow like the accent is the brand, not an invitation to touch (3.3, rule 8); that is why it always carries the black stripes as well and never an accent surface alone.
+- Never in a state colour and never in a colour that changes per theme. It is a tape, not a token of the ladder; in the light theme it is the same yellow and black as in the dark.
+- Never in a third place without this section naming it. A tape on every corner is wallpaper.
 
-**Wie es läuft.** Linear, eine Periode (16 px, ein gelber und ein schwarzer Streifen) in `HMotion.cautionTape` (1200 ms), also rund 13 px je Sekunde: man sieht, dass es läuft, und es zieht nicht. Nahtlos: eine Periode Verschiebung zeichnet dasselbe Bild wie keine. Sein Platz ist immer reserviert, auch ohne Band — dort steht dann die Haarlinie —, damit nichts darunter springt, wenn es kommt oder geht (2.8). Es baut beim Laufen nicht neu, sondern zeichnet hinter einer `RepaintBoundary` nur seine eigenen Pixel; ohne Anlass ist es nicht im Baum und hat keinen Ticker, und in einer unsichtbaren Sektion schweigt sein Ticker über `TickerMode`.
+**How it runs.** Linearly, one period (16 px, one yellow and one black stripe) in `HMotion.cautionTape` (1200 ms), so about 13 px per second: you see that it is running, and it does not pull at the eye. Seamless: a shift of one period draws the same image as none. Its place is always reserved, even without the tape — the hairline then stands there —, so that nothing below it jumps when it comes or goes (2.8). It does not rebuild while running, but only paints its own pixels behind a `RepaintBoundary`; without a cause it is not in the tree and has no ticker, and in an invisible section its ticker falls silent via `TickerMode`.
 
-**Reduzierte Bewegung** (2.10): die Streifen stehen still, das Band bleibt. Der Weg fällt weg, die Aussage bleibt.
+**Reduced motion** (2.10): the stripes stand still, the tape stays. The path is dropped, the statement stays.
 
-**Tests und Goldens** halten das Band über `HCautionTape.debugFreeze` an, gesetzt in `app/test/flutter_test_config.dart`; ein endloses Band liefe sonst in jede Zeitgrenze von `pumpAndSettle`, und ein Golden zeigt es als Standbild bei Phase null.
+**Tests and goldens** stop the tape via `HCautionTape.debugFreeze`, set in `app/test/flutter_test_config.dart`; an endless tape would otherwise run into every time limit of `pumpAndSettle`, and a golden shows it as a still image at phase zero.
 
 ---
 
-## 4. Den Menschen anleiten
+## 4. Guiding the human
 
-Prinzip 7 aus `BACKLOG.md` gilt wörtlich: kein Zustand ohne Klartext-Grund, kein Fehler ohne „Warum" und „Was jetzt". Alle Texte kommen aus ARB, keiner steht im Code. Englisch ist die Quellsprache, Deutsch die Übersetzung; jeder Satz, den dieses Dokument festlegt, steht deshalb in beiden Sprachen, Englisch zuerst, in der Reihenfolge, in der die ARB-Dateien ihn tragen.
+Principle 7 from `BACKLOG.md` applies literally: no state without a plain-language reason, no error without "why" and "what now". All texts come from ARB, none stands in the code. English is the source language, German the translation; every sentence this document fixes therefore stands in both languages, English first, in the order in which the ARB files carry it.
 
-### 4.1 Leerzustände
+### 4.1 Empty states
 
-Es gibt zwei Leerzustände, und sie verwechseln heißt, dem Menschen eine Zukunft zu versprechen, die es nicht gibt.
+There are two empty states, and confusing them means promising the human a future that does not exist.
 
-**Leer, weil noch nichts passiert ist.** Der Satz nennt das nächste Ereignis, nie die Abwesenheit: „`<Subjekt>` erscheint hier, wenn `<Auslöser>`". Die Wörter „Nichts", „keine" und „noch" kommen darin nicht vor. Ein leerer Screen ist der am längsten sichtbare Screen, den ein neuer Nutzer sieht, und die einzige Lehrfläche, die das Programm geschenkt bekommt.
+**Empty because nothing has happened yet.** The sentence names the next event, never the absence: "`<subject>` appears here when `<trigger>`". The words "nothing", "no" and "yet" do not occur in it. An empty screen is the screen a new user sees for longest, and the only teaching surface the program gets for free.
 
-**Leer, weil ein Filter nichts trifft.** Hier gibt es keine kommende Zukunft; die Menge ist da und der Filter schneidet sie weg. Der Satz nennt den Filter, die Trefferzahl und den Rückweg, und der Rückweg ist ein Akzent-Control, kein Satzteil: en „`host:foo` matches 0 of 1,284 requests · Reset filter", de „`host:foo` trifft 0 von 1.284 Anfragen · Filter zurücksetzen". Das gilt in History und in Rules.
+**Empty because a filter matches nothing.** Here there is no coming future; the set is there and the filter cuts it away. The sentence names the filter, the number of matches and the way back, and the way back is an accent control, not part of the sentence: en "`host:foo` matches 0 of 1,284 requests · Reset filter", de "`host:foo` trifft 0 von 1.284 Anfragen · Filter zurücksetzen". This applies in History and in Rules.
 
-**Leer als Tatsache über ein fertiges Objekt** ist keines von beidem. Eine Anfrage ohne Query-Parameter bekommt nie welche; dort ist „No parameters." / „Keine Parameter." richtig und der Verbotswortkatalog gilt nicht. Die Unterscheidung ist prüfbar: gibt es ein Ereignis, das die Fläche füllen würde, ist es ein Leerzustand; gibt es keines, ist es eine Aussage.
+**Empty as a fact about a finished object** is neither of the two. A request without query parameters never gets any; there "No parameters." / "Keine Parameter." is right and the catalogue of forbidden words does not apply. The distinction is checkable: if there is an event that would fill the surface, it is an empty state; if there is none, it is a statement.
 
-Die leere Queue zeigt zusätzlich die drei Tasten, einmal und nie wieder. Die Reihenfolge beginnt mit der umkehrbaren Taste, und `Enter` nennt seine Folge: en „`B` block · `Enter` send (final) · `J`/`K` move", de „`B` blockieren · `Enter` senden (endgültig) · `J`/`K` bewegen". Eine Lehrfläche, die mit der unumkehrbaren Taste anfängt, bringt genau das Falsche zuerst bei.
+The empty queue additionally shows the three keys, once and never again. The order begins with the reversible key, and `Enter` names its consequence: en "`B` block · `Enter` send (final) · `J`/`K` move", de "`B` blockieren · `Enter` senden (endgültig) · `J`/`K` bewegen". A teaching surface that begins with the irreversible key teaches exactly the wrong thing first.
 
-Heute verstoßen fünf ausgelieferte Schlüssel gegen die erste Formel, und sie werden mit dem Screen ersetzt, der sie benutzt:
+Today five shipped keys violate the first formula, and they are replaced together with the screen that uses them:
 
-| Schlüssel | heute | statt dessen |
+<!-- lang: de -->
+| Key | today | instead |
 |---|---|---|
-| `shellSectionPlaceholder` | „Nothing here yet." / „Hier ist noch nichts." | der Screen sagt, was er tun wird, oder er fehlt (4.2, letzter Absatz) |
-| `interceptEmptyTitle` | „No request is waiting" / „Keine Anfrage wartet" | en „The queue is open", de „Die Schleuse ist offen" |
-| `interceptEmptyHint` | „The agent works without a network." / „Der Agent arbeitet ohne Netz." | en „Every request the agent makes appears here.", de „Jede Anfrage des Agenten erscheint hier." — „ohne Netz" liest sich als „ohne Sicherheitsnetz" und behauptet außerdem etwas Falsches, solange keine Sitzung läuft (4.2) |
-| `interceptCardEmptyTitle` | „Nothing selected" / „Nichts ausgewählt" | en „Pick a request", de „Eine Anfrage wählen" |
-| `shellIsolationUnknown` | „Isolation: not checked yet" / „Isolation: noch nicht geprüft" | en „Isolation: check running", de „Isolation: Prüfung läuft" — und wenn keine läuft, nennt der Satz die Aktion, die eine startet |
+| `shellSectionPlaceholder` | "Nothing here yet." / "Hier ist noch nichts." | the screen says what it will do, or it is absent (4.2, last paragraph) |
+| `interceptEmptyTitle` | "No request is waiting" / "Keine Anfrage wartet" | en "The queue is open", de "Die Schleuse ist offen" |
+| `interceptEmptyHint` | "The agent works without a network." / "Der Agent arbeitet ohne Netz." | en "Every request the agent makes appears here.", de "Jede Anfrage des Agenten erscheint hier." — "ohne Netz" reads as "without a safety net" and moreover claims something false as long as no session is running (4.2) |
+| `interceptCardEmptyTitle` | "Nothing selected" / "Nichts ausgewählt" | en "Pick a request", de "Eine Anfrage wählen" |
+| `shellIsolationUnknown` | "Isolation: not checked yet" / "Isolation: noch nicht geprüft" | en "Isolation: check running", de "Isolation: Prüfung läuft" — and if none is running, the sentence names the action that starts one |
+<!-- /lang -->
 
-`interceptQueryEmpty`, `interceptHeadersEmpty` und `interceptBodyEmpty` bleiben, wie sie sind: sie sind Aussagen über eine fertige Anfrage. Damit die Verbotswörter nicht mit dem nächsten Screen zurückkommen, prüft ein ARB-Lint sie in beiden Sprachen und kennt diese drei Ausnahmen namentlich (Abschnitt 9).
+`interceptQueryEmpty`, `interceptHeadersEmpty` and `interceptBodyEmpty` stay as they are: they are statements about a finished request. So that the forbidden words do not come back with the next screen, an ARB lint checks them in both languages and knows these three exceptions by name (section 9).
 
-### 4.2 Vor der ersten Anfrage
+### 4.2 Before the first request
 
-Der erste Bildschirm ist nicht die leere Queue, sondern die Frage, ob überhaupt jemand antwortet. Vier Zustände, jeder mit Text, Ort und genau einer Aktion:
+The first screen is not the empty queue but the question whether anyone answers at all. Four states, each with text, place and exactly one action:
 
-1. **Der Daemon antwortet noch nicht.** Splash, ganzflächig, nach den Schwellen aus 2.11: unter `HMotion.waitVisible` nichts, danach sichtbar und mindestens `HMotion.waitMinVisible` stehend. Kein Spinner, kein Fortschrittsbalken für etwas, dessen Dauer niemand kennt. Ein Splash, der bei einem schnellen Start aufblitzt, ist schlimmer als kein Splash.
-2. **Der Daemon fehlt beim Start.** Setup-Screen. Das `Diagnostic` ist das eine Wichtige des Screens (3.1): `why` aus dem Daemon oder aus dem Transportfehler, `fix` als gefülltes Control. Nichts anderes auf diesem Screen konkurriert darum.
-3. **Der Daemon läuft, aber keine Sitzung.** Die Queue sagt nicht, der Agent arbeite ohne Netz — es arbeitet niemand. Sie nennt das nächste Ereignis, das der Mensch auslöst: en „Once a session runs, every request the agent makes appears here.", de „Sobald eine Session läuft, erscheint hier jede Anfrage des Agenten." Die einzige Aktion ist en „Start session" / de „Session starten", und sie ist gefüllt, weil der Screen leer ist (3.1).
-4. **Die Verbindung bricht während laufender Queue ab.** Die Shell bleibt stehen. Der Setup-Screen ersetzt sie nur beim Kaltstart, nie mitten in der Arbeit — wer zwölf wartende Anfragen auf dem Schirm hat, verliert sonst den Bildschirm und erfährt nicht, was mit dem Agenten passiert ist. Statt dessen: die Queue wird als eingefrorener Schnappschuss markiert (Zeitstempel im Kopf, alle Countdowns stehen, alle Entscheidungstasten still), darüber ein Banner mit Grund, Folge für den Agenten und der einen Aktion en „Reconnect" / de „Erneut verbinden".
+1. **The daemon does not answer yet.** Splash, full-screen, after the thresholds from 2.11: below `HMotion.waitVisible` nothing, after that visible and standing for at least `HMotion.waitMinVisible`. No spinner, no progress bar for something whose duration nobody knows. A splash that flashes up on a quick start is worse than no splash.
+2. **The daemon is missing at start-up.** Setup screen. The `Diagnostic` is the one important thing of the screen (3.1): `why` from the daemon or from the transport error, `fix` as a filled control. Nothing else on this screen competes for it.
+<!-- lang: de -->
+3. **The daemon is running, but no session.** The queue does not say the agent is working without a network — nobody is working. It names the next event the human triggers: en "Once a session runs, every request the agent makes appears here.", de "Sobald eine Session läuft, erscheint hier jede Anfrage des Agenten." The only action is en "Start session" / de "Session starten", and it is filled because the screen is empty (3.1).
+<!-- /lang -->
+4. **The connection breaks while the queue is running.** The shell stays. The setup screen replaces it only on a cold start, never in the middle of work — whoever has twelve waiting requests on the screen would otherwise lose the screen and not learn what has happened to the agent. Instead: the queue is marked as a frozen snapshot (timestamp in the header, all countdowns stop, all decision keys still), above it a banner with reason, consequence for the agent and the one action en "Reconnect" / de "Erneut verbinden".
 
-Sobald Verkehr da ist, aber nichts ausgewählt, zeigt der Kontext-Pane die Zusammenfassung der Sitzung, die seine Sektion besitzt (gesehene Hosts, die häufigsten fünf, Findings gesamt) — ein Pane, dessen einziger Inhalt seine eigene Überschrift ist, liest sich als kaputt.
+As soon as there is traffic but nothing is selected, the context pane shows the summary of the session that its section owns (hosts seen, the five most frequent, findings in total) — a pane whose only content is its own heading reads as broken.
 
-Internes Vokabular steht nie auf dem Schirm: keine Sprintnummern, keine Issue-Kennungen, kein Wort „Platzhalter". Ein Control, das noch nichts tut, sagt, was es tun wird, oder fehlt. Zielgruppe sind Designer und Berater; „Ab Sprint 2 verfügbar" sagt ihnen, dass das Produkt unfertig ist, nicht, was es kann.
+Internal vocabulary never stands on the screen: no sprint numbers, no issue identifiers, no word "placeholder". A control that does nothing yet says what it will do, or is absent. The target audience is designers and consultants; "Available from sprint 2" tells them that the product is unfinished, not what it can do.
 
-### 4.3 Warum diese Anfrage wartet
+### 4.3 Why this request is waiting
 
-Der Satz wird aus dem Haltegrund des Flows gebaut, nicht aus einer Konstanten:
+The sentence is built from the hold reason of the flow, not from a constant:
 
-| Grund | en | de |
+<!-- lang: de -->
+| Reason | en | de |
 |---|---|---|
-| keine Regel traf zu | „Held: no rule matches · default: ask" | „Angehalten: keine Regel · Vorgabe: fragen" (HUM-052: kürzer, damit der Satz in der Aktionsleiste nicht abgeschnitten wird) |
-| eine Regel sagt fragen | „Held: rule `<Regelsatz>` says ask" | „Angehalten: Regel `<Regelsatz>` sagt fragen" |
-| ein Finding | „Held: an AWS access key was found in the body" | „Angehalten: im Body steht ein AWS-Zugangsschlüssel" |
-| unbekannt | benennt, was bekannt ist, und erfindet keinen Grund | dito |
+| no rule matched | "Held: no rule matches · default: ask" | "Angehalten: keine Regel · Vorgabe: fragen" (HUM-052: shorter, so that the sentence is not cut off in the action bar) |
+| a rule says ask | "Held: rule `<rule sentence>` says ask" | "Angehalten: Regel `<Regelsatz>` sagt fragen" |
+| a finding | "Held: an AWS access key was found in the body" | "Angehalten: im Body steht ein AWS-Zugangsschlüssel" |
+| unknown | names what is known, and invents no reason | likewise |
+<!-- /lang -->
 
-Der `kind`-Bezeichner des Findings steht nie im Satz. Er ist internes Vokabular (4.2) und gehört in die Detailzeile und in den Semantics-Value; der Satz nennt den übersetzten Namen und den Fundort.
+The `kind` identifier of the finding never stands in the sentence. It is internal vocabulary (4.2) and belongs in the detail line and in the Semantics value; the sentence names the translated name and the location of the finding.
 
-Heute steht dort für jeden Flow derselbe Text, zentriert zwischen Blockieren und Erlauben, an der aufmerksamkeitsstärksten Stelle des Screens — und er wird zur Lüge, sobald HUM-022 echte `ask`-Regeln liefert. Aus dieser Mitte gehört Wechselndes: der Grund und die verbleibende Zeit mit ihrer Folge benannt — en „auto-blocks in 1:47", de „wird in 1:47 blockiert" —, nie ein blankes `mm:ss`, dessen Richtung und Ausgang man erraten muss, und nie ein Partizip („blockiert in 1:47"), das offenlässt, ob es schon geschehen ist.
+<!-- lang: de -->
+Today the same text stands there for every flow, centred between Block and Allow, at the most attention-grabbing spot of the screen — and it becomes a lie as soon as HUM-022 delivers real `ask` rules. What belongs in this middle is what changes: the reason, and the remaining time with its consequence named — en "auto-blocks in 1:47", de "wird in 1:47 blockiert" —, never a bare `mm:ss` whose direction and outcome one has to guess, and never a participle ("blockiert in 1:47") that leaves open whether it has already happened.
+<!-- /lang -->
 
 ### 4.4 Diagnostics
 
-Jeder Fehlerpfad liefert ein `Diagnostic`, nie einen nackten String.
+Every error path delivers a `Diagnostic`, never a bare string.
 
-- Der `why`-Slot trägt den Satz des Daemons. Der generische Text der App ist der Titel, nicht der Grund. Heute steht der echte Grund in der Mono-Detailzeile und im `why` eine Konstante; damit sind beide Hälften von Prinzip 7 auf einmal gebrochen.
-- `fix` wird immer übergeben, wenn das `Diagnostic` eine `FixAction` trägt. Ein `Diagnostic` mit `FixAction` und ohne sichtbare Aktion ist ein Defekt.
-- Verankert wird am Ort des Fehlschlags: inline unter dem Control bei einer einzelnen Entscheidung, als Banner über der Liste mit `Reload` bei einem Datenfehler, an der Stelle des Skeletts bei einem fehlgeschlagenen Wartevorgang (2.11), ganzflächig nur, wenn gar nichts angezeigt werden kann. Abstand zwischen Fehler und Ursache ist der Grund, warum Menschen die fehlgeschlagene Aktion wiederholen, statt sie zu beheben.
-- Ein Doku-Link ist Akzent, wenn er klickbar ist. Eine URL, die niemand öffnen kann, ist `fg1` mono mit einem Kopierknopf daneben.
+- The `why` slot carries the daemon's sentence. The generic text of the app is the title, not the reason. Today the real reason stands in the mono detail line and a constant in `why`; that breaks both halves of principle 7 at once.
+- `fix` is always passed on when the `Diagnostic` carries a `FixAction`. A `Diagnostic` with a `FixAction` and without a visible action is a defect.
+- It is anchored at the place of the failure: inline below the control for a single decision, as a banner above the list with `Reload` for a data error, in the place of the skeleton for a failed waiting operation (2.11), full-screen only when nothing at all can be displayed. Distance between error and cause is the reason why people repeat the failed action instead of fixing it.
+- A documentation link is accent if it is clickable. A URL that nobody can open is `fg1` mono with a copy button next to it.
 
-### 4.5 Was „Rückgängig" heißt
+### 4.5 What "Undo" means
 
-„Rückgängig" macht immer die Regel rückgängig, nie die Anfrage. Der Streifen liest „Regel gespeichert · Rückgängig" für `HMotion.undoWindow` (10 s) und sagt im selben Atemzug, dass die Anfrage bereits draußen ist. Danach verschwindet nur der Streifen; die Regel bleibt im Rules-Screen löschbar. Für Erlauben und Blockieren selbst gibt es kein Rückgängig — deshalb der Halteschutz und die Armierung aus 5.4. Ein Rückgängig, dessen Reichweite jemand falsch rät, ist schlimmer als keines, weil er sich beim nächsten Schwall darauf verlässt.
+"Undo" always undoes the rule, never the request. The strip reads "Rule saved · Undo" for `HMotion.undoWindow` (10 s) and says in the same breath that the request is already out. Afterwards only the strip disappears; the rule stays deletable in the Rules screen. For allow and block themselves there is no undo — hence the hold protection and the arming from 5.4. An undo whose reach someone guesses wrongly is worse than none, because they will rely on it in the next burst.
 
-### 4.6 Bewegung und Text sagen dasselbe
+### 4.6 Motion and text say the same thing
 
-Der Streifen, der in der entschiedenen Zeile steht, nennt die Folge, nicht die Handlung: en „Sent to api.github.com · 2.1 KB", de „Gesendet an api.github.com · 2,1 KB". Blockiert liest en „Blocked. The agent may retry.", de „Blockiert. Der Agent kann es erneut versuchen." Kein Toast begleitet eine Bewegung; Toast plus Bewegung sind zwei Ankündigungen desselben Ereignisses.
+The strip that stands in the decided row names the consequence, not the action: en "Sent to api.github.com · 2.1 KB", de "Gesendet an api.github.com · 2,1 KB". Blocked reads en "Blocked. The agent may retry.", de "Blockiert. Der Agent kann es erneut versuchen." No toast accompanies a motion; toast plus motion are two announcements of the same event.
 
-Nach dem Bestätigungsfenster ist der Streifen weg, aber die Handlung war unumkehrbar. Die Statusleiste trägt deshalb die letzte Entscheidung dauerhaft als eine Zeile — Zustands-Glyph, Host, Uhrzeit — bis die nächste sie ersetzt. Drei Sekunden sind zu kurz für die einzige Spur einer Handlung, die 4.5 nicht zurücknehmen kann.
+After the confirmation window the strip is gone, but the action was irreversible. The status bar therefore carries the last decision permanently as one line — state glyph, host, time of day — until the next one replaces it. Three seconds are too short for the only trace of an action that 4.5 cannot take back.
 
-**Die Verben.** Drei Orte, drei Formulierungen, und sie werden nicht vermischt:
+**The verbs.** Three places, three wordings, and they are not mixed:
 
-| Ort | en | de | warum |
+| Place | en | de | why |
 |---|---|---|---|
-| Control | „Allow" | „Senden" | Das Control nennt die Handlung am Objekt. Der deutsche Nutzer sendet eine Anfrage, er erlaubt sie nicht. |
-| Regel | „allow" | „Erlauben" | Die Regel nennt die Politik, nicht die Einzelhandlung; sie gilt für alles Künftige. |
-| Streifen | „Sent to {host} · {size}" | „Gesendet an {host} · {size}" | Der Streifen nennt die Folge, im Perfekt, mit Ziel und Umfang. |
+| Control | "Allow" | "Senden" | The control names the action on the object. The German user sends a request, they do not allow it. |
+| Rule | "allow" | "Erlauben" | The rule names the policy, not the single action; it applies to everything in the future. |
+| Strip | "Sent to {host} · {size}" | "Gesendet an {host} · {size}" | The strip names the consequence, in the perfect tense, with target and extent. |
 
-Damit steht fest, dass auf dem deutschen Button nicht „Erlauben" steht, auch wenn HUM-028 den Regelsatz mit „Erlauben · ∗ · …" beginnt (Abweichung in Abschnitt 8). `BACKLOG.md` Abschnitt 5 legt diesen Split bereits fest; hier steht, warum er kein Fehler ist.
+This settles that the German button does not say "Erlauben", even though HUM-028 begins the rule sentence with "Erlauben · ∗ · …" (deviation in section 8). `BACKLOG.md` section 5 already fixes this split; here stands why it is not a mistake.
 
-Vor „Merken" steht die Regel als Satz, damit sie geprüft werden kann, die Vorgabedauer ist `session`, und ein Control mit der Aufschrift „Allow all" existiert nur als Palette-Befehl, der eine Host-Liste öffnet.
+Before "Remember" the rule stands as a sentence so that it can be checked, the default duration is `session`, and a control labelled "Allow all" exists only as a palette command that opens a host list.
 
-Solange das Raster merkt, stehen deshalb **beide** Sätze unter den Controls, untereinander: der Satz der Regel, die Senden anlegt, und darunter der, den Blockieren anlegt (HUM-249). Welcher Satz dasteht, hängt nicht am Zeiger und nicht am Fokus. Ein Tastenkürzel fragt keinen von beiden: Mit der Maus über „Blockieren" legt `A` eine Allow-Regel an, mit dem Fokus auf dem Ventil legt `Ctrl+L` eine Block-Regel an, und stünde nur der Satz der hervorgehobenen Aktion da, wäre die gespeicherte Regel eine, die niemand gelesen hat. Ein Kürzel, das den Satz erst zeigt und einen zweiten Druck verlangt, wurde verworfen: Es bricht den Rhythmus der Queue und bräuchte einen Zustand, den Zeiger, Fokus und Tasten gemeinsam pflegen. Ein neutraler Satz ohne Aktion ebenso: Die Regel nennt die Politik (Tabelle oben), und eine Regel ohne Verb ist keine, die man prüfen kann. Die Sätze brechen um und werden nie mit Auslassungspunkten gekürzt, auch nicht bei 480 px Pane-Breite und doppelter Schrift: Ein gekürzter Satz ist einer, dessen Ende niemand gelesen hat, und am Ende steht die Dauer. Dasselbe gilt für den Regelsatz im Modal (5.4). Die Zeile wird dadurch höher, aber nur zusammen mit dem Raster, das ohnehin eine eigene Zeile nimmt; der Zeiger, der zwischen den Knöpfen wandert, verändert keinen Text mehr (2.8). Bei geschlossenem Raster legt das Halten des Ventils eine Regel für die Sitzung an; ihr Satz steht vom Druck an, solange der Finger unten ist, also die 400 ms vor dem Speichern, an der Stelle des Haltegrunds. Ändert sich während des Haltens, woraus die Regel entsteht — Dauer, Ziel, Anfrage, Domain —, speichert das Halten nichts und sagt warum; es speichert nie eine andere Regel als die, deren Satz es zeigte. Die Sätze nehmen höchstens ein Drittel des Panes; was darüber hinausgeht, scrollt, und eine Entscheidung, die eine dieser Regeln speichern würde, wird abgewiesen, bis das Ende der Sätze zu sehen war. Dasselbe im Modal: Es bleibt im Fenster, sein Rumpf scrollt, und Bestätigen geht erst, wenn der Rumpf bis zum Ende zu sehen war. Gespeichert wird genau die Regel, deren Satz dastand (`ShownRule`, HUM-058).
+As long as the grid remembers, **both** sentences therefore stand below the controls, one below the other: the sentence of the rule that Allow creates, and below it the one that Block creates (HUM-249). Which sentence stands there depends neither on the pointer nor on the focus. A keyboard shortcut asks neither of them: with the mouse over "Block", `A` creates an allow rule; with the focus on the valve, `Ctrl+L` creates a block rule; and if only the sentence of the highlighted action stood there, the saved rule would be one that nobody has read. A shortcut that first shows the sentence and demands a second press was rejected: it breaks the rhythm of the queue and would need a state that pointer, focus and keys maintain together. A neutral sentence without an action likewise: the rule names the policy (table above), and a rule without a verb is not one that can be checked. The sentences wrap and are never shortened with an ellipsis, not even at 480 px pane width and double font size: a shortened sentence is one whose end nobody has read, and the duration stands at the end. The same applies to the rule sentence in the modal (5.4). The row becomes taller as a result, but only together with the grid, which takes a line of its own anyway; the pointer that wanders between the buttons no longer changes any text (2.8). With the grid closed, holding the valve creates a rule for the session; its sentence stands from the press onwards, as long as the finger is down, that is the 400 ms before saving, in the place of the hold reason. If what the rule is built from changes during the hold — duration, target, request, domain —, the hold saves nothing and says why; it never saves a rule other than the one whose sentence it showed. The sentences take at most a third of the pane; whatever goes beyond that scrolls, and a decision that would save one of these rules is refused until the end of the sentences has been in view. The same in the modal: it stays in the window, its body scrolls, and confirming only works once the body has been in view to the end. Exactly the rule whose sentence stood there is saved (`ShownRule`, HUM-058).
 
-### 4.7 Wenn ein Secret mitgeht
+### 4.7 When a secret goes along
 
-Eine Anfrage, die wegen eines Findings gehalten wird, ist der eine Fall, der nicht ruhig sein darf. Sie darf nicht aussehen wie eine Routine-Anfrage, und sie bekommt deshalb vier Abweichungen vom Normalfall — und nur diese vier:
+A request that is held because of a finding is the one case that must not be calm. It must not look like a routine request, and it therefore gets four deviations from the normal case — and only these four:
 
-- **In der Zeile** steht der Findings-Chip in `HColors.secret` statt in `fg2`. Das ist die einzige Chroma, die eine ruhende Queue-Zeile tragen darf; der Rest der Zeile bleibt neutral.
-- **In der Aktionsleiste** nennt der Haltegrund Art und Fundort in Klartext (4.3), und die Release Valve wechselt auf `warning`, trägt das Warnglyph (`triangleAlert`) vor ihrer Beschriftung und beschriftet sich um. Das Glyph ist seit HUM-260 nötig, weil `warning` im Wert dem Akzent gleicht und die Farbe allein ein Ventil mit Fund nicht mehr von einer Routineanfrage unterscheidet: en „Send with 2 findings", de „Senden mit 2 Funden" (so bereits in HUM-049 vorgesehen).
-- **Erlauben verlangt dieselbe Halte-Bestätigung wie Blockieren**, solange mindestens ein Finding ungelöst ist, plus einen Satz, der die Folge benennt: en „An AWS access key goes to api.example.com", de „Ein AWS-Zugangsschlüssel geht an api.example.com". Erst wer weiß, was wohin geht, hält gedrückt.
-- **Ein Klick, `Enter` oder `A` öffnen bei einer einzelnen Anfrage die Pause mit den offenen Funden** (HUM-049), statt nur abzuweisen. Sie ersetzt den unteren Teil der Karte, wächst in 200 ms auf und listet je Fund Art, gekürzten Wert und Ort; am Fuß stehen „Trotzdem senden" (`S`), „Pseudonymisieren" (`P`, öffnet den Editor mit allen Funden ersetzt) und „Blockieren" (`B`), `Esc` schließt sie. Die Halte-Bestätigung bleibt der Weg ohne Pause. Über eine Gruppe gibt es keine Pause: Dort fehlt die Liste der Funde, und es bleibt beim Halten oder einer Taste.
+- **In the row** the findings chip stands in `HColors.secret` instead of `fg2`. That is the only chroma a resting queue row may carry; the rest of the row stays neutral.
+<!-- lang: de -->
+- **In the action bar** the hold reason names kind and location of the finding in plain language (4.3), and the release valve switches to `warning`, carries the warning glyph (`triangleAlert`) before its label and relabels itself. The glyph has been necessary since HUM-260, because `warning` equals the accent in value and the colour alone no longer distinguishes a valve with a finding from a routine request: en "Send with 2 findings", de "Senden mit 2 Funden" (as already planned in HUM-049).
+<!-- /lang -->
+- **Allowing demands the same hold confirmation as blocking**, as long as at least one finding is unresolved, plus a sentence that names the consequence: en "An AWS access key goes to api.example.com", de "Ein AWS-Zugangsschlüssel geht an api.example.com". Only someone who knows what goes where presses and holds.
+- **A click, `Enter` or `A` open, for a single request, the pause with the open findings** (HUM-049), instead of only refusing. It replaces the lower part of the card, grows open in 200 ms and lists per finding the kind, the shortened value and the location; at the foot stand "Send anyway" (`S`), "Pseudonymize" (`P`, opens the editor with all findings replaced) and "Block" (`B`), `Esc` closes it. The hold confirmation stays the way without a pause. For a group there is no pause: there the list of findings is missing, and it stays with holding or a key.
 
-Ausdrücklich **kein** Modal. Die Regel „nie ein Modal für eine einzelne Entscheidung" (5.4) gilt hier weiter; ein Modal wäre auch der falsche Schutz, weil es sich wegklicken lässt, ohne den Satz zu lesen. Der Schutz sitzt in der Zeit, nicht in der Fläche (5.4). Abweichung in Abschnitt 8.
+Explicitly **no** modal. The rule "never a modal for a single decision" (5.4) continues to apply here; a modal would also be the wrong protection, because it can be clicked away without reading the sentence. The protection sits in time, not in surface (5.4). Deviation in section 8.
 
-### 4.8 Wenn die Zeit abläuft
+### 4.8 When time runs out
 
-Ein Timeout ist keine Entscheidung eines Menschen, sondern das Ausbleiben einer. Er ist deshalb das Ereignis, das die meiste Spur hinterlassen muss, und heute hinterlässt er die wenigste.
+A timeout is not a decision by a human but the absence of one. It is therefore the event that must leave the most trace, and today it leaves the least.
 
-- **Vorher** warnt die App einmal, an der Zeile und in der Aktionsleiste des betroffenen Flows, nie als Toast: Host, Folge und Restzeit in einem Satz — en „registry.npmjs.org auto-blocks in 0:30", de „registry.npmjs.org wird in 0:30 blockiert". Sobald der Daemon Verlängern kennt, steht daneben genau eine Verlängerung. Bis dahin ist die Warnung mit benannter Folge das Minimum.
-- **Im Augenblick des Ablaufs** wischt der Rail auf `timedOut` wie bei jeder anderen Entscheidung, und die Zeile bleibt drei Sekunden als graue Zeile mit dem Streifen en „Blocked (timed out)" / de „Blockiert (Zeit abgelaufen)" stehen. So steht es bereits in HUM-029; hier steht, dass es dieselbe Choreografie ist wie bei einer menschlichen Entscheidung, weil die Folge für den Agenten dieselbe ist.
-- **Danach** trägt die Statusleiste dauerhaft einen Zähler: en „{n} timed out this session", de „{n} abgelaufen in dieser Session". Ein Klick filtert History darauf. Wer fünf Minuten weg war, muss beim Zurückkommen sehen, dass sechs Anfragen abgewiesen wurden, ohne History zu öffnen und ohne sich an ein Banner zu erinnern, das er nie gesehen hat.
+<!-- lang: de -->
+- **Before**, the app warns once, at the row and in the action bar of the flow concerned, never as a toast: host, consequence and remaining time in one sentence — en "registry.npmjs.org auto-blocks in 0:30", de "registry.npmjs.org wird in 0:30 blockiert". As soon as the daemon knows extending, exactly one extension stands next to it. Until then the warning with the consequence named is the minimum.
+<!-- /lang -->
+- **At the instant of expiry** the rail sweeps to `timedOut` as with any other decision, and the row stays for three seconds as a grey row with the strip en "Blocked (timed out)" / de "Blockiert (Zeit abgelaufen)". That already stands in HUM-029; here stands that it is the same choreography as for a human decision, because the consequence for the agent is the same.
+- **Afterwards** the status bar permanently carries a counter: en "{n} timed out this session", de "{n} abgelaufen in dieser Session". A click filters History to it. Whoever was away for five minutes must see on coming back that six requests were refused, without opening History and without remembering a banner they never saw.
 
-### 4.9 Tray, Notification und Rückkehr
+### 4.9 Tray, notification and return
 
-Das ist die einzige Oberfläche, die der Mensch sieht, während der Agent hängt. Sie bekommt deshalb eigene Regeln und nicht eine Zeile am Rand.
+This is the only surface the human sees while the agent is stuck. It therefore gets rules of its own and not a line at the margin.
 
-**Die Notification** hat dieselbe Hierarchie wie ein Screen (3.1): der Host ist das eine Wichtige und steht groß; Methode und Pfad sind sekundär; die Restzeit steht als Wort, nie als `mm:ss` — en „about 4 minutes left", de „noch etwa 4 Minuten". Eine Notification ist ein Standbild in einem fremden Fenstermanager; eine Ziffer darin ist ab der ersten Sekunde falsch. Bei fokussiertem Fenster erscheint keine Notification: was auf dem Schirm steht, wird nicht zusätzlich angekündigt (dieselbe Regel wie Toast plus Bewegung in 4.6). Mehrere Ankünfte aktualisieren dieselbe Meldung, sie stapeln nicht.
+**The notification** has the same hierarchy as a screen (3.1): the host is the one important thing and stands large; method and path are secondary; the remaining time stands as a word, never as `mm:ss` — en "about 4 minutes left", de "noch etwa 4 Minuten". A notification is a still image in someone else's window manager; a digit in it is wrong from the first second. With the window focused no notification appears: what stands on the screen is not announced in addition (the same rule as toast plus motion in 4.6). Several arrivals update the same message, they do not stack.
 
-**Das Tray-Icon** ist ein Zustandsanzeiger und trägt Zustandsfarbe (3.3, Regel 9):
+**The tray icon** is a state indicator and carries state colour (3.3, rule 9):
 
-| Zustand | Icon | Farbe |
+| State | Icon | Colour |
 |---|---|---|
-| nichts wartet | `idle` | `fg2`, neutral |
-| 1 bis 9 warten, 10 und mehr | `held_n`, `held_9plus` | Farbe von `held` mit Ziffer |
-| seit dem letzten Fokus hat ein Timeout blockiert | `alert` | `blocked` |
+| nothing is waiting | `idle` | `fg2`, neutral |
+| 1 to 9 waiting, 10 and more | `held_n`, `held_9plus` | colour of `held` with digit |
+| a timeout has blocked since the last focus | `alert` | `blocked` |
 
-**Das Fenster** trägt keine Titelleiste des Toolkits (HUM-255). Die Kopfleiste der App ist die Titelleiste: Ziehen auf ihrer freien Fläche, auf Wortmarke, Bereichstitel oder Badges verschiebt das Fenster, ein Doppelklick maximiert oder stellt wieder her, und ihre Bedienelemente bleiben Bedienelemente. Rechts stehen Minimieren, Maximieren und Schließen als Ghost-Knöpfe mit Hover- und Semantik-Label, auch auf Splash und Setup eines Kaltstarts (dort in einer schmalen Leiste, die ebenfalls Griff ist), auch unter Kachel-Fenstermanagern, die die ersten beiden womöglich überhören. Schließen tut genau, was das Schließen über den Fenstermanager tut; es ist nicht das „Beenden" des Tray-Menüs.
+**The window** carries no title bar of the toolkit (HUM-255). The header bar of the app is the title bar: dragging on its free surface, on the wordmark, section title or badges moves the window, a double click maximises or restores, and its controls stay controls. On the right stand minimise, maximise and close as ghost buttons with hover and semantics labels, also on splash and setup of a cold start (there in a narrow bar that is a grip as well), also under tiling window managers that may ignore the first two. Close does exactly what closing via the window manager does; it is not the "Quit" of the tray menu.
 
-**Die Rückkehr** spielt nichts nach. Wer nach fünfzehn Ankünften zurückkommt, sieht die Queue, wie sie ist, ohne Ankunftsanimationen für Dinge, die vor Minuten passiert sind — eine Animation beantwortet „was ist gerade angekommen", und nichts davon ist gerade angekommen (2.1). Was in der Abwesenheit geschah, steht in zwei ruhigen Formen: das Rückkehr-Banner nennt die längste Wartezeit und führt zum ältesten Flow, der Timeout-Zähler in der Statusleiste nennt die Abweisungen (4.8).
+**The return** replays nothing. Whoever comes back after fifteen arrivals sees the queue as it is, without arrival animations for things that happened minutes ago — an animation answers "what has just arrived", and none of this has just arrived (2.1). What happened during the absence stands in two calm forms: the return banner names the longest waiting time and leads to the oldest flow, the timeout counter in the status bar names the refusals (4.8).
 
 ---
 
-## 5. Tastatur und Maus
+## 5. Keyboard and mouse
 
-### 5.1 Parität
+### 5.1 Parity
 
-- Jede Zeigergeste hat eine Tastenentsprechung. Auch Press-and-hold: die Release Valve ist über eine Taste oder eine zweistufige Bestätigung erreichbar, sonst ist das Signature-Element ohne Maus unbenutzbar. Auch die Pille „+n neu" (2.8).
-- Jedes Element, das auf Tippen reagiert, ist mit `Tab` erreichbar und mit `Enter` und `Leertaste` auslösbar. Ein nacktes `GestureDetector` oder `MouseRegion` ist nie der einzige Eingabeweg.
-- Nichts, was eine Aktion ausführt, erscheint nur bei Hover. Zeilenaktionen erscheinen auch bei Fokus und bleiben im Semantics-Baum, wenn sie unsichtbar sind.
-- Der Shortcut steht auf dem Control, das ihn ausführt: dauerhaft auf den beiden Hauptentscheidungen, bei Hover auf allem anderen, nach dem `HoverLabel`-Muster der Icon-Rail. Ein Mausnutzer kann `Enter`, `A`, `B`, `J` und `K` sonst nicht durch Klicken entdecken.
-- Die Command Palette ist das Handbuch: sie listet jede über Tastatur erreichbare Aktion mit ihrem Shortcut in der Zeile, nicht nur die fünf Navigationseinträge.
+- Every pointer gesture has a key equivalent. Press-and-hold too: the release valve is reachable via a key or a two-step confirmation, otherwise the signature element is unusable without a mouse. The pill "+n new" too (2.8).
+- Every element that reacts to tapping is reachable with `Tab` and can be triggered with `Enter` and `Space`. A bare `GestureDetector` or `MouseRegion` is never the only input path.
+- Nothing that executes an action appears only on hover. Row actions also appear on focus and stay in the Semantics tree when they are invisible.
+- The shortcut stands on the control that executes it: permanently on the two main decisions, on hover on everything else, after the `HoverLabel` pattern of the icon rail. Otherwise a mouse user cannot discover `Enter`, `A`, `B`, `J` and `K` by clicking.
+- The command palette is the manual: it lists every action reachable by keyboard with its shortcut in the row, not only the five navigation entries.
 
-### 5.2 Wem die Taste gehört
+### 5.2 Who the key belongs to
 
-Kein `Shortcuts`-Widget oberhalb fokussierbarer Controls darf `Enter`, `Leertaste` oder einen einzelnen Buchstaben so binden, dass das fokussierte Control leer ausgeht. Heute erlaubt ein Tastaturnutzer, der auf „Blockieren" fokussiert und `Enter` drückt, die Anfrage — mit `Leertaste` blockiert dasselbe Control korrekt, und die falsche der beiden Tasten ist die, nach der jeder Desktop-Nutzer zuerst greift.
+No `Shortcuts` widget above focusable controls may bind `Enter`, `Space` or a single letter in such a way that the focused control goes empty-handed. Today a keyboard user who focuses on "Block" and presses `Enter` allows the request — with `Space` the same control blocks correctly, and the wrong one of the two keys is the one every desktop user reaches for first.
 
-Der Mechanismus, der das behebt, ist genau einer, und er steht hier ausgeschrieben, weil der naheliegende nicht funktioniert. `Action.overridable` hilft nicht: eine überschreibbare Action wird vom nächsten **Vorfahren** überschrieben, nie von einem fokussierten Nachfahren, und die Kollision entsteht ohnehin früher — `Shortcuts` bildet `Enter` auf `AllowIntent` ab, bevor irgendeine Action-Suche läuft.
+The mechanism that fixes this is exactly one, and it is written out here because the obvious one does not work. `Action.overridable` does not help: an overridable action is overridden by the nearest **ancestor**, never by a focused descendant, and the collision arises earlier anyway — `Shortcuts` maps `Enter` to `AllowIntent` before any action lookup runs.
 
-Statt dessen: die `AllowIntent`- und `BlockIntent`-Actions des Screens überschreiben `isActionEnabled` und liefern `false`, solange `FocusManager.instance.primaryFocus` auf einem Control sitzt, das `ActivateIntent` behandelt. `ShortcutManager.handleKeypress` gibt für eine deaktivierte Action `KeyEventResult.ignored` zurück; die Taste fällt damit an die Standardbindungen von `WidgetsApp` durch, wo `Enter` `ActivateIntent` auslöst, und das fokussierte Control gewinnt. Die billigere Variante, falls sich das im Test als brüchig erweist: `Enter` gar nicht auf Screen-Ebene binden, nur `A` und `B`, und `Enter` überall „aktivieren" bedeuten lassen.
+Instead: the `AllowIntent` and `BlockIntent` actions of the screen override `isActionEnabled` and return `false` as long as `FocusManager.instance.primaryFocus` sits on a control that handles `ActivateIntent`. `ShortcutManager.handleKeypress` returns `KeyEventResult.ignored` for a disabled action; the key thereby falls through to the default bindings of `WidgetsApp`, where `Enter` triggers `ActivateIntent`, and the focused control wins. The cheaper variant, should this prove brittle in testing: do not bind `Enter` at screen level at all, only `A` and `B`, and let `Enter` mean "activate" everywhere.
 
-Die Queue ist ein einziger Fokusstopp mit Pfeiltasten-Navigation darin. Solange der Fokus in der Queue steht, gilt `Enter` = erlauben; steht er auf einem Control, gilt `Enter` für dieses Control. Das widerspricht nicht der Regel aus 3.4, dass aus der Zeile heraus nur blockiert wird: die Zeile ist nicht das Control, die **Auswahl** ist der Gegenstand. `Enter` erlaubt den ausgewählten Flow, dessen URL die Karte zeigt, und die Zeile selbst trägt keine Erlauben-Affordanz, die man mit dem Zeiger treffen könnte.
+The queue is a single focus stop with arrow-key navigation inside. As long as the focus is in the queue, `Enter` = allow; if it is on a control, `Enter` applies to that control. That does not contradict the rule from 3.4 that only blocking happens from the row: the row is not the control, the **selection** is the subject. `Enter` allows the selected flow, whose URL the card shows, and the row itself carries no allow affordance that one could hit with the pointer.
 
-**Im Terminal gilt dieselbe Frage, und die Antwort ist umgekehrt.** Dort gehört
-jede Taste dem Agenten -- Rücktaste, Pfeile, Enter, `Ctrl+C` als `0x03`,
-`Ctrl+P` als `0x10` --, mit genau sieben Ausnahmen: `Ctrl+1` bis `Ctrl+6` und
-`Ctrl+K`. Ohne sie käme man aus einem Vollbild-TUI nur noch mit der Maus
-heraus, und das verstieße gegen 5.1. Der Weg dorthin ist nicht der
-naheliegende: Der Emulator übersetzt `Ctrl+K` in `0x0b` und `Ctrl+6` in `0x1e`
-und meldet die Taste als behandelt, womit das Ereignis kein `Shortcuts`
-darüber mehr erreicht; `KeyEventResult.skipRemainingHandlers` hielte zwar den
-Emulator auf, beendete die Reise aber genauso. `TerminalPane._onKey` schlägt
-die Taste deshalb selbst in `shellShortcuts()` nach und löst die Absicht über
-`Actions` aus. Gemessen in `a_shortcut_of_the_application_survives_the_terminal`
-für alle drei Fälle (`Ctrl+1`, `Ctrl+6`, `Ctrl+K`).
+**In the terminal the same question applies, and the answer is reversed.** There
+every key belongs to the agent -- backspace, arrows, Enter, `Ctrl+C` as `0x03`,
+`Ctrl+P` as `0x10` --, with exactly seven exceptions: `Ctrl+1` to `Ctrl+6` and
+`Ctrl+K`. Without them one could only get out of a full-screen TUI with the
+mouse, and that would violate 5.1. The way there is not the
+obvious one: the emulator translates `Ctrl+K` into `0x0b` and `Ctrl+6` into `0x1e`
+and reports the key as handled, so that the event no longer reaches any `Shortcuts`
+above it; `KeyEventResult.skipRemainingHandlers` would stop the
+emulator, but would end the journey just the same. `TerminalPane._onKey` therefore looks up
+the key itself in `shellShortcuts()` and triggers the intent via
+`Actions`. Measured in `a_shortcut_of_the_application_survives_the_terminal`
+for all three cases (`Ctrl+1`, `Ctrl+6`, `Ctrl+K`).
 
-### 5.3 Jede gebundene Taste tut etwas
+### 5.3 Every bound key does something
 
-Jeder Aktivator in `interceptShortcuts()` hat eine Action im selben Screen. Ein Widget-Test vergleicht die beiden Tastenmengen und schlägt bei Ungleichheit fehl; eine Bindung ohne Action wird gelöscht, nicht stillgelegt. Heute sind `/`, `Ctrl+D` und `N` gebunden und stumm.
+Every activator in `interceptShortcuts()` has an action in the same screen. A widget test compares the two key sets and fails if they differ; a binding without an action is deleted, not disabled. Today `/`, `Ctrl+D` and `N` are bound and mute.
 
-Jeder angenommene Tastendruck erzeugt einen sichtbaren Frame innerhalb von 100 ms; die Tastenentscheidung zeigt dieselbe 120-ms-Füllung auf dem passenden Control der Aktionsleiste wie ein Mausklick. Ein abgelehnter Druck bekommt seine eigene, leise Ablehnung — das Control, das gehandelt hätte, zeigt seine Füllung und läuft wieder leer, und der Grund steht daneben. Nie Stille, nie ein Rütteln, nie ein rotes Blitzen. Für einen blinden Nutzer wäre eine rein sichtbare Ablehnung eine stumme; die Ablehnung wird deshalb höflich angesagt (Abschnitt 6). Heute liefert ein zweites `A` während einer laufenden Entscheidung gar nichts zurück, während gleichzeitig die Ghost-Buttons verschwinden, und ein schnelles `A A` liest sich, als sei das Programm eingefroren.
+Every accepted key press produces a visible frame within 100 ms; the key decision shows the same 120 ms fill on the matching control of the action bar as a mouse click. A rejected press gets its own quiet rejection — the control that would have acted shows its fill and drains again, and the reason stands next to it. Never silence, never a shake, never a red flash. For a blind user a purely visible rejection would be a mute one; the rejection is therefore announced politely (section 6). Today a second `A` during a running decision returns nothing at all, while at the same time the ghost buttons disappear, and a quick `A A` reads as if the program had frozen.
 
-### 5.4 Sorgfalt wächst mit Reichweite und Umkehrbarkeit
+### 5.4 Care grows with reach and reversibility
 
-Gefahr ist kein Maß: niemand weiß vorab, ob ein `POST` an einen unbekannten Host schlimm ist. Umkehrbarkeit ist eines. Deshalb hat der Schutz zwei Achsen, und deshalb ist Blockieren Ghost, obwohl es die scheinbar härtere Handlung ist — der Agent darf es erneut versuchen. Erlauben ist gefüllt, weil es die Handlung ist, um die es geht; sein Schutz sitzt in der Zeit, nicht in der Fläche.
+Danger is not a measure: nobody knows in advance whether a `POST` to an unknown host is bad. Reversibility is one. That is why the protection has two axes, and that is why blocking is ghost, although it is the seemingly harsher action — the agent may try again. Allowing is filled, because it is the action that matters; its protection sits in time, not in surface.
 
-**Reichweite:**
+**Reach:**
 
-| Reichweite | Schutz |
+| Reach | Protection |
 |---|---|
-| eine Anfrage | 250 ms Halten (`HMotion.holdToBlock`) |
-| zwei bis fünf Anfragen | 250 ms Halten |
-| mehr als fünf, oder eine Regel mit `forever` | Modal |
+| one request | 250 ms hold (`HMotion.holdToBlock`) |
+| two to five requests | 250 ms hold |
+| more than five, or a rule with `forever` | Modal |
 
-Nie ein Modal für eine einzelne Entscheidung: Modal pro Klick zerstört den Rhythmus der Queue. Ein Modal fängt den Fokus in sich, fokussiert die nicht-zerstörerische Aktion, schließt auf `Escape` und legt die Entscheidungs-Shortcuts des Screens still, solange es offen ist.
+Never a modal for a single decision: a modal per click destroys the rhythm of the queue. A modal traps the focus within itself, focuses the non-destructive action, closes on `Escape` and silences the decision shortcuts of the screen as long as it is open.
 
-**Umkehrbarkeit.** Erlauben ist unumkehrbar (4.5), `Enter` ist eine einzelne Taste, und die Auswahl springt nach jeder Entscheidung auf den nächsten gehaltenen Flow. Drei Festlegungen halten das auseinander:
+**Reversibility.** Allowing is irreversible (4.5), `Enter` is a single key, and the selection jumps to the next held flow after every decision. Three provisions keep this apart:
 
-1. **Armierung.** `Enter` und `A` feuern erst, wenn die URL des ausgewählten Flows mindestens `HMotion.rearm` (350 ms) in der Karte stand. Jede neue Auswahl armiert neu — auch die, die das Programm selbst nach einer Entscheidung setzt. Blockieren bleibt sofort verfügbar. Eine Sakkade auf eine neue Zeile plus eine Fixation dauert rund 300 ms; wer schneller entscheidet, hat nicht gelesen.
-2. **Tastenwiederholung entscheidet nie.** Ein `KeyDownEvent` mit `repeat == true` wird verworfen. Nach einer angenommenen Entscheidung bleiben `Enter`, `A` und `B` gesperrt, bis das zugehörige `KeyUpEvent` eingetroffen ist.
-3. **Die Auswahl wartet.** Sie springt nach einer Entscheidung nicht weiter, solange eine Entscheidungstaste noch gedrückt ist. Sonst armiert Regel 1 gegen einen Finger, der gar nicht losgelassen hat.
+1. **Arming.** `Enter` and `A` only fire once the URL of the selected flow has stood in the card for at least `HMotion.rearm` (350 ms). Every new selection re-arms — including the one the program itself sets after a decision. Blocking stays available at once. A saccade to a new row plus a fixation takes about 300 ms; whoever decides faster has not read.
+2. **Key repeat never decides.** A `KeyDownEvent` with `repeat == true` is discarded. After an accepted decision, `Enter`, `A` and `B` stay locked until the matching `KeyUpEvent` has arrived.
+3. **The selection waits.** It does not move on after a decision as long as a decision key is still pressed. Otherwise rule 1 arms against a finger that has not let go at all.
 
-**Wenn die Aufzeichnung nicht schreibt** (HUM-250), ist Erlauben zusätzlich nicht mehr nachlesbar. Der Daemon meldet die Störung (`RECORDER_001`, `RECORDER_003`) und ihr Ende (`RECORDER_005`); solange sie dauert, steht in der Statusleiste in der Fehlerfarbe „Aufzeichnung gestört" (en „Recording disrupted"), jede gehaltene und jede seither angekommene Karte trägt „Wird nicht aufgezeichnet", und die erste Freigabe der Sitzung hält an einer Pause an der Stelle der Entscheidungsleiste, wie die Pause mit offenen Funden: kein Modal. „Unaufgezeichnet senden" (`S`) nimmt erst nach `HMotion.rearm` an und gilt danach für den Rest der Sitzung; `Esc` schließt die Pause, ohne zu senden.
+**When the recording does not write** (HUM-250), allowing additionally can no longer be looked up later. The daemon reports the disruption (`RECORDER_001`, `RECORDER_003`) and its end (`RECORDER_005`); as long as it lasts, the status bar shows "Recording disrupted" (de "Aufzeichnung gestört") in the error colour, every held card and every card that has arrived since carries "Not being recorded", and the first release of the session stops at a pause in the place of the decision bar, like the pause with open findings: no modal. "Send unrecorded" (`S`) only accepts after `HMotion.rearm` and then applies for the rest of the session; `Esc` closes the pause without sending.
 
-Pflichttest: `Enter` 500 ms gedrückt halten erzeugt genau ein `Decide`, nicht mehrere. Ohne diese drei Sätze erlaubt gedrückt gehaltenes `Enter` die halbe Queue ungelesen — heute ist der einzige Schutz `isSending`, und der endet mit der Antwort des Daemons nach wenigen Millisekunden.
+Mandatory test: holding `Enter` down for 500 ms produces exactly one `Decide`, not several. Without these three provisions a held-down `Enter` allows half the queue unread — today the only protection is `isSending`, and that ends with the daemon's answer after a few milliseconds.
 
-Die beiden Entscheidungen sind außerdem größer als alles andere: `HSize.hitMin` (28 px) ist die Untergrenze für Nebensächliches, Erlauben und Blockieren messen mindestens 32 px Höhe und 120 px Breite, wie HUM-028 es für die Release Valve ohnehin nennt. Ein 28-px-Ziel neben einem anderen 28-px-Ziel ist genau die Geometrie, in der ein hastiger Klick daneben geht — und daneben liegt hier die unumkehrbare Handlung.
+The two decisions are also larger than everything else: `HSize.hitMin` (28 px) is the lower bound for minor things, allow and block measure at least 32 px in height and 120 px in width, as HUM-028 names it for the release valve anyway. A 28 px target next to another 28 px target is exactly the geometry in which a hasty click misses — and what lies next to it here is the irreversible action.
 
-Das Notizfeld beim Blockieren (HUM-072) ist vorübergehend: verborgen bis `N`, geschlossen bei `Escape` oder bei einer Entscheidung, nie eine dauerhafte Zeile der Aktionsleiste. Ein dauerhaft sichtbares optionales Textfeld fügt der Leiste einen Fokusstopp, einen Rahmen und einen Zeichenzähler hinzu und lädt zum Tippen ein, wo der Normalweg ein Tastendruck ist.
-
----
-
-## 6. Barrierefreiheit als Zahlen
-
-> **Stand 2026-09-04: bis 1.0.0 vertagt.** Der Projekteigentümer hat
-> entschieden, dass der MVP zuerst beweisen soll, dass die Sache trägt und gut
-> sein kann; die Barrierefreiheit als Programm kommt danach. Was in diesem
-> Abschnitt steht, bleibt das Ziel und bleibt lesenswert, blockiert aber kein
-> Issue mehr: die Screenreader-Ansagen, der zweite Kanal in seiner vollen
-> Abstufung, die Prüfung bei `TextScaler.linear(2.0)` und die 4,5:1 als
-> Testgatter ruhen. Wo eine dieser Zahlen heute schon erreicht ist, bleibt sie
-> stehen — vertagt heißt „nicht darauf warten", nicht „Erreichtes wieder
-> herausreissen".
->
-> **Vier Dinge gelten weiter**, weil sie nur wie Barrierefreiheit aussehen und
-> in Wahrheit Sicherheit oder schlichte Benutzbarkeit sind:
->
-> 1. Eine Haltedauer behält ihre volle Zeit, auch wenn die Plattform
->    `disableAnimations` meldet. Flutter kürzt sonst auf fünf Prozent, und
->    damit sendet ein gewöhnlicher Klick, wo ein Halten verlangt war; gemessen
->    genügten 60 Millisekunden.
-> 2. Die Trefferflächen der Entscheidung bleiben: mindestens 28 × 28 px
->    allgemein, mindestens 32 × 120 px für Erlauben und Blockieren. Wer sich
->    bei einer unumkehrbaren Handlung vergreift, hat kein
->    Barrierefreiheitsproblem, sondern eine gesendete Anfrage.
-> 3. Text bleibt über etwa 3:1. Das ist keine Norm mehr, sondern
->    Lesbarkeit: `shadcn_flutter` malt seinen Destructive-Button bei 1,97:1,
->    und das ist für jeden unlesbar, nicht nur für manche.
-> 4. Ein Klick zeigt eine sichtbare Reaktion. Ein Control, das nichts tut,
->    fühlt sich kaputt an.
->
-> Siehe ADR-0009, Abschnitt „Revidiert am 2026-09-04 durch den
-> Projekteigentümer".
-
-
-- **Kontrast.** Text erreicht 4,5:1 gegen die Fläche, auf der er wirklich steht — also auch gegen einen 10-%-Tint und gegen eine Füllung, auf allen vier Flächen beider Leitern. Flächen und Rails erreichen 3:1, mit der einen benannten Ausnahme der ruhenden `held`-Rail (3.3, Regel 10). Der Test in `app/packages/ui/test/tokens_test.dart` prüft heute nur 3:1 für Zustandsfarben als Fläche; er wird auf Text-auf-Tint und Text-auf-Füllung erweitert und schlägt unter 4,5:1 fehl. Gemessene Verstöße heute: DELETE-Label auf seinem Tint über `bg3` 2,65:1, `held`-Label hell auf seinem Tint 2,75:1.
-- **Sekundärtext.** `fg2` misst 3,02:1 auf `bg3`, `lFg2` 3,24:1 auf `lBg3`. Beide sind für wirklich deaktivierte Controls reserviert. Jeder Satz, den jemand lesen soll, ist `fg1` oder besser; das betrifft heute den Leerzustand der Queue und die Titel der Klappabschnitte.
-- **Fokus.** 2 px Akzentring außerhalb des eigenen Rahmens. Nie durch Umfärben eines vorhandenen Rahmens, nie in der Farbe, mit der das Control gefüllt ist. Auf dem Primärbutton misst der Fokusrahmen heute 1,00:1 gegen die Füllung — ein Tastaturnutzer sieht dort keinen Unterschied.
-- **Hit-Targets.** Mindestens 28 × 28 logische Pixel (`HSize.hitMin`), für Erlauben und Blockieren mindestens 32 × 120 px (5.4), im Widget-Test gemessen, nicht behauptet. Bekannter Verstoß: der Eye-Toggle, der ein maskiertes Secret aufdeckt, misst 28 × 19,2 px.
-- **Textskalierung.** Bis `TextScaler.linear(2.0)` ohne `RenderFlex`-Overflow und ohne abgeschnittenen Absatz. Kein Kasten, der Text enthält, hat eine feste Höhe; alle Zeilenhöhen aus 3.2 sind Mindesthöhen, und die Aktionsleiste bricht in eine Spalte um, wenn die skalierten Inhalte nicht mehr nebeneinander passen. Widget-Test und Golden bei 2.0 für Queue-Zeile, Aktionsleiste, Header und Statusleiste — feste Höhen schlucken den Overflow still, also gibt es ohne diesen Test keinen Fehlschlag, nur überlappenden Text.
-- **Zweiter Kanal, abgestuft.** Das Glyph steht überall neben der Zustandsfarbe, ohne Ausnahme. Das übersetzte Klartext-Label steht überall dort, wo Platz dafür reserviert ist: Karte, Detailansicht, Gruppenkopf, Aktionsleiste, Bestätigungsstreifen. Wo eine Spalte 28 px misst wie die Zustandsspalte der History-Tabelle, tragen Semantics-Label und Tooltip das Wort — und die tragen es **immer**, in jeder Ansicht. Ohne diese Abstufung verbreitert einer die Spalte und einer hakt die Checkliste falsch ab. Im hellen Theme messen `allowed` und `blocked` unter Deuteranopie 1,01:1; das Glyph ist deshalb Pflicht und nicht Zierde.
-- **Angesagt wird** — heute gibt es weder `liveRegion` noch `SemanticsService.announce` im Programm:
-  - **Ankünfte gebündelt, höflich**, höchstens eine Ansage je zwei Sekunden: en „3 new, oldest GET api.github.com", de „3 neu, älteste GET api.github.com". Fünfzehn Ankünfte in zwanzig Sekunden ergäben sonst fünfzehn volle URLs im Ohr.
-  - **Eine selbst ausgelöste Entscheidung höflich**, mit Host, Umfang und der Angabe, ob ein Rückgängig-Fenster läuft. Bestimmt angesagt wird nur, was der Mensch nicht ausgelöst hat: die Timeout-Vorwarnung und der eingetretene Timeout.
-  - **Ein abgelehnter Tastendruck höflich**, mit dem Grund aus 5.3.
-  - **Das Haltebudget** nur an den Schwellen 5 min, 1 min, 30 s und 10 s, und nur bei 5 % bestimmt.
-- **Kein Label ändert sich häufiger als einmal pro Sekunde**, und der Countdown ist kein Live-Bereich. Ein Label, das sich viermal je Sekunde ändert, ist die hörbare Form des Nörgelns. Die verbleibende Zeit steht deshalb nicht im **Label** der Zeile, sondern in ihrem **Semantics-Value**, und wird nur an den vier genannten Schwellen neu ausgesprochen; ein Label mit `mm:ss` ändert sich einmal je Sekunde und wird von jedem Screenreader auf der fokussierten Zeile jedes Mal vollständig wiederholt. Zugleich wird der Countdown nicht mehr per `ExcludeSemantics` versteckt: die Zeile trägt Zustand, Index, Gesamtzahl, Methode, Host und Pfad im Label und die verbleibende Zeit im Value. Ein Widget darf nie der einzige Träger einer Frist und dabei aus der Semantik ausgeschlossen sein.
-- **Reduzierte Bewegung** nach 2.10.
-- **Ein Timeout ist keine Entscheidung eines Menschen**, nach 4.8.
+The note field when blocking (HUM-072) is temporary: hidden until `N`, closed on `Escape` or on a decision, never a permanent line of the action bar. A permanently visible optional text field adds a focus stop, a border and a character counter to the bar and invites typing where the normal way is a key press.
 
 ---
 
-## 7. Leistung als Budget
+## 6. Accessibility as numbers
 
-Ein Budget, das kein Test prüfen kann, ist eine Absichtserklärung. Die Tabelle trennt deshalb zwei Sorten. **Gatter** laufen in `flutter test`, blockieren CI und messen nur, was in einer Fake-Async-Umgebung ohne Rasterizer bestimmbar ist: Build-Zahlen, Element-Zahlen, Aufrufzahlen. **Messung** läuft in `integration_test` mit `IntegrationTestWidgetsFlutterBinding.watchPerformance` unter Xvfb oder in DevTools, wird im PR berichtet und blockiert nicht: Frame- und Rasterzeiten, Speicher. `AutomatedTestWidgetsFlutterBinding` rastert nie, also ist dort jede `FrameTiming` bedeutungslos.
+> **As of 2026-09-04: deferred until 1.0.0.** The project owner has
+> decided that the MVP should first prove that the thing holds up and can be
+> good; accessibility as a programme comes afterwards. What stands in this
+> section remains the goal and remains worth reading, but no longer blocks any
+> issue: the screen reader announcements, the second channel in its full
+> gradation, the check at `TextScaler.linear(2.0)` and the 4.5:1 as a
+> test gate are dormant. Where one of these numbers is already reached today, it
+> stays — deferred means "do not wait for it", not "tear out again
+> what has been achieved".
+>
+> **Four things continue to apply**, because they only look like accessibility and
+> are in truth security or plain usability:
+>
+> 1. A hold duration keeps its full time, even if the platform
+>    reports `disableAnimations`. Flutter otherwise shortens it to five per cent, and
+>    then an ordinary click sends where a hold was demanded; as measured,
+>    60 milliseconds were enough.
+> 2. The hit areas of the decision stay: at least 28 × 28 px
+>    in general, at least 32 × 120 px for allow and block. Whoever slips
+>    on an irreversible action does not have an
+>    accessibility problem, but a sent request.
+> 3. Text stays above about 3:1. That is no longer a standard, but
+>    legibility: `shadcn_flutter` paints its destructive button at 1.97:1,
+>    and that is unreadable for everyone, not only for some.
+> 4. A click shows a visible reaction. A control that does nothing
+>    feels broken.
+>
+> See ADR-0009, section "Revised on 2026-09-04 by the
+> project owner".
 
-| Fall | Budget | Art |
+
+- **Contrast.** Text reaches 4.5:1 against the surface it really stands on — that is, also against a 10 % tint and against a fill, on all four surfaces of both ladders. Surfaces and rails reach 3:1, with the one named exception of the resting `held` rail (3.3, rule 10). The test in `app/packages/ui/test/tokens_test.dart` today only checks 3:1 for state colours as a surface; it is extended to text-on-tint and text-on-fill and fails below 4.5:1. Measured violations today: DELETE label on its tint over `bg3` 2.65:1, `held` label light on its tint 2.75:1.
+- **Secondary text.** `fg2` measures 3.02:1 on `bg3`, `lFg2` 3.24:1 on `lBg3`. Both are reserved for genuinely disabled controls. Every sentence someone is meant to read is `fg1` or better; today that concerns the empty state of the queue and the titles of the collapsible sections.
+- **Focus.** 2 px accent ring outside its own border. Never by recolouring an existing border, never in the colour the control is filled with. On the primary button the focus border measures 1.00:1 against the fill today — a keyboard user sees no difference there.
+- **Hit targets.** At least 28 × 28 logical pixels (`HSize.hitMin`), for allow and block at least 32 × 120 px (5.4), measured in the widget test, not claimed. Known violation: the eye toggle that uncovers a masked secret measures 28 × 19.2 px.
+- **Text scaling.** Up to `TextScaler.linear(2.0)` without `RenderFlex` overflow and without a cut-off paragraph. No box that contains text has a fixed height; all row heights from 3.2 are minimum heights, and the action bar wraps into a column when the scaled contents no longer fit side by side. Widget test and golden at 2.0 for queue row, action bar, header and status bar — fixed heights swallow the overflow silently, so without this test there is no failure, only overlapping text.
+- **Second channel, graded.** The glyph stands next to the state colour everywhere, without exception. The translated plain-language label stands wherever space is reserved for it: card, detail view, group header, action bar, confirmation strip. Where a column measures 28 px, like the state column of the History table, Semantics label and tooltip carry the word — and they carry it **always**, in every view. Without this grading one person widens the column and another ticks off the checklist wrongly. In the light theme `allowed` and `blocked` measure 1.01:1 under deuteranopia; the glyph is therefore mandatory and not decoration.
+- **What is announced** — today there is neither `liveRegion` nor `SemanticsService.announce` in the program:
+  - **Arrivals bundled, politely**, at most one announcement per two seconds: en "3 new, oldest GET api.github.com", de "3 neu, älteste GET api.github.com". Fifteen arrivals in twenty seconds would otherwise put fifteen full URLs in the ear.
+  - **A self-triggered decision politely**, with host, extent and whether an undo window is running. Only what the human did not trigger is announced assertively: the timeout pre-warning and the timeout that has occurred.
+  - **A rejected key press politely**, with the reason from 5.3.
+  - **The hold budget** only at the thresholds 5 min, 1 min, 30 s and 10 s, and assertively only at 5 %.
+- **No label changes more often than once per second**, and the countdown is not a live region. A label that changes four times per second is the audible form of nagging. The remaining time therefore stands not in the **label** of the row but in its **Semantics value**, and is only spoken again at the four thresholds named; a label with `mm:ss` changes once per second and is repeated in full by every screen reader on the focused row every time. At the same time the countdown is no longer hidden via `ExcludeSemantics`: the row carries state, index, total, method, host and path in the label and the remaining time in the value. A widget may never be the only carrier of a deadline and at the same time be excluded from semantics.
+- **Reduced motion** per 2.10.
+- **A timeout is not a decision by a human**, per 4.8.
+
+---
+
+## 7. Performance as a budget
+
+A budget that no test can check is a declaration of intent. The table therefore separates two kinds. **Gates** run in `flutter test`, block CI and measure only what can be determined in a fake-async environment without a rasteriser: build counts, element counts, call counts. **Measurements** run in `integration_test` with `IntegrationTestWidgetsFlutterBinding.watchPerformance` under Xvfb or in DevTools, are reported in the PR and do not block: frame and raster times, memory. `AutomatedTestWidgetsFlutterBinding` never rasterises, so every `FrameTiming` there is meaningless.
+
+| Case | Budget | Kind |
 |---|---|---|
-| 200 gehaltene Zeilen, fünf Ankünfte in einem Frame | kein Frame über 16 ms; p95 über 120 Frames im Profile-Build der in `CONTRIBUTING.md` genannten Maschine | Messung |
-| eine Entscheidung | zwei Zeilen-Builds, nicht zweihundert | Gatter |
-| eine Sekunde Uhr | höchstens ein Build je sichtbarer Zeile | Gatter |
-| ein Splitter-Frame | kein Build der Karte, ihres Kopfs und ihrer Body-Vorschau | Gatter |
-| 8 MiB Body, 10k History-Zeilen | kein sichtbares Ruckeln | Messung |
-| 8 MiB Body, 10k History-Zeilen | Speicher unter 300 MB | Messung, DevTools; `ProcessInfo.currentRss` sieht den GPU-Speicher nicht |
+| 200 held rows, five arrivals in one frame | no frame over 16 ms; p95 over 120 frames in the profile build on the machine named in `CONTRIBUTING.md` | Measurement |
+| one decision | two row builds, not two hundred | Gate |
+| one second of clock | at most one build per visible row | Gate |
+| one splitter frame | no build of the card, its header and its body preview | Gate |
+| 8 MiB body, 10k History rows | no visible stutter | Measurement |
+| 8 MiB body, 10k History rows | memory below 300 MB | Measurement, DevTools; `ProcessInfo.currentRss` does not see the GPU memory |
 
-Regeln, die diese Budgets halten:
+Rules that keep these budgets:
 
-- **Zwei Uhren, nicht eine.** Die **UI-Uhr** (`nowProvider`, `HMotion.clockTick`, ganze Sekunden) treibt Labels und Ringe und steht still, sobald ihre Sektion unsichtbar ist. Die **Politik-Uhr** ist grob (5 s), hält nie an und feuert nur, was auch in einem anderen Fenster gelten muss: die Timeout-Vorwarnung (4.8), den Tray-Zähler und die Ansagen (Abschnitt 6). Wer beide zu einer macht, tötet mit dem Sparen genau die zwei Fähigkeiten, für die das Programm existiert, während der Mensch woanders ist.
-- **Der Ring bekommt keinen eigenen Controller je Zeile.** Über fünf Minuten wandert das Bogenende eines 16-px-Rings rund 0,15 px je Sekunde, also rund 0,003 px je Frame; zweihundert Ticker für Subpixel sind kein Budget, sondern eine Rechnung ohne Gegenwert. Der Ring liest dieselbe Sekundenuhr wie alles andere. Erst unter `HMotion.ringSmoothBelow` (60 s) bekommt er einen `AnimationController`, weil der Bogen dort rund 0,8 px je Sekunde läuft und die Sekundenschritte als Ruckeln sichtbar werden. Einen eigenen Controller braucht ohnehin nur, was unterhalb einer Sekunde etwas aussagt: die Halte-Füllung und der Rail-Wisch.
-- **Die Sichtbarkeit ist ein Provider, kein privates Feld.** Der Intercept-Screen berechnet den Flag heute in `_InterceptScreenState`, wo ihn niemand lesen kann; er wird zu einem Provider, den die UI-Uhr beobachtet. `nowProvider` verliert dabei `keepAlive` — heute behauptet sein Doc-Kommentar, der Timer stoppe mit dem letzten Beobachter, und `@Riverpod(keepAlive: true)` sorgt dafür, dass er es nicht tut.
-- **Ein Provider, der filtert, sortiert oder gruppiert, sieht nie eine Uhr.** Sonst läuft eine O(n log n)-Projektion über die gesamte Flow-Map je Tick, und n ist der Verkehr der ganzen Sitzung, nicht die Länge der Queue. Zeitabhängige Zeilen bekommen einen einmaligen Timer.
-- **Die Flow-Map ist beschränkt.** Entschiedene Flows fallen heraus, sobald ihr Exit-Fenster vorbei ist; History paginiert vom Daemon, nicht aus dieser Map. Eine anwachsende Map, die je Ereignis vollständig kopiert wird, macht aus einem Ereignis eine O(n)-Kopie.
-- **Jeder abgeleitete Collection-Provider gibt einen Typ mit Wertgleichheit zurück**, nie eine nackte `List` oder `Map`. Vorbild ist `QueueSnapshot` mit `listEquals`.
-- **Skalare mit `.select`.** Nie `.length` auf einer beobachteten Collection.
-- **Zwei Builds je Entscheidung sind nur mit Memoisierung erreichbar.** `SliverChildBuilderDelegate.shouldRebuild` liefert unbedingt `true`, und ein `setState` des Panes je Schnappschuss baut jede gebaute Zeile neu. Das Pane hält deshalb `List<FlowId>` und merkt sich je `FlowId` **eine** `QueueRow`-Widget-Instanz; die Zeile beobachtet `flowProvider(id)` und `selectedFlowIdProvider.select(...)` selbst. `Element.updateChild` bricht bei identischem Kind-Widget ab, und das ist der einzige Weg zu der Zahl. `flowProvider(FlowId)` gibt es noch nicht (Abschnitt 9).
-- **Eine Zeile beobachtet nur Provider, die auf ihre eigene `FlowId` geschlüsselt sind.** Geteilter Zustand wie die laufende Entscheidung wird dort gelesen, wo er angezeigt wird.
-- **Zeigeranwesenheit und Einfrier-Zustand bleiben im `State` des Panes.** Die eingefrorene Reihenfolge ist Sichtzustand und stirbt mit dem Pane; nur der Zähler der ausstehenden Ankünfte ist ein Provider, weil ihn die Pille und die Ansage teilen. Zeigerbewegungen erreichen den Provider-Graphen nie. Das weicht von HUM-029 ab, siehe Abschnitt 8.
-- **Kontinuierlicher Drag-Zustand liegt in einem `ValueNotifier`**, den nur das Layout-Widget hört. Ein Provider-Schreibvorgang je Zeigerbewegung baut den ganzen Screen 120-mal je Sekunde neu.
-- **Feste Zeilenhöhen sind der Liste bekannt, wo n groß ist und keine Zeile die Höhe wechselt**: History über `FixedSpanExtent`, Body- und Hex-Ansichten über `itemExtent`. Die Intercept-Queue ist ausgenommen (2.4), weil sie `AnimatedList` braucht und weil ihre Zeilenhöhe bei größerer Textskalierung ohnehin keine Konstante ist. Ohne Extent kostet Scrollen linear statt konstant — bei zehntausend Zeilen ist das der Unterschied, bei zweihundert nicht.
-- **Animationswrapper verlassen den Baum**, sobald `animation.isCompleted` gilt. Eine lazy Liste baut nur ihr Viewport, also trägt eine Queue nicht sechshundert überflüssige Renderobjekte, sondern rund zwei je sichtbarer Zeile — in einem 660 px hohen Pane etwa sechsunddreißig. Genau die zahlt man je Frame, und genau deshalb verschwinden sie. `CurvedAnimation` ist ein `late final`-Feld eines `State` und wird disposed, nie ein Ausdruck in `build`.
-- **`FadeTransition` und `SlideTransition` statt `Opacity` plus `Transform` in einem `AnimatedBuilder`.** Die Transitions bauen den Kindbaum nicht je Frame neu; der `AnimatedBuilder`-Umweg tut es, und zwar an den beiden Stellen, die ohnehin am teuersten sind.
-- **`RepaintBoundary` genau um die Inseln mit eigener Uhr**: Countdown-Ring, Kartenwisch, atmendes Glyph — und um die ankommende und die gehende Zeile, weil dort je Frame eine Deckkraftschicht bezahlt wird. Sonst nirgends; anderswo kostet sie nur eine Textur.
-- **`Shortcuts`- und `Actions`-Maps sind `late final`-Felder**, keine Ausdrücke in `build`. Kinder, die ein rebauender Elternteil unverändert durchreicht, sind `const` oder Felder.
-- **Keine Formatierung, Kürzung oder Analyse in einem Layout-Callback.** Einmal gegen die Constraints rechnen und gegen diese Constraints cachen; `middleEllipsis` allokiert je Aufruf eine volle Runen-Liste.
-- **Alles, was einen Body anfasst**, läuft über 64 KiB in `Isolate.run` und gibt nur einfache Dart-Werte zurück.
+- **Two clocks, not one.** The **UI clock** (`nowProvider`, `HMotion.clockTick`, whole seconds) drives labels and rings and stands still as soon as its section is invisible. The **policy clock** is coarse (5 s), never stops and only fires what must also apply in another window: the timeout pre-warning (4.8), the tray counter and the announcements (section 6). Whoever makes both into one kills, by saving, exactly the two abilities the program exists for while the human is elsewhere.
+- **The ring gets no controller of its own per row.** Over five minutes the arc end of a 16 px ring moves about 0.15 px per second, so about 0.003 px per frame; two hundred tickers for subpixels are not a budget but a bill without a return. The ring reads the same seconds clock as everything else. Only below `HMotion.ringSmoothBelow` (60 s) does it get an `AnimationController`, because the arc runs about 0.8 px per second there and the second steps become visible as stutter. Only what says something below one second needs a controller of its own anyway: the hold fill and the rail sweep.
+- **Visibility is a provider, not a private field.** The Intercept screen today computes the flag in `_InterceptScreenState`, where nobody can read it; it becomes a provider that the UI clock observes. `nowProvider` loses `keepAlive` in the process — today its doc comment claims the timer stops with the last observer, and `@Riverpod(keepAlive: true)` makes sure it does not.
+- **A provider that filters, sorts or groups never sees a clock.** Otherwise an O(n log n) projection runs over the entire flow map per tick, and n is the traffic of the whole session, not the length of the queue. Time-dependent rows get a one-off timer.
+- **The flow map is bounded.** Decided flows drop out as soon as their exit window is over; History paginates from the daemon, not from this map. A growing map that is copied in full per event turns one event into an O(n) copy.
+- **Every derived collection provider returns a type with value equality**, never a bare `List` or `Map`. The model is `QueueSnapshot` with `listEquals`.
+- **Scalars with `.select`.** Never `.length` on an observed collection.
+- **Two builds per decision are only reachable with memoisation.** `SliverChildBuilderDelegate.shouldRebuild` returns `true` unconditionally, and a `setState` of the pane per snapshot rebuilds every built row. The pane therefore holds `List<FlowId>` and remembers **one** `QueueRow` widget instance per `FlowId`; the row observes `flowProvider(id)` and `selectedFlowIdProvider.select(...)` itself. `Element.updateChild` stops at an identical child widget, and that is the only way to the number. `flowProvider(FlowId)` does not exist yet (section 9).
+- **A row only observes providers keyed on its own `FlowId`.** Shared state such as the running decision is read where it is displayed.
+- **Pointer presence and freeze state stay in the `State` of the pane.** The frozen order is view state and dies with the pane; only the counter of pending arrivals is a provider, because the pill and the announcement share it. Pointer movements never reach the provider graph. This deviates from HUM-029, see section 8.
+- **Continuous drag state lies in a `ValueNotifier`** that only the layout widget listens to. A provider write per pointer movement rebuilds the whole screen 120 times per second.
+- **Fixed row heights are known to the list where n is large and no row changes its height**: History via `FixedSpanExtent`, body and hex views via `itemExtent`. The Intercept queue is exempt (2.4), because it needs `AnimatedList` and because its row height is not a constant at larger text scales anyway. Without an extent, scrolling costs linear instead of constant time — at ten thousand rows that is the difference, at two hundred it is not.
+- **Animation wrappers leave the tree** as soon as `animation.isCompleted` holds. A lazy list builds only its viewport, so a queue carries not six hundred superfluous render objects but about two per visible row — in a 660 px high pane about thirty-six. Exactly those are paid for per frame, and exactly that is why they disappear. `CurvedAnimation` is a `late final` field of a `State` and is disposed, never an expression in `build`.
+- **`FadeTransition` and `SlideTransition` instead of `Opacity` plus `Transform` in an `AnimatedBuilder`.** The transitions do not rebuild the child tree per frame; the `AnimatedBuilder` detour does, and in the two places that are the most expensive anyway.
+- **`RepaintBoundary` exactly around the islands with their own clock**: countdown ring, card sweep, breathing glyph — and around the arriving and the leaving row, because an opacity layer is paid for there per frame. Nowhere else; elsewhere it only costs a texture.
+- **`Shortcuts` and `Actions` maps are `late final` fields**, not expressions in `build`. Children that a rebuilding parent passes through unchanged are `const` or fields.
+- **No formatting, shortening or analysis in a layout callback.** Compute once against the constraints and cache against these constraints; `middleEllipsis` allocates a full rune list per call.
+- **Everything that touches a body** runs in `Isolate.run` above 64 KiB and returns only simple Dart values.
 
-Wie ein Test das beweist:
+How a test proves this:
 
-1. **Rebuild-Zähler (Gatter).** Eine statische Zählvariable im `build` des Widgets, eine Zustandsänderung durch den Container, die exakte Zahl geprüft. Pflicht je Screen: `QueueRow` je Entscheidung, `HeaderBar` je Ereignis, `InterceptScreen` je Splitter-Frame, History-Zeile je Live-Aktualisierung. Rebuild-Umfang ist für Compiler und Goldens unsichtbar und regressiert sonst still.
-2. **Lastgatter (Gatter).** Der Fake-Daemon kennt `burst:200`. Ein stehender Widget-Test hält damit die Zahl der `QueueRow`-Builds je Sekunde Fake-Zeit und je Entscheidung fest.
-3. **Frame-Budget (Messung).** Für 10k History-Zeilen und einen 8-MiB-Body misst ein `integration_test` unter Xvfb Frame- und Rasterzeiten; die Zahl steht im PR. HUM-030 misst heute nur UI-Thread-Zeiten über `SchedulerBinding` und HUM-032 führt die Frames als Risiko mit DevTools-Messung — beides ist weniger, als diese Tabelle verlangt, und wird entsprechend erweitert.
-
----
-
-## 8. Wo dieses Dokument von einer Spezifikation abweicht
-
-Damit die Abweichung prüfbar bleibt, steht sie hier und nicht zwischen den Zeilen.
-
-- **HUM-028:** Der Bestätigungsstreifen gehört an die entschiedene Zeile, nicht in die Karte, und er ist kein zusätzlicher 28-px-Kasten, sondern der getauschte Inhalt derselben Zeile (3.4). In der Karte blockierte er drei Sekunden lang genau den Platz, an dem die nächste Entscheidung fällt.
-- **HUM-028:** Die Release Valve trägt die Akzent-Tönung am Token-Deckel (10 %), nicht 12 %. `HColorDerivation.tint` deckelt bei `HColors.tintAlpha`; ein Wert, den die Token-Schicht nicht erzeugen kann, ist keine Spezifikation, und zwei Prozent Alpha sieht niemand.
-- **HUM-028 und `BACKLOG.md` 5:** Auf dem deutschen Control steht „Senden", nicht „Erlauben"; „Erlauben" gehört dem Regelsatz (4.6).
-- **HUM-020 und `BACKLOG.md` 5:** Die Queue-Zeile bleibt in jedem Zustand 36 px hoch und hat keine zweite Zeile, weil diese Zeile nur wiederholt, was die Karte daneben zeigt, und dabei die Liste unter dem Auge wandern lässt. 36 px ist dabei eine Mindesthöhe, die mit der Textskalierung wächst.
-- **HUM-020:** Aus der Zeile heraus wird nur blockiert. Erlauben ist unumkehrbar und verlangt die URL, und die steht in der Karte.
-- **HUM-029:** Der Gruppenkopf zeigt nur `Block {n}`; `Allow {n}` übernimmt die Aktionsleiste, sobald eine Gruppe ausgewählt ist (3.5).
-- **HUM-029:** Die eingefrorene Reihenfolge lebt im `State` des Queue-Panes, nicht in einem `queueFreezeProvider`; nur der Zähler der ausstehenden Ankünfte ist ein Provider (Abschnitt 7).
-- **HUM-029 und Abschnitt 7:** Die Intercept-Queue behält `AnimatedList` und verzichtet auf `itemExtent`; die Extent-Pflicht gilt in History und in den Body-Ansichten (2.4).
-- **HUM-030:** Werte im JSON-Baum bleiben auf der `fg`-Leiter; einzige Chroma sind Findings.
-- **2.9, Leerlauf:** Das Absperrband (3.6) läuft endlos, solange sein Anlass besteht. Es ist die einzige Dauerbewegung neben dem begrenzten Atem; der Projekteigentümer hat es am 2026-10-20 als Zeichen der Marke entschieden (HUM-260). Es steht nur an den zwei Stellen, die 3.6 nennt.
-- **HUM-034:** Der Tray-Zähler steht in der Farbe von `held`, nicht als Akzentpunkt. Das Tray-Icon ist ein Zustandsanzeiger, kein Control (3.3, Regel 9).
-- **HUM-049:** Erlauben verlangt bei mindestens einem ungelösten Finding dieselbe Halte-Bestätigung wie Blockieren, plus einen Satz, der Secret-Typ und Zielhost benennt — aber kein Modal (4.7).
-- **`BACKLOG.md` 5:** Das Glyph atmet begrenzt (zwei Schwellen, je drei Züge) statt dauerhaft, es hellt auf, statt zu verblassen, und ein Glyph, das eine Schwelle überschreitet, startet seinen ersten Zug bei voller Deckkraft (2.7).
-- **`packages/ui`:** Die ruhende `held`-Rail in der Queue ist namentlich von der 3:1-Regel ausgenommen (3.3, Regel 10). Jede andere Fläche und jede andere Rail erreicht sie.
-- **2.9 und `HTextField`:** Der Fokusring dieses **einen** Controls blendet über 150 ms ein und reserviert keinen Platz, sondern zeichnet über die eigene Kante hinaus. 2.9 verlangt einen Ring in einem Frame, weil ein einblendender sich als Eingabeverzögerung liest. Das Eingabefeld steht seit der Revision von ADR-0009 auf dem `TextField` von `shadcn_flutter`, und das hängt seinen `FocusOutline` fest ein — ohne Schalter. Zwei Ringe übereinander wären einer zu viel, also ist es ihrer. Seine Maße sind unsere: zwei Pixel Akzent, zwei Pixel Abstand, gesetzt über `FocusOutlineTheme` aus `HFocusRingMetrics`. Jedes andere Control trägt weiterhin `HFocusRing`, der seinen Platz reserviert und nicht animiert. Unter reduzierter Bewegung fällt die Einblendung des Bibliotheksrings auf 7,5 ms, weil deren Animationsprimitive ohne `animationBehavior` gebaut ist; sichtbar ist das Ergebnis dann wieder ein Frame.
+1. **Rebuild counter (gate).** A static counter variable in the widget's `build`, a state change through the container, the exact number checked. Mandatory per screen: `QueueRow` per decision, `HeaderBar` per event, `InterceptScreen` per splitter frame, History row per live update. Rebuild extent is invisible to compiler and goldens and otherwise regresses silently.
+2. **Load gate (gate).** The fake daemon knows `burst:200`. A standing widget test uses it to pin down the number of `QueueRow` builds per second of fake time and per decision.
+3. **Frame budget (measurement).** For 10k History rows and an 8 MiB body, an `integration_test` under Xvfb measures frame and raster times; the number stands in the PR. HUM-030 today only measures UI thread times via `SchedulerBinding`, and HUM-032 lists the frames as a risk with a DevTools measurement — both are less than this table demands and are extended accordingly.
 
 ---
 
-## 9. Was das Designsystem noch braucht
+## 8. Where this document deviates from a specification
 
-> **Stand 2026-09-04.** Ein eigener Durchgang hat den grössten Teil dieser
-> Liste geschlossen: `HRow` mit Zustands-Glyph, Fokus und Aktions-Slot,
-> `HFocusRing`, `HSkeleton` und `HWait`, `HTextField`, `HSegmented`,
-> `HCheckbox`, die fehlenden Grössen-Tokens, fünf Glyphen, und vor allem der
-> Kontrastfehler: Zustandsfarben haben jetzt eine eigene Textvariante, die auf
-> allen vier Flächen beider Leitern und auf Tint, Hover- und Druckfüllung
-> 4,5:1 erreicht, während die Flächenfarben bleiben, wie sie waren. Was hier
-> unten noch steht und nicht als geschlossen markiert ist, gilt weiter.
+So that the deviation stays checkable, it stands here and not between the lines.
+
+- **HUM-028:** The confirmation strip belongs to the decided row, not in the card, and it is not an extra 28 px box but the swapped content of the same row (3.4). In the card it would block, for three seconds, exactly the spot where the next decision is made.
+- **HUM-028:** The release valve carries the accent tint at the token cap (10 %), not 12 %. `HColorDerivation.tint` caps at `HColors.tintAlpha`; a value the token layer cannot produce is no specification, and nobody sees two per cent of alpha.
+- **HUM-028 and `BACKLOG.md` 5:** The German control says "Senden", not "Erlauben"; "Erlauben" belongs to the rule sentence (4.6).
+- **HUM-020 and `BACKLOG.md` 5:** The queue row stays 36 px high in every state and has no second line, because this line only repeats what the card next to it shows, and makes the list wander under the eye in doing so. 36 px is a minimum height that grows with the text scaling.
+- **HUM-020:** From the row only blocking is possible. Allowing is irreversible and demands the URL, and that stands in the card.
+- **HUM-029:** The group header shows only `Block {n}`; the action bar takes over `Allow {n}` as soon as a group is selected (3.5).
+- **HUM-029:** The frozen order lives in the `State` of the queue pane, not in a `queueFreezeProvider`; only the counter of pending arrivals is a provider (section 7).
+- **HUM-029 and section 7:** The Intercept queue keeps `AnimatedList` and does without `itemExtent`; the extent obligation applies in History and in the body views (2.4).
+- **HUM-030:** Values in the JSON tree stay on the `fg` ladder; findings are the only chroma.
+- **2.9, idle:** The caution tape (3.6) runs endlessly as long as its cause persists. It is the only continuous motion besides the bounded breath; the project owner decided on it on 2026-10-20 as a sign of the brand (HUM-260). It stands only in the two places that 3.6 names.
+- **HUM-034:** The tray counter stands in the colour of `held`, not as an accent dot. The tray icon is a state indicator, not a control (3.3, rule 9).
+- **HUM-049:** With at least one unresolved finding, allowing demands the same hold confirmation as blocking, plus a sentence that names the secret type and target host — but no modal (4.7).
+- **`BACKLOG.md` 5:** The glyph breathes in a bounded way (two thresholds, three breaths each) instead of permanently, it brightens instead of fading, and a glyph that crosses a threshold starts its first breath at full opacity (2.7).
+- **`packages/ui`:** The resting `held` rail in the queue is exempt by name from the 3:1 rule (3.3, rule 10). Every other surface and every other rail reaches it.
+- **2.9 and `HTextField`:** The focus ring of this **one** control fades in over 150 ms and reserves no space, but draws beyond its own edge. 2.9 demands a ring in one frame, because one that fades in reads as input lag. Since the revision of ADR-0009 the input field stands on the `TextField` of `shadcn_flutter`, and that builds in its `FocusOutline` firmly — without a switch. Two rings on top of each other would be one too many, so it is theirs. Its measurements are ours: two pixels of accent, two pixels of gap, set via `FocusOutlineTheme` from `HFocusRingMetrics`. Every other control continues to carry `HFocusRing`, which reserves its space and does not animate. Under reduced motion the fade-in of the library ring drops to 7.5 ms, because its animation primitive is built without `animationBehavior`; the visible result is then one frame again.
+
+---
+
+## 9. What the design system still needs
+
+> **As of 2026-09-04.** A dedicated pass has closed most of this
+> list: `HRow` with state glyph, focus and action slot,
+> `HFocusRing`, `HSkeleton` and `HWait`, `HTextField`, `HSegmented`,
+> `HCheckbox`, the missing size tokens, five glyphs, and above all the
+> contrast defect: state colours now have a text variant of their own that reaches
+> 4.5:1 on all four surfaces of both ladders and on tint, hover and press fill,
+> while the surface colours stay as they were. Whatever still stands
+> below and is not marked as closed continues to apply.
 >
-> **Nachtrag 2026-09-04, zweiter Durchgang.** Zwei Reviews haben neunzehn
-> Befunde gebracht; sie sind behoben, und jeder hat einen Test, der ohne ihn
-> rot wird. Der Atem endet wieder bei voller Deckkraft (`repeat(count:)`
-> zählt Halbdurchläufe), die geteilte Pille malt Wort und Chevron in der
-> Textvariante ihrer Fläche, der Akzent hat mit `accentText` und `accentFill`
-> dieselbe Trennung von Fläche und Wort wie jede Zustandsfarbe, der Fokusring
-> hält zwei Pixel Fläche frei, wo er sonst auf einer Füllung läge, die von ihm
-> selbst nicht zu unterscheiden ist — beim Primärbutton also, gemessen und
-> nicht aufgezählt (`HFocusRing.needsGap`) —, die Haltefüllung ist ein
-> Token (`HColors.fillHoldAlpha`) und steht in der Liste, gegen die die
-> Textableitung rechnet, `HSheet` fängt den Fokus und schließt auf `Escape`,
-> die Kopfzeile eines Klappabschnitts und der Splitter der Panes sind
-> Fokusstopps mit Tastenbedienung, und `HMotion` hat die beiden Fristen
-> aufgenommen, die vorher als Literale in `core/ui` standen. Die
-> Haltefüllung in der Textableitung verschiebt die Textpalette leicht; die
-> eingefrorenen Tabellen in `tokens_test.dart` sind entsprechend neu.
+> **Addendum 2026-09-04, second pass.** Two reviews brought nineteen
+> findings; they are fixed, and each has a test that turns red without
+> the fix. The breath ends at full opacity again (`repeat(count:)`
+> counts half cycles), the split pill paints word and chevron in the
+> text variant of its surface, the accent has, with `accentText` and `accentFill`,
+> the same separation of surface and word as every state colour, the focus ring
+> keeps two pixels of surface clear where it would otherwise lie on a fill that cannot be
+> told apart from it — that is, on the primary button, measured and
+> not enumerated (`HFocusRing.needsGap`) —, the hold fill is a
+> token (`HColors.fillHoldAlpha`) and stands in the list against which the
+> text derivation calculates, `HSheet` traps the focus and closes on `Escape`,
+> the header line of a collapsible section and the splitter of the panes are
+> focus stops with keyboard operation, and `HMotion` has taken up the two deadlines
+> that previously stood as literals in `core/ui`. The
+> hold fill in the text derivation shifts the text palette slightly; the
+> frozen tables in `tokens_test.dart` are new accordingly.
 >
-> **Nachtrag 2026-09-04, dritter Durchgang.** Zehn weitere Befunde, ebenfalls
-> je mit einem Test, der ohne die Sicherung rot wird. Die Haltefüllung der
-> Pille liegt auf deren eigener Tönung und komponierte zu 0,248 statt 0,20;
-> ihr Alpha wird jetzt zurückgerechnet (`HColorDerivation.alphaOver`), und
-> `holdFill` in `core/ui` nimmt denselben Weg. Ein deaktiviertes Kästchen und
-> ein deaktiviertes Segment tragen `fg2` statt `fg0` und keinen Akzent mehr;
-> das Kästchen füllt mit `accentFill` wie der Primärbutton. Die Tastenfüllung
-> behält ihre 120 ms auch bei abgeschalteten Animationen: `AnimatedContainer`
-> baut seinen Controller ohne `animationBehavior`, also übernimmt
-> `HAnimatedFill` die Farbe von Button, Zeile und Segment. Die gemerkte
-> Variante der Pille hat einen Tastenweg (`Enter` oder Leertaste gehalten),
-> der Rahmen der Pille trägt denselben Ton wie ihr Wort, die
-> Kopfzeile eines Klappabschnitts hat eine Mindesthöhe statt einer Höhe und
-> ihre Kurve als Feld statt als Ausdruck in `build`, und die Breite des
-> Splitter-Griffs ist ein Token (`HSize.splitter`, ungerade, damit die
-> Haarlinie auf einem ganzen Pixel liegt). `core/ui` hat seitdem einen
-> eigenen Test bei doppelter Textskalierung; er hat den Kopf der
-> Diagnose-Karte gefunden, der jetzt umbricht statt abzuschneiden.
+> **Addendum 2026-09-04, third pass.** Ten more findings, likewise
+> each with a test that turns red without the safeguard. The hold fill of the
+> pill lay on the pill's own tint and composited to 0.248 instead of 0.20;
+> its alpha is now calculated back (`HColorDerivation.alphaOver`), and
+> `holdFill` in `core/ui` takes the same route. A disabled checkbox and
+> a disabled segment carry `fg2` instead of `fg0` and no accent any more;
+> the checkbox fills with `accentFill` like the primary button. The key fill
+> keeps its 120 ms even with animations switched off: `AnimatedContainer`
+> builds its controller without `animationBehavior`, so
+> `HAnimatedFill` takes over the colour of button, row and segment. The remembered
+> variant of the pill has a keyboard path (`Enter` or Space held),
+> the border of the pill carries the same tone as its word, the
+> header line of a collapsible section has a minimum height instead of a height and
+> its curve as a field instead of an expression in `build`, and the width of the
+> splitter grip is a token (`HSize.splitter`, odd, so that the
+> hairline lies on a whole pixel). Since then `core/ui` has a
+> test of its own at double text scaling; it found the header of the
+> diagnostic card, which now wraps instead of cutting off.
 >
-> Eine Entscheidung dieses Durchgangs steht gegen den ersten Anschein: das
-> Zustands-Glyph behält die **Flächenfarbe**. Der Doc-Kommentar von
-> `stateTextColor` zählte es zu dem, was die Textvariante nimmt, und der Code
-> tat es nicht; richtiggestellt wurde der Kommentar. Ein Glyph ist eine
-> Grafik, seine Grenze ist die 3:1 aus Abschnitt 6, und die hält die
-> Flächenpalette auf jeder Fläche beider Leitern. Mit der Textvariante
-> verlöre ausgerechnet `autoRule` seinen Ton — die Farbe trägt 60 % Deckkraft,
-> 4,5:1 erreicht sie nur dicht an Weiß (dunkel) oder Schwarz (hell) —, und das
-> Glyph ist der Kanal, der die Farbe für Farbenblinde verdoppelt (3.3).
+> One decision of this pass goes against first appearances: the
+> state glyph keeps the **surface colour**. The doc comment of
+> `stateTextColor` counted it among what takes the text variant, and the code
+> did not; it was the comment that was corrected. A glyph is a
+> graphic, its threshold is the 3:1 from section 6, and the
+> surface palette keeps that on every surface of both ladders. With the text variant,
+> `autoRule` of all things would lose its tone — the colour carries 60 % opacity,
+> it reaches 4.5:1 only close to white (dark) or black (light) —, and the
+> glyph is the channel that doubles the colour for the colour-blind (3.3).
 
-Gewachsen sind `motion.dart` (`leaveOffset`, `stagger`, `staggerMax`, `leaveGlideFraction`, `holdToBlock`, `rearm`, `confirm`, `undoWindow`, `freezeAfterKey`, `freezeAfterPointer`, `clockTick`, `waitVisible`, `waitMinVisible`, `ringSmoothBelow`, `breatheBelowUrgent`, `breatheCycles`, `breatheMinOpacity`, `reducedRingAlpha`, `hoverLabel`, `copyFeedback` sowie `HReducedMotion`), `colors.dart` (`fillHoverAlpha`, `fillPressedAlpha`, `fillHoldAlpha`, `textMinContrast`, `areaMinContrast`, `fillAlphas`, `textBackgrounds`, `textVariant`, `readableFill`), `spacing.dart` (`rowHistory`, `rowBody`, `rowActionSlot`, `hitDecision`, `measureChars`, `splitterActive`, `splitterStep`), `flow_state.dart` (Glyph und ARB-Schlüssel je Zustand) und `tokens.dart` (`stateText`, `methodText`, `accentText`, `accentFill`, `stateTextOf`). Mit HUM-260 kamen `HColors.onAccent`, `HColors.warning`, `HColors.info` (samt hellen Varianten und `colors.warningText`, `colors.infoText`), `HMotion.cautionTape`, `HMotion.cautionTapePeriod`, `HSize.cautionTape` und das Widget `HCautionTape` dazu. Alles Folgende ist offen und wird in eigenen Issues entschieden, nie beiläufig.
+The following have grown: `motion.dart` (`leaveOffset`, `stagger`, `staggerMax`, `leaveGlideFraction`, `holdToBlock`, `rearm`, `confirm`, `undoWindow`, `freezeAfterKey`, `freezeAfterPointer`, `clockTick`, `waitVisible`, `waitMinVisible`, `ringSmoothBelow`, `breatheBelowUrgent`, `breatheCycles`, `breatheMinOpacity`, `reducedRingAlpha`, `hoverLabel`, `copyFeedback` as well as `HReducedMotion`), `colors.dart` (`fillHoverAlpha`, `fillPressedAlpha`, `fillHoldAlpha`, `textMinContrast`, `areaMinContrast`, `fillAlphas`, `textBackgrounds`, `textVariant`, `readableFill`), `spacing.dart` (`rowHistory`, `rowBody`, `rowActionSlot`, `hitDecision`, `measureChars`, `splitterActive`, `splitterStep`), `flow_state.dart` (glyph and ARB key per state) and `tokens.dart` (`stateText`, `methodText`, `accentText`, `accentFill`, `stateTextOf`). With HUM-260 came `HColors.onAccent`, `HColors.warning`, `HColors.info` (together with light variants and `colors.warningText`, `colors.infoText`), `HMotion.cautionTape`, `HMotion.cautionTapePeriod`, `HSize.cautionTape` and the widget `HCautionTape`. Everything that follows is open and is decided in issues of its own, never in passing.
 
-**Token:**
+**Tokens:**
 
-1. ~~`HSize.rowSelected` (56) benutzt nach 3.4 keine Zeile mehr. Entweder streichen oder auf die History-Detailzeile umwidmen.~~ Geschlossen am 2026-09-04: auf die zweizeilige Detailzeile der History umgewidmet.
-2. ~~`HSize.selectionRail` (2) entfällt, sobald die Auswahl die Zustands-Rail ersetzt statt sie zu überlagern.~~ Geschlossen am 2026-09-04: die Auswahl ersetzt die Rail über alle vier Pixel, und das Token markiert jetzt die aktive Sektion der Icon-Rail.
-3. ~~Die drei Zeilendichten aus 3.2 brauchen drei Token: `HSize.rowHistory` (28), `HSize.rowBody` (24) und `HSize.rowActionSlot` (28).~~ Geschlossen am 2026-09-04: alle drei stehen in `spacing.dart`, der Aktionsslot borgt sich `hitMin` nicht mehr.
-4. ~~Eine eigene Untergrenze für die beiden Entscheidungen: `HSize.hitDecision` (32 px Höhe, 120 px Breite) neben `HSize.hitMin` (5.4).~~ Geschlossen am 2026-09-04.
-5. ~~Die Methoden-Hues erreichen als Text auf ihrem eigenen Tint keine 4,5:1 (DELETE dunkel 2,65:1). Entweder Label- und Flächenfarbe getrennt führen oder die Hues nachziehen.~~ Geschlossen am 2026-09-04: `HMethodColors.darkText` und `lightText` führen das Kürzel getrennt von der Fläche, abgeleitet über `HColorDerivation.textVariant`.
-6. ~~Der Countdown-Ring nimmt `tokens.colors.line` als Spur; im hellen Theme misst der Bogen dagegen 2,84:1.~~ Entschieden am 2026-09-04, und zwar für die Lücke: der Ring zeichnet nur noch den verbleibenden Bogen, die verbrauchte Strecke bleibt Fläche. Eine Spur hätte zwei Bedingungen zugleich erfüllen müssen — auf jeder Panelfläche sichtbar sein und dem Bogen 3:1 lassen —, und die abgeleitete helle Spur erfüllte die erste nicht: sie maß gegen die vier hellen Flächen 1,01:1 bis 1,26:1 und war auf keinem Panel zu sehen. Der Bogen allein erreicht als Zustandsfarbe auf jeder Fläche beider Leitern seine 3:1. Das Token `ringTrack` ist damit wieder weg.
-7. ~~Für die Maß-Obergrenze aus 3.2 gibt es kein Token. Vorschlag: eine Zeichenzahl (90), keine Pixelbreite.~~ Geschlossen am 2026-09-04: `HSize.measureChars` (90) und `HSize.measureWidth`.
-8. Eine Rail, die 3:1 erreicht, bräuchte ein eigenes Alpha-Token weit oberhalb von `HColors.tintAlpha`. Dieses Dokument will sie nicht (3.3, Regel 10); wer sie doch will, führt das Token ein und darf `tint()` nicht dafür missbrauchen.
+1. ~~`HSize.rowSelected` (56) is no longer used by any row per 3.4. Either delete it or repurpose it for the History detail row.~~ Closed on 2026-09-04: repurposed for the two-line detail row of History.
+2. ~~`HSize.selectionRail` (2) is dropped as soon as the selection replaces the state rail instead of overlaying it.~~ Closed on 2026-09-04: the selection replaces the rail across all four pixels, and the token now marks the active section of the icon rail.
+3. ~~The three row densities from 3.2 need three tokens: `HSize.rowHistory` (28), `HSize.rowBody` (24) and `HSize.rowActionSlot` (28).~~ Closed on 2026-09-04: all three stand in `spacing.dart`, the action slot no longer borrows `hitMin`.
+4. ~~A lower bound of its own for the two decisions: `HSize.hitDecision` (32 px height, 120 px width) next to `HSize.hitMin` (5.4).~~ Closed on 2026-09-04.
+5. ~~The method hues do not reach 4.5:1 as text on their own tint (DELETE dark 2.65:1). Either carry label and surface colour separately or adjust the hues.~~ Closed on 2026-09-04: `HMethodColors.darkText` and `lightText` carry the abbreviation separately from the surface, derived via `HColorDerivation.textVariant`.
+6. ~~The countdown ring takes `tokens.colors.line` as its track; in the light theme the arc measures 2.84:1 against it.~~ Decided on 2026-09-04, in favour of the gap: the ring now only draws the remaining arc, the consumed distance stays surface. A track would have had to meet two conditions at once — be visible on every panel surface and leave the arc 3:1 —, and the derived light track did not meet the first: it measured 1.01:1 to 1.26:1 against the four light surfaces and could not be seen on any panel. The arc alone, as a state colour, reaches its 3:1 on every surface of both ladders. The token `ringTrack` is thus gone again.
+7. ~~There is no token for the measure upper bound from 3.2. Proposal: a character count (90), not a pixel width.~~ Closed on 2026-09-04: `HSize.measureChars` (90) and `HSize.measureWidth`.
+8. A rail that reaches 3:1 would need an alpha token of its own far above `HColors.tintAlpha`. This document does not want it (3.3, rule 10); whoever wants it anyway introduces the token and must not misuse `tint()` for it.
 
 **Widgets in `packages/ui`:**
 
-9. ~~Eine gehende Zeile braucht ein eigenes Widget ohne `ref`: `QueueRowSnapshot` (oder `HRow.frozen`).~~ Geschlossen am 2026-09-04, und zwar ohne zweites Widget: `HRow` beobachtet nichts und nimmt ausschließlich aufgelöste Werte — Zustand, Glyph, Methode, Host, Pfad, Restzeit als Zeichenkette. Damit taugt dieselbe Klasse für die lebende und für die gehende Zeile, und der Abgang zeichnet ein eingefrorenes Abbild mit stehendem Countdown (2.4). Der Doc-Kommentar von `HRow` sagt dasselbe; die beiden Texte widersprachen sich, bis dieser hier nachgezogen wurde.
-10. ~~`HRow` malt Hover und Auswahl beide `bg3`. Hover muss `bg2` werden (3.4).~~ Geschlossen am 2026-09-04.
-11. ~~`HRow` benutzt `HMotion.sweep` für Hover-Tönung und Höhe. Hover gehört `HMotion.press`, die Höhe animiert nicht.~~ Geschlossen am 2026-09-04.
-12. ~~`HRow` hat keinen Slot für ein Zustands-Glyph und ist nicht fokussierbar. Dazu ein Slot für die Mehrfachauswahl-Rail (3.5).~~ Geschlossen am 2026-09-04; die Kopfzeile dieses Abschnitts sagt dasselbe.
-13. ~~`HMethodBadge` braucht eine neutrale Variante (`fg1` auf `bg2`) für Listen; die farbige bleibt dem Kartenkopf.~~ Geschlossen am 2026-09-04.
-14. ~~`HButton` zeichnet Fokus durch Umfärben des vorhandenen 1-px-Rahmens. Gebraucht wird ein 2-px-Akzentring außerhalb; zwei `BoxDecoration` reichen dafür, ein neues Token nicht.~~ Geschlossen am 2026-09-04: `HFocusRing` zeichnet den Ring außerhalb, `HFocusRing.inline` auf der Kante der geteilten Pille.
-15. `HStateGlyph`: `easeInOut`, die Untergrenze `HMotion.breatheMinOpacity`, `HMotion.breatheCycles` je Schwelle, der Start bei voller Deckkraft und der ruhende Ersatzring unter reduzierter Bewegung stehen seit 2026-09-04; das Ende des Atems ebenfalls (`repeat(reverse: true, count:)` zählt Halbdurchläufe, eine ungerade Zahl endet auf der geringsten Deckkraft). Offen bleibt nur die Phase: das Glyph hat einen eigenen Controller, statt seine Phase aus der Uhrzeit modulo `HMotion.breathe` zu nehmen. Zwei Zeilen, die im selben Moment unter die Schwelle fallen, atmen deshalb im Gleichschritt, zwei aus verschiedenen Momenten nicht.
-16. ~~`HModal` hat weder `FocusScope` noch `Escape`-Bindung.~~ Geschlossen am 2026-09-04: `FocusScope` mit `autofocus`, `Escape` über `DismissIntent`. `HSheet` hatte dieselbe Lücke und hat seit dem 2026-09-04 dieselbe Behandlung; ohne sie lief `Tab` durch den Bildschirm, den das Blatt gerade verdeckt.
-17. ~~`HPill`, `HIconButton`, `HRow` und `HBadge` mit `onTap` sind nicht fokussierbar; `HButton` ist heute das einzige fokussierbare Control im System.~~ Geschlossen am 2026-09-04: zehn der 21 Widgets tragen eigene Fokus-Behandlung, darunter alle vier.
-18. ~~`HBadge.chipHeight` und `HButtonSize` sind feste Höhen und laufen bei `TextScaler` 2.0 über. Mindesthöhen statt Höhen.~~ Geschlossen am 2026-09-04; der Test bei doppelter Skalierung deckt seit demselben Tag auch `HPill`, `HSegmented`, `HIconButton` und `HModal` ab.
-19. ~~Ein Skelett-Widget für 2.11: Haarlinien in der Höhe einer Zieldichte, `fg2`, ohne Bewegung, mit den beiden Schwellen `waitVisible` und `waitMinVisible` eingebaut.~~ Geschlossen am 2026-09-04: `HSkeleton` und `HWait`.
+9. ~~A leaving row needs a widget of its own without `ref`: `QueueRowSnapshot` (or `HRow.frozen`).~~ Closed on 2026-09-04, and without a second widget: `HRow` observes nothing and takes exclusively resolved values — state, glyph, method, host, path, remaining time as a string. So the same class serves for the living and for the leaving row, and the exit draws a frozen image with a stopped countdown (2.4). The doc comment of `HRow` says the same; the two texts contradicted each other until this one was brought in line.
+10. ~~`HRow` paints hover and selection both `bg3`. Hover must become `bg2` (3.4).~~ Closed on 2026-09-04.
+11. ~~`HRow` uses `HMotion.sweep` for hover tint and height. Hover belongs to `HMotion.press`, the height does not animate.~~ Closed on 2026-09-04.
+12. ~~`HRow` has no slot for a state glyph and is not focusable. Plus a slot for the multiple-selection rail (3.5).~~ Closed on 2026-09-04; the header of this section says the same.
+13. ~~`HMethodBadge` needs a neutral variant (`fg1` on `bg2`) for lists; the coloured one stays reserved for the card header.~~ Closed on 2026-09-04.
+14. ~~`HButton` draws focus by recolouring the existing 1 px border. What is needed is a 2 px accent ring outside; two `BoxDecoration`s are enough for that, a new token is not needed.~~ Closed on 2026-09-04: `HFocusRing` draws the ring outside, `HFocusRing.inline` on the edge of the split pill.
+15. `HStateGlyph`: `easeInOut`, the lower bound `HMotion.breatheMinOpacity`, `HMotion.breatheCycles` per threshold, the start at full opacity and the resting substitute ring under reduced motion have been in place since 2026-09-04; the end of the breath as well (`repeat(reverse: true, count:)` counts half cycles, an odd number ends on the lowest opacity). Only the phase remains open: the glyph has a controller of its own instead of taking its phase from the clock time modulo `HMotion.breathe`. Two rows that drop below the threshold at the same moment therefore breathe in step, two from different moments do not.
+16. ~~`HModal` has neither a `FocusScope` nor an `Escape` binding.~~ Closed on 2026-09-04: `FocusScope` with `autofocus`, `Escape` via `DismissIntent`. `HSheet` had the same gap and has had the same treatment since 2026-09-04; without it `Tab` ran through the screen that the sheet was covering.
+17. ~~`HPill`, `HIconButton`, `HRow` and `HBadge` with `onTap` are not focusable; `HButton` is today the only focusable control in the system.~~ Closed on 2026-09-04: ten of the 21 widgets carry focus handling of their own, among them all four.
+18. ~~`HBadge.chipHeight` and `HButtonSize` are fixed heights and overflow at `TextScaler` 2.0. Minimum heights instead of heights.~~ Closed on 2026-09-04; since the same day the test at double scaling also covers `HPill`, `HSegmented`, `HIconButton` and `HModal`.
+19. ~~A skeleton widget for 2.11: hairlines at the height of a target density, `fg2`, without motion, with the two thresholds `waitVisible` and `waitMinVisible` built in.~~ Closed on 2026-09-04: `HSkeleton` and `HWait`.
 
-**In `app/lib`, außerhalb dieses Dokuments zu entscheiden:**
+**In `app/lib`, to be decided outside this document:**
 
-20. `flowProvider(FlowId)` gibt es nicht; Abschnitt 7 braucht ihn für die Memoisierung der Zeilen.
-21. Die Sichtbarkeit einer Sektion braucht einen Provider; heute ist sie ein privates Feld von `_InterceptScreenState`.
-22. `nowProvider` verliert `keepAlive` und wird die UI-Uhr; die Politik-Uhr aus Abschnitt 7 kommt daneben.
-23. `ConnectionGate` ersetzt heute die ganze Shell, sobald die Verbindung fehlschlägt — auch mitten in der Arbeit. 4.2 Punkt 4 verlangt, dass der Setup-Screen nur beim Kaltstart übernimmt.
+20. `flowProvider(FlowId)` does not exist; section 7 needs it for the memoisation of the rows.
+21. The visibility of a section needs a provider; today it is a private field of `_InterceptScreenState`.
+22. `nowProvider` loses `keepAlive` and becomes the UI clock; the policy clock from section 7 comes next to it.
+23. `ConnectionGate` today replaces the whole shell as soon as the connection fails — even in the middle of work. 4.2 item 4 demands that the setup screen only takes over on a cold start.
 
 **Tests:**
 
-24. ~~Der Kontrast-Test prüft Farbe-auf-Fläche mit 3:1. Er braucht Text-auf-Tint und Text-auf-Füllung mit 4,5:1.~~ Geschlossen am 2026-09-04: `every state colour carries text at 4.5:1 in both themes`, `every method hue carries its verb at 4.5:1 in both themes` und `every fill of the system is a fill the derivation saw` in `packages/ui/test/tokens_test.dart`; die Ausnahme aus 3.3 Regel 10 steht namentlich im Test `the area palette is exactly what it claims`.
-25. Es gibt keinen Test, der belegt, dass jede Zustandsfarbe von Glyph **und** Label begleitet ist. (Die zweite Hälfte dieses Punktes — ein Test bei `TextScaler` 2.0 — ist mit Punkt 18 erledigt: `packages/ui` prüft die Skalierung seit dem 2026-09-04 für zehn Controls, `app/lib/core/ui` seit demselben Tag für seine drei.)
-26. Ein ARB-Lint prüft die Verbotswörter aus 4.1 in beiden Sprachen und kennt die drei Aussage-Schlüssel als Ausnahme.
-27. Ein Widget-Test hält `Enter` 500 ms gedrückt und erwartet genau ein `Decide` (5.4).
+24. ~~The contrast test checks colour-on-surface at 3:1. It needs text-on-tint and text-on-fill at 4.5:1.~~ Closed on 2026-09-04: `every state colour carries text at 4.5:1 in both themes`, `every method hue carries its verb at 4.5:1 in both themes` and `every fill of the system is a fill the derivation saw` in `packages/ui/test/tokens_test.dart`; the exception from 3.3 rule 10 stands by name in the test `the area palette is exactly what it claims`.
+25. There is no test that proves every state colour is accompanied by glyph **and** label. (The second half of this item — a test at `TextScaler` 2.0 — is done with item 18: `packages/ui` has checked the scaling for ten controls since 2026-09-04, `app/lib/core/ui` for its three since the same day.)
+26. An ARB lint checks the forbidden words from 4.1 in both languages and knows the three statement keys as exceptions.
+27. A widget test holds `Enter` down for 500 ms and expects exactly one `Decide` (5.4).
 
-**Was die Bibliothek liefert und was nicht (ADR-0009, „Revidiert am 2026-09-04 durch den Projekteigentümer"):**
+**What the library delivers and what it does not (ADR-0009, "Revised on 2026-09-04 by the project owner"):**
 
-`shadcn_flutter` ist seit dem 2026-09-04 aufgenommen und liefert Resizable,
-Command Palette, Sheet und ContextMenu. Toast und Menubar entfallen trotzdem:
-Ein Toast widerspricht 2.11, 4.6 und 4.8, und die beiden Wege zu jeder Handlung
-sind die Icon-Rail und die Command Palette (5.1), nicht eine Menüleiste.
+`shadcn_flutter` has been adopted since 2026-09-04 and delivers Resizable,
+Command Palette, Sheet and ContextMenu. Toast and Menubar are dropped nonetheless:
+a toast contradicts 2.11, 4.6 and 4.8, and the two ways to every action
+are the icon rail and the command palette (5.1), not a menu bar.
 
-Die Bibliothek liefert das Aussehen, nicht die Verhaltensschicht darunter. Sie
-berechnet an keiner Stelle einen Kontrastwert, kennt `AnimationBehavior` nicht,
-hat drei `Semantics`-Knoten in der ganzen Bibliothek, kein
-Halten-zum-Bestätigen, keine Mindest-Trefferfläche und auf dem Desktop keinen
-gedrückten Zustand. Was davon im MVP trotzdem gilt, steht im ADR: die
-Haltedauer behält ihre Zeit, Text bleibt über etwa 3:1, und ein Klick zeigt
-eine Reaktion. Der Rest ist bis 1.0.0 vertagt.
+The library delivers the look, not the behaviour layer underneath. It
+computes a contrast value nowhere, does not know `AnimationBehavior`,
+has three `Semantics` nodes in the whole library, no
+hold-to-confirm, no minimum hit area and, on the desktop, no
+pressed state. What of this applies in the MVP anyway stands in the ADR: the
+hold duration keeps its time, text stays above about 3:1, and a click shows
+a reaction. The rest is deferred until 1.0.0.
 
-28. ~~Ein Kontextmenü fehlt.~~ Geschlossen am 2026-09-04: `shadcn_flutter`
-    bringt eines mit. Gebraucht wird es zweimal, „Copy value" und „Copy path" im
-    JSON-Baum und Copy/Paste im Terminal; es wird in `packages/ui` gewickelt,
-    nicht in einem der beiden Features, weil beide dieselbe Tastenführung und
-    denselben Fokusring brauchen.
-29. ~~Ein Datum-Zeit-Wähler fehlt.~~ Geschlossen am 2026-09-04: die Bibliothek
-    bringt einen mit. Beim Wickeln gilt weiterhin, dass die Uhrzeit im
-    Zeitraum-Filter des Audit-Screens in Monospace steht, weil sie Teil des
-    Belegs ist (`backlog/CONVENTIONS.md` 4.13).
-30. ~~`HResizablePanes` kennt nur die waagerechte Achse.~~ Geschlossen am
-    2026-09-04: die Bibliothek kennt beide Achsen. Ihre zwei offenen Fehler zur
-    senkrechten Achse (#427, #428) waren der Grund, warum HUM-035 sie als Risiko
-    führte; beim Wickeln ist zu prüfen, ob sie uns treffen.
-31. `FocusRing` in `app/lib/core/ui` und `HFocusRing` in `packages/ui` sind
-    dieselbe Sache zweimal. Der Kommentar, der das mit einem Zustand begründete,
-    den Punkt 14 aufgehoben hat, ist am 2026-09-04 richtiggestellt; die Datei
-    bleibt, weil fünf Controls der Aktionsleiste und der History sie benutzen
+28. ~~A context menu is missing.~~ Closed on 2026-09-04: `shadcn_flutter`
+    brings one along. It is needed twice, "Copy value" and "Copy path" in the
+    JSON tree and copy/paste in the terminal; it is wrapped in `packages/ui`,
+    not in one of the two features, because both need the same keyboard handling and
+    the same focus ring.
+29. ~~A date-time picker is missing.~~ Closed on 2026-09-04: the library
+    brings one along. When wrapping it, it still applies that the time of day in the
+    time-range filter of the audit screen stands in monospace, because it is part of the
+    evidence (`backlog/CONVENTIONS.md` 4.13).
+30. ~~`HResizablePanes` only knows the horizontal axis.~~ Closed on
+    2026-09-04: the library knows both axes. Its two open bugs concerning the
+    vertical axis (#427, #428) were the reason why HUM-035 listed it as a risk;
+    when wrapping, it has to be checked whether they affect us.
+31. `FocusRing` in `app/lib/core/ui` and `HFocusRing` in `packages/ui` are
+    the same thing twice. The comment that justified this with a state
+    that item 14 has removed was corrected on 2026-09-04; the file
+    stays, because five controls of the action bar and of History use it
     (`block_button`, `note_field`, `release_valve`, `remember_grid`,
-    `history_table`). Bis zum Umzug liest sie ihre Geometrie aus `HFocusRing`,
-    damit die beiden Ringe nicht auseinanderlaufen; ein Test hält die beiden
-    Abstände gleich. Beim Umzug der Handoff-Widgets bleibt eine der beiden.
-32. `HPill` und `HPanel` hat kein Bildschirm je aufgerufen; sie stehen nur in
-    der Galerie. Entweder sie bekommen einen Aufrufer oder sie fallen weg.
+    `history_table`). Until the move it reads its geometry from `HFocusRing`,
+    so that the two rings do not drift apart; a test keeps the two
+    spacings equal. When the handoff widgets move, one of the two remains.
+32. No screen has ever called `HPill` and `HPanel`; they stand only in
+    the gallery. Either they get a caller or they are dropped.
 
 ---
 
-## 10. Checkliste vor „fertig"
+## 10. Checklist before "done"
 
-- [ ] Jede Animation beantwortet eine der vier Fragen aus 2.1; jede Dauer, Kurve und Strecke kommt aus `HMotion`, kein Literal in einer Feature-Datei.
-- [ ] Jedes Overlay — Sheet, Modal, Palette, Banner, Sektions- und Tabwechsel — nimmt seine Zeile aus 2.2 und erfindet keine eigene Bewegung.
-- [ ] Nichts bewegt sich, was gerade gelesen wird; keine Zahl, kein Fokusring und keine Zeilenhöhe animiert wegen eines Zustandswechsels.
-- [ ] Strecken und Schleifen laufen über `HReducedMotion`, jede Schleife hat einen ruhenden Ersatz, und der Abgang behält unter reduzierter Bewegung seine Rückmeldung (2.10).
-- [ ] Jeder Wartevorgang folgt 2.11: nichts unter 150 ms, danach Skelett in der Zieldichte, mindestens 400 ms stehend, kein Spinner, keine Verschiebung beim Eintreffen.
-- [ ] Der Screen hat genau ein gefülltes Control je Entscheidungskontext, einen Leerzustand und ein größtes Textelement, und das ist das Wichtigste darauf.
-- [ ] Jede Zustandsfarbe wird vom Glyph begleitet, vom Klartext-Label überall dort, wo Platz reserviert ist, und von Semantics und Tooltip immer; Akzent nur auf Fokussierbarem oder Anfassbarem; Chrome ohne zweiten Wert trägt `fg1`.
-- [ ] Alle Abstände sind Vielfache von 4, die rechte Rinne misst 12 px, das Textmaß höchstens 90 Monospace-Zeichen — außer in Code, Hex und Tabellen, die waagerecht scrollen und nie umbrechen.
-- [ ] Jeder Leerzustand nennt das nächste Ereignis oder, bei einem Filter, Trefferzahl und Rückweg; kein „Nichts", kein „noch", kein internes Vokabular, jeder Text aus ARB in beiden Sprachen.
-- [ ] Die vier Zustände vor der ersten Anfrage aus 4.2 sind gebaut, und der Setup-Screen ersetzt die Shell nur beim Kaltstart.
-- [ ] Ein Timeout hinterlässt eine Vorwarnung am Flow, drei Sekunden graue Zeile und einen dauerhaften Zähler in der Statusleiste (4.8).
-- [ ] Eine Anfrage mit Finding trägt den Chip in `HColors.secret`, den Grund in Klartext und die Halte-Bestätigung auf dem Erlauben (4.7).
-- [ ] Jeder Fehlerpfad zeigt ein `Diagnostic` mit dem `why` des Daemons und mit `fix`, verankert am Ort der Aktion.
-- [ ] Jeder Aktivator hat eine Action, jeder Zeigerweg eine Taste, jeder angenommene Druck eine sichtbare Reaktion in 100 ms, jeder abgelehnte eine leise und eine angesagte.
-- [ ] Weder `Enter` noch `Leertaste` noch ein einzelner Buchstabe gewinnt gegen ein fokussiertes Control; ein Test vergleicht beide Tastenmengen, und ein zweiter hält `Enter` 500 ms gedrückt und erwartet ein `Decide`.
-- [ ] Erlauben ist nach jeder neuen Auswahl `HMotion.rearm` lang unscharf, Tastenwiederholung entscheidet nie, und die Auswahl springt nicht weiter, solange eine Entscheidungstaste gedrückt ist.
-- [ ] Kontrast: Text ≥ 4,5:1 auch auf Tint und Füllung, Flächen ≥ 3:1 mit der einen benannten Ausnahme; Hit-Targets ≥ 28 × 28 px, Erlauben und Blockieren ≥ 32 × 120 px, im Test gemessen.
-- [ ] Widget-Test und Golden bei `TextScaler` 2.0 ohne Overflow; Semantics tragen Zustand, Index und Gesamtzahl im Label und die Frist im Value; kein Label ändert sich häufiger als einmal je Sekunde; Ankünfte sind gebündelt.
-- [ ] Ein Rebuild-Zähler-Test hält die Builds je Entscheidung, je Sekunde Uhr und je Splitter-Frame fest; die Frame- und Speicherzahlen stehen als Messung im PR, nicht als Gatter im Unit-Test.
-- [ ] `make check` grün, Goldens grün, und jede Abweichung von einer Spezifikation steht in Abschnitt 8.
+- [ ] Every animation answers one of the four questions from 2.1; every duration, curve and distance comes from `HMotion`, no literal in a feature file.
+- [ ] Every overlay — sheet, modal, palette, banner, section and tab change — takes its row from 2.2 and invents no motion of its own.
+- [ ] Nothing moves that is being read; no number, no focus ring and no row height animates because of a state change.
+- [ ] Distances and loops run through `HReducedMotion`, every loop has a resting substitute, and the exit keeps its feedback under reduced motion (2.10).
+- [ ] Every waiting operation follows 2.11: nothing below 150 ms, after that a skeleton in the target density, standing for at least 400 ms, no spinner, no shift on arrival.
+- [ ] The screen has exactly one filled control per decision context, one empty state and one largest text element, and that is the most important thing on it.
+- [ ] Every state colour is accompanied by the glyph, by the plain-language label wherever space is reserved, and by Semantics and tooltip always; accent only on what is focusable or touchable; chrome without a second value carries `fg1`.
+- [ ] All spacings are multiples of 4, the right gutter measures 12 px, the measure at most 90 monospace characters — except in code, hex and tables, which scroll horizontally and never wrap.
+- [ ] Every empty state names the next event or, for a filter, the number of matches and the way back; no "nothing", no "yet", no internal vocabulary, every text from ARB in both languages.
+- [ ] The four states before the first request from 4.2 are built, and the setup screen replaces the shell only on a cold start.
+- [ ] A timeout leaves a pre-warning at the flow, three seconds of grey row and a permanent counter in the status bar (4.8).
+- [ ] A request with a finding carries the chip in `HColors.secret`, the reason in plain language and the hold confirmation on allow (4.7).
+- [ ] Every error path shows a `Diagnostic` with the daemon's `why` and with `fix`, anchored at the place of the action.
+- [ ] Every activator has an action, every pointer path a key, every accepted press a visible reaction within 100 ms, every rejected one a quiet and an announced one.
+- [ ] Neither `Enter` nor `Space` nor a single letter wins against a focused control; one test compares both key sets, and a second holds `Enter` down for 500 ms and expects one `Decide`.
+- [ ] After every new selection allowing is disarmed for `HMotion.rearm`, key repeat never decides, and the selection does not move on as long as a decision key is pressed.
+- [ ] Contrast: text ≥ 4.5:1 also on tint and fill, surfaces ≥ 3:1 with the one named exception; hit targets ≥ 28 × 28 px, allow and block ≥ 32 × 120 px, measured in the test.
+- [ ] Widget test and golden at `TextScaler` 2.0 without overflow; Semantics carry state, index and total in the label and the deadline in the value; no label changes more often than once per second; arrivals are bundled.
+- [ ] A rebuild counter test pins down the builds per decision, per second of clock and per splitter frame; the frame and memory numbers stand as a measurement in the PR, not as a gate in the unit test.
+- [ ] `make check` green, goldens green, and every deviation from a specification stands in section 8.

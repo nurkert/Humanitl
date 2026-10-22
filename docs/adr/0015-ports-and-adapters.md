@@ -1,175 +1,172 @@
-# ADR-0015 · Ports-and-Adapters mit maschinell erzwungener Abhängigkeitsrichtung
+# ADR-0015 · Ports and adapters with a machine-enforced dependency direction
 
 Applies to: Humanitl 0.1
 
 Status: Accepted
-Datum: 2026-09-02
+Date: 2026-09-02
 
-## Kontext
+## Context
 
-Humanitl ist ein Hobbyprojekt mit langer Laufzeit. Solche Projekte scheitern
-selten an einer falschen Technologieentscheidung und fast immer an der
-Wucherung: Nach zwei Jahren kennt jedes Modul jedes andere, ein Test braucht
-einen laufenden Daemon, und eine Änderung an der Regelauswertung zieht eine
-Änderung an der Protobuf-Definition nach sich.
+Humanitl is a hobby project with a long lifetime. Such projects rarely fail
+because of a wrong technology decision and almost always because of sprawl:
+after two years every module knows every other one, a test needs a running
+daemon, and a change to rule evaluation drags a change to the Protobuf
+definition along with it.
 
-Zugleich soll der Code so schmal wie möglich bleiben. Die naheliegende Antwort
-auf Wucherung — mehr Abstraktionsschichten — erzeugt oft das Gegenteil: eine
-Schnittstelle über jeder Fremdbibliothek, eine Fabrik über jeder Schnittstelle,
-und niemand findet mehr, wo tatsächlich etwas passiert.
+At the same time the code should stay as lean as possible. The obvious answer
+to sprawl — more abstraction layers — often produces the opposite: an
+interface over every third-party library, a factory over every interface, and
+nobody can find any more where something actually happens.
 
-Es braucht also eine Regel, die beides gleichzeitig sichert: klare Grenzen und
-wenig Code. Und sie muss maschinell prüfbar sein, weil Konventionen unter
-Zeitdruck als Erstes fallen.
+So a rule is needed that secures both at once: clear boundaries and little
+code. And it must be machine-checkable, because conventions are the first
+thing to fall under time pressure.
 
-## Entscheidung
+## Decision
 
-**Drei Schichten mit einer Abhängigkeitsrichtung.**
+**Three layers with one dependency direction.**
 
 ```
-Adapter (außen)   ipc/tonic · sandbox/bwrap · proxy/hudsucker · recorder/sqlite
-                  catalog/files · cli/clap                       IO, async, Fremdbibliotheken
-        │ darf nach innen
-Anwendung         Session-Orchestrierung, Hold-Queue,
-                  Policy-Entscheidung (Regel → Verdict → Hold)   async, aber nur über Ports
+Adapters (outer)  ipc/tonic · sandbox/bwrap · proxy/hudsucker · recorder/sqlite
+                  catalog/files · cli/clap                       IO, async, third-party libraries
+        │ may point inwards
+Application       session orchestration, hold queue,
+                  policy decision (rule → verdict → hold)        async, but only via ports
         │
-Kern (innen)      core-types · rules · findings · audit · config kein IO, kein async, kein Proto
+Core (inner)      core-types · rules · findings · audit · config no IO, no async, no proto
 ```
 
-Abhängigkeiten zeigen ausschließlich nach innen. Der Kern importiert nichts aus
-Anwendung oder Adaptern. Die Anwendung kennt Adapter nur als Traits.
+Dependencies point exclusively inwards. The core imports nothing from the
+application or the adapters. The application knows adapters only as traits.
 
-**Die Port-Liste ist im MVP abgeschlossen.** Jeder Port hat genau eine
-Implementierung:
+**The port list is closed in the MVP.** Every port has exactly one
+implementation:
 
-| Port | Definiert in | MVP-Adapter | Spätere Adapter |
+| Port | Defined in | MVP adapter | Later adapters |
 |---|---|---|---|
 | `SandboxBackend` | sandbox | bwrap | docker, seatbelt, microvm |
 | `AgentAdapter` | core | opencode | aider, codex, claude-code |
 | `Detector` | findings | regex/checksum | presidio-grpc, wasm |
-| `FlowStore` | recorder | sqlite | postgres (Team) |
+| `FlowStore` | recorder | sqlite | postgres (team) |
 | `AuditSink` | audit | jsonl-hashchain | remote-anchor |
 | `CatalogSource` | catalog | bundled-yaml | user-yaml, team-url |
-| `Resolver` | proxy | hickory (nach Allow) | doh |
+| `Resolver` | proxy | hickory (after allow) | doh |
 | `Egress` | proxy | direct | http-proxy, socks5h (Tor) |
-| `Bridge` (Shim) | sandbox | proxy-socket | cdp-socket (Browser) |
-| `AskChannel` | Anwendung | grpc-ui, terminal, none | plugin |
+| `Bridge` (shim) | sandbox | proxy-socket | cdp-socket (browser) |
+| `AskChannel` | application | grpc-ui, terminal, none | plugin |
 
-**Ein neuer Port braucht einen ADR und einen konkreten zweiten Adapter.** Kein
-Trait ohne zweiten Nutzer in Sicht.
+**A new port needs an ADR and a concrete second adapter.** No trait without a
+second user in sight.
 
-**Erzwungen durch CI**, nicht durch Review:
+**Enforced by CI**, not by review:
 
-- `tools/check-deps.sh` liest `cargo metadata` und prüft jede
-  Workspace-Abhängigkeit gegen die Richtungstabelle in `backlog/CONVENTIONS.md`
-  3.1.
-- Dasselbe Skript prüft `#![deny(missing_docs)]` in jeder Bibliotheks-Crate.
-- Es prüft, dass `TcpStream::connect` nur unterhalb von
-  `daemon/crates/proxy/src/egress/` vorkommt (ADR-0017).
-- Es prüft, dass kein Flutter-Feature ein anderes Feature importiert.
-- Generierter Code (Protobuf, riverpod, freezed) ist gitignored und wird in CI
-  erzeugt; Drift bricht den Build.
+- `tools/check-deps.sh` reads `cargo metadata` and checks every workspace
+  dependency against the direction table in `backlog/CONVENTIONS.md` 3.1.
+- The same script checks `#![deny(missing_docs)]` in every library crate.
+- It checks that `TcpStream::connect` occurs only below
+  `daemon/crates/proxy/src/egress/` (ADR-0017).
+- It checks that no Flutter feature imports another feature.
+- Generated code (Protobuf, riverpod, freezed) is gitignored and generated in
+  CI; drift breaks the build.
 
-**Code-Sparsamkeit, konkret:**
+**Code frugality, concretely:**
 
-- Keine Abstraktion über Fremdbibliotheken. hudsucker, tonic und rusqlite werden
-  direkt benutzt, aber jeweils in **einer** Crate. Wechselt die Bibliothek,
-  wechselt diese eine Crate.
-- Werttypen statt Strings. `HostName`, `FlowId`, `DiagnosticCode` sind Typen;
-  ein `String` an einer Signatur ist ein Verdachtsfall, außer er ist wirklich
-  Freitext.
-- Fehler sind Werte mit Bedeutung: `thiserror` pro Crate, kein `anyhow` in
-  Bibliotheks-Crates, `anyhow` nur in `main` (ADR-0012).
-- Dünne Binaries. `humanitld` und `humanitl` sind Verdrahtung. Ein `if` in
-  `main.rs`, das eine Fachentscheidung trifft, steht am falschen Ort.
-- Löschen ist ein Feature. Jeder Sprint endet mit einem Blick auf
-  `experimental`-Flags und ungenutzte Pfade; was zwei Sprints lang niemand
-  benutzt, fliegt.
+- No abstraction over third-party libraries. hudsucker, tonic and rusqlite are
+  used directly, but each in **one** crate. If the library changes, that one
+  crate changes.
+- Value types instead of strings. `HostName`, `FlowId`, `DiagnosticCode` are
+  types; a `String` in a signature is a suspect, unless it really is free
+  text.
+- Errors are values with meaning: `thiserror` per crate, no `anyhow` in
+  library crates, `anyhow` only in `main` (ADR-0012).
+- Thin binaries. `humanitld` and `humanitl` are wiring. An `if` in `main.rs`
+  that makes a domain decision is in the wrong place.
+- Deleting is a feature. Every sprint ends with a look at `experimental` flags
+  and unused paths; what nobody uses for two sprints goes.
 
-Dieselben Regeln gelten auf der Flutter-Seite: `core/domain` sind freezed-Typen
-ohne Flutter-Import, `core/ipc` ist ein Interface mit zwei Implementierungen
-(gRPC und Fake), ein Feature importiert kein anderes Feature, und das
-Widget-Vokabular steht in `packages/ui` auf `shadcn_flutter`. Ein Feature
-importiert `lib/core/ui/ui.dart`, nie ein fremdes Widget-Paket; `tools/check-deps.sh`
-beanstandet jeden Import der Bibliothek ausserhalb von `app/packages/ui`
-(ADR-0009, Abschnitt „Revidiert am 2026-09-04 durch den Projekteigentümer").
+The same rules apply on the Flutter side: `core/domain` are freezed types
+without a Flutter import, `core/ipc` is an interface with two implementations
+(gRPC and fake), a feature imports no other feature, and the widget vocabulary
+lives in `packages/ui` on top of `shadcn_flutter`. A feature imports
+`lib/core/ui/ui.dart`, never a third-party widget package; `tools/check-deps.sh`
+objects to every import of the library outside `app/packages/ui`
+(ADR-0009, section "Revised on 2026-09-04 by the project owner").
 
-## Begründung
+## Rationale
 
-Die Richtung nach innen ist die einzige Regel, die man sich merken muss, und sie
-trägt alles Weitere. Sie macht den Kern testbar ohne Netzwerk, ohne Datenbank und
-ohne Laufzeitumgebung: Regelauswertung, Zustandsübergänge, Hash-Kette und
-Konfigurationspräzedenz sind pure Funktionen über Werttypen und tabellengetrieben
-prüfbar. Das ist kein Selbstzweck — es ist der Grund, warum die
-sicherheitsrelevante Logik überhaupt vollständig testbar ist.
+The inward direction is the only rule one has to remember, and it carries
+everything else. It makes the core testable without a network, without a
+database and without a runtime: rule evaluation, state transitions, hash chain
+and configuration precedence are pure functions over value types and can be
+checked table-driven. This is not an end in itself — it is the reason why the
+security-relevant logic is fully testable at all.
 
-Die abgeschlossene Port-Liste ist der Gegenpol zur Abstraktionswucherung. Ohne
-sie entsteht die typische Bewegung: Jedes Modul bekommt vorsorglich ein Trait,
-und nach einem Jahr gibt es dreißig Schnittstellen mit je einer Implementierung.
-Zehn Ports mit einem benannten zweiten Adapter in der Zukunft sind eine
-überschaubare Menge, und die Hürde „ADR plus konkreter zweiter Adapter" hält sie
-klein.
+The closed port list is the counterweight to abstraction sprawl. Without it
+the typical movement sets in: every module gets a trait as a precaution, and
+after a year there are thirty interfaces with one implementation each. Ten
+ports with a named second adapter in the future are a manageable set, and the
+hurdle "ADR plus concrete second adapter" keeps it small.
 
-Dass Fremdbibliotheken **nicht** abstrahiert werden, aber jeweils nur in einer
-Crate vorkommen, ist der Kompromiss zwischen den beiden Fehlern. Eine
-Schnittstelle über hudsucker wäre eine Erfindung, die nur den kleinsten
-gemeinsamen Nenner aller denkbaren Proxy-Bibliotheken abbildet — mehr Code,
-weniger Fähigkeiten. hudsucker direkt zu benutzen, aber nur in
-`humanitl-proxy`, hält den Wechselaufwand lokal, ohne vorher etwas zu erfinden.
+That third-party libraries are **not** abstracted but each occurs in only one
+crate is the compromise between the two failures. An interface over hudsucker
+would be an invention that maps only the lowest common denominator of all
+conceivable proxy libraries — more code, fewer capabilities. Using hudsucker
+directly, but only in `humanitl-proxy`, keeps the cost of switching local
+without inventing anything beforehand.
 
-Die maschinelle Prüfung ist der Kern dieser Entscheidung. Eine Architekturregel,
-die nur im Kopf existiert, hält bis zum ersten Termindruck. `cargo metadata`
-kennt den tatsächlichen Abhängigkeitsgraphen; ein Skript, das ihn gegen eine
-Tabelle prüft, ist zwanzig Zeilen und hält jahrelang. Dasselbe gilt für den
-Grep nach `TcpStream::connect`: Er ist grob, aber er fängt genau den Fehler, der
-die Egress-Garantie stillschweigend aushebeln würde.
+The machine check is the heart of this decision. An architecture rule that
+exists only in people's heads lasts until the first deadline. `cargo metadata`
+knows the actual dependency graph; a script that checks it against a table is
+twenty lines and lasts for years. The same applies to the grep for
+`TcpStream::connect`: it is coarse, but it catches exactly the error that
+would silently undermine the egress guarantee.
 
-## Verworfene Alternativen
+## Rejected alternatives
 
-- **Schichtung nur als Konvention im Review.** Der übliche Weg und der Grund,
-  warum die meisten Projekte ihre Architektur verlieren. Ein Review übersieht
-  eine Zeile in einer `Cargo.toml`; `cargo metadata` nicht.
-- **Ein einziger Crate mit Modulen.** Weniger Zeremonie, aber Rust erzwingt
-  Modulgrenzen innerhalb einer Crate nicht in der Abhängigkeitsrichtung: `mod
-  rules` könnte `mod proxy` benutzen, und niemand merkt es.
-- **Vollständige Clean Architecture mit Use-Case-Klassen und DTOs an jeder
-  Grenze.** Erzwingt dieselbe Richtung und kostet ein Vielfaches an Code sowie
-  eine Übersetzungsschicht pro Grenze. Für ein Programm dieser Größe
-  unverhältnismäßig.
-- **Ports für alles, vorsorglich.** Verworfen mit der Regel „kein Trait ohne
-  zweiten Nutzer in Sicht". Ein Trait mit genau einer Implementierung, die nie
-  eine zweite bekommt, ist Kosten ohne Nutzen.
-- **Mikroservices statt Crates.** Trennung durch Prozessgrenzen statt durch
-  Modulgrenzen. Für ein Desktop-Programm absurd — mit einer Ausnahme, die
-  bestehen bleibt: der Shim in der Sandbox, weil er ohne tokio und ohne
-  Abhängigkeiten sein muss.
-- **Generierten Code einchecken.** Bequem beim Bauen ohne Toolchain, aber Drift
-  zwischen Quelle und Erzeugnis wird dann unsichtbar. Stattdessen: gitignored und
-  in CI erzeugt.
+- **Layering only as a convention in review.** The usual route and the reason
+  why most projects lose their architecture. A review overlooks a line in a
+  `Cargo.toml`; `cargo metadata` does not.
+- **A single crate with modules.** Less ceremony, but Rust does not enforce
+  module boundaries within a crate in terms of dependency direction: `mod
+  rules` could use `mod proxy`, and nobody would notice.
+- **Full Clean Architecture with use-case classes and DTOs at every
+  boundary.** Enforces the same direction and costs many times the code as
+  well as a translation layer per boundary. Disproportionate for a program of
+  this size.
+- **Ports for everything, as a precaution.** Rejected with the rule "no trait
+  without a second user in sight". A trait with exactly one implementation
+  that never gets a second one is cost without benefit.
+- **Microservices instead of crates.** Separation by process boundaries
+  instead of module boundaries. Absurd for a desktop program — with one
+  exception that remains: the shim in the sandbox, because it has to be
+  without tokio and without dependencies.
+- **Check in generated code.** Convenient when building without a toolchain,
+  but drift between source and product then becomes invisible. Instead:
+  gitignored and generated in CI.
 
-## Konsequenzen
+## Consequences
 
-- Der Workspace hat mehr Crates, als man auf den ersten Blick für nötig hielte.
-  Das ist der Preis dafür, dass die Richtung vom Compiler und von `cargo
-  metadata` geprüft wird statt von Menschen.
-- Neue Abhängigkeiten zwischen Crates brauchen einen Eintrag in
-  `tools/deps-allow.toml` und damit eine bewusste Entscheidung.
-- `#![forbid(unsafe_code)]` und `#![deny(missing_docs)]` stehen in jeder
-  Bibliotheks-Crate; die zweite Zeile wird vom Skript geprüft.
-- Ein zweiter Adapter (Docker, macOS, Postgres, Tor) berührt Kern und Anwendung
-  nicht. Das ist die Zusage, mit der ADR-0002, ADR-0008 und ADR-0017 arbeiten.
-- Die Testpyramide folgt der Schichtung: tabellengetriebene Unit-Tests im Kern,
-  In-Process-Integrationstests gegen einen Fake-Upstream für den Proxy,
-  privilegierte Escape-Tests für die Garantien, Widget- und Golden-Tests gegen
-  den Fake-Daemon. Ein Bug bekommt zuerst einen Test auf der niedrigsten Ebene,
-  auf der er reproduzierbar ist.
-- Der Preis ist etwas mehr Zeremonie beim Anlegen einer neuen Fähigkeit. Der
-  Gewinn ist, dass eine Änderung an der Regelauswertung nie eine Änderung an der
-  Protobuf-Definition erzwingt.
+- The workspace has more crates than one would at first glance consider
+  necessary. That is the price for the direction being checked by the
+  compiler and by `cargo metadata` instead of by humans.
+- New dependencies between crates need an entry in `tools/deps-allow.toml` and
+  thus a conscious decision.
+- `#![forbid(unsafe_code)]` and `#![deny(missing_docs)]` stand in every library
+  crate; the second line is checked by the script.
+- A second adapter (Docker, macOS, Postgres, Tor) touches neither core nor
+  application. That is the promise ADR-0002, ADR-0008 and ADR-0017 work with.
+- The test pyramid follows the layering: table-driven unit tests in the core,
+  in-process integration tests against a fake upstream for the proxy,
+  privileged escape tests for the guarantees, widget and golden tests against
+  the fake daemon. A bug first gets a test on the lowest level at which it can
+  be reproduced.
+- The price is a little more ceremony when creating a new capability. The gain
+  is that a change to rule evaluation never forces a change to the Protobuf
+  definition.
 
-## Betroffene Issues
+## Affected issues
 
-`HUM-074` (Abhängigkeits-Lint `tools/check-deps.sh`), `HUM-001` (Monorepo-Layout
-mit der Crate-Aufteilung), `HUM-004` (core-types als IO-freier Kern),
-`HUM-002` (CI-Job `deps-lint`), `HUM-062` (config im Kern, Präzedenz als reine
-Funktion).
+`HUM-074` (dependency lint `tools/check-deps.sh`), `HUM-001` (monorepo layout
+with the crate split), `HUM-004` (core-types as the IO-free core),
+`HUM-002` (CI job `deps-lint`), `HUM-062` (config in the core, precedence as a
+pure function).

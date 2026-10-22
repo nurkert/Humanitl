@@ -6,7 +6,7 @@
 #   2. numbers start at 0001, are contiguous and unique (0000 is the template)
 #   3. the template and the index exist
 #   4. every ADR file has a row in README.md, and every row points at a file
-#   5. every ADR has the seven MADR headings plus Status and Datum
+#   5. every ADR has the seven MADR headings plus Status and Date
 #   6. every ADR names at least one HUM- issue
 #
 # Usage:
@@ -95,18 +95,18 @@ check_dir() {
   done < <(grep -o '([0-9][0-9][0-9][0-9]-[a-z0-9-]*\.md)' "$index" | tr -d '()' | sort -u)
 
   # --- per-file structure ----------------------------------------------------
-  local headings=("## Kontext" "## Entscheidung" "## Begründung" \
-                  "## Verworfene Alternativen" "## Konsequenzen" "## Betroffene Issues")
+  local headings=("## Context" "## Decision" "## Rationale" \
+                  "## Rejected alternatives" "## Consequences" "## Affected issues")
   local h
   for f in "${adrs[@]}" "0000-template.md"; do
     path="$adr_dir/$f"
     [[ -f "$path" ]] || continue
 
     head -n1 "$path" | grep -qE '^# ADR-([0-9]{4}|NNNN) · .+' \
-      || err "$f: first line must be '# ADR-NNNN · Titel'"
+      || err "$f: first line must be '# ADR-NNNN · Title'"
 
     grep -qE '^Status: .+' "$path" || err "$f: missing 'Status:' line"
-    grep -qE '^Datum: .+' "$path" || err "$f: missing 'Datum:' line"
+    grep -qE '^Date: .+' "$path" || err "$f: missing 'Date:' line"
 
     for h in "${headings[@]}"; do
       grep -qxF "$h" "$path" || err "$f: missing heading '$h'"
@@ -143,7 +143,7 @@ mut_no_number()        { touch adr-nineteen.md; }
 mut_uppercase()        { touch 0099-Bad_Name.md; }
 mut_duplicate()        { cp 0001-*.md 0001-duplicate.md; }
 mut_ghost_link()       { printf '| [0098](0098-ghost.md) | Ghost | Accepted | x |\n' >> README.md; }
-mut_missing_heading()  { sed -i '/^## Konsequenzen$/d' 0001-*.md; }
+mut_missing_heading()  { sed -i '/^## Consequences$/d' 0001-*.md; }
 mut_lowercase_status() { sed -i 's/^Status: Accepted$/Status: accepted/' 0001-*.md; }
 mut_title_mismatch()   { sed -i '1s/ADR-0001/ADR-0002/' 0001-*.md; }
 mut_no_issue()         { sed -i 's/HUM-[0-9]\{3\}/HUM-x/g' 0001-*.md; }
@@ -206,7 +206,7 @@ self_test() {
   run_case gap-in-numbering 'missing ADR number'                  mut_gap
   run_case unlisted-file    'not listed in README.md'             mut_unlisted
   run_case ghost-link       'links a missing file: 0098-ghost.md' mut_ghost_link
-  run_case missing-heading  "missing heading '## Konsequenzen'"   mut_missing_heading
+  run_case missing-heading  "missing heading '## Consequences'"   mut_missing_heading
   run_case lowercase-status 'Status must be'                      mut_lowercase_status
   run_case title-mismatch   'title number does not match'         mut_title_mismatch
   run_case no-issue         'names no HUM- issue'                 mut_no_issue

@@ -1,161 +1,159 @@
-# ADR-0014 · Agent-Bewusstsein und Feedback über den einen vorhandenen Kanal
+# ADR-0014 · Agent awareness and feedback over the one existing channel
 
 Applies to: Humanitl 0.1
 
 Status: Accepted
-Datum: 2026-09-02
+Date: 2026-09-02
 
-## Kontext
+## Context
 
-Ein LLM-Agent in der Humanitl-Sandbox erlebt eine Umgebung, für die er nicht
-trainiert wurde. Sein `webfetch` hängt fünf Minuten und liefert dann `403`. Sein
-Update-Check schlägt fehl. Ein `curl` läuft in einen Timeout. Ohne Erklärung
-reagiert er so, wie Agenten auf Fehler reagieren: Er wiederholt, variiert die
-URL, probiert einen anderen Weg und verbrennt dabei Zeit und Token — und der
-Mensch sieht eine Warteschlange voller Wiederholungen desselben blockierten
-Requests.
+An LLM agent in the Humanitl sandbox experiences an environment it was not
+trained for. Its `webfetch` hangs for five minutes and then returns `403`. Its
+update check fails. A `curl` runs into a timeout. Without an explanation it
+reacts the way agents react to errors: it retries, varies the URL, tries a
+different route and burns time and tokens in the process — and the human sees
+a queue full of retries of the same blocked request.
 
-Umgekehrt hat der Mensch beim Blocken oft einen Grund, den der Agent gebrauchen
-könnte: „nicht GitHub, nimm PyPI", „diese Domain nicht, das ist Telemetrie".
-Heute verpufft dieser Grund.
+Conversely, the human often has a reason when blocking that the agent could
+use: "not GitHub, take PyPI", "not this domain, that is telemetry". Today this
+reason goes to waste.
 
-Die Versuchung ist ein zweiter Kanal: ein Steuersocket, eine Datei, die der Agent
-liest, ein Sidecar. Jeder davon ist eine neue Tür in die Sandbox und damit ein
-Riss in der Garantie „genau eine Tür" (ADR-0002).
+The temptation is a second channel: a control socket, a file the agent reads,
+a sidecar. Each of these is a new door into the sandbox and thus a crack in
+the guarantee "exactly one door" (ADR-0002).
 
-## Entscheidung
+## Decision
 
-Alles läuft über den einen vorhandenen Kanal, den Proxy-Socket. Kein neuer Kanal,
-keine neue Fähigkeit für den Agenten, keine neue Lücke in der Garantie.
+Everything runs over the one existing channel, the proxy socket. No new
+channel, no new capability for the agent, no new gap in the guarantee.
 
-**1. Briefing.** Der `AgentAdapter` legt beim Start eine globale
-Instruktionsdatei **in der Sandbox** an — bei OpenCode
-`~/.config/opencode/AGENTS.md`, bei Claude Code `~/.claude/CLAUDE.md` — und
-**nie im Projektverzeichnis**. Inhalt ist eine gebündelte Vorlage von etwa 150
-Token in der Sprache des Nutzers (`ui.language`). Kernaussagen: kein direkter
-Internetzugang; jede HTTP-Anfrage geht durch einen Proxy, ein Mensch
-entscheidet; Warten ist normal und kein Grund zum Abbrechen; eine Antwort `403`
-mit `Blocked by Humanitl` ist endgültig und wird nicht wiederholt — stattdessen
-den Nutzer informieren und eine Alternative vorschlagen; Statusabfrage unter
+**1. Briefing.** At start the `AgentAdapter` places a global instruction file
+**in the sandbox** — for OpenCode `~/.config/opencode/AGENTS.md`, for Claude
+Code `~/.claude/CLAUDE.md` — and **never in the project directory**. Its
+content is a bundled template of about 150 tokens in the user's language
+(`ui.language`). Key statements: no direct internet access; every HTTP request
+goes through a proxy, a human decides; waiting is normal and no reason to
+abort; a response `403` with `Blocked by Humanitl` is final and is not retried
+— instead inform the user and suggest an alternative; status query at
 `http://humanitl.internal/`.
 
-**2. Feedback beim Blocken.** Die Aktionsleiste hat ein optionales, aufklappbares
-Notizfeld. Der Text landet im `403`-Body unter `note:` und im Header
-`X-Humanitl-Note`. Der Agent sieht ihn im Ergebnis seines Werkzeugaufrufs und
-kann darauf reagieren. Die Notiz wird vor beidem gesäubert (`sanitize_note` in
-`humanitl-core`, `backlog/CONVENTIONS.md` 4.11): `CR` und `LF` werden zu
-Leerzeichen, andere Steuerzeichen fallen weg, ebenso unsichtbare Zeichen
-(Zero-Width-Zeichen, Bidi-Overrides, BOM, weiches Trennzeichen, Tag-Zeichen),
-die im Terminal des Agenten einen anderen Text vortäuschen könnten als den, den
-der Nutzer geschrieben hat. Es bleiben höchstens 500 Zeichen. Der Header-Wert
-ist zusätzlich auf sichtbare ASCII-Zeichen plus `SP` und `HTAB` beschränkt
-(RFC 9110 §5.5); Nicht-ASCII steht nur im Body (keine Header-Injection).
+**2. Feedback on blocking.** The action bar has an optional, expandable note
+field. The text ends up in the `403` body under `note:` and in the header
+`X-Humanitl-Note`. The agent sees it in the result of its tool call and can
+react to it. The note is cleaned before both (`sanitize_note` in
+`humanitl-core`, `backlog/CONVENTIONS.md` 4.11): `CR` and `LF` become spaces,
+other control characters are dropped, as are invisible characters (zero-width
+characters, bidi overrides, BOM, soft hyphen, tag characters) that could fake
+a different text in the agent's terminal than the one the user wrote. At most
+500 characters remain. The header value is additionally restricted to visible
+ASCII characters plus `SP` and `HTAB` (RFC 9110 §5.5); non-ASCII stands only
+in the body (no header injection).
 
-**3. Meta-Endpunkt.** Der Proxy bedient den virtuellen Host
-`humanitl.internal` selbst, ohne Upstream und ohne DNS, mit kleinen
-`text/plain`-Antworten:
+**3. Meta endpoint.** The proxy serves the virtual host `humanitl.internal`
+itself, without an upstream and without DNS, with small `text/plain`
+responses:
 
-| Pfad | Methode | Antwort |
+| Path | Method | Response |
 |---|---|---|
-| `/` | GET | Kurzstatus: Sitzung, Ask-Modus, Timeout, gültige Regeln (eine Zeile pro Regel) |
-| `/why/<flow-id>` | GET | Begründung der Entscheidung samt Notiz |
-| `/ask` | POST | Freitext bis 2 KB; erzeugt ein `AgentAsk`-Ereignis und im UI eine Karte „Der Agent bittet um …" mit Regelvorschlag |
+| `/` | GET | Short status: session, ask mode, timeout, valid rules (one line per rule) |
+| `/why/<flow-id>` | GET | Reason for the decision including the note |
+| `/ask` | POST | Free text up to 2 KB; creates an `AgentAsk` event and in the UI a card "The agent asks for …" with a rule suggestion |
 
-Andere Methoden werden abgelehnt. `/ask` erzeugt **nur** eine Karte im UI,
-**nie** eine Regel.
+Other methods are refused. `/ask` creates **only** a card in the UI, **never**
+a rule.
 
-**4. Sichtbarkeit im Terminal.** Wird ein Request gehalten, schreibt der Daemon
-eine Statuszeile in das Terminal des Agenten — über den PTY-Strom, nicht in
-`stdin`. Der Mensch, der auf das Terminal schaut, sieht damit, was gerade hängt.
+**4. Visibility in the terminal.** When a request is held, the daemon writes a
+status line into the agent's terminal — over the PTY stream, not into
+`stdin`. The human looking at the terminal thereby sees what is currently
+pending.
 
-**Was das ausdrücklich nicht ist:** Der Agent bekommt keine Möglichkeit, Regeln
-anzulegen, Entscheidungen zu beeinflussen oder den Nutzer zu umgehen. `/ask` ist
-eine Bitte, keine Aktion.
+**What this explicitly is not:** the agent gets no way to create rules,
+influence decisions or bypass the user. `/ask` is a request, not an action.
 
-## Begründung
+## Rationale
 
-Der Proxy-Socket existiert bereits, ist bereits die einzige Tür, wird bereits
-vollständig aufgezeichnet und unterliegt bereits der Regelauswertung. Ihn für
-Statusinformation und Feedback mitzubenutzen, kostet keine zusätzliche
-Angriffsfläche: Ein Request an `humanitl.internal` ist ein Request wie jeder
-andere, nur dass ihn der Proxy selbst beantwortet.
+The proxy socket already exists, is already the only door, is already fully
+recorded and is already subject to rule evaluation. Using it as well for
+status information and feedback costs no additional attack surface: a request
+to `humanitl.internal` is a request like any other, except that the proxy
+answers it itself.
 
-Das Briefing kostet etwa 150 Token und spart ein Vielfaches davon. Ein Agent, der
-weiß, dass `403 Blocked by Humanitl` endgültig ist, wiederholt nicht. Ein Agent,
-der weiß, dass Warten normal ist, bricht nicht nach dreißig Sekunden ab. Das ist
-die billigste Verbesserung im ganzen Entwurf.
+The briefing costs about 150 tokens and saves many times that. An agent that
+knows that `403 Blocked by Humanitl` is final does not retry. An agent that
+knows that waiting is normal does not abort after thirty seconds. This is the
+cheapest improvement in the whole design.
 
-Dass das Briefing in ein **globales** Konfigurationsverzeichnis der Sandbox geht
-und nicht ins Projektverzeichnis, ist wichtig: `/work` ist der Projektordner des
-Nutzers, oft ein Git-Repository. Eine Datei, die Humanitl dort ablegt, landet in
-einem Diff, vielleicht in einem Commit, und irgendwann in einem fremden
-Repository. Das globale Verzeichnis liegt im tmpfs der Sandbox und verschwindet
-mit ihr.
+That the briefing goes into a **global** configuration directory of the
+sandbox and not into the project directory matters: `/work` is the user's
+project folder, often a Git repository. A file that Humanitl places there ends
+up in a diff, perhaps in a commit, and eventually in someone else's
+repository. The global directory lives in the sandbox's tmpfs and disappears
+with it.
 
-Die Notiz im `403` ist der kürzeste Weg von der Entscheidung des Menschen zum
-Verhalten des Agenten. Sie nutzt einen Antwortweg, den der Agent ohnehin liest,
-und braucht kein Protokoll. Header **und** Body, weil manche Werkzeuge nur eines
-von beidem an das Modell weiterreichen.
+The note in the `403` is the shortest path from the human's decision to the
+agent's behaviour. It uses a response path the agent reads anyway and needs no
+protocol. Header **and** body, because some tools pass only one of the two on
+to the model.
 
-`/ask` ist bewusst eine Sackgasse. Der Agent kann eine Bitte formulieren, sie
-erscheint im UI als Karte mit einem Regelvorschlag, und dort endet seine
-Wirkung. Ein Agent, der Regeln anlegen könnte, hätte die Kontrolle, um die es
-hier geht; ein Agent, der gar nichts sagen kann, lässt den Menschen raten. Die
-Karte ist der Kompromiss, der die Machtverhältnisse unverändert lässt.
+`/ask` is deliberately a dead end. The agent can phrase a request, it appears
+in the UI as a card with a rule suggestion, and there its effect ends. An
+agent that could create rules would have the control this is all about; an
+agent that cannot say anything at all leaves the human guessing. The card is
+the compromise that leaves the balance of power unchanged.
 
-Die Statuszeile im Terminal löst ein Wahrnehmungsproblem: Der Mensch sitzt vor
-dem Terminal des Agenten und sieht dort Stillstand. Die Zeile sagt ihm, dass
-nicht der Agent hängt, sondern eine Entscheidung aussteht. Sie geht über den
-Ausgabestrom, nie über `stdin`, damit sie nicht mit der Eingabe des Agenten
-verwechselt werden kann.
+The status line in the terminal solves a perception problem: the human sits in
+front of the agent's terminal and sees a standstill there. The line tells them
+that it is not the agent that hangs but that a decision is pending. It goes
+over the output stream, never over `stdin`, so that it cannot be mistaken for
+the agent's input.
 
-## Verworfene Alternativen
+## Rejected alternatives
 
-- **Ein zweiter Socket oder eine Steuerdatei für Agent-Kommunikation.** Der
-  offensichtliche Weg, und der einzige, der die Garantie „genau eine Tür"
-  bricht. Ausgeschlossen.
-- **Umgebungsvariablen für den Status.** Statisch beim Start; Regeln und
-  Zustand ändern sich während der Sitzung. Für ein Briefing zu wenig Platz.
-- **Briefing ins Projektverzeichnis (`/work/AGENTS.md`).** Am einfachsten und in
-  vielen Agenten der Standardort. Verworfen wegen der Verschmutzung des
-  Nutzer-Repositories.
-- **Briefing als System-Prompt über den LLM-Passthrough einschleusen.** Hätte
-  bedeutet, dass Humanitl in die Prompts des Nutzers hineinschreibt. Ein
-  massiver Eingriff, schwer zu debuggen, und beim Streaming kaum sauber
-  umsetzbar.
-- **`/ask` erzeugt automatisch eine Regel oder eine Freigabeanfrage mit
-  Auto-Timeout.** Verworfen: Damit könnte der Agent den Entscheidungsfluss
-  steuern, statt ihn nur zu informieren.
-- **Kein Feedback beim Blocken.** Der Ist-Zustand ohne diesen ADR. Der Agent
-  probiert weiter, der Mensch blockt weiter, und niemand lernt etwas.
-- **Statuszeile über `stdin` in den Agenten schreiben.** Wäre für zeilenbasierte
-  Agenten bequem und ist eine Injektion in den Eingabestrom eines Programms, dem
-  wir nicht trauen. Ausgeschlossen.
+- **A second socket or a control file for agent communication.** The obvious
+  route, and the only one that breaks the guarantee "exactly one door". Ruled
+  out.
+- **Environment variables for the status.** Static at start; rules and state
+  change during the session. Too little room for a briefing.
+- **Briefing in the project directory (`/work/AGENTS.md`).** The simplest and
+  the default location in many agents. Rejected because it pollutes the
+  user's repository.
+- **Inject the briefing as a system prompt via the LLM passthrough.** Would
+  have meant that Humanitl writes into the user's prompts. A massive
+  intervention, hard to debug, and hardly implementable cleanly with
+  streaming.
+- **`/ask` automatically creates a rule or an approval request with an
+  auto-timeout.** Rejected: with it the agent could steer the decision flow
+  instead of only informing it.
+- **No feedback on blocking.** The current state without this ADR. The agent
+  keeps trying, the human keeps blocking, and nobody learns anything.
+- **Write the status line into the agent via `stdin`.** Would be convenient
+  for line-based agents and is an injection into the input stream of a program
+  we do not trust. Ruled out.
 
-## Konsequenzen
+## Consequences
 
-- `humanitl.internal` ist ein reservierter Hostname. Er wird nie aufgelöst und
-  nie an einen Upstream weitergereicht; die Regelauswertung sieht ihn als
-  Sonderfall.
-- Der Meta-Endpunkt ist Teil der Angriffsfläche des Proxys und wird entsprechend
-  behandelt: nur `GET` und `POST`, feste Pfade, `/ask` mit 2 KB Obergrenze,
-  Tests für alle drei Pfade und für die Ablehnung anderer Methoden.
-- Die Notiz erweitert `Decision::Block { reason, note }` und damit den
-  Kerntyp, die Proto (`DecideRequest.block.note`), das Audit-Log und die
-  History-Ansicht.
-- Header-Injection über die Notiz ist ein Testfall, kein Restrisiko: Länge
-  begrenzt, `CR`/`LF` zu Leerzeichen, Steuer- und unsichtbare Zeichen entfernt,
-  Header-Wert auf sichtbares ASCII plus `SP`/`HTAB` beschränkt.
-- Der `AgentAdapter` bekommt `files(&self, ctx) -> Vec<(PathBuf, Vec<u8>)>` für
-  Dateien, die in der Sandbox angelegt werden. Das Briefing ist die erste
-  Anwendung davon; `opencode.json` ist die zweite.
-- Die Briefing-Vorlage liegt unter `agents/opencode/briefing.{en,de}.md` und ist
-  damit lesbar, anpassbar und übersetzbar, statt im Code zu stehen.
-- Ein Test prüft, dass nach dem Start die Datei in der Sandbox existiert **und**
-  das Projektverzeichnis unverändert ist.
+- `humanitl.internal` is a reserved hostname. It is never resolved and never
+  passed on to an upstream; rule evaluation sees it as a special case.
+- The meta endpoint is part of the proxy's attack surface and is treated
+  accordingly: only `GET` and `POST`, fixed paths, `/ask` with a 2 KB upper
+  limit, tests for all three paths and for the refusal of other methods.
+- The note extends `Decision::Block { reason, note }` and with it the core
+  type, the proto (`DecideRequest.block.note`), the audit log and the history
+  view.
+- Header injection via the note is a test case, not a residual risk: length
+  limited, `CR`/`LF` to spaces, control and invisible characters removed,
+  header value restricted to visible ASCII plus `SP`/`HTAB`.
+- The `AgentAdapter` gets `files(&self, ctx) -> Vec<(PathBuf, Vec<u8>)>` for
+  files that are created in the sandbox. The briefing is the first use of it;
+  `opencode.json` is the second.
+- The briefing template lives under `agents/opencode/briefing.{en,de}.md` and
+  is thus readable, customisable and translatable instead of standing in the
+  code.
+- A test checks that after the start the file exists in the sandbox **and**
+  the project directory is unchanged.
 
-## Betroffene Issues
+## Affected issues
 
-`HUM-071` (Agent-Briefing), `HUM-072` (Block mit Notiz), `HUM-073`
-(Meta-Endpunkt `humanitl.internal`), `HUM-037` (AgentAdapter und
-OpenCode-Profil), `HUM-042` (Terminal mit Statuszeile).
+`HUM-071` (agent briefing), `HUM-072` (block with note), `HUM-073`
+(meta endpoint `humanitl.internal`), `HUM-037` (AgentAdapter and
+OpenCode profile), `HUM-042` (terminal with status line).

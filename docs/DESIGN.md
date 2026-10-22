@@ -105,8 +105,8 @@ are shared by both themes. The constants behind them are `HColors`, `HType`,
   `blocked` measure 1.01:1 under deuteranopia.
 
 The rules behind these numbers, and the list of surfaces each colour is
-measured against, are in [docs/UX.md, section 3.3](UX.md#33-farbe-bedeutet-zustand)
-and [section 6](UX.md#6-barrierefreiheit-als-zahlen).
+measured against, are in [docs/UX.md, section 3.3](UX.md#33-colour-means-state)
+and [section 6](UX.md#6-accessibility-as-numbers).
 
 ### Surfaces, text and accent
 
@@ -488,7 +488,7 @@ the skeleton for at least 400 ms.
 The barrier tape: diagonal stripes in brand yellow and black, 4 px tall, moving
 sideways at one period (16 px) per 1200 ms. It is a brand mark, not a state and
 not a control, and stands still under reduced motion. Where it may appear is
-ruled in [docs/UX.md, section 3.6](UX.md#36-das-absperrband).
+ruled in [docs/UX.md, section 3.6](UX.md#36-the-caution-tape).
 
 ### HAnimatedFill
 
@@ -547,7 +547,7 @@ mono 12 shortened in the middle, findings chip, and the reserved 28 px action
 slot, where hover or focus reveals Block (250 ms hold). The remaining time is
 the arc of the ring, not `mm:ss` digits, and a row never allows; allowing
 needs the full URL on the card. Hosts are never shortened at the end. The full
-anatomy is in [docs/UX.md, section 3.4](UX.md#34-die-queue-zeile-ausgeschrieben). A 4 px
+anatomy is in [docs/UX.md, section 3.4](UX.md#34-the-queue-row-written-out). A 4 px
 caution tape runs under the queue header while at least one request is held.
 
 ### Other fixed widths
@@ -565,7 +565,7 @@ is in [docs/UX.md](UX.md).
 ## Interaction
 
 The keyboard is a first-class way to work: every pointer path has a key
-([docs/UX.md, section 5](UX.md#5-tastatur-und-maus)). Single-letter keys never
+([docs/UX.md, section 5](UX.md#5-keyboard-and-mouse)). Single-letter keys never
 fire while a text field has focus; the chords (`Ctrl+F`, `Ctrl+L`) do. The two
 decision keys ignore key repeat, and Allow re-arms only 350 ms after a new
 request is selected, so a held Enter cannot allow the queue unread.
@@ -610,7 +610,7 @@ The table lists each binding as the app has it in 0.1, checked against
 | `Ctrl+0` | Expand or collapse the icon rail | `ToggleRailIntent` | Everywhere |
 
 Three intents of CONVENTIONS 3.9 have no binding in 0.1, because a key that
-does nothing is worse than no key ([docs/UX.md, section 5](UX.md#5-tastatur-und-maus)):
+does nothing is worse than no key ([docs/UX.md, section 5](UX.md#5-keyboard-and-mouse)):
 
 | Key in CONVENTIONS 3.9 | Intent | State in 0.1 |
 |---|---|---|
@@ -651,7 +651,7 @@ Motion explains a state change; it does not decorate. Entries use `enter`
 (`cubic-bezier(0.2, 0, 0, 1)`), exits use `exit` (`cubic-bezier(0.4, 0, 1, 1)`).
 Under reduced motion distances drop to zero and loops stop, but the durations
 that confirm a decision (fade, press fill, rail sweep) stay
-([docs/UX.md, section 2.10](UX.md#210-reduzierte-bewegung)).
+([docs/UX.md, section 2.10](UX.md#210-reduced-motion)).
 
 | # | Micro-interaction | Duration | Easing | What moves |
 |---|---|---|---|---|
@@ -665,7 +665,7 @@ Holding has its own timings: 400 ms (`holdToConfirm`) on the release valve,
 250 ms (`holdToBlock`) for Block in a row and in the action bar. The three
 isolation checks appear 120 ms apart (`checkStagger`), so three proofs read as
 three, not as one switch. What never animates (focus rings, context menus,
-row heights) is listed in [docs/UX.md, section 2](UX.md#2-die-bewegungssprache).
+row heights) is listed in [docs/UX.md, section 2](UX.md#2-the-motion-language).
 
 ## Signature elements
 
@@ -728,8 +728,9 @@ in both languages (GET, POST, Header, Body, Status), and so does everything
 that is stored (`allow`, `block`, `ask`, `redact` in `rules.yaml` and audit
 records).
 
-Key terms (the full list is [docs/GLOSSARY.md](GLOSSARY.md#begriffe)):
+Key terms (the full list is [docs/GLOSSARY.md](GLOSSARY.md#ui-terms)):
 
+<!-- lang: de -->
 | Concept | English | German | Note |
 |---|---|---|---|
 | Held state | Held | Angehalten | Never "abgefangen" |
@@ -747,6 +748,7 @@ Key terms (the full list is [docs/GLOSSARY.md](GLOSSARY.md#begriffe)):
 | LLM passthrough | LLM passthrough | LLM-Durchleitung | |
 | Queue | Queue | Warteschlange | |
 | History | History | Verlauf | |
+<!-- /lang -->
 
 ## Anti-patterns
 
