@@ -21,13 +21,13 @@ registry! {
 const String _glossary = '''
 # Glossar
 
-## Begriffe
+## UI terms
 
 | Begriff | en | de | ARB-Schlüssel | Anmerkung |
 |---|---|---|---|---|
 | held | Held | Angehalten | `stateHeld` | |
 
-## Verbotene Wörter
+## Forbidden words
 
 | Wort | statt | Grund |
 |---|---|---|

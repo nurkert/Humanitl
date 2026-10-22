@@ -1,16 +1,16 @@
-# Die Kommandozeile
+# The command line
 
 Applies to: Humanitl 0.1
 
-`humanitl` ist ein dünner Client des Daemons (ADR-018). Jede Fähigkeit ist
-zuerst ein RPC; die Kommandozeile ruft ihn auf und formatiert die Antwort. Sie
-enthält keine Fachlogik, und sie erfindet nichts dazu.
+`humanitl` is a thin client of the daemon (ADR-018). Every capability is a RPC
+first; the command line calls it and formats the answer. It contains no
+domain logic, and it makes nothing up.
 
-Dieses Dokument beschreibt `humanitl run`, `humanitl doctor`, `humanitl config`,
-`humanitl audit` und die drei `humanitl daemon`-Kommandos vollständig und die
-übrigen Unterkommandos nur so weit, wie sie `run` betreffen. Die kanonische
-Liste aller Unterkommandos steht in `backlog/CONVENTIONS.md` 3.8, das Schema
-aller Konfigurations-Flags in `docs/CONFIG.md`.
+This document describes `humanitl run`, `humanitl doctor`, `humanitl config`,
+`humanitl audit` and the three `humanitl daemon` commands in full, and the
+remaining subcommands only as far as they concern `run`. The canonical list of
+all subcommands is in `backlog/CONVENTIONS.md` 3.8, the schema of all
+configuration flags in `docs/CONFIG.md`.
 
 ## `humanitl run`
 
@@ -19,66 +19,65 @@ humanitl run [--profile NAME] [--work DIR] [--work-mode ro|rw]
              [--ask ui|terminal|none] [--llm URL] [-- CMD...]
 ```
 
-Startet im Projektverzeichnis eine Sitzung: Der Daemon baut die Sandbox, der
-Agent läuft darin, und `humanitl run` endet mit dessen Exit-Code.
+Starts a session in the project directory: the daemon builds the sandbox, the
+agent runs inside it, and `humanitl run` ends with the agent's exit code.
 
-### Was der Befehl der Reihe nach tut
+### What the command does, in order
 
-1. **Das Profil der Sitzung auflösen.** Das ist der erste Schritt, vor der
-   Verbindung zum Daemon und vor allem anderen. Ein `.humanitl/profile.toml`
-   im Projekt kommt aus einem geklonten Repository und ist damit fremder Text;
-   wer einen gesperrten Schlüssel setzt oder Host-Pfade einhängen will,
-   bekommt hier `CONFIG_003` und die Sitzung startet nicht
+1. **Resolve the profile of the session.** This is the first step, before the
+   connection to the daemon and before anything else. A `.humanitl/profile.toml`
+   in the project comes from a cloned repository and is therefore foreign text;
+   whoever sets a locked key or wants to mount host paths gets `CONFIG_003`
+   here, and the session does not start
    (`backlog/CONVENTIONS.md` 4.23).
-2. **Den Daemon verbinden** und die Vertragsversion prüfen. Ohne Daemon gibt
-   es keinen Proxy, keine Aufzeichnung und keine Sandbox.
-3. **`Sandbox(Start)` senden** — mit dem Profil dieser Sitzung, dem
-   Projektverzeichnis, dem Arbeitsmodus, dem Frage-Modus und den
-   Konfigurationswerten der Kommandozeile. Der Daemon löst daraufhin für genau
-   diese Sitzung erneut auf und baut Regelspeicher, Haltefrist und die
-   Durchreiche zum Sprachmodell daraus neu.
-4. **Die drei Garantien zeigen**, sobald der Daemon sie an der laufenden
-   Sandbox gemessen hat — je eine Zeile, `[ok  ]` oder `[FAIL]`. Eine rote
-   Garantie beendet den Lauf mit Exit 3; die Sandbox wird dabei beendet.
-5. **Die Ausgabe des Agenten durchreichen** und mit seinem Exit-Code enden.
+2. **Connect to the daemon** and check the contract version. Without a daemon
+   there is no proxy, no recording and no sandbox.
+3. **Send `Sandbox(Start)`** — with the profile of this session, the
+   project directory, the work mode, the ask mode and the configuration values
+   from the command line. The daemon then resolves again for exactly this
+   session and rebuilds the rule store, the hold deadline and the passthrough
+   to the language model from them.
+4. **Show the three guarantees** as soon as the daemon has measured them on the
+   running sandbox — one line each, `[ok  ]` or `[FAIL]`. A red guarantee ends
+   the run with exit 3; the sandbox is shut down in the process.
+5. **Pass the agent's output through** and end with its exit code.
 
-### Die Flags
+### The flags
 
-| Flag | Wirkt auf | Bedeutung |
+| Flag | Acts on | Meaning |
 |---|---|---|
-| `--profile NAME` | — | Das Profil der Sitzung (`profiles/*.toml`), zum Beispiel `llm-only`. Ein Name, den es nicht gibt, ist `CONFIG_001`. Unter `humanitl sandbox` benennt dasselbe Flag etwas anderes, nämlich das bwrap-Profil; welche Bedeutung gilt, entscheidet das Unterkommando. |
-| `--work DIR` | `sandbox.work_dir` | Das Projektverzeichnis, das in der Sandbox als `/work` liegt. Vorgabe ist das aktuelle Verzeichnis. Es muss absolut sein, ohne `..`, ein Verzeichnis, und unter dem Heimatverzeichnis liegen oder genau das sein, was in `config.toml` steht. Alles andere ist `SANDBOX_006`. |
-| `--work-mode ro\|rw` | `sandbox.work_mode` | Ob der Agent im Projekt schreiben darf. |
-| `--ask ui\|terminal\|none` | `hold.ask_mode` | Wo über eine gehaltene Anfrage entschieden wird. Siehe unten. |
-| `--llm URL` | `llm.endpoint` | Das Sprachmodell dieser Sitzung. Daraus entsteht die erklärte Durchreiche: eine Regel in Rang 1, die nicht gehalten wird und die eigenen Block-Regeln überholt, für die Inferenzpfade dieses einen Hosts. Sie steht als eigene Regel in der Liste, unter `http://humanitl.internal/` und in der Aufzeichnung. Ist die Adresse nach ihrem Namen nicht im eigenen Netz, meldet der Start `LLM_006`; die Sitzung startet trotzdem. Aufgelöst wird dafür nichts. |
-| `-- CMD...` | `agent.command` | Der Befehl in der Sandbox, statt des Agenten aus der Konfiguration. `-- bash` ist der Weg, sich die Sandbox von innen anzusehen. |
+| `--profile NAME` | — | The profile of the session (`profiles/*.toml`), for example `llm-only`. A name that does not exist is `CONFIG_001`. Under `humanitl sandbox` the same flag names something else, namely the bwrap profile; which meaning applies is decided by the subcommand. |
+| `--work DIR` | `sandbox.work_dir` | The project directory that sits in the sandbox as `/work`. The default is the current directory. It must be absolute, without `..`, a directory, and lie below the home directory or be exactly what `config.toml` says. Anything else is `SANDBOX_006`. |
+| `--work-mode ro\|rw` | `sandbox.work_mode` | Whether the agent may write in the project. |
+| `--ask ui\|terminal\|none` | `hold.ask_mode` | Where a held request is decided. See below. |
+| `--llm URL` | `llm.endpoint` | The language model of this session. From it comes the declared passthrough: a rule in rank 1 that is not held and overtakes your own block rules, for the inference paths of this one host. It stands as a rule of its own in the list, under `http://humanitl.internal/` and in the recording. If the address is not in your own network according to its name, the start reports `LLM_006`; the session starts anyway. Nothing is resolved for this. |
+| `-- CMD...` | `agent.command` | The command in the sandbox, instead of the agent from the configuration. `-- bash` is the way to look at the sandbox from the inside. |
 
-Jedes andere Konfigurations-Flag (`--hold-timeout-secs`, `--findings-enabled`
-und so weiter) gehört zur Konfiguration und nicht zu einer Sitzung. Der Daemon
-nimmt vom Client nur zwei Pfade an — `llm.endpoint` und `hold.timeout_secs` —
-und antwortet auf jeden anderen mit `CONFIG_003`. Der Grund steht in
-`backlog/CONVENTIONS.md` 4.26: Ein Client, der jeden Schlüssel setzen dürfte,
-bestimmte damit die Einhängefläche der Sandbox und den Prozess darin. Wer einen
-anderen Wert ändern will, schreibt ihn in `config.toml` oder in ein eigenes
-Profil, wo ein Mensch ihn geschrieben hat und der Daemon ihn liest.
+Every other configuration flag (`--hold-timeout-secs`, `--findings-enabled`
+and so on) belongs to the configuration and not to a session. The daemon
+accepts only two paths from the client — `llm.endpoint` and `hold.timeout_secs` —
+and answers every other one with `CONFIG_003`. The reason is in
+`backlog/CONVENTIONS.md` 4.26: a client that could set any key would thereby
+decide the mount surface of the sandbox and the process inside it. Whoever
+wants to change another value writes it into `config.toml` or into a profile of
+their own, where a human wrote it and the daemon reads it.
 
-### Die drei Frage-Modi
+### The three ask modes
 
-- **`ui`** — Anfragen ohne Regel bleiben in der Warteschlange, und der Mensch
-  entscheidet in der Anwendung. `humanitl run` sagt das vor dem Start in einer
-  Zeile und schreibt danach nichts mehr dazu; die Anwendung zeigt die Karte.
-  Läuft keine Anwendung, läuft die Frist ab und die Anfrage wird geblockt. Die
-  Zeile je gehaltener Anfrage (`[humanitl] request held: …`) kommt mit
-  HUM-042: Sie braucht den Ereignisstrom der Flüsse und die Säuberung der
-  Werte, die aus der Anfrage des Agenten stammen.
-- **`none`** — es wird nicht gefragt. Die Frist ist null, jede Anfrage ohne
-  Regel läuft sofort in die Zeitüberschreitung, und der Agent bekommt `504`
-  mit `reason: timeout`. Das ist der Modus des Profils `llm-only`: Dort
-  entscheidet ohnehin eine Regel (`block host "**"`) vorher, und der Agent
-  bekommt `403`.
-- **`terminal`** — der Mensch entscheidet im selben Terminal. Sobald eine
-  Anfrage gehalten wird, steht ein Kasten auf `stderr`, während die Ausgabe des
-  Agenten auf `stdout` weiterläuft:
+- **`ui`** — requests without a rule stay in the queue, and the human decides
+  in the application. `humanitl run` says so in one line before the start and
+  writes nothing more about it afterwards; the application shows the card.
+  If no application is running, the deadline expires and the request is
+  blocked. The line per held request (`[humanitl] request held: …`) comes with
+  HUM-042: it needs the event stream of the flows and the sanitising of the
+  values that come from the agent's request.
+- **`none`** — nobody is asked. The deadline is zero, every request without a
+  rule runs straight into the timeout, and the agent gets `504` with
+  `reason: timeout`. This is the mode of the profile `llm-only`: there a rule
+  (`block host "**"`) decides beforehand anyway, and the agent gets `403`.
+- **`terminal`** — the human decides in the same terminal. As soon as a
+  request is held, a box appears on `stderr` while the agent's output keeps
+  running on `stdout`:
 
   ```
   ┌─ humanitl · request held (1 of 2) ─────────────────────── 04:52 left ─┐
@@ -93,121 +92,117 @@ Profil, wo ein Mensch ihn geschrieben hat und der Daemon ihn liest.
   └───────────────────────────────────────────────────────────────────────┘
   ```
 
-  Die Tasten:
+  The keys:
 
-  | Taste | Was sie tut |
+  | Key | What it does |
   |---|---|
-  | `a` | Erlaubt diese eine Anfrage. |
-  | `s` | Erlaubt sie und legt eine Regel für diesen Host an, gültig für diese Sitzung. |
-  | `b` | Blockt sie. Der Agent bekommt `403`. |
-  | `r` | Fragt Ziel (URL, Host, Apex, Host und Methode) und Dauer (einmal, Sitzung, dauerhaft), zeigt die Regel und legt sie nach `Enter` an. Zwei Ziele können scheitern und sagen es: ein Apex, den der Dienst nicht kennt (eine Adresse, ein unbekanntes Suffix), und eine Methode, die der Vertrag nicht benennt — eine Regel, die dann breiter wäre als das, was auf dem Schirm stand, entsteht nicht. |
-  | `e` | Schreibt die Anfrage samt vollständigem Rumpf nach `$XDG_RUNTIME_DIR/humanitl/edit-<id>.http` (0600, neu angelegt, ohne einem Symlink zu folgen), öffnet `$VISUAL` oder `$EDITOR` (sonst `vi`) und schickt das Ergebnis als `allow_edited`. Die Datei wird nach dem Lesen gelöscht. Ohne `$XDG_RUNTIME_DIR` verweigert der Weg den Dienst, statt in ein Verzeichnis zu schreiben, in das jeder schreiben kann. Ein Rumpf, der kein UTF-8 ist, wird nicht bearbeitet: Was ein Editor daraus machte, ginge als etwas anderes hinaus, als der Agent geschickt hat. |
-  | `v` | Zeigt die ersten 4 KiB des Rumpfs; was nicht druckbar ist, steht als Hex. |
-  | `n` | Geht zur nächsten gehaltenen Anfrage, ohne zu entscheiden. |
-  | `Esc`, `Ctrl+C` | Schließt den Kasten. Die Anfrage bleibt gehalten. |
+  | `a` | Allows this one request. |
+  | `s` | Allows it and creates a rule for this host, valid for this session. |
+  | `b` | Blocks it. The agent gets `403`. |
+  | `r` | Asks for the target (URL, host, apex, host and method) and duration (once, session, permanent), shows the rule and creates it after `Enter`. Two targets can fail and say so: an apex the service does not know (an address, an unknown suffix), and a method the contract does not name — a rule that would then be broader than what was on the screen is not created. |
+  | `e` | Writes the request including its full body to `$XDG_RUNTIME_DIR/humanitl/edit-<id>.http` (0600, newly created, without following a symlink), opens `$VISUAL` or `$EDITOR` (otherwise `vi`) and sends the result as `allow_edited`. The file is deleted after reading. Without `$XDG_RUNTIME_DIR` this path refuses service instead of writing into a directory anyone can write to. A body that is not UTF-8 is not edited: what an editor made of it would go out as something other than what the agent sent. |
+  | `v` | Shows the first 4 KiB of the body; whatever is not printable is shown as hex. |
+  | `n` | Goes to the next held request without deciding. |
+  | `Esc`, `Ctrl+C` | Closes the box. The request stays held. |
 
-  Der Kasten wird jede Sekunde neu gezeichnet, damit die Uhr oben rechts
-  stimmt, und er verschwindet, sobald über die Anfrage entschieden ist — auch
-  dann, wenn jemand anders sie im Fenster entschieden hat. Läuft die Frist ab,
-  steht `[humanitl] timed out -> blocked` da, und der nächste gehaltene Fluss
-  kommt.
+  The box is redrawn every second so that the clock at the top right is
+  correct, and it disappears as soon as the request is decided — even when
+  someone else decided it in the window. If the deadline expires,
+  `[humanitl] timed out -> blocked` appears, and the next held flow
+  comes up.
 
-  Er braucht ein Terminal auf der Eingabe und mindestens 40 Spalten. Ohne
-  Terminal — in einer Pipe, in einem Skript — verweigert der Befehl den Dienst
-  mit `CLI_002`: Bytes aus einer Pipe hat niemand als Antwort gemeint. Der
-  Kasten ist außerdem ASCII; eine Breite in Zeichen ist nicht dieselbe wie eine
-  Breite in Spalten, und ein doppelt breites Zeichen ließe jede Zeile umbrechen.
-  Ein Pfad in einer anderen Schrift ist im Kasten deshalb nicht zu lesen; wer
-  ihn lesen will, nimmt `humanitl flows show`. Solange er steht,
-  wird die Ausgabe des Agenten angehalten (höchstens 256 KiB); danach geht sie
-  hinaus und der Kasten wird darüber neu gezeichnet.
+  It needs a terminal on the input and at least 40 columns. Without a
+  terminal — in a pipe, in a script — the command refuses service with
+  `CLI_002`: nobody meant bytes from a pipe as an answer. The box is also
+  ASCII; a width in characters is not the same as a width in columns, and a
+  double-width character would make every line wrap.
+  A path in another script is therefore not readable in the box; whoever wants
+  to read it uses `humanitl flows show`. While the box is up, the agent's
+  output is held back (at most 256 KiB); afterwards it goes out and the box is
+  redrawn above it.
 
-  Jedes Feld läuft durch `sanitize_note` und wird auf die Fensterbreite
-  geklemmt: Was der Agent schickt, ist Text und keine Steuerfolge, und keine
-  Adresse schiebt die Tastenzeile vom Schirm.
+  Every field runs through `sanitize_note` and is clamped to the window width:
+  what the agent sends is text and not a control sequence, and no address
+  pushes the key line off the screen.
 
-  Für **Vollbild-TUI-Agenten wie OpenCode** bleibt `CLI_002` die Antwort
-  (`backlog/CONVENTIONS.md` 4.10): Ein TUI zeichnet den ganzen Schirm neu, und
-  der Kasten wäre nach dem ersten Bild weg. Entschieden wird am wirksamen
-  Kommando — `humanitl run --ask terminal -- bash` startet kein TUI und
-  bekommt den Prompt.
+  For **full-screen TUI agents such as OpenCode** `CLI_002` remains the answer
+  (`backlog/CONVENTIONS.md` 4.10): a TUI redraws the whole screen, and the box
+  would be gone after the first frame. The decision is made on the effective
+  command — `humanitl run --ask terminal -- bash` starts no TUI and gets the
+  prompt.
 
-### Terminal, Eingabe und Signale
+### Terminal, input and signals
 
-Der Agent bekommt **kein** PTY. Seine Ausgabe kommt als Bytes über den
-Ereignisstrom des Daemons und geht auf `stdout` und `stderr` dieses Prozesses;
-gefiltert wird sie im Daemon, nicht hier. Der Filter ist eine Erlaubnisliste:
-**von allen Steuerfolgen geht genau eine hinaus, `ESC [ … m` für Farbe und
-Attribute.** Verworfen werden damit der Zugriff auf die Zwischenablage
-(OSC 52), Verweise unter sichtbarem Text (OSC 8), das Setzen des
-Fenstertitels, jede Bewegung des Cursors, jedes Löschen und Scrollen und das
-Zurücksetzen des Terminals — jeweils in allen drei Schreibweisen: mit `ESC`
-eingeleitet, als einzelnes C1-Byte und als dessen UTF-8-Kodierung.
+The agent gets **no** PTY. Its output arrives as bytes over the daemon's event
+stream and goes to `stdout` and `stderr` of this process; it is filtered in the
+daemon, not here. The filter is an allow list: **of all control sequences
+exactly one goes out, `ESC [ … m` for colour and attributes.** This discards
+access to the clipboard (OSC 52), links under visible text (OSC 8), setting
+the window title, every cursor movement, every erase and scroll, and the
+terminal reset — each in all three notations: introduced with `ESC`, as a
+single C1 byte and as its UTF-8 encoding.
 
-Praktisch heißt das: Der Agent darf schreiben und färben und mit `\r` und `\b`
-die Zeile umschreiben, auf der er gerade steht. Er kann keine Zeile
-überschreiben, die schon dasteht — insbesondere keine der drei Zeilen, mit
-denen dieser Befehl die Isolationsprüfungen meldet. Der Preis: Ein
-Fortschrittsbalken, der mit `\x1b[K` bis zum Zeilenende löscht, lässt Reste
-stehen. Warum die Regel so streng ist, steht in `docs/SECURITY.md` 3.3.
+In practice this means: the agent may write and colour and rewrite the line it
+is currently on with `\r` and `\b`. It cannot overwrite a line that is already
+there — in particular none of the three lines with which this command reports
+the isolation checks. The price: a progress bar that erases to the end of the
+line with `\x1b[K` leaves remnants behind. Why the rule is so strict is
+explained in `docs/SECURITY.md` 3.3.
 
-Daraus folgt für diese Fassung:
+For this version that means:
 
-- Es gibt **keine Eingabe** an den Agenten. Ein Programm, das eine Frage
-  stellt, bekommt keine Antwort. Für zeilenorientierte Läufe ist das kein
-  Problem, für ein Vollbild-TUI schon. Wer tippen will, hängt sich mit
-  `humanitl sandbox attach` an dieselbe Sitzung; dort geht jede Taste an den
-  Agenten.
-- Einen **Raw-Modus** gibt es nur mit `--ask terminal`, und nur für die Tasten
-  des Kastens: Der Prompt braucht einzelne Tasten ohne Zeilenende. Das
-  Terminal wird auf jedem Ausgang zurückgegeben — beim gewöhnlichen Ende, auf
-  jedem Fehlerpfad, bei einer Panik und bei `SIGTERM`, `SIGHUP` und `SIGINT`
-  (dann mit Exit `128 + n`). Ohne `--ask terminal` wird es gar nicht erst
-  angefasst.
-- **`Ctrl+C`** beendet die Sitzung (`Sandbox(Stop)`), es geht nicht als Byte an
-  den Agenten. Steht der Kasten, schließt das erste `Ctrl+C` ihn, und die
-  Anfrage bleibt gehalten. **Zweimal gedrückt endet der Befehl selbst** mit
-  `130`: Das erste bittet die Sitzung zu enden, und wenn der Agent darauf nicht
-  hört, soll das zweite nicht ins Leere gehen. Dasselbe gilt für `SIGTERM` und
-  `SIGHUP` von außen — sie beenden die Sitzung und den Befehl mit `128 + n`,
-  und das Terminal ist danach wieder im Normalmodus.
-- Ein **`Ctrl+]`-Menü** gibt es nicht. Der Weg zu einer gehaltenen Anfrage ist
-  der Kasten von `--ask terminal`, die Anwendung oder `humanitl flows`.
+- There is **no input** to the agent. A program that asks a question gets no
+  answer. For line-oriented runs that is no problem, for a full-screen TUI it
+  is. Whoever wants to type attaches to the same session with
+  `humanitl sandbox attach`; there every key goes to the agent.
+- A **raw mode** exists only with `--ask terminal`, and only for the keys of
+  the box: the prompt needs single keys without a line ending. The terminal
+  is restored on every exit — on the ordinary end, on every error path, on a
+  panic and on `SIGTERM`, `SIGHUP` and `SIGINT` (then with exit `128 + n`).
+  Without `--ask terminal` it is not touched at all.
+- **`Ctrl+C`** ends the session (`Sandbox(Stop)`); it does not go to the agent
+  as a byte. If the box is up, the first `Ctrl+C` closes it, and the request
+  stays held. **Pressed twice, the command itself ends** with `130`: the first
+  asks the session to end, and if the agent does not listen, the second should
+  not go nowhere. The same applies to `SIGTERM` and `SIGHUP` from outside —
+  they end the session and the command with `128 + n`, and the terminal is
+  back in normal mode afterwards.
+- There is no **`Ctrl+]` menu**. The way to a held request is the box of
+  `--ask terminal`, the application or `humanitl flows`.
 
-### Exit-Codes
+### Exit codes
 
-| Code | Bedeutung |
+| Code | Meaning |
 |---|---|
-| Der des Agenten | Er hat sich beendet; seine Zahl wird weitergegeben. Ein Signal wird zu `128 + n`. |
-| `1` | Ein Fehler des Aufrufers: ein Profil, das es nicht gibt, ein Pfad, der keiner ist, `--ask terminal` mit einem Vollbild-TUI-Agenten. |
-| `2` | Der Daemon ist nicht erreichbar, oder er spricht eine andere Major-Version des Vertrags. |
-| `3` | Eine der drei Isolations-Garantien gilt nicht. Die Sandbox wurde beendet. |
-| `4` | Eine Sicherheitsverletzung, zum Beispiel ein Authority-Mismatch. |
+| The agent's | It has ended; its number is passed on. A signal becomes `128 + n`. |
+| `1` | An error of the caller: a profile that does not exist, a path that is not one, `--ask terminal` with a full-screen TUI agent. |
+| `2` | The daemon is not reachable, or it speaks a different major version of the contract. |
+| `3` | One of the three isolation guarantees does not hold. The sandbox was shut down. |
+| `4` | A security violation, for example an authority mismatch. |
 
-**Bekannte Kollision:** Ein Agent, der selbst mit 2 oder 3 endet, ist von einem
-Daemon- oder Isolationsfehler nicht zu unterscheiden. Wer beides sauber trennen
-muss, liest `--json`: Dort steht der Exit-Code des Agenten als eigenes Feld,
-und ein Fehlschlag ist ein Befund mit seinem Code.
+**Known collision:** an agent that itself ends with 2 or 3 cannot be told apart
+from a daemon or isolation error. Whoever must separate the two cleanly reads
+`--json`: there the agent's exit code is a field of its own, and a failure is a
+Diagnostic with its code.
 
 ### `--json`
 
-Mit `--json` schreibt `humanitl run` am Ende genau einen JSON-Wert auf
-`stdout`: Projektverzeichnis, Profil, Frage-Modus, Befehl und `exit_code`. Die
-Ausgabe des Agenten geht dabei weiter durch dieselbe `stdout`; wer den JSON-Wert
-allein braucht, liest die letzte Zeile. Ein Fehlschlag ist stattdessen eine
-Zeile mit dem Befund.
+With `--json`, `humanitl run` writes exactly one JSON value to `stdout` at the
+end: project directory, profile, ask mode, command and `exit_code`. The agent's
+output keeps going through the same `stdout`; whoever needs the JSON value
+alone reads the last line. A failure is instead a line with the Diagnostic.
 
-### Eine Sitzung je Daemon
+### One session per daemon
 
-Der Daemon führt genau eine Sandbox. Ein zweites `humanitl run`, während eine
-läuft, bekommt `CLI_005` mit der Kennung der laufenden Sitzung. Wer sie sehen
-will, hängt sich an: `humanitl sandbox attach` verbindet dieses Terminal mit
-der laufenden Sitzung, `--read-only` sieht nur zu. Genau ein Client darf
-schreiben; ein zweiter bekommt `TERM_001` und den Hinweis auf `--read-only`.
-`Ctrl+C` erreicht den Agenten dabei als Byte `0x03` und nicht als Signal, denn
-die Sandbox hat kein steuerndes Terminal. Wer sich abhängt, beendet nur den
-eigenen Strom; die Sitzung läuft weiter, und ein späteres `attach` zeigt den
-Rückstand.
+The daemon runs exactly one sandbox. A second `humanitl run` while one is
+running gets `CLI_005` with the identifier of the running session. Whoever
+wants to see it attaches: `humanitl sandbox attach` connects this terminal to
+the running session, `--read-only` only watches. Exactly one client may
+write; a second one gets `TERM_001` and the hint at `--read-only`.
+`Ctrl+C` reaches the agent as the byte `0x03` and not as a signal, because
+the sandbox has no controlling terminal. Whoever detaches ends only their own
+stream; the session keeps running, and a later `attach` shows the
+backlog.
 
 ## `humanitl doctor`
 
@@ -215,86 +210,88 @@ Rückstand.
 humanitl doctor [--json] [--probe-llm]
 ```
 
-Prüft die Maschine und gibt eine Zeile je Vorbedingung aus, mit `ok`, `warn`
-oder `fail`. Das ist der Befehl für die Frage „warum läuft das hier nicht?".
+Checks the machine and prints one line per precondition, with `ok`, `warn`
+or `fail`. This is the command for the question "why doesn't this run here?".
 
-### Die elf Zeilen
+### The eleven lines
 
-| Kennung | Was sie prüft | `fail`, wenn |
+| Identifier | What it checks | `fail` if |
 |---|---|---|
-| `bwrap` | `bwrap` liegt im `PATH` und ist mindestens 0.8 | es fehlt oder ist älter |
-| `userns` | `bwrap --unshare-user` macht einen Namensraum auf | es geht nicht oder hängt länger als zwei Sekunden |
-| `seccomp` | `/proc/self/status` führt ein Feld `Seccomp`, der Kernel ist mindestens 5.4 | das Feld fehlt (Kernel ohne `CONFIG_SECCOMP`) |
-| `runtime_dir` | `$XDG_RUNTIME_DIR` ist gesetzt, ist ein Verzeichnis, gehört uns und hat genau 0700 | eines davon nicht — auch ein zu enger Modus wie 0500 oder 0600, in dem der Daemon weder hineinwechseln noch den Socket anlegen kann |
-| `systemd_user` | `systemctl --user is-system-running` endet mit 0 und sagt `running` | nie; ohne systemd startet man `humanitld` von Hand |
-| `daemon` | der Daemon antwortet und spricht dieselbe Major-Version des Vertrags | die Major-Version abweicht |
-| `agent` | das Kommando des Agenten liegt im `PATH` und nennt seine Fassung | nie; der Pfad in der Sandbox kann ein anderer sein |
-| `llm` | der Endpunkt aus `llm.endpoint` antwortet | nie |
-| `tray` | `libayatana-appindicator3` oder `libappindicator3` liegt in einem Verzeichnis des Laders; unter GNOME zusätzlich die AppIndicator-Erweiterung | nie |
-| `renderer` | Impeller verträgt sich mit dem Treiber: ein geladenes NVIDIA-Modul unter Wayland ist der bekannte schwarze Bildschirm | nie |
-| `disk_space` | im Datenverzeichnis ist mindestens 1 GiB frei | nie |
+| `bwrap` | `bwrap` is in the `PATH` and is at least 0.8 | it is missing or older |
+| `userns` | `bwrap --unshare-user` opens a namespace | it does not work or hangs longer than two seconds |
+| `seccomp` | `/proc/self/status` has a field `Seccomp`, the kernel is at least 5.4 | the field is missing (kernel without `CONFIG_SECCOMP`) |
+| `runtime_dir` | `$XDG_RUNTIME_DIR` is set, is a directory, belongs to us and has exactly 0700 | one of these does not hold — including a mode that is too narrow, such as 0500 or 0600, in which the daemon can neither change into it nor create the socket |
+| `systemd_user` | `systemctl --user is-system-running` ends with 0 and says `running` | never; without systemd you start `humanitld` by hand |
+| `daemon` | the daemon answers and speaks the same major version of the contract | the major version differs |
+| `agent` | the agent's command is in the `PATH` and names its version | never; the path in the sandbox can be a different one |
+| `llm` | the endpoint from `llm.endpoint` answers | never |
+| `tray` | `libayatana-appindicator3` or `libappindicator3` lies in a directory of the loader; under GNOME also the AppIndicator extension | never |
+| `renderer` | Impeller gets along with the driver: a loaded NVIDIA module under Wayland is the known black screen | never |
+| `disk_space` | at least 1 GiB is free in the data directory | never |
 
-Die vier ersten sind die Vorbedingungen der Sandbox; ohne sie startet nichts.
-`fail` wird außerdem die Zeile `daemon`, wenn der Daemon eine andere
-Major-Version des Vertrags spricht — dann versteht keine Seite die Nachrichten
-der anderen. Alles Übrige ist eine Warnung: Es läuft, nur nicht so bequem.
+The first four are the preconditions of the sandbox; without them nothing
+starts. The line `daemon` also becomes `fail` when the daemon speaks a
+different major version of the contract — then neither side understands the
+other's messages. Everything else is a warning: it runs, just not as
+comfortably.
 
-### Was eine Zeile bedeutet
+### What a line means
 
-Jede Zeile, die nicht `ok` ist, trägt einen `Diagnostic` mit Code, Grund und
-Vorschlag; die Blöcke stehen unter der Tabelle, einer je Zeile und nicht nur
-für die erste. Die Codes sind `DOCTOR_001` bis `DOCTOR_013`
+Every line that is not `ok` carries a `Diagnostic` with code, reason and
+suggestion; the blocks stand below the table, one per line and not just for
+the first. The codes are `DOCTOR_001` to `DOCTOR_013`
 (`docs/DIAGNOSTICS.md`).
 
-**`ok` heißt nachgesehen und in Ordnung, nie „ich konnte nicht nachsehen".**
-Eine Prüfung, die nicht durchgeführt werden konnte — eine Datei, die es auf
-diesem Kernel nicht gibt, ein Programm, das nicht antwortet —, ist `warn` mit
-`DOCTOR_012`; ihr Beleg beginnt mit `not measured:`, und ihr Vorschlag ist der
-Befehl, den der Doctor versucht hat, damit ein Mensch selbst nachsehen kann.
+**`ok` means looked at and in order, never "I could not look".**
+A check that could not be carried out — a file that does not exist on this
+kernel, a program that does not answer — is `warn` with `DOCTOR_012`; its
+evidence starts with `not measured:`, and its suggestion is the command the
+doctor tried, so that a human can look for themselves.
 
-### Der Endpunkt des Sprachmodells wird nur auf Verlangen angesprochen
+### The language model's endpoint is contacted only on request
 
-`humanitl doctor` baut von sich aus keine einzige Verbindung auf. Die Zeile
-`llm` trägt deshalb ohne weitere Angabe `DOCTOR_013` — „nicht angesprochen" —
-und als Vorschlag den Befehl, der es täte.
+`humanitl doctor` does not open a single connection on its own. The line
+`llm` therefore carries `DOCTOR_013` without further options — "not
+contacted" — and as its suggestion the command that would do it.
 
-Mit `--probe-llm` wird gemessen. Vorher steht auf `stderr` eine Zeile, die
-sagt, wohin es geht und was geschickt wird, **bevor** die Verbindung aufgebaut
-wird; sie lässt sich weder mit `--json` noch mit `-q` abstellen, weil sie zur
-Handlung gehört und nicht zur Ausgabe. Gemessen wird über die RPC `ProbeLlm`
-im Daemon (`GET` auf die Modellliste des Endpunkts, bei einem Ollama ohne
-Pfad-Präfix vorher auf `/api/tags`; keine Zugangsdaten, keine Weiterleitungen); ohne
-laufenden Daemon gibt es die Probe nicht, und die Zeile bleibt ehrlich
-ungemessen. Der Schalter heißt nicht `--llm`: Das ist der Zweitname von
-`--llm-endpoint` und **setzt** die Adresse, statt sie zu prüfen.
+With `--probe-llm` it is measured. Beforehand a line on `stderr` says where it
+goes and what is sent, **before** the connection is opened; it can be switched
+off neither with `--json` nor with `-q`, because it belongs to the action and
+not to the output. The measurement goes through the RPC `ProbeLlm` in the
+daemon (`GET` on the endpoint's model list, for an Ollama without a path
+prefix first on `/api/tags`; no credentials, no redirects); without a running
+daemon there is no probe, and the line stays honestly unmeasured. The switch
+is not called `--llm`: that is the alias of `--llm-endpoint` and **sets** the
+address instead of checking it.
 
-### Woher der Bericht kommt
+### Where the report comes from
 
-Der Doctor ist eine Fähigkeit des Daemons (RPC `Doctor`, ADR-018); der
-Setup-Bildschirm zeigt dieselben Zeilen über denselben Aufruf. Läuft kein
-Daemon, führt die Kommandozeile dieselben Prüfungen aus derselben Crate im
-eigenen Prozess aus — ein Doctor, der einen laufenden Daemon bräuchte, wäre in
-genau dem Fall nutzlos, für den es ihn gibt. Welche der beiden Quellen es war,
-steht in der Ausgabe (`source`), denn `PATH` und `$XDG_RUNTIME_DIR` des Daemons
-sind die seiner Unit und nicht die des Terminals.
+The doctor is a capability of the daemon (RPC `Doctor`, ADR-018); the setup
+screen shows the same lines through the same call. If no daemon is running,
+the command line runs the same checks from the same crate in its own process
+— a doctor that needed a running daemon would be useless in exactly the case
+it exists for. Which of the two sources it was is stated in the output
+(`source`), because the daemon's `PATH` and `$XDG_RUNTIME_DIR` are those of
+its unit and not those of the terminal.
 
-Zwei Zeilen kommen immer vom Client: `daemon`, weil nur ein Client weiß, ob er
-den Daemon erreicht, und `llm`, weil dahinter eine Verbindung stünde.
+Two lines always come from the client: `daemon`, because only a client knows
+whether it reaches the daemon, and `llm`, because a connection would stand
+behind it.
 
-### Exit-Codes
+### Exit codes
 
-| Code | Bedeutung |
+| Code | Meaning |
 |---|---|
-| `0` | jede Zeile ist `ok` oder `warn` |
-| `3` | mindestens eine Zeile ist `fail`; die Sandbox startet so nicht |
-| `1` | die Konfiguration ließ sich nicht lesen |
+| `0` | every line is `ok` or `warn` |
+| `3` | at least one line is `fail`; the sandbox does not start like this |
+| `1` | the configuration could not be read |
 
-Ein fehlender Daemon ist **kein** Exit 2: Er ist eine Zeile des Berichts.
+A missing daemon is **not** exit 2: it is a line of the report.
 
 ### `--json`
 
-Ein Wert auf `stdout`, die Schlüssel alphabetisch (so schreibt `serde_json`
-eine Map), die Zeilen in der Reihenfolge der Anzeige:
+One value on `stdout`, the keys in alphabetical order (that is how
+`serde_json` writes a map), the lines in display order:
 
 ```json
 {
@@ -319,327 +316,331 @@ eine Map), die Zeilen in der Reihenfolge der Anzeige:
 }
 ```
 
-`source` ist `daemon` oder `local`, `status` der schlimmste Zustand im Bericht,
-`checks` die elf Zeilen in der Reihenfolge der Anzeige. `diagnostic` steht
-genau dann, wenn die Zeile nicht `ok` ist. Ein Beleg, der mit `not measured:`
-beginnt, ist eine Zeile ohne Messung.
+`source` is `daemon` or `local`, `status` the worst state in the report,
+`checks` the eleven lines in display order. `diagnostic` is present exactly
+when the line is not `ok`. Evidence that starts with `not measured:` is a line
+without a measurement.
 
 ## `humanitl daemon install`
 
-Schreibt die systemd-Nutzer-Unit, die den Daemon bei jeder Anmeldung startet.
-Es ist der eingriffsreichste Befehl dieses Produkts außerhalb der Sandbox, und
-deshalb steht hier vollständig, was er tut.
+Writes the systemd user unit that starts the daemon at every login.
+It is the most invasive command of this product outside the sandbox, and
+that is why what it does is described here in full.
 
 ```
 humanitl daemon install [--print] [--no-start] [--bin-dir DIR]
 humanitl daemon install --refresh
 ```
 
-**Höchstens eine Datei, an einem genannten Ort.**
-`$XDG_CONFIG_HOME/systemd/user/humanitld.service`, sonst
-`~/.config/systemd/user/humanitld.service`, mit den Rechten `0644`. Keine
-System-Unit, kein `sudo`, keine zweite Datei, keine `humanitld.socket`. Ihr
-`ExecStart` nennt das `humanitld` **neben der laufenden Kommandozeile** — nie
-eines aus `PATH` und nie eines aus einem Konfigurationswert, damit beim
-Anmelden dieselbe Fassung startet wie die, die die Unit geschrieben hat.
-`--bin-dir DIR` nennt statt dessen ein anderes Verzeichnis, etwa das Bundle
-eines Pakets, das die Kommandozeile über einen Verweis erreicht hat. Aus einem
-AppImage (`$APPIMAGE` gesetzt) müssen unter `DIR/..` außerdem
-`share/humanitl/catalog/domains.yaml` und `profiles/sandbox/default.toml`
-liegen wie im Bild, sonst endet der Befehl mit `DAEMON_011`.
+**At most one file, in a named place.**
+`$XDG_CONFIG_HOME/systemd/user/humanitld.service`, otherwise
+`~/.config/systemd/user/humanitld.service`, with the permissions `0644`. No
+system unit, no `sudo`, no second file, no `humanitld.socket`. Its
+`ExecStart` names the `humanitld` **next to the running command line** —
+never one from `PATH` and never one from a configuration value, so that at
+login the same version starts as the one that wrote the unit.
+`--bin-dir DIR` names a different directory instead, such as the bundle of a
+package that the command line was reached through via a link. From an
+AppImage (`$APPIMAGE` set), `share/humanitl/catalog/domains.yaml` and
+`profiles/sandbox/default.toml` must also lie under `DIR/..`
+as in the image, otherwise the command ends with `DAEMON_011`.
 
-**Mit dem Paket wird nichts geschrieben.** Liegt
-`/usr/lib/systemd/user/humanitld.service` da, hat das Paket die Units
-abgelegt, und der Befehl schreibt keine Datei (HUM-053). Er ruft nur, was das
-Paket als root nicht kann: `systemctl --user daemon-reload` und
-`systemctl --user enable --now humanitld.socket`. Nur den Socket (HUM-164):
-Findet ein Client kein Token, öffnet er den Socket trotzdem einmal, systemd
-startet darauf den Dienst, und der Client wartet höchstens zehn Sekunden auf
-dessen Token. Pakete ohne Socket-Unit bekommen `humanitld.service`. Die
-Ausgabe nennt als `unit` die Unit des Pakets und als `action` das Wort `packaged`; unter `--json` stehen die
-Namen in `units`. Nach der Aktivierung stehen in `unit` und `exec_start`, was
-systemd wirklich geladen hat (`systemctl --user show -p FragmentPath,ExecStart`),
-nicht, was in der Datei des Pakets steht; `unit_text` ist dann der Text dieser
-geladenen Datei und `null`, wenn sie sich nicht lesen lässt. Liegt unter
+**With the package, nothing is written.** If
+`/usr/lib/systemd/user/humanitld.service` is there, the package has placed the
+units, and the command writes no file (HUM-053). It only runs what the
+package cannot do as root: `systemctl --user daemon-reload` and
+`systemctl --user enable --now humanitld.socket`. Only the socket (HUM-164):
+if a client finds no token, it opens the socket once anyway, systemd then
+starts the service, and the client waits at most ten seconds for its token.
+Packages without a socket unit get `humanitld.service`. The
+output names the package's unit as `unit` and the word `packaged` as `action`; under `--json` the
+names are in `units`. After activation, `unit` and `exec_start` contain what
+systemd really loaded (`systemctl --user show -p FragmentPath,ExecStart`),
+not what is in the package's file; `unit_text` is then the text of this
+loaded file and `null` if it cannot be read. If under
 `~/.config/systemd/user/`
-noch die eigene Unit einer früheren Installation (erste Zeile ist die Marke),
-verdeckte sie die des Pakets: Der Befehl kündigt es an, legt sie samt Verweis
-der Aktivierung als `humanitld.service.bak` beiseite (oder `.bak.N`, wenn der
-Name vergeben ist; `set_aside` in der Ausgabe), startet den Dienst neu und
-legt beides zurück, wenn das scheitert (HUM-211). Beiseitegelegt wird nur,
-wenn auch aktiviert wird: Unter `--print`, `--no-start` oder ohne `systemctl`
-bleibt sie liegen und steht als `shadowed_by` in der Ausgabe. Eine Datei dort
-ohne die Marke bleibt liegen, und der Befehl bricht mit `DAEMON_005` ab, auch
-unter `--print`.
-Aus einem AppImage und mit `--bin-dir` gilt dieser Weg nicht:
-Beide nennen ausdrücklich einen anderen Daemon als den des Pakets. Ohne Paket
-schreibt der Befehl nie eine Socket-Unit; der Daemon bindet seinen Socket dann
-selbst.
+the own unit of an earlier installation is still there (first line is the
+marker), it would hide the package's one: the command announces it, sets it
+aside together with the activation link as `humanitld.service.bak` (or
+`.bak.N` if the name is taken; `set_aside` in the output), restarts the service
+and puts both back if that fails (HUM-211). It is set aside only when
+activation also happens: under `--print`, `--no-start` or without `systemctl`
+it stays where it is and appears as `shadowed_by` in the output. A file there
+without the marker stays where it is, and the command aborts with
+`DAEMON_005`, even under `--print`.
+From an AppImage and with `--bin-dir` this path does not apply:
+both explicitly name a different daemon than the package's. Without a package
+the command never writes a socket unit; the daemon then binds its socket
+itself.
 
-**Aus einem AppImage wird kopiert.** Läuft die Kommandozeile aus einem
-AppImage (`$APPIMAGE` ist gesetzt), liegen `humanitld` und `humanitl-shim`
-unter `/tmp/.mount_*`, und dieser Pfad verschwindet mit dem Prozess. Ein
-`ExecStart` darauf zeigte beim nächsten Anmelden ins Leere. Beide Binaries
-werden deshalb nach `~/.local/lib/humanitl/<version>.<stempel>/bin/` kopiert,
-und mit ihnen der Domain-Katalog (`share/humanitl/catalog/`) und das
-Sandbox-Profil (`profiles/sandbox/default.toml`), im selben Aufbau wie im Bild:
-Der Daemon sucht beide relativ zu seinem eigenen Pfad und liefe ohne sie mit
-leerem Katalog und ohne Profil (HUM-165). Der Verweis
-`~/.local/lib/humanitl/current` zeigt auf diese Kopie, und `ExecStart` nennt
-`current/bin/humanitld`: Ein Update legt eine neue Kopie daneben und hängt den
-Verweis um, ohne die Unit anzufassen. Fehlt eines der beiden Binaries, endet
-der Befehl mit `DAEMON_007`, fehlen Katalog oder Profil im Bild, mit
-`DAEMON_011`; in beiden Fällen ist nichts kopiert. Neben `bin/` liegt in jeder
-Kopie `humanitld` als relativer Verweis auf `bin/humanitld`: Eine Unit von vor
-HUM-165 nennt `current/humanitld`, und bricht ein Lauf ab, nachdem `current`
-umgehängt, aber bevor die neue Unit geschrieben ist, startet sie so trotzdem
-den Daemon der neuen Kopie. Kopiert wird erst nach der Ankündigung und nach
-jeder Prüfung, die den Lauf ablehnen kann; eine fremde Unit (`DAEMON_005`) oder
-eine fehlende Nutzersitzung (`DAEMON_010`) lassen `~/.local/lib/humanitl` also
-unberührt.
+**From an AppImage, files are copied.** If the command line runs from an
+AppImage (`$APPIMAGE` is set), `humanitld` and `humanitl-shim` lie under
+`/tmp/.mount_*`, and this path disappears with the process. An
+`ExecStart` pointing there would point into nothing at the next login. Both
+binaries are therefore copied to `~/.local/lib/humanitl/<version>.<stamp>/bin/`,
+and with them the domain catalogue (`share/humanitl/catalog/`) and the
+sandbox profile (`profiles/sandbox/default.toml`), in the same layout as in the
+image: the daemon looks for both relative to its own path and would run
+without them with an empty catalogue and without a profile (HUM-165). The link
+`~/.local/lib/humanitl/current` points to this copy, and `ExecStart` names
+`current/bin/humanitld`: an update places a new copy next to it and repoints
+the link without touching the unit. If one of the two binaries is missing,
+the command ends with `DAEMON_007`; if catalogue or profile are missing in the
+image, with `DAEMON_011`; in both cases nothing has been copied. Next to
+`bin/`, every copy holds `humanitld` as a relative link to `bin/humanitld`: a
+unit from before HUM-165 names `current/humanitld`, and if a run aborts after
+`current` was repointed but before the new unit is written, the unit still
+starts the daemon of the new copy this way. Copying happens only after the
+announcement and after every check that can reject the run; a foreign unit
+(`DAEMON_005`) or a missing user session (`DAEMON_010`) therefore leave
+`~/.local/lib/humanitl` untouched.
 
-Jede Kopie bekommt ein neues Verzeichnis (`<stempel>` aus Zeit und
-Prozessnummer), auch wenn dieselbe Fassung ein zweites Mal installiert wird:
-Das Verzeichnis, auf das `current` gerade zeigt, wird nie angefasst, bevor
-`current` auf eine vollständige neue Kopie zeigt. Ein Abbruch mittendrin lässt
-also nie einen Verweis ins Leere. `current` wird über einen zweiten Verweis und
-`rename` umgehängt, nie gelöscht und neu angelegt. Zeigte `current` vorher auf
-eine andere Kopie, läuft der Dienst womöglich noch aus ihr; der Befehl startet
-ihn deshalb nach `enable --now` mit `systemctl --user try-restart
-humanitld.service` neu, und erst danach gehen die vorige Kopie und jede ältere,
-die ein früherer Lauf liegen lassen musste (HUM-077). Neu gestartet wird bei
-jeder Kopie, auch beim ersten Lauf und wenn `current` fehlte: Lief schon ein
-Dienst dieses Namens, etwa aus einer Unit unter `/etc`, die die neue verdeckt,
-ließe `enable --now` ihn laufen. Eine Kopie geht nur, wenn danach ein Daemon
-genau dieser Fassung antwortet und kein Prozess sein Programm aus ihr haben
-kann (`/proc/<pid>/exe`, HUM-210): Ein Daemon, der noch aus ihr läuft, fände
-sonst seinen Shim nicht mehr, und jede Sandbox scheiterte mit `SANDBOX_011`.
-Im Zweifel bleibt sie: wenn `/proc` oder einer seiner Einträge sich nicht
-lesen lässt; wenn `systemctl --user show -p MainPID` scheitert, keine Zeile
-`MainPID=` liefert oder keine Zahl (nur `MainPID=0` heißt „kein
-Hauptprozess"); wenn der Hauptprozess, den es nennt, nicht sichtbar ist; wenn
-ein Prozess sein Programm nicht lesen lässt und sein `status` nicht sagt, wem
-er gehört und wie er heißt; oder wenn ein Prozess `humanitld` desselben Kontos
-sein Programm nicht lesen lässt. Eine Kopie, die liegen bleibt, räumt ein späterer Lauf weg. Auch
-die neue Kopie eines gescheiterten Laufs bleibt nach denselben Regeln, solange
-ein Prozess aus ihr laufen kann. Ohne Neustart
-(`--no-start`, kein `systemctl`) bleibt die vorige Kopie liegen. Scheitert der
-Neustart, zeigt `current` wieder auf die vorige Kopie, die Unit bekommt ihren
-alten Text, der alte Daemon wird noch einmal gestartet, und der Befund ist
-`DAEMON_008`. Geht `current` oder die Unit nicht nachweislich zurück, startet
-der Befehl nichts mehr, denn er startete sonst die eben gescheiterte Kopie;
-der Befund nennt dann, was nicht zurückging. Dasselbe gilt für eine ersetzte Unit auf dem Weg ohne AppImage:
-Wer `daemon install` aus einem neuen Archiv ruft, bekommt den Daemon des neuen
-Archivs auch sofort und nicht erst bei der nächsten Anmeldung. Ist
-`~/.local/lib/humanitl` ein Verweis oder gehört
-es einem anderen Konto als das Heimatverzeichnis, wird nichts kopiert
-(`DAEMON_011`). Scheitert nach der Kopie noch etwas — die Unit, `systemctl` —,
-zeigt `current` wieder dorthin, wohin es vorher zeigte, und die neue Kopie
-geht wieder. `--print` nennt denselben Pfad `…/current/bin/humanitld`, den die
-Unit bekäme, und kopiert nichts.
+Every copy gets a new directory (`<stamp>` from time and process number),
+even when the same version is installed a second time: the directory that
+`current` points to at the moment is never touched before `current` points
+to a complete new copy. An abort halfway through therefore never leaves a link
+pointing into nothing. `current` is repointed via a second link and `rename`,
+never deleted and created anew. If `current` pointed to another copy before,
+the service may still be running from it; the command therefore restarts it
+after `enable --now` with `systemctl --user try-restart
+humanitld.service`, and only after that do the previous copy and every older
+one that an earlier run had to leave behind go away (HUM-077). The restart
+happens for every copy, also on the first run and when `current` was missing:
+if a service of this name was already running, for instance from a unit under
+`/etc` that hides the new one, `enable --now` would leave it running. A copy
+goes away only if afterwards a daemon of exactly this version answers and no
+process can have its program from it (`/proc/<pid>/exe`, HUM-210): a daemon
+still running from it would otherwise no longer find its shim, and every
+sandbox would fail with `SANDBOX_011`.
+When in doubt it stays: if `/proc` or one of its entries cannot be read; if
+`systemctl --user show -p MainPID` fails, yields no line `MainPID=` or no
+number (only `MainPID=0` means "no main process"); if the main process it
+names is not visible; if a process does not let its program be read and its
+`status` does not say whom it belongs to and what it is called; or if a
+process `humanitld` of the same account does not let its program be read. A
+copy that stays behind is cleaned up by a later run. The new copy of a failed
+run also stays by the same rules, as long as a process can be running from
+it. Without a restart (`--no-start`, no `systemctl`) the previous copy stays
+behind. If the restart fails, `current` points to the previous copy again, the
+unit gets its old text back, the old daemon is started once more, and the
+Diagnostic is `DAEMON_008`. If `current` or the unit does not demonstrably go
+back, the command starts nothing more, because it would otherwise start the
+copy that just failed; the Diagnostic then names what did not go back. The
+same applies to a replaced unit on the path without AppImage: whoever calls
+`daemon install` from a new archive gets the new archive's daemon right away
+and not only at the next login. If `~/.local/lib/humanitl` is a link or
+belongs to a different account than the home directory, nothing is copied
+(`DAEMON_011`). If something else fails after the copy — the unit,
+`systemctl` —, `current` points back to where it pointed before, and the new
+copy goes away again. `--print` names the same path `…/current/bin/humanitld`
+the unit would get, and copies nothing.
 
-**`--refresh`: ein neueres AppImage erneuert den Dienst.** `AppRun` ruft bei
-jedem Start der Anwendung `humanitl -q daemon install --refresh` (HUM-077).
-Der Schalter tut nur dann etwas, wenn der Lauf aus einem AppImage kommt, die
-Unit unter `~/.config/systemd/user/` die Marke trägt und
-`ExecStart=~/.local/lib/humanitl/current/bin/humanitld` nennt (oder
-`current/humanitld`, wie vor HUM-165; die Unit bekommt dabei den neuen Pfad),
-und `current` auf
-die Kopie einer anderen Fassung zeigt; dann läuft alles wie oben beschrieben,
-samt Neustart. Sonst endet er sofort mit 0 und schreibt, warum nicht:
-`not_appimage`, `not_installed` oder `up_to_date` (unter `--json` als `action`,
-dazu `installed` und `version`). Die erste Einrichtung macht er nie: Eine Unit,
-die bei jeder Anmeldung einen Dienst startet, legt ein Programmstart nicht
-ungefragt an; das bleibt der Knopf in der Einrichtung oder
-`--cli daemon install`. Und wer den Dienst mit `daemon uninstall` entfernt hat,
-bekommt ihn vom nächsten Start des AppImage nicht still zurück, weil die Unit
-fehlt. `--refresh` verträgt sich nicht mit `--print`, `--no-start` und
-`--bin-dir`.
+**`--refresh`: a newer AppImage renews the service.** `AppRun` calls
+`humanitl -q daemon install --refresh` at every start of the application
+(HUM-077). The switch does something only if the run comes from an AppImage,
+the unit under `~/.config/systemd/user/` carries the marker and names
+`ExecStart=~/.local/lib/humanitl/current/bin/humanitld` (or
+`current/humanitld`, as before HUM-165; the unit gets the new path in the
+process),
+and `current` points to
+the copy of a different version; then everything runs as described above,
+including the restart. Otherwise it ends at once with 0 and writes why not:
+`not_appimage`, `not_installed` or `up_to_date` (under `--json` as `action`,
+plus `installed` and `version`). It never does the first setup: a unit that
+starts a service at every login is not created unasked by a program start;
+that remains the button in the setup or
+`--cli daemon install`. And whoever removed the service with
+`daemon uninstall` does not silently get it back from the next start of the
+AppImage, because the unit is missing. `--refresh` does not go together with
+`--print`, `--no-start` and `--bin-dir`.
 
-**Ohne Nutzersitzung wird nichts geschrieben.** Fehlt `XDG_RUNTIME_DIR` und
-soll die Unit gestartet werden (kein `--print`, kein `--no-start`), endet der
-Befehl vor dem ersten Schreibzugriff mit `DAEMON_010` und dem Vorschlag
-`loginctl enable-linger $USER`. Dasselbe gilt, wenn `systemctl --user` den Bus
-der Sitzung nicht findet („Failed to connect to bus"); dann ist die Unit schon
-zurückgenommen, wenn der Befund erscheint.
+**Without a user session nothing is written.** If `XDG_RUNTIME_DIR` is missing
+and the unit is to be started (no `--print`, no `--no-start`), the command
+ends before the first write with `DAEMON_010` and the suggestion
+`loginctl enable-linger $USER`. The same applies if `systemctl --user` does
+not find the session bus ("Failed to connect to bus"); then the unit has
+already been taken back when the Diagnostic appears.
 
-**Am Ende wird gewartet.** Hat systemd die Unit genommen, fragt der Befehl bis
-zu fünf Sekunden lang `GetInfo`, bis der Daemon antwortet, und schreibt die
-Fassung, die er nennt, als letzte Zeile. Antwortet er nicht, steht dort
-`no answer within 5000 ms`; das ist eine Beobachtung und kein Grund, die
-Installation zurückzunehmen — die Unit liegt, und `humanitl daemon logs` sagt,
-woran es hängt.
+**At the end, it waits.** Once systemd has taken the unit, the command asks
+`GetInfo` for up to five seconds until the daemon answers, and writes the
+version it names as the last line. If it does not answer, the line reads
+`no answer within 5000 ms`; that is an observation and no reason to take the
+installation back — the unit is in place, and `humanitl daemon logs` says
+what it is stuck on.
 
-**Sichtbar, bevor es geschieht.** Der ganze Text der Unit und beide
-`systemctl`-Aufrufe gehen vor dem ersten Schreibzugriff auf `stderr`, an der
-Ausgabesteuerung vorbei: `-q` schaltet das nicht ab. Unter `--json` liest ein
-Programm, und für das gilt der Vertrag dieser Kommandozeile — ein Objekt auf
-`stdout`, `stderr` leer —; Text und Befehle stehen dann im Objekt als
-`unit_text` und `commands`. `--print` zeigt dieselbe Datei und schreibt
-nichts.
+**Visible before it happens.** The whole text of the unit and both
+`systemctl` calls go to `stderr` before the first write, bypassing the
+output control: `-q` does not switch this off. Under `--json` a program is
+reading, and for it the contract of this command line applies — one object on
+`stdout`, `stderr` empty —; text and commands then stand in the object as
+`unit_text` and `commands`. `--print` shows the same file and writes
+nothing.
 
-**Wiederholbar.** Ein zweiter Aufruf mit demselben Ergebnis schreibt nicht
-noch einmal; die Ausgabe sagt dann `unchanged` statt `created`.
+**Repeatable.** A second call with the same result does not write again; the
+output then says `unchanged` instead of `created`.
 
-**Nie über fremdes Eigentum.** Die erste Zeile der Unit ist die Marke
-`# humanitl daemon install: written by Humanitl`. Fehlt sie in einer
-vorhandenen Datei, gehört die Datei jemand anderem, und der Befehl weigert
-sich mit `DAEMON_005`, statt sie zu überschreiben. Es gibt dafür mit Absicht
-kein `--force`: Wer eine eigene Unit führt, legt sie beiseite.
+**Never over someone else's property.** The first line of the unit is the
+marker `# humanitl daemon install: written by Humanitl`. If it is missing in an
+existing file, the file belongs to someone else, and the command refuses with
+`DAEMON_005` instead of overwriting it. There is deliberately no `--force` for
+this: whoever runs a unit of their own sets it aside.
 
-**Danach `systemctl --user`, nie `sudo`.** Ohne `--no-start` laufen
-`systemctl --user daemon-reload` und `enable --now`, und zwar je nach Weg:
+**Afterwards `systemctl --user`, never `sudo`.** Without `--no-start`,
+`systemctl --user daemon-reload` and `enable --now` run, depending on the
+path:
 
-- *Archiv und AppImage:* `systemctl --user enable --now humanitld.service`,
-  auf die eben geschriebene Unit. Der Daemon bindet seinen Socket selbst.
-- *Units des Pakets:* `systemctl --user enable --now humanitld.socket
-  humanitld.service`, auf die Units unter `/usr/lib/systemd/user/`. Geschrieben
-  wird dabei nichts. Beide Units, weil ein Client das Token liest, bevor er
-  den Socket öffnet, und erst der laufende Daemon es schreibt.
+- *Archive and AppImage:* `systemctl --user enable --now humanitld.service`,
+  on the unit just written. The daemon binds its socket itself.
+- *Units of the package:* `systemctl --user enable --now humanitld.socket
+  humanitld.service`, on the units under `/usr/lib/systemd/user/`. Nothing is
+  written in the process. Both units, because a client reads the token before
+  it opens the socket, and only the running daemon writes it.
 
-Gibt es kein `systemctl` in `PATH`, startet nichts, und die Ausgabe nennt die
-beiden Befehle.
+If there is no `systemctl` in `PATH`, nothing starts, and the output names the
+two commands.
 
-**Ein Fehlschlag lässt nichts liegen.** Nimmt systemd die Unit nicht an, wird
-der Zustand von vorher wiederhergestellt — eine angelegte Datei verschwindet,
-eine ersetzte bekommt ihren alten Inhalt zurück, die Units des Pakets bleiben,
-wie sie sind — und `daemon-reload` läuft noch einmal, damit auch systemds Bild
-davon stimmt. Scheitert `enable --now`, werden vorher alle genannten Units
-angehalten (`stop`, `reset-failed`). Der Befund ist `DAEMON_008`.
+**A failure leaves nothing behind.** If systemd does not accept the unit, the
+previous state is restored — a created file disappears, a replaced one gets
+its old content back, the package's units stay as they are — and
+`daemon-reload` runs once more so that systemd's picture of it is correct too.
+If `enable --now` fails, all named units are stopped first (`stop`,
+`reset-failed`). The Diagnostic is `DAEMON_008`.
 
-Zurückgenommen wird dabei auch die Aktivierung. `systemctl --user enable --now`
-ist ein Aufruf mit zwei Schritten: Er legt die Verweise an und startet dann.
-Die Verweise liegen im Unit-Verzeichnis des Nutzers, auch für die Units des
-Pakets: `default.target.wants/humanitld.service` und beim Paket statt dessen
-`sockets.target.wants/humanitld.socket`. Misslingt der Start, stünden sie ohne
-diese Rücknahme weiter da, und der Dienst startete beim nächsten Anmelden,
-obwohl der Befehl mit `DAEMON_008` abgebrochen ist. Entfernt werden nur die
-Verweise, die dieser Aufruf angelegt hat: Wer den Dienst schon vorher
-aktiviert hatte, behält die Aktivierung.
+The activation is taken back as well. `systemctl --user enable --now` is a
+call with two steps: it creates the links and then starts. The links lie in
+the user's unit directory, also for the package's units:
+`default.target.wants/humanitld.service` and for the package instead
+`sockets.target.wants/humanitld.socket`. If the start fails, they would remain
+in place without this rollback, and the service would start at the next
+login, even though the command aborted with `DAEMON_008`. Only the links this
+call created are removed: whoever had activated the service before keeps the
+activation.
 
-**Maßgeblich ist das Verzeichnis des systemd-Verwalters** (HUM-217). Die
-Kommandozeile schreibt die Unit unter ihr eigenes `XDG_CONFIG_HOME`; steht die
-Variable nur in der Shell-rc, sucht der Verwalter woanders. Deshalb fragt der
-Befehl nach `daemon-reload` mit `systemctl --user show -p FragmentPath
-humanitld.service`, aus welcher Datei systemd die Unit lädt. Ist es nicht die
-geschriebene, geht sie zurück, bevor `enable` einen Verweis anlegt, und
-`DAEMON_008` nennt beide Verzeichnisse; der Vorschlag `systemctl --user show
--p UnitPath` zeigt, wo der Verwalter sucht. Sagt systemd zu `FragmentPath`
-nichts, entscheiden diese Suchpfade (`systemctl --user show -p UnitPath`):
-Steht das Verzeichnis der Unit nicht darunter, ist das derselbe Befund. Unter
-`--no-start` gilt dieselbe Prüfung über die Suchpfade, ohne dass systemd etwas
-neu liest. Gibt systemd auf beides keine Antwort, gilt die Unit nicht als
-geprüft und geht ebenso zurück; nur wenn `systemctl` den Bus der Sitzung gar
-nicht erreicht, bleibt sie unter `--no-start` liegen, denn dieser Weg braucht
-keine Sitzung. Vor `enable` merkt sich der Befehl mit `systemctl --user
-is-enabled`, welche Units schon dauerhaft aktiviert waren (eine Aktivierung
-nur unter `/run` zählt nicht), und meldet nach einem Fehlschlag die übrigen
-mit `systemctl --user disable` ab, auch nach einem gescheiterten Neustart:
-systemd nimmt die Verweise dort weg, wo der Verwalter sie angelegt hat. Die
-Suche im eigenen Unit-Verzeichnis bleibt als Rückfall. Sagt `is-enabled` zu
-einer Unit nichts, aktiviert der Befehl nicht und nimmt die Unit zurück.
+**What counts is the directory of the systemd manager** (HUM-217). The
+command line writes the unit under its own `XDG_CONFIG_HOME`; if the variable
+is only set in the shell rc, the manager looks elsewhere. That is why, after
+`daemon-reload`, the command asks with `systemctl --user show -p FragmentPath
+humanitld.service` which file systemd loads the unit from. If it is not the
+one written, the unit goes back before `enable` creates a link, and
+`DAEMON_008` names both directories; the suggestion `systemctl --user show
+-p UnitPath` shows where the manager looks. If systemd says nothing about
+`FragmentPath`, these search paths decide (`systemctl --user show -p UnitPath`):
+if the unit's directory is not among them, that is the same Diagnostic. Under
+`--no-start` the same check over the search paths applies, without systemd
+rereading anything. If systemd gives no answer to either, the unit counts as
+unchecked and goes back as well; only if `systemctl` does not reach the
+session bus at all does it stay under `--no-start`, because this path needs
+no session. Before `enable`, the command notes with `systemctl --user
+is-enabled` which units were already permanently enabled (an activation
+only under `/run` does not count), and after a failure it disables the others
+with `systemctl --user disable`, also after a failed restart: systemd removes
+the links where the manager created them. The search in the own unit
+directory remains as a fallback. If `is-enabled` says nothing about a unit,
+the command does not activate and takes the unit back.
 
-Die Härtung der Unit ist gemessen und nicht behauptet (HUM-044, gehärtet in
-HUM-053). Die Escape-Tests laufen unter genau ihren `[Service]`-Zeilen mit 124
-von 124 Fällen grün. Die Zeilen, die dafür stehen müssen:
+The hardening of the unit is measured, not claimed (HUM-044, hardened in
+HUM-053). The escape tests run green under exactly its `[Service]` lines with
+124 of 124 cases. The lines that must be there for this:
 `SystemCallFilter=@system-service @mount @sandbox sethostname` —
-`@mount`, weil `bubblewrap` mountet und `pivot_root`t; `@sandbox`, weil der
-Filter einer Unit an jedes Kind vererbt wird und `humanitl-shim` seinen eigenen
-seccomp-Filter mit `seccomp(2)` installiert (ohne den Aufruf stirbt der Shim an
-`SIGSYS`, bevor die dritte Sandbox-Garantie steht; auf systemd 262 enthielte
-`@system-service` ihn über `@default` auch so, aber das steht in keiner Zeile
-von `systemd.exec(5)`); `sethostname`, weil `bubblewrap` den UTS-Namensraum
-der Sandbox `sandbox` nennt und sonst mit „Can't set hostname to sandbox"
-abbricht. `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK` —
-ohne `AF_NETLINK` bringt `bubblewrap` `lo` im Namensraum nicht hoch
-(„loopback: Failed to create NETLINK_ROUTE socket"), und ohne `lo` gibt es
-keine Brücke vom Shim zum Proxy. Dazu `NoNewPrivileges`, `ProtectSystem=strict`,
-`PrivateUsers`, `ProtectProc=invisible`, `CapabilityBoundingSet=CAP_SYS_ADMIN`
-und weitere; jede Zeile, auch jede mit Absicht fehlende, steht mit ihrem
-Grund in `docs/INSTALL.md#hardening`, und `systemd-analyze security` bewertet
-die Unit mit 3,7. Jeder Pfad in `ReadWritePaths` trägt ein `-`, weil systemd
-eine Unit mit einem nicht vorhandenen Pfad darin gar nicht erst startet und auf
-einer frischen Installation keiner der drei existiert. Gemessen am 2026-09-18
-auf Debian 14 mit bubblewrap 0.12.0 und systemd 262.
+`@mount`, because `bubblewrap` mounts and calls `pivot_root`; `@sandbox`,
+because the filter of a unit is inherited by every child and `humanitl-shim`
+installs its own seccomp filter with `seccomp(2)` (without the call the shim
+dies of `SIGSYS` before the third sandbox guarantee is in place; on systemd 262
+`@system-service` would contain it via `@default` anyway, but that is not
+written in any line of `systemd.exec(5)`); `sethostname`, because `bubblewrap`
+names the UTS namespace of the sandbox `sandbox` and otherwise aborts with
+"Can't set hostname to sandbox". `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK` —
+without `AF_NETLINK` `bubblewrap` does not bring up `lo` in the namespace
+("loopback: Failed to create NETLINK_ROUTE socket"), and without `lo` there is
+no bridge from the shim to the proxy. In addition `NoNewPrivileges`,
+`ProtectSystem=strict`, `PrivateUsers`, `ProtectProc=invisible`,
+`CapabilityBoundingSet=CAP_SYS_ADMIN` and more; every line, also every one
+deliberately missing, is listed with its reason in
+`docs/INSTALL.md#hardening`, and `systemd-analyze security` rates the unit at
+3.7. Every path in `ReadWritePaths` carries a `-`, because systemd does not
+even start a unit with a non-existent path in it, and on a fresh installation
+none of the three exists. Measured on 2026-09-18 on Debian 14 with bubblewrap
+0.12.0 and systemd 262.
 
-**`PrivateTmp=yes` hat eine Folge, die man kennen muss: Ein Projektordner
-unter `/tmp` funktioniert nicht.** Die Unit gibt dem Daemon ein eigenes,
-privates `/tmp`; das `/tmp` der Anmeldesitzung sieht er nicht. Ein Ordner wie
-`/tmp/repo` ist für ihn deshalb nicht vorhanden, `bwrap` kann ihn nicht
-einhängen, und der Start endet mit `SANDBOX_005` und dem Satz
-„sandbox.work_dir /tmp/repo does not exist", obwohl der Ordner im Terminal
-danebensteht. Dasselbe gilt für alles unter `/var/tmp`. Wer ein Projekt aus
-`/tmp` heraus moderieren will, legt es an eine bleibende Stelle — unter `$HOME`
-oder irgendwo sonst außerhalb von `/tmp` — oder startet den Daemon von Hand
-(`humanitld`) statt über die Unit. Die Zeile bleibt trotzdem in der Unit: Ein
-gemeinsames `/tmp` ist der Weg, auf dem ein anderer Prozess des Nutzers dem
-Daemon eine Datei unterschiebt, und ein Projektordner in einem Verzeichnis, das
-beim nächsten Start verschwindet, ist ohnehin kein Ort für Arbeit.
+**`PrivateTmp=yes` has a consequence you need to know: a project folder under
+`/tmp` does not work.** The unit gives the daemon its own private `/tmp`; it
+does not see the `/tmp` of the login session. A folder like `/tmp/repo`
+therefore does not exist for it, `bwrap` cannot mount it, and the start ends
+with `SANDBOX_005` and the sentence
+"sandbox.work_dir /tmp/repo does not exist", although the folder is right
+there in the terminal. The same applies to everything under `/var/tmp`.
+Whoever wants to moderate a project out of `/tmp` puts it in a lasting place —
+under `$HOME` or anywhere else outside `/tmp` — or starts the daemon by hand
+(`humanitld`) instead of through the unit. The line stays in the unit anyway: a
+shared `/tmp` is the way another process of the user slips the daemon a file,
+and a project folder in a directory that disappears at the next start is no
+place for work in any case.
 
 ## `humanitl daemon uninstall`
 
-Das Gegenstück zu `daemon install` (HUM-077): meldet den Dienst ab und nimmt
-weg, was `daemon install` angelegt hat.
+The counterpart to `daemon install` (HUM-077): disables the service and
+removes what `daemon install` created.
 
 ```
 humanitl daemon uninstall [--purge-binaries]
 ```
 
-**Erst abmelden, dann entfernen.** Zuerst läuft `systemctl --user disable
---now` für die Units, die es gibt: `humanitld.service`, wenn die Unit mit der
-Marke unter `~/.config/systemd/user/` liegt, beim Paket
-`humanitld.socket humanitld.service`, auch wenn `daemon install` seit HUM-164
-nur den Socket aktiviert: Ein früherer Lauf hat den Dienst mit aktiviert.
-Scheitert der Aufruf, ist noch nichts
-entfernt, und der Befund `DAEMON_014` nennt genau diesen Aufruf zum Kopieren;
-findet `systemctl` den Bus der Sitzung nicht, ist es `DAEMON_010`. Danach
-gehen:
+**Disable first, then remove.** First `systemctl --user disable
+--now` runs for the units that exist: `humanitld.service` if the unit with the
+marker lies under `~/.config/systemd/user/`, for the package
+`humanitld.socket humanitld.service`, even though `daemon install` has
+activated only the socket since HUM-164: an earlier run activated the service
+as well.
+If the call fails, nothing has been
+removed yet, and the Diagnostic `DAEMON_014` names exactly this call for
+copying; if `systemctl` does not find the session bus, it is `DAEMON_010`.
+Then these go:
 
-- jeder Verweis der Aktivierung unter `~/.config/systemd/user/*.wants/` und
-  `*.requires/` für diese Units (ohne `systemctl` entfernt der Befehl sie
-  selbst, sonst die Reste, die `disable` übrig ließ);
-- die Unit `~/.config/systemd/user/humanitld.service`, nur wenn sie die Marke
-  trägt;
-- der Socket `$XDG_RUNTIME_DIR/humanitl/daemon.sock`, nur wenn es ein Socket
-  ist und niemand mehr an ihm lauscht. Antwortet dort noch ein Daemon, den
-  jemand von Hand gestartet hat, bleibt er unberührt;
-- mit `--purge-binaries` die Kopien aus einem AppImage: der Verweis
-  `~/.local/lib/humanitl/current`, liegengebliebene Zwischenverweise
-  `current.tmp-*` und jedes eigene Verzeichnis der Form
-  `<version>.<stempel>`, danach `~/.local/lib/humanitl` selbst, wenn es leer
-  ist. Was anders heißt, ein Verweis ist oder einem anderen Konto gehört,
-  bleibt liegen. Die Kopien gehen erst hier, weil erst jetzt kein Dienst mehr
-  aus ihnen läuft.
+- every activation link under `~/.config/systemd/user/*.wants/` and
+  `*.requires/` for these units (without `systemctl` the command removes them
+  itself, otherwise the remnants that `disable` left behind);
+- the unit `~/.config/systemd/user/humanitld.service`, only if it carries the
+  marker;
+- the socket `$XDG_RUNTIME_DIR/humanitl/daemon.sock`, only if it is a socket
+  and nobody is listening on it any more. If a daemon that someone started by
+  hand still answers there, it stays untouched;
+- with `--purge-binaries` the copies from an AppImage: the link
+  `~/.local/lib/humanitl/current`, leftover intermediate links
+  `current.tmp-*` and every own directory of the form
+  `<version>.<stamp>`, then `~/.local/lib/humanitl` itself if it is empty.
+  Whatever is named differently, is a link or belongs to another account
+  stays behind. The copies go only here, because only now does no service run
+  from them any more.
 
-Antwortet nach dem Abmelden noch ein Daemon am Socket, etwa einer, den
-jemand von Hand gestartet hat, entfernt `--purge-binaries` nichts: Er läuft
-womöglich aus genau diesen Kopien. Der Befund ist `DAEMON_014` mit dem
-Vorschlag `pkill -x humanitld`.
+If after disabling a daemon still answers on the socket, for instance one that
+someone started by hand, `--purge-binaries` removes nothing: it may be running
+from exactly these copies. The Diagnostic is `DAEMON_014` with the
+suggestion `pkill -x humanitld`.
 
-Danach `daemon-reload` und `reset-failed`, deren Ergebnis nicht zählt.
-Bleibt etwas stehen, endet der Befehl mit `DAEMON_014` und nennt jeden Pfad,
-der blieb.
+Then `daemon-reload` and `reset-failed`, whose result does not count.
+If something remains, the command ends with `DAEMON_014` and names every path
+that remained.
 
-**Nie über fremdes Eigentum.** Eine Unit ohne die Marke hat Humanitl nicht
-geschrieben; der Befehl meldet nichts ab, entfernt nichts und endet mit
-`DAEMON_005`. Die Units des Pakets unter `/usr/lib/systemd/user/` werden
-abgemeldet, bleiben aber liegen, bis das Paket geht
-(`sudo apt remove humanitl`); eine Notiz sagt das. Konfiguration,
-Aufzeichnung und Audit-Log bleiben ebenfalls liegen, sie gehören dem Menschen.
+**Never over someone else's property.** Humanitl did not write a unit without
+the marker; the command disables nothing, removes nothing and ends with
+`DAEMON_005`. The package's units under `/usr/lib/systemd/user/` are
+disabled but stay in place until the package goes
+(`sudo apt remove humanitl`); a note says so. Configuration,
+recording and audit log stay in place as well; they belong to the human.
 
-Ohne Unit und ohne Kopie endet der Befehl mit 0 und `activation: nothing`.
-Die Ausgabe nennt `unit`, `units`, `activation` (`disabled`, `no systemctl`,
-`nothing`), `removed`, `binaries` und unter `--json` `package`, den Pfad der
-Dienst-Unit des Pakets oder `null`.
+Without a unit and without a copy, the command ends with 0 and
+`activation: nothing`. The output names `unit`, `units`, `activation`
+(`disabled`, `no systemctl`, `nothing`), `removed`, `binaries` and under
+`--json` `package`, the path of the package's service unit or `null`.
 
-Danach zeigt `humanitl doctor` in der Zeile `daemon` den Befund `DOCTOR_006`
-mit dem Vorschlag `InstallService`, also `humanitl daemon install`: Ohne
-erreichbaren Daemon schlägt der Doctor den Weg vor, der den Dienst auf Dauer
-einrichtet, und nicht `humanitld` im Vordergrund eines Terminals.
+Afterwards `humanitl doctor` shows the Diagnostic `DOCTOR_006` in the line
+`daemon`, with the suggestion `InstallService`, that is `humanitl daemon install`:
+without a reachable daemon the doctor suggests the path that sets up the
+service permanently, and not `humanitld` in the foreground of a terminal.
 
 ## `humanitl daemon status`
 
-Fragt den Daemon, wer er ist.
+Asks the daemon who it is.
 
 ```
 humanitl daemon status [--json]
@@ -655,48 +656,48 @@ session       7b1c…
 capabilities  hold, rules, sandbox
 ```
 
-`socket` ist der Pfad, an dem der Client sucht; `unit` ist die Antwort von
-`systemctl --user is-active humanitld.service` und steht als `-`, wenn es kein
-`systemctl` gibt — ein Daemon, den jemand von Hand gestartet hat, ist kein
-Fehler, und ein erfundenes `inactive` wäre eine falsche Auskunft über eine
-Unit, die niemand installiert hat. Alles Übrige kommt aus `GetInfo` und wird
-nicht ergänzt.
+`socket` is the path where the client looks; `unit` is the answer of
+`systemctl --user is-active humanitld.service` and shows as `-` if there is no
+`systemctl` — a daemon that someone started by hand is not an error, and an
+invented `inactive` would be false information about a unit nobody
+installed. Everything else comes from `GetInfo` and is not
+supplemented.
 
-Antwortet niemand, endet der Befehl mit **2** und `DAEMON_001`; spricht der
-Daemon eine andere Hauptversion des Vertrags, ebenfalls mit 2 und
-`DAEMON_002`. Ein Skript, das auf den Dienst wartet, fragt also nur diese eine
-Zahl ab.
+If nobody answers, the command ends with **2** and `DAEMON_001`; if the daemon
+speaks a different major version of the contract, likewise with 2 and
+`DAEMON_002`. A script waiting for the service therefore checks only this one
+number.
 
 ## `humanitl daemon logs`
 
-Reicht das Journal des Dienstes durch.
+Passes the service's journal through.
 
 ```
 humanitl daemon logs [-f] [-n N]
 ```
 
-Der Befehl startet `journalctl --user -u humanitld.service` als Kind und gibt
-ihm das eigene Terminal. `-n N` und `-f` gehen unverändert weiter. Endet
-`journalctl` mit 0, endet der Befehl mit 0, sonst mit 1: Eine 2 oder 4 von
-`journalctl` hieße hier „Daemon nicht erreichbar" oder
-„Sicherheitsverletzung", und beides wäre falsch. Einen eigenen Leser für Journal-Einträge gibt es nicht: Er
-wäre eine zweite Quelle für dieselbe Wahrheit, mit eigenen Formaten und eigenen
-Fehlern.
+The command starts `journalctl --user -u humanitld.service` as a child and gives
+it its own terminal. `-n N` and `-f` are passed on unchanged. If
+`journalctl` ends with 0, the command ends with 0, otherwise with 1: a 2 or 4 from
+`journalctl` would mean "daemon not reachable" or
+"security violation" here, and both would be wrong. There is no reader of its own for journal entries: it
+would be a second source for the same truth, with its own formats and its own
+errors.
 
-Weil das Kind schreibt, hat `--json` hier keine Wirkung; wer JSON-Zeilen will,
-bekommt sie von `journalctl` selbst (`humanitl daemon logs -- -o json` gibt es
-nicht, dafür ruft man `journalctl --user -u humanitld.service -o json` direkt).
+Because the child writes, `--json` has no effect here; whoever wants JSON lines
+gets them from `journalctl` itself (`humanitl daemon logs -- -o json` does not
+exist; for that you call `journalctl --user -u humanitld.service -o json` directly).
 
-Fehlt `XDG_RUNTIME_DIR`, endet der Befehl mit `DAEMON_010` und dem einzig
-sinnvollen Vorschlag: `loginctl enable-linger $USER`. Über SSH ohne Linger gibt
-es keine Nutzersitzung, in der ein Nutzerdienst leben könnte, und damit auch
-kein Journal. Liegt kein `journalctl` im `PATH`, fehlt dagegen ein Programm und
-keine Sitzung: `DAEMON_012` mit `sudo apt-get install systemd`.
+If `XDG_RUNTIME_DIR` is missing, the command ends with `DAEMON_010` and the only
+sensible suggestion: `loginctl enable-linger $USER`. Over SSH without linger
+there is no user session in which a user service could live, and therefore no
+journal either. If there is no `journalctl` in the `PATH`, on the other hand, a
+program is missing and not a session: `DAEMON_012` with `sudo apt-get install systemd`.
 
 ## `humanitl config`
 
-Die aufgelöste Konfiguration lesen, einen Wert schreiben, das Schema ausgeben,
-die Datei von Hand öffnen.
+Read the resolved configuration, write a value, print the schema,
+open the file by hand.
 
 ```
 humanitl config get [KEY] [--origin] [--json]
@@ -707,7 +708,7 @@ humanitl config edit
 
 ### `config get`
 
-Ohne `KEY` steht jedes Blattfeld als Zeile da:
+Without `KEY`, every leaf field is shown as a line:
 
 ```
 $ humanitl config get --origin
@@ -718,89 +719,86 @@ llm.endpoint           -        default
 sandbox.work_mode      rw       config.toml
 ```
 
-Ohne `--origin` bleibt die dritte Spalte weg, damit die Tabelle in ein Terminal
-passt; mit `--json` steht sie immer, dort kostet eine Spalte keine Breite.
+Without `--origin` the third column is left out so that the table fits into a
+terminal; with `--json` it is always there, since a column costs no width there.
 
-Mit `KEY` steht auf `stdout` nur der Wert — `$(humanitl config get
-hold.timeout_secs)` ist damit die Zahl und nicht ein Satz darüber. Welche Ebene
-ihn gesetzt hat, geht auf `stderr`; in eine Pipe gerät sie nicht.
+With `KEY`, only the value is on `stdout` — `$(humanitl config get
+hold.timeout_secs)` is thus the number and not a sentence about it. Which layer
+set it goes to `stderr`; it does not end up in a pipe.
 
-Aufgelöst wird lokal, über dieselben sieben Ebenen, die der Daemon beim Start
-fährt (ADR-011). Ein laufender Daemon kann Werte tragen, die nur er kennt —
-`hold.timeout_secs` aus einer Sitzung etwa —; was hier steht, ist die
-Auflösung dieses Aufrufs.
+Resolution happens locally, over the same seven layers the daemon runs through
+at start (ADR-011). A running daemon can hold values only it knows —
+`hold.timeout_secs` from a session, for instance —; what is shown here is the
+resolution of this call.
 
 ### `config set`
 
-Der Wert wird nach dem Typ des Schemas gelesen:
+The value is read according to the schema's type:
 
-| Feld | Eingabe | steht in der Datei als |
+| Field | Input | stands in the file as |
 |---|---|---|
 | `hold.timeout_secs` | `5m` | `300` |
 | `limits.hold_body_cap_bytes` | `32MiB` | `33554432` |
 | `findings.enabled` | `true` | `true` |
 | `ui.theme` | `dark` | `"dark"` |
-| `llm.passthrough_paths` | `'["/v1/","/api/"]'` | die Liste |
-| `sandbox.env` | `'{"FOO":"bar"}'` | die Tabelle |
-| `llm.endpoint` | `null` oder `-` | nichts: der Schlüssel geht, der Vorgabewert gilt |
+| `llm.passthrough_paths` | `'["/v1/","/api/"]'` | the list |
+| `sandbox.env` | `'{"FOO":"bar"}'` | the table |
+| `llm.endpoint` | `null` or `-` | nothing: the key goes, the default applies |
 
-Ein Wert, der mit `-` beginnt, ist ein Wert und kein Flag
-(`humanitl config set hold.timeout_secs -5m` wird gelesen und abgelehnt, nicht
-als unbekannte Option).
+A value that starts with `-` is a value and not a flag
+(`humanitl config set hold.timeout_secs -5m` is read and rejected, not
+treated as an unknown option).
 
-Eine Dauer nimmt `s`, `m`, `h` und `d`, eine Größe `KiB`, `MiB`, `GiB` und die
-Formen ohne `i`. Beides gilt nur für Felder, deren Name darauf endet (`_secs`,
-`_ms`, `_bytes`); das Schema selbst kennt keine Einheiten.
+A duration takes `s`, `m`, `h` and `d`, a size `KiB`, `MiB`, `GiB` and the
+forms without `i`. Both apply only to fields whose name ends accordingly
+(`_secs`, `_ms`, `_bytes`); the schema itself knows no units.
 
 ```
 $ humanitl config set hold.timeout_secs 5m
 hold.timeout_secs = 300 (global)
 ```
 
-Geschrieben wird `$XDG_CONFIG_HOME/humanitl/config.toml` (mit `--config` die
-dort genannte Datei), und zwar über denselben Schreiber, den der Daemon für
-`SetConfig` benutzt (`humanitl_config::edit::set_value`). Dabei gelten vier
-Zusagen:
+What is written is `$XDG_CONFIG_HOME/humanitl/config.toml` (with `--config` the
+file named there), through the same writer the daemon uses for
+`SetConfig` (`humanitl_config::edit::set_value`). Four promises apply:
 
-- **Nur der eine Wert ändert sich.** Das Dokument wird mit `toml_edit`
-  geändert und nicht neu serialisiert; Kommentare, Reihenfolge und
-  Schreibweise bleiben, auch ein Kommentar hinter dem Wert, eine Markierung
-  der Byte-Reihenfolge und Zeilenenden mit CRLF. Eine verlinkte Datei bleibt
-  verlinkt; geändert wird ihr Ziel. Danach wird das Ergebnis noch einmal
-  gelesen und mit der alten Datei samt dem neuen Wert verglichen; weicht es ab,
-  wird nichts geschrieben (`CONFIG_015`).
-- **Nie eine halbe Datei.** Geschrieben wird in eine Nebendatei im selben
-  Verzeichnis, dann `rename`.
-- **Kein Schreiber verliert einen Wert.** Während des Schreibens ist das
-  Verzeichnis der Datei mit `flock` gesperrt; ein zweites `config set` oder
-  ein `SetConfig` des Daemons wartet, statt einen Wert zu überschreiben, den es
-  nie gelesen hat.
-- **Geprüft, bevor es in der Datei steht.** Erst gegen das Schema — Typ,
-  Aufzählung, Grenzen —, dann wird die fertige Nebendatei mit allen übrigen
-  Ebenen geladen, wie der nächste Start sie lädt: Profile, Umgebung und die
-  anderen Werte der Datei. Ein Wert, der für sich richtig ist, aber mit einem
-  anderen nicht zusammenpasst (`limits.hold_body_cap_bytes` über
-  `limits.hold_max_bytes`), landet so nie in der Datei. Die Quellen werden
-  dafür mit der neuen Datei neu bestimmt: `config set sandbox.work_dir` wird
-  mit dem Profil des Projekts geprüft, das es nennt, nicht mit dem des alten.
-  Lädt die Konfiguration schon ohne die Änderung nicht — ein anderer Wert der
-  Datei, eine Umgebungsvariable wie `HUMANITL_HOLD__TIMEOUT_SECS=0` —, zählt
-  `config set` alle Befunde vorher und nachher: Die Ladung meldet nur ihren
-  ersten, also nimmt die Prüfung den Schlüssel jedes Befunds aus Datei,
-  Projekt-Profil und Umgebung und lädt neu. Geschrieben wird, wenn der neue
-  Wert keinen Befund mitbringt, den es vorher nicht gab, und keiner den
-  gesetzten Schlüssel nennt; auf `stderr` steht dann, dass die Konfiguration
-  weiter nicht lädt. Derselbe Befund heißt gleicher Code, gleicher Schlüssel
-  und gleiche Begründung: Verschiebt der neue Wert die Schranke eines alten
-  Befunds (`limits.hold_max_bytes` neu gesetzt, während
-  `limits.hold_body_cap_bytes` schon darüber lag), ist das ein neuer Befund. So lässt sich eine Datei mit zwei falschen Werten
-  Schlüssel für Schlüssel reparieren, und ein älterer Fehler verdeckt keinen
-  neuen. Ein Befund, der keinen Schlüssel nennt (ein unbekannter Schlüssel in
-  der Datei, ein Profil, das nicht lädt), lässt sich so nicht zählen; dann
-  wird nicht geschrieben, und der Vorschlag ist `humanitl config edit`, nie ein
-  Wert aus einer anderen Ebene. Ein Wert, der schon genau so dasteht, wird
-  ebenso geprüft; stand er falsch da, endet `config set` mit dem Befund. Ein Wert, der nicht passt, ist `CONFIG_003` und Exit 1, und die Datei
-  bleibt unberührt:
+- **Only the one value changes.** The document is changed with `toml_edit`
+  and not serialised anew; comments, order and notation stay, including a
+  comment behind the value, a byte order mark and CRLF line endings. A linked
+  file stays linked; its target is changed. Afterwards the result is read
+  once more and compared with the old file plus the new value; if it differs,
+  nothing is written (`CONFIG_015`).
+- **Never half a file.** Writing goes to a side file in the same directory,
+  then `rename`.
+- **No writer loses a value.** While writing, the file's directory is locked
+  with `flock`; a second `config set` or a `SetConfig` of the daemon waits
+  instead of overwriting a value it never read.
+- **Checked before it is in the file.** First against the schema — type,
+  enumeration, bounds —, then the finished side file is loaded with all other
+  layers, the way the next start loads it: profiles, environment and the
+  other values of the file. A value that is correct on its own but does not
+  fit together with another (`limits.hold_body_cap_bytes` above
+  `limits.hold_max_bytes`) thus never ends up in the file. The sources are
+  determined anew with the new file for this: `config set sandbox.work_dir` is
+  checked with the profile of the project it names, not with that of the old
+  one. If the configuration already does not load without the change —
+  another value of the file, an environment variable such as
+  `HUMANITL_HOLD__TIMEOUT_SECS=0` —, `config set` counts all Diagnostics before
+  and after: loading reports only its first one, so the check takes the key of
+  each Diagnostic out of file, project profile and environment and loads again.
+  The value is written if the new value brings no Diagnostic that did not
+  exist before and none names the key being set; `stderr` then says that the
+  configuration still does not load. The same Diagnostic means same code, same
+  key and same reason: if the new value moves the bound of an old Diagnostic
+  (`limits.hold_max_bytes` newly set while `limits.hold_body_cap_bytes` was
+  already above it), that is a new Diagnostic. This way a file with two wrong
+  values can be repaired key by key, and an older error does not hide any
+  new one. A Diagnostic that names no key (an unknown key in the file, a
+  profile that does not load) cannot be counted this way; then nothing is
+  written, and the suggestion is `humanitl config edit`, never a value from
+  another layer. A value that is already there exactly like this is
+  checked as well; if it was wrong, `config set` ends with the Diagnostic. A value that does not fit is `CONFIG_003` and exit 1, and the file
+  stays untouched:
 
 ```
 $ humanitl config set hold.ask_mode banana
@@ -810,65 +808,64 @@ error[CONFIG_003]: Wert außerhalb des Bereichs
   docs: https://github.com/nurkert/Humanitl/blob/main/docs/DIAGNOSTICS.md#config_003
 ```
 
-Jeder Vorschlag ist ein Befehl, der gelingt: bei einer Aufzählung ihr erster
-Wert, sonst der Vorgabewert des Feldes (bei `-5m` für `hold.timeout_secs` also
-`300`, nicht die Grenze `0`, die die Prüfung ebenso ablehnte), und Listen oder
-Tabellen darin stehen in einfachen Anführungszeichen.
+Every suggestion is a command that succeeds: for an enumeration its first
+value, otherwise the field's default (for `-5m` on `hold.timeout_secs` that is
+`300`, not the bound `0`, which the check would reject as well), and lists or
+tables in it stand in single quotes.
 
-Steht der Wert schon so da, wird nicht geschrieben; `--json` sagt dann
+If the value is already there like this, nothing is written; `--json` then says
 `"written": "unchanged"`.
 
-Auf `stderr` steht danach, wann der neue Wert wirkt: Läuft ein Daemon,
-übernimmt er ihn beim nächsten Start; läuft keiner, liest er ihn, sobald er
-startet. Beides ist richtig, und deshalb sagt die Ausgabe, welcher Fall
-vorliegt.
+Afterwards `stderr` says when the new value takes effect: if a daemon is
+running, it picks it up at its next start; if none is running, it reads it as
+soon as it starts. Both are correct, and that is why the output says which
+case applies.
 
-`--project` schreibt statt dessen in `<projekt>/.humanitl/profile.toml` unter
-`[config]`. Das geht nur für Schlüssel, die das Projekt-Profil setzen darf:
-Diese Datei liegt im geklonten Repository und ist fremder Text, und ein
-gesperrter Schlüssel ist dort `CONFIG_003` — dieselbe Grenze, an der auch der
-Start eine solche Datei zurückweist (`backlog/CONVENTIONS.md` 4.11). Die
-Grenze wird vor allem anderen geprüft: Wer einen gesperrten Schlüssel ins
-Projekt schreiben will, erfährt die Grenze und nicht, dass sein Wert falsch
-geschrieben ist.
+`--project` writes instead into `<project>/.humanitl/profile.toml` under
+`[config]`. That works only for keys the project profile may set: this file
+lies in the cloned repository and is foreign text, and a locked key there is
+`CONFIG_003` — the same boundary at which the start also rejects such a file
+(`backlog/CONVENTIONS.md` 4.11). The boundary is checked before anything else:
+whoever wants to write a locked key into the project learns about the boundary
+and not that their value is spelled wrong.
 
 ### `config schema`
 
-Gibt das JSON-Schema aus, immer als JSON; ohne `--json` eingerückt. Jedes
-Blattfeld trägt `description`, `x-tier` (die Sichtbarkeitsstufe des
-Einstellungs-Bildschirms) und `x-project-scope` (die Vertrauensgrenze oben).
-`--profiles` gibt statt dessen die Profile aus, die `--profile` wählen kann.
+Prints the JSON schema, always as JSON; without `--json` indented. Every leaf
+field carries `description`, `x-tier` (the visibility tier of the settings
+screen) and `x-project-scope` (the trust boundary above).
+`--profiles` instead prints the profiles that `--profile` can choose.
 
 ### `config edit`
 
-Öffnet `config.toml` in `$VISUAL`, sonst `$EDITOR`, sonst `nano`, sonst `vi`,
-und prüft die Datei nach dem Schließen: erst, ob sie TOML ist, dann, ob sie
-sich auflösen lässt. Geht das nicht, steht der Befund da, und an einem Terminal
-folgt die einzige interaktive Frage dieser Kommandozeile — „open it again?
-[y/N]". Ohne Terminal und unter `--json` gibt es keine Frage; dann endet der
-Befehl mit dem Befund und Exit 1. Der Befund steht in jedem Fall genau einmal
-da, unter `--json` als ein Objekt. Findet sich kein Editor, ist das
-`CONFIG_017` mit dem Vorschlag `export EDITOR=nano`.
+Opens `config.toml` in `$VISUAL`, otherwise `$EDITOR`, otherwise `nano`,
+otherwise `vi`, and checks the file after it is closed: first whether it is
+TOML, then whether it can be resolved. If that fails, the Diagnostic is shown,
+and at a terminal the only interactive question of this command line follows —
+"open it again? [y/N]". Without a terminal and under `--json` there is no
+question; then the command ends with the Diagnostic and exit 1. The Diagnostic
+is shown exactly once in every case, under `--json` as one object. If no
+editor is found, that is `CONFIG_017` with the suggestion `export EDITOR=nano`.
 
 ## `humanitl audit`
 
-Die Hash-Kette prüfen und die Records exportieren.
+Check the hash chain and export the records.
 
 ```
 humanitl audit verify [--file PATH] [--json]
 humanitl audit export --format jsonl|csv --out FILE [--since TS] [--until TS] [--file PATH]
 ```
 
-### Was `verify` beweist und was nicht
+### What `verify` proves and what it does not
 
-Die Kette zeigt eine Änderung, Löschung oder Umordnung vor dem letzten Anker,
-solange der Angreifer den HMAC-Schlüssel nicht hat (`docs/SECURITY.md`, „Was
-die Audit-Kette beweist"). Diese Aussage hängt an drei Dingen: der Kette
-selbst, den MACs und den Ankern. Alle drei hat nur der Daemon — den Schlüssel
-aus dem Schlüsselspeicher, die Anker aus der Tabelle `audit_anchors`.
+The chain shows a change, deletion or reordering before the last anchor, as
+long as the attacker does not have the HMAC key (`docs/SECURITY.md`, "What
+the chain proves"). This statement depends on three things: the chain
+itself, the MACs and the anchors. Only the daemon has all three — the key
+from the key store, the anchors from the table `audit_anchors`.
 
-Deshalb fragt der Befehl zuerst den Daemon (HUM-156). Der prüft jeden Record
-mit seinem Schlüssel und gegen die Anker und sagt das:
+That is why the command asks the daemon first (HUM-156). It checks every record
+with its key and against the anchors and says so:
 
 ```
 $ humanitl audit verify
@@ -881,14 +878,14 @@ warnings:    unanchored tail: 13 records
 checked by:  daemon
 ```
 
-Der Kopf ist derselbe Hash, den der Audit-Screen der Oberfläche zeigt: Beide
-fragen denselben Daemon, und der bringt vor jeder Antwort alles auf die
-Platte, was er bis dahin geschrieben hat.
+The head is the same hash that the audit screen of the interface shows: both
+ask the same daemon, and before every answer it flushes to disk everything it
+has written up to then.
 
-Antwortet **kein** Daemon — keiner erreichbar, keiner, der das Token annimmt,
-oder einer, der `Audit` noch nicht kennt —, prüft die Kommandozeile die Datei
-selbst, und das ist die **schwächere** Prüfung: Kette und kanonische Form,
-aber keine MACs und keine Anker. Die Ausgabe sagt das, in jeder Fassung:
+If **no** daemon answers — none reachable, none that accepts the token, or one
+that does not know `Audit` yet —, the command line checks the file itself, and
+that is the **weaker** check: chain and canonical form, but no MACs and no
+anchors. The output says so, in every format:
 
 ```
 $ humanitl audit verify
@@ -901,22 +898,22 @@ warnings:    the daemon is not reachable (cannot stat the session token /run/use
 checked by:  file:/home/nik/.local/share/humanitl/audit/audit.jsonl
 ```
 
-Die erste Warnung sagt, warum die Datei geprüft wurde: „is not reachable",
-wenn kein Daemon da ist, „does not answer Audit", wenn ein älterer Daemon den
-Aufruf nicht kennt. Der Rest der Datei-Prüfung kennt keine Anker, also zählt
-jeder Record als unverankert.
+The first warning says why the file was checked: "is not reachable" if no
+daemon is there, "does not answer Audit" if an older daemon does not know the
+call. The rest of the file check knows no anchors, so every record counts as
+unanchored.
 
-Ein Daemon, der antwortet und **ablehnt** — sein Log oder seine Anker sind
-nicht lesbar, oder er läuft ohne Audit-Log (`IPC_006`) —, bekommt keine
-Datei-Prüfung als Ersatz. Sein Befund steht auf `stderr`, und der Befehl
-endet mit dessen Exit-Code: Eine schwächere Antwort, die eine Ablehnung
-überdeckt, wäre die falsche Auskunft.
+A daemon that answers and **refuses** — its log or its anchors are not
+readable, or it runs without an audit log (`IPC_006`) — does not get a file
+check as a substitute. Its Diagnostic is on `stderr`, and the command ends
+with its exit code: a weaker answer that covers up a refusal would be the
+wrong information.
 
-`--file PATH` prüft ausdrücklich diese Datei, ebenfalls ohne Schlüssel und
-Anker — der Weg für ein Log, das von woanders kommt.
+`--file PATH` explicitly checks this file, likewise without key and
+anchors — the way for a log that comes from elsewhere.
 
-Bricht die Kette, endet der Befehl mit **4** (Sicherheitsverletzung nach
-`backlog/CONVENTIONS.md` 3.8), nennt die Stelle und schreibt `AUDIT_001` auf
+If the chain breaks, the command ends with **4** (security violation according
+to `backlog/CONVENTIONS.md` 3.8), names the position and writes `AUDIT_001` to
 `stderr`:
 
 ```
@@ -933,16 +930,16 @@ error[AUDIT_001]: Hash-Kette gebrochen
   docs: https://github.com/nurkert/Humanitl/blob/main/docs/DIAGNOSTICS.md#audit_001
 ```
 
-Die ersten sieben Zeilen stehen auf `stdout`, der Befund auf `stderr`.
+The first seven lines are on `stdout`, the Diagnostic on `stderr`.
 
-Mit `--json` steht alles davon in einem Objekt auf `stdout`, der Befund als
-Feld `diagnostic`; `stderr` bleibt leer. `mode` sagt, welche Prüfung lief:
-`full` beim Daemon mit Schlüssel und Ankern, `file` ohne beides; `hmac` und
-`anchors` sagen dasselbe je Teil (`checked` oder `not_checked`). Beim Daemon
-kommen `anchor_count` und `last_anchor_at` dazu. `head.hash` ist der Hash, den
-der Audit-Screen zeigt; `head.ts` ist der Zeitstempel der Zeile dieses
-Records, Zeichen für Zeichen wie im Log (HUM-162). Nur ein Daemon, der
-`AuditResponse.head_ts` noch nicht kennt, lässt ihn aus; dann steht dort
+With `--json` all of it is in one object on `stdout`, the Diagnostic as the
+field `diagnostic`; `stderr` stays empty. `mode` says which check ran:
+`full` at the daemon with key and anchors, `file` without both; `hmac` and
+`anchors` say the same per part (`checked` or `not_checked`). At the daemon
+`anchor_count` and `last_anchor_at` are added. `head.hash` is the hash the
+audit screen shows; `head.ts` is the timestamp of this record's line,
+character for character as in the log (HUM-162). Only a daemon that does not
+know `AuditResponse.head_ts` yet leaves it out; then it reads
 `null`.
 
 ### `audit export`
@@ -952,113 +949,110 @@ $ humanitl audit export --format csv --out audit.csv
 exported 4213 records to audit.csv
 ```
 
-Den Export schreibt der Daemon, wenn einer antwortet, sonst die
-Kommandozeile selbst; beide nehmen denselben Code (`humanitl_audit_log::export`)
-und schreiben dieselbe Datei. `jsonl` schreibt jede Zeile des Logs wörtlich —
-der Export bleibt damit gegen die Datei nachrechenbar. `csv` schreibt eine
-Kopfzeile und eine Zeile je Record, mit den zwölf Spalten aus HUM-050:
+The daemon writes the export if one answers, otherwise the command line
+itself; both use the same code (`humanitl_audit_log::export`) and write the
+same file. `jsonl` writes every line of the log verbatim — the export thus
+stays verifiable against the file. `csv` writes a header line and one line
+per record, with the twelve columns from HUM-050:
 
 ```
 seq,ts,session,kind,flow,host,method,decision,rule,status,size,hash
 ```
 
-Die acht Spalten zwischen `kind` und `hash` kommen aus `data` und bleiben leer,
-wo der Record das Feld nicht trägt; `flow.decided` etwa nennt weder Host noch
-Methode, die stehen in `flow.received`. `data` als Ganzes steht nur im JSONL.
-Bis HUM-156 schrieb die Kommandozeile acht Spalten (`seq,ts,session,kind,data,
-prev,hash,mac`); die Übersicht der Oberfläche und die der Kommandozeile sind
-seitdem dieselbe.
+The eight columns between `kind` and `hash` come from `data` and stay empty
+where the record does not carry the field; `flow.decided`, for instance, names
+neither host nor method, those are in `flow.received`. `data` as a whole is
+only in the JSONL. Until HUM-156 the command line wrote eight columns
+(`seq,ts,session,kind,data,prev,hash,mac`); the overview of the interface and
+that of the command line have been the same since then.
 
-Felder mit Komma oder Anführungszeichen stehen nach RFC 4180 in
-Anführungszeichen, doppelte Anführungszeichen verdoppelt, und jede Zeile endet
-mit CRLF. JSON-Zeilen enden mit LF, wie im Log.
+Fields with a comma or quotation marks are quoted per RFC 4180, double
+quotation marks doubled, and every line ends with CRLF. JSON lines end with
+LF, as in the log.
 
-Eine Datei, die schon da ist, wird nie überschrieben (`AUDIT_008`): Ein Export
-ist ein Beleg, und ein `--force` gibt es aus demselben Grund nicht wie bei
-`daemon install`. Geschrieben wird in eine Nebendatei, und erst der fertige
-Export bekommt seinen Namen; ein Log mit einer Zeile, die kein Record ist
-(`AUDIT_001`), hinterlässt keine halbe Datei, die den nächsten Versuch
-abwiese. Eine gebrochene Kette exportiert er unverändert, den Bruch meldet
-`humanitl audit verify` (HUM-214). Die
-Nebendatei eines abgebrochenen Exports räumt der nächste Export in dasselbe
-Verzeichnis weg, aber nur, wenn das Verzeichnis dem eigenen Konto gehört und
-weder Gruppe noch andere hineinschreiben dürfen; in einem geteilten
-Verzeichnis bleibt sie liegen. Ein relativer
-`--out` wird vor dem Aufruf beim Daemon gegen das eigene Verzeichnis
-aufgelöst: Der Daemon läuft woanders. Läuft er unter systemd mit
-`PrivateTmp=yes`, hat er ein eigenes `/tmp`; ein Export nach `/tmp` oder
-`/var/tmp` wird dann mit `AUDIT_008` abgelehnt, statt in einem Verzeichnis zu
-landen, das nur der Daemon sieht. Der Daemon legt kein Verzeichnis an und
-schreibt nicht durch einen Verweis im Weg zum Ziel; das Verzeichnis legt die
-Kommandozeile vorher selbst an.
+A file that already exists is never overwritten (`AUDIT_008`): an export is
+evidence, and there is no `--force` for the same reason as with
+`daemon install`. Writing goes to a side file, and only the finished export
+gets its name; a log with a line that is not a record (`AUDIT_001`) leaves no
+half file behind that would turn away the next attempt. A broken chain is
+exported unchanged; the break is reported by `humanitl audit verify`
+(HUM-214). The side file of an aborted export is cleaned up by the next export
+into the same directory, but only if the directory belongs to the own account
+and neither group nor others may write into it; in a shared directory it stays
+behind. A relative `--out` is resolved against the own directory before the
+call to the daemon: the daemon runs elsewhere. If it runs under systemd with
+`PrivateTmp=yes`, it has its own `/tmp`; an export to `/tmp` or `/var/tmp` is
+then rejected with `AUDIT_008` instead of landing in a directory only the
+daemon sees. The daemon creates no directory and does not write through a link
+on the way to the target; the command line creates the directory itself
+beforehand.
 
-`--since` und `--until` nehmen RFC-3339-Zeitpunkte und schneiden halboffen
-(`since` gehört dazu, `until` nicht), damit ein Record nie in zwei
-aufeinanderfolgenden Exporten steht. Sie gehen mit zum Daemon: Der Vertrag
-(`AuditRequest.Export.from` und `.to`) schließt beide Grenzen ein, und weil
-das Log Mikrosekunden schreibt, schickt die Kommandozeile als obere Grenze die
-letzte ganze Mikrosekunde vor `--until`. Das Ergebnis ist dasselbe wie in der
-Fassung über die Datei.
+`--since` and `--until` take RFC 3339 timestamps and cut half-open
+(`since` is included, `until` is not), so that a record never appears in two
+consecutive exports. They are passed on to the daemon: the contract
+(`AuditRequest.Export.from` and `.to`) includes both bounds, and because
+the log writes microseconds, the command line sends as the upper bound the
+last whole microsecond before `--until`. The result is the same as in the
+version that works on the file.
 
-Was in keinem Record steht und damit auch in keinem Export: Bodies,
-Klartext-Werte, die Originale von Pseudonymen — und die Notiz einer
-Entscheidung. Sie steht in der Aufzeichnung (`flows.decision_note`,
-`humanitl flows show`), nicht im Audit-Log (HUM-117).
+What is in no record and therefore in no export either: bodies,
+plain-text values, the originals of pseudonyms — and the note of a
+decision. It is in the recording (`flows.decision_note`,
+`humanitl flows show`), not in the audit log (HUM-117).
 
 ## `humanitl llm discover`
 
-Sucht im eigenen Netz nach Modellservern. Es ist nach `daemon install` der
-zweite Befehl, der über den eigenen Rechner hinausgreift, und deshalb steht
-hier vollständig, was er tut.
+Searches the local network for model servers. After `daemon install` it is the
+second command that reaches beyond your own machine, and that is why what it
+does is described here in full.
 
 ```
 humanitl llm discover [--subnet CIDR] [--port PORT]... [--json]
 ```
 
-**Nur auf Zuruf, und vorher angekündigt.** Ohne diesen Befehl entsteht keine
-einzige Verbindung; die Oberfläche hat denselben Weg hinter einem Knopf mit
-demselben Text. Vor dem ersten Paket geht auf `stderr` eine Zeile heraus, die
-das Netz und die Ports nennt — an der Ausgabesteuerung vorbei, damit auch
-`--json` sie nicht verschluckt.
+**Only when called, and announced beforehand.** Without this command not a
+single connection is made; the interface has the same path behind a button
+with the same text. Before the first packet a line goes out on `stderr` that
+names the network and the ports — bypassing the output control, so that
+`--json` does not swallow it either.
 
-**Im eigenen `/24` und nirgends sonst.** Ohne `--subnet` leitet der Daemon das
-Netz aus der Vorgaberoute ab: Die Routing-Tabelle nennt Schnittstelle und
-Gateway, ein verbundener UDP-Socket (der nichts schickt) nennt die eigene
-Adresse, und daraus wird das `/24` um sie herum. Ein `--subnet`, das weiter ist
-als ein `/24`, wird mit `LLM_008` abgelehnt, bevor irgendetwas verbindet: Ein
-`/16` wären 65 534 Verbindungsversuche in ein Netz, das dem Aufrufer
-vielleicht nicht gehört.
+**In your own `/24` and nowhere else.** Without `--subnet` the daemon derives
+the network from the default route: the routing table names interface and
+gateway, a connected UDP socket (which sends nothing) names your own address,
+and from that comes the `/24` around it. A `--subnet` wider than a `/24` is
+rejected with `LLM_008` before anything connects: a `/16` would be 65 534
+connection attempts into a network that may not belong to the caller.
 
-**Vier Ports, zwei Schritte.** Gefragt werden `11434` (Ollama), `1234`
-(LM Studio), `8000` (vLLM und die meisten Python-Server) und `8080`
-(llama.cpp); `--port` ersetzt diese Liste. Zuerst ein Verbindungsversuch je
-Adresse und Port mit 200 ms Frist, 64 gleichzeitig; für jeden offenen Port
-danach dieselbe Probe wie beim Testknopf: `GET /api/tags`, sonst `GET
-/v1/models`, ohne Zugangsdaten und ohne Weiterleitung. Ein `/24` ohne einen
-einzigen Treffer ist damit in unter vier Sekunden durch.
+**Four ports, two steps.** The ports asked are `11434` (Ollama), `1234`
+(LM Studio), `8000` (vLLM and most Python servers) and `8080`
+(llama.cpp); `--port` replaces this list. First one connection attempt per
+address and port with a 200 ms deadline, 64 at a time; for every open port
+then the same probe as with the test button: `GET /api/tags`, otherwise `GET
+/v1/models`, without credentials and without redirects. A `/24` without a
+single hit is thus done in under four seconds.
 
-**Was in der Liste steht, hat der Server gesagt.** Produkt, Modelle und Latenz
-kommen aus seiner Antwort; die Modellnamen sind gedeckelt und gesäubert wie
-die des Testknopfs. Ein Server, der `401` oder `403` sagt, verschwindet nicht,
-sondern trägt `(auth required)`. Ein Server, der auf einem der Ports horcht,
-aber keine der beiden APIs beantwortet, steht als `unknown` da — er wird
-genannt, nicht verschwiegen und nicht als Modellserver ausgegeben.
+**What is in the list, the server said.** Product, models and latency
+come from its answer; the model names are capped and sanitised like those of
+the test button. A server that says `401` or `403` does not disappear but
+carries `(auth required)`. A server that listens on one of the ports but
+answers neither of the two APIs is shown as `unknown` — it is named, not
+concealed and not passed off as a model server.
 
-**Kein Fluss und keine Warteschlange.** Die Suche läuft im Daemon im Host-Netz,
-nie in der Sandbox. Sie erscheint in keiner Warteschlange und in keiner
-Historie; sie ändert nichts und schreibt nichts.
+**No flow and no queue.** The search runs in the daemon in the host network,
+never in the sandbox. It appears in no queue and in no history; it changes
+nothing and writes nothing.
 
-Der Lauf endet mit `0`, auch wenn nichts geantwortet hat: „nichts gefunden" ist
-ein Ergebnis und kein Fehler. Mit `--json` steht am Ende ein Wert mit
-`servers` und `count`, sonst eine Tabelle, während der Suche je Fund eine
-Zeile auf `stderr`.
+The run ends with `0` even if nothing answered: "nothing found" is a result
+and not an error. With `--json` a value with `servers` and `count` stands at
+the end, otherwise a table, and during the search one line per find on
+`stderr`.
 
 ## `humanitl rules test`
 
-Fragt den geltenden Regelsatz, was mit einer Anfrage geschähe. Ausgewertet wird
-im Daemon, mit derselben Engine wie im Proxy-Pfad (ADR-018): Eine zweite
-Auswertung in der Kommandozeile könnte anders antworten als die, die wirklich
-entscheidet.
+Asks the rule set in force what would happen to a request. Evaluation happens
+in the daemon, with the same engine as in the proxy path (ADR-018): a second
+evaluation in the command line could answer differently than the one that
+really decides.
 
 ```
 humanitl rules test <URL> [--method M] [--upgrade websocket] [--json]
@@ -1067,38 +1061,38 @@ verdict: block
 rule: 018f0000-0000-7000-8000-00000000000a (bundled, position 3)
 ```
 
-Ohne `--method` gilt `GET`. Trifft keine Regel, steht dort
-`rule: none (default ask)`. Die Herkunft — `session`, `user` oder `bundled` —
-kommt aus derselben Antwort wie das Verdikt und nicht aus einem zweiten Aufruf.
+Without `--method`, `GET` applies. If no rule matches, it reads
+`rule: none (default ask)`. The origin — `session`, `user` or `bundled` —
+comes from the same answer as the verdict and not from a second call.
 
-**Der Exit-Code trägt das Verdikt**, damit ein Skript es lesen kann, ohne die
-Zeile zu zerlegen: `allow` endet mit `0`, `block` mit `10`, `ask` mit `11`.
-`redact` endet ebenfalls mit `11`, weil eine solche Anfrage heute gehalten
-wird. Ein Fehlschlag bleibt davon unberührt: eine URL ohne Schema oder mit
-Fragment ist `CLI_004` und Exit `1`, bevor irgendjemand gefragt wird, und ohne
-Daemon endet auch dieses Kommando mit `2`.
+**The exit code carries the verdict**, so that a script can read it without
+parsing the line: `allow` ends with `0`, `block` with `10`, `ask` with `11`.
+`redact` also ends with `11`, because such a request is held today. A failure
+is not affected by this: a URL without a scheme or with a fragment is
+`CLI_004` and exit `1` before anyone is asked, and without a daemon this
+command too ends with `2`.
 
-Mit `--json` steht eine Zeile auf `stdout`, mit `verdict`, `matched`,
-`rule_id`, `origin`, `position` und `passthrough`; der Exit-Code bleibt
-derselbe. `origin` und `passthrough` sind `null`, wo die Antwort die Regel
-nicht führt — dasselbe „unbekannt" zweimal, nie ein `false`, das mehr behauptet
-als bekannt ist.
+With `--json` there is one line on `stdout`, with `verdict`, `matched`,
+`rule_id`, `origin`, `position` and `passthrough`; the exit code stays the
+same. `origin` and `passthrough` are `null` where the answer does not carry
+the rule — the same "unknown" twice, never a `false` that claims more than is
+known.
 
-Normalisiert wird im Daemon: Groß- und Kleinschreibung, ein Punkt am Ende und
-ein internationalisierter Name gehen roh hinaus und werden dort behandelt wie
-in einer echten Anfrage. `tests/escape/esc-4-rules.sh` fährt fünfzehn Zeilen der
-Host-Tabelle aus HUM-022 auf genau diesem Weg.
+Normalisation happens in the daemon: upper and lower case, a trailing dot and
+an internationalised name go out raw and are treated there as in a real
+request. `tests/escape/esc-4-rules.sh` runs fifteen lines of the host table
+from HUM-022 along exactly this path.
 
 ## `humanitl llm test`
 
-Fragt einen einzelnen Endpunkt, was er ist. Dieselbe Probe wie hinter dem
-Testknopf im Setup und wie bei `doctor --probe-llm`: GET-Anfragen im Daemon
-auf die Modellliste des Endpunkts (`<Basis>/models`, bei einem Ollama ohne
-Pfad-Präfix vorher `/api/tags`), ohne Weiterleitung, nichts davon durch die
-Sandbox. Zugangsdaten gehen nur mit `--with-key` mit: Dann schickt der
-Daemon den hinterlegten Zugangsschlüssel als `Authorization: Bearer`, und nur,
-wenn `URL` dieselbe Herkunft (Schema, Host, Port) hat wie `llm.endpoint`;
-`key_sent` in `--json` sagt, ob einer ging (HUM-140).
+Asks a single endpoint what it is. The same probe as behind the test button in
+the setup and as with `doctor --probe-llm`: GET requests in the daemon on the
+endpoint's model list (`<base>/models`, for an Ollama without a path prefix
+first `/api/tags`), without redirects, none of it through the sandbox.
+Credentials are sent only with `--with-key`: then the daemon sends the stored
+access key as `Authorization: Bearer`, and only if `URL` has the same origin
+(scheme, host, port) as `llm.endpoint`; `key_sent` in `--json` says whether
+one was sent (HUM-140).
 
 ```
 humanitl llm test <URL> [--timeout-ms N] [--with-key] [--json]
@@ -1110,82 +1104,82 @@ models: 2
   llama3.1:8b
 ```
 
-Vor dem ersten Paket geht auf `stderr` eine Zeile heraus, die den Endpunkt und
-die zwei Anfragen nennt — an der Ausgabesteuerung vorbei, damit auch `--json`
-und `-q` sie nicht verschlucken. Gezeigt werden höchstens sechs Namen mit je
-höchstens 40 Zeichen, der Rest als `+N more`; dieselben Grenzen wie in der
-Oberfläche, denn ein Name aus dem Netz ist Text von einer Maschine, über die
-noch niemand entschieden hat. Die vollständige Liste steht in `--json`.
+Before the first packet a line goes out on `stderr` that names the endpoint
+and the two requests — bypassing the output control, so that `--json` and
+`-q` do not swallow it either. At most six names of at most 40 characters each
+are shown, the rest as `+N more`; the same limits as in the interface, because
+a name from the network is text from a machine about which nobody has decided
+yet. The full list is in `--json`.
 
-Ein Endpunkt, der nicht antwortet, endet mit `1` und dem Befund des Daemons
-(`LLM_001`; `LLM_007`, wenn die Adresse gar nicht lesbar war). Befunde, die
-kein Fehlschlag sind, stehen unter der Ausgabe und der Lauf endet mit `0`:
-`LLM_006` für eine Adresse außerhalb des eigenen Netzes, und `LLM_003` für
-einen Server, der antwortet, aber als keine bekannte API — dann steht dort
-`flavor: unknown` und keine Modellliste. Wer geantwortet hat, hat geantwortet.
+An endpoint that does not answer ends with `1` and the daemon's Diagnostic
+(`LLM_001`; `LLM_007` if the address could not even be read). Diagnostics
+that are not a failure stand below the output and the run ends with `0`:
+`LLM_006` for an address outside your own network, and `LLM_003` for a server
+that answers, but as no known API — then it reads `flavor: unknown` and there
+is no model list. Whoever answered, answered.
 
 ## `humanitl llm key`
 
-Der Zugangsschlüssel des Endpunkts, für ein Modell, das nur mit Schlüssel
-antwortet (HUM-140). Ein Aufruf der RPC `LlmKey`; dieselbe, die das Feld
-„Zugangsschlüssel" der Einstellungen bedient.
+The endpoint's access key, for a model that answers only with a key
+(HUM-140). A call of the RPC `LlmKey`; the same one that serves the field
+"Access key" of the settings.
 
 ```
 humanitl llm key status [--json]
-humanitl llm key set [--json]        # liest den Schlüssel von stdin
+humanitl llm key set [--json]        # reads the key from stdin
 humanitl llm key remove [--json]
 
 access key: set (secret-service:humanitl/llm, secret-service)
 ```
 
-`set` liest den Schlüssel von `stdin`, nie von der Kommandozeile: `argv` steht
-in `/proc/<pid>/cmdline` für jeden Prozess desselben Nutzers und in der
-Historie der Shell. An einem Terminal ist die Eingabe verdeckt; aus einer Pipe
-wird alles bis zum Ende gelesen, ohne den Zeilenumbruch am Schluss
-(`printf '%s' "$KEY" | humanitl llm key set`). Der Daemon legt ihn im
-Schlüsselbund des Systems ab (`secret-tool`, Secret Service), sonst in
-`$XDG_DATA_HOME/humanitl/keys/llm.key` mit `0600` und meldet dann `CONFIG_019`.
-In `config.toml` steht danach nur der Verweis `llm.api_key_ref`. Keine Ausgabe
-trägt den Schlüssel, auch `--json` nicht: Sie nennt `set`, `store`
-(`secret-service`, `file` oder `none`), `key_ref` und die Befunde.
+`set` reads the key from `stdin`, never from the command line: `argv` is
+visible in `/proc/<pid>/cmdline` to every process of the same user and in the
+shell's history. At a terminal the input is hidden; from a pipe everything is
+read up to the end, without the trailing line break
+(`printf '%s' "$KEY" | humanitl llm key set`). The daemon stores it in the
+system keyring (`secret-tool`, Secret Service), otherwise in
+`$XDG_DATA_HOME/humanitl/keys/llm.key` with `0600` and then reports `CONFIG_019`.
+Afterwards `config.toml` holds only the reference `llm.api_key_ref`. No output
+carries the key, not even `--json`: it names `set`, `store`
+(`secret-service`, `file` or `none`), `key_ref` and the Diagnostics.
 
-`status` meldet `LLM_009`, wenn `llm.api_key_ref` einen Schlüssel nennt, den
-der Speicher nicht herausgibt. `remove` entfernt Schlüssel und Verweis. Ein
-Schlüssel, der leer ist, Leerraum trägt oder länger als 4096 Bytes ist, wird
-mit `CONFIG_020` abgelehnt, und nichts wird geschrieben. Wie bei jeder
-Einstellung gilt ein neuer Schlüssel für die nächste Sitzung; eine laufende
-behält, womit sie gestartet ist.
+`status` reports `LLM_009` if `llm.api_key_ref` names a key that the store
+does not hand out. `remove` removes key and reference. A key that is empty,
+contains whitespace or is longer than 4096 bytes is rejected with
+`CONFIG_020`, and nothing is written. As with every setting, a new key applies
+to the next session; a running one keeps what it was started with.
 
-## Die globalen Schalter
+## The global switches
 
-Fünf Schalter gelten für jedes Unterkommando, weil `clap` sie als `global`
-führt (`daemon/bin/humanitl/src/cli.rs`, `GlobalOpts`). Sie stehen vor oder
-hinter dem Unterkommando, beides geht.
+Five switches apply to every subcommand, because `clap` carries them as
+`global` (`daemon/bin/humanitl/src/cli.rs`, `GlobalOpts`). They stand before or
+after the subcommand; both work.
 
-| Schalter | Wirkung |
+| Switch | Effect |
 |---|---|
-| `--json` | Maschinenlesbare Ausgabe: genau ein JSON-Wert auf `stdout`, Befunde eingeschlossen. Hinweise auf `stderr` entfallen; was ein Unterkommando im JSON-Modus schreibt, steht bei ihm. |
-| `--config PATH` | Liest diese Konfigurationsdatei statt der im Konfigurationsverzeichnis des Nutzers. Der Pfad gilt für diesen Aufruf und ändert nichts an der Datei des Nutzers. |
-| `-v`, `--verbose` | Erklärt, was gerade geschieht: Hinweise, die sonst stumm bleiben (`Renderer::detail`). Mehrfach angeben geht (`-vv`), heute ohne weitere Stufe. |
-| `-q`, `--quiet` | Nur das Ergebnis, keine Hinweise: `Renderer::note` schreibt nichts mehr auf `stderr`. Schließt `-v` aus; Befunde und Fehler bleiben. |
-| `--profile NAME` | Das Profil der Sitzung. Unter `humanitl sandbox` benennt dasselbe Flag das bwrap-Profil; welche Bedeutung gilt, entscheidet das Unterkommando. |
+| `--json` | Machine-readable output: exactly one JSON value on `stdout`, Diagnostics included. Hints on `stderr` are dropped; what a subcommand writes in JSON mode is described with it. |
+| `--config PATH` | Reads this configuration file instead of the one in the user's configuration directory. The path applies to this call and changes nothing about the user's file. |
+| `-v`, `--verbose` | Explains what is happening: hints that otherwise stay silent (`Renderer::detail`). Giving it several times works (`-vv`), today without a further level. |
+| `-q`, `--quiet` | Only the result, no hints: `Renderer::note` no longer writes anything to `stderr`. Excludes `-v`; Diagnostics and errors remain. |
+| `--profile NAME` | The profile of the session. Under `humanitl sandbox` the same flag names the bwrap profile; which meaning applies is decided by the subcommand. |
 
-Der Ergebnistext eines Unterkommandos steht auf `stdout` und bleibt auch mit
-`-q` stehen; `-q` nimmt nur die begleitenden Hinweise weg. Ein Befund
-(`Diagnostic`) geht auf `stderr` und lässt sich mit keinem der Schalter
-abstellen, weil er den Exit-Code erklärt.
+The result text of a subcommand is on `stdout` and stays there with `-q` too;
+`-q` removes only the accompanying hints. A Diagnostic (`Diagnostic`) goes to
+`stderr` and cannot be switched off with any of the switches, because it
+explains the exit code.
 
-## Was `run` mit den anderen Unterkommandos teilt
+## What `run` shares with the other subcommands
 
-- `humanitl sandbox run` startet die Sandbox im Prozess der Kommandozeile und
-  ist der Weg für Selbsttests und die Escape-Tests. `humanitl run` startet sie
-  im Daemon; nur dort gibt es Proxy, Aufzeichnung und Warteschlange.
-- `humanitl rules list` zeigt den Regelsatz, der gerade gilt — nach einem Start
-  also den der Sitzung, samt der Regeln ihres Profils und ihrer Durchreiche.
-- `humanitl daemon status` sagt, ob überhaupt ein Daemon da ist. Das ist die
-  Antwort auf Exit 2.
-- `humanitl doctor` sagt, ob `run` auf dieser Maschine überhaupt eine Sandbox
-  bekommen kann. Das ist die Antwort auf Exit 3, bevor er eintritt.
-- `humanitl daemon install` legt die Unit an, die den Daemon beim Anmelden
-  startet. Das ist die Antwort auf die Zeile `daemon` des Doctors und auf
-  `DAEMON_001` im Setup-Bildschirm.
+- `humanitl sandbox run` starts the sandbox in the process of the command line
+  and is the way for self-tests and the escape tests. `humanitl run` starts it
+  in the daemon; only there are proxy, recording and queue.
+- `humanitl rules list` shows the rule set currently in force — after a start,
+  therefore, that of the session, including the rules of its profile and its
+  passthrough.
+- `humanitl daemon status` says whether there is a daemon at all. That is the
+  answer to exit 2.
+- `humanitl doctor` says whether `run` can get a sandbox on this machine at
+  all. That is the answer to exit 3, before it happens.
+- `humanitl daemon install` creates the unit that starts the daemon at login.
+  That is the answer to the doctor's line `daemon` and to
+  `DAEMON_001` in the setup screen.

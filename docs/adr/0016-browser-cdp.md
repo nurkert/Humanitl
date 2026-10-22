@@ -1,35 +1,35 @@
-# ADR-0016 · Browser für den Agenten über CDP, Zuschauen und Eingreifen im UI
+# ADR-0016 · Browser for the agent over CDP, watching and intervening in the UI
 
 Applies to: Humanitl 0.1
 
 Status: Accepted
-Datum: 2026-09-02
+Date: 2026-09-02
 
-## Kontext
+## Context
 
-Agenten brauchen zunehmend einen Browser: Dokumentation lesen, die
-JavaScript nachlädt, Formulare ausfüllen, Anmeldeflüsse durchlaufen, eine
-Weboberfläche bedienen. Ein Agent ohne Browser fällt auf `curl` zurück und
-scheitert an jeder Seite, die clientseitig rendert.
+Agents increasingly need a browser: reading documentation that loads content
+with JavaScript, filling in forms, going through sign-in flows, operating a
+web interface. An agent without a browser falls back on `curl` and fails at
+every page that renders on the client side.
 
-Ein Browser in der Sandbox wirft drei Fragen auf. Erstens: Läuft er überhaupt?
-Chromium bringt eine eigene Sandbox mit, die User-Namespaces belegt — dieselbe
-Ressource, die bwrap bereits verwendet. Zweitens: Bleibt die Garantie bestehen?
-Ein Browser öffnet Verbindungen, spricht QUIC, hat einen eigenen DNS-Cache und
-benutzt Unix-Socketpairs für seine interne Kommunikation. Drittens: Was sieht
-der Mensch? Ein Agent, der unbeobachtet in einer Weboberfläche klickt, ist genau
-das Kontrollverlustszenario, gegen das Humanitl gebaut ist.
+A browser in the sandbox raises three questions. First: does it run at all?
+Chromium brings its own sandbox, which occupies user namespaces — the same
+resource that bwrap already uses. Second: does the guarantee still hold? A
+browser opens connections, speaks QUIC, has its own DNS cache and uses Unix
+socketpairs for its internal communication. Third: what does the human see?
+An agent clicking around a web interface unobserved is exactly the
+loss-of-control scenario Humanitl is built against.
 
-Diese Entscheidung ist **Post-MVP (M7)**. Sie wird jetzt getroffen, weil zwei
-Vorarbeiten im MVP anfallen und sonst falsch dimensioniert würden: die
-Bridge-Verwaltung im Shim und die Konfigurierbarkeit der erlaubten
-seccomp-Socket-Familien pro Profil.
+This decision is **post-MVP (M7)**. It is made now because two pieces of
+groundwork arise in the MVP and would otherwise be dimensioned wrongly: the
+bridge management in the shim and the configurability of the allowed seccomp
+socket families per profile.
 
-## Entscheidung
+## Decision
 
-**Sandbox-Profil `browser`.** Es benutzt das Chromium des Hosts über den
-Nur-Lese-Mount von `/usr` und bringt `nodriver` im Python-Paket mit.
-Start-Flags:
+**Sandbox profile `browser`.** It uses the host's Chromium via the read-only
+mount of `/usr` and brings `nodriver` along in the Python package. Start
+flags:
 
 ```
 --proxy-server=http://127.0.0.1:3128
@@ -37,117 +37,116 @@ Start-Flags:
 --remote-debugging-port=9222
 --headless=new
 --no-sandbox
---ignore-certificate-errors-spki-list=<SPKI-Hash der Humanitl-CA>
+--ignore-certificate-errors-spki-list=<SPKI hash of the Humanitl CA>
 ```
 
-Ein gebündeltes `humanitl_browser.py` liefert die fertige nodriver-Konfiguration.
-Alle Seitenaufrufe laufen durch den Proxy wie jeder andere Request und
-unterliegen denselben Regeln und derselben Aufzeichnung.
+A bundled `humanitl_browser.py` provides the ready-made nodriver
+configuration. All page loads go through the proxy like any other request and
+are subject to the same rules and the same recording.
 
-**Zuschauen.** Der Shim startet vor dem seccomp-Filter eine zweite,
-host-initiierte Bridge: ein Unix-Socket in der Sandbox, der auf
-`127.0.0.1:9222` weiterleitet (Richtung `out`). Der Daemon spricht darüber CDP
-(`chromiumoxide`); `Page.startScreencast` liefert Einzelbilder, und ein
-gRPC-Stream `Browser` bringt sie ins UI.
+**Watching.** Before the seccomp filter, the shim starts a second,
+host-initiated bridge: a Unix socket in the sandbox that forwards to
+`127.0.0.1:9222` (direction `out`). Over it the daemon speaks CDP
+(`chromiumoxide`); `Page.startScreencast` delivers single frames, and a gRPC
+stream `Browser` brings them into the UI.
 
-**Eingreifen.** Maus- und Tastatureingaben gehen als CDP-Input zurück. Der
-Übernahme-Modus ist im UI sichtbar (Rahmen). Agent und Mensch können gleichzeitig
-verbunden sein, weil Chromium mehrere CDP-Clients erlaubt.
+**Intervening.** Mouse and keyboard input goes back as CDP input. The takeover
+mode is visible in the UI (frame). Agent and human can be connected at the
+same time, because Chromium allows several CDP clients.
 
-**Sicherheitsfolgen, ausgesprochen.** Der Shim unterstützt eine **Liste** von
-Bridges aus dem Profil, jede mit Richtung `in` oder `out`. Der seccomp-Filter
-erlaubt `AF_INET`/`AF_INET6` immer (im Namespace existiert nur `lo`); das Profil
-`browser` erlaubt **zusätzlich `AF_UNIX`** (und `SOCK_DGRAM`), weil Chromium eigene
-Unix-Sockets für seine Prozess-IPC anlegt; `socketpair()` bleibt davon unabhängig in allen
-Profilen unbeschränkt (CONVENTIONS 4.11). Die Garantie trägt in diesem
-Profil das Netzwerk-Namespace plus die Mount-Allowlist; seccomp bleibt doppelter
-Boden, ist aber nicht mehr die engste Stelle. Chromium läuft ohne eigene Sandbox
-(`--no-sandbox`), weil bwrap die User-Namespaces belegt — bwrap **ist** die
-äußere Sandbox.
+**Security consequences, stated.** The shim supports a **list** of bridges
+from the profile, each with direction `in` or `out`. The seccomp filter always
+allows `AF_INET`/`AF_INET6` (only `lo` exists in the namespace); the profile
+`browser` **additionally allows `AF_UNIX`** (and `SOCK_DGRAM`), because
+Chromium creates its own Unix sockets for its process IPC; `socketpair()`
+stays unrestricted in all profiles independently of this (CONVENTIONS 4.11).
+In this profile the guarantee is carried by the network namespace plus the
+mount allowlist; seccomp remains a second floor but is no longer the
+narrowest point. Chromium runs without its own sandbox (`--no-sandbox`),
+because bwrap occupies the user namespaces — bwrap **is** the outer sandbox.
 
-**Im MVP nur die Vorarbeiten:** die Bridge-Liste im Shim (HUM-012) und die
-seccomp-Familien pro Profil (HUM-010).
+**In the MVP only the groundwork:** the bridge list in the shim (HUM-012) and
+the seccomp families per profile (HUM-010).
 
-## Begründung
+## Rationale
 
-Chromium des Hosts statt eines gebündelten Browsers, weil ein mitgeliefertes
-Chromium das Paket um mehr als hundert Megabyte aufbläht und eine eigene
-Sicherheitsaktualisierungspflicht erzeugt. Der Nur-Lese-Mount von `/usr` liegt
-ohnehin vor.
+The host's Chromium instead of a bundled browser, because a shipped Chromium
+inflates the package by more than a hundred megabytes and creates its own
+obligation to ship security updates. The read-only mount of `/usr` is there
+anyway.
 
-`--disable-quic` ist nicht optional. QUIC läuft über UDP und würde den
-HTTP-Proxy umgehen; im leeren Netzwerk-Namespace scheitert es zwar ohnehin, aber
-ein stiller Fehlschlag mit langen Timeouts ist schlechter als eine klare
-Abschaltung.
+`--disable-quic` is not optional. QUIC runs over UDP and would bypass the HTTP
+proxy; in the empty network namespace it fails anyway, but a silent failure
+with long timeouts is worse than a clear switch-off.
 
-Der SPKI-Hash der Humanitl-CA statt `--ignore-certificate-errors` insgesamt: Der
-Browser vertraut genau einem Schlüssel, nicht jedem beliebigen Zertifikat. Der
-Unterschied ist die Frage, ob eine MITM-Attacke innerhalb der Sandbox möglich
-wäre.
+The SPKI hash of the Humanitl CA instead of `--ignore-certificate-errors`
+altogether: the browser trusts exactly one key, not any certificate whatever.
+The difference is the question of whether a MITM attack within the sandbox
+would be possible.
 
-CDP statt eines eingebetteten WebViews im UI: Der Browser läuft dort, wo er
-hingehört — in der Sandbox — und das UI sieht nur Einzelbilder. Damit bleibt
-ADR-0009 („kein WebView auf Linux") intakt, und der Rendering-Prozess der zu
-prüfenden Seite läuft nie im selben Prozess wie die Oberfläche.
+CDP instead of an embedded WebView in the UI: the browser runs where it
+belongs — in the sandbox — and the UI sees only single frames. This keeps
+ADR-0009 ("no WebView on Linux") intact, and the rendering process of the page
+under review never runs in the same process as the interface.
 
-Dass Agent und Mensch gleichzeitig verbunden sein können, ist die eigentliche
-Produktidee dahinter: Zuschauen ist der Normalfall, Eingreifen die Ausnahme, und
-der Übergang braucht keinen Moduswechsel — nur einen sichtbaren Rahmen.
+That agent and human can be connected at the same time is the actual product
+idea behind it: watching is the normal case, intervening the exception, and
+the transition needs no mode switch — only a visible frame.
 
-Der Preis wird benannt statt versteckt: Im Profil `browser` ist der
-seccomp-Filter schwächer als im Standardprofil. Deshalb ist es ein **eigenes
-Profil**. Wer keinen Browser braucht, bekommt die engere Einstellung; wer einen
-braucht, sieht die Ausnahme im Profil und im Isolation-Panel.
+The price is named instead of hidden: in the profile `browser` the seccomp
+filter is weaker than in the default profile. That is why it is a **profile of
+its own**. Whoever needs no browser gets the narrower setting; whoever needs
+one sees the exception in the profile and in the isolation panel.
 
-## Verworfene Alternativen
+## Rejected alternatives
 
-- **Browser auf dem Host, gesteuert aus dem Daemon.** Umgeht die Sandbox
-  vollständig: Der Browser hätte das Netzwerk, das Dateisystem und die Cookies
-  des Nutzers. Der Angriffsweg „Agent besucht Seite, Seite exfiltriert über den
-  Host-Browser" wäre offen.
-- **Playwright oder Selenium statt CDP direkt.** Bringt eine große
-  Node- oder Python-Abhängigkeit und eine eigene Browser-Verwaltung mit, die
-  Browser herunterlädt — genau das, was in einer netzwerklosen Sandbox nicht
-  funktioniert. `chromiumoxide` spricht CDP direkt.
-- **Firefox über das Remote-Protokoll.** Marionette und das Remote-Agent-Protokoll
-  sind weniger vollständig für Screencast und Input als CDP.
-- **Ein eingebetteter WebView im UI.** Widerspricht ADR-0009 und würde die
-  besuchte Seite im Prozess der Oberfläche rendern.
-- **Screencast über Video-Encoding statt Einzelbildern.** Bessere Bildrate, aber
-  eine Encoder-Abhängigkeit und mehr Latenz beim Eingreifen. JPEG-Einzelbilder,
-  auf zehn Bilder pro Sekunde gedrosselt, reichen zum Zuschauen.
-- **`AF_UNIX` global erlauben, um kein zweites Profil zu brauchen.**
-  Ausdrücklich verworfen: Das hätte die Garantie 3 für alle Nutzer geschwächt,
-  auch für die ohne Browser. Die Ausnahme bleibt im Profil, wo sie sichtbar ist.
-- **Chromium mit eigener Sandbox in bwrap.** Technisch nicht möglich, weil beide
-  dieselben User-Namespaces beanspruchen. `--no-sandbox` ist hier kein
-  Nachlassen, sondern die Feststellung, wer die äußere Sandbox ist.
+- **Browser on the host, controlled from the daemon.** Bypasses the sandbox
+  completely: the browser would have the user's network, file system and
+  cookies. The attack path "agent visits page, page exfiltrates via the host
+  browser" would be open.
+- **Playwright or Selenium instead of CDP directly.** Brings a large Node or
+  Python dependency and its own browser management that downloads browsers —
+  exactly what does not work in a sandbox without a network. `chromiumoxide`
+  speaks CDP directly.
+- **Firefox via the remote protocol.** Marionette and the Remote Agent protocol
+  are less complete for screencast and input than CDP.
+- **An embedded WebView in the UI.** Contradicts ADR-0009 and would render the
+  visited page in the interface's process.
+- **Screencast via video encoding instead of single frames.** Better frame
+  rate, but an encoder dependency and more latency when intervening. JPEG
+  single frames, throttled to ten frames per second, are enough for watching.
+- **Allow `AF_UNIX` globally so as not to need a second profile.** Explicitly
+  rejected: that would have weakened guarantee 3 for all users, including
+  those without a browser. The exception stays in the profile, where it is
+  visible.
+- **Chromium with its own sandbox inside bwrap.** Technically not possible,
+  because both claim the same user namespaces. `--no-sandbox` is not a
+  slackening here but the statement of who the outer sandbox is.
 
-## Konsequenzen
+## Consequences
 
-- Der Shim (`humanitl-shim`) verwaltet eine **Liste** von Bridges mit Richtung,
-  nicht eine einzelne. Diese Verallgemeinerung fällt bereits im MVP an
-  (HUM-012), obwohl der zweite Eintrag erst in M7 benutzt wird.
-- Das Sandbox-Profil-Format hat `[network].bridges` als Liste und
-  `[seccomp].allow_families` und `[seccomp].allow_types` als profilabhängige
-  Werte (HUM-010).
-- Das Isolation-Panel muss im Profil `browser` eine zusätzliche, ehrliche Zeile
-  zeigen: Der seccomp-Filter ist hier weiter gefasst. Kein grüner Haken für
-  etwas, das nicht zutrifft.
-- `chromiumoxide`, ein `Browser`-RPC und ein Browser-Tab im UI kommen in M7 dazu;
-  keiner dieser Teile berührt Kern oder Anwendung (ADR-0015).
-- Bekannte Fallstricke für M7, damit sie nicht neu entdeckt werden müssen:
-  Screencast-Bilder drosseln (maximal 10 fps, JPEG-Qualität 60);
-  Tastaturbelegungen in `dispatchKeyEvent` sind fehleranfällig;
-  nodriver-Versionen pinnen.
-- Die Domain-Vorschau im Domain-Panel kann später denselben Browser benutzen
-  (HUM-085), statt eines eigenen Abrufwegs — und behält damit die Regel aus
-  ADR-0006, dass nichts automatisch geholt wird.
+- The shim (`humanitl-shim`) manages a **list** of bridges with direction, not
+  a single one. This generalisation already arises in the MVP (HUM-012),
+  although the second entry is only used in M7.
+- The sandbox profile format has `[network].bridges` as a list and
+  `[seccomp].allow_families` and `[seccomp].allow_types` as profile-dependent
+  values (HUM-010).
+- In the profile `browser` the isolation panel must show an additional,
+  honest row: the seccomp filter is wider here. No green tick for something
+  that does not apply.
+- `chromiumoxide`, a `Browser` RPC and a browser tab in the UI are added in M7;
+  none of these parts touches core or application (ADR-0015).
+- Known pitfalls for M7, so that they do not have to be rediscovered: throttle
+  screencast frames (at most 10 fps, JPEG quality 60); keyboard layouts in
+  `dispatchKeyEvent` are error-prone; pin nodriver versions.
+- The domain preview in the domain panel can later use the same browser
+  (HUM-085) instead of a fetch path of its own — and thereby keeps the rule
+  from ADR-0006 that nothing is fetched automatically.
 
-## Betroffene Issues
+## Affected issues
 
-Im MVP: `HUM-012` (Bridge-Liste im Shim), `HUM-010` (seccomp-Familien pro
-Profil). In M7: `HUM-080` (Sandbox-Profil `browser`), `HUM-081` (Reverse-Bridge
-und `cdp.sock`), `HUM-082` (CDP-Client im Daemon), `HUM-083` (gRPC
-`Browser`-Bidi-Stream), `HUM-084` (Browser-Tab im UI), `HUM-085`
-(Screenshot-Vorschau für das Domain-Panel).
+In the MVP: `HUM-012` (bridge list in the shim), `HUM-010` (seccomp families
+per profile). In M7: `HUM-080` (sandbox profile `browser`), `HUM-081`
+(reverse bridge and `cdp.sock`), `HUM-082` (CDP client in the daemon),
+`HUM-083` (gRPC `Browser` bidi stream), `HUM-084` (browser tab in the UI),
+`HUM-085` (screenshot preview for the domain panel).
