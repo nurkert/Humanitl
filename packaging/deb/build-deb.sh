@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Baut `humanitl_<version>_amd64.deb` aus fertigen Programmen und dem
 # Flutter-Bundle, mit Debians eigenem Werkzeug (`dpkg-shlibdeps`,
-# `dpkg-deb`) und ohne Maintainer-Skripte.
+# `dpkg-deb`). Die einzigen Maintainer-Skripte, `postinst` und `postrm`,
+# setzt `maintscripts.sh` zusammen (HUM-284).
 #
 # Aufruf: packaging/deb/build-deb.sh <0.0.N> <bin-dir> <flutter-bundle> <out-dir>
 #
@@ -21,15 +22,19 @@
 #   /usr/share/humanitl/profiles/sandbox/  Sandbox-Profile (PROFILE_DIRS)
 #   /usr/share/doc/humanitl/           copyright, changelog.gz
 #
-# Bewusst nicht dabei, mit Grund:
-# - kein `postinst`/`prerm`: Es gibt nichts, was als root beim Installieren
-#   geschehen muesste. Die Trigger von `desktop-file-utils` und
-#   `hicolor-icon-theme` aktualisieren Menue und Symbol-Cache selbst; das ist
-#   genau das, was HUM-053 vom `postinst` verlangt (`update-desktop-database`,
-#   `gtk-update-icon-cache`), nur ohne Skript, das lintian pruefen muesste.
-#   Einen Nutzerdienst aktiviert nie das Paket, sondern jeder Mensch fuer sich
-#   mit `humanitl daemon install` (HUM-053 Fallstricke: `postinst` laeuft als
-#   root, und `systemctl --user` geht dort nicht).
+# Was die Maintainer-Skripte tun und was nicht:
+# - `postinst` laedt in jeder laufenden systemd-Nutzerinstanz die Units neu
+#   und startet einen laufenden Daemon ohne Agenten-Sitzung mit dem neuen
+#   Programm neu, als der Mensch, dem die Instanz gehoert (HUM-284,
+#   `maintscript-users.sh`); `postrm` laedt nach dem Entfernen neu. Beides
+#   bricht nie die Installation ab.
+# - Menue und Symbol-Cache aktualisieren die Trigger von `desktop-file-utils`
+#   und `hicolor-icon-theme` selbst; das ist genau das, was HUM-053 vom
+#   `postinst` verlangt (`update-desktop-database`, `gtk-update-icon-cache`),
+#   nur ohne eigene Zeile dafuer.
+# - Einen Nutzerdienst aktiviert nie das Paket, sondern jeder Mensch fuer sich
+#   mit `humanitl daemon install` (HUM-053 Fallstricke). Das Paket startet nur
+#   neu, was schon lief.
 #
 # Die PNG-Symbole liegen fertig gerechnet unter `packaging/deb/icons/`, aus
 # `humanitl.svg` mit Inkscape (`packaging/deb/icons/render.sh`). Eingecheckt
@@ -182,6 +187,8 @@ sed -e "s|@VERSION@|$version|" -e "s|@INSTALLED_SIZE@|$installed_size|" \
   -e "s|@DEPENDS@|$depends|" "$here/control.in" >"$pkg/DEBIAN/control"
 (cd "$pkg" && find usr -type f -print0 | sort -z | xargs -0 md5sum) >"$pkg/DEBIAN/md5sums"
 chmod 0644 "$pkg/DEBIAN/control" "$pkg/DEBIAN/md5sums"
+# `postinst` und `postrm` (HUM-284); `maintscripts.sh` setzt sie mit 0755.
+"$here/maintscripts.sh" "$pkg/DEBIAN"
 
 deb="$out/humanitl_${version}_amd64.deb"
 SOURCE_DATE_EPOCH="$epoch" dpkg-deb --root-owner-group -Zxz --build "$pkg" "$deb"

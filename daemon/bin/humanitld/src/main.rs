@@ -34,6 +34,7 @@
 
 mod audit_retention;
 mod audit_sink;
+mod replaced;
 mod systemd;
 
 use std::fs;
@@ -435,7 +436,7 @@ async fn run_daemon(cli: &Cli, passed: Option<systemd::Passed>) -> Result<(), Di
         Some(probe) => server.with_llm_probe(probe),
         None => server,
     };
-    let (signal, stop_reason) = shutdown_with_reason();
+    let (signal, stop_reason) = shutdown_with_reason(Some(retirement(&socket, &sandbox)));
     let (signal, farewell) = signal_that_ends_the_sandbox(signal, sandbox.clone());
     let result = systemd::serve(socket, &paths.socket, &paths.token, server, signal).await;
     join_farewell(farewell, sandbox).await;
@@ -617,9 +618,44 @@ async fn stop_audit(sink: AuditSink, audit: AuditWriter, reason: &'static str) {
     }
 }
 
+/// Das Ende ohne Signal (HUM-284): Es kommt, sobald sich der Dienst ohne
+/// Sitzung verabschiedet hat ([`SandboxService::retired`]), auf
+/// `SandboxRequest.retire_if_idle` von `postinst` oder der App, oder durch den
+/// Wächter über ein ersetztes Programm (`replaced.rs`).
+///
+/// Den Wächter gibt es nur, wenn systemd den Socket übergeben hat: Ohne die
+/// Socket-Unit startete nach dem Ende niemand das neue Programm. Die Zukunft
+/// liegt auf dem Heap, weil sie in die des Dienstes eingeht und ihn sonst um
+/// ihre ganze Größe wachsen ließe.
+fn retirement(
+    socket: &systemd::Socket,
+    sandbox: &SandboxService,
+) -> std::pin::Pin<Box<dyn Future<Output = &'static str> + Send>> {
+    if matches!(socket, systemd::Socket::Activated(_)) {
+        tokio::spawn(replaced::retire_when_replaced(
+            sandbox.clone(),
+            replaced::own_program_replaced,
+            replaced::POLL,
+        ));
+    }
+    let sandbox = sandbox.clone();
+    Box::pin(async move {
+        sandbox.retired().await;
+        tracing::info!("no session holds this daemon and it was asked to retire; ending");
+        replaced::REASON
+    })
+}
+
 /// Das Warten auf das Signal, das den Dienst beendet, samt der Stelle, an der
 /// danach sein Name steht; er wird der Grund in `daemon.stopped`.
-fn shutdown_with_reason() -> (
+///
+/// `retire` ist der zweite Weg zum Ende ([`retirement`], HUM-284): Er endet
+/// mit [`replaced::REASON`], wenn sich der Dienst ohne Sitzung verabschiedet
+/// hat. Was zuerst kommt, beendet den Dienst; der Abschied danach ist
+/// derselbe.
+fn shutdown_with_reason(
+    retire: Option<impl Future<Output = &'static str> + Send + 'static>,
+) -> (
     impl Future<Output = ()> + Send + 'static,
     Arc<OnceLock<&'static str>>,
 ) {
@@ -630,7 +666,14 @@ fn shutdown_with_reason() -> (
         // bevor der Daemon `READY=1` meldet (HUM-053).
         let waiting = shutdown_signal();
         async move {
-            let _ = reason.set(waiting.await);
+            let ended = match retire {
+                Some(retire) => tokio::select! {
+                    signal = waiting => signal,
+                    replaced = retire => replaced,
+                },
+                None => waiting.await,
+            };
+            let _ = reason.set(ended);
         }
     };
     (signal, reason)
@@ -3111,6 +3154,36 @@ mod tests {
             "the probe rebuilt with the test root has to reach the server; a probe nobody \
              attaches is the defect this issue fixes"
         );
+    }
+
+    /// Ein Dienst, der sich ohne Sitzung verabschiedet, endet wie nach
+    /// einem Signal, und sein Grund steht danach in `daemon.stopped`
+    /// (HUM-284). Ohne Abschied endet nichts.
+    #[tokio::test]
+    async fn a_retired_service_ends_with_its_reason() {
+        let paths =
+            humanitl_config::Paths::new(humanitl_config::Env::from_pairs([("HOME", "/home/u")]));
+        let sandbox = humanitl_ipc::SandboxService::new(
+            humanitl_ipc::session::SessionResolver::for_config(paths, Config::default()),
+            SessionId::nil(),
+            humanitl_ipc::sandbox::SandboxPorts::none(),
+        );
+        let (signal, reason) = super::shutdown_with_reason(Some(super::retirement(
+            &super::systemd::Socket::Bind,
+            &sandbox,
+        )));
+        let mut signal = Box::pin(signal);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut signal)
+                .await
+                .is_err(),
+            "nothing retired, nothing ends"
+        );
+        assert!(sandbox.retire_if_idle(), "no session holds it");
+        tokio::time::timeout(std::time::Duration::from_secs(5), signal)
+            .await
+            .expect("the retirement ends the wait without a signal");
+        assert_eq!(super::stop_reason_of::<()>(&Ok(()), &reason), "retired");
     }
 
     /// Das Signal schiebt den Riegel vor, und zwar bevor die Aufgabe läuft

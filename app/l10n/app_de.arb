@@ -1285,5 +1285,8 @@
   "diagUI003Title": "Der Ordnerdialog ging nicht auf",
   "diagUI003Why": "Die Arbeitsumgebung konnte keinen Ordnerdialog zeigen. Im Projektordner ein Terminal öffnen und dort humanitl run starten.",
   "setupLlmNoModelList": "{endpoint} hat in {ms} ms geantwortet, aber nicht mit einer Modellliste: {answer}",
-  "settingsModelNoList": "Der Endpunkt hat geantwortet, aber nicht mit einer Modellliste: {answer}"
+  "settingsModelNoList": "Der Endpunkt hat geantwortet, aber nicht mit einer Modellliste: {answer}",
+  "shellStatusRestartDaemon": "Daemon neu starten",
+  "shellStatusRestartAfterSession": "Möglich, sobald die Agenten-Sitzung beendet ist",
+  "shellStatusRestartFailed": "Neustart fehlgeschlagen: {detail}"
 }

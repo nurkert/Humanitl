@@ -438,6 +438,7 @@ fn all_contract_messages_exist() {
         "SandboxEvent.LogLine",
         "SandboxEvent.Refusals",
         "SandboxEvent.Refusal",
+        "SandboxEvent.Retire",
         "SessionSummaryRef",
         "SessionSummary",
         "FileChange",
@@ -905,6 +906,13 @@ const SANDBOX_EVENT_FIELDS: &FieldTable = &[
         "refusals",
         9,
         ".humanitl.v1.SandboxEvent.Refusals",
+        Some("event"),
+    ),
+    // HUM-284: der zehnte Arm, die Antwort auf `retire_if_idle`.
+    (
+        "retire",
+        10,
+        ".humanitl.v1.SandboxEvent.Retire",
         Some("event"),
     ),
 ];

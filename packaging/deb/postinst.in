@@ -1,0 +1,25 @@
+#!/bin/sh
+# postinst des Pakets humanitl (HUM-284).
+#
+# Nach einer Installation oder einem Update laedt jede laufende
+# systemd-Nutzerinstanz die Units des Pakets neu, und ein laufender Daemon
+# ohne Agenten-Sitzung wird mit dem neuen Programm neu gestartet. Was das
+# im Einzelnen heisst und warum es nie die Installation abbricht, steht im
+# eingesetzten Teil darunter (`packaging/deb/maintscript-users.sh`).
+set -e
+
+#HUMANITL_USERS#
+
+case "$1" in
+  configure)
+    humanitl_refresh_users restart || true
+    ;;
+  abort-upgrade | abort-remove | abort-deconfigure)
+    ;;
+  *)
+    echo "postinst called with unknown argument '$1'" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

@@ -112,8 +112,10 @@ What the package puts where:
 | `/usr/share/humanitl/profiles/sandbox/default.toml` | the sandbox profile |
 | `/usr/share/applications/`, `/usr/share/icons/hicolor/` | menu entry and icons |
 
-The package writes nothing under `/etc`, `/var` or your home directory and has
-no maintainer scripts.
+The package writes nothing under `/etc`, `/var` or your home directory. Its
+only maintainer scripts reload the user units of logged-in users after an
+install, an upgrade or a removal, and restart a running daemon that has no
+agent session (see [Update](#update) and `docs/INSTALL.md`).
 
 ### Enable the user service
 
@@ -286,9 +288,13 @@ Every code is explained in [DIAGNOSTICS.md](../DIAGNOSTICS.md).
 ## Update
 
 - **Package:** install the newer `.deb` with `sudo apt install ./…deb` (or
-  `apt upgrade` from the APT repository). The socket unit keeps working; the
-  next connection starts the new daemon. Run `systemctl --user restart
-  humanitld.service` if one is still running.
+  `apt upgrade` from the APT repository). Nothing else to type: the package
+  reloads your user units and restarts your daemon with the new version. If an
+  agent session is running, the daemon keeps running until it ends; a daemon of
+  any release after 0.0.6 then ends by itself, and the next connection starts the new
+  version. Until then the app's status bar names the other version and offers
+  **Restart daemon** once no session runs; the command line equivalent is
+  `systemctl --user daemon-reload && systemctl --user restart humanitld`.
 - **AppImage:** start the newer image. It refreshes the service by itself.
 - **Archive:** unpack the new version and run its `bin/humanitl daemon install`.
 
