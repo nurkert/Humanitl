@@ -1520,6 +1520,14 @@ registry! {
     RECORDER_005 => "recorder", "Aufzeichnung läuft wieder", "#recorder_005",
         "Der Schreib-Thread hat nach einer gemeldeten Störung wieder eine Transaktion ohne Fehler geschrieben.",
         "Kein Fix: Was während der Störung geschah, fehlt in der History und wird nicht nachgetragen.";
+
+    /// Der Ordnerdialog der Arbeitsumgebung ließ sich nicht öffnen, unter
+    /// Linux meist ein fehlendes oder gestörtes XDG-Desktop-Portal. Gebaut im
+    /// Client, nicht im Daemon: Nur die Oberfläche fragt nach dem Dialog. Ein
+    /// abgebrochener Dialog ist kein Befund (HUM-282).
+    UI_003 => "ui", "Ordnerdialog nicht verfügbar", "#ui_003",
+        "Die Arbeitsumgebung konnte den Dialog zur Wahl des Projektordners nicht öffnen; der Grund des Portals steht im Text.",
+        "`CopyCommand` mit `humanitl run`, im Projektordner auszuführen.";
 }
 
 /// Sucht einen Code im Register.

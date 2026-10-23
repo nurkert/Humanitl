@@ -209,8 +209,12 @@ abstract final class ClientDiagnostics {
   /// still open, and the register carries the code so both sides name it the
   /// same (`daemon/crates/core-types/src/diagnostics/codes.rs`).
   ///
-  /// Without `fix`: the row itself carries the folder button, and a second
-  /// button beside it would lead somewhere else (HUM-044, diagnostic table).
+  /// The fix is a `ChangeSetting` on `sandbox.work_dir`, the same one the
+  /// daemon puts on a refused folder (`SANDBOX_006`). `FixControl` turns it
+  /// into a button that opens the folder dialog of the row above, so the card
+  /// offers the way out itself instead of pointing at a control somebody has
+  /// to find first (HUM-282, which replaces the earlier rule of HUM-044 that
+  /// the card carried no fix).
   static Diagnostic noProjectFolder() {
     return const Diagnostic(
       code: DiagnosticCodes.noProjectFolder,
@@ -218,6 +222,29 @@ abstract final class ClientDiagnostics {
       why:
           'No project folder chosen. The agent needs exactly one folder to '
           'work in.',
+      fix: FixAction.changeSetting(key: FormKeys.sandboxWorkDir, value: ''),
+    );
+  }
+
+  /// Command that starts a session in the current directory, offered as the
+  /// fix for [folderDialogFailed]: the way to a project folder that needs no
+  /// dialog.
+  static const String runInFolderCommand = 'humanitl run';
+
+  /// `UI_003`: the desktop's folder dialog did not open (HUM-282).
+  ///
+  /// [error] is what the platform threw, as text; it stands in `why` so the
+  /// person can report it. A cancelled dialog never gets here: it answers
+  /// null, and that is an answer, not a failure.
+  static Diagnostic folderDialogFailed(Object error) {
+    return Diagnostic(
+      code: DiagnosticCodes.folderDialogFailed,
+      severity: Severity.error,
+      why:
+          'The desktop could not show a folder dialog ($error). Open a '
+          'terminal in the project folder and run `$runInFolderCommand` '
+          'there.',
+      fix: const FixAction.copyCommand(command: runInFolderCommand),
     );
   }
 }

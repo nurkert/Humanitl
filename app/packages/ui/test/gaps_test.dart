@@ -1128,6 +1128,8 @@ void main() {
         // HUM-255: die Fensterknöpfe der Kopfleiste.
         HGlyph.minus,
         HGlyph.square,
+        // HUM-282: der Knopf, der den Projektordner wählt.
+        HGlyph.folder,
       ]) {
         expect(HGlyph.values, contains(glyph));
       }

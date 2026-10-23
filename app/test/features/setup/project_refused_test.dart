@@ -14,6 +14,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
+import 'package:humanitl/core/ui/hover_label.dart';
 import 'package:humanitl/core/ui/work_dir_picker.dart';
 import 'package:humanitl/features/setup/providers/setup_provider.dart';
 import 'package:humanitl/features/setup/setup_screen.dart';
@@ -167,21 +168,47 @@ void main() {
     expect(chooseFix, findsNothing);
   });
 
-  testWidgets('while a sandbox runs the fix offers no chooser', (
+  testWidgets('while a sandbox runs the fix is locked and says why', (
     WidgetTester tester,
   ) async {
     // Gesperrt wie der Picker: Der Ordner einer laufenden Sitzung ändert sich
-    // nicht, und ein Knopf, der dann wählen ließe, täte nichts.
+    // nicht. Der Knopf bleibt stehen, ist aus und sagt beim Verweilen den
+    // Satz des gesperrten Pickers (HUM-262, HUM-282).
     final HomeRefusingClient client = HomeRefusingClient();
+    int asked = 0;
     client.sandbox = client.sandbox.copyWith(
       state: SandboxState.running,
       sandboxId: FakeDaemonClient.defaultSandbox,
     );
-    await openSetup(tester, client, chooser: () async => project);
+    await openSetup(
+      tester,
+      client,
+      chooser: () async {
+        asked += 1;
+        return project;
+      },
+    );
 
     expect(stateOf(tester, SetupCheckKind.project), 'blocks the start');
-    expect(chooseFix, findsNothing);
-    expect(find.text('Change sandbox.work_dir'), findsOneWidget);
+    expect(chooseFix, findsOneWidget);
+    expect(tester.widget<HButton>(chooseFix).enabled, isFalse);
+    expect(find.text('Change sandbox.work_dir'), findsNothing);
+    expect(
+      find.ancestor(
+        of: chooseFix,
+        matching: find.byWidgetPredicate(
+          (Widget w) =>
+              w is HoverLabel &&
+              w.label ==
+                  'The project folder cannot change while the sandbox runs.',
+        ),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(chooseFix, warnIfMissed: false);
+    await tester.pump();
+    expect(asked, 0);
+    expect(client.planned, isEmpty);
   });
 
   testWidgets('a cancelled chooser changes nothing', (

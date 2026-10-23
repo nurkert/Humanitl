@@ -33,6 +33,7 @@ import '../domain/domain.dart';
 import '../ipc/client_providers.dart';
 import '../ipc/connection.dart';
 import '../../l10n/l10n.dart';
+import 'hover_label.dart';
 import 'settings_opener.dart';
 import 'shell_command.dart';
 import 'ui.dart';
@@ -408,6 +409,8 @@ class FixControl extends ConsumerStatefulWidget {
     this.installService,
     this.writeEnv,
     this.onChooseFolder,
+    this.chooseFolderLocked,
+    this.diagnosticCode,
     super.key,
   });
 
@@ -424,6 +427,21 @@ class FixControl extends ConsumerStatefulWidget {
   /// and the fix becomes a button that opens it; a screen without one keeps
   /// the badge that names the setting.
   final VoidCallback? onChooseFolder;
+
+  /// Why the folder button is off, while the screen's chooser is locked
+  /// because a sandbox runs (HUM-262, HUM-282).
+  ///
+  /// Set, a `ChangeSetting` on [workDirSettingKey] stays a button, switched
+  /// off, and says this sentence on hover -- the same sentence the locked
+  /// picker says (`docs/UX.md` 5.3). It wins over [onChooseFolder].
+  final String? chooseFolderLocked;
+
+  /// Code of the finding this fix belongs to, where the label depends on it.
+  ///
+  /// Only the folder button reads it: for `CONFIG_013` there is no folder
+  /// yet, and "Choose another folder" would name one that does not exist, so
+  /// the button reads "Choose folder" (HUM-282).
+  final String? diagnosticCode;
 
   /// Was der Knopf „In config.toml schreiben" eines `SetEnv` tut.
   ///
@@ -566,12 +584,10 @@ class _FixControlState extends ConsumerState<FixControl> {
         style: mono,
       ),
       FixActionChangeSetting(:final key)
-          when key == workDirSettingKey && widget.onChooseFolder != null =>
-        HButton(
-          key: const Key('fix-choose-folder'),
-          onPressed: widget.onChooseFolder,
-          child: Text(l10n.setupFixChooseFolder),
-        ),
+          when key == workDirSettingKey &&
+              (widget.onChooseFolder != null ||
+                  widget.chooseFolderLocked != null) =>
+        _chooseFolder(l10n),
       // Ein Schlüssel, den das Einstellungsblatt zeigt, wird ein Knopf, der
       // das Blatt an genau diesem Feld öffnet (HUM-275); für `LLM_002` ist
       // das der Zugangsschlüssel. Ohne Shell darüber gibt es kein Blatt und
@@ -598,6 +614,25 @@ class _FixControlState extends ConsumerState<FixControl> {
       FixActionAddRule() => HBadge(text: l10n.setupFixAddRule),
       FixActionRemountReadOnly() => HBadge(text: l10n.setupFixRemountReadOnly),
     };
+  }
+
+  /// The button that opens the screen's folder dialog, or the same button
+  /// switched off with the reason on hover.
+  Widget _chooseFolder(AppLocalizations l10n) {
+    final String? locked = widget.chooseFolderLocked;
+    final Widget button = HButton(
+      key: const Key('fix-choose-folder'),
+      onPressed: locked == null ? widget.onChooseFolder : null,
+      child: Text(
+        widget.diagnosticCode == DiagnosticCodes.noProjectFolder
+            ? l10n.setupFixChooseFirstFolder
+            : l10n.setupFixChooseFolder,
+      ),
+    );
+    if (locked == null) {
+      return button;
+    }
+    return HoverLabel(label: locked, child: button);
   }
 
   /// Der Knopf und daneben, was er kopiert.

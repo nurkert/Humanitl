@@ -3164,5 +3164,15 @@
   "shellSettingsButton": "Settings (Ctrl+,)",
   "@shellSettingsButton": {"description": "Tooltip and screen-reader label of the gear button in the header that opens the settings sheet, the same sheet as the shortcut it names (HUM-275). The modifier is named as it is printed on the keyboard of the language, like shellPaletteHint."},
   "setupFixOpenSettings": "Open settings",
-  "@setupFixOpenSettings": {"description": "Fix button of a diagnostic whose fix is a setting the settings sheet shows, such as the access key of LLM_002 (HUM-275). Opens the settings sheet, scrolls to that field and focuses it."}
+  "@setupFixOpenSettings": {"description": "Fix button of a diagnostic whose fix is a setting the settings sheet shows, such as the access key of LLM_002 (HUM-275). Opens the settings sheet, scrolls to that field and focuses it."},
+  "workDirChooseButton": "Choose folder…",
+  "@workDirChooseButton": {"description": "Visible button beside the project-folder path in Setup and in the sandbox header while no folder is chosen (HUM-282). Opens the desktop's folder dialog; choosing starts nothing. The ellipsis says a dialog follows."},
+  "workDirChangeButton": "Change…",
+  "@workDirChangeButton": {"description": "The same button once a project folder is chosen (HUM-282). Opens the folder dialog to pick another folder; the current path stands beside it."},
+  "setupFixChooseFirstFolder": "Choose folder",
+  "@setupFixChooseFirstFolder": {"description": "Fix button on the card CONFIG_013 (no project folder chosen yet, HUM-282). Opens the same folder dialog as the button of the project row."},
+  "diagUI003Title": "The folder dialog did not open",
+  "@diagUI003Title": {"description": "Title of the diagnostic UI_003 (docs/DIAGNOSTICS.md): the desktop's folder dialog (on Linux the XDG desktop portal) failed, so no folder could be chosen here (HUM-282)."},
+  "diagUI003Why": "The desktop could not show a folder dialog. Open a terminal in the project folder and run humanitl run there.",
+  "@diagUI003Why": {"description": "Generic cause of UI_003. Names the way that works without the dialog: the command line starts a session in the current directory. The command itself stands in the copy row under it."}
 }
