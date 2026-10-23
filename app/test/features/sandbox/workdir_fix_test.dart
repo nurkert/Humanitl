@@ -8,6 +8,8 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ui/hover_label.dart';
+import 'package:humanitl_ui/humanitl_ui.dart';
 
 import 'harness.dart';
 
@@ -59,12 +61,34 @@ void main() {
     ]);
   });
 
-  testWidgets('while the sandbox runs the fix offers no chooser', (
+  testWidgets('while the sandbox runs the fix is locked and says why', (
     WidgetTester tester,
   ) async {
-    await pumpSandbox(tester, client: refusingClient(SandboxState.running));
+    final SandboxTestClient client = refusingClient(SandboxState.running);
+    await pumpSandbox(
+      tester,
+      client: client,
+      chosenDirectory: '/home/nik/clients/beta',
+    );
 
-    expect(find.byKey(const Key('fix-choose-folder')), findsNothing);
-    expect(find.text('Change sandbox.work_dir'), findsOneWidget);
+    final Finder fix = find.byKey(const Key('fix-choose-folder'));
+    expect(fix, findsOneWidget);
+    expect(tester.widget<HButton>(fix).enabled, isFalse);
+    expect(find.text('Change sandbox.work_dir'), findsNothing);
+    expect(
+      find.ancestor(
+        of: fix,
+        matching: find.byWidgetPredicate(
+          (Widget w) =>
+              w is HoverLabel &&
+              w.label ==
+                  'The project folder cannot change while the sandbox runs.',
+        ),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(fix, warnIfMissed: false);
+    await tester.pump();
+    expect(client.plans, isEmpty);
   });
 }

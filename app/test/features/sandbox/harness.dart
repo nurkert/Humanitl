@@ -223,6 +223,7 @@ Future<void> pumpSandbox(
   WidgetTester tester, {
   required SandboxTestClient client,
   String? chosenDirectory,
+  DirectoryChooser? chooser,
   HThemeMode mode = HThemeMode.dark,
   TextScaler textScaler = TextScaler.noScaling,
   Size size = const Size(1280, 800),
@@ -235,6 +236,7 @@ Future<void> pumpSandbox(
     sandboxUnderTest(
       client: client,
       chosenDirectory: chosenDirectory,
+      chooser: chooser,
       mode: mode,
       textScaler: textScaler,
       overrides: overrides,
@@ -256,6 +258,7 @@ Future<void> pumpSandbox(
 Widget sandboxUnderTest({
   required SandboxTestClient client,
   String? chosenDirectory,
+  DirectoryChooser? chooser,
   HThemeMode mode = HThemeMode.dark,
   TextScaler textScaler = TextScaler.noScaling,
   DateTime? now,
@@ -267,7 +270,11 @@ Widget sandboxUnderTest({
   return ProviderScope(
     overrides: <Override>[
       daemonClientProvider.overrideWithValue(client),
-      directoryChooserProvider.overrideWithValue(() async => chosenDirectory),
+      // [chooser] gewinnt über [chosenDirectory]: ein Dialog, der wirft
+      // (HUM-282).
+      directoryChooserProvider.overrideWithValue(
+        chooser ?? () async => chosenDirectory,
+      ),
       // Genau eine Überschreibung der Uhr: Riverpod 3 wirft, wenn derselbe
       // Provider in einem Container zweimal überschrieben wird. Wer die Uhr
       // anders stellen will, übergibt [now].
