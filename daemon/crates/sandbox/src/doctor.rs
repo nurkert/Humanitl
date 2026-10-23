@@ -778,6 +778,36 @@ pub enum LlmFacts {
         latency_ms: u32,
         /// Was die Probe daneben gefunden hat, zum Beispiel `LLM_006`.
         diagnostics: Vec<Diagnostic>,
+        /// Was zurückkam, wenn keine Modellliste kam, etwa
+        /// `HTTP 404, text/html` (HUM-283); `None` sonst.
+        answer: Option<String>,
+    },
+    /// `llm.endpoint` steht in der Konfiguration, aber die Ladung hat ihn
+    /// beiseitegelegt, weil er ein Zeichen trägt, das in keiner Adresse
+    /// steht (HUM-283, `humanitl_config::llm_endpoint::set_aside`).
+    SetAside {
+        /// Der Befund der Ladung (`CONFIG_003`, Warnung, mit der sauberen
+        /// Adresse als Vorschlag).
+        diagnostic: Box<Diagnostic>,
+    },
+    /// Der Endpunkt hat geantwortet, aber eine Anmeldung verlangt (`LLM_002`,
+    /// HUM-283).
+    ///
+    /// Die Probe des Doctors schickt mit Absicht keinen Zugangsschlüssel. Ein
+    /// `401` heißt dann nicht „hat nicht geantwortet" und auch nicht
+    /// zwingend „es fehlt ein Schlüssel": Ist einer hinterlegt, ist der
+    /// nächste Schritt die Probe mit ihm, nicht ein neuer.
+    Refused {
+        /// Die Adresse, die gefragt wurde.
+        endpoint: String,
+        /// Der Status, den der Server geschickt hat (`401` oder `403`), wenn
+        /// er sich aus dem Befund lesen ließ.
+        status: Option<u16>,
+        /// Ob ein Zugangsschlüssel hinterlegt ist; `None`, wenn das nicht zu
+        /// erfahren war. Nie der Schlüssel selbst.
+        key_stored: Option<bool>,
+        /// Der Befund der Probe.
+        diagnostic: Box<Diagnostic>,
     },
     /// Der Endpunkt hat nicht geantwortet.
     Silent {
@@ -810,6 +840,26 @@ impl LlmFacts {
             endpoint,
             command: command.into(),
         })
+    }
+
+    /// Wie [`LlmFacts::not_contacted`], mit den Befunden der Ladung.
+    ///
+    /// Fehlt der Endpunkt, weil die Ladung ihn beiseitegelegt hat (HUM-283),
+    /// sagt die Zeile das, statt „nicht gesetzt" zu behaupten.
+    #[must_use]
+    pub fn from_config(
+        endpoint: Option<String>,
+        load_diagnostics: &[Diagnostic],
+        command: impl Into<String>,
+    ) -> Self {
+        if endpoint.is_none()
+            && let Some(set_aside) = humanitl_config::llm_endpoint::set_aside(load_diagnostics)
+        {
+            return Self::SetAside {
+                diagnostic: Box::new(set_aside.clone()),
+            };
+        }
+        Self::not_contacted(endpoint, command)
     }
 }
 

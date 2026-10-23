@@ -132,11 +132,19 @@ class _Models extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         Text(
-          l10n.setupLlmMeasured(
-            probe.endpoint,
-            probe.models.length,
-            probe.latencyMs,
-          ),
+          // Ohne Modellliste sagt die Zeile, was zurückkam, statt "0 Modelle"
+          // neben `LLM_003` zu behaupten (HUM-283).
+          probe.models.isEmpty && probe.answer.isNotEmpty
+              ? l10n.setupLlmNoModelList(
+                  probe.endpoint,
+                  probe.latencyMs,
+                  probe.answer,
+                )
+              : l10n.setupLlmMeasured(
+                  probe.endpoint,
+                  probe.models.length,
+                  probe.latencyMs,
+                ),
           key: const Key('setup-evidence-llm'),
           style: tokens.typography.mono12.tinted(tokens.colors.fg1),
           maxLines: 2,

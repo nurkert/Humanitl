@@ -553,6 +553,46 @@ impl Merge {
                 return Err(project_scope_denied(&entry));
             }
 
+            // Dieselbe Prüfung des Texts wie `config set`, `SetConfig` und
+            // `ProbeLlm` (HUM-283): Der Parser der Adresse machte aus
+            // `…/v1/"` still `…/v1/%22`. Hier aber nie ein Abbruch, auch
+            // nicht aus einer Datei: Eine ältere Fassung hat die Adresse
+            // angenommen, und ein Daemon, der deshalb nicht startet, ließe
+            // sich auch über `SetConfig` nicht mehr reparieren. Der Wert
+            // bleibt draußen, der Befund ist eine Warnung mit der sauberen
+            // Adresse als Vorschlag ([`crate::llm_endpoint::set_aside`]).
+            if entry.path == crate::llm_endpoint::SETTING
+                && let Some(text) = entry.value.as_str()
+                && let Err(mut refused) = crate::llm_endpoint::check_text(text)
+            {
+                // Von der Kommandozeile ist der Wert eben getippt und nie
+                // gespeichert: Dort bleibt es eine Ablehnung.
+                if entry.origin == Origin::Cli {
+                    refused.why = format!(
+                        "{} (from {}): {}",
+                        entry.written_as, entry.origin, refused.why
+                    );
+                    return Err(refused);
+                }
+                refused.severity = Severity::Warning;
+                refused.why = format!(
+                    "{} (from {}): {}; the endpoint is ignored until it is corrected",
+                    entry.written_as, entry.origin, refused.why
+                );
+                self.diagnostics.push(refused);
+                // Wirklich nicht gesetzt, nicht nur übergangen (Review zu
+                // HUM-283): Sonst bliebe der Wert einer tieferen Ebene stehen,
+                // etwa `http://localhost:11434` aus `config.toml` unter einem
+                // beiseitegelegten Wert aus der Umgebung, und der hinterlegte
+                // Schlüssel ginge an ein Ziel, das niemand mehr meint. Eine
+                // höhere Ebene mit einer sauberen Adresse setzt ihn wieder.
+                self.flat.remove(&entry.path);
+                self.origins.insert(entry.path.clone(), Origin::Default);
+                self.alias_uses.remove(&entry.path);
+                self.canonical_uses.remove(&entry.path);
+                continue;
+            }
+
             if let Err(diagnostic) = check_value(field, &entry) {
                 if hard {
                     return Err(diagnostic);
@@ -951,7 +991,10 @@ mod tests {
 
     use toml::Value as TomlValue;
 
-    use super::{AliasUse, alias_diagnostics, nearest, scalar};
+    use humanitl_core::diagnostics::codes::CONFIG_003;
+    use humanitl_core::{FixAction, Severity};
+
+    use super::{AliasUse, Sources, alias_diagnostics, load, nearest, scalar};
     use crate::origin::Origin;
 
     #[test]
@@ -1030,5 +1073,64 @@ mod tests {
     fn a_typo_finds_its_neighbour() {
         assert_eq!(nearest("hold.timeoutt_secs"), Some("hold.timeout_secs"));
         assert_eq!(nearest("nothing.like.a.key"), None);
+    }
+
+    /// Eine Adresse mit dem Anführungszeichen aus der Zwischenablage (HUM-283).
+    #[test]
+    fn an_endpoint_with_a_stray_quote_is_set_aside_with_a_warning() {
+        // Eine ältere Fassung hat die Adresse angenommen: Der Start bricht
+        // nicht ab, der Wert gilt als nicht gesetzt, und eine Warnung nennt
+        // Herkunft, Zeichen und die saubere Adresse (HUM-283, Review).
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.toml");
+        std::fs::write(&file, "[llm]\nendpoint = 'https://h/v1/\"'\n").unwrap();
+        let sources = Sources {
+            global_toml: Some(file),
+            ..Sources::empty()
+        };
+        let resolved = load(&sources).unwrap();
+        assert_eq!(resolved.config.llm.endpoint, None);
+        let warning = crate::llm_endpoint::set_aside(&resolved.diagnostics)
+            .expect("the endpoint that was set aside is reported");
+        assert_eq!(warning.code, CONFIG_003);
+        assert_eq!(warning.severity, Severity::Warning);
+        assert!(warning.why.contains("a double quote"), "{}", warning.why);
+        assert!(warning.why.contains("config.toml"), "{}", warning.why);
+        assert_eq!(
+            warning.fix,
+            Some(FixAction::ChangeSetting {
+                key: "llm.endpoint".to_owned(),
+                value: "https://h/v1/".to_owned(),
+            })
+        );
+
+        // Von der Kommandozeile ist der Wert eben getippt: dort eine Ablehnung.
+
+        let cli = Sources::empty().with_cli([("llm.endpoint", "http://h:1/v1 ")]);
+        assert_eq!(load(&cli).unwrap_err().code, CONFIG_003);
+    }
+
+    /// Ein beiseitegelegter Wert einer höheren Ebene lässt den einer tieferen
+    /// nicht durchscheinen: sauberes `config.toml`, Umgebung mit
+    /// Anführungszeichen, und der Endpunkt ist danach nicht gesetzt, mit der
+    /// Warnung (Review zu HUM-283). Sonst ginge der hinterlegte Schlüssel an
+    /// `localhost`, und der Doctor zeigte die Ursache nicht.
+    #[test]
+    fn a_set_aside_endpoint_does_not_let_a_lower_layer_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.toml");
+        std::fs::write(&file, "[llm]\nendpoint = 'http://localhost:11434'\n").unwrap();
+        let sources = Sources {
+            global_toml: Some(file),
+            ..Sources::empty()
+        }
+        .with_env(crate::Env::from_pairs([(
+            "HUMANITL_LLM__ENDPOINT",
+            "https://corp.example/api/v1/\"",
+        )]));
+        let resolved = load(&sources).unwrap();
+        assert_eq!(resolved.config.llm.endpoint, None);
+        assert_eq!(resolved.origin("llm.endpoint"), Some(&Origin::Default));
+        assert!(crate::llm_endpoint::set_aside(&resolved.diagnostics).is_some());
     }
 }

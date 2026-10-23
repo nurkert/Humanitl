@@ -1599,6 +1599,10 @@ message ProbeLlmResponse {
   bool endpoint_is_private = 6;
   // Wahr, wenn die Probe einen Zugangsschluessel mitgeschickt hat (HUM-140).
   bool key_sent = 7;
+  // Was zurueckkam, wenn keine Modellliste kam: Status und Inhaltstyp der
+  // letzten Antwort, etwa `HTTP 200, text/html` (HUM-283). Leer, wenn eine
+  // Modellliste kam. Eine Oberflaeche zeigt diesen Text statt "0 Modelle".
+  string answer = 8;
 }
 
 // ---------- Zugangsschluessel ----------

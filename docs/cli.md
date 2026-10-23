@@ -260,7 +260,17 @@ off neither with `--json` nor with `-q`, because it belongs to the action and
 not to the output. The measurement goes through the RPC `ProbeLlm` in the
 daemon (`GET` on the endpoint's model list, for an Ollama without a path
 prefix first on `/api/tags`; no credentials, no redirects); without a running
-daemon there is no probe, and the line stays honestly unmeasured. The switch
+daemon there is no probe, and the line stays honestly unmeasured. A server
+that wants an access key answers this keyless probe with `401` or `403`; the
+line then says so, says that the doctor sends no key, and says whether one is
+stored (asked through `LlmKey`, never the key itself). The fix is
+`humanitl llm key set` only when none is stored; with one stored it is
+`humanitl llm test <endpoint> --with-key` (HUM-283). An `llm.endpoint` in
+`config.toml` that carries a quote, an angle bracket, a backslash or white
+space (an older version accepted it) does not stop the daemon: it counts as
+not set, and the line `llm` carries the `CONFIG_003` warning with the cleaned
+address as its fix. Without a model list the line names the last answer
+(`no model list, last answer HTTP 404, text/html`) instead of `0 models`. The switch
 is not called `--llm`: that is the alias of `--llm-endpoint` and **sets** the
 address instead of checking it.
 
@@ -1116,8 +1126,14 @@ An endpoint that does not answer ends with `1` and the daemon's Diagnostic
 (`LLM_001`; `LLM_007` if the address could not even be read). Diagnostics
 that are not a failure stand below the output and the run ends with `0`:
 `LLM_006` for an address outside your own network, and `LLM_003` for a server
-that answers, but as no known API — then it reads `flavor: unknown` and there
-is no model list. Whoever answered, answered.
+that answers, but as no known API — then it reads `flavor: unknown`, there
+is no model list, and `answer:` (in `--json` the key `answer`) says what came
+back instead, status and content type, for instance `HTTP 404, text/html`
+(HUM-283). Whoever answered, answered. An address with a quote, an angle
+bracket, a backslash or white space in it is refused before any request with
+`CONFIG_003`, naming the character and its position and offering the cleaned
+address: such a character is almost always left over from copying the address
+out of a configuration file.
 
 ## `humanitl llm key`
 
@@ -1145,9 +1161,12 @@ carries the key, not even `--json`: it names `set`, `store`
 (`secret-service`, `file` or `none`), `key_ref` and the Diagnostics.
 
 `status` reports `LLM_009` if `llm.api_key_ref` names a key that the store
-does not hand out. `remove` removes key and reference. A key that is empty,
-contains whitespace or is longer than 4096 bytes is rejected with
-`CONFIG_020`, and nothing is written. As with every setting, a new key applies
+does not hand out. `remove` removes key and reference. White space around
+the key and one quote at each end are removed before it is stored, so a key
+copied with its quotes out of a configuration file works (HUM-283). A key
+that is then empty, contains white space inside or is longer than 4096 bytes
+is rejected with `CONFIG_020`, without repeating the key, and nothing is
+written. As with every setting, a new key applies
 to the next session; a running one keeps what it was started with.
 
 ## The global switches

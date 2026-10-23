@@ -110,6 +110,7 @@ fn healthy() -> MachineFacts {
             models: 4,
             latency_ms: 9,
             diagnostics: Vec::new(),
+            answer: None,
         },
         tray: TrayFacts {
             library: Some(PathBuf::from("/usr/lib/libayatana-appindicator3.so.1")),
