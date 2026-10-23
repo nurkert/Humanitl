@@ -46,6 +46,11 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-273 | Releases 0.0.x appear as regular releases, not as pre-releases | S | HUM-053, HUM-225 |
 | HUM-277 | Saved settings take effect without restarting the daemon (before HUM-060) | M | HUM-069, HUM-140, HUM-151 |
 | HUM-278 | The daemon finds agents installed in ~/.local/bin (before HUM-060) | S | HUM-037, HUM-136 |
+| HUM-275 | Settings are reachable without a shortcut, and LLM_002 leads to the key field (before HUM-060) | S | HUM-069, HUM-140, HUM-254 |
+| HUM-276 | The "no tray" notice can be dismissed for good and sits under the header (before HUM-060) | S | HUM-034, HUM-254 |
+| HUM-279 | `humanitl sandbox attach` has a detach key (before HUM-060) | S | HUM-042 |
+| HUM-280 | The agent starts from a shell inside the sandbox (before HUM-060) | M | HUM-042, HUM-278, HUM-279 |
+| HUM-281 | The concurrent start test counts one sandbox twice | S | HUM-067, HUM-277 |
 
 ---
 
@@ -5399,3 +5404,179 @@ per-user search each turn at least one of these tests red. All run without
 ### References
 HUM-037, HUM-135, HUM-136, HUM-139, HUM-263. `docs/SECURITY.md` section on
 binds and `docs/THREAT-MODEL.md` K-17 changed in the same commit.
+
+## HUM-275 · Settings are reachable without a shortcut, and LLM_002 leads to the key field (before HUM-060)
+
+### Context
+On the owner's machine (v0.0.6) the status line said the endpoint "requires an
+access key that is not provided". The app offered no visible way to enter one:
+the settings sheet opens only with `Ctrl+,`, and the LLM_002 diagnostic has no
+fix that leads there. The owner found the shortcut by chance.
+
+### Goal
+Settings have a visible entry, and every diagnostic that a setting resolves
+opens the settings sheet at that field.
+
+### Specification
+1. A settings button (gear icon, tooltip "Settings (Ctrl+,)") sits in the
+   shell where it is visible in every view and with the sidebar collapsed
+   (HUM-254). It opens the same sheet as `Ctrl+,`.
+2. LLM_002 carries `FixAction::ChangeSetting { key: "llm.api_key_ref", value:
+   "" }` from the daemon (probe and status line). The app renders a
+   `ChangeSetting` fix as a button "Open settings" that opens the sheet,
+   scrolls to the field of `key` and focuses it; for `llm.api_key_ref` that is
+   the access-key field. Keys the sheet does not show keep today's rendering.
+3. CLI: the same fix prints `humanitl llm key set` as before (no change to the
+   CLI text).
+4. ARB keys in `en` and `de`; widget test and golden of the button in both
+   themes.
+
+### Tests
+- `settings_entry_test`: the gear button exists with the sidebar open and
+  collapsed and opens the sheet.
+- `change_setting_fix_test`: an LLM_002 diagnostic with the fix opens the sheet
+  with the key field focused.
+- Daemon: `llm_002_carries_the_change_setting_fix`.
+Mutation proofs: removing the button, dropping the fix in the daemon, opening
+the sheet without focusing the field each turn a test red.
+
+### Acceptance criteria
+1. Without knowing `Ctrl+,`, a user reaches the settings in one click from any
+   view.
+2. LLM_002 in the status line offers a button that lands in the key field.
+3. `flutter analyze`, goldens and the daemon tests are green.
+
+## HUM-276 · The "no tray" notice can be dismissed for good and sits under the header (before HUM-060)
+
+### Context
+On a desktop without a StatusNotifier host (sway without a tray bar) the app
+shows UI_002 "This desktop has no tray" in the left column. The owner could not
+dismiss it, it took space in the queue column, and after a restart it was back.
+
+### Goal
+The notice is shown once where it does not cover work, can be dismissed with a
+reachable button, and stays dismissed across restarts.
+
+### Specification
+1. The notice is a banner under the header, full window width, not inside the
+   queue or sidebar column.
+2. Its "Dismiss" button is reachable by mouse and keyboard (focus order, Esc
+   does not dismiss by accident) and works in both widths of the sidebar.
+3. Dismissal is stored in the app's local preferences (the store HUM-254 uses
+   for the sidebar state), keyed by the diagnostic code. A later UI_002 after
+   a restart is not shown again; it stays visible in Diagnostics / the doctor.
+4. Nothing else about tray detection changes.
+
+### Tests
+- `attention_notice_test`: the banner sits under the header, not in the queue
+  column; Dismiss hides it.
+- `notice_dismissal_persists_test`: after Dismiss and a rebuilt app with the
+  same preferences the banner stays hidden; with fresh preferences it shows.
+- Goldens of the banner in both themes.
+Mutation proofs: not writing the preference, rendering in the old place, each
+turns a test red.
+
+### Acceptance criteria
+1. The notice can be dismissed and does not return after a restart.
+2. It does not sit in the left column.
+
+## HUM-279 · `humanitl sandbox attach` has a detach key (before HUM-060)
+
+### Context
+`humanitl sandbox attach` puts the terminal into raw mode and forwards every
+byte, `Ctrl+C` included, to the session. The only way out today is closing the
+terminal or a signal from outside. The owner wants to work like `screen`:
+attach, detach, attach again, with the agent running on.
+
+### Goal
+A key sequence detaches the client and leaves the session running.
+
+### Specification
+1. Default prefix `Ctrl+A` (0x01), as in `screen`. After the prefix:
+   `d` detaches (sends `close`, restores the terminal, exit 0 with the line
+   "Detached; the session keeps running. Attach again: humanitl sandbox
+   attach"); `Ctrl+A` or `a` sends one literal 0x01; any other byte sends the
+   prefix and that byte unchanged.
+2. `--detach-keys <spec>` overrides the prefix (`ctrl-a`, `ctrl-b`, ... `ctrl-]`;
+   `none` disables detaching). Config key `terminal.detach_prefix` sets the
+   default.
+3. On attach, one line on stderr before raw mode: "Detach: Ctrl+A d".
+4. The prefix may arrive split across reads; a prefix at the end of a read
+   waits for the next byte, without a timeout.
+5. `--read-only` detaches on the same key (no bytes go up anyway).
+6. The app terminal is not affected.
+
+### Tests
+- `attach::tests::ctrl_a_d_detaches`, `ctrl_a_ctrl_a_sends_one_prefix`,
+  `a_prefix_split_across_reads_still_detaches`,
+  `an_unknown_key_after_the_prefix_is_forwarded`, `none_disables_detaching`.
+- CLI integration: attach to a fake daemon, send `\x01d`, exit 0 and a `close`
+  message, terminal restored.
+Mutation proofs: forwarding the prefix unconditionally, dropping the split
+handling, each turn a test red.
+
+### Acceptance criteria
+1. `Ctrl+A d` detaches, the session keeps running, a second `attach` shows it.
+2. A literal `Ctrl+A` still reaches the agent (`Ctrl+A Ctrl+A`).
+3. The terminal is restored after detaching.
+
+## HUM-280 · The agent starts from a shell inside the sandbox (before HUM-060)
+
+### Context
+`humanitl run -- bash` gives a shell in the sandbox with the adapter's config
+files and environment (model, key file, CA), because the daemon applies the
+adapter contribution to caller commands too. The agent program itself is not
+there when it lives outside the mounts: HUM-278 binds only the configured
+agent and only as the session's own command. The owner wants to open a shell,
+start `opencode` or `pi` there, stop it with `Ctrl+C`, and start it again.
+
+### Goal
+In a session started with a caller command, the configured agent is on the
+shell's PATH with the same model, key and config as a daemon-started agent,
+and `Ctrl+C` in the shell stops it.
+
+### Specification
+1. When the session command comes from the caller, the daemon still binds the
+   configured agent program by HUM-278's rules (same search, same checks, fd
+   bind) at `/run/humanitl/agent/<name>`, and prepends `/run/humanitl/agent`
+   to the sandbox PATH. The caller's own command is still never bound.
+2. The adapter's files and environment are the same as for a daemon-started
+   agent (already so; a test pins it).
+3. Job control: the session's first process gets the session's pseudo-terminal
+   as controlling terminal, so `Ctrl+C` in an interactive shell interrupts the
+   foreground program, not the shell. The pty is the daemon's own, never the
+   user's terminal, so TIOCSTI cannot reach the host. `docs/SECURITY.md` and
+   `docs/THREAT-MODEL.md` say why `--new-session` stays and how the controlling
+   terminal is set.
+4. `humanitl run -- bash` attaches interactively like `humanitl sandbox attach`
+   when stdin is a terminal (raw mode, resize, HUM-279 detach key); otherwise
+   it keeps today's read-only behaviour.
+5. The doctor and the preflight do not change.
+
+### Tests
+- `ipc::sandbox`: a caller command plan contains the agent bind and the PATH
+  entry; the caller's command is not bound.
+- Sandbox integration (CI, real bwrap): `bash -ic 'command -v opencode'` prints
+  `/run/humanitl/agent/opencode`; `OPENCODE_CONFIG` points at the adapter file.
+- PTY integration: an interactive shell, `sleep 100`, then `\x03`, the shell
+  prompt comes back and the session still runs.
+- CLI: `run -- bash` with a terminal enters raw mode; without one it does not.
+Mutation proofs: not binding for caller commands, no PATH entry, no
+controlling terminal, each turns a test red.
+
+### Acceptance criteria
+1. `humanitl run -- bash`, then `opencode` (or `pi` with HUM-274) starts the
+   agent with the configured model and key, without further setup.
+2. `Ctrl+C` stops the agent and returns to the shell; `exit` ends the session.
+3. Detach and attach work as in HUM-279.
+4. The security statement in `README.md` holds; SECURITY.md and THREAT-MODEL.md
+   are updated in the same commit.
+
+## HUM-281 · The concurrent start test counts one sandbox twice
+
+Done (b8e11d0). `only_one_of_two_concurrent_starts_gets_the_session` failed on
+main about three times in four with a real bwrap. The refused start reports,
+by design, the state of the running session after CLI_005; once the winner
+reached `Running`, both streams carried `Running` and the old count gave two.
+The test now counts distinct non-empty sandbox ids across `Running` statuses.
+The daemon is unchanged; HUM-277's timing made the race visible.
