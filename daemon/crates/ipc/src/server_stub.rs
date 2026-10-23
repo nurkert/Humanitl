@@ -163,6 +163,18 @@ pub trait DaemonApi: Send + Sync + 'static {
     /// [`Diagnostic`] mit `CONFIG_020`, wenn der Schlüssel keiner ist oder
     /// sich nicht ablegen lässt.
     async fn llm_key(&self, request: v1::LlmKeyRequest) -> Result<v1::LlmKeyStatus, Diagnostic>;
+
+    /// Die gespeicherten Modellserver: auflisten, anlegen, umbenennen,
+    /// entfernen, aktivieren (HUM-289). Keine Antwort trägt einen Schlüssel.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `CONFIG_021`, wenn der Auftrag nichts ändert, und
+    /// `CONFIG_003` für einen Endpunkt, der keiner ist.
+    async fn llm_servers(
+        &self,
+        request: v1::LlmServersRequest,
+    ) -> Result<v1::LlmServerList, Diagnostic>;
 }
 
 /// Der tonic-Dienst über einem beliebigen [`DaemonApi`].
@@ -228,7 +240,11 @@ pub fn grpc_code(code: DiagnosticCode) -> Code {
         // einer Form, die sich nicht ändern ließ, ohne mehr zu ändern (HUM-151),
         // der Flow trägt ein bestätigtes Geheimnis unter der harten Sperre und
         // darf nur bearbeitet hinaus (HUM-159).
-        "IPC_003" | "RULES_010" | "CONFIG_015" | "HOLD_004" => Code::FailedPrecondition,
+        // `CONFIG_021`: ein Auftrag an die Modellserver, den ihr Stand nicht
+        // zulässt, etwa den aktiven ohne Nachfolger zu entfernen (HUM-289).
+        "IPC_003" | "RULES_010" | "CONFIG_015" | "HOLD_004" | "CONFIG_021" => {
+            Code::FailedPrecondition
+        }
         "DAEMON_001" => Code::Unavailable,
         _ => Code::Internal,
     }
@@ -528,6 +544,18 @@ impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
         self.check_token(&request)?;
         self.api
             .llm_key(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+    }
+
+    async fn llm_servers(
+        &self,
+        request: Request<v1::LlmServersRequest>,
+    ) -> Result<Response<v1::LlmServerList>, Status> {
+        self.check_token(&request)?;
+        self.api
+            .llm_servers(request.into_inner())
             .await
             .map(Response::new)
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))

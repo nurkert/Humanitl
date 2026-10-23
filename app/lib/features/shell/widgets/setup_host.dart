@@ -19,6 +19,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/ipc/config_providers.dart';
 import '../../sandbox/providers/sandbox_status_provider.dart';
 import '../../setup/providers/setup_provider.dart';
 import '../../setup/setup_screen.dart';
@@ -69,6 +70,9 @@ class SetupHost extends ConsumerWidget {
       report: ref.watch(setupDoctorProvider).value ?? DoctorReport.empty,
       probe: ref.watch(setupLlmProbeProvider),
       llmEndpoint: status.llmEndpoint,
+      activeServer: _activeServer(
+        ref.watch(llmServersProvider).value ?? SavedServers.none,
+      ),
       workMode: status.workMode,
       sandboxLocked: sandboxBusy,
       onRetry: () {
@@ -140,3 +144,9 @@ void _remeasure(WidgetRef ref) {
   unawaited(ref.read(setupDoctorProvider.notifier).refresh());
   unawaited(ref.read(sandboxStatusProvider.notifier).refresh());
 }
+
+/// The name of the active saved server the model row names, or empty: also
+/// empty while the list only derives `default` from the flat keys, because
+/// then nobody has saved a server yet (HUM-289).
+String _activeServer(SavedServers list) =>
+    list.implicit || list.servers.isEmpty ? '' : list.active;

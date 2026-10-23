@@ -16,7 +16,7 @@ Entfernen eines Codes.
 |---|---|---|---|---|
 | daemon | `DAEMON` | 001 | 019 | 001-004 Start, Erreichbarkeit, Version des Daemons, 005-008 die Nutzer-Unit von `daemon install` (HUM-044), 009 Abschied (HUM-142), 010 Nutzersitzung, 011 Binaries aus dem `AppImage`, 012 `journalctl` (HUM-070), 013 der von systemd übergebene Socket (HUM-053), 014 `daemon uninstall` (HUM-077) |
 | ipc | `IPC` | 001 | 009 | gRPC-Schnittstelle, Token, Aufrufe gegen den Zustand |
-| config | `CONFIG` | 001 | 029 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel (HUM-070), 019-020 der Zugangsschlüssel des Modells (HUM-140, Bereich dafür bis 029 erweitert) |
+| config | `CONFIG` | 001 | 029 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel (HUM-070), 019-020 der Zugangsschlüssel des Modells (HUM-140, Bereich dafür bis 029 erweitert), 021 die gespeicherten Modellserver (HUM-289) |
 | sandbox | `SANDBOX` | 001 | 029 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043) |
 | proxy | `PROXY` | 001 | 019 | Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120) |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
@@ -362,6 +362,14 @@ Zugangsschlüssel nicht gespeichert
 **Auslöser.** `LlmKey(Set)` oder `LlmKey(Clear)` bekommt einen Schlüssel, der keiner ist (leer, kürzer als 16 Zeichen, länger als 4096 Bytes, mit Leerraum), eine Anfrage ohne Operation, oder weder Schlüsselbund noch Datei lassen sich schreiben oder löschen.
 
 **Fix.** Bei einem zu kurzen Schlüssel `openssl rand -hex 24` zum Kopieren, für einen lokalen Server mit selbst gewähltem Schlüssel; sonst nennt der Text den Grund, und ein Schlüssel ohne Leerraum oder ein beschreibbares Datenverzeichnis behebt ihn.
+
+#### CONFIG_021
+
+Modellserver nicht geändert
+
+**Auslöser.** `LlmServers` oder `humanitl llm server` bekommt einen ungültigen, doppelten oder unbekannten Namen, einen Endpunkt, der keiner ist, oder soll den aktiven Server ohne Nachfolger oder während einer Sitzung entfernen; `LlmKey` trifft einen Server, der sich beim Ablegen geändert hat oder dessen Verweis ein anderer trägt; `SetConfig` nennt einen Server, der nicht mehr aktiv ist; oder beim Laden gibt es keinen gültigen aktiven Server, einen geteilten Verweis oder einen Endpunkt, der nicht vom aktiven Server kommt.
+
+**Fix.** `CopyCommand`: `humanitl llm server ls` zeigt die Namen; beim Entfernen des aktiven Servers `--use NAME` mit dem Nachfolger.
 
 ### Bereich sandbox
 

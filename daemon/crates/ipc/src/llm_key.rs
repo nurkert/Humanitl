@@ -9,6 +9,13 @@
 //!   (`CONFIG_019`), und richtet `llm.api_key_ref` in `config.toml` darauf.
 //! - `remove` entfernt ihn und nimmt den Verweis aus `config.toml`.
 //!
+//! Mit `LlmKeyRequest.server` gilt jede Operation dem Schlüssel dieses
+//! gespeicherten Servers (HUM-289): `set` legt ihn unter dem Namen des
+//! Servers ab (`secret-service:humanitl/<name>`, oder unter dem Namen, den
+//! sein Verweis schon trägt) und richtet `llm.servers.<name>.api_key_ref`
+//! darauf, beim aktiven Server auch `llm.api_key_ref`. Ohne Namen gilt der
+//! aktive Server, und ohne Einträge `llm.api_key_ref` wie bisher.
+//!
 //! Die Reihenfolge von `set` ist Absicht: erst der Speicher, dann der Verweis.
 //! Scheitert der Verweis, steht ein Schlüssel im Speicher, auf den nichts
 //! zeigt — harmlos, und das nächste `set` überschreibt ihn. Andersherum stünde
@@ -16,9 +23,10 @@
 //! bräche mit `LLM_009` ab.
 
 use humanitl_config::secret::{KeyRef, KeyStore, StoreKind};
+use humanitl_config::servers;
 use humanitl_config::{Paths, ProfileSelection};
-use humanitl_core::Diagnostic;
-use humanitl_core::diagnostics::codes::CONFIG_020;
+use humanitl_core::diagnostics::codes::{CONFIG_020, CONFIG_021};
+use humanitl_core::{Diagnostic, Severity};
 use zeroize::Zeroizing;
 
 use crate::{convert, v1};
@@ -29,19 +37,86 @@ const KEY_REF_PATH: [&str; 2] = ["llm", "api_key_ref"];
 /// Beantwortet einen Auftrag an `LlmKey`.
 ///
 /// Blockiert: Es startet `secret-tool` und schreibt `config.toml`. Der Dienst
-/// ruft es in [`tokio::task::spawn_blocking`].
+/// ruft es in [`tokio::task::spawn_blocking`]. Der ganze Ablauf steht unter
+/// [`servers::lock`], derselben Sperre wie `LlmServers` (HUM-289).
 ///
 /// # Errors
 ///
 /// `CONFIG_020` ohne Operation, und wenn der Schlüssel keiner ist oder
-/// sich nirgends ablegen oder entfernen lässt, und die Befunde von
-/// [`humanitl_config::edit::set_value`], wenn `config.toml` nicht geschrieben
-/// wurde.
+/// sich nirgends ablegen oder entfernen lässt; `CONFIG_021` für einen
+/// Server, den es nicht gibt, für ein `set` oder `remove` ohne aktiven
+/// Server und für einen Server, der sich während des Ablegens geändert hat;
+/// und die Befunde von [`humanitl_config::edit::edit_with`], wenn
+/// `config.toml` nicht geschrieben wurde.
 pub fn answer(
     paths: &Paths,
     keys: &KeyStore,
     request: v1::LlmKeyRequest,
 ) -> Result<v1::LlmKeyStatus, Diagnostic> {
+    answer_with(paths, keys, request, &mut || {})
+}
+
+/// [`answer`] mit einem Haken zwischen Ablegen und Verweis, unter der Sperre;
+/// für Tests, die zeigen, was in diesem Augenblick warten muss.
+fn answer_with(
+    paths: &Paths,
+    keys: &KeyStore,
+    request: v1::LlmKeyRequest,
+    before_attach: &mut dyn FnMut(),
+) -> Result<v1::LlmKeyStatus, Diagnostic> {
+    let _order = servers::lock(paths)?;
+    answer_locked(paths, keys, request, before_attach)
+}
+
+/// [`answer`] unter der Sperre; `before_attach` läuft beim Setzen für einen
+/// Server zwischen dem Ablegen des Schlüssels und dem Verweis darauf. Tests
+/// schreiben dort `config.toml` von außen um, wie es ein zweiter Prozess
+/// täte.
+fn answer_locked(
+    paths: &Paths,
+    keys: &KeyStore,
+    request: v1::LlmKeyRequest,
+    before_attach: &mut dyn FnMut(),
+) -> Result<v1::LlmKeyStatus, Diagnostic> {
+    let is_status = matches!(request.op, Some(v1::llm_key_request::Op::Status(_)));
+    let named = !request.server.trim().is_empty();
+    match target(paths, request.server.trim())? {
+        // Ein Setzen oder Entfernen ohne Namen träfe den Server, der gerade
+        // aktiv ist, und nicht unbedingt den, für den der Mensch den Schlüssel
+        // eingegeben hat (HUM-289, Review): Gibt es gespeicherte Server,
+        // nennt der Auftrag ihn, wie `SetConfig` mit `expected_server`.
+        Target::Server(_) if !named && !is_status => {
+            return Err(Diagnostic::builder(CONFIG_021, Severity::Error)
+                .why(
+                    "LlmKey changed nothing: saved model servers exist, and the request names \
+                     none; a key is set or removed only for the server it was entered for"
+                        .to_owned(),
+                )
+                .fix(humanitl_core::FixAction::CopyCommand(
+                    "humanitl llm key set --server NAME".to_owned(),
+                ))
+                .build());
+        }
+        Target::Server(server) => {
+            return answer_for(paths, keys, &server, request.op, before_attach);
+        }
+        // Ohne gültigen aktiven Server gibt es keinen Schlüssel, nach dem
+        // sich fragen ließe: der leere Stand, kein Fehler (Review).
+        Target::NoActive if is_status => return Ok(v1::LlmKeyStatus::default()),
+        Target::NoActive => {
+            return Err(Diagnostic::builder(CONFIG_021, Severity::Error)
+                .why(
+                    "LlmKey changed nothing: no model server is active, so it is unclear whose \
+                     key is meant; name the server"
+                        .to_owned(),
+                )
+                .fix(humanitl_core::FixAction::CopyCommand(
+                    "humanitl llm key set --server NAME".to_owned(),
+                ))
+                .build());
+        }
+        Target::Flat => {}
+    }
     match request.op {
         Some(v1::llm_key_request::Op::Status(_)) => Ok(status(paths, keys, Vec::new())),
         Some(v1::llm_key_request::Op::Set(mut set)) => {
@@ -50,10 +125,211 @@ pub fn answer(
             store(paths, keys, &text)
         }
         Some(v1::llm_key_request::Op::Remove(_)) => remove(paths, keys),
-        None => Err(Diagnostic::builder(CONFIG_020, humanitl_core::Severity::Error)
-            .why("LlmKey changed nothing: the request names no operation (status, set or remove)".to_owned())
-            .build()),
+        None => Err(no_operation()),
     }
+}
+
+/// Wem ein Auftrag gilt.
+enum Target {
+    /// Den flachen Schlüsseln, ohne gespeicherte Server.
+    Flat,
+    /// Diesem gespeicherten Server.
+    Server(String),
+    /// Es gibt Server, aber keinen gültigen aktiven.
+    NoActive,
+}
+
+/// Der Server, dem der Auftrag gilt.
+///
+/// Ein genannter Server gilt, wie er heißt. Ohne Namen gilt der aktive, wie
+/// ihn die wirksame Konfiguration sieht (alle Ebenen, auch die Umgebung);
+/// ohne Einträge bleibt es bei `llm.api_key_ref`, damit eine Datei von vor
+/// HUM-289 sich nicht ändert, nur weil jemand einen Schlüssel setzt.
+fn target(paths: &Paths, named: &str) -> Result<Target, Diagnostic> {
+    if !named.is_empty() {
+        servers::check_name(named)?;
+        return Ok(Target::Server(named.to_owned()));
+    }
+    if let Ok(resolved) =
+        humanitl_config::resolve(&ProfileSelection::default(), None, paths.env(), &[])
+    {
+        let llm = resolved.config.llm;
+        if llm.servers.is_empty() {
+            return Ok(Target::Flat);
+        }
+        return Ok(llm
+            .active
+            .filter(|name| llm.servers.contains_key(name))
+            .map_or(Target::NoActive, Target::Server));
+    }
+    let table = crate::llm_servers::read_table(paths)?;
+    if !servers::has_servers(&table) {
+        return Ok(Target::Flat);
+    }
+    Ok(servers::active_name(&table).map_or(Target::NoActive, Target::Server))
+}
+
+/// Der Auftrag für den Schlüssel des Servers `server` (HUM-289).
+fn answer_for(
+    paths: &Paths,
+    keys: &KeyStore,
+    server: &str,
+    op: Option<v1::llm_key_request::Op>,
+    before_attach: &mut dyn FnMut(),
+) -> Result<v1::LlmKeyStatus, Diagnostic> {
+    let table = crate::llm_servers::read_table(paths)?;
+    match op {
+        Some(v1::llm_key_request::Op::Status(_)) => Ok(status_of(
+            keys,
+            servers::key_ref_of(&table, server)?,
+            Vec::new(),
+        )),
+        Some(v1::llm_key_request::Op::Set(mut set)) => {
+            let text = Zeroizing::new(std::mem::take(&mut set.key));
+            let key = humanitl_config::secret::ApiKey::from_pasted(&text)?;
+            let before = entry_of(&table, server)?;
+            let name = servers::key_name_for(&table, server)?;
+            let stored = keys.store_named(&name, &key)?;
+            before_attach();
+            attach(paths, keys, server, &before, &stored.key_ref)?;
+            let notes = stored
+                .note
+                .iter()
+                .map(convert::diagnostic_to_proto)
+                .collect();
+            Ok(status_of(keys, Some(stored.key_ref), notes))
+        }
+        Some(v1::llm_key_request::Op::Remove(_)) => {
+            // Ein Verweis, den ein anderer Server auch trägt, löscht nicht
+            // dessen Schlüssel mit, wie beim Entfernen eines Servers.
+            if let Some(key_ref) = servers::key_ref_of(&table, server)?
+                && !servers::shared_by_other(&table, &key_ref, server)
+            {
+                keys.clear(&key_ref)?;
+            }
+            write_server_ref(paths, server, None)?;
+            Ok(status_of(keys, None, Vec::new()))
+        }
+        None => Err(no_operation()),
+    }
+}
+
+/// Der Eintrag `server`, wie er jetzt dasteht.
+fn entry_of(table: &toml::Table, server: &str) -> Result<servers::ServerEntry, Diagnostic> {
+    servers::list(table)
+        .servers
+        .into_iter()
+        .find(|entry| entry.name == server)
+        .ok_or_else(|| {
+            // Dieselbe Absage wie `key_ref_of` für einen unbekannten Namen.
+            servers::key_ref_of(table, server).err().unwrap_or_else(|| {
+                Diagnostic::builder(CONFIG_021, Severity::Error)
+                    .why(format!("there is no server named {server}"))
+                    .build()
+            })
+        })
+}
+
+/// Hängt den eben abgelegten Schlüssel an den Server, wenn er noch derselbe
+/// ist (HUM-289, Review D).
+///
+/// Unter der Sperre von `config.toml` wird nachgesehen, ob der Eintrag noch
+/// da ist, denselben Endpunkt hat und keinen anderen Verweis trägt als den,
+/// unter dem der Schlüssel eben abgelegt wurde. Hat ihn jemand dazwischen
+/// entfernt, neu angelegt oder auf eine andere Adresse gerichtet, wird der
+/// Schlüssel nicht angehängt: Er gehört zu dem Server, für den ihn der Mensch
+/// eingegeben hat. Der abgelegte Eintrag im Speicher wird dann gelöscht, und
+/// ein Verweis darauf, der noch irgendwo steht, verschwindet mit ihm; lieber
+/// fehlt ein Schlüssel, als dass er an eine fremde Herkunft geht.
+fn attach(
+    paths: &Paths,
+    keys: &KeyStore,
+    server: &str,
+    before: &servers::ServerEntry,
+    key_ref: &KeyRef,
+) -> Result<(), Diagnostic> {
+    let file = paths.config_path();
+    let attached = humanitl_config::edit::edit_with(
+        &file,
+        |old| {
+            let now = servers::list(old)
+                .servers
+                .into_iter()
+                .find(|entry| entry.name == server);
+            let same = now.as_ref().is_some_and(|now| {
+                now.endpoint == before.endpoint
+                    && now
+                        .api_key_ref
+                        .as_deref()
+                        .and_then(KeyRef::parse)
+                        .is_none_or(|own| own.name() == key_ref.name())
+            });
+            if !same {
+                return Err(Diagnostic::builder(CONFIG_021, Severity::Error)
+                    .why(format!(
+                        "the access key was not attached: the server {server} changed while the \
+                         key was being stored (it was removed, added again or got another \
+                         endpoint); set the key again for the server as it is now"
+                    ))
+                    .fix(humanitl_core::FixAction::CopyCommand(format!(
+                        "humanitl llm key set --server {server}"
+                    )))
+                    .build());
+            }
+            servers::set_key_ref(old, server, Some(key_ref))
+        },
+        |_| Ok(()),
+    );
+    let Err(refused) = attached else {
+        return Ok(());
+    };
+    // Der Schlüssel liegt schon im Speicher; er darf an keinem Eintrag
+    // hängen, für den er nicht eingegeben wurde.
+    let _detached = humanitl_config::edit::edit_with(
+        &file,
+        |old| {
+            let mut edits = Vec::new();
+            for entry in servers::list(old).servers {
+                if entry
+                    .api_key_ref
+                    .as_deref()
+                    .and_then(KeyRef::parse)
+                    .is_some_and(|own| own.name() == key_ref.name())
+                {
+                    edits.extend(servers::set_key_ref(old, &entry.name, None)?);
+                }
+            }
+            Ok(edits)
+        },
+        |_| Ok(()),
+    );
+    let _cleared = keys.clear(key_ref);
+    Err(refused)
+}
+
+/// Richtet den Verweis des Servers `server` auf den Schlüssel, oder nimmt
+/// ihn heraus; beim aktiven Server auch `llm.api_key_ref`.
+fn write_server_ref(
+    paths: &Paths,
+    server: &str,
+    key_ref: Option<&KeyRef>,
+) -> Result<(), Diagnostic> {
+    humanitl_config::edit::edit_with(
+        &paths.config_path(),
+        |old| servers::set_key_ref(old, server, key_ref),
+        |_| Ok(()),
+    )?;
+    Ok(())
+}
+
+/// `CONFIG_020` für einen Auftrag ohne Operation.
+fn no_operation() -> Diagnostic {
+    Diagnostic::builder(CONFIG_020, Severity::Error)
+        .why(
+            "LlmKey changed nothing: the request names no operation (status, set or remove)"
+                .to_owned(),
+        )
+        .build()
 }
 
 /// Legt den Schlüssel ab und richtet den Verweis darauf.
@@ -107,7 +383,20 @@ pub fn status(
     keys: &KeyStore,
     mut diagnostics: Vec<v1::Diagnostic>,
 ) -> v1::LlmKeyStatus {
-    let Some(key_ref) = configured_ref(paths) else {
+    status_of(
+        keys,
+        configured_ref(paths),
+        std::mem::take(&mut diagnostics),
+    )
+}
+
+/// Der Stand zu einem Verweis, wie [`status`] ihn beschreibt.
+fn status_of(
+    keys: &KeyStore,
+    key_ref: Option<KeyRef>,
+    mut diagnostics: Vec<v1::Diagnostic>,
+) -> v1::LlmKeyStatus {
+    let Some(key_ref) = key_ref else {
         return v1::LlmKeyStatus {
             diagnostics,
             ..v1::LlmKeyStatus::default()
@@ -174,7 +463,10 @@ mod tests {
     }
 
     fn request(op: v1::llm_key_request::Op) -> v1::LlmKeyRequest {
-        v1::LlmKeyRequest { op: Some(op) }
+        v1::LlmKeyRequest {
+            op: Some(op),
+            ..v1::LlmKeyRequest::default()
+        }
     }
 
     fn set_op(key: &str) -> v1::LlmKeyRequest {
@@ -307,5 +599,262 @@ mod tests {
         let refused = answer(&paths, &keys, set_op("sk-1\n")).unwrap_err();
         assert_eq!(refused.code.as_str(), "CONFIG_020");
         assert!(!paths.config_path().exists());
+    }
+
+    fn for_server(mut request: v1::LlmKeyRequest, server: &str) -> v1::LlmKeyRequest {
+        request.server = server.to_owned();
+        request
+    }
+
+    /// Der Schlüssel eines nicht aktiven Servers landet unter dessen Namen,
+    /// sein Verweis im Eintrag, und der flache Verweis des aktiven bleibt
+    /// (HUM-289). Der übernommene Eintrag `default` behält `humanitl/llm`.
+    #[test]
+    fn a_server_key_goes_under_its_own_name_and_leaves_the_active_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let keys = KeyStore::for_paths(&paths).with_secret_tool(Some(fake_tool(dir.path())));
+        answer(&paths, &keys, set_op(SECRET)).unwrap();
+        crate::llm_servers::answer(
+            &paths,
+            &keys,
+            &crate::llm_servers::OPEN,
+            &v1::LlmServersRequest {
+                op: Some(v1::llm_servers_request::Op::Add(
+                    v1::llm_servers_request::Add {
+                        name: "cloud".to_owned(),
+                        endpoint: "https://api.example.com/v1".to_owned(),
+                        models: Vec::new(),
+                        activate: false,
+                    },
+                )),
+            },
+        )
+        .unwrap();
+
+        let other = "sk-other-key-9876543210";
+        let cloud = answer(&paths, &keys, for_server(set_op(other), "cloud")).unwrap();
+        assert_eq!(cloud.key_ref, "secret-service:humanitl/cloud");
+        assert!(cloud.set);
+        assert!(!format!("{cloud:?}").contains(other));
+
+        let config = std::fs::read_to_string(paths.config_path()).unwrap();
+        let table: toml::Table = config.parse().unwrap();
+        let llm = table["llm"].as_table().unwrap();
+        assert_eq!(
+            llm["api_key_ref"].as_str(),
+            Some("secret-service:humanitl/llm"),
+            "the active server lost its key: {config}"
+        );
+        assert_eq!(
+            llm["servers"]["default"]["api_key_ref"].as_str(),
+            Some("secret-service:humanitl/llm")
+        );
+        assert_eq!(
+            llm["servers"]["cloud"]["api_key_ref"].as_str(),
+            Some("secret-service:humanitl/cloud")
+        );
+        assert!(!config.contains(other) && !config.contains(SECRET));
+        let stored = keys
+            .lookup(&KeyRef::parse("secret-service:humanitl/llm").unwrap())
+            .unwrap();
+        assert!(stored.expose() == SECRET, "the active key was overwritten");
+
+        let status = answer(
+            &paths,
+            &keys,
+            for_server(
+                request(v1::llm_key_request::Op::Status(
+                    v1::llm_key_request::Status {},
+                )),
+                "cloud",
+            ),
+        )
+        .unwrap();
+        assert!(status.set);
+
+        let unknown = answer(
+            &paths,
+            &keys,
+            for_server(
+                request(v1::llm_key_request::Op::Status(
+                    v1::llm_key_request::Status {},
+                )),
+                "nope",
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(unknown.code.as_str(), "CONFIG_021");
+    }
+
+    /// Ein Server, der zwischen dem Ablegen des Schlüssels und dem Verweis
+    /// darauf entfernt und mit anderem Endpunkt neu angelegt wird, bekommt
+    /// den Schlüssel nicht, und der abgelegte Eintrag verschwindet (HUM-289,
+    /// Review D).
+    #[test]
+    fn a_server_replaced_while_its_key_is_stored_does_not_get_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let keys = KeyStore::for_paths(&paths).with_secret_tool(Some(fake_tool(dir.path())));
+        std::fs::create_dir_all(paths.config_dir()).unwrap();
+        std::fs::write(
+            paths.config_path(),
+            "[llm]\nactive = \"home\"\nendpoint = \"http://home.lan/\"\n\
+             [llm.servers.home]\nendpoint = \"http://home.lan/\"\n\
+             [llm.servers.cloud]\nendpoint = \"https://api.example.com/v1\"\n",
+        )
+        .unwrap();
+        let config = paths.config_path();
+        let mut replace = || {
+            std::fs::write(
+                &config,
+                "[llm]\nactive = \"home\"\nendpoint = \"http://home.lan/\"\n\
+                 [llm.servers.home]\nendpoint = \"http://home.lan/\"\n\
+                 [llm.servers.cloud]\nendpoint = \"https://evil.example.net/v1\"\n",
+            )
+            .unwrap();
+        };
+        let refused = answer_locked(
+            &paths,
+            &keys,
+            for_server(set_op("sk-cloud-0123456789abcdef"), "cloud"),
+            &mut replace,
+        )
+        .unwrap_err();
+        assert_eq!(refused.code.as_str(), "CONFIG_021");
+        let text = std::fs::read_to_string(paths.config_path()).unwrap();
+        assert!(
+            !text.contains("humanitl/cloud"),
+            "the key was attached to the replaced server: {text}"
+        );
+        assert!(
+            !dir.path().join("keyring/cloud").exists(),
+            "the stored key stayed in the keyring"
+        );
+    }
+
+    /// Status ohne gültigen aktiven Server ist der leere Stand, kein Fehler.
+    #[test]
+    fn status_without_an_active_server_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let keys = KeyStore::for_paths(&paths).with_secret_tool(None);
+        std::fs::create_dir_all(paths.config_dir()).unwrap();
+        std::fs::write(
+            paths.config_path(),
+            "[llm.servers.a]\nendpoint = \"http://a.lan/\"\napi_key_ref = \"file:a\"\n",
+        )
+        .unwrap();
+        let status = answer(
+            &paths,
+            &keys,
+            request(v1::llm_key_request::Op::Status(
+                v1::llm_key_request::Status {},
+            )),
+        )
+        .unwrap();
+        assert!(!status.set);
+        assert!(status.key_ref.is_empty());
+        let refused = answer(&paths, &keys, set_op(SECRET)).unwrap_err();
+        assert_eq!(refused.code.as_str(), "CONFIG_021");
+    }
+
+    /// Während `LlmKey` einen Schlüssel für einen Server ablegt, wartet ein
+    /// `SetConfig` auf dessen Endpunkt, bis der Verweis steht: Endpunkt und
+    /// Verweis ändern sich nie mitten im Ablegen (HUM-289, Review).
+    #[test]
+    fn a_form_write_waits_while_a_key_is_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let keys = KeyStore::for_paths(&paths).with_secret_tool(Some(fake_tool(dir.path())));
+        std::fs::create_dir_all(paths.config_dir()).unwrap();
+        std::fs::write(
+            paths.config_path(),
+            "[llm]\nactive = \"home\"\nendpoint = \"http://home.lan/\"\n\
+             [llm.servers.home]\nendpoint = \"http://home.lan/\"\n",
+        )
+        .unwrap();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let mut writer = None;
+        let mut blocked = None;
+        let mut hook = || {
+            let paths = paths.clone();
+            let done_tx = done_tx.clone();
+            writer = Some(std::thread::spawn(move || {
+                let written = crate::config_rpc::set_expecting(
+                    &paths,
+                    "llm.endpoint",
+                    "http://other.lan/",
+                    "home",
+                );
+                done_tx.send(written.is_ok()).unwrap();
+            }));
+            blocked = Some(
+                done_rx.recv_timeout(std::time::Duration::from_secs(1))
+                    == Err(std::sync::mpsc::RecvTimeoutError::Timeout),
+            );
+        };
+        let stored = answer_with(
+            &paths,
+            &keys,
+            for_server(set_op("sk-home-0123456789abcdef"), "home"),
+            &mut hook,
+        )
+        .expect("the key is attached to the unchanged server");
+        assert_eq!(
+            blocked,
+            Some(true),
+            "SetConfig wrote while the key was being stored"
+        );
+        writer.unwrap().join().unwrap();
+        assert!(
+            done_rx.recv().unwrap(),
+            "SetConfig writes once the key is attached"
+        );
+        assert_eq!(stored.key_ref, "secret-service:humanitl/home");
+        let text = std::fs::read_to_string(paths.config_path()).unwrap();
+        assert!(text.contains("http://other.lan/"), "{text}");
+    }
+
+    /// Gibt es gespeicherte Server, setzt und entfernt `LlmKey` nur mit
+    /// Namen; der Stand ohne Namen bleibt der des aktiven (HUM-289, Review).
+    #[test]
+    fn an_unnamed_set_or_remove_is_refused_when_servers_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let keys = KeyStore::for_paths(&paths).with_secret_tool(Some(fake_tool(dir.path())));
+        std::fs::create_dir_all(paths.config_dir()).unwrap();
+        std::fs::write(
+            paths.config_path(),
+            "[llm]\nactive = \"home\"\nendpoint = \"http://home.lan/\"\n\
+             [llm.servers.home]\nendpoint = \"http://home.lan/\"\n",
+        )
+        .unwrap();
+        let before = std::fs::read_to_string(paths.config_path()).unwrap();
+        let refused = answer(&paths, &keys, set_op(SECRET)).unwrap_err();
+        assert_eq!(refused.code.as_str(), "CONFIG_021");
+        let refused = answer(
+            &paths,
+            &keys,
+            request(v1::llm_key_request::Op::Remove(
+                v1::llm_key_request::Remove {},
+            )),
+        )
+        .unwrap_err();
+        assert_eq!(refused.code.as_str(), "CONFIG_021");
+        assert_eq!(
+            std::fs::read_to_string(paths.config_path()).unwrap(),
+            before
+        );
+        assert!(!dir.path().join("keyring/home").exists());
+        answer(
+            &paths,
+            &keys,
+            request(v1::llm_key_request::Op::Status(
+                v1::llm_key_request::Status {},
+            )),
+        )
+        .expect("the state needs no name");
+        answer(&paths, &keys, for_server(set_op(SECRET), "home")).expect("named, it is set");
     }
 }

@@ -61,9 +61,14 @@ abstract final class ProtoVersion {
   /// with `SandboxRequest.retire_if_idle`: from that minor on the restart
   /// button of the status bar lets the daemon decide atomically whether a
   /// session holds it, through `humanitl daemon retire-if-idle`, and only for
-  /// an older daemon asks `Sandbox(Status)` itself (HUM-284).
+  /// an older daemon asks `Sandbox(Status)` itself (HUM-284). Raised to 20
+  /// with the saved model servers: the switcher of the settings and of the
+  /// status bar reads `LlmServers`, `LlmKey` names a server, the probe of a
+  /// saved server sends `ProbeLlmRequest.server`, and a form value for the
+  /// active server's view carries `SetConfigRequest.expected_server`
+  /// (HUM-289).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 19;
+  static const int minor = 20;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

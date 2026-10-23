@@ -102,6 +102,12 @@ pub struct LlmConfig {
     /// Verweis auf den Zugangsschlüssel des Endpunkts, nie der Schlüssel selbst: `secret-service:humanitl/llm` für den Schlüsselbund des Systems oder `file:llm` für eine Datei mit `0600` unter `$XDG_DATA_HOME/humanitl/keys`. Gesetzt wird er mit `humanitl llm key set` oder in den Einstellungen; der Agent bekommt den Schlüssel als Datei in der Sandbox, nie über die Kommandozeile. Leer heißt: kein Schlüssel.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub api_key_ref: Option<String>,
+    /// Gespeicherte Modellserver, je Name ein Eintrag mit `endpoint`, `models` und `api_key_ref` (`secret-service:humanitl/NAME`). Der Eintrag, den `llm.active` nennt, liefert `llm.endpoint`, `llm.models` und `llm.api_key_ref`; die flachen Schlüssel sind seine Ansicht. Ein Name hat 1 bis 32 Zeichen `a-z`, `0-9`, `-` und `_`. Gepflegt wird die Tabelle mit `humanitl llm server` oder in den Einstellungen; ein Wechsel gilt ab der nächsten Sitzung.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub servers: BTreeMap<String, LlmServer>,
+    /// Der Name des aktiven Eintrags aus `llm.servers`. Nur sein Endpunkt bekommt den hinterlegten Zugangsschlüssel und gilt als LLM-Passthrough. Leer, solange es keine Einträge gibt.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub active: Option<String>,
 }
 
 impl Default for LlmConfig {
@@ -111,11 +117,76 @@ impl Default for LlmConfig {
             passthrough_paths: vec!["/v1/".to_owned(), "/api/".to_owned()],
             models: Vec::new(),
             api_key_ref: None,
+            servers: BTreeMap::new(),
+            active: None,
         }
     }
 }
 
+/// Ein gespeicherter Modellserver unter `llm.servers.<name>` (HUM-289).
+///
+/// Dieselben drei Werte wie die flachen Schlüssel unter `llm`, deren Ansicht
+/// der aktive Eintrag ist. Der Zugangsschlüssel steht auch hier nie selbst in
+/// der Datei, nur der Verweis darauf.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct LlmServer {
+    /// OpenAI-kompatibler Endpunkt dieses Servers, wie `llm.endpoint`.
+    ///
+    /// Als Text und nicht als Adresse: Ein Eintrag, der nicht aktiv ist, darf
+    /// eine Adresse tragen, die kein Parser annimmt, ohne dass das Laden
+    /// scheitert; er ist dann nur nicht zu aktivieren (HUM-289, Review).
+    pub endpoint: Option<String>,
+    /// Modelle dieses Servers, das voreingestellte zuerst, wie `llm.models`.
+    pub models: Vec<String>,
+    /// Verweis auf den Zugangsschlüssel dieses Servers, wie `llm.api_key_ref`.
+    pub api_key_ref: Option<String>,
+}
+
 impl LlmConfig {
+    /// Ob der hinterlegte Schlüssel (`llm.api_key_ref`) zusammen mit
+    /// `llm.endpoint` hinausgehen darf (HUM-289).
+    ///
+    /// Die eine Regel, die beim Laden ([`crate::servers`]) schon gilt und an
+    /// jeder Stelle, die den Schlüssel benutzt, noch einmal geprüft wird:
+    /// Ein Verweis wirkt nur zusammen mit dem Endpunkt **desselben**
+    /// Eintrags. Ohne gespeicherte Server sind das die flachen Schlüssel;
+    /// mit ihnen muss der Eintrag, den `llm.active` nennt, genau diesen
+    /// Verweis tragen, kein anderer Eintrag denselben, und sein Endpunkt
+    /// dieselbe Herkunft (Schema, Host, Port) haben wie `llm.endpoint`.
+    #[must_use]
+    pub fn key_goes_with_endpoint(&self) -> bool {
+        if self.servers.is_empty() {
+            return true;
+        }
+        let Some(reference) = self.api_key_ref.as_deref() else {
+            return true;
+        };
+        let Some(entry) = self.active.as_ref().and_then(|name| self.servers.get(name)) else {
+            return false;
+        };
+        if entry.api_key_ref.as_deref() != Some(reference) {
+            return false;
+        }
+        let shared = self
+            .servers
+            .values()
+            .filter(|other| other.api_key_ref.as_deref() == Some(reference))
+            .count();
+        if shared != 1 {
+            return false;
+        }
+        let entry_origin = entry
+            .endpoint
+            .as_deref()
+            .and_then(|text| url::Url::parse(text).ok())
+            .map(|url| url.origin());
+        match (&self.endpoint, entry_origin) {
+            (Some(endpoint), Some(origin)) => endpoint.origin() == origin,
+            _ => false,
+        }
+    }
+
     /// Host und Port des Endpunkts, normalisiert wie der Proxy jede Anfrage
     /// normalisiert ([`humanitl_core::HostName::parse`]), mit dem
     /// Standardport des Schemas.

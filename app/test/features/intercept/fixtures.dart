@@ -337,12 +337,17 @@ class TestDaemonClient implements DaemonClient {
     Duration? timeout,
     String? apiKey,
     bool useStoredKey = false,
+    String? server,
   }) async => LlmProbe(endpoint: endpoint);
 
   // Der Schreibweg des Fixes (HUM-151) gehört der Karte, nicht der
   // Warteschlange. Dieser Client schreibt nichts und behauptet nichts.
   @override
-  Future<void> setConfig(String key, String value) async {}
+  Future<void> setConfig(
+    String key,
+    String value, {
+    String? expectedServer,
+  }) async {}
 
   // Das Einstellungsformular (HUM-069, HUM-140) gehört nicht zur
   // Warteschlange: Die Vorgaben genügen, und ein Schlüssel ist nicht gesetzt.
@@ -350,13 +355,44 @@ class TestDaemonClient implements DaemonClient {
   Future<ConfigValues> getConfig() async => ConfigValues.empty;
 
   @override
-  Future<LlmKeyStatus> llmKeyStatus() async => LlmKeyStatus.unset;
+  Future<LlmKeyStatus> llmKeyStatus({String? server}) async =>
+      LlmKeyStatus.unset;
 
   @override
-  Future<LlmKeyStatus> setLlmKey(String key) async => LlmKeyStatus.unset;
+  Future<LlmKeyStatus> setLlmKey(String key, {String? server}) async =>
+      LlmKeyStatus.unset;
 
   @override
-  Future<LlmKeyStatus> clearLlmKey() async => LlmKeyStatus.unset;
+  Future<LlmKeyStatus> clearLlmKey({String? server}) async =>
+      LlmKeyStatus.unset;
+
+  // Die gespeicherten Modellserver (HUM-289) gehören nicht zur
+  // Warteschlange: keiner gespeichert, und nichts ändert sich.
+  @override
+  Future<SavedServers> listLlmServers() async => SavedServers.none;
+
+  @override
+  Future<SavedServers> addLlmServer({
+    required String name,
+    required String endpoint,
+    List<String> models = const <String>[],
+    bool activate = false,
+  }) async => SavedServers.none;
+
+  @override
+  Future<SavedServers> renameLlmServer(String name, String newName) async =>
+      SavedServers.none;
+
+  @override
+  Future<SavedServers> removeLlmServer(
+    String name, {
+    bool deleteKey = false,
+    String? replacement,
+  }) async => SavedServers.none;
+
+  @override
+  Future<SavedServers> activateLlmServer(String name) async =>
+      SavedServers.none;
 
   @override
   Stream<LlmServer> discoverLlm({

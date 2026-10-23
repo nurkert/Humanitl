@@ -392,6 +392,12 @@ async fn set(ctx: &Context, key: &str, text: &str, project: bool) -> Result<u8, 
     let mut segments = prefix;
     segments.extend(path.split('.').map(ToOwned::to_owned));
 
+    // Ein Schlüssel der Server ändert sich nie, während der Daemon einen
+    // Zugangsschlüssel ablegt: dieselbe Sperre wie dort (HUM-289).
+    let _order = (!project && humanitl_config::servers::is_server_setting(&path))
+        .then(|| humanitl_config::servers::lock(&ctx.paths))
+        .transpose()
+        .map_err(Failure::new)?;
     let written =
         humanitl_config::edit::set_value(&file, &segments, toml_value.as_ref(), |candidate| {
             probe(ctx, field, scope, &file, candidate)

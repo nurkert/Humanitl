@@ -51,6 +51,11 @@ service Humanitl {
   // (HUM-140). Der Schluessel geht nur hinein, nie heraus: Keine Antwort
   // dieses Dienstes traegt ihn, nur ob einer hinterlegt ist und wo.
   rpc LlmKey(LlmKeyRequest) returns (LlmKeyStatus);
+  // Die gespeicherten Modellserver: auflisten, anlegen, umbenennen,
+  // entfernen, aktivieren (HUM-289). Ein Wechsel gilt ab der naechsten
+  // Sitzung; eine laufende behaelt ihren Server. Keine Antwort traegt einen
+  // Schluessel, nur den Verweis darauf.
+  rpc LlmServers(LlmServersRequest) returns (LlmServerList);
 }
 
 // ---------- Info ----------
@@ -1515,6 +1520,12 @@ message FieldOrigin {
 message SetConfigRequest {
   string key = 1;
   string value = 2;
+  // Fuer `llm.endpoint` und `llm.models`: der gespeicherte Server, dessen
+  // Ansicht der Client bearbeitet hat (HUM-289). Ist inzwischen ein anderer
+  // aktiv, schreibt der Daemon nichts und antwortet `CONFIG_021`; so landet
+  // ein Wert, der fuer den einen Server getippt wurde, nie im anderen. Leer
+  // heisst: ohne diese Pruefung.
+  string expected_server = 3;
 }
 
 // ---------- Doctor ----------
@@ -1596,6 +1607,11 @@ message ProbeLlmRequest {
   // Daemon tut das nur, wenn `endpoint` dieselbe Herkunft (Schema, Host,
   // Port) hat wie `llm.endpoint`; einem anderen Ziel gibt er ihn nie.
   bool use_stored_key = 4;
+  // Mit `use_stored_key`: der Schluessel dieses gespeicherten Servers statt
+  // des aktiven (HUM-289). Der Daemon schickt ihn nur, wenn `endpoint`
+  // dieselbe Herkunft hat wie der Endpunkt dieses Eintrags. Leer heisst: der
+  // aktive Server.
+  string server = 5;
 }
 
 // Was die Probe gemessen hat. Ein leeres `models` bei `flavor = UNKNOWN` ist
@@ -1655,6 +1671,11 @@ message LlmKeyRequest {
     Set set = 2;
     Remove remove = 3;
   }
+  // Der gespeicherte Server, dessen Schluessel gemeint ist (HUM-289). Leer
+  // heisst: der aktive, oder ohne Eintraege `llm.api_key_ref`. Ein Server
+  // ohne eigenen Verweis bekommt beim Setzen den Eintrag
+  // `secret-service:humanitl/<name>`.
+  string server = 4;
 }
 
 // Der Stand des Zugangsschluessels, ohne den Schluessel selbst.
@@ -1670,5 +1691,79 @@ message LlmKeyStatus {
   // Was dazu zu sagen ist: der Grund fuer den Rueckfall auf die Datei, oder
   // `LLM_009`, wenn die Konfiguration einen Schluessel nennt, den der
   // Speicher nicht haelt.
+  repeated Diagnostic diagnostics = 4;
+}
+
+// ---------- Modellserver ----------
+
+// Ein gespeicherter Modellserver unter `llm.servers.<name>` (HUM-289).
+message LlmServer {
+  // Der Name, 1 bis 32 Zeichen a-z, 0-9, - und _.
+  string name = 1;
+  // Der Endpunkt, wie er in der Datei steht.
+  string endpoint = 2;
+  // Die Modelle, das voreingestellte zuerst.
+  repeated string models = 3;
+  // Der Verweis auf den Zugangsschluessel, etwa
+  // `secret-service:humanitl/cloud`; leer ohne Schluessel. Ob der Speicher
+  // ihn haelt, sagt `LlmKey(Status)` mit diesem Namen.
+  string key_ref = 4;
+  // Wahr fuer den Eintrag, den `llm.active` nennt.
+  bool active = 5;
+}
+
+// Auftrag an `LlmServers`. Genau eine Operation.
+message LlmServersRequest {
+  // Nur auflisten.
+  message List {}
+  // Einen Server anlegen. Der Endpunkt wird geprueft wie `llm.endpoint`.
+  // Der Schluessel kommt danach ueber `LlmKey` mit `server = name`.
+  message Add {
+    string name = 1;
+    string endpoint = 2;
+    repeated string models = 3;
+    // Danach aktiv. Der erste Server wird es immer.
+    bool activate = 4;
+  }
+  // Einen Server umbenennen. Der Verweis auf den Schluessel bleibt.
+  message Rename {
+    string name = 1;
+    string new_name = 2;
+  }
+  // Einen Server entfernen.
+  message Remove {
+    string name = 1;
+    // Auch seinen Eintrag im Schluesselbund (oder die Datei) loeschen, wenn
+    // kein anderer Server denselben Verweis traegt.
+    bool delete_key = 2;
+    // Der Server, der danach aktiv ist. Pflicht fuer den aktiven Server,
+    // solange es andere gibt.
+    string replacement = 3;
+  }
+  // Einen Server zum aktiven machen, ab der naechsten Sitzung.
+  message Activate {
+    string name = 1;
+  }
+  oneof op {
+    List list = 1;
+    Add add = 2;
+    Rename rename = 3;
+    Remove remove = 4;
+    Activate activate = 5;
+  }
+}
+
+// Die gespeicherten Server nach einem Auftrag.
+message LlmServerList {
+  // Nach Namen sortiert.
+  repeated LlmServer servers = 1;
+  // Der Name des aktiven Servers; leer, wenn keiner aktiv ist.
+  string active = 2;
+  // Wahr, solange `config.toml` nur flache Werte traegt und die Liste den
+  // Server `default` daraus ableitet; der erste schreibende Auftrag legt ihn
+  // an.
+  bool implicit = 3;
+  // Was dazu zu sagen ist, etwa dass der Schluessel eines entfernten
+  // Servers nicht geloescht werden konnte.
   repeated Diagnostic diagnostics = 4;
 }

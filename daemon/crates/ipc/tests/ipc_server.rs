@@ -762,6 +762,7 @@ fn set_request(key: &str, value: &str) -> v1::SetConfigRequest {
     v1::SetConfigRequest {
         key: key.to_owned(),
         value: value.to_owned(),
+        expected_server: String::new(),
     }
 }
 
@@ -916,6 +917,7 @@ async fn llm_key_over_the_wire_never_carries_the_key_back() {
             op: Some(v1::llm_key_request::Op::Set(v1::llm_key_request::Set {
                 key: KEY.to_owned(),
             })),
+            server: String::new(),
         })
         .await
         .unwrap()
@@ -938,6 +940,7 @@ async fn llm_key_over_the_wire_never_carries_the_key_back() {
             op: Some(v1::llm_key_request::Op::Status(
                 v1::llm_key_request::Status {},
             )),
+            server: String::new(),
         })
         .await
         .unwrap()

@@ -31,6 +31,7 @@ class ThrowingProbeClient extends FakeDaemonClient {
     Duration? timeout,
     String? apiKey,
     bool useStoredKey = false,
+    String? server,
   }) async {
     throw StateError('the answer had no flavor this build knows');
   }
@@ -70,6 +71,7 @@ class KeyRecordingClient extends FakeDaemonClient {
     Duration? timeout,
     String? apiKey,
     bool useStoredKey = false,
+    String? server,
   }) {
     storedKeyAsked.add(useStoredKey);
     return super.probeLlm(
@@ -77,6 +79,7 @@ class KeyRecordingClient extends FakeDaemonClient {
       timeout: timeout,
       apiKey: apiKey,
       useStoredKey: useStoredKey,
+      server: server,
     );
   }
 }
@@ -346,5 +349,28 @@ void main() {
         .data!;
     expect(evidence, contains('HTTP 404, text/html'));
     expect(evidence, isNot(contains('0 models')));
+  });
+
+  // HUM-289: the model row names the active saved server whose endpoint the
+  // field shows, and says nothing while no server is saved.
+  testWidgets('the model row names the active saved server', (
+    WidgetTester tester,
+  ) async {
+    final FakeDaemonClient client = FakeDaemonClient()
+      ..savedServers = <SavedServer>[
+        const SavedServer(name: 'home', endpoint: 'http://192.168.1.20:11434/'),
+      ]
+      ..activeServer = 'home';
+    await openSetup(tester, client);
+    await tester.pumpAndSettle();
+    expect(find.text('Saved server: home'), findsOneWidget);
+  });
+
+  testWidgets('without a saved server the model row names none', (
+    WidgetTester tester,
+  ) async {
+    await openSetup(tester, FakeDaemonClient());
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('setup-llm-active-server')), findsNothing);
   });
 }

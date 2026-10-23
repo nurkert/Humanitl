@@ -1224,6 +1224,15 @@ const EXPECTED_RPCS: &[(&str, &str, &str, bool, bool)] = &[
         false,
         false,
     ),
+    // HUM-289: die gespeicherten Modellserver. Nicht in BACKLOG.md 3.3; die
+    // Antwort trägt nur Verweise auf Schlüssel, nie einen Schlüssel.
+    (
+        "LlmServers",
+        ".humanitl.v1.LlmServersRequest",
+        ".humanitl.v1.LlmServerList",
+        false,
+        false,
+    ),
 ];
 
 #[test]

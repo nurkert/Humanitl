@@ -29,6 +29,7 @@
 //! - [`secret`] der Zugangsschlüssel des Modells: Verweis, Schlüsselbund, Datei
 //! - [`llm_endpoint`] die eine Lesart von `llm.endpoint`: Basis, Präfix, Pfade
 //! - [`pasted`] was eine Zwischenablage an einem eingefügten Wert hinterlässt
+//! - [`servers`] gespeicherte Modellserver und der aktive davon
 //!
 //! ```
 //! use humanitl_config::{Env, Sources, load};
@@ -63,6 +64,7 @@ pub mod resolve;
 pub mod schema;
 pub mod scope;
 pub mod secret;
+pub mod servers;
 /// Werkzeug, das nur die Unit-Tests dieser Crate benutzen (HUM-267).
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -77,8 +79,8 @@ pub use crate::env::{Env, LOADER_ENV_KEYS, is_loader_key};
 pub use crate::load::{DEFAULT_ENV_PREFIX, ENV_SEPARATOR, PROFILE_SECTION, Sources, load};
 pub use crate::model::{
     AgentBriefing, AgentRef, AskMode, AuditConfig, Config, Experimental, FindingsConfig,
-    HoldConfig, IpPreference, Language, Limits, LlmConfig, PseudonymConfig, RecorderConfig,
-    ResolverConfig, SandboxRef, Theme, TlsConfig, UiConfig, WorkMode,
+    HoldConfig, IpPreference, Language, Limits, LlmConfig, LlmServer, PseudonymConfig,
+    RecorderConfig, ResolverConfig, SandboxRef, Theme, TlsConfig, UiConfig, WorkMode,
 };
 pub use crate::origin::{Origin, Resolved};
 pub use crate::paths::{APP_DIR, DIR_MODE, FILE_MODE, Paths, RuntimeDir};

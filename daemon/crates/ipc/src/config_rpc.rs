@@ -78,11 +78,34 @@ const SHOWN_KEY_CHARS: usize = 80;
 /// die Befunde von [`humanitl_config::edit::set_value`], wenn die Datei nicht
 /// geändert wurde. Geschrieben ist in keinem der Fälle etwas.
 pub fn set(paths: &Paths, key: &str, value: &str) -> Result<v1::ConfigSnapshot, Diagnostic> {
+    set_expecting(paths, key, value, "")
+}
+
+/// Wie [`set`]; für `llm.endpoint` und `llm.models` mit dem gespeicherten
+/// Server, dessen Ansicht der Client bearbeitet hat (HUM-289,
+/// `SetConfigRequest.expected_server`). Ist ein anderer aktiv, wird nichts
+/// geschrieben.
+///
+/// # Errors
+///
+/// Wie [`set`], dazu `CONFIG_021`, wenn `expected_server` nicht mehr der
+/// aktive Server ist.
+pub fn set_expecting(
+    paths: &Paths,
+    key: &str,
+    value: &str,
+    expected_server: &str,
+) -> Result<v1::ConfigSnapshot, Diagnostic> {
     if key.starts_with(SANDBOX_ENV_PREFIX) {
         let name = accepted(key, value)?;
         humanitl_config::edit::set_sandbox_env(&paths.config_path(), name, value)?;
     } else if FORM_KEYS.contains(&key) {
-        set_form_value(paths, key, value)?;
+        // Endpunkt und Modelle sind die Ansicht des aktiven Servers: Sie
+        // ändern sich nie, während `LlmKey` einen Schlüssel ablegt (HUM-289).
+        let _order = humanitl_config::servers::is_server_setting(key)
+            .then(|| humanitl_config::servers::lock(paths))
+            .transpose()?;
+        set_form_value(paths, key, value, expected_server.trim())?;
     } else {
         return Err(refused(&format!(
             "{} is not one of the settings of the form",
@@ -122,14 +145,77 @@ pub fn form_value(
 }
 
 /// Schreibt eine Einstellung des Formulars.
-fn set_form_value(paths: &Paths, key: &str, text: &str) -> Result<(), Diagnostic> {
+fn set_form_value(
+    paths: &Paths,
+    key: &str,
+    text: &str,
+    expected_server: &str,
+) -> Result<(), Diagnostic> {
     let (field, value) = form_value(key, text)?;
     let toml_value = to_toml(field, &value)?;
     let file = paths.config_path();
     let segments: Vec<String> = key.split('.').map(ToOwned::to_owned).collect();
-    humanitl_config::edit::set_value(&file, &segments, toml_value.as_ref(), |candidate| {
-        probe(paths, &file, candidate, key)
-    })?;
+    if expected_server.is_empty() {
+        // Gibt es gespeicherte Server, nennt ein Client, der die Ansicht des
+        // aktiven schreibt, ihn auch (Review): Ohne Namen ließe sich nicht
+        // prüfen, ob der Wert für diesen Server getippt wurde.
+        if humanitl_config::servers::is_server_setting(key)
+            && humanitl_config::servers::has_servers(&crate::llm_servers::read_table(paths)?)
+        {
+            return Err(humanitl_core::Diagnostic::builder(
+                humanitl_core::diagnostics::codes::CONFIG_021,
+                Severity::Error,
+            )
+            .why(format!(
+                "{key} was not written: saved model servers exist, and the request names none; \
+                 a client writes the active server's view only together with its name \
+                 (SetConfigRequest.expected_server)"
+            ))
+            .fix(humanitl_core::FixAction::CopyCommand(
+                "humanitl llm server ls".to_owned(),
+            ))
+            .build());
+        }
+        humanitl_config::edit::set_value(&file, &segments, toml_value.as_ref(), |candidate| {
+            probe(paths, &file, candidate, key)
+        })?;
+        return Ok(());
+    }
+    // Unter der Sperre der Datei: Erst wenn der erwartete Server noch aktiv
+    // ist, geht der Wert in die flachen Schlüssel und in seinen Eintrag.
+    humanitl_config::edit::edit_with(
+        &file,
+        |old| {
+            let active = humanitl_config::servers::active_name(old).unwrap_or_default();
+            if active != expected_server {
+                return Err(humanitl_core::Diagnostic::builder(
+                    humanitl_core::diagnostics::codes::CONFIG_021,
+                    Severity::Error,
+                )
+                .why(format!(
+                    "{key} was not written: it was entered for the server {expected_server}, \
+                     and the active server is {} now",
+                    if active.is_empty() {
+                        "none"
+                    } else {
+                        active.as_str()
+                    }
+                ))
+                .build());
+            }
+            let mut edits = vec![humanitl_config::edit::Edit::new(
+                segments.clone(),
+                toml_value.clone(),
+            )];
+            edits.extend(humanitl_config::servers::mirror_of(
+                old,
+                &segments,
+                toml_value.as_ref(),
+            ));
+            Ok(edits)
+        },
+        |candidate| probe(paths, &file, candidate, key),
+    )?;
     Ok(())
 }
 
@@ -149,7 +235,12 @@ fn set_form_value(paths: &Paths, key: &str, text: &str) -> Result<(), Diagnostic
 ///
 /// Der Befund der Ladung, mit dem Pfad der Nebendatei durch den von
 /// `config.toml` ersetzt.
-fn probe(paths: &Paths, file: &Path, candidate: &Path, key: &str) -> Result<(), Diagnostic> {
+pub(crate) fn probe(
+    paths: &Paths,
+    file: &Path,
+    candidate: &Path,
+    key: &str,
+) -> Result<(), Diagnostic> {
     let Err(after) = load_with(paths, Some(candidate.to_path_buf())) else {
         return Ok(());
     };
