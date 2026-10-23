@@ -21,6 +21,7 @@ class SettingRow extends StatelessWidget {
     this.help,
     this.refusal,
     this.refusalKey,
+    this.anchor,
     super.key,
   });
 
@@ -38,6 +39,12 @@ class SettingRow extends StatelessWidget {
 
   /// The key of the refusal text, for tests.
   final Key? refusalKey;
+
+  /// The node a diagnostic's `ChangeSetting` fix lands on (HUM-275).
+  ///
+  /// It wraps the control and takes no focus itself; the sheet scrolls to it
+  /// and hands the focus to the first control inside it.
+  final FocusNode? anchor;
 
   @override
   Widget build(BuildContext context) {
@@ -57,7 +64,10 @@ class SettingRow extends StatelessWidget {
             Text(text, style: tokens.typography.ui12.tinted(tokens.colors.fg1)),
           ],
           SizedBox(height: tokens.spacing.x2),
-          child,
+          if (anchor case final FocusNode node)
+            Focus(focusNode: node, child: child)
+          else
+            child,
           if (refused != null) ...<Widget>[
             SizedBox(height: tokens.spacing.x1),
             Text(

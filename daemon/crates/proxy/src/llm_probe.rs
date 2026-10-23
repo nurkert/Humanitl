@@ -108,6 +108,26 @@ pub const MAX_TIMEOUT_MS: u32 = 30_000;
 /// löschte damit den Endpunkt.
 pub const EXAMPLE_ENDPOINT: &str = "http://192.168.1.50:11434";
 
+/// Der Schlüssel der Einstellung, die auf den Zugangsschlüssel verweist.
+pub const API_KEY_REF_SETTING: &str = "llm.api_key_ref";
+
+/// Der Vorschlag jedes `LLM_002`: die Einstellung des Zugangsschlüssels
+/// (HUM-275).
+///
+/// Ein `ChangeSetting` und kein `CopyCommand`, damit die Oberfläche daraus
+/// einen Knopf machen kann, der die Einstellungen am Feld „Zugangsschlüssel"
+/// öffnet. Der Wert bleibt leer: Der Schlüssel selbst steht nie in einem
+/// Befund, und eine Oberfläche, die den Fix wörtlich anwendete, setzte nur den
+/// Verweis zurück, nicht den Schlüssel. Die Kommandozeile zeigt für diesen
+/// Schlüssel weiterhin `humanitl llm key set` (`render::fix_line`).
+#[must_use]
+pub fn api_key_fix() -> FixAction {
+    FixAction::ChangeSetting {
+        key: API_KEY_REF_SETTING.to_owned(),
+        value: String::new(),
+    }
+}
+
 /// So viele Bytes einer Antwort liest die Probe höchstens.
 ///
 /// Eine Modellliste ist ein paar Kilobyte groß. Ein Endpunkt, der stattdessen
@@ -246,7 +266,7 @@ impl LlmProbe {
                         "the stored access key is not a valid header value, so it was not sent"
                             .to_owned(),
                     )
-                    .fix(FixAction::CopyCommand("humanitl llm key set".to_owned()))
+                    .fix(api_key_fix())
                     .build()
             })?
             .map(|mut value| {
@@ -527,7 +547,7 @@ impl Failure {
                         "the LLM server answered {status} at {url} to the access key that was \
                          sent; it does not accept this key."
                     ))
-                    .fix(FixAction::CopyCommand("humanitl llm key set".to_owned()))
+                    .fix(api_key_fix())
                     .build()
             }
             Self::NeedsAuth { status, url } => Diagnostic::builder(LLM_002, Severity::Error)
@@ -535,7 +555,7 @@ impl Failure {
                     "the LLM server answered {status} at {url}. It requires an access key, and \
                      none was sent."
                 ))
-                .fix(FixAction::CopyCommand("humanitl llm key set".to_owned()))
+                .fix(api_key_fix())
                 .build(),
         }
     }

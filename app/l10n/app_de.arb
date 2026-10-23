@@ -1276,5 +1276,7 @@
   "interceptRecorderPauseSend": "Unaufgezeichnet senden",
   "diagRECORDER005Title": "Aufzeichnung läuft wieder",
   "diagRECORDER005Why": "Die Aufzeichnung schreibt wieder; was während der Störung geschah, fehlt in der History.",
-  "shellStatusDaemonMismatch": "Nicht die Version dieser App ({app}) · systemctl --user restart humanitld"
+  "shellStatusDaemonMismatch": "Nicht die Version dieser App ({app}) · systemctl --user restart humanitld",
+  "shellSettingsButton": "Einstellungen (Strg+,)",
+  "setupFixOpenSettings": "Einstellungen öffnen"
 }

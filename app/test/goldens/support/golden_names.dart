@@ -82,4 +82,6 @@ const List<String> goldenNames = <String>[
   'icon_rail_expanded',
   // states_golden_test.dart (HUM-250)
   'states_recorder_failure',
+  // settings_entry_golden_test.dart (HUM-275)
+  'settings_entry',
 ];
