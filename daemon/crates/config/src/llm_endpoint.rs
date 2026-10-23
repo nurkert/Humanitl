@@ -102,6 +102,14 @@ pub fn display(endpoint: &Url) -> String {
     without_secrets(endpoint).to_string()
 }
 
+/// Wie [`display`], für einen Endpunkt als Text, etwa aus einer Liste der
+/// gespeicherten Server (HUM-289). Ein Text, der keine Adresse ist, bleibt,
+/// wie er ist; ein solcher trägt ohnehin keinen Teil, den die Probe schickte.
+#[must_use]
+pub fn display_text(endpoint: &str) -> String {
+    Url::parse(endpoint).map_or_else(|_| endpoint.to_owned(), |url| display(&url))
+}
+
 /// Der Endpunkt ohne Benutzer, Passwort, Query und Fragment (siehe
 /// [`display`]), als Adresse, an die sich weiter Pfade hängen lassen.
 #[must_use]

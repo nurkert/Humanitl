@@ -270,7 +270,7 @@ impl fmt::Display for KeyRef {
 }
 
 /// Ob `name` ein Name ist, den ein Verweis tragen darf.
-fn is_key_name(name: &str) -> bool {
+pub(crate) fn is_key_name(name: &str) -> bool {
     (1..=32).contains(&name.len())
         && name
             .bytes()
@@ -369,12 +369,32 @@ impl KeyStore {
     ///
     /// `CONFIG_020`, wenn weder der Schlüsselbund noch die Datei ihn nehmen.
     pub fn store(&self, key: &ApiKey) -> Result<Stored, Diagnostic> {
-        let reason = match self.store_secret_service(DEFAULT_KEY_NAME, key) {
+        self.store_named(DEFAULT_KEY_NAME, key)
+    }
+
+    /// Wie [`KeyStore::store`], unter dem Namen `name`: der Eintrag
+    /// `humanitl/<name>` im Schlüsselbund oder die Datei `<name>.key`. Jeder
+    /// gespeicherte Modellserver hat so seinen eigenen Eintrag (HUM-289).
+    ///
+    /// # Errors
+    ///
+    /// `CONFIG_020`, wenn `name` kein gültiger Name ist oder weder der
+    /// Schlüsselbund noch die Datei den Schlüssel nehmen.
+    pub fn store_named(&self, name: &str, key: &ApiKey) -> Result<Stored, Diagnostic> {
+        if !is_key_name(name) {
+            return Err(Diagnostic::builder(CONFIG_020, Severity::Error)
+                .why(format!(
+                    "the access key was not stored: {name:?} is not a key name (1 to 32 \
+                     characters a-z, 0-9, - and _)"
+                ))
+                .build());
+        }
+        let reason = match self.store_secret_service(name, key) {
             Ok(()) => {
                 // Ein Rest aus einer Zeit ohne Schlüsselbund liegt sonst als
                 // Klartext neben dem Eintrag, der jetzt gilt; bleibt er
                 // stehen, sagt der Befund es, statt es zu verschweigen.
-                let note = self.remove_file(DEFAULT_KEY_NAME).err().map(|why| {
+                let note = self.remove_file(name).err().map(|why| {
                     Diagnostic::builder(CONFIG_019, Severity::Warning)
                         .why(format!(
                             "the access key is in the system keyring now, and the old fallback \
@@ -383,18 +403,18 @@ impl KeyStore {
                         ))
                         .fix(FixAction::CopyCommand(format!(
                             "rm {}",
-                            shell_path(&self.file_path(DEFAULT_KEY_NAME))
+                            shell_path(&self.file_path(name))
                         )))
                         .build()
                 });
                 return Ok(Stored {
-                    key_ref: default_ref(StoreKind::SecretService),
+                    key_ref: named_ref(StoreKind::SecretService, name),
                     note,
                 });
             }
             Err(reason) => reason,
         };
-        self.write_file(DEFAULT_KEY_NAME, key).map_err(|why| {
+        self.write_file(name, key).map_err(|why| {
             Diagnostic::builder(CONFIG_020, Severity::Error)
                 .why(format!(
                     "the access key was not stored: the system keyring did not take it \
@@ -403,13 +423,13 @@ impl KeyStore {
                 .build()
         })?;
         Ok(Stored {
-            key_ref: default_ref(StoreKind::File),
+            key_ref: named_ref(StoreKind::File, name),
             note: Some(
                 Diagnostic::builder(CONFIG_019, Severity::Warning)
                     .why(format!(
                         "the system keyring did not take the access key ({reason}); it is \
                          stored in {} with mode 0600 instead, readable by this account only",
-                        self.file_path(DEFAULT_KEY_NAME).display()
+                        self.file_path(name).display()
                     ))
                     .fix(FixAction::CopyCommand(
                         "sudo apt-get install libsecret-tools".to_owned(),
@@ -645,11 +665,11 @@ impl KeyStore {
     }
 }
 
-/// Der Verweis auf den einen Schlüssel des Formulars an diesem Ort.
-fn default_ref(store: StoreKind) -> KeyRef {
+/// Der Verweis auf den Schlüssel `name` an diesem Ort.
+fn named_ref(store: StoreKind, name: &str) -> KeyRef {
     KeyRef {
         store,
-        name: DEFAULT_KEY_NAME.to_owned(),
+        name: name.to_owned(),
     }
 }
 

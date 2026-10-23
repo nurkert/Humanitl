@@ -1,5 +1,5 @@
 /// The 24 px status bar: connection dot, daemon version, queue pressure,
-/// session.
+/// the active model server, session.
 library;
 
 import 'package:flutter/widgets.dart';
@@ -16,6 +16,7 @@ import '../../intercept/providers/flows.dart';
 import '../../intercept/providers/recorder_health.dart';
 import '../queue_pressure.dart';
 import 'daemon_restart_control.dart';
+import 'llm_server_item.dart';
 
 /// The version of a build nobody stamped (HUM-277).
 const String _devBuild = '0.0.0';
@@ -138,6 +139,9 @@ class StatusBar extends ConsumerWidget {
               const Spacer(),
               const RecorderStatusLabel(),
               const QueuePressureLabel(),
+              // HUM-289: the active saved model server and its quick switch,
+              // only when there is a choice.
+              const LlmServerItem(),
               Text(
                 info.hasSession
                     ? l10n.shellStatusSession(SessionId(info.sessionId).short)

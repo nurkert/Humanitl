@@ -107,6 +107,130 @@ pub struct FakeDaemon {
 }
 
 impl FakeDaemon {
+    /// Der Server, dem ein `LlmKey` gilt, wie im echten Dienst: der
+    /// genannte, sonst der aktive, ohne Einträge keiner (HUM-289).
+    fn key_target(&self, named: &str) -> Result<Option<String>, Diagnostic> {
+        if !named.is_empty() {
+            humanitl_config::servers::check_name(named)?;
+            return Ok(Some(named.to_owned()));
+        }
+        let table = self.state.llm_servers();
+        if !humanitl_config::servers::has_servers(&table) {
+            return Ok(None);
+        }
+        humanitl_config::servers::active_name(&table)
+            .map(Some)
+            .ok_or_else(|| {
+                Diagnostic::builder(codes::CONFIG_021, Severity::Error)
+                    .why("LlmKey changed nothing: no model server is active".to_owned())
+                    .build()
+            })
+    }
+
+    /// `LlmKey` für den Schlüssel eines Servers im Fake: nur die Aussage
+    /// „hinterlegt", nie der Schlüssel.
+    fn server_key(
+        &self,
+        server: &str,
+        op: Option<v1::llm_key_request::Op>,
+    ) -> Result<v1::LlmKeyStatus, Diagnostic> {
+        use humanitl_config::secret::KeyRef;
+        use humanitl_config::servers;
+
+        let table = self.state.llm_servers();
+        let status = |key_ref: Option<KeyRef>, state: &FakeState| match key_ref {
+            Some(key_ref) => v1::LlmKeyStatus {
+                set: state.server_key(key_ref.name()),
+                store: v1::LlmKeyStore::SecretService as i32,
+                key_ref: key_ref.to_string(),
+                diagnostics: Vec::new(),
+            },
+            None => v1::LlmKeyStatus::default(),
+        };
+        match op {
+            Some(v1::llm_key_request::Op::Status(_)) => {
+                Ok(status(servers::key_ref_of(&table, server)?, &self.state))
+            }
+            Some(v1::llm_key_request::Op::Set(set)) => {
+                humanitl_config::secret::ApiKey::from_pasted(&set.key)?;
+                let name = servers::key_name_for(&table, server)?;
+                let key_ref = KeyRef::secret_service(&name);
+                let edits = servers::set_key_ref(&table, server, key_ref.as_ref())?;
+                if let Some(after) = humanitl_config::edit::apply_edits(&table, &edits) {
+                    self.state.set_llm_servers(after);
+                }
+                self.state.set_server_key(&name, true);
+                Ok(status(key_ref, &self.state))
+            }
+            Some(v1::llm_key_request::Op::Remove(_)) => {
+                if let Some(key_ref) = servers::key_ref_of(&table, server)? {
+                    self.state.set_server_key(key_ref.name(), false);
+                }
+                let edits = servers::set_key_ref(&table, server, None)?;
+                if let Some(after) = humanitl_config::edit::apply_edits(&table, &edits) {
+                    self.state.set_llm_servers(after);
+                }
+                Ok(v1::LlmKeyStatus::default())
+            }
+            None => Err(Diagnostic::builder(codes::CONFIG_020, Severity::Error)
+                .why(
+                    "LlmKey changed nothing: the request names no operation (status, set or \
+                     remove)"
+                        .to_owned(),
+                )
+                .build()),
+        }
+    }
+
+    /// Ob die Probe im Fake einen hinterlegten Schlüssel hätte: der des
+    /// genannten Servers, sonst der flache (HUM-289).
+    fn probe_has_key(&self, endpoint: &str, server: &str) -> Result<bool, Diagnostic> {
+        if server.is_empty() {
+            return Ok(self.state.llm_key_set());
+        }
+        let table = self.state.llm_servers();
+        let key_ref = humanitl_config::servers::key_ref_of(&table, server).map_err(|_unknown| {
+            Diagnostic::builder(codes::CONFIG_021, Severity::Error)
+                .why(format!(
+                    "the probe sent no key: there is no server named {server}"
+                ))
+                .build()
+        })?;
+        // Wie der Dienst: nur an die Herkunft des Eintrags selbst.
+        let entry_origin = humanitl_config::servers::list(&table)
+            .servers
+            .into_iter()
+            .find(|entry| entry.name == server)
+            .and_then(|entry| entry.endpoint)
+            .and_then(|text| url::Url::parse(&text).ok())
+            .map(|url| url.origin());
+        let same_origin = entry_origin.is_some_and(|origin| {
+            url::Url::parse(endpoint).is_ok_and(|probed| probed.origin() == origin)
+        });
+        Ok(same_origin && key_ref.is_some_and(|key_ref| self.state.server_key(key_ref.name())))
+    }
+
+    /// Setzt `llm.endpoint` und `llm.models` der gedachten Konfiguration auf
+    /// die des aktiven Servers in `table`, oder nimmt sie heraus.
+    fn follow_active(&self, table: &toml::Table) {
+        let list = humanitl_config::servers::list(table);
+        let active = list
+            .active
+            .as_deref()
+            .and_then(|name| list.servers.iter().find(|entry| entry.name == name));
+        match active.and_then(|entry| entry.endpoint.clone()) {
+            Some(endpoint) => self.state.set_config("llm.endpoint".to_owned(), endpoint),
+            None => self.state.remove_config("llm.endpoint"),
+        }
+        match active.filter(|entry| !entry.models.is_empty()) {
+            Some(entry) => self.state.set_config(
+                "llm.models".to_owned(),
+                serde_json::Value::from(entry.models.clone()).to_string(),
+            ),
+            None => self.state.remove_config("llm.models"),
+        }
+    }
+
     /// Baut den Fake über einer eingelesenen Sitzung.
     #[must_use]
     pub fn new(session: Session, options: FakeOptions) -> Self {
@@ -428,6 +552,38 @@ impl DaemonApi for FakeDaemon {
         &self,
         request: v1::SetConfigRequest,
     ) -> Result<v1::ConfigSnapshot, Diagnostic> {
+        // Dieselbe Prüfung wie der Dienst (HUM-289): Ein Wert für die Ansicht
+        // eines Servers geht nicht in die eines anderen.
+        let expected = request.expected_server.trim();
+        if expected.is_empty()
+            && humanitl_config::servers::is_server_setting(&request.key)
+            && humanitl_config::servers::has_servers(&self.state.llm_servers())
+        {
+            return Err(Diagnostic::builder(codes::CONFIG_021, Severity::Error)
+                .why(format!(
+                    "{} was not written: saved model servers exist, and the request names none",
+                    request.key
+                ))
+                .build());
+        }
+        if !expected.is_empty() {
+            let active = humanitl_config::servers::active_name(&self.state.llm_servers())
+                .unwrap_or_default();
+            if active != expected {
+                return Err(Diagnostic::builder(codes::CONFIG_021, Severity::Error)
+                    .why(format!(
+                        "{} was not written: it was entered for the server {expected}, and the \
+                         active server is {} now",
+                        request.key,
+                        if active.is_empty() {
+                            "none"
+                        } else {
+                            active.as_str()
+                        }
+                    ))
+                    .build());
+            }
+        }
         let mut overrides = self.state.config_overrides();
         let stored = if request
             .key
@@ -459,6 +615,22 @@ impl DaemonApi for FakeDaemon {
     /// Schlüssel (HUM-140). Was der echte Dienst an einem Schlüssel ablehnt,
     /// lehnt auch der Fake ab ([`humanitl_config::secret::ApiKey::from_pasted`]).
     async fn llm_key(&self, request: v1::LlmKeyRequest) -> Result<v1::LlmKeyStatus, Diagnostic> {
+        if let Some(server) = self.key_target(request.server.trim())? {
+            // Wie der Dienst: Mit gespeicherten Servern setzt und entfernt
+            // `LlmKey` nur mit Namen (HUM-289).
+            if request.server.trim().is_empty()
+                && !matches!(request.op, Some(v1::llm_key_request::Op::Status(_)))
+            {
+                return Err(Diagnostic::builder(codes::CONFIG_021, Severity::Error)
+                    .why(
+                        "LlmKey changed nothing: saved model servers exist, and the request \
+                         names none"
+                            .to_owned(),
+                    )
+                    .build());
+            }
+            return self.server_key(&server, request.op);
+        }
         match request.op {
             Some(v1::llm_key_request::Op::Status(_)) => {}
             Some(v1::llm_key_request::Op::Set(set)) => {
@@ -486,6 +658,33 @@ impl DaemonApi for FakeDaemon {
         } else {
             v1::LlmKeyStatus::default()
         })
+    }
+
+    /// Die gespeicherten Modellserver über der Tabelle im Speicher, mit
+    /// denselben Rechnungen wie der echte Dienst (HUM-289).
+    async fn llm_servers(
+        &self,
+        request: v1::LlmServersRequest,
+    ) -> Result<v1::LlmServerList, Diagnostic> {
+        let table = self.state.llm_servers();
+        let planned = crate::llm_servers::plan(&table, &request)?;
+        let after =
+            humanitl_config::edit::apply_edits(&table, &planned.edits).ok_or_else(|| {
+                Diagnostic::builder(codes::CONFIG_015, Severity::Error)
+                    .why("the model servers of the fake were not changed".to_owned())
+                    .build()
+            })?;
+        if let Some(key_ref) = planned.delete_key {
+            self.state.set_server_key(key_ref.name(), false);
+        }
+        self.state.set_llm_servers(after.clone());
+        // `GetConfig` zeigt danach die Ansicht des aktiven Servers, wie der
+        // Dienst sie in `config.toml` schreibt.
+        self.follow_active(&after);
+        Ok(crate::llm_servers::listing(
+            &humanitl_config::servers::list(&after),
+            Vec::new(),
+        ))
     }
 
     /// Alle Zeilen des Doctors, keine davon gemessen (HUM-075).
@@ -562,6 +761,7 @@ impl DaemonApi for FakeDaemon {
         // Beleg, und alles andere zählt als nicht privat — die vorsichtige
         // Seite, denn nur dann warnt die Oberfläche mit `LLM_006`.
         let endpoint_is_private = looks_private(&endpoint);
+        let stored_key = self.probe_has_key(&endpoint, request.server.trim())?;
         let mut diagnostics = Vec::new();
         if !endpoint_is_private && !endpoint.is_empty() {
             diagnostics.push(diagnostic_to_proto(
@@ -584,8 +784,7 @@ impl DaemonApi for FakeDaemon {
             diagnostics,
             endpoint_is_private,
             // Der Fake schickt nichts; er sagt nur, was der Daemon täte.
-            key_sent: !request.api_key.is_empty()
-                || (request.use_stored_key && self.state.llm_key_set()),
+            key_sent: !request.api_key.is_empty() || (request.use_stored_key && stored_key),
             // Der Fake antwortet immer mit einer Modellliste.
             answer: String::new(),
         })

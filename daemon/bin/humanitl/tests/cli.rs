@@ -1407,6 +1407,124 @@ fn llm_test_an_endpoint_the_daemon_refuses_is_exit_1() {
     assert_eq!(code(&output), 2, "{}", stderr(&output));
 }
 
+/// Ruft das Binary mit `input` auf `stdin` auf, etwa einen Schlüssel.
+fn run_with_stdin(harness: &Harness, args: &[&str], input: &[u8]) -> std::process::Output {
+    use std::io::Write as _;
+    let mut child = harness
+        .command()
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the binary starts");
+    child
+        .stdin
+        .take()
+        .expect("stdin is a pipe")
+        .write_all(input)
+        .expect("the input reaches the process");
+    child.wait_with_output().expect("the binary ends")
+}
+
+/// `llm server`: anlegen, wechseln, umbenennen, entfernen, und die Tabelle
+/// nennt Verweise, nie einen Schlüssel (HUM-289).
+#[test]
+fn llm_server_commands_manage_the_saved_servers() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let empty = harness.run(["llm", "server", "ls"]);
+    assert_eq!(code(&empty), 0, "{}", stderr(&empty));
+    assert!(
+        stdout(&empty).contains("no model server saved"),
+        "{}",
+        stdout(&empty)
+    );
+
+    let added = harness.run([
+        "llm",
+        "server",
+        "add",
+        "home",
+        "http://192.168.1.20:11434",
+        "--model",
+        "qwen3",
+    ]);
+    assert_eq!(code(&added), 0, "{}", stderr(&added));
+    assert!(
+        stdout(&added).contains("* "),
+        "the first server is active: {}",
+        stdout(&added)
+    );
+    assert!(
+        stderr(&added).contains("applies to the next session"),
+        "{}",
+        stderr(&added)
+    );
+    let second = harness.run([
+        "llm",
+        "server",
+        "add",
+        "cloud",
+        "https://api.example.com/v1",
+    ]);
+    assert_eq!(code(&second), 0, "{}", stderr(&second));
+
+    let key = run_with_stdin(
+        &harness,
+        &["llm", "key", "set", "--server", "cloud"],
+        b"sk-cloud-0123456789abcdef\n",
+    );
+    assert_eq!(code(&key), 0, "{}", stderr(&key));
+    assert!(
+        stdout(&key).contains("secret-service:humanitl/cloud"),
+        "{}",
+        stdout(&key)
+    );
+    assert!(!stdout(&key).contains("sk-cloud"), "{}", stdout(&key));
+
+    let switched = harness.run(["--json", "llm", "server", "use", "cloud"]);
+    assert_eq!(code(&switched), 0, "{}", stderr(&switched));
+    let value = json_of(&switched);
+    assert_eq!(value["active"], "cloud", "{value}");
+    assert!(!value.to_string().contains("sk-cloud"), "{value}");
+
+    // Ohne `--server` nennt die Kommandozeile den aktiven Server selbst; der
+    // Daemon nähme ein namenloses Setzen nicht an (HUM-289).
+    let unnamed = run_with_stdin(
+        &harness,
+        &["llm", "key", "set"],
+        b"sk-cloud-9876543210abcdef\n",
+    );
+    assert_eq!(code(&unnamed), 0, "{}", stderr(&unnamed));
+    assert!(
+        stdout(&unnamed).contains("secret-service:humanitl/cloud"),
+        "{}",
+        stdout(&unnamed)
+    );
+
+    let refused = harness.run(["llm", "server", "rm", "cloud"]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("[CONFIG_021]"),
+        "{}",
+        stderr(&refused)
+    );
+
+    let renamed = harness.run(["llm", "server", "rename", "home", "lan"]);
+    assert_eq!(code(&renamed), 0, "{}", stderr(&renamed));
+    let removed = harness.run(["--json", "llm", "server", "rm", "cloud", "--use", "lan"]);
+    assert_eq!(code(&removed), 0, "{}", stderr(&removed));
+    let value = json_of(&removed);
+    assert_eq!(value["active"], "lan", "{value}");
+    assert_eq!(
+        value["servers"].as_array().map(Vec::len),
+        Some(1),
+        "{value}"
+    );
+}
+
 #[test]
 fn rules_without_a_daemon_is_daemon_001_and_exit_two() {
     let harness = Harness::new();

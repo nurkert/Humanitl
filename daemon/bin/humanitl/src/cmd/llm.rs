@@ -1,6 +1,7 @@
-//! `humanitl llm discover|test|key`: die Suche nach LLM-Servern im eigenen
-//! Netz (HUM-076), die Probe eines einzelnen Endpunkts (HUM-114) und der
-//! Zugangsschlüssel des Endpunkts (HUM-140).
+//! `humanitl llm discover|test|key|server`: die Suche nach LLM-Servern im
+//! eigenen Netz (HUM-076), die Probe eines einzelnen Endpunkts (HUM-114), der
+//! Zugangsschlüssel des Endpunkts (HUM-140) und die gespeicherten
+//! Modellserver (HUM-289, [`server`]).
 //!
 //! Ein gRPC-Aufruf und sonst nichts (ADR-018): Gesucht wird im Daemon, im
 //! Host-Netz; hier wird angekündigt, gezählt und geschrieben. Die Ankündigung
@@ -14,6 +15,8 @@
 
 use humanitl_ipc::v1;
 use serde_json::{Value, json};
+
+mod server;
 
 use crate::cli::{KeyCmd, LlmCmd};
 use crate::cmd::{Context, EXIT_OK, Failure, status_diagnostic};
@@ -48,8 +51,19 @@ pub async fn run(ctx: &Context, cmd: &LlmCmd) -> Result<u8, Failure> {
             url,
             timeout_ms,
             with_key,
-        } => test(ctx, url, timeout_ms.unwrap_or_default(), *with_key).await,
-        LlmCmd::Key { cmd } => key(ctx, cmd).await,
+            server,
+        } => {
+            test(
+                ctx,
+                url,
+                timeout_ms.unwrap_or_default(),
+                *with_key,
+                server.as_deref(),
+            )
+            .await
+        }
+        LlmCmd::Key { server, cmd } => key(ctx, server.as_deref(), cmd).await,
+        LlmCmd::Server { cmd } => server::run(ctx, cmd).await,
     }
 }
 
@@ -65,7 +79,7 @@ const MAX_KEY_INPUT: u64 = 8 * 1024;
 /// und in der Historie der Shell. An einem Terminal ist die Eingabe verdeckt.
 /// Keine Antwort des Daemons trägt den Schlüssel, also auch keine Ausgabe
 /// dieses Befehls.
-async fn key(ctx: &Context, cmd: &KeyCmd) -> Result<u8, Failure> {
+async fn key(ctx: &Context, server: Option<&str>, cmd: &KeyCmd) -> Result<u8, Failure> {
     let op = match cmd {
         KeyCmd::Status => v1::llm_key_request::Op::Status(v1::llm_key_request::Status {}),
         KeyCmd::Set => {
@@ -79,8 +93,31 @@ async fn key(ctx: &Context, cmd: &KeyCmd) -> Result<u8, Failure> {
         KeyCmd::Remove => v1::llm_key_request::Op::Remove(v1::llm_key_request::Remove {}),
     };
     let mut client = ctx.connect().await?;
+    // Ohne `--server` gilt beim Setzen und Entfernen der aktive Server, und
+    // der Daemon verlangt seinen Namen, sobald es gespeicherte gibt
+    // (HUM-289): Er wird hier erfragt und mitgeschickt. Ein Daemon vor
+    // `LlmServers` kennt keine Server; dann geht der Auftrag ohne Namen.
+    let server = match (server, &op) {
+        (Some(name), _) => name.to_owned(),
+        (None, v1::llm_key_request::Op::Status(_)) => String::new(),
+        (None, _) => client
+            .llm_servers(v1::LlmServersRequest {
+                op: Some(v1::llm_servers_request::Op::List(
+                    v1::llm_servers_request::List {},
+                )),
+            })
+            .await
+            .ok()
+            .map(tonic::Response::into_inner)
+            .filter(|list| !list.implicit)
+            .map(|list| list.active)
+            .unwrap_or_default(),
+    };
     let status = client
-        .llm_key(v1::LlmKeyRequest { op: Some(op) })
+        .llm_key(v1::LlmKeyRequest {
+            op: Some(op),
+            server,
+        })
         .await
         .map_err(|status| Failure::new(status_diagnostic(&status, "LlmKey")))?
         .into_inner();
@@ -223,7 +260,13 @@ fn read_key() -> Result<String, humanitl_core::Diagnostic> {
 /// und der Exit-Code. Ein Endpunkt, der nicht antwortet, ist ein Befund des
 /// Dienstes (`LLM_001`) und keine eigene Erklärung: Was gemessen wurde, weiß
 /// die Stelle, die gemessen hat.
-async fn test(ctx: &Context, url: &str, timeout_ms: u32, with_key: bool) -> Result<u8, Failure> {
+async fn test(
+    ctx: &Context,
+    url: &str,
+    timeout_ms: u32,
+    with_key: bool,
+    server: Option<&str>,
+) -> Result<u8, Failure> {
     let mut client = ctx.connect().await?;
     announce_probe(url);
 
@@ -232,6 +275,7 @@ async fn test(ctx: &Context, url: &str, timeout_ms: u32, with_key: bool) -> Resu
             endpoint: url.to_owned(),
             timeout_ms,
             use_stored_key: with_key,
+            server: server.unwrap_or_default().to_owned(),
             ..v1::ProbeLlmRequest::default()
         })
         .await

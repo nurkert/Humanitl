@@ -107,6 +107,80 @@ pub fn set_value(
     value: Option<&toml::Value>,
     check: impl FnOnce(&Path) -> Result<(), Diagnostic>,
 ) -> Result<Written, Diagnostic> {
+    edit_with(
+        path,
+        |old| {
+            // Ein flacher Schlüssel unter `llm` ist die Ansicht des aktiven
+            // Servers (HUM-289): Wer ihn schreibt, schreibt den Eintrag mit,
+            // sonst setzte der nächste Start den alten Wert des Eintrags
+            // wieder ein.
+            let mut edits = vec![Edit::new(segments.to_vec(), value.cloned())];
+            edits.extend(crate::servers::mirror_of(old, segments, value));
+            Ok(edits)
+        },
+        check,
+    )
+}
+
+/// Eine Änderung an einem Pfad: setzen oder, mit `None`, entfernen.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Edit {
+    /// Der Pfad, zum Beispiel `["llm", "active"]`.
+    pub segments: Vec<String>,
+    /// Der neue Wert, oder `None`, wenn der Pfad wegfällt.
+    pub value: Option<toml::Value>,
+}
+
+impl Edit {
+    /// Eine Änderung aus Pfad und Wert.
+    #[must_use]
+    pub const fn new(segments: Vec<String>, value: Option<toml::Value>) -> Self {
+        Self { segments, value }
+    }
+
+    /// Eine Änderung aus einem Pfad mit Punkten, etwa `llm.active`.
+    #[must_use]
+    pub fn at(path: &str, value: Option<toml::Value>) -> Self {
+        Self::new(path.split('.').map(ToOwned::to_owned).collect(), value)
+    }
+}
+
+/// Die Tabelle nach diesen Änderungen, ohne Datei; `None`, wenn ein Schritt
+/// eines Pfades keine Tabelle ist.
+///
+/// Dieselbe Rechnung wie die Gegenprobe von [`edit_with`]. Der Fake
+/// (`humanitld --fake`) hält seine Modellserver damit im Speicher und
+/// antwortet so wie der Dienst, der in die Datei schreibt (HUM-289).
+#[must_use]
+pub fn apply_edits(table: &toml::Table, edits: &[Edit]) -> Option<toml::Table> {
+    let mut out = table.clone();
+    for edit in edits {
+        out = match &edit.value {
+            Some(value) => with_value(out, &edit.segments, value),
+            None => without_value(out, &edit.segments),
+        }?;
+    }
+    Some(out)
+}
+
+/// Liest `config.toml` unter der Sperre, lässt `plan` aus der alten Tabelle
+/// die Änderungen bestimmen und schreibt sie in einem Zug (HUM-289).
+///
+/// Für Aufträge, die mehrere Werte zugleich ändern müssen, etwa das
+/// Aktivieren eines Servers (`llm.active` und die drei flachen Schlüssel):
+/// Ein Leser zwischen zwei einzelnen Schreibvorgängen sähe sonst einen
+/// Stand, in dem der Schlüssel des einen Servers neben dem Endpunkt des
+/// anderen steht. Alle Zusagen von [`set_value`] gelten für die ganze Liste.
+///
+/// # Errors
+///
+/// Wie [`set_value`], und der Befund von `plan`, wenn der den Auftrag
+/// ablehnt; die Datei bleibt dann unberührt.
+pub fn edit_with(
+    path: &Path,
+    plan: impl FnOnce(&toml::Table) -> Result<Vec<Edit>, Diagnostic>,
+    check: impl FnOnce(&Path) -> Result<(), Diagnostic>,
+) -> Result<Written, Diagnostic> {
     let _order = WRITE_ORDER.lock().unwrap_or_else(PoisonError::into_inner);
     let target = follow_link(path)?;
     let _lock = DirLock::acquire(&target)?;
@@ -121,19 +195,27 @@ pub fn set_value(
     let old: toml::Table = body.parse().map_err(|err: toml::de::Error| {
         unreadable(&target, &format!("is not valid TOML: {err}"))
     })?;
+    let edits = plan(&old)?;
+    let Some(first) = edits.first() else {
+        return Ok(Written::Unchanged);
+    };
+    let (first_segments, first_value) = (first.segments.clone(), first.value.clone());
 
     let not_a_table = "a step of the path there is not a table";
-    let expected = match value {
-        Some(value) => with_value(old.clone(), segments, value),
-        None => without_value(old.clone(), segments),
+    let mut expected = old.clone();
+    for edit in &edits {
+        expected = match &edit.value {
+            Some(value) => with_value(expected, &edit.segments, value),
+            None => without_value(expected, &edit.segments),
+        }
+        .ok_or_else(|| not_edited(&target, &edit.segments, edit.value.as_ref(), not_a_table))?;
     }
-    .ok_or_else(|| not_edited(&target, segments, value, not_a_table))?;
     if expected == old {
         // Ein Wert, der schon so dasteht, wird trotzdem geprüft, und zwar an
         // der Datei selbst: Stand er falsch da, bekommt der Mensch den Befund
         // und kein „geschrieben". Ein Entfernen, das nichts entfernt, bringt
         // keinen Wert mit und bleibt ungeprüft.
-        if value.is_some() {
+        if edits.iter().any(|edit| edit.value.is_some()) {
             check(&target)?;
         }
         return Ok(Written::Unchanged);
@@ -142,11 +224,13 @@ pub fn set_value(
     let mut document: DocumentMut = body.parse().map_err(|err: toml_edit::TomlError| {
         unreadable(&target, &format!("is not valid TOML: {err}"))
     })?;
-    match value {
-        Some(value) => insert(&mut document, segments, value),
-        None => remove(&mut document, segments),
+    for edit in &edits {
+        match &edit.value {
+            Some(value) => insert(&mut document, &edit.segments, value),
+            None => remove(&mut document, &edit.segments),
+        }
+        .ok_or_else(|| not_edited(&target, &edit.segments, edit.value.as_ref(), not_a_table))?;
     }
-    .ok_or_else(|| not_edited(&target, segments, value, not_a_table))?;
     let mut after = document.to_string();
     if crlf {
         after = after.replace("\r\n", "\n").replace('\n', "\r\n");
@@ -160,8 +244,8 @@ pub fn set_value(
     if after.parse::<toml::Table>().ok().as_ref() != Some(&expected) {
         return Err(not_edited(
             &target,
-            segments,
-            value,
+            &first_segments,
+            first_value.as_ref(),
             "the file read back after the edit did not equal the old file plus this one change",
         ));
     }

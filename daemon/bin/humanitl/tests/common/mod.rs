@@ -439,6 +439,12 @@ impl DaemonApi for SilentExport {
     async fn llm_key(&self, request: v1::LlmKeyRequest) -> Result<v1::LlmKeyStatus, Diagnostic> {
         self.inner.llm_key(request).await
     }
+    async fn llm_servers(
+        &self,
+        request: v1::LlmServersRequest,
+    ) -> Result<v1::LlmServerList, Diagnostic> {
+        self.inner.llm_servers(request).await
+    }
 }
 
 /// Die aufgezeichnete Sitzung aus `fixtures/sessions/`.

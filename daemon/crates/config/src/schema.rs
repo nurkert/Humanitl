@@ -248,6 +248,10 @@ fn type_label(node: &Value) -> String {
             .get("items")
             .map_or_else(|| "value".to_owned(), type_label);
         format!("list of {item}")
+    } else if has_type(node, "object") && node.get("properties").is_some() {
+        // Eine Struktur als Wert einer freien Tabelle (`llm.servers`, HUM-289):
+        // Ihre Felder nennt die Beschreibung.
+        "table".to_owned()
     } else if has_type(node, "object") {
         let value = node
             .get("additionalProperties")

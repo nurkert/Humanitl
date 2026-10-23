@@ -88,7 +88,23 @@ fn real() -> (IpcServer, tempfile::TempDir) {
     let (store, diagnostics) =
         RulesStore::load(&dir.path().join("rules.yaml"), &bundled(), session);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    let server = IpcServer::new(queue, &config, Some(session)).with_rules(Arc::new(store), None);
+    // Die Pfade liegen im selben Wegwerf-Verzeichnis: `LlmServers` und
+    // `LlmKey` lesen `config.toml`, und kein Test liest die des Menschen
+    // (HUM-289). Ohne `PATH` findet der Speicher kein `secret-tool`.
+    let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([
+        ("HOME", dir.path().display().to_string()),
+        (
+            "XDG_CONFIG_HOME",
+            dir.path().join("config").display().to_string(),
+        ),
+        (
+            "XDG_DATA_HOME",
+            dir.path().join("data").display().to_string(),
+        ),
+    ]));
+    let server = IpcServer::new(queue, &config, Some(session))
+        .with_rules(Arc::new(store), None)
+        .with_paths(paths);
     (server, dir)
 }
 
@@ -610,6 +626,102 @@ fn table() -> Vec<Case> {
                 get_session_summary,
                 v1::SessionSummaryRef {
                     sandbox_id: String::new(),
+                }
+            ),
+        },
+        // ---- LlmServers und LlmKey mit Server (HUM-289) ------------------
+        //
+        // Beide Seiten rechnen mit `humanitl_config::servers`, der echte
+        // Dienst über `config.toml`, der Fake über seiner Tabelle; beide
+        // lehnen dasselbe mit demselben Befund ab.
+        Case {
+            what: "llm_servers without an operation",
+            expected: refused(Code::FailedPrecondition, codes::CONFIG_021),
+            call: both!(llm_servers, v1::LlmServersRequest { op: None }),
+        },
+        Case {
+            what: "llm_servers listing an empty configuration",
+            expected: Seen::ok(),
+            call: both!(
+                llm_servers,
+                v1::LlmServersRequest {
+                    op: Some(v1::llm_servers_request::Op::List(
+                        v1::llm_servers_request::List {},
+                    )),
+                }
+            ),
+        },
+        Case {
+            what: "llm_servers adding a server with a name that is not one",
+            expected: refused(Code::FailedPrecondition, codes::CONFIG_021),
+            call: both!(
+                llm_servers,
+                v1::LlmServersRequest {
+                    op: Some(v1::llm_servers_request::Op::Add(
+                        v1::llm_servers_request::Add {
+                            name: "Not A Name".to_owned(),
+                            endpoint: "http://192.168.1.20:11434".to_owned(),
+                            models: Vec::new(),
+                            activate: false,
+                        },
+                    )),
+                }
+            ),
+        },
+        Case {
+            what: "llm_servers adding a server with a stray quote in the endpoint",
+            expected: refused(Code::InvalidArgument, codes::CONFIG_003),
+            call: both!(
+                llm_servers,
+                v1::LlmServersRequest {
+                    op: Some(v1::llm_servers_request::Op::Add(
+                        v1::llm_servers_request::Add {
+                            name: "home".to_owned(),
+                            endpoint: "http://192.168.1.20:11434\"".to_owned(),
+                            models: Vec::new(),
+                            activate: false,
+                        },
+                    )),
+                }
+            ),
+        },
+        Case {
+            what: "llm_servers activating a server that does not exist",
+            expected: refused(Code::FailedPrecondition, codes::CONFIG_021),
+            call: both!(
+                llm_servers,
+                v1::LlmServersRequest {
+                    op: Some(v1::llm_servers_request::Op::Activate(
+                        v1::llm_servers_request::Activate {
+                            name: "nowhere".to_owned(),
+                        },
+                    )),
+                }
+            ),
+        },
+        Case {
+            what: "llm_key for a server that does not exist",
+            expected: refused(Code::FailedPrecondition, codes::CONFIG_021),
+            call: both!(
+                llm_key,
+                v1::LlmKeyRequest {
+                    op: Some(v1::llm_key_request::Op::Status(
+                        v1::llm_key_request::Status {},
+                    )),
+                    server: "nowhere".to_owned(),
+                }
+            ),
+        },
+        Case {
+            what: "llm_key for a server with a name that is not one",
+            expected: refused(Code::FailedPrecondition, codes::CONFIG_021),
+            call: both!(
+                llm_key,
+                v1::LlmKeyRequest {
+                    op: Some(v1::llm_key_request::Op::Status(
+                        v1::llm_key_request::Status {},
+                    )),
+                    server: "../etc".to_owned(),
                 }
             ),
         },
