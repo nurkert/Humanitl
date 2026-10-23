@@ -249,6 +249,10 @@ pub struct LaunchInputs {
     /// Gerendert hinter den Erweiterungen des Profils und vor dem
     /// Projektordner; leer heißt: kein Argument.
     pub session_ro: Vec<(SourceFd, PathBuf)>,
+    /// The opened agent program (HUM-278), bound by descriptor onto
+    /// [`crate::agent::AgentProgram::dst`]. `None` binds by path; that is the
+    /// preview, not the start.
+    pub agent_program: Option<SourceFd>,
 }
 
 impl LaunchInputs {
@@ -272,6 +276,7 @@ impl LaunchInputs {
             extra_ro: Vec::new(),
             extra_rw: Vec::new(),
             session_ro: Vec::new(),
+            agent_program: None,
         }
     }
 
@@ -413,6 +418,13 @@ impl SandboxProfile {
         // ([`CA_BUNDLE_DST`]).
         args.bind("--ro-bind", &ctx.ca_bundle_src, Path::new(CA_BUNDLE_DST));
         args.bind("--ro-bind", &ctx.shim_src, &self.network.shim_dst);
+        // The agent program from outside the mounts, one file and read-only
+        // (HUM-278). It stands after the profile's mounts, so no profile entry
+        // can cover it, and under `/run/humanitl`, which never comes from the
+        // host.
+        if let Some(program) = &ctx.agent_program {
+            args.bind_source(false, &program.host, inputs.agent_program, &program.dst);
+        }
 
         // Wer der Nutzer ist, sagt der Launcher, nicht der Host: kein
         // Host-`/etc/passwd`, nur die eine Zeile für diese Kennung.
@@ -713,6 +725,7 @@ mod tests {
             session_env: Vec::new(),
             command: vec!["true".into()],
             files: Vec::new(),
+            agent_program: None,
         }
     }
 
@@ -818,6 +831,7 @@ mod tests {
                 extra_ro: Vec::new(),
                 extra_rw: Vec::new(),
                 session_ro: Vec::new(),
+                agent_program: None,
             },
         );
         assert!(with.windows(2).any(|w| w == ["--json-status-fd", "11"]));
@@ -913,6 +927,7 @@ mod tests {
                 extra_ro: Vec::new(),
                 extra_rw: Vec::new(),
                 session_ro: Vec::new(),
+                agent_program: None,
             },
         );
         assert!(window_at(&args, &["--ro-bind-data", "40", "/work/.envrc"]).is_some());

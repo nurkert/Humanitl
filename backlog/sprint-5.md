@@ -45,6 +45,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-272 | Accent-filled controls react too weakly to hover and press | S | HUM-260 |
 | HUM-273 | Releases 0.0.x appear as regular releases, not as pre-releases | S | HUM-053, HUM-225 |
 | HUM-277 | Saved settings take effect without restarting the daemon (before HUM-060) | M | HUM-069, HUM-140, HUM-151 |
+| HUM-278 | The daemon finds agents installed in ~/.local/bin (before HUM-060) | S | HUM-037, HUM-136 |
 
 ---
 
@@ -5278,3 +5279,123 @@ HUM-039, HUM-067, HUM-069, HUM-075, HUM-140, HUM-151, HUM-257,
 BACKLOG.md section 9 item 17. `docs/SECURITY.md` and `docs/THREAT-MODEL.md`
 stay unchanged: no guarantee moves, the passthrough rule and the key mask
 followed every start already.
+
+## HUM-278 · The daemon finds agents installed in ~/.local/bin (before HUM-060)
+
+### Context
+On the owner's machine (v0.0.6 `.deb`, socket-activated user daemon) `humanitl
+doctor` reported `no opencode in PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin`
+with DOCTOR_007 and the fix `curl -fsSL https://opencode.ai/install | bash`.
+OpenCode was installed: its installer puts one native binary into
+`~/.opencode/bin`, and `~/.local/bin/opencode` held a wrapper script. The
+systemd user manager's `PATH` names neither directory, and the sandbox binds
+`/usr` read-only and nothing under `/home`, so even a found binary would not
+start inside. Reinstalling does not help.
+
+### Goal
+The daemon finds an agent in the usual per-user directories, makes that one
+file available in the sandbox read-only, and points the command at it. When
+it finds nothing usable, DOCTOR_007 and AGENT_001 name the directories
+searched, the candidates passed over, and a fix that helps everywhere:
+`humanitl config set agent.command '["/absolute/path/to/opencode"]'`.
+
+### Non-goal
+- Scripts and npm entry points (`#!/usr/bin/env node`): they need files
+  beside them; they are named, not bound.
+- Detecting the npm user prefix (`npm config get prefix`); a prefix of
+  `~/.local` is covered by `~/.local/bin`.
+- Commands the caller names after `--` that are not the agent.
+
+### Affected paths
+`daemon/crates/sandbox/src/agent/locate.rs` (new), `agent/mod.rs`,
+`agent/opencode.rs`, `profile.rs` (`SessionContext::agent_program`),
+`bwrap_args.rs`, `doctor.rs`, `doctor/probe.rs`, `doctor/checks.rs`,
+`daemon/crates/ipc/src/sandbox.rs`, `daemon/bin/humanitl/src/cmd/sandbox.rs`,
+`daemon/crates/core-types/src/diagnostics/codes.rs` (texts of DOCTOR_007 and
+AGENT_001), `docs/DIAGNOSTICS.md`, `docs/SECURITY.md`, `docs/THREAT-MODEL.md`
+(K-17), `profiles/sandbox/default.toml` (comment), the `SessionContext`
+literals in tests.
+
+### Specification
+1. Search order for a bare command not startable inside the sandbox: the
+   daemon's `PATH`, then `$HOME/.opencode/bin`, `$HOME/.local/bin`,
+   `$HOME/bin`. An absolute `agent.command` outside the binds is checked the
+   same way. A path relative to the project stays as it is.
+2. A candidate is accepted only when its canonical file is executable for
+   this user, a native ELF executable, owned by the user or root, and neither
+   file nor directory is world-writable; group-writable only when the group
+   is the user's private group (primary group, named like the user in
+   `/etc/group`, no listed members, no other account in `/etc/passwd` with it
+   as primary group; unknown to the files means refused). Debian's umask 002
+   leaves `~/.local/bin` at `drwxrwxr-x`.
+3. The accepted file is opened once (`O_PATH | O_NOFOLLOW`, `PinnedSource`
+   as in HUM-263), checked through that descriptor (owner, mode, ELF header:
+   class, byte order, length, type `EXEC` or `DYN`) and bound by descriptor
+   (`--ro-bind-fd`) at `/run/humanitl/agent/<name>` after the profile's mounts
+   (`SessionContext::agent_program`, `LaunchInputs::agent_program`). The name
+   is the one asked for, the host path the canonical one. The first word of
+   the command becomes that path. One file, never the directory. Only the
+   configured agent is bound, never a command after `--`. The bind is checked
+   by these rules, not by the SANDBOX_006 denylist.
+4. The adapter preflight stays quiet when the bind will happen. Preflight,
+   plan and doctor share one search (`locate::search` over `search_dirs`).
+   AGENT_001 names the searched directories, the skipped candidates with their
+   reason and the install command; its fix is the `config set` line shared
+   with DOCTOR_007. AGENT_002 and AGENT_004 name a passed-over candidate with
+   its reason.
+5. The doctor searches the same directories under `PATH` and `HOME`. With a
+   sandbox view, a host candidate counts only when the start would bind it;
+   without one (the daemon's own `Doctor` RPC) a host PATH hit stays a
+   statement about the host. Found: the agent line is green with the
+   canonical path. Missing: evidence `no
+   opencode in PATH=… or <dirs>`, `why` with the passed-over candidates and
+   the install command, fix `CopyCommand` of the `config set` line above.
+
+### Tests
+- `locate::tests::an_agent_in_local_bin_is_found_while_path_lacks_it`
+- `locate::tests::a_group_writable_dir_is_skipped_unless_the_group_is_private`
+- `locate::tests::a_script_is_passed_over_for_a_native_binary_later_in_the_order`
+- `locate::tests::the_private_group_needs_the_users_name_and_no_members`
+- `opencode_adapter::an_agent_in_local_bin_is_bound_and_the_preflight_stays_quiet`
+- `opencode_adapter::agent_001_names_the_per_user_dirs_it_searched`
+- `bwrap_args_snapshot::the_agent_program_is_bound_read_only_after_the_mounts`
+- `doctor::probe::tests::an_agent_in_a_per_user_bin_dir_is_found_outside_path`,
+  `a_script_in_a_per_user_bin_dir_is_named_as_passed_over`
+- `doctor::checks::tests::an_agent_without_a_version_is_not_reported_as_a_version`
+  (extended: dirs, skipped candidate, config fix)
+
+Also: `the_pinned_program_survives_a_swap_of_its_path`,
+`only_a_complete_elf_executable_header_is_native`,
+`a_callers_command_is_never_bound`,
+`a_script_in_path_outside_the_sandbox_is_not_reported_green`,
+`a_script_in_the_host_path_is_named_as_passed_over`, and the descriptor bind
+in the snapshot test.
+
+Mutation proofs: dropping the per-user dirs from `search_dirs`, accepting
+group write unconditionally, `--bind` instead of `--ro-bind`, skipping the ELF
+check, the install command as DOCTOR_007 fix, and a doctor without the
+per-user search each turn at least one of these tests red. All run without
+`bwrap`; the real start is CI's.
+
+### Acceptance criteria
+1. With OpenCode only in `~/.opencode/bin` or `~/.local/bin` (native binary)
+   and the systemd `PATH`, a session starts the agent, and `humanitl sandbox
+   argv` shows one `--ro-bind` of that file to `/run/humanitl/agent/opencode`.
+2. A group- or world-writable candidate that is not the user's private group
+   is not bound.
+3. A script candidate is not bound and is named in AGENT_001 and DOCTOR_007.
+4. DOCTOR_007 names the searched directories and offers `humanitl config set
+   agent.command`, not a reinstall.
+5. `tools/check_coupling.py` does not grow.
+
+### Pitfalls
+- A wrapper in `~/.local/bin` that execs `~/.opencode/bin/opencode` works on
+  the host and fails inside; hence `.opencode/bin` first and scripts skipped.
+- `SessionContext` gained a field; every literal names it.
+- The doctor runs in the daemon, so its `PATH` and `HOME` are the systemd ones.
+- `/run/humanitl` is reserved for adapter files; the launcher's own bind is
+  the one entry there that names a host file besides shim and socket.
+
+### References
+HUM-037, HUM-135, HUM-136, HUM-139, HUM-263. `docs/SECURITY.md` section on
+binds and `docs/THREAT-MODEL.md` K-17 changed in the same commit.

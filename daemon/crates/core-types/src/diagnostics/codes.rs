@@ -875,8 +875,8 @@ registry! {
     /// im `$PATH` des Hosts noch als `agent.command`. Ohne Kommando gibt es
     /// nichts zu starten, deshalb ist der Befund blockierend (HUM-037).
     AGENT_001 => "agent", "Agent-Kommando nicht gefunden", "#agent_001",
-        "Das Agent-Kommando ist weder im `PATH` noch über `agent.command` gesetzt.",
-        "`CopyCommand` mit dem Installationsbefehl.";
+        "Das Agent-Kommando ist weder im `PATH`, in `~/.opencode/bin`, `~/.local/bin`, `~/bin` noch über `agent.command` gesetzt (HUM-278).",
+        "`CopyCommand` mit `humanitl config set agent.command`, der Pfad ist ein Platzhalter; der Installationsbefehl steht im Text.";
     /// `agent.command` zeigt auf eine Datei, die es nicht gibt oder die nicht
     /// ausführbar ist. Die Sandbox startet trotzdem, weil der Pfad in der
     /// Sandbox ein anderer sein kann als auf dem Host; scheitert das `exec`,
@@ -1088,8 +1088,8 @@ registry! {
     /// sein als der auf dem Host, und ob das `exec` gelingt, entscheidet der
     /// Shim. Ohne das Kommando läuft der Agent aber nicht (HUM-075, HUM-037).
     DOCTOR_007 => "doctor", "Agent-Kommando nicht im PATH", "#doctor_007",
-        "Das Agent-Kommando liegt nicht im `PATH` des Daemons.",
-        "`CopyCommand` mit dem Installationsbefehl des Agenten.";
+        "Das Agent-Kommando liegt weder im `PATH` des Daemons noch in `~/.opencode/bin`, `~/.local/bin` oder `~/bin` (HUM-278).",
+        "`CopyCommand` mit `humanitl config set agent.command`, der Pfad ist ein Platzhalter; der Installationsbefehl steht im Text.";
     /// Der Endpunkt des Sprachmodells fehlt oder hat nicht geantwortet.
     ///
     /// Steht nur nach einer Messung. Der Befund der Endpunkt-Probe steht mit

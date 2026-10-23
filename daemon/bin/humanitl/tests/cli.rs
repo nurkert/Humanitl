@@ -1084,6 +1084,7 @@ fn sandbox_argv_is_the_translation_of_the_profile() {
             OsString::from("echo hello world"),
         ],
         files: Vec::new(),
+        agent_program: None,
     };
     let profile = SandboxProfile::load(&profile_file("default")).expect("the profile loads");
     let expected: Vec<String> = profile

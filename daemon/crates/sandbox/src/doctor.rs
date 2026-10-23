@@ -730,6 +730,12 @@ pub enum AgentFacts {
         command: String,
         /// Der `PATH`, in dem gesucht wurde.
         searched: String,
+        /// The per-user bin directories searched after `PATH`, comma-separated;
+        /// empty without `HOME` (HUM-278).
+        user_dirs: String,
+        /// Candidates that exist and were passed over, with the reason; empty
+        /// without any (HUM-278).
+        skipped: String,
         /// Wie man es nachinstalliert.
         install: String,
     },

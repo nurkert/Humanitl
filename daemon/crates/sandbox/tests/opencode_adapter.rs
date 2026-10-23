@@ -226,6 +226,152 @@ fn opencode_preflight_missing_binary() {
     );
 }
 
+/// A home with a `.local/bin` nobody else can write, for HUM-278.
+fn home_with_local_bin() -> (tempfile::TempDir, PathBuf) {
+    let home = tempfile::tempdir().unwrap();
+    let bin = home.path().join(".local/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (home, bin)
+}
+
+/// A copy of a real native executable, so the ELF check sees ELF.
+fn native_program(dir: &Path, name: &str) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::copy("/bin/true", &path)
+        .or_else(|_| std::fs::copy("/usr/bin/true", &path))
+        .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+/// This user's id, read from a directory this test just created.
+fn uid() -> u32 {
+    let probe = tempfile::tempdir().unwrap();
+    std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(probe.path()).unwrap())
+}
+
+/// The daemon's PATH under systemd lacks `~/.local/bin`; the agent there is
+/// still found, bound read-only, and the command points at it (HUM-278).
+#[test]
+fn an_agent_in_local_bin_is_bound_and_the_preflight_stays_quiet() {
+    let adapter = OpenCodeAdapter::new();
+    let (home, bin) = home_with_local_bin();
+    let program = native_program(&bin, "opencode");
+    let empty = tempfile::tempdir().unwrap();
+    let ctx = context(Some("http://192.168.1.50:11434"))
+        .with_models(vec!["qwen3".to_owned()])
+        .with_host_path(Some(OsString::from(empty.path())))
+        .with_host_home(Some(home.path().to_path_buf()))
+        .with_trust(humanitl_sandbox::agent::locate::Trust::new(uid(), None))
+        .with_sandbox_view(SandboxView::same_path(
+            vec![PathBuf::from("/usr")],
+            Vec::new(),
+        ))
+        .with_sandbox_path(Some(OsString::from("/usr/local/bin:/usr/bin")));
+
+    let diagnostics = adapter.preflight(&ctx);
+    assert!(
+        diagnostics
+            .iter()
+            .all(|d| !d.code.as_str().starts_with("AGENT_")),
+        "the start binds the agent, so nothing blocks: {diagnostics:?}"
+    );
+
+    let mut command = adapter.command(&ctx);
+    let bound = humanitl_sandbox::agent::bind_agent_program(&ctx, &mut command)
+        .expect("the agent in ~/.local/bin is bound");
+    assert_eq!(bound.host, std::fs::canonicalize(&program).unwrap());
+    assert_eq!(bound.dst, Path::new("/run/humanitl/agent/opencode"));
+    assert_eq!(
+        command,
+        vec![OsString::from("/run/humanitl/agent/opencode")]
+    );
+}
+
+/// Without a usable agent, `AGENT_001` names the per-user directories it
+/// searched and the setting that helps when it lies elsewhere (HUM-278).
+#[test]
+fn agent_001_names_the_per_user_dirs_it_searched() {
+    let adapter = OpenCodeAdapter::new();
+    let (home, bin) = home_with_local_bin();
+    let empty = tempfile::tempdir().unwrap();
+    let ctx = context(Some("http://192.168.1.50:11434"))
+        .with_models(vec!["qwen3".to_owned()])
+        .with_host_path(Some(OsString::from(empty.path())))
+        .with_host_home(Some(home.path().to_path_buf()))
+        .with_trust(humanitl_sandbox::agent::locate::Trust::new(uid(), None))
+        .with_sandbox_view(SandboxView::same_path(
+            vec![PathBuf::from("/usr")],
+            Vec::new(),
+        ))
+        .with_sandbox_path(Some(OsString::from("/usr/local/bin:/usr/bin")));
+
+    let diagnostics = adapter.preflight(&ctx);
+    let agent_001 = diagnostics
+        .iter()
+        .find(|d| d.code.as_str() == "AGENT_001")
+        .expect("AGENT_001 is missing");
+    assert!(
+        agent_001.why.contains(&bin.display().to_string()),
+        "{}",
+        agent_001.why
+    );
+    assert!(agent_001.why.contains("agent.command"), "{}", agent_001.why);
+    assert!(
+        agent_001.why.contains("opencode.ai/install"),
+        "{}",
+        agent_001.why
+    );
+    assert_eq!(
+        agent_001.fix,
+        Some(humanitl_core::FixAction::CopyCommand(
+            "humanitl config set agent.command '[\"/absolute/path/to/opencode\"]'".to_owned()
+        ))
+    );
+    let mut command = adapter.command(&ctx);
+    assert_eq!(
+        humanitl_sandbox::agent::bind_agent_program(&ctx, &mut command),
+        None
+    );
+}
+
+/// A wrapper script found in the host PATH and not bound is named with its
+/// reason in `AGENT_004` (HUM-278).
+#[test]
+fn a_script_in_the_host_path_is_named_as_passed_over() {
+    let adapter = OpenCodeAdapter::new();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let script = dir.path().join("opencode");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nexec \"$HOME/.opencode/bin/opencode\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let ctx = context(Some("http://192.168.1.50:11434"))
+        .with_models(vec!["qwen3".to_owned()])
+        .with_host_path(Some(OsString::from(dir.path())))
+        .with_trust(humanitl_sandbox::agent::locate::Trust::new(uid(), None))
+        .with_sandbox_view(SandboxView::same_path(
+            vec![PathBuf::from("/usr")],
+            Vec::new(),
+        ))
+        .with_sandbox_path(Some(OsString::from("/usr/local/bin:/usr/bin")));
+
+    let diagnostics = adapter.preflight(&ctx);
+    let agent_004 = diagnostics
+        .iter()
+        .find(|d| d.code.as_str() == "AGENT_004")
+        .unwrap_or_else(|| panic!("AGENT_004 is missing: {diagnostics:?}"));
+    assert!(
+        agent_004.why.contains("passed over: a script"),
+        "{}",
+        agent_004.why
+    );
+}
+
 #[test]
 fn opencode_preflight_is_quiet_when_everything_is_there() {
     let adapter = OpenCodeAdapter::new();
@@ -1623,6 +1769,7 @@ impl Fixture {
             session_env: vec![("HUMANITL_SESSION".to_owned(), SessionId::nil().to_string())],
             command: command.iter().map(OsString::from).collect(),
             files: Vec::new(),
+            agent_program: None,
         }
     }
 

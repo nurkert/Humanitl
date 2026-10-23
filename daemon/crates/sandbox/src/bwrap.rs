@@ -785,6 +785,7 @@ impl SandboxBackend for BwrapBackend {
             extra_ro: read_only,
             extra_rw: writable,
             session_ro: pinned.session_sources(self),
+            agent_program: pinned.agent.as_ref().map(|agent| self.source_fd(agent)),
         };
         let env = profile.effective_env(session, inputs.report_fd);
         let mut argv = vec![self.program.clone().into_os_string()];
@@ -995,6 +996,8 @@ struct PinnedMounts {
     writable: Vec<PinnedSource>,
     /// Die Binds aus [`BwrapBackend::with_read_only_bind`], mit ihrem Ziel.
     session: Vec<(PinnedSource, PathBuf)>,
+    /// The agent program, opened and checked once (HUM-278).
+    agent: Option<PinnedSource>,
 }
 
 impl PinnedMounts {
@@ -1022,7 +1025,31 @@ impl PinnedMounts {
                 Ok((pinned, dst.clone()))
             })
             .collect::<Result<Vec<_>, Diagnostic>>()?;
+        // The agent program is checked by its owner, mode and ELF header on
+        // the opened descriptor, not by the mount denylist: it is one file the
+        // daemon resolved itself (HUM-278, docs/SECURITY.md).
+        let agent = session
+            .agent_program
+            .as_ref()
+            .map(|program| {
+                crate::agent::locate::pin_program(
+                    &program.host,
+                    &crate::agent::locate::Trust::of_this_process(),
+                )
+                .map_err(|skip| {
+                    Diagnostic::builder(SANDBOX_006, Severity::Blocking)
+                        .why(format!(
+                            "the agent program {} is no longer bindable: {}; it was checked \
+                             when the session was planned and is opened again at the start",
+                            program.host.display(),
+                            skip.describe()
+                        ))
+                        .build()
+                })
+            })
+            .transpose()?;
         Ok(Self {
+            agent,
             work,
             read_only: Self::open_list(policy, &profile.mounts.extra_ro, "mounts.extra_ro")?,
             writable: Self::open_list(policy, &profile.mounts.extra_rw, "mounts.extra_rw")?,
@@ -1070,6 +1097,7 @@ impl PinnedMounts {
             .chain(self.read_only)
             .chain(self.writable)
             .chain(self.session.into_iter().map(|(pinned, _)| pinned))
+            .chain(self.agent)
             .map(PinnedSource::into_fd)
     }
 }

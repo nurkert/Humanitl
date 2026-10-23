@@ -171,6 +171,8 @@ fn broken() -> MachineFacts {
             adapter: "opencode".to_owned(),
             command: "opencode".to_owned(),
             searched: "/usr/bin".to_owned(),
+            user_dirs: String::new(),
+            skipped: String::new(),
             install: "curl -fsSL https://opencode.ai/install | bash".to_owned(),
         },
         llm: LlmFacts::NotContacted {
