@@ -2457,8 +2457,15 @@ impl Inner {
             ca_bundle_src: self.paths.ca_dir().join(CA_BUNDLE_FILE),
             shim_src: shim_path(),
             session_env,
-            command: Self::command(&config, command, &agent.command),
+            // A bound program rewrote the adapter's command; the caller's own
+            // words would name the host path the sandbox does not have.
+            command: if agent.program.is_some() {
+                agent.command.clone()
+            } else {
+                Self::command(&config, command, &agent.command)
+            },
             files: agent.files,
+            agent_program: agent.program,
         };
 
         // Ein Schnappschuss ist eine Anzeige, kein Start: Ohne `bwrap` steht
@@ -2512,6 +2519,7 @@ impl Inner {
             // wollte). Die Herkunft geht mit: Ein Befund über ein Kommando von
             // der Kommandozeile darf nicht `agent.command` anfassen.
             .with_host_path(self.paths.env().non_empty("PATH").map(OsString::from))
+            .with_host_home(self.paths.env().non_empty("HOME").map(PathBuf::from))
             .with_language(config.ui.language)
             .with_hold(config.hold.clone())
             .with_briefing(config.agent.briefing.clone())
@@ -2556,8 +2564,14 @@ impl Inner {
             ctx.with_command_from_caller(command.to_vec())
         };
 
+        // An agent outside the sandbox's mounts, for example in
+        // `~/.opencode/bin`, is bound read-only as one file and the command
+        // points at it (HUM-278).
+        let mut command = adapter.command(&ctx);
+        let program = humanitl_sandbox::agent::bind_agent_program(&ctx, &mut command);
         Ok(AgentContribution {
-            command: adapter.command(&ctx),
+            command,
+            program,
             env: adapter.env(&ctx),
             files: adapter.files(&ctx)?,
         })
@@ -2802,6 +2816,8 @@ struct Facts {
 #[derive(Debug, Default)]
 struct AgentContribution {
     command: Vec<OsString>,
+    /// The agent program bound from outside the mounts (HUM-278).
+    program: Option<humanitl_sandbox::agent::AgentProgram>,
     env: Vec<(String, String)>,
     files: Vec<SandboxFile>,
 }
@@ -4006,6 +4022,7 @@ mod tests {
             session_env: Vec::new(),
             command: Vec::new(),
             files: Vec::new(),
+            agent_program: None,
         };
         let paths =
             humanitl_config::Paths::new(humanitl_config::Env::from_pairs([("HOME", "/home/u")]));

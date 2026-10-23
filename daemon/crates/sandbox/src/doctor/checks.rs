@@ -736,22 +736,43 @@ pub(super) fn agent(facts: &AgentFacts) -> CheckOutcome {
             adapter,
             command,
             searched,
+            user_dirs,
+            skipped,
             install,
-        } => CheckOutcome::warn(
-            CheckId::Agent,
-            format!("no {command} in PATH={searched}"),
-            finding_with_docs(
-                DOCTOR_007,
-                Severity::Warning,
-                format!(
-                    "the adapter {adapter} starts {command}, and no executable of that name lies \
-                     in PATH={searched}. The sandbox starts even so, because the path inside it \
-                     may be another one; without the command the agent does not run"
+        } => {
+            // Where the daemon looked, in the order it looked (HUM-278): the
+            // PATH of the daemon is the systemd one, so the per-user
+            // directories are the ones a user expects to see named.
+            let place = if user_dirs.is_empty() {
+                format!("PATH={searched}")
+            } else {
+                format!("PATH={searched} or {user_dirs}")
+            };
+            let passed_over = if skipped.is_empty() {
+                String::new()
+            } else {
+                format!(" ({skipped})")
+            };
+            CheckOutcome::warn(
+                CheckId::Agent,
+                format!("no {command} in {place}"),
+                finding_with_docs(
+                    DOCTOR_007,
+                    Severity::Warning,
+                    format!(
+                        "the adapter {adapter} starts {command}, and no usable executable of \
+                         that name lies in {place}{passed_over}. If {command} is installed \
+                         elsewhere, set agent.command to the absolute path of its binary; the \
+                         sandbox binds it read-only. If it is not installed: {install}"
+                    ),
+                    // Reinstalling does not help someone whose agent lies in
+                    // a directory the daemon does not search; naming the path
+                    // does, for every location.
+                    FixAction::CopyCommand(crate::agent::locate::agent_command_fix(command)),
+                    opencode::DOCS_URL,
                 ),
-                FixAction::CopyCommand(install.clone()),
-                opencode::DOCS_URL,
-            ),
-        ),
+            )
+        }
         AgentFacts::Found {
             adapter,
             command,
@@ -1795,12 +1816,29 @@ mod tests {
             adapter: "opencode".to_owned(),
             command: "opencode".to_owned(),
             searched: "/usr/bin".to_owned(),
+            user_dirs: "/home/u/.opencode/bin, /home/u/.local/bin, /home/u/bin".to_owned(),
+            skipped: "/home/u/.local/bin/opencode was passed over: a script".to_owned(),
             install: "curl -fsSL https://opencode.ai/install | bash".to_owned(),
         });
         assert_eq!(missing.status(), CheckStatus::Warn);
+        let diagnostic = missing.diagnostic().expect("a finding");
+        assert_eq!(diagnostic.code.as_str(), "DOCTOR_007");
+        // HUM-278: the searched per-user directories and the passed-over
+        // candidate are named, and the fix points agent.command at a path
+        // instead of reinstalling.
+        assert!(
+            missing.evidence().contains("/home/u/.local/bin"),
+            "{}",
+            missing.evidence()
+        );
+        let why = &diagnostic.why;
+        assert!(why.contains("/home/u/.opencode/bin"), "{why}");
+        assert!(why.contains("passed over: a script"), "{why}");
         assert_eq!(
-            missing.diagnostic().expect("a finding").code.as_str(),
-            "DOCTOR_007"
+            diagnostic.fix,
+            Some(FixAction::CopyCommand(
+                "humanitl config set agent.command '[\"/absolute/path/to/opencode\"]'".to_owned()
+            ))
         );
     }
 

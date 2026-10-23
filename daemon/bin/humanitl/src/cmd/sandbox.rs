@@ -642,8 +642,15 @@ fn prepare(
         // Adapters; die übrigen Paare des Env-Kits stehen im `[env]` des
         // Profils (`humanitl_proxy::ca::ENV_KIT`).
         session_env,
-        command: agent_command(config, command, &agent.command),
+        // A bound program rewrote the adapter's command; the caller's own
+        // words would name the host path the sandbox does not have.
+        command: if agent.program.is_some() {
+            agent.command
+        } else {
+            agent_command(config, command, &agent.command)
+        },
         files: agent.files,
+        agent_program: agent.program,
     };
 
     let backend = match BwrapBackend::detect(paths.clone()) {
@@ -669,6 +676,9 @@ struct AgentContribution {
     /// Das Kommando, das der Shim nach seccomp startet; leer, wenn kein
     /// Adapter beiträgt.
     command: Vec<OsString>,
+    /// The agent program bound from outside the mounts (HUM-278); with it,
+    /// `command` already names its place in the sandbox.
+    program: Option<humanitl_sandbox::agent::AgentProgram>,
     /// Die Umgebungsvariablen des Agenten.
     env: Vec<(String, String)>,
     /// Die Dateien, die vor dem `exec` in der Sandbox liegen müssen.
@@ -752,6 +762,7 @@ fn agent_contribution(
         // Das Kommando, das wirklich läuft, steht weiter unten: Es hängt daran,
         // ob der Aufrufer eines genannt hat, und die Herkunft geht mit.
         .with_host_path(ctx.env.non_empty("PATH").map(OsString::from))
+        .with_host_home(ctx.env.non_empty("HOME").map(PathBuf::from))
         .with_language(config.ui.language)
         // Frist und Ask-Modus stehen im Briefing (HUM-071); sie müssen die
         // sein, nach denen der Proxy arbeitet, sonst nennt der Text dem Agenten
@@ -809,8 +820,11 @@ fn agent_contribution(
         ctx.render.note(diagnostic_block(&diagnostic).trim_end());
     }
 
+    let mut command = adapter.command(&agent_ctx);
+    let program = humanitl_sandbox::agent::bind_agent_program(&agent_ctx, &mut command);
     Ok(AgentContribution {
-        command: adapter.command(&agent_ctx),
+        command,
+        program,
         env: adapter.env(&agent_ctx),
         files: adapter.files(&agent_ctx).map_err(Failure::new)?,
     })

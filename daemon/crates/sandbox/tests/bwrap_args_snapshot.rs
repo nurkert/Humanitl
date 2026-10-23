@@ -76,6 +76,7 @@ fn context(work_mode: WorkMode) -> SessionContext {
             OsString::from("echo hello world"),
         ],
         files: Vec::new(),
+        agent_program: None,
     }
 }
 
@@ -553,5 +554,63 @@ fn argv_line_is_shell_parsable() {
     assert_eq!(
         split,
         strings(&profile.to_bwrap_args(&ctx, &LaunchInputs::preview()))
+    );
+}
+
+/// The agent program from outside the mounts is bound read-only as one file
+/// under `/run/humanitl/agent`, after the profile's mounts, and the command
+/// names that place (HUM-278).
+#[test]
+fn the_agent_program_is_bound_read_only_after_the_mounts() {
+    let mut ctx = context(WorkMode::Rw);
+    let program = humanitl_sandbox::agent::AgentProgram::new(
+        PathBuf::from("/home/u/.opencode/bin/opencode"),
+        std::ffi::OsStr::new("opencode"),
+    );
+    ctx.command = vec![program.dst.clone().into_os_string()];
+    ctx.agent_program = Some(program);
+
+    let args = strings(&profile("default").to_bwrap_args(&ctx, &LaunchInputs::preview()));
+
+    let at = args
+        .windows(3)
+        .position(|w| {
+            w == [
+                "--ro-bind",
+                "/home/u/.opencode/bin/opencode",
+                "/run/humanitl/agent/opencode",
+            ]
+        })
+        .unwrap_or_else(|| panic!("no read-only bind of the agent program: {args:?}"));
+    assert!(
+        !args
+            .windows(2)
+            .any(|w| w[0] == "--bind" && w[1] == "/home/u/.opencode/bin/opencode"),
+        "the agent program is never bound writable"
+    );
+    assert!(at > index_of(&args, "/usr"), "after the profile's mounts");
+    assert_eq!(
+        args.last().map(String::as_str),
+        Some("/run/humanitl/agent/opencode")
+    );
+
+    // At the start the launcher binds the descriptor it checked, never the
+    // path again (HUM-278).
+    let inputs = LaunchInputs {
+        agent_program: Some(humanitl_sandbox::SourceFd::BindFd(77)),
+        ..LaunchInputs::preview()
+    };
+    let started = strings(&profile("default").to_bwrap_args(&ctx, &inputs));
+    assert!(
+        started
+            .windows(3)
+            .any(|w| w == ["--ro-bind-fd", "77", "/run/humanitl/agent/opencode"]),
+        "{started:?}"
+    );
+    assert!(
+        !started
+            .iter()
+            .any(|arg| arg == "/home/u/.opencode/bin/opencode"),
+        "the host path is not bound again at the start"
     );
 }
