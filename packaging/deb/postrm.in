@@ -1,0 +1,30 @@
+#!/bin/sh
+# postrm des Pakets humanitl (HUM-284).
+#
+# Nach dem Entfernen sind die Units unter /usr/lib/systemd/user fort; jede
+# laufende systemd-Nutzerinstanz laedt neu, damit sie keine Unit mehr fuehrt,
+# deren Datei fehlt. Ein laufender Daemon wird nicht angehalten: Das ist eine
+# Entscheidung seines Menschen (`humanitl daemon uninstall`, solange die
+# Kommandozeile noch da ist), und er endet auch nicht von selbst: Sein
+# Waechter geht nur, wenn am alten Pfad ein neues Programm liegt, nicht wenn
+# es entfernt ist (`daemon/bin/humanitld/src/replaced.rs`). Er laeuft weiter,
+# bis sein Mensch ihn anhaelt (`systemctl --user stop humanitld.service
+# humanitld.socket`). Bei einem Update (`upgrade`) tut dieses Skript
+# nichts; dann laedt der `postinst` der neuen Fassung neu.
+set -e
+
+#HUMANITL_USERS#
+
+case "$1" in
+  remove | purge)
+    humanitl_refresh_users reload || true
+    ;;
+  upgrade | failed-upgrade | abort-install | abort-upgrade | disappear)
+    ;;
+  *)
+    echo "postrm called with unknown argument '$1'" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

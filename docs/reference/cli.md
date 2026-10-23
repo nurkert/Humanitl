@@ -49,6 +49,7 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl daemon install`](#humanitl-daemon-install) Write the systemd user unit that starts the daemon at login
 - [`humanitl daemon logs`](#humanitl-daemon-logs) Show the journal of the daemon: journalctl --user -u humanitld
 - [`humanitl daemon uninstall`](#humanitl-daemon-uninstall) Stop and disable the service and remove the unit daemon install wrote
+- [`humanitl daemon retire-if-idle`](#humanitl-daemon-retire-if-idle) Ask the daemon to end now if no agent session holds it (after an upgrade)
 - [`humanitl doctor`](#humanitl-doctor) Check this machine: one line per precondition, with a fix
 - [`humanitl llm`](#humanitl-llm) Find LLM servers in the local network
 - [`humanitl llm discover`](#humanitl-llm-discover) Search the local /24 for OpenAI-compatible servers and Ollama
@@ -1362,11 +1363,12 @@ The background service
 Usage: humanitl daemon [OPTIONS] <COMMAND>
 
 Commands:
-  status     Ask the daemon who it is
-  install    Write the systemd user unit that starts the daemon at login
-  logs       Show the journal of the daemon: journalctl --user -u humanitld
-  uninstall  Stop and disable the service and remove the unit daemon install wrote
-  help       Print this message or the help of the given subcommand(s)
+  status          Ask the daemon who it is
+  install         Write the systemd user unit that starts the daemon at login
+  logs            Show the journal of the daemon: journalctl --user -u humanitld
+  uninstall       Stop and disable the service and remove the unit daemon install wrote
+  retire-if-idle  Ask the daemon to end now if no agent session holds it (after an upgrade)
+  help            Print this message or the help of the given subcommand(s)
 
 Options:
       --json
@@ -1506,6 +1508,33 @@ Options:
 
       --purge-binaries
           Also remove the copies an `AppImage` placed under `~/.local/lib/humanitl`
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl daemon retire-if-idle
+
+```text
+Ask the daemon to end now if no agent session holds it (after an upgrade)
+
+Usage: humanitl daemon retire-if-idle [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory

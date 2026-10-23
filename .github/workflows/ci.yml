@@ -868,8 +868,9 @@ jobs:
     # Step 13 of the M4 demo: a release build of the three binaries and the
     # app, the .deb, lintian without E:, and no test hook in the release
     # humanitld. Its own job because a release build alone is longer than the
-    # ten minutes e2e-m4 aims for.
-    timeout-minutes: 45
+    # ten minutes e2e-m4 aims for. Since HUM-284 it also upgrades from the
+    # last release with a running daemon, which installs the package twice.
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/setup-rust
@@ -898,6 +899,20 @@ jobs:
           E2E_TRACE: "1"
           M4_PACKAGE: only
         run: ./tests/e2e/m4_trusted_editor.sh
+      - name: Allow unprivileged user namespaces
+        # The hardened user unit (PrivateUsers, ProtectSystem) needs them in
+        # the user manager; Ubuntu 24.04 restricts them through AppArmor.
+        run: |
+          set -euo pipefail
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Upgrade from the last release with a running daemon (HUM-284)
+        # The runner is a VM with systemd as PID 1, no container: linger
+        # starts the user manager of the runner user, v0.0.6 runs its daemon
+        # through socket activation, and installing the .deb of step 13 over
+        # it must leave the new daemon running without a manual command.
+        run: ./packaging/deb/check-upgrade.sh target/e2e/m4-package/dist/humanitl_0.0.0_amd64.deb 0.0.0
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:

@@ -1013,6 +1013,12 @@ impl FakeDaemon {
                 ]
             }
             Some(Op::IsolationCheck(())) => isolation_checks(),
+            // Der Fake spielt eine laufende Sitzung und geht nie (HUM-284).
+            Some(Op::RetireIfIdle(())) => vec![v1::SandboxEvent {
+                event: Some(v1::sandbox_event::Event::Retire(
+                    v1::sandbox_event::Retire { retired: false },
+                )),
+            }],
             Some(Op::Argv(())) => argv_lines(&self.state.session().work_dir),
             Some(Op::Plan(plan)) => vec![self.sandbox_status_for(
                 self.state.sandbox().1,

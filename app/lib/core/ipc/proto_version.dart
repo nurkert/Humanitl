@@ -57,9 +57,13 @@ abstract final class ProtoVersion {
   /// `key_sent`, and `LlmKey` stores, reports and removes the access key
   /// (HUM-069, HUM-140). Raised to 18 with `ProbeLlmResponse.answer`: when no
   /// model list came, the probe line of the setup screen says what came back
-  /// (status and content type) instead of "0 models" (HUM-283).
+  /// (status and content type) instead of "0 models" (HUM-283). Raised to 19
+  /// with `SandboxRequest.retire_if_idle`: from that minor on the restart
+  /// button of the status bar lets the daemon decide atomically whether a
+  /// session holds it, through `humanitl daemon retire-if-idle`, and only for
+  /// an older daemon asks `Sandbox(Status)` itself (HUM-284).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 18;
+  static const int minor = 19;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

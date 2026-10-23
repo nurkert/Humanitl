@@ -56,4 +56,7 @@ bytes.workspace = true
 # nimmt den Zeitpunkt als Argument (HUM-104).
 chrono.workspace = true
 tempfile.workspace = true
+# Die Tests des Wächters über ein ersetztes Programm lassen die Uhr springen,
+# statt zehn Sekunden je Blick zu warten (HUM-284).
+tokio = { workspace = true, features = ["test-util"] }
 tokio-stream.workspace = true

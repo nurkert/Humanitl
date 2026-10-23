@@ -569,7 +569,9 @@ fn handle(ctx: &Context, event: v1::SandboxEvent) -> Option<Failure> {
             }
             None
         }
-        Event::Exit(_) => None,
+        // `Retire` ist die Antwort auf `retire_if_idle` (HUM-284); auf dem
+        // Strom eines Starts kommt sie nie.
+        Event::Exit(_) | Event::Retire(_) => None,
     }
 }
 
