@@ -3160,5 +3160,9 @@
   "diagRECORDER005Why": "The recording writes again; what happened while it was disrupted is missing from the history.",
   "@diagRECORDER005Why": {"description": "Generic cause of RECORDER_005. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own; the daemon's measured sentence always wins there (docs/UX.md 4.4, HUM-052, HUM-250)."},
   "shellStatusDaemonMismatch": "Not the version of this app ({app}) · systemctl --user restart humanitld",
-  "@shellStatusDaemonMismatch": {"description": "Status bar, next to the daemon version: the running daemon has another version than the app, usually because a package upgrade left the old daemon running (HUM-277). The command restarts it and stays untranslated. {app} is the version of the app.", "placeholders": {"app": {"type": "String"}}}
+  "@shellStatusDaemonMismatch": {"description": "Status bar, next to the daemon version: the running daemon has another version than the app, usually because a package upgrade left the old daemon running (HUM-277). The command restarts it and stays untranslated. {app} is the version of the app.", "placeholders": {"app": {"type": "String"}}},
+  "shellSettingsButton": "Settings (Ctrl+,)",
+  "@shellSettingsButton": {"description": "Tooltip and screen-reader label of the gear button in the header that opens the settings sheet, the same sheet as the shortcut it names (HUM-275). The modifier is named as it is printed on the keyboard of the language, like shellPaletteHint."},
+  "setupFixOpenSettings": "Open settings",
+  "@setupFixOpenSettings": {"description": "Fix button of a diagnostic whose fix is a setting the settings sheet shows, such as the access key of LLM_002 (HUM-275). Opens the settings sheet, scrolls to that field and focuses it."}
 }

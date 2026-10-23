@@ -33,10 +33,25 @@ import 'widgets/setting_row.dart';
 /// The settings, as a sheet from the right.
 class SettingsSheet extends ConsumerWidget {
   /// Creates the sheet; [onClose] closes it.
-  const SettingsSheet({required this.onClose, super.key});
+  const SettingsSheet({
+    required this.onClose,
+    this.focusKey,
+    this.focusSerial = 0,
+    super.key,
+  });
 
   /// Closes the sheet.
   final VoidCallback onClose;
+
+  /// The configuration key whose field the sheet scrolls to and focuses, or
+  /// null (HUM-275). A diagnostic's `ChangeSetting` fix opens the sheet with
+  /// it; one of [FormKeys.shownInSheet].
+  final String? focusKey;
+
+  /// Counts the requests for [focusKey]. A second click on the same fix asks
+  /// for the same key again and lands on the field again, even if the focus
+  /// moved away in between.
+  final int focusSerial;
 
   /// Wide enough for an endpoint and its button side by side.
   static const double sheetWidth = 520;
@@ -69,7 +84,12 @@ class SettingsSheet extends ConsumerWidget {
           : FocusTraversalGroup(
               child: SingleChildScrollView(
                 padding: EdgeInsets.all(tokens.spacing.x3),
-                child: _SettingsForm(config: values, status: status),
+                child: _SettingsForm(
+                  config: values,
+                  status: status,
+                  focusKey: focusKey,
+                  focusSerial: focusSerial,
+                ),
               ),
             ),
     );
@@ -78,10 +98,17 @@ class SettingsSheet extends ConsumerWidget {
 
 /// The groups of the form.
 class _SettingsForm extends ConsumerStatefulWidget {
-  const _SettingsForm({required this.config, required this.status});
+  const _SettingsForm({
+    required this.config,
+    required this.status,
+    required this.focusKey,
+    required this.focusSerial,
+  });
 
   final ConfigValues config;
   final LlmKeyStatus status;
+  final String? focusKey;
+  final int focusSerial;
 
   @override
   ConsumerState<_SettingsForm> createState() => _SettingsFormState();
@@ -97,10 +124,61 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
 
   bool _openFailed = false;
 
+  /// One anchor per key the sheet shows, around the control of its row
+  /// (HUM-275). The anchor itself takes no focus; [_reveal] scrolls to it and
+  /// focuses the first control inside it.
+  final Map<String, FocusNode> _anchors = <String, FocusNode>{
+    for (final String key in FormKeys.shownInSheet)
+      key: FocusNode(
+        debugLabel: 'setting-anchor-$key',
+        canRequestFocus: false,
+        skipTraversal: true,
+      ),
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _reveal(widget.focusKey);
+  }
+
+  @override
+  void didUpdateWidget(_SettingsForm oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focusKey != oldWidget.focusKey ||
+        widget.focusSerial != oldWidget.focusSerial) {
+      _reveal(widget.focusKey);
+    }
+  }
+
   @override
   void dispose() {
     _timeout.dispose();
+    for (final FocusNode anchor in _anchors.values) {
+      anchor.dispose();
+    }
     super.dispose();
+  }
+
+  /// Scrolls to the field of [key] and focuses it, after the frame that
+  /// builds it. Without this the fix of `LLM_002` would open a sheet whose
+  /// access-key field lies below the fold, and the person would still have to
+  /// look for it (HUM-275).
+  void _reveal(String? key) {
+    final FocusNode? anchor = key == null ? null : _anchors[key];
+    if (anchor == null) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      final BuildContext? target = anchor.context;
+      if (!mounted || target == null) {
+        return;
+      }
+      // Ohne Dauer: Der Sprung ist die Antwort auf einen Klick, keine
+      // Bewegung, die etwas erklärt (`docs/UX.md` 2.1).
+      unawaited(Scrollable.ensureVisible(target, alignment: 0.1));
+      anchor.traversalDescendants.firstOrNull?.requestFocus();
+    });
   }
 
   Future<void> _write(String key, String value) async {
@@ -154,13 +232,14 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
           key: const Key('settings-restart-note'),
           style: tokens.typography.ui12.tinted(tokens.colors.fg1),
         ),
-        ModelSection(config: config, status: widget.status),
+        ModelSection(config: config, status: widget.status, anchors: _anchors),
         SettingGroupTitle(l10n.settingsSectionHolding),
         SettingRow(
           label: l10n.settingsTimeoutLabel,
           help: l10n.settingsTimeoutHelp,
           refusal: _refusals[FormKeys.holdTimeoutSecs],
           refusalKey: const Key('settings-timeout-refusal'),
+          anchor: _anchors[FormKeys.holdTimeoutSecs],
           child: Focus(
             onFocusChange: (bool focused) {
               if (!focused) {
@@ -180,6 +259,7 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
           label: l10n.settingsAskModeLabel,
           help: l10n.settingsAskModeHelp,
           refusal: _refusals[FormKeys.holdAskMode],
+          anchor: _anchors[FormKeys.holdAskMode],
           child: Align(
             alignment: Alignment.centerLeft,
             child: HSegmented<String>(
@@ -208,6 +288,7 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
         SettingRow(
           label: l10n.settingsLanguageLabel,
           refusal: _refusals[FormKeys.uiLanguage],
+          anchor: _anchors[FormKeys.uiLanguage],
           child: Align(
             alignment: Alignment.centerLeft,
             child: HSegmented<String>(
@@ -228,6 +309,7 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
         SettingRow(
           label: l10n.settingsThemeLabel,
           refusal: _refusals[FormKeys.uiTheme],
+          anchor: _anchors[FormKeys.uiTheme],
           child: Align(
             alignment: Alignment.centerLeft,
             child: HSegmented<String>(
@@ -255,6 +337,7 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
         SettingRow(
           label: l10n.settingsNotificationsLabel,
           refusal: _refusals[FormKeys.uiNotifications],
+          anchor: _anchors[FormKeys.uiNotifications],
           child: HCheckbox(
             key: const Key('settings-notifications'),
             label: l10n.settingsNotificationsHint,
@@ -269,6 +352,7 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
           help: l10n.settingsWorkDirHelp,
           refusal: _refusals[FormKeys.sandboxWorkDir],
           refusalKey: const Key('settings-workdir-refusal'),
+          anchor: _anchors[FormKeys.sandboxWorkDir],
           // Der Pfad auf einer eigenen Zeile, die Knöpfe darunter in einem
           // `Wrap`: Nebeneinander liefen „Ordner wählen" und „Startordner
           // verwenden" im Deutschen und bei doppelter Schrift über den Rand
@@ -316,6 +400,7 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
           help: l10n.settingsTrustSystemStoreHelp,
           refusal: _refusals[FormKeys.tlsTrustSystemStore],
           refusalKey: const Key('settings-trust-system-store-refusal'),
+          anchor: _anchors[FormKeys.tlsTrustSystemStore],
           child: HCheckbox(
             key: const Key('settings-trust-system-store'),
             label: l10n.settingsTrustSystemStoreHint,

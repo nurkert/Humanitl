@@ -651,7 +651,7 @@ registry! {
     /// `audit.jsonl`, die etwas anderes bedeuten könnte.
     LLM_002 => "llm", "LLM-Endpoint verlangt eine Anmeldung", "#llm_002",
         "Der Endpunkt verlangt eine Anmeldung (`401` oder `403`), ohne Schlüssel oder mit einem, den er ablehnt.",
-        "`CopyCommand`: `humanitl llm key set` hinterlegt den Zugangsschlüssel; in der Oberfläche das Feld „Zugangsschlüssel“ der Einstellungen.";
+        "`ChangeSetting` auf `llm.api_key_ref`: in der Oberfläche ein Knopf, der die Einstellungen am Feld „Zugangsschlüssel“ öffnet; auf der Kommandozeile `humanitl llm key set`.";
     /// Die Verbindung steht, aber die Modellliste des Endpunkts antwortet
     /// nicht als bekannte API (an der Wurzel eines Servers zuvor auch
     /// `/api/tags` nicht). Meist zeigt die Adresse auf eine Oberfläche statt

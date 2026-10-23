@@ -456,7 +456,7 @@ async fn keyed_server(key: &'static str) -> (u16, Arc<std::sync::Mutex<Vec<Strin
 
 /// Mit Schlüssel geht er als `Bearer` an genau diesen Endpunkt, und die
 /// Antwort sagt, dass einer ging; ohne Schlüssel geht keiner, und `LLM_002`
-/// schlägt vor, einen zu hinterlegen (HUM-140).
+/// schlägt vor, einen zu hinterlegen (HUM-140, als Einstellung seit HUM-275).
 #[tokio::test(flavor = "multi_thread")]
 async fn probe_sends_the_key_as_bearer_and_only_when_given() {
     const KEY: &str = "sk-probe-0123456789";
@@ -474,12 +474,7 @@ async fn probe_sends_the_key_as_bearer_and_only_when_given() {
     let refused = probe().probe(&endpoint(port), None).await.unwrap_err();
     assert_eq!(refused.code.as_str(), "LLM_002");
     assert!(refused.why.contains("none was sent"), "{}", refused.why);
-    assert_eq!(
-        refused.fix,
-        Some(humanitl_core::FixAction::CopyCommand(
-            "humanitl llm key set".to_owned()
-        ))
-    );
+    assert_eq!(refused.fix, Some(key_setting_fix()));
     assert_eq!(
         seen.lock().unwrap().last().map(String::as_str),
         Some(""),
@@ -497,6 +492,45 @@ async fn probe_sends_the_key_as_bearer_and_only_when_given() {
         rejected.why
     );
     assert!(!rejected.why.contains("sk-wrong"), "{}", rejected.why);
+}
+
+/// Der Vorschlag jedes `LLM_002` seit HUM-275: die Einstellung
+/// `llm.api_key_ref` mit leerem Wert. Die Oberfläche macht daraus den Knopf,
+/// der die Einstellungen am Feld des Zugangsschlüssels öffnet.
+fn key_setting_fix() -> humanitl_core::FixAction {
+    humanitl_core::FixAction::ChangeSetting {
+        key: "llm.api_key_ref".to_owned(),
+        value: String::new(),
+    }
+}
+
+/// HUM-275: `LLM_002` trägt in beiden Fällen, ohne Schlüssel und mit einem
+/// abgelehnten, den Vorschlag `ChangeSetting` auf `llm.api_key_ref`. Ohne ihn
+/// bliebe die Oberfläche ohne Weg zum Feld, und der Mensch fände die
+/// Einstellungen nur über `Ctrl+,`.
+#[tokio::test(flavor = "multi_thread")]
+async fn llm_002_carries_the_change_setting_fix() {
+    let upstream = FakeUpstream::needs_auth().await;
+    let missing = probe()
+        .probe(&endpoint(upstream.port()), None)
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code.as_str(), "LLM_002");
+    assert_eq!(missing.fix, Some(key_setting_fix()));
+
+    let (port, _seen) = keyed_server("sk-right-0123456789").await;
+    let wrong = humanitl_config::secret::ApiKey::new("sk-wrong-0000000000").unwrap();
+    let rejected = probe()
+        .probe_with_key(&endpoint(port), None, Some(&wrong))
+        .await
+        .unwrap_err();
+    assert_eq!(rejected.code.as_str(), "LLM_002");
+    assert_eq!(rejected.fix, Some(key_setting_fix()));
+    assert_eq!(
+        humanitl_proxy::llm_probe::api_key_fix(),
+        key_setting_fix(),
+        "the helper and the test name the same setting"
+    );
 }
 
 /// HUM-257: Ein Endpunkt, dessen Zertifikat von einer Stelle stammt, der
@@ -680,12 +714,7 @@ async fn a_prefixed_endpoint_without_a_key_asks_for_the_key() {
         "{}",
         diagnostic.why
     );
-    assert_eq!(
-        diagnostic.fix,
-        Some(humanitl_core::FixAction::CopyCommand(
-            "humanitl llm key set".to_owned()
-        ))
-    );
+    assert_eq!(diagnostic.fix, Some(key_setting_fix()));
     assert_eq!(seen.lock().unwrap().as_slice(), ["/api/v1/models"]);
 }
 

@@ -697,7 +697,7 @@ LLM-Endpoint verlangt eine Anmeldung
 
 **Auslöser.** Der Endpunkt verlangt eine Anmeldung (`401` oder `403`), ohne Schlüssel oder mit einem, den er ablehnt.
 
-**Fix.** `CopyCommand`: `humanitl llm key set` hinterlegt den Zugangsschlüssel; in der Oberfläche das Feld „Zugangsschlüssel“ der Einstellungen.
+**Fix.** `ChangeSetting` auf `llm.api_key_ref`: in der Oberfläche ein Knopf, der die Einstellungen am Feld „Zugangsschlüssel“ öffnet; auf der Kommandozeile `humanitl llm key set`.
 
 #### LLM_003
 

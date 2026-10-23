@@ -33,6 +33,7 @@ import '../domain/domain.dart';
 import '../ipc/client_providers.dart';
 import '../ipc/connection.dart';
 import '../../l10n/l10n.dart';
+import 'settings_opener.dart';
 import 'shell_command.dart';
 import 'ui.dart';
 
@@ -526,6 +527,7 @@ class _FixControlState extends ConsumerState<FixControl> {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final TextStyle mono = tokens.typography.mono12.tinted(tokens.colors.fg1);
+    final SettingsOpener? settings = SettingsOpener.maybeOf(context);
     return switch (widget.fix) {
       null => const SizedBox.shrink(),
       FixActionCopyCommand(:final command) => _copyRow(
@@ -569,6 +571,25 @@ class _FixControlState extends ConsumerState<FixControl> {
           key: const Key('fix-choose-folder'),
           onPressed: widget.onChooseFolder,
           child: Text(l10n.setupFixChooseFolder),
+        ),
+      // Ein Schlüssel, den das Einstellungsblatt zeigt, wird ein Knopf, der
+      // das Blatt an genau diesem Feld öffnet (HUM-275); für `LLM_002` ist
+      // das der Zugangsschlüssel. Ohne Shell darüber gibt es kein Blatt und
+      // damit auch keinen Knopf, und jeder andere Schlüssel behält das
+      // Abzeichen, das ihn nennt.
+      //
+      // Der Projektordner bleibt ausgenommen: Seinen Fix trägt der Ordnerwähler
+      // des Bildschirms (oben), und wo der gesperrt ist, weil eine Sandbox
+      // läuft, soll auch kein anderer Knopf den Ordner wählen lassen
+      // (HUM-262).
+      FixActionChangeSetting(:final key)
+          when settings != null &&
+              key != workDirSettingKey &&
+              FormKeys.shownInSheet.contains(key) =>
+        HButton(
+          key: const Key('fix-open-settings'),
+          onPressed: () => settings.open(key),
+          child: Text(l10n.setupFixOpenSettings),
         ),
       FixActionChangeSetting(:final key) => HBadge(
         text: l10n.setupFixChangeSetting(key),
