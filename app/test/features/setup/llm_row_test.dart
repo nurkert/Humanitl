@@ -60,7 +60,40 @@ Future<void> probe(WidgetTester tester) async {
   await tester.pump();
 }
 
+/// A fake that remembers whether the probe asked for the stored key.
+class KeyRecordingClient extends FakeDaemonClient {
+  final List<bool> storedKeyAsked = <bool>[];
+
+  @override
+  Future<LlmProbe> probeLlm(
+    String endpoint, {
+    Duration? timeout,
+    String? apiKey,
+    bool useStoredKey = false,
+  }) {
+    storedKeyAsked.add(useStoredKey);
+    return super.probeLlm(
+      endpoint,
+      timeout: timeout,
+      apiKey: apiKey,
+      useStoredKey: useStoredKey,
+    );
+  }
+}
+
 void main() {
+  // HUM-288: Setup asked without the stored key, so a server that wants one
+  // answered 401 there while the settings check with the key succeeded.
+  testWidgets('the setup probe sends the stored key', (
+    WidgetTester tester,
+  ) async {
+    final KeyRecordingClient client = KeyRecordingClient();
+    await openSetup(tester, client);
+    await type(tester, 'http://192.168.1.10:11434');
+    await probe(tester);
+    expect(client.storedKeyAsked, <bool>[true]);
+  });
+
   testWidgets('llm_row_uses_probe', (WidgetTester tester) async {
     final FakeDaemonClient client = FakeDaemonClient();
     await openSetup(tester, client);
