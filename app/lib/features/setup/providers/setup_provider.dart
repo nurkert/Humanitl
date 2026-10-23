@@ -403,9 +403,13 @@ class SetupLlmProbe extends _$SetupLlmProbe {
   Future<void> run(String endpoint) async {
     state = const LlmProbeState(busy: true);
     try {
+      // The stored key goes along: the daemon sends it only to the origin of
+      // `llm.endpoint` and only when one is set, so this probe answers the
+      // same question as the agent's start. Without it a server that wants a
+      // key answered 401 here while the settings check succeeded (HUM-288).
       final LlmProbe probe = await ref
           .read(daemonClientProvider)
-          .probeLlm(endpoint);
+          .probeLlm(endpoint, useStoredKey: true);
       state = LlmProbeState(probe: probe);
     } on DaemonException catch (error) {
       state = LlmProbeState(failure: error.diagnostic);
