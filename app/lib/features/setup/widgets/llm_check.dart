@@ -40,8 +40,13 @@ class LlmCheck extends StatelessWidget {
     required this.onDiscover,
     required this.onEdited,
     required this.enabled,
+    this.activeServer = '',
     super.key,
   });
+
+  /// The name of the active saved server whose endpoint the field shows,
+  /// or empty when no server is saved (HUM-289).
+  final String activeServer;
 
   /// What the row says.
   final SetupCheck check;
@@ -77,6 +82,14 @@ class LlmCheck extends StatelessWidget {
       detail: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
+          if (activeServer.isNotEmpty) ...<Widget>[
+            Text(
+              l10n.setupLlmActiveServer(activeServer),
+              key: const Key('setup-llm-active-server'),
+              style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+            ),
+            SizedBox(height: tokens.spacing.x1),
+          ],
           LlmEndpointField(
             controller: controller,
             label: l10n.setupLlmEndpointLabel,

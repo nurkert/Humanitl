@@ -73,7 +73,9 @@ use crate::domains::DomainTable;
 use crate::rules::RulesService;
 use crate::sandbox::SandboxService;
 use crate::server_stub::{BoxStream, diagnostic_to_status};
-use crate::{PROTO_MAJOR, PROTO_MINOR, auth, config_rpc, convert, llm_key, rules, v1, validate};
+use crate::{
+    PROTO_MAJOR, PROTO_MINOR, auth, config_rpc, convert, llm_key, llm_servers, rules, v1, validate,
+};
 
 /// Was dieser Daemon in M1 kann.
 ///
@@ -309,19 +311,23 @@ impl IpcServer {
     /// Ein Schlüssel im Auftrag geht an genau den Endpunkt des Auftrags: Der
     /// Mensch hat ihn eben eingetippt, und gespeichert wird er hier nicht. Der
     /// hinterlegte geht nur an einen Endpunkt mit derselben Herkunft wie
-    /// `llm.endpoint`; ein Client, der einen anderen Host nennt, bekommt die
-    /// Probe ohne Schlüssel, und `key_sent` sagt es.
+    /// `llm.endpoint`, also wie der aktive Server; ein Client, der einen
+    /// anderen Host nennt, bekommt die Probe ohne Schlüssel, und `key_sent`
+    /// sagt es. Nennt der Auftrag einen gespeicherten Server (`server`,
+    /// HUM-289), gilt dasselbe mit dessen Endpunkt und dessen Schlüssel: Ein
+    /// Schlüssel geht nie an die Herkunft eines anderen Servers.
     ///
     /// # Errors
     ///
-    /// `CONFIG_020` für einen Schlüssel im Auftrag, der keiner ist, und
-    /// `LLM_009`, wenn der hinterlegte Schlüssel verlangt, aber nicht zu holen
-    /// ist.
+    /// `CONFIG_020` für einen Schlüssel im Auftrag, der keiner ist,
+    /// `CONFIG_021` für einen Server, den es nicht gibt, und `LLM_009`, wenn
+    /// der hinterlegte Schlüssel verlangt, aber nicht zu holen ist.
     async fn probe_key(
         &self,
         endpoint: &url::Url,
         typed: &str,
         use_stored_key: bool,
+        server: &str,
     ) -> Result<Option<ApiKey>, Diagnostic> {
         if !typed.is_empty() {
             return ApiKey::from_pasted(typed).map(Some);
@@ -332,6 +338,7 @@ impl IpcServer {
         let paths = self.doctor.paths.clone();
         let keys = self.key_store();
         let endpoint = endpoint.clone();
+        let server = server.trim().to_owned();
         tokio::task::spawn_blocking(move || {
             let Ok(resolved) = humanitl_config::resolve(
                 &humanitl_config::ProfileSelection::default(),
@@ -342,11 +349,53 @@ impl IpcServer {
                 return Ok(None);
             };
             let llm = resolved.config.llm;
-            let same_origin = llm
-                .endpoint
+            // Welcher Endpunkt und welcher Verweis zusammengehören: ohne
+            // Namen der aktive Server (die flachen Schlüssel sind seine
+            // Ansicht), mit Namen genau dieser Eintrag. Eine Datei ohne
+            // Einträge kennt nur den abgeleiteten Server `default`.
+            let (configured, reference) = if server.is_empty()
+                || (llm.servers.is_empty() && server == humanitl_config::servers::MIGRATED_NAME)
+            {
+                // Dieselbe Regel wie beim Start (HUM-289): Der Verweis wirkt
+                // nur mit dem Endpunkt desselben Eintrags.
+                if !llm.key_goes_with_endpoint() {
+                    return Ok(None);
+                }
+                (llm.endpoint, llm.api_key_ref)
+            } else {
+                let Some(entry) = llm.servers.get(&server) else {
+                    return Err(Diagnostic::builder(
+                        humanitl_core::diagnostics::codes::CONFIG_021,
+                        humanitl_core::Severity::Error,
+                    )
+                    .why(format!(
+                        "the probe sent no key: there is no server named {server}"
+                    ))
+                    .fix(humanitl_core::FixAction::CopyCommand(
+                        "humanitl llm server ls".to_owned(),
+                    ))
+                    .build());
+                };
+                // Ein Verweis, den ein anderer Eintrag auch trägt, wirkt für
+                // keinen (HUM-289, Review C).
+                let shared = llm
+                    .servers
+                    .values()
+                    .filter(|other| {
+                        other.api_key_ref.is_some() && other.api_key_ref == entry.api_key_ref
+                    })
+                    .count()
+                    > 1;
+                let endpoint = entry
+                    .endpoint
+                    .as_deref()
+                    .and_then(|text| url::Url::parse(text).ok());
+                (endpoint, entry.api_key_ref.clone().filter(|_| !shared))
+            };
+            let same_origin = configured
                 .as_ref()
                 .is_some_and(|configured| configured.origin() == endpoint.origin());
-            let key_ref = llm.api_key_ref.as_deref().and_then(KeyRef::parse);
+            let key_ref = reference.as_deref().and_then(KeyRef::parse);
             match key_ref {
                 Some(key_ref) if same_origin => keys.lookup(&key_ref).map(Some),
                 _ => Ok(None),
@@ -1774,12 +1823,18 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         &self,
         request: Request<v1::SetConfigRequest>,
     ) -> Result<Response<v1::ConfigSnapshot>, Status> {
-        let v1::SetConfigRequest { key, value } = request.into_inner();
+        let v1::SetConfigRequest {
+            key,
+            value,
+            expected_server,
+        } = request.into_inner();
         let paths = self.doctor.paths.clone();
-        let snapshot = tokio::task::spawn_blocking(move || config_rpc::set(&paths, &key, &value))
-            .await
-            .map_err(|error| diagnostic_to_status(&unfinished("SetConfig", &error)))?
-            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        let snapshot = tokio::task::spawn_blocking(move || {
+            config_rpc::set_expecting(&paths, &key, &value, &expected_server)
+        })
+        .await
+        .map_err(|error| diagnostic_to_status(&unfinished("SetConfig", &error)))?
+        .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         Ok(Response::new(snapshot))
     }
 
@@ -1957,7 +2012,7 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             ms => Some(Duration::from_millis(u64::from(ms))),
         };
         let key = self
-            .probe_key(&endpoint, &typed, request.use_stored_key)
+            .probe_key(&endpoint, &typed, request.use_stored_key, &request.server)
             .await
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         let result = probe
@@ -1981,6 +2036,40 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             .map_err(|error| diagnostic_to_status(&unfinished("LlmKey", &error)))?
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         Ok(Response::new(status))
+    }
+
+    /// Die gespeicherten Modellserver (HUM-289, [`llm_servers`]). Ein
+    /// Wechsel gilt ab der nächsten Sitzung; keine Antwort trägt einen
+    /// Schlüssel.
+    async fn llm_servers(
+        &self,
+        request: Request<v1::LlmServersRequest>,
+    ) -> Result<Response<v1::LlmServerList>, Status> {
+        let request = request.into_inner();
+        let paths = self.doctor.paths.clone();
+        let keys = self.key_store();
+        let sandbox = self.sandbox.clone();
+        let list = tokio::task::spawn_blocking(move || {
+            // Den aktiven Server entfernt der Dienst nur, solange keine
+            // Sitzung läuft oder startet (HUM-289, Review E).
+            let idle = |work: &mut dyn FnMut()| match &sandbox {
+                Some(sandbox) => sandbox.while_idle(work),
+                None => llm_servers::always_idle(work),
+            };
+            let no_start = |work: &mut dyn FnMut()| match &sandbox {
+                Some(sandbox) => sandbox.while_no_start(work),
+                None => llm_servers::always_idle(work),
+            };
+            let gates = llm_servers::Gates {
+                idle: &idle,
+                no_start: &no_start,
+            };
+            llm_servers::answer(&paths, &keys, &gates, &request)
+        })
+        .await
+        .map_err(|error| diagnostic_to_status(&unfinished("LlmServers", &error)))?
+        .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        Ok(Response::new(list))
     }
 
     /// Was ein Sandbox-Lauf im Projektverzeichnis hinterlassen hat.
@@ -2555,6 +2644,7 @@ mod tests {
             .set_config(Request::new(v1::SetConfigRequest {
                 key: "llm.endpoint".to_owned(),
                 value: "https://llm.example.net/api/v1/".to_owned(),
+                expected_server: String::new(),
             }))
             .await
             .expect("SetConfig writes");
@@ -3551,5 +3641,76 @@ mod tests {
         );
         assert_eq!(first.flows.len(), 2);
         assert_eq!(first.next_cursor, newest_first[1]);
+    }
+
+    /// Ein hinterlegter Schlüssel geht nur an die Herkunft seines eigenen
+    /// Servers (HUM-289): ohne Namen der des aktiven, mit Namen der dieses
+    /// Eintrags, und keiner an die Herkunft eines anderen.
+    #[tokio::test]
+    async fn a_stored_key_goes_only_to_the_origin_of_its_own_server() {
+        const HOME_KEY: &str = "sk-home-0123456789abcdef";
+        const CLOUD_KEY: &str = "sk-cloud-0123456789abcdef";
+        let dir = tempfile::tempdir().unwrap();
+        let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([
+            ("HOME", dir.path().display().to_string()),
+            (
+                "XDG_CONFIG_HOME",
+                dir.path().join("config").display().to_string(),
+            ),
+            (
+                "XDG_DATA_HOME",
+                dir.path().join("data").display().to_string(),
+            ),
+        ]));
+        let keys = humanitl_config::secret::KeyStore::for_paths(&paths).with_secret_tool(None);
+        for (name, key) in [("llm", HOME_KEY), ("cloud", CLOUD_KEY)] {
+            keys.store_named(name, &humanitl_config::secret::ApiKey::new(key).unwrap())
+                .unwrap();
+        }
+        std::fs::create_dir_all(paths.config_dir()).unwrap();
+        std::fs::write(
+            paths.config_path(),
+            r#"[llm]
+active = "home"
+endpoint = "http://home.lan:11434/"
+api_key_ref = "file:llm"
+[llm.servers.home]
+endpoint = "http://home.lan:11434/"
+api_key_ref = "file:llm"
+[llm.servers.cloud]
+endpoint = "https://api.example.com/v1"
+api_key_ref = "file:cloud"
+"#,
+        )
+        .unwrap();
+        let queue = queue();
+        let server = server(&queue).with_paths(paths).with_key_store(keys);
+        let home = url::Url::parse("http://home.lan:11434/v1").unwrap();
+        let cloud = url::Url::parse("https://api.example.com/v1").unwrap();
+        let sent =
+            |key: Option<humanitl_config::secret::ApiKey>| key.map(|key| key.expose().to_owned());
+
+        let active = server.probe_key(&home, "", true, "").await.unwrap();
+        assert_eq!(sent(active).as_deref(), Some(HOME_KEY));
+        let elsewhere = server.probe_key(&cloud, "", true, "").await.unwrap();
+        assert!(
+            elsewhere.is_none(),
+            "the key of the active server went to the origin of another server"
+        );
+
+        let own = server.probe_key(&cloud, "", true, "cloud").await.unwrap();
+        assert_eq!(
+            sent(own).as_deref(),
+            Some(CLOUD_KEY),
+            "a saved server is probed with its own key"
+        );
+        let crossed = server.probe_key(&home, "", true, "cloud").await.unwrap();
+        assert!(
+            crossed.is_none(),
+            "the key of a saved server went to the origin of the active one"
+        );
+
+        let unknown = server.probe_key(&home, "", true, "nope").await.unwrap_err();
+        assert_eq!(unknown.code, codes::CONFIG_021);
     }
 }

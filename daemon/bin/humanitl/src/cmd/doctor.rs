@@ -434,6 +434,7 @@ async fn key_stored(client: &mut Client) -> Option<bool> {
         op: Some(v1::llm_key_request::Op::Status(
             v1::llm_key_request::Status {},
         )),
+        server: String::new(),
     });
     match timeout(PROBE_TIMEOUT, call).await {
         Ok(Ok(status)) => Some(status.into_inner().set),

@@ -110,10 +110,16 @@ const REGISTER: &[(&str, &str)] = &[
     // Gelesen in `SandboxService::agent_key` beim Start einer Sitzung: Der
     // Schlüssel geht als Datei in die Sandbox, und `IpcServer::probe_key`
     // gibt ihn der Probe, wenn sie ihn verlangt (HUM-140).
+    // Gelesen beim Laden: Der Eintrag, den `llm.active` nennt, liefert die
+    // flachen Schlüssel darunter (`servers::project`, HUM-289).
+    ("llm.active", "effective"),
     ("llm.api_key_ref", "effective"),
     ("llm.endpoint", "effective"),
     ("llm.models", "effective"),
     ("llm.passthrough_paths", "effective"),
+    // Die Einträge tragen dieselben drei Felder wie die flachen Schlüssel
+    // und haben deren Leser: Der aktive wird beim Laden zu ihnen (HUM-289).
+    ("llm.servers", "effective"),
     // Der Rücktausch von Pseudonymen kommt mit HUM-079; bis dahin puffert
     // niemand eine Antwort dafür.
     ("pseudonyms.max_response_bytes", "pending(HUM-079)"),
@@ -455,6 +461,7 @@ fn the_schema_hides_no_leaf_from_the_walk() {
         if let Some(values) = node
             .get("additionalProperties")
             .filter(|value| value.is_object())
+            .filter(|_| path != SERVERS_CONTAINER)
         {
             assert!(
                 !hides_fields(values),
@@ -480,13 +487,52 @@ fn the_schema_hides_no_leaf_from_the_walk() {
         }
     });
     assert!(checked > 40, "only {checked} nodes, the walk found nothing");
-    // Die beiden Behälter von heute, beim Namen: Wer einen dritten anlegt,
-    // sieht hier, dass seine Einträge keine eigene Zeile bekommen. Bis HUM-088
-    // waren es drei; `experimental.upstream_port_map` ist entfallen.
+    // Die Behälter von heute, beim Namen: Wer einen weiteren anlegt, sieht
+    // hier, dass seine Einträge keine eigene Zeile bekommen. Bis HUM-088
+    // waren es drei; `experimental.upstream_port_map` ist entfallen, und
+    // HUM-289 brachte `llm.servers`.
     assert_eq!(
         schema::free_table_paths().into_iter().collect::<Vec<_>>(),
-        vec!["resolver.overrides", "sandbox.env"]
+        vec!["llm.servers", "resolver.overrides", "sandbox.env"]
     );
+}
+
+/// Der eine Behälter, dessen Werte Felder tragen: `llm.servers` (HUM-289).
+///
+/// Die Grenze ist hier neu gezogen, nicht aufgehoben. Ein Eintrag trägt genau
+/// die drei Felder, die unter `llm` als eigene Blätter mit eigener Zeile
+/// stehen, und der aktive Eintrag wird beim Laden zu ihnen; ihre Leser sind
+/// seine Leser. Ein viertes Feld hätte keinen solchen Zwilling, und dieser
+/// Test nennt es.
+const SERVERS_CONTAINER: &str = "llm.servers";
+
+#[test]
+fn a_server_entry_carries_only_fields_that_have_a_flat_twin() {
+    let schema = Config::json_schema();
+    let entry = &schema["properties"]["llm"]["properties"]["servers"]["additionalProperties"];
+    let fields: BTreeSet<&str> = entry["properties"]
+        .as_object()
+        .expect("a server entry has properties")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        fields,
+        humanitl_config::servers::FIELDS
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+    );
+    let register = register();
+    for field in fields {
+        assert!(
+            register.contains_key(format!("llm.{field}").as_str()),
+            "llm.servers.*.{field} has no flat twin with a register line"
+        );
+        assert!(
+            !hides_fields(&entry["properties"][field]),
+            "llm.servers.*.{field} carries fields of its own"
+        );
+    }
 }
 
 #[test]

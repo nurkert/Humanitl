@@ -83,7 +83,8 @@ pub static AREAS: &[AreaInfo] = &[
                010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner \
                der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel \
                (HUM-070), 019-020 der Zugangsschlüssel des Modells (HUM-140, \
-               Bereich dafür bis 029 erweitert)",
+               Bereich dafür bis 029 erweitert), 021 die gespeicherten \
+               Modellserver (HUM-289)",
     },
     AreaInfo {
         area: "sandbox",
@@ -1528,6 +1529,25 @@ registry! {
     UI_003 => "ui", "Ordnerdialog nicht verfügbar", "#ui_003",
         "Die Arbeitsumgebung konnte den Dialog zur Wahl des Projektordners nicht öffnen; der Grund des Portals steht im Text.",
         "`CopyCommand` mit `humanitl run`, im Projektordner auszuführen.";
+
+    /// Ein Auftrag an die gespeicherten Modellserver änderte nichts, oder
+    /// `llm.active` nennt keinen Eintrag aus `llm.servers` (HUM-289).
+    ///
+    /// Als Fehler: ein Name, der keiner ist (1 bis 32 Zeichen `a-z`, `0-9`,
+    /// `-`, `_`), ein Name, den es schon gibt oder nicht gibt, ein Server
+    /// ohne lesbaren Endpunkt, das Entfernen des aktiven Servers, ohne einen
+    /// Nachfolger zu nennen, solange es andere gibt, oder während eine
+    /// Sitzung läuft, ein Schlüssel für einen Server, der sich beim Ablegen
+    /// geändert hat oder dessen Verweis ein anderer trägt, und ein Wert des
+    /// Formulars für einen Server, der nicht mehr aktiv ist. `config.toml`
+    /// bleibt dann, wie sie war. Als Warnung beim Laden: kein gültiger
+    /// aktiver Server (dann gelten weder Endpunkt noch Modelle noch
+    /// Schlüssel), zwei Server mit demselben Verweis (dann wirkt er für
+    /// keinen), oder Endpunkt und Verweis kommen nicht aus einem Eintrag,
+    /// etwa ein Endpunkt aus der Umgebung (dann geht kein Schlüssel hinaus).
+    CONFIG_021 => "config", "Modellserver nicht geändert", "#config_021",
+        "`LlmServers` oder `humanitl llm server` bekommt einen ungültigen, doppelten oder unbekannten Namen, einen Endpunkt, der keiner ist, oder soll den aktiven Server ohne Nachfolger oder während einer Sitzung entfernen; `LlmKey` trifft einen Server, der sich beim Ablegen geändert hat oder dessen Verweis ein anderer trägt; `SetConfig` nennt einen Server, der nicht mehr aktiv ist; oder beim Laden gibt es keinen gültigen aktiven Server, einen geteilten Verweis oder einen Endpunkt, der nicht vom aktiven Server kommt.",
+        "`CopyCommand`: `humanitl llm server ls` zeigt die Namen; beim Entfernen des aktiven Servers `--use NAME` mit dem Nachfolger.";
 }
 
 /// Sucht einen Code im Register.

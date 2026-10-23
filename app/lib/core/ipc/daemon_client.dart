@@ -172,7 +172,9 @@ abstract class DaemonClient {
   /// sandbox. Credentials go along only when asked for (HUM-140): [apiKey] is
   /// a key somebody has just typed, sent to this endpoint once and stored
   /// nowhere; [useStoredKey] asks the daemon to send the stored key, which it
-  /// does only when [endpoint] has the origin of `llm.endpoint`.
+  /// does only when [endpoint] has the origin of `llm.endpoint`. With
+  /// [server] it is the key of that saved server instead, sent only when
+  /// [endpoint] has that server's origin (HUM-289).
   /// [LlmProbe.keySent] says whether a key went. **This is the one call of the application
   /// that reaches a machine on the network, and it runs only on an explicit
   /// gesture** -- never while somebody types, because the name would go into
@@ -186,6 +188,7 @@ abstract class DaemonClient {
     Duration? timeout,
     String? apiKey,
     bool useStoredKey = false,
+    String? server,
   });
 
   /// `DiscoverLlm`: searches the local network for LLM servers (HUM-076).
@@ -220,7 +223,12 @@ abstract class DaemonClient {
   /// session keeps what stood when it started. The answer's snapshot is
   /// dropped on purpose: whoever shows the configuration asks [getConfig]
   /// afterwards, so there is one way a screen learns it.
-  Future<void> setConfig(String key, String value);
+  ///
+  /// [expectedServer] names the saved server whose view (`llm.endpoint`,
+  /// `llm.models`) the value was entered for (HUM-289): when another server
+  /// is active by now, the daemon writes nothing and refuses with
+  /// `CONFIG_021`.
+  Future<void> setConfig(String key, String value, {String? expectedServer});
 
   /// `GetConfig`: the configuration as the next start loads it, fresh from
   /// the files (HUM-069).
@@ -229,15 +237,47 @@ abstract class DaemonClient {
   /// `LlmKey(status)`: whether an access key is stored and where (HUM-140).
   ///
   /// None of the three key methods ever returns the key: the daemon does not
-  /// send it, and [LlmKeyStatus] has no field for it.
-  Future<LlmKeyStatus> llmKeyStatus();
+  /// send it, and [LlmKeyStatus] has no field for it. Without [server] they
+  /// mean the active server's key; with it, that saved server's (HUM-289).
+  Future<LlmKeyStatus> llmKeyStatus({String? server});
 
   /// `LlmKey(set)`: stores [key] in the system keyring, or in the 0600
-  /// fallback file, and points `llm.api_key_ref` at it.
-  Future<LlmKeyStatus> setLlmKey(String key);
+  /// fallback file, and points `llm.api_key_ref` (or the reference of
+  /// [server]) at it.
+  Future<LlmKeyStatus> setLlmKey(String key, {String? server});
 
-  /// `LlmKey(clear)`: removes the key and `llm.api_key_ref`.
-  Future<LlmKeyStatus> clearLlmKey();
+  /// `LlmKey(clear)`: removes the key and `llm.api_key_ref` (or the
+  /// reference of [server]).
+  Future<LlmKeyStatus> clearLlmKey({String? server});
+
+  /// `LlmServers(list)`: the saved model servers (HUM-289).
+  Future<SavedServers> listLlmServers();
+
+  /// `LlmServers(add)`: saves a server; the first one, or one with
+  /// [activate], becomes the active one. Its key follows through
+  /// [setLlmKey] with `server: name`.
+  Future<SavedServers> addLlmServer({
+    required String name,
+    required String endpoint,
+    List<String> models = const <String>[],
+    bool activate = false,
+  });
+
+  /// `LlmServers(rename)`: renames a server; its key stays where it is.
+  Future<SavedServers> renameLlmServer(String name, String newName);
+
+  /// `LlmServers(remove)`: removes a server and, with [deleteKey], its
+  /// keyring item when no other server refers to it. The active server goes
+  /// only with a [replacement] while there are others (`CONFIG_021`).
+  Future<SavedServers> removeLlmServer(
+    String name, {
+    bool deleteKey = false,
+    String? replacement,
+  });
+
+  /// `LlmServers(activate)`: makes a server the active one, from the next
+  /// session on; a running session keeps its server.
+  Future<SavedServers> activateLlmServer(String name);
 
   /// `Terminal`: the output of the running session, and the keys on their way
   /// back (HUM-042).

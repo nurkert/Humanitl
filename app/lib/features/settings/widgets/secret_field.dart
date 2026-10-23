@@ -24,8 +24,13 @@ class SecretField extends StatefulWidget {
     required this.hint,
     this.onSubmitted,
     this.enabled = true,
+    this.inputKey = const Key('settings-key-input'),
     super.key,
   });
+
+  /// The key of the input itself; a second field on the same sheet (the
+  /// form of a new server, HUM-289) needs its own.
+  final Key inputKey;
 
   /// The text being typed. The owner clears it after every attempt.
   final TextEditingController controller;
@@ -108,7 +113,7 @@ class _SecretFieldState extends State<SecretField> {
                     ),
                   ),
                 EditableText(
-                  key: const Key('settings-key-input'),
+                  key: widget.inputKey,
                   controller: widget.controller,
                   focusNode: _focus,
                   readOnly: !widget.enabled,

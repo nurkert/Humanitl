@@ -888,6 +888,7 @@ async fn config_answers_and_keeps_only_what_the_daemon_accepts() {
         .set_config(v1::SetConfigRequest {
             key: "sandbox.env.CURL_CA_BUNDLE".to_owned(),
             value: "/etc/humanitl/ca.crt".to_owned(),
+            expected_server: String::new(),
         })
         .await
         .expect("set");
@@ -905,6 +906,7 @@ async fn config_answers_and_keeps_only_what_the_daemon_accepts() {
         .set_config(v1::SetConfigRequest {
             key: "hold.timeout_secs".to_owned(),
             value: "42".to_owned(),
+            expected_server: String::new(),
         })
         .await
         .expect("a form setting");
@@ -917,6 +919,7 @@ async fn config_answers_and_keeps_only_what_the_daemon_accepts() {
         .set_config(v1::SetConfigRequest {
             key: "hold.timeout_secs".to_owned(),
             value: "0".to_owned(),
+            expected_server: String::new(),
         })
         .await
         .expect_err("out of range");
@@ -927,6 +930,7 @@ async fn config_answers_and_keeps_only_what_the_daemon_accepts() {
             .set_config(v1::SetConfigRequest {
                 key: key.to_owned(),
                 value: value.to_owned(),
+                expected_server: String::new(),
             })
             .await
             .expect_err("the daemon refuses it, so the fake does too");

@@ -512,6 +512,27 @@ to this account, is no symlink and is readable by nobody else (otherwise `LLM_00
 or with `humanitl llm key set`, which reads it from `stdin`; no answer of the daemon carries it
 back.
 
+*Several saved servers (HUM-289).* `config.toml` may hold several model servers under
+`[llm.servers.<name>]`, each with its own endpoint and its own key reference; a new server's key
+lives under `account=<name>` (`secret-service:humanitl/<name>`), the server taken over from an
+older configuration keeps `account=llm`, and no two servers share an item. `llm.active` names the
+one that applies, and the flat keys `llm.endpoint` and `llm.api_key_ref` are its view: only the
+active server's origin gets the stored key, at the start of a session and in the probe, and only it
+is the passthrough of the next session. A probe that names a saved server (`ProbeLlmRequest.server`)
+sends that server's key, and only when the probed address has that server's origin (scheme, host,
+port); the key of one server never goes to the origin of another. One rule holds at load and again
+at every use (the agent's key at the start, the probe without a server): a key reference is only
+effective together with the endpoint of the same entry. If the environment or the command line sets
+`llm.endpoint` or `llm.api_key_ref` above the active server, or, without saved servers, the two flat
+keys come from different layers, the stored key is withheld (`CONFIG_021`). If saved servers exist
+and `llm.active` names none of them, endpoint, models and key are all unset (`CONFIG_021`). Two
+servers that share one reference get the key for neither, and no key is ever written to a shared
+reference. A key is attached to a server only if the entry is unchanged (same name, same endpoint)
+after the key was stored; otherwise the stored item is deleted again. A switch applies to the next
+session; a running session keeps the server, the key and the passthrough it started with, and the
+active server cannot be removed while a session runs or starts; no switch and no removal that deletes a key happens while a start is resolving its configuration, and endpoint or key reference of a server never change while its key is being stored (one lock for the daemon and the command line). Removing a server deletes its
+keyring item on request, and only when no other server refers to it.
+
 *How it reaches the sandbox.* When a session starts, the daemon fetches the key and places it as
 the file `/etc/humanitl/opencode/llm-api-key` in the sandbox, from a memfd through
 `--ro-bind-data`. `opencode.json` refers to it with `{file:/etc/humanitl/opencode/llm-api-key}`.
@@ -1026,3 +1047,4 @@ passthrough or the audit chain gets a line here and in the change history of
 | Version | Change |
 |---|---|
 | 0.1.0 | Initial release. |
+| 0.1.0 | Several saved model servers with one keyring item each; only the active origin gets a key and the passthrough (HUM-289). |

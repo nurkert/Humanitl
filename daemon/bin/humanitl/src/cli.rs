@@ -206,6 +206,11 @@ pub enum LlmCmd {
         /// llm.endpoint; the daemon never gives it to another address.
         #[arg(long = "with-key")]
         with_key: bool,
+
+        /// With --with-key: the key of this saved server instead of the
+        /// active one, sent only if URL has the origin of that server.
+        #[arg(long, value_name = "NAME", requires = "with_key")]
+        server: Option<String>,
     },
 
     /// The access key of the LLM endpoint, kept in the system keyring.
@@ -213,9 +218,84 @@ pub enum LlmCmd {
     /// The key never stands in config.toml, on a command line, in a log or in
     /// the recording; the configuration file carries only a reference to it.
     Key {
+        /// The saved server whose key is meant; without it, the active one.
+        #[arg(long, value_name = "NAME", global = true)]
+        server: Option<String>,
+
         /// What to do with the key.
         #[command(subcommand)]
         cmd: KeyCmd,
+    },
+
+    /// Saved model servers: endpoint, models and access key per entry.
+    ///
+    /// The active server is what `llm.endpoint`, `llm.models` and
+    /// `llm.api_key_ref` show; only its address gets the stored key. A switch
+    /// applies to the next session, a running session keeps its server.
+    Server {
+        /// What to do with the servers.
+        #[command(subcommand)]
+        cmd: ServerCmd,
+    },
+}
+
+/// Die Unterkommandos von `humanitl llm server` (HUM-289).
+#[derive(Debug, Subcommand)]
+pub enum ServerCmd {
+    /// List the saved servers; the active one is marked.
+    Ls,
+
+    /// Save a server. Its key follows with `humanitl llm key set --server NAME`.
+    Add {
+        /// 1 to 32 characters a-z, 0-9, - and _.
+        #[arg(value_name = "NAME")]
+        name: String,
+
+        /// The address as it would stand in `llm.endpoint`.
+        #[arg(value_name = "URL")]
+        url: String,
+
+        /// A model of this server, repeatable; the first is the default.
+        #[arg(long, value_name = "MODEL")]
+        model: Vec<String>,
+
+        /// Make it the active server right away.
+        #[arg(long = "use")]
+        activate: bool,
+    },
+
+    /// Make a server the active one, from the next session on.
+    Use {
+        /// The saved server.
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
+
+    /// Rename a server. Its key stays where it is.
+    Rename {
+        /// The saved server.
+        #[arg(value_name = "NAME")]
+        name: String,
+
+        /// The new name.
+        #[arg(value_name = "NEW")]
+        new_name: String,
+    },
+
+    /// Remove a server and, unless --keep-key, its key from the keyring.
+    Rm {
+        /// The saved server.
+        #[arg(value_name = "NAME")]
+        name: String,
+
+        /// The server to use afterwards; required for the active server
+        /// while there are others.
+        #[arg(long = "use", value_name = "NEXT")]
+        replacement: Option<String>,
+
+        /// Leave the key of the server in the keyring.
+        #[arg(long = "keep-key")]
+        keep_key: bool,
     },
 }
 

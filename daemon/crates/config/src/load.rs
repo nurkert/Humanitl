@@ -220,16 +220,30 @@ pub fn load(sources: &Sources) -> Result<Resolved, Diagnostic> {
         merge.apply(entries, hard, layer)?;
     }
     let Merge {
-        flat,
-        origins,
+        mut flat,
+        mut origins,
         diagnostics: merged,
         alias_uses,
         canonical_uses,
+        set_aside,
     } = merge;
 
     let mut diagnostics = notes;
     diagnostics.extend(merged);
     diagnostics.extend(alias_diagnostics(&alias_uses, &canonical_uses));
+    // Der aktive Server liefert die flachen Schlüssel unter `llm` (HUM-289).
+    // Welche Ebene einen Pfad zuletzt gesetzt oder beiseitegelegt hat,
+    // entscheidet, ob die Ansicht ihn ersetzt.
+    let layer_of = |path: &str| {
+        let canonical = canonical_uses
+            .get(path)
+            .and_then(|uses| uses.iter().map(|(layer, _)| *layer).max());
+        let aliased = alias_uses
+            .get(path)
+            .and_then(|uses| uses.iter().map(|used| used.layer).max());
+        canonical.max(aliased).max(set_aside.get(path).copied())
+    };
+    diagnostics.extend(crate::servers::project(&mut flat, &mut origins, &layer_of)?);
 
     let table = nest(&flat)?;
     let config: Config = TomlValue::Table(table)
@@ -477,6 +491,11 @@ struct Merge {
     diagnostics: Vec<Diagnostic>,
     alias_uses: BTreeMap<String, Vec<AliasUse>>,
     canonical_uses: BTreeMap<String, Vec<(usize, Origin)>>,
+    /// Die Ebene, in der ein Pfad zuletzt beiseitegelegt wurde (HUM-283).
+    /// Sie zählt für die Ansicht des aktiven Servers wie ein gesetzter Wert:
+    /// Ein beiseitegelegter Endpunkt aus der Umgebung lässt den des Eintrags
+    /// darunter nicht wieder durch (HUM-289).
+    set_aside: BTreeMap<String, usize>,
 }
 
 impl Merge {
@@ -492,6 +511,7 @@ impl Merge {
             diagnostics: Vec::new(),
             alias_uses: BTreeMap::new(),
             canonical_uses: BTreeMap::new(),
+            set_aside: BTreeMap::new(),
         }
     }
 
@@ -590,6 +610,7 @@ impl Merge {
                 self.origins.insert(entry.path.clone(), Origin::Default);
                 self.alias_uses.remove(&entry.path);
                 self.canonical_uses.remove(&entry.path);
+                self.set_aside.insert(entry.path.clone(), layer);
                 continue;
             }
 
