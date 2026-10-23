@@ -26,6 +26,7 @@
 //! nicht.
 
 pub mod briefing;
+pub mod locate;
 pub mod opencode;
 pub mod opencode_models;
 
@@ -37,6 +38,9 @@ use humanitl_config::{AgentBriefing, HoldConfig, Language, LlmConfig};
 use humanitl_core::rule::Rule;
 use humanitl_core::{Diagnostic, SessionId};
 
+pub use crate::agent::locate::{
+    AGENT_PROGRAM_DIR, AgentProgram, bind_agent_program, plan_agent_program,
+};
 pub use crate::agent::opencode::OpenCodeAdapter;
 
 /// Der Ort in der Sandbox, an dem das Projekt liegt.
@@ -202,6 +206,13 @@ pub struct AgentContext {
     /// Kommandozeile dieselben sind wie beim Start, ohne dass für eine Anzeige
     /// ein Geheimnis gelesen wird.
     pub llm_key: AgentKey,
+    /// The user's home on the host (`$HOME` of the daemon), whose per-user
+    /// bin directories [`locate::plan_agent_program`] searches after
+    /// [`AgentContext::host_path`] (HUM-278). Without it they are not searched.
+    pub host_home: Option<PathBuf>,
+    /// Who may own a program the daemon binds into the sandbox; `None` means
+    /// the user this process runs as ([`locate::Trust::of_this_process`]).
+    pub trust: Option<locate::Trust>,
 }
 
 /// Der Zugangsschlüssel des Modells, so weit ihn ein Adapter sehen darf
@@ -267,7 +278,24 @@ impl AgentContext {
             sandbox_view: SandboxView::default(),
             sandbox_path: None,
             llm_key: AgentKey::None,
+            host_home: None,
+            trust: None,
         }
+    }
+
+    /// Sets the user's home on the host, for the per-user bin directories
+    /// (HUM-278).
+    #[must_use]
+    pub fn with_host_home(mut self, home: Option<PathBuf>) -> Self {
+        self.host_home = home;
+        self
+    }
+
+    /// Sets who may own a program bound into the sandbox; for tests.
+    #[must_use]
+    pub const fn with_trust(mut self, trust: locate::Trust) -> Self {
+        self.trust = Some(trust);
+        self
     }
 
     /// Setzt, was der Agent vom Zugangsschlüssel des Modells bekommt.

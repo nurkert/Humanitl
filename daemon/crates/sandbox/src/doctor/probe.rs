@@ -29,6 +29,7 @@
 //! hängen bleibt.
 
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::os::fd::OwnedFd;
@@ -47,6 +48,7 @@ use super::{
     UsernsFacts,
 };
 use crate::agent::SandboxView;
+use crate::agent::locate;
 use crate::agent::opencode;
 use crate::bwrap::{BwrapBackend, Version};
 
@@ -239,9 +241,24 @@ impl<'a> Probe<'a> {
         // beide etwas haben, ist die Fassung der Sandbox die, die startet. Ein
         // Wrapper unter `~/.local/bin` hat auf dem Host Vorrang und ist
         // drinnen nicht da; der Doctor nennte sonst seine Fassung (HUM-139).
-        let agent_program = self
-            .find_in_sandbox(&agent_command)
-            .or_else(|| self.find_executable(&agent_command));
+        let in_sandbox = self.find_in_sandbox(&agent_command);
+        // Without a sandbox view (the daemon's own `Doctor` RPC passes none)
+        // the doctor cannot tell what the sandbox reaches; a hit in the host
+        // PATH stays a statement about the host, as before HUM-278. With a
+        // view, a program outside it counts only when the start would bind
+        // it, so a wrapper script outside the mounts is not reported green.
+        // The view decides, not the sandbox PATH: a valid profile may omit
+        // PATH and still have mounts.
+        let on_host = (in_sandbox.is_none() && self.sandbox_view.mounts.is_empty())
+            .then(|| self.find_executable(&agent_command))
+            .flatten();
+        // Then the search the start uses: the daemon's PATH and the per-user
+        // bin directories, with the owner and ELF rules (HUM-278).
+        let host_search =
+            (in_sandbox.is_none() && on_host.is_none()).then(|| self.host_search(&agent_command));
+        let agent_program = in_sandbox
+            .or(on_host)
+            .or_else(|| host_search.as_ref().and_then(|search| search.found.clone()));
 
         let (bwrap_version, userns_probe, systemd_state, agent_version) =
             std::thread::scope(|scope| {
@@ -297,6 +314,8 @@ impl<'a> Probe<'a> {
                 agent_program.as_deref(),
                 agent_version,
                 &self.agent_searched(),
+                host_search.as_ref(),
+                self.path(),
             ),
             llm,
             tray: self.tray(),
@@ -355,6 +374,32 @@ impl<'a> Probe<'a> {
             .filter(|dir| dir.is_absolute())
             .map(|dir| dir.join(name))
             .find_map(|full| self.sandbox_view.startable(&full))
+    }
+
+    /// Searches a bare command in the per-user bin directories under `HOME`
+    /// (HUM-278), with the same rules as the start.
+    fn host_search(&self, name: &str) -> locate::Search {
+        let trust = locate::Trust::of_this_process();
+        let named = Path::new(name);
+        if named.is_absolute() {
+            return match locate::check_program(named, &trust) {
+                Ok(found) => locate::Search {
+                    found: Some(found),
+                    ..locate::Search::default()
+                },
+                Err(skip) if named.exists() => locate::Search {
+                    skipped: vec![(named.to_path_buf(), skip)],
+                    ..locate::Search::default()
+                },
+                Err(_) => locate::Search::default(),
+            };
+        }
+        if named.components().count() != 1 {
+            return locate::Search::default();
+        }
+        let home = self.env.non_empty("HOME").map(PathBuf::from);
+        let dirs = locate::search_dirs(Some(OsStr::new(self.path())), home.as_deref());
+        locate::search(OsStr::new(name), &dirs, &trust)
     }
 
     /// Wo nach dem Agenten gesucht wurde, für den Befund.
@@ -783,12 +828,30 @@ fn agent_facts(
     program: Option<&Path>,
     version: Option<Result<CommandRun, String>>,
     searched: &str,
+    host_search: Option<&locate::Search>,
+    host_path: &str,
 ) -> AgentFacts {
     let Some(program) = program else {
         return AgentFacts::Missing {
             adapter: adapter.to_owned(),
             command: command.to_owned(),
             searched: searched.to_owned(),
+            // The directories beyond PATH, which `searched` already names.
+            user_dirs: host_search
+                .map(|search| {
+                    let path: Vec<&str> = host_path.split(':').collect();
+                    search
+                        .searched
+                        .iter()
+                        .filter(|dir| !path.iter().any(|entry| Path::new(entry) == dir.as_path()))
+                        .map(|dir| dir.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default(),
+            skipped: host_search
+                .map(locate::Search::skipped_display)
+                .unwrap_or_default(),
             install: install_command(adapter),
         };
     };
@@ -1386,6 +1449,129 @@ mod tests {
         };
         assert_eq!(program, dir.path().join("opencode"));
         assert_eq!(version, Reading::Found("1.2.3".to_owned()));
+    }
+
+    /// An agent in `~/.local/bin` is found although the daemon's PATH, the
+    /// systemd one, lacks it (HUM-278).
+    #[test]
+    fn an_agent_in_a_per_user_bin_dir_is_found_outside_path() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let program = bin.join("opencode");
+        std::fs::copy("/bin/true", &program)
+            .or_else(|_| std::fs::copy("/usr/bin/true", &program))
+            .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let home_text = home.path().display().to_string();
+        let env = env_with(&[("PATH", "/does/not/exist"), ("HOME", home_text.as_str())]);
+        let (daemon, llm) = nothing();
+
+        let facts = probe(&env).collect(daemon, llm);
+
+        let super::AgentFacts::Found { program: found, .. } = facts.agent else {
+            panic!("the agent lies in ~/.local/bin: {:?}", facts.agent);
+        };
+        assert_eq!(found, std::fs::canonicalize(program).unwrap());
+    }
+
+    /// A script in a per-user directory is named as passed over, and the
+    /// searched directories are named (HUM-278).
+    #[test]
+    fn a_script_in_a_per_user_bin_dir_is_named_as_passed_over() {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        script(&bin, "opencode", "echo '1.2.3'");
+        let home_text = home.path().display().to_string();
+        let env = env_with(&[("PATH", "/does/not/exist"), ("HOME", home_text.as_str())]);
+        let (daemon, llm) = nothing();
+
+        let facts = probe(&env).collect(daemon, llm);
+
+        let super::AgentFacts::Missing {
+            user_dirs, skipped, ..
+        } = facts.agent
+        else {
+            panic!("a script is not bound into the sandbox: {:?}", facts.agent);
+        };
+        assert!(
+            user_dirs.contains(&format!("{home_text}/.opencode/bin")),
+            "{user_dirs}"
+        );
+        assert!(
+            user_dirs.contains(&format!("{home_text}/.local/bin")),
+            "{user_dirs}"
+        );
+        assert!(skipped.contains("a script"), "{skipped}");
+    }
+
+    /// With a sandbox view, a wrapper script in the host PATH outside the
+    /// view is not green: the start would not bind it (HUM-278).
+    #[test]
+    fn a_script_in_path_outside_the_sandbox_is_not_reported_green() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(
+            dir.path(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        script(dir.path(), "opencode", "echo '1.2.3'");
+        let path_text = dir.path().display().to_string();
+        let env = env_with(&[("PATH", path_text.as_str())]);
+        let (daemon, llm) = nothing();
+
+        let facts = probe(&env)
+            .with_sandbox(
+                crate::agent::SandboxView::same_path(vec![PathBuf::from("/usr")], Vec::new()),
+                Some("/usr/bin".to_owned()),
+            )
+            .collect(daemon, llm);
+
+        let super::AgentFacts::Missing { skipped, .. } = facts.agent else {
+            panic!(
+                "a script outside the sandbox does not start: {:?}",
+                facts.agent
+            );
+        };
+        assert!(skipped.contains("a script"), "{skipped}");
+        assert!(skipped.contains(&path_text), "{skipped}");
+    }
+
+    /// A profile may omit PATH and still mount `/usr`; the view alone decides
+    /// that a host PATH hit must be bindable to count (HUM-278).
+    #[test]
+    fn a_script_in_path_is_not_green_when_the_profile_has_no_path() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(
+            dir.path(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        script(dir.path(), "opencode", "echo '1.2.3'");
+        let path_text = dir.path().display().to_string();
+        let env = env_with(&[("PATH", path_text.as_str())]);
+        let (daemon, llm) = nothing();
+
+        let facts = probe(&env)
+            .with_sandbox(
+                crate::agent::SandboxView::same_path(vec![PathBuf::from("/usr")], Vec::new()),
+                None,
+            )
+            .collect(daemon, llm);
+
+        let super::AgentFacts::Missing { skipped, .. } = facts.agent else {
+            panic!(
+                "a script outside the sandbox does not start: {:?}",
+                facts.agent
+            );
+        };
+        assert!(skipped.contains("a script"), "{skipped}");
     }
 
     #[test]

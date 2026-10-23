@@ -69,6 +69,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::agent::briefing;
+use crate::agent::locate;
 use crate::agent::opencode_models::{
     DEFAULT_RULES, PROVIDER_ID, effective_models, permission_json, render_config, render_models,
 };
@@ -562,6 +563,58 @@ fn not_on_the_sandbox_path(ctx: &AgentContext, binary: &Path) -> Diagnostic {
         .build()
 }
 
+/// The sentence of `AGENT_001`: where the daemon looked and what it passed
+/// over (HUM-278).
+///
+/// The per-user directories are named because they are what a user checks
+/// first; a candidate that exists and was not taken is named with its reason,
+/// so "not found" never stands next to a file the user can see.
+fn not_found_why(ctx: &AgentContext, path: Option<&OsStr>) -> String {
+    let search = locate::host_search(ctx, OsStr::new(DEFAULT_COMMAND));
+    let skipped = search.skipped_display();
+    let searched = if search.searched.is_empty() {
+        format!(
+            "PATH={}",
+            path.map(OsStr::to_string_lossy).unwrap_or_default()
+        )
+    } else {
+        search.searched_display()
+    };
+    format!(
+        "{DEFAULT_COMMAND} is not in {searched} and agent.command is not set{}; the sandbox \
+         searches PATH={}. If it is installed elsewhere, set agent.command to the absolute path \
+         of its binary; if it is not installed: {INSTALL_COMMAND}",
+        if skipped.is_empty() {
+            String::new()
+        } else {
+            format!(" ({skipped})")
+        },
+        ctx.sandbox_path_display()
+    )
+}
+
+/// Why the daemon does not bind the command it found on the host (HUM-278),
+/// for `AGENT_002` and `AGENT_004`; empty when nothing was passed over.
+fn passed_over(ctx: &AgentContext, named: &OsStr) -> String {
+    if ctx.agent_command_from_caller {
+        return String::new();
+    }
+    let path = Path::new(named);
+    if path.is_absolute() {
+        let trust = ctx.trust.unwrap_or_else(locate::Trust::of_this_process);
+        return match locate::check_program(path, &trust) {
+            Err(skip) if path.exists() => {
+                format!("{} was passed over: {}", path.display(), skip.describe())
+            }
+            _ => String::new(),
+        };
+    }
+    if path.components().count() != 1 {
+        return String::new();
+    }
+    locate::host_search(ctx, named).skipped_display()
+}
+
 /// Die Vorprüfung des Kommandos: Ist der Agent dort, wo er startet?
 ///
 /// Gesucht wird zuerst im Suchpfad der Sandbox, denn dort sucht der Agent
@@ -609,6 +662,14 @@ fn command_preflight(ctx: &AgentContext) -> Vec<Diagnostic> {
         SandboxLookup::Missing => {}
     }
 
+    // Not inside, but a native program the daemon binds read-only into the
+    // sandbox itself: from the daemon's PATH, a per-user bin directory, or an
+    // absolute `agent.command` (HUM-278). The start will find it, so there is
+    // nothing to report.
+    if locate::plan_agent_program(ctx, named).is_some() {
+        return diagnostics;
+    }
+
     match requested {
         Some(command) => {
             let found = find_in_path(command, path);
@@ -630,14 +691,12 @@ fn command_preflight(ctx: &AgentContext) -> Vec<Diagnostic> {
             match found.as_deref() {
                 None => diagnostics.push(
                     Diagnostic::builder(AGENT_001, Severity::Blocking)
-                        .why(format!(
-                            "{DEFAULT_COMMAND} is not in PATH={} and agent.command is not set; \
-                             the sandbox searches PATH={}",
-                            path.map(|p| p.to_string_lossy().into_owned())
-                                .unwrap_or_default(),
-                            ctx.sandbox_path_display()
-                        ))
-                        .fix(FixAction::CopyCommand(INSTALL_COMMAND.to_owned()))
+                        .why(not_found_why(ctx, path))
+                        // Naming the path helps wherever the agent lies;
+                        // the install command stands in the sentence.
+                        .fix(FixAction::CopyCommand(locate::agent_command_fix(
+                            DEFAULT_COMMAND,
+                        )))
                         .docs(DOCS_URL)
                         .build(),
                 ),
@@ -676,6 +735,19 @@ fn command_preflight(ctx: &AgentContext) -> Vec<Diagnostic> {
             }
         } else {
             diagnostics.push(not_reachable_in_sandbox(ctx, binary));
+        }
+    }
+
+    // A candidate the daemon found and will not bind is named with its
+    // reason, so a wrapper script never looks like the answer (HUM-278).
+    let note = passed_over(ctx, named);
+    if !note.is_empty() {
+        for diagnostic in &mut diagnostics {
+            if [AGENT_002, AGENT_004].contains(&diagnostic.code) {
+                diagnostic.why.push_str(" The sandbox does not get it: ");
+                diagnostic.why.push_str(&note);
+                diagnostic.why.push('.');
+            }
         }
     }
 

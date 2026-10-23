@@ -737,6 +737,11 @@ pub struct SessionContext {
     /// mit der Sitzung. Keine von ihnen darf unter `/work` liegen; das prüft
     /// [`crate::agent::files_inside_work`], bevor der Plan entsteht.
     pub files: Vec<crate::agent::SandboxFile>,
+    /// The agent program the daemon resolved outside the sandbox's mounts
+    /// (HUM-278), bound read-only as one file at
+    /// [`crate::agent::AGENT_PROGRAM_DIR`]. `None` when the command is found
+    /// inside as it is.
+    pub agent_program: Option<crate::agent::AgentProgram>,
 }
 
 /// Ein Eintrag der Denylist.

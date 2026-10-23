@@ -158,13 +158,32 @@ argument list (`humanitl sandbox argv`). In short, from `profiles/sandbox/defaul
 - created fresh: an own `/proc`, a minimal `/dev`, `tmpfs` on `/tmp`, `/var/tmp`, `/dev/shm` and
   an empty `/home/agent`;
 - the project at `/work`, with the masks of [section 5.2](#52-the-project-directory-work);
-- the proxy socket file.
+- the proxy socket file;
+- the agent program, when it lies outside these binds (HUM-278): one native executable, bound
+  read-only at `/run/humanitl/agent/<name>`, see below.
 
 There is no `/etc/resolv.conf`. What is **not** bound stands in the code as a denylist the
 argument builder enforces: `$XDG_RUNTIME_DIR`, `/run`, the host's `/tmp`, `/home`, `~/.ssh`,
 `~/.gitconfig`, `~/.netrc`, X11, Wayland, D-Bus and Docker sockets. A profile naming one of them
 is refused with `SANDBOX_006`. The shim and the proxy socket live under `/run/humanitl`, the one
 directory that never comes from the host.
+
+**The agent program (HUM-278).** Agents install per user (`~/.opencode/bin`, `~/.local/bin`,
+`~/bin`), which the sandbox does not see. When the command is not startable inside, the daemon
+searches its `PATH` and these directories and binds the file it found read-only at
+`/run/humanitl/agent/<name>`; the command then names that path. Only the configured agent
+(`agent.command` or the adapter's default) is bound this way, never a command given after `--`.
+This bind is checked by its own rules, not by the `SANDBOX_006` mount denylist, which would
+refuse everything under `/home`: what is bound is one regular file, never its directory, and only
+when it is a native ELF executable of type `EXEC` or `DYN` (a script would need files beside
+it), owned by the user or root, and neither it nor its directory is writable by anyone else.
+Group write counts only for the user's private group: named like the user, no listed members,
+and no other account with it as primary group; where that cannot be shown, group write is
+refused. Like the `mounts.extra_ro` sources (HUM-263), the file is opened once with
+`O_PATH | O_NOFOLLOW`, checked through that descriptor (owner, mode, ELF header), and bound by
+the descriptor (`--ro-bind-fd`, or `/proc/self/fd/N` below bubblewrap 0.10), so a swap of the path
+after the check does not reach the sandbox. The agent is untrusted anyway; it receives read access
+to the code it already runs, nothing more. An absolute `agent.command` follows the same rules.
 
 **Bound is what was checked (HUM-263).** The project directory and every entry of
 `mounts.extra_ro` and `mounts.extra_rw` are opened exactly once while planning

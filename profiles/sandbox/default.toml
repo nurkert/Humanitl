@@ -15,6 +15,10 @@
 #      versiegelten memfd und keine unter /work,
 #   3. der Konfigurationsschluessel `sandbox.env` fuer weitere Variablen.
 #
+# Beside these the launcher binds its own fixed files (proxy socket, CA, shim)
+# and, when the agent lies outside the mounts, the one agent program read-only
+# at /run/humanitl/agent/<name> (HUM-278, docs/SECURITY.md).
+#
 # Was aus keiner dieser drei kommt, gibt es in der Sandbox nicht. Ein Host-Pfad
 # kommt nur ueber diese Datei herein und wird zusaetzlich gegen eine fest
 # verdrahtete Denylist geprueft (SANDBOX_006); der Adapter kann keinen Mount

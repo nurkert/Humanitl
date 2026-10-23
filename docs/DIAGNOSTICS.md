@@ -1127,9 +1127,9 @@ Daemon nicht erreichbar oder anderer Vertrag
 
 Agent-Kommando nicht im PATH
 
-**Auslöser.** Das Agent-Kommando liegt nicht im `PATH` des Daemons.
+**Auslöser.** Das Agent-Kommando liegt weder im `PATH` des Daemons noch in `~/.opencode/bin`, `~/.local/bin` oder `~/bin` (HUM-278).
 
-**Fix.** `CopyCommand` mit dem Installationsbefehl des Agenten.
+**Fix.** `CopyCommand` mit `humanitl config set agent.command`, der Pfad ist ein Platzhalter; der Installationsbefehl steht im Text.
 
 #### DOCTOR_008
 
@@ -1245,9 +1245,9 @@ Kein Platz für das Anzeigesymbol
 
 Agent-Kommando nicht gefunden
 
-**Auslöser.** Das Agent-Kommando ist weder im `PATH` noch über `agent.command` gesetzt.
+**Auslöser.** Das Agent-Kommando ist weder im `PATH`, in `~/.opencode/bin`, `~/.local/bin`, `~/bin` noch über `agent.command` gesetzt (HUM-278).
 
-**Fix.** `CopyCommand` mit dem Installationsbefehl.
+**Fix.** `CopyCommand` mit `humanitl config set agent.command`, der Pfad ist ein Platzhalter; der Installationsbefehl steht im Text.
 
 #### AGENT_002
 

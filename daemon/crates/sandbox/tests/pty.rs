@@ -133,6 +133,7 @@ impl Fixture {
             session_env: vec![("HUMANITL_SESSION".to_owned(), SessionId::nil().to_string())],
             command: command.iter().map(OsString::from).collect(),
             files: Vec::new(),
+            agent_program: None,
         }
     }
 
