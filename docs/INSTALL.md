@@ -31,8 +31,33 @@ from the release page as the guide describes.
 
 ## The package in detail
 
-The package has no maintainer scripts. The menu and the icon cache are updated
-by the triggers of `desktop-file-utils` and `hicolor-icon-theme`.
+The menu and the icon cache are updated by the triggers of `desktop-file-utils`
+and `hicolor-icon-theme`. The package has two maintainer scripts, both about
+the user service (HUM-284):
+
+- `postinst` finds every user with a running systemd user manager
+  (`loginctl list-users`, then `user@UID.service`; not in a chroot, not
+  without systemd) and, as that user via `setpriv`, runs `systemctl --user
+  daemon-reload`. If that user's `humanitld.service` is active and comes from
+  the package, it runs `humanitl daemon retire-if-idle`: the daemon itself
+  decides, under the lock a start takes its claim with, that no agent session
+  holds it, and from then on no session can start. Only after `retired` does
+  `systemctl --user restart humanitld.service` start the new version. A
+  session that runs keeps its daemon; a daemon from this version on ends by
+  itself once the session is over, and the next connection starts the new
+  program through the socket. Until then the app shows the version notice
+  with a "Restart daemon" button. The daemon of 0.0.6 does not know the
+  request; for it `postinst` asks `humanitl --json daemon status` and runs
+  `try-restart` only on `agent_session` `none`. That old daemon reports
+  `stopped` for the whole of a start, so a start that runs or begins before
+  the restart can be cut off; only this one upgrade has that window. Every call as
+  the user runs under a root-side `timeout`, detached from the terminal, and
+  `policy-rc.d` returning 101 forbids the restart.
+- `postrm` runs the same `daemon-reload` after `remove` and `purge`.
+
+Neither ever fails the installation. Whatever did not work is written to the
+journal (`journalctl -t humanitl`) and to the output of apt, with the command
+to run by hand, usually `systemctl --user restart humanitld`.
 
 `humanitl daemon install` enables only the socket, not the service (HUM-164).
 Whoever ran `humanitl daemon install` before that change enabled the service

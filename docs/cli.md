@@ -358,8 +358,9 @@ as in the image, otherwise the command ends with `DAEMON_011`.
 **With the package, nothing is written.** If
 `/usr/lib/systemd/user/humanitld.service` is there, the package has placed the
 units, and the command writes no file (HUM-053). It only runs what the
-package cannot do as root: `systemctl --user daemon-reload` and
-`systemctl --user enable --now humanitld.socket`. Only the socket (HUM-164):
+package does not do for you: `systemctl --user daemon-reload` and
+`systemctl --user enable --now humanitld.socket` (the package reloads and
+restarts what already runs, HUM-284, but never enables a service). Only the socket (HUM-164):
 if a client finds no token, it opens the socket once anyway, systemd then
 starts the service, and the client waits at most ten seconds for its token.
 Packages without a socket unit get `humanitld.service`. The
@@ -657,26 +658,55 @@ humanitl daemon status [--json]
 ```
 
 ```
-FIELD         VALUE
-socket        /run/user/1000/humanitl/daemon.sock
-unit          active
-daemon        0.0.0
-proto         1.0
-session       7b1c…
-capabilities  hold, rules, sandbox
+FIELD          VALUE
+socket         /run/user/1000/humanitl/daemon.sock
+unit           active
+daemon         0.0.0
+proto          1.0
+session        7b1c…
+agent session  none
+capabilities   hold, rules, sandbox
 ```
 
 `socket` is the path where the client looks; `unit` is the answer of
 `systemctl --user is-active humanitld.service` and shows as `-` if there is no
 `systemctl` — a daemon that someone started by hand is not an error, and an
 invented `inactive` would be false information about a unit nobody
-installed. Everything else comes from `GetInfo` and is not
-supplemented.
+installed. `agent session` (under `--json` `agent_session`) comes from
+`Sandbox(Status)`: `running` while a sandbox is held (starting, running,
+stopping, or its agent exited and nobody stopped it), `none` when nothing is
+held, and `unknown` when the daemon did not answer within five seconds. The
+package's `postinst` restarts a daemon after an upgrade only on `none`
+(HUM-284); `session` is the daemon's proxy session and is set whenever a
+daemon runs. Everything else comes from `GetInfo` and is not supplemented.
 
 If nobody answers, the command ends with **2** and `DAEMON_001`; if the daemon
 speaks a different major version of the contract, likewise with 2 and
 `DAEMON_002`. A script waiting for the service therefore checks only this one
 number.
+
+## `humanitl daemon retire-if-idle`
+
+Asks the running daemon to end now if no agent session holds it (HUM-284).
+
+```
+humanitl daemon retire-if-idle [--json]
+```
+
+The daemon decides under the same lock under which a start takes its claim
+(`SandboxRequest.retire_if_idle`): no start holds a claim and no sandbox is
+held, and from that moment on no start gets one. It then ends with its usual
+farewell; `systemctl --user restart humanitld.service`, or the next connection
+through the socket, starts the program that is installed now. The package's
+`postinst` and the "Restart daemon" button of the status bar use it after an
+upgrade.
+
+The answer is one word, under `--json` the field `outcome`: `retired` (it ends
+now), `busy` (a session holds it, it keeps running), `unsupported` (a daemon
+older than contract 1.19 does not know the request), `none` (no daemon runs:
+its token or socket is missing; the command does not wake one behind the
+socket; any other connection failure is `unknown`) or `unknown` (no readable
+answer within five seconds; treat it as `busy`). Every answer ends with **0**.
 
 ## `humanitl daemon logs`
 
