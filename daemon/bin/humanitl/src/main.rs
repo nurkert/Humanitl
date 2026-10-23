@@ -39,7 +39,34 @@ use crate::cli::{Cmd, Invocation};
 use crate::cmd::{Context, EXIT_OK, EXIT_USER, Failure, ProfileMeaning};
 use crate::render::Renderer;
 
+/// Exit code when the reader of `stdout` went away, as a shell reports a
+/// process ended by `SIGPIPE` (128 + 13).
+const EXIT_PIPE: i32 = 141;
+
+/// `humanitl doctor | head -5` closes the pipe early. Rust ignores `SIGPIPE`,
+/// so the next `println!` panics with "failed printing to stdout: Broken pipe".
+/// A reader that stopped reading is a normal end, not a crash (HUM-285):
+/// this hook ends the process quietly with [`EXIT_PIPE`] for exactly that
+/// panic and leaves every other panic to the default hook. Resetting the
+/// signal instead would need `unsafe`, which this crate forbids.
+fn end_quietly_when_stdout_closes() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info.payload();
+        let text = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        if text.starts_with("failed printing to stdout") && text.contains("os error 32") {
+            std::process::exit(EXIT_PIPE);
+        }
+        default(info);
+    }));
+}
+
 fn main() -> ExitCode {
+    end_quietly_when_stdout_closes();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
