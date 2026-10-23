@@ -41,13 +41,23 @@ import 'setting_row.dart';
 /// The model group of the settings form.
 class ModelSection extends ConsumerStatefulWidget {
   /// Creates the group for [config] and the key [status].
-  const ModelSection({required this.config, required this.status, super.key});
+  const ModelSection({
+    required this.config,
+    required this.status,
+    this.anchors = const <String, FocusNode>{},
+    super.key,
+  });
 
   /// The configuration the form was opened with, or last read.
   final ConfigValues config;
 
   /// What the daemon says about the access key.
   final LlmKeyStatus status;
+
+  /// The anchors of the form, by key, that a `ChangeSetting` fix lands on
+  /// (HUM-275); this group places those of the endpoint, the model and the
+  /// access key.
+  final Map<String, FocusNode> anchors;
 
   @override
   ConsumerState<ModelSection> createState() => _ModelSectionState();
@@ -241,6 +251,7 @@ class _ModelSectionState extends ConsumerState<ModelSection> {
           help: l10n.settingsEndpointHelp,
           refusal: _endpointRefusal,
           refusalKey: const Key('settings-endpoint-refusal'),
+          anchor: widget.anchors[FormKeys.llmEndpoint],
           child: Row(
             children: <Widget>[
               Expanded(
@@ -280,6 +291,7 @@ class _ModelSectionState extends ConsumerState<ModelSection> {
           label: l10n.settingsModelLabel,
           refusal: _modelRefusal,
           refusalKey: const Key('settings-model-refusal'),
+          anchor: widget.anchors[FormKeys.llmModels],
           child: Focus(
             onFocusChange: (bool focused) {
               if (!focused && _model.text.trim().isNotEmpty) {
@@ -300,6 +312,7 @@ class _ModelSectionState extends ConsumerState<ModelSection> {
           help: l10n.settingsKeyHelp,
           refusal: _keyRefusal ?? _firstKeyFinding(widget.status),
           refusalKey: const Key('settings-key-refusal'),
+          anchor: widget.anchors[FormKeys.llmApiKeyRef],
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[

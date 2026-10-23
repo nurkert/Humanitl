@@ -9,6 +9,7 @@ import '../../core/domain/domain.dart';
 import '../../core/ipc/flow_handoff.dart';
 import '../../core/ipc/flow_reveal.dart';
 import '../../core/shortcuts/intents.dart';
+import '../../core/ui/settings_opener.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
 import '../about/about_dialog.dart';
@@ -59,6 +60,11 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   /// lie over whichever of them is showing (`BACKLOG.md` 5, "Sheet").
   bool _settingsOpen = false;
 
+  /// The key whose field the open sheet scrolls to and focuses, and how often
+  /// that was asked for (HUM-275).
+  String? _settingsFocusKey;
+  int _settingsFocusSerial = 0;
+
   /// Whether the setup screen has already had its one chance to open itself.
   ///
   /// It gets exactly one: at startup, as soon as the four checks have settled,
@@ -92,10 +98,24 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
 
   void _togglePalette() => _paletteOpen ? _closePalette() : _openPalette();
 
-  void _openSettings() => setState(() => _settingsOpen = true);
+  void _openSettings() => setState(() {
+    _settingsOpen = true;
+    _settingsFocusKey = null;
+  });
+
+  /// Opens the sheet at the field of [key], or plain without one: the way a
+  /// diagnostic's `ChangeSetting` fix reaches the sheet (HUM-275).
+  void _openSettingsAt(String? key) => setState(() {
+    _settingsOpen = true;
+    _settingsFocusKey = key;
+    _settingsFocusSerial++;
+  });
 
   void _closeSettings() {
-    setState(() => _settingsOpen = false);
+    setState(() {
+      _settingsOpen = false;
+      _settingsFocusKey = null;
+    });
     // The sheet held the focus; without this `Ctrl+K` would reach nobody.
     _focus.requestFocus();
   }
@@ -389,52 +409,66 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
         child: Focus(
           focusNode: _focus,
           autofocus: true,
-          child: Stack(
-            fit: StackFit.expand,
-            children: <Widget>[
-              ColoredBox(
-                color: tokens.colors.bg0,
-                child: Column(
-                  children: <Widget>[
-                    HeaderBar(section: section, onPalette: _togglePalette),
-                    if (link case ConnectionFrozen(
-                      :final Diagnostic diagnostic,
-                    ))
-                      FrozenBanner(
-                        diagnostic: diagnostic,
-                        onReconnect: ref
-                            .read(connectionStateProvider.notifier)
-                            .retry,
+          // Der Weg eines `ChangeSetting` in das Blatt (HUM-275): Jede
+          // Diagnostik-Karte darunter, auch die im Blatt selbst, öffnet es
+          // über diesen Griff am Feld ihres Schlüssels.
+          child: SettingsOpener(
+            open: _openSettingsAt,
+            child: Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
+                ColoredBox(
+                  color: tokens.colors.bg0,
+                  child: Column(
+                    children: <Widget>[
+                      HeaderBar(
+                        section: section,
+                        onPalette: _togglePalette,
+                        onSettings: _openSettings,
                       ),
-                    const ShellNotices(),
-                    Expanded(
-                      child: Row(
-                        children: <Widget>[
-                          IconRail(
-                            active: section,
-                            onSelect: navigation.go,
-                            expanded: railExpanded,
-                            onToggle: rail.toggle,
-                          ),
-                          Expanded(child: _sections(section, frozen: !live)),
-                        ],
+                      if (link case ConnectionFrozen(
+                        :final Diagnostic diagnostic,
+                      ))
+                        FrozenBanner(
+                          diagnostic: diagnostic,
+                          onReconnect: ref
+                              .read(connectionStateProvider.notifier)
+                              .retry,
+                        ),
+                      const ShellNotices(),
+                      Expanded(
+                        child: Row(
+                          children: <Widget>[
+                            IconRail(
+                              active: section,
+                              onSelect: navigation.go,
+                              expanded: railExpanded,
+                              onToggle: rail.toggle,
+                            ),
+                            Expanded(child: _sections(section, frozen: !live)),
+                          ],
+                        ),
                       ),
+                      StatusBar(info: widget.info),
+                    ],
+                  ),
+                ),
+                if (_settingsOpen)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: SettingsSheet(
+                      onClose: _closeSettings,
+                      focusKey: _settingsFocusKey,
+                      focusSerial: _settingsFocusSerial,
                     ),
-                    StatusBar(info: widget.info),
-                  ],
-                ),
-              ),
-              if (_settingsOpen)
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: SettingsSheet(onClose: _closeSettings),
-                ),
-              if (_paletteOpen)
-                CommandPalette(
-                  commands: _commands(context, live: live),
-                  onClose: _closePalette,
-                ),
-            ],
+                  ),
+                if (_paletteOpen)
+                  CommandPalette(
+                    commands: _commands(context, live: live),
+                    onClose: _closePalette,
+                  ),
+              ],
+            ),
           ),
         ),
       ),

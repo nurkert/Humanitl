@@ -3,6 +3,8 @@
 /// `HGlyph` in `packages/ui` (handoff of HUM-019).
 library;
 
+import 'dart:math' as math;
+
 import 'package:flutter/widgets.dart';
 
 import 'ui.dart';
@@ -26,6 +28,10 @@ enum ShellGlyph {
 
   /// Lucide `circle-check-big`: the checks that come before a start.
   setup,
+
+  /// A gear after Lucide `settings`: the settings sheet, from the header
+  /// (HUM-275). Not a rail entry; the sheet lies over every section.
+  settings,
 }
 
 /// Draws one [ShellGlyph] at [size] in [color].
@@ -147,6 +153,13 @@ class _ShellGlyphPainter extends CustomPainter {
             ]),
             stroke,
           );
+      case ShellGlyph.settings:
+        // Acht Zähne um einen Ring, die Nabe in der Mitte. Gezeichnet statt
+        // als Lucide-Pfad abgeschrieben: Die Bögen der Vorlage brauchten
+        // einen SVG-Parser, und die Form liest sich bei 18 px gleich.
+        canvas
+          ..drawPath(_gear(), stroke)
+          ..drawCircle(const Offset(12, 12), 3, stroke);
       case ShellGlyph.audit:
         canvas
           ..drawPath(
@@ -180,6 +193,28 @@ class _ShellGlyphPainter extends CustomPainter {
           ..drawLine(const Offset(11, 13), const Offset(16, 13), stroke);
     }
     canvas.restore();
+  }
+
+  /// Der Umriss des Zahnrads: acht Zähne, jeder zwei Punkte auf dem äußeren
+  /// und zwei auf dem inneren Radius.
+  static Path _gear() {
+    const int teeth = 8;
+    const double outer = 10;
+    const double inner = 7.5;
+    const int corners = teeth * 4;
+    final Path gear = Path();
+    for (int i = 0; i < corners; i++) {
+      final double angle = i * math.pi * 2 / corners - math.pi / 2;
+      final double radius = (i % 4 == 1 || i % 4 == 2) ? outer : inner;
+      final double x = 12 + radius * math.cos(angle);
+      final double y = 12 + radius * math.sin(angle);
+      if (i == 0) {
+        gear.moveTo(x, y);
+      } else {
+        gear.lineTo(x, y);
+      }
+    }
+    return gear..close();
   }
 
   static Path _polyline(List<Offset> points, {bool close = false}) {
