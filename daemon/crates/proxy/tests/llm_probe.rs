@@ -150,6 +150,26 @@ async fn probe_unknown_paths_llm_003() {
         result.diagnostics[0].severity,
         humanitl_core::Severity::Warning
     );
+    // HUM-283: Neben `LLM_003` steht, was zurückkam, nicht „0 Modelle".
+    let answer = result.answer.as_deref().expect("what came back");
+    assert!(answer.starts_with("HTTP 404"), "{answer}");
+    assert!(
+        result.diagnostics[0].why.contains(answer),
+        "{}",
+        result.diagnostics[0].why
+    );
+}
+
+/// Kommt eine Modellliste, gibt es nichts zu erklären: `answer` bleibt leer
+/// (HUM-283).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_model_list_leaves_no_answer_to_explain() {
+    let upstream = FakeUpstream::ollama().await;
+    let result = probe()
+        .probe(&endpoint(upstream.port()), None)
+        .await
+        .unwrap();
+    assert_eq!(result.answer, None);
 }
 
 /// Ein Server, der eine Anmeldung verlangt, ist `LLM_002` und keine leere

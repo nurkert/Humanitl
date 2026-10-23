@@ -172,6 +172,9 @@ struct DoctorSetup {
     agent_command: Option<String>,
     /// `llm.endpoint`, als Text.
     llm_endpoint: Option<String>,
+    /// Die Befunde der letzten Ladung; darunter der eines `llm.endpoint`,
+    /// den sie beiseitegelegt hat (HUM-283).
+    load_diagnostics: Vec<Diagnostic>,
 }
 
 impl DoctorSetup {
@@ -196,6 +199,7 @@ impl DoctorSetup {
                 .command
                 .and_then(|words| words.into_iter().next());
             self.llm_endpoint = now.config.llm.endpoint.as_ref().map(ToString::to_string);
+            self.load_diagnostics = now.diagnostics;
         }
         self
     }
@@ -205,8 +209,9 @@ impl DoctorSetup {
     /// Nie mehr als „er steht in der Konfiguration": Gemessen wird er über
     /// `ProbeLlm`, auf ausdrücklichen Wunsch eines Menschen.
     fn llm_facts(&self) -> humanitl_sandbox::doctor::LlmFacts {
-        humanitl_sandbox::doctor::LlmFacts::not_contacted(
+        humanitl_sandbox::doctor::LlmFacts::from_config(
             self.llm_endpoint.clone(),
+            &self.load_diagnostics,
             humanitl_sandbox::doctor::PROBE_LLM_COMMAND,
         )
     }
@@ -277,6 +282,7 @@ impl IpcServer {
                     .and_then(|words| words.first())
                     .cloned(),
                 llm_endpoint: config.llm.endpoint.as_ref().map(ToString::to_string),
+                load_diagnostics: Vec::new(),
             },
             bodies: BodyIndex::new(),
             keys: None,
@@ -318,7 +324,7 @@ impl IpcServer {
         use_stored_key: bool,
     ) -> Result<Option<ApiKey>, Diagnostic> {
         if !typed.is_empty() {
-            return ApiKey::new(typed).map(Some);
+            return ApiKey::from_pasted(typed).map(Some);
         }
         if !use_stored_key {
             return Ok(None);
@@ -2662,7 +2668,7 @@ mod tests {
 
         let Err(status) = server
             .probe_llm(Request::new(v1::ProbeLlmRequest {
-                endpoint: "not a url".to_owned(),
+                endpoint: "not-a-url".to_owned(),
                 timeout_ms: 0,
                 ..v1::ProbeLlmRequest::default()
             }))
@@ -2685,7 +2691,7 @@ mod tests {
     async fn probe_llm_refuses_an_endpoint_it_cannot_read() {
         let queue = queue();
         let server = server(&queue);
-        for endpoint in ["", "not a url", "ftp://model.lan/"] {
+        for endpoint in ["", "not-a-url", "ftp://model.lan/"] {
             let Err(status) = server
                 .probe_llm(Request::new(v1::ProbeLlmRequest {
                     endpoint: endpoint.to_owned(),

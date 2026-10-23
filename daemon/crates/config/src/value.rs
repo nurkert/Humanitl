@@ -228,6 +228,13 @@ fn split_suffix<'a>(text: &'a str, units: &[(&'static str, i64)]) -> Option<(&'a
 ///
 /// `CONFIG_003` mit dem Bereich und dem Vorgabewert als Vorschlag.
 pub fn check_value(field: &schema::Field, value: &Value) -> Result<(), Diagnostic> {
+    // Eine Adresse mit Anführungszeichen oder Leerraum nähme der Parser hin
+    // und machte daraus einen anderen Pfad (HUM-283); geprüft wird der Text.
+    if field.path == crate::llm_endpoint::SETTING
+        && let Some(text) = value.as_str()
+    {
+        crate::llm_endpoint::check_text(text)?;
+    }
     if let (Some(allowed), Some(text)) = (field.allowed.as_ref(), value.as_str())
         && !allowed.iter().any(|known| known == text)
     {

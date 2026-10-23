@@ -45,6 +45,7 @@
 use std::time::Duration;
 
 use humanitl_core::Diagnostic;
+use humanitl_core::diagnostics::codes::LLM_002;
 use humanitl_ipc::client::{self, Client};
 use humanitl_ipc::{PROTO_MAJOR, PROTO_MINOR, convert, v1};
 use humanitl_sandbox::doctor::{
@@ -137,7 +138,10 @@ impl Source {
 /// fehlender Daemon ist **kein** Fehlschlag dieses Befehls: Er ist eine Zeile
 /// des Berichts.
 pub async fn run(ctx: &Context, args: &DoctorArgs) -> Result<u8, Failure> {
-    let config = ctx.config()?.config;
+    let resolved = ctx.config()?;
+    // Was die Ladung beiseitegelegt hat, gehört in die Zeile `llm` (HUM-283).
+    let load_diagnostics = resolved.diagnostics;
+    let config = resolved.config;
     let socket = ctx.paths.daemon_socket();
 
     let (mut client, refused) = match timeout(WAKE_CONNECT_TIMEOUT, ctx.connect()).await {
@@ -158,7 +162,7 @@ pub async fn run(ctx: &Context, args: &DoctorArgs) -> Result<u8, Failure> {
                     "the daemon refused Doctor ({}); running the checks in this process instead",
                     status.code().description()
                 ));
-                (local(ctx, &config).await, Source::Local)
+                (local(ctx, &config, &load_diagnostics).await, Source::Local)
             }
             Err(_elapsed) => {
                 ctx.render.note(&format!(
@@ -166,15 +170,15 @@ pub async fn run(ctx: &Context, args: &DoctorArgs) -> Result<u8, Failure> {
                      process instead",
                     REPORT_TIMEOUT.as_millis()
                 ));
-                (local(ctx, &config).await, Source::Local)
+                (local(ctx, &config, &load_diagnostics).await, Source::Local)
             }
         },
-        None => (local(ctx, &config).await, Source::Local),
+        None => (local(ctx, &config, &load_diagnostics).await, Source::Local),
     };
 
     replace(&mut report, &doctor::daemon_line(&daemon));
     if args.probe_llm {
-        let outcome = probe_llm(&config, client.as_mut()).await;
+        let outcome = probe_llm(&config, &load_diagnostics, client.as_mut()).await;
         replace(&mut report, &outcome);
     }
 
@@ -246,7 +250,11 @@ async fn daemon_facts(
 }
 
 /// Die Prüfungen in diesem Prozess, weil kein Daemon antwortet.
-async fn local(ctx: &Context, config: &humanitl_config::Config) -> v1::DoctorReport {
+async fn local(
+    ctx: &Context,
+    config: &humanitl_config::Config,
+    load_diagnostics: &[Diagnostic],
+) -> v1::DoctorReport {
     let env = ctx.env.clone();
     let adapter = config.agent.adapter.clone();
     let command = config
@@ -257,8 +265,9 @@ async fn local(ctx: &Context, config: &humanitl_config::Config) -> v1::DoctorRep
         .cloned();
     // Derselbe Endpunkt, den der Daemon in seine Zeile schreibt, und dieselbe
     // Aussage darüber: dass ihn niemand angesprochen hat.
-    let llm = LlmFacts::not_contacted(
+    let llm = LlmFacts::from_config(
         config.llm.endpoint.as_ref().map(ToString::to_string),
+        load_diagnostics,
         PROBE_LLM_COMMAND,
     );
     // Die Prüfungen lesen Dateien und starten kurze Programme. In einer
@@ -325,9 +334,18 @@ fn untried() -> DaemonFacts {
 /// `ProbeLlm` ist die Fähigkeit, die Kommandozeile ihr Client (ADR-018, und
 /// `tools/check-deps.sh` lässt eine ausgehende Verbindung außerhalb des
 /// `Egress`-Ports ohnehin nicht zu).
-async fn probe_llm(config: &humanitl_config::Config, client: Option<&mut Client>) -> CheckOutcome {
+async fn probe_llm(
+    config: &humanitl_config::Config,
+    load_diagnostics: &[Diagnostic],
+    client: Option<&mut Client>,
+) -> CheckOutcome {
     let Some(endpoint) = config.llm.endpoint.as_ref().map(ToString::to_string) else {
-        return doctor::llm_line(&LlmFacts::NoEndpoint);
+        // Nicht gesetzt oder beiseitegelegt (HUM-283): Gefragt wird nichts.
+        return doctor::llm_line(&LlmFacts::from_config(
+            None,
+            load_diagnostics,
+            PROBE_LLM_COMMAND,
+        ));
     };
     let Some(client) = client else {
         return CheckOutcome::unmeasured(
@@ -366,14 +384,72 @@ async fn probe_llm(config: &humanitl_config::Config, client: Option<&mut Client>
                 models: response.models.len(),
                 latency_ms: response.latency_ms,
                 diagnostics: response.diagnostics.iter().filter_map(from_proto).collect(),
+                answer: (!response.answer.is_empty()).then_some(response.answer),
             }
         }
-        Ok(Err(status)) => LlmFacts::Silent {
-            diagnostic: Box::new(status_diagnostic(&status, "ProbeLlm")),
-            endpoint,
-        },
+        Ok(Err(status)) => {
+            let diagnostic = status_diagnostic(&status, "ProbeLlm");
+            // Ob ein Schlüssel hinterlegt ist, fragt der Doctor nur nach einer
+            // Anmeldung; `LlmKey(Status)` sagt es, ohne ihn zu zeigen.
+            let stored = if diagnostic.code == LLM_002 {
+                key_stored(client).await
+            } else {
+                None
+            };
+            failure_facts(endpoint, diagnostic, stored)
+        }
     };
     doctor::llm_line(&facts)
+}
+
+/// Die Tatsachen zu einer Probe, die mit einem Befund endete.
+///
+/// `LLM_002` heißt: Der Server hat geantwortet und eine Anmeldung verlangt
+/// (HUM-283). Die Probe des Doctors schickt nie einen Schlüssel, also ist das
+/// kein „hat nicht geantwortet", sondern [`LlmFacts::Refused`] mit dem
+/// Status und dem Wissen, ob ein Schlüssel hinterlegt ist. Jeder andere
+/// Befund bleibt [`LlmFacts::Silent`].
+fn failure_facts(endpoint: String, diagnostic: Diagnostic, key_stored: Option<bool>) -> LlmFacts {
+    if diagnostic.code == LLM_002 {
+        LlmFacts::Refused {
+            status: answered_status(&diagnostic.why),
+            key_stored,
+            diagnostic: Box::new(diagnostic),
+            endpoint,
+        }
+    } else {
+        LlmFacts::Silent {
+            diagnostic: Box::new(diagnostic),
+            endpoint,
+        }
+    }
+}
+
+/// Ob ein Zugangsschlüssel hinterlegt ist, nach dem Daemon (`LlmKey`,
+/// Operation `status`); `None`, wenn er es nicht in der Frist sagt.
+///
+/// Die Antwort trägt nie den Schlüssel, nur `set` und den Verweis.
+async fn key_stored(client: &mut Client) -> Option<bool> {
+    let call = client.llm_key(v1::LlmKeyRequest {
+        op: Some(v1::llm_key_request::Op::Status(
+            v1::llm_key_request::Status {},
+        )),
+    });
+    match timeout(PROBE_TIMEOUT, call).await {
+        Ok(Ok(status)) => Some(status.into_inner().set),
+        Ok(Err(_)) | Err(_) => None,
+    }
+}
+
+/// Der Status `401` oder `403` aus dem Satz von `LLM_002` („answered 401
+/// at …"); `None`, wenn der Satz ihn nicht in dieser Form nennt.
+fn answered_status(why: &str) -> Option<u16> {
+    let (_, rest) = why.split_once("answered ")?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    match digits.parse::<u16>() {
+        Ok(status @ (401 | 403)) => Some(status),
+        _ => None,
+    }
 }
 
 /// Sagt auf `stderr`, wohin gleich eine Verbindung geht und was sie tut.
@@ -534,7 +610,10 @@ mod tests {
     use humanitl_ipc::{convert, v1};
     use humanitl_sandbox::doctor::{CheckId, CheckOutcome, DaemonFacts};
 
-    use super::{Source, has_failure, mark, replace, status_name, timed_out, worst};
+    use super::{
+        Diagnostic, LLM_002, Source, answered_status, doctor, failure_facts, has_failure, mark,
+        replace, status_name, timed_out, worst,
+    };
 
     /// Ein Weg zum Daemon, der in seine Frist läuft, schlägt denselben
     /// dauerhaften Start vor wie jeder andere „kein Daemon", nicht
@@ -636,5 +715,60 @@ mod tests {
     fn the_source_of_the_report_is_named() {
         assert_eq!(Source::Daemon.as_str(), "daemon");
         assert_eq!(Source::Local.as_str(), "local");
+    }
+
+    /// Der Status steht im Satz von `LLM_002`; nur `401` und `403` gelten
+    /// (HUM-283).
+    #[test]
+    fn the_status_of_a_refusal_is_read_from_llm_002() {
+        assert_eq!(
+            answered_status("the LLM server answered 401 at https://h/v1/models. It requires"),
+            Some(401)
+        );
+        assert_eq!(
+            answered_status("the LLM server answered 403 at https://h/v1/models to the key"),
+            Some(403)
+        );
+        assert_eq!(answered_status("the LLM server answered 500 at x"), None);
+        assert_eq!(answered_status("no number here"), None);
+    }
+
+    /// Der Fall des Besitzers vom 2026-10-23: Die Probe ohne Schlüssel bekommt
+    /// `401`. Die Zeile sagt nicht „did not answer", sondern nennt den Status,
+    /// dass der Doctor keinen Schlüssel schickt, und ob einer hinterlegt ist
+    /// (HUM-283).
+    #[test]
+    fn a_401_to_the_keyless_probe_is_a_refusal_not_silence() {
+        let refusal = || {
+            Diagnostic::builder(LLM_002, humanitl_core::Severity::Error)
+                .why(
+                    "the LLM server answered 401 at https://llm.example.net/api/v1/models. It \
+                     requires an access key, and none was sent.",
+                )
+                .fix(humanitl_core::FixAction::ChangeSetting {
+                    key: "llm.api_key_ref".to_owned(),
+                    value: String::new(),
+                })
+                .build()
+        };
+        let endpoint = "https://llm.example.net/api/v1/".to_owned();
+        let line = doctor::llm_line(&failure_facts(endpoint.clone(), refusal(), Some(true)));
+        let evidence = line.evidence();
+        assert!(!evidence.contains("did not answer"), "{evidence}");
+        assert!(evidence.contains("answered 401"), "{evidence}");
+        assert!(evidence.contains("sends no access key"), "{evidence}");
+        assert!(evidence.contains("an access key is stored"), "{evidence}");
+        assert_ne!(
+            line.diagnostic().and_then(|finding| finding.fix.clone()),
+            refusal().fix,
+            "with a key stored, the fix is not `humanitl llm key set`"
+        );
+
+        let none = doctor::llm_line(&failure_facts(endpoint, refusal(), Some(false)));
+        assert!(none.evidence().contains("no access key is stored"));
+        assert_eq!(
+            none.diagnostic().and_then(|finding| finding.fix.clone()),
+            refusal().fix
+        );
     }
 }

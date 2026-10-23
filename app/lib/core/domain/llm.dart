@@ -59,6 +59,11 @@ abstract class LlmProbe with _$LlmProbe {
 
     /// True when the probe sent an access key along (HUM-140).
     @Default(false) bool keySent,
+
+    /// What came back when no model list did: status and content type of
+    /// the last answer, for instance `HTTP 200, text/html` (HUM-283). Empty
+    /// when a model list came. A row shows this instead of "0 models".
+    @Default('') String answer,
   }) = _LlmProbe;
 
   const LlmProbe._();

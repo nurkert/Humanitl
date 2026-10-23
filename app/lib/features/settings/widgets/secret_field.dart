@@ -12,6 +12,7 @@ library;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../../../core/ui/pasted_text.dart';
 import '../../../core/ui/ui.dart';
 
 /// A one-line masked input.
@@ -127,6 +128,9 @@ class _SecretFieldState extends State<SecretField> {
                     // ein Zeilenumbruch aus der Zwischenablage faellt hier weg
                     // statt im Daemon als `CONFIG_020` zurueckzukommen.
                     FilteringTextInputFormatter.deny(RegExp(r'[\r\n]')),
+                    // Ein eingefügter Schlüssel verliert Anführungszeichen
+                    // und Leerraum außen (HUM-283), wie im Daemon.
+                    const PasteDebrisFormatter(),
                   ],
                 ),
               ],

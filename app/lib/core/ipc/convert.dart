@@ -838,6 +838,7 @@ extension ProbeLlmResponseToDomain on pb.ProbeLlmResponse {
       diagnostics.map((pb.Diagnostic finding) => finding.toDomain()),
     ),
     keySent: keySent,
+    answer: answer,
   );
 }
 

@@ -187,7 +187,20 @@ pub struct ProbeResult {
     pub diagnostics: Vec<Diagnostic>,
     /// Wahr, wenn die Probe einen Zugangsschlüssel mitgeschickt hat.
     pub key_sent: bool,
+    /// Was zurückkam, wenn keine Modellliste kam: Status und Inhaltstyp der
+    /// letzten Antwort, etwa `HTTP 200, text/html` (HUM-283). `None`, wenn
+    /// eine Modellliste kam.
+    ///
+    /// Eine Zeile wie „hat mit 0 Modellen geantwortet" behauptete neben
+    /// `LLM_003` eine Liste, die es nie gab; dieser Text sagt stattdessen,
+    /// was der Server geschickt hat. Der Inhaltstyp stammt vom Server und ist
+    /// auf sichtbare ASCII-Zeichen und [`ANSWER_TYPE_CHARS`] Zeichen gekürzt.
+    pub answer: Option<String>,
 }
+
+/// So viele Zeichen des Inhaltstyps einer Antwort stehen in
+/// [`ProbeResult::answer`].
+pub const ANSWER_TYPE_CHARS: usize = 64;
 
 /// Die Probe über einem [`Upstream`].
 ///
@@ -309,8 +322,12 @@ impl LlmProbe {
         if !outcome.endpoint_is_private {
             diagnostics.push(not_private(endpoint));
         }
-        if outcome.flavor == LlmFlavor::Unknown {
-            diagnostics.push(unknown_api(&target));
+        // Was vom Server stammt, trägt den mitgeschickten Schlüssel nie
+        // weiter, auch nicht, wenn der Server ihn zurückspiegelt.
+        let answer =
+            (outcome.flavor == LlmFlavor::Unknown).then(|| without_key(&progress.answer(), key));
+        if let Some(answer) = &answer {
+            diagnostics.push(unknown_api(&target, answer));
         }
         Ok(ProbeResult {
             flavor: outcome.flavor,
@@ -319,6 +336,7 @@ impl LlmProbe {
             endpoint_is_private: outcome.endpoint_is_private,
             diagnostics,
             key_sent: target.authorization.is_some(),
+            answer,
         })
     }
 
@@ -408,6 +426,11 @@ impl LlmProbe {
 
         progress.answered.store(true, Ordering::SeqCst);
         let status = response.status().as_u16();
+        progress.record_answer(
+            status,
+            response.headers().get(hyper::header::CONTENT_TYPE),
+            sent_key(target),
+        );
         if status == 401 || status == 403 {
             return Err(Failure::NeedsAuth {
                 status,
@@ -441,6 +464,8 @@ struct Progress {
     answered: AtomicBool,
     /// Der Pfad der Anfrage, die zuletzt begonnen hat; `None` vor der ersten.
     attempted: std::sync::Mutex<Option<String>>,
+    /// Status und Inhaltstyp der letzten Antwort ([`ProbeResult::answer`]).
+    answer: std::sync::Mutex<Option<String>>,
 }
 
 impl Progress {
@@ -457,6 +482,91 @@ impl Progress {
             .lock()
             .ok()
             .and_then(|attempted| attempted.clone())
+    }
+
+    /// Merkt sich, was eben zurückkam.
+    fn record_answer(
+        &self,
+        status: u16,
+        content_type: Option<&HeaderValue>,
+        sent_key: Option<&[u8]>,
+    ) {
+        if let Ok(mut answer) = self.answer.lock() {
+            *answer = Some(describe_answer(status, content_type, sent_key));
+        }
+    }
+
+    /// Was zuletzt zurückkam; ohne Antwort ein Satz, der genau das sagt.
+    fn answer(&self) -> String {
+        self.answer
+            .lock()
+            .ok()
+            .and_then(|answer| answer.clone())
+            .unwrap_or_else(|| "no answer was read".to_owned())
+    }
+}
+
+/// Status und Inhaltstyp einer Antwort in einer Zeile, etwa
+/// `HTTP 200, text/html`.
+///
+/// Der Inhaltstyp kommt vom Server: Es bleibt nur der Medientyp ohne
+/// Parameter (`text/plain; note=…` wird `text/plain`, Review zu HUM-283), und
+/// davon nur Zeichen eines Tokens nach RFC 9110, höchstens
+/// [`ANSWER_TYPE_CHARS`]. Ein Wert ohne ein solches Zeichen heißt
+/// `no content type`.
+///
+/// Trägt der rohe Kopf den mitgeschickten Schlüssel ([`sent_key`], in
+/// beliebiger Schreibung), steht statt des Inhaltstyps `content type
+/// withheld`. Geprüft wird vor dem Filtern, Kleinschreiben und Kürzen: Danach
+/// fände ein Vergleich einen langen oder gemischt geschriebenen Schlüssel
+/// nicht mehr, und ein Stück davon stünde in der Antwort (Review zu HUM-283).
+fn describe_answer(
+    status: u16,
+    content_type: Option<&HeaderValue>,
+    sent_key: Option<&[u8]>,
+) -> String {
+    let bytes = content_type.map(HeaderValue::as_bytes).unwrap_or_default();
+    if let Some(key) = sent_key
+        && !key.is_empty()
+        && bytes
+            .windows(key.len())
+            .any(|window| window.eq_ignore_ascii_case(key))
+    {
+        return format!("HTTP {status}, content type withheld");
+    }
+    let media_type = bytes.split(|byte| *byte == b';').next().unwrap_or_default();
+    let shown: String = media_type
+        .iter()
+        .filter(|byte| byte.is_ascii_alphanumeric() || b"!#$&^_.+-/".contains(byte))
+        .take(ANSWER_TYPE_CHARS)
+        .map(|byte| char::from(byte.to_ascii_lowercase()))
+        .collect();
+    if shown.is_empty() {
+        format!("HTTP {status}, no content type")
+    } else {
+        format!("HTTP {status}, {shown}")
+    }
+}
+
+/// Der Schlüssel, den die Probe an [`Target`] schickt, als rohe Bytes aus
+/// `Authorization: Bearer …`; `None` ohne Schlüssel.
+fn sent_key(target: &Target) -> Option<&[u8]> {
+    target
+        .authorization
+        .as_ref()
+        .and_then(|value| value.as_bytes().strip_prefix(b"Bearer "))
+}
+
+/// [`describe_answer`] ohne den Schlüssel, den die Probe geschickt hat.
+///
+/// Ein Server kann den Schlüssel im Inhaltstyp zurückspiegeln; dieser Text
+/// geht in `ProbeLlmResponse.answer` und in `LLM_003`. Jedes Vorkommen wird
+/// zu [`humanitl_config::secret::MASK`] (Review zu HUM-283). Ein Schlüssel hat
+/// mindestens 16 Zeichen, also trifft das Ersetzen kein gewöhnliches Wort.
+fn without_key(text: &str, key: Option<&ApiKey>) -> String {
+    match key.map(ApiKey::expose) {
+        Some(secret) if !secret.is_empty() => text.replace(secret, humanitl_config::secret::MASK),
+        _ => text.to_owned(),
     }
 }
 
@@ -778,7 +888,7 @@ fn unreadable_endpoint(why: String) -> Diagnostic {
 /// Gebaut aus dem Ziel der Anfragen und den gefragten Pfaden, nie aus dem
 /// eingetragenen Text: Dessen Query oder Fragment ging nicht hinaus und kann
 /// ein Geheimnis tragen (HUM-261).
-fn unknown_api(target: &Target) -> Diagnostic {
+fn unknown_api(target: &Target, answer: &str) -> Diagnostic {
     let urls: Vec<String> = target
         .asked_paths()
         .into_iter()
@@ -788,10 +898,13 @@ fn unknown_api(target: &Target) -> Diagnostic {
         [only] => format!("{only} did not answer"),
         many => format!("neither {} answered", many.join(" nor ")),
     };
+    // Was zurückkam, steht im Satz (HUM-283): Ein `HTTP 404, text/html`
+    // sagt mehr über eine falsche Adresse als jede Vermutung.
     Diagnostic::builder(LLM_003, Severity::Warning)
         .why(format!(
-            "connected to {}, but {asked} with a model list. Check that the URL is the base URL \
-             of the OpenAI-compatible API (as in OpenCode), not a chat UI.",
+            "connected to {}, but {asked} with a model list; the last answer was {answer}. Check \
+             that the URL is the base URL of the OpenAI-compatible API (as in OpenCode), not a \
+             chat UI.",
             target.authority
         ))
         .fix(FixAction::ChangeSetting {
@@ -925,7 +1038,7 @@ mod tests {
         let url = Url::parse("http://model.example:11434").unwrap();
         for diagnostic in [
             super::not_private(&url),
-            super::unknown_api(&Target::parse(&url).unwrap()),
+            super::unknown_api(&Target::parse(&url).unwrap(), "HTTP 404, text/html"),
         ] {
             match diagnostic.fix {
                 Some(humanitl_core::FixAction::ChangeSetting { key, value }) => {
@@ -972,7 +1085,7 @@ mod tests {
         let mut texts = vec![
             super::not_private(&url).why,
             super::not_private_by_name(&url).unwrap().why,
-            super::unknown_api(&target).why,
+            super::unknown_api(&target, "HTTP 404, text/html").why,
         ];
         let ftp = Url::parse("ftp://user:pw-geheim@model.example.com/?token=geheim").unwrap();
         texts.push(Target::parse(&ftp).unwrap_err().why);
@@ -1022,6 +1135,66 @@ mod tests {
             Some(Vec::new()),
             "a server without models is still a server"
         );
+    }
+
+    /// Was zurückkam, steht als Status und Inhaltstyp da, gekürzt auf
+    /// sichtbare Zeichen; der Text vom Server bekommt keinen Platz für
+    /// Steuerzeichen (HUM-283).
+    #[test]
+    fn the_answer_names_status_and_content_type() {
+        use hyper::header::HeaderValue;
+        assert_eq!(
+            super::describe_answer(
+                200,
+                Some(&HeaderValue::from_static("text/html; charset=utf-8")),
+                None
+            ),
+            "HTTP 200, text/html"
+        );
+        assert_eq!(
+            super::describe_answer(404, None, None),
+            "HTTP 404, no content type"
+        );
+        let long = "a".repeat(200);
+        let shown = super::describe_answer(200, Some(&HeaderValue::from_str(&long).unwrap()), None);
+        assert_eq!(shown.len(), "HTTP 200, ".len() + super::ANSWER_TYPE_CHARS);
+        let raw = HeaderValue::from_bytes(b"text/\xffhtml\t").unwrap();
+        assert_eq!(
+            super::describe_answer(200, Some(&raw), None),
+            "HTTP 200, text/html"
+        );
+    }
+
+    /// Spiegelt der Server den mitgeschickten Schlüssel im Inhaltstyp, in
+    /// welcher Schreibung auch immer, steht weder der Schlüssel noch ein
+    /// Stück davon in der Antwort oder in `LLM_003` (Review zu HUM-283). Der
+    /// Schlüssel ist gemischt geschrieben und länger als 64 Zeichen, wie ein
+    /// `sk-proj-…`.
+    #[test]
+    fn a_content_type_that_echoes_the_key_is_withheld() {
+        use hyper::header::HeaderValue;
+        let secret = format!("SK-PROJ-{}", "AbCdEf0123456789".repeat(5));
+        let sent = secret.as_bytes();
+        let prefix = secret.get(..20).unwrap().to_ascii_lowercase();
+        let target =
+            Target::parse(&Url::parse("https://llm.example.net/api/v1/").unwrap()).unwrap();
+        for header in [
+            format!("text/plain; note={secret}"),
+            format!("text/{secret}"),
+            format!("text/{}", secret.to_ascii_lowercase()),
+        ] {
+            let value = HeaderValue::from_str(&header).unwrap();
+            let answer = super::describe_answer(200, Some(&value), Some(sent));
+            let why = super::unknown_api(&target, &answer).why;
+            for text in [&answer, &why] {
+                let lower = text.to_ascii_lowercase();
+                assert!(
+                    !lower.contains(&secret.to_ascii_lowercase()) && !lower.contains(&prefix),
+                    "the key or a piece of it came back"
+                );
+            }
+            assert_eq!(answer, "HTTP 200, content type withheld");
+        }
     }
 
     #[test]

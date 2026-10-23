@@ -25,18 +25,21 @@
 /// the same field, and no feature imports another one (ARCHITECTURE 5).
 library;
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import 'pasted_text.dart';
 import 'ui.dart';
 
 /// The endpoint field with its probe button.
 class LlmEndpointField extends StatelessWidget {
   /// Creates the field over [controller].
   ///
-  /// [onProbe] is called with the trimmed text, never with the raw one, and
-  /// never for an empty field: an empty endpoint is not an address, and
-  /// asking the daemon about it would only produce a finding this control can
-  /// see coming.
+  /// [onProbe] is called with the cleaned text ([stripPasteDebris]: white
+  /// space and one quote at each end removed, HUM-283), never with the raw
+  /// one, and never for an empty field: an empty endpoint is not an address,
+  /// and asking the daemon about it would only produce a finding this control
+  /// can see coming.
   const LlmEndpointField({
     required this.controller,
     required this.label,
@@ -61,7 +64,7 @@ class LlmEndpointField extends StatelessWidget {
   /// Label of the button that opens the connection, already localised.
   final String probeLabel;
 
-  /// Called with the trimmed endpoint when somebody asks for a probe.
+  /// Called with the cleaned endpoint when somebody asks for a probe.
   final void Function(String endpoint) onProbe;
 
   /// Called with every text a person types.
@@ -91,6 +94,9 @@ class LlmEndpointField extends StatelessWidget {
             enabled: enabled && !busy,
             onChanged: onChanged,
             onSubmitted: (_) => _probe(),
+            // A pasted `https://…/v1/"` loses its quote in the field, before
+            // anybody asks for it (HUM-283).
+            inputFormatters: const <TextInputFormatter>[PasteDebrisFormatter()],
           ),
         ),
         SizedBox(width: tokens.spacing.x2),
@@ -105,9 +111,13 @@ class LlmEndpointField extends StatelessWidget {
   }
 
   void _probe() {
-    final String endpoint = controller.text.trim();
+    final String endpoint = stripPasteDebris(controller.text);
     if (endpoint.isEmpty) {
       return;
+    }
+    // The field shows what is asked, not what was typed.
+    if (endpoint != controller.text) {
+      controller.text = endpoint;
     }
     onProbe(endpoint);
   }

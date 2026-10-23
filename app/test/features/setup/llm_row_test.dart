@@ -287,4 +287,64 @@ void main() {
     expect(state[SetupCheckKind.llm].state, SetupCheckState.checking);
     expect(state.canStart, isFalse);
   });
+  // HUM-283: the owner pasted the endpoint with a trailing quote out of a
+  // config file. The field drops it on paste, and a quote that was typed is
+  // dropped on submit: the daemon never sees a request for `/v1/%22`.
+  testWidgets('a pasted endpoint loses its stray quote before the probe', (
+    WidgetTester tester,
+  ) async {
+    final FakeDaemonClient client = FakeDaemonClient();
+    await openSetup(tester, client);
+
+    await type(tester, ' https://llm.example.net/api/v1/"\n');
+    final EditableText field = tester.widget<EditableText>(
+      find.descendant(
+        of: find.byKey(const Key('setup-llm-endpoint')),
+        matching: find.byType(EditableText),
+      ),
+    );
+    expect(field.controller.text, 'https://llm.example.net/api/v1/');
+    await probe(tester);
+    expect(client.probedEndpoints, <String>['https://llm.example.net/api/v1/']);
+
+    // One character at a time is typing, not a paste: the field keeps it,
+    // and submitting cleans it.
+    await type(tester, 'https://llm.example.net/api/v1/');
+    await type(tester, 'https://llm.example.net/api/v1/"');
+    expect(field.controller.text, 'https://llm.example.net/api/v1/"');
+    await probe(tester);
+    expect(
+      client.probedEndpoints.last,
+      'https://llm.example.net/api/v1/',
+      reason: 'submitted without the quote',
+    );
+  });
+
+  // HUM-283: no model list is not "0 models". The line says what came back.
+  testWidgets('a probe without a model list says what came back', (
+    WidgetTester tester,
+  ) async {
+    final FakeDaemonClient client = FakeDaemonClient()
+      ..llmProbe = const LlmProbe(
+        endpoint: 'https://llm.example.net/other/',
+        latencyMs: 12,
+        answer: 'HTTP 404, text/html',
+        diagnostics: <Diagnostic>[
+          Diagnostic(
+            code: 'LLM_003',
+            severity: Severity.warning,
+            why: 'connected, but no model list',
+          ),
+        ],
+      );
+    await openSetup(tester, client);
+    await type(tester, 'https://llm.example.net/other/');
+    await probe(tester);
+
+    final String evidence = tester
+        .widget<Text>(find.byKey(const Key('setup-evidence-llm')))
+        .data!;
+    expect(evidence, contains('HTTP 404, text/html'));
+    expect(evidence, isNot(contains('0 models')));
+  });
 }

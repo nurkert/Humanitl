@@ -134,11 +134,33 @@ impl ApiKey {
         }
         if text.chars().any(|c| c.is_whitespace() || c.is_control()) {
             return Err(refuse(
-                "it contains white space or a control character; a key copied with a line break \
-                 or a blank at its end is the usual cause",
+                "it contains white space or a control character between its characters; blanks \
+                 and quotes around a pasted key are removed, but a key is one word, so check \
+                 that only the key was copied",
             ));
         }
         Ok(Self(Zeroizing::new(text.to_owned())))
+    }
+
+    /// Ein Schlüssel aus dem Text, den ein Mensch eingefügt hat (HUM-283).
+    ///
+    /// Erst fallen Leerraum außen und je ein Anführungszeichen am Anfang und
+    /// am Ende weg ([`crate::pasted::strip_paste_debris`]): `"sk-…"` aus einer
+    /// Konfigurationsdatei ist derselbe Schlüssel wie `sk-…`, und mit den
+    /// Anführungszeichen antwortete der Server `401`. Was danach bleibt, prüft
+    /// [`ApiKey::new`]; Leerraum im Inneren lehnt es ab, ohne den Schlüssel zu
+    /// wiederholen.
+    ///
+    /// Diesen Weg nehmen die Stellen, an denen ein Mensch einen Schlüssel
+    /// übergibt (`LlmKey` beim Setzen, der Schlüssel einer Probe), und auch
+    /// das Lesen aus dem Speicher: Ein Schlüssel, den eine ältere Fassung
+    /// samt Anführungszeichen abgelegt hat, wirkt so ohne neues Setzen.
+    ///
+    /// # Errors
+    ///
+    /// Wie [`ApiKey::new`].
+    pub fn from_pasted(text: &str) -> Result<Self, Diagnostic> {
+        Self::new(crate::pasted::strip_paste_debris(text))
     }
 
     /// Der Schlüssel als Text, für die eine Stelle, die ihn braucht.
@@ -444,8 +466,10 @@ impl KeyStore {
             unavailable(key_ref, "the keyring entry is not text", Some(set_again()))
         })?;
         // `secret-tool` hängt einen Zeilenumbruch an, wenn es an ein Terminal
-        // schreibt; ein Schlüssel trägt keinen Leerraum (`ApiKey::new`).
-        ApiKey::new(text.trim_end()).map_err(|_refused| {
+        // schreibt; ein Schlüssel trägt keinen Leerraum (`ApiKey::new`). Ein
+        // Eintrag, den eine ältere Fassung samt Anführungszeichen abgelegt hat,
+        // wirkt trotzdem: dieselbe Bereinigung wie beim Setzen (HUM-283).
+        ApiKey::from_pasted(text).map_err(|_refused| {
             unavailable(
                 key_ref,
                 "the keyring entry is not a usable key",
@@ -550,7 +574,7 @@ impl KeyStore {
         let text = std::str::from_utf8(&bytes).map_err(|_not_text| {
             unavailable(key_ref, "the key file is not text", Some(set_again()))
         })?;
-        ApiKey::new(text.trim_end()).map_err(|_refused| {
+        ApiKey::from_pasted(text).map_err(|_refused| {
             unavailable(
                 key_ref,
                 &format!("{} does not hold a usable key", path.display()),
@@ -861,6 +885,35 @@ mod tests {
         assert_eq!(ApiKey::new(&long).unwrap_err().code, CONFIG_020);
     }
 
+    /// Ein eingefügter Schlüssel verliert Anführungszeichen und Leerraum
+    /// außen und ist danach derselbe wie ohne; Leerraum im Inneren wird
+    /// abgelehnt, und der Befund wiederholt den Schlüssel nicht (HUM-283).
+    #[test]
+    fn a_pasted_key_loses_its_quotes_and_inner_white_space_is_refused() {
+        for pasted in [
+            format!("\"{SECRET}\""),
+            format!("'{SECRET}'"),
+            format!("{SECRET}\""),
+            format!("  {SECRET}\n"),
+            format!("\" {SECRET} \"\r\n"),
+        ] {
+            let key = ApiKey::from_pasted(&pasted).unwrap();
+            assert!(key.expose() == SECRET, "a pasted variant was not cleaned");
+        }
+        let inner = "sk-live-key 0123456789";
+        let refused = ApiKey::from_pasted(&format!("\"{inner}\"")).unwrap_err();
+        assert_eq!(refused.code, CONFIG_020);
+        assert!(refused.why.contains("white space"), "{}", refused.why);
+        assert!(
+            !refused.why.contains("sk-live"),
+            "the refusal repeats the key"
+        );
+        assert!(
+            !refused.why.contains("0123456789"),
+            "the refusal repeats the key"
+        );
+    }
+
     /// Ein Schlüssel unter 16 Zeichen ließe sich nicht verlässlich aus der
     /// Aufzeichnung halten (`?key=abc`) und wird abgelehnt, mit Grund und
     /// Ausweg; 16 Zeichen gehen (HUM-140, Review).
@@ -918,6 +971,28 @@ mod tests {
         let dir_mode = fs::metadata(store.key_dir()).unwrap().mode() & 0o777;
         assert_eq!(dir_mode, 0o700);
         assert_eq!(store.lookup(&stored.key_ref).unwrap().expose(), SECRET);
+    }
+
+    /// Ein Schlüssel, den eine ältere Fassung samt Anführungszeichen und
+    /// Zeilenumbruch abgelegt hat, wirkt beim Lesen, aus dem Schlüsselbund
+    /// wie aus der Datei (HUM-283).
+    #[test]
+    fn a_key_stored_with_quotes_by_an_older_version_still_works() {
+        let quoted = format!("\"{SECRET}\"\n");
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path(), Some(fake_tool(dir.path())));
+        let stored = store.store(&ApiKey::new(SECRET).unwrap()).unwrap();
+        fs::write(dir.path().join("store").join("llm"), &quoted).unwrap();
+        let key = store.lookup(&stored.key_ref).unwrap();
+        assert!(key.expose() == SECRET, "the keyring entry was not cleaned");
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_in(dir.path(), Some(broken_tool(dir.path())));
+        let stored = store.store(&ApiKey::new(SECRET).unwrap()).unwrap();
+        fs::write(store.file_path("llm"), &quoted).unwrap();
+        let key = store.lookup(&stored.key_ref).unwrap();
+        assert!(key.expose() == SECRET, "the key file was not cleaned");
     }
 
     /// Bleibt nach dem Ablegen im Schlüsselbund eine alte Datei des

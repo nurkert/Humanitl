@@ -457,12 +457,12 @@ impl DaemonApi for FakeDaemon {
 
     /// Der Zugangsschlüssel im Fake: nur die Aussage „gesetzt", nie der
     /// Schlüssel (HUM-140). Was der echte Dienst an einem Schlüssel ablehnt,
-    /// lehnt auch der Fake ab ([`humanitl_config::secret::ApiKey::new`]).
+    /// lehnt auch der Fake ab ([`humanitl_config::secret::ApiKey::from_pasted`]).
     async fn llm_key(&self, request: v1::LlmKeyRequest) -> Result<v1::LlmKeyStatus, Diagnostic> {
         match request.op {
             Some(v1::llm_key_request::Op::Status(_)) => {}
             Some(v1::llm_key_request::Op::Set(set)) => {
-                humanitl_config::secret::ApiKey::new(&set.key)?;
+                humanitl_config::secret::ApiKey::from_pasted(&set.key)?;
                 self.state.set_llm_key(true);
             }
             Some(v1::llm_key_request::Op::Remove(_)) => self.state.set_llm_key(false),
@@ -586,6 +586,8 @@ impl DaemonApi for FakeDaemon {
             // Der Fake schickt nichts; er sagt nur, was der Daemon täte.
             key_sent: !request.api_key.is_empty()
                 || (request.use_stored_key && self.state.llm_key_set()),
+            // Der Fake antwortet immer mit einer Modellliste.
+            answer: String::new(),
         })
     }
 
