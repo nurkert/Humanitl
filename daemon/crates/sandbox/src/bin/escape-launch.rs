@@ -302,6 +302,7 @@ fn run() -> Result<ExitCode, LaunchError> {
         shim_src: shim.path().to_path_buf(),
         command: args.command.clone(),
         files: Vec::new(),
+        agent_program: None,
     };
 
     let backend = match BwrapBackend::detect(paths) {
@@ -768,6 +769,7 @@ mod tests {
             session_env: Vec::new(),
             command: words(&["/bin/sh", "/tests/escape/esc-1-sockets.sh"]),
             files: Vec::new(),
+            agent_program: None,
         }
     }
 
@@ -929,6 +931,7 @@ mod tests {
             session_env: Vec::new(),
             command: words(&["/bin/sh", "-c", "true"]),
             files: Vec::new(),
+            agent_program: None,
         };
         let tests_dir = state.join("tests-escape");
         make_dir(&tests_dir).expect("tests dir");

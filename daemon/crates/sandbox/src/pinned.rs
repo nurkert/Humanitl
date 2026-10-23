@@ -37,6 +37,8 @@ pub(crate) enum SourceKind {
     /// Ein Verzeichnis oder eine gewöhnliche Datei, etwa ein Eintrag aus
     /// `mounts.extra_ro`.
     DirectoryOrFile,
+    /// Only a regular file: the agent program (HUM-278).
+    RegularFile,
 }
 
 /// Eine geöffnete Mount-Quelle und der Ort, an dem sie liegt.
@@ -85,6 +87,7 @@ impl PinnedSource {
             SourceKind::DirectoryOrFile => {
                 matches!(file_type, FileType::Directory | FileType::RegularFile)
             }
+            SourceKind::RegularFile => file_type == FileType::RegularFile,
         };
         if !acceptable {
             return Err(format!(
@@ -120,6 +123,11 @@ impl PinnedSource {
     }
 
     /// Die Nummer des Deskriptors.
+    /// The descriptor itself, for `fstat` (HUM-278).
+    pub(crate) fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.fd.as_fd()
+    }
+
     pub(crate) fn raw_fd(&self) -> RawFd {
         self.fd.as_raw_fd()
     }
@@ -135,6 +143,7 @@ impl SourceKind {
         match self {
             Self::Directory => "a directory",
             Self::DirectoryOrFile => "a directory or a regular file",
+            Self::RegularFile => "a regular file",
         }
     }
 }

@@ -75,6 +75,7 @@
 //!     session_env: vec![("HUMANITL_SESSION".to_owned(), SessionId::nil().to_string())],
 //!     command: vec!["opencode".into()],
 //!     files: Vec::new(),
+//!     agent_program: None,
 //! };
 //!
 //! // Die Vorschau: feste Deskriptornummern, alles unter /work als vorhanden.

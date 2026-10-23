@@ -291,6 +291,21 @@ confirmation. `RECORDER_005` ends the outage. Lost flows are not written afterwa
 risk:* traffic during the outage, above all through `allow` rules and the passthrough, which no
 human sees, has no record; the claim "both are recorded" is visibly false for that time.
 
+### K-17 The agent program from a per-user directory
+
+When the agent lives in `~/.opencode/bin`, `~/.local/bin` or `~/bin` (or an absolute
+`agent.command` points outside the binds), the daemon binds that one file read-only at
+`/run/humanitl/agent/<name>` (HUM-278). From inside, attackers (a) to (c) can read and run the
+file, which they already run as the agent; they cannot write it (read-only bind), and they see no
+other file of the directory. The daemon binds only a native ELF executable owned by the user or
+root whose file and directory nobody else can write (group write only for a group shown to be the
+user's private group). The launcher opens the file once with `O_PATH | O_NOFOLLOW`, checks owner,
+mode and ELF header through that descriptor and binds the descriptor, so a swap of the path or of
+a parent directory after the check does not change what the sandbox gets. A command given after
+`--` is never bound this way. *Residual risk:* whoever can write as the user, or holds write
+access to an ancestor directory before the check, can substitute another file owned by the user
+or root; that is outside the threat model (see [Out of scope](#out-of-scope)).
+
 ## Assumptions
 
 | ID | Assumption | How to check it | If it breaks |
@@ -355,6 +370,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-21 | K-01: project and extra mounts bound by descriptor | HUM-263 |
 | 2026-10-21 | Recording outage reaches every client and the window | HUM-250 |
 | 2026-10-21 | Translated to English and brought to the state of the code for 0.1 | HUM-059 |
+| 2026-10-22 | K-17: agent program from a per-user directory bound read-only as one file | HUM-278 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in
