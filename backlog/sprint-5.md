@@ -51,6 +51,14 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-279 | `humanitl sandbox attach` has a detach key (before HUM-060) | S | HUM-042 |
 | HUM-280 | The agent starts from a shell inside the sandbox (before HUM-060) | M | HUM-042, HUM-278, HUM-279 |
 | HUM-281 | The concurrent start test counts one sandbox twice | S | HUM-067, HUM-277 |
+| HUM-288 | Setup's model probe sends the stored key (before HUM-060) | S | HUM-140, HUM-044 |
+| HUM-282 | The project folder has a visible "Choose folder" button (before HUM-060) | S | HUM-262 |
+| HUM-283 | Pasted endpoint and key are cleaned, and a stray quote is refused (before HUM-060) | S | HUM-039, HUM-140 |
+| HUM-284 | A package update replaces the running daemon without a command (before HUM-060) | M | HUM-053, HUM-277 |
+| HUM-285 | The CLI ends quietly when the pipe closes | S | — |
+| HUM-289 | Several saved model servers, switchable in the app (before HUM-060) | M | HUM-140, HUM-277, HUM-283 |
+| HUM-286 | One layout grid: pane headers, action bar and the rail highlight line up (before HUM-060) | M | HUM-254, HUM-275 |
+| HUM-287 | Setup becomes a short onboarding, not a scroll list (before HUM-060) | M | HUM-282, HUM-286, HUM-289 |
 
 ---
 
@@ -5580,3 +5588,231 @@ by design, the state of the running session after CLI_005; once the winner
 reached `Running`, both streams carried `Running` and the old count gave two.
 The test now counts distinct non-empty sandbox ids across `Running` statuses.
 The daemon is unchanged; HUM-277's timing made the race visible.
+
+## HUM-282 · The project folder has a visible "Choose folder" button (before HUM-060)
+
+### Context
+On v0.0.6 the Setup row "Project folder" shows "No project folder" and the
+ro/rw switch. The text is a ghost button that opens the folder dialog, but
+nothing says so; the owner looked for a way to choose the folder and found
+none. The CONFIG_013 card below offers no action either.
+
+### Specification
+1. `WorkDirPicker` shows a visible button "Choose folder…" (folder glyph,
+   outline variant) next to the path, in Setup and in the Sandbox header; the
+   path itself stays a label (ellipsized, full path on hover). With a folder
+   chosen the button reads "Change…".
+2. The CONFIG_013 card carries the same action as a button "Choose folder"
+   that opens the dialog; locked while a session runs, with the existing
+   locked sentence.
+3. A cancelled dialog changes nothing; a failing desktop portal shows a
+   diagnostic with the CLI alternative (`humanitl run` in the folder) instead
+   of doing nothing.
+4. ARB en/de, widget tests, goldens both themes.
+
+### Acceptance criteria
+1. Without prior knowledge a user finds and uses the folder chooser in Setup.
+2. CONFIG_013 offers the button.
+
+## HUM-283 · Pasted endpoint and key are cleaned, and a stray quote is refused (before HUM-060)
+
+### Context
+The owner pasted the endpoint from a config file as
+`https://llm.hzo.schutzwerk.net/api/v1/"`. App and daemon took it; the probe
+asked `/api/v1/%22/v1/models` and reported LLM_003 next to "answered with 0
+models". The access key store trims only trailing whitespace, so a pasted key
+with quotes or a leading space is stored as is and the server answers 401.
+
+### Specification
+1. App: the endpoint field and the key field trim surrounding whitespace and
+   one pair of matching or a single trailing/leading `"`/`'` on paste and on
+   submit.
+2. Daemon (`humanitl-config` validation of `llm.endpoint`, also `SetConfig`
+   and `config set`): a URL containing `"`, `'`, `<`, `>`, a backslash or
+   whitespace is refused with CONFIG_00x, why naming the character and its
+   position, fix `ChangeSetting { llm.endpoint }` with the cleaned value.
+3. Key store (`LlmKey` set, CLI `llm key set`): surrounding whitespace and
+   quotes are stripped before storing; a key with inner whitespace is refused
+   with a diagnostic (never echoing the key).
+4. The probe's summary line does not say "answered with 0 models" when it
+   reports LLM_003; it says what came back (status, content type).
+
+### Acceptance criteria
+1. Pasting the owner's endpoint with the quote results in the clean URL or a
+   clear refusal, never a `%22` request.
+2. A key pasted with quotes works.
+
+## HUM-284 · A package update replaces the running daemon without a command (before HUM-060)
+
+### Context
+After upgrading the .deb from 0.0.5 to 0.0.6 the owner's systemd user manager
+still ran the 0.0.5 daemon and warned "unit file … changed on disk. Run
+'systemctl --user daemon-reload'". Only `systemctl --user daemon-reload &&
+systemctl --user restart humanitld` by hand brought 0.0.6. The owner wants no
+command after an update.
+
+### Specification
+1. `postinst` (configure, upgrade): for every user with a running user manager
+   (`loginctl list-users`, `/run/user/<uid>/systemd`), run as that user
+   `systemctl --user daemon-reload`, then restart `humanitld.service` only if
+   it is active and no agent session is running (asked over the daemon socket
+   with the CLI as that user, short timeout; unknown means "running"). With a
+   running session, set a marker so the daemon exits after the session ends
+   and socket activation starts the new binary; the app shows the HUM-277
+   version notice meanwhile.
+2. `prerm`/`postrm` stay as they are except for the same reload on remove.
+3. Errors in this step never fail the package installation; they are logged
+   to the journal with the manual command.
+4. The app's HUM-277 version-mismatch notice gets a "Restart daemon" button
+   that runs the reload + restart for this user when no session runs.
+5. CI job `e2e-m4-package`: install the previous release, start the daemon,
+   install the new .deb, assert `humanitl doctor` reports the new version
+   without manual steps.
+
+### Acceptance criteria
+1. Upgrading the .deb with an idle daemon leaves the new version running.
+2. With a running session the session survives and the new daemon starts
+   after it ends.
+
+## HUM-285 · The CLI ends quietly when the pipe closes
+
+### Context
+`humanitl doctor | head -5` panicked: `failed printing to stdout: Broken pipe
+(os error 32)`.
+
+### Specification
+The CLI treats EPIPE on stdout as a normal end (exit 0 for a reader that
+stopped early, like coreutils with SIGPIPE default): reset SIGPIPE to default
+at startup or map the write error; no panic text. A test pipes `doctor` and
+`flows` into a reader that closes after one line.
+
+## HUM-286 · One layout grid: pane headers, action bar and the rail highlight line up (before HUM-060)
+
+### Context
+Screenshots of v0.0.6 on the owner's machine (2026-10-23): the Settings sheet
+header is taller than the Queue pane header beside it, so their bottom borders
+do not meet; the Intercept action bar (Allow / Edit + Allow / Block) sits inset
+in its own box with gaps to the pane borders on the left, right and below; the
+active rail item's highlight is not on the same row as the right pane's header
+and keeps a gap to the border above it. Each surface invented its own
+geometry.
+
+### Goal
+One layout concept for the whole shell, written down in docs/UX.md and as
+tokens, applied everywhere: every horizontal divider that crosses the window
+continues across panes, and highlights and bars are flush with the borders
+they belong to.
+
+### Specification
+1. Tokens (app theme): `paneHeaderHeight` (one value for every pane header:
+   Queue, detail, History, Rules, Sandbox, Audit, Setup, Settings sheet, any
+   side sheet), `railItemHeight`, and the border width. Headers use the token,
+   never their own padding to reach a height.
+2. Rail: the first rail item starts directly under the header border with no
+   gap; the active highlight fills the item's full height edge to edge and
+   touches the border above. The rail's first row lines up with the pane
+   header row of the content (same top, same height), so "Intercept" and
+   "Queue" share one row.
+3. Intercept action bar: a full-width footer of the detail pane, flush with
+   the pane's left/right borders and the window's bottom edge (or status bar),
+   separated from the content by one border; no inner card, no inset.
+4. Settings sheet and other side sheets: header height and border line match
+   the pane headers, so the divider continues across the window.
+5. Rules view (screenshot 4): under the Saved/Temporary toolbar there are two
+   stacked horizontal borders (toolbar bottom and list top, offset by a few
+   px); one border only. General rule: two adjacent regions share one divider,
+   owned by the upper one; nested containers do not add their own top border.
+   The audit checks every view for doubled or offset dividers.
+6. docs/UX.md gets a short "Layout grid" section with these rules; the
+   impeccable audit/polish pass (layout) is the method, the owner's three
+   screenshots are the acceptance reference.
+7. Goldens regenerated; a geometry test asserts that the bottom edges of all
+   visible pane headers and the sheet header are equal and that the active
+   rail item's top equals the header border's bottom.
+
+### Acceptance criteria
+1. The four spots in the screenshots line up: sheet header vs Queue header,
+   action bar flush, rail highlight flush and on the header row, one divider
+   under the Rules toolbar.
+2. No pane header computes its height outside the token.
+3. Goldens and `make flutter-analyze` green.
+
+## HUM-287 · Setup becomes a short onboarding, not a scroll list (before HUM-060)
+
+### Context
+The owner (2026-10-23): the Setup page is a long list of rows with cards
+below each; it should be rethought for the current vision and workflow as a
+mini onboarding that ideally finds everything already set and otherwise leads
+through the few things that are missing, without a blunt scroll list.
+
+### Goal
+First start: a guided, step-by-step setup that confirms what is already fine
+in one glance and puts the one thing that needs the user in front. Later: the
+same page is a compact health overview, not a wall of cards.
+
+### Specification
+1. Design pass first (impeccable `shape`, then `onboard`): two to three
+   rendered variants (dark and light, en) for the owner to pick from before
+   building; the chosen one is recorded in docs/UX.md.
+2. Steps in workflow order: background service, model server (endpoint,
+   model, access key), project folder, sandbox checks; agent detection
+   (HUM-278) is shown with the model step or as its own step, as the design
+   decides.
+3. A step that is green collapses to one line with its evidence; the first
+   step that needs the user is expanded and focused, with its action as the
+   primary button (Contact, Choose folder, Store key, Open settings). Steps
+   do not need scrolling to reach the current one at 1280×800.
+4. All green: a clear "Ready" state with one primary action (start a session
+   / go to Intercept). The app opens Setup on first start and whenever a step
+   blocks the start; otherwise it opens Intercept.
+5. Diagnostics keep their content (code, why, fix) but appear inside the
+   step, not as stacked cards below a list.
+6. Uses the HUM-286 layout grid; reuses HUM-282's folder button and HUM-275's
+   settings opener.
+7. ARB en/de, widget tests per step state, goldens of first-run, partial and
+   ready states in both themes.
+
+### Acceptance criteria
+1. On a machine where everything is set, Setup shows "Ready" with four green
+   one-liners and no cards.
+2. With the owner's 2026-10-23 state (no folder, key rejected) the first
+   blocking step is open with its action; nothing below needs scrolling to
+   find it.
+3. The owner picked the design from rendered variants.
+
+## HUM-288 · Setup's model probe sends the stored key (before HUM-060)
+
+### Context
+On v0.0.6 the owner's Settings check reported "2 models offered. The access
+key was sent", while Setup's "Contact it" on the same endpoint showed LLM_002
+"none was sent". Setup called `probeLlm` without `useStoredKey`; Settings
+passed it.
+
+### Specification
+Setup's probe passes `useStoredKey: true`. The daemon sends the stored key
+only when `llm.api_key_ref` is set and the probed endpoint has the origin of
+`llm.endpoint` (`server.rs` `probe_key`), so an address typed but not saved
+gets no key. Test `the setup probe sends the stored key`; mutation: dropping
+the flag turns it red.
+
+## HUM-289 · Several saved model servers, switchable in the app (before HUM-060)
+
+### Context
+The owner (2026-10-23) wants to switch quickly in the GUI between several
+saved model servers: endpoint, access key and model as one entry, each key in
+the system keyring.
+
+### Specification
+1. Config: named entries `[llm.servers.<name>]` with `endpoint`, `model`,
+   `api_key_ref` (`secret-service:humanitl/<name>`); `llm.active = "<name>"`.
+   The flat `llm.endpoint`/`llm.model`/`llm.api_key_ref` keys stay as the
+   active entry's view for compatibility (migration writes one entry
+   `default`).
+2. RPCs: list, add, rename, remove, activate; keys per entry through the
+   existing `LlmKey` RPC with the entry name; keys never leave the daemon.
+3. App: a switcher in the Settings model section and in the status bar's LLM
+   item; adding an entry probes it with its own key. Switching takes effect
+   for the next session (HUM-277); a running session keeps its server.
+4. CLI: `humanitl llm server ls|add|use|rm`.
+5. Bundled passthrough rule follows the active entry's origin; the security
+   statement and THREAT-MODEL note that only the active origin gets the key.
