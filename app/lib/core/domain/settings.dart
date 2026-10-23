@@ -54,6 +54,19 @@ abstract final class FormKeys {
     llmModels,
     tlsTrustSystemStore,
   ];
+
+  /// The reference to the access key, as the daemon names it in the
+  /// `ChangeSetting` fix of `LLM_002` (HUM-275).
+  ///
+  /// Not in [all]: the form never writes it through `SetConfig`. Its field in
+  /// the form is the access key, which goes through `LlmKey`.
+  static const String llmApiKeyRef = 'llm.api_key_ref';
+
+  /// Every key the settings sheet shows a field for, so a `ChangeSetting` on
+  /// one of them can open the sheet at that field (HUM-275). A key outside
+  /// this set keeps the badge that names it. [sandboxWorkDir] is in the set,
+  /// but its fix stays with the folder chooser of the screen (HUM-262).
+  static const Set<String> shownInSheet = <String>{...all, llmApiKeyRef};
 }
 
 /// The effective configuration, mirror of `ConfigSnapshot` (HUM-069).

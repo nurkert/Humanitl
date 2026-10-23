@@ -196,11 +196,22 @@ pub fn docs_url(diagnostic: &Diagnostic) -> Option<String> {
     lookup(diagnostic.code).map(|info| format!("{DOCS_BASE}{}", info.docs_anchor))
 }
 
+/// Die Einstellung, die auf den Zugangsschlüssel des Endpunkts verweist.
+const API_KEY_REF_SETTING: &str = "llm.api_key_ref";
+
 /// Der Behebungsvorschlag als eine Zeile, die man abtippen oder kopieren kann.
 #[must_use]
 pub fn fix_line(fix: &FixAction) -> String {
     match fix {
         FixAction::SetEnv { key, value } => format!("export {key}={}", shell_word(value)),
+        // Den Verweis auf den Zugangsschlüssel setzt kein `config set`: Ein
+        // leerer Wert dort löschte ihn nur, und den Schlüssel selbst nimmt
+        // allein `humanitl llm key set` entgegen. `LLM_002` trägt diesen
+        // Vorschlag seit HUM-275 als Einstellung, damit die Oberfläche das
+        // Feld öffnen kann; die Kommandozeile zeigt denselben Befehl wie zuvor.
+        FixAction::ChangeSetting { key, .. } if key == API_KEY_REF_SETTING => {
+            "humanitl llm key set".to_owned()
+        }
         FixAction::ChangeSetting { key, value } => {
             format!("humanitl config set {key} {}", shell_word(value))
         }
@@ -526,6 +537,22 @@ mod tests {
         assert_eq!(super::shell_word("a=b"), "a=b");
         assert_eq!(super::shell_word(""), "''");
         assert_eq!(super::shell_word("it's"), r"'it'\''s'");
+    }
+
+    /// HUM-275: `LLM_002` schlägt die Einstellung `llm.api_key_ref` vor, und
+    /// die Kommandozeile druckt dafür denselben Befehl wie vorher, nicht ein
+    /// `config set`, das den Verweis leerte.
+    #[test]
+    fn the_key_setting_prints_the_key_command() {
+        let fix = FixAction::ChangeSetting {
+            key: "llm.api_key_ref".to_owned(),
+            value: String::new(),
+        };
+        assert_eq!(super::fix_line(&fix), "humanitl llm key set");
+        assert_eq!(
+            super::fix_json(&fix)["command"],
+            serde_json::Value::String("humanitl llm key set".to_owned())
+        );
     }
 
     /// Nur ein `=` am Anfang wird gequotet, eines in der Mitte bleibt nackt.

@@ -1,6 +1,6 @@
 /// The 40 px header: wordmark, section title, intercept pill, hold count,
-/// isolation ring, the palette button and the window buttons. It is the
-/// title bar of the window as well (HUM-255).
+/// isolation ring, the palette button, the settings gear and the window
+/// buttons. It is the title bar of the window as well (HUM-255).
 library;
 
 import 'dart:math' as math;
@@ -14,6 +14,7 @@ import '../../../core/ipc/connection.dart';
 import '../../../core/shortcuts/intents.dart';
 import '../../../core/ui/app_mark.dart';
 import '../../../core/ui/hover_label.dart';
+import '../../../core/ui/shell_glyph.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../../intercept/providers/flows.dart';
@@ -30,13 +31,21 @@ import 'window_frame.dart';
 /// every decision.
 class HeaderBar extends ConsumerWidget {
   /// Creates the header for [section].
-  const HeaderBar({required this.section, required this.onPalette, super.key});
+  const HeaderBar({
+    required this.section,
+    required this.onPalette,
+    required this.onSettings,
+    super.key,
+  });
 
   /// The shown section; its title sits next to the wordmark.
   final Section section;
 
   /// Opens the command palette.
   final VoidCallback onPalette;
+
+  /// Opens the settings sheet, the same as `Ctrl+,` (HUM-275).
+  final VoidCallback onSettings;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -113,11 +122,53 @@ class HeaderBar extends ConsumerWidget {
                   semanticsLabel: l10n.shellPaletteTitle,
                   child: Text(l10n.shellPaletteHint),
                 ),
+                SizedBox(width: tokens.spacing.x2),
+                SettingsButton(onPressed: onSettings),
                 SizedBox(width: tokens.spacing.x3),
                 const WindowButtons(),
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The gear that opens the settings sheet (HUM-275).
+///
+/// It stands in the header and not in the rail: the header is there in every
+/// section and keeps its width when the rail is collapsed (HUM-254), so the
+/// settings are one click away from anywhere without knowing `Ctrl+,`. The
+/// tooltip names the shortcut, so the click also teaches it.
+class SettingsButton extends StatelessWidget {
+  /// Creates the button; [onPressed] opens the sheet.
+  const SettingsButton({required this.onPressed, super.key});
+
+  /// Opens the settings sheet.
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final HTokens tokens = HTheme.of(context);
+    final String label = context.l10n.shellSettingsButton;
+    // Ein `HButton` in der stillen Variante wie der Ring daneben: Fokus,
+    // Enter, Leertaste und Druckzustand wie bei jedem Control
+    // (`docs/UX.md` 5.1).
+    // Below, not to the right: the gear sits beside the window buttons, and a
+    // label to its right would run past the window edge.
+    return HoverLabel(
+      label: label,
+      side: HoverLabelSide.below,
+      child: HButton(
+        key: const Key('header-settings-button'),
+        variant: HButtonVariant.ghost,
+        semanticsLabel: label,
+        onPressed: onPressed,
+        child: ShellGlyphIcon(
+          ShellGlyph.settings,
+          size: 16,
+          color: tokens.colors.fg1,
         ),
       ),
     );
