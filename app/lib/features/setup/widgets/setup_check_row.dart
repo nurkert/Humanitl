@@ -35,8 +35,20 @@ class SetupCheckRow extends StatelessWidget {
     this.detail,
     this.showDiagnostic = true,
     this.onChooseFolder,
+    this.chooseFolderLocked,
+    this.notice,
     super.key,
   });
+
+  /// Why the folder button of the card is off ([FixControl.chooseFolderLocked],
+  /// HUM-282). Null on every row but a locked project row.
+  final String? chooseFolderLocked;
+
+  /// A finding of this screen's own controls, drawn as a card above the
+  /// row's finding: the folder dialog that did not open (`UI_003`, HUM-282).
+  /// It does not change the state of the row; the row still says what was
+  /// measured.
+  final Diagnostic? notice;
 
   /// Opens the folder chooser, for a finding whose fix is another folder
   /// ([FixControl.onChooseFolder], HUM-262). Null on every row but the
@@ -63,9 +75,6 @@ class SetupCheckRow extends StatelessWidget {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final Diagnostic? diagnostic = check.diagnostic;
-    final (String, String) text = diagnostic == null
-        ? ('', '')
-        : setupDiagnosticText(l10n, diagnostic);
     return Padding(
       padding: EdgeInsets.symmetric(vertical: tokens.spacing.x3),
       child: Column(
@@ -120,40 +129,58 @@ class SetupCheckRow extends StatelessWidget {
               ],
             ],
           ),
+          if (notice case final Diagnostic notice) ...<Widget>[
+            SizedBox(height: tokens.spacing.x2),
+            _card(tokens, l10n, notice, copyKey: 'setup-fix-copy-notice'),
+          ],
           if (showDiagnostic && diagnostic != null) ...<Widget>[
             SizedBox(height: tokens.spacing.x2),
-            Padding(
-              padding: EdgeInsets.only(
-                left: SetupMark.size + tokens.spacing.x3,
-              ),
-              child: HDiagnosticCard(
-                code: diagnostic.code,
-                severityLabel: setupSeverityLabel(l10n, diagnostic.severity),
-                color: setupSeverityColor(tokens, diagnostic.severity),
-                // Der allgemeine Satz ist der Titel, der gemessene der Grund,
-                // und die technische Zeile steht als Detail darunter
-                // (`docs/UX.md` 4.4).
-                //
-                // Die Detailzeile trägt den rohen Satz des Daemons **unter**
-                // einem übersetzten. Gibt es zu diesem Code keinen übersetzten
-                // -- und den gibt es nur für die vier, die diese Anwendung
-                // selbst baut --, dann ist der übersetzte genau der rohe, und
-                // eine zweite Kopie darunter sagt dieselbe Sache zweimal.
-                // Dann entfällt sie.
-                title: text.$1,
-                why: text.$2,
-                detail: text.$2 == diagnostic.why ? null : diagnostic.why,
-                fix: FixControl(
-                  fix: diagnostic.fix,
-                  copyKey: Key('setup-fix-copy-${check.kind.name}'),
-                  onChooseFolder: onChooseFolder,
-                ),
-                docsUrl: diagnostic.docsUrl,
-                width: setupCardWidth,
-              ),
+            _card(
+              tokens,
+              l10n,
+              diagnostic,
+              copyKey: 'setup-fix-copy-${check.kind.name}',
             ),
           ],
         ],
+      ),
+    );
+  }
+
+  /// The card of one finding, indented under the title like the evidence.
+  Widget _card(
+    HTokens tokens,
+    AppLocalizations l10n,
+    Diagnostic diagnostic, {
+    required String copyKey,
+  }) {
+    final (String, String) text = setupDiagnosticText(l10n, diagnostic);
+    return Padding(
+      padding: EdgeInsets.only(left: SetupMark.size + tokens.spacing.x3),
+      child: HDiagnosticCard(
+        code: diagnostic.code,
+        severityLabel: setupSeverityLabel(l10n, diagnostic.severity),
+        color: setupSeverityColor(tokens, diagnostic.severity),
+        // Der allgemeine Satz ist der Titel, der gemessene der Grund, und die
+        // technische Zeile steht als Detail darunter (`docs/UX.md` 4.4).
+        //
+        // Die Detailzeile trägt den rohen Satz des Daemons **unter** einem
+        // übersetzten. Gibt es zu diesem Code keinen übersetzten -- und den
+        // gibt es nur für die Codes, die diese Anwendung selbst baut --, dann
+        // ist der übersetzte genau der rohe, und eine zweite Kopie darunter
+        // sagt dieselbe Sache zweimal. Dann entfällt sie.
+        title: text.$1,
+        why: text.$2,
+        detail: text.$2 == diagnostic.why ? null : diagnostic.why,
+        fix: FixControl(
+          fix: diagnostic.fix,
+          copyKey: Key(copyKey),
+          onChooseFolder: onChooseFolder,
+          chooseFolderLocked: chooseFolderLocked,
+          diagnosticCode: diagnostic.code,
+        ),
+        docsUrl: diagnostic.docsUrl,
+        width: setupCardWidth,
       ),
     );
   }

@@ -279,6 +279,18 @@ class _HGlyphPainter extends CustomPainter {
           ),
           stroke,
         );
+      case HGlyph.folder:
+        canvas.drawPath(
+          _polyline(const <Offset>[
+            Offset(3, 5),
+            Offset(9, 5),
+            Offset(11, 8),
+            Offset(21, 8),
+            Offset(21, 19),
+            Offset(3, 19),
+          ], close: true),
+          stroke,
+        );
     }
     canvas.restore();
   }

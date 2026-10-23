@@ -1278,5 +1278,10 @@
   "diagRECORDER005Why": "Die Aufzeichnung schreibt wieder; was während der Störung geschah, fehlt in der History.",
   "shellStatusDaemonMismatch": "Nicht die Version dieser App ({app}) · systemctl --user restart humanitld",
   "shellSettingsButton": "Einstellungen (Strg+,)",
-  "setupFixOpenSettings": "Einstellungen öffnen"
+  "setupFixOpenSettings": "Einstellungen öffnen",
+  "workDirChooseButton": "Ordner wählen…",
+  "workDirChangeButton": "Ändern…",
+  "setupFixChooseFirstFolder": "Ordner wählen",
+  "diagUI003Title": "Der Ordnerdialog ging nicht auf",
+  "diagUI003Why": "Die Arbeitsumgebung konnte keinen Ordnerdialog zeigen. Im Projektordner ein Terminal öffnen und dort humanitl run starten."
 }
