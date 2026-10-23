@@ -20,7 +20,11 @@
 //! Zwei Lesarten liefen auseinander; genau so entstand der `curl` auf
 //! `/api/api/tags`, den es nicht gibt.
 
+use humanitl_core::diagnostics::codes::CONFIG_003;
+use humanitl_core::{Diagnostic, FixAction, Severity};
 use url::Url;
+
+use crate::pasted::strip_paste_debris;
 
 /// Das Stück Pfad, unter dem eine OpenAI-kompatible API ihre Oberfläche
 /// anbietet.
@@ -144,7 +148,13 @@ pub fn probe_paths(endpoint: &Url) -> Vec<String> {
 /// selbst weist ihn dann ab.
 #[must_use]
 pub fn probe_plan(endpoint: &str) -> String {
-    let Ok(url) = Url::parse(endpoint) else {
+    // Ein Text, den [`check_text`] ablehnt, wird nie gefragt; die
+    // Ankündigung nennt dann auch keinen Pfad wie `/api/v1/%22/v1/models`
+    // (HUM-283).
+    let Some(url) = check_text(endpoint)
+        .ok()
+        .and_then(|()| Url::parse(endpoint).ok())
+    else {
         return format!(
             "GET requests for the model list of the endpoint, and {OLLAMA_TAGS_PATH} on a \
              plain Ollama server"
@@ -157,16 +167,217 @@ pub fn probe_plan(endpoint: &str) -> String {
     }
 }
 
+/// Der Schlüssel der Einstellung, um die es hier geht.
+pub const SETTING: &str = "llm.endpoint";
+
+/// Ob ein Zeichen in einer eingetragenen Adresse nichts verloren hat.
+///
+/// Anführungszeichen, spitze Klammern, ein Backslash, Leerraum und
+/// Steuerzeichen. Der Parser der Adresse nähme sie hin und machte daraus
+/// etwas anderes: `"` und `<` würden zu `%22` und `%3C` im Pfad, ein
+/// Backslash zu `/`, Leerraum am Rand fiele still weg. Die Probe fragte dann
+/// `/api/v1/%22/v1/models` (HUM-283), und der Agent bekäme dieselbe falsche
+/// Basis.
+#[must_use]
+pub fn is_refused_char(c: char) -> bool {
+    matches!(c, '"' | '\'' | '<' | '>' | '\\') || c.is_whitespace() || c.is_control()
+}
+
+/// Prüft den Text einer Adresse, bevor ein Parser ihn sieht (HUM-283).
+///
+/// Dieselbe Prüfung gilt für `config.toml`, `humanitl config set`, `SetConfig`
+/// und die Probe (`ProbeLlm`), damit keiner dieser Wege eine Adresse annimmt,
+/// die ein anderer ablehnt.
+///
+/// # Errors
+///
+/// `CONFIG_003`, wenn der Text ein Zeichen aus [`is_refused_char`] trägt.
+/// Das `why` nennt das erste solche Zeichen und seine Stelle, nicht die ganze
+/// Adresse: In Benutzer, Passwort oder Query kann ein Geheimnis stehen. Der
+/// Vorschlag ist die bereinigte Adresse ([`cleaned`]).
+pub fn check_text(text: &str) -> Result<(), Diagnostic> {
+    let Some((index, refused)) = text.chars().enumerate().find(|(_, c)| is_refused_char(*c)) else {
+        return Ok(());
+    };
+    let position = index + 1;
+    let length = text.chars().count();
+    // Der Vorschlag trägt kein Geheimnis (Review zu HUM-283): Benutzer,
+    // Passwort, Query und Fragment fallen weg ([`without_secrets`]). Lässt
+    // sich die bereinigte Adresse nicht lesen, bleibt nur der Befehl ohne
+    // Wert; ein Text, den kein Parser zerlegt hat, könnte noch eins tragen.
+    let clean = cleaned(text);
+    let fix = match Url::parse(&clean) {
+        Ok(url) => FixAction::ChangeSetting {
+            key: SETTING.to_owned(),
+            value: if carries_secrets(&url) {
+                without_secrets(&url).to_string()
+            } else {
+                clean
+            },
+        },
+        Err(_unreadable) => FixAction::CopyCommand(format!("humanitl config set {SETTING} URL")),
+    };
+    Err(Diagnostic::builder(CONFIG_003, Severity::Error)
+        .why(format!(
+            "{REFUSAL_MARK}{} at position {position} of {length}; a URL carries no quotes, \
+             angle brackets, backslashes or white space. Such a character is usually left over \
+             from copying the address out of a configuration file",
+            char_name(refused)
+        ))
+        .fix(fix)
+        .build())
+}
+
+/// Ob die Adresse einen Teil trägt, in dem ein Geheimnis stehen kann.
+fn carries_secrets(url: &Url) -> bool {
+    !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+}
+
+/// Der Satzanfang von [`check_text`], an dem [`set_aside`] den Befund erkennt.
+const REFUSAL_MARK: &str = "llm.endpoint contains ";
+
+/// Der Befund einer Ladung, die einen eingetragenen `llm.endpoint`
+/// beiseitegelegt hat (HUM-283, Review).
+///
+/// Eine Adresse, die eine ältere Fassung angenommen hat, bricht den Start
+/// nicht ab: Sie gilt als nicht gesetzt, und dieser Befund (`CONFIG_003`,
+/// Warnung, mit der sauberen Adresse als Vorschlag) sagt warum. Doctor und
+/// Setup zeigen ihn an der Zeile `llm`.
+#[must_use]
+pub fn set_aside(diagnostics: &[Diagnostic]) -> Option<&Diagnostic> {
+    diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == CONFIG_003 && diagnostic.why.contains(REFUSAL_MARK))
+}
+
+/// Die Adresse ohne die Reste einer Zwischenablage und ohne jedes Zeichen aus
+/// [`is_refused_char`].
+///
+/// Erst fällt weg, was außen steht ([`strip_paste_debris`]), dann jedes
+/// verbliebene abgelehnte Zeichen. Das Ergebnis ist ein Vorschlag, den der
+/// Mensch sieht, bevor er ihn übernimmt.
+#[must_use]
+pub fn cleaned(text: &str) -> String {
+    strip_paste_debris(text)
+        .chars()
+        .filter(|c| !is_refused_char(*c))
+        .collect()
+}
+
+/// Ein Zeichen so benannt, dass man es in einer Zeile wiedererkennt.
+fn char_name(c: char) -> String {
+    match c {
+        '"' => "a double quote (\")".to_owned(),
+        '\'' => "a single quote (')".to_owned(),
+        '<' | '>' => format!("an angle bracket ({c})"),
+        '\\' => "a backslash (\\)".to_owned(),
+        ' ' => "a space".to_owned(),
+        '\t' => "a tab".to_owned(),
+        '\n' | '\r' => "a line break".to_owned(),
+        other => format!("the character U+{:04X}", u32::from(other)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
 
+    use humanitl_core::FixAction;
+    use humanitl_core::diagnostics::codes::CONFIG_003;
     use url::Url;
 
     use super::{
-        display, openai_base_path, openai_base_url, openai_path, path_prefix, probe_paths,
-        probe_plan, serves_native_ollama,
+        check_text, cleaned, display, openai_base_path, openai_base_url, openai_path, path_prefix,
+        probe_paths, probe_plan, serves_native_ollama,
     };
+
+    /// Die Adresse des Besitzers vom 2026-10-23 mit dem Anführungszeichen am
+    /// Ende: abgelehnt mit Zeichen und Stelle, der Vorschlag ist die saubere
+    /// Adresse, und keine Probe fragt je `%22` (HUM-283).
+    #[test]
+    fn a_stray_quote_is_refused_with_its_position_and_the_clean_url() {
+        let pasted = "https://llm.hzo.example.net/api/v1/\"";
+        let refused = check_text(pasted).unwrap_err();
+        assert_eq!(refused.code, CONFIG_003);
+        assert!(
+            refused.why.contains("a double quote (\")"),
+            "{}",
+            refused.why
+        );
+        assert!(refused.why.contains("position 36 of 36"), "{}", refused.why);
+        assert_eq!(
+            refused.fix,
+            Some(FixAction::ChangeSetting {
+                key: "llm.endpoint".to_owned(),
+                value: "https://llm.hzo.example.net/api/v1/".to_owned(),
+            })
+        );
+        assert!(check_text(&cleaned(pasted)).is_ok());
+    }
+
+    /// Jedes der Zeichen wird abgelehnt, auch im Inneren, und eine saubere
+    /// Adresse geht durch.
+    #[test]
+    fn quotes_brackets_backslashes_and_white_space_are_refused_anywhere() {
+        for (text, named) in [
+            ("'http://h:1/v1'", "a single quote"),
+            ("http://h:1/<v1>", "an angle bracket (<)"),
+            ("http://h:1\\v1", "a backslash"),
+            (" http://h:1/v1", "a space at position 1"),
+            ("http://h:1/v1\n", "a line break"),
+            ("http://h:1/a b", "a space at position 13"),
+            ("http://h:1/\tv1", "a tab"),
+        ] {
+            let refused = check_text(text).unwrap_err();
+            assert_eq!(refused.code, CONFIG_003, "{text:?}");
+            assert!(refused.why.contains(named), "{text:?}: {}", refused.why);
+        }
+        for clean in [
+            "http://192.168.1.50:11434",
+            "https://llm.example.net/api/v1/",
+            "https://user:pw@llm.example.net/v1?x=1#f",
+        ] {
+            assert!(check_text(clean).is_ok(), "{clean}");
+        }
+    }
+
+    /// Das `why` wiederholt die Adresse nicht: In Benutzer, Passwort oder
+    /// Query kann ein Geheimnis stehen.
+    #[test]
+    fn the_refusal_does_not_repeat_the_address() {
+        let refused = check_text("https://user:geheim@h/v1?token=abc\"").unwrap_err();
+        assert!(!refused.why.contains("geheim"), "{}", refused.why);
+        assert!(!refused.why.contains("token=abc"), "{}", refused.why);
+    }
+
+    /// Auch der Vorschlag trägt kein Geheimnis: Benutzer, Passwort, Query und
+    /// Fragment fallen weg, und was kein Parser liest, bekommt nur den Befehl
+    /// ohne Wert (HUM-283, Review).
+    #[test]
+    fn the_fix_carries_no_secret() {
+        let refused = check_text("https://user:geheim@h/v1?token=x\"").unwrap_err();
+        let fix = format!("{:?}", refused.fix);
+        for secret in ["geheim", "token=x"] {
+            assert!(!refused.why.contains(secret), "{}", refused.why);
+            assert!(!fix.contains(secret), "{fix}");
+        }
+        assert_eq!(
+            refused.fix,
+            Some(FixAction::ChangeSetting {
+                key: "llm.endpoint".to_owned(),
+                value: "https://h/v1".to_owned(),
+            })
+        );
+        assert_eq!(
+            check_text("\"not a url\"").unwrap_err().fix,
+            Some(FixAction::CopyCommand(
+                "humanitl config set llm.endpoint URL".to_owned()
+            ))
+        );
+    }
 
     /// Benutzer, Passwort, Query und Fragment erscheinen nie in der Anzeige.
     #[test]
@@ -199,6 +410,10 @@ mod tests {
             ["/api/v1/models"]
         );
         assert!(probe_plan("not a url").contains("model list"));
+        // HUM-283: eine Adresse, die abgelehnt wird, kündigt keinen Pfad an.
+        let refused = probe_plan("https://llm.example.net/api/v1/\"");
+        assert!(!refused.contains("%22"), "{refused}");
+        assert!(refused.contains("model list"), "{refused}");
     }
 
     fn url(text: &str) -> Url {

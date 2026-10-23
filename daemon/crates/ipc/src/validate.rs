@@ -318,7 +318,15 @@ pub fn order_by(order_by: &str) -> Result<(&'static str, bool), Diagnostic> {
 /// Fake setzte hier den Endpunkt der Sitzung ein und antwortete auf jeden
 /// Unsinn mit einer erfundenen Modellliste; wer die Oberfläche dagegen baut,
 /// sieht den Fehlerfall nie.
+///
+/// `CONFIG_003` vor jedem Parser, wenn der Text Anführungszeichen, spitze
+/// Klammern, einen Backslash oder Leerraum trägt
+/// ([`humanitl_config::llm_endpoint::check_text`], HUM-283): Der Parser machte
+/// aus `…/v1/"` still `…/v1/%22`, und die Probe fragte einen Pfad, den
+/// niemand eingetragen hat. Derselbe Befund wie beim Speichern, mit der
+/// sauberen Adresse als Vorschlag.
 pub fn llm_endpoint(endpoint: &str) -> Result<url::Url, Diagnostic> {
+    humanitl_config::llm_endpoint::check_text(endpoint)?;
     url::Url::parse(endpoint).map_err(|err| {
         Diagnostic::builder(codes::LLM_007, Severity::Error)
             .why(format!(

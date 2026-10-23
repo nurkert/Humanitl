@@ -553,7 +553,22 @@ fn table() -> Vec<Case> {
             call: both!(
                 probe_llm,
                 v1::ProbeLlmRequest {
-                    endpoint: "not a url".to_owned(),
+                    endpoint: "not-a-url".to_owned(),
+                    timeout_ms: 0,
+                    ..v1::ProbeLlmRequest::default()
+                }
+            ),
+        },
+        // HUM-283: das Anführungszeichen aus der Zwischenablage wird vor
+        // jedem Parser abgelehnt, auf beiden Seiten mit demselben Befund wie
+        // beim Speichern, und nie als `%22` gefragt.
+        Case {
+            what: "probe_llm with a stray quote in the endpoint",
+            expected: refused(Code::InvalidArgument, codes::CONFIG_003),
+            call: both!(
+                probe_llm,
+                v1::ProbeLlmRequest {
+                    endpoint: "https://llm.example.net/api/v1/\"".to_owned(),
                     timeout_ms: 0,
                     ..v1::ProbeLlmRequest::default()
                 }

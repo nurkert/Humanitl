@@ -367,4 +367,45 @@ void main() {
     },
     variant: TargetPlatformVariant.only(TargetPlatform.linux),
   );
+  // HUM-283: a key pasted with quotes and a line break arrives without them,
+  // and the field never shows the key.
+  testWidgets('a key pasted with quotes is stored without them', (
+    WidgetTester tester,
+  ) async {
+    final FakeDaemonClient client = configured();
+    await openSettings(tester, client);
+    await tester.enterText(
+      find.byKey(const Key('settings-key-input')),
+      ' "$secret"\n',
+    );
+    await tester.pump();
+    expect(
+      keyFieldText(tester) == secret,
+      isTrue,
+      reason: 'the pasted key still carries quotes or blanks',
+    );
+    await tester.tap(find.byKey(const Key('settings-key-store')));
+    await tester.pumpAndSettle();
+    expect(client.setKeyLengths, <int>[secret.length]);
+    expect(anyTextContains(tester, secret), isFalse);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  // HUM-283: the endpoint pasted with its trailing quote is written clean.
+  testWidgets('a pasted endpoint is written without its stray quote', (
+    WidgetTester tester,
+  ) async {
+    final FakeDaemonClient client = configured();
+    await openSettings(tester, client);
+    await tester.enterText(
+      find.byKey(const Key('settings-endpoint')),
+      'http://192.168.1.30:11434/"',
+    );
+    await tester.pump();
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect(client.configWrites.last, (
+      'llm.endpoint',
+      'http://192.168.1.30:11434/',
+    ));
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 }

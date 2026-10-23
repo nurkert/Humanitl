@@ -838,14 +838,35 @@ pub(super) fn llm(facts: &LlmFacts) -> CheckOutcome {
                 },
             ),
         ),
+        LlmFacts::Refused {
+            endpoint,
+            status,
+            key_stored,
+            diagnostic,
+        } => refused_llm(endpoint, *status, *key_stored, diagnostic),
+        // Der Befund der Ladung selbst, mit seinem Vorschlag der sauberen
+        // Adresse: Er ist die eine Stelle, an der die Ursache steht.
+        LlmFacts::SetAside { diagnostic } => CheckOutcome::warn(
+            CheckId::Llm,
+            "llm.endpoint was set aside: it carries a character no URL carries",
+            (**diagnostic).clone(),
+        ),
         LlmFacts::Answered {
             endpoint,
             flavor,
             models,
             latency_ms,
             diagnostics,
+            answer,
         } => {
-            let evidence = format!("{flavor} at {endpoint}, {models} models, {latency_ms} ms");
+            // Ohne Modellliste sagt die Zeile, was zurückkam, statt „0
+            // models" neben `LLM_003` zu behaupten (HUM-283).
+            let evidence = match answer {
+                Some(answer) if *models == 0 => format!(
+                    "{flavor} at {endpoint}, no model list, last answer {answer}, {latency_ms} ms"
+                ),
+                _ => format!("{flavor} at {endpoint}, {models} models, {latency_ms} ms"),
+            };
             match diagnostics.first() {
                 None => CheckOutcome::ok(CheckId::Llm, evidence),
                 Some(first) => CheckOutcome::warn(
@@ -863,6 +884,54 @@ pub(super) fn llm(facts: &LlmFacts) -> CheckOutcome {
             }
         }
     }
+}
+
+/// Die Zeile `llm`, wenn der Endpunkt eine Anmeldung verlangt (HUM-283).
+///
+/// Sie sagt, was geschah: Der Server hat geantwortet, mit `401` oder `403`,
+/// und die Probe des Doctors schickt nie einen Schlüssel. Ob einer
+/// hinterlegt ist, steht dabei, der Schlüssel selbst nie. Der Vorschlag ist
+/// `humanitl llm key set` (über den Fix von `LLM_002`) nur, wenn keiner
+/// hinterlegt ist; sonst die Probe mit dem hinterlegten Schlüssel.
+fn refused_llm(
+    endpoint: &str,
+    status: Option<u16>,
+    key_stored: Option<bool>,
+    diagnostic: &Diagnostic,
+) -> CheckOutcome {
+    let answered = status.map_or_else(
+        || "answered with a request to sign in".to_owned(),
+        |status| format!("answered {status}"),
+    );
+    let stored = match key_stored {
+        Some(true) => "an access key is stored",
+        Some(false) => "no access key is stored",
+        None => "whether an access key is stored could not be read",
+    };
+    let fix = match key_stored {
+        Some(false) => diagnostic
+            .fix
+            .clone()
+            .unwrap_or_else(|| FixAction::CopyCommand("humanitl llm key set".to_owned())),
+        Some(true) | None => FixAction::CopyCommand(format!(
+            "humanitl llm test {} --with-key",
+            humanitl_core::shell::shell_word(endpoint)
+        )),
+    };
+    CheckOutcome::warn(
+        CheckId::Llm,
+        format!("{endpoint} {answered}; the doctor sends no access key, and {stored}"),
+        finding(
+            DOCTOR_008,
+            Severity::Warning,
+            format!(
+                "{endpoint} {answered} ({}): the server wants an access key, and the doctor's \
+                 probe never sends one; {stored}",
+                diagnostic.code
+            ),
+            fix,
+        ),
+    )
 }
 
 /// Die Codes einer Liste von Befunden, durch Komma getrennt.
@@ -1872,6 +1941,7 @@ mod tests {
             models: 3,
             latency_ms: 12,
             diagnostics: Vec::new(),
+            answer: None,
         });
         assert_eq!(green.status(), CheckStatus::Ok);
         assert!(green.evidence().contains("3 models"));
@@ -1897,9 +1967,124 @@ mod tests {
                     .why("not private")
                     .build(),
             ],
+            answer: None,
         });
         assert_eq!(noisy.status(), CheckStatus::Warn);
         assert!(noisy.evidence().contains("LLM_001"), "{}", noisy.evidence());
+    }
+
+    /// Ohne Modellliste nennt die Zeile, was zurückkam, und nie „0 models"
+    /// (HUM-283, Review).
+    #[test]
+    fn no_model_list_names_the_last_answer_not_zero_models() {
+        let line = llm(&LlmFacts::Answered {
+            endpoint: "https://llm.example.net/other/".to_owned(),
+            flavor: "unknown".to_owned(),
+            models: 0,
+            latency_ms: 7,
+            diagnostics: vec![
+                Diagnostic::builder(
+                    humanitl_core::diagnostics::codes::LLM_003,
+                    Severity::Warning,
+                )
+                .why("connected, but no model list")
+                .build(),
+            ],
+            answer: Some("HTTP 404, text/html".to_owned()),
+        });
+        let evidence = line.evidence();
+        assert!(!evidence.contains("0 models"), "{evidence}");
+        assert!(
+            evidence.contains("no model list, last answer HTTP 404, text/html"),
+            "{evidence}"
+        );
+    }
+
+    /// Ein `llm.endpoint`, den die Ladung beiseitegelegt hat, ist nicht
+    /// „nicht gesetzt": Die Zeile trägt den Befund der Ladung mit seinem
+    /// Vorschlag (HUM-283, Review).
+    #[test]
+    fn an_endpoint_set_aside_by_the_load_says_so() {
+        let warning = Diagnostic::builder(
+            humanitl_core::diagnostics::codes::CONFIG_003,
+            Severity::Warning,
+        )
+        .why("llm.endpoint (from config.toml): llm.endpoint contains a double quote (\")")
+        .fix(FixAction::ChangeSetting {
+            key: "llm.endpoint".to_owned(),
+            value: "https://h/v1/".to_owned(),
+        })
+        .build();
+        let facts = LlmFacts::from_config(None, std::slice::from_ref(&warning), "cmd");
+        let line = llm(&facts);
+        assert_eq!(line.status(), CheckStatus::Warn);
+        assert!(line.evidence().contains("set aside"), "{}", line.evidence());
+        assert_eq!(line.diagnostic(), Some(&warning));
+        assert_eq!(
+            LlmFacts::from_config(None, &[], "cmd"),
+            LlmFacts::NoEndpoint,
+            "without the finding it stays not set"
+        );
+    }
+
+    /// Ein `401` auf die Probe ohne Schlüssel ist kein „hat nicht
+    /// geantwortet": Die Zeile nennt den Status, dass der Doctor keinen
+    /// Schlüssel schickt und ob einer hinterlegt ist. `humanitl llm key set`
+    /// schlägt sie nur vor, wenn keiner da ist (HUM-283).
+    #[test]
+    fn a_401_names_the_status_the_missing_key_and_whether_one_is_stored() {
+        let llm_002 = || {
+            Box::new(
+                Diagnostic::builder(humanitl_core::diagnostics::codes::LLM_002, Severity::Error)
+                    .why("the LLM server answered 401 at https://llm.example.net/api/v1/models")
+                    .fix(FixAction::ChangeSetting {
+                        key: "llm.api_key_ref".to_owned(),
+                        value: String::new(),
+                    })
+                    .build(),
+            )
+        };
+        let endpoint = "https://llm.example.net/api/v1/".to_owned();
+
+        let stored = llm(&LlmFacts::Refused {
+            endpoint: endpoint.clone(),
+            status: Some(401),
+            key_stored: Some(true),
+            diagnostic: llm_002(),
+        });
+        assert_eq!(stored.status(), CheckStatus::Warn);
+        let evidence = stored.evidence();
+        assert!(!evidence.contains("did not answer"), "{evidence}");
+        assert!(evidence.contains("answered 401"), "{evidence}");
+        assert!(evidence.contains("sends no access key"), "{evidence}");
+        assert!(evidence.contains("an access key is stored"), "{evidence}");
+        assert_eq!(
+            stored.diagnostic().expect("a finding").fix,
+            Some(FixAction::CopyCommand(
+                "humanitl llm test https://llm.example.net/api/v1/ --with-key".to_owned()
+            )),
+            "with a key stored, the next step is the probe with it, not a new key"
+        );
+
+        let missing = llm(&LlmFacts::Refused {
+            endpoint,
+            status: Some(401),
+            key_stored: Some(false),
+            diagnostic: llm_002(),
+        });
+        assert!(
+            missing.evidence().contains("no access key is stored"),
+            "{}",
+            missing.evidence()
+        );
+        assert_eq!(
+            missing.diagnostic().expect("a finding").fix,
+            Some(FixAction::ChangeSetting {
+                key: "llm.api_key_ref".to_owned(),
+                value: String::new(),
+            }),
+            "without a key, LLM_002's fix stands: humanitl llm key set"
+        );
     }
 
     #[test]

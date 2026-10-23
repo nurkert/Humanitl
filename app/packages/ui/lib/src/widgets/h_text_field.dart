@@ -53,6 +53,7 @@ class HTextField extends StatefulWidget {
     this.onSubmitted,
     this.focusNode,
     this.autofocus = false,
+    this.inputFormatters = const <TextInputFormatter>[],
     super.key,
   });
 
@@ -85,6 +86,11 @@ class HTextField extends StatefulWidget {
 
   /// Nimmt den Fokus, sobald das Feld zum ersten Mal gebaut wird.
   final bool autofocus;
+
+  /// Weitere Formatierer für Eingaben eines Menschen, etwa die Bereinigung
+  /// eines eingefügten Werts (HUM-283). Sie laufen vor dem Filter, der
+  /// [onChanged] speist, damit er das bereinigte Ergebnis sieht.
+  final List<TextInputFormatter> inputFormatters;
 
   @override
   State<HTextField> createState() => _HTextFieldState();
@@ -148,6 +154,7 @@ class _HTextFieldState extends State<HTextField> {
             // sieht, der am Ende im Feld steht.
             inputFormatters: <TextInputFormatter>[
               if (widget.digitsOnly) FilteringTextInputFormatter.digitsOnly,
+              ...widget.inputFormatters,
               _probe,
             ],
             onChanged: _forward,

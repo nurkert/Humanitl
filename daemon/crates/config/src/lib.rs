@@ -28,6 +28,7 @@
 //! - [`value`] ein Wert aus Text, gelesen und geprüft nach dem Schema
 //! - [`secret`] der Zugangsschlüssel des Modells: Verweis, Schlüsselbund, Datei
 //! - [`llm_endpoint`] die eine Lesart von `llm.endpoint`: Basis, Präfix, Pfade
+//! - [`pasted`] was eine Zwischenablage an einem eingefügten Wert hinterlässt
 //!
 //! ```
 //! use humanitl_config::{Env, Sources, load};
@@ -53,6 +54,7 @@ pub mod llm_endpoint;
 pub mod load;
 pub mod model;
 pub mod origin;
+pub mod pasted;
 pub mod paths;
 pub mod pending;
 pub mod private_dir;

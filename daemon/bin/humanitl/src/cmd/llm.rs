@@ -246,6 +246,7 @@ async fn test(ctx: &Context, url: &str, timeout_ms: u32, with_key: bool) -> Resu
             "latency_ms": response.latency_ms,
             "endpoint_is_private": response.endpoint_is_private,
             "key_sent": response.key_sent,
+            "answer": response.answer,
             "diagnostics": response
                 .diagnostics
                 .iter()
@@ -264,6 +265,11 @@ async fn test(ctx: &Context, url: &str, timeout_ms: u32, with_key: bool) -> Resu
         // Kein Modell ist eine Aussage und keine Lücke: Es hat sich nichts
         // gemeldet, was Humanitl kennt (`ProbeLlmResponse` im Vertrag).
         ctx.render.line("models: none");
+        // Was statt einer Modellliste zurückkam (HUM-283), etwa
+        // `HTTP 200, text/html`: Das sagt mehr als „keine Modelle".
+        if !response.answer.is_empty() {
+            ctx.render.line(&format!("answer: {}", response.answer));
+        }
     } else {
         ctx.render
             .line(&format!("models: {}", response.models.len()));

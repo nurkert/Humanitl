@@ -58,7 +58,7 @@ pub fn answer(
 
 /// Legt den Schlüssel ab und richtet den Verweis darauf.
 fn store(paths: &Paths, keys: &KeyStore, text: &str) -> Result<v1::LlmKeyStatus, Diagnostic> {
-    let key = humanitl_config::secret::ApiKey::new(text)?;
+    let key = humanitl_config::secret::ApiKey::from_pasted(text)?;
     let stored = keys.store(&key)?;
     write_ref(paths, Some(&stored.key_ref))?;
     let notes = stored
@@ -263,6 +263,39 @@ mod tests {
         let config = std::fs::read_to_string(paths.config_path()).unwrap();
         assert!(!config.contains("api_key_ref"), "{config}");
         assert!(!dir.path().join("keyring/llm").exists());
+    }
+
+    /// Ein Schlüssel, eingefügt samt Anführungszeichen und Leerraum, landet
+    /// ohne beides im Speicher und wirkt danach (HUM-283).
+    #[test]
+    fn a_key_pasted_with_quotes_is_stored_without_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let keys = KeyStore::for_paths(&paths).with_secret_tool(Some(fake_tool(dir.path())));
+        let answer = answer(&paths, &keys, set_op(&format!(" \"{SECRET}\"\n"))).unwrap();
+        assert!(answer.set);
+        let key_ref = KeyRef::parse(&answer.key_ref).unwrap();
+        let stored = keys.lookup(&key_ref).unwrap();
+        assert!(
+            stored.expose() == SECRET,
+            "the stored key still carries the quotes or blanks"
+        );
+    }
+
+    /// Leerraum im Inneren ist kein Rest der Zwischenablage: abgelehnt, nichts
+    /// geschrieben, und der Befund wiederholt den Schlüssel nicht (HUM-283).
+    #[test]
+    fn a_key_with_inner_white_space_is_refused_without_echoing_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let keys = KeyStore::for_paths(&paths).with_secret_tool(None);
+        let refused = answer(&paths, &keys, set_op("\"sk-live-key 0123456789\"")).unwrap_err();
+        assert_eq!(refused.code.as_str(), "CONFIG_020");
+        assert!(
+            !refused.why.contains("sk-live-key") && !refused.why.contains("0123456789"),
+            "the refusal repeats the key"
+        );
+        assert!(!paths.config_path().exists());
     }
 
     /// Ein Schlüssel mit Zeilenumbruch wird nicht abgelegt.
