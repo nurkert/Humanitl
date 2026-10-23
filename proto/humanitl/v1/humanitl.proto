@@ -899,6 +899,15 @@ message SandboxRequest {
     google.protobuf.Empty argv = 5;
     // Wie `status`, aber fuer ein Projektverzeichnis, das noch nicht gilt.
     Plan plan = 6;
+    // Beendet den Daemon, wenn keine Sitzung ihn haelt (HUM-284): Pruefen und
+    // Riegeln geschehen unter dem Schloss, unter dem ein Start seinen
+    // Anspruch nimmt, und ab dem Riegel bekommt kein Start mehr einen. Die
+    // Antwort ist genau ein `SandboxEvent.retire`; danach endet der Daemon
+    // mit dem gewoehnlichen Abschied, und die Socket-Aktivierung startet bei
+    // der naechsten Verbindung das Programm, das jetzt installiert ist. Ein
+    // Daemon vor Minor 19 kennt die Operation nicht und antwortet mit einer
+    // Momentaufnahme wie auf `status`.
+    google.protobuf.Empty retire_if_idle = 7;
   }
 
   // Start einer Sandbox-Session.
@@ -1058,6 +1067,16 @@ message SandboxEvent {
     // der die Sitzung begonnen hat; jeder andere Client liest den Stand aus
     // `Status.refusals`, wenn er die Momentaufnahme holt (HUM-202).
     Refusals refusals = 9;
+    // Die Antwort auf `SandboxRequest.retire_if_idle` (HUM-284).
+    Retire retire = 10;
+  }
+
+  // Ob der Daemon sich verabschiedet (HUM-284).
+  message Retire {
+    // Wahr: keine Sitzung hielt ihn, der Riegel steht, und er endet jetzt.
+    // Falsch: eine Sitzung haelt ihn (ein Start mit Anspruch oder eine
+    // gehaltene Sandbox), und er laeuft weiter.
+    bool retired = 1;
   }
 
   // Die verweigerten `socket(2)`-Aufrufe eines Laufs (HUM-138).

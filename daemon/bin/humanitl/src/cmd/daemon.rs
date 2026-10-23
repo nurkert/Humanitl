@@ -57,9 +57,11 @@ use crate::cli::{DaemonCmd, InstallArgs, LogsArgs};
 use crate::cmd::{Context, EXIT_OK, Failure, status_diagnostic, unit};
 use crate::render::{table, tick};
 
+mod agent_session;
 mod image;
 mod manager;
 mod packaged;
+mod retire;
 mod running;
 mod uninstall;
 
@@ -135,6 +137,7 @@ pub async fn run(ctx: &Context, cmd: &DaemonCmd) -> Result<u8, Failure> {
         }
         DaemonCmd::Logs(args) => logs(ctx, args),
         DaemonCmd::Uninstall(args) => uninstall(ctx, args).await,
+        DaemonCmd::RetireIfIdle => retire::retire_if_idle(ctx).await,
     }
 }
 
@@ -1613,6 +1616,7 @@ async fn status(ctx: &Context) -> Result<u8, Failure> {
 
     let socket = ctx.paths.daemon_socket().display().to_string();
     let unit_state = is_active(ctx).await;
+    let agent = agent_session::ask(&mut client).await;
     if ctx.render.is_json() {
         ctx.render.value(&json!({
             "socket": socket,
@@ -1622,6 +1626,7 @@ async fn status(ctx: &Context) -> Result<u8, Failure> {
             "proto_minor": info.proto_minor,
             "capabilities": info.capabilities,
             "session_id": info.session_id,
+            "agent_session": agent.name(),
         }));
         return Ok(EXIT_OK);
     }
@@ -1643,6 +1648,7 @@ async fn status(ctx: &Context) -> Result<u8, Failure> {
             format!("{}.{}", info.proto_major, info.proto_minor),
         ],
         vec!["session".to_owned(), session],
+        vec!["agent session".to_owned(), agent.name().to_owned()],
         vec![
             "capabilities".to_owned(),
             if info.capabilities.is_empty() {

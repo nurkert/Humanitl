@@ -3184,5 +3184,11 @@
   "@settingsModelNoList": {
     "description": "A probe in the settings that got no model list (LLM_003). Says what came back instead of 'offers no model' (HUM-283). answer is status and content type, for instance 'HTTP 404, text/html'.",
     "placeholders": {"answer": {"type": "String"}}
-  }
+  },
+  "shellStatusRestartDaemon": "Restart daemon",
+  "@shellStatusRestartDaemon": {"description": "Status bar, button next to the version notice (HUM-284): runs systemctl --user daemon-reload and systemctl --user restart humanitld for this user, so the daemon of the installed version starts."},
+  "shellStatusRestartAfterSession": "Possible once the agent session has ended",
+  "@shellStatusRestartAfterSession": {"description": "Status bar, next to the disabled Restart daemon button (HUM-284): an agent session holds the daemon, or the app does not know whether one does, and a restart would end the agent's work."},
+  "shellStatusRestartFailed": "Restart failed: {detail}",
+  "@shellStatusRestartFailed": {"description": "Status bar, after Restart daemon did not work (HUM-284). detail names the command that failed and what it wrote, untranslated, for instance 'systemctl --user daemon-reload exited with 1: Failed to connect to bus'.", "placeholders": {"detail": {"type": "String"}}}
 }

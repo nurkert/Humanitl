@@ -463,6 +463,12 @@ struct Inner {
     /// das `--die-with-parent` an das Ende des Daemons hängt. Gesetzt wird das
     /// in [`Inner::shutdown`], gelesen in [`Inner::claim_start`].
     leaving: std::sync::atomic::AtomicBool,
+    /// Ob sich der Dienst ohne Sitzung verabschiedet hat (HUM-284).
+    ///
+    /// Gesetzt in [`Inner::retire_if_idle`], gelesen von
+    /// [`SandboxService::retired`]: Der Daemon wartet darauf wie auf ein
+    /// Signal und geht dann denselben Abschied.
+    retired: tokio::sync::watch::Sender<bool>,
 }
 
 /// Woran der Dienst hängt, wenn eine Sitzung startet.
@@ -569,6 +575,7 @@ impl SandboxService {
                 recorder: ports.recorder,
                 keys,
                 leaving: std::sync::atomic::AtomicBool::new(false),
+                retired: tokio::sync::watch::Sender::new(false),
             }),
         }
     }
@@ -637,6 +644,33 @@ impl SandboxService {
         self.inner.is_leaving()
     }
 
+    /// Schiebt den Riegel vor, aber nur, wenn keine Sitzung läuft (HUM-284).
+    ///
+    /// Das ist der Abschied eines Daemons, dessen Programm ein Paket-Update
+    /// ersetzt hat: Er geht, sobald niemand mehr in einer Sitzung arbeitet,
+    /// und die Socket-Aktivierung startet bei der nächsten Verbindung das
+    /// neue Programm. Eine Sitzung hält ihn, solange sie einen Anspruch oder
+    /// ein Handle hat; auch eine, deren Agent sich beendet hat, denn ihr
+    /// Terminal und ihre Zusammenfassung sieht ein Mensch noch an.
+    ///
+    /// Prüfen und Riegeln geschehen unter demselben Schloss, unter dem ein
+    /// `Start` seinen Anspruch nimmt: Ein `Start`, der gleichzeitig anklopft,
+    /// bekommt entweder seinen Anspruch, und dann geht der Daemon nicht, oder
+    /// er findet den Riegel vor. Zurück kommt, ob der Riegel jetzt steht.
+    #[must_use]
+    pub fn retire_if_idle(&self) -> bool {
+        self.inner.retire_if_idle()
+    }
+
+    /// Wartet, bis [`SandboxService::retire_if_idle`] den Dienst ohne Sitzung
+    /// verabschiedet hat (HUM-284), über `SandboxRequest.retire_if_idle` oder
+    /// den Wächter über ein ersetztes Programm. Der Daemon wartet darauf neben
+    /// `SIGTERM`; danach ist der Abschied derselbe.
+    pub async fn retired(&self) {
+        let mut retired = self.inner.retired.subscribe();
+        let _ = retired.wait_for(|retired| *retired).await;
+    }
+
     /// Der Ereignisstrom einer Sandbox-Operation.
     #[must_use]
     pub fn stream(&self, request: v1::SandboxRequest) -> BoxStream<v1::SandboxEvent> {
@@ -650,6 +684,12 @@ impl SandboxService {
             }
             Some(Op::Stop(())) => {
                 tokio::spawn(async move { inner.stop(tx).await });
+            }
+            // Ein Schloss und ein Ereignis: Das blockiert nicht, und die
+            // Antwort passt in den leeren Puffer (HUM-284).
+            Some(Op::RetireIfIdle(())) => {
+                let retired = inner.retire_if_idle();
+                let _ = tx.try_send(retire_event(retired));
             }
             // Lesen heisst hier: ein Profil von der Platte lesen und eine
             // Kommandozeile bauen. Das ist blockierende Arbeit und gehoert
@@ -686,10 +726,11 @@ impl Inner {
     /// bekommt `CLI_005`. Ein laufender Agent hält den Anspruch ebenso wie
     /// ein Start, der gerade erst beginnt.
     ///
-    /// Dies ist die einzige Stelle, an der `pending` und `running` ineinander
-    /// gehalten werden, und die Reihenfolge ist `pending` vor `running`. Jede
-    /// andere Stelle nimmt sie nacheinander (`work_dir`, `work_mode`,
-    /// `profile_name`), also gibt es keinen Weg, sie andersherum zu halten.
+    /// Dies und [`Inner::retire_if_idle`] sind die einzigen Stellen, an denen
+    /// `pending` und `running` ineinander gehalten werden, und die Reihenfolge
+    /// ist beide Male `pending` vor `running`. Jede andere Stelle nimmt sie
+    /// nacheinander (`work_dir`, `work_mode`, `profile_name`), also gibt es
+    /// keinen Weg, sie andersherum zu halten.
     fn claim_start(self: &Arc<Self>) -> Option<StartClaim> {
         let mut pending = lock(&self.pending);
         if pending.claimed || self.is_running() || self.is_leaving() {
@@ -704,6 +745,30 @@ impl Inner {
         Some(StartClaim {
             inner: Arc::clone(self),
         })
+    }
+
+    /// Ob ein Start gerade seinen Anspruch hält. Nimmt nur `pending`.
+    fn start_claimed(&self) -> bool {
+        lock(&self.pending).claimed
+    }
+
+    /// Siehe [`SandboxService::retire_if_idle`].
+    ///
+    /// Dieselbe Reihenfolge der Schlösser wie in [`Inner::claim_start`]:
+    /// `pending` vor `running`.
+    fn retire_if_idle(&self) -> bool {
+        let pending = lock(&self.pending);
+        if self.is_leaving() {
+            return true;
+        }
+        if pending.claimed || lock(&self.running).is_some() {
+            return false;
+        }
+        self.leaving
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        drop(pending);
+        self.retired.send_replace(true);
+        true
     }
 
     /// Die Konfiguration, die gerade gilt.
@@ -1063,7 +1128,7 @@ impl Inner {
                 events.push(diagnostic_event(&diagnostic));
                 // Der abgelehnte Wunsch steht in keiner Momentaufnahme: Sie zeigte
                 // sonst das Verzeichnis, das gerade verweigert wurde.
-                events.push(status_event(self.failed_status_with(
+                events.push(status_event(self.plan_failed_status(
                     config,
                     &self.pending_choice(),
                     &v1::sandbox_request::Plan::default(),
@@ -1081,7 +1146,7 @@ impl Inner {
             Ok(status) => events.push(status_event(status)),
             Err(diagnostic) => {
                 events.push(diagnostic_event(&diagnostic));
-                events.push(status_event(self.failed_status_with(
+                events.push(status_event(self.plan_failed_status(
                     config,
                     &staged,
                     plan,
@@ -1090,6 +1155,27 @@ impl Inner {
             }
         }
         (events, Some(wish))
+    }
+
+    /// [`Inner::failed_status_with`] für einen `Plan` oder `Status`.
+    ///
+    /// Hält gerade ein Start seinen Anspruch und noch kein Handle, ist der
+    /// Zustand `starting`, auch wenn der Plan dieses Aufrufers nicht aufgeht
+    /// (HUM-284): Wer fragt, ob eine Sitzung läuft, darf in diesem Fenster
+    /// nicht „keine" lesen. Der Start selbst meldet sein Scheitern weiter mit
+    /// `failed` ([`Inner::failed_status`]).
+    fn plan_failed_status(
+        &self,
+        config: &Config,
+        choice: &PlanChoice,
+        plan: &v1::sandbox_request::Plan,
+        diagnostic: &Diagnostic,
+    ) -> v1::sandbox_event::Status {
+        let mut status = self.failed_status_with(config, choice, plan, diagnostic);
+        if status.sandbox_id.is_empty() && self.start_claimed() {
+            status.state = v1::SandboxState::Starting.into();
+        }
+        status
     }
 
     /// Was einem Start im Weg steht, bevor jemand ihn versucht.
@@ -2105,10 +2191,19 @@ impl Inner {
         // etwas tut. `agent_running` sagt allein, ob darin noch jemand
         // arbeitet. Beides zu vermengen hieße, `stopped` mit einer Startzeit
         // zu melden (Review Codex, Befund 4).
-        let state = state.unwrap_or(if held {
-            v1::SandboxState::Running
-        } else {
-            v1::SandboxState::Stopped
+        //
+        // Ein Start, der seinen Anspruch hält, aber noch kein Handle abgelegt
+        // hat, ist `starting` und nicht `stopped` (HUM-284): Ein zweiter
+        // Client, der in diesem Fenster fragt (`postinst` vor einem Neustart,
+        // die Statusleiste), sähe sonst keine Sitzung, wo eine anläuft.
+        let state = state.unwrap_or_else(|| {
+            if held {
+                v1::SandboxState::Running
+            } else if self.start_claimed() {
+                v1::SandboxState::Starting
+            } else {
+                v1::SandboxState::Stopped
+            }
         });
         Ok(v1::sandbox_event::Status {
             state: state.into(),
@@ -3342,6 +3437,15 @@ const fn start_may_refresh(facts: &Facts) -> bool {
     !facts.agent_running
 }
 
+/// Die Antwort auf `SandboxRequest.retire_if_idle` (HUM-284).
+fn retire_event(retired: bool) -> v1::SandboxEvent {
+    v1::SandboxEvent {
+        event: Some(v1::sandbox_event::Event::Retire(
+            v1::sandbox_event::Retire { retired },
+        )),
+    }
+}
+
 fn status_event(status: v1::sandbox_event::Status) -> v1::SandboxEvent {
     v1::SandboxEvent {
         event: Some(v1::sandbox_event::Event::Status(status)),
@@ -4392,6 +4496,120 @@ mod tests {
             "the finding says which thread and that it failed: {}",
             finding.why
         );
+    }
+
+    /// Ein Daemon, dessen Programm ersetzt wurde, geht nur ohne Sitzung
+    /// (HUM-284).
+    ///
+    /// Solange ein Start seinen Anspruch hält, bleibt er und startet weiter;
+    /// ist der Anspruch frei, steht der Riegel, und kein späterer Start bekommt
+    /// noch einen.
+    #[test]
+    fn a_replaced_daemon_retires_only_without_a_session() {
+        let home = tempfile::tempdir().unwrap();
+        let service = service_for(&home, "opencode");
+
+        let claim = service.inner.claim_start().expect("the claim is free");
+        assert!(
+            !service.retire_if_idle(),
+            "a start that holds its claim keeps the daemon"
+        );
+        assert!(!service.is_leaving(), "and nothing is barred");
+        drop(claim);
+
+        assert!(service.retire_if_idle(), "without a session it retires");
+        assert!(service.is_leaving());
+        assert!(
+            service.inner.claim_start().is_none(),
+            "after retiring no start gets a claim any more"
+        );
+        assert!(service.retire_if_idle(), "asking twice changes nothing");
+    }
+
+    /// Die Zustände aller Momentaufnahmen einer Antwort auf `Status`.
+    async fn status_states(service: &SandboxService) -> Vec<v1::SandboxState> {
+        use tokio_stream::StreamExt as _;
+
+        let events: Vec<v1::SandboxEvent> = service
+            .stream(v1::SandboxRequest {
+                op: Some(v1::sandbox_request::Op::Status(())),
+            })
+            .collect()
+            .await;
+        events
+            .iter()
+            .filter_map(|event| match &event.event {
+                Some(v1::sandbox_event::Event::Status(status)) => {
+                    v1::SandboxState::try_from(status.state).ok()
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Ein Start, der seinen Anspruch hält und noch kein Handle hat, ist für
+    /// jeden anderen Client `starting`, nie `stopped` (HUM-284).
+    ///
+    /// In genau diesem Fenster fragte `postinst` vor einem Neustart; las es
+    /// `stopped`, startete es den Daemon mitten in einem Start neu.
+    #[tokio::test]
+    async fn a_held_claim_is_starting_for_every_other_client() {
+        let home = tempfile::tempdir().unwrap();
+        let service = service_for(&home, "opencode");
+
+        let claim = service.inner.claim_start().expect("the claim is free");
+        let held = status_states(&service).await;
+        assert!(!held.is_empty(), "the answer carries a snapshot");
+        assert!(
+            held.iter()
+                .all(|state| *state == v1::SandboxState::Starting),
+            "a claimed start is starting: {held:?}"
+        );
+        drop(claim);
+
+        let free = status_states(&service).await;
+        assert!(
+            free.iter()
+                .all(|state| *state != v1::SandboxState::Starting),
+            "without the claim nothing starts: {free:?}"
+        );
+    }
+
+    /// `SandboxRequest.retire_if_idle` antwortet mit genau einem `Retire`:
+    /// falsch, solange ein Start seinen Anspruch hält, wahr ohne ihn, und
+    /// dann endet das Warten auf [`SandboxService::retired`] (HUM-284).
+    #[tokio::test]
+    async fn retire_if_idle_answers_over_the_wire_and_releases_the_daemon() {
+        use tokio_stream::StreamExt as _;
+
+        async fn ask(service: &SandboxService) -> Vec<bool> {
+            let events: Vec<v1::SandboxEvent> = service
+                .stream(v1::SandboxRequest {
+                    op: Some(v1::sandbox_request::Op::RetireIfIdle(())),
+                })
+                .collect()
+                .await;
+            events
+                .iter()
+                .map(|event| match &event.event {
+                    Some(v1::sandbox_event::Event::Retire(retire)) => retire.retired,
+                    other => panic!("only a Retire answers, not {other:?}"),
+                })
+                .collect()
+        }
+
+        let home = tempfile::tempdir().unwrap();
+        let service = service_for(&home, "opencode");
+        let claim = service.inner.claim_start().expect("the claim is free");
+        assert_eq!(ask(&service).await, vec![false], "a claimed start keeps it");
+        let waiting = tokio::time::timeout(Duration::from_millis(50), service.retired()).await;
+        assert!(waiting.is_err(), "a busy daemon is not released");
+        drop(claim);
+
+        assert_eq!(ask(&service).await, vec![true]);
+        tokio::time::timeout(Duration::from_secs(5), service.retired())
+            .await
+            .expect("the retired daemon is released to its farewell");
     }
 
     /// Ein Daemon, der sich verabschiedet, startet keine neue Sandbox mehr

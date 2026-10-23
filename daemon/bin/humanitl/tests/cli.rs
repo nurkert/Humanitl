@@ -1142,6 +1142,10 @@ fn daemon_status_and_flows_list_speak_to_a_running_daemon() {
     assert_eq!(info["proto_major"], 1);
     assert!(info["daemon_version"].as_str().is_some());
     assert_eq!(info["unit"], "active");
+    // Die aufgezeichnete Sitzung des Fakes hält eine laufende Sandbox, und
+    // `Sandbox(Status)` sagt es; `postinst` startet diesen Daemon nicht neu
+    // (HUM-284).
+    assert_eq!(info["agent_session"], "running", "{info}");
 
     let table = harness.run(["daemon", "status"]);
     assert_eq!(code(&table), 0);

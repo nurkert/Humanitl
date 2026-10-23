@@ -51,7 +51,11 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `18` seit `ProbeLlmResponse.answer` (HUM-283): Kam keine Modellliste,
+/// `19` seit `SandboxRequest.retire_if_idle` und `SandboxEvent.retire`
+/// (HUM-284): Der Daemon endet auf Anfrage, wenn keine Sitzung ihn hält,
+/// atomar gegen jeden Start; `postinst` und der Knopf der Statusleiste
+/// starten danach das neue Programm.
+/// `18` war `ProbeLlmResponse.answer` (HUM-283): Kam keine Modellliste,
 /// sagt das Feld, was zurückkam (Status und Inhaltstyp), damit keine
 /// Oberfläche „0 Modelle" neben `LLM_003` schreibt.
 /// `17` war das Einstellungsformular mit Modell und Zugangsschlüssel
@@ -118,7 +122,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 18;
+pub const PROTO_MINOR: u32 = 19;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

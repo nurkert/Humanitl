@@ -401,6 +401,11 @@ class GrpcDaemonClient implements DaemonClient {
             // thing that tells this client when the contract grows a ninth
             // event. A `default` would swallow it silently.
             break;
+          case pb.SandboxEvent_Event.retire:
+            // The answer to `retire_if_idle` (HUM-284). This client never
+            // asks over gRPC: the restart button goes through
+            // `humanitl daemon retire-if-idle` (`features/shell/daemon_restart.dart`).
+            break;
           case pb.SandboxEvent_Event.refusals:
             // What the filter refused the agent, the whole tally each time
             // (HUM-138).

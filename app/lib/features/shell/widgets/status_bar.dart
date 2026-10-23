@@ -15,6 +15,7 @@ import '../../about/about_dialog.dart' as about show appVersion;
 import '../../intercept/providers/flows.dart';
 import '../../intercept/providers/recorder_health.dart';
 import '../queue_pressure.dart';
+import 'daemon_restart_control.dart';
 
 /// The version of a build nobody stamped (HUM-277).
 const String _devBuild = '0.0.0';
@@ -118,6 +119,13 @@ class StatusBar extends ConsumerWidget {
                       tokens.colors.warningText,
                     ),
                   ),
+                ),
+                // HUM-284: the same restart as a button, for this user only
+                // and never during an agent session.
+                SizedBox(width: tokens.spacing.x2),
+                Flexible(
+                  flex: 2,
+                  child: DaemonRestartControl(daemonMinor: info.protoMinor),
                 ),
               ],
               if (info.isFake) ...<Widget>[

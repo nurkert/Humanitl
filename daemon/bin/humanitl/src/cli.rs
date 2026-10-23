@@ -745,6 +745,9 @@ pub enum DaemonCmd {
 
     /// Stop and disable the service and remove the unit daemon install wrote.
     Uninstall(UninstallArgs),
+
+    /// Ask the daemon to end now if no agent session holds it (after an upgrade).
+    RetireIfIdle,
 }
 
 /// Die Argumente von `humanitl daemon uninstall` (HUM-077).
