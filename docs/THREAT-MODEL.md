@@ -150,7 +150,12 @@ instead of the surfaces `/v1/` and `/api/` (HUM-261); a path with `..` segments 
 Traffic is recorded and scanned (`LLM_005`), and with `hold.hard_block_checksum_secrets` a
 checksum-confirmed secret is blocked (`HOLD_004`). The access key of a provider (HUM-140) lives in
 the system keyring and reaches the agent only as a sandbox file; it is masked in the recording and a
-finding everywhere except in `Authorization` towards `llm.endpoint`. *Residual risk:* complete.
+finding everywhere except in `Authorization` towards `llm.endpoint`. With several saved model
+servers (HUM-289) each has its own keyring item, and only the active server's origin gets a key and
+is the passthrough of the next session; a probe sends a saved server's key only to that server's own
+origin, never to another's; an endpoint from the environment or the command line above the active
+server, a shared reference or a missing active server leaves the key unsent. *Residual risk:*
+complete.
 Whoever steers the agent through prompt injection can put project content into a prompt. If
 `llm.endpoint` is a name, whoever controls that name can redirect the passthrough between two
 requests, and because the rule carries `allow_private`, the router or `169.254.169.254` are valid
@@ -371,6 +376,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-21 | Recording outage reaches every client and the window | HUM-250 |
 | 2026-10-21 | Translated to English and brought to the state of the code for 0.1 | HUM-059 |
 | 2026-10-22 | K-17: agent program from a per-user directory bound read-only as one file | HUM-278 |
+| 2026-10-23 | K-02: several saved model servers, one keyring item each; only the active origin gets a key and the passthrough | HUM-289 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

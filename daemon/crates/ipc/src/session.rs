@@ -776,6 +776,45 @@ mod tests {
         assert_eq!(passthrough.matcher.host.to_string(), "llm.example.net");
     }
 
+    /// The passthrough rule of the next session follows the active model
+    /// server (HUM-289): after a switch it names the new server's host and
+    /// no longer the old one.
+    #[test]
+    fn the_passthrough_rule_follows_the_active_server() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let under_test = session_resolver(home.path());
+        let keys =
+            humanitl_config::secret::KeyStore::for_paths(under_test.paths()).with_secret_tool(None);
+        let servers = [
+            ("home", "http://home.lan:11434/", false),
+            ("cloud", "https://api.example.com/v1", true),
+        ];
+        for (name, endpoint, activate) in servers {
+            crate::llm_servers::answer(
+                under_test.paths(),
+                &keys,
+                &crate::llm_servers::OPEN,
+                &crate::v1::LlmServersRequest {
+                    op: Some(crate::v1::llm_servers_request::Op::Add(
+                        crate::v1::llm_servers_request::Add {
+                            name: name.to_owned(),
+                            endpoint: endpoint.to_owned(),
+                            models: Vec::new(),
+                            activate,
+                        },
+                    )),
+                },
+            )
+            .expect("the server is saved");
+        }
+        let resolved = under_test
+            .resolve(&SessionRequest::default())
+            .expect("resolves");
+        let (rules, _) = bundled_rules(&resolved.config, &resolved.profiles, SessionId::new());
+        let passthrough = rules.passthrough().expect("a passthrough rule");
+        assert_eq!(passthrough.matcher.host.to_string(), "api.example.com");
+    }
+
     /// A resolver built from a hand-made configuration keeps it: a fresh
     /// resolution from its empty directories would silently replace it.
     #[test]

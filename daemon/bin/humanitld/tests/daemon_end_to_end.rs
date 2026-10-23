@@ -2068,6 +2068,7 @@ async fn a_timeout_set_in_the_form_blocks_after_the_restart_at_fifteen_seconds()
     grpc.set_config(v1::SetConfigRequest {
         key: "hold.timeout_secs".to_owned(),
         value: "15".to_owned(),
+        expected_server: String::new(),
     })
     .await
     .expect("the form setting is accepted");

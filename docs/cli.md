@@ -1133,10 +1133,12 @@ first `/api/tags`), without redirects, none of it through the sandbox.
 Credentials are sent only with `--with-key`: then the daemon sends the stored
 access key as `Authorization: Bearer`, and only if `URL` has the same origin
 (scheme, host, port) as `llm.endpoint`; `key_sent` in `--json` says whether
-one was sent (HUM-140).
+one was sent (HUM-140). With `--server NAME` the key of that saved server is
+sent instead, and only if `URL` has the origin of that server's endpoint; a
+key never goes to the origin of another server (HUM-289).
 
 ```
-humanitl llm test <URL> [--timeout-ms N] [--with-key] [--json]
+humanitl llm test <URL> [--timeout-ms N] [--with-key [--server NAME]] [--json]
 
 flavor: ollama
 latency: 12 ms
@@ -1172,9 +1174,9 @@ The endpoint's access key, for a model that answers only with a key
 "Access key" of the settings.
 
 ```
-humanitl llm key status [--json]
-humanitl llm key set [--json]        # reads the key from stdin
-humanitl llm key remove [--json]
+humanitl llm key status [--server NAME] [--json]
+humanitl llm key set [--server NAME] [--json]    # reads the key from stdin
+humanitl llm key remove [--server NAME] [--json]
 
 access key: set (secret-service:humanitl/llm, secret-service)
 ```
@@ -1198,6 +1200,55 @@ that is then empty, contains white space inside or is longer than 4096 bytes
 is rejected with `CONFIG_020`, without repeating the key, and nothing is
 written. As with every setting, a new key applies
 to the next session; a running one keeps what it was started with.
+
+`--server NAME` means the key of that saved server (see `humanitl llm server`
+below); without it, the active server's. A server without a key of its own
+gets the keyring entry `secret-service:humanitl/<NAME>` (or `file:<NAME>` in
+the fallback); one that already has a reference keeps it, so the server
+`default` taken over from an older configuration keeps
+`secret-service:humanitl/llm`. Setting the key of a server that is not
+active does not touch the key of the active one.
+
+## `humanitl llm server`
+
+Saved model servers, each with endpoint, models and access key, switchable
+with one command (HUM-289). A call of the RPC `LlmServers`; the same one that
+serves the server switcher in the settings and on the status bar.
+
+```
+humanitl llm server ls [--json]
+humanitl llm server add <NAME> <URL> [--model MODEL]... [--use] [--json]
+humanitl llm server use <NAME> [--json]
+humanitl llm server rename <NAME> <NEW> [--json]
+humanitl llm server rm <NAME> [--use NEXT] [--keep-key] [--json]
+
+   NAME   ENDPOINT                    MODEL  KEY
+*  home   http://192.168.1.20:11434/  qwen3  secret-service:humanitl/llm
+   cloud  https://api.example.com/v1  -      secret-service:humanitl/cloud
+```
+
+The entries stand in `config.toml` as `[llm.servers.<NAME>]` with
+`endpoint`, `models` and `api_key_ref`; `llm.active` names the active one.
+The flat keys `llm.endpoint`, `llm.models` and `llm.api_key_ref` are the
+active server's view: `use` writes them together with `llm.active` in one
+step, and whoever writes one of them (the settings form, `config set`)
+writes the active entry along. Only the active server's origin gets the
+stored key and is the LLM passthrough of the next session; a running
+session keeps the server it was started with, and every changing command
+says so on `stderr`.
+
+A configuration from before HUM-289 with only the flat keys is listed as the
+server `default`; the first changing command writes it as an entry, with
+the same key reference. `add` checks the endpoint like `llm.endpoint`
+(`CONFIG_003` for a quote or white space, for a scheme other than http or
+https); the first server becomes active, later ones only with `--use`. Its
+key follows with `humanitl llm key set --server NAME`. `rename` keeps the
+key where it is. `rm` deletes the server's keyring entry unless
+`--keep-key`, and only if no other server shares it; the active server is
+removed only with `--use NEXT` while there are others (`CONFIG_021`
+otherwise), and the last one takes the flat keys with it. Names have 1 to 32
+characters `a-z`, `0-9`, `-` and `_`. The table never shows a key, only its
+reference, and the endpoint without user, password or query.
 
 ## The global switches
 

@@ -270,6 +270,13 @@ struct Inner {
     /// Ob ein Zugangsschlüssel „hinterlegt" ist (HUM-140). Der Fake hält
     /// nie den Schlüssel selbst, nur diese Aussage.
     llm_key_set: bool,
+    /// Der Teil `[llm]` einer gedachten `config.toml` mit den gespeicherten
+    /// Modellservern (HUM-289). Der Fake schreibt keine Datei; dieselben
+    /// Rechnungen wie im echten Dienst laufen über dieser Tabelle.
+    llm_servers: toml::Table,
+    /// Die Namen der Schlüssel, die als hinterlegt gelten, je Server. Nie
+    /// ein Schlüssel selbst.
+    server_keys: std::collections::BTreeSet<String>,
     sandbox_id: SandboxId,
     sandbox_state: v1::SandboxState,
     hold_bytes: u64,
@@ -294,6 +301,8 @@ impl FakeState {
                 scripted: BTreeMap::new(),
                 config: BTreeMap::new(),
                 llm_key_set: false,
+                llm_servers: toml::Table::new(),
+                server_keys: std::collections::BTreeSet::new(),
                 sandbox_id: SandboxId::new(),
                 sandbox_state: v1::SandboxState::Running,
                 hold_bytes: 0,
@@ -566,6 +575,33 @@ impl FakeState {
     /// Setzt die Aussage, ob ein Zugangsschlüssel hinterlegt ist.
     pub fn set_llm_key(&self, set: bool) {
         self.lock().llm_key_set = set;
+    }
+
+    /// Die gedachte `config.toml` mit den Modellservern (HUM-289).
+    #[must_use]
+    pub fn llm_servers(&self) -> toml::Table {
+        self.lock().llm_servers.clone()
+    }
+
+    /// Ersetzt die gedachte `config.toml` mit den Modellservern.
+    pub fn set_llm_servers(&self, table: toml::Table) {
+        self.lock().llm_servers = table;
+    }
+
+    /// Ob der Schlüssel mit diesem Namen als hinterlegt gilt.
+    #[must_use]
+    pub fn server_key(&self, name: &str) -> bool {
+        self.lock().server_keys.contains(name)
+    }
+
+    /// Setzt die Aussage, ob der Schlüssel mit diesem Namen hinterlegt ist.
+    pub fn set_server_key(&self, name: &str, set: bool) {
+        let mut inner = self.lock();
+        if set {
+            inner.server_keys.insert(name.to_owned());
+        } else {
+            inner.server_keys.remove(name);
+        }
     }
 
     /// Id und Zustand der simulierten Sandbox.

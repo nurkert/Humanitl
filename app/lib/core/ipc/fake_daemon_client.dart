@@ -1480,14 +1480,39 @@ class FakeDaemonClient implements DaemonClient {
   // Schreibweg ueben, den es nicht gibt (CONVENTIONS 4.7).
 
   @override
-  Future<void> setConfig(String key, String value) async {
+  Future<void> setConfig(
+    String key,
+    String value, {
+    String? expectedServer,
+  }) async {
     _check();
     if (setConfigFailure case final Diagnostic failure) {
       throw DaemonException(failure);
     }
+    // Dieselbe Pruefung wie der Daemon (HUM-289): ein Wert fuer die Ansicht
+    // eines Servers geht nicht in die eines anderen.
+    final bool view = key == FormKeys.llmEndpoint || key == FormKeys.llmModels;
+    if (expectedServer case final String expected
+        when expected.isNotEmpty && expected != activeServer) {
+      _refuseServers(
+        '$key was entered for the server $expected, and the active server is '
+        '${activeServer.isEmpty ? 'none' : activeServer} now',
+      );
+    }
+    if (view &&
+        (expectedServer == null || expectedServer.isEmpty) &&
+        savedServers.isNotEmpty) {
+      _refuseServers(
+        '$key was not written: saved model servers exist, and the request '
+        'names none',
+      );
+    }
     if (FormKeys.all.contains(key)) {
       _setFormValue(key, value);
       configWrites.add((key, value));
+      if (view && activeServer.isNotEmpty) {
+        _mirrorIntoActive(key, value);
+      }
       return;
     }
     const String prefix = 'sandbox.env.';
@@ -1541,9 +1566,11 @@ class FakeDaemonClient implements DaemonClient {
     Duration? timeout,
     String? apiKey,
     bool useStoredKey = false,
+    String? server,
   }) async {
     _check();
     probedEndpoints.add(endpoint);
+    probedServers.add(server ?? '');
     // Nur die Art, nie der Schluessel: Auch ein Fake haelt keinen Wert, den
     // ein Test aus Versehen zeigen koennte (HUM-140).
     probeKeyUses.add(
@@ -1574,7 +1601,7 @@ class FakeDaemonClient implements DaemonClient {
     }
     final bool keySent =
         (apiKey != null && apiKey.isNotEmpty) ||
-        (useStoredKey && llmKey.set && endpoint == configValues.llmEndpoint);
+        (useStoredKey && _storedKeyGoesTo(endpoint, server));
     if (llmProbe case final LlmProbe fixed) {
       return fixed.copyWith(endpoint: endpoint, keySent: keySent);
     }
@@ -2489,14 +2516,18 @@ class FakeDaemonClient implements DaemonClient {
   }
 
   @override
-  Future<LlmKeyStatus> llmKeyStatus() async {
+  Future<LlmKeyStatus> llmKeyStatus({String? server}) async {
     _check();
+    if (_otherServer(server) case final String name) {
+      return serverKeys[name] ?? LlmKeyStatus.unset;
+    }
     return llmKey;
   }
 
   @override
-  Future<LlmKeyStatus> setLlmKey(String key) async {
+  Future<LlmKeyStatus> setLlmKey(String key, {String? server}) async {
     _check();
+    _refuseUnnamedKey(server);
     if (setLlmKeyFailure case final Diagnostic failure) {
       throw DaemonException(failure);
     }
@@ -2513,18 +2544,37 @@ class FakeDaemonClient implements DaemonClient {
       );
     }
     setKeyLengths.add(key.length);
-    llmKey = const LlmKeyStatus(
+    final String? named = server == null || server.isEmpty ? null : server;
+    final LlmKeyStatus stored = LlmKeyStatus(
       set: true,
       store: LlmKeyStore.secretService,
-      keyRef: 'secret-service:humanitl/llm',
+      keyRef: 'secret-service:humanitl/${named ?? _activeKeyName}',
     );
+    if (_otherServer(server) case final String name) {
+      serverKeys[name] = stored;
+      _setKeyRef(name, stored.keyRef);
+      return stored;
+    }
+    llmKey = stored;
+    if (activeServer.isNotEmpty) {
+      _setKeyRef(activeServer, stored.keyRef);
+    }
     return llmKey;
   }
 
   @override
-  Future<LlmKeyStatus> clearLlmKey() async {
+  Future<LlmKeyStatus> clearLlmKey({String? server}) async {
     _check();
+    _refuseUnnamedKey(server);
+    if (_otherServer(server) case final String name) {
+      serverKeys.remove(name);
+      _setKeyRef(name, '');
+      return LlmKeyStatus.unset;
+    }
     llmKey = LlmKeyStatus.unset;
+    if (activeServer.isNotEmpty) {
+      _setKeyRef(activeServer, '');
+    }
     return llmKey;
   }
 
@@ -2603,6 +2653,318 @@ class FakeDaemonClient implements DaemonClient {
       configPath: configValues.configPath,
     );
   }
+
+  // --- Gespeicherte Modellserver (HUM-289) -------------------------------
+  //
+  // Der Fake haelt die Server im Speicher und prueft, was die Oberflaeche
+  // merkt: Namen, doppelte und unbekannte Namen, den aktiven Server ohne
+  // Nachfolger, mit `CONFIG_021` wie der Daemon. Aktivieren setzt die
+  // flachen Werte `llm.endpoint` und `llm.models`, wie der Daemon sie als
+  // Ansicht des aktiven Servers schreibt. Schluessel haelt er nie, nur die
+  // Aussage je Server.
+
+  /// The saved servers, in name order.
+  List<SavedServer> savedServers = <SavedServer>[];
+
+  /// The name of the active server; empty without one.
+  String activeServer = '';
+
+  /// What `LlmKey` says about the key of each server that is not active.
+  final Map<String, LlmKeyStatus> serverKeys = <String, LlmKeyStatus>{};
+
+  /// The server each `ProbeLlm` named, empty for none, in call order.
+  final List<String> probedServers = <String>[];
+
+  /// Every `LlmServers` request that changed something, as `op name`.
+  final List<String> serverRequests = <String>[];
+
+  /// The finding every `LlmServers` request fails with; null means none.
+  Diagnostic? llmServersFailure;
+
+  @override
+  Future<SavedServers> listLlmServers() async {
+    _check();
+    return _serverList();
+  }
+
+  @override
+  Future<SavedServers> addLlmServer({
+    required String name,
+    required String endpoint,
+    List<String> models = const <String>[],
+    bool activate = false,
+  }) async {
+    _serverCheck();
+    _checkServerName(name);
+    if (_server(name) != null) {
+      _refuseServers('a server named $name exists already');
+    }
+    if (!_isUsableEndpoint(endpoint)) {
+      throw DaemonException(
+        Diagnostic(
+          code: 'CONFIG_003',
+          severity: Severity.error,
+          why:
+              'the endpoint of the server $name is not a URL with the scheme '
+              'http or https and a host',
+        ),
+      );
+    }
+    serverRequests.add('add $name');
+    savedServers = <SavedServer>[
+      ...savedServers,
+      SavedServer(name: name, endpoint: endpoint, models: models),
+    ]..sort((SavedServer a, SavedServer b) => a.name.compareTo(b.name));
+    if (activate || activeServer.isEmpty) {
+      _activate(name);
+    }
+    return _serverList();
+  }
+
+  @override
+  Future<SavedServers> renameLlmServer(String name, String newName) async {
+    _serverCheck();
+    _checkServerName(newName);
+    final SavedServer old = _server(name) ?? _unknownServer(name);
+    if (_server(newName) != null) {
+      _refuseServers('a server named $newName exists already');
+    }
+    serverRequests.add('rename $name $newName');
+    savedServers = <SavedServer>[
+      for (final SavedServer server in savedServers)
+        if (server.name == name)
+          SavedServer(
+            name: newName,
+            endpoint: old.endpoint,
+            models: old.models,
+            keyRef: old.keyRef,
+          )
+        else
+          server,
+    ]..sort((SavedServer a, SavedServer b) => a.name.compareTo(b.name));
+    if (serverKeys.remove(name) case final LlmKeyStatus status) {
+      serverKeys[newName] = status;
+    }
+    if (activeServer == name) {
+      activeServer = newName;
+    }
+    return _serverList();
+  }
+
+  @override
+  Future<SavedServers> removeLlmServer(
+    String name, {
+    bool deleteKey = false,
+    String? replacement,
+  }) async {
+    _serverCheck();
+    _server(name) ?? _unknownServer(name);
+    final String next = replacement ?? '';
+    if (next.isNotEmpty && (next == name || _server(next) == null)) {
+      _unknownServer(next);
+    }
+    if (activeServer == name && next.isEmpty && savedServers.length > 1) {
+      _refuseServers(
+        '$name is the active server; name the server to use instead',
+      );
+    }
+    serverRequests.add(
+      'remove $name${deleteKey ? ' delete-key' : ''}'
+      '${next.isEmpty ? '' : ' use $next'}',
+    );
+    savedServers = <SavedServer>[
+      for (final SavedServer server in savedServers)
+        if (server.name != name) server,
+    ];
+    serverKeys.remove(name);
+    if (activeServer == name) {
+      if (next.isEmpty) {
+        activeServer = '';
+        llmKey = LlmKeyStatus.unset;
+        _setFormValue(FormKeys.llmEndpoint, '-');
+        _setFormValue(FormKeys.llmModels, '-');
+      } else {
+        // The removed server's key goes with it; nothing is kept for it.
+        llmKey = LlmKeyStatus.unset;
+        activeServer = '';
+        _activate(next);
+      }
+    } else if (next.isNotEmpty) {
+      _activate(next);
+    }
+    return _serverList();
+  }
+
+  @override
+  Future<SavedServers> activateLlmServer(String name) async {
+    _serverCheck();
+    _server(name) ?? _unknownServer(name);
+    serverRequests.add('activate $name');
+    _activate(name);
+    return _serverList();
+  }
+
+  /// The list as the daemon answers it.
+  SavedServers _serverList() => SavedServers(
+    servers: List<SavedServer>.unmodifiable(<SavedServer>[
+      for (final SavedServer server in savedServers)
+        SavedServer(
+          name: server.name,
+          endpoint: server.endpoint,
+          models: server.models,
+          keyRef: server.keyRef,
+          active: server.name == activeServer,
+        ),
+    ]),
+    active: activeServer,
+  );
+
+  /// Makes [name] active: its key becomes the one `LlmKey` reports without a
+  /// name, and its endpoint and models the flat values.
+  void _activate(String name) {
+    final SavedServer? server = _server(name);
+    if (server == null) {
+      return;
+    }
+    if (activeServer.isNotEmpty && activeServer != name) {
+      serverKeys[activeServer] = llmKey;
+    }
+    llmKey = serverKeys.remove(name) ?? LlmKeyStatus.unset;
+    activeServer = name;
+    _setFormValue(FormKeys.llmEndpoint, server.endpoint);
+    _setFormValue(
+      FormKeys.llmModels,
+      server.models.isEmpty ? '-' : jsonEncode(server.models),
+    );
+  }
+
+  /// The saved server [name], or null.
+  SavedServer? _server(String name) {
+    for (final SavedServer server in savedServers) {
+      if (server.name == name) {
+        return server;
+      }
+    }
+    return null;
+  }
+
+  /// [server] when it names a saved server that is not the active one.
+  String? _otherServer(String? server) {
+    if (server == null || server.isEmpty || server == activeServer) {
+      return null;
+    }
+    if (_server(server) == null) {
+      _unknownServer(server);
+    }
+    return server;
+  }
+
+  /// Like the daemon (HUM-289): with saved servers, a key is set or removed
+  /// only for a named one.
+  void _refuseUnnamedKey(String? server) {
+    if ((server == null || server.isEmpty) && savedServers.isNotEmpty) {
+      _refuseServers(
+        'LlmKey changed nothing: saved model servers exist, and the request '
+        'names none',
+      );
+    }
+  }
+
+  /// The key name of the active server's key.
+  String get _activeKeyName => activeServer.isEmpty ? 'llm' : activeServer;
+
+  /// Writes a flat view value into the active entry too, as the daemon does.
+  void _mirrorIntoActive(String key, String value) {
+    savedServers = <SavedServer>[
+      for (final SavedServer server in savedServers)
+        if (server.name == activeServer)
+          SavedServer(
+            name: server.name,
+            endpoint: key == FormKeys.llmEndpoint
+                ? (value == '-' ? '' : value)
+                : server.endpoint,
+            models: key == FormKeys.llmModels
+                ? (value == '-'
+                      ? const <String>[]
+                      : (jsonDecode(value) as List<Object?>)
+                            .whereType<String>()
+                            .toList())
+                : server.models,
+            keyRef: server.keyRef,
+          )
+        else
+          server,
+    ];
+  }
+
+  /// Points the reference of [name] at [keyRef], or removes it.
+  void _setKeyRef(String name, String keyRef) {
+    savedServers = <SavedServer>[
+      for (final SavedServer server in savedServers)
+        if (server.name == name)
+          SavedServer(
+            name: server.name,
+            endpoint: server.endpoint,
+            models: server.models,
+            keyRef: keyRef,
+          )
+        else
+          server,
+    ];
+  }
+
+  /// Whether the stored key of [server] (or the active one) would go to
+  /// [endpoint]: only to its own server's endpoint, as in the daemon.
+  bool _storedKeyGoesTo(String endpoint, String? server) {
+    if (server == null || server.isEmpty) {
+      return llmKey.set && endpoint == configValues.llmEndpoint;
+    }
+    final SavedServer saved = _server(server) ?? _unknownServer(server);
+    final bool set = server == activeServer
+        ? llmKey.set
+        : (serverKeys[server]?.set ?? false);
+    // Wie der Daemon: an dieselbe Herkunft (Schema, Host, Port), nicht an
+    // denselben Text.
+    return set && _sameOrigin(endpoint, saved.endpoint);
+  }
+
+  static bool _sameOrigin(String a, String b) {
+    final Uri? left = Uri.tryParse(a);
+    final Uri? right = Uri.tryParse(b);
+    if (left == null || right == null || left.host.isEmpty) {
+      return false;
+    }
+    return left.scheme == right.scheme &&
+        left.host.toLowerCase() == right.host.toLowerCase() &&
+        left.port == right.port;
+  }
+
+  void _serverCheck() {
+    _check();
+    if (llmServersFailure case final Diagnostic failure) {
+      throw DaemonException(failure);
+    }
+  }
+
+  void _checkServerName(String name) {
+    if (!isServerName(name)) {
+      _refuseServers(
+        '"$name" is not a server name: a name has 1 to 32 characters a-z, '
+        '0-9, - and _',
+      );
+    }
+  }
+
+  Never _unknownServer(String name) =>
+      _refuseServers('there is no server named $name');
+
+  Never _refuseServers(String why) => throw DaemonException(
+    Diagnostic(
+      code: 'CONFIG_021',
+      severity: Severity.error,
+      why: 'the model servers were not changed: $why',
+    ),
+  );
 }
 
 /// Builder of the events of one scripted flow.

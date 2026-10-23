@@ -61,8 +61,13 @@ class SetupScreen extends StatefulWidget {
     required this.onWorkMode,
     required this.onStart,
     this.daemonAttempts = 0,
+    this.activeServer = '',
     super.key,
   });
+
+  /// The name of the active saved model server, or empty when none is
+  /// saved; the model row names it above the field (HUM-289).
+  final String activeServer;
 
   /// How many attempts to reach the daemon failed so far, or 0 while it
   /// answers. The first row shows the count, so a screen that keeps trying
@@ -218,6 +223,7 @@ class _SetupScreenState extends State<SetupScreen> {
                   check: state[SetupCheckKind.llm],
                   probe: widget.probe,
                   controller: _endpoint,
+                  activeServer: widget.activeServer,
                   onProbe: widget.onProbeLlm,
                   onDiscover: () => setState(() => _discovering = true),
                   onEdited: _edited,

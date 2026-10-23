@@ -662,6 +662,26 @@ impl SandboxService {
         self.inner.retire_if_idle()
     }
 
+    /// Führt `work` nur aus, solange keine Sitzung die Sandbox hält oder
+    /// startet, und hält während der Arbeit jeden neuen Start an derselben
+    /// Stelle zurück wie [`SandboxService::retire_if_idle`] (HUM-289): Das
+    /// Entfernen des aktiven Modellservers kann so nie zwischen die Auflösung
+    /// eines Starts und dessen Sitzung geraten. `false`, wenn nicht
+    /// ausgeführt.
+    ///
+    /// Blockiert, solange `work` läuft; ein Start wartet so lange.
+    pub fn while_idle(&self, work: &mut dyn FnMut()) -> bool {
+        self.inner.while_idle(work)
+    }
+
+    /// Wie [`SandboxService::while_idle`], aber nur ein Start mit Anspruch
+    /// hält die Arbeit auf, eine laufende Sitzung nicht (HUM-289): Sie hat
+    /// Konfiguration und Schlüssel schon, ein Start dagegen löst gerade auf
+    /// und holt den Schlüssel erst noch.
+    pub fn while_no_start(&self, work: &mut dyn FnMut()) -> bool {
+        self.inner.while_no_start(work)
+    }
+
     /// Wartet, bis [`SandboxService::retire_if_idle`] den Dienst ohne Sitzung
     /// verabschiedet hat (HUM-284), über `SandboxRequest.retire_if_idle` oder
     /// den Wächter über ein ersetztes Programm. Der Daemon wartet darauf neben
@@ -756,6 +776,26 @@ impl Inner {
     ///
     /// Dieselbe Reihenfolge der Schlösser wie in [`Inner::claim_start`]:
     /// `pending` vor `running`.
+    fn while_no_start(&self, work: &mut dyn FnMut()) -> bool {
+        let pending = lock(&self.pending);
+        if pending.claimed {
+            return false;
+        }
+        work();
+        drop(pending);
+        true
+    }
+
+    fn while_idle(&self, work: &mut dyn FnMut()) -> bool {
+        let pending = lock(&self.pending);
+        if pending.claimed || lock(&self.running).is_some() {
+            return false;
+        }
+        work();
+        drop(pending);
+        true
+    }
+
     fn retire_if_idle(&self) -> bool {
         let pending = lock(&self.pending);
         if self.is_leaving() {
@@ -2696,6 +2736,16 @@ impl Inner {
                 .fix(FixAction::CopyCommand("humanitl llm key set".to_owned()))
                 .build()
         })?;
+        // Die Regel des Ladens, noch einmal an der Stelle, die den Schlüssel
+        // holt (HUM-289): Er geht nur mit dem Endpunkt desselben Eintrags.
+        if !config.llm.key_goes_with_endpoint() {
+            tracing::warn!(
+                key_ref = %key_ref,
+                "the access key does not belong to the configured endpoint; it is not given to \
+                 the agent"
+            );
+            return Ok(AgentKey::None);
+        }
         if need == KeyNeed::Plan {
             return Ok(AgentKey::Withheld);
         }
@@ -3802,6 +3852,53 @@ mod tests {
         }
     }
 
+    /// The start gets the stored key only together with the endpoint of the
+    /// same saved server (HUM-289, review A): an endpoint that is not the
+    /// active server's leaves the agent without a key.
+    #[test]
+    fn the_start_withholds_a_key_that_belongs_to_another_endpoint() {
+        const KEY: &str = "sk-sandbox-0123456789abcdef";
+        let home = tempfile::TempDir::new().unwrap();
+        let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+            "XDG_DATA_HOME",
+            home.path().join("data").display().to_string(),
+        )]));
+        let keys =
+            KeyStore::for_paths(&paths).with_secret_tool(Some(fake_secret_tool(home.path())));
+        let stored = keys
+            .store(&humanitl_config::secret::ApiKey::new(KEY).unwrap())
+            .unwrap();
+        let key_ref = stored.key_ref.to_string();
+        let service = service_with(
+            &home,
+            "opencode",
+            Some(&key_ref),
+            SandboxPorts::none().with_keys(keys),
+        );
+        let mut config = (*service.inner.config()).clone();
+        config.llm.servers.insert(
+            "cloud".to_owned(),
+            humanitl_config::LlmServer {
+                endpoint: Some(KEYED_ENDPOINT.to_owned()),
+                models: Vec::new(),
+                api_key_ref: Some(key_ref.clone()),
+            },
+        );
+        config.llm.active = Some("cloud".to_owned());
+        assert!(matches!(
+            service.inner.agent_key(&config, KeyNeed::Start).unwrap(),
+            AgentKey::Key(_)
+        ));
+        config.llm.endpoint = Some(url::Url::parse("http://192.168.1.20:11434/").unwrap());
+        assert!(
+            matches!(
+                service.inner.agent_key(&config, KeyNeed::Start).unwrap(),
+                AgentKey::None
+            ),
+            "the key went to the agent beside an endpoint of another origin"
+        );
+    }
+
     /// Der Zugangsschlüssel kommt aus der Attrappe des Speichers in eine
     /// Datei der Sandbox, auf die `opencode.json` verweist, und sonst
     /// nirgendwohin: nicht in `argv`, nicht in die Umgebung, nicht ins Log und
@@ -4798,6 +4895,7 @@ mod tests {
                 op: Some(v1::llm_key_request::Op::Set(v1::llm_key_request::Set {
                     key: KEY.to_owned(),
                 })),
+                server: String::new(),
             },
         )
         .expect("LlmKey stores");
@@ -4895,6 +4993,191 @@ mod tests {
             "a new claim retires the previous session's configuration"
         );
         drop(again);
+    }
+
+    /// A start that holds its claim blocks every switch and every removal
+    /// that deletes a key (HUM-289, review): it has resolved the active
+    /// server and fetches that server's key only later. Once it is gone, the
+    /// same requests go through.
+    #[tokio::test]
+    async fn a_claimed_start_blocks_switching_and_key_deleting_removals() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, paths) = live_service(&home, SandboxPorts::none());
+        let keys = KeyStore::for_paths(&paths).with_secret_tool(None);
+        let open = crate::llm_servers::OPEN;
+        for (name, endpoint) in [
+            ("home", "http://home.lan:11434/"),
+            ("cloud", "https://api.example.com/v1"),
+        ] {
+            crate::llm_servers::answer(
+                &paths,
+                &keys,
+                &open,
+                &v1::LlmServersRequest {
+                    op: Some(v1::llm_servers_request::Op::Add(
+                        v1::llm_servers_request::Add {
+                            name: name.to_owned(),
+                            endpoint: endpoint.to_owned(),
+                            models: Vec::new(),
+                            activate: false,
+                        },
+                    )),
+                },
+            )
+            .expect("the server is saved");
+        }
+        let idle = |work: &mut dyn FnMut()| service.while_idle(work);
+        let no_start = |work: &mut dyn FnMut()| service.while_no_start(work);
+        let gates = crate::llm_servers::Gates {
+            idle: &idle,
+            no_start: &no_start,
+        };
+        let activate = v1::LlmServersRequest {
+            op: Some(v1::llm_servers_request::Op::Activate(
+                v1::llm_servers_request::Activate {
+                    name: "cloud".to_owned(),
+                },
+            )),
+        };
+        let remove_home = v1::LlmServersRequest {
+            op: Some(v1::llm_servers_request::Op::Remove(
+                v1::llm_servers_request::Remove {
+                    name: "home".to_owned(),
+                    delete_key: true,
+                    replacement: String::new(),
+                },
+            )),
+        };
+
+        let claim = service.inner.claim_start().expect("the claim is free");
+        let refused = crate::llm_servers::answer(&paths, &keys, &gates, &activate).unwrap_err();
+        assert_eq!(refused.code, codes::CONFIG_021);
+        let refused = crate::llm_servers::answer(&paths, &keys, &gates, &remove_home).unwrap_err();
+        assert_eq!(refused.code, codes::CONFIG_021);
+        let remove_cloud = v1::LlmServersRequest {
+            op: Some(v1::llm_servers_request::Op::Remove(
+                v1::llm_servers_request::Remove {
+                    name: "cloud".to_owned(),
+                    delete_key: true,
+                    replacement: String::new(),
+                },
+            )),
+        };
+        let refused = crate::llm_servers::answer(&paths, &keys, &gates, &remove_cloud).unwrap_err();
+        assert_eq!(
+            refused.code,
+            codes::CONFIG_021,
+            "a key went away under a start"
+        );
+        let table = crate::llm_servers::read_table(&paths).unwrap();
+        assert_eq!(
+            table["llm"]["servers"].as_table().map(toml::Table::len),
+            Some(2)
+        );
+        assert_eq!(
+            humanitl_config::servers::active_name(&table).as_deref(),
+            Some("home"),
+            "the server the start resolved changed under it"
+        );
+        drop(claim);
+
+        crate::llm_servers::answer(&paths, &keys, &gates, &activate).expect("no start, a switch");
+        crate::llm_servers::answer(&paths, &keys, &gates, &remove_home)
+            .expect("no start, a removal");
+    }
+
+    /// `while_idle` runs nothing while a start holds its claim, and runs the
+    /// work once the claim is gone (HUM-289, review E).
+    #[tokio::test]
+    async fn while_idle_refuses_while_a_start_holds_its_claim() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, _paths) = live_service(&home, SandboxPorts::none());
+        let claim = service.inner.claim_start().expect("the claim is free");
+        let mut ran = false;
+        assert!(!service.while_idle(&mut || ran = true));
+        assert!(!ran, "the work ran beside a claimed start");
+        drop(claim);
+        assert!(service.while_idle(&mut || ran = true));
+        assert!(ran);
+    }
+
+    /// Switching the active model server while a session runs (HUM-289):
+    /// the running session keeps the server, endpoint and key it started
+    /// with; the next one gets the new server.
+    #[tokio::test]
+    async fn activating_another_server_leaves_the_running_session_alone() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, paths) = live_service(&home, SandboxPorts::none());
+        let keys = KeyStore::for_paths(&paths).with_secret_tool(None);
+        let add = |name: &str, endpoint: &str| v1::LlmServersRequest {
+            op: Some(v1::llm_servers_request::Op::Add(
+                v1::llm_servers_request::Add {
+                    name: name.to_owned(),
+                    endpoint: endpoint.to_owned(),
+                    models: Vec::new(),
+                    activate: false,
+                },
+            )),
+        };
+        crate::llm_servers::answer(
+            &paths,
+            &keys,
+            &crate::llm_servers::OPEN,
+            &add("home", "http://home.lan:11434/"),
+        )
+        .expect("the first server is saved and active");
+        crate::llm_servers::answer(
+            &paths,
+            &keys,
+            &crate::llm_servers::OPEN,
+            &add("cloud", "https://api.example.com/v1"),
+        )
+        .expect("the second server is saved");
+
+        let claim = service.inner.claim_start().expect("the claim is free");
+        service
+            .inner
+            .apply_session(
+                &v1::sandbox_request::Start::default(),
+                Some(home.path().join("project")),
+            )
+            .expect("the session resolves");
+        crate::llm_servers::answer(
+            &paths,
+            &keys,
+            &crate::llm_servers::OPEN,
+            &v1::LlmServersRequest {
+                op: Some(v1::llm_servers_request::Op::Activate(
+                    v1::llm_servers_request::Activate {
+                        name: "cloud".to_owned(),
+                    },
+                )),
+            },
+        )
+        .expect("the switch is written");
+
+        assert_eq!(
+            service
+                .inner
+                .config()
+                .llm
+                .endpoint
+                .as_ref()
+                .map(url::Url::as_str),
+            Some("http://home.lan:11434/"),
+            "the running session switched its server"
+        );
+        assert_eq!(
+            planned_endpoint(&service).await,
+            "http://home.lan:11434/",
+            "the snapshot of the running session shows its own server"
+        );
+        drop(claim);
+        assert_eq!(
+            planned_endpoint(&service).await,
+            "https://api.example.com/v1",
+            "the next session gets the new server"
+        );
     }
 
     /// The second interleaving of the review (HUM-277): a `Plan` takes its

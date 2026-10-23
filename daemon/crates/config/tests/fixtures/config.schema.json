@@ -357,16 +357,28 @@
     "llm": {
       "additionalProperties": false,
       "default": {
+        "active": null,
         "api_key_ref": null,
         "endpoint": null,
         "models": [],
         "passthrough_paths": [
           "/v1/",
           "/api/"
-        ]
+        ],
+        "servers": {}
       },
       "description": "Der lokale LLM-Endpunkt und was als Passthrough gilt.",
       "properties": {
+        "active": {
+          "default": null,
+          "description": "Der Name des aktiven Eintrags aus `llm.servers`. Nur sein Endpunkt bekommt den hinterlegten Zugangsschlüssel und gilt als LLM-Passthrough. Leer, solange es keine Einträge gibt.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
         "api_key_ref": {
           "default": null,
           "description": "Verweis auf den Zugangsschlüssel des Endpunkts, nie der Schlüssel selbst: `secret-service:humanitl/llm` für den Schlüsselbund des Systems oder `file:llm` für eine Datei mit `0600` unter `$XDG_DATA_HOME/humanitl/keys`. Gesetzt wird er mit `humanitl llm key set` oder in den Einstellungen; der Agent bekommt den Schlüssel als Datei in der Sandbox, nie über die Kommandozeile. Leer heißt: kein Schlüssel.",
@@ -407,6 +419,44 @@
             "type": "string"
           },
           "type": "array",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "servers": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "description": "Ein gespeicherter Modellserver unter `llm.servers.<name>` (HUM-289).\n\nDieselben drei Werte wie die flachen Schlüssel unter `llm`, deren Ansicht\nder aktive Eintrag ist. Der Zugangsschlüssel steht auch hier nie selbst in\nder Datei, nur der Verweis darauf.",
+            "properties": {
+              "api_key_ref": {
+                "default": null,
+                "description": "Verweis auf den Zugangsschlüssel dieses Servers, wie `llm.api_key_ref`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "endpoint": {
+                "default": null,
+                "description": "OpenAI-kompatibler Endpunkt dieses Servers, wie `llm.endpoint`.\n\nAls Text und nicht als Adresse: Ein Eintrag, der nicht aktiv ist, darf\neine Adresse tragen, die kein Parser annimmt, ohne dass das Laden\nscheitert; er ist dann nur nicht zu aktivieren (HUM-289, Review).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "models": {
+                "default": [],
+                "description": "Modelle dieses Servers, das voreingestellte zuerst, wie `llm.models`.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "default": {},
+          "description": "Gespeicherte Modellserver, je Name ein Eintrag mit `endpoint`, `models` und `api_key_ref` (`secret-service:humanitl/NAME`). Der Eintrag, den `llm.active` nennt, liefert `llm.endpoint`, `llm.models` und `llm.api_key_ref`; die flachen Schlüssel sind seine Ansicht. Ein Name hat 1 bis 32 Zeichen `a-z`, `0-9`, `-` und `_`. Gepflegt wird die Tabelle mit `humanitl llm server` oder in den Einstellungen; ein Wechsel gilt ab der nächsten Sitzung.",
+          "type": "object",
           "x-project-scope": "denied",
           "x-tier": "advanced"
         }

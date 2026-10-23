@@ -138,6 +138,31 @@ fn llm_is_well_formed(llm: &LlmConfig) -> Result<(), Diagnostic> {
              and _",
         ));
     }
+    // Die Einträge unter `llm.servers` werden geprüft wie die flachen
+    // Schlüssel, deren Ansicht der aktive ist (HUM-289): Ein Name ist auch
+    // der Name seines Schlüssels im Schlüsselbund.
+    for (name, server) in &llm.servers {
+        if crate::servers::check_name(name).is_err() {
+            return Err(out_of_range(
+                "llm.servers",
+                &format!("{name:?}"),
+                "server names of 1 to 32 characters a-z, 0-9, - and _",
+            ));
+        }
+        // Der Endpunkt eines Eintrags bricht das Laden nie ab: Beim Projizieren
+        // (`servers::project`) wird er geprüft, und ein abgelehnter macht den
+        // Eintrag nur unbrauchbar (HUM-289, Review).
+        if let Some(reference) = &server.api_key_ref
+            && crate::secret::KeyRef::parse(reference).is_none()
+        {
+            return Err(out_of_range(
+                &format!("llm.servers.{name}.api_key_ref"),
+                &format!("{reference:?}"),
+                "secret-service:humanitl/NAME or file:NAME, NAME of 1 to 32 characters a-z, \
+                 0-9, - and _",
+            ));
+        }
+    }
     if llm.passthrough_paths.is_empty() {
         return Err(out_of_range(
             "llm.passthrough_paths",

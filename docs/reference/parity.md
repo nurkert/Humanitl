@@ -31,6 +31,7 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 | `Humanitl.GetSessionSummary` | `humanitl sessions summary` | fehlt |
 | `Humanitl.ListFlows` | `humanitl flows list` | `features/history/history_screen` |
 | `Humanitl.LlmKey` | `humanitl llm key remove`<br>`humanitl llm key set`<br>`humanitl llm key status` | `features/settings/widgets/model_section` |
+| `Humanitl.LlmServers` | `humanitl llm server add`<br>`humanitl llm server ls`<br>`humanitl llm server rename`<br>`humanitl llm server rm`<br>`humanitl llm server use` | `features/settings/widgets/server_switcher` |
 | `Humanitl.ProbeLlm` | `humanitl llm test` | `features/setup/widgets/llm_check` |
 | `Humanitl.Rules` | `humanitl rules add`<br>`humanitl rules disable`<br>`humanitl rules dry-run`<br>`humanitl rules enable`<br>`humanitl rules list`<br>`humanitl rules reload`<br>`humanitl rules remove`<br>`humanitl rules reorder`<br>`humanitl rules test`<br>`humanitl rules update` | `features/rules/rules_screen` |
 | `Humanitl.Sandbox` | `humanitl run` | `features/sandbox/sandbox_screen` |

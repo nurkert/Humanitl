@@ -888,3 +888,27 @@ extension LlmKeyStatusToDomain on pb.LlmKeyStatus {
     ),
   );
 }
+
+/// `LlmServerList` to its domain form (HUM-289).
+extension LlmServerListToDomain on pb.LlmServerList {
+  /// The domain form. No field of the wire carries a key, and neither does
+  /// this one.
+  SavedServers toDomain() => SavedServers(
+    servers: List<SavedServer>.unmodifiable(
+      servers.map(
+        (pb.LlmServer server) => SavedServer(
+          name: server.name,
+          endpoint: server.endpoint,
+          models: List<String>.unmodifiable(server.models),
+          keyRef: server.keyRef,
+          active: server.active,
+        ),
+      ),
+    ),
+    active: active,
+    implicit: implicit,
+    diagnostics: List<Diagnostic>.unmodifiable(
+      diagnostics.map((pb.Diagnostic finding) => finding.toDomain()),
+    ),
+  );
+}

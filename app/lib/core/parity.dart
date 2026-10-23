@@ -24,6 +24,7 @@ const parity = <String, String>{
   'Humanitl.GetInfo': 'features/shell/connection_gate',
   'Humanitl.ListFlows': 'features/history/history_screen',
   'Humanitl.LlmKey': 'features/settings/widgets/model_section',
+  'Humanitl.LlmServers': 'features/settings/widgets/server_switcher',
   'Humanitl.ProbeLlm': 'features/setup/widgets/llm_check',
   'Humanitl.Rules': 'features/rules/rules_screen',
   'Humanitl.Sandbox': 'features/sandbox/sandbox_screen',

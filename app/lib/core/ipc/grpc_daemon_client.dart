@@ -435,6 +435,7 @@ class GrpcDaemonClient implements DaemonClient {
     Duration? timeout,
     String? apiKey,
     bool useStoredKey = false,
+    String? server,
   }) async {
     // No deadline of this client's own beyond the daemon's: the probe clamps
     // its own timeout, and a client that gave up earlier would report "no
@@ -444,7 +445,8 @@ class GrpcDaemonClient implements DaemonClient {
       ..endpoint = endpoint
       ..timeoutMs = timeout?.inMilliseconds ?? 0
       ..apiKey = apiKey ?? ''
-      ..useStoredKey = useStoredKey;
+      ..useStoredKey = useStoredKey
+      ..server = server ?? '';
     try {
       final pb.ProbeLlmResponse response = await _stub.probeLlm(
         request,
@@ -468,16 +470,79 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
-  Future<LlmKeyStatus> llmKeyStatus() =>
-      _llmKey(pb.LlmKeyRequest()..status = pb.LlmKeyRequest_Status());
+  Future<LlmKeyStatus> llmKeyStatus({String? server}) => _llmKey(
+    pb.LlmKeyRequest()
+      ..status = pb.LlmKeyRequest_Status()
+      ..server = server ?? '',
+  );
 
   @override
-  Future<LlmKeyStatus> setLlmKey(String key) =>
-      _llmKey(pb.LlmKeyRequest()..set = (pb.LlmKeyRequest_Set()..key = key));
+  Future<LlmKeyStatus> setLlmKey(String key, {String? server}) => _llmKey(
+    pb.LlmKeyRequest()
+      ..set = (pb.LlmKeyRequest_Set()..key = key)
+      ..server = server ?? '',
+  );
 
   @override
-  Future<LlmKeyStatus> clearLlmKey() =>
-      _llmKey(pb.LlmKeyRequest()..remove = pb.LlmKeyRequest_Remove());
+  Future<LlmKeyStatus> clearLlmKey({String? server}) => _llmKey(
+    pb.LlmKeyRequest()
+      ..remove = pb.LlmKeyRequest_Remove()
+      ..server = server ?? '',
+  );
+
+  @override
+  Future<SavedServers> listLlmServers() =>
+      _llmServers(pb.LlmServersRequest()..list = pb.LlmServersRequest_List());
+
+  @override
+  Future<SavedServers> addLlmServer({
+    required String name,
+    required String endpoint,
+    List<String> models = const <String>[],
+    bool activate = false,
+  }) => _llmServers(
+    pb.LlmServersRequest()
+      ..add = (pb.LlmServersRequest_Add()
+        ..name = name
+        ..endpoint = endpoint
+        ..models.addAll(models)
+        ..activate = activate),
+  );
+
+  @override
+  Future<SavedServers> renameLlmServer(String name, String newName) =>
+      _llmServers(
+        pb.LlmServersRequest()
+          ..rename = (pb.LlmServersRequest_Rename()
+            ..name = name
+            ..newName = newName),
+      );
+
+  @override
+  Future<SavedServers> removeLlmServer(
+    String name, {
+    bool deleteKey = false,
+    String? replacement,
+  }) => _llmServers(
+    pb.LlmServersRequest()
+      ..remove = (pb.LlmServersRequest_Remove()
+        ..name = name
+        ..deleteKey = deleteKey
+        ..replacement = replacement ?? ''),
+  );
+
+  @override
+  Future<SavedServers> activateLlmServer(String name) => _llmServers(
+    pb.LlmServersRequest()
+      ..activate = (pb.LlmServersRequest_Activate()..name = name),
+  );
+
+  Future<SavedServers> _llmServers(pb.LlmServersRequest request) async {
+    final pb.LlmServerList list = await _unary(
+      (CallOptions options) => _stub.llmServers(request, options: options),
+    );
+    return list.toDomain();
+  }
 
   Future<LlmKeyStatus> _llmKey(pb.LlmKeyRequest request) async {
     final pb.LlmKeyStatus status = await _unary(
@@ -487,7 +552,11 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
-  Future<void> setConfig(String key, String value) async {
+  Future<void> setConfig(
+    String key,
+    String value, {
+    String? expectedServer,
+  }) async {
     // Der `ConfigSnapshot` der Antwort wird verworfen: Wer die Konfiguration
     // zeigt, fragt danach `getConfig`, damit es genau einen Weg gibt, auf dem
     // ein Bildschirm sie erfährt (HUM-069).
@@ -495,7 +564,8 @@ class GrpcDaemonClient implements DaemonClient {
       (CallOptions options) => _stub.setConfig(
         pb.SetConfigRequest()
           ..key = key
-          ..value = value,
+          ..value = value
+          ..expectedServer = expectedServer ?? '',
         options: options,
       ),
     );

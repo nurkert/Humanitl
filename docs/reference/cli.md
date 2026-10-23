@@ -58,6 +58,12 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl llm key status`](#humanitl-llm-key-status) Whether a key is stored, and where: system keyring or 0600 file
 - [`humanitl llm key set`](#humanitl-llm-key-set) Store the key. It is read from stdin, never from the command line; at a terminal the input is hidden
 - [`humanitl llm key remove`](#humanitl-llm-key-remove) Remove the key and its reference from the configuration file
+- [`humanitl llm server`](#humanitl-llm-server) Saved model servers: endpoint, models and access key per entry
+- [`humanitl llm server ls`](#humanitl-llm-server-ls) List the saved servers; the active one is marked
+- [`humanitl llm server add`](#humanitl-llm-server-add) Save a server. Its key follows with `humanitl llm key set --server NAME`
+- [`humanitl llm server use`](#humanitl-llm-server-use) Make a server the active one, from the next session on
+- [`humanitl llm server rename`](#humanitl-llm-server-rename) Rename a server. Its key stays where it is
+- [`humanitl llm server rm`](#humanitl-llm-server-rm) Remove a server and, unless --keep-key, its key from the keyring
 
 ## Configuration flags
 
@@ -95,6 +101,7 @@ below lists the flag names and their short aliases.
 | `--limits-max-decompress-ratio` | - | `INTEGER` | `limits.max_decompress_ratio` |
 | `--limits-preview-cap-bytes` | - | `INTEGER` | `limits.preview_cap_bytes` |
 | `--limits-recorder-max-body-bytes` | - | `INTEGER` | `limits.recorder_max_body_bytes` |
+| `--llm-active` | - | `STRING,_OPTIONAL` | `llm.active` |
 | `--llm-api-key-ref` | - | `STRING,_OPTIONAL` | `llm.api_key_ref` |
 | `--llm-endpoint` | `--llm` | `STRING,_OPTIONAL` | `llm.endpoint` |
 | `--llm-models` | - | `LIST_OF_STRING` | `llm.models` |
@@ -1595,6 +1602,7 @@ Commands:
   discover  Search the local /24 for OpenAI-compatible servers and Ollama
   test      Ask one endpoint what it is: which API answered, its models, how long
   key       The access key of the LLM endpoint, kept in the system keyring
+  server    Saved model servers: endpoint, models and access key per entry
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -1678,6 +1686,9 @@ Options:
       --with-key
           Send the stored access key along, if URL has the origin of llm.endpoint; the daemon never gives it to another address
 
+      --server <NAME>
+          With --with-key: the key of this saved server instead of the active one, sent only if URL has the origin of that server
+
   -v, --verbose...
           Explain what is happening; repeat for more
 
@@ -1710,6 +1721,9 @@ Options:
       --json
           Machine-readable output: one JSON value on stdout, diagnostics included
 
+      --server <NAME>
+          The saved server whose key is meant; without it, the active one
+
       --config <PATH>
           Read this config file instead of the one in the user's config directory
 
@@ -1736,6 +1750,9 @@ Usage: humanitl llm key status [OPTIONS]
 Options:
       --json
           Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --server <NAME>
+          The saved server whose key is meant; without it, the active one
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory
@@ -1764,6 +1781,9 @@ Options:
       --json
           Machine-readable output: one JSON value on stdout, diagnostics included
 
+      --server <NAME>
+          The saved server whose key is meant; without it, the active one
+
       --config <PATH>
           Read this config file instead of the one in the user's config directory
 
@@ -1791,8 +1811,217 @@ Options:
       --json
           Machine-readable output: one JSON value on stdout, diagnostics included
 
+      --server <NAME>
+          The saved server whose key is meant; without it, the active one
+
       --config <PATH>
           Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl llm server
+
+```text
+Saved model servers: endpoint, models and access key per entry.
+
+The active server is what `llm.endpoint`, `llm.models` and `llm.api_key_ref` show; only its address gets the stored key. A switch applies to the next session, a running session keeps its server.
+
+Usage: humanitl llm server [OPTIONS] <COMMAND>
+
+Commands:
+  ls      List the saved servers; the active one is marked
+  add     Save a server. Its key follows with `humanitl llm key set --server NAME`
+  use     Make a server the active one, from the next session on
+  rename  Rename a server. Its key stays where it is
+  rm      Remove a server and, unless --keep-key, its key from the keyring
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## humanitl llm server ls
+
+```text
+List the saved servers; the active one is marked
+
+Usage: humanitl llm server ls [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl llm server add
+
+```text
+Save a server. Its key follows with `humanitl llm key set --server NAME`
+
+Usage: humanitl llm server add [OPTIONS] <NAME> <URL>
+
+Arguments:
+  <NAME>
+          1 to 32 characters a-z, 0-9, - and _
+
+  <URL>
+          The address as it would stand in `llm.endpoint`
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --model <MODEL>
+          A model of this server, repeatable; the first is the default
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+      --use
+          Make it the active server right away
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl llm server use
+
+```text
+Make a server the active one, from the next session on
+
+Usage: humanitl llm server use [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          The saved server
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl llm server rename
+
+```text
+Rename a server. Its key stays where it is
+
+Usage: humanitl llm server rename [OPTIONS] <NAME> <NEW>
+
+Arguments:
+  <NAME>
+          The saved server
+
+  <NEW>
+          The new name
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl llm server rm
+
+```text
+Remove a server and, unless --keep-key, its key from the keyring
+
+Usage: humanitl llm server rm [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          The saved server
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --use <NEXT>
+          The server to use afterwards; required for the active server while there are others
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+      --keep-key
+          Leave the key of the server in the keyring
 
   -v, --verbose...
           Explain what is happening; repeat for more
