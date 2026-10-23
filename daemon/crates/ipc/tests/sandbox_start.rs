@@ -569,11 +569,29 @@ async fn only_one_of_two_concurrent_starts_gets_the_session() {
         "exactly one of the two starts is refused: {seen_first:?} / {seen_second:?}"
     );
 
-    let started = usize::from(states(&seen_first).contains(&v1::SandboxState::Running))
-        + usize::from(states(&seen_second).contains(&v1::SandboxState::Running));
+    // The refused stream reports the state of the session that is running
+    // (see `start`), so it may carry `Running` too, with the winner's
+    // sandbox id. What counts is the number of distinct sandboxes.
+    let started: std::collections::BTreeSet<String> = seen_first
+        .iter()
+        .chain(&seen_second)
+        .filter_map(|event| match &event.event {
+            Some(v1::sandbox_event::Event::Status(status))
+                if status.state == v1::SandboxState::Running as i32 =>
+            {
+                Some(status.sandbox_id.clone())
+            }
+            _ => None,
+        })
+        .collect();
     assert_eq!(
-        started, 1,
+        started.len(),
+        1,
         "and exactly one sandbox reports running: {seen_first:?} / {seen_second:?}"
+    );
+    assert!(
+        started.iter().all(|id| !id.is_empty()),
+        "a running sandbox has an id: {started:?}"
     );
 
     let _ = events(
