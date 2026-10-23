@@ -228,5 +228,6 @@ abstract final class DiagnosticL10n {
       'TLS_004' => (l10n.diagTLS004Title, l10n.diagTLS004Why),
       'TLS_005' => (l10n.diagTLS005Title, l10n.diagTLS005Why),
       'UI_002' => (l10n.diagUI002Title, l10n.diagUI002Why),
+      'UI_003' => (l10n.diagUI003Title, l10n.diagUI003Why),
       _ => null,
     };

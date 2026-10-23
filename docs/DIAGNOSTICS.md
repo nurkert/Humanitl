@@ -1239,6 +1239,14 @@ Kein Platz für das Anzeigesymbol
 
 **Fix.** Kein Fix: Das Fenster bleibt der Weg zur Warteschlange.
 
+#### UI_003
+
+Ordnerdialog nicht verfügbar
+
+**Auslöser.** Die Arbeitsumgebung konnte den Dialog zur Wahl des Projektordners nicht öffnen; der Grund des Portals steht im Text.
+
+**Fix.** `CopyCommand` mit `humanitl run`, im Projektordner auszuführen.
+
 ### Bereich agent
 
 #### AGENT_001

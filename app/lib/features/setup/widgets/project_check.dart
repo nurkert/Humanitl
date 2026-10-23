@@ -29,8 +29,12 @@ import 'setup_check_row.dart';
 ///
 /// A folder the daemon refuses (`SANDBOX_006`) carries the fix "choose another
 /// folder", and the card under this row turns it into a button that opens the
-/// same chooser as the picker above it (HUM-262). Which folder is refused, and
-/// why, is the daemon's sentence; the row only offers the way out.
+/// same chooser as the picker above it (HUM-262). A folder nobody has chosen
+/// yet (`CONFIG_013`) carries the same fix as "choose folder" (HUM-282).
+/// Which folder is refused, and why, is the daemon's sentence; the row only
+/// offers the way out. A folder dialog that does not open stands as its own
+/// card above the row's finding (`UI_003`), with the command line as the way
+/// around it.
 class ProjectCheck extends ConsumerWidget {
   /// Creates the row for [check].
   const ProjectCheck({
@@ -60,6 +64,12 @@ class ProjectCheck extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final AppLocalizations l10n = context.l10n;
+    // Die Karte eines gescheiterten Ordnerdialogs steht nur, solange der
+    // Ordner wählbar ist; mit einer laufenden Sitzung ist der Ausweg schon
+    // genommen (HUM-282).
+    final Diagnostic? dialogFailure = locked
+        ? null
+        : ref.watch(folderDialogFailureProvider);
     return SetupCheckRow(
       check: check,
       title: setupCheckTitle(l10n, SetupCheckKind.project),
@@ -69,18 +79,24 @@ class ProjectCheck extends ConsumerWidget {
       onChooseFolder: locked
           ? null
           : () => unawaited(chooseWorkDir(ref, onPick)),
-      // Der Pfad steht im Knopf des Pickers und ist zugleich der Beleg dieser
-      // Zeile; ihn daneben ein zweites Mal zu zeigen, wäre dieselbe Aussage
-      // zweimal. Deshalb ersetzt der Picker die Belegzeile, statt neben ihr
-      // zu stehen.
+      // Gesperrt bleibt der Knopf der Karte stehen und sagt beim Verweilen
+      // denselben Satz wie der Picker (`docs/UX.md` 5.3).
+      chooseFolderLocked: locked ? l10n.sandboxWorkDirLocked : null,
+      notice: dialogFailure,
+      // Der Pfad steht im Picker und ist zugleich der Beleg dieser Zeile; ihn
+      // daneben ein zweites Mal zu zeigen, wäre dieselbe Aussage zweimal.
+      // Deshalb ersetzt der Picker die Belegzeile, statt neben ihr zu stehen.
       detail: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           WorkDirPicker(
             buttonKey: const Key('setup-workdir'),
+            reflow: true,
             workDir: check.detail.isEmpty ? null : check.detail,
             workMode: workMode,
             chooseLabel: l10n.sandboxWorkDirChoose,
+            chooseButtonLabel: l10n.workDirChooseButton,
+            changeButtonLabel: l10n.workDirChangeButton,
             noneLabel: l10n.sandboxWorkDirNone,
             readOnlyLabel: l10n.sandboxWorkModeRo,
             readWriteLabel: l10n.sandboxWorkModeRw,

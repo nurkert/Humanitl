@@ -141,4 +141,9 @@ abstract final class DiagnosticCodes {
   /// The recording writes again after one of the two codes above; the hints
   /// "not being recorded" go away (HUM-250).
   static const String recorderRecovered = 'RECORDER_005';
+
+  /// The desktop's folder dialog did not open, on Linux mostly a missing or
+  /// broken XDG desktop portal. Raised by the client, because only the client
+  /// asks for the dialog; a cancelled dialog is no finding (HUM-282).
+  static const String folderDialogFailed = 'UI_003';
 }

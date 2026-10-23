@@ -65,6 +65,8 @@ class SandboxHeader extends ConsumerWidget {
                 workDir: status.workDirHost,
                 workMode: status.workMode,
                 chooseLabel: l10n.sandboxWorkDirChoose,
+                chooseButtonLabel: l10n.workDirChooseButton,
+                changeButtonLabel: l10n.workDirChangeButton,
                 noneLabel: l10n.sandboxWorkDirNone,
                 readOnlyLabel: l10n.sandboxWorkModeRo,
                 readWriteLabel: l10n.sandboxWorkModeRw,

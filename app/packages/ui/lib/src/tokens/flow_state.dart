@@ -93,6 +93,9 @@ enum HGlyph {
 
   /// Lucide `square`: das Fenster maximieren oder wiederherstellen (HUM-255).
   square,
+
+  /// Lucide `folder`: einen Ordner wählen (HUM-282).
+  folder,
 }
 
 /// The eight state colours of one theme.

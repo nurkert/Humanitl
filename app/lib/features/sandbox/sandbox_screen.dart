@@ -249,7 +249,21 @@ class _Diagnostics extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if (status.diagnostics.isEmpty) {
+    // Ein Ordnerdialog, der nicht aufging, steht hier mit den Befunden des
+    // Daemons (`UI_003`, HUM-282): Der Knopf im Kopf hat dann nichts getan,
+    // und ohne Karte wüsste niemand, warum und wie es anders geht. Nur
+    // solange der Ordner wählbar ist: Läuft eine Sitzung, etwa über
+    // `humanitl run`, ist der Ausweg schon genommen, und eine Karte, die
+    // sich nicht wegklicken lässt, stünde nur im Weg.
+    final bool locked = status.isUp || status.isBusy;
+    final Diagnostic? dialogFailure = locked
+        ? null
+        : ref.watch(folderDialogFailureProvider);
+    final List<Diagnostic> diagnostics = <Diagnostic>[
+      ...status.diagnostics,
+      ?dialogFailure,
+    ];
+    if (diagnostics.isEmpty) {
       return const SizedBox.shrink();
     }
     final HTokens tokens = HTheme.of(context);
@@ -258,7 +272,7 @@ class _Diagnostics extends ConsumerWidget {
     // (`SANDBOX_006`, HUM-262). Der Knopf öffnet dieselbe Auswahl wie der
     // Picker im Kopf und ist gesperrt wie er: Solange die Sandbox läuft oder
     // ein Start oder Stopp unterwegs ist, ändert sich der Ordner nicht.
-    final VoidCallback? chooseFolder = status.isUp || status.isBusy
+    final VoidCallback? chooseFolder = locked
         ? null
         : () => unawaited(
             chooseWorkDir(
@@ -278,8 +292,7 @@ class _Diagnostics extends ConsumerWidget {
           // verbotene Mounts, zwei Symlinks aus dem Projekt heraus —, und ein
           // Schlüssel aus dem Code allein ließ den Bildschirm mit „Duplicate
           // keys" abstürzen (gefunden beim Bau des Deckels, HUM-068).
-          for (final (int place, Diagnostic diagnostic)
-              in status.diagnostics.indexed)
+          for (final (int place, Diagnostic diagnostic) in diagnostics.indexed)
             if (DiagnosticL10n.resolve(diagnostic, l10n)
                 case final DiagnosticText text)
               SandboxArrive(
@@ -292,12 +305,25 @@ class _Diagnostics extends ConsumerWidget {
                     color: severityColor(tokens, diagnostic.severity),
                     title: text.title,
                     // The daemon's own sentence. The application writes the
-                    // title, never the reason (`docs/UX.md` 4.4).
-                    why: text.cause,
+                    // title, never the reason (`docs/UX.md` 4.4). A folder
+                    // dialog that failed is built by this client: its reason
+                    // is the translated sentence with the way around, and
+                    // the platform's raw text stands under it, as on the
+                    // setup card (HUM-282).
+                    why: identical(diagnostic, dialogFailure)
+                        ? text.why
+                        : text.cause,
+                    detail: identical(diagnostic, dialogFailure)
+                        ? diagnostic.why
+                        : null,
                     docsUrl: diagnostic.docsUrl,
                     fix: FixControl(
                       fix: diagnostic.fix,
                       onChooseFolder: chooseFolder,
+                      chooseFolderLocked: locked
+                          ? l10n.sandboxWorkDirLocked
+                          : null,
+                      diagnosticCode: diagnostic.code,
                     ),
                     width: double.infinity,
                   ),
