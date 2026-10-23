@@ -3174,5 +3174,15 @@
   "diagUI003Title": "The folder dialog did not open",
   "@diagUI003Title": {"description": "Title of the diagnostic UI_003 (docs/DIAGNOSTICS.md): the desktop's folder dialog (on Linux the XDG desktop portal) failed, so no folder could be chosen here (HUM-282)."},
   "diagUI003Why": "The desktop could not show a folder dialog. Open a terminal in the project folder and run humanitl run there.",
-  "@diagUI003Why": {"description": "Generic cause of UI_003. Names the way that works without the dialog: the command line starts a session in the current directory. The command itself stands in the copy row under it."}
+  "@diagUI003Why": {"description": "Generic cause of UI_003. Names the way that works without the dialog: the command line starts a session in the current directory. The command itself stands in the copy row under it."},
+  "setupLlmNoModelList": "{endpoint} answered in {ms} ms, but not with a model list: {answer}",
+  "@setupLlmNoModelList": {
+    "description": "Evidence of the model row after a probe that got no model list (LLM_003). Says what came back instead of claiming 0 models (HUM-283). answer is status and content type from the daemon, for instance 'HTTP 200, text/html'.",
+    "placeholders": {"endpoint": {"type": "String"}, "ms": {"type": "int"}, "answer": {"type": "String"}}
+  },
+  "settingsModelNoList": "The endpoint answered, but not with a model list: {answer}",
+  "@settingsModelNoList": {
+    "description": "A probe in the settings that got no model list (LLM_003). Says what came back instead of 'offers no model' (HUM-283). answer is status and content type, for instance 'HTTP 404, text/html'.",
+    "placeholders": {"answer": {"type": "String"}}
+  }
 }

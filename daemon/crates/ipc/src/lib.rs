@@ -51,7 +51,10 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `17` seit dem Einstellungsformular mit Modell und Zugangsschlüssel
+/// `18` seit `ProbeLlmResponse.answer` (HUM-283): Kam keine Modellliste,
+/// sagt das Feld, was zurückkam (Status und Inhaltstyp), damit keine
+/// Oberfläche „0 Modelle" neben `LLM_003` schreibt.
+/// `17` war das Einstellungsformular mit Modell und Zugangsschlüssel
 /// (HUM-069, HUM-140): `GetConfig` antwortet, `ConfigSnapshot.values_json`
 /// und `.config_path` tragen die Werte als JSON und die Datei, die
 /// `SetConfig` schreibt, `ProbeLlmRequest.api_key` und `.use_stored_key`
@@ -115,7 +118,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 17;
+pub const PROTO_MINOR: u32 = 18;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

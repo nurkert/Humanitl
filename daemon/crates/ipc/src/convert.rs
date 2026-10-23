@@ -345,6 +345,9 @@ pub fn probe_result_to_proto(result: &ProbeResult) -> v1::ProbeLlmResponse {
         diagnostics,
         endpoint_is_private: result.endpoint_is_private,
         key_sent: result.key_sent,
+        // Schon an der Quelle auf sichtbare Zeichen gekürzt
+        // (`humanitl_proxy::llm_probe::describe_answer`, HUM-283).
+        answer: result.answer.clone().unwrap_or_default(),
     }
 }
 

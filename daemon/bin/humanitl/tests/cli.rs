@@ -1382,10 +1382,20 @@ fn llm_test_an_endpoint_the_daemon_refuses_is_exit_1() {
     let harness = Harness::new();
     let _server = FakeServer::start(&harness);
 
-    let output = harness.run(["llm", "test", "not a url"]);
+    let output = harness.run(["llm", "test", "not-a-url"]);
     let text = stderr(&output);
     assert_eq!(code(&output), 1, "{text}");
     assert!(text.contains("[LLM_007]"), "{text}");
+    assert!(stdout(&output).is_empty(), "stdout must stay clean");
+
+    // HUM-283: das Anführungszeichen aus der Zwischenablage wird abgelehnt,
+    // mit der sauberen Adresse als Vorschlag, und nie als `%22` gefragt.
+    let output = harness.run(["llm", "test", "https://llm.example.net/api/v1/\""]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("[CONFIG_003]"), "{text}");
+    assert!(text.contains("a double quote"), "{text}");
+    assert!(!text.contains("%22"), "{text}");
     assert!(stdout(&output).is_empty(), "stdout must stay clean");
 
     let without = Harness::new();
@@ -4035,6 +4045,36 @@ fn config_set_an_enum_value_is_written() {
     }
     let text = std::fs::read_to_string(config_file(&harness)).expect("the file");
     assert!(text.contains("ask_mode = \"terminal\""), "{text}");
+}
+
+/// Die Adresse des Besitzers vom 2026-10-23 mit dem Anführungszeichen am Ende
+/// landet nicht in der Datei: `CONFIG_003` mit Zeichen, Stelle und der
+/// sauberen Adresse als Befehl zum Abschreiben (HUM-283).
+#[test]
+fn config_set_refuses_an_endpoint_with_a_stray_quote() {
+    let harness = Harness::new();
+    let output = config_set(
+        &harness,
+        &["llm.endpoint", "https://llm.example.net/api/v1/\""],
+    );
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.starts_with("error[CONFIG_003]: "), "{text}");
+    assert!(
+        text.contains("a double quote (\") at position 32 of 32"),
+        "{text}"
+    );
+    assert!(
+        text.contains("fix: humanitl config set llm.endpoint https://llm.example.net/api/v1/\n"),
+        "{text}"
+    );
+    assert!(!config_file(&harness).exists(), "nothing is written");
+
+    let clean = config_set(
+        &harness,
+        &["llm.endpoint", "https://llm.example.net/api/v1/"],
+    );
+    assert_eq!(code(&clean), 0, "{}", stderr(&clean));
 }
 
 /// Geprüft wird gegen die wirkliche Datei, nicht gegen die Vorgaben.

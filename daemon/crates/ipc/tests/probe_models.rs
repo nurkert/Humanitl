@@ -23,6 +23,7 @@ fn probe(models: Vec<String>) -> ProbeResult {
         endpoint_is_private: true,
         diagnostics: Vec::new(),
         key_sent: false,
+        answer: None,
     }
 }
 

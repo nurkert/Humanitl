@@ -23,6 +23,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -33,6 +34,7 @@ import '../../../core/ipc/daemon_client.dart';
 import '../../../core/ui/diagnostic_severity.dart';
 import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
+import '../../../core/ui/pasted_text.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import 'secret_field.dart';
@@ -112,7 +114,12 @@ class _ModelSectionState extends ConsumerState<ModelSection> {
 
   /// Writes the endpoint, or removes it for an empty field.
   Future<void> _saveEndpoint() async {
-    final String text = _endpoint.text.trim();
+    // Ohne Leerraum und Anführungszeichen aus der Zwischenablage (HUM-283);
+    // das Feld zeigt danach, was geschrieben wird.
+    final String text = stripPasteDebris(_endpoint.text);
+    if (text != _endpoint.text) {
+      _endpoint.text = text;
+    }
     if (text == widget.config.llmEndpoint) {
       return;
     }
@@ -163,11 +170,11 @@ class _ModelSectionState extends ConsumerState<ModelSection> {
 
   /// "Check": the one gesture of this form that reaches the network.
   Future<void> _check() async {
-    final String endpoint = _endpoint.text.trim();
+    final String endpoint = stripPasteDebris(_endpoint.text);
     if (endpoint.isEmpty || _probing) {
       return;
     }
-    final String typed = _key.text;
+    final String typed = stripPasteDebris(_key.text);
     setState(() {
       _probing = true;
       _probeFailure = null;
@@ -203,7 +210,9 @@ class _ModelSectionState extends ConsumerState<ModelSection> {
   }
 
   Future<void> _storeKey() async {
-    final String typed = _key.text;
+    // Anführungszeichen und Leerraum aus der Zwischenablage fallen weg, wie
+    // im Daemon (`ApiKey::from_pasted`, HUM-283).
+    final String typed = stripPasteDebris(_key.text);
     if (typed.isEmpty || _keyBusy) {
       return;
     }
@@ -267,6 +276,9 @@ class _ModelSectionState extends ConsumerState<ModelSection> {
                     semanticsLabel: l10n.settingsEndpointLabel,
                     hint: l10n.settingsEndpointHint,
                     onSubmitted: (String _) => unawaited(_saveEndpoint()),
+                    inputFormatters: const <TextInputFormatter>[
+                      PasteDebrisFormatter(),
+                    ],
                   ),
                 ),
               ),
@@ -380,9 +392,12 @@ class _ModelSectionState extends ConsumerState<ModelSection> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
             Text(
-              probe.models.isEmpty
-                  ? l10n.settingsModelNone
-                  : l10n.settingsModelsFound(probe.models.length),
+              probe.models.isNotEmpty
+                  ? l10n.settingsModelsFound(probe.models.length)
+                  // Was zurückkam, wenn keine Modellliste kam (HUM-283).
+                  : probe.answer.isNotEmpty
+                  ? l10n.settingsModelNoList(probe.answer)
+                  : l10n.settingsModelNone,
               style: tokens.typography.ui12.tinted(tokens.colors.fg1),
             ),
             if (probe.keySent)

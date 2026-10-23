@@ -55,9 +55,11 @@ abstract final class ProtoVersion {
   /// settings form: `GetConfig` answers with `ConfigSnapshot.values_json` and
   /// `config_path`, the probe sends `api_key` or `use_stored_key` and reads
   /// `key_sent`, and `LlmKey` stores, reports and removes the access key
-  /// (HUM-069, HUM-140).
+  /// (HUM-069, HUM-140). Raised to 18 with `ProbeLlmResponse.answer`: when no
+  /// model list came, the probe line of the setup screen says what came back
+  /// (status and content type) instead of "0 models" (HUM-283).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 17;
+  static const int minor = 18;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';
