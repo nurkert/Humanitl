@@ -5491,6 +5491,49 @@ turns a test red.
 1. The notice can be dismissed and does not return after a restart.
 2. It does not sit in the left column.
 
+### Umsetzung (HUM-276)
+
+- **Ort.** Der Meldungsplatz `ShellNotices` stand schon unter der Kopfzeile,
+  die Karte darin war aber eine `HDiagnosticCard` von 560 px am linken Rand
+  und lag damit optisch über Leiste und Queue. `AttentionNoticeCard` ist jetzt
+  `AttentionNoticeBanner` (`app/lib/features/tray/widgets/attention_notice.dart`):
+  ein Banner über die ganze Fensterbreite, getönt im Schweregrad, Linie unten
+  (`docs/UX.md` 3.7), mit Code- und Schweregrad-Badge, Titel, Grund, Detail und
+  Vorschlag (`FixControl`), „Dismiss" oben rechts. Der Doku-Verweis entfällt im
+  Banner; bei `UI_002` ist er derselbe Link wie der Vorschlag.
+- **Tastatur.** „Dismiss" liegt in der Lesefolge nach der Kopfzeile und vor dem
+  Kopierknopf des Vorschlags; `Space` schließt, `Esc` nicht. Vom
+  Intercept-Bildschirm aus erreicht `Shift+Tab` das Banner. Ein `Tab` nach vorn
+  bleibt dort in der Gruppe von `HResizablePanes` und erreicht weder Kopfzeile
+  noch Leiste noch Banner; das ist älter als dieses Issue (Kandidat für ein
+  eigenes Issue).
+- **Merken.** `DismissedNotices` (`app/lib/features/shell/providers/notice_dismissal.dart`)
+  liest und schreibt `noticeDismissed.<Code>` in `ui-state.json`, denselben
+  Speicher wie die Leistenbreite (HUM-254). Er liegt in der Shell, weil `tray`
+  `intercept` (Ort von `UiStateFile`) nicht importieren darf
+  (`tools/check-deps.sh`). Gemerkt wird nur eine Meldung aus `showOnce`
+  (`AttentionNotice.lasting`): eine Tatsache über den Schreibtisch. Eine
+  Meldung aus `show` (`IPC_003`, Verbindung weg) betrifft ein Ereignis und
+  kommt beim nächsten wieder. `TrayHost` erkennt das fehlende Tray weiter und
+  zeigt nur das Banner nicht; die Tray-Prüfung des Doctors und des
+  Setup-Bildschirms ist unverändert.
+- **Tests.** `attention_notice_test.dart`: `attention_notice_test: under the
+  header, rail collapsed|expanded` (Banner beginnt an der Unterkante der
+  Kopfzeile, `left == 0`, volle Breite, Leiste und `QueuePane` darunter,
+  Dismiss rechts, Klick schließt) und `attention_notice_test: the keyboard
+  reaches Dismiss, Esc not`; Kontrast der Bannerfläche in beiden Themes.
+  `notice_dismissal_persists_test.dart`: `notice_dismissal_persists_test`
+  (Neustart mit demselben Speicher: kein Banner, frischer Speicher: Banner)
+  und `a_notice_about_one_event_is_not_remembered`. Golden
+  `attention_notice_banner` in vier Varianten; kein bestehendes Golden ändert
+  sich. `tray_host_test` legt jetzt `uiStateOverride()` vor, damit Dismiss nie
+  in die Datei des Menschen schreibt, der den Test fährt.
+- **Mutationsbeweise.** Schreiben in `DismissedNotices.remember` entfernt:
+  `notice_dismissal_persists_test` rot. Prüfung in `TrayHost._seed` entfernt:
+  `notice_dismissal_persists_test` rot (Banner nach Neustart da).
+  `ShellNotices` in die Spalte rechts der Leiste verschoben (alter Ort):
+  beide `under the header`-Tests rot (`left` 48 bzw. 200 statt 0).
+
 ## HUM-279 · `humanitl sandbox attach` has a detach key (before HUM-060)
 
 ### Context

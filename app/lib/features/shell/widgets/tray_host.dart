@@ -33,6 +33,7 @@ import '../../tray/providers/attention.dart';
 import '../../tray/providers/notice.dart';
 import '../../tray/tray_diagnostics.dart';
 import '../providers/navigation.dart';
+import '../providers/notice_dismissal.dart';
 import '../section.dart';
 
 /// Wraps [child] and keeps the desktop in step with it.
@@ -144,7 +145,12 @@ class _TrayHostState extends ConsumerState<TrayHost> {
     _attention.connectionChanged(connected: ref.read(linkLiveProvider));
     _push(ref.read(attentionProvider));
     final Diagnostic? missing = await _ports.tray.start();
-    if (missing != null && mounted) {
+    // Einmal geschlossen heißt für immer geschlossen, auch über einen
+    // Neustart hinweg (HUM-276). Erkannt wird das fehlende Tray trotzdem;
+    // nur das Banner bleibt weg.
+    if (missing != null &&
+        mounted &&
+        !ref.read(dismissedNoticesProvider).contains(missing.code)) {
       ref.read(attentionNoticeProvider.notifier).showOnce(missing);
     }
   }
