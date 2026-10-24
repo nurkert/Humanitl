@@ -985,6 +985,33 @@ rules:
     match: { host: "opencode.ai", path: "/share/**" }
     expires: never
     note: "The share links of OpenCode are read under this path. The upload itself goes to opncd.ai in 1.18.25; this rule covers the case that it moves back to the main host."
+
+  # pi (HUM-274). Measured on pi 1.3.0 with a logging proxy; the adapter sets
+  # PI_OFFLINE=1, PI_SKIP_VERSION_CHECK=1 and PI_TELEMETRY=0, so these rules
+  # are the second lock. Nothing is allowed in addition.
+  - id: 01920000-0000-7000-8000-000000000101
+    action: block
+    match: { host: "pi.dev", path: "/api/**" }
+    expires: never
+    note: "pi asks pi.dev for its latest version (/api/latest-version) and for a fresh model catalogue (/api/models/providers/<id>) at every interactive start; `pi update` fetches its installer from /api/installer/releases. Switched off by PI_OFFLINE and PI_SKIP_VERSION_CHECK; this rule is the second lock. The documentation pages of pi.dev stay unmatched."
+
+  - id: 01920000-0000-7000-8000-000000000102
+    action: block
+    match: { host: "radius.pi.dev" }
+    expires: never
+    note: "Radius, the service of the pi authors: bug report uploads (/bug) and session sharing with sessionShareDestination radius upload the whole conversation. pi 1.3.0 contacts it only on such a command; this rule keeps a session from leaving that way."
+
+  - id: 01920000-0000-7000-8000-000000000103
+    action: block
+    match: { host: "github.com", path: "/sharkdp/fd/releases/**" }
+    expires: never
+    note: "pi downloads fd from its GitHub releases at start when no fd or fdfind is installed. Switched off by PI_OFFLINE, which makes pi print a warning and work without fd; this rule is the second lock."
+
+  - id: 01920000-0000-7000-8000-000000000104
+    action: block
+    match: { host: "github.com", path: "/BurntSushi/ripgrep/releases/**" }
+    expires: never
+    note: "pi downloads ripgrep from its GitHub releases at start when no rg is installed. Switched off by PI_OFFLINE; this rule is the second lock."
 # humanitl rules test https://models.dev/api.json
 # verdict: block
 # humanitl rules test https://eu.posthog.com/capture
@@ -996,6 +1023,16 @@ rules:
 # humanitl rules test https://registry.npmjs.org/@ai-sdk%2fopenai
 # verdict: ask
 # humanitl rules test https://opencode.ai/docs/
+# verdict: ask
+# humanitl rules test https://pi.dev/api/latest-version
+# verdict: block
+# humanitl rules test https://pi.dev/docs/latest
+# verdict: ask
+# humanitl rules test https://radius.pi.dev/v1/bug --method POST
+# verdict: block
+# humanitl rules test https://github.com/sharkdp/fd/releases/latest
+# verdict: block
+# humanitl rules test https://github.com/earendil-works/pi
 # verdict: ask
 ```
 
@@ -1011,6 +1048,10 @@ rules:
 | `…0008` | `registry.npmjs.org`, `GET`/`HEAD` | ask | OpenCode installs provider packages on first use; held on purpose, so you learn what it is. |
 | `…0009` | `models.opencode.ai` | block | The model catalog host the installed OpenCode actually uses. |
 | `…000a` | `opencode.ai`, path `/share/**` | block | Share links, in case the upload moves back to the main host. |
+| `…0101` | `pi.dev`, path `/api/**` | block | Version check, model catalogue and installer of pi. Switched off by `PI_OFFLINE`; this is the second lock. |
+| `…0102` | `radius.pi.dev` | block | Bug report uploads and Radius session sharing of pi; they upload the whole conversation. |
+| `…0103` | `github.com`, path `/sharkdp/fd/releases/**` | block | pi downloads `fd` when it is missing. Switched off by `PI_OFFLINE`; this is the second lock. |
+| `…0104` | `github.com`, path `/BurntSushi/ripgrep/releases/**` | block | pi downloads `rg` when it is missing. Switched off by `PI_OFFLINE`; this is the second lock. |
 
 The `ask` rule `…0008` behaves like no rule at all; it exists so that the
 Rules screen can explain the request. Any rule of yours for

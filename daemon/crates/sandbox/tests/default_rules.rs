@@ -44,7 +44,9 @@ fn default_rules_parse() {
     // installierten Binary 1.18.25: der Modellkatalog liegt auf
     // `models.opencode.ai` und nicht auf `models.dev`, und das Teilen einer
     // Sitzung geht an `opncd.ai` und nicht an `opencode.ai/share`.
-    assert_eq!(set.len(), 10);
+    // Four more for pi (HUM-274): its version check and catalogue, Radius,
+    // and the two tool downloads from GitHub.
+    assert_eq!(set.len(), 14);
     for rule in set.iter() {
         assert!(rule.bundled, "rule {} is not bundled", rule.id);
         assert!(
@@ -228,14 +230,14 @@ fn a_user_rule_overrides_a_bundled_rule() {
         Action::Allow,
         "the rule of the user is evaluated before the bundled one"
     );
-    assert_eq!(set.len(), 11);
+    assert_eq!(set.len(), 15);
     assert!(
         !set.iter().next().expect("the user rule").bundled,
         "the rule of the user comes first"
     );
     assert!(
         set.iter().skip(1).all(|rule| rule.bundled),
-        "the ten bundled rules follow it"
+        "the fourteen bundled rules follow it"
     );
 }
 
@@ -283,5 +285,64 @@ fn bundled_rules_cover_the_known_startup_hosts() {
         vec!["registry.npmjs.org"],
         "of the known startup targets the bundled rules block all but one, \
          and the remaining one is the npm request that the catalog card explains"
+    );
+}
+
+/// pi's phone-home hosts are blocked, and their neighbours stay a question
+/// (HUM-274). A block on all of `pi.dev` or `github.com` would refuse the
+/// documentation and every repository the agent clones.
+#[test]
+fn the_pi_rules_block_exactly_what_pi_does_on_its_own() {
+    let set = bundled();
+    for (host, method, path, expected) in [
+        ("pi.dev", Method::GET, "/api/latest-version", Action::Block),
+        (
+            "pi.dev",
+            Method::GET,
+            "/api/models/providers/openrouter",
+            Action::Block,
+        ),
+        (
+            "pi.dev",
+            Method::GET,
+            "/api/installer/releases/1.4.0",
+            Action::Block,
+        ),
+        ("pi.dev", Method::GET, "/docs/latest", Action::Ask),
+        ("pi.dev", Method::GET, "/apiary", Action::Ask),
+        ("radius.pi.dev", Method::POST, "/v1/bug", Action::Block),
+        (
+            "github.com",
+            Method::GET,
+            "/sharkdp/fd/releases/latest",
+            Action::Block,
+        ),
+        (
+            "github.com",
+            Method::GET,
+            "/BurntSushi/ripgrep/releases/download/14.1.1/x.tar.gz",
+            Action::Block,
+        ),
+        ("github.com", Method::GET, "/sharkdp/fd", Action::Ask),
+        ("github.com", Method::GET, "/earendil-works/pi", Action::Ask),
+    ] {
+        let outcome = verdict(&set, host, &method, path);
+        assert_eq!(
+            outcome.action(),
+            expected,
+            "{method} https://{host}{path} came out as {outcome:?}"
+        );
+    }
+}
+
+/// Both adapters hand the daemon the same bundled set: it loads one
+/// `rules/default.yaml` for every session (HUM-038, HUM-274).
+#[test]
+fn both_adapters_bundle_the_same_rules() {
+    use humanitl_sandbox::PiAdapter;
+
+    assert_eq!(
+        PiAdapter::new().default_rules(),
+        OpenCodeAdapter::new().default_rules()
     );
 }

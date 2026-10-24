@@ -408,4 +408,46 @@ void main() {
       'http://192.168.1.30:11434/',
     ));
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  // HUM-274: the agent of the next session is chosen in the form. The control
+  // shows the configured adapter, and a click writes the other one through
+  // SetConfig.
+  testWidgets('the agent switch shows agent.adapter and writes it', (
+    WidgetTester tester,
+  ) async {
+    final FakeDaemonClient client = configured();
+    client.configValues = ConfigValues(
+      values: <String, Object?>{
+        ...client.configValues.values,
+        'agent': <String, Object?>{'adapter': 'pi'},
+      },
+      configPath: client.configValues.configPath,
+    );
+    await openSettings(tester, client);
+    final Finder control = find.byKey(const Key('settings-agent'));
+    expect(tester.widget<HSegmented<String>>(control).selected, 'pi');
+
+    final Finder openCode = find.descendant(
+      of: control,
+      matching: find.text('OpenCode'),
+    );
+    await tester.ensureVisible(openCode);
+    await tester.pumpAndSettle();
+    await tester.tap(openCode);
+    await tester.pumpAndSettle();
+    expect(client.configWrites.last, ('agent.adapter', 'opencode'));
+    expect(tester.widget<HSegmented<String>>(control).selected, 'opencode');
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+  testWidgets('the agent switch shows OpenCode when agent.adapter is unset', (
+    WidgetTester tester,
+  ) async {
+    await openSettings(tester, configured());
+    expect(
+      tester
+          .widget<HSegmented<String>>(find.byKey(const Key('settings-agent')))
+          .selected,
+      'opencode',
+    );
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 }

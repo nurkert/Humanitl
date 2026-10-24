@@ -21,14 +21,16 @@
 //!    sonst nichts. Ob der LLM-Endpunkt antwortet, beantwortet die Probe aus
 //!    HUM-039, nicht der Adapter.
 //!
-//! Der einzige Adapter des MVP ist [`opencode::OpenCodeAdapter`]; weitere
-//! (Aider, Codex, Claude Code) kommen nach dem MVP und berühren diesen Kern
-//! nicht.
+//! The MVP ships two adapters, [`opencode::OpenCodeAdapter`] and
+//! [`pi::PiAdapter`] (HUM-274); further ones (Aider, Codex, Claude Code) come
+//! after the MVP and do not touch this core.
 
 pub mod briefing;
 pub mod locate;
 pub mod opencode;
 pub mod opencode_models;
+pub mod pi;
+pub mod pi_config;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -42,6 +44,7 @@ pub use crate::agent::locate::{
     AGENT_PROGRAM_DIR, AgentProgram, bind_agent_program, plan_agent_program,
 };
 pub use crate::agent::opencode::OpenCodeAdapter;
+pub use crate::agent::pi::PiAdapter;
 
 /// Der Ort in der Sandbox, an dem das Projekt liegt.
 ///
@@ -732,6 +735,25 @@ pub trait AgentAdapter: Send + Sync {
     /// Adapters ist ([`AgentAdapter::is_agent_command`]).
     fn program(&self) -> &'static str;
 
+    /// The command that installs the program where the sandbox finds it.
+    ///
+    /// It stands in the fix of `AGENT_001` and of `DOCTOR_007`; a suggestion
+    /// that installs the program under `$HOME` would end in `AGENT_004`.
+    fn install_command(&self) -> &'static str;
+
+    /// The documentation of the agent; stands in `docs` of its findings.
+    fn docs_url(&self) -> &'static str;
+
+    /// Whether the program is one native executable, which the daemon can
+    /// bind into the sandbox from a per-user directory (HUM-278).
+    ///
+    /// False for a script such as pi, a Node entry point that needs its
+    /// `node_modules` (HUM-274): pointing `agent.command` at it does not help,
+    /// so `AGENT_001` and `DOCTOR_007` offer the installer instead.
+    fn is_native_program(&self) -> bool {
+        true
+    }
+
     /// Wahr, wenn dieses Kommando der Agent dieses Adapters ist.
     ///
     /// Ein leeres Kommando ist er immer: Dann setzt der Adapter es selbst.
@@ -808,7 +830,7 @@ impl AdapterRegistry {
     #[must_use]
     pub fn builtin() -> Self {
         Self {
-            adapters: vec![Box::new(OpenCodeAdapter::new())],
+            adapters: vec![Box::new(OpenCodeAdapter::new()), Box::new(PiAdapter::new())],
         }
     }
 

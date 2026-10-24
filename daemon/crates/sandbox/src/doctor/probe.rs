@@ -727,27 +727,23 @@ fn reading(run: Option<Result<CommandRun, String>>) -> Reading<CommandRun> {
     }
 }
 
-/// Das Kommando, das ein Adapter ohne Ersatz aus der Konfiguration startet.
+/// The command an adapter starts without a replacement from the
+/// configuration, from [`crate::AdapterRegistry::builtin`] (HUM-274).
 ///
-/// Der einzige eingebaute Adapter ist `opencode`
-/// ([`crate::AdapterRegistry::builtin`]); ein unbekannter Name aus
-/// `agent.adapter` wird als Kommando genommen, damit der Beleg wenigstens
-/// sagt, wonach gesucht wurde.
+/// An unknown name from `agent.adapter` is taken as the command, so the
+/// finding at least says what was searched for.
 fn default_command(adapter: &str) -> String {
-    if adapter == opencode::ADAPTER_ID {
-        opencode::DEFAULT_COMMAND.to_owned()
-    } else {
-        adapter.to_owned()
-    }
+    crate::AdapterRegistry::builtin()
+        .get(adapter)
+        .map_or_else(|| adapter.to_owned(), |known| known.program().to_owned())
 }
 
-/// Wie sich das Kommando eines Adapters nachinstallieren lässt.
+/// How the command of an adapter is installed where the sandbox sees it.
 fn install_command(adapter: &str) -> String {
-    if adapter == opencode::ADAPTER_ID {
-        opencode::INSTALL_COMMAND.to_owned()
-    } else {
-        format!("install {adapter} and put it in PATH")
-    }
+    crate::AdapterRegistry::builtin().get(adapter).map_or_else(
+        || format!("install {adapter} and put it in PATH"),
+        |known| known.install_command().to_owned(),
+    )
 }
 
 /// Die Tatsachen über `bwrap` aus Fund und Fassungsabfrage.

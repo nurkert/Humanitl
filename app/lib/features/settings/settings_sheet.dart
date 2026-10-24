@@ -6,7 +6,8 @@
 /// search, tiers, origins, reset per field and live reload behind the MVP. The
 /// form shows `hold.timeout_secs`, `hold.ask_mode`, `ui.language`, `ui.theme`,
 /// `ui.notifications`, `sandbox.work_dir`, the endpoint, the model, the
-/// access key and `tls.trust_system_store` (HUM-257); everything else stays
+/// access key, `tls.trust_system_store` (HUM-257) and `agent.adapter`
+/// (HUM-274); everything else stays
 /// in `config.toml`, one click away.
 ///
 /// Every value comes from `GetConfig` and goes back through `SetConfig` and
@@ -233,6 +234,35 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
           style: tokens.typography.ui12.tinted(tokens.colors.fg1),
         ),
         ModelSection(config: config, status: widget.status, anchors: _anchors),
+        // Welcher Agent in der nächsten Sitzung startet (HUM-274). Welche Ids
+        // es gibt, prüft der Daemon; das Formular bietet die seines Registers.
+        SettingGroupTitle(l10n.settingsSectionAgent),
+        SettingRow(
+          label: l10n.settingsAgentLabel,
+          help: l10n.settingsAgentHelp,
+          refusal: _refusals[FormKeys.agentAdapter],
+          refusalKey: const Key('settings-agent-refusal'),
+          anchor: _anchors[FormKeys.agentAdapter],
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: HSegmented<String>(
+              key: const Key('settings-agent'),
+              options: <HSegmentOption<String>>[
+                HSegmentOption<String>(
+                  value: 'opencode',
+                  label: l10n.settingsAgentOpenCode,
+                ),
+                HSegmentOption<String>(
+                  value: 'pi',
+                  label: l10n.settingsAgentPi,
+                ),
+              ],
+              selected: config.agentAdapter,
+              onSelect: (String adapter) =>
+                  unawaited(_write(FormKeys.agentAdapter, adapter)),
+            ),
+          ),
+        ),
         SettingGroupTitle(l10n.settingsSectionHolding),
         SettingRow(
           label: l10n.settingsTimeoutLabel,

@@ -877,7 +877,7 @@ registry! {
     /// nichts zu starten, deshalb ist der Befund blockierend (HUM-037).
     AGENT_001 => "agent", "Agent-Kommando nicht gefunden", "#agent_001",
         "Das Agent-Kommando ist weder im `PATH`, in `~/.opencode/bin`, `~/.local/bin`, `~/bin` noch über `agent.command` gesetzt (HUM-278).",
-        "`CopyCommand` mit `humanitl config set agent.command`, der Pfad ist ein Platzhalter; der Installationsbefehl steht im Text.";
+        "`CopyCommand` mit `humanitl config set agent.command`, der Pfad ist ein Platzhalter, und der Installationsbefehl steht im Text; bei einem Adapter, dessen Programm ein Skript ist (pi, HUM-274), der Installationsbefehl des Adapters selbst, weil der Daemon ein Skript nie einbindet.";
     /// `agent.command` zeigt auf eine Datei, die es nicht gibt oder die nicht
     /// ausführbar ist. Die Sandbox startet trotzdem, weil der Pfad in der
     /// Sandbox ein anderer sein kann als auf dem Host; scheitert das `exec`,
@@ -1090,7 +1090,7 @@ registry! {
     /// Shim. Ohne das Kommando läuft der Agent aber nicht (HUM-075, HUM-037).
     DOCTOR_007 => "doctor", "Agent-Kommando nicht im PATH", "#doctor_007",
         "Das Agent-Kommando liegt weder im `PATH` des Daemons noch in `~/.opencode/bin`, `~/.local/bin` oder `~/bin` (HUM-278).",
-        "`CopyCommand` mit `humanitl config set agent.command`, der Pfad ist ein Platzhalter; der Installationsbefehl steht im Text.";
+        "`CopyCommand` mit `humanitl config set agent.command`, der Pfad ist ein Platzhalter, und der Installationsbefehl steht im Text; bei einem Adapter, dessen Programm ein Skript ist (pi, HUM-274), der Installationsbefehl des Adapters selbst, weil der Daemon ein Skript nie einbindet.";
     /// Der Endpunkt des Sprachmodells fehlt oder hat nicht geantwortet.
     ///
     /// Steht nur nach einer Messung. Der Befund der Endpunkt-Probe steht mit
@@ -1548,6 +1548,17 @@ registry! {
     CONFIG_021 => "config", "Modellserver nicht geändert", "#config_021",
         "`LlmServers` oder `humanitl llm server` bekommt einen ungültigen, doppelten oder unbekannten Namen, einen Endpunkt, der keiner ist, oder soll den aktiven Server ohne Nachfolger oder während einer Sitzung entfernen; `LlmKey` trifft einen Server, der sich beim Ablegen geändert hat oder dessen Verweis ein anderer trägt; `SetConfig` nennt einen Server, der nicht mehr aktiv ist; oder beim Laden gibt es keinen gültigen aktiven Server, einen geteilten Verweis oder einen Endpunkt, der nicht vom aktiven Server kommt.",
         "`CopyCommand`: `humanitl llm server ls` zeigt die Namen; beim Entfernen des aktiven Servers `--use NAME` mit dem Nachfolger.";
+
+    // HUM-274: pi is a Node script.
+    /// The agent command is a script whose `#!` line asks for Node.js
+    /// (`#!/usr/bin/env node` or an absolute `node`), and the sandbox has no
+    /// startable `node` where the script looks for it: not on the sandbox
+    /// `PATH`, or not under a mount. `env` would end with exit 127 after the
+    /// start, although the command itself is reachable. Blocking, like
+    /// `AGENT_004`; undecidable lookups produce no finding (HUM-274).
+    AGENT_006 => "agent", "Node.js missing in the sandbox", "#agent_006",
+        "The command resolves to a script that starts Node.js through its `#!` line, and the sandbox finds no executable `node` on its `PATH` (or at the absolute path the line names). The finding names the script, the sandbox `PATH` and where a `node` lies on the host, if anywhere.",
+        "`ChangeSetting` on `sandbox.env.PATH` when a mounted `node` is only missing from the path, `CopyCommand` that installs the host's `node` under `/usr/local/bin` when it is not mounted, the installer of pi when the `#!` line names an absolute `node` outside the mounts, otherwise `OpenUrl` to the Node.js download page (pi needs 22.19 or newer).";
 }
 
 /// Sucht einen Code im Register.
