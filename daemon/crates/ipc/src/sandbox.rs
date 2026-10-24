@@ -87,7 +87,6 @@ use std::time::{Duration, Instant, SystemTime};
 
 use humanitl_config::secret::{KeyRef, KeyStore};
 use humanitl_config::{Config, WorkMode};
-use humanitl_core::Severity as CoreSeverity;
 use humanitl_core::diagnostics::codes;
 use humanitl_core::ids::{SandboxId, SessionId};
 use humanitl_core::{Diagnostic, FixAction, Severity};
@@ -99,7 +98,8 @@ use humanitl_sandbox::summary::SessionSummary;
 use humanitl_sandbox::{
     AdapterRegistry, AgentContext, AgentKey, BwrapBackend, CheckResult, IsolationCheck, KILL_GRACE,
     LaunchInputs, MIN_BWRAP_VERSION, MountPolicy, SANDBOX_SHELL, SandboxBackend, SandboxFile,
-    SandboxHandle, SandboxProfile, SessionContext, StdioMode, Termination, shell_line,
+    SandboxHandle, SandboxProfile, SessionContext, StdioMode, Termination, WorkDirSource,
+    check_project_dir, shell_line,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -319,6 +319,8 @@ struct Running {
     started_at: SystemTime,
     profile: String,
     work_dir: PathBuf,
+    /// Woher `work_dir` kam (HUM-293), für jeden Befund über ihn.
+    work_dir_source: WorkDirSource,
     work_mode: WorkMode,
     /// Das Terminal dieser Sitzung: der eine Filter, der Ringpuffer und die
     /// Clients, die zusehen (HUM-042).
@@ -352,15 +354,33 @@ pub struct SandboxService {
 
 /// Was der Mensch für den nächsten Start gewählt hat.
 ///
-/// Es steht hier und nicht in `config.toml`, weil `SetConfig` erst mit dem
-/// Einstellungs-Bildschirm kommt (HUM-069). Die Wahl gilt deshalb für diese
-/// Sitzung; ohne sie fiele die Momentaufnahme beim nächsten `Status` still
-/// auf das Verzeichnis der Konfiguration zurück, und der gewählte Ordner
-/// verschwände, ohne dass jemand etwas angefasst hätte.
+/// Profil und Modus stehen hier und nicht in `config.toml`; sie gelten für
+/// diese Sitzung des Daemons.
+///
+/// **Der Projektordner steht nicht hier** (HUM-293). Er hat genau eine Quelle,
+/// `sandbox.work_dir` in `config.toml`, und die Oberfläche schreibt ihn mit
+/// `SetConfig`. Bis HUM-293 merkte sich der Daemon den Ordner aus
+/// `Sandbox(Plan)` an dieser Stelle; die Oberfläche startete dann in ihm,
+/// `humanitl sandbox run` aber im aktuellen Verzeichnis, und `SANDBOX_006`
+/// nannte `sandbox.work_dir` für einen Pfad, der in keiner Datei stand. Ein
+/// `work_dir` in `Plan` gilt nur für diesen einen Plan, eines in `Start` nur
+/// für diesen einen Start ([`Pending::starting_work_dir`]).
 #[derive(Debug, Default)]
 struct Pending {
     profile: Option<String>,
-    work_dir: Option<PathBuf>,
+    /// Der geprüfte Ordner, den der Start nennt, der gerade den Anspruch
+    /// hält (`--work` oder das aktuelle Verzeichnis von `humanitl run`).
+    ///
+    /// Mit ihm steht seine Quelle, damit ein Befund während des Starts
+    /// `--work` oder die Datei nennt und nicht „die Anfrage".
+    ///
+    /// Er lebt, bis die Sandbox steht: [`Inner::launch`] leert ihn, sobald
+    /// `Running::work_dir` ihn nennt, und [`StartClaim`] beim Loslassen,
+    /// falls der Start vorher scheitert. Ein `Plan` ohne Ordner, der danach
+    /// kommt, auch im Fenster der Zusammenfassung nach dem Ende, zeigt den
+    /// laufenden oder den gespeicherten Ordner; ein Ordner eines Aufrufs wird
+    /// nie zum Ordner des nächsten.
+    starting_work_dir: Option<(PathBuf, WorkDirSource)>,
     work_mode: Option<WorkMode>,
     /// Ob gerade ein Start läuft, der noch kein Handle hat.
     ///
@@ -407,7 +427,10 @@ struct StartClaim {
 
 impl Drop for StartClaim {
     fn drop(&mut self) {
-        lock(&self.inner.pending).claimed = false;
+        let mut pending = lock(&self.inner.pending);
+        pending.claimed = false;
+        pending.starting_work_dir = None;
+        drop(pending);
         self.inner.bump_generation();
     }
 }
@@ -886,10 +909,11 @@ impl Inner {
         }
     }
 
-    /// Prüft den Wunsch und merkt ihn sich für den nächsten Start.
+    /// Prüft den Wunsch eines Starts und merkt ihn sich für diesen Start.
     ///
     /// Leere Felder ändern nichts: `Status` schickt einen leeren Wunsch und
-    /// darf die Wahl nicht löschen.
+    /// darf die Wahl nicht löschen. Ein Ordner gilt nur für den Start, der
+    /// den Anspruch hält ([`Pending::starting_work_dir`], HUM-293).
     ///
     /// **Geprüft wird vor dem Merken, und gemerkt wird nur ein Wunsch, der
     /// ganz durchkommt.** Der Socket ist die Vertrauensgrenze, nicht die
@@ -912,7 +936,19 @@ impl Inner {
         config: &Config,
         plan: &v1::sandbox_request::Plan,
     ) -> Result<Option<PathBuf>, Diagnostic> {
-        Ok(self.commit(&self.plan_choice(config, plan)?))
+        let wish = self.plan_choice(config, plan)?;
+        self.commit(&wish);
+        let mut pending = lock(&self.pending);
+        pending.starting_work_dir = wish.work_dir.clone().map(|dir| {
+            (
+                dir,
+                wish.work_dir_source
+                    .clone()
+                    .unwrap_or(WorkDirSource::Request),
+            )
+        });
+        drop(pending);
+        Ok(wish.work_dir)
     }
 
     /// What this wish chooses, checked against `config`, without writing
@@ -929,9 +965,15 @@ impl Inner {
                 Some(name.to_owned())
             }
         };
-        let work_dir = match plan.work_dir.trim() {
-            "" => None,
-            dir => Some(self.check_work_dir(config, Path::new(dir))?),
+        let (work_dir, work_dir_source) = match plan.work_dir.trim() {
+            "" => (None, None),
+            dir => {
+                let from = crate::work_dir::source_from_proto(plan.work_dir_source.as_ref());
+                (
+                    Some(self.check_work_dir(config, Path::new(dir), &from)?),
+                    Some(from),
+                )
+            }
         };
         let work_mode = match plan.work_mode.trim().to_ascii_lowercase().as_str() {
             "ro" => Some(WorkMode::Ro),
@@ -941,37 +983,37 @@ impl Inner {
         Ok(PlanChoice {
             profile,
             work_dir,
+            work_dir_source,
             work_mode,
         })
     }
 
-    /// Writes a checked choice into `pending`, in one locked step.
-    fn commit(&self, wish: &PlanChoice) -> Option<PathBuf> {
+    /// Writes the profile and mode of a checked choice into `pending`, in
+    /// one locked step. The folder of a choice is never kept (HUM-293); the
+    /// caller carries the checked folder of **this** wish on, rather than
+    /// fetching it from `pending` later, when another call could have put a
+    /// different one there.
+    fn commit(&self, wish: &PlanChoice) {
         let mut pending = lock(&self.pending);
         if let Some(profile) = &wish.profile {
             pending.profile = Some(profile.clone());
         }
-        if let Some(dir) = &wish.work_dir {
-            pending.work_dir = Some(dir.clone());
-        }
         if let Some(mode) = wish.work_mode {
             pending.work_mode = Some(mode);
         }
-        // Das Verzeichnis, das für **diesen** Wunsch gilt, gelesen unter
-        // demselben Schloss, unter dem es geschrieben wurde. Der Aufrufer
-        // trägt es weiter, statt es später noch einmal aus `pending` zu holen:
-        // Dazwischen könnte ein anderer Aufruf ein anderes hineingelegt haben,
-        // und die Sitzung löste dann gegen ein Verzeichnis auf, das niemand
-        // für sie gewählt hat.
-        pending.work_dir.clone()
     }
 
     /// The choices in `pending` now.
     fn pending_choice(&self) -> PlanChoice {
         let pending = lock(&self.pending);
+        let (work_dir, work_dir_source) = pending
+            .starting_work_dir
+            .clone()
+            .map_or((None, None), |(dir, from)| (Some(dir), Some(from)));
         PlanChoice {
             profile: pending.profile.clone(),
-            work_dir: pending.work_dir.clone(),
+            work_dir,
+            work_dir_source,
             work_mode: pending.work_mode,
         }
     }
@@ -981,110 +1023,30 @@ impl Inner {
         let now = self.pending_choice();
         PlanChoice {
             profile: wish.profile.clone().or(now.profile),
+            work_dir_source: if wish.work_dir.is_some() {
+                wish.work_dir_source.clone()
+            } else {
+                now.work_dir_source
+            },
             work_dir: wish.work_dir.clone().or(now.work_dir),
             work_mode: wish.work_mode.or(now.work_mode),
         }
     }
 
-    /// Checks a project directory a start inherits from an earlier `Plan`
-    /// against the configuration this start refreshed (HUM-277).
-    ///
-    /// The `Plan` checked it against the configuration of its time; since then
-    /// `SetConfig` may have moved `sandbox.work_dir`, and a directory outside
-    /// the home directory is only allowed while it is the configured one. A
-    /// directory this start names itself was checked by [`Inner::remember`]
-    /// a moment ago. A refused one leaves `pending`, so the next start does
-    /// not inherit it either.
-    fn revalidate_inherited(
-        &self,
-        plan: &v1::sandbox_request::Plan,
-        dir: Option<PathBuf>,
-    ) -> Result<Option<PathBuf>, Diagnostic> {
-        if !plan.work_dir.trim().is_empty() {
-            return Ok(dir);
-        }
-        let Some(inherited) = dir else {
-            return Ok(None);
-        };
-        match self.check_work_dir(&self.config(), &inherited) {
-            Ok(checked) => Ok(Some(checked)),
-            Err(diagnostic) => {
-                let mut pending = lock(&self.pending);
-                if pending.work_dir.as_ref() == Some(&inherited) {
-                    pending.work_dir = None;
-                }
-                Err(diagnostic)
-            }
-        }
-    }
-
-    /// Prüft ein Projektverzeichnis, das über die RPC hereinkommt.
-    ///
-    /// Drei Stufen, und alle drei müssen halten:
-    ///
-    /// 1. **Es ist ein Verzeichnis.** Absolut, ohne `..`, vorhanden, und nach
-    ///    dem Auflösen der Symlinks immer noch ein Verzeichnis. Der aufgelöste
-    ///    Pfad ist der, der weiterreist: Sonst zeigte der Bildschirm den
-    ///    geschriebenen und die Sandbox hängte den aufgelösten ein.
-    /// 2. **Die Politik der Sandbox** ([`MountPolicy::check_work_dir`]) — die
-    ///    Denylist, das Heimatverzeichnis selbst, die Verzeichnisse von
-    ///    Humanitl, alles, was darüber liegt.
-    /// 3. **Es liegt dort, wo Projekte liegen**: unter dem Heimatverzeichnis,
-    ///    oder es ist genau das Verzeichnis, das in `sandbox.work_dir` steht.
-    ///    Stufe 2 kennt `/etc`, `/usr` und `/var/lib` nicht, und ein
-    ///    Bildschirm, der „der Agent sieht nur dein Projekt" verspricht und
-    ///    `/etc` zeigt, hat die Zusage gebrochen. Wer ein Projekt außerhalb
-    ///    des Heimatverzeichnisses hat, schreibt es in `config.toml`; dort
-    ///    steht die Erklärung eines Menschen und nicht der Wunsch eines
-    ///    Clients.
+    /// Prüft ein Projektverzeichnis, das über die RPC hereinkommt, gegen
+    /// `config` ([`crate::work_dir::check_requested`]). `from` ist die
+    /// Quelle, die der Client nennt; sie steht in jedem Befund (HUM-293).
     ///
     /// # Errors
     ///
     /// `SANDBOX_006` mit dem Grund, in der Sprache des Nutzers.
-    fn check_work_dir(&self, config: &Config, dir: &Path) -> Result<PathBuf, Diagnostic> {
-        if !dir.is_absolute() {
-            return Err(work_dir_refused(
-                dir,
-                "a project directory is an absolute path",
-            ));
-        }
-        if dir
-            .components()
-            .any(|part| part == std::path::Component::ParentDir)
-        {
-            return Err(work_dir_refused(
-                dir,
-                "a project directory is written out, without `..`",
-            ));
-        }
-        let resolved = dir.canonicalize().map_err(|error| {
-            work_dir_refused(dir, &format!("cannot be read as a directory: {error}"))
-        })?;
-        if !resolved.is_dir() {
-            return Err(work_dir_refused(dir, "is not a directory"));
-        }
-        MountPolicy::from_paths(&self.paths).check_work_dir(&resolved)?;
-
-        let home = self.paths.home();
-        let configured = config
-            .sandbox
-            .work_dir
-            .as_ref()
-            .and_then(|dir| dir.canonicalize().ok());
-        let allowed = resolved.starts_with(&home)
-            || configured.is_some_and(|configured| configured == resolved);
-        if !allowed {
-            return Err(work_dir_refused(
-                dir,
-                &format!(
-                    "lies outside {} and is not the directory named in sandbox.work_dir; a project \
-                     directory comes from your home directory, and anything else is declared in \
-                     config.toml",
-                    home.display()
-                ),
-            ));
-        }
-        Ok(resolved)
+    fn check_work_dir(
+        &self,
+        config: &Config,
+        dir: &Path,
+        from: &WorkDirSource,
+    ) -> Result<PathBuf, Diagnostic> {
+        crate::work_dir::check_requested(&self.paths, config.sandbox.work_dir.as_deref(), dir, from)
     }
 
     /// Der Schnappschuss zu diesem Wunsch, oder der Befund, der ihn verhindert.
@@ -1286,6 +1248,7 @@ impl Inner {
             profile: start.profile.clone(),
             work_dir: start.work_dir.clone(),
             work_mode: start.work_mode.clone(),
+            work_dir_source: start.work_dir_source.clone(),
         };
         // Der Anspruch zuerst, vor jeder Prüfung, die etwas merkt: Ein
         // zweiter Start soll `pending` nicht anfassen, während der erste
@@ -1315,10 +1278,7 @@ impl Inner {
             let this = Arc::clone(&self);
             let _ = tokio::task::spawn_blocking(move || this.refresh_for_start()).await;
         }
-        let work_dir = match self
-            .remember(&plan)
-            .and_then(|dir| self.revalidate_inherited(&plan, dir))
-        {
+        let work_dir = match self.remember(&plan) {
             Ok(work_dir) => work_dir,
             Err(diagnostic) => {
                 let _ = tx.send(diagnostic_event(&diagnostic)).await;
@@ -2167,6 +2127,9 @@ impl Inner {
                 .unwrap_or_default(),
             path: sandbox_path_of(&prepared),
         };
+        // Die Quelle, solange `running` noch leer ist: danach nennte
+        // [`Inner::work_dir_source`] die der laufenden Sitzung.
+        let work_dir_source = self.work_dir_source(&self.config(), &self.pending_choice(), plan);
         let handle = launcher.launch(&launch)?;
         drop(launcher);
         let sandbox = handle.id;
@@ -2185,10 +2148,17 @@ impl Inner {
             started_at: SystemTime::now(),
             profile: prepared.profile.name.clone(),
             work_dir: prepared.session.work_src.clone(),
+            work_dir_source,
             work_mode: prepared.session.work_mode,
             terminal,
             agent,
         });
+        drop(running);
+        // Ab hier nennt die laufende Sandbox den Ordner; der des Starts gilt
+        // für nichts mehr (HUM-293). `pending` erst nach `running`
+        // losgelassen: Die Reihenfolge der Schlösser ist sonst überall
+        // `pending` vor `running`.
+        lock(&self.pending).starting_work_dir = None;
         Ok(Launched {
             warnings,
             watch,
@@ -2535,8 +2505,20 @@ impl Inner {
         // `config.toml` kam bisher ungeprüft bis zum Start durch. Kein Ordner
         // ist für einen Plan kein Befund, sondern eine offene Wahl: Die
         // Momentaufnahme nennt dann keinen, und das Setup verlangt einen.
-        if need == KeyNeed::Start || !work_src.as_os_str().is_empty() {
-            policy.check_work_dir(&work_src)?;
+        // Der Start prüft dazu, dass der Ordner da ist. Der Befund nennt die
+        // Quelle des Pfades (HUM-293); gesucht wird sie erst, wenn es einen
+        // Befund gibt, denn für einen Ordner aus der Konfiguration heißt das,
+        // sie noch einmal zu lesen.
+        if need == KeyNeed::Start {
+            with_source(
+                |from| check_project_dir(&policy, &work_src, from),
+                || self.work_dir_source(&config, choice, plan),
+            )?;
+        } else if !work_src.as_os_str().is_empty() {
+            with_source(
+                |from| policy.check_work_dir_from(&work_src, from),
+                || self.work_dir_source(&config, choice, plan),
+            )?;
         }
         let work_mode = self.work_mode(&config, choice, plan);
         // Every session gets the adapter's contribution, whatever its command
@@ -2841,8 +2823,8 @@ impl Inner {
     }
 
     /// Das Projektverzeichnis dieses Wunsches, sonst das der laufenden
-    /// Sandbox, sonst das zuletzt gewählte, sonst das der Konfiguration,
-    /// sonst [`Self::default_work_dir`].
+    /// Sandbox, sonst das des Starts, der gerade anläuft, sonst
+    /// `sandbox.work_dir` der Konfiguration, sonst [`Self::default_work_dir`].
     fn work_dir(
         &self,
         config: &Config,
@@ -2880,14 +2862,54 @@ impl Inner {
         if let Some(running) = lock(&self.running).as_ref() {
             return running.work_dir.clone();
         }
-        if let Some(chosen) = choice.work_dir.clone() {
-            return chosen;
+        if let Some(starting) = choice.work_dir.clone() {
+            return starting;
         }
         config
             .sandbox
             .work_dir
             .clone()
             .unwrap_or_else(|| self.default_work_dir(cwd))
+    }
+
+    /// Woher der Ordner kommt, den [`Self::work_dir`] für diesen Wunsch
+    /// nennt (HUM-293): die Quelle, die der Client zu seinem `work_dir`
+    /// angibt, sonst die Herkunft von `sandbox.work_dir`, sonst das aktuelle
+    /// Verzeichnis des Daemons.
+    ///
+    /// Für `sandbox.work_dir` liest das die Konfiguration noch einmal; die
+    /// Aufnahme im Dienst kennt Werte, aber nicht ihre Herkunft. Scheitert
+    /// das Lesen, ist die Quelle die Datei, die `SetConfig` schreibt.
+    fn work_dir_source(
+        &self,
+        config: &Config,
+        choice: &PlanChoice,
+        plan: &v1::sandbox_request::Plan,
+    ) -> WorkDirSource {
+        if !plan.work_dir.trim().is_empty() && choice.work_dir.is_some() {
+            return choice.work_dir_source.clone().unwrap_or_else(|| {
+                crate::work_dir::source_from_proto(plan.work_dir_source.as_ref())
+            });
+        }
+        if let Some(running) = lock(&self.running).as_ref() {
+            return running.work_dir_source.clone();
+        }
+        if choice.work_dir.is_some() {
+            return choice
+                .work_dir_source
+                .clone()
+                .unwrap_or(WorkDirSource::Request);
+        }
+        if config.sandbox.work_dir.is_none() {
+            return WorkDirSource::CurrentDir;
+        }
+        let file = self.paths.config_path();
+        match self.resolver.current() {
+            Ok(now) if now.config.sandbox.work_dir.is_some() => {
+                crate::work_dir::configured_source(&now, &file)
+            }
+            Ok(_) | Err(_) => WorkDirSource::ConfigFile(file),
+        }
     }
 
     /// Die Vorgabe, wenn niemand einen Ordner genannt hat: das
@@ -3254,17 +3276,6 @@ fn check_profile_name(name: &str) -> Result<(), Diagnostic> {
     humanitl_config::profile::check_name(name, "the Sandbox request")
 }
 
-/// Der Befund für ein Projektverzeichnis, das keines sein darf.
-fn work_dir_refused(dir: &Path, why: &str) -> Diagnostic {
-    Diagnostic::builder(codes::SANDBOX_006, CoreSeverity::Blocking)
-        .why(format!("{} {why}", dir.display()))
-        .fix(FixAction::ChangeSetting {
-            key: "sandbox.work_dir".to_owned(),
-            value: String::new(),
-        })
-        .build()
-}
-
 /// Der Befund für einen Start, während schon eine Sitzung läuft.
 ///
 /// Der Daemon führt genau eine; eine zweite bekäme eine Sandbox, die einem
@@ -3519,12 +3530,32 @@ fn tree_dirs() -> impl Iterator<Item = PathBuf> {
 }
 
 /// Ein Schnappschuss als Ereignis.
+/// Runs `check` without a source first and, only when it refuses, again with
+/// the source `from` finds (HUM-293). Finding the source of a configured
+/// folder reads the configuration once more; a folder that passes needs none.
+///
+/// # Errors
+///
+/// The refusal of `check` with the source in it.
+fn with_source(
+    check: impl Fn(&WorkDirSource) -> Result<(), Diagnostic>,
+    from: impl FnOnce() -> WorkDirSource,
+) -> Result<(), Diagnostic> {
+    if check(&WorkDirSource::Request).is_ok() {
+        return Ok(());
+    }
+    check(&from())
+}
+
 /// Profile, project directory and mode a `Plan` chooses, staged before it is
-/// committed to `pending` (HUM-277).
+/// committed to `pending` (HUM-277). The directory is never committed; it
+/// belongs to this one call (HUM-293).
 #[derive(Debug, Clone, Default)]
 struct PlanChoice {
     profile: Option<String>,
     work_dir: Option<PathBuf>,
+    /// Where `work_dir` came from (HUM-293); set exactly when it is.
+    work_dir_source: Option<WorkDirSource>,
     work_mode: Option<WorkMode>,
 }
 
@@ -5537,6 +5568,19 @@ mod tests {
         drop(claim);
     }
 
+    /// Writes `sandbox.work_dir` the way a person declares it, past the check
+    /// of `SetConfig` (`humanitl config set`, an editor): a folder outside the
+    /// home directory gets into the file only this way (HUM-293).
+    fn declare_work_dir(paths: &humanitl_config::Paths, dir: &Path) {
+        humanitl_config::edit::set_value(
+            &paths.config_path(),
+            &["sandbox".to_owned(), "work_dir".to_owned()],
+            Some(&toml::Value::String(dir.display().to_string())),
+            |_| Ok(()),
+        )
+        .expect("the file is written");
+    }
+
     /// A directory outside the home directory, and the `Plan` that names it.
     fn outside_dir() -> (tempfile::TempDir, PathBuf, v1::sandbox_request::Plan) {
         let outside = tempfile::TempDir::new().unwrap();
@@ -5559,8 +5603,7 @@ mod tests {
         let home = tempfile::TempDir::new().unwrap();
         let (service, paths) = live_service(&home, SandboxPorts::none());
         let (_outside, canonical, plan) = outside_dir();
-        crate::config_rpc::set(&paths, "sandbox.work_dir", &canonical.display().to_string())
-            .expect("SetConfig writes");
+        declare_work_dir(&paths, &canonical);
         let project = home.path().join("project");
         let inner = Arc::clone(&service.inner);
         let first = v1::sandbox_request::Plan {
@@ -5621,41 +5664,143 @@ mod tests {
         drop(claim);
     }
 
-    /// Defence in depth (HUM-277): a start that inherits a directory from an
-    /// earlier `Plan` checks it against its own refreshed configuration and
-    /// drops it from `pending` when that refuses it.
+    /// The folder of a `Plan` belongs to that one call (HUM-293): it is not
+    /// kept, and the next `Plan` without a folder shows `sandbox.work_dir`
+    /// again. Before HUM-293 the daemon kept it, the app started in it and
+    /// the command line did not, so two places picked the folder by two
+    /// rules.
     #[tokio::test]
-    async fn a_start_revalidates_an_inherited_directory() {
+    async fn a_plans_folder_is_not_kept_for_the_next_call() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, _paths) = live_service(&home, SandboxPorts::none());
+        let inner = Arc::clone(&service.inner);
+        let other = home.path().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        let plan = v1::sandbox_request::Plan {
+            work_dir: other.display().to_string(),
+            ..v1::sandbox_request::Plan::default()
+        };
+        let events = inner.consistent_plan(&plan, || {});
+        let shown = |events: &[v1::SandboxEvent]| {
+            events
+                .iter()
+                .find_map(|event| match &event.event {
+                    Some(v1::sandbox_event::Event::Status(status)) => Some(status.work_dir.clone()),
+                    _ => None,
+                })
+                .expect("a snapshot")
+        };
+        assert_eq!(
+            shown(&events),
+            other.canonicalize().unwrap().display().to_string()
+        );
+        assert_eq!(inner.pending_choice().work_dir, None, "nothing is kept");
+        let events = inner.consistent_plan(&v1::sandbox_request::Plan::default(), || {});
+        assert_eq!(
+            shown(&events),
+            home.path().join("project").display().to_string(),
+            "the next Plan shows sandbox.work_dir"
+        );
+    }
+
+    /// The folder a start names lives exactly as long as its claim
+    /// (HUM-293): `--work` overrides the stored folder for one call.
+    #[tokio::test]
+    async fn a_starts_folder_lives_as_long_as_its_claim() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, _paths) = live_service(&home, SandboxPorts::none());
+        let inner = Arc::clone(&service.inner);
+        let other = home.path().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        let start = v1::sandbox_request::Plan {
+            work_dir: other.display().to_string(),
+            ..v1::sandbox_request::Plan::default()
+        };
+        let claim = inner.claim_start().expect("the claim is free");
+        let checked = inner.remember(&start).expect("a folder under home");
+        assert_eq!(checked, Some(other.canonicalize().unwrap()));
+        assert_eq!(inner.pending_choice().work_dir, checked, "while it starts");
+        drop(claim);
+        assert_eq!(inner.pending_choice().work_dir, None, "and not after");
+    }
+
+    /// While a start holds its folder, a finding about it names the source
+    /// the client gave, not "the request" (review HUM-293).
+    #[tokio::test]
+    async fn a_starting_folder_keeps_its_source() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, _paths) = live_service(&home, SandboxPorts::none());
+        let inner = Arc::clone(&service.inner);
+        let other = home.path().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        let start = v1::sandbox_request::Plan {
+            work_dir: other.display().to_string(),
+            work_dir_source: Some(crate::work_dir::source_to_proto(&WorkDirSource::Flag)),
+            ..v1::sandbox_request::Plan::default()
+        };
+        let claim = inner.claim_start().expect("the claim is free");
+        inner.remember(&start).expect("a folder under home");
+        let config = inner.config();
+        let choice = inner.pending_choice();
+        assert_eq!(
+            inner.work_dir_source(&config, &choice, &start),
+            WorkDirSource::Flag
+        );
+        assert_eq!(
+            inner.work_dir_source(&config, &choice, &v1::sandbox_request::Plan::default()),
+            WorkDirSource::Flag,
+            "a Plan without a folder during the start names it too"
+        );
+        drop(claim);
+    }
+
+    /// Every refusal of a folder over the socket names the source the client
+    /// gave (HUM-293); a client without one gets "the request".
+    #[tokio::test]
+    async fn a_refused_folder_names_the_source_of_the_request() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, _paths) = live_service(&home, SandboxPorts::none());
+        let inner = Arc::clone(&service.inner);
+        let plan = |source: Option<v1::WorkDirSource>| v1::sandbox_request::Plan {
+            work_dir: home.path().display().to_string(),
+            work_dir_source: source,
+            ..v1::sandbox_request::Plan::default()
+        };
+        let current = crate::work_dir::source_to_proto(&WorkDirSource::CurrentDir);
+        let refused = inner
+            .remember(&plan(Some(current)))
+            .expect_err("home is no project");
+        assert_eq!(refused.code, codes::SANDBOX_006);
+        assert!(
+            refused.why.contains("from the current directory"),
+            "{}",
+            refused.why
+        );
+        assert!(!refused.why.contains("sandbox.work_dir"), "{}", refused.why);
+        let refused = inner.remember(&plan(None)).expect_err("home is no project");
+        assert!(
+            refused.why.contains("from the work_dir of the request"),
+            "{}",
+            refused.why
+        );
+    }
+
+    /// A configured folder the start refuses names the file it stands in
+    /// (HUM-293).
+    #[tokio::test]
+    async fn a_refused_configured_folder_names_its_file() {
         let home = tempfile::TempDir::new().unwrap();
         let (service, paths) = live_service(&home, SandboxPorts::none());
-        let (_outside, canonical, plan) = outside_dir();
-        crate::config_rpc::set(&paths, "sandbox.work_dir", &canonical.display().to_string())
-            .expect("SetConfig writes");
+        declare_work_dir(&paths, home.path());
         let inner = Arc::clone(&service.inner);
-        assert_eq!(
-            inner
-                .remember_with(&inner.plan_config(), &plan)
-                .expect("A allows it"),
-            Some(canonical.clone())
-        );
-
-        let project = home.path().join("project");
-        crate::config_rpc::set(&paths, "sandbox.work_dir", &project.display().to_string())
-            .expect("SetConfig writes");
-        let claim = inner.claim_start().expect("the claim is free");
         inner.refresh_for_start();
-        // A start that names the directory itself was checked by `remember`.
-        assert_eq!(
-            inner
-                .revalidate_inherited(&plan, Some(canonical.clone()))
-                .expect("named"),
-            Some(canonical.clone())
-        );
-        let start = v1::sandbox_request::Plan::default();
-        inner
-            .revalidate_inherited(&start, Some(canonical))
-            .expect_err("B refuses the inherited directory");
-        assert_eq!(lock(&inner.pending).work_dir, None, "and it leaves pending");
-        drop(claim);
+        let Err(refused) =
+            inner.prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+        else {
+            panic!("home is no project");
+        };
+        assert_eq!(refused.code, codes::SANDBOX_006);
+        let named = format!("sandbox.work_dir in {}", paths.config_path().display());
+        assert!(refused.why.contains(&named), "{}", refused.why);
     }
 }

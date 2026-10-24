@@ -49,7 +49,6 @@ class NeverRanClient extends SandboxTestClient {
   @override
   Stream<SandboxUpdate> startSandbox({
     String? profile,
-    String? workDir,
     WorkMode? workMode,
   }) async* {
     // Der Daemon nimmt die Momentaufnahme `running` erst nach der
@@ -57,7 +56,6 @@ class NeverRanClient extends SandboxTestClient {
     // dann schon vorbei, und `agent_running` ist falsch.
     await for (final SandboxUpdate update in super.startSandbox(
       profile: profile,
-      workDir: workDir,
       workMode: workMode,
     )) {
       if (update is SandboxUpdateStatus &&

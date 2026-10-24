@@ -51,7 +51,12 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `20` seit den gespeicherten Modellservern (HUM-289): die RPC
+/// `21` seit der Quelle des Projektverzeichnisses (HUM-293):
+/// `SandboxRequest.Start.work_dir_source` und `.Plan.work_dir_source` sagen,
+/// woher der Client `work_dir` hat (`--work`, das aktuelle Verzeichnis, eine
+/// Konfigurationsdatei, eine Umgebungsvariable, ein Profil), und jeder
+/// `SANDBOX_006` über dieses Verzeichnis nennt genau diese Quelle.
+/// `20` war die Reihe der gespeicherten Modellserver (HUM-289): die RPC
 /// `LlmServers` mit `LlmServer`, `LlmServersRequest` und `LlmServerList`,
 /// `LlmKeyRequest.server` für den Schlüssel eines bestimmten Servers und
 /// `ProbeLlmRequest.server`, mit dem die Probe den Schlüssel dieses Servers
@@ -127,7 +132,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 20;
+pub const PROTO_MINOR: u32 = 21;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -171,6 +176,7 @@ pub mod terminal;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod validate;
+pub mod work_dir;
 
 /// Die Ports, die `DiscoverLlm` ohne eigene Angabe fragt (HUM-076).
 ///

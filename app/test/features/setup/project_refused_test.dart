@@ -13,6 +13,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ipc/daemon_client.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/hover_label.dart';
 import 'package:humanitl/core/ui/work_dir_picker.dart';
@@ -30,20 +31,26 @@ const String project = '/home/u/projects/app';
 
 /// Der Befund, den der Daemon für [dir] schickt, wenn [dir] die eigene
 /// Konfiguration enthält: Code, Schwere, Satz und Abhilfe wie in
-/// `MountPolicy::check_work_dir`.
-Diagnostic refusal(String dir) => Diagnostic(
+/// `MountPolicy::check_work_dir_from`. [source] ist die Quelle des Pfades,
+/// die der Satz seit HUM-293 nennt.
+Diagnostic refusal(String dir, String source) => Diagnostic(
   code: DiagnosticCodes.workDirRefused,
   severity: Severity.blocking,
   why:
-      'sandbox.work_dir names $dir: $dir contains $dir/.config/humanitl, '
-      "Humanitl's own configuration directory: config.toml, rules.yaml and "
-      'the profiles; choose the folder of a single project instead, such as '
-      '~/projects/xyz',
+      'the project directory from $source names $dir: $dir contains '
+      "$dir/.config/humanitl, Humanitl's own configuration directory: "
+      'config.toml, rules.yaml and the profiles; choose the folder of a '
+      'single project instead, such as ~/projects/xyz',
   fix: const FixAction.changeSetting(key: 'sandbox.work_dir', value: ''),
 );
 
+/// Die Quelle eines gespeicherten Ordners im Satz des Daemons.
+const String storedSource =
+    'sandbox.work_dir in $home/.config/humanitl/config.toml';
+
 /// Ein Daemon, in dessen `config.toml` das Heimatverzeichnis als
-/// Projektordner steht, und der es so ablehnt wie der echte.
+/// Projektordner steht, und der es so ablehnt wie der echte: beim Plan, und
+/// schon beim Speichern (`SetConfig`, HUM-293).
 class HomeRefusingClient extends FakeDaemonClient {
   /// Erzeugt den Fake mit gesunder Maschine und [home] als Projektordner.
   HomeRefusingClient() {
@@ -51,15 +58,39 @@ class HomeRefusingClient extends FakeDaemonClient {
     sandbox = sandbox.copyWith(workDirHost: home);
   }
 
-  /// Jeder Ordner, nach dem `Sandbox(Plan)` gefragt wurde.
-  final List<String?> planned = <String?>[];
+  /// Jeder Ordner, den die Oberfläche als `sandbox.work_dir` speichern
+  /// wollte, auch ein abgelehnter.
+  final List<String> asked = <String>[];
+
+  /// Jeder Ordner, den `SetConfig` angenommen hat.
+  List<String> get stored => <String>[
+    for (final (String key, String value) in configWrites)
+      if (key == FormKeys.sandboxWorkDir) value,
+  ];
+
+  @override
+  Future<void> setConfig(
+    String key,
+    String value, {
+    String? expectedServer,
+  }) async {
+    if (key == FormKeys.sandboxWorkDir) {
+      asked.add(value);
+      if (value == home) {
+        // Wie `config_rpc::check_chosen_work_dir`: abgelehnt, nichts
+        // geschrieben.
+        throw DaemonException(refusal(home, 'the folder just chosen'));
+      }
+    }
+    await super.setConfig(key, value, expectedServer: expectedServer);
+  }
 
   @override
   Stream<SandboxUpdate> sandboxStatus() async* {
     if (sandbox.workDirHost == home) {
       // Wie `snapshot_or_diagnostic`: erst der Befund, dann der Zustand
       // `failed`, der den abgelehnten Ordner weiter nennt.
-      yield SandboxUpdate.diagnostic(refusal(home));
+      yield SandboxUpdate.diagnostic(refusal(home, storedSource));
       // Eine Sitzung, die noch läuft, bleibt `running`; sonst `failed`.
       yield SandboxUpdate.status(
         sandbox.isUp ? sandbox : sandbox.copyWith(state: SandboxState.failed),
@@ -72,21 +103,14 @@ class HomeRefusingClient extends FakeDaemonClient {
   @override
   Stream<SandboxUpdate> planSandbox({
     String? profile,
-    String? workDir,
     WorkMode? workMode,
   }) async* {
-    planned.add(workDir);
-    final String? effective = workDir ?? sandbox.workDirHost;
-    if (effective == home) {
-      yield SandboxUpdate.diagnostic(refusal(home));
+    if (sandbox.workDirHost == home) {
+      yield SandboxUpdate.diagnostic(refusal(home, storedSource));
       yield SandboxUpdate.status(sandbox.copyWith(state: SandboxState.failed));
       return;
     }
-    yield* super.planSandbox(
-      profile: profile,
-      workDir: workDir,
-      workMode: workMode,
-    );
+    yield* super.planSandbox(profile: profile, workMode: workMode);
   }
 }
 
@@ -117,6 +141,14 @@ Future<void> openSetup(
   );
   await pressCtrl(tester, LogicalKeyboardKey.digit6);
   await tester.pump();
+}
+
+/// Lässt Dialog, `SetConfig`, das neue Lesen der Konfiguration und den Plan
+/// durchlaufen; jeder Schritt ist ein eigener Mikrotask.
+Future<void> settle(WidgetTester tester) async {
+  for (int i = 0; i < 4; i++) {
+    await tester.pump();
+  }
 }
 
 void main() {
@@ -158,11 +190,10 @@ void main() {
     );
 
     await tester.tap(chooseFix);
-    await tester.pump();
-    await tester.pump();
+    await settle(tester);
 
     expect(asked, 1);
-    expect(client.planned, <String?>[project]);
+    expect(client.stored, <String>[project]);
     // Der neue Ordner kommt durch, die Karte verschwindet mit ihrem Befund.
     expect(stateOf(tester, SetupCheckKind.project), 'ok');
     expect(chooseFix, findsNothing);
@@ -208,7 +239,7 @@ void main() {
     await tester.tap(chooseFix, warnIfMissed: false);
     await tester.pump();
     expect(asked, 0);
-    expect(client.planned, isEmpty);
+    expect(client.asked, isEmpty);
   });
 
   testWidgets('a cancelled chooser changes nothing', (
@@ -218,17 +249,18 @@ void main() {
     await openSetup(tester, client, chooser: () async => null);
 
     await tester.tap(chooseFix);
-    await tester.pump();
+    await settle(tester);
 
-    expect(client.planned, isEmpty);
+    expect(client.asked, isEmpty);
     expect(stateOf(tester, SetupCheckKind.project), 'blocks the start');
   });
 
-  testWidgets('picking the home folder in the picker shows the same refusal', (
-    WidgetTester tester,
-  ) async {
-    // Der Weg über den Picker endete schon vorher in `SANDBOX_006`; jetzt
-    // trägt die Karte dort dieselbe Abhilfe wie beim Öffnen.
+  testWidgets('a refused folder is not stored and shows SANDBOX_006 in the '
+      'step', (WidgetTester tester) async {
+    // Der Weg über den Picker (HUM-293): Die Wahl geht als `sandbox.work_dir`
+    // an `SetConfig`, der Daemon lehnt das Heimatverzeichnis ab, und nichts
+    // wird gespeichert. Der Befund steht im Schritt mit derselben Abhilfe
+    // wie beim Öffnen, und der Ordner davor bleibt der gespeicherte.
     final HomeRefusingClient client = HomeRefusingClient()
       ..sandbox = defaultSandbox_().copyWith(workDirHost: project);
     await openSetup(tester, client, chooser: () async => home);
@@ -238,11 +270,38 @@ void main() {
     // geöffneten Schritt.
     await openSetupStep(tester, 'project');
     await tester.tap(find.byKey(const Key('setup-workdir')));
-    await tester.pump();
-    await tester.pump();
+    await settle(tester);
 
-    expect(client.planned, <String?>[home]);
+    expect(client.asked, <String>[home], reason: 'SetConfig was called');
+    expect(client.stored, isEmpty, reason: 'the refused folder is not stored');
+    expect(client.sandbox.workDirHost, project);
     expect(stateOf(tester, SetupCheckKind.project), 'blocks the start');
+    expect(
+      find.descendant(
+        of: find.byType(SetupScreen),
+        matching: find.text(DiagnosticCodes.workDirRefused),
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('the folder just chosen'), findsOneWidget);
     expect(chooseFix, findsOneWidget);
+  });
+
+  testWidgets('choosing a folder stores it with SetConfig', (
+    WidgetTester tester,
+  ) async {
+    // HUM-293: Der Ordner hat eine Quelle, `sandbox.work_dir`. Ohne den
+    // Aufruf von `SetConfig` startete die Kommandozeile woanders als die
+    // Oberfläche.
+    final HomeRefusingClient client = HomeRefusingClient()
+      ..sandbox = defaultSandbox_().copyWith(workDirHost: '/home/u/old');
+    await openSetup(tester, client, chooser: () async => project);
+    await openSetupStep(tester, 'project');
+    await tester.tap(find.byKey(const Key('setup-workdir')));
+    await settle(tester);
+
+    expect(client.configWrites, contains((FormKeys.sandboxWorkDir, project)));
+    expect(client.sandbox.workDirHost, project);
+    expect(stateOf(tester, SetupCheckKind.project), 'ok');
   });
 }

@@ -277,7 +277,7 @@ class _Diagnostics extends ConsumerWidget {
             chooseWorkDir(
               ref,
               (String dir) => unawaited(
-                ref.read(sandboxStatusProvider.notifier).plan(workDir: dir),
+                ref.read(sandboxStatusProvider.notifier).chooseWorkDir(dir),
               ),
             ),
           );

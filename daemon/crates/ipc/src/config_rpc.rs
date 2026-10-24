@@ -35,8 +35,8 @@ use humanitl_config::value::{check_value, parse_value, to_toml};
 use humanitl_config::{Paths, ProfileSelection, Resolved, schema};
 use humanitl_core::diagnostics::codes::{CONFIG_003, CONFIG_014};
 use humanitl_core::{Diagnostic, FixAction, Severity};
-use humanitl_sandbox::AdapterRegistry;
 use humanitl_sandbox::profile::CA_CERT_DST;
+use humanitl_sandbox::{AdapterRegistry, WORK_DIR_KEY, WorkDirSource};
 
 use crate::{convert, v1};
 
@@ -188,8 +188,18 @@ fn set_form_value(
     expected_server: &str,
 ) -> Result<(), Diagnostic> {
     let (field, value) = form_value(key, text)?;
-    let toml_value = to_toml(field, &value)?;
+    let mut toml_value = to_toml(field, &value)?;
     let file = paths.config_path();
+    // Ein gewählter Ordner wird geprüft und in seiner aufgelösten Form
+    // geschrieben (HUM-293): Geschrieben wird, was geprüft wurde, und ein
+    // Verweis, der später woandershin zeigt, nimmt den Projektordner nicht
+    // mit.
+    if key == WORK_DIR_KEY
+        && let Some(dir) = value.as_str()
+    {
+        let checked = check_chosen_work_dir(paths, &file, Path::new(dir))?;
+        toml_value = Some(toml::Value::String(checked.display().to_string()));
+    }
     let segments: Vec<String> = key.split('.').map(ToOwned::to_owned).collect();
     if expected_server.is_empty() {
         // Gibt es gespeicherte Server, nennt ein Client, der die Ansicht des
@@ -253,6 +263,41 @@ fn set_form_value(
         |candidate| probe(paths, &file, candidate, key),
     )?;
     Ok(())
+}
+
+/// Prüft einen Ordner, der als `sandbox.work_dir` geschrieben werden soll,
+/// mit denselben Stufen wie einen Ordner aus `Sandbox(Plan)` (HUM-293,
+/// [`crate::work_dir::check_requested`]).
+///
+/// Ein Ordner, den der nächste Start verweigerte, kommt so nie in die Datei:
+/// Sonst stünde dort ein Wert, an dem jede Kommandozeile und jeder Start der
+/// Oberfläche scheiterte, und das Setup hätte ihn trotzdem angenommen. Ein
+/// Ordner außerhalb des Heimatverzeichnisses geht nur, wenn er schon in
+/// `sandbox.work_dir` steht, also von einem Menschen erklärt wurde.
+///
+/// Ein relativer Pfad ist `CONFIG_003`, und zwar hier und nicht erst in der
+/// Gegenprobe: Lädt die Datei schon wegen eines anderen Werts nicht, ließe
+/// die Gegenprobe den neuen Wert durch (Review HUM-293).
+///
+/// # Errors
+///
+/// `CONFIG_003` für einen relativen Pfad, `SANDBOX_006` mit dem Grund für
+/// einen Ordner, der kein Projekt sein darf; geschrieben ist dann nichts.
+fn check_chosen_work_dir(paths: &Paths, file: &Path, dir: &Path) -> Result<PathBuf, Diagnostic> {
+    if !dir.is_absolute() {
+        return Err(Diagnostic::builder(CONFIG_003, Severity::Error)
+            .why(format!(
+                "{WORK_DIR_KEY} = {} is not an absolute path; a project folder is written out \
+                 from the root, such as ~/projects/xyz expanded",
+                shown(&dir.display().to_string())
+            ))
+            .fix(humanitl_sandbox::choose_folder_fix())
+            .build());
+    }
+    let configured = load_with(paths, file.is_file().then(|| file.to_path_buf()))
+        .ok()
+        .and_then(|resolved| resolved.config.sandbox.work_dir);
+    crate::work_dir::check_requested(paths, configured.as_deref(), dir, &WorkDirSource::Chosen)
 }
 
 /// Lädt die Konfiguration so, wie der nächste Start sie lädt — mit der
@@ -516,7 +561,11 @@ mod tests {
         assert_eq!(values["ui"]["language"], "de");
         assert_eq!(values["ui"]["theme"], "light");
         assert_eq!(values["ui"]["notifications"], false);
-        assert_eq!(values["sandbox"]["work_dir"], work_text);
+        // Der aufgelöste Ordner (HUM-293).
+        assert_eq!(
+            values["sandbox"]["work_dir"],
+            work.canonicalize().unwrap().display().to_string()
+        );
         assert_eq!(values["llm"]["endpoint"], "http://192.168.1.20:11434/");
         assert_eq!(values["llm"]["models"][0], "qwen2.5-coder:14b");
         assert_eq!(values["tls"]["trust_system_store"], false);
@@ -554,6 +603,95 @@ mod tests {
             );
         }
         assert!(!paths.config_path().exists(), "nothing was written");
+    }
+
+    /// Ein Ordner, den der Start verweigerte, kommt nicht in die Datei
+    /// (HUM-293): das Heimatverzeichnis ist `SANDBOX_006`, die Datei bleibt
+    /// Byte für Byte, wie sie war, und ein Projekt darunter wird geschrieben.
+    #[test]
+    fn home_as_the_project_folder_is_refused_and_the_file_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        std::fs::create_dir_all(paths.config_dir()).unwrap();
+        let before = "# mein Kommentar\n[hold]\ntimeout_secs = 300\n";
+        std::fs::write(paths.config_path(), before).unwrap();
+
+        let home = dir.path().display().to_string();
+        let refused = set(&paths, "sandbox.work_dir", &home).expect_err("home is no project");
+        assert_eq!(refused.code.as_str(), "SANDBOX_006", "{}", refused.why);
+        assert!(
+            refused.why.contains("the folder just chosen"),
+            "{}",
+            refused.why
+        );
+        assert_eq!(
+            std::fs::read_to_string(paths.config_path()).unwrap(),
+            before,
+            "nothing was written"
+        );
+
+        let outside = tempfile::tempdir().unwrap();
+        let refused = set(
+            &paths,
+            "sandbox.work_dir",
+            &outside.path().display().to_string(),
+        )
+        .expect_err("outside home");
+        assert_eq!(refused.code.as_str(), "SANDBOX_006", "{}", refused.why);
+        assert_eq!(
+            std::fs::read_to_string(paths.config_path()).unwrap(),
+            before
+        );
+
+        let project = dir.path().join("Masterthesis");
+        std::fs::create_dir_all(&project).unwrap();
+        set(&paths, "sandbox.work_dir", &project.display().to_string()).expect("a project");
+        let values: serde_json::Value =
+            serde_json::from_str(&snapshot(&paths).values_json).unwrap();
+        assert_eq!(
+            values["sandbox"]["work_dir"],
+            project.canonicalize().unwrap().display().to_string()
+        );
+    }
+
+    /// Ein relativer Ordner ist `CONFIG_003`, auch wenn die Datei schon wegen
+    /// eines anderen Werts nicht lädt und die Gegenprobe deshalb nachsichtig
+    /// ist (Review HUM-293); die Datei bleibt, wie sie war.
+    #[test]
+    fn a_relative_folder_is_refused_beside_an_old_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        std::fs::create_dir_all(paths.config_dir()).unwrap();
+        let before = "[hold]\ntimeout_secs = 0\n";
+        std::fs::write(paths.config_path(), before).unwrap();
+        for relative in ["relative/dir", "Masterthesis", "./x"] {
+            let refused = set(&paths, "sandbox.work_dir", relative).expect_err(relative);
+            assert_eq!(refused.code.as_str(), "CONFIG_003", "{}", refused.why);
+        }
+        assert_eq!(
+            std::fs::read_to_string(paths.config_path()).unwrap(),
+            before
+        );
+    }
+
+    /// Geschrieben wird der aufgelöste Ordner, nicht der Verweis (Review
+    /// HUM-293): Zeigt der Verweis später woandershin, bleibt das Projekt das
+    /// geprüfte.
+    #[test]
+    fn a_linked_folder_is_stored_as_its_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let target = dir.path().join("projects/thesis");
+        std::fs::create_dir_all(&target).unwrap();
+        let link = dir.path().join("thesis-link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        set(&paths, "sandbox.work_dir", &link.display().to_string()).expect("a project");
+        let values: serde_json::Value =
+            serde_json::from_str(&snapshot(&paths).values_json).unwrap();
+        assert_eq!(
+            values["sandbox"]["work_dir"],
+            target.canonicalize().unwrap().display().to_string()
+        );
     }
 
     /// Ein Schlüssel außerhalb des Formulars bleibt `CONFIG_014`, auch der

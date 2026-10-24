@@ -213,6 +213,33 @@ impl Context {
         pairs
     }
 
+    /// Das Projektverzeichnis dieses Aufrufs und woher es kommt (HUM-293).
+    ///
+    /// `sandbox.work_dir` aus der Auflösung — `--work`, eine Variable
+    /// `HUMANITL_*`, ein Profil oder die `config.toml`, in die die Oberfläche
+    /// den gewählten Ordner schreibt —, und nur wenn dort nichts steht, das
+    /// aktuelle Verzeichnis. Die Quelle reist mit, damit ein `SANDBOX_006`
+    /// sagt, wo der Pfad herkam, und nicht `sandbox.work_dir` nennt, wenn er
+    /// aus dem aktuellen Verzeichnis kam.
+    #[must_use]
+    pub fn work_dir(&self, resolved: &Resolved) -> (PathBuf, humanitl_sandbox::WorkDirSource) {
+        let Some(dir) = resolved.config.sandbox.work_dir.clone() else {
+            return (
+                self.cwd.clone(),
+                humanitl_sandbox::WorkDirSource::CurrentDir,
+            );
+        };
+        let file = self
+            .config_file
+            .clone()
+            .unwrap_or_else(|| self.paths.config_path());
+        let source = humanitl_sandbox::WorkDirSource::from_origin(
+            resolved.origin(humanitl_sandbox::WORK_DIR_KEY),
+            &file,
+        );
+        (dir, source)
+    }
+
     /// Lädt die Konfiguration und meldet, was das Laden überlebt hat.
     ///
     /// Streng: Ein `--profile`, das ein Sitzungsprofil benennt, muss eines
@@ -524,5 +551,81 @@ mod tests {
         let mut proto = diagnostic_to_proto(&diagnostic(DAEMON_001));
         proto.code = "FUTURE_042".to_owned();
         assert!(from_proto(&proto).is_none());
+    }
+
+    /// Woher `humanitl run` und `humanitl sandbox run` ihr Projekt nehmen
+    /// (HUM-293): `--work` vor der Umgebung vor der Datei, und das aktuelle
+    /// Verzeichnis nur, wenn nichts davon etwas nennt. Jede Quelle nennt sich.
+    #[test]
+    fn the_work_dir_comes_from_the_stored_folder_before_the_current_directory() {
+        use std::path::PathBuf;
+
+        use humanitl_config::Env;
+        use humanitl_sandbox::WorkDirSource;
+
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let cwd = root.path().join("work");
+        let thesis = home.join("Masterthesis");
+        std::fs::create_dir_all(&thesis).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+        let context = |pairs: &[(&str, String)], cli: Vec<(String, String)>| {
+            let mut all = vec![
+                ("HOME", home.display().to_string()),
+                (
+                    "XDG_CONFIG_HOME",
+                    home.join(".config").display().to_string(),
+                ),
+            ];
+            all.extend(pairs.iter().cloned());
+            let env = Env::from_pairs(all);
+            super::Context {
+                paths: humanitl_config::Paths::new(env.clone()),
+                env,
+                cwd: cwd.clone(),
+                cli_config: cli,
+                config_file: None,
+                profile: None,
+                profile_means: super::ProfileMeaning::Session,
+                render: crate::render::Renderer::new(false, 0, true),
+            }
+        };
+        let picked = |ctx: &super::Context| ctx.work_dir(&ctx.config().expect("resolves"));
+
+        let bare = context(&[], Vec::new());
+        assert_eq!(picked(&bare), (cwd.clone(), WorkDirSource::CurrentDir));
+
+        let file = bare.paths.config_path();
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &file,
+            format!("[sandbox]\nwork_dir = {:?}\n", thesis.display().to_string()),
+        )
+        .unwrap();
+        assert_eq!(
+            picked(&bare),
+            (thesis.clone(), WorkDirSource::ConfigFile(file.clone())),
+            "the stored folder, not the current directory"
+        );
+
+        let other = home.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        let env = context(
+            &[("HUMANITL_SANDBOX__WORK_DIR", other.display().to_string())],
+            Vec::new(),
+        );
+        assert_eq!(
+            picked(&env),
+            (
+                other.clone(),
+                WorkDirSource::Env("HUMANITL_SANDBOX__WORK_DIR".to_owned())
+            )
+        );
+
+        let flag = context(
+            &[],
+            vec![("sandbox.work_dir".to_owned(), other.display().to_string())],
+        );
+        assert_eq!(picked(&flag), (PathBuf::from(&other), WorkDirSource::Flag));
     }
 }

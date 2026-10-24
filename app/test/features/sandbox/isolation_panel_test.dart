@@ -53,7 +53,6 @@ class StallingSecondStartClient extends SandboxTestClient {
   @override
   Stream<SandboxUpdate> startSandbox({
     String? profile,
-    String? workDir,
     WorkMode? workMode,
   }) async* {
     startCount++;
@@ -65,11 +64,7 @@ class StallingSecondStartClient extends SandboxTestClient {
       yield SandboxUpdate.status(sandbox);
       return;
     }
-    yield* super.startSandbox(
-      profile: profile,
-      workDir: workDir,
-      workMode: workMode,
-    );
+    yield* super.startSandbox(profile: profile, workMode: workMode);
   }
 }
 

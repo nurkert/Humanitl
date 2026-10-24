@@ -316,6 +316,7 @@ async fn a_plan_answers_for_a_directory_that_does_not_apply_yet() {
                 profile: String::new(),
                 work_dir: other.display().to_string(),
                 work_mode: "ro".to_owned(),
+                work_dir_source: None,
             })),
         },
     )
@@ -330,8 +331,9 @@ async fn a_plan_answers_for_a_directory_that_does_not_apply_yet() {
     assert_eq!(work.mode, v1::MountMode::Ro as i32);
     assert!(planned.argv_preview.contains(&other.display().to_string()));
 
-    // Die Wahl gilt für die Sitzung: der nächste `Status` fällt nicht still
-    // auf das Verzeichnis der Konfiguration zurück (CONVENTIONS 4.17).
+    // Der Modus gilt für die Sitzung (CONVENTIONS 4.17), der Ordner nur für
+    // diesen Plan: Er hat eine Quelle, `sandbox.work_dir`, und der nächste
+    // `Status` zeigt wieder sie (HUM-293).
     let again = snapshot(
         &service,
         v1::SandboxRequest {
@@ -339,7 +341,10 @@ async fn a_plan_answers_for_a_directory_that_does_not_apply_yet() {
         },
     )
     .await;
-    assert_eq!(again.work_dir, other.display().to_string());
+    assert_eq!(
+        again.work_dir,
+        home.path().join("project").display().to_string()
+    );
     assert_eq!(again.work_mode, "ro");
 }
 
@@ -406,6 +411,7 @@ fn plan_profile(name: &str) -> v1::SandboxRequest {
             profile: name.to_owned(),
             work_dir: String::new(),
             work_mode: String::new(),
+            work_dir_source: None,
         })),
     }
 }
@@ -417,6 +423,7 @@ fn plan_work_dir(dir: &str) -> v1::SandboxRequest {
             profile: String::new(),
             work_dir: dir.to_owned(),
             work_mode: String::new(),
+            work_dir_source: None,
         })),
     }
 }

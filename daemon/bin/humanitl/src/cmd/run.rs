@@ -100,11 +100,10 @@ pub async fn run(ctx: &Context, args: &RunArgs) -> Result<u8, Failure> {
         .into_inner();
     crate::cmd::daemon::check_proto(&info)?;
 
-    let work_dir = config
-        .sandbox
-        .work_dir
-        .clone()
-        .unwrap_or_else(|| ctx.cwd.clone());
+    // Der gespeicherte Ordner, `--work` für diesen einen Aufruf, und das
+    // aktuelle Verzeichnis nur, wenn beides fehlt (HUM-293). Die Quelle geht
+    // mit, damit der Daemon sie in einem `SANDBOX_006` nennt.
+    let (work_dir, work_dir_source) = ctx.work_dir(&resolved);
     let start = v1::sandbox_request::Start {
         // Das bwrap-Profil bleibt der Konfiguration überlassen; unter
         // `humanitl run` benennt `--profile` das Profil der Sitzung
@@ -120,6 +119,7 @@ pub async fn run(ctx: &Context, args: &RunArgs) -> Result<u8, Failure> {
         session_profile: ctx.profile_flag().unwrap_or_default().to_owned(),
         ask_mode: ask_mode_name(config.hold.ask_mode).to_owned(),
         cli_overrides: session_overrides(ctx),
+        work_dir_source: Some(humanitl_ipc::work_dir::source_to_proto(&work_dir_source)),
     };
 
     let session = json!({
