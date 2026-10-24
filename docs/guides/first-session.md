@@ -250,7 +250,7 @@ and see the same queue, rules and history.
 | Store an access key | `humanitl llm key set` (reads the key from stdin) |
 | Start in the project | `cd ~/demo-project && humanitl run` |
 | Isolation check | `humanitl run` prints the three guarantees before the agent starts; `humanitl sandbox check` measures them on their own |
-| Type into the running agent | `humanitl sandbox attach` |
+| Type into the running agent | `humanitl sandbox attach` (detach with `Ctrl+A d`) |
 | List held requests | `humanitl flows list state:held` |
 | Look at one | `humanitl flows show <id>` |
 | Allow it and remember a rule | `humanitl flows decide <id> allow --remember registry.npmjs.org --remember-method GET --remember-expires session` |

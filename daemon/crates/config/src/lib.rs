@@ -78,9 +78,10 @@ pub use crate::alias::{ALIASES, Alias, Retired, RetiredShape};
 pub use crate::env::{Env, LOADER_ENV_KEYS, is_loader_key};
 pub use crate::load::{DEFAULT_ENV_PREFIX, ENV_SEPARATOR, PROFILE_SECTION, Sources, load};
 pub use crate::model::{
-    AgentBriefing, AgentRef, AskMode, AuditConfig, Config, Experimental, FindingsConfig,
-    HoldConfig, IpPreference, Language, Limits, LlmConfig, LlmServer, PseudonymConfig,
-    RecorderConfig, ResolverConfig, SandboxRef, Theme, TlsConfig, UiConfig, WorkMode,
+    AgentBriefing, AgentRef, AskMode, AuditConfig, Config, DetachKeys, Experimental,
+    FindingsConfig, HoldConfig, IpPreference, Language, Limits, LlmConfig, LlmServer,
+    PseudonymConfig, RecorderConfig, ResolverConfig, SandboxRef, TerminalConfig, Theme, TlsConfig,
+    UiConfig, WorkMode,
 };
 pub use crate::origin::{Origin, Resolved};
 pub use crate::paths::{APP_DIR, DIR_MODE, FILE_MODE, Paths, RuntimeDir};

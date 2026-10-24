@@ -44,6 +44,7 @@ const DENIED_BY_CONVENTION: &[&str] = &[
     "recorder.retention_days",
     "limits.recorder_max_body_bytes",
     "audit.*",
+    "terminal.*",
 ];
 
 /// Ein Verzeichnis, in dem die Tests ihre Dateien anlegen.
@@ -416,6 +417,30 @@ fn a_cloned_project_cannot_lift_the_hard_block_of_the_user() {
         Err(diagnostic) => diagnostic,
     };
     assert_denied(&diagnostic, "hold.hard_block_checksum_secrets", &profile);
+}
+
+/// Ein geklontes Projekt nimmt dem Menschen die Taste zum Abhängen nicht
+/// weg und legt sie nicht um (HUM-279): `none` und ein anderes Präfix sind
+/// aus dem Projekt-Profil `CONFIG_003`, aus dem globalen Profil erlaubt.
+#[test]
+fn a_cloned_project_cannot_take_the_detach_key() {
+    let scratch = Scratch::new();
+    for value in ["\"none\"", "\"ctrl-b\""] {
+        let profile = scratch.project_profile(&format!("terminal.detach_prefix = {value}"));
+        let diagnostic = expect_err(&Sources {
+            profile_project: Some(profile.clone()),
+            ..Sources::empty()
+        });
+        assert_denied(&diagnostic, "terminal.detach_prefix", &profile);
+    }
+
+    let global = scratch.global_profile("terminal.detach_prefix = \"none\"");
+    let resolved = load(&Sources {
+        profiles: vec![ProfileSource::File(global)],
+        ..Sources::empty()
+    })
+    .expect("the global profile may set the detach key");
+    assert_eq!(resolved.config.terminal.detach_prefix, "none");
 }
 
 /// Die Sperre gilt in beide Richtungen: Auch ein Projekt, das den Schalter
