@@ -62,6 +62,9 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-292 | Spike: Podman as a second sandbox backend, with and without a kernel boundary (after HUM-060, first) | S | HUM-060, HUM-145 |
 | HUM-293 | One project folder, chosen once, for app and CLI alike (before HUM-060) | S | HUM-069, HUM-262, HUM-282, HUM-287 |
 | HUM-274 | pi becomes a first-class agent next to OpenCode (before HUM-060) | M | HUM-037, HUM-039, HUM-140, HUM-261 |
+| HUM-294 | A stored project folder gets the full folder check at every start (after HUM-060) | S | HUM-293 |
+| HUM-295 | Settings re-plans the sandbox after the project folder changes (after HUM-060) | S | HUM-293 |
+| HUM-296 | `humanitl run --config` with a folder outside HOME is judged against the file it names (after HUM-060) | S | HUM-293 |
 
 ---
 
@@ -6339,3 +6342,70 @@ HUM-037 (adapter contract), HUM-039 (passthrough), HUM-071 (briefing), HUM-135, 
   `node_interpreter` überspringt `env -u NAME`, `-C DIR` und `NAME=wert`.
 - **Offen.** Der Handlauf mit einem echten pi 1.3.0 gegen den Mock-LLM steht
   aus.
+
+---
+## HUM-294 · A stored project folder gets the full folder check at every start (after HUM-060)
+
+### Context
+Found in the HUM-293 review (2026-10-24). `check_requested` in
+`daemon/crates/ipc/src/work_dir.rs` skips the third stage (the folder lies
+under `$HOME`) for the folder that is already stored in `sandbox.work_dir`,
+because a stored folder used to count as declared by a person. Since HUM-293
+the app writes that value through `SetConfig` too. SetConfig stores the
+resolved path, so a stored link cannot be retargeted; a path component that
+is later replaced by a link still is. The mount policy (deny list, `$HOME`
+itself and its parents) still runs at every start, so the security statement
+holds; only the under-HOME rule is skipped.
+
+### Specification
+1. Record who declared a folder outside `$HOME`: a value written by
+   `humanitl config set` or by hand keeps today's exemption, a value written
+   through `SetConfig` from the app gets all three stages at every start.
+   Or, simpler: every start re-resolves the stored folder and compares the
+   result with the stored text; a difference is `SANDBOX_006` naming the file.
+2. The diagnostic names the config file as the source (HUM-293 `WorkDirSource`).
+
+### Acceptance criteria
+1. A stored folder whose parent was replaced by a link to a place outside
+   `$HOME` after it was chosen in the app is refused at the next start with
+   `SANDBOX_006` naming the config file. Test with a temporary home.
+2. A folder outside `$HOME` declared with `humanitl config set` still starts.
+
+---
+## HUM-295 · Settings re-plans the sandbox after the project folder changes (after HUM-060)
+
+### Context
+Found in the HUM-293 review. Settings writes `sandbox.work_dir` through
+`SetConfig`, but the sandbox snapshot is planned again only when the sandbox
+screen becomes visible or Setup chooses a folder itself, because a feature
+does not import another.
+
+### Specification
+1. After a successful write of `sandbox.work_dir`, the sandbox snapshot is
+   planned again, through a shared provider in `core/` or by watching the
+   config revision, without a feature importing another.
+
+### Acceptance criteria
+1. Changing the folder in Settings shows the new folder in the sandbox
+   header and Setup without switching screens. Widget test.
+
+---
+## HUM-296 · `humanitl run --config` with a folder outside HOME is judged against the file it names (after HUM-060)
+
+### Context
+Found in the HUM-293 review. `humanitl run --config other.toml` sends the
+folder from `other.toml` with source `ConfigFile(other.toml)`. The daemon
+allows a folder outside `$HOME` only when it equals the folder in its own
+`config.toml`, so the start is refused although the person declared the
+folder in the file they named.
+
+### Specification
+1. Decide: either the daemon accepts the declaration from a file the CLI
+   names (it can read the file itself, under the same owner checks as its own
+   config), or the refusal says plainly that only the daemon's config file
+   declares folders outside `$HOME` and names it in the fix.
+
+### Acceptance criteria
+1. The case has a test and either starts or ends in a `SANDBOX_006` whose fix
+   names the daemon's config file.
+
