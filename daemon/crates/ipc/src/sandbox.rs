@@ -94,7 +94,7 @@ use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::session::{SessionSettings, SessionState};
 use humanitl_recorder::Recorder;
-use humanitl_sandbox::agent::opencode;
+use humanitl_sandbox::agent::{opencode, pi};
 use humanitl_sandbox::summary::SessionSummary;
 use humanitl_sandbox::{
     AdapterRegistry, AgentContext, AgentKey, BwrapBackend, CheckResult, IsolationCheck, KILL_GRACE,
@@ -226,6 +226,11 @@ pub static VISIBLE_ENV: &[&str] = &[
     opencode::ENV_ENABLE_PARALLEL,
     opencode::ENV_DISABLE_LSP_DOWNLOAD,
     opencode::ENV_PERMISSION,
+    // The pi adapter (HUM-274), by name for the same reason.
+    pi::ENV_AGENT_DIR,
+    pi::ENV_OFFLINE,
+    pi::ENV_SKIP_VERSION_CHECK,
+    pi::ENV_TELEMETRY,
 ];
 
 /// Die Variable, die allein die Sitzung kennt.
@@ -4002,6 +4007,73 @@ mod tests {
         let masks = recorder.masks();
         assert!(masks.expected_at(&hash, "api.example.com:443"));
         assert!(!masks.expected_at(&hash, "evil.example:443"));
+    }
+
+    /// With `agent.adapter = "pi"` the key takes the same way: a file of the
+    /// sandbox, read by the command `models.json` names, and nothing else
+    /// (HUM-274, HUM-140).
+    #[test]
+    fn the_key_reaches_pi_through_a_sandbox_file_only() {
+        const KEY: &str = "sk-pi-sandbox-0123456789abcdef";
+        let home = tempfile::TempDir::new().unwrap();
+        let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+            "XDG_DATA_HOME",
+            home.path().join("data").display().to_string(),
+        )]));
+        let keys =
+            KeyStore::for_paths(&paths).with_secret_tool(Some(fake_secret_tool(home.path())));
+        let stored = keys
+            .store(&humanitl_config::secret::ApiKey::new(KEY).unwrap())
+            .unwrap();
+        let key_ref = stored.key_ref.to_string();
+        let service = service_with(
+            &home,
+            "pi",
+            Some(&key_ref),
+            SandboxPorts::none().with_keys(keys),
+        );
+        let prepared = service
+            .inner
+            .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+            .expect("the session is prepared");
+
+        let secret = prepared
+            .session
+            .files
+            .iter()
+            .find(|file| file.secret)
+            .expect("the key travels as a file");
+        assert_eq!(secret.dst, Path::new(pi::API_KEY_DST));
+        assert_eq!(secret.content, KEY.as_bytes());
+        let models = prepared
+            .session
+            .files
+            .iter()
+            .find(|file| file.dst.ends_with(".pi/agent/models.json"))
+            .expect("models.json is there");
+        let models = String::from_utf8_lossy(&models.content);
+        assert!(
+            models.contains("\"apiKey\": \"!cat /etc/humanitl/pi/llm-api-key\""),
+            "{models}"
+        );
+        assert!(
+            models.contains("\"baseUrl\": \"https://api.example.com/v1\""),
+            "{models}"
+        );
+        assert!(!models.contains(KEY), "{models}");
+
+        let argv = shell_line(&prepared.argv());
+        assert!(!argv.contains(KEY), "the key reached argv: {argv}");
+        assert!(
+            argv.contains("PI_OFFLINE"),
+            "the adapter contributed: {argv}"
+        );
+        for (name, value) in &prepared.session.session_env {
+            assert!(
+                !value.contains(KEY),
+                "the key reached the environment as {name}"
+            );
+        }
     }
 
     /// Zeichnet eine Anfrage mit `Authorization: Bearer <key>` auf und liest

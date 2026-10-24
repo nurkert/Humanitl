@@ -536,6 +536,10 @@ keyring item on request, and only when no other server refers to it.
 *How it reaches the sandbox.* When a session starts, the daemon fetches the key and places it as
 the file `/etc/humanitl/opencode/llm-api-key` in the sandbox, from a memfd through
 `--ro-bind-data`. `opencode.json` refers to it with `{file:/etc/humanitl/opencode/llm-api-key}`.
+With `agent.adapter = "pi"` the same mechanism places it at `/etc/humanitl/pi/llm-api-key`, and
+pi's `models.json` refers to it with `"apiKey": "!cat /etc/humanitl/pi/llm-api-key"`, which pi
+runs through `/bin/sh -c`; the path is a constant of the adapter, never a configured value, and
+only the path stands in the `argv` of that `cat` (HUM-274).
 It is deliberately not an environment variable: bwrap sets the agent's environment with
 `--setenv NAME VALUE` on its own command line, which every process of the same user can read in
 `/proc/<pid>/cmdline`. If the key is missing from the store, the session does not start and

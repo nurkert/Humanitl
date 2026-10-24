@@ -427,7 +427,7 @@ pub fn passthrough_prefixes(endpoint: &Url, prefixes: &[String]) -> Vec<String> 
 /// Der Satz nennt, woher das Kommando kommt, und der Vorschlag folgt daraus:
 /// `agent.command` zu ändern hilft nur dem, der es gesetzt hat; wer sein
 /// Kommando hinter `--` geschrieben hat, ändert seine eigene Zeile (HUM-135).
-fn not_executable(command: &OsString, from_caller: bool) -> Diagnostic {
+fn not_executable(command: &OsString, from_caller: bool, default_command: &str) -> Diagnostic {
     let named = command.to_string_lossy();
     let finding = Diagnostic::builder(AGENT_002, Severity::Warning).why(if from_caller {
         format!(
@@ -449,7 +449,7 @@ fn not_executable(command: &OsString, from_caller: bool) -> Diagnostic {
     finding
         .fix(FixAction::ChangeSetting {
             key: "agent.command".to_owned(),
-            value: format!("[\"{DEFAULT_COMMAND}\"]"),
+            value: format!("[\"{default_command}\"]"),
         })
         .build()
 }
@@ -461,25 +461,64 @@ fn not_executable(command: &OsString, from_caller: bool) -> Diagnostic {
 /// einhängt und welcher Suchpfad drinnen gilt. Ohne den Suchpfad stünde dort
 /// ein Pfad des Hosts und keine Antwort auf die Frage, die der Befund stellt
 /// (HUM-139).
-fn not_reachable_in_sandbox(ctx: &AgentContext, binary: &Path) -> Diagnostic {
+fn not_reachable_in_sandbox(ctx: &AgentContext, binary: &Path, docs: &str) -> Diagnostic {
     Diagnostic::builder(AGENT_004, Severity::Blocking)
-        .why(format!(
-            "{} is on this machine, but the sandbox mounts only {} and its PATH is {}, so the \
-             command is not there and the exec would fail after the start. Put the binary under \
-             one of those paths, or add its directory to `[mounts].extra_ro` of the sandbox \
-             profile **and** to the PATH the sandbox uses (`[env].PATH` or `sandbox.env.PATH`) \
-             — mounting alone does not put it on the search path.",
-            binary.display(),
-            mounts_of(ctx),
-            ctx.sandbox_path_display()
-        ))
+        .why(native_unreachable_why(ctx, binary))
         // Der Name am Ziel ist der des Binaries und nicht der
         // des Adapters: Ein `agent.command = ["mycode"]` würde
         // sonst zu `install … /usr/local/bin/opencode`, und der
         // Vorschlag benennte die Datei beim Kopieren um.
         .fix(FixAction::CopyCommand(install_fix(binary)))
-        .docs(DOCS_URL)
+        .docs(docs)
         .build()
+}
+
+/// `AGENT_004` for an adapter whose program is a script (HUM-274).
+///
+/// Copying the entry script of an npm package to `/usr/local/bin` leaves its
+/// package files behind, and the start ends in `ERR_MODULE_NOT_FOUND`. The
+/// fix is the adapter's installer, which puts the whole package under
+/// `/usr/local`.
+fn script_not_reachable_in_sandbox(
+    ctx: &AgentContext,
+    binary: &Path,
+    adapter: &dyn AgentAdapter,
+) -> Diagnostic {
+    Diagnostic::builder(AGENT_004, Severity::Blocking)
+        .why(format!(
+            "{} is on this machine, but the sandbox mounts only {} and its PATH is {}, so the \
+         command is not there and the exec would fail after the start. {} is a script that \
+         needs its package files beside it; copying the one file does not help. Install it \
+         under /usr/local, which the sandbox mounts: {}",
+            binary.display(),
+            mounts_of(ctx),
+            ctx.sandbox_path_display(),
+            adapter.program(),
+            adapter.install_command()
+        ))
+        .fix(FixAction::CopyCommand(adapter.install_command().to_owned()))
+        .docs(adapter.docs_url())
+        .build()
+}
+
+/// Whether this command is the adapter's own program, by its file name
+/// (HUM-274): only then is the adapter's installer a fix.
+fn starts_own_program(named: &OsStr, adapter: &dyn AgentAdapter) -> bool {
+    Path::new(named).file_name() == Some(OsStr::new(adapter.program()))
+}
+
+/// The sentence of `AGENT_004` for a native program.
+fn native_unreachable_why(ctx: &AgentContext, binary: &Path) -> String {
+    format!(
+        "{} is on this machine, but the sandbox mounts only {} and its PATH is {}, so the \
+             command is not there and the exec would fail after the start. Put the binary under \
+             one of those paths, or add its directory to `[mounts].extra_ro` of the sandbox \
+             profile **and** to the PATH the sandbox uses (`[env].PATH` or `sandbox.env.PATH`) \
+             — mounting alone does not put it on the search path.",
+        binary.display(),
+        mounts_of(ctx),
+        ctx.sandbox_path_display()
+    )
 }
 
 /// Der Befehl, der ein Binary an eine Stelle legt, die die Sandbox einhängt.
@@ -488,7 +527,7 @@ fn not_reachable_in_sandbox(ctx: &AgentContext, binary: &Path) -> Diagnostic {
 /// (HUM-215): Ein Name mit Leerzeichen oder einem Byte, das kein UTF-8 ist,
 /// nennte sonst eine andere Datei. Das Ziel entsteht deshalb als Pfad und
 /// nicht als Text.
-fn install_fix(binary: &Path) -> String {
+pub(crate) fn install_fix(binary: &Path) -> String {
     let destination =
         Path::new("/usr/local/bin").join(binary.file_name().unwrap_or(OsStr::new(DEFAULT_COMMAND)));
     format!(
@@ -509,7 +548,7 @@ fn chmod_fix(binary: &Path) -> String {
 /// Genannt wird der aufgelöste Pfad auf dem Host und der Suchpfad, über den
 /// die Sandbox dorthin kommt. Ohne diesen Zweig stünde hier `AGENT_001`, „nicht
 /// gefunden" — eine Aussage über eine Datei, die sehr wohl da ist (HUM-139).
-fn not_executable_in_sandbox(ctx: &AgentContext, binary: &Path) -> Diagnostic {
+fn not_executable_in_sandbox(ctx: &AgentContext, binary: &Path, docs: &str) -> Diagnostic {
     Diagnostic::builder(AGENT_002, Severity::Warning)
         .why(format!(
             "{} lies in the sandbox PATH {}, and this user cannot execute it; the exec would \
@@ -518,7 +557,7 @@ fn not_executable_in_sandbox(ctx: &AgentContext, binary: &Path) -> Diagnostic {
             ctx.sandbox_path_display()
         ))
         .fix(FixAction::CopyCommand(chmod_fix(binary)))
-        .docs(DOCS_URL)
+        .docs(docs)
         .build()
 }
 
@@ -541,7 +580,7 @@ fn mounts_of(ctx: &AgentContext) -> String {
 /// mit 127. Genau hierher läuft, wer dem Vorschlag von
 /// [`not_reachable_in_sandbox`] folgt und nur `[mounts].extra_ro` ergänzt
 /// (HUM-139).
-fn not_on_the_sandbox_path(ctx: &AgentContext, binary: &Path) -> Diagnostic {
+fn not_on_the_sandbox_path(ctx: &AgentContext, binary: &Path, docs: &str) -> Diagnostic {
     let dir = binary.parent().unwrap_or(Path::new("/")).display();
     Diagnostic::builder(AGENT_004, Severity::Blocking)
         .why(format!(
@@ -559,7 +598,7 @@ fn not_on_the_sandbox_path(ctx: &AgentContext, binary: &Path) -> Diagnostic {
             key: "sandbox.env.PATH".to_owned(),
             value: format!("{dir}:{}", ctx.sandbox_path_value()),
         })
-        .docs(DOCS_URL)
+        .docs(docs)
         .build()
 }
 
@@ -569,9 +608,24 @@ fn not_on_the_sandbox_path(ctx: &AgentContext, binary: &Path) -> Diagnostic {
 /// The per-user directories are named because they are what a user checks
 /// first; a candidate that exists and was not taken is named with its reason,
 /// so "not found" never stands next to a file the user can see.
-fn not_found_why(ctx: &AgentContext, path: Option<&OsStr>) -> String {
-    let search = locate::host_search(ctx, OsStr::new(DEFAULT_COMMAND));
-    let skipped = search.skipped_display();
+///
+/// The program and its installer come from the adapter (HUM-274), so a
+/// finding about pi names pi.
+fn not_found_why(
+    ctx: &AgentContext,
+    path: Option<&OsStr>,
+    program: &str,
+    install: &str,
+    native: bool,
+) -> String {
+    let search = locate::host_search(ctx, OsStr::new(program));
+    // The reasons of HUM-278 advise the native binary; a script adapter has
+    // none, and its own sentence below says where it must lie (HUM-274).
+    let skipped = if native {
+        search.skipped_display()
+    } else {
+        String::new()
+    };
     let searched = if search.searched.is_empty() {
         format!(
             "PATH={}",
@@ -580,10 +634,22 @@ fn not_found_why(ctx: &AgentContext, path: Option<&OsStr>) -> String {
     } else {
         search.searched_display()
     };
+    // A script is never bound (HUM-278): for it only a place under the
+    // sandbox's mounts helps, which the installer provides (HUM-274).
+    let advice = if native {
+        format!(
+            "If it is installed elsewhere, set agent.command to the absolute path of its binary; \
+             if it is not installed: {install}"
+        )
+    } else {
+        format!(
+            "{program} is a script that the sandbox only finds under one of its mounts, such as \
+             /usr/local: {install}"
+        )
+    };
     format!(
-        "{DEFAULT_COMMAND} is not in {searched} and agent.command is not set{}; the sandbox \
-         searches PATH={}. If it is installed elsewhere, set agent.command to the absolute path \
-         of its binary; if it is not installed: {INSTALL_COMMAND}",
+        "{program} is not in {searched} and agent.command is not set{}; the sandbox \
+         searches PATH={}. {advice}",
         if skipped.is_empty() {
             String::new()
         } else {
@@ -631,7 +697,12 @@ fn passed_over(ctx: &AgentContext, named: &OsStr) -> String {
 /// deckt, während das eingehängte `~/.opencode/bin` im PATH der Sandbox stand:
 /// Der Start hätte funktioniert, und ein blockierender Befund verhinderte ihn
 /// (HUM-139).
-fn command_preflight(ctx: &AgentContext) -> Vec<Diagnostic> {
+///
+/// Shared by every adapter (HUM-274): the program, its installer and its
+/// documentation come from the adapter, so a finding about pi names pi.
+pub(crate) fn command_preflight(ctx: &AgentContext, adapter: &dyn AgentAdapter) -> Vec<Diagnostic> {
+    let program = adapter.program();
+    let docs = adapter.docs_url();
     let mut diagnostics = Vec::new();
     let path = ctx.host_path.as_deref();
     let mut resolved: Option<PathBuf> = None;
@@ -639,7 +710,7 @@ fn command_preflight(ctx: &AgentContext) -> Vec<Diagnostic> {
     let requested = ctx.agent_command_override.as_ref().and_then(|c| c.first());
     // Erst die Sandbox: Dort startet das Kommando, und dort sucht `execvp` es
     // über den Suchpfad des Profils und das Arbeitsverzeichnis.
-    let named = requested.map_or_else(|| OsStr::new(DEFAULT_COMMAND), OsString::as_os_str);
+    let named = requested.map_or_else(|| OsStr::new(program), OsString::as_os_str);
     let lookup = ctx.look_up_in_sandbox_path(named);
     // Vollständig gesucht und nichts gefunden: Der Suchpfad ist bekannt, die
     // Einhängungen sind bekannt, und das Kommando trägt keinen Pfad.
@@ -656,7 +727,7 @@ fn command_preflight(ctx: &AgentContext) -> Vec<Diagnostic> {
         // Da und ohne Ausführungsrecht. Das ist kein „nicht gefunden": Das
         // `exec` findet die Datei und endet mit 126.
         SandboxLookup::NotExecutable(binary) => {
-            diagnostics.push(not_executable_in_sandbox(ctx, &binary));
+            diagnostics.push(not_executable_in_sandbox(ctx, &binary, docs));
             return diagnostics;
         }
         SandboxLookup::Missing => {}
@@ -675,7 +746,11 @@ fn command_preflight(ctx: &AgentContext) -> Vec<Diagnostic> {
             let found = find_in_path(command, path);
             resolved.clone_from(&found);
             if !found.as_deref().is_some_and(is_executable_file) {
-                diagnostics.push(not_executable(command, ctx.agent_command_from_caller));
+                diagnostics.push(not_executable(
+                    command,
+                    ctx.agent_command_from_caller,
+                    program,
+                ));
             }
         }
         // Ohne Suchpfad gibt es nichts zu durchsuchen. „Pfad unbekannt"
@@ -686,18 +761,28 @@ fn command_preflight(ctx: &AgentContext) -> Vec<Diagnostic> {
         // die Prüfung, und das `exec` in der Sandbox entscheidet.
         None if path.is_none() => {}
         None => {
-            let found = find_in_path(OsStr::new(DEFAULT_COMMAND), path);
+            let found = find_in_path(OsStr::new(program), path);
             resolved.clone_from(&found);
             match found.as_deref() {
                 None => diagnostics.push(
                     Diagnostic::builder(AGENT_001, Severity::Blocking)
-                        .why(not_found_why(ctx, path))
-                        // Naming the path helps wherever the agent lies;
-                        // the install command stands in the sentence.
-                        .fix(FixAction::CopyCommand(locate::agent_command_fix(
-                            DEFAULT_COMMAND,
-                        )))
-                        .docs(DOCS_URL)
+                        .why(not_found_why(
+                            ctx,
+                            path,
+                            program,
+                            adapter.install_command(),
+                            adapter.is_native_program(),
+                        ))
+                        // Naming the path helps wherever a native agent
+                        // lies; the install command stands in the sentence.
+                        // A script is never bound (HUM-278), so for it the
+                        // installer is the fix (HUM-274).
+                        .fix(FixAction::CopyCommand(if adapter.is_native_program() {
+                            locate::agent_command_fix(program)
+                        } else {
+                            adapter.install_command().to_owned()
+                        }))
+                        .docs(docs)
                         .build(),
                 ),
                 // Eine Datei, die da ist, aber nicht startet, galt bis zum
@@ -706,12 +791,12 @@ fn command_preflight(ctx: &AgentContext) -> Vec<Diagnostic> {
                 Some(binary) if !is_executable_file(binary) => diagnostics.push(
                     Diagnostic::builder(AGENT_002, Severity::Warning)
                         .why(format!(
-                            "{} is the first {DEFAULT_COMMAND} in PATH, and this user cannot \
+                            "{} is the first {program} in PATH, and this user cannot \
                              execute it; the exec would fail after the start",
                             binary.display()
                         ))
                         .fix(FixAction::CopyCommand(chmod_fix(binary)))
-                        .docs(DOCS_URL)
+                        .docs(docs)
                         .build(),
                 ),
                 Some(_) => {}
@@ -731,16 +816,27 @@ fn command_preflight(ctx: &AgentContext) -> Vec<Diagnostic> {
             // findet `execvp` sie nicht: Ihr Verzeichnis steht nicht im
             // Suchpfad der Sandbox.
             if searched_the_path {
-                diagnostics.push(not_on_the_sandbox_path(ctx, binary));
+                diagnostics.push(not_on_the_sandbox_path(ctx, binary, docs));
             }
+        } else if adapter.is_native_program() || !starts_own_program(named, adapter) {
+            // Another command than the adapter's own program keeps the
+            // generic finding: the adapter's installer is not its fix.
+            diagnostics.push(not_reachable_in_sandbox(ctx, binary, docs));
         } else {
-            diagnostics.push(not_reachable_in_sandbox(ctx, binary));
+            diagnostics.push(script_not_reachable_in_sandbox(ctx, binary, adapter));
         }
     }
 
     // A candidate the daemon found and will not bind is named with its
     // reason, so a wrapper script never looks like the answer (HUM-278).
-    let note = passed_over(ctx, named);
+    // For a script adapter such as pi the advice of `Skip::Script` (point
+    // agent.command at the native binary) leads nowhere; its findings name
+    // the installer instead (HUM-274).
+    let note = if adapter.is_native_program() {
+        passed_over(ctx, named)
+    } else {
+        String::new()
+    };
     if !note.is_empty() {
         for diagnostic in &mut diagnostics {
             if [AGENT_002, AGENT_004].contains(&diagnostic.code) {
@@ -761,6 +857,14 @@ impl AgentAdapter for OpenCodeAdapter {
 
     fn program(&self) -> &'static str {
         DEFAULT_COMMAND
+    }
+
+    fn install_command(&self) -> &'static str {
+        INSTALL_COMMAND
+    }
+
+    fn docs_url(&self) -> &'static str {
+        DOCS_URL
     }
 
     fn command(&self, ctx: &AgentContext) -> Vec<OsString> {
@@ -861,81 +965,96 @@ impl AgentAdapter for OpenCodeAdapter {
     }
 
     fn llm_passthrough(&self, llm: &LlmConfig) -> Option<Rule> {
-        let url = llm.endpoint.as_ref()?;
-        let (host, scheme, port) = passthrough_target(llm)?;
-
-        let matcher = Matcher::host(HostPattern::Exact(host))
-            // `GET` ist dabei, weil OpenCode die Modellliste über
-            // `GET /v1/models` holt.
-            .with_methods(vec![Method::POST, Method::GET])
-            .with_path_prefixes(passthrough_prefixes(url, &llm.passthrough_paths))
-            .with_scheme(scheme)
-            .with_port(port);
-
-        Some(
-            Rule::new(
-                RuleId::from_uuid(Uuid::from_u128(PASSTHROUGH_RULE_ID)),
-                Action::Allow,
-                matcher,
-            )
-            // Das Modell steht üblicherweise im eigenen Netz; ohne dieses Recht
-            // verweigerte der Proxy die aufgelöste Adresse (ADR-006).
-            .with_allow_private(true)
-            .bundled(true)
-            // Erst dieses Merkmal macht aus der Regel die erklärte Ausnahme:
-            // Der Proxy hält solche Flüsse nicht, zeichnet sie vollständig auf
-            // und warnt vor Funden, statt sie aufzuhalten (`LLM_005`).
-            .passthrough_llm(true)
-            // Ohne Benutzer, Passwort und Query: Die Notiz steht in der
-            // Oberfläche und in `rules.yaml` (HUM-261).
-            .with_note(format!(
-                "LLM passthrough for {}. Logged, never held.",
-                llm_endpoint::display(url)
-            )),
-        )
+        passthrough_rule(llm)
     }
 
     fn preflight(&self, ctx: &AgentContext) -> Vec<Diagnostic> {
-        let mut diagnostics = command_preflight(ctx);
-
-        if effective_models(&ctx.llm.models) == vec![PLACEHOLDER_MODEL.to_owned()] {
-            // Der Vorschlag ist der Weg zu den Namen, nicht ein erfundener
-            // Name: welche Modelle der Server anbietet, weiß nur er. Sobald
-            // die Probe aus HUM-039 steht, füllt sie `llm.models` selbst.
-            let fix = ctx.llm.endpoint.as_ref().map_or_else(
-                || FixAction::ChangeSetting {
-                    key: "llm.endpoint".to_owned(),
-                    value: EXAMPLE_ENDPOINT.to_owned(),
-                },
-                |endpoint| {
-                    // Ohne Zugangsdaten aus `llm.endpoint` und als ein Wort
-                    // der Shell (HUM-261).
-                    let base =
-                        llm_endpoint::openai_base_url(&llm_endpoint::without_secrets(endpoint));
-                    FixAction::CopyCommand(format!(
-                        "curl -sS {}",
-                        humanitl_core::shell::shell_word(&format!("{base}/models"))
-                    ))
-                },
-            );
-            diagnostics.push(
-                Diagnostic::builder(LLM_004, Severity::Warning)
-                    .why(format!(
-                        "llm.models is empty; the agent is configured with the placeholder model \
-                         {PROVIDER_ID}/{PLACEHOLDER_MODEL}, and whether the server knows a model \
-                         of that name is unknown. Put the ids the server reports into llm.models."
-                    ))
-                    .fix(fix)
-                    .build(),
-            );
-        }
-
+        let mut diagnostics = command_preflight(ctx, self);
+        diagnostics.extend(placeholder_model_finding(&ctx.llm));
         diagnostics
     }
 
     fn is_fullscreen_tui(&self) -> bool {
         true
     }
+}
+
+/// The finding about an empty `llm.models` (`LLM_004`), shared by every
+/// adapter that falls back to [`PLACEHOLDER_MODEL`] (HUM-274).
+#[must_use]
+pub(crate) fn placeholder_model_finding(llm: &LlmConfig) -> Option<Diagnostic> {
+    if effective_models(&llm.models) != vec![PLACEHOLDER_MODEL.to_owned()] {
+        return None;
+    }
+    // Der Vorschlag ist der Weg zu den Namen, nicht ein erfundener
+    // Name: welche Modelle der Server anbietet, weiß nur er. Sobald
+    // die Probe aus HUM-039 steht, füllt sie `llm.models` selbst.
+    let fix = llm.endpoint.as_ref().map_or_else(
+        || FixAction::ChangeSetting {
+            key: "llm.endpoint".to_owned(),
+            value: EXAMPLE_ENDPOINT.to_owned(),
+        },
+        |endpoint| {
+            // Ohne Zugangsdaten aus `llm.endpoint` und als ein Wort
+            // der Shell (HUM-261).
+            let base = llm_endpoint::openai_base_url(&llm_endpoint::without_secrets(endpoint));
+            FixAction::CopyCommand(format!(
+                "curl -sS {}",
+                humanitl_core::shell::shell_word(&format!("{base}/models"))
+            ))
+        },
+    );
+    Some(
+        Diagnostic::builder(LLM_004, Severity::Warning)
+            .why(format!(
+                "llm.models is empty; the agent is configured with the placeholder model \
+                 {PROVIDER_ID}/{PLACEHOLDER_MODEL}, and whether the server knows a model \
+                 of that name is unknown. Put the ids the server reports into llm.models."
+            ))
+            .fix(fix)
+            .build(),
+    )
+}
+
+/// The passthrough rule for the LLM endpoint of the user (HUM-039).
+///
+/// Shared by every adapter that talks to `llm.endpoint` through the
+/// OpenAI-compatible surface (HUM-274): the rule depends on the endpoint and
+/// on `llm.passthrough_paths`, not on the agent, and it keeps its fixed id.
+#[must_use]
+pub(crate) fn passthrough_rule(llm: &LlmConfig) -> Option<Rule> {
+    let url = llm.endpoint.as_ref()?;
+    let (host, scheme, port) = passthrough_target(llm)?;
+
+    let matcher = Matcher::host(HostPattern::Exact(host))
+        // `GET` ist dabei, weil OpenCode die Modellliste über
+        // `GET /v1/models` holt.
+        .with_methods(vec![Method::POST, Method::GET])
+        .with_path_prefixes(passthrough_prefixes(url, &llm.passthrough_paths))
+        .with_scheme(scheme)
+        .with_port(port);
+
+    Some(
+        Rule::new(
+            RuleId::from_uuid(Uuid::from_u128(PASSTHROUGH_RULE_ID)),
+            Action::Allow,
+            matcher,
+        )
+        // Das Modell steht üblicherweise im eigenen Netz; ohne dieses Recht
+        // verweigerte der Proxy die aufgelöste Adresse (ADR-006).
+        .with_allow_private(true)
+        .bundled(true)
+        // Erst dieses Merkmal macht aus der Regel die erklärte Ausnahme:
+        // Der Proxy hält solche Flüsse nicht, zeichnet sie vollständig auf
+        // und warnt vor Funden, statt sie aufzuhalten (`LLM_005`).
+        .passthrough_llm(true)
+        // Ohne Benutzer, Passwort und Query: Die Notiz steht in der
+        // Oberfläche und in `rules.yaml` (HUM-261).
+        .with_note(format!(
+            "LLM passthrough for {}. Logged, never held.",
+            llm_endpoint::display(url)
+        )),
+    )
 }
 
 /// Die Dateien, die der Adapter anlegt, als Pfade.

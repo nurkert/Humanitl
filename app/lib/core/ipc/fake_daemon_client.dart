@@ -2587,6 +2587,8 @@ class FakeDaemonClient implements DaemonClient {
       FormKeys.holdAskMode: <String>['ui', 'terminal', 'none'],
       FormKeys.uiLanguage: <String>['en', 'de'],
       FormKeys.uiTheme: <String>['dark', 'light', 'system'],
+      // The ids of the registry, as the daemon checks them (HUM-274).
+      FormKeys.agentAdapter: FormKeys.agentAdapters,
     };
     final Object? value;
     if (text == '-') {
