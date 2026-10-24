@@ -3,6 +3,7 @@
 // in einem Fenster von 1280×800.
 
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -49,5 +50,22 @@ Future<void> pressCtrl(WidgetTester tester, LogicalKeyboardKey key) async {
   await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
   await tester.sendKeyEvent(key);
   await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  await tester.pump();
+}
+
+/// Opens the setup step [kind] (`SetupCheckKind.name`) by its "Details"
+/// button when it stands as one line (HUM-287).
+///
+/// A green step is folded to one line, and so is every step behind the one in
+/// front; a test that looks at the controls of such a step opens it first,
+/// the way a person would. A step that is already open is left as it is.
+Future<void> openSetupStep(WidgetTester tester, String kind) async {
+  if (find.byKey(Key('setup-open-$kind')).evaluate().isNotEmpty) {
+    return;
+  }
+  final Finder toggle = find.byKey(Key('setup-step-toggle-$kind'));
+  await tester.ensureVisible(toggle);
+  await tester.pump();
+  await tester.tap(toggle);
   await tester.pump();
 }

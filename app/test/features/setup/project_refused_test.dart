@@ -234,6 +234,9 @@ void main() {
     await openSetup(tester, client, chooser: () async => home);
     expect(stateOf(tester, SetupCheckKind.project), 'ok');
 
+    // Grün steht der Schritt als eine Zeile (HUM-287); der Picker steht im
+    // geöffneten Schritt.
+    await openSetupStep(tester, 'project');
     await tester.tap(find.byKey(const Key('setup-workdir')));
     await tester.pump();
     await tester.pump();

@@ -38,17 +38,20 @@ about this machine:
 
 A row shows "ok", "worth knowing", "not measured" or "blocks the start". A row
 that is not "ok" carries a card with the reason and, where there is one, a
-button for the fix, such as "Copy command". The button "Start agent" at the
+button for the fix, such as "Copy command". The button "Start a session" at the
 bottom stays off until all four rows are green, and the line under it names the
 row in the way. The fourth row has "Check again" and lists the doctor's lines
 about this machine; they are the same lines `humanitl doctor` prints.
 
 ## 2. Test the model server
 
-Type the address into "Address of the model server" and press "Contact it" (or
-`Enter`). Typing alone contacts nothing; the model server is the one address
-that traffic reaches without passing the queue, so it is only contacted when
-you ask. The row then says, for example,
+When a model server is already saved in the configuration, Setup contacts it
+once by itself when it opens, with the stored access key, and again on "Check
+again" or after the saved address changes. It contacts nothing else, and
+nothing at all while no address is saved. Otherwise type the address into
+"Address of the model server" and press "Contact it" (or `Enter`). Typing
+alone contacts nothing; the model server is the one address that traffic
+reaches without passing the queue, so it is only contacted when you ask. The row then says, for example,
 "http://192.168.1.50:11434 answered with 3 models in 40 ms" and lists the
 models.
 

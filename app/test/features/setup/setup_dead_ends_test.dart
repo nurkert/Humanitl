@@ -103,14 +103,20 @@ class StallingRefusedStartClient extends FakeDaemonClient {
 }
 
 /// Der Ordner, den der Knopf des Pickers nennt, oder null.
-String? pickedFolder(WidgetTester tester) => tester
-    .widget<WorkDirPicker>(
-      find.ancestor(
-        of: find.byKey(const Key('setup-workdir')),
-        matching: find.byType(WorkDirPicker),
-      ),
-    )
-    .workDir;
+///
+/// Ein grüner Schritt steht als eine Zeile (HUM-287); der Picker steht erst
+/// im geöffneten Schritt, also öffnet ihn die Hilfe zuerst.
+Future<String?> pickedFolder(WidgetTester tester) async {
+  await openSetupStep(tester, 'project');
+  return tester
+      .widget<WorkDirPicker>(
+        find.ancestor(
+          of: find.byKey(const Key('setup-workdir')),
+          matching: find.byType(WorkDirPicker),
+        ),
+      )
+      .workDir;
+}
 
 void main() {
   /// Zwischen dem Klick und der ersten Antwort des Daemons baut sich nichts
@@ -159,7 +165,7 @@ void main() {
     await pressCtrl(tester, LogicalKeyboardKey.digit6);
     await tester.pump();
     expect(startEnabled(tester), isTrue);
-    expect(pickedFolder(tester), FakeDaemonClient.defaultWorkDir);
+    expect(await pickedFolder(tester), FakeDaemonClient.defaultWorkDir);
     expect(find.byKey(const Key('setup-start-failure')), findsNothing);
 
     // Der Dienst wird zwischen zwei Klicks gestoppt: `Sandbox(Start)` wirft,
@@ -170,7 +176,7 @@ void main() {
 
     // Der Ordner steht weiter im Knopf -- `work_dir_host` im Daemon hat sich
     // nicht geändert.
-    expect(pickedFolder(tester), FakeDaemonClient.defaultWorkDir);
+    expect(await pickedFolder(tester), FakeDaemonClient.defaultWorkDir);
     // Und die Zeile behauptet weder eine Lücke noch einen Fehler des Ordners.
     expect(stateOf(tester, SetupCheckKind.project), 'ok');
     expect(reasonOf(tester), isNot(contains('Project folder')));
@@ -214,7 +220,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(stateOf(tester, SetupCheckKind.project), 'ok');
-    expect(pickedFolder(tester), FakeDaemonClient.defaultWorkDir);
+    expect(await pickedFolder(tester), FakeDaemonClient.defaultWorkDir);
     expect(startEnabled(tester), isTrue);
   });
 
@@ -286,7 +292,7 @@ void main() {
 
     // Die dritte Zeile bleibt, was ihre letzte Messung sagte.
     expect(stateOf(tester, SetupCheckKind.project), 'ok');
-    expect(pickedFolder(tester), FakeDaemonClient.defaultWorkDir);
+    expect(await pickedFolder(tester), FakeDaemonClient.defaultWorkDir);
     expect(reasonOf(tester), isNot(contains('Project folder')));
 
     // Der Befund steht unter dem Knopf, mit dem Code der Garantie.
@@ -355,7 +361,7 @@ void main() {
     // Die dritte Zeile bleibt, was ihre letzte Messung sagte, und der Ordner
     // steht weiter im Knopf.
     expect(stateOf(tester, SetupCheckKind.project), 'ok');
-    expect(pickedFolder(tester), FakeDaemonClient.defaultWorkDir);
+    expect(await pickedFolder(tester), FakeDaemonClient.defaultWorkDir);
     expect(reasonOf(tester), isNot(contains('Project folder')));
     // Der Befund steht unter dem Knopf, auf den jemand gedrueckt hat.
     final Finder card = find.byKey(const Key('setup-start-failure'));

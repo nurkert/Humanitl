@@ -5826,6 +5826,84 @@ same page is a compact health overview, not a wall of cards.
    find it.
 3. The owner picked the design from rendered variants.
 
+### Umsetzung (HUM-287)
+
+Der Entwurf kam zuerst: drei Varianten als echte Flutter-Widgets mit echten
+Schriften gerendert (V1 senkrechter Stepper, V2 Checkliste mit Detail-Pane,
+V3 eine Karte mit Fortschrittsband), je erster Start, Lage des Owners und
+Bereit, hell und dunkel. Der Owner hat am 2026-10-24 V1 gewählt, mit der
+Überschrift in Worten aus V3 und dem „Next: …" aus V2; der Agent steht als
+Zeile im Modellschritt. Festgehalten in `docs/UX.md` 4.10.
+
+Gebaut:
+
+- `SetupCheckRow` (`app/lib/features/setup/widgets/setup_check_row.dart`) ist
+  ein Schritt: eine Zeile mit Marke, Titel, Zustandswort, Beleg und
+  „Details", oder offen als Fläche mit Überschrift, eigenen Bedienelementen,
+  Befund und Aktionen. `SetupFinding` zeigt den Befund im Schritt mit Code,
+  Schweregrad, Titel, Grund, Detail, Abhilfe und Doku-Verweis, als
+  Zustandsschiene statt als Karte. `SetupStepView` sagt, ob ein Schritt offen
+  ist, ob er vorn steht und was danach kommt.
+- `SetupScreen` sucht den vorderen Schritt nach der Reihenfolge
+  (`setupCurrentStep`, `setupStepAfter`) und urteilt über keinen. Mit vier
+  grünen Schritten sagt die Überschrift „Humanitl is ready"; die eine
+  Primäraktion ist „Start a session", oder „Go to Intercept", solange eine
+  Session läuft (`onOpenIntercept` aus `SetupHost`).
+- `FixControl.primary` und `FixControl.offersButton` (HUM-282 Ordnerknopf,
+  HUM-275 Weg ins Einstellungsblatt, Installer) und
+  `LlmEndpointField.primary`. So hat ein Schritt genau einen Primärknopf,
+  und der hat den Fokus. Die Probe schickt weiter den hinterlegten Schlüssel
+  (HUM-288); der Modellschritt nennt weiter den gespeicherten Server
+  (HUM-289).
+- Beim Öffnen spricht das Setup den gespeicherten Modellserver einmal selbst
+  an (`SetupHost`, Entscheidung des Owners vom 2026-10-24): dieselbe Probe wie
+  „Contact it" mit dem hinterlegten Schlüssel, wieder bei „Check again" und
+  wenn sich der gespeicherte Endpunkt ändert, nie nach einer Uhr. Ohne
+  gespeicherten Endpunkt geht nichts hinaus. Das ersetzt die Zusage aus
+  HUM-075; `opening_the_setup_contacts_nothing` heißt jetzt
+  `opening_the_setup_contacts_only_the_saved_model_server`, dazu
+  `opening_the_setup_without_a_saved_server_contacts_nothing`.
+- Reviews, drei Runden: Jede Probe läuft durch ein Steuerwerk
+  (`SetupLlmProbe`) mit Anfrage-Nummer; nur die neueste setzt das Ergebnis.
+  Jedes Ergebnis trägt einen Fingerabdruck aus Adresse, aktivem Server,
+  Schlüsselreferenz, Schlüsselstand und den Schlüsseländerungen dieser App
+  (`llmKeyRevisionProvider`). Der Modellschritt zählt es nur für den
+  Fingerabdruck dessen, was das Feld zeigt. Der gespeicherte Endpunkt kommt aus
+  der Konfiguration (`setupLlmSavedProvider`), nicht aus dem Schnappschuss
+  der Sandbox. `SetupHost` verdrahtet nur noch die Auslöser der Regel. Ein
+  über „Details" geöffneter Schritt faltet sich, sobald er grün wird.
+- Im offenen Ordnerschritt steht genau ein „Choose folder", der Primärknopf
+  des Befunds; der Picker erscheint erst, wenn ein Ordner gilt.
+- Wo die App öffnet: unverändert `_offerSetup` in `shell_screen.dart` auf
+  `SetupState.needsSetup`. Ein erster Start hat keinen Ordner, und der fehlende
+  Ordner sperrt (`CONFIG_013`); einen eigenen Merker für den ersten Start
+  braucht der Client deshalb nicht.
+- ARB en/de: 20 neue Schlüssel `setupTitleReady` bis
+  `setupHeadSandboxUnmeasured`. `setupStart` heißt jetzt „Start a session" /
+  „Session starten", und `setupIntro` verliert den ersten Satz, weil der
+  Fortschritt („2 of 4 steps ready.") davor steht.
+
+Tests: `app/test/features/setup/setup_onboarding_test.dart` (Lage des Owners
+mit offenem ersten Sperrschritt, Primärknopf mit Fokus und „Next", kein
+Scrollen bei 1280×800, grüne Schritte als eine Zeile, Übergabe nach vorn,
+Bereit ohne Befund mit genau einer Primäraktion, laufende Session, Wahl des
+vorderen Schritts, wo die App öffnet). Die bestehenden Tests der
+Einrichtung öffnen einen gefalteten Schritt über `openSetupStep`
+(`app/test/harness/app_harness.dart`). Neue Goldens `setup_firstrun` und
+`setup_partial` in vier Varianten; neu erzeugt wurden die Goldens des
+Setup-Bildschirms (`setup_*`) und des kalten Starts (`states_daemon_missing`,
+`states_incompatible`).
+
+Mutationsbeweise, je einzeln, je rot: grüner Schritt offen gezeichnet (6
+Tests), Warteschlange statt Setup bei sperrendem Schritt (3), Abhilfe nicht
+primär (1), vorn der gravste statt der erste Schritt (2), Schritte unter
+die Falz geschoben (4).
+
+Damit zeigt ein fertig eingerichteter Rechner „Ready" ohne Klick
+(Akzeptanzkriterium 1). Belegt mit einem Doctor, der den Modellserver wie
+ein echter Daemon nicht angesprochen hat (`DOCTOR_013`). Mutation: ohne die
+Selbst-Probe wird `everything set shows Ready` rot.
+
 ## HUM-288 · Setup's model probe sends the stored key (before HUM-060)
 
 ### Context

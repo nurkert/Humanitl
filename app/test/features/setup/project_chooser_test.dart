@@ -101,46 +101,37 @@ void main() {
       },
     );
 
-    // Der Knopf ist ein Knopf: Rahmen, Ordnersymbol, ein Wort, das sagt,
-    // was er tut. Kein Geisterknopf, dessen Beschriftung der leere Pfad ist.
-    final HButton button = tester.widget<HButton>(pickerButton);
-    expect(button.variant, isNot(HButtonVariant.ghost));
+    // Ohne Ordner steht genau ein „Choose folder" im offenen Schritt: der
+    // Knopf des Befunds, als Primärknopf (Owner, 2026-10-24). Der Picker mit
+    // seinem zweiten Knopf für dieselbe Wahl steht erst, wenn ein Ordner gilt.
+    expect(pickerButton, findsNothing);
+    final HButton button = tester.widget<HButton>(cardButton);
+    expect(button.variant, HButtonVariant.primary);
     expect(button.enabled, isTrue);
-    expect(
-      find.descendant(of: pickerButton, matching: find.text('Choose folder…')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: pickerButton,
-        matching: find.byWidgetPredicate(
-          (Widget w) => w is HGlyphIcon && w.glyph == HGlyph.folder,
-        ),
-      ),
-      findsOneWidget,
-    );
-    // Der Pfad ist ein Text neben dem Knopf, nicht seine Beschriftung.
-    final Finder path = find.byKey(
-      const ValueKey<String>('setup-workdir-path'),
-    );
-    expect(tester.widget<Text>(path).data, 'No project folder');
-    expect(
-      find.ancestor(of: path, matching: find.byType(HButton)),
-      findsNothing,
-    );
+    expect(find.text('Choose folder'), findsOneWidget);
+    expect(find.text('Choose folder…'), findsNothing);
 
-    await press(tester, pickerButton);
+    await press(tester, cardButton);
 
     expect(asked, 1);
     expect(client.planned, <String?>[project]);
     expect(stateOf(tester, SetupCheckKind.project), 'ok');
-    // Mit Ordner heißt der Knopf „Change…", und der Pfad steht daneben,
-    // ganz beim Verweilen.
+    // Grün steht der Schritt als eine Zeile (HUM-287); wer den Ordner ändern
+    // will, öffnet ihn. Mit Ordner heißt der Knopf „Change…", und der Pfad
+    // steht daneben, ganz beim Verweilen.
+    await openSetupStep(tester, 'project');
     expect(
       find.descendant(of: pickerButton, matching: find.text('Change…')),
       findsOneWidget,
     );
+    final Finder path = find.byKey(
+      const ValueKey<String>('setup-workdir-path'),
+    );
     expect(tester.widget<Text>(path).data, project);
+    expect(
+      find.ancestor(of: path, matching: find.byType(HButton)),
+      findsNothing,
+    );
     expect(
       find.ancestor(
         of: path,
@@ -187,7 +178,6 @@ void main() {
     final NoFolderClient client = NoFolderClient();
     await openSetup(tester, client, chooser: () async => null);
 
-    await press(tester, pickerButton);
     await press(tester, cardButton);
 
     expect(client.planned, isEmpty);
@@ -211,7 +201,7 @@ void main() {
       },
     );
 
-    await press(tester, pickerButton);
+    await press(tester, cardButton);
 
     expect(tester.takeException(), isNull);
     expect(client.planned, isEmpty);

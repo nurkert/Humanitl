@@ -15,6 +15,11 @@ import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import '../../harness/app_harness.dart';
 
 /// Oeffnet den Setup-Abschnitt der Shell.
+/// Öffnet den Setup-Abschnitt der Shell.
+///
+/// Die Konfiguration des Fakes nennt keinen Endpunkt; mit einem gespeicherten
+/// spräche das Setup ihn beim Öffnen von selbst an (HUM-287). Diese Tests
+/// prüfen das Feld und den Knopf.
 Future<void> openSetup(WidgetTester tester, FakeDaemonClient client) async {
   await pumpApp(tester, client: client);
   await pressCtrl(tester, LogicalKeyboardKey.digit6);
@@ -42,14 +47,43 @@ Future<void> search(WidgetTester tester) async {
 }
 
 void main() {
-  testWidgets('opening_the_setup_contacts_nothing', (
+  // Seit HUM-287 (Entscheidung des Owners, 2026-10-24) spricht das Setup beim
+  // Öffnen den gespeicherten Modellserver einmal an, mit derselben Probe wie
+  // „Contact it". Sonst nichts: keine Suche im Netz, keine andere Adresse.
+  testWidgets('opening_the_setup_contacts_only_the_saved_model_server', (
+    WidgetTester tester,
+  ) async {
+    const String saved = 'http://192.168.1.50:11434';
+    final FakeDaemonClient client = FakeDaemonClient()
+      ..configValues = const ConfigValues(
+        values: <String, Object?>{
+          'llm': <String, Object?>{'endpoint': saved},
+        },
+      );
+    await openSetup(tester, client);
+    for (int i = 0; i < 4; i++) {
+      await tester.pump();
+    }
+
+    expect(client.probedEndpoints, <String>[saved]);
+    expect(client.discoverCalls, isEmpty);
+
+    // Einmal je Öffnung, nicht in jedem Frame und nicht nach einer Uhr.
+    await tester.pump(const Duration(seconds: 10));
+    expect(client.probedEndpoints, <String>[saved]);
+  });
+
+  testWidgets('opening_the_setup_without_a_saved_server_contacts_nothing', (
     WidgetTester tester,
   ) async {
     final FakeDaemonClient client = FakeDaemonClient();
     await openSetup(tester, client);
+    await tester.pump();
 
-    // Ein Netzscan, der beim Oeffnen eines Bildschirms losliefe, waere genau
-    // der Vorgang, den die Spezifikation ausschliesst.
+    // Ohne gespeicherten Endpunkt gibt es nichts anzusprechen, und ein
+    // Netzscan, der beim Oeffnen eines Bildschirms losliefe, waere genau der
+    // Vorgang, den die Spezifikation ausschliesst.
+    expect(client.probedEndpoints, isEmpty);
     expect(client.discoverCalls, isEmpty);
 
     await openSheet(tester);
@@ -166,6 +200,9 @@ void main() {
     // Zeile, die eine Adresse zeigt und daneben die Messung einer anderen,
     // waere die Luege, die CONVENTIONS 4.13 ausschliesst.
     expect(find.byKey(const Key('setup-discover-start')), findsNothing);
+    // Gemessen und grün steht der Schritt als eine Zeile (HUM-287); das Feld
+    // steht im geöffneten Schritt.
+    await openSetupStep(tester, 'llm');
     expect(
       tester
           .widget<EditableText>(
