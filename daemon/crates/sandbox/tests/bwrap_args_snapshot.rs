@@ -614,3 +614,80 @@ fn the_agent_program_is_bound_read_only_after_the_mounts() {
         "the host path is not bound again at the start"
     );
 }
+
+/// The value of `--setenv <key>` in an argument list.
+fn setenv_of<'a>(args: &'a [String], key: &str) -> Option<&'a str> {
+    args.windows(3)
+        .find(|w| w[0] == "--setenv" && w[1] == key)
+        .map(|w| w[2].as_str())
+}
+
+/// With a bound agent program its directory is first on `PATH`, so a shell
+/// the caller starts finds `opencode` by name (HUM-280). Without a bind,
+/// `PATH` is the profile's, untouched.
+#[test]
+fn a_bound_agent_puts_its_directory_first_on_the_path() {
+    let plain = context(WorkMode::Rw);
+    let unbound = strings(&profile("default").to_bwrap_args(&plain, &LaunchInputs::preview()));
+    let profile_path = setenv_of(&unbound, "PATH")
+        .expect("the default profile sets PATH")
+        .to_owned();
+    assert!(
+        !profile_path.contains("/run/humanitl/agent"),
+        "no bind, no entry: {profile_path}"
+    );
+
+    let mut ctx = context(WorkMode::Rw);
+    ctx.command = vec![OsString::from("bash")];
+    ctx.agent_program = Some(humanitl_sandbox::agent::AgentProgram::new(
+        PathBuf::from("/home/u/.opencode/bin/opencode"),
+        std::ffi::OsStr::new("opencode"),
+    ));
+    let bound = strings(&profile("default").to_bwrap_args(&ctx, &LaunchInputs::preview()));
+    assert_eq!(
+        setenv_of(&bound, "PATH"),
+        Some(format!("/run/humanitl/agent:{profile_path}").as_str())
+    );
+    // The caller's command stays what it was.
+    assert_eq!(bound.last().map(String::as_str), Some("bash"));
+
+    // A PATH that already names the directory further back gets it moved to
+    // the front, once: an `opencode` in `/work/bin` must not win over the
+    // bind.
+    ctx.session_env.push((
+        "PATH".to_owned(),
+        "/work/bin:/run/humanitl/agent:/usr/bin".to_owned(),
+    ));
+    let again = strings(&profile("default").to_bwrap_args(&ctx, &LaunchInputs::preview()));
+    assert_eq!(
+        setenv_of(&again, "PATH"),
+        Some("/run/humanitl/agent:/work/bin:/usr/bin")
+    );
+}
+
+/// The shim's switch for the controlling terminal stands right after
+/// `--proxy-port` when the start is at the daemon's own pseudo-terminal, and
+/// nowhere otherwise (HUM-280).
+#[test]
+fn the_controlling_terminal_is_asked_for_only_at_the_daemons_terminal() {
+    let ctx = context(WorkMode::Rw);
+    let preview = strings(&profile("default").to_bwrap_args(&ctx, &LaunchInputs::preview()));
+    assert!(
+        !preview
+            .iter()
+            .any(|arg| arg == humanitl_sandbox::SHIM_CONTROLLING_TERMINAL),
+        "{preview:?}"
+    );
+    let at_pty = strings(&profile("default").to_bwrap_args(
+        &ctx,
+        &LaunchInputs::preview().with_controlling_terminal(true),
+    ));
+    let port = index_of(&at_pty, "--proxy-port");
+    assert_eq!(
+        at_pty[port + 2],
+        humanitl_sandbox::SHIM_CONTROLLING_TERMINAL,
+        "{at_pty:?}"
+    );
+    assert_eq!(at_pty[port + 3], "--");
+    assert_eq!(at_pty.len(), preview.len() + 1);
+}

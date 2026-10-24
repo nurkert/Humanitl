@@ -2127,7 +2127,8 @@ impl Inner {
             launcher = launcher.with_output_sink(sink);
         }
         let launch = launcher.plan(&prepared.profile, &prepared.session)?;
-        let mut warnings = launch.warnings.clone();
+        let mut warnings = prepared.warnings.clone();
+        warnings.extend(launch.warnings.iter().cloned());
         // **Der Schnappschuss steht zwischen Planen und Starten.** Vorher gibt
         // es `LaunchPlan::unprotected` noch nicht, und nachher wäre er falsch:
         // Was der Agent in der Zwischenzeit schreibt, stünde als „war schon
@@ -2538,21 +2539,17 @@ impl Inner {
             policy.check_work_dir(&work_src)?;
         }
         let work_mode = self.work_mode(&config, choice, plan);
-        // Entschieden wird am wirksamen Kommando und nicht daran, ob eines
-        // genannt wurde: `humanitl run -- opencode` startet denselben Agenten
-        // wie `humanitl run`, und beide brauchen dieselbe Umgebung (HUM-135).
+        // Every session gets the adapter's contribution, whatever its command
+        // (HUM-280). `humanitl run -- opencode` starts the same agent as
+        // `humanitl run` (HUM-135), and since HUM-280 `humanitl run -- bash`
+        // is a shell in which the person starts that agent by hand: with the
+        // same model, key file, CA and configuration files, and with the
+        // configured agent bound on `PATH`. The caller's own command is still
+        // never bound.
         //
-        // Das leere Kommando geht dabei **immer** durch
-        // [`Self::agent_contribution`], auch wenn der Adapter der Konfiguration
-        // gar nicht existiert: Dort meldet ihn `CONFIG_003`, und ohne diesen
-        // Weg startete stattdessen still eine Shell.
-        let agent = if command.is_empty()
-            || humanitl_sandbox::agent::command_is_the_agent(&config, command)
-        {
-            self.agent_contribution(&config, &work_src, &profile, command, need)?
-        } else {
-            AgentContribution::default()
-        };
+        // An adapter that does not exist is `CONFIG_003` for every command;
+        // without that, an empty command would silently start a shell.
+        let agent = self.agent_contribution(&config, &work_src, &profile, command, need)?;
 
         let mut session_env = vec![(ENV_SESSION.to_owned(), self.session.to_string())];
         session_env.extend(agent.env.iter().cloned());
@@ -2598,7 +2595,9 @@ impl Inner {
             shim_src: shim_path(),
             session_env,
             // A bound program rewrote the adapter's command; the caller's own
-            // words would name the host path the sandbox does not have.
+            // words would name the host path the sandbox does not have. A
+            // caller's command is never rewritten: it comes back unchanged
+            // from the adapter, and the bind beside it serves `PATH` only.
             command: if agent.program.is_some() {
                 agent.command.clone()
             } else {
@@ -2607,6 +2606,7 @@ impl Inner {
             files: agent.files,
             agent_program: agent.program,
         };
+        let warnings = agent.warnings;
 
         // Ein Schnappschuss ist eine Anzeige, kein Start: Ohne `bwrap` steht
         // die Zeile trotzdem da, und der Start scheitert später mit dem
@@ -2618,6 +2618,7 @@ impl Inner {
         Ok(Prepared {
             env_origin,
             adapter_files: session.files.iter().map(|file| file.dst.clone()).collect(),
+            warnings,
             profile,
             session,
             backend,
@@ -2650,6 +2651,20 @@ impl Inner {
                 })
                 .build()
         })?;
+
+        // A shell from the caller does not wait for a locked or missing key
+        // (HUM-280): it starts without one and says so. The agent the daemon
+        // starts itself still stops with `LLM_009`, because without the key
+        // it would only fail at its first request.
+        let mut warnings = Vec::new();
+        let key = match self.agent_key(config, need) {
+            Ok(key) => key,
+            Err(found) if !command.is_empty() && found.code == codes::LLM_009 => {
+                warnings.push(started_without_key(found));
+                AgentKey::None
+            }
+            Err(found) => return Err(found),
+        };
 
         let ctx = AgentContext::new(self.session, work_src.to_path_buf(), config.llm.clone())
             // Das Kommando, das wirklich läuft: das genannte, sonst das der
@@ -2691,7 +2706,7 @@ impl Inner {
                     .map(OsString::from),
             )
             .with_work_dir_sandbox(profile.mounts.work.dst.clone())
-            .with_llm_key(self.agent_key(config, need)?);
+            .with_llm_key(key);
         let ctx = if command.is_empty() {
             ctx.with_command_override(
                 config
@@ -2706,14 +2721,29 @@ impl Inner {
 
         // An agent outside the sandbox's mounts, for example in
         // `~/.opencode/bin`, is bound read-only as one file and the command
-        // points at it (HUM-278).
+        // points at it (HUM-278). A command from the caller stays as it is
+        // and is never bound; the configured agent is bound beside it, so a
+        // shell finds it on `PATH` (HUM-280).
         let mut command = adapter.command(&ctx);
-        let program = humanitl_sandbox::agent::bind_agent_program(&ctx, &mut command);
+        let program = if ctx.agent_command_from_caller {
+            humanitl_sandbox::agent::plan_configured_agent(
+                &ctx,
+                adapter,
+                config
+                    .agent
+                    .command
+                    .as_ref()
+                    .map(|parts| parts.iter().map(OsString::from).collect()),
+            )
+        } else {
+            humanitl_sandbox::agent::bind_agent_program(&ctx, &mut command)
+        };
         Ok(AgentContribution {
             command,
             program,
             env: adapter.env(&ctx),
             files: adapter.files(&ctx)?,
+            warnings,
         })
     }
 
@@ -2970,6 +3000,19 @@ struct AgentContribution {
     program: Option<humanitl_sandbox::agent::AgentProgram>,
     env: Vec<(String, String)>,
     files: Vec<SandboxFile>,
+    /// Findings that do not stop the start, such as a shell without the key
+    /// (HUM-280).
+    warnings: Vec<Diagnostic>,
+}
+
+/// `LLM_009` as a warning: the caller's command starts without the key.
+fn started_without_key(mut found: Diagnostic) -> Diagnostic {
+    found.severity = Severity::Warning;
+    found.why = format!(
+        "{}; the session starts anyway, without the key, and an agent started in it has no          access key for the model",
+        found.why
+    );
+    found
 }
 
 /// Profil, Sitzung und Backend eines Schnappschusses.
@@ -2986,6 +3029,8 @@ struct Prepared {
     env_origin: BTreeMap<String, v1::ValueOrigin>,
     /// Die Ziele der Dateien des Adapters; für die Herkunftsspalte.
     adapter_files: BTreeSet<PathBuf>,
+    /// Befunde der Vorbereitung, die den Start nicht aufhalten (HUM-280).
+    warnings: Vec<Diagnostic>,
 }
 
 impl Prepared {
@@ -3012,12 +3057,18 @@ impl Prepared {
     /// geht an die Oberfläche und über sie in die Zwischenablage.
     fn argv(&self) -> Vec<OsString> {
         let mut args = vec![self.backend.program().as_os_str().to_owned()];
-        args.extend(self.profile.to_bwrap_args(
-            &self.session,
-            &LaunchInputs::preview_with_agent_files(
-                self.session.files.iter().map(|file| file.dst.clone()),
+        // The daemon starts every session at its own pseudo-terminal, so the
+        // shim gets the controlling terminal there (HUM-280), and the line
+        // says so.
+        args.extend(
+            self.profile.to_bwrap_args(
+                &self.session,
+                &LaunchInputs::preview_with_agent_files(
+                    self.session.files.iter().map(|file| file.dst.clone()),
+                )
+                .with_controlling_terminal(true),
             ),
-        ));
+        );
         self.redact_hidden_values(&mut args);
         args
     }
@@ -3789,6 +3840,18 @@ mod tests {
         api_key_ref: Option<&str>,
         ports: SandboxPorts,
     ) -> SandboxService {
+        service_configured(home, adapter, api_key_ref, ports, |_| {})
+    }
+
+    /// Wie [`service_with`], und `tweak` darf die Konfiguration danach noch
+    /// ändern.
+    fn service_configured(
+        home: &tempfile::TempDir,
+        adapter: &str,
+        api_key_ref: Option<&str>,
+        ports: SandboxPorts,
+        tweak: impl FnOnce(&mut humanitl_config::Config),
+    ) -> SandboxService {
         let config_home = home.path().join("config");
         let profile_dir = config_home.join("humanitl/profiles/sandbox");
         std::fs::create_dir_all(&profile_dir).unwrap();
@@ -3818,6 +3881,7 @@ mod tests {
             config.llm.endpoint = Some(url::Url::parse(KEYED_ENDPOINT).unwrap());
         }
         std::fs::create_dir_all(home.path().join("project")).unwrap();
+        tweak(&mut config);
 
         SandboxService::new(
             crate::session::SessionResolver::for_config(humanitl_config::Paths::new(env), config),
@@ -4169,6 +4233,51 @@ mod tests {
         );
     }
 
+    /// A caller's command starts without the key when the store does not
+    /// give it out, and says so with `LLM_009` as a warning; the agent the
+    /// daemon starts itself still stops (HUM-280).
+    #[test]
+    fn a_shell_starts_without_a_key_the_store_does_not_give() {
+        let home = tempfile::TempDir::new().unwrap();
+        let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+            "XDG_DATA_HOME",
+            home.path().join("data").display().to_string(),
+        )]));
+        let keys =
+            KeyStore::for_paths(&paths).with_secret_tool(Some(fake_secret_tool(home.path())));
+        let service = service_with(
+            &home,
+            "opencode",
+            Some("secret-service:humanitl/llm"),
+            SandboxPorts::none().with_keys(keys),
+        );
+        let shell = service
+            .inner
+            .prepare_keyed(
+                &v1::sandbox_request::Plan::default(),
+                &[OsString::from("bash")],
+                KeyNeed::Start,
+            )
+            .expect("a shell starts without the key");
+        assert!(
+            !shell.session.files.iter().any(|file| file.secret),
+            "no key file without a key"
+        );
+        let warning = shell
+            .warnings
+            .iter()
+            .find(|found| found.code == codes::LLM_009)
+            .expect("the start says it has no key");
+        assert_eq!(warning.severity, Severity::Warning);
+        assert!(warning.why.contains("without the key"), "{}", warning.why);
+
+        let refused = service
+            .inner
+            .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+            .expect_err("the agent itself still stops");
+        assert_eq!(refused.code, codes::LLM_009);
+    }
+
     /// HUM-262: Die Vorgabe ist nie ein Ordner, den der Start ablehnt.
     ///
     /// Der Daemon läuft als Nutzerdienst im Heimatverzeichnis. Das enthält die
@@ -4258,11 +4367,93 @@ mod tests {
             }
         }
 
+        // Since HUM-280 a command of its own gets the same contribution: a
+        // shell in which the person starts the agent by hand needs the same
+        // configuration as the agent the daemon starts.
         for other in [vec!["bash"], vec!["sh", "-c", "opencode"]] {
             let keys = env_keys_for(&service, &other);
             assert!(
-                !keys.iter().any(|key| key.starts_with("OPENCODE_")),
-                "{other:?} is a command of its own: {keys:?}"
+                keys.iter().any(|key| key == "OPENCODE_CONFIG"),
+                "{other:?} is a shell for the agent: {keys:?}"
+            );
+        }
+    }
+
+    /// A native executable in a per-user bin directory, as the ELF check
+    /// wants it (HUM-278).
+    fn native_program(dir: &Path, name: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = dir.join(name);
+        std::fs::copy("/bin/true", &path)
+            .or_else(|_| std::fs::copy("/usr/bin/true", &path))
+            .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// A session started with a caller's command binds the configured agent
+    /// by HUM-278's rules and puts its directory first on `PATH`; the
+    /// caller's own command is not bound and not rewritten (HUM-280).
+    #[test]
+    fn a_callers_command_gets_the_configured_agent_on_its_path() {
+        let home = tempfile::TempDir::new().unwrap();
+        // A name no system has under `/usr`, so the sandbox cannot start it
+        // as it is and the search goes to the per-user directories.
+        let agent = native_program(&home.path().join(".opencode/bin"), "hum280-agent");
+        let elsewhere = native_program(&home.path().join("tools"), "hum280-tool");
+        let service = service_configured(&home, "opencode", None, SandboxPorts::none(), |c| {
+            c.agent.command = Some(vec!["hum280-agent".to_owned()]);
+        });
+
+        for caller in [
+            vec![OsString::from("bash")],
+            vec![elsewhere.clone().into_os_string(), OsString::from("-v")],
+        ] {
+            let prepared = service
+                .inner
+                .prepare_with_command(&v1::sandbox_request::Plan::default(), &caller)
+                .expect("the session is prepared");
+            let program = prepared
+                .session
+                .agent_program
+                .clone()
+                .unwrap_or_else(|| panic!("{caller:?}: the configured agent is bound"));
+            assert_eq!(program.dst, Path::new("/run/humanitl/agent/hum280-agent"));
+            assert_eq!(program.host, agent.canonicalize().unwrap());
+            assert_eq!(
+                prepared.session.command, caller,
+                "the caller's command is neither bound nor rewritten"
+            );
+
+            let env = prepared.profile.effective_env(&prepared.session, None);
+            let path = env
+                .iter()
+                .find(|(key, _)| key == "PATH")
+                .map(|(_, value)| value.clone())
+                .expect("the sandbox has a PATH");
+            assert!(
+                path.starts_with("/run/humanitl/agent:"),
+                "{caller:?}: the bind is first on PATH: {path}"
+            );
+            assert!(
+                env.iter().any(|(key, _)| key == "OPENCODE_CONFIG"),
+                "{caller:?}: the adapter's configuration is there"
+            );
+
+            let argv = prepared.argv();
+            let elsewhere = elsewhere.as_os_str();
+            assert!(
+                !argv
+                    .windows(2)
+                    .any(|w| w[0].to_string_lossy().contains("bind") && w[1] == elsewhere),
+                "{caller:?}: the caller's file is never bound: {argv:?}"
+            );
+            assert!(
+                argv.iter()
+                    .any(|arg| arg == humanitl_sandbox::SHIM_CONTROLLING_TERMINAL),
+                "the screen's line asks for the controlling terminal, as the start does"
             );
         }
     }
@@ -4305,6 +4496,7 @@ mod tests {
             backend: BwrapBackend::unchecked("bwrap", MIN_BWRAP_VERSION, paths),
             env_origin: BTreeMap::new(),
             adapter_files: BTreeSet::new(),
+            warnings: Vec::new(),
         }
     }
 

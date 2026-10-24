@@ -12,9 +12,11 @@
 //!    Schreiber; ein Leser bekommt die des Schreibers und rendert
 //!    letterboxed.
 //! 3. **Tastendrücke und `SIGWINCH` hinaufreichen.** `Ctrl+C` ist dabei Byte
-//!    `0x03` und kein Signal: Die Sandbox läuft mit `--new-session` und hat
-//!    kein steuerndes Terminal. Wer den Agenten wirklich unterbrechen will,
-//!    nimmt `humanitl sandbox` … `stop` beziehungsweise beendet die Sitzung.
+//!    `0x03` und kein Signal dieses Prozesses. Im Pseudoterminal des Daemons
+//!    wird es zum `SIGINT` an die Vordergrundgruppe, denn der erste Prozess
+//!    der Sitzung trägt es seit HUM-280 als steuerndes Terminal; die Sandbox
+//!    läuft weiter mit `--new-session`, und das Terminal dieses Befehls
+//!    erreicht sie nie. Ein Programm im Rohmodus liest das Byte selbst.
 //! 4. **Die Bytes des Daemons ausgeben.** Sie sind dort gefiltert; dieser
 //!    Befehl schreibt sie unverändert, denn ein zweiter Filter im Client wäre
 //!    eine zweite Wahrheit.
@@ -88,6 +90,20 @@ const LEAVE_SCREEN: &[u8] = b"\x1b[?1049l\x1b[?25h\r\n";
 pub async fn run(ctx: &Context, read_only: bool, detach_keys: Option<&str>) -> Result<u8, Failure> {
     // Vor der Verbindung: Ein Tippfehler im Schalter soll nicht erst nach dem
     // Anhängen auffallen, und ohne Daemon soll er trotzdem auffallen.
+    let keys = resolve_detach_keys(ctx, detach_keys)?;
+    let ending = attach(ctx, read_only, keys).await?;
+    finish(ctx, ending)
+}
+
+/// Die Taste zum Abhängen: der Schalter, sonst `terminal.detach_prefix`.
+///
+/// # Errors
+///
+/// `CLI_004` für ein unlesbares `--detach-keys`, die Befunde des Ladens.
+pub(crate) fn resolve_detach_keys(
+    ctx: &Context,
+    detach_keys: Option<&str>,
+) -> Result<DetachKeys, Failure> {
     let keys = if let Some(spec) = detach_keys {
         DetachKeys::parse(spec).ok_or_else(|| invalid_detach_keys("--detach-keys", spec))?
     } else {
@@ -99,7 +115,41 @@ pub async fn run(ctx: &Context, read_only: bool, detach_keys: Option<&str>) -> R
         DetachKeys::parse(&spec)
             .ok_or_else(|| invalid_detach_keys("terminal.detach_prefix", &spec))?
     };
+    Ok(keys)
+}
 
+/// Der Exit-Code eines Anschlusses, und nach dem Abhängen die Zeile dazu.
+///
+/// # Errors
+///
+/// Der Befund, mit dem der Strom endete.
+pub(crate) fn finish(ctx: &Context, ending: Ending) -> Result<u8, Failure> {
+    match ending {
+        Ending::Stream(outcome) => outcome,
+        Ending::Detached => {
+            ctx.render.note(DETACHED);
+            Ok(EXIT_OK)
+        }
+        Ending::Signal(number) => Ok(128_u8.saturating_add(number)),
+    }
+}
+
+/// Hängt dieses Terminal an die laufende Sitzung, bis der Strom endet, die
+/// Taste zum Abhängen kommt oder ein Signal.
+///
+/// Dieselbe Hälfte für `humanitl sandbox attach` und für `humanitl run` an
+/// einem Terminal (HUM-280); was danach zu sagen ist, entscheidet der
+/// Aufrufer ([`finish`]). Das Terminal ist beim Rückkehren wieder gewöhnlich.
+///
+/// # Errors
+///
+/// `DAEMON_001` ohne Daemon und die Befunde der `Terminal`-RPC vor dem
+/// ersten Byte.
+pub(crate) async fn attach(
+    ctx: &Context,
+    read_only: bool,
+    keys: DetachKeys,
+) -> Result<Ending, Failure> {
     let mut client = ctx.connect().await?;
     let (cols, rows) = window_size();
 
@@ -191,18 +241,11 @@ pub async fn run(ctx: &Context, read_only: bool, detach_keys: Option<&str>) -> R
         let _ = out.write_all(LEAVE_SCREEN);
         let _ = out.flush();
     }
-    match ending {
-        Ending::Stream(outcome) => outcome,
-        Ending::Detached => {
-            ctx.render.note(DETACHED);
-            Ok(EXIT_OK)
-        }
-        Ending::Signal(number) => Ok(128_u8.saturating_add(number)),
-    }
+    Ok(ending)
 }
 
 /// Wie ein Anschluss endet.
-enum Ending {
+pub(crate) enum Ending {
     /// Der Strom ist zu Ende: die Sitzung, ein Befund, oder das Ende der
     /// Eingabe an einer Pipe.
     Stream(Result<u8, Failure>),

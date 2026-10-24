@@ -253,6 +253,15 @@ pub struct LaunchInputs {
     /// [`crate::agent::AgentProgram::dst`]. `None` binds by path; that is the
     /// preview, not the start.
     pub agent_program: Option<SourceFd>,
+    /// Whether the shim gives the session's first process the sandbox's
+    /// pseudo-terminal as its controlling terminal (HUM-280), rendered as
+    /// [`crate::bridge_env::SHIM_CONTROLLING_TERMINAL`] after `--proxy-port`.
+    ///
+    /// Only for a start at the daemon's own pseudo-terminal
+    /// ([`crate::StdioMode::Pty`]); never when the sandbox inherits the
+    /// caller's descriptors, because those may be the user's terminal
+    /// (`docs/SECURITY.md`, section on `TIOCSTI`). The preview leaves it off.
+    pub controlling_terminal: bool,
 }
 
 impl LaunchInputs {
@@ -277,7 +286,19 @@ impl LaunchInputs {
             extra_rw: Vec::new(),
             session_ro: Vec::new(),
             agent_program: None,
+            controlling_terminal: false,
         }
+    }
+
+    /// The same inputs with the controlling terminal switched on or off.
+    ///
+    /// For the preview of a session the daemon starts: it always starts at
+    /// its own pseudo-terminal, and the line on the screen must be the one
+    /// that starts.
+    #[must_use]
+    pub fn with_controlling_terminal(mut self, on: bool) -> Self {
+        self.controlling_terminal = on;
+        self
     }
 
     /// Dieselbe Vorschau, aber mit den Dateien eines Agent-Adapters.
@@ -464,6 +485,9 @@ impl SandboxProfile {
         args.flag("--");
         args.push(&self.network.shim_dst);
         args.pair("--proxy-port", self.network.proxy_port.to_string());
+        if inputs.controlling_terminal {
+            args.flag(crate::bridge_env::SHIM_CONTROLLING_TERMINAL);
+        }
         args.flag("--");
         for part in &ctx.command {
             args.push(part);
@@ -581,6 +605,27 @@ impl SandboxProfile {
         let mut merged = self.env.clone();
         for (key, value) in &session.session_env {
             merged.insert(key.clone(), value.clone());
+        }
+        // The bound agent program is on the search path, first (HUM-280): a
+        // shell started by the caller finds `opencode` or `pi` by name, with
+        // the same file a daemon-started agent runs. The directory holds that
+        // one bind and nothing else; without a bind it is not named.
+        if session.agent_program.is_some() {
+            let path = merged
+                .get("PATH")
+                .map_or(crate::agent::DEFAULT_SANDBOX_PATH, String::as_str);
+            let entry = crate::agent::AGENT_PROGRAM_DIR;
+            // Once and first: an entry further back would let a same-named
+            // program in an earlier directory, `/work/bin` say, win over the
+            // bind.
+            let joined = std::iter::once(entry)
+                .chain(
+                    path.split(':')
+                        .filter(|dir| !dir.is_empty() && *dir != entry),
+                )
+                .collect::<Vec<_>>()
+                .join(":");
+            merged.insert("PATH".to_owned(), joined);
         }
         for (key, value) in shim_env(self, report_fd) {
             merged.insert(key, value);
@@ -832,6 +877,7 @@ mod tests {
                 extra_rw: Vec::new(),
                 session_ro: Vec::new(),
                 agent_program: None,
+                controlling_terminal: false,
             },
         );
         assert!(with.windows(2).any(|w| w == ["--json-status-fd", "11"]));
@@ -928,6 +974,7 @@ mod tests {
                 extra_rw: Vec::new(),
                 session_ro: Vec::new(),
                 agent_program: None,
+                controlling_terminal: false,
             },
         );
         assert!(window_at(&args, &["--ro-bind-data", "40", "/work/.envrc"]).is_some());

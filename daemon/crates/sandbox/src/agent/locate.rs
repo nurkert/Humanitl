@@ -428,6 +428,28 @@ pub fn bind_agent_program(
     Some(program)
 }
 
+/// The bind of the configured agent for a session whose command came from
+/// the caller (HUM-280).
+///
+/// `humanitl run -- bash` opens a shell, and the person starts `opencode`
+/// or `pi` there. The caller's own command is never bound
+/// ([`plan_agent_program`] refuses it); the agent the configuration names
+/// (`configured`, from `agent.command`, otherwise the adapter's default) is
+/// planned by the same rules as for a daemon-started agent and lies at
+/// [`AGENT_PROGRAM_DIR`]`/<name>`, which the sandbox puts first on `PATH`
+/// whenever a bind exists. `ctx` is the caller's context; everything but the
+/// command is the same for both.
+#[must_use]
+pub fn plan_configured_agent(
+    ctx: &super::AgentContext,
+    adapter: &dyn super::AgentAdapter,
+    configured: Option<Vec<std::ffi::OsString>>,
+) -> Option<AgentProgram> {
+    let agent = ctx.clone().with_command_override(configured);
+    let command = adapter.command(&agent);
+    plan_agent_program(&agent, command.first()?)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

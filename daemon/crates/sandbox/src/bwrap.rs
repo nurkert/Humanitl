@@ -36,7 +36,7 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{BufRead, BufReader, PipeReader, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStringExt as _;
@@ -786,6 +786,10 @@ impl SandboxBackend for BwrapBackend {
             extra_rw: writable,
             session_ro: pinned.session_sources(self),
             agent_program: pinned.agent.as_ref().map(|agent| self.source_fd(agent)),
+            // Only at the daemon's own pseudo-terminal (HUM-280). Inherited
+            // descriptors may be the user's terminal, and that one must never
+            // become a controlling terminal inside the sandbox (`TIOCSTI`).
+            controlling_terminal: self.stdio.pty_size().is_some(),
         };
         let env = profile.effective_env(session, inputs.report_fd);
         let mut argv = vec![self.program.clone().into_os_string()];
@@ -1291,10 +1295,15 @@ impl Pty {
 /// vererbt werden. Ein Agent mit ihr in der Hand läse mit, was ein Mensch
 /// tippt, und könnte seine eigene Ausgabe fälschen.
 ///
-/// `setsid` und das steuernde Terminal macht `bwrap` selbst (`--new-session`,
-/// unbedingt in jeder Kommandozeile). Deshalb hat der Agent kein *steuerndes*
-/// Terminal, und deshalb liefert der Kernel bei einer Größenänderung kein
-/// `SIGWINCH`; das tut [`SandboxHandle::resize`].
+/// `bwrap` ruft `setsid` selbst (`--new-session`, unbedingt in jeder
+/// Kommandozeile): Der Shim beginnt ohne steuerndes Terminal. Erst sein Kind,
+/// der erste Prozess der Sitzung, macht eine eigene Sitzung auf und nimmt
+/// diese Untertanenseite als steuerndes Terminal (`--controlling-terminal`,
+/// HUM-280); `TIOCSCTTY` ohne Übernahme gelingt nur, weil niemand sie
+/// sonst als steuerndes Terminal hat, und dafür steht hier `O_NOCTTY`.
+/// Damit schickt der Kernel `SIGINT` für `Ctrl+C` und `SIGWINCH` bei einer
+/// Größenänderung an die Vordergrundgruppe; [`SandboxHandle::resize`] und
+/// [`SandboxHandle::interrupt`] signalisieren zusätzlich selbst.
 fn open_pty(cols: u16, rows: u16) -> Result<Pty, Diagnostic> {
     let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC)
         .map_err(|err| pty_failed(&format!("cannot open a pseudo terminal: {err}")))?;
@@ -1314,11 +1323,18 @@ fn open_pty(cols: u16, rows: u16) -> Result<Pty, Diagnostic> {
         ))
     })?;
     let path = PathBuf::from(OsString::from_vec(name.into_bytes()));
-    let slave = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&path)
-        .map_err(|err| pty_failed(&format!("cannot open {}: {err}", path.display())))?;
+    // `O_NOCTTY`: The follower side must never become the daemon's own
+    // controlling terminal. A daemon under systemd is a session leader
+    // without one, and an `open(2)` without the flag would make it so; the
+    // session's first process could then not take it (HUM-280), and a hang-up
+    // of the agent's terminal would reach the daemon.
+    let slave = rustix::fs::open(
+        &path,
+        rustix::fs::OFlags::RDWR | rustix::fs::OFlags::NOCTTY | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map(File::from)
+    .map_err(|err| pty_failed(&format!("cannot open {}: {err}", path.display())))?;
     tcsetwinsize(
         &master,
         Winsize {

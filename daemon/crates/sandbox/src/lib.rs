@@ -119,8 +119,8 @@ pub use crate::bridge_env::{
     CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NAMES, CHECK_NO_INTERFACES, CHECK_PREFIX,
     CHECK_SECCOMP_APPLIED, CHECK_SINGLE_SOCKET, ENV_BRIDGES, ENV_REPORT_FD, ENV_SECCOMP_DENY,
     ENV_SECCOMP_FAMILIES, ENV_SECCOMP_TYPES, EXEC_PREFIX, EXIT_EXEC, EXIT_SETUP, EXIT_USAGE,
-    ExecFailure, RESERVED_ENV, ShimCheck, bridges_json, parse_check_line, parse_exec_line,
-    shim_env,
+    ExecFailure, RESERVED_ENV, SHIM_CONTROLLING_TERMINAL, ShimCheck, bridges_json,
+    parse_check_line, parse_exec_line, shim_env,
 };
 pub use crate::bwrap::{
     BIND_FD_VERSION, BwrapBackend, EARLY_EXIT_WINDOW, MIN_BWRAP_VERSION, REPORT_TIMEOUT,

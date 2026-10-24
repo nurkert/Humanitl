@@ -122,6 +122,16 @@ pub const ENV_SECCOMP_DENY: &str = "HUMANITL_SECCOMP_DENY";
 /// Der geerbte Deskriptor für den Bericht; fehlt er, gibt es keinen.
 pub const ENV_REPORT_FD: &str = "HUMANITL_REPORT_FD";
 
+/// The shim's switch for the controlling terminal (HUM-280).
+///
+/// With it, the shim's child makes itself the leader of a new session and
+/// takes descriptor 0 as its controlling terminal (`setsid`, then
+/// `TIOCSCTTY` without stealing) before the filter and the `exec`. The
+/// launcher renders it only for a start at its own pseudo-terminal
+/// ([`crate::StdioMode::Pty`]); a sandbox that inherits the caller's
+/// descriptors never gets it, because they may be the user's terminal.
+pub const SHIM_CONTROLLING_TERMINAL: &str = "--controlling-terminal";
+
 /// Die Namen, die der Launcher setzt und die kein Profil belegen kann.
 pub const RESERVED_ENV: &[&str] = &[
     ENV_BRIDGES,
