@@ -1,16 +1,20 @@
 /// The third row: the folder the agent works in (HUM-044, HUM-040).
 ///
-/// Choosing a folder starts nothing. It asks the daemon what a start with that
-/// folder would mount (`Sandbox(Plan)`), and the answer decides this row: a
-/// blocking finding forbids the start, and which findings are blocking is
-/// decided in the daemon (`SANDBOX_006` for a folder it will not mount). The
-/// screen judges nothing about the folder -- not whether it exists, not
+/// Choosing a folder starts nothing. It stores the folder as
+/// `sandbox.work_dir` in `config.toml` (`SetConfig`) and then asks the daemon
+/// what a start with it would mount (`Sandbox(Plan)`); the answer decides this
+/// row: a blocking finding forbids the start, and which findings are blocking
+/// is decided in the daemon (`SANDBOX_006` for a folder it will not mount).
+/// The screen judges nothing about the folder -- not whether it exists, not
 /// whether it is writable, not where it lies (ADR-018).
 ///
-/// The chosen folder travels in `Sandbox(Plan)` and `Sandbox(Start)` and is
-/// not written into `config.toml`: `SetConfig` accepts only a CA variable
-/// under `sandbox.env` since HUM-151 and refuses `sandbox.work_dir` with
-/// `CONFIG_014` until HUM-069 (CONVENTIONS 4.17).
+/// The folder is chosen once (HUM-293): the app, the desktop launcher and
+/// `humanitl sandbox run` all read it from `config.toml`, and `--work`
+/// overrides it for one call only. The daemon checks the folder before it
+/// writes it; a refused one is not stored, and its `SANDBOX_006` stands in
+/// this row. No folder travels in `Sandbox(Plan)` or `Sandbox(Start)` any
+/// more, so there is no second, in-memory copy that could disagree with the
+/// file.
 library;
 
 import 'dart:async';

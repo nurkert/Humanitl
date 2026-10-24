@@ -1321,19 +1321,32 @@ impl FakeDaemon {
     ) -> v1::SandboxEvent {
         let session = self.state.session();
         let (sandbox_id, _) = self.state.sandbox();
+        let running = matches!(
+            state,
+            v1::SandboxState::Running | v1::SandboxState::Stopping
+        );
+        // Wie der Daemon (HUM-293): der Ordner dieses Plans, sonst der der
+        // laufenden Sitzung, sonst der, den `SetConfig` als
+        // `sandbox.work_dir` angenommen hat, sonst der der Aufnahme.
+        let stored = (!running)
+            .then(|| {
+                self.state
+                    .config_overrides()
+                    .get(humanitl_sandbox::WORK_DIR_KEY)
+                    .cloned()
+            })
+            .flatten();
         let work_dir = work_dir
             .map(str::trim)
             .filter(|dir| !dir.is_empty())
-            .map_or(session.work_dir, ToOwned::to_owned);
+            .map(ToOwned::to_owned)
+            .or(stored)
+            .unwrap_or(session.work_dir);
         let work_mode = work_mode
             .map(str::trim)
             .filter(|mode| matches!(*mode, "ro" | "rw"))
             .unwrap_or("rw")
             .to_owned();
-        let running = matches!(
-            state,
-            v1::SandboxState::Running | v1::SandboxState::Stopping
-        );
         v1::SandboxEvent {
             event: Some(v1::sandbox_event::Event::Status(
                 v1::sandbox_event::Status {

@@ -212,6 +212,14 @@ pub fn fix_line(fix: &FixAction) -> String {
         FixAction::ChangeSetting { key, .. } if key == API_KEY_REF_SETTING => {
             "humanitl llm key set".to_owned()
         }
+        // Ein Projektordner ohne Wert ist die Ordnerauswahl der Oberfläche;
+        // hier steht der Befehl, der einen Ordner dauerhaft wählt, mit einem
+        // Platzhalter statt eines leeren Werts (HUM-293).
+        FixAction::ChangeSetting { key, value }
+            if key == humanitl_sandbox::WORK_DIR_KEY && value.is_empty() =>
+        {
+            humanitl_sandbox::CHOOSE_PROJECT_FOLDER.to_owned()
+        }
         FixAction::ChangeSetting { key, value } => {
             format!("humanitl config set {key} {}", shell_word(value))
         }

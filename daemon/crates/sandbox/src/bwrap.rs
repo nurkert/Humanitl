@@ -393,15 +393,17 @@ impl BwrapBackend {
         let shown = work.display();
         if !work.is_absolute() {
             return Err(work_dir_diagnostic(format!(
-                "sandbox.work_dir {shown} is not an absolute path"
+                "the project directory {shown} is not an absolute path"
             )));
         }
         let meta = std::fs::metadata(work).map_err(|err| {
-            work_dir_diagnostic(format!("sandbox.work_dir {shown} does not exist: {err}"))
+            work_dir_diagnostic(format!(
+                "the project directory {shown} does not exist: {err}"
+            ))
         })?;
         if !meta.is_dir() {
             return Err(work_dir_diagnostic(format!(
-                "sandbox.work_dir {shown} is not a directory"
+                "the project directory {shown} is not a directory"
             )));
         }
         if profile.effective_work_mode(session.work_mode) == WorkMode::Rw
@@ -409,7 +411,7 @@ impl BwrapBackend {
         {
             return Err(Diagnostic::builder(SANDBOX_005, Severity::Blocking)
                 .why(format!(
-                    "sandbox.work_dir {shown} is not writable, but sandbox.work_mode is rw"
+                    "the project directory {shown} is not writable, but sandbox.work_mode is rw"
                 ))
                 .fix(FixAction::RemountReadOnly(work.to_path_buf()))
                 .build());
@@ -1017,7 +1019,11 @@ impl PinnedMounts {
         profile: &SandboxProfile,
         session: &SessionContext,
     ) -> Result<Self, Diagnostic> {
-        let work = BwrapBackend::pin(&session.work_src, SourceKind::Directory, "sandbox.work_dir")?;
+        let work = BwrapBackend::pin(
+            &session.work_src,
+            SourceKind::Directory,
+            "the project directory",
+        )?;
         policy.check_work_dir(work.resolved())?;
         let session_binds = backend
             .read_only_binds

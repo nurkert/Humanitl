@@ -6155,6 +6155,65 @@ stored folder in the CLI, each turns a test red.
 2. The diagnostic never names `sandbox.work_dir` for a path that came from
    somewhere else.
 
+### Umsetzung (HUM-293)
+
+- **Eine Quelle.** Der Ordner aus Setup, Sandbox-Kopf und Einstellungen geht
+  über `SetConfig` als `sandbox.work_dir` in die `config.toml` des Nutzers
+  (`SandboxStatusNotifier.chooseWorkDir`, danach ein `Plan` ohne Ordner).
+  `DaemonClient.planSandbox`/`startSandbox` haben kein `workDir` mehr; der
+  Daemon merkt sich keinen Ordner (`Pending.work_dir` entfällt). Ein
+  `work_dir` in `Plan` gilt nur für diesen Plan, eines in `Start` nur, solange
+  der Start seinen Anspruch hält (`Pending::starting_work_dir`); danach nennt
+  die laufende Sitzung ihren Ordner selbst.
+- **Prüfung vor dem Schreiben.** `config_rpc::check_chosen_work_dir` prüft mit
+  `work_dir::check_requested`, denselben drei Stufen wie ein Ordner über den
+  Socket (absolut, ohne `..`, vorhanden; `MountPolicy::check_work_dir_from`;
+  unter `$HOME` oder der schon erklärte Ordner). Abgelehnt ist `SANDBOX_006`,
+  die Datei bleibt Byte für Byte. Ein relativer Pfad bleibt `CONFIG_003` der
+  Gegenprobe. `x-project-scope = "denied"` unverändert.
+- **Die Quelle im Satz.** `humanitl_sandbox::WorkDirSource` (Datei mit Pfad,
+  Profil, `--work`, Umgebungsvariable, aktuelles Verzeichnis, gerade
+  gewählter Ordner, Anfrage ohne Angabe). Die Kommandozeile bestimmt sie aus
+  der Herkunft von `sandbox.work_dir` (`Context::work_dir`) und schickt sie
+  als `SandboxRequest.Start.work_dir_source` (neue Nachricht
+  `WorkDirSource`, Vertrag `1.21`); `humanitl sandbox run` prüft vor dem Plan
+  mit `check_project_dir`. Der Daemon sucht die Herkunft eines
+  konfigurierten Ordners erst, wenn ein Befund entsteht (`with_source`). Die
+  allgemeinen Sätze im Backend nennen „the project directory", nie mehr
+  `sandbox.work_dir`. Die Kommandozeile druckt die Abhilfe als
+  „choose a project folder: humanitl config set sandbox.work_dir <dir>"
+  (`CHOOSE_PROJECT_FOLDER`), die Oberfläche öffnet weiter die Ordnerauswahl.
+- **Fakes.** Der Dart-Fake legt einen angenommenen `sandbox.work_dir` in die
+  Momentaufnahme, solange keine Sandbox läuft; der Rust-Fake zeigt ihn im
+  Plan.
+- **Tests.** Daemon: `config_rpc` (`$HOME` und ein Ordner außerhalb abgelehnt,
+  Datei unverändert, Projekt geschrieben), `work_dir` (Quelle über die
+  Leitung, bereinigt, drei Stufen), `sandbox` (Ordner eines Plans nicht
+  gemerkt, Ordner eines Starts lebt mit dem Anspruch, Quelle der Anfrage und
+  Datei im Satz), `sandbox_rpc` angepasst. Kommandozeile: gespeicherter Ordner
+  aus `~`, `--work` ohne Schreiben, abgelehntes aktuelles Verzeichnis mit
+  „the current directory" und der Abhilfe (Text und JSON), gespeicherter
+  Ordner nennt seine Datei, `Context::work_dir` für alle Quellen. App:
+  `project_refused_test` (Wahl ruft `SetConfig`, abgelehnter Ordner nicht
+  gespeichert und `SANDBOX_006` im Schritt), `project_chooser_test`,
+  Sandbox-Harness zählt gespeicherte Ordner.
+- **Mutationen.** Ohne `SetConfig` im Picker: 7 App-Tests rot. Gespeicherter
+  Ordner in der Kommandozeile übergangen: 4 Tests rot. Ohne Prüfung in
+  `SetConfig`: 1 rot. Quelle im Daemon übergangen: 2 rot.
+- **Review Runde 1.** Stufe 3 vergleicht auch mit dem aufgelösten
+  `$HOME` (verlinktes Heimatverzeichnis wie auf Silverblue), die Politik prüft
+  geschriebene und aufgelöste Form, letztere auch gegen das aufgelöste
+  Heimatverzeichnis. `SetConfig` lehnt einen relativen Ordner selbst mit
+  `CONFIG_003` ab, unabhängig von der Gegenprobe, und schreibt den
+  aufgelösten Pfad. Quelle des Ordners reist mit `Pending::starting_work_dir`
+  und `Running::work_dir_source`; der Ordner des Starts wird geleert, sobald
+  `running` steht. `chooseWorkDir`: nur `SetConfig` zählt als Ablehnung, ein
+  gescheitertes Neulesen der Konfiguration nicht, und nur die jüngste Wahl
+  schreibt die Momentaufnahme.
+- **Offen.** `action_bar_de_test` ist auf `main` schon rot (Schriftbreite),
+  nicht Teil dieses Issues. Die Einstellungen planen nach dem Schreiben nicht
+  neu; der Sandbox-Bildschirm fragt beim Sichtbarwerden ohnehin.
+
 ---
 
 ## HUM-274 · pi becomes a first-class agent next to OpenCode

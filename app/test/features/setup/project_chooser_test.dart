@@ -24,7 +24,7 @@ import '../../harness/app_harness.dart';
 /// Der Ordner, den die Ordnerauswahl im Test liefert.
 const String project = '/home/u/projects/app';
 
-/// Ein Daemon ohne Projektordner, der jede Planung mitschreibt.
+/// Ein Daemon ohne Projektordner.
 class NoFolderClient extends FakeDaemonClient {
   /// Erzeugt den Fake mit gesunder Maschine und ohne Ordner.
   NoFolderClient() {
@@ -32,22 +32,12 @@ class NoFolderClient extends FakeDaemonClient {
     sandbox = const SandboxStatus();
   }
 
-  /// Jeder Ordner, nach dem `Sandbox(Plan)` gefragt wurde.
-  final List<String?> planned = <String?>[];
-
-  @override
-  Stream<SandboxUpdate> planSandbox({
-    String? profile,
-    String? workDir,
-    WorkMode? workMode,
-  }) {
-    planned.add(workDir);
-    return super.planSandbox(
-      profile: profile,
-      workDir: workDir,
-      workMode: workMode,
-    );
-  }
+  /// Jeder Ordner, den `SetConfig` als `sandbox.work_dir` angenommen hat
+  /// (HUM-293): Die Wahl landet in `config.toml`, nicht im Speicher.
+  List<String> get stored => <String>[
+    for (final (String key, String value) in configWrites)
+      if (key == FormKeys.sandboxWorkDir) value,
+  ];
 }
 
 /// Der Knopf des Pickers in der Projektzeile.
@@ -83,8 +73,11 @@ Future<void> press(WidgetTester tester, Finder finder) async {
   await tester.ensureVisible(finder);
   await tester.pump();
   await tester.tap(finder);
-  await tester.pump();
-  await tester.pump();
+  // Dialog, `SetConfig`, das neue Lesen der Konfiguration und der Plan:
+  // jeder Schritt ist ein eigener Mikrotask.
+  for (int i = 0; i < 4; i++) {
+    await tester.pump();
+  }
 }
 
 void main() {
@@ -114,7 +107,7 @@ void main() {
     await press(tester, cardButton);
 
     expect(asked, 1);
-    expect(client.planned, <String?>[project]);
+    expect(client.stored, <String>[project]);
     expect(stateOf(tester, SetupCheckKind.project), 'ok');
     // Grün steht der Schritt als eine Zeile (HUM-287); wer den Ordner ändern
     // will, öffnet ihn. Mit Ordner heißt der Knopf „Change…", und der Pfad
@@ -167,7 +160,7 @@ void main() {
     await press(tester, cardButton);
 
     expect(asked, 1);
-    expect(client.planned, <String?>[project]);
+    expect(client.stored, <String>[project]);
     expect(stateOf(tester, SetupCheckKind.project), 'ok');
     expect(find.text(DiagnosticCodes.noProjectFolder), findsNothing);
   });
@@ -180,7 +173,7 @@ void main() {
 
     await press(tester, cardButton);
 
-    expect(client.planned, isEmpty);
+    expect(client.stored, isEmpty);
     expect(stateOf(tester, SetupCheckKind.project), 'blocks the start');
     expect(find.text(DiagnosticCodes.folderDialogFailed), findsNothing);
   });
@@ -204,7 +197,7 @@ void main() {
     await press(tester, cardButton);
 
     expect(tester.takeException(), isNull);
-    expect(client.planned, isEmpty);
+    expect(client.stored, isEmpty);
     expect(find.text(DiagnosticCodes.folderDialogFailed), findsOneWidget);
     expect(find.text('The folder dialog did not open'), findsOneWidget);
     // Der Ausweg steht als Kopierzeile da, nicht nur im Satz.
@@ -217,7 +210,7 @@ void main() {
     fail = false;
     await press(tester, cardButton);
 
-    expect(client.planned, <String?>[project]);
+    expect(client.stored, <String>[project]);
     expect(find.text(DiagnosticCodes.folderDialogFailed), findsNothing);
   });
 
