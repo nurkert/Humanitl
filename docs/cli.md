@@ -51,7 +51,7 @@ agent runs inside it, and `humanitl run` ends with the agent's exit code.
 | `--work-mode ro\|rw` | `sandbox.work_mode` | Whether the agent may write in the project. |
 | `--ask ui\|terminal\|none` | `hold.ask_mode` | Where a held request is decided. See below. |
 | `--llm URL` | `llm.endpoint` | The language model of this session. From it comes the declared passthrough: a rule in rank 1 that is not held and overtakes your own block rules, for the inference paths of this one host. It stands as a rule of its own in the list, under `http://humanitl.internal/` and in the recording. If the address is not in your own network according to its name, the start reports `LLM_006`; the session starts anyway. Nothing is resolved for this. |
-| `-- CMD...` | `agent.command` | The command in the sandbox, instead of the agent from the configuration. `-- bash` is the way to look at the sandbox from the inside. |
+| `-- CMD...` | `agent.command` | The command in the sandbox, instead of the agent from the configuration. `-- bash` is the way to look at the sandbox from the inside, and to start the agent by hand there (see "A shell for the agent"). |
 
 Every other configuration flag (`--hold-timeout-secs`, `--findings-enabled`
 and so on) belongs to the configuration and not to a session. The daemon
@@ -131,9 +131,38 @@ their own, where a human wrote it and the daemon reads it.
   command — `humanitl run --ask terminal -- bash` starts no TUI and gets the
   prompt.
 
+### A shell for the agent
+
+`humanitl run -- bash` with a terminal on `stdin` attaches this terminal to
+the session, like `humanitl sandbox attach`: raw mode once the daemon reports
+`running`, the window size, every key to the shell, and the detach key
+`Ctrl+A d` (`terminal.detach_prefix`). The session's terminal is the daemon's
+own pseudo-terminal, never this one; the bytes come back filtered as for
+`attach` (HUM-280).
+
+In that shell the configured agent is on `PATH`: when it lies outside the
+sandbox's mounts (`~/.opencode/bin`, `~/.local/bin`, `~/bin`), the daemon
+binds that one file read-only at `/run/humanitl/agent/<name>` by the rules of
+HUM-278 and puts `/run/humanitl/agent` first on `PATH`. The adapter's files
+and environment are the same as for an agent the daemon starts itself:
+model, key file, CA and configuration. So `opencode` (or `pi`) starts with the
+configured model and key, `Ctrl+C` stops it and returns to the shell, `exit`
+ends the session, and `Ctrl+A d` leaves it running for a later
+`humanitl sandbox attach`. The command after `--` itself is never bound; it
+must be startable inside the sandbox. pi is a script and is never bound; it
+must lie under a mount such as `/usr/local`. If the key store does not give
+out the model's key (`LLM_009`, for example a locked keyring), a command of
+your own still starts, without the key, and the start reports `LLM_009` as a
+warning; the agent in that shell then has no key. A session without a command
+stops with `LLM_009` as before.
+
+Without a terminal on `stdin`, with `--ask terminal` (whose box needs the same
+keyboard) or with `--json`, the command keeps reading along as described
+below.
+
 ### Terminal, input and signals
 
-The agent gets **no** PTY. Its output arrives as bytes over the daemon's event
+Without "A shell for the agent", the agent gets **no** PTY of this terminal. Its output arrives as bytes over the daemon's event
 stream and goes to `stdout` and `stderr` of this process; it is filtered in the
 daemon, not here. The filter is an allow list: **of all control sequences
 exactly one goes out, `ESC [ … m` for colour and attributes.** This discards
@@ -200,8 +229,10 @@ running gets `CLI_005` with the identifier of the running session. Whoever
 wants to see it attaches: `humanitl sandbox attach` connects this terminal to
 the running session, `--read-only` only watches. Exactly one client may
 write; a second one gets `TERM_001` and the hint at `--read-only`.
-`Ctrl+C` reaches the agent as the byte `0x03` and not as a signal, because
-the sandbox has no controlling terminal. Whoever detaches ends only their own
+`Ctrl+C` goes to the session's pseudo-terminal as the byte `0x03`; the
+session's first process holds that terminal as its controlling terminal, so it
+interrupts the foreground program there, and a program in raw mode reads the
+byte. Whoever detaches ends only their own
 stream; the session keeps running, and a later `attach` shows the
 backlog.
 

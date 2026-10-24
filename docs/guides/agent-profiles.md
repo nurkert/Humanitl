@@ -668,13 +668,18 @@ flow: <flow id>
 host: example.com
 ```
 
-Such a command is not the adapter's agent, so the adapter contributes nothing:
-no OpenCode files and no OpenCode variables, only the sandbox profile's
-environment. `humanitl run -- bash` is the same way to look at the sandbox from
-inside. To make your program the default, set `agent.command` in `config.toml`,
-for example `agent.command = ["/usr/local/bin/my-agent"]`. A command named
-there counts as the agent of the session, so the configured adapter's files and
-variables are added too.
+Under `humanitl run`, such a command gets the same adapter contribution as
+the agent itself (HUM-280): the configured adapter's files, its variables and,
+when a key is stored, the key file. The configured agent is bound beside it and
+stands first on `PATH`, so `humanitl run -- bash` is a shell in which
+`opencode` (or `pi`) starts with the configured model and key. The command you
+name is never bound itself; it must be startable from the sandbox's mounts. If
+the key store does not give out the key, a command of your own still starts,
+without the key, and the start says so with `LLM_009` as a warning. Only the
+daemon-less `humanitl sandbox run` keeps the older rule: there a command that
+is not the agent gets nothing from the adapter. To make your program the
+default, set `agent.command` in `config.toml`, for example
+`agent.command = ["/usr/local/bin/my-agent"]`.
 
 ## Known phone-home hosts
 

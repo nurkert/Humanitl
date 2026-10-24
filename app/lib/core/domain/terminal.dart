@@ -56,8 +56,10 @@ final class TerminalOpen extends TerminalCommand {
 
 /// Keys of the human, on their way to the agent.
 ///
-/// `Ctrl+C` is byte `0x03` here and not a signal: the sandbox runs with
-/// `--new-session` and has no controlling terminal.
+/// `Ctrl+C` is byte `0x03` here and not a signal of this process. In the
+/// session's pseudo-terminal it interrupts the foreground program, because the
+/// session's first process holds that terminal as its controlling terminal
+/// (HUM-280); a program in raw mode reads the byte itself.
 final class TerminalKeys extends TerminalCommand {
   /// The bytes as the terminal produced them.
   const TerminalKeys(this.bytes);
