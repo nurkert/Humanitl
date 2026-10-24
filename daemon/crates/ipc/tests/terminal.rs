@@ -61,18 +61,24 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::new_with(|env| env)
+    }
+
+    /// Wie [`Fixture::new`], und `tweak` darf die Umgebung des Dienstes noch
+    /// ändern, etwa seinen `PATH` (HUM-280).
+    fn new_with(tweak: impl FnOnce(Env) -> Env) -> Self {
         let dir = tempfile::tempdir().expect("a temporary directory");
         let home = dir.path().join("home");
         let runtime = dir.path().join("runtime");
         std::fs::create_dir_all(&home).expect("home");
         std::fs::create_dir_all(&runtime).expect("runtime");
-        let paths = Paths::new(
+        let paths = Paths::new(tweak(
             Env::from_process()
                 .with("HOME", home.to_string_lossy())
                 .with("XDG_RUNTIME_DIR", runtime.to_string_lossy())
                 .with("XDG_CONFIG_HOME", home.join(".config").to_string_lossy())
                 .with("XDG_DATA_HOME", home.join(".local/share").to_string_lossy()),
-        );
+        ));
 
         let profiles = paths.profiles_dir().join("sandbox");
         std::fs::create_dir_all(&profiles).expect("profile directory");
@@ -102,6 +108,23 @@ impl Fixture {
             work,
             _proxy: proxy,
         }
+    }
+
+    /// Das Heimatverzeichnis des Dienstes auf dem Host.
+    fn home(&self) -> PathBuf {
+        self.work
+            .parent()
+            .expect("the project lies in the home directory")
+            .to_path_buf()
+    }
+
+    /// Wie [`Fixture::start`], mit einem ganzen Kommando des Aufrufers.
+    fn start_command(&self, command: &[&str]) -> v1::SandboxRequest {
+        let mut request = self.start();
+        if let Some(v1::sandbox_request::Op::Start(start)) = request.op.as_mut() {
+            start.command = command.iter().map(|part| (*part).to_owned()).collect();
+        }
+        request
     }
 
     fn service(&self) -> SandboxService {
@@ -1310,4 +1333,141 @@ async fn a_terminal_without_a_session_says_so() {
     let error = service.terminal("").expect_err("nothing runs here");
     assert_eq!(error.code.as_str(), "IPC_006", "{error}");
     assert!(error.why.contains("no sandbox is running"), "{}", error.why);
+}
+
+/// Ob `bash` auf dem Host liegt; die Sandbox bindet `/usr` und sieht damit
+/// dasselbe Programm.
+fn has_bash() -> bool {
+    ["/usr/bin/bash", "/bin/bash"]
+        .iter()
+        .any(|path| Path::new(path).exists())
+}
+
+/// A shell from the caller finds the configured agent on its `PATH`, at the
+/// bind of HUM-278, and sees the adapter's configuration (HUM-280).
+///
+/// The agent is a copy of `/bin/true` in `~/.opencode/bin` of the fixture's
+/// home; the daemon's `PATH` names only system directories, so only the
+/// per-user search finds it. The test never runs the program.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shell_finds_the_configured_agent_on_its_path() {
+    let fixture = Fixture::new_with(|env| env.with("PATH", "/usr/bin:/bin"));
+    if !usable(&fixture) || !has_bash() {
+        return;
+    }
+    let bin = fixture.home().join(".opencode/bin");
+    std::fs::create_dir_all(&bin).expect("the per-user bin directory");
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod bin");
+    let agent = bin.join("opencode");
+    std::fs::copy("/bin/true", &agent)
+        .or_else(|_| std::fs::copy("/usr/bin/true", &agent))
+        .expect("a native executable");
+    std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+    let service = fixture.service();
+    let script = "printf 'AT=%s\\n' \"$(command -v opencode)\"; \
+                  printf 'CFG=%s\\n' \"$OPENCODE_CONFIG\"; \
+                  test -r \"$OPENCODE_CONFIG\" && printf 'CFG-READABLE\\n'; \
+                  printf 'DONE\\n'; sleep 30";
+    let Some(hub) = running_with(&service, fixture.start_command(&["bash", "-ic", script])).await
+    else {
+        return;
+    };
+
+    with_session(service, async move {
+        let mut client = Client::attach(&hub, 100, 30, false);
+        let mut seen = String::new();
+        assert!(
+            client.wait_for(&mut seen, "DONE").await,
+            "the shell runs its line: {seen:?}"
+        );
+        assert!(
+            seen.contains("AT=/run/humanitl/agent/opencode\r\n"),
+            "the shell finds the bound agent first on PATH: {seen:?}"
+        );
+        assert!(
+            seen.contains("CFG=/etc/humanitl/opencode/opencode.json\r\n"),
+            "OPENCODE_CONFIG points at the adapter's file: {seen:?}"
+        );
+        assert!(
+            seen.contains("CFG-READABLE"),
+            "and the file is there: {seen:?}"
+        );
+    })
+    .await;
+}
+
+/// `Ctrl+C` in an interactive shell interrupts the foreground program, the
+/// prompt comes back, and the session runs on (HUM-280).
+///
+/// This needs the controlling terminal: without it the byte `0x03` is just a
+/// byte, the line discipline has no foreground group to signal, `sleep 100`
+/// runs on, and the next line waits behind it far longer than [`WAIT`].
+#[tokio::test(flavor = "multi_thread")]
+async fn ctrl_c_interrupts_the_foreground_program_not_the_shell() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) || !has_bash() {
+        return;
+    }
+    let service = fixture.service();
+    let Some(hub) = running_with(
+        &service,
+        fixture.start_command(&["bash", "--norc", "--noprofile", "-i"]),
+    )
+    .await
+    else {
+        return;
+    };
+
+    with_session(service, async move {
+        let mut client = Client::attach(&hub, 100, 30, false);
+        let mut seen = String::new();
+        client
+            .send(v1::terminal_input::Input::Data(
+                b"echo READY-$((20+1))\r".to_vec(),
+            ))
+            .await;
+        assert!(
+            client.wait_for(&mut seen, "READY-21").await,
+            "the shell answers: {seen:?}"
+        );
+        client
+            .send(v1::terminal_input::Input::Data(
+                b"sleep 100; echo SLEPT-$((1+1))\r".to_vec(),
+            ))
+            .await;
+        // Give the shell time to start `sleep` in the foreground.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        client
+            .send(v1::terminal_input::Input::Data(vec![0x03]))
+            .await;
+        client
+            .send(v1::terminal_input::Input::Data(
+                b"echo BACK-$((40+2))\r".to_vec(),
+            ))
+            .await;
+        assert!(
+            client.wait_for(&mut seen, "BACK-42").await,
+            "Ctrl+C ended sleep and the prompt came back: {seen:?}"
+        );
+        assert!(
+            !seen.contains("SLEPT-2"),
+            "the interrupted line did not run on: {seen:?}"
+        );
+        assert!(
+            !seen.contains("no job control"),
+            "the shell has job control: {seen:?}"
+        );
+        // The shell itself survived the interrupt.
+        client
+            .send(v1::terminal_input::Input::Data(
+                b"echo ALIVE-$((3+4))\r".to_vec(),
+            ))
+            .await;
+        assert!(
+            client.wait_for(&mut seen, "ALIVE-7").await,
+            "the session still runs: {seen:?}"
+        );
+    })
+    .await;
 }

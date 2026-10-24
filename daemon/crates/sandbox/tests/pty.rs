@@ -43,6 +43,8 @@ const FAKE_SHIM: &str = r#"#!/bin/bash
 # fake humanitl-shim for the pty tests: report, then exec. No filter.
 if [ "$#" -eq 0 ]; then exit 125; fi
 if [ "$1" = "--proxy-port" ]; then shift 2; fi
+# HUM-280: the launcher asks for the controlling terminal at a pty.
+if [ "$1" = "--controlling-terminal" ]; then shift; fi
 if [ "$1" = "--" ]; then shift; fi
 if [ -n "${HUMANITL_REPORT_FD:-}" ]; then
   fd="$HUMANITL_REPORT_FD"
@@ -200,9 +202,10 @@ fn has_stty() -> bool {
 ///
 /// Das ist das Akzeptanzkriterium „Fenster-Resize im UI ändert die Spaltenzahl
 /// im Agenten": `tcsetwinsize` allein genügt nicht. Die Sandbox läuft mit
-/// `--new-session` und hat kein steuerndes Terminal, also schickt der Kernel
-/// kein `SIGWINCH`; das tut `SandboxHandle::resize` selbst, an die
-/// Prozessgruppe des Sandbox-Init.
+/// `--new-session`, und der Ersatz-Shim dieses Tests nimmt kein steuerndes
+/// Terminal (das tut erst der echte mit `--controlling-terminal`, HUM-280),
+/// also schickt der Kernel kein `SIGWINCH`; das tut `SandboxHandle::resize`
+/// selbst, an die Prozessgruppe des Sandbox-Init.
 #[test]
 fn a_resize_reaches_the_agent() {
     let fx = fixture();

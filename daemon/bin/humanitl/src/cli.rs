@@ -419,8 +419,9 @@ pub enum SandboxCmd {
 
     /// Attach this terminal to the running session.
     ///
-    /// One client writes, any number watch. Ctrl+C reaches the agent as byte
-    /// 0x03, not as a signal: the sandbox has no controlling terminal. Detach
+    /// One client writes, any number watch. Ctrl+C goes to the session's
+    /// terminal as byte 0x03, which interrupts its foreground program, as in
+    /// any terminal; this terminal itself never reaches the sandbox. Detach
     /// with Ctrl+A d, as in screen; the session keeps running, and a later
     /// attach shows it. Ctrl+A Ctrl+A (or Ctrl+A a) sends one Ctrl+A to the
     /// agent.

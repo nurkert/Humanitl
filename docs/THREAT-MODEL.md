@@ -201,7 +201,15 @@ a file mount (not a socket) such as `~/.ssh` read-only; the check does not see f
 Without its own PID namespace the agent would see every process of the user and read tokens from
 `/proc/<pid>/environ`; without its own IPC namespace it would reach shared memory and message
 queues. The sandbox has its own PID, IPC and UTS namespaces, a fresh `/proc`, `--new-session` (no
-shared controlling terminal, so no `TIOCSTI` injection) and `--die-with-parent`. PID 1 is the shim
+shared controlling terminal, so no `TIOCSTI` injection) and `--die-with-parent`. `--new-session`
+stays although a session at the daemon's pseudo-terminal now has a controlling terminal
+(HUM-280): it detaches the sandbox from the terminal that started bwrap, and only then the shim's
+child takes the daemon's own pseudo-terminal with `setsid` and `TIOCSCTTY` (argument 0, never
+stealing). The user's terminal is never handed to such a session, so `TIOCSTI` can only write
+into the input of the sandbox's own pseudo-terminal, whose master the daemon holds; a sandbox with
+inherited descriptors never asks for a controlling terminal, and a terminal that already is a
+session's controlling terminal cannot be taken without `CAP_SYS_ADMIN` in the initial user
+namespace. PID 1 is the shim
 (HUM-203), which reaps orphans and relays `SIGTERM` and `SIGHUP`; it is not dumpable, so
 `/proc/1/environ` and `/proc/1/mem` are unreadable for the agent. *Residual risk:* none known, as
 long as bwrap implements the options as documented.
@@ -307,7 +315,10 @@ root whose file and directory nobody else can write (group write only for a grou
 user's private group). The launcher opens the file once with `O_PATH | O_NOFOLLOW`, checks owner,
 mode and ELF header through that descriptor and binds the descriptor, so a swap of the path or of
 a parent directory after the check does not change what the sandbox gets. A command given after
-`--` is never bound this way. *Residual risk:* whoever can write as the user, or holds write
+`--` is never bound this way. Since HUM-280 a session with such a command (`humanitl run -- bash`)
+still gets the configured agent's bind beside it, by the same rules, and `/run/humanitl/agent`
+first on `PATH`; that is the same file a daemon-started agent would get, and the caller's own
+command stays unbound. *Residual risk:* whoever can write as the user, or holds write
 access to an ancestor directory before the check, can substitute another file owned by the user
 or root; that is outside the threat model (see [Out of scope](#out-of-scope)).
 
@@ -377,6 +388,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-21 | Translated to English and brought to the state of the code for 0.1 | HUM-059 |
 | 2026-10-22 | K-17: agent program from a per-user directory bound read-only as one file | HUM-278 |
 | 2026-10-23 | K-02: several saved model servers, one keyring item each; only the active origin gets a key and the passthrough | HUM-289 |
+| 2026-10-24 | K-06: the session's first process takes the daemon's pseudo-terminal as controlling terminal, `--new-session` stays; K-17: a caller's command gets the configured agent bound beside it, never itself | HUM-280 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

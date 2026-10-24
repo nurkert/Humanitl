@@ -19,12 +19,16 @@
 //!
 //! # Launcher <-> shim contract (binding for HUM-011, HUM-012, HUM-013)
 //!
-//! **Command line.** `humanitl-shim --proxy-port <port> -- <command> [args...]`,
-//! the tail of the bwrap argument vector from
+//! **Command line.** `humanitl-shim --proxy-port <port> [--controlling-terminal]
+//! -- <command> [args...]`, the tail of the bwrap argument vector from
 //! `humanitl_sandbox::SandboxProfile::to_bwrap_args`, where the shim itself
 //! is `/usr/local/bin/humanitl-shim` inside the sandbox. `--proxy-port` is
 //! the port the agent's `HTTP_PROXY` names; the shim refuses to start when
-//! no `in` bridge listens there. `humanitl-shim --rules` prints the seccomp
+//! no `in` bridge listens there. `--controlling-terminal` (HUM-280) makes the
+//! child the leader of a new session with descriptor 0 as its controlling
+//! terminal; the launcher passes it only when descriptor 0 is the daemon's
+//! own pseudo-terminal, never the user's terminal (see
+//! [`take_controlling_terminal`]). `humanitl-shim --rules` prints the seccomp
 //! rule table the same environment would produce, one row per line, and
 //! starts nothing.
 //!
@@ -76,14 +80,16 @@
 //!    listener and hands the listener to the parent (without a listener the
 //!    same filter with `TSYNC`), proves it (`seccomp_applied`, `families`),
 //!    tells the parent the agent is next, waits at the gate, and `execvp`s
-//!    the command. The parent, PID 1 of the sandbox, makes itself
-//!    non-dumpable as its first step, installs its own,
-//!    slightly wider filter (the agent's plus `AF_UNIX`), counts and answers
-//!    the refused sockets of the agent (`refusals.rs`), serves the bridges,
-//!    opens the gate, forwards `SIGTERM` and `SIGHUP` to the child (`SIGINT`
-//!    reaches the agent through the process group and is ignored here), reaps
-//!    every orphan while it waits for its own child (`waitpid(-1)`), and
-//!    writes the last tally.
+//!    the command. With `--controlling-terminal` it first calls `setsid` and
+//!    takes descriptor 0 as its controlling terminal, before the filter. The
+//!    parent, PID 1 of the sandbox, makes itself non-dumpable as its first
+//!    step, installs its own, slightly wider filter (the agent's plus
+//!    `AF_UNIX`), counts and answers the refused sockets of the agent
+//!    (`refusals.rs`), serves the bridges, opens the gate, forwards `SIGTERM`
+//!    and `SIGHUP` to the child (`SIGINT` reaches the agent through its
+//!    process group or, with a controlling terminal, through the terminal's
+//!    foreground group, and is ignored here), reaps every orphan while it
+//!    waits for its own child (`waitpid(-1)`), and writes the last tally.
 //! 4. Exit status: 125 usage, 126 seccomp or bridge setup failed (the message
 //!    names which), 127 `exec` failed (and the child writes `EXEC fail
 //!    errno=<n>` to the report first, see `report.rs`), otherwise the
@@ -133,7 +139,7 @@ const EXIT_SETUP: i32 = 126;
 /// Exit status when `execvp` returned.
 const EXIT_EXEC: i32 = 127;
 
-const USAGE: &str = "usage: humanitl-shim --proxy-port <port> -- <command> [args...]\n\
+const USAGE: &str = "usage: humanitl-shim --proxy-port <port> [--controlling-terminal] -- <command> [args...]\n\
                      \x20      humanitl-shim --rules    print the seccomp rule table for this environment\n\
                      environment: HUMANITL_BRIDGES, HUMANITL_SECCOMP_FAMILIES, HUMANITL_SECCOMP_TYPES,\n\
                      HUMANITL_SECCOMP_DENY, HUMANITL_REPORT_FD (see the crate documentation)\n";
@@ -183,7 +189,7 @@ fn run() -> i32 {
     };
 
     match prepare(&cli, &report) {
-        Ok(prepared) => launch(prepared, report, &cli.command),
+        Ok(prepared) => launch(prepared, report, &cli),
         Err(err) => {
             report.check(err.check(), false, &err.to_string());
             say(&format!("humanitl-shim: {err}\n"));
@@ -336,7 +342,7 @@ fn list<'a>(values: impl Iterator<Item = &'a str>) -> String {
 }
 
 /// Step 3 and 4: fork, and each side's life.
-fn launch(prepared: Prepared, report: Report, command: &[OsString]) -> i32 {
+fn launch(prepared: Prepared, report: Report, cli: &Cli) -> i32 {
     // SAFETY: getpid has no preconditions.
     let parent_pid = unsafe { libc::getpid() };
     // The gate the child waits at before `exec` (HUM-137): it opens when the
@@ -406,7 +412,7 @@ fn launch(prepared: Prepared, report: Report, command: &[OsString]) -> i32 {
             &prepared.policy,
             &report,
             gate_read,
-            command,
+            cli,
         )
     }
     drop(gate_read);
@@ -532,8 +538,9 @@ fn child(
     policy: &Policy,
     report: &Report,
     gate: OwnedFd,
-    command: &[OsString],
+    cli: &Cli,
 ) -> ! {
+    let command = cli.command.as_slice();
     // SAFETY: prctl with PR_SET_PDEATHSIG only records a signal number.
     unsafe {
         libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
@@ -551,6 +558,10 @@ fn child(
         .collect();
     close_inherited(&keep);
     reset_signal_mask();
+    // Before the filter, so the filter never has to allow it.
+    if cli.controlling_terminal {
+        take_controlling_terminal();
+    }
 
     if let Err(err) = filter.install() {
         report.check(Check::SeccompApplied, false, &err.to_string());
@@ -619,6 +630,53 @@ fn child(
             .unwrap_or_default()
     ));
     exit_now(EXIT_EXEC)
+}
+
+/// Makes the child the leader of a new session with descriptor 0 as its
+/// controlling terminal (HUM-280).
+///
+/// Job control needs it: without a controlling terminal, `Ctrl+C` in an
+/// interactive shell is a byte and not `SIGINT` to the foreground program,
+/// and the shell reports "no job control". bwrap's `--new-session` stays in
+/// every command line; it detaches the whole sandbox from whatever terminal
+/// started bwrap. This step only attaches the session's first process to the
+/// terminal descriptor 0 already is.
+///
+/// Why this cannot reach the user's terminal:
+///
+/// - The launcher passes `--controlling-terminal` only when descriptor 0 is
+///   the follower side of a pseudo-terminal the daemon opened for this
+///   session (`StdioMode::Pty`), never with inherited descriptors.
+/// - `TIOCSCTTY` is called with argument 0: it never steals a terminal that
+///   is another session's controlling terminal. A user's terminal always is
+///   (the shell that started the command holds it), so the call would fail
+///   with `EPERM`; stealing needs `CAP_SYS_ADMIN` in the initial user
+///   namespace, which the sandbox never has.
+///
+/// A failure is reported on stderr and is not fatal: the agent then runs as
+/// before this issue, without job control, and every guarantee holds.
+fn take_controlling_terminal() {
+    // SAFETY: isatty only inspects descriptor 0.
+    if unsafe { libc::isatty(0) } != 1 {
+        say("humanitl-shim: warning: no controlling terminal: descriptor 0 is not a terminal\n");
+        return;
+    }
+    // SAFETY: setsid has no preconditions. The forked child is never a
+    // process group leader, so the call cannot fail with EPERM.
+    if unsafe { libc::setsid() } < 0 {
+        let err = io::Error::last_os_error();
+        say(&format!(
+            "humanitl-shim: warning: no controlling terminal: setsid failed: {err}\n"
+        ));
+        return;
+    }
+    // SAFETY: TIOCSCTTY takes an int; 0 means "do not steal".
+    if unsafe { libc::ioctl(0, libc::TIOCSCTTY, 0 as c_int) } != 0 {
+        let err = io::Error::last_os_error();
+        say(&format!(
+            "humanitl-shim: warning: no controlling terminal: TIOCSCTTY failed: {err}\n"
+        ));
+    }
 }
 
 /// A failed `families` probe: the evidence line and whether a refusal that
@@ -1110,6 +1168,8 @@ fn reap(child: libc::pid_t) -> i32 {
 
 struct Cli {
     proxy_port: u16,
+    /// `--controlling-terminal` (HUM-280).
+    controlling_terminal: bool,
     command: Vec<OsString>,
 }
 
@@ -1142,6 +1202,7 @@ impl fmt::Display for CliError {
 
 fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> {
     let mut proxy_port = None;
+    let mut controlling_terminal = false;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--") => {
@@ -1152,11 +1213,13 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
                 let proxy_port = proxy_port.ok_or(CliError::MissingProxyPort)?;
                 return Ok(Cli {
                     proxy_port,
+                    controlling_terminal,
                     command,
                 });
             }
             Some("--help" | "-h") => return Err(CliError::Help),
             Some("--rules") => return Err(CliError::Rules),
+            Some("--controlling-terminal") => controlling_terminal = true,
             Some("--proxy-port") => {
                 let value = args.next().ok_or(CliError::MissingValue("--proxy-port"))?;
                 let port = value
@@ -1261,7 +1324,18 @@ mod tests {
     fn command_line_has_exactly_one_shape() {
         let cli = parse_cli(args(&["--proxy-port", "3128", "--", "sh", "-c", "exit 7"])).unwrap();
         assert_eq!(cli.proxy_port, 3128);
+        assert!(!cli.controlling_terminal);
         assert_eq!(cli.command, ["sh", "-c", "exit 7"].map(OsString::from));
+        let cli = parse_cli(args(&[
+            "--proxy-port",
+            "3128",
+            "--controlling-terminal",
+            "--",
+            "bash",
+        ]))
+        .unwrap();
+        assert!(cli.controlling_terminal);
+        assert_eq!(cli.command, [OsString::from("bash")]);
         // Arguments after -- are the agent's, whatever they look like.
         let cli = parse_cli(args(&["--proxy-port", "0", "--", "--help"])).unwrap();
         assert_eq!(cli.command, [OsString::from("--help")]);

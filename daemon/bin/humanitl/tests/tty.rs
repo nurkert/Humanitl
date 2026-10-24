@@ -571,3 +571,87 @@ fn ask_terminal_is_cli_002_for_the_named_agent() {
     let said = String::from_utf8_lossy(&pty.read()).into_owned();
     assert!(said.contains("DAEMON_001"), "{said}");
 }
+
+/// `humanitl run -- bash` at a terminal attaches like `sandbox attach`:
+/// raw mode once the session runs, the detach key of HUM-279, the session
+/// left running, and the terminal given back (HUM-280).
+#[test]
+fn run_with_a_command_at_a_terminal_attaches() {
+    let harness = Harness::new();
+    let server = FakeServer::start(&harness);
+    let pty = Pty::open();
+    assert!(pty.is_cooked(), "the terminal starts cooked");
+
+    let mut child = harness
+        .command()
+        .args(["run", "--", "bash"])
+        .stdin(pty.stdio())
+        .stdout(pty.stdio())
+        .stderr(pty.stdio())
+        .spawn()
+        .expect("the binary starts");
+    wait_for_raw(&mut child, &pty);
+    pty.write(b"\x01d");
+
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+    assert!(
+        pty.is_cooked(),
+        "the terminal stayed raw, modes {:?}",
+        pty.modes()
+    );
+    let said = String::from_utf8_lossy(&pty.read()).into_owned();
+    assert!(said.contains("Detach: Ctrl+A d"), "{said:?}");
+    assert!(
+        said.contains("Detached; the session keeps running"),
+        "{said:?}"
+    );
+    let inputs = server.terminal_inputs();
+    assert_eq!(inputs.first(), Some(&"open"), "{inputs:?}");
+    assert_eq!(inputs.last(), Some(&"close"), "{inputs:?}");
+}
+
+/// Without a terminal on `stdin`, `humanitl run -- bash` only reads along,
+/// as before HUM-280: no raw mode and no `Terminal` stream.
+#[test]
+fn run_with_a_command_without_a_terminal_does_not_attach() {
+    let harness = Harness::new();
+    let server = FakeServer::start(&harness);
+    let pty = Pty::open();
+
+    let mut child = harness
+        .command()
+        .args(["run", "--", "bash"])
+        .stdin(Stdio::null())
+        .stdout(pty.stdio())
+        .stderr(pty.stdio())
+        .spawn()
+        .expect("the binary starts");
+    let deadline = Instant::now() + PATIENCE;
+    let code = loop {
+        pty.drain();
+        assert!(
+            pty.is_cooked(),
+            "the run set raw mode without a terminal on stdin: {:?}",
+            pty.modes()
+        );
+        if let Some(status) = child.try_wait().expect("the child can be polled") {
+            break status.code().unwrap_or(-1);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the run did not end within {PATIENCE:?}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let said = String::from_utf8_lossy(&pty.read()).into_owned();
+    // The fake's start ends without an exit code: the run ends with
+    // `CLI_001`, as it always did there.
+    assert_ne!(code, 0, "{said:?}");
+    assert!(!said.contains("Detach:"), "{said:?}");
+    assert!(
+        server.terminal_inputs().is_empty(),
+        "no Terminal stream without a terminal: {:?}",
+        server.terminal_inputs()
+    );
+}
