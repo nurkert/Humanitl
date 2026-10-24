@@ -753,23 +753,45 @@ pub(super) fn agent(facts: &AgentFacts) -> CheckOutcome {
             } else {
                 format!(" ({skipped})")
             };
+            let registry = crate::AdapterRegistry::builtin();
+            let known = registry.get(adapter);
             CheckOutcome::warn(
                 CheckId::Agent,
                 format!("no {command} in {place}"),
                 finding_with_docs(
                     DOCTOR_007,
                     Severity::Warning,
-                    format!(
-                        "the adapter {adapter} starts {command}, and no usable executable of \
-                         that name lies in {place}{passed_over}. If {command} is installed \
-                         elsewhere, set agent.command to the absolute path of its binary; the \
-                         sandbox binds it read-only. If it is not installed: {install}"
-                    ),
+                    if known.is_some_and(|known| !known.is_native_program()) {
+                        // A script is never bound (HUM-278); it has to lie
+                        // where the sandbox mounts it (HUM-274).
+                        format!(
+                            "the adapter {adapter} starts {command}, and no usable executable \
+                             of that name lies in {place}{passed_over}. {command} is a script \
+                             that the sandbox only finds under one of its mounts, such as \
+                             /usr/local: {install}"
+                        )
+                    } else {
+                        format!(
+                            "the adapter {adapter} starts {command}, and no usable executable \
+                             of that name lies in {place}{passed_over}. If {command} is \
+                             installed elsewhere, set agent.command to the absolute path of its \
+                             binary; the sandbox binds it read-only. If it is not installed: \
+                             {install}"
+                        )
+                    },
                     // Reinstalling does not help someone whose agent lies in
                     // a directory the daemon does not search; naming the path
-                    // does, for every location.
-                    FixAction::CopyCommand(crate::agent::locate::agent_command_fix(command)),
-                    opencode::DOCS_URL,
+                    // does, for every location of a native program. A script
+                    // such as pi is never bound, so its installer is the fix
+                    // (HUM-274).
+                    FixAction::CopyCommand(match known {
+                        Some(known) if !known.is_native_program() => install.clone(),
+                        _ => crate::agent::locate::agent_command_fix(command),
+                    }),
+                    // The documentation of the adapter that was asked for
+                    // (HUM-274); OpenCode's for a name the registry does not
+                    // know.
+                    known.map_or(opencode::DOCS_URL, |known| known.docs_url()),
                 ),
             )
         }
@@ -1908,6 +1930,34 @@ mod tests {
             Some(FixAction::CopyCommand(
                 "humanitl config set agent.command '[\"/absolute/path/to/opencode\"]'".to_owned()
             ))
+        );
+        assert_eq!(
+            diagnostic.docs.as_deref(),
+            Some(crate::agent::opencode::DOCS_URL)
+        );
+
+        // HUM-274: pi is a script the daemon never binds, so its installer is
+        // the fix, and the docs are pi's.
+        let pi = agent(&AgentFacts::Missing {
+            adapter: "pi".to_owned(),
+            command: "pi".to_owned(),
+            searched: "/usr/bin".to_owned(),
+            user_dirs: String::new(),
+            skipped: String::new(),
+            install: crate::agent::pi::INSTALL_COMMAND.to_owned(),
+        });
+        let diagnostic = pi.diagnostic().expect("a finding");
+        assert_eq!(
+            diagnostic.fix,
+            Some(FixAction::CopyCommand(
+                crate::agent::pi::INSTALL_COMMAND.to_owned()
+            ))
+        );
+        assert_eq!(diagnostic.docs.as_deref(), Some(crate::agent::pi::DOCS_URL));
+        assert!(
+            !diagnostic.why.contains("agent.command"),
+            "{}",
+            diagnostic.why
         );
     }
 

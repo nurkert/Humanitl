@@ -3242,5 +3242,19 @@
   "setupLlmActiveServer": "Saved server: {name}",
   "@setupLlmActiveServer": {"description": "Model row of the setup screen: the active saved server whose endpoint the field shows (HUM-289).", "placeholders": {"name": {"type": "String"}}},
   "settingsServerSavedWithoutKey": "The server {name} is saved, and its access key was not stored: {cause} Paste the key again and store it.",
-  "@settingsServerSavedWithoutKey": {"description": "Add form of a saved server after the server was saved and the key was refused (HUM-289). The form then only offers storing the key again.", "placeholders": {"name": {"type": "String"}, "cause": {"type": "String"}}}
+  "@settingsServerSavedWithoutKey": {"description": "Add form of a saved server after the server was saved and the key was refused (HUM-289). The form then only offers storing the key again.", "placeholders": {"name": {"type": "String"}, "cause": {"type": "String"}}},
+  "diagAGENT006Title": "Node.js missing in the sandbox",
+  "@diagAGENT006Title": {"description": "Title of the diagnostic AGENT_006 (docs/DIAGNOSTICS.md): the agent command is a Node.js script, such as pi, and the sandbox has no node to start it (HUM-274)."},
+  "diagAGENT006Why": "The agent command is a script that starts Node.js, and the sandbox finds no node to run it, so the agent would fail right after the start.",
+  "@diagAGENT006Why": {"description": "Generic cause of AGENT_006. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "settingsSectionAgent": "Agent",
+  "@settingsSectionAgent": {"description": "Group heading: which coding agent the next session starts (HUM-274)."},
+  "settingsAgentLabel": "Coding agent",
+  "@settingsAgentLabel": {"description": "Label of agent.adapter (HUM-274)."},
+  "settingsAgentHelp": "The agent the next session starts in the sandbox. Humanitl writes its configuration, endpoint, models and key for it.",
+  "@settingsAgentHelp": {"description": "Help under agent.adapter (HUM-274)."},
+  "settingsAgentOpenCode": "OpenCode",
+  "@settingsAgentOpenCode": {"description": "Option of agent.adapter: the OpenCode agent. A product name, not translated (HUM-274)."},
+  "settingsAgentPi": "pi",
+  "@settingsAgentPi": {"description": "Option of agent.adapter: the pi coding agent. A product name, lower case, not translated (HUM-274)."}
 }

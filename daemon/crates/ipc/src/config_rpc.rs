@@ -33,8 +33,9 @@ use std::path::{Path, PathBuf};
 
 use humanitl_config::value::{check_value, parse_value, to_toml};
 use humanitl_config::{Paths, ProfileSelection, Resolved, schema};
-use humanitl_core::diagnostics::codes::CONFIG_014;
-use humanitl_core::{Diagnostic, Severity};
+use humanitl_core::diagnostics::codes::{CONFIG_003, CONFIG_014};
+use humanitl_core::{Diagnostic, FixAction, Severity};
+use humanitl_sandbox::AdapterRegistry;
 use humanitl_sandbox::profile::CA_CERT_DST;
 
 use crate::{convert, v1};
@@ -60,7 +61,12 @@ pub const FORM_KEYS: &[&str] = &[
     // Das Opt-out des Vertrauens in die Zertifikatsablage des Systems
     // (HUM-257). Im Projekt-Profil gesperrt, hier schreibt nur der Mensch.
     "tls.trust_system_store",
+    // The agent of the next session (HUM-274); only ids of the registry.
+    AGENT_ADAPTER_KEY,
 ];
+
+/// The key of the agent choice in the form (HUM-274).
+pub const AGENT_ADAPTER_KEY: &str = "agent.adapter";
 
 /// So viele Zeichen eines abgelehnten Schlüssels stehen im Befund. Der Text
 /// reist im Status mit, und ein Client bestimmt die Länge des Schlüssels.
@@ -141,7 +147,37 @@ pub fn form_value(
         .ok_or_else(|| refused(&format!("{key} is not in the schema of this daemon")))?;
     let value = parse_value(field, text)?;
     check_value(field, &value)?;
+    if key == AGENT_ADAPTER_KEY {
+        known_adapter(&value)?;
+    }
     Ok((field, value))
+}
+
+/// Refuses an `agent.adapter` that names no built-in adapter (HUM-274).
+///
+/// The schema knows only "a string"; which ids exist knows the registry of
+/// the sandbox. Written anyway, the next session would start without the
+/// passthrough rule and every inference would be held (`CONFIG_003` there).
+fn known_adapter(value: &serde_json::Value) -> Result<(), Diagnostic> {
+    let registry = AdapterRegistry::builtin();
+    let id = value.as_str().unwrap_or_default();
+    if registry.get(id).is_some() {
+        return Ok(());
+    }
+    Err(Diagnostic::builder(CONFIG_003, Severity::Error)
+        .why(format!(
+            "agent.adapter = {} names no adapter of this daemon; known: {}",
+            shown(&value.to_string()),
+            registry.ids().join(", ")
+        ))
+        .fix(FixAction::ChangeSetting {
+            key: AGENT_ADAPTER_KEY.to_owned(),
+            value: registry
+                .ids()
+                .first()
+                .map_or_else(String::new, |first| (*first).to_owned()),
+        })
+        .build())
 }
 
 /// Schreibt eine Einstellung des Formulars.
@@ -464,6 +500,7 @@ mod tests {
             ("llm.endpoint", "http://192.168.1.20:11434/"),
             ("llm.models", r#"["qwen2.5-coder:14b"]"#),
             ("tls.trust_system_store", "false"),
+            ("agent.adapter", "pi"),
         ] {
             set(&paths, key, value).unwrap_or_else(|d| panic!("{key}: {}", d.why));
         }
@@ -483,6 +520,7 @@ mod tests {
         assert_eq!(values["llm"]["endpoint"], "http://192.168.1.20:11434/");
         assert_eq!(values["llm"]["models"][0], "qwen2.5-coder:14b");
         assert_eq!(values["tls"]["trust_system_store"], false);
+        assert_eq!(values["agent"]["adapter"], "pi");
         assert_eq!(
             snapshot.config_path,
             paths.config_path().display().to_string()
@@ -503,6 +541,9 @@ mod tests {
             ("llm.endpoint", "ftp://model.lan/"),
             ("sandbox.work_dir", "relative/dir"),
             ("tls.trust_system_store", "maybe"),
+            // An id the registry does not know (HUM-274).
+            ("agent.adapter", "aider"),
+            ("agent.adapter", "Pi"),
         ] {
             let refused = set(&paths, key, value).expect_err(key);
             assert_eq!(

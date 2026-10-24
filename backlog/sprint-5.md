@@ -61,6 +61,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-287 | Setup becomes a short onboarding, not a scroll list (before HUM-060) | M | HUM-282, HUM-286, HUM-289 |
 | HUM-292 | Spike: Podman as a second sandbox backend, with and without a kernel boundary (after HUM-060, first) | S | HUM-060, HUM-145 |
 | HUM-293 | One project folder, chosen once, for app and CLI alike (before HUM-060) | S | HUM-069, HUM-262, HUM-282, HUM-287 |
+| HUM-274 | pi becomes a first-class agent next to OpenCode (before HUM-060) | M | HUM-037, HUM-039, HUM-140, HUM-261 |
 
 ---
 
@@ -5954,3 +5955,129 @@ stored folder in the CLI, each turns a test red.
    run` from `~` runs in that folder.
 2. The diagnostic never names `sandbox.work_dir` for a path that came from
    somewhere else.
+
+---
+
+## HUM-274 · pi becomes a first-class agent next to OpenCode
+Sprint: 5 · Size: M · Dependencies: HUM-037, HUM-039, HUM-140, HUM-261 · Blocks: HUM-060
+
+### Context
+Owner decision of 2026-10-22: release 0.1.0 integrates the pi coding agent (<https://pi.dev/>, binary `pi`) as cleanly as OpenCode, not only OpenCode; pi is the long-term focus (BACKLOG.md section 9, item 9). Until now `AdapterRegistry::builtin()` knows one adapter, and every agent-facing surface (doctor, preflight fixes, docs, settings form) names OpenCode.
+
+Facts measured on pi 1.3.0 (`@earendil-works/pi-coding-agent`, published 2026-10-15; the old package `@mariozechner/pi-coding-agent` is deprecated and stops at 0.73.1), installed into a private prefix and run against `tests/e2e/mock_llm`:
+
+- **Launch.** `pi` is a Node script (`#!/usr/bin/env node`, engines `node >= 22.19.0`). Installed with `npm install -g`, it lies under `/usr/local/bin` or `/usr/bin`, both inside the `/usr` mount. A Node from nvm or a prefix under `$HOME` is not visible in the sandbox, and then `env` fails with exit 127 although `pi` itself is reachable.
+- **Configuration.** Everything lives in the agent directory, `$PI_CODING_AGENT_DIR`, default `~/.pi/agent`: `models.json` (custom providers), `settings.json`, `AGENTS.md` (global instructions), plus files pi writes itself (`auth.json`, `models-store.json`, `sessions/`, lock directories). The directory must stay writable; the files Humanitl places may be read-only. A read-only `settings.json` is tolerated: pi records the failed write of `lastChangelogVersion` and carries on (measured).
+- **Custom provider.** `models.json` → `providers.<id>` with `baseUrl`, `api: "openai-completions"`, `apiKey`, `models: [{id, name, contextWindow, maxTokens}]`. pi posts to `<baseUrl>/chat/completions`, so `baseUrl` is the same value OpenCode gets (`llm_endpoint::openai_base_url`, including a path prefix, HUM-261). Measured requests: only `POST /v1/chat/completions`; no `GET /models`.
+- **Key.** `apiKey` takes a literal, `$ENV`/`${ENV}` interpolation, or `!command`, which pi runs through `/bin/sh -c` and whose trimmed stdout is the key. `"!cat /etc/humanitl/pi/llm-api-key"` reads the key from the memfd file of HUM-140; it never stands in the environment, in `argv` of `pi` or in `models.json`. Only the path stands in the `argv` of the short-lived `cat`. A model whose provider has no resolvable key is not offered at all, so without a stored key the adapter writes a fixed placeholder that names itself (`humanitl-no-key`).
+- **Phone-home.** Interactive mode, without switches, contacts `pi.dev` (`/api/latest-version`, the model catalogue `/api/models/providers/<id>`) and `github.com` (`/sharkdp/fd/releases/latest`, the same for ripgrep, when `fd` or `rg` is missing). Print mode contacts nothing. `PI_OFFLINE=1` stops all of it (version check, catalogue refresh, package update check, tool download); `PI_SKIP_VERSION_CHECK=1` and `PI_TELEMETRY=0` are the explicit second switches. With `PI_OFFLINE=1` the logging proxy of the probe saw no request at all. User-triggered paths exist and are left to the queue: `/share` (GitHub gist or `radius.pi.dev`), `/bug` upload (`radius.pi.dev`), `pi update` (npm, `pi.dev/api/installer`), packages from trusted project settings (npm).
+- **Briefing.** pi reads `<agent-dir>/AGENTS.md` (and `CLAUDE.md`) on every start and the project's `AGENTS.md` from the working directory up, regardless of project trust.
+- **Project trust.** `.pi/settings.json`, `.pi/extensions` and the like in `/work` load only after a trust decision; the default `defaultProjectTrust: "ask"` shows a prompt in the TUI. A trusted project can override `defaultProvider`/`defaultModel` and add extensions. All of their traffic still goes through the proxy.
+- **Terminal.** Full-screen TUI by default (`tuiMode: "fullscreen"`): alternate screen, any-event mouse tracking (`?1003`), focus events, bracketed paste, synchronized output (`?2026`), kitty keyboard push and query (`CSI >7u`, `CSI ?u`), DA1, OSC 10/11/4 colour queries with a 100 ms timeout, OSC 7501 program status, OSC 8 links, `?2031`. `TERM=xterm-256color` and `COLORTERM=truecolor` work. `--ask terminal` must refuse it like OpenCode (CLI_002).
+
+### Goal
+`agent.adapter = "pi"` starts pi in the sandbox with the user's `llm.endpoint`, models and key, without any request pi makes on its own, with the same briefing, passthrough rule and preflight quality as OpenCode, selectable from the CLI and the settings form, documented in a guide section.
+
+### Non-goal
+- No new port, no change to the sandbox profile, no second bridge, no new mount.
+- No pi extensions, skills or MCP configuration shipped by Humanitl; no `defaultProjectTrust` override (the human decides in pi's own prompt).
+- No automatic choice of the adapter from the command name (`humanitl run -- pi` with `agent.adapter = "opencode"` starts pi without its configuration, as `-- bash` does today); candidate issue.
+- No per-adapter bundled rule set: the daemon loads one `rules/default.yaml` for every session (HUM-038, HUM-104). pi's blocks are appended there.
+
+### Affected paths
+`daemon/crates/sandbox/src/agent/{mod.rs,opencode.rs,pi.rs,pi_config.rs}`, `agents/pi/` (new), `rules/default.yaml`, `daemon/crates/sandbox/src/doctor/{probe.rs,checks.rs}`, `daemon/crates/sandbox/tests/{pi_adapter.rs,default_rules.rs}`, `daemon/crates/core-types/src/diagnostics/codes.rs` (append), `docs/DIAGNOSTICS.md` (generated), `daemon/crates/ipc/src/{sandbox.rs,config_rpc.rs}`, `app/lib/core/domain/settings.dart`, `app/lib/features/settings/settings_sheet.dart`, `app/lib/core/ipc/fake_daemon_client.dart` (own entry only), `app/lib/l10n/diagnostic_l10n.dart`, `app/l10n/app_{en,de}.arb` (append), `app/test/features/settings/`, `docs/guides/{agent-profiles.md,install.md}`, `docs/SECURITY.md`, `README.md`.
+
+### Specification
+1. **Adapter `pi`** (`PiAdapter`, `ADAPTER_ID = "pi"`, program `pi`), registered after OpenCode in `AdapterRegistry::builtin()`. Full-screen TUI: yes.
+2. **Command:** `["pi"]`, or `agent.command` / the caller's command unchanged.
+3. **Environment:** `PI_CODING_AGENT_DIR=<home>/.pi/agent`, `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1`, `PI_TELEMETRY=0`, `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `NODE_EXTRA_CA_CERTS=<ca>`, `TERM=xterm-256color`, `COLORTERM=truecolor`, `LANG=C.UTF-8`. No variable carries a secret; all pi variables are added by name to the visible environment list of the sandbox screen.
+4. **Files**, all read-only, all under `<home>/.pi/agent` or `/etc/humanitl/pi`, none under `/work`:
+   - `<agent-dir>/models.json` from `agents/pi/models.json.tmpl`: provider `humanitl-local`, `baseUrl = llm_endpoint::openai_base_url(endpoint)` (fallback as OpenCode), `api = "openai-completions"`, one model entry per `llm.models` (placeholder model when empty, `LLM_004`), `apiKey = "!cat /etc/humanitl/pi/llm-api-key"` when a key is configured, else `"humanitl-no-key"`. Rendered through `serde_json`, never by text substitution.
+   - `<agent-dir>/settings.json` from `agents/pi/settings.json.tmpl`: `defaultProvider = "humanitl-local"`, `defaultModel = <first model>`, `enableInstallTelemetry = false`.
+   - `/etc/humanitl/pi/llm-api-key` (`SandboxFile::secret`) only when a key is configured; empty for a plan.
+   - `<agent-dir>/AGENTS.md`: the shared briefing (`briefing::render`), unless `agent.briefing.enabled = false`.
+5. **Default rules:** `default_rules()` returns the shared `rules/default.yaml`. Appended, with fixed ids `01920000-0000-7000-8000-0000000001xx`: block `pi.dev` path `/api/**` (version check, catalogue, installer), block `radius.pi.dev` (bug upload, Radius share), block `github.com` paths `/sharkdp/fd/releases/**` and `/BurntSushi/ripgrep/releases/**` (tool download). Nothing is allowed in addition.
+6. **Passthrough:** the same rule as OpenCode (same id, methods, exact inference paths under the endpoint's base, HUM-261); the shared code is used, not copied.
+7. **Preflight:** the command check of OpenCode, parameterised by the adapter (program, install command `sudo npm install -g --ignore-scripts @earendil-works/pi-coding-agent` (lands under `/usr/local`, which the sandbox mounts; the `pi.dev/install.sh` installer puts pi under `$HOME`), docs `https://github.com/earendil-works/pi/tree/main/packages/coding-agent/docs`), so `AGENT_001`/`002`/`004` name pi and its installer. New `AGENT_006` (Blocking): the resolved `pi` is a script whose `#!` line asks for `node` (directly or through `env`), and no startable `node` is found where the sandbox looks for it; `why` names both, `fix` is a `ChangeSetting` of `sandbox.env.PATH` when a `node` is mounted but not on the sandbox path, otherwise a `CopyCommand` that installs Node under `/usr`. Undecidable lookups stay silent (`backlog/CONVENTIONS.md` 4.13). `LLM_004` as for OpenCode.
+8. **Selection:** `agent.adapter = "pi"` in `config.toml` or `humanitl config set agent.adapter pi`. The settings form gets a group "Agent" with a segmented control OpenCode / pi writing `agent.adapter` through `SetConfig`; `agent.adapter` joins `FORM_KEYS` and `FormKeys`, and `SetConfig` refuses an id the registry does not know (`CONFIG_003`, naming the known ids).
+9. **Doctor:** `default_command`, `install_command` and the docs link of `DOCTOR_007` come from the registry instead of being fixed to OpenCode.
+10. **Docs:** `docs/guides/agent-profiles.md` gets "## Using pi" (install, select, what Humanitl writes, key handling, phone-home table, terminal notes) and pi rows in "Known phone-home hosts"; `install.md` names both agents; `docs/SECURITY.md` names pi's key path and the `!cat` reference next to OpenCode's; README mentions pi. `agents/pi/README.md` documents the templates.
+
+### Tests
+- `daemon/crates/sandbox/tests/pi_adapter.rs`: environment (offline switches present, no secret, no network pointer); `models.json` valid JSON, base URL with and without path prefix, `/v1` once, key reference with key and placeholder without; key never in environment, `argv` or config text; `settings.json` names the first model; placeholder model and `LLM_004`; briefing in the agent directory, absent when switched off; nothing under `/work`, nothing on reserved targets; preflight `AGENT_001` with pi's installer, quiet when `pi` and `node` are there, `AGENT_006` when `node` is missing, silent when undecidable; passthrough equals OpenCode's; registry lists `opencode`, `pi`.
+- Real sandbox (skips without `bwrap`, like the OpenCode integration tests): a fake `pi` script does what pi does at start — reads `models.json`, runs the `apiKey` command through `/bin/sh -c`, prints whether the key arrived, checks `PI_OFFLINE`, reads `AGENTS.md`, writes into the agent directory, fails to write `settings.json` — and the three guarantees hold. No network.
+- `default_rules.rs`: each new pi rule blocks its target and leaves a neighbour (`pi.dev/docs`, another GitHub repository) unmatched.
+- `config_rpc`: `agent.adapter = "pi"` is written, `"nope"` is refused with `CONFIG_003`.
+- Flutter: the settings form writes `agent.adapter` and shows the current value; `diagnostic_l10n_test` covers `AGENT_006`.
+- Mutation proof per new test, listed in the commit body.
+- Manual: one real pi 1.3.0 run in a Humanitl sandbox against the mock LLM (`PI_OFFLINE` on: no held request before the first prompt; the prompt reaches the model through the passthrough).
+
+### Acceptance criteria
+- [ ] `agent.adapter = "pi"` starts pi in the sandbox with endpoint, models and key from the configuration; the key is in no environment variable, no `argv` of `pi` and no config file text.
+- [ ] Before the first prompt, a pi session produces no held or blocked flow (offline switches plus bundled rules).
+- [ ] Preflight names pi and its installer when `pi` is missing, and reports `AGENT_006` with `why` and `fix` when Node is missing in the sandbox.
+- [ ] The adapter is selectable from `config.toml`, `humanitl config set` and the settings form; an unknown id is refused by `SetConfig`.
+- [ ] The guide section "Using pi" exists and its phone-home table matches `rules/default.yaml`.
+- [ ] Coupling ratchet unchanged or lower; README security statement unchanged (pi's key path is the same mechanism as OpenCode's).
+
+### Pitfalls
+1. pi writes into its agent directory at every start (`auth.json`, `models-store.json`, `sessions/`, lock directories): only files go in read-only, never the directory.
+2. `!command` runs through the shell; the path is a constant, never a value from the configuration, so nothing from a user or a project reaches that shell line.
+3. Without any `apiKey` pi hides the provider and starts with "no model". The placeholder must be non-empty.
+4. `sandbox.env.PI_CODING_AGENT_DIR` wins over the adapter's value, and pi then reads none of the files; documented, not prevented (same class as `XDG_CONFIG_HOME` for OpenCode, which `AgentContext::config_home` follows).
+5. `timeout` without `--foreground` around an interactive pi in a test harness leaves it in a background process group: raw mode fails, Enter arrives as `\n` and inserts a newline. A probe, not a product issue, but it cost an hour.
+6. `fd` is missing in most sandboxes; pi warns once ("Offline mode enabled, skipping download") and works without it.
+
+### References
+HUM-037 (adapter contract), HUM-039 (passthrough), HUM-071 (briefing), HUM-135, HUM-139 (preflight), HUM-140 (key file), HUM-261 (path prefix), HUM-220 (terminal rendering), pi docs `docs/{configuration,models,settings,environment-variables,security}.md` in the npm package 1.3.0, <https://github.com/earendil-works/pi>.
+
+### Umsetzung (HUM-274)
+
+- **Adapter.** `PiAdapter` in `daemon/crates/sandbox/src/agent/pi.rs`, die
+  Vorlagen in `pi_config.rs` aus `agents/pi/`, registriert nach OpenCode. Der
+  Schlüssel geht als Datei `/etc/humanitl/pi/llm-api-key`, `models.json` nennt
+  `"!cat /etc/humanitl/pi/llm-api-key"`; ohne Schlüssel steht dort
+  `humanitl-no-key`. Endpunkt, Modelle und Schlüssel kommen wie bei OpenCode
+  aus `AgentContext` (`ctx.llm`, `ctx.llm_key`), also aus dem aktiven
+  Modellserver von HUM-289 samt der Regel, dass der Schlüssel nur mit dem
+  Endpunkt desselben Eintrags geht (`agent_key` im IPC-Crate, für beide
+  Adapter dieselbe Stelle).
+- **Vorprüfung.** `command_preflight` in `opencode.rs` nimmt jetzt den Adapter
+  (Programm, Installer, Doku) und behält die Suche und das Binden von HUM-278
+  (`plan_agent_program`, `passed_over`). Neu ist
+  `AgentAdapter::is_native_program` (Vorgabe `true`, pi `false`): Ein Skript
+  bindet der Daemon nie (HUM-278), deshalb bieten `AGENT_001` und
+  `DOCTOR_007` für pi den npm-Installer statt `agent.command` an, und der Satz
+  sagt, dass pi unter einer Einhängung wie `/usr/local` liegen muss.
+  `AGENT_006` (Node.js fehlt in der Sandbox) folgt nur, wenn das Kommando
+  selbst in Ordnung ist.
+- **Doctor.** `default_command`, `install_command` und der Doku-Link von
+  `DOCTOR_007` kommen aus `AdapterRegistry::builtin()`.
+- **Auswahl.** `agent.adapter` steht in `FORM_KEYS`; `SetConfig` lehnt eine
+  unbekannte Kennung mit `CONFIG_003` ab und nennt die bekannten. Im
+  Formular die Gruppe „Agent" mit `HSegmented` OpenCode / pi
+  (`settings-agent`), `FormKeys.agentAdapter`, im Fake dieselbe Prüfung. Die
+  Goldens der Einstellungen sind neu erzeugt (neue Gruppe).
+- **Regeln.** Vier gebündelte Sperren `…0101` bis `…0104` in
+  `rules/default.yaml`; `docs/reference/rules.md` nennt sie.
+- **Doku.** „Using pi" und die pi-Zeilen der Phone-home-Tabelle in
+  `docs/guides/agent-profiles.md`, pi in `install.md`, der Schlüsselpfad in
+  `docs/SECURITY.md`, ein Satz in `README.md`, `agents/pi/README.md`.
+- **Tests.** `daemon/crates/sandbox/tests/pi_adapter.rs` (15 Tests, davon einer
+  in einer echten Sandbox mit einem falschen `pi`), `default_rules.rs`
+  (`the_pi_rules_block_exactly_what_pi_does_on_its_own`), `config_rpc`
+  (`pi` geschrieben, `aider` und `Pi` abgelehnt), `sandbox.rs`
+  (`the_key_reaches_pi_through_a_sandbox_file_only`), `doctor::checks`
+  (pi-Fall von `DOCTOR_007`), Flutter `settings_sheet_test.dart` (zwei Tests),
+  `change_setting_fix_test.dart` (`agent.adapter` landet auf dem Schalter);
+  `AGENT_006` deckt `diagnostic_l10n_test` über das Register ab.
+- **Review Runde 1.** `AGENT_004` für pi schlägt den npm-Installer vor statt
+  `install` des Einstiegsskripts, das ohne seine Paketdateien mit
+  `ERR_MODULE_NOT_FOUND` endete. `AGENT_006` mit absolutem `#!`-Interpreter
+  außerhalb der Einhängungen schlägt die Neuinstallation von pi mit einem
+  Node.js unter `/usr` vor, nicht das Kopieren von node. Der Hinweis von
+  `Skip::Script` („native binary") entfällt für Skript-Adapter. Die
+  `$schema`-Zeilen der pi-Vorlagen sind weg (nicht gegen pi 1.3.0 geprüft).
+  `node_interpreter` überspringt `env -u NAME`, `-C DIR` und `NAME=wert`.
+- **Offen.** Der Handlauf mit einem echten pi 1.3.0 gegen den Mock-LLM steht
+  aus.

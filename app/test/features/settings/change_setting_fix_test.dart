@@ -97,6 +97,7 @@ const Map<String, Key> fieldOf = <String, Key>{
   FormKeys.llmEndpoint: Key('settings-endpoint'),
   FormKeys.llmModels: Key('settings-model'),
   FormKeys.tlsTrustSystemStore: Key('settings-trust-system-store'),
+  FormKeys.agentAdapter: Key('settings-agent'),
   FormKeys.llmApiKeyRef: Key('settings-key-input'),
 };
 

@@ -11,7 +11,7 @@ Three things decide what happens when Humanitl starts an agent:
 | Agent adapter | compiled into the daemon (`agent.adapter`) | the agent's command, its configuration files, its environment and its bundled rules |
 
 This guide explains the session profile format, the OpenCode adapter line by
-line, how to write an adapter or run a plain script as the agent, and which
+line, the pi adapter, how to write an adapter or run a plain script as the agent, and which
 hosts the known agents contact on their own. Every configuration key is listed
 in [CONFIG.md](../CONFIG.md), the rule language in the
 [rules reference](../reference/rules.md), and the command line in the
@@ -226,7 +226,8 @@ in [SECURITY.md](../SECURITY.md).
 
 ## The OpenCode adapter
 
-OpenCode is the only adapter in Humanitl 0.1 (`agent.adapter = "opencode"`).
+OpenCode is the default adapter in Humanitl 0.1 (`agent.adapter = "opencode"`);
+the second one is pi, see [Using pi](#using-pi).
 Its code is `daemon/crates/sandbox/src/agent/opencode.rs`; everything it writes
 into the sandbox lives under `agents/opencode/` and is compiled in. Nothing is
 read from there at run time and nothing is downloaded.
@@ -392,6 +393,137 @@ it with `CLI_002`; decide in the app (`--ask ui`) or let unruled requests be
 blocked (`--ask none`). All codes are explained in
 [DIAGNOSTICS.md](../DIAGNOSTICS.md).
 
+## Using pi
+
+pi (<https://pi.dev/>, npm package `@earendil-works/pi-coding-agent`) is the
+second adapter (`agent.adapter = "pi"`). Its code is
+`daemon/crates/sandbox/src/agent/pi.rs` and `pi_config.rs`; its templates live
+under `agents/pi/` and are compiled in. The values below were measured on pi
+1.3.0; other versions were not checked.
+
+### Install
+
+pi is a Node.js script (`#!/usr/bin/env node`, Node.js 22.19 or newer). The
+sandbox mounts `/usr` read-only and nothing under your home, and the daemon
+binds only native programs from a per-user directory, never a script. Install
+both pi and Node.js under `/usr`:
+
+```sh
+sudo npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+```
+
+A global npm install lands under `/usr/local` (or `/usr` with a distribution's
+npm). The installer script from `pi.dev` puts pi under `$HOME`, which the
+sandbox does not see; a Node.js from nvm under `$HOME` is not visible either.
+
+### Select
+
+```sh
+humanitl config set agent.adapter pi
+```
+
+or `agent.adapter = "pi"` in `config.toml`, or the "Agent" group of the
+settings form. The daemon refuses an id it does not know with `CONFIG_003` and
+names the known ones. The choice applies to the next session.
+
+### What Humanitl writes
+
+Everything pi reads lives in its agent directory, `PI_CODING_AGENT_DIR`, here
+`/home/agent/.pi/agent`. pi also writes there at every start (`auth.json`,
+`models-store.json`, `sessions/`, lock directories), so the directory stays
+writable in the tmpfs home; only the files Humanitl places are read-only.
+
+| Path in the sandbox | Content |
+|---|---|
+| `~/.pi/agent/models.json` | one provider `humanitl-local` with `baseUrl` from `llm.endpoint` (the same base URL OpenCode gets, path prefix included), `api: "openai-completions"`, one model per entry of `llm.models` |
+| `~/.pi/agent/settings.json` | `defaultProvider = "humanitl-local"`, `defaultModel` = the first model, `enableInstallTelemetry = false` |
+| `/etc/humanitl/pi/llm-api-key` | the access key, only if one is stored |
+| `~/.pi/agent/AGENTS.md` | the briefing in the language of `ui.language`, unless `agent.briefing.enabled = false` |
+
+Both JSON files are parsed and rebuilt with a JSON library, never filled in as
+text: a model name with a quotation mark cannot inject structure. With an empty
+`llm.models` pi gets the placeholder model `default` and the warning
+`LLM_004`. The limits of every model (`contextWindow` 32768, `maxTokens` 4096)
+are cautious defaults; adjust them in `agents/pi/models.json.tmpl` if you know
+your model.
+
+The endpoint, the models and the key are those of the active saved model
+server, exactly as for OpenCode: the key only goes with the endpoint of the
+same entry, and a switch applies to the next session.
+
+### Key handling
+
+`apiKey` in `models.json` is `"!cat /etc/humanitl/pi/llm-api-key"`. pi runs a
+value that starts with `!` through `/bin/sh -c` and takes the trimmed output as
+the key. The key file comes from a sealed memfd like every adapter file; the
+key stands in no environment variable, not in the `argv` of `pi` and not in
+`models.json`. Only the path stands in the `argv` of the short-lived `cat`. The
+path is a constant of the adapter, never a value from the configuration, so
+nothing a user or a project writes reaches that shell line.
+
+Without a stored key, `apiKey` is the placeholder `humanitl-no-key`: pi hides
+a provider without a key and would start with no model at all. A server
+without authentication ignores the value.
+
+### Environment
+
+| Variable | Value | Effect |
+|---|---|---|
+| `PI_CODING_AGENT_DIR` | `/home/agent/.pi/agent` | Where pi reads and writes its files. |
+| `PI_OFFLINE` | `1` | No automatic network activity: version check, catalogue refresh, package update check, tool download. Model calls are not affected. |
+| `PI_SKIP_VERSION_CHECK` | `1` | No request to `pi.dev/api/latest-version`. |
+| `PI_TELEMETRY` | `0` | No install telemetry. |
+| `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` | under `/home/agent` | pi's state stays in the tmpfs. |
+| `NODE_EXTRA_CA_CERTS` | `/etc/humanitl/ca.crt` | Node trusts the local CA of the proxy. |
+| `TERM`, `COLORTERM`, `LANG` | `xterm-256color`, `truecolor`, `C.UTF-8` | The terminal of the agent. |
+
+No variable carries a secret, and all four `PI_*` variables are shown by name
+in the environment list of the sandbox screen. `sandbox.env` wins over the
+adapter: if you set `PI_CODING_AGENT_DIR` there, pi reads none of the files
+Humanitl writes.
+
+### What pi does on its own
+
+| Host | What | Rule | Also switched off by |
+|---|---|---|---|
+| `pi.dev`, path `/api/**` | version check, model catalogue, `pi update` installer | block (`…0101`) | `PI_OFFLINE`, `PI_SKIP_VERSION_CHECK` |
+| `radius.pi.dev` | bug report upload (`/bug`), Radius session sharing | block (`…0102`) | nothing; only on such a command |
+| `github.com`, path `/sharkdp/fd/releases/**` | download of `fd` when it is missing | block (`…0103`) | `PI_OFFLINE` |
+| `github.com`, path `/BurntSushi/ripgrep/releases/**` | download of `rg` when it is missing | block (`…0104`) | `PI_OFFLINE` |
+
+With `PI_OFFLINE=1` a logging proxy saw no request at all before the first
+prompt. Other user-triggered paths (`/share` as a GitHub gist, `pi update`
+through npm, packages from a trusted project) are not blocked and go through
+the queue like any other request. Without `fd`, pi prints once "Offline mode
+enabled, skipping download" and works without it.
+
+### Project trust
+
+A project's `.pi/settings.json`, extensions and skills load only after pi's own
+trust prompt, which you answer in the TUI; Humanitl does not override
+`defaultProjectTrust`. A trusted project can choose another default model or
+add a provider; every request still goes through the proxy and is held.
+`models.json` is read from the agent directory only, so a project cannot
+rewrite the base URL of the bundled provider.
+
+### Terminal and checks
+
+pi is a full-screen TUI. `humanitl run --ask terminal` refuses it with
+`CLI_002`, as for OpenCode. Before the start the adapter checks:
+
+- `AGENT_001`: `pi` is not found; the fix is the npm command above.
+- `AGENT_002`: as for OpenCode, naming pi.
+- `AGENT_004`: pi lies on the host where the sandbox does not look. The fix is
+  the npm command above; copying the one script would leave its package
+  files behind.
+- `AGENT_006`: `pi` is reachable, but its `#!` line asks for `node`, and the
+  sandbox finds no startable `node`. The fix adds a mounted `node` to
+  `sandbox.env.PATH`, copies the host's `node` under `/usr/local/bin`, or
+  points at the Node.js download page. When the `#!` line names an absolute
+  `node` outside the mounts, the fix is reinstalling pi with a Node.js under
+  `/usr` or `/usr/local`.
+- `LLM_004`: `llm.models` is empty.
+
 ## Writing an adapter
 
 An adapter is Rust code in the crate `humanitl-sandbox`, registered in
@@ -547,8 +679,8 @@ variables are added too.
 ## Known phone-home hosts
 
 What an agent contacts by itself, without the person asking for it. The list
-comes from the bundled rules in `rules/default.yaml`, which every OpenCode
-session loads, and from the variables of the adapter. Each rule carries a note
+comes from the bundled rules in `rules/default.yaml`, which every session
+loads, whatever the adapter, and from the variables of the adapter. Each rule carries a note
 with the reasoning; `humanitl rules list --all` and the "Bundled rules" group
 in the Rules screen show them.
 
@@ -568,6 +700,15 @@ in the Rules screen show them.
 Language-server downloads are switched off with
 `OPENCODE_DISABLE_LSP_DOWNLOAD`; their hosts are not catalogued, so if one ever
 appears, it is held like any other request.
+
+### pi
+
+| Host | What | Rule | Also switched off by |
+|---|---|---|---|
+| `pi.dev`, path `/api/**` | version check, model catalogue, installer | block (`…0101`) | `PI_OFFLINE`, `PI_SKIP_VERSION_CHECK` |
+| `radius.pi.dev` | bug report upload, Radius session sharing | block (`…0102`) | nothing; only on such a command |
+| `github.com`, path `/sharkdp/fd/releases/**` | `fd` download | block (`…0103`) | `PI_OFFLINE` |
+| `github.com`, path `/BurntSushi/ripgrep/releases/**` | `rg` download | block (`…0104`) | `PI_OFFLINE` |
 
 ### Other agents
 
