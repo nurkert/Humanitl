@@ -19,6 +19,7 @@ library;
 
 import 'package:flutter/widgets.dart';
 
+import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/setup_provider.dart';
@@ -32,8 +33,12 @@ class DaemonCheck extends StatelessWidget {
     required this.check,
     required this.onRetry,
     this.attempts = 0,
+    this.view = SetupStepView.focused,
     super.key,
   });
+
+  /// Open or one line, in front or not (HUM-287).
+  final SetupStepView view;
 
   /// What the row says.
   final SetupCheck check;
@@ -49,26 +54,48 @@ class DaemonCheck extends StatelessWidget {
     final AppLocalizations l10n = context.l10n;
     final HTokens tokens = HTheme.of(context);
     final bool down = check.state != SetupCheckState.ok;
+    // Bietet der Befund einen eigenen Knopf -- den Installer der Unit --,
+    // ist der die eine Aktion dieses Schritts, und „Erneut verbinden" tritt
+    // daneben zurück: zwei Primärknöpfe in einem Schritt sagen nicht, welcher
+    // zuerst kommt (HUM-287).
+    final bool fixIsPrimary = FixControl.offersButton(
+      context,
+      check.diagnostic?.fix,
+    );
     return SetupCheckRow(
       check: check,
       title: setupCheckTitle(l10n, SetupCheckKind.daemon),
-      detail: down && attempts > 0
+      view: view,
+      primaryFix: fixIsPrimary,
+      body: down && attempts > 0
           ? Text(
               l10n.setupDaemonAttempts(attempts),
               key: const Key('setup-daemon-attempts'),
               style: tokens.typography.mono12.tinted(tokens.colors.fg1),
             )
           : null,
-      control: check.state == SetupCheckState.ok
-          ? null
-          : HButton(
+      actions: <Widget>[
+        if (down)
+          HButton(
+            key: const Key('setup-daemon-retry'),
+            variant: view.current && !fixIsPrimary
+                ? HButtonVariant.primary
+                : HButtonVariant.secondary,
+            autofocus: view.current && !fixIsPrimary,
+            onPressed: check.state == SetupCheckState.checking ? null : onRetry,
+            child: Text(l10n.setupRetry),
+          ),
+      ],
+      lineAction: down
+          ? HButton(
               key: const Key('setup-daemon-retry'),
               size: HButtonSize.sm,
               onPressed: check.state == SetupCheckState.checking
                   ? null
                   : onRetry,
               child: Text(l10n.setupRetry),
-            ),
+            )
+          : null,
     );
   }
 }

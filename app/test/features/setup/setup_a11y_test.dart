@@ -56,12 +56,19 @@ void main() {
     );
     await pressCtrl(tester, LogicalKeyboardKey.digit6);
     await tester.pump();
+    // Alle vier Schritte sind grün und stehen als je eine Zeile (HUM-287);
+    // ihre Bedienelemente stehen im geöffneten Schritt.
+    for (final String kind in <String>['llm', 'project', 'sandbox']) {
+      await openSetupStep(tester, kind);
+    }
 
     for (final Key key in <Key>[
       const Key('setup-start'),
       const Key('setup-sandbox-recheck'),
       const Key('setup-llm-probe'),
       const Key('setup-workdir'),
+      // Der Knopf, der einen Schritt öffnet oder faltet (HUM-287).
+      const Key('setup-step-toggle-daemon'),
     ]) {
       final Size size = tester.getSize(find.byKey(key));
       expect(size.height, greaterThanOrEqualTo(hitMin), reason: '$key height');
