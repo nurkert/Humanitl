@@ -19,6 +19,7 @@ import '../../tray/providers/notice.dart';
 import '../../tray/widgets/attention_notice.dart';
 import '../../tray/widgets/return_banner.dart';
 import '../providers/navigation.dart';
+import '../providers/notice_dismissal.dart';
 import '../section.dart';
 
 /// The slot. Takes no height while there is nothing to say.
@@ -38,11 +39,13 @@ class ShellNotices extends ConsumerWidget {
     final AppLocalizations l10n = context.l10n;
     return Column(
       mainAxisSize: MainAxisSize.min,
+      // Volle Fensterbreite, über Leiste und Panes (HUM-276).
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         if (notice != null)
-          AttentionNoticeCard(
+          AttentionNoticeBanner(
             diagnostic: notice,
-            onDismiss: ref.read(attentionNoticeProvider.notifier).dismiss,
+            onDismiss: () => _dismissNotice(ref, notice),
           ),
         if (banner != null)
           ReturnBanner(
@@ -52,6 +55,16 @@ class ShellNotices extends ConsumerWidget {
           ),
       ],
     );
+  }
+
+  /// Closes the notice. A fact about the desktop, raised once, stays closed
+  /// after a restart as well (HUM-276); a notice about one event does not.
+  static void _dismissNotice(WidgetRef ref, Diagnostic notice) {
+    final AttentionNotice notices = ref.read(attentionNoticeProvider.notifier);
+    if (notices.lasting) {
+      ref.read(dismissedNoticesProvider.notifier).remember(notice.code);
+    }
+    notices.dismiss();
   }
 
   /// Leads to the request that has waited longest, and to no other.

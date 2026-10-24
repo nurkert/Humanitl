@@ -28,6 +28,7 @@ import 'package:humanitl/features/tray/tray_diagnostics.dart';
 import 'package:humanitl/features/tray/widgets/attention_notice.dart';
 import 'package:humanitl/features/tray/widgets/return_banner.dart';
 
+import '../../harness/ui_state.dart';
 import 'fixtures.dart';
 
 /// Lässt die Fenster ablaufen, die eine Entscheidung hinterlässt: das
@@ -48,6 +49,9 @@ Future<ProviderContainer> pumpDesktop(
   addTearDown(() => tester.binding.setSurfaceSize(null));
   final ProviderContainer container = ProviderContainer(
     overrides: <Override>[
+      // Das Schliessen des Banners schreibt seit HUM-276 in den Speicher der
+      // Oberflaeche; nie in den des Menschen, der den Test faehrt.
+      uiStateOverride(),
       daemonClientProvider.overrideWithValue(client),
       connectionHeartbeatProvider.overrideWithValue(null),
       desktopPortsProvider.overrideWithValue(desktop.ports),
@@ -122,20 +126,20 @@ void main() {
       desktop: desktop,
     );
 
-    expect(find.byType(AttentionNoticeCard), findsOneWidget);
+    expect(find.byType(AttentionNoticeBanner), findsOneWidget);
     expect(find.text('This desktop has no tray'), findsOneWidget);
     expect(find.text(DiagnosticCodes.noTray), findsOneWidget);
 
     // Dismissed once is dismissed for good; the same cause never comes back.
     await tester.tap(find.byKey(const Key('attention-notice-dismiss')));
     await tester.pump();
-    expect(find.byType(AttentionNoticeCard), findsNothing);
+    expect(find.byType(AttentionNoticeBanner), findsNothing);
 
     container
         .read(attentionNoticeProvider.notifier)
         .showOnce(TrayDiagnostics.trayUnavailable('again'));
     await tester.pump();
-    expect(find.byType(AttentionNoticeCard), findsNothing);
+    expect(find.byType(AttentionNoticeBanner), findsNothing);
   });
 
   testWidgets('action_allow_decides_without_showing_the_window', (

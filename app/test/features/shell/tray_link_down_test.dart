@@ -31,6 +31,7 @@ import 'package:humanitl/features/tray/providers/attention.dart';
 import 'package:humanitl/features/tray/providers/notice.dart';
 
 import '../tray/fixtures.dart';
+import '../../harness/ui_state.dart';
 
 /// Baut die App über [client] und [desktop], ohne Fokus, damit eine Meldung
 /// hinausgeht.
@@ -49,6 +50,7 @@ Future<ProviderContainer> pumpNotified(
   addTearDown(() => tester.binding.setSurfaceSize(null));
   final ProviderContainer container = ProviderContainer(
     overrides: <Override>[
+      uiStateOverride(),
       daemonClientProvider.overrideWithValue(client),
       connectionHeartbeatProvider.overrideWithValue(heartbeat),
       connectionReconnectProvider.overrideWithValue(null),
