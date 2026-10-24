@@ -28,8 +28,8 @@ import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ipc/generated/humanitl/v1/humanitl.pb.dart' as pb;
 import 'package:humanitl/core/ipc/grpc_daemon_client.dart';
 import 'package:humanitl/core/ipc/launch_options.dart';
-import 'package:humanitl/core/ui/h_diagnostic_card.dart';
 import 'package:humanitl/features/setup/setup_screen.dart';
+import 'package:humanitl/features/setup/widgets/setup_check_row.dart';
 import 'package:humanitl/features/shell/shell_screen.dart';
 
 import '../harness/app_harness.dart';
@@ -59,9 +59,9 @@ class CountingClient extends FakeDaemonClient {
   }
 }
 
-/// Die Karte mit dem Code [code].
+/// Der Befund mit dem Code [code], im Schritt, zu dem er gehört (HUM-287).
 Finder cardWith(String code) => find.byWidgetPredicate(
-  (Widget widget) => widget is HDiagnosticCard && widget.code == code,
+  (Widget widget) => widget is SetupFinding && widget.diagnostic.code == code,
 );
 
 /// Der Text der Zeile, die die Versuche zählt.

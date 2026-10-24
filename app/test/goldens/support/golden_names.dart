@@ -69,6 +69,8 @@ const List<String> goldenNames = <String>[
   'settings_refusal',
   // setup_golden_test.dart
   'setup_checklist',
+  'setup_firstrun',
+  'setup_partial',
   // ui_gallery_golden_test.dart
   'tokens_palette',
   // states_golden_test.dart (HUM-058)

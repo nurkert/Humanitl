@@ -39,11 +39,14 @@
 library;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/ipc/client_diagnostics.dart';
 import '../../../core/ipc/client_providers.dart';
+import '../../../core/ipc/config_providers.dart';
+import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/daemon_client.dart';
 
 part 'setup_provider.g.dart';
@@ -360,7 +363,13 @@ class SetupDoctor extends _$SetupDoctor {
 /// (HUM-044).
 class LlmProbeState {
   /// Creates a state.
-  const LlmProbeState({this.probe, this.failure, this.busy = false});
+  const LlmProbeState({
+    this.probe,
+    this.failure,
+    this.busy = false,
+    this.endpoint = '',
+    this.fingerprint = '',
+  });
 
   /// Nobody has asked yet.
   static const LlmProbeState idle = LlmProbeState();
@@ -374,21 +383,133 @@ class LlmProbeState {
   /// True while a probe is in flight.
   final bool busy;
 
+  /// The address that was asked about, as it was sent; empty while idle.
+  final String endpoint;
+
+  /// What the measurement is a measurement of: [endpoint] together with the
+  /// saved server, its key reference and the key as this app last changed it
+  /// ([setupLlmFingerprint]); empty while idle.
+  final String fingerprint;
+
   /// True while no probe has been made at all.
   bool get isIdle => probe == null && failure == null && !busy;
+
+  /// This state, when it measured exactly [fingerprint]; otherwise nothing
+  /// measured.
+  ///
+  /// A result next to another address, another server or another key would
+  /// claim to be about that one (CONVENTIONS 4.13). A probe that is still
+  /// running for something else keeps [busy], so the field rests, but it
+  /// measures nothing here.
+  LlmProbeState about(String fingerprint) => this.fingerprint == fingerprint
+      ? this
+      : busy
+      ? const LlmProbeState(busy: true)
+      : idle;
 }
 
-/// The endpoint probe, on request and never on a keystroke.
+/// The identity of a measurement of [address] (HUM-287): the address, the
+/// active saved server, the reference of its key, whether one is stored, and
+/// how often this app changed it since it started.
+///
+/// The stored key goes along with every probe of the saved origin (HUM-288),
+/// so a result says something only about the key that was stored when it was
+/// made. Any change of these parts makes the result one about something that
+/// is no longer there.
+String setupLlmFingerprint(String address, SetupLlmContext context) =>
+    '$address\n${context.server}\n${context.keyRef}\n${context.keySet}'
+    '\n${context.keyRevision}';
+
+/// What a probe of the saved server depends on besides its address.
+typedef SetupLlmContext = ({
+  String server,
+  String keyRef,
+  bool keySet,
+  int keyRevision,
+});
+
+/// The endpoint saved in the configuration, or empty: the one value Settings
+/// writes and a switch of the saved server changes (HUM-289).
+final Provider<String> setupLlmSavedProvider = Provider<String>(
+  (Ref ref) => ref.watch(configProvider).value?.llmEndpoint ?? '',
+);
+
+/// The parts of [setupLlmFingerprint] that are not the address.
+final Provider<SetupLlmContext> setupLlmContextProvider =
+    Provider<SetupLlmContext>((Ref ref) {
+      final LlmKeyStatus key =
+          ref.watch(llmKeyProvider).value ?? LlmKeyStatus.unset;
+      return (
+        server: ref.watch(llmServersProvider).value?.active ?? '',
+        keyRef: key.keyRef,
+        keySet: key.set,
+        keyRevision: ref.watch(llmKeyRevisionProvider),
+      );
+    });
+
+/// The address the model step shows when it is not the saved one: what
+/// somebody typed into the field, as it stands there, or null while the
+/// field shows the endpoint saved in the configuration (HUM-287).
+final NotifierProvider<SetupLlmTyped, String?> setupLlmTypedProvider =
+    NotifierProvider<SetupLlmTyped, String?>(SetupLlmTyped.new);
+
+/// The notifier behind [setupLlmTypedProvider].
+class SetupLlmTyped extends Notifier<String?> {
+  /// Nothing typed: the field shows the saved endpoint.
+  @override
+  String? build() => null;
+
+  /// Records the address the field shows; null for the saved one.
+  void show(String? address) => state = address;
+}
+
+/// The fingerprint of what the model step shows right now: the typed
+/// address, or the saved one, with the context of the saved server.
+final Provider<String> setupLlmShownProvider = Provider<String>(
+  (Ref ref) => setupLlmFingerprint(
+    ref.watch(setupLlmTypedProvider) ?? ref.watch(setupLlmSavedProvider),
+    ref.watch(setupLlmContextProvider),
+  ),
+);
+
+/// The one controller of every probe of the model server: "Contact it", the
+/// address taken from the search, and the one contact Setup makes by itself.
+///
+/// Each request gets a number, and only the latest request may set the
+/// result. A probe overtaken by a newer one -- the saved server's contact
+/// still running while somebody takes another address from the search --
+/// ends without a trace, so a late answer never replaces a newer one
+/// (HUM-287).
 @Riverpod(keepAlive: true)
 class SetupLlmProbe extends _$SetupLlmProbe {
+  /// The number of the latest request.
+  int _latest = 0;
+
   @override
-  LlmProbeState build() => LlmProbeState.idle;
+  LlmProbeState build() {
+    // Bricht die Verbindung ab, sagt keine Messung von vorher mehr etwas
+    // über jetzt: Der Daemon kann neu gestartet sein, mit anderer
+    // Konfiguration und anderem Schlüssel. Das Ergebnis fällt, eine laufende
+    // Probe ist überholt, und nach der Rückkehr fragt die Regel des Setups
+    // neu (HUM-287).
+    ref.listen<ConnectionStatus>(connectionStateProvider, (
+      ConnectionStatus? previous,
+      ConnectionStatus next,
+    ) {
+      if (previous is ConnectionConnected && next is! ConnectionConnected) {
+        forget();
+      }
+    });
+    return LlmProbeState.idle;
+  }
 
   /// Asks the daemon to contact [endpoint].
   ///
-  /// This opens a connection to a machine on the network, so it happens only
-  /// where a person asked for it: the button of the endpoint field and the
-  /// `Enter` key in it, and nothing else.
+  /// This opens a connection to a machine on the network, so it happens in
+  /// two places only: where a person asks for it (the button of the endpoint
+  /// field and the `Enter` key in it), and once when Setup opens, for the
+  /// endpoint saved in the configuration and nothing else (`SetupHost`,
+  /// HUM-287). Never while somebody types.
   ///
   /// **Every throw ends this row, not only the expected one.** The caller does
   /// not await the future, so nothing else would ever see the error: the row
@@ -401,7 +522,16 @@ class SetupLlmProbe extends _$SetupLlmProbe {
   /// An unexpected failure therefore becomes the finding of the transport,
   /// exactly as it does on the decision path (`decision.dart`).
   Future<void> run(String endpoint) async {
-    state = const LlmProbeState(busy: true);
+    final int request = ++_latest;
+    final String fingerprint = setupLlmFingerprint(
+      endpoint,
+      ref.read(setupLlmContextProvider),
+    );
+    state = LlmProbeState(
+      busy: true,
+      endpoint: endpoint,
+      fingerprint: fingerprint,
+    );
     try {
       // The stored key goes along: the daemon sends it only to the origin of
       // `llm.endpoint` and only when one is set, so this probe answers the
@@ -410,11 +540,28 @@ class SetupLlmProbe extends _$SetupLlmProbe {
       final LlmProbe probe = await ref
           .read(daemonClientProvider)
           .probeLlm(endpoint, useStoredKey: true);
-      state = LlmProbeState(probe: probe);
+      if (request == _latest) {
+        state = LlmProbeState(
+          probe: probe,
+          endpoint: endpoint,
+          fingerprint: fingerprint,
+        );
+      }
     } on DaemonException catch (error) {
-      state = LlmProbeState(failure: error.diagnostic);
+      if (request == _latest) {
+        state = LlmProbeState(
+          failure: error.diagnostic,
+          endpoint: endpoint,
+          fingerprint: fingerprint,
+        );
+      }
     } on Object catch (error) {
+      if (request != _latest) {
+        return;
+      }
       state = LlmProbeState(
+        endpoint: endpoint,
+        fingerprint: fingerprint,
         failure: ClientDiagnostics.daemonUnreachable(
           socketPath: '?',
           detail: error.toString(),
@@ -427,7 +574,10 @@ class SetupLlmProbe extends _$SetupLlmProbe {
   ///
   /// Used when the text in the field no longer is the text that was probed: a
   /// result shown next to another address would claim to be about that one.
-  void forget() => state = LlmProbeState.idle;
+  void forget() {
+    _latest++;
+    state = LlmProbeState.idle;
+  }
 }
 
 /// The four rows, folded out of what the daemon said.
@@ -441,13 +591,22 @@ SetupState setupChecks({
   required AsyncValue<SandboxStatus> sandbox,
   required SandboxCall sandboxCall,
   required LlmProbeState llm,
+  String? llmFingerprint,
 }) {
   final DoctorReport report = doctor.value ?? DoctorReport.empty;
   final DoctorCheck? llmLine = report[DoctorCheckId.llm];
+  // Mit [llmFingerprint] zählt die Probe nur, wenn sie genau das gemessen
+  // hat, was der Schritt zeigt (HUM-287): dieselbe Adresse, derselbe
+  // gespeicherte Server, derselbe Schlüssel.
+  final LlmProbeState measured = switch (llmFingerprint) {
+    null => llm,
+    final String shown when llm.fingerprint == shown => llm,
+    _ => LlmProbeState.idle,
+  };
   return SetupState(
     checks: <SetupCheck>[
       _daemonCheck(daemon),
-      _llmCheck(llm, llmLine),
+      _llmCheck(measured, llmLine),
       _projectCheck(sandbox, sandboxCall),
       _sandboxCheck(doctor),
     ],

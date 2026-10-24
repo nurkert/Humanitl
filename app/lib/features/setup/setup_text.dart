@@ -176,3 +176,42 @@ SetupCheckState doctorLineState(DoctorCheck line) => switch (line.status) {
 
 (String, String) _titleAndCause(DiagnosticText text) =>
     (text.title, text.cause);
+
+/// The code of the finding a model server raises when it wants a login
+/// (`daemon/crates/core-types/src/diagnostics/codes.rs`, `LLM_002`).
+const String _llmLogin = 'LLM_002';
+
+/// The code of the finding for a model server nobody answers at (`LLM_001`).
+const String _llmUnreachable = 'LLM_001';
+
+/// The headline of an open step, in plain words, or null for a green one
+/// (HUM-287).
+///
+/// It names the situation before the finding under it says why: the finding
+/// keeps its code, its cause and its fix (`docs/UX.md` 4.4), the headline only
+/// says what the person is looking at. The words come from the state and the
+/// code the daemon sent; nothing about the machine is judged here.
+String? setupStepHeadline(AppLocalizations l10n, SetupCheck check) {
+  final String? code = check.diagnostic?.code;
+  return switch ((check.kind, check.state)) {
+    (_, SetupCheckState.ok) => null,
+    (_, SetupCheckState.checking) => l10n.setupHeadChecking,
+    (SetupCheckKind.daemon, SetupCheckState.failed) => l10n.setupHeadDaemonDown,
+    (SetupCheckKind.llm, _) when code == _llmLogin => l10n.setupHeadLlmKey,
+    (SetupCheckKind.llm, _) when code == _llmUnreachable =>
+      l10n.setupHeadLlmUnreachable,
+    (SetupCheckKind.llm, SetupCheckState.failed) => l10n.setupHeadLlmFailed,
+    (SetupCheckKind.llm, SetupCheckState.unmeasured) =>
+      l10n.setupHeadLlmContact,
+    (SetupCheckKind.project, SetupCheckState.failed) =>
+      code == DiagnosticCodes.noProjectFolder
+          ? l10n.setupHeadProjectNone
+          : l10n.setupHeadProjectRefused,
+    (SetupCheckKind.sandbox, SetupCheckState.failed) =>
+      l10n.setupHeadSandboxFailed,
+    (SetupCheckKind.sandbox, SetupCheckState.unmeasured) =>
+      l10n.setupHeadSandboxUnmeasured,
+    (_, SetupCheckState.warn) => l10n.setupHeadWarn,
+    (_, SetupCheckState.unmeasured) => l10n.setupHeadUnmeasured,
+  };
+}

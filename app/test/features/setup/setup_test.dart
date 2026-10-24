@@ -411,7 +411,9 @@ void main() {
   testWidgets('an unmeasured check is its own state and keeps the start shut', (
     WidgetTester tester,
   ) async {
-    // Die Vorgabe des Fakes: elf Zeilen, keine davon gemessen.
+    // Die Vorgabe des Fakes: elf Zeilen, keine davon gemessen, und kein
+    // gespeicherter Modellserver in der Konfiguration, den das Setup von
+    // selbst ansprechen könnte.
     await pumpApp(tester, client: FakeDaemonClient());
     await pressCtrl(tester, LogicalKeyboardKey.digit6);
     await tester.pump();
@@ -429,18 +431,20 @@ void main() {
   ) async {
     // Modellserver gemessen, Maschine nicht: Dann ist die Maschinenzeile die
     // erste, die im Weg steht, und die Zahl auf der Knopfzeile zählt genau die
-    // neun Zeilen, die diese Zeile faltet -- nicht die elf des Berichts.
-    final FakeDaemonClient client = FakeDaemonClient();
+    // neun Zeilen, die diese Zeile faltet -- nicht die elf des Berichts. Den
+    // gespeicherten Modellserver spricht das Setup beim Öffnen selbst an
+    // (HUM-287).
+    final FakeDaemonClient client = FakeDaemonClient()
+      ..configValues = const ConfigValues(
+        values: <String, Object?>{
+          'llm': <String, Object?>{'endpoint': 'http://192.168.1.50:11434'},
+        },
+      );
     await pumpApp(tester, client: client);
     await pressCtrl(tester, LogicalKeyboardKey.digit6);
-    await tester.pump();
-    await tester.enterText(
-      find.byKey(const Key('setup-llm-endpoint')),
-      'http://192.168.1.10:11434',
-    );
-    await tester.tap(find.byKey(const Key('setup-llm-probe')));
-    await tester.pump();
-    await tester.pump();
+    for (int i = 0; i < 4; i++) {
+      await tester.pump();
+    }
 
     expect(stateOf(tester, SetupCheckKind.llm), 'ok');
     expect(stateOf(tester, SetupCheckKind.sandbox), 'not measured');
@@ -481,6 +485,9 @@ void main() {
     await pumpApp(tester, client: FakeDaemonClient());
     await pressCtrl(tester, LogicalKeyboardKey.digit6);
     await tester.pump();
+    // Vorn steht der Modellschritt; die Maschine steht dahinter als eine
+    // Zeile und wird geöffnet, wie ein Mensch es täte (HUM-287).
+    await openSetupStep(tester, 'sandbox');
 
     expect(find.byType(DoctorList), findsOneWidget);
     // Neun Zeilen: elf minus die beiden, die eine eigene Zeile haben.
