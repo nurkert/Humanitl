@@ -33,6 +33,9 @@ SetupState setupState(Ref ref) => setupChecks(
   sandbox: ref.watch(sandboxStatusProvider),
   sandboxCall: ref.watch(sandboxCallProvider),
   llm: ref.watch(setupLlmProbeProvider),
+  // Was der Modellschritt zeigt: die getippte Adresse, sonst die
+  // gespeicherte, mit Server und Schlüssel (HUM-287).
+  llmFingerprint: ref.watch(setupLlmShownProvider),
 );
 
 /// The connection state in the vocabulary of the setup feature.

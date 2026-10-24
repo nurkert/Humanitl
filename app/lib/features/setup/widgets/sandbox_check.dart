@@ -27,8 +27,12 @@ class SandboxCheck extends StatelessWidget {
     required this.check,
     required this.report,
     required this.onRecheck,
+    this.view = SetupStepView.focused,
     super.key,
   });
+
+  /// Open or one line, in front or not (HUM-287).
+  final SetupStepView view;
 
   /// What the row says.
   final SetupCheck check;
@@ -49,34 +53,51 @@ class SandboxCheck extends StatelessWidget {
     // diesem Bildschirm, und eine Ueberschrift, die sie mitzaehlt, verspricht
     // zwei Zeilen, die niemand findet.
     final List<DoctorCheck> shown = machineLines(report);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        SetupCheckRow(
-          check: check,
-          title: setupCheckTitle(l10n, SetupCheckKind.sandbox),
-          control: HButton(
-            key: const Key('setup-sandbox-recheck'),
-            size: HButtonSize.sm,
-            onPressed: check.state == SetupCheckState.checking
-                ? null
-                : onRecheck,
-            child: Text(l10n.setupRecheck),
-          ),
-        ),
-        if (shown.isNotEmpty)
-          Padding(
-            padding: EdgeInsets.only(left: SetupMark.size + tokens.spacing.x3),
-            child: HCollapsible(
+    return SetupCheckRow(
+      check: check,
+      title: setupCheckTitle(l10n, SetupCheckKind.sandbox),
+      view: view,
+      last: true,
+      // Grün sagt die eine Zeile, wie viele Zeilen hinter ihr stehen; sonst
+      // steht dort die Zeile des Doctors, die den Schritt entschieden hat.
+      summary: check.isGreen && shown.isNotEmpty
+          ? l10n.setupDoctorLines(shown.length)
+          : null,
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          if (check.detail.isNotEmpty || shown.isEmpty)
+            Text(
+              check.detail.isEmpty
+                  ? setupNoEvidence(l10n, check.state)
+                  : check.detail,
+              key: const Key('setup-evidence-sandbox'),
+              style: tokens.typography.mono12.tinted(tokens.colors.fg1),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          if (shown.isNotEmpty)
+            HCollapsible(
               title: l10n.setupDoctorLines(shown.length),
-              // Zu, solange nichts daran ist: Elf Zeilen über einer Liste von
-              // vier machen die vier unlesbar. Ist eine davon rot oder
-              // ungemessen, steht sie offen -- das ist dann das eine Wichtige
-              // dieses Bildschirms (`docs/UX.md` 3.1).
+              // Zu, solange nichts daran ist: Zeilen über einer Liste von
+              // vier Schritten machen die Schritte unlesbar. Ist eine davon
+              // rot oder ungemessen, steht sie offen -- das ist dann das eine
+              // Wichtige dieses Bildschirms (`docs/UX.md` 3.1).
               initiallyOpen: check.state != SetupCheckState.ok,
               child: DoctorList(checks: shown),
             ),
-          ),
+        ],
+      ),
+      actions: <Widget>[
+        HButton(
+          key: const Key('setup-sandbox-recheck'),
+          variant: view.current
+              ? HButtonVariant.primary
+              : HButtonVariant.secondary,
+          autofocus: view.current,
+          onPressed: check.state == SetupCheckState.checking ? null : onRecheck,
+          child: Text(l10n.setupRecheck),
+        ),
       ],
     );
   }

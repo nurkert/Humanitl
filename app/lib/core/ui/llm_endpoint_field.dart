@@ -49,8 +49,14 @@ class LlmEndpointField extends StatelessWidget {
     this.onChanged,
     this.busy = false,
     this.enabled = true,
+    this.primary = false,
     super.key,
   });
+
+  /// True when contacting the server is the one action of the step this
+  /// field stands in (HUM-287): the button is then the primary one and
+  /// takes the focus.
+  final bool primary;
 
   /// The text being edited.
   final TextEditingController controller;
@@ -103,6 +109,8 @@ class LlmEndpointField extends StatelessWidget {
         HButton(
           key: const Key('setup-llm-probe'),
           size: HButtonSize.sm,
+          variant: primary ? HButtonVariant.primary : HButtonVariant.secondary,
+          autofocus: primary && enabled && !busy,
           onPressed: enabled && !busy ? _probe : null,
           child: Text(probeLabel),
         ),

@@ -19,6 +19,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/work_dir_picker.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/setup_provider.dart';
@@ -43,8 +44,12 @@ class ProjectCheck extends ConsumerWidget {
     required this.locked,
     required this.onPick,
     required this.onMode,
+    this.view = SetupStepView.focused,
     super.key,
   });
+
+  /// Open or one line, in front or not (HUM-287).
+  final SetupStepView view;
 
   /// What the row says.
   final SetupCheck check;
@@ -70,15 +75,38 @@ class ProjectCheck extends ConsumerWidget {
     final Diagnostic? dialogFailure = locked
         ? null
         : ref.watch(folderDialogFailureProvider);
+    final VoidCallback? choose = locked
+        ? null
+        : () => unawaited(chooseWorkDir(ref, onPick));
+    final Diagnostic? diagnostic = check.diagnostic;
+    // Verlangt der Befund einen (anderen) Ordner, trägt sein Knopf die eine
+    // Wahl dieses Schritts. Der Picker träte mit einem zweiten Knopf für
+    // dieselbe Wahl daneben; er steht deshalb erst wieder, wenn ein Ordner
+    // gilt (Owner, 2026-10-24).
+    final bool fixChooses =
+        diagnostic != null &&
+        FixControl.offersButton(context, diagnostic.fix, chooseFolder: true);
     return SetupCheckRow(
       check: check,
       title: setupCheckTitle(l10n, SetupCheckKind.project),
+      view: view,
+      // Der Ordnerknopf des Befunds (HUM-282) ist die eine Aktion dieses
+      // Schritts, wenn der Befund einen anderen Ordner verlangt (HUM-287).
+      primaryFix: true,
+      // Steht der Schritt nicht vorn, bleibt seine Abhilfe trotzdem einen
+      // Klick entfernt: derselbe Ordnerknopf auf der einen Zeile.
+      lineAction: fixChooses
+          ? FixControl(
+              fix: diagnostic.fix,
+              onChooseFolder: choose,
+              chooseFolderLocked: locked ? l10n.sandboxWorkDirLocked : null,
+              diagnosticCode: diagnostic.code,
+            )
+          : null,
       // Gesperrt wie der Picker: Solange eine Sandbox läuft, ändert sich der
       // Ordner nicht, und ein Knopf, der dann trotzdem wählen ließe, täte
       // nichts.
-      onChooseFolder: locked
-          ? null
-          : () => unawaited(chooseWorkDir(ref, onPick)),
+      onChooseFolder: choose,
       // Gesperrt bleibt der Knopf der Karte stehen und sagt beim Verweilen
       // denselben Satz wie der Picker (`docs/UX.md` 5.3).
       chooseFolderLocked: locked ? l10n.sandboxWorkDirLocked : null,
@@ -86,30 +114,32 @@ class ProjectCheck extends ConsumerWidget {
       // Der Pfad steht im Picker und ist zugleich der Beleg dieser Zeile; ihn
       // daneben ein zweites Mal zu zeigen, wäre dieselbe Aussage zweimal.
       // Deshalb ersetzt der Picker die Belegzeile, statt neben ihr zu stehen.
-      detail: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          WorkDirPicker(
-            buttonKey: const Key('setup-workdir'),
-            reflow: true,
-            workDir: check.detail.isEmpty ? null : check.detail,
-            workMode: workMode,
-            chooseLabel: l10n.sandboxWorkDirChoose,
-            chooseButtonLabel: l10n.workDirChooseButton,
-            changeButtonLabel: l10n.workDirChangeButton,
-            noneLabel: l10n.sandboxWorkDirNone,
-            readOnlyLabel: l10n.sandboxWorkModeRo,
-            readWriteLabel: l10n.sandboxWorkModeRw,
-            lockedLabel: locked ? l10n.sandboxWorkDirLocked : null,
-            onPick: onPick,
-            onMode: onMode,
-          ),
-          // Ohne Ordner sperrt die Zeile den Start. Der Grund steht dann als
-          // Karte unter der Zeile wie jeder andere Befund auch (`CONFIG_013`,
-          // gebaut im Client wie `DAEMON_001`), und nicht als Satz daneben:
-          // zwei Orte für dieselbe Aussage sind einer zu viel.
-        ],
-      ),
+      body: fixChooses
+          ? null
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                WorkDirPicker(
+                  buttonKey: const Key('setup-workdir'),
+                  reflow: true,
+                  workDir: check.detail.isEmpty ? null : check.detail,
+                  workMode: workMode,
+                  chooseLabel: l10n.sandboxWorkDirChoose,
+                  chooseButtonLabel: l10n.workDirChooseButton,
+                  changeButtonLabel: l10n.workDirChangeButton,
+                  noneLabel: l10n.sandboxWorkDirNone,
+                  readOnlyLabel: l10n.sandboxWorkModeRo,
+                  readWriteLabel: l10n.sandboxWorkModeRw,
+                  lockedLabel: locked ? l10n.sandboxWorkDirLocked : null,
+                  onPick: onPick,
+                  onMode: onMode,
+                ),
+                // Ohne Ordner sperrt die Zeile den Start. Der Grund steht dann als
+                // Karte unter der Zeile wie jeder andere Befund auch (`CONFIG_013`,
+                // gebaut im Client wie `DAEMON_001`), und nicht als Satz daneben:
+                // zwei Orte für dieselbe Aussage sind einer zu viel.
+              ],
+            ),
     );
   }
 }

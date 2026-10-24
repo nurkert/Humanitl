@@ -17,6 +17,16 @@
 //    davon nichts zu sehen: Knopf und Satz liegen bei 1280x800 unter der
 //    Falz.
 //  * `setup_ready`: alles gemessen und in Ordnung.
+//
+// Seit HUM-287 dazu die Lagen des Onboardings in den vier Varianten:
+//
+//  * `setup_firstrun`: der erste Start. Der Dienst antwortet, die Maschine
+//    ist gemessen, den Modellserver hat niemand angesprochen, und es ist kein
+//    Ordner gewählt. Vorn steht der Modellschritt mit „Contact it".
+//  * `setup_partial`: die Lage des Owners vom 2026-10-23. Der Modellserver
+//    lehnt den Schlüssel ab (`LLM_002`), es ist kein Ordner gewählt. Vorn
+//    steht der Modellschritt mit dem Weg ins Einstellungsblatt, der Ordner
+//    folgt als eine Zeile mit seinem Knopf.
 
 import 'package:alchemist/alchemist.dart';
 import 'package:flutter/widgets.dart';
@@ -109,6 +119,62 @@ class _FixedSection extends Navigation {
   Section build() => section;
 }
 
+/// Die Zeile `llm` des Doctors, ersetzt durch [line].
+DoctorReport doctorWithLlm(DoctorCheck Function(DoctorCheck llm) line) =>
+    DoctorReport(
+      checks: <DoctorCheck>[
+        for (final DoctorCheck check in fakeDoctorOk().checks)
+          if (check.id == DoctorCheckId.llm) line(check) else check,
+      ],
+    );
+
+/// Der erste Start: niemand hat den Modellserver ansprechen lassen, und es
+/// ist kein Ordner gewählt (HUM-287).
+FakeDaemonClient firstRun() => FakeDaemonClient()
+  ..doctorReport = doctorWithLlm(
+    (DoctorCheck llm) => llm.copyWith(
+      status: DoctorStatus.warn,
+      evidence: 'not contacted: nobody asked for a probe',
+      diagnostic: const Diagnostic(
+        code: DiagnosticCodes.doctorNotContacted,
+        severity: Severity.warning,
+        why: 'the endpoint is contacted only when somebody asks for it',
+      ),
+    ),
+  )
+  ..sandbox = const SandboxStatus();
+
+/// Die Lage des Owners am 2026-10-23: Schlüssel abgelehnt, kein Ordner.
+FakeDaemonClient ownersState() => FakeDaemonClient()
+  ..doctorReport = doctorWithLlm(
+    (DoctorCheck llm) => llm.copyWith(
+      status: DoctorStatus.fail,
+      evidence:
+          'https://llm.example.net/api/v1/ answered 401; an access key is '
+          'stored',
+      diagnostic: const Diagnostic(
+        code: 'LLM_002',
+        severity: Severity.error,
+        why:
+            'the LLM server answered 401 at '
+            'https://llm.example.net/api/v1/models',
+        fix: FixAction.changeSetting(key: 'llm.api_key_ref', value: ''),
+      ),
+    ),
+  )
+  ..llmProbeFailure = const Diagnostic(
+    code: 'LLM_002',
+    severity: Severity.error,
+    why: 'the LLM server answered 401 at https://llm.example.net/api/v1/models',
+    fix: FixAction.changeSetting(key: 'llm.api_key_ref', value: ''),
+  )
+  ..configValues = const ConfigValues(
+    values: <String, Object?>{
+      'llm': <String, Object?>{'endpoint': 'https://llm.example.net/api/v1/'},
+    },
+  )
+  ..sandbox = const SandboxStatus();
+
 void main() {
   const BoxConstraints window = BoxConstraints.tightFor(
     width: 1280,
@@ -129,6 +195,18 @@ void main() {
       variant,
       FakeDaemonClient()..doctorReport = fakeDoctorFailing(),
     ),
+  );
+
+  goldenVariants(
+    'setup_firstrun',
+    constraints: window,
+    builder: (GoldenVariant variant) => setupVariant(variant, firstRun()),
+  );
+
+  goldenVariants(
+    'setup_partial',
+    constraints: window,
+    builder: (GoldenVariant variant) => setupVariant(variant, ownersState()),
   );
 
   for (final HThemeMode mode in HThemeMode.values) {

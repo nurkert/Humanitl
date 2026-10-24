@@ -11,6 +11,7 @@
 /// While no daemon answers, a reader gets the defaults of [ConfigValues].
 library;
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../domain/domain.dart';
@@ -93,6 +94,7 @@ class LlmKeySetting extends _$LlmKeySetting {
   }
 
   void _settle(LlmKeyStatus status, String? server) {
+    ref.read(llmKeyRevisionProvider.notifier).bump();
     if (server == null) {
       state = AsyncValue<LlmKeyStatus>.data(status);
       return;
@@ -142,6 +144,7 @@ class LlmServersSetting extends _$LlmServersSetting {
         await _settled(await client.listLlmServers());
         throw ServerSavedWithoutKey(name, error.diagnostic);
       }
+      ref.read(llmKeyRevisionProvider.notifier).bump();
       list = await client.listLlmServers();
     }
     return _settled(list);
@@ -151,6 +154,7 @@ class LlmServersSetting extends _$LlmServersSetting {
   Future<SavedServers> storeKey(String server, String key) async {
     final DaemonClient client = ref.read(daemonClientProvider);
     await client.setLlmKey(key, server: server);
+    ref.read(llmKeyRevisionProvider.notifier).bump();
     return _settled(await client.listLlmServers());
   }
 
@@ -197,4 +201,24 @@ final class ServerSavedWithoutKey implements Exception {
 
   @override
   String toString() => 'ServerSavedWithoutKey($name, ${diagnostic.code})';
+}
+
+/// How often this app stored or cleared an access key of a model server.
+///
+/// The daemon never says which key it holds, only whether one is stored and
+/// under which reference. A key replaced by another under the same reference
+/// looks the same from here, so the app counts its own changes: a
+/// measurement made before one of them is not a measurement of the key that
+/// is stored now (HUM-287).
+final NotifierProvider<LlmKeyRevision, int> llmKeyRevisionProvider =
+    NotifierProvider<LlmKeyRevision, int>(LlmKeyRevision.new);
+
+/// The notifier behind [llmKeyRevisionProvider].
+class LlmKeyRevision extends Notifier<int> {
+  /// No change yet.
+  @override
+  int build() => 0;
+
+  /// Counts one change of a stored key.
+  void bump() => state = state + 1;
 }

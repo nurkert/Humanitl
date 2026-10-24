@@ -411,11 +411,42 @@ class FixControl extends ConsumerStatefulWidget {
     this.onChooseFolder,
     this.chooseFolderLocked,
     this.diagnosticCode,
+    this.primary = false,
     super.key,
   });
 
   /// The proposed fix.
   final FixAction? fix;
+
+  /// True when this fix is the one action of the step it stands in
+  /// (HUM-287): its button is then the primary one and takes the focus.
+  ///
+  /// Only the three fixes that are a button of their own follow it -- the
+  /// folder chooser, the way into the settings sheet and the service
+  /// installer. A command to copy stays a copy row: copying is never the
+  /// whole remedy, so it is never the primary action either.
+  final bool primary;
+
+  /// True when [fix] becomes a button of its own here, the kind [primary]
+  /// applies to; false for a copy row, a badge or nothing.
+  ///
+  /// The screen asks this before it decides which of its controls is the
+  /// primary one, so that a step never shows two (HUM-287). It reads the
+  /// same conditions [build] reads: the opener of the settings sheet above
+  /// [context], and whether the screen hands a folder chooser in.
+  static bool offersButton(
+    BuildContext context,
+    FixAction? fix, {
+    bool chooseFolder = false,
+  }) => switch (fix) {
+    FixActionInstallService() => true,
+    FixActionChangeSetting(:final key) when key == workDirSettingKey =>
+      chooseFolder,
+    FixActionChangeSetting(:final key) =>
+      SettingsOpener.maybeOf(context) != null &&
+          FormKeys.shownInSheet.contains(key),
+    _ => false,
+  };
 
   /// Opens the folder chooser of the screen that draws this control.
   ///
@@ -604,6 +635,8 @@ class _FixControlState extends ConsumerState<FixControl> {
               FormKeys.shownInSheet.contains(key) =>
         HButton(
           key: const Key('fix-open-settings'),
+          variant: _variant,
+          autofocus: widget.primary,
           onPressed: () => settings.open(key),
           child: Text(l10n.setupFixOpenSettings),
         ),
@@ -616,12 +649,19 @@ class _FixControlState extends ConsumerState<FixControl> {
     };
   }
 
+  /// The variant of the button this fix becomes: primary where it is the
+  /// one action of its step (HUM-287).
+  HButtonVariant get _variant =>
+      widget.primary ? HButtonVariant.primary : HButtonVariant.secondary;
+
   /// The button that opens the screen's folder dialog, or the same button
   /// switched off with the reason on hover.
   Widget _chooseFolder(AppLocalizations l10n) {
     final String? locked = widget.chooseFolderLocked;
     final Widget button = HButton(
       key: const Key('fix-choose-folder'),
+      variant: _variant,
+      autofocus: widget.primary && locked == null,
       onPressed: locked == null ? widget.onChooseFolder : null,
       child: Text(
         widget.diagnosticCode == DiagnosticCodes.noProjectFolder
@@ -718,6 +758,8 @@ class _FixControlState extends ConsumerState<FixControl> {
           children: <Widget>[
             HButton(
               key: const Key('setup-fix-install'),
+              variant: _variant,
+              autofocus: widget.primary,
               onPressed: _installing ? null : _install,
               child: Text(
                 _installing

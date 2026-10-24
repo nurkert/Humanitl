@@ -1,10 +1,26 @@
 /// The setup screen: what somebody sees the first time they open this
 /// application, and on a machine where something is not yet right (HUM-044).
 ///
-/// Four rows -- background service, model server, project folder, machine --
-/// and under them the one button that starts the agent. Every verdict on this
-/// screen was made in the daemon; the screen shows them and hands the two
-/// gestures that change something back to the shell (ADR-018).
+/// Four steps in the order of the work -- background service, model server
+/// with its agent, project folder, machine -- and under them the one button
+/// that starts a session. Every verdict on this screen was made in the daemon;
+/// the screen shows them and hands the gestures that change something back to
+/// the shell (ADR-018).
+///
+/// # A short onboarding, not a list of cards (HUM-287)
+///
+/// A step that is green is one line with its evidence. The first step that is
+/// not green is open: a headline in plain words, the step's controls, its
+/// finding inside the step and its action as the primary button, with the
+/// step after it named beside that button. Every other step that is not
+/// green stays one line too and keeps its remedy on that line where it has a
+/// button of its own (the folder chooser). With all four green the heading
+/// says "Humanitl is ready" and the one primary action is the start, or the
+/// way to the queue while a session already runs. The design was picked by
+/// the owner from rendered variants on 2026-10-24 (`docs/UX.md` 4.10).
+///
+/// Which step is in front is the order of the four and nothing else: the
+/// screen judges no step, it only finds the first one that is not green.
 ///
 /// # What the button hangs on, and what the line under it says
 ///
@@ -28,7 +44,6 @@ import 'package:flutter/widgets.dart';
 
 import '../../core/domain/domain.dart';
 import '../../core/ui/fix_control.dart';
-import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
 import 'providers/setup_provider.dart';
@@ -41,7 +56,7 @@ import 'widgets/sandbox_check.dart';
 import 'widgets/setup_check_row.dart';
 
 /// Width of the centred column.
-const double setupColumnWidth = 640;
+const double setupColumnWidth = 720;
 
 /// The setup screen.
 class SetupScreen extends StatefulWidget {
@@ -56,14 +71,19 @@ class SetupScreen extends StatefulWidget {
     required this.onRetry,
     required this.onRecheck,
     required this.onProbeLlm,
-    required this.onForgetProbe,
+    required this.onAddress,
     required this.onPickWorkDir,
     required this.onWorkMode,
     required this.onStart,
     this.daemonAttempts = 0,
     this.activeServer = '',
+    this.onOpenIntercept,
     super.key,
   });
+
+  /// Shows the queue. The ready screen offers it as its one action while a
+  /// session already runs and nothing may start a second one (HUM-287).
+  final VoidCallback? onOpenIntercept;
 
   /// The name of the active saved model server, or empty when none is
   /// saved; the model row names it above the field (HUM-289).
@@ -101,12 +121,11 @@ class SetupScreen extends StatefulWidget {
   /// Asks the daemon to contact an endpoint.
   final void Function(String endpoint) onProbeLlm;
 
-  /// Drops the last probe result.
+  /// Called with the text of the endpoint field whenever somebody edits it.
   ///
-  /// Called as soon as the text in the field is no longer the address the
-  /// result is about: a measurement shown next to another address would claim
-  /// to be about that one (CONVENTIONS 4.13).
-  final VoidCallback onForgetProbe;
+  /// The step shows a measurement only for the address in the field, so the
+  /// shell has to know which one that is (HUM-287, CONVENTIONS 4.13).
+  final ValueChanged<String> onAddress;
 
   /// Called with the folder somebody chose.
   final void Function(String workDir) onPickWorkDir;
@@ -129,6 +148,39 @@ class _SetupScreenState extends State<SetupScreen> {
   /// True while the search sheet is open. Opening it contacts nothing.
   bool _discovering = false;
 
+  /// The steps somebody opened by hand. The step in front is open without
+  /// being in here, and a step that turns green stays as it was asked for.
+  final Set<SetupCheckKind> _opened = <SetupCheckKind>{};
+
+  void _toggle(SetupCheckKind kind) => setState(() {
+    if (!_opened.remove(kind)) {
+      _opened.add(kind);
+    }
+  });
+
+  /// How the screen wants [kind] drawn, given the step in front.
+  SetupStepView _view(
+    AppLocalizations l10n,
+    SetupState state,
+    SetupCheckKind kind,
+  ) {
+    final SetupCheckKind? current = setupCurrentStep(state);
+    if (kind == current) {
+      final SetupCheckKind? after = setupStepAfter(state, kind);
+      return SetupStepView(
+        open: true,
+        current: true,
+        next: after == null
+            ? l10n.setupStepNextStart
+            : l10n.setupStepNext(setupCheckTitle(l10n, after)),
+      );
+    }
+    return SetupStepView(
+      open: _opened.contains(kind),
+      onToggle: () => _toggle(kind),
+    );
+  }
+
   @override
   void didUpdateWidget(SetupScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -140,6 +192,15 @@ class _SetupScreenState extends State<SetupScreen> {
         _endpoint.text == oldWidget.llmEndpoint) {
       _endpoint.text = widget.llmEndpoint;
     }
+    // Ein Schritt, den jemand über „Details" geöffnet hat, faltet sich, sobald
+    // er grün wird: Fertig heißt vier Zeilen, nicht eine offene Fläche
+    // zwischen drei Zeilen (HUM-287, Akzeptanzkriterium 1). Öffnen lässt er
+    // sich danach wieder.
+    for (final SetupCheck check in widget.state.checks) {
+      if (check.isGreen && !oldWidget.state[check.kind].isGreen) {
+        _opened.remove(check.kind);
+      }
+    }
   }
 
   @override
@@ -148,13 +209,8 @@ class _SetupScreenState extends State<SetupScreen> {
     super.dispose();
   }
 
-  /// Drops a result that is no longer about the text in the field.
-  void _edited(String text) {
-    final String? measured = widget.probe.probe?.endpoint;
-    if (measured != null && text.trim() != measured) {
-      widget.onForgetProbe();
-    }
-  }
+  /// Tells the shell which address the field shows now.
+  void _edited(String text) => widget.onAddress(text);
 
   @override
   Widget build(BuildContext context) {
@@ -191,6 +247,7 @@ class _SetupScreenState extends State<SetupScreen> {
     AppLocalizations l10n,
     SetupState state,
   ) {
+    final int ready = state.checks.where((SetupCheck c) => c.isGreen).length;
     return ColoredBox(
       color: tokens.colors.bg0,
       child: SingleChildScrollView(
@@ -199,17 +256,20 @@ class _SetupScreenState extends State<SetupScreen> {
           child: SizedBox(
             width: setupColumnWidth,
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
                 Text(
-                  l10n.setupTitle,
+                  state.canStart ? l10n.setupTitleReady : l10n.setupTitle,
+                  key: const Key('setup-title'),
                   style: tokens.typography.ui20.semibold.tinted(
                     tokens.colors.fg0,
                   ),
                 ),
-                SizedBox(height: tokens.spacing.x2),
+                SizedBox(height: tokens.spacing.x1),
                 Text(
-                  l10n.setupIntro,
+                  '${l10n.setupProgress(ready, state.checks.length)} '
+                  '${l10n.setupIntro}',
+                  key: const Key('setup-progress'),
                   style: tokens.typography.ui13.tinted(tokens.colors.fg1),
                 ),
                 SizedBox(height: tokens.spacing.x4),
@@ -217,8 +277,8 @@ class _SetupScreenState extends State<SetupScreen> {
                   check: state[SetupCheckKind.daemon],
                   onRetry: widget.onRetry,
                   attempts: widget.daemonAttempts,
+                  view: _view(l10n, state, SetupCheckKind.daemon),
                 ),
-                const HHairline(),
                 LlmCheck(
                   check: state[SetupCheckKind.llm],
                   probe: widget.probe,
@@ -229,23 +289,31 @@ class _SetupScreenState extends State<SetupScreen> {
                   onEdited: _edited,
                   enabled:
                       state[SetupCheckKind.daemon].state == SetupCheckState.ok,
+                  view: _view(l10n, state, SetupCheckKind.llm),
+                  agent: widget.report[DoctorCheckId.agent],
                 ),
-                const HHairline(),
                 ProjectCheck(
                   check: state[SetupCheckKind.project],
                   workMode: widget.workMode,
                   locked: widget.sandboxLocked,
                   onPick: widget.onPickWorkDir,
                   onMode: widget.onWorkMode,
+                  view: _view(l10n, state, SetupCheckKind.project),
                 ),
-                const HHairline(),
                 SandboxCheck(
                   check: state[SetupCheckKind.sandbox],
                   report: widget.report,
                   onRecheck: widget.onRecheck,
+                  view: _view(l10n, state, SetupCheckKind.sandbox),
                 ),
                 SizedBox(height: tokens.spacing.x5),
-                _StartRow(state: state, onStart: widget.onStart),
+                _StartRow(
+                  state: state,
+                  onStart: widget.onStart,
+                  onOpenIntercept: widget.sandboxLocked
+                      ? widget.onOpenIntercept
+                      : null,
+                ),
               ],
             ),
           ),
@@ -255,12 +323,49 @@ class _SetupScreenState extends State<SetupScreen> {
   }
 }
 
+/// The first step that is not green, in the order of the four, or null when
+/// all four are (HUM-287).
+///
+/// The step in front is decided by the order alone. The screen judges no
+/// step: green is the daemon's verdict, and the order is the order of the
+/// work -- without a background service nothing else can be asked, and
+/// without a model and a folder a sound machine starts nothing.
+SetupCheckKind? setupCurrentStep(SetupState state) {
+  for (final SetupCheck check in state.checks) {
+    if (!check.isGreen) {
+      return check.kind;
+    }
+  }
+  return null;
+}
+
+/// The first step after [kind] that is not green, or null.
+SetupCheckKind? setupStepAfter(SetupState state, SetupCheckKind kind) {
+  bool past = false;
+  for (final SetupCheck check in state.checks) {
+    if (past && !check.isGreen) {
+      return check.kind;
+    }
+    if (check.kind == kind) {
+      past = true;
+    }
+  }
+  return null;
+}
+
 /// The one button of this screen, and the sentence that says what it knows.
 class _StartRow extends StatelessWidget {
-  const _StartRow({required this.state, required this.onStart});
+  const _StartRow({
+    required this.state,
+    required this.onStart,
+    this.onOpenIntercept,
+  });
 
   final SetupState state;
   final VoidCallback? onStart;
+
+  /// Shows the queue; set while a session runs and the start is shut.
+  final VoidCallback? onOpenIntercept;
 
   @override
   Widget build(BuildContext context) {
@@ -268,15 +373,37 @@ class _StartRow extends StatelessWidget {
     final AppLocalizations l10n = context.l10n;
     final bool ready = state.canStart && onStart != null;
     final SetupCallFailure? failure = state.sandboxFailure;
+    // Eine Primäraktion je Bildschirm: Solange ein Schritt vorn steht, ist es
+    // seine, und der Start tritt zurück (HUM-287). Läuft schon eine Session,
+    // ist der Weg zur Warteschlange die eine Aktion des fertigen Setups.
+    final VoidCallback? toQueue = state.canStart ? onOpenIntercept : null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        HButton(
-          key: const Key('setup-start'),
-          variant: HButtonVariant.primary,
-          size: HButtonSize.md,
-          onPressed: ready ? onStart : null,
-          child: Text(l10n.setupStart),
+        Wrap(
+          spacing: tokens.spacing.x2,
+          runSpacing: tokens.spacing.x2,
+          children: <Widget>[
+            HButton(
+              key: const Key('setup-start'),
+              variant: ready
+                  ? HButtonVariant.primary
+                  : HButtonVariant.secondary,
+              size: HButtonSize.md,
+              autofocus: ready,
+              onPressed: ready ? onStart : null,
+              child: Text(l10n.setupStart),
+            ),
+            if (toQueue != null)
+              HButton(
+                key: const Key('setup-open-intercept'),
+                variant: HButtonVariant.primary,
+                size: HButtonSize.md,
+                autofocus: true,
+                onPressed: toQueue,
+                child: Text(l10n.setupGoToIntercept),
+              ),
+          ],
         ),
         SizedBox(height: tokens.spacing.x2),
         // Ein Control, das aus ist, sagt auf sich selbst warum
@@ -355,6 +482,9 @@ class _StartRow extends StatelessWidget {
 
 /// The finding of a `Sandbox` call that did not arrive, under the button the
 /// gesture was made on.
+///
+/// The same inline finding the steps carry (HUM-287): code, cause and fix,
+/// without a card around them.
 class _FailureCard extends StatelessWidget {
   const _FailureCard({required this.failure});
 
@@ -362,23 +492,13 @@ class _FailureCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final HTokens tokens = HTheme.of(context);
-    final AppLocalizations l10n = context.l10n;
-    final (String, String) text = setupDiagnosticText(l10n, failure);
-    return HDiagnosticCard(
+    return SetupFinding(
       key: const Key('setup-start-failure'),
-      code: failure.code,
-      severityLabel: setupSeverityLabel(l10n, failure.severity),
-      color: setupSeverityColor(tokens, failure.severity),
-      title: text.$1,
-      why: text.$2,
-      detail: text.$2 == failure.why ? null : failure.why,
+      diagnostic: failure,
       fix: FixControl(
         fix: failure.fix,
         copyKey: const Key('setup-fix-copy-start'),
       ),
-      docsUrl: failure.docsUrl,
-      width: setupCardWidth,
     );
   }
 }

@@ -37,7 +37,11 @@ class ThrowingProbeClient extends FakeDaemonClient {
   }
 }
 
-/// Oeffnet den Setup-Abschnitt der Shell.
+/// Öffnet den Setup-Abschnitt der Shell.
+///
+/// Die Konfiguration des Fakes nennt keinen Endpunkt; mit einem gespeicherten
+/// spräche das Setup ihn beim Öffnen von selbst an (HUM-287). Diese Tests
+/// prüfen das Feld und den Knopf.
 Future<void> openSetup(WidgetTester tester, FakeDaemonClient client) async {
   await pumpApp(tester, client: client);
   await pressCtrl(tester, LogicalKeyboardKey.digit6);
@@ -49,7 +53,11 @@ String llmState(WidgetTester tester) =>
     tester.widget<Text>(find.byKey(const Key('setup-state-llm'))).data!;
 
 /// Tippt [endpoint] in das Feld, ohne zu senden.
+///
+/// Ein grüner Modellschritt steht als eine Zeile (HUM-287); wer eine andere
+/// Adresse tippen will, öffnet ihn zuerst, wie ein Mensch es täte.
 Future<void> type(WidgetTester tester, String endpoint) async {
+  await openSetupStep(tester, 'llm');
   await tester.enterText(find.byKey(const Key('setup-llm-endpoint')), endpoint);
   await tester.pump();
 }
@@ -113,6 +121,9 @@ void main() {
     await probe(tester);
     expect(client.probedEndpoints, <String>['http://192.168.1.10:11434']);
     expect(llmState(tester), 'ok');
+    // Grün faltet sich der Schritt auf eine Zeile (HUM-287); die Modelle
+    // stehen im geöffneten Schritt.
+    await openSetupStep(tester, 'llm');
     expect(find.byKey(const Key('setup-llm-models')), findsOneWidget);
   });
 
@@ -149,6 +160,7 @@ void main() {
     await openSetup(tester, client);
     await type(tester, 'http://192.168.1.10:11434');
     await probe(tester);
+    await openSetupStep(tester, 'llm');
 
     final Iterable<HBadge> chips = tester
         .widgetList<HBadge>(
