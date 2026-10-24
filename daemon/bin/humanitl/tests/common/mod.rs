@@ -175,19 +175,30 @@ pub struct FakeServer {
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     /// Der Thread, der die Laufzeit trägt.
     thread: Option<std::thread::JoinHandle<()>>,
+    /// Die Art jeder Nachricht, die über `Terminal` ankam, in ihrer
+    /// Reihenfolge (HUM-279).
+    terminal_inputs: TerminalInputs,
 }
+
+/// Was der Fake über `Terminal` empfangen hat: `open`, `data`, `resize` oder
+/// `close` je Nachricht.
+///
+/// Der Fake beantwortet ein `close` wie das Ende des Stroms; von außen ist
+/// beides ein `Exit 0`. Ob ein Client wirklich `close` geschickt hat, steht
+/// deshalb nur hier.
+type TerminalInputs = Arc<std::sync::Mutex<Vec<&'static str>>>;
 
 impl FakeServer {
     /// Startet den Dienst und wartet, bis Socket und Token da sind.
     pub fn start(harness: &Harness) -> Self {
-        Self::start_with(harness, false, None)
+        Self::start_with(harness, false, None, false)
     }
 
     /// Wie [`FakeServer::start`], aber `GetInfo` nennt `version` als Fassung
     /// des Daemons (HUM-210): ein älterer Daemon, der nach einem Update noch
     /// antwortet.
     pub fn start_with_version(harness: &Harness, version: &str) -> Self {
-        Self::start_with(harness, false, Some(version.to_owned()))
+        Self::start_with(harness, false, Some(version.to_owned()), false)
     }
 
     /// Wie [`FakeServer::start`], aber `Audit(Export)` meldet Erfolg und
@@ -195,10 +206,23 @@ impl FakeServer {
     /// schreibt, die der Aufrufer nicht hat, etwa ein eigenes `/tmp` unter
     /// `PrivateTmp`.
     pub fn start_with_silent_export(harness: &Harness) -> Self {
-        Self::start_with(harness, true, None)
+        Self::start_with(harness, true, None, false)
     }
 
-    fn start_with(harness: &Harness, silent_export: bool, version: Option<String>) -> Self {
+    /// Wie [`FakeServer::start`], aber `Terminal` liest nach dem `Open` keine
+    /// Eingabe mehr (HUM-279): eine Sitzung, deren Agent nicht liest. Der
+    /// Strom bleibt offen, bis der Client geht, und alles, was er schickt,
+    /// staut sich im Transport.
+    pub fn start_with_stalled_terminal(harness: &Harness) -> Self {
+        Self::start_with(harness, false, None, true)
+    }
+
+    fn start_with(
+        harness: &Harness,
+        silent_export: bool,
+        version: Option<String>,
+        stall_terminal: bool,
+    ) -> Self {
         let paths = harness.paths();
         let socket = paths.daemon_socket();
         let token_path = paths.token_path();
@@ -211,6 +235,8 @@ impl FakeServer {
         .expect("the runtime directory");
 
         let session = Session::load(&fixture()).expect("the recorded session loads");
+        let terminal_inputs = TerminalInputs::default();
+        let recorded = Arc::clone(&terminal_inputs);
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let thread = std::thread::spawn({
             let socket = socket.clone();
@@ -231,6 +257,8 @@ impl FakeServer {
                             inner: daemon,
                             silent: silent_export,
                             version,
+                            terminal_inputs: recorded,
+                            stall_terminal,
                         }),
                         token,
                     ));
@@ -260,7 +288,16 @@ impl FakeServer {
         Self {
             stop: Some(stop),
             thread: Some(thread),
+            terminal_inputs,
         }
+    }
+
+    /// Die Arten der Nachrichten, die bisher über `Terminal` ankamen.
+    pub fn terminal_inputs(&self) -> Vec<&'static str> {
+        self.terminal_inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -360,6 +397,10 @@ struct SilentExport {
     silent: bool,
     /// Die Fassung, die `GetInfo` statt der des Fakes nennt.
     version: Option<String>,
+    /// Wohin die Arten der Terminal-Nachrichten geschrieben werden.
+    terminal_inputs: TerminalInputs,
+    /// Wahr, wenn `Terminal` nach dem `Open` nichts mehr liest.
+    stall_terminal: bool,
 }
 
 #[tonic::async_trait]
@@ -393,7 +434,49 @@ impl DaemonApi for SilentExport {
         self.inner.sandbox(request)
     }
     fn terminal(&self, input: BoxStream<v1::TerminalInput>) -> BoxStream<v1::TerminalOutput> {
-        self.inner.terminal(input)
+        use tokio_stream::StreamExt as _;
+        use v1::terminal_input::Input;
+
+        let recorded = Arc::clone(&self.terminal_inputs);
+        if self.stall_terminal {
+            // Das `Open` lesen, eine Zeile schicken, dann die Eingabe halten,
+            // ohne sie je wieder zu lesen, bis der Client geht.
+            let (out, rx) = tokio::sync::mpsc::channel(4);
+            tokio::spawn(async move {
+                let mut input = input;
+                if input.next().await.is_some() {
+                    recorded
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push("open");
+                }
+                let greeting = v1::TerminalOutput {
+                    output: Some(v1::terminal_output::Output::Data(
+                        b"humanitl fake terminal: input is never read\r\n".to_vec(),
+                    )),
+                };
+                if out.send(greeting).await.is_ok() {
+                    out.closed().await;
+                }
+                drop(input);
+            });
+            return Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx));
+        }
+        let input = input.map(move |message| {
+            let kind = match message.input {
+                Some(Input::Open(_)) => "open",
+                Some(Input::Data(_)) => "data",
+                Some(Input::Resize(_)) => "resize",
+                Some(Input::Close(())) => "close",
+                None => "empty",
+            };
+            recorded
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(kind);
+            message
+        });
+        self.inner.terminal(Box::pin(input))
     }
     async fn audit(&self, request: v1::AuditRequest) -> Result<v1::AuditResponse, Diagnostic> {
         match request.op.as_ref() {

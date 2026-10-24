@@ -117,6 +117,7 @@ below lists the flag names and their short aliases.
 | `--sandbox-profile` | - | `STRING` | `sandbox.profile` |
 | `--sandbox-work-dir` | `--work` | `STRING,_OPTIONAL` | `sandbox.work_dir` |
 | `--sandbox-work-mode` | `--work-mode` | `ro`, `rw` | `sandbox.work_mode` |
+| `--terminal-detach-prefix` | - | `STRING` | `terminal.detach_prefix` |
 | `--tls-trust-system-store` | - | `true`, `false` | `tls.trust_system_store` |
 | `--ui-language` | - | `en`, `de` | `ui.language` |
 | `--ui-notifications` | - | `true`, `false` | `ui.notifications` |
@@ -340,7 +341,7 @@ Options:
 ```text
 Attach this terminal to the running session.
 
-One client writes, any number watch. Ctrl+C reaches the agent as byte 0x03, not as a signal: the sandbox has no controlling terminal. Detach by closing the connection; the session keeps running.
+One client writes, any number watch. Ctrl+C reaches the agent as byte 0x03, not as a signal: the sandbox has no controlling terminal. Detach with Ctrl+A d, as in screen; the session keeps running, and a later attach shows it. Ctrl+A Ctrl+A (or Ctrl+A a) sends one Ctrl+A to the agent.
 
 Usage: humanitl sandbox attach [OPTIONS]
 
@@ -349,10 +350,13 @@ Options:
           Machine-readable output: one JSON value on stdout, diagnostics included
 
       --read-only
-          Watch without sending anything
+          Watch without sending anything. Ctrl+A d detaches here too, and so does Ctrl+C
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory
+
+      --detach-keys <SPEC>
+          The prefix of the detach key: ctrl-a to ctrl-z (not ctrl-h, ctrl-i, ctrl-j, ctrl-m: Backspace, Tab and Enter send them), ctrl-\, ctrl-], ctrl-^, ctrl-_, or none for no detach key. Default from `terminal.detach_prefix`, which is ctrl-a
 
   -v, --verbose...
           Explain what is happening; repeat for more

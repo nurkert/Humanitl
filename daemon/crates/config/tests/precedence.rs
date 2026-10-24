@@ -349,6 +349,17 @@ const GROUP_OVERRIDES: &[GroupOverride] = &[
         after_higher: "System",
     },
     GroupOverride {
+        // HUM-279: `humanitl sandbox attach` liest die Taste zum Abhängen
+        // aus der Konfiguration, wenn `--detach-keys` fehlt.
+        group: "terminal",
+        path: "terminal.detach_prefix",
+        lower: "\"ctrl-b\"",
+        higher: "none",
+        read: |config| config.terminal.detach_prefix.clone(),
+        after_lower: "ctrl-b",
+        after_higher: "none",
+    },
+    GroupOverride {
         // Die Gruppe braucht eine Zeile, sonst hat sie keinen Präzedenz-Test
         // (`the_override_table_names_every_group_of_the_schema`). Bis HUM-088
         // stand hier `experimental.upstream_port_map` als freie Tabelle; die

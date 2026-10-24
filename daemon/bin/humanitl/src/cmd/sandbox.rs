@@ -109,7 +109,10 @@ pub async fn run(ctx: &Context, cmd: &SandboxCmd) -> Result<u8, Failure> {
         SandboxCmd::Argv { cmd } => argv(ctx, cmd),
         SandboxCmd::Run { cmd, tests_dir } => start(ctx, cmd, tests_dir.as_deref()).await,
         SandboxCmd::Check => check(ctx),
-        SandboxCmd::Attach { read_only } => crate::cmd::attach::run(ctx, *read_only).await,
+        SandboxCmd::Attach {
+            read_only,
+            detach_keys,
+        } => crate::cmd::attach::run(ctx, *read_only, detach_keys.as_deref()).await,
     }
 }
 

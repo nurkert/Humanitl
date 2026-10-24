@@ -660,6 +660,25 @@
       "x-project-scope": "denied",
       "x-tier": "basic"
     },
+    "terminal": {
+      "additionalProperties": false,
+      "default": {
+        "detach_prefix": "ctrl-a"
+      },
+      "description": "Das Terminal der Kommandozeile, wenn sie an einer Sitzung hängt.",
+      "properties": {
+        "detach_prefix": {
+          "default": "ctrl-a",
+          "description": "Präfix der Taste, mit der sich `humanitl sandbox attach` abhängt: `ctrl-a` bis `ctrl-z`, `ctrl-\\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, oder `none`, dann gibt es keine. Nach dem Präfix hängt `d` ab und lässt die Sitzung laufen; das Präfix zweimal oder sein Buchstabe schickt es einmal an den Agenten, jede andere Taste geht mit dem Präfix unverändert weiter. `ctrl-[` ist ausgenommen, weil jede Pfeiltaste mit diesem Byte beginnt, `ctrl-h`, `ctrl-i`, `ctrl-j` und `ctrl-m`, weil Rücktaste, Tab und Enter dieselben Bytes schicken. `--detach-keys` überschreibt den Wert für einen Aufruf.",
+          "type": "string",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "denied",
+      "x-tier": "advanced"
+    },
     "tls": {
       "additionalProperties": false,
       "default": {
