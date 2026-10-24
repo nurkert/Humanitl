@@ -59,6 +59,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-289 | Several saved model servers, switchable in the app (before HUM-060) | M | HUM-140, HUM-277, HUM-283 |
 | HUM-286 | One layout grid: pane headers, action bar and the rail highlight line up (before HUM-060) | M | HUM-254, HUM-275 |
 | HUM-287 | Setup becomes a short onboarding, not a scroll list (before HUM-060) | M | HUM-282, HUM-286, HUM-289 |
+| HUM-292 | Spike: Podman as a second sandbox backend, with and without a kernel boundary (after HUM-060, first) | S | HUM-060, HUM-145 |
 
 ---
 
@@ -5816,3 +5817,46 @@ the system keyring.
 4. CLI: `humanitl llm server ls|add|use|rm`.
 5. Bundled passthrough rule follows the active entry's origin; the security
    statement and THREAT-MODEL note that only the active origin gets the key.
+
+## HUM-292 · Spike: Podman as a second sandbox backend, with and without a kernel boundary (after HUM-060, first)
+
+### Context
+The owner (2026-10-24) wants a sandbox with its own kernel as the first work
+after 0.1.0. BACKLOG.md section 9 point 1 already plans a swappable sandbox
+backend and names Podman (wish of 2026-10-16) next to Incus and microsandbox.
+A plain rootless Podman container shares the host kernel like bwrap; a kernel
+boundary needs another OCI runtime: `crun` with libkrun (`--runtime krun` or
+the annotation `run.oci.handler=krun`) or Kata Containers. Rough estimate for
+the whole backend: one to two weeks, so a time-boxed spike decides first.
+
+### Goal
+A written answer, backed by a throwaway prototype, to: can Humanitl launch a
+session through Podman (plain and krun) and keep the three sandbox guarantees,
+and what does the neutral `LaunchPlan` need for that.
+
+### Specification
+1. Time box one working day. Prototype code lives outside `main` (branch or
+   scratch); the result is a document, `docs/adr/` draft plus a section in
+   BACKLOG.md 9.1, not production code.
+2. Questions to answer, each with evidence (command, output, test run):
+   - Project folder and agent binary: fd-pinned binds (HUM-263, HUM-278) vs
+     Podman volumes and, under krun, virtiofs; can the TOCTOU guarantee hold?
+   - The proxy door: today a Unix socket in the sandbox; under krun the VM
+     boundary needs vsock or a passt/TSI path. Does guarantee 2 (no network
+     except through the door) hold, and how is it tested?
+   - PTY and session lifecycle through conmon: attach, detach (HUM-279),
+     resize, exit status, retire.
+   - Rootfs: image or host bind, startup time, disk cost.
+   - Prerequisites (`podman`, `crun` built with libkrun, `/dev/kvm`, Kata)
+     and the Diagnostic with why and fix when one is missing.
+   - `tests/escape/` against both levels; can CI run them (KVM on GitHub
+     runners)?
+3. Output: which `LaunchPlan`/`SandboxBackend` fields are bwrap-specific
+   today (from `tools/coupling-baseline.toml` and the sandbox crate), the
+   proposed neutral shape, the effort estimate per part, and a go/no-go per
+   level (plain Podman, Podman + krun, Kata).
+
+### Acceptance criteria
+1. The document answers every question in item 2 with evidence or names it
+   as open with the reason.
+2. The owner decides from it which level comes next, with the estimate.
