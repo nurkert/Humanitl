@@ -437,15 +437,35 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                         ),
                       const ShellNotices(),
                       Expanded(
-                        child: Row(
+                        child: Stack(
+                          fit: StackFit.expand,
                           children: <Widget>[
-                            IconRail(
-                              active: section,
-                              onSelect: navigation.go,
-                              expanded: railExpanded,
-                              onToggle: rail.toggle,
+                            Row(
+                              children: <Widget>[
+                                IconRail(
+                                  active: section,
+                                  onSelect: navigation.go,
+                                  expanded: railExpanded,
+                                  onToggle: rail.toggle,
+                                ),
+                                Expanded(
+                                  child: _sections(section, frozen: !live),
+                                ),
+                              ],
                             ),
-                            Expanded(child: _sections(section, frozen: !live)),
+                            // Das Blatt hängt zwischen Kopfleiste und
+                            // Statusleiste, wie jeder Pane: seine Kopfzeile
+                            // steht in derselben Reihe wie die der Queue, und
+                            // die Linie darunter läuft durch (HUM-286).
+                            if (_settingsOpen)
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: SettingsSheet(
+                                  onClose: _closeSettings,
+                                  focusKey: _settingsFocusKey,
+                                  focusSerial: _settingsFocusSerial,
+                                ),
+                              ),
                           ],
                         ),
                       ),
@@ -453,15 +473,6 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                     ],
                   ),
                 ),
-                if (_settingsOpen)
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: SettingsSheet(
-                      onClose: _closeSettings,
-                      focusKey: _settingsFocusKey,
-                      focusSerial: _settingsFocusSerial,
-                    ),
-                  ),
                 if (_paletteOpen)
                   CommandPalette(
                     commands: _commands(context, live: live),

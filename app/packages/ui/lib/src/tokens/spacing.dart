@@ -71,6 +71,30 @@ abstract final class HSize {
   /// Height of the status bar.
   static const double statusBar = 24;
 
+  /// Height of every pane header, its bottom border included (HUM-286).
+  ///
+  /// One value for the Queue, the detail pane, the context pane, History,
+  /// Rules, Sandbox and every side sheet, so that the line under one header
+  /// continues into the next one across the window (`docs/UX.md`, "Layout
+  /// grid"). It is the value at text scale 1; `HPaneHeader.rowHeight` scales
+  /// it with the text, up to twice, the same for every header and for the
+  /// rail entries, so the row stays shared. A header reaches this height
+  /// through `HPaneHeader`, never through padding of its own.
+  static const double paneHeader = 48;
+
+  /// Height of one entry of the icon rail (HUM-286).
+  ///
+  /// Equal to [paneHeader] on purpose: the first entry starts directly under
+  /// the window header and shares its row with the pane headers beside it, so
+  /// "Intercept" and "Queue" stand on one line.
+  static const double railItem = paneHeader;
+
+  /// Width of every border and divider of the shell (HUM-286).
+  ///
+  /// The same value as [hairline]; the name says what it is used for when a
+  /// region draws its edge.
+  static const double border = hairline;
+
   /// Height of a collapsed queue row.
   static const double row = 36;
 
@@ -286,6 +310,9 @@ class HSizeTokens {
   const HSizeTokens({
     this.headerBar = HSize.headerBar,
     this.statusBar = HSize.statusBar,
+    this.paneHeaderHeight = HSize.paneHeader,
+    this.railItemHeight = HSize.railItem,
+    this.borderWidth = HSize.border,
     this.row = HSize.row,
     this.rowSelected = HSize.rowSelected,
     this.rowHistory = HSize.rowHistory,
@@ -308,6 +335,15 @@ class HSizeTokens {
 
   /// Height of the status bar.
   final double statusBar;
+
+  /// Height of every pane header and sheet header, border included.
+  final double paneHeaderHeight;
+
+  /// Height of one entry of the icon rail; equal to [paneHeaderHeight].
+  final double railItemHeight;
+
+  /// Width of every border and divider.
+  final double borderWidth;
 
   /// Height of a collapsed row.
   final double row;

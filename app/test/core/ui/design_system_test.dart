@@ -389,7 +389,9 @@ void main() {
     // Kein Literal mehr: die Breite des Griffs ist ein Token
     // (`docs/UX.md` 2.1).
     const double splitter = HSize.splitter;
-    const double available = width - splitter;
+    // Der Griff liegt über der Naht; die Panes teilen sich alles außer der
+    // einen Haarlinie dazwischen (HUM-286).
+    const double available = width - HSize.border;
     List<double>? seen;
     await tester.pumpWidget(
       host(
@@ -443,6 +445,50 @@ void main() {
     expect(seen, isNotNull);
     expect(seen![0], closeTo(0.5 - HSize.splitterStep / available, 0.001));
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Tab goes pane, splitter, pane, although the grip lies on top', (
+    WidgetTester tester,
+  ) async {
+    // Der Griff steht im Baum nach den Panes (HUM-286), damit er über ihrem
+    // Rand den Zeiger bekommt; die Tastatur darf das nicht merken.
+    final FocusNode left = FocusNode(debugLabel: 'left');
+    final FocusNode right = FocusNode(debugLabel: 'right');
+    addTearDown(left.dispose);
+    addTearDown(right.dispose);
+    await tester.pumpWidget(
+      host(
+        SizedBox(
+          width: 400,
+          height: 200,
+          child: HResizablePanes(
+            ratios: const <double>[0.5, 0.5],
+            minWidths: const <double>[50, 50],
+            splitterSemanticsLabel: 'resize',
+            onRatiosChanged: (List<double> _) {},
+            children: <Widget>[
+              Focus(focusNode: left, child: const SizedBox.expand()),
+              Focus(focusNode: right, child: const SizedBox.expand()),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    left.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.context
+          ?.findAncestorWidgetOfExactType<HResizablePanes>(),
+      isNotNull,
+    );
+    expect(left.hasFocus, isFalse);
+    expect(right.hasFocus, isFalse, reason: 'the splitter comes first');
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+    expect(right.hasFocus, isTrue, reason: 'then the right pane');
   });
 
   testWidgets('the hover label waits its token, not a number', (

@@ -335,21 +335,32 @@ class _QueuePaneState extends ConsumerState<QueuePane> {
     final int pending = ref.watch(
       pendingArrivalsProvider.select((Set<FlowId> waiting) => waiting.length),
     );
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: tokens.colors.bg1,
-        border: Border(right: BorderSide(color: tokens.colors.line)),
-      ),
+    // Keine Kante rechts: Die Naht zwischen zwei Panes gehört dem Splitter
+    // (`docs/UX.md` 3.2 und "Layout grid").
+    return ColoredBox(
+      color: tokens.colors.bg1,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          Padding(
-            padding: EdgeInsets.fromLTRB(
-              tokens.spacing.x3,
-              tokens.spacing.x2,
-              tokens.spacing.x3,
-              tokens.spacing.x2,
-            ),
+          // Die Kopfzeile ist die eines jeden Panes (HUM-286): Ihre Höhe
+          // kommt aus dem Token, das Band oder die Haarlinie darunter
+          // gehört dazu und ist ihre untere Kante.
+          //
+          // Die Absperrung steht: solange mindestens eine Anfrage gehalten
+          // ist, läuft unter dem Kopf das Absperrband der Marke, und es geht,
+          // sobald nichts mehr hält (HUM-260, `docs/UX.md` 3.6). Der Platz
+          // ist immer reserviert, damit keine Zeile darunter springt, wenn es
+          // kommt oder geht (2.8); ohne Band steht dort die Haarlinie wie
+          // vorher. Ohne Band im Baum läuft auch kein Ticker.
+          HPaneHeader(
+            key: const Key('intercept-queue-header'),
+            dividerHeight: HSize.cautionTape,
+            divider: held > 0
+                ? const HCautionTape(key: Key('intercept-caution-tape'))
+                : const Align(
+                    alignment: Alignment.bottomCenter,
+                    child: HHairline(),
+                  ),
             child: Row(
               children: <Widget>[
                 Expanded(
@@ -363,21 +374,6 @@ class _QueuePaneState extends ConsumerState<QueuePane> {
                 QueueCountBadge(count: held, arrivals: _arrivals),
               ],
             ),
-          ),
-          // Die Absperrung steht: solange mindestens eine Anfrage gehalten
-          // ist, läuft unter dem Kopf das Absperrband der Marke, und es geht,
-          // sobald nichts mehr hält (HUM-260, `docs/UX.md` 3.6). Der Platz
-          // ist immer reserviert, damit keine Zeile darunter springt, wenn es
-          // kommt oder geht (2.8); ohne Band steht dort die Haarlinie wie
-          // vorher. Ohne Band im Baum läuft auch kein Ticker.
-          SizedBox(
-            height: HSize.cautionTape,
-            child: held > 0
-                ? const HCautionTape(key: Key('intercept-caution-tape'))
-                : const Align(
-                    alignment: Alignment.bottomCenter,
-                    child: HHairline(),
-                  ),
           ),
           // What the agent asked for stands above the queue, not in it: it is
           // not a request that waits for a decision, and it must never take a
@@ -752,6 +748,22 @@ class QueueEmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
+    // Centred while there is room, scrolling instead of overflowing in a low
+    // window: the shared header row (HUM-286) takes 48 px, and the empty
+    // state must not run under the status bar at 600 px or at a large text
+    // scale.
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) =>
+          SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Center(child: _content(tokens, l10n, context)),
+            ),
+          ),
+    );
+  }
+
+  Widget _content(HTokens tokens, AppLocalizations l10n, BuildContext context) {
     return Center(
       child: Padding(
         padding: EdgeInsets.all(tokens.spacing.x6),

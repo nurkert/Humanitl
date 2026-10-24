@@ -264,6 +264,9 @@ Everything is a multiple of the 4 px base unit.
 |---|---|
 | `headerBar` | 40 |
 | `statusBar` | 24 |
+| `paneHeaderHeight` | 48 |
+| `railItemHeight` | 48 |
+| `borderWidth` | 1 |
 | `row` | 36 |
 | `rowSelected` | 56 |
 | `rowHistory` | 28 |
@@ -523,7 +526,13 @@ right; modals are only for destructive confirmations.
 | Header bar | 40 px | App mark, session, isolation ring, window controls |
 | Icon rail | 48 px collapsed, 200 px expanded | Intercept, History, Rules, Sandbox, Audit, Setup; `Ctrl+0` toggles |
 | Status bar | 24 px | Daemon connection, quiet text |
-| Active section marker | 2 px accent on the rail | `selectionRail` |
+| Pane header | 48 px, border included | `paneHeaderHeight`, always `HPaneHeader`; the same row as the first rail item |
+| Rail item | 48 px | `railItemHeight`; starts directly under the header bar |
+| Active section marker | 2 px accent on the rail, full item height | `selectionRail` |
+
+Every pane and side sheet header ends on one line across the window, and two
+adjacent regions share one divider. The rules are in
+[docs/UX.md, section 3.7](UX.md#37-layout-grid).
 
 ![Icon rail, expanded](img/design-icon-rail.png)
 

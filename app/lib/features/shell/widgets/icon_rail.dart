@@ -7,6 +7,8 @@
 /// between the two.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 
 import '../../../core/ui/hover_label.dart';
@@ -74,22 +76,37 @@ class IconRail extends StatelessWidget {
             ),
             child: Column(
               children: <Widget>[
-                SizedBox(height: tokens.spacing.x2),
-                for (final Section section in Section.values)
-                  RailEntry(
-                    section: section,
-                    active: section == active,
-                    name: section.label(l10n),
-                    shortcut: l10n.shellNavShortcutKey(section.shortcutDigit),
-                    label: l10n.shellNavShortcut(
-                      section.label(l10n),
-                      l10n.shellNavShortcutKey(section.shortcutDigit),
+                // Kein Abstand über dem ersten Eintrag: er beginnt direkt
+                // unter der Linie der Kopfleiste und steht in derselben Reihe
+                // wie die Kopfzeilen der Panes daneben (HUM-286).
+                //
+                // Die Einträge wachsen mit der Schrift wie die Kopfzeilen
+                // daneben; wird das Fenster dafür zu niedrig, rollen sie, statt
+                // unten überzulaufen.
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      children: <Widget>[
+                        for (final Section section in Section.values)
+                          RailEntry(
+                            section: section,
+                            active: section == active,
+                            name: section.label(l10n),
+                            shortcut: l10n.shellNavShortcutKey(
+                              section.shortcutDigit,
+                            ),
+                            label: l10n.shellNavShortcut(
+                              section.label(l10n),
+                              l10n.shellNavShortcutKey(section.shortcutDigit),
+                            ),
+                            width: width,
+                            showLabel: showLabels,
+                            onTap: () => onSelect(section),
+                          ),
+                      ],
                     ),
-                    width: width,
-                    showLabel: showLabels,
-                    onTap: () => onSelect(section),
                   ),
-                const Spacer(),
+                ),
                 if (onToggle case final VoidCallback toggle)
                   _ToggleButton(
                     expanded: expanded,
@@ -153,6 +170,39 @@ class _RailEntryState extends State<RailEntry> {
   bool _hovered = false;
 
   @override
+  void initState() {
+    super.initState();
+    if (widget.active) {
+      _reveal();
+    }
+  }
+
+  @override
+  void didUpdateWidget(RailEntry oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.active && !oldWidget.active) {
+      _reveal();
+    }
+  }
+
+  /// Scrolls the rail so the active entry and its mark are fully visible.
+  ///
+  /// At a large text scale the entries scroll in a low window; a section
+  /// chosen by shortcut must not keep its mark clipped (HUM-286).
+  void _reveal() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        unawaited(
+          Scrollable.ensureVisible(
+            context,
+            duration: HReducedMotion.displace(context, HMotion.arrive),
+          ),
+        );
+      }
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final Color fill = widget.active
@@ -172,15 +222,19 @@ class _RailEntryState extends State<RailEntry> {
         onTap: widget.onTap,
         child: SizedBox(
           width: widget.width,
-          height: railWidth,
+          height: HPaneHeader.scaleRow(context, tokens.sizes.railItemHeight),
           child: Stack(
             children: <Widget>[
               Positioned.fill(child: ColoredBox(color: fill)),
+              // Fläche und Akzent füllen die ganze Höhe des Eintrags, Kante
+              // an Kante: Die Markierung ist die Reihe, nicht ein Kasten in
+              // ihr (HUM-286).
               if (widget.active)
                 Positioned(
+                  key: const Key('icon-rail-active-mark'),
                   left: 0,
-                  top: tokens.spacing.x2,
-                  bottom: tokens.spacing.x2,
+                  top: 0,
+                  bottom: 0,
                   width: HSize.selectionRail,
                   child: ColoredBox(color: tokens.colors.accent),
                 ),
@@ -381,11 +435,13 @@ class _ToggleButton extends StatelessWidget {
       padding: EdgeInsets.only(bottom: tokens.spacing.x2),
       child: SizedBox(
         width: width,
-        height: railWidth,
+        // Eine Zeile der Rail wie jeder Eintrag darüber (HUM-286); die
+        // Breite der Glyphenspalte bleibt [railWidth].
+        height: HPaneHeader.scaleRow(context, tokens.sizes.railItemHeight),
         child: Align(
           alignment: AlignmentDirectional.centerStart,
-          child: SizedBox.square(
-            dimension: railWidth,
+          child: SizedBox(
+            width: railWidth,
             child: Center(
               child: Semantics(
                 expanded: expanded,

@@ -104,18 +104,16 @@ class _HistoryFilterBarState extends ConsumerState<HistoryFilterBar> {
       (String? previous, String next) => _syncField(next),
     );
     final bool focused = widget.focusNode.hasFocus;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        tokens.spacing.x3,
-        tokens.spacing.x2,
-        tokens.spacing.x3,
-        tokens.spacing.x2,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Semantics(
+    // Das Filterfeld ist die Kopfzeile des Screens und steht in derselben
+    // Reihe wie die Kopfzeile jedes anderen (HUM-286); die Schnellfilter
+    // darunter sind eine eigene Leiste mit eigener Linie.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        HPaneHeader(
+          key: const Key('history-header'),
+          child: Semantics(
             textField: true,
             label: l10n.historyFilterLabel,
             child: DecoratedBox(
@@ -171,55 +169,68 @@ class _HistoryFilterBarState extends ConsumerState<HistoryFilterBar> {
               ),
             ),
           ),
-          SizedBox(height: tokens.spacing.x2),
-          Row(
+        ),
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+            tokens.spacing.x3,
+            tokens.spacing.x2,
+            tokens.spacing.x3,
+            tokens.spacing.x2,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Expanded(
-                child: Wrap(
-                  spacing: tokens.spacing.x2,
-                  runSpacing: tokens.spacing.x1,
-                  children: <Widget>[
-                    for (final HistoryChip chip in HistoryChip.values)
-                      _ChipButton(
-                        chip: chip,
-                        active: query.has(chip),
-                        label: _chipLabel(l10n, chip, query),
-                        onPressed: () => ref
-                            .read(historyQueryProvider.notifier)
-                            .toggle(chip),
-                      ),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Wrap(
+                      spacing: tokens.spacing.x2,
+                      runSpacing: tokens.spacing.x1,
+                      children: <Widget>[
+                        for (final HistoryChip chip in HistoryChip.values)
+                          _ChipButton(
+                            chip: chip,
+                            active: query.has(chip),
+                            label: _chipLabel(l10n, chip, query),
+                            onPressed: () => ref
+                                .read(historyQueryProvider.notifier)
+                                .toggle(chip),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (!query.isUnfiltered) ...<Widget>[
+                    SizedBox(width: tokens.spacing.x2),
+                    HButton(
+                      variant: HButtonVariant.ghost,
+                      size: HButtonSize.sm,
+                      onPressed: _reset,
+                      child: Text(l10n.historyFilterReset),
+                    ),
                   ],
-                ),
+                  if (widget.trailing != null) ...<Widget>[
+                    SizedBox(width: tokens.spacing.x2),
+                    widget.trailing!,
+                  ],
+                ],
               ),
-              if (!query.isUnfiltered) ...<Widget>[
-                SizedBox(width: tokens.spacing.x2),
-                HButton(
-                  variant: HButtonVariant.ghost,
-                  size: HButtonSize.sm,
-                  onPressed: _reset,
-                  child: Text(l10n.historyFilterReset),
+              if (failure != null && filterRefused) ...<Widget>[
+                SizedBox(height: tokens.spacing.x2),
+                HDiagnosticCard(
+                  code: failure.code,
+                  severityLabel: historySeverityLabel(l10n, failure.severity),
+                  color: historySeverityColor(tokens, failure.severity),
+                  title: l10n.historyFilterInvalidTitle,
+                  why: failure.why,
+                  docsUrl: failure.docsUrl,
+                  width: double.infinity,
                 ),
-              ],
-              if (widget.trailing != null) ...<Widget>[
-                SizedBox(width: tokens.spacing.x2),
-                widget.trailing!,
               ],
             ],
           ),
-          if (failure != null && filterRefused) ...<Widget>[
-            SizedBox(height: tokens.spacing.x2),
-            HDiagnosticCard(
-              code: failure.code,
-              severityLabel: historySeverityLabel(l10n, failure.severity),
-              color: historySeverityColor(tokens, failure.severity),
-              title: l10n.historyFilterInvalidTitle,
-              why: failure.why,
-              docsUrl: failure.docsUrl,
-              width: double.infinity,
-            ),
-          ],
-        ],
-      ),
+        ),
+      ],
     );
   }
 
