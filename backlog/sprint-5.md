@@ -60,6 +60,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-286 | One layout grid: pane headers, action bar and the rail highlight line up (before HUM-060) | M | HUM-254, HUM-275 |
 | HUM-287 | Setup becomes a short onboarding, not a scroll list (before HUM-060) | M | HUM-282, HUM-286, HUM-289 |
 | HUM-292 | Spike: Podman as a second sandbox backend, with and without a kernel boundary (after HUM-060, first) | S | HUM-060, HUM-145 |
+| HUM-293 | One project folder, chosen once, for app and CLI alike (before HUM-060) | S | HUM-069, HUM-262, HUM-282, HUM-287 |
 
 ---
 
@@ -5860,3 +5861,53 @@ and what does the neutral `LaunchPlan` need for that.
 1. The document answers every question in item 2 with evidence or names it
    as open with the reason.
 2. The owner decides from it which level comes next, with the estimate.
+
+## HUM-293 · One project folder, chosen once, for app and CLI alike (before HUM-060)
+
+### Context
+The owner (2026-10-24) chose `~/Documents/Masterthesis` in Setup; the app
+uses it. `humanitl sandbox run` started from `~` then failed with
+SANDBOX_006 "sandbox.work_dir names /home/nburkert", although `config.toml`
+holds no `sandbox.work_dir`: Setup's choice travels only in `Sandbox(Plan)`
+and `Sandbox(Start)` (comment in `project_check.dart`, written before HUM-069
+let `SetConfig` write `sandbox.work_dir`), and the CLI falls back to its
+current directory. Two places pick the folder by different rules, and the
+diagnostic names a config key that was never set. The owner wants the folder
+set once and then used everywhere.
+
+### Specification
+1. Choosing a folder in Setup or Settings writes `sandbox.work_dir` through
+   `SetConfig` (user `config.toml`, never a project profile; the key stays
+   `x-project-scope = denied`). The daemon checks it with the same
+   `MountPolicy::check_work_dir` before writing; a refused folder is not
+   stored and Setup shows SANDBOX_006 in the step as today.
+2. App, desktop launcher start and `humanitl sandbox run`/`humanitl run` all
+   use the stored folder. `--work <path>` (`--sandbox-work-dir`) overrides it
+   for one call and is not stored.
+3. The current directory is used only when nothing is stored and no `--work`
+   is given. Every SANDBOX_006 names the source of the path: config file
+   (with its path), `--work`, environment variable, or "the current
+   directory"; its fix then says "choose a project folder: humanitl config
+   set sandbox.work_dir <dir>" first.
+4. A session that is running keeps its folder; the new one applies to the
+   next start (like HUM-277).
+5. The `project_check.dart` comment and docs/UX.md, docs/cli.md, docs/guides
+   are updated; the in-memory-only path for the chosen folder is removed
+   (no second source of truth).
+
+### Tests
+- App: choosing a folder calls SetConfig with `sandbox.work_dir`; a refused
+  folder is not stored and shows SANDBOX_006 in the step.
+- Daemon: SetConfig with `$HOME` as work_dir is refused with SANDBOX_006 and
+  the file stays unchanged.
+- CLI: with a stored folder, `sandbox run` from another cwd uses the stored
+  one; `--work` overrides without writing; with nothing stored the cwd is
+  used and a refused cwd's SANDBOX_006 says "the current directory".
+Mutation proofs: dropping the SetConfig call in the picker, ignoring the
+stored folder in the CLI, each turns a test red.
+
+### Acceptance criteria
+1. After choosing `~/Documents/Masterthesis` in Setup once, `humanitl sandbox
+   run` from `~` runs in that folder.
+2. The diagnostic never names `sandbox.work_dir` for a path that came from
+   somewhere else.
