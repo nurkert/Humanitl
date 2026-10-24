@@ -54,6 +54,7 @@ export 'src/widgets/h_hairline.dart';
 export 'src/widgets/h_icon_button.dart';
 export 'src/widgets/h_method_badge.dart';
 export 'src/widgets/h_modal.dart';
+export 'src/widgets/h_pane_header.dart';
 export 'src/widgets/h_panel.dart';
 export 'src/widgets/h_pill.dart';
 export 'src/widgets/h_popover.dart';

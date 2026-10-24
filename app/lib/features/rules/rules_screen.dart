@@ -76,31 +76,85 @@ class _RulesScreenState extends ConsumerState<RulesScreen> {
     final AsyncValue<RuleSet> set = ref.watch(rulesProvider);
     return ColoredBox(
       color: tokens.colors.bg0,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: Stack(
+        fit: StackFit.expand,
         children: <Widget>[
-          const _Header(),
-          const HHairline(),
-          const RulesBannerView(),
-          const RuleUndoStrip(),
-          Expanded(
-            child: switch (set) {
-              AsyncError(:final Object error) => _CannotRead(error: error),
-              _ => HWait(
-                loading: set.isLoading && !set.hasValue,
-                skeleton: Padding(
-                  padding: EdgeInsets.all(tokens.spacing.x3),
-                  child: HSkeleton(
-                    rows: rulesSkeletonRows,
-                    rowHeight: tokens.sizes.row,
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              // Kopfzeile und Linie darunter sind eins (HUM-286): Die Liste
+              // darunter zieht keine eigene Linie mehr (`docs/UX.md` "Layout
+              // grid").
+              const _Header(),
+              const RulesBannerView(),
+              const RuleUndoStrip(),
+              Expanded(
+                child: switch (set) {
+                  AsyncError(:final Object error) => _CannotRead(error: error),
+                  _ => HWait(
+                    loading: set.isLoading && !set.hasValue,
+                    skeleton: Padding(
+                      padding: EdgeInsets.all(tokens.spacing.x3),
+                      child: HSkeleton(
+                        rows: rulesSkeletonRows,
+                        rowHeight: tokens.sizes.row,
+                      ),
+                    ),
+                    child: const _Body(),
                   ),
-                ),
-                child: const _Body(),
+                },
               ),
-            },
+            ],
           ),
+          const _RulesSheet(),
         ],
       ),
+    );
+  }
+}
+
+/// The editor as a sheet, below [rulesSheetBelow].
+///
+/// Mounted by the screen and not inside the list: like every sheet it starts
+/// directly under the window header, and its header shares the row of the
+/// Rules header (HUM-286, `docs/UX.md` 3.7).
+class _RulesSheet extends ConsumerWidget {
+  const _RulesSheet();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final AppLocalizations l10n = context.l10n;
+    final bool open = ref.watch(
+      ruleEditorProvider.select((RuleEditorState state) => state.isOpen),
+    );
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        if (!open || constraints.maxWidth >= rulesSheetBelow) {
+          return const SizedBox.shrink();
+        }
+        return Stack(
+          children: <Widget>[
+            Positioned(
+              top: 0,
+              right: 0,
+              bottom: 0,
+              // The sheet comes from the edge it hangs on, and the list
+              // behind it stays where it is (`docs/UX.md` 2.2).
+              child: ArriveIn(
+                fromRight: true,
+                child: HSheet(
+                  key: const Key('rules-editor-sheet'),
+                  title: Text(l10n.rulesEditorTitle),
+                  closeSemanticsLabel: l10n.rulesClose,
+                  onClose: ref.read(ruleEditorProvider.notifier).close,
+                  width: constraints.maxWidth * rulesSheetFraction,
+                  child: const RuleEditor(),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -111,10 +165,6 @@ class _Body extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final AppLocalizations l10n = context.l10n;
-    final bool open = ref.watch(
-      ruleEditorProvider.select((RuleEditorState state) => state.isOpen),
-    );
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         if (constraints.maxWidth >= rulesSheetBelow) {
@@ -130,29 +180,9 @@ class _Body extends ConsumerWidget {
             ],
           );
         }
-        return Stack(
-          children: <Widget>[
-            const Positioned.fill(child: RulesList()),
-            if (open)
-              Positioned(
-                top: 0,
-                right: 0,
-                bottom: 0,
-                // The sheet comes from the edge it hangs on, and the list
-                // behind it stays where it is (`docs/UX.md` 2.2).
-                child: ArriveIn(
-                  fromRight: true,
-                  child: HSheet(
-                    title: Text(l10n.rulesEditorTitle),
-                    closeSemanticsLabel: l10n.rulesClose,
-                    onClose: ref.read(ruleEditorProvider.notifier).close,
-                    width: constraints.maxWidth * rulesSheetFraction,
-                    child: const RuleEditor(),
-                  ),
-                ),
-              ),
-          ],
-        );
+        // Schmal hängt der Screen den Editor als Blatt über sich selbst
+        // (`_RulesSheet`), nicht unter seiner Kopfzeile (HUM-286).
+        return const RulesList();
       },
     );
   }
@@ -184,8 +214,8 @@ class _Header extends ConsumerWidget {
     // to read: as soon as the list has rules, the fill belongs to `Save` in
     // the editor (`docs/UX.md` 3.1).
     final bool emptyScreen = set.rules.isEmpty && !editorOpen;
-    return Padding(
-      padding: EdgeInsets.all(tokens.spacing.x3),
+    return HPaneHeader(
+      key: const Key('rules-header'),
       child: Row(
         children: <Widget>[
           _Tabs(tab: tab, saved: saved, temporary: temporary),

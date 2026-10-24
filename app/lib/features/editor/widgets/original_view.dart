@@ -37,18 +37,17 @@ class OriginalView extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
+        // Dieselbe Kopfzeile wie die Reiter des Entwurfs daneben: Beide
+        // Linien liegen auf einer Höhe (HUM-286).
         if (label.isNotEmpty)
-          Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: tokens.spacing.x3,
-              vertical: tokens.spacing.x2,
-            ),
+          HPaneHeader(
             child: Text(
               label,
               style: tokens.typography.ui12.medium.tinted(tokens.colors.fg1),
             ),
-          ),
-        const HHairline(),
+          )
+        else
+          const HHairline(),
         Expanded(
           child: SingleChildScrollView(
             padding: EdgeInsets.all(tokens.spacing.x3),
