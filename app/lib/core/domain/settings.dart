@@ -42,6 +42,12 @@ abstract final class FormKeys {
   /// way to a target, such as a company CA (HUM-257).
   static const String tlsTrustSystemStore = 'tls.trust_system_store';
 
+  /// The agent the next session starts: `opencode` or `pi` (HUM-274).
+  static const String agentAdapter = 'agent.adapter';
+
+  /// The agents the daemon knows, in the order of its registry (HUM-274).
+  static const List<String> agentAdapters = <String>['opencode', 'pi'];
+
   /// All of them.
   static const List<String> all = <String>[
     holdTimeoutSecs,
@@ -53,6 +59,7 @@ abstract final class FormKeys {
     llmEndpoint,
     llmModels,
     tlsTrustSystemStore,
+    agentAdapter,
   ];
 
   /// The reference to the access key, as the daemon names it in the
@@ -144,6 +151,9 @@ final class ConfigValues {
     final bool on => on,
     _ => true,
   };
+
+  /// `agent.adapter`, default `opencode` (HUM-274).
+  String get agentAdapter => _text(FormKeys.agentAdapter, 'opencode');
 
   /// `sandbox.work_dir`, empty when unset.
   String get sandboxWorkDir => _text(FormKeys.sandboxWorkDir, '');

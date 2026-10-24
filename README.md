@@ -172,7 +172,7 @@ real sandbox (`tests/e2e/`), not when its code exists.
 
 Version 0.1.0 is the first release (milestone M5). In it: the sealed sandbox with the three
 guarantees and five escape tests in CI; the intercept queue with allow, block, edit and rules; the
-OpenCode agent against a model in your network, with terminal and isolation check; history, export
+OpenCode and pi agents against a model in your network, with terminal and isolation check; history, export
 and a hash-chained audit log; pseudonymisation in the editor; settings, German and English; `.deb`
 and AppImage. Not in it: holding responses or WebSocket frames, HTTP/2 to the destination, a Docker
 or micro-VM backend, a browser for the agent, macOS. What comes after the MVP is listed in

@@ -1137,7 +1137,7 @@ Agent-Kommando nicht im PATH
 
 **Auslöser.** Das Agent-Kommando liegt weder im `PATH` des Daemons noch in `~/.opencode/bin`, `~/.local/bin` oder `~/bin` (HUM-278).
 
-**Fix.** `CopyCommand` mit `humanitl config set agent.command`, der Pfad ist ein Platzhalter; der Installationsbefehl steht im Text.
+**Fix.** `CopyCommand` mit `humanitl config set agent.command`, der Pfad ist ein Platzhalter, und der Installationsbefehl steht im Text; bei einem Adapter, dessen Programm ein Skript ist (pi, HUM-274), der Installationsbefehl des Adapters selbst, weil der Daemon ein Skript nie einbindet.
 
 #### DOCTOR_008
 
@@ -1263,7 +1263,7 @@ Agent-Kommando nicht gefunden
 
 **Auslöser.** Das Agent-Kommando ist weder im `PATH`, in `~/.opencode/bin`, `~/.local/bin`, `~/bin` noch über `agent.command` gesetzt (HUM-278).
 
-**Fix.** `CopyCommand` mit `humanitl config set agent.command`, der Pfad ist ein Platzhalter; der Installationsbefehl steht im Text.
+**Fix.** `CopyCommand` mit `humanitl config set agent.command`, der Pfad ist ein Platzhalter, und der Installationsbefehl steht im Text; bei einem Adapter, dessen Programm ein Skript ist (pi, HUM-274), der Installationsbefehl des Adapters selbst, weil der Daemon ein Skript nie einbindet.
 
 #### AGENT_002
 
@@ -1296,6 +1296,14 @@ Agent startete nicht
 **Auslöser.** Der Shim meldet auf dem Berichtskanal `EXEC fail`, oder das Kommando endet ohne dieses Signal mit Exit-Code `127` oder `126`, ohne ein einziges Byte geschrieben zu haben. Der Befund nennt das Kommando und den `PATH` der Sandbox; den `PATH` hält er zurück, wenn ein Mensch ihn geschrieben hat (`sandbox.env` oder ein eigenes Profil), wie die Umgebungstabelle.
 
 **Fix.** `CopyCommand` mit `humanitl sandbox run -- /bin/sh -c 'command -v …'`: fragt dieselbe Sandbox, wo das Kommando liegt. Was eingehängt wird, entscheidet das Profil.
+
+#### AGENT_006
+
+Node.js missing in the sandbox
+
+**Auslöser.** The command resolves to a script that starts Node.js through its `#!` line, and the sandbox finds no executable `node` on its `PATH` (or at the absolute path the line names). The finding names the script, the sandbox `PATH` and where a `node` lies on the host, if anywhere.
+
+**Fix.** `ChangeSetting` on `sandbox.env.PATH` when a mounted `node` is only missing from the path, `CopyCommand` that installs the host's `node` under `/usr/local/bin` when it is not mounted, the installer of pi when the `#!` line names an absolute `node` outside the mounts, otherwise `OpenUrl` to the Node.js download page (pi needs 22.19 or newer).
 
 ### Bereich edit
 

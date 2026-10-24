@@ -14,8 +14,8 @@
 //! - [`profile`] die Typen des Profils, das Laden und die Mount-Allowlist
 //!   (HUM-010)
 //! - [`agent`] der Port [`AgentAdapter`] mit [`AgentContext`],
-//!   [`SandboxFile`] und [`AdapterRegistry`]; der einzige Adapter des MVP ist
-//!   [`OpenCodeAdapter`] (HUM-037)
+//!   [`SandboxFile`] und [`AdapterRegistry`]; the MVP adapters are
+//!   [`OpenCodeAdapter`] (HUM-037) and [`PiAdapter`] (HUM-274)
 //! - [`agent_exit`] woran sich ein Agent erkennen lässt, der nie gelaufen ist:
 //!   die Zeile `EXEC fail` im Bericht des Shims, sonst Exit-Code `126`/`127`
 //!   ohne ein Byte Ausgabe; Befund `AGENT_005`
@@ -111,8 +111,8 @@ pub mod summary;
 pub mod worktree;
 
 pub use crate::agent::{
-    AdapterRegistry, AgentAdapter, AgentContext, AgentKey, Mount, OpenCodeAdapter, Reach,
-    SandboxFile, SandboxLookup, SandboxView, files_inside_work, find_in_path,
+    AdapterRegistry, AgentAdapter, AgentContext, AgentKey, Mount, OpenCodeAdapter, PiAdapter,
+    Reach, SandboxFile, SandboxLookup, SandboxView, files_inside_work, find_in_path,
 };
 pub use crate::agent_exit::{FirstOutput, did_not_start};
 pub use crate::bridge_env::{

@@ -1314,5 +1314,12 @@
   "shellStatusLlmServerSwitch": "Modellserver wechseln; gilt ab der nächsten Sitzung",
   "shellStatusLlmServerActive": "{name} (aktiv)",
   "setupLlmActiveServer": "Gespeicherter Server: {name}",
-  "settingsServerSavedWithoutKey": "Der Server {name} ist gespeichert, sein Zugangsschlüssel nicht: {cause} Den Schlüssel erneut einfügen und hinterlegen."
+  "settingsServerSavedWithoutKey": "Der Server {name} ist gespeichert, sein Zugangsschlüssel nicht: {cause} Den Schlüssel erneut einfügen und hinterlegen.",
+  "diagAGENT006Title": "Node.js fehlt in der Sandbox",
+  "diagAGENT006Why": "Das Agent-Kommando ist ein Skript, das Node.js startet, und die Sandbox findet kein node dafür; der Agent scheiterte gleich nach dem Start.",
+  "settingsSectionAgent": "Agent",
+  "settingsAgentLabel": "Coding-Agent",
+  "settingsAgentHelp": "Der Agent, den die nächste Sitzung in der Sandbox startet. Humanitl schreibt ihm Konfiguration, Endpunkt, Modelle und Schlüssel.",
+  "settingsAgentOpenCode": "OpenCode",
+  "settingsAgentPi": "pi"
 }

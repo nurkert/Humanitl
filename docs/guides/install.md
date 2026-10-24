@@ -190,8 +190,8 @@ it is, or run `daemon install` again after moving it.
 
 ## Install the agent
 
-Humanitl 0.1 ships one agent adapter, OpenCode. Install OpenCode as its project
-documents it, for example:
+Humanitl 0.1 ships two agent adapters, OpenCode (the default) and pi. Install
+OpenCode as its project documents it, for example:
 
 ```sh
 curl -fsSL https://opencode.ai/install | bash
@@ -210,6 +210,18 @@ If you skip this, the start of a session stops with `AGENT_004` and names
 exactly this command. The [agent profiles guide](agent-profiles.md) explains
 what Humanitl configures for OpenCode and how to run another program as the
 agent.
+
+To use pi instead, install it and Node.js 22.19 or newer under `/usr`, where
+the sandbox sees them, and select it:
+
+```sh
+sudo npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+humanitl config set agent.adapter pi
+```
+
+pi is a Node.js script; a pi or a Node.js under your home directory (the
+`pi.dev` installer, nvm) is not visible in the sandbox. See
+[Using pi](agent-profiles.md#using-pi).
 
 ## Check the installation
 
