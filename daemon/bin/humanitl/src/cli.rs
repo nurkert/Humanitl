@@ -421,11 +421,20 @@ pub enum SandboxCmd {
     ///
     /// One client writes, any number watch. Ctrl+C reaches the agent as byte
     /// 0x03, not as a signal: the sandbox has no controlling terminal. Detach
-    /// by closing the connection; the session keeps running.
+    /// with Ctrl+A d, as in screen; the session keeps running, and a later
+    /// attach shows it. Ctrl+A Ctrl+A (or Ctrl+A a) sends one Ctrl+A to the
+    /// agent.
     Attach {
-        /// Watch without sending anything.
+        /// Watch without sending anything. Ctrl+A d detaches here too, and so
+        /// does Ctrl+C.
         #[arg(long)]
         read_only: bool,
+        /// The prefix of the detach key: ctrl-a to ctrl-z (not ctrl-h, ctrl-i,
+        /// ctrl-j, ctrl-m: Backspace, Tab and Enter send them), ctrl-\,
+        /// ctrl-], ctrl-^, ctrl-_, or none for no detach key. Default from
+        /// `terminal.detach_prefix`, which is ctrl-a.
+        #[arg(long, value_name = "SPEC")]
+        detach_keys: Option<String>,
     },
 }
 

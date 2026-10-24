@@ -2282,6 +2282,39 @@ fn sandbox_attach_read_only_watches_and_sends_nothing() {
     );
 }
 
+/// Ein `--detach-keys`, das keine Taste nennt, ist `CLI_004` mit der Form, die
+/// gilt, und fällt auf, bevor ein Daemon gefragt wird (HUM-279).
+#[test]
+fn sandbox_attach_refuses_an_unreadable_detach_key() {
+    let harness = Harness::new();
+    let output = harness.run(["sandbox", "attach", "--detach-keys", "ctrl-["]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.starts_with("error[CLI_004]: "), "{text}");
+    assert!(text.contains("--detach-keys \"ctrl-[\""), "{text}");
+    assert!(
+        text.contains("humanitl sandbox attach --detach-keys ctrl-a"),
+        "{text}"
+    );
+}
+
+/// `terminal.detach_prefix` wird beim Laden geprüft: ein unlesbarer Wert ist
+/// `CONFIG_003` mit Schlüssel und Vorgabe (HUM-279).
+#[test]
+fn sandbox_attach_refuses_an_unreadable_detach_prefix() {
+    let harness = Harness::new();
+    let output = harness
+        .command()
+        .env("HUMANITL_TERMINAL__DETACH_PREFIX", "alt-d")
+        .args(["sandbox", "attach"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.starts_with("error[CONFIG_003]: "), "{text}");
+    assert!(text.contains("terminal.detach_prefix"), "{text}");
+}
+
 // --- `humanitl daemon install` (HUM-044) -------------------------------------
 //
 // Der Befehl schreibt eine Datei auf den Rechner eines Menschen, die von da an

@@ -21,8 +21,8 @@ use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::model::{
-    AgentRef, AuditConfig, Config, FindingsConfig, Limits, LlmConfig, RecorderConfig,
-    ResolverConfig, SandboxRef,
+    AgentRef, AuditConfig, Config, DetachKeys, FindingsConfig, Limits, LlmConfig, RecorderConfig,
+    ResolverConfig, SandboxRef, TerminalConfig,
 };
 use crate::schema;
 
@@ -434,6 +434,20 @@ fn agent_is_well_formed(agent: &AgentRef) -> Result<(), Diagnostic> {
     Ok(())
 }
 
+/// Das Terminal der Kommandozeile: ein Präfix, das [`DetachKeys::parse`]
+/// lesen kann (HUM-279). Ein unlesbarer Wert fiele sonst erst beim nächsten
+/// `attach` auf, und dann mit einem Terminal, aus dem niemand mehr herausfindet.
+fn terminal_is_well_formed(terminal: &TerminalConfig) -> Result<(), Diagnostic> {
+    if DetachKeys::parse(&terminal.detach_prefix).is_none() {
+        return Err(out_of_range(
+            "terminal.detach_prefix",
+            &format!("{:?}", terminal.detach_prefix),
+            DetachKeys::ALLOWED,
+        ));
+    }
+    Ok(())
+}
+
 impl Config {
     /// Prüft alle Wertebereiche und Beziehungen zwischen Feldern.
     ///
@@ -459,6 +473,7 @@ impl Config {
         llm_is_well_formed(&self.llm)?;
         findings_are_well_formed(&self.findings)?;
         sandbox_is_well_formed(&self.sandbox)?;
+        terminal_is_well_formed(&self.terminal)?;
         agent_is_well_formed(&self.agent)
     }
 }
@@ -529,6 +544,42 @@ mod tests {
                 "{refused} is out of range"
             );
         }
+    }
+
+    /// `terminal.detach_prefix` nimmt, was `--detach-keys` nimmt, und ein
+    /// unlesbarer Wert nennt Schlüssel, Wert und Vorgabe (HUM-279).
+    #[test]
+    fn a_detach_prefix_must_be_a_control_key_or_none() {
+        let mut config = Config::default();
+        assert_eq!(config.terminal.detach_prefix, "ctrl-a");
+        for allowed in ["ctrl-b", "Ctrl-Z", "ctrl-]", "ctrl-\\", "ctrl-_", "none"] {
+            config.terminal.detach_prefix = allowed.to_owned();
+            assert!(config.validate().is_ok(), "{allowed} is allowed");
+        }
+        for refused in [
+            "ctrl-[", "ctrl-m", "ctrl-1", "alt-a", "ctrl-", "ctrl-ab", "", "a",
+        ] {
+            config.terminal.detach_prefix = refused.to_owned();
+            let diagnostic = config.validate().expect_err(refused);
+            assert_eq!(diagnostic.code.as_str(), "CONFIG_003");
+            assert!(
+                diagnostic.why.contains("terminal.detach_prefix"),
+                "{}",
+                diagnostic.why
+            );
+            assert!(
+                matches!(
+                    &diagnostic.fix,
+                    Some(FixAction::ChangeSetting { key, value })
+                        if key == "terminal.detach_prefix" && value.contains("ctrl-a")
+                ),
+                "{:?}",
+                diagnostic.fix
+            );
+        }
+        // Der Befund nennt den Grund, warum Enter kein Präfix sein kann.
+        config.terminal.detach_prefix = "ctrl-m".to_owned();
+        assert!(why_of(&config).contains("Backspace, Tab and Enter"));
     }
 
     #[test]

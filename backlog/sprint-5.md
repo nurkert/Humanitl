@@ -5530,6 +5530,49 @@ handling, each turn a test red.
 2. A literal `Ctrl+A` still reaches the agent (`Ctrl+A Ctrl+A`).
 3. The terminal is restored after detaching.
 
+### Umsetzung (HUM-279)
+
+- **Filter.** `DetachFilter` in `daemon/bin/humanitl/src/cmd/attach.rs` ist eine
+  reine Zustandsmaschine mit einem Bit („Präfix gelesen"); die fünf Tests der
+  Spezifikation stehen dort als `cmd::attach::tests::*`, dazu
+  `another_prefix_has_its_own_letter`. Die Lesart der Angabe (`ctrl-a` bis
+  `ctrl-z`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, `none`) ist
+  `humanitl_config::DetachKeys::parse`, dieselbe für `--detach-keys` (`CLI_004`)
+  und `terminal.detach_prefix` (`CONFIG_003` beim Laden). `ctrl-[` ist
+  ausgenommen, weil jede Pfeiltaste mit `ESC` beginnt, ebenso `ctrl-h`, `ctrl-i`,
+  `ctrl-j` und `ctrl-m` (Rücktaste, Tab, Enter). Die Gruppe `terminal`
+  ist `x-project-scope = denied`: Ein Projekt-Profil darf die Taste weder
+  ändern noch abschalten (`a_cloned_project_cannot_take_the_detach_key`).
+- **Abhängen.** Der Tastenleser meldet die Taste, `close` schickt danach der
+  Befehl selbst; so kann das Ende des Stroms nie vor der Meldung ankommen. Der
+  Leser wartet nie auf den Kanal zum Daemon: Er füllt eine Warteschlange von
+  höchstens 1 MiB, die ein eigener Weiterreicher leert, und sieht die Taste
+  deshalb auch, wenn die Sitzung ihre Eingabe nicht liest. Abgeben, `close`
+  und das Ende des Stroms stehen zusammen unter einer Frist von zwei
+  Sekunden; dann gibt der Befehl das Terminal zurück und endet mit 0 und der
+  Zeile der Spezifikation auf `stderr`.
+- **`--read-only`** setzt an einem Terminal jetzt den Rohmodus, um die Taste zu
+  sehen; `Ctrl+C` ist dort ein Byte und hängt ebenfalls ab. An einer Pipe liest
+  er weiterhin nichts, mit `--detach-keys none` bleibt sein Terminal gewöhnlich.
+- **Tests am Terminal** (`daemon/bin/humanitl/tests/tty.rs`, Pseudoterminal und
+  Fake): `ctrl_a_d_detaches_and_gives_the_terminal_back` (Exit 0, `close` beim
+  Fake, kein `data`, Terminal gewöhnlich, zweites `attach` kommt an),
+  `ctrl_a_twice_reaches_the_agent`, `read_only_detaches_on_the_same_key`,
+  `detach_keys_none_forwards_ctrl_a_d`. Der Fake der Kommandozeilen-Tests
+  zeichnet dafür die Art jeder Terminal-Nachricht auf
+  (`FakeServer::terminal_inputs`), denn `close` und das Ende des Stroms
+  beantwortet er gleich.
+- **Mutationsbeweise.** Präfix immer weiterreichen: fünf der sechs Filtertests
+  und `ctrl_a_d_detaches_and_gives_the_terminal_back` rot. Präfix am Ende eines
+  Stücks sofort weiterreichen: `a_prefix_split_across_reads_still_detaches` und
+  `an_unknown_key_after_the_prefix_is_forwarded` rot. Kein `close` beim
+  Abhängen: `ctrl_a_d_detaches_and_gives_the_terminal_back` und
+  `read_only_detaches_on_the_same_key` rot. Nach dem Review: Leser wartet auf
+  das Weiterreichen, oder Abgeben und `close` ohne Frist:
+  `a_session_that_reads_nothing_still_lets_go` rot (Fake
+  `FakeServer::start_with_stalled_terminal`, 4 MiB eingefügt). `Ctrl+C` erst
+  nach dem Filter geprüft: `read_only_ctrl_c_detaches_even_as_the_prefix` rot.
+
 ## HUM-280 · The agent starts from a shell inside the sandbox (before HUM-060)
 
 ### Context
