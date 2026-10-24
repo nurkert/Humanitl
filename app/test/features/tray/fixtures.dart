@@ -3,13 +3,19 @@
 // Fixtures eines anderen Screens hängen.
 
 import 'dart:async';
+import 'dart:io' show Directory;
 
+import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:humanitl/app.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
+import 'package:humanitl/features/intercept/providers/coach_mark.dart';
 import 'package:humanitl/features/intercept/providers/now.dart';
+import 'package:humanitl/features/shell/providers/connection.dart';
 import 'package:humanitl/features/tray/desktop_ports.dart';
 import 'package:humanitl/features/tray/providers/attention.dart';
 
@@ -439,3 +445,55 @@ FlowDetail trayDetail(Flow flow) => FlowDetail(
     version: 'HTTP/1.1',
   ),
 );
+
+/// Ein Zustandsspeicher der Oberfläche in einem eigenen, frischen
+/// Verzeichnis (HUM-276), mit [initial] als Inhalt, wenn angegeben.
+///
+/// Zwei Aufbauten derselben App über demselben Speicher sind zwei Starts
+/// mit denselben Einstellungen; ein neuer Speicher ist eine frische
+/// Installation. Nie die Datei im Heimatverzeichnis des Menschen, der den
+/// Test laufen lässt (`test/harness/ui_state.dart`).
+UiStateFile trayUiState({Map<String, bool>? initial}) {
+  final Directory dir = Directory.systemTemp.createTempSync('humanitl-notice');
+  addTearDown(() => dir.deleteSync(recursive: true));
+  final UiStateFile store = UiStateFile('${dir.path}/${UiStateFile.fileName}');
+  for (final MapEntry<String, bool> entry
+      in (initial ?? const <String, bool>{}).entries) {
+    store.setBool(entry.key, entry.value);
+  }
+  return store;
+}
+
+/// Baut die ganze App über [desktop] und dem Speicher [uiState], im Fenster
+/// [size], und wartet, bis das Tray gestartet ist und seine Meldung
+/// abgegeben hat.
+///
+/// Jeder Aufruf ist ein eigener Start: ein eigener Container, also auch ein
+/// frisch gelesener Speicher.
+Future<ProviderContainer> pumpTrayShell(
+  WidgetTester tester, {
+  required FakeDesktop desktop,
+  required UiStateFile uiState,
+  Size size = const Size(1400, 900),
+}) async {
+  await tester.binding.setSurfaceSize(size);
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+  final ProviderContainer container = ProviderContainer(
+    overrides: <Override>[
+      uiStateFileProvider.overrideWithValue(uiState),
+      daemonClientProvider.overrideWithValue(FakeDaemonClient.empty()),
+      connectionHeartbeatProvider.overrideWithValue(null),
+      desktopPortsProvider.overrideWithValue(desktop.ports),
+      nowProvider.overrideWith(() => TrayFixedNow(DateTime.now())),
+    ],
+  );
+  addTearDown(container.dispose);
+  await tester.pumpWidget(
+    UncontrolledProviderScope(container: container, child: const HumanitlApp()),
+  );
+  await tester.pump();
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
+  await tester.pump();
+  return container;
+}
