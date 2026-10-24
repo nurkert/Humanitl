@@ -8,6 +8,7 @@ import '../tokens/tokens.dart';
 import '../tokens/typography.dart';
 import 'h_hairline.dart';
 import 'h_icon_button.dart';
+import 'h_pane_header.dart';
 
 /// A panel that slides in from the right: rule from request, history detail,
 /// isolation details.
@@ -104,12 +105,13 @@ class HSheet extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                      HSpace.panelPadding,
-                      HSpace.x2,
-                      HSpace.x2,
-                      HSpace.x2,
+                  // Dieselbe Kopfzeile wie jeder Pane daneben: Höhe und Linie
+                  // kommen aus dem Token, damit die Trennlinie über das Blatt
+                  // hinweg weiterläuft (HUM-286).
+                  HPaneHeader(
+                    padding: const EdgeInsetsDirectional.only(
+                      start: HSpace.panelPadding,
+                      end: HSpace.x2,
                     ),
                     child: Row(
                       children: <Widget>[
@@ -131,7 +133,6 @@ class HSheet extends StatelessWidget {
                       ],
                     ),
                   ),
-                  const HHairline(),
                   Expanded(
                     child: Padding(
                       padding: const EdgeInsets.all(HSpace.panelPadding),

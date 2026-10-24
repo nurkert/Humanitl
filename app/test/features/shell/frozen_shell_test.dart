@@ -66,6 +66,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl_ui/humanitl_ui.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
+import 'package:humanitl/core/ui/h_resizable_panes.dart';
 import 'package:humanitl/features/intercept/intercept_screen.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
 import 'package:humanitl/features/intercept/providers/now.dart';
@@ -154,8 +155,18 @@ DateTime uptimeClock(WidgetTester tester) => ProviderScope.containerOf(
 ).read(nowProvider);
 
 /// Der Fokusknoten, unter dem die Warteschlange liegt.
-FocusNode queueFocus(WidgetTester tester) =>
-    Focus.of(tester.element(find.byType(QueuePane)));
+///
+/// Gesucht über den Panes und nicht an der Queue selbst: Zwischen Pane und
+/// Screen liegt seit HUM-286 die `FocusTraversalGroup` der Panes, deren
+/// Knoten nie fokussiert wird und nur die Tab-Reihenfolge ordnet.
+FocusNode queueFocus(WidgetTester tester) => Focus.of(
+  tester.element(
+    find.ancestor(
+      of: find.byType(QueuePane),
+      matching: find.byType(HResizablePanes),
+    ),
+  ),
+);
 
 /// Baut die App, lässt das Skript bis zum ersten gehaltenen Flow laufen und
 /// gibt die Uhr zurück, die der Test stellt.

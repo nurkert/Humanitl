@@ -73,6 +73,25 @@ List<double> resolvePaneWidths(
   return widths;
 }
 
+/// [widths] with every seam on a whole pixel: the boundaries between panes are
+/// rounded, and each pane takes the difference, so the sum stays the same.
+///
+/// Eine Naht auf einem halben Pixel wäre eine Haarlinie, die über zwei
+/// Pixelspalten verschmiert und blasser aussieht als jede andere Linie des
+/// Systems (HUM-286).
+List<double> snapPaneWidths(List<double> widths) {
+  final List<double> snapped = <double>[];
+  double edge = 0;
+  double sum = 0;
+  for (int i = 0; i < widths.length; i++) {
+    sum += widths[i];
+    final double next = i == widths.length - 1 ? sum : sum.roundToDouble();
+    snapped.add(math.max(0, next - edge));
+    edge = next;
+  }
+  return snapped;
+}
+
 /// A row of panes separated by splitters the pointer can drag.
 ///
 /// The widget owns no state: [ratios] come in and [onRatiosChanged] reports
@@ -112,7 +131,9 @@ class HResizablePanes extends StatefulWidget {
   /// Width of the drag handle; a 1 px hairline sits in its middle.
   ///
   /// [HSize.splitter] by default; no literal, and odd on purpose so the
-  /// hairline lands on a whole pixel (`docs/UX.md` 2.1).
+  /// hairline lands on a whole pixel (`docs/UX.md` 2.1). The handle lies over
+  /// the seam and takes no width from the panes: between two panes there is
+  /// exactly one [HSize.border] (HUM-286).
   final double splitterWidth;
 
   /// Screen-reader label of every splitter, already localised.
@@ -156,34 +177,79 @@ class _HResizablePanesState extends State<HResizablePanes> {
     final int n = widget.children.length;
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
+        // Zwischen zwei Panes liegt genau eine Haarlinie und kein Streifen:
+        // Die Panes stoßen an die Naht, und der Griff liegt als
+        // unsichtbare Fläche über ihr, halb links, halb rechts. Ein Griff,
+        // der sich seine sieben Pixel aus der Zeile nähme, ließe neben jeder
+        // Naht einen Streifen im Hintergrund der Seite stehen; eine Leiste,
+        // die bündig an ihrem Pane enden soll, stünde dann eingerückt in
+        // ihm (HUM-286, `docs/UX.md` "Layout grid").
+        const double seam = HSize.border;
         final double available = math.max(
           0,
-          constraints.maxWidth - widget.splitterWidth * (n - 1),
+          constraints.maxWidth - seam * (n - 1),
         );
-        final List<double> widths = resolvePaneWidths(
-          available,
-          widget.ratios,
-          widget.minWidths,
+        final List<double> widths = snapPaneWidths(
+          resolvePaneWidths(available, widget.ratios, widget.minWidths),
         );
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            for (int i = 0; i < n; i++) ...<Widget>[
-              SizedBox(width: widths[i], child: widget.children[i]),
-              if (i < n - 1)
-                _Splitter(
+        final List<Widget> grips = <Widget>[];
+        double x = 0;
+        for (int i = 0; i < n - 1; i++) {
+          x += widths[i];
+          final int index = i;
+          grips.add(
+            Positioned(
+              top: 0,
+              bottom: 0,
+              left: x - (widget.splitterWidth - seam) / 2,
+              width: widget.splitterWidth,
+              child: FocusTraversalOrder(
+                order: NumericFocusOrder(2.0 * index + 1),
+                child: _Splitter(
                   width: widget.splitterWidth,
-                  active: _dragging == i,
-                  color: _dragging == i
+                  active: _dragging == index,
+                  color: _dragging == index
                       ? tokens.colors.accent
                       : tokens.colors.line,
                   semanticsLabel: widget.splitterSemanticsLabel,
-                  onStart: () => setState(() => _dragging = i),
-                  onUpdate: (double delta) => _drag(i, delta, available),
+                  onStart: () => setState(() => _dragging = index),
+                  onUpdate: (double delta) => _drag(index, delta, available),
                   onEnd: () => setState(() => _dragging = null),
                 ),
+              ),
+            ),
+          );
+          x += seam;
+        }
+        // Die Griffe liegen im Baum nach den Panes, damit sie über deren
+        // Rand den Zeiger bekommen. Die Tastatur geht trotzdem Pane,
+        // Splitter, Pane: Die Reihenfolge steht ausdrücklich da und nicht im
+        // Zufall der Geometrie; innerhalb eines Panes bleibt die Lesefolge
+        // (`docs/UX.md` 5.1).
+        return FocusTraversalGroup(
+          policy: OrderedTraversalPolicy(),
+          child: Stack(
+            children: <Widget>[
+              Positioned.fill(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    for (int i = 0; i < n; i++) ...<Widget>[
+                      SizedBox(
+                        width: widths[i],
+                        child: FocusTraversalOrder(
+                          order: NumericFocusOrder(2.0 * i),
+                          child: widget.children[i],
+                        ),
+                      ),
+                      if (i < n - 1) const SizedBox(width: seam),
+                    ],
+                  ],
+                ),
+              ),
+              ...grips,
             ],
-          ],
+          ),
         );
       },
     );
@@ -273,6 +339,10 @@ class _SplitterState extends State<_Splitter> {
                   // Kein Literal: die gezogene Linie ist doppelt so breit wie
                   // die ruhende Haarlinie (`docs/UX.md` 2.1).
                   width: marked ? HSize.splitterActive : HSize.hairline,
+                  // Die volle Höhe: Ohne sie bekäme die Linie im `Center`
+                  // die Höhe null und wäre nie zu sehen gewesen; die Naht
+                  // zeigten bis HUM-286 nur die Kanten der Panes daneben.
+                  height: double.infinity,
                   child: ColoredBox(color: widget.color),
                 ),
               ),
