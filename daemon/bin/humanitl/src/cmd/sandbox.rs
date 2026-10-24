@@ -40,7 +40,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::Arc;
 
-use humanitl_config::{Config, Env, Paths};
+use humanitl_config::{Config, Env, Paths, Resolved};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
@@ -48,7 +48,7 @@ use humanitl_sandbox::{
     AdapterRegistry, AgentContext, BwrapBackend, CheckResult, INTERRUPT_GRACE, LaunchInputs,
     MIN_BWRAP_VERSION, MountPolicy, Refusal, RefusalReason, RefusalReporting, Refusals,
     SANDBOX_SHELL, SandboxBackend, SandboxFile, SandboxHandle, SandboxProfile, SandboxView,
-    SessionContext, StdioMode, shell_line,
+    SessionContext, StdioMode, WorkDirSource, shell_line,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -163,8 +163,8 @@ struct Setup {
 
 /// `sandbox argv`: die Kommandozeile, ohne zu starten.
 fn argv(ctx: &Context, command: &[OsString]) -> Result<u8, Failure> {
-    let config = ctx.config()?.config;
-    let setup = prepare(ctx, &config, Wiring::Preview, command)?;
+    let resolved = ctx.config()?;
+    let setup = prepare(ctx, &resolved, Wiring::Preview, command)?;
     // Die Vorschau, nicht der Plan: feste Deskriptornummern, alles unter
     // `/work` als vorhanden. Der Plan legt Deskriptoren an und verlangt
     // Socket, CA und Shim; nichts davon braucht, wer nur nachsehen will.
@@ -199,7 +199,7 @@ async fn start(
     command: &[OsString],
     tests_dir: Option<&Path>,
 ) -> Result<u8, Failure> {
-    let config = ctx.config()?.config;
+    let resolved = ctx.config()?;
 
     // Schritt 1 der Spezifikation: ohne Daemon kein Lauf. Er hält den
     // Proxy-Socket und das CA-Bundle; ohne beides hätte der Agent in der
@@ -210,7 +210,7 @@ async fn start(
         .await
         .map_err(|status| Failure::new(status_diagnostic(&status, "GetInfo")))?;
 
-    let mut setup = prepare(ctx, &config, Wiring::Daemon, command)?;
+    let mut setup = prepare(ctx, &resolved, Wiring::Daemon, command)?;
     if let Some(dir) = tests_dir {
         let src = take_tests_placeholder(ctx, &mut setup.profile, dir)?;
         ctx.render
@@ -325,10 +325,10 @@ fn refusal_line(entry: &Refusal) -> String {
 
 /// `sandbox check`: eine kurzlebige Sandbox und die drei Garantien.
 fn check(ctx: &Context) -> Result<u8, Failure> {
-    let config = ctx.config()?.config;
+    let resolved = ctx.config()?;
     let command: Vec<OsString> = CHECK_COMMAND.iter().map(OsString::from).collect();
     let wiring = Wiring::Placeholder(Box::new(placeholder()?));
-    let setup = prepare(ctx, &config, wiring, &command)?;
+    let setup = prepare(ctx, &resolved, wiring, &command)?;
 
     // Gesammelt statt durchgereicht: was der Prüfbefehl sagt, gehört nicht in
     // die Tabelle.
@@ -592,10 +592,11 @@ fn exit_code_of(status: ExitStatus) -> u8 {
 /// Profil, Sitzung und Backend für einen Lauf.
 fn prepare(
     ctx: &Context,
-    config: &Config,
+    resolved: &Resolved,
     wiring: Wiring,
     command: &[OsString],
 ) -> Result<Setup, Failure> {
+    let config = &resolved.config;
     let paths = wiring.paths(ctx);
     let policy = MountPolicy::from_paths(&paths);
     let profile_path = profile_path(ctx, &config.sandbox.profile)?;
@@ -604,7 +605,16 @@ fn prepare(
         .detail(&format!("profile {}", profile_path.display()));
 
     let id = SessionId::new();
-    let work_src = wiring.work_dir(ctx, config);
+    let (work_src, work_source) = wiring.work_dir(ctx, resolved);
+    // Der gespeicherte Ordner, `--work` für diesen Aufruf, sonst das aktuelle
+    // Verzeichnis (HUM-293), und vor dem Plan geprüft: Der Plan des Backends
+    // stellt dieselben Fragen, kennt aber die Quelle nicht, und der Befund
+    // soll sagen, woher der Pfad kam. Die Vorschau startet nichts und prüft
+    // deshalb nicht.
+    if matches!(wiring, Wiring::Daemon) {
+        humanitl_sandbox::check_project_dir(&policy, &work_src, &work_source)
+            .map_err(Failure::new)?;
+    }
     // Der Beitrag des Agent-Adapters gilt dem Agenten, und zwar am wirksamen
     // Kommando: `sandbox run -- /bin/sh` (so laufen die Escape-Tests) ist keiner
     // und bekommt nichts, `sandbox run -- opencode` ist einer und bekommt
@@ -895,17 +905,13 @@ impl Wiring {
         }
     }
 
-    /// Das Verzeichnis, das als `/work` eingehängt wird.
-    fn work_dir(&self, ctx: &Context, config: &Config) -> PathBuf {
+    /// Das Verzeichnis, das als `/work` eingehängt wird, und woher es kommt.
+    fn work_dir(&self, ctx: &Context, resolved: &Resolved) -> (PathBuf, WorkDirSource) {
         if let Self::Placeholder(placeholder) = self {
             // Ein Selbsttest fasst das Projekt des Nutzers nicht an.
-            return placeholder.dir.path().join("work");
+            return (placeholder.dir.path().join("work"), WorkDirSource::Request);
         }
-        config
-            .sandbox
-            .work_dir
-            .clone()
-            .unwrap_or_else(|| ctx.cwd.clone())
+        ctx.work_dir(resolved)
     }
 }
 

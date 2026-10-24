@@ -240,7 +240,7 @@ void main() {
     final SandboxStatusNotifier sandbox = opened.read(
       sandboxStatusProvider.notifier,
     );
-    await sandbox.plan(workDir: started.project);
+    await sandbox.chooseWorkDir(started.project);
 
     // **Gemessen wird die Zeit bis `running`, nicht die Dauer des Aufrufs.**
     // `start()` läuft, bis der Strom des Daemons endet; das ist die Lebenszeit

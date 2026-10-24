@@ -108,6 +108,7 @@ mod pinned;
 pub mod profile;
 pub mod refusals;
 pub mod summary;
+pub mod work_dir;
 pub mod worktree;
 
 pub use crate::agent::{
@@ -156,6 +157,10 @@ pub use crate::refusals::{
 pub use crate::summary::{
     ChangeKind, FileChangeRecord, SCAN_MAX_BYTES, SessionSummary, SummaryFinding, SymlinkEscape,
     executable_on_host, looks_like_text,
+};
+pub use crate::work_dir::{
+    CHOOSE_PROJECT_FOLDER, WORK_DIR_KEY, WorkDirSource, check_project_dir, choose_folder_fix,
+    work_dir_refused,
 };
 pub use crate::worktree::{
     Entry, FileChange, Kind, Resolution, SnapshotLimits, TreeSnapshot, diff, escapes, open_beneath,

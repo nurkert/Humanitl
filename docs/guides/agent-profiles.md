@@ -115,8 +115,11 @@ of known profiles. A file that exists but does not load counts as present: a
 broken profile stops the start instead of vanishing silently.
 
 The project directory is `sandbox.work_dir`, else the current directory. The
-key is locked at the project layer, so a project profile cannot decide where it
-is looked for.
+folder chosen in Setup or Settings is stored there, in `config.toml`, so the
+app, the desktop launcher, `humanitl run` and `humanitl sandbox run` all start
+in the same folder; `--work DIR` overrides it for one call and is not stored
+(HUM-293). The key is locked at the project layer, so a project profile cannot
+decide where it is looked for.
 
 ### What a project profile may not do
 

@@ -938,6 +938,10 @@ message SandboxRequest {
     // Pfad setzen duerfte, koennte die Einhaengeflaeche der Sandbox und den
     // Prozess darin bestimmen.
     repeated CliOverride cli_overrides = 7;
+    // Woher der Client `work_dir` hat (HUM-293). Der Daemon nennt die Quelle
+    // in jedem `SANDBOX_006` ueber dieses Verzeichnis; ohne Angabe heisst sie
+    // "the work_dir of the request". Leer bei leerem `work_dir`.
+    WorkDirSource work_dir_source = 8;
   }
 
   // Ein Konfigurationswert, den der Client fuer diese Sitzung setzt.
@@ -957,7 +961,33 @@ message SandboxRequest {
     string work_dir = 2;
     // `ro` oder `rw`.
     string work_mode = 3;
+    // Wie `Start.work_dir_source` (HUM-293).
+    WorkDirSource work_dir_source = 4;
   }
+}
+
+// Woher ein Projektverzeichnis kommt, das ein Client in `work_dir` schickt
+// (HUM-293). Die Angabe aendert keine Pruefung und keine Einhaengung; sie
+// steht nur im Satz eines `SANDBOX_006`, damit der Mensch an der richtigen
+// Stelle nachsieht und nicht in einer `config.toml`, in der nichts steht.
+message WorkDirSource {
+  enum Kind {
+    // Keine Angabe: ein Client vor HUM-293.
+    KIND_UNSPECIFIED = 0;
+    // `--work` (`--sandbox-work-dir`) auf der Kommandozeile.
+    KIND_FLAG = 1;
+    // Das aktuelle Verzeichnis des Clients, weil nichts gesetzt ist.
+    KIND_CURRENT_DIRECTORY = 2;
+    // `sandbox.work_dir` in einer Konfigurationsdatei; `detail` ist ihr Pfad.
+    KIND_CONFIG_FILE = 3;
+    // Eine Umgebungsvariable; `detail` ist ihr Name.
+    KIND_ENVIRONMENT = 4;
+    // `sandbox.work_dir` in einem Profil; `detail` ist sein Name.
+    KIND_PROFILE = 5;
+  }
+  Kind kind = 1;
+  // Pfad, Variablenname oder Profilname, je nach `kind`; sonst leer.
+  string detail = 2;
 }
 
 // Wie ein Pfad in der Sandbox eingehaengt ist. Die Mode-Angabe kommt aus der

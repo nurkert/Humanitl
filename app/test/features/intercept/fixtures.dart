@@ -301,18 +301,12 @@ class TestDaemonClient implements DaemonClient {
   );
 
   @override
-  Stream<SandboxUpdate> planSandbox({
-    String? profile,
-    String? workDir,
-    WorkMode? workMode,
-  }) => const Stream<SandboxUpdate>.empty();
+  Stream<SandboxUpdate> planSandbox({String? profile, WorkMode? workMode}) =>
+      const Stream<SandboxUpdate>.empty();
 
   @override
-  Stream<SandboxUpdate> startSandbox({
-    String? profile,
-    String? workDir,
-    WorkMode? workMode,
-  }) => const Stream<SandboxUpdate>.empty();
+  Stream<SandboxUpdate> startSandbox({String? profile, WorkMode? workMode}) =>
+      const Stream<SandboxUpdate>.empty();
 
   @override
   Stream<SandboxUpdate> stopSandbox() => const Stream<SandboxUpdate>.empty();

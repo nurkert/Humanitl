@@ -5629,3 +5629,141 @@ fn doctor_gives_a_woken_daemon_the_time_of_the_wake_up() {
         "a slow first start counts as a silent socket: {line}"
     );
 }
+
+// --- HUM-293: ein Projektordner, einmal gewählt --------------------------
+
+/// Schreibt `sandbox.work_dir` in die `config.toml` dieser Umgebung, wie die
+/// Oberfläche es mit `SetConfig` tut, und liefert den Text der Datei.
+fn store_work_dir(harness: &Harness, dir: &Path) -> String {
+    let file = harness.path("config/humanitl/config.toml");
+    let text = format!("[sandbox]\nwork_dir = {:?}\n", dir.display().to_string());
+    std::fs::write(&file, &text).expect("config.toml is written");
+    text
+}
+
+/// `sandbox argv` aus diesem Verzeichnis, mit diesen Argumenten davor.
+fn argv_from(harness: &Harness, cwd: &Path, flags: &[&str]) -> Output {
+    harness
+        .command()
+        .current_dir(cwd)
+        .args(flags)
+        .args(["sandbox", "argv"])
+        .output()
+        .expect("the binary runs")
+}
+
+/// Ob die Kommandozeile `dir` als `/work` einhängt.
+fn mounts_as_work(output: &Output, dir: &Path) -> bool {
+    let parts = shlex::split(stdout(output).trim()).expect("one shell command");
+    parts
+        .windows(2)
+        .any(|pair| pair[0] == dir.display().to_string() && pair[1] == "/work")
+}
+
+/// Nach einer Wahl im Setup läuft `humanitl sandbox run` aus `~` in dem
+/// gewählten Ordner (HUM-293, Akzeptanzkriterium 1): Der gespeicherte Ordner
+/// gilt, nicht das aktuelle Verzeichnis.
+#[test]
+fn a_stored_project_folder_is_used_from_another_directory() {
+    let harness = Harness::new();
+    let thesis = harness.path("home/Documents/Masterthesis");
+    std::fs::create_dir_all(&thesis).expect("the project");
+    store_work_dir(&harness, &thesis);
+
+    let output = argv_from(&harness, &harness.path("home"), &[]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(mounts_as_work(&output, &thesis), "{}", stdout(&output));
+    assert!(
+        !mounts_as_work(&output, &harness.path("home")),
+        "{}",
+        stdout(&output)
+    );
+}
+
+/// `--work` gilt für einen Aufruf und wird nicht geschrieben (HUM-293).
+#[test]
+fn work_overrides_the_stored_folder_without_writing_it() {
+    let harness = Harness::new();
+    let thesis = harness.path("home/Documents/Masterthesis");
+    let other = harness.path("home/other");
+    std::fs::create_dir_all(&thesis).expect("the project");
+    std::fs::create_dir_all(&other).expect("another project");
+    let before = store_work_dir(&harness, &thesis);
+
+    let flag = other.display().to_string();
+    let output = argv_from(&harness, &harness.path("home"), &["--work", &flag]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(mounts_as_work(&output, &other), "{}", stdout(&output));
+    assert_eq!(
+        std::fs::read_to_string(harness.path("config/humanitl/config.toml")).expect("config.toml"),
+        before,
+        "--work is not stored"
+    );
+
+    let again = argv_from(&harness, &harness.path("home"), &[]);
+    assert!(mounts_as_work(&again, &thesis), "{}", stdout(&again));
+}
+
+/// Ohne gespeicherten Ordner gilt das aktuelle Verzeichnis, und ein
+/// abgelehntes sagt genau das (HUM-293, Akzeptanzkriterium 2): kein
+/// `sandbox.work_dir` für einen Pfad, der in keiner Datei steht, und als
+/// Abhilfe zuerst der Weg, einen Ordner zu wählen.
+#[test]
+fn a_refused_current_directory_is_named_as_such() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let _socket = harness.wire_daemon_files();
+
+    let cwd = harness.path("work");
+    let used = argv_from(&harness, &cwd, &[]);
+    assert!(mounts_as_work(&used, &cwd), "{}", stdout(&used));
+
+    let output = harness
+        .command()
+        .current_dir(harness.path("home"))
+        .args(["sandbox", "run", "--", "sh", "-c", "exit 0"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("[SANDBOX_006]"), "{text}");
+    assert!(text.contains("from the current directory"), "{text}");
+    assert!(!text.contains("sandbox.work_dir names"), "{text}");
+    assert!(
+        text.contains("choose a project folder: humanitl config set sandbox.work_dir <dir>"),
+        "{text}"
+    );
+
+    let json = harness
+        .command()
+        .current_dir(harness.path("home"))
+        .args(["--json", "sandbox", "run", "--", "sh", "-c", "exit 0"])
+        .output()
+        .expect("the binary runs");
+    let value = json_of(&json);
+    assert_eq!(value["code"], "SANDBOX_006", "{value}");
+    assert_eq!(
+        value["fix"]["command"],
+        "choose a project folder: humanitl config set sandbox.work_dir <dir>",
+        "{value}"
+    );
+}
+
+/// Ein gespeicherter Ordner, den der Start ablehnt, nennt die Datei, in der
+/// er steht (HUM-293).
+#[test]
+fn a_refused_stored_folder_names_its_file() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let _socket = harness.wire_daemon_files();
+    store_work_dir(&harness, &harness.path("home"));
+
+    let output = harness.run(["sandbox", "run", "--", "sh", "-c", "exit 0"]);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    let text = stderr(&output);
+    let file = harness.path("config/humanitl/config.toml");
+    assert!(
+        text.contains(&format!("from sandbox.work_dir in {}", file.display())),
+        "{text}"
+    );
+}

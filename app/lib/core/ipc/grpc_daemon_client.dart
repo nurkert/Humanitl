@@ -305,24 +305,16 @@ class GrpcDaemonClient implements DaemonClient {
       _sandbox(pb.SandboxRequest()..status = Empty());
 
   @override
-  Stream<SandboxUpdate> planSandbox({
-    String? profile,
-    String? workDir,
-    WorkMode? workMode,
-  }) => _sandbox(pb.SandboxRequest()..plan = _plan(profile, workDir, workMode));
+  Stream<SandboxUpdate> planSandbox({String? profile, WorkMode? workMode}) =>
+      _sandbox(pb.SandboxRequest()..plan = _plan(profile, workMode));
 
   @override
-  Stream<SandboxUpdate> startSandbox({
-    String? profile,
-    String? workDir,
-    WorkMode? workMode,
-  }) {
-    final pb.SandboxRequest_Plan plan = _plan(profile, workDir, workMode);
+  Stream<SandboxUpdate> startSandbox({String? profile, WorkMode? workMode}) {
+    final pb.SandboxRequest_Plan plan = _plan(profile, workMode);
     return _sandbox(
       pb.SandboxRequest()
         ..start = (pb.SandboxRequest_Start()
           ..profile = plan.profile
-          ..workDir = plan.workDir
           ..workMode = plan.workMode),
     );
   }
@@ -336,15 +328,12 @@ class GrpcDaemonClient implements DaemonClient {
       _sandbox(pb.SandboxRequest()..isolationCheck = Empty());
 
   /// The wish of the caller; an argument left out stays empty, and the daemon
-  /// reads empty as "keep what you have".
-  pb.SandboxRequest_Plan _plan(
-    String? profile,
-    String? workDir,
-    WorkMode? workMode,
-  ) => pb.SandboxRequest_Plan()
-    ..profile = profile ?? ''
-    ..workDir = workDir ?? ''
-    ..workMode = workMode?.wire ?? '';
+  /// reads empty as "keep what you have". `work_dir` stays empty for good:
+  /// the daemon takes the stored `sandbox.work_dir` (HUM-293).
+  pb.SandboxRequest_Plan _plan(String? profile, WorkMode? workMode) =>
+      pb.SandboxRequest_Plan()
+        ..profile = profile ?? ''
+        ..workMode = workMode?.wire ?? '';
 
   /// One `Sandbox` call, translated event by event.
   ///

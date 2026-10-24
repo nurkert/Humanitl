@@ -79,7 +79,7 @@ class SandboxHeader extends ConsumerWidget {
                       ? l10n.sandboxWorkDirLocked
                       : null,
                   onPick: (String dir) => unawaited(
-                    ref.read(sandboxStatusProvider.notifier).plan(workDir: dir),
+                    ref.read(sandboxStatusProvider.notifier).chooseWorkDir(dir),
                   ),
                   onMode: (WorkMode mode) => unawaited(
                     ref

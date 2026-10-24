@@ -13,6 +13,7 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/ipc/client_providers.dart';
+import '../../../core/ipc/config_providers.dart';
 import '../../../core/ipc/daemon_client.dart';
 
 part 'sandbox_status_provider.g.dart';
@@ -76,18 +77,86 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     }
   }
 
-  /// Asks what a start with [workDir] and [workMode] would mount, without
-  /// starting anything.
+  /// Asks what a start with the stored folder and [workMode] would mount,
+  /// without starting anything.
   ///
-  /// This is the whole of the project directory picker: the person chooses a
-  /// directory, the daemon answers with the mounts, the environment and the
-  /// command line that directory produces, and the screen shows that answer.
-  /// Nothing is computed here (ADR-018).
-  Future<void> plan({String? workDir, WorkMode? workMode}) => _apply(
-    (DaemonClient client) =>
-        client.planSandbox(workDir: workDir, workMode: workMode),
+  /// The daemon answers with the mounts, the environment and the command line
+  /// and the screen shows that answer. Nothing is computed here (ADR-018).
+  Future<void> plan({WorkMode? workMode}) => _apply(
+    (DaemonClient client) => client.planSandbox(workMode: workMode),
     call: SandboxCall.plan,
   );
+
+  /// Stores [workDir] as the project folder and asks what a start with it
+  /// would mount (HUM-293).
+  ///
+  /// This is the whole of the project folder picker in setup and on the
+  /// sandbox screen. The folder goes into `sandbox.work_dir` through
+  /// `SetConfig`, the one place the daemon, the desktop launcher and
+  /// `humanitl sandbox run` read it from; the daemon checks it before it
+  /// writes. A folder it refuses is not stored: its `SANDBOX_006` stands
+  /// under the folder control as the finding of a plan would, and the
+  /// snapshot keeps the folder that was stored before. A running sandbox
+  /// keeps its folder; the new one applies to the next start.
+  ///
+  /// The writes go out one after the other, in the order the folders were
+  /// picked, so the latest choice is also the last write to `config.toml`.
+  /// Only the latest choice writes the snapshot: a refusal of an older one,
+  /// or a late event of its plan, must not cover a newer one. Only
+  /// `SetConfig` itself can refuse; a configuration that cannot be read
+  /// again afterwards is not a refusal, and the plan runs anyway.
+  Future<void> chooseWorkDir(String workDir) async {
+    final int mine = ++_chooses;
+    final Future<Diagnostic?> stored = _chooseChain.then(
+      (_) => _store(workDir),
+    );
+    _chooseChain = stored.then((_) {}, onError: (Object _) {});
+    final Diagnostic? refusal = await stored;
+    if (mine != _chooses) {
+      return;
+    }
+    if (refusal != null) {
+      final SandboxStatus current = state.value ?? const SandboxStatus();
+      ref.read(sandboxCallProvider.notifier).record(SandboxCall.plan);
+      state = AsyncData<SandboxStatus>(
+        current.copyWith(diagnostics: <Diagnostic>[refusal]),
+      );
+      return;
+    }
+    // Stored. The form reads the file again; whether that works says nothing
+    // about the folder.
+    try {
+      await ref.read(configProvider.notifier).refresh();
+    } on Object {
+      // The settings show their own state of the configuration.
+    }
+    if (mine != _chooses) {
+      return;
+    }
+    await _apply(
+      (DaemonClient client) => client.planSandbox(),
+      call: SandboxCall.plan,
+      choice: mine,
+    );
+  }
+
+  /// `SetConfig` for [workDir]; the refusal of the daemon, or null.
+  Future<Diagnostic?> _store(String workDir) async {
+    try {
+      await ref
+          .read(daemonClientProvider)
+          .setConfig(FormKeys.sandboxWorkDir, workDir);
+      return null;
+    } on DaemonException catch (error) {
+      return error.diagnostic;
+    }
+  }
+
+  /// Counts the calls of [chooseWorkDir]; the latest one owns the snapshot.
+  int _chooses = 0;
+
+  /// The write of the choice before, which the next one waits for.
+  Future<void> _chooseChain = Future<void>.value();
 
   /// Starts the sandbox. Every event of the start updates the snapshot as it
   /// arrives, so `starting` is on the screen before `running` is.
@@ -127,7 +196,11 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     Stream<SandboxUpdate> Function(DaemonClient) request, {
     required SandboxCall call,
     bool clearDiagnostics = true,
+    int? choice,
   }) async {
+    // A plan of a folder choice counts only while no newer choice exists
+    // (HUM-293); its late events would show the older folder.
+    bool superseded() => choice != null && choice != _chooses;
     final DaemonClient client = ref.read(daemonClientProvider);
     SandboxStatus current = state.value ?? const SandboxStatus();
     // A new operation starts without the findings of the last one: a
@@ -138,11 +211,16 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     }
     try {
       await for (final SandboxUpdate update in request(client)) {
+        if (superseded()) {
+          return;
+        }
         current = _fold(current, update, call);
         state = AsyncData<SandboxStatus>(current);
       }
     } on DaemonException catch (error, stack) {
-      state = AsyncError<SandboxStatus>(error, stack);
+      if (!superseded()) {
+        state = AsyncError<SandboxStatus>(error, stack);
+      }
     }
   }
 
