@@ -197,7 +197,7 @@ Today the scale collapses to 11/12/13: `ui20` stands only on placeholders, `ui14
 - **Measure at most 90 monospace characters** — for running text and for single-line URL and path fields. Surplus pane width becomes gutter, never line length. At 2560 px a URL would otherwise run over 137 characters, and the eye searches for the start of the next line.
 - **Code, hex and tables never wrap.** Raw body, hex view and the History table scroll horizontally and get no measure. A wrap there produces visual lines that shift the byte offsets of the findings (HUM-030, pitfall "wrap off"); a misplaced finding is worse than a long line.
 - Panes 28/44/28 up to 1800 px window width. Above that the inspector freezes at measure plus gutter, queue and context take the rest. Below 1280 px the context pane collapses and is reachable via `Ctrl+D`.
-- The seam between two panes belongs to the splitter. A pane draws neither a left nor a right border; today every seam has two hairlines 3 px apart.
+- The seam between two panes belongs to the splitter. A pane draws neither a left nor a right border; between two panes there is exactly one hairline, and the grip of the splitter lies invisibly over it (3.7).
 - A screen shows one empty state, not one per pane. As long as the main pane is empty, the side panes stay quiet.
 
 The measure is given as a character count, not as a pixel width, because the width depends on the installed font. For whoever calculates anyway: JetBrains Mono and every fallback of the chain run at about 0.6 em advance, so about 700 px at `mono13` and about 650 px at `mono12`; `queue_row.dart` calculates with 7.3 px per character at 12 px. These numbers are illustration; the character count is normative (section 9).
@@ -293,6 +293,25 @@ Humanitl is the barrier at which the traffic stops. Its sign is a yellow-and-bla
 **Reduced motion** (2.10): the stripes stand still, the tape stays. The path is dropped, the statement stays.
 
 **Tests and goldens** stop the tape via `HCautionTape.debugFreeze`, set in `app/test/flutter_test_config.dart`; an endless tape would otherwise run into every time limit of `pumpAndSettle`, and a golden shows it as a still image at phase zero.
+
+
+### 3.7 Layout grid
+
+One grid for the whole shell (HUM-286). Each surface used to invent its own geometry: the settings sheet header was taller than the queue header beside it, the action bar sat inset in a box of its own, the active rail item kept a gap to the line above it, and the rules list drew a second line a few pixels under the toolbar. The rules below are the reason none of that can come back.
+
+**Rows.** Under the window header (`headerBar`, 40 px) every pane starts on the same line. The first row is the pane header, `paneHeaderHeight` (48 px) high, its bottom border included. Queue, request card, context pane, editor, History, Rules, Sandbox and every side sheet (settings, rule from request, history detail, audit record, command line) use it. The rail has the same row: its entries are `railItemHeight` (48 px, equal to the header) high and start directly under the window header, so "Intercept" in the rail and "Queue" in the pane stand on one line.
+
+**One widget, one height.** A pane header is `HPaneHeader` and nothing else. It sets the height from the token and centres its content vertically; it has horizontal padding (12 px) and no vertical padding. A header that reached its height through padding of its own would change with the font, and the line under it would no longer continue into the header next door. The height is fixed, and it follows the text scale once for everybody: `HPaneHeader.rowHeight` scales the token with the ambient text scaler (clamped to 1 to 2, rounded to a whole pixel), every header and every rail entry takes that one value, and content that does not fit is clipped rather than pushing its line out of the row. A two-line URL in the request card fits at every scale up to twice. The divider under the header is part of it; in the queue that is the caution tape or, without one, the hairline in the same 4 px (3.6).
+
+**Borders.** Every border and divider is `borderWidth` (1 px, the hairline). Two adjacent regions share one divider, and it belongs to the upper one (or, side by side, to the splitter). What stands below a header starts directly under its line and draws no top border of its own; a nested container never adds a line on top of the line it already stands under. A block that has a separator above it drops it when it moves to the top of its list (the bundled rules under the Rules header).
+
+**Highlights and bars are flush.** The active rail item fills its whole row edge to edge, fill and accent mark from the line above to the next item, without a margin. The action bar of the inspector is a footer of its pane: full width from seam to seam, down to the status bar, separated from the card by one border, with no inner card and no inset. The seams between panes are one hairline, never a strip of background beside a line (3.2).
+
+**Sheets hang between the bars.** A side sheet starts under the window header and ends at the status bar, like a pane; its header is the same `HPaneHeader`, so the divider continues across the window when the sheet is open. A screen mounts its sheet at its own top, never inside a region below its header (the narrow rule editor of Rules is mounted by the screen, not by the list).
+
+**Views without a header.** Setup and Audit open with content, not with a pane header (a document and a status card). They start with the panel padding under the window header. When one of them gets a header, it is an `HPaneHeader`.
+
+**Checked by** `app/test/features/shell/layout_grid_test.dart`: in Intercept (with and without the settings sheet), History, Rules and Sandbox, at text scale 1 and 2, every visible pane header starts under the window header and ends on the same line, and the active rail item fills its row; the settings sheet, the narrow rule editor sheet and the sandbox command sheet start under the window header and their header line continues the one beside them. Between two panes, Tab goes pane, splitter, pane (`app/test/core/ui/design_system_test.dart`).
 
 ---
 

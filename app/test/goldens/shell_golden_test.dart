@@ -2,7 +2,9 @@
 // `flutter test --update-goldens test/goldens`.
 
 import 'package:alchemist/alchemist.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:humanitl/app.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
@@ -51,4 +53,29 @@ void main() {
     constraints: window,
     builder: () => shell(HThemeMode.light),
   );
+
+  // Das offene Einstellungsblatt neben der Queue (HUM-286): Die Kopfzeile des
+  // Blatts endet auf derselben Linie wie die der Queue, und das Blatt hängt
+  // zwischen Kopf- und Statusleiste.
+  for (final HThemeMode mode in <HThemeMode>[
+    HThemeMode.dark,
+    HThemeMode.light,
+  ]) {
+    goldenTest(
+      'shell_settings_${mode.name}',
+      fileName: 'shell_settings_${mode.name}',
+      constraints: window,
+      pumpBeforeTest: _openSettings,
+      builder: () => shell(mode),
+    );
+  }
+}
+
+/// Öffnet das Blatt mit `Ctrl+,`, wie es ein Mensch täte.
+Future<void> _openSettings(WidgetTester tester) async {
+  await tester.pumpAndSettle();
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+  await tester.sendKeyEvent(LogicalKeyboardKey.comma);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  await tester.pumpAndSettle();
 }

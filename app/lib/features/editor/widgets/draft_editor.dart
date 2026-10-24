@@ -209,11 +209,9 @@ class DraftEditorState extends State<DraftEditor> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: tokens.spacing.x3,
-            vertical: tokens.spacing.x2,
-          ),
+        // Kopfzeile mit Höhe und Linie aus dem Token, auf einer Höhe mit der
+        // des Originals daneben (HUM-286).
+        HPaneHeader(
           child: Align(
             alignment: Alignment.centerLeft,
             child: HSegmented<DraftTab>(
@@ -230,7 +228,6 @@ class DraftEditorState extends State<DraftEditor> {
             ),
           ),
         ),
-        const HHairline(),
         Expanded(child: _pane(tokens)),
       ],
     );

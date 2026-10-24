@@ -250,7 +250,17 @@ class _RulesListState extends ConsumerState<RulesList> {
             },
           ),
           if (chain.bundled.isNotEmpty) ...<Widget>[
-            const SliverToBoxAdapter(child: _BundledHeader()),
+            SliverToBoxAdapter(
+              // Steht der Block ganz oben, trägt die Kopfzeile des Screens
+              // schon die Linie darüber; eine zweite, ein paar Pixel tiefer,
+              // wäre die doppelte Kante aus HUM-286.
+              child: _BundledHeader(
+                first:
+                    chain.rules.isEmpty &&
+                    !(!canReorder && _refusedUnder == query) &&
+                    !(tab == RuleTab.saved && chain.otherTab > 0),
+              ),
+            ),
             SliverList.builder(
               itemCount: chain.bundled.length,
               itemBuilder: (BuildContext context, int index) {
@@ -366,18 +376,22 @@ class _ChainNote extends StatelessWidget {
 /// The separator above the bundled block, with the reason it cannot be
 /// touched and the way around it.
 class _BundledHeader extends StatelessWidget {
-  const _BundledHeader();
+  const _BundledHeader({required this.first});
+
+  /// True when nothing stands above the block in the list: the divider above
+  /// it is then the one under the screen header, and the block draws none.
+  final bool first;
 
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     return Padding(
-      padding: EdgeInsets.only(top: tokens.spacing.x3),
+      padding: EdgeInsets.only(top: first ? 0 : tokens.spacing.x3),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          const HHairline(),
+          if (!first) const HHairline(),
           Padding(
             padding: EdgeInsets.fromLTRB(
               tokens.spacing.x3,

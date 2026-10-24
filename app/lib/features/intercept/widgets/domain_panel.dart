@@ -42,33 +42,42 @@ class DomainPanel extends ConsumerWidget {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final Flow? flow = this.flow;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: tokens.colors.bg1,
-        border: Border(left: BorderSide(color: tokens.colors.line)),
-      ),
-      // Das Pane scrollt: Bei doppelter Textskalierung ist sein Inhalt höher
-      // als jedes Fenster, und eine Spalte, die überläuft, verschluckt den Rest
-      // schweigend (`docs/UX.md` 6).
-      child: SingleChildScrollView(
-        padding: EdgeInsets.all(tokens.spacing.x3),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Text(
+    // Keine Kante links: Die Naht gehört dem Splitter. Der Titel ist die
+    // Kopfzeile des Panes und steht in derselben Reihe wie die der Queue und
+    // der Karte (HUM-286, `docs/UX.md` "Layout grid").
+    return ColoredBox(
+      color: tokens.colors.bg1,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          HPaneHeader(
+            key: const Key('intercept-domain-header'),
+            child: Text(
               l10n.interceptDomainTitle,
               style: tokens.typography.ui13.semibold.tinted(tokens.colors.fg0),
             ),
-            SizedBox(height: tokens.spacing.x3),
-            if (flow == null)
-              const _SessionSummary()
-            else ...<Widget>[
-              _CardFor(flow: flow),
-              SizedBox(height: tokens.spacing.x4),
-              _QuickRules(flow: flow),
-            ],
-          ],
-        ),
+          ),
+          // Das Pane scrollt: Bei doppelter Textskalierung ist sein Inhalt
+          // höher als jedes Fenster, und eine Spalte, die überläuft,
+          // verschluckt den Rest schweigend (`docs/UX.md` 6).
+          Expanded(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.all(tokens.spacing.x3),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  if (flow == null)
+                    const _SessionSummary()
+                  else ...<Widget>[
+                    _CardFor(flow: flow),
+                    SizedBox(height: tokens.spacing.x4),
+                    _QuickRules(flow: flow),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

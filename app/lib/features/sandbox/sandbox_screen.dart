@@ -108,7 +108,6 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
                     SandboxHeader(status: status, onAskStop: _askStop),
-                    const HHairline(),
                     // Befunde stehen oben, wo sie entstanden sind, und sie
                     // nehmen dem Bildschirm nicht den Boden weg: Über einem
                     // Drittel der Höhe rollt der Block in sich. Ohne diese

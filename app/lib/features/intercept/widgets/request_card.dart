@@ -52,6 +52,23 @@ class RequestCard extends ConsumerWidget {
         : flow.visualState;
     final HttpRequest? request = detail.value?.request;
     final RecorderOutage? outage = ref.watch(recorderHealthProvider);
+    final List<Widget> notices = <Widget>[
+      if (flow.decision != null) _CardBanner(flow: flow),
+      // Während einer Störung der Aufzeichnung trägt jede Karte, deren
+      // Anfrage oder Entscheidung jetzt nicht aufgezeichnet wird, den
+      // Hinweis: jede gehaltene und jede, die seit Beginn der Störung kam
+      // (HUM-250). Er geht mit `RECORDER_005`.
+      if (outage != null &&
+          (flow.isHeld || !flow.receivedAt.isBefore(outage.since)))
+        const _NotRecordedNotice(),
+      if (flow.decision == DecisionKind.timedOut) _TimeoutRule(flow: flow),
+      if (request != null && requestOpensWebSocket(request.headers))
+        _WebSocketNotice(flow: flow),
+      if (flow.isHeld &&
+          detail.value != null &&
+          !requestIsReadable(detail.value))
+        const _UnreadableNotice(),
+    ];
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
@@ -60,27 +77,26 @@ class RequestCard extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              Padding(
-                padding: EdgeInsets.all(tokens.spacing.x3),
+              // Die Kopfzeile des Panes (HUM-286): Ihre Höhe ist das Token,
+              // ihre Linie die untere Kante, in derselben Reihe wie die der
+              // Queue und des Kontext-Panes.
+              HPaneHeader(
+                key: const Key('intercept-card-header'),
                 child: _CardHeader(flow: flow),
               ),
-              _CardBanner(flow: flow),
-              // Während einer Störung der Aufzeichnung trägt jede Karte, deren
-              // Anfrage oder Entscheidung jetzt nicht aufgezeichnet wird, den
-              // Hinweis: jede gehaltene und jede, die seit Beginn der Störung
-              // kam (HUM-250). Er geht mit `RECORDER_005`.
-              if (outage != null &&
-                  (flow.isHeld || !flow.receivedAt.isBefore(outage.since)))
-                const _NotRecordedNotice(),
-              if (flow.decision == DecisionKind.timedOut)
-                _TimeoutRule(flow: flow),
-              if (request != null && requestOpensWebSocket(request.headers))
-                _WebSocketNotice(flow: flow),
-              if (flow.isHeld &&
-                  detail.value != null &&
-                  !requestIsReadable(detail.value))
-                const _UnreadableNotice(),
-              const HHairline(),
+              // Die Hinweise stehen zwischen Kopf und Abschnitten und bringen
+              // ihre Linie darunter nur mit, wenn es sie gibt: zwei Linien
+              // übereinander wären eine zu viel ("Layout grid").
+              if (notices.isNotEmpty) ...<Widget>[
+                Padding(
+                  padding: EdgeInsets.only(top: tokens.spacing.x3),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: notices,
+                  ),
+                ),
+                const HHairline(),
+              ],
               Expanded(
                 child: SingleChildScrollView(
                   padding: EdgeInsets.symmetric(

@@ -231,6 +231,9 @@ void _sizes(StringBuffer out) {
     <List<String>>[
       <String>['`headerBar`', _px(s.headerBar)],
       <String>['`statusBar`', _px(s.statusBar)],
+      <String>['`paneHeaderHeight`', _px(s.paneHeaderHeight)],
+      <String>['`railItemHeight`', _px(s.railItemHeight)],
+      <String>['`borderWidth`', _px(s.borderWidth)],
       <String>['`row`', _px(s.row)],
       <String>['`rowSelected`', _px(s.rowSelected)],
       <String>['`rowHistory`', _px(s.rowHistory)],

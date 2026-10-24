@@ -646,8 +646,10 @@ class _HeaderState extends State<_Header> {
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
-    return Padding(
-      padding: EdgeInsets.all(tokens.spacing.x3),
+    // Der Editor hält den Pane der Karte, also auch ihre Kopfzeile: Höhe und
+    // Linie aus dem Token (HUM-286).
+    return HPaneHeader(
+      key: const Key('editor-header'),
       child: Row(
         children: <Widget>[
           SizedBox(

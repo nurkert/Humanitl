@@ -40,54 +40,59 @@ class SandboxHeader extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
-    return Container(
-      constraints: const BoxConstraints(minHeight: HSize.headerBar),
+    // Die Kopfzeile des Screens, mit Höhe und Linie aus dem Token wie jede
+    // andere (HUM-286).
+    return ColoredBox(
       color: tokens.colors.bg1,
-      padding: EdgeInsets.symmetric(horizontal: tokens.spacing.x3),
-      child: Row(
-        children: <Widget>[
-          SandboxStateIndicator(status: status),
-          SizedBox(width: tokens.spacing.x3),
-          HBadge(
-            text: status.profile.isEmpty
-                ? l10n.sandboxProfileUnknown
-                : l10n.sandboxProfile(status.profile),
-            color: tokens.colors.fg2,
-            textColor: tokens.colors.fg1,
-          ),
-          // Der Picker bekommt den ganzen Rest und steht rechts. Ein `Spacer`
-          // daneben teilte den Platz mit ihm, und der Pfad bekäme die Hälfte
-          // dessen, was da ist.
-          Expanded(
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: WorkDirPicker(
-                workDir: status.workDirHost,
-                workMode: status.workMode,
-                chooseLabel: l10n.sandboxWorkDirChoose,
-                chooseButtonLabel: l10n.workDirChooseButton,
-                changeButtonLabel: l10n.workDirChangeButton,
-                noneLabel: l10n.sandboxWorkDirNone,
-                readOnlyLabel: l10n.sandboxWorkModeRo,
-                readWriteLabel: l10n.sandboxWorkModeRw,
-                // While the sandbox is up the mount cannot change; a picker
-                // that answered would show a folder the running agent does
-                // not have.
-                lockedLabel: status.isUp || status.isBusy
-                    ? l10n.sandboxWorkDirLocked
-                    : null,
-                onPick: (String dir) => unawaited(
-                  ref.read(sandboxStatusProvider.notifier).plan(workDir: dir),
-                ),
-                onMode: (WorkMode mode) => unawaited(
-                  ref.read(sandboxStatusProvider.notifier).plan(workMode: mode),
+      child: HPaneHeader(
+        key: const Key('sandbox-header'),
+        child: Row(
+          children: <Widget>[
+            SandboxStateIndicator(status: status),
+            SizedBox(width: tokens.spacing.x3),
+            HBadge(
+              text: status.profile.isEmpty
+                  ? l10n.sandboxProfileUnknown
+                  : l10n.sandboxProfile(status.profile),
+              color: tokens.colors.fg2,
+              textColor: tokens.colors.fg1,
+            ),
+            // Der Picker bekommt den ganzen Rest und steht rechts. Ein `Spacer`
+            // daneben teilte den Platz mit ihm, und der Pfad bekäme die Hälfte
+            // dessen, was da ist.
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: WorkDirPicker(
+                  workDir: status.workDirHost,
+                  workMode: status.workMode,
+                  chooseLabel: l10n.sandboxWorkDirChoose,
+                  chooseButtonLabel: l10n.workDirChooseButton,
+                  changeButtonLabel: l10n.workDirChangeButton,
+                  noneLabel: l10n.sandboxWorkDirNone,
+                  readOnlyLabel: l10n.sandboxWorkModeRo,
+                  readWriteLabel: l10n.sandboxWorkModeRw,
+                  // While the sandbox is up the mount cannot change; a picker
+                  // that answered would show a folder the running agent does
+                  // not have.
+                  lockedLabel: status.isUp || status.isBusy
+                      ? l10n.sandboxWorkDirLocked
+                      : null,
+                  onPick: (String dir) => unawaited(
+                    ref.read(sandboxStatusProvider.notifier).plan(workDir: dir),
+                  ),
+                  onMode: (WorkMode mode) => unawaited(
+                    ref
+                        .read(sandboxStatusProvider.notifier)
+                        .plan(workMode: mode),
+                  ),
                 ),
               ),
             ),
-          ),
-          SizedBox(width: tokens.spacing.x3),
-          SandboxStartStop(status: status, onAskStop: onAskStop),
-        ],
+            SizedBox(width: tokens.spacing.x3),
+            SandboxStartStop(status: status, onAskStop: onAskStop),
+          ],
+        ),
       ),
     );
   }
