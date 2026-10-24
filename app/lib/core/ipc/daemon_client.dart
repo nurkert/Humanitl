@@ -124,23 +124,21 @@ abstract class DaemonClient {
   /// `Sandbox(Plan)`: the snapshot a start with these settings would have,
   /// without starting anything.
   ///
-  /// This is how the project directory picker shows what it is about to do:
-  /// mounts, environment and command line come back from the daemon for a
-  /// directory that does not apply yet. Every argument left out keeps the
-  /// value the daemon already has.
-  Stream<SandboxUpdate> planSandbox({
-    String? profile,
-    String? workDir,
-    WorkMode? workMode,
-  });
+  /// Mounts, environment and command line come back from the daemon for the
+  /// stored project folder and the mode asked for. Every argument left out
+  /// keeps the value the daemon already has.
+  ///
+  /// There is no folder argument (HUM-293): the project folder has one
+  /// source, `sandbox.work_dir` in `config.toml`, and a chosen folder goes
+  /// there through [setConfig]. A folder that lived only in the daemon's
+  /// memory made the app start in one folder and `humanitl sandbox run` in
+  /// another.
+  Stream<SandboxUpdate> planSandbox({String? profile, WorkMode? workMode});
 
   /// `Sandbox(Start)`: starts the sandbox and reports `starting`, then
-  /// `running`, or a diagnostic and `failed`.
-  Stream<SandboxUpdate> startSandbox({
-    String? profile,
-    String? workDir,
-    WorkMode? workMode,
-  });
+  /// `running`, or a diagnostic and `failed`. The folder is the stored one,
+  /// as for [planSandbox].
+  Stream<SandboxUpdate> startSandbox({String? profile, WorkMode? workMode});
 
   /// `Sandbox(Stop)`: stops the sandbox and reports `stopping`, then
   /// `stopped`.

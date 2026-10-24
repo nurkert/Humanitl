@@ -86,7 +86,7 @@ use humanitl_core::diagnostics::codes::{
     CONFIG_001, CONFIG_002, CONFIG_003, SANDBOX_006, SANDBOX_007, SANDBOX_020,
 };
 use humanitl_core::ids::SessionId;
-use humanitl_core::{Diagnostic, FixAction, Severity};
+use humanitl_core::{Diagnostic, Severity};
 use serde::{Deserialize, Serialize};
 
 /// Das Projektverzeichnis in der Sandbox.
@@ -1031,17 +1031,39 @@ impl MountPolicy {
     /// läuft beim Planen (`Sandbox(Plan)`, `Sandbox(Status)`) und beim Start,
     /// damit das Setup nie einen Ordner grün zeigt, den der Start verweigert.
     ///
+    /// Der Satz nennt den Pfad „the project directory" und keinen Schlüssel:
+    /// Diese Prüfung weiß nicht, woher der Pfad kam, und `sandbox.work_dir`
+    /// zu nennen für einen Pfad aus dem aktuellen Verzeichnis schickte den
+    /// Menschen in eine Datei, in der nichts steht (HUM-293). Wer die Quelle
+    /// kennt, nimmt [`MountPolicy::check_work_dir_from`].
+    ///
     /// # Errors
     ///
     /// [`Diagnostic`] mit `SANDBOX_006` und dem beanstandeten Pfad.
     pub fn check_work_dir(&self, source: &Path) -> Result<(), Diagnostic> {
-        let checked = self.check_scope(source, "sandbox.work_dir", Scope::WorkDir);
+        self.check_work_dir_as(source, "the project directory")
+    }
+
+    /// Wie [`MountPolicy::check_work_dir`], und der Befund nennt, woher der
+    /// Pfad kam (HUM-293): die Konfigurationsdatei, `--work`, eine
+    /// Umgebungsvariable oder das aktuelle Verzeichnis.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `SANDBOX_006`, dem beanstandeten Pfad und `from`.
+    pub fn check_work_dir_from(
+        &self,
+        source: &Path,
+        from: &crate::work_dir::WorkDirSource,
+    ) -> Result<(), Diagnostic> {
+        self.check_work_dir_as(source, &format!("the project directory from {from}"))
+    }
+
+    fn check_work_dir_as(&self, source: &Path, whence: &str) -> Result<(), Diagnostic> {
+        let checked = self.check_scope(source, whence, Scope::WorkDir);
         checked.map_err(|mut diagnostic| {
             diagnostic.why.push_str(WORK_DIR_INSTEAD);
-            diagnostic.fix = Some(FixAction::ChangeSetting {
-                key: "sandbox.work_dir".to_owned(),
-                value: String::new(),
-            });
+            diagnostic.fix = Some(crate::work_dir::choose_folder_fix());
             diagnostic
         })
     }

@@ -3,9 +3,9 @@
 /// This is the one control of the product that changes what the agent gets, so
 /// it says what it will do before it does it: choosing a folder starts
 /// nothing. What it does with the choice is the caller's business -- the
-/// sandbox screen asks the daemon what a start with that folder would mount,
-/// the setup screen does the same for its project row. Nothing is computed
-/// here (ADR-018).
+/// sandbox screen and the setup row store it as `sandbox.work_dir` through
+/// `SetConfig` and then ask the daemon what a start with it would mount
+/// (HUM-293). Nothing is computed here (ADR-018).
 ///
 /// The path is a label and the dialog has a button of its own (HUM-282). On
 /// v0.0.6 the path itself was a ghost button, and nobody recognised it as the

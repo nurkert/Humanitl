@@ -2195,6 +2195,13 @@ Oberfläche.
 - **Gemerkt wird nur ein Wunsch, der ganz durchkommt.** Ein halb übernommener
   hinterließe einen Zustand, den niemand gewählt hat, und die Momentaufnahme
   nach einem abgelehnten Wunsch zeigt den alten Stand, nie den abgelehnten.
+- **Der Ordner wird nicht gemerkt** (HUM-293). Er hat eine Quelle,
+  `sandbox.work_dir` in `config.toml`; die Oberfläche schreibt ihn mit
+  `SetConfig`, und `SetConfig` prüft ihn mit denselben drei Stufen, bevor es
+  schreibt. Ein `work_dir` in `Plan` gilt nur für diesen Plan, eines in
+  `Start` (`--work`, das aktuelle Verzeichnis von `humanitl run`) nur für
+  diesen Start. Jeder `SANDBOX_006` über den Ordner nennt seine Quelle
+  (`SandboxRequest.*.work_dir_source`, `humanitl_sandbox::WorkDirSource`).
 
 **Der Zustand kommt vom gehaltenen Handle, `agent_running` von der Lebendigkeit
 des Kindes.** Eine Sitzung, deren Agent sich beendet hat, läuft weiter: Sie hat

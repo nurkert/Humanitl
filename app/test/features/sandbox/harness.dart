@@ -37,8 +37,26 @@ class SandboxTestClient extends FakeDaemonClient {
   SandboxTestClient()
     : super(script: const <ScriptedEvent>[], clock: () => sandboxTestNow);
 
-  /// Jede `Plan`-Anfrage, älteste zuerst.
+  /// Jede `Plan`-Anfrage, älteste zuerst: der Ordner, den die Oberfläche
+  /// unmittelbar davor mit `SetConfig` gespeichert hat (sonst `null`), und
+  /// der Modus, nach dem sie fragt. Seit HUM-293 trägt `Sandbox(Plan)` keinen
+  /// Ordner mehr; gewählt wird über `sandbox.work_dir`.
   final List<(String?, WorkMode?)> plans = <(String?, WorkMode?)>[];
+
+  /// Der Ordner, den `SetConfig` seit dem letzten Plan angenommen hat.
+  String? _storedSincePlan;
+
+  @override
+  Future<void> setConfig(
+    String key,
+    String value, {
+    String? expectedServer,
+  }) async {
+    await super.setConfig(key, value, expectedServer: expectedServer);
+    if (key == FormKeys.sandboxWorkDir) {
+      _storedSincePlan = value;
+    }
+  }
 
   /// Wie oft `Sandbox(Start)` gerufen wurde.
   int starts = 0;
@@ -71,31 +89,16 @@ class SandboxTestClient extends FakeDaemonClient {
   }
 
   @override
-  Stream<SandboxUpdate> planSandbox({
-    String? profile,
-    String? workDir,
-    WorkMode? workMode,
-  }) {
-    plans.add((workDir, workMode));
-    return super.planSandbox(
-      profile: profile,
-      workDir: workDir,
-      workMode: workMode,
-    );
+  Stream<SandboxUpdate> planSandbox({String? profile, WorkMode? workMode}) {
+    plans.add((_storedSincePlan, workMode));
+    _storedSincePlan = null;
+    return super.planSandbox(profile: profile, workMode: workMode);
   }
 
   @override
-  Stream<SandboxUpdate> startSandbox({
-    String? profile,
-    String? workDir,
-    WorkMode? workMode,
-  }) {
+  Stream<SandboxUpdate> startSandbox({String? profile, WorkMode? workMode}) {
     starts++;
-    return super.startSandbox(
-      profile: profile,
-      workDir: workDir,
-      workMode: workMode,
-    );
+    return super.startSandbox(profile: profile, workMode: workMode);
   }
 
   @override

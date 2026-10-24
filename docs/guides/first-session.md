@@ -83,14 +83,17 @@ more so that its row is green.
 ## 3. Choose the project
 
 In the row "Project folder", press "Choose the project folder" and pick
-`~/demo-project`. Choosing starts nothing: the app asks the daemon what a start
-with this folder would mount, and the row turns green if the daemon agrees.
+`~/demo-project`. Choosing starts nothing: the app stores the folder as
+`sandbox.work_dir` in your `config.toml` and asks the daemon what a start with
+it would mount, and the row turns green if the daemon agrees. You choose it
+once: `humanitl run` and `humanitl sandbox run` use the same folder from any
+directory, and `--work DIR` picks another one for a single call.
 "The agent may" switches between "read and write" (the default) and "read only".
 
 The folder is the only thing of yours the agent sees, as `/work`. The daemon
-refuses folders it will not mount, such as a path outside your home directory
-(`SANDBOX_006`); the card under the row then offers "Choose another
-folder". A few files in the project are hidden from the agent on purpose, such
+refuses folders it will not mount, such as your home directory itself or a path
+outside it (`SANDBOX_006`), and does not store them; the card under the row
+then offers "Choose another folder". A few files in the project are hidden from the agent on purpose, such
 as `.env` and `.git/config`; the Sandbox screen lists them under "Mounts".
 
 ## 4. Start

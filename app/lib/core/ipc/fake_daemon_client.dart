@@ -1153,13 +1153,13 @@ class FakeDaemonClient implements DaemonClient {
   @override
   Stream<SandboxUpdate> planSandbox({
     String? profile,
-    String? workDir,
     WorkMode? workMode,
   }) async* {
     _check();
+    // Der Ordner kommt, wie beim Daemon, aus `sandbox.work_dir`: `setConfig`
+    // hat ihn in [sandbox] gelegt (HUM-293).
     sandbox = sandbox.copyWith(
       profile: profile ?? sandbox.profile,
-      workDirHost: workDir ?? sandbox.workDirHost,
       workMode: workMode ?? sandbox.workMode,
     );
     sandbox = sandbox.copyWith(
@@ -1178,13 +1178,11 @@ class FakeDaemonClient implements DaemonClient {
   @override
   Stream<SandboxUpdate> startSandbox({
     String? profile,
-    String? workDir,
     WorkMode? workMode,
   }) async* {
     _check();
     await for (final SandboxUpdate update in planSandbox(
       profile: profile,
-      workDir: workDir,
       workMode: workMode,
     )) {
       // Der Plan ist nur die Vorbereitung; gemeldet wird er als `starting`.
@@ -1512,6 +1510,11 @@ class FakeDaemonClient implements DaemonClient {
       configWrites.add((key, value));
       if (view && activeServer.isNotEmpty) {
         _mirrorIntoActive(key, value);
+      }
+      // Der gespeicherte Ordner gilt fuer den naechsten Plan und Start; eine
+      // laufende Sandbox behaelt ihren (HUM-293, wie HUM-277).
+      if (key == FormKeys.sandboxWorkDir && !sandbox.isUp) {
+        sandbox = sandbox.copyWith(workDirHost: value == '-' ? null : value);
       }
       return;
     }

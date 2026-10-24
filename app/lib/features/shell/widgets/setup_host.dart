@@ -239,7 +239,7 @@ class _SetupHostState extends ConsumerState<SetupHost> {
       },
       onAddress: _show,
       onPickWorkDir: (String dir) => unawaited(
-        ref.read(sandboxStatusProvider.notifier).plan(workDir: dir),
+        ref.read(sandboxStatusProvider.notifier).chooseWorkDir(dir),
       ),
       onWorkMode: (WorkMode mode) => unawaited(
         ref.read(sandboxStatusProvider.notifier).plan(workMode: mode),
