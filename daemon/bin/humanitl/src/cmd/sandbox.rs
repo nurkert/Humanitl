@@ -608,9 +608,12 @@ fn prepare(
     // Der Beitrag des Agent-Adapters gilt dem Agenten, und zwar am wirksamen
     // Kommando: `sandbox run -- /bin/sh` (so laufen die Escape-Tests) ist keiner
     // und bekommt nichts, `sandbox run -- opencode` ist einer und bekommt
-    // dasselbe wie `humanitl run` (HUM-135). Dieselbe Regel im Daemon; stünde
-    // sie hier anders, zeigte `sandbox argv` eine Umgebung, die der Start nicht
-    // baut.
+    // dasselbe wie `humanitl run` (HUM-135). Der Daemon gibt seit HUM-280
+    // jedem Kommando den Beitrag und bindet den konfigurierten Agenten
+    // daneben, damit eine Shell aus `humanitl run -- bash` ihn findet. Dieser
+    // Weg ohne Daemon bleibt bei der alten Regel: Er ist der der Escape-Suiten,
+    // die genau die Sandbox ohne Agentendateien prüfen, und er startet am
+    // geerbten Terminal, nie an einem eigenen Pseudoterminal.
     let agent =
         if command.is_empty() || humanitl_sandbox::agent::command_is_the_agent(config, command) {
             agent_contribution(ctx, config, &wiring, id, &work_src, &profile, command)?

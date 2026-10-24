@@ -5669,6 +5669,84 @@ controlling terminal, each turns a test red.
 4. The security statement in `README.md` holds; SECURITY.md and THREAT-MODEL.md
    are updated in the same commit.
 
+### Umsetzung (HUM-280)
+
+- **Beitrag für jedes Kommando.** Punkt 2 der Spezifikation stimmte nicht:
+  Bis hierher bekam ein Kommando, das nicht der Agent ist (`-- bash`), keinen
+  Beitrag des Adapters (HUM-135, so auch der Satz in HUM-274). Der Daemon
+  ruft `agent_contribution` jetzt für jedes Kommando
+  (`daemon/crates/ipc/src/sandbox.rs`); Dateien, Umgebung und Schlüsseldatei
+  sind dieselben wie für einen vom Daemon gestarteten Agenten. Der Test
+  `a_named_agent_still_gets_its_environment` sagt das jetzt für `bash` und
+  `sh -c opencode`. Der Weg ohne Daemon (`humanitl sandbox run`, die
+  Escape-Suiten) bleibt bei der Regel von HUM-135.
+- **Bind und `PATH`.** `agent::plan_configured_agent` (`locate.rs`) plant den
+  konfigurierten Agenten mit dem Kontext des Aufrufers, aber dem Kommando aus
+  `agent.command` oder der Vorgabe des Adapters, über dieselbe
+  `plan_agent_program`-Regel von HUM-278. Das Kommando des Aufrufers bleibt
+  unverändert und wird nie gebunden. `SandboxProfile::effective_env` setzt
+  `/run/humanitl/agent` an den Anfang von `PATH`, sobald ein Bind besteht,
+  nie doppelt. Für pi gibt es nichts zu binden (Skript, HUM-274).
+- **Steuerndes Terminal.** `--new-session` bleibt. Neuer Shim-Schalter
+  `--controlling-terminal` (`SHIM_CONTROLLING_TERMINAL`), gerendert nach
+  `--proxy-port`, nur wenn der Start am eigenen Pseudoterminal des Daemons
+  steht (`LaunchInputs::controlling_terminal`, gesetzt aus
+  `StdioMode::Pty`); die Vorschau des Daemons zeigt ihn mit
+  (`with_controlling_terminal(true)`), `humanitl sandbox argv` nicht. Das
+  Kind des Shims ruft vor dem Filter `setsid` und `TIOCSCTTY` mit Argument 0
+  auf Deskriptor 0; ein Fehlschlag ist eine Warnung, kein Abbruch. Der Daemon
+  öffnet die Untertanenseite jetzt mit `O_NOCTTY`. `SandboxHandle::interrupt`
+  signalisiert zusätzlich die Vordergrundgruppe (`tcgetpgrp` auf der
+  Herrscherseite), weil der Agent die Gruppe des Init verlassen hat.
+- **`humanitl run -- CMD` am Terminal.** Mit Terminal auf `stdin`, ohne
+  `--ask terminal` und ohne `--json` hängt sich der Lauf bei `running` über
+  `cmd::attach::attach` an (Rohmodus, Größe, Taste von HUM-279) und liest die
+  Ausgabe nicht mehr aus dem Ereignisstrom. Abhängen endet mit 0 und lässt
+  die Sitzung laufen, ein Signal stoppt sie wie bisher, das Ende der Sitzung
+  liefert den Exit-Code. Sonst bleibt es beim Mitlesen.
+- **Tests.** `ipc::sandbox::tests::a_callers_command_gets_the_configured_agent_on_its_path`,
+  `bwrap_args_snapshot::a_bound_agent_puts_its_directory_first_on_the_path`,
+  `the_controlling_terminal_is_asked_for_only_at_the_daemons_terminal`, in
+  `daemon/crates/ipc/tests/terminal.rs` (echtes `bwrap`, echter Shim)
+  `a_shell_finds_the_configured_agent_on_its_path` (`bash -ic`,
+  `command -v opencode` ergibt `/run/humanitl/agent/opencode`,
+  `OPENCODE_CONFIG` lesbar) und
+  `ctrl_c_interrupts_the_foreground_program_not_the_shell`, in
+  `daemon/bin/humanitl/tests/tty.rs` `run_with_a_command_at_a_terminal_attaches`
+  und `run_with_a_command_without_a_terminal_does_not_attach`, dazu
+  `cmd::run::tests::only_a_callers_command_at_a_terminal_attaches` und der
+  Schalter in den Tests des Shims.
+- **Mutationsbeweise.** Kein Bind für Kommandos des Aufrufers:
+  `a_callers_command_gets_the_configured_agent_on_its_path` und
+  `a_shell_finds_the_configured_agent_on_its_path` rot. Kein Eintrag in
+  `PATH`: dieselben zwei und `a_bound_agent_puts_its_directory_first_on_the_path`
+  rot. Kein steuerndes Terminal, im Shim oder im Launcher:
+  `ctrl_c_interrupts_the_foreground_program_not_the_shell` rot (`bash: no job
+  control in this shell`). Kein Anschluss in `run`:
+  `run_with_a_command_at_a_terminal_attaches` und
+  `only_a_callers_command_at_a_terminal_attaches` rot.
+- **Review Runde 1.** `/run/humanitl/agent` steht genau einmal und vorn in
+  `PATH`, auch wenn er schon weiter hinten stand (sonst gewänne ein
+  gleichnamiges Programm in `/work/bin`). Ein Kommando des Aufrufers startet
+  ohne Schlüssel, wenn der Speicher ihn nicht herausgibt, und meldet
+  `LLM_009` als Warnung (`a_shell_starts_without_a_key_the_store_does_not_give`);
+  ohne Kommando bleibt `LLM_009` blockierend, `CONFIG_003` und Fehler der
+  Adapterdateien ebenso. Bekommt `run` am Terminal `TERM_001`, weil schon
+  jemand schreibt, hängt es sich lesend an und sieht den Rückstand.
+  Mutationsbeweise: Eintrag nicht verschoben macht
+  `a_bound_agent_puts_its_directory_first_on_the_path` rot, Schlüssel blockiert
+  die Shell macht den neuen Test rot. `docs/guides/agent-profiles.md`
+  nachgezogen.
+- **Review Runde 2.** Im lesenden Rückfall nach `TERM_001` beendet ein Signal
+  nur den Zuschauer (Exit `128 + n`, Terminal zurück) und stoppt die Sitzung
+  nicht, wie `sandbox attach --read-only`; sonst stoppte `Ctrl+C` bei
+  `terminal.detach_prefix = "none"` eine Sitzung, die dieser Lauf nur sah
+  (`signal_stops_session`, Test
+  `a_watching_run_leaves_the_session_on_a_signal`, Mutation rot).
+- **Doku.** `docs/SECURITY.md` (Abschnitt 3 und 5.3, Changelog),
+  `docs/THREAT-MODEL.md` (K-06, K-17, Änderungsverlauf), `docs/cli.md`
+  („A shell for the agent"), `docs/reference/cli.md` neu erzeugt.
+
 ## HUM-281 · The concurrent start test counts one sandbox twice
 
 Done (b8e11d0). `only_one_of_two_concurrent_starts_gets_the_session` failed on

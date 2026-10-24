@@ -21,17 +21,30 @@
 //!    rote Prüfung beendet den Lauf mit Exit 3.
 //! 5. **Die Ausgabe des Agenten durchreichen** und mit seinem Exit-Code enden.
 //!
-//! # Was dieser Befehl nicht tut
+//! # Ein eigenes Kommando an einem Terminal (HUM-280)
 //!
-//! Er verbindet dieses Terminal nicht mit dem des Agenten. Der Daemon startet
-//! die Sitzung seit HUM-042 zwar an einem Pseudoterminal, aber dieser Befehl
-//! liest nur mit: Seine Ausgabe kommt als Bytes über den Ereignisstrom und
-//! geht unverändert auf `stdout` dieses Prozesses; gefiltert wird sie im
-//! Daemon ([`humanitl_core::TerminalFilter`], Politik `ColourOnly`). Damit
-//! gibt es hier keinen Raw-Modus, keine Weiterleitung der Fenstergröße, keine
-//! Eingabe an den Agenten und kein `Ctrl+]`-Menü — das alles hat
-//! `humanitl sandbox attach`, und `--ask terminal` verweigert weiterhin den
-//! Dienst mit `CLI_002`.
+//! `humanitl run -- bash` mit einem Terminal auf `stdin` hängt dieses Terminal
+//! an die Sitzung wie `humanitl sandbox attach`: Rohmodus, Fenstergröße,
+//! Eingabe an die Shell und die Taste zum Abhängen von HUM-279
+//! (`terminal.detach_prefix`). Der Anschluss beginnt, sobald der Daemon
+//! `running` meldet; die Bytes kommen dann über die `Terminal`-RPC, samt dem
+//! Rückstand, und nicht mehr über den Ereignisstrom. `Ctrl+C` ist im
+//! Rohmodus ein Byte für die Shell, die es als steuerndes Terminal hat;
+//! `exit` beendet die Sitzung, `Ctrl+A d` hängt ab und lässt sie laufen.
+//! Mit `--ask terminal` oder `--json` und ohne Terminal bleibt es beim
+//! Mitlesen unten.
+//!
+//! # Was dieser Befehl sonst nicht tut
+//!
+//! Ohne eigenes Kommando oder ohne Terminal verbindet er dieses Terminal nicht
+//! mit dem des Agenten. Der Daemon startet die Sitzung seit HUM-042 zwar an
+//! einem Pseudoterminal, aber dieser Befehl liest nur mit: Seine Ausgabe kommt
+//! als Bytes über den Ereignisstrom und geht unverändert auf `stdout` dieses
+//! Prozesses; gefiltert wird sie im Daemon ([`humanitl_core::TerminalFilter`],
+//! Politik `ColourOnly`). Damit gibt es dann keinen Raw-Modus, keine
+//! Weiterleitung der Fenstergröße, keine Eingabe an den Agenten — das alles
+//! hat `humanitl sandbox attach`, und `--ask terminal` verweigert weiterhin
+//! den Dienst mit `CLI_002`.
 //!
 //! Zwei Dinge folgen aus dem Pseudoterminal und sind hier sichtbar: Ein
 //! Terminal hat einen Strom, also kommt alles auf `stdout` und nichts auf
@@ -123,7 +136,15 @@ pub async fn run(ctx: &Context, args: &RunArgs) -> Result<u8, Failure> {
     ctx.render
         .note(&where_decisions_happen(config.hold.ask_mode));
     let moderate = config.hold.ask_mode == AskMode::Terminal;
-    let code = drive(ctx, &mut client, start, moderate).await?;
+    // A command of the caller at a terminal works like `sandbox attach`
+    // (HUM-280). The key is read before the start, so a typo in
+    // `terminal.detach_prefix` stops nothing that already runs.
+    let keys = if attaches(args, moderate, ctx.render.is_json(), stdin_is_terminal()) {
+        Some(crate::cmd::attach::resolve_detach_keys(ctx, None)?)
+    } else {
+        None
+    };
+    let code = drive(ctx, &mut client, start, moderate, keys).await?;
     if ctx.render.is_json() {
         let mut value = session;
         value["exit_code"] = json!(code);
@@ -132,12 +153,54 @@ pub async fn run(ctx: &Context, args: &RunArgs) -> Result<u8, Failure> {
     Ok(code)
 }
 
+/// Ob `stdin` ein Terminal ist.
+fn stdin_is_terminal() -> bool {
+    std::io::IsTerminal::is_terminal(&std::io::stdin())
+}
+
+/// Ob dieser Lauf sein Terminal an die Sitzung hängt (HUM-280): ein eigenes
+/// Kommando, ein Terminal auf `stdin`, kein Kasten von `--ask terminal`, der
+/// dieselbe Tastatur bräuchte, und keine JSON-Ausgabe auf `stdout`.
+const fn attaches(args: &RunArgs, moderate: bool, json: bool, terminal: bool) -> bool {
+    !args.cmd.is_empty() && terminal && !moderate && !json
+}
+
+/// Der Anschluss an das Terminal der Sitzung, solange er läuft.
+type Attached<'a> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<crate::cmd::attach::Ending, Failure>> + 'a>,
+>;
+
+/// Das Ende des Anschlusses, oder nie.
+async fn next_attached(
+    attached: &mut Option<Attached<'_>>,
+) -> Result<crate::cmd::attach::Ending, Failure> {
+    match attached {
+        Some(future) => future.await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Ob dieses Ereignis sagt, dass die Sitzung läuft.
+fn is_running(event: &v1::SandboxEvent) -> bool {
+    matches!(
+        event.event.as_ref(),
+        Some(v1::sandbox_event::Event::Status(status))
+            if status.state == v1::SandboxState::Running as i32
+    )
+}
+
 /// Startet die Sitzung und begleitet sie bis zum Ende des Agenten.
+///
+/// Mit `keys` hängt sich der Lauf an das Terminal der Sitzung, sobald sie
+/// läuft (HUM-280); die Ausgabe kommt dann von dort und nicht vom
+/// Ereignisstrom.
+#[allow(clippy::too_many_lines)]
 async fn drive(
     ctx: &Context,
     client: &mut Client,
     start: v1::sandbox_request::Start,
     moderate: bool,
+    keys: Option<humanitl_config::DetachKeys>,
 ) -> Result<u8, Failure> {
     // **Erst die Signale, dann alles andere.** `open_moderation` setzt für
     // `--ask terminal` den Rohmodus (`cmd/moderate.rs`), und danach dauert der
@@ -175,6 +238,20 @@ async fn drive(
     let mut exit: Option<i32> = None;
     let mut last_refusals: Option<v1::sandbox_event::Refusals> = None;
     let mut interrupted = false;
+    // HUM-280: the key waits here until the session runs, then the attach
+    // takes this terminal. While it runs, the output comes through it.
+    let mut pending_keys = keys;
+    let mut attached: Option<Attached<'_>> = None;
+    let mut through_terminal = pending_keys.is_some();
+    let mut events_open = true;
+    let mut attach_code: Option<u8> = None;
+    // A writer that is already there (the app's pane, `TERM_001`) leaves this
+    // terminal a reader: it still shows the backlog and the session, and the
+    // detach key still works (HUM-280).
+    let mut reader_keys = keys;
+    // Set once this terminal only watches: a signal then ends the viewer and
+    // leaves the session to whoever writes, as `sandbox attach --read-only`.
+    let mut watching = false;
 
     let mut clock = tokio::time::interval(std::time::Duration::from_secs(1));
     clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -190,7 +267,62 @@ async fn drive(
     // Schnappschusses; der Strom endet unmittelbar danach.
     loop {
         let next = tokio::select! {
-            event = events.message() => event,
+            event = events.message(), if events_open => event,
+            // Der Anschluss an das Terminal ist zu Ende (HUM-280).
+            ended = next_attached(&mut attached), if attached.is_some() => {
+                attached = None;
+                match ended {
+                    // Abgehängt: Die Sitzung läuft weiter, und dieser Befehl
+                    // endet, ohne sie zu stoppen.
+                    Ok(crate::cmd::attach::Ending::Detached) => {
+                        return crate::cmd::attach::finish(
+                            ctx,
+                            crate::cmd::attach::Ending::Detached,
+                        );
+                    }
+                    Ok(crate::cmd::attach::Ending::Signal(number)) => {
+                        if !signal_stops_session(watching) {
+                            return Ok(leave_on_signal(number));
+                        }
+                        return Ok(end_on_signal(ctx, &mut stopper, None, number).await);
+                    }
+                    // Die Sitzung ist zu Ende; der Ereignisstrom bringt noch
+                    // den Exit-Code und die Zusammenfassung.
+                    Ok(crate::cmd::attach::Ending::Stream(Ok(code))) => {
+                        attach_code = Some(code);
+                    }
+                    // Schon jemand schreibt: Dieser Lauf hängt sich lesend an
+                    // und sieht den Rückstand, statt ihn zu verlieren.
+                    Ok(crate::cmd::attach::Ending::Stream(Err(found))) | Err(found)
+                        if found.diagnostic.code == codes::TERM_001 && reader_keys.is_some() =>
+                    {
+                        ctx.render
+                            .note(crate::render::diagnostic_block(&found.diagnostic).trim_end());
+                        ctx.render.note(
+                            "[humanitl] another client writes to this session; this terminal \
+                             only watches",
+                        );
+                        if let Some(keys) = reader_keys.take() {
+                            watching = true;
+                            attached =
+                                Some(Box::pin(crate::cmd::attach::attach(ctx, true, keys)));
+                        }
+                        continue;
+                    }
+                    // Kein Anschluss aus einem anderen Grund: Der Lauf liest
+                    // weiter mit wie ohne Terminal.
+                    Ok(crate::cmd::attach::Ending::Stream(Err(found))) | Err(found) => {
+                        ctx.render
+                            .note(crate::render::diagnostic_block(&found.diagnostic).trim_end());
+                        failure.get_or_insert(found);
+                        through_terminal = false;
+                    }
+                }
+                if !events_open {
+                    break;
+                }
+                continue;
+            }
             // Ein Ereignis der Warteschlange: gehalten, entschieden,
             // abgelaufen. Ohne Moderation wartet dieser Zweig für immer.
             flow = next_flow(flows.as_mut()) => {
@@ -232,6 +364,9 @@ async fn drive(
             // zweites `Ctrl+C` kommt, weil das erste nichts bewirkt hat, und
             // dann endet dieser Befehl, statt es zu verschlucken.
             () = next_of(&mut interrupt) => {
+                if !signal_stops_session(watching) {
+                    return Ok(leave_on_signal(2));
+                }
                 if interrupted {
                     return Ok(end_on_signal(ctx, &mut stopper, moderation.as_mut(), 2).await);
                 }
@@ -250,19 +385,51 @@ async fn drive(
             // Sonst hinge der Befehl bis zu einem `SIGKILL`, und das ließe das
             // Terminal im Rohmodus zurück.
             number = next_signal(&mut terminate, &mut hangup) => {
+                if !signal_stops_session(watching) {
+                    return Ok(leave_on_signal(number));
+                }
                 return Ok(end_on_signal(ctx, &mut stopper, moderation.as_mut(), number).await);
             }
         };
         let event = match next {
             Ok(Some(event)) => event,
-            Ok(None) => break,
+            Ok(None) => {
+                events_open = false;
+                // A running attach keeps the command alive: the session is
+                // there until its terminal says it ended.
+                if attached.is_some() {
+                    continue;
+                }
+                break;
+            }
             Err(status) => {
                 failure.get_or_insert_with(|| {
                     Failure::new(status_diagnostic(&status, "Sandbox(Start)"))
                 });
+                events_open = false;
+                if attached.is_some() {
+                    continue;
+                }
                 break;
             }
         };
+        // The session runs, and nothing went wrong on the way: this terminal
+        // takes it over (HUM-280). A refused start also reports `running`,
+        // the state of the other session, after its finding.
+        if failure.is_none()
+            && is_running(&event)
+            && let Some(keys) = pending_keys.take()
+        {
+            attached = Some(Box::pin(crate::cmd::attach::attach(ctx, false, keys)));
+        }
+        if through_terminal
+            && matches!(
+                event.event.as_ref(),
+                Some(v1::sandbox_event::Event::Output(_))
+            )
+        {
+            continue;
+        }
         if let Some(v1::sandbox_event::Event::Refusals(refusals)) = event.event.as_ref() {
             last_refusals = Some(refusals.clone());
         }
@@ -293,7 +460,7 @@ async fn drive(
         moderation.finish();
     }
 
-    outcome(exit, failure)
+    outcome(exit.or(attach_code.map(i32::from)), failure)
 }
 
 /// Der Exit-Code der Sitzung, oder der Befund, an dem sie hängen blieb.
@@ -381,6 +548,22 @@ async fn next_of(stream: &mut Option<tokio::signal::unix::Signal>) {
         }
         None => std::future::pending().await,
     }
+}
+
+/// Ob ein Signal die Sitzung stoppt (HUM-280).
+///
+/// Nein, wenn dieses Terminal nur zusieht, weil schon ein anderer Client
+/// schreibt: Dann endet nur dieser Befehl, wie `sandbox attach --read-only`,
+/// und die Sitzung gehört weiter dem, der schreibt.
+const fn signal_stops_session(watching: bool) -> bool {
+    !watching
+}
+
+/// Endet auf ein Signal hin, ohne die Sitzung anzufassen: Terminal zurück,
+/// Exit-Code `128 + n`.
+fn leave_on_signal(number: u8) -> u8 {
+    crate::tty::restore_now();
+    128_u8.saturating_add(number)
 }
 
 /// Beendet die Sitzung auf ein Signal hin und liefert den Exit-Code `128 + n`.
@@ -847,11 +1030,35 @@ mod tests {
     use humanitl_ipc::session::SESSION_OVERRIDE_KEYS;
 
     use super::{
-        Config, chain, check_line, inline_rules, refusal_summary, refuse_terminal_ask,
-        session_lines, state_name,
+        Config, attaches, chain, check_line, inline_rules, refusal_summary, refuse_terminal_ask,
+        session_lines, signal_stops_session, state_name,
     };
     use crate::cli::RunArgs;
     use crate::cmd::{EXIT_CHECK, EXIT_USER};
+
+    /// Only a command of the caller at a terminal attaches, and neither the
+    /// box of `--ask terminal` nor `--json` share the terminal with it
+    /// (HUM-280).
+    #[test]
+    fn only_a_callers_command_at_a_terminal_attaches() {
+        let bash = RunArgs {
+            cmd: vec![std::ffi::OsString::from("bash")],
+        };
+        let agent = RunArgs { cmd: Vec::new() };
+        assert!(attaches(&bash, false, false, true));
+        assert!(!attaches(&bash, false, false, false), "no terminal");
+        assert!(!attaches(&bash, true, false, true), "--ask terminal");
+        assert!(!attaches(&bash, false, true, true), "--json");
+        assert!(!attaches(&agent, false, false, true), "the agent itself");
+    }
+
+    /// A viewer that fell back to watching (`TERM_001`) never stops the
+    /// session on a signal; a run that owns the session does (HUM-280).
+    #[test]
+    fn a_watching_run_leaves_the_session_on_a_signal() {
+        assert!(signal_stops_session(false));
+        assert!(!signal_stops_session(true));
+    }
 
     /// The summary after the run names every pair and the total, and says
     /// nothing when nothing was refused (HUM-138).

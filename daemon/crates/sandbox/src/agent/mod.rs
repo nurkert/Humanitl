@@ -41,7 +41,7 @@ use humanitl_core::rule::Rule;
 use humanitl_core::{Diagnostic, SessionId};
 
 pub use crate::agent::locate::{
-    AGENT_PROGRAM_DIR, AgentProgram, bind_agent_program, plan_agent_program,
+    AGENT_PROGRAM_DIR, AgentProgram, bind_agent_program, plan_agent_program, plan_configured_agent,
 };
 pub use crate::agent::opencode::OpenCodeAdapter;
 pub use crate::agent::pi::PiAdapter;

@@ -711,6 +711,15 @@ impl SandboxHandle {
     ///   `kill(-child_pid, SIGINT)` erreicht deshalb genau den Agenten, ohne
     ///   dass der Shim es weiterreichen muss.
     ///
+    /// An einem Pseudoterminal des Daemons kommt seit HUM-280 ein dritter
+    /// Grund dazu: Der erste Prozess der Sitzung hat dort eine eigene Sitzung
+    /// mit dem Terminal als steuerndem Terminal (`--controlling-terminal`) und
+    /// liegt nicht mehr in der Gruppe des Init. Das Signal geht deshalb auch an
+    /// die Vordergrundgruppe dieses Terminals (`tcgetpgrp` auf der
+    /// Herrscherseite), also an das, was dort gerade läuft: den Agenten, oder
+    /// das Programm, das eine Shell im Vordergrund hat. Diese Gruppe liegt
+    /// immer in der Sitzung des Terminals und damit in der Sandbox.
+    ///
     /// Die eigene Prozessgruppe ist nie betroffen: das Sandbox-Init hat mit
     /// `setsid` eine eigene aufgemacht. Kennt das Handle die PID des Init noch
     /// nicht, ist nichts zu unterbrechen, und der Aufrufer eskaliert.
@@ -734,7 +743,11 @@ impl SandboxHandle {
         // vergeben sein. Das Fenster ist Millisekunden gross und braucht einen
         // vollen Umlauf des PID-Zaehlers; ein Signal an eine fremde Gruppe waere
         // dann SIGINT an einen Prozess desselben Nutzers, keine Eskalation.
-        if kill_process_group(pid, Signal::INT).is_err() {
+        let to_init = kill_process_group(pid, Signal::INT);
+        let to_foreground = self
+            .foreground_group()
+            .map(|group| kill_process_group(group, Signal::INT));
+        if to_init.is_err() && !matches!(to_foreground, Some(Ok(()))) {
             return false;
         }
         self.shared.wait_exit(Some(grace)).is_some()
@@ -870,10 +883,12 @@ impl SandboxHandle {
     /// Schreibt Bytes in die Eingabe des Agenten.
     ///
     /// Das ist die Tastatur des Menschen, nicht mehr: Der Agent liest sie als
-    /// Terminaleingabe. `Ctrl+C` erreicht ihn als Byte `0x03` und nicht als
-    /// `SIGINT`, denn die Sandbox läuft mit `--new-session` und hat kein
-    /// steuerndes Terminal (`docs/THREAT-MODEL.md`, Absatz zu `TIOCSTI`); wer
-    /// wirklich unterbrechen will, nimmt [`SandboxHandle::interrupt`].
+    /// Terminaleingabe. `Ctrl+C` geht als Byte `0x03` in das Terminal; die
+    /// Zeilendisziplin macht daraus `SIGINT` an die Vordergrundgruppe, weil der
+    /// erste Prozess der Sitzung dieses Terminal seit HUM-280 als steuerndes
+    /// Terminal trägt. Ein Programm im Rohmodus liest es als Byte. Das
+    /// Terminal des Nutzers ist es nie (`docs/THREAT-MODEL.md`, Absatz zu
+    /// `TIOCSTI`).
     ///
     /// Der Aufruf blockiert, wenn der Agent nicht liest und der Puffer des
     /// Terminals voll ist. Er gehört deshalb auf einen Faden, der blockieren
@@ -909,12 +924,13 @@ impl SandboxHandle {
     /// Zwei Schritte, und der zweite ist nicht selbstverständlich:
     /// `tcsetwinsize` trägt die neue Größe ein, aber der Kernel schickt das
     /// `SIGWINCH` nur an die Vordergrund-Prozessgruppe des *steuernden*
-    /// Terminals — und die Sandbox hat mit `--new-session` keines. Ohne das
-    /// Signal fragt kein Vollbild-TUI die neue Größe ab und zeichnet weiter
-    /// im alten Raster. Das Signal geht deshalb an die Prozessgruppe des
-    /// Sandbox-Init, genau wie bei [`SandboxHandle::interrupt`] und aus
-    /// demselben Grund: Ein Signal an die `bwrap`-PID allein wäre eines an
-    /// das Init des PID-Namensraums, und das verwirft der Kernel.
+    /// Terminals. Seit HUM-280 hat die Sitzung eines an einem Pseudoterminal
+    /// des Daemons; ohne `--controlling-terminal` hätte sie keines, und ohne
+    /// das Signal fragt kein Vollbild-TUI die neue Größe ab. Das Signal geht
+    /// deshalb zusätzlich an die Prozessgruppe des Sandbox-Init, genau wie bei
+    /// [`SandboxHandle::interrupt`] und aus demselben Grund: Ein Signal an die
+    /// `bwrap`-PID allein wäre eines an das Init des PID-Namensraums, und das
+    /// verwirft der Kernel.
     ///
     /// # Errors
     ///
@@ -943,6 +959,15 @@ impl SandboxHandle {
             let _ = kill_process_group(pid, Signal::WINCH);
         }
         Ok(())
+    }
+
+    /// Die Vordergrundgruppe des Pseudoterminals, wenn die Sandbox eines hat
+    /// und ein Prozess darin es als steuerndes Terminal trägt (HUM-280).
+    ///
+    /// Die Nummer kommt aus dem PID-Namensraum des Daemons; der Kernel
+    /// übersetzt sie. Ohne steuerndes Terminal gibt es keine Gruppe.
+    fn foreground_group(&self) -> Option<Pid> {
+        rustix::termios::tcgetpgrp(self.pty_master()?).ok()
     }
 
     /// Das Terminal dieser Sandbox, oder der Befund, dass sie keines hat.

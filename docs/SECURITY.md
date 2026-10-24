@@ -185,6 +185,18 @@ the descriptor (`--ro-bind-fd`, or `/proc/self/fd/N` below bubblewrap 0.10), so 
 after the check does not reach the sandbox. The agent is untrusted anyway; it receives read access
 to the code it already runs, nothing more. An absolute `agent.command` follows the same rules.
 
+**A session with the caller's command (HUM-280).** `humanitl run -- bash` gets the same adapter
+files and environment as a daemon-started agent, and the configured agent is bound by exactly the
+rules above, beside the caller's command; `/run/humanitl/agent` then stands first on the
+sandbox's `PATH`, so the shell finds it by name. The caller's own command is still never bound:
+it stays as written and must be startable from the profile's mounts. Nothing new reaches the
+sandbox this way. The bind is the same one file a daemon-started agent would get, the key file is
+the one that agent would read, and the directory on `PATH` holds that one bind and nothing else.
+`PATH` gets that directory exactly once and first, so a same-named program in a directory such as
+`/work/bin` cannot stand in front of the bind. When the key store does not give out the key
+(`LLM_009`), a session with the caller's command starts without it and reports `LLM_009` as a
+warning; no key file is written then. A session without a command still refuses to start.
+
 **Bound is what was checked (HUM-263).** The project directory and every entry of
 `mounts.extra_ro` and `mounts.extra_rw` are opened exactly once while planning
 (`O_PATH | O_NOFOLLOW`, the project directory also with `O_DIRECTORY`). The mount policy then
@@ -654,6 +666,29 @@ daemon: an overlong form such as `E0 82 9B` is `U+009B`, and surrogates and code
 the terminal widget a permanent banner says that agent output is not trustworthy, and the widget
 registers no OSC handler of its own.
 
+**The controlling terminal (HUM-280).** bubblewrap runs with `--new-session` in every command
+line, and that stays: `setsid` before the shim detaches the whole sandbox from whatever terminal
+started bwrap, so `TIOCSTI` (which writes into a terminal's input queue and is allowed only on the
+caller's own controlling terminal) can never reach the user's terminal. A session the daemon
+starts sits on a pseudo-terminal the daemon opened for it; the user's terminal is never handed to
+the sandbox, and the daemon opens the follower side with `O_NOCTTY`, so it never becomes the
+daemon's controlling terminal either. For such a start, and only for it, the launcher passes
+`--controlling-terminal` to the shim. The shim's child, the session's first process, then calls
+`setsid` and `TIOCSCTTY` with argument 0 on descriptor 0, before the seccomp filter and the
+`exec`. Argument 0 never steals a terminal that is already some session's controlling terminal,
+and stealing would need `CAP_SYS_ADMIN` in the initial user namespace, which the sandbox never
+has. An interactive user's terminal is the controlling terminal of the session of the shell
+that runs in it, so a launcher bug that passed the switch with inherited descriptors would, in
+that usual case, end in `EPERM`, which the shim reports and survives; the guarantee itself is
+that the switch is never passed then. With its own pseudo-terminal as controlling terminal, `Ctrl+C` in an
+interactive shell interrupts the foreground program and job control works. `TIOCSTI` inside the
+sandbox now reaches only that pseudo-terminal's own input, which the sandbox already writes; the
+master side stays in the daemon (`CLOEXEC`, never inherited), and what comes back out runs
+through the filter above like every other byte. A sandbox started with inherited descriptors
+(`humanitl sandbox run`, the escape suites) never gets the switch. `SandboxHandle::interrupt`
+signals the terminal's foreground group (`tcgetpgrp` on the master) in addition to the group of
+the sandbox's init, both of which lie in the sandbox.
+
 *What the filter does not cover.* A C1 byte **inside** a longer printable UTF-8 character stays
 text; a terminal that does not work in UTF-8 still reads it as a control. Dropping every such
 byte would mean showing no text outside ASCII; this is a decision, not a gap to be closed. The
@@ -1052,3 +1087,4 @@ passthrough or the audit chain gets a line here and in the change history of
 |---|---|
 | 0.1.0 | Initial release. |
 | 0.1.0 | Several saved model servers with one keyring item each; only the active origin gets a key and the passthrough (HUM-289). |
+| 0.1.0 | The session's first process takes the daemon's pseudo-terminal as controlling terminal; `--new-session` stays. A caller's command gets the adapter's contribution and the configured agent on `PATH`, never a bind of its own (HUM-280). |
