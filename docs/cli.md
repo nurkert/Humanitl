@@ -154,7 +154,8 @@ For this version that means:
 - There is **no input** to the agent. A program that asks a question gets no
   answer. For line-oriented runs that is no problem, for a full-screen TUI it
   is. Whoever wants to type attaches to the same session with
-  `humanitl sandbox attach`; there every key goes to the agent.
+  `humanitl sandbox attach`; there every key goes to the agent, except the
+  detach key `Ctrl+A d`.
 - A **raw mode** exists only with `--ask terminal`, and only for the keys of
   the box: the prompt needs single keys without a line ending. The terminal
   is restored on every exit — on the ordinary end, on every error path, on a
@@ -203,6 +204,40 @@ write; a second one gets `TERM_001` and the hint at `--read-only`.
 the sandbox has no controlling terminal. Whoever detaches ends only their own
 stream; the session keeps running, and a later `attach` shows the
 backlog.
+
+The way out is a key, as in `screen`: **`Ctrl+A d`** detaches. The command
+sends `close`, gives the terminal back and ends with `0` and the line
+`Detached; the session keeps running. Attach again: humanitl sandbox attach`.
+Before the terminal goes into raw mode, a line on `stderr` names the key
+(`Detach: Ctrl+A d`). After the prefix:
+
+| Key | Effect |
+|---|---|
+| `d` | Detach; the session keeps running. |
+| `Ctrl+A` or `a` | Send one `Ctrl+A` to the agent. |
+| anything else | Send `Ctrl+A` and that key unchanged. |
+
+The prefix may arrive in one read and the key in the next; it waits for the
+next key without a timeout. `--detach-keys SPEC` chooses another prefix for
+one call (`ctrl-a` to `ctrl-z`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`), and
+`--detach-keys none` turns detaching off, so every byte goes to the agent.
+`terminal.detach_prefix` in `config.toml` sets the default; the profile of a
+project folder may not set it. `ctrl-[` is refused because every arrow key
+starts with that byte, and `ctrl-h`, `ctrl-i`, `ctrl-j` and `ctrl-m` because
+Backspace, Tab and Enter send the same bytes. `ctrl-c` and `ctrl-d` are
+allowed, but then that key reaches the agent only as the prefix pressed twice.
+With a different prefix, its own letter takes the place of `a` (`Ctrl+] ]`).
+
+If the session does not read its input, at most 1 MiB of typed or pasted
+text waits in the command; more is dropped, and the detach key still works.
+After the key, the command waits at most two seconds for the daemon before
+it gives the terminal back.
+
+`--read-only` detaches on the same key. It reads the keyboard only for that
+and sends nothing up; at a terminal it uses raw mode for it, and `Ctrl+C`
+detaches as well. With `--detach-keys none` it leaves the terminal alone.
+The terminal of the application is not affected: there, closing the pane
+detaches.
 
 ## `humanitl doctor`
 

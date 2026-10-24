@@ -147,6 +147,29 @@ impl Pty {
         self.master = None;
     }
 
+    /// Wie [`Pty::write`], aber mit Frist: `false`, wenn der Lauf die Bytes
+    /// bis dahin nicht abgenommen hat. Für den Fall, in dem genau das der
+    /// Fehler wäre -- ein Lauf, der seine Tastatur nicht mehr liest.
+    fn write_within(&self, bytes: &[u8], deadline: Instant) -> bool {
+        let master = self.master.as_ref().expect("the master is still open");
+        let mut written = 0;
+        while written < bytes.len() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            match rustix::io::write(master, &bytes[written..]) {
+                Ok(0) => panic!("the terminal takes nothing"),
+                Ok(count) => written += count,
+                Err(rustix::io::Errno::AGAIN) => {
+                    self.drain();
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("cannot write to the terminal: {error}"),
+            }
+        }
+        true
+    }
+
     /// Tippt für den Lauf: schreibt Bytes in das Terminal.
     fn write(&self, bytes: &[u8]) {
         let master = self.master.as_ref().expect("the master is still open");
@@ -164,9 +187,15 @@ impl Pty {
 
 /// Startet `humanitl sandbox attach` an diesem Terminal.
 fn attach(harness: &Harness, pty: &Pty) -> Child {
+    attach_with(harness, pty, &[])
+}
+
+/// Wie [`attach`], mit weiteren Argumenten.
+fn attach_with(harness: &Harness, pty: &Pty, extra: &[&str]) -> Child {
     harness
         .command()
         .args(["sandbox", "attach"])
+        .args(extra)
         .stdin(pty.stdio())
         .stdout(pty.stdio())
         .stderr(pty.stdio())
@@ -307,6 +336,201 @@ fn the_ordinary_end_is_an_exit_and_not_a_wait() {
     pty.close_master();
 
     assert_eq!(wait_for_exit(&mut child, &pty), 0);
+}
+
+/// Wartet, bis der Lauf dieses Byte geschrieben hat; der Fake wirft jede
+/// Eingabe zurück, also heißt das: Es ist beim Agenten angekommen.
+fn wait_for_byte(child: &mut Child, pty: &Pty, byte: u8) {
+    let deadline = Instant::now() + PATIENCE;
+    while Instant::now() < deadline {
+        if pty.read().contains(&byte) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    panic!("the byte {byte:#04x} never came back from the session");
+}
+
+/// `Ctrl+A d` hängt ab (HUM-279): Exit 0, ein `close` beim Daemon, keine der
+/// beiden Tasten beim Agenten, das Terminal gewöhnlich, und ein zweites
+/// `attach` kommt wieder an die Sitzung.
+///
+/// Der Fake beantwortet `close` und das Ende des Stroms gleich; ob wirklich
+/// `close` kam, liest der Test deshalb aus dem, was der Fake empfangen hat.
+#[test]
+fn ctrl_a_d_detaches_and_gives_the_terminal_back() {
+    let harness = Harness::new();
+    let server = FakeServer::start(&harness);
+    let pty = Pty::open();
+    assert!(pty.is_cooked(), "the terminal starts cooked");
+
+    let mut child = attach(&harness, &pty);
+    wait_for_raw(&mut child, &pty);
+    pty.write(b"\x01d");
+
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+    assert!(
+        pty.is_cooked(),
+        "the terminal stayed raw, modes {:?}",
+        pty.modes()
+    );
+    let said = String::from_utf8_lossy(&pty.read()).into_owned();
+    assert!(said.contains("Detach: Ctrl+A d"), "{said:?}");
+    assert!(
+        said.contains("Detached; the session keeps running. Attach again: humanitl sandbox attach"),
+        "{said:?}"
+    );
+    let inputs = server.terminal_inputs();
+    assert_eq!(inputs.first(), Some(&"open"), "{inputs:?}");
+    assert_eq!(inputs.last(), Some(&"close"), "{inputs:?}");
+    assert!(
+        !inputs.contains(&"data"),
+        "the detach key reached the agent: {inputs:?}"
+    );
+
+    // Die Sitzung ist nicht vorbei: Ein zweites `attach` hängt sich wieder an.
+    let mut again = attach(&harness, &pty);
+    wait_for_raw(&mut again, &pty);
+    pty.write(&[0x04]);
+    assert_eq!(wait_for_exit(&mut again, &pty), 0);
+}
+
+/// `Ctrl+A Ctrl+A` schickt dem Agenten ein `Ctrl+A` und hängt nicht ab
+/// (HUM-279).
+#[test]
+fn ctrl_a_twice_reaches_the_agent() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let pty = Pty::open();
+
+    let mut child = attach(&harness, &pty);
+    wait_for_raw(&mut child, &pty);
+    pty.write(b"\x01\x01");
+    wait_for_byte(&mut child, &pty, 0x01);
+    assert!(
+        child.try_wait().expect("the child can be polled").is_none(),
+        "Ctrl+A Ctrl+A detached"
+    );
+
+    pty.write(&[0x04]);
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+    let said = String::from_utf8_lossy(&pty.read()).into_owned();
+    assert!(!said.contains("Detached;"), "{said:?}");
+}
+
+/// `--read-only` hängt mit derselben Taste ab (HUM-279) und gibt das
+/// Terminal zurück, das er dafür in den Rohmodus gesetzt hat. `Ctrl+C` hängt
+/// ihn ebenso ab: Im Rohmodus ist es kein Signal mehr, und ein lesender
+/// Anschluss hat niemanden, dem er es schicken könnte.
+#[test]
+fn read_only_detaches_on_the_same_key() {
+    for keys in [&b"\x01d"[..], &b"\x03"[..]] {
+        let harness = Harness::new();
+        let server = FakeServer::start(&harness);
+        let pty = Pty::open();
+
+        let mut child = attach_with(&harness, &pty, &["--read-only"]);
+        wait_for_raw(&mut child, &pty);
+        pty.write(keys);
+
+        assert_eq!(wait_for_exit(&mut child, &pty), 0, "{keys:?}");
+        assert!(
+            pty.is_cooked(),
+            "{keys:?}: the terminal stayed raw, modes {:?}",
+            pty.modes()
+        );
+        let inputs = server.terminal_inputs();
+        assert_eq!(inputs, vec!["open", "close"], "{keys:?}");
+    }
+}
+
+/// Eine Sitzung, die ihre Eingabe nicht liest, hält den Menschen nicht fest
+/// (HUM-279, Review): Nach einem großen Einfügen staut sich alles im
+/// Transport, und `Ctrl+A d` hängt trotzdem ab, in begrenzter Zeit, mit
+/// Exit 0 und einem gewöhnlichen Terminal.
+///
+/// Gemessen wird beides mit Frist: dass der Lauf das Eingefügte abnimmt (ein
+/// Leser, der in `send` wartet, nähme es nie ab) und dass er danach endet.
+#[test]
+fn a_session_that_reads_nothing_still_lets_go() {
+    let harness = Harness::new();
+    let _server = FakeServer::start_with_stalled_terminal(&harness);
+    let pty = Pty::open();
+
+    let mut child = attach(&harness, &pty);
+    wait_for_raw(&mut child, &pty);
+
+    // 4 MiB: mehr, als Transport, Kanal und Warteschlange zusammen fassen.
+    let paste = vec![b'x'; 4 * 1024 * 1024];
+    let taken = pty.write_within(&paste, Instant::now() + Duration::from_secs(20));
+    if !taken {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("the command stopped reading its keyboard behind a session that reads nothing");
+    }
+    let started = Instant::now();
+    assert!(
+        pty.write_within(b"\x01d", Instant::now() + Duration::from_secs(5)),
+        "the detach key was not taken"
+    );
+
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "detaching took {:?}",
+        started.elapsed()
+    );
+    assert!(
+        pty.is_cooked(),
+        "the terminal stayed raw, modes {:?}",
+        pty.modes()
+    );
+    let said = String::from_utf8_lossy(&pty.read()).into_owned();
+    assert!(
+        said.contains("Detached; the session keeps running."),
+        "{said:?}"
+    );
+}
+
+/// `--read-only --detach-keys ctrl-c`: Ein einzelnes `Ctrl+C` hängt ab, obwohl
+/// es zugleich das Präfix ist (HUM-279, Review).
+#[test]
+fn read_only_ctrl_c_detaches_even_as_the_prefix() {
+    let harness = Harness::new();
+    let server = FakeServer::start(&harness);
+    let pty = Pty::open();
+
+    let mut child = attach_with(&harness, &pty, &["--read-only", "--detach-keys", "ctrl-c"]);
+    wait_for_raw(&mut child, &pty);
+    pty.write(b"\x03");
+
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+    assert!(pty.is_cooked(), "modes {:?}", pty.modes());
+    assert_eq!(server.terminal_inputs(), vec!["open", "close"]);
+}
+
+/// `--detach-keys none`: `Ctrl+A d` geht an den Agenten, und der Lauf hängt
+/// sich nicht ab (HUM-279).
+#[test]
+fn detach_keys_none_forwards_ctrl_a_d() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let pty = Pty::open();
+
+    let mut child = attach_with(&harness, &pty, &["--detach-keys", "none"]);
+    wait_for_raw(&mut child, &pty);
+    pty.write(b"\x01d");
+    wait_for_byte(&mut child, &pty, 0x01);
+    assert!(
+        child.try_wait().expect("the child can be polled").is_none(),
+        "--detach-keys none still detached"
+    );
+    pty.write(&[0x04]);
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+    let said = String::from_utf8_lossy(&pty.read()).into_owned();
+    assert!(!said.contains("Detach: "), "{said:?}");
 }
 
 /// `--ask terminal -- opencode` ist der Vollbild-Agent und wird abgelehnt,

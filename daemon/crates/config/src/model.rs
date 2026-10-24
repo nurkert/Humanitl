@@ -20,8 +20,8 @@
 //! `hold.hard_block_checksum_secrets`, `findings.enabled`,
 //! `findings.ignored_hashes`, `findings.email_allow_domains`, `pseudonyms.*`,
 //! `limits.recorder_max_body_bytes`, `resolver.*`, `tls.*`, `experimental.*`,
-//! `recorder.retention_days`, `audit.*`. Eine Gruppe ist `denied`, wenn jedes
-//! Blatt darunter es ist.
+//! `recorder.retention_days`, `audit.*`, `terminal.*`. Eine Gruppe ist `denied`,
+//! wenn jedes Blatt darunter es ist.
 //!
 //! Gruppen sind flach und nach Zuständigkeit geschnitten. Caps und Zeitgrenzen
 //! wohnen ausnahmslos in [`Limits`] (`backlog/CONVENTIONS.md` 4.4); die alten
@@ -81,6 +81,9 @@ pub struct Config {
     /// Sprache, Erscheinungsbild und Meldungen der Oberfläche.
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "allowed"))]
     pub ui: UiConfig,
+    /// Das Terminal der Kommandozeile, wenn sie an einer Sitzung hängt.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub terminal: TerminalConfig,
     /// Schalter für unfertige Wege. Alles hier darf ohne Ankündigung wegfallen.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub experimental: Experimental,
@@ -620,6 +623,94 @@ pub enum Theme {
     System,
 }
 
+/// Das Terminal der Kommandozeile, wenn sie an einer Sitzung hängt
+/// (`humanitl sandbox attach`, HUM-279).
+///
+/// Die Oberfläche hat ihr eigenes Terminal und liest hier nichts: Dort hängt
+/// sich ab, wer den Bereich schließt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct TerminalConfig {
+    /// Präfix der Taste, mit der sich `humanitl sandbox attach` abhängt: `ctrl-a` bis `ctrl-z`, `ctrl-\`, `ctrl-]`, `ctrl-^`, `ctrl-_`, oder `none`, dann gibt es keine. Nach dem Präfix hängt `d` ab und lässt die Sitzung laufen; das Präfix zweimal oder sein Buchstabe schickt es einmal an den Agenten, jede andere Taste geht mit dem Präfix unverändert weiter. `ctrl-[` ist ausgenommen, weil jede Pfeiltaste mit diesem Byte beginnt, `ctrl-h`, `ctrl-i`, `ctrl-j` und `ctrl-m`, weil Rücktaste, Tab und Enter dieselben Bytes schicken. `--detach-keys` überschreibt den Wert für einen Aufruf.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub detach_prefix: String,
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self {
+            detach_prefix: DetachKeys::DEFAULT_SPEC.to_owned(),
+        }
+    }
+}
+
+/// Die Taste, mit der sich ein angehängtes Terminal abhängt: ein Präfix oder
+/// keine.
+///
+/// Eine Lesart für `terminal.detach_prefix` und `--detach-keys`, damit die
+/// Prüfung beim Laden und die der Kommandozeile dieselben Werte annehmen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetachKeys {
+    /// Dieses Steuerbyte leitet die Taste ein (`0x01` für `ctrl-a`).
+    Prefix(u8),
+    /// Kein Abhängen über die Tastatur; jedes Byte geht an den Agenten.
+    Disabled,
+}
+
+impl DetachKeys {
+    /// Die Vorgabe, wie in `screen`.
+    pub const DEFAULT_SPEC: &'static str = "ctrl-a";
+
+    /// Was ein Befund als erlaubte Werte nennt.
+    pub const ALLOWED: &'static str = "ctrl-a to ctrl-z except ctrl-h, ctrl-i, ctrl-j and ctrl-m, or \
+                                       ctrl-\\, ctrl-], ctrl-^, ctrl-_ or none (ctrl-[ is excluded \
+                                       because every arrow key starts with it, ctrl-h, ctrl-i, \
+                                       ctrl-j and ctrl-m because Backspace, Tab and Enter send \
+                                       them)";
+
+    /// Liest eine Angabe wie `ctrl-a` oder `none`; `None`, wenn sie keine ist.
+    ///
+    /// Groß- und Kleinschreibung zählen nicht (`Ctrl-A` geht auch).
+    /// `ctrl-[` ist `ESC` und fehlt mit Absicht: Jede Pfeiltaste und jede
+    /// Funktionstaste beginnt mit diesem Byte, und ein Präfix dort hielte jede
+    /// davon an, bis die nächste Taste kommt.
+    #[must_use]
+    pub fn parse(spec: &str) -> Option<Self> {
+        let spec = spec.trim().to_ascii_lowercase();
+        if spec == "none" {
+            return Some(Self::Disabled);
+        }
+        let key = spec.strip_prefix("ctrl-")?;
+        let mut chars = key.chars();
+        let (Some(key), None) = (chars.next(), chars.next()) else {
+            return None;
+        };
+        match key {
+            // `ctrl-h`, `ctrl-i`, `ctrl-j` und `ctrl-m` schickt das Terminal
+            // auch für Rücktaste, Tab und Enter: Jede dieser Tasten wartete
+            // sonst auf eine zweite.
+            'h' | 'i' | 'j' | 'm' => None,
+            'a'..='z' | '\\' | ']' | '^' | '_' => {
+                // Das Steuerbyte ist der Großbuchstabe ohne Bit 6: `A` (0x41)
+                // wird 0x01, `]` (0x5d) wird 0x1d.
+                let upper = u8::try_from(key.to_ascii_uppercase()).ok()?;
+                Some(Self::Prefix(upper & 0x1f))
+            }
+            _ => None,
+        }
+    }
+
+    /// Wie die Taste heißt, für den Hinweis beim Anhängen: `Ctrl+A d`.
+    /// `None` ohne Präfix.
+    #[must_use]
+    pub fn label(self) -> Option<String> {
+        match self {
+            Self::Prefix(byte) => Some(format!("Ctrl+{} d", char::from(byte | 0x40))),
+            Self::Disabled => None,
+        }
+    }
+}
+
 /// Schalter für unfertige Wege.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
@@ -635,7 +726,35 @@ mod tests {
 
     use humanitl_core::{Authority, HostName};
 
-    use super::LlmConfig;
+    use super::{DetachKeys, LlmConfig};
+
+    /// Jede Angabe wird zu dem Byte, das das Terminal für diese Taste
+    /// schickt, und zu dem Namen, den der Hinweis beim Anhängen nennt
+    /// (HUM-279).
+    #[test]
+    fn a_detach_spec_names_the_byte_the_terminal_sends() {
+        for (spec, byte, label) in [
+            ("ctrl-a", 0x01, "Ctrl+A d"),
+            ("CTRL-B", 0x02, "Ctrl+B d"),
+            ("ctrl-z", 0x1a, "Ctrl+Z d"),
+            ("ctrl-\\", 0x1c, "Ctrl+\\ d"),
+            ("ctrl-]", 0x1d, "Ctrl+] d"),
+            ("ctrl-^", 0x1e, "Ctrl+^ d"),
+            ("ctrl-_", 0x1f, "Ctrl+_ d"),
+        ] {
+            let keys = DetachKeys::parse(spec);
+            assert_eq!(keys, Some(DetachKeys::Prefix(byte)), "{spec}");
+            assert_eq!(keys.and_then(DetachKeys::label).as_deref(), Some(label));
+        }
+        assert_eq!(DetachKeys::parse("none"), Some(DetachKeys::Disabled));
+        assert_eq!(DetachKeys::Disabled.label(), None);
+        for refused in [
+            "ctrl-[", "ctrl-h", "ctrl-i", "ctrl-j", "ctrl-m", "Ctrl-M", "ctrl-@", "ctrl-1",
+            "ctrl-", "ctrl-aa", "^a", "",
+        ] {
+            assert_eq!(DetachKeys::parse(refused), None, "{refused}");
+        }
+    }
 
     fn authority_of(endpoint: &str) -> Option<String> {
         LlmConfig {
