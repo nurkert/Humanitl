@@ -74,6 +74,54 @@ const SingleActivator terminalFullWindowNumpadActivator = SingleActivator(
   includeRepeats: false,
 );
 
+/// Give the keyboard to the terminal wherever it is shown, without changing
+/// the layout. `Ctrl+Backquote` (HUM-303).
+class FocusTerminalIntent extends Intent {
+  /// Creates the intent.
+  const FocusTerminalIntent();
+}
+
+/// `Ctrl` with the key left of the `1`, by its place on the keyboard
+/// (HUM-303).
+///
+/// On a US layout that key is the backquote, and `Ctrl+Backquote` is the
+/// chord the owner chose. On many other layouts the same key is a dead key
+/// (`^` on a German keyboard) or another sign (`²` on a French one), and the
+/// backquote itself lies elsewhere, often behind a dead key or `AltGr`. A
+/// [SingleActivator] names a logical key and would then match nothing, or a
+/// chord nobody can press with one hand; this activator therefore asks for
+/// the physical key. It also takes a logical backquote with `Ctrl`, for a
+/// layout that puts the backquote on its own key somewhere else.
+///
+/// Exactly `Ctrl`: with `Shift`, `Alt` or `Meta` it is another chord. No
+/// repeats, so a held chord asks once. No other binding of the application
+/// uses this key, with or without modifiers (checked against every
+/// `SingleActivator` in `app/lib` and CONVENTIONS 3.9). The terminal looks
+/// it up like the other keys of the shell, so it never reaches the agent.
+class TerminalFocusActivator extends ShortcutActivator {
+  /// Creates the activator.
+  const TerminalFocusActivator();
+
+  /// Null: the trigger is a physical key, and the logical key it produces
+  /// differs from layout to layout. `Shortcuts` then asks [accepts] for every
+  /// key event.
+  @override
+  Iterable<LogicalKeyboardKey>? get triggers => null;
+
+  @override
+  bool accepts(KeyEvent event, HardwareKeyboard state) =>
+      event is KeyDownEvent &&
+      (event.physicalKey == PhysicalKeyboardKey.backquote ||
+          event.logicalKey == LogicalKeyboardKey.backquote) &&
+      state.isControlPressed &&
+      !state.isShiftPressed &&
+      !state.isAltPressed &&
+      !state.isMetaPressed;
+
+  @override
+  String debugDescribeKeys() => 'Ctrl + Backquote (physical)';
+}
+
 /// The key that expands and collapses the rail, with `Ctrl` (HUM-254).
 ///
 /// Not `Ctrl+B`: CONVENTIONS 3.9 keeps that for `AddRuleIntent`, and a plain
@@ -84,7 +132,8 @@ const LogicalKeyboardKey railToggleKey = LogicalKeyboardKey.digit0;
 
 /// The bindings of HUM-019: one `Ctrl+<digit>` per section, `Ctrl+K`,
 /// `Ctrl+,` for the settings (HUM-069), `Ctrl+0` for the rail (HUM-254) and
-/// `Ctrl+Shift+Enter` for the terminal over the whole window (HUM-298).
+/// `Ctrl+Shift+Enter` for the terminal over the whole window (HUM-298) and
+/// `Ctrl+Backquote` for the keyboard to the terminal (HUM-303).
 Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
   for (int i = 0; i < navigationKeys.length; i++)
     SingleActivator(navigationKeys[i], control: true): NavIntent(i),
@@ -95,6 +144,7 @@ Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
   const SingleActivator(railToggleKey, control: true): const ToggleRailIntent(),
   terminalFullWindowActivator: const ToggleTerminalFullWindowIntent(),
   terminalFullWindowNumpadActivator: const ToggleTerminalFullWindowIntent(),
+  const TerminalFocusActivator(): const FocusTerminalIntent(),
 };
 
 /// The digit keys of the navigation shortcuts, in section order.

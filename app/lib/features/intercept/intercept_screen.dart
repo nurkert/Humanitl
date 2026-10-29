@@ -198,7 +198,10 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
       _handFocusBack();
       return;
     }
-    if (_focus.hasFocus) {
+    // A layer is about to open and has parked the keyboard on a scope around
+    // this screen; taking it back would let the next `Enter` decide in the
+    // frame before the layer stands (HUM-303).
+    if (_focus.hasFocus || HLayerScope.keyboardClaimed) {
       return;
     }
     final FocusNode? primary = FocusManager.instance.primaryFocus;

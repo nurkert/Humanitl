@@ -2,6 +2,8 @@
 /// that bind them (HUM-019).
 library;
 
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -119,24 +121,59 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
     super.dispose();
   }
 
-  void _openPalette() => setState(() => _paletteOpen = true);
+  /// Whether the palette opened over another layer -- a sheet or a modal --
+  /// that held the keyboard (HUM-303).
+  ///
+  /// Then closing the palette hands the keyboard back to that layer
+  /// (`HLayerScope` does it), and nothing here may park it on the shell or
+  /// the terminal behind both; "Focus the terminal" is not offered either.
+  bool _paletteOverLayer = false;
+
+  void _openPalette() {
+    _paletteOverLayer = HLayerScope.holdsFocus();
+    HLayerScope.claimKeyboard();
+    setState(() => _paletteOpen = true);
+  }
 
   void _closePalette() {
     setState(() => _paletteOpen = false);
-    // The palette's field held the focus; without this the next Ctrl+2 would
-    // reach nobody. Over the whole window the keys go back to the terminal
-    // instead (HUM-298): the scope around it remembers which of its nodes had
-    // the focus, and the shell's shortcuts stay above it either way.
-    if (ref.read(terminalPlacementProvider) == TerminalPlacement.fullWindow) {
-      _terminalScope.requestFocus();
-    } else {
-      _focus.requestFocus();
+    if (!_paletteOverLayer) {
+      _keysBackAfterLayer();
     }
+  }
+
+  /// Makes sure the shell can hear keys again once a layer it opened -- the
+  /// palette, the settings sheet -- has closed (HUM-303).
+  ///
+  /// The layer gives the keyboard back to whoever had it before
+  /// (`HLayerScope`): the terminal that opened the settings with `Ctrl+,`
+  /// gets it again, and so does the queue. Only when that holder is gone --
+  /// the terminal over the whole window that the sheet ended -- would the
+  /// focus fall to the scope around the shell, and with it `Ctrl+2` and
+  /// `Ctrl+K` would reach nobody; then the shell takes it, or over the whole
+  /// window the terminal's scope (HUM-298). Checked after the hand-back: it
+  /// is requested while the frame ends and applied in a microtask, and this
+  /// check queues behind it.
+  void _keysBackAfterLayer() {
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      scheduleMicrotask(() {
+        if (!mounted || _focus.hasFocus) {
+          return;
+        }
+        if (ref.read(terminalPlacementProvider) ==
+            TerminalPlacement.fullWindow) {
+          _terminalScope.requestFocus();
+        } else {
+          _focus.requestFocus();
+        }
+      });
+    });
   }
 
   void _togglePalette() => _paletteOpen ? _closePalette() : _openPalette();
 
   void _openSettings() {
+    HLayerScope.claimKeyboard();
     ref.read(terminalPlacementProvider.notifier).leaveFullWindow();
     setState(() {
       _settingsOpen = true;
@@ -150,6 +187,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   /// The sheet hangs in the layout with the rail, so a terminal over the
   /// whole window steps back first (HUM-298).
   void _openSettingsAt(String? key) {
+    HLayerScope.claimKeyboard();
     ref.read(terminalPlacementProvider.notifier).leaveFullWindow();
     setState(() {
       _settingsOpen = true;
@@ -163,8 +201,9 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
       _settingsOpen = false;
       _settingsFocusKey = null;
     });
-    // The sheet held the focus; without this `Ctrl+K` would reach nobody.
-    _focus.requestFocus();
+    // The sheet gives the keyboard back to whoever opened it; the shell
+    // steps in only when that holder is gone.
+    _keysBackAfterLayer();
   }
 
   /// Die Befehle der Palette, für eine Verbindung, die [live] ist oder nicht.
@@ -242,7 +281,16 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
       PaletteCommand(
         id: 'about',
         label: l10n.shellPaletteAbout,
-        run: () => showHumanitlAbout(context),
+        // After the frame in which the palette goes: by then the palette has
+        // handed the keyboard back to whoever had it, and the dialog takes it
+        // from there and returns it when it closes. Pushed in the same frame,
+        // the palette's leaving would hand the keyboard to the first control
+        // of the page under the dialog, and `Esc` would stay there (HUM-303).
+        run: () => WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+          if (mounted) {
+            showHumanitlAbout(context);
+          }
+        }),
       ),
       // Dasselbe wie `Ctrl+Shift+Enter` und der Knopf über dem Terminal
       // (HUM-298). Am Ende, damit die Zeilen davor ihren Platz behalten.
@@ -254,7 +302,45 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
             : l10n.shellPaletteTerminalFullWindowEnter,
         run: ref.read(terminalPlacementProvider.notifier).toggleFullWindow,
       ),
+      // Dasselbe wie `Ctrl+Backquote` (HUM-303), und nur, solange ein
+      // Terminal zu sehen ist: Ohne eines täte der Befehl nichts, und ein
+      // Befehl, der nichts tut, gehört nicht in die Liste (`docs/UX.md` 5.3).
+      // Die Anfrage wartet bis nach dem Frame, in dem die Palette geht: Bis
+      // dahin hält deren Feld den Fokus, und aus einer Ebene über der Arbeit
+      // nimmt das Terminal ihn nicht (`TerminalPane._mayTakeKeyboard`).
+      if (!_paletteOverLayer && _terminalShown())
+        PaletteCommand(
+          id: 'focus-terminal',
+          label: l10n.shellPaletteFocusTerminal,
+          run: () => WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+            if (mounted) {
+              _requestTerminalFocus();
+            }
+          }),
+        ),
     ];
+  }
+
+  /// Whether a terminal with a session stands on the screen (HUM-303): over
+  /// the whole window, or in its pane while the Sandbox section shows.
+  bool _terminalShown() {
+    final bool running =
+        ref.read(sandboxStatusProvider).value?.agentRunning ?? false;
+    return running &&
+        (ref.read(terminalPlacementProvider) == TerminalPlacement.fullWindow ||
+            ref.read(navigationProvider) == Section.sandbox);
+  }
+
+  /// Asks the terminal that is shown to take the keyboard (HUM-303).
+  ///
+  /// Not while a layer holds the keyboard: the terminal would refuse anyway
+  /// (`TerminalPane._mayTakeKeyboard`), and the shell does not ask what must
+  /// not happen.
+  void _requestTerminalFocus() {
+    if (HLayerScope.holdsFocus()) {
+      return;
+    }
+    ref.read(terminalFocusRequestProvider.notifier).request();
   }
 
   /// Räumt weg, was ein Bruch der Verbindung unbedienbar zurückließe.
@@ -522,6 +608,12 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                   return null;
                 },
               ),
+          FocusTerminalIntent: CallbackAction<FocusTerminalIntent>(
+            onInvoke: (FocusTerminalIntent intent) {
+              _requestTerminalFocus();
+              return null;
+            },
+          ),
           PaletteIntent: CallbackAction<PaletteIntent>(
             onInvoke: (PaletteIntent intent) {
               _togglePalette();

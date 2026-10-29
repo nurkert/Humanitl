@@ -8,6 +8,7 @@ import '../tokens/tokens.dart';
 import '../tokens/typography.dart';
 import 'h_hairline.dart';
 import 'h_icon_button.dart';
+import 'h_layer_scope.dart';
 import 'h_pane_header.dart';
 
 /// A panel that slides in from the right: rule from request, history detail,
@@ -82,10 +83,7 @@ class HSheet extends StatelessWidget {
               },
             ),
         },
-        child: HTheme.host(
-          context,
-          FocusScope(autofocus: true, child: _panel(context)),
-        ),
+        child: HTheme.host(context, HLayerScope(child: _panel(context))),
       ),
     );
   }
