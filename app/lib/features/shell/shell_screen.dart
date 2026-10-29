@@ -29,6 +29,7 @@ import '../sandbox/sandbox_screen.dart';
 import '../sandbox/widgets/sandbox_terminal.dart';
 import '../settings/settings_sheet.dart';
 import '../setup/providers/setup_provider.dart';
+import 'agent_session_feed.dart';
 import 'providers/connection.dart';
 import 'providers/language.dart';
 import 'providers/navigation.dart';
@@ -92,6 +93,9 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
     debugLabel: 'terminal-full-window',
   );
 
+  /// Keeps the bit of `agentSessionProvider` fresh (HUM-306).
+  late final AgentSessionFeed _agentFeed;
+
   @override
   void initState() {
     super.initState();
@@ -112,10 +116,15 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
       },
       fireImmediately: true,
     );
+    // Die leere Warteschlange sagt, ob der Agent arbeitet (HUM-306); die
+    // Shell kennt Sandbox und Warteschlange und hält das eine Bit im Kern
+    // frisch (`agent_session_feed.dart`).
+    _agentFeed = AgentSessionFeed(ref);
   }
 
   @override
   void dispose() {
+    _agentFeed.dispose();
     _focus.dispose();
     _terminalScope.dispose();
     super.dispose();

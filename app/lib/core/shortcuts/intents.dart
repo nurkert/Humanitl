@@ -161,6 +161,14 @@ const List<LogicalKeyboardKey> navigationKeys = <LogicalKeyboardKey>[
   LogicalKeyboardKey.digit6,
 ];
 
+/// The index of the Sandbox section in [navigationKeys] (`Ctrl+4`).
+///
+/// A feature that leads to the terminal of the agent cannot name `Section`,
+/// which lives in the shell (ARCHITECTURE 5); it names this index instead.
+/// The digits keep their meaning (see [navigationKeys]), and a test of the
+/// shell holds this constant to `Section.sandbox.index` (HUM-306).
+const int sandboxSectionIndex = 3;
+
 /// True when the keyboard focus sits in an editable text.
 ///
 /// Single-key shortcuts must not fire while the person types; this is the
