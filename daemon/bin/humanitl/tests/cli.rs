@@ -5767,3 +5767,60 @@ fn a_refused_stored_folder_names_its_file() {
         "{text}"
     );
 }
+
+/// `config set sandbox.work_dir` schreibt den aufgelösten Pfad, wie
+/// `SetConfig` (HUM-294): Ein Ordner außerhalb des Heimatverzeichnisses, über
+/// einen Verweis geschrieben, gilt dem Daemon dann als erklärt und startet;
+/// ein Verweis, der später in den Pfad kommt, verschiebt ihn nicht unbemerkt.
+#[test]
+fn config_set_work_dir_writes_the_resolved_path() {
+    let harness = Harness::new();
+    let real = harness.path("outside/real");
+    std::fs::create_dir_all(&real).expect("a folder outside home");
+    let link = harness.path("outside/link");
+    std::os::unix::fs::symlink(&real, &link).expect("a link to it");
+
+    let output = config_set(&harness, &["sandbox.work_dir", &link.display().to_string()]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let text = std::fs::read_to_string(config_file(&harness)).expect("the file");
+    let resolved = real.canonicalize().expect("the real folder");
+    assert!(
+        text.contains(&format!("work_dir = {:?}", resolved.display().to_string())),
+        "{text}"
+    );
+    assert!(!text.contains("outside/link"), "{text}");
+}
+
+/// `humanitl sandbox run` startet ohne den Daemon und prüft einen
+/// gespeicherten Ordner deshalb selbst mit allen drei Stufen (HUM-294): Ist
+/// sein Elternverzeichnis inzwischen ein Verweis nach außerhalb des
+/// Heimatverzeichnisses, endet der Lauf mit `SANDBOX_006` und nennt die
+/// Datei, statt den neuen Ort einzuhängen.
+#[test]
+fn sandbox_run_refuses_a_stored_folder_moved_out_of_home_by_a_link() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+    let _socket = harness.wire_daemon_files();
+    let parent = harness.path("home/projects");
+    std::fs::create_dir_all(parent.join("x")).expect("the chosen folder");
+    store_work_dir(&harness, &parent.join("x"));
+
+    let outside = harness.path("outside/projects");
+    std::fs::create_dir_all(outside.join("x")).expect("a folder outside home");
+    std::fs::remove_dir_all(&parent).expect("the parent goes");
+    std::os::unix::fs::symlink(&outside, &parent).expect("and a link takes its place");
+
+    let output = harness.run(["sandbox", "run", "--", "sh", "-c", "exit 0"]);
+    let text = stderr(&output);
+    assert_eq!(code(&output), 1, "{text}");
+    assert!(text.contains("[SANDBOX_006]"), "{text}");
+    let file = harness.path("config/humanitl/config.toml");
+    assert!(
+        text.contains(&format!("from sandbox.work_dir in {}", file.display())),
+        "{text}"
+    );
+    assert!(
+        text.contains("a symbolic link in its path leads elsewhere"),
+        "{text}"
+    );
+}

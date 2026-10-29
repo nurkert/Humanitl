@@ -47,7 +47,7 @@ agent runs inside it, and `humanitl run` ends with the agent's exit code.
 | Flag | Acts on | Meaning |
 |---|---|---|
 | `--profile NAME` | — | The profile of the session (`profiles/*.toml`), for example `llm-only`. A name that does not exist is `CONFIG_001`. Under `humanitl sandbox` the same flag names something else, namely the bwrap profile; which meaning applies is decided by the subcommand. |
-| `--work DIR` | `sandbox.work_dir` | The project directory that sits in the sandbox as `/work`, for this one call; it is not stored. Without it the folder stored in `sandbox.work_dir` applies (the one chosen in Setup or Settings, or set with `humanitl config set sandbox.work_dir DIR`), and only when nothing is stored the current directory. It must be absolute, without `..`, a directory, and lie below the home directory or be exactly what `config.toml` says. Anything else is `SANDBOX_006`. |
+| `--work DIR` | `sandbox.work_dir` | The project directory that sits in the sandbox as `/work`, for this one call; it is not stored. Without it the folder stored in `sandbox.work_dir` applies (the one chosen in Setup or Settings, or set with `humanitl config set sandbox.work_dir DIR`), and only when nothing is stored the current directory. It must be absolute, without `..`, a directory, and lie below the home directory or be exactly what `config.toml` says, under the path it really has (no symbolic link in it). Anything else is `SANDBOX_006`. |
 | `--work-mode ro\|rw` | `sandbox.work_mode` | Whether the agent may write in the project. |
 | `--ask ui\|terminal\|none` | `hold.ask_mode` | Where a held request is decided. See below. |
 | `--llm URL` | `llm.endpoint` | The language model of this session. From it comes the declared passthrough: a rule in rank 1 that is not held and overtakes your own block rules, for the inference paths of this one host. It stands as a rule of its own in the list, under `http://humanitl.internal/` and in the recording. If the address is not in your own network according to its name, the start reports `LLM_006`; the session starts anyway. Nothing is resolved for this. |
@@ -72,6 +72,22 @@ With a stored folder the source reads `sandbox.work_dir in
 ~/.config/humanitl/config.toml`, with the flag `--work`, with the variable
 `the environment variable HUMANITL_SANDBOX__WORK_DIR`. A session that runs
 keeps its folder; a newly chosen one applies to the next start.
+
+**The stored folder is checked again at every start (HUM-294).** Setup,
+Settings and `humanitl config set sandbox.work_dir` store the resolved path,
+with every symbolic link followed. At every plan and start the daemon resolves
+the stored folder once more and applies the same three checks as to `--work`:
+a directory, allowed by the mount policy, and below the home directory or
+exactly the declared folder. A folder outside the home directory counts as
+declared only while its stored text is still the path it resolves to. If a
+parent directory is later replaced by a link that leads out of the home
+directory, the start ends with `SANDBOX_006` from `sandbox.work_dir in
+~/.config/humanitl/config.toml`, and the sentence names where the path now
+leads. A folder outside the home directory written by hand through a link is
+refused the same way; `humanitl config set sandbox.work_dir <dir>` writes its
+real path. A stored folder that no longer exists is `SANDBOX_006` already in
+the plan, so Setup shows it red before any start. The start then mounts the
+folder only if the directory it opens still lies at the path it checked.
 
 Every other configuration flag (`--hold-timeout-secs`, `--findings-enabled`
 and so on) belongs to the configuration and not to a session. The daemon

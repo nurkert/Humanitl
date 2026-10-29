@@ -1226,3 +1226,36 @@ fn a_read_only_bind_of_the_caller_is_pinned_and_checked() {
     assert_eq!(err.code.as_str(), "SANDBOX_006");
     assert!(err.why.contains("/tests/escape"), "{}", err.why);
 }
+
+/// Der Aufrufer hat den Projektordner an einem aufgelösten Ort geprüft und
+/// freigegeben (HUM-294). Führt derselbe Pfad beim Öffnen woandershin, weil
+/// zwischen Prüfung und Plan ein Verweis an seine Stelle trat, wird nichts
+/// eingehängt, auch wenn die Denylist das neue Ziel erlaubte.
+#[test]
+fn a_folder_that_no_longer_lies_where_it_was_approved_is_not_mounted() {
+    let fx = fixture();
+    let approved = fx.work.canonicalize().expect("the checked folder");
+    let backend = fx.unchecked().with_approved_work_dir(&approved);
+    backend
+        .plan(&profile("default"), &fx.context(&["true"]))
+        .expect("the folder lies where it was approved");
+
+    let elsewhere = fx.state.join("elsewhere");
+    std::fs::create_dir(&elsewhere).expect("another folder");
+    std::fs::rename(&fx.work, fx.state.join("work.checked")).expect("move the folder away");
+    std::os::unix::fs::symlink(&elsewhere, &fx.work).expect("plant the link");
+    fx.unchecked()
+        .plan(&profile("default"), &fx.context(&["true"]))
+        .expect("without an approval only the deny list decides, and it allows the target");
+    let err = backend
+        .plan(&profile("default"), &fx.context(&["true"]))
+        .expect_err("the link leads away from the approved folder");
+    assert_eq!(err.code.as_str(), "SANDBOX_006");
+    let target = elsewhere.canonicalize().expect("the link target");
+    assert!(
+        err.why.contains(&approved.display().to_string())
+            && err.why.contains(&target.display().to_string()),
+        "{}",
+        err.why
+    );
+}
