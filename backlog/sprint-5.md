@@ -66,6 +66,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-295 | Settings re-plans the sandbox after the project folder changes (after HUM-060) | S | HUM-293 |
 | HUM-296 | `humanitl run --config` with a folder outside HOME is judged against the file it names (after HUM-060) | S | HUM-293 |
 | HUM-297 | RUSTSEC-2026-0414 in pulldown-cmark turns the dependency check red | S | — |
+| HUM-304 | The agent knows it has web access through the proxy | S | HUM-071, HUM-274 |
 
 ---
 
@@ -6627,3 +6628,140 @@ is red until the lock file moves.
 ### Acceptance criteria
 1. `cargo deny check` reports advisories, bans, licenses and sources ok.
 
+---
+## HUM-304 · The agent knows it has web access through the proxy
+Sprint: 5 · Size: S · Dependencies: HUM-071, HUM-274
+
+### Context
+Owner report of 2026-10-29: asked to look something up, pi answered that it has
+no internet access. The owner wants the agent to know that it can fetch and
+search the web, with every request controlled in Humanitl's queue.
+
+The briefing (`agents/opencode/briefing.{en,de}.md`, rendered by
+`daemon/crates/sandbox/src/agent/briefing.rs`, placed for pi as
+`<agent-dir>/AGENTS.md`) opened with "No network interface: HTTP(S) leaves only
+through the proxy in the proxy environment." A model reads the first three
+words as "no internet". pi ships only the tools `read`, `write`, `edit` and
+`bash`, so its way to the web is `curl`, `wget` or a script through `bash`.
+
+Measured on 2026-10-29 (Node 24.22.1, pi 1.4.0 under `/usr/local`), against a
+logging proxy on loopback with the proxy variables of the env kit and an empty
+`NO_PROXY`:
+
+- Node's built-in `fetch` ignores `HTTP_PROXY`/`HTTPS_PROXY` without
+  `NODE_USE_ENV_PROXY=1`: it connects directly and fails (`ECONNREFUSED` for
+  `127.0.0.1`, `EAI_AGAIN` for a name). With the switch every request goes to
+  the proxy, `http` in absolute form, `https` as `CONNECT`, including a
+  request to `127.0.0.1:<port>`, because `NO_PROXY` is empty. In the sandbox a
+  `node -e "fetch(…)"` from the agent's shell therefore found no route.
+- pi's own HTTP client does not depend on the switch: pi installs an undici
+  `EnvHttpProxyAgent` (`proxyTunnel: true`) as global dispatcher and global
+  `fetch`. Its model call through the logging proxy was the same `CONNECT` to
+  the model server with and without `NODE_USE_ENV_PROXY=1`, and the answer
+  arrived both times.
+- A request to the proxy's own address (`http://127.0.0.1:3128/…`, the
+  fallback base URL of both adapters when no `llm.endpoint` is set) names the
+  same target whether it arrives in origin form or through the proxy
+  environment, so `NO_PROXY` needs no exception for it.
+
+### Specification
+1. **Briefing.** The first sentence says what works before it says the limit,
+   in both languages: internet access over HTTP(S) with `curl`, `wget` and
+   other clients, through the proxy in the environment, nothing else. The
+   ask-mode blocks keep saying that a request may wait for a person and that
+   waiting is normal. Every other statement stays (`Blocked by Humanitl.`,
+   `403` handling with `note:`, `http://humanitl.internal/` with `GET /` and
+   `POST /ask`, only the user adds a rule, the model rule). Each statement keeps
+   its evidence in the table of the module comment of `briefing.rs`. Both
+   languages stay within `TOKEN_BUDGET` (185, `tools/briefing-tokens.py`,
+   worst case); the budget is not raised.
+2. **Env kit.** `humanitl_proxy::ca::ENV_KIT` gets `NODE_USE_ENV_PROXY=1`, and
+   `profiles/sandbox/{default,test}.toml` carry the same pair. The variable is
+   on `VISIBLE_ENV` of the sandbox screen with the other proxy variables. Node
+   versions before 22.21 and 24.5 ignore it. A custom profile copied before
+   this issue lacks the pair, exactly as it would lack `HTTP_PROXY` if it had
+   been written without it: the variables come from the profile's `[env]`
+   only, and a missing one fails closed (candidate issue: inject `ENV_KIT` at
+   launch instead of relying on the profile).
+3. **`NO_PROXY` stays empty.** No exception for loopback or for the proxy's
+   port. A request from Node to a loopback address now goes to the proxy, as
+   it already does for curl, wget and pi, and the proxy decides it like any
+   other target. Whether servers the agent starts inside the sandbox should be
+   reachable directly (`NO_PROXY=localhost,127.0.0.1`) is a separate decision
+   and a candidate issue.
+4. `docs/SECURITY.md` names the switch where it describes the proxy
+   environment. Guarantee 2 of the README security statement is unchanged:
+   the switch only points Node at the proxy that curl already uses.
+
+### Non-goal
+- No web-search extension or tool for pi and no search engine named in the
+  briefing (candidate issue: a pi extension or a documented search recipe,
+  each request still through the queue).
+- No change to the proxy, the rules or the hold flow.
+
+### Tests
+- `briefing.rs`: the first sentence after the heading starts with the access
+  statement, names `curl` and `wget` and the proxy in the environment, in both
+  languages and both ask modes, and the old opening "No network interface" /
+  "Keine Netzwerkschnittstelle" is gone.
+- `proxy/tests/ca.rs`: `NODE_USE_ENV_PROXY` is in `ENV_KIT` with value `1` and
+  in both shipped profiles with the same value.
+- `sandbox/tests/profile_parse.rs`: both profiles carry the key.
+- `sandbox/tests/bwrap_args_snapshot.rs`: the snapshot shows the
+  `--setenv NODE_USE_ENV_PROXY 1`.
+- `ipc/tests/sandbox_rpc.rs`: the bundled profile withholds no row (the new
+  variable is visible).
+- Mutation proof per new assertion.
+
+### Acceptance criteria
+- [ ] The rendered briefing in English and German opens with internet access
+      over HTTP(S) through the proxy, keeps every earlier statement, and stays
+      within 185 tokens in the worst case.
+- [ ] Every bundled sandbox profile sets `NODE_USE_ENV_PROXY=1`; Node's built-in `fetch` in the
+      sandbox reaches the proxy instead of failing without a route.
+- [ ] pi's own model calls work unchanged; `NO_PROXY` stays empty.
+- [ ] README security statement unchanged; `docs/SECURITY.md` in sync.
+
+### Umsetzung (HUM-304)
+
+- **Einweisung.** Der erste Satz heißt jetzt „You have internet access:
+  HTTP(S) with `curl`, `wget` etc. goes through the proxy in the environment,
+  nothing else." bzw. „Du hast Internet: HTTP(S) mit `curl`, `wget` usw.
+  läuft über den Proxy der Umgebung, sonst nichts." Um im Budget zu bleiben,
+  entfällt „The proxy answers" / „beantwortet der Proxy" vor
+  `http://humanitl.internal/`; alle übrigen Aussagen und beide Ask-Blöcke
+  bleiben. Das ist ein bewusster Tausch: der Agent erfährt nicht mehr
+  ausdrücklich, dass der Proxy den Meta-Endpunkt beantwortet, was aus der
+  Adresse und aus „Blocked by Humanitl." folgt; dafür trägt der erste Satz
+  den Zugang. Nachgezählt mit `tools/briefing-tokens.py` (`tiktoken`,
+  `o200k_base`, ungünstigster Fall): englisch 170 (`ui`) und 168 (`none`),
+  deutsch 184 und 179; `TOKEN_BUDGET` bleibt 185. Tabelle und Begründung im
+  Modulkommentar von `briefing.rs` nachgezogen.
+- **Env-Kit.** `NODE_USE_ENV_PROXY=1` in `humanitl_proxy::ca::ENV_KIT`, in
+  `profiles/sandbox/{default,test}.toml`, auf `VISIBLE_ENV` und im
+  argv-Schnappschuss; `docs/SECURITY.md` nennt den Schalter. `NO_PROXY` bleibt
+  leer.
+- **Gemessen** (Node 24.22.1, pi 1.4.0, loggender Proxy auf Loopback): Nodes
+  `fetch` ohne Schalter geht direkt und scheitert, mit Schalter landet jede
+  Anfrage beim Proxy. pis Modellaufruf ist mit und ohne Schalter derselbe
+  `CONNECT` über den Proxy und bekommt die Antwort des Mock-LLM.
+- **Tests.** `briefing.rs`
+  (`the_briefing_opens_with_internet_access_over_the_proxy`),
+  `proxy/tests/ca.rs` (Schlüssel und Wert `1` in `ENV_KIT` und beiden
+  Profilen), `profile_parse.rs` (Schlüssel in beiden Profilen),
+  Schnappschuss neu erzeugt. Mutationsbeweise: englischer oder deutscher
+  erster Satz zurückgedreht, Eintrag aus `ENV_KIT` entfernt, Wert `0`,
+  Zeile aus `default.toml` entfernt, Name aus `VISIBLE_ENV` entfernt; jede
+  Mutation macht ihren Test rot.
+- **Review.** Codex blocking (alte eigene Profile ohne den Schalter) als
+  außerhalb des Umfangs bewertet: auch `HTTP_PROXY` kommt nur aus dem
+  Profil, ein Fehlen schlägt geschlossen fehl; Kandidat, Wortlaut der Spec
+  auf „bundled profile" korrigiert. Opus minor: `docs/SECURITY.md` nennt
+  `fetch` und die globalen Agenten von `node:http`/`node:https`;
+  `conf_17_node_fetch_https` setzt den Schalter nicht mehr selbst, er kommt
+  aus dem Env-Kit, Versionsangabe wie in `ca.rs`.
+- **Kandidaten.** `ENV_KIT` beim Start einspeisen statt nur aus dem Profil.
+  Eine Websuche für pi (Erweiterung oder dokumentiertes
+  Rezept, jede Anfrage weiter durch die Warteschlange);
+  `NO_PROXY=localhost,127.0.0.1` für Server, die der Agent in der Sandbox
+  selbst startet.

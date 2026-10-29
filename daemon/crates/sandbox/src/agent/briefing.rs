@@ -22,7 +22,7 @@
 //!
 //! | Aussage | Beleg im Code |
 //! |---|---|
-//! | Keine Netzwerkschnittstelle, alles über den Proxy | `--unshare-all` in `crate::bwrap_args`, `humanitl_proxy::ca::ENV_KIT` mit `HTTP_PROXY` und leerem `NO_PROXY` |
+//! | Internetzugang über HTTP(S) mit `curl`, `wget` und anderen Clients, durch den Proxy der Umgebung, sonst nichts | `--unshare-all` in `crate::bwrap_args` (kein anderer Weg hinaus), `humanitl_proxy::ca::ENV_KIT` mit `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, leerem `NO_PROXY` und `NODE_USE_ENV_PROXY=1` für Nodes `fetch` (HUM-304); pi stellt seinen Dispatcher selbst auf dieselben Variablen ein |
 //! | Regeln entscheiden das meiste, der Rest wartet auf einen Menschen | `humanitl_proxy::pipeline::RulesPipeline` über `AskPipeline` |
 //! | Ein Rumpf mit `Blocked by Humanitl.` kommt vom Proxy | `humanitl_core::block::BANNER` |
 //! | `403` heißt: gegen die Anfrage entschieden | `BlockReason::User`, `Rule`, `AuthorityMismatch`, `PrivateAddress`, `Secret` |
@@ -55,11 +55,18 @@
 //! Ebenfalls nicht im Text: eine Aufforderung, den Proxy nicht zu umgehen.
 //! Der Fallstrick des Issues ist ausdrücklich, dass keine Formulierung
 //! „Umgehen" als Möglichkeit in den Raum stellt, auch nicht verneint. Der Text
-//! nennt deshalb nur die Tatsache, dass ohne die Proxy-Umgebung keine
-//! Verbindung zustande kommt. Genannt wird die Umgebung, nicht eine einzelne
+//! nennt deshalb nur die Tatsache, dass HTTP(S) über den Proxy der Umgebung
+//! geht und sonst nichts. Genannt wird die Umgebung, nicht eine einzelne
 //! Variable: `humanitl_proxy::ca::ENV_KIT` setzt `HTTP_PROXY`, `HTTPS_PROXY`,
 //! `ALL_PROXY` und die kleingeschriebenen Formen, und ein Satz über nur eine
 //! davon wäre halb wahr.
+//!
+//! **Warum der erste Satz mit dem Zugang beginnt und nicht mit der Grenze
+//! (HUM-304).** Bis dahin hieß er „No network interface: HTTP(S) leaves only
+//! through the proxy". Ein Modell las das als „kein Internet" und sagte dem
+//! Nutzer, es könne nichts im Web nachsehen; pi hat nur `bash` als Werkzeug
+//! dafür und versuchte es gar nicht erst. Die Grenze ist dieselbe geblieben
+//! („sonst nichts"), der Satz nennt aber zuerst, was geht, und womit.
 //!
 //! # Das Format der Vorlagen
 //!
@@ -105,6 +112,10 @@ pub const TEMPLATE_DE_FILE: &str = "agents/opencode/briefing.de.md";
 /// halten hieße, eine Aussage wegzulassen, die der englische macht — und damit
 /// die Zusage aufzugeben, dass die Übersetzung dieselben Aussagen in derselben
 /// Reihenfolge trägt.
+///
+/// Nachgezählt am 2026-10-29 nach HUM-304 (erster Satz über den
+/// Internetzugang, dafür ohne „beantwortet der Proxy" vor dem Meta-Endpunkt):
+/// englisch 170 und 168, deutsch weiter 184 und 179.
 ///
 /// 185 ist die Grenze knapp über dem gemessenen Wert, also weiter ein
 /// Stolperdraht und kein Freibrief. Wer den Text wachsen lässt, zählt nach und
@@ -415,6 +426,41 @@ mod tests {
                 assert!(text.contains("/ask"), "{text}");
                 assert!(text.contains("202"), "{text}");
                 assert!(text.contains(only_the_user), "{text}");
+            }
+        }
+    }
+
+    /// Der erste Satz sagt dem Agenten, dass er ins Internet kommt, und womit
+    /// (HUM-304). „No network interface" am Anfang las ein Modell als „kein
+    /// Internet" und versuchte keinen einzigen Abruf.
+    #[test]
+    fn the_briefing_opens_with_internet_access_over_the_proxy() {
+        for (language, access, tools, proxy, old_opening) in [
+            (
+                Language::En,
+                "You have internet access: HTTP(S)",
+                "`curl`, `wget`",
+                "through the proxy in the environment, nothing else.",
+                "No network interface",
+            ),
+            (
+                Language::De,
+                "Du hast Internet: HTTP(S)",
+                "`curl`, `wget`",
+                "über den Proxy der Umgebung, sonst nichts.",
+                "Keine Netzwerkschnittstelle",
+            ),
+        ] {
+            for ask_mode in [AskMode::Ui, AskMode::None] {
+                let text = render(language, ask_mode, 300, Some(HOST)).unwrap();
+                let opening = text
+                    .lines()
+                    .find(|line| !line.is_empty() && !line.starts_with('#'))
+                    .unwrap();
+                assert!(opening.starts_with(access), "{opening}");
+                assert!(opening.contains(tools), "{opening}");
+                assert!(opening.contains(proxy), "{opening}");
+                assert!(!text.contains(old_opening), "{text}");
             }
         }
     }

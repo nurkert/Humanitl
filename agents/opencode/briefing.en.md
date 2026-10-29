@@ -10,11 +10,11 @@
 
 # Humanitl sandbox
 
-No network interface: HTTP(S) leaves only through the proxy in the proxy environment. {ask_mode}
+You have internet access: HTTP(S) with `curl`, `wget` etc. goes through the proxy in the environment, nothing else. {ask_mode}
 
 `Blocked by Humanitl.` in a body comes from the proxy. `403`: decided against — do not repeat it; read any `note:` line and tell the user what was refused, why, and what else could work.
 
-The proxy answers `http://humanitl.internal/`: `GET /` lists the rules, `POST /ask` with one line asks the user (`202`). Only the user can add a rule.
+`http://humanitl.internal/`: `GET /` lists the rules, `POST /ask` with one line asks the user (`202`). Only the user can add a rule.
 
 One rule allows model calls to {llm_host}, nothing else on that host.
 

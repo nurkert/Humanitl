@@ -174,6 +174,8 @@ pub static VISIBLE_ENV: &[&str] = &[
     "ALL_PROXY",
     "NO_PROXY",
     "FTP_PROXY",
+    // Lenkt Nodes eingebautes `fetch` auf dieselben Proxy-Variablen (HUM-304).
+    "NODE_USE_ENV_PROXY",
     // 2. Wem glaubt er.
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
