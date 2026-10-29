@@ -5092,6 +5092,64 @@ Kein Geheimnis der Masken verlässt den Daemon oder landet in der Datei über ei
 ### Referenzen
 HUM-140, HUM-256 (Umsetzung, Offen), `daemon/crates/proxy/src/limits.rs`.
 
+### Umsetzung (HUM-271)
+
+- **Ort.** Nicht in den Bauern der Befunde (`body_over_cap`,
+  `private_address_refused`, `repeated_drops`, die Proben), sondern im
+  Trichter des Ereignisstroms des Proxys: `HoldQueue::publish` ruft vor
+  Registry, Aufzeichnung und Strom `HoldQueue::withhold_secret_fix`, das
+  `suggestion::withhold_secret_fix` mit den Masken der Aufzeichnung
+  (`Recorder::masks`) anwendet. So gilt die Prüfung für jeden Befund im
+  Ereignisstrom, gleich welcher Code und welche Art von Vorschlag, und keiner
+  der drei Wege kann sie verpassen. Die Sperre `Flow::send_refusal`
+  (`HOLD_004`) steht schon vor `publish` am Flow und von dort am Datensatz, in
+  `ListFlows` und in der Zurückweisung eines `Allow`; der Handler legt sie
+  deshalb vorher selbst durch `HoldQueue::withhold_secret_fix` (Review,
+  Codex). Ein zweiter Aufruf in `publish` ändert nichts mehr. Befunde
+  außerhalb des Ereignisstroms (`SANDBOX_022`, die Zusammenfassung einer
+  Sitzung) gehen nicht durch `publish` und sind nicht abgedeckt; das wird ein
+  eigenes Issue. `GetFlow` liest den Befund der
+  laufenden Sitzung aus der Registry und den nach einem Neustart aus der
+  Aufzeichnung; beide haben ihn schon ohne Vorschlag.
+- **Prüfung.** `SecretMasks::appears_in` sagt, ob `apply` oder `apply_host`
+  etwas ersetzen würde, also roh, in einer URL kodiert und als Label ohne
+  Rücksicht auf die Schreibung. Geprüft wird jeder Text, den ein Vorschlag
+  hinausträgt: bei einer Regel Host, Pfadmuster, Pfadpräfixe, Notiz und dazu
+  die Form von `rules.yaml`, in der sie in `fix_value` und in die Datei des
+  Nutzers ginge; bei `CopyCommand` und `OpenUrl` der Text, bei `SetEnv` und
+  `ChangeSetting` Schlüssel und Wert, bei `RemountReadOnly` der Pfad.
+- **Folge.** Trägt der Vorschlag ein Geheimnis, fällt er weg, und das `why`
+  bekommt den Satz `suggestion::WITHHELD_SENTENCE` angehängt. Ein Vorschlag
+  ohne Geheimnis und ein Befund ohne Masken (keine Aufzeichnung) bleiben Byte
+  für Byte, wie sie waren.
+- **Tests.** In `tests/limits.rs` des Proxys
+  `a_key_as_a_host_label_never_rides_on_the_limit_001_suggestion` (Schlüssel
+  mit Großbuchstaben in den Masken, klein als Label des Hosts),
+  `a_key_as_a_path_segment_never_rides_on_the_limit_001_suggestion` und
+  `a_suggestion_without_a_secret_stays_as_it_was` (dieselbe Regel in Strom,
+  Registry und `fix_value`, `why` ohne den Satz), je über Strom, Registry und
+  Aufzeichnung; in `hold.rs`
+  `a_copy_command_with_a_masked_key_is_withheld_on_every_way_out` (Befehl mit
+  dem Schlüssel im Pfad neben einem ohne, über alle drei Wege), in
+  `tests/hard_block.rs`
+  `the_refusal_on_the_flow_carries_no_masked_secret_in_its_fix` (Sperre am
+  Datensatz und in der Zurückweisung eines `Allow` gleich der im Strom, ohne
+  Vorschlag; ein Teil des Einstellungsnamens steht dafür als Geheimnis in den
+  Masken, weil der Vorschlag von `HOLD_004` heute nur ihn nennt) und in
+  `suggestion.rs` sowie `secret_mask.rs` je ein Einheitstest.
+- **Mutationsbeweise.** Ohne den Aufruf in `publish` scheitern die drei Tests
+  mit Schlüssel; ohne `apply_host` in `appears_in` der Test zum Label des
+  Hosts; ohne die Pfadpräfixe und die Form von `rules.yaml` in `fix_texts` der
+  Test zum Pfadsegment; ohne den Aufruf im Handler der Test zur Sperre am
+  Flow; mit einem Vorschlag, der immer wegfällt, der Test ohne
+  Geheimnis und der zum Befehl (dessen Befehl ohne Schlüssel bleiben muss).
+  Jede Datei danach mit `cmp` gegen ihre Sicherung geprüft.
+- **Offen.** Das `why` selbst geht im Strom weiterhin unmaskiert hinaus, wie
+  schon die Zeile und der Pfad im `Received` des Stroms; maskiert wird es erst
+  in Aufzeichnung und Detail (HUM-256). Ein Vorschlag, der vor dem Eintrag
+  eines Schlüssels aufgezeichnet wurde, wird von `GetFlow` nicht nachgeprüft;
+  der Start einer Sitzung trägt den Schlüssel vor dem ersten Verkehr ein.
+
 ---
 
 ## HUM-273 · Releases 0.0.x appear as regular releases, not as pre-releases

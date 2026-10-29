@@ -196,6 +196,68 @@ async fn a_checksum_secret_is_held_and_every_allow_is_refused() {
     assert_eq!(hold_refusals(&events.seen).len(), 1, "announced once");
 }
 
+/// Die Sperre am Flow trägt keinen Vorschlag, der ein Geheimnis der Masken
+/// enthielte, und ist dieselbe wie im Strom (HUM-271, Review).
+///
+/// `send_refusal` steht am Flow, bevor der Befund durch `HoldQueue::publish`
+/// geht, und von dort am Datensatz, in `ListFlows` und in der Zurückweisung
+/// eines `Allow`. Heute nennt der Vorschlag von `HOLD_004` nur die
+/// Einstellung `hold.hard_block_checksum_secrets`; damit der Weg trotzdem
+/// geprüft wird, steht ein Teil dieses Namens als Geheimnis in den Masken.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_refusal_on_the_flow_carries_no_masked_secret_in_its_fix() {
+    let upstream = FakeUpstream::plain().await;
+    let proxy = ProxyBuilder::new()
+        .scanner(Arc::new(ChecksumScan))
+        .hard_block_checksum_secrets(true)
+        .recording(true)
+        .start()
+        .await;
+    proxy
+        .recorder
+        .as_ref()
+        .expect("recording is on")
+        .mask_secret("hard_block_checksum_secrets", None);
+    let mut events = proxy.events();
+    let sending = send_to_sink(&proxy, upstream.port(), IBAN_BODY).await;
+    let id = held_flow(&mut events).await;
+
+    let streamed = hold_refusals(&events.seen);
+    assert_eq!(streamed.len(), 1, "announced once");
+    let streamed = streamed[0].clone();
+    assert_eq!(streamed.fix, None, "{streamed:?}");
+    assert!(
+        streamed
+            .why
+            .ends_with(humanitl_proxy::suggestion::WITHHELD_SENTENCE),
+        "{}",
+        streamed.why
+    );
+    let record = proxy.queue.registry().get(id).expect("the record");
+    assert_eq!(
+        record.send_refusal.as_ref(),
+        Some(&streamed),
+        "the copy on the record is the one in the stream"
+    );
+    let Err(NotHeld::SendRefused { refusal, .. }) = proxy.queue.decide(id, Decision::Allow) else {
+        panic!("an allow under the hard block is refused");
+    };
+    assert_eq!(*refusal, streamed, "and so is the refusal of an allow");
+
+    proxy
+        .queue
+        .decide(
+            id,
+            Decision::Block {
+                reason: BlockReason::User,
+                note: None,
+            },
+        )
+        .unwrap();
+    let (status, _) = sending.await.unwrap();
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
 /// Pseudonymisiert geht dieselbe Anfrage hinaus: Nach dem zurückgewiesenen
 /// `Allow` gibt der Mensch die bearbeitete Fassung frei, der zweite Scan
 /// findet nichts mehr, und beim Ziel kommt der saubere Rumpf an.
