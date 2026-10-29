@@ -12,13 +12,13 @@
 
 You have internet access: HTTP(S) with `curl`, `wget` etc. goes through the proxy in the environment, nothing else. {ask_mode}
 
-`Blocked by Humanitl.` in a body comes from the proxy. `403`: decided against — do not repeat it; read any `note:` line and tell the user what was refused, why, and what else could work.
+`Blocked by Humanitl.` comes from the proxy. `403`: decided against — do not repeat it; read any `note:` line and tell the user what was refused, why, and what else could work.
 
 `http://humanitl.internal/`: `GET /` lists the rules, `POST /ask` with one line asks the user (`202`). Only the user can add a rule.
 
 One rule allows model calls to {llm_host}, nothing else on that host.
 
 <!-- ask_mode: ui -->
-Rules decide most; the rest waits up to {timeout}s for a person, then `504`. Waiting is normal: do not abort or retry.
+Rules decide most; the rest waits up to {timeout}s for a person, then `504`. Waiting is normal: do not abort; a tool that gives up sooner withdraws the question, `curl` waits.
 <!-- ask_mode: none -->
 Rules decide everything here; nobody is asked, and what no rule allows fails at once with `504`. Tell the user which rule is missing.

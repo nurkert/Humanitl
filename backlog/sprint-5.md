@@ -69,6 +69,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-304 | The agent knows it has web access through the proxy | S | HUM-071, HUM-274 |
 | HUM-311 | The Debian changelog line stays within lintian's 80 characters for every version | S | HUM-273 |
 | HUM-298 | The terminal goes full window from anywhere, by shortcut and button | S | HUM-042, HUM-286 |
+| HUM-308 | Agents do not ask twice and do not give up while a request waits | S | HUM-274, HUM-304 |
 
 ---
 
@@ -6954,3 +6955,168 @@ back to where he was.
   Fokusanfrage an einen noch nicht eingehängten Knoten wirkt beim Einhängen,
   `autofocus` im neuen Scope); alle drei Wege entfernt rot, nur das
   Nachholen übrig grün.
+
+---
+## HUM-308 · Agents do not ask twice and do not give up while a request waits
+Sprint: 5 · Size: S · Dependencies: HUM-274, HUM-304
+
+### Context
+Owner report of 2026-10-29, two problems:
+
+1. **Asked twice.** OpenCode asks "allow webfetch?" in its own terminal before
+   it fetches a page, and then Humanitl holds the same request in Intercept.
+   The bundled `agents/opencode/opencode.json.tmpl` sets
+   `"webfetch": "ask"`, also in `OPENCODE_PERMISSION`. The owner wants the
+   agents to run without their own prompts inside the sandbox; Humanitl is the
+   gate.
+2. **Gives up while waiting.** An agent tool such as OpenCode's `webfetch`
+   times out while the request still waits for the owner in Intercept; the
+   agent then reports a failure and stops. When a client gives up, the proxy
+   ends the held flow as `ClientTimeout` (`HoldQueue::hold`, ticket dropped),
+   and the card leaves the queue before anybody decided.
+
+The hold lasts `hold.timeout_secs` (default 300) with `hold.ask_mode` `ui` or
+`terminal`; with `none` a request without a rule fails at once and nothing
+waits.
+
+### Specification
+1. **OpenCode permissions.** The template's `permission` block sets
+   `webfetch` and `bash` to `allow`; `websearch` and `external_directory`
+   stay `deny`. `OPENCODE_PERMISSION` carries the same block (it is derived
+   from the template). No entry is `ask`. Check the schema against the
+   installed OpenCode, not the documentation.
+2. **`edit`.** OpenCode already allows edits by default. Write `edit`
+   explicitly only if it does not change the behaviour of OpenCode's built-in
+   agents; otherwise leave it out and say why.
+3. **pi.** Find out from the installed package (1.4.0, read-only, never
+   `~/.pi`) whether pi has permission prompts. If it has, the bundled
+   `settings.json` switches them off; if not, the template stays and
+   `agents/pi/README.md` says so.
+4. **Timeouts.** Find each agent's own timeout for the tools that reach the
+   network (OpenCode `webfetch` and `bash`, pi `bash`). Where a configuration
+   switch exists, the adapter raises the tool's default timeout to at least
+   `hold.timeout_secs` in the ask modes `ui` and `terminal`, and leaves the
+   agent's default with `none`. Where the cap is fixed below the hold, the
+   briefing says in one short sentence what happens and what to do instead;
+   the sentence must be true for every adapter that shares the briefing, and
+   both languages stay within `TOKEN_BUDGET` (185, worst case).
+5. **Documentation.** `docs/SECURITY.md` explains why the agent's own prompts
+   protect nothing inside the sandbox, `docs/THREAT-MODEL.md` stays
+   consistent, and the guides that describe the permission block and the
+   environment follow. The README security statement is unchanged.
+
+### Non-goal
+- No change to the proxy, the hold or `hold.timeout_secs`.
+- No countdown of the agent's own tool timeout in Intercept (candidate).
+- OpenCode's remaining own questions (`read` of `*.env`, `doom_loop` after
+  three identical calls) stay at OpenCode's default; neither is a network
+  decision.
+
+### Tests
+- `sandbox/tests/opencode_adapter.rs`: the rendered `opencode.json` and
+  `OPENCODE_PERMISSION` allow `webfetch` and `bash`, carry no `ask`, keep
+  `websearch` and `external_directory` at `deny`; the bash timeout variable
+  follows `hold.timeout_secs` in `ui` and `terminal`, has a floor and a
+  ceiling, and is absent with `none`.
+- `pi_config.rs`: the rendered `settings.json` sets nothing beyond provider,
+  model and telemetry.
+- `briefing.rs`: the sentence about a tool that gives up sooner and `curl`
+  stands in the ask block of both languages and not in the `none` block.
+- Mutation proof per new assertion, restored byte-identical.
+
+### Acceptance criteria
+- [ ] OpenCode in the sandbox fetches and runs commands without asking in its
+      own interface; the request is held once, in Intercept.
+- [ ] A `curl` in OpenCode's `bash` waits at least `hold.timeout_secs` by
+      default; pi's `bash` has no default timeout to raise.
+- [ ] The briefing tells the agent that a tool with a shorter limit
+      withdraws the question and that `curl` waits, in both languages, within
+      185 tokens.
+- [ ] README security statement unchanged; `docs/SECURITY.md` and
+      `docs/THREAT-MODEL.md` say why agent-side prompts are no boundary.
+
+### Umsetzung (HUM-308)
+
+- **Gemessen, OpenCode.** Installiert ist 1.18.31 (`~/.opencode/bin/opencode`,
+  Konstante `"1.18.31"` in den Zeichenketten des Binärprogramms; ausgeführt
+  wurde es nicht, damit nichts nach `~/.local/share/opencode` schreibt).
+  Schema des Blocks `permission`: `read`, `edit`, `glob`, `grep`, `list`,
+  `bash`, `task`, `external_directory`, `todowrite`, `question`, `webfetch`,
+  `websearch`, `lsp`, `doom_loop`, `skill`, Werte `allow`/`ask`/`deny`.
+  Vorgabe aller Agenten: `"*": "allow"`, `doom_loop: "ask"`,
+  `external_directory: "ask"` (außer Arbeits- und Temp-Verzeichnis),
+  `read` von `*.env`/`*.env.*`: `ask`. Die Rechte aus der Konfiguration
+  werden als Letztes über die eines jeden eingebauten Agenten gelegt
+  (`merge(defaults, agent, user)`); der Plan-Agent hat
+  `edit: {"*": "deny", <Plan-Dateien>: "allow"}`.
+- **Gemessen, Fristen OpenCode.** `webfetch`: Vorgabe 30 s, höchstens 120 s
+  (`timeout` des Modells in Sekunden, `Math.min(..., 120000)`), fest im Code,
+  keine Einstellung. Vor der Frist steht die eigene Rückfrage
+  (`ask({permission: "webfetch"})`), dann der Abruf mit
+  `timeoutOrElse(... "Request timed out")`. `bash`: Vorgabe 120 s aus
+  `OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` (positive ganze Zahl, sonst
+  verworfen), je Aufruf überschreibbar, keine Obergrenze außer der des
+  Zeitgebers.
+- **Gemessen, pi 1.4.0** (`/usr/local/lib/node_modules/@earendil-works/pi-coding-agent`).
+  Keine Rückfragen vor Werkzeugaufrufen (`docs/security.md`: „it does not ask
+  for approval before every tool call"; Werkzeuge `read`, `write`, `edit`,
+  `bash`, `grep`, `find`, `ls` ohne Freigabeschritt; Freigaben gibt es nur
+  über Erweiterungen). `bash`: `timeout` optional, „no default timeout",
+  höchstens 2 147 483 s. Kein Web-Werkzeug. Die Vorlage bleibt; die
+  Vertrauensfrage zu Projekt-Erweiterungen (`defaultProjectTrust`) bleibt
+  beim Menschen.
+- **Gemessen, Humanitl.** `hold.timeout_secs` Vorgabe 300, gilt mit
+  `ask_mode` `ui` und `terminal`; `none` setzt die Frist auf null. Gibt der
+  Client auf, fällt in `HoldQueue::hold` das Ticket, und der Flow endet als
+  `Block { ClientTimeout }` (`408`); die Karte verlässt die Warteschlange.
+  Ein abgelaufener `webfetch` lässt also keine Frage zurück, die der Mensch
+  noch beantworten könnte; ein Satz „nach der Entscheidung einfach
+  wiederholen" wäre falsch gewesen.
+- **Vorlage.** `"webfetch": "allow"`, neu `"bash": "allow"`; `websearch` und
+  `external_directory` bleiben `deny`. `edit` bewusst nicht: ein
+  ausdrückliches `allow` stünde über dem `edit: deny` des Plan-Agenten und
+  machte den Plan-Modus schreibend; die Vorgabe `"*": "allow"` erlaubt
+  `edit` im Build-Agenten ohnehin ohne Rückfrage.
+- **Frist `bash`.** `opencode::bash_default_timeout_ms`: mit Frage
+  `(hold.timeout_secs + 60) * 1000`, mindestens 120 000, höchstens
+  2 147 483 547 (JavaScript-Zeitgeber minus die 100 ms, die OpenCode
+  aufschlägt); mit `none` keine Variable. Vorgabe ergibt `360000`. Die
+  Variable steht auf `VISIBLE_ENV`.
+- **Einweisung.** Block `ui`: „Waiting is normal: do not abort; a tool that
+  gives up sooner withdraws the question, `curl` waits." bzw. „Warten ist
+  normal: nicht abbrechen; gibt ein Tool früher auf, ist die Frage weg, `curl`
+  wartet." Wahr für beide Adapter: `curl` hat keine eigene Gesamtfrist, pis
+  `bash` keine Vorgabefrist, OpenCodes `bash` jetzt mindestens die Halte-Frist.
+  „or retry"/„nicht wiederholen" im Block entfällt, weil nach einem Abbruch nur
+  ein neuer Abruf neu fragt; das `403` bleibt „nicht wiederholen". Für das
+  Budget entfallen „in a body", im Deutschen „im Rumpf", „die" vor „Regeln",
+  „läuft", „auf diesem Host", „das meiste" wird „fast alles", und „eine
+  etwaige `note:`-Zeile" wird „etwaige `note:`-Zeilen" (eine `403` kann ohne
+  `note:` kommen; Review Codex). Nachgezählt mit
+  `tools/briefing-tokens.py` (`o200k_base`, ungünstigster Fall): englisch
+  181 (`ui`) und 165 (`none`), deutsch 185 und 169. `TOKEN_BUDGET` bleibt 185;
+  der deutsche Block `ui` steht damit genau an der Grenze.
+- **Doku.** `docs/SECURITY.md` neuer Abschnitt „The agent's own permission
+  prompts" und Changelog-Zeile, `docs/THREAT-MODEL.md` B1 und
+  Änderungshistorie, `docs/guides/agent-profiles.md` (Block, Tabelle, Fristen,
+  Umgebung), `docs/guides/first-session.md`, `agents/opencode/README.md`,
+  `agents/pi/README.md`, Kommentar in `tests/e2e/m3_agent_inside/run.sh`.
+  Die Sicherheitsaussage im README ist unverändert.
+- **Tests.** `opencode_adapter.rs`:
+  `opencode_does_not_ask_before_fetching_or_running_a_command`,
+  `opencode_bash_waits_at_least_as_long_as_the_hold`, dazu
+  `opencode_config_is_valid_json_and_points_to_llm` auf `allow` nachgezogen.
+  `briefing.rs`: `a_tool_that_gives_up_sooner_is_named_together_with_curl`.
+  `pi_config.rs`:
+  `the_settings_switch_nothing_beyond_provider_model_and_telemetry`.
+  `ipc`: der Name im Test der Erlaubnisliste.
+- **Mutationsbeweise**, je Mutation rot und danach mit `cmp` byte-gleich
+  zurückgestellt: `webfetch` wieder `ask`; `bash` entfernt; `edit: allow`
+  ergänzt; Reserve 0; ohne Untergrenze; ohne Obergrenze; `none` setzt die
+  Variable; Variable nicht in die Umgebung gekettet; englischer oder deutscher
+  Satz entfernt; Satz im Block `none`; `defaultProjectTrust` in der
+  pi-Vorlage.
+- **Kandidaten.** In Intercept anzeigen, wie lange das Werkzeug des Agenten
+  noch wartet (die Frist kennt nur der Agent; für `webfetch` 30 oder 120 s).
+  OpenCodes `doom_loop`-Frage nach drei gleichen Aufrufen, die ein
+  wiederholter Abruf auslösen kann. Mehr Luft im deutschen Briefing.

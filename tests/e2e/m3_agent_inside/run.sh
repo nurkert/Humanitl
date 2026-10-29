@@ -1576,10 +1576,12 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
     # `/_debug/tool` -- aus der Sicht des Empfängers, nicht aus dem, was der
     # Agent darüber schreibt.
     #
-    # Ein eigenes Profil und nicht `llm-only` selbst: In der Sandbox steht
-    # `OPENCODE_PERMISSION` auf `{"webfetch":"ask"}`, und ohne Menschen
-    # verweigert OpenCode das Werkzeug. Gemessen würde dann die Berechtigung
-    # des Agenten statt der Regel von Humanitl. `[config.sandbox.env]` steht
+    # Ein eigenes Profil und nicht `llm-only` selbst: Bis HUM-308 stand
+    # `OPENCODE_PERMISSION` in der Sandbox auf `{"webfetch":"ask"}`, und ohne
+    # Menschen verweigerte OpenCode das Werkzeug. Seitdem erlaubt der Adapter
+    # `webfetch` selbst; das Profil setzt es weiter ausdrücklich, damit der
+    # Lauf die Regel von Humanitl misst und nicht die Vorlage des Adapters
+    # voraussetzt. `[config.sandbox.env]` steht
     # über dem Adapter (`daemon/crates/ipc/src/sandbox.rs`, Reihenfolge der
     # Quellen); ein Projektprofil darf das nicht, ein globales schon.
     # Das Verzeichnis, in das die Vorbereitung oben ihre `llm-only.toml`

@@ -49,6 +49,18 @@
 //! ansprechen kann, muss das wissen. Welches Modell voreingestellt ist,
 //! bestimmt weiterhin Humanitl.
 //!
+//! **Keine zweite Frage, kein vorzeitiger Abbruch (HUM-308).** In der Sandbox
+//! ist Humanitl die Schranke, nicht `OpenCode`. Die Vorlage erlaubt deshalb
+//! `webfetch` und `bash` ohne Rückfrage; `edit` erlaubt `OpenCode` ohnehin
+//! (Vorgabe `"*": "allow"`), und ein ausdrückliches `"edit": "allow"` stünde
+//! als Letztes über dem `edit: deny` des eingebauten Plan-Agenten und machte
+//! den Plan-Modus schreibend. Warum die Rückfrage des Agenten in der Sandbox
+//! nichts schützt, steht in `docs/SECURITY.md`. Die Frist von `bash` hebt
+//! [`bash_default_timeout_ms`] über `hold.timeout_secs`; die von `webfetch`
+//! steht in 1.18.31 fest im Code (Vorgabe 30, höchstens 120 Sekunden) und
+//! lässt sich nicht einstellen. Für sie sagt das Briefing, dass ein Werkzeug,
+//! das früher aufgibt, die Frage zurückzieht und `curl` wartet.
+//!
 //! `OPENCODE_DISABLE_PROJECT_CONFIG` wäre der vierte Weg, schaltet aber
 //! dieselbe Variable auch die `AGENTS.md` des Projekts ab, also die Datei, aus
 //! der der Agent seine Arbeitsregeln liest. Der Adapter setzt sie deshalb
@@ -59,8 +71,8 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
-use humanitl_config::LlmConfig;
 use humanitl_config::llm_endpoint;
+use humanitl_config::{AskMode, HoldConfig, LlmConfig};
 use humanitl_core::diagnostics::codes::{AGENT_001, AGENT_002, AGENT_004, LLM_004};
 use humanitl_core::rule::{Action, HostPattern, Matcher, Rule};
 use humanitl_core::shell::shell_path;
@@ -189,6 +201,51 @@ pub const ENV_ENABLE_PARALLEL: &str = "OPENCODE_ENABLE_PARALLEL";
 pub const ENV_DISABLE_LSP_DOWNLOAD: &str = "OPENCODE_DISABLE_LSP_DOWNLOAD";
 /// Die Berechtigungen; wird als Letztes über alle Konfigurationsquellen gemergt.
 pub const ENV_PERMISSION: &str = "OPENCODE_PERMISSION";
+/// Die Vorgabefrist des Werkzeugs `bash` in Millisekunden (HUM-308).
+///
+/// `OpenCode` 1.18.31 liest sie als positive ganze Zahl; alles andere
+/// verwirft es still und nimmt [`OPENCODE_BASH_DEFAULT_TIMEOUT_MS`]. Das
+/// Modell kann je Aufruf eine eigene Frist mitgeben; die Variable setzt nur
+/// den Wert, der gilt, wenn es das nicht tut.
+pub const ENV_BASH_DEFAULT_TIMEOUT_MS: &str = "OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS";
+
+/// Die Frist, die `OpenCode` 1.18.31 ohne [`ENV_BASH_DEFAULT_TIMEOUT_MS`]
+/// einem Befehl gibt: 120 Sekunden.
+pub const OPENCODE_BASH_DEFAULT_TIMEOUT_MS: u64 = 120_000;
+
+/// So viel Zeit bekommt ein Befehl über `hold.timeout_secs` hinaus: für den
+/// Verbindungsaufbau vor dem Halten und die Antwort danach.
+pub const BASH_TIMEOUT_MARGIN_SECS: u64 = 60;
+
+/// Der größte Wert, den ein Zeitgeber in JavaScript fasst, abzüglich der
+/// 100 Millisekunden, die `OpenCode` selbst auf die Frist aufschlägt.
+/// Darüber feuert `setTimeout` sofort statt nie.
+const JS_TIMER_MAX_MS: u64 = 2_147_483_647 - 100;
+
+/// Die Vorgabefrist für `bash`, die eine gehaltene Anfrage abwartet (HUM-308).
+///
+/// Ein `curl` im Werkzeug `bash` wartet, solange der Proxy hält. Mit den
+/// 120 Sekunden von `OpenCode` bräche das Werkzeug den Befehl nach zwei
+/// Minuten ab, während die Karte bis zu `hold.timeout_secs` (Vorgabe 300)
+/// auf den Menschen wartet; der Abbruch schließt die Verbindung, und der
+/// Proxy beendet den Fluss als `ClientTimeout`, bevor jemand entschieden hat.
+///
+/// Gilt nur, wenn jemand gefragt wird. Mit `ask_mode = none` endet eine
+/// Anfrage ohne Regel sofort, und `None` lässt die Vorgabe von `OpenCode`
+/// stehen. Nie kleiner als diese Vorgabe, nie größer als ein
+/// JavaScript-Zeitgeber fasst.
+#[must_use]
+pub fn bash_default_timeout_ms(hold: &HoldConfig) -> Option<u64> {
+    match hold.ask_mode {
+        AskMode::None => None,
+        AskMode::Ui | AskMode::Terminal => Some(
+            hold.timeout_secs
+                .saturating_add(BASH_TIMEOUT_MARGIN_SECS)
+                .saturating_mul(1000)
+                .clamp(OPENCODE_BASH_DEFAULT_TIMEOUT_MS, JS_TIMER_MAX_MS),
+        ),
+    }
+}
 
 /// Die Id der Passthrough-Regel; fest, damit sie überall dieselbe ist.
 const PASSTHROUGH_RULE_ID: u128 = 0x0192_0000_0000_7000_8000_0000_0000_00ff;
@@ -910,6 +967,10 @@ impl AgentAdapter for OpenCodeAdapter {
             permission_json()
                 .ok()
                 .map(|json| (ENV_PERMISSION.to_owned(), json)),
+        )
+        .chain(
+            bash_default_timeout_ms(&ctx.hold)
+                .map(|ms| (ENV_BASH_DEFAULT_TIMEOUT_MS.to_owned(), ms.to_string())),
         )
         .collect()
     }

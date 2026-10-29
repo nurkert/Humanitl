@@ -80,7 +80,9 @@ this host" and makes that choice visible (K-02).
 ```
 
 - **B1, sandbox to host.** The kernel boundary: namespaces, seccomp, no capabilities. Everything
-  inside is attacker-controlled.
+  inside is attacker-controlled, including the agent's own permission prompts; they are no
+  boundary, and Humanitl switches them off for fetching and commands
+  ([`SECURITY.md`](SECURITY.md#the-agents-own-permission-prompts-hum-308)).
 - **B2, the one door.** The proxy socket file. Every byte through it is parsed by the daemon,
   which is why the daemon is memory-safe Rust and hardened by systemd.
 - **B3, daemon to the network.** Only after a rule or a human allowed the request, resolved once
@@ -389,6 +391,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-22 | K-17: agent program from a per-user directory bound read-only as one file | HUM-278 |
 | 2026-10-23 | K-02: several saved model servers, one keyring item each; only the active origin gets a key and the passthrough | HUM-289 |
 | 2026-10-24 | K-06: the session's first process takes the daemon's pseudo-terminal as controlling terminal, `--new-session` stays; K-17: a caller's command gets the configured agent bound beside it, never itself | HUM-280 |
+| 2026-10-29 | B1: the agent's own permission prompts are no boundary; OpenCode's for `webfetch` and `bash` are off | HUM-308 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

@@ -229,6 +229,7 @@ pub static VISIBLE_ENV: &[&str] = &[
     opencode::ENV_ENABLE_PARALLEL,
     opencode::ENV_DISABLE_LSP_DOWNLOAD,
     opencode::ENV_PERMISSION,
+    opencode::ENV_BASH_DEFAULT_TIMEOUT_MS,
     // The pi adapter (HUM-274), by name for the same reason.
     pi::ENV_AGENT_DIR,
     pi::ENV_OFFLINE,
@@ -3936,6 +3937,7 @@ mod tests {
             "HOME",
             "HUMANITL_SESSION",
             "OPENCODE_PERMISSION",
+            "OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS",
         ] {
             assert!(
                 shows_env_value(visible, v1::ValueOrigin::Profile),

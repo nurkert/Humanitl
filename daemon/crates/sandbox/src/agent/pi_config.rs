@@ -209,4 +209,28 @@ mod tests {
         assert_eq!(doc["defaultModel"], Value::String("m2".to_owned()));
         assert_eq!(doc["enableInstallTelemetry"], Value::Bool(false));
     }
+
+    /// pi 1.4.0 fragt vor keinem Werkzeugaufruf (`docs/security.md` des
+    /// Pakets: "it does not ask for approval before every tool call"); es gibt
+    /// also keine Rückfrage abzuschalten (HUM-308). Die Vorlage setzt deshalb
+    /// nur Provider, Modell und Telemetrie, und vor allem kein
+    /// `defaultProjectTrust`: die Vertrauensfrage zu Erweiterungen eines
+    /// Projekts bleibt beim Menschen.
+    #[test]
+    fn the_settings_switch_nothing_beyond_provider_model_and_telemetry() {
+        let doc: Value =
+            serde_json::from_str(&render_settings(&["m".to_owned()]).unwrap()).unwrap();
+        let mut keys: Vec<&str> = doc
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec!["defaultModel", "defaultProvider", "enableInstallTelemetry"],
+            "{doc}"
+        );
+    }
 }
