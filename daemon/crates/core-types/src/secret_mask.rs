@@ -258,6 +258,20 @@ impl SecretMasks {
         }
         out
     }
+
+    /// Ob in `text` ein bekanntes Geheimnis steht, so wie [`SecretMasks::apply`]
+    /// oder [`SecretMasks::apply_host`] es ersetzen würden (HUM-271).
+    ///
+    /// Für Text, der nicht maskiert werden darf, weil er danach etwas anderes
+    /// täte: eine vorgeschlagene Regel, ein Befehl zum Kopieren. Wer hier
+    /// `true` bekommt, gibt den Text gar nicht erst heraus. Verglichen wird
+    /// wie in [`SecretMasks::apply_host`] auch ohne Rücksicht auf die
+    /// Schreibung; ein Treffer zu viel kostet einen Vorschlag, einer zu wenig
+    /// den Schlüssel.
+    #[must_use]
+    pub fn appears_in(&self, text: &str) -> bool {
+        self.apply(text) != text || self.apply_host(text) != text
+    }
 }
 
 /// `text` mit jedem Bereich aus `spans` durch [`MASK`] ersetzt.
@@ -410,5 +424,18 @@ mod tests {
         assert!(masks.expected_at(&hash, "192.168.1.20:11434"));
         assert!(!masks.expected_at(&hash, "evil.example:443"));
         assert!(!masks.expected_at(&sha256(b"sk-live-other"), "192.168.1.20:11434"));
+    }
+
+    /// Ein Schlüssel in einem Text, roh, kodiert oder als Label in anderer
+    /// Schreibung, ist darin zu finden; ein Text ohne ihn nicht (HUM-271).
+    #[test]
+    fn a_known_secret_appears_in_any_spelling_the_masks_replace() {
+        let masks = SecretMasks::default();
+        assert!(!masks.appears_in("Sk-Live-0123456789.evil.example"));
+        masks.add("sk-live-0123456789");
+        assert!(masks.appears_in("/v1/sk-live-0123456789/files"));
+        assert!(masks.appears_in("/v1/sk%2Dlive-0123456789"));
+        assert!(masks.appears_in("Sk-Live-0123456789.evil.example"));
+        assert!(!masks.appears_in("/v1/files on api.example.com"));
     }
 }

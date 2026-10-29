@@ -49,6 +49,9 @@
 //! - [`limits`]: die Befunde der Grenzen aus `limits.*` (`LIMIT_001`,
 //!   `LIMIT_004`, `LIMIT_005`) und der Regelvorschlag mit `stream: true`
 //!   (HUM-057).
+//! - [`suggestion`]: ein Vorschlag, der ein Geheimnis der Masken trüge,
+//!   verlässt den Daemon nicht; das `why` sagt stattdessen, warum er fehlt
+//!   (HUM-271).
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
@@ -71,6 +74,7 @@ pub mod registry;
 pub mod resolver;
 pub mod rules_store;
 pub mod session;
+pub mod suggestion;
 pub mod tls;
 pub mod tls_observe;
 pub mod trust;

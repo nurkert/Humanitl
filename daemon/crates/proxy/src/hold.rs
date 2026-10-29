@@ -707,10 +707,19 @@ impl HoldQueue {
     ///    (HUM-031),
     /// 4. der Rundfunk an die Zuhörer.
     ///
+    /// Vor allen vier verliert ein Befund seinen Vorschlag, wenn der ein
+    /// Geheimnis der Masken trüge ([`crate::suggestion`], HUM-271).
+    ///
     /// Die Reihenfolge ist Absicht: Die Aufzeichnung sieht die Zeile des
     /// Flows, bevor der Katalog Apex und Kennung nachträgt, und beide sind
     /// fertig, bevor ein Zuhörer das Ereignis bekommt.
-    pub fn publish(&self, event: FlowEvent) {
+    pub fn publish(&self, mut event: FlowEvent) {
+        // Ein Vorschlag mit einem Geheimnis der Masken geht auf keinem der
+        // Wege unten hinaus, weder in die Registry noch in die Aufzeichnung
+        // noch in den Strom; maskiert wäre er ein anderer (HUM-271).
+        if let FlowEvent::Diagnostic { diagnostic, .. } = &mut event {
+            self.withhold_secret_fix(diagnostic);
+        }
         let order = self
             .publish_order
             .lock()
@@ -748,6 +757,21 @@ impl HoldQueue {
             domains.observe(*flow_id, &request.authority.host, *at);
         }
         let _ = self.events.send(event);
+    }
+
+    /// Nimmt `diagnostic` den Vorschlag, wenn er ein Geheimnis aus den Masken
+    /// der Aufzeichnung trüge ([`crate::suggestion::withhold_secret_fix`],
+    /// HUM-271); ohne Aufzeichnung gibt es keine Masken und nichts zu tun.
+    ///
+    /// [`HoldQueue::publish`] ruft es für jeden Befund im Strom. Wer einen
+    /// Befund außerdem am Flow ablegt, bevor er veröffentlicht wird (die
+    /// Sperre `Flow::send_refusal`), ruft es vorher selbst, damit die Kopie am
+    /// Datensatz dieselbe ist wie die im Strom. Ein zweiter Aufruf ändert
+    /// nichts mehr.
+    pub fn withhold_secret_fix(&self, diagnostic: &mut Diagnostic) -> bool {
+        self.recorder.as_ref().is_some_and(|recorder| {
+            crate::suggestion::withhold_secret_fix(diagnostic, &recorder.masks())
+        })
     }
 
     /// Der synchrone Teil von [`HoldQueue::hold`], siehe dort.
@@ -1445,6 +1469,119 @@ mod tests {
                 assert_eq!(live.len(), 2 * PER_THREAD);
                 assert_eq!(live, stored, "flow {id}");
             }
+        });
+    }
+
+    /// Ein Befehl zum Kopieren mit dem Schlüssel im Pfad verlässt den Daemon
+    /// auf keinem Weg: nicht im Strom, nicht am Datensatz der Registry (aus
+    /// dem `GetFlow` liest), nicht in der Aufzeichnung. Derselbe Befehl ohne
+    /// Schlüssel bleibt Byte für Byte, wie er war (HUM-271).
+    #[test]
+    fn a_copy_command_with_a_masked_key_is_withheld_on_every_way_out() {
+        use std::time::SystemTime;
+
+        use humanitl_core::diagnostics::codes::LIMIT_004;
+        use humanitl_core::{
+            Authority, Diagnostic, FixAction, Flow, FlowId, HostName, HttpRequest, Method, Scheme,
+            SessionId, Severity,
+        };
+        use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
+
+        use crate::ConnectionContext;
+        use crate::registry::FlowRecord;
+        use crate::suggestion::WITHHELD_SENTENCE;
+
+        const KEY: &str = "sk-live-0123456789abcdef";
+
+        let dir = tempfile::tempdir().unwrap();
+        let recorder = Recorder::open(
+            &dir.path().join("humanitl.db"),
+            &dir.path().join("blobs"),
+            RecorderSettings::default(),
+        )
+        .unwrap();
+        let session = SessionId::new();
+        recorder.start_session(&SessionMeta {
+            id: session,
+            started_at: SystemTime::now(),
+            sandbox_profile: "default".to_owned(),
+            llm_endpoint: None,
+            work_dir: "/w".to_owned(),
+            agent: "opencode".to_owned(),
+        });
+        recorder.mask_secret(KEY, None);
+        let queue = HoldQueue::new(&Limits::default()).recording(recorder.clone());
+        let mut stream = queue.subscribe();
+
+        let request = HttpRequest::new(
+            Method::GET,
+            Scheme::Https,
+            Authority::with_scheme(HostName::Dns("api.example.com".to_owned()), Scheme::Https),
+            "/v1",
+        );
+        let flow = Flow::new(FlowId::new(), session, SystemTime::now(), request);
+        queue
+            .registry()
+            .insert(FlowRecord::new(&flow, &ConnectionContext::plain(session)));
+        queue.publish(flow.received_event());
+        let with_command = |command: String| {
+            Diagnostic::builder(LIMIT_004, Severity::Warning)
+                .why("the target went silent.")
+                .fix(FixAction::CopyCommand(command))
+                .build()
+        };
+        let plain = with_command("curl -sS https://api.example.com/v1/models".to_owned());
+        let leaking = with_command(format!("curl -sS https://api.example.com/v1/{KEY}/models"));
+        for diagnostic in [&leaking, &plain] {
+            queue.publish(FlowEvent::Diagnostic {
+                flow_id: Some(flow.id),
+                at: SystemTime::now(),
+                diagnostic: Box::new(diagnostic.clone()),
+            });
+        }
+
+        let mut streamed = Vec::new();
+        while let Ok(event) = stream.try_recv() {
+            if let FlowEvent::Diagnostic { diagnostic, .. } = event {
+                streamed.push(*diagnostic);
+            }
+        }
+        let registered = queue.registry().get(flow.id).unwrap().diagnostics;
+        let withheld = Diagnostic {
+            fix: None,
+            why: format!("the target went silent. {WITHHELD_SENTENCE}"),
+            ..leaking.clone()
+        };
+        assert_eq!(streamed, [withheld.clone(), plain.clone()]);
+        assert_eq!(registered, [withheld, plain]);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            recorder.flush().await;
+            let rows = recorder
+                .get_flow(flow.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .diagnostics;
+            let columns: Vec<(Option<&str>, Option<&str>)> = rows
+                .iter()
+                .map(|row| (row.fix_kind.as_deref(), row.fix_value.as_deref()))
+                .collect();
+            assert_eq!(
+                columns,
+                [
+                    (None, None),
+                    (
+                        Some("copy_command"),
+                        Some("curl -sS https://api.example.com/v1/models")
+                    ),
+                ]
+            );
+            assert!(rows[0].why.ends_with(WITHHELD_SENTENCE));
         });
     }
 }
