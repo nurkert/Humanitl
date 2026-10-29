@@ -71,6 +71,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-298 | The terminal goes full window from anywhere, by shortcut and button | S | HUM-042, HUM-286 |
 | HUM-308 | Agents do not ask twice and do not give up while a request waits | S | HUM-274, HUM-304 |
 | HUM-299 | A second shell in a running sandbox | M | HUM-042, HUM-279, HUM-280 |
+| HUM-307 | The Intercept action bar keeps Allow and Block on one line | S | HUM-286 |
 
 ---
 
@@ -7357,3 +7358,150 @@ refuse a second listener); that is declared, not hidden.
   - Kandidaten für eigene Issues: weitere Shells vom Agenten trennen
     (Unter-Nutzernamensraum mit anderer UID, oder `hidepid`/`subset=pid`);
     das interne Paar in Garantie 2 der `README.md` erwähnen.
+
+---
+## HUM-307 · The Intercept action bar keeps Allow and Block on one line
+
+### Context
+Owner report of 2026-10-29: in the Intercept tab "Block" sits lower than
+"Allow", as if wrapped into a second row. It is a second row: below an
+inspector width of `actionBarWrapWidth` (800 px, times the text scale) the bar
+switched to a column with Block on its own line. The threshold was measured
+with the square glyphs of the test font, which are about twice as wide as
+Inter; with real fonts the controls fit long before that, yet the inspector
+reaches 800 px only in windows wider than about 1920 px, and with the rail
+expanded (HUM-254) never at 1280 px.
+
+At the same time `action_bar_de_test` "the German action bar keeps every
+label on one line" failed locally ("Angehalten: keine Regel · Vorgabe:
+fragen" cut short) and passed in CI. The test built the app without its own
+UI state file and read `~/.local/state/humanitl/ui-state.json` of whoever
+ran it; with the rail expanded there, the inspector shrank to its minimum of
+480 px.
+
+### Specification
+1. Allow and Block share one line at every inspector width from the minimum
+   (480 px) up, at text scale 1.0 and 1.3, in English and German. The line
+   measures what it carries and gives way in a fixed order: the distance
+   between the decisions shrinks from 160 px to a minimum, then
+   "Edit + Allow" leaves the line (`E` still opens the editor; the hidden
+   control is neither painted, hit, read out nor focusable), then the valve
+   shortens its label down to `HSize.hitDecision.width`. Only when even that
+   does not fit (twice the text scale in the narrowest pane) Block moves
+   under Allow, as `docs/UX.md` 6 allows for scaled text. Block and the note
+   slot keep their size; the hold reason below keeps its ellipsis.
+2. Allow and Block stand at the same height, vertically centred on one line.
+3. No widget test reads the UI state file of the person running it.
+4. Layout tests that judge what fits measure with a proportional font that
+   is the same in CI and locally.
+
+### Acceptance criteria
+1. A widget test asserts the same vertical centre and label baseline for
+   Allow and Block in both locales, at 1.0 and 1.3, in the narrowest pane,
+   the default window and a wide window, with and without findings.
+2. A test of the layout steps pins every boundary to the pixel.
+3. A guard test fails when a test file builds `HumanitlApp()` without its
+   own UI state file.
+4. Only the goldens the layout change alters are regenerated, and they are
+   named in the commit.
+
+### Umsetzung (HUM-307)
+
+- **Ursache des lokalen Rots.** Sieben Testdateien (`action_bar_de_test`,
+  `action_bar_test`, `intercept_screen_test`, `undo_test`, `rebuild_test`,
+  `history_handoff_test`, `smoke_test`) bauten `HumanitlApp()` ohne
+  `uiStateOverride()` und lasen damit `~/.local/state/humanitl/ui-state.json`.
+  Beim Besitzer steht dort `shellRailExpanded: true`; die Leiste der Shell
+  nimmt dann 200 statt 48 px, der Inspector fällt bei 1280 px auf seine
+  480 px, die Leiste schaltete auf die Spalte, und der Haltegrund wurde mit
+  den Quadraten der Testschrift gekürzt. In der CI gibt es die Datei nicht.
+  Schriftmetrik, Plattform und Textskalierung waren es nicht. Alle sieben
+  Dateien tragen jetzt `uiStateOverride()`; `test/harness/ui_state_guard_test.dart`
+  hält das am Quelltext fest.
+- **Ursache der Meldung.** Dieselbe Spalte im echten Fenster: Unter 800 px
+  Inspector stand Block unter Allow, also bei 1920 px Fenster
+  ((1920 − 48) · 0,44 − 24 = 799 px) gerade noch, mit aufgeklappter Leiste
+  erst recht. Mit Inter oder Roboto passen Ventil, Notizplatz und Block schon
+  in 456 px.
+- **`DecisionRow`** (`widgets/decision_row.dart`), ein eigenes
+  Render-Objekt mit vier Plätzen (Ventil, Edit, Notiz, Block), ersetzt
+  `LayoutBuilder`, `_wide`, `_narrow`, den `Wrap` und `actionBarWrapWidth`.
+  Es misst die Kinder und gibt in der Reihenfolge der Spezifikation nach:
+  Abstand von [decisionGap] (160) bis [decisionGapMin] (96, neu), dann
+  verlässt Edit die Zeile, dann schrumpft das Ventil bis 120 px (oder bis
+  zu seiner eigenen kleinsten Breite, wenn die größer ist; die liefert
+  `getMinIntrinsicWidth`, seit die Beschriftung des Ventils in
+  `ShrinkableLabel` steht, denn ein einzeiliger Text mit Ellipse meldet
+  sonst seine volle Breite als Minimum), zuletzt
+  Block unter Allow. Der Abstand zählt vom rechten Rand der Allow-Seite bis
+  Block, der leere Notizplatz steht darin. Alle Kinder stehen vertikal
+  zentriert. Das ausgelassene Edit wird nicht gemalt, nicht getroffen,
+  nicht vorgelesen (`visitChildrenForSemantics`) und verliert im selben
+  Layout Fokus und Tabstopp: Ein eigener `FocusNode` vor dem Edit
+  (`_editGate`) bekommt `descendantsAreFocusable` und
+  `descendantsAreTraversable` direkt gesetzt, ohne Neubau. Die erste
+  Fassung nahm es per `ExcludeFocus` erst einen Frame später heraus; ein
+  `Enter` in diesem Frame hätte den Editor aus einem unsichtbaren Knopf
+  geöffnet (Review Codex). Das offene Raster steht jetzt unter der Zeile
+  statt zwischen Allow und Block.
+- **Review.** Codex nannte die privaten benannten Konstruktorparameter
+  (`required this._gap`) blockierend; verworfen: Dart 3.13 erlaubt private
+  benannte Parameter, Analyse und Tests laufen damit. Übernommen: Fokus im
+  selben Frame (siehe oben), 12 px statt 0 über einer eigenen Edit-Zeile
+  in der Spalte, ein Test der echten Spalte bei doppelter Schrift im
+  480-px-Pane (Block rechtsbündig an der Innenkante), Grundlinien statt
+  Unterkanten der Beschriftungen im Matrixtest, der Wächter prüft jeden Bau
+  von `HumanitlApp()` einzeln, und der Kommentar zu `decisionGap` sagt,
+  dass 160 nur noch in die intrinsische Breite eingeht.
+- **Offene Entscheidung des Besitzers.** Im Vorgabefenster 1280 px fällt
+  „Edit + Allow" auf Deutsch aus der Zeile und bleibt über `E` erreichbar.
+  So bleibt es, bis der Besitzer anders entscheidet.
+- **Hover der Notiz.** Statt einer `MouseRegion` um den `Wrap` hat Block
+  eine und der Notizplatz eine, deren Fläche bis an Block reicht; beim
+  Übergang fallen Verlassen und Betreten in dasselbe Ereignis, der Platz
+  flackert nicht.
+- **Deterministische Schrift.** `test/harness/layout_fonts.dart` lädt Roboto
+  aus `bin/cache/artifacts/material_fonts` des Flutter-SDK unter dem Namen
+  `Inter`, gleich in CI und lokal; Inter selbst liefert die App nicht mit.
+  Die Monospace-Familie bleibt bei den Quadraten (breiter als JetBrains Mono,
+  also auf der sicheren Seite). Benutzt von `action_bar_de_test` und
+  `action_bar_one_line_test`.
+- **Tests.** `action_bar_one_line_test.dart`: 24 Fälle (en/de, 1,0/1,3,
+  schmalster Pane mit aufgeklappter Leiste, Vorgabefenster, 1920 px, ohne
+  und mit Funden) prüfen gleiche Mitte und Grundlinie von Allow und Block,
+  mindestens 96 px Abstand, keine umbrochene Beschriftung eines Controls und
+  bei 1,0 ungekürzte Beschriftungen beider Entscheidungen (Ausnahme:
+  „Senden mit 2 Funden" im schmalsten Pane kürzt sich, bevor Block
+  umbricht); dazu Edit sichtbar und 160 px breit, Edit im schmalsten Pane
+  ausgelassen und fokusgesperrt. `decision_row_test.dart` legt jede Stufe auf
+  den Pixel (478/477, 366/336/335). `action_bar_test`: „the bar wraps and
+  puts block on its own line" (prüfte genau den Fehler) wird „a narrow pane
+  keeps block on the line of allow", neu „at twice the text scale block
+  moves under allow". `uiStateOverride` hat ein optionales `railExpanded`.
+- **Goldens neu (33, nur die von der Leiste veränderten):**
+  `action_bar_findings.{dark,light}-de`, `action_bar_narrow_{dark,light}`,
+  `action_bar_note_{dark,light}`, `action_bar_remember_open.{dark,light}-{de,en}`,
+  `action_bar_text_scale_2`, `intercept_diagnostic_tls_{dark,light}`,
+  `intercept_empty_{dark,light}`, `intercept_three_held_{dark,light}`,
+  `queue_grouped_collapsed_{dark,light}`, `queue_grouped_expanded_{dark,light}`,
+  `queue_grouped_scale2_{dark,light}`, `queue_new_pill_{dark,light}`,
+  `shell_{dark,light}`, `shell_settings_{dark,light}`,
+  `states_tls_rejected.{dark,light}-{de,en}`. Auf dem alten Stand sind alle
+  grün; neu erzeugt wurden genau die, die mit der Änderung rot wurden.
+- **Mutationsbeweise.** Alte `action_bar.dart` (Spalte unter 800 px): 24 von
+  24 Matrixfällen rot, dazu der schmale Fall in `action_bar_test` und
+  „drops the edit control". `uiStateOverride()` aus `action_bar_de_test`
+  entfernt: Wächter rot, und lokal beim Besitzer auch „with findings as
+  well". Edit in Stufe 3 nicht ausgelassen: drei rot („drops the edit control",
+  zwei Stufentests). Fokustor nie geschaltet: drei rot (Stufentest an
+  477 px, „loses focus in the frame it leaves", „drops the edit control").
+  Der alte Weg über `ExcludeFocus` nach einem Frame: „loses focus in the
+  frame it leaves" rot (`Enter` öffnet das Edit noch). Kein Abstand über
+  einer eigenen Edit-Zeile: „gets its own" rot. Block oben statt
+  zentriert: 12 Fälle bei 1,3 rot. Kleinster Abstand ignoriert
+  (`free(0)`): Stufentest an 477 px rot. Kleinste Breite des Ventils
+  ignoriert (nur 120 px): Stufentest „never shrinks below" rot, und
+  `queue_grouped_scale2_*` läuft im Ventil über. Ohne `ShrinkableLabel`
+  um die Beschriftung des Ventils: sechs Matrixfälle mit Funden rot (Block
+  rutscht unter Allow, weil das Ventil seine volle Beschriftung als
+  Minimum meldet).

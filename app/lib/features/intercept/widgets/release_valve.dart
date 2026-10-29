@@ -15,6 +15,7 @@ import 'package:flutter/widgets.dart';
 import '../../../core/ui/focus_ring.dart';
 import '../../../core/ui/hold_to_confirm.dart';
 import '../../../core/ui/ui.dart';
+import 'decision_row.dart' show ShrinkableLabel;
 
 /// Width of the chevron segment.
 const double valveChevronWidth = HSize.hitMin;
@@ -321,15 +322,19 @@ class _ReleaseValveState extends State<ReleaseValve> {
                         ),
                         SizedBox(width: tokens.spacing.x2),
                       ],
+                      // Kürzbar bis auf nichts: Die Zeile der Entscheidungen
+                      // fragt nach der kleinsten Breite des Ventils (HUM-307).
                       Flexible(
-                        child: ExcludeSemantics(
-                          child: Text(
-                            progress > 0 ? widget.holdLabel : widget.label,
-                            key: const Key('intercept-valve-label'),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: tokens.typography.ui13.medium.tinted(
-                              tokens.colors.fg0,
+                        child: ShrinkableLabel(
+                          child: ExcludeSemantics(
+                            child: Text(
+                              progress > 0 ? widget.holdLabel : widget.label,
+                              key: const Key('intercept-valve-label'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: tokens.typography.ui13.medium.tinted(
+                                tokens.colors.fg0,
+                              ),
                             ),
                           ),
                         ),
