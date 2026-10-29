@@ -3296,5 +3296,13 @@
   "setupHeadSandboxFailed": "A sandbox cannot start on this machine",
   "@setupHeadSandboxFailed": {"description": "Headline of the open machine step when a doctor line fails (HUM-287)."},
   "setupHeadSandboxUnmeasured": "Some checks of this machine could not run",
-  "@setupHeadSandboxUnmeasured": {"description": "Headline of the open machine step when a doctor line carried no measurement (HUM-287)."}
+  "@setupHeadSandboxUnmeasured": {"description": "Headline of the open machine step when a doctor line carried no measurement (HUM-287)."},
+  "sandboxTerminalFullWindowEnter": "Terminal full window (Ctrl+Shift+Enter)",
+  "@sandboxTerminalFullWindowEnter": {"description": "Tooltip and screen-reader label of the button in the header strip of the terminal that shows the terminal over the whole window, without rail and other panes, the same as the shortcut it names (HUM-298). The modifiers are named as they are printed on the keyboard of the language, like shellSettingsButton."},
+  "sandboxTerminalFullWindowLeave": "Back to the previous view (Ctrl+Shift+Enter)",
+  "@sandboxTerminalFullWindowLeave": {"description": "Tooltip and screen-reader label of the same button while the terminal fills the window: it returns to the screen that was showing before (HUM-298)."},
+  "shellPaletteTerminalFullWindowEnter": "Show terminal full window",
+  "@shellPaletteTerminalFullWindowEnter": {"description": "Command palette entry: shows the terminal of the sandbox over the whole window from any section; Ctrl+Shift+Enter does the same (HUM-298)."},
+  "shellPaletteTerminalFullWindowLeave": "Leave terminal full window",
+  "@shellPaletteTerminalFullWindowLeave": {"description": "Command palette entry while the terminal fills the window: back to the section and layout that were showing before (HUM-298)."}
 }

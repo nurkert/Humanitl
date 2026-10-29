@@ -1341,5 +1341,9 @@
   "setupHeadProjectNone": "Den Ordner wählen, in dem der Agent arbeitet",
   "setupHeadProjectRefused": "Dieser Ordner lässt sich nicht verwenden",
   "setupHeadSandboxFailed": "Auf diesem Rechner startet keine Sandbox",
-  "setupHeadSandboxUnmeasured": "Einige Prüfungen dieses Rechners liefen nicht"
+  "setupHeadSandboxUnmeasured": "Einige Prüfungen dieses Rechners liefen nicht",
+  "sandboxTerminalFullWindowEnter": "Terminal im ganzen Fenster (Strg+Umschalt+Enter)",
+  "sandboxTerminalFullWindowLeave": "Zurück zur vorigen Ansicht (Strg+Umschalt+Enter)",
+  "shellPaletteTerminalFullWindowEnter": "Terminal im ganzen Fenster zeigen",
+  "shellPaletteTerminalFullWindowLeave": "Terminal-Vollfenster verlassen"
 }

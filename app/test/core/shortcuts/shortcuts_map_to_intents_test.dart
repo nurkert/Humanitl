@@ -72,6 +72,8 @@ final List<KeyRow> shellTable = <KeyRow>[
   ctrl(LogicalKeyboardKey.keyK, 'PaletteIntent'),
   ctrl(LogicalKeyboardKey.comma, 'SettingsIntent'),
   ctrl(LogicalKeyboardKey.digit0, 'ToggleRailIntent'),
+  ctrlShift(LogicalKeyboardKey.enter, 'ToggleTerminalFullWindowIntent'),
+  ctrlShift(LogicalKeyboardKey.numpadEnter, 'ToggleTerminalFullWindowIntent'),
 ];
 
 /// Die Warteschlange (CONVENTIONS 3.9 und die Bindungen von HUM-029, HUM-072).
