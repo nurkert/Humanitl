@@ -648,8 +648,9 @@ extension CheckResultToDomain on pb.CheckResult {
 
 /// `SandboxEvent.Status` to [SandboxStatus].
 extension SandboxStatusToDomain on pb.SandboxEvent_Status {
-  /// The domain form, without diagnostics: those arrive as their own events
-  /// and are collected by the provider that reads the stream.
+  /// The domain form, without the diagnostics of an operation: those arrive
+  /// as their own events and are collected by the provider that reads the
+  /// stream. The one finding the snapshot does carry is [SandboxStatus.llmDiagnostic].
   SandboxStatus toDomain() => SandboxStatus(
     state: state.toDomain(),
     sessionId: sessionId.isEmpty ? null : SessionId(sessionId),
@@ -669,6 +670,7 @@ extension SandboxStatusToDomain on pb.SandboxEvent_Status {
     argvPreview: argvPreview,
     agentRunning: agentRunning,
     refusals: hasRefusals() ? refusals.toDomain() : null,
+    llmDiagnostic: hasLlm() ? llm.toDomain() : null,
   );
 }
 

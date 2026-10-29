@@ -252,6 +252,13 @@ abstract class SandboxStatus with _$SandboxStatus {
     /// What the filter refused the agent, counted (HUM-138); null while no
     /// sandbox runs or the daemon did not say.
     SandboxRefusals? refusals,
+
+    /// The daemon's finding about the passthrough to the model in this run
+    /// (HUM-251), mirror of `SandboxEvent.Status.llm`: `LLM_001` while the
+    /// last request the passthrough let out could not connect, null otherwise.
+    /// The daemon decides this from the flows; the screen only draws it
+    /// (ADR-018).
+    Diagnostic? llmDiagnostic,
   }) = _SandboxStatus;
 
   const SandboxStatus._();
