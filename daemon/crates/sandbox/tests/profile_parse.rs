@@ -46,6 +46,7 @@ const ENV_KIT: &[&str] = &[
     "https_proxy",
     "NO_PROXY",
     "no_proxy",
+    "NODE_USE_ENV_PROXY",
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
     "CURL_CA_BUNDLE",

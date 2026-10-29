@@ -185,6 +185,9 @@ NIX_SSL_CERT_FILE
 NODE_EXTRA_CA_CERTS
 /etc/humanitl/ca.crt
 --setenv
+NODE_USE_ENV_PROXY
+1
+--setenv
 NO_PROXY
 
 --setenv
