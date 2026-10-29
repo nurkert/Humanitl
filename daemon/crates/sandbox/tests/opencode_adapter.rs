@@ -137,9 +137,10 @@ fn opencode_config_is_valid_json_and_points_to_llm() {
         doc["permission"]["websearch"],
         Value::String("deny".to_owned())
     );
+    // Seit HUM-308 fragt Humanitl, nicht `OpenCode`.
     assert_eq!(
         doc["permission"]["webfetch"],
-        Value::String("ask".to_owned())
+        Value::String("allow".to_owned())
     );
     assert_eq!(
         doc["permission"]["external_directory"],
@@ -1082,6 +1083,83 @@ fn opencode_outranks_a_config_from_the_cloned_project() {
         Value::String("deny".to_owned()),
         "the hosted web search stays off, whatever a project config says"
     );
+}
+
+/// In der Sandbox fragt Humanitl, nicht `OpenCode` (HUM-308). Ein `ask` in
+/// der Vorlage ließe den Menschen dieselbe Anfrage zweimal freigeben: erst
+/// im Terminal des Agenten, dann in Intercept.
+#[test]
+fn opencode_does_not_ask_before_fetching_or_running_a_command() {
+    let adapter = OpenCodeAdapter::new();
+    let ctx = context(Some("http://192.168.1.50:11434")).with_models(vec!["qwen3".to_owned()]);
+    let config: Value =
+        serde_json::from_slice(&file_at(adapter, &ctx, CONFIG_DST)).expect("the config is JSON");
+    let env = env_map(adapter, &ctx);
+    let from_env: Value = serde_json::from_str(env.get("OPENCODE_PERMISSION").unwrap()).unwrap();
+
+    for permission in [&config["permission"], &from_env] {
+        for tool in ["webfetch", "bash"] {
+            assert_eq!(
+                permission[tool],
+                Value::String("allow".to_owned()),
+                "{tool} runs without a prompt of the agent: {permission}"
+            );
+        }
+        // `edit` bleibt bei der Vorgabe von `OpenCode` (`"*": "allow"`). Ein
+        // ausdrückliches `allow` stünde über dem `edit: deny` des Plan-Agenten.
+        assert!(
+            permission.get("edit").is_none(),
+            "an explicit edit permission would make the plan agent write: {permission}"
+        );
+        // Kein Werkzeug fragt mehr; was gesperrt bleibt, bleibt gesperrt.
+        let entries = permission.as_object().unwrap();
+        assert!(
+            entries.values().all(|value| value != "ask"),
+            "no tool asks in the agent's own interface: {permission}"
+        );
+        assert_eq!(permission["websearch"], Value::String("deny".to_owned()));
+        assert_eq!(
+            permission["external_directory"],
+            Value::String("deny".to_owned())
+        );
+    }
+}
+
+/// Die Vorgabefrist von `bash` wartet eine gehaltene Anfrage ab (HUM-308).
+///
+/// Mit den 120 Sekunden von `OpenCode` bräche ein `curl` nach zwei Minuten ab,
+/// während die Karte bis zu `hold.timeout_secs` auf den Menschen wartet.
+#[test]
+fn opencode_bash_waits_at_least_as_long_as_the_hold() {
+    const KEY: &str = "OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS";
+    let adapter = OpenCodeAdapter::new();
+    let with_hold = |timeout_secs: u64, ask_mode: AskMode| {
+        let ctx = context(Some("http://192.168.1.50:11434")).with_hold(HoldConfig {
+            timeout_secs,
+            ask_mode,
+            ..HoldConfig::default()
+        });
+        env_map(adapter, &ctx).get(KEY).cloned()
+    };
+
+    // Die Vorgabe des Produkts, 300 Sekunden: Frist plus 60 Sekunden Reserve.
+    let default = with_hold(HoldConfig::default().timeout_secs, AskMode::Ui);
+    assert_eq!(default.as_deref(), Some("360000"));
+    let ms: u64 = default.unwrap().parse().unwrap();
+    assert!(ms >= HoldConfig::default().timeout_secs * 1000);
+
+    // `terminal` fragt ebenso einen Menschen; eine längere Frist zieht mit.
+    assert_eq!(
+        with_hold(1800, AskMode::Terminal).as_deref(),
+        Some("1860000")
+    );
+    // Nie unter der Vorgabe von `OpenCode`, auch bei einer kurzen Frist.
+    assert_eq!(with_hold(10, AskMode::Ui).as_deref(), Some("120000"));
+    // Nie über dem, was ein JavaScript-Zeitgeber fasst.
+    let huge: u64 = with_hold(u64::MAX, AskMode::Ui).unwrap().parse().unwrap();
+    assert!(huge < 2_147_483_647, "{huge}");
+    // Ohne Frage gibt es nichts abzuwarten: die Vorgabe von `OpenCode` bleibt.
+    assert_eq!(with_hold(300, AskMode::None), None);
 }
 
 #[test]

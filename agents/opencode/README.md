@@ -97,6 +97,24 @@ Anführungszeichen darf keine fremde Struktur in die Datei schreiben können
 Ist kein Modell konfiguriert, trägt der Adapter das Platzhalter-Modell `default`
 ein und meldet `LLM_004` als Warnung.
 
+## Berechtigungen und Fristen (HUM-308)
+
+In der Sandbox fragt Humanitl, nicht OpenCode. Der Block `permission` erlaubt
+`webfetch` und `bash` ohne Rückfrage; `websearch` und `external_directory`
+bleiben `deny`. `edit` steht nicht darin: OpenCode erlaubt es ohnehin
+(`"*": "allow"`), und weil der Block als Letztes über die Rechte jedes Agenten
+gelegt wird, machte ein ausdrückliches `"edit": "allow"` auch den Plan-Agenten
+schreibend, dessen eigenes `edit` auf `deny` steht. Gemessen an OpenCode
+1.18.31 (Zeichenketten des Binärprogramms).
+
+Fristen derselben Fassung: `webfetch` wartet 30 Sekunden, höchstens 120, wenn
+das Modell mehr verlangt, fest im Code und nicht einstellbar. `bash` wartet
+120 Sekunden, einstellbar über `OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS`;
+der Adapter setzt dort `hold.timeout_secs` plus 60 Sekunden, mindestens die
+120, und lässt die Variable bei `hold.ask_mode = "none"` weg. Für `webfetch`
+sagt die Einweisung, dass ein Werkzeug, das früher aufgibt, die Frage
+zurückzieht und `curl` wartet.
+
 ## Die Einweisung des Agenten
 
 `briefing.{en,de}.md` sind der einzige Text, den Humanitl dem Agenten mitgibt
