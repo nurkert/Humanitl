@@ -473,6 +473,11 @@ sealed class SandboxUpdate with _$SandboxUpdate {
   /// The whole tally of refused attempts; replaces the one before (HUM-138).
   const factory SandboxUpdate.refusals(SandboxRefusals refusals) =
       SandboxUpdateRefusals;
+
+  /// The agent ended with [code] (or 128 plus the signal); the sandbox may
+  /// still stand (HUM-306). Comes last on the stream of the start that began
+  /// the session.
+  const factory SandboxUpdate.exit(int code) = SandboxUpdateExit;
 }
 
 /// Whether the sandbox reports refused attempts, mirror of the proto enum

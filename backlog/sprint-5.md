@@ -75,6 +75,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-309 | pi gets web search and fetch through pi-web-access | S | HUM-274, HUM-304, HUM-308 |
 | HUM-305 | Pane boundaries can be dragged, and the sandbox terminal can grow | S | HUM-286, HUM-298 |
 | HUM-303 | The terminal takes the keyboard on hover and by shortcut | S | HUM-298 |
+| HUM-306 | The empty queue says the agent is working when a session runs | S | HUM-298 |
 
 ---
 
@@ -8042,3 +8043,156 @@ keyboard wherever it is shown, without changing the layout.
   `FocusScope` für den schwebenden Wirt muss wie `_terminalScope` unter dem
   Bereich der Shell hängen und darf kein `HLayerScope` sein, sonst hielte
   das Terminal sich selbst für eine Ebene über der Arbeit.
+
+---
+## HUM-306 · The empty queue says the agent is working when a session runs
+
+### Context
+Owner report of 2026-10-29: Intercept showed "Start session" while a pi
+agent was running in the terminal. The empty state of the queue
+(`QueueEmptyState` in `features/intercept/widgets/queue_pane.dart`) offered
+its primary "Start session" whenever nothing waited, whether or not a session
+ran. With a running agent the queue is empty because the agent works without
+asking; a button that sends somebody to start what already runs is wrong, and
+it hides the one thing worth doing from there, looking at the agent.
+
+### Specification
+1. While the agent of a sandbox session runs, the empty queue says so: the
+   title says that the agent is working, the hint says that every request
+   that needs the person appears here. The words "nothing", "no" and "yet"
+   stay out, as for every empty state (`docs/UX.md` 4.1).
+2. Its one action is then "Go to terminal", filled like the start: it opens
+   the Sandbox section with the agent's terminal, rail and tabs, from where
+   `Ctrl+1` returns as from any section. The terminal over the whole window
+   (HUM-298) stays one chord away; a floating terminal (HUM-300) may later
+   take this button's place.
+3. Without a running agent (no session, or a sandbox whose agent has exited)
+   the empty state stays as it was: "The queue is open", the hint, and
+   "Start session" into Setup.
+4. The line with the three keys stands in both cases.
+5. Features do not import each other (ARCHITECTURE 5,
+   `tools/check-deps.sh`). The queue reads one bit from a provider in
+   `app/lib/core`; the shell, the composition root, feeds it from the
+   sandbox snapshot. "Running" means what the terminal asks: the agent runs,
+   not merely the sandbox.
+6. The empty state follows the session live: a session that starts or stops
+   while the queue is showing changes it without a reload. That includes
+   the end of the agent, which the daemon reports as `SandboxEvent.Exit` on
+   the stream of the start and follows with no `Status`, and a session
+   started or stopped on the command line, which sends this window nothing:
+   the daemon has no stream that announces sessions, so while the empty
+   queue is in view (Intercept shown, link live, terminal not over the
+   window, nothing held) the shell asks for the snapshot when the queue
+   comes into view, when the window comes back to the front, and every 5 s.
+   The question is the snapshot alone, without the isolation check; it
+   keeps the findings that stand and does not turn the sandbox screen red
+   when it goes unanswered.
+7. Without a live link the queue does not claim that the agent works.
+8. Strings come from ARB, English source and German translation, appended.
+
+### Acceptance criteria
+1. Widget test: with a running agent the empty queue shows the working title
+   and hint, "Go to terminal" and the three keys, and no "Start session";
+   the button opens the Sandbox section.
+2. Widget test: without a session the empty queue shows "Start session" as
+   before and no terminal button; the button opens Setup.
+3. Widget test: a sandbox whose agent has exited shows "Start session".
+4. Widget test: starting and stopping a session while the queue shows
+   switches the empty state both ways.
+5. Widget tests: the end of the agent on the start stream switches back at
+   once; a session started and stopped on the command line appears and
+   goes within one interval; no question while another section shows, one
+   at once on return; one at once when the window comes back to the front;
+   without a link no "working"; an unanswered question leaves the snapshot.
+6. A test holds the core's index of the Sandbox section to
+   `Section.sandbox.index`.
+7. Each behaviour has a mutation proof; `make flutter-analyze` and the tests
+   of intercept, shell and sandbox are green; existing goldens are
+   unchanged, a new golden shows the working state.
+
+### Umsetzung (HUM-306)
+
+- **Das eine Bit im Kern.** `core/ui/agent_session.dart`:
+  `agentSessionProvider` (`bool`, am Anfang `false`) mit `report(running:)`.
+  Gefüttert von `features/shell/agent_session_feed.dart` (`AgentSessionFeed`,
+  angelegt in `initState` der Shell, entsorgt mit ihr): Bit = Verbindung lebt
+  und `sandboxStatusProvider` sagt `agentRunning` (dieselbe Frage wie
+  `SandboxTerminal`). Der erste Stand geht nach dem ersten Frame hinüber, nicht
+  mit `fireImmediately`: Riverpod verbietet Schreiben während des Baus, und
+  `initState` gehört dazu.
+- **Ende des Agenten.** `GrpcDaemonClient` warf `SandboxEvent.Exit` weg, und
+  der Daemon schickt danach kein `Status`; der Schnappschuss blieb bei „läuft"
+  (Codex-Befund). Neu `SandboxUpdate.exit(code)`, im Notifier gefaltet zu
+  `agentRunning: false`. Der Fake schließt den Strom des Starts schon bei
+  `running` und schickt kein `Exit`; die Tests spielen den echten Ablauf mit
+  einem eigenen Client nach (`SessionClient.agentEnd`), der Fake bleibt, wie
+  er ist (gemeinsame Datei, und ein offener Start-Strom hielte jeden
+  `start()`-Aufruf der übrigen Tests an).
+- **Sitzungen von der Kommandozeile.** Der Daemon hat keinen Strom, der
+  Sitzungen ankündigt. Solange die leere Warteschlange zu sehen ist
+  (Intercept, Verbindung lebt, Terminal nicht im ganzen Fenster, nichts
+  gehalten), fragt die Shell nach dem Schnappschuss: sofort beim Eintreten,
+  wenn das Fenster nach vorn kommt (`AppLifecycleListener.onResume`), und alle
+  `agentSessionPollInterval` (5 s). Dafür `pollStatus()` im
+  Sandbox-Notifier: nur `Sandbox(Status)`, keine Isolationsprüfung. Sie nimmt
+  nur den Schnappschuss, keine Befunde und keine Logzeilen (der Daemon
+  wiederholt die Befunde seiner Vorabprüfung mit jedem Schnappschuss; sonst
+  stünde alle 5 s eine Kopie mehr da, und `sandboxCallProvider` spräche sie
+  der Frage zu). Sie erhöht `_snapshots` nicht (ein laufender Plan oder
+  Refresh behält seine Antwort, eine spätere Antwort der Frage fällt weg).
+  Jedes Ereignis eines anderen Aufrufs (Start, Stopp, `Exit`, Plan,
+  Refresh) zählt `_sessionEvents` hoch, und eine Antwort, die vor dem
+  letzten davon losging, fällt weg: Ein `Exit` ist neuer als ein
+  Schnappschuss von davor. Sie faltet auf den Stand bei Ankunft statt auf
+  den beim Fragen (sonst gingen Prüfergebnisse eines Starts dazwischen
+  verloren), und ein Fehlschlag lässt den Schnappschuss stehen. Immer nur
+  eine Frage zugleich, weitere Aufrufe schließen sich ihr an; nach
+  `sandboxPollDeadline` (10 s) gilt sie als verloren, ihre Antwort fällt
+  weg, und die nächste fragt neu. Ein `Stream.timeout` oder ein eigener
+  `StreamController` als Frist ließ in den Widget-Tests das Ende des Stroms
+  nie ankommen; deshalb ein Zähler (`_pollToken`) und ein Timer. Die
+  abgelaufene Anfrage selbst bleibt offen, bis der Daemon sie beendet.
+  Ein Zubringer je App: Eine zweite Shell im selben Prozess bleibt untätig
+  (`AgentSessionFeed.idle`).
+- **Ohne Verbindung** sagt die Warteschlange nicht „arbeitet" (Sonnet-Befund).
+- **Leerzustand.** `QueueEmptyState` ist ein `ConsumerWidget`. Mit laufendem
+  Agenten: Titel „The agent is working" / „Der Agent arbeitet", Hinweis
+  „Every request that needs you appears here." / „Jede Anfrage, die dich
+  braucht, erscheint hier.", Knopf `queue-go-to-terminal` „Go to terminal" /
+  „Zum Terminal". Ohne: alles wie vorher. Die Tastenzeile steht in beiden.
+  „Nothing waiting" ist nicht übernommen, die verbotenen Wörter aus
+  `docs/UX.md` 4.1 kommen nicht vor.
+- **Wohin der Knopf führt.** In den Sandbox-Abschnitt (`NavIntent`), nicht
+  ins ganze Fenster: Leiste und Tabs bleiben, `Ctrl+1` führt zurück, und
+  `Ctrl+Shift+Enter` führt von überall ins ganze Fenster.
+  `sandboxSectionIndex = 3` steht in `core/shortcuts/intents.dart` neben
+  `navigationKeys`, ein Test hält ihn an `Section.sandbox.index`.
+- **Tests.** `test/features/intercept/empty_queue_session_test.dart`, zwölf
+  Fälle über die ganze App: laufender Agent (Text, Knopf, Tastenzeile, kein
+  Start, Knopf öffnet Sandbox), ohne Session (Start, öffnet Setup), Sandbox
+  mit beendetem Agenten, Start und Stopp aus der App, ein Schnappschuss, der
+  vor der Shell steht, `Exit` auf dem Start-Strom, Sitzung der
+  Kommandozeile kommt und geht, keine Frage auf einem anderen Abschnitt und
+  sofort eine beim Zurückkehren, Fenster kommt nach vorn, ohne Verbindung
+  kein „arbeitet", unbeantwortete Frage lässt den Schnappschuss stehen,
+  eine alte Antwort nach dem `Exit` weckt den Agenten nicht, drei Fragen mit
+  wiederholtem Befund lassen einen Befund und seine Herkunft stehen, eine
+  hängende Frage wird nicht verdoppelt und gibt nach der Frist auf, eine
+  zweite Shell füttert nichts, Index. Dazu `test/core/ipc/grpc_client_test.dart` „the end of the agent on
+  the start stream reaches the app" gegen einen echten gRPC-Server auf einem
+  Unix-Socket.
+- **Goldens.** Bestehende unverändert. Neu
+  `intercept_empty_working_{dark,light}` in `intercept_golden_test.dart`, mit
+  einem festen `WorkingAgent`.
+- **Mutationsbeweise** (jede Datei danach byte-gleich zurück, mit `cmp`
+  geprüft), alle 20 rot: Warteschlange ignoriert das Bit; Feed ohne
+  Zuhörer am Schnappschuss; Feed ohne ersten Stand; `isUp` statt
+  `agentRunning`; Knopf nach Setup; Index 2; Tastenzeile fehlt; `Exit` nicht
+  gefaltet; keine wiederholte Frage; Frage auf jedem Abschnitt; keine Frage
+  beim Eintreten; kein `onResume`; Verbindung ignoriert; Frage nicht leise
+  (Sandbox-Ansicht wird rot); gRPC-Client wirft `Exit` weg; Frage achtet
+  nicht auf `_sessionEvents`; Frage faltet Befunde; keine Bündelung; keine
+  Frist; kein Schutz vor einer zweiten Shell.
+- **Offen.** Der Zustand eines anderen Clients kommt höchstens 5 s später
+  an. Ein Strom des Daemons, der Sitzungsänderungen meldet, ersetzte die
+  Frage; Kandidat für ein eigenes Issue.

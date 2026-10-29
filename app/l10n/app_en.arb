@@ -3312,5 +3312,11 @@
   "sandboxSplitter": "Resize the terminal and the tabs",
   "@sandboxSplitter": {"description": "Screen-reader label of the drag handle between the sandbox terminal and the tabs below it; arrow up and down move it, a double click restores the default split (HUM-305)."},
   "shellPaletteFocusTerminal": "Focus the terminal",
-  "@shellPaletteFocusTerminal": {"description": "Command palette entry, listed only while a terminal with a running session is on the screen: hands the keyboard to the terminal without changing the layout; Ctrl+` (the key left of 1) does the same (HUM-303)."}
+  "@shellPaletteFocusTerminal": {"description": "Command palette entry, listed only while a terminal with a running session is on the screen: hands the keyboard to the terminal without changing the layout; Ctrl+` (the key left of 1) does the same (HUM-303)."},
+  "interceptEmptyWorkingTitle": "The agent is working",
+  "@interceptEmptyWorkingTitle": {"description": "Empty state of the queue while the agent of a sandbox session runs, first line: the queue is empty because the agent works without asking (HUM-306). Names the state, never the absence (docs/UX.md 4.1)."},
+  "interceptEmptyWorkingHint": "Every request that needs you appears here.",
+  "@interceptEmptyWorkingHint": {"description": "Empty state of the queue while the agent of a sandbox session runs, second line: what will fill the queue (HUM-306)."},
+  "interceptEmptyGoToTerminal": "Go to terminal",
+  "@interceptEmptyGoToTerminal": {"description": "The one action of the empty queue while the agent of a session runs: opens the Sandbox section with the agent's terminal, in place of Start session (HUM-306)."}
 }
