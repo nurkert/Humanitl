@@ -429,6 +429,9 @@ impl IpcServer {
     #[must_use]
     pub fn with_sandbox(mut self, sandbox: SandboxService) -> Self {
         self.info.capabilities.push("sandbox.bwrap".to_owned());
+        // Further shells in the running sandbox (HUM-299): a client asks
+        // before it offers the action.
+        self.info.capabilities.push("sandbox.exec".to_owned());
         self.sandbox = Some(sandbox);
         self
     }
@@ -1749,8 +1752,8 @@ impl v1::humanitl_server::Humanitl for IpcServer {
     ) -> Result<Response<Self::TerminalStream>, Status> {
         let sandbox = self.sandbox.clone();
         let input = crate::server_stub::plain_stream(request.into_inner());
-        let open = move |wanted: &str| match sandbox.as_ref() {
-            Some(sandbox) => sandbox.terminal(wanted),
+        let open = move |wanted: &v1::terminal_input::Open| match sandbox.as_ref() {
+            Some(sandbox) => sandbox.terminal_for(wanted),
             None => Err(Diagnostic::builder(codes::IPC_006, Severity::Error)
                 .why(
                     "this daemon runs without a sandbox, so there is no terminal to attach to"
@@ -2079,6 +2082,33 @@ impl v1::humanitl_server::Humanitl for IpcServer {
     /// die keine ist, bleibt auch mit Aufzeichnung keine; andersherum
     /// antwortete ein Daemon ohne Aufzeichnung auf denselben Unsinn
     /// `RECORDER_001` und der Fake `IPC_005`.
+    /// Eine weitere Shell in der laufenden Sandbox (HUM-299).
+    ///
+    /// Ohne Sandbox wie `Terminal`: `IPC_006`. Jeder Befund geht als Status
+    /// hinaus; die Antwort trägt die Kennung, unter der `Terminal` das
+    /// Terminal der Shell öffnet.
+    async fn exec(
+        &self,
+        request: Request<v1::ExecRequest>,
+    ) -> Result<Response<v1::ExecResponse>, Status> {
+        let Some(sandbox) = self.sandbox.as_ref() else {
+            return Err(diagnostic_to_status(
+                &Diagnostic::builder(codes::IPC_006, Severity::Error)
+                    .why(
+                        "this daemon runs without a sandbox, so there is nothing to open a shell \
+                         in"
+                        .to_owned(),
+                    )
+                    .build(),
+            ));
+        };
+        sandbox
+            .exec(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+    }
+
     async fn get_session_summary(
         &self,
         request: Request<v1::SessionSummaryRef>,

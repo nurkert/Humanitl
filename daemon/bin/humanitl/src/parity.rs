@@ -33,6 +33,7 @@ pub static PARITY: &[(&str, &str)] = &[
     ("Humanitl.Decide", "flows decide"),
     ("Humanitl.DiscoverLlm", "llm discover"),
     ("Humanitl.Doctor", "doctor"),
+    ("Humanitl.Exec", "sandbox exec"),
     ("Humanitl.GetBody", "flows show --body"),
     ("Humanitl.GetFlow", "flows show"),
     ("Humanitl.GetInfo", "daemon status"),
@@ -62,6 +63,7 @@ pub static PARITY: &[(&str, &str)] = &[
     // Ereignisstrom mit.
     ("Humanitl.Subscribe", "run --ask terminal"),
     ("Humanitl.Terminal", "sandbox attach"),
+    ("Humanitl.Terminal", "sandbox attach --shell"),
 ];
 
 #[cfg(test)]

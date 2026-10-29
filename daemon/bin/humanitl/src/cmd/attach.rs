@@ -87,12 +87,31 @@ const LEAVE_SCREEN: &[u8] = b"\x1b[?1049l\x1b[?25h\r\n";
 /// (`CONFIG_003` für ein unlesbares `terminal.detach_prefix`), `DAEMON_001`
 /// ohne Daemon, `IPC_006`, wenn keine Sitzung läuft, `TERM_001`, wenn schon
 /// jemand schreibt, und die Befunde des Daemons für alles Weitere.
-pub async fn run(ctx: &Context, read_only: bool, detach_keys: Option<&str>) -> Result<u8, Failure> {
+///
+/// `shell` ist leer für das Terminal des Agenten, sonst die Kennung einer
+/// weiteren Shell aus `humanitl sandbox exec` (HUM-299).
+pub async fn run(
+    ctx: &Context,
+    read_only: bool,
+    detach_keys: Option<&str>,
+    shell: &str,
+) -> Result<u8, Failure> {
     // Vor der Verbindung: Ein Tippfehler im Schalter soll nicht erst nach dem
     // Anhängen auffallen, und ohne Daemon soll er trotzdem auffallen.
     let keys = resolve_detach_keys(ctx, detach_keys)?;
-    let ending = attach(ctx, read_only, keys).await?;
-    finish(ctx, ending)
+    let ending = attach_to(ctx, read_only, keys, shell).await?;
+    if shell.is_empty() {
+        finish(ctx, ending)
+    } else {
+        finish_with(ctx, ending, &shell_detached(shell))
+    }
+}
+
+/// Die Zeile nach dem Abhängen von einer weiteren Shell (HUM-299).
+pub(crate) fn shell_detached(shell: &str) -> String {
+    format!(
+        "Detached; the shell keeps running. Attach again: humanitl sandbox attach --shell {shell}"
+    )
 }
 
 /// Die Taste zum Abhängen: der Schalter, sonst `terminal.detach_prefix`.
@@ -124,10 +143,19 @@ pub(crate) fn resolve_detach_keys(
 ///
 /// Der Befund, mit dem der Strom endete.
 pub(crate) fn finish(ctx: &Context, ending: Ending) -> Result<u8, Failure> {
+    finish_with(ctx, ending, DETACHED)
+}
+
+/// Wie [`finish`], mit einer eigenen Zeile nach dem Abhängen.
+///
+/// # Errors
+///
+/// Der Befund, mit dem der Strom endete.
+pub(crate) fn finish_with(ctx: &Context, ending: Ending, detached: &str) -> Result<u8, Failure> {
     match ending {
         Ending::Stream(outcome) => outcome,
         Ending::Detached => {
-            ctx.render.note(DETACHED);
+            ctx.render.note(detached);
             Ok(EXIT_OK)
         }
         Ending::Signal(number) => Ok(128_u8.saturating_add(number)),
@@ -150,6 +178,21 @@ pub(crate) async fn attach(
     read_only: bool,
     keys: DetachKeys,
 ) -> Result<Ending, Failure> {
+    attach_to(ctx, read_only, keys, "").await
+}
+
+/// Wie [`attach`], an das Terminal einer weiteren Shell, wenn `shell` eine
+/// Kennung nennt (HUM-299); leer ist das Terminal des Agenten.
+///
+/// # Errors
+///
+/// Wie [`attach`]; `IPC_006` für eine Shell, die es nicht (mehr) gibt.
+pub(crate) async fn attach_to(
+    ctx: &Context,
+    read_only: bool,
+    keys: DetachKeys,
+    shell: &str,
+) -> Result<Ending, Failure> {
     let mut client = ctx.connect().await?;
     let (cols, rows) = window_size();
 
@@ -161,6 +204,7 @@ pub(crate) async fn attach(
             cols,
             rows,
             read_only,
+            shell_id: shell.to_owned(),
         })),
     };
     tx.send(open).await.map_err(|_| closed_input())?;
