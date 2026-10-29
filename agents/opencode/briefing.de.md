@@ -7,11 +7,11 @@
 
 # Humanitl-Sandbox
 
-Keine Netzwerkschnittstelle: HTTP(S) geht nur über den Proxy aus der Proxy-Umgebung. {ask_mode}
+Du hast Internet: HTTP(S) mit `curl`, `wget` usw. läuft über den Proxy der Umgebung, sonst nichts. {ask_mode}
 
 `Blocked by Humanitl.` im Rumpf kommt vom Proxy. `403`: dagegen entschieden — nicht wiederholen; lies eine etwaige `note:`-Zeile und sag dem Nutzer, was abgelehnt wurde, warum, und was sonst geht.
 
-`http://humanitl.internal/` beantwortet der Proxy: `GET /` listet die Regeln, `POST /ask` mit einer Zeile fragt den Nutzer (`202`). Nur der Nutzer kann eine Regel anlegen.
+`http://humanitl.internal/`: `GET /` listet die Regeln, `POST /ask` mit einer Zeile fragt den Nutzer (`202`). Nur der Nutzer kann eine Regel anlegen.
 
 Eine Regel erlaubt Modell-Aufrufe an {llm_host}, sonst nichts auf diesem Host.
 

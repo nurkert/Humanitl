@@ -524,6 +524,7 @@ fn envkit_complete_and_identical_in_the_shipped_profiles() {
         "ALL_PROXY",
         "NO_PROXY",
         "no_proxy",
+        "NODE_USE_ENV_PROXY",
         "SSL_CERT_FILE",
         "SSL_CERT_DIR",
         "CURL_CA_BUNDLE",
@@ -542,6 +543,9 @@ fn envkit_complete_and_identical_in_the_shipped_profiles() {
     }
     assert_eq!(kit["NO_PROXY"], "");
     assert_eq!(kit["no_proxy"], "");
+    // Node's built-in `fetch` follows the proxy variables only with this
+    // switch (HUM-304); without it a `fetch` in the sandbox finds no route.
+    assert_eq!(kit["NODE_USE_ENV_PROXY"], "1");
     assert_eq!(kit["SSL_CERT_FILE"], SANDBOX_CA_PATH);
     assert_eq!(kit["HUMANITL"], "1");
     assert!(!kit.contains_key("GOFLAGS"), "Go reads SSL_CERT_FILE");
