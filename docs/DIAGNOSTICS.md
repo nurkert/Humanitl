@@ -1305,6 +1305,14 @@ Node.js missing in the sandbox
 
 **Fix.** `ChangeSetting` on `sandbox.env.PATH` when a mounted `node` is only missing from the path, `CopyCommand` that installs the host's `node` under `/usr/local/bin` when it is not mounted, the installer of pi when the `#!` line names an absolute `node` outside the mounts, otherwise `OpenUrl` to the Node.js download page (pi needs 22.19 or newer).
 
+#### AGENT_007
+
+pi web extension not installed
+
+**Auslöser.** `agent.pi.web_access` is `on`, and no directory the sandbox reaches holds the package `pi-web-access`. pi starts without `web_search` and `fetch_content`.
+
+**Fix.** `CopyCommand` with `sudo npm install -g --ignore-scripts pi-web-access`, which puts the package under `/usr/local`, where the sandbox sees it read-only.
+
 ### Bereich edit
 
 #### EDIT_001

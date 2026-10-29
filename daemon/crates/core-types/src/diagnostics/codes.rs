@@ -1562,6 +1562,16 @@ registry! {
     AGENT_006 => "agent", "Node.js missing in the sandbox", "#agent_006",
         "The command resolves to a script that starts Node.js through its `#!` line, and the sandbox finds no executable `node` on its `PATH` (or at the absolute path the line names). The finding names the script, the sandbox `PATH` and where a `node` lies on the host, if anywhere.",
         "`ChangeSetting` on `sandbox.env.PATH` when a mounted `node` is only missing from the path, `CopyCommand` that installs the host's `node` under `/usr/local/bin` when it is not mounted, the installer of pi when the `#!` line names an absolute `node` outside the mounts, otherwise `OpenUrl` to the Node.js download page (pi needs 22.19 or newer).";
+
+    // HUM-309: pi's web extension.
+    /// `agent.pi.web_access = "on"`, and the sandbox finds no package
+    /// `pi-web-access` where a global npm install puts it (next to pi, under
+    /// `/usr/local/lib/node_modules` or `/usr/lib/node_modules`). A warning:
+    /// pi starts without the web tools. With `auto` a missing package says
+    /// nothing; undecidable lookups produce no finding (HUM-309).
+    AGENT_007 => "agent", "pi web extension not installed", "#agent_007",
+        "`agent.pi.web_access` is `on`, and no directory the sandbox reaches holds the package `pi-web-access`. pi starts without `web_search` and `fetch_content`.",
+        "`CopyCommand` with `sudo npm install -g --ignore-scripts pi-web-access`, which puts the package under `/usr/local`, where the sandbox sees it read-only.";
 }
 
 /// Sucht einen Code im Register.

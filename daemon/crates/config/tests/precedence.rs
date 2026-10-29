@@ -1523,3 +1523,37 @@ fn a_harmless_variable_in_sandbox_env_still_passes() {
         Some("libs")
     );
 }
+
+/// HUM-309: `agent.pi.web_access` defaults to `auto`, takes `on` and `off`
+/// from the environment, and a file with any other value does not load.
+#[test]
+fn pi_web_access_defaults_to_auto_and_refuses_other_values() {
+    use humanitl_config::PiWebAccess;
+
+    let resolved = expect_ok(&Sources::empty());
+    assert_eq!(resolved.config.agent.pi.web_access, PiWebAccess::Auto);
+
+    for (text, expected) in [("on", PiWebAccess::On), ("off", PiWebAccess::Off)] {
+        let sources =
+            Sources::empty().with_env(Env::from_pairs([("HUMANITL_AGENT__PI__WEB_ACCESS", text)]));
+        assert_eq!(
+            expect_ok(&sources).config.agent.pi.web_access,
+            expected,
+            "{text}"
+        );
+    }
+
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let file = dir.path().join("config.toml");
+    std::fs::write(&file, "[agent.pi]\nweb_access = \"yes\"\n").expect("write the file");
+    let sources = Sources {
+        global_toml: Some(file),
+        ..Sources::empty()
+    };
+    let diagnostic = expect_err(&sources);
+    assert!(
+        diagnostic.why.contains("agent.pi.web_access"),
+        "{}",
+        diagnostic.why
+    );
+}

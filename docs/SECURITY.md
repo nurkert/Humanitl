@@ -82,6 +82,21 @@ What stays with the agent is the question it may still ask about its own work, s
 prompt before reading a `.env` file or after the same call repeated three times. Neither is a
 network decision, and both are left at OpenCode's default.
 
+### Third-party agent extensions (HUM-309)
+
+With `agent.pi.web_access` at `auto` (the default) or `on`, pi loads the npm package
+`pi-web-access` when you have installed it globally. That is third-party code running inside the
+agent process, so it sits on the untrusted side of B1 like the agent itself and gets no right the
+agent does not have: the same namespaces, seccomp filter and mounts; its directory lies in a
+read-only mount (normally `/usr`); it leaves only through the proxy, and every request it makes is
+decided by a rule or, when no rule decides it, held for you, like any other (measured: a fetch arrived at the proxy as `CONNECT`). Its own
+SSRF guard is told to let the proxy resolve names (`ssrf.trustEnvProxy`), because the sandbox has
+no resolver; that changes no guarantee, since the proxy is the only door anyway. No API key of a
+search provider reaches the sandbox. What the claim does not cover is what you install: Humanitl
+does not review the package, so a malicious version can do inside the sandbox what a steered
+agent could do there. `agent.pi.web_access = off` keeps it out, and a project profile cannot
+switch it.
+
 ### Trusted computing base
 
 The trusted computing base is the set of components whose failure voids the guarantees. It is
@@ -1179,3 +1194,4 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.0 | The session's first process takes the daemon's pseudo-terminal as controlling terminal; `--new-session` stays. A caller's command gets the adapter's contribution and the configured agent on `PATH`, never a bind of its own (HUM-280). |
 | 0.1.0 | OpenCode no longer asks before `webfetch` and `bash`; the proxy is the one place that asks. Its `bash` waits as long as a held request (HUM-308). |
 | 0.1.x | Further shells next to the agent: the daemon asks PID 1 over an unnamed `SOCK_SEQPACKET` pair only it and PID 1 hold; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX`; at most four, ending with their process or the sandbox (HUM-299). |
+| 0.1.x | pi loads the globally installed extension `pi-web-access` (`agent.pi.web_access`, default `auto`, closed to project profiles); its requests go through the proxy like every other (HUM-309). |
