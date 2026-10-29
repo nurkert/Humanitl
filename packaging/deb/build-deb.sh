@@ -132,13 +132,21 @@ install -m 0644 "$here/lintian-overrides" "$pkg/usr/share/lintian/overrides/huma
 # (lintian: wrong-name-for-changelog-of-native-package).
 epoch="${SOURCE_DATE_EPOCH:-$(git -C "$root" log -1 --format=%ct 2>/dev/null || date +%s)}"
 commit="$(git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
-{
+# lintian warnt ab 81 Zeichen je Zeile (debian-changelog-line-too-long); mit
+# 0.0.10 war die alte Zeile 81 Zeichen lang und check-deb rot (HUM-311). Die
+# Pruefung hier faellt schon beim Bauen, auch fuer lange Versionen.
+changelog_text="$(
   echo "humanitl ($version) unstable; urgency=medium"
   echo
-  echo "  * Early release $version, built from commit $commit. Not for production use."
+  echo "  * Early release $version from commit $commit, not for production use."
   echo
   echo " -- Niko Burkert <humanitl@nurkert.de>  $(LC_ALL=C date -u -R -d "@$epoch")"
-} | gzip -9n >"$pkg/usr/share/doc/humanitl/changelog.gz"
+)"
+if awk 'length > 80 { bad = 1 } END { exit !bad }' <<<"$changelog_text"; then
+  echo "error: a changelog line is longer than 80 characters (lintian)" >&2
+  exit 1
+fi
+printf '%s\n' "$changelog_text" | gzip -9n >"$pkg/usr/share/doc/humanitl/changelog.gz"
 chmod 0644 "$pkg/usr/share/doc/humanitl/changelog.gz"
 
 # Rechte, wie Debian sie erwartet: Verzeichnisse 0755, Dateien 0644, nur die
