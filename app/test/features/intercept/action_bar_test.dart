@@ -27,6 +27,7 @@ import 'package:humanitl/features/intercept/widgets/release_valve.dart';
 import 'package:humanitl/features/shell/providers/connection.dart';
 import 'package:humanitl/features/shell/widgets/header_bar.dart';
 
+import '../../harness/ui_state.dart';
 import 'fixtures.dart';
 
 /// Ein Fake mit stehender Uhr.
@@ -68,12 +69,14 @@ Future<void> pumpIntercept(
   List<Override> overrides = const <Override>[],
   Size size = const Size(1400, 900),
   TextScaler textScaler = TextScaler.noScaling,
+  bool railExpanded = false,
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
   await tester.pumpWidget(
     ProviderScope(
       overrides: <Override>[
+        uiStateOverride(railExpanded: railExpanded),
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(null),
         nowProvider.overrideWith(() => FixedNow(testStart)),
@@ -384,7 +387,11 @@ void main() {
     expect(block.left - allow.right, greaterThanOrEqualTo(decisionGap));
   });
 
-  testWidgets('the bar wraps and puts block on its own line', (
+  // Bis HUM-307 stand Block hier in einer zweiten Zeile, unter 800 px Pane
+  // immer. Jetzt verlässt zuerst „Edit + Allow" die Zeile; die beiden
+  // Entscheidungen bleiben nebeneinander, auch mit den Quadraten der
+  // Testschrift im schmalsten Pane.
+  testWidgets('a narrow pane keeps block on the line of allow', (
     WidgetTester tester,
   ) async {
     await pumpIntercept(
@@ -396,7 +403,38 @@ void main() {
 
     final Rect allow = tester.getRect(find.byType(ReleaseValve));
     final Rect block = tester.getRect(find.byType(BlockButton));
+    expect(block.center.dy, moreOrLessEquals(allow.center.dy));
+    expect(block.left - allow.right, greaterThanOrEqualTo(decisionGapMin));
+    expect(find.byKey(const Key('intercept-edit')).hitTestable(), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('at twice the text scale block moves under allow', (
+    WidgetTester tester,
+  ) async {
+    await pumpIntercept(
+      tester,
+      client: fake(holdScript(<FlowDetail>[github()])),
+      // Aufgeklappte Leiste der Shell: der Pane auf seinen 480 px. Ein
+      // schmaleres Fenster ließe bei doppelter Schrift die Kopfzeile
+      // überlaufen, nicht die Aktionsleiste.
+      railExpanded: true,
+      size: const Size(1280, 900),
+      textScaler: const TextScaler.linear(2),
+    );
+    await playScript(tester);
+
+    // Der letzte Schritt aus `DecisionRow`: Nicht einmal das schmalste
+    // Ventil passt neben Block, und eine Leiste, die überläuft, versteckt
+    // eine Entscheidung (`docs/UX.md` 6).
+    final Rect allow = tester.getRect(find.byType(ReleaseValve));
+    final Rect block = tester.getRect(find.byType(BlockButton));
+    final Rect bar = tester.getRect(find.byType(ActionBar));
     expect(block.top, greaterThanOrEqualTo(allow.bottom));
+    // Rechtsbündig an der Innenkante der Leiste (Polster `x3`).
+    expect(block.right, bar.right - HSpace.x3);
+    expect(bar.width, 480);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('the remember keys build the rule and the sentence', (

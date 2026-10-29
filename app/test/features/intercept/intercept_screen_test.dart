@@ -21,6 +21,7 @@ import 'package:humanitl/features/intercept/widgets/queue_row.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/features/shell/providers/connection.dart';
 
+import '../../harness/ui_state.dart';
 import 'fixtures.dart';
 
 /// Ein Fake mit stehender Uhr: seine Ereignisse tragen dieselbe Zeit wie
@@ -40,6 +41,7 @@ Future<void> pumpIntercept(
   await tester.pumpWidget(
     ProviderScope(
       overrides: <Override>[
+        uiStateOverride(),
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(null),
         nowProvider.overrideWith(() => FixedNow(testStart)),

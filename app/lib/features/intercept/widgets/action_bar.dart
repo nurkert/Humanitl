@@ -42,27 +42,30 @@ import '../providers/selection.dart';
 import '../rule_sentence.dart';
 import '../../../core/domain/websocket.dart';
 import 'block_button.dart';
+import 'decision_row.dart';
 import 'note_field.dart';
 import 'recorder_pause.dart';
 import 'release_valve.dart';
 import 'remember_grid.dart';
 
-/// The gap the layout keeps between the two decisions.
+/// The distance the bar asks for between the two decisions.
 ///
 /// A hurried click that misses Block must not land on Allow: Allow cannot be
-/// taken back, Block can be retried by the agent (`docs/UX.md` 5.4). Below
-/// [actionBarWrapWidth] the two decisions stand on two lines instead, which is
-/// the same rule with a different geometry.
+/// taken back, Block can be retried by the agent (`docs/UX.md` 5.4). The
+/// distance runs from the right edge of the Allow side (the valve, or
+/// "Edit + Allow" beside it) to Block; the note slot stands inside it and is
+/// empty at rest. Since HUM-307 the layout guarantees only [decisionGapMin]
+/// and gives the distance whatever the controls leave over; this value
+/// feeds only the intrinsic width of `DecisionRow`. In every pane wider than
+/// the controls plus 160 px the distance is therefore at least this.
 const double decisionGap = 160;
 
-/// Below this width the bar wraps into a column.
+/// The smallest distance between the two decisions (HUM-307).
 ///
-/// Seit HUM-047 stehen drei Controls in der Zeile — die Freigabe, „Bearbeiten"
-/// daneben und die Sperre hinter [decisionGap] —, und die Zahl ist die Breite,
-/// ab der alle drei nebeneinander passen. Sie war 640, solange es zwei waren;
-/// bei 652 px lief die Zeile um 142 px über, und eine Leiste, die überläuft,
-/// versteckt eine Entscheidung, statt sie umzubrechen (`docs/UX.md` 6).
-const double actionBarWrapWidth = 800;
+/// Three decision heights. Below it the line rather drops "Edit + Allow" and
+/// then shortens the valve's label than move Allow and Block closer
+/// together (`DecisionRow`).
+const double decisionGapMin = 96;
 
 /// Height reserved for each of the two lines under the controls.
 const double actionBarLineHeight = 24;
@@ -465,9 +468,11 @@ class _ActionBarState extends ConsumerState<ActionBar> {
     // Seite der Freigabe und nicht zwischen den beiden Entscheidungen: Er ist
     // der Weg zu einer Freigabe, nur zu einer bearbeiteten, und der Abstand
     // von [decisionGap] zwischen Allow und Block bleibt frei (BACKLOG.md 5).
+    // Wird der Pane zu schmal, verlässt er als Erster die Zeile; `E` öffnet
+    // den Editor weiter (HUM-307, `DecisionRow`).
     final VoidCallback? onEdit = widget.onEdit;
-    final Widget edit = onEdit == null
-        ? const SizedBox.shrink()
+    final Widget? edit = onEdit == null
+        ? null
         : HButton(
             key: const Key('intercept-edit'),
             variant: HButtonVariant.ghost,
@@ -485,23 +490,17 @@ class _ActionBarState extends ConsumerState<ActionBar> {
             ),
           );
 
-    // Hover over the pair reveals the note slot, and it is read here and not
-    // in the block control: a `MouseRegion` reports an enter in every
-    // environment, while the hover highlight of a `FocusableActionDetector`
-    // needs a focus highlight mode that a widget test never reaches.
-    final Widget decisions = MouseRegion(
+    // Hover over Block or the note slot beside it reveals the slot, and it is
+    // read here and not in the block control: a `MouseRegion` reports an
+    // enter in every environment, while the hover highlight of a
+    // `FocusableActionDetector` needs a focus highlight mode that a widget
+    // test never reaches. The slot's region reaches up to Block, so that the
+    // pointer passing from one to the other leaves one and enters the other
+    // in the same event and the slot does not flicker.
+    Widget hoverBlockSide(Widget child) => MouseRegion(
       onEnter: (PointerEnterEvent _) => _highlightBlock(true),
       onExit: (PointerExitEvent _) => _highlightBlock(false),
-      // A `Wrap`, not a `Row`: at twice the text scale "Block 4 selected" and
-      // the note beside it do not fit on one line, and a bar that overflows
-      // hides a decision instead of moving it (`docs/UX.md` 6).
-      child: Wrap(
-        alignment: WrapAlignment.end,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: tokens.spacing.x2,
-        runSpacing: tokens.spacing.x2,
-        children: <Widget>[noteSlot, block],
-      ),
+      child: child,
     );
 
     final Widget? grid = remember.open
@@ -603,27 +602,42 @@ class _ActionBarState extends ConsumerState<ActionBar> {
                       onBack: () =>
                           ref.read(openFindingsPauseProvider.notifier).close(),
                     )
-                  : LayoutBuilder(
+                  : Column(
                       key: const ValueKey<String>('controls'),
-                      builder:
-                          (BuildContext context, BoxConstraints constraints) {
-                            // The threshold grows with the text: at twice the
-                            // scale the same three controls need twice the
-                            // room, and the bar breaks into a column instead
-                            // of hiding one (`docs/UX.md` 6).
-                            final double scale = MediaQuery.textScalerOf(
-                              context,
-                            ).scale(1);
-                            // An open grid always takes a line of its own:
-                            // eight segments and their two frames measure
-                            // around 800 px, which no pane of this window ever
-                            // has left beside the two decisions.
-                            return grid == null &&
-                                    constraints.maxWidth >=
-                                        actionBarWrapWidth * scale
-                                ? _wide(tokens, valve, edit, decisions)
-                                : _narrow(tokens, valve, edit, grid, decisions);
-                          },
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        // Allow and Block on one line at every width of the
+                        // pane (HUM-307); what gives way first, when the
+                        // room runs out, is decided in `DecisionRow`.
+                        DecisionRow(
+                          valve: valve,
+                          edit: edit,
+                          note: hoverBlockSide(
+                            Padding(
+                              padding: EdgeInsets.only(
+                                right: tokens.spacing.x2,
+                              ),
+                              child: noteSlot,
+                            ),
+                          ),
+                          block: hoverBlockSide(block),
+                          gap: decisionGap,
+                          minGap: decisionGapMin,
+                          minDecisionWidth: tokens.sizes.hitDecision.width,
+                          editSpacing: tokens.spacing.x3,
+                          noteSpacing: 0,
+                          lineSpacing: tokens.spacing.x3,
+                        ),
+                        // An open grid always takes a line of its own, under
+                        // the decisions: eight segments and their two frames
+                        // measure around 800 px, which no pane of this
+                        // window ever has left beside them.
+                        if (grid != null) ...<Widget>[
+                          SizedBox(height: tokens.spacing.x2),
+                          Align(alignment: Alignment.centerLeft, child: grid),
+                        ],
+                      ],
                     ),
             ),
             // The note is temporary: hidden until `N`, gone on `Escape` and on
@@ -719,83 +733,6 @@ class _ActionBarState extends ConsumerState<ActionBar> {
       child: Semantics(tooltip: why, child: valve),
     );
   }
-
-  /// The wide layout: both decisions on one line, [decisionGap] apart.
-  ///
-  /// The note slot stands inside that distance, on the Block side: it is the
-  /// note of a block and belongs beside it, and the gap between the two
-  /// decisions stays what it is.
-  ///
-  /// "Edit + Allow" steht wieder hier, seit HUM-047 einen Editor dahinter
-  /// gesetzt hat. Es war ein Control, das sich nicht druecken liess, und ein
-  /// toter Zustand ohne Grund ist schlechter als ein fehlender
-  /// (`backlog/CONVENTIONS.md` 4.13); jetzt oeffnet es den Editor im selben
-  /// Pane. Es entscheidet nichts und steht deshalb neben der Freigabe, nicht
-  /// im Abstand zwischen den beiden Entscheidungen.
-  Widget _wide(HTokens tokens, Widget valve, Widget edit, Widget decisions) =>
-      Row(
-        // Kein `Spacer`: Neben einem `Flexible` teilte er sich den freien
-        // Platz mit dem Ventil zur Hälfte, und bei 900 px stand das Ventil auf
-        // 52 px gequetscht (gemessen, `action_bar_test`). Der Abstand entsteht
-        // hier durch `spaceBetween`, nachdem das Ventil seine volle Breite
-        // genommen hat.
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: <Widget>[
-          // Das Ventil darf als Einziges schrumpfen: Seit HUM-260 traegt es bei
-          // offenem Fund ein Warn-Glyph, und mit der deutschen Beschriftung
-          // fehlten knapp ueber der Umbruchbreite zwei Pixel. Die beiden
-          // Entscheidungen behalten ihre volle Groesse. Es schrumpft nur, wenn
-          // der Platz wirklich fehlt: ein loses `Flexible` als einziges in der
-          // Zeile bekommt allen freien Platz angeboten und nimmt davon nur,
-          // was es braucht.
-          Flexible(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Flexible(child: valve),
-                SizedBox(width: tokens.spacing.x3),
-                edit,
-              ],
-            ),
-          ),
-          const SizedBox(width: decisionGap),
-          decisions,
-        ],
-      );
-
-  /// The narrow layout: Block moves to its own line, right aligned.
-  ///
-  /// What goes first when the pane gets narrow stands here and is not left to
-  /// the layout: the edit control, which is the only one of the three that
-  /// takes no decision. The two decisions keep their full size, and the
-  /// distance between them becomes a line break instead of 160 px.
-  Widget _narrow(
-    HTokens tokens,
-    Widget valve,
-    Widget edit,
-    Widget? grid,
-    Widget decisions,
-  ) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    mainAxisSize: MainAxisSize.min,
-    children: <Widget>[
-      Align(
-        alignment: Alignment.centerLeft,
-        child: Wrap(
-          crossAxisAlignment: WrapCrossAlignment.center,
-          spacing: tokens.spacing.x3,
-          runSpacing: tokens.spacing.x2,
-          children: <Widget>[valve, edit],
-        ),
-      ),
-      if (grid != null) ...<Widget>[
-        SizedBox(height: tokens.spacing.x2),
-        Align(alignment: Alignment.centerLeft, child: grid),
-      ],
-      SizedBox(height: tokens.spacing.x3),
-      Align(alignment: Alignment.centerRight, child: decisions),
-    ],
-  );
 
   /// Says what happened, once, and politely.
   ///

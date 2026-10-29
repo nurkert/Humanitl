@@ -3,7 +3,9 @@
 /// Es steht hier und nicht bei den Tests der Warteschlange, weil es der
 /// Eingang zum Editor ist und mit ihm kam. Geprüft wird, was der dritte Knopf
 /// in der Leiste kostet: Mit ihm lief die breite Zeile bei 652 px um 142 px
-/// über, und `actionBarWrapWidth` steht deshalb auf 800 statt 640.
+/// über. Seit HUM-307 misst `DecisionRow`, was passt, und lässt das Control
+/// aus der Zeile, bevor sie überliefe; über das ganze Band darf nichts
+/// überlaufen.
 library;
 
 import 'package:flutter/widgets.dart' hide Flow;

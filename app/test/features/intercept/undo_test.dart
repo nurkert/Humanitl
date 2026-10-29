@@ -15,6 +15,7 @@ import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/intercept/providers/now.dart';
 import 'package:humanitl/features/shell/providers/connection.dart';
 
+import '../../harness/ui_state.dart';
 import 'fixtures.dart';
 
 FlowDetail github() => detailFor(
@@ -39,6 +40,7 @@ Future<FakeDaemonClient> pumpAndRemember(WidgetTester tester) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: <Override>[
+        uiStateOverride(),
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(null),
         nowProvider.overrideWith(() => FixedNow(testStart)),
@@ -107,6 +109,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: <Override>[
+          uiStateOverride(),
           daemonClientProvider.overrideWithValue(client),
           connectionHeartbeatProvider.overrideWithValue(null),
           nowProvider.overrideWith(() => FixedNow(testStart)),
