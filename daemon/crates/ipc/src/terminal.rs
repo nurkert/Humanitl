@@ -74,7 +74,7 @@ use humanitl_core::{
     Decision, Diagnostic, FlowEvent, FlowId, Severity, TerminalFilter, TerminalPolicy,
 };
 use humanitl_proxy::{FlowRegistry, HoldQueue};
-use humanitl_sandbox::SandboxHandle;
+use humanitl_sandbox::{SandboxHandle, Shell};
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::ReceiverStream;
@@ -142,11 +142,38 @@ struct HubState {
     finished: Option<i32>,
 }
 
+/// Wessen Pseudoterminal ein Terminal bedient.
+#[derive(Debug)]
+enum Target {
+    /// Das des Agenten, der ersten Prozesses der Sitzung.
+    Agent(Arc<SandboxHandle>),
+    /// Das einer weiteren Shell (HUM-299).
+    Shell(Arc<Shell>),
+}
+
+impl Target {
+    fn resize(&self, cols: u16, rows: u16) -> Result<(), Diagnostic> {
+        match self {
+            Self::Agent(handle) => handle.resize(cols, rows),
+            Self::Shell(shell) => shell.resize(cols, rows),
+        }
+    }
+
+    fn write_input(&self, bytes: &[u8]) -> Result<(), Diagnostic> {
+        match self {
+            Self::Agent(handle) => handle.write_input(bytes),
+            Self::Shell(shell) => shell.write_input(bytes),
+        }
+    }
+}
+
 /// Der geteilte Zustand eines Terminals.
 #[derive(Debug)]
 struct HubInner {
     sandbox: SandboxId,
-    handle: Arc<SandboxHandle>,
+    target: Target,
+    /// Die Kennung der Shell, wenn es nicht das Terminal des Agenten ist.
+    shell_id: Option<String>,
     frames: broadcast::Sender<Frame>,
     state: Mutex<HubState>,
     /// Ob der Daemon Hinweiszeilen in den Strom schreibt
@@ -170,11 +197,47 @@ impl TerminalHub {
     /// Ein Terminal über der Herrscherseite dieser Sandbox.
     #[must_use]
     pub fn new(handle: Arc<SandboxHandle>, cols: u16, rows: u16, notices: bool) -> Self {
+        Self::over(handle.id, Target::Agent(handle), None, cols, rows, notices)
+    }
+
+    /// Ein Terminal über einer weiteren Shell dieser Sandbox (HUM-299).
+    ///
+    /// Dasselbe wie das des Agenten: ein Filter, ein Ring, ein Schreiber,
+    /// beliebig viele Leser. Die Bytes der Shell kommen aus der Sandbox und
+    /// sind so wenig vertrauenswürdig wie die des Agenten.
+    #[must_use]
+    pub fn for_shell(
+        sandbox: SandboxId,
+        shell: Arc<Shell>,
+        shell_id: String,
+        cols: u16,
+        rows: u16,
+        notices: bool,
+    ) -> Self {
+        Self::over(
+            sandbox,
+            Target::Shell(shell),
+            Some(shell_id),
+            cols,
+            rows,
+            notices,
+        )
+    }
+
+    fn over(
+        sandbox: SandboxId,
+        target: Target,
+        shell_id: Option<String>,
+        cols: u16,
+        rows: u16,
+        notices: bool,
+    ) -> Self {
         let (frames, _) = broadcast::channel(FRAME_BUFFER);
         Self {
             inner: Arc::new(HubInner {
-                sandbox: handle.id,
-                handle,
+                sandbox,
+                target,
+                shell_id,
                 frames,
                 state: Mutex::new(HubState {
                     filter: TerminalFilter::with_policy(TerminalPolicy::FullScreen),
@@ -194,6 +257,13 @@ impl TerminalHub {
     #[must_use]
     pub fn sandbox(&self) -> SandboxId {
         self.inner.sandbox
+    }
+
+    /// Die Kennung der Shell, wenn dies das Terminal einer weiteren Shell ist
+    /// (HUM-299); `None` für das des Agenten.
+    #[must_use]
+    pub fn shell_id(&self) -> Option<&str> {
+        self.inner.shell_id.as_deref()
     }
 
     /// Ob der Daemon Hinweiszeilen in diesen Strom schreibt.
@@ -287,7 +357,7 @@ impl TerminalHub {
     /// Clients und nicht in ein Log: Wer gerade das Fenster zieht, soll
     /// erfahren, dass niemand mehr zusieht.
     pub fn resize(&self, cols: u16, rows: u16) {
-        if let Err(diagnostic) = self.inner.handle.resize(cols, rows) {
+        if let Err(diagnostic) = self.inner.target.resize(cols, rows) {
             self.diagnostic(&diagnostic);
             return;
         }
@@ -305,7 +375,7 @@ impl TerminalHub {
     ///
     /// `TERM_002`, wenn das Terminal nicht mehr annimmt.
     pub fn write(&self, bytes: &[u8]) -> Result<(), Diagnostic> {
-        self.inner.handle.write_input(bytes)
+        self.inner.target.write_input(bytes)
     }
 
     /// Meldet einen Client an.
@@ -318,14 +388,19 @@ impl TerminalHub {
             let mut state = lock(&self.inner.state);
             if !read_only {
                 if state.writer {
-                    return Err(Diagnostic::builder(TERM_001, Severity::Error)
-                        .why(format!(
-                            "sandbox {} already has a terminal client that writes",
-                            self.inner.sandbox
-                        ))
-                        .fix(humanitl_core::FixAction::CopyCommand(
+                    let (what, fix) = match self.shell_id() {
+                        Some(id) => (
+                            format!("shell {id} of sandbox {}", self.inner.sandbox),
+                            format!("humanitl sandbox attach --shell {id} --read-only"),
+                        ),
+                        None => (
+                            format!("sandbox {}", self.inner.sandbox),
                             "humanitl sandbox attach --read-only".to_owned(),
-                        ))
+                        ),
+                    };
+                    return Err(Diagnostic::builder(TERM_001, Severity::Error)
+                        .why(format!("{what} already has a terminal client that writes"))
+                        .fix(humanitl_core::FixAction::CopyCommand(fix))
                         .build());
                 }
                 state.writer = true;
@@ -560,9 +635,12 @@ impl HeldNotices {
 /// Der Strom endet, wenn der Client `close` schickt, wenn der Agent sich
 /// beendet oder wenn ein Befund ihn beendet. Er schließt nie das
 /// Pseudoterminal: Ein Client, der geht, nimmt die Sitzung nicht mit.
+///
+/// `open` bekommt das `Open` des Clients und findet das Terminal: das des
+/// Agenten oder, mit `shell_id`, das einer weiteren Shell (HUM-299).
 #[must_use]
 pub fn serve(
-    open: impl FnOnce(&str) -> Result<TerminalHub, Diagnostic> + Send + 'static,
+    open: impl FnOnce(&v1::terminal_input::Open) -> Result<TerminalHub, Diagnostic> + Send + 'static,
     input: BoxStream<v1::TerminalInput>,
 ) -> BoxStream<v1::TerminalOutput> {
     let (tx, rx) = mpsc::channel(FRAME_BUFFER);
@@ -572,7 +650,7 @@ pub fn serve(
 
 /// Ein Client, von seinem `Open` bis zu seinem Ende.
 async fn session(
-    open: impl FnOnce(&str) -> Result<TerminalHub, Diagnostic>,
+    open: impl FnOnce(&v1::terminal_input::Open) -> Result<TerminalHub, Diagnostic>,
     mut input: BoxStream<v1::TerminalInput>,
     tx: mpsc::Sender<v1::TerminalOutput>,
 ) {
@@ -580,7 +658,7 @@ async fn session(
         return;
     };
 
-    let hub = match open(&opened.sandbox_id) {
+    let hub = match open(&opened) {
         Ok(hub) => hub,
         Err(diagnostic) => {
             let _ = tx.send(diagnostic_output(&diagnostic)).await;

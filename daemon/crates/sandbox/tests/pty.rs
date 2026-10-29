@@ -45,6 +45,8 @@ if [ "$#" -eq 0 ]; then exit 125; fi
 if [ "$1" = "--proxy-port" ]; then shift 2; fi
 # HUM-280: the launcher asks for the controlling terminal at a pty.
 if [ "$1" = "--controlling-terminal" ]; then shift; fi
+# HUM-299: and names the door for further shells.
+if [ "$1" = "--control-fd" ]; then shift 2; fi
 if [ "$1" = "--" ]; then shift; fi
 if [ -n "${HUMANITL_REPORT_FD:-}" ]; then
   fd="$HUMANITL_REPORT_FD"

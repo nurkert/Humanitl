@@ -1233,6 +1233,15 @@ const EXPECTED_RPCS: &[(&str, &str, &str, bool, bool)] = &[
         false,
         false,
     ),
+    // HUM-299: eine weitere Shell in der laufenden Sandbox. Unär: Das
+    // Terminal der Shell öffnet `Terminal` mit `Open.shell_id`.
+    (
+        "Exec",
+        ".humanitl.v1.ExecRequest",
+        ".humanitl.v1.ExecResponse",
+        false,
+        false,
+    ),
 ];
 
 #[test]

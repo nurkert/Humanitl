@@ -112,7 +112,19 @@ pub async fn run(ctx: &Context, cmd: &SandboxCmd) -> Result<u8, Failure> {
         SandboxCmd::Attach {
             read_only,
             detach_keys,
-        } => crate::cmd::attach::run(ctx, *read_only, detach_keys.as_deref()).await,
+            shell,
+        } => {
+            crate::cmd::attach::run(
+                ctx,
+                *read_only,
+                detach_keys.as_deref(),
+                shell.as_deref().unwrap_or_default(),
+            )
+            .await
+        }
+        SandboxCmd::Exec { detach_keys, cmd } => {
+            crate::cmd::exec::run(ctx, cmd, detach_keys.as_deref()).await
+        }
     }
 }
 

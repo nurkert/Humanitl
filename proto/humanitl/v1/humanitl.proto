@@ -56,6 +56,12 @@ service Humanitl {
   // Sitzung; eine laufende behaelt ihren Server. Keine Antwort traegt einen
   // Schluessel, nur den Verweis darauf.
   rpc LlmServers(LlmServersRequest) returns (LlmServerList);
+  // Eine weitere Shell in der laufenden Sandbox, neben dem Agenten und mit
+  // einem eigenen Terminal (HUM-299). Die Antwort nennt ihre Kennung; das
+  // Terminal oeffnet `Terminal` mit `Open.shell_id`. Der Shim startet sie von
+  // innen, sie traegt dieselben Grenzen wie der Agent, endet mit ihrem
+  // Prozess oder mit der Sandbox, und hoechstens vier leben gleichzeitig.
+  rpc Exec(ExecRequest) returns (ExecResponse);
 }
 
 // ---------- Info ----------
@@ -1376,6 +1382,10 @@ message TerminalInput {
     // Nur lesen. Mehrere Leser sind erlaubt, ein zweiter Schreiber nicht
     // (Diagnostic `TERM_001`).
     bool read_only = 4;
+    // Das Terminal einer weiteren Shell aus `Exec` (HUM-299); leer ist das
+    // Terminal des Agenten. Eine Kennung, die es nicht (mehr) gibt, beantwortet
+    // der Strom mit `IPC_006`.
+    string shell_id = 5;
   }
 
   // Neue Geometrie des Schreibers.
@@ -1412,6 +1422,28 @@ message TerminalOutput {
     uint32 cols = 1;
     uint32 rows = 2;
   }
+}
+
+// Eine weitere Shell in der laufenden Sandbox (HUM-299).
+message ExecRequest {
+  // Leer heisst die Sitzung, die laeuft; sonst genau ihre Kennung.
+  string sandbox_id = 1;
+  // Das Kommando in der Sandbox. Leer: eine interaktive Shell, `bash`, wenn
+  // die Sandbox eines findet, sonst `sh`.
+  repeated string command = 2;
+  // Die Groesse des Terminals; 0 nimmt die Vorgabe.
+  uint32 cols = 3;
+  uint32 rows = 4;
+}
+
+// Die gestartete Shell.
+message ExecResponse {
+  // Die Kennung der Shell in ihrer Sandbox, fuer `TerminalInput.Open.shell_id`.
+  string shell_id = 1;
+  // Das Kommando, das wirklich gestartet wurde.
+  repeated string command = 2;
+  // Die Sandbox, in der sie laeuft.
+  string sandbox_id = 3;
 }
 
 // ---------- Audit ----------
