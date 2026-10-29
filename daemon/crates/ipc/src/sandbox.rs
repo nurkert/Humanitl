@@ -2936,6 +2936,7 @@ impl Inner {
             .with_language(config.ui.language)
             .with_hold(config.hold.clone())
             .with_briefing(config.agent.briefing.clone())
+            .with_pi_web_access(config.agent.pi.web_access)
             .with_home(
                 config
                     .sandbox

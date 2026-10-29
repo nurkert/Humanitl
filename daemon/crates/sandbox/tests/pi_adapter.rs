@@ -13,17 +13,18 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
 use humanitl_config::secret::ApiKey;
-use humanitl_config::{AgentBriefing, LlmConfig};
+use humanitl_config::{AgentBriefing, LlmConfig, PiWebAccess};
 use humanitl_core::{FixAction, SessionId, Severity};
 use humanitl_sandbox::agent::files_on_reserved_targets;
 use humanitl_sandbox::agent::opencode_models::{PLACEHOLDER_MODEL, PROVIDER_ID};
 use humanitl_sandbox::agent::pi::{
-    API_KEY_DST, DOCS_URL, INSTALL_COMMAND, NODE_DOWNLOAD_URL, VISIBLE_ENV, briefing_dst,
-    file_targets, models_dst, settings_dst,
+    API_KEY_DST, DOCS_URL, INSTALL_COMMAND, NODE_DOWNLOAD_URL, VISIBLE_ENV, WEB_ACCESS_DOCS_URL,
+    WEB_ACCESS_INSTALL_COMMAND, WebAccessLookup, briefing_dst, file_targets, find_web_access,
+    models_dst, settings_dst, web_search_dst,
 };
 use humanitl_sandbox::agent::pi_config::NO_KEY_PLACEHOLDER;
 use humanitl_sandbox::{
-    AdapterRegistry, AgentAdapter, AgentContext, AgentKey, OpenCodeAdapter, PiAdapter,
+    AdapterRegistry, AgentAdapter, AgentContext, AgentKey, Mount, OpenCodeAdapter, PiAdapter,
     SandboxBackend, SandboxProfile, SandboxView, files_inside_work,
 };
 use serde_json::Value;
@@ -130,7 +131,7 @@ fn pi_files_follow_an_overridden_home() {
         .into_iter()
         .map(|file| file.dst.clone())
         .collect();
-    assert_eq!(targets, file_targets(Path::new("/home/other"), true));
+    assert_eq!(targets, file_targets(Path::new("/home/other"), true, false));
 }
 
 #[test]
@@ -753,4 +754,230 @@ fn another_command_under_pi_does_not_get_pis_installer() {
         Some(FixAction::OpenUrl(NODE_DOWNLOAD_URL.to_owned()))
     );
     assert!(!finding.why.contains(INSTALL_COMMAND), "{}", finding.why);
+}
+
+// ---------------------------------------------------------------------------
+// HUM-309: the web extension `pi-web-access`
+// ---------------------------------------------------------------------------
+
+/// Where the extension lies in the sandbox after a global install under
+/// `/usr/local`.
+const USR_LOCAL_PACKAGE: &str = "/usr/local/lib/node_modules/pi-web-access";
+
+/// A global npm install below `prefix`: `lib/node_modules/pi-web-access`
+/// with a `package.json` that carries `name`.
+fn fake_global_install(prefix: &Path, name: &str) {
+    let package = prefix.join("lib/node_modules/pi-web-access");
+    std::fs::create_dir_all(package.join("dist")).unwrap();
+    std::fs::write(
+        package.join("package.json"),
+        format!("{{\"name\": \"{name}\", \"version\": \"0.46.0\", \"pi\": {{\"extensions\": [\"./dist\"]}}}}\n"),
+    )
+    .unwrap();
+    std::fs::write(package.join("dist/index.js"), b"export default () => {};\n").unwrap();
+}
+
+/// A context whose sandbox sees `usr_local` as `/usr/local` and nothing else.
+fn with_usr_local(usr_local: &Path, mode: PiWebAccess) -> AgentContext {
+    context(Some("http://192.168.1.50:11434"))
+        .with_sandbox_view(SandboxView::new(
+            vec![Mount::new(usr_local, "/usr/local")],
+            Vec::new(),
+        ))
+        .with_pi_web_access(mode)
+}
+
+fn settings_json(ctx: &AgentContext) -> Value {
+    serde_json::from_str(&file_at(ctx, &settings_dst(Path::new(HOME)))).unwrap()
+}
+
+fn has_web_search_file(ctx: &AgentContext) -> bool {
+    PiAdapter::new()
+        .files(ctx)
+        .unwrap()
+        .iter()
+        .any(|file| file.dst == web_search_dst(Path::new(HOME)))
+}
+
+fn agent_007(ctx: &AgentContext) -> Option<humanitl_core::Diagnostic> {
+    PiAdapter::new()
+        .preflight(ctx)
+        .into_iter()
+        .find(|diagnostic| diagnostic.code.as_str() == "AGENT_007")
+}
+
+#[test]
+fn a_global_install_under_usr_local_lands_in_the_settings() {
+    let usr_local = tempfile::tempdir().unwrap();
+    fake_global_install(usr_local.path(), "pi-web-access");
+    for mode in [PiWebAccess::Auto, PiWebAccess::On] {
+        let ctx = with_usr_local(usr_local.path(), mode);
+        assert_eq!(
+            find_web_access(&ctx),
+            WebAccessLookup::Found(PathBuf::from(USR_LOCAL_PACKAGE))
+        );
+        let settings = settings_json(&ctx);
+        assert_eq!(
+            settings["packages"],
+            serde_json::json!([USR_LOCAL_PACKAGE]),
+            "{mode:?}: {settings}"
+        );
+        assert_eq!(settings["defaultProvider"], PROVIDER_ID);
+
+        let web_search: Value =
+            serde_json::from_str(&file_at(&ctx, &web_search_dst(Path::new(HOME)))).unwrap();
+        assert_eq!(web_search["ssrf"]["trustEnvProxy"], true, "{web_search}");
+        let file = PiAdapter::new()
+            .files(&ctx)
+            .unwrap()
+            .into_iter()
+            .find(|file| file.dst == web_search_dst(Path::new(HOME)))
+            .unwrap();
+        assert!(!file.secret);
+
+        let targets: Vec<PathBuf> = PiAdapter::new()
+            .files(&ctx)
+            .unwrap()
+            .into_iter()
+            .map(|file| file.dst.clone())
+            .collect();
+        assert_eq!(targets, file_targets(Path::new(HOME), true, true));
+        assert!(agent_007(&ctx).is_none(), "{mode:?}");
+    }
+}
+
+/// The directory next to pi wins: a global install of pi under any prefix
+/// the sandbox mounts brings the extension from the same `node_modules`.
+#[test]
+fn the_extension_is_found_next_to_pi_itself() {
+    let dir = tempfile::tempdir().unwrap();
+    // Canonical, so that the mount and the resolved script agree.
+    let prefix = std::fs::canonicalize(dir.path()).unwrap();
+    let cli = prefix.join("lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js");
+    write_executable(&cli, PI_SCRIPT);
+    std::fs::create_dir_all(prefix.join("bin")).unwrap();
+    std::os::unix::fs::symlink(
+        "../lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
+        prefix.join("bin/pi"),
+    )
+    .unwrap();
+    write_executable(&prefix.join("bin/node"), "#!/bin/sh\nexit 0\n");
+    fake_global_install(&prefix, "pi-web-access");
+
+    let bin = prefix.join("bin").display().to_string();
+    let ctx = sandboxed(&[&prefix], &bin, &bin);
+    let expected = prefix.join("lib/node_modules/pi-web-access");
+    assert_eq!(
+        settings_json(&ctx)["packages"],
+        serde_json::json!([expected.display().to_string()])
+    );
+    assert!(has_web_search_file(&ctx));
+    assert_eq!(PiAdapter::new().preflight(&ctx), Vec::new());
+}
+
+#[test]
+fn web_access_off_loads_nothing_even_when_installed() {
+    let usr_local = tempfile::tempdir().unwrap();
+    fake_global_install(usr_local.path(), "pi-web-access");
+    let ctx = with_usr_local(usr_local.path(), PiWebAccess::Off);
+    let settings = settings_json(&ctx);
+    assert!(settings.get("packages").is_none(), "{settings}");
+    assert!(!has_web_search_file(&ctx));
+    assert!(agent_007(&ctx).is_none());
+}
+
+#[test]
+fn web_access_auto_without_the_package_changes_nothing() {
+    let usr_local = tempfile::tempdir().unwrap();
+    let ctx = with_usr_local(usr_local.path(), PiWebAccess::Auto);
+    assert_eq!(find_web_access(&ctx), WebAccessLookup::Missing);
+    let settings = settings_json(&ctx);
+    assert!(settings.get("packages").is_none(), "{settings}");
+    assert!(!has_web_search_file(&ctx));
+    assert!(agent_007(&ctx).is_none(), "auto says nothing");
+    assert_eq!(
+        PiAdapter::new().files(&ctx).unwrap(),
+        PiAdapter::new()
+            .files(&with_usr_local(usr_local.path(), PiWebAccess::Off))
+            .unwrap(),
+        "auto without the package is exactly off"
+    );
+}
+
+#[test]
+fn web_access_on_without_the_package_warns_with_the_npm_command() {
+    let usr_local = tempfile::tempdir().unwrap();
+    let ctx = with_usr_local(usr_local.path(), PiWebAccess::On);
+    let finding = agent_007(&ctx).expect("AGENT_007");
+    assert_eq!(finding.severity, Severity::Warning);
+    assert_eq!(
+        finding.fix,
+        Some(FixAction::CopyCommand(
+            WEB_ACCESS_INSTALL_COMMAND.to_owned()
+        ))
+    );
+    assert!(
+        finding.why.contains(WEB_ACCESS_INSTALL_COMMAND),
+        "{}",
+        finding.why
+    );
+    assert!(finding.why.contains("~/.pi/agent"), "{}", finding.why);
+    assert_eq!(finding.docs.as_deref(), Some(WEB_ACCESS_DOCS_URL));
+    // A warning: pi still gets its files and starts, without the extension.
+    assert!(settings_json(&ctx).get("packages").is_none());
+}
+
+/// A directory named `pi-web-access` with another package in it is not the
+/// extension, and an unreadable `package.json` is undecidable: nothing loads,
+/// and only the first one is a finding.
+#[test]
+fn only_a_package_json_that_names_the_extension_counts() {
+    let usr_local = tempfile::tempdir().unwrap();
+    fake_global_install(usr_local.path(), "pi-web-access-fork");
+    let ctx = with_usr_local(usr_local.path(), PiWebAccess::On);
+    assert_eq!(find_web_access(&ctx), WebAccessLookup::Missing);
+    assert!(settings_json(&ctx).get("packages").is_none());
+    assert!(agent_007(&ctx).is_some());
+
+    let broken = tempfile::tempdir().unwrap();
+    fake_global_install(broken.path(), "pi-web-access");
+    std::fs::write(
+        broken
+            .path()
+            .join("lib/node_modules/pi-web-access/package.json"),
+        b"{ not json",
+    )
+    .unwrap();
+    let ctx = with_usr_local(broken.path(), PiWebAccess::On);
+    assert_eq!(find_web_access(&ctx), WebAccessLookup::Unknown);
+    assert!(settings_json(&ctx).get("packages").is_none());
+    assert!(agent_007(&ctx).is_none(), "undecidable is silent");
+}
+
+/// A FIFO named `package.json` must not hang the preflight: an `open` of a
+/// FIFO blocks until a writer appears. It is no package, so `on` reports it
+/// missing (review of HUM-309).
+#[test]
+fn a_fifo_as_package_json_does_not_hang_the_lookup() {
+    let usr_local = tempfile::tempdir().unwrap();
+    let package = usr_local.path().join("lib/node_modules/pi-web-access");
+    std::fs::create_dir_all(&package).unwrap();
+    let status = std::process::Command::new("mkfifo")
+        .arg(package.join("package.json"))
+        .status()
+        .expect("mkfifo runs");
+    assert!(status.success());
+
+    let root = usr_local.path().to_path_buf();
+    let (done, wait) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let ctx = with_usr_local(&root, PiWebAccess::On);
+        done.send((find_web_access(&ctx), agent_007(&ctx).is_some()))
+            .unwrap();
+    });
+    let (lookup, finding) = wait
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the lookup ends instead of blocking on the FIFO");
+    assert_eq!(lookup, WebAccessLookup::Missing);
+    assert!(finding, "on with no real package is AGENT_007");
 }

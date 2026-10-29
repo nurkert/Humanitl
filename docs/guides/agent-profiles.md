@@ -459,7 +459,8 @@ writable in the tmpfs home; only the files Humanitl places are read-only.
 | Path in the sandbox | Content |
 |---|---|
 | `~/.pi/agent/models.json` | one provider `humanitl-local` with `baseUrl` from `llm.endpoint` (the same base URL OpenCode gets, path prefix included), `api: "openai-completions"`, one model per entry of `llm.models` |
-| `~/.pi/agent/settings.json` | `defaultProvider = "humanitl-local"`, `defaultModel` = the first model, `enableInstallTelemetry = false` |
+| `~/.pi/agent/settings.json` | `defaultProvider = "humanitl-local"`, `defaultModel` = the first model, `enableInstallTelemetry = false`; with web access also `packages` = the directory of `pi-web-access` |
+| `~/.pi/agent/web-search.json` | only with web access: `ssrf.trustEnvProxy = true` (see "Web search and fetch") |
 | `/etc/humanitl/pi/llm-api-key` | the access key, only if one is stored |
 | `~/.pi/agent/AGENTS.md` | the briefing in the language of `ui.language`, unless `agent.briefing.enabled = false` |
 
@@ -529,6 +530,61 @@ add a provider; every request still goes through the proxy and is held.
 `models.json` is read from the agent directory only, so a project cannot
 rewrite the base URL of the bundled provider.
 
+### Web search and fetch
+
+pi has no web tool of its own. The npm package `pi-web-access` (MIT,
+<https://github.com/nicobailon/pi-web-access>, measured with 0.46.0) adds
+`web_search`, `fetch_content`, `source_check` and `get_search_content`.
+`pi install npm:pi-web-access` does not help here: it writes to `~/.pi/agent`
+on your machine, and pi's agent directory in the sandbox is a fresh tmpfs.
+Install the package globally, next to pi:
+
+```sh
+sudo npm install -g --ignore-scripts pi-web-access
+```
+
+Humanitl looks for it in the `node_modules` directory that holds pi, then
+under `/usr/local/lib/node_modules` and `/usr/lib/node_modules`, and counts a
+directory only if the sandbox reaches its `package.json` and that file names
+`pi-web-access`. When found, `settings.json` lists the directory under
+`packages`, and pi loads it from there read-only, without installing
+anything. The switch is `agent.pi.web_access`:
+
+| Value | Effect |
+|---|---|
+| `auto` (default) | load the package when it is installed, otherwise start without it and say nothing |
+| `on` | the same, but a missing package gives the warning `AGENT_007` with the npm command |
+| `off` | never load it |
+
+```sh
+humanitl config set agent.pi.web_access off
+```
+
+The key is closed to project profiles: loading third-party code into the
+agent is your decision, not the cloned repository's. The settings form has no
+field for it yet.
+
+**Every request still passes the proxy.** It is held in Intercept when no
+rule decides it; a rule decides without a hold (the bundled `**.exa.ai` rule
+blocks keyless search, an `allow` rule forwards at once). The extension uses Node's
+`fetch`, which pi routes through its own `EnvHttpProxyAgent` on `HTTPS_PROXY`.
+Measured with a logging proxy: `fetch_content` on an `http://` page arrived as
+`CONNECT host:80`, keyless search as `CONNECT mcp.exa.ai:443`. The extension
+checks each target with its own DNS lookup before it fetches; the sandbox has
+no resolver, so every fetch failed with `Failed to resolve` until
+`web-search.json` set `ssrf.trustEnvProxy`. That file is read-only: the
+extension's own commands that save a provider choice fail in the sandbox.
+
+**Keys and search.** Fetching a URL needs no key. Without a key, search
+goes to Exa's keyless MCP endpoint `mcp.exa.ai`, and the bundled rule
+`…0006` blocks `**.exa.ai` for every session (it was written for OpenCode's
+hosted search). So out of the box `fetch_content` works and `web_search`
+reports that the Exa search failed. A rule of yours wins over the bundled one; to let
+search through, add one for the host, for example `ask` with
+`host: "mcp.exa.ai"` in `rules.yaml`. Search providers with an API key (Brave,
+Tavily, Jina and others) are not wired up: no key from the keyring reaches
+the sandbox, and the extension finds none in the cleared environment.
+
 ### Terminal and checks
 
 pi is a full-screen TUI. `humanitl run --ask terminal` refuses it with
@@ -545,6 +601,8 @@ pi is a full-screen TUI. `humanitl run --ask terminal` refuses it with
   points at the Node.js download page. When the `#!` line names an absolute
   `node` outside the mounts, the fix is reinstalling pi with a Node.js under
   `/usr` or `/usr/local`.
+- `AGENT_007` (warning): `agent.pi.web_access = "on"`, and `pi-web-access`
+  is not installed where the sandbox sees it; pi starts without web tools.
 - `LLM_004`: `llm.models` is empty.
 
 ## Writing an adapter

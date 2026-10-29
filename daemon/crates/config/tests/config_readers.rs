@@ -78,6 +78,9 @@ const REGISTER: &[(&str, &str)] = &[
     ("agent.adapter", "effective"),
     ("agent.briefing.enabled", "effective"),
     ("agent.command", "effective"),
+    // Gelesen vom Adapter `pi` beim Rendern seiner Dateien und in seiner
+    // Vorprüfung (HUM-309).
+    ("agent.pi.web_access", "effective"),
     // Gelesen in `humanitld` beim Öffnen des Audit-Schreibers (HUM-050).
     ("audit.anchor_every", "effective"),
     ("audit.fsync_every", "effective"),

@@ -32,6 +32,7 @@ const DENIED_BY_CONVENTION: &[&str] = &[
     "sandbox.env",
     "agent.adapter",
     "agent.command",
+    "agent.pi.web_access",
     "hold.ask_mode",
     "hold.hard_block_checksum_secrets",
     "findings.enabled",

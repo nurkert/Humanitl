@@ -36,7 +36,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use humanitl_config::secret::ApiKey;
-use humanitl_config::{AgentBriefing, HoldConfig, Language, LlmConfig};
+use humanitl_config::{AgentBriefing, HoldConfig, Language, LlmConfig, PiWebAccess};
 use humanitl_core::rule::Rule;
 use humanitl_core::{Diagnostic, SessionId};
 
@@ -216,6 +216,9 @@ pub struct AgentContext {
     /// Who may own a program the daemon binds into the sandbox; `None` means
     /// the user this process runs as ([`locate::Trust::of_this_process`]).
     pub trust: Option<locate::Trust>,
+    /// Whether the pi adapter loads the extension `pi-web-access`
+    /// (`agent.pi.web_access`, HUM-309). Other adapters ignore it.
+    pub pi_web_access: PiWebAccess,
 }
 
 /// Der Zugangsschlüssel des Modells, so weit ihn ein Adapter sehen darf
@@ -283,6 +286,7 @@ impl AgentContext {
             llm_key: AgentKey::None,
             host_home: None,
             trust: None,
+            pi_web_access: PiWebAccess::default(),
         }
     }
 
@@ -361,6 +365,14 @@ impl AgentContext {
     #[must_use]
     pub fn with_briefing(mut self, briefing: AgentBriefing) -> Self {
         self.briefing = briefing;
+        self
+    }
+
+    /// Sets whether the pi adapter loads `pi-web-access`
+    /// (`agent.pi.web_access`, HUM-309).
+    #[must_use]
+    pub const fn with_pi_web_access(mut self, mode: PiWebAccess) -> Self {
+        self.pi_web_access = mode;
         self
     }
 

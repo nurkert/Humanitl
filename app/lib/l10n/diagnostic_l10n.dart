@@ -78,6 +78,7 @@ abstract final class DiagnosticL10n {
       'AGENT_004' => (l10n.diagAGENT004Title, l10n.diagAGENT004Why),
       'AGENT_005' => (l10n.diagAGENT005Title, l10n.diagAGENT005Why),
       'AGENT_006' => (l10n.diagAGENT006Title, l10n.diagAGENT006Why),
+      'AGENT_007' => (l10n.diagAGENT007Title, l10n.diagAGENT007Why),
       'AUDIT_001' => (l10n.diagAUDIT001Title, l10n.diagAUDIT001Why),
       'AUDIT_002' => (l10n.diagAUDIT002Title, l10n.diagAUDIT002Why),
       'AUDIT_003' => (l10n.diagAUDIT003Title, l10n.diagAUDIT003Why),
