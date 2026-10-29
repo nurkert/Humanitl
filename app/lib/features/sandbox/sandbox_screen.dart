@@ -19,6 +19,7 @@ import '../../core/time/now.dart';
 import '../../core/ui/fix_control.dart';
 import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/diagnostic_severity.dart';
+import '../../core/ui/terminal_placement.dart';
 import '../../core/ui/ui.dart';
 import '../../core/ui/work_dir_picker.dart';
 import '../../l10n/l10n.dart';
@@ -32,8 +33,8 @@ import 'widgets/log_tab.dart';
 import 'widgets/mounts_tab.dart';
 import 'widgets/sandbox_header.dart';
 import 'widgets/sandbox_tabs.dart';
+import 'widgets/sandbox_terminal.dart';
 import 'widgets/stop_dialog.dart';
-import 'widgets/terminal_pane.dart';
 
 /// How much of the height the terminal keeps.
 ///
@@ -58,6 +59,14 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
   bool _visible = false;
   bool _asking = false;
   bool _argvOpen = false;
+
+  /// True for the one build in which the terminal comes back from the whole
+  /// window (HUM-298).
+  ///
+  /// One shot: the pane mounts the terminal in that build and hands it the
+  /// keyboard; the flag is cleared after the frame, so a later remount or a
+  /// session that starts later does not take the focus from wherever it is.
+  bool _terminalCameBack = false;
 
   /// True while the shell actually paints this section. The shell keeps every
   /// section built inside an `IndexedStack`, which wraps each child in a
@@ -88,6 +97,20 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
       );
     }
     _visible = visible;
+    ref.listen<TerminalPlacement>(terminalPlacementProvider, (
+      TerminalPlacement? previous,
+      TerminalPlacement next,
+    ) {
+      if (next == TerminalPlacement.pane && previous != next) {
+        setState(() => _terminalCameBack = true);
+      }
+    });
+
+    if (_terminalCameBack) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (Duration _) => _terminalCameBack = false,
+      );
+    }
 
     final AsyncValue<SandboxStatus> snapshot = ref.watch(sandboxStatusProvider);
     final SandboxStatus status = snapshot.value ?? const SandboxStatus();
@@ -136,7 +159,11 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
                               rowHeight: tokens.sizes.rowHistory,
                             ),
                           ),
-                          child: _Body(status: status, onShowArgv: _showArgv),
+                          child: _Body(
+                            status: status,
+                            onShowArgv: _showArgv,
+                            cameBack: _terminalCameBack,
+                          ),
                         ),
                       },
                     ),
@@ -163,9 +190,17 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
 
 /// The terminal above, the four tabs below.
 class _Body extends ConsumerWidget {
-  const _Body({required this.status, required this.onShowArgv});
+  const _Body({
+    required this.status,
+    required this.onShowArgv,
+    required this.cameBack,
+  });
 
   final SandboxStatus status;
+
+  /// True once the terminal has come back from the whole window: then it
+  /// takes the keyboard again when its pane shows it (HUM-298).
+  final bool cameBack;
 
   /// Opens the command the daemon built; the isolation tab leads there too.
   final VoidCallback onShowArgv;
@@ -174,17 +209,24 @@ class _Body extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final AppLocalizations l10n = context.l10n;
     final SandboxTab tab = ref.watch(sandboxTabChoiceProvider);
+    // Steht das Terminal woanders (über dem ganzen Fenster, HUM-298), bleibt
+    // sein Platz hier leer, in der Farbe des Terminals: Zwei Ansichten
+    // derselben Sitzung würden beide ihre Größe melden und beide Tasten
+    // nehmen. Die Sitzung selbst und ihr Rücklauf leben im Provider und
+    // überstehen den Wechsel.
+    final bool here =
+        ref.watch(terminalPlacementProvider) == TerminalPlacement.pane;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         Expanded(
           flex: (sandboxTerminalFraction * 100).round(),
-          child: TerminalPane(
-            key: const Key('sandbox-terminal'),
-            sandboxId: status.agentRunning
-                ? (status.sandboxId?.value ?? '')
-                : '',
-          ),
+          child: here
+              ? SandboxTerminal(focusOnMount: cameBack)
+              : ColoredBox(
+                  key: const Key('sandbox-terminal-elsewhere'),
+                  color: HTheme.of(context).terminal.background,
+                ),
         ),
         const HHairline(),
         SandboxTabs<SandboxTab>(

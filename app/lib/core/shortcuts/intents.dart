@@ -37,6 +37,43 @@ class ToggleRailIntent extends Intent {
   const ToggleRailIntent();
 }
 
+/// Show the terminal of the sandbox over the whole window, or put it back.
+/// `Ctrl+Shift+Enter` (HUM-298).
+class ToggleTerminalFullWindowIntent extends Intent {
+  /// Creates the intent.
+  const ToggleTerminalFullWindowIntent();
+}
+
+/// The chord that shows the terminal over the whole window and back
+/// (HUM-298), decided by the owner on 2026-10-29.
+///
+/// Not `Ctrl+Shift+F`: that is `AllowGroupIntent` of the queue, whose binding
+/// is nearer to the focus and would allow a group of one held request at the
+/// first press. `Ctrl+Shift+Enter` is free in every section. `SingleActivator`
+/// demands its modifiers exactly, so none of the queue's `Enter` bindings
+/// matches it -- `Enter` allows, `Ctrl+Enter` blocks, `Shift+Enter` opens the
+/// remember grid -- and none of them is asked before the shell's.
+///
+/// No repeats: a held chord would toggle the layout back and forth. The
+/// terminal looks the chord up itself (it is one of the few keys it does not
+/// hand to the agent, `docs/UX.md` 5.2), and the tooltip and the palette name
+/// it.
+const SingleActivator terminalFullWindowActivator = SingleActivator(
+  LogicalKeyboardKey.enter,
+  control: true,
+  shift: true,
+  includeRepeats: false,
+);
+
+/// The same chord with the `Enter` of the number block, like every `Enter`
+/// binding of the queue and the history (HUM-298).
+const SingleActivator terminalFullWindowNumpadActivator = SingleActivator(
+  LogicalKeyboardKey.numpadEnter,
+  control: true,
+  shift: true,
+  includeRepeats: false,
+);
+
 /// The key that expands and collapses the rail, with `Ctrl` (HUM-254).
 ///
 /// Not `Ctrl+B`: CONVENTIONS 3.9 keeps that for `AddRuleIntent`, and a plain
@@ -46,7 +83,8 @@ class ToggleRailIntent extends Intent {
 const LogicalKeyboardKey railToggleKey = LogicalKeyboardKey.digit0;
 
 /// The bindings of HUM-019: one `Ctrl+<digit>` per section, `Ctrl+K`,
-/// `Ctrl+,` for the settings (HUM-069) and `Ctrl+0` for the rail (HUM-254).
+/// `Ctrl+,` for the settings (HUM-069), `Ctrl+0` for the rail (HUM-254) and
+/// `Ctrl+Shift+Enter` for the terminal over the whole window (HUM-298).
 Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
   for (int i = 0; i < navigationKeys.length; i++)
     SingleActivator(navigationKeys[i], control: true): NavIntent(i),
@@ -55,6 +93,8 @@ Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
   const SingleActivator(LogicalKeyboardKey.comma, control: true):
       const SettingsIntent(),
   const SingleActivator(railToggleKey, control: true): const ToggleRailIntent(),
+  terminalFullWindowActivator: const ToggleTerminalFullWindowIntent(),
+  terminalFullWindowNumpadActivator: const ToggleTerminalFullWindowIntent(),
 };
 
 /// The digit keys of the navigation shortcuts, in section order.

@@ -512,6 +512,20 @@ the key itself in `shellShortcuts()` and triggers the intent via
 `Actions`. Measured in `a_shortcut_of_the_application_survives_the_terminal`
 for all three cases (`Ctrl+1`, `Ctrl+6`, `Ctrl+K`).
 
+`Ctrl+Shift+Enter` (HUM-298, also with the `Enter` of the number block) is
+one more exception and takes the same way: it shows the terminal over the
+whole window, without rail, sections and status bar, and brings back the
+section and layout that were there before. The button at the right end of the
+strip above the terminal does the same and names the chord in its tooltip.
+`Esc` is not an exception; it stays with the agent, because OpenCode and pi
+cancel with it. Measured in
+`the_shortcut_works_with_the_terminal_focused_and_esc_reaches_the_agent`.
+The chord is free in the queue as well: `Enter` allows, `Ctrl+Enter` blocks
+and `Shift+Enter` opens the remember grid, and each of them demands its
+modifiers exactly, so `Ctrl+Shift+Enter` decides nothing
+(`the_chord_decides_nothing_in_the_focused_queue`). Not `Ctrl+Shift+F`: that
+is the group allow of the queue.
+
 ### 5.3 Every bound key does something
 
 Every activator in `interceptShortcuts()` has an action in the same screen. A widget test compares the two key sets and fails if they differ; a binding without an action is deleted, not disabled. Today `/`, `Ctrl+D` and `N` are bound and mute.
