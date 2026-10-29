@@ -73,6 +73,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-299 | A second shell in a running sandbox | M | HUM-042, HUM-279, HUM-280 |
 | HUM-307 | The Intercept action bar keeps Allow and Block on one line | S | HUM-286 |
 | HUM-309 | pi gets web search and fetch through pi-web-access | S | HUM-274, HUM-304, HUM-308 |
+| HUM-305 | Pane boundaries can be dragged, and the sandbox terminal can grow | S | HUM-286, HUM-298 |
 
 ---
 
@@ -7688,3 +7689,137 @@ the pi adapter; no general extension manager.
   Sandbox, Masken im Recorder) als eigene Issue; Regel `…0006` für pi
   lockern oder pro Adapter schneiden; Feld im Einstellungsformular; die
   Erweiterung als Baustein der Agent-Setups (HUM-310).
+
+---
+## HUM-305 · Pane boundaries can be dragged, and the sandbox terminal can grow
+
+### Context
+Owner request of 2026-10-29: "die Mounts usw müssen nicht so viel Platz
+einnehmen, ich kann die Kante vom Terminal nicht runter- und das Terminal
+größer ziehen". The Sandbox section splits its body at a fixed 60/40 between
+the terminal (HUM-042, HUM-298) and the tabs below it (mounts, environment,
+isolation, log). The boundary is a plain hairline; nothing can be dragged, and
+on a laptop screen the terminal keeps fewer rows than a TUI agent wants.
+
+The two-column screens already have `HResizablePanes` (HUM-020): the three
+Intercept panes can be dragged, but the ratios are lost on restart, and the
+editor (HUM-031) passes fixed ratios with a callback that drops every drag, so
+its splitter moves the cursor but never the boundary.
+
+### Specification
+1. `HResizablePanes` gets a vertical axis. One widget for both directions:
+   the same minimums, the same whole-pixel seams (HUM-286), the same grip
+   geometry (`HSize.splitter`, hairline at rest, `HSize.splitterActive` while
+   dragged), a row-resize cursor on the vertical axis.
+2. The Sandbox body is two panes on the vertical axis: the terminal above,
+   tab bar plus tab content below. Dragging the boundary down grows the
+   terminal; the lower pane shrinks to a slim minimum (the tab bar and about
+   one row) and its content scrolls. The terminal keeps a minimum of a few
+   rows. The default split stays 60/40.
+3. Every boundary between two panes is draggable: the Intercept panes, the
+   editor halves and the Sandbox split.
+4. Each screen remembers its split across restarts in the UI state file of
+   HUM-254 (`$XDG_STATE_HOME/humanitl/ui-state.json`), under a key of its
+   own. The file is written when a drag ends, not on every pixel. A missing,
+   unreadable or malformed entry means the default split.
+5. A double click on a boundary restores the default split of that screen and
+   stores it.
+6. Every boundary is a focus stop; the arrow keys of its axis move it by
+   `HSize.splitterStep`, and the move is stored like a drag. Keys reach the
+   boundary only while it has the focus: the terminal keeps every arrow key
+   while it has the focus.
+7. While the terminal grows or shrinks, its new columns and rows reach the
+   PTY so the TUI redraws, but not once per pixel: resizes go out at most
+   once per short interval, the last size of a drag always goes out, and a
+   size equal to the last one sent is not sent again.
+8. The UI state store is a core service, not a part of the Intercept feature:
+   the Sandbox section and the editor may not import another feature
+   (`tools/check-deps.sh`).
+
+### Acceptance criteria
+1. Widget tests on the Sandbox screen: dragging the boundary down grows the
+   terminal; the lower pane never goes below its minimum; the split is stored
+   and a new screen over the same file starts with it; a double click
+   restores the default; the arrow keys move a focused boundary and the
+   terminal keeps its arrow keys.
+2. A widget test drags the boundary in many small steps and counts the
+   `TerminalResize` commands at the daemon: fewer than the number of row
+   changes, and the last one carries the final size.
+3. The same persistence test for the Intercept panes and the editor halves.
+4. Every new test has a mutation proof; only goldens the change alters are
+   regenerated.
+
+### Umsetzung (HUM-305)
+
+- **Lage der Naht.** Im Sandbox-Abschnitt steht das Terminal oben und die
+  Reiter darunter, also wird die Naht nach unten gezogen, um das Terminal zu
+  vergrößern (so auch der Wortlaut des Besitzers, „runterziehen"). Die
+  Reiter schrumpfen bis `sandboxDetailsMinHeight` (72 px: Reiterleiste und
+  etwa eine Zeile); unter `sandboxDetailsContentFloor` (120 px) rollt der
+  Inhalt des Reiters als Ganzes, statt gequetscht zu werden. Das Terminal
+  behält mindestens `sandboxTerminalMinHeight` (160 px). Die Vorgabe bleibt
+  60/40, jetzt von der ganzen Höhe unter dem Kopf; die Reiterleiste gehört
+  zum unteren Pane, und die Haarlinie zwischen Terminal und Reitern zeichnet
+  der Griff.
+- **Ein Widget, zwei Achsen.** `HResizablePanes` hat `axis`, `onDragEnd` und
+  `onReset`. Vertikal: `Flex` statt `Row`, liegender Griff,
+  `resizeRow`-Zeiger, Pfeil hoch/runter. Die Pfeile der Naht gelten nur,
+  solange sie den Fokus hat; das Terminal behält seine Pfeile. Zwei
+  Ereignisse in einem Frame (zwei Tastendrücke, zwei Zeigerbewegungen)
+  rechneten bisher beide von den alten Verhältnissen aus und der zweite
+  überschrieb den ersten; das Widget rechnet jetzt bis zum nächsten Frame
+  von dem weiter, was es zuletzt gemeldet hat. Der Doppelklick ist von Hand
+  gezählt (zwei Klicks ohne Zug innerhalb `kDoubleTapTimeout`), weil
+  `onDoubleTap` nach jedem Zug einen Zeitgeber hinterlässt, der jeden
+  Ziehtest mit „Timer still pending" rot machte.
+- **Gemerkt je Bildschirm.** `PaneSplit` (`core/ui/pane_split.dart`), eine
+  Familie über `PaneSplitSpec(key, defaults)`: `set` nur im Speicher
+  während des Zugs, `commit` am Ende des Zugs und nach jedem Tastendruck,
+  `reset` beim Doppelklick. Schlüssel `paneSplit.sandbox`,
+  `paneSplit.intercept`, `paneSplit.editor`. Ein fehlender oder kaputter
+  Eintrag (falsche Länge, keine positive Zahl) ist die Vorgabe.
+- **`UiStateFile` in den Kern.** Sandbox und Editor dürfen kein anderes
+  Feature importieren (`tools/check-deps.sh`); die Datei und
+  `uiStateFileProvider` stehen jetzt in `core/ui_state/ui_state_file.dart`
+  (handgeschriebener `Provider`), `coach_mark.dart` exportiert sie weiter,
+  damit bestehende Importe gelten. Neu: `setValue` für Listen.
+- **Editor.** Der Griff verwarf bisher jeden Zug (`onRatiosChanged: (_) {}`);
+  jetzt zieht er und merkt sich die Aufteilung.
+- **Größe zum PTY.** `TerminalView` misst sich bei jeder Höhe neu und
+  meldet über `terminal.onResize`; `TerminalSession._resize` schickt die
+  erste Größe sofort, sammelt danach für `terminalResizeInterval` (100 ms)
+  und schickt am Ende der Frist nur die letzte, und eine Größe gleich der
+  zuletzt gesendeten (auch der aus `TerminalOpen`) gar nicht.
+  `terminal_pane.dart` ist unberührt (HUM-303 arbeitet dort).
+- **Testgerüste.** `sandboxUnderTest` legt `uiStateOverride()` vor, Editor-
+  Test und Editor-Golden ebenso; sonst läsen sie die Datei des Menschen.
+- **Mutationsbeweise** (je angewandt, Test rot, Datei byte-gleich zurück,
+  per SHA-256 geprüft): Drossel aus (`_resizeQuiet`-Prüfung weg) und
+  nachlaufende Größe weg (beide `the terminal resize reaches the daemon`);
+  `onDragEnd` im Sandbox-Abschnitt weg und `commit` in `set` (beide
+  `the split is written when the drag ends`); `onReset` weg (`double click`);
+  vertikale Achse mit links/rechts und Rechnen von den alten Verhältnissen
+  (beide `arrow keys`); Minimum der Reiter 0 und Rollboden aus (beide
+  `minimum`); vertikaler Zug liest `dx` (`grows the terminal`); Länge des
+  gespeicherten Eintrags ungeprüft (`core/ui/pane_split_test.dart`);
+  `onDragEnd` im Intercept weg (`the splitter drags`); Editor verwirft Züge
+  (`the halves can be dragged`).
+- **Goldens.** Neu erzeugt nur die 20, die die Änderung verschiebt:
+  `sandbox_header_{stopped,running,failed}_{dark,light}`,
+  `states_sandbox_failed.*` (4), `isolation_panel_{ok,failed}.*` (8),
+  `isolation_panel_no_report_{dark,light}`. Das Terminal nimmt jetzt 60
+  Prozent der ganzen Höhe unter dem Kopf; das hohe Fenster der
+  Isolations-Goldens wächst deshalb von 1100 auf 1160 px, damit der Reiter
+  wieder so viel zeigt wie vorher.
+- **Nach dem Review.** Ein Zug zählt nicht als Klick: Der Griff zählt den
+  gemeldeten Zugweg seit dem Aufsetzen, und über `kTouchSlop` ist das
+  Loslassen kein Klick (Codex: Zug um 80 px plus ein Klick setzte zurück; der
+  Start des Erkenners taugt nicht als Merkmal, weil er allein in der Arena
+  schon beim Aufsetzen gewinnt). `PaneSplit` verwirft eine Summe, die
+  überläuft, und jede Aufteilung, in der ein Pane nach dem Normieren null
+  hätte (`[1e308, 1e308]`, `[1e308, 1e-308]`). Die Tests für Intercept und
+  Editor bauen jetzt einen zweiten Baum über derselben Datei und prüfen die
+  Breiten; der Drosseltest zieht mit 16 ms je Frame und prüft höchstens eine
+  Meldung je Intervall plus zwei. Neue Mutationen: Zug als Klick gezählt,
+  Null-Anteil angenommen, gespeicherte Aufteilung beim Start ignoriert
+  (Intercept und Editor) -- alle rot, Dateien byte-gleich zurück.

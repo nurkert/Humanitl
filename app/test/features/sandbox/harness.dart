@@ -19,6 +19,7 @@ import 'package:humanitl/core/ui/work_dir_picker.dart';
 import 'package:humanitl/l10n/l10n.dart';
 
 import '../../harness/fixed_now.dart';
+import '../../harness/ui_state.dart';
 
 /// Der Zeitpunkt, gegen den jeder Test rechnet.
 final DateTime sandboxTestNow = DateTime.utc(2026, 9, 4, 12);
@@ -72,6 +73,10 @@ class SandboxTestClient extends FakeDaemonClient {
   /// die Taste (HUM-042).
   final List<int> typed = <int>[];
 
+  /// Jede Größe, die ein Terminal-Client mit `TerminalResize` geschickt hat,
+  /// als `(Spalten, Zeilen)`, älteste zuerst (HUM-305).
+  final List<(int, int)> resizes = <(int, int)>[];
+
   @override
   Stream<TerminalFrame> terminal(Stream<TerminalCommand> input) {
     final StreamController<TerminalCommand> seen =
@@ -81,6 +86,9 @@ class SandboxTestClient extends FakeDaemonClient {
     ) {
       if (command is TerminalKeys) {
         typed.addAll(command.bytes);
+      }
+      if (command is TerminalResize) {
+        resizes.add((command.cols, command.rows));
       }
       seen.add(command);
     }, onDone: seen.close);
@@ -232,6 +240,7 @@ Future<void> pumpSandbox(
   Size size = const Size(1280, 800),
   List<Override> overrides = const <Override>[],
   Widget Function(Widget child)? wrap,
+  Override? uiState,
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -244,6 +253,7 @@ Future<void> pumpSandbox(
       textScaler: textScaler,
       overrides: overrides,
       wrap: wrap,
+      uiState: uiState,
     ),
   );
   // Ein Frame für `Sandbox(Status)`, einer für die Antwort, einer für den
@@ -258,6 +268,11 @@ Future<void> pumpSandbox(
 /// Die Uhr steht auf [now], ohne Angabe auf [sandboxTestNow] plus
 /// [sandboxTestUptime]. [overrides] darf `nowProvider` nicht noch einmal
 /// überschreiben.
+///
+/// [uiState] ist der Zustandsspeicher der Oberfläche, ohne Angabe ein
+/// frischer: Der Bildschirm liest dort seit HUM-305 die Aufteilung von
+/// Terminal und Reitern, und ohne eigenen Speicher läse er die Datei des
+/// Menschen, der den Test laufen lässt.
 Widget sandboxUnderTest({
   required SandboxTestClient client,
   String? chosenDirectory,
@@ -268,10 +283,12 @@ Widget sandboxUnderTest({
   List<Override> overrides = const <Override>[],
   Widget Function(Widget child)? wrap,
   Locale? locale,
+  Override? uiState,
 }) {
   final HTokens tokens = mode.resolve(Brightness.dark);
   return ProviderScope(
     overrides: <Override>[
+      uiState ?? uiStateOverride(),
       daemonClientProvider.overrideWithValue(client),
       // [chooser] gewinnt über [chosenDirectory]: ein Dialog, der wirft
       // (HUM-282).

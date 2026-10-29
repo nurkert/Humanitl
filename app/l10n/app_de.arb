@@ -1347,5 +1347,6 @@
   "shellPaletteTerminalFullWindowEnter": "Terminal im ganzen Fenster zeigen",
   "shellPaletteTerminalFullWindowLeave": "Terminal-Vollfenster verlassen",
   "diagAGENT007Title": "pi-Weberweiterung nicht installiert",
-  "diagAGENT007Why": "Der Webzugang für pi ist eingeschaltet, aber das Paket pi-web-access liegt nicht dort, wo die Sandbox es sieht; pi startet ohne Websuche und Seitenabruf."
+  "diagAGENT007Why": "Der Webzugang für pi ist eingeschaltet, aber das Paket pi-web-access liegt nicht dort, wo die Sandbox es sieht; pi startet ohne Websuche und Seitenabruf.",
+  "sandboxSplitter": "Terminal und Reiter verschieben"
 }

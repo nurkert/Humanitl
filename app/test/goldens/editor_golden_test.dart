@@ -20,6 +20,7 @@ import 'package:humanitl/features/editor/model/draft.dart';
 import 'package:humanitl/features/editor/providers/draft_provider.dart';
 
 import '../features/intercept/fixtures.dart';
+import '../harness/ui_state.dart';
 import 'support/golden_variants.dart';
 
 const FlowId editorFlow = FlowId('01930000-0000-7000-8000-0000000000ff');
@@ -105,7 +106,10 @@ DraftSource jsonSource() {
 /// Der Editor über [source] in der Variante [variant].
 Widget editor(GoldenVariant variant, {bool replaceAll = false}) => goldenFrame(
   variant: variant,
-  overrides: <Override>[daemonClientProvider.overrideWithValue(AlwaysHeld())],
+  overrides: <Override>[
+    uiStateOverride(),
+    daemonClientProvider.overrideWithValue(AlwaysHeld()),
+  ],
   child: EditorScreen(
     flowId: editorFlow,
     source: jsonSource(),
