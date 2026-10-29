@@ -276,7 +276,7 @@ Provider-Namen (verbindlich): `daemonClientProvider`, `daemonInfoProvider`, `flo
 
 Design-Tokens als `HTokens` (Farben, Typo, Spacing) exakt nach BACKLOG.md Abschnitt 5. Zustandsfarben über `FlowStateColor.of(state)`.
 
-Shortcuts (verbindlich, als `Intent`-Klassen): `AllowIntent` Enter/`A`/Ctrl+F, `BlockIntent` `B`/Ctrl+L, `EditIntent` `E`, `ScopeIntent` `R`, `AllowGroupIntent` Ctrl+Shift+F, `BlockGroupIntent` Ctrl+Shift+L, `NextFlowIntent` `J`/↓, `PrevFlowIntent` `K`/↑, `DurationIntent(n)` `1`/`2`/`3`, `TargetIntent(n)` Shift+1..4, `FilterIntent` `/`, `PaletteIntent` Ctrl+K, `NavIntent(n)` Ctrl+1..5, `ToggleDomainPanelIntent` Ctrl+D, `AddRuleIntent` Ctrl+B, `ToggleRailIntent` Ctrl+0 (HUM-254; die Null gehört der Leiste und ist kein künftiger Bereich).
+Shortcuts (verbindlich, als `Intent`-Klassen): `AllowIntent` Enter/`A`/Ctrl+F, `BlockIntent` `B`/Ctrl+L, `EditIntent` `E`, `ScopeIntent` `R`, `AllowGroupIntent` Ctrl+Shift+F, `BlockGroupIntent` Ctrl+Shift+L, `NextFlowIntent` `J`/↓, `PrevFlowIntent` `K`/↑, `DurationIntent(n)` `1`/`2`/`3`, `TargetIntent(n)` Shift+1..4, `FilterIntent` `/`, `PaletteIntent` Ctrl+K, `NavIntent(n)` Ctrl+1..5, `ToggleDomainPanelIntent` Ctrl+D, `AddRuleIntent` Ctrl+B, `ToggleRailIntent` Ctrl+0 (HUM-254; die Null gehört der Leiste und ist kein künftiger Bereich), `FocusTerminalIntent` Ctrl+` (HUM-303; die physische Taste links der 1, auf deutscher Belegung Strg+^).
 
 ### 3.10 Agent-Adapter
 

@@ -7,6 +7,7 @@ import '../tokens/colors.dart';
 import '../tokens/spacing.dart';
 import '../tokens/tokens.dart';
 import '../tokens/typography.dart';
+import 'h_layer_scope.dart';
 
 /// A centred card over a scrim.
 ///
@@ -86,10 +87,7 @@ class HModal extends StatelessWidget {
               },
             ),
         },
-        child: HTheme.host(
-          context,
-          FocusScope(autofocus: true, child: _card(context, tokens)),
-        ),
+        child: HTheme.host(context, HLayerScope(child: _card(context, tokens))),
       ),
     );
   }

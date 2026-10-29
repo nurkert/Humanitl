@@ -73,13 +73,84 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
     if (widget.focusOnMount) {
       _takeFocus();
     }
+    // `Ctrl+Backquote` and the palette (HUM-303). Every host listens; the
+    // rule below lets only the one that is shown act.
+    ref.listenManual<int>(
+      terminalFocusRequestProvider,
+      (int? previous, int next) => _takeKeyboard(byHover: false),
+    );
   }
 
+  /// Whether the emulator may take the keyboard now, asked by the pointer
+  /// ([byHover]) or by `Ctrl+Backquote` (HUM-303).
+  ///
+  /// **The pointer decides where the keys go, with two exceptions, and both
+  /// keep the focus where it is.**
+  ///
+  /// * **A layer above the work.** A dialog, a sheet, a menu or the command
+  ///   palette each hold the keyboard in a focus scope of their own
+  ///   (`HModal`, `HSheet`, the menu of `HContextMenu`). Their scope is never
+  ///   one the terminal stands in, so the rule needs no list of them: the
+  ///   terminal takes the focus only from a node whose scope is its own or one
+  ///   of the scopes around it. The menu of the terminal itself is the case
+  ///   that shows why: it opens under the pointer, over the terminal, and
+  ///   lets the pointer through; without this rule the next movement would
+  ///   take the keys from it, and `Esc` would cancel the agent instead of
+  ///   closing the menu. This holds for the shortcut too.
+  /// * **A text field somebody types in**, only for the pointer. Crossing the
+  ///   terminal on the way to a button must not cut a note or a filter in
+  ///   half. Whoever wants the terminal then clicks it or presses the
+  ///   shortcut, which asks deliberately.
+  ///
+  /// **No delay.** The obvious alternative, focus only after the pointer
+  /// rested 150 ms, was weighed and dropped: it leaves a moment in which the
+  /// pointer is on the terminal and the keyboard is still in the queue, and
+  /// an `Enter` typed for the agent in that moment would allow a held
+  /// request. Taking the focus at once closes that gap; the text-field rule
+  /// covers what the delay would have protected.
+  bool _mayTakeKeyboard({required bool byHover}) {
+    if (!mounted || widget.sandboxId.isEmpty || !Visibility.of(context)) {
+      return false;
+    }
+    if (_focus.hasPrimaryFocus || HLayerScope.keyboardClaimed) {
+      return false;
+    }
+    final FocusScopeNode? own = _focus.enclosingScope;
+    if (own == null) {
+      // Not attached: there is no emulator on the screen to give it to.
+      return false;
+    }
+    final FocusNode? holder = FocusManager.instance.primaryFocus;
+    if (holder != null) {
+      final FocusScopeNode? held = holder.nearestScope;
+      if (held != own && !own.ancestors.contains(held)) {
+        return false;
+      }
+    }
+    return !(byHover && isTextInputFocused());
+  }
+
+  /// Hands the keyboard to the emulator when [_mayTakeKeyboard] allows it.
+  void _takeKeyboard({required bool byHover}) {
+    if (_mayTakeKeyboard(byHover: byHover)) {
+      _focus.requestFocus();
+    }
+  }
+
+  void _hovered(PointerEvent _) => _takeKeyboard(byHover: true);
+
   /// Gives the keyboard to the emulator one frame from now, once it is built.
+  ///
+  /// Within the same rule as the pointer and the shortcut: a layer that holds
+  /// the keyboard keeps it (HUM-303). Opening the settings from the terminal
+  /// over the whole window puts the terminal back into its pane, and the
+  /// pane hands it the keyboard as soon as the session is known again --
+  /// which is after the sheet has taken it. Without the rule every key typed
+  /// into the sheet went to the agent behind it.
   void _takeFocus() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && Visibility.of(context)) {
-        _focus.requestFocus();
+        _takeKeyboard(byHover: false);
       }
     });
   }
@@ -151,6 +222,8 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   /// noch mit der Maus heraus (`docs/UX.md` 5.1). Dasselbe gilt für
   /// `Ctrl+Shift+Enter`, das Terminal über das ganze Fenster und zurück
   /// (HUM-298): Es steht in [shellShortcuts] und nimmt deshalb denselben Weg.
+  /// Ebenso `Ctrl+Backquote`, die Tastatur ans Terminal (HUM-303): Steht der
+  /// Fokus schon hier, tut es nichts, und der Agent bekommt kein Byte.
   /// Alles andere gehört ihm, `Ctrl+C` als `0x03`, `Ctrl+P` als `0x10` und
   /// `Esc` eingeschlossen, das OpenCode und pi zum Abbrechen brauchen.
   ///
@@ -331,28 +404,36 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
         onSelected: _paste,
       ),
     ],
-    child: ColoredBox(
-      color: tokens.terminal.background,
-      child: TerminalView(
-        session.terminal,
-        controller: _controller,
-        focusNode: _focus,
-        autofocus: true,
-        shortcuts: _emulatorShortcuts(),
-        theme: _theme(tokens.terminal),
-        textStyle: TerminalStyle(
-          fontSize: tokens.typography.mono13.fontSize ?? 13,
-          fontFamily: HType.monoFamily,
-          fontFamilyFallback: HType.monoFallback,
+    // The pointer over the emulator hands it the keyboard, within the rule of
+    // [_mayTakeKeyboard] (HUM-303). On entering, and on every movement
+    // after: a text field that had the focus when the pointer came in may
+    // have let go of it since.
+    child: MouseRegion(
+      onEnter: _hovered,
+      onHover: _hovered,
+      child: ColoredBox(
+        color: tokens.terminal.background,
+        child: TerminalView(
+          session.terminal,
+          controller: _controller,
+          focusNode: _focus,
+          autofocus: true,
+          shortcuts: _emulatorShortcuts(),
+          theme: _theme(tokens.terminal),
+          textStyle: TerminalStyle(
+            fontSize: tokens.typography.mono13.fontSize ?? 13,
+            fontFamily: HType.monoFamily,
+            fontFamilyFallback: HType.monoFallback,
+          ),
+          padding: EdgeInsets.all(tokens.spacing.x2),
+          onSecondaryTapDown: (TapDownDetails details, CellOffset _) =>
+              _menu.open(details.globalPosition),
+          onKeyEvent: _onKey,
+          // A reader may not type, and nobody may while the session is not
+          // attached: the daemon drops those keys, and an emulator that still
+          // takes them shows a cursor waiting for an agent that never hears it.
+          readOnly: session.readOnly || session.phase != TerminalPhase.attached,
         ),
-        padding: EdgeInsets.all(tokens.spacing.x2),
-        onSecondaryTapDown: (TapDownDetails details, CellOffset _) =>
-            _menu.open(details.globalPosition),
-        onKeyEvent: _onKey,
-        // A reader may not type, and nobody may while the session is not
-        // attached: the daemon drops those keys, and an emulator that still
-        // takes them shows a cursor waiting for an agent that never hears it.
-        readOnly: session.readOnly || session.phase != TerminalPhase.attached,
       ),
     ),
   );
