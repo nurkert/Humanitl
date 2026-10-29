@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/domain/domain.dart';
+import '../../core/ipc/config_providers.dart';
 import '../../core/ipc/flow_handoff.dart';
 import '../../core/ipc/flow_reveal.dart';
 import '../../core/shortcuts/intents.dart';
@@ -20,6 +21,7 @@ import '../intercept/intercept_screen.dart';
 import '../intercept/providers/decision.dart';
 import '../intercept/providers/flows.dart';
 import '../rules/rules_screen.dart';
+import '../sandbox/providers/sandbox_status_provider.dart';
 import '../sandbox/sandbox_screen.dart';
 import '../settings/settings_sheet.dart';
 import '../setup/providers/setup_provider.dart';
@@ -80,6 +82,28 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   final List<GlobalKey> _keys = <GlobalKey>[
     for (int i = 0; i < 5; i++) GlobalKey(debugLabel: 'section-$i'),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    // Die Einstellungen schreiben den Projektordner über `configProvider`,
+    // der Sandbox-Schnappschuss plant mit ihm. Kein Feature importiert ein
+    // anderes; die Shell hält beide und reicht jeden lesbaren Ordner weiter,
+    // damit Kopf und Setup den neuen zeigen, ohne dass der Bildschirm
+    // wechselt (HUM-295). Sofort einmal, damit der Ordner beim Öffnen der
+    // Shell als Ausgangspunkt gilt und nicht als Änderung.
+    ref.listenManual<String?>(
+      configProvider.select(
+        (AsyncValue<ConfigValues> config) => config.value?.sandboxWorkDir,
+      ),
+      (String? _, String? workDir) {
+        if (workDir != null) {
+          ref.read(sandboxStatusProvider.notifier).storedWorkDirRead(workDir);
+        }
+      },
+      fireImmediately: true,
+    );
+  }
 
   @override
   void dispose() {
