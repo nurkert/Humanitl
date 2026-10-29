@@ -31,13 +31,27 @@
 //! model or add a provider; every request still goes through the proxy and is
 //! held. `models.json` is read from the agent directory only, so a project
 //! cannot rewrite the base URL of the bundled provider.
+//!
+//! **Web access (HUM-309).** pi has no web tool of its own. The npm package
+//! `pi-web-access` adds `web_search` and `fetch_content`. `pi install` would
+//! write to `~/.pi/agent` on the host, which the sandbox does not see, so the
+//! owner installs it globally next to pi ([`WEB_ACCESS_INSTALL_COMMAND`]), and
+//! the adapter lists the directory it finds under `packages` in
+//! `settings.json` (`agent.pi.web_access`). pi loads a local package from
+//! there without installing anything, also with `PI_OFFLINE=1`. The adapter
+//! writes `web-search.json` next to it with `ssrf.trustEnvProxy`: the
+//! extension resolves every target itself before it fetches, and the sandbox
+//! has no resolver. Its requests go through pi's own dispatcher
+//! (`EnvHttpProxyAgent` on `HTTPS_PROXY`), measured with 0.46.0: a fetch
+//! arrived at the proxy as `CONNECT host:80`, keyless search as
+//! `CONNECT mcp.exa.ai:443`.
 
 use std::ffi::{OsStr, OsString};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
-use humanitl_config::{LlmConfig, llm_endpoint};
-use humanitl_core::diagnostics::codes::AGENT_006;
+use humanitl_config::{LlmConfig, PiWebAccess, llm_endpoint};
+use humanitl_core::diagnostics::codes::{AGENT_006, AGENT_007};
 use humanitl_core::rule::Rule;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
@@ -47,10 +61,10 @@ use crate::agent::opencode::{
 };
 use crate::agent::opencode_models::DEFAULT_RULES;
 use crate::agent::pi_config::{
-    NO_KEY_PLACEHOLDER, api_key_command, render_models, render_settings,
+    NO_KEY_PLACEHOLDER, api_key_command, render_models, render_settings, render_web_search,
 };
 use crate::agent::{
-    AgentAdapter, AgentContext, SandboxFile, SandboxLookup, briefing, find_in_path,
+    AgentAdapter, AgentContext, Reach, SandboxFile, SandboxLookup, briefing, find_in_path,
     is_executable_file,
 };
 
@@ -85,6 +99,21 @@ pub const DOCS_URL: &str =
 /// Where Node.js comes from when the machine has none; stands in the fix of
 /// `AGENT_006`. pi 1.3.0 needs Node.js 22.19 or newer.
 pub const NODE_DOWNLOAD_URL: &str = "https://nodejs.org/en/download";
+
+/// The npm name of pi's web extension (HUM-309).
+pub const WEB_ACCESS_PACKAGE: &str = "pi-web-access";
+
+/// How the web extension is installed where the sandbox sees it: globally,
+/// next to pi, under the read-only `/usr` mount. `--ignore-scripts` like for
+/// pi itself: the package needs no install script.
+pub const WEB_ACCESS_INSTALL_COMMAND: &str = "sudo npm install -g --ignore-scripts pi-web-access";
+
+/// The documentation of the web extension; stands in `docs` of `AGENT_007`.
+pub const WEB_ACCESS_DOCS_URL: &str = "https://github.com/nicobailon/pi-web-access";
+
+/// Where a global npm install puts its packages, as paths in the sandbox, in
+/// the order they are searched after the directory that holds pi itself.
+pub const GLOBAL_NODE_MODULES: &[&str] = &["/usr/local/lib/node_modules", "/usr/lib/node_modules"];
 
 /// The agent directory of pi.
 pub const ENV_AGENT_DIR: &str = "PI_CODING_AGENT_DIR";
@@ -128,6 +157,13 @@ pub fn settings_dst(home: &Path) -> PathBuf {
     agent_dir(home).join("settings.json")
 }
 
+/// `web-search.json` in the agent directory, the configuration of
+/// `pi-web-access` (HUM-309).
+#[must_use]
+pub fn web_search_dst(home: &Path) -> PathBuf {
+    agent_dir(home).join("web-search.json")
+}
+
 /// The briefing (HUM-071): pi reads `<agent-dir>/AGENTS.md` at every start,
 /// before the `AGENTS.md` files of the project.
 #[must_use]
@@ -138,8 +174,11 @@ pub fn briefing_dst(home: &Path) -> PathBuf {
 /// The files the adapter creates, as paths, in the order of
 /// [`AgentAdapter::files`] without the key file.
 #[must_use]
-pub fn file_targets(home: &Path, briefing: bool) -> Vec<PathBuf> {
+pub fn file_targets(home: &Path, briefing: bool, web_access: bool) -> Vec<PathBuf> {
     let mut targets = vec![models_dst(home), settings_dst(home)];
+    if web_access {
+        targets.push(web_search_dst(home));
+    }
     if briefing {
         targets.push(briefing_dst(home));
     }
@@ -332,6 +371,148 @@ fn node_preflight(ctx: &AgentContext, command: &OsStr) -> Option<Diagnostic> {
     )
 }
 
+/// The command that starts in the sandbox: `agent.command`, else `pi`.
+fn started_command(ctx: &AgentContext) -> OsString {
+    ctx.agent_command_override
+        .as_ref()
+        .and_then(|command| command.first())
+        .map_or_else(|| OsString::from(DEFAULT_COMMAND), Clone::clone)
+}
+
+/// What the search for `pi-web-access` found (HUM-309).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebAccessLookup {
+    /// The package directory, as a path in the sandbox.
+    Found(PathBuf),
+    /// No candidate holds the package.
+    Missing,
+    /// A candidate could not be read; nothing is claimed
+    /// (`backlog/CONVENTIONS.md` 4.13).
+    Unknown,
+}
+
+/// The `node_modules` directory that holds pi itself, if pi is a script
+/// under one: a global install of pi lies at
+/// `<prefix>/lib/node_modules/@earendil-works/pi-coding-agent/...`, and a
+/// global install of the extension next to it. Taken as a path in the
+/// sandbox; the lookup of `package.json` decides whether the sandbox reaches
+/// it there.
+fn node_modules_of_pi(ctx: &AgentContext) -> Option<PathBuf> {
+    let script = started_script(ctx, &started_command(ctx))?;
+    let real = std::fs::canonicalize(&script).unwrap_or(script);
+    real.ancestors()
+        .find(|dir| dir.file_name() == Some(OsStr::new("node_modules")))
+        .map(Path::to_path_buf)
+}
+
+/// More than any `package.json` needs; a larger file is not read to its end.
+const PACKAGE_JSON_LIMIT: u64 = 256 * 1024;
+
+/// Whether a `package.json` names the web extension; `None` when it cannot be
+/// read or parsed.
+///
+/// Only a regular file is read. A FIFO named `package.json` would block an
+/// `open` until someone writes to it, and with it the preflight of the
+/// daemon (review of HUM-309). So the type is checked before the `open`, the
+/// `open` itself does not block (`O_NONBLOCK`), and the open descriptor is
+/// checked again, in case the file was swapped in between.
+fn names_web_access(host: &Path) -> Option<bool> {
+    use rustix::fs::{Mode, OFlags};
+
+    if !std::fs::symlink_metadata(host).ok()?.is_file() {
+        return Some(false);
+    }
+    let fd = rustix::fs::open(
+        host,
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+        Mode::empty(),
+    )
+    .ok()?;
+    let file = std::fs::File::from(fd);
+    if !file.metadata().ok()?.is_file() {
+        return Some(false);
+    }
+    let mut text = Vec::new();
+    file.take(PACKAGE_JSON_LIMIT).read_to_end(&mut text).ok()?;
+    let doc: serde_json::Value = serde_json::from_slice(&text).ok()?;
+    Some(doc.get("name").and_then(serde_json::Value::as_str) == Some(WEB_ACCESS_PACKAGE))
+}
+
+/// Searches `pi-web-access` where a global npm install puts it: next to pi,
+/// then [`GLOBAL_NODE_MODULES`].
+///
+/// A candidate counts only when the sandbox reaches its `package.json`
+/// through the mounts ([`AgentContext::search_view`]) and the file names the
+/// package; a directory of that name with another package in it is not the
+/// extension.
+#[must_use]
+pub fn find_web_access(ctx: &AgentContext) -> WebAccessLookup {
+    let mut dirs: Vec<PathBuf> = node_modules_of_pi(ctx).into_iter().collect();
+    for dir in GLOBAL_NODE_MODULES {
+        let dir = PathBuf::from(dir);
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    let view = ctx.search_view();
+    let mut unknown = false;
+    for dir in dirs {
+        let package = dir.join(WEB_ACCESS_PACKAGE);
+        match view.resolve(&package.join("package.json")) {
+            Reach::Host(host) => match names_web_access(&host) {
+                Some(true) => return WebAccessLookup::Found(package),
+                Some(false) => {}
+                None => unknown = true,
+            },
+            Reach::Unknown => unknown = true,
+            Reach::Absent => {}
+        }
+    }
+    if unknown {
+        WebAccessLookup::Unknown
+    } else {
+        WebAccessLookup::Missing
+    }
+}
+
+/// The package directory pi loads in this sandbox, or `None`: switched off,
+/// or not found (`agent.pi.web_access`, HUM-309).
+#[must_use]
+pub fn web_access_package(ctx: &AgentContext) -> Option<PathBuf> {
+    match ctx.pi_web_access {
+        PiWebAccess::Off => None,
+        PiWebAccess::Auto | PiWebAccess::On => match find_web_access(ctx) {
+            WebAccessLookup::Found(package) => Some(package),
+            WebAccessLookup::Missing | WebAccessLookup::Unknown => None,
+        },
+    }
+}
+
+/// `AGENT_007`: `agent.pi.web_access` is `on`, and the package is missing.
+///
+/// A warning, not a stop: pi runs without the web tools, and the user sees
+/// why. `auto` says nothing, and neither does an undecidable lookup.
+fn web_access_preflight(ctx: &AgentContext) -> Option<Diagnostic> {
+    if ctx.pi_web_access != PiWebAccess::On || find_web_access(ctx) != WebAccessLookup::Missing {
+        return None;
+    }
+    Some(
+        Diagnostic::builder(AGENT_007, Severity::Warning)
+            .why(format!(
+                "agent.pi.web_access is on, and the sandbox finds no package {WEB_ACCESS_PACKAGE} \
+                 next to pi or under {}; pi starts without web_search and fetch_content. \
+                 `pi install` does not help: it writes to ~/.pi/agent on this machine, which the \
+                 sandbox does not see. Install it globally: {WEB_ACCESS_INSTALL_COMMAND}",
+                GLOBAL_NODE_MODULES.join(" or "),
+            ))
+            .fix(FixAction::CopyCommand(
+                WEB_ACCESS_INSTALL_COMMAND.to_owned(),
+            ))
+            .docs(WEB_ACCESS_DOCS_URL)
+            .build(),
+    )
+}
+
 impl AgentAdapter for PiAdapter {
     fn id(&self) -> &'static str {
         ADAPTER_ID
@@ -395,7 +576,11 @@ impl AgentAdapter for PiAdapter {
             NO_KEY_PLACEHOLDER.to_owned()
         };
         let models = render_models(&base, &ctx.llm.models, &api_key)?;
-        let settings = render_settings(&ctx.llm.models)?;
+        let web_access = web_access_package(ctx);
+        let package = web_access
+            .as_ref()
+            .map(|package| package.to_string_lossy().into_owned());
+        let settings = render_settings(&ctx.llm.models, package.as_deref())?;
 
         let mut files = vec![
             SandboxFile::read_only(models_dst(&ctx.home), models.into_bytes()),
@@ -403,6 +588,15 @@ impl AgentAdapter for PiAdapter {
         ];
         if ctx.llm_key.is_some() {
             files.push(SandboxFile::secret(API_KEY_DST, ctx.llm_key.file_content()));
+        }
+        // Read-only like the others: the extension's own commands that save
+        // a provider choice fail, and the agent cannot switch the DNS check
+        // back on or point the extension at another proxy (HUM-309).
+        if web_access.is_some() {
+            files.push(SandboxFile::read_only(
+                web_search_dst(&ctx.home),
+                render_web_search()?.into_bytes(),
+            ));
         }
         // The same briefing as for OpenCode, with the host from the same
         // checked source as the passthrough rule (HUM-071).
@@ -434,13 +628,9 @@ impl AgentAdapter for PiAdapter {
         // Only when the command itself is fine: a finding about Node for a
         // command that is not there would be a second answer to one question.
         if diagnostics.is_empty() {
-            let command = ctx
-                .agent_command_override
-                .as_ref()
-                .and_then(|command| command.first())
-                .map_or_else(|| OsString::from(DEFAULT_COMMAND), Clone::clone);
-            diagnostics.extend(node_preflight(ctx, &command));
+            diagnostics.extend(node_preflight(ctx, &started_command(ctx)));
         }
+        diagnostics.extend(web_access_preflight(ctx));
         diagnostics.extend(placeholder_model_finding(&ctx.llm));
         diagnostics
     }

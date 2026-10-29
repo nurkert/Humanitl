@@ -79,6 +79,7 @@ below lists the flag names and their short aliases.
 | `--agent-adapter` | - | `STRING` | `agent.adapter` |
 | `--agent-briefing-enabled` | - | `true`, `false` | `agent.briefing.enabled` |
 | `--agent-command` | - | `LIST_OF_STRING,_OPTIONAL` | `agent.command` |
+| `--agent-pi-web-access` | - | `auto`, `on`, `off` | `agent.pi.web_access` |
 | `--audit-anchor-every` | - | `INTEGER` | `audit.anchor_every` |
 | `--audit-fsync-every` | - | `INTEGER` | `audit.fsync_every` |
 | `--audit-max-bytes` | - | `INTEGER` | `audit.max_bytes` |

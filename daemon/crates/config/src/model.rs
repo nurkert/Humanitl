@@ -489,6 +489,9 @@ pub struct AgentRef {
     /// Die Instruktionsdatei, die der Agent in der Sandbox vorfindet.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub briefing: AgentBriefing,
+    /// Einstellungen, die nur der Adapter `pi` liest (HUM-309).
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub pi: PiAgentConfig,
 }
 
 impl Default for AgentRef {
@@ -497,8 +500,31 @@ impl Default for AgentRef {
             adapter: "opencode".to_owned(),
             command: None,
             briefing: AgentBriefing::default(),
+            pi: PiAgentConfig::default(),
         }
     }
+}
+
+/// Was der Adapter `pi` zusätzlich in die Sandbox bringt (HUM-309).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct PiAgentConfig {
+    /// Lädt die pi-Erweiterung `pi-web-access` (Websuche und Abruf von Seiten), wenn sie global installiert ist (`sudo npm install -g --ignore-scripts pi-web-access`). `auto` lädt sie, wenn die Sandbox sie findet, `on` ebenso und meldet `AGENT_007`, wenn sie fehlt, `off` lädt sie nie. Jede Anfrage der Erweiterung geht wie jede andere durch den Proxy. Im Projekt-Profil gesperrt: fremden Code in den Agenten zu laden, entscheidet der Nutzer.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub web_access: PiWebAccess,
+}
+
+/// Ob der Adapter `pi` die Erweiterung `pi-web-access` lädt (HUM-309).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PiWebAccess {
+    /// Laden, wenn die Sandbox das Paket findet; sonst still ohne.
+    #[default]
+    Auto,
+    /// Laden; fehlt das Paket, sagt es ein Befund (`AGENT_007`).
+    On,
+    /// Nie laden.
+    Off,
 }
 
 /// Die kurze Einweisung, die der Agent in der Sandbox vorfindet.
