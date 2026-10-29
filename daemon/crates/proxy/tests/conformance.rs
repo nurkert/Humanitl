@@ -917,10 +917,11 @@ async fn conf_16_git_ls_remote_https() {
 
 /// `fetch` durch den Proxy.
 ///
-/// Node kennt Proxy-Umgebungsvariablen für `fetch` erst ab Version 24
-/// (`NODE_USE_ENV_PROXY`). Auf älteren Versionen baut das Skript den Tunnel
-/// selbst mit `CONNECT` und `tls.connect`; geprüft wird in beiden Fällen
-/// dasselbe: Status 200 und keine TLS-Beschwerde.
+/// Node kennt Proxy-Umgebungsvariablen für `fetch` erst mit
+/// `NODE_USE_ENV_PROXY=1`, ab Version 22.21 und 24.5; den Schalter setzt das
+/// Env-Kit selbst (HUM-304). Vor Version 24 baut das Skript den Tunnel selbst
+/// mit `CONNECT` und `tls.connect`; geprüft wird in beiden Fällen dasselbe:
+/// Status 200 und keine TLS-Beschwerde.
 #[tokio::test(flavor = "multi_thread")]
 async fn conf_17_node_fetch_https() {
     let Some(node) = clients::require("node") else {
@@ -941,7 +942,6 @@ async fn conf_17_node_fetch_https() {
         .arg(NODE_FETCH_SCRIPT)
         .arg(format!("https://localhost:{}/echo", upstream.port()));
     clients::apply(&mut cmd, &clients::env_kit(&bridge.url(), &proxy.ca_pem()));
-    cmd.env("NODE_USE_ENV_PROXY", "1");
     // Der Zweig ohne `fetch` lässt sich lokal erzwingen, damit beide Wege
     // geprüft werden können: `HUMANITL_NODE_MANUAL=1 cargo test conf_17`.
     if std::env::var_os("HUMANITL_NODE_MANUAL").is_some() {

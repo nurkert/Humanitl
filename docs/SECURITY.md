@@ -143,7 +143,8 @@ application and the CLI on the host steer the daemon through it.
 
 Inside the sandbox the shim listens on `127.0.0.1:3128` and forwards every accepted TCP
 connection to that one socket file. The agent's environment points `HTTP_PROXY`, `HTTPS_PROXY`
-and `ALL_PROXY` there and sets `NO_PROXY` empty. The profile allows exactly one bridge: a second
+and `ALL_PROXY` there and sets `NO_PROXY` empty; `NODE_USE_ENV_PROXY=1` makes Node's built-in
+`fetch` and the global agents of `node:http` and `node:https` follow the same variables. The profile allows exactly one bridge: a second
 one would be a second listener to a second Unix socket and is refused with `CONFIG_003`, a
 bridge in the direction `out` with `SANDBOX_007`.
 

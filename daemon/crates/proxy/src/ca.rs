@@ -110,6 +110,16 @@ pub const SYSTEM_BUNDLE_CANDIDATES: &[&str] = &[
 /// `NO_PROXY` steht ausdrücklich leer: ein Agent-Image mit `NO_PROXY=*` würde
 /// sonst den Proxy umgehen wollen, und `--clearenv` allein schützt nicht vor
 /// einem Wert, den ein Werkzeug selbst als Default annimmt.
+///
+/// `NODE_USE_ENV_PROXY=1` (HUM-304): Das eingebaute `fetch` von Node und die
+/// globalen Agenten von `node:http`/`node:https` lesen die Proxy-Variablen
+/// erst mit diesem Schalter (Node ab 22.21 und 24.5; ältere Versionen
+/// ignorieren ihn). Ohne ihn versucht ein `node -e "fetch(…)"` in der Sandbox
+/// eine direkte Verbindung und scheitert an der fehlenden Netzwerkschnittstelle,
+/// obwohl der Proxy die Anfrage beantworten würde. Der Schalter öffnet keinen
+/// Weg, den es nicht schon gibt: er lenkt Node auf denselben Proxy wie curl.
+/// pi stellt seinen eigenen Dispatcher (`EnvHttpProxyAgent` aus undici) auf
+/// dieselben Variablen ein und bleibt davon unberührt.
 pub const ENV_KIT: &[(&str, &str)] = &[
     ("HTTP_PROXY", SANDBOX_PROXY_URL),
     ("HTTPS_PROXY", SANDBOX_PROXY_URL),
@@ -118,6 +128,7 @@ pub const ENV_KIT: &[(&str, &str)] = &[
     ("ALL_PROXY", SANDBOX_PROXY_URL),
     ("NO_PROXY", ""),
     ("no_proxy", ""),
+    ("NODE_USE_ENV_PROXY", "1"),
     ("SSL_CERT_FILE", SANDBOX_CA_PATH),
     ("SSL_CERT_DIR", SANDBOX_CERT_DIR),
     ("CURL_CA_BUNDLE", SANDBOX_CA_PATH),
