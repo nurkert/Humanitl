@@ -74,6 +74,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-307 | The Intercept action bar keeps Allow and Block on one line | S | HUM-286 |
 | HUM-309 | pi gets web search and fetch through pi-web-access | S | HUM-274, HUM-304, HUM-308 |
 | HUM-305 | Pane boundaries can be dragged, and the sandbox terminal can grow | S | HUM-286, HUM-298 |
+| HUM-303 | The terminal takes the keyboard on hover and by shortcut | S | HUM-298 |
 
 ---
 
@@ -7823,3 +7824,221 @@ its splitter moves the cursor but never the boundary.
   Meldung je Intervall plus zwei. Neue Mutationen: Zug als Klick gezählt,
   Null-Anteil angenommen, gespeicherte Aufteilung beim Start ignoriert
   (Intercept und Editor) -- alle rot, Dateien byte-gleich zurück.
+
+---
+## HUM-303 · The terminal takes the keyboard on hover and by shortcut
+
+### Context
+Owner request 2026-10-29. Typing to the agent takes a click into the
+terminal first, in its pane as well as over the whole window (HUM-298). The
+owner wants the terminal to take the keyboard as soon as the pointer is over
+it, and a shortcut (owner proposal accepted: ``Ctrl+` ``) that gives it the
+keyboard wherever it is shown, without changing the layout.
+
+### Specification
+1. The pointer over the emulator hands it the keyboard, without a click, in
+   every host: the pane, the whole window and later the floating terminal
+   (HUM-300). The rule lives with the terminal widget, so every host gets it.
+2. Exceptions that keep the focus where it is: an open dialog, sheet, menu
+   or the command palette (input there must never slip into the terminal),
+   and a text field that has the focus while the pointer only crosses the
+   terminal. The rule chosen and why is documented in `docs/UX.md` 5.2.
+3. A core intent `FocusTerminalIntent`, bound in `shellShortcuts()` to
+   ``Ctrl+` ``, gives the keyboard to the terminal wherever it is shown and
+   changes nothing in the layout. With no terminal on the screen it does
+   nothing for now (HUM-300 will open the floating terminal). On layouts
+   where the backquote is a dead key the chord is matched by the physical
+   key. No repeats.
+4. The chord is not swallowed by the terminal: it takes the way of the
+   other application keys through `TerminalPane._onKey` and never reaches
+   the agent. It collides with no binding (`app/lib/core/shortcuts/intents.dart`,
+   intercept decision keys, editor, CONVENTIONS 3.9).
+5. The command palette lists it (while a terminal is shown); `docs/DESIGN.md`
+   shortcut table, `docs/UX.md` 5.2 and CONVENTIONS 3.9 name it; the palette
+   label is in ARB (`en` source, `de` translation, appended).
+
+### Acceptance criteria
+1. Widget test: hovering the terminal gives it the keyboard, and `Enter`
+   then reaches the agent as `0x0d`, not as an Allow.
+2. Widget test: with a held request selected and the focus in the queue,
+   `Enter` allows (counter-check) and the agent hears nothing; after the
+   pointer moved over the terminal and the focus actually moved, `Enter`
+   goes to the agent and the queue decides nothing. Never both.
+3. Widget tests: a text field, the terminal's context menu, an open sheet
+   and the palette keep the keyboard while the pointer is over the terminal.
+4. Widget tests: ``Ctrl+` `` gives the keyboard to the terminal in its pane
+   and over the whole window, leaves the layout as it was, does not reach the
+   agent, and does nothing with no terminal on the screen; the activator
+   matches the physical key, exactly `Ctrl`, no repeats.
+5. Each behaviour has a mutation proof; `make flutter-analyze` and the tests
+   of the touched packages are green; no golden changes.
+
+### Fallstricke
+- A delay before hover focus (say 150 ms) looks gentler and is the less safe
+  choice: while it runs, the pointer is on the terminal and an `Enter` meant
+  for the agent still allows the selected request.
+- `HModal`, `HSheet` and the menu of `HContextMenu` hold the keyboard in a
+  `FocusScope(autofocus: true)` of their own. The terminal's context menu
+  opens under the pointer, over the terminal, and lets hover through; a
+  hover rule without the scope check would take the keys from it at the next
+  movement.
+- The palette closes before it runs a command, and its field holds the focus
+  until the frame ends; a request for the keyboard from the palette has to
+  wait for that frame, or the scope rule refuses it.
+- `` ` `` is a dead key on German (`^`) and other layouts; a
+  `SingleActivator` on the logical backquote would match nothing there.
+
+### Umsetzung (HUM-303)
+
+- **Regel beim Terminal.** `TerminalPane._mayTakeKeyboard` gilt für jeden
+  Wirt (Pane, ganzes Fenster, später das schwebende Terminal). Ein
+  `MouseRegion` um den Emulator ruft sie bei `onEnter` und `onHover`; auch
+  bei jeder Bewegung, damit ein Textfeld, das den Fokus inzwischen abgegeben
+  hat, nicht verhindert, dass der Zeiger ihn holt.
+- **Entschieden: Fokus sofort, keine Verzögerung.** Zwei Ausnahmen halten
+  ihn. (1) Eine Ebene über der Arbeit: Das Terminal nimmt den Fokus nur von
+  einem Knoten, dessen Bereich sein eigener ist oder einer der Bereiche um
+  ihn. `HModal`, `HSheet` und das Menü von `HContextMenu` haben je einen
+  eigenen `FocusScope`, also deckt das Dialog, Blatt, Menü und Palette ohne
+  Liste. Gilt auch für das Kürzel. (2) Ein Textfeld mit Fokus, nur für den
+  Zeiger (`isTextInputFocused`); das Kürzel fragt ausdrücklich und darf es.
+  Eine Verzögerung von 150 ms wurde verworfen: In dieser Zeit stünde der
+  Zeiger auf dem Terminal, und ein `Enter` für den Agenten gäbe in der
+  Warteschlange frei.
+- **Kürzel.** `FocusTerminalIntent` und `TerminalFocusActivator` in
+  `core/shortcuts/intents.dart`: physische Taste links der 1 oder logischer
+  Backquote, genau `Ctrl`, nur `KeyDownEvent` (keine Wiederholung). In
+  `shellShortcuts()`, also nimmt das Terminal über `_onKey` denselben Weg wie
+  `Ctrl+K`. Die Shell zählt `terminalFocusRequestProvider`
+  (`core/ui/terminal_placement.dart`) hoch; jeder Wirt hört zu, nur der
+  sichtbare mit Sitzung handelt. Ohne sichtbares Terminal passiert nichts.
+- **Palette.** Befehl `focus-terminal` am Ende, nur solange ein Terminal mit
+  Sitzung zu sehen ist (ganzes Fenster oder Abschnitt Sandbox). Die Anfrage
+  wartet auf den Frame nach dem Schließen, weil bis dahin das Feld der
+  Palette den Fokus hält und die Bereichsregel ablehnen würde.
+- **Doku.** `docs/UX.md` 5.2, `docs/DESIGN.md` Kürzeltabelle,
+  CONVENTIONS 3.9, ARB `shellPaletteFocusTerminal` (en, de, angehängt).
+- **Tests.** `test/features/shell/terminal_keyboard_test.dart` (zwölf):
+  Zeiger gibt die Tastatur, `Enter` kommt als `0x0d` an; Warteschlange
+  neben dem Terminal (nimmt HUM-300 vorweg): `Enter` gibt zuerst frei,
+  Agent hört nichts; nach dem Darüberfahren steht der Fokus nachweislich im
+  Terminal, `Enter` geht an den Agenten, keine zweite Entscheidung;
+  Notizfeld behält den Fokus beim Darüberfahren; Kontextmenü des Terminals
+  und Einstellungsblatt behalten ihn unter dem Zeiger, `Esc` schließt das
+  Menü und erreicht den Agenten nicht; Palette behält ihn gegen Zeiger und
+  Kürzel, listet den Befehl nur mit sichtbarem Terminal, der Befehl gibt die
+  Tastatur; Kürzel im Pane und über dem ganzen Fenster, Layout bleibt;
+  Kürzel erreicht den Agenten nicht; ohne Terminal tut es nichts;
+  Aktivator: andere logische Taste auf derselben physischen Taste, kein
+  `Shift`, kein Wiederholen. Eine Zeile in
+  `shortcuts_map_to_intents_test.dart`. Keine Goldens geändert.
+- **Mutationsbeweise**, je rot und danach mit `cmp` byte-gleich zurück:
+  Zeiger-Handler entfernt; Bereichsregel aus; Textfeldregel aus; Bindung
+  entfernt; nur logischer Backquote; Wiederholung erlaubt; `Shift`
+  ignoriert; Wirt hört nicht auf die Anfrage; Shell ohne Action; Befehl
+  immer in der Palette; Palette-Anfrage ohne Warten auf den Frame (zuerst
+  grün, weil der ruhende Zeiger die Tastatur beim Verschwinden der Palette
+  brachte; der Test führt den Zeiger jetzt weg und nimmt `Enter`, dann rot).
+  Grün und so belassen: ohne `Visibility.of`-Prüfung, weil `ExcludeFocus`
+  des `IndexedStack` die Anfrage eines verdeckten Wirts schon abweist; die
+  Prüfung bleibt als zweite Wand. Bindung entfernt lässt
+  `the_chord_never_reaches_the_agent` grün: Der Emulator schickt für
+  `Ctrl+Backquote` im Test ohnehin kein Byte; der Test hält das Ergebnis
+  fest, nicht den Weg.
+- **Review (Codex, Sonnet), nachgebessert.** Kontextmenü, Blatt und Modal
+  nahmen den Fokus nicht, solange das Terminal ihn hielt:
+  `FocusScope(autofocus: true)` gibt nach, sobald im Bereich darum etwas
+  fokussiert ist. `Esc` im Terminalmenü ging an den Agenten, Tippen in einem
+  über dem Terminal geöffneten Blatt ebenso (Akzeptanzkriterium 3). Neu
+  `HLayerScope` (`packages/ui`, `h_layer_scope.dart`), von `HModal`,
+  `HSheet` und dem Menü von `HContextMenu` benutzt: Der Bereich fordert den
+  Fokus einen Frame nach dem Erscheinen selbst an, außer etwas darin hat ihn
+  schon. Zurück geht er beim Schließen an den, der ihn vorher hatte
+  (ausdrücklich; siehe zweite Runde).
+  `HLayerScope.holdsFocus()` sagt, ob gerade eine Ebene die Tastatur hat
+  (auch im Release-Build, anders als `debugLabel`). Palette über einem
+  Blatt oder Modal (Befund Codex): Die Shell merkt sich das beim Öffnen,
+  parkt den Fokus beim Schließen nicht auf sich oder dem Terminal, sondern
+  überlässt ihn der Ebene darunter, und bietet „Focus the terminal" dann
+  nicht an; `_requestTerminalFocus` fragt nicht, solange eine Ebene die
+  Tastatur hat. Tests: Menü und Blatt ohne Hilfsgriff, also auf dem echten
+  Weg (Menü über dem fokussierten Terminal nimmt die Tastatur, `Esc`
+  schließt es, der Agent hört nichts, das Terminal bekommt sie zurück;
+  Blatt mit `Ctrl+,` aus dem Terminal, `A` und `Enter` erreichen den Agenten
+  nicht); `the_palette_over_a_sheet_gives_the_keyboard_back_to_the_sheet`;
+  `hover_takes_the_keyboard_when_nobody_holds_it` (Befund Sonnet; ein
+  `primaryFocus` von `null` gibt es nach dem ersten Frame nicht, gemessen
+  wird mit dem Bereich als Halter, im Aufbau ohne Shell, weil die Shell den
+  Fokus sonst zurückholt); `packages/ui/test/layer_scope_test.dart` (drei, mit der zweiten Runde vier).
+  Mutationen rot: Ebene fordert den Fokus nicht an; Palette bietet den
+  Befehl über einer Ebene an; Schließen der Palette parkt auf der Shell;
+  ein Bereich als Halter wird abgewiesen. Grün und belassen: die Shell fragt
+  auch unter einer Ebene nach dem Terminal (die Bereichsregel des Terminals
+  weist ab; zweite Wand).
+- **Review zweite Runde (Codex), nachgebessert.** (1) Zwischen dem Öffnen
+  einer Ebene und ihrem ersten Bild lag ein Frame, in dem eine Taste noch
+  beim alten Halter ankam: `Esc` beim Agenten nach dem Rechtsklick, `Enter`
+  in der Warteschlange nach „Regel anlegen". Neu
+  `HLayerScope.claimKeyboard()`: Der Öffner ruft es im selben Callback, es
+  merkt sich den Halter und parkt die Tastatur auf dem Bereich um ihn, wo
+  keine Bindung der Arbeit lauscht. Öffner mit Griff: Kontextmenü
+  (`HContextMenu._open`), Palette und Einstellungen in der Shell, „Regel
+  anlegen" auf der Karte des Agenten. Die Ebene übernimmt den gemerkten
+  Halter und gibt ihm die Tastatur beim Schließen ausdrücklich zurück, denn
+  das Parken löscht das Gedächtnis des Bereichs. Kein Rückgeben, wenn eine
+  neuere Ebene offen ist; schließt eine Ebene, aus der heraus eine neuere
+  aufging, erbt die neuere deren früheren Halter (Palette, „Allow all",
+  Modal). Zwei Stellen nahmen die geparkte Tastatur sofort wieder an sich
+  und brauchten deshalb `HLayerScope.keyboardClaimed` (beansprucht oder
+  gebaut, aber noch ohne Tastatur): `InterceptScreen._syncFocus`, das
+  sich jeden Fokus auf einem Bereich darüber zurückholt, und
+  `TerminalPane._takeFocus`, das beim Zurückkehren ins Pane zugriff, sobald
+  die Sitzung wieder bekannt war -- also nachdem das Blatt die Tastatur
+  hatte; Tippen im Blatt ging dann an den Agenten. `_takeFocus` folgt jetzt
+  derselben Regel wie Zeiger und Kürzel. (2) Die Shell forderte beim
+  Schließen von Palette und Einstellungen den Fokus für sich an und
+  überstimmte damit die Rückgabe: Einstellungen, aus dem Terminal geöffnet,
+  gaben die Tastatur der Shell statt dem Terminal. Jetzt
+  `_keysBackAfterLayer`: nach der Rückgabe prüfen, und nur wenn der frühere
+  Halter weg ist (das Terminal des ganzen Fensters, das die Einstellungen
+  beenden), nimmt die Shell sie. Tests:
+  `esc_in_the_frame_the_menu_opens_does_not_reach_the_agent`,
+  `settings_opened_from_the_terminal_give_the_keys_back_to_it`,
+  `when_the_holder_is_gone_the_shell_takes_the_keys`,
+  `test/features/intercept/layer_opening_frame_test.dart` (`Enter` vor dem
+  ersten Bild des Regelblatts entscheidet nichts, mit Gegenprobe),
+  `a_layer_opened_from_a_closing_layer_returns_to_the_first_holder` in
+  `packages/ui`. Nicht mit Griff, weil außerhalb dieses Issues und ohne
+  Nachbarschaft zu Terminal oder Entscheidung im selben Bild: Stopp-Dialog,
+  Befehlsblatt der Sandbox, Blatt und Exportmenü der History, Regel-Editor,
+  Audit-Blatt, Suchblatt im Setup, Sammelmodal, About; für sie bleibt das
+  eine Bild bis zur Übernahme.
+  Mutationen, je rot und mit `cmp` byte-gleich zurück: Menü ohne Griff;
+  Regelblatt ohne Griff; Warteschlange nimmt die geparkte Tastatur;
+  gebaute, noch wartende Ebene zählt nicht als beansprucht; Terminal im
+  Pane nimmt die Tastatur beim Einhängen ohne Ebenenregel; Shell fordert
+  beim Schließen der Einstellungen den Fokus für sich; ohne ausdrückliche
+  Rückgabe; ohne Übergabe zwischen Ebenen (Test in `packages/ui` mit
+  Griff, denn ohne Griff stellt Flutters eigenes Gedächtnis den Halter
+  wieder her). Grün und belassen: die Ausweichstelle der Shell, wenn der
+  frühere Halter weg ist. In jedem erreichbaren Fall gibt Flutter die
+  Tastatur beim Abbau des Terminalbereichs schon an den zuletzt
+  fokussierten Knoten des Elternbereichs, die Shell; die Ausweichstelle
+  bleibt als zweite Wand für einen Halter, der ohne einen solchen Knoten
+  verschwindet. Ebenso grün und entfernt: die sofortige Anwendung der
+  Fokusänderung im Griff (`applyFocusChangesIfNeeded`). Flutter wendet
+  sie in einer Microtask an, und die läuft vor dem nächsten Ereignis der
+  Plattform; der Fehler im ersten Versuch lag am Zurückholen durch die
+  Warteschlange, nicht an der Microtask. Gefunden im vollen Lauf: „About"
+  aus der Palette öffnete den Dialog im selben Bild, in dem die Palette
+  ging; weil das Parken das Gedächtnis des Bereichs gelöscht hatte, gab
+  Flutter die Tastatur dem ersten Bedienelement der Seite unter dem
+  Dialog, der Warteschlange, und `Esc` schloss den Dialog nicht mehr
+  (`Escape closes About and the shell keys work again`). Der Befehl
+  öffnet den Dialog jetzt nach diesem Bild, wie „Focus the terminal";
+  Mutation (Dialog wieder im selben Bild) rot.
+- **Für HUM-300.** Das schwebende Terminal hält dieselbe Ebenenregel: Es
+  baut `TerminalPane` und erbt damit `_mayTakeKeyboard`; ein eigener
+  `FocusScope` für den schwebenden Wirt muss wie `_terminalScope` unter dem
+  Bereich der Shell hängen und darf kein `HLayerScope` sein, sonst hielte
+  das Terminal sich selbst für eine Ebene über der Arbeit.

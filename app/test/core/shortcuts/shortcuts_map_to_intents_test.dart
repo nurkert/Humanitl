@@ -74,6 +74,7 @@ final List<KeyRow> shellTable = <KeyRow>[
   ctrl(LogicalKeyboardKey.digit0, 'ToggleRailIntent'),
   ctrlShift(LogicalKeyboardKey.enter, 'ToggleTerminalFullWindowIntent'),
   ctrlShift(LogicalKeyboardKey.numpadEnter, 'ToggleTerminalFullWindowIntent'),
+  ctrl(LogicalKeyboardKey.backquote, 'FocusTerminalIntent'),
 ];
 
 /// Die Warteschlange (CONVENTIONS 3.9 und die Bindungen von HUM-029, HUM-072).
@@ -206,6 +207,11 @@ Future<void> press(WidgetTester tester, KeyRow row) async {
 /// Die Zeile, die zu [activator] gehört, als Text: zum Vergleich der beiden
 /// Richtungen.
 String activatorLabel(ShortcutActivator activator) {
+  // Die Tastatur ans Terminal fragt nach der physischen Taste links der 1
+  // (HUM-303); ihre Zeile steht unter dem Namen dieser Taste auf US-Belegung.
+  if (activator is TerminalFocusActivator) {
+    return 'Ctrl+${LogicalKeyboardKey.backquote.keyLabel}';
+  }
   final SingleActivator single = activator as SingleActivator;
   return '${single.control ? 'Ctrl+' : ''}${single.shift ? 'Shift+' : ''}'
       '${single.alt ? 'Alt+' : ''}${single.trigger.keyLabel}';

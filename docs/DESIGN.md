@@ -621,6 +621,7 @@ The table lists each binding as the app has it in 0.1, checked against
 | `Ctrl+,` | Settings | `SettingsIntent` | Everywhere |
 | `Ctrl+0` | Expand or collapse the icon rail | `ToggleRailIntent` | Everywhere |
 | `Ctrl+Shift+Enter` (also numpad `Enter`) | Show the terminal over the whole window, and back (HUM-298) | `ToggleTerminalFullWindowIntent` | Everywhere, also inside the terminal |
+| ``Ctrl+` `` (the key left of `1`, by position) | Give the keyboard to the terminal that is shown, without changing the layout; nothing while no terminal is shown (HUM-303) | `FocusTerminalIntent` | Everywhere, also inside the terminal |
 
 Three intents of CONVENTIONS 3.9 have no binding in 0.1, because a key that
 does nothing is worse than no key ([docs/UX.md, section 5](UX.md#5-keyboard-and-mouse)):
