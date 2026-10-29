@@ -38,6 +38,12 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
   @override
   Future<SandboxStatus> build() async {
     final DaemonClient client = ref.watch(daemonClientProvider);
+    // A folder change that had to wait -- for the first snapshot, for a
+    // sandbox to come down -- is planned once the snapshot allows it
+    // (HUM-295).
+    listenSelf((AsyncValue<SandboxStatus>? _, AsyncValue<SandboxStatus> _) {
+      _reconcileWorkDir();
+    });
     SandboxStatus status = await _drain(
       client.sandboxStatus(),
       call: SandboxCall.status,
@@ -64,15 +70,18 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
   /// lines: an unknown guarantee is honest only as long as nobody could have
   /// asked (CONVENTIONS 4.13).
   Future<void> refresh() async {
+    final int generation = ++_snapshots;
     await _apply(
       (DaemonClient client) => client.sandboxStatus(),
       call: SandboxCall.status,
+      generation: generation,
     );
-    if (state.value?.isUp ?? false) {
+    if (generation == _snapshots && (state.value?.isUp ?? false)) {
       await _apply(
         (DaemonClient client) => client.checkIsolation(),
         call: SandboxCall.isolationCheck,
         clearDiagnostics: false,
+        generation: generation,
       );
     }
   }
@@ -82,10 +91,76 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
   ///
   /// The daemon answers with the mounts, the environment and the command line
   /// and the screen shows that answer. Nothing is computed here (ADR-018).
-  Future<void> plan({WorkMode? workMode}) => _apply(
-    (DaemonClient client) => client.planSandbox(workMode: workMode),
-    call: SandboxCall.plan,
-  );
+  Future<void> plan({WorkMode? workMode}) {
+    _plannedWorkDir = _storedWorkDir ?? _plannedWorkDir;
+    return _apply(
+      (DaemonClient client) => client.planSandbox(workMode: workMode),
+      call: SandboxCall.plan,
+      generation: ++_snapshots,
+    );
+  }
+
+  /// Takes note of the project folder the configuration holds now, and plans
+  /// again once it differs from the folder the snapshot was planned with
+  /// (HUM-295).
+  ///
+  /// The settings write `sandbox.work_dir` through `configProvider`, and no
+  /// feature imports another one (ARCHITECTURE 5). The shell, which holds
+  /// both, hands every readable value of the folder in here; a folder
+  /// changed in the settings then reaches the sandbox header and the setup
+  /// row without a change of screen. The first value noted is the folder the
+  /// snapshot already shows, not a change.
+  void storedWorkDirRead(String workDir) {
+    final String? before = _storedWorkDir;
+    _storedWorkDir = workDir;
+    if (before == null) {
+      _plannedWorkDir ??= workDir;
+      return;
+    }
+    _reconcileWorkDir();
+  }
+
+  /// Plans once when the stored folder is not the one the snapshot was
+  /// planned with, and the snapshot allows it now.
+  ///
+  /// Three cases wait instead of dropping the change. A [chooseWorkDir]
+  /// under way plans by itself after its write and calls this when the last
+  /// one ends; a plan now would only race it. Before the first snapshot it
+  /// is unknown whether a sandbox runs. A sandbox that is up or on its way
+  /// keeps its folder, the new one applies to the next start; the folder
+  /// pickers rest in that state for the same reason. The last two are
+  /// reconciled by the listener on the snapshot in [build].
+  void _reconcileWorkDir() {
+    final String? stored = _storedWorkDir;
+    if (stored == null || stored == _plannedWorkDir || _choosing > 0) {
+      return;
+    }
+    final SandboxStatus? current = state.value;
+    if (current == null || current.isUp || current.isBusy) {
+      return;
+    }
+    _plannedWorkDir = stored;
+    unawaited(
+      _apply(
+        (DaemonClient client) => client.planSandbox(),
+        call: SandboxCall.plan,
+        generation: ++_snapshots,
+      ),
+    );
+  }
+
+  /// The folder [storedWorkDirRead] noted last, or null before the first.
+  String? _storedWorkDir;
+
+  /// The stored folder the snapshot was last planned with, or null before
+  /// the first one is known.
+  String? _plannedWorkDir;
+
+  /// Counts the requests that answer with a whole snapshot: a refresh and
+  /// every plan. Only the latest one writes the snapshot, so an older answer
+  /// that arrives late never replaces a newer one (HUM-295). A start and a
+  /// stop do not count; their events are the state of the sandbox itself.
+  int _snapshots = 0;
 
   /// Stores [workDir] as the project folder and asks what a start with it
   /// would mount (HUM-293).
@@ -106,6 +181,18 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
   /// `SetConfig` itself can refuse; a configuration that cannot be read
   /// again afterwards is not a refusal, and the plan runs anyway.
   Future<void> chooseWorkDir(String workDir) async {
+    _choosing++;
+    try {
+      await _chooseWorkDir(workDir);
+    } finally {
+      _choosing--;
+    }
+    // A folder the settings stored while this choice was under way was left
+    // to it; whatever is stored now and not planned yet is planned once.
+    _reconcileWorkDir();
+  }
+
+  Future<void> _chooseWorkDir(String workDir) async {
     final int mine = ++_chooses;
     final Future<Diagnostic?> stored = _chooseChain.then(
       (_) => _store(workDir),
@@ -133,10 +220,12 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     if (mine != _chooses) {
       return;
     }
+    _plannedWorkDir = workDir;
     await _apply(
       (DaemonClient client) => client.planSandbox(),
       call: SandboxCall.plan,
       choice: mine,
+      generation: ++_snapshots,
     );
   }
 
@@ -154,6 +243,9 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
 
   /// Counts the calls of [chooseWorkDir]; the latest one owns the snapshot.
   int _chooses = 0;
+
+  /// How many calls of [chooseWorkDir] are under way.
+  int _choosing = 0;
 
   /// The write of the choice before, which the next one waits for.
   Future<void> _chooseChain = Future<void>.value();
@@ -181,6 +273,9 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
   /// refresh that then measures the isolation -- because the second call
   /// would otherwise drop the findings of the first.
   ///
+  /// [generation] is the count of [_snapshots] the request took; its events
+  /// are dropped once a newer refresh or plan was asked for.
+  ///
   /// **[call] travels with the stream and is never a field of this notifier.**
   /// Two `Sandbox` calls can be in flight at the same time: the start of a
   /// sandbox takes as long as a sandbox takes to come up, and a `plan` from
@@ -197,10 +292,15 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     required SandboxCall call,
     bool clearDiagnostics = true,
     int? choice,
+    int? generation,
   }) async {
     // A plan of a folder choice counts only while no newer choice exists
     // (HUM-293); its late events would show the older folder.
-    bool superseded() => choice != null && choice != _chooses;
+    // An answer of a refresh or a plan counts only while no newer one was
+    // asked for (HUM-295).
+    bool superseded() =>
+        (choice != null && choice != _chooses) ||
+        (generation != null && generation != _snapshots);
     final DaemonClient client = ref.read(daemonClientProvider);
     SandboxStatus current = state.value ?? const SandboxStatus();
     // A new operation starts without the findings of the last one: a

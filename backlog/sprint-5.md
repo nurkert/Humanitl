@@ -6532,6 +6532,62 @@ does not import another.
 1. Changing the folder in Settings shows the new folder in the sandbox
    header and Setup without switching screens. Widget test.
 
+### Umsetzung (HUM-295)
+
+- **Die Shell reicht den Ordner weiter.** `ShellScreen` hört in `initState`
+  mit `listenManual` (sofort einmal) auf `sandbox.work_dir` in
+  `configProvider` und gibt jeden lesbaren Wert an
+  `SandboxStatusNotifier.storedWorkDirRead`. Die Shell hält ohnehin Sandbox
+  und Einstellungen; kein Feature importiert ein anderes, und die
+  Einstellungen bleiben unverändert (`configProvider.write` liest nach dem
+  Schreiben neu). Der erste Wert ist der Ausgangspunkt, jeder abweichende
+  danach löst einen `Plan` ohne Ordner aus. Auch ein Ordner, der nach einer
+  Rückkehr der Verbindung anders gelesen wird (etwa nach
+  `humanitl config set`), plant so neu.
+- **Warum nicht im Notifier selbst.** Ein `ref.listen` auf `configProvider`
+  in `SandboxStatusNotifier.build` verschob den Takt des Wiederverbindens:
+  `setup_test.dart` „retry reconnects once the daemon is back" sah die Shell
+  einen Frame früher. In der Shell besteht das Abonnement erst, wenn es eine
+  Verbindung gibt.
+- **Gespeichert gegen geplant.** Der Notifier merkt sich den zuletzt
+  gelesenen Ordner (`_storedWorkDir`) und den, mit dem der Schnappschuss
+  geplant wurde (`_plannedWorkDir`: der erste gelesene Wert, der Ordner einer
+  Wahl, der gespeicherte bei `plan`). `_reconcileWorkDir` plant genau dann
+  einmal, wenn beide verschieden sind und der Schnappschuss es erlaubt.
+  Eine Änderung, die warten muss, geht nicht verloren:
+  - Während `chooseWorkDir` läuft (`_choosing`), plant nichts daneben. Nach
+    der letzten Wahl folgt der Abgleich; hat die Wahl ihren eigenen Ordner
+    zurückgelesen, ist nichts mehr zu tun. Haben die Einstellungen währenddessen
+    einen anderen Ordner geschrieben, wird er danach einmal geplant.
+  - Vor dem ersten Schnappschuss ist unbekannt, ob eine Sandbox läuft; ist
+    die Sandbox oben oder im Starten oder Stoppen, behält sie ihren Ordner
+    (wie die gesperrten Ordnerknöpfe). In beiden Fällen plant ein
+    `listenSelf` in `build` nach, sobald der Schnappschuss es erlaubt, also
+    beim ersten Schnappschuss oder auf dem Weg nach `stopped`/`failed`.
+- **Ältere Antworten.** Refresh und jeder Plan zählen gemeinsam in
+  `_snapshots`; nur die jüngste Anfrage schreibt den Schnappschuss. Eine
+  Statusabfrage, die vor einem Plan begann und nach ihm antwortet, stellt den
+  alten Ordner nicht wieder her. Start und Stopp zählen nicht mit; ihre
+  Ereignisse sind der Zustand der Sandbox selbst.
+- **Tests.** `test/features/settings/settings_replans_sandbox_test.dart`
+  (Widget): Ordner in den Einstellungen gewählt, über dem Sandbox-Bereich
+  zeigt der Kopf den neuen Ordner, über dem Setup die Projektzeile; über
+  einer laufenden Sandbox kein Plan. Die Pläne zählen ab dem Bau des Fakes,
+  ein Plan auf den ersten Wert fiele auf. `test/features/sandbox/stored_work_dir_test.dart`
+  (Provider, mit einer Weitergabe wie die Shell): erster Wert und derselbe
+  Wert erneut planen nicht; ein erster Wert, der erst nach einem
+  Lesefehler kommt, plant nicht; ein Ordner aus den Einstellungen plant einmal;
+  ein verspäteter Refresh ersetzt den späteren Plan nicht; ein Ordner aus den
+  Einstellungen während einer Wahl wird nach ihr geplant; eine Wahl plant
+  einmal; eine Änderung vor dem ersten Schnappschuss wartet auf ihn; eine
+  Änderung bei laufender Sandbox wird beim Stoppen geplant.
+- **Mutationsbeweise.** Weitergabe in `ShellScreen` entfernt: beide Tests
+  des Kriteriums rot. Generation aus `superseded` entfernt: der Test des
+  verspäteten Refresh rot. Abgleich nach der letzten Wahl entfernt: der Test
+  der Einstellungen während einer Wahl rot. `listenSelf` entfernt: die Tests
+  „vor dem ersten Schnappschuss" und „laufende Sandbox" rot. Plan schon auf
+  den ersten Wert: fünf Provider-Tests und der Widget-Test des Kopfs rot.
+
 ---
 ## HUM-296 · `humanitl run --config` with a folder outside HOME is judged against the file it names (after HUM-060)
 
