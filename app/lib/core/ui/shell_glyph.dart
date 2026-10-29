@@ -32,6 +32,12 @@ enum ShellGlyph {
   /// A gear after Lucide `settings`: the settings sheet, from the header
   /// (HUM-275). Not a rail entry; the sheet lies over every section.
   settings,
+
+  /// Lucide `maximize-2`: show the terminal over the whole window (HUM-298).
+  maximize,
+
+  /// Lucide `minimize-2`: put the terminal back into its pane (HUM-298).
+  minimize,
 }
 
 /// Draws one [ShellGlyph] at [size] in [color].
@@ -160,6 +166,46 @@ class _ShellGlyphPainter extends CustomPainter {
         canvas
           ..drawPath(_gear(), stroke)
           ..drawCircle(const Offset(12, 12), 3, stroke);
+      case ShellGlyph.maximize:
+        canvas
+          ..drawPath(
+            _polyline(const <Offset>[
+              Offset(15, 3),
+              Offset(21, 3),
+              Offset(21, 9),
+            ]),
+            stroke,
+          )
+          ..drawPath(
+            _polyline(const <Offset>[
+              Offset(9, 21),
+              Offset(3, 21),
+              Offset(3, 15),
+            ]),
+            stroke,
+          )
+          ..drawLine(const Offset(21, 3), const Offset(14, 10), stroke)
+          ..drawLine(const Offset(3, 21), const Offset(10, 14), stroke);
+      case ShellGlyph.minimize:
+        canvas
+          ..drawPath(
+            _polyline(const <Offset>[
+              Offset(4, 14),
+              Offset(10, 14),
+              Offset(10, 20),
+            ]),
+            stroke,
+          )
+          ..drawPath(
+            _polyline(const <Offset>[
+              Offset(20, 10),
+              Offset(14, 10),
+              Offset(14, 4),
+            ]),
+            stroke,
+          )
+          ..drawLine(const Offset(14, 10), const Offset(21, 3), stroke)
+          ..drawLine(const Offset(3, 21), const Offset(10, 14), stroke);
       case ShellGlyph.audit:
         canvas
           ..drawPath(

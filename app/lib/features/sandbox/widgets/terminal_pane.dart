@@ -27,6 +27,9 @@ import 'package:xterm2/ui.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/shortcuts/intents.dart';
+import '../../../core/ui/hover_label.dart';
+import '../../../core/ui/shell_glyph.dart';
+import '../../../core/ui/terminal_placement.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../providers/terminal_provider.dart';
@@ -37,10 +40,22 @@ const double terminalStripHeight = 24;
 /// The terminal of the running session.
 class TerminalPane extends ConsumerStatefulWidget {
   /// Shows the terminal of [sandboxId], or the reason there is none.
-  const TerminalPane({required this.sandboxId, super.key});
+  const TerminalPane({
+    required this.sandboxId,
+    this.focusOnMount = false,
+    super.key,
+  });
 
   /// The session this pane belongs to; empty while nothing runs.
   final String sandboxId;
+
+  /// Whether the terminal takes the keyboard when it is mounted (HUM-298).
+  ///
+  /// A host that shows the terminal because somebody asked for it -- the
+  /// whole window, or the pane coming back from there -- hands the keys to
+  /// the agent at once. `autofocus` does not do that: it only acts while
+  /// nothing in the scope has the focus, and the shell always holds it.
+  final bool focusOnMount;
 
   @override
   ConsumerState<TerminalPane> createState() => _TerminalPaneState();
@@ -55,6 +70,18 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   void initState() {
     super.initState();
     _attach();
+    if (widget.focusOnMount) {
+      _takeFocus();
+    }
+  }
+
+  /// Gives the keyboard to the emulator one frame from now, once it is built.
+  void _takeFocus() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && Visibility.of(context)) {
+        _focus.requestFocus();
+      }
+    });
   }
 
   @override
@@ -62,6 +89,12 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.sandboxId != widget.sandboxId) {
       _attach();
+      // A host that asked for the keyboard before any session ran -- the
+      // whole window over the empty state -- gets it when the session
+      // arrives; until then there was no emulator to give it to (HUM-298).
+      if (widget.focusOnMount && oldWidget.sandboxId.isEmpty) {
+        _takeFocus();
+      }
     }
   }
 
@@ -115,8 +148,11 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   ///
   /// Der Preis steht ausdrücklich hier: `Ctrl+1` bis `Ctrl+6` und `Ctrl+K`
   /// erreichen den Agenten nicht. Ohne sie käme man aus einem Vollbild-TUI nur
-  /// noch mit der Maus heraus (`docs/UX.md` 5.1). Alles andere gehört ihm,
-  /// `Ctrl+C` als `0x03` und `Ctrl+P` als `0x10` eingeschlossen.
+  /// noch mit der Maus heraus (`docs/UX.md` 5.1). Dasselbe gilt für
+  /// `Ctrl+Shift+Enter`, das Terminal über das ganze Fenster und zurück
+  /// (HUM-298): Es steht in [shellShortcuts] und nimmt deshalb denselben Weg.
+  /// Alles andere gehört ihm, `Ctrl+C` als `0x03`, `Ctrl+P` als `0x10` und
+  /// `Esc` eingeschlossen, das OpenCode und pi zum Abbrechen brauchen.
   ///
   /// Hört an dieser Stelle des Baums niemand auf eine Absicht -- im Test etwa,
   /// der die Kachel ohne Schale zeigt --, bleibt die Taste beim Agenten.
@@ -166,7 +202,16 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = AppLocalizations.of(context);
     if (widget.sandboxId.isEmpty) {
-      return _Idle(text: l10n.sandboxTerminalIdle);
+      // Auch ohne Sitzung steht die Kopfzeile mit dem Knopf da: Wer das
+      // Terminal über das ganze Fenster geholt hat, kommt auch ohne laufende
+      // Sitzung mit der Maus zurück (HUM-298).
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          _Banner(text: l10n.sandboxTerminalUntrustedBanner),
+          Expanded(child: _Idle(text: l10n.sandboxTerminalIdle)),
+        ],
+      );
     }
     final TerminalSessionState session = ref.watch(
       terminalSessionProvider(widget.sandboxId),
@@ -367,7 +412,12 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   );
 }
 
-/// The sentence that never goes away.
+/// The sentence that never goes away, and the button that moves the terminal.
+///
+/// This strip is the header of the terminal wherever it stands: in its pane
+/// and over the whole window, where it is the one row left above the
+/// emulator (HUM-298). The button sits at its right end, so it is in the same
+/// place in both layouts and a second click undoes the first.
 class _Banner extends StatelessWidget {
   const _Banner({required this.text});
 
@@ -379,11 +429,58 @@ class _Banner extends StatelessWidget {
     return Container(
       constraints: const BoxConstraints(minHeight: terminalStripHeight),
       color: tokens.colors.bg2,
-      padding: EdgeInsets.symmetric(horizontal: tokens.spacing.x2),
-      alignment: Alignment.centerLeft,
-      child: Text(
-        text,
-        style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+      padding: EdgeInsets.only(left: tokens.spacing.x2),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Text(
+              text,
+              style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+            ),
+          ),
+          const FullWindowButton(),
+        ],
+      ),
+    );
+  }
+}
+
+/// Shows the terminal over the whole window, or puts it back (HUM-298).
+///
+/// The same as `Ctrl+Shift+Enter`, and the tooltip says so, so the click also
+/// teaches the chord. It writes the placement and nothing else; the shell
+/// lays the window out from it.
+class FullWindowButton extends ConsumerWidget {
+  /// Creates the button.
+  const FullWindowButton({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final HTokens tokens = HTheme.of(context);
+    final AppLocalizations l10n = AppLocalizations.of(context);
+    final bool full =
+        ref.watch(terminalPlacementProvider) == TerminalPlacement.fullWindow;
+    final String label = full
+        ? l10n.sandboxTerminalFullWindowLeave
+        : l10n.sandboxTerminalFullWindowEnter;
+    // Below and not to the right: the button stands at the right end of the
+    // pane, and over the whole window at the edge of the window.
+    return HoverLabel(
+      label: label,
+      side: HoverLabelSide.below,
+      child: HButton(
+        key: const Key('sandbox-terminal-full-window'),
+        variant: HButtonVariant.ghost,
+        size: HButtonSize.sm,
+        semanticsLabel: label,
+        onPressed: ref
+            .read(terminalPlacementProvider.notifier)
+            .toggleFullWindow,
+        child: ShellGlyphIcon(
+          full ? ShellGlyph.minimize : ShellGlyph.maximize,
+          size: 14,
+          color: tokens.colors.fg1,
+        ),
       ),
     );
   }

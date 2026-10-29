@@ -68,6 +68,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-297 | RUSTSEC-2026-0414 in pulldown-cmark turns the dependency check red | S | — |
 | HUM-304 | The agent knows it has web access through the proxy | S | HUM-071, HUM-274 |
 | HUM-311 | The Debian changelog line stays within lintian's 80 characters for every version | S | HUM-273 |
+| HUM-298 | The terminal goes full window from anywhere, by shortcut and button | S | HUM-042, HUM-286 |
 
 ---
 
@@ -6793,3 +6794,163 @@ five-character version and 81 with `0.0.10`, and lintian warns from 81 on
    10.100.100 (checked by hand: 74, 73, 77, 78).
 2. `check-deb` passes on the next tag.
 
+## HUM-298 · The terminal goes full window from anywhere, by shortcut and button
+
+### Context
+Owner request 2026-10-29. The terminal of the agent lives in the upper part
+of the Sandbox section, next to the tabs below it, the rail and the status
+bar. Working in a full-screen TUI such as OpenCode or pi in that pane is
+cramped, and getting to it from another section takes two steps. The owner
+wants the terminal over the whole window from any screen, with one shortcut
+(owner decision: `Ctrl+Shift+Enter`) or a button, and the same gesture
+back to where he was.
+
+### Specification
+1. A core intent `ToggleTerminalFullWindowIntent`, bound in `shellShortcuts()`
+   to `Ctrl+Shift+Enter` (and with the `Enter` of the number block, like
+   every `Enter` binding of the app), without repeats, toggles a core provider that says where the terminal
+   stands (pane or full window). Features do not import each other: the
+   shell (composition root) lays the window out from the provider, the
+   Sandbox section leaves its own terminal slot empty while the terminal
+   stands elsewhere, and the terminal's button writes the provider.
+2. Full window: the terminal of the current session fills the content of the
+   window, without rail, sections, other panes or status bar. The header bar
+   of the window stays (it is the title bar with the window buttons and the
+   count of held requests), and so does the slim header strip of the
+   terminal with the untrusted-output banner and the toggle button.
+3. The shortcut works while the terminal has the keyboard focus: the
+   terminal looks the chord up in `shellShortcuts()` like `Ctrl+1..6` and
+   `Ctrl+K` (`docs/UX.md` 5.2). Every other key, `Esc` included, keeps going
+   to the agent.
+4. A button at the right end of the terminal's header strip does the same;
+   its tooltip names the shortcut. It stands there in both layouts and also
+   without a running session.
+5. The same shortcut or the button returns to the previous section and
+   layout; the sections stay built underneath, so their state survives.
+   Choosing a section (`Ctrl+1..6` or the palette; the rail is hidden) or
+   opening the settings also ends the full window.
+6. Without a running session the full window shows the terminal's usual
+   empty state.
+7. The command palette lists the toggle; the shortcut tables of
+   `docs/DESIGN.md` and `docs/UX.md` 5.2 name it.
+8. One view of the session at a time. The emulator and its scrollback stay
+   in `terminalSessionProvider`; a host that shows the terminal attaches to
+   the same session. The design leaves room for a third host, a floating
+   overlay (HUM-300), without recreating the session.
+
+### Acceptance criteria
+1. Widget test: from a section other than Sandbox, `Ctrl+Shift+Enter` shows the
+   terminal over the window (no rail, no status bar, one terminal view) and
+   the same chord returns to that section.
+2. Widget test: with the keyboard focus in the terminal, `Esc` reaches the
+   agent as `0x1b`, and `Ctrl+Shift+Enter` does not reach it and leaves the full
+   window.
+3. Widget test: the button toggles the full window and back.
+4. Widget test: without a session the full window shows the empty state and
+   the button.
+5. Widget test: with the focus in the queue and an armed held request,
+   `Ctrl+Shift+Enter` (both `Enter` keys) decides nothing and opens the full
+   window; plain `Enter` at the same place still allows (counter-check).
+6. Each of these behaviours has a mutation proof; `make flutter-analyze` and
+   the tests of the touched packages are green; goldens changed only where
+   the terminal header gained the button.
+
+### Fallstricke
+- The first proposal, `Ctrl+Shift+F`, is `AllowGroupIntent` in the queue
+  (`backlog/CONVENTIONS.md` 3.9, HUM-029). The queue's `Shortcuts` sits nearer
+  to the focus than the shell's, so the chord would have allowed a group of
+  one held request at the first press. Owner decision 2026-10-29:
+  `Ctrl+Shift+Enter`; the group allow keeps `Ctrl+Shift+F`.
+- `Enter` decides in the queue. `SingleActivator` demands its modifiers
+  exactly, so `Enter` (allow), `Ctrl+Enter` (block, also the note field and
+  the editor's send) and `Shift+Enter` (remember grid) never match
+  `Ctrl+Shift+Enter`; the palette and the history bind plain `Enter` only.
+  The decision-key lock of the queue reads `Enter` too: right after a
+  decision by `Enter`, a chord pressed before `Enter` came up is refused
+  like any held decision key.
+
+### Umsetzung (HUM-298)
+
+- **Wo das Terminal steht.** `core/ui/terminal_placement.dart`:
+  `TerminalPlacement { pane, fullWindow }` und `terminalPlacementProvider`
+  (`toggleFullWindow`, `leaveFullWindow`). HUM-300 bekommt hier einen dritten
+  Wert und in der Shell einen dritten Wirt.
+- **Ein Widget für jeden Wirt.** `features/sandbox/widgets/sandbox_terminal.dart`
+  (`SandboxTerminal`) liest die laufende Sitzung aus `sandboxStatusProvider`
+  und baut `TerminalPane`. Die Sandbox zeigt es im Pane, solange die
+  Platzierung `pane` ist, sonst eine leere Fläche in Terminalfarbe; die Shell
+  zeigt es über dem ganzen Fenster (`catchUp` fragt den Status einmal nach,
+  `focusOnMount` gibt dem Agenten die Tastatur). Sitzung und Rücklauf
+  überstehen den Wechsel, weil sie im `keepAlive`-Provider leben und
+  `attach` idempotent ist; verloren geht nur Auswahl und Scrollposition der
+  Ansicht.
+- **Shell.** `_withTerminalHost`: ein `IndexedStack` zwischen dem gewohnten
+  Layout (Leiste, Abschnitte, Blatt) und dem Terminal. Das Layout bleibt
+  gebaut, verliert den Fokus, meldet über `Visibility.of` „nicht sichtbar"
+  (die Entscheidungstasten der Queue sind damit außer Dienst) und hält seine
+  Ticker an. Die Statusleiste ist versteckt, nicht entfernt. Die Kopfleiste
+  bleibt: Sie ist die Titelleiste des rahmenlosen Fensters (HUM-255) mit
+  Fensterknöpfen und Halte-Zähler. Das ganze Fenster endet mit
+  `ToggleTerminalFullWindowIntent`, mit jedem `NavIntent` (auch auf den
+  Abschnitt, auf dem man steht), mit jeder Änderung von `navigationProvider`
+  (Palette, Übergaben, Setup) und beim Öffnen der Einstellungen. Bei jedem
+  Platzwechsel nimmt die Shell den Fokus, das Terminal holt ihn sich ein
+  Frame später (`TerminalPane.focusOnMount`); die Sandbox gibt ihn dem Pane
+  zurück, wenn es aus dem ganzen Fenster zurückkommt.
+- **Taste und Knopf.** `terminalFullWindowActivator` (`Ctrl+Shift+Enter`)
+  und `terminalFullWindowNumpadActivator` in `core/shortcuts/intents.dart`,
+  ohne Wiederholungen, in `shellShortcuts()`; `TerminalPane._onKey`
+  reicht ihn wie die anderen Kürzel der Shell an `Actions` weiter. Der Knopf
+  (`FullWindowButton`, `sandbox-terminal-full-window`) steht rechts im
+  Hinweisstreifen über dem Terminal, auch im Leerzustand, `HButton` ghost
+  `sm` mit `HoverLabel` unten; Glyphen `ShellGlyph.maximize`/`minimize`
+  (Lucide `maximize-2`/`minimize-2`). Der Streifen wird dadurch so hoch wie
+  der Knopf.
+- **Palette und Doku.** Befehl `toggle-terminal-full-window` am Ende der
+  Liste (davor verdrängte er `queue-allow-all` aus dem sichtbaren Bereich).
+  `docs/DESIGN.md` Kürzeltabelle, `docs/UX.md` 5.2.
+- **Tests.** `test/features/shell/terminal_full_window_test.dart` (neun, davon drei aus dem Review; sechs
+  Tests: Kürzel aus History hin, mit Ziffernblock-`Enter` zurück; Fokus im
+  Terminal, `Esc` als `0x1b`, Kürzel erreicht den Agenten nicht; Knopf hin
+  und zurück plus `Ctrl+4` auf dem eigenen Abschnitt; Leerzustand aus
+  Intercept mit Knopf; Palette hin, „Go to History" zurück; Queue mit
+  gehaltener, scharfer Anfrage im Fokus: beide Varianten entscheiden nichts
+  und öffnen das ganze Fenster, `Enter` danach gibt frei), zwei Zeilen in
+  `shortcuts_map_to_intents_test.dart`. Goldens neu: `sandbox_header_*`
+  (6) und `isolation_panel_*` (10), nur der Knopf im Terminalstreifen.
+- **Mutationsbeweise**, je rot und danach Byte für Byte zurück: Bindung aus
+  `shellShortcuts()` entfernt; Terminal verschluckt das Kürzel; kein Fokus
+  beim Einhängen (`Esc` kommt nicht an); Knopf ohne Wirkung; Leerzustand ohne
+  Kopfstreifen; Shell ohne Action; ohne Navigations-Listener; `NavIntent`
+  ohne Rückkehr; Pane behält sein Terminal (zwei Ansichten); `IndexedStack`
+  bleibt auf dem Layout; die Queue sperrt auf `Ctrl+Shift+Enter`;
+  Ziffernblock-Bindung entfernt; `_onKey` überspringt das Kürzel (der
+  Emulator übersetzt `Ctrl+Shift+Enter` sonst in Bytes für den Agenten).
+- **Entschieden.** Der erste Entwurf band `Ctrl+Shift+F` und kollidierte
+  mit der Gruppenfreigabe der Queue; der Eigentümer hat am 2026-10-29
+  `Ctrl+Shift+Enter` gewählt (siehe Fallstricke). Geprüft gegen jede
+  `SingleActivator` in `app/lib` und CONVENTIONS 3.9: keine Kollision.
+- **Restrisiko, bekannt.** Ein halb gegriffenes Kürzel ist eine andere
+  Taste: Kommt `Shift` erst nach `Ctrl+Enter`, sperrt die Queue die
+  ausgewählte Anfrage (umkehrbar, der Agent darf es erneut versuchen);
+  kommen beide Modifikatoren zu spät, ist der Druck ein `Enter` und gibt
+  frei, hinter der Scharfschaltung von `docs/UX.md` 5.4. Dieselbe Klasse wie
+  jedes `Ctrl`-Kürzel auf einer Entscheidungstaste (`Ctrl+F`, `Ctrl+L`,
+  `Ctrl+Shift+F`); kein eigener Schutz in diesem Issue.
+- **Review (Codex, Sonnet).** „Go to <Abschnitt>" in der Palette und die
+  Übergaben aus History und Befunden gehen über `_go`, das das ganze Fenster
+  ausdrücklich beendet: Auf den Abschnitt darunter ändert sich die
+  Navigation nicht, und der Listener hört nichts. Die Palette gibt die
+  Tasten beim Schließen über dem ganzen Fenster an das Terminal zurück: Der
+  Wirt steht in einem eigenen `FocusScope` (`_terminalScope`), der sich den
+  fokussierten Knoten merkt. Startet die Sitzung erst, nachdem das ganze
+  Fenster offen ist, holt `TerminalPane.didUpdateWidget` den Fokus nach.
+  `_terminalCameBack` gilt nur für den einen Build. Tests:
+  `going_to_the_section_underneath_ends_the_whole_window`,
+  `after_the_palette_the_keys_go_back_to_the_terminal`,
+  `a_session_that_starts_later_gets_the_keys`. Mutationen: `_go` ohne
+  Rückkehr rot; Palette gibt den Fokus der Shell rot; das Nachholen in
+  `didUpdateWidget` allein ist grün, weil zwei Wege es schon tragen (eine
+  Fokusanfrage an einen noch nicht eingehängten Knoten wirkt beim Einhängen,
+  `autofocus` im neuen Scope); alle drei Wege entfernt rot, nur das
+  Nachholen übrig grün.
