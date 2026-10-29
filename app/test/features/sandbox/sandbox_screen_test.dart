@@ -4,10 +4,14 @@
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/hover_label.dart';
+import 'package:humanitl/core/ui/ui.dart';
+import 'package:humanitl/features/sandbox/providers/sandbox_status_provider.dart';
+import 'package:humanitl/features/sandbox/sandbox_screen.dart';
 import 'package:humanitl/features/sandbox/widgets/env_tab.dart';
 import 'package:humanitl/features/sandbox/widgets/isolation_panel.dart';
 import 'package:humanitl/features/sandbox/widgets/sandbox_header.dart';
@@ -306,6 +310,87 @@ void main() {
       find.textContaining('Nothing runs, so nothing is measured'),
       findsOneWidget,
     );
+  });
+
+  // HUM-251: Der Daemon meldet ein im Lauf unerreichbares Modell als
+  // `LLM_001` am Status. Die Zeile „LLM“ wird dann rot und trägt den Befund
+  // samt Fix; die Oberfläche leitet das aus nichts ab, sie zeichnet das Feld.
+  // Kommt eine Momentaufnahme ohne den Befund, ist die Zeile wieder die
+  // gelbe Ausnahme-Zeile.
+  testWidgets('llm_unreachable_row', (WidgetTester tester) async {
+    const String endpoint = 'http://127.0.0.1:11434/v1';
+    const Diagnostic unreachable = Diagnostic(
+      code: 'LLM_001',
+      severity: Severity.error,
+      title: 'LLM-Endpoint nicht erreichbar',
+      why:
+          "the agent's last request to its model at $endpoint failed: nobody "
+          'accepted the connection; until a request gets through again, the '
+          'agent works without its model',
+      fix: FixAction.changeSetting(key: 'llm.endpoint', value: endpoint),
+    );
+    final SandboxTestClient client = runningClient();
+    client.sandbox = client.sandbox.copyWith(
+      llmEndpoint: endpoint,
+      llmDiagnostic: unreachable,
+    );
+    await pumpSandbox(tester, client: client);
+    await openTab(tester, 'sandbox-tab-isolation');
+
+    final HTokens tokens = HTheme.of(
+      tester.element(find.byKey(const Key('sandbox-isolation-exception'))),
+    );
+    Color dotColour() {
+      final DecoratedBox box = tester.widget<DecoratedBox>(
+        find.descendant(
+          of: find.byKey(const Key('sandbox-isolation-exception-dot')),
+          matching: find.byType(DecoratedBox),
+        ),
+      );
+      return (box.decoration as BoxDecoration).color!;
+    }
+
+    Color textColour() => tester
+        .widget<Text>(find.byKey(const Key('sandbox-isolation-exception')))
+        .style!
+        .color!;
+
+    expect(dotColour(), tokens.state.blocked, reason: 'the dot is red');
+    expect(
+      textColour(),
+      tokens.stateText.blocked,
+      reason: 'and so is the line',
+    );
+    // Die Farbe ist nie der einzige Kanal: Der Befund steht darunter, mit
+    // Code und dem Satz des Daemons.
+    final Finder card = find.byKey(
+      const Key('sandbox-isolation-exception-diagnostic'),
+    );
+    expect(card, findsOneWidget);
+    expect(
+      find.descendant(of: card, matching: find.textContaining('LLM_001')),
+      findsWidgets,
+    );
+    expect(
+      find.descendant(
+        of: card,
+        matching: find.textContaining('nobody accepted the connection'),
+      ),
+      findsOneWidget,
+    );
+
+    // Die nächste Durchreiche gelingt, und der Daemon nimmt den Befund weg.
+    client.sandbox = client.sandbox.copyWith(llmDiagnostic: null);
+    final ProviderContainer container = ProviderScope.containerOf(
+      tester.element(find.byType(SandboxScreen)),
+    );
+    await container.read(sandboxStatusProvider.notifier).refresh();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(dotColour(), tokens.colors.warning, reason: 'yellow again');
+    expect(textColour(), tokens.colors.warningText);
+    expect(card, findsNothing);
   });
 }
 

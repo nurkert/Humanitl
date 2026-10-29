@@ -109,7 +109,10 @@ class IsolationPanel extends StatelessWidget {
               segment: status.segmentFor(IsolationCheck.values[i]),
               expected: !nothingRuns,
             ),
-          _ExceptionLine(endpoint: status.llmEndpoint),
+          _ExceptionLine(
+            endpoint: status.llmEndpoint,
+            unreachable: status.llmDiagnostic,
+          ),
           RefusalsSection(status: status),
           SizedBox(height: tokens.spacing.x3),
           const HHairline(),
@@ -296,38 +299,81 @@ class _Evidence extends StatelessWidget {
 /// that showed three green lines and kept quiet about the open path would be
 /// claiming more than it proved (BACKLOG.md 4.2, `docs/THREAT-MODEL.md`
 /// K-02).
+///
+/// It turns red while the daemon says the model cannot be reached in this
+/// run ([SandboxStatus.llmDiagnostic], `LLM_001`, HUM-251), with the
+/// daemon's finding and its fix under it. Whether a request to the model
+/// failed is decided in the daemon from the flows, never here (ADR-018).
 class _ExceptionLine extends StatelessWidget {
-  const _ExceptionLine({required this.endpoint});
+  const _ExceptionLine({required this.endpoint, required this.unreachable});
 
   final String endpoint;
+
+  /// The daemon's finding that the model cannot be reached, or null.
+  final Diagnostic? unreachable;
 
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final bool configured = endpoint.isNotEmpty;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    final Diagnostic? diagnostic = unreachable;
+    final DiagnosticText? text = diagnostic == null
+        ? null
+        : DiagnosticL10n.resolve(diagnostic, l10n);
+    final Color dot = diagnostic != null
+        ? tokens.state.blocked
+        : configured
+        ? tokens.colors.warning
+        : tokens.colors.fg2;
+    final Color ink = diagnostic != null
+        ? tokens.stateText.blocked
+        : configured
+        ? tokens.colors.warningText
+        : tokens.colors.fg2;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        Padding(
-          padding: EdgeInsets.only(top: tokens.spacing.x1),
-          child: _Dot(
-            color: configured ? tokens.colors.warning : tokens.colors.fg2,
-            filled: configured,
-          ),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Padding(
+              padding: EdgeInsets.only(top: tokens.spacing.x1),
+              child: _Dot(
+                key: const Key('sandbox-isolation-exception-dot'),
+                color: dot,
+                filled: configured || diagnostic != null,
+              ),
+            ),
+            SizedBox(width: tokens.spacing.x2),
+            Expanded(
+              child: Text(
+                configured
+                    ? l10n.isolationException(endpoint)
+                    : l10n.isolationExceptionNone,
+                key: const Key('sandbox-isolation-exception'),
+                style: tokens.typography.ui13.tinted(ink),
+              ),
+            ),
+          ],
         ),
-        SizedBox(width: tokens.spacing.x2),
-        Expanded(
-          child: Text(
-            configured
-                ? l10n.isolationException(endpoint)
-                : l10n.isolationExceptionNone,
-            key: const Key('sandbox-isolation-exception'),
-            style: tokens.typography.ui13.tinted(
-              configured ? tokens.colors.warningText : tokens.colors.fg2,
+        // The finding is the word next to the colour: red alone would say
+        // nothing about what broke (`docs/UX.md` 3.3, rule 2).
+        if (diagnostic != null && text != null)
+          Padding(
+            padding: EdgeInsets.only(top: tokens.spacing.x2),
+            child: HDiagnosticCard(
+              key: const Key('sandbox-isolation-exception-diagnostic'),
+              code: diagnostic.code,
+              severityLabel: severityLabel(l10n, diagnostic.severity),
+              color: tokens.state.error,
+              title: text.title,
+              why: text.cause,
+              docsUrl: diagnostic.docsUrl,
+              fix: FixControl(fix: diagnostic.fix),
+              width: double.infinity,
             ),
           ),
-        ),
       ],
     );
   }
@@ -507,7 +553,7 @@ class _IsolationDotState extends State<IsolationDot>
 /// shape as well as in hue, so neither can be read as a paler green
 /// ([isolationSegmentFilled]).
 class _Dot extends StatelessWidget {
-  const _Dot({required this.color, required this.filled});
+  const _Dot({required this.color, required this.filled, super.key});
 
   final Color color;
   final bool filled;

@@ -66,9 +66,13 @@ abstract final class ProtoVersion {
   /// status bar reads `LlmServers`, `LlmKey` names a server, the probe of a
   /// saved server sends `ProbeLlmRequest.server`, and a form value for the
   /// active server's view carries `SetConfigRequest.expected_server`
-  /// (HUM-289).
+  /// (HUM-289). Minor 21, the source of the project folder (HUM-293), has no
+  /// reader here: the app sends no folder and writes `sandbox.work_dir`
+  /// instead. Raised to 22 with `SandboxEvent.Status.llm`: the isolation tab
+  /// draws the line of the model passthrough red while the daemon says the
+  /// model cannot be reached (`LLM_001`, HUM-251).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 20;
+  static const int minor = 22;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

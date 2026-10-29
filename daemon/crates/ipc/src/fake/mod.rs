@@ -1370,6 +1370,9 @@ impl FakeDaemon {
                         reporting: v1::RefusalReporting::On as i32,
                         ..Default::default()
                     }),
+                    // Der gespielte Agent fragt kein Modell; also scheitert auch
+                    // keine Durchreiche (HUM-251).
+                    llm: None,
                 },
             )),
         }
