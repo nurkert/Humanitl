@@ -56,6 +56,32 @@ socket still leads nowhere is the work of the empty network namespace from guara
 the filter: only `lo` exists there, and the routing table is empty. The three guarantees hold
 together; none of them holds alone.
 
+### The agent's own permission prompts (HUM-308)
+
+Agents bring their own permission prompts: OpenCode asks "allow webfetch?" before it fetches a
+page and can ask before a shell command or an edit. Inside the sandbox Humanitl switches these off
+for fetching and running commands (`"webfetch": "allow"`, `"bash": "allow"` in the bundled
+`opencode.json`, also in `OPENCODE_PERMISSION`); `edit` stays at OpenCode's own default, which
+already allows it without a prompt. pi 1.4.0 has no such prompts. None of the guarantees above
+rests on these prompts, and switching them off weakens none of them:
+
+- **They are not a boundary.** The prompt runs inside the agent process, which sits on the
+  untrusted side of B1 ([`THREAT-MODEL.md`](THREAT-MODEL.md#trust-boundaries)). A steered or
+  compromised agent does not ask; a request it sends anyway is held at the proxy all the same.
+- **The network question is asked once, at the door.** Every request leaves only through the
+  proxy and is approved there, by a rule or by you. A second prompt before the same request
+  asked you twice for one decision and taught you to click through.
+- **Shell and edits stay inside the sandbox.** Commands run under the same namespaces and filter;
+  writes that outlive the session reach only `/work`
+  ([section 5.2](#52-the-project-directory-work)), which you review afterwards in the run
+  summary, plus any `mounts.extra_rw` a profile declares and configured package caches
+  ([section 5.5](#55-package-caches)). `/tmp` and the agent's home are a `tmpfs` and end with the
+  session. `external_directory` stays `deny` and `websearch` stays `deny`.
+
+What stays with the agent is the question it may still ask about its own work, such as OpenCode's
+prompt before reading a `.env` file or after the same call repeated three times. Neither is a
+network decision, and both are left at OpenCode's default.
+
 ### Trusted computing base
 
 The trusted computing base is the set of components whose failure voids the guarantees. It is
@@ -1093,3 +1119,4 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.0 | Initial release. |
 | 0.1.0 | Several saved model servers with one keyring item each; only the active origin gets a key and the passthrough (HUM-289). |
 | 0.1.0 | The session's first process takes the daemon's pseudo-terminal as controlling terminal; `--new-session` stays. A caller's command gets the adapter's contribution and the configured agent on `PATH`, never a bind of its own (HUM-280). |
+| 0.1.0 | OpenCode no longer asks before `webfetch` and `bash`; the proxy is the one place that asks. Its `bash` waits as long as a held request (HUM-308). |

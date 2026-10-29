@@ -242,7 +242,8 @@ offers a hosted web search. Nobody asked for any of that, and the first held
 request a person sees should be one they understand. The adapter therefore
 turns these off in three ways: through the environment, through its
 configuration file, and through its bundled rules as a second lock. The values
-were checked against OpenCode 1.18.25; other versions were not checked.
+were checked against OpenCode 1.18.25, the permissions and timeouts of HUM-308
+against 1.18.31; other versions were not checked.
 
 ### The configuration template
 
@@ -265,7 +266,8 @@ were checked against OpenCode 1.18.25; other versions were not checked.
   "autoupdate": false,
   "share": "disabled",
   "permission": {
-    "webfetch": "ask",
+    "webfetch": "allow",
+    "bash": "allow",
     "websearch": "deny",
     "external_directory": "deny"
   }
@@ -296,9 +298,26 @@ a separate read-only file and never stands in the configuration.
 
 | Permission | Value | Why |
 |---|---|---|
-| `webfetch` | `ask` | OpenCode asks in its own interface before it fetches a page. The fetch itself then goes through Humanitl and is held like any other request. |
+| `webfetch` | `allow` | OpenCode fetches without asking in its own interface. The fetch goes through Humanitl and is held like any other request, so you decide once, in Intercept, not twice (HUM-308). |
+| `bash` | `allow` | Commands run without a prompt of the agent. They run inside the sandbox; a `curl` among them is held at the proxy like any other request. |
 | `websearch` | `deny` | The search tool talks to a hosted search service, not to the page. |
 | `external_directory` | `deny` | No access to directories outside the project. Inside the sandbox there is little to reach, but the agent should not try. |
+
+`edit` is deliberately not in the block. OpenCode allows it by default, and
+because this block is merged over every agent's own permissions, an explicit
+`"edit": "allow"` would also let OpenCode's plan agent write, which is meant to
+be read-only. Why the agent's own prompts protect nothing inside the sandbox is
+in [SECURITY.md](../SECURITY.md#the-agents-own-permission-prompts-hum-308).
+
+**How long a tool waits.** A held request waits up to `hold.timeout_secs` (300
+seconds by default). OpenCode's `webfetch` gives up after 30 seconds, or after
+at most 120 when the model asks for longer; in OpenCode 1.18.31 that limit is
+fixed in its code. When a tool gives up, it closes the connection, the proxy
+ends the flow as `client_timeout` and the card leaves the queue in Intercept before
+you decided. The briefing tells the agent so and that `curl` waits, unless the model
+passes its own timeout. For `bash`
+the adapter raises the default timeout with
+`OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` (see the next table).
 
 The same `permission` block also goes into the environment variable
 `OPENCODE_PERMISSION`, which OpenCode merges over every configuration source
@@ -353,6 +372,7 @@ The adapter adds these variables to the environment of the sandbox profile:
 | `OPENCODE_ENABLE_PARALLEL` | `false` | No hosted web search (Parallel). |
 | `OPENCODE_DISABLE_LSP_DOWNLOAD` | `true` | No language servers downloaded from the network. |
 | `OPENCODE_PERMISSION` | the `permission` block as JSON | Merged over every configuration source last. |
+| `OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` | `hold.timeout_secs` plus 60 seconds, in milliseconds, at least `120000` (`360000` by default) | A command in `bash` waits for a held request instead of being cut after OpenCode's 120 seconds. Not set with `hold.ask_mode = "none"`, where nothing waits. The model can still pass its own timeout for one call. |
 | `HOME`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` | under `/home/agent` | OpenCode's state stays in the tmpfs, not on the host. |
 | `NODE_EXTRA_CA_CERTS` | `/etc/humanitl/ca.crt` | Node trusts the local CA of the proxy. |
 | `TERM`, `COLORTERM`, `LANG` | `xterm-256color`, `truecolor`, `C.UTF-8` | The terminal of the agent. |

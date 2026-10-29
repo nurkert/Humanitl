@@ -36,3 +36,15 @@ substituted. A model name with a quotation mark therefore cannot add keys.
 `contextWindow` 32768 and `maxTokens` 4096 are cautious defaults, because the
 daemon does not know the model behind the endpoint. If you know yours, adjust
 the pattern entry and rebuild the daemon.
+
+## No permission prompts to switch off
+
+pi 1.4.0 does not ask before a tool call; its own `docs/security.md` says so
+("it does not ask for approval before every tool call"), and its tools carry no
+approval step. Inside the sandbox Humanitl is the one place that asks
+(HUM-308), so `settings.json` has nothing to switch off. It also leaves
+`defaultProjectTrust` unset: the trust prompt for a project's own extensions
+and settings stays with the human.
+
+The `bash` tool has no default timeout; a `curl` in it waits as long as the
+proxy holds the request, unless the model passes its own timeout. pi has no web tool of its own.

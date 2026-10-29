@@ -29,6 +29,7 @@
 //! | Eine `note:`-Zeile kann dabeistehen | `humanitl_core::block::block_response` |
 //! | Mit Frage endet die abgelaufene Frist in `504` | `BlockReason::Timeout` aus `Decision::TimedOut` |
 //! | Ohne Frage scheitert eine Anfrage ohne Regel sofort mit `504` | `ask_mode = none` setzt die Frist auf null, der Flow endet sofort als `TimedOut` |
+//! | Gibt ein Werkzeug früher auf, ist die Frage weg; `curl` wartet (nur mit Frage, HUM-308) | Bricht der Client ab, endet der Flow in `HoldQueue::hold` als `ClientTimeout`, und die Karte verlässt die Warteschlange. `webfetch` von `OpenCode` 1.18.31 gibt nach 30, höchstens 120 Sekunden auf, fest im Code; `curl` hat keine eigene Gesamtfrist, `bash` von pi 1.4.0 keine Vorgabefrist, und die von `OpenCode` hebt `opencode::bash_default_timeout_ms` über `hold.timeout_secs` |
 //! | Eine Regel deckt die Modell-Aufrufe, andere Pfade nicht | `OpenCodeAdapter::llm_passthrough` baut **eine** Regel: nur dieser Host, dieses Schema, dieser Port, `GET`/`POST` und die Pfade aus `llm.passthrough_paths`; `POST /api/pull` und `POST /v1/files` fallen durch und gehen den Weg jeder anderen Anfrage |
 //!
 //! Der Satz über das Modell sagt ausdrücklich *„eine Regel erlaubt"* und nicht
@@ -116,6 +117,15 @@ pub const TEMPLATE_DE_FILE: &str = "agents/opencode/briefing.de.md";
 /// Nachgezählt am 2026-10-29 nach HUM-304 (erster Satz über den
 /// Internetzugang, dafür ohne „beantwortet der Proxy" vor dem Meta-Endpunkt):
 /// englisch 170 und 168, deutsch weiter 184 und 179.
+///
+/// Nachgezählt am 2026-10-29 nach HUM-308 (Satz über Werkzeuge mit kürzerer
+/// Frist im Block für `ui`; dafür entfallen „or retry" und „in a body", im
+/// Deutschen „nicht wiederholen" im Block, „im Rumpf", „die" vor „Regeln",
+/// „läuft" und „auf diesem Host", aus „das meiste" wird „fast alles", und
+/// „eine etwaige `note:`-Zeile" wird „etwaige `note:`-Zeilen"): englisch 181
+/// (`ui`) und 165 (`none`), deutsch 185 und 169. „Nicht wiederholen" fällt
+/// nicht nur aus Platzgründen: Hat ein Werkzeug aufgegeben, ist die Frage weg,
+/// und nur ein neuer Abruf fragt erneut. Das `403` bleibt „nicht wiederholen".
 ///
 /// 185 ist die Grenze knapp über dem gemessenen Wert, also weiter ein
 /// Stolperdraht und kein Freibrief. Wer den Text wachsen lässt, zählt nach und
@@ -462,6 +472,32 @@ mod tests {
                 assert!(opening.contains(proxy), "{opening}");
                 assert!(!text.contains(old_opening), "{text}");
             }
+        }
+    }
+
+    /// Ein Werkzeug mit kürzerer Frist als der Halt zieht die Frage zurück,
+    /// wenn es aufgibt (HUM-308): `webfetch` von `OpenCode` nach höchstens
+    /// 120 Sekunden, der Halt dauert 300. Der Agent erfährt das und welches
+    /// Werkzeug wartet. Ohne Frage gibt es nichts zurückzuziehen.
+    #[test]
+    fn a_tool_that_gives_up_sooner_is_named_together_with_curl() {
+        for (language, gives_up, waits) in [
+            (
+                Language::En,
+                "a tool that gives up sooner withdraws the question",
+                "`curl` waits.",
+            ),
+            (
+                Language::De,
+                "gibt ein Tool früher auf, ist die Frage weg",
+                "`curl` wartet.",
+            ),
+        ] {
+            let asked = render(language, AskMode::Ui, 300, Some(HOST)).unwrap();
+            assert!(asked.contains(gives_up), "{asked}");
+            assert!(asked.contains(waits), "{asked}");
+            let unasked = render(language, AskMode::None, 300, Some(HOST)).unwrap();
+            assert!(!unasked.contains(gives_up), "{unasked}");
         }
     }
 

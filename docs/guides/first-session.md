@@ -136,9 +136,9 @@ What the three guarantees mean, and what they do not cover, is in
 ## 6. Decide the first held request
 
 Give OpenCode a task in its terminal, for example "Fetch https://example.com and
-summarise it". OpenCode first asks in its own interface whether it may fetch a
-page (its `webfetch` permission is set to ask); confirm it there. The request
-then leaves the agent, reaches Humanitl and is held. Very often the first held
+summarise it". OpenCode does not ask in its own interface before it fetches a page or
+runs a command; for these, Humanitl is the one place that asks (HUM-308). The request leaves the agent, reaches Humanitl and is
+held. Very often the first held
 request comes even earlier: OpenCode installs its provider package from
 `registry.npmjs.org` on first use, and a bundled rule holds that request so you
 see it.
