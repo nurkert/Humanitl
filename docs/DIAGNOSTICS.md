@@ -697,7 +697,7 @@ LLM-Endpoint nicht erreichbar
 
 **Auslöser.** Der Endpunkt antwortet nicht, löst nicht auf, die Frist läuft ab, oder sein Zertifikat stammt von einer Stelle, der dieser Rechner nicht vertraut.
 
-**Fix.** `CopyCommand` mit einem `curl`, das dasselbe versucht; bei unbekannter Stelle wie `PROXY_003`.
+**Fix.** Bei der Probe `CopyCommand` mit einem `curl`, das dasselbe versucht; bei unbekannter Stelle wie `PROXY_003`. Im Lauf `ChangeSetting` auf `llm.endpoint`.
 
 #### LLM_002
 

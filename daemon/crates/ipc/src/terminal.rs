@@ -472,6 +472,28 @@ impl HeldNotices {
         Self { queue, registry }
     }
 
+    /// Ein eigener Zuhörer am Ereignisstrom der Warteschlange, für den Stand
+    /// der Durchreiche an das Modell (HUM-251).
+    #[must_use]
+    pub fn subscribe(&self) -> broadcast::Receiver<FlowEvent> {
+        self.queue.subscribe()
+    }
+
+    /// Eine eigene Warteschlange ohne Proxy davor, für Tests anderer Module.
+    #[cfg(test)]
+    pub(crate) fn detached() -> Self {
+        let limits = humanitl_config::Limits::default();
+        let registry = Arc::new(FlowRegistry::new(&limits));
+        let queue = Arc::new(HoldQueue::with_registry(&limits, Arc::clone(&registry)));
+        Self::new(queue, registry)
+    }
+
+    /// Veröffentlicht ein Ereignis, als käme es vom Proxy.
+    #[cfg(test)]
+    pub(crate) fn publish(&self, event: FlowEvent) {
+        self.queue.publish(event);
+    }
+
     /// Schreibt Hinweise in dieses Terminal, bis der Agent endet.
     pub async fn run(self, hub: TerminalHub) {
         let mut events = self.queue.subscribe();

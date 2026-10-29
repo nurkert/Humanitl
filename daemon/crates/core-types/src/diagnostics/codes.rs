@@ -634,10 +634,13 @@ registry! {
     /// lief ab. Blockierend, weil der Agent ohne Modell nichts tun kann
     /// (HUM-039). Derselbe Code, wenn das Zertifikat des Endpunkts von einer
     /// Stelle stammt, der dieser Rechner nicht vertraut; das `why` sagt das
-    /// (HUM-257).
+    /// (HUM-257). Derselbe Code im Lauf, wenn eine Anfrage, die die
+    /// Durchreiche freigab, an Name, Verbindung, TLS oder Frist scheitert: Er
+    /// steht dann als Fehler in `SandboxEvent.Status.llm`, bis wieder eine
+    /// Durchreiche eine Antwort bekommt (HUM-251).
     LLM_001 => "llm", "LLM-Endpoint nicht erreichbar", "#llm_001",
         "Der Endpunkt antwortet nicht, löst nicht auf, die Frist läuft ab, oder sein Zertifikat stammt von einer Stelle, der dieser Rechner nicht vertraut.",
-        "`CopyCommand` mit einem `curl`, das dasselbe versucht; bei unbekannter Stelle wie `PROXY_003`.";
+        "Bei der Probe `CopyCommand` mit einem `curl`, das dasselbe versucht; bei unbekannter Stelle wie `PROXY_003`. Im Lauf `ChangeSetting` auf `llm.endpoint`.";
     /// Der LLM-Endpunkt antwortet, verlangt aber eine Anmeldung (`401` oder
     /// `403`). Ohne hinterlegten Zugangsschlüssel schickt Humanitl keine
     /// Zugangsdaten (HUM-039); mit einem hat der Endpunkt ihn abgelehnt
