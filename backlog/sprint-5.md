@@ -65,6 +65,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-294 | A stored project folder gets the full folder check at every start (after HUM-060) | S | HUM-293 |
 | HUM-295 | Settings re-plans the sandbox after the project folder changes (after HUM-060) | S | HUM-293 |
 | HUM-296 | `humanitl run --config` with a folder outside HOME is judged against the file it names (after HUM-060) | S | HUM-293 |
+| HUM-297 | RUSTSEC-2026-0414 in pulldown-cmark turns the dependency check red | S | — |
 
 ---
 
@@ -6408,4 +6409,23 @@ folder in the file they named.
 ### Acceptance criteria
 1. The case has a test and either starts or ends in a `SANDBOX_006` whose fix
    names the daemon's config file.
+
+---
+## HUM-297 · RUSTSEC-2026-0414 in pulldown-cmark turns the dependency check red
+
+### Context
+On 2026-10-29 the CI step "Licenses, advisories, duplicate crates"
+(`make rust-deny`) failed for the HUM-271 branch although the branch changed
+no dependency: the advisory RUSTSEC-2026-0414 (exponential event growth with
+`ENABLE_WIKILINKS`) was published for `pulldown-cmark` 0.13.4. The crate is
+only a build dependency (`prost-build` through `tonic-prost-build` of
+`humanitl-ipc`), so no shipped binary parses Markdown with it; every branch
+is red until the lock file moves.
+
+### Specification
+1. `cargo update -p pulldown-cmark --precise 0.13.5` in `daemon/`; only
+   `daemon/Cargo.lock` changes.
+
+### Acceptance criteria
+1. `cargo deny check` reports advisories, bans, licenses and sources ok.
 
