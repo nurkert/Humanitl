@@ -6439,6 +6439,81 @@ holds; only the under-HOME rule is skipped.
    `SANDBOX_006` naming the config file. Test with a temporary home.
 2. A folder outside `$HOME` declared with `humanitl config set` still starts.
 
+### Umsetzung (HUM-294)
+
+- **Variante.** Die einfachere: Jeder Plan und jeder Start schickt den
+  gespeicherten Ordner durch `work_dir::check_requested`, alle drei Stufen
+  gegen seinen heutigen aufgelösten Pfad (`Inner::is_stored_work_dir` in
+  `ipc/src/sandbox.rs`, nur wenn weder Anfrage noch laufender Start noch
+  laufende Sitzung einen Ordner nennt). Der Befund nennt über `with_source`
+  die Datei (`sandbox.work_dir in <config.toml>`).
+- **Unterschied nur, wo er zählt.** Ein Unterschied zwischen Text und
+  aufgelöstem Pfad wird nicht pauschal abgelehnt, sondern nur, wenn Stufe 3
+  an ihm hängt: Unter dem Heimatverzeichnis (geschrieben oder aufgelöst)
+  bleibt er erlaubt. Sonst fiele das verlinkte Heimatverzeichnis aus der
+  Review von HUM-293 (Silverblue, `/home/u` auf `/var/home/u`) für jeden von
+  Hand oder mit `humanitl config set` geschriebenen Ordner heraus, und ein
+  Verweis innerhalb des Heimatverzeichnisses ändert an der Sicherheitsaussage
+  nichts; die Politik prüft weiter geschriebene und aufgelöste Form.
+- **Erklärt ist der Text, nicht sein Ziel.** Die Ausnahme von Stufe 3 gilt nur,
+  wenn der erklärte Text schon sein aufgelöster Pfad ist (`declared`). Damit
+  fällt das Schlupfloch auch für `--work` und die Quelle `ConfigFile` der
+  Kommandozeile, nicht nur für den Start ohne Ordner. Steht der erklärte Text
+  selbst zur Prüfung und führt woandershin, sagt der Satz, wohin, und nennt
+  `humanitl config set sandbox.work_dir <aufgelöst>` als Weg.
+- **`humanitl config set`.** Die Kommandozeile schreibt `sandbox.work_dir`
+  jetzt aufgelöst, wie `SetConfig` (`resolved_work_dir` in
+  `bin/humanitl/src/cmd/config.rs`). So bleibt die Ausnahme für einen Ordner
+  außerhalb von `$HOME`, auch wenn der Mensch ihn über einen Verweis tippt
+  (`/data` als Verweis); der Verweis zählt beim Erklären, nicht danach.
+  Relativ, mit `..` oder fehlend bleibt der Text unverändert und scheitert
+  an der Gegenprobe wie bisher. Von Hand über einen Verweis geschrieben und
+  außerhalb von `$HOME`: abgelehnt, der Satz nennt den echten Pfad.
+- **Tests.** `sandbox`:
+  `a_stored_folder_moved_out_of_home_by_a_link_is_refused_at_start`
+  (temporäres Heimatverzeichnis, Wahl über `config_rpc::set`, Start grün,
+  Elternverzeichnis durch Verweis nach außen ersetzt, Start und Plan
+  `SANDBOX_006` mit Datei), `a_declared_folder_outside_home_still_starts`
+  (erklärter Ordner außerhalb startet, erklärt über einen Verweis abgelehnt
+  mit dem echten Pfad). `work_dir`:
+  `a_declaration_holds_only_for_the_path_it_really_names`. Kommandozeile:
+  `config_set_work_dir_writes_the_resolved_path`.
+- **Mutationen.** Prüfung des gespeicherten Ordners beim Start entfernt: 2 rot.
+  Alte Ausnahme (Ziel statt Text verglichen): 3 rot. Ausnahme ganz entfernt:
+  3 rot (darunter AC 2). `config set` ohne Auflösen: 1 rot. Alle Dateien
+  danach byte-gleich zurück (`cmp`).
+- **Review Runde 1.** Zwischen der Prüfung im Daemon und dem Öffnen im
+  Sandbox-Backend (HUM-263) konnte ein Verweis in den Pfad kommen; das Backend
+  prüfte dort nur die Denylist. Jetzt reist der freigegebene aufgelöste Ort
+  mit (`with_approved_work_dir`, neutral benannt, keine neue Kopplung), für
+  den gespeicherten Ordner und für einen Ordner aus der Anfrage; das Backend
+  bindet den Projektordner nur, wenn der Ort seines Deskriptors genau dieser
+  ist, sonst `SANDBOX_006`. Die Vorgabe aus dem aktuellen Verzeichnis bleibt
+  ohne Freigabe (nur Politik, wie bisher). `work_src` behält den
+  geschriebenen Text, die Anzeige ändert sich also nicht (kein
+  `/var/home/...` auf Silverblue); verglichen wird der aufgelöste Ort. Test
+  `launcher::a_folder_that_no_longer_lies_where_it_was_approved_is_not_mounted`
+  (Tausch zwischen Freigabe und Plan; ohne Freigabe ließe die Denylist das
+  Ziel durch), im Daemon-Test trägt das Backend den freigegebenen Ort.
+  Mutationen: Vergleich im Backend entfernt 1 rot, Freigabe im Daemon nicht
+  weitergereicht 1 rot. Ein gespeicherter Ordner, den es nicht mehr gibt, ist
+  schon im Plan `SANDBOX_006` (Kommentar und `docs/cli.md`). Satz neutral:
+  „a symbolic link in its path leads elsewhere".
+- **Review Runde 2.** `humanitl sandbox run` startet ohne Daemon und prüfte
+  einen gespeicherten Ordner nur mit `check_project_dir`. Jetzt geht ein
+  Ordner aus `sandbox.work_dir` (Datei, Profil, Umgebungsvariable) dort durch
+  `humanitl_ipc::work_dir::check_requested`, der freigegebene Ort geht an
+  `with_approved_work_dir` (`bin/humanitl/src/cmd/sandbox.rs`). Test
+  `sandbox_run_refuses_a_stored_folder_moved_out_of_home_by_a_link`;
+  Mutation (Prüfung übergangen) 1 rot. Nicht übernommen, mit Grund:
+  `--work` und das aktuelle Verzeichnis auf diesem Weg (keine Erklärung im
+  Spiel, die Politik prüft geschriebene und aufgelöste Form am Deskriptor;
+  Stufe 3 für sie hier wäre eine neue Regel für die Escape-Suiten, eigenes
+  Issue), `sandbox check` (Platzhalter-Ordner im Temp-Verzeichnis),
+  `sandbox argv` (Vorschau, startet nichts), `escape-launch` (Testwerkzeug,
+  Ordner aus seinen Argumenten, kein gespeicherter Ordner), `humanitl run`
+  (startet immer über den Daemon, keinen eigenen Weg).
+
 ---
 ## HUM-295 · Settings re-plans the sandbox after the project folder changes (after HUM-060)
 

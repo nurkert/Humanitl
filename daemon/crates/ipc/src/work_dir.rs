@@ -41,7 +41,16 @@ use crate::v1;
 ///    gebrochen. Wer ein Projekt außerhalb des Heimatverzeichnisses hat,
 ///    schreibt es mit `humanitl config set` oder von Hand in `config.toml`;
 ///    dort steht die Erklärung eines Menschen und nicht der Wunsch eines
-///    Clients.
+///    Clients. Erklärt ist dabei der Ordner, den der Text in `configured`
+///    selbst nennt, also nur, solange er schon der aufgelöste Pfad ist
+///    (HUM-294): Wird später ein Teil des Pfades durch einen Verweis ersetzt,
+///    zeigt derselbe Text auf einen anderen Ordner, und den hat niemand
+///    erklärt. `SetConfig` und `humanitl config set` schreiben deshalb den
+///    aufgelösten Pfad.
+///
+/// Ein gespeicherter Ordner geht bei jedem Start durch alle drei Stufen
+/// (`dir` und `configured` sind dann derselbe Pfad, HUM-294); vorher galt er
+/// über die Ausnahme von Stufe 3 immer als erklärt.
 ///
 /// # Errors
 ///
@@ -104,10 +113,29 @@ pub fn check_requested(
     // Verglichen wird mit dem aufgelösten Heimatverzeichnis, sonst fiele
     // jedes Projekt unter einem verlinkten `$HOME` aus Stufe 3 heraus (Review
     // HUM-293). Lässt es sich nicht auflösen, gilt die geschriebene Form.
-    let configured = configured.and_then(|dir| dir.canonicalize().ok());
     let allowed = resolved.starts_with(&home_resolved)
         || resolved.starts_with(&home)
-        || configured.is_some_and(|configured| configured == resolved);
+        || configured.is_some_and(|configured| declared(configured) == Some(resolved.clone()));
+    if !allowed && configured.is_some_and(|configured| configured == dir) {
+        // Der erklärte Text selbst führt jetzt woandershin: Ein Teil seines
+        // Pfades ist ein Verweis geworden, oder er war nie der aufgelöste
+        // Pfad (von Hand geschrieben). Der Satz nennt beide Formen, damit der
+        // Mensch sieht, welcher Ordner eingehängt würde.
+        return Err(work_dir_refused(
+            dir,
+            from,
+            &format!(
+                "it resolves to {}, outside {}: a symbolic link in its path leads elsewhere, \
+                 and a folder outside your home directory counts as declared only under the \
+                 path it really has; if {} is the right folder, declare it with humanitl config \
+                 set {WORK_DIR_KEY} {}",
+                resolved.display(),
+                home.display(),
+                resolved.display(),
+                resolved.display()
+            ),
+        ));
+    }
     if !allowed {
         return Err(work_dir_refused(
             dir,
@@ -121,6 +149,17 @@ pub fn check_requested(
         ));
     }
     Ok(resolved)
+}
+
+/// Der Ordner, den der erklärte Text `configured` nennt: sein aufgelöster
+/// Pfad, aber nur, wenn der Text schon dieser Pfad ist (HUM-294). Führt ein
+/// Verweis im Pfad woandershin, oder ist der Ordner nicht da, ist nichts
+/// erklärt.
+fn declared(configured: &Path) -> Option<PathBuf> {
+    configured
+        .canonicalize()
+        .ok()
+        .filter(|resolved| resolved == configured)
 }
 
 /// Die Quelle, die ein Client zu seinem `work_dir` nennt.
@@ -281,5 +320,49 @@ mod tests {
                 .expect_err("the home itself is no project");
             assert_eq!(refused.code, SANDBOX_006, "{}", refused.why);
         }
+    }
+
+    /// Der erklärte Ordner außerhalb des Heimatverzeichnisses gilt nur unter
+    /// seinem aufgelösten Pfad (HUM-294): Ersetzt ein Verweis später einen
+    /// Teil des Pfades, nennt derselbe Text einen anderen Ordner.
+    #[test]
+    fn a_declaration_holds_only_for_the_path_it_really_names() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = paths_in(home.path());
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let declared = root.join("parent/x");
+        std::fs::create_dir_all(&declared).unwrap();
+        let source = WorkDirSource::ConfigFile(PathBuf::from("/c/config.toml"));
+        check_requested(&paths, Some(&declared), &declared, &source)
+            .expect("declared under its real path");
+
+        std::fs::rename(root.join("parent"), root.join("moved")).unwrap();
+        std::fs::create_dir_all(root.join("other/x")).unwrap();
+        std::os::unix::fs::symlink(root.join("other"), root.join("parent")).unwrap();
+        let refused = check_requested(&paths, Some(&declared), &declared, &source)
+            .expect_err("the text now names another folder");
+        assert_eq!(refused.code, SANDBOX_006);
+        assert!(
+            refused.why.contains("sandbox.work_dir in /c/config.toml"),
+            "{}",
+            refused.why
+        );
+        assert!(
+            refused
+                .why
+                .contains(&root.join("other/x").display().to_string()),
+            "{}",
+            refused.why
+        );
+        // Ein Ordner über die Leitung, der auf dasselbe Ziel zeigt, ist so
+        // wenig erklärt.
+        check_requested(
+            &paths,
+            Some(&declared),
+            &root.join("other/x"),
+            &WorkDirSource::Flag,
+        )
+        .expect_err("the link target was never declared");
     }
 }
