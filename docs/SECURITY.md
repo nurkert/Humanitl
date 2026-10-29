@@ -599,7 +599,11 @@ end up in the file.
 
 *Why it exists.* An agent that may not write is a chat window.
 
-*What Humanitl does.* Only a subpath is bound, never `$HOME`. `sandbox.work_mode = "ro"` is
+*What Humanitl does.* Only a subpath is bound, never `$HOME`. The folder lies below `$HOME` or
+is the one a person declared in `config.toml`; a stored folder gets this check at every start
+against the path it resolves to then, and a declaration outside `$HOME` holds only for the path
+its text really names, so a link put into a parent directory later cannot move the project
+elsewhere (HUM-294). `sandbox.work_mode = "ro"` is
 possible and the suggestion for analysis-only sessions. Paths through which written files would
 later be **executed** on the host are covered (full list in `profiles/sandbox/default.toml`):
 

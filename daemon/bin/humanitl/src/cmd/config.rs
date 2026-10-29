@@ -372,6 +372,7 @@ async fn set(ctx: &Context, key: &str, text: &str, project: bool) -> Result<u8, 
     }
     let value = parse_value(field, text).map_err(Failure::new)?;
     check_value(field, &value).map_err(Failure::new)?;
+    let value = resolved_work_dir(&path, value);
     let toml_value = to_toml(field, &value).map_err(Failure::new)?;
 
     let (file, prefix, scope) = if project {
@@ -424,6 +425,38 @@ async fn set(ctx: &Context, key: &str, text: &str, project: bool) -> Result<u8, 
         .line(&format!("{path} = {shown} ({})", scope.as_str()));
     ctx.render.note(&reach(ctx, &file).await);
     Ok(EXIT_OK)
+}
+
+/// `sandbox.work_dir` kommt als aufgelöster Pfad in die Datei, wie bei
+/// `SetConfig` (HUM-294).
+///
+/// Ein Ordner außerhalb des Heimatverzeichnisses gilt dem Daemon nur unter
+/// dem Pfad als erklärt, den er wirklich hat; ein Verweis, der später in den
+/// Pfad kommt, verschiebt das Projekt so nicht unbemerkt. Wer
+/// `/data/projekt` schreibt und `/data` ist ein Verweis, erklärt damit das
+/// Ziel. Ein relativer Pfad, einer mit `..` oder einer, der nicht da ist,
+/// bleibt, wie er ist: Die Gegenprobe lehnt ihn mit seinem eigenen Befund ab.
+fn resolved_work_dir(path: &str, value: Value) -> Value {
+    if path != "sandbox.work_dir" {
+        return value;
+    }
+    let Some(text) = value.as_str() else {
+        return value;
+    };
+    let dir = Path::new(text);
+    if !dir.is_absolute()
+        || dir
+            .components()
+            .any(|part| part == std::path::Component::ParentDir)
+    {
+        return value;
+    }
+    match dir.canonicalize() {
+        Ok(resolved) if resolved.is_dir() => resolved
+            .to_str()
+            .map_or(value, |resolved| Value::String(resolved.to_owned())),
+        Ok(_) | Err(_) => value,
+    }
 }
 
 /// Wohin `config set` schreibt.

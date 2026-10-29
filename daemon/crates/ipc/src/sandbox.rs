@@ -2653,7 +2653,10 @@ impl Inner {
         // und schon hier, damit `Sandbox(Plan)` und `Sandbox(Status)` einen Ordner nie
         // grün zeigen, den der Start danach verweigert. Ein Wunsch über die
         // RPC ist in `check_work_dir` schon geprüft; ein Ordner aus
-        // `config.toml` kam bisher ungeprüft bis zum Start durch. Kein Ordner
+        // `config.toml` kam bisher ungeprüft bis zum Start durch; seit
+        // HUM-294 geht er unten durch alle drei Stufen, auch beim Plan, und
+        // ein gespeicherter Ordner, den es nicht mehr gibt, ist dann schon im
+        // Plan `SANDBOX_006`. Kein Ordner
         // ist für einen Plan kein Befund, sondern eine offene Wahl: Die
         // Momentaufnahme nennt dann keinen, und das Setup verlangt einen.
         // Der Start prüft dazu, dass der Ordner da ist. Der Befund nennt die
@@ -2671,6 +2674,33 @@ impl Inner {
                 || self.work_dir_source(&config, choice, plan),
             )?;
         }
+        // Der gespeicherte Ordner bekommt bei jedem Plan und Start die ganze
+        // Prüfung eines Ordners über die RPC, auch die dritte Stufe (unter
+        // dem Heimatverzeichnis oder erklärt), und das gegen seinen heutigen
+        // aufgelösten Pfad (HUM-294). Sonst hängte ein Start, nachdem ein
+        // Elternverzeichnis durch einen Verweis nach außerhalb ersetzt wurde,
+        // den neuen Ort ein, den nie jemand gewählt hat.
+        // Der aufgelöste Ort, der hier freigegeben ist, reist zum Backend: Es
+        // bindet den Ordner nur, wenn sein geöffneter Deskriptor genau dort
+        // liegt. Ein Verweis, der zwischen dieser Prüfung und dem Öffnen in
+        // den Pfad kommt, erreicht die Sandbox so nicht (HUM-294, Review). Ein
+        // Ordner aus der Anfrage ist schon der aufgelöste, den
+        // `check_work_dir` freigegeben hat; die Vorgabe aus dem aktuellen
+        // Verzeichnis prüft nur die Politik, wie bisher.
+        let approved = if self.is_stored_work_dir(&config, choice, plan, &work_src) {
+            Some(with_source(
+                |from| {
+                    crate::work_dir::check_requested(&self.paths, Some(&work_src), &work_src, from)
+                },
+                || self.work_dir_source(&config, choice, plan),
+            )?)
+        } else {
+            choice
+                .work_dir
+                .as_ref()
+                .filter(|checked| **checked == work_src)
+                .cloned()
+        };
         let work_mode = self.work_mode(&config, choice, plan);
         // Every session gets the adapter's contribution, whatever its command
         // (HUM-280). `humanitl run -- opencode` starts the same agent as
@@ -2747,6 +2777,10 @@ impl Inner {
         let backend = BwrapBackend::detect(self.paths.clone()).unwrap_or_else(|_| {
             BwrapBackend::unchecked("bwrap", MIN_BWRAP_VERSION, self.paths.clone())
         });
+        let backend = match approved {
+            Some(dir) => backend.with_approved_work_dir(dir),
+            None => backend,
+        };
 
         Ok(Prepared {
             env_origin,
@@ -3021,6 +3055,24 @@ impl Inner {
             .work_dir
             .clone()
             .unwrap_or_else(|| self.default_work_dir(cwd))
+    }
+
+    /// Ob `work_src` der Ordner aus `sandbox.work_dir` ist (HUM-294): kein
+    /// Ordner in der Anfrage, keiner eines laufenden Starts, keine laufende
+    /// Sitzung, und die Konfiguration nennt genau ihn. Einen Ordner aus der
+    /// Anfrage hat [`crate::work_dir::check_requested`] schon geprüft, den
+    /// einer laufenden Sitzung prüfte ihr Start.
+    fn is_stored_work_dir(
+        &self,
+        config: &Config,
+        choice: &PlanChoice,
+        plan: &v1::sandbox_request::Plan,
+        work_src: &Path,
+    ) -> bool {
+        plan.work_dir.trim().is_empty()
+            && choice.work_dir.is_none()
+            && lock(&self.running).is_none()
+            && config.sandbox.work_dir.as_deref() == Some(work_src)
     }
 
     /// Woher der Ordner kommt, den [`Self::work_dir`] für diesen Wunsch
@@ -3688,14 +3740,14 @@ fn tree_dirs() -> impl Iterator<Item = PathBuf> {
 /// # Errors
 ///
 /// The refusal of `check` with the source in it.
-fn with_source(
-    check: impl Fn(&WorkDirSource) -> Result<(), Diagnostic>,
+fn with_source<T>(
+    check: impl Fn(&WorkDirSource) -> Result<T, Diagnostic>,
     from: impl FnOnce() -> WorkDirSource,
-) -> Result<(), Diagnostic> {
-    if check(&WorkDirSource::Request).is_ok() {
-        return Ok(());
+) -> Result<T, Diagnostic> {
+    match check(&WorkDirSource::Request) {
+        Ok(passed) => Ok(passed),
+        Err(_) => check(&from()),
     }
-    check(&from())
 }
 
 /// Profile, project directory and mode a `Plan` chooses, staged before it is
@@ -6157,5 +6209,99 @@ mod tests {
         assert_eq!(refused.code, codes::SANDBOX_006);
         let named = format!("sandbox.work_dir in {}", paths.config_path().display());
         assert!(refused.why.contains(&named), "{}", refused.why);
+    }
+
+    /// A folder chosen in the app is stored resolved (HUM-293); when a parent
+    /// of it is later replaced by a link to a place outside the home
+    /// directory, the same text names another folder. The next start refuses
+    /// it and names the config file (HUM-294).
+    #[tokio::test]
+    async fn a_stored_folder_moved_out_of_home_by_a_link_is_refused_at_start() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, paths) = live_service(&home, SandboxPorts::none());
+        let parent = home.path().join("projects");
+        std::fs::create_dir_all(parent.join("x")).unwrap();
+        crate::config_rpc::set(
+            &paths,
+            "sandbox.work_dir",
+            &parent.join("x").display().to_string(),
+        )
+        .expect("SetConfig stores a folder under home");
+        let inner = Arc::clone(&service.inner);
+        inner.refresh_for_start();
+        let prepared = inner
+            .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+            .expect("the chosen folder starts");
+        assert_eq!(
+            prepared.backend.approved_work_dir(),
+            Some(parent.join("x").canonicalize().unwrap().as_path()),
+            "the backend mounts only the folder checked here"
+        );
+
+        let outside = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(outside.path().join("projects/x")).unwrap();
+        std::fs::remove_dir_all(&parent).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("projects"), &parent).unwrap();
+        inner.refresh_for_start();
+        let Err(refused) =
+            inner.prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+        else {
+            panic!("the link leads out of home");
+        };
+        assert_eq!(refused.code, codes::SANDBOX_006);
+        let named = format!("sandbox.work_dir in {}", paths.config_path().display());
+        assert!(refused.why.contains(&named), "{}", refused.why);
+        assert!(
+            refused
+                .why
+                .contains("a symbolic link in its path leads elsewhere"),
+            "{}",
+            refused.why
+        );
+        // The plan says the same, so Setup never shows the folder green.
+        let Err(planned) =
+            inner.prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Plan)
+        else {
+            panic!("the plan refuses it too");
+        };
+        assert_eq!(planned.code, codes::SANDBOX_006);
+    }
+
+    /// A folder outside the home directory that a person declared, with
+    /// `humanitl config set` or by hand, under the path it really has, still
+    /// starts (HUM-294); written through a link, it is refused with the path
+    /// to declare instead.
+    #[tokio::test]
+    async fn a_declared_folder_outside_home_still_starts() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, paths) = live_service(&home, SandboxPorts::none());
+        let (outside, canonical, _plan) = outside_dir();
+        declare_work_dir(&paths, &canonical);
+        let inner = Arc::clone(&service.inner);
+        inner.refresh_for_start();
+        let prepared = inner
+            .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+            .expect("a declared folder outside home starts");
+        assert_eq!(prepared.session.work_src, canonical);
+
+        let link_outside = tempfile::TempDir::new().unwrap();
+        let through = link_outside.path().join("link");
+        std::os::unix::fs::symlink(outside.path(), &through).unwrap();
+        declare_work_dir(&paths, &through);
+        inner.refresh_for_start();
+        let Err(refused) =
+            inner.prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
+        else {
+            panic!("a declaration through a link names another path");
+        };
+        assert_eq!(refused.code, codes::SANDBOX_006);
+        assert!(
+            refused.why.contains(&format!(
+                "humanitl config set sandbox.work_dir {}",
+                canonical.display()
+            )),
+            "{}",
+            refused.why
+        );
     }
 }
