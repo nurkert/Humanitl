@@ -161,6 +161,9 @@ pub struct BwrapBackend {
     /// Nur lesbare Binds, die der Aufrufer zur Sitzung beiträgt, als
     /// `(Quelle, Ziel)`; siehe [`BwrapBackend::with_read_only_bind`].
     read_only_binds: Vec<(PathBuf, PathBuf)>,
+    /// Der aufgelöste Ort, an dem der Aufrufer den Projektordner geprüft hat;
+    /// siehe [`BwrapBackend::with_approved_work_dir`].
+    approved_work_dir: Option<PathBuf>,
 }
 
 impl BwrapBackend {
@@ -209,6 +212,7 @@ impl BwrapBackend {
             report_timeout: REPORT_TIMEOUT,
             output_sink: None,
             read_only_binds: Vec::new(),
+            approved_work_dir: None,
         }
     }
 
@@ -246,6 +250,29 @@ impl BwrapBackend {
     pub fn with_read_only_bind(mut self, src: impl Into<PathBuf>, dst: impl Into<PathBuf>) -> Self {
         self.read_only_binds.push((src.into(), dst.into()));
         self
+    }
+
+    /// Der aufgelöste Ort, an dem der Aufrufer den Projektordner geprüft und
+    /// freigegeben hat (HUM-294).
+    ///
+    /// [`SandboxBackend::plan`] öffnet den Projektordner einmal (HUM-263) und
+    /// bindet ihn nur, wenn der Ort des Deskriptors genau dieser ist. Der
+    /// Aufrufer prüft mehr als die Politik hier, etwa ob der Ordner unter dem
+    /// Heimatverzeichnis liegt oder erklärt ist; ersetzt ein Verweis zwischen
+    /// seiner Prüfung und dem Öffnen einen Teil des Pfades, führte derselbe
+    /// Text sonst an einen Ort, den nur die Denylist gesehen hat. Ohne Angabe
+    /// gilt allein die Politik, wie bisher.
+    #[must_use]
+    pub fn with_approved_work_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.approved_work_dir = Some(dir.into());
+        self
+    }
+
+    /// Der freigegebene Ort des Projektordners, falls der Aufrufer einen
+    /// genannt hat ([`BwrapBackend::with_approved_work_dir`]).
+    #[must_use]
+    pub fn approved_work_dir(&self) -> Option<&Path> {
+        self.approved_work_dir.as_deref()
     }
 
     /// Wie lange [`SandboxBackend::isolation_check`] auf den Bericht wartet.
@@ -1025,6 +1052,20 @@ impl PinnedMounts {
             "the project directory",
         )?;
         policy.check_work_dir(work.resolved())?;
+        if let Some(approved) = &backend.approved_work_dir
+            && work.resolved() != approved.as_path()
+        {
+            return Err(Diagnostic::builder(SANDBOX_006, Severity::Blocking)
+                .why(format!(
+                    "the project directory {} was checked at {}, but once opened it lies at {}; \
+                     a symbolic link in its path leads elsewhere now, so it is not mounted",
+                    session.work_src.display(),
+                    approved.display(),
+                    work.resolved().display()
+                ))
+                .fix(crate::work_dir::choose_folder_fix())
+                .build());
+        }
         let session_binds = backend
             .read_only_binds
             .iter()

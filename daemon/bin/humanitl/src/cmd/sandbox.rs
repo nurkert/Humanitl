@@ -615,6 +615,28 @@ fn prepare(
         humanitl_sandbox::check_project_dir(&policy, &work_src, &work_source)
             .map_err(Failure::new)?;
     }
+    // Ein gespeicherter Ordner geht hier wie im Daemon durch alle drei Stufen,
+    // gegen seinen heutigen aufgelösten Pfad (HUM-294): Sonst hängte dieser
+    // Weg ohne Daemon einen Ordner ein, dessen Elternverzeichnis inzwischen
+    // ein Verweis nach außerhalb des Heimatverzeichnisses ist. Der
+    // freigegebene Ort geht an das Backend, das nur einen Deskriptor an genau
+    // diesem Ort bindet. `--work` und das aktuelle Verzeichnis bleiben bei der
+    // Politik allein, wie bisher auf diesem Weg.
+    let approved = match (&wiring, &work_source) {
+        (
+            Wiring::Daemon,
+            WorkDirSource::ConfigFile(_) | WorkDirSource::Profile(_) | WorkDirSource::Env(_),
+        ) => Some(
+            humanitl_ipc::work_dir::check_requested(
+                &paths,
+                Some(&work_src),
+                &work_src,
+                &work_source,
+            )
+            .map_err(Failure::new)?,
+        ),
+        _ => None,
+    };
     // Der Beitrag des Agent-Adapters gilt dem Agenten, und zwar am wirksamen
     // Kommando: `sandbox run -- /bin/sh` (so laufen die Escape-Tests) ist keiner
     // und bekommt nichts, `sandbox run -- opencode` ist einer und bekommt
@@ -676,6 +698,10 @@ fn prepare(
             BwrapBackend::unchecked("bwrap", MIN_BWRAP_VERSION, paths)
         }
         Err(diagnostic) => return Err(Failure::new(diagnostic)),
+    };
+    let backend = match approved {
+        Some(dir) => backend.with_approved_work_dir(dir),
+        None => backend,
     };
 
     Ok(Setup {
