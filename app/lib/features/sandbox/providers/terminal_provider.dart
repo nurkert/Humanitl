@@ -55,6 +55,17 @@ final Provider<Duration?> terminalReconnectProvider = Provider<Duration?>(
 /// verbinden: dieselbe Obergrenze wie beim Ereignisstrom.
 const Duration terminalReconnectMax = Duration(seconds: 10);
 
+/// How often a resize goes up to the daemon at most (HUM-305).
+///
+/// Wer die Naht über dem Terminal zieht, ändert dessen Zeilenzahl bei jeder
+/// Zeilenhöhe, die der Zeiger zurücklegt, also viele Male je Sekunde. Jede
+/// Meldung wäre ein `TIOCSWINSZ` im Agenten und ein vollständiges Neuzeichnen
+/// seiner Oberfläche. Die erste Größe geht sofort hinauf, damit ein einzelner
+/// Schritt ohne Verzug ankommt; was danach innerhalb dieser Frist kommt,
+/// sammelt sich, und nur die letzte Größe geht am Ende der Frist hinauf. Das
+/// Ende eines Zugs kommt so immer an.
+const Duration terminalResizeInterval = Duration(milliseconds: 100);
+
 /// Where a terminal session stands.
 enum TerminalPhase {
   /// Nothing attached yet.
@@ -174,6 +185,17 @@ class TerminalSession extends _$TerminalSession {
   /// Die nächste Wartezeit vor einem neuen Anschluss; null heißt die erste.
   Duration? _backoff;
 
+  /// Die Frist nach der letzten Größe, die hinaufging, oder null (HUM-305).
+  Timer? _resizeQuiet;
+
+  /// Die Größe, die in der laufenden Frist zuletzt kam und noch wartet.
+  (int, int)? _resizePending;
+
+  /// Die Größe, die der Daemon zuletzt bekommen hat, mit `TerminalOpen` oder
+  /// `TerminalResize`. Dieselbe Größe ein zweites Mal wäre ein Neuzeichnen
+  /// für nichts.
+  (int, int)? _resizeSent;
+
   @override
   TerminalSessionState build(String sandboxId) {
     final Terminal terminal = Terminal(maxLines: terminalScrollback);
@@ -186,9 +208,10 @@ class TerminalSession extends _$TerminalSession {
       int height,
       int pixelWidth,
       int pixelHeight,
-    ) => _send(TerminalResize(cols: width, rows: height));
+    ) => _resize((width, height));
     ref.onDispose(() {
       _stopRetry();
+      _resizeQuiet?.cancel();
       unawaited(_detach());
     });
     return TerminalSessionState(terminal: terminal);
@@ -217,6 +240,7 @@ class TerminalSession extends _$TerminalSession {
       // up as two replacement characters.
       _TerminalSink(terminal.write),
     );
+    _resizeSent = (terminal.viewWidth, terminal.viewHeight);
     input.add(
       TerminalOpen(
         sandboxId: sandboxId,
@@ -310,6 +334,31 @@ class TerminalSession extends _$TerminalSession {
   void _stopRetry() {
     _retry?.cancel();
     _retry = null;
+  }
+
+  /// Meldet [size] dem Daemon, höchstens einmal je [terminalResizeInterval];
+  /// siehe dort.
+  void _resize((int, int) size) {
+    if (_resizeQuiet != null) {
+      _resizePending = size;
+      return;
+    }
+    _resizePending = null;
+    if (size == _resizeSent) {
+      return;
+    }
+    final (int cols, int rows) = size;
+    if (_input != null) {
+      _resizeSent = size;
+    }
+    _send(TerminalResize(cols: cols, rows: rows));
+    _resizeQuiet = Timer(terminalResizeInterval, () {
+      _resizeQuiet = null;
+      final (int, int)? pending = _resizePending;
+      if (pending != null) {
+        _resize(pending);
+      }
+    });
   }
 
   void _send(TerminalCommand command) {

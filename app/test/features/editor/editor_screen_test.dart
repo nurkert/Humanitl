@@ -6,8 +6,10 @@
 library;
 
 import 'dart:convert';
+import 'dart:io';
 
-import 'package:flutter/gestures.dart' show PointerDeviceKind;
+import 'package:flutter/gestures.dart'
+    show PointerDeviceKind, kDoubleTapTimeout;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,9 +19,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui.dart';
+import 'package:humanitl/core/ui/pane_split.dart';
+import 'package:humanitl/core/ui_state/ui_state_file.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/features/editor/editor_host.dart';
 import 'package:humanitl/features/editor/editor_screen.dart';
+import 'package:humanitl/features/editor/widgets/original_view.dart';
 import 'package:humanitl/features/editor/model/draft.dart';
 import 'package:humanitl/features/editor/model/draft_ops.dart';
 import 'package:humanitl/features/editor/providers/draft_provider.dart';
@@ -28,6 +33,7 @@ import 'package:humanitl/l10n/l10n.dart';
 
 import '../intercept/fixtures.dart';
 import '../intercept/harness.dart';
+import '../../harness/ui_state.dart';
 
 /// Die englischen Texte, ohne einen Baum zu bauen.
 final AppLocalizations english = lookupAppLocalizations(const Locale('en'));
@@ -148,6 +154,7 @@ Future<ProviderContainer> pumpEditor(
   VoidCallback? onClose,
   bool canSend = true,
   bool sendRefused = false,
+  Override? uiState,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1200, 800));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -158,6 +165,7 @@ Future<ProviderContainer> pumpEditor(
   // ein Fluss, den der Fake nicht kennt, räumte ihn weg.
   final ProviderContainer container = ProviderContainer(
     overrides: <Override>[
+      uiState ?? uiStateOverride(),
       daemonClientProvider.overrideWithValue(_AlwaysHeld()),
     ],
   );
@@ -282,7 +290,10 @@ Future<ProviderContainer> pumpHost(
   await tester.binding.setSurfaceSize(const Size(1200, 800));
   addTearDown(() => tester.binding.setSurfaceSize(null));
   final ProviderContainer container = ProviderContainer(
-    overrides: <Override>[daemonClientProvider.overrideWithValue(client)],
+    overrides: <Override>[
+      uiStateOverride(),
+      daemonClientProvider.overrideWithValue(client),
+    ],
   );
   // Der Baum wird vor dem Container abgeraeumt: Erst damit kuendigt der
   // Ereignisstrom, und der Fake laesst dann keinen Zeitgeber zurueck
@@ -366,6 +377,60 @@ void main() {
       expect(marks.last.kind, HEditorDecorationKind.secret);
       expect(find.byKey(const Key('editor-finding-chip-EMAIL')), findsOne);
       expect(find.byKey(const Key('editor-finding-chip-API_KEY')), findsOne);
+    });
+
+    testWidgets('the halves can be dragged, and the split is kept', (
+      WidgetTester tester,
+    ) async {
+      // Bis HUM-305 nahm der Griff den Zeiger, verwarf aber jeden Zug.
+      final Directory dir = Directory.systemTemp.createTempSync('hum305-ed');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final UiStateFile store = UiStateFile(
+        '${dir.path}/${UiStateFile.fileName}',
+      );
+      final ProviderContainer container = await pumpEditor(
+        tester,
+        source: _source(body: 'mail a@x.de'),
+        uiState: uiStateFileProvider.overrideWithValue(store),
+      );
+      final double before = tester.getRect(find.byType(OriginalView)).width;
+
+      await tester.dragFrom(
+        Offset(
+          tester.getRect(find.byType(OriginalView)).right + HSize.border / 2,
+          400,
+        ),
+        const Offset(80, 0),
+        kind: PointerDeviceKind.mouse,
+      );
+      await tester.pump(kDoubleTapTimeout);
+
+      expect(
+        tester.getRect(find.byType(OriginalView)).width,
+        closeTo(before + 80, 2),
+      );
+      final List<double> split = container.read(
+        paneSplitProvider(editorPaneSplit),
+      );
+      expect(split[0], greaterThan(0.5));
+      expect(
+        container.read(uiStateFileProvider).read()[editorPaneSplit.key],
+        split,
+        reason: 'the split is written down',
+      );
+
+      // Ein Neustart: ein neuer Baum über derselben Datei.
+      final double dragged = tester.getRect(find.byType(OriginalView)).width;
+      await tester.pumpWidget(const SizedBox.shrink());
+      await pumpEditor(
+        tester,
+        source: _source(body: 'mail a@x.de'),
+        uiState: uiStateFileProvider.overrideWithValue(store),
+      );
+      expect(
+        tester.getRect(find.byType(OriginalView)).width,
+        closeTo(dragged, 1),
+      );
     });
 
     testWidgets('replace_all_glows', (WidgetTester tester) async {

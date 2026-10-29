@@ -545,8 +545,11 @@ adjacent regions share one divider. The rules are in
 | Context (domain) | 28 % | 260 px | What is known about the target domain |
 
 Splitters are 7 px grips with a 1 px hairline in the middle, 2 px while
-dragged, and move 8 px per arrow key when focused. The ratios persist in
-`intercept.pane_ratios`.
+dragged, and move 8 px per arrow key of their axis when focused; a double
+click restores the default split. Every boundary between two panes is one,
+side by side or stacked (the Sandbox terminal above its tabs, HUM-305). Each
+screen's ratios persist in the UI state file (`$XDG_STATE_HOME/humanitl/ui-state.json`)
+under `paneSplit.<screen>`, written when a drag ends.
 
 ### Queue row
 

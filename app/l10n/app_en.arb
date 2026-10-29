@@ -3308,5 +3308,7 @@
   "diagAGENT007Title": "pi web extension not installed",
   "@diagAGENT007Title": {"description": "Title of the diagnostic AGENT_007 (docs/DIAGNOSTICS.md): agent.pi.web_access is on, and the sandbox finds no pi-web-access package, so pi starts without web search and fetch (HUM-309)."},
   "diagAGENT007Why": "Web access for pi is switched on, but the package pi-web-access is not installed where the sandbox can see it, so pi starts without web search and page fetch.",
-  "@diagAGENT007Why": {"description": "Generic cause of AGENT_007. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
+  "@diagAGENT007Why": {"description": "Generic cause of AGENT_007. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "sandboxSplitter": "Resize the terminal and the tabs",
+  "@sandboxSplitter": {"description": "Screen-reader label of the drag handle between the sandbox terminal and the tabs below it; arrow up and down move it, a double click restores the default split (HUM-305)."}
 }
