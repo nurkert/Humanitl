@@ -93,6 +93,7 @@ Welcher Agent in der Sandbox läuft.
 | `agent.adapter` | string | `"opencode"` | advanced | denied | ja | Kennung des Adapters, zum Beispiel `opencode`. |
 | `agent.briefing.enabled` | boolean | `true` | advanced | allowed | ja | Legt die Instruktionsdatei des Agenten in der Sandbox an. |
 | `agent.command` | list of string, optional | `-` | expert | denied | ja | Ersetzt die Kommandozeile des Adapters vollständig. Leer bedeutet: die des Adapters. |
+| `agent.pi.web_access` | auto \| on \| off | `"auto"` | advanced | denied | ja | Lädt die pi-Erweiterung `pi-web-access` (Websuche und Abruf von Seiten), wenn sie global installiert ist (`sudo npm install -g --ignore-scripts pi-web-access`). `auto` lädt sie, wenn die Sandbox sie findet, `on` ebenso und meldet `AGENT_007`, wenn sie fehlt, `off` lädt sie nie. Jede Anfrage der Erweiterung geht wie jede andere durch den Proxy. Im Projekt-Profil gesperrt: fremden Code in den Agenten zu laden, entscheidet der Nutzer. |
 
 ### `audit`
 

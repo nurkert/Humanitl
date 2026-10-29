@@ -80,8 +80,8 @@ pub use crate::load::{DEFAULT_ENV_PREFIX, ENV_SEPARATOR, PROFILE_SECTION, Source
 pub use crate::model::{
     AgentBriefing, AgentRef, AskMode, AuditConfig, Config, DetachKeys, Experimental,
     FindingsConfig, HoldConfig, IpPreference, Language, Limits, LlmConfig, LlmServer,
-    PseudonymConfig, RecorderConfig, ResolverConfig, SandboxRef, TerminalConfig, Theme, TlsConfig,
-    UiConfig, WorkMode,
+    PiAgentConfig, PiWebAccess, PseudonymConfig, RecorderConfig, ResolverConfig, SandboxRef,
+    TerminalConfig, Theme, TlsConfig, UiConfig, WorkMode,
 };
 pub use crate::origin::{Origin, Resolved};
 pub use crate::paths::{APP_DIR, DIR_MODE, FILE_MODE, Paths, RuntimeDir};

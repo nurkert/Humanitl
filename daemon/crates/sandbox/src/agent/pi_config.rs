@@ -7,8 +7,11 @@
 //!   provider that points pi at `llm.endpoint`.
 //! - [`SETTINGS_TEMPLATE`] becomes `<agent-dir>/settings.json`, which selects
 //!   that provider and its first model and switches off install telemetry.
+//!   With the extension `pi-web-access` it also lists the package (HUM-309).
+//! - [`WEB_SEARCH_TEMPLATE`] becomes `<agent-dir>/web-search.json`, the
+//!   configuration of that extension, only when the package is loaded.
 //!
-//! Like the `OpenCode` templates, both carry their placeholders as values and
+//! Like the `OpenCode` templates, they carry their placeholders as values and
 //! are parsed and rebuilt with `serde_json`, never filled in as text: a model
 //! name with a quote must not be able to write foreign structure into the
 //! file (HUM-037, pitfall 5).
@@ -24,11 +27,18 @@ pub const MODELS_TEMPLATE: &str = include_str!("../../../../../agents/pi/models.
 /// The template of `settings.json`.
 pub const SETTINGS_TEMPLATE: &str = include_str!("../../../../../agents/pi/settings.json.tmpl");
 
+/// The template of `web-search.json`, the configuration of `pi-web-access`
+/// (HUM-309).
+pub const WEB_SEARCH_TEMPLATE: &str = include_str!("../../../../../agents/pi/web-search.json.tmpl");
+
 /// The path of [`MODELS_TEMPLATE`] in the repository; stands in findings.
 const MODELS_FILE: &str = "agents/pi/models.json.tmpl";
 
 /// The path of [`SETTINGS_TEMPLATE`] in the repository; stands in findings.
 const SETTINGS_FILE: &str = "agents/pi/settings.json.tmpl";
+
+/// The path of [`WEB_SEARCH_TEMPLATE`] in the repository; stands in findings.
+const WEB_SEARCH_FILE: &str = "agents/pi/web-search.json.tmpl";
 
 /// What `apiKey` holds when no key is stored.
 ///
@@ -131,11 +141,16 @@ pub fn render_models(
 
 /// Renders `settings.json`: the bundled provider and the first model.
 ///
+/// `web_access` is the directory of the package `pi-web-access` as a path in
+/// the sandbox, or `None`. pi loads a local package listed under `packages`
+/// from that path, without copying or installing anything (its
+/// `docs/packages.md`, measured with 1.4.0 and `PI_OFFLINE=1`, HUM-309).
+///
 /// # Errors
 ///
 /// A [`Diagnostic`] with `AGENT_003` when the template does not have the
 /// expected form.
-pub fn render_settings(models: &[String]) -> Result<String, Diagnostic> {
+pub fn render_settings(models: &[String], web_access: Option<&str>) -> Result<String, Diagnostic> {
     let models = effective_models(models);
     let first = models
         .first()
@@ -149,7 +164,43 @@ pub fn render_settings(models: &[String]) -> Result<String, Diagnostic> {
         Value::String(PROVIDER_ID.to_owned()),
     );
     doc.insert("defaultModel".to_owned(), Value::String(first.clone()));
+    if let Some(package) = web_access {
+        doc.insert(
+            "packages".to_owned(),
+            Value::Array(vec![Value::String(package.to_owned())]),
+        );
+    }
     write_back(SETTINGS_FILE, doc)
+}
+
+/// Renders `web-search.json`, the configuration of `pi-web-access`
+/// (HUM-309).
+///
+/// The extension checks every target with a local DNS lookup before it
+/// fetches, as a guard against requests into the local network. The sandbox
+/// has no resolver (`crate::bwrap_args`), so every fetch would end with
+/// `Failed to resolve`. `ssrf.trustEnvProxy` lets the proxy from the
+/// environment resolve the name instead, as for every other client; literal
+/// private addresses and `localhost` stay refused by the extension. The
+/// template must say so, or the file would be useless.
+///
+/// # Errors
+///
+/// A [`Diagnostic`] with `AGENT_003` when the template does not have the
+/// expected form.
+pub fn render_web_search() -> Result<String, Diagnostic> {
+    let doc = parse_object(WEB_SEARCH_FILE, WEB_SEARCH_TEMPLATE)?;
+    let trusts = doc
+        .get("ssrf")
+        .and_then(|ssrf| ssrf.get("trustEnvProxy"))
+        .and_then(Value::as_bool);
+    if trusts != Some(true) {
+        return Err(broken(
+            WEB_SEARCH_FILE,
+            "\"ssrf\".\"trustEnvProxy\" is not true; without it every fetch fails in the sandbox",
+        ));
+    }
+    write_back(WEB_SEARCH_FILE, doc)
 }
 
 #[cfg(test)]
@@ -158,7 +209,9 @@ mod tests {
 
     use serde_json::Value;
 
-    use super::{NO_KEY_PLACEHOLDER, PROVIDER_ID, render_models, render_settings};
+    use super::{
+        NO_KEY_PLACEHOLDER, PROVIDER_ID, render_models, render_settings, render_web_search,
+    };
 
     #[test]
     fn a_model_name_with_a_quote_stays_inside_its_string() {
@@ -199,9 +252,10 @@ mod tests {
 
     #[test]
     fn the_settings_name_the_first_model() {
-        let doc: Value =
-            serde_json::from_str(&render_settings(&["  ".to_owned(), "m2".to_owned()]).unwrap())
-                .unwrap();
+        let doc: Value = serde_json::from_str(
+            &render_settings(&["  ".to_owned(), "m2".to_owned()], None).unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             doc["defaultProvider"],
             Value::String(PROVIDER_ID.to_owned())
@@ -219,7 +273,7 @@ mod tests {
     #[test]
     fn the_settings_switch_nothing_beyond_provider_model_and_telemetry() {
         let doc: Value =
-            serde_json::from_str(&render_settings(&["m".to_owned()]).unwrap()).unwrap();
+            serde_json::from_str(&render_settings(&["m".to_owned()], None).unwrap()).unwrap();
         let mut keys: Vec<&str> = doc
             .as_object()
             .unwrap()
@@ -232,5 +286,32 @@ mod tests {
             vec!["defaultModel", "defaultProvider", "enableInstallTelemetry"],
             "{doc}"
         );
+    }
+
+    /// HUM-309: the package lands under `packages`, as the one entry, and
+    /// provider, model and telemetry stay as they were.
+    #[test]
+    fn the_settings_list_the_web_access_package_when_given() {
+        let package = "/usr/local/lib/node_modules/pi-web-access";
+        let doc: Value =
+            serde_json::from_str(&render_settings(&["m".to_owned()], Some(package)).unwrap())
+                .unwrap();
+        assert_eq!(doc["packages"], serde_json::json!([package]), "{doc}");
+        assert_eq!(doc["defaultModel"], Value::String("m".to_owned()));
+        assert_eq!(
+            doc["defaultProvider"],
+            Value::String(PROVIDER_ID.to_owned())
+        );
+        assert_eq!(doc["enableInstallTelemetry"], Value::Bool(false));
+        assert!(doc.get("extensions").is_none(), "{doc}");
+    }
+
+    /// HUM-309: without `ssrf.trustEnvProxy` the extension resolves every
+    /// target itself, and the sandbox has no resolver.
+    #[test]
+    fn the_web_search_file_lets_the_proxy_resolve_names() {
+        let doc: Value = serde_json::from_str(&render_web_search().unwrap()).unwrap();
+        assert_eq!(doc["ssrf"]["trustEnvProxy"], Value::Bool(true), "{doc}");
+        assert!(doc.get("proxy").is_none(), "{doc}");
     }
 }

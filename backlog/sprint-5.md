@@ -72,6 +72,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-308 | Agents do not ask twice and do not give up while a request waits | S | HUM-274, HUM-304 |
 | HUM-299 | A second shell in a running sandbox | M | HUM-042, HUM-279, HUM-280 |
 | HUM-307 | The Intercept action bar keeps Allow and Block on one line | S | HUM-286 |
+| HUM-309 | pi gets web search and fetch through pi-web-access | S | HUM-274, HUM-304, HUM-308 |
 
 ---
 
@@ -7505,3 +7506,185 @@ ran it; with the rail expanded there, the inspector shrank to its minimum of
   um die Beschriftung des Ventils: sechs Matrixfälle mit Funden rot (Block
   rutscht unter Allow, weil das Ventil seine volle Beschriftung als
   Minimum meldet).
+
+---
+## HUM-309 · pi gets web search and fetch through pi-web-access
+Sprint: 5 · Size: S · Dependencies: HUM-274, HUM-304, HUM-308
+
+### Context
+Owner request of 2026-10-29: pi in the sandbox should search and fetch the
+web, and every request must still wait in the proxy queue (Intercept). pi has
+no web tool of its own (HUM-308). The npm package `pi-web-access` (0.46.0,
+MIT, `github.com/nicobailon/pi-web-access`) adds the tools `web_search`,
+`fetch_content`, `source_check` and `get_search_content`. URL fetch works
+without a key; search uses providers such as Exa, Brave, Tavily or Jina, most
+of which need an API key.
+
+`pi install npm:pi-web-access` on the host does not help: it writes to
+`~/.pi/agent`, and pi's agent directory in the sandbox is a fresh tmpfs
+(`PI_CODING_AGENT_DIR=/home/agent/.pi/agent`). The owner installs the package
+globally instead, `sudo npm install -g --ignore-scripts pi-web-access`; it
+lands under `/usr/local`, which the sandbox mounts read-only, next to pi
+itself.
+
+This is the first building block of the planned agent setups (HUM-310:
+layered defaults < user < enforced). It stays a small, explicit feature of
+the pi adapter; no general extension manager.
+
+### Specification
+1. **Detection.** The pi adapter looks for the package where a global npm
+   install puts it: the `node_modules` directory that holds pi itself (from
+   the resolved pi command), then `/usr/local/lib/node_modules` and
+   `/usr/lib/node_modules`. A candidate counts only when the sandbox reaches
+   `<dir>/pi-web-access/package.json` through its mounts and the file names
+   the package `pi-web-access`. Undecidable lookups count as not found and
+   produce no finding (`backlog/CONVENTIONS.md` 4.13).
+2. **Loading.** When found and switched on, the rendered `settings.json`
+   lists the package directory, as a sandbox path, under `packages`. pi loads
+   a local package from that path without copying or installing anything.
+3. **DNS.** The extension checks every target with a local DNS lookup before
+   it fetches (SSRF guard). The sandbox has no resolver, so every fetch would
+   fail. With the package loaded the adapter also writes
+   `<agent-dir>/web-search.json` with `ssrf.trustEnvProxy: true`: the proxy
+   from the environment resolves names, as for every other client.
+4. **Configuration.** `agent.pi.web_access`, values `auto` (default: load
+   when installed), `on` (load, and say so when missing), `off` (never
+   load). Tier advanced, denied in the project profile: loading third-party
+   code into the agent is the user's decision. Validated by the schema like
+   every enum, so `SetConfig` and `humanitl config set` refuse other values.
+   No form field in the app in this issue.
+5. **Finding.** `on` with the package missing gives `AGENT_007` (warning, the
+   start goes on without web tools) with `why` and the npm command as
+   `CopyCommand`. `auto` with the package missing says nothing.
+6. **Proxy.** Measure that the extension's requests go through
+   `HTTPS_PROXY` (pi's own `EnvHttpProxyAgent` dispatcher, `NODE_USE_ENV_PROXY`
+   from HUM-304) and therefore appear in Intercept.
+7. **Documentation.** `agents/pi/README.md`, `docs/guides/agent-profiles.md`
+   ("Using pi"), `docs/SECURITY.md` (third-party extension code runs inside
+   the sandbox with all its restrictions), `docs/CONFIG.md`,
+   `backlog/CONVENTIONS.md` 4.4.
+
+### Non-goal
+- No keyring handling for search-provider API keys. Keyless fetch works; keys
+  (keyring, a file into the sandbox, masks in the recorder) are a candidate
+  for a new issue.
+- No general extension or package manager, no other pi packages.
+- No install of the package by Humanitl, no download at start.
+- No Settings form field (follow-up in the app).
+
+### Tests
+- `pi_config.rs`: with a package path the rendered `settings.json` lists it
+  under `packages` and keeps provider, model and telemetry; without one it
+  sets nothing more than before; the rendered `web-search.json` sets
+  `ssrf.trustEnvProxy` to `true`.
+- `sandbox/tests/pi_adapter.rs`: a fake global install under a mount lands in
+  `settings.json` and brings `web-search.json`; `off` loads nothing; `auto`
+  without the package loads nothing and finds nothing; `on` without the
+  package gives `AGENT_007` with a `CopyCommand`; a directory without a
+  matching `package.json` does not count.
+- Config: the key is registered, defaults to `auto`, is denied in the
+  project profile and refuses unknown values.
+- Mutation proof per new assertion, restored byte-identical.
+
+### Acceptance criteria
+- [ ] With `pi-web-access` installed globally, pi in the sandbox offers
+      `web_search` and `fetch_content`, and a fetch shows up as a held
+      request in Intercept.
+- [ ] `agent.pi.web_access = off` keeps the package out; `auto` without the
+      package changes nothing; `on` without it gives `AGENT_007` with the
+      npm command.
+- [ ] No API key and no host file of the user reaches the sandbox.
+- [ ] README security statement unchanged; `docs/SECURITY.md` names the
+      third-party code and its limits.
+
+### Umsetzung (HUM-309)
+
+- **Gemessen, wie pi das Paket lädt.** pi 1.4.0 (`docs/packages.md`,
+  `docs/settings.md` des installierten Pakets, `~/.pi` nicht gelesen): ein
+  lokaler Pfad unter `packages` in `settings.json` wird an Ort und Stelle
+  geladen, nichts kopiert, nichts installiert. Probe mit `npm install -g
+  --prefix <scratch> --ignore-scripts pi-web-access@0.46.0` (212 Pakete, die
+  optionalen Peers von pi nicht mit, `typebox` schon), `PI_OFFLINE=1`,
+  leerem Agentenverzeichnis und `pi -p` gegen einen nachgebauten
+  OpenAI-Server: pi bot `read, bash, edit, write, web_search, source_check,
+  fetch_content, get_search_content` an; kein `web_enable`-Umweg.
+- **Gemessen, wohin die Anfragen gehen.** Logging-Proxy in `HTTP(S)_PROXY`,
+  `ALL_PROXY`, `NO_PROXY` leer, `NODE_USE_ENV_PROXY=1`, wie in der Sandbox.
+  `fetch_content` auf `http://example.invalid/hum309`: `CONNECT
+  example.invalid:80`, darin `GET /hum309`, die Seite kam als Markdown beim
+  Modell an. Keyless `web_search`: `CONNECT mcp.exa.ai:443`. Der Weg ist pis
+  eigener Dispatcher (`core/http-dispatcher.js`: `EnvHttpProxyAgent` mit
+  `proxyTunnel: true`, `undici.install()` ersetzt das globale `fetch`); die
+  Erweiterung ruft `fetch` und baut selbst keinen Agenten (nur
+  `gemini-web.ts` nimmt `EnvHttpProxyAgent`, ebenfalls aus der Umgebung).
+  Ein `proxy` in `web-search.json` schaltete sie auf `curl` um; den setzt die
+  Vorlage nicht.
+- **Gemessen, warum `web-search.json` nötig ist.** Ohne `ssrf.trustEnvProxy`
+  löst die Erweiterung jeden Namen selbst auf, bevor sie abruft:
+  `Error: Failed to resolve example.invalid: getaddrinfo EAI_AGAIN`. In der
+  Sandbox gibt es keinen Resolver, also schlüge jeder Abruf fehl. Mit dem
+  Schalter ging die Anfrage an den Proxy. Literale private Adressen und
+  `localhost` lehnt die Erweiterung weiter ab.
+- **Befund zur Suche.** Keyless-Suche geht an `mcp.exa.ai`, und die
+  mitgelieferte Regel `…0006` (`**.exa.ai`, für OpenCode geschrieben) sperrt
+  das in jeder Sitzung. Ohne eigene Regel des Nutzers bleibt `web_search`
+  also erfolglos; `fetch_content` geht. Dokumentiert in
+  `docs/guides/agent-profiles.md`; die Regel bleibt, wie sie ist (Kandidat).
+- **Bau.** `agent.pi.web_access` (`PiAgentConfig`, `PiWebAccess`
+  `auto|on|off`, Stufe advanced, im Projekt gesperrt, CONVENTIONS 4.4 und
+  die Sperrliste). `AgentContext::pi_web_access`, gesetzt in
+  `ipc::sandbox` und `humanitl sandbox`. `pi.rs`: `find_web_access` sucht im
+  `node_modules` neben pi (aus dem aufgelösten Skript), dann
+  `/usr/local/lib/node_modules`, `/usr/lib/node_modules`, über
+  `search_view` und nur mit `package.json` `name = "pi-web-access"`;
+  Unentscheidbares schweigt. `web_access_package` entscheidet nach Schalter,
+  `files` nimmt `packages` und `web-search.json` (nur lesbar) auf,
+  `preflight` meldet `AGENT_007` (Warnung, `CopyCommand` mit der
+  npm-Zeile) nur bei `on` und fehlendem Paket. Vorlage
+  `agents/pi/web-search.json.tmpl`, `render_web_search` lehnt eine Vorlage
+  ohne `trustEnvProxy: true` mit `AGENT_003` ab. `AGENT_007` mit ARB
+  (en, de) und `diagnostic_l10n.dart`. Kein Feld im Einstellungsformular.
+- **Tests.** `pi_config`:
+  `the_settings_list_the_web_access_package_when_given`,
+  `the_web_search_file_lets_the_proxy_resolve_names`. `pi_adapter`:
+  `a_global_install_under_usr_local_lands_in_the_settings`,
+  `the_extension_is_found_next_to_pi_itself`,
+  `web_access_off_loads_nothing_even_when_installed`,
+  `web_access_auto_without_the_package_changes_nothing`,
+  `web_access_on_without_the_package_warns_with_the_npm_command`,
+  `only_a_package_json_that_names_the_extension_counts`. Config:
+  `pi_web_access_defaults_to_auto_and_refuses_other_values`, Register,
+  Sperrliste, Schema-Fixture, `docs/CONFIG.md`, `docs/DIAGNOSTICS.md`,
+  `docs/reference/cli.md` erzeugt.
+- **Grenzen der Erkennung.** `node_modules_of_pi` nimmt den kanonischen
+  Host-Pfad des pi-Skripts als Pfad in der Sandbox. Gefunden wird das Paket
+  neben pi deshalb nur, wo die Sandbox denselben Pfad sieht (gleichnamige
+  Einhängung wie `/usr`); liegt pi unter einer anders benannten Einhängung,
+  bleibt es bei den festen Orten. Die Lücke fällt in die sichere Richtung:
+  nichts wird geladen, was die Sandbox nicht unter genau diesem Pfad hat,
+  denn `package.json` wird über `search_view` nachgeschlagen.
+- **Was nicht Ende zu Ende gezeigt ist.** Kriterium 1 (die Anfrage erscheint
+  in Intercept) folgt aus der Architektur: Die Anfrage kam am Proxy aus
+  `HTTPS_PROXY` an, und in der Sandbox ist das die Brücke zum Proxy, der jede
+  Anfrage ohne entscheidende Regel hält. Ein Lauf mit echtem Daemon, echter
+  Sandbox und installiertem Paket fehlt; der Besitzer prüft es von Hand.
+- **Review Runde 1** (Opus, Codex; keine blocking/major, alle minor
+  übernommen): `names_web_access` liest nur eine reguläre Datei (Typ vor dem
+  `open`, `O_NONBLOCK`, Typ des Deskriptors danach), Test
+  `a_fifo_as_package_json_does_not_hang_the_lookup`; `docs/SECURITY.md`
+  „in a read-only mount (normally `/usr`)“; Leitfaden und THREAT-MODEL
+  sagen, dass eine Anfrage nur ohne entscheidende Regel gehalten wird.
+- **Mutationsbeweise**, alle Dateien danach mit `cmp` byte-gleich zurück
+  (und mit frischem mtime, sonst baut cargo nicht neu): `packages` leer:
+  `the_settings_list…` und `a_global_install…` rot; Vorlage
+  `trustEnvProxy: false`: `the_web_search_file…` und `a_global_install…`
+  rot; `off` wie `auto`: `web_access_off…` rot; Befund auch bei `auto`:
+  `web_access_auto…` rot; jede `package.json` zählt:
+  `only_a_package_json…` rot; nichts neben pi: `the_extension_is_found…`
+  rot; kein `web-search.json`: `a_global_install…` rot; Befund blockierend:
+  `web_access_on…` rot; Vorgabe `on`: `pi_web_access_defaults…` rot;
+  Projekt `allowed`: `the_denied_keys…` rot.
+- **Offen.** Schlüssel der Suchanbieter (Schlüsselbund, Datei in die
+  Sandbox, Masken im Recorder) als eigene Issue; Regel `…0006` für pi
+  lockern oder pro Adapter schneiden; Feld im Einstellungsformular; die
+  Erweiterung als Baustein der Agent-Setups (HUM-310).

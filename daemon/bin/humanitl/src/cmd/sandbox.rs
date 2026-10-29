@@ -823,6 +823,7 @@ fn agent_contribution(
         // eine Wartezeit, die es nicht gibt.
         .with_hold(config.hold.clone())
         .with_briefing(config.agent.briefing.clone())
+        .with_pi_web_access(config.agent.pi.web_access)
         // Das Heimatverzeichnis, das der Agent tatsächlich vorfindet, und das
         // Konfigurationsverzeichnis dazu.
         //

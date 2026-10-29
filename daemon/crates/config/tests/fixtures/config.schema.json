@@ -10,7 +10,10 @@
         "briefing": {
           "enabled": true
         },
-        "command": null
+        "command": null,
+        "pi": {
+          "web_access": "auto"
+        }
       },
       "description": "Welcher Agent in der Sandbox läuft.",
       "properties": {
@@ -52,6 +55,41 @@
           ],
           "x-project-scope": "denied",
           "x-tier": "expert"
+        },
+        "pi": {
+          "additionalProperties": false,
+          "default": {
+            "web_access": "auto"
+          },
+          "description": "Einstellungen, die nur der Adapter `pi` liest (HUM-309).",
+          "properties": {
+            "web_access": {
+              "default": "auto",
+              "description": "Lädt die pi-Erweiterung `pi-web-access` (Websuche und Abruf von Seiten), wenn sie global installiert ist (`sudo npm install -g --ignore-scripts pi-web-access`). `auto` lädt sie, wenn die Sandbox sie findet, `on` ebenso und meldet `AGENT_007`, wenn sie fehlt, `off` lädt sie nie. Jede Anfrage der Erweiterung geht wie jede andere durch den Proxy. Im Projekt-Profil gesperrt: fremden Code in den Agenten zu laden, entscheidet der Nutzer.",
+              "oneOf": [
+                {
+                  "const": "auto",
+                  "description": "Laden, wenn die Sandbox das Paket findet; sonst still ohne.",
+                  "type": "string"
+                },
+                {
+                  "const": "on",
+                  "description": "Laden; fehlt das Paket, sagt es ein Befund (`AGENT_007`).",
+                  "type": "string"
+                },
+                {
+                  "const": "off",
+                  "description": "Nie laden.",
+                  "type": "string"
+                }
+              ],
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
+            }
+          },
+          "type": "object",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
         }
       },
       "type": "object",
