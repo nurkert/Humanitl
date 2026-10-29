@@ -278,6 +278,146 @@ async fn a_flow_blocked_at_the_cap_keeps_limit_001_after_a_restart() {
     assert_eq!(fix, offered.fix, "the same suggestion, rule for rule");
 }
 
+/// Ein Zugangsschlüssel in den Masken der Aufzeichnung, mit Großbuchstaben:
+/// Als Label eines Hostnamens steht er klein geschrieben in der Anfrage und
+/// ist trotzdem derselbe Wert (HUM-271).
+const MASKED_KEY: &str = "Sk-Live-0123456789ABCDEF";
+
+/// Schickt eine angekündigte Anfrage über dem Cap an `target` (Host und
+/// Pfad als absolute URL ohne Schema) und gibt den `LIMIT_001` zurück, wie
+/// Strom, Registry und Aufzeichnung ihn tragen.
+///
+/// Der Schlüssel steht in den Masken, bevor die Anfrage kommt, so wie der
+/// Start einer Sitzung ihn einträgt. Ein Ziel ohne Namensauflösung genügt:
+/// Geblockt wird auf die Ankündigung hin, bevor ein Name aufgelöst wird.
+async fn limit_001_for(
+    target: &str,
+) -> (Diagnostic, Diagnostic, humanitl_recorder::DiagnosticRecord) {
+    let proxy = ProxyBuilder::new().recording(true).start().await;
+    let recorder = proxy.recorder.as_ref().expect("recording is on");
+    recorder.mask_secret(MASKED_KEY, Some("llm.example:443"));
+    let mut events = proxy.events();
+    let host = target.split('/').next().unwrap();
+    let answer = proxy
+        .raw_exchange(
+            &format!(
+                "POST http://{target} HTTP/1.1\r\nHost: {host}\r\nContent-Length: {}\r\n\r\n",
+                40u64 * 1024 * 1024
+            ),
+            b"xxxxxxxxxxxxxxxx",
+        )
+        .await;
+    assert!(answer.starts_with("HTTP/1.1 413 "), "{answer}");
+    events.wait_for("recorded").await;
+    let flow = first_flow(&events.seen);
+    let streamed = diagnostics_of(&events.seen, flow)
+        .into_iter()
+        .find(|diagnostic| diagnostic.code == LIMIT_001)
+        .expect("LIMIT_001 in the stream");
+    let registered = proxy
+        .queue
+        .registry()
+        .get(flow)
+        .expect("the record")
+        .diagnostics
+        .into_iter()
+        .find(|diagnostic| diagnostic.code == LIMIT_001)
+        .expect("LIMIT_001 at the record");
+    recorder.flush().await;
+    let stored = recorder
+        .get_flow(flow)
+        .await
+        .unwrap()
+        .expect("the flow is in the history")
+        .diagnostics
+        .into_iter()
+        .find(|diagnostic| diagnostic.code == "LIMIT_001")
+        .expect("LIMIT_001 in the recording");
+    (streamed, registered, stored)
+}
+
+/// Kein Weg hinaus trägt den Schlüssel im Vorschlag: Der Strom und die
+/// Registry (aus der `GetFlow` den Befund der laufenden Sitzung nimmt) haben
+/// keinen `fix`, die Aufzeichnung keine Spalte dafür, und das `why` sagt in
+/// einem Satz, warum der Knopf fehlt.
+fn assert_no_key_in_the_suggestion(
+    streamed: &Diagnostic,
+    registered: &Diagnostic,
+    recorded: &humanitl_recorder::DiagnosticRecord,
+) {
+    let lowered = MASKED_KEY.to_ascii_lowercase();
+    for diagnostic in [streamed, registered] {
+        assert_eq!(diagnostic.fix, None, "{diagnostic:?}");
+        assert!(
+            diagnostic
+                .why
+                .ends_with(humanitl_proxy::suggestion::WITHHELD_SENTENCE),
+            "{}",
+            diagnostic.why
+        );
+    }
+    assert_eq!(recorded.fix_kind, None, "{recorded:?}");
+    assert_eq!(recorded.fix_value, None, "{recorded:?}");
+    assert!(
+        !recorded.why.to_ascii_lowercase().contains(&lowered),
+        "{}",
+        recorded.why
+    );
+    assert!(
+        recorded
+            .why
+            .ends_with(humanitl_proxy::suggestion::WITHHELD_SENTENCE),
+        "{}",
+        recorded.why
+    );
+}
+
+/// Der Schlüssel als Label des Hosts: Die vorgeschlagene Regel trüge ihn im
+/// Host und in ihrer Notiz, also gibt es keinen Vorschlag (HUM-271).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_as_a_host_label_never_rides_on_the_limit_001_suggestion() {
+    let target = format!("{}.evil.example/upload", MASKED_KEY.to_ascii_lowercase());
+    let (streamed, registered, recorded) = limit_001_for(&target).await;
+    assert_no_key_in_the_suggestion(&streamed, &registered, &recorded);
+}
+
+/// Der Schlüssel als Pfadsegment: Die vorgeschlagene Regel trüge ihn im
+/// Pfadpräfix (HUM-271).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_as_a_path_segment_never_rides_on_the_limit_001_suggestion() {
+    let target = format!("upload.example/v1/{MASKED_KEY}/files");
+    let (streamed, registered, recorded) = limit_001_for(&target).await;
+    assert_no_key_in_the_suggestion(&streamed, &registered, &recorded);
+}
+
+/// Ohne Schlüssel in Host und Pfad bleibt der Vorschlag, wie er war, auch
+/// wenn die Masken einen Schlüssel kennen: dieselbe Regel in Strom, Registry
+/// und Aufzeichnung, und das `why` ohne den Satz (HUM-271).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_suggestion_without_a_secret_stays_as_it_was() {
+    let (streamed, registered, recorded) = limit_001_for("upload.example/v1/files").await;
+    let Some(FixAction::AddRule(rule)) = &streamed.fix else {
+        panic!("the fix is a rule, got {:?}", streamed.fix);
+    };
+    assert_eq!(rule.matcher.path_prefixes, vec!["/v1/files".to_owned()]);
+    assert_eq!(streamed, registered);
+    assert!(
+        !streamed
+            .why
+            .contains(humanitl_proxy::suggestion::WITHHELD_SENTENCE),
+        "{}",
+        streamed.why
+    );
+    assert_eq!(recorded.why, streamed.why);
+    assert_eq!(recorded.fix_kind.as_deref(), Some("add_rule"));
+    assert_eq!(
+        recorded.fix_value,
+        Some(humanitl_rules::serialize_rules(
+            &humanitl_rules::RuleSet::from_rules([(**rule).clone()])
+        ))
+    );
+}
+
 /// Ohne angekündigte Länge fällt das Cap erst beim Puffern auf; derselbe
 /// Block, und der Befund sagt „mehr als".
 #[tokio::test(flavor = "multi_thread")]
