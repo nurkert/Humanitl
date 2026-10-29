@@ -36,6 +36,7 @@ import '../../core/ui/findings_pause.dart';
 import '../../core/ui/fix_control.dart';
 import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/h_resizable_panes.dart';
+import '../../core/ui/pane_split.dart';
 import '../../core/ui/ui.dart';
 import '../../core/ui/websocket_notice.dart';
 import '../../l10n/l10n.dart';
@@ -54,6 +55,16 @@ import 'widgets/original_view.dart';
 /// Unter 320 px passt keine Zeile Mono-12 mehr ohne Umbruch mitten im Wort,
 /// und ein Vergleich, bei dem beide Seiten anders umbrechen, vergleicht nichts.
 const double editorHalfMinWidth = 320;
+
+/// Die Aufteilung des Editors, gemerkt über Neustarts (HUM-305).
+///
+/// Bis HUM-305 stand hier eine feste Hälfte mit einem Rückruf, der jeden Zug
+/// verwarf: Der Griff nahm den Zeiger und den Fokus, aber die Naht blieb
+/// stehen.
+const PaneSplitSpec editorPaneSplit = PaneSplitSpec(
+  'paneSplit.editor',
+  <double>[0.5, 0.5],
+);
 
 /// Der Editor im mittleren Pane.
 class EditorScreen extends ConsumerStatefulWidget {
@@ -440,9 +451,13 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   /// Links das Original, rechts der Entwurf.
   Widget _panes(Draft draft, DraftNotifier notifier, AppLocalizations l10n) =>
       HResizablePanes(
-        ratios: const <double>[0.5, 0.5],
+        ratios: ref.watch(paneSplitProvider(editorPaneSplit)),
         minWidths: const <double>[editorHalfMinWidth, editorHalfMinWidth],
-        onRatiosChanged: (List<double> _) {},
+        onRatiosChanged: ref
+            .read(paneSplitProvider(editorPaneSplit).notifier)
+            .set,
+        onDragEnd: ref.read(paneSplitProvider(editorPaneSplit).notifier).commit,
+        onReset: ref.read(paneSplitProvider(editorPaneSplit).notifier).reset,
         splitterSemanticsLabel: l10n.editorSplitter,
         children: <Widget>[
           OriginalView(

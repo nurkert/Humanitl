@@ -19,6 +19,8 @@ import '../../core/time/now.dart';
 import '../../core/ui/fix_control.dart';
 import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/diagnostic_severity.dart';
+import '../../core/ui/h_resizable_panes.dart';
+import '../../core/ui/pane_split.dart';
 import '../../core/ui/terminal_placement.dart';
 import '../../core/ui/ui.dart';
 import '../../core/ui/work_dir_picker.dart';
@@ -42,6 +44,31 @@ import 'widgets/stop_dialog.dart';
 /// while it is a placeholder: the panes must not move under the person once
 /// HUM-042 fills it (CONVENTIONS 4.13, "Vorhersagbarkeit").
 const double sandboxTerminalFraction = 0.6;
+
+/// The split of terminal and tabs, remembered across restarts (HUM-305).
+///
+/// [sandboxTerminalFraction] is where it starts and where a double click on
+/// the boundary puts it back.
+const PaneSplitSpec sandboxPaneSplit = PaneSplitSpec(
+  'paneSplit.sandbox',
+  <double>[sandboxTerminalFraction, 1 - sandboxTerminalFraction],
+);
+
+/// The smallest height of the terminal pane.
+///
+/// Banner, a held strip and an exit strip can stand over the emulator at the
+/// same time; at this height a few rows of it still show between them.
+const double sandboxTerminalMinHeight = 160;
+
+/// The smallest height of the pane with the tabs: the tab bar and about one
+/// row below it. Whoever wants the terminal large wants the tabs small, and
+/// the tab bar has to stay reachable (HUM-305).
+const double sandboxDetailsMinHeight = 72;
+
+/// Below this height the content of a tab scrolls as a whole instead of
+/// being squeezed: the environment tab puts a search field above its list,
+/// and a squeezed column would paint over its own edge.
+const double sandboxDetailsContentFloor = 120;
 
 /// How many skeleton rows the first load draws.
 const int sandboxSkeletonRows = 6;
@@ -188,7 +215,8 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
   }
 }
 
-/// The terminal above, the four tabs below.
+/// The terminal above, the four tabs below, and a boundary between them
+/// that can be dragged (HUM-305).
 class _Body extends ConsumerWidget {
   const _Body({
     required this.status,
@@ -208,7 +236,6 @@ class _Body extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final AppLocalizations l10n = context.l10n;
-    final SandboxTab tab = ref.watch(sandboxTabChoiceProvider);
     // Steht das Terminal woanders (über dem ganzen Fenster, HUM-298), bleibt
     // sein Platz hier leer, in der Farbe des Terminals: Zwei Ansichten
     // derselben Sitzung würden beide ihre Größe melden und beide Tasten
@@ -216,19 +243,63 @@ class _Body extends ConsumerWidget {
     // überstehen den Wechsel.
     final bool here =
         ref.watch(terminalPlacementProvider) == TerminalPlacement.pane;
+    final PaneSplit split = ref.read(
+      paneSplitProvider(sandboxPaneSplit).notifier,
+    );
+    // Terminal oben, Reiter unten, und die Naht dazwischen lässt sich ziehen
+    // (HUM-305): Wer das Terminal groß will, zieht sie nach unten, und die
+    // Reiter rollen in sich, statt Platz zu beanspruchen. Die Größe des
+    // Terminals folgt dem Zug über den Weg, den jede Größenänderung nimmt:
+    // `TerminalView` misst sich neu, und der Emulator meldet Spalten und
+    // Zeilen an den Daemon.
+    return HResizablePanes(
+      axis: Axis.vertical,
+      ratios: ref.watch(paneSplitProvider(sandboxPaneSplit)),
+      minWidths: const <double>[
+        sandboxTerminalMinHeight,
+        sandboxDetailsMinHeight,
+      ],
+      onRatiosChanged: split.set,
+      onDragEnd: split.commit,
+      onReset: split.reset,
+      splitterSemanticsLabel: l10n.sandboxSplitter,
+      children: <Widget>[
+        if (here)
+          SandboxTerminal(focusOnMount: cameBack)
+        else
+          ColoredBox(
+            key: const Key('sandbox-terminal-elsewhere'),
+            color: HTheme.of(context).terminal.background,
+          ),
+        _Details(status: status, onShowArgv: onShowArgv),
+      ],
+    );
+  }
+}
+
+/// The tab bar and the open tab: the lower pane of the section.
+class _Details extends ConsumerWidget {
+  const _Details({required this.status, required this.onShowArgv});
+
+  final SandboxStatus status;
+  final VoidCallback onShowArgv;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final AppLocalizations l10n = context.l10n;
+    final SandboxTab tab = ref.watch(sandboxTabChoiceProvider);
+    final Widget content = switch (tab) {
+      SandboxTab.mounts => MountsTab(status: status),
+      SandboxTab.env => EnvTab(status: status),
+      SandboxTab.isolation => IsolationPanel(
+        status: status,
+        onShowArgv: onShowArgv,
+      ),
+      SandboxTab.log => const LogTab(),
+    };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        Expanded(
-          flex: (sandboxTerminalFraction * 100).round(),
-          child: here
-              ? SandboxTerminal(focusOnMount: cameBack)
-              : ColoredBox(
-                  key: const Key('sandbox-terminal-elsewhere'),
-                  color: HTheme.of(context).terminal.background,
-                ),
-        ),
-        const HHairline(),
         SandboxTabs<SandboxTab>(
           selected: tab,
           onSelect: ref.read(sandboxTabChoiceProvider.notifier).go,
@@ -257,16 +328,18 @@ class _Body extends ConsumerWidget {
         ),
         const HHairline(),
         Expanded(
-          flex: (100 - sandboxTerminalFraction * 100).round(),
-          child: switch (tab) {
-            SandboxTab.mounts => MountsTab(status: status),
-            SandboxTab.env => EnvTab(status: status),
-            SandboxTab.isolation => IsolationPanel(
-              status: status,
-              onShowArgv: onShowArgv,
-            ),
-            SandboxTab.log => const LogTab(),
-          },
+          child: LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) =>
+                constraints.maxHeight >= sandboxDetailsContentFloor
+                ? content
+                : SingleChildScrollView(
+                    key: const Key('sandbox-details-scroll'),
+                    child: SizedBox(
+                      height: sandboxDetailsContentFloor,
+                      child: content,
+                    ),
+                  ),
+          ),
         ),
       ],
     );

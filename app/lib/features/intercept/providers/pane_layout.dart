@@ -4,39 +4,33 @@
 /// survives a section switch: the shell keeps every section built, but the
 /// screen state is rebuilt whenever the widget is replaced.
 ///
-/// They do **not** survive a restart yet. The specification asks for
-/// `SharedPreferences` under the key `intercept.pane_ratios`; that package is
-/// not a dependency of the app, and adding a plugin also regenerates the Linux
-/// plugin registrant. Persisting the ratios is therefore left to the issue
-/// that adds the settings storage; the notifier below is the single place that
-/// has to learn how to read and write them.
+/// Seit HUM-305 überstehen sie auch einen Neustart: Sie stehen in der
+/// Zustandsdatei der Oberfläche (HUM-254) unter [interceptPaneSplit] und nicht
+/// in `SharedPreferences`, wie die Spezifikation von HUM-020 es vorsah; dieses
+/// Paket ist keine Abhängigkeit der App, und die Datei gibt es schon.
 library;
 
-import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/ui/pane_split.dart';
 import '../../../core/ui/ui.dart';
 
-part 'pane_layout.g.dart';
+/// The key the ratios are stored under in the UI state file.
+const String paneRatiosSettingsKey = 'paneSplit.intercept';
 
-/// The key the ratios will be stored under once the app has a settings store.
-const String paneRatiosSettingsKey = 'intercept.pane_ratios';
+/// The Intercept screen's panes: queue, inspector and domain pane, by default
+/// in the proportions of [HSize.paneRatio].
+final PaneSplitSpec interceptPaneSplit = PaneSplitSpec(
+  paneRatiosSettingsKey,
+  _defaultRatios(),
+);
+
+List<double> _defaultRatios() {
+  final (int queue, int inspector, int domain) = HSize.paneRatio;
+  final double total = (queue + inspector + domain).toDouble();
+  return <double>[queue / total, inspector / total, domain / total];
+}
 
 /// Relative widths of queue, inspector and domain pane; they sum to one.
-@Riverpod(keepAlive: true)
-class PaneRatios extends _$PaneRatios {
-  @override
-  List<double> build() {
-    final (int queue, int inspector, int domain) = HSize.paneRatio;
-    final double total = (queue + inspector + domain).toDouble();
-    return <double>[queue / total, inspector / total, domain / total];
-  }
-
-  /// Takes the widths a drag produced, normalised to a sum of one.
-  void set(List<double> ratios) {
-    final double sum = ratios.fold(0, (double a, double b) => a + b);
-    if (sum <= 0) {
-      return;
-    }
-    state = <double>[for (final double r in ratios) r / sum];
-  }
-}
+final NotifierProvider<PaneSplit, List<double>> paneRatiosProvider =
+    paneSplitProvider(interceptPaneSplit);

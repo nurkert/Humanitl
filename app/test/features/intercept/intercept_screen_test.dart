@@ -1,6 +1,8 @@
 // Widget-Tests des Intercept-Screens (HUM-020): Tastatur, Maskierung,
 // Ablauf und die Wirkung der Aktionsleiste, alles gegen den Fake.
 
+import 'dart:io';
+
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,6 +18,7 @@ import 'package:humanitl/features/intercept/intercept_screen.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
 import 'package:humanitl/features/intercept/providers/now.dart';
 import 'package:humanitl/features/intercept/providers/pane_layout.dart';
+import 'package:humanitl/core/ui_state/ui_state_file.dart';
 import 'package:humanitl/features/intercept/widgets/queue_pane.dart';
 import 'package:humanitl/features/intercept/widgets/queue_row.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
@@ -35,13 +38,14 @@ Future<void> pumpIntercept(
   required FakeDaemonClient client,
   List<Override> overrides = const <Override>[],
   Size size = const Size(1400, 900),
+  Override? uiState,
 }) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
   await tester.pumpWidget(
     ProviderScope(
       overrides: <Override>[
-        uiStateOverride(),
+        uiState ?? uiStateOverride(),
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(null),
         nowProvider.overrideWith(() => FixedNow(testStart)),
@@ -384,9 +388,15 @@ void main() {
   testWidgets('the splitter drags and the panes keep their minimum', (
     WidgetTester tester,
   ) async {
+    final Directory dir = Directory.systemTemp.createTempSync('hum305-ic');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final UiStateFile store = UiStateFile(
+      '${dir.path}/${UiStateFile.fileName}',
+    );
     await pumpIntercept(
       tester,
       client: fake(holdScript(<FlowDetail>[github()])),
+      uiState: uiStateFileProvider.overrideWithValue(store),
     );
     await playScript(tester);
 
@@ -401,5 +411,25 @@ void main() {
 
     expect(tester.getRect(find.byType(QueuePane)).width, greaterThan(before));
     expect(containerOf(tester).read(paneRatiosProvider), isNot(ratiosBefore));
+    // Am Ende des Zugs steht die Aufteilung in der Zustandsdatei und
+    // übersteht so einen Neustart (HUM-305).
+    expect(
+      containerOf(tester)
+          .read(uiStateFileProvider)
+          .read()[paneRatiosSettingsKey],
+      containerOf(tester).read(paneRatiosProvider),
+    );
+
+    // Ein Neustart: ein neuer Baum über derselben Datei bringt dieselben
+    // Breiten zurück.
+    final double dragged = tester.getRect(find.byType(QueuePane)).width;
+    await tester.pumpWidget(const SizedBox.shrink());
+    await pumpIntercept(
+      tester,
+      client: fake(holdScript(<FlowDetail>[github()])),
+      uiState: uiStateFileProvider.overrideWithValue(store),
+    );
+    await playScript(tester);
+    expect(tester.getRect(find.byType(QueuePane)).width, closeTo(dragged, 1));
   });
 }

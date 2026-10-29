@@ -99,10 +99,13 @@ void main() {
   );
   // Höher als das Standardfenster: Der Reiter steht im unteren Teil des
   // Bildschirms, und erst so passen die drei Garantien, die Zeile mit der
-  // Ausnahme und der Abschnitt der Verweigerungen ganz hinein.
+  // Ausnahme und der Abschnitt der Verweigerungen ganz hinein. Seit HUM-305
+  // nimmt das Terminal 60 Prozent der ganzen Höhe unter dem Kopf und nicht
+  // mehr der Höhe ohne Reiterleiste; 60 px mehr geben dem Reiter die 24 px
+  // zurück, die ihm dadurch fehlten.
   const BoxConstraints tall = BoxConstraints.tightFor(
     width: 1280,
-    height: 1100,
+    height: 1160,
   );
 
   // 3/3, 2/3 und 0/3 nebeneinander: drei gemessene Garantien, eine rote in

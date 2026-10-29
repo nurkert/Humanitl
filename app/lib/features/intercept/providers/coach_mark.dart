@@ -35,91 +35,19 @@
 /// next start. It is a convenience, and it fails like one.
 library;
 
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:riverpod_annotation/riverpod_annotation.dart';
+
+import '../../../core/ui_state/ui_state_file.dart';
+
+// Die Datei ist seit HUM-305 ein Dienst des Kerns: Der Sandbox-Abschnitt und
+// der Editor merken sich dort ihre Aufteilung und dürfen kein anderes Feature
+// importieren. Wer sie bisher von hier bezog, bekommt sie weiter von hier.
+export '../../../core/ui_state/ui_state_file.dart';
 
 part 'coach_mark.g.dart';
 
 /// The key under which the flag stands in the state file.
 const String coachMarkSeenKey = 'interceptCoachMarkSeen';
-
-/// Where small pieces of interface state survive a restart.
-///
-/// Reads and writes one small JSON object. Every failure is an answer and
-/// never an exception: a missing file means "not seen", an unreadable one
-/// means the same, and a write that does not go through leaves the flag in
-/// memory.
-class UiStateFile {
-  /// Creates a store over [path].
-  const UiStateFile(this.path);
-
-  /// The store at the place XDG names for it.
-  ///
-  /// `$XDG_STATE_HOME/humanitl/ui-state.json`, and `~/.local/state/...` when
-  /// the variable is unset -- the same order the daemon uses for its own
-  /// directories (`humanitl_config::Paths`).
-  factory UiStateFile.resolve({Map<String, String>? environment}) {
-    final Map<String, String> env = environment ?? Platform.environment;
-    final String? state = env['XDG_STATE_HOME'];
-    final String base = state == null || state.isEmpty
-        ? '${env['HOME'] ?? '.'}/.local/state'
-        : state;
-    return UiStateFile('$base/humanitl/$fileName');
-  }
-
-  /// The name of the file.
-  static const String fileName = 'ui-state.json';
-
-  /// Where the file lies.
-  final String path;
-
-  /// The whole object, or an empty one when there is nothing readable.
-  Map<String, Object?> read() {
-    try {
-      final File file = File(path);
-      if (!file.existsSync()) {
-        return const <String, Object?>{};
-      }
-      final Object? decoded = jsonDecode(file.readAsStringSync());
-      return decoded is Map<String, Object?>
-          ? decoded
-          : const <String, Object?>{};
-    } on IOException {
-      return const <String, Object?>{};
-    } on FormatException {
-      return const <String, Object?>{};
-    }
-  }
-
-  /// Writes [key] as true. Answers whether it went through.
-  bool setFlag(String key) => setBool(key, true);
-
-  /// Writes [key] as [value], leaving every other key as it was. Answers
-  /// whether it went through.
-  ///
-  /// The shell keeps the width of its rail here as well (HUM-254); a flag
-  /// that can be switched back needs `false` as much as `true`.
-  bool setBool(String key, bool value) {
-    try {
-      final Map<String, Object?> object = <String, Object?>{
-        ...read(),
-        key: value,
-      };
-      final File file = File(path);
-      file.parent.createSync(recursive: true);
-      file.writeAsStringSync(jsonEncode(object), flush: true);
-      return true;
-    } on IOException {
-      return false;
-    }
-  }
-}
-
-/// The store the application uses. Tests override it.
-@Riverpod(keepAlive: true)
-UiStateFile uiStateFile(Ref ref) => UiStateFile.resolve();
 
 /// Whether the explanation of the action bar has already been shown.
 @Riverpod(keepAlive: true)

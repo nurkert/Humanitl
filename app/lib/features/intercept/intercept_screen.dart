@@ -676,6 +676,8 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
                       onRatiosChanged: ref
                           .read(paneRatiosProvider.notifier)
                           .set,
+                      onDragEnd: ref.read(paneRatiosProvider.notifier).commit,
+                      onReset: ref.read(paneRatiosProvider.notifier).reset,
                       children: <Widget>[
                         const QueuePane(),
                         _InspectorPane(

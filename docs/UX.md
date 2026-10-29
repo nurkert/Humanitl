@@ -801,7 +801,10 @@ a reaction. The rest is deferred until 1.0.0.
 30. ~~`HResizablePanes` only knows the horizontal axis.~~ Closed on
     2026-09-04: the library knows both axes. Its two open bugs concerning the
     vertical axis (#427, #428) were the reason why HUM-035 listed it as a risk;
-    when wrapping, it has to be checked whether they affect us.
+    when wrapping, it has to be checked whether they affect us. Since
+    HUM-305 our own `HResizablePanes` has the vertical axis as well (the
+    Sandbox section stacks terminal and tabs); the library is still not
+    wrapped.
 31. `FocusRing` in `app/lib/core/ui` and `HFocusRing` in `packages/ui` are
     the same thing twice. The comment that justified this with a state
     that item 14 has removed was corrected on 2026-09-04; the file
