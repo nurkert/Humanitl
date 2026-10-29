@@ -1439,7 +1439,14 @@ impl FlowHandler {
         // (HUM-159); der Befund am Flow sperrt jede Freigabe außer einer
         // bearbeiteten. Er steht am Flow, bevor der Datensatz entsteht, damit
         // auch die Zeile ihn trägt.
-        let refusal = hard_block.err();
+        // Die Sperre steht gleich zweimal da, am Flow (und damit am Datensatz
+        // und in `ListFlows`) und im Strom. Ein Vorschlag mit einem Geheimnis
+        // der Masken fällt deshalb hier schon weg, nicht erst in `publish`,
+        // sonst trüge die Kopie am Flow ihn weiter (HUM-271, Review).
+        let mut refusal = hard_block.err();
+        if let Some(refusal) = refusal.as_mut() {
+            self.inner.queue.withhold_secret_fix(refusal);
+        }
         flow.send_refusal.clone_from(&refusal);
 
         // Der Datensatz entsteht hier, an der einen Stelle, die den Bericht
