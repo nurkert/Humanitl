@@ -11,6 +11,7 @@ import '../../core/ipc/flow_handoff.dart';
 import '../../core/ipc/flow_reveal.dart';
 import '../../core/shortcuts/intents.dart';
 import '../../core/ui/settings_opener.dart';
+import '../../core/ui/terminal_placement.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
 import '../about/about_dialog.dart';
@@ -23,6 +24,7 @@ import '../intercept/providers/flows.dart';
 import '../rules/rules_screen.dart';
 import '../sandbox/providers/sandbox_status_provider.dart';
 import '../sandbox/sandbox_screen.dart';
+import '../sandbox/widgets/sandbox_terminal.dart';
 import '../settings/settings_sheet.dart';
 import '../setup/providers/setup_provider.dart';
 import 'providers/connection.dart';
@@ -83,6 +85,11 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
     for (int i = 0; i < 5; i++) GlobalKey(debugLabel: 'section-$i'),
   ];
 
+  /// The focus scope around the terminal over the whole window (HUM-298).
+  final FocusScopeNode _terminalScope = FocusScopeNode(
+    debugLabel: 'terminal-full-window',
+  );
+
   @override
   void initState() {
     super.initState();
@@ -108,6 +115,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   @override
   void dispose() {
     _focus.dispose();
+    _terminalScope.dispose();
     super.dispose();
   }
 
@@ -116,24 +124,39 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   void _closePalette() {
     setState(() => _paletteOpen = false);
     // The palette's field held the focus; without this the next Ctrl+2 would
-    // reach nobody.
-    _focus.requestFocus();
+    // reach nobody. Over the whole window the keys go back to the terminal
+    // instead (HUM-298): the scope around it remembers which of its nodes had
+    // the focus, and the shell's shortcuts stay above it either way.
+    if (ref.read(terminalPlacementProvider) == TerminalPlacement.fullWindow) {
+      _terminalScope.requestFocus();
+    } else {
+      _focus.requestFocus();
+    }
   }
 
   void _togglePalette() => _paletteOpen ? _closePalette() : _openPalette();
 
-  void _openSettings() => setState(() {
-    _settingsOpen = true;
-    _settingsFocusKey = null;
-  });
+  void _openSettings() {
+    ref.read(terminalPlacementProvider.notifier).leaveFullWindow();
+    setState(() {
+      _settingsOpen = true;
+      _settingsFocusKey = null;
+    });
+  }
 
   /// Opens the sheet at the field of [key], or plain without one: the way a
   /// diagnostic's `ChangeSetting` fix reaches the sheet (HUM-275).
-  void _openSettingsAt(String? key) => setState(() {
-    _settingsOpen = true;
-    _settingsFocusKey = key;
-    _settingsFocusSerial++;
-  });
+  ///
+  /// The sheet hangs in the layout with the rail, so a terminal over the
+  /// whole window steps back first (HUM-298).
+  void _openSettingsAt(String? key) {
+    ref.read(terminalPlacementProvider.notifier).leaveFullWindow();
+    setState(() {
+      _settingsOpen = true;
+      _settingsFocusKey = key;
+      _settingsFocusSerial++;
+    });
+  }
 
   void _closeSettings() {
     setState(() {
@@ -157,7 +180,6 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   /// (`docs/UX.md` 5.3).
   List<PaletteCommand> _commands(BuildContext context, {required bool live}) {
     final AppLocalizations l10n = context.l10n;
-    final Navigation navigation = ref.read(navigationProvider.notifier);
     // Die andere der beiden Sprachen, gemessen an der, in der das Fenster
     // gerade spricht, und nicht an der Wahl: Ohne Wahl spricht es die des
     // Desktops (HUM-052).
@@ -171,7 +193,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
         PaletteCommand(
           id: 'go-${section.name}',
           label: l10n.shellPaletteGoTo(section.label(l10n)),
-          run: () => navigation.go(section),
+          run: () => _go(section),
         ),
       PaletteCommand(
         id: 'toggle-theme',
@@ -210,7 +232,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
           id: 'queue-allow-all',
           label: l10n.paletteQueueAllowAll,
           run: () {
-            navigation.go(Section.intercept);
+            _go(Section.intercept);
             ref.read(interceptDecisionProvider.notifier).askAllowAll();
           },
         ),
@@ -221,6 +243,16 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
         id: 'about',
         label: l10n.shellPaletteAbout,
         run: () => showHumanitlAbout(context),
+      ),
+      // Dasselbe wie `Ctrl+Shift+Enter` und der Knopf über dem Terminal
+      // (HUM-298). Am Ende, damit die Zeilen davor ihren Platz behalten.
+      PaletteCommand(
+        id: 'toggle-terminal-full-window',
+        label:
+            ref.read(terminalPlacementProvider) == TerminalPlacement.fullWindow
+            ? l10n.shellPaletteTerminalFullWindowLeave
+            : l10n.shellPaletteTerminalFullWindowEnter,
+        run: ref.read(terminalPlacementProvider.notifier).toggleFullWindow,
       ),
     ];
   }
@@ -268,7 +300,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
       return;
     }
     ref.read(selectedFlowIdProvider.notifier).select(next);
-    ref.read(navigationProvider.notifier).go(Section.intercept);
+    _go(Section.intercept);
     ref.read(flowHandoffProvider.notifier).clear();
   }
 
@@ -280,7 +312,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   /// clears the note, because only it knows when the flow is open.
   void _takeReveal(FlowId? previous, FlowId? next) {
     if (next != null) {
-      ref.read(navigationProvider.notifier).go(Section.history);
+      _go(Section.history);
     }
   }
 
@@ -307,6 +339,70 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
       ref.read(navigationProvider.notifier).go(Section.setup);
     }
   }
+
+  // --- The terminal over the whole window (HUM-298) -------------------------
+
+  /// A section that is asked for ends the whole window: whoever presses
+  /// `Ctrl+2` or picks "Go to History" in the palette wants to see History,
+  /// and the queue that a handover opens has to be seen too.
+  void _sectionAsked(Section? previous, Section next) =>
+      ref.read(terminalPlacementProvider.notifier).leaveFullWindow();
+
+  /// Shows [section] and ends the whole window, also when [section] is
+  /// already the one underneath: then the navigation does not change, and
+  /// [_sectionAsked] never hears of it.
+  void _go(Section section) {
+    ref.read(terminalPlacementProvider.notifier).leaveFullWindow();
+    ref.read(navigationProvider.notifier).go(section);
+  }
+
+  /// Takes the keyboard when the terminal changes place.
+  ///
+  /// The control that held the focus may just have been hidden, and a focus
+  /// that falls back to the root would leave every shortcut of the shell
+  /// mute, `Ctrl+Shift+Enter` included. The terminal takes the keys from
+  /// here one frame later, when its new host mounts it
+  /// (`TerminalPane.focusOnMount`).
+  void _terminalMoved(TerminalPlacement? previous, TerminalPlacement next) =>
+      _focus.requestFocus();
+
+  /// The terminal of the current session in place of rail, sections and
+  /// status bar. The header bar stays: it is the title bar of the window,
+  /// with its buttons and the count of held requests.
+  ///
+  /// It stands in a focus scope of its own, so that the keys can go back to
+  /// the terminal after the palette, which lies outside it, had them.
+  Widget _terminalFullWindow() => FocusScope(
+    node: _terminalScope,
+    child: const SandboxTerminal(
+      key: Key('shell-terminal-full-window'),
+      focusOnMount: true,
+      catchUp: true,
+    ),
+  );
+
+  /// [layout] -- rail, sections and sheet --, or the terminal in its place
+  /// while [fullWindow] holds.
+  ///
+  /// **The layout stays built underneath.** It carries the state of every
+  /// section (the frozen order of the queue, scroll positions, an open
+  /// editor), and leaving the whole window has to find all of it where it
+  /// was. An [IndexedStack] keeps it, takes away its focus and tells every
+  /// section through `Visibility.of` that it is not shown, so the decision
+  /// keys of the queue are out of service while the terminal fills the
+  /// window. Its tickers stop with the [TickerMode]. A floating terminal
+  /// (HUM-300) becomes a sibling over [layout] in the same place.
+  Widget _withTerminalHost({
+    required bool fullWindow,
+    required Widget layout,
+  }) => IndexedStack(
+    index: fullWindow ? 1 : 0,
+    sizing: StackFit.expand,
+    children: <Widget>[
+      TickerMode(enabled: !fullWindow, child: layout),
+      if (fullWindow) _terminalFullWindow() else const SizedBox.shrink(),
+    ],
+  );
 
   /// Die sechs Abschnitte, und bei einem Bruch der Verbindung fünf davon als
   /// Schnappschuss.
@@ -389,6 +485,8 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
     // als Änderung an, und genau auf ihn wartet die Weiche.
     ref.listen<SetupState>(setupStateProvider, _offerSetup);
     ref.listen<bool>(linkLiveProvider, _linkChanged);
+    ref.listen<Section>(navigationProvider, _sectionAsked);
+    ref.listen<TerminalPlacement>(terminalPlacementProvider, _terminalMoved);
     // Die Shell steht auch dann, wenn die Verbindung wegbricht. Sie sagt es
     // dann im Banner und friert die Abschnitte darunter ein, die Daten des
     // Daemons zeigen (`docs/UX.md` 4.2, Fall 4). Die eine Frage danach steht
@@ -400,6 +498,11 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
     final Navigation navigation = ref.read(navigationProvider.notifier);
     final bool railExpanded = ref.watch(railExpandedProvider);
     final RailExpanded rail = ref.read(railExpandedProvider.notifier);
+    final bool fullWindow =
+        ref.watch(terminalPlacementProvider) == TerminalPlacement.fullWindow;
+    final TerminalPlacementNotifier terminal = ref.read(
+      terminalPlacementProvider.notifier,
+    );
     final HTokens tokens = HTheme.of(context);
     return Shortcuts(
       shortcuts: shellShortcuts(),
@@ -407,10 +510,18 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
         actions: <Type, Action<Intent>>{
           NavIntent: CallbackAction<NavIntent>(
             onInvoke: (NavIntent intent) {
+              terminal.leaveFullWindow();
               navigation.goIndex(intent.index);
               return null;
             },
           ),
+          ToggleTerminalFullWindowIntent:
+              CallbackAction<ToggleTerminalFullWindowIntent>(
+                onInvoke: (ToggleTerminalFullWindowIntent intent) {
+                  terminal.toggleFullWindow();
+                  return null;
+                },
+              ),
           PaletteIntent: CallbackAction<PaletteIntent>(
             onInvoke: (PaletteIntent intent) {
               _togglePalette();
@@ -461,39 +572,48 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                         ),
                       const ShellNotices(),
                       Expanded(
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: <Widget>[
-                            Row(
-                              children: <Widget>[
-                                IconRail(
-                                  active: section,
-                                  onSelect: navigation.go,
-                                  expanded: railExpanded,
-                                  onToggle: rail.toggle,
-                                ),
-                                Expanded(
-                                  child: _sections(section, frozen: !live),
-                                ),
-                              ],
-                            ),
-                            // Das Blatt hängt zwischen Kopfleiste und
-                            // Statusleiste, wie jeder Pane: seine Kopfzeile
-                            // steht in derselben Reihe wie die der Queue, und
-                            // die Linie darunter läuft durch (HUM-286).
-                            if (_settingsOpen)
-                              Align(
-                                alignment: Alignment.centerRight,
-                                child: SettingsSheet(
-                                  onClose: _closeSettings,
-                                  focusKey: _settingsFocusKey,
-                                  focusSerial: _settingsFocusSerial,
-                                ),
+                        child: _withTerminalHost(
+                          fullWindow: fullWindow,
+                          layout: Stack(
+                            fit: StackFit.expand,
+                            children: <Widget>[
+                              Row(
+                                children: <Widget>[
+                                  IconRail(
+                                    active: section,
+                                    onSelect: navigation.go,
+                                    expanded: railExpanded,
+                                    onToggle: rail.toggle,
+                                  ),
+                                  Expanded(
+                                    child: _sections(section, frozen: !live),
+                                  ),
+                                ],
                               ),
-                          ],
+                              // Das Blatt hängt zwischen Kopfleiste und
+                              // Statusleiste, wie jeder Pane: seine Kopfzeile
+                              // steht in derselben Reihe wie die der Queue, und
+                              // die Linie darunter läuft durch (HUM-286).
+                              if (_settingsOpen)
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: SettingsSheet(
+                                    onClose: _closeSettings,
+                                    focusKey: _settingsFocusKey,
+                                    focusSerial: _settingsFocusSerial,
+                                  ),
+                                ),
+                            ],
+                          ),
                         ),
                       ),
-                      StatusBar(info: widget.info),
+                      // Hidden, not removed, so its state survives the whole
+                      // window (HUM-298).
+                      Visibility(
+                        visible: !fullWindow,
+                        maintainState: true,
+                        child: StatusBar(info: widget.info),
+                      ),
                     ],
                   ),
                 ),
