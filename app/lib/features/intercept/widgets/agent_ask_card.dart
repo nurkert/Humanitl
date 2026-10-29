@@ -157,9 +157,13 @@ class AgentAskCard extends ConsumerWidget {
                   children: <Widget>[
                     HButton(
                       key: const Key('intercept-agent-ask-open-rule'),
-                      onPressed: () => ref
-                          .read(agentAskRuleDraftProvider.notifier)
-                          .open(ask),
+                      // The keyboard leaves the queue before the sheet is
+                      // even built: an `Enter` in the frame between would
+                      // still allow the selected request (HUM-303).
+                      onPressed: () {
+                        HLayerScope.claimKeyboard();
+                        ref.read(agentAskRuleDraftProvider.notifier).open(ask);
+                      },
                       child: Text(l10n.interceptAgentAskCreateRule),
                     ),
                     if (ask.suggestedTarget.isNotEmpty) ...<Widget>[

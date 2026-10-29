@@ -526,6 +526,38 @@ modifiers exactly, so `Ctrl+Shift+Enter` decides nothing
 (`the_chord_decides_nothing_in_the_focused_queue`). Not `Ctrl+Shift+F`: that
 is the group allow of the queue.
 
+**The terminal takes the keyboard on hover and by shortcut (HUM-303).** The
+pointer over the emulator hands it the keyboard at once, without a click, in
+its pane, over the whole window and later floating (HUM-300). Two exceptions
+keep the focus where it is. A layer above the work -- a dialog, a sheet, a
+menu, the command palette -- holds the keyboard in a focus scope of its own,
+and the terminal takes the focus only from a node in its own scope or one of
+the scopes around it; that covers every such layer without a list, and the
+terminal's own context menu, which opens under the pointer and lets it
+through, is the case that needs it. Every such layer takes the keyboard
+when it opens, also from the terminal, and gives it back when it closes
+(`HLayerScope`); `autofocus` alone would yield to whatever already holds
+the focus, and `Esc` in the terminal's menu would reach the agent. A
+palette opened over a sheet hands the keyboard back to the sheet and does
+not offer the terminal. And a text field that has the focus keeps
+it while the pointer only crosses the terminal; whoever wants the terminal
+then clicks it or presses the shortcut. There is deliberately no delay of
+some 150 ms: it would leave a moment in which the pointer is on the terminal
+and an `Enter` meant for the agent still allows the selected request in the
+queue. Focus at once, and the decision keys never fire because focus moved by
+hover (`enter_goes_to_the_terminal_only_once_the_focus_moved`).
+
+``Ctrl+` `` gives the keyboard to the terminal that is shown and changes
+nothing in the layout; with no terminal on the screen it does nothing for
+now (HUM-300 will open the floating terminal). It asks by the physical key
+left of `1`, because on many layouts the backquote is a dead key or lies
+behind `AltGr`; on a German keyboard the chord is `Strg+^`. It is one more
+exception in the terminal and takes the way of the others through
+`TerminalPane._onKey`, so the agent never receives it. A layer
+above the work keeps the focus against the shortcut too; a text field does
+not, because the shortcut asks deliberately. The palette lists it while a
+terminal is shown.
+
 ### 5.3 Every bound key does something
 
 Every activator in `interceptShortcuts()` has an action in the same screen. A widget test compares the two key sets and fails if they differ; a binding without an action is deleted, not disabled. Today `/`, `Ctrl+D` and `N` are bound and mute.

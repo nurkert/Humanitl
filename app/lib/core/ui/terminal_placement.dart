@@ -15,6 +15,9 @@
 /// both resize it and both take keys, so the hosts take turns, and this value
 /// says whose turn it is. A floating overlay (HUM-300) becomes a third value
 /// here and a third host in the shell.
+///
+/// The same note carries the request for the keyboard (HUM-303): the shell
+/// asks for it, the terminal that is shown takes it.
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -52,4 +55,28 @@ class TerminalPlacementNotifier extends Notifier<TerminalPlacement> {
       state = TerminalPlacement.pane;
     }
   }
+}
+
+/// How often somebody asked for the keyboard to go to the terminal
+/// (HUM-303).
+///
+/// `Ctrl+Backquote` and the palette ask for it from the shell, which does not
+/// know the focus node of the emulator; the terminal does not know the
+/// shortcut. The count is the note between them: every host of the terminal
+/// listens, and the one that is shown takes the keyboard. A host that is not
+/// shown ignores it, so with no terminal on the screen the request does
+/// nothing (HUM-300 will open the floating terminal instead). Only a change
+/// counts; the number itself means nothing.
+final NotifierProvider<TerminalFocusRequests, int>
+terminalFocusRequestProvider = NotifierProvider<TerminalFocusRequests, int>(
+  TerminalFocusRequests.new,
+);
+
+/// The notifier behind [terminalFocusRequestProvider].
+class TerminalFocusRequests extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  /// Asks the terminal that is shown to take the keyboard.
+  void request() => state++;
 }
