@@ -51,7 +51,12 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `21` seit der Quelle des Projektverzeichnisses (HUM-293):
+/// `22` seit dem Befund zur Durchreiche im Lauf (HUM-251):
+/// `SandboxEvent.Status.llm` trägt `LLM_001` mit `ChangeSetting` auf
+/// `llm.endpoint`, solange die letzte Anfrage der Durchreiche an der
+/// Verbindung scheiterte, und der Isolations-Reiter färbt die Zeile „LLM“
+/// danach rot.
+/// `21` war die Quelle des Projektverzeichnisses (HUM-293):
 /// `SandboxRequest.Start.work_dir_source` und `.Plan.work_dir_source` sagen,
 /// woher der Client `work_dir` hat (`--work`, das aktuelle Verzeichnis, eine
 /// Konfigurationsdatei, eine Umgebungsvariable, ein Profil), und jeder
@@ -132,7 +137,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 21;
+pub const PROTO_MINOR: u32 = 22;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -164,6 +169,7 @@ pub mod convert;
 pub mod domains;
 pub mod fake;
 pub mod llm_key;
+pub mod llm_reach;
 pub mod llm_servers;
 pub mod rules;
 pub mod sandbox;

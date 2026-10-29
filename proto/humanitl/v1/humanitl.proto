@@ -1193,6 +1193,14 @@ message SandboxEvent {
     // Zeitpunkt der Momentaufnahme, ohne Folgeereignisse. Fehlt, solange
     // keine Sandbox laeuft.
     Refusals refusals = 14;
+    // Der Befund zur Durchreiche an das Modell im laufenden Lauf (HUM-251):
+    // `LLM_001` mit `ChangeSetting` auf `llm.endpoint`, solange die letzte
+    // Anfrage, die die Durchreiche freigab, an der Verbindung scheiterte
+    // (Name, Verbindung, TLS oder Frist). Fehlt, solange keine scheiterte,
+    // sobald wieder eine Antwort kam, und ausserhalb eines Laufs. Aendert er
+    // sich, kommt auf dem Strom des Starts eine neue Momentaufnahme; jeder
+    // andere Client liest ihn, wenn er sie holt.
+    Diagnostic llm = 15;
   }
 
   // Eine Zeile aus dem Log der Sandbox.

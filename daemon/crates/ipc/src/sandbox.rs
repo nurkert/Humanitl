@@ -89,7 +89,7 @@ use humanitl_config::secret::{KeyRef, KeyStore};
 use humanitl_config::{Config, WorkMode};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::ids::{SandboxId, SessionId};
-use humanitl_core::{Diagnostic, FixAction, Severity};
+use humanitl_core::{Diagnostic, FixAction, FlowEvent, Severity};
 use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::session::{SessionSettings, SessionState};
 use humanitl_recorder::Recorder;
@@ -104,6 +104,7 @@ use humanitl_sandbox::{
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::llm_reach::LlmReach;
 use crate::server_stub::BoxStream;
 use crate::session::{
     SessionRequest, SessionResolver, ask_mode_name, bundled_rules, parse_ask_mode, parse_work_mode,
@@ -415,6 +416,98 @@ struct Launched {
     sandbox: SandboxId,
 }
 
+/// Der Zuhörer für den Stand der Durchreiche eines Laufs (HUM-251).
+///
+/// Er entsteht vor dem Start des Agenten ([`Inner::listen_llm`]), beginnt zu
+/// melden mit [`LlmWatch::run`] und endet mit [`LlmWatch::finish`]. Fällt er
+/// ohne `finish` weg (ein früher Ausstieg aus `attend`, ein Start, der
+/// scheitert, eine Aufgabe, die abgebrochen wird), bricht er seine Aufgabe
+/// beim Fallenlassen selbst ab und leert den Stand: Ein Befund aus einem Lauf,
+/// der nicht mehr läuft, wäre eine Behauptung über nichts.
+#[derive(Debug)]
+struct LlmWatch {
+    inner: Arc<Inner>,
+    /// Der Empfänger, bis [`LlmWatch::run`] ihn in die Aufgabe übergibt.
+    events: Option<tokio::sync::broadcast::Receiver<FlowEvent>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl LlmWatch {
+    /// Liest den Ereignisstrom, auch was seit der Anmeldung schon wartet, und
+    /// schickt eine neue Momentaufnahme in den Strom dieses Starts, sobald
+    /// sich `Status.llm` ändert.
+    ///
+    /// Wie bei den verweigerten Versuchen bekommt nur dieser eine Strom die
+    /// Änderung; jeder andere Client liest den Befund, wenn er die
+    /// Momentaufnahme holt.
+    fn run(&mut self, plan: &v1::sandbox_request::Plan, tx: &mpsc::Sender<v1::SandboxEvent>) {
+        let Some(mut events) = self.events.take() else {
+            return;
+        };
+        let this = Arc::clone(&self.inner);
+        let plan = plan.clone();
+        let tx = tx.clone();
+        self.task = Some(tokio::spawn(async move {
+            loop {
+                let event = match events.recv().await {
+                    Ok(event) => event,
+                    // Verpasste Ereignisse lassen den Stand, wie er ist; die
+                    // nächste Durchreiche entscheidet ihn neu.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                };
+                if !this.llm_reach.observe(&event) || tx.is_closed() {
+                    continue;
+                }
+                send_snapshot(&this, &plan, &tx).await;
+            }
+        }));
+    }
+
+    /// Beendet den Zuhörer am Ende des Agenten. Stand ein Befund, geht eine
+    /// Momentaufnahme ohne ihn in den Strom, damit die Oberfläche die Zeile
+    /// nicht rot stehen lässt, nachdem der Lauf vorbei ist.
+    async fn finish(
+        mut self,
+        plan: &v1::sandbox_request::Plan,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+            // Bis der Abbruch gegriffen hat; danach schreibt die Aufgabe
+            // nichts mehr in den Strom. Den Stand schützt ohnehin `end`.
+            let _ = task.await;
+        }
+        if self.inner.llm_reach.end() {
+            send_snapshot(&self.inner, plan, tx).await;
+        }
+    }
+}
+
+impl Drop for LlmWatch {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+        self.inner.llm_reach.end();
+    }
+}
+
+/// Schickt die Momentaufnahme von `plan` in `tx`; scheitert ihr Bau, geht
+/// nichts, denn die nächste Momentaufnahme sagt dasselbe.
+async fn send_snapshot(
+    inner: &Arc<Inner>,
+    plan: &v1::sandbox_request::Plan,
+    tx: &mpsc::Sender<v1::SandboxEvent>,
+) {
+    let inner = Arc::clone(inner);
+    let wanted = plan.clone();
+    let status = tokio::task::spawn_blocking(move || inner.snapshot(&wanted)).await;
+    if let Ok(Ok(status)) = status {
+        let _ = tx.send(status_event(status)).await;
+    }
+}
+
 /// Der Anspruch auf den nächsten Start, solange er gehalten wird.
 ///
 /// Er gibt sich beim Fallenlassen selbst frei, damit kein Fehlerpfad ihn
@@ -497,6 +590,9 @@ struct Inner {
     /// [`SandboxService::retired`]: Der Daemon wartet darauf wie auf ein
     /// Signal und geht dann denselben Abschied.
     retired: tokio::sync::watch::Sender<bool>,
+    /// Ob die Durchreiche an das Modell im laufenden Lauf zuletzt scheiterte
+    /// (HUM-251); `Status.llm` liest es.
+    llm_reach: LlmReach,
 }
 
 /// Woran der Dienst hängt, wenn eine Sitzung startet.
@@ -604,6 +700,7 @@ impl SandboxService {
                 keys,
                 leaving: std::sync::atomic::AtomicBool::new(false),
                 retired: tokio::sync::watch::Sender::new(false),
+                llm_reach: LlmReach::default(),
             }),
         }
     }
@@ -1324,6 +1421,9 @@ impl Inner {
             }
         }
 
+        // Der Zuhörer der Durchreiche vor dem Agenten, damit keine erste
+        // Anfrage an ihm vorbeigeht (HUM-251).
+        let llm = self.listen_llm();
         let this = Arc::clone(&self);
         let launch_plan = plan.clone();
         let command: Vec<OsString> = start.command.iter().map(OsString::from).collect();
@@ -1347,7 +1447,7 @@ impl Inner {
                         break;
                     }
                 }
-                self.accompany(&plan, run, output_rx, &tx).await;
+                self.accompany(&plan, run, output_rx, llm, &tx).await;
             }
             Ok(Err(diagnostic)) => {
                 let _ = tx.send(diagnostic_event(&diagnostic)).await;
@@ -1385,19 +1485,24 @@ impl Inner {
         plan: &v1::sandbox_request::Plan,
         run: Launched,
         output: std::sync::mpsc::Receiver<humanitl_sandbox::OutputChunk>,
+        llm: Option<LlmWatch>,
         tx: &mpsc::Sender<v1::SandboxEvent>,
     ) {
         let watch = run.watch;
         let sandbox = run.sandbox;
-        self.attend(plan, output, tx).await;
+        self.attend(plan, output, llm, tx).await;
         self.summarize(watch, sandbox, tx).await;
     }
 
     /// Der Lauf selbst: Log-Zeile, Garantien, `running`, Ausgabe, Exit-Code.
+    ///
+    /// `llm` ist der Zuhörer der Durchreiche, angemeldet vor dem Start des
+    /// Agenten; ein früher Ausstieg lässt ihn fallen, und das leert den Stand.
     async fn attend(
         self: &Arc<Self>,
         plan: &v1::sandbox_request::Plan,
         output: std::sync::mpsc::Receiver<humanitl_sandbox::OutputChunk>,
+        mut llm: Option<LlmWatch>,
         tx: &mpsc::Sender<v1::SandboxEvent>,
     ) {
         // Die Zeile, die der Log-Reiter zeigt. Der leere Zustand dort
@@ -1435,9 +1540,17 @@ impl Inner {
             .clone()
             .map(|notices| tokio::spawn(notices.run(hub.clone())));
         let refusals = self.forward_refusals(tx);
+        if let Some(llm) = llm.as_mut() {
+            llm.run(plan, tx);
+        }
         let first = self.stream_output(output, hub, tx).await;
         if let Some(task) = notices {
             task.abort();
+        }
+        // Vor dem Exit-Code: Ein Client, der beim Exit aufhört zu lesen, soll
+        // die Zeile „LLM“ nicht rot stehen lassen (HUM-251).
+        if let Some(llm) = llm {
+            llm.finish(plan, tx).await;
         }
         // Der letzte Stand der verweigerten Versuche vor dem Exit-Code, damit
         // ein Client, der beim Exit aufhört zu lesen, ihn noch hat (HUM-138).
@@ -2241,6 +2354,11 @@ impl Inner {
             argv_preview: shell_line(&argv),
             agent_running,
             refusals: self.running_refusals(),
+            llm: self
+                .llm_reach
+                .current()
+                .as_ref()
+                .map(crate::convert::diagnostic_to_proto),
         })
     }
 
@@ -2292,6 +2410,11 @@ impl Inner {
             argv_preview: String::new(),
             agent_running,
             refusals: self.running_refusals(),
+            llm: self
+                .llm_reach
+                .current()
+                .as_ref()
+                .map(crate::convert::diagnostic_to_proto),
         }
     }
 
@@ -2444,6 +2567,34 @@ impl Inner {
                 }
             }
         }))
+    }
+
+    /// Meldet den Zuhörer für den Stand der Durchreiche an und beginnt den
+    /// Lauf ohne Befund (HUM-251); `None` ohne Warteschlange (Fake-Modus,
+    /// Tests), denn dann gibt es keine Durchreiche.
+    ///
+    /// **Vor dem Start des Agenten zu rufen.** Ein Agent, der sofort ein
+    /// totes Modell fragt, erzeugt `Decided` und `Failed` in den ersten
+    /// Millisekunden; ein Zuhörer, der sich erst nach der Prüfung der
+    /// Garantien anmeldet, verpasste genau diese und meldete nie `LLM_001`.
+    /// Der Empfänger puffert, was bis zu [`LlmWatch::run`] eintrifft.
+    fn listen_llm(self: &Arc<Self>) -> Option<LlmWatch> {
+        // Erst der Zuhörer, dann der neue Stand: Ein Ereignis dazwischen
+        // gehörte sonst zu keinem Lauf.
+        let events = self.notices.as_ref()?.subscribe();
+        let endpoint = self
+            .config()
+            .llm
+            .endpoint
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        self.llm_reach.begin(&endpoint);
+        Some(LlmWatch {
+            inner: Arc::clone(self),
+            events: Some(events),
+            task: None,
+        })
     }
 
     /// Das Backend, das gestartet hat, und sein Handle; beides oder nichts.
@@ -4937,6 +5088,210 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// `Status.llm` aus der Antwort auf `Status`, wie sie jeder andere Client
+    /// liest.
+    async fn status_llm(service: &SandboxService) -> Option<v1::Diagnostic> {
+        use tokio_stream::StreamExt as _;
+
+        let events: Vec<v1::SandboxEvent> = service
+            .stream(v1::SandboxRequest {
+                op: Some(v1::sandbox_request::Op::Status(())),
+            })
+            .collect()
+            .await;
+        let mut last = None;
+        for event in events {
+            if let Some(v1::sandbox_event::Event::Status(status)) = event.event {
+                last = Some(status.llm);
+            }
+        }
+        last.expect("the answer carries a snapshot")
+    }
+
+    /// Die nächste Momentaufnahme im Strom des Starts.
+    async fn next_status(rx: &mut mpsc::Receiver<v1::SandboxEvent>) -> v1::sandbox_event::Status {
+        loop {
+            let event = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+                .await
+                .expect("a snapshot within ten seconds")
+                .expect("the stream is open");
+            if let Some(v1::sandbox_event::Event::Status(status)) = event.event {
+                return status;
+            }
+        }
+    }
+
+    /// HUM-251: Scheitert die Durchreiche an der Verbindung, steht `LLM_001`
+    /// mit `ChangeSetting` auf `llm.endpoint` am Status, im Strom des Starts
+    /// wie in der Momentaufnahme jedes anderen Clients; die nächste Antwort
+    /// einer Durchreiche nimmt ihn weg.
+    ///
+    /// Die Ereignisse gehen durch eine echte Warteschlange und in der Form,
+    /// in der der Proxy sie für eine Durchreiche veröffentlicht
+    /// (`Decided` mit `DecisionSource::Passthrough`, danach `Failed`
+    /// beziehungsweise `ResponseHeaders`), und der Zuhörer ist derselbe, den
+    /// `start` vor dem Agenten anmeldet und `attend` laufen lässt.
+    ///
+    /// Die erste Anfrage scheitert, **bevor** der Zuhörer liest: So sieht es
+    /// aus, wenn ein Agent sofort ein totes Modell fragt, während der Dienst
+    /// noch die Garantien prüft. Ein Zuhörer, der sich erst beim Lesen
+    /// anmeldete, verpasste sie.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_passthrough_sets_llm_001_on_the_status_and_an_answer_removes_it() {
+        let home = tempfile::tempdir().unwrap();
+        let notices = HeldNotices::detached();
+        let service = service_with(
+            &home,
+            "opencode",
+            None,
+            SandboxPorts::none().with_notices(notices.clone()),
+        );
+        assert_eq!(status_llm(&service).await, None, "nothing failed yet");
+
+        let (tx, mut rx) = mpsc::channel(16);
+        let plan = v1::sandbox_request::Plan::default();
+        let mut watch = service.inner.listen_llm().expect("a queue to listen to");
+
+        let first = humanitl_core::FlowId::new();
+        unreachable_passthrough(&notices, first);
+        watch.run(&plan, &tx);
+        let pushed = next_status(&mut rx).await;
+        let llm = pushed.llm.expect("LLM_001 travels in the snapshot");
+        assert_eq!(llm.code, "LLM_001");
+        let endpoint = service
+            .inner
+            .config()
+            .llm
+            .endpoint
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        assert_eq!(
+            llm.fix.and_then(|fix| fix.action),
+            Some(v1::fix_action::Action::ChangeSetting(
+                v1::fix_action::ChangeSetting {
+                    key: "llm.endpoint".to_owned(),
+                    value: endpoint,
+                }
+            ))
+        );
+        assert_eq!(
+            status_llm(&service).await.map(|llm| llm.code),
+            Some("LLM_001".to_owned()),
+            "every other client reads it from the snapshot"
+        );
+
+        let second = humanitl_core::FlowId::new();
+        notices.publish(passthrough(second));
+        notices.publish(FlowEvent::ResponseHeaders {
+            flow_id: second,
+            at: SystemTime::now(),
+            status: 200,
+        });
+        let pushed = next_status(&mut rx).await;
+        assert_eq!(pushed.llm, None, "an answer takes it away");
+        assert_eq!(status_llm(&service).await, None);
+        watch.finish(&plan, &tx).await;
+    }
+
+    /// Eine Freigabe der Durchreiche, wie der Proxy sie veröffentlicht.
+    fn passthrough(flow_id: humanitl_core::FlowId) -> FlowEvent {
+        FlowEvent::Decided {
+            flow_id,
+            at: SystemTime::now(),
+            decision: humanitl_core::Decision::Allow,
+            source: humanitl_core::DecisionSource::Passthrough,
+            findings: humanitl_core::DecidedFindings::default(),
+        }
+    }
+
+    /// Eine Durchreiche, an der niemand die Verbindung annahm.
+    fn unreachable_passthrough(notices: &HeldNotices, flow_id: humanitl_core::FlowId) {
+        notices.publish(passthrough(flow_id));
+        notices.publish(FlowEvent::Failed {
+            flow_id,
+            at: SystemTime::now(),
+            error: humanitl_core::UpstreamError::Connect,
+        });
+    }
+
+    /// HUM-251: Endet der Agent, solange `LLM_001` steht, geht noch eine
+    /// Momentaufnahme ohne ihn in den Strom des Starts; sonst bliebe die
+    /// Zeile „LLM“ nach dem Ende rot. Auch jede spätere Momentaufnahme liest
+    /// den geleerten Stand.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_end_of_the_agent_sends_a_snapshot_without_llm_001() {
+        let home = tempfile::tempdir().unwrap();
+        let notices = HeldNotices::detached();
+        let service = service_with(
+            &home,
+            "opencode",
+            None,
+            SandboxPorts::none().with_notices(notices.clone()),
+        );
+        let (tx, mut rx) = mpsc::channel(16);
+        let plan = v1::sandbox_request::Plan::default();
+        let mut watch = service.inner.listen_llm().expect("a queue to listen to");
+        watch.run(&plan, &tx);
+        unreachable_passthrough(&notices, humanitl_core::FlowId::new());
+        assert!(
+            next_status(&mut rx).await.llm.is_some(),
+            "the finding stands"
+        );
+
+        watch.finish(&plan, &tx).await;
+        let pushed = tokio::time::timeout(Duration::from_secs(1), next_status(&mut rx))
+            .await
+            .expect("a snapshot after the end");
+        assert_eq!(pushed.llm, None, "the end clears the line");
+        assert_eq!(status_llm(&service).await, None);
+
+        // Ohne Befund schuldet das Ende niemandem eine Momentaufnahme.
+        let mut quiet = service.inner.listen_llm().expect("a queue to listen to");
+        quiet.run(&plan, &tx);
+        quiet.finish(&plan, &tx).await;
+        assert!(rx.try_recv().is_err(), "nothing to say, nothing sent");
+    }
+
+    /// HUM-251: Fällt der Zuhörer ohne `finish` weg (ein früher Ausstieg,
+    /// eine abgebrochene Aufgabe), bricht er seine Aufgabe ab und leert den
+    /// Stand; ein Ereignis danach setzt nichts mehr.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_dropped_watch_stops_listening_and_clears_the_finding() {
+        let home = tempfile::tempdir().unwrap();
+        let notices = HeldNotices::detached();
+        let service = service_with(
+            &home,
+            "opencode",
+            None,
+            SandboxPorts::none().with_notices(notices.clone()),
+        );
+        let (tx, mut rx) = mpsc::channel(16);
+        let plan = v1::sandbox_request::Plan::default();
+        let mut watch = service.inner.listen_llm().expect("a queue to listen to");
+        watch.run(&plan, &tx);
+        unreachable_passthrough(&notices, humanitl_core::FlowId::new());
+        assert!(next_status(&mut rx).await.llm.is_some());
+
+        drop(watch);
+        assert_eq!(
+            service.inner.llm_reach.current(),
+            None,
+            "dropping clears it"
+        );
+        // Die abgebrochene Aufgabe lässt ihren Sender los, sobald der
+        // Abbruch greift; danach erreicht kein Ereignis mehr den Stand.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        unreachable_passthrough(&notices, humanitl_core::FlowId::new());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            service.inner.llm_reach.current(),
+            None,
+            "nobody listens any more"
+        );
+        assert!(rx.try_recv().is_err(), "and nothing is sent");
     }
 
     /// Ein Start, der seinen Anspruch hält und noch kein Handle hat, ist für
