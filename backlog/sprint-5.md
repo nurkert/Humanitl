@@ -67,6 +67,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-296 | `humanitl run --config` with a folder outside HOME is judged against the file it names (after HUM-060) | S | HUM-293 |
 | HUM-297 | RUSTSEC-2026-0414 in pulldown-cmark turns the dependency check red | S | — |
 | HUM-304 | The agent knows it has web access through the proxy | S | HUM-071, HUM-274 |
+| HUM-311 | The Debian changelog line stays within lintian's 80 characters for every version | S | HUM-273 |
 
 ---
 
@@ -6765,3 +6766,30 @@ logging proxy on loopback with the proxy variables of the env kit and an empty
   Rezept, jede Anfrage weiter durch die Warteschlange);
   `NO_PROXY=localhost,127.0.0.1` für Server, die der Agent in der Sandbox
   selbst startet.
+
+---
+## HUM-311 · The Debian changelog line stays within lintian's 80 characters for every version
+
+### Context
+The tag v0.0.10 (2026-10-29) did not publish: `check-deb` failed in the
+`lintian` step. The .deb of v0.0.9 passes the same lintian in the same
+pinned `ubuntu:24.04` container, and nothing in the package changed except
+`NODE_USE_ENV_PROXY` in the bundled profile. The cause is the changelog
+written by `packaging/deb/build-deb.sh`: "  * Early release $version, built
+from commit $commit. Not for production use." is 80 characters with a
+five-character version and 81 with `0.0.10`, and lintian warns from 81 on
+(`debian-changelog-line-too-long`); warnings fail the job.
+
+### Specification
+1. The line becomes "  * Early release $version from commit $commit, not
+   for production use." (74 characters for 0.0.10, 78 for 10.100.100).
+2. `build-deb.sh` fails at build time with a clear error when any changelog
+   line exceeds 80 characters, so a long version cannot reach lintian.
+3. The failed tag v0.0.10 stays as it is (no release was published); the next
+   early release is v0.0.11.
+
+### Acceptance criteria
+1. The changelog lines are at most 80 characters for versions up to
+   10.100.100 (checked by hand: 74, 73, 77, 78).
+2. `check-deb` passes on the next tag.
+
