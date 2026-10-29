@@ -15,10 +15,12 @@
 // den Hinweis pruefen will, setzt `seen: false` und ueberschreibt damit die
 // Vorgabe.
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_riverpod/misc.dart';
 import 'package:humanitl/features/intercept/providers/coach_mark.dart';
+import 'package:humanitl/features/shell/providers/rail.dart';
 
 /// Wie viele Speicher dieser Testlauf schon ausgegeben hat.
 ///
@@ -38,12 +40,18 @@ final Directory _dir = Directory.systemTemp.createTempSync('humanitl-ui-state');
 /// Ein Zustandsspeicher in einer eigenen Datei.
 ///
 /// [seen] schreibt die Marke hinein; ohne sie gibt es die Datei nicht, und der
-/// Hinweis gilt als noch nicht gezeigt.
-Override uiStateOverride({bool seen = true}) {
+/// Hinweis gilt als noch nicht gezeigt. [railExpanded] klappt die Leiste der
+/// Shell auf, wie sie bei jemandem steht, der sie einmal aufgeklappt hat
+/// (HUM-254); die Panes werden dann um 152 px schmaler (HUM-307).
+Override uiStateOverride({bool seen = true, bool railExpanded = false}) {
   _next++;
   final File file = File('${_dir.path}/$_next-${UiStateFile.fileName}');
-  if (seen) {
-    file.writeAsStringSync('{"$coachMarkSeenKey": true}');
+  final Map<String, bool> state = <String, bool>{
+    if (seen) coachMarkSeenKey: true,
+    if (railExpanded) railExpandedKey: true,
+  };
+  if (state.isNotEmpty) {
+    file.writeAsStringSync(jsonEncode(state));
   }
   return uiStateFileProvider.overrideWithValue(UiStateFile(file.path));
 }

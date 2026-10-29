@@ -5,11 +5,14 @@ import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/features/shell/providers/connection.dart';
 import 'package:humanitl/main.dart';
 
+import 'harness/ui_state.dart';
+
 void main() {
   testWidgets('app boots', (tester) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          uiStateOverride(),
           daemonClientProvider.overrideWithValue(FakeDaemonClient()),
           connectionHeartbeatProvider.overrideWithValue(null),
         ],

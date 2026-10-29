@@ -21,6 +21,8 @@ import 'package:humanitl/features/shell/providers/connection.dart';
 import 'package:humanitl/features/shell/providers/navigation.dart';
 import 'package:humanitl/features/shell/section.dart';
 
+import '../../harness/ui_state.dart';
+
 void main() {
   testWidgets('the history does not take the focus back out of the rail', (
     WidgetTester tester,
@@ -30,6 +32,7 @@ void main() {
     final FakeDaemonClient client = FakeDaemonClient.history(count: 12);
     final ProviderContainer container = ProviderContainer(
       overrides: [
+        uiStateOverride(),
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(null),
       ],
@@ -86,6 +89,7 @@ void main() {
     final FakeDaemonClient client = FakeDaemonClient.history(count: 24);
     final ProviderContainer container = ProviderContainer(
       overrides: [
+        uiStateOverride(),
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(null),
       ],
@@ -134,6 +138,7 @@ void main() {
     final FakeDaemonClient client = FakeDaemonClient.history(count: 250);
     final ProviderContainer container = ProviderContainer(
       overrides: [
+        uiStateOverride(),
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(null),
       ],
@@ -189,6 +194,7 @@ void main() {
     final FakeDaemonClient client = FakeDaemonClient.history(count: 12);
     final ProviderContainer container = ProviderContainer(
       overrides: [
+        uiStateOverride(),
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(null),
       ],

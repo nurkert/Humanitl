@@ -3,6 +3,14 @@
 // Beschriftung muss in einer Zeile stehen; ein Umbruch in einer 28-px-Zeile
 // schneidet den Text ab oder drückt die Leiste auseinander. Die Goldens
 // `action_bar_de` und `intercept_card_de` kommen mit HUM-054.
+//
+// Gemessen wird mit Roboto statt mit den Quadraten der Testschrift
+// (`harness/layout_fonts.dart`, HUM-307): Mit den Quadraten ist jedes Wort
+// doppelt so breit wie auf dem Bildschirm. Und mit eigenem Zustandsspeicher:
+// Bis HUM-307 las dieser Test `~/.local/state/humanitl/ui-state.json` des
+// Menschen, der ihn laufen ließ. Wer die Leiste der Shell aufgeklappt hatte,
+// bekam einen 480 px schmalen Pane und einen gekürzten Haltegrund, die CI
+// einen breiteren und Grün.
 
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart' hide Flow;
@@ -18,6 +26,8 @@ import 'package:humanitl/features/intercept/widgets/action_bar.dart';
 import 'package:humanitl/features/shell/providers/connection.dart';
 import 'package:humanitl/l10n/l10n.dart';
 
+import '../../harness/layout_fonts.dart';
+import '../../harness/ui_state.dart';
 import 'fixtures.dart';
 
 final AppLocalizations de = lookupAppLocalizations(const Locale('de'));
@@ -46,6 +56,7 @@ Future<void> pumpGerman(WidgetTester tester, FlowDetail detail) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: <Override>[
+        uiStateOverride(),
         daemonClientProvider.overrideWithValue(
           FakeDaemonClient(
             script: holdScript(<FlowDetail>[detail]),
@@ -100,6 +111,8 @@ List<String> wrapped(WidgetTester tester, {Set<String> except = const {}}) =>
     ];
 
 void main() {
+  setUpAll(loadLayoutFonts);
+
   final TargetPlatformVariant linux = TargetPlatformVariant.only(
     TargetPlatform.linux,
   );

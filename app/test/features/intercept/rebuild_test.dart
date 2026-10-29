@@ -23,6 +23,7 @@ import 'package:humanitl/features/shell/shell_screen.dart';
 import 'package:humanitl/features/shell/widgets/header_bar.dart';
 import 'package:humanitl/features/shell/widgets/status_bar.dart';
 
+import '../../harness/ui_state.dart';
 import 'fixtures.dart';
 
 // Jeder Flow bekommt eine eigene registrierbare Domain, damit die Queue
@@ -49,6 +50,7 @@ Future<FakeDaemonClient> pumpQueue(WidgetTester tester, int count) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: <Override>[
+        uiStateOverride(),
         daemonClientProvider.overrideWithValue(client),
         connectionHeartbeatProvider.overrideWithValue(null),
         nowProvider.overrideWith(() => FixedNow(testStart)),
