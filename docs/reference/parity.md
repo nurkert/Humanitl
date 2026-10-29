@@ -24,6 +24,7 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 | `Humanitl.Decide` | `humanitl flows decide` | `features/intercept/widgets/action_bar` |
 | `Humanitl.DiscoverLlm` | `humanitl llm discover` | `features/setup/widgets/llm_discover_sheet` |
 | `Humanitl.Doctor` | `humanitl doctor` | `features/setup/widgets/doctor_list` |
+| `Humanitl.Exec` | `humanitl sandbox exec` | fehlt |
 | `Humanitl.GetBody` | `humanitl flows show --body` | `features/history/history_detail` |
 | `Humanitl.GetConfig` | Ausnahme | `features/settings/settings_sheet` |
 | `Humanitl.GetFlow` | `humanitl flows show` | `features/history/history_detail` |
@@ -37,10 +38,11 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 | `Humanitl.Sandbox` | `humanitl run` | `features/sandbox/sandbox_screen` |
 | `Humanitl.SetConfig` | Ausnahme | `core/ui/fix_control` |
 | `Humanitl.Subscribe` | `humanitl run --ask terminal` | `features/intercept/widgets/queue_pane` |
-| `Humanitl.Terminal` | `humanitl sandbox attach` | `features/sandbox/widgets/terminal_pane` |
+| `Humanitl.Terminal` | `humanitl sandbox attach`<br>`humanitl sandbox attach --shell` | `features/sandbox/widgets/terminal_pane` |
 
 ## UI-Lücken
 
+- `Humanitl.Exec`
 - `Humanitl.GetSessionSummary`
 
 ## Ausnahmen

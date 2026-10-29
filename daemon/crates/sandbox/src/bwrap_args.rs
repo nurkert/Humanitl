@@ -262,6 +262,14 @@ pub struct LaunchInputs {
     /// caller's descriptors, because those may be the user's terminal
     /// (`docs/SECURITY.md`, section on `TIOCSTI`). The preview leaves it off.
     pub controlling_terminal: bool,
+    /// The shim's end of the daemon's door for further shells (HUM-299),
+    /// rendered as [`crate::bridge_env::SHIM_CONTROL_FD`] with its number
+    /// after `--proxy-port`.
+    ///
+    /// Only for a start at the daemon's own pseudo-terminal, like
+    /// [`LaunchInputs::controlling_terminal`]. `None` renders nothing; that
+    /// is the preview and every start without the daemon.
+    pub control_fd: Option<RawFd>,
 }
 
 impl LaunchInputs {
@@ -287,6 +295,7 @@ impl LaunchInputs {
             session_ro: Vec::new(),
             agent_program: None,
             controlling_terminal: false,
+            control_fd: None,
         }
     }
 
@@ -487,6 +496,9 @@ impl SandboxProfile {
         args.pair("--proxy-port", self.network.proxy_port.to_string());
         if inputs.controlling_terminal {
             args.flag(crate::bridge_env::SHIM_CONTROLLING_TERMINAL);
+        }
+        if let Some(fd) = inputs.control_fd {
+            args.pair(crate::bridge_env::SHIM_CONTROL_FD, fd.to_string());
         }
         args.flag("--");
         for part in &ctx.command {
@@ -878,6 +890,7 @@ mod tests {
                 session_ro: Vec::new(),
                 agent_program: None,
                 controlling_terminal: false,
+                control_fd: None,
             },
         );
         assert!(with.windows(2).any(|w| w == ["--json-status-fd", "11"]));
@@ -975,6 +988,7 @@ mod tests {
                 session_ro: Vec::new(),
                 agent_program: None,
                 controlling_terminal: false,
+                control_fd: None,
             },
         );
         assert!(window_at(&args, &["--ro-bind-data", "40", "/work/.envrc"]).is_some());

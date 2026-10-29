@@ -95,6 +95,24 @@ pub trait DaemonApi: Send + Sync + 'static {
     /// Verbindet ein Terminal mit der Sandbox.
     fn terminal(&self, input: BoxStream<v1::TerminalInput>) -> BoxStream<v1::TerminalOutput>;
 
+    /// Öffnet eine weitere Shell in der laufenden Sandbox (HUM-299).
+    ///
+    /// Die Vorgabe antwortet `IPC_006`: Ein Daemon ohne Sandbox, und jeder
+    /// Fake, der keine spielt, öffnet keine Shell.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `IPC_006` oder dem Befund des Dienstes.
+    async fn exec(&self, request: v1::ExecRequest) -> Result<v1::ExecResponse, Diagnostic> {
+        let _ = request;
+        Err(Diagnostic::builder(
+            humanitl_core::diagnostics::codes::IPC_006,
+            humanitl_core::Severity::Error,
+        )
+        .why("this daemon runs no sandbox, so there is nothing to open a shell in".to_owned())
+        .build())
+    }
+
     /// Prüft oder exportiert das Audit-Log.
     ///
     /// # Errors
@@ -457,6 +475,18 @@ impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
         self.check_token(&request)?;
         let input = plain_stream(request.into_inner());
         Ok(Response::new(ok_stream(self.api.terminal(input))))
+    }
+
+    async fn exec(
+        &self,
+        request: Request<v1::ExecRequest>,
+    ) -> Result<Response<v1::ExecResponse>, Status> {
+        self.check_token(&request)?;
+        self.api
+            .exec(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
     }
 
     async fn audit(

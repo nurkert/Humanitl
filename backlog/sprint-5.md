@@ -70,6 +70,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-311 | The Debian changelog line stays within lintian's 80 characters for every version | S | HUM-273 |
 | HUM-298 | The terminal goes full window from anywhere, by shortcut and button | S | HUM-042, HUM-286 |
 | HUM-308 | Agents do not ask twice and do not give up while a request waits | S | HUM-274, HUM-304 |
+| HUM-299 | A second shell in a running sandbox | M | HUM-042, HUM-279, HUM-280 |
 
 ---
 
@@ -7120,3 +7121,239 @@ waits.
   noch wartet (die Frist kennt nur der Agent; für `webfetch` 30 oder 120 s).
   OpenCodes `doom_loop`-Frage nach drei gleichen Aufrufen, die ein
   wiederholter Abruf auslösen kann. Mehr Luft im deutschen Briefing.
+
+---
+## HUM-299 · A second shell in a running sandbox
+
+Owner request 2026-10-29. Daemon, shim and command line only; the tab
+"+ Shell" in the app's terminal pane is a follow-up issue, because the app's
+terminal files are being changed by HUM-298, HUM-300 and HUM-303.
+
+### Context
+Like `docker exec`, the owner wants to open a shell inside a sandbox in which
+the agent (pi, OpenCode) is already running, without stopping the agent and
+without sharing its terminal. Today the only way into a running session is
+`humanitl sandbox attach`, which is the agent's own terminal, and
+`humanitl run -- bash` (HUM-280), which is a new session.
+
+Entering the sandbox from outside (`nsenter`, `setns`) is ruled out: the
+process would start without the shim's filter, without `PR_SET_NO_NEW_PRIVS`
+and with the daemon's descriptors, and each of these would have to be
+rebuilt by hand outside the shim. The shim is PID 1 of the sandbox (HUM-203)
+and already carries all of it, so a child it forks inherits every
+restriction and sees the same mounts, proxy environment, rules and project
+folder.
+
+### Specification
+1. **The door.** For a start at the daemon's own pseudo-terminal
+   (`StdioMode::Pty`), and only then, the launcher creates a
+   `SOCK_SEQPACKET` pair. bwrap inherits one end, which reaches the shim as
+   `--control-fd <n>`, rendered after `--proxy-port` and
+   `--controlling-terminal`; the daemon keeps the other with `CLOEXEC`. This
+   is the least invasive channel: the shim has no other way to hear from the
+   daemon (the report descriptor and the status pipe point outward), a named
+   socket would be a second socket in the sandbox's filesystem
+   (`single_socket`), and a pipe cannot carry the shell's terminal.
+2. **Who holds it.** Inside the sandbox only PID 1: the agent's child closes
+   it before its filter, it carries `CLOEXEC`, every further shell closes
+   all descriptors above 2, and PID 1 stays non-dumpable. On the host only
+   the daemon, and only the RPC `Exec` uses it. Nothing inside the sandbox
+   can trigger a spawn.
+3. **The request.** `S`, a four-byte id chosen by the daemon (never 0) and
+   the command, each argument NUL-terminated, at most 16 KiB and 256
+   arguments, with exactly one descriptor as `SCM_RIGHTS`: the follower side
+   of a pseudo-terminal the daemon opened for this shell. Anything else is
+   refused (`F`). Answers are nine bytes: `R` id pid, `F` id code, `E` id
+   status. The daemon reads answers without a control buffer, so a
+   descriptor sent its way is closed by the kernel.
+4. **The shell.** A thread of PID 1 serves the door. Per request it forks a
+   child that dies with that thread (`PR_SET_PDEATHSIG`), calls `setsid` and
+   `TIOCSCTTY` (argument 0) on the follower, makes it descriptors 0 to 2,
+   closes everything above, resets the signal mask, installs the agent's
+   filter in the variant that answers `EPERM` itself, proves it
+   (`socket(AF_UNIX, SOCK_STREAM)` must answer `EPERM`, otherwise exit 126),
+   resets the signal dispositions and `execvpe`s the command with the
+   shim's environment minus its own variables. Everything the child needs
+   exists before the fork; the child allocates nothing.
+5. **Limits and end.** At most four further shells live at a time; the shim
+   and the daemon both count, the fifth is `TERM_002`. A shell ends when its
+   process exits (its exit code reaches its terminal) and with the sandbox:
+   PID 1 kills every shell after the agent's end, the PID namespace ends
+   with PID 1, and the daemon ends the shell's terminal with `128 + 9` when
+   its end of the pair closes without an `E`.
+6. **Protocol.** RPC `Exec(ExecRequest) returns (ExecResponse)`:
+   `sandbox_id` (empty: the running session), `command` (empty: an
+   interactive `bash`, else `sh`), `cols`, `rows`; the answer carries
+   `shell_id`, the command started and `sandbox_id`.
+   `TerminalInput.Open.shell_id` attaches to that shell's terminal with the
+   rules of the agent's (one writer, any number of readers, `TERM_001`, a
+   filtered ring buffer, notice lines); an id under which no shell lives is
+   `IPC_006`. `Info.capabilities` names `sandbox.exec`. `PROTO_MINOR` 23,
+   `docs/PROTOCOL.md`.
+7. **Command line.** `humanitl sandbox exec [--detach-keys SPEC] [-- CMD]`
+   asks for the shell, prints `Shell <id> in sandbox <id>` and attaches like
+   `humanitl sandbox attach` (raw mode, size, `Ctrl+A d` from HUM-279);
+   without a terminal on `stdin` it only watches until the shell ends.
+   Detaching says `Attach again: humanitl sandbox attach --shell <id>`; that
+   flag is new on `sandbox attach`. The command ends with the shell's exit
+   code.
+8. **Follow-up.** The app tab "+ Shell" in the terminal pane, reading
+   `sandbox.exec`, `Exec` and `Open.shell_id`, is its own issue.
+
+### Security
+The pair is a new way into the sandbox, so `docs/SECURITY.md` (section 4,
+"Further shells in a running sandbox", changelog) and
+`docs/THREAT-MODEL.md` (K-18, change history) describe it in the same
+change. The statement in `README.md` holds: the shell has no network
+interface (same network namespace), sees exactly one door (the pair is
+unnamed and held only by PID 1), and carries a filter that is at least the
+agent's (PID 1's plus the agent's, proven by a refused `AF_UNIX`). Refused
+`socket()` calls of a further shell are refused but not counted (the filters
+refuse a second listener); that is declared, not hidden.
+
+### Acceptance criteria
+1. With a running session, `humanitl sandbox exec` opens a shell next to the
+   agent; the agent keeps running and keeps its terminal.
+2. Inside the shell the escape checks hold as for the agent: same network,
+   mount, PID and user namespaces, `Seccomp: 2`, `NoNewPrivs: 1`,
+   `socket(AF_UNIX)` refused with `EPERM`, nothing above descriptor 2, PID
+   1's descriptors closed.
+3. Stopping the sandbox ends every further shell; no process outlives it.
+4. A fifth simultaneous shell is refused with `TERM_002`; once one ends, its
+   place is free again.
+5. Nothing inside the sandbox holds the door or can request a spawn.
+
+### Pitfalls
+- The forking thread is not the main thread: `PR_SET_PDEATHSIG` fires when
+  that thread ends, which is wanted (the daemon let go of the door).
+- The parent has threads: no allocation and no `std::io::stderr` lock in the
+  child, and the reaper must find a shell that ended at once, so the live
+  list stays locked across `fork` and the `R` answer.
+- The reaper is `waitpid(-1)` on the main thread; a shell's status goes to
+  the daemon as `E`, an orphan's is dropped as before.
+- A background job can keep the shell's terminal open after the shell
+  exited: the daemon stops reading a short drain after the exit and closes
+  the master.
+- Fake shims in tests must accept `--control-fd <n>`.
+
+### Umsetzung (HUM-299)
+
+- **Tür.** `crate::shell::pair()` (`daemon/crates/sandbox/src/shell.rs`) legt
+  das `SOCK_SEQPACKET`-Paar nur an, wenn `BwrapBackend` am eigenen
+  Pseudoterminal startet (`BwrapBackend::shell_door`). Die Seite des Shims
+  liegt über den Standardströmen, wird vererbt und als `--control-fd <n>`
+  gerendert (`LaunchInputs::control_fd`, `SHIM_CONTROL_FD`); die Vorschau
+  und `humanitl sandbox run` haben keine. Die Seite des Daemons reist in
+  `LaunchOnce::shells` zu `launch`, dort öffnet `ShellDoor::start` einen
+  Leser der Antworten; eine Tür, die nicht aufgeht, kostet nur die weiteren
+  Shells.
+- **Shim.** Neue Datei `bin/humanitl-shim/src/exec.rs`. `take_control`
+  prüft die Nummer (offener Socket, über 2) und setzt `CLOEXEC`; das Kind des
+  Agenten schließt sie ausdrücklich (`drop(control)`) und behält sie in
+  `close_inherited` nicht. Der Faden `shells` startet nach dem eigenen
+  Filter und der Prüfung auf nicht dumpbar, direkt vor dem Tor. Je Anfrage
+  forkt er unter dem Schloss der Liste lebender Shells (der Ernter in
+  `reap(child, shells)` meldet `E` erst nach dem `R`), das Kind tut nur
+  async-signal-sichere Schritte (`setsid`, `TIOCSCTTY` mit 0, `dup2`,
+  `close_range`, Signalmaske, Filter des Agenten in der stillen Fassung,
+  Probe `socket(AF_UNIX)` muss `EPERM` sein, Dispositionen, `execvpe` mit
+  der Umgebung ohne `SHIM_VARS`). Nach dem Ende des Agenten tötet
+  `kill_all` alle Shells. Grenze `MAX_SHELLS = 4` im Shim und im Daemon.
+- **Daemon.** `SandboxHandle::open_shell` gibt einen `Shell` (eigenes
+  Pseudoterminal, `write_input`, `resize`, `pump`). `pump` liest mit `poll`,
+  nach dem `E` noch 300 ms, und liefert den Exit-Code, ohne `E` bei
+  geschlossener Tür `ENDED_WITH_SANDBOX` (137). In `humanitl-ipc` trägt
+  `TerminalHub` jetzt ein `Target` (Agent oder Shell), `TerminalHub::for_shell`
+  ist dasselbe Terminal mit Filter, Ring, einem Schreiber und Hinweiszeilen.
+  Neues Modul `ipc/src/exec.rs` (`ShellRegistry`, `open`, `Opened::run`);
+  `SandboxService::exec` und `terminal_for` sind dünn, `Running::shells`
+  hält die Ablage. `TERM_001` für eine Shell nennt
+  `humanitl sandbox attach --shell <id> --read-only`.
+- **Vertrag.** `rpc Exec(ExecRequest) returns (ExecResponse)`,
+  `TerminalInput.Open.shell_id = 5`, `Info.capabilities` mit `sandbox.exec`,
+  `PROTO_MINOR` 23, `docs/PROTOCOL.md`, `proto/descriptor.binpb` und
+  `proto/generated.sha256` neu erzeugt (`scripts/gen-proto.sh`, protoc 27.5,
+  protoc_plugin 25.0.0). `DaemonApi::exec` hat eine Vorgabe mit `IPC_006`;
+  `humanitld --fake` öffnet keine Shell. `app/lib/core/ipc/proto_version.dart`
+  bleibt bei 22 (darf nachziehen, `docs/PROTOCOL.md` 5).
+- **Befunde.** Kein neuer Code: Grenze, beendete Sandbox, Ablehnung des
+  Shims und fehlende Tür sind `TERM_002` mit eigenem Satz, keine Sitzung oder
+  eine unbekannte Kennung `IPC_006`. Ein eigener Code (`TERM_003`) bräuchte
+  ARB-Einträge in `app/` und gehört deshalb zur Folge-Issue der App.
+- **Kommandozeile.** `humanitl sandbox exec [--detach-keys] [-- CMD]`
+  (`bin/humanitl/src/cmd/exec.rs`) und `humanitl sandbox attach --shell ID`;
+  `attach::attach_to` und `finish_with` tragen die Kennung und die eigene
+  Zeile nach dem Abhängen. Ohne Terminal auf `stdin` nur lesend. Ohne
+  Kommando `/bin/sh -c 'if command -v bash …; then exec bash -i; fi; exec sh -i'`.
+  `parity.rs`, `docs/reference/cli.md` und `docs/reference/parity.md`
+  (`cargo xtask docs`), `docs/cli.md` („A second shell next to the agent").
+- **Sicherheit.** `docs/SECURITY.md` Abschnitt 4 „Further shells in a running
+  sandbox" und Changelog, `docs/THREAT-MODEL.md` K-18, Tabelle und
+  Änderungsverlauf. Gezählt werden verweigerte `socket()`-Aufrufe einer
+  weiteren Shell nicht (zweiter Listener verboten); das steht dort.
+- **Tests.** Echtes `bwrap`, echter Shim (`daemon/crates/ipc/tests/terminal.rs`):
+  `a_further_shell_runs_next_to_the_agent_with_the_agents_limits` (Agent und
+  Shell drucken denselben Bericht: gleiche Namensräume net, mnt, pid, user,
+  ipc, uts, `Seccomp 2`, `NoNewPrivs 1`, `Seccomp_filters` der Shell ≥ dem
+  des Agenten, `AF_UNIX` `EPERM` per `python3`, gleicher Proxy, `PATH` und
+  `/work`, keine Shim-Variablen, beide nur Deskriptoren 0 bis 2, `/proc/1/fd`
+  zu, eigene Größe 101x33, der Agent läuft und liest weiter),
+  `a_further_shell_dies_with_the_sandbox` (Stopp, `Exit 137` am Terminal der
+  Shell, `sleep 2990299` nicht mehr auf dem Host, Kennung weg),
+  `the_fifth_further_shell_is_refused_until_one_ends` (vier offen, fünfte
+  `TERM_002`, Exit-Code 5 kommt an, danach geht eine neue auf),
+  `exec_without_a_session_says_so`. Einheiten: `shell::tests` (Fake-Shim am
+  Paar: Kommando und Exit-Code, Grenze vier auch für verwaiste Shells,
+  Ablehnung, fremde Kennungen, Ende mit der Sandbox, schlechte Kommandos),
+  `exec::tests` im Shim (Format, jede Abweichung abgelehnt), `parse_cli` mit
+  `--control-fd`, `ipc::exec::tests`, `cmd::exec::tests`. Kommandozeile:
+  `tty::sandbox_exec_opens_a_shell_and_attaches_to_its_terminal` (Fake: `Exec`
+  vor `Open` mit `shell_id 1`, `Ctrl+A d`, Zeile mit `--shell 1`, erneutes
+  `attach --shell 1`). `proto_contract` kennt `Exec`; der Ersatz-Shim in
+  `sandbox/tests/pty.rs` nimmt `--control-fd`.
+- **Mutationsbeweise**, alle Dateien danach mit `cmp` byte-gleich zurück:
+  Filter des Agenten und Probe in der Shell entfernt:
+  `…with_the_agents_limits` rot (`SHELL-UNIX=ok`, `Seccomp_filters=1`).
+  `hub.finish` in `Opened::run` entfernt: `…dies_with_the_sandbox` und
+  `the_fifth…` rot. `MAX_SHELLS` 5 in Shim und Daemon: `the_fifth…` rot
+  (fünfte Shell geht auf), nur im Daemon zusätzlich
+  `the_door_counts_to_four_and_no_further` rot. Tür beim Agenten gelassen
+  (kein `drop(control)`, in der Behalteliste, `CLOEXEC` weg; drei Schichten,
+  eine allein zeigt nichts, weil die anderen halten):
+  `…with_the_agents_limits` rot (`AGENT-FD` mit 26). Prüfung „genau ein
+  Deskriptor" im Shim auf „mindestens einer": `anything_else_is_refused…`
+  rot.
+- **Offen.** App-Reiter „+ Shell" (eigene Issue, liest `sandbox.exec`,
+  `Exec`, `Open.shell_id`); Liste offener Shells für `attach` ohne Kennung
+  (heute nennt die Zeile nach dem Abhängen die Kennung, `IPC_006` die offenen);
+  eigener Befundcode für die Grenze samt ARB.
+- **Review Runde 1** (Codex, Opus; keine blocking/major, alle minor übernommen):
+  - Ein schnelles Kommando (`sandbox exec -- true`) endete, bevor sich die
+    Kommandozeile anhing, und der Exit-Code ging verloren. Jetzt bleibt das
+    Terminal einer beendeten Shell samt Rückstand und Exit-Code für genau
+    einen ersten Client stehen, höchstens `FINISHED_RETENTION` (30 s)
+    (`ShellRegistry::retire`, `get` gibt es einmal heraus). Test
+    `a_fast_shell_leaves_output_and_exit_for_the_first_client`; Mutation
+    (Frist 0) rot.
+  - Die Nummern des Shims beginnen je Sandbox bei 1; ein altes
+    `attach --shell 1` hätte die Shell einer neuen Sitzung getroffen. Die
+    Kennung nach außen ist jetzt `<sitzung>-<n>` (acht Hex-Zeichen aus der
+    zufälligen Hälfte der Sandbox-Kennung, `ShellRegistry::external_id`);
+    geprüft wird beim Anhängen gegen die Ablage der laufenden Sitzung. Tests
+    `a_shell_id_holds_only_in_its_own_session`,
+    `exec::tests::an_external_id_carries_its_sandbox`; Mutation (nur die
+    Nummer) beide rot.
+  - Restrisiko dokumentiert (`docs/SECURITY.md` Abschnitt 4, K-18): Die
+    Shell läuft mit der UID des Agenten im selben PID-Namensraum ohne
+    `hidepid`; der Agent kann lesen, was dort getippt wird, und in ihr
+    Terminal schreiben. Keine Geheimnisse dort tippen. Die Vorgabe-Shell
+    startet ohne Startdateien (`bash --norc --noprofile -i`, `sh -i` ohne
+    `ENV`), ein vom Agenten angelegtes `~/.bashrc` läuft nicht.
+  - „session token" heißt jetzt „the daemon's token".
+  - Shim: Alle empfangenen Deskriptoren eines Kontrollkopfes werden bis zu
+    seinem Ende übernommen und bis auf den einen erwarteten geschlossen
+    (keine Obergrenze 16 mehr); eine Nachricht über `MAX_REQUEST` gilt als
+    fehlerhaft, auch wenn sie in das eine Ersatzbyte passte.
+  - Kandidaten für eigene Issues: weitere Shells vom Agenten trennen
+    (Unter-Nutzernamensraum mit anderer UID, oder `hidepid`/`subset=pid`);
+    das interne Paar in Garantie 2 der `README.md` erwähnen.

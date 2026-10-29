@@ -11,16 +11,16 @@
 //! the bridge to the proxy needs `socket(2)` and lives in the parent; the
 //! agent is a child that carries the filter before `exec` and can never shed
 //! it. Deliberately dependency-free (`libc` and `seccompiler` only, no tokio,
-//! no workspace crate) so the security-critical steps stay auditable in six
+//! no workspace crate) so the security-critical steps stay auditable in seven
 //! short files: this one (process model), `seccomp.rs` (the filter as data),
 //! `bridge.rs` (the bytes), `report.rs` (the evidence), `refusals.rs` (what
-//! the filter refused, counted) and `channel.rs` (how its listener reaches
-//! the parent).
+//! the filter refused, counted), `channel.rs` (how its listener reaches
+//! the parent) and `exec.rs` (further shells the daemon asks for, HUM-299).
 //!
 //! # Launcher <-> shim contract (binding for HUM-011, HUM-012, HUM-013)
 //!
 //! **Command line.** `humanitl-shim --proxy-port <port> [--controlling-terminal]
-//! -- <command> [args...]`, the tail of the bwrap argument vector from
+//! [--control-fd <n>] -- <command> [args...]`, the tail of the bwrap argument vector from
 //! `humanitl_sandbox::SandboxProfile::to_bwrap_args`, where the shim itself
 //! is `/usr/local/bin/humanitl-shim` inside the sandbox. `--proxy-port` is
 //! the port the agent's `HTTP_PROXY` names; the shim refuses to start when
@@ -28,7 +28,12 @@
 //! child the leader of a new session with descriptor 0 as its controlling
 //! terminal; the launcher passes it only when descriptor 0 is the daemon's
 //! own pseudo-terminal, never the user's terminal (see
-//! [`take_controlling_terminal`]). `humanitl-shim --rules` prints the seccomp
+//! [`take_controlling_terminal`]). `--control-fd` (HUM-299) names an
+//! inherited `SOCK_SEQPACKET` socket whose other end only the daemon holds;
+//! over it the daemon asks for further shells next to the agent
+//! (`exec.rs`). Only PID 1 keeps it: the agent's child closes it before its
+//! filter, and a missing or unusable descriptor means no further shells,
+//! never a failed start. `humanitl-shim --rules` prints the seccomp
 //! rule table the same environment would produce, one row per line, and
 //! starts nothing.
 //!
@@ -108,6 +113,7 @@
 
 mod bridge;
 mod channel;
+mod exec;
 mod refusals;
 mod report;
 mod seccomp;
@@ -139,7 +145,7 @@ const EXIT_SETUP: i32 = 126;
 /// Exit status when `execvp` returned.
 const EXIT_EXEC: i32 = 127;
 
-const USAGE: &str = "usage: humanitl-shim --proxy-port <port> [--controlling-terminal] -- <command> [args...]\n\
+const USAGE: &str = "usage: humanitl-shim --proxy-port <port> [--controlling-terminal] [--control-fd <n>] -- <command> [args...]\n\
                      \x20      humanitl-shim --rules    print the seccomp rule table for this environment\n\
                      environment: HUMANITL_BRIDGES, HUMANITL_SECCOMP_FAMILIES, HUMANITL_SECCOMP_TYPES,\n\
                      HUMANITL_SECCOMP_DENY, HUMANITL_REPORT_FD (see the crate documentation)\n";
@@ -188,8 +194,13 @@ fn run() -> i32 {
         }
     };
 
+    // The daemon's door for further shells (HUM-299). Taken before the
+    // descriptors are closed in `launch`, and never a reason to refuse the
+    // start: without it there are simply no further shells.
+    let control = cli.control_fd.and_then(take_control);
+
     match prepare(&cli, &report) {
-        Ok(prepared) => launch(prepared, report, &cli),
+        Ok(prepared) => launch(prepared, report, &cli, control),
         Err(err) => {
             report.check(err.check(), false, &err.to_string());
             say(&format!("humanitl-shim: {err}\n"));
@@ -341,8 +352,28 @@ fn list<'a>(values: impl Iterator<Item = &'a str>) -> String {
     }
 }
 
+/// Takes the descriptor of `--control-fd` when it is an open socket; gives
+/// it `CLOEXEC` so that no `exec` carries it on.
+fn take_control(fd: RawFd) -> Option<OwnedFd> {
+    // SAFETY: plain data; fstat fills it.
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: fstat on a descriptor number with a valid pointer.
+    let rc = unsafe { libc::fstat(fd, &raw mut stat) };
+    if fd < 3 || rc != 0 || stat.st_mode & libc::S_IFMT != libc::S_IFSOCK {
+        say("humanitl-shim: warning: --control-fd is not an open socket; no further shells\n");
+        return None;
+    }
+    // SAFETY: F_SETFD with FD_CLOEXEC changes one flag of one descriptor.
+    unsafe {
+        libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+    }
+    // SAFETY: the launcher handed this descriptor to the shim alone, and
+    // nothing else in this process owns it.
+    Some(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
 /// Step 3 and 4: fork, and each side's life.
-fn launch(prepared: Prepared, report: Report, cli: &Cli) -> i32 {
+fn launch(prepared: Prepared, report: Report, cli: &Cli, control: Option<OwnedFd>) -> i32 {
     // SAFETY: getpid has no preconditions.
     let parent_pid = unsafe { libc::getpid() };
     // The gate the child waits at before `exec` (HUM-137): it opens when the
@@ -371,6 +402,7 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli) -> i32 {
         report.fd().unwrap_or(-1),
         gate_read.as_raw_fd(),
         gate_write.as_raw_fd(),
+        control.as_ref().map_or(-1, AsRawFd::as_raw_fd),
     ]);
     close_inherited(&keep);
     // The pair over which the child hands its listener to the parent
@@ -402,6 +434,10 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli) -> i32 {
         // wait there for ever, and the parent with it in `reap`.
         drop(gate_write);
         drop(parent_end);
+        // The daemon's door for further shells stays with PID 1 (HUM-299):
+        // closed here explicitly, and `close_inherited` in `child` does not
+        // keep it either. The agent never holds it.
+        drop(control);
         child(
             parent_pid,
             &AgentFilter {
@@ -417,6 +453,13 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli) -> i32 {
     }
     drop(gate_read);
     drop(child_end);
+    let shells = control.map(|control| {
+        Arc::new(exec::Shells::new(
+            control,
+            prepared.agent_fallback,
+            &SHIM_VARS,
+        ))
+    });
     let tally = Tally::new(
         prepared
             .policy
@@ -435,6 +478,7 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli) -> i32 {
             control: parent_end,
             tally: Arc::new(tally),
         },
+        shells,
     )
 }
 
@@ -919,6 +963,7 @@ fn parent(
     report: Report,
     gate: OwnedFd,
     refusals: &Refusals,
+    shells: Option<Arc<exec::Shells>>,
 ) -> i32 {
     // The parent holds the listener and the report descriptor while the agent
     // runs. Neither may be reachable from the agent through
@@ -986,8 +1031,29 @@ fn parent(
     if let Err(err) = check_undumpable() {
         return refuse_to_open(child, report, &format!("get:{err}"));
     }
+    // The door for further shells opens last, under the same premises as
+    // the gate: this process wears its filter and is not dumpable, and every
+    // shell forked from here inherits both (HUM-299). A thread that cannot
+    // start costs the shells, not the session.
+    let shells = shells.filter(|shells| {
+        let serving = Arc::clone(shells);
+        let started = thread::Builder::new()
+            .name("shells".to_owned())
+            .spawn(move || serving.serve());
+        if let Err(err) = &started {
+            say(&format!(
+                "humanitl-shim: warning: no further shells: cannot start their thread: {err}\n"
+            ));
+        }
+        started.is_ok()
+    });
     drop(gate);
-    let code = reap(child);
+    let code = reap(child, shells.as_deref());
+    if let Some(shells) = &shells {
+        // The namespace ends with this process anyway; the shells go first
+        // and on purpose, not as a side effect.
+        shells.kill_all();
+    }
     // The last word on the refusals: everything that changed since the last
     // periodic flush, once the agent can make no further attempt.
     refusals::flush(&report, &refusals.tally);
@@ -1126,7 +1192,7 @@ fn kill_and_reap(child: libc::pid_t) {
     unsafe {
         libc::kill(child, libc::SIGKILL);
     }
-    reap(child);
+    reap(child, None);
 }
 
 /// Waits for the child and turns its status into ours: the exit code, or
@@ -1138,8 +1204,10 @@ fn kill_and_reap(child: libc::pid_t) {
 /// liegen, und ein Agent, der viele Prozesse abkoppelt, füllt so die
 /// Prozesstabelle. Der Status einer Waise wird verworfen; nur der eigene
 /// Kindprozess entscheidet über den Exit-Code. `ECHILD`, ohne dass das Kind
-/// geerntet wurde, kann nicht vorkommen und endet mit 126.
-fn reap(child: libc::pid_t) -> i32 {
+/// geerntet wurde, kann nicht vorkommen und endet mit 126. Eine weitere Shell
+/// (HUM-299) ist auch ein Kind dieses Prozesses; ihr Ende geht an `shells`,
+/// das es dem Daemon meldet.
+fn reap(child: libc::pid_t, shells: Option<&exec::Shells>) -> i32 {
     loop {
         let mut status: c_int = 0;
         // SAFETY: waitpid on any child of this process with a valid status
@@ -1155,7 +1223,11 @@ fn reap(child: libc::pid_t) -> i32 {
             continue;
         }
         if waited > 0 {
-            // Eine Waise des Agenten, geerntet und vergessen.
+            // Eine weitere Shell meldet ihr Ende; eine Waise des Agenten wird
+            // geerntet und vergessen.
+            if let Some(shells) = shells {
+                shells.reaped(waited, status);
+            }
             continue;
         }
         if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
@@ -1170,6 +1242,8 @@ struct Cli {
     proxy_port: u16,
     /// `--controlling-terminal` (HUM-280).
     controlling_terminal: bool,
+    /// `--control-fd` (HUM-299).
+    control_fd: Option<RawFd>,
     command: Vec<OsString>,
 }
 
@@ -1179,6 +1253,7 @@ enum CliError {
     Rules,
     MissingProxyPort,
     BadProxyPort(String),
+    BadControlFd(String),
     MissingValue(&'static str),
     UnknownOption(String),
     Positional(String),
@@ -1192,6 +1267,9 @@ impl fmt::Display for CliError {
             Self::Rules => write!(f, "rules"),
             Self::MissingProxyPort => write!(f, "--proxy-port is required"),
             Self::BadProxyPort(value) => write!(f, "--proxy-port {value:?} is not a port"),
+            Self::BadControlFd(value) => {
+                write!(f, "--control-fd {value:?} is not a descriptor above 2")
+            }
             Self::MissingValue(flag) => write!(f, "{flag} needs a value"),
             Self::UnknownOption(arg) => write!(f, "unknown option {arg:?}"),
             Self::Positional(arg) => write!(f, "unexpected argument {arg:?} before --"),
@@ -1203,6 +1281,7 @@ impl fmt::Display for CliError {
 fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> {
     let mut proxy_port = None;
     let mut controlling_terminal = false;
+    let mut control_fd = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--") => {
@@ -1214,12 +1293,22 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
                 return Ok(Cli {
                     proxy_port,
                     controlling_terminal,
+                    control_fd,
                     command,
                 });
             }
             Some("--help" | "-h") => return Err(CliError::Help),
             Some("--rules") => return Err(CliError::Rules),
             Some("--controlling-terminal") => controlling_terminal = true,
+            Some("--control-fd") => {
+                let value = args.next().ok_or(CliError::MissingValue("--control-fd"))?;
+                let fd = value
+                    .to_str()
+                    .and_then(|text| text.parse::<RawFd>().ok())
+                    .filter(|fd| *fd > 2)
+                    .ok_or_else(|| CliError::BadControlFd(value.to_string_lossy().into_owned()))?;
+                control_fd = Some(fd);
+            }
             Some("--proxy-port") => {
                 let value = args.next().ok_or(CliError::MissingValue("--proxy-port"))?;
                 let port = value
@@ -1335,7 +1424,18 @@ mod tests {
         ]))
         .unwrap();
         assert!(cli.controlling_terminal);
+        assert_eq!(cli.control_fd, None);
         assert_eq!(cli.command, [OsString::from("bash")]);
+        let cli = parse_cli(args(&[
+            "--proxy-port",
+            "3128",
+            "--control-fd",
+            "9",
+            "--",
+            "sh",
+        ]))
+        .unwrap();
+        assert_eq!(cli.control_fd, Some(9));
         // Arguments after -- are the agent's, whatever they look like.
         let cli = parse_cli(args(&["--proxy-port", "0", "--", "--help"])).unwrap();
         assert_eq!(cli.command, [OsString::from("--help")]);
@@ -1356,6 +1456,18 @@ mod tests {
                 "unknown option \"--verbose\"",
             ),
             (&["sh", "--", "sh"], "unexpected argument \"sh\" before --"),
+            (
+                &["--proxy-port", "1", "--control-fd", "2", "--", "sh"],
+                "--control-fd \"2\" is not a descriptor above 2",
+            ),
+            (
+                &["--proxy-port", "1", "--control-fd", "x", "--", "sh"],
+                "is not a descriptor above 2",
+            ),
+            (
+                &["--proxy-port", "1", "--control-fd"],
+                "--control-fd needs a value",
+            ),
         ];
         for (list, needle) in cases {
             let err = match parse_cli(args(list)) {

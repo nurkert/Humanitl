@@ -114,7 +114,7 @@ without a mechanism yet).
 | K-11 | queue and rule metadata | a, b, c | low | `humanitl.internal` is read-only, `/ask` never creates a rule; the policy oracle stays | declared | ESC-4 |
 | K-12 | package caches | b | medium | caches per project, not per trust level; none unless configured | declared | - |
 
-Four further channels complete the model:
+Five further channels complete the model:
 
 | ID | Channel | Attackers | Severity | Mitigation in 0.1 | Status | Test |
 |---|---|---|---|---|---|---|
@@ -122,6 +122,7 @@ Four further channels complete the model:
 | K-14 | audit file on the host | d | high | hash chain with HMAC, anchors in file and SQLite; mitigated only against an attacker without the HMAC key: not against a same-user process that has the key, not a cut behind the last anchor | declared | ESC-5 |
 | K-15 | the window between `exec` and `SIGKILL` | b | high | report read at once, `SIGKILL` without grace | open | - |
 | K-16 | recording outage | a, b, c | medium | outage reported to every client once per cause, cards marked "not recorded", first approval paused | declared | `daemon/crates/recorder` health tests, golden `states_recorder_failure` |
+| K-18 | the door for further shells (`humanitl sandbox exec`) | b | high | unnamed socket pair held only by the daemon and PID 1; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX`; at most four; dies with the sandbox | mitigated | `daemon/crates/ipc/tests/terminal.rs` (HUM-299) |
 
 K-13 is the obvious channel and the only one considered closed outright. K-14 is here so that
 attacker (d) appears in a row. K-15 came with HUM-041: the check that proves the guarantees runs
@@ -324,6 +325,35 @@ command stays unbound. *Residual risk:* whoever can write as the user, or holds 
 access to an ancestor directory before the check, can substitute another file owned by the user
 or root; that is outside the threat model (see [Out of scope](#out-of-scope)).
 
+### K-18 The door for further shells
+
+`humanitl sandbox exec` (RPC `Exec`, HUM-299) opens a shell next to the agent. The daemon does not
+enter the sandbox's namespaces; it asks PID 1 over a `SOCK_SEQPACKET` pair the launcher creates
+only for a session at the daemon's pseudo-terminal, and the shim forks the shell from inside. That
+pair is a second channel between the sandbox and the host next to the proxy socket, so attacker
+(b) would try three things. (1) *Ask for a shell from inside, or send the daemon something on the
+pair.* The pair has no name in any filesystem; inside, only PID 1 holds its end (the agent's child
+closes it, it carries `CLOEXEC`, every further shell closes all descriptors above 2), and PID 1 is
+not dumpable, so `/proc/1/fd` and `pidfd_getfd` do not reach it. Even a request from inside would
+start nothing the agent cannot already run itself. The daemon reads only nine-byte answers for ids
+it asked for and never accepts a descriptor from the pair. (2) *Get a shell with fewer limits than
+the agent.* The shell inherits PID 1's filter, which allows `AF_UNIX`, and installs the agent's
+filter on top before `exec`; the shim checks that `socket(AF_UNIX)` is refused and does not start
+the shell otherwise. Mounts, namespaces, environment and the proxy are the agent's, because the
+shell is forked inside the same sandbox. (3) *Outlive the session or exhaust the host.* At most
+four shells live at a time (shim and daemon both count); PID 1 kills them when the agent ends,
+they die with the forking thread and the PID namespace, and the daemon ends their terminals when
+its end of the pair closes. The only caller on the host side is the `Exec` RPC, behind the
+daemon's token on the daemon's socket, which is never bound into the sandbox; shell ids carry a
+part of the sandbox id, so an id from an earlier session reaches nothing. *Residual risk:* refused
+`socket()` calls of a further shell are refused but not counted (K-13 stays visible for the
+agent only), because the filters refuse a second listener. The shell is not confidential against
+the agent: it runs with the agent's UID in the same PID namespace without `hidepid`, so the agent
+can read what is typed into it and write into its terminal. Never type secrets there. The default
+shell runs no start files (`bash --norc --noprofile`, `sh` without `ENV`), so an rc file the agent
+planted does not run when it opens. Isolating further shells from the agent (a sub-user namespace
+with another UID, or `hidepid`) is a candidate for a later issue.
+
 ## Assumptions
 
 | ID | Assumption | How to check it | If it breaks |
@@ -392,6 +422,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-23 | K-02: several saved model servers, one keyring item each; only the active origin gets a key and the passthrough | HUM-289 |
 | 2026-10-24 | K-06: the session's first process takes the daemon's pseudo-terminal as controlling terminal, `--new-session` stays; K-17: a caller's command gets the configured agent bound beside it, never itself | HUM-280 |
 | 2026-10-29 | B1: the agent's own permission prompts are no boundary; OpenCode's for `webfetch` and `bash` are off | HUM-308 |
+| 2026-10-29 | K-18: further shells next to the agent through a socket pair only the daemon and PID 1 hold, forked inside with the agent's filter on top | HUM-299 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

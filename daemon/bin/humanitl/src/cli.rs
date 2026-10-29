@@ -436,6 +436,29 @@ pub enum SandboxCmd {
         /// `terminal.detach_prefix`, which is ctrl-a.
         #[arg(long, value_name = "SPEC")]
         detach_keys: Option<String>,
+        /// Attach to a further shell from `humanitl sandbox exec` instead of
+        /// the agent's terminal.
+        #[arg(long, value_name = "ID")]
+        shell: Option<String>,
+    },
+
+    /// Open a further shell in the running sandbox, next to the agent.
+    ///
+    /// Like docker exec: the shell gets a terminal of its own, the agent
+    /// keeps running and keeps its terminal. The shell carries the same
+    /// limits as the agent (filter, mounts, network through the proxy, rules)
+    /// and sees the same project folder. It ends when its process exits or
+    /// when the sandbox stops; at most four live at a time. Detach with
+    /// Ctrl+A d, attach again with `humanitl sandbox attach --shell ID`.
+    /// Without a terminal on stdin the command only watches the output.
+    Exec {
+        /// The prefix of the detach key, as for `humanitl sandbox attach`.
+        #[arg(long, value_name = "SPEC")]
+        detach_keys: Option<String>,
+        /// The command to run, after `--`; without it an interactive bash,
+        /// or sh when the sandbox has no bash.
+        #[arg(last = true, value_name = "CMD")]
+        cmd: Vec<OsString>,
     },
 }
 

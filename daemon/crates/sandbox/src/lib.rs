@@ -107,6 +107,7 @@ pub mod os_release;
 mod pinned;
 pub mod profile;
 pub mod refusals;
+pub mod shell;
 pub mod summary;
 pub mod work_dir;
 pub mod worktree;
@@ -120,7 +121,7 @@ pub use crate::bridge_env::{
     CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NAMES, CHECK_NO_INTERFACES, CHECK_PREFIX,
     CHECK_SECCOMP_APPLIED, CHECK_SINGLE_SOCKET, ENV_BRIDGES, ENV_REPORT_FD, ENV_SECCOMP_DENY,
     ENV_SECCOMP_FAMILIES, ENV_SECCOMP_TYPES, EXEC_PREFIX, EXIT_EXEC, EXIT_SETUP, EXIT_USAGE,
-    ExecFailure, RESERVED_ENV, SHIM_CONTROLLING_TERMINAL, ShimCheck, bridges_json,
+    ExecFailure, RESERVED_ENV, SHIM_CONTROL_FD, SHIM_CONTROLLING_TERMINAL, ShimCheck, bridges_json,
     parse_check_line, parse_exec_line, shim_env,
 };
 pub use crate::bwrap::{
@@ -154,6 +155,7 @@ pub use crate::refusals::{
     MAX_REFUSAL_ENTRIES, REFUSALS_PREFIX, REFUSED_PREFIX, Refusal, RefusalLine, RefusalReason,
     RefusalReporting, Refusals, parse_refusal_line, refusals_unreported,
 };
+pub use crate::shell::{ENDED_WITH_SANDBOX, MAX_SHELLS, Shell, ShellDoor};
 pub use crate::summary::{
     ChangeKind, FileChangeRecord, SCAN_MAX_BYTES, SessionSummary, SummaryFinding, SymlinkEscape,
     executable_on_host, looks_like_text,

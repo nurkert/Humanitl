@@ -19,6 +19,7 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl sandbox argv`](#humanitl-sandbox-argv) Print the bwrap command line for the current profile without starting it
 - [`humanitl sandbox check`](#humanitl-sandbox-check) Start a short-lived sandbox and show the three isolation guarantees
 - [`humanitl sandbox attach`](#humanitl-sandbox-attach) Attach this terminal to the running session
+- [`humanitl sandbox exec`](#humanitl-sandbox-exec) Open a further shell in the running sandbox, next to the agent
 - [`humanitl rules`](#humanitl-rules) List, add, change, reorder, dry-run and reload rules
 - [`humanitl rules list`](#humanitl-rules-list) List the rules in the order in which they are evaluated
 - [`humanitl rules add`](#humanitl-rules-add) Add a rule. The daemon checks it and answers with the whole set
@@ -222,6 +223,7 @@ Commands:
   argv    Print the bwrap command line for the current profile without starting it
   check   Start a short-lived sandbox and show the three isolation guarantees
   attach  Attach this terminal to the running session
+  exec    Open a further shell in the running sandbox, next to the agent
   help    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -357,6 +359,45 @@ Options:
 
       --detach-keys <SPEC>
           The prefix of the detach key: ctrl-a to ctrl-z (not ctrl-h, ctrl-i, ctrl-j, ctrl-m: Backspace, Tab and Enter send them), ctrl-\, ctrl-], ctrl-^, ctrl-_, or none for no detach key. Default from `terminal.detach_prefix`, which is ctrl-a
+
+      --shell <ID>
+          Attach to a further shell from `humanitl sandbox exec` instead of the agent's terminal
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## humanitl sandbox exec
+
+```text
+Open a further shell in the running sandbox, next to the agent.
+
+Like docker exec: the shell gets a terminal of its own, the agent keeps running and keeps its terminal. The shell carries the same limits as the agent (filter, mounts, network through the proxy, rules) and sees the same project folder. It ends when its process exits or when the sandbox stops; at most four live at a time. Detach with Ctrl+A d, attach again with `humanitl sandbox attach --shell ID`. Without a terminal on stdin the command only watches the output.
+
+Usage: humanitl sandbox exec [OPTIONS] [-- <CMD>...]
+
+Arguments:
+  [CMD]...
+          The command to run, after `--`; without it an interactive bash, or sh when the sandbox has no bash
+
+Options:
+      --detach-keys <SPEC>
+          The prefix of the detach key, as for `humanitl sandbox attach`
+
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
 
   -v, --verbose...
           Explain what is happening; repeat for more

@@ -463,7 +463,11 @@ impl DaemonApi for SilentExport {
             return Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx));
         }
         let input = input.map(move |message| {
-            let kind = match message.input {
+            let kind = match &message.input {
+                // The terminal of a further shell (HUM-299), and only the
+                // one `exec` below hands out.
+                Some(Input::Open(open)) if open.shell_id == "1" => "open-shell-1",
+                Some(Input::Open(open)) if !open.shell_id.is_empty() => "open-shell-other",
                 Some(Input::Open(_)) => "open",
                 Some(Input::Data(_)) => "data",
                 Some(Input::Resize(_)) => "resize",
@@ -477,6 +481,23 @@ impl DaemonApi for SilentExport {
             message
         });
         self.inner.terminal(Box::pin(input))
+    }
+    /// One further shell, always id 1 (HUM-299); the command is recorded as
+    /// the kind `exec` so a test sees that the RPC came before the terminal.
+    async fn exec(&self, request: v1::ExecRequest) -> Result<v1::ExecResponse, Diagnostic> {
+        self.terminal_inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(if request.command.is_empty() {
+                "exec-default"
+            } else {
+                "exec-command"
+            });
+        Ok(v1::ExecResponse {
+            shell_id: "1".to_owned(),
+            command: request.command,
+            sandbox_id: "fake".to_owned(),
+        })
     }
     async fn audit(&self, request: v1::AuditRequest) -> Result<v1::AuditResponse, Diagnostic> {
         match request.op.as_ref() {

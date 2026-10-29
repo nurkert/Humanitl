@@ -168,6 +168,9 @@ pub(crate) struct LaunchOnce {
     pub(crate) report: PipeReader,
     /// Die Leseseite der Status-Pipe von `bwrap`.
     pub(crate) status: PipeReader,
+    /// Die Seite des Daemons an der Tür zu weiteren Shells (HUM-299), nur
+    /// für einen Start am eigenen Pseudoterminal.
+    pub(crate) shells: Option<OwnedFd>,
 }
 
 /// Die vollständige Kommandozeile samt allem, was der Start braucht.

@@ -266,6 +266,7 @@ impl Client {
                     cols,
                     rows,
                     read_only,
+                    shell_id: String::new(),
                 })),
             })
             .expect("the session takes its Open");
@@ -1469,6 +1470,447 @@ async fn ctrl_c_interrupts_the_foreground_program_not_the_shell() {
             client.wait_for(&mut seen, "ALIVE-7").await,
             "the session still runs: {seen:?}"
         );
+    })
+    .await;
+}
+
+// ---- further shells (HUM-299) ----------------------------------------------
+
+/// Opens a further shell with `command` at `cols` by `rows` and returns its
+/// id and its terminal.
+async fn exec_shell(
+    service: &SandboxService,
+    command: &[&str],
+    cols: u32,
+    rows: u32,
+) -> Result<(String, TerminalHub), humanitl_core::Diagnostic> {
+    let response = within(
+        "the sandbox to open a further shell",
+        WAIT,
+        service.exec(v1::ExecRequest {
+            sandbox_id: String::new(),
+            command: command.iter().map(|part| (*part).to_owned()).collect(),
+            cols,
+            rows,
+        }),
+    )
+    .await?;
+    let hub = service
+        .terminal_for(&shell_open(&response.shell_id))
+        .expect("a shell that was just opened has a terminal");
+    Ok((response.shell_id, hub))
+}
+
+fn shell_open(shell_id: &str) -> v1::terminal_input::Open {
+    v1::terminal_input::Open {
+        sandbox_id: String::new(),
+        cols: 0,
+        rows: 0,
+        read_only: false,
+        shell_id: shell_id.to_owned(),
+    }
+}
+
+/// The value after `KEY=` on the first line that starts with it.
+fn value_of<'a>(seen: &'a str, key: &str) -> Option<&'a str> {
+    seen.lines()
+        .map(|line| line.trim_end_matches('\r'))
+        .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+}
+
+/// Every value after `KEY=`, in order.
+fn values_of<'a>(seen: &'a str, key: &str) -> Vec<&'a str> {
+    seen.lines()
+        .map(|line| line.trim_end_matches('\r'))
+        .filter_map(|line| line.strip_prefix(key)?.strip_prefix('='))
+        .collect()
+}
+
+/// What a process of the sandbox prints about itself, every line with
+/// `PREFIX-` in front: namespaces, its filter, its descriptors, whether PID 1's
+/// descriptors are open to it, its environment and whether `AF_UNIX` is
+/// refused (`tests/escape/esc-1-sockets.sh`, `socket_af_unix`).
+fn self_report(p: &str) -> String {
+    format!(
+        r#"for n in net mnt pid user ipc uts; do printf '{p}-NS-%s=%s\n' $n "$(readlink /proc/self/ns/$n)"; done; grep -E '^(Seccomp|Seccomp_filters|NoNewPrivs):' /proc/self/status | while read -r k v; do printf '{p}-%s=%s\n' "${{k%:}}" "$v"; done; ls -1 /proc/$$/fd | sed 's/^/{p}-FD=/'; ls /proc/1/fd >/dev/null 2>&1 && printf '{p}-PID1-FD=open\n'; printf '{p}-PROXY=%s\n' "$HTTP_PROXY"; printf '{p}-PATH=%s\n' "$PATH"; printf '{p}-CWD=%s\n' "$PWD"; printf '{p}-SHIMVARS=%s\n' "$(env | grep -c '^HUMANITL_\(BRIDGES\|SECCOMP\|REPORT_FD\)')"; if command -v python3 >/dev/null 2>&1; then python3 -c 'import socket
+try:
+    socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).close()
+    print("{p}-UNIX=ok")
+except PermissionError:
+    print("{p}-UNIX=EPERM")'; else printf '{p}-UNIX=skip\n'; fi; printf '{p}-DONE\n'"#
+    )
+}
+
+/// What [`a_further_shell_runs_next_to_the_agent_with_the_agents_limits`]
+/// compares: the shell's report `seen` against the agent's `agent_seen`.
+fn assert_the_agents_limits(seen: &str, agent_seen: &str) {
+    for ns in ["net", "mnt", "pid", "user", "ipc", "uts"] {
+        let agent = value_of(agent_seen, &format!("AGENT-NS-{ns}"));
+        let shell = value_of(seen, &format!("SHELL-NS-{ns}"));
+        assert!(
+            agent.is_some(),
+            "the agent names its {ns} namespace: {agent_seen:?}"
+        );
+        assert_eq!(shell, agent, "the shell shares the agent's {ns} namespace");
+    }
+    assert_eq!(value_of(seen, "SHELL-Seccomp"), Some("2"), "{seen:?}");
+    assert_eq!(value_of(seen, "SHELL-NoNewPrivs"), Some("1"), "{seen:?}");
+    let filters = |text: &str, key: &str| -> u32 {
+        value_of(text, key)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    };
+    assert!(
+        filters(agent_seen, "AGENT-Seccomp_filters") >= 1
+            && filters(seen, "SHELL-Seccomp_filters")
+                >= filters(agent_seen, "AGENT-Seccomp_filters"),
+        "the shell carries at least the agent's filters: {seen:?} / {agent_seen:?}"
+    );
+    let unix = value_of(seen, "SHELL-UNIX");
+    assert_ne!(
+        unix,
+        Some("ok"),
+        "AF_UNIX is refused in the shell: {seen:?}"
+    );
+    if std::env::var_os("CI").is_some() {
+        assert_eq!(unix, Some("EPERM"), "{seen:?}");
+    }
+    assert_eq!(
+        unix,
+        value_of(agent_seen, "AGENT-UNIX"),
+        "the same answer as the agent's"
+    );
+    for key in ["PROXY", "PATH", "CWD"] {
+        let mine = value_of(seen, &format!("SHELL-{key}"));
+        assert!(mine.is_some_and(|v| !v.is_empty()), "SHELL-{key}: {seen:?}");
+        assert_eq!(
+            mine,
+            value_of(agent_seen, &format!("AGENT-{key}")),
+            "{key} as for the agent"
+        );
+    }
+    assert_eq!(value_of(seen, "SHELL-CWD"), Some("/work"));
+    assert_eq!(value_of(seen, "SHELL-SHIMVARS"), Some("0"), "{seen:?}");
+    assert_eq!(value_of(agent_seen, "AGENT-SHIMVARS"), Some("0"));
+    for (text, key) in [(seen, "SHELL-FD"), (agent_seen, "AGENT-FD")] {
+        let fds = values_of(text, key);
+        assert!(!fds.is_empty(), "{key}: {text:?}");
+        assert!(
+            fds.iter().all(|fd| ["0", "1", "2"].contains(fd)),
+            "{key}: nothing above descriptor 2, the door included: {fds:?}"
+        );
+    }
+    assert_eq!(value_of(seen, "SHELL-PID1-FD"), None, "{seen:?}");
+    assert_eq!(
+        value_of(agent_seen, "AGENT-PID1-FD"),
+        None,
+        "{agent_seen:?}"
+    );
+    assert_eq!(
+        value_of(seen, "SHELL-SIZE"),
+        Some("33 101"),
+        "its own terminal"
+    );
+}
+
+/// A further shell runs next to the agent, in the same sandbox, with every
+/// limit the agent has and its own terminal (HUM-299, acceptance criteria 1
+/// and 2).
+///
+/// The agent and the shell print the same report; the test compares them.
+/// Same namespaces (network, mounts, PID, user, IPC, UTS), the filter on and
+/// at least the agent's (`Seccomp_filters`: the parent's bridge filter plus
+/// the agent's own), `NoNewPrivs`, `AF_UNIX` refused although PID 1's filter
+/// allows it, the same proxy and `PATH`, `/work` as its directory, none of
+/// the shim's variables, and nothing above descriptor 2: neither of them
+/// holds the door for further shells, and PID 1's descriptors are closed to
+/// both. The shell's own size (101 by 33) shows that its terminal is its own.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_further_shell_runs_next_to_the_agent_with_the_agents_limits() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+    let agent = format!(
+        "{}; while read -r line; do printf 'GOT %s\\n' \"$line\"; done",
+        self_report("AGENT")
+    );
+    let Some(agent_hub) = running_with(&service, fixture.start_with(&agent)).await else {
+        return;
+    };
+    let shell = format!(
+        "{}; printf 'SHELL-SIZE=%s\\n' \"$(stty size)\"; sleep 30",
+        self_report("SHELL")
+    );
+    let opened = exec_shell(&service, &["/bin/sh", "-c", &shell], 101, 33).await;
+    with_session(service, async move {
+        let mut agent_client = Client::attach(&agent_hub, 80, 24, false);
+        let mut agent_seen = String::new();
+        assert!(
+            agent_client.wait_for(&mut agent_seen, "AGENT-DONE").await,
+            "the agent reports: {agent_seen:?}"
+        );
+        let (shell_id, shell_hub) = opened.expect("the sandbox opens a further shell");
+        assert!(shell_id.ends_with("-1"), "{shell_id}");
+        assert_eq!(shell_hub.shell_id(), Some(shell_id.as_str()));
+        let mut shell_client = Client::attach(&shell_hub, 101, 33, false);
+        let mut seen = String::new();
+        assert!(
+            shell_client.wait_for(&mut seen, "SHELL-SIZE=").await,
+            "the shell reports: {seen:?}"
+        );
+        // The rest of the size line.
+        let _ = shell_client.wait_for(&mut seen, " 101").await;
+        assert_the_agents_limits(&seen, &agent_seen);
+        // The agent's terminal did not get the shell's bytes, and the agent
+        // still runs and reads.
+        assert!(!agent_seen.contains("SHELL-"), "{agent_seen:?}");
+        agent_client
+            .send(v1::terminal_input::Input::Data(b"still-here\r".to_vec()))
+            .await;
+        assert!(
+            agent_client
+                .wait_for(&mut agent_seen, "GOT still-here")
+                .await,
+            "the agent runs on: {agent_seen:?}"
+        );
+    })
+    .await;
+}
+
+/// The id of a running process on the host whose command line holds `needle`.
+fn host_process_with(needle: &str) -> Option<String> {
+    std::fs::read_dir("/proc")
+        .ok()?
+        .flatten()
+        .find_map(|entry| {
+            let cmdline = std::fs::read(entry.path().join("cmdline")).ok()?;
+            let text = String::from_utf8_lossy(&cmdline).replace('\0', " ");
+            text.contains(needle)
+                .then(|| entry.file_name().to_string_lossy().into_owned())
+        })
+}
+
+/// Reads `client` until the terminal says that its process ended.
+async fn exit_code(client: &mut Client, what: &str) -> i32 {
+    let until = tokio::time::Instant::now() + WAIT;
+    loop {
+        match client.next_at(until).await {
+            Some(v1::TerminalOutput {
+                output: Some(v1::terminal_output::Output::Exit(exit)),
+            }) => return exit.code,
+            Some(_) => {}
+            None => panic!("{what} never ended within {WAIT:?}"),
+        }
+    }
+}
+
+/// Stopping the sandbox ends every further shell: its terminal sends the exit
+/// to every client, its id is gone, and its process is gone from the host
+/// (HUM-299, acceptance criterion 3).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_further_shell_dies_with_the_sandbox() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+    if running(&service, &fixture).await.is_none() {
+        return;
+    }
+    let marker = "sleep 2990299";
+    let opened = exec_shell(&service, &["sleep", "2990299"], 80, 24).await;
+    let inner = service.clone();
+    with_session(service, async move {
+        let (shell_id, hub) = opened.expect("the sandbox opens a further shell");
+        let mut client = Client::attach(&hub, 80, 24, true);
+        let until = tokio::time::Instant::now() + WAIT;
+        while host_process_with(marker).is_none() {
+            assert!(tokio::time::Instant::now() < until, "the shell never ran");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        drain(inner.stream(stop())).await;
+        assert_eq!(
+            exit_code(&mut client, "the shell").await,
+            humanitl_sandbox::ENDED_WITH_SANDBOX,
+            "killed with the sandbox"
+        );
+        let until = tokio::time::Instant::now() + WAIT;
+        while let Some(pid) = host_process_with(marker) {
+            assert!(
+                tokio::time::Instant::now() < until,
+                "process {pid} outlived the sandbox"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            inner.terminal_for(&shell_open(&shell_id)).is_err(),
+            "no terminal for a shell that ended with its sandbox"
+        );
+    })
+    .await;
+}
+
+/// At most four further shells live at a time; the fifth is refused with
+/// `TERM_002`, and once one ends its place is free again. Its exit code
+/// reaches its terminal (HUM-299, acceptance criterion 4).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_fifth_further_shell_is_refused_until_one_ends() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+    if running(&service, &fixture).await.is_none() {
+        return;
+    }
+    let inner = service.clone();
+    with_session(service, async move {
+        let script = ["/bin/sh", "-c", "printf 'WAITING\\n'; read -r line; exit 5"];
+        let mut hubs = Vec::new();
+        // Four, the number of the specification, not the constant.
+        for _ in 0..4 {
+            let (_, hub) = exec_shell(&inner, &script, 80, 24)
+                .await
+                .expect("four further shells open");
+            hubs.push(hub);
+        }
+        let refused = exec_shell(&inner, &script, 80, 24)
+            .await
+            .expect_err("a fifth further shell is refused");
+        assert_eq!(refused.code.as_str(), "TERM_002", "{refused}");
+        assert!(refused.why.contains("4 further shells"), "{}", refused.why);
+
+        let mut client = Client::attach(&hubs[0], 80, 24, false);
+        let mut seen = String::new();
+        assert!(client.wait_for(&mut seen, "WAITING").await, "{seen:?}");
+        client
+            .send(v1::terminal_input::Input::Data(b"go\r".to_vec()))
+            .await;
+        assert_eq!(
+            exit_code(&mut client, "the first shell").await,
+            5,
+            "the shell's own exit code"
+        );
+        let until = tokio::time::Instant::now() + WAIT;
+        loop {
+            match exec_shell(&inner, &script, 80, 24).await {
+                Ok(_) => break,
+                Err(err) => assert!(
+                    tokio::time::Instant::now() < until,
+                    "the place of the ended shell never came free: {err}"
+                ),
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+}
+
+/// Without a session, `Exec` answers like `Terminal`: `IPC_006`; and so does
+/// an id under which no shell lives.
+#[tokio::test(flavor = "multi_thread")]
+async fn exec_without_a_session_says_so() {
+    let fixture = Fixture::new();
+    let service = fixture.service();
+    let error = service
+        .exec(v1::ExecRequest::default())
+        .await
+        .expect_err("nothing runs here");
+    assert_eq!(error.code.as_str(), "IPC_006", "{error}");
+    let error = service
+        .terminal_for(&shell_open("1"))
+        .expect_err("no shell without a session");
+    assert_eq!(error.code.as_str(), "IPC_006", "{error}");
+}
+
+/// A command that ends before anybody attaches still leaves its output and
+/// its exit code to the first client; after that its id is gone (HUM-299,
+/// review: `humanitl sandbox exec -- true`).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fast_shell_leaves_output_and_exit_for_the_first_client() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+    if running(&service, &fixture).await.is_none() {
+        return;
+    }
+    let inner = service.clone();
+    with_session(service, async move {
+        let response = within(
+            "the sandbox to open a further shell",
+            WAIT,
+            inner.exec(v1::ExecRequest {
+                command: ["/bin/sh", "-c", "printf 'FAST-OUT\\n'; exit 7"]
+                    .iter()
+                    .map(|part| (*part).to_owned())
+                    .collect(),
+                ..v1::ExecRequest::default()
+            }),
+        )
+        .await
+        .expect("the sandbox opens a further shell");
+        // Long enough for the command to end and its reader to finish the
+        // terminal before anybody attaches.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        let hub = inner
+            .terminal_for(&shell_open(&response.shell_id))
+            .expect("a finished shell waits for its first client");
+        let mut client = Client::attach(&hub, 80, 24, true);
+        let mut seen = String::new();
+        let until = tokio::time::Instant::now() + WAIT;
+        let code = loop {
+            match client.next_at(until).await {
+                Some(v1::TerminalOutput {
+                    output: Some(v1::terminal_output::Output::Exit(exit)),
+                }) => break exit.code,
+                Some(output) => client.take(output, &mut seen),
+                None => panic!("no exit for the first client: {seen:?}"),
+            }
+        };
+        assert_eq!(code, 7, "the command's own exit code");
+        assert!(seen.contains("FAST-OUT"), "its output: {seen:?}");
+        assert!(
+            inner.terminal_for(&shell_open(&response.shell_id)).is_err(),
+            "only the first client gets a finished shell"
+        );
+    })
+    .await;
+}
+
+/// An id is valid only in its own session: the bare number of the shim, or
+/// the number with another session's part, reaches nothing (HUM-299, review:
+/// an old `attach --shell 1` must not reach a new session's shell).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shell_id_holds_only_in_its_own_session() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+    if running(&service, &fixture).await.is_none() {
+        return;
+    }
+    let opened = exec_shell(&service, &["sleep", "30"], 80, 24).await;
+    let inner = service.clone();
+    with_session(service, async move {
+        let (shell_id, _hub) = opened.expect("the sandbox opens a further shell");
+        let (session, number) = shell_id.split_once('-').expect("<session>-<n>");
+        assert_eq!(number, "1");
+        assert_eq!(session.len(), 8, "{shell_id}");
+        for stale in ["1".to_owned(), format!("{}-1", "0".repeat(8))] {
+            if stale == shell_id {
+                continue;
+            }
+            let error = inner
+                .terminal_for(&shell_open(&stale))
+                .expect_err("an id of another session reaches nothing");
+            assert_eq!(error.code.as_str(), "IPC_006", "{error}");
+        }
+        assert!(inner.terminal_for(&shell_open(&shell_id)).is_ok());
     })
     .await;
 }
