@@ -703,6 +703,38 @@ impl BwrapBackend {
     }
 }
 
+impl BwrapBackend {
+    /// Eine Pipe, deren Schreibseite `bwrap` erbt: Sie liegt deshalb über den
+    /// Standardströmen (`inherit.rs`). `name` steht im Befund.
+    fn inherited_pipe(name: &str) -> Result<(PipeReader, OwnedFd), Diagnostic> {
+        let (reader, writer) = std::io::pipe().map_err(|err| {
+            placeholder_diagnostic(format!("cannot create the {name} pipe: {err}"))
+        })?;
+        let writer = above_stdio(OwnedFd::from(writer)).map_err(|err| {
+            placeholder_diagnostic(format!("cannot place the {name} pipe: {err}"))
+        })?;
+        Ok((reader, writer))
+    }
+
+    /// The door for further shells (HUM-299) as `(daemon's end, shim's
+    /// end)`, like the controlling terminal only at the daemon's own
+    /// pseudo-terminal: a sandbox that runs without the daemon has nobody to
+    /// ask for a shell. The shim's end lies above the standard streams
+    /// (`inherit.rs`).
+    fn shell_door(&self) -> Result<(Option<OwnedFd>, Option<OwnedFd>), Diagnostic> {
+        if self.stdio.pty_size().is_none() {
+            return Ok((None, None));
+        }
+        let (daemon_end, shim_end) = crate::shell::pair().map_err(|err| {
+            placeholder_diagnostic(format!("cannot create the door for further shells: {err}"))
+        })?;
+        let shim_end = above_stdio(shim_end).map_err(|err| {
+            placeholder_diagnostic(format!("cannot place the door for further shells: {err}"))
+        })?;
+        Ok((Some(daemon_end), Some(shim_end)))
+    }
+}
+
 impl SandboxBackend for BwrapBackend {
     fn name(&self) -> &'static str {
         "bwrap"
@@ -761,20 +793,8 @@ impl SandboxBackend for BwrapBackend {
         // die zwei Pipes, die drei Identitätsdateien, dann eine Maske je
         // Eintrag von `masks_to_render`, jede mit ihrem eigenen memfd, die
         // Adapter-Dateien und zuletzt die geöffneten Verzeichnisse (HUM-263).
-        let (report_reader, report_writer) = std::io::pipe().map_err(|err| {
-            placeholder_diagnostic(format!("cannot create the report pipe: {err}"))
-        })?;
-        let (status_reader, status_writer) = std::io::pipe().map_err(|err| {
-            placeholder_diagnostic(format!("cannot create the status pipe: {err}"))
-        })?;
-        // Die Schreibseiten erbt `bwrap`; sie liegen deshalb über den
-        // Standardströmen (`inherit.rs`).
-        let report_writer = above_stdio(OwnedFd::from(report_writer)).map_err(|err| {
-            placeholder_diagnostic(format!("cannot place the report pipe: {err}"))
-        })?;
-        let status_writer = above_stdio(OwnedFd::from(status_writer)).map_err(|err| {
-            placeholder_diagnostic(format!("cannot place the status pipe: {err}"))
-        })?;
+        let (report_reader, report_writer) = Self::inherited_pipe("report")?;
+        let (status_reader, status_writer) = Self::inherited_pipe("status")?;
         let identity = profile.identity_files(
             rustix::process::getuid().as_raw(),
             rustix::process::getgid().as_raw(),
@@ -798,6 +818,7 @@ impl SandboxBackend for BwrapBackend {
 
         let (agent_fds, agent_files) = Self::agent_file_fds(session)?;
         let (work_dir, read_only, writable) = pinned.sources(self);
+        let (shell_door, shim_door) = self.shell_door()?;
 
         let inputs = LaunchInputs {
             masks: MaskFds::Each(masks.iter().map(AsRawFd::as_raw_fd).collect()),
@@ -819,6 +840,7 @@ impl SandboxBackend for BwrapBackend {
             // descriptors may be the user's terminal, and that one must never
             // become a controlling terminal inside the sandbox (`TIOCSTI`).
             controlling_terminal: self.stdio.pty_size().is_some(),
+            control_fd: shim_door.as_ref().map(AsRawFd::as_raw_fd),
         };
         let env = profile.effective_env(session, inputs.report_fd);
         let mut argv = vec![self.program.clone().into_os_string()];
@@ -828,6 +850,7 @@ impl SandboxBackend for BwrapBackend {
         inherit.extend(masks);
         inherit.extend(agent_fds);
         inherit.extend(pinned.into_fds());
+        inherit.extend(shim_door);
         let fds = inherit
             .iter()
             .map(|fd| (fd.as_raw_fd(), fd.as_raw_fd()))
@@ -846,6 +869,7 @@ impl SandboxBackend for BwrapBackend {
                 inherit,
                 report: report_reader,
                 status: status_reader,
+                shells: shell_door,
             })),
         })
     }
@@ -871,6 +895,7 @@ impl SandboxBackend for BwrapBackend {
             inherit,
             report,
             status,
+            shells,
         } = once;
         let id = SandboxId::new();
         let shared = Arc::new(Shared::default());
@@ -897,6 +922,14 @@ impl SandboxBackend for BwrapBackend {
                 .build()
         })??;
         let handle = SandboxHandle::new(id, pid, plan.argv_line(), Arc::clone(&shared));
+        // The door opens after `bwrap` holds its end, and a door that cannot
+        // open costs the further shells, never the session (HUM-299).
+        // `SandboxHandle::open_shell` then says that there is no door.
+        if let Some(socket) = shells
+            && let Ok(door) = crate::shell::ShellDoor::start(socket)
+        {
+            shared.set_shells(door);
+        }
 
         // Ohne die Leser gäbe es weder Bericht noch Befund; dann lieber gar
         // keine Sandbox als eine, über die niemand etwas sagen kann.
@@ -1293,16 +1326,16 @@ fn supervise(
 /// Ein Pseudoterminal: die Herrscherseite bleibt beim Daemon, die
 /// Untertanenseite bekommt die Sandbox als ihre drei Deskriptoren.
 #[derive(Debug)]
-struct Pty {
-    master: OwnedFd,
+pub(crate) struct Pty {
+    pub(crate) master: OwnedFd,
     /// Dieselbe Herrscherseite ein zweites Mal, für den Leser-Faden.
     ///
     /// Sie wird **vor** dem Start verdoppelt. Danach läuft `bwrap`, und ein
     /// Fehler, der zu einem `return` führte, ließe den Prozess als Zombie
     /// stehen: Niemand riefe mehr `wait`. Ein Fehlerpfad, den es nicht gibt,
     /// ist besser als einer, den man behandelt.
-    reader: OwnedFd,
-    slave: File,
+    pub(crate) reader: OwnedFd,
+    pub(crate) slave: File,
 }
 
 impl Pty {
@@ -1351,7 +1384,7 @@ impl Pty {
 /// Damit schickt der Kernel `SIGINT` für `Ctrl+C` und `SIGWINCH` bei einer
 /// Größenänderung an die Vordergrundgruppe; [`SandboxHandle::resize`] und
 /// [`SandboxHandle::interrupt`] signalisieren zusätzlich selbst.
-fn open_pty(cols: u16, rows: u16) -> Result<Pty, Diagnostic> {
+pub(crate) fn open_pty(cols: u16, rows: u16) -> Result<Pty, Diagnostic> {
     let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC)
         .map_err(|err| pty_failed(&format!("cannot open a pseudo terminal: {err}")))?;
     grantpt(&master).map_err(|err| {

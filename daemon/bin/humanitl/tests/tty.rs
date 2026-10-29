@@ -655,3 +655,67 @@ fn run_with_a_command_without_a_terminal_does_not_attach() {
         server.terminal_inputs()
     );
 }
+
+/// `humanitl sandbox exec` asks the daemon for a further shell, attaches to
+/// that shell's terminal (not the agent's) like `sandbox attach`, and
+/// `Ctrl+A d` detaches with a line that names the shell (HUM-299).
+#[test]
+fn sandbox_exec_opens_a_shell_and_attaches_to_its_terminal() {
+    let harness = Harness::new();
+    let server = FakeServer::start(&harness);
+    let pty = Pty::open();
+
+    let mut child = harness
+        .command()
+        .args(["sandbox", "exec", "--", "sh", "-c", "true"])
+        .stdin(pty.stdio())
+        .stdout(pty.stdio())
+        .stderr(pty.stdio())
+        .spawn()
+        .expect("the binary starts");
+    wait_for_raw(&mut child, &pty);
+    pty.write(b"\x01d");
+
+    assert_eq!(wait_for_exit(&mut child, &pty), 0);
+    assert!(
+        pty.is_cooked(),
+        "the terminal stayed raw: {:?}",
+        pty.modes()
+    );
+    let said = String::from_utf8_lossy(&pty.read()).into_owned();
+    assert!(said.contains("Shell 1 in sandbox fake"), "{said:?}");
+    assert!(
+        said.contains(
+            "Detached; the shell keeps running. Attach again: humanitl sandbox attach --shell 1"
+        ),
+        "{said:?}"
+    );
+    let inputs = server.terminal_inputs();
+    assert_eq!(
+        inputs.first().copied(),
+        Some("exec-command"),
+        "the command went with Exec: {inputs:?}"
+    );
+    assert_eq!(
+        inputs.get(1).copied(),
+        Some("open-shell-1"),
+        "the shell's terminal, not the agent's: {inputs:?}"
+    );
+    assert_eq!(inputs.last(), Some(&"close"), "{inputs:?}");
+
+    // `sandbox attach --shell 1` finds the same terminal again.
+    let mut again = attach_with(&harness, &pty, &["--shell", "1"]);
+    wait_for_raw(&mut again, &pty);
+    pty.write(&[0x04]);
+    assert_eq!(wait_for_exit(&mut again, &pty), 0);
+    assert_eq!(
+        server
+            .terminal_inputs()
+            .iter()
+            .filter(|kind| **kind == "open-shell-1")
+            .count(),
+        2,
+        "{:?}",
+        server.terminal_inputs()
+    );
+}

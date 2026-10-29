@@ -104,6 +104,7 @@ use humanitl_sandbox::{
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::exec::ShellRegistry;
 use crate::llm_reach::LlmReach;
 use crate::server_stub::BoxStream;
 use crate::session::{
@@ -329,6 +330,8 @@ struct Running {
     /// Das Terminal dieser Sitzung: der eine Filter, der Ringpuffer und die
     /// Clients, die zusehen (HUM-042).
     terminal: TerminalHub,
+    /// Die Terminals der weiteren Shells dieser Sitzung (HUM-299).
+    shells: ShellRegistry,
     /// Was ein Befund braucht, wenn der Agent nie läuft (HUM-137).
     agent: AgentFacts,
 }
@@ -721,6 +724,62 @@ impl SandboxService {
     /// Sandbox hat.
     pub fn terminal(&self, sandbox_id: &str) -> Result<TerminalHub, Diagnostic> {
         self.inner.terminal(sandbox_id)
+    }
+
+    /// Das Terminal, das ein `Open` meint: mit `shell_id` das einer weiteren
+    /// Shell (HUM-299), sonst das des Agenten.
+    ///
+    /// # Errors
+    ///
+    /// `IPC_006` wie [`SandboxService::terminal`], und für eine Kennung,
+    /// unter der keine Shell (mehr) lebt.
+    pub fn terminal_for(&self, open: &v1::terminal_input::Open) -> Result<TerminalHub, Diagnostic> {
+        let hub = self.inner.terminal(&open.sandbox_id)?;
+        let wanted = open.shell_id.trim();
+        if wanted.is_empty() {
+            return Ok(hub);
+        }
+        let Some(shells) = self.inner.running_shells() else {
+            return Err(crate::exec::no_such_shell(wanted, hub.sandbox(), &[]));
+        };
+        shells
+            .get(wanted)
+            .ok_or_else(|| crate::exec::no_such_shell(wanted, hub.sandbox(), &shells.ids()))
+    }
+
+    /// Öffnet eine weitere Shell in der laufenden Sandbox (HUM-299).
+    ///
+    /// Die Shell bekommt ein Terminal wie das des Agenten und, wie dieses,
+    /// die Hinweiszeilen zu gehaltenen Flüssen. Ihr Leser läuft, bis sie
+    /// endet; dann nimmt er ihr Terminal aus der Ablage.
+    ///
+    /// # Errors
+    ///
+    /// `IPC_006`, wenn keine Sitzung läuft oder eine andere gemeint ist;
+    /// `TERM_002`, wenn die Sandbox keine Tür hat, beendet ist, schon vier
+    /// weitere Shells offen sind oder der Shim ablehnt.
+    pub async fn exec(&self, request: v1::ExecRequest) -> Result<v1::ExecResponse, Diagnostic> {
+        let inner = Arc::clone(&self.inner);
+        let opened = tokio::task::spawn_blocking(move || inner.open_shell(&request))
+            .await
+            .map_err(|err| {
+                Diagnostic::builder(codes::TERM_002, Severity::Error)
+                    .why(format!("opening the shell did not finish: {err}"))
+                    .build()
+            })??;
+        let response = opened.response.clone();
+        let notices = self
+            .inner
+            .notices
+            .clone()
+            .map(|notices| tokio::spawn(notices.run(opened.hub.clone())));
+        tokio::spawn(async move {
+            let _ = tokio::task::spawn_blocking(move || opened.run()).await;
+            if let Some(task) = notices {
+                task.abort();
+            }
+        });
+        Ok(response)
     }
 
     /// Beendet die laufende Sandbox dieser Sitzung, mit Frist, und sagt, was
@@ -2267,6 +2326,7 @@ impl Inner {
             work_dir_source,
             work_mode: prepared.session.work_mode,
             terminal,
+            shells: ShellRegistry::for_sandbox(sandbox),
             agent,
         });
         drop(running);
@@ -2471,6 +2531,34 @@ impl Inner {
         lock(&self.running)
             .as_ref()
             .is_some_and(|running| running.handle.try_wait().is_none())
+    }
+
+    /// Die Ablage der weiteren Shells der laufenden Sitzung (HUM-299).
+    fn running_shells(&self) -> Option<ShellRegistry> {
+        lock(&self.running)
+            .as_ref()
+            .map(|running| running.shells.clone())
+    }
+
+    /// Öffnet eine weitere Shell; siehe [`SandboxService::exec`]. Blockiert.
+    fn open_shell(&self, request: &v1::ExecRequest) -> Result<crate::exec::Opened, Diagnostic> {
+        // The same answer as `Terminal`: no session, or another one meant.
+        let hub = self.terminal(&request.sandbox_id)?;
+        let Some((handle, shells)) = lock(&self.running)
+            .as_ref()
+            .map(|running| (Arc::clone(&running.handle), running.shells.clone()))
+        else {
+            return Err(no_terminal(
+                "no sandbox is running in this session, so there is nothing to open a shell in"
+                    .to_owned(),
+            ));
+        };
+        if handle.id != hub.sandbox() {
+            return Err(no_terminal(
+                "the session changed while the shell was being opened".to_owned(),
+            ));
+        }
+        crate::exec::open(&handle, hub.sandbox(), &shells, request, hub.notices())
     }
 
     /// Das Terminal der laufenden Sitzung; siehe [`SandboxService::terminal`].

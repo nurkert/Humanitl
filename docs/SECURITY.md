@@ -318,6 +318,64 @@ process in the sandbox carries a filter, PID 1 included (ESC-1 `seccomp_every_pr
 the agent's UID. With `kernel.yama.ptrace_scope = 0` the agent could open `/proc/1/mem` for
 writing and run code there without a filter (security pass of 2026-09-23, finding M1).
 
+### Further shells in a running sandbox (HUM-299)
+
+`humanitl sandbox exec` opens a shell next to the agent, like `docker exec`. Nobody enters the
+sandbox from outside: there is no `setns`, no `nsenter`, and the daemon starts no process in the
+sandbox's namespaces itself. It asks PID 1, the shim's parent, which forks the shell from
+inside. The shell therefore inherits what every process of the sandbox carries:
+`PR_SET_NO_NEW_PRIVS`, the parent's filter, the same mounts, namespaces, environment (without
+the shim's own variables) and `/work` as its directory. Before `exec` the shell's child installs
+the agent's filter on top, in the variant that answers `EPERM` itself, and proves it:
+`socket(AF_UNIX, SOCK_STREAM)`, which the parent's filter still allows for the bridge, must
+answer `EPERM`, or the shell never starts. Filters only stack, so the shell carries at least
+everything the agent carries. It runs on a pseudo-terminal of its own that the daemon opened,
+takes it as controlling terminal like the agent (`setsid`, `TIOCSCTTY` with argument 0), closes
+every descriptor above 2, and resets signal mask and dispositions. Its output runs through the
+same `FullScreen` filter as the agent's ([section 5.3](#53-the-agents-terminal-output)).
+
+**The door, and who holds it.** The request travels over a `SOCK_SEQPACKET` pair the launcher
+creates only for a start at the daemon's own pseudo-terminal. The daemon keeps one end
+(`CLOEXEC`); bwrap inherits the other and passes it to the shim as `--control-fd`. This is a new
+way into the sandbox, so its limits are part of the claim:
+
+- Only the daemon can ask. The pair has no name in any filesystem, so there is nothing to
+  connect to, and `single_socket` still finds the proxy socket alone. Inside the sandbox only
+  PID 1 holds its end: the agent's child closes it before its filter, the end carries `CLOEXEC`,
+  every further shell closes all descriptors above 2, and PID 1 is not dumpable, so neither
+  `/proc/1/fd` nor `pidfd_getfd(2)` (which the floor refuses anyway) reaches it. On the daemon's
+  side the only caller is the `Exec` RPC on the gRPC socket, which needs the daemon's token and is
+  never bound into the sandbox.
+- A shell id is `<session>-<n>`: the number the shim counts from 1 per sandbox, with eight hex
+  characters of the sandbox id in front, so an id from an earlier session reaches nothing.
+- A request carries a command and exactly one descriptor, the follower side of the shell's
+  pseudo-terminal; anything else is refused. What comes back are nine-byte answers (started,
+  refused, ended) for ids the daemon asked for; the daemon reads them without a control buffer,
+  so a descriptor sent the other way is closed by the kernel, never accepted.
+- At most four further shells live at a time; the shim counts, and the daemon counts again
+  (`TERM_002` for the fifth).
+- A shell ends when its process exits, and with the sandbox: PID 1 kills every shell when the
+  agent ends, the shells die with the thread that forked them (`PR_SET_PDEATHSIG`) and with the
+  PID namespace, and the daemon ends their terminals when its end of the pair closes.
+- A sandbox started without the daemon's pseudo-terminal (`humanitl sandbox run`, the escape
+  suites) has no door.
+
+*What it costs.* A refused `socket()` call in a further shell is refused like the agent's but
+not counted: the listener of the reported gate belongs to the agent's filter, and the filters
+refuse a second one. The shell also starts with the parent's filter underneath, which allows
+`AF_UNIX`; the agent's filter on top refuses it, and the shell does not start unless that
+refusal is proven.
+
+*Not confidential against the agent.* A further shell runs with the agent's UID in the same PID
+namespace, and the sandbox's `/proc` is not mounted with `hidepid`. The agent can therefore see
+the shell's processes, read what the shell's programs read from their terminal (the keystrokes
+typed there) and write output into that terminal, which reaches the human through the same
+filter as the agent's own output. The shell guards the host against the agent, not the human's
+input against the agent: never type a secret into it. The default shell starts without start
+files (`bash --norc --noprofile -i`, or `sh -i` with `ENV` unset), so a `~/.bashrc` or
+`~/.profile` the agent planted in the sandbox's home does not run when it opens; a command the
+caller names after `--` decides that for itself.
+
 ### What the filter allows and refuses
 
 `socket()` passes only for a family in `allow_families` (`AF_INET`, `AF_INET6`) with a type in
@@ -1120,3 +1178,4 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.0 | Several saved model servers with one keyring item each; only the active origin gets a key and the passthrough (HUM-289). |
 | 0.1.0 | The session's first process takes the daemon's pseudo-terminal as controlling terminal; `--new-session` stays. A caller's command gets the adapter's contribution and the configured agent on `PATH`, never a bind of its own (HUM-280). |
 | 0.1.0 | OpenCode no longer asks before `webfetch` and `bash`; the proxy is the one place that asks. Its `bash` waits as long as a held request (HUM-308). |
+| 0.1.x | Further shells next to the agent: the daemon asks PID 1 over an unnamed `SOCK_SEQPACKET` pair only it and PID 1 hold; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX`; at most four, ending with their process or the sandbox (HUM-299). |

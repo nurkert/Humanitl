@@ -132,6 +132,15 @@ pub const ENV_REPORT_FD: &str = "HUMANITL_REPORT_FD";
 /// descriptors never gets it, because they may be the user's terminal.
 pub const SHIM_CONTROLLING_TERMINAL: &str = "--controlling-terminal";
 
+/// The shim flag that names the daemon's door for further shells (HUM-299),
+/// followed by a descriptor number.
+///
+/// The descriptor is one end of a `SOCK_SEQPACKET` pair whose other end only
+/// the daemon holds ([`crate::shell::ShellDoor`]). The launcher renders it
+/// only for a start at its own pseudo-terminal ([`crate::StdioMode::Pty`]),
+/// like [`SHIM_CONTROLLING_TERMINAL`]; in the shim only PID 1 keeps it.
+pub const SHIM_CONTROL_FD: &str = "--control-fd";
+
 /// Die Namen, die der Launcher setzt und die kein Profil belegen kann.
 pub const RESERVED_ENV: &[&str] = &[
     ENV_BRIDGES,

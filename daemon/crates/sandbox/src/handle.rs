@@ -243,6 +243,9 @@ pub(crate) struct Shared {
     pty: OnceLock<OwnedFd>,
     /// Wie viele Bytes der Terminalausgabe schon als Fehlerausgabe zählen.
     mirrored: Mutex<usize>,
+    /// Die Tür zu weiteren Shells (HUM-299), nur am eigenen
+    /// Pseudoterminal des Daemons.
+    shells: OnceLock<Arc<crate::shell::ShellDoor>>,
 }
 
 /// Das Feld `starttime` aus `/proc/<pid>/stat`, Feld 22 (Ticks seit dem
@@ -429,6 +432,11 @@ impl Shared {
     /// Legt die Herrscherseite des Pseudoterminals ab; einmal je Start.
     pub(crate) fn set_pty(&self, master: OwnedFd) {
         let _ = self.pty.set(master);
+    }
+
+    /// Legt die Tür zu weiteren Shells ab; einmal je Start (HUM-299).
+    pub(crate) fn set_shells(&self, door: Arc<crate::shell::ShellDoor>) {
+        let _ = self.shells.set(door);
     }
 
     /// Schickt ein Stück an den Zuhörer, falls einer da ist.
@@ -878,6 +886,50 @@ impl SandboxHandle {
     #[must_use]
     pub fn pty_master(&self) -> Option<&OwnedFd> {
         self.shared.pty.get()
+    }
+
+    /// Öffnet eine weitere Shell in dieser Sandbox (HUM-299), neben dem
+    /// Agenten und mit einem eigenen Pseudoterminal der Größe `cols` mal
+    /// `rows`. Der Shim startet sie von innen; sie trägt dieselben Grenzen
+    /// wie der Agent (`docs/SECURITY.md`).
+    ///
+    /// Blockiert, bis die Sandbox antwortet, höchstens wenige Sekunden.
+    ///
+    /// # Errors
+    ///
+    /// `TERM_002`, wenn diese Sandbox keine Tür hat (sie lief
+    /// nicht am Pseudoterminal des Daemons), wenn sie beendet ist, wenn schon
+    /// [`crate::MAX_SHELLS`] Shells offen sind oder wenn der Shim ablehnt.
+    pub fn open_shell(
+        &self,
+        command: &[String],
+        cols: u16,
+        rows: u16,
+    ) -> Result<crate::shell::Shell, Diagnostic> {
+        let Some(door) = self.shared.shells.get() else {
+            return Err(Diagnostic::builder(TERM_002, Severity::Error)
+                .why(format!(
+                    "cannot open another shell in sandbox {}: it was not started at the \
+                     daemon's terminal, so it has no door for further shells",
+                    self.id
+                ))
+                .build());
+        };
+        if self.try_wait().is_some() {
+            return Err(Diagnostic::builder(TERM_002, Severity::Error)
+                .why(format!(
+                    "cannot open another shell in sandbox {}: it has ended",
+                    self.id
+                ))
+                .build());
+        }
+        door.open(command, cols, rows)
+    }
+
+    /// Wie viele weitere Shells dieser Sandbox gegen die Grenze zählen.
+    #[must_use]
+    pub fn open_shells(&self) -> usize {
+        self.shared.shells.get().map_or(0, |door| door.live())
     }
 
     /// Schreibt Bytes in die Eingabe des Agenten.

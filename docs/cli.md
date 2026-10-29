@@ -196,6 +196,39 @@ Without a terminal on `stdin`, with `--ask terminal` (whose box needs the same
 keyboard) or with `--json`, the command keeps reading along as described
 below.
 
+### A second shell next to the agent
+
+`humanitl sandbox exec` opens a further shell in the running sandbox, like
+`docker exec`: the agent keeps running and keeps its own terminal, and the
+shell gets a terminal of its own. Without a command after `--` it is an
+interactive `bash`, or `sh` when the sandbox has no `bash`, both without start
+files (`--norc --noprofile`, `ENV` unset); `humanitl sandbox exec -- htop`
+runs that instead. The shell carries the same limits as the
+agent: the seccomp filter, the mounts, the project folder at `/work`, the
+network only through the proxy and its rules, the same environment with the
+configured agent on `PATH`. It is started from inside the sandbox by the
+shim, never by entering its namespaces from outside (HUM-299,
+`docs/SECURITY.md` section 4).
+
+```text
+$ humanitl sandbox exec
+Shell 4f2a91c3-1 in sandbox 0193…
+Detach: Ctrl+A d
+agent@sandbox:/work$
+```
+
+`Ctrl+A d` detaches and leaves the shell running; `humanitl sandbox attach
+--shell 4f2a91c3-1` attaches again, with `--read-only` to watch; the id holds
+only for this session. A command that ends before the terminal is attached
+leaves its output and exit code for the first client, for 30 seconds. The
+shell is not private against the agent, which runs as the same user next to
+it: do not type secrets there (`docs/SECURITY.md` section 4). One client writes,
+any number watch, as for the agent's terminal. The shell ends when its
+process exits (the command ends with its exit code) or when the sandbox
+stops; it never outlives the session. At most four further shells live at a
+time; a fifth is refused with `TERM_002`. Without a terminal on `stdin` the
+command only watches the output until the shell ends.
+
 ### Terminal, input and signals
 
 Without "A shell for the agent", the agent gets **no** PTY of this terminal. Its output arrives as bytes over the daemon's event

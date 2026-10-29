@@ -31,7 +31,13 @@ zeroize.workspace = true
 # Pseudoterminal (`openpt`, `grantpt`, `unlockpt`, `ptsname`) und setzt seine
 # Geometrie (`tcsetwinsize`). Beides gaebe es sonst nur ueber `libc` und damit
 # ueber `unsafe`.
-rustix = { version = "1.1", features = ["fs", "process", "pty", "termios"] }
+#
+# `net` und `event` kommen mit HUM-299 dazu: Die Tür zu weiteren Shells ist ein
+# `SOCK_SEQPACKET`-Paar (`socketpair`), die Anfrage reicht die
+# Untertanenseite des Pseudoterminals per `SCM_RIGHTS` weiter (`sendmsg`), und
+# der Leser einer Shell wartet mit `poll`, damit er nach ihrem Ende aufhören
+# kann, auch wenn ein Hintergrundprozess das Terminal offen hält.
+rustix = { version = "1.1", features = ["fs", "process", "pty", "termios", "net", "event"] }
 # Die Zusammenfassung eines Sandbox-Laufs baut aus einem Host-Pfad einen
 # Befehl fuer die Zwischenablage (HUM-043, `summary::copy_command`). Der Pfad
 # kommt aus einem Verzeichnis, in das der Agent schreiben darf; er wird nur
