@@ -1,0 +1,84 @@
+---
+// Eine Garantie als Karte: Satz, Mechanismus, Mini-Diagramm und der Beweisblock mit
+// Prüfname, CI-Ausgabe unter macOS, Handprüfung unter Linux, Zeilenformat des Shims,
+// Ausbruchsproben und dem macOS-Unterschied.
+import Rich from './Rich.astro';
+import Src from './Src.astro';
+import Term from './Term.astro';
+
+interface Props {
+  s: any;
+  k: any;
+  i: number;
+  item: any;
+}
+const { s, k, i, item } = Astro.props;
+const pr = s.proofs;
+const row = k.macRows[i];
+---
+
+<article class="sec-glass sec-proof sec-rv" id={`g${i + 1}`} data-reveal>
+  <div class="sec-proof__top">
+    <header class="sec-proof__head">
+      <span class="sec-proof__num chrome" aria-hidden="true">{String(i + 1).padStart(2, '0')}</span>
+      <h3 class="sec-proof__title">{item.title}</h3>
+      <Rich tag="p" class="sec-proof__mech" text={item.mechanism} />
+    </header>
+    <div class="sec-proof__fig">
+      <slot />
+    </div>
+  </div>
+
+  <div class="sec-proof__body">
+    <div class="sec-proof__col">
+      <p class="sec-checkchip">
+        <span>{pr.checkLabel}</span>
+        <code>{k.checks[i]}</code>
+      </p>
+      <Term
+        caption={pr.termCaption}
+        rows={[
+          { kind: 'cmd', text: k.check },
+          { kind: 'head', text: k.head },
+          { kind: 'check', name: row.name, ev: row.ev },
+        ]}
+      />
+      <details class="sec-mac" open>
+        <summary>{pr.macTitle}</summary>
+        <Rich tag="p" text={item.mac} />
+      </details>
+    </div>
+    <div class="sec-proof__col">
+      <div class="sec-block">
+        <h4>{pr.manualTitle}</h4>
+        <dl class="sec-manual">
+          {
+            k.manual[i].map((cmd: string, j: number) => (
+              <div>
+                <dt>
+                  <code class="sec-cmd">{cmd}</code>
+                </dt>
+                <dd>
+                  <Rich text={item.manual[j]} />
+                </dd>
+              </div>
+            ))
+          }
+        </dl>
+        {item.note && <Rich tag="p" class="sec-foot" text={item.note} />}
+      </div>
+      <div class="sec-block">
+        <h4>{pr.shimTitle}</h4>
+        <pre class="sec-shim" tabindex="0"><code>{k.shim[i].join('\n')}</code></pre>
+      </div>
+      <div class="sec-block">
+        <h4>{pr.probesTitle}</h4>
+        <ul class="sec-chips">
+          {k.probes[i].map((p: string) => <li class="sec-probe">{p}</li>)}
+        </ul>
+      </div>
+      <slot name="extra" />
+    </div>
+  </div>
+  <Src src={item.src} prefix={s.srcPrefix} />
+</article>

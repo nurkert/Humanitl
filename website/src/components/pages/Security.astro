@@ -1,0 +1,293 @@
+---
+// Die Sicherheitsseite (HUM-345): das Prinzip, der Weg einer Anfrage als Scroll-Erzählung,
+// die drei Garantien mit ihren Beweisen, die Ausbruchstests, die Audit-Kette, die offenen
+// Kanäle und die macOS-Unterschiede. Befehle, Ausgaben, Probe- und Prüfnamen stehen hier
+// als Konstanten, nie in den Locales: Sie werden nicht übersetzt.
+import '../../styles/security.css';
+
+import Base from '../../layouts/Base.astro';
+import { ui, type Lang } from '../../i18n/ui';
+import Hero from '../security/Hero.astro';
+import Principles from '../security/Principles.astro';
+import Journey from '../security/Journey.astro';
+import ProofCard from '../security/ProofCard.astro';
+import ProofNet from '../security/ProofNet.astro';
+import ProofDoor from '../security/ProofDoor.astro';
+import ProofFloor from '../security/ProofFloor.astro';
+import Together from '../security/Together.astro';
+import Verify from '../security/Verify.astro';
+import EscapeGrid from '../security/EscapeGrid.astro';
+import AuditChain from '../security/AuditChain.astro';
+import Limits from '../security/Limits.astro';
+import MacOS from '../security/MacOS.astro';
+import Closing from '../security/Closing.astro';
+import Rail from '../security/Rail.astro';
+import Rich from '../security/Rich.astro';
+
+interface Props {
+  lang: Lang;
+}
+const { lang } = Astro.props;
+const s = ui[lang].securityPage;
+const pre = s.srcPrefix;
+
+// Die echte Ausgabe von `humanitl sandbox check` unter macOS aus der CI des Projekts,
+// gekürzt, dieselbe wie auf der Startseite; die Evidenz ist an "; " gespalten.
+const macRows = [
+  {
+    name: 'no_network_interface',
+    ev: ['no_interfaces ok: tcp_1.1.1.1:443:_EPERM', 'tcp_[2606:4700:4700::1111]:443:_EPERM', 'udp_1.1.1.1:53:_EPERM'],
+  },
+  {
+    name: 'single_socket',
+    ev: ['single_socket ok: door_…/proxy/proxy.sock:_answers', '/var/run/syslog:_EPERM', 'bridge_listening ok'],
+  },
+  {
+    name: 'seccomp_active',
+    ev: ['seccomp_applied ok: sandbox_check(getpid(),_NULL,_0)_=_1', 'families ok: AF_ROUTE …_EPERM'],
+  },
+];
+
+const K = {
+  check: 'humanitl sandbox check',
+  head: '   CHECK                 EVIDENCE',
+  macRows,
+  checks: ['no_network_interface', 'single_socket', 'seccomp_active'],
+  manual: [
+    ['ip link', 'ip route', 'cat /proc/net/route', 'capsh --print'],
+    [
+      "find / \\( -path /proc -o -path /sys -o \\( -path '/dev/*' ! -path /dev/shm ! -path '/dev/shm/*' \\) \\) -prune -o -xtype s -print 2>/dev/null",
+      'hostname',
+    ],
+    ['grep Seccomp /proc/self/status'],
+  ],
+  shim: [
+    ['CHECK no_interfaces ok lo'],
+    [
+      'CHECK single_socket ok sockets=<list>;unexpected=<list|none>;entries=N;limit=<..|none>',
+      'CHECK bridge_listening ok proxy=127.0.0.1:3128->/run/humanitl/proxy.sock',
+    ],
+    [
+      'CHECK seccomp_applied ok Seccomp:2;NoNewPrivs:1',
+      'CHECK families ok …',
+      '  socket(AF_UNIX,SOCK_STREAM)=EPERM',
+      '  socket(AF_INET,SOCK_DGRAM)=EPERM',
+      '  x32:socket=EPERM',
+      '  io_uring_setup=EPERM',
+      '  socket(AF_INET,SOCK_STREAM)=ok',
+    ],
+  ],
+  probes: [
+    ['ifaces_only_lo', 'no_ipv4_routes', 'connect_wan_enetunreach', 'direct_http', 'direct_https', 'direct_ip', 'dns_lookup', 'dns_udp_53', 'quic_udp'],
+    [
+      'exactly_one_socket',
+      'socket_is_proxy',
+      'proxy_is_socket_file',
+      'no_daemon_socket',
+      'no_x11',
+      'no_wayland',
+      'no_dbus',
+      'no_docker',
+      'no_host_home',
+      'no_runtime_dir',
+      'hostname_sandbox',
+    ],
+    [
+      'socket_af_unix',
+      'socket_af_netlink',
+      'socket_af_packet',
+      'socket_af_vsock',
+      'socket_inet_dgram',
+      'socket_inet_raw',
+      'io_uring_setup',
+      'x32_syscall_eperm',
+      'seccomp_mode_2',
+      'seccomp_every_process',
+      'pid1_is_shim',
+      'pid1_not_dumpable',
+    ],
+  ],
+  refusalsProbe: 'refusals_reported',
+  scan: [
+    '/tmp/.X11-unix',
+    '$XDG_RUNTIME_DIR/wayland-0',
+    '/run/dbus/system_bus_socket',
+    '/var/run/docker.sock',
+    'daemon.sock',
+    '/run/humanitl/proxy.sock',
+  ],
+  floor: ['AF_UNIX SOCK_STREAM', 'AF_NETLINK', 'AF_PACKET', 'AF_VSOCK', 'AF_INET SOCK_DGRAM', 'AF_INET SOCK_RAW', 'io_uring_setup', 'x32 socket'],
+  floorOk: 'AF_INET SOCK_STREAM',
+  floorMac: ['AF_ROUTE', 'AF_SYSTEM', 'AF_NDRV', 'AF_INET SOCK_RAW'],
+  ways: ['humanitl sandbox argv', 'humanitl sandbox check · --json', 'tests/escape/'],
+  format: 'CHECK <name> <ok|fail> <evidence>',
+  formatMap: [
+    ['no_network_interface', 'no_interfaces'],
+    ['single_socket', 'single_socket + bridge_listening'],
+    ['seccomp_active', 'seccomp_applied + families'],
+  ],
+  states: ['Received', 'Analyzed', 'Held', 'Decided', 'Forwarded', 'Responded', 'Recorded'],
+  rules: ['allow registry.npmjs.org', 'block 169.254.169.254', 'default: ask'],
+  host: 'api.github.com',
+  packet: 'POST api.github.com',
+  suites: [
+    {
+      id: 'ESC-1',
+      file: 'esc-1-sockets.sh',
+      probes: [
+        'ifaces_only_lo',
+        'no_ipv4_routes',
+        'connect_wan_enetunreach',
+        'socket_af_unix',
+        'socket_af_netlink',
+        'socket_af_packet',
+        'socket_af_vsock',
+        'socket_inet_dgram',
+        'socket_inet_raw',
+        'io_uring_setup',
+        'x32_syscall_eperm',
+        'caps_effective_empty',
+        'no_new_privs',
+        'seccomp_mode_2',
+        'seccomp_every_process',
+        'pid1_is_shim',
+        'pid1_not_dumpable',
+        'pid1_mem_rdwr',
+        'refusals_reported',
+      ],
+    },
+    {
+      id: 'ESC-2',
+      file: 'esc-2-mounts.sh',
+      probes: [
+        'no_x11',
+        'no_wayland',
+        'no_dbus',
+        'no_docker',
+        'no_host_home',
+        'no_runtime_dir',
+        'no_etc_shadow',
+        'exactly_one_socket',
+        'socket_is_proxy',
+        'proxy_is_socket_file',
+        'no_daemon_socket',
+        'no_host_env_leak',
+        'pid1_is_not_host_init',
+        'hostname_sandbox',
+        'masked_envrc_hides_content',
+        'git_hooks_is_tmpfs',
+      ],
+    },
+    {
+      id: 'ESC-3',
+      file: 'esc-3-egress.sh',
+      probes: [
+        'direct_http',
+        'direct_https',
+        'direct_ip',
+        'dns_lookup',
+        'dns_udp_53',
+        'quic_udp',
+        'via_proxy_held',
+        'via_proxy_metadata_held',
+        'via_proxy_idn_held',
+        'host_mismatch_blocked',
+        'dns_not_before_decision',
+        'dns_after_allow_once',
+        'meta_no_dns_lookup',
+      ],
+    },
+    { id: 'ESC-4', file: 'esc-4-rules.sh', probes: ['rule_body_over_cap'] },
+    {
+      id: 'ESC-5',
+      file: 'esc-5-filesystem.sh',
+      probes: [
+        'symlink_out_of_work_is_marked',
+        'masked_path_stays_masked',
+        'hooks_write_stays_in_sandbox',
+        'osc52_does_not_reach_host',
+        'osc8_and_title_are_inert',
+        'audit_delete_is_detected',
+        'audit_truncate_is_detected',
+      ],
+    },
+    { id: 'macOS', file: 'tests/escape/macos/run.sh', probes: [] as string[] },
+  ],
+  macGroups: [
+    ['direct_tcp', 'direct_tls', 'dns', 'udp', 'ipv6', 'raw_socket', 'route_socket', 'syslog_socket', 'mdns_socket', 'other_loopback'],
+    ['read_home', 'list_home', 'read_users', 'read_env_mask'],
+    ['write_git_hooks', 'write_outside', 'write_library', 'write_profile', 'remove_profile', 'write_etc'],
+    ['rename_git', 'other_terminal'],
+  ],
+  macMust: ['write_project', 'read_project', 'own_pty'],
+  chain: ['0098', '0099', '0100', '0101', '0102', '0103'],
+  chainKind: 'flow.decided',
+  chainPrev: ['c41e…', '3f9a…', '81c2…', '5d07…', 'e6b3…', '29fa…'],
+  chainHash: ['3f9a…', '81c2…', '5d07…', 'e6b3…', '29fa…', '7a1d…'],
+  anchorDb: 'humanitl.db · audit_anchors',
+  key: 'keys/audit.key · 0600',
+  auditCmds: ['humanitl audit verify', 'humanitl audit verify --file', 'humanitl audit export'],
+  auditTests: ['audit_delete_is_detected', 'audit_truncate_is_detected', 'truncate_above_last_anchor_not_detected_documented'],
+  tcb: 'kernel · bubblewrap · seccomp filter · shim · humanitld · hyper/rustls/rcgen · system cert store · LLM host · audit key · keyring',
+  closingCmd: 'humanitl sandbox check',
+};
+
+const chapters = ['prinzip', 'weg', 'beweise', 'pruefen', 'tests', 'aufzeichnung', 'grenzen', 'macos'];
+const proofFigs = [ProofNet, ProofDoor, ProofFloor];
+---
+
+<Base lang={lang} page="security" title={`${s.meta.title} · Humanitl`} description={s.meta.description}>
+  <main id="main" class="sec" data-sec>
+    <Rail s={s} chapters={chapters} />
+
+    <section class="sec-section sec-hero-sec" id="prinzip" data-chapter aria-labelledby="sec-hero-title">
+      <Hero s={s} chapters={chapters} />
+      <Principles s={s} />
+    </section>
+
+    <Journey s={s} k={K} />
+
+    <section class="sec-section" id="beweise" data-chapter aria-labelledby="sec-proofs-title">
+      <div class="sec-wide">
+        <header class="sec-head sec-rv" data-reveal>
+          <p class="sec-eyebrow">{s.proofs.eyebrow}</p>
+          <h2 id="sec-proofs-title" class="chrome sec-h2">{s.proofs.title}</h2>
+          <p class="lede">{s.proofs.lede}</p>
+        </header>
+        <div class="sec-proofs">
+          {
+            s.proofs.items.map((item, i) => {
+              const Fig = proofFigs[i];
+              return (
+                <ProofCard s={s} k={K} i={i} item={item}>
+                  <Fig s={s} k={K} />
+                  {i === 2 && (
+                    <div slot="extra" class="sec-visible">
+                      <h4>{s.proofs.visible.title}</h4>
+                      <Rich tag="p" text={s.proofs.visible.text} />
+                      <p class="sec-chips sec-chips--one">
+                        <span class="sec-probe">{K.refusalsProbe}</span>
+                      </p>
+                    </div>
+                  )}
+                </ProofCard>
+              );
+            })
+          }
+        </div>
+        <Together s={s} />
+      </div>
+    </section>
+
+    <Verify s={s} k={K} />
+    <EscapeGrid s={s} k={K} />
+    <AuditChain s={s} k={K} />
+    <Limits s={s} k={K} />
+    <MacOS s={s} k={K} />
+    <Closing s={s} k={K} lang={lang} />
+  </main>
+</Base>
+
+<script>
+  import '../../scripts/security';
+</script>

@@ -23,6 +23,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-334 | Die Bühne von humanitl.de: Glas, Licht, Einflug und Morph | M | HUM-333 |
 | HUM-335 | Linux: das AppImage in jedem Release, APT und AppImage auf der Download-Seite | S | HUM-333 |
 | HUM-336 | Die Dokumentation aus docs/ auf humanitl.de | M | HUM-333 |
+| HUM-345 | Die Sicherheitsseite von humanitl.de | M | HUM-333, HUM-336 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -194,3 +195,33 @@ Akzeptanzkriterien:
 
 Nicht in diesem Issue: eine Suche über alle Seiten, Übersetzungen der Dokumente.
 
+## HUM-345 · Die Sicherheitsseite von humanitl.de
+
+Ziel: Eine eigene Seite (/sicherheit/, /en/security/) zeigt das Sicherheitsprinzip und
+seine Beweisbarkeit: den Weg einer Anfrage als Scroll-Erzählung, die drei Garantien mit
+Prüfbefehl, Ausgabe und Ausbruchsproben, die Ausbruchstests, die Audit-Kette mit dem, was
+sie beweist und was nicht, die offenen Kanäle und die ehrlichen macOS-Unterschiede.
+Bewegung und Anmutung auf dem Niveau der Startseite. Der Nav-Eintrag „Sicherheit“ führt
+auf die neue Seite.
+
+Abschnitte: Prinzip, Weg, Beweise, Prüfen, Tests, Aufzeichnung, Grenzen, macOS, Abschluss.
+
+Dateien: website/src/components/pages/Security.astro, website/src/components/security/*,
+website/src/scripts/security.ts, website/src/styles/security.css; minimal ui.ts,
+[...route].astro, locales (Schlüssel securityPage), Base.astro (ein Nav-Eintrag).
+
+Akzeptanz:
+- Jede Aussage ist mit README.md, docs/SECURITY.md, docs/THREAT-MODEL.md,
+  docs/ARCHITECTURE.md, ADR-0019 oder tests/escape belegt und verlinkt.
+- Linux-Evidenz erscheint nur als gekennzeichnetes Format, nie als echte Ausgabe; nicht
+  behauptet wird, Linux-Releases führten die Ausbruchssuite aus; SECURITY.md §5.6 Punkt 8
+  wird nicht zitiert; die offenen Kanäle stehen sichtbar, nicht nur in Ausklappern.
+- Keine Inline-Skripte, keine Fremdanfragen; Animation pro Bild nur über transform und
+  opacity; Animationen laufen nur im Sichtbereich.
+- prefers-reduced-motion und ohne JavaScript: vollständige, statische Diagramme, volle
+  Lesbarkeit.
+- Diagramme mit role="img" und Textäquivalent.
+- 360x740 bis 2560x1080 ohne waagrechtes Seitenscrollen; Deutsch und Englisch.
+
+Folge-Kandidaten: Home-Link „Die Sicherheitsargumentation“ auf die neue Seite umbiegen;
+SECURITY.md §5.6 Punkt 8 an Seatbelt anpassen; K-22-Satz in THREAT-MODEL.md reparieren.

@@ -1,0 +1,90 @@
+---
+// Kapitel 5: die Ausbruchstests. Sechs Gruppen, jede Probe ein Chip.
+import Rich from './Rich.astro';
+import Src from './Src.astro';
+
+interface Props {
+  s: any;
+  k: any;
+}
+const { s, k } = Astro.props;
+const t = s.tests;
+---
+
+<section class="sec-section" id="tests" data-chapter aria-labelledby="sec-tests-title">
+  <div class="sec-wide">
+    <header class="sec-head sec-rv" data-reveal>
+      <p class="sec-eyebrow">{t.eyebrow}</p>
+      <h2 id="sec-tests-title" class="chrome sec-h2">{t.title}</h2>
+      <p class="lede">{t.lede}</p>
+    </header>
+
+    <div class="sec-escape">
+      {
+        k.suites.map((suite: any, i: number) => (
+          <details class={`sec-glass sec-suite sec-rv${suite.id === 'macOS' ? ' sec-suite--mac' : ''}`} open data-reveal style={`--i:${i % 3}`}>
+            <summary>
+              <span class="sec-suite__id">{suite.id}</span>
+              <span class="sec-suite__title">{t.suites[i].title}</span>
+              <span class="sec-suite__where">{t.suites[i].where}</span>
+              <code class="sec-suite__file">{suite.file}</code>
+            </summary>
+            {suite.id === 'macOS' ? (
+              <div class="sec-suite__body">
+                {k.macGroups.map((g: string[], gi: number) => (
+                  <Fragment>
+                    <p class="sec-suite__group">{t.groups[gi]}</p>
+                    <ul class="sec-chips">
+                      {g.map((p, j) => (
+                        <li class="sec-probe" style={`--i:${j}`}>
+                          {p}
+                        </li>
+                      ))}
+                    </ul>
+                  </Fragment>
+                ))}
+                <p class="sec-suite__group">{t.mustWork}</p>
+                <ul class="sec-chips">
+                  {k.macMust.map((p: string, j: number) => (
+                    <li class="sec-probe sec-probe--must" style={`--i:${j}`}>
+                      {p}
+                    </li>
+                  ))}
+                </ul>
+                <p class="sec-foot">{t.macNote}</p>
+              </div>
+            ) : (
+              <div class="sec-suite__body">
+                <ul class="sec-chips">
+                  {suite.probes.map((p: string, j: number) => (
+                    <li class="sec-probe" style={`--i:${j}`}>
+                      {p}
+                    </li>
+                  ))}
+                </ul>
+                {t.suites[i].more && <Rich tag="p" class="sec-foot" text={t.suites[i].more} />}
+              </div>
+            )}
+          </details>
+        ))
+      }
+    </div>
+
+    <div class="sec-facts sec-rv" data-reveal>
+      <div>
+        <h3 class="sec-h3">{t.runsTitle}</h3>
+        <ul class="sec-list">
+          {t.runs.map((r: string) => <Rich tag="li" text={r} />)}
+        </ul>
+      </div>
+      <div class="sec-facts__side">
+        <p>{t.exitCodes}</p>
+        <Rich tag="p" class="sec-honest" text={t.honest} />
+        <p>
+          <strong>{t.alsoTitle}:</strong> {t.also}
+        </p>
+      </div>
+    </div>
+    <Src src={t.src} prefix={s.srcPrefix} />
+  </div>
+</section>

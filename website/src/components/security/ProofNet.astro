@@ -1,0 +1,42 @@
+---
+// Diagramm P1: der leere Raum. Drei Versuche, drei Stempel an der Wand.
+interface Props {
+  s: any;
+  k: any;
+}
+const { s } = Astro.props;
+const n = s.proofs.net;
+const rows = [
+  { y: 70, stamp: 'ENETUNREACH', target: '1.1.1.1:443' },
+  { y: 110, stamp: 'ENETUNREACH', target: '[2606:4700:4700::1111]' },
+  { y: 150, stamp: 'EPERM', target: 'udp :53' },
+];
+---
+
+<figure class="sec-mini sec-p1" data-reveal>
+  <svg viewBox="0 0 420 220" role="img" aria-labelledby="p1-t p1-d">
+    <title id="p1-t">{n.figTitle}</title>
+    <desc id="p1-d">{n.figDesc}</desc>
+    <g aria-hidden="true">
+      <rect class="sv-fill" x="20" y="24" width="180" height="172" rx="18"></rect>
+      <rect class="sv-wall-r" x="20" y="24" width="180" height="172" rx="18"></rect>
+      <rect class="p-flash" x="196" y="40" width="8" height="140" rx="4"></rect>
+      <text x="36" y="50" class="sv-lbl sv-lbl--m">lo</text>
+      <circle class="sv-agent" cx="80" cy="110" r="8"></circle>
+      {
+        rows.map((r, i) => (
+          <g style={`--i:${i}`}>
+            <rect class="p-arrow" x="88" y={r.y - 1} width="108" height="2" />
+            <text class="p-stamp sv-lbl sv-lbl--deny sv-lbl--s" x="192" y={r.y - 7} text-anchor="end">
+              {r.stamp}
+            </text>
+            <text class="p-target sv-lbl sv-lbl--s" x="212" y={r.y + 4}>
+              {r.target}
+            </text>
+          </g>
+        ))
+      }
+    </g>
+  </svg>
+  <figcaption class="sec-mini__cap">{n.sub}</figcaption>
+</figure>

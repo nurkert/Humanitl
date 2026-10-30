@@ -1,0 +1,73 @@
+---
+// Kapitel 2: der Weg einer Anfrage. Links die sieben Schritte, rechts die angeheftete Figur.
+import JourneyFigure from './JourneyFigure.astro';
+import Rich from './Rich.astro';
+import Src from './Src.astro';
+
+interface Props {
+  s: any;
+  k: any;
+}
+const { s, k } = Astro.props;
+const p = s.path;
+---
+
+<section class="sec-section sec-journey" id="weg" data-chapter data-journey aria-labelledby="sec-path-title">
+  <div class="sec-wide">
+    <header class="sec-head sec-rv" data-reveal>
+      <p class="sec-eyebrow">{p.eyebrow}</p>
+      <h2 id="sec-path-title" class="chrome sec-h2">{p.title}</h2>
+      <p class="lede">{p.lede}</p>
+    </header>
+
+    <div class="sec-journey__grid">
+      <div class="sec-journey__figwrap">
+        <figure class="sec-jfig" data-beat="all" data-jfig data-loop tabindex="0" role="region" aria-labelledby="j-t">
+          <ul class="sec-legend" aria-hidden="true">
+            <li><span class="sec-legend__held"></span>{p.legendHeld}</li>
+            <li><span class="sec-legend__decl"></span>{p.legendDeclared}</li>
+          </ul>
+          <JourneyFigure s={s} k={k} />
+        </figure>
+      </div>
+      <ol class="sec-steps">
+        {
+          p.steps.map((step: any, i: number) => (
+            <li class="sec-step" data-step={i + 1}>
+              <article class="sec-step__card">
+                <p class="sec-step__n">
+                  <span>{String(i + 1).padStart(2, '0')}</span>
+                  <i aria-hidden="true" />
+                  {step.mono && i > 0 && <span class="sec-step__tag">{step.mono}</span>}
+                </p>
+                <h3 class="sec-h3">{step.title}</h3>
+                <Rich tag="p" text={step.text} />
+                {i === 0 && <p class="sec-mono-line">{step.mono}</p>}
+                <Src src={step.src} prefix={s.srcPrefix} />
+              </article>
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+
+    <div class="sec-states" data-reveal>
+      <p class="sec-eyebrow">{p.statesLabel}</p>
+      <div class="sec-states__rail">
+      <span class="sec-states__track" aria-hidden="true"><span class="sec-states__fill"></span></span>
+      <ol class="sec-states__list">
+        {
+          k.states.map((st: string, i: number) => (
+            <li class={st === 'Held' ? 'sec-state is-held' : 'sec-state'} style={`--i:${i}`}>
+              <span class="sec-state__dot" aria-hidden="true" />
+              <code>{st}</code>
+            </li>
+          ))
+        }
+      </ol>
+      </div>
+      <p class="sec-mono-line sec-states__branches">{p.branches}</p>
+      <Src src={p.statesSrc} prefix={s.srcPrefix} />
+    </div>
+  </div>
+</section>
