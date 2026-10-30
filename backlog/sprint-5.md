@@ -81,6 +81,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-313 | Terminal copy and paste | S | HUM-042, HUM-301, HUM-303 |
 | HUM-300 | Terminal as picture-in-picture | M | HUM-298, HUM-302, HUM-303, HUM-305 |
 | HUM-314 | The terminal pane opens further shells as tabs | S | HUM-299, HUM-300, HUM-302, HUM-303, HUM-313 |
+| HUM-315 | The floating terminal docks on the Sandbox page, floats from the empty queue and keeps a title strip | S | HUM-300, HUM-303, HUM-306, HUM-314 |
 
 ---
 
@@ -9413,3 +9414,173 @@ Plattform Linux; dazu die Grenze und die unbekannte Kennung im Fake.
   Tasten danach und nimmt abgehängte Ströme aus seiner Liste. Tests
   `the_fake_refuses_a_live_shell_of_another_sandbox`,
   `the_fake_closes_a_shell_stream_after_its_exit`.
+
+---
+## HUM-315 · The floating terminal docks on the Sandbox page, floats from the empty queue and keeps a title strip
+
+### Kontext
+Folge-Issue von HUM-300, Kandidaten (A), (B) und (C). Der Owner hat am
+2026-10-30 alle drei Punkte entschieden und dazu das Kürzel bestätigt:
+`Ctrl+Shift+P` bleibt, nichts daran ändert sich. HUM-314 hat seither Reiter
+ins Terminal gebracht; der Streifen unten nennt den aktiven.
+
+### Spezifikation
+1. **Auf der Sandbox-Seite angedockt.** Solange der Abschnitt Sandbox zu
+   sehen ist, steht ein schwebendes Terminal in seinem Pane dort, an seinem
+   gewohnten Platz; ein Fenster über der eigenen Seite verdeckte nur deren
+   Pane. Wer die Seite verlässt, sieht es wieder schweben, solange die
+   Sitzung läuft und der Mensch es vorher schweben ließ. Das Andocken wegen
+   der Seite ist ein Zustand der Ansicht und keine Wahl:
+   `terminalPlacementProvider` bleibt `floating`, Knopf und Palette sagen
+   weiter „zurücklegen", und ein Druck darauf legt das Terminal wirklich
+   zurück, sodass es beim Verlassen nicht mehr schwebt.
+2. **Eine Regel für den Wirt.** Welcher Wirt zeigt, entscheidet allein
+   `terminalHostFor` in `core/ui/terminal_placement.dart` über die Wahl und
+   `sandboxPageShownProvider` (die Shell schreibt ihn bei jedem Wechsel des
+   Abschnitts), gelesen über `terminalHostProvider`. Wer zeigt (Pane,
+   schwebende Ebene), liest den Wirt; wer die Wahl ändert oder nennt
+   (Knöpfe, Kürzel, Palette, Zustandsabfrage), liest die Wahl.
+3. **Ende auf der Seite.** Endet der Agent, während die Seite zu sehen ist,
+   legt die Ebene das Terminal sofort zurück: Das Pane zeigt das Ende
+   selbst, und beim Verlassen schwebte sonst eine Sitzung, die vorbei ist.
+   Endet er anderswo, gilt der Nachlauf von HUM-300.
+4. **Tastatur beim Wechsel der Seite.** Hatte das schwebende Terminal die
+   Tastatur, behält das Pane sie beim Betreten der Seite; es wird
+   weitergetippt. Beim Verlassen nimmt sie das Terminal nicht mit: Wer
+   einen anderen Abschnitt verlangt, bekommt dessen Regel, die
+   Warteschlange nimmt die Tastatur, und `Enter` entscheidet wie bisher
+   (HUM-300, Spezifikation 6).
+5. **„Go to terminal".** Der Knopf der leeren Warteschlange (HUM-306)
+   wechselt nicht mehr den Abschnitt, sondern tut, was ``Ctrl+` `` tut
+   (`FocusTerminalIntent`): Ohne sichtbares Terminal schwebt es über der
+   Warteschlange und bekommt die Tastatur, nach der Regel von HUM-303
+   (`_mayTakeKeyboard`, nicht über einer Ebene). Schwebt es schon, bekommt
+   es nur die Tastatur. Auf der Sandbox-Seite bekommt das angedockte
+   Terminal die Tastatur. Zeigt die schwebende Ebene nur den Streifen (oder
+   gar nichts), legt die Anfrage das Terminal zurück, zeigt die
+   Sandbox-Seite und gibt dem Pane die Tastatur, wie ein Klick auf den
+   Streifen ohne Platz (Review-Runde 1). Der ausdrückliche Wunsch nach dem Terminal ist
+   der Unterschied zu `Ctrl+Shift+P` aus der Warteschlange, das die
+   Tastatur dort lässt.
+6. **Titelstreifen statt Verschwinden.** Findet das Fenster keine freie
+   Ecke, schrumpft es zu einem schmalen Streifen: Profil der Sandbox (oder
+   „Terminal"), der aktive Reiter aus HUM-314 („Agent", „Shell 1") und ein
+   Knopf. Größe als Token `HSize.terminalStrip` (240 x 28, so hoch wie
+   `hitMin` und die Titelleiste des Fensters). Er nimmt die erste Ecke in
+   derselben Reihenfolge wie das Fenster, die ihm Platz lässt
+   (`placeTerminalStrip`), und überdeckt nie, was `HKeepClear` markiert:
+   Warteschlange, Freigeben und Blockieren, Hinweise, Blätter, Modale. Nur
+   ohne Platz auch für ihn tritt er zurück. Er hält kein Terminal, ändert
+   die Größe der Sitzung also nicht und nimmt keine Taste.
+7. **Klick auf den Streifen.** Öffnet das Fenster in der nächsten freien
+   Ecke, gemessen an den Bereichen, wie sie jetzt stehen; ist keine frei,
+   legt er das Terminal zurück und zeigt die Sandbox-Seite. Weil das
+   Fenster von selbst zurückkehrt, sobald eine Ecke frei wird, ist der
+   zweite Fall der übliche; nur zurücklegen ohne die Seite zu zeigen hieße
+   das Terminal ganz zu verstecken, obwohl der Mensch es sehen wollte.
+8. UI-Texte nur über ARB (`en` Quelle, `de` Übersetzung, angehängt);
+   `docs/UX.md` 5.2 und `docs/DESIGN.md` (Token-Tabelle, `HKeepClear` und
+   das schwebende Terminal) beschreiben Andocken, Streifen und den Knopf.
+
+### Akzeptanzkriterien
+1. Widget-Test: Schwebend auf History, `Ctrl+4` zeigt das Terminal im Pane
+   der Sandbox-Seite mit demselben Emulator, kein Fenster, genau eine
+   `TerminalView`, die Wahl bleibt `floating`; `Ctrl+3` lässt es wieder
+   schweben. Ein nie geschwebtes Terminal schwebt beim Verlassen nicht.
+2. Widget-Test: Endet der Agent auf der Sandbox-Seite, ist die Wahl danach
+   `pane`, und beim Verlassen schwebt nichts.
+3. Widget-Test: Hatte das Fenster die Tastatur, hat sie das Pane nach
+   `Ctrl+4`; nach `Ctrl+1` hat sie das Terminal nicht, und kein bloßer
+   Bereich hält sie.
+4. Widget-Test: „Go to terminal" lässt das Terminal über Intercept
+   schweben, der Abschnitt bleibt, das Terminal hat die Tastatur; schwebt
+   es schon, bekommt es nur die Tastatur.
+5. Widget-Test: Ohne freie Ecke (History, offenes Einstellungsblatt, links
+   zu schmal für 320 x 200) steht der Streifen in 240 x 28, nicht über dem
+   Blatt, mit Profil und Reiter; geht das Blatt, wird er wieder Fenster;
+   ein Klick ohne Platz legt zurück und zeigt die Sandbox-Seite.
+6. Reine Tests: `placeTerminalStrip` (Ecke zu klein fürs Fenster, Reihenfolge,
+   `null` ohne Platz) und `terminalHostFor` samt Provider (die Seite ändert
+   die Wahl nie).
+7. Goldens `terminal_strip` in vier Varianten (dunkel und hell, en und de);
+   sonst ändert sich kein Golden.
+8. Mutationsbeweise für Andocken und erneutes Schweben, „Go to terminal"
+   und den Streifen statt Verschwinden.
+
+### Tests
+`app/test/features/shell/terminal_dock_test.dart` (Kriterien 1 bis 5),
+`app/test/core/ui/terminal_float_test.dart` (Kriterium 6),
+`app/test/goldens/terminal_strip_golden_test.dart`, das Token in
+`app/packages/ui/test/tokens_test.dart`. Angepasst: in
+`terminal_float_test.dart` das Schweben vom Pane aus (jetzt erst nach dem
+Verlassen der Seite, zurück über `Ctrl+4` statt über den entfallenen Knopf
+im leeren Pane) und der gehaltene Griff (der Wechsel des Wirts kommt jetzt
+vom schwebenden Fenster über History); in `empty_queue_session_test.dart`
+bleibt der Abschnitt nach „Go to terminal"; in `terminal_tabs_test.dart`
+schwebt das Terminal mit seinen Reitern über History statt über der
+Sandbox-Seite.
+
+### Fallstricke
+- Verdeckte Abschnitte bauen in Riverpod 3 bei geändertem Provider nicht
+  neu (ihre Abos ruhen unter `TickerMode`). Das Pane der Sandbox-Seite
+  baut deshalb bei jeder Rückkehr des Terminals ausdrücklich neu
+  (`setState`), wie es das vor diesem Issue schon tat; die Tastatur nimmt es
+  dabei nur aus dem ganzen Fenster.
+- Der Knopf „Terminal hierher zurückholen" im leeren Pane hat keinen Platz
+  mehr: Auf der eigenen Seite dockt das Terminal ohnehin an. Der
+  ARB-Schlüssel `sandboxTerminalDockHere` ist in en und de entfernt.
+- Der Streifen nimmt nur Ecken. Eine Lage, in der alle vier Ecken auch für
+  240 x 28 belegt sind (ein Modal über der Arbeit), lässt ihn zurücktreten
+  wie früher das Fenster.
+
+### Umsetzung (HUM-315)
+- **Wirt.** `core/ui/terminal_placement.dart`: `sandboxPageShownProvider`,
+  `terminalHostFor`, `terminalHostProvider`. Die Shell schreibt die Seite in
+  `_sectionAsked` (und einmal nach dem ersten Frame) und reicht dort die
+  Tastatur auf die Seite weiter.
+- **Ebene.** `FloatingTerminalLayer` zeigt nach dem Wirt, dockt bei einem
+  Ende auf der Seite sofort und baut ohne freie Ecke den Streifen
+  (`floating_terminal_strip.dart`: `FloatingTerminalStrip` ohne Provider,
+  `LiveFloatingTerminalStrip` fragt Profil und Reiter).
+- **Regel.** `core/ui/terminal_float.dart`: `placeTerminalStrip` teilt mit
+  `placeFloatingTerminal` die Ecken und die Prüfung (`_firstFree`).
+- **Token.** `HSize.terminalStrip` und `HSizeTokens.terminalStrip` in
+  `packages/ui`, `dump_tokens.dart`, Token-Tabelle in `docs/DESIGN.md`.
+- **Sandbox.** Pane nach dem Wirt, leeres Pane ohne Knopf;
+  `terminalActiveTabLabel` in `terminal_tabs.dart`.
+- **Warteschlange.** „Go to terminal" ruft `FocusTerminalIntent`.
+- **ARB.** 4 Schlüssel, en und de, angehängt; `sandboxTerminalDockHere`
+  entfernt, die Beschreibung von `interceptEmptyGoToTerminal` nachgezogen.
+- **Goldens neu:** `terminal_strip` (4: dunkel und hell, en und de); kein
+  anderes Golden geändert.
+- **Grün:** `test/features/shell`, `test/features/sandbox`,
+  `test/features/intercept`, `test/core/ui`, `test/core/shortcuts`,
+  `packages/ui`, alle Goldens; `flutter analyze` beider Pakete, `dart format`
+  und `tools/check_coupling.py` ohne Befund. Gelaufen über einen Schatten des
+  SDK mit `--no-pub`.
+- **Mutationsbeweise**, je rot und danach mit `cmp` byte-gleich zurück:
+  `terminalHostFor` ohne die Seite (Andocken und erneutes Schweben); „Go to
+  terminal" wechselt wieder den Abschnitt; ohne freie Ecke kein Streifen.
+
+### Kandidaten (HUM-315)
+- (A) Der Streifen nimmt nur die vier Ecken; er könnte entlang der Kanten
+  einen freien Platz suchen.
+- (B) `sandboxSectionIndex` in `core/shortcuts/intents.dart` hat keinen
+  Nutzer mehr außer seinem Test; streichen oder für einen künftigen Weg
+  behalten.
+
+### Review-Runde 1 (Codex, Sonnet)
+Kein blockierender oder schwerer Befund; die minor-Befunde übernommen.
+- **Tastatur ohne Fenster.** ``Ctrl+` `` und „Go to terminal" taten nichts,
+  solange nur der Streifen stand. Die Ebene hört jetzt auf
+  `terminalFocusRequestProvider` und legt dann zurück, zeigt die
+  Sandbox-Seite und fragt einen Frame später erneut, sodass das Pane die
+  Tastatur nimmt (ehemals Kandidat B). Test
+  `asking_for_the_terminal_with_only_the_strip_docks_it` (Rules, 900 x 280:
+  zu niedrig für das kleinste Fenster); Mutation (Anfrage ignoriert) rot.
+- **Verlassen mit der Tastatur im Pane.** Test
+  `the_pane_keeps_no_keyboard_after_leaving_and_ctrl_1_works`: nach
+  `Ctrl+2` hält das Terminal die Tastatur nicht, und `Ctrl+1` erreicht die
+  Shell.
+- **ARB.** `sandboxTerminalDockHere` entfernt, Beschreibung von
+  `interceptEmptyGoToTerminal` nachgezogen.

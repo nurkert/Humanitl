@@ -564,8 +564,13 @@ agent runs, `Ctrl+Shift+P` or the button left of the full-window button in
 the strip above the terminal lets the terminal float as a small window over
 whatever section is shown, so the agent stays in sight while its requests
 are decided. It is the same session and the same emulator with its
-scrollback; exactly one place shows it, and while it floats the pane in the
-Sandbox section is empty and offers "Put the terminal back here". The window
+scrollback; exactly one place shows it. **On the Sandbox page it docks**
+(HUM-315): while that page shows, a floating terminal stands in its pane
+there, and leaving the page lets it float again. Docking for the page is a
+state of the view, not a choice: the toggle and the palette still say it
+floats. A terminal that had the keyboard in the window keeps it in the pane;
+leaving the page leaves the keyboard to the section asked for. An agent that
+ends while the page shows docks the terminal for good. The window
 has a title bar to drag it by, a button back to the Sandbox section and a
 close button (the same chord); it snaps to the corner of the quadrant it is
 let go in, a grip in the inner corner resizes it between 320 x 200 and 60 %
@@ -576,8 +581,14 @@ decision. **It never covers what must stay clickable.** The queue with its
 rows and notices, the bar with Allow and Block, the notices of the shell, a
 sheet and a modal mark themselves as regions to keep clear (`HKeepClear`);
 the window takes the chosen corner at the chosen size, else the smallest
-size, else the corner beside, above or across, and steps back while no
-corner is free (a modal over the work). It hangs over the sections only,
+size, else the corner beside, above or across. **Without a free corner it
+shrinks to a slim title strip** (HUM-315, `HSize.terminalStrip`, 240 x 28):
+the profile of the sandbox or "Terminal", the active tab, and a button; it
+takes the first corner in the same order that leaves room for it and never
+covers what must stay clickable either. The strip, or its button, opens the
+window in the next free corner, or with none free puts the terminal back
+into its pane and shows the Sandbox page. Only without room even for the
+strip (a modal over the work) it steps back. It hangs over the sections only,
 never over the rail, the header or the status bar, and the settings sheet
 and the command palette lie above it. **The keyboard stays where it is.**
 Opening the window from the queue leaves the keyboard in the queue, and
@@ -587,7 +598,10 @@ the shell keeps working from inside it, `Ctrl+Shift+P` included. A terminal
 that had the keyboard in its pane takes it along. **The end.** When the agent
 ends, the window shows the end as the pane would for four seconds and then
 puts the terminal back into its pane by itself. Without a running agent the
-chord does nothing and the button is disabled. The palette lists the toggle
+chord does nothing and the button is disabled. "Go to terminal" of the empty
+queue (HUM-306) does what ``Ctrl+` `` does since HUM-315: it lets the
+terminal float over the queue and hands it the keyboard, or on the Sandbox
+page gives the keyboard to the terminal in its pane. The palette lists the toggle
 while an agent runs or the terminal floats. The whole window
 (`Ctrl+Shift+Enter`) returns to the floating window when it was opened from
 there. `Ctrl+Shift+P` reaches no agent: a Linux terminal sends it as `0x10`

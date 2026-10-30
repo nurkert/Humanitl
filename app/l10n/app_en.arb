@@ -3318,7 +3318,7 @@
   "interceptEmptyWorkingHint": "Every request that needs you appears here.",
   "@interceptEmptyWorkingHint": {"description": "Empty state of the queue while the agent of a sandbox session runs, second line: what will fill the queue (HUM-306)."},
   "interceptEmptyGoToTerminal": "Go to terminal",
-  "@interceptEmptyGoToTerminal": {"description": "The one action of the empty queue while the agent of a session runs: opens the Sandbox section with the agent's terminal, in place of Start session (HUM-306)."},
+  "@interceptEmptyGoToTerminal": {"description": "The one action of the empty queue while the agent of a session runs, in place of Start session (HUM-306): lets the agent's terminal float over the queue and hands it the keyboard, the same as Ctrl+` (HUM-315)."},
   "shellPaletteTerminalZoomIn": "Terminal text larger",
   "@shellPaletteTerminalZoomIn": {"description": "Command palette entry, listed only while a terminal with a running session is on the screen: makes the terminal text one step larger; Ctrl+Plus, Ctrl+= and Ctrl with the numpad plus do the same (HUM-301)."},
   "shellPaletteTerminalZoomOut": "Terminal text smaller",
@@ -3337,8 +3337,6 @@
   "@sandboxTerminalFloatEnter": {"description": "Tooltip and screen-reader label of the button in the header strip of the terminal that lets the terminal float as a small window over whatever section is shown, the same as the shortcut it names (HUM-300). Disabled while no agent runs. The modifiers are named as they are printed on the keyboard of the language."},
   "sandboxTerminalFloatLeave": "Put the terminal back (Ctrl+Shift+P)",
   "@sandboxTerminalFloatLeave": {"description": "Tooltip and screen-reader label of the same button while the terminal floats: it puts the terminal back into its pane in the Sandbox section (HUM-300)."},
-  "sandboxTerminalDockHere": "Put the terminal back here",
-  "@sandboxTerminalDockHere": {"description": "Button in the empty terminal pane of the Sandbox section while the terminal floats over the sections: puts it back into this pane (HUM-300)."},
   "shellFloatingTerminalTitle": "Agent terminal",
   "@shellFloatingTerminalTitle": {"description": "Title in the bar of the floating terminal window, by which the window is dragged (HUM-300)."},
   "shellFloatingTerminalLabel": "Floating terminal of the agent",
@@ -3378,5 +3376,13 @@
   "sandboxTerminalTabShellGone": "Shell {number} · ended",
   "@sandboxTerminalTabShellGone": {"description": "The tab of a further shell that ended before this window saw its exit code: the daemon no longer knows the shell (IPC_006 on attach). Clicking the tab closes it (HUM-314).", "placeholders": {"number": {"type": "int"}}},
   "sandboxTerminalTabShellGoneHint": "Shell ended, its exit code is unknown; click to close the tab",
-  "@sandboxTerminalTabShellGoneHint": {"description": "Tooltip and screen-reader label of the tab of a further shell that ended without its exit code reaching this window: a click closes the tab (HUM-314)."}
+  "@sandboxTerminalTabShellGoneHint": {"description": "Tooltip and screen-reader label of the tab of a further shell that ended without its exit code reaching this window: a click closes the tab (HUM-314)."},
+  "shellTerminalStripTitle": "{sandbox} · {tab}",
+  "@shellTerminalStripTitle": {"description": "The text of the slim title strip the floating terminal shrinks to while no corner of the sections leaves room for its window (HUM-315): the profile of the sandbox (or the fallback 'Terminal') and the name of the active terminal tab, such as 'Agent' or 'Shell 1'.", "placeholders": {"sandbox": {"type": "String"}, "tab": {"type": "String"}}},
+  "shellTerminalStripFallback": "Terminal",
+  "@shellTerminalStripFallback": {"description": "Stands in the title strip of the floating terminal for the name of the sandbox while the status names no profile (HUM-315)."},
+  "shellTerminalStripOpen": "Open the terminal",
+  "@shellTerminalStripOpen": {"description": "Tooltip and screen-reader label of the button in the slim title strip of the floating terminal, and of the strip itself: opens the terminal in the next free corner, or, with no corner free, puts it back into its pane and shows the Sandbox section (HUM-315)."},
+  "shellTerminalStripLabel": "Floating terminal, shrunk for lack of room",
+  "@shellTerminalStripLabel": {"description": "What a screen reader reads for the slim title strip as a whole: the floating terminal had no free corner and shrank to this strip so it covers nothing that must stay clickable (HUM-315)."}
 }

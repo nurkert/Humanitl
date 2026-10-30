@@ -18,6 +18,7 @@ import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/shortcuts/intents.dart';
 import 'package:humanitl/core/ui/agent_session.dart';
+import 'package:humanitl/core/ui/terminal_placement.dart';
 import 'package:humanitl/features/intercept/providers/now.dart';
 import 'package:humanitl/features/intercept/widgets/queue_pane.dart';
 import 'package:humanitl/features/sandbox/providers/sandbox_status_provider.dart';
@@ -228,10 +229,17 @@ void main() {
 
     await tester.tap(find.byKey(const Key('queue-go-to-terminal')));
     await settle(tester);
+    // Seit HUM-315 schwebt das Terminal über der Warteschlange, statt dass
+    // der Abschnitt wechselt (`terminal_dock_test.dart` prüft die Tastatur).
     expect(
       container.read(navigationProvider),
-      Section.sandbox,
-      reason: 'the button leads to the section with the terminal',
+      Section.intercept,
+      reason: 'the queue stays',
+    );
+    expect(
+      container.read(terminalPlacementProvider),
+      TerminalPlacement.floating,
+      reason: 'the button lets the terminal float over it',
     );
     expect(tester.takeException(), isNull);
   });
