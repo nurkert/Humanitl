@@ -24,6 +24,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-335 | Linux: das AppImage in jedem Release, APT und AppImage auf der Download-Seite | S | HUM-333 |
 | HUM-336 | Die Dokumentation aus docs/ auf humanitl.de | M | HUM-333 |
 | HUM-345 | Die Sicherheitsseite von humanitl.de | M | HUM-333, HUM-336 |
+| HUM-344 | Eine README, die das Projekt zeigt | M | HUM-333 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -225,3 +226,31 @@ Akzeptanz:
 
 Folge-Kandidaten: Home-Link „Die Sicherheitsargumentation“ auf die neue Seite umbiegen;
 SECURITY.md §5.6 Punkt 8 an Seatbelt anpassen; K-22-Satz in THREAT-MODEL.md reparieren.
+
+## HUM-344 · Eine README, die das Projekt zeigt
+
+### Kontext
+
+Rückmeldung des Inhabers vom 2026-10-30: Die README sieht nach Anfängerprojekt aus, obwohl 0.1.0 kurz bevorsteht und schon viel bietet. Gewünscht ist eine saubere, professionelle README mit echten Screenshots. Bisher stand oben ein Golden mit Ahem-Blöcken (`docs/img/intercept.png`), dazu Installationsangaben mit einem AppImage, das in keinem Release liegt.
+
+### Spezifikation
+
+- `README.md` behält die zehn Abschnitte zweiter Ebene aus HUM-059 in derselben Reihenfolge; alles Neue steht darunter als dritte und vierte Ebene. Vor dem ersten Abschnitt: App-Symbol, Einzeiler wortgleich, vier Abzeichen (CI, Release, Lizenz, Plattform), eine Linkzeile (Website, Download, Dokumentation, Sicherheitsmodell, Deutsch), das Intercept-Bild als `<picture>` mit heller und dunkler Fassung, der bisherige Absatz zur Funktionsweise und „How it works in three steps".
+- Die Sicherheitsaussage bleibt mindestens so stark: die drei Garantien unter Linux wortgleich mit beiden Prüfbefehlen, eine Tabelle für macOS nach `docs/SECURITY.md` Abschnitt 12, die Escape-Tests ESC-1 bis ESC-5 und die Seatbelt-Suite, die fünf Seitenkanäle als Tabelle, die macOS-Grenzen K-19 bis K-23, „Out of scope" nach `docs/SECURITY.md`. Neu ist der Hinweis auf `docs/SECURITY.md` Abschnitt 5.6 (Antworten und WebSocket-Frames nicht angehalten, kein HTTP/2, Isolationsprüfung erst nach dem Start). `docs/SECURITY.md` und `docs/THREAT-MODEL.md` bleiben unverändert.
+- Installation: APT-Repository, `.deb`, Archiv, macOS-Abbild mit „Open Anyway" und einer ausformulierten Warnung zu `xattr`, Prüfsummen mit dem Satz aus `packaging/release/release-notes.sh`. Kein AppImage, solange HUM-335 nicht auf `main` und in einem Release ist.
+- Eine Tour durch die App (Intercept, Editor, Regeln, Verlauf und Audit, Sandbox, Tastatur), CLI mit Paritätstabelle, Dokumentationsübersicht, Architekturbild mit Textfassung in `<details>`, Status mit der Zeile M12 und „Project health" als Liste.
+- Bilder unter `images/readme/`, nur PNG, zusammen unter 3 MB: echte Aufnahmen der macOS-App gegen `humanitld --fake fixtures/sessions/npm-install.jsonl`, ohne sichtbare Spuren des Demo-Modus, das Architekturbild aus HTML gerendert, das Symbol aus `website/public/favicon.svg`. Editor, Isolationsprüfung, Einrichtung und Audit zeigt der Demo-Daemon nur mit „fake"-Hinweisen; diese Module bleiben ohne Bild.
+- `README.de.md` trägt dieselben Fakten zu Garantien, macOS-Grenzen, Seitenkanälen und Installation, kürzer und ohne Tour; für Tour, CLI, Architektur und Stand verweist sie auf die englische README. Das weicht bewusst von HUM-059 („eine Seite") ab: Die deutsche Fassung soll Einsteigern die Sicherheitsaussage und die Installation vollständig geben, die Pflege der langen Teile bleibt an einer Stelle.
+- Maschinelle Leser: `scripts/ci/lint-docs.sh` sucht das Bild jetzt als `images/readme/intercept-dark.png` (Markdown-Bild oder `src="…"`), `scripts/ci/check-doc-links.py` prüft auch jedes Ziel in `srcset`. Die Status-Tabelle behält ihr Format für `packaging/release/release-notes.sh`.
+
+### Akzeptanzkriterien
+
+- `scripts/ci/lint-docs.sh`, `python3 -I scripts/ci/check-doc-links.py` (mit `--self-test`) und `packaging/release/release-notes-test.sh` sind grün.
+- Die Bildregel in `lint-docs.sh` und `srcset` in `check-doc-links.py` ändern sich im selben Commit; der Selbsttest hat einen Fall für ein fehlendes `srcset`-Ziel.
+- Jedes Bild ist eine echte Aufnahme oder aus Fakten des Repositorys gerendert; kein Bild zeigt Text des Demo-Modus.
+- `images/readme/` ist zusammen höchstens 3 MB groß, nur PNG oder JPEG.
+- Die Sicherheitsaussage ist mindestens so stark wie vorher; K-19 bis K-23 und die fünf Seitenkanäle sind genannt.
+- Kein AppImage, kein Link auf `humanitl.de/en/docs/`, kein Abzeichen, das etwas Unprüfbares behauptet.
+- Gerendert mit `gh api /markdown` bei 1280 und 400 px, hell und dunkel, ohne waagrechtes Scrollen geprüft.
+
+Offen für den Maintainer: `docs/img/intercept.png` ist danach nirgends mehr verlinkt und kann weg. `images/banner.jpg` bleibt ungenutzt; ob es die Social Preview von GitHub wird, entscheidet der Inhaber.
