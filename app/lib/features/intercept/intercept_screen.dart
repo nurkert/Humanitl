@@ -22,6 +22,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/domain/domain.dart';
 import '../../core/ipc/connection.dart';
+import '../../core/recorder/recorder_health.dart';
 import '../../core/ui/h_resizable_panes.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
@@ -34,7 +35,6 @@ import 'providers/held_groups.dart';
 import 'providers/note.dart';
 import 'providers/pane_layout.dart';
 import 'providers/queue_freeze.dart';
-import 'providers/recorder_health.dart';
 import 'providers/selection.dart';
 import 'rule_sentence.dart';
 import 'widgets/action_bar.dart';
