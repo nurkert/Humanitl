@@ -122,6 +122,110 @@ class TerminalFocusActivator extends ShortcutActivator {
   String debugDescribeKeys() => 'Ctrl + Backquote (physical)';
 }
 
+/// What a zoom chord does to the text of the terminal (HUM-301).
+enum TerminalZoom {
+  /// One step larger. `Ctrl` + `+`, `Ctrl+=`, `Ctrl` + numpad `+`.
+  zoomIn,
+
+  /// One step smaller. `Ctrl` + `-`, `Ctrl` + numpad `-`.
+  zoomOut,
+
+  /// Back to the default size. `Ctrl+Shift+0`, `Ctrl` + numpad `0`.
+  reset,
+}
+
+/// Make the text of the terminal that is shown larger, smaller or the
+/// default size again (HUM-301).
+class TerminalZoomIntent extends Intent {
+  /// Creates the intent for [zoom].
+  const TerminalZoomIntent(this.zoom);
+
+  /// Which way the size changes.
+  final TerminalZoom zoom;
+}
+
+/// The chords that zoom the text of the terminal (HUM-301).
+///
+/// **Zoom in** takes `+` with or without `Shift`: on a US layout `+` is
+/// `Shift+=`, on a German one it has its own key, and the keypad has one of
+/// its own. Flutter names a key by what it types without modifiers, so the US
+/// chord arrives as `equal` with `Shift` and the German one as `add`.
+///
+/// **Zoom out** takes `-` only without `Shift`: `Ctrl+Shift+-` is `Ctrl+_`,
+/// undo in readline, and stays with the agent.
+///
+/// **Reset is `Ctrl+Shift+0`, not `Ctrl+0`.** `Ctrl+0` is the reset of every
+/// browser and terminal and here the toggle of the rail ([railToggleKey],
+/// HUM-254), in every section and from inside the terminal as well. Two
+/// meanings for one chord, one of them only while the terminal has the
+/// keyboard, would leave whoever wants the rail with a smaller text and the
+/// other way round. `Shift` with the same key keeps the reset next to the
+/// digit people reach for; [SingleActivator] demands its modifiers exactly,
+/// so the rail binding does not match it. On a German keyboard
+/// `Shift+0` types `=`, but the key is still named `digit0`, so the chord is
+/// the same there and is not mistaken for zoom in. `Ctrl` with the `0` of the
+/// keypad resets as well, without `Shift`, because `Shift` turns that key
+/// into `Insert` while Num Lock is on.
+///
+/// Zoom in and out repeat while held, the reset does not. Exactly `Ctrl` as
+/// the other modifier: with `Alt` or `Meta` it is another chord. None of these
+/// keys is bound anywhere else in the application with `Ctrl` (checked
+/// against every `SingleActivator` in `app/lib` and `app/packages` and
+/// CONVENTIONS 3.9). The terminal looks them up like the other keys of the
+/// shell, so they never reach the agent.
+class TerminalZoomActivator extends ShortcutActivator {
+  /// Creates the activator for [zoom].
+  const TerminalZoomActivator(this.zoom);
+
+  /// The chord this activator stands for.
+  final TerminalZoom zoom;
+
+  @override
+  Iterable<LogicalKeyboardKey> get triggers => switch (zoom) {
+    TerminalZoom.zoomIn => const <LogicalKeyboardKey>[
+      LogicalKeyboardKey.equal,
+      LogicalKeyboardKey.add,
+      LogicalKeyboardKey.numpadAdd,
+    ],
+    TerminalZoom.zoomOut => const <LogicalKeyboardKey>[
+      LogicalKeyboardKey.minus,
+      LogicalKeyboardKey.numpadSubtract,
+    ],
+    TerminalZoom.reset => const <LogicalKeyboardKey>[
+      LogicalKeyboardKey.digit0,
+      LogicalKeyboardKey.numpad0,
+    ],
+  };
+
+  @override
+  bool accepts(KeyEvent event, HardwareKeyboard state) {
+    final bool down =
+        event is KeyDownEvent ||
+        (event is KeyRepeatEvent && zoom != TerminalZoom.reset);
+    if (!down ||
+        !triggers.contains(event.logicalKey) ||
+        !state.isControlPressed ||
+        state.isAltPressed ||
+        state.isMetaPressed) {
+      return false;
+    }
+    final bool shift = state.isShiftPressed;
+    return switch (zoom) {
+      TerminalZoom.zoomIn => true,
+      TerminalZoom.zoomOut => !shift,
+      TerminalZoom.reset =>
+        event.logicalKey == LogicalKeyboardKey.digit0 ? shift : !shift,
+    };
+  }
+
+  @override
+  String debugDescribeKeys() => switch (zoom) {
+    TerminalZoom.zoomIn => 'Ctrl + Plus / Equal / Numpad Add',
+    TerminalZoom.zoomOut => 'Ctrl + Minus / Numpad Subtract',
+    TerminalZoom.reset => 'Ctrl + Shift + 0 / Ctrl + Numpad 0',
+  };
+}
+
 /// The key that expands and collapses the rail, with `Ctrl` (HUM-254).
 ///
 /// Not `Ctrl+B`: CONVENTIONS 3.9 keeps that for `AddRuleIntent`, and a plain
@@ -133,7 +237,8 @@ const LogicalKeyboardKey railToggleKey = LogicalKeyboardKey.digit0;
 /// The bindings of HUM-019: one `Ctrl+<digit>` per section, `Ctrl+K`,
 /// `Ctrl+,` for the settings (HUM-069), `Ctrl+0` for the rail (HUM-254) and
 /// `Ctrl+Shift+Enter` for the terminal over the whole window (HUM-298) and
-/// `Ctrl+Backquote` for the keyboard to the terminal (HUM-303).
+/// `Ctrl+Backquote` for the keyboard to the terminal (HUM-303) and the zoom
+/// chords of the terminal (HUM-301).
 Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
   for (int i = 0; i < navigationKeys.length; i++)
     SingleActivator(navigationKeys[i], control: true): NavIntent(i),
@@ -145,6 +250,8 @@ Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
   terminalFullWindowActivator: const ToggleTerminalFullWindowIntent(),
   terminalFullWindowNumpadActivator: const ToggleTerminalFullWindowIntent(),
   const TerminalFocusActivator(): const FocusTerminalIntent(),
+  for (final TerminalZoom zoom in TerminalZoom.values)
+    TerminalZoomActivator(zoom): TerminalZoomIntent(zoom),
 };
 
 /// The digit keys of the navigation shortcuts, in section order.

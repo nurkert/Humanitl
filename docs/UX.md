@@ -558,6 +558,26 @@ above the work keeps the focus against the shortcut too; a text field does
 not, because the shortcut asks deliberately. The palette lists it while a
 terminal is shown.
 
+**The terminal text can be zoomed (HUM-301).** `Ctrl` with `+` makes it one
+step larger, with `-` one step smaller, between 10 and 28 px; the default is
+the 13 px of `mono13`. `+` counts with or without `Shift`, because on a US
+keyboard it is `Shift+=`, and so does `Ctrl+=` and the plus of the keypad.
+`-` counts only without `Shift`: `Ctrl+Shift+-` is `Ctrl+_`, undo in
+readline, and stays with the agent. The reset is `Ctrl+Shift+0` (also `Ctrl`
+with the `0` of the keypad), **not `Ctrl+0`**: that chord, the reset of every
+browser and terminal, is the rail here (HUM-254), in every section and from
+inside the terminal; one chord with two meanings depending on where the
+focus sits would cost whoever wants the rail a smaller text and the other
+way round. `Ctrl` + wheel over the emulator zooms too, and the scrollback
+does not move meanwhile. The zoom chords are further exceptions in the
+terminal and take the way of the others through `TerminalPane._onKey`, so
+the agent never receives them; outside the terminal they act only while a
+terminal with a session is shown, otherwise the key goes on unchanged. The
+size survives a restart in the state file of the interface, and after a zoom
+the emulator counts its columns and rows again and sends them up on the
+throttled resize path (HUM-305), so the agent redraws. The palette lists
+the three commands while a terminal is shown.
+
 ### 5.3 Every bound key does something
 
 Every activator in `interceptShortcuts()` has an action in the same screen. A widget test compares the two key sets and fails if they differ; a binding without an action is deleted, not disabled. Today `/`, `Ctrl+D` and `N` are bound and mute.
