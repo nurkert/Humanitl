@@ -938,6 +938,8 @@ List flows, newest first; --asc turns the order around.
 
 SIZE is request plus response in bytes, MS the duration in milliseconds, PATH shortened in the middle to 40 characters. What the daemon does not know stays a dash.
 
+ID is the end of the flow id, as many characters as it takes to tell the rows of this page apart and at least eight; `flows show` takes it as it stands. DECISION reads `aborted` where the client gave up its TLS connection to the proxy before there was anything to decide (nobody blocked it; `flows show` names the cause), and `passthrough` for the requests to the model endpoint, which only --passthrough lists.
+
 Usage: humanitl flows list [OPTIONS] [FILTER]...
 
 Arguments:
@@ -968,6 +970,9 @@ Options:
   -v, --verbose...
           Explain what is happening; repeat for more
 
+      --passthrough
+          Include the requests the passthrough let through to the model endpoint; DECISION reads `passthrough` for them
+
   -q, --quiet
           Only the result, no notes
 
@@ -987,7 +992,7 @@ Usage: humanitl flows show [OPTIONS] <ID>
 
 Arguments:
   <ID>
-          The id of the flow
+          The id of the flow: the whole id, or its end as `flows list` prints it (at least eight characters), looked up among the last 1000 flows
 
 Options:
       --body <WHICH>

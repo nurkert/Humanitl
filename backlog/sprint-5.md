@@ -9584,3 +9584,166 @@ Kein blockierender oder schwerer Befund; die minor-Befunde übernommen.
   Shell.
 - **ARB.** `sandboxTerminalDockHere` entfernt, Beschreibung von
   `interceptEmptyGoToTerminal` nachgezogen.
+
+---
+## HUM-316 · Aborted TLS tunnels, model traffic and flow IDs are shown truthfully
+
+### Kontext
+Befund des Eigentümers am 2026-10-30. `humanitl flows list` zeigte 16 Zeilen
+`CONNECT llm.hzo.schutzwerk.net`, Entscheidung `block`, Zustand `recorded`,
+0 bis 1 ms, Fehler `tls_handshake_failed`, null Funde. Der Host ist der
+eingestellte Modellserver. Drei Dinge stimmten nicht:
+
+- `record_connect_failure` in `daemon/crates/proxy/src/handler.rs` verbuchte
+  jeden abgebrochenen oder abgelehnten Handschlag des Clients und jeden
+  Tunnel, der nach dem Handschlag leer blieb, als `Decision::Block { reason:
+  NoRoute }` durch das System. Geblockt hatte niemand. Die Klasse
+  (`tls_observe::TlsFailure`: `eof_before_finished`, `reset_before_finished`,
+  `closed_after_handshake`, `alert_unknown_ca` und andere) stand nur in einer
+  Protokollzeile auf `debug`; am Flow stand `tls_handshake_failed` ohne
+  Ursache. In der App hieß dieselbe Zeile in der Regelspalte sogar „manuell",
+  weil die Aufzeichnung keine Quelle führt.
+- Die gelungenen Anfragen an das Modell sind Durchreich-Flows.
+  `humanitl flows list` schickte `include_passthrough: false` fest
+  eingetragen; die History hat dafür einen Schalter, die Kommandozeile hatte
+  keinen.
+- Die Spalte `ID` zeigte die ersten acht Zeichen einer UUIDv7. Die sind die
+  Uhrzeit und für alle Flows einer Minute gleich (fünfmal `01a189bd`). Eine
+  Zeile ließ sich so nicht ansprechen, und `flows show` nahm ohnehin nur die
+  ganze Id.
+
+### Spezifikation
+1. **Eigener Grund statt `NoRoute`.** Neue Variante
+   `BlockReason::ClientAborted` (`client_aborted`), auf der Leitung
+   `BLOCK_REASON_CLIENT_ABORTED = 12`, `PROTO_MINOR` 24, `docs/PROTOCOL.md`,
+   `proto/descriptor.binpb`, `proto/generated.sha256`,
+   `ProtoVersion.minor` 24. Der Flow endet weiter als `Decided(Block)` durch
+   das System und dann `Recorded`.
+   **Warum so und nicht anders.** Der Automat schließt einen Flow nur über
+   eine Entscheidung ab, und nichts ging zum Ziel; ein neuer
+   Entscheidungstyp hätte jeden Zweig über `Decision` in Proxy, Hold,
+   Pipeline, Audit und App berührt. Eine neue `DecisionSource` wäre nach dem
+   Neuladen verloren, denn die Tabelle `flows` führt keine Quelle. Der Grund
+   dagegen steht schon heute als Text in `flows.block_reason` und reist über
+   `FlowEvent::Decided` wie über `ListFlows`: keine Migration, eine additive
+   Enum-Nummer, und ältere Clients lesen ihn als unbekannt. `decision` bleibt
+   `block`, damit Zählungen und der Filter `decision:block` wie bisher
+   rechnen; was die Oberflächen zeigen, entscheidet der Grund.
+   `http_status` ist 408 wie `ClientTimeout`, geht aber nie hinaus.
+2. **Die Klasse steht am Flow.** `flows.error` trägt
+   `tls_handshake_failed:<klasse>` (`tls_observe::flow_error`), dieselbe Form
+   wie `upstream_private_address:<ip>`. `AlertOther` schreibt nur
+   `alert_other`; die Beschreibung von rustls steht im Befund. Keine
+   Migration, die Spalte gibt es seit HUM-045. Ältere Zeilen behalten
+   `tls_handshake_failed` ohne Klasse; wer den Fall erkennt, vergleicht den
+   Teil vor dem ersten `:` (Kommentar an `FlowSummary.error`).
+   **Protokoll.** Kein `info` je Flow: Ein Client, der im Takt neu verbindet,
+   flutete sonst das Journal. Eine Zeile auf `info` mit Host, Klasse und Flow
+   steht genau dann, wenn auch eine Karte fällig ist, also unter demselben
+   Zählfenster (`HandshakeWatch`, `MAX_REPORTS_PER_WINDOW`). Die Zeile auf
+   `debug` je Versuch bleibt.
+3. **`flows list --passthrough`.** Der Schalter setzt
+   `ListFlowsRequest.include_passthrough`; der Name folgt dem Feld und dem
+   Chip der History. Die Spalte DECISION schreibt `passthrough` für einen
+   Durchreich-Flow, der freigegeben wurde (`allow`, `allow_edited`); ein
+   Block oder Ablauf an ihm bleibt, was er ist, und ohne Entscheidung steht
+   wie überall ein Strich. `flows show` sucht seine Zeile ebenfalls mit
+   Durchreiche.
+4. **Eindeutige IDs.** Die Spalte `ID` zeigt das Ende der Id in Hexziffern
+   ohne Bindestriche, so viele Zeichen, wie es braucht, damit das Ende jeder
+   Zeile auf genau einen Flow passt, mindestens acht, eine Breite für die
+   ganze Seite. Gezählt wird über die Seite und über dieselbe Menge, in der
+   `flows show` nachschlägt (`search_set`: die jüngsten 1000 Flows samt
+   Durchreiche, eine Stelle im Code für Liste, Probelauf und `show`); sonst
+   druckte `flows list --limit 1` ein Ende, das `show` als mehrdeutig
+   abwiese. `ListFlows` kennt keine Abfrage nur nach Ids, die Liste holt
+   deshalb eine zweite Seite Zusammenfassungen.
+   Das Ende statt des Anfangs, weil der Anfang einer UUIDv7 die Uhrzeit ist
+   und das Ende Zufall. `flows show` nimmt die ganze Id (mit oder ohne
+   Bindestriche) wie bisher, oder ein Ende ab acht Hexziffern
+   (Groß-/Kleinschreibung und Bindestriche egal), nachgeschlagen unter den
+   letzten 1000 Flows samt Durchreiche. Keiner passt: `IPC_003` wie beim
+   bisherigen Nachschlagen, mit dem Satz, dass nur die jüngsten 1000 Flows
+   durchsucht werden und ein älterer die ganze Id aus
+   `humanitl flows list --json` braucht. Mehrere passen: `CLI_004` mit allen Kandidaten
+   im Text, geraten wird nie. Zu kurz oder kein Hex: `CLI_004` mit
+   `CopyCommand` auf `humanitl flows list`. Auch die Bestätigungszeile von
+   `flows decide` nennt das Ende.
+5. **Wahrheit in Tabelle, `show` und JSON.** DECISION und die Zeile
+   `decision` von `flows show` schreiben `aborted`, wo der Grund
+   `client_aborted` ist. `flows show` zeigt unter `status` eine Zeile
+   `error`, wenn der Flow einen Fehler trägt. `--json` behält `decision`
+   (`block`) und nennt daneben `outcome` (dasselbe Wort wie die Spalte) und
+   `block_reason` (leer ohne Block). Die Kommandozeile liest dafür nur Enums
+   des Dienstes, sie deutet nichts aus `error` (ADR-018).
+6. **App, so knapp wie möglich.** `BlockReason.clientAborted` (Position 12),
+   in der History Fehlerfarbe wie `no_route`, Regelspalte „client"
+   („Client"), Feld Entscheidung im Detail „aborted" („abgebrochen"); ARB
+   `historyDeciderClient`, `historyDecisionAborted` (en und de, angehängt).
+7. **Dokumentation.** Hilfe von `flows list` und `flows show`,
+   `docs/reference/cli.md` (erzeugt), Tabelle in
+   `docs/guides/first-session.md`, CONVENTIONS 3.1 (Enum) und 4 (Grund und
+   Status).
+
+### Akzeptanzkriterien
+1. Ein abgelehnter Handschlag, ein abgebrochener Handschlag und ein leer
+   geschlossener Tunnel ergeben je einen Flow mit `block_reason =
+   client_aborted`, nie `no_route`; Tabelle und `flows show` schreiben
+   `aborted`, `--json` `outcome: "aborted"`.
+2. `flows.error` trägt die Klasse: `tls_handshake_failed:alert_unknown_ca`,
+   `…:closed_after_handshake`, `…:eof_before_finished` oder
+   `…:reset_before_finished`; `flows show` und `--json` zeigen sie.
+3. Der Grund überlebt das Neuladen aus der Aufzeichnung.
+4. `flows list --passthrough` schickt `include_passthrough: true`, ohne den
+   Schalter `false`; ein Durchreich-Flow heißt in DECISION `passthrough`.
+5. Die Spalte `ID` ist auf jeder Seite eindeutig, mindestens acht Zeichen;
+   `flows show` findet mit genau diesem Ende genau den Flow der Zeile,
+   nimmt weiter die ganze Id und rät bei mehreren Treffern nicht.
+6. Die History zeigt einen abgebrochenen Tunnel nicht als Blockierung und
+   nicht als „manuell".
+7. Kein Schema der Aufzeichnung ändert sich; die Proto ändert sich nur
+   additiv.
+
+### Tests
+- `daemon/crates/proxy/tests/tls_observe.rs`: die vorhandenen Fälle prüfen
+  Klasse und `client_aborted` (Ablehnung `alert_unknown_ca`, leerer Tunnel
+  `closed_after_handshake`, Wiederholung), der Fall `TLS_002` zeichnet jetzt
+  auf und prüft für jeden der drei Abbrüche `eof_before_finished` oder
+  `reset_before_finished` samt `client_aborted`.
+- `tls_observe::tests::the_flow_error_carries_the_class`.
+- `humanitl_ipc::convert::tests::an_aborted_tunnel_survives_the_recording`.
+- `humanitl` (`cmd::flows`): `an_aborted_tunnel_reads_aborted_and_names_its_cause`,
+  `a_passthrough_flow_reads_passthrough`,
+  `the_id_column_tells_every_row_of_a_page_apart`,
+  `the_id_column_grows_until_the_ends_differ`,
+  `flows_show_takes_the_end_the_table_prints`,
+  `an_end_that_fits_several_or_none_is_refused`; `cli`:
+  `passthrough_is_a_flag_of_flows_list`.
+- `app/test/features/history/history_view_test.dart`: `an aborted tunnel was
+  decided by nobody (HUM-316)`, aus einer `FlowSummary` von der Leitung.
+
+### Kandidaten (HUM-316)
+- (A) `flows decide` nimmt das Ende der Id ebenso wie `flows show`. Der
+  Leitfaden führt `flows show <id>` und `flows decide <id>` nebeneinander;
+  heute braucht `decide` die ganze Id aus `--json`.
+- (B) Die Aufzeichnung führt `decision_source` als Spalte, damit „manuell"
+  in der History nicht mehr aus dem Fehlen einer Regel geschlossen wird.
+- (C) Den Grund der 16 Abbrüche beim Modellserver klären, sobald die Klasse
+  am Flow steht: ein Client mit eigenem Verbindungspool, der Verbindungen
+  vorab öffnet und ungenutzt schließt, sähe genau so aus
+  (`closed_after_handshake`). Dann wäre der Flow kein Fehler, sondern
+  Rauschen, und die Durchreiche könnte ihn unterdrücken oder zusammenfassen.
+- (D) Ein Filterterm `reason:` im Recorder (`reason:client_aborted`), damit
+  die History und `flows list` die Abbrüche ein- oder ausblenden können.
+
+### Review Runde 1 (HUM-316)
+- **Breite der Spalte gegen die Suchmenge** (Codex, major, AK 5). Die Breite
+  kam aus der Seite allein, `flows show` sucht aber in den jüngsten 1000
+  Flows; `flows list --limit 1` konnte so ein Ende drucken, das `show` mit
+  `CLI_004` abwies. Jetzt misst `id_tail_len` gegen Seite und `search_set`.
+  Test `the_id_column_is_unique_among_what_show_searches`; Mutation (Suchmenge
+  ignoriert) rot. Auch `rules dry-run` misst so.
+- **Text von `IPC_003`** (Sonnet, minor): nennt die Grenze von 1000 und den
+  Weg über `flows list --json`.
+- **`passthrough` nur nach Freigabe** (Sonnet, minor): ohne Entscheidung
+  wieder ein Strich.

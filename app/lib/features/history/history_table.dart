@@ -556,6 +556,7 @@ class _Cell extends StatelessWidget {
         HistoryDecider.passthrough => l10n.historyDeciderPassthrough,
         HistoryDecider.pending => l10n.historyDeciderPending,
         HistoryDecider.meta => l10n.historyDeciderMeta,
+        HistoryDecider.client => l10n.historyDeciderClient,
       };
 
   Widget _text(HTokens tokens, String value, TextStyle style, Color color) =>

@@ -261,7 +261,11 @@ async fn dry_run(ctx: &Context, args: &RuleArgs, scan: u32) -> Result<u8, Failur
             .note("the daemon has no recorded requests to scan");
     }
     if !response.dry_run_matches.is_empty() {
-        crate::cmd::flows::print_flows(&response.dry_run_matches);
+        // Dieselbe Breite der Spalte `ID` wie in `flows list`: gemessen an
+        // der Menge, in der `flows show` ein Ende nachschlägt (HUM-316).
+        let mut client = ctx.connect().await?;
+        let searched = crate::cmd::flows::search_set(&mut client).await?;
+        crate::cmd::flows::print_flows(&response.dry_run_matches, &searched);
     }
     ctx.render
         .note("a match is not a decision: another rule may match first");

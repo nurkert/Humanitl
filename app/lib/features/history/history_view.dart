@@ -32,7 +32,9 @@ const String historyFilterInvalidCode = 'RECORDER_002';
 ///    not an upstream failure, and the same holds for the 403 of a block:
 ///    a decision is never overruled by the status it produced.
 /// 5. `no_route` is an error even though it is written as a block: nothing
-///    was refused, the target was never reachable.
+///    was refused, the target was never reachable. The same holds for
+///    `client_aborted` (HUM-316): the client gave up before anything could
+///    be refused, and the blocked hue would claim a refusal nobody made.
 /// 6. Otherwise a failed upstream or a 5xx answer is an error, and everything
 ///    left is what the queue would show, so that the same flow does not
 ///    change colour when it moves from one screen to the other.
@@ -65,7 +67,8 @@ HFlowState historyVisualState(Flow flow) {
   if (flow.decision == DecisionKind.timedOut) {
     return HFlowState.timedOut;
   }
-  if (flow.blockReason == BlockReason.noRoute) {
+  if (flow.blockReason == BlockReason.noRoute ||
+      flow.blockReason == BlockReason.clientAborted) {
     return HFlowState.error;
   }
   if (flow.decision == DecisionKind.block) {
@@ -115,12 +118,20 @@ enum HistoryDecider {
 
   /// Nobody has decided yet.
   pending,
+
+  /// Nobody did: the client gave up its TLS connection to the proxy before
+  /// there was a request to decide (HUM-316). Not [manual]: no person was
+  /// asked, and the word would name one who never decided.
+  client,
 }
 
-/// Which of the six words the rule column shows for [flow].
+/// Which of the seven words the rule column shows for [flow].
 HistoryDecider historyDecider(Flow flow) {
   if (flow.meta) {
     return HistoryDecider.meta;
+  }
+  if (flow.blockReason == BlockReason.clientAborted) {
+    return HistoryDecider.client;
   }
   if (flow.passthrough) {
     return HistoryDecider.passthrough;
