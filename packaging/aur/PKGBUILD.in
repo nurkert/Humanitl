@@ -1,0 +1,123 @@
+# Maintainer: Niko Burkert <humanitl@nurkert.de>
+#
+# Erzeugt von packaging/aur/render.sh aus packaging/aur/PKGBUILD.in im
+# Humanitl-Repository (HUM-339). Aendern in der Vorlage dort, nicht hier.
+#
+# Binaerpaket aus dem Release-Archiv humanitl-<version>-linux-x86_64.tar.gz:
+# dieselben Programme und dasselbe Flutter-Bundle wie im .deb, in derselben
+# Anordnung unter /usr/lib/humanitl. Das Archiv enthaelt weder Nutzer-Units
+# noch Desktop-Datei noch Symbole; die kommen als lokale Quellen mit, aus
+# dem Repository beim Tag dieser Version erzeugt.
+#
+# Gebaut werden die Programme auf Ubuntu 24.04; sie brauchen glibc 2.39 oder
+# neuer.
+
+pkgname=humanitl-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='Human-in-the-loop network moderation for AI coding agents (early 0.0.x release)'
+arch=('x86_64')
+url='https://github.com/nurkert/Humanitl'
+license=('GPL-3.0-only' 'CC-BY-4.0' 'CC-BY-3.0' 'BSD-3-Clause' 'MIT')
+# Aus den NEEDED-Eintraegen der Programme und des Bundles. libglvnd: Die
+# Flutter-Engine laedt libEGL.so.1 und libGLESv2.so.2 mit dlopen, das sieht
+# kein Abhaengigkeitsscanner. bubblewrap wird gestartet, nicht gelinkt; die
+# Mindestversion ist MIN_BWRAP_VERSION des Daemons. hicolor-icon-theme
+# besitzt die Verzeichnisse, in die die Symbole fallen.
+depends=(
+  'glibc>=2.39'
+  'libgcc'
+  'libstdc++'
+  'zlib'
+  'gtk3'
+  'glib2'
+  'pango'
+  'harfbuzz'
+  'cairo'
+  'gdk-pixbuf2'
+  'at-spi2-core'
+  'libepoxy'
+  'fontconfig'
+  'hicolor-icon-theme'
+  'libglvnd'
+  'bubblewrap>=@BWRAP_MIN@'
+)
+optdepends=(
+  'libsecret: keep provider keys in the desktop keyring via secret-tool'
+  'libayatana-appindicator: tray icon'
+  'opencode: the coding agent that runs in the sandbox'
+)
+provides=("humanitl=$pkgver")
+conflicts=('humanitl')
+# strip wuerde den Dart-AOT-Snapshot libapp.so zerschneiden, und debug
+# spaltete von schon gestrippten Programmen ein leeres -debug-Paket ab.
+options=('!strip' '!debug')
+install=humanitl-bin.install
+source=(
+  "https://github.com/nurkert/Humanitl/releases/download/v$pkgver/humanitl-$pkgver-linux-x86_64.tar.gz"
+  'humanitld.service'
+  'humanitld.socket'
+  'dev.humanitl.humanitl.desktop'
+  'humanitl.svg'
+  'humanitl-64.png'
+  'humanitl-128.png'
+  'humanitl-256.png'
+  'copyright'
+)
+sha256sums=(
+  '@SHA256:tarball@'
+  '@SHA256:humanitld.service@'
+  '@SHA256:humanitld.socket@'
+  '@SHA256:dev.humanitl.humanitl.desktop@'
+  '@SHA256:humanitl.svg@'
+  '@SHA256:humanitl-64.png@'
+  '@SHA256:humanitl-128.png@'
+  '@SHA256:humanitl-256.png@'
+  '@SHA256:copyright@'
+)
+
+package() {
+  local tree="$srcdir/humanitl-$pkgver-linux-x86_64"
+  local lib="$pkgdir/usr/lib/humanitl"
+
+  # Das Flutter-Bundle (Programm humanitl, lib/, data/) und die drei Programme.
+  install -d -m 0755 "$lib/bin" "$pkgdir/usr/bin"
+  cp -R --no-preserve=ownership "$tree/app/." "$lib/"
+  install -m 0755 "$tree/bin/humanitld" "$tree/bin/humanitl" "$tree/bin/humanitl-shim" "$lib/bin/"
+  ln -s ../lib/humanitl/bin/humanitl "$pkgdir/usr/bin/humanitl"
+  ln -s ../lib/humanitl/humanitl "$pkgdir/usr/bin/humanitl-app"
+
+  # Domain-Katalog und das Sandbox-Profil "default", dort, wo der Daemon
+  # sie sucht (PACKAGED_CATALOG, PROFILE_DIRS).
+  install -D -m 0644 -t "$pkgdir/usr/share/humanitl/catalog" \
+    "$tree/share/humanitl/catalog/domains.yaml" \
+    "$tree/share/humanitl/catalog/ranks-top100k.csv.gz" \
+    "$tree/share/humanitl/catalog/RANKS-LICENSE"
+  install -D -m 0644 -t "$pkgdir/usr/share/humanitl/profiles/sandbox" \
+    "$tree/profiles/sandbox/default.toml"
+
+  # Die Nutzer-Units des Pakets. `humanitl daemon install` erkennt eine
+  # Paketinstallation an /usr/lib/systemd/user/humanitld.service.
+  install -D -m 0644 -t "$pkgdir/usr/lib/systemd/user" \
+    "$srcdir/humanitld.service" "$srcdir/humanitld.socket"
+
+  install -D -m 0644 "$srcdir/dev.humanitl.humanitl.desktop" \
+    "$pkgdir/usr/share/applications/dev.humanitl.humanitl.desktop"
+  install -D -m 0644 "$srcdir/humanitl.svg" \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/humanitl.svg"
+  local size
+  for size in 64 128 256; do
+    install -D -m 0644 "$srcdir/humanitl-$size.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/humanitl.png"
+  done
+
+  install -D -m 0644 "$tree/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -D -m 0644 "$srcdir/copyright" "$pkgdir/usr/share/licenses/$pkgname/copyright"
+
+  # Rechte wie im .deb: Verzeichnisse 0755, Dateien 0644, nur die Programme
+  # 0755. Die Anwendung verweigert eine Kommandozeile unter einem Verzeichnis,
+  # in das Gruppe oder alle schreiben duerfen.
+  find "$pkgdir" -type d -exec chmod 0755 {} +
+  find "$pkgdir/usr" -type f -exec chmod 0644 {} +
+  chmod 0755 "$lib/humanitl" "$lib/bin/humanitld" "$lib/bin/humanitl" "$lib/bin/humanitl-shim"
+}

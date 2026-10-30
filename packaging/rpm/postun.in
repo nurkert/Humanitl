@@ -1,0 +1,22 @@
+# %postun des RPM-Pakets humanitl (HUM-339), das Gegenstueck zum `postrm`
+# des .deb (HUM-284).
+#
+# Argument 0 heisst: Das Paket ist entfernt, die Units unter
+# /usr/lib/systemd/user sind fort. Dann laedt jede laufende
+# systemd-Nutzerinstanz neu, damit sie keine Unit mehr fuehrt, deren Datei
+# fehlt. Ein laufender Daemon wird nicht angehalten; die Begruendung steht im
+# `postrm` des .deb (`packaging/deb/postrm.in`).
+#
+# Jedes andere Argument heisst Update: Dann laeuft dieses Skript der alten
+# Fassung nach dem `%post` der neuen, und das hat schon neu geladen und neu
+# gestartet. Hier geschieht dann nichts.
+#
+# Kein `set -e`, das Skript endet immer mit 0 (siehe `post.in`).
+
+#HUMANITL_USERS#
+
+if [ "${1:-0}" = 0 ]; then
+  humanitl_refresh_users reload || true
+fi
+
+exit 0

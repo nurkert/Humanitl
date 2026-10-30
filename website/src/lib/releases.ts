@@ -6,8 +6,8 @@ export type Platform = 'macos' | 'linux';
 
 export interface Asset {
   platform: Platform;
-  /** Was die Datei ist, für die Beschriftung: Disk-Image, Zip, Debian-Paket, AppImage, Archiv. */
-  kind: 'dmg' | 'zip' | 'deb' | 'appimage' | 'tar';
+  /** Was die Datei ist, für die Beschriftung: Disk-Image, Zip, Debian-Paket, RPM, AppImage, Archiv. */
+  kind: 'dmg' | 'zip' | 'deb' | 'rpm' | 'appimage' | 'tar';
   name: string;
   url: string;
   sizeMb: number;
@@ -31,6 +31,7 @@ const kinds: [Asset['kind'], Platform, RegExp][] = [
   ['dmg', 'macos', /macos\.dmg$/i],
   ['zip', 'macos', /macos\.zip$/i],
   ['deb', 'linux', /\.deb$/i],
+  ['rpm', 'linux', /\.x86_64\.rpm$/i],
   ['appimage', 'linux', /x86_64\.AppImage$/i],
   ['tar', 'linux', /linux.*\.tar\.gz$/i],
 ];
@@ -50,7 +51,15 @@ interface ApiRelease {
   assets: ApiAsset[];
 }
 
-export async function loadReleases(): Promise<Release[]> {
+// Ein Bau fragt GitHub einmal; Startseite und Download-Seite sehen dieselben Daten.
+let cached: Promise<Release[]> | undefined;
+
+export function loadReleases(): Promise<Release[]> {
+  cached ??= fetchReleases();
+  return cached;
+}
+
+async function fetchReleases(): Promise<Release[]> {
   const headers: Record<string, string> = { Accept: 'application/vnd.github+json' };
   if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
   try {

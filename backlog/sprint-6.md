@@ -28,6 +28,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-342 | Die Ampel unter macOS sitzt mittig in der Titelleiste der App | S | HUM-325 |
 | HUM-343 | Der Ordnerdialog öffnet sich unter macOS | S | HUM-325, HUM-326 |
 | HUM-346 | Die Docs zweisprachig auf humanitl.de | M | HUM-336 |
+| HUM-339 | Linux: ein RPM für Fedora und openSUSE und das AUR-Paket humanitl-bin | M | HUM-335 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -340,3 +341,16 @@ Zeile 3) und `scripts/ci/check-doc-links.py` (Links relativ zur eigenen Datei) m
 `docs/translations/` ausnehmen oder relativ zum Original prüfen, sonst schlägt die CI fehl.
 Die Sicherheitsseite (HUM-345) verlinkt auf der englischen Fassung noch /docs/security/
 statt /en/docs/security/.
+
+## HUM-339 · Linux: ein RPM für Fedora und openSUSE und das AUR-Paket humanitl-bin
+
+Wunsch des Inhabers vom 2026-10-30: Linux-Pakete über das `.deb` hinaus, zuerst ein RPM (Fedora, openSUSE) und ein AUR-Paket für Arch. Den Upload ins AUR und ein dnf-Repository neben `apt.nurkert.de` übernimmt der Inhaber selbst.
+
+Akzeptanzkriterien:
+
+- `release.yml` baut `humanitl-<version>-1.x86_64.rpm` aus denselben Programmen, demselben Flutter-Bundle und demselben Dateibaum wie das `.deb` (`packaging/rpm/build-rpm.sh`), reproduzierbar mit `SOURCE_DATE_EPOCH`; `SHA256SUMS` enthält es, das Release hängt es an.
+- Ein Job `check-rpm` installiert es in einem auf Digest gepinnten Fedora-Container, prüft Dateien, Versionen, Units, Desktop-Datei und dass `humanitl daemon install --print` das Paket erkennt, und entfernt es ohne Reste; `rpmlint` ohne Fehler und Warnungen, jede gefilterte Meldung mit Begründung.
+- Die Scriptlets entsprechen den Maintainer-Skripten des `.deb` (Neuladen und Neustart der Nutzerdienste, nie ein Fehlschlag der Transaktion); `packaging/rpm/scriptlets-test.sh` läuft in `make deps-lint`.
+- `packaging/aur/render.sh` erzeugt PKGBUILD und `.SRCINFO` für ein Release aus dem Tarball oder seiner Prüfsumme; ein Job `check-aur` baut das Paket in einem gepinnten Arch-Container mit `makepkg`, installiert und entfernt es. `packaging/aur/README.md` beschreibt den Upload durch den Inhaber.
+- Release-Notes, `docs/guides/install.md`, `docs/INSTALL.md` und `CONTRIBUTING.md` beschreiben RPM und AUR wahrheitsgemäß, mit der glibc-Grenze 2.39 (Fedora 40 und neuer, Tumbleweed; RHEL 9 und Leap 15 nicht). Die deutschen Übersetzungen der beiden Docs ziehen mit.
+- Die Download-Seite führt das RPM mit `dnf install` und nennt das AUR-Paket nur, wenn das AUR es beim Bauen kennt.
