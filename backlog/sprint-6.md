@@ -31,6 +31,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-339 | Linux: ein RPM für Fedora und openSUSE und das AUR-Paket humanitl-bin | M | HUM-335 |
 | HUM-337 | Download: der Knopf nennt das System, keine Empfehlung, neutrale Symbole, eine Tafel für die Zahlen | S | HUM-333, HUM-335 |
 | HUM-347 | Bühne: größeres Fokusfenster, Ring danach ausgerichtet, Tiefenschärfe nach hinten, Pfeile immer erreichbar | M | HUM-334 |
+| HUM-348 | Landing: wenige Scheiben seitlich geneigt mit sichtbarer Tiefe, Licht wie geschliffenes Glas | M | HUM-347 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -378,3 +379,14 @@ Akzeptanzkriterien:
 - Die hinteren Fenster werden nach hinten zunehmend unscharf, mit Bokeh-Scheiben. Das Fokusfenster bleibt scharf, ebenso alle Fenster in der Landing-Section.
 - Kein Filter wird pro Frame neu berechnet: die Unschärfe liegt fest in einer eigenen Ebene, das Skript setzt nur `opacity` und `transform`. Mit `data-lite` entfällt das Bokeh; ohne Skript und mit reduzierter Bewegung bleibt die Seite vollständig.
 - Die Pfeile erscheinen, sobald der Ring steht, sind ohne Suchen sichtbar und liegen in jeder Layout-Klasse im Bild und klickbar, über alle Module. Drag und Tastatur bleiben daneben bestehen.
+
+## HUM-348 · Landing: wenige Scheiben seitlich geneigt mit sichtbarer Tiefe, Licht wie geschliffenes Glas
+
+Wünsche des Inhabers vom 2026-10-30.
+
+Akzeptanzkriterien:
+
+- In der Landing-Section stehen nur drei, höchstens vier Fenster, sauber gestaffelt und seitlich geneigt, sodass Dicke und Z-Tiefe jeder Scheibe sichtbar sind. Die übrigen blenden im Morph auf; alle sieben erreichen den Ring.
+- Jedes Fenster liegt vom Licht her unter einer abgerundeten Glasscheibe ohne harte Kante: ein weiches Band folgt dem Rand, läuft ohne Knick um die Ecken und fällt nach innen sanft ab.
+- Das ist nur Reflexion über dem Bild. Es gibt keine Brechung, der Screenshot wird nicht verzerrt, und kein Filter läuft pro Frame.
+- Der Fächer schneidet weder Text noch Knöpfe, erzeugt keinen waagrechten Überlauf, und die Fassung ohne Skript zeigt denselben Aufbau.
