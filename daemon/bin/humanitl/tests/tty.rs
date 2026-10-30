@@ -165,7 +165,19 @@ impl Pty {
                 Ok(count) => written += count,
                 Err(rustix::io::Errno::AGAIN) => {
                     self.drain();
-                    std::thread::sleep(Duration::from_millis(1));
+                    // Auf Platz warten statt zu schlafen: Das PTY von macOS
+                    // nimmt kleine Häppchen, und eine Millisekunde Schlaf je
+                    // Häppchen wird auf einem ausgelasteten Läufer zu zehn,
+                    // dann reicht die Frist für 4 MiB nicht mehr (HUM-312).
+                    let mut fds = [rustix::event::PollFd::new(
+                        master,
+                        rustix::event::PollFlags::OUT,
+                    )];
+                    let wait = rustix::event::Timespec {
+                        tv_sec: 0,
+                        tv_nsec: 10_000_000,
+                    };
+                    let _ = rustix::event::poll(&mut fds, Some(&wait));
                 }
                 Err(error) => panic!("cannot write to the terminal: {error}"),
             }
