@@ -12,7 +12,7 @@
 //!
 //! Deshalb ruft dieses Modul `humanitl-sandbox` unmittelbar auf, im Prozess
 //! der Kommandozeile: dasselbe [`SandboxProfile`], derselbe
-//! [`BwrapBackend`], derselbe [`LaunchPlan`](humanitl_sandbox::LaunchPlan) wie später im Daemon. Es gibt
+//! [`PlatformBackend`], derselbe [`LaunchPlan`](humanitl_sandbox::LaunchPlan) wie später im Daemon. Es gibt
 //! keine zweite Übersetzung des Profils und keine Fachlogik, die es nur hier
 //! gäbe; was hier passiert, ist Verdrahtung, die mit der `Sandbox`-RPC
 //! umzieht. Die Naht ist [`Wiring`]: sie sagt, woher Proxy-Socket und CA

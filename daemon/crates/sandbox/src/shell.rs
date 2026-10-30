@@ -30,7 +30,7 @@
 //!
 //! Seatbelt kennt keinen Namensraum, in dem ein PID 1 sitzen könnte, und
 //! macOS kein `SOCK_SEQPACKET`. Dort startet die Tür jede weitere Shell
-//! selbst ([`SpawnSpec`]): `sandbox-exec` mit demselben Profil, darin der
+//! selbst (`SpawnSpec`): `sandbox-exec` mit demselben Profil, darin der
 //! Shim ohne Bridge, der das Terminal übernimmt, das Kommando startet und
 //! beim Ende dessen ganze Sitzung beendet (HUM-313). Ende und Exit-Code
 //! kommen vom Prozess selbst; endet die Sandbox, bekommt jede Shell `SIGTERM`.
