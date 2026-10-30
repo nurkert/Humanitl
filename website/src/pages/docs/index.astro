@@ -1,0 +1,99 @@
+---
+// Startseite der Dokumentation (HUM-336), aus docs/README.md: dieselben Gruppen, je Seite
+// eine Karte mit der Zeile „What it answers" aus der README-Tabelle.
+import { getCollection, render } from 'astro:content';
+
+import Base from '../../layouts/Base.astro';
+import { ui } from '../../i18n/ui';
+import { docGroups, repoUrl } from '../../lib/docs';
+import '../../styles/docs.css';
+
+const t = ui.en.docs;
+const entries = await getCollection('docs');
+const groups = docGroups(entries).filter((group) => group.key !== 'start');
+
+// Die Abschnitte tragen die IDs der Überschriften aus docs/README.md (`#using-humanitl` usw.),
+// damit Sprungmarken, die auf GitHub funktionieren, auch hier landen. Zugeordnet über den
+// Anfang des Slugs; ohne Treffer bleibt der Gruppenschlüssel.
+const readme = entries.find((entry) => entry.id === 'readme');
+const readmeHeadings = readme ? (await render(readme)).headings.filter((heading) => heading.depth === 2) : [];
+const sectionId = (key: string) => readmeHeadings.find((heading) => heading.slug.startsWith(key))?.slug ?? key;
+
+// Der Einleitungsabsatz der README (nach „Applies to", vor der ersten H2), Zeichen für Zeichen;
+// nur `*kursiv*` und `Code` werden ausgezeichnet, alles andere maskiert.
+const escapeHtml = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const intro = (readme?.body ?? '')
+  .split(/\n## /)[0]
+  .split(/\n\s*\n/)
+  .map((block) => block.trim())
+  .filter((block) => block && !block.startsWith('#') && !block.startsWith('<!--') && !/^Applies to:/.test(block))
+  .map((block) =>
+    escapeHtml(block.replace(/\s*\n\s*/g, ' '))
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*([^*]+)\*/g, '<em>$1</em>'),
+  );
+---
+
+<Base lang="en" title="Documentation · Humanitl Docs" description={t.lede}>
+  <main id="main" class="dhome container">
+    <header class="dhome__head">
+      <h1 class="chrome dhome__title">{t.title}</h1>
+      <p class="dhome__lede">{t.lede}</p>
+      {intro.map((html) => <p class="dhome__intro" set:html={html} />)}
+      <p class="dhome__meta">
+        <span>{entries.length} {t.pages}</span>
+        <span aria-hidden="true">·</span>
+        <span>{t.appliesTo}</span>
+        <span aria-hidden="true">·</span>
+        <a href={`${repoUrl}/tree/main/docs`}>{t.sourceOnGitHub}</a>
+      </p>
+    </header>
+
+    {
+      groups.map((group) => (
+        <section class="dgroup" aria-labelledby={sectionId(group.key)}>
+          <div class="dgroup__head">
+            <h2 id={sectionId(group.key)}>{group.title}</h2>
+            <span class="dgroup__n">{group.items.length}</span>
+          </div>
+          {t.groups[group.key as keyof typeof t.groups] && (
+            <p class="dgroup__lede">{t.groups[group.key as keyof typeof t.groups]}</p>
+          )}
+          {group.key === 'decisions' ? (
+            <ul class="adrs">
+              {group.items.map((item) => (
+                <li>
+                  <a class="adrs__row" href={item.href}>
+                    <span class="adrs__num">{item.number || '—'}</span>
+                    <span class="adrs__label">{item.number ? item.label : item.title}</span>
+                    {item.status && (
+                      <span class="chip" data-status={item.status.split(/\s/)[0].toLowerCase()}>
+                        {item.status.split(/\s/)[0].replace(/\|$/, '')}
+                      </span>
+                    )}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <ul class="cards">
+              {group.items.map((item) => (
+                <li>
+                  <a class="card" href={item.href}>
+                    <span class="card__title">{item.label}</span>
+                    <span class="card__sum">{item.summary}</span>
+                    <span class="card__foot">
+                      <span>{item.source}</span>
+                      {item.german && <span class="badge">DE</span>}
+                      {item.generated && <span class="badge">GENERATED</span>}
+                    </span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ))
+    }
+  </main>
+</Base>

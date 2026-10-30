@@ -1,0 +1,71 @@
+---
+// Eine Seite je Markdown-Datei unter docs/ (HUM-336), außer docs/README.md, aus der
+// die Startseite /docs/ entsteht (index.astro).
+import { getCollection, render } from 'astro:content';
+
+import Docs from '../../layouts/Docs.astro';
+import { ui } from '../../i18n/ui';
+import { blobUrl, docGroups, editUrl, findItem, historyUrl, neighbours, type DocEntry } from '../../lib/docs';
+
+export async function getStaticPaths() {
+  const entries = await getCollection('docs');
+  const groups = docGroups(entries);
+  return entries
+    .filter((entry) => entry.id !== 'readme')
+    .map((entry) => ({
+      params: { slug: findItem(groups, entry.id)!.href.replace(/^\/docs\/|\/$/g, '') },
+      props: { entry },
+    }));
+}
+
+const { entry } = Astro.props as { entry: DocEntry };
+const t = ui.en.docs;
+const { Content, headings } = await render(entry);
+const groups = docGroups(await getCollection('docs'));
+const item = findItem(groups, entry.id)!;
+const { prev, next } = neighbours(groups, entry.id);
+---
+
+<Docs
+  docLang={item.german ? 'de' : 'en'}
+  title={`${item.title} · Humanitl Docs`}
+  description={item.summary || item.title}
+  groups={groups}
+  currentId={entry.id}
+  headings={headings}
+>
+  <nav class="crumbs" aria-label={t.breadcrumb}>
+    <a href="/docs/">Docs</a>
+    <span aria-hidden="true">/</span>
+    <span>{item.group}</span>
+  </nav>
+  <article class="doc" lang={item.german ? 'de' : 'en'}>
+    <Content />
+  </article>
+
+  <Fragment slot="after">
+    <footer class="doc-foot">
+      <a class="doc-foot__src" href={blobUrl(item.source)}>{item.source}</a>
+      <a href={editUrl(item.source)}>{t.editOnGitHub}</a>
+      <a href={historyUrl(item.source)}>{t.history}</a>
+    </footer>
+    {
+      (prev || next) && (
+        <nav class="pager" aria-label={t.pagination}>
+          {prev && (
+            <a class="pager__card" href={prev.href} rel="prev">
+              <span class="pager__k">← {t.previous}</span>
+              <span class="pager__t">{prev.number ? `${prev.number} · ${prev.label}` : prev.label}</span>
+            </a>
+          )}
+          {next && (
+            <a class="pager__card pager__card--next" href={next.href} rel="next">
+              <span class="pager__k">{t.next} →</span>
+              <span class="pager__t">{next.number ? `${next.number} · ${next.label}` : next.label}</span>
+            </a>
+          )}
+        </nav>
+      )
+    }
+  </Fragment>
+</Docs>

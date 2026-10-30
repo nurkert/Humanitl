@@ -9,7 +9,8 @@ import { alternates, defaultLang, languages, path, repoUrl, ui, type Lang, type 
 
 interface Props {
   lang: Lang;
-  page: Page;
+  /** Fehlt bei Seiten, die es nur in einer Sprache gibt (die Docs): dann keine hreflang-Paare und keine Sprachwahl. */
+  page?: Page;
   title: string;
   description: string;
 }
@@ -18,12 +19,15 @@ const { lang, page, title, description } = Astro.props;
 const t = ui[lang];
 const site = Astro.site!;
 const canonical = new URL(Astro.url.pathname, site);
-const versions = alternates(page);
+const versions = page ? alternates(page) : [];
+// Unter /docs/ ist der Docs-Link aktiv; auf der Startseite der Docs als genau diese Seite.
+const docsCurrent = Astro.url.pathname === '/docs/' ? 'page' : Astro.url.pathname.startsWith('/docs/') ? 'true' : undefined;
 const home = path('home', lang);
 
 const nav = [
   { href: `${home}#module`, label: t.nav.how },
-  { href: `${home}#sicherheit`, label: t.nav.security },
+  { href: path('security', lang), label: t.nav.security, current: page === 'security' ? 'page' : undefined },
+  { href: '/docs/', label: t.nav.docs, current: docsCurrent },
 ];
 
 const jsonLd = {
@@ -57,7 +61,7 @@ const jsonLd = {
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
     {versions.map((version) => <link rel="alternate" hreflang={version.lang} href={new URL(version.href, site)} />)}
-    <link rel="alternate" hreflang="x-default" href={new URL(path(page, defaultLang), site)} />
+    {page && <link rel="alternate" hreflang="x-default" href={new URL(path(page, defaultLang), site)} />}
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="sitemap" href="/sitemap.xml" />
@@ -82,30 +86,38 @@ const jsonLd = {
           <span>Humanitl</span>
         </a>
         <nav class="nav__links" aria-label={t.nav.menu}>
-          {nav.map((item) => <a href={item.href}>{item.label}</a>)}
+          {
+            nav.map((item) => (
+              <a href={item.href} aria-current={item.current}>
+                {item.label}
+              </a>
+            ))
+          }
           <a href={repoUrl} class="nav__gh">
             <Icon name="github" />
             <span>GitHub</span>
           </a>
         </nav>
         <div class="nav__end">
-          <ul class="nav__lang" aria-label={t.nav.language}>
-            {
-              versions.map((version) => (
-                <li>
-                  <a
-                    href={version.href}
-                    hreflang={version.lang}
-                    lang={version.lang}
-                    aria-current={version.lang === lang ? 'true' : undefined}
-                    title={languages[version.lang].label}
-                  >
-                    {languages[version.lang].short}
-                  </a>
-                </li>
-              ))
-            }
-          </ul>
+          {
+            versions.length > 0 && (
+              <ul class="nav__lang" aria-label={t.nav.language}>
+                {versions.map((version) => (
+                  <li>
+                    <a
+                      href={version.href}
+                      hreflang={version.lang}
+                      lang={version.lang}
+                      aria-current={version.lang === lang ? 'true' : undefined}
+                      title={languages[version.lang].label}
+                    >
+                      {languages[version.lang].short}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )
+          }
           <a class="pill pill--small" href={path('download', lang)} aria-current={page === 'download' ? 'page' : undefined}>
             {t.nav.download}
           </a>
@@ -124,6 +136,7 @@ const jsonLd = {
         <p class="foot__line">{t.footer.line}</p>
         <nav class="foot__links" aria-label={t.legal.imprint}>
           <a href={path('download', lang)}>{t.nav.download}</a>
+          <a href="/docs/">{t.nav.docs}</a>
           <a href={repoUrl}>{t.footer.github}</a>
           <a href={path('imprint', lang)}>{t.legal.imprint}</a>
           <a href={path('privacy', lang)}>{t.legal.privacy}</a>
@@ -197,7 +210,8 @@ const jsonLd = {
     text-decoration: none;
     transition: color 0.3s var(--ease-out);
   }
-  .nav__links a:hover {
+  .nav__links a:hover,
+  .nav__links a[aria-current] {
     color: var(--fg);
   }
   .nav__links :global(svg) {
