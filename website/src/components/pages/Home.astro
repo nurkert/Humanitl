@@ -8,6 +8,7 @@ import { Picture } from 'astro:assets';
 import Icon from '../Icon.astro';
 import Base from '../../layouts/Base.astro';
 import { path, repoUrl, securityUrl, ui, type Lang } from '../../i18n/ui';
+import { loadReleases } from '../../lib/releases';
 import intercept from '../../assets/screens/intercept.png';
 import notice from '../../assets/screens/notice.png';
 import history from '../../assets/screens/history.png';
@@ -27,6 +28,10 @@ const n = modules.length;
 // Abstand eines Fensters zur Mitte im Ring, -3 bis 3: Intercept steht vorn.
 const ringOffset = (i: number) => ((i + Math.floor(n / 2)) % n) - Math.floor(n / 2);
 const formats = ['avif'] as const;
+// Der Knopf führt auf dem Mac direkt zum Disk-Image der aktuellen Version (HUM-337).
+const releases = await loadReleases();
+const current = releases.find((release) => !release.prerelease) ?? releases[0];
+const macHref = current?.assets.find((asset) => asset.kind === 'dmg')?.url;
 // Die Dicke des Glases: sechs Konturen hintereinander, von hell (vorn) nach dunkel.
 const edges = [1, 2, 3, 4, 5, 6];
 const digits = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -174,10 +179,17 @@ const pad = (v: number) => String(v).padStart(2, '0');
             <p class="hero__lede lede">{t.hero.lede}</p>
           </header>
           <div class="hero__actions" data-hero-actions>
-            <a class="pill pill--light" href={path('download', lang)}>
+            <a
+              class="pill pill--light"
+              href={path('download', lang)}
+              data-smart-download
+              data-mac-href={macHref}
+              data-label-macos={t.hero.ctaForMac}
+              data-label-linux={t.hero.ctaForLinux}
+            >
               <Icon name="download" />
               {t.hero.cta}
-              <span class="hero__for">{t.hero.ctaFor}</span>
+              <span class="hero__for" data-smart-label>{t.hero.ctaFor}</span>
             </a>
             <a class="hero__source" href={repoUrl}>
               <Icon name="github" />
@@ -334,9 +346,16 @@ const pad = (v: number) => String(v).padStart(2, '0');
       <div class="container closing__inner">
         <h2 id="closing-title" class="chrome">{t.closing.title}</h2>
         <p class="lede">{t.closing.text}</p>
-        <a class="pill pill--light closing__cta" href={path('download', lang)}>
+        <a
+          class="pill pill--light closing__cta"
+          href={path('download', lang)}
+          data-smart-download
+          data-mac-href={macHref}
+          data-label-macos={t.closing.ctaMac}
+          data-label-linux={t.closing.ctaLinux}
+        >
           <Icon name="download" />
-          {t.closing.cta}
+          <span data-smart-label>{t.closing.cta}</span>
         </a>
       </div>
     </section>
@@ -346,6 +365,7 @@ const pad = (v: number) => String(v).padStart(2, '0');
 
 <script>
   import '../../scripts/stage';
+  import '../../scripts/smart-download';
 </script>
 
 <style>

@@ -20,6 +20,8 @@ const en: Copy = {
     lede: 'Your AI agent works in a sandbox without a network. Whatever none of your rules allows, Humanitl holds until you decide.',
     cta: 'Download',
     ctaFor: 'for macOS and Linux',
+    ctaForMac: 'for macOS',
+    ctaForLinux: 'for Linux',
     source: 'Source on GitHub',
     scroll: 'Keep scrolling',
   },
