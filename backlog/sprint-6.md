@@ -25,6 +25,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-336 | Die Dokumentation aus docs/ auf humanitl.de | M | HUM-333 |
 | HUM-345 | Die Sicherheitsseite von humanitl.de | M | HUM-333, HUM-336 |
 | HUM-344 | Eine README, die das Projekt zeigt | M | HUM-333 |
+| HUM-342 | Die Ampel unter macOS sitzt mittig in der Titelleiste der App | S | HUM-325 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -254,3 +255,13 @@ Rückmeldung des Inhabers vom 2026-10-30: Die README sieht nach Anfängerprojekt
 - Gerendert mit `gh api /markdown` bei 1280 und 400 px, hell und dunkel, ohne waagrechtes Scrollen geprüft.
 
 Offen für den Maintainer: `docs/img/intercept.png` ist danach nirgends mehr verlinkt und kann weg. `images/banner.jpg` bleibt ungenutzt; ob es die Social Preview von GitHub wird, entscheidet der Inhaber.
+
+## HUM-342 · Die Ampel unter macOS sitzt mittig in der Titelleiste der App
+
+Rückmeldung des Inhabers vom 2026-10-30: Die nativen Fensterknöpfe (Ampel) kleben links oben in der 28 pt hohen Titelleiste des Systems und fluchten nicht mit Logo und Titel der 40 pt hohen Kopfleiste der App. Aus HUM-332 („Ampel-Abstand").
+
+Akzeptanzkriterien:
+
+- Die drei Knöpfe stehen senkrecht mittig auf der Kopfleiste der App (`HSize.headerBar`) und so weit vom linken Rand, dass sie mit dem Rest der Leiste fluchten; `trafficLightInset` reicht weiter für sie.
+- Sie bleiben dort nach Größenänderung, Fokuswechsel, Bildschirmwechsel und nach dem Verlassen des Vollbilds; im Vollbild bleibt die Leiste des Systems unberührt.
+- Die Titelleiste des Systems wird nicht vergrößert, damit sie keine Klicks auf Elemente der App abfängt.
