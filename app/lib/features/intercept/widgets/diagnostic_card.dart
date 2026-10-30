@@ -31,7 +31,10 @@
 ///   der Grund und kein Knopf.
 /// * **Jede Karte geht einzeln weg.** Ausblenden ist die Antwort „gesehen"
 ///   und gilt nur für diesen einen Befund; ein zweiter Befund desselben Codes
-///   ergibt eine neue Karte, weil zwei Befunde zwei Dinge sind.
+///   ergibt eine neue Karte, weil zwei Befunde zwei Dinge sind. Die eine
+///   Ausnahme sind aufeinanderfolgende `LLM_005` für denselben Host
+///   (HUM-354): Sie stehen als eine Karte mit Zähler da, „Anfrage öffnen"
+///   öffnet die jüngste, und Ausblenden nimmt die ganze Gruppe.
 /// * **Ein Befund an einem Flow führt zu diesem Flow** (HUM-039). Der Flow
 ///   hinter `LLM_005` ist eine Durchreiche und steht in keiner Warteschlange;
 ///   „Anfrage öffnen" bittet die Historie über `flowRevealProvider`, ihn aus der
@@ -286,7 +289,7 @@ class DiagnosticCard extends ConsumerWidget {
         why: diagnostic.why,
         // Kein leerer Slot: Ein Befund ohne Vorschlag und ohne Flow bekommt
         // keine Zeile, die aussieht, als fehlte dort etwas.
-        fix: _actions(l10n, ref, entry.id, fix, flowId, tokens),
+        fix: _actions(l10n, ref, entry, fix, flowId, tokens),
         docsUrl: diagnostic.docsUrl,
         width: double.infinity,
         dense: true,
@@ -312,11 +315,12 @@ class DiagnosticCard extends ConsumerWidget {
 Widget? _actions(
   AppLocalizations l10n,
   WidgetRef ref,
-  int id,
+  SessionDiagnostic entry,
   FixAction? fix,
   FlowId? flowId,
   HTokens tokens,
 ) {
+  final int id = entry.id;
   final Widget? control = fix == null
       ? null
       : FixControl(
@@ -334,16 +338,29 @@ Widget? _actions(
               ref.read(flowRevealProvider.notifier).request(flowId),
           child: Text(l10n.interceptDiagnosticOpenFlow),
         );
-  if (control == null || open == null) {
-    return control ?? open;
+  // Der Zähler einer zusammengefassten `LLM_005`-Karte (HUM-354). Eine
+  // einzelne Warnung bekommt keinen: „1 Anfrage" sagte nichts, was der Satz
+  // des Daemons nicht schon sagt.
+  final int? newFindings = entry.newFindings;
+  final Widget? repeats = entry.requests > 1 && newFindings != null
+      ? Text(
+          l10n.interceptDiagnosticRepeats(entry.requests, newFindings),
+          key: ValueKey<String>('intercept-diagnostic-repeats-$id'),
+          style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+        )
+      : null;
+  final List<Widget> parts = <Widget>[?repeats, ?control, ?open];
+  if (parts.length <= 1) {
+    return parts.isEmpty ? null : parts.single;
   }
   return Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     mainAxisSize: MainAxisSize.min,
     children: <Widget>[
-      control,
-      SizedBox(height: tokens.spacing.x2),
-      open,
+      for (int i = 0; i < parts.length; i++) ...<Widget>[
+        if (i > 0) SizedBox(height: tokens.spacing.x2),
+        parts[i],
+      ],
     ],
   );
 }

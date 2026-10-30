@@ -873,6 +873,61 @@ void main() {
     );
     expect(stripScroll(tester).position.maxScrollExtent, 0);
   });
+
+  /// Aufeinanderfolgende `LLM_005` für denselben Host stehen als eine Karte
+  /// mit Zähler da (HUM-354); ein anderer Host bekommt seine eigene.
+  testWidgets('repeated_llm_warnings_for_one_host_are_one_card', (
+    WidgetTester tester,
+  ) async {
+    ScriptedEvent warning(int i, String host, int fresh, int total) =>
+        ScriptedEvent(
+          Duration(milliseconds: 100 + i),
+          (FakeSessionState state, DateTime now) => FlowEvent.diagnostic(
+            at: now,
+            flowId: FlowId('018f0001-0000-7000-8000-00000035400$i'),
+            diagnostic: Diagnostic(
+              code: 'LLM_005',
+              severity: Severity.warning,
+              why: llm005Why(host, fresh, total),
+            ),
+          ),
+        );
+    final FakeDaemonClient client = fakeDaemon(<ScriptedEvent>[
+      warning(0, '192.168.1.50', 2, 2),
+      warning(1, '192.168.1.50', 1, 3),
+      warning(2, '192.168.1.50', 2, 5),
+      warning(3, 'api.other.example', 1, 1),
+    ]);
+    await pumpIntercept(tester, client: client);
+    await playScript(tester, const Duration(milliseconds: 300));
+    await tester.pump(HMotion.arrive);
+    await tester.pump();
+
+    // Rot, sobald die Gruppe fällt: dann stehen hier vier Karten.
+    expect(find.byType(DiagnosticCard), findsNWidgets(2));
+    expect(
+      find.byKey(const ValueKey<String>('intercept-diagnostic-repeats-0')),
+      findsOneWidget,
+    );
+    expect(find.text('3 requests, 5 new findings'), findsOneWidget);
+    // Der andere Host steht einzeln und ohne Zähler.
+    expect(
+      find.byKey(const ValueKey<String>('intercept-diagnostic-repeats-1')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('intercept-diagnostic-open-0')),
+      findsOneWidget,
+    );
+
+    // Ausblenden nimmt die ganze Gruppe.
+    await tester.tap(
+      find.byKey(const ValueKey<String>('intercept-diagnostic-dismiss-0')),
+    );
+    await tester.pump();
+    expect(find.byType(DiagnosticCard), findsOneWidget);
+    expect(find.text('3 requests, 5 new findings'), findsNothing);
+  });
 }
 
 /// Die letzten Worte des Befundes.

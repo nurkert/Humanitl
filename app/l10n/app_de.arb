@@ -1393,5 +1393,6 @@
   "diagSANDBOX031Title": "Änderung eines Wegwerf-Laufs nicht übernommen",
   "diagSANDBOX031Why": "Eine Datei hat sich seit dem Start im Projekt geändert, eine Änderung verlässt das Projekt oder ist keine Datei, oder das Schreiben scheiterte; die Änderungen warten weiter.",
   "diagSANDBOX032Title": "Wegwerf-Schicht voll",
-  "diagSANDBOX032Why": "Die Änderungen des Wegwerf-Laufs sind über die Grenze ihrer Schicht im Arbeitsspeicher gewachsen, deshalb wurde die Sandbox beendet; was vorher geschrieben wurde, wartet weiter."
+  "diagSANDBOX032Why": "Die Änderungen des Wegwerf-Laufs sind über die Grenze ihrer Schicht im Arbeitsspeicher gewachsen, deshalb wurde die Sandbox beendet; was vorher geschrieben wurde, wartet weiter.",
+  "interceptDiagnosticRepeats": "{requests, plural, =1{1 Anfrage} other{{requests} Anfragen}}, {findings, plural, =0{keine neuen Funde} =1{1 neuer Fund} other{{findings} neue Funde}}"
 }

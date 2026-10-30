@@ -55,6 +55,7 @@ use humanitl_rules::{RequestKey, RuleSet, Verdict};
 use crate::connect::requested_upgrade;
 use crate::findings::hard_block_decision;
 use crate::hold::HoldQueue;
+use crate::llm_warnings::LlmWarningMemory;
 use crate::session::SessionSettings;
 
 pub use crate::connect::{ConnMeta, ConnectionContext};
@@ -335,6 +336,11 @@ pub struct RulesPipeline {
     queue: Arc<HoldQueue>,
     rules: Arc<RwLock<RuleSet>>,
     inner: Arc<dyn FlowPipeline>,
+    /// Vor welchen Funden `LLM_005` in diesem Lauf schon gewarnt hat
+    /// (HUM-354). Im Daemon das Gedächtnis aus
+    /// [`SessionSettings::llm_warnings`], das jeder Start eines Laufs leert;
+    /// ohne [`RulesPipeline::with_warnings`] ein eigenes.
+    warned: Arc<LlmWarningMemory>,
 }
 
 impl std::fmt::Debug for RulesPipeline {
@@ -347,7 +353,7 @@ impl RulesPipeline {
     /// Eine Pipeline, die `rules` auswertet und alles Übrige an `inner`
     /// weitergibt (im Daemon die [`AskPipeline`]).
     #[must_use]
-    pub const fn new(
+    pub fn new(
         queue: Arc<HoldQueue>,
         rules: Arc<RwLock<RuleSet>>,
         inner: Arc<dyn FlowPipeline>,
@@ -356,7 +362,16 @@ impl RulesPipeline {
             queue,
             rules,
             inner,
+            warned: Arc::new(LlmWarningMemory::new()),
         }
+    }
+
+    /// Dieselbe Pipeline mit dem Gedächtnis der Warnung `LLM_005`, das der
+    /// Start eines Laufs leert ([`SessionSettings::llm_warnings`]).
+    #[must_use]
+    pub fn with_warnings(mut self, warned: Arc<LlmWarningMemory>) -> Self {
+        self.warned = warned;
+        self
     }
 
     /// Der Regelsatz, den diese Pipeline liest; HUM-027 tauscht ihn zur
@@ -424,12 +439,22 @@ impl RulesPipeline {
     /// Die Warnung `LLM_005` für einen durchgereichten Fluss mit Funden.
     ///
     /// Der Befund hält nichts auf — dafür ist die Durchreiche da —, aber er
-    /// muss ankommen: Er nennt die Zahl der Funde und den Host, damit die
-    /// Zeile im Verlauf bernsteinfarben wird und die Details erreichbar sind.
-    /// Was gefunden wurde, steht im Fluss selbst (`Analyzed`) und in der
-    /// Aufzeichnung (`findings`); **der gefundene Wert steht in keinem von
-    /// beiden**, nur sein Hash (`humanitl_core::Finding`). Deshalb steht er
-    /// auch hier nicht.
+    /// muss ankommen: Er nennt den Host und die Zahl der Funde, neue und alle,
+    /// damit die Details erreichbar sind. Was gefunden wurde, steht im Fluss
+    /// selbst (`Analyzed`) und in der Aufzeichnung (`findings`); **der
+    /// gefundene Wert steht in keinem von beiden**, nur sein Hash
+    /// (`humanitl_core::Finding`). Deshalb steht er auch hier nicht.
+    ///
+    /// Gewarnt wird nur, wenn die Anfrage wenigstens einen Fund trägt, vor dem
+    /// in diesem Lauf am selben Endpunkt noch nicht oder vor mehr als
+    /// [`WARNING_TTL`](crate::llm_warnings::WARNING_TTL) gewarnt wurde
+    /// (HUM-354, [`LlmWarningMemory`]). Agenten schicken mit jedem Zug das ganze
+    /// Gespräch; ohne dieses Gedächtnis kam dieselbe Warnung mit jeder Anfrage
+    /// wieder. Die Funde selbst bleiben davon unberührt am Fluss.
+    ///
+    /// Die Form des Satzes liest die Oberfläche, um Karten desselben Hosts
+    /// zusammenzufassen (`app/lib/features/intercept/providers/diagnostics.dart`,
+    /// `llmWarningOf`): `at <host> carries` und `: <neu> new, <alle> in total`.
     fn warn_about_findings(&self, flow: &Flow) {
         let FlowState::Analyzed { findings } = &flow.state else {
             return;
@@ -437,14 +462,21 @@ impl RulesPipeline {
         if findings.is_empty() {
             return;
         }
+        let host = flow.request.authority.host.to_string();
+        // Das Gedächtnis unterscheidet Endpunkte mit Port: Zwei Modellserver
+        // auf einem Rechner sind zwei Gespräche.
+        let endpoint = flow.request.authority.to_string();
+        let novelty = self.warned.observe(flow.session, &endpoint, findings);
+        if novelty.new == 0 {
+            tracing::debug!(
+                flow = %flow.id,
+                findings = novelty.total,
+                "every finding of this passthrough was already reported; LLM_005 not repeated"
+            );
+            return;
+        }
         let diagnostic = Diagnostic::builder(LLM_005, Severity::Warning)
-            .why(format!(
-                "this request to your language model at {} contains {} potential secret(s) or \
-                 personal data. It was sent because the LLM endpoint is a declared trust \
-                 boundary: traffic to it is logged, never held.",
-                flow.request.authority.host,
-                findings.len()
-            ))
+            .why(llm_warning_sentence(&host, novelty.new, novelty.total))
             .build();
         self.queue.publish(FlowEvent::Diagnostic {
             flow_id: Some(flow.id),
@@ -483,6 +515,21 @@ impl RulesPipeline {
         }
         self.decide_by_rule(flow, Decision::Allow, DecisionSource::Rule(rule))
     }
+}
+
+/// Der Satz der Warnung `LLM_005` (HUM-354).
+///
+/// `new` zählt die Funde, vor denen in diesem Lauf noch nicht oder vor mehr
+/// als fünfzehn Minuten gewarnt wurde, `total` alle Funde der Anfrage. Der zweite Satz sagt, warum die
+/// übrigen fehlen, und dass keiner verloren ist.
+#[must_use]
+fn llm_warning_sentence(host: &str, new: usize, total: usize) -> String {
+    format!(
+        "this request to your language model at {host} carries potential secret(s) or personal \
+         data: {new} new, {total} in total. Findings already warned about in this run repeat only \
+         after 15 minutes; every finding stays recorded with its request. It was sent because \
+         the LLM endpoint is a declared trust boundary: traffic to it is logged, never held."
+    )
 }
 
 #[async_trait]
@@ -580,5 +627,25 @@ impl FlowPipeline for RulesPipeline {
             }
             Action::Ask => self.inner.decide(flow, meta).await,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Der Satz ist ein Vertrag: Die Oberfläche liest Host und Zahlen daraus
+    /// (`llmWarningOf` in `app/lib/features/intercept/providers/diagnostics.dart`),
+    /// und ihre Testvorlage `llm005Why` in
+    /// `app/test/features/intercept/diagnostics_test.dart` gibt ihn Zeichen
+    /// für Zeichen wieder. Wer ihn hier ändert, ändert beide mit.
+    #[test]
+    fn the_llm_warning_sentence_is_pinned() {
+        assert_eq!(
+            super::llm_warning_sentence("192.168.1.50", 2, 6),
+            "this request to your language model at 192.168.1.50 carries potential secret(s) \
+             or personal data: 2 new, 6 in total. Findings already warned about in this run \
+             repeat only after 15 minutes; every finding stays recorded with its request. It \
+             was sent because the LLM endpoint is a declared trust boundary: traffic to it is \
+             logged, never held."
+        );
     }
 }
