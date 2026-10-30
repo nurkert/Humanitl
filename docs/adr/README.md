@@ -61,6 +61,7 @@ Rules:
 | [0016](0016-browser-cdp.md) | Browser for the agent over CDP, watching and intervening in the UI | Accepted | Post-MVP (M7); in the MVP only the groundwork: bridge list in the shim and seccomp families per profile. |
 | [0017](0017-egress-port.md) | One egress port for direct connection, upstream proxy and Tor | Accepted | Exactly one place where an outbound connection is made; CI forbids `TcpStream::connect` anywhere else. |
 | [0018](0018-rpc-parity.md) | Parity: every capability is an RPC first, UI and CLI are thin clients | Accepted | Generated parity table; an RPC without a CLI row breaks the build, a UI gap is only a warning. |
+| [0019](0019-seatbelt-on-macos.md) | Seatbelt is the sandbox on macOS, a Linux VM comes later | Accepted | `sandbox-exec` with a generated SBPL profile per session; the three guarantees restated for macOS and measured by the same shim. |
 
 ## Cross-references
 
@@ -76,6 +77,7 @@ Where one decision refines or corrects another:
 | ADR-0015 | ADR-0001, ADR-0002, ADR-0008, ADR-0017 | Fixes where these adapters may live and that a second adapter does not touch the core. |
 | ADR-0016 | ADR-0002 | Corrects the statement "`AF_UNIX` always forbidden": in the profile `browser` it is allowed, and there the network namespace carries the guarantee. |
 | ADR-0018 | ADR-0003, ADR-0013 | Makes the equality of UI and CLI from ADR-0013 machine-checkable. |
+| ADR-0019 | ADR-0002, ADR-0015 | The second adapter of `SandboxBackend` that ADR-0015 announced; on macOS it takes the place of bwrap from ADR-0002. |
 | ADR-0011 | ADR-0007 | Governs the two storage locations for rules (saved and session). |
 | ADR-0012 | ADR-0010 | `FixAction::InstallService` is the mechanism behind the one-click installation. |
 
