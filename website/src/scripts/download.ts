@@ -1,19 +1,11 @@
-// Die Download-Seite: wählt das System des Besuchers vor, schaltet zwischen den Feldern
+// Die Download-Seite: öffnet das Feld des Systems, auf dem sie gerade läuft (still, ohne
+// Empfehlung auszusprechen), schaltet zwischen den Feldern
 // und kopiert Befehle. Ohne Skript stehen beide Felder offen untereinander.
+
+import { detectPlatform } from './platform';
 
 const tabs = document.querySelector<HTMLElement>('[data-tabs]');
 if (tabs) initTabs(tabs);
-
-function detect(): string {
-  const data = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData;
-  const platform = (data?.platform || navigator.platform || navigator.userAgent).toLowerCase();
-  // Telefone und Tablets bekommen keine Empfehlung: Android meldet sich als Linux, das iPad
-  // im Desktop-Modus als Mac, und keines von beiden führt Humanitl aus.
-  if (/android|iphone|ipad|ipod/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1 && platform.includes('mac')) return '';
-  if (platform.includes('mac')) return 'macos';
-  if (platform.includes('linux') || platform.includes('x11')) return 'linux';
-  return '';
-}
 
 function initTabs(tabs: HTMLElement) {
   const buttons = [...tabs.querySelectorAll<HTMLButtonElement>('[data-tab]')];
@@ -40,12 +32,11 @@ function initTabs(tabs: HTMLElement) {
   }
 
   tabs.hidden = false;
-  const detected = detect();
-  const recommended = buttons.find((button) => button.dataset.tab === detected);
-  recommended?.querySelector<HTMLElement>('[data-recommended]')?.removeAttribute('hidden');
+  const detected = detectPlatform();
+  const current = buttons.find((button) => button.dataset.tab === detected);
   // Ohne Übergang setzen, dann erst die Bewegung des Gleiters erlauben.
   glider?.style.setProperty('transition', 'none');
-  select(recommended?.dataset.tab ?? buttons[0].dataset.tab!);
+  select(current?.dataset.tab ?? buttons[0].dataset.tab!);
   requestAnimationFrame(() => glider?.style.removeProperty('transition'));
 
   buttons.forEach((button, i) => {

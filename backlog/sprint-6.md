@@ -29,6 +29,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-343 | Der Ordnerdialog öffnet sich unter macOS | S | HUM-325, HUM-326 |
 | HUM-346 | Die Docs zweisprachig auf humanitl.de | M | HUM-336 |
 | HUM-339 | Linux: ein RPM für Fedora und openSUSE und das AUR-Paket humanitl-bin | M | HUM-335 |
+| HUM-337 | Download: der Knopf nennt das System, keine Empfehlung, neutrale Symbole, eine Tafel für die Zahlen | S | HUM-333, HUM-335 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -354,3 +355,14 @@ Akzeptanzkriterien:
 - `packaging/aur/render.sh` erzeugt PKGBUILD und `.SRCINFO` für ein Release aus dem Tarball oder seiner Prüfsumme; ein Job `check-aur` baut das Paket in einem gepinnten Arch-Container mit `makepkg`, installiert und entfernt es. `packaging/aur/README.md` beschreibt den Upload durch den Inhaber.
 - Release-Notes, `docs/guides/install.md`, `docs/INSTALL.md` und `CONTRIBUTING.md` beschreiben RPM und AUR wahrheitsgemäß, mit der glibc-Grenze 2.39 (Fedora 40 und neuer, Tumbleweed; RHEL 9 und Leap 15 nicht). Die deutschen Übersetzungen der beiden Docs ziehen mit.
 - Die Download-Seite führt das RPM mit `dnf install` und nennt das AUR-Paket nur, wenn das AUR es beim Bauen kennt.
+
+## HUM-337 · Download: der Knopf nennt das System, keine Empfehlung, neutrale Symbole, eine Tafel für die Zahlen
+
+Wünsche des Inhabers vom 2026-10-30.
+
+Akzeptanzkriterien:
+
+- Die Download-Knöpfe der Startseite nennen das System des Besuchers. Auf dem Mac führen sie direkt zum Disk-Image der aktuellen Version, unter Linux zur Download-Seite, weil es dort mehrere Wege gibt. Auf anderen Geräten, ohne Skript und wenn beim Bauen kein Disk-Image bekannt ist, bleiben sie neutral.
+- Die Download-Seite spricht keine Empfehlung aus; sie öffnet still das Feld des Systems.
+- Apple-Logo und Tux sind entfernt (das Apple-Logo darf ohne Lizenz von Apple nicht stehen). macOS und Linux tragen selbst gezeichnete Symbole in der Strichstärke der Website; `platform-icons.ts` und sein Eintrag in `THIRD_PARTY.md` entfallen.
+- Version und Download-Zahlen stehen auf einer Tafel. Gezählt werden Installationsdateien aller Versionen; ein Balken teilt sie nach System auf, die Teile ergeben die Summe. Er wächst nur über `transform`.

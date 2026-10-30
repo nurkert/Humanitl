@@ -33,14 +33,6 @@ sums everything up.
   `website/src/components/Logo.astro` draws the same paths (HUM-333); each
   carries the attribution above.
 
-## Website: platform logos
-
-- **File:** `website/src/lib/platform-icons.ts` (the Apple and Linux logos on
-  the download page, HUM-333).
-- **Source:** Simple Icons 16.34.0, <https://simpleicons.org>, under CC0 1.0
-  (no attribution required; named here for the record). The logos are
-  trademarks of their owners and name the platform only.
-
 ## Described elsewhere
 
 - Excerpt from the Majestic Million (CC BY 3.0): `catalog/RANKS-LICENSE`.
