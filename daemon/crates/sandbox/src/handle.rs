@@ -486,7 +486,7 @@ impl Shared {
         let _ = self.pty.set(master);
     }
 
-    /// Schließt die Tür zu weiteren Shells, wenn es eine gibt (HUM-313).
+    /// Schließt die Tür zu weiteren Shells, wenn es eine gibt (HUM-323).
     pub(crate) fn close_shells(&self) {
         if let Some(door) = self.shells.get() {
             door.close();

@@ -18,7 +18,7 @@ final Provider<FileOpener> fileOpenerProvider = Provider<FileOpener>(
   (Ref ref) => openWithDesktop,
 );
 
-/// `xdg-open PATH` (on macOS `open PATH`, HUM-315), without a shell; false
+/// `xdg-open PATH` (on macOS `open PATH`, HUM-325), without a shell; false
 /// when it could not start or did not end with 0.
 Future<bool> openWithDesktop(String path) async {
   try {

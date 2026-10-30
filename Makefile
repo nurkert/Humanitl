@@ -260,7 +260,7 @@ e2e: ## Run the demo scripts of every milestone reached (E2E_ONLY=m1|m2|m3|m4 pi
 # Original; driftet sie doch, nennt der Bildschirm einen anderen Dienst, als
 # der Daemon zugeordnet hat (HUM-094).
 catalog-assets: ## Copy the domain catalog into the Flutter asset bundle
-	@# BSD install (macOS) kennt kein -D; mkdir -p legt das Ziel an (HUM-315).
+	@# BSD install (macOS) kennt kein -D; mkdir -p legt das Ziel an (HUM-325).
 	mkdir -p app/assets/catalog
 	install -m 0644 catalog/domains.yaml app/assets/catalog/domains.yaml
 

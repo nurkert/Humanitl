@@ -2,20 +2,22 @@
 
 Ziel des Sprints: Humanitl läuft auf macOS (Apple Silicon und Intel) so sauber wie auf Linux, und jedes Release trägt eine funktionierende Mac-App. Wunsch des Nutzers vom 2026-10-29. Entscheidungen des Nutzers vom selben Tag: Die Sandbox auf macOS ist zuerst Seatbelt (`sandbox-exec` mit einem erzeugten SBPL-Profil), ein Backend mit Linux-VM folgt später als eigenes Issue (HUM-318). Die App wird ohne Apple Developer ID nur ad-hoc signiert. Die Arbeit landet auf dem Feature-Branch `macos-support`, ein Commit je Issue, und geht erst nach `main`, wenn Linux und macOS grün sind; das weicht bewusst von `CLAUDE.md` Schritt 5 ab.
 
+Nummern: Die Issues HUM-323, HUM-324 und HUM-325 hießen auf dem Branch zuerst HUM-313, HUM-314 und HUM-315. Diese Nummern hat `main` parallel an die Terminal-Issues aus Sprint 5 vergeben; die Commit-Texte des Branches tragen noch die alten Nummern.
+
 Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entweder plattformneutral oder hinter `#[cfg(target_os = ...)]` beziehungsweise `Platform.isMacOS`, und die Linux-CI bleibt die Referenz.
 
 | ID | Titel | Größe | Abhängigkeiten |
 |---|---|---|---|
 | HUM-312 | Daemon, CLI und Tests bauen auf macOS | M | — |
-| HUM-313 | Seatbelt-Backend: die Sandbox auf macOS | L | HUM-312 |
-| HUM-314 | Der Daemon läuft auf macOS als launchd-Agent | M | HUM-312 |
-| HUM-315 | Die App läuft auf macOS | M | HUM-312 |
-| HUM-316 | Jedes Release trägt eine Mac-App | M | HUM-313, HUM-314, HUM-315 |
-| HUM-317 | Sicherheitsaussage und Bedrohungsmodell für macOS | S | HUM-313 |
-| HUM-318 | Linux-VM als zweites Backend auf macOS (später) | L | HUM-313 |
-| HUM-319 | Tray und Benachrichtigungen auf macOS (später) | M | HUM-315 |
-| HUM-320 | Vorschau und Mounttabelle zeigen das Seatbelt-Profil | S | HUM-313 |
-| HUM-321 | Der Proxy nimmt unter macOS nur den Shim der laufenden Sitzung an | M | HUM-313 |
+| HUM-323 | Seatbelt-Backend: die Sandbox auf macOS | L | HUM-312 |
+| HUM-324 | Der Daemon läuft auf macOS als launchd-Agent | M | HUM-312 |
+| HUM-325 | Die App läuft auf macOS | M | HUM-312 |
+| HUM-316 | Jedes Release trägt eine Mac-App | M | HUM-323, HUM-324, HUM-325 |
+| HUM-317 | Sicherheitsaussage und Bedrohungsmodell für macOS | S | HUM-323 |
+| HUM-318 | Linux-VM als zweites Backend auf macOS (später) | L | HUM-323 |
+| HUM-319 | Tray und Benachrichtigungen auf macOS (später) | M | HUM-325 |
+| HUM-320 | Vorschau und Mounttabelle zeigen das Seatbelt-Profil | S | HUM-323 |
+| HUM-321 | Der Proxy nimmt unter macOS nur den Shim der laufenden Sitzung an | M | HUM-323 |
 | HUM-322 | Kleinere Folgen aus den Reviews von M12 | S | HUM-312 bis HUM-317 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
@@ -35,7 +37,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 2. Ein Test belegt `Env::uid() == getuid()`.
 3. `tools/check_coupling.py` bleibt grün.
 
-## HUM-313 · Seatbelt-Backend: die Sandbox auf macOS
+## HUM-323 · Seatbelt-Backend: die Sandbox auf macOS
 
 ### Kontext
 Auf macOS gibt es keine Namespaces, kein bwrap und kein seccomp. Das Gegenstück ist Seatbelt: `sandbox-exec -f profil.sb` setzt ein SBPL-Profil, das der Kern für den Prozess und alle Kinder durchsetzt; Chrome, Codex und Claude Code `sandbox-runtime` nutzen es. Am 2026-10-29 auf macOS 27.0.1 gemessen, mit `(deny default)`, Tür-Socket und einem Loopback-Port erlaubt: Die Tür antwortet; TCP nach außen, UDP-Senden, DNS, Raw-Sockets, IPv6, `AF_ROUTE`, `AF_SYSTEM`, `AF_NDRV`, fremde Unix-Sockets und Schreiben außerhalb des Projekts enden mit `EPERM`. `socket()` selbst wird für `AF_INET`, `AF_INET6` und `AF_UNIX` nicht vermittelt, aber jedes `bind`, `connect` und `sendto` geht über `network-*`. Bei SBPL gewinnt die letzte passende Regel.
@@ -56,7 +58,7 @@ Seatbelt kennt keine Mounts. Der Agent sieht echte Pfade, nicht `/work` oder `/h
 2. Aus der Sandbox: `curl https://example.com` ohne Proxy scheitert, mit Proxy wird die Anfrage gehalten; `cat ~/.ssh/*` scheitert; Schreiben in `/work/.git/hooks` scheitert.
 3. Linux unverändert: `tests/escape/` grün.
 
-## HUM-314 · Der Daemon läuft auf macOS als launchd-Agent
+## HUM-324 · Der Daemon läuft auf macOS als launchd-Agent
 
 ### Spezifikation
 1. Laufzeitverzeichnis auf macOS: `confstr(_CS_DARWIN_USER_TEMP_DIR)/humanitl`, für Terminal und launchd dieselbe Stelle und kurz genug für `sun_path`.
@@ -64,7 +66,7 @@ Seatbelt kennt keine Mounts. Der Agent sieht echte Pfade, nicht `/work` oder `/h
 3. Diagnosen nennen auf macOS `launchctl` statt `systemctl`.
 4. `humanitl doctor` prüft auf macOS `sandbox-exec`, das Laufzeitverzeichnis, den LaunchAgent und lässt bwrap, user namespaces, seccomp, tray und renderer weg.
 
-## HUM-315 · Die App läuft auf macOS
+## HUM-325 · Die App läuft auf macOS
 
 ### Spezifikation
 1. `app/macos` mit Titel, Größe 1280×720, ohne doppelte Titelleiste, App Sandbox aus (die App muss Socket, Token und die CLI neben sich erreichen).
@@ -97,7 +99,7 @@ Unter Linux laufen Tray und Benachrichtigungen über D-Bus (StatusNotifierItem, 
 ## HUM-320 · Vorschau und Mounttabelle zeigen das Seatbelt-Profil
 
 ### Kontext
-Aus HUM-313: Der Plan-RPC baut seine Vorschau (`argv_preview`, Mounttabelle der Oberfläche, `humanitl sandbox argv`) aus `SandboxProfile::to_bwrap_args` und liest die Mounts aus deren Flags (`ipc/src/sandbox.rs`, `Prepared::argv`, `mounts_of`). Unter macOS startet aber `sandbox-exec` mit einem SBPL-Profil; die Vorschau zeigt dort eine bwrap-Zeile, die nie läuft.
+Aus HUM-323: Der Plan-RPC baut seine Vorschau (`argv_preview`, Mounttabelle der Oberfläche, `humanitl sandbox argv`) aus `SandboxProfile::to_bwrap_args` und liest die Mounts aus deren Flags (`ipc/src/sandbox.rs`, `Prepared::argv`, `mounts_of`). Unter macOS startet aber `sandbox-exec` mit einem SBPL-Profil; die Vorschau zeigt dort eine bwrap-Zeile, die nie läuft.
 
 ### Spezifikation
 1. Unter macOS zeigt die Vorschau die Kommandozeile von `sandbox-exec` und den Text des Profils, ohne Seiteneffekt (kein Sitzungsverzeichnis, kein Port).

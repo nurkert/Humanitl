@@ -91,7 +91,7 @@ class _QueueRowState extends ConsumerState<QueueRow> {
     final Set<LogicalKeyboardKey> down =
         HardwareKeyboard.instance.logicalKeysPressed;
     // On macOS a selection toggles with Cmd, where Ctrl-click opens the
-    // context menu (HUM-315).
+    // context menu (HUM-325).
     final bool control =
         down.contains(LogicalKeyboardKey.controlLeft) ||
         down.contains(LogicalKeyboardKey.controlRight) ||

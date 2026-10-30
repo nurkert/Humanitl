@@ -1,4 +1,4 @@
-//! Der Daemon als launchd-Agent unter macOS (HUM-314, `backlog/sprint-6.md`).
+//! Der Daemon als launchd-Agent unter macOS (HUM-324, `backlog/sprint-6.md`).
 //!
 //! Unter Linux richtet `humanitl daemon install` eine systemd-Unit ein; unter
 //! macOS übernimmt launchd diese Rolle. Eine Datei
@@ -50,7 +50,7 @@ pub fn log_path(home: &Path) -> PathBuf {
 }
 
 /// Die Zeile, an der `install` und `uninstall` ihre eigene Datei erkennen.
-const MARKER: &str = "Written by `humanitl daemon install` (HUM-314)";
+const MARKER: &str = "Written by `humanitl daemon install` (HUM-324)";
 
 /// Die Datei des Agenten für dieses Programm.
 #[must_use]

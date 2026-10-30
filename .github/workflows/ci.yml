@@ -258,14 +258,14 @@ jobs:
       - name: Name the tests that failed
         if: failure() && steps.macos-test.outcome == 'failure'
         run: ./scripts/ci/test-report.sh "$RUNNER_TEMP/macos-test.log"
-      - name: Seatbelt escape tests (HUM-313)
+      - name: Seatbelt escape tests (HUM-323)
         # A real daemon in an empty HOME, `humanitl sandbox check` with three
         # green guarantees, then every way out the profile must refuse.
         run: |
           set -euo pipefail
           cd daemon && cargo build -p humanitl -p humanitld -p humanitl-shim
           cd .. && ./tests/escape/macos/run.sh daemon/target/debug
-      - name: The macOS app builds (HUM-315)
+      - name: The macOS app builds (HUM-325)
         # The runner under app/macos, the Dart code that only macOS takes
         # (lstat, the window, the restart through launchd) and its tests. A
         # failing command leaves the end of its output in an annotation, so the
@@ -290,7 +290,7 @@ jobs:
           cd app
           step flutter test test/core/ipc test/core/ui test/features/shell
           step flutter build macos --debug
-      - name: The daemon as a launchd agent (HUM-314)
+      - name: The daemon as a launchd agent (HUM-324)
         # A fresh runner: install the agent from the build, wait until the
         # daemon answers, check the sandbox through it, take it away again.
         # Every step that fails says why in an annotation, with launchd's view

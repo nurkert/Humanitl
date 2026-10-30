@@ -55,7 +55,7 @@ class WindowDragArea extends ConsumerWidget {
 }
 
 /// Whether the system draws the window buttons itself: the traffic lights of
-/// macOS at the left end of the bar (HUM-315). Then [WindowButtons] stays
+/// macOS at the left end of the bar (HUM-325). Then [WindowButtons] stays
 /// empty and the bar leaves [trafficLightInset] free.
 bool get systemWindowButtons => defaultTargetPlatform == TargetPlatform.macOS;
 

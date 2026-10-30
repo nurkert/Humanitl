@@ -89,7 +89,7 @@ protoc --proto_path=proto --dart_out=grpc:"$DART_OUT" "${PROTO_FILES[@]}"
 # Drift-Wachhund fuer CI: `generated/` ist gitignored, der Hash nicht. Ohne
 # Dateien gibt es keinen Hash: `sha256sum` ohne Argumente laese stdin und
 # schriebe den Hash ueber nichts als `-`, und der Wachhund waere blind.
-# Eine Schleife statt `mapfile`: die Bash 3.2 von macOS kennt es nicht (HUM-315).
+# Eine Schleife statt `mapfile`: die Bash 3.2 von macOS kennt es nicht (HUM-325).
 dart_files=()
 while IFS= read -r file; do
   dart_files+=("$file")

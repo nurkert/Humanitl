@@ -914,7 +914,7 @@ mod tests {
 
         // macOS keeps at most 128 waiting connections per listener and drops
         // the SYN of the rest, which then wait for a retransmission; under a
-        // loaded test run that took minutes (HUM-313).
+        // loaded test run that took minutes (HUM-323).
         let count: u32 = if cfg!(target_os = "linux") { 200 } else { 100 };
         let workers: Vec<_> = (0..count)
             .map(|i| {

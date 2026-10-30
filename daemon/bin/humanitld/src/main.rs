@@ -2582,7 +2582,7 @@ mod tests {
     /// Im `/tmp`-Rückfall schlägt ein fremdes Laufzeitverzeichnis das eigene
     /// unter dem Heimatverzeichnis vor, in einer Sitzung mit
     /// `XDG_RUNTIME_DIR` nicht: dort zerlegte der Befehl die grafische Sitzung.
-    // Der Rückfall nach /run/user und $TMPDIR gilt nicht unter macOS (HUM-314).
+    // Der Rückfall nach /run/user und $TMPDIR gilt nicht unter macOS (HUM-324).
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn only_the_fallback_proposes_an_own_runtime_directory() {

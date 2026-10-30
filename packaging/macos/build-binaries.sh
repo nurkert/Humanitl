@@ -6,7 +6,7 @@
 #
 # Der Shim braucht unter macOS keine statische Bindung: Er läuft unter
 # Seatbelt von seinem eigenen Pfad im Bündel, nicht in einem leeren
-# Dateisystem wie unter bwrap (HUM-313).
+# Dateisystem wie unter bwrap (HUM-323).
 set -euo pipefail
 
 [[ $# -eq 1 ]] || { echo "usage: $0 <out-dir>" >&2; exit 2; }

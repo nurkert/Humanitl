@@ -387,7 +387,7 @@ mod tests {
     /// Im `/tmp`-Rückfall (kein `XDG_RUNTIME_DIR`, kein `/run/user/<uid>`)
     /// schlägt ein fremdes Verzeichnis das eigene unter dem Heimatverzeichnis
     /// vor.
-    // Der Rückfall nach /run/user und $TMPDIR gilt nicht unter macOS (HUM-314).
+    // Der Rückfall nach /run/user und $TMPDIR gilt nicht unter macOS (HUM-324).
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn a_foreign_fallback_dir_proposes_an_own_runtime_dir() {
@@ -413,7 +413,7 @@ mod tests {
     /// Im Rückfall ohne Verzeichnis und ohne Token läuft bloß kein Daemon:
     /// Der Vorschlag richtet den Dienst ein, nicht die Anleitung zum eigenen
     /// Verzeichnis und nicht `humanitld` im Vordergrund (HUM-189).
-    // Der Rückfall nach /run/user und $TMPDIR gilt nicht unter macOS (HUM-314).
+    // Der Rückfall nach /run/user und $TMPDIR gilt nicht unter macOS (HUM-324).
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn a_missing_fallback_dir_proposes_installing_the_service() {

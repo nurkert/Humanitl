@@ -144,12 +144,12 @@ pub use crate::launcher::{CheckResult, IsolationCheck, LaunchPlan, SandboxBacken
 pub use crate::seatbelt::SeatbeltBackend;
 
 /// Das Sandbox-Backend dieses Systems: Seatbelt unter macOS, sonst bwrap
-/// (HUM-313). Daemon und Kommandozeile sprechen nur diesen Typ an.
+/// (HUM-323). Daemon und Kommandozeile sprechen nur diesen Typ an.
 #[cfg(target_os = "macos")]
 pub type PlatformBackend = SeatbeltBackend;
 
 /// Das Sandbox-Backend dieses Systems: Seatbelt unter macOS, sonst bwrap
-/// (HUM-313). Daemon und Kommandozeile sprechen nur diesen Typ an.
+/// (HUM-323). Daemon und Kommandozeile sprechen nur diesen Typ an.
 #[cfg(not(target_os = "macos"))]
 pub type PlatformBackend = BwrapBackend;
 pub use crate::os_release::{

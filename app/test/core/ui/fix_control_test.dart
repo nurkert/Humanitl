@@ -434,7 +434,7 @@ void main() {
     });
 
     test('takes the command line of an app in /Applications on macOS', () {
-      // `/Applications` is `drwxrwxr-x root:admin` on every Mac (HUM-315).
+      // `/Applications` is `drwxrwxr-x root:admin` on every Mac (HUM-325).
       const String app = '/Applications/Humanitl.app/Contents/MacOS';
       int modes(String path) => path == '/Applications' ? 0x1FD : 0x1ED;
       ({String? path, String? refusal}) candidate(bool rootAdmin) =>

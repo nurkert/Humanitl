@@ -443,7 +443,7 @@ fn the_report_of_a_machine_where_nothing_answers_is_still_eleven_lines() {
 }
 
 /// Unter macOS urteilen die Zeilen über Seatbelt und launchd, und keine
-/// Linux-Zeile ist rot (HUM-314).
+/// Linux-Zeile ist rot (HUM-324).
 #[test]
 fn on_macos_the_linux_lines_are_not_needed_and_seatbelt_counts() {
     let mut facts = healthy();

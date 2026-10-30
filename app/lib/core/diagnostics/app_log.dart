@@ -76,7 +76,7 @@ class AppLog {
   ///
   /// On macOS without `XDG_STATE_HOME` it lies under
   /// `~/Library/Application Support/Humanitl`, next to the daemon's runtime
-  /// directory (HUM-315).
+  /// directory (HUM-325).
   factory AppLog.resolve({Map<String, String>? environment, bool? macOS}) {
     final Map<String, String> env = environment ?? Platform.environment;
     final String? state = env['XDG_STATE_HOME'];

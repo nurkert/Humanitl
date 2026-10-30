@@ -202,7 +202,7 @@ class NoteIntent extends Intent {
 // the vocabulary of CONVENTIONS 3.9 and come back with the screens that
 // answer them.
 
-/// On macOS every `Ctrl` chord answers to `Cmd` as well (HUM-315).
+/// On macOS every `Ctrl` chord answers to `Cmd` as well (HUM-325).
 ///
 /// The `Ctrl` form stays, so the hints that name it remain true there; `Cmd`
 /// is what a Mac user presses first. [platform] defaults to

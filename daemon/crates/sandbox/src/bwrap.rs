@@ -222,7 +222,7 @@ impl BwrapBackend {
 
     /// Ohne Prüfung, mit `bwrap` aus `PATH`: der Rückfall, wenn
     /// [`Self::detect`] scheitert und trotzdem ein Plan gezeigt werden soll
-    /// (HUM-313, dieselbe Form wie [`crate::SeatbeltBackend::fallback`]).
+    /// (HUM-323, dieselbe Form wie [`crate::SeatbeltBackend::fallback`]).
     #[must_use]
     pub fn fallback(paths: Paths) -> Self {
         Self::unchecked("bwrap", MIN_BWRAP_VERSION, paths)
@@ -491,7 +491,7 @@ impl BwrapBackend {
     }
 
     /// [`Self::check_proxy_socket`] for any backend: the socket of these
-    /// paths, 0600, from the proxy directory and nowhere else (HUM-313).
+    /// paths, 0600, from the proxy directory and nowhere else (HUM-323).
     pub(crate) fn check_proxy_socket_in(
         paths: &Paths,
         session: &SessionContext,
@@ -944,7 +944,7 @@ impl SandboxBackend for BwrapBackend {
 }
 
 /// The three guarantees from the shim's report, for every backend whose shim
-/// writes the same five `CHECK` lines (HUM-313); see
+/// writes the same five `CHECK` lines (HUM-323); see
 /// [`BwrapBackend::isolation_check`](SandboxBackend::isolation_check).
 pub(crate) fn isolation_from_report(handle: &SandboxHandle, timeout: Duration) -> Vec<CheckResult> {
     let report = handle.wait_for_report(timeout);
@@ -998,7 +998,7 @@ pub(crate) fn isolation_from_report(handle: &SandboxHandle, timeout: Duration) -
 /// Starts a plan: the supervisor thread, the readers of report and status,
 /// and the wait for the first line or an early end. The same for every
 /// backend that starts one program with inherited descriptors (bwrap,
-/// `sandbox-exec`, HUM-313).
+/// `sandbox-exec`, HUM-323).
 ///
 /// # Errors
 ///
@@ -1027,7 +1027,7 @@ pub(crate) fn launch_plan(
     let args: Vec<OsString> = plan.argv.iter().skip(1).cloned().collect();
     // bwrap carries the environment in `--setenv` and starts with an
     // empty one; `sandbox-exec` hands its own environment to the command
-    // (HUM-313).
+    // (HUM-323).
     let env = if plan.env_on_program {
         plan.env.clone()
     } else {
@@ -1387,7 +1387,7 @@ fn supervise(
             Err(_) => break ExitStatus::default(),
         }
     };
-    // Weitere Shells einer Start-Tür enden mit der Sandbox (HUM-313); unter
+    // Weitere Shells einer Start-Tür enden mit der Sandbox (HUM-323); unter
     // Linux erledigt das der PID-Namensraum.
     shared.close_shells();
     // Erst die Leser einsammeln, dann den Zuhörer der Ausgabe loslassen, dann

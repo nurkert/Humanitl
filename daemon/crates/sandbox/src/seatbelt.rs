@@ -1,4 +1,4 @@
-//! Das Sandbox-Backend für macOS: Seatbelt (HUM-313, `backlog/sprint-6.md`).
+//! Das Sandbox-Backend für macOS: Seatbelt (HUM-323, `backlog/sprint-6.md`).
 //!
 //! Seatbelt ist die Sandbox des macOS-Kerns. `sandbox-exec -f profil.sb`
 //! setzt ein Profil in der Sprache SBPL, und der Kern hält den Prozess und
@@ -120,7 +120,7 @@ impl PathMap {
                 return Some(to.clone());
             }
             // Nur Bestandteile unterhalb des Ziels: `//x` oder `..` führten
-            // mit `join` hinaus (Review HUM-313).
+            // mit `join` hinaus (Review HUM-323).
             let rest = Path::new(rest.strip_prefix('/')?);
             rest.components()
                 .all(|component| matches!(component, Component::Normal(_)))
@@ -239,7 +239,7 @@ pub struct SeatbeltPolicy {
     pub session: PathBuf,
     /// Die beschreibbaren Teile der Sitzung, `home` und `tmp`. Nie das
     /// Sitzungsverzeichnis selbst: Wer dort schreiben dürfte, ersetzte das
-    /// Profil, mit dem die nächste Shell startet (Review HUM-313).
+    /// Profil, mit dem die nächste Shell startet (Review HUM-323).
     pub session_writable: Vec<PathBuf>,
     /// Weitere Ordner, nur lesbar.
     pub read_only: Vec<PathBuf>,
@@ -265,7 +265,7 @@ impl SeatbeltPolicy {
     pub fn render(&self) -> String {
         let mut out = String::new();
         out.push_str(
-            ";; Humanitl Seatbelt profile (HUM-313). Generated per session; do not edit.\n\
+            ";; Humanitl Seatbelt profile (HUM-323). Generated per session; do not edit.\n\
              ;; In SBPL the last matching rule wins.\n\
              (version 1)\n(deny default)\n\n\
              ;; Processes: start programs, only signal or inspect the own sandbox.\n\
@@ -336,7 +336,7 @@ impl SeatbeltPolicy {
         // erlaubt, sonst fände `ttyname(3)` das eigene nicht. Ein neues legt er
         // über `/dev/ptmx` an; dessen Untertanenseite trägt dann die
         // Erweiterung `com.apple.sandbox.pty`, die nur er bekommt (Review
-        // HUM-313).
+        // HUM-323).
         out.push_str(
             "(deny file-read-data file-write* (regex #\"^/dev/ttys[0-9]+$\"))\n\
              (allow file-read* file-write* file-ioctl (literal \"/dev/ptmx\"))\n\
@@ -605,7 +605,7 @@ impl SeatbeltBackend {
         // Die Ordner zwischen Projekt und Maske dürfen weder umbenannt noch
         // gelöscht werden: Sonst zöge `mv .git .gitx` die Maske von
         // `.git/hooks` ab, und `mv .gitx .git` brächte den Inhalt zurück
-        // (Review HUM-313).
+        // (Review HUM-323).
         let mut locked: Vec<PathBuf> = masked
             .iter()
             .flat_map(|path| path.ancestors().skip(1))

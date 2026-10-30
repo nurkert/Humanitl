@@ -1,4 +1,4 @@
-//! The shim on macOS: bridge, evidence, exec (HUM-313, `backlog/sprint-6.md`).
+//! The shim on macOS: bridge, evidence, exec (HUM-323, `backlog/sprint-6.md`).
 //!
 //! On macOS the launcher starts this binary under `sandbox-exec` with the
 //! session's Seatbelt profile. The kernel enforces that profile on the shim and
@@ -87,7 +87,7 @@ struct Cli {
     /// The working directory of the command, the project; without mounts
     /// there is no `--chdir /work` of the launcher.
     chdir: Option<OsString>,
-    /// A further shell next to the agent (HUM-313): no bridge, no checks,
+    /// A further shell next to the agent (HUM-323): no bridge, no checks,
     /// only the process with its session.
     no_bridge: bool,
     controlling_terminal: bool,
@@ -344,7 +344,7 @@ fn launch(cli: &Cli, bound: Option<Bound>, report: &Report, status: Option<&Owne
     std::thread::spawn(move || watchdog(pid));
     let code = wait_for(pid);
     // Whatever the command left running in its session ends with it: there
-    // is no PID namespace that would take it along (HUM-313).
+    // is no PID namespace that would take it along (HUM-323).
     end_session(pid, libc::SIGKILL);
     // Also after a signal: the command ran, and a missing line would read
     // as a sandbox that never started (`SandboxHandle::verdict`).

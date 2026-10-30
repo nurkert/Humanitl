@@ -136,7 +136,7 @@ Future<DaemonRestart> restartUserDaemon(
   required Future<bool?> Function() askSession,
   bool? macOS,
 }) async {
-  // On macOS the daemon is a launchd agent (HUM-315): no unit to reload, and
+  // On macOS the daemon is a launchd agent (HUM-325): no unit to reload, and
   // the restart is `humanitl daemon restart` (`launchctl kickstart -k`), which
   // also starts an agent that retired with exit 0. The decision, retire only
   // when idle, is the same on both systems.

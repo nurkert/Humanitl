@@ -1,4 +1,4 @@
-// The restart of the daemon on macOS (HUM-315): no systemd, no
+// The restart of the daemon on macOS (HUM-325): no systemd, no
 // `humanitl daemon restart` restarts the launchd agent, and only when no agent
 // session holds the daemon: retire-if-idle first, as on Linux.
 

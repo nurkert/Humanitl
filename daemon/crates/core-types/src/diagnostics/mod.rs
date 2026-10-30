@@ -17,7 +17,7 @@ use std::path::PathBuf;
 pub use codes::{AREAS, AreaInfo, CODES, CodeInfo, lookup, lookup_str};
 
 /// Der Befehl, der den Daemon dieses Systems neu startet, als Vorschlag in
-/// Befunden: unter Linux systemd, unter macOS der launchd-Agent (HUM-314).
+/// Befunden: unter Linux systemd, unter macOS der launchd-Agent (HUM-324).
 pub const RESTART_DAEMON_COMMAND: &str = if cfg!(target_os = "macos") {
     "humanitl daemon restart"
 } else {
