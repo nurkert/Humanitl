@@ -138,11 +138,19 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
       TerminalPlacement? previous,
       TerminalPlacement next,
     ) {
-      if (next == TerminalPlacement.pane && previous != next) {
-        setState(
-          () => _terminalCameBack = previous == TerminalPlacement.fullWindow,
-        );
+      if (previous == next) {
+        return;
       }
+      // Auch beim Gehen neu bauen, nicht nur beim Kommen (HUM-352): Verborgen
+      // ruht `ref.watch` unten, und ein Terminal, das von History aus zu
+      // schweben beginnt, bliebe hier als zweite Ansicht derselben Sitzung
+      // stehen. Nach „Schließen" und erneutem Schweben hielten so zwei Wirte
+      // denselben Emulator, und beide meldeten ihre Größe.
+      setState(
+        () => _terminalCameBack =
+            next == TerminalPlacement.pane &&
+            previous == TerminalPlacement.fullWindow,
+      );
     });
 
     if (_terminalCameBack) {

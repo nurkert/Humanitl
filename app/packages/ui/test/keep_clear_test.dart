@@ -84,6 +84,70 @@ void main() {
     expect(HKeepClear.changes.value, greaterThan(before));
   });
 
+  // HUM-352: Die Leiste mit Freigeben und Blockieren hält nur frei, solange
+  // etwas wartet.
+  testWidgets('a_disabled_region_keeps_nothing_clear_until_enabled', (
+    WidgetTester tester,
+  ) async {
+    Widget scene({required bool enabled}) => Directionality(
+      textDirection: TextDirection.ltr,
+      child: Align(
+        alignment: Alignment.topLeft,
+        child: SizedBox(
+          key: _root,
+          width: 400,
+          height: 300,
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: HKeepClear(
+              enabled: enabled,
+              child: const SizedBox(width: 100, height: 50),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpWidget(scene(enabled: false));
+    await tester.pump();
+    expect(_rects(tester), isEmpty);
+    final int before = HKeepClear.changes.value;
+
+    await tester.pumpWidget(scene(enabled: true));
+    await tester.pump();
+    expect(_rects(tester), <Rect>[const Rect.fromLTWH(0, 0, 100, 50)]);
+    expect(HKeepClear.changes.value, greaterThan(before));
+  });
+
+  // HUM-352: Ein Hinweis im schwebenden Fenster hält nichts frei; das
+  // Fenster wiche sonst sich selbst aus.
+  testWidgets('a_region_inside_a_floater_keeps_nothing_clear', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      const Directionality(
+        textDirection: TextDirection.ltr,
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            key: _root,
+            width: 400,
+            height: 300,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                HKeepClear(child: SizedBox(width: 100, height: 50)),
+                HKeepClearExempt(
+                  child: HKeepClear(child: SizedBox(width: 60, height: 40)),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(_rects(tester), <Rect>[const Rect.fromLTWH(150, 0, 100, 50)]);
+  });
+
   testWidgets('a_removed_region_is_gone', (WidgetTester tester) async {
     await tester.pumpWidget(_scene(shown: 0));
     expect(_rects(tester), isNotEmpty);

@@ -494,15 +494,23 @@ only (never rail, header or status bar), `bg1` with a `lineStrong` hairline
 and the `card` radius, no shadow. A 28 px title bar in `bg2` (title `ui12`
 semibold, drag by it) carries a ghost button back to the Sandbox section and
 an `HIconButton` close; below it the terminal with its usual banner, which
-there keeps only the full-window button. A 14 px grip in the inner corner
-resizes it between 320 x 200 and 60 % of the sections (at most 960 x 640).
-It sits 12 px (`x3`) from the edges of a corner, bottom right by default,
-and snaps to the corner of the quadrant it is let go in. Without a free corner it shrinks to a title strip of `terminalStrip`
+there keeps only the full-window button. A 14 px grip in the window's
+corner across from its anchor resizes it between 320 x 200 and 60 % of the
+sections (at most 960 x 640), the same at every anchor; on a middle axis it
+sits right or bottom and the window grows on both sides. When the grip sits
+in the top row, title bar and banner leave its 14 px free on its side
+(HUM-352). The window holds to one of nine anchors (the corners, the middles
+of the edges, the centre), 12 px (`x3`) from the edges it holds to, bottom
+right by default. Let go calmly, it snaps to the nearest anchor; thrown
+(from 400 px/s), to the next anchor in the direction of the throw, and it
+glides there in `arrive` (HUM-352). Without a free corner it shrinks to a title strip of `terminalStrip`
 (240 x 28, HUM-315): `bg2` with the `lineStrong` hairline and the `card`
 radius like the window, the picture-in-picture glyph, "profile · tab" in
 `ui12` semibold, and a ghost button with the maximize glyph that opens it
 again. The strip takes the first free corner in the same order as the
 window; on the Sandbox page the window and the strip give way to the pane.
+Notices inside the window (`HKeepClearExempt`) keep nothing clear from it,
+and the bar with Allow and Block keeps clear only while a request waits.
 
 ### HContextMenu
 
