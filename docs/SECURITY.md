@@ -683,7 +683,16 @@ reads them all) under one shared budget of `limits.preview_cap_bytes` and
 `limits.max_decompress_ratio`. Bytes after the end of a `deflate` or `br` stream, or after the
 last complete gzip member, that cannot be read as another member make the scan search the decoded
 part before them and report the rest as a gap (`FINDINGS_002`) instead of calling the body fully
-searched (HUM-247). A key written differently from literal or URL-encoded (a JSON escape, `+` as
+searched (HUM-247). A `deflate` body is read with the zlib frame of RFC 1950 first and as a raw
+RFC 1951 stream only when the frame is broken; when the frame reads completely, the raw reading
+is compared against it under the same limits. A body whose raw reading differs from the zlib
+reading is reported as a gap (`FINDINGS_002`) with the zlib reading searched, since a receiver
+that only knows the raw stream would get content the scan never saw; this holds when the raw
+stream ends cleanly, has bytes behind its end, or stops short in the middle after it has already
+diverged, because a streaming receiver has delivered that content by then. A valid zlib header
+that asks for a preset dictionary (`FDICT`) is a gap as well: the scan has no dictionary, searches
+the raw reading and says that the zlib reading was not searched (HUM-266). A key
+written differently from literal or URL-encoded (a JSON escape, `+` as
 a space in a form) is no hit.
 
 *What stays open.* The agent can read the key; it needs it. A subverted agent can therefore put it

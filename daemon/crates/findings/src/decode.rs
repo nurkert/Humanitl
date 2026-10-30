@@ -208,13 +208,16 @@ impl fmt::Debug for Bytes {
 /// ein, damit eine Bombe nicht den Speicher des Daemons füllt. Alle Bereiche
 /// der Funde zeigen danach auf die entpackten Bytes.
 ///
-/// Vier Fälle melden `FINDINGS_002` und setzen `truncated`: der Body liegt über
+/// Fünf Fälle melden `FINDINGS_002` und setzen `truncated`: der Body liegt über
 /// dem Cap, das Cap hat das Entpacken abgebrochen, der Body ließ sich nicht
-/// entpacken (unbekannte Kodierung, abgeschnittener oder kaputter Strom), oder
-/// hinter dem Ende des Stroms liegen weitere Bytes (HUM-247). Im letzten Fall
-/// wird durchsucht, was vor dem Ende stand; der Rest bleibt eine benannte
-/// Lücke, weil ein anderer Entpacker ihn anders lesen kann.
-/// Ein fünfter meldet stattdessen `LIMIT_003`: Das Entpacken brach am
+/// entpacken (unbekannte Kodierung, abgeschnittener oder kaputter Strom),
+/// hinter dem Ende des Stroms liegen weitere Bytes (HUM-247), oder ein
+/// `deflate`-Body ergibt als zlib-Rahmen und als nackter Strom Verschiedenes
+/// (HUM-266). Im vierten Fall wird durchsucht, was vor dem Ende stand; der Rest
+/// bleibt eine benannte Lücke, weil ein anderer Entpacker ihn anders lesen
+/// kann. Im fünften wird die zlib-Lesart durchsucht, und die nackte Lesart
+/// bleibt die benannte Lücke.
+/// Ein sechster meldet stattdessen `LIMIT_003`: Das Entpacken brach am
 /// Verhältnis ab, `limits.max_decompress_ratio` war die engere Grenze
 /// ([`Budget::limited_by_ratio`], HUM-057).
 /// Bei einem Body, der sich nicht entpacken ließ, wird gar nichts durchsucht,
@@ -259,6 +262,7 @@ pub fn decode_body(
         Ok(Inflated {
             bytes,
             stopped: false,
+            ambiguity: None,
         }) => DecodedBody {
             bytes,
             truncated: false,
@@ -266,7 +270,20 @@ pub fn decode_body(
         },
         Ok(Inflated {
             bytes,
+            stopped: false,
+            ambiguity: Some(ambiguity),
+        }) => {
+            let scanned = bytes.len();
+            DecodedBody {
+                bytes,
+                truncated: true,
+                diagnostic: Some(ambiguous_frame(ambiguity, raw.len(), scanned)),
+            }
+        }
+        Ok(Inflated {
+            bytes,
             stopped: true,
+            ..
         }) if budget.limited_by_ratio() => {
             let produced = bytes.len();
             DecodedBody {
@@ -278,29 +295,19 @@ pub fn decode_body(
         Ok(Inflated {
             bytes,
             stopped: true,
+            ..
         }) => {
             let produced = bytes.len();
             DecodedBody {
                 bytes,
                 truncated: true,
-                diagnostic: Some(
-                    Diagnostic::builder(FINDINGS_002, Severity::Warning)
-                        .why(format!(
-                            "der Body ist mit \"{}\" kodiert und beim Entpacken über das Budget \
-                             gelaufen; durchsucht wurden die ersten {produced} Bytes \
-                             (limits.preview_cap_bytes = {cap_bytes}, \
-                             limits.max_decompress_ratio = {max_ratio}, gepackt {} Bytes)",
-                            encoding.as_str(),
-                            raw.len()
-                        ))
-                        // Hier zog das Cap und nicht das Verhältnis (das
-                        // meldet `LIMIT_003`), also zeigt der Rat auf das Cap.
-                        .fix(humanitl_core::FixAction::ChangeSetting {
-                            key: "limits.preview_cap_bytes".to_owned(),
-                            value: cap_bytes.saturating_mul(2).to_string(),
-                        })
-                        .build(),
-                ),
+                diagnostic: Some(cap_exceeded(
+                    encoding,
+                    raw.len(),
+                    produced,
+                    cap_bytes,
+                    max_ratio,
+                )),
             }
         }
         Err(InflateError::TrailingBytes { decoded }) => {
@@ -374,6 +381,26 @@ pub struct Inflated {
     pub bytes: Vec<u8>,
     /// Wahr, wenn das Budget vor dem Ende des Stroms zugemacht hat.
     pub stopped: bool,
+    /// Gesetzt, wenn dieselben Bytes eine Lesart haben, die der Scan nicht
+    /// geprüft hat (HUM-266).
+    ///
+    /// Nur bei `deflate`. `GetBody` liefert weiter `bytes` aus, denn genau
+    /// darauf zeigen die Fundstellen des Scans; der Scan meldet die andere
+    /// Lesart als Lücke (`FINDINGS_002`).
+    pub ambiguity: Option<Ambiguity>,
+}
+
+/// Warum ein `deflate`-Body eine Lesart hat, die der Scan nicht geprüft hat
+/// (HUM-266).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ambiguity {
+    /// zlib-Rahmen (RFC 1950) und nackter Strom (RFC 1951) ergeben
+    /// Verschiedenes. Durchsucht ist die zlib-Lesart.
+    Readings,
+    /// Der zlib-Kopf ist gültig, verlangt aber ein voreingestelltes Wörterbuch
+    /// (`FDICT`, RFC 1950 §2.2), das der Scan nicht hat. Durchsucht ist die
+    /// nackte Lesart; ein Empfänger mit dem Wörterbuch liest etwas anderes.
+    PresetDictionary,
 }
 
 impl fmt::Debug for Inflated {
@@ -381,6 +408,7 @@ impl fmt::Debug for Inflated {
         f.debug_struct("Inflated")
             .field("bytes", &Bytes(self.bytes.len()))
             .field("stopped", &self.stopped)
+            .field("ambiguity", &self.ambiguity)
             .finish()
     }
 }
@@ -400,6 +428,7 @@ pub fn inflate(
         ContentEncoding::Identity => Ok(Inflated {
             bytes: raw.to_vec(),
             stopped: false,
+            ambiguity: None,
         }),
         // RFC 1952 erlaubt beliebig viele Member hintereinander, und `gzip -d`
         // oder Go `compress/gzip` auf der Gegenseite lesen sie alle. Deshalb
@@ -407,14 +436,34 @@ pub fn inflate(
         ContentEncoding::Gzip => read_limited(GzipMembers::new(raw), budget),
         // "deflate" ist im Netz zweideutig: die meisten Server schicken den
         // zlib-Rahmen aus RFC 1950, manche den nackten Strom aus RFC 1951.
-        // Erst der Rahmen, dann der nackte Strom. Nur ein kaputter Rahmen
-        // führt zum zweiten Versuch; ein sauberer Rahmen mit Bytes dahinter
-        // bleibt eine Lücke und wird nicht anders gedeutet.
+        // Erst der Rahmen, dann der nackte Strom. Ein kaputter Rahmen führt
+        // zum zweiten Versuch; ein sauberer Rahmen mit Bytes dahinter bleibt
+        // eine Lücke und wird nicht anders gedeutet. Ist der Rahmen vollständig
+        // gelesen, wird der nackte Strom zusätzlich gegen ihn verglichen:
+        // Dieselben Bytes können beides sein und Verschiedenes sagen (HUM-266).
+        // Ein gültiger Kopf mit `FDICT` scheitert hier immer, weil der Scan das
+        // Wörterbuch nicht hat; die zlib-Lesart bleibt dann ungeprüft, auch
+        // wenn der nackte Strom sauber endet.
         ContentEncoding::Deflate => {
-            let mut framed = *budget;
+            let before = *budget;
+            let mut framed = before;
             match read_limited(ZlibDecoder::new(raw), &mut framed) {
                 Err(InflateError::BrokenStream { .. }) => {
-                    read_limited(DeflateDecoder::new(raw), budget)
+                    let mut naked = read_limited(DeflateDecoder::new(raw), budget);
+                    if let Ok(inflated) = &mut naked
+                        && !inflated.stopped
+                        && wants_preset_dictionary(raw)
+                    {
+                        inflated.ambiguity = Some(Ambiguity::PresetDictionary);
+                    }
+                    naked
+                }
+                Ok(mut inflated) => {
+                    *budget = framed;
+                    if !inflated.stopped && raw_reading_differs(raw, before, &inflated.bytes) {
+                        inflated.ambiguity = Some(Ambiguity::Readings);
+                    }
+                    Ok(inflated)
                 }
                 other => {
                     *budget = framed;
@@ -564,6 +613,7 @@ fn read_limited<R: StreamEnd>(
                 return Ok(Inflated {
                     stopped: true,
                     bytes,
+                    ambiguity: None,
                 });
             }
             return finish(reader, bytes);
@@ -584,6 +634,7 @@ fn read_limited<R: StreamEnd>(
             return Ok(Inflated {
                 bytes,
                 stopped: true,
+                ambiguity: None,
             });
         }
         bytes.extend_from_slice(&chunk[..read]);
@@ -599,7 +650,91 @@ fn finish<R: StreamEnd>(mut reader: R, bytes: Vec<u8>) -> Result<Inflated, Infla
     Ok(Inflated {
         bytes,
         stopped: false,
+        ambiguity: None,
     })
+}
+
+/// Wahr, wenn der nackte Strom aus RFC 1951 eine gültige Lesart von `raw` ist
+/// und etwas anderes ergibt als die zlib-Lesart `framed` (HUM-266).
+///
+/// Der Kopf eines zlib-Rahmens mit `CM = 8` beginnt nackt gelesen immer einen
+/// Stored-Block. Bei einem gewöhnlichen zlib-Body passen dessen `LEN` und
+/// `NLEN` nicht zusammen, der nackte Strom bricht sofort ab, und es bleibt bei
+/// der zlib-Lesart. Ein gezielt gebauter Body besteht beide Prüfungen und
+/// trägt nackt gelesen einen anderen Inhalt; ein Empfänger, der nur den
+/// nackten Strom kennt, bekäme dann etwas, das der Scan nie sah.
+///
+/// Die zweite Lesart bekommt ein eigenes Budget mit derselben Grenze wie die
+/// erste (`budget` ist der Stand vor der zlib-Lesart). Ihre Ausgabe wird nicht
+/// aufbewahrt, sondern stückweise mit `framed` verglichen und verworfen: Im
+/// Speicher liegt nie mehr als ein Stück von [`DECOMPRESS_CHUNK`] Bytes
+/// zusätzlich, und entpackt werden höchstens `allowance + 1` Bytes. Nach der
+/// ersten Abweichung liest sie ohne Vergleich bis zum Ende weiter.
+///
+/// Ein Strom mit ungültigem Inhalt (falsches `NLEN`, unbekannter Blocktyp,
+/// Abstand vor den Anfang) ist keine Lesart und lässt es bei der zlib-Lesart.
+/// Zwei Enden zählen dagegen als Lesart, weil ein Empfänger, der stückweise
+/// entpackt, bis dahin schon ausgeliefert hat: Bytes hinter dem Ende des
+/// nackten Stroms (Python `zlib.decompressobj(-15)` legt sie in
+/// `unused_data` ab) und eine Eingabe, die mitten im Strom aufhört
+/// (`UnexpectedEof`; `decompressobj(-15)` liefert, was bis dahin entstand,
+/// ohne Fehler). Im zweiten Fall zählt nur, was schon abweicht oder über die
+/// zlib-Lesart hinausgeht; ein abgeschnittener Anfang derselben Bytes zeigt
+/// nichts, was der Scan nicht sah.
+///
+/// Läuft die zweite Lesart über das Budget, gilt sie als verschieden: Die
+/// zlib-Lesart hat vollständig ins Budget gepasst, der nackte Strom ist also
+/// länger. Ob er danach noch bricht, sieht der Scan nicht, und was er nicht
+/// sieht, meldet er (`backlog/CONVENTIONS.md` 4.13).
+fn raw_reading_differs(raw: &[u8], mut budget: Budget, framed: &[u8]) -> bool {
+    let mut reader = DeflateDecoder::new(raw);
+    let mut chunk = [0u8; DECOMPRESS_CHUNK];
+    let mut seen = 0usize;
+    let mut differs = false;
+    loop {
+        let left = budget.remaining();
+        let want = DECOMPRESS_CHUNK.min(left.saturating_add(1));
+        let read = match reader.read(&mut chunk[..want]) {
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return differs || seen > framed.len();
+            }
+            Err(_) => return false,
+        };
+        if read == 0 {
+            return differs || seen != framed.len();
+        }
+        if read > left {
+            return true;
+        }
+        if !differs {
+            differs = framed.get(seen..seen + read) != Some(&chunk[..read]);
+        }
+        seen += read;
+        budget.take(read);
+    }
+}
+
+/// Wahr, wenn `raw` mit einem gültigen zlib-Kopf beginnt, der ein
+/// voreingestelltes Wörterbuch verlangt (`FDICT`, RFC 1950 §2.2).
+///
+/// Gültig heißt: `CM = 8`, `CINFO` höchstens 7 und `FCHECK` passend. Der
+/// Entpacker dieser Crate hat kein Wörterbuch und bricht an so einem Kopf ab;
+/// ein Server, der das Wörterbuch kennt, liest den Rahmen trotzdem.
+///
+/// Beginnt der Rahmen hinter Kopf und Wörterbuch-Kennung mit dem reservierten
+/// Blocktyp 3, ist er mit keinem Wörterbuch lesbar; dann gibt es keine zweite
+/// Lesart und keine Lücke.
+fn wants_preset_dictionary(raw: &[u8]) -> bool {
+    let [cmf, flg, ..] = *raw else {
+        return false;
+    };
+    let reserved_block = raw.get(6).is_some_and(|first| (first >> 1) & 0b11 == 0b11);
+    cmf & 0x0f == 8
+        && cmf >> 4 <= 7
+        && (u16::from(cmf) << 8 | u16::from(flg)) % 31 == 0
+        && flg & 0x20 != 0
+        && !reserved_block
 }
 
 /// Der Abbruch eines Stroms samt dem, was bis dahin entstanden ist.
@@ -626,6 +761,59 @@ fn ratio_exceeded(
              wurden die ersten {produced} entpackt und durchsucht, dann brach das Entpacken ab",
             encoding.as_str(),
         ))
+        .build()
+}
+
+/// Der Befund `FINDINGS_002` für einen Body, dessen Entpacken am Cap
+/// `limits.preview_cap_bytes` abgebrochen wurde.
+fn cap_exceeded(
+    encoding: &ContentEncoding,
+    packed: usize,
+    produced: usize,
+    cap_bytes: usize,
+    max_ratio: u32,
+) -> Diagnostic {
+    Diagnostic::builder(FINDINGS_002, Severity::Warning)
+        .why(format!(
+            "der Body ist mit \"{}\" kodiert und beim Entpacken über das Budget \
+             gelaufen; durchsucht wurden die ersten {produced} Bytes \
+             (limits.preview_cap_bytes = {cap_bytes}, \
+             limits.max_decompress_ratio = {max_ratio}, gepackt {packed} Bytes)",
+            encoding.as_str(),
+        ))
+        // Hier zog das Cap und nicht das Verhältnis (das meldet `LIMIT_003`),
+        // also zeigt der Rat auf das Cap.
+        .fix(humanitl_core::FixAction::ChangeSetting {
+            key: "limits.preview_cap_bytes".to_owned(),
+            value: cap_bytes.saturating_mul(2).to_string(),
+        })
+        .build()
+}
+
+/// Der Befund `FINDINGS_002` für einen `deflate`-Body mit einer Lesart, die
+/// der Scan nicht geprüft hat (HUM-266).
+///
+/// Ohne `fix`: Keine Einstellung macht aus zwei Lesarten eine, und das
+/// Wörterbuch eines fremden Servers kennt der Scan nicht.
+fn ambiguous_frame(ambiguity: Ambiguity, packed: usize, scanned: usize) -> Diagnostic {
+    let why = match ambiguity {
+        Ambiguity::Readings => format!(
+            "der Body ist mit \"deflate\" kodiert und ergibt als zlib-Rahmen (RFC 1950) und als \
+             nackter Strom (RFC 1951) Verschiedenes; durchsucht wurden die {scanned} Bytes der \
+             zlib-Lesart, die nackte Lesart nicht (gepackt {packed} Bytes). Ein Empfänger, der \
+             nur den nackten Strom liest, bekommt Inhalt, den der Scan nicht gesehen hat; ein \
+             gewöhnlicher Server erzeugt so einen Body nicht"
+        ),
+        Ambiguity::PresetDictionary => format!(
+            "der Body ist mit \"deflate\" kodiert und beginnt mit einem zlib-Kopf (RFC 1950), der \
+             ein voreingestelltes Wörterbuch verlangt (FDICT); das Wörterbuch hat der Scan nicht. \
+             Durchsucht wurden die {scanned} Bytes der Lesart als nackter Strom (RFC 1951), die \
+             zlib-Lesart nicht (gepackt {packed} Bytes). Ein Empfänger mit dem Wörterbuch \
+             bekommt Inhalt, den der Scan nicht gesehen hat"
+        ),
+    };
+    Diagnostic::builder(FINDINGS_002, Severity::Warning)
+        .why(why)
         .build()
 }
 
@@ -775,8 +963,9 @@ mod tests {
     use std::io::Read as _;
 
     use super::{
-        Budget, ContentEncoding, DECOMPRESS_CHUNK, DecodedBody, InflateError, MIN_PRINTABLE_RUN,
-        decode_body, percent_decode, printable_only, read_limited,
+        Ambiguity, Budget, ContentEncoding, DECOMPRESS_CHUNK, DecodedBody, DeflateDecoder,
+        InflateError, MIN_PRINTABLE_RUN, StreamEnd as _, ZlibDecoder, decode_body, inflate,
+        percent_decode, printable_only, raw_reading_differs, read_limited,
     };
 
     fn gzip(bytes: &[u8]) -> Vec<u8> {
@@ -883,6 +1072,196 @@ mod tests {
             assert!(!decoded.truncated);
             assert!(decoded.diagnostic.is_none());
         }
+    }
+
+    /// Ein `deflate`-Body mit zwei gültigen Lesarten (HUM-266), dieselbe Datei
+    /// wie im Corpus von `body_decoder`; das erste Byte wählt dort `deflate`.
+    ///
+    /// Der Kopf `08 1d` ist ein gültiger zlib-Kopf. Als zlib gelesen folgt ein
+    /// Stored-Block mit `LEN` 65250 (`01 e2 fe 1d 01`) samt passender
+    /// Adler-32-Summe; der Inhalt besteht fast nur aus Nullbytes. Nackt
+    /// gelesen ist `08` selbst ein nicht letzter Stored-Block mit `LEN`
+    /// `0x011d` (`1d 01 e2 fe`), dahinter ein letzter Block mit festen
+    /// Huffman-Codes, der `password=hum-266-polyglot-secret` trägt. Der Rest
+    /// liegt hinter dem Ende des nackten Stroms.
+    fn polyglot() -> &'static [u8] {
+        let file = include_bytes!("../tests/regressions/body_decoder-deflate-polyglot.bin");
+        &file[1..]
+    }
+
+    const POLYGLOT_SECRET: &[u8] = b"password=hum-266-polyglot-secret";
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+    }
+
+    #[test]
+    fn the_polyglot_has_two_valid_readings() {
+        // Die Datei ist, was sie sein soll: Beide Lesarten enden sauber, und
+        // nur die nackte trägt das Geheimnis. Ohne diese Probe könnte der
+        // folgende Test auf einer kaputten Datei grün sein.
+        let mut framed = Vec::new();
+        ZlibDecoder::new(polyglot())
+            .read_to_end(&mut framed)
+            .unwrap();
+        assert_eq!(framed.len(), 65_250);
+        assert!(!contains(&framed, POLYGLOT_SECRET));
+        let mut naked = Vec::new();
+        let mut reader = DeflateDecoder::new(polyglot());
+        reader.read_to_end(&mut naked).unwrap();
+        assert!(contains(&naked, POLYGLOT_SECRET));
+        assert!(reader.has_trailing_input());
+    }
+
+    #[test]
+    fn a_deflate_polyglot_is_reported_and_not_called_complete() {
+        let decoded = decode_body(polyglot(), &ContentEncoding::Deflate, 1 << 20, 100);
+        assert!(decoded.truncated);
+        assert_eq!(code(&decoded), Some("FINDINGS_002"));
+        let why = decoded.diagnostic.unwrap().why;
+        assert!(why.contains("RFC 1951"), "{why}");
+        // Durchsucht wird die zlib-Lesart, auf die auch `GetBody` zeigt.
+        assert_eq!(decoded.bytes.len(), 65_250);
+        assert!(!contains(&decoded.bytes, POLYGLOT_SECRET));
+        let mut budget = Budget::new(polyglot().len(), 1 << 20, 100);
+        let inflated = inflate(polyglot(), &ContentEncoding::Deflate, &mut budget).unwrap();
+        assert_eq!(inflated.ambiguity, Some(Ambiguity::Readings));
+        assert_eq!(inflated.bytes, decoded.bytes);
+    }
+
+    /// Wie [`polyglot`], aber der nackte Strom hört nach dem Geheimnis mitten
+    /// in einem Stored-Block auf (`UnexpectedEof`). Python
+    /// `zlib.decompressobj(-15)` liefert das Geheimnis trotzdem.
+    fn cut_polyglot() -> &'static [u8] {
+        let file =
+            include_bytes!("../tests/regressions/body_decoder-deflate-truncated-divergence.bin");
+        &file[1..]
+    }
+
+    #[test]
+    fn a_naked_reading_that_diverges_and_then_stops_short_is_a_reading() {
+        let secret = b"password=hum-266-truncated-secret";
+        let mut naked = Vec::new();
+        let error = DeflateDecoder::new(cut_polyglot())
+            .read_to_end(&mut naked)
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+        let decoded = decode_body(cut_polyglot(), &ContentEncoding::Deflate, 1 << 20, 100);
+        assert!(!contains(&decoded.bytes, secret));
+        assert!(decoded.truncated);
+        assert_eq!(code(&decoded), Some("FINDINGS_002"));
+        assert!(decoded.diagnostic.unwrap().why.contains("RFC 1951"));
+    }
+
+    /// Ein gültiger zlib-Kopf `08 3c` mit `FDICT` und der Wörterbuch-Kennung
+    /// `ff c3 00 03`. Mit dem passenden Wörterbuch ergibt der Rahmen
+    /// `password=hum-266-dictionary-secret`; nackt gelesen ist derselbe Body
+    /// ein Stored-Block von 65340 Bytes ohne das Geheimnis und ein leerer
+    /// letzter Block, sauber zu Ende.
+    fn dictionary_body() -> &'static [u8] {
+        let file =
+            include_bytes!("../tests/regressions/body_decoder-deflate-preset-dictionary.bin");
+        &file[1..]
+    }
+
+    #[test]
+    fn a_zlib_header_with_a_preset_dictionary_is_a_gap() {
+        assert!(super::wants_preset_dictionary(dictionary_body()));
+        let mut naked = Vec::new();
+        DeflateDecoder::new(dictionary_body())
+            .read_to_end(&mut naked)
+            .unwrap();
+        assert_eq!(naked.len(), 65_340);
+        let decoded = decode_body(dictionary_body(), &ContentEncoding::Deflate, 1 << 20, 100);
+        assert_eq!(decoded.bytes, naked);
+        assert!(decoded.truncated);
+        assert_eq!(code(&decoded), Some("FINDINGS_002"));
+        assert!(decoded.diagnostic.unwrap().why.contains("FDICT"));
+        // Ohne gesetztes `FDICT` oder mit falscher Prüfsumme ist es kein
+        // zlib-Kopf mit Wörterbuch; dann gilt der nackte Strom allein.
+        assert!(!super::wants_preset_dictionary(&[0x08, 0x1d]));
+        assert!(!super::wants_preset_dictionary(&[0x08, 0x3d]));
+        // Codex-Beispiel: Kopf mit Wörterbuch, aber der Rahmen beginnt mit dem
+        // reservierten Blocktyp; nackt ist der Body vollständig lesbar.
+        let mut reserved = vec![0x08, 0x3c, 0x00, 0xc3, 0xff, 0x00, 0x06];
+        reserved.extend([0u8; 58]);
+        reserved.extend([0x03, 0x00]);
+        assert!(!super::wants_preset_dictionary(&reserved));
+        let decoded = decode_body(&reserved, &ContentEncoding::Deflate, 1 << 20, 100);
+        assert!(!decoded.truncated);
+        assert_eq!(code(&decoded), None);
+        assert!(!super::wants_preset_dictionary(&[0x08]));
+        let plain = b"ein gewoehnlicher nackter Strom";
+        let decoded = decode_body(&raw_deflate(plain), &ContentEncoding::Deflate, 4096, 100);
+        assert!(!decoded.truncated);
+    }
+
+    #[test]
+    fn ordinary_zlib_and_raw_deflate_have_one_reading() {
+        // Alle Stufen, auch `none`: Dort ist der zlib-Inhalt selbst ein
+        // Stored-Block, der nackt gelesen am ehesten durchrutschen könnte.
+        let plain: Vec<u8> = (0..20_000u32)
+            .flat_map(|index| format!("Zeile {index} mit etwas Text\n").into_bytes())
+            .collect();
+        for level in [0, 1, 6, 9] {
+            let level = Compression::new(level);
+            let mut framed = ZlibEncoder::new(Vec::new(), level);
+            framed.write_all(&plain).unwrap();
+            let mut naked = DeflateEncoder::new(Vec::new(), level);
+            naked.write_all(&plain).unwrap();
+            for packed in [framed.finish().unwrap(), naked.finish().unwrap()] {
+                let decoded = decode_body(&packed, &ContentEncoding::Deflate, 1 << 21, 100);
+                assert_eq!(decoded.bytes, plain, "{level:?}");
+                assert!(!decoded.truncated, "{level:?}");
+                assert!(decoded.diagnostic.is_none(), "{level:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_second_reading_stays_inside_the_same_budget() {
+        let plain = b"derselbe Inhalt in beiden Lesarten";
+        let naked = raw_deflate(plain);
+        // Gleiche Ausgabe, sauberes Ende: eine Lesart.
+        assert!(!raw_reading_differs(
+            &naked,
+            Budget::new(naked.len(), 4096, 100),
+            plain
+        ));
+        // Ein nackter Strom, der bricht, lässt es bei der zlib-Lesart.
+        assert!(!raw_reading_differs(
+            &naked[..naked.len() / 2],
+            Budget::new(naked.len(), 4096, 100),
+            plain
+        ));
+        // Eine Abweichung im Inhalt oder in der Länge ist eine zweite Lesart.
+        assert!(raw_reading_differs(
+            &naked,
+            Budget::new(naked.len(), 4096, 100),
+            b"derselbe Inhalt in beiden LesartEN"
+        ));
+        assert!(raw_reading_differs(
+            &naked,
+            Budget::new(naked.len(), 4096, 100),
+            &plain[..10]
+        ));
+        // Die zweite Lesart entpackt nicht über das Budget hinaus: Schon das
+        // erste Byte über `allowance` beendet sie, und ein Strom, der weiter
+        // reicht als die vollständige zlib-Lesart, ist eine andere Lesart.
+        let budget = Budget::new(naked.len(), plain.len() - 1, 100);
+        assert!(raw_reading_differs(
+            &naked,
+            budget,
+            &plain[..plain.len() - 1]
+        ));
+        // Mit einem Budget, an dem schon die zlib-Lesart endet, gibt es keine
+        // zweite Lesart: Der Body ist ohnehin als gekürzt gemeldet.
+        let decoded = decode_body(polyglot(), &ContentEncoding::Deflate, 1024, 100);
+        assert!(decoded.truncated);
+        assert_eq!(decoded.bytes.len(), 1024);
+        assert!(decoded.diagnostic.unwrap().why.contains("Budget"));
     }
 
     #[test]
