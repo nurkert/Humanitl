@@ -1,0 +1,40 @@
+---
+import Base from '../../layouts/Base.astro';
+import { repoUrl, ui, type Lang } from '../../i18n/ui';
+import { loadImprint } from '../../lib/imprint';
+import '../../styles/prose.css';
+
+interface Props {
+  lang: Lang;
+}
+const { lang } = Astro.props;
+const t = ui[lang];
+// Das Impressum selbst ist deutsch, wie vorgeschrieben; es wird einmal je Bau geholt.
+const imprint = await loadImprint();
+---
+
+<Base lang={lang} page="imprint" title={`${t.legal.imprintTitle} · Humanitl`} description={t.legal.imprintTitle}>
+  <main id="main" class="legal">
+    <article class="container prose" lang="de">
+      <h1 class="chrome">{t.legal.imprintTitle}</h1>
+      {
+        imprint ? (
+          <Fragment set:html={imprint.html} />
+        ) : (
+          <>
+            <p lang={lang}>{t.legal.forkNote}</p>
+            <p lang={lang}>
+              <a href={repoUrl}>GitHub</a>
+            </p>
+          </>
+        )
+      }
+    </article>
+  </main>
+</Base>
+
+<style>
+  .legal {
+    padding: clamp(8rem, 18vh, 11rem) 0 6rem;
+  }
+</style>
