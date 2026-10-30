@@ -26,7 +26,9 @@ on:
     # through tools/ci-gate.sh and merges into main only on green (HUM-237).
     # main keeps its own run, because the release guard (release.yml) asks for
     # a green push run of exactly the tagged main commit.
-    branches: [main, "hum-*"]
+    # `macos-*` is the feature branch of M12 (backlog/sprint-6.md), which
+    # collects one commit per issue before it is merged (HUM-312).
+    branches: [main, "hum-*", "macos-*"]
   pull_request:
 
 # One run per ref. On an issue branch a new push supersedes the one in flight;
