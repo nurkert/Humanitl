@@ -77,6 +77,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-303 | The terminal takes the keyboard on hover and by shortcut | S | HUM-298 |
 | HUM-306 | The empty queue says the agent is working when a session runs | S | HUM-298 |
 | HUM-301 | The terminal text can be zoomed | S | HUM-298, HUM-303 |
+| HUM-302 | Notices float as dismissible overlays and never push the layout | S | HUM-276, HUM-286 |
 
 ---
 
@@ -8403,3 +8404,190 @@ On a large screen or from some distance pi is hard to read.
   (optional, minor): das Schreiben in die Zustandsdatei während eines
   gehaltenen Zooms zu entprellen; es ist ein kleines JSON je Schritt, und
   die Wiederholrate der Tastatur begrenzt es.
+---
+## HUM-302 · Notices float as dismissible overlays and never push the layout
+
+### Context
+Owner report of 2026-10-29, two complaints about the same thing.
+
+1. The finding "LLM endpoint is not on a private network" (`LLM_006`) has a
+   band of its own at the top of the Sandbox section, is oddly tall, and
+   makes the terminal re-wrap ("macht mir mein Terminal so witzig"). The
+   daemon puts `LLM_006` into every sandbox status while the endpoint is
+   public; the band stood between the sandbox header and the terminal, so
+   each status that brought it or took it away resized the PTY and the TUI
+   of the agent redrew. It could not be closed.
+2. In Intercept, the cards above the queue (findings of the daemon,
+   HUM-106, and the requests of the agent, HUM-073) are not clean overlays:
+   the close glyph of a finding sits beside the card instead of on it, which
+   leaves an empty column on the right, and every card pushes the queue list
+   down.
+
+The desktop notice of the shell (`UI_002`, HUM-276) and the return banner
+(HUM-034) are bands of the same kind, directly under the header, and push
+every pane.
+
+### Specification
+1. One shared overlay pattern in `app/lib/core/ui` (`HNoticeLayer`): notices
+   float above the content in a `Stack`, never in its `Column`, right-aligned
+   at the top of their region: the window below the header row of the panes
+   for global notices (`UI_002`, the return banner), the area under the
+   sandbox header for the findings of the Sandbox, the list area of the queue
+   column for the queue cards. The width is the region minus its inset on
+   both sides, at most 420 px; cards stack with the 8 px gap of the grid;
+   beyond a bounded height they scroll.
+2. The content keeps its full size whether a notice stands or not; a
+   running terminal is not resized when a notice appears or disappears. The
+   content keeps its element across arrivals and dismissals.
+3. Every card has its close affordance inside the card, top right, a 28 px
+   hit target with its label on hover (`HNoticeDismiss`). Details, fixes and
+   "Open request" stay on the card.
+4. A finding that stands, as opposed to an event, stays closed while it is
+   unchanged: the dismissal is keyed by the code plus a fingerprint of its
+   subject (code and cause; the cause names the endpoint of `LLM_006`), kept
+   in `ui-state.json`, and the card comes back when the subject changes. The
+   `showOnce` memory of HUM-276 for `UI_002` keeps working unchanged.
+5. Notices are passive: no autofocus, no `HLayerScope`, no shortcut, and
+   `Esc` closes none of them. They never cover the Intercept action bar: the
+   global notices start below the header row of the panes, at the top right,
+   and the queue cards stay in the queue column.
+6. Surfaces follow `docs/DESIGN.md` (HUM-286): `bg2`, strong hairline, card
+   radius, no shadow, `H*` widgets only. ARB keys are appended only.
+
+### Acceptance criteria
+1. A widget test shows a global notice without moving the queue pane, and a
+   Sandbox finding without changing the size of the terminal; the terminal
+   sends no resize when the finding comes or goes.
+2. A widget test closes a Sandbox finding with its close glyph; it stays
+   closed across a new status with the same finding and over a new screen
+   on the same state file, and comes back when its subject changes.
+3. A widget test shows the queue cards right-aligned over the queue column,
+   the first row of the list at the same place with and without them, and
+   the close glyph inside the card.
+4. A widget test shows that the arrival of a notice leaves the keyboard focus
+   where it was.
+5. Every new test has a mutation proof; only goldens the change alters are
+   regenerated.
+
+### Umsetzung (HUM-302)
+
+- **Fundorte.** Vier Bänder: `ShellNotices` (`UI_002` und Rückkehr-Banner)
+  unter der Kopfzeile der Shell; `_Diagnostics` im Sandbox-Bildschirm
+  zwischen Kopf und Terminal (dort stand `LLM_006`, das der Daemon in jeden
+  Sandbox-Status legt, solange der Endpunkt öffentlich ist); `AgentAskStrip`
+  und `DiagnosticStrip` über der Liste der Queue. Das eingefrorene Banner
+  (`FrozenBanner`) bleibt ein Band: Es ist ein Zustand der Verbindung, kein
+  wegklickbarer Hinweis.
+- **Gemeinsames Muster** in `app/lib/core/ui/h_notice_layer.dart`:
+  `HNoticeLayer` legt die Hinweise in einem `Stack` über die Region, oben
+  rechts, 8 px Abstand, Breite Region minus Abstand, höchstens
+  `noticeMaxWidth` (420 px); Inhalt immer erstes, Hinweise immer zweites
+  Kind, auch ohne Hinweis, damit das Element des Inhalts (Terminal) jede
+  Ankunft übersteht. `HNoticeCard` (bg2, `lineStrong`, Kartenradius,
+  optionale Zustandsschiene, kein Schatten), `HNoticeDismiss`
+  (`HIconButton` 28 px mit `HoverLabel`, 4 px aus der Ecke, in der Karte),
+  `HNoticeColumn` (8 px Abstand). Diagnosen bleiben `HDiagnosticCard`, mit
+  zwei neuen optionalen Parametern: `dense` (12 px Innenabstand, Titel 13/600,
+  Grund 12) und `dismiss` (Slot oben rechts in der Karte, Text hält Abstand),
+  dazu `detailMaxLines`. So bleiben alle bestehenden Tests auf
+  `HDiagnosticCard` gültig. Beschrieben in `docs/DESIGN.md`.
+- **Orte.** Shell: `HNoticeLayer` um den Bereich zwischen Kopfzeile und
+  Statusleiste, `top` = `HSize.paneHeader` + 8, damit kein Hinweis die
+  Kopfzeilen der Panes (Start/Stopp, Schließen des Blatts) und nie die
+  Aktionsleiste von Intercept verdeckt. Sandbox: über Terminal und Reitern,
+  höchstens ein Drittel der Höhe, dann rollt es. Queue: über der Liste,
+  höchstens `interceptStripsMaxHeight`, der Befund-Streifen rollt wie bisher
+  selbst (`scroll: false`). Die Karten der Agent-Bitten tragen jetzt
+  `HNoticeCard` (Rahmen ringsum, Schließen in der Ecke, `ClipRect` bleibt).
+- **Schließen mit Gedächtnis.** `app/lib/core/ui_state/dismissed_findings.dart`:
+  Schlüssel `findingDismissed.<code>` in `ui-state.json`, Liste von
+  Fingerabdrücken (FNV-1a, 32 Bit, über Code und Grund; der Grund nennt den
+  Gegenstand, bei `LLM_006` den Endpunkt), höchstens 8 je Code. Gilt für die
+  stehenden Befunde des Sandbox-Bildschirms (siehe Review-Runde). Der Satz
+  selbst landet nicht in der Datei.
+  `UI_002` behält `showOnce` und `noticeDismissed.UI_002` unverändert; die
+  Befunde der Queue sind Ereignisse und gehen weiter je Eintrag weg.
+- **Tastatur.** Kein Autofokus, kein eigener Fokusbereich, keine Kürzel,
+  `Esc` schließt nichts. Die Karten sind gewöhnliche Fokushalte; der globale
+  Hinweis ist jetzt mit `Tab` nach den Splittern erreichbar statt mit
+  `Shift+Tab` (Test angepasst).
+- **Tests.** Neu: `test/core/ui/notice_layer_test.dart` (Region behält
+  Größe, Zustand und Fokus; rechtsbündig, 420 px, 8 px Abstand; Schließen in
+  der Karte, 28 px, Beschriftung beim Überfahren; ohne Hinweis gehört die Ecke
+  der Region), `test/features/sandbox/notice_overlay_test.dart` (Terminal
+  behält Rechteck, kein `TerminalResize` bei Kommen und Gehen; Schließen
+  bleibt über neuen Status und neuen Bildschirm auf derselben Datei, nur der
+  eine von zwei Befunden geht, anderer Endpunkt bringt ihn zurück, Datei
+  trägt Fingerabdruck, nicht den Satz; Fokus bleibt im Terminal),
+  `test/features/intercept/queue_notices_test.dart` (erste Zeile bleibt
+  stehen, Karte rechtsbündig unter dem Queue-Kopf, Schließen in der Karte,
+  Fokus bleibt). Angepasst: `attention_notice_test` (schwebt oben rechts,
+  Leiste und Queue beginnen an der Kopfzeile und bleiben nach dem Schließen
+  stehen; Kontrast auf `bg2`; Tastatur), `return_banner_test` (Schließen ist
+  `HIconButton`).
+- **Mutationsbeweise** (je Datei byte-gleich zurückgestellt, mit `cmp`
+  geprüft): Sandbox-Befunde wieder als Band über dem Terminal: zwei rot
+  (Terminalgröße, Schließen). Shell-Hinweise wieder in der Spalte: drei rot.
+  Queue-Streifen wieder über der Liste: rot. Fingerabdruck nur aus dem Code:
+  rot (anderer Endpunkt kommt nicht wieder). Filter der geschlossenen Befunde
+  entfernt: rot. Ein Hinweis, der bei Ankunft den Fokus weiterreicht: drei
+  rot (Layer, Sandbox, Queue). Schließen ohne Schreiben in die Datei: rot.
+- **Goldens neu (16, nur die veränderten):**
+  `attention_notice_banner.{dark,light}-{de,en}` (Rahmen jetzt die Karte in
+  436 × 260), `intercept_diagnostic_tls_{dark,light}`,
+  `sandbox_header_failed_{dark,light}`,
+  `states_sandbox_failed.{dark,light}-{de,en}`,
+  `states_tls_rejected.{dark,light}-{de,en}`.
+- **Review-Runde (Sonnet).** Übernommen: (1, major) Dauerhaft geschlossen
+  wird nur, was steht. Befunde der Schwere Fehler oder blockierend im Status
+  sind Fehlschläge der letzten Operation und werden nur im Speicher
+  geschlossen (`features/sandbox/providers/closed_failures.dart`); das
+  Gedächtnis endet, sobald die Sandbox eine neue Operation beginnt (Übergang
+  nach `starting`/`stopping`) oder der Befund nicht mehr im Status steht. Ein
+  fehlgeschlagener Ordnerdialog (`UI_003`) gilt nur als genau dieses Objekt
+  geschlossen; der nächste Fehlschlag ist ein neues. Nichts davon landet in
+  `ui-state.json`. (2) Queue-Test auch mit einer Bitte des Agenten. (3) Die
+  Fokustests stellen den Fokus vorher auf eine Zeile bzw. das Terminal und
+  prüfen, dass er steht. (4) In `HNoticeCard` und `HDiagnosticCard` weicht nur
+  noch die erste Zeile (Abzeichen bzw. `header`) dem Schließen aus
+  (`noticeDismissClearance` = 4 + 28 + 8 px: Knopf mit Fokusring 32 px plus
+  4 px Abstand); Titel und Text darunter laufen bis an die Innenkante.
+  `HNoticeCard` hat dafür `header` und `child`. (5) Solange das
+  Einstellungsblatt offen ist, zeigt die Shell keine Hinweise; sie bleiben im
+  Provider und erscheinen nach dem Schließen wieder. Abgefragt wird
+  `_settingsOpen` der Shell und nicht `HLayerScope.holdsFocus()`, weil diese
+  statische Abfrage keinen Neubau auslöst.
+- **Weitere Mutationsbeweise** (byte-gleich zurückgestellt): Klassifizierung
+  „alles steht" (`isOperationFailure` immer false): rot (zweiter Fehlstart
+  bleibt unsichtbar, Datei bekommt einen Eintrag). Kein Zurücksetzen bei
+  neuer Operation: rot. Hinweise auch bei offenem Blatt: rot. Erste Zeile
+  ohne Abstand zum Schließen: rot.
+- **Review-Runde (Codex).** Übernommen: (1) Die Karten der Queue stehen
+  unten rechts in der Spalte (`HNoticeLayer.bottom`); die obersten Zeilen
+  mit ihrem Blockieren bleiben greifbar, ein Zeiger auf der ersten Zeile
+  trifft die Zeile. Damit verdecken sie auch die Pille „neue Anfragen" oben
+  nicht mehr. Den Abstand zwischen Bitten und Befunden setzt der `QueuePane`
+  (`_StripGap`), nur wenn beide stehen. (2) Geschlossene Fehlschläge
+  vergisst die Sandbox, sobald eine neue Operation gerufen wird (Plan,
+  Start, Stopp, Ordnerwahl: `closedFailuresProvider.newOperation()` in
+  `_apply`), nicht erst bei `starting`; eine Abfrage des Status behält sie.
+  Ein Start, der vor `starting` abgelehnt wird, zeigt seinen Fehlschlag beim
+  nächsten Versuch wieder. (3) Der Abstand der Shell-Hinweise nach oben ist
+  `HPaneHeader.rowHeight(context)` plus 8 px, also 96 + 8 bei doppelter
+  Schrift. (4) Über dem Terminal werden die Befunde höchstens so hoch, dass
+  unten zwei Zeilen des Emulators und sein Innenabstand frei bleiben
+  (`sandboxTerminalFreeRows`, aus Aufteilung und Mindesthöhen errechnet wie
+  in `HResizablePanes`), auch wenn das Terminal auf 160 px gezogen ist.
+  (5) Die Shell-Hinweise warten, solange irgendeine Ebene offen ist:
+  `HLayerScope.openLayers` (neu, `ValueListenable<int>`, nach dem Frame
+  aktualisiert) zählt Blätter, Modals und Menüs, darunter das Regelblatt
+  einer Bitte.
+- **Mutationsbeweise dieser Runde** (byte-gleich zurückgestellt): Karten der
+  Queue wieder oben: rot. Kein `newOperation()`: rot. Fester Abstand 56 px:
+  rot (doppelte Schrift). Keine Grenze über dem Terminal: rot. Nur
+  `_settingsOpen` statt offener Ebenen: rot (Regelblatt).
+- **Hinweis zur Prüfung.** Ein Zwischenstand ließ `DiagnosticStrip`
+  `agentAsksProvider` beobachten; der Streifentest ohne Fake-Client öffnete
+  darauf einen Abonnement-Versuch gegen den echten Daemon-Socket, der
+  scheiterte. Zurückgenommen, der Abstand steht jetzt im `QueuePane`.
+- **Offen.** Keins aus diesem Issue.

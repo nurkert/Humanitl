@@ -9,6 +9,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,8 +17,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/domain/domain.dart';
 import '../../core/ipc/daemon_client.dart';
 import '../../core/time/now.dart';
+import '../../core/ui_state/dismissed_findings.dart';
 import '../../core/ui/fix_control.dart';
 import '../../core/ui/h_diagnostic_card.dart';
+import '../../core/ui/h_notice_layer.dart';
 import '../../core/ui/diagnostic_severity.dart';
 import '../../core/ui/h_resizable_panes.dart';
 import '../../core/ui/pane_split.dart';
@@ -25,6 +28,7 @@ import '../../core/ui/terminal_placement.dart';
 import '../../core/ui/ui.dart';
 import '../../core/ui/work_dir_picker.dart';
 import '../../l10n/l10n.dart';
+import 'providers/closed_failures.dart';
 import 'providers/sandbox_status_provider.dart';
 import 'sandbox_text.dart';
 import 'widgets/argv_sheet.dart';
@@ -158,41 +162,46 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
                     SandboxHeader(status: status, onAskStop: _askStop),
-                    // Befunde stehen oben, wo sie entstanden sind, und sie
-                    // nehmen dem Bildschirm nicht den Boden weg: Über einem
-                    // Drittel der Höhe rollt der Block in sich. Ohne diese
-                    // Grenze schob schon der dritte Befund den Mounts-Reiter
-                    // aus dem Fenster — 32 px Inhalt, den niemand sehen
-                    // konnte (HUM-068).
-                    ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxHeight: constraints.maxHeight * _diagnosticsShare,
-                      ),
-                      child: SingleChildScrollView(
-                        child: _Diagnostics(status: status),
-                      ),
-                    ),
+                    // Befunde schweben oben rechts über Terminal und
+                    // Reitern, direkt unter dem Kopf mit dem Startknopf, an
+                    // dem sie entstanden sind (HUM-302). Sie nehmen dem
+                    // Terminal keine Zeile: Als Band über ihm ließen sie es
+                    // bei jedem Kommen und Gehen schrumpfen und wachsen, und
+                    // die Oberfläche des Agenten darin brach neu um. Über
+                    // einem Drittel der Höhe rollen sie in sich (HUM-068).
                     Expanded(
-                      child: switch (snapshot) {
-                        AsyncError(:final Object error) => _CannotRead(
-                          error: error,
+                      child: HNoticeLayer(
+                        maxHeight: constraints.maxHeight * _diagnosticsShare,
+                        // Und nie über die unteren Zeilen des Terminals: Dort
+                        // tippt der Mensch, auch wenn das Terminal auf seine
+                        // kleinste Höhe gezogen ist (HUM-302, Review).
+                        maxHeightFor: (double region) => _noticeRoomAbove(
+                          context,
+                          region,
+                          ref.read(paneSplitProvider(sandboxPaneSplit)),
                         ),
-                        _ => HWait(
-                          loading: snapshot.isLoading && !snapshot.hasValue,
-                          skeleton: Padding(
-                            padding: EdgeInsets.all(tokens.spacing.x3),
-                            child: HSkeleton(
-                              rows: sandboxSkeletonRows,
-                              rowHeight: tokens.sizes.rowHistory,
+                        notices: _Diagnostics(status: status),
+                        child: switch (snapshot) {
+                          AsyncError(:final Object error) => _CannotRead(
+                            error: error,
+                          ),
+                          _ => HWait(
+                            loading: snapshot.isLoading && !snapshot.hasValue,
+                            skeleton: Padding(
+                              padding: EdgeInsets.all(tokens.spacing.x3),
+                              child: HSkeleton(
+                                rows: sandboxSkeletonRows,
+                                rowHeight: tokens.sizes.rowHistory,
+                              ),
+                            ),
+                            child: _Body(
+                              status: status,
+                              onShowArgv: _showArgv,
+                              cameBack: _terminalCameBack,
                             ),
                           ),
-                          child: _Body(
-                            status: status,
-                            onShowArgv: _showArgv,
-                            cameBack: _terminalCameBack,
-                          ),
-                        ),
-                      },
+                        },
+                      ),
                     ),
                     const HHairline(),
                     SandboxStatusBar(status: status, onShowArgv: _showArgv),
@@ -346,16 +355,54 @@ class _Details extends ConsumerWidget {
   }
 }
 
-/// Every finding of the last operation, newest last, right under the header.
+/// Wie viele Zeilen des Terminals unten frei bleiben, wenn Befunde darüber
+/// schweben: die Eingabezeile und die eine darüber (HUM-302, Review).
+const int sandboxTerminalFreeRows = 2;
+
+/// Die Zeilenhöhe des Emulators: `TerminalStyle` rechnet die Schriftgröße
+/// mal 1,2.
+const double _terminalLineFactor = 1.2;
+
+/// Wie hoch die Befunde über dem Terminal höchstens werden: die Höhe, die
+/// das Terminal in einer Region von [region] Pixeln bei [ratios] bekommt,
+/// abzüglich der [sandboxTerminalFreeRows] unteren Zeilen, des Innenabstands
+/// des Emulators und des Abstands der Hinweise zur Oberkante.
+double _noticeRoomAbove(
+  BuildContext context,
+  double region,
+  List<double> ratios,
+) {
+  final HTokens tokens = HTheme.of(context);
+  final double terminal = snapPaneWidths(
+    resolvePaneWidths(
+      math.max(0, region - HSize.border),
+      ratios,
+      const <double>[sandboxTerminalMinHeight, sandboxDetailsMinHeight],
+    ),
+  ).first;
+  final double row = MediaQuery.textScalerOf(context)
+      .scale((tokens.typography.mono13.fontSize ?? 13) * _terminalLineFactor);
+  return terminal -
+      sandboxTerminalFreeRows * row -
+      tokens.spacing.x2 -
+      tokens.spacing.x2;
+}
+
+/// Wie viel Höhe die Befunde höchstens einnehmen, bevor sie in sich rollen.
+///
+/// Ein Drittel: genug für zwei Karten nebeneinanderliegender Ursachen, wenig
+/// genug, dass vom Terminal darunter das meiste sichtbar bleibt.
+const double _diagnosticsShare = 1 / 3;
+
+/// Every finding of the last operation, newest last, floating at the top
+/// right right under the header (HUM-302).
 ///
 /// A finding is anchored where the action was: the start button is above it,
 /// and the reason it did not start stands directly below (`docs/UX.md` 4.4).
-/// Wie viel Höhe die Befunde höchstens einnehmen.
-///
-/// Ein Drittel: genug für zwei Karten nebeneinanderliegender Ursachen, wenig
-/// genug, dass der Reiter darunter noch ein Reiter ist.
-const double _diagnosticsShare = 1 / 3;
-
+/// Each card closes on its own. A finding that stands stays closed while its
+/// code and cause stay the same (`dismissedFindingsProvider`); a failure of
+/// the last operation and a failed folder dialog stay closed only until the
+/// next operation (`closedFailuresProvider`).
 class _Diagnostics extends ConsumerWidget {
   const _Diagnostics({required this.status});
 
@@ -367,8 +414,8 @@ class _Diagnostics extends ConsumerWidget {
     // Daemons (`UI_003`, HUM-282): Der Knopf im Kopf hat dann nichts getan,
     // und ohne Karte wüsste niemand, warum und wie es anders geht. Nur
     // solange der Ordner wählbar ist: Läuft eine Sitzung, etwa über
-    // `humanitl run`, ist der Ausweg schon genommen, und eine Karte, die
-    // sich nicht wegklicken lässt, stünde nur im Weg.
+    // `humanitl run`, ist der Ausweg schon genommen, und die Karte stünde
+    // nur im Weg.
     final bool locked = status.isUp || status.isBusy;
     final Diagnostic? dialogFailure = locked
         ? null
@@ -377,7 +424,29 @@ class _Diagnostics extends ConsumerWidget {
       ...status.diagnostics,
       ?dialogFailure,
     ];
-    if (diagnostics.isEmpty) {
+    // Zwei Arten zu schließen (HUM-302, Review). Ein Befund, der steht,
+    // ist für seinen Gegenstand geschlossen, nicht für die eine Antwort:
+    // `LLM_006` kommt mit jeder Abfrage des Status wieder, solange der
+    // Endpunkt derselbe ist. Ein Fehlschlag der letzten Operation und ein
+    // Ordnerdialog, der nicht aufging, sind Ereignisse: geschlossen bis zur
+    // nächsten Operation, damit ein Start, der wieder scheitert, das sagt.
+    ref.watch(dismissedFindingsProvider);
+    ref.watch(closedFailuresProvider);
+    final DismissedFindings standing = ref.read(
+      dismissedFindingsProvider.notifier,
+    );
+    final ClosedFailures events = ref.read(closedFailuresProvider.notifier);
+    bool hidden(Diagnostic diagnostic) => identical(diagnostic, dialogFailure)
+        ? events.coversDialog(diagnostic)
+        : isOperationFailure(diagnostic)
+        ? events.coversFailure(diagnostic)
+        : standing.covers(diagnostic);
+    void close(Diagnostic diagnostic) => identical(diagnostic, dialogFailure)
+        ? events.closeDialog(diagnostic)
+        : isOperationFailure(diagnostic)
+        ? events.closeFailure(diagnostic)
+        : standing.dismiss(diagnostic);
+    if (diagnostics.every(hidden)) {
       return const SizedBox.shrink();
     }
     final HTokens tokens = HTheme.of(context);
@@ -396,55 +465,58 @@ class _Diagnostics extends ConsumerWidget {
               ),
             ),
           );
-    return Padding(
-      padding: EdgeInsets.all(tokens.spacing.x3),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          // Der Schlüssel trägt den Platz **und** den Code: Zwei Befunde
-          // desselben Codes in einer Sitzung sind kein Sonderfall — zwei
-          // verbotene Mounts, zwei Symlinks aus dem Projekt heraus —, und ein
-          // Schlüssel aus dem Code allein ließ den Bildschirm mit „Duplicate
-          // keys" abstürzen (gefunden beim Bau des Deckels, HUM-068).
-          for (final (int place, Diagnostic diagnostic) in diagnostics.indexed)
+    return HNoticeColumn(
+      children: <Widget>[
+        // Der Schlüssel trägt den Platz **und** den Code: Zwei Befunde
+        // desselben Codes in einer Sitzung sind kein Sonderfall — zwei
+        // verbotene Mounts, zwei Symlinks aus dem Projekt heraus —, und ein
+        // Schlüssel aus dem Code allein ließ den Bildschirm mit „Duplicate
+        // keys" abstürzen (gefunden beim Bau des Deckels, HUM-068). Der Platz
+        // ist der in der ganzen Liste, auch wenn davor einer geschlossen ist.
+        for (final (int place, Diagnostic diagnostic) in diagnostics.indexed)
+          if (!hidden(diagnostic))
             if (DiagnosticL10n.resolve(diagnostic, l10n)
                 case final DiagnosticText text)
               SandboxArrive(
                 key: ValueKey<String>('diagnostic-$place-${diagnostic.code}'),
-                child: Padding(
-                  padding: EdgeInsets.only(bottom: tokens.spacing.x2),
-                  child: HDiagnosticCard(
-                    code: diagnostic.code,
-                    severityLabel: severityLabel(l10n, diagnostic.severity),
-                    color: severityColor(tokens, diagnostic.severity),
-                    title: text.title,
-                    // The daemon's own sentence. The application writes the
-                    // title, never the reason (`docs/UX.md` 4.4). A folder
-                    // dialog that failed is built by this client: its reason
-                    // is the translated sentence with the way around, and
-                    // the platform's raw text stands under it, as on the
-                    // setup card (HUM-282).
-                    why: identical(diagnostic, dialogFailure)
-                        ? text.why
-                        : text.cause,
-                    detail: identical(diagnostic, dialogFailure)
-                        ? diagnostic.why
+                child: HDiagnosticCard(
+                  code: diagnostic.code,
+                  severityLabel: severityLabel(l10n, diagnostic.severity),
+                  color: severityColor(tokens, diagnostic.severity),
+                  title: text.title,
+                  // The daemon's own sentence. The application writes the
+                  // title, never the reason (`docs/UX.md` 4.4). A folder
+                  // dialog that failed is built by this client: its reason
+                  // is the translated sentence with the way around, and the
+                  // platform's raw text stands under it, as on the setup card
+                  // (HUM-282).
+                  why: identical(diagnostic, dialogFailure)
+                      ? text.why
+                      : text.cause,
+                  detail: identical(diagnostic, dialogFailure)
+                      ? diagnostic.why
+                      : null,
+                  docsUrl: diagnostic.docsUrl,
+                  fix: FixControl(
+                    fix: diagnostic.fix,
+                    onChooseFolder: chooseFolder,
+                    chooseFolderLocked: locked
+                        ? l10n.sandboxWorkDirLocked
                         : null,
-                    docsUrl: diagnostic.docsUrl,
-                    fix: FixControl(
-                      fix: diagnostic.fix,
-                      onChooseFolder: chooseFolder,
-                      chooseFolderLocked: locked
-                          ? l10n.sandboxWorkDirLocked
-                          : null,
-                      diagnosticCode: diagnostic.code,
+                    diagnosticCode: diagnostic.code,
+                  ),
+                  width: double.infinity,
+                  dense: true,
+                  dismiss: HNoticeDismiss(
+                    label: l10n.sandboxDiagnosticDismiss,
+                    buttonKey: ValueKey<String>(
+                      'sandbox-diagnostic-dismiss-$place-${diagnostic.code}',
                     ),
-                    width: double.infinity,
+                    onPressed: () => close(diagnostic),
                   ),
                 ),
               ),
-        ],
-      ),
+      ],
     );
   }
 }

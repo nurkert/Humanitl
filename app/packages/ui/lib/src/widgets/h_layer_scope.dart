@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 /// The focus scope of a layer above the work: a modal, a sheet, a menu
@@ -48,6 +49,25 @@ class HLayerScope extends StatefulWidget {
 
   /// Every open layer, oldest first.
   static final List<_HLayerScopeState> _open = <_HLayerScopeState>[];
+
+  static final ValueNotifier<int> _openCount = ValueNotifier<int>(0);
+
+  /// How many layers are open, for whoever must step back while one is:
+  /// the floating notices of the shell wait until no sheet, modal or menu
+  /// stands over the work (HUM-302).
+  ///
+  /// Updated after the frame in which a layer opened or closed, never during
+  /// it: a listener that rebuilds an ancestor must not do so while the tree
+  /// is being built or torn down.
+  static ValueListenable<int> get openLayers => _openCount;
+
+  static void _publishOpenCount() {
+    WidgetsBinding.instance
+      ..addPostFrameCallback((Duration _) {
+        _openCount.value = _open.length;
+      })
+      ..ensureVisualUpdate();
+  }
 
   /// Takes the keyboard from whoever holds it, now, because a layer is about
   /// to open.
@@ -141,6 +161,7 @@ class _HLayerScopeState extends State<HLayerScope> {
       }
     }
     HLayerScope._open.add(this);
+    HLayerScope._publishOpenCount();
     _scope.addListener(_focusChanged);
     // After the frame that builds the scope: before it is attached a request
     // goes nowhere, and `autofocus` yields to whoever holds the focus. The
@@ -172,6 +193,7 @@ class _HLayerScopeState extends State<HLayerScope> {
     _scope.removeListener(_focusChanged);
     final int index = HLayerScope._open.indexOf(this);
     HLayerScope._open.remove(this);
+    HLayerScope._publishOpenCount();
     // A newer layer opened from inside this one inherits the holder this
     // one would have given the keyboard back to.
     for (final _HLayerScopeState layer in HLayerScope._open) {

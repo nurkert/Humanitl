@@ -1355,5 +1355,6 @@
   "interceptEmptyGoToTerminal": "Zum Terminal",
   "shellPaletteTerminalZoomIn": "Terminaltext größer",
   "shellPaletteTerminalZoomOut": "Terminaltext kleiner",
-  "shellPaletteTerminalZoomReset": "Terminaltext in Standardgröße"
+  "shellPaletteTerminalZoomReset": "Terminaltext in Standardgröße",
+  "sandboxDiagnosticDismiss": "Ausblenden"
 }

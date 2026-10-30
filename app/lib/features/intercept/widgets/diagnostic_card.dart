@@ -48,6 +48,7 @@ import '../../../core/ipc/flow_reveal.dart';
 import '../../../core/ui/diagnostic_severity.dart';
 import '../../../core/ui/fix_control.dart';
 import '../../../core/ui/h_diagnostic_card.dart';
+import '../../../core/ui/h_notice_layer.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/diagnostics.dart';
@@ -62,6 +63,9 @@ import '../providers/diagnostics.dart';
 const double interceptStripScrollbarWidth = 4;
 
 /// Die Befunde dieser Sitzung, über der Warteschlange.
+///
+/// Seit HUM-302 schweben sie über ihr, unten rechts in der Spalte
+/// (`HNoticeLayer` im `QueuePane`), und schieben keine Zeile mehr nach unten.
 ///
 /// Zeichnet gar nichts, solange es keinen gibt: Ein leerer Streifen nähme der
 /// Warteschlange eine Zeile für etwas, das nicht da ist.
@@ -154,16 +158,28 @@ class DiagnosticStripState extends ConsumerState<DiagnosticStrip> {
         children: <Widget>[
           if (dropped > 0)
             Padding(
-              padding: EdgeInsets.fromLTRB(
-                tokens.spacing.x3,
-                tokens.spacing.x2,
-                tokens.spacing.x3,
-                0,
+              padding: EdgeInsets.only(
+                bottom: found.isEmpty ? 0 : tokens.spacing.x2,
               ),
-              child: Text(
-                l10n.interceptDiagnosticDropped(dropped),
-                key: const Key('intercept-diagnostic-dropped'),
-                style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+              // Eine eigene Fläche: Der Streifen schwebt über der Liste
+              // (HUM-302), und Text ohne Grund stünde auf den Zeilen.
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: tokens.colors.bg2,
+                  borderRadius: BorderRadius.circular(tokens.radii.card),
+                  border: Border.all(color: tokens.colors.lineStrong),
+                ),
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: tokens.spacing.x3,
+                    vertical: tokens.spacing.x2,
+                  ),
+                  child: Text(
+                    l10n.interceptDiagnosticDropped(dropped),
+                    key: const Key('intercept-diagnostic-dropped'),
+                    style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+                  ),
+                ),
               ),
             ),
           // `ListView.builder` und nicht `Column` in einem
@@ -206,13 +222,18 @@ class DiagnosticStripState extends ConsumerState<DiagnosticStrip> {
                     itemCount: found.length,
                     itemBuilder: (BuildContext context, int index) {
                       final SessionDiagnostic entry = found[index];
-                      return DiagnosticCard(
-                        key: ValueKey<String>(
-                          'intercept-diagnostic:${entry.id}',
+                      return Padding(
+                        padding: EdgeInsets.only(
+                          top: index == 0 ? 0 : tokens.spacing.x2,
                         ),
-                        entry: entry,
-                        animate: _fresh.contains(entry.id),
-                        onShown: () => _fresh.remove(entry.id),
+                        child: DiagnosticCard(
+                          key: ValueKey<String>(
+                            'intercept-diagnostic:${entry.id}',
+                          ),
+                          entry: entry,
+                          animate: _fresh.contains(entry.id),
+                          onShown: () => _fresh.remove(entry.id),
+                        ),
                       );
                     },
                   ),
@@ -251,39 +272,31 @@ class DiagnosticCard extends ConsumerWidget {
     final Diagnostic diagnostic = entry.diagnostic;
     final FixAction? fix = diagnostic.fix;
     final FlowId? flowId = entry.flowId;
+    // Das Schließen steht in der Karte, oben rechts, und nicht neben ihr
+    // (HUM-302): Neben ihr nahm es der Karte eine Spalte, die über der
+    // Warteschlange wie leerer Platz aussah.
     return _DiagnosticArrival(
       animate: animate,
       onShown: onShown,
-      child: Padding(
-        padding: EdgeInsets.all(tokens.spacing.x2),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            // `Expanded` statt der Vorgabebreite der Karte: Die Warteschlange
-            // ist ab `HSize.paneMinQueue` schmal, und eine feste Breite von
-            // 560 px liefe dort über den Rand.
-            Expanded(
-              child: HDiagnosticCard(
-                code: diagnostic.code,
-                severityLabel: severityLabel(l10n, diagnostic.severity),
-                color: severityColor(tokens, diagnostic.severity),
-                title: l10n.interceptDiagnosticTitle,
-                why: diagnostic.why,
-                // Kein leerer Slot: Ein Befund ohne Vorschlag und ohne Flow
-                // bekommt keine Zeile, die aussieht, als fehlte dort etwas.
-                fix: _actions(l10n, ref, entry.id, fix, flowId, tokens),
-                docsUrl: diagnostic.docsUrl,
-              ),
-            ),
-            SizedBox(width: tokens.spacing.x2),
-            HIconButton(
-              key: ValueKey<String>('intercept-diagnostic-dismiss-${entry.id}'),
-              glyph: HGlyph.close,
-              semanticsLabel: l10n.interceptDiagnosticDismiss,
-              onPressed: () =>
-                  ref.read(diagnosticsProvider.notifier).dismiss(entry.id),
-            ),
-          ],
+      child: HDiagnosticCard(
+        code: diagnostic.code,
+        severityLabel: severityLabel(l10n, diagnostic.severity),
+        color: severityColor(tokens, diagnostic.severity),
+        title: l10n.interceptDiagnosticTitle,
+        why: diagnostic.why,
+        // Kein leerer Slot: Ein Befund ohne Vorschlag und ohne Flow bekommt
+        // keine Zeile, die aussieht, als fehlte dort etwas.
+        fix: _actions(l10n, ref, entry.id, fix, flowId, tokens),
+        docsUrl: diagnostic.docsUrl,
+        width: double.infinity,
+        dense: true,
+        dismiss: HNoticeDismiss(
+          label: l10n.interceptDiagnosticDismiss,
+          buttonKey: ValueKey<String>(
+            'intercept-diagnostic-dismiss-${entry.id}',
+          ),
+          onPressed: () =>
+              ref.read(diagnosticsProvider.notifier).dismiss(entry.id),
         ),
       ),
     );

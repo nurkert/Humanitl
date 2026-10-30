@@ -16,6 +16,8 @@ import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/config_providers.dart';
 import '../../../core/ipc/daemon_client.dart';
 
+import 'closed_failures.dart';
+
 part 'sandbox_status_provider.g.dart';
 
 /// How many log lines the screen keeps.
@@ -381,6 +383,12 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
         (quiet && sessionEvents != _sessionEvents) ||
         (poll != null && poll != _pollToken);
     final DaemonClient client = ref.read(daemonClientProvider);
+    // Eine Operation, kein Blick auf den Stand: Was ihre Vorgängerin an
+    // Fehlschlägen meldete und jemand geschlossen hat, gilt für sie nicht
+    // mehr (HUM-302).
+    if (call != SandboxCall.status && call != SandboxCall.isolationCheck) {
+      ref.read(closedFailuresProvider.notifier).newOperation();
+    }
     SandboxStatus current = state.value ?? const SandboxStatus();
     // A new operation starts without the findings of the last one: a
     // diagnostic that named the previous failure would otherwise keep the
