@@ -98,7 +98,8 @@ pub(crate) fn pending_blocks_start(sandbox: SandboxId) -> Diagnostic {
     Diagnostic::builder(codes::SANDBOX_030, Severity::Blocking)
         .why(format!(
             "the changes of the disposable sandbox {sandbox} still wait for apply or discard; \
-             a new disposable run would put them out of reach"
+             a new disposable run would put them out of reach, and a run that falls back to \
+             direct would write under them (only an explicit --direct leaves them waiting)"
         ))
         .fix(FixAction::CopyCommand(
             "humanitl sandbox changes".to_owned(),
@@ -106,11 +107,76 @@ pub(crate) fn pending_blocks_start(sandbox: SandboxId) -> Diagnostic {
         .build()
 }
 
+/// Wartende Änderungen sperren jeden Start, der nicht ausdrücklich `direct`
+/// ist (HUM-357): `disposable` würde sie unerreichbar machen, und `auto`
+/// könnte auf `direct` zurückfallen und dann unter ihnen schreiben.
+///
+/// # Errors
+///
+/// `SANDBOX_030` mit `humanitl sandbox changes` als Fix, wenn `pending` eine
+/// Sandbox nennt und `wanted` nicht `direct` ist.
+#[cfg(target_os = "linux")]
+pub(crate) fn pending_guard(
+    wanted: SandboxMode,
+    pending: Option<SandboxId>,
+) -> Result<(), Diagnostic> {
+    match pending {
+        Some(sandbox) if wanted != SandboxMode::Direct => Err(pending_blocks_start(sandbox)),
+        _ => Ok(()),
+    }
+}
+
+/// Was ein gescheiterter Wegwerf-Start war: davor oder nachdem die Sandbox
+/// lief (HUM-357).
+#[derive(Debug)]
+pub(crate) enum SetupFailure {
+    /// Bevor bubblewrap startete; nichts lief.
+    Before(Diagnostic),
+    /// Die Sandbox lief schon oder es ist nicht sicher, dass sie nicht lief.
+    /// Ohne Overlay (macOS) gibt es nur [`SetupFailure::Before`].
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    After(Diagnostic),
+}
+
+/// Ob ein gescheiterter Wegwerf-Start auf `direct` zurückfällt (HUM-357):
+/// nur für die Vorgabe `auto`, nur mit `SANDBOX_030` und nur, bevor die
+/// Sandbox lief. Dann ist das Ergebnis der Hinweis `SANDBOX_033` mit dem
+/// wirklichen Grund; sonst der Befund selbst.
+///
+/// # Errors
+///
+/// Der Befund, wenn nicht zurückgefallen wird.
+pub(crate) fn fallback_after(
+    wanted: SandboxMode,
+    failure: SetupFailure,
+) -> Result<Diagnostic, Diagnostic> {
+    match failure {
+        SetupFailure::Before(diagnostic)
+            if wanted == SandboxMode::Auto && diagnostic.code == codes::SANDBOX_030 =>
+        {
+            Ok(humanitl_sandbox::disposable::fallback_notice(&diagnostic))
+        }
+        SetupFailure::Before(diagnostic) | SetupFailure::After(diagnostic) => Err(diagnostic),
+    }
+}
+
+/// Der Ausgang eines Wegwerf-Laufs, der nichts geändert hat (HUM-357).
+#[cfg(target_os = "linux")]
+pub(crate) const NO_CHANGES: &str = "no_changes";
+
+/// Ob eine Liste nichts zu entscheiden lässt: keine Änderung und nichts
+/// abgeschnitten (HUM-357). Eine abgeschnittene leere Liste ist kein „nichts".
+#[cfg(target_os = "linux")]
+#[must_use]
+pub(crate) fn nothing_to_decide(changes: &v1::DisposableChanges) -> bool {
+    changes.changes.is_empty() && !changes.truncated
+}
+
 /// Liest `Start.sandbox_mode`; leer heißt: die Konfiguration.
 ///
 /// # Errors
 ///
-/// `CONFIG_003` für ein anderes Wort als `direct` oder `disposable`.
+/// `CONFIG_003` für ein anderes Wort als `auto`, `direct` oder `disposable`.
 pub(crate) fn parse_mode(text: &str) -> Result<Option<SandboxMode>, Diagnostic> {
     if text.trim().is_empty() {
         return Ok(None);
@@ -118,7 +184,7 @@ pub(crate) fn parse_mode(text: &str) -> Result<Option<SandboxMode>, Diagnostic> 
     SandboxMode::parse(text).map(Some).ok_or_else(|| {
         Diagnostic::builder(codes::CONFIG_003, Severity::Blocking)
             .why(format!(
-                "sandbox_mode {:?} is neither \"direct\" nor \"disposable\"",
+                "sandbox_mode {:?} is none of \"auto\", \"direct\" and \"disposable\"",
                 text.trim()
             ))
             .fix(FixAction::ChangeSetting {
@@ -176,6 +242,11 @@ impl Waiting {
     /// Wie [`Waiting::scan`].
     pub(crate) fn changes(&self) -> Result<v1::DisposableChanges, Diagnostic> {
         let set = self.scan()?;
+        // Eine unvollständige Liste wartet immer auf den Menschen, auch leer
+        // (HUM-357); die Gründe stehen im Protokoll des Daemons.
+        for why in &set.incomplete {
+            tracing::warn!(sandbox = %self.sandbox, why = %why, "the list of a disposable layer is incomplete");
+        }
         let upper = open_root(&self.layer.upper())?;
         let lower = self.lower.as_fd();
         let changes = set
@@ -377,6 +448,7 @@ mod tests {
             Some(SandboxMode::Disposable)
         );
         assert_eq!(parse_mode("direct").unwrap(), Some(SandboxMode::Direct));
+        assert_eq!(parse_mode("auto").unwrap(), Some(SandboxMode::Auto));
         let err = parse_mode("throwaway").unwrap_err();
         assert_eq!(err.code.as_str(), "CONFIG_003");
     }
@@ -406,5 +478,68 @@ mod tests {
         );
         assert_eq!(wire.sha256.len(), 64);
         assert_eq!(wire.stripped_bits, 0o4000);
+    }
+
+    /// Wartende Änderungen sperren jeden Start außer einem ausdrücklichen
+    /// `direct`, auch die Vorgabe `auto`, bevor sie aufgelöst wird
+    /// (HUM-357, Review).
+    ///
+    /// Mutationsbeweis: die Sperre nur für `disposable`, rot.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn waiting_changes_refuse_every_start_but_an_explicit_direct() {
+        let pending = Some(humanitl_core::ids::SandboxId::new());
+        for wanted in [SandboxMode::Auto, SandboxMode::Disposable] {
+            let refused = pending_guard(wanted, pending).expect_err("changes wait");
+            assert_eq!(refused.code.as_str(), "SANDBOX_030", "{wanted:?}");
+        }
+        assert!(pending_guard(SandboxMode::Direct, pending).is_ok());
+        assert!(pending_guard(SandboxMode::Auto, None).is_ok());
+    }
+
+    /// Scheitert das Anlegen einer Wegwerf-Sandbox, bevor sie läuft, fällt
+    /// nur die Vorgabe `auto` mit `SANDBOX_030` auf `direct` zurück, mit dem
+    /// wirklichen Grund in `SANDBOX_033`; nach dem Start nie (HUM-357,
+    /// Review).
+    ///
+    /// Mutationsbeweis: jeder Fehler fällt zurück, oder keiner, je rot.
+    #[test]
+    fn only_the_default_falls_back_and_only_before_the_sandbox_ran() {
+        let refusal = || {
+            Diagnostic::builder(codes::SANDBOX_030, Severity::Blocking)
+                .why("the layer directory is not private")
+                .build()
+        };
+        let notice = fallback_after(SandboxMode::Auto, SetupFailure::Before(refusal()))
+            .expect("the default falls back");
+        assert_eq!(notice.code.as_str(), "SANDBOX_033");
+        assert!(notice.why.contains("not private"), "{}", notice.why);
+        assert!(fallback_after(SandboxMode::Disposable, SetupFailure::Before(refusal())).is_err());
+        assert!(fallback_after(SandboxMode::Auto, SetupFailure::After(refusal())).is_err());
+        let other = Diagnostic::builder(codes::SANDBOX_006, Severity::Blocking)
+            .why("another directory took its path")
+            .build();
+        assert!(fallback_after(SandboxMode::Auto, SetupFailure::Before(other)).is_err());
+    }
+
+    /// Eine leere, nicht abgeschnittene Liste lässt nichts zu entscheiden;
+    /// die Schicht geht dann ohne Warten (HUM-357, Review).
+    ///
+    /// Mutationsbeweis: `nothing_to_decide` immer falsch, rot.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_empty_layer_leaves_nothing_to_decide() {
+        let empty = v1::DisposableChanges::default();
+        assert!(nothing_to_decide(&empty));
+        let cut = v1::DisposableChanges {
+            truncated: true,
+            ..Default::default()
+        };
+        assert!(!nothing_to_decide(&cut));
+        let one = v1::DisposableChanges {
+            changes: vec![v1::DisposableChange::default()],
+            ..Default::default()
+        };
+        assert!(!nothing_to_decide(&one));
     }
 }

@@ -63,6 +63,9 @@ pub const FORM_KEYS: &[&str] = &[
     "tls.trust_system_store",
     // The agent of the next session (HUM-274); only ids of the registry.
     AGENT_ADAPTER_KEY,
+    // Where the agent's changes go (HUM-357): `auto`, `direct` or
+    // `disposable`. Closed to project profiles; here only the human writes.
+    "sandbox.mode",
 ];
 
 /// The key of the agent choice in the form (HUM-274).
@@ -546,6 +549,7 @@ mod tests {
             ("llm.models", r#"["qwen2.5-coder:14b"]"#),
             ("tls.trust_system_store", "false"),
             ("agent.adapter", "pi"),
+            ("sandbox.mode", "disposable"),
         ] {
             set(&paths, key, value).unwrap_or_else(|d| panic!("{key}: {}", d.why));
         }
@@ -570,6 +574,7 @@ mod tests {
         assert_eq!(values["llm"]["models"][0], "qwen2.5-coder:14b");
         assert_eq!(values["tls"]["trust_system_store"], false);
         assert_eq!(values["agent"]["adapter"], "pi");
+        assert_eq!(values["sandbox"]["mode"], "disposable");
         assert_eq!(
             snapshot.config_path,
             paths.config_path().display().to_string()
@@ -593,6 +598,8 @@ mod tests {
             // An id the registry does not know (HUM-274).
             ("agent.adapter", "aider"),
             ("agent.adapter", "Pi"),
+            // Only the three modes of the schema (HUM-357).
+            ("sandbox.mode", "throwaway"),
         ] {
             let refused = set(&paths, key, value).expect_err(key);
             assert_eq!(

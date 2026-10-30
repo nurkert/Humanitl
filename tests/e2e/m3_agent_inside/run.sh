@@ -858,9 +858,12 @@ chmod +x "$M3_PROJECT/agent_script.sh"
 # Befehl steht, genau wie beim Nutzer (HUM-067). `-v` schaltet die Zeilen des
 # Daemons frei — die Startzeile der Sandbox, die drei Garantien und die
 # Befunde; `stdout` bleibt dem Agenten vorbehalten.
+# `--direct` (HUM-357): Dieses Demo prüft, was ein direkter Lauf im
+# Projektordner hinterlässt; die Vorgabe `auto` wäre auf einem System mit
+# Overlay eine Wegwerf-Sandbox, deren Änderungen erst nach `apply` ankommen.
 (
     cd "$M3_PROJECT" &&
-        humanitl -v run -- /bin/sh /work/agent_script.sh \
+        humanitl -v run --direct -- /bin/sh /work/agent_script.sh \
             > "$M3_AGENT_OUT" 2> "$M3_AGENT_ERR"
 ) &
 M3_RUN_PID=$!
@@ -1268,7 +1271,7 @@ chmod +x "$M3_PROJECT/agent_script_llm_only.sh"
 m3_only_status=0
 (
     cd "$M3_PROJECT" &&
-        humanitl -v run --profile llm-only -- /bin/sh /work/agent_script_llm_only.sh \
+        humanitl -v run --direct --profile llm-only -- /bin/sh /work/agent_script_llm_only.sh \
             > "$M3_ONLY_OUT" 2> "$M3_ONLY_ERR"
 ) || m3_only_status=$?
 e2e_expect "the llm-only session exited cleanly" 0 "$m3_only_status"
@@ -1423,7 +1426,7 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
                 XDG_CONFIG_HOME="$E2E_XDG_CONFIG" \
                 HOME="$E2E_HOME" \
                 timeout "${M3_OPENCODE_SECONDS:-60}" \
-                "$E2E_CLI" run --ask none -- "$m3_opencode_path" models \
+                "$E2E_CLI" run --direct --ask none -- "$m3_opencode_path" models \
                 2> "$E2E_WORKDIR/out/opencode-models.log"
     ); then
         m3_oc_models_status=$?
@@ -1479,7 +1482,7 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
                 XDG_CONFIG_HOME="$E2E_XDG_CONFIG" \
                 HOME="$E2E_HOME" \
                 timeout "${M3_OPENCODE_SECONDS:-60}" \
-                "$E2E_CLI" -v run --profile llm-only --ask none -- \
+                "$E2E_CLI" -v run --direct --profile llm-only --ask none -- \
                 "$m3_opencode_path" run 'say the word humanitl' \
                 > "$M3_OC_OUT" 2> "$M3_OC_ERR"
     ) || m3_oc_status=$?
@@ -1607,7 +1610,7 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
                 XDG_CONFIG_HOME="$E2E_XDG_CONFIG" \
                 HOME="$E2E_HOME" \
                 timeout "${M3_OPENCODE_SECONDS:-60}" \
-                "$E2E_CLI" -v run --profile llm-only-webfetch --ask none -- \
+                "$E2E_CLI" -v run --direct --profile llm-only-webfetch --ask none -- \
                 "$m3_opencode_path" run "humanitl-webfetch https://$m3_oc_fetch_host/page" \
                 > "$M3_OC_FETCH_OUT" 2> "$M3_OC_FETCH_ERR"
     ) || m3_oc_fetch_status=$?
@@ -1691,7 +1694,7 @@ if [ -n "$m3_opencode_path" ] && [ "$m3_opencode_wanted" != 0 ]; then
                 XDG_CONFIG_HOME="$E2E_XDG_CONFIG" \
                 HOME="$E2E_HOME" \
                 exec timeout -k 10 "${M3_OPENCODE_TUI_SECONDS:-120}" \
-                "$E2E_CLI" -v run --profile llm-only-webfetch --ask none -- "$m3_opencode_path" \
+                "$E2E_CLI" -v run --direct --profile llm-only-webfetch --ask none -- "$m3_opencode_path" \
                 > "$M3_OC_TUI_OUT" 2> "$M3_OC_TUI_ERR"
     ) &
     M3_RUN_PID=$!

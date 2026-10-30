@@ -111,7 +111,8 @@ pub async fn run(ctx: &Context, cmd: &SandboxCmd) -> Result<u8, Failure> {
             cmd,
             tests_dir,
             disposable,
-        } => start(ctx, cmd, tests_dir.as_deref(), *disposable).await,
+            direct,
+        } => start(ctx, cmd, tests_dir.as_deref(), *disposable, *direct).await,
         SandboxCmd::Check => check(ctx),
         SandboxCmd::Attach {
             read_only,
@@ -222,10 +223,10 @@ async fn start(
     command: &[OsString],
     tests_dir: Option<&Path>,
     disposable: bool,
+    direct: bool,
 ) -> Result<u8, Failure> {
     let resolved = ctx.config()?;
-    let disposable =
-        disposable || resolved.config.sandbox.mode == humanitl_config::SandboxMode::Disposable;
+    let disposable = throwaway_wanted(disposable, direct, resolved.config.sandbox.mode);
     // Ohne das Overlay von bubblewrap gibt es keine Wegwerf-Sandbox (HUM-350).
     #[cfg(not(target_os = "linux"))]
     if disposable {
@@ -295,6 +296,21 @@ async fn start(
         drop(throwaway);
     }
     ended
+}
+
+/// Ob `sandbox run` eine Wegwerf-Sandbox startet (HUM-357).
+///
+/// Die Flags gewinnen; ohne sie nur ein ausdrückliches `sandbox.mode =
+/// "disposable"`. Die Vorgabe `auto` heißt hier `direct`: Dieser Befehl hält
+/// keine Schicht über sein Ende hinaus, und eine Vorgabe, die alles verwirft,
+/// was der Lauf schreibt, nähme der Fluchtprüfung (`tests/escape`) und den
+/// Demos (`tests/e2e`) ihre Ergebnisdateien unter `/work`. Wer die Änderungen
+/// prüfen und übernehmen will, nimmt `humanitl run`.
+fn throwaway_wanted(disposable: bool, direct: bool, mode: humanitl_config::SandboxMode) -> bool {
+    if disposable || direct {
+        return disposable;
+    }
+    mode == humanitl_config::SandboxMode::Disposable
 }
 
 /// The layer of `sandbox run --disposable`; dropped, it is discarded.
@@ -1299,7 +1315,7 @@ mod tests {
 
     use super::{
         CHECK_COMMAND, RefusalNotes, agent_command, exit_code_of, placeholder, refusal_notes,
-        with_sandbox_view,
+        throwaway_wanted, with_sandbox_view,
     };
 
     /// „Nichts verweigert" steht nur, wenn die Sandbox gesagt hat, dass sie
@@ -1474,5 +1490,19 @@ mod tests {
         assert!(placeholder.dir.path().join("ca.crt").is_file());
         assert!(placeholder.dir.path().join("work").is_dir());
         assert!(placeholder.dir.path().join("ca-bundle.crt").is_file());
+    }
+
+    /// `sandbox run` keeps no layer, so the default `auto` is direct here;
+    /// only `--disposable` or an explicit `sandbox.mode = "disposable"` make
+    /// it a throwaway run, and `--direct` wins over the configuration
+    /// (HUM-357).
+    #[test]
+    fn sandbox_run_is_disposable_only_when_asked() {
+        use humanitl_config::SandboxMode;
+        assert!(!throwaway_wanted(false, false, SandboxMode::Auto));
+        assert!(!throwaway_wanted(false, false, SandboxMode::Direct));
+        assert!(throwaway_wanted(false, false, SandboxMode::Disposable));
+        assert!(throwaway_wanted(true, false, SandboxMode::Direct));
+        assert!(!throwaway_wanted(false, true, SandboxMode::Disposable));
     }
 }

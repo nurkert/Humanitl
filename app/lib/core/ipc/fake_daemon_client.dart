@@ -1149,6 +1149,7 @@ class FakeDaemonClient implements DaemonClient {
     for (final Diagnostic diagnostic in sandbox.diagnostics) {
       yield SandboxUpdate.diagnostic(diagnostic);
     }
+    sandbox = _withResolvedMode(sandbox);
     yield SandboxUpdate.status(sandbox);
   }
 
@@ -1174,6 +1175,7 @@ class FakeDaemonClient implements DaemonClient {
         workMode: sandbox.workMode,
       ),
     );
+    sandbox = _withResolvedMode(sandbox);
     yield SandboxUpdate.status(sandbox);
   }
 
@@ -3181,12 +3183,17 @@ class FakeDaemonClient implements DaemonClient {
     );
     client.pendingChanges = fakeDisposableChanges();
     client.disposableRunChanges = fakeDisposableChanges();
+    // Dieses System kann eine Wegwerf-Sandbox: Die Vorgabe `auto` wird zu
+    // `disposable`, wie der Daemon sie auf Linux mit bubblewrap 0.11 aufloest
+    // (HUM-357).
+    client.autoSandboxMode = SandboxMode.disposable;
+    client.sandbox = client._withResolvedMode(client.sandbox);
     return client;
   }
 
   /// `GetInfo` eines Daemons, der `sandbox.disposable` nennt.
   static final DaemonInfo disposableInfo = defaultInfo.copyWith(
-    protoMinor: 26,
+    protoMinor: 27,
     capabilities: <String>[
       ...defaultInfo.capabilities,
       DaemonInfo.disposableCapability,
@@ -3219,11 +3226,29 @@ class FakeDaemonClient implements DaemonClient {
   /// Ob der laufende Lauf ein Wegwerf-Lauf ist.
   bool _disposableRun = false;
 
+  /// Was dieses gespielte System aus `sandbox.mode = auto` macht (HUM-357).
+  SandboxMode autoSandboxMode = SandboxMode.direct;
+
+  /// Der Grund, wenn `auto` auf `direct` zurueckfaellt, sonst null.
+  Diagnostic? autoSandboxNotice;
+
+  /// Wie der Daemon: Jede Momentaufnahme nennt den aufgeloesten Modus, ein
+  /// ausdrueckliches `sandbox.mode` gilt wie geschrieben (HUM-357).
+  SandboxStatus _withResolvedMode(SandboxStatus status) {
+    final SandboxMode? explicit = configValues.sandboxMode;
+    return status.copyWith(
+      effectiveSandboxMode: explicit ?? autoSandboxMode,
+      sandboxModeNotice: explicit == null ? autoSandboxNotice : null,
+    );
+  }
+
   /// Wie der Daemon: Ein leeres `Start.sandbox_mode` heisst `sandbox.mode`
-  /// aus der Konfiguration.
+  /// aus der Konfiguration, und die Vorgabe `auto` heisst, was die
+  /// Momentaufnahme als aufgeloesten Modus nennt (HUM-357).
   bool _isDisposable(SandboxMode? mode) =>
       info.offersDisposable &&
-      (mode ?? configValues.sandboxMode) == SandboxMode.disposable;
+      (mode ?? configValues.sandboxMode ?? sandbox.effectiveSandboxMode) ==
+          SandboxMode.disposable;
 
   /// `SANDBOX_030`, wenn ein Wegwerf-Start auf wartende Aenderungen trifft,
   /// wie im Daemon (Voraussetzung 3, HUM-350).
@@ -4618,6 +4643,9 @@ SandboxStatus defaultSandbox_() => SandboxStatus(
     workDir: FakeDaemonClient.defaultWorkDir,
     workMode: WorkMode.rw,
   ),
+  // Wie der Rust-Fake: ohne Wegwerf-Sandbox ist jeder Start direkt, ohne
+  // Rueckfall und ohne Hinweis (HUM-357).
+  effectiveSandboxMode: SandboxMode.direct,
 );
 
 /// Was der Daemon meldet, wenn der Shim keinen Bericht geliefert hat.

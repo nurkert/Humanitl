@@ -171,7 +171,11 @@ impl Fixture {
                 ask_mode: String::new(),
                 cli_overrides: Vec::new(),
                 work_dir_source: None,
-                sandbox_mode: String::new(),
+                // Ausdrücklich direkt (HUM-357): Die Tests dieser Datei prüfen
+                // die Zusammenfassung eines direkten Laufs, und die Vorgabe
+                // `auto` wäre hier, mit bubblewrap 0.11 und dem
+                // Laufzeitverzeichnis unter `/dev/shm`, eine Wegwerf-Sandbox.
+                sandbox_mode: "direct".to_owned(),
             })),
         }
     }
@@ -1177,6 +1181,79 @@ fn outcome(events: &[v1::SandboxEvent]) -> Option<&v1::DisposableOutcome> {
         Some(v1::sandbox_event::Event::ChangesOutcome(outcome)) => Some(outcome),
         _ => None,
     })
+}
+
+/// Die Vorgabe `auto` über die RPC (HUM-357): Ein Start ohne Modus ist eine
+/// Wegwerf-Sandbox, wo bubblewrap `--overlay` kennt und das
+/// Laufzeitverzeichnis auf tmpfs liegt, und sonst ein direkter Lauf mit dem
+/// Hinweis `SANDBOX_033`. Beides wird gemessen, nie vorausgesetzt: Welcher
+/// Zweig gilt, sagt die Probe dieses Rechners.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_start_without_a_mode_is_disposable_where_the_system_allows_it() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    std::fs::write(fixture.work.join("readme.txt"), "before\n").expect("readme");
+    let supported = humanitl_sandbox::PlatformBackend::detect(fixture.paths.clone())
+        .is_ok_and(|backend| backend.version() >= humanitl_sandbox::MIN_OVERLAY_VERSION)
+        && humanitl_sandbox::disposable::require_tmpfs(&fixture.paths.runtime_dir().path).is_ok();
+    let service = fixture.service();
+    let mut start = fixture.start();
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.sandbox_mode = String::new();
+        inner.command = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "echo after > /work/readme.txt; exit 0".to_owned(),
+        ];
+    }
+    let seen = events_to_end(&service, start).await;
+    let readme = std::fs::read_to_string(fixture.work.join("readme.txt")).expect("readme");
+    if supported {
+        assert!(
+            disposable_changes(&seen).is_some(),
+            "the default is disposable here: {seen:?}"
+        );
+        assert_eq!(readme, "before\n", "the project is untouched");
+        assert!(!carries(&seen, "SANDBOX_033"), "{seen:?}");
+    } else {
+        assert!(
+            carries(&seen, "SANDBOX_033"),
+            "the fallback says so: {seen:?}"
+        );
+        assert_eq!(readme, "after\n", "the fallback runs direct");
+        assert!(disposable_changes(&seen).is_none());
+    }
+}
+
+/// Ein Wegwerf-Lauf ohne Änderungen lässt nichts warten (HUM-357, Review):
+/// keine Liste auf dem Strom, keine Schicht, und der nächste Start mit der
+/// Vorgabe wird nicht abgelehnt. Sonst lehnte mit `auto` als Vorgabe jeder
+/// zweite `humanitl run` ab, bis jemand verwirft.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_disposable_run_without_changes_leaves_nothing_waiting() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+    let mut start = fixture.start();
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.sandbox_mode = "disposable".to_owned();
+        inner.command = vec!["/bin/sh".to_owned(), "-c".to_owned(), "exit 0".to_owned()];
+    }
+    let seen = events_to_end(&service, start.clone()).await;
+    assert!(
+        disposable_changes(&seen).is_none(),
+        "a run without changes shows no list: {seen:?}"
+    );
+    assert!(!carries(&seen, "SANDBOX_030"), "{seen:?}");
+    let again = events_to_end(&service, start).await;
+    assert!(
+        !carries(&again, "SANDBOX_030"),
+        "nothing waits, so the next disposable start runs: {again:?}"
+    );
 }
 
 /// Die Wegwerf-Sandbox über die RPC (HUM-350): Der Agent schreibt, das

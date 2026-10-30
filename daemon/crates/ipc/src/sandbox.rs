@@ -1611,6 +1611,20 @@ impl Inner {
         let this = Arc::clone(self);
         let listed = tokio::task::spawn_blocking(move || {
             let changes = waiting.changes();
+            // Ein Lauf ohne Änderungen hinterlässt nichts zu entscheiden: Die
+            // Schicht geht sofort, die Aufzeichnung sagt `no_changes`, und
+            // der nächste Start mit der Vorgabe `auto` wartet auf nichts
+            // (HUM-357).
+            if let Ok(listed) = &changes
+                && crate::disposable::nothing_to_decide(listed)
+            {
+                tracing::info!(
+                    session = %this.session,
+                    sandbox = %waiting.sandbox,
+                    "a disposable sandbox ended without changes; its layer is gone"
+                );
+                return Err(this.drop_layer(waiting, crate::disposable::NO_CHANGES));
+            }
             tracing::info!(
                 session = %this.session,
                 sandbox = %waiting.sandbox,
@@ -1618,14 +1632,16 @@ impl Inner {
                 "the changes of a disposable sandbox wait for apply or discard"
             );
             *lock(&this.disposable) = Some(waiting);
-            changes
+            Ok(changes)
         })
         .await;
         let event = match listed {
-            Ok(Ok(changes)) => v1::SandboxEvent {
+            Ok(Ok(Ok(changes))) => v1::SandboxEvent {
                 event: Some(v1::sandbox_event::Event::Changes(changes)),
             },
-            Ok(Err(diagnostic)) => diagnostic_event(&diagnostic),
+            Ok(Ok(Err(diagnostic)) | Err(Some(diagnostic))) => diagnostic_event(&diagnostic),
+            // Nichts zu entscheiden und die Schicht ist weg: kein Panel.
+            Ok(Err(None)) => return,
             Err(error) => diagnostic_event(&joined_failed(&error)),
         };
         let _ = tx.send(event).await;
@@ -2333,70 +2349,134 @@ impl Inner {
         mode: Option<SandboxMode>,
         output: Option<humanitl_sandbox::OutputSink>,
     ) -> Result<Launched, Diagnostic> {
-        let disposable = mode.unwrap_or(self.config().sandbox.mode) == SandboxMode::Disposable;
-        if disposable {
-            self.disposable_allowed()?;
-        }
         let prepared = self.prepare_keyed(plan, command, KeyNeed::Start)?;
-        if disposable {
-            return self.launch_disposable(&prepared, plan, output);
+        // Der Wunsch des Starts, sonst `sandbox.mode` aus derselben Aufnahme
+        // der Konfiguration, die den Plan gebaut hat (HUM-357).
+        let wanted = mode.unwrap_or(prepared.wanted_mode);
+        // Warten Änderungen eines früheren Laufs, entscheidet erst der Mensch
+        // über sie, und zwar vor der Auflösung: Auch eine Vorgabe, die
+        // zurückfiele, ließe den Agenten sonst direkt in einen Ordner
+        // schreiben, über dem Änderungen liegen, die niemand gesehen hat. Nur
+        // ein ausdrückliches `direct` geht.
+        self.pending_guard(wanted)?;
+        // Aufgelöst gegen das, was das System kann. Ein ausdrückliches
+        // `disposable`, das nicht geht, endet hier mit `SANDBOX_030`; die
+        // Vorgabe `auto` fällt auf `direct` zurück und sagt es mit
+        // `SANDBOX_033`.
+        let mut choice = self.mode_choice(wanted, &prepared)?;
+        if choice.is_disposable() {
+            match self.launch_disposable(&prepared, plan, output.clone()) {
+                Ok(launched) => return Ok(launched),
+                Err(failure) => match crate::disposable::fallback_after(wanted, failure) {
+                    Ok(notice) => {
+                        choice = humanitl_sandbox::ModeChoice {
+                            mode: SandboxMode::Direct,
+                            notice: Some(notice),
+                        }
+                    }
+                    Err(diagnostic) => return Err(diagnostic),
+                },
+            }
         }
-        self.launch_with(&prepared, plan, None, None, output)
-            .map(|(run, _)| run)
+        let mut launched = self
+            .launch_with(&prepared, plan, None, None, output)
+            .map(|(run, _)| run)?;
+        if let Some(notice) = choice.notice {
+            tracing::info!(why = %notice.why, "sandbox.mode auto runs direct");
+            launched.warnings.push(notice);
+        }
+        Ok(launched)
     }
 
-    /// Ob eine Wegwerf-Sandbox starten darf: keine Änderungen eines früheren
-    /// Laufs warten (HUM-350).
+    /// Wartende Änderungen sperren jeden Start außer einem ausdrücklichen
+    /// `direct` (HUM-357); siehe [`crate::disposable::pending_guard`].
     #[cfg(target_os = "linux")]
-    fn disposable_allowed(&self) -> Result<(), Diagnostic> {
-        match lock(&self.disposable).as_ref() {
-            Some(waiting) => Err(crate::disposable::pending_blocks_start(waiting.sandbox)),
-            None => Ok(()),
-        }
+    fn pending_guard(&self, wanted: SandboxMode) -> Result<(), Diagnostic> {
+        let pending = lock(&self.disposable)
+            .as_ref()
+            .map(|waiting| waiting.sandbox);
+        crate::disposable::pending_guard(wanted, pending)
     }
 
-    /// Ohne das Overlay von bubblewrap gibt es keine Wegwerf-Sandbox; der
-    /// Start endet vor allem anderen (HUM-350).
+    /// Ohne Overlay wartet nie eine Schicht.
+    #[cfg(not(target_os = "linux"))]
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    fn pending_guard(&self, _wanted: SandboxMode) -> Result<(), Diagnostic> {
+        Ok(())
+    }
+
+    /// Löst `wanted` für diesen Plan auf (HUM-357); siehe
+    /// [`humanitl_sandbox::resolve_mode`].
+    fn mode_choice(
+        &self,
+        wanted: SandboxMode,
+        prepared: &Prepared,
+    ) -> Result<humanitl_sandbox::ModeChoice, Diagnostic> {
+        humanitl_sandbox::resolve_mode(wanted, || self.disposable_support(prepared))
+    }
+
+    /// Ob dieser Plan eine Wegwerf-Sandbox bekommen kann: ein Sandbox-Backend
+    /// mit Overlay, das Projekt schreibbar, das Laufzeitverzeichnis auf tmpfs
+    /// (HUM-357).
+    #[cfg(target_os = "linux")]
+    fn disposable_support(&self, prepared: &Prepared) -> Result<(), Diagnostic> {
+        prepared.backend.disposable_support(
+            &prepared.profile,
+            &prepared.session,
+            &self.paths.runtime_dir().path,
+        )
+    }
+
+    /// Ohne Overlay gibt es keine Wegwerf-Sandbox (HUM-350).
     #[cfg(not(target_os = "linux"))]
     #[allow(clippy::unused_self)]
-    fn disposable_allowed(&self) -> Result<(), Diagnostic> {
+    fn disposable_support(&self, _prepared: &Prepared) -> Result<(), Diagnostic> {
         Err(humanitl_sandbox::disposable::unsupported())
     }
 
     /// Der Start einer Wegwerf-Sandbox: die obere Schicht vor dem Plan, damit
     /// der Plan sie nennt, und jeder Weg hinaus vor dem Handle räumt sie
     /// wieder weg (HUM-350).
+    ///
+    /// Ein Fehler trägt, ob die Sandbox schon lief
+    /// ([`crate::disposable::SetupFailure`]): Nur davor darf die Vorgabe
+    /// `auto` noch auf `direct` zurückfallen (HUM-357).
     #[cfg(target_os = "linux")]
     fn launch_disposable(
         &self,
         prepared: &Prepared,
         plan: &v1::sandbox_request::Plan,
         output: Option<humanitl_sandbox::OutputSink>,
-    ) -> Result<Launched, Diagnostic> {
+    ) -> Result<Launched, crate::disposable::SetupFailure> {
+        use crate::disposable::SetupFailure::{After, Before};
         // Der Projektordner, einmal geöffnet (C1): Grundlage, Diff und
         // Übernahme arbeiten an diesem Deskriptor, nie wieder am Pfad, und
         // das Backend muss genau diesen Ort einhängen.
-        let lower = humanitl_sandbox::worktree::open_root(&prepared.session.work_src)?;
-        let resolved = pinned_path(&lower)?;
+        let lower =
+            humanitl_sandbox::worktree::open_root(&prepared.session.work_src).map_err(Before)?;
+        let resolved = pinned_path(&lower).map_err(Before)?;
         if let Some(approved) = prepared.backend.approved_work_dir()
             && approved != resolved.as_path()
         {
-            return Err(moved_work_dir(approved, &resolved));
+            return Err(Before(moved_work_dir(approved, &resolved)));
         }
         // Die Grundlage vor dem Start (C3, O5): Was der Mensch ab jetzt
         // ändert, ist ein Konflikt, auch in den ersten Augenblicken des Laufs.
         let baseline = humanitl_sandbox::disposable::baseline_at(std::os::fd::AsFd::as_fd(&lower));
-        let layer = humanitl_sandbox::Layer::create(&self.paths.runtime_dir().path)?;
+        let layer =
+            humanitl_sandbox::Layer::create(&self.paths.runtime_dir().path).map_err(Before)?;
         let meta = lower
             .try_clone()
             .map(std::fs::File::from)
             .and_then(|file| file.metadata())
             .map_err(|err| {
-                Diagnostic::builder(codes::SANDBOX_030, Severity::Blocking)
-                    .why(format!(
-                        "the opened project folder cannot be inspected ({err})"
-                    ))
-                    .build()
+                Before(
+                    Diagnostic::builder(codes::SANDBOX_030, Severity::Blocking)
+                        .why(format!(
+                            "the opened project folder cannot be inspected ({err})"
+                        ))
+                        .build(),
+                )
             })?;
         let pin = PinnedWork {
             path: &resolved,
@@ -2405,8 +2485,13 @@ impl Inner {
         };
         match self.launch_with(prepared, plan, Some(layer.dirs()), Some(pin), output) {
             Ok((mut run, handle)) => {
+                // Ab hier läuft die Sandbox: Was jetzt scheitert, fällt nie
+                // mehr auf `direct` zurück.
                 let pinned = Pinned { lower, baseline };
-                run.disposable = Some(self.watch_layer(layer, handle, prepared, pinned)?);
+                run.disposable = Some(
+                    self.watch_layer(layer, handle, prepared, pinned)
+                        .map_err(After)?,
+                );
                 Ok(run)
             }
             Err(diagnostic) => {
@@ -2417,12 +2502,19 @@ impl Inner {
                         "the upper layer of a failed disposable start stays until the next daemon start"
                     );
                 }
-                Err(diagnostic)
+                // `SANDBOX_030` kommt aus `launch_with` nur aus der Prüfung
+                // des Plans, vor dem Start von bubblewrap; jeder andere
+                // Befund zählt, als liefe die Sandbox schon.
+                if diagnostic.code == codes::SANDBOX_030 {
+                    Err(Before(diagnostic))
+                } else {
+                    Err(After(diagnostic))
+                }
             }
         }
     }
 
-    /// Ohne Overlay: siehe [`Inner::disposable_allowed`].
+    /// Ohne Overlay gibt es keine Wegwerf-Sandbox (HUM-350).
     #[cfg(not(target_os = "linux"))]
     #[allow(clippy::unused_self)]
     fn launch_disposable(
@@ -2430,8 +2522,10 @@ impl Inner {
         _prepared: &Prepared,
         _plan: &v1::sandbox_request::Plan,
         _output: Option<humanitl_sandbox::OutputSink>,
-    ) -> Result<Launched, Diagnostic> {
-        Err(humanitl_sandbox::disposable::unsupported())
+    ) -> Result<Launched, crate::disposable::SetupFailure> {
+        Err(crate::disposable::SetupFailure::Before(
+            humanitl_sandbox::disposable::unsupported(),
+        ))
     }
 
     /// Die Grundlage und die Grenze einer gestarteten Wegwerf-Sandbox.
@@ -2623,10 +2717,10 @@ impl Inner {
 
     /// Die Schicht, die die Zeile einer Wegwerf-Sandbox zeigt (HUM-350): an
     /// der Stelle der Kennung, die erst der Start vergibt, steht `LAYER`.
-    fn overlay_preview(&self, config: &Config) -> Option<humanitl_sandbox::OverlayDirs> {
+    fn overlay_preview(&self, disposable: bool) -> Option<humanitl_sandbox::OverlayDirs> {
         // Ohne Overlay zeigt die Zeile keines; der Start lehnt ab (HUM-350).
         let possible = cfg!(target_os = "linux");
-        (possible && config.sandbox.mode == SandboxMode::Disposable).then(|| {
+        (possible && disposable).then(|| {
             let layer = self
                 .paths
                 .runtime_dir()
@@ -2894,6 +2988,12 @@ impl Inner {
                 .current()
                 .as_ref()
                 .map(crate::convert::diagnostic_to_proto),
+            sandbox_mode: prepared.plan_mode.mode.as_str().to_owned(),
+            sandbox_mode_notice: prepared
+                .plan_mode
+                .notice
+                .as_ref()
+                .map(crate::convert::diagnostic_to_proto),
         })
     }
 
@@ -2950,6 +3050,9 @@ impl Inner {
                 .current()
                 .as_ref()
                 .map(crate::convert::diagnostic_to_proto),
+            // Ohne Plan kein aufgelöster Modus (HUM-357).
+            sandbox_mode: String::new(),
+            sandbox_mode_notice: None,
         }
     }
 
@@ -3344,16 +3447,41 @@ impl Inner {
             None => backend,
         };
 
-        let overlay_preview = self.overlay_preview(&config);
-        Ok(Prepared {
+        Ok(self.with_plan_mode(Prepared {
             env_origin,
             adapter_files: session.files.iter().map(|file| file.dst.clone()).collect(),
             warnings,
             profile,
             session,
             backend,
-            overlay_preview,
-        })
+            overlay_preview: None,
+            wanted_mode: config.sandbox.mode,
+            plan_mode: humanitl_sandbox::ModeChoice {
+                mode: SandboxMode::Direct,
+                notice: None,
+            },
+        }))
+    }
+
+    /// Der Modus, den ein Start ohne eigenen Wunsch bekäme, und die Schicht,
+    /// die die Zeile dann zeigt (HUM-357). Ein ausdrückliches `disposable`,
+    /// das hier nicht geht, zeigt die Zeile weiter mit Overlay und nennt den
+    /// Befund, mit dem der Start ablehnen wird.
+    fn with_plan_mode(&self, mut prepared: Prepared) -> Prepared {
+        prepared.plan_mode = self
+            .mode_choice(prepared.wanted_mode, &prepared)
+            .unwrap_or_else(|refusal| humanitl_sandbox::ModeChoice {
+                mode: SandboxMode::Disposable,
+                notice: Some(refusal),
+            });
+        // Warten Änderungen, lehnt der nächste Start ohne `direct` ab; die
+        // Momentaufnahme sagt das, statt einen Modus ohne Hinweis zu nennen
+        // (HUM-357, Review).
+        if let Err(pending) = self.pending_guard(prepared.wanted_mode) {
+            prepared.plan_mode.notice = Some(pending);
+        }
+        prepared.overlay_preview = self.overlay_preview(prepared.plan_mode.is_disposable());
+        prepared
     }
 
     /// Was der Agent-Adapter zu dieser Sitzung beiträgt.
@@ -3821,10 +3949,16 @@ struct Prepared {
     adapter_files: BTreeSet<PathBuf>,
     /// Befunde der Vorbereitung, die den Start nicht aufhalten (HUM-280).
     warnings: Vec<Diagnostic>,
-    /// Die Schicht, die die Zeile zeigt, wenn `sandbox.mode` `disposable`
-    /// ist (HUM-350). Die echte entsteht erst beim Start und trägt dann
-    /// eine eigene Kennung an der Stelle von `LAYER`.
+    /// Die Schicht, die die Zeile zeigt, wenn der Plan eine Wegwerf-Sandbox
+    /// ist (HUM-350, HUM-357). Die echte entsteht erst beim Start und trägt
+    /// dann eine eigene Kennung an der Stelle von `LAYER`.
     overlay_preview: Option<humanitl_sandbox::OverlayDirs>,
+    /// `sandbox.mode` aus der Aufnahme der Konfiguration, die diesen Plan
+    /// gebaut hat (HUM-357).
+    wanted_mode: SandboxMode,
+    /// [`Prepared::wanted_mode`], aufgelöst gegen das System: der Modus eines
+    /// Starts ohne eigenen Wunsch, mit dem Grund einer Abweichung (HUM-357).
+    plan_mode: humanitl_sandbox::ModeChoice,
 }
 
 impl Prepared {
@@ -5359,6 +5493,161 @@ mod tests {
         assert_eq!(diagnostic.code.as_str(), "CONFIG_003");
     }
 
+    /// Der Plan eines Dienstes mit `tweak` und einem Sandbox-Backend der Fassung
+    /// `version`, ohne ein echtes zu fragen (HUM-357).
+    #[cfg(target_os = "linux")]
+    fn plan_with(
+        home: &tempfile::TempDir,
+        version: humanitl_sandbox::Version,
+        tweak: impl FnOnce(&mut humanitl_config::Config),
+    ) -> (SandboxService, Prepared) {
+        let service = service_configured(home, "opencode", None, SandboxPorts::none(), tweak);
+        let mut prepared = service
+            .inner
+            .prepare_with_command(&v1::sandbox_request::Plan::default(), &[])
+            .expect("the plan");
+        let program = humanitl_sandbox::PlatformBackend::fallback(service.inner.paths.clone())
+            .program()
+            .to_owned();
+        prepared.backend = humanitl_sandbox::PlatformBackend::unchecked(
+            program,
+            version,
+            service.inner.paths.clone(),
+        );
+        (service, prepared)
+    }
+
+    /// Ob das Laufzeitverzeichnis der Testdienste auf tmpfs liegt.
+    #[cfg(target_os = "linux")]
+    fn runtime_on_tmpfs(home: &tempfile::TempDir) -> bool {
+        humanitl_sandbox::disposable::require_tmpfs(&home.path().join("run")).is_ok()
+    }
+
+    /// Die Vorgabe `auto` löst der Daemon gegen das System auf (HUM-357):
+    /// eine Wegwerf-Sandbox mit `--overlay`, schreibbarem Projekt und
+    /// Laufzeitverzeichnis auf tmpfs, sonst `direct` mit `SANDBOX_033`, das
+    /// den Grund nennt; ein altes bubblewrap und ein nur lesbares Projekt
+    /// nennen je ihren eigenen.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_default_mode_resolves_against_the_system() {
+        use humanitl_sandbox::Version;
+
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, prepared) = plan_with(&home, Version(0, 11, 0), |_| {});
+        assert_eq!(prepared.wanted_mode, SandboxMode::Auto);
+        let choice = service
+            .inner
+            .mode_choice(SandboxMode::Auto, &prepared)
+            .unwrap();
+        if runtime_on_tmpfs(&home) {
+            assert_eq!(choice.mode, SandboxMode::Disposable, "{choice:?}");
+            assert!(choice.notice.is_none());
+        } else {
+            assert_eq!(choice.mode, SandboxMode::Direct);
+            let notice = choice.notice.expect("the notice");
+            assert_eq!(notice.code.as_str(), "SANDBOX_033");
+            assert!(notice.why.contains("not on tmpfs"), "{}", notice.why);
+        }
+
+        let (service, prepared) = plan_with(&home, Version(0, 9, 0), |_| {});
+        let choice = service
+            .inner
+            .mode_choice(SandboxMode::Auto, &prepared)
+            .unwrap();
+        assert_eq!(choice.mode, SandboxMode::Direct);
+        let notice = choice.notice.expect("old bubblewrap");
+        assert_eq!(notice.code.as_str(), "SANDBOX_033");
+        assert_eq!(notice.severity, Severity::Warning);
+        assert!(notice.why.contains("bubblewrap 0.9.0"), "{}", notice.why);
+
+        let (service, prepared) = plan_with(&home, Version(0, 11, 0), |config| {
+            config.sandbox.work_mode = WorkMode::Ro;
+        });
+        let choice = service
+            .inner
+            .mode_choice(SandboxMode::Auto, &prepared)
+            .unwrap();
+        assert_eq!(choice.mode, SandboxMode::Direct);
+        let notice = choice.notice.expect("read-only project");
+        assert_eq!(notice.code.as_str(), "SANDBOX_033");
+        assert!(notice.why.contains("read-only"), "{}", notice.why);
+    }
+
+    /// Ein ausdrückliches `disposable`, aus der Konfiguration oder dem Start,
+    /// lehnt ab, wo es nicht geht (HUM-357); `direct` fragt nichts.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_explicit_disposable_still_refuses_where_it_cannot_run() {
+        use humanitl_sandbox::Version;
+
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, prepared) = plan_with(&home, Version(0, 9, 0), |config| {
+            config.sandbox.mode = SandboxMode::Disposable;
+        });
+        let refused = service
+            .inner
+            .mode_choice(prepared.wanted_mode, &prepared)
+            .expect_err("explicit disposable on bubblewrap 0.9");
+        assert_eq!(refused.code.as_str(), "SANDBOX_030");
+        let direct = service
+            .inner
+            .mode_choice(SandboxMode::Direct, &prepared)
+            .unwrap();
+        assert_eq!(direct.mode, SandboxMode::Direct);
+        assert!(direct.notice.is_none());
+    }
+
+    /// Die Momentaufnahme nennt den Modus des nächsten Starts und den Grund
+    /// einer Abweichung (HUM-357): `direct` ohne Hinweis, wenn es gewählt
+    /// ist; ein ausdrückliches `disposable` vor einem nur lesbaren Projekt
+    /// bleibt `disposable` und nennt das `SANDBOX_030`, mit dem der Start
+    /// ablehnen wird.
+    #[test]
+    fn the_snapshot_names_the_resolved_mode_and_its_reason() {
+        let home = tempfile::TempDir::new().unwrap();
+        let service = service_configured(&home, "opencode", None, SandboxPorts::none(), |config| {
+            config.sandbox.mode = SandboxMode::Direct;
+        });
+        let status = service
+            .inner
+            .snapshot(&v1::sandbox_request::Plan::default())
+            .unwrap();
+        assert_eq!(status.sandbox_mode, "direct");
+        assert!(status.sandbox_mode_notice.is_none());
+
+        let service = service_configured(&home, "opencode", None, SandboxPorts::none(), |config| {
+            config.sandbox.mode = SandboxMode::Disposable;
+            config.sandbox.work_mode = WorkMode::Ro;
+        });
+        let status = service
+            .inner
+            .snapshot(&v1::sandbox_request::Plan::default())
+            .unwrap();
+        assert_eq!(status.sandbox_mode, "disposable");
+        let notice = status.sandbox_mode_notice.expect("the refusal to come");
+        assert_eq!(notice.code, "SANDBOX_030");
+
+        // Die Vorgabe: was immer das System hier kann, nie `auto`, und ein
+        // `direct` nur mit Grund.
+        let service = service_configured(&home, "opencode", None, SandboxPorts::none(), |_| {});
+        let status = service
+            .inner
+            .snapshot(&v1::sandbox_request::Plan::default())
+            .unwrap();
+        assert!(
+            matches!(status.sandbox_mode.as_str(), "direct" | "disposable"),
+            "{}",
+            status.sandbox_mode
+        );
+        if cfg!(target_os = "linux") && status.sandbox_mode == "direct" {
+            assert_eq!(
+                status.sandbox_mode_notice.expect("the reason").code,
+                "SANDBOX_033"
+            );
+        }
+    }
+
     /// Ein Profil ohne Datei, nur für die Tabellenfunktionen.
     fn preview_prepared() -> Prepared {
         let profile = SandboxProfile::parse("version = 1\nname = \"test\"\n", Path::new("<test>"))
@@ -5386,6 +5675,11 @@ mod tests {
             adapter_files: BTreeSet::new(),
             warnings: Vec::new(),
             overlay_preview: None,
+            wanted_mode: SandboxMode::Direct,
+            plan_mode: humanitl_sandbox::ModeChoice {
+                mode: SandboxMode::Direct,
+                notice: None,
+            },
         }
     }
 
