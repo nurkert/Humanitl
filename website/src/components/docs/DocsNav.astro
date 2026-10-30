@@ -1,0 +1,46 @@
+---
+// Die Liste aller Docs-Seiten in Gruppen, für die Seitenleiste und das Menü auf dem Telefon.
+import type { DocGroup } from '../../lib/docs';
+
+interface Props {
+  groups: DocGroup[];
+  currentId?: string;
+}
+
+const { groups, currentId } = Astro.props;
+---
+
+<div class="dnav">
+  {
+    groups.map((group) => {
+      const hasCurrent = group.items.some((item) => item.id === currentId);
+      // Die lange Liste der Entscheidungen bleibt zu, solange man nicht darin liest.
+      const open = group.key !== 'decisions' || hasCurrent;
+      return (
+        <details class="dnav__group" open={open} data-group={group.key}>
+          <summary class="dnav__title">{group.title}</summary>
+          <ul class="dnav__list">
+            {group.items.map((item) => (
+              <li>
+                <a
+                  class:list={['dnav__link', { 'dnav__link--adr': item.number }]}
+                  href={item.href}
+                  aria-current={item.id === currentId ? 'page' : undefined}
+                >
+                  {item.number && <span class="dnav__num">{item.number}</span>}
+                  <span class="dnav__label">{item.label}</span>
+                  {item.german && (
+                    <span class="badge" aria-hidden="true">
+                      DE
+                    </span>
+                  )}
+                  {item.german && <span class="visually-hidden">(German)</span>}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </details>
+      );
+    })
+  }
+</div>
