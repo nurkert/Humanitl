@@ -3,8 +3,8 @@
 /// HUM-034 proposes a set of PNG files plus a script that renders them from
 /// SVG. Drawing them here instead removes the generator, the assets and the
 /// risk that icon and design token drift apart: the icon takes its colours
-/// from `HColors`, so a change to the held hue (sky cyan since HUM-260) reaches the tray with
-/// everything else.
+/// from `HColors`, so a change to the held hue (orchid since HUM-355) reaches
+/// the tray with everything else.
 ///
 /// The colours are the dark ones. The tray is not part of the themed widget
 /// tree, and nothing tells an application whether the panel it sits in is
@@ -85,8 +85,8 @@ Color trayIconColor(TrayIconState state) => switch (state) {
 /// The colour of the digit, the question mark and the cross on the icon.
 ///
 /// On a filled chip the darkest surface, so the digit reads on the chip's
-/// colour: since HUM-260 `held` is sky cyan, and `bg0` on it measures well
-/// over 4.5:1, as it does on the red of an alert. On an outline the digit
+/// colour: since HUM-355 `held` is a light orchid, and `bg0` on it measures
+/// well over 4.5:1, as it does on the red of an alert. On an outline the digit
 /// takes the outline's own colour.
 Color trayIconInk(TrayIconState state) =>
     trayIconIsFilled(state) ? HColors.bg0 : trayIconColor(state);

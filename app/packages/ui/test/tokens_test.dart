@@ -34,11 +34,11 @@ const List<Color> darkSurfaces = <Color>[
 /// values, so a test that recomputed them could not fail. A change to the
 /// derivation shows up here as a diff to review, not as a silent re-statement.
 const Map<HFlowState, int> frozenLightStates = <HFlowState, int>{
-  HFlowState.held: 0xFF1C91C5,
+  HFlowState.held: 0xFFB56BC6,
   HFlowState.allowed: 0xFF36956A,
   HFlowState.allowedEdited: 0xFF3E957E,
   HFlowState.blocked: 0xFFDC303D,
-  HFlowState.timedOut: 0xFF6A7185,
+  HFlowState.timedOut: 0xFF717171,
   HFlowState.autoRule: 0x991C4E38,
   HFlowState.passthroughLlm: 0xFF9154E9,
   HFlowState.error: 0xFFEB4D17,
@@ -49,23 +49,23 @@ const Map<HFlowState, int> frozenLightStates = <HFlowState, int>{
 /// also könnte ein Test, der sie nachrechnet, nicht fehlschlagen. Eine
 /// geänderte Ableitung erscheint hier als Diff, den jemand ansieht.
 const Map<HFlowState, int> frozenDarkStateText = <HFlowState, int>{
-  HFlowState.held: 0xFF79C9EC,
-  HFlowState.allowed: 0xFF56C291,
-  HFlowState.allowedEdited: 0xFF62BEA5,
+  HFlowState.held: 0xFFD8B1E1,
+  HFlowState.allowed: 0xFF4FBF8C,
+  HFlowState.allowedEdited: 0xFF5BBBA1,
   HFlowState.blocked: 0xFFEB878F,
-  HFlowState.timedOut: 0xFFA4A8B6,
-  HFlowState.autoRule: 0x99ECF8F3,
-  HFlowState.passthroughLlm: 0xFFC09CF2,
-  HFlowState.error: 0xFFF28E6B,
+  HFlowState.timedOut: 0xFFA7A7A7,
+  HFlowState.autoRule: 0x99E8F7F0,
+  HFlowState.passthroughLlm: 0xFFBD98F2,
+  HFlowState.error: 0xFFF28A66,
 };
 
 /// Dasselbe für das helle Theme.
 const Map<HFlowState, int> frozenLightStateText = <HFlowState, int>{
-  HFlowState.held: 0xFF136386,
+  HFlowState.held: 0xFF883B9A,
   HFlowState.allowed: 0xFF26684A,
   HFlowState.allowedEdited: 0xFF2B6656,
   HFlowState.blocked: 0xFFA81C27,
-  HFlowState.timedOut: 0xFF565B6B,
+  HFlowState.timedOut: 0xFF5A5A5A,
   HFlowState.autoRule: 0x99020705,
   HFlowState.passthroughLlm: 0xFF7122E3,
   HFlowState.error: 0xFFA2340E,
@@ -396,10 +396,10 @@ void main() {
       }
       // Die gemessenen Zahlen, damit ein Rückschritt hier auffällt und nicht
       // erst auf dem Schirm. Der schlechteste Fall ist seit der Aufnahme der
-      // Haltefüllung in `fillAlphas` diese Füllung (`docs/UX.md` 6). Das
-      // Cyan, das `held` seit HUM-260 trägt, misst auf ihr 2,44:1; das alte
-      // Amber kam auf 2,49:1.
-      expect(lightArea[HFlowState.held]!, closeTo(2.44, 0.01));
+      // Haltefüllung in `fillAlphas` diese Füllung (`docs/UX.md` 6). Die
+      // Orchidee, die `held` seit HUM-355 trägt, misst auf ihr 2,48:1; das
+      // Cyan davor kam auf 2,44:1, das Amber vor HUM-260 auf 2,49:1.
+      expect(lightArea[HFlowState.held]!, closeTo(2.48, 0.01));
       expect(lightArea[HFlowState.blocked]!, closeTo(2.95, 0.01));
       expect(lightArea[HFlowState.error]!, closeTo(2.49, 0.01));
     });
@@ -745,7 +745,7 @@ void main() {
         }
       }
       // Die gemessenen Zahlen, damit eine Verschiebung als Diff auffällt.
-      expect(worstOf(HColors.accent, darkSurfaces), closeTo(7.95, 0.02));
+      expect(worstOf(HColors.accent, darkSurfaces), closeTo(8.21, 0.02));
       expect(wcagContrast(HColors.lAccent, HColors.lBg1), closeTo(3.89, 0.02));
       expect(worstOf(HColors.lAccent, lightSurfaces), closeTo(3.29, 0.02));
     });
@@ -789,7 +789,10 @@ void main() {
       for (final Color accent in <Color>[HColors.accent, HColors.lAccent]) {
         expect(hueOf(accent), inInclusiveRange(38.0, 46.0));
       }
-      expect(hueOf(HColors.held), inInclusiveRange(185.0, 205.0));
+      // `held` ist seit HUM-355 eine Orchidee, weder gelb noch blau. Der
+      // HSL-Farbton ist hier nur eine billige Wache; maßgeblich ist der
+      // OKLab-Test der Gruppe HUM-355 weiter unten.
+      expect(hueOf(HColors.held), inInclusiveRange(280.0, 300.0));
     });
 
     test('held is far from every other state colour and the accent', () {
@@ -1103,11 +1106,12 @@ void main() {
       }
     });
 
-    test('warning is the brand yellow, info the old blue', () {
+    test('warning is the brand yellow, info a quiet neutral', () {
       expect(HColors.warning, HColors.accent);
       expect(HColors.lWarning, HColors.lAccent);
-      expect(HColors.info.toARGB32(), 0xFF7C9CF5);
-      expect(HColors.lInfo.toARGB32(), 0xFF5B7FE6);
+      // Seit HUM-355 kein Blau mehr: ein Silber und sein Graphit.
+      expect(HColors.info.toARGB32(), 0xFFE0E0E0);
+      expect(HColors.lInfo.toARGB32(), 0xFF404040);
       expect(HTokens.dark.colors.warning, HColors.warning);
       expect(HTokens.light.colors.warning, HColors.lWarning);
       expect(HTokens.dark.colors.info, HColors.info);
@@ -1158,9 +1162,11 @@ void main() {
     });
 
     test('info, warning and held never share a family', () {
-      // Gelb heißt Achtung, Blau heißt Auskunft, Cyan heißt gehalten. Info
-      // und Warnung stehen immer mit ihrem Wort da (`HDiagnosticCard`); der
-      // Abstand sorgt dafür, dass die Farbe dem Wort nicht widerspricht.
+      // Gelb heißt Achtung, Silber heißt Auskunft, Orchidee heißt gehalten.
+      // Info und Warnung stehen immer mit ihrem Wort da (`HDiagnosticCard`);
+      // der Abstand sorgt dafür, dass die Farbe dem Wort nicht widerspricht.
+      // Seit HUM-355 steht auch `info/held` in der Liste: Silber und die
+      // helle Orchidee rücken unter Deuteranopie am nächsten zusammen.
       for (final Brightness brightness in Brightness.values) {
         final HSurfaceColors c = HTokens.forBrightness(brightness).colors;
         final Color held = HTokens.forBrightness(brightness).state.held;
@@ -1170,6 +1176,7 @@ void main() {
                 ('info/warning', c.info, c.warning),
                 ('info/accent', c.info, c.accent),
                 ('warning/held', c.warning, held),
+                ('info/held', c.info, held),
               ]) {
             final double d = perceivedDistance(a, b, vision);
             expect(
@@ -1192,6 +1199,9 @@ void main() {
     });
 
     test('the terminal answers yellow with yellow and cyan with cyan', () {
+      // Seit HUM-355 trägt die Oberfläche weder Blau noch Cyan; das Terminal
+      // behält beide, weil ein Agent mit `ESC [ 34 m` und `ESC [ 36 m` zwei
+      // Dinge meint. Cyan ist deshalb nicht mehr `held`.
       // ANSI: schwarz, rot, grün, gelb, blau, magenta, cyan, weiß.
       for (final HTerminalPalette palette in <HTerminalPalette>[
         HTerminalPalette.dark,
@@ -1207,40 +1217,256 @@ void main() {
         }
       }
       expect(HTerminalPalette.dark.normal[3], HColors.accent);
-      expect(HTerminalPalette.dark.normal[6], HColors.held);
+      expect(HTerminalPalette.dark.normal[6].toARGB32(), 0xFF79C9EC);
+      expect(HTerminalPalette.dark.normal[6], isNot(HColors.held));
+    });
+  });
+
+  group('HUM-355: neutral greys and no blue next to the yellow', () {
+    // Die Buntheit in OKLab, ab der ein Grau sichtbar getönt ist. Ein reines
+    // Grau misst 0 (bis auf Rundung); die alte Leiter lag bei 0,008 (`bg0`)
+    // bis 0,039 (`lineStrong`), `bg1` bei 0,0185.
+    const double greyChromaMax = 0.004;
+
+    double chroma(Color color) {
+      final List<double> lab = oklab(seenAs(color, null));
+      return math.sqrt(lab[1] * lab[1] + lab[2] * lab[2]);
+    }
+
+    /// Der Ton in OKLab, 0 bis 360 Grad.
+    double okHue(Color color) {
+      final List<double> lab = oklab(seenAs(color, null));
+      return (math.atan2(lab[2], lab[1]) * 180 / math.pi) % 360;
+    }
+
+    const Map<String, Color> greys = <String, Color>{
+      'bg0': HColors.bg0,
+      'bg1': HColors.bg1,
+      'bg2': HColors.bg2,
+      'bg3': HColors.bg3,
+      'line': HColors.line,
+      'lineStrong': HColors.lineStrong,
+      'fg0': HColors.fg0,
+      'fg1': HColors.fg1,
+      'fg2': HColors.fg2,
+      'onAccent': HColors.onAccent,
+      'timedOut': HColors.timedOut,
+      'info': HColors.info,
+      'lBg0': HColors.lBg0,
+      'lBg1': HColors.lBg1,
+      'lBg2': HColors.lBg2,
+      'lBg3': HColors.lBg3,
+      'lLine': HColors.lLine,
+      'lLineStrong': HColors.lLineStrong,
+      'lFg0': HColors.lFg0,
+      'lFg1': HColors.lFg1,
+      'lFg2': HColors.lFg2,
+      'lInfo': HColors.lInfo,
+    };
+
+    test('no grey token carries a hue', () {
+      greys.forEach((String name, Color color) {
+        expect(
+          chroma(color),
+          lessThanOrEqualTo(greyChromaMax),
+          reason:
+              '$name ${HColorDerivation.toHex(color)} has OKLab chroma '
+              '${chroma(color).toStringAsFixed(4)}',
+        );
+      });
+      // Und was aus der Leiter abgeleitet wird, bleibt unbunt: die Flächen
+      // des Themes, das abgeleitete `timedOut` und seine Textvariante.
+      for (final HTokens tokens in <HTokens>[HTokens.dark, HTokens.light]) {
+        for (final Color color in <Color>[
+          ...tokens.colors.ladder,
+          tokens.state.timedOut,
+          tokens.stateText.timedOut,
+          tokens.colors.infoText,
+          tokens.method.of('PROPFIND'),
+        ]) {
+          expect(
+            chroma(color),
+            lessThanOrEqualTo(greyChromaMax),
+            reason:
+                '${tokens.brightness.name} ${HColorDerivation.toHex(color)}',
+          );
+        }
+      }
+    });
+
+    test('the threshold bites: the old blue ladder fails it', () {
+      // Der Gegenbeweis: ohne ihn bewiese die Prüfung oben nichts.
+      for (final Color old in <Color>[
+        const Color(0xFF0F1115), // bg0
+        const Color(0xFF151821), // bg1
+        const Color(0xFF6B7186), // fg2
+        const Color(0xFFE9ECF3), // lBg3
+      ]) {
+        expect(chroma(old), greaterThan(greyChromaMax));
+      }
+    });
+
+    test('every text step reads on every surface of its ladder', () {
+      // fg0 und fg1 tragen Text (4,5:1), fg2 ist die ausgenommene Stufe des
+      // Deaktivierten und hält die 3:1 einer Fläche (`docs/UX.md` 6).
+      for (final (
+            String theme,
+            List<Color> surfaces,
+            Color f0,
+            Color f1,
+            Color f2,
+          )
+          in <(String, List<Color>, Color, Color, Color)>[
+            ('dark', darkSurfaces, HColors.fg0, HColors.fg1, HColors.fg2),
+            ('light', lightSurfaces, HColors.lFg0, HColors.lFg1, HColors.lFg2),
+          ]) {
+        for (final Color surface in surfaces) {
+          final String on = '$theme on ${HColorDerivation.toHex(surface)}';
+          expect(
+            wcagContrast(f0, surface),
+            greaterThanOrEqualTo(4.5),
+            reason: on,
+          );
+          expect(
+            wcagContrast(f1, surface),
+            greaterThanOrEqualTo(4.5),
+            reason: on,
+          );
+          expect(
+            wcagContrast(f2, surface),
+            greaterThanOrEqualTo(3.0),
+            reason: on,
+          );
+        }
+      }
+      // Die gemessenen Zahlen aus den Doc-Kommentaren, auf der jeweils
+      // strengsten Fläche, damit eine Verschiebung als Diff auffällt.
+      expect(wcagContrast(HColors.fg0, HColors.bg3), closeTo(12.35, 0.01));
+      expect(wcagContrast(HColors.fg1, HColors.bg3), closeTo(6.36, 0.01));
+      expect(wcagContrast(HColors.fg2, HColors.bg3), closeTo(3.06, 0.01));
+      expect(wcagContrast(HColors.lFg0, HColors.lBg3), closeTo(15.03, 0.01));
+      expect(wcagContrast(HColors.lFg1, HColors.lBg3), closeTo(6.72, 0.01));
+      expect(wcagContrast(HColors.lFg2, HColors.lBg3), closeTo(3.25, 0.01));
+      // `lineStrong` ist die Druckfläche neutraler Controls und trägt dort
+      // `fg1`.
+      expect(
+        wcagContrast(HColors.fg1, HColors.lineStrong),
+        closeTo(4.57, 0.01),
+      );
+      expect(wcagContrast(HColors.lInfo, HColors.lBg3), closeTo(8.78, 0.01));
+    });
+
+    test('accent and onAccent hold on the neutral ladder', () {
+      for (final Color surface in darkSurfaces) {
+        expect(
+          wcagContrast(HColors.accent, surface),
+          greaterThanOrEqualTo(HColorDerivation.areaMinContrast),
+        );
+      }
+      for (final Color surface in lightSurfaces) {
+        expect(
+          wcagContrast(HColors.lAccent, surface),
+          greaterThanOrEqualTo(HColorDerivation.areaMinContrast),
+        );
+      }
+      expect(HColors.onAccent.computeLuminance(), lessThan(0.02));
+      expect(
+        wcagContrast(HColors.onAccent, HColors.accent),
+        closeTo(9.81, 0.02),
+      );
+      expect(
+        wcagContrast(HColors.onAccent, HColors.lAccent),
+        closeTo(4.65, 0.02),
+      );
+    });
+
+    test('every state colour reads on bg0 to bg3 in both themes', () {
+      for (final HTokens tokens in <HTokens>[HTokens.dark, HTokens.light]) {
+        for (final HFlowState state in HFlowState.values) {
+          for (final Color surface in tokens.colors.ladder) {
+            final double area = wcagContrast(tokens.stateColor(state), surface);
+            final double text = wcagContrast(
+              tokens.stateTextColor(state),
+              surface,
+            );
+            final String name =
+                '${tokens.brightness.name} ${state.name} on '
+                '${HColorDerivation.toHex(surface)}';
+            expect(area, greaterThanOrEqualTo(3.0), reason: '$name area');
+            expect(text, greaterThanOrEqualTo(4.5), reason: '$name text');
+          }
+        }
+      }
+    });
+
+    test('held and info carry no blue, in neither theme', () {
+      // Blau und Cyan reichen in OKLab von rund 195 bis 285 Grad: das alte
+      // `held` (#79C9EC) lag bei 228, das alte `info` (#7C9CF5) bei 268.
+      bool isBlue(Color color) {
+        if (chroma(color) <= greyChromaMax) {
+          return false;
+        }
+        final double hue = okHue(color);
+        return hue >= 195 && hue <= 285;
+      }
+
+      expect(isBlue(const Color(0xFF79C9EC)), isTrue, reason: 'old held');
+      expect(isBlue(const Color(0xFF7C9CF5)), isTrue, reason: 'old info');
+      expect(isBlue(const Color(0xFF5B7FE6)), isTrue, reason: 'old lInfo');
+      for (final HTokens tokens in <HTokens>[HTokens.dark, HTokens.light]) {
+        for (final (String name, Color color) in <(String, Color)>[
+          ('held', tokens.state.held),
+          ('heldText', tokens.stateText.held),
+          ('info', tokens.colors.info),
+          ('infoText', tokens.colors.infoText),
+          ('PUT', tokens.method.of('PUT')),
+        ]) {
+          expect(
+            isBlue(color),
+            isFalse,
+            reason:
+                '${tokens.brightness.name} $name '
+                '${HColorDerivation.toHex(color)} has OKLab hue '
+                '${okHue(color).toStringAsFixed(0)}',
+          );
+        }
+      }
     });
   });
 
   group('token tables', () {
     test('BACKLOG hexes are literal', () {
-      expect(HColors.bg0.toARGB32(), 0xFF0F1115);
-      expect(HColors.bg1.toARGB32(), 0xFF151821);
-      expect(HColors.bg2.toARGB32(), 0xFF1B1F2A);
-      expect(HColors.bg3.toARGB32(), 0xFF232838);
-      expect(HColors.line.toARGB32(), 0xFF2A3040);
-      expect(HColors.lineStrong.toARGB32(), 0xFF384056);
-      expect(HColors.fg0.toARGB32(), 0xFFE6E8EE);
-      expect(HColors.fg1.toARGB32(), 0xFFA3A9B8);
-      expect(HColors.fg2.toARGB32(), 0xFF6B7186);
-      // Seit HUM-260: Gelb der Marke als Akzent, `held` Himmelscyan, und ein
-      // dunkler Vordergrund auf dem Akzent in beiden Themes.
+      // Seit HUM-355 unbunt: die Leiter aus BACKLOG 5 hatte einen blauen
+      // Stich (Ton ~230), die Werte hier sind reine Graustufen derselben
+      // Leuchtdichte.
+      expect(HColors.bg0.toARGB32(), 0xFF111111);
+      expect(HColors.bg1.toARGB32(), 0xFF171717);
+      expect(HColors.bg2.toARGB32(), 0xFF1E1E1E);
+      expect(HColors.bg3.toARGB32(), 0xFF262626);
+      expect(HColors.line.toARGB32(), 0xFF2E2E2E);
+      expect(HColors.lineStrong.toARGB32(), 0xFF3D3D3D);
+      expect(HColors.fg0.toARGB32(), 0xFFE8E8E8);
+      expect(HColors.fg1.toARGB32(), 0xFFA8A8A8);
+      expect(HColors.fg2.toARGB32(), 0xFF707070);
+      // Seit HUM-260: Gelb der Marke als Akzent und ein dunkler Vordergrund
+      // auf dem Akzent in beiden Themes; seit HUM-355 `held` eine Orchidee.
       expect(HColors.accent.toARGB32(), 0xFFE8B84B);
-      expect(HColors.onAccent.toARGB32(), 0xFF14161C);
-      expect(HColors.held.toARGB32(), 0xFF79C9EC);
+      expect(HColors.onAccent.toARGB32(), 0xFF161616);
+      expect(HColors.held.toARGB32(), 0xFFD8B1E1);
       expect(HColors.allowed.toARGB32(), 0xFF4FBF8C);
       expect(HColors.blocked.toARGB32(), 0xFFE5646E);
-      expect(HColors.timedOut.toARGB32(), 0xFF8A90A2);
+      expect(HColors.timedOut.toARGB32(), 0xFF909090);
       expect(HColors.passthrough.toARGB32(), 0xFFB48AF0);
       expect(HColors.secret.toARGB32(), 0xFFF0784F);
-      expect(HColors.lBg0.toARGB32(), 0xFFFAFBFD);
+      expect(HColors.lBg0.toARGB32(), 0xFFFBFBFB);
       expect(HColors.lBg1.toARGB32(), 0xFFFFFFFF);
-      expect(HColors.lBg2.toARGB32(), 0xFFF3F5F9);
-      expect(HColors.lBg3.toARGB32(), 0xFFE9ECF3);
-      expect(HColors.lLine.toARGB32(), 0xFFE1E5EE);
-      expect(HColors.lLineStrong.toARGB32(), 0xFFC9CFDC);
-      expect(HColors.lFg0.toARGB32(), 0xFF16181F);
-      expect(HColors.lFg1.toARGB32(), 0xFF4B5162);
-      expect(HColors.lFg2.toARGB32(), 0xFF7C8294);
+      expect(HColors.lBg2.toARGB32(), 0xFFF5F5F5);
+      expect(HColors.lBg3.toARGB32(), 0xFFECECEC);
+      expect(HColors.lLine.toARGB32(), 0xFFE5E5E5);
+      expect(HColors.lLineStrong.toARGB32(), 0xFFCFCFCF);
+      expect(HColors.lFg0.toARGB32(), 0xFF181818);
+      expect(HColors.lFg1.toARGB32(), 0xFF515151);
+      expect(HColors.lFg2.toARGB32(), 0xFF828282);
       expect(HColors.lAccent.toARGB32(), 0xFFA57A1C);
       expect(HColors.tintAlpha, 0.10);
       expect(HColors.fillHoverAlpha, 0.14);
@@ -1816,7 +2042,7 @@ void main() {
               );
               // Ein wirklich deaktiviertes Control trägt `fg2`, und `fg2` ist
               // von der 4,5:1 ausgenommen: `docs/UX.md` 6 hält die Stufe
-              // genau dafür frei und nennt ihre 3,02:1 namentlich.
+              // genau dafür frei und nennt ihre 3,06:1 namentlich.
               final double floor = states.contains(WidgetState.disabled)
                   ? HColorDerivation.areaMinContrast
                   : HColorDerivation.textMinContrast;
@@ -2077,7 +2303,7 @@ void main() {
     });
 
     test('hex formatting drops a full alpha channel', () {
-      expect(HColorDerivation.toHex(HColors.bg0), '#0F1115');
+      expect(HColorDerivation.toHex(HColors.bg0), '#111111');
       expect(HColorDerivation.toHex(HColors.autoRule), '#994FBF8C');
     });
   });

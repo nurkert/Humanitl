@@ -166,7 +166,7 @@ void main() {
     WidgetTester tester,
   ) async {
     // Ein Satz, den jemand lesen soll, ist `fg1` oder besser; `fg2` misst
-    // 3,02:1 auf `bg3` und gehört den deaktivierten Controls (`docs/UX.md` 6,
+    // 3,06:1 auf `bg3` und gehört den deaktivierten Controls (`docs/UX.md` 6,
     // Sekundärtext; HUM-154). Ein Golden allein genügt dafür nicht: die
     // CI-Variante von Alchemist zeichnet Text als Block, in dem kein Wort
     // mehr steht. Hier wird deshalb der Stil gelesen, nicht ein Bild
