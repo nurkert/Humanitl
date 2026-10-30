@@ -222,11 +222,13 @@ fn join_paths(paths: &[PathBuf]) -> String {
 pub(crate) fn pin_program(path: &Path, trust: &Trust) -> Result<PinnedSource, Skip> {
     let pinned =
         PinnedSource::open(path, SourceKind::RegularFile).map_err(|_| Skip::NotExecutable)?;
-    if rustix::fs::access(pinned.proc_path(), rustix::fs::Access::EXEC_OK).is_err() {
+    if rustix::fs::access(pinned.check_path(), rustix::fs::Access::EXEC_OK).is_err() {
         return Err(Skip::NotExecutable);
     }
     let file = rustix::fs::fstat(pinned.fd()).map_err(|_| Skip::NotExecutable)?;
-    if !trust.admits_raw(file.st_uid, file.st_gid, file.st_mode) {
+    // `st_mode` ist auf macOS `u16` (HUM-312).
+    #[allow(clippy::useless_conversion)]
+    if !trust.admits_raw(file.st_uid, file.st_gid, u32::from(file.st_mode)) {
         return Err(Skip::Untrusted);
     }
     let dir = pinned
@@ -235,19 +237,20 @@ pub(crate) fn pin_program(path: &Path, trust: &Trust) -> Result<PinnedSource, Sk
         .and_then(|parent| {
             rustix::fs::open(
                 parent,
-                OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                crate::platform::PATH_ONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::empty(),
             )
             .ok()
         })
         .and_then(|fd| rustix::fs::fstat(&fd).ok())
         .ok_or(Skip::Untrusted)?;
-    if !trust.admits_raw(dir.st_uid, dir.st_gid, dir.st_mode) {
+    #[allow(clippy::useless_conversion)]
+    if !trust.admits_raw(dir.st_uid, dir.st_gid, u32::from(dir.st_mode)) {
         return Err(Skip::Untrusted);
     }
-    let mut header = Vec::with_capacity(ELF64_HEADER_LEN);
-    std::fs::File::open(pinned.proc_path())
-        .and_then(|file| file.take(ELF64_HEADER_LEN as u64).read_to_end(&mut header))
+    let mut header = Vec::with_capacity(HEADER_READ_LEN);
+    std::fs::File::open(pinned.check_path())
+        .and_then(|file| file.take(HEADER_READ_LEN as u64).read_to_end(&mut header))
         .map_err(|_| Skip::NotExecutable)?;
     if !is_native_header(&header) {
         return Err(Skip::Script);
@@ -269,11 +272,69 @@ pub fn check_program(path: &Path, trust: &Trust) -> Result<PathBuf, Skip> {
 const ELF32_HEADER_LEN: usize = 52;
 /// The length of an ELF64 file header.
 const ELF64_HEADER_LEN: usize = 64;
+/// How much of a candidate is read: an ELF64 header, or the architecture
+/// table of a universal Mach-O file with up to 16 entries of 32 bytes.
+const HEADER_READ_LEN: usize = 8 + 16 * 32;
 
-/// Whether these bytes start a native executable: ELF magic, a known class
+/// Whether these bytes start a native executable of this system: ELF on
+/// Linux, Mach-O on macOS (HUM-312).
+fn is_native_header(bytes: &[u8]) -> bool {
+    if cfg!(target_os = "macos") {
+        is_macho_executable(bytes)
+    } else {
+        is_elf_executable(bytes)
+    }
+}
+
+/// Whether these bytes start a Mach-O program: a thin 64- or 32-bit image of
+/// type `MH_EXECUTE` with its complete header, or a universal (fat) file
+/// whose architecture table is complete and names a non-empty image for each
+/// entry. A universal file starts with the same magic as a Java class file,
+/// which differs in the second word (the class file version, 45 and up,
+/// against a handful of architectures).
+fn is_macho_executable(bytes: &[u8]) -> bool {
+    const MH_EXECUTE: u32 = 2;
+    const MAX_FAT_ARCHS: usize = 16;
+    let word = |at: usize| -> Option<[u8; 4]> { bytes.get(at..at + 4)?.try_into().ok() };
+    let be = |at: usize| word(at).map(u32::from_be_bytes);
+    match bytes.get(..4) {
+        // MH_MAGIC_64 and MH_MAGIC, little endian as on every Mac; the
+        // header is 32 and 28 bytes long.
+        Some([magic @ (0xcf | 0xce), 0xfa, 0xed, 0xfe]) => {
+            let header = if *magic == 0xcf { 32 } else { 28 };
+            bytes.len() >= header
+                && word(12).is_some_and(|kind| u32::from_le_bytes(kind) == MH_EXECUTE)
+        }
+        // FAT_MAGIC and FAT_MAGIC_64, big endian: `nfat_arch`, then one entry
+        // of 20 (or 32) bytes each, whose offset and size must not be zero.
+        Some([0xca, 0xfe, 0xba, last @ (0xbe | 0xbf)]) => {
+            let (entry, offset_at, size_at) = if *last == 0xbe {
+                (20, 8, 12)
+            } else {
+                (32, 12, 20)
+            };
+            let Some(count) = be(4).and_then(|count| usize::try_from(count).ok()) else {
+                return false;
+            };
+            (1..=MAX_FAT_ARCHS).contains(&count)
+                && (0..count).all(|index| {
+                    let at = 8 + index * entry;
+                    let nonzero = |field: usize| {
+                        bytes
+                            .get(at + field..at + field + 4)
+                            .is_some_and(|value| value != [0; 4])
+                    };
+                    bytes.len() >= at + entry && nonzero(offset_at) && nonzero(size_at)
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Whether these bytes start an ELF program: ELF magic, a known class
 /// and byte order, a complete header for that class, and the type `EXEC` or
 /// `DYN` (a PIE). A core dump or an object file is not a program.
-fn is_native_header(bytes: &[u8]) -> bool {
+fn is_elf_executable(bytes: &[u8]) -> bool {
     const ET_EXEC: u16 = 2;
     const ET_DYN: u16 = 3;
     if bytes.len() < ELF32_HEADER_LEN || &bytes[..4] != ELF_MAGIC {
@@ -593,27 +654,66 @@ mod tests {
     }
 
     #[test]
+    fn a_thin_or_universal_macho_program_is_native_on_macos() {
+        let mut thin = vec![0_u8; 32];
+        thin[..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
+        thin[12] = 2; // MH_EXECUTE
+        assert!(is_macho_executable(&thin));
+        thin[12] = 6; // MH_DYLIB
+        assert!(!is_macho_executable(&thin), "a library is no program");
+        assert!(
+            !is_macho_executable(&thin[..20]),
+            "a cut header is no program"
+        );
+        let mut fat = vec![0_u8; 48];
+        fat[..4].copy_from_slice(&[0xca, 0xfe, 0xba, 0xbe]);
+        fat[7] = 2;
+        for entry in [8, 28] {
+            fat[entry + 11] = 0x40; // offset
+            fat[entry + 15] = 0x10; // size
+        }
+        assert!(is_macho_executable(&fat));
+        assert!(
+            !is_macho_executable(&fat[..40]),
+            "a cut table is no program"
+        );
+        assert!(
+            !is_macho_executable(&[0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 1]),
+            "a table without entries is no program"
+        );
+        fat[28 + 15] = 0;
+        assert!(!is_macho_executable(&fat), "an empty image is no program");
+        fat[28 + 15] = 0x10;
+        fat[7] = 52; // a Java class file, version 52
+        assert!(!is_macho_executable(&fat), "a class file is no program");
+        assert!(!is_macho_executable(b"#!/bin/sh\n"));
+        thin[12] = 2;
+        assert_eq!(is_native_header(&thin), cfg!(target_os = "macos"));
+    }
+
+    #[test]
     fn only_a_complete_elf_executable_header_is_native() {
         let mut header = vec![0_u8; 64];
         header[..4].copy_from_slice(b"\x7fELF");
         header[4] = 2; // ELF64
         header[5] = 1; // little endian
         header[16] = 3; // ET_DYN
-        assert!(is_native_header(&header));
+        assert!(is_elf_executable(&header));
+        assert_eq!(is_native_header(&header), cfg!(target_os = "linux"));
         header[16] = 2; // ET_EXEC
-        assert!(is_native_header(&header));
+        assert!(is_elf_executable(&header));
         header[16] = 4; // ET_CORE
-        assert!(!is_native_header(&header));
+        assert!(!is_elf_executable(&header));
         header[16] = 1; // ET_REL
-        assert!(!is_native_header(&header));
+        assert!(!is_elf_executable(&header));
         header[16] = 3;
         assert!(
-            !is_native_header(&header[..60]),
+            !is_elf_executable(&header[..60]),
             "an ELF64 header needs 64 bytes"
         );
         header[4] = 9;
-        assert!(!is_native_header(&header), "unknown class");
-        assert!(!is_native_header(b"\x7fELF"));
+        assert!(!is_elf_executable(&header), "unknown class");
+        assert!(!is_elf_executable(b"\x7fELF"));
     }
 
     /// A command the caller names after `--` is never bound, only the agent

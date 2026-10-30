@@ -1802,7 +1802,9 @@ mod tests {
         assert!(!previous.exists());
     }
 
-    /// Eine ältere Kopie eines anderen Kontos wird nicht entfernt.
+    /// Eine ältere Kopie eines anderen Kontos wird nicht entfernt. Fragt das
+    /// echte `/proc`, das es nur unter Linux gibt (HUM-312).
+    #[cfg(target_os = "linux")]
     #[test]
     fn retire_previous_leaves_a_copy_of_another_owner() {
         let (_base, mut staged) = two_copies();

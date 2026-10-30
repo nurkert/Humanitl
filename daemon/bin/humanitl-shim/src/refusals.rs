@@ -1,7 +1,7 @@
 //! Refused `socket(2)` calls of the agent, counted and reported (HUM-138).
 //!
 //! The agent's filter answers a refused `socket(2)` with
-//! `SECCOMP_RET_USER_NOTIF` ([`crate::seccomp::Gate::Reported`]). The kernel
+//! `SECCOMP_RET_USER_NOTIF` ([`crate::linux::seccomp::Gate::Reported`]). The kernel
 //! parks the call and hands it to whoever holds the listener: the shim's
 //! parent, in [`serve`]. The parent does two things and never a third: it
 //! counts the attempt in a [`Tally`] and answers `EPERM`. It never answers
@@ -42,7 +42,7 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::report::Report;
+use crate::linux::report::Report;
 
 /// How many family-and-type pairs the tally keeps apart. Every further pair
 /// is counted in one overflow entry: an agent that walks through all 2^32
@@ -318,7 +318,7 @@ pub fn kernel_fits() -> Result<(), i32> {
 
 /// Parks, counts, answers `EPERM`; never returns.
 ///
-/// `control` is the parent's end of [`crate::channel::channel`]; attempts
+/// `control` is the parent's end of [`crate::linux::channel::channel`]; attempts
 /// count from the moment the child's marker (or its end of the pair closing)
 /// is visible there. The check happens after the notification is received,
 /// and the agent's first call comes after the marker was sent, so no attempt
@@ -362,7 +362,7 @@ pub fn serve(listener: &OwnedFd, control: &OwnedFd, tally: &Tally) -> ! {
         }
         errors = 0;
         if !armed {
-            armed = crate::channel::exec_marker_arrived(control);
+            armed = crate::linux::channel::exec_marker_arrived(control);
         }
         if armed && c_long::from(notif.data.nr) == libc::SYS_socket {
             tally.record(
@@ -413,8 +413,8 @@ mod tests {
     use std::ffi::c_int;
 
     use super::*;
-    use crate::channel::{Received, channel, receive, send_exec_marker, send_listener};
-    use crate::seccomp::{Gate, Policy, probe_socket};
+    use crate::linux::channel::{Received, channel, receive, send_exec_marker, send_listener};
+    use crate::linux::seccomp::{Gate, Policy, probe_socket};
 
     const AF_UNIX: u32 = libc::AF_UNIX as u32;
     const AF_INET: u32 = libc::AF_INET as u32;
@@ -556,7 +556,7 @@ mod tests {
         assert!(pid >= 0);
         if pid == 0 {
             let control = child_end.as_raw_fd();
-            let Ok(listener) = crate::seccomp::apply_reporting(&program) else {
+            let Ok(listener) = crate::linux::seccomp::apply_reporting(&program) else {
                 unsafe { libc::_exit(10) }
             };
             if !send_listener(control, listener.as_raw_fd()) {

@@ -242,8 +242,11 @@ mod tests {
 
     /// Ein eigenes Pseudoterminal, das mit dem Test verschwindet.
     fn terminal() -> (std::os::fd::OwnedFd, std::os::fd::OwnedFd) {
-        let master =
-            openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC).expect("a pty");
+        // macOS nimmt `O_CLOEXEC` bei `posix_openpt` nicht an; das Flag kommt
+        // danach, sonst erbte jedes gestartete Kind die Herrscherseite, und
+        // sie schlösse nie (HUM-312).
+        let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).expect("a pty");
+        rustix::io::fcntl_setfd(&master, rustix::io::FdFlags::CLOEXEC).expect("close-on-exec");
         grantpt(&master).expect("grantpt");
         unlockpt(&master).expect("unlockpt");
         let name = ptsname(&master, Vec::new()).expect("the name of the slave");

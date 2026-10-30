@@ -2226,7 +2226,10 @@ fn check_private_dir(dir: &Path, uid: u32) -> Result<(), Diagnostic> {
 }
 
 /// Die Grenze für den Pfad eines Unix-Sockets (`sun_path`), inklusive der Null.
-const SUN_PATH_MAX: usize = 108;
+///
+/// Aus `sockaddr_un` gemessen: 108 unter Linux, 104 unter macOS (HUM-312).
+const SUN_PATH_MAX: usize =
+    std::mem::size_of::<libc::sockaddr_un>() - std::mem::offset_of!(libc::sockaddr_un, sun_path);
 
 /// Weist einen Socket-Pfad ab, der nicht in `sun_path` passt.
 fn check_sun_path(socket: &Path, owner: DirOwner) -> Result<(), Diagnostic> {
@@ -2437,9 +2440,9 @@ mod tests {
     use humanitl_rules::{RequestKey, Verdict};
 
     use super::{
-        ADVICE_DAEMON_SOCKET, Config, DirOwner, ResolverConfig, Runtime, Serve, XdgPaths,
-        announce_overrides, check_private_dir, fix_hint, free_socket, load_rules, parse_speed,
-        probe_with_roots, shutdown_runtime, test_ca_roots,
+        ADVICE_DAEMON_SOCKET, Config, DirOwner, ResolverConfig, Runtime, SUN_PATH_MAX, Serve,
+        XdgPaths, announce_overrides, check_private_dir, fix_hint, free_socket, load_rules,
+        parse_speed, probe_with_roots, shutdown_runtime, test_ca_roots,
     };
 
     fn mode_of(path: &Path) -> u32 {
@@ -2641,7 +2644,12 @@ mod tests {
         let error = Runtime::at(deep.join("d.sock"), DirOwner::User).unwrap_err();
 
         assert_eq!(error.code.as_str(), "CONFIG_003");
-        assert!(error.why.contains("107"));
+        // 107 unter Linux, 103 unter macOS: die Grenze ohne die Null (HUM-312).
+        assert!(
+            error.why.contains(&(SUN_PATH_MAX - 1).to_string()),
+            "{}",
+            error.why
+        );
         assert!(!deep.exists(), "nothing may be created for a refused path");
 
         let error = Runtime::at(deep.join("daemon.sock"), DirOwner::Daemon).unwrap_err();

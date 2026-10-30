@@ -4708,6 +4708,7 @@ mod tests {
 
     /// A native executable in a per-user bin directory, as the ELF check
     /// wants it (HUM-278).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn native_program(dir: &Path, name: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::create_dir_all(dir).unwrap();
@@ -4723,6 +4724,8 @@ mod tests {
     /// A session started with a caller's command binds the configured agent
     /// by HUM-278's rules and puts its directory first on `PATH`; the
     /// caller's own command is not bound and not rewritten (HUM-280).
+    // Plant mit dem Linux-Sandbox-Backend (HUM-312).
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_callers_command_gets_the_configured_agent_on_its_path() {
         let home = tempfile::TempDir::new().unwrap();

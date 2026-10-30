@@ -135,9 +135,16 @@ mod tests {
                 .contains(FdFlags::CLOEXEC)
         );
 
-        // Über `/proc/self/fd/N`: `dash` kennt `>&N` nur für eine Ziffer.
+        // Über `/proc/self/fd/N` (unter macOS `/dev/fd/N`, HUM-312): `dash`
+        // kennt `>&N` nur für eine Ziffer.
         let mut command = Command::new("/bin/sh");
-        command.args(["-c", &format!("echo inherited > /proc/self/fd/{number}")]);
+        command.args([
+            "-c",
+            &format!(
+                "echo inherited > {}",
+                crate::platform::fd_path(number).display()
+            ),
+        ]);
         inherit_in_child(&mut command, &[writer.as_fd()]).expect("above the standard streams");
         let status = command.status().expect("sh runs");
         assert!(status.success(), "{status}");
@@ -162,7 +169,10 @@ mod tests {
         let writer = OwnedFd::from(writer);
         let number = writer.as_raw_fd();
         let status = Command::new("/bin/sh")
-            .args(["-c", &format!("echo x > /proc/self/fd/{number}")])
+            .args([
+                "-c",
+                &format!("echo x > {}", crate::platform::fd_path(number).display()),
+            ])
             .stderr(std::process::Stdio::null())
             .status()
             .expect("sh runs");

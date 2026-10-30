@@ -78,8 +78,11 @@ impl Pty {
         // gewöhnliche Ausgang in die Frist, mit ihr endet er in 0,2 s. Der
         // Slave darf `CLOEXEC` tragen, weil `Stdio` ihn auf 0, 1 und 2 legt und
         // dabei das Flag verliert.
-        let master =
-            openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC).expect("a pty");
+        // macOS nimmt `O_CLOEXEC` bei `posix_openpt` nicht an; das Flag kommt
+        // danach, sonst erbte jedes gestartete Kind die Herrscherseite, und
+        // sie schlösse nie (HUM-312).
+        let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).expect("a pty");
+        rustix::io::fcntl_setfd(&master, rustix::io::FdFlags::CLOEXEC).expect("close-on-exec");
         grantpt(&master).expect("grantpt");
         unlockpt(&master).expect("unlockpt");
         let name = ptsname(&master, Vec::new()).expect("the name of the slave");

@@ -105,6 +105,7 @@ mod inherit;
 pub mod launcher;
 pub mod os_release;
 mod pinned;
+mod platform;
 pub mod profile;
 pub mod refusals;
 pub mod shell;

@@ -147,11 +147,14 @@ impl<'a> IntoIterator for &'a Env {
     }
 }
 
+/// Die echte UID dieses Prozesses.
+///
+/// Aus `getuid(2)`, nicht aus dem Besitzer von `/proc/self`: macOS hat kein
+/// `/proc`, und der frühere Rückfall auf 0 ließ die CLI dort das eigene Token
+/// verweigern (HUM-312).
 #[cfg(unix)]
 fn current_uid() -> u32 {
-    use std::os::unix::fs::MetadataExt as _;
-
-    std::fs::metadata("/proc/self").map_or(0, |meta| meta.uid())
+    rustix::process::getuid().as_raw()
 }
 
 #[cfg(not(unix))]
@@ -173,6 +176,14 @@ mod tests {
         assert_eq!(env.get("EMPTY"), Some(""));
         assert_eq!(env.uid(), 1000);
         assert_eq!(env.iter().count(), 2);
+    }
+
+    /// Die UID kommt aus `getuid(2)`, auch dort, wo es kein `/proc` gibt
+    /// (macOS); vorher war sie dort 0 (HUM-312).
+    #[test]
+    fn the_uid_is_the_real_uid_of_the_process() {
+        let env = Env::from_process();
+        assert_eq!(env.uid(), rustix::process::getuid().as_raw());
     }
 
     #[test]

@@ -251,9 +251,55 @@ pub(crate) struct Shared {
 /// Das Feld `starttime` aus `/proc/<pid>/stat`, Feld 22 (Ticks seit dem
 /// Systemstart); `None`, wenn sich die Zeile nicht lesen oder nicht deuten
 /// lässt.
+#[cfg(target_os = "linux")]
 fn read_start_ticks(pid: u32) -> Option<u64> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     start_ticks_of(&stat)
+}
+
+/// Unter macOS gibt es kein `/proc`; Zustand und Startzeit kommen aus
+/// `ps(1)`, die Startzeit als Prüfsumme ihres Texts (HUM-312). Sie ist nur
+/// ein Ausweis, keine Zeit, und wird nur mit sich selbst verglichen.
+#[cfg(not(target_os = "linux"))]
+fn read_start_ticks(pid: u32) -> Option<u64> {
+    ps_state(pid).ok()?.map(|(_, start)| start)
+}
+
+/// Zustand und Ausweis eines Prozesses nach `ps -o stat=,lstart=`; `None`,
+/// wenn es ihn nicht gibt.
+///
+/// # Errors
+///
+/// Wenn `ps` nicht startet oder etwas antwortet, das keine Zeile ist.
+#[cfg(not(target_os = "linux"))]
+fn ps_state(pid: u32) -> std::io::Result<Option<(String, u64)>> {
+    use std::hash::{Hash as _, Hasher as _};
+
+    let output = std::process::Command::new("/bin/ps")
+        .args(["-o", "stat=,lstart=", "-p", &pid.to_string()])
+        .env("LC_ALL", "C")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text.trim();
+    if line.is_empty() {
+        // `ps` endet mit 1 und schreibt nichts, wenn es die PID nicht gibt.
+        // Jedes andere Ende ohne Ausgabe ist keine Auskunft.
+        if output.status.code() == Some(1) {
+            return Ok(None);
+        }
+        return Err(std::io::Error::other(format!(
+            "ps ended with {}",
+            output.status
+        )));
+    }
+    let (state, start) = line.split_once(char::is_whitespace).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("ps said {line:?}"))
+    })?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    start.trim().hash(&mut hasher);
+    Ok(Some((state.to_owned(), hasher.finish())))
 }
 
 /// Wie [`read_start_ticks`], aber über eine schon gelesene Zeile.
@@ -262,6 +308,8 @@ fn read_start_ticks(pid: u32) -> Option<u64> {
 /// Programms steht in Klammern und darf selbst Klammern und Leerzeichen
 /// tragen. Danach ist Feld 3 der Zustand, und `starttime` ist Feld 22, also
 /// das zwanzigste danach.
+// Liest `/proc/<pid>/stat`; außerhalb von Linux nur von den Tests benutzt.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn start_ticks_of(stat: &str) -> Option<u64> {
     fields_after_comm(stat)?.nth(19)?.parse().ok()
 }
@@ -272,6 +320,8 @@ fn start_ticks_of(stat: &str) -> Option<u64> {
 /// Gezählt wird hinter der **letzten** schließenden Klammer: Der Name steht in
 /// Klammern und darf selbst Klammern und Leerzeichen tragen, und wer von vorn
 /// zählt, zählt bei `(od d) ler)` falsch. Ohne Klammer wird nichts geraten.
+// Liest `/proc/<pid>/stat`; außerhalb von Linux nur von den Tests benutzt.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn fields_after_comm(stat: &str) -> Option<std::str::SplitWhitespace<'_>> {
     Some(stat.get(stat.rfind(')')? + 1..)?.split_whitespace())
 }
@@ -289,6 +339,8 @@ fn fields_after_comm(stat: &str) -> Option<std::str::SplitWhitespace<'_>> {
 ///   Fremden — unser Prozess ist weg.
 /// - **Läuft er?** Ein Zombie (`Z`) zählt als beendet: kein Programm mehr, nur
 ///   noch ein Eintrag, den sein Elternprozess abholt.
+// Liest `/proc/<pid>/stat`; außerhalb von Linux nur von den Tests benutzt.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn alive_from_stat(stat: &str, started_at_ticks: Option<u64>) -> Option<bool> {
     let state = fields_after_comm(stat)?.next()?;
     // Wer einen Ausweis hat, muss ihn auch lesen können. Eine Zeile, die
@@ -862,10 +914,30 @@ impl SandboxHandle {
     /// stehen geblieben sei, darf nicht auf einer Vermutung stehen.
     #[must_use]
     pub fn process_alive(&self) -> Option<bool> {
-        match std::fs::read_to_string(format!("/proc/{}/stat", self.pid)) {
-            Ok(stat) => alive_from_stat(&stat, self.started_at_ticks),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(false),
-            Err(_) => None,
+        #[cfg(target_os = "linux")]
+        {
+            match std::fs::read_to_string(format!("/proc/{}/stat", self.pid)) {
+                Ok(stat) => alive_from_stat(&stat, self.started_at_ticks),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(false),
+                Err(_) => None,
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            // Dieselben zwei Fragen wie in `alive_from_stat`: derselbe
+            // Prozess, und läuft er (HUM-312).
+            match ps_state(self.pid) {
+                Ok(None) => Some(false),
+                Ok(Some((_, start)))
+                    if self
+                        .started_at_ticks
+                        .is_some_and(|expected| expected != start) =>
+                {
+                    Some(false)
+                }
+                Ok(Some((state, _))) => Some(!state.starts_with('Z')),
+                Err(_) => None,
+            }
         }
     }
 

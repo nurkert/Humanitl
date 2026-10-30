@@ -121,9 +121,14 @@ async fn detects_ollama_mock() {
 /// Setups eine Zeile je geschlossenem Port.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_closed_port_is_not_a_server() {
-    let upstream = FakeUpstream::ollama().await;
-    let ollama = upstream.port();
-    let silent = if ollama == u16::MAX { 1024 } else { ollama + 1 };
+    let _upstream = FakeUpstream::ollama().await;
+    // Ein Port, den das System eben vergeben und wieder freigegeben hat.
+    // Nicht der Nachbar des Mocks: macOS vergibt Ports der Reihe nach, und
+    // dort horcht oft der Mock eines parallel laufenden Tests (HUM-312).
+    let silent = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .and_then(|listener| listener.local_addr())
+        .expect("a free port")
+        .port();
     let scan = Scan::new(Subnet::single(Ipv4Addr::LOCALHOST))
         .with_ports(vec![silent])
         .expect("the ports of this scan");
@@ -270,7 +275,10 @@ async fn a_scan_over_a_full_24_stays_in_the_budget() {
         .first(vec![Ipv4Addr::LOCALHOST]);
 
     let started = Instant::now();
-    let found = run(scan, Arc::new(Direct::default())).await;
+    // Mit der Frist des Daemons (`ipc::server`): Unter macOS antworten
+    // `127.0.0.2` und folgende nicht, und die Vorgabe von `Direct` wartet
+    // zehn Sekunden je Versuch (HUM-312).
+    let found = run(scan, Arc::new(Direct::new(CONNECT_TIMEOUT))).await;
     let took = started.elapsed();
 
     assert_eq!(found.len(), 1, "one server on the loopback: {found:?}");

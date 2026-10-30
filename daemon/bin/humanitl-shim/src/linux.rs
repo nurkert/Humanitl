@@ -1,0 +1,1496 @@
+//! Launcher inside the sandbox: bridges first, then the seccomp filter, then
+//! the agent (HUM-012, ADR-002, `docs/SECURITY.md` Satz 3).
+//!
+//! The shim is PID 1 of the sandbox: the launcher starts bwrap with
+//! `--as-pid-1`, so no init of bwrap sits above it (HUM-203). That init carried
+//! no filter and was dumpable; the shim's parent carries the bridge filter and
+//! makes itself non-dumpable before the agent starts. As PID 1 it also reaps
+//! every orphan of the sandbox and relays `SIGTERM` and `SIGHUP`, which the
+//! kernel would otherwise drop at a namespace init without a handler. It
+//! resolves the review finding "seccomp after socat" by process separation:
+//! the bridge to the proxy needs `socket(2)` and lives in the parent; the
+//! agent is a child that carries the filter before `exec` and can never shed
+//! it. Deliberately dependency-free (`libc` and `seccompiler` only, no tokio,
+//! no workspace crate) so the security-critical steps stay auditable in seven
+//! short files: this one (process model), `seccomp.rs` (the filter as data),
+//! `bridge.rs` (the bytes), `report.rs` (the evidence), `refusals.rs` (what
+//! the filter refused, counted), `channel.rs` (how its listener reaches
+//! the parent) and `exec.rs` (further shells the daemon asks for, HUM-299).
+//!
+//! # Launcher <-> shim contract (binding for HUM-011, HUM-012, HUM-013)
+//!
+//! **Command line.** `humanitl-shim --proxy-port <port> [--controlling-terminal]
+//! [--control-fd <n>] -- <command> [args...]`, the tail of the bwrap argument vector from
+//! `humanitl_sandbox::SandboxProfile::to_bwrap_args`, where the shim itself
+//! is `/usr/local/bin/humanitl-shim` inside the sandbox. `--proxy-port` is
+//! the port the agent's `HTTP_PROXY` names; the shim refuses to start when
+//! no `in` bridge listens there. `--controlling-terminal` (HUM-280) makes the
+//! child the leader of a new session with descriptor 0 as its controlling
+//! terminal; the launcher passes it only when descriptor 0 is the daemon's
+//! own pseudo-terminal, never the user's terminal (see
+//! [`take_controlling_terminal`]). `--control-fd` (HUM-299) names an
+//! inherited `SOCK_SEQPACKET` socket whose other end only the daemon holds;
+//! over it the daemon asks for further shells next to the agent
+//! (`exec.rs`). Only PID 1 keeps it: the agent's child closes it before its
+//! filter, and a missing or unusable descriptor means no further shells,
+//! never a failed start. `humanitl-shim --rules` prints the seccomp
+//! rule table the same environment would produce, one row per line, and
+//! starts nothing.
+//!
+//! **Environment** (set by the launcher with `--setenv` after `--clearenv`;
+//! none of it reaches the agent, the child removes the five variables before
+//! `exec`):
+//!
+//! - `HUMANITL_BRIDGES`: JSON array of `{"name","dir","listen","socket"}`
+//!   from the profile's `[network].bridges` (MVP: exactly one, `dir` `in`,
+//!   `listen` `127.0.0.1:3128`, `socket` `/run/humanitl/proxy.sock`). Absent
+//!   means that one bridge on `--proxy-port`.
+//! - `HUMANITL_SECCOMP_FAMILIES`: comma list from `[seccomp].allow_families`
+//!   (absent: `AF_INET,AF_INET6`).
+//! - `HUMANITL_SECCOMP_TYPES`: comma list from `allow_types` (absent:
+//!   `SOCK_STREAM`).
+//! - `HUMANITL_SECCOMP_DENY`: comma list of `deny_syscalls`; the floor from
+//!   `seccomp::FLOOR` is always added.
+//! - `HUMANITL_REPORT_FD`: optional descriptor number, the inherited write
+//!   end of a pipe, on which the shim writes one line per check before
+//!   `exec`: `CHECK <name> <ok|fail> <evidence>` for `bridge_listening`,
+//!   `no_interfaces`, `single_socket`, `seccomp_applied`, `families`
+//!   (HUM-041). Absent means
+//!   no report. The descriptor is opened before anything that can fail, so
+//!   that a setup failure is a failed check line and not only a message on
+//!   stderr: an unreadable policy or bridge list, a port that is taken, a
+//!   listener that does not accept and the parent's own filter all end in
+//!   `CHECK seccomp_applied fail ...` or `CHECK bridge_listening fail ...`
+//!   before the shim exits 126. While the agent runs, the parent writes
+//!   `REFUSALS on|off <why>` and `REFUSED socket ...` lines on the same
+//!   descriptor (HUM-138, `refusals.rs`).
+//!
+//! **Behaviour, in order.**
+//!
+//! 1. Parse the command line, then open the report.
+//! 2. Read the environment. For every `in` bridge, bind the TCP listener in the parent and
+//!    connect to it once (`bridge_listening`); read the interface list
+//!    (`no_interfaces`); walk the filesystem for Unix sockets that are not a
+//!    bridge's (`single_socket`). The last two are reported, not enforced: the
+//!    shim can neither remove an interface nor unmount a socket, bwrap's
+//!    `--unshare-net` and the profile's mounts are the guarantee, and the
+//!    launcher's isolation check is the enforcement point.
+//! 3. Before the fork the shim closes every descriptor it inherited except
+//!    0, 1, 2, the report, the exec gate and the bridge listeners, so
+//!    neither process holds what a careless launcher leaked without
+//!    `CLOEXEC`; then it makes the refusal channel (HUM-138). Fork. The
+//!    child dies with the parent (`PR_SET_PDEATHSIG`), closes every inherited
+//!    descriptor but 0, 1, 2, the report, the gate and its end of the refusal
+//!    channel, sets `PR_SET_NO_NEW_PRIVS`, installs the filter with a
+//!    listener and hands the listener to the parent (without a listener the
+//!    same filter with `TSYNC`), proves it (`seccomp_applied`, `families`),
+//!    tells the parent the agent is next, waits at the gate, and `execvp`s
+//!    the command. With `--controlling-terminal` it first calls `setsid` and
+//!    takes descriptor 0 as its controlling terminal, before the filter. The
+//!    parent, PID 1 of the sandbox, makes itself non-dumpable as its first
+//!    step, installs its own, slightly wider filter (the agent's plus
+//!    `AF_UNIX`), counts and answers the refused sockets of the agent
+//!    (`refusals.rs`), serves the bridges, opens the gate, forwards `SIGTERM`
+//!    and `SIGHUP` to the child (`SIGINT` reaches the agent through its
+//!    process group or, with a controlling terminal, through the terminal's
+//!    foreground group, and is ignored here), reaps every orphan while it
+//!    waits for its own child (`waitpid(-1)`), and writes the last tally.
+//! 4. Exit status: 125 usage, 126 seccomp or bridge setup failed (the message
+//!    names which), 127 `exec` failed (and the child writes `EXEC fail
+//!    errno=<n>` to the report first, see `report.rs`), otherwise the
+//!    child's status, or
+//!    128 + signal when the child was killed. A bridge with direction `out`
+//!    is 126 with "bridge direction out not supported yet".
+//!
+//! **Host side (HUM-013).** The proxy listens on
+//! `$XDG_RUNTIME_DIR/humanitl/proxy/proxy.sock` (`Paths::proxy_socket()`,
+//! directory 0700, socket 0600). The launcher bind-mounts only that socket
+//! file to `/run/humanitl/proxy.sock`, the CA to `/etc/humanitl/ca.crt` and
+//! this binary to `/usr/local/bin/humanitl-shim`, all read-only. The gRPC
+//! socket is never mounted.
+
+mod bridge;
+mod channel;
+mod exec;
+mod refusals;
+mod report;
+mod seccomp;
+
+use std::env;
+use std::ffi::{CString, OsString, c_char, c_int, c_uint};
+use std::fmt;
+use std::fs;
+use std::io::{self, Write};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::ptr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::thread;
+
+use seccompiler::BpfProgram;
+
+use crate::linux::bridge::{Bound, Bridge};
+use crate::linux::channel::Received;
+use crate::linux::refusals::Tally;
+use crate::linux::report::{Check, Report};
+use crate::linux::seccomp::{Gate, Policy};
+
+/// Exit status for a command line the shim does not understand.
+const EXIT_USAGE: i32 = 125;
+/// Exit status when a bridge or the filter could not be set up.
+const EXIT_SETUP: i32 = 126;
+/// Exit status when `execvp` returned.
+const EXIT_EXEC: i32 = 127;
+
+const USAGE: &str = "usage: humanitl-shim --proxy-port <port> [--controlling-terminal] [--control-fd <n>] -- <command> [args...]\n\
+                     \x20      humanitl-shim --rules    print the seccomp rule table for this environment\n\
+                     environment: HUMANITL_BRIDGES, HUMANITL_SECCOMP_FAMILIES, HUMANITL_SECCOMP_TYPES,\n\
+                     HUMANITL_SECCOMP_DENY, HUMANITL_REPORT_FD (see the crate documentation)\n";
+
+/// The shim's own variables; removed from the agent's environment.
+const SHIM_VARS: [&str; 5] = [
+    "HUMANITL_BRIDGES",
+    "HUMANITL_SECCOMP_FAMILIES",
+    "HUMANITL_SECCOMP_TYPES",
+    "HUMANITL_SECCOMP_DENY",
+    "HUMANITL_REPORT_FD",
+];
+
+/// The child's pid, for the signal handler.
+static CHILD: AtomicI32 = AtomicI32::new(0);
+
+/// The entry point on Linux, called from `main.rs`.
+pub(crate) fn main() {
+    std::process::exit(run());
+}
+
+fn run() -> i32 {
+    let cli = match parse_cli(env::args_os().skip(1)) {
+        Ok(cli) => cli,
+        Err(CliError::Help) => {
+            let _ = io::stdout().lock().write_all(USAGE.as_bytes());
+            return 0;
+        }
+        Err(CliError::Rules) => return print_rules(),
+        Err(err) => {
+            say(&format!("humanitl-shim: {err}\n{USAGE}"));
+            return EXIT_USAGE;
+        }
+    };
+
+    // The report comes before everything that can fail, so that every setup
+    // failure is a `CHECK <name> fail <evidence>` line and not just a message
+    // on a stderr the launcher may not be reading. The launcher turns the
+    // failed line into `SANDBOX_014` to `SANDBOX_016`; without it a shim that
+    // never got as far as binding would look like a shim that wrote no report
+    // at all (`SANDBOX_013`), and the two have different causes.
+    let report = match Report::from_env(env::var_os("HUMANITL_REPORT_FD").as_deref()) {
+        Ok(report) => report,
+        Err(err) => {
+            say(&format!("humanitl-shim: warning: no report: {err}\n"));
+            Report::none()
+        }
+    };
+
+    // The daemon's door for further shells (HUM-299). Taken before the
+    // descriptors are closed in `launch`, and never a reason to refuse the
+    // start: without it there are simply no further shells.
+    let control = cli.control_fd.and_then(take_control);
+
+    match prepare(&cli, &report) {
+        Ok(prepared) => launch(prepared, report, &cli, control),
+        Err(err) => {
+            report.check(err.check(), false, &err.to_string());
+            say(&format!("humanitl-shim: {err}\n"));
+            EXIT_SETUP
+        }
+    }
+}
+
+/// `--rules`: the effective rule table for this environment, one row per
+/// line on stdout, so an auditor can ask the binary in the sandbox what its
+/// filter does instead of trusting a document. Exit 126 when the environment
+/// does not describe a valid policy.
+fn print_rules() -> i32 {
+    match policy_from_env() {
+        Ok(policy) => {
+            let mut out = io::stdout().lock();
+            for rule in policy.rules(Gate::Reported) {
+                let _ = writeln!(out, "{rule}");
+            }
+            0
+        }
+        Err(err) => {
+            say(&format!("humanitl-shim: {err}\n"));
+            EXIT_SETUP
+        }
+    }
+}
+
+/// Everything that exists before the fork.
+struct Prepared {
+    policy: Policy,
+    /// The agent's filter, refused sockets reported ([`Gate::Reported`]).
+    agent_program: BpfProgram,
+    /// The same filter answering `EPERM` itself, for a kernel that refuses
+    /// the agent a listener.
+    agent_fallback: BpfProgram,
+    bridge_program: BpfProgram,
+    bound: Vec<Bound>,
+}
+
+/// Steps 1 and 2: the policy, the programs, the bridges and their evidence.
+///
+/// Every failure here is reported by the caller as a failed check line; the
+/// report is already open when this starts.
+fn prepare(cli: &Cli, report: &Report) -> Result<Prepared, SetupError> {
+    let policy = policy_from_env()?;
+    let agent_program = policy
+        .program(Gate::Reported)
+        .map_err(SetupError::seccomp)?;
+    let agent_fallback = policy.program(Gate::Silent).map_err(SetupError::seccomp)?;
+    let bridge_program = policy
+        .for_bridge()
+        .program(Gate::Silent)
+        .map_err(SetupError::seccomp)?;
+
+    let bridges = match env_utf8("HUMANITL_BRIDGES").map_err(SetupError::bridge)? {
+        Some(json) => bridge::parse(&json).map_err(SetupError::bridge)?,
+        None => vec![Bridge::default_proxy(cli.proxy_port)],
+    };
+    bridge::validate(&bridges, cli.proxy_port).map_err(SetupError::bridge)?;
+
+    let mut bound = Vec::with_capacity(bridges.len());
+    for bridge in bridges {
+        bound.push(bridge::bind(bridge).map_err(SetupError::bridge)?);
+    }
+    let mut evidence = Vec::with_capacity(bound.len());
+    for listener in &bound {
+        listener.self_connect().map_err(SetupError::bridge)?;
+        evidence.push(format!(
+            "{}={}->{}",
+            listener.bridge().name,
+            listener.local_addr(),
+            listener.bridge().socket.display()
+        ));
+    }
+    report.check(Check::BridgeListening, true, &evidence.join(";"));
+
+    match report::interfaces() {
+        Ok(names) => {
+            let only_lo = names.iter().all(|name| name == "lo");
+            report.check(Check::NoInterfaces, only_lo, &names.join(","));
+            if !only_lo {
+                say(&format!(
+                    "humanitl-shim: warning: interfaces besides lo: {}\n",
+                    names.join(",")
+                ));
+            }
+        }
+        Err(err) => report.check(Check::NoInterfaces, false, &format!("unreadable:{err}")),
+    }
+
+    check_single_socket(&bound, report);
+
+    Ok(Prepared {
+        policy,
+        agent_program,
+        agent_fallback,
+        bridge_program,
+        bound,
+    })
+}
+
+/// The second guarantee, measured instead of assumed: no Unix socket in the
+/// sandbox's filesystem but the ones the bridges serve.
+///
+/// `bridge_listening` proves the one door is open and answers; it says nothing
+/// about a second one. So the shim walks the filesystem before the agent
+/// exists ([`report::sockets`]) and names everything it found. A socket that
+/// is not a bridge's is a `fail`: it is reported and warned about, not
+/// enforced, the same way `no_interfaces` is. The launcher turns the failed
+/// line into `SANDBOX_015` and refuses to let the run continue (HUM-011); the
+/// shim's job is the evidence, the decision belongs to the host.
+fn check_single_socket(bound: &[Bound], report: &Report) {
+    let walk = report::sockets();
+    let expected: Vec<String> = bound
+        .iter()
+        .map(|listener| listener.bridge().socket.to_string_lossy().into_owned())
+        .collect();
+    let unexpected: Vec<&str> = walk
+        .sockets
+        .iter()
+        .filter(|found| !expected.iter().any(|path| path == *found))
+        .map(String::as_str)
+        .collect();
+    let evidence = format!(
+        "sockets={};unexpected={};entries={};limit={}",
+        list(walk.sockets.iter().map(String::as_str)),
+        list(unexpected.iter().copied()),
+        walk.entries,
+        walk.limit.unwrap_or("none"),
+    );
+    report.check(Check::SingleSocket, unexpected.is_empty(), &evidence);
+    if !unexpected.is_empty() {
+        say(&format!(
+            "humanitl-shim: warning: unix sockets besides the bridge: {}\n",
+            list(unexpected.into_iter())
+        ));
+    }
+}
+
+/// A comma list for one field of the evidence; never empty, never with a space
+/// in it, because a reader splits the line on spaces.
+fn list<'a>(values: impl Iterator<Item = &'a str>) -> String {
+    let joined = values.collect::<Vec<_>>().join(",");
+    if joined.is_empty() {
+        "none".to_owned()
+    } else {
+        joined
+    }
+}
+
+/// Takes the descriptor of `--control-fd` when it is an open socket; gives
+/// it `CLOEXEC` so that no `exec` carries it on.
+fn take_control(fd: RawFd) -> Option<OwnedFd> {
+    // SAFETY: plain data; fstat fills it.
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: fstat on a descriptor number with a valid pointer.
+    let rc = unsafe { libc::fstat(fd, &raw mut stat) };
+    if fd < 3 || rc != 0 || stat.st_mode & libc::S_IFMT != libc::S_IFSOCK {
+        say("humanitl-shim: warning: --control-fd is not an open socket; no further shells\n");
+        return None;
+    }
+    // SAFETY: F_SETFD with FD_CLOEXEC changes one flag of one descriptor.
+    unsafe {
+        libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+    }
+    // SAFETY: the launcher handed this descriptor to the shim alone, and
+    // nothing else in this process owns it.
+    Some(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+/// Step 3 and 4: fork, and each side's life.
+fn launch(prepared: Prepared, report: Report, cli: &Cli, control: Option<OwnedFd>) -> i32 {
+    // SAFETY: getpid has no preconditions.
+    let parent_pid = unsafe { libc::getpid() };
+    // The gate the child waits at before `exec` (HUM-137): it opens when the
+    // parent has closed its write end. The parent closes it once nothing it
+    // holds is reachable for the agent any more: its own filter is on and it
+    // is no longer dumpable (HUM-138), so neither the report writer nor the
+    // listener of the refusals can be opened through `/proc/<pid>/fd` or
+    // `pidfd_getfd(2)`, and the agent cannot forge `EXEC fail`.
+    let Some((gate_read, gate_write)) = gate() else {
+        let err = io::Error::last_os_error();
+        report.check(Check::SeccompApplied, false, &format!("gate-failed:{err}"));
+        say(&format!(
+            "humanitl-shim: cannot create the exec gate: {err}\n"
+        ));
+        return EXIT_SETUP;
+    };
+    // Whatever the launcher left open without `CLOEXEC` goes before the
+    // fork, in both processes at once: the agent could otherwise reopen it
+    // through `/proc/<ppid>/fd`, and a stray line in a pipe of the launcher
+    // is a line in someone else's protocol. Kept are the report, the gate
+    // and the bridge listeners; the bridges open their Unix sockets per
+    // connection. Single-threaded here, so nothing opens a descriptor while
+    // the range closes.
+    let mut keep: Vec<c_int> = prepared.bound.iter().map(Bound::listener_fd).collect();
+    keep.extend([
+        report.fd().unwrap_or(-1),
+        gate_read.as_raw_fd(),
+        gate_write.as_raw_fd(),
+        control.as_ref().map_or(-1, AsRawFd::as_raw_fd),
+    ]);
+    close_inherited(&keep);
+    // The pair over which the child hands its listener to the parent
+    // (HUM-138), made after the close above and right before the fork, so
+    // that close cannot take it. Without it the agent still gets its filter,
+    // only one that answers `EPERM` itself and tells nobody.
+    let pair = match channel::channel() {
+        Ok(pair) => Some(pair),
+        Err(err) => {
+            say(&format!(
+                "humanitl-shim: warning: refused sockets will not be reported: {err}\n"
+            ));
+            None
+        }
+    };
+    let (parent_end, child_end) = pair.map_or((None, None), |(p, c)| (Some(p), Some(c)));
+    // SAFETY: the process is single-threaded here (the bridge threads start
+    // after the fork), so the child inherits a consistent image.
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        let err = io::Error::last_os_error();
+        report.check(Check::SeccompApplied, false, &format!("fork-failed:{err}"));
+        say(&format!("humanitl-shim: fork failed: {err}\n"));
+        return EXIT_SETUP;
+    }
+    if pid == 0 {
+        // Explicitly, not only through `close_inherited`: should that fail
+        // to close it, the child would hold a write end of its own gate and
+        // wait there for ever, and the parent with it in `reap`.
+        drop(gate_write);
+        drop(parent_end);
+        // The daemon's door for further shells stays with PID 1 (HUM-299):
+        // closed here explicitly, and `close_inherited` in `child` does not
+        // keep it either. The agent never holds it.
+        drop(control);
+        child(
+            parent_pid,
+            &AgentFilter {
+                reported: &prepared.agent_program,
+                fallback: &prepared.agent_fallback,
+                control: child_end,
+            },
+            &prepared.policy,
+            &report,
+            gate_read,
+            cli,
+        )
+    }
+    drop(gate_read);
+    drop(child_end);
+    let shells = control.map(|control| {
+        Arc::new(exec::Shells::new(
+            control,
+            prepared.agent_fallback,
+            &SHIM_VARS,
+        ))
+    });
+    let tally = Tally::new(
+        prepared
+            .policy
+            .families()
+            .iter()
+            .map(|family| family.number)
+            .collect(),
+    );
+    parent(
+        pid,
+        &prepared.bridge_program,
+        prepared.bound,
+        report,
+        gate_write,
+        &Refusals {
+            control: parent_end,
+            tally: Arc::new(tally),
+        },
+        shells,
+    )
+}
+
+/// The agent's two filters and the child's end of the channel to the parent.
+struct AgentFilter<'a> {
+    reported: &'a BpfProgram,
+    fallback: &'a BpfProgram,
+    control: Option<OwnedFd>,
+}
+
+impl AgentFilter<'_> {
+    /// Installs the reported gate and hands its listener to the parent; falls
+    /// back to the silent gate when the kernel refuses a listener, and says
+    /// so over the channel (HUM-138).
+    ///
+    /// The fallback is not a weaker filter: both answer `EPERM` to the same
+    /// calls, and both refuse the agent a listener of its own. What it loses
+    /// is the report, and the parent turns the reason into a `REFUSALS off`
+    /// line the host shows.
+    fn install(&self) -> Result<(), seccomp::Error> {
+        let Some(control) = self.control.as_ref().map(AsRawFd::as_raw_fd) else {
+            return seccomp::apply(self.fallback);
+        };
+        let listener = refusals::kernel_fits()
+            .map_err(|errno| seccomp::Error::Listener(io::Error::from_raw_os_error(errno)))
+            .and_then(|()| seccomp::apply_reporting(self.reported));
+        match listener {
+            Ok(listener) => {
+                // If the hand-over fails, the listener dies with this scope
+                // and the kernel answers the parked calls with `ENOSYS`; the
+                // `families` probe then refuses to start the agent.
+                channel::send_listener(control, listener.as_raw_fd());
+                Ok(())
+            }
+            Err(err) => {
+                let errno = match &err {
+                    seccomp::Error::Listener(io) | seccomp::Error::NoNewPrivs(io) => {
+                        io.raw_os_error().unwrap_or(0)
+                    }
+                    _ => 0,
+                };
+                seccomp::apply(self.fallback)?;
+                channel::send_unavailable(control, errno);
+                Ok(())
+            }
+        }
+    }
+
+    /// Tells the parent that the probes are over; the next refusal is the
+    /// agent's.
+    fn before_exec(&self) {
+        if let Some(control) = self.control.as_ref() {
+            channel::send_exec_marker(control.as_raw_fd());
+        }
+    }
+
+    fn control_fd(&self) -> Option<RawFd> {
+        self.control.as_ref().map(AsRawFd::as_raw_fd)
+    }
+}
+
+/// The parent's half of the report on refused sockets.
+struct Refusals {
+    control: Option<OwnedFd>,
+    tally: Arc<Tally>,
+}
+
+/// A pipe with `CLOEXEC` on both ends, as `(read, write)`.
+fn gate() -> Option<(OwnedFd, OwnedFd)> {
+    let mut fds = [0 as c_int; 2];
+    // SAFETY: `fds` is a valid two-element array for pipe2.
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+        return None;
+    }
+    // SAFETY: pipe2 just created both descriptors, and nothing else owns them.
+    Some(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+}
+
+/// Blocks until every write end of the gate is closed.
+fn wait_at_gate(gate: &OwnedFd) {
+    let mut byte = [0u8; 1];
+    loop {
+        // SAFETY: the buffer is one byte long and outlives the call.
+        let n = unsafe { libc::read(gate.as_raw_fd(), byte.as_mut_ptr().cast(), 1) };
+        if n == 0 {
+            return;
+        }
+        if n < 0 && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+            return;
+        }
+    }
+}
+
+// ---- the child --------------------------------------------------------------
+
+/// The child: die with the parent, drop what was inherited, install the
+/// filter, prove it, become the agent. Never returns.
+fn child(
+    parent_pid: libc::pid_t,
+    filter: &AgentFilter<'_>,
+    policy: &Policy,
+    report: &Report,
+    gate: OwnedFd,
+    cli: &Cli,
+) -> ! {
+    let command = cli.command.as_slice();
+    // SAFETY: prctl with PR_SET_PDEATHSIG only records a signal number.
+    unsafe {
+        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+    }
+    // The parent may have died between fork and prctl; then nobody would
+    // ever send the signal.
+    // SAFETY: getppid has no preconditions.
+    if unsafe { libc::getppid() } != parent_pid {
+        exit_now(EXIT_SETUP);
+    }
+
+    let keep: Vec<c_int> = [report.fd(), Some(gate.as_raw_fd()), filter.control_fd()]
+        .into_iter()
+        .flatten()
+        .collect();
+    close_inherited(&keep);
+    reset_signal_mask();
+    // Before the filter, so the filter never has to allow it.
+    if cli.controlling_terminal {
+        take_controlling_terminal();
+    }
+
+    if let Err(err) = filter.install() {
+        report.check(Check::SeccompApplied, false, &err.to_string());
+        say(&format!("humanitl-shim: seccomp setup failed: {err}\n"));
+        exit_now(EXIT_SETUP);
+    }
+
+    let mode = seccomp::seccomp_mode();
+    let nnp = seccomp::no_new_privs();
+    let evidence = format!("Seccomp:{};NoNewPrivs:{}", show(mode), show(nnp));
+    report.check(
+        Check::SeccompApplied,
+        mode == Some(2) && nnp == Some(1),
+        &evidence,
+    );
+    if matches!(mode, Some(m) if m != 2) || matches!(nnp, Some(n) if n != 1) {
+        say(&format!(
+            "humanitl-shim: seccomp setup failed: the kernel accepted the filter but /proc/self/status shows {evidence}\n"
+        ));
+        exit_now(EXIT_SETUP);
+    }
+
+    match probe_families(policy) {
+        Ok(evidence) => report.check(Check::Families, true, &evidence),
+        Err(Probe { evidence, fatal }) => {
+            report.check(Check::Families, false, &evidence);
+            if fatal {
+                say(&format!(
+                    "humanitl-shim: seccomp setup failed: the filter does not refuse what it must: {evidence}\n"
+                ));
+                exit_now(EXIT_SETUP);
+            }
+        }
+    }
+
+    for var in SHIM_VARS {
+        // SAFETY: the child is single-threaded; nothing reads the environment
+        // concurrently.
+        unsafe {
+            env::remove_var(var);
+        }
+    }
+    // From here on every refused socket is the agent's. The channel itself
+    // carries `CLOEXEC` and closes with the `exec`; the agent never holds it,
+    // and never the listener, which went to the parent in `install`.
+    filter.before_exec();
+    // The agent starts with the defaults. Last, and not a line earlier: the
+    // report writes above must survive a launcher that stopped reading, and
+    // they do that because Rust ignores SIGPIPE at start-up. Resetting the
+    // dispositions before them would kill the child on the first write into
+    // a closed pipe.
+    reset_signal_dispositions();
+
+    // Not a line earlier than here, and not skipped: see `launch`.
+    wait_at_gate(&gate);
+    drop(gate);
+    let err = exec(command);
+    // Out of band first: the terminal line below is for the person, the
+    // report line is the launcher's proof that the agent never ran (HUM-137).
+    report.exec_failed(&err);
+    say(&format!(
+        "humanitl-shim: exec failed: {}: {err}\n",
+        command
+            .first()
+            .map(|c| c.to_string_lossy())
+            .unwrap_or_default()
+    ));
+    exit_now(EXIT_EXEC)
+}
+
+/// Makes the child the leader of a new session with descriptor 0 as its
+/// controlling terminal (HUM-280).
+///
+/// Job control needs it: without a controlling terminal, `Ctrl+C` in an
+/// interactive shell is a byte and not `SIGINT` to the foreground program,
+/// and the shell reports "no job control". bwrap's `--new-session` stays in
+/// every command line; it detaches the whole sandbox from whatever terminal
+/// started bwrap. This step only attaches the session's first process to the
+/// terminal descriptor 0 already is.
+///
+/// Why this cannot reach the user's terminal:
+///
+/// - The launcher passes `--controlling-terminal` only when descriptor 0 is
+///   the follower side of a pseudo-terminal the daemon opened for this
+///   session (`StdioMode::Pty`), never with inherited descriptors.
+/// - `TIOCSCTTY` is called with argument 0: it never steals a terminal that
+///   is another session's controlling terminal. A user's terminal always is
+///   (the shell that started the command holds it), so the call would fail
+///   with `EPERM`; stealing needs `CAP_SYS_ADMIN` in the initial user
+///   namespace, which the sandbox never has.
+///
+/// A failure is reported on stderr and is not fatal: the agent then runs as
+/// before this issue, without job control, and every guarantee holds.
+fn take_controlling_terminal() {
+    // SAFETY: isatty only inspects descriptor 0.
+    if unsafe { libc::isatty(0) } != 1 {
+        say("humanitl-shim: warning: no controlling terminal: descriptor 0 is not a terminal\n");
+        return;
+    }
+    // SAFETY: setsid has no preconditions. The forked child is never a
+    // process group leader, so the call cannot fail with EPERM.
+    if unsafe { libc::setsid() } < 0 {
+        let err = io::Error::last_os_error();
+        say(&format!(
+            "humanitl-shim: warning: no controlling terminal: setsid failed: {err}\n"
+        ));
+        return;
+    }
+    // SAFETY: TIOCSCTTY takes an int; 0 means "do not steal".
+    if unsafe { libc::ioctl(0, libc::TIOCSCTTY, 0 as c_int) } != 0 {
+        let err = io::Error::last_os_error();
+        say(&format!(
+            "humanitl-shim: warning: no controlling terminal: TIOCSCTTY failed: {err}\n"
+        ));
+    }
+}
+
+/// A failed `families` probe: the evidence line and whether a refusal that
+/// did not happen makes the child refuse to `exec`.
+struct Probe {
+    evidence: String,
+    fatal: bool,
+}
+
+/// Proves the filter from inside: one family the policy refuses, one type it
+/// refuses, the x32 number of `socket`, `io_uring_setup` from the floor, and
+/// the first allowed family and type as the positive control.
+///
+/// A refusal that does not come back as `EPERM` is fatal: the kernel said the
+/// filter is installed, and the filter is ours, so this cannot happen, and if
+/// it does the agent must not run. A positive control that fails (a kernel
+/// without the family) is reported, not fatal: the agent would only be more
+/// locked in, not less.
+fn probe_families(policy: &Policy) -> Result<String, Probe> {
+    const DENIED_FAMILIES: [(&str, u32); 4] = [
+        ("AF_UNIX", libc::AF_UNIX.unsigned_abs()),
+        ("AF_NETLINK", libc::AF_NETLINK.unsigned_abs()),
+        ("AF_PACKET", libc::AF_PACKET.unsigned_abs()),
+        ("AF_VSOCK", libc::AF_VSOCK.unsigned_abs()),
+    ];
+    const DENIED_TYPES: [(&str, u32); 2] = [
+        ("SOCK_DGRAM", libc::SOCK_DGRAM.unsigned_abs()),
+        ("SOCK_RAW", libc::SOCK_RAW.unsigned_abs()),
+    ];
+    let Some(family) = policy.families().first() else {
+        return Err(Probe {
+            evidence: "no-allowed-family".to_owned(),
+            fatal: true,
+        });
+    };
+    let Some(sock_type) = policy.types().first() else {
+        return Err(Probe {
+            evidence: "no-allowed-type".to_owned(),
+            fatal: true,
+        });
+    };
+    let mut evidence = Vec::new();
+    let mut fatal = false;
+
+    let mut expect_eperm = |label: String, result: Result<(), i32>| {
+        let refused = result == Err(libc::EPERM);
+        fatal |= !refused;
+        evidence.push(format!("{label}={}", errno_name(result)));
+    };
+    if let Some((name, number)) = DENIED_FAMILIES
+        .iter()
+        .find(|(_, number)| !policy.families().iter().any(|f| f.number == *number))
+    {
+        expect_eperm(
+            format!("socket({name},{})", sock_type.name),
+            seccomp::probe_socket(u64::from(*number), u64::from(sock_type.number)),
+        );
+    }
+    if let Some((name, number)) = DENIED_TYPES
+        .iter()
+        .find(|(_, number)| !policy.types().iter().any(|t| t.number == *number))
+    {
+        expect_eperm(
+            format!("socket({},{name})", family.name),
+            seccomp::probe_socket(u64::from(family.number), u64::from(*number)),
+        );
+    }
+    expect_eperm(
+        "x32:socket".to_owned(),
+        seccomp::probe_socket_x32(u64::from(family.number), u64::from(sock_type.number)),
+    );
+    expect_eperm("io_uring_setup".to_owned(), seccomp::probe_io_uring_setup());
+
+    let control = seccomp::probe_socket(
+        u64::from(family.number),
+        u64::from(sock_type.number | libc::SOCK_CLOEXEC.unsigned_abs()),
+    );
+    let control_ok = control.is_ok();
+    evidence.push(format!(
+        "socket({},{})={}",
+        family.name,
+        sock_type.name,
+        errno_name(control)
+    ));
+
+    let evidence = evidence.join(";");
+    if fatal || !control_ok {
+        Err(Probe { evidence, fatal })
+    } else {
+        Ok(evidence)
+    }
+}
+
+fn errno_name(result: Result<(), i32>) -> String {
+    match result {
+        Ok(()) => "ok".to_owned(),
+        Err(errno) if errno == libc::EPERM => "EPERM".to_owned(),
+        Err(errno) => format!("errno{errno}"),
+    }
+}
+
+fn show(value: Option<u32>) -> String {
+    value.map_or_else(|| "?".to_owned(), |v| v.to_string())
+}
+
+/// Closes every descriptor from 3 upwards except those in `keep`, which get
+/// `CLOEXEC` so that `exec` closes them.
+///
+/// `close_range(2)` (Linux 5.9) through `syscall(2)`, so the binary does not
+/// depend on the C library's version; on `ENOSYS` the fallback walks
+/// `/proc/self/fd`.
+fn close_inherited(keep: &[c_int]) {
+    let mut kept: Vec<c_int> = keep.iter().copied().filter(|fd| *fd >= 3).collect();
+    kept.sort_unstable();
+    kept.dedup();
+    let mut first = 3;
+    for &fd in kept.iter().chain(std::iter::once(&c_int::MAX)) {
+        let last = if fd == c_int::MAX { fd } else { fd - 1 };
+        if first <= last && !close_range(first, last) {
+            close_by_listing(first, last, &kept);
+        }
+        first = fd.saturating_add(1);
+    }
+    for &fd in &kept {
+        // SAFETY: F_SETFD with FD_CLOEXEC changes one flag of one descriptor.
+        unsafe {
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+        }
+    }
+}
+
+fn close_range(first: c_int, last: c_int) -> bool {
+    let first = c_uint::try_from(first).unwrap_or(3);
+    let last = c_uint::try_from(last).unwrap_or(c_uint::MAX);
+    // SAFETY: close_range takes three integers; closing descriptors the
+    // child does not use has no memory-safety implications.
+    unsafe { libc::syscall(libc::SYS_close_range, first, last, 0 as c_uint) == 0 }
+}
+
+fn close_by_listing(first: c_int, last: c_int, keep: &[c_int]) {
+    let Ok(entries) = fs::read_dir("/proc/self/fd") else {
+        return;
+    };
+    let fds: Vec<c_int> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().to_str()?.parse().ok())
+        .collect();
+    for fd in fds {
+        if fd >= first && fd <= last && !keep.contains(&fd) {
+            // SAFETY: closing a descriptor the child inherited and does not
+            // use; a stale number (the listing's own directory) is EBADF.
+            unsafe {
+                libc::close(fd);
+            }
+        }
+    }
+}
+
+fn reset_signal_mask() {
+    // SAFETY: sigset_t is plain data; an all-zero value is what sigemptyset
+    // produces, and sigprocmask reads it.
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&raw mut set);
+        libc::sigprocmask(libc::SIG_SETMASK, &raw const set, ptr::null_mut());
+    }
+}
+
+/// Gives the agent the default disposition for every signal it can handle.
+///
+/// `execve` resets a handler to the default, but it keeps `SIG_IGN`. An
+/// ignored signal therefore travels from whoever started Humanitl all the way
+/// into the sandbox: a service under systemd, a background job of a shell
+/// without job control, anything started through `nohup`. The agent then
+/// cannot install a handler for it at all -- POSIX says a non-interactive
+/// shell may not trap a signal that was ignored on entry -- and
+/// `SandboxHandle::interrupt` asks a process that cannot hear the question.
+/// Measured on 2026-09-06: with `SIGINT` ignored in the launcher, `sh -c
+/// 'trap "exit 42" INT; sleep 60'` in the sandbox stayed alive through the
+/// whole grace period and was killed instead of ending with its own code.
+///
+/// The sandbox init decides this, not the launcher. `SIGKILL` and `SIGSTOP`
+/// are left out because they cannot be set; the real-time signals are
+/// included because a queued one would be ignored just as silently.
+///
+/// Called immediately before `execvp` and nowhere earlier. `SIGPIPE` is one of
+/// the dispositions it resets, and Rust's ignored `SIGPIPE` is what keeps the
+/// report writes of this child alive when the launcher has stopped reading.
+fn reset_signal_dispositions() {
+    let last = libc::SIGRTMAX();
+    for signal in 1..=last {
+        if signal == libc::SIGKILL || signal == libc::SIGSTOP {
+            continue;
+        }
+        // SAFETY: signal(2) with SIG_DFL takes two integers and has no
+        // preconditions; an unknown number answers with SIG_ERR and is
+        // ignored here on purpose.
+        unsafe {
+            libc::signal(signal, libc::SIG_DFL);
+        }
+    }
+}
+
+/// `execvp(command[0], command)`; returns only on failure.
+fn exec(command: &[OsString]) -> io::Error {
+    let argv: Result<Vec<CString>, _> = command
+        .iter()
+        .map(|arg| CString::new(arg.as_bytes()))
+        .collect();
+    let Ok(argv) = argv else {
+        return io::Error::new(io::ErrorKind::InvalidInput, "argument contains a NUL byte");
+    };
+    let Some(file) = argv.first() else {
+        return io::Error::new(io::ErrorKind::InvalidInput, "empty command");
+    };
+    let mut pointers: Vec<*const c_char> = argv.iter().map(|arg| arg.as_ptr()).collect();
+    pointers.push(ptr::null());
+    // SAFETY: `pointers` is a NUL-terminated array of pointers to
+    // NUL-terminated strings that outlive the call; execvp reads them.
+    unsafe {
+        libc::execvp(file.as_ptr(), pointers.as_ptr());
+    }
+    io::Error::last_os_error()
+}
+
+fn exit_now(code: i32) -> ! {
+    // SAFETY: _exit ends the process without unwinding or running the
+    // parent's destructors in the child's copy.
+    unsafe { libc::_exit(code) }
+}
+
+// ---- the parent -------------------------------------------------------------
+
+/// The parent: forward signals, wear the bridge filter, serve the bridges,
+/// wait for the child and answer with its status.
+fn parent(
+    child: libc::pid_t,
+    bridge_program: &BpfProgram,
+    bound: Vec<Bound>,
+    report: Report,
+    gate: OwnedFd,
+    refusals: &Refusals,
+    shells: Option<Arc<exec::Shells>>,
+) -> i32 {
+    // The parent holds the listener and the report descriptor while the agent
+    // runs. Neither may be reachable from the agent through
+    // `/proc/<pid>/fd` or `pidfd_getfd(2)`: with the listener it could answer
+    // its own refused calls, with the report it could write lines of its own.
+    // A process that is not dumpable passes `ptrace_may_access` for nobody
+    // without `CAP_SYS_PTRACE`, which the sandbox has dropped. After the fork,
+    // so the child and its `exec` keep the default, and first of all, well
+    // before `drop(gate)` (HUM-138). Since HUM-203 this process is PID 1 of
+    // the sandbox, and the same flag is what keeps `/proc/1/mem` and
+    // `pidfd_getfd(2)` on PID 1 closed to the agent: an init that stays
+    // dumpable would be a process without the agent's filter that the agent
+    // could write into.
+    let report = Arc::new(report);
+    if let Err(err) = set_undumpable() {
+        return refuse_to_open(child, report, &format!("set:{err}"));
+    }
+    CHILD.store(child, Ordering::SeqCst);
+    forward_signals();
+
+    // The parent keeps its copy of the report descriptor while the agent runs:
+    // the refusals of the agent are written on it, the last tally after
+    // `reap` (HUM-138). The child waits at the gate until this process is
+    // non-dumpable (above) and wears its own filter (below). Non-dumpable
+    // replaces HUM-137's "no report writer exists when the agent runs": a
+    // writer still exists, but the agent can no longer reach it through
+    // `/proc/<pid>/fd` or `pidfd_getfd(2)`, so it still cannot forge a line.
+    if let Err(err) = seccomp::apply(bridge_program) {
+        report.check(
+            Check::SeccompApplied,
+            false,
+            &format!("bridge-filter:{err}"),
+        );
+        say(&format!(
+            "humanitl-shim: seccomp setup failed: bridge filter: {err}\n"
+        ));
+        drop(report);
+        kill_and_reap(child);
+        return EXIT_SETUP;
+    }
+    watch_refusals(&report, refusals);
+    for listener in bound {
+        let bridge_name = listener.bridge().name.clone();
+        let name = format!("bridge-{bridge_name}");
+        if let Err(err) = thread::Builder::new()
+            .name(name)
+            .spawn(move || listener.serve())
+        {
+            report.check(
+                Check::BridgeListening,
+                false,
+                &format!("{bridge_name}=no-accept-thread:{err}"),
+            );
+            say(&format!(
+                "humanitl-shim: bridge setup failed: cannot start the accept thread: {err}\n"
+            ));
+            drop(report);
+            kill_and_reap(child);
+            return EXIT_SETUP;
+        }
+    }
+    // Only now may the agent start: this process is non-dumpable, wears its
+    // filter and serves the listener (HUM-137, HUM-138). The gate never opens
+    // on a premise that is not proven: the flag is read back right here.
+    if let Err(err) = check_undumpable() {
+        return refuse_to_open(child, report, &format!("get:{err}"));
+    }
+    // The door for further shells opens last, under the same premises as
+    // the gate: this process wears its filter and is not dumpable, and every
+    // shell forked from here inherits both (HUM-299). A thread that cannot
+    // start costs the shells, not the session.
+    let shells = shells.filter(|shells| {
+        let serving = Arc::clone(shells);
+        let started = thread::Builder::new()
+            .name("shells".to_owned())
+            .spawn(move || serving.serve());
+        if let Err(err) = &started {
+            say(&format!(
+                "humanitl-shim: warning: no further shells: cannot start their thread: {err}\n"
+            ));
+        }
+        started.is_ok()
+    });
+    drop(gate);
+    let code = reap(child, shells.as_deref());
+    if let Some(shells) = &shells {
+        // The namespace ends with this process anyway; the shells go first
+        // and on purpose, not as a side effect.
+        shells.kill_all();
+    }
+    // The last word on the refusals: everything that changed since the last
+    // periodic flush, once the agent can make no further attempt.
+    refusals::flush(&report, &refusals.tally);
+    drop(report);
+    code
+}
+
+/// Makes this process non-dumpable (HUM-138).
+fn set_undumpable() -> Result<(), io::Error> {
+    // SAFETY: prctl with PR_SET_DUMPABLE only sets a flag of this process.
+    let rc = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// Reads the flag back: the gate opens only when this process is proven
+/// non-dumpable, not merely asked to be (HUM-138).
+fn check_undumpable() -> Result<(), String> {
+    // SAFETY: prctl with PR_GET_DUMPABLE only reads a flag of this process.
+    let rc = unsafe { libc::prctl(libc::PR_GET_DUMPABLE, 0, 0, 0, 0) };
+    match rc {
+        0 => Ok(()),
+        -1 => Err(io::Error::last_os_error().to_string()),
+        other => Err(format!("still-{other}")),
+    }
+}
+
+/// Ends the run before the gate opens, because a premise of the gate does not
+/// hold: the failed check goes on the report, the child dies unstarted.
+fn refuse_to_open(child: libc::pid_t, report: Arc<Report>, why: &str) -> i32 {
+    report.check(Check::SeccompApplied, false, &format!("dumpable:{why}"));
+    say(&format!(
+        "humanitl-shim: setup failed: the parent is not non-dumpable: {why}\n"
+    ));
+    drop(report);
+    kill_and_reap(child);
+    EXIT_SETUP
+}
+
+/// Takes the listener from the child and starts counting (HUM-138).
+///
+/// Writes `REFUSALS on` when the listener is served, `REFUSALS off <why>`
+/// when it is not, and nothing when the child ended before it said either:
+/// then the child has written its own failed check line.
+fn watch_refusals(report: &Arc<Report>, refusals: &Refusals) {
+    let Some(control) = refusals.control.as_ref() else {
+        report.line("REFUSALS off no-channel");
+        return;
+    };
+    let listener = match channel::receive(control) {
+        Received::Listener(listener) => listener,
+        Received::Unavailable(errno) => {
+            report.line(&format!("REFUSALS off errno{errno}"));
+            say(&format!(
+                "humanitl-shim: warning: refused sockets will not be reported: {}\n",
+                io::Error::from_raw_os_error(errno)
+            ));
+            return;
+        }
+        Received::Closed => return,
+    };
+    let Ok(control) = control.try_clone() else {
+        report.line("REFUSALS off no-channel");
+        return;
+    };
+    let tally = Arc::clone(&refusals.tally);
+    let served = thread::Builder::new()
+        .name("refusals".to_owned())
+        .spawn(move || refusals::serve(&listener, &control, &tally));
+    if let Err(err) = served {
+        // The listener went down with the closure; the kernel now answers the
+        // parked calls with `ENOSYS`, and the child's `families` probe stops
+        // the agent from starting. Nor could the agent claim a listener of
+        // its own: both gates refuse the flag (`seccomp.rs`).
+        report.line(&format!("REFUSALS off thread:{err}"));
+        return;
+    }
+    report.line("REFUSALS on");
+    let flusher_report = Arc::clone(report);
+    let tally = Arc::clone(&refusals.tally);
+    let _ = thread::Builder::new()
+        .name("refusals-flush".to_owned())
+        .spawn(move || refusals::flush_every(&flusher_report, &tally));
+}
+
+extern "C" fn relay(signal: c_int) {
+    let child = CHILD.load(Ordering::SeqCst);
+    if child > 0 {
+        // SAFETY: kill is async-signal-safe and takes two integers.
+        unsafe {
+            libc::kill(child, signal);
+        }
+    }
+}
+
+fn forward_signals() {
+    // Tragend, seit der Shim PID 1 der Sandbox ist (HUM-203): Der Kernel stellt
+    // einem Namensraum-Init kein Signal zu, für das es keinen Handler hat,
+    // außer SIGKILL und SIGSTOP von außerhalb. Ohne diese Weiterleitung
+    // verpuffte ein SIGTERM an den Shim, und der Agent hörte es nie.
+    // SIGINT fehlt hier mit Absicht: Ein Terminal schickt es an die ganze
+    // Vordergrund-Prozessgruppe, und der Launcher (SandboxHandle::interrupt)
+    // an die Prozessgruppe der Sandbox; der Agent hat es dann schon. Reichte
+    // der Shim es zusaetzlich weiter, bekaeme der Agent zwei SIGINT wenige
+    // Millisekunden hintereinander, und viele Agenten deuten das zweite als
+    // "sofort abbrechen". SIGTERM und SIGHUP kommen meist an den Shim allein
+    // (systemd, kill <pid>) und werden deshalb weitergereicht.
+    // Der Shim selbst darf an SIGINT nicht sterben: Es kommt an die ganze
+    // Gruppe, und ein toter Shim hiesse ein totes bwrap mit Exit 130, bevor
+    // der Agent seinen Handler ausfuehren konnte. Nur der Elternprozess
+    // ignoriert es; das Kind hat die Vorgabe geerbt, weil dies nach dem Fork
+    // geschieht.
+    // SAFETY: SIG_IGN fuer ein Signal des eigenen Prozesses zu setzen hat
+    // keine Vorbedingungen.
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_IGN);
+    }
+    for signal in [libc::SIGTERM, libc::SIGHUP] {
+        // SAFETY: sigaction is plain data; the handler is an extern "C" fn
+        // that calls only kill(2).
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = relay as extern "C" fn(c_int) as usize;
+            action.sa_flags = libc::SA_RESTART;
+            libc::sigemptyset(&raw mut action.sa_mask);
+            libc::sigaction(signal, &raw const action, ptr::null_mut());
+        }
+    }
+}
+
+fn kill_and_reap(child: libc::pid_t) {
+    // SAFETY: kill takes two integers.
+    unsafe {
+        libc::kill(child, libc::SIGKILL);
+    }
+    reap(child, None);
+}
+
+/// Waits for the child and turns its status into ours: the exit code, or
+/// 128 + signal.
+///
+/// Der Shim ist PID 1 der Sandbox (`--as-pid-1`, HUM-203), und jede Waise im
+/// Namensraum wird sein Kind. Deshalb `waitpid(-1)` und nicht
+/// `waitpid(child)`: Eine Waise, die niemand erntet, bleibt als Zombie
+/// liegen, und ein Agent, der viele Prozesse abkoppelt, füllt so die
+/// Prozesstabelle. Der Status einer Waise wird verworfen; nur der eigene
+/// Kindprozess entscheidet über den Exit-Code. `ECHILD`, ohne dass das Kind
+/// geerntet wurde, kann nicht vorkommen und endet mit 126. Eine weitere Shell
+/// (HUM-299) ist auch ein Kind dieses Prozesses; ihr Ende geht an `shells`,
+/// das es dem Daemon meldet.
+fn reap(child: libc::pid_t, shells: Option<&exec::Shells>) -> i32 {
+    loop {
+        let mut status: c_int = 0;
+        // SAFETY: waitpid on any child of this process with a valid status
+        // pointer.
+        let waited = unsafe { libc::waitpid(-1, &raw mut status, 0) };
+        if waited == child {
+            if libc::WIFEXITED(status) {
+                return libc::WEXITSTATUS(status);
+            }
+            if libc::WIFSIGNALED(status) {
+                return 128 + libc::WTERMSIG(status);
+            }
+            continue;
+        }
+        if waited > 0 {
+            // Eine weitere Shell meldet ihr Ende; eine Waise des Agenten wird
+            // geerntet und vergessen.
+            if let Some(shells) = shells {
+                shells.reaped(waited, status);
+            }
+            continue;
+        }
+        if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+            return EXIT_SETUP;
+        }
+    }
+}
+
+// ---- command line and small helpers -----------------------------------------
+
+struct Cli {
+    proxy_port: u16,
+    /// `--controlling-terminal` (HUM-280).
+    controlling_terminal: bool,
+    /// `--control-fd` (HUM-299).
+    control_fd: Option<RawFd>,
+    command: Vec<OsString>,
+}
+
+#[derive(Debug)]
+enum CliError {
+    Help,
+    Rules,
+    MissingProxyPort,
+    BadProxyPort(String),
+    BadControlFd(String),
+    MissingValue(&'static str),
+    UnknownOption(String),
+    Positional(String),
+    MissingCommand,
+}
+
+impl fmt::Display for CliError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Help => write!(f, "help"),
+            Self::Rules => write!(f, "rules"),
+            Self::MissingProxyPort => write!(f, "--proxy-port is required"),
+            Self::BadProxyPort(value) => write!(f, "--proxy-port {value:?} is not a port"),
+            Self::BadControlFd(value) => {
+                write!(f, "--control-fd {value:?} is not a descriptor above 2")
+            }
+            Self::MissingValue(flag) => write!(f, "{flag} needs a value"),
+            Self::UnknownOption(arg) => write!(f, "unknown option {arg:?}"),
+            Self::Positional(arg) => write!(f, "unexpected argument {arg:?} before --"),
+            Self::MissingCommand => write!(f, "no command after --"),
+        }
+    }
+}
+
+fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> {
+    let mut proxy_port = None;
+    let mut controlling_terminal = false;
+    let mut control_fd = None;
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("--") => {
+                let command: Vec<OsString> = args.collect();
+                if command.is_empty() {
+                    return Err(CliError::MissingCommand);
+                }
+                let proxy_port = proxy_port.ok_or(CliError::MissingProxyPort)?;
+                return Ok(Cli {
+                    proxy_port,
+                    controlling_terminal,
+                    control_fd,
+                    command,
+                });
+            }
+            Some("--help" | "-h") => return Err(CliError::Help),
+            Some("--rules") => return Err(CliError::Rules),
+            Some("--controlling-terminal") => controlling_terminal = true,
+            Some("--control-fd") => {
+                let value = args.next().ok_or(CliError::MissingValue("--control-fd"))?;
+                let fd = value
+                    .to_str()
+                    .and_then(|text| text.parse::<RawFd>().ok())
+                    .filter(|fd| *fd > 2)
+                    .ok_or_else(|| CliError::BadControlFd(value.to_string_lossy().into_owned()))?;
+                control_fd = Some(fd);
+            }
+            Some("--proxy-port") => {
+                let value = args.next().ok_or(CliError::MissingValue("--proxy-port"))?;
+                let port = value
+                    .to_str()
+                    .and_then(|text| text.parse::<u16>().ok())
+                    .ok_or_else(|| CliError::BadProxyPort(value.to_string_lossy().into_owned()))?;
+                proxy_port = Some(port);
+            }
+            Some(other) if other.starts_with('-') => {
+                return Err(CliError::UnknownOption(other.to_owned()));
+            }
+            _ => return Err(CliError::Positional(arg.to_string_lossy().into_owned())),
+        }
+    }
+    Err(CliError::MissingCommand)
+}
+
+/// A setup failure: which area, and why. Always exit 126.
+struct SetupError {
+    area: &'static str,
+    /// The check whose line reports this failure, because the launcher reads
+    /// names, not prose. A policy the environment does not describe means the
+    /// agent will never carry a filter (`seccomp_applied`); a bridge list that
+    /// cannot be read, bound or reached means nothing listens
+    /// (`bridge_listening`).
+    check: Check,
+    why: String,
+}
+
+impl SetupError {
+    fn seccomp(err: impl fmt::Display) -> Self {
+        Self {
+            area: "seccomp",
+            check: Check::SeccompApplied,
+            why: err.to_string(),
+        }
+    }
+
+    fn bridge(err: impl fmt::Display) -> Self {
+        Self {
+            area: "bridge",
+            check: Check::BridgeListening,
+            why: err.to_string(),
+        }
+    }
+
+    const fn check(&self) -> Check {
+        self.check
+    }
+}
+
+impl fmt::Display for SetupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} setup failed: {}", self.area, self.why)
+    }
+}
+
+/// A variable that is not valid UTF-8.
+struct NotUtf8(&'static str);
+
+impl fmt::Display for NotUtf8 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} is not valid UTF-8", self.0)
+    }
+}
+
+/// The agent's policy from the three `HUMANITL_SECCOMP_*` variables.
+fn policy_from_env() -> Result<Policy, SetupError> {
+    let families = env_utf8("HUMANITL_SECCOMP_FAMILIES").map_err(SetupError::seccomp)?;
+    let types = env_utf8("HUMANITL_SECCOMP_TYPES").map_err(SetupError::seccomp)?;
+    let deny = env_utf8("HUMANITL_SECCOMP_DENY").map_err(SetupError::seccomp)?;
+    Policy::from_env(families.as_deref(), types.as_deref(), deny.as_deref())
+        .map_err(SetupError::seccomp)
+}
+
+fn env_utf8(name: &'static str) -> Result<Option<String>, NotUtf8> {
+    match env::var_os(name) {
+        None => Ok(None),
+        Some(value) => value.into_string().map(Some).map_err(|_| NotUtf8(name)),
+    }
+}
+
+/// One message on stderr. Never panics, whatever stderr is.
+fn say(text: &str) {
+    let _ = io::stderr().lock().write_all(text.as_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    fn args(list: &[&str]) -> impl Iterator<Item = OsString> {
+        list.iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    #[test]
+    fn command_line_has_exactly_one_shape() {
+        let cli = parse_cli(args(&["--proxy-port", "3128", "--", "sh", "-c", "exit 7"])).unwrap();
+        assert_eq!(cli.proxy_port, 3128);
+        assert!(!cli.controlling_terminal);
+        assert_eq!(cli.command, ["sh", "-c", "exit 7"].map(OsString::from));
+        let cli = parse_cli(args(&[
+            "--proxy-port",
+            "3128",
+            "--controlling-terminal",
+            "--",
+            "bash",
+        ]))
+        .unwrap();
+        assert!(cli.controlling_terminal);
+        assert_eq!(cli.control_fd, None);
+        assert_eq!(cli.command, [OsString::from("bash")]);
+        let cli = parse_cli(args(&[
+            "--proxy-port",
+            "3128",
+            "--control-fd",
+            "9",
+            "--",
+            "sh",
+        ]))
+        .unwrap();
+        assert_eq!(cli.control_fd, Some(9));
+        // Arguments after -- are the agent's, whatever they look like.
+        let cli = parse_cli(args(&["--proxy-port", "0", "--", "--help"])).unwrap();
+        assert_eq!(cli.command, [OsString::from("--help")]);
+    }
+
+    #[test]
+    fn command_line_mistakes_are_usage_errors() {
+        let cases: &[(&[&str], &str)] = &[
+            (&[], "no command after --"),
+            (&["--proxy-port", "3128"], "no command after --"),
+            (&["--proxy-port", "3128", "--"], "no command after --"),
+            (&["--", "sh"], "--proxy-port is required"),
+            (&["--proxy-port"], "--proxy-port needs a value"),
+            (&["--proxy-port", "http", "--", "sh"], "not a port"),
+            (&["--proxy-port", "70000", "--", "sh"], "not a port"),
+            (
+                &["--verbose", "--proxy-port", "1", "--", "sh"],
+                "unknown option \"--verbose\"",
+            ),
+            (&["sh", "--", "sh"], "unexpected argument \"sh\" before --"),
+            (
+                &["--proxy-port", "1", "--control-fd", "2", "--", "sh"],
+                "--control-fd \"2\" is not a descriptor above 2",
+            ),
+            (
+                &["--proxy-port", "1", "--control-fd", "x", "--", "sh"],
+                "is not a descriptor above 2",
+            ),
+            (
+                &["--proxy-port", "1", "--control-fd"],
+                "--control-fd needs a value",
+            ),
+        ];
+        for (list, needle) in cases {
+            let err = match parse_cli(args(list)) {
+                Ok(_) => panic!("{list:?} parsed"),
+                Err(err) => err.to_string(),
+            };
+            assert!(err.contains(needle), "{list:?}: {err}");
+        }
+        assert!(matches!(parse_cli(args(&["--help"])), Err(CliError::Help)));
+        assert!(matches!(
+            parse_cli(args(&["-h", "--", "sh"])),
+            Err(CliError::Help)
+        ));
+    }
+
+    #[test]
+    fn errno_names_are_short_and_eperm_is_spelled_out() {
+        assert_eq!(errno_name(Ok(())), "ok");
+        assert_eq!(errno_name(Err(libc::EPERM)), "EPERM");
+        assert_eq!(
+            errno_name(Err(libc::EINVAL)),
+            format!("errno{}", libc::EINVAL)
+        );
+        assert_eq!(show(Some(2)), "2");
+        assert_eq!(show(None), "?");
+    }
+}
