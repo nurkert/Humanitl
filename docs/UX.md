@@ -578,6 +578,22 @@ the emulator counts its columns and rows again and sends them up on the
 throttled resize path (HUM-305), so the agent redraws. The palette lists
 the three commands while a terminal is shown.
 
+**Copy and paste in the terminal (HUM-313)** work as in every Linux
+terminal. `Ctrl+Shift+C` copies the selection, `Ctrl+Shift+V` pastes;
+plain `Ctrl+C` stays the interrupt of the agent and plain `Ctrl+V` the
+quoted insert of readline, both reach the agent. The two chords act only
+while the terminal has the keyboard and take the way of the other
+exceptions through `TerminalPane._onKey`; no binding of the application
+uses them elsewhere. The middle button pastes as long as the program does
+not take the mouse itself. The right click opens the menu with Copy
+(disabled without a selection), Paste and Select all, which stands in for
+`Ctrl+A`, the start of the line for the agent. A paste is bracketed while
+the program asked for it (`DECSET 2004`), so several lines arrive as one
+input, and every escape sequence in the pasted text is dropped, so an
+`ESC [201~` cannot end the bracket early. Selecting alone copies nothing:
+Flutter offers no primary selection on Linux, and the clipboard is filled
+only by an explicit action.
+
 ### 5.3 Every bound key does something
 
 Every activator in `interceptShortcuts()` has an action in the same screen. A widget test compares the two key sets and fails if they differ; a binding without an action is deleted, not disabled. Today `/`, `Ctrl+D` and `N` are bound and mute.

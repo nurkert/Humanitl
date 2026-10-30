@@ -7,6 +7,7 @@
 /// [isTextInputFocused] first, because `Shortcuts` fires inside text fields.
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -223,6 +224,77 @@ class TerminalZoomActivator extends ShortcutActivator {
     TerminalZoom.zoomIn => 'Ctrl + Plus / Equal / Numpad Add',
     TerminalZoom.zoomOut => 'Ctrl + Minus / Numpad Subtract',
     TerminalZoom.reset => 'Ctrl + Shift + 0 / Ctrl + Numpad 0',
+  };
+}
+
+/// What a clipboard chord of the terminal does (HUM-313).
+enum TerminalClipboard {
+  /// Copy the selection. `Ctrl+Shift+C`, `Cmd+C` on Apple platforms.
+  copy,
+
+  /// Paste the clipboard as input for the agent. `Ctrl+Shift+V`, `Cmd+V` on
+  /// Apple platforms.
+  paste,
+}
+
+/// The chords that copy from and paste into the terminal (HUM-313).
+///
+/// **`Shift` is part of the chord, as in every terminal on Linux.** Plain
+/// `Ctrl+C` is the interrupt of the agent (`0x03`) and plain `Ctrl+V` is
+/// quoted insert in readline (`0x16`); both stay with the agent. On Apple
+/// platforms the chords are `Cmd+C` and `Cmd+V`, because `Cmd` never reaches
+/// a terminal program there.
+///
+/// **Not part of [shellShortcuts].** The chords act only while the emulator
+/// has the keyboard: `TerminalPane._onKey` asks this activator itself, after
+/// the shell's bindings. Outside the terminal `Ctrl+Shift+C` and
+/// `Ctrl+Shift+V` stay free for whoever has the focus. None of the bindings
+/// of the application uses `C` or `V` with `Ctrl` and `Shift` (checked against
+/// every `SingleActivator` in `app/lib` and `app/packages` and CONVENTIONS
+/// 3.9; `Ctrl+Shift+F` and `Ctrl+Shift+L` are the group decisions of the
+/// queue, `Ctrl+Shift+Enter` the full window, `Ctrl+Shift+0` the zoom reset).
+///
+/// Exactly these modifiers: `Ctrl+Alt+Shift+C` is another chord. No repeats:
+/// a held chord copies or pastes once; the terminal keeps the repeats and the
+/// release of the key from the agent.
+class TerminalClipboardActivator extends ShortcutActivator {
+  /// Creates the activator for [action].
+  const TerminalClipboardActivator(this.action);
+
+  /// The chord this activator stands for.
+  final TerminalClipboard action;
+
+  LogicalKeyboardKey get _key => switch (action) {
+    TerminalClipboard.copy => LogicalKeyboardKey.keyC,
+    TerminalClipboard.paste => LogicalKeyboardKey.keyV,
+  };
+
+  @override
+  Iterable<LogicalKeyboardKey> get triggers => <LogicalKeyboardKey>[_key];
+
+  @override
+  bool accepts(KeyEvent event, HardwareKeyboard state) {
+    if (event is! KeyDownEvent || event.logicalKey != _key) {
+      return false;
+    }
+    return switch (defaultTargetPlatform) {
+      TargetPlatform.iOS || TargetPlatform.macOS =>
+        state.isMetaPressed &&
+            !state.isControlPressed &&
+            !state.isShiftPressed &&
+            !state.isAltPressed,
+      _ =>
+        state.isControlPressed &&
+            state.isShiftPressed &&
+            !state.isAltPressed &&
+            !state.isMetaPressed,
+    };
+  }
+
+  @override
+  String debugDescribeKeys() => switch (action) {
+    TerminalClipboard.copy => 'Ctrl + Shift + C (Cmd + C on Apple)',
+    TerminalClipboard.paste => 'Ctrl + Shift + V (Cmd + V on Apple)',
   };
 }
 

@@ -3326,5 +3326,11 @@
   "shellPaletteTerminalZoomReset": "Terminal text default size",
   "@shellPaletteTerminalZoomReset": {"description": "Command palette entry, listed only while a terminal with a running session is on the screen: brings the terminal text back to its default size; Ctrl+Shift+0 and Ctrl with the numpad 0 do the same (HUM-301)."},
   "sandboxDiagnosticDismiss": "Dismiss",
-  "@sandboxDiagnosticDismiss": {"description": "Label and hover text of the close glyph on one finding of the Sandbox section. It hides that finding until its code or its cause changes; the daemon is not informed (HUM-302)."}
+  "@sandboxDiagnosticDismiss": {"description": "Label and hover text of the close glyph on one finding of the Sandbox section. It hides that finding until its code or its cause changes; the daemon is not informed (HUM-302)."},
+  "sandboxTerminalSelectAll": "Select all",
+  "@sandboxTerminalSelectAll": {"description": "Context menu entry over the terminal that selects the whole buffer, scrollback included. It replaces Ctrl+A, which belongs to the agent (start of line in readline) (HUM-313)."},
+  "sandboxTerminalCopyKey": "Ctrl+Shift+C",
+  "@sandboxTerminalCopyKey": {"description": "The chord that copies the terminal selection, shown next to the Copy entry of the terminal menu. Plain Ctrl+C stays the interrupt of the agent. The modifiers are named as printed on the keyboard of the language (HUM-313)."},
+  "sandboxTerminalPasteKey": "Ctrl+Shift+V",
+  "@sandboxTerminalPasteKey": {"description": "The chord that pastes into the terminal, shown next to the Paste entry of the terminal menu. Plain Ctrl+V stays with the agent. The modifiers are named as printed on the keyboard of the language (HUM-313)."}
 }
