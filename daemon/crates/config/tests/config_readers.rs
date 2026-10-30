@@ -138,6 +138,9 @@ const REGISTER: &[(&str, &str)] = &[
     ("resolver.prefer", "effective"),
     ("resolver.test_ca", "effective"),
     ("sandbox.env", "effective"),
+    // Gelesen in `SandboxService::start`, wenn der Start keinen Modus nennt
+    // (HUM-350), und in `humanitl run` für die Anfrage.
+    ("sandbox.mode", "effective"),
     ("sandbox.profile", "effective"),
     ("sandbox.work_dir", "effective"),
     ("sandbox.work_mode", "effective"),

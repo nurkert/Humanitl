@@ -86,7 +86,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use humanitl_config::secret::{KeyRef, KeyStore};
-use humanitl_config::{Config, WorkMode};
+use humanitl_config::{Config, SandboxMode, WorkMode};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::ids::{SandboxId, SessionId};
 use humanitl_core::{Diagnostic, FixAction, FlowEvent, Severity};
@@ -420,6 +420,11 @@ struct Launched {
     watch: Option<SummaryWatch>,
     /// Die Kennung dieses Laufs, zugleich der Schlüssel der Zusammenfassung.
     sandbox: SandboxId,
+    /// Die Schicht einer Wegwerf-Sandbox (HUM-350); `None` für jeden anderen
+    /// Lauf. Sie steht hier und nicht in [`Running`], aus demselben Grund
+    /// wie der Schnappschuss: Ein Stopp räumt `running` weg, und die
+    /// Änderungen dürfen dabei nicht verloren gehen.
+    disposable: Option<crate::disposable::Waiting>,
 }
 
 /// Der Zuhörer für den Stand der Durchreiche eines Laufs (HUM-251).
@@ -599,6 +604,10 @@ struct Inner {
     /// Ob die Durchreiche an das Modell im laufenden Lauf zuletzt scheiterte
     /// (HUM-251); `Status.llm` liest es.
     llm_reach: LlmReach,
+    /// Die obere Schicht einer beendeten Wegwerf-Sandbox, deren Änderungen
+    /// auf den Menschen warten (HUM-350). Höchstens eine; ein neuer Start
+    /// mit wartenden Änderungen wird abgelehnt.
+    disposable: Mutex<Option<crate::disposable::Waiting>>,
 }
 
 /// Woran der Dienst hängt, wenn eine Sitzung startet.
@@ -707,6 +716,7 @@ impl SandboxService {
                 leaving: std::sync::atomic::AtomicBool::new(false),
                 retired: tokio::sync::watch::Sender::new(false),
                 llm_reach: LlmReach::default(),
+                disposable: Mutex::new(None),
             }),
         }
     }
@@ -915,6 +925,17 @@ impl SandboxService {
             Some(Op::IsolationCheck(())) => {
                 tokio::task::spawn_blocking(move || inner.isolation_check(&tx));
             }
+            // Die Wegwerf-Sandbox (HUM-350): Lesen, Prüfen und Schreiben im
+            // Projekt sind blockierende Arbeit.
+            Some(Op::Changes(())) => {
+                tokio::task::spawn_blocking(move || inner.disposable_changes(&tx));
+            }
+            Some(Op::ApplyChanges(request)) => {
+                tokio::task::spawn_blocking(move || inner.apply_changes(&request, &tx));
+            }
+            Some(Op::DiscardChanges(request)) => {
+                tokio::task::spawn_blocking(move || inner.discard_changes(&request, &tx));
+            }
             _ => {
                 tokio::task::spawn_blocking(move || {
                     inner.snapshot_or_diagnostic(&v1::sandbox_request::Plan::default(), &tx);
@@ -989,6 +1010,12 @@ impl Inner {
             return true;
         }
         if pending.claimed || lock(&self.running).is_some() {
+            return false;
+        }
+        // Wartende Änderungen einer Wegwerf-Sandbox halten den Daemon
+        // (HUM-350): Sein Abschied verwürfe sie, und eine Paketaktualisierung
+        // ist kein Grund dafür.
+        if lock(&self.disposable).is_some() {
             return false;
         }
         self.leaving
@@ -1403,11 +1430,13 @@ impl Inner {
         start: v1::sandbox_request::Start,
         tx: mpsc::Sender<v1::SandboxEvent>,
     ) {
-        let plan = v1::sandbox_request::Plan {
-            profile: start.profile.clone(),
-            work_dir: start.work_dir.clone(),
-            work_mode: start.work_mode.clone(),
-            work_dir_source: start.work_dir_source.clone(),
+        let plan = plan_of(&start);
+        // `direct` or `disposable` (HUM-350); a word that is neither ends the
+        // start before it claims anything. The buffer is empty here.
+        let Ok(mode) = crate::disposable::parse_mode(&start.sandbox_mode)
+            .map_err(|diagnostic| tx.try_send(diagnostic_event(&diagnostic)))
+        else {
+            return;
         };
         // Der Anspruch zuerst, vor jeder Prüfung, die etwas merkt: Ein
         // zweiter Start soll `pending` nicht anfassen, während der erste
@@ -1495,7 +1524,7 @@ impl Inner {
         // will sehen, was gerade geschieht.
         let (output_tx, output_rx) = std::sync::mpsc::channel();
         let launched = tokio::task::spawn_blocking(move || {
-            this.launch(&launch_plan, &command, Some(output_tx))
+            this.launch(&launch_plan, &command, mode, Some(output_tx))
         })
         .await;
         match launched {
@@ -1552,8 +1581,54 @@ impl Inner {
     ) {
         let watch = run.watch;
         let sandbox = run.sandbox;
+        let disposable = run.disposable;
         self.attend(plan, output, llm, tx).await;
-        self.summarize(watch, sandbox, tx).await;
+        match disposable {
+            #[cfg(target_os = "linux")]
+            Some(waiting) => self.settle_disposable(waiting, tx).await,
+            // Ohne Overlay entsteht nie eine Schicht (HUM-350).
+            #[cfg(not(target_os = "linux"))]
+            Some(waiting) => match waiting {},
+            None => self.summarize(watch, sandbox, tx).await,
+        }
+    }
+
+    /// Nach dem Ende einer Wegwerf-Sandbox: die Grenze anhalten, die Schicht
+    /// ablegen und die Änderungen einmal schicken, ohne dass ein Client
+    /// fragen muss (HUM-350).
+    #[cfg(target_os = "linux")]
+    async fn settle_disposable(
+        self: &Arc<Self>,
+        mut waiting: crate::disposable::Waiting,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        if let Some(guard) = waiting.guard.take() {
+            guard.stop();
+            if let Some(tripped) = guard.tripped() {
+                let _ = tx.send(diagnostic_event(&tripped)).await;
+            }
+        }
+        let this = Arc::clone(self);
+        let listed = tokio::task::spawn_blocking(move || {
+            let changes = waiting.changes();
+            tracing::info!(
+                session = %this.session,
+                sandbox = %waiting.sandbox,
+                layer = %waiting.layer.dir().display(),
+                "the changes of a disposable sandbox wait for apply or discard"
+            );
+            *lock(&this.disposable) = Some(waiting);
+            changes
+        })
+        .await;
+        let event = match listed {
+            Ok(Ok(changes)) => v1::SandboxEvent {
+                event: Some(v1::sandbox_event::Event::Changes(changes)),
+            },
+            Ok(Err(diagnostic)) => diagnostic_event(&diagnostic),
+            Err(error) => diagnostic_event(&joined_failed(&error)),
+        };
+        let _ = tx.send(event).await;
     }
 
     /// Der Lauf selbst: Log-Zeile, Garantien, `running`, Ausgabe, Exit-Code.
@@ -2129,9 +2204,19 @@ impl Inner {
         // zweite Griff kostet nichts und deckt jeden anderen Aufrufer.
         self.leaving
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        let handle = self.running_handle()?;
-        let ended = farewell(&handle);
-        self.clear_running();
+        let ended = self.running_handle().and_then(|handle| {
+            let ended = farewell(&handle);
+            self.clear_running();
+            ended
+        });
+        // Die obere Schicht liegt im Arbeitsspeicher und gehört zu diesem
+        // Daemon; mit ihm geht sie (HUM-350). Die Aufzeichnung sagt es.
+        if let Some(waiting) = lock(&self.disposable).take() {
+            #[cfg(target_os = "linux")]
+            self.drop_layer(waiting, "discarded");
+            #[cfg(not(target_os = "linux"))]
+            match waiting {}
+        }
         ended
     }
 
@@ -2245,13 +2330,195 @@ impl Inner {
         &self,
         plan: &v1::sandbox_request::Plan,
         command: &[OsString],
+        mode: Option<SandboxMode>,
         output: Option<humanitl_sandbox::OutputSink>,
     ) -> Result<Launched, Diagnostic> {
+        let disposable = mode.unwrap_or(self.config().sandbox.mode) == SandboxMode::Disposable;
+        if disposable {
+            self.disposable_allowed()?;
+        }
         let prepared = self.prepare_keyed(plan, command, KeyNeed::Start)?;
+        if disposable {
+            return self.launch_disposable(&prepared, plan, output);
+        }
+        self.launch_with(&prepared, plan, None, None, output)
+            .map(|(run, _)| run)
+    }
+
+    /// Ob eine Wegwerf-Sandbox starten darf: keine Änderungen eines früheren
+    /// Laufs warten (HUM-350).
+    #[cfg(target_os = "linux")]
+    fn disposable_allowed(&self) -> Result<(), Diagnostic> {
+        match lock(&self.disposable).as_ref() {
+            Some(waiting) => Err(crate::disposable::pending_blocks_start(waiting.sandbox)),
+            None => Ok(()),
+        }
+    }
+
+    /// Ohne das Overlay von bubblewrap gibt es keine Wegwerf-Sandbox; der
+    /// Start endet vor allem anderen (HUM-350).
+    #[cfg(not(target_os = "linux"))]
+    #[allow(clippy::unused_self)]
+    fn disposable_allowed(&self) -> Result<(), Diagnostic> {
+        Err(humanitl_sandbox::disposable::unsupported())
+    }
+
+    /// Der Start einer Wegwerf-Sandbox: die obere Schicht vor dem Plan, damit
+    /// der Plan sie nennt, und jeder Weg hinaus vor dem Handle räumt sie
+    /// wieder weg (HUM-350).
+    #[cfg(target_os = "linux")]
+    fn launch_disposable(
+        &self,
+        prepared: &Prepared,
+        plan: &v1::sandbox_request::Plan,
+        output: Option<humanitl_sandbox::OutputSink>,
+    ) -> Result<Launched, Diagnostic> {
+        // Der Projektordner, einmal geöffnet (C1): Grundlage, Diff und
+        // Übernahme arbeiten an diesem Deskriptor, nie wieder am Pfad, und
+        // das Backend muss genau diesen Ort einhängen.
+        let lower = humanitl_sandbox::worktree::open_root(&prepared.session.work_src)?;
+        let resolved = pinned_path(&lower)?;
+        if let Some(approved) = prepared.backend.approved_work_dir()
+            && approved != resolved.as_path()
+        {
+            return Err(moved_work_dir(approved, &resolved));
+        }
+        // Die Grundlage vor dem Start (C3, O5): Was der Mensch ab jetzt
+        // ändert, ist ein Konflikt, auch in den ersten Augenblicken des Laufs.
+        let baseline = humanitl_sandbox::disposable::baseline_at(std::os::fd::AsFd::as_fd(&lower));
+        let layer = humanitl_sandbox::Layer::create(&self.paths.runtime_dir().path)?;
+        let meta = lower
+            .try_clone()
+            .map(std::fs::File::from)
+            .and_then(|file| file.metadata())
+            .map_err(|err| {
+                Diagnostic::builder(codes::SANDBOX_030, Severity::Blocking)
+                    .why(format!(
+                        "the opened project folder cannot be inspected ({err})"
+                    ))
+                    .build()
+            })?;
+        let pin = PinnedWork {
+            path: &resolved,
+            dev: std::os::unix::fs::MetadataExt::dev(&meta),
+            ino: std::os::unix::fs::MetadataExt::ino(&meta),
+        };
+        match self.launch_with(prepared, plan, Some(layer.dirs()), Some(pin), output) {
+            Ok((mut run, handle)) => {
+                let pinned = Pinned { lower, baseline };
+                run.disposable = Some(self.watch_layer(layer, handle, prepared, pinned)?);
+                Ok(run)
+            }
+            Err(diagnostic) => {
+                if let Err((layer, failed)) = layer.discard() {
+                    tracing::warn!(
+                        layer = %layer.dir().display(),
+                        why = %failed.why,
+                        "the upper layer of a failed disposable start stays until the next daemon start"
+                    );
+                }
+                Err(diagnostic)
+            }
+        }
+    }
+
+    /// Ohne Overlay: siehe [`Inner::disposable_allowed`].
+    #[cfg(not(target_os = "linux"))]
+    #[allow(clippy::unused_self)]
+    fn launch_disposable(
+        &self,
+        _prepared: &Prepared,
+        _plan: &v1::sandbox_request::Plan,
+        _output: Option<humanitl_sandbox::OutputSink>,
+    ) -> Result<Launched, Diagnostic> {
+        Err(humanitl_sandbox::disposable::unsupported())
+    }
+
+    /// Die Grundlage und die Grenze einer gestarteten Wegwerf-Sandbox.
+    ///
+    /// Die Grundlage entsteht hier, nach dem Start: Der Agent schreibt nie in
+    /// das Projekt, sie hält nur fest, was der **Mensch** währenddessen
+    /// ändert. Lässt sich das Projekt nicht lesen oder die Schicht nicht
+    /// messen, endet die Sandbox, denn ohne Grundlage gäbe es keine sichere
+    /// Übernahme und ohne Messung keine Grenze.
+    #[cfg(target_os = "linux")]
+    fn watch_layer(
+        &self,
+        layer: humanitl_sandbox::Layer,
+        handle: Arc<SandboxHandle>,
+        prepared: &Prepared,
+        pinned: Pinned,
+    ) -> Result<crate::disposable::Waiting, Diagnostic> {
+        let stop = Arc::clone(&handle);
+        // Gemessen gegen den Stand beim Anlegen der Schicht (C4, O4).
+        let guarded = humanitl_sandbox::SizeGuard::start(&layer, move || {
+            let _ = stop.kill();
+        });
+        let guard = match guarded {
+            Ok(guard) => guard,
+            Err(diagnostic) => {
+                let _ = handle.kill();
+                self.clear_running();
+                if let Err((layer, failed)) = layer.discard() {
+                    tracing::warn!(
+                        layer = %layer.dir().display(),
+                        why = %failed.why,
+                        "the upper layer of a failed disposable start stays until the next daemon start"
+                    );
+                }
+                return Err(diagnostic);
+            }
+        };
+        // Die Startzeit des ersten Prozesses (O11): Eine wiederverwendete
+        // Nummer ist später nicht mehr diese Sandbox.
+        let child_start = handle.child_pid().and_then(|pid| {
+            humanitl_sandbox::disposable::start_ticks(std::path::Path::new("/proc"), pid)
+        });
+        Ok(crate::disposable::Waiting {
+            sandbox: handle.id,
+            layer,
+            work_dir: prepared.session.work_src.clone(),
+            lower: pinned.lower,
+            baseline: pinned.baseline,
+            handle,
+            child_start,
+            guard: Some(guard),
+        })
+    }
+
+    /// Der Start selbst, mit der Schicht, wenn es eine gibt.
+    fn launch_with(
+        &self,
+        prepared: &Prepared,
+        plan: &v1::sandbox_request::Plan,
+        overlay: Option<humanitl_sandbox::OverlayDirs>,
+        pinned: Option<PinnedWork<'_>>,
+        output: Option<humanitl_sandbox::OutputSink>,
+    ) -> Result<(Launched, Arc<SandboxHandle>), Diagnostic> {
         let backend = prepared.backend.clone().with_stdio(StdioMode::Pty {
             cols: DEFAULT_TERMINAL_SIZE.0,
             rows: DEFAULT_TERMINAL_SIZE.1,
         });
+        let backend = match &pinned {
+            Some(pin) => backend.with_approved_work_dir(pin.path),
+            None => backend,
+        };
+        let disposable = overlay.is_some();
+        // Das Backend hängt nur den Ordner ein, den der Daemon schon offen
+        // hält (Review Runde 2): gleicher Ort und gleicher Inode.
+        #[cfg(target_os = "linux")]
+        let backend = match (overlay, &pinned) {
+            (Some(dirs), Some(pin)) => backend
+                .with_overlay(dirs)
+                .with_expected_work_inode(pin.dev, pin.ino),
+            (Some(dirs), None) => backend.with_overlay(dirs),
+            (None, _) => backend,
+        };
+        #[cfg(not(target_os = "linux"))]
+        if let Some(dirs) = overlay {
+            drop(dirs);
+            return Err(humanitl_sandbox::disposable::unsupported());
+        }
         // Der Zuhörer hängt nur an dem Backend, das startet, und nicht an dem,
         // das gehalten wird: Ein gehaltener Sender schlösse seinen Kanal nie,
         // und wer auf dessen Ende wartet, wartete für immer. Beide tragen
@@ -2270,11 +2537,18 @@ impl Inner {
         // da" im Baum und fehlte am Ende im Unterschied. Er kostet einen Lauf
         // über das Projekt und verzögert den Start um genau diesen Lauf; die
         // Budgets aus `SnapshotLimits` decken ihn nach oben (HUM-043).
-        let watch = match crate::summary::SummaryWatch::start(
-            &prepared.session.work_src,
-            prepared.session.work_mode,
-            &launch.unprotected,
-        ) {
+        // Eine Wegwerf-Sandbox schreibt nicht in das Projekt; was sie
+        // hinterlässt, zeigt die obere Schicht (HUM-350).
+        let watched = if disposable {
+            Ok(None)
+        } else {
+            crate::summary::SummaryWatch::start(
+                &prepared.session.work_src,
+                prepared.session.work_mode,
+                &launch.unprotected,
+            )
+        };
+        let watch = match watched {
             Ok(watch) => watch,
             // Ohne ersten Schnappschuss gibt es später keinen Vergleich. Der
             // Start geht trotzdem weiter: Ein Projektverzeichnis, das sich
@@ -2300,7 +2574,7 @@ impl Inner {
                 .first()
                 .map(|command| command.to_string_lossy().into_owned())
                 .unwrap_or_default(),
-            path: sandbox_path_of(&prepared),
+            path: sandbox_path_of(prepared),
         };
         // Die Quelle, solange `running` noch leer ist: danach nennte
         // [`Inner::work_dir_source`] die der laufenden Sitzung.
@@ -2309,6 +2583,7 @@ impl Inner {
         drop(launcher);
         let sandbox = handle.id;
         let handle = Arc::new(handle);
+        let started = Arc::clone(&handle);
         let terminal = TerminalHub::new(
             Arc::clone(&handle),
             DEFAULT_TERMINAL_SIZE.0,
@@ -2335,11 +2610,208 @@ impl Inner {
         // losgelassen: Die Reihenfolge der Schlösser ist sonst überall
         // `pending` vor `running`.
         lock(&self.pending).starting_work_dir = None;
-        Ok(Launched {
-            warnings,
-            watch,
-            sandbox,
+        Ok((
+            Launched {
+                warnings,
+                watch,
+                sandbox,
+                disposable: None,
+            },
+            started,
+        ))
+    }
+
+    /// Die Schicht, die die Zeile einer Wegwerf-Sandbox zeigt (HUM-350): an
+    /// der Stelle der Kennung, die erst der Start vergibt, steht `LAYER`.
+    fn overlay_preview(&self, config: &Config) -> Option<humanitl_sandbox::OverlayDirs> {
+        // Ohne Overlay zeigt die Zeile keines; der Start lehnt ab (HUM-350).
+        let possible = cfg!(target_os = "linux");
+        (possible && config.sandbox.mode == SandboxMode::Disposable).then(|| {
+            let layer = self
+                .paths
+                .runtime_dir()
+                .path
+                .join(humanitl_sandbox::disposable::DISPOSABLE_DIR)
+                .join("LAYER");
+            humanitl_sandbox::OverlayDirs {
+                upper: layer.join("upper"),
+                work: layer.join("work"),
+            }
         })
+    }
+
+    /// `Op::Changes`: die wartenden Änderungen einer Wegwerf-Sandbox
+    /// (HUM-350).
+    #[cfg(target_os = "linux")]
+    fn disposable_changes(&self, tx: &mpsc::Sender<v1::SandboxEvent>) {
+        let slot = lock(&self.disposable);
+        let event = match slot.as_ref().map(crate::disposable::Waiting::changes) {
+            None => diagnostic_event(&crate::disposable::nothing_pending()),
+            Some(Ok(changes)) => v1::SandboxEvent {
+                event: Some(v1::sandbox_event::Event::Changes(changes)),
+            },
+            Some(Err(diagnostic)) => diagnostic_event(&diagnostic),
+        };
+        drop(slot);
+        let _ = tx.blocking_send(event);
+    }
+
+    /// `Op::ApplyChanges`: schreibt die gewählten Änderungen und verwirft den
+    /// Rest (HUM-350). Scheitert eine Prüfung vor dem ersten Schreiben, bleibt
+    /// alles, wie es war.
+    #[cfg(target_os = "linux")]
+    fn apply_changes(
+        &self,
+        request: &v1::sandbox_request::ApplyChanges,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        let mut slot = lock(&self.disposable);
+        let Some(waiting) = slot.as_ref() else {
+            drop(slot);
+            let _ = tx.blocking_send(diagnostic_event(&crate::disposable::nothing_pending()));
+            return;
+        };
+        let applied = match waiting.apply(request) {
+            Ok(applied) => applied,
+            Err(diagnostic) => {
+                drop(slot);
+                let _ = tx.blocking_send(diagnostic_event(&diagnostic));
+                return;
+            }
+        };
+        let mut events = Vec::new();
+        if let Some(failed) = &applied.failed {
+            events.push(diagnostic_event(failed));
+        }
+        if let Some(record) = applied.record
+            && let Some(waiting) = slot.take()
+        {
+            tracing::info!(
+                session = %self.session,
+                sandbox = %waiting.sandbox,
+                applied = record.applied.len(),
+                discarded = record.discarded.len(),
+                "the changes of a disposable sandbox were applied"
+            );
+            if let Some(diagnostic) = self.finish_layer(waiting, record) {
+                events.push(diagnostic_event(&diagnostic));
+            }
+        }
+        drop(slot);
+        events.push(v1::SandboxEvent {
+            event: Some(v1::sandbox_event::Event::ChangesOutcome(applied.outcome)),
+        });
+        for event in events {
+            let _ = tx.blocking_send(event);
+        }
+    }
+
+    /// `Op::DiscardChanges`: verwirft alle wartenden Änderungen (HUM-350).
+    #[cfg(target_os = "linux")]
+    fn discard_changes(
+        &self,
+        request: &v1::sandbox_request::DiscardChanges,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        let mut slot = lock(&self.disposable);
+        let checked = match slot.as_ref() {
+            None => Err(crate::disposable::nothing_pending()),
+            Some(waiting) => {
+                crate::disposable::check_id(waiting, &request.sandbox_id).and_then(|()| {
+                    humanitl_sandbox::disposable::ensure_ended(&waiting.handle, waiting.child_start)
+                })
+            }
+        };
+        if let Err(diagnostic) = checked {
+            drop(slot);
+            let _ = tx.blocking_send(diagnostic_event(&diagnostic));
+            return;
+        }
+        let Some(waiting) = slot.take() else {
+            return;
+        };
+        drop(slot);
+        let sandbox = waiting.sandbox;
+        let discarded = waiting.discarded_paths();
+        let failed = self.drop_layer(waiting, "discarded");
+        if let Some(diagnostic) = &failed {
+            let _ = tx.blocking_send(diagnostic_event(diagnostic));
+        }
+        let _ = tx.blocking_send(v1::SandboxEvent {
+            event: Some(v1::sandbox_event::Event::ChangesOutcome(
+                crate::disposable::outcome(sandbox, "discarded", Vec::new(), discarded),
+            )),
+        });
+    }
+
+    /// Verwirft eine Schicht und hält es in der Aufzeichnung fest.
+    #[cfg(target_os = "linux")]
+    fn drop_layer(&self, waiting: crate::disposable::Waiting, outcome: &str) -> Option<Diagnostic> {
+        let record = humanitl_sandbox::DisposableRecord {
+            outcome: outcome.to_owned(),
+            applied: Vec::new(),
+            discarded: waiting.discarded_paths(),
+        };
+        tracing::info!(
+            session = %self.session,
+            sandbox = %waiting.sandbox,
+            discarded = record.discarded.len(),
+            "the changes of a disposable sandbox were discarded"
+        );
+        self.finish_layer(waiting, record)
+    }
+
+    /// Entfernt die Schicht und legt die Entscheidung in der Aufzeichnung
+    /// ab. Eine Schicht, die sich nicht entfernen lässt, ist ein Befund; sie
+    /// verschwindet spätestens beim nächsten Start des Daemons.
+    #[cfg(target_os = "linux")]
+    fn finish_layer(
+        &self,
+        waiting: crate::disposable::Waiting,
+        record: humanitl_sandbox::DisposableRecord,
+    ) -> Option<Diagnostic> {
+        if let Some(recorder) = self.recorder.as_ref() {
+            let summary = waiting.summary(self.session, record);
+            if let Ok(json) = serde_json::to_string(&summary) {
+                recorder.store_session_summary(self.session, summary.sandbox, &json);
+            }
+        }
+        waiting
+            .layer
+            .discard()
+            .err()
+            .map(|(_, diagnostic)| diagnostic)
+    }
+
+    /// `Op::Changes` ohne Overlay: Es gibt keine Wegwerf-Sandbox (HUM-350).
+    #[cfg(not(target_os = "linux"))]
+    #[allow(clippy::unused_self)]
+    fn disposable_changes(&self, tx: &mpsc::Sender<v1::SandboxEvent>) {
+        let _ = tx.blocking_send(diagnostic_event(
+            &humanitl_sandbox::disposable::unsupported(),
+        ));
+    }
+
+    /// `Op::ApplyChanges` ohne Overlay (HUM-350).
+    #[cfg(not(target_os = "linux"))]
+    #[allow(clippy::unused_self)]
+    fn apply_changes(
+        &self,
+        _request: &v1::sandbox_request::ApplyChanges,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        self.disposable_changes(tx);
+    }
+
+    /// `Op::DiscardChanges` ohne Overlay (HUM-350).
+    #[cfg(not(target_os = "linux"))]
+    #[allow(clippy::unused_self)]
+    fn discard_changes(
+        &self,
+        _request: &v1::sandbox_request::DiscardChanges,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        self.disposable_changes(tx);
     }
 
     /// Der Schnappschuss, wie ihn die Oberfläche zeigt.
@@ -2872,6 +3344,7 @@ impl Inner {
             None => backend,
         };
 
+        let overlay_preview = self.overlay_preview(&config);
         Ok(Prepared {
             env_origin,
             adapter_files: session.files.iter().map(|file| file.dst.clone()).collect(),
@@ -2879,6 +3352,7 @@ impl Inner {
             profile,
             session,
             backend,
+            overlay_preview,
         })
     }
 
@@ -3347,6 +3821,10 @@ struct Prepared {
     adapter_files: BTreeSet<PathBuf>,
     /// Befunde der Vorbereitung, die den Start nicht aufhalten (HUM-280).
     warnings: Vec<Diagnostic>,
+    /// Die Schicht, die die Zeile zeigt, wenn `sandbox.mode` `disposable`
+    /// ist (HUM-350). Die echte entsteht erst beim Start und trägt dann
+    /// eine eigene Kennung an der Stelle von `LAYER`.
+    overlay_preview: Option<humanitl_sandbox::OverlayDirs>,
 }
 
 impl Prepared {
@@ -3382,7 +3860,8 @@ impl Prepared {
                 &LaunchInputs::preview_with_agent_files(
                     self.session.files.iter().map(|file| file.dst.clone()),
                 )
-                .with_controlling_terminal(true),
+                .with_controlling_terminal(true)
+                .with_overlay(self.overlay_preview.clone()),
             ),
         );
         self.redact_hidden_values(&mut args);
@@ -3446,10 +3925,32 @@ fn mounts_of(argv: &[OsString], prepared: &Prepared) -> Vec<v1::Mount> {
     let user_dsts = prepared.user_dsts();
     let mut mounts = Vec::new();
     let mut index = 0;
+    // `--overlay-src LOWER` gehört zum nächsten `--overlay` (HUM-350).
+    let mut lower = String::new();
     while index < argv.len() {
         let flag = argv[index].to_string_lossy().into_owned();
         if flag == "--" {
             break;
+        }
+        if flag == "--overlay-src" && index + 1 < argv.len() {
+            lower = argv[index + 1].to_string_lossy().into_owned();
+            index += 2;
+            continue;
+        }
+        // Das Projekt einer Wegwerf-Sandbox: Auf diesem Rechner ist es nur
+        // lesbar eingehängt; was der Agent schreibt, landet in der oberen
+        // Schicht. Die Zeile nennt deshalb den Ordner des Projekts mit `ro`.
+        if flag == "--overlay" && index + 3 < argv.len() {
+            let dst = argv[index + 3].to_string_lossy().into_owned();
+            mounts.push(v1::Mount {
+                origin: v1::ValueOrigin::Session.into(),
+                dst,
+                src: std::mem::take(&mut lower),
+                mode: v1::MountMode::Ro.into(),
+                link_target: String::new(),
+            });
+            index += 4;
+            continue;
         }
         let (mode, arity) = match flag.as_str() {
             "--ro-bind" | "--ro-bind-try" => (v1::MountMode::Ro, 2),
@@ -3869,6 +4370,64 @@ const fn start_may_refresh(facts: &Facts) -> bool {
 }
 
 /// Die Antwort auf `SandboxRequest.retire_if_idle` (HUM-284).
+/// Der geöffnete Projektordner einer Wegwerf-Sandbox und seine Grundlage,
+/// beide vor dem Start genommen (HUM-350).
+#[cfg(target_os = "linux")]
+struct Pinned {
+    lower: std::os::fd::OwnedFd,
+    baseline: humanitl_sandbox::worktree::TreeSnapshot,
+}
+
+/// Wo der geöffnete Projektordner liegt.
+#[cfg(target_os = "linux")]
+fn pinned_path(lower: &std::os::fd::OwnedFd) -> Result<PathBuf, Diagnostic> {
+    use std::os::fd::AsRawFd as _;
+
+    std::fs::read_link(format!("/proc/self/fd/{}", lower.as_raw_fd())).map_err(|err| {
+        Diagnostic::builder(codes::SANDBOX_030, Severity::Blocking)
+            .why(format!(
+                "where the opened project folder lies cannot be read ({err}); the disposable \
+                 sandbox needs it to mount exactly that folder"
+            ))
+            .build()
+    })
+}
+
+/// Der Projektordner liegt nicht mehr dort, wo er geprüft wurde.
+#[cfg(target_os = "linux")]
+fn moved_work_dir(approved: &std::path::Path, now: &std::path::Path) -> Diagnostic {
+    Diagnostic::builder(codes::SANDBOX_006, Severity::Blocking)
+        .why(format!(
+            "the project folder was checked at {}, but once opened it lies at {}; a symbolic \
+             link in its path leads elsewhere now, so it is not mounted",
+            approved.display(),
+            now.display()
+        ))
+        .fix(humanitl_sandbox::choose_folder_fix())
+        .build()
+}
+
+/// Der Projektordner, den der Daemon vor dem Start geöffnet hält: sein Ort
+/// und sein Inode, damit das Backend genau ihn einhängt (HUM-350).
+#[derive(Debug, Clone, Copy)]
+struct PinnedWork<'a> {
+    path: &'a std::path::Path,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    dev: u64,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    ino: u64,
+}
+
+/// Der Plan, den ein Start mit sich trägt.
+fn plan_of(start: &v1::sandbox_request::Start) -> v1::sandbox_request::Plan {
+    v1::sandbox_request::Plan {
+        profile: start.profile.clone(),
+        work_dir: start.work_dir.clone(),
+        work_mode: start.work_mode.clone(),
+        work_dir_source: start.work_dir_source.clone(),
+    }
+}
+
 fn retire_event(retired: bool) -> v1::SandboxEvent {
     v1::SandboxEvent {
         event: Some(v1::sandbox_event::Event::Retire(
@@ -4826,6 +5385,7 @@ mod tests {
             env_origin: BTreeMap::new(),
             adapter_files: BTreeSet::new(),
             warnings: Vec::new(),
+            overlay_preview: None,
         }
     }
 

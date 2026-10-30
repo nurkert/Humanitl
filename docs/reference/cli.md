@@ -20,6 +20,9 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl sandbox check`](#humanitl-sandbox-check) Start a short-lived sandbox and show the three isolation guarantees
 - [`humanitl sandbox attach`](#humanitl-sandbox-attach) Attach this terminal to the running session
 - [`humanitl sandbox exec`](#humanitl-sandbox-exec) Open a further shell in the running sandbox, next to the agent
+- [`humanitl sandbox changes`](#humanitl-sandbox-changes) Show what a disposable run changed: files changed, created and deleted, with a diff for text files and size and hash for others
+- [`humanitl sandbox apply`](#humanitl-sandbox-apply) Write the changes of a disposable run to the project folder and discard the rest
+- [`humanitl sandbox discard`](#humanitl-sandbox-discard) Drop all changes of a disposable run. Asks first
 - [`humanitl rules`](#humanitl-rules) List, add, change, reorder, dry-run and reload rules
 - [`humanitl rules list`](#humanitl-rules-list) List the rules in the order in which they are evaluated
 - [`humanitl rules add`](#humanitl-rules-add) Add a rule. The daemon checks it and answers with the whole set
@@ -117,6 +120,7 @@ below lists the flag names and their short aliases.
 | `--resolver-nameserver` | - | `STRING,_OPTIONAL` | `resolver.nameserver` |
 | `--resolver-prefer` | - | `ipv4`, `ipv6` | `resolver.prefer` |
 | `--resolver-test-ca` | - | `STRING,_OPTIONAL` | `resolver.test_ca` |
+| `--sandbox-mode` | - | `direct`, `disposable` | `sandbox.mode` |
 | `--sandbox-profile` | - | `STRING` | `sandbox.profile` |
 | `--sandbox-work-dir` | `--work` | `STRING,_OPTIONAL` | `sandbox.work_dir` |
 | `--sandbox-work-mode` | `--work-mode` | `ro`, `rw` | `sandbox.work_mode` |
@@ -194,6 +198,9 @@ Arguments:
           The command to run in the sandbox, after `--`; without it the agent from the configuration
 
 Options:
+      --disposable
+          Keep the project folder untouched: it lies read-only under a layer in RAM, and after the run `humanitl sandbox changes` shows what the agent changed, `apply` writes it and `discard` drops it. The same as sandbox.mode = "disposable" for this run
+
       --json
           Machine-readable output: one JSON value on stdout, diagnostics included
 
@@ -221,12 +228,15 @@ Start, plan and check the sandbox
 Usage: humanitl sandbox [OPTIONS] <COMMAND>
 
 Commands:
-  run     Start a sandbox with CMD as the agent and exit with its exit code
-  argv    Print the bwrap command line for the current profile without starting it
-  check   Start a short-lived sandbox and show the three isolation guarantees
-  attach  Attach this terminal to the running session
-  exec    Open a further shell in the running sandbox, next to the agent
-  help    Print this message or the help of the given subcommand(s)
+  run      Start a sandbox with CMD as the agent and exit with its exit code
+  argv     Print the bwrap command line for the current profile without starting it
+  check    Start a short-lived sandbox and show the three isolation guarantees
+  attach   Attach this terminal to the running session
+  exec     Open a further shell in the running sandbox, next to the agent
+  changes  Show what a disposable run changed: files changed, created and deleted, with a diff for text files and size and hash for others
+  apply    Write the changes of a disposable run to the project folder and discard the rest
+  discard  Drop all changes of a disposable run. Asks first
+  help     Print this message or the help of the given subcommand(s)
 
 Options:
       --json
@@ -268,6 +278,9 @@ Options:
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory
+
+      --disposable
+          Run with the project folder read-only under a layer in RAM; at the end the changes are listed and discarded (this command keeps no layer; `humanitl run --disposable` keeps them for apply)
 
   -v, --verbose...
           Explain what is happening; repeat for more
@@ -412,6 +425,107 @@ Options:
 
   -h, --help
           Print help (see a summary with '-h')
+```
+
+## humanitl sandbox changes
+
+```text
+Show what a disposable run changed: files changed, created and deleted, with a diff for text files and size and hash for others.
+
+Each row starts with the id that `humanitl sandbox apply` takes. A conflict means the file changed in the project since the start; a change marked "never applied" (a symbolic link out of the project, a device, FIFO or socket) is not written to the host.
+
+Usage: humanitl sandbox changes [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --stat
+          Only the list, without the diffs
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## humanitl sandbox apply
+
+```text
+Write the changes of a disposable run to the project folder and discard the rest.
+
+Without IDs all changes; with IDs only those. Asks before it writes. Nothing is written when one of the chosen changes cannot be applied as it is; the changes keep waiting then.
+
+Usage: humanitl sandbox apply [OPTIONS] [ID]...
+
+Arguments:
+  [ID]...
+          The ids from `humanitl sandbox changes`
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --overwrite
+          Also write files that changed in the project since the start
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+      --yes
+          Do not ask; for scripts
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## humanitl sandbox discard
+
+```text
+Drop all changes of a disposable run. Asks first
+
+Usage: humanitl sandbox discard [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --yes
+          Do not ask; for scripts
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
 ```
 
 ## humanitl rules

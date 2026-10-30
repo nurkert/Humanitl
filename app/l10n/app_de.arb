@@ -1387,5 +1387,11 @@
   "shellTerminalStripOpen": "Terminal öffnen",
   "shellTerminalStripLabel": "Schwebendes Terminal, mangels Platz verkleinert",
   "historyDeciderClient": "Client",
-  "historyDecisionAborted": "abgebrochen"
+  "historyDecisionAborted": "abgebrochen",
+  "diagSANDBOX030Title": "Wegwerf-Sandbox nicht möglich",
+  "diagSANDBOX030Why": "Die Wegwerf-Sandbox braucht bubblewrap 0.11 oder neuer, ein Laufzeitverzeichnis im Arbeitsspeicher, einen beschreibbaren Blick auf den Projektordner und keine Änderungen, die noch aus einem früheren Lauf warten.",
+  "diagSANDBOX031Title": "Änderung eines Wegwerf-Laufs nicht übernommen",
+  "diagSANDBOX031Why": "Eine Datei hat sich seit dem Start im Projekt geändert, eine Änderung verlässt das Projekt oder ist keine Datei, oder das Schreiben scheiterte; die Änderungen warten weiter.",
+  "diagSANDBOX032Title": "Wegwerf-Schicht voll",
+  "diagSANDBOX032Why": "Die Änderungen des Wegwerf-Laufs sind über die Grenze ihrer Schicht im Arbeitsspeicher gewachsen, deshalb wurde die Sandbox beendet; was vorher geschrieben wurde, wartet weiter."
 }

@@ -529,7 +529,7 @@ fn read_failed(rel: &Path, err: impl core::fmt::Display) -> Diagnostic {
 /// Ergebnisses mit der erwarteten Größe — der Fundscan tut genau das nicht,
 /// weil er ohnehin nur bis [`crate::summary::SCAN_MAX_BYTES`] sucht und eine
 /// Datei darüber gar nicht erst liest.
-fn read_capped(fd: OwnedFd, max_bytes: u64) -> Result<Vec<u8>, std::io::Error> {
+pub(crate) fn read_capped(fd: OwnedFd, max_bytes: u64) -> Result<Vec<u8>, std::io::Error> {
     let file = File::from(fd);
     let mut out = Vec::new();
     file.take(max_bytes).read_to_end(&mut out)?;
@@ -755,7 +755,7 @@ impl Walker<'_> {
 /// Verzeichnis genau einen frischen Deskriptor öffnet und ihn genau einmal
 /// liest.
 #[cfg(target_os = "linux")]
-fn dir_names(dir: BorrowedFd<'_>, room: usize) -> Result<(Vec<OsString>, bool), Errno> {
+pub(crate) fn dir_names(dir: BorrowedFd<'_>, room: usize) -> Result<(Vec<OsString>, bool), Errno> {
     let mut buffer = Vec::with_capacity(DIR_BUFFER_BYTES);
     let mut iter = RawDir::new(dir, buffer.spare_capacity_mut());
     let mut out = Vec::new();

@@ -203,6 +203,7 @@ Welches Sandbox-Profil mit welchem Arbeitsverzeichnis startet.
 | Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
 |---|---|---|---|---|---|---|
 | `sandbox.env` | table of string | `{}` | advanced | denied | ja | Zusätzliche Umgebungsvariablen für die Sandbox; sie überschreiben gleichnamige Einträge aus dem `[env]` des Profils. Der Schlüssel lässt sich aus der Umgebung des Prozesses setzen und ist damit nur so vertrauenswürdig wie die Shell, aus der Humanitl startet; die Variablen des dynamischen Linkers (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) werden deshalb abgelehnt, sie liefen vor dem seccomp-Filter des Shims. |
+| `sandbox.mode` | direct \| disposable | `"direct"` | basic | denied | ja | Wohin die Änderungen des Agenten gehen. `direct` schreibt in das Projektverzeichnis; `disposable` legt es nur lesbar unter eine Schicht im Arbeitsspeicher, und nach dem Lauf entscheidet der Mensch, welche Änderungen er übernimmt (`humanitl sandbox changes`, `apply`, `discard`). `disposable` gibt es vorerst nur unter Linux (Overlay von bubblewrap); unter macOS lehnt der Start mit `SANDBOX_030` ab. |
 | `sandbox.profile` | string | `"default"` | advanced | denied | ja | Name des Profils unter `profiles/sandbox/`, ohne Endung. |
 | `sandbox.work_dir` | string, optional | `-` | basic | denied | ja | Projektverzeichnis, das als `/work` eingehängt wird. Leer bedeutet: das aktuelle Verzeichnis. |
 | `sandbox.work_mode` | ro \| rw | `"rw"` | basic | denied | ja | Ob der Agent im Projektverzeichnis schreiben darf. |
