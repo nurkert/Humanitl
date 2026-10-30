@@ -24,7 +24,7 @@ substituted. A model name with a quotation mark therefore cannot add keys.
 - `baseUrl` becomes the OpenAI base URL of `llm.endpoint`, the same value
   OpenCode gets, including a path prefix. pi posts to
   `<baseUrl>/chat/completions`.
-- `apiKey` becomes `!cat /etc/humanitl/pi/llm-api-key` when a key is stored,
+- `apiKey` becomes `!cat "$HUMANITL_PI_KEY_FILE"` when a key is stored,
   otherwise the placeholder `humanitl-no-key`. pi runs a value starting with
   `!` through `/bin/sh -c`; the path is a constant, never a configured value.
 - The first entry of `models` is the pattern of one model. It is repeated once

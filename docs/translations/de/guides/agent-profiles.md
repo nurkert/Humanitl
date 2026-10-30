@@ -1,6 +1,6 @@
 ---
 source: guides/agent-profiles.md
-source-sha256: a618e8ee7dece7bf9d1e4168b6d9f36c8825b01b09a1b6bedcfded8f09512a2b
+source-sha256: dc3979f0593211801b58c46ee883c7465e50c1ef6a2f22c1f9a79f07fef77926
 lang: de
 ---
 # Agentenprofile und Adapter
@@ -484,7 +484,7 @@ die nächste Session.
 
 ### Umgang mit dem Schlüssel
 
-`apiKey` in `models.json` ist `"!cat /etc/humanitl/pi/llm-api-key"`. pi führt einen Wert, der mit
+`apiKey` in `models.json` ist `"!cat \"$HUMANITL_PI_KEY_FILE\""`. pi führt einen Wert, der mit
 `!` beginnt, über `/bin/sh -c` aus und nimmt die getrimmte Ausgabe als Schlüssel. Die
 Schlüsseldatei stammt wie jede Adapter-Datei aus einem versiegelten memfd; der Schlüssel steht in
 keiner Umgebungsvariable, nicht im `argv` von `pi` und nicht in `models.json`. Nur der Pfad steht

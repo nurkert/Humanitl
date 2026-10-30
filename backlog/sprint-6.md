@@ -32,6 +32,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-337 | Download: der Knopf nennt das System, keine Empfehlung, neutrale Symbole, eine Tafel für die Zahlen | S | HUM-333, HUM-335 |
 | HUM-347 | Bühne: größeres Fokusfenster, Ring danach ausgerichtet, Tiefenschärfe nach hinten, Pfeile immer erreichbar | M | HUM-334 |
 | HUM-349 | Der Zugangsschlüssel unter macOS im Keychain | S | HUM-140, HUM-323 |
+| HUM-357 | macOS: pi liest den Modellschlüssel auch aus einem Pfad mit Leerzeichen | S | HUM-328 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -409,3 +410,12 @@ Folge-Kandidaten:
 
 - `tests/escape/macos/run.sh` um eine Zeile erweitern, die `security find-generic-password` aus der laufenden Sandbox ruft.
 - Nach einem Rückfall in die Datei bleibt ein älterer Eintrag im Schlüsselbund liegen, auf den nichts mehr zeigt. Das gilt seit HUM-140 auch unter Linux und ist hier nicht behoben.
+
+## HUM-357 · macOS: pi liest den Modellschlüssel auch aus einem Pfad mit Leerzeichen
+
+Rückmeldung des Inhabers vom 2026-10-30: Unter macOS scheitert jede Modellanfrage von pi mit „Failed to resolve API key … from shell command: cat /Users/…/Application Support/…". Der Pfad des Schlüssels liegt dort unter `Application Support` und stand ungequotet in der Zeile, die pi durch `/bin/sh -c` schickt.
+
+Akzeptanzkriterien:
+
+- Die Zeile in `models.json` nennt den Pfad nur über die Variable `HUMANITL_PI_KEY_FILE`; Leerzeichen und Apostrophe des Pfads erreichen die Shell-Zeile nicht. Die Variable trägt den Pfad, nie den Schlüssel.
+- Ein Test belegt, dass die Variable gesetzt ist und die Abbildung unter macOS sie mit umschreibt.
