@@ -14,7 +14,7 @@
 #            pruefen, mit --purge entfernen; lintian ohne Fehler und Warnungen.
 # build-macos  macOS-15: universal binaries (arm64 + x86_64), die Flutter-App,
 #            beides zu Humanitl.app, ad-hoc signiert, als gestaltetes .dmg und
-#            als .zip (HUM-316, packaging/macos).
+#            als .zip (HUM-326, packaging/macos).
 # check-macos  Ein frischer macOS-Runner haengt das .dmg ein und prueft
 #            Signatur, Architekturen, Version, den Start der App und die
 #            Seatbelt-Escape-Tests gegen die Programme im Buendel.

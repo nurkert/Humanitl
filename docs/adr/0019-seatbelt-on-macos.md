@@ -48,7 +48,7 @@ type alias `PlatformBackend`. Daemon and command line name only that alias.
   door ends in `EPERM`), exactly one door, and the kernel holds the process to
   the profile (`sandbox_check`).
 
-A backend with a Linux VM follows as its own issue (HUM-318), decided by the
+A backend with a Linux VM follows as its own issue (HUM-328), decided by the
 owner on 2026-10-29.
 
 ## Rationale
@@ -86,7 +86,7 @@ same workflow as a Linux user.
 - There is no PID namespace. The shim ends the command's session at the end
   of the sandbox, in repeated passes; a process that starts a session of its
   own outlives it, still under the profile, and the profile allows it the
-  daemon's proxy socket for as long as the daemon runs (K-20). HUM-321
+  daemon's proxy socket for as long as the daemon runs (K-20). HUM-331
   restricts that socket to the session's shim.
 - Reading is a deny list, not the allow list of mounts: everything outside
   `/Users`, `/Volumes` and the temp trees is readable, `/etc` and
@@ -100,5 +100,5 @@ same workflow as a Linux user.
 
 ## Affected issues
 
-`HUM-323` (the backend), `HUM-317` (this record and the security documents),
-`HUM-318` (the VM backend). See [`backlog/sprint-6.md`](../../backlog/sprint-6.md).
+`HUM-323` (the backend), `HUM-327` (this record and the security documents),
+`HUM-328` (the VM backend). See [`backlog/sprint-6.md`](../../backlog/sprint-6.md).

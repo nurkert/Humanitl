@@ -86,7 +86,7 @@ Future<void> _run(List<String> args) async {
 }
 
 /// The desktop this run talks to: the real one on Linux, the window alone on
-/// macOS (HUM-325; tray and notifications are HUM-319), none anywhere else.
+/// macOS (HUM-325; tray and notifications are HUM-329), none anywhere else.
 ///
 /// This is the only place the real tray, the real notification and the real
 /// window are built. Every test and every headless run gets

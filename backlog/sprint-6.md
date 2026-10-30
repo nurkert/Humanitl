@@ -1,8 +1,8 @@
 # Sprint 6 · macOS (M12)
 
-Ziel des Sprints: Humanitl läuft auf macOS (Apple Silicon und Intel) so sauber wie auf Linux, und jedes Release trägt eine funktionierende Mac-App. Wunsch des Nutzers vom 2026-10-29. Entscheidungen des Nutzers vom selben Tag: Die Sandbox auf macOS ist zuerst Seatbelt (`sandbox-exec` mit einem erzeugten SBPL-Profil), ein Backend mit Linux-VM folgt später als eigenes Issue (HUM-318). Die App wird ohne Apple Developer ID nur ad-hoc signiert. Die Arbeit landet auf dem Feature-Branch `macos-support`, ein Commit je Issue, und geht erst nach `main`, wenn Linux und macOS grün sind; das weicht bewusst von `CLAUDE.md` Schritt 5 ab.
+Ziel des Sprints: Humanitl läuft auf macOS (Apple Silicon und Intel) so sauber wie auf Linux, und jedes Release trägt eine funktionierende Mac-App. Wunsch des Nutzers vom 2026-10-29. Entscheidungen des Nutzers vom selben Tag: Die Sandbox auf macOS ist zuerst Seatbelt (`sandbox-exec` mit einem erzeugten SBPL-Profil), ein Backend mit Linux-VM folgt später als eigenes Issue (HUM-328). Die App wird ohne Apple Developer ID nur ad-hoc signiert. Die Arbeit landet auf dem Feature-Branch `macos-support`, ein Commit je Issue, und geht erst nach `main`, wenn Linux und macOS grün sind; das weicht bewusst von `CLAUDE.md` Schritt 5 ab.
 
-Nummern: Die Issues HUM-323, HUM-324 und HUM-325 hießen auf dem Branch zuerst HUM-313, HUM-314 und HUM-315. Diese Nummern hat `main` parallel an die Terminal-Issues aus Sprint 5 vergeben; die Commit-Texte des Branches tragen noch die alten Nummern.
+Nummern: Die Issues HUM-323 bis HUM-332 hießen auf dem Branch zuerst HUM-313 bis HUM-322. HUM-313 bis HUM-316 hat `main` parallel an Issues aus Sprint 5 vergeben, deshalb ist der ganze Block um zehn verschoben; die Commit-Texte des Branches tragen noch die alten Nummern.
 
 Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entweder plattformneutral oder hinter `#[cfg(target_os = ...)]` beziehungsweise `Platform.isMacOS`, und die Linux-CI bleibt die Referenz.
 
@@ -12,13 +12,13 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-323 | Seatbelt-Backend: die Sandbox auf macOS | L | HUM-312 |
 | HUM-324 | Der Daemon läuft auf macOS als launchd-Agent | M | HUM-312 |
 | HUM-325 | Die App läuft auf macOS | M | HUM-312 |
-| HUM-316 | Jedes Release trägt eine Mac-App | M | HUM-323, HUM-324, HUM-325 |
-| HUM-317 | Sicherheitsaussage und Bedrohungsmodell für macOS | S | HUM-323 |
-| HUM-318 | Linux-VM als zweites Backend auf macOS (später) | L | HUM-323 |
-| HUM-319 | Tray und Benachrichtigungen auf macOS (später) | M | HUM-325 |
-| HUM-320 | Vorschau und Mounttabelle zeigen das Seatbelt-Profil | S | HUM-323 |
-| HUM-321 | Der Proxy nimmt unter macOS nur den Shim der laufenden Sitzung an | M | HUM-323 |
-| HUM-322 | Kleinere Folgen aus den Reviews von M12 | S | HUM-312 bis HUM-317 |
+| HUM-326 | Jedes Release trägt eine Mac-App | M | HUM-323, HUM-324, HUM-325 |
+| HUM-327 | Sicherheitsaussage und Bedrohungsmodell für macOS | S | HUM-323 |
+| HUM-328 | Linux-VM als zweites Backend auf macOS (später) | L | HUM-323 |
+| HUM-329 | Tray und Benachrichtigungen auf macOS (später) | M | HUM-325 |
+| HUM-330 | Vorschau und Mounttabelle zeigen das Seatbelt-Profil | S | HUM-323 |
+| HUM-331 | Der Proxy nimmt unter macOS nur den Shim der laufenden Sitzung an | M | HUM-323 |
+| HUM-332 | Kleinere Folgen aus den Reviews von M12 | S | HUM-312, HUM-323 bis HUM-327 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -76,27 +76,27 @@ Seatbelt kennt keine Mounts. Der Agent sieht echte Pfade, nicht `/work` oder `/h
 5. Neustart des Daemons und Einrichtung gehen über die CLI (`humanitl daemon restart|install`), nicht über `systemctl`. Die CLI liegt in `Humanitl.app/Contents/MacOS/bin`.
 6. Dateien öffnen mit `open`; Zustandsdateien unter `~/Library/Application Support/Humanitl`.
 
-## HUM-316 · Jedes Release trägt eine Mac-App
+## HUM-326 · Jedes Release trägt eine Mac-App
 
 ### Spezifikation
 1. Der Release-Workflow baut auf `macos-15` die Binaries für `aarch64-apple-darwin` und `x86_64-apple-darwin`, verbindet sie mit `lipo`, baut die App, legt `humanitld`, `humanitl` und `humanitl-shim` in `Contents/MacOS/bin`, signiert ad-hoc (`codesign --force --deep -s -`) und packt `Humanitl-<version>-macos.dmg` und `.zip`.
 2. Ein Prüfjob auf einem frischen macOS-Runner entpackt das Archiv, prüft Signatur und Architekturen, startet den Daemon aus dem Bündel und fährt `humanitl sandbox check`.
 3. Das Release führt beide Dateien und ihre Prüfsummen in `SHA256SUMS`; die Release-Notes nennen den Quarantäne-Schritt.
 
-## HUM-317 · Sicherheitsaussage und Bedrohungsmodell für macOS
+## HUM-327 · Sicherheitsaussage und Bedrohungsmodell für macOS
 
 ### Spezifikation
 `docs/SECURITY.md` und `docs/THREAT-MODEL.md` nennen die Garantien je Backend, die Abweichungen von Linux (Host-geteilter Loopback, kein PID-Namensraum, Leserechte nach Pfaden statt Mounts, Seatbelt ist undokumentiert und als veraltet markiert) und ihre Folgen. ADR-0019 hält die Wahl von Seatbelt fest. `README.md` und `docs/INSTALL.md` nennen macOS.
 
-## HUM-318 · Linux-VM als zweites Backend auf macOS (später)
+## HUM-328 · Linux-VM als zweites Backend auf macOS (später)
 
 Entscheidung des Nutzers vom 2026-10-29: nach Seatbelt. Eine Linux-VM über `Virtualization.framework` mit dem bestehenden bwrap-Backend im Gast, die Tür als vsock-Port. Damit gelten auf macOS dieselben drei Garantien wie auf Linux. Umfang, Gastabbild und Startzeit legt ein Spike fest.
 
-## HUM-319 · Tray und Benachrichtigungen auf macOS (später)
+## HUM-329 · Tray und Benachrichtigungen auf macOS (später)
 
 Unter Linux laufen Tray und Benachrichtigungen über D-Bus (StatusNotifierItem, `org.freedesktop.Notifications`). Auf macOS braucht es ein `NSStatusItem` und `UNUserNotificationCenter` mit den Aktionen Erlauben, Blockieren, Anzeigen. Bis dahin zeigt die App auf macOS den Hinweis „kein Tray“ wie auf einem Linux ohne Tray.
 
-## HUM-320 · Vorschau und Mounttabelle zeigen das Seatbelt-Profil
+## HUM-330 · Vorschau und Mounttabelle zeigen das Seatbelt-Profil
 
 ### Kontext
 Aus HUM-323: Der Plan-RPC baut seine Vorschau (`argv_preview`, Mounttabelle der Oberfläche, `humanitl sandbox argv`) aus `SandboxProfile::to_bwrap_args` und liest die Mounts aus deren Flags (`ipc/src/sandbox.rs`, `Prepared::argv`, `mounts_of`). Unter macOS startet aber `sandbox-exec` mit einem SBPL-Profil; die Vorschau zeigt dort eine bwrap-Zeile, die nie läuft.
@@ -106,10 +106,10 @@ Aus HUM-323: Der Plan-RPC baut seine Vorschau (`argv_preview`, Mounttabelle der 
 2. Die Mounttabelle kommt aus derselben Beschreibung wie das Profil (`SeatbeltPolicy`): Projekt mit Modus, Sitzungsverzeichnis, zusätzliche Ordner, Masken.
 3. Der Schalter in der Oberfläche heißt neutral („Exakte Sandbox-Kommandozeile").
 
-## HUM-321 · Der Proxy nimmt unter macOS nur den Shim der laufenden Sitzung an
+## HUM-331 · Der Proxy nimmt unter macOS nur den Shim der laufenden Sitzung an
 
 ### Kontext
-Aus der Review von HUM-317 (K-19, K-20): Unter macOS fehlen PID-Namensraum und seccomp. Ein Prozess, der sich mit `setsid` aus der Sitzung des Agenten löst, überlebt das Ende der Sitzung, und das Seatbelt-Profil erlaubt ihm weiter den Proxy-Socket des Daemons, der für den ganzen Lauf des Daemons gilt. Er kann Anfragen stellen, solange der Daemon läuft; `allow`-Regeln und der Passthrough gelten. Dazu erreicht jeder lokale Prozess jedes Kontos den Loopback-Port der Tür.
+Aus der Review von HUM-327 (K-19, K-20): Unter macOS fehlen PID-Namensraum und seccomp. Ein Prozess, der sich mit `setsid` aus der Sitzung des Agenten löst, überlebt das Ende der Sitzung, und das Seatbelt-Profil erlaubt ihm weiter den Proxy-Socket des Daemons, der für den ganzen Lauf des Daemons gilt. Er kann Anfragen stellen, solange der Daemon läuft; `allow`-Regeln und der Passthrough gelten. Dazu erreicht jeder lokale Prozess jedes Kontos den Loopback-Port der Tür.
 
 ### Spezifikation
 1. Der Proxy liest unter macOS bei jeder Verbindung auf dem Proxy-Socket die PID der Gegenseite (`getsockopt(LOCAL_PEERPID)`) und nimmt nur Verbindungen der Shims laufender Sitzungen an; der Daemon trägt die PID beim Start ein und beim Ende aus. Abgewiesene Verbindungen zählt und meldet er wie abgewiesene Sockets (HUM-138).
@@ -117,7 +117,7 @@ Aus der Review von HUM-317 (K-19, K-20): Unter macOS fehlen PID-Namensraum und s
 3. Die Escape-Suite unter macOS bekommt Proben: ein mit `setsid` gelöster Prozess erreicht den Proxy nach dem Ende der Sitzung nicht mehr, ein Prozess außerhalb der Sandbox erreicht die Tür nicht.
 4. `docs/SECURITY.md` Abschnitt 12, K-19 und K-20 werden entsprechend eingeschränkt.
 
-## HUM-322 · Kleinere Folgen aus den Reviews von M12
+## HUM-332 · Kleinere Folgen aus den Reviews von M12
 
 1. Die Titel im Register der Codes nennen unter macOS systemd (`DAEMON_008`, `DOCTOR_005`); sie werden plattformneutral oder je Plattform.
 2. Kopierbare Befehle nennen unter macOS `humanitl` ohne Pfad, der Befehl liegt aber nur im Bündel; sie nennen den Pfad aus `installServiceCandidate` oder die Anleitung zum Verlinken.

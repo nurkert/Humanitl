@@ -985,7 +985,7 @@ pub fn run(facts: &MachineFacts) -> DoctorReport {
                 checks::daemon(&facts.daemon),
                 checks::agent(&facts.agent),
                 checks::llm(&facts.llm),
-                checks::not_on_macos(CheckId::Tray, "no tray on macOS yet (HUM-319)"),
+                checks::not_on_macos(CheckId::Tray, "no tray on macOS yet (HUM-329)"),
                 checks::not_on_macos(CheckId::Renderer, "Flutter renders with Metal"),
                 checks::disk_space(&facts.disk),
             ],
