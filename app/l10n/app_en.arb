@@ -3324,5 +3324,7 @@
   "shellPaletteTerminalZoomOut": "Terminal text smaller",
   "@shellPaletteTerminalZoomOut": {"description": "Command palette entry, listed only while a terminal with a running session is on the screen: makes the terminal text one step smaller; Ctrl+Minus and Ctrl with the numpad minus do the same (HUM-301)."},
   "shellPaletteTerminalZoomReset": "Terminal text default size",
-  "@shellPaletteTerminalZoomReset": {"description": "Command palette entry, listed only while a terminal with a running session is on the screen: brings the terminal text back to its default size; Ctrl+Shift+0 and Ctrl with the numpad 0 do the same (HUM-301)."}
+  "@shellPaletteTerminalZoomReset": {"description": "Command palette entry, listed only while a terminal with a running session is on the screen: brings the terminal text back to its default size; Ctrl+Shift+0 and Ctrl with the numpad 0 do the same (HUM-301)."},
+  "sandboxDiagnosticDismiss": "Dismiss",
+  "@sandboxDiagnosticDismiss": {"description": "Label and hover text of the close glyph on one finding of the Sandbox section. It hides that finding until its code or its cause changes; the daemon is not informed (HUM-302)."}
 }

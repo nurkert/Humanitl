@@ -19,6 +19,7 @@ library;
 
 import 'package:flutter/widgets.dart';
 
+import 'h_notice_layer.dart';
 import 'ui.dart';
 
 /// The card.
@@ -34,6 +35,9 @@ class HDiagnosticCard extends StatelessWidget {
     this.fix,
     this.docsUrl,
     this.width = 560,
+    this.dense = false,
+    this.dismiss,
+    this.detailMaxLines,
     super.key,
   });
 
@@ -64,12 +68,27 @@ class HDiagnosticCard extends StatelessWidget {
   /// Width of the card.
   final double width;
 
+  /// The compact form for a notice that floats over other content
+  /// (HUM-302): 12 px padding instead of 16, the title at 13/600, the cause
+  /// at 12.
+  final bool dense;
+
+  /// The close affordance of a notice (`HNoticeDismiss`), placed inside the
+  /// card at its top right corner, or none. The text keeps clear of it.
+  final Widget? dismiss;
+
+  /// How many lines of [detail] are drawn; all of them when null.
+  final int? detailMaxLines;
+
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final String? detail = this.detail;
     final Widget? fix = this.fix;
     final String? docsUrl = this.docsUrl;
+    final Widget? dismiss = this.dismiss;
+    final double pad = dense ? tokens.spacing.x3 : tokens.spacing.x4;
+    final double gap = dense ? tokens.spacing.x1 : tokens.spacing.x2;
     return Semantics(
       container: true,
       label: '$code $title',
@@ -134,10 +153,10 @@ class HDiagnosticCard extends StatelessWidget {
                   children: <Widget>[
                     Padding(
                       padding: EdgeInsetsDirectional.fromSTEB(
-                        HSize.stateRail + tokens.spacing.x4,
-                        tokens.spacing.x4,
-                        tokens.spacing.x4,
-                        tokens.spacing.x4,
+                        HSize.stateRail + pad,
+                        pad,
+                        pad,
+                        pad,
                       ),
                       child: SizedBox(
                         // Volle Breite wie vorher das `Expanded`: Ein Kind des
@@ -152,27 +171,43 @@ class HDiagnosticCard extends StatelessWidget {
                             // Textskalierung passen Code und Schweregrad nicht
                             // mehr nebeneinander, und eine Zeile schnitte sie
                             // ab, statt umzubrechen (`docs/UX.md` 6).
-                            Wrap(
-                              spacing: tokens.spacing.x2,
-                              runSpacing: tokens.spacing.x1,
-                              children: <Widget>[
-                                HBadge(text: code, color: color, mono: true),
-                                HBadge(text: severityLabel, color: color),
-                              ],
+                            // Nur die Zeile der Abzeichen weicht dem
+                            // Schließen aus; Titel und Grund darunter stehen
+                            // schon unter dem Knopf und nehmen die ganze
+                            // Breite (HUM-302, Review).
+                            Padding(
+                              padding: EdgeInsetsDirectional.only(
+                                end: dismiss == null
+                                    ? 0
+                                    : noticeDismissClearance - pad,
+                              ),
+                              child: Wrap(
+                                spacing: tokens.spacing.x2,
+                                runSpacing: tokens.spacing.x1,
+                                children: <Widget>[
+                                  HBadge(text: code, color: color, mono: true),
+                                  HBadge(text: severityLabel, color: color),
+                                ],
+                              ),
                             ),
                             SizedBox(height: tokens.spacing.x2),
                             Text(
                               title,
-                              style: tokens.typography.ui16.semibold.tinted(
-                                tokens.colors.fg0,
-                              ),
+                              style:
+                                  (dense
+                                          ? tokens.typography.ui13
+                                          : tokens.typography.ui16)
+                                      .semibold
+                                      .tinted(tokens.colors.fg0),
                             ),
-                            SizedBox(height: tokens.spacing.x2),
+                            SizedBox(height: gap),
                             Text(
                               why,
-                              style: tokens.typography.ui13.tinted(
-                                tokens.colors.fg1,
-                              ),
+                              style:
+                                  (dense
+                                          ? tokens.typography.ui12
+                                          : tokens.typography.ui13)
+                                      .tinted(tokens.colors.fg1),
                             ),
                             if (detail != null &&
                                 detail.isNotEmpty) ...<Widget>[
@@ -192,6 +227,10 @@ class HDiagnosticCard extends StatelessWidget {
                                   ),
                                   child: Text(
                                     detail,
+                                    maxLines: detailMaxLines,
+                                    overflow: detailMaxLines == null
+                                        ? null
+                                        : TextOverflow.ellipsis,
                                     style: tokens.typography.mono12.tinted(
                                       tokens.colors.fg1,
                                     ),
@@ -226,6 +265,12 @@ class HDiagnosticCard extends StatelessWidget {
                       width: HSize.stateRail,
                       child: ColoredBox(color: color),
                     ),
+                    if (dismiss != null)
+                      PositionedDirectional(
+                        top: tokens.spacing.x1,
+                        end: tokens.spacing.x1,
+                        child: dismiss,
+                      ),
                   ],
                 );
                 return constraints.hasBoundedHeight

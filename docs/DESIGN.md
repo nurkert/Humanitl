@@ -460,6 +460,27 @@ beside its target in the layout, never over it, takes no focus and binds no
 key. It arrives with `arrive` and `arriveOffset`, without blinking. Arrow up or
 down (`HPopoverArrow`).
 
+### HNoticeLayer and HNoticeCard
+
+Notices float; they never take a band of the layout (HUM-302). `HNoticeLayer`
+lays them over the top right of their region, 8 px from the edges: the window
+below the header row of the panes for global notices (at the header's real
+height, which grows with the text scale), the area under the sandbox header
+for its findings (never over the bottom two rows of the terminal). The queue
+cards stand at the bottom right of the list area, so the newest rows at the
+top stay clickable. A card is as wide as the region minus its insets, at most 420 px
+(`noticeMaxWidth`); cards stack with an 8 px gap and scroll beyond a bounded
+height. The region keeps its full size, so nothing moves and no terminal is
+resized when a notice comes or goes. `HNoticeCard` is the surface: `bg2`,
+`lineStrong` hairline, `card` radius, an optional state rail, no shadow. Its
+close affordance (`HNoticeDismiss`) is an `HIconButton` inside the card, 4 px
+from its top right corner, with its label on hover. Only the first line of
+the card (its `header`, the badges of a diagnostic) keeps clear of it; the
+text below runs to the inner edge. A diagnostic as a notice is an
+`HDiagnosticCard` with `dense: true` and the same affordance in its `dismiss`
+slot. Notices take no focus, bind no key and do not close on Escape; global
+notices wait while any layer (`HLayerScope.openLayers`) is open.
+
 ### HContextMenu
 
 The right-click menu (`HMenuItem`, `HContextMenuController`). It appears
