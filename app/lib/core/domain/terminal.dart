@@ -65,7 +65,9 @@ final class TerminalOpen extends TerminalCommand {
 /// `Ctrl+C` is byte `0x03` here and not a signal of this process. In the
 /// session's pseudo-terminal it interrupts the foreground program, because the
 /// session's first process holds that terminal as its controlling terminal
-/// (HUM-280); a program in raw mode reads the byte itself.
+/// (HUM-280); a program in raw mode reads the byte itself. While visible text
+/// is selected in the app's terminal, `Ctrl+C` copies it instead and never
+/// becomes this command (HUM-353).
 final class TerminalKeys extends TerminalCommand {
   /// The bytes as the terminal produced them.
   const TerminalKeys(this.bytes);

@@ -8,6 +8,7 @@ hier gelesen und nichts nachgeladen.
 | Datei | Wohin in der Sandbox | Wofür |
 |---|---|---|
 | `opencode.json.tmpl` | `/etc/humanitl/opencode/opencode.json`, `~/.config/opencode/opencode.json` und `/etc/opencode/opencode.json` | Provider, Modell und Berechtigungen des Agenten |
+| `tui.json.tmpl` | `~/.config/opencode/tui.json` | Tastenbelegung der Oberfläche: `Ctrl+C` beendet OpenCode nicht (HUM-353) |
 | `models.json` | `/etc/humanitl/opencode/models.json` | Ersatz für den Modellkatalog, den OpenCode sonst aus dem Netz holt |
 | `briefing.en.md`, `briefing.de.md` | `~/.config/opencode/AGENTS.md` | Die Einweisung des Agenten, in der Sprache aus `ui.language` |
 | `update-models.sh` | — | Entwickler-Werkzeug, das das Schema-Skelett gegen die echte Quelle abgleicht |
@@ -76,6 +77,28 @@ Projekt kann einen eigenen Provider mit eigener Adresse hinzufügen, und
 `opencode models` zeigt ihn dann. Es fällt dabei keine Garantie, weil jeder
 Verkehr dorthin durch den Proxy geht und gehalten wird; welches Modell
 voreingestellt ist, bestimmt weiterhin Humanitl.
+
+## Tastenbelegung: `Ctrl+C` beendet OpenCode nicht (HUM-353)
+
+Im Terminal von Humanitl geht `Ctrl+C` als `0x03` an den Agenten, und
+OpenCode 1.18.31 bindet `app_exit` in der Vorgabe an `ctrl+c,ctrl+d,<leader>q`.
+Ein Griff aus Gewohnheit, um zu kopieren, beendete also OpenCode und mit ihm
+die Sitzung. `tui.json.tmpl` setzt `keybinds.app_exit` auf
+`ctrl+d,<leader>q`: Beenden bleibt mit `Ctrl+D` bei leerer Eingabe, wie in
+jeder Shell, und mit `Ctrl+X q`. `input_clear` (`ctrl+c`, die Eingabe leeren)
+und `session_interrupt` (`escape`) bleiben unberührt.
+
+Die Datei heißt `tui.json` und nicht `opencode.json`, weil OpenCode seit der
+Trennung von Server- und Oberflächen-Konfiguration `keybinds` in
+`opencode.json` verwirft (und versucht, den Block in eine `tui.json`
+daneben umzuziehen). Sie liegt nur im Konfigurationsverzeichnis, nicht im
+verwalteten: OpenCode liest `tui.json` aus dem Konfigurationsverzeichnis,
+dann `OPENCODE_TUI_CONFIG`, dann aus dem Projektbaum und den
+`.opencode`-Verzeichnissen, spätere gewinnen. Wer im Projekt eine eigene
+Belegung für `app_exit` setzt, behält sie. Eine Sicherheitsfrage ist das
+nicht, nur eine Vorgabe. Geprüft an den Zeichenketten des Binärprogramms von
+OpenCode 1.18.31 (Schlüssel `app_exit`, Vorgabe, Ladereihenfolge); andere
+Fassungen wurden nicht geprüft.
 
 ## Wie der Adapter die Vorlagen füllt
 
