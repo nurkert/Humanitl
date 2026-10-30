@@ -3318,5 +3318,11 @@
   "interceptEmptyWorkingHint": "Every request that needs you appears here.",
   "@interceptEmptyWorkingHint": {"description": "Empty state of the queue while the agent of a sandbox session runs, second line: what will fill the queue (HUM-306)."},
   "interceptEmptyGoToTerminal": "Go to terminal",
-  "@interceptEmptyGoToTerminal": {"description": "The one action of the empty queue while the agent of a session runs: opens the Sandbox section with the agent's terminal, in place of Start session (HUM-306)."}
+  "@interceptEmptyGoToTerminal": {"description": "The one action of the empty queue while the agent of a session runs: opens the Sandbox section with the agent's terminal, in place of Start session (HUM-306)."},
+  "shellPaletteTerminalZoomIn": "Terminal text larger",
+  "@shellPaletteTerminalZoomIn": {"description": "Command palette entry, listed only while a terminal with a running session is on the screen: makes the terminal text one step larger; Ctrl+Plus, Ctrl+= and Ctrl with the numpad plus do the same (HUM-301)."},
+  "shellPaletteTerminalZoomOut": "Terminal text smaller",
+  "@shellPaletteTerminalZoomOut": {"description": "Command palette entry, listed only while a terminal with a running session is on the screen: makes the terminal text one step smaller; Ctrl+Minus and Ctrl with the numpad minus do the same (HUM-301)."},
+  "shellPaletteTerminalZoomReset": "Terminal text default size",
+  "@shellPaletteTerminalZoomReset": {"description": "Command palette entry, listed only while a terminal with a running session is on the screen: brings the terminal text back to its default size; Ctrl+Shift+0 and Ctrl with the numpad 0 do the same (HUM-301)."}
 }

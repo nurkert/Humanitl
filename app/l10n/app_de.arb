@@ -1352,5 +1352,8 @@
   "shellPaletteFocusTerminal": "Tastatur ans Terminal",
   "interceptEmptyWorkingTitle": "Der Agent arbeitet",
   "interceptEmptyWorkingHint": "Jede Anfrage, die dich braucht, erscheint hier.",
-  "interceptEmptyGoToTerminal": "Zum Terminal"
+  "interceptEmptyGoToTerminal": "Zum Terminal",
+  "shellPaletteTerminalZoomIn": "Terminaltext größer",
+  "shellPaletteTerminalZoomOut": "Terminaltext kleiner",
+  "shellPaletteTerminalZoomReset": "Terminaltext in Standardgröße"
 }
