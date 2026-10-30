@@ -493,7 +493,7 @@ same entry, and a switch applies to the next session.
 
 ### Key handling
 
-`apiKey` in `models.json` is `"!cat /etc/humanitl/pi/llm-api-key"`. pi runs a
+`apiKey` in `models.json` is `"!cat \"$HUMANITL_PI_KEY_FILE\""`. pi runs a
 value that starts with `!` through `/bin/sh -c` and takes the trimmed output as
 the key. The key file comes from a sealed memfd like every adapter file; the
 key stands in no environment variable, not in the `argv` of `pi` and not in

@@ -20,7 +20,7 @@
 //! calls: the provider below still reaches `llm.endpoint`.
 //!
 //! **The key.** pi resolves an `apiKey` that starts with `!` by running it
-//! through `/bin/sh -c`. `models.json` says `!cat /etc/humanitl/pi/llm-api-key`,
+//! through `/bin/sh -c`. `models.json` says `!cat "$HUMANITL_PI_KEY_FILE"`,
 //! and the file comes from a memfd like every adapter file (HUM-140). The key
 //! is in no environment variable, not in `argv` of `pi` and not in
 //! `models.json`; the short-lived `cat` carries only the path.
@@ -61,7 +61,8 @@ use crate::agent::opencode::{
 };
 use crate::agent::opencode_models::DEFAULT_RULES;
 use crate::agent::pi_config::{
-    NO_KEY_PLACEHOLDER, api_key_command, render_models, render_settings, render_web_search,
+    ENV_KEY_FILE, NO_KEY_PLACEHOLDER, api_key_command, render_models, render_settings,
+    render_web_search,
 };
 use crate::agent::{
     AgentAdapter, AgentContext, Reach, SandboxFile, SandboxLookup, briefing, find_in_path,
@@ -548,6 +549,7 @@ impl AgentAdapter for PiAdapter {
         let config_home = ctx.config_home().to_string_lossy().into_owned();
         [
             (ENV_AGENT_DIR, agent),
+            (ENV_KEY_FILE, API_KEY_DST.to_owned()),
             (ENV_OFFLINE, "1".to_owned()),
             (ENV_SKIP_VERSION_CHECK, "1".to_owned()),
             (ENV_TELEMETRY, "0".to_owned()),
@@ -571,7 +573,7 @@ impl AgentAdapter for PiAdapter {
             llm_endpoint::openai_base_url,
         );
         let api_key = if ctx.llm_key.is_some() {
-            api_key_command(API_KEY_DST)
+            api_key_command()
         } else {
             NO_KEY_PLACEHOLDER.to_owned()
         };

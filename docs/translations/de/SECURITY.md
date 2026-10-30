@@ -1,6 +1,6 @@
 ---
 source: SECURITY.md
-source-sha256: 1ff59e84cfa1b91ad1cc278ab83558335031b6660c18bf2af205856ec2267480
+source-sha256: 935654b80ffe1356c6825dbe4d3987f4abecbb5d229a500deb30a4c3d2e57bee
 lang: de
 ---
 # Sicherheit
@@ -731,7 +731,7 @@ Eintrag im Schlüsselbund auf Wunsch, und nur, wenn kein anderer Server darauf v
 ihn als Datei `/etc/humanitl/opencode/llm-api-key` in die Sandbox, aus einem memfd über
 `--ro-bind-data`. `opencode.json` verweist mit `{file:/etc/humanitl/opencode/llm-api-key}` darauf.
 Mit `agent.adapter = "pi"` legt derselbe Mechanismus ihn unter `/etc/humanitl/pi/llm-api-key` ab,
-und `models.json` von pi verweist mit `"apiKey": "!cat /etc/humanitl/pi/llm-api-key"` darauf, was
+und `models.json` von pi verweist mit `"apiKey": "!cat \"$HUMANITL_PI_KEY_FILE\""` darauf, was
 pi über `/bin/sh -c` ausführt; der Pfad ist eine Konstante des Adapters, nie ein eingerichteter
 Wert, und nur der Pfad steht im `argv` dieses `cat` (HUM-274).
 Er ist bewusst keine Umgebungsvariable: bwrap setzt die Umgebung des Agenten mit
