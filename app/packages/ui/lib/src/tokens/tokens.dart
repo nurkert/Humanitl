@@ -206,7 +206,8 @@ class HSurfaceColors {
   final Color warningText;
 
   /// Information, die weder Zustand noch Warnung ist, etwa ein Diagnostic
-  /// der Stufe `info`. Das Blau, das bis HUM-260 der Akzent war.
+  /// der Stufe `info`. Seit HUM-355 ein unbuntes Silber (hell ein Graphit),
+  /// bis dahin das Blau, das bis HUM-260 der Akzent war.
   final Color info;
 
   /// [info], wie sie ein Wort tragen darf.

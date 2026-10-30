@@ -423,7 +423,7 @@ void main() {
     );
     expect(sentence.data, english.interceptBodyEmpty);
     expect(find.text(english.interceptBodyEmpty), findsOneWidget);
-    // `fg2` misst 3,02:1 auf `bg3` und ist für Sätze zu schwach
+    // `fg2` misst 3,06:1 auf `bg3` und ist für Sätze zu schwach
     // (`docs/UX.md` 6, Sekundärtext).
     expect(sentence.style?.color, HTokens.dark.colors.fg1);
     expect(sentence.style?.color, isNot(HTokens.dark.colors.fg2));

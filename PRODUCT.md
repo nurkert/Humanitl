@@ -53,7 +53,7 @@ line (`humanitl`) and the desktop app. Linux (bubblewrap, seccomp) and macOS
 - Name: Humanitl (human in the loop). Icon: a black fist on a yellow rounded
   tile (`app/macos/Runner/Assets.xcassets/AppIcon.appiconset`).
 - App direction "Airlock" (`docs/DESIGN.md`): calm control room, near-black
-  surfaces (#0F1115), yellow accent #E8B84B for "held", the yellow hazard
+  neutral grey surfaces (#111111, HUM-355), yellow accent #E8B84B, the yellow hazard
   stripe above the queue.
 - Website look requested by the owner on 2026-10-30: a highly modern, clean
   web app; dark space, floating 3D glass screens with specular rim light,

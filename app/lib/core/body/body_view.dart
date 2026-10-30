@@ -131,7 +131,7 @@ class _BodyViewState extends ConsumerState<BodyView> {
     // keinen Rumpf hat, sind dieselbe Aussage und bekommen denselben Satz —
     // auf beiden Bildschirmen, damit das Detail der History dafür keinen
     // eigenen Weg mehr braucht (HUM-154). Der Satz trägt `fg1` oder besser;
-    // `fg2` misst 3,02:1 auf `bg3` und gehört den deaktivierten Controls
+    // `fg2` misst 3,06:1 auf `bg3` und gehört den deaktivierten Controls
     // (`docs/UX.md` 6, Sekundärtext).
     final Widget nothingToShow = Text(
       l10n.interceptBodyEmpty,

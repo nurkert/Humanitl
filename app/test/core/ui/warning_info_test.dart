@@ -1,5 +1,6 @@
 // Warnung und Information haben seit HUM-260 eigene Töne: `warning` ist das
-// Gelb der Marke, `info` das Blau, das vorher der Akzent war. `held` heißt
+// Gelb der Marke, `info` seit HUM-355 ein unbuntes Silber (bis dahin das
+// Blau, das vorher der Akzent war). `held` heißt
 // ausschließlich „gehalten" und taucht in keiner dieser Zuordnungen mehr auf.
 
 import 'package:flutter/widgets.dart';
@@ -19,7 +20,7 @@ void main() {
     final HTokens tokens = HTokens.forBrightness(brightness);
     final String theme = brightness.name;
 
-    test('$theme: a diagnostic says info in blue and warning in yellow', () {
+    test('$theme: a diagnostic says info in silver and warning in yellow', () {
       expect(severityColor(tokens, Severity.info), tokens.colors.info);
       expect(severityColor(tokens, Severity.warning), tokens.colors.warning);
       expect(severityColor(tokens, Severity.info), isNot(tokens.colors.accent));
@@ -79,7 +80,7 @@ void main() {
         HEditorDecorations.colorOf(tokens, HEditorDecorationKind.pii),
         tokens.colors.warning,
       );
-      // Keine dieser Stellen trägt mehr das Cyan von `held`.
+      // Keine dieser Stellen trägt die Farbe von `held`.
       final Color held = tokens.state.held;
       final Color heldText = tokens.stateText.held;
       for (final Color used in <Color>[
