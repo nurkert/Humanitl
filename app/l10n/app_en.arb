@@ -3384,5 +3384,9 @@
   "shellTerminalStripOpen": "Open the terminal",
   "@shellTerminalStripOpen": {"description": "Tooltip and screen-reader label of the button in the slim title strip of the floating terminal, and of the strip itself: opens the terminal in the next free corner, or, with no corner free, puts it back into its pane and shows the Sandbox section (HUM-315)."},
   "shellTerminalStripLabel": "Floating terminal, shrunk for lack of room",
-  "@shellTerminalStripLabel": {"description": "What a screen reader reads for the slim title strip as a whole: the floating terminal had no free corner and shrank to this strip so it covers nothing that must stay clickable (HUM-315)."}
+  "@shellTerminalStripLabel": {"description": "What a screen reader reads for the slim title strip as a whole: the floating terminal had no free corner and shrank to this strip so it covers nothing that must stay clickable (HUM-315)."},
+  "historyDeciderClient": "client",
+  "@historyDeciderClient": {"description": "Rule column (HUM-316): nobody and no rule decided; the client gave up its TLS connection to the proxy before there was a request to decide, by rejecting or breaking off the handshake or by closing the tunnel empty."},
+  "historyDecisionAborted": "aborted",
+  "@historyDecisionAborted": {"description": "Decision field of the detail head (HUM-316) for a flow whose client gave up its TLS connection to the proxy before there was anything to decide. Not \"blocked\": nobody blocked it, and nothing reached the target."}
 }

@@ -3015,7 +3015,14 @@ fn decide_remember_carries_origin() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let lines: Vec<String> = stdout(&output).lines().map(str::to_owned).collect();
     assert_eq!(lines.len(), 2, "{lines:?}");
-    assert_eq!(lines[0], "allow 018f0001", "{lines:?}");
+    // Das Ende der Id, nicht ihr Anfang: Der Anfang einer UUIDv7 ist die
+    // Uhrzeit (HUM-316).
+    let hex = plain_id.replace('-', "");
+    assert_eq!(
+        lines[0],
+        format!("allow {}", &hex[hex.len() - 8..]),
+        "{lines:?}"
+    );
     let rule_line = &lines[1];
     assert!(
         rule_line.starts_with("rule "),
@@ -5823,4 +5830,70 @@ fn sandbox_run_refuses_a_stored_folder_moved_out_of_home_by_a_link() {
         text.contains("a symbolic link in its path leads elsewhere"),
         "{text}"
     );
+}
+
+/// HUM-316: `flows list --passthrough` nimmt den Verkehr zum Modell mit, ohne
+/// den Schalter fehlt er, und das Ende der Id, wie die Tabelle es druckt,
+/// genügt `flows show`.
+///
+/// Die aufgezeichnete Sitzung schickt nach 2,6 s genau eine Anfrage durch die
+/// Durchreiche (`fixtures/sessions/mixed.jsonl`).
+#[test]
+fn flows_list_passthrough_shows_the_model_traffic_and_show_takes_the_printed_end() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let deadline = Instant::now() + PATIENCE;
+    let mut model = None;
+    while Instant::now() < deadline && model.is_none() {
+        let output = harness.run(["--json", "flows", "list", "--passthrough"]);
+        assert_eq!(code(&output), 0, "{}", stderr(&output));
+        model = json_of(&output)["flows"].as_array().and_then(|flows| {
+            flows
+                .iter()
+                .find(|flow| flow["passthrough"] == true)
+                .cloned()
+        });
+        if model.is_none() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    let model = model.expect("the recorded session sends one request to the model");
+    assert_eq!(model["outcome"], "passthrough", "{model}");
+    let id = model["flow_id"].as_str().expect("a flow id").to_owned();
+
+    let without = harness.run(["--json", "flows", "list"]);
+    assert_eq!(code(&without), 0, "{}", stderr(&without));
+    let rows = json_of(&without)["flows"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(!rows.is_empty(), "the other flows stay listed");
+    assert!(
+        rows.iter().all(|flow| flow["passthrough"] != true),
+        "without --passthrough the model traffic stays out: {rows:?}"
+    );
+
+    let table = harness.run(["flows", "list", "--passthrough"]);
+    assert_eq!(code(&table), 0, "{}", stderr(&table));
+    let text = stdout(&table);
+    let hex = id.replace('-', "");
+    let printed = text
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .find(|cell| cell.len() >= 8 && hex.ends_with(cell))
+        .unwrap_or_else(|| panic!("no row ends {id}:\n{text}"));
+    assert!(
+        printed.len() < hex.len(),
+        "the table prints the end, not the id"
+    );
+    let line = text
+        .lines()
+        .find(|line| line.starts_with(printed))
+        .unwrap_or_default();
+    assert!(line.contains("passthrough"), "{line}");
+
+    let shown = harness.run(["flows", "show", printed]);
+    assert_eq!(code(&shown), 0, "{}", stderr(&shown));
+    assert!(stdout(&shown).contains(&id), "{}", stdout(&shown));
 }

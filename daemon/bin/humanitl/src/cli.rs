@@ -490,6 +490,13 @@ pub enum FlowsCmd {
     /// SIZE is request plus response in bytes, MS the duration in
     /// milliseconds, PATH shortened in the middle to 40 characters. What the
     /// daemon does not know stays a dash.
+    ///
+    /// ID is the end of the flow id, as many characters as it takes to tell
+    /// the rows of this page apart and at least eight; `flows show` takes it
+    /// as it stands. DECISION reads `aborted` where the client gave up its TLS
+    /// connection to the proxy before there was anything to decide (nobody
+    /// blocked it; `flows show` names the cause), and `passthrough` for the
+    /// requests to the model endpoint, which only --passthrough lists.
     List {
         /// The filter, for example `host:github.com state:blocked`. Several
         /// words are joined with one space and passed to the daemon
@@ -510,11 +517,17 @@ pub enum FlowsCmd {
         /// Ascending instead of descending: the oldest row first.
         #[arg(long)]
         asc: bool,
+        /// Include the requests the passthrough let through to the model
+        /// endpoint; DECISION reads `passthrough` for them.
+        #[arg(long)]
+        passthrough: bool,
     },
 
     /// Show one flow, or one of its bodies.
     Show {
-        /// The id of the flow.
+        /// The id of the flow: the whole id, or its end as `flows list`
+        /// prints it (at least eight characters), looked up among the last
+        /// 1000 flows.
         #[arg(value_name = "ID")]
         id: String,
         /// Print one of the two bodies instead of the fields.
@@ -1457,6 +1470,7 @@ mod tests {
                     sort,
                     asc,
                     limit,
+                    passthrough,
                 },
         } = invocation.cli.cmd
         else {
@@ -1466,6 +1480,20 @@ mod tests {
         assert_eq!(sort, "size");
         assert!(asc);
         assert_eq!(limit, 0);
+        assert!(!passthrough, "the model traffic stays out unless asked for");
+    }
+
+    /// `--passthrough` nimmt die Durchreiche zum Modell in die Liste (HUM-316).
+    #[test]
+    fn passthrough_is_a_flag_of_flows_list() {
+        let invocation = parse(["humanitl", "flows", "list", "--passthrough"]).expect("parses");
+        let Cmd::Flows {
+            cmd: FlowsCmd::List { passthrough, .. },
+        } = invocation.cli.cmd
+        else {
+            panic!("expected flows list");
+        };
+        assert!(passthrough);
     }
 
     #[test]

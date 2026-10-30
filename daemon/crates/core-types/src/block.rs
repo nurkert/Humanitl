@@ -416,6 +416,7 @@ mod tests {
             (BlockReason::HoldMaxFlows, 503),
             (BlockReason::NoRoute, 502),
             (BlockReason::ClientTimeout, 408),
+            (BlockReason::ClientAborted, 408),
         ];
         for (reason, status) in cases {
             let response = block_response(reason, FlowId::new(), &host(), None);
