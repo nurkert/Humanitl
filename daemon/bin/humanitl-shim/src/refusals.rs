@@ -42,7 +42,7 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::linux::report::Report;
+use crate::report::Report;
 
 /// How many family-and-type pairs the tally keeps apart. Every further pair
 /// is counted in one overflow entry: an agent that walks through all 2^32

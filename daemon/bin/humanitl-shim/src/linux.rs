@@ -109,11 +109,9 @@
 //! this binary to `/usr/local/bin/humanitl-shim`, all read-only. The gRPC
 //! socket is never mounted.
 
-mod bridge;
 mod channel;
 mod exec;
 mod refusals;
-mod report;
 mod seccomp;
 
 use std::env;
@@ -130,11 +128,11 @@ use std::thread;
 
 use seccompiler::BpfProgram;
 
-use crate::linux::bridge::{Bound, Bridge};
+use crate::bridge::{self, Bound, Bridge};
 use crate::linux::channel::Received;
 use crate::linux::refusals::Tally;
-use crate::linux::report::{Check, Report};
 use crate::linux::seccomp::{Gate, Policy};
+use crate::report::{self, Check, Report};
 
 /// Exit status for a command line the shim does not understand.
 const EXIT_USAGE: i32 = 125;
