@@ -1,0 +1,50 @@
+# rpmlint-Ausnahmen fuer das Paket humanitl (HUM-339). Jede steht mit ihrem
+# Grund da; eine Ausnahme ohne Grund gehoert nicht in diese Datei. Geprueft
+# wird mit `packaging/rpm/rpmlint.sh`, das bei jeder nicht erklaerten Meldung
+# scheitert. Das Gegenstueck fuer das .deb ist `packaging/deb/lintian-overrides`;
+# wo eine Ausnahme dort schon steht, steht hier derselbe Grund.
+
+# Der Shim ist mit Absicht statisch und ohne PIE (HUM-012): Er ist das einzige
+# Programm, das in die Sandbox eingehaengt wird, und dort gibt es keine
+# Bibliotheken des Hosts und keinen Lader.
+addFilter(r"statically-linked-binary /usr/lib/humanitl/bin/humanitl-shim$")
+addFilter(r"position-independent-executable-suggested /usr/lib/humanitl/bin/humanitl-shim$")
+
+# libapp.so ist der AOT-Snapshot des Dart-Codes, kein gewoehnliches Shared
+# Object: Die Flutter-Engine laedt ihn ueber seinen Pfad, er hat keinen
+# Soname und keine GNU-Hash-Tabelle, so wie Flutter ihn erzeugt.
+addFilter(r"no-soname /usr/lib/humanitl/lib/libapp\.so$")
+addFilter(r"missing-gnu-hash-section /usr/lib/humanitl/lib/libapp\.so$")
+
+# Die Engine und die Plugins sind private Bibliotheken des Bundles unter
+# /usr/lib/humanitl/lib, gefunden ueber den RUNPATH der Anwendung. Ihren
+# Soname ohne Versionsnummer gibt Flutters Build vor; das Paket bietet sie dem
+# System nicht an (`__provides_exclude_from` im Spec).
+addFilter(r"invalid-soname /usr/lib/humanitl/lib/lib(flutter_linux_gtk|screen_retriever_linux_plugin|window_manager_plugin)\.so ")
+
+# Man-Pages gibt es noch nicht. Die Kommandozeile beschreibt sich mit
+# `humanitl --help` selbst, die Referenz steht in docs/cli.md; Man-Pages
+# gehoeren zur Dokumentation von HUM-059.
+addFilter(r"no-manual-page-for-binary humanitl(-app)?$")
+
+# Die Dokumentation liegt online (README, docs/); im Paket stehen nur die
+# Lizenztexte unter /usr/share/licenses/humanitl. Das .deb traegt dort, wo
+# rpm die Lizenzen ablegt, nur copyright und das Changelog, das rpm im
+# Paketkopf fuehrt.
+addFilter(r"no-documentation$")
+
+# Gleiche Flaggen fuer Gebiete, die die Flagge eines Staats fuehren (etwa
+# Frankreich und seine Ueberseegebiete), als eigene Assets der Dart-Bibliothek
+# country_flags. Das Asset-Bundle ist so, wie `flutter build linux` es baut;
+# die Engine sucht jede Flagge unter ihrem eigenen Namen.
+addFilter(r"files-duplicate /usr/lib/humanitl/data/flutter_assets/packages/country_flags/res/si/")
+# files-duplicated-waste nennt nur die Summe aller Dubletten des Pakets, keinen
+# Pfad; enger als auf dieses Paket laesst sie sich nicht fassen. Wer neue
+# Dubletten einfuehrt, sieht sie trotzdem an files-duplicate oben.
+addFilter(r"humanitl\.x86_64: W: files-duplicated-waste ")
+
+# `rm -f` in den Scriptlets loescht nur die eigene Zwischendatei unter /run
+# (`mktemp -p /run humanitl-postinst.XXXXXX` in
+# `packaging/deb/maintscript-users.sh`), nie eine Datei eines Pakets oder
+# eines Menschen.
+addFilter(r"dangerous-command-in-%(post|postun) rm$")

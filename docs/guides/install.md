@@ -6,17 +6,20 @@ This guide takes a desktop Linux machine from nothing to a running Humanitl
 daemon with a passing sandbox check. It takes about ten minutes. The next step
 after it is [your first session](first-session.md).
 
-Humanitl ships in three forms for x86_64. All three contain the same four
+Humanitl ships in five forms for x86_64. All of them contain the same four
 programs: the desktop app, the command line `humanitl`, the daemon `humanitld`
 and the static shim `humanitl-shim` that runs inside the sandbox.
 
 | Form | File | Best for |
 |---|---|---|
 | Debian package | `humanitl_<version>_amd64.deb` | Debian and Ubuntu; updates through apt |
+| RPM package | `humanitl-<version>-1.x86_64.rpm` | Fedora 40 and newer, openSUSE Tumbleweed |
+| AUR package | `humanitl-bin`, built from the archive | Arch Linux and its derivatives, once it is published |
 | AppImage | `Humanitl-<version>-x86_64.AppImage` | other distributions, or trying it without root |
 | Archive | `humanitl-<version>-linux-x86_64.tar.gz` | servers and scripted setups without the app |
 
-Flatpak, Snap, RPM and arm64 are not part of 0.1.
+Flatpak, Snap and arm64 are not part of 0.1, and neither is a dnf repository:
+the RPM is installed from the file, like the `.deb` without the APT repository.
 
 The daemon always runs as a **systemd user service** of the person who uses it,
 never as a system service and never with `sudo`. It reads one person's runtime
@@ -28,17 +31,17 @@ or one click in the app.
 
 | What | Why | How to check |
 |---|---|---|
-| Debian 13 or Ubuntu 24.04, or newer, on x86_64 | the targets the packages are built and tested for | `cat /etc/os-release` |
+| Debian 13 or Ubuntu 24.04, or newer, on x86_64; for the RPM Fedora 40 or newer or openSUSE Tumbleweed; for the AUR package a current Arch Linux | the programs are built on Ubuntu 24.04 and need glibc 2.39 or newer, which RHEL 9 (2.34) and openSUSE Leap 15 (2.31) do not have | `cat /etc/os-release`, `ldd --version` |
 | systemd with a user session | the daemon is a user service | `systemctl --user is-system-running` answers `running` |
 | bubblewrap 0.8.0 or newer | the sandbox backend; older versions are refused (`SANDBOX_002`) | `bwrap --version` |
 | unprivileged user namespaces | bubblewrap opens the sandbox without setuid | see [User namespaces](#user-namespaces) |
 | a kernel with seccomp, 5.4 or newer | the third guarantee, no new sockets | `grep Seccomp /proc/self/status` |
-| GTK 3, GLib, EGL and GLES 2 | the desktop app | the `.deb` pulls them in |
+| GTK 3, GLib, EGL and GLES 2 | the desktop app | the `.deb`, the `.rpm` and the AUR package pull them in |
 | `libayatana-appindicator3-1` (optional) | the tray icon; without it the app runs and the window title carries the count of held requests | `humanitl doctor`, line `tray` |
 | `libsecret-tools` (recommended) | keeps an access key for the model server in the system keyring; without it the key lives in a file with mode `0600` | `command -v secret-tool` |
 
 The `.deb` declares bubblewrap, EGL and GLES 2 as dependencies, so apt installs
-them. GTK 3 and GLib come in through the libraries of the app. The tray library
+them; the `.rpm` and the AUR package declare the same, for dnf, zypper and pacman. GTK 3 and GLib come in through the libraries of the app. The tray library
 and `libsecret-tools` are optional; the package recommends `libsecret-tools`.
 
 On GNOME the tray icon also needs the shell extension "AppIndicator and
@@ -146,6 +149,57 @@ Instead of the command, the app offers the same step: the first row of its
 setup screen, "Background service", shows the button "Install and start" when
 no daemon answers. It runs the `humanitl` next to the app, never one from
 `PATH`, and turns green once the service answers.
+
+## Install the RPM
+
+For Fedora 40 and newer and openSUSE Tumbleweed. The RPM holds the same files at
+the same paths as the `.deb` (see the table above); only the licence texts lie
+under `/usr/share/licenses/humanitl/`. The release run installs, checks and
+removes it in a Fedora 44 container; Tumbleweed is not tested. Older systems
+such as RHEL 9 or openSUSE Leap 15 refuse it, because their glibc is older
+than 2.39.
+
+```sh
+sudo dnf install ./humanitl-<version>-1.x86_64.rpm
+humanitl daemon install
+humanitl daemon status
+```
+
+On openSUSE the release is not signed, so zypper asks for it explicitly:
+
+```sh
+sudo zypper install --allow-unsigned-rpm ./humanitl-<version>-1.x86_64.rpm
+```
+
+Like the `.deb`, the package writes nothing under `/etc`, `/var` or your home
+directory, and `humanitl daemon install` only enables the socket it ships (see
+[Enable the user service](#enable-the-user-service)). Its scriptlets reload the
+user units of logged-in users after an install, an upgrade or a removal, and
+restart a running daemon that has no agent session.
+
+## Install from the AUR
+
+The AUR package `humanitl-bin` takes the archive
+`humanitl-<version>-linux-x86_64.tar.gz` of a release, checks its SHA-256 and
+installs it with the same layout as the `.deb`, units and menu entry included.
+The release run builds it with makepkg and installs and removes it in an Arch
+Linux container. The maintainer publishes it to the AUR by hand after each
+release, so it can lag behind the release page for a while; as long as
+<https://aur.archlinux.org/packages/humanitl-bin> does not exist, the package is
+not published yet.
+
+```sh
+git clone https://aur.archlinux.org/humanitl-bin.git
+cd humanitl-bin
+less PKGBUILD humanitl-bin.install   # read what you are about to run as root
+makepkg -si
+humanitl daemon install
+humanitl daemon status
+```
+
+An AUR helper such as `yay -S humanitl-bin` does the same. The package needs
+`bubblewrap` 0.8.0 or newer from the Arch repositories; `libsecret` and
+`libayatana-appindicator` are optional.
 
 ## Install the AppImage
 
@@ -346,6 +400,12 @@ Every code is explained in [DIAGNOSTICS.md](../DIAGNOSTICS.md).
   version. Until then the app's status bar names the other version and offers
   **Restart daemon** once no session runs; the command line equivalent is
   `systemctl --user daemon-reload && systemctl --user restart humanitld`.
+- **RPM:** `sudo dnf install ./humanitl-<newer>-1.x86_64.rpm` (openSUSE:
+  `sudo zypper install --allow-unsigned-rpm ./…rpm`). The scriptlet reloads and
+  restarts like the `.deb` does.
+- **AUR:** `git pull` in the `humanitl-bin` checkout, then `makepkg -si`, or
+  the update of your AUR helper. The install script reloads and restarts like
+  the `.deb` does.
 - **AppImage:** start the newer image. It refreshes the service by itself.
 - **Archive:** unpack the new version and run its `bin/humanitl daemon install`.
 
@@ -370,6 +430,27 @@ sudo apt remove --purge humanitl
 `humanitl daemon uninstall` disables the socket and the service (the same as
 `systemctl --user disable --now humanitld.socket humanitld.service`). The units
 belong to the package, which removes them.
+
+**RPM** on Fedora:
+
+```sh
+humanitl daemon uninstall
+sudo dnf remove humanitl
+```
+
+**RPM** on openSUSE:
+
+```sh
+humanitl daemon uninstall
+sudo zypper remove humanitl
+```
+
+**AUR package** on Arch Linux:
+
+```sh
+humanitl daemon uninstall
+sudo pacman -Rns humanitl-bin
+```
 
 **AppImage:**
 

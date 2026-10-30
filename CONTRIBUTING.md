@@ -258,9 +258,13 @@ desselben Dienstes. Einzelheiten in `docs/ARCHITECTURE.md`.
 
 Bis zum ersten richtigen Release 0.1.0 gibt es Vorabversionen mit der Nummer
 0.0.N. Sie entstehen aus einem Tag und dem Workflow
-`.github/workflows/release.yml`. Das Release enthält das Paket
-`humanitl_0.0.N_amd64.deb`, das Archiv `humanitl-0.0.N-linux-x86_64.tar.gz`
-und `SHA256SUMS`. Seit HUM-273 erscheint es auf GitHub als reguläres Release
+`.github/workflows/release.yml`. Das Release enthält die Pakete
+`humanitl_0.0.N_amd64.deb` und `humanitl-0.0.N-1.x86_64.rpm`, das AppImage
+`Humanitl-0.0.N-x86_64.AppImage`, das Archiv
+`humanitl-0.0.N-linux-x86_64.tar.gz`, für macOS `Humanitl-0.0.N-macos.dmg`
+und `Humanitl-0.0.N-macos.zip` sowie `SHA256SUMS`. Das AUR-Paket
+`humanitl-bin` ist kein Asset; es wird aus dem Archiv gerendert und vom
+Maintainer selbst hochgeladen (`packaging/aur/README.md`). Seit HUM-273 erscheint es auf GitHub als reguläres Release
 („Latest“), nicht mehr als Pre-Release; es ist weiterhin nicht signiert und
 nicht für den produktiven Einsatz gedacht. Signaturen kommen mit 1.0.0.
 
