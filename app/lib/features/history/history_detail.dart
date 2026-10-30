@@ -379,9 +379,14 @@ class _Head extends StatelessWidget {
                 // A meta request has no decision and never will: the proxy
                 // answered it itself, and a dash would read as "unknown"
                 // (`backlog/CONVENTIONS.md` 4.13, HUM-103).
+                // A tunnel the client gave up is recorded as a block, but
+                // nobody blocked it: the word says what happened (HUM-316).
                 value: switch (flow.decision) {
                   null when flow.meta => l10n.historyDecisionNone,
                   null => unknown,
+                  DecisionKind()
+                      when flow.blockReason == BlockReason.clientAborted =>
+                    l10n.historyDecisionAborted,
                   final DecisionKind decision => l10n.flowStateLabel(
                     historyDecisionLabelState(decision),
                   ),
@@ -448,6 +453,7 @@ class _Head extends StatelessWidget {
         HistoryDecider.passthrough => l10n.historyDeciderPassthrough,
         HistoryDecider.pending => l10n.historyDeciderPending,
         HistoryDecider.meta => l10n.historyDeciderMeta,
+        HistoryDecider.client => l10n.historyDeciderClient,
       };
 }
 

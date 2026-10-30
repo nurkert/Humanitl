@@ -97,8 +97,26 @@ pub const MAX_TRACKED_HOSTS: usize = 256;
 /// bleibt davon unberührt — jeder Versuch ist dort eine eigene Zeile.
 pub const MAX_REPORTS_PER_WINDOW: usize = 32;
 
-/// Der Wert, der bei einem gescheiterten Handschlag in `flows.error` steht.
+/// Der feste Anfang des Wertes, der bei einem gescheiterten Handschlag in
+/// `flows.error` steht. Dahinter folgt nach einem `:` die Klasse
+/// ([`flow_error`], HUM-316).
 pub const FLOW_ERROR: &str = "tls_handshake_failed";
+
+/// Der Wert für `flows.error` zu einem gedeuteten Fehlschlag:
+/// `tls_handshake_failed:<klasse>`, etwa
+/// `tls_handshake_failed:eof_before_finished` (HUM-316).
+///
+/// Die Klasse stand bis HUM-316 nur in einer Protokollzeile auf `debug`, und
+/// wer die History las, sah sechzehn gleiche Zeilen ohne Ursache. Jetzt steht
+/// sie am Flow, so dauerhaft wie der Flow selbst, und das Zählfenster der
+/// Befunde ([`MAX_REPORTS_PER_WINDOW`]) begrenzt nur die Karten, nicht diese
+/// Angabe. Dieselbe Form wie `upstream_private_address:<ip>`: der feste Teil
+/// vor dem ersten `:`, das Einzelne danach. `AlertOther` nennt nur
+/// `alert_other`, nicht die Beschreibung von rustls; die steht im Befund.
+#[must_use]
+pub fn flow_error(failure: &TlsFailure) -> String {
+    format!("{FLOW_ERROR}:{}", failure.as_str())
+}
 
 /// So tief wird die Ursachenkette eines Fehlers verfolgt.
 const MAX_CAUSE_DEPTH: usize = 8;
@@ -851,9 +869,40 @@ mod tests {
     use humanitl_core::{FixAction, HeaderMap, HostName, Severity};
 
     use super::{
-        DROP_THRESHOLD, HandshakeWatch, MAX_REPORTS_PER_WINDOW, MAX_TRACKED_HOSTS, TlsFailure,
-        ToolHint, classify, diagnostic_for, missing_sni, tool_hint,
+        DROP_THRESHOLD, FLOW_ERROR, HandshakeWatch, MAX_REPORTS_PER_WINDOW, MAX_TRACKED_HOSTS,
+        TlsFailure, ToolHint, classify, diagnostic_for, flow_error, missing_sni, tool_hint,
     };
+
+    /// Die Klasse steht am Flow, hinter dem festen Anfang (HUM-316).
+    #[test]
+    fn the_flow_error_carries_the_class() {
+        let all = [
+            TlsFailure::AlertUnknownCa,
+            TlsFailure::AlertBadCertificate,
+            TlsFailure::AlertOther("HandshakeFailure".to_owned()),
+            TlsFailure::EofBeforeFinished,
+            TlsFailure::ResetBeforeFinished,
+            TlsFailure::ClosedAfterHandshake,
+        ];
+        for failure in &all {
+            let error = flow_error(failure);
+            assert_eq!(
+                error.split_once(':'),
+                Some((FLOW_ERROR, failure.as_str())),
+                "{error}"
+            );
+        }
+        assert_eq!(
+            flow_error(&TlsFailure::EofBeforeFinished),
+            "tls_handshake_failed:eof_before_finished"
+        );
+        // Die Beschreibung von rustls bleibt im Befund; die Spalte nennt nur
+        // die Klasse.
+        assert_eq!(
+            flow_error(&TlsFailure::AlertOther("HandshakeFailure".to_owned())),
+            "tls_handshake_failed:alert_other"
+        );
+    }
 
     fn host(name: &str) -> HostName {
         HostName::parse(name).unwrap_or_else(|err| panic!("{err}"))

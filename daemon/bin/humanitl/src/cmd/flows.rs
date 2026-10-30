@@ -20,6 +20,17 @@
 //! der JSON-Wert die Auskunft. `SIZE` zählt Anfrage und Antwort zusammen in
 //! Bytes, `MS` ist die Dauer in Millisekunden, und `PATH` wird in der Mitte auf
 //! 40 Zeichen gekürzt, damit die Spalten stehen bleiben.
+//!
+//! `ID` ist das Ende der Flow-Id, nicht ihr Anfang (HUM-316): Eine `UUIDv7`
+//! beginnt mit der Uhrzeit, und alle Flows einer Minute teilen dieselben
+//! ersten acht Zeichen. Das Ende ist Zufall. Die Spalte zeigt so viele
+//! Zeichen, wie es braucht, um die Zeilen der Seite zu unterscheiden, und
+//! mindestens acht; `flows show` nimmt genau diese Form.
+//!
+//! `DECISION` schreibt `aborted`, wo der Dienst `BLOCK_REASON_CLIENT_ABORTED`
+//! meldet, und `passthrough` für die Durchreiche zum Modell. Beides liest die
+//! Spalte aus dem, was der Dienst sagt; die Kommandozeile deutet nichts aus
+//! `error` (ADR-018).
 
 use std::io::Write as _;
 
@@ -35,8 +46,13 @@ use crate::cli::{FlowsCmd, RememberArgs};
 use crate::cmd::{Context, EXIT_OK, Failure, from_proto, status_diagnostic};
 use crate::render::table;
 
-/// Wie viele Zeilen `flows show` höchstens durchsucht, wenn `GetFlow` fehlt.
+/// Wie viele Zeilen `flows show` höchstens durchsucht, wenn `GetFlow` fehlt
+/// oder die Id nur ihr Ende nennt.
 const SEARCH_LIMIT: u32 = 1000;
+
+/// So viele Zeichen zeigt die Spalte `ID` mindestens, und so viele braucht
+/// `flows show` mindestens, um ein Ende nachzuschlagen (HUM-316).
+const MIN_ID_TAIL: usize = 8;
 
 /// Auf wie viele Zeichen `PATH` in der Tabelle gekürzt wird.
 const PATH_WIDTH: usize = 40;
@@ -61,7 +77,11 @@ pub async fn run(ctx: &Context, cmd: &FlowsCmd) -> Result<u8, Failure> {
             limit,
             sort,
             asc,
-        } => list(ctx, client, filter, *limit, sort, *asc).await,
+            passthrough,
+        } => {
+            let order = order_by(sort, *asc);
+            list(ctx, client, filter, *limit, &order, *passthrough).await
+        }
         FlowsCmd::Show { id, body, raw } => show(ctx, client, id, body.as_deref(), *raw).await,
         FlowsCmd::Decide {
             id,
@@ -75,17 +95,19 @@ pub async fn run(ctx: &Context, cmd: &FlowsCmd) -> Result<u8, Failure> {
 /// `flows list [FILTER...]`.
 ///
 /// Der Filter wird Wort für Wort so weitergereicht, wie er auf der
-/// Kommandozeile stand; gefiltert und sortiert wird im Dienst.
+/// Kommandozeile stand; gefiltert und sortiert wird im Dienst. Ob die
+/// Durchreiche zum Modell mitkommt, entscheidet `--passthrough` über
+/// `ListFlowsRequest.include_passthrough`, wie der Schalter der History.
 async fn list(
     ctx: &Context,
     mut client: Client,
     filter: &[String],
     limit: u32,
-    sort: &str,
-    asc: bool,
+    order_by: &str,
+    passthrough: bool,
 ) -> Result<u8, Failure> {
     let filter = filter.join(" ");
-    let page = fetch(&mut client, &filter, limit, &order_by(sort, asc)).await?;
+    let page = fetch(&mut client, &filter, limit, order_by, passthrough).await?;
 
     if ctx.render.is_json() {
         ctx.render.value(&json!({
@@ -101,7 +123,11 @@ async fn list(
         return Ok(EXIT_OK);
     }
 
-    print_flows(&page.flows);
+    // Die Breite der Spalte richtet sich nach der Menge, in der `flows show`
+    // nachschlägt, nicht nach der Seite allein: Sonst druckte eine kurze
+    // Seite ein Ende, das `show` als mehrdeutig abwiese.
+    let searched = search_set(&mut client).await?;
+    print_flows(&page.flows, &searched);
     if !page.next_cursor.is_empty() {
         ctx.render.note(&format!(
             "{} of {} flows; --limit 0 asks the daemon for its default page",
@@ -133,6 +159,10 @@ async fn show(
                 .build(),
         ));
     }
+
+    // Die Spalte `ID` zeigt nur das Ende; der Dienst kennt nur ganze Ids.
+    let id = resolve_id(&mut client, id).await?;
+    let id = id.as_str();
 
     let detail = match client
         .get_flow(v1::FlowRef {
@@ -386,8 +416,11 @@ async fn decide(
             .value(&decide_json(verdict, note, &result.flow_id, &response));
         return Ok(EXIT_OK);
     }
-    ctx.render
-        .line(&format!("{} {}", verdict, short_id(&result.flow_id)));
+    ctx.render.line(&format!(
+        "{} {}",
+        verdict,
+        id_tail(&result.flow_id, MIN_ID_TAIL)
+    ));
     if let Some(rule) = response.created_rule.as_ref() {
         ctx.render.line(&rule_line(rule));
     }
@@ -417,7 +450,7 @@ fn remembered_rule(
         return Ok(None);
     }
     let mut rule = crate::cmd::rules::rule_from_args(&args, None)?;
-    // Die volle Id, nicht die gekürzte aus `short_id`: `rule_from_proto` weist
+    // Die volle Id, nicht das Ende aus `id_tail`: `rule_from_proto` weist
     // ein Präfix mit `IPC_005` ab.
     id.clone_into(&mut rule.created_from_flow_id);
     Ok(Some(rule))
@@ -483,6 +516,7 @@ async fn fetch(
     filter: &str,
     limit: u32,
     order_by: &str,
+    include_passthrough: bool,
 ) -> Result<v1::FlowPage, Failure> {
     client
         .list_flows(v1::ListFlowsRequest {
@@ -491,7 +525,7 @@ async fn fetch(
             cursor: String::new(),
             limit,
             order_by: order_by.to_owned(),
-            include_passthrough: false,
+            include_passthrough,
         })
         .await
         .map(tonic::Response::into_inner)
@@ -499,8 +533,11 @@ async fn fetch(
 }
 
 /// Sucht einen Flow in der Historie, solange `GetFlow` fehlt.
+///
+/// Mit der Durchreiche: Auch eine Anfrage an das Modell ist ein Flow, den
+/// `flows list --passthrough` zeigt und `flows show` finden muss.
 async fn find(client: &mut Client, id: &str) -> Result<v1::FlowSummary, Failure> {
-    let page = fetch(client, "", SEARCH_LIMIT, &order_by("ts", false)).await?;
+    let page = fetch(client, "", SEARCH_LIMIT, &order_by("ts", false), true).await?;
     page.flows
         .into_iter()
         .find(|summary| summary.flow_id == id)
@@ -515,13 +552,185 @@ async fn find(client: &mut Client, id: &str) -> Result<v1::FlowSummary, Failure>
         })
 }
 
+/// Die Flows, unter denen `flows show` ein Ende nachschlägt: die jüngsten
+/// [`SEARCH_LIMIT`] samt Durchreiche.
+///
+/// Die eine Stelle für diese Menge. `flows list` und `rules dry-run` messen
+/// die Breite der Spalte `ID` an ihr ([`print_flows`]), `flows show` sucht
+/// in ihr ([`resolve_id`]); laufen beide auseinander, druckt die Tabelle ein
+/// Ende, das `show` nicht eindeutig findet. `ListFlows` kennt keine Abfrage
+/// nur nach Ids, also kommen die Zusammenfassungen.
+pub async fn search_set(client: &mut Client) -> Result<Vec<v1::FlowSummary>, Failure> {
+    fetch(client, "", SEARCH_LIMIT, &order_by("ts", false), true)
+        .await
+        .map(|page| page.flows)
+}
+
+/// Macht aus dem, was in `flows show ID` stand, eine ganze Flow-Id.
+///
+/// Eine ganze Id (mit oder ohne Bindestriche) geht unverändert weiter. Alles
+/// andere gilt als Ende einer Id, wie die Spalte `ID` es zeigt, und wird in
+/// [`search_set`] nachgeschlagen ([`match_tail`]).
+async fn resolve_id(client: &mut Client, id: &str) -> Result<String, Failure> {
+    if let Some(full) = full_id(id) {
+        return Ok(full);
+    }
+    let wanted = tail_query(id)?;
+    let searched = search_set(client).await?;
+    match_tail(&searched, id, &wanted)
+}
+
+/// Eine ganze Id in der Form, in der der Daemon sie führt: mit Bindestrichen
+/// und klein geschrieben. Die Tabelle druckt eine Zeile außerhalb von
+/// [`search_set`] als 32 Hexziffern ohne Bindestriche; verglichen wird in
+/// [`find`] aber mit der Form des Daemons.
+fn full_id(id: &str) -> Option<String> {
+    FlowId::parse(id).ok().map(|flow| flow.to_string())
+}
+
+/// Prüft, ob `id` als Ende einer Flow-Id taugt, und gibt die Vergleichsform.
+///
+/// Mindestens [`MIN_ID_TAIL`] Hexziffern: So viele zeigt die Tabelle immer,
+/// und ein kürzeres Ende passte unter tausend Flows schnell auf mehrere.
+fn tail_query(id: &str) -> Result<String, Failure> {
+    let wanted = hex_id(id);
+    if wanted.len() < MIN_ID_TAIL || !wanted.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(Failure::new(
+            Diagnostic::builder(codes::CLI_004, Severity::Error)
+                .why(format!(
+                    "{id:?} is neither a flow id nor the end of one as humanitl flows list prints it (at least {MIN_ID_TAIL} hex characters)"
+                ))
+                .fix(FixAction::CopyCommand("humanitl flows list".to_owned()))
+                .build(),
+        ));
+    }
+    Ok(wanted)
+}
+
+/// Der eine Flow, dessen Id auf `wanted` endet.
+///
+/// Keiner ist `IPC_003` wie bei [`find`]. Mehrere sind `CLI_004` mit allen
+/// Kandidaten im Text: Raten wäre hier die falsche Hilfe, denn `flows show`
+/// zeigte dann still einen anderen Flow als gemeint.
+fn match_tail(flows: &[v1::FlowSummary], given: &str, wanted: &str) -> Result<String, Failure> {
+    let candidates: Vec<&str> = flows
+        .iter()
+        .map(|summary| summary.flow_id.as_str())
+        .filter(|flow_id| hex_id(flow_id).ends_with(wanted))
+        .collect();
+    match candidates.as_slice() {
+        [] => Err(Failure::new(
+            Diagnostic::builder(codes::IPC_003, Severity::Error)
+                .why(format!(
+                    "no flow among the newest {SEARCH_LIMIT} ends in {given}; flows show looks up the end of an id only there, so an older flow needs its whole id from humanitl flows list --json"
+                ))
+                .fix(FixAction::CopyCommand(
+                    "humanitl flows list --json".to_owned(),
+                ))
+                .build(),
+        )),
+        [one] => Ok((*one).to_owned()),
+        many => Err(Failure::new(
+            Diagnostic::builder(codes::CLI_004, Severity::Error)
+                .why(format!(
+                    "{given} is the end of {} flows ({}); give more characters or the whole id",
+                    many.len(),
+                    many.join(", ")
+                ))
+                .fix(FixAction::CopyCommand("humanitl flows list --json".to_owned()))
+                .build(),
+        )),
+    }
+}
+
 /// Die Tabelle einer Liste von Flows.
 ///
 /// Auch der Probelauf aus `humanitl rules dry-run` zeigt seine Treffer so:
-/// dieselben Spalten, damit man beide Ausgaben nebeneinander lesen kann.
-pub fn print_flows(flows: &[v1::FlowSummary]) {
-    let rows: Vec<Vec<String>> = flows.iter().map(summary_row).collect();
-    print!("{}", table(&FLOW_HEADERS, &rows));
+/// dieselben Spalten, damit man beide Ausgaben nebeneinander lesen kann. Die
+/// Breite der Spalte `ID` gilt für die ganze Seite und wird gegen
+/// `searched` gemessen, die Menge aus [`search_set`] ([`id_tail_len`]).
+pub fn print_flows(flows: &[v1::FlowSummary], searched: &[v1::FlowSummary]) {
+    print!("{}", table(&FLOW_HEADERS, &flow_rows(flows, searched)));
+}
+
+/// Die Zeilen der Tabelle, mit einer Breite der Spalte `ID` für alle.
+fn flow_rows(flows: &[v1::FlowSummary], searched: &[v1::FlowSummary]) -> Vec<Vec<String>> {
+    let ids: Vec<&str> = flows
+        .iter()
+        .map(|summary| summary.flow_id.as_str())
+        .collect();
+    let others: Vec<&str> = searched
+        .iter()
+        .map(|summary| summary.flow_id.as_str())
+        .collect();
+    let width = id_tail_len(&ids, &others);
+    flows
+        .iter()
+        .map(|summary| summary_row(summary, width))
+        .collect()
+}
+
+/// Die Id ohne Bindestriche und in Kleinbuchstaben, die Form, in der Enden
+/// verglichen werden.
+fn hex_id(id: &str) -> String {
+    id.chars()
+        .filter(|c| *c != '-')
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// Die kürzeste Länge ab [`MIN_ID_TAIL`], bei der das Ende jeder Id der
+/// Seite (`page`) auf genau einen Flow passt, gezählt über die Seite und
+/// über `searched`, die Menge, in der `flows show` nachschlägt.
+///
+/// Eine Breite für die ganze Seite statt einer je Zeile: Die Spalte steht
+/// dann bündig, und wer zwei Zeilen vergleicht, vergleicht gleich lange
+/// Enden. Dieselbe Id in beiden Mengen ist ein Flow, kein Zusammenstoß; zwei
+/// Flows außerhalb der Seite, die sich ein Ende teilen, machen die Spalte
+/// nicht breiter, denn ihre Enden druckt sie nicht.
+///
+/// Steht eine Zeile der Seite nicht in `searched` (eine alte Seite mit
+/// `--asc` oder ein Filter, der hinter die neuesten Flows reicht), fände
+/// `flows show` ihr Ende nicht. Dann druckt die Spalte die ganzen Ids, die
+/// `flows show` ohne Suche annimmt.
+fn id_tail_len(page: &[&str], searched: &[&str]) -> usize {
+    let page: Vec<String> = page.iter().map(|id| hex_id(id)).collect();
+    let searched: std::collections::HashSet<String> =
+        searched.iter().map(|id| hex_id(id)).collect();
+    let all: std::collections::HashSet<String> = page
+        .iter()
+        .cloned()
+        .chain(searched.iter().cloned())
+        .collect();
+    let longest = all.iter().map(String::len).max().unwrap_or(0);
+    if page.iter().any(|id| !searched.contains(id)) {
+        return longest.max(MIN_ID_TAIL);
+    }
+    (MIN_ID_TAIL..longest)
+        .find(|&len| {
+            let mut counts = std::collections::HashMap::new();
+            for id in &all {
+                *counts.entry(tail(id, len)).or_insert(0_usize) += 1;
+            }
+            page.iter()
+                .all(|id| counts.get(tail(id, len)).copied() == Some(1))
+        })
+        .unwrap_or_else(|| longest.max(MIN_ID_TAIL))
+}
+
+/// Die letzten `len` Zeichen einer Id in der Vergleichsform.
+fn id_tail(id: &str, len: usize) -> String {
+    tail(&hex_id(id), len).to_owned()
+}
+
+/// Die letzten `len` Zeichen von `text`, oder `text` selbst, wenn er kürzer
+/// ist. Eine Id besteht aus ASCII; geschnitten wird trotzdem an einer
+/// Zeichengrenze.
+fn tail(text: &str, len: usize) -> &str {
+    let skip = text.chars().count().saturating_sub(len);
+    text.char_indices()
+        .nth(skip)
+        .map_or("", |(index, _)| &text[index..])
 }
 
 /// Eine Zeile der Liste.
@@ -529,12 +738,12 @@ pub fn print_flows(flows: &[v1::FlowSummary]) {
 /// Ein Strich steht für „der Daemon weiß es nicht", nie für eine Null
 /// (`backlog/CONVENTIONS.md` 4.13). `SIZE` ist die Summe aus Anfrage und
 /// Antwort in Bytes, `MS` die Dauer in Millisekunden.
-fn summary_row(summary: &v1::FlowSummary) -> Vec<String> {
+fn summary_row(summary: &v1::FlowSummary, id_width: usize) -> Vec<String> {
     vec![
-        short_id(&summary.flow_id),
+        id_tail(&summary.flow_id, id_width),
         clock(summary.received_at.as_ref().map(|at| at.seconds)),
         state_name(summary.state).to_ascii_lowercase(),
-        decision_name(summary.decision).to_owned(),
+        outcome_name(summary).to_owned(),
         method_name(summary),
         authority(summary.authority.as_ref()),
         truncate_middle(&summary.path, PATH_WIDTH),
@@ -596,10 +805,7 @@ fn detail_rows(summary: &v1::FlowSummary) -> Vec<Vec<String>> {
             "state".to_owned(),
             state_name(summary.state).to_ascii_lowercase(),
         ],
-        vec![
-            "decision".to_owned(),
-            decision_name(summary.decision).to_owned(),
-        ],
+        vec!["decision".to_owned(), outcome_name(summary).to_owned()],
         vec![
             "status".to_owned(),
             if summary.status == 0 {
@@ -635,6 +841,19 @@ fn detail_rows(summary: &v1::FlowSummary) -> Vec<Vec<String>> {
     }
     if !summary.origin_tool.is_empty() {
         rows.push(vec!["tool".to_owned(), summary.origin_tool.clone()]);
+    }
+    // Woran der Flow scheiterte, mit der Klasse, etwa
+    // `tls_handshake_failed:eof_before_finished` (HUM-316). Leer heißt
+    // „nichts gescheitert", dann keine Zeile.
+    if !summary.error.is_empty() {
+        let after_status = rows
+            .iter()
+            .position(|row| row.first().is_some_and(|field| field == "status"))
+            .map_or(rows.len(), |index| index.saturating_add(1));
+        rows.insert(
+            after_status,
+            vec!["error".to_owned(), summary.error.clone()],
+        );
     }
     rows
 }
@@ -677,7 +896,13 @@ pub fn summary_json(summary: &v1::FlowSummary) -> Value {
         }),
         "path": summary.path,
         "state": state_name(summary.state).to_ascii_lowercase(),
+        // `decision` bleibt, was der Automat verbucht hat, damit kein Skript
+        // bricht, das `block` zählt; `outcome` ist das Wort der Spalte
+        // DECISION, mit `aborted` und `passthrough` (HUM-316), und
+        // `block_reason` der Grund dahinter, leer ohne Block.
         "decision": decision_name(summary.decision),
+        "outcome": outcome_name(summary),
+        "block_reason": block_reason_name(summary.block_reason),
         "status": summary.status,
         "request_size": summary.request_size,
         "response_size": summary.response_size,
@@ -701,8 +926,10 @@ pub fn summary_json(summary: &v1::FlowSummary) -> Value {
     })
 }
 
-/// Die ersten acht Zeichen einer Flow-Id: genug, um sie in einer Liste
-/// wiederzuerkennen. `flows show` will die ganze.
+/// Die ersten acht Zeichen einer Regel-Id, wie `rules list` sie zeigt.
+///
+/// Für Flow-Ids nicht mehr: Deren Anfang ist die Uhrzeit (HUM-316), siehe
+/// [`id_tail`].
 fn short_id(id: &str) -> String {
     id.chars().take(8).collect()
 }
@@ -734,6 +961,41 @@ fn method_name(summary: &v1::FlowSummary) -> String {
         .as_str_name()
         .trim_start_matches("METHOD_")
         .to_owned()
+}
+
+/// Das Wort der Spalte DECISION: die Entscheidung, oder was an ihrer Stelle
+/// wahr ist (HUM-316).
+///
+/// `aborted`, wo der Dienst `BLOCK_REASON_CLIENT_ABORTED` meldet: Der Client
+/// hat die TLS-Verbindung zum Proxy aufgegeben, bevor es etwas zu entscheiden
+/// gab, und `block` behauptete eine Blockierung, die niemand vorgenommen hat.
+/// `passthrough` für eine Anfrage, die die Durchreiche zum Modell freigegeben
+/// hat; ein Block oder Ablauf an ihr bleibt, was er ist, und ohne
+/// Entscheidung steht wie überall ein Strich.
+fn outcome_name(summary: &v1::FlowSummary) -> &'static str {
+    if summary.block_reason == v1::BlockReason::ClientAborted as i32 {
+        return "aborted";
+    }
+    if summary.passthrough
+        && matches!(
+            v1::DecisionKind::try_from(summary.decision),
+            Ok(v1::DecisionKind::Allow | v1::DecisionKind::AllowEdited)
+        )
+    {
+        return "passthrough";
+    }
+    decision_name(summary.decision)
+}
+
+/// Der Block-Grund, wie ihn der Dienst nennt, klein geschrieben; leer ohne.
+fn block_reason_name(reason: i32) -> String {
+    match v1::BlockReason::try_from(reason) {
+        Ok(v1::BlockReason::Unspecified) | Err(_) => String::new(),
+        Ok(reason) => reason
+            .as_str_name()
+            .trim_start_matches("BLOCK_REASON_")
+            .to_ascii_lowercase(),
+    }
 }
 
 /// Der Name der Entscheidung, klein geschrieben.
@@ -770,8 +1032,9 @@ mod tests {
     use humanitl_ipc::v1;
 
     use super::{
-        FLOW_HEADERS, PATH_WIDTH, authority, decision_name, detail_rows, method_name, order_by,
-        short_id, summary_json, summary_row, truncate_middle,
+        FLOW_HEADERS, MIN_ID_TAIL, PATH_WIDTH, authority, decision_name, detail_rows, flow_rows,
+        full_id, id_tail, id_tail_len, match_tail, method_name, order_by, outcome_name, short_id,
+        summary_json, summary_row, tail_query, truncate_middle,
     };
 
     fn summary() -> v1::FlowSummary {
@@ -841,7 +1104,9 @@ mod tests {
         assert_eq!(summary_json(&blocked)["decision_note"], "use PyPI");
 
         assert!(
-            !summary_row(&blocked).iter().any(|cell| cell == "use PyPI"),
+            !summary_row(&blocked, MIN_ID_TAIL)
+                .iter()
+                .any(|cell| cell == "use PyPI"),
             "the list is a table and carries no free text"
         );
 
@@ -923,10 +1188,10 @@ mod tests {
 
     #[test]
     fn a_row_carries_every_column_of_the_table() {
-        let row = summary_row(&summary());
+        let row = summary_row(&summary(), MIN_ID_TAIL);
 
         assert_eq!(row.len(), FLOW_HEADERS.len());
-        assert_eq!(row[0], "0199c0ff", "ID");
+        assert_eq!(row[0], "deadbeef", "ID is the random end, not the clock");
         assert_eq!(row[2], "held", "STATE");
         assert_eq!(row[3], "-", "DECISION");
         assert_eq!(row[4], "GET", "METHOD");
@@ -947,7 +1212,7 @@ mod tests {
             nanos: 250_000_000,
         });
         summary.response_size = 30;
-        let row = summary_row(&summary);
+        let row = summary_row(&summary, MIN_ID_TAIL);
 
         assert_eq!(row[8], "42", "12 up plus 30 down");
         assert_eq!(row[9], "1250");
@@ -1001,5 +1266,241 @@ mod tests {
             "timed_out"
         );
         assert_eq!(short_id("abc"), "abc");
+    }
+
+    /// Fünf Flows derselben Minute, wie sie der Eigentümer am 2026-10-30 sah:
+    /// gleicher Anfang, verschiedenes Ende.
+    fn same_minute() -> Vec<v1::FlowSummary> {
+        [
+            "01a189bd-1111-7000-8000-00000000a001",
+            "01a189bd-2222-7000-8000-00000000b002",
+            "01a189bd-3333-7000-8000-00000000c003",
+            "01a189bd-4444-7000-8000-00000000d004",
+            "01a189bd-5555-7000-8000-00000000e005",
+        ]
+        .iter()
+        .map(|id| v1::FlowSummary {
+            flow_id: (*id).to_owned(),
+            ..summary()
+        })
+        .collect()
+    }
+
+    /// HUM-316: Die Spalte `ID` trennt jede Zeile der Seite von jeder anderen.
+    ///
+    /// Vorher zeigte sie die ersten acht Zeichen, und die sind bei einer
+    /// `UUIDv7` die Uhrzeit: fünfmal `01a189bd`.
+    #[test]
+    fn the_id_column_tells_every_row_of_a_page_apart() {
+        let flows = same_minute();
+        let rows = flow_rows(&flows, &flows);
+        let ids: std::collections::HashSet<&str> = rows.iter().map(|row| row[0].as_str()).collect();
+        assert_eq!(ids.len(), flows.len(), "{rows:?}");
+        for (row, flow) in rows.iter().zip(&flows) {
+            assert_eq!(row[0].len(), MIN_ID_TAIL, "eight suffice here");
+            assert!(
+                flow.flow_id.replace('-', "").ends_with(&row[0]),
+                "{} is the end of {}",
+                row[0],
+                flow.flow_id
+            );
+        }
+    }
+
+    /// Teilen zwei Ids die letzten acht Zeichen, wird die ganze Spalte
+    /// breiter, bis sie sich unterscheiden, und bleibt bündig.
+    #[test]
+    fn the_id_column_grows_until_the_ends_differ() {
+        let ids = [
+            "01a189bd-1111-7000-8000-0000deadbeef",
+            "01a189bd-2222-7000-8000-1000deadbeef",
+            "01a189bd-3333-7000-8000-00000000c003",
+        ];
+        assert_eq!(id_tail_len(&ids, &ids), 12);
+        assert_eq!(id_tail(ids[0], 12), "0000deadbeef");
+        assert_eq!(id_tail(ids[1], 12), "1000deadbeef");
+        assert_eq!(id_tail_len(&[], &[]), MIN_ID_TAIL);
+        assert_eq!(
+            id_tail_len(&[ids[0]], &[ids[0]]),
+            MIN_ID_TAIL,
+            "the same flow on the page and in the search set is one flow"
+        );
+    }
+
+    /// Die ganze Id, wie die Tabelle sie druckt (32 Hexziffern), findet
+    /// `flows show` in der Form des Daemons.
+    #[test]
+    fn a_printed_whole_id_finds_the_daemons_form() {
+        assert_eq!(
+            full_id("01A189BD1111700080000000DEADBEEF").as_deref(),
+            Some("01a189bd-1111-7000-8000-0000deadbeef")
+        );
+        assert_eq!(full_id("0000deadbeef"), None);
+    }
+
+    /// Delta-Runde (HUM-316): Eine Zeile, die `flows show` nicht durchsucht,
+    /// etwa die älteste mit `--asc`, steht mit ihrer ganzen Id da, denn ein
+    /// kurzes Ende fände `flows show` nicht.
+    #[test]
+    fn a_row_outside_the_search_set_prints_its_whole_id() {
+        let old = "01a189bd-1111-7000-8000-0000deadbeef";
+        let newer = ["01a189bd-2222-7000-8000-00000000c003"];
+        assert_eq!(id_tail_len(&[old], &newer), 32);
+        assert_eq!(id_tail(old, 32), "01a189bd1111700080000000deadbeef");
+    }
+
+    /// Review Runde 1 (HUM-316): Eine Seite mit einer Zeile, deren letzte
+    /// acht Zeichen ein Flow außerhalb der Seite teilt. Die Tabelle druckt
+    /// ein längeres Ende, und `flows show` findet mit genau diesem Ende den
+    /// Flow der Zeile.
+    #[test]
+    fn the_id_column_is_unique_among_what_show_searches() {
+        let searched = same_minute();
+        let page = vec![v1::FlowSummary {
+            flow_id: "01a189bd-6666-7000-8000-10000000a001".to_owned(),
+            ..summary()
+        }];
+        let mut all = searched.clone();
+        all.extend(page.iter().cloned());
+
+        let rows = flow_rows(&page, &all);
+        let printed = &rows[0][0];
+        assert_eq!(printed, "10000000a001", "eight would also fit 0000a001");
+        let wanted = tail_query(printed).expect("a printed end is a valid query");
+        assert_eq!(
+            match_tail(&all, printed, &wanted).ok().as_deref(),
+            Some("01a189bd-6666-7000-8000-10000000a001")
+        );
+        // Gegen die Seite allein gemessen wären es acht, und die passten
+        // auf zwei Flows.
+        let short = tail_query(&rows[0][0][4..]).expect("eight hex digits");
+        assert!(match_tail(&all, &rows[0][0][4..], &short).is_err());
+    }
+
+    /// `flows show` nimmt das Ende, wie die Tabelle es zeigt, und findet
+    /// genau den einen Flow.
+    #[test]
+    fn flows_show_takes_the_end_the_table_prints() {
+        let flows = same_minute();
+        let rows = flow_rows(&flows, &flows);
+        for (row, flow) in rows.iter().zip(&flows) {
+            let wanted = tail_query(&row[0]).expect("a printed end is a valid query");
+            let found = match_tail(&flows, &row[0], &wanted)
+                .unwrap_or_else(|failure| panic!("{:?}", failure.diagnostic));
+            assert_eq!(found, flow.flow_id);
+        }
+        // Groß geschrieben und mit Bindestrich ist es dasselbe Ende.
+        let wanted = tail_query("0000-0000A001").expect("hex with a dash");
+        assert_eq!(
+            match_tail(&flows, "0000-0000A001", &wanted).ok().as_deref(),
+            Some("01a189bd-1111-7000-8000-00000000a001")
+        );
+    }
+
+    /// Ein Ende, das auf mehrere passt, wird nicht geraten, und eines, das
+    /// auf keinen passt, auch nicht.
+    #[test]
+    fn an_end_that_fits_several_or_none_is_refused() {
+        let flows = same_minute();
+        let none = tail_query("0000f006").expect("eight hex digits");
+        let failure = match_tail(&flows, "0000f006", &none).expect_err("no flow ends so");
+        assert_eq!(failure.diagnostic.code.as_str(), "IPC_003");
+
+        let mut twins = same_minute();
+        twins[1].flow_id = "01a189bd-9999-7000-8000-00000000a001".to_owned();
+        let wanted = tail_query("0000a001").expect("eight hex digits");
+        let failure =
+            match_tail(&twins, "0000a001", &wanted).expect_err("two flows end in 0000a001");
+        assert_eq!(failure.diagnostic.code.as_str(), "CLI_004");
+        assert!(
+            failure
+                .diagnostic
+                .why
+                .contains("01a189bd-9999-7000-8000-00000000a001")
+                && failure
+                    .diagnostic
+                    .why
+                    .contains("01a189bd-1111-7000-8000-00000000a001"),
+            "{}",
+            failure.diagnostic.why
+        );
+
+        assert!(
+            tail_query("a001").is_err(),
+            "shorter than the table ever prints"
+        );
+        assert!(tail_query("zzzzzzzz").is_err(), "not hex");
+    }
+
+    /// HUM-316: Ein abgebrochener Tunnel heißt `aborted`, nicht `block`, in
+    /// der Tabelle, in `flows show` und im JSON, und die Ursache steht dabei.
+    #[test]
+    fn an_aborted_tunnel_reads_aborted_and_names_its_cause() {
+        let aborted = v1::FlowSummary {
+            method: v1::Method::Connect as i32,
+            state: v1::FlowState::Recorded as i32,
+            decision: v1::DecisionKind::Block as i32,
+            decision_source: v1::DecisionSource::System as i32,
+            block_reason: v1::BlockReason::ClientAborted as i32,
+            error: "tls_handshake_failed:eof_before_finished".to_owned(),
+            ..summary()
+        };
+        assert_eq!(outcome_name(&aborted), "aborted");
+        assert_eq!(summary_row(&aborted, MIN_ID_TAIL)[3], "aborted");
+
+        let rows = detail_rows(&aborted);
+        let field = |name: &str| {
+            rows.iter()
+                .find(|row| row[0] == name)
+                .map_or_else(|| panic!("no {name} row in {rows:?}"), |row| row[1].clone())
+        };
+        assert_eq!(field("decision"), "aborted");
+        assert_eq!(field("error"), "tls_handshake_failed:eof_before_finished");
+
+        let json = summary_json(&aborted);
+        assert_eq!(json["outcome"], "aborted");
+        assert_eq!(json["block_reason"], "client_aborted");
+        assert_eq!(json["decision"], "block", "the recorded decision stays");
+        assert_eq!(json["error"], "tls_handshake_failed:eof_before_finished");
+
+        // Ein Block ohne diesen Grund bleibt ein Block.
+        let blocked = v1::FlowSummary {
+            block_reason: v1::BlockReason::NoRoute as i32,
+            ..aborted
+        };
+        assert_eq!(outcome_name(&blocked), "block");
+        assert_eq!(summary_json(&blocked)["block_reason"], "no_route");
+        assert!(
+            !detail_rows(&summary()).iter().any(|row| row[0] == "error"),
+            "nothing failed, no error row"
+        );
+    }
+
+    /// HUM-316: Die Durchreiche zum Modell steht als `passthrough` da; ein
+    /// Block an ihr bleibt ein Block.
+    #[test]
+    fn a_passthrough_flow_reads_passthrough() {
+        let model = v1::FlowSummary {
+            passthrough: true,
+            decision: v1::DecisionKind::Allow as i32,
+            decision_source: v1::DecisionSource::Passthrough as i32,
+            ..summary()
+        };
+        assert_eq!(summary_row(&model, MIN_ID_TAIL)[3], "passthrough");
+        assert_eq!(summary_json(&model)["outcome"], "passthrough");
+        assert_eq!(summary_json(&model)["passthrough"], true);
+
+        let undecided = v1::FlowSummary {
+            decision: v1::DecisionKind::Unspecified as i32,
+            ..model.clone()
+        };
+        assert_eq!(outcome_name(&undecided), "-", "no decision yet, a dash");
+
+        let refused = v1::FlowSummary {
+            decision: v1::DecisionKind::Block as i32,
+            block_reason: v1::BlockReason::Secret as i32,
+            ..model
+        };
+        assert_eq!(outcome_name(&refused), "block");
     }
 }

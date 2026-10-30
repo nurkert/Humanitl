@@ -120,6 +120,12 @@ enum BlockReason {
   BLOCK_REASON_PRIVATE_ADDRESS = 10;
   // Ein Geheimnis mit aufgehender Pruefsumme, hard_block_checksum_secrets an.
   BLOCK_REASON_SECRET = 11;
+  // Kein Block durch irgendwen: Der Client hat die TLS-Verbindung zum Proxy
+  // abgebrochen oder abgelehnt, bevor eine Anfrage zu entscheiden war, oder
+  // den Tunnel danach leer geschlossen. Nichts ging zum Ziel. Clients zeigen
+  // den Flow als "abgebrochen", nie als Blockierung; die Ursache steht in
+  // FlowSummary.error (HUM-316, PROTO_MINOR 24).
+  BLOCK_REASON_CLIENT_ABORTED = 12;
 }
 
 // Wer entschieden hat.
@@ -366,8 +372,13 @@ message FlowSummary {
   // Woran der Flow gescheitert ist, als kurzer fester Bezeichner; leer, wenn
   // nichts gescheitert ist. `upstream_dns`, `upstream_connect`, `upstream_tls`,
   // `upstream_private_address:<ip>`, `upstream_timeout` fuer einen
-  // gescheiterten Weg nach draussen, `tls_handshake_failed` fuer einen Client
-  // in der Sandbox, der den Handschlag zum Proxy abgebrochen hat (HUM-045).
+  // gescheiterten Weg nach draussen, `tls_handshake_failed:<klasse>` fuer einen
+  // Client in der Sandbox, der den Handschlag zum Proxy abgebrochen oder den
+  // Tunnel leer geschlossen hat (HUM-045, HUM-316). Die Klasse ist eine von
+  // `alert_unknown_ca`, `alert_bad_certificate`, `alert_other`,
+  // `eof_before_finished`, `reset_before_finished`, `closed_after_handshake`;
+  // Zeilen vor HUM-316 tragen `tls_handshake_failed` ohne Klasse. Wer den Fall
+  // erkennen will, vergleicht den Teil vor dem ersten `:`.
   //
   // Nicht dasselbe wie `upstream_error`: Das Enum gilt nur bei
   // FLOW_STATE_FAILED, waehrend ein abgebrochener Handschlag als

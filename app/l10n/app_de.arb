@@ -1385,5 +1385,7 @@
   "shellTerminalStripTitle": "{sandbox} · {tab}",
   "shellTerminalStripFallback": "Terminal",
   "shellTerminalStripOpen": "Terminal öffnen",
-  "shellTerminalStripLabel": "Schwebendes Terminal, mangels Platz verkleinert"
+  "shellTerminalStripLabel": "Schwebendes Terminal, mangels Platz verkleinert",
+  "historyDeciderClient": "Client",
+  "historyDecisionAborted": "abgebrochen"
 }
