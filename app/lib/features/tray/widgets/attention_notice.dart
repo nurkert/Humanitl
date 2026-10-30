@@ -2,14 +2,14 @@
 /// (HUM-034).
 ///
 /// It is a `Diagnostic` like every other non-green state: code, severity,
-/// cause and a fix (`docs/UX.md` 4.4). Since HUM-276 it is a banner and no
-/// longer a card: it runs the full width of the window directly under the
-/// header, above the rail and every pane, so it never stands in the queue
-/// column and looks the same with the rail collapsed or expanded. Its
-/// "Dismiss" button sits at the top of the right end, which puts it in the
-/// reading order right after the header and before the fix below the text.
-/// Only a click or `Space` on it closes the banner; `Esc` does not, because
-/// `Esc` belongs to whatever the person is doing below it.
+/// cause and a fix (`docs/UX.md` 4.4). Since HUM-302 it is a card that floats
+/// over the top right of the window (`HNoticeLayer`), no longer a band under
+/// the header: a band pushed every pane down and made a running terminal
+/// wrap anew whenever it came or went. The name stays from the band of
+/// HUM-276. Its close affordance sits inside the card, top right, which puts
+/// it in the reading order before the fix below the text. Only a click or
+/// `Space` on it closes the notice; `Esc` does not, because `Esc` belongs to
+/// whatever the person is doing below it.
 library;
 
 import 'package:flutter/widgets.dart';
@@ -17,13 +17,15 @@ import 'package:flutter/widgets.dart';
 import '../../../core/domain/domain.dart';
 import '../../../core/ui/diagnostic_severity.dart';
 import '../../../core/ui/fix_control.dart';
+import '../../../core/ui/h_diagnostic_card.dart';
+import '../../../core/ui/h_notice_layer.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../tray_diagnostics.dart';
 
-/// The banner.
+/// The notice card.
 class AttentionNoticeBanner extends StatelessWidget {
-  /// Creates the banner for [diagnostic].
+  /// Creates the notice for [diagnostic].
   const AttentionNoticeBanner({
     required this.diagnostic,
     required this.onDismiss,
@@ -41,88 +43,27 @@ class AttentionNoticeBanner extends StatelessWidget {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final (String title, String why) = _text(l10n, diagnostic);
-    final Color color = severityColor(tokens, diagnostic.severity);
     // Der Satz des Daemons nur dann als Detail, wenn er nicht schon im
     // Grund-Platz steht (`docs/UX.md` 4.4).
     final String? detail = diagnostic.why.isEmpty || why == diagnostic.why
         ? null
         : diagnostic.why;
-    return Semantics(
+    return HDiagnosticCard(
       key: const Key('attention-notice'),
-      container: true,
-      label: '${diagnostic.code} $title',
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: HColorDerivation.tint(color),
-          // Die Linie gehört dem oberen von zwei Bereichen (`docs/UX.md`
-          // 3.7): Das Banner zieht sie unter sich, die Panes darunter
-          // beginnen ohne eigene.
-          border: Border(bottom: BorderSide(color: tokens.colors.line)),
-        ),
-        child: ConstrainedBox(
-          // Eine Mindesthöhe, keine Höhe: Bei doppelter Textskalierung wächst
-          // das Banner, statt den Rest still abzuschneiden (`docs/UX.md` 6).
-          constraints: BoxConstraints(minHeight: tokens.sizes.row),
-          child: Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: tokens.spacing.x3,
-              vertical: tokens.spacing.x2,
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                HBadge(text: diagnostic.code, color: color, mono: true),
-                SizedBox(width: tokens.spacing.x2),
-                HBadge(
-                  text: severityLabel(l10n, diagnostic.severity),
-                  color: color,
-                ),
-                SizedBox(width: tokens.spacing.x3),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      Text(
-                        title,
-                        key: const Key('attention-notice-title'),
-                        style: tokens.typography.ui13.medium.tinted(
-                          tokens.colors.fg0,
-                        ),
-                      ),
-                      Text(
-                        why,
-                        key: const Key('attention-notice-why'),
-                        style: tokens.typography.ui12.tinted(tokens.colors.fg0),
-                      ),
-                      if (detail != null)
-                        Text(
-                          detail,
-                          key: const Key('attention-notice-detail'),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: tokens.typography.mono12.tinted(
-                            tokens.colors.fg0,
-                          ),
-                        ),
-                      if (diagnostic.fix != null) ...<Widget>[
-                        SizedBox(height: tokens.spacing.x2),
-                        FixControl(fix: diagnostic.fix),
-                      ],
-                    ],
-                  ),
-                ),
-                SizedBox(width: tokens.spacing.x3),
-                HButton(
-                  key: const Key('attention-notice-dismiss'),
-                  variant: HButtonVariant.ghost,
-                  onPressed: onDismiss,
-                  child: Text(l10n.trayDismiss),
-                ),
-              ],
-            ),
-          ),
-        ),
+      code: diagnostic.code,
+      severityLabel: severityLabel(l10n, diagnostic.severity),
+      color: severityColor(tokens, diagnostic.severity),
+      title: title,
+      why: why,
+      detail: detail,
+      detailMaxLines: 2,
+      fix: diagnostic.fix == null ? null : FixControl(fix: diagnostic.fix),
+      width: double.infinity,
+      dense: true,
+      dismiss: HNoticeDismiss(
+        label: l10n.trayDismiss,
+        buttonKey: const Key('attention-notice-dismiss'),
+        onPressed: onDismiss,
       ),
     );
   }

@@ -5,10 +5,15 @@
 /// arrived" and none of this just arrived (`docs/UX.md` 4.9). What is left is
 /// one quiet line that names the longest wait and leads to the request behind
 /// it.
+///
+/// Since HUM-302 the line is a card over the top right of the window
+/// (`HNoticeLayer`), with its close affordance inside the card; the name
+/// stays from the band it was before.
 library;
 
 import 'package:flutter/widgets.dart';
 
+import '../../../core/ui/h_notice_layer.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 
@@ -36,55 +41,36 @@ class ReturnBanner extends StatelessWidget {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     return ArriveFromTop(
-      child: Semantics(
-        container: true,
-        label: sentence,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: HColorDerivation.tint(tokens.state.held),
-            border: Border(bottom: BorderSide(color: tokens.colors.line)),
-          ),
-          child: ConstrainedBox(
-            // A minimum, not a height: at `TextScaler` 2.0 the line is taller
-            // than 36 px and a fixed box would swallow the overflow in
-            // silence (`docs/UX.md` 6).
-            constraints: BoxConstraints(minHeight: tokens.sizes.row),
-            child: Padding(
-              padding: EdgeInsets.symmetric(
-                horizontal: tokens.spacing.x3,
-                vertical: tokens.spacing.x1,
-              ),
-              child: Row(
-                children: <Widget>[
-                  HGlyphIcon(
-                    HGlyph.hourglass,
-                    size: HSize.glyph,
-                    color: tokens.stateTextColor(HFlowState.held),
-                  ),
-                  SizedBox(width: tokens.spacing.x2),
-                  Expanded(
-                    child: Text(
-                      sentence,
-                      key: const Key('return-banner-sentence'),
-                      style: tokens.typography.ui13.tinted(tokens.colors.fg0),
-                    ),
-                  ),
-                  SizedBox(width: tokens.spacing.x2),
-                  HButton(
-                    key: const Key('return-banner-jump'),
-                    onPressed: onJump,
-                    child: Text(l10n.trayReturnJump),
-                  ),
-                  SizedBox(width: tokens.spacing.x2),
-                  HButton(
-                    key: const Key('return-banner-dismiss'),
-                    variant: HButtonVariant.ghost,
-                    onPressed: onDismiss,
-                    child: Text(l10n.trayDismiss),
-                  ),
-                ],
+      child: HNoticeCard(
+        rail: tokens.state.held,
+        semanticsLabel: sentence,
+        dismissLabel: l10n.trayDismiss,
+        dismissKey: const Key('return-banner-dismiss'),
+        onDismiss: onDismiss,
+        header: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            HGlyphIcon(
+              HGlyph.hourglass,
+              size: HSize.glyph,
+              color: tokens.stateTextColor(HFlowState.held),
+            ),
+            SizedBox(width: tokens.spacing.x2),
+            Expanded(
+              child: Text(
+                sentence,
+                key: const Key('return-banner-sentence'),
+                style: tokens.typography.ui13.tinted(tokens.colors.fg0),
               ),
             ),
+          ],
+        ),
+        child: Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: HButton(
+            key: const Key('return-banner-jump'),
+            onPressed: onJump,
+            child: Text(l10n.trayReturnJump),
           ),
         ),
       ),

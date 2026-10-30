@@ -12,6 +12,7 @@ import '../../core/ipc/config_providers.dart';
 import '../../core/ipc/flow_handoff.dart';
 import '../../core/ipc/flow_reveal.dart';
 import '../../core/shortcuts/intents.dart';
+import '../../core/ui/h_notice_layer.dart';
 import '../../core/ui/settings_opener.dart';
 import '../../core/ui/terminal_placement.dart';
 import '../../core/ui/terminal_zoom.dart';
@@ -690,40 +691,63 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                               .read(connectionStateProvider.notifier)
                               .retry,
                         ),
-                      const ShellNotices(),
+                      // Die Hinweise schweben oben rechts über den
+                      // Bereichen, unter der Kopfzeile der Panes, und
+                      // nehmen ihnen keine Höhe (HUM-302): Ein Terminal
+                      // behält seine Größe, wenn einer kommt oder geht.
                       Expanded(
-                        child: _withTerminalHost(
-                          fullWindow: fullWindow,
-                          layout: Stack(
-                            fit: StackFit.expand,
-                            children: <Widget>[
-                              Row(
-                                children: <Widget>[
-                                  IconRail(
-                                    active: section,
-                                    onSelect: navigation.go,
-                                    expanded: railExpanded,
-                                    onToggle: rail.toggle,
-                                  ),
-                                  Expanded(
-                                    child: _sections(section, frozen: !live),
-                                  ),
-                                ],
-                              ),
-                              // Das Blatt hängt zwischen Kopfleiste und
-                              // Statusleiste, wie jeder Pane: seine Kopfzeile
-                              // steht in derselben Reihe wie die der Queue, und
-                              // die Linie darunter läuft durch (HUM-286).
-                              if (_settingsOpen)
-                                Align(
-                                  alignment: Alignment.centerRight,
-                                  child: SettingsSheet(
-                                    onClose: _closeSettings,
-                                    focusKey: _settingsFocusKey,
-                                    focusSerial: _settingsFocusSerial,
-                                  ),
+                        child: HNoticeLayer(
+                          // Unter der Kopfzeile der Panes, so hoch sie bei
+                          // der aktuellen Textskalierung wirklich ist.
+                          top:
+                              HPaneHeader.rowHeight(context) +
+                              tokens.spacing.x2,
+                          // Solange eine Ebene offen ist -- das
+                          // Einstellungsblatt, das Regelblatt einer Bitte, ein
+                          // Modal --, hält sie die Tastatur, und ein Hinweis
+                          // läge über ihrem Inhalt; er wartet, bis sie zu ist.
+                          // Er bleibt im Provider und ist danach wieder da.
+                          notices: ValueListenableBuilder<int>(
+                            valueListenable: HLayerScope.openLayers,
+                            builder:
+                                (BuildContext context, int open, Widget? _) =>
+                                    open > 0 || _settingsOpen
+                                    ? const SizedBox.shrink()
+                                    : const ShellNotices(),
+                          ),
+                          child: _withTerminalHost(
+                            fullWindow: fullWindow,
+                            layout: Stack(
+                              fit: StackFit.expand,
+                              children: <Widget>[
+                                Row(
+                                  children: <Widget>[
+                                    IconRail(
+                                      active: section,
+                                      onSelect: navigation.go,
+                                      expanded: railExpanded,
+                                      onToggle: rail.toggle,
+                                    ),
+                                    Expanded(
+                                      child: _sections(section, frozen: !live),
+                                    ),
+                                  ],
                                 ),
-                            ],
+                                // Das Blatt hängt zwischen Kopfleiste und
+                                // Statusleiste, wie jeder Pane: seine Kopfzeile
+                                // steht in derselben Reihe wie die der Queue, und
+                                // die Linie darunter läuft durch (HUM-286).
+                                if (_settingsOpen)
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: SettingsSheet(
+                                      onClose: _closeSettings,
+                                      focusKey: _settingsFocusKey,
+                                      focusSerial: _settingsFocusSerial,
+                                    ),
+                                  ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
