@@ -220,6 +220,8 @@ const pad = (v: number) => String(v).padStart(2, '0');
                     aria-roledescription="slide"
                     aria-label={`${i + 1} ${t.stage.of} ${n}: ${module.name}`}
                   >
+                    <span class={`win__bokeh win__bokeh--${(i % 3) + 1}`} data-bokeh aria-hidden="true" />
+                    <span class="win__feather" data-feather aria-hidden="true" />
                     <span class="win__shadow" aria-hidden="true" />
                     <span class="win__back" aria-hidden="true" />
                     {edges.map((k) => (
@@ -244,6 +246,11 @@ const pad = (v: number) => String(v).padStart(2, '0');
                       />
                       <span class="win__glaze" aria-hidden="true" />
                       <span class="win__rim" aria-hidden="true" />
+                      <span class="win__dof" data-dof aria-hidden="true">
+                        <span class="win__dofIn" data-dof-in>
+                          <Picture src={module.image} alt="" formats={formats} fallbackFormat="webp" width={160} loading="eager" decoding="async" draggable="false" />
+                        </span>
+                      </span>
                       <span class="win__shade" aria-hidden="true" />
                     </div>
                   </li>
@@ -908,10 +915,117 @@ const pad = (v: number) => String(v).padStart(2, '0');
     transform: translate3d(var(--swx, 0px), 0, 0);
     opacity: var(--swo, 0);
   }
+  /* Tiefenschärfe: über dem scharfen Bildschirm liegt dieselbe Aufnahme in 160 px, groß
+     gezogen und weichgezeichnet. Der Filter ist fest und sitzt auf dem Bild innerhalb einer
+     eigenen Ebene, er wird also einmal gerastert; das Skript blendet nur deren opacity und
+     skaliert sie. Ohne Skript bleibt die Deckkraft 0. */
+  .win__dof {
+    position: absolute;
+    z-index: 4;
+    inset: 0;
+    overflow: hidden;
+    border-radius: var(--r);
+    background: #0d0f13;
+    opacity: 0;
+    will-change: opacity;
+    pointer-events: none;
+  }
+  .win__dofIn {
+    position: absolute;
+    inset: var(--pad);
+    display: block;
+    will-change: transform;
+  }
+  .win__dof :global(picture) {
+    position: absolute;
+    inset: 0;
+  }
+  .win__dof :global(img) {
+    border-radius: 0;
+    box-shadow: none;
+    background: none;
+    filter: blur(calc(var(--w) * 0.012));
+  }
+  /* Lichter im Bild werden in der Unschärfe zu Scheiben; sie liegen fest in der weichen Ebene. */
+  .win__dofIn::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    --disc: calc(var(--w) * 0.05);
+    background:
+      radial-gradient(circle var(--disc) at 18% 26%, rgb(255 255 255 / 0.05) 80%, rgb(255 255 255 / 0.1) 94%, transparent),
+      radial-gradient(circle calc(var(--disc) * 0.7) at 71% 18%, rgb(190 214 255 / 0.05) 80%, rgb(190 214 255 / 0.1) 94%, transparent),
+      radial-gradient(circle calc(var(--disc) * 1.3) at 84% 72%, rgb(255 226 190 / 0.04) 80%, rgb(255 226 190 / 0.08) 94%, transparent);
+  }
+  /* Die harte Kontur verläuft: ein weicher Saum in der Farbe des Körpers liegt über der
+     Kante, nur seine Deckkraft wechselt. Ohne Skript bleibt sie 0. */
+  .win__feather {
+    position: absolute;
+    inset: -1px;
+    border-radius: var(--r);
+    border: 2px solid rgb(16 18 24);
+    box-shadow:
+      0 0 calc(var(--w) * 0.012) calc(var(--w) * 0.004) rgb(16 18 24),
+      inset 0 0 calc(var(--w) * 0.006) rgb(16 18 24);
+    transform: translateZ(1px);
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* Bokeh um die fernen Fenster: Scheiben hinter dem Körper, nur ihre Deckkraft wechselt. */
+  .win__bokeh {
+    --disc: calc(var(--w) * 0.06);
+    --a: rgb(255 255 255 / 0.11);
+    --a2: rgb(255 255 255 / 0.2);
+    --b: rgb(170 200 255 / 0.13);
+    --b2: rgb(170 200 255 / 0.24);
+    --c: rgb(255 214 170 / 0.09);
+    --c2: rgb(255 214 170 / 0.17);
+    position: absolute;
+    inset: -30% -18%;
+    border-radius: 0;
+    transform: translateZ(calc(var(--t) * -1 - 4px));
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* Eigene Ebenen nur, solange der Ring steht: im Fächer und ohne Skript kosten sie Speicher. */
+  .scene[data-live] .win__feather,
+  .scene[data-live] .win__bokeh {
+    will-change: opacity;
+  }
+  .win__bokeh--1 {
+    background:
+      radial-gradient(circle calc(var(--disc) * 1) at 13% 13%, var(--a) 80%, var(--a2) 93%, transparent),
+      radial-gradient(circle calc(var(--disc) * 0.6) at 41% 11%, var(--b) 80%, var(--b2) 93%, transparent),
+      radial-gradient(circle calc(var(--disc) * 1.4) at 84% 16%, var(--c) 80%, var(--c2) 93%, transparent),
+      radial-gradient(circle calc(var(--disc) * 0.8) at 92% 62%, var(--b) 80%, var(--b2) 93%, transparent),
+      radial-gradient(circle calc(var(--disc) * 0.5) at 66% 90%, var(--a) 80%, var(--a2) 93%, transparent),
+      radial-gradient(circle calc(var(--disc) * 0.7) at 7% 70%, var(--c) 80%, var(--c2) 93%, transparent);
+  }
+  .win__bokeh--2 {
+    background:
+      radial-gradient(circle calc(var(--disc) * 1.2) at 24% 13%, var(--b) 80%, var(--b2) 93%, transparent),
+      radial-gradient(circle calc(var(--disc) * 0.55) at 58% 10%, var(--c) 80%, var(--c2) 93%, transparent),
+      radial-gradient(circle calc(var(--disc) * 0.8) at 91% 28%, var(--a) 80%, var(--a2) 93%, transparent),
+      radial-gradient(circle calc(var(--disc) * 1) at 85% 86%, var(--b) 80%, var(--b2) 93%, transparent),
+      radial-gradient(circle calc(var(--disc) * 0.6) at 8% 44%, var(--c) 80%, var(--c2) 93%, transparent);
+  }
+  .win__bokeh--3 {
+    background:
+      radial-gradient(circle calc(var(--disc) * 0.7) at 7% 27%, var(--c) 80%, var(--c2) 93%, transparent),
+      radial-gradient(circle calc(var(--disc) * 1.3) at 49% 14%, var(--a) 80%, var(--a2) 93%, transparent),
+      radial-gradient(circle calc(var(--disc) * 0.6) at 86% 10%, var(--b) 80%, var(--b2) 93%, transparent),
+      radial-gradient(circle calc(var(--disc) * 1) at 92% 52%, var(--c) 80%, var(--c2) 93%, transparent),
+      radial-gradient(circle calc(var(--disc) * 0.8) at 27% 87%, var(--b) 80%, var(--b2) 93%, transparent);
+  }
+  /* Auf schwachen Geräten bleibt die weiche Ebene, die großen Scheiben entfallen. */
+  .scene[data-lite] .win__bokeh,
+  .scene[data-lite] .win__dofIn::after {
+    display: none;
+  }
   /* Abdunkeln der hinteren Fenster über eine schwarze Ebene statt über einen Filter. */
   .win__shade {
     position: absolute;
-    z-index: 3;
+    z-index: 5;
     inset: 0;
     background: #000;
     opacity: var(--shade, 0);
@@ -1091,10 +1205,10 @@ const pad = (v: number) => String(v).padStart(2, '0');
     place-items: center;
     width: 2.75rem;
     height: 2.75rem;
-    border: 1px solid var(--line-strong);
+    border: 1px solid rgb(255 255 255 / 0.32);
     border-radius: 50%;
-    background: rgb(255 255 255 / 0.02);
-    color: var(--fg-1);
+    background: rgb(255 255 255 / 0.07);
+    color: var(--fg);
     cursor: pointer;
     transition:
       color 0.3s var(--ease-out),
@@ -1107,8 +1221,8 @@ const pad = (v: number) => String(v).padStart(2, '0');
   }
   .deck__arrow:hover {
     color: #fff;
-    border-color: rgb(255 255 255 / 0.4);
-    background: rgb(255 255 255 / 0.06);
+    border-color: rgb(255 255 255 / 0.6);
+    background: rgb(255 255 255 / 0.14);
   }
   .deck__arrow:active {
     transform: scale(0.94);
@@ -1121,7 +1235,7 @@ const pad = (v: number) => String(v).padStart(2, '0');
 
   /* Bildausschnitte der Beschriftung, je Klasse aus dem Skript (data-cls). */
   .scene[data-cls='A'] {
-    --cap-r: 7vw;
+    --cap-r: 5vw;
     --cap-b: 7vh;
     --cap-w: 27vw;
     --idx: min(10rem, 12vh);
@@ -1152,9 +1266,9 @@ const pad = (v: number) => String(v).padStart(2, '0');
     padding: 0;
   }
   .scene[data-cls='B'] {
-    --cap-r: 5vw;
+    --cap-r: 4vw;
     --cap-b: 6.5vh;
-    --cap-w: 34vw;
+    --cap-w: 30vw;
     --idx: min(8rem, 9.5vh);
     --head: clamp(2rem, 1rem + 2.6vw, min(4.2rem, 5.6vh));
     --cap-gap: clamp(0.5rem, 1.2vh, 1rem);
@@ -1165,7 +1279,7 @@ const pad = (v: number) => String(v).padStart(2, '0');
   @media (max-height: 800px) {
     .scene:is([data-cls='B'], [data-cls='C']) {
       --cap-b: 4.5vh;
-      --cap-w: 36vw;
+      --cap-w: 32vw;
       --idx: min(8rem, 8.5vh);
       --head: clamp(1.8rem, 1rem + 2.2vw, min(4.2rem, 5.4vh));
       --text: 0.95rem;
@@ -1173,20 +1287,20 @@ const pad = (v: number) => String(v).padStart(2, '0');
     }
   }
   .scene[data-cls='C'] {
-    --cap-r: 5vw;
+    --cap-r: 4vw;
     --cap-b: 6vh;
-    --cap-w: 34vw;
+    --cap-w: 31vw;
     --idx: min(7rem, 9.5vh);
     --head: clamp(2rem, 1rem + 2.4vw, min(3.4rem, 5.4vh));
     --cap-gap: clamp(0.5rem, 1.2vh, 1rem);
     --text: 1.02rem;
   }
   .scene[data-cls='D'] {
-    --cap-r: 5vw;
-    --cap-b: 5vh;
-    --cap-w: 52vw;
-    --idx: 6rem;
-    --head: 2.3rem;
+    --cap-r: 4vw;
+    --cap-b: 3.5vh;
+    --cap-w: 47vw;
+    --idx: 5.5rem;
+    --head: 2.1rem;
     --text: 1rem;
   }
   /* 4:3: der Index steht links neben dem Text. */
@@ -1260,6 +1374,31 @@ const pad = (v: number) => String(v).padStart(2, '0');
   .scene[data-cls='F'] .deck__track {
     max-width: none;
   }
+  /* Kurze Telefone: die Pfeile stehen fest am Boden der Beschriftung, der Text weicht. */
+  @media (max-height: 619px) {
+    .scene[data-cls='F'] {
+      --head: 1.5rem;
+      --text: 0.85rem;
+      --cap-gap: 0.4rem;
+    }
+    .scene[data-cls='F'] .cap__index {
+      display: none;
+    }
+    .scene[data-cls='F'] .cap {
+      padding-bottom: 3.25rem;
+    }
+    .scene[data-cls='F'] .deck__controls {
+      position: absolute;
+      inset: auto 0 0;
+      margin: 0;
+    }
+    .scene[data-cls='F'] .cap__text {
+      display: -webkit-box;
+      overflow: hidden;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
+    }
+  }
   .scene[data-cls='F'] .deck__controls,
   .scene[data-cls='E'] .deck__controls {
     justify-content: space-between;
@@ -1274,8 +1413,8 @@ const pad = (v: number) => String(v).padStart(2, '0');
   .scene[data-cls='G'] .cap {
     top: 16vh;
     bottom: 5vh;
-    left: 54vw;
-    right: 6vw;
+    left: 57vw;
+    right: 4vw;
     width: auto;
     justify-content: center;
   }
