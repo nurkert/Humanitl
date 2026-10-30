@@ -831,20 +831,21 @@ class QueueEmptyState extends ConsumerWidget {
             // einem anderen Feature; diese Zeile führt dorthin, und dort
             // steht der Knopf, der den Zustand der Maschine kennt (ADR-018).
             //
-            // Läuft der Agent einer Session, führt sie stattdessen zu seinem
-            // Terminal im Sandbox-Abschnitt (HUM-306): mit Leiste und Tabs,
-            // zurück mit `Ctrl+1` wie von jedem Abschnitt. Das Terminal über
-            // dem ganzen Fenster (HUM-298) wäre ein Modus ohne Leiste, den
-            // man erst wieder verlassen lernen muss; dorthin führt
-            // `Ctrl+Shift+Enter` ohnehin von überall.
+            // Läuft der Agent einer Session, zeigt sie stattdessen sein
+            // Terminal (HUM-306): seit HUM-315 schwebend über diesem
+            // Abschnitt, mit der Tastatur, wie ``Ctrl+` `` es tut. Die Leiste
+            // bleibt, die Warteschlange auch, und die nächste Anfrage steht
+            // neben dem Terminal statt einen Abschnitt weiter. Welcher Wirt
+            // das Terminal zeigt, entscheidet die Shell; dieses Feature
+            // fragt nur danach (ADR-018, ARCHITECTURE 5).
             if (working)
               HButton(
                 key: const Key('queue-go-to-terminal'),
                 variant: HButtonVariant.primary,
                 size: HButtonSize.md,
-                onPressed: () => Actions.maybeInvoke<NavIntent>(
+                onPressed: () => Actions.maybeInvoke<FocusTerminalIntent>(
                   context,
-                  const NavIntent(sandboxSectionIndex),
+                  const FocusTerminalIntent(),
                 ),
                 child: Text(l10n.interceptEmptyGoToTerminal),
               )

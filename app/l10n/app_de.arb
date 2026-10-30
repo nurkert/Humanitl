@@ -1362,7 +1362,6 @@
   "sandboxTerminalPasteKey": "Strg+Umschalt+V",
   "sandboxTerminalFloatEnter": "Terminal über der Seite schweben lassen (Strg+Umschalt+P)",
   "sandboxTerminalFloatLeave": "Terminal zurücklegen (Strg+Umschalt+P)",
-  "sandboxTerminalDockHere": "Terminal hierher zurückholen",
   "shellFloatingTerminalTitle": "Terminal des Agenten",
   "shellFloatingTerminalLabel": "Schwebendes Terminal des Agenten",
   "shellFloatingTerminalBack": "Zurück zur Sandbox-Seite",
@@ -1382,5 +1381,9 @@
   "sandboxTerminalShellHint": "Hier keine Geheimnisse tippen; der Agent kann diese Shell mitlesen.",
   "sandboxTerminalShellHintDismiss": "Verstanden",
   "sandboxTerminalTabShellGone": "Shell {number} · beendet",
-  "sandboxTerminalTabShellGoneHint": "Shell beendet, Exit-Code unbekannt; Klick schließt den Reiter"
+  "sandboxTerminalTabShellGoneHint": "Shell beendet, Exit-Code unbekannt; Klick schließt den Reiter",
+  "shellTerminalStripTitle": "{sandbox} · {tab}",
+  "shellTerminalStripFallback": "Terminal",
+  "shellTerminalStripOpen": "Terminal öffnen",
+  "shellTerminalStripLabel": "Schwebendes Terminal, mangels Platz verkleinert"
 }

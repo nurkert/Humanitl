@@ -1549,6 +1549,11 @@ void main() {
       expect(HSize.rowActionSlot, 28);
       expect(HSize.rowActionSlot, HSize.hitMin);
       expect(HSize.hitDecision, const Size(120, 32));
+      // Der Streifen des schwebenden Terminals ohne Platz (HUM-315): so hoch
+      // wie ein Ziel und wie die Titelleiste des Fensters.
+      expect(HSize.terminalStrip, const Size(240, 28));
+      expect(HSize.terminalStrip.height, HSize.hitMin);
+      expect(HTokens.dark.sizes.terminalStrip, HSize.terminalStrip);
       // Das Maß ist eine Zeichenzahl, keine Pixelbreite.
       expect(HSize.measureChars, 90);
       expect(HSize.measureWidth(12), closeTo(90 * 0.6 * 12, 1e-9));

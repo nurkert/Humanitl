@@ -589,7 +589,10 @@ void main() {
     await _openShell(tester);
     final String id = client.liveShells.single;
 
+    // Auf der Sandbox-Seite dockt es an (HUM-315); es schwebt über History.
     await pressFloat(tester);
+    await pressCtrl(tester, LogicalKeyboardKey.digit2);
+    await settle(tester);
     expect(floating, findsOneWidget);
     final TerminalPane pane = tester.widget<TerminalPane>(
       find.descendant(of: floating, matching: find.byType(TerminalPane)),

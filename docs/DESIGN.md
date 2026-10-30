@@ -278,6 +278,7 @@ Everything is a multiple of the 4 px base unit.
 | `paneMinInspector` | 480 |
 | `paneMinContext` | 260 |
 | `paneRatio` | 28/44/28 (percent) |
+| `terminalStrip` | 240 x 28 |
 | `measureChars` | 90 (characters) |
 | `stateRail` | 4 |
 | `selectionRail` | 2 |
@@ -496,7 +497,12 @@ an `HIconButton` close; below it the terminal with its usual banner, which
 there keeps only the full-window button. A 14 px grip in the inner corner
 resizes it between 320 x 200 and 60 % of the sections (at most 960 x 640).
 It sits 12 px (`x3`) from the edges of a corner, bottom right by default,
-and snaps to the corner of the quadrant it is let go in.
+and snaps to the corner of the quadrant it is let go in. Without a free corner it shrinks to a title strip of `terminalStrip`
+(240 x 28, HUM-315): `bg2` with the `lineStrong` hairline and the `card`
+radius like the window, the picture-in-picture glyph, "profile · tab" in
+`ui12` semibold, and a ghost button with the maximize glyph that opens it
+again. The strip takes the first free corner in the same order as the
+window; on the Sandbox page the window and the strip give way to the pane.
 
 ### HContextMenu
 

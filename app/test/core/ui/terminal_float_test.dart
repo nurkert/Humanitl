@@ -228,4 +228,95 @@ void main() {
       expect(container.read(terminalPlacementProvider), TerminalPlacement.pane);
     });
   });
+
+  // --- HUM-315 ---------------------------------------------------------------
+
+  group('placeTerminalStrip', () {
+    const Size strip = Size(240, 28);
+
+    FloatPlacement? placeStrip({
+      FloatCorner corner = FloatCorner.bottomRight,
+      List<Rect> keepClear = const <Rect>[],
+      Rect within = region,
+    }) => placeTerminalStrip(
+      region: within,
+      corner: corner,
+      size: strip,
+      keepClear: keepClear,
+      inset: inset,
+    );
+
+    test('a_corner_too_small_for_the_window_still_takes_the_strip', () {
+      // Rechts bleiben 300 x 800 frei: zu schmal für 320 x 200 und den
+      // Rand, breit genug für den Streifen.
+      const Rect taken = Rect.fromLTWH(0, 0, 1200, 800);
+      expect(place(keepClear: <Rect>[taken]), isNull);
+      final FloatPlacement? placed = placeStrip(keepClear: <Rect>[taken]);
+      expect(placed?.corner, FloatCorner.bottomRight);
+      expect(
+        placed?.rect,
+        const Rect.fromLTWH(1500 - 12 - 240, 800 - 12 - 28, 240, 28),
+      );
+      expect(placed!.rect.overlaps(taken), isFalse);
+    });
+
+    test('the_strip_takes_the_corners_in_the_same_order', () {
+      // Unten rechts besetzt: der Streifen geht wie das Fenster daneben.
+      const Rect bottomRight = Rect.fromLTWH(1000, 600, 500, 200);
+      expect(
+        placeStrip(keepClear: <Rect>[bottomRight])?.corner,
+        FloatCorner.bottomLeft,
+      );
+      expect(
+        placeStrip(
+          corner: FloatCorner.topLeft,
+          keepClear: const <Rect>[Rect.fromLTWH(0, 0, 400, 100)],
+        )?.corner,
+        FloatCorner.topRight,
+      );
+    });
+
+    test('nothing_free_even_for_the_strip_means_no_place', () {
+      expect(placeStrip(keepClear: <Rect>[region]), isNull);
+    });
+  });
+
+  group('terminalHostFor', () {
+    test('a_floating_terminal_docks_on_the_sandbox_page_only', () {
+      expect(
+        terminalHostFor(TerminalPlacement.floating, sandboxPageShown: true),
+        TerminalPlacement.pane,
+      );
+      expect(
+        terminalHostFor(TerminalPlacement.floating, sandboxPageShown: false),
+        TerminalPlacement.floating,
+      );
+    });
+
+    test('pane_and_whole_window_do_not_depend_on_the_page', () {
+      for (final bool page in <bool>[true, false]) {
+        expect(
+          terminalHostFor(TerminalPlacement.pane, sandboxPageShown: page),
+          TerminalPlacement.pane,
+        );
+        expect(
+          terminalHostFor(TerminalPlacement.fullWindow, sandboxPageShown: page),
+          TerminalPlacement.fullWindow,
+        );
+      }
+    });
+
+    test('the_page_never_changes_the_choice', () {
+      final (ProviderContainer container, String _) = containerWith(null);
+      container.read(terminalPlacementProvider.notifier).float();
+      container.read(sandboxPageShownProvider.notifier).set(shown: true);
+      expect(container.read(terminalHostProvider), TerminalPlacement.pane);
+      expect(
+        container.read(terminalPlacementProvider),
+        TerminalPlacement.floating,
+      );
+      container.read(sandboxPageShownProvider.notifier).set(shown: false);
+      expect(container.read(terminalHostProvider), TerminalPlacement.floating);
+    });
+  });
 }
