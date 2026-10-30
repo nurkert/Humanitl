@@ -563,10 +563,13 @@ void main() {
     expectFullWindow(tester);
   }, variant: linux);
 
-  testWidgets('without_a_terminal_on_the_screen_the_shortcut_does_nothing', (
+  // Mit laufendem Agenten lässt dasselbe Kürzel das Terminal schweben
+  // (HUM-300, `terminal_float_test.dart`); ohne Agenten gibt es nichts zu
+  // zeigen, und es tut nichts.
+  testWidgets('without_an_agent_the_shortcut_does_nothing', (
     WidgetTester tester,
   ) async {
-    final SandboxTestClient client = runningClient();
+    final SandboxTestClient client = SandboxTestClient();
     await pumpApp(tester, client: client);
     await pressCtrl(tester, LogicalKeyboardKey.digit2);
     await settle(tester);
@@ -576,6 +579,11 @@ void main() {
     await settle(tester);
     expect(headerTitle(tester), 'History');
     expectLayout(tester);
+    expect(
+      find.byKey(const Key('shell-terminal-floating')),
+      findsNothing,
+      reason: 'nothing to float without an agent',
+    );
     expect(terminalHasKeyboard(), isFalse);
     expect(FocusManager.instance.primaryFocus, before);
     expect(client.typed, isEmpty);

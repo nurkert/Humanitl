@@ -75,6 +75,8 @@ final List<KeyRow> shellTable = <KeyRow>[
   ctrl(LogicalKeyboardKey.digit0, 'ToggleRailIntent'),
   ctrlShift(LogicalKeyboardKey.enter, 'ToggleTerminalFullWindowIntent'),
   ctrlShift(LogicalKeyboardKey.numpadEnter, 'ToggleTerminalFullWindowIntent'),
+  // Das schwebende Terminal (HUM-300).
+  ctrlShift(LogicalKeyboardKey.keyP, 'ToggleTerminalFloatIntent'),
   ctrl(LogicalKeyboardKey.backquote, 'FocusTerminalIntent'),
   // Der Zoom des Terminals (HUM-301): `+` mit und ohne `Shift`, weil es auf
   // US-Belegung `Shift+=` ist; `-` nur ohne, weil `Ctrl+_` dem Agenten

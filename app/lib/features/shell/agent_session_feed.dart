@@ -114,8 +114,16 @@ class AgentSessionFeed {
   bool _queueEmptyInView() =>
       _ref.read(linkLiveProvider) &&
       _ref.read(navigationProvider) == Section.intercept &&
-      _ref.read(terminalPlacementProvider) == TerminalPlacement.pane &&
+      _ref.read(terminalPlacementProvider) != TerminalPlacement.fullWindow &&
       _ref.read(heldFlowsProvider).isEmpty;
+
+  /// Whether the floating terminal stands on the screen (HUM-300). It closes
+  /// itself a moment after its agent ended, and it hears of the end only
+  /// through the snapshot, so the snapshot is asked as long as it floats,
+  /// whatever section lies below.
+  bool _floatingInView() =>
+      _ref.read(linkLiveProvider) &&
+      _ref.read(terminalPlacementProvider) == TerminalPlacement.floating;
 
   /// Starts the timer when the empty queue comes into view, with one question
   /// right away, and stops it when the queue leaves.
@@ -123,7 +131,7 @@ class AgentSessionFeed {
     if (_disposed) {
       return;
     }
-    final bool wanted = _queueEmptyInView();
+    final bool wanted = _queueEmptyInView() || _floatingInView();
     if (wanted && _poll == null) {
       _ask();
       _poll = Timer.periodic(agentSessionPollInterval, (Timer _) => _ask());
@@ -135,7 +143,7 @@ class AgentSessionFeed {
 
   /// The window came back to the front: a session may have changed meanwhile.
   void _resumed() {
-    if (!_disposed && _queueEmptyInView()) {
+    if (!_disposed && (_queueEmptyInView() || _floatingInView())) {
       _ask();
     }
   }
