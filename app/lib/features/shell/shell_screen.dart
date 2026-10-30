@@ -26,6 +26,7 @@ import '../intercept/intercept_screen.dart';
 import '../intercept/providers/decision.dart';
 import '../intercept/providers/flows.dart';
 import '../rules/rules_screen.dart';
+import '../sandbox/providers/disposable_review.dart';
 import '../sandbox/providers/sandbox_status_provider.dart';
 import '../sandbox/sandbox_screen.dart';
 import '../sandbox/widgets/sandbox_terminal.dart';
@@ -555,6 +556,15 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
     }
   }
 
+  /// Bringt die Sandbox-Seite nach vorn, wenn der Strom eines Starts die
+  /// Änderungen eines Wegwerf-Laufs gebracht hat: Das Panel darauf erscheint
+  /// ohne Klick, auch wenn gerade die Warteschlange zu sehen war (HUM-351).
+  void _changesArrived(int? previous, int next) {
+    if (previous != null && next > previous) {
+      _go(Section.sandbox);
+    }
+  }
+
   /// Shows [section] and ends the whole window, also when [section] is
   /// already the one underneath: then the navigation does not change, and
   /// [_sectionAsked] never hears of it.
@@ -729,6 +739,12 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   Widget build(BuildContext context) {
     ref.listen<FlowId?>(flowHandoffProvider, _takeHandoff);
     ref.listen<FlowId?>(flowRevealProvider, _takeReveal);
+    ref.listen<int>(
+      disposableReviewProvider.select(
+        (DisposableReview review) => review.arrivals,
+      ),
+      _changesArrived,
+    );
     // Ohne `fireImmediately`: Der erste Zustand ist `checking`, und darauf
     // schaltet `_offerSetup` ohnehin nicht. Der erste gesetzte Zustand kommt
     // als Änderung an, und genau auf ihn wartet die Weiche.

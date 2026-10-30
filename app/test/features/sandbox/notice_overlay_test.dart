@@ -54,6 +54,7 @@ class RefusingClient extends SandboxTestClient {
   Stream<SandboxUpdate> startSandbox({
     String? profile,
     WorkMode? workMode,
+    SandboxMode? sandboxMode,
   }) async* {
     starts++;
     sandbox = sandbox.copyWith(

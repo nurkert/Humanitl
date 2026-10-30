@@ -138,7 +138,46 @@ abstract class DaemonClient {
   /// `Sandbox(Start)`: starts the sandbox and reports `starting`, then
   /// `running`, or a diagnostic and `failed`. The folder is the stored one,
   /// as for [planSandbox].
-  Stream<SandboxUpdate> startSandbox({String? profile, WorkMode? workMode});
+  ///
+  /// [sandboxMode] goes out as `Start.sandbox_mode` (HUM-351); null leaves
+  /// the field empty, and the daemon takes `sandbox.mode` from its
+  /// configuration. A disposable run sends [SandboxUpdate.changes] on this
+  /// stream after the agent ended.
+  Stream<SandboxUpdate> startSandbox({
+    String? profile,
+    WorkMode? workMode,
+    SandboxMode? sandboxMode,
+  });
+
+  /// `Sandbox(Changes)`: the changes of a disposable run that wait for a
+  /// decision (HUM-350). One [SandboxUpdate.changes], or a diagnostic
+  /// (`SANDBOX_031`) when nothing waits or the sandbox still runs.
+  Stream<SandboxUpdate> sandboxChanges();
+
+  /// `Sandbox(ApplyChanges)`: writes the changes with [ids] into the project
+  /// folder and discards the rest (HUM-350).
+  ///
+  /// [ids] are path hashes ([DisposableChange.id]), never paths. An empty
+  /// list means "all" to the daemon; the changes panel therefore never sends
+  /// one and names every id it means instead. [overwriteIds] are the ids
+  /// whose conflict somebody confirmed one by one
+  /// (`ApplyChanges.overwrite_ids`, HUM-351): the daemon writes a change whose
+  /// file the person changed since the start only when its id is there, and
+  /// stops the whole call before the first write at any other conflict. The
+  /// app never sets the old flag `overwrite`, which confirms every chosen id.
+  ///
+  /// The answer is a [SandboxUpdate.changesOutcome], after a diagnostic when
+  /// writing broke off midway (`partial`); a check that fails before the
+  /// first write answers with the diagnostic alone.
+  Stream<SandboxUpdate> applyChanges({
+    required String sandboxId,
+    required List<String> ids,
+    required List<String> overwriteIds,
+  });
+
+  /// `Sandbox(DiscardChanges)`: drops every waiting change (HUM-350). The
+  /// answer is a [SandboxUpdate.changesOutcome] with `discarded`.
+  Stream<SandboxUpdate> discardChanges({required String sandboxId});
 
   /// `Sandbox(Stop)`: stops the sandbox and reports `stopping`, then
   /// `stopped`.

@@ -38,6 +38,15 @@ abstract class DaemonInfo with _$DaemonInfo {
   /// terminal pane offers "+ Shell" only then (HUM-314).
   bool get offersShells => capabilities.contains(execCapability);
 
+  /// The capability of a daemon that can run a disposable sandbox: the
+  /// project folder under a layer in RAM, reviewed and applied afterwards
+  /// (HUM-350). A daemon on macOS does not name it.
+  static const String disposableCapability = 'sandbox.disposable';
+
+  /// True when the daemon runs disposable sandboxes; the app offers the
+  /// switch, the setting and the changes panel only then (HUM-351).
+  bool get offersDisposable => capabilities.contains(disposableCapability);
+
   /// True when a session is running.
   bool get hasSession => sessionId.isNotEmpty;
 

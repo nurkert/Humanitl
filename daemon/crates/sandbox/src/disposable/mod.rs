@@ -40,7 +40,7 @@
 //!   hinaus, schreibt keinen Symlink, der das Projekt verlässt, kein Gerät,
 //!   keine FIFO, keinen Socket, keine setuid-, setgid- oder Sticky-Bits, und
 //!   keine Datei, die der Mensch seit dem Start geändert hat, ohne dass er es
-//!   ausdrücklich sagt (`ApplyOptions::overwrite`).
+//!   ausdrücklich für diese Datei sagt (`ApplyOptions::may_overwrite`).
 
 #[cfg(target_os = "linux")]
 mod apply;

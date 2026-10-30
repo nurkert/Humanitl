@@ -85,7 +85,32 @@ impl Fixture {
             lower.as_fd(),
             base,
             &chosen,
-            ApplyOptions { overwrite },
+            &ApplyOptions {
+                overwrite,
+                ..ApplyOptions::default()
+            },
+        )
+    }
+
+    /// Wie [`Fixture::apply`], mit Überschreiben nur für `overwrite_ids`.
+    fn apply_overwriting(
+        &self,
+        base: &TreeSnapshot,
+        ids: &[String],
+        overwrite_ids: &[String],
+    ) -> Result<ApplyReport, Diagnostic> {
+        let set = self.scan(base);
+        let chosen = select(&set, ids)?;
+        let (upper, lower) = self.fds();
+        apply(
+            upper.as_fd(),
+            lower.as_fd(),
+            base,
+            &chosen,
+            &ApplyOptions {
+                overwrite: false,
+                overwrite_ids: overwrite_ids.iter().cloned().collect(),
+            },
         )
     }
 }
@@ -432,6 +457,51 @@ fn a_file_the_user_changed_since_the_start_is_not_overwritten_unasked() {
     assert_eq!(
         fs::read_to_string(fx.lower.join("edit.txt")).unwrap(),
         "agent\n"
+    );
+}
+
+/// Eine Bestätigung gilt einer Datei, nie einer anderen (HUM-351): `a.txt`
+/// ist zum Überschreiben bestätigt, `b.txt` bekam seinen Konflikt erst nach
+/// der Auswahl. Nichts wird geschrieben, und der Befund nennt `b.txt`.
+#[test]
+fn a_conflict_not_named_for_overwrite_is_not_overwritten_even_if_another_is() {
+    let fx = fixture();
+    fs::write(fx.lower.join("a.txt"), "a\n").unwrap();
+    fs::write(fx.lower.join("b.txt"), "b\n").unwrap();
+    let base = fx.baseline();
+    fs::write(fx.upper.join("a.txt"), "agent a\n").unwrap();
+    fs::write(fx.upper.join("b.txt"), "agent b\n").unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    fs::write(fx.lower.join("a.txt"), "human a, longer\n").unwrap();
+    fs::write(fx.lower.join("b.txt"), "human b, longer\n").unwrap();
+
+    let set = fx.scan(&base);
+    let a = change_at(&set, "a.txt").path_hash();
+    let b = change_at(&set, "b.txt").path_hash();
+    let err = fx
+        .apply_overwriting(&base, &[a.clone(), b.clone()], std::slice::from_ref(&a))
+        .unwrap_err();
+    assert!(err.why.contains("b.txt"), "{}", err.why);
+    assert!(!err.why.contains("a.txt:"), "{}", err.why);
+    assert_eq!(
+        fs::read_to_string(fx.lower.join("a.txt")).unwrap(),
+        "human a, longer\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fx.lower.join("b.txt")).unwrap(),
+        "human b, longer\n"
+    );
+
+    // Beide bestätigt: beide geschrieben.
+    fx.apply_overwriting(&base, &[a.clone(), b.clone()], &[a, b])
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(fx.lower.join("a.txt")).unwrap(),
+        "agent a\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fx.lower.join("b.txt")).unwrap(),
+        "agent b\n"
     );
 }
 
@@ -1131,7 +1201,10 @@ fn a_removal_that_fails_names_what_may_be_left() {
         lower.as_fd(),
         &base,
         &chosen,
-        ApplyOptions { overwrite: true },
+        &ApplyOptions {
+            overwrite: true,
+            ..ApplyOptions::default()
+        },
     )
     .unwrap();
     fs::set_permissions(fx.lower.join("ro"), fs::Permissions::from_mode(0o755)).unwrap();

@@ -78,8 +78,29 @@ class SetupScreen extends StatefulWidget {
     this.daemonAttempts = 0,
     this.activeServer = '',
     this.onOpenIntercept,
+    this.disposable,
+    this.onDisposable,
+    this.changesWaiting,
+    this.onReviewChanges,
     super.key,
   });
+
+  /// Wie viele Änderungen eines Wegwerf-Laufs auf eine Entscheidung warten,
+  /// oder null, wenn keine warten (HUM-351). Ein Wegwerf-Start ist dann
+  /// gesperrt (die Hülle gibt kein [onStart]), ein direkter geht mit einem
+  /// Hinweis.
+  final int? changesWaiting;
+
+  /// Öffnet das Panel der wartenden Änderungen.
+  final VoidCallback? onReviewChanges;
+
+  /// Ob der nächste Start eine Wegwerf-Sandbox ist, oder null, wenn der
+  /// Daemon keine kann (`sandbox.disposable` fehlt, etwa auf macOS); dann
+  /// steht der Schalter nicht da (HUM-351).
+  final bool? disposable;
+
+  /// Wird mit dem gewünschten Stand des Schalters gerufen.
+  final ValueChanged<bool>? onDisposable;
 
   /// Shows the queue. The ready screen offers it as its one action while a
   /// session already runs and nothing may start a second one (HUM-287).
@@ -309,6 +330,12 @@ class _SetupScreenState extends State<SetupScreen> {
                 SizedBox(height: tokens.spacing.x5),
                 _StartRow(
                   state: state,
+                  disposable: widget.disposable,
+                  changesWaiting: widget.changesWaiting,
+                  onReviewChanges: widget.onReviewChanges,
+                  onDisposable: widget.sandboxLocked
+                      ? null
+                      : widget.onDisposable,
                   onStart: widget.onStart,
                   onOpenIntercept: widget.sandboxLocked
                       ? widget.onOpenIntercept
@@ -359,10 +386,26 @@ class _StartRow extends StatelessWidget {
     required this.state,
     required this.onStart,
     this.onOpenIntercept,
+    this.disposable,
+    this.onDisposable,
+    this.changesWaiting,
+    this.onReviewChanges,
   });
+
+  /// Wartende Änderungen eines Wegwerf-Laufs, oder null (HUM-351).
+  final int? changesWaiting;
+
+  /// Öffnet ihr Panel.
+  final VoidCallback? onReviewChanges;
 
   final SetupState state;
   final VoidCallback? onStart;
+
+  /// Der Schalter „Wegwerf", oder null ohne die Fähigkeit (HUM-351).
+  final bool? disposable;
+
+  /// Ändert den Schalter; null, solange eine Sandbox steht.
+  final ValueChanged<bool>? onDisposable;
 
   /// Shows the queue; set while a session runs and the start is shut.
   final VoidCallback? onOpenIntercept;
@@ -377,9 +420,26 @@ class _StartRow extends StatelessWidget {
     // seine, und der Start tritt zurück (HUM-287). Läuft schon eine Session,
     // ist der Weg zur Warteschlange die eine Aktion des fertigen Setups.
     final VoidCallback? toQueue = state.canStart ? onOpenIntercept : null;
+    final bool? disposable = this.disposable;
+    final ValueChanged<bool>? onDisposable = this.onDisposable;
+    final int? waiting = changesWaiting;
+    // Warten Änderungen, sperrt nur ein Wegwerf-Start; der Satz sagt es statt
+    // „bereit" (HUM-351).
+    final bool heldByChanges = waiting != null && disposable == true;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
+        if (disposable != null) ...<Widget>[
+          HCheckbox(
+            key: const Key('setup-disposable'),
+            label: l10n.setupDisposableLabel,
+            hint: l10n.setupDisposableHint,
+            value: disposable,
+            enabled: onDisposable != null,
+            onChanged: onDisposable ?? (bool _) {},
+          ),
+          SizedBox(height: tokens.spacing.x2),
+        ],
         Wrap(
           spacing: tokens.spacing.x2,
           runSpacing: tokens.spacing.x2,
@@ -394,6 +454,14 @@ class _StartRow extends StatelessWidget {
               onPressed: ready ? onStart : null,
               child: Text(l10n.setupStart),
             ),
+            if (waiting != null && onReviewChanges != null)
+              HButton(
+                key: const Key('setup-changes-open'),
+                variant: HButtonVariant.secondary,
+                size: HButtonSize.md,
+                onPressed: onReviewChanges,
+                child: Text(l10n.sandboxChangesReview(waiting)),
+              ),
             if (toQueue != null)
               HButton(
                 key: const Key('setup-open-intercept'),
@@ -411,7 +479,7 @@ class _StartRow extends StatelessWidget {
         // wieder grün macht. Steht keine im Weg, sagt der Satz, worauf sich
         // jemand dann verlassen darf.
         Text(
-          _sentence(l10n),
+          heldByChanges ? l10n.sandboxChangesStartBlocked : _sentence(l10n),
           key: const Key('setup-start-reason'),
           style: tokens.typography.ui12.tinted(
             ready && failure == null
@@ -419,6 +487,14 @@ class _StartRow extends StatelessWidget {
                 : tokens.stateText.error,
           ),
         ),
+        if (waiting != null && !heldByChanges) ...<Widget>[
+          SizedBox(height: tokens.spacing.x1),
+          Text(
+            l10n.sandboxChangesStartDirect,
+            key: const Key('setup-changes-hint'),
+            style: tokens.typography.ui12.tinted(tokens.colors.warningText),
+          ),
+        ],
         // Ein Aufruf, der nicht angekommen ist, wird dort berichtet, wo er
         // gemacht wurde: unter dem Knopf, auf den jemand gedrückt hat, und
         // nicht auf einer der vier Zeilen, über die er nichts sagt

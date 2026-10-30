@@ -956,9 +956,20 @@ message SandboxRequest {
     // alle, und das wird abgelehnt, wenn die Liste abgeschnitten ist.
     repeated string ids = 2;
     // Auch Dateien schreiben, die der Mensch seit dem Start im Projekt
-    // geaendert hat. Ohne den Schalter ist jeder Konflikt ein Abbruch vor
-    // dem ersten Schreiben.
+    // geaendert hat, und zwar jede gewaehlte: gleichbedeutend mit
+    // `overwrite_ids` = alle Kennungen in `ids` (bei leerem `ids` alle). Ohne
+    // den Schalter und ohne Eintrag in `overwrite_ids` ist jeder Konflikt ein
+    // Abbruch vor dem ersten Schreiben. Die Kommandozeile setzt ihn fuer
+    // `humanitl sandbox apply --overwrite`; die Oberflaeche setzt ihn nie,
+    // sondern nennt jede bestaetigte Datei einzeln (HUM-351).
     bool overwrite = 3;
+    // Die Kennungen (`DisposableChange.id`), deren Konflikt jemand einzeln
+    // bestaetigt hat (HUM-351). Ein Eintrag mit Konflikt wird nur
+    // ueberschrieben, wenn seine Kennung hier steht oder `overwrite` gilt;
+    // ein anderer Konflikt bricht ab, auch wenn er erst nach der Auswahl
+    // entstand. Ein Daemon vor Minor 26 kennt das Feld nicht und bricht an
+    // jedem Konflikt ab.
+    repeated string overwrite_ids = 4;
   }
 
   // Welche Aenderungen verworfen werden: immer alle (HUM-350).
