@@ -19,6 +19,8 @@ const de = {
     lede: 'Dein KI-Agent arbeitet in einer Sandbox ohne Netz. Was keine deiner Regeln erlaubt, hält Humanitl an, bis du entscheidest.',
     cta: 'Download',
     ctaFor: 'für macOS und Linux',
+    ctaForMac: 'für macOS',
+    ctaForLinux: 'für Linux',
     source: 'Quellcode auf GitHub',
     scroll: 'Weiter scrollen',
   },
