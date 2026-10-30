@@ -1,6 +1,6 @@
 ---
 source: THREAT-MODEL.md
-source-sha256: 6525d38faa261ee82b8bc2550c56d5c1cc9d111042b8a16e2d5700d8e29ddf28
+source-sha256: 06b8f324ee21422f0f7c6fb17102a01a116253e19e9128c60ebd041050954024
 lang: de
 ---
 # Bedrohungsmodell
@@ -131,7 +131,7 @@ Fünf weitere Kanäle vervollständigen das Modell:
 | K-15 | das Zeitfenster zwischen `exec` und `SIGKILL` | b | hoch | Bericht sofort gelesen, `SIGKILL` ohne Schonfrist | open | - |
 | K-16 | Ausfall der Aufzeichnung | a, b, c | mittel | Ausfall an jeden Client einmal je Ursache gemeldet, Karten als „Wird nicht aufgezeichnet" markiert, erste Freigabe pausiert | declared | Health-Tests in `daemon/crates/recorder`, Golden-Test `states_recorder_failure` |
 | K-18 | die Tür für weitere Shells (`humanitl sandbox exec`) | b | hoch | unbenanntes Socket-Paar, das nur der Daemon und PID 1 halten; der Shim forkt die Shell von innen mit dem Filter des Agenten obendrauf, belegt durch ein verweigertes `AF_UNIX`; höchstens vier; stirbt mit der Sandbox | mitigated | `daemon/crates/ipc/tests/terminal.rs` (HUM-299) |
-| K-24 | die Wegwerf-Sandbox: die obere Schicht und der Weg zurück ins Projekt (`humanitl sandbox apply`) | b | hoch | Projektordner nur lesbar als untere Schicht eines Overlays, obere Schicht im RAM unter dem Laufzeitverzeichnis des Daemons mit Größengrenze, `mounts.extra_rw` nur lesbar; übernommen nur auf Wahl eines Menschen, geprüft vor dem ersten Schreiben, nie durch einen oder als einen Symlink aus dem Projekt hinaus, kein Gerät, kein FIFO, kein Socket, kein setuid-Bit, kein Überschreiben einer Datei, die der Mensch seit dem Start geändert hat, ohne `--overwrite` | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350) |
+| K-24 | die Wegwerf-Sandbox: die obere Schicht und der Weg zurück ins Projekt (`humanitl sandbox apply`) | b | hoch | Projektordner nur lesbar als untere Schicht eines Overlays, obere Schicht im RAM unter dem Laufzeitverzeichnis des Daemons mit Größengrenze, `mounts.extra_rw` nur lesbar; übernommen nur auf Wahl eines Menschen, geprüft vor dem ersten Schreiben, nie durch einen oder als einen Symlink aus dem Projekt hinaus, kein Gerät, kein FIFO, kein Socket, kein setuid-Bit, kein Überschreiben einer Datei, die der Mensch seit dem Start geändert hat, außer diese Änderung ist einzeln bestätigt (`ApplyChanges.overwrite_ids` aus der App, HUM-351) oder jede ausgewählte Änderung ist es (`--overwrite`) | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350) |
 
 K-13 ist der offensichtliche Kanal und der einzige, der rundweg als geschlossen gilt. K-14 steht
 hier, damit Angreifer (d) in einer Zeile vorkommt. K-15 kam mit HUM-041: Die Prüfung, die die
@@ -166,7 +166,9 @@ jeder Fund bleibt an seiner Anfrage, die Warnung wiederholt sich nur für Funde,
 sind oder vor 15 Minuten oder mehr zuletzt gewarnt wurden; ein abgelaufener oder verdrängter
 Fingerabdruck warnt erneut, HUM-354), und mit `hold.hard_block_checksum_secrets` wird ein durch
 Prüfsumme bestätigtes Secret blockiert (`HOLD_004`). Der Zugangsschlüssel eines Anbieters
-(HUM-140) liegt im Schlüsselbund des Systems und erreicht den Agenten nur als Datei in der
+(HUM-140) liegt im Schlüsselbund des Systems (unter macOS im Anmelde-Schlüsselbund, HUM-349; das
+Seatbelt-Profil erreicht kein `securityd` und kein `~/Library/Keychains`, der Agent kann also nicht
+danach fragen) und erreicht den Agenten nur als Datei in der
 Sandbox; in der Aufzeichnung und in einem Fund ist er überall verdeckt, außer in `Authorization`
 gegenüber `llm.endpoint`. Bei mehreren gespeicherten Modellservern (HUM-289) hat jeder einen
 eigenen Eintrag im Schlüsselbund, und nur der Ursprung des aktiven Servers bekommt einen Schlüssel
@@ -504,7 +506,8 @@ und Einträge mit Overlay-Attributen, die ein unprivilegiertes Overlay nie schre
 vor dem Start geöffnet; der Ausgangsstand wird über diesen Deskriptor erfasst, bevor die Sandbox
 startet, der Launcher hängt nur einen Ordner mit demselben Inode ein, und Diff und Übernahme öffnen
 den Pfad nie erneut. Eine Datei, die der Mensch seit dem Start geändert hat, ist ein Konflikt und
-braucht `--overwrite`, und das Ziel wird unmittelbar vor jedem Schreiben noch einmal verglichen
+wird nur geschrieben, wenn er für genau diese Änderung bestätigt wurde (`overwrite_ids`, oder
+`--overwrite` für alle ausgewählten, HUM-351), und das Ziel wird unmittelbar vor jedem Schreiben noch einmal verglichen
 (ein verbleibendes Zeitfenster von wenigen Systemaufrufen, keine Sperre auf dem Ordner); jede
 ausgewählte Änderung wird
 vor dem ersten Schreiben geprüft, und eine fehlschlagende Prüfung schreibt nichts. Pfade und Diffs
@@ -595,6 +598,8 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-10-30 | K-19 bis K-23: macOS mit Seatbelt; gemeinsames Loopback, kein PID-Namespace, Pfade statt Deskriptoren, eine veraltete Schnittstelle, lokale Seitenkanäle auf dem Rechner | HUM-323, HUM-327, HUM-331 |
 
 | 2026-10-30 | K-24: die Wegwerf-Sandbox, ein Overlay über dem nur lesbaren Projekt mit der oberen Schicht im RAM und einer Größengrenze; Änderungen erreichen das Projekt nur über eine geprüfte Übernahme | HUM-350 |
+| 2026-10-30 | K-02: unter macOS liegt der Zugangsschlüssel des Anbieters im Anmelde-Schlüsselbund über `/usr/bin/security`, über `stdin` und zurückgelesen; dieselbe Klasse wie der Secret Service: lesbar für jeden Prozess des Kontos außerhalb der Sandbox, außer Reichweite des Agenten | HUM-349 |
+| 2026-10-30 | K-24: das Überschreiben eines Konflikts wird je Änderung bestätigt (`overwrite_ids`); eine Bestätigung für eine Datei deckt nie eine andere ab | HUM-351 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

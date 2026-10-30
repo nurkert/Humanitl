@@ -31,6 +31,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-339 | Linux: ein RPM für Fedora und openSUSE und das AUR-Paket humanitl-bin | M | HUM-335 |
 | HUM-337 | Download: der Knopf nennt das System, keine Empfehlung, neutrale Symbole, eine Tafel für die Zahlen | S | HUM-333, HUM-335 |
 | HUM-347 | Bühne: größeres Fokusfenster, Ring danach ausgerichtet, Tiefenschärfe nach hinten, Pfeile immer erreichbar | M | HUM-334 |
+| HUM-349 | Der Zugangsschlüssel unter macOS im Keychain | S | HUM-140, HUM-323 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -378,3 +379,33 @@ Akzeptanzkriterien:
 - Die hinteren Fenster werden nach hinten zunehmend unscharf, mit Bokeh-Scheiben. Das Fokusfenster bleibt scharf, ebenso alle Fenster in der Landing-Section.
 - Kein Filter wird pro Frame neu berechnet: die Unschärfe liegt fest in einer eigenen Ebene, das Skript setzt nur `opacity` und `transform`. Mit `data-lite` entfällt das Bokeh; ohne Skript und mit reduzierter Bewegung bleibt die Seite vollständig.
 - Die Pfeile erscheinen, sobald der Ring steht, sind ohne Suchen sichtbar und liegen in jeder Layout-Klasse im Bild und klickbar, über alle Module. Drag und Tastatur bleiben daneben bestehen.
+
+## HUM-349 · Der Zugangsschlüssel unter macOS im Keychain
+
+### Kontext
+
+Der Inhaber sah in der macOS-App unter Einstellungen „Set, in a file only you can read: the system keyring did not answer" und dazu `secret-tool is not installed`: `daemon/crates/config/src/secret.rs` kannte nur das Linux-Werkzeug, und der Text riet zu einem Paket von Debian. Unter macOS blieb der Schlüssel deshalb immer in der Datei.
+
+### Spezifikation
+
+- Unter macOS liegt der Schlüssel im Anmelde-Schlüsselbund, gesprochen wird mit `/usr/bin/security`. Kein Crate: Die App ist nur ad-hoc signiert, ein Eintrag, dessen Zugriffsliste unserem Programm vertraut, fragte nach jedem Update. Einträge von `security` vertrauen dem von Apple signierten Werkzeug.
+- Neues Schema `keychain:humanitl/<name>` neben `secret-service:` und `file:`, weil ein Verweis den Ort nennt. Ein Verweis des anderen Systems meldet `LLM_009` mit `humanitl llm key set`, ohne dort den falschen Speicher zu fragen, und `KeyStore::clear` nimmt ihn als schon weg hin, damit `humanitl llm key remove` ihn aus der Konfiguration nimmt. Dienst `humanitl`, Konto der Schlüsselname, `TOOL_TIMEOUT` und `run_tool` wie bisher.
+- Hinein über `security -i` auf `stdin`, nie über `argv`. Gemessen unter macOS 27 an einem Wegwerf-Schlüsselbund: Eine Zeile über gut 4096 Bytes wird zerschnitten und der Rest als Befehl gelesen, samt Ende des Schlüssels auf `stderr`; eine fehlerhafte Zeile kann mit 0 und ohne Ausgabe enden; `find-generic-password -w` gibt Nicht-ASCII als Hexadezimaltext aus und hängt `\n` an; ein fehlender Eintrag endet mit 44. Darum: Zeilengrenze 4000 Bytes, nur druckbares ASCII, Zurücklesen und Vergleich nach dem Ablegen, und aus `stderr` von `-i` nur Zeilen `security: SecKeychain…` in den Befund.
+- Rückfall in die `0600`-Datei mit `CONFIG_019`, wenn `security` nicht nimmt; der Text nennt „the macOS Keychain", der Vorschlag ist `security unlock-keychain`, kein `secret-tool`, kein `libsecret-tools`. Bei einem Schlüssel, den `security` nie trüge, steht kein Vorschlag da. Texte unter Linux bleiben Byte für Byte.
+- Der Speicher wählt zur Laufzeit, damit die Tests beider Systeme mit Attrappen auf beiden laufen. `KEYCHAIN_TOOL` gilt nur, wenn der Suchpfad `/usr/bin` nennt, sodass Tests mit Wegwerf-Pfaden den Schlüsselbund des Menschen nicht erreichen. Keine Vertragsänderung: `LLM_KEY_STORE_SECRET_SERVICE` heißt auf dem Draht „Schlüsselbund des Systems", den Unterschied trägt `key_ref`, und die CLI zeigt daraus `keychain`.
+- `docs/SECURITY.md`, `docs/THREAT-MODEL.md`, Anleitung, README und Website sagen es ehrlich: Ein Eintrag ist für jeden Prozess desselben Kontos außerhalb der Sandbox mit `security` lesbar, dieselbe Schutzklasse wie der Secret Service. Der Agent erreicht ihn nicht: `MACH_SERVICES` nennt kein `securityd`, `~/Library/Keychains` liegt in `/Users`.
+
+### Akzeptanzkriterien
+
+- Der Schlüssel steht nie in `argv` (`the_keychain_takes_the_key_over_stdin_and_never_over_argv`, Mutationsbeweis: mit `-w` in `argv` rot).
+- Anführungszeichen und Backslashes kommen unverändert zurück, gegen die Attrappe und einmalig gegen `/usr/bin/security` mit einem Wegwerf-Schlüsselbund, ebenso Ersetzen mit `-U`, Lesen und Löschen.
+- Ein scheiterndes `security -i` führt in die Datei mit `CONFIG_019` (`a_failed_security_i_falls_back_to_the_file_and_says_so`, Mutationsbeweis: Ausgang ignoriert, rot); ein stilles Scheitern fängt das Zurücklesen ab.
+- Kein Text unter macOS nennt `secret-tool` oder `libsecret-tools`; kein Befund trägt den Schlüssel, auch nicht aus `stderr`.
+- `file:`-Verweise und die Datei wirken weiter; das nächste Setzen zieht den Schlüssel ins Keychain und löscht die Datei.
+- Der Test `seatbelt` hält fest, dass `MACH_SERVICES` keinen Dienst des Schlüsselbunds nennt; in einem Profil mit derselben Mach-Liste findet `security` selbst bei lesbarer Keychain-Datei nichts.
+- Kein Test schreibt in das Anmelde-Keychain.
+
+Folge-Kandidaten:
+
+- `tests/escape/macos/run.sh` um eine Zeile erweitern, die `security find-generic-password` aus der laufenden Sandbox ruft.
+- Nach einem Rückfall in die Datei bleibt ein älterer Eintrag im Schlüsselbund liegen, auf den nichts mehr zeigt. Das gilt seit HUM-140 auch unter Linux und ist hier nicht behoben.

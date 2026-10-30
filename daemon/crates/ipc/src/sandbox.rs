@@ -3498,7 +3498,7 @@ impl Inner {
             Diagnostic::builder(codes::CONFIG_003, Severity::Error)
                 .why(format!(
                     "llm.api_key_ref = {text:?} is not a reference to an access key; it takes \
-                     secret-service:humanitl/NAME or file:NAME"
+                     secret-service:humanitl/NAME, keychain:humanitl/NAME or file:NAME"
                 ))
                 .fix(FixAction::CopyCommand("humanitl llm key set".to_owned()))
                 .build()

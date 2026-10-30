@@ -336,7 +336,8 @@ opens the command palette, `Ctrl+,` the settings.
 - `humanitl doctor` and the setup checklist: one line per precondition, each with its fix.
 - Any OpenAI-compatible model server or Ollama, found with `humanitl llm discover` and tested with
   `humanitl llm test`, with several saved servers. The access key lives in the system keyring on
-  Linux, otherwise in a `0600` file, never in the configuration. The passthrough is logged, never
+  Linux and in the login Keychain on macOS, otherwise in a `0600` file, never in the
+  configuration. The passthrough is logged, never
   held.
 - The agents OpenCode and pi, the profiles `default` and `llm-only`, and your own adapter
   ([`docs/guides/agent-profiles.md`](docs/guides/agent-profiles.md)).

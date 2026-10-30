@@ -1435,8 +1435,10 @@ registry! {
     /// Die Konfiguration nennt einen Zugangsschlüssel (`llm.api_key_ref`), und
     /// der Speicher gibt ihn nicht heraus.
     ///
-    /// Der Schlüsselbund hält keinen Eintrag unter dem Namen, `secret-tool`
-    /// fehlt oder antwortet nicht in der Frist, oder die Datei des Rückfalls
+    /// Der Schlüsselbund hält keinen Eintrag unter dem Namen, das Werkzeug
+    /// (`secret-tool`, unter macOS `security`) fehlt oder antwortet nicht in
+    /// der Frist, der Verweis nennt den Schlüsselbund des anderen Systems,
+    /// oder die Datei des Rückfalls
     /// fehlt, ist offen für andere oder gehört einem anderen Konto. Ein Start
     /// bricht dann ab, statt den Agenten ohne den Schlüssel loszuschicken, den
     /// der Mensch eingetragen hat; die Probe schickt dann keinen (HUM-140).
@@ -1446,13 +1448,16 @@ registry! {
     /// Der Zugangsschlüssel liegt in einer Datei und nicht im Schlüsselbund.
     ///
     /// Der Secret Service hat nicht geantwortet (kein `secret-tool`, kein
-    /// Sitzungsbus, ein Fehler oder die Frist), also liegt der Schlüssel als
+    /// Sitzungsbus, ein Fehler oder die Frist), oder unter macOS hat
+    /// `/usr/bin/security` den Schlüssel nicht genommen (gesperrter
+    /// Schlüsselbund in einer Sitzung ohne Bildschirm, ein Schlüssel außerhalb
+    /// von ASCII oder zu lang für `security -i`), also liegt der Schlüssel als
     /// Datei mit `0600` unter `$XDG_DATA_HOME/humanitl/keys`. Eine Warnung, kein
     /// Fehler: Der Schlüssel wirkt, nur schützt ihn auf dieser Maschine das
     /// Dateisystem und nicht der Schlüsselbund (HUM-140).
     CONFIG_019 => "config", "Zugangsschlüssel nicht im Schlüsselbund", "#config_019",
-        "Beim Hinterlegen des Zugangsschlüssels antwortet der Secret Service nicht, und der Schlüssel liegt im `0600`-Rückfall unter `$XDG_DATA_HOME/humanitl/keys`.",
-        "`CopyCommand`: `sudo apt-get install libsecret-tools` bringt `secret-tool`; danach `humanitl llm key set` erneut.";
+        "Beim Hinterlegen des Zugangsschlüssels antwortet der Schlüsselbund des Systems nicht (Secret Service, unter macOS das Keychain über `/usr/bin/security`), und der Schlüssel liegt im `0600`-Rückfall unter `$XDG_DATA_HOME/humanitl/keys`.",
+        "`CopyCommand`: unter Linux bringt `sudo apt-get install libsecret-tools` das Programm `secret-tool`, unter macOS entsperrt `security unlock-keychain` den Schlüsselbund; danach `humanitl llm key set` erneut. Taugt der Schlüssel selbst nicht für `security`, gibt es keinen Vorschlag.";
     /// Der Zugangsschlüssel wurde nicht hinterlegt oder nicht entfernt.
     ///
     /// Der Schlüssel ist leer, länger als 4096 Bytes oder trägt Leerraum oder

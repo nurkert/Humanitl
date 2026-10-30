@@ -116,7 +116,7 @@ deliberately small and consists of components that many other projects use as we
 | system certificate store | trust anchors for the daemon's own connections to destinations (HUM-257) | `/etc/ssl/certs`, written only by root; `webpki-roots` when it holds no usable root | the store `curl`, `apt` and the browser trust; whoever changes it is root and outside the model |
 | the LLM host | sees every prompt | must belong to the user | a declared side channel, not a technical safeguard ([section 5.1](#51-the-llm-passthrough)) |
 | audit key file | HMAC key of the audit chain | `$XDG_DATA_HOME/humanitl/keys/audit.key`, `0600` in `0700` | protects against other accounts, not against the same account |
-| system keyring (Secret Service) | the LLM access key (HUM-140) | `secret-tool` from `libsecret-tools`; without an answer `$XDG_DATA_HOME/humanitl/keys/llm.key`, `0600` in `0700` | protects against other accounts, not against the same account; the agent reads the key inside the sandbox because it needs it |
+| system keyring (Secret Service, on macOS the login Keychain) | the LLM access key (HUM-140, HUM-349) | `secret-tool` from `libsecret-tools`, on macOS `/usr/bin/security`; without an answer `$XDG_DATA_HOME/humanitl/keys/llm.key`, `0600` in `0700` | protects against other accounts, not against the same account; the agent reads the key inside the sandbox because it needs it |
 
 **Not part of the isolation TCB: the Flutter application.** It is a gRPC client like the CLI
 and cannot weaken the sandbox. It is trusted for the *decision*, though: it shows the human
@@ -633,9 +633,30 @@ bus, an error, or 20 seconds without an answer), it lives in
 `CONFIG_019`, and the form says which of the two applies. The file is read only when it belongs
 to this account, is no symlink and is readable by nobody else (otherwise `LLM_009`).
 `config.toml` never holds the key, only its reference `llm.api_key_ref`
-(`secret-service:humanitl/llm` or `file:llm`). It is set through the RPC `LlmKey`, from the form
-or with `humanitl llm key set`, which reads it from `stdin`; no answer of the daemon carries it
+(`secret-service:humanitl/llm`, `keychain:humanitl/llm` or `file:llm`). It is set through the RPC
+`LlmKey`, from the form or with `humanitl llm key set`, which reads it from `stdin`; no answer of the daemon carries it
 back.
+
+*On macOS (HUM-349).* The keyring is the login Keychain, addressed with the system tool
+`/usr/bin/security`, with the same service `humanitl` and account `llm`, the reference
+`keychain:humanitl/llm` and the same 20 seconds. There is no client library: the app is only
+ad-hoc signed, so an item whose access list trusted our binary would ask after every update.
+An item created by `security` trusts that Apple-signed tool, and only it; no `-A`, no `-T`. The
+key goes to `security -i` over `stdin`, never on its command line, and comes back over `stdout`.
+Because the exit code of `security -i` proves nothing (a line it cannot process can end with 0),
+the daemon reads the item back and compares it before it calls the key stored. A key `security`
+cannot carry unchanged (characters outside printable ASCII, or a command over 4000 bytes) never
+reaches the tool. If the Keychain does not take the key, for example because it is locked in a
+session without a screen, the key lives in the `0600` file as on Linux and `CONFIG_019` says so,
+with the reason. A key already in that file keeps working through its `file:` reference; setting
+a key again moves it to the Keychain and removes the file. An item of the Keychain is exactly as
+open to the account as the Secret Service: **every process of this account that runs outside the
+sandbox can read it with `security find-generic-password -s humanitl -a llm -w`**, without a
+prompt, because the access list trusts that tool and not a caller. Against the agent the Keychain
+holds as the Secret Service does: the Seatbelt profile reaches no `securityd` (Mach services are
+an allow list without it), and `~/Library/Keychains` lies in `/Users`, which is not readable.
+`/usr/bin/security` itself may be started inside the sandbox; it finds nothing there. The agent
+gets the key only as the sandbox file of the session.
 
 *Several saved servers (HUM-289).* `config.toml` may hold several model servers under
 `[llm.servers.<name>]`, each with its own endpoint and its own key reference; a new server's key
@@ -712,10 +733,11 @@ a space in a form) is no hit.
 into a request to another destination. There it is a finding, except in the path before `?` and
 in the host; the request is held only at a host without an allowing rule or with
 `hold.hard_block_checksum_secrets`. A key that leaves re-encoded (Base64, split, encrypted) is no
-literal hit. Whoever controls the same user reads the key with `secret-tool lookup` themselves; the
-keyring protects against other users, not against this one. *What to do:* create a key with as
-few rights as possible, revocable at the provider, and install `libsecret-tools` so it does not
-end up in the file.
+literal hit. Whoever controls the same user reads the key with `secret-tool lookup`, on macOS with
+`security find-generic-password`, themselves; the keyring protects against other users, not
+against this one. *What to do:* create a key with as few rights as possible, revocable at the
+provider, and install `libsecret-tools` so it does not end up in the file; on macOS keep the
+login Keychain unlocked when you set the key.
 
 ### 5.2 The project directory `/work`
 
@@ -1359,7 +1381,8 @@ masks come last.
   pseudo-terminals; their follower side carries the extension `com.apple.sandbox.pty` that only
   it gets.
 - **Services:** only the Mach services ordinary tools need for user data, notifications, logging
-  and preferences. Not reachable: `mDNSResponder` (DNS), `trustd`, the pasteboard and launchd.
+  and preferences. Not reachable: `mDNSResponder` (DNS), `trustd`, `securityd` (so no Keychain),
+  the pasteboard and launchd.
 
 Without mounts the sandbox paths of a profile are mapped: `/work` is the project itself,
 `/home/agent`, `/tmp`, `/etc/humanitl` and `/run/humanitl` lie in the session directory under the

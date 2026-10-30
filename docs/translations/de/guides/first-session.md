@@ -1,6 +1,6 @@
 ---
 source: guides/first-session.md
-source-sha256: 5b5bb1f9b878e4ed5690f248d44f469b975d64c17b47650eeb4537df889fb0ec
+source-sha256: f3d050d58a87a24017799929e776e4ae30319a4ae6c2557bc25d81c1ddc885d3
 lang: de
 ---
 # Deine erste Session
@@ -75,7 +75,8 @@ Das Ansprechen speichert den Server nicht. Öffne die Einstellungen mit `Ctrl+,`
 2. „Modell“: das Modell, das der Agent nutzen soll, zum Beispiel `qwen2.5-coder:14b`.
    Nach einer Prüfung trägt ein Klick auf ein gelistetes Modell es ein.
 3. „Zugangsschlüssel“: nur, wenn der Server einen verlangt. Er kommt in den
-   Schlüsselbund des Systems und nie in `config.toml`.
+   Schlüsselbund des Systems (unter macOS den Anmelde-Schlüsselbund) und nie in
+   `config.toml`.
 
 Wie das Einstellungsblatt sagt, werden Änderungen in `config.toml` geschrieben und
 wirken beim nächsten Start des Daemons. Starte ihn einmal neu, während keine Session

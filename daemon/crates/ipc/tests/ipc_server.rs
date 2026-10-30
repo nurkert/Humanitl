@@ -901,9 +901,10 @@ async fn set_config_writes_a_form_setting_and_get_config_reads_it() {
     daemon.shutdown().await;
 }
 
-/// `LlmKey` über den Draht: Ohne Schlüsselbund (kein `secret-tool` im
-/// Suchpfad dieser Pfade) landet der Schlüssel in der Datei `0600`, die
-/// Antwort sagt es, und weder sie noch `config.toml` trägt ihn (HUM-140).
+/// `LlmKey` über den Draht: Ohne Schlüsselbund (diese Pfade haben keinen
+/// Suchpfad, auch nicht für den von macOS) landet der Schlüssel in der Datei
+/// `0600`, die Antwort sagt es, und weder sie noch `config.toml` trägt ihn
+/// (HUM-140).
 #[tokio::test]
 async fn llm_key_over_the_wire_never_carries_the_key_back() {
     const KEY: &str = "sk-wire-0123456789abcdef";

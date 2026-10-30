@@ -1,6 +1,6 @@
 ---
 source: DIAGNOSTICS.md
-source-sha256: b27ed5a8cac42eab9cdb8fc2776eebb492581e41b676e5cad82a3a1b6216e699
+source-sha256: 7046cb4aad7f38650643b2e8b300fa0bf5dfc5a9a4623383dadac2418c117460
 lang: en
 ---
 # Diagnostic codes
@@ -356,9 +356,9 @@ Key is a group
 
 Access key not in the system keyring
 
-**Trigger.** When the access key is stored, the Secret Service does not answer, and the key lies in the `0600` fallback under `$XDG_DATA_HOME/humanitl/keys`.
+**Trigger.** When the access key is stored, the system keyring does not answer (Secret Service, on macOS the Keychain through `/usr/bin/security`), and the key lies in the `0600` fallback under `$XDG_DATA_HOME/humanitl/keys`.
 
-**Fix.** `CopyCommand`: `sudo apt-get install libsecret-tools` brings `secret-tool`; then `humanitl llm key set` again.
+**Fix.** `CopyCommand`: on Linux `sudo apt-get install libsecret-tools` brings the program `secret-tool`, on macOS `security unlock-keychain` unlocks the keychain; then `humanitl llm key set` again. If the key itself is not fit for `security`, there is no suggestion.
 
 #### CONFIG_020
 

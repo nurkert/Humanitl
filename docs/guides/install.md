@@ -43,6 +43,8 @@ or one click in the app.
 The `.deb` declares bubblewrap, EGL and GLES 2 as dependencies, so apt installs
 them; the `.rpm` and the AUR package declare the same, for dnf, zypper and pacman. GTK 3 and GLib come in through the libraries of the app. The tray library
 and `libsecret-tools` are optional; the package recommends `libsecret-tools`.
+On macOS nothing is needed for this: the access key lives in your login Keychain,
+through the system tool `/usr/bin/security`.
 
 On GNOME the tray icon also needs the shell extension "AppIndicator and
 KStatusNotifierItem Support" (Debian: `gnome-shell-extension-appindicator`).
@@ -484,7 +486,7 @@ package, and stay where they are:
 | `~/.local/share/humanitl/blobs/` | request and response bodies of the recording |
 | `~/.local/share/humanitl/audit/audit.jsonl` | the audit chain |
 | `~/.local/share/humanitl/ca/ca.key`, `ca.crt` | the local CA that the proxy uses inside the sandbox; it is never added to the host's trust store |
-| `~/.local/share/humanitl/keys/` | an access key stored as a file, when the keyring was not available |
+| `~/.local/share/humanitl/keys/` | an access key stored as a file, when the keyring (on macOS the Keychain) was not available |
 | `$XDG_RUNTIME_DIR/humanitl/` | socket and token of the daemon; gone after logout |
 
 The table assumes the default `XDG_CONFIG_HOME=~/.config` and

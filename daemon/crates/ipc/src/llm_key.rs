@@ -11,10 +11,11 @@
 //!
 //! Mit `LlmKeyRequest.server` gilt jede Operation dem Schlüssel dieses
 //! gespeicherten Servers (HUM-289): `set` legt ihn unter dem Namen des
-//! Servers ab (`secret-service:humanitl/<name>`, oder unter dem Namen, den
-//! sein Verweis schon trägt) und richtet `llm.servers.<name>.api_key_ref`
-//! darauf, beim aktiven Server auch `llm.api_key_ref`. Ohne Namen gilt der
-//! aktive Server, und ohne Einträge `llm.api_key_ref` wie bisher.
+//! Servers ab (`secret-service:humanitl/<name>`, unter macOS
+//! `keychain:humanitl/<name>`, oder unter dem Namen, den sein Verweis schon
+//! trägt) und richtet `llm.servers.<name>.api_key_ref` darauf, beim aktiven
+//! Server auch `llm.api_key_ref`. Ohne Namen gilt der aktive Server, und ohne
+//! Einträge `llm.api_key_ref` wie bisher.
 //!
 //! Die Reihenfolge von `set` ist Absicht: erst der Speicher, dann der Verweis.
 //! Scheitert der Verweis, steht ein Schlüssel im Speicher, auf den nichts
@@ -36,9 +37,10 @@ const KEY_REF_PATH: [&str; 2] = ["llm", "api_key_ref"];
 
 /// Beantwortet einen Auftrag an `LlmKey`.
 ///
-/// Blockiert: Es startet `secret-tool` und schreibt `config.toml`. Der Dienst
-/// ruft es in [`tokio::task::spawn_blocking`]. Der ganze Ablauf steht unter
-/// [`servers::lock`], derselben Sperre wie `LlmServers` (HUM-289).
+/// Blockiert: Es startet das Werkzeug des Schlüsselbunds und schreibt
+/// `config.toml`. Der Dienst ruft es in [`tokio::task::spawn_blocking`]. Der
+/// ganze Ablauf steht unter [`servers::lock`], derselben Sperre wie
+/// `LlmServers` (HUM-289).
 ///
 /// # Errors
 ///
@@ -420,7 +422,9 @@ fn status_of(
 /// Der Ort in seiner Wire-Form.
 const fn store_to_proto(store: StoreKind) -> v1::LlmKeyStore {
     match store {
-        StoreKind::SecretService => v1::LlmKeyStore::SecretService,
+        // Der Wert meint auf dem Draht den Schlüsselbund des Systems; welcher,
+        // sagt der Verweis (HUM-349).
+        StoreKind::SecretService | StoreKind::Keychain => v1::LlmKeyStore::SecretService,
         StoreKind::File => v1::LlmKeyStore::File,
     }
 }
@@ -505,6 +509,43 @@ mod tests {
         )
         .unwrap();
         assert!(status.set);
+    }
+
+    /// Unter macOS trägt der Verweis den Ort, und der Wert auf dem Draht
+    /// bleibt „Schlüsselbund des Systems" (HUM-349).
+    #[test]
+    fn a_key_in_the_keychain_answers_with_its_reference() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let store = dir.path().join("keychain");
+        std::fs::create_dir_all(&store).unwrap();
+        let script = dir.path().join("security");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = -i ]; then sed -e 's/.* -w \"//' -e 's/\"$//' \
+                 > '{0}/llm'; exit 0; fi\n[ -f '{0}/llm' ] || exit 44\n\
+                 [ \"$1\" = find-generic-password ] && exec cat '{0}/llm'\n\
+                 rm '{0}/llm'\n",
+                store.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let keys = KeyStore::for_paths(&paths).with_keychain_tool(Some(script));
+
+        let stored = answer(&paths, &keys, set_op(SECRET)).unwrap();
+        assert!(stored.set, "{stored:?}");
+        assert!(stored.diagnostics.is_empty(), "{stored:?}");
+        assert_eq!(stored.store, v1::LlmKeyStore::SecretService as i32);
+        assert_eq!(stored.key_ref, "keychain:humanitl/llm");
+        let config = std::fs::read_to_string(paths.config_path()).unwrap();
+        assert!(
+            config.contains("api_key_ref = \"keychain:humanitl/llm\""),
+            "{config}"
+        );
+        assert!(!config.contains(SECRET), "{config}");
     }
 
     /// Ohne Schlüsselbund liegt er in der Datei, und die Antwort sagt das.
