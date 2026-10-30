@@ -35,6 +35,9 @@ INLINE_CODE = re.compile(r"(`+)(.+?)\1")
 # [text](target) and ![alt](target); the target ends at whitespace or ")".
 MD_LINK = re.compile(r"!?\[(?:[^\[\]]|\[[^\]]*\])*\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
 HTML_LINK = re.compile(r"""(?:href|src)\s*=\s*["']([^"']+)["']""")
+# <source srcset="a.png 1x, b.png 2x">: a list of candidates, each a URL and an
+# optional descriptor. Every URL is checked, not only the first (HUM-344).
+HTML_SRCSET = re.compile(r"""srcset\s*=\s*["']([^"']+)["']""")
 HEADING = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
 EXPLICIT_ANCHOR = re.compile(r"""<a\s+[^>]*(?:id|name)\s*=\s*["']([^"']+)["']""")
 SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
@@ -105,6 +108,8 @@ def check_file(path: Path, cache: dict[Path, set[str]]) -> list[str]:
     lines = strip_code(path.read_text(encoding="utf-8").splitlines())
     for number, line in enumerate(lines, start=1):
         targets = MD_LINK.findall(line) + HTML_LINK.findall(line)
+        for srcset in HTML_SRCSET.findall(line):
+            targets += [c.split()[0] for c in srcset.split(",") if c.strip()]
         for target in targets:
             if SCHEME.match(target) or target.startswith("//"):
                 continue
@@ -156,6 +161,8 @@ def self_test() -> int:
         "missing-fragment": ("[a](other.md#nope)", "no heading or anchor #nope"),
         "missing-local-fragment": ("[a](#nope)", "no heading or anchor #nope"),
         "html-src": ('<img src="gone.png">', "link target does not exist: gone.png"),
+        "html-srcset": ('<source srcset="img.png 1x, gone.png 2x">',
+                        "link target does not exist: gone.png"),
     }
     failures = 0
     with tempfile.TemporaryDirectory() as tmp:
