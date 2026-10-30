@@ -3400,5 +3400,7 @@
   "diagSANDBOX032Title": "Disposable layer full",
   "@diagSANDBOX032Title": {"description": "Title of the diagnostic SANDBOX_032 (docs/DIAGNOSTICS.md): the upper layer of a disposable sandbox grew over its cap in RAM, and the daemon stopped the sandbox (HUM-350)."},
   "diagSANDBOX032Why": "The changes of the disposable run grew over the cap of its layer in RAM, so the sandbox was stopped; what was written before still waits.",
-  "@diagSANDBOX032Why": {"description": "Generic cause of SANDBOX_032. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
+  "@diagSANDBOX032Why": {"description": "Generic cause of SANDBOX_032. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "interceptDiagnosticRepeats": "{requests, plural, =1{1 request} other{{requests} requests}}, {findings, plural, =0{no new findings} =1{1 new finding} other{{findings} new findings}}",
+  "@interceptDiagnosticRepeats": {"description": "Counter on one LLM_005 card that stands for several consecutive warnings about the same language model host (HUM-354): how many requests it covers and how many new findings they reported together. Open request opens the latest of them.", "placeholders": {"requests": {"type": "int"}, "findings": {"type": "int"}}}
 }

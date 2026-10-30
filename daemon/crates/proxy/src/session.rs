@@ -20,10 +20,12 @@
 //! nicht: Wer die Grenzen, die Detektoren oder den Resolver anders will,
 //! startet den Daemon neu.
 
-use std::sync::{PoisonError, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use humanitl_config::AskMode;
+
+use crate::llm_warnings::LlmWarningMemory;
 
 /// Die drei Werte, die eine Sitzung mitbringt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,9 +67,14 @@ impl SessionState {
 /// also selten; geschrieben genau beim Start einer Sitzung. Ein `RwLock`
 /// reicht dafür, und er hält die drei Werte zusammen — ein Frage-Modus ohne
 /// die Frist, die zu ihm gehört, wäre ein Zustand, den niemand gewählt hat.
+///
+/// Dazu gehört das Gedächtnis der Warnung `LLM_005` (HUM-354): Es gilt für
+/// einen Lauf, und [`SessionSettings::set`] ist die eine Stelle, die vom Start
+/// eines Laufs erfährt.
 #[derive(Debug)]
 pub struct SessionSettings {
     state: RwLock<SessionState>,
+    llm_warnings: Arc<LlmWarningMemory>,
 }
 
 impl SessionSettings {
@@ -76,6 +83,7 @@ impl SessionSettings {
     pub fn new(state: SessionState) -> Self {
         Self {
             state: RwLock::new(state),
+            llm_warnings: Arc::new(LlmWarningMemory::new()),
         }
     }
 
@@ -95,9 +103,25 @@ impl SessionSettings {
     }
 
     /// Setzt den Stand für die Sitzung, die gerade startet.
+    ///
+    /// Der Sandbox-Dienst ruft das bei jedem Start eines Laufs. Ein neuer Lauf
+    /// ist ein neues Gespräch mit dem Modell, deshalb vergisst `LLM_005` hier,
+    /// wovor es schon gewarnt hat: Eine Warnung, die im letzten Lauf niemand
+    /// gesehen hat, darf im nächsten nicht schweigen.
     pub fn set(&self, state: SessionState) {
         let mut slot = self.state.write().unwrap_or_else(PoisonError::into_inner);
         *slot = state;
+        drop(slot);
+        self.llm_warnings.reset();
+    }
+
+    /// Das Gedächtnis der Warnung `LLM_005`, das mit jedem Lauf neu beginnt.
+    ///
+    /// [`RulesPipeline::with_warnings`](crate::pipeline::RulesPipeline::with_warnings)
+    /// nimmt genau diesen Wert.
+    #[must_use]
+    pub fn llm_warnings(&self) -> Arc<LlmWarningMemory> {
+        Arc::clone(&self.llm_warnings)
     }
 }
 
@@ -150,5 +174,45 @@ mod tests {
         assert_eq!(state.ask_mode, AskMode::None);
         assert_eq!(state.hold_timeout, Duration::ZERO);
         assert_eq!(state.llm.as_deref(), Some("model.lan:11434"));
+    }
+
+    #[test]
+    fn a_new_run_resets_the_llm_warning_memory() {
+        // Rot, sobald `set` das Gedächtnis nicht mehr leert: Dann schwiege
+        // eine Warnung, die im letzten Lauf niemand gesehen hat, bis zum
+        // Neustart des Daemons (HUM-354).
+        use humanitl_core::{Finding, FindingKind, FindingLocation, SessionId, Tier};
+
+        let settings = SessionSettings::default();
+        let memory = settings.llm_warnings();
+        let session = SessionId::new();
+        let value = "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8";
+        let finding = Finding::new(
+            FindingKind::ApiKey("github".to_owned()),
+            0..value.len(),
+            FindingLocation::Body,
+            Tier::Checksum,
+            value,
+        );
+        let endpoint = "127.0.0.1:8080";
+        assert_eq!(
+            memory
+                .observe(session, endpoint, std::slice::from_ref(&finding))
+                .new,
+            1
+        );
+        assert_eq!(
+            memory
+                .observe(session, endpoint, std::slice::from_ref(&finding))
+                .new,
+            0
+        );
+        settings.set(SessionState::for_config(AskMode::Ui, 300, None));
+        assert_eq!(
+            memory
+                .observe(session, endpoint, std::slice::from_ref(&finding))
+                .new,
+            1
+        );
     }
 }

@@ -1781,8 +1781,12 @@ fn build_handler(
     // `snapshot()` ist die Naht zum Regelspeicher: dasselbe Handle bleibt über
     // jede Änderung gültig, der Inhalt wird ersetzt. Der Proxy liest damit
     // immer den geltenden Satz, ohne den Speicher zu kennen (HUM-027).
-    let pipeline: Arc<dyn FlowPipeline> =
-        Arc::new(RulesPipeline::new(Arc::clone(queue), rules.snapshot(), ask));
+    // Das Gedächtnis der Warnung `LLM_005` haengt an den Einstellungen der
+    // Sitzung: Jeder Start eines Laufs leert es (HUM-354).
+    let pipeline: Arc<dyn FlowPipeline> = Arc::new(
+        RulesPipeline::new(Arc::clone(queue), rules.snapshot(), ask)
+            .with_warnings(settings.llm_warnings()),
+    );
     // Der Meta-Endpunkt liest denselben Regel-Schnappschuss wie die Pipeline
     // (HUM-073): Was `http://humanitl.internal/` zeigt, ist der Satz, nach dem
     // entschieden wird, und keine zweite Kopie.
