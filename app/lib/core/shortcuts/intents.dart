@@ -409,24 +409,26 @@ const LogicalKeyboardKey railToggleKey = LogicalKeyboardKey.digit0;
 /// chords of the terminal (HUM-301) and `Ctrl+Shift+P` for the floating
 /// terminal (HUM-300), `Ctrl+Shift+T` for a further shell and
 /// `Ctrl+PageUp`/`Ctrl+PageDown` for its tabs (HUM-314).
-Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
-  for (int i = 0; i < navigationKeys.length; i++)
-    SingleActivator(navigationKeys[i], control: true): NavIntent(i),
-  const SingleActivator(LogicalKeyboardKey.keyK, control: true):
-      const PaletteIntent(),
-  const SingleActivator(LogicalKeyboardKey.comma, control: true):
-      const SettingsIntent(),
-  const SingleActivator(railToggleKey, control: true): const ToggleRailIntent(),
-  terminalFullWindowActivator: const ToggleTerminalFullWindowIntent(),
-  terminalFullWindowNumpadActivator: const ToggleTerminalFullWindowIntent(),
-  terminalFloatActivator: const ToggleTerminalFloatIntent(),
-  const TerminalFocusActivator(): const FocusTerminalIntent(),
-  for (final TerminalZoom zoom in TerminalZoom.values)
-    TerminalZoomActivator(zoom): TerminalZoomIntent(zoom),
-  openShellActivator: const OpenShellIntent(),
-  previousTerminalTabActivator: const SwitchTerminalTabIntent(-1),
-  nextTerminalTabActivator: const SwitchTerminalTabIntent(1),
-};
+Map<ShortcutActivator, Intent> shellShortcuts() =>
+    withCommandOnMac(<ShortcutActivator, Intent>{
+      for (int i = 0; i < navigationKeys.length; i++)
+        SingleActivator(navigationKeys[i], control: true): NavIntent(i),
+      const SingleActivator(LogicalKeyboardKey.keyK, control: true):
+          const PaletteIntent(),
+      const SingleActivator(LogicalKeyboardKey.comma, control: true):
+          const SettingsIntent(),
+      const SingleActivator(railToggleKey, control: true):
+          const ToggleRailIntent(),
+      terminalFullWindowActivator: const ToggleTerminalFullWindowIntent(),
+      terminalFullWindowNumpadActivator: const ToggleTerminalFullWindowIntent(),
+      terminalFloatActivator: const ToggleTerminalFloatIntent(),
+      const TerminalFocusActivator(): const FocusTerminalIntent(),
+      for (final TerminalZoom zoom in TerminalZoom.values)
+        TerminalZoomActivator(zoom): TerminalZoomIntent(zoom),
+      openShellActivator: const OpenShellIntent(),
+      previousTerminalTabActivator: const SwitchTerminalTabIntent(-1),
+      nextTerminalTabActivator: const SwitchTerminalTabIntent(1),
+    });
 
 /// The digit keys of the navigation shortcuts, in section order.
 ///
@@ -537,3 +539,29 @@ class NoteIntent extends Intent {
 // because `FilterIntent`, `ToggleDomainPanelIntent` and `NoteIntent` belong to
 // the vocabulary of CONVENTIONS 3.9 and come back with the screens that
 // answer them.
+
+/// On macOS every `Ctrl` chord answers to `Cmd` as well (HUM-325).
+///
+/// The `Ctrl` form stays, so the hints that name it remain true there; `Cmd`
+/// is what a Mac user presses first. [platform] defaults to
+/// [defaultTargetPlatform]; tests pass their own.
+Map<ShortcutActivator, Intent> withCommandOnMac(
+  Map<ShortcutActivator, Intent> shortcuts, {
+  TargetPlatform? platform,
+}) {
+  if ((platform ?? defaultTargetPlatform) != TargetPlatform.macOS) {
+    return shortcuts;
+  }
+  return <ShortcutActivator, Intent>{
+    ...shortcuts,
+    for (final MapEntry<ShortcutActivator, Intent> entry in shortcuts.entries)
+      if (entry.key case final SingleActivator chord when chord.control)
+        SingleActivator(
+          chord.trigger,
+          meta: true,
+          shift: chord.shift,
+          alt: chord.alt,
+          includeRepeats: chord.includeRepeats,
+        ): entry.value,
+  };
+}

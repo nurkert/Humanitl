@@ -45,7 +45,7 @@
 //! # Die drei Garantien
 //!
 //! Gemessen wird in der Sandbox, die läuft: Der Shim schreibt seine Prüfzeilen
-//! von innen, [`BwrapBackend::isolation_check`] faltet sie zu den drei
+//! von innen, [`SandboxBackend::isolation_check`] faltet sie zu den drei
 //! Garantien, und dieses Modul reicht sie als [`v1::CheckResult`] weiter. Es
 //! prüft nichts selbst; eine zweite Prüfpipeline neben der vorhandenen wäre
 //! eine zweite Wahrheit über dieselbe Sandbox.
@@ -96,10 +96,10 @@ use humanitl_recorder::Recorder;
 use humanitl_sandbox::agent::{opencode, pi};
 use humanitl_sandbox::summary::SessionSummary;
 use humanitl_sandbox::{
-    AdapterRegistry, AgentContext, AgentKey, BwrapBackend, CheckResult, IsolationCheck, KILL_GRACE,
-    LaunchInputs, MIN_BWRAP_VERSION, MountPolicy, SANDBOX_SHELL, SandboxBackend, SandboxFile,
-    SandboxHandle, SandboxProfile, SessionContext, StdioMode, Termination, WorkDirSource,
-    check_project_dir, shell_line,
+    AdapterRegistry, AgentContext, AgentKey, CheckResult, IsolationCheck, KILL_GRACE, LaunchInputs,
+    MountPolicy, PlatformBackend, SANDBOX_SHELL, SandboxBackend, SandboxFile, SandboxHandle,
+    SandboxProfile, SessionContext, StdioMode, Termination, WorkDirSource, check_project_dir,
+    shell_line,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -320,7 +320,7 @@ struct Running {
     /// (`BwrapBackend::with_report_timeout`). Ein zweites, frisch gefundenes
     /// Backend hätte eine andere Frist und prüfte damit unter anderen
     /// Bedingungen als es gestartet hat.
-    backend: BwrapBackend,
+    backend: PlatformBackend,
     started_at: SystemTime,
     profile: String,
     work_dir: PathBuf,
@@ -1347,13 +1347,13 @@ impl Inner {
     /// Was einem Start im Weg steht, bevor jemand ihn versucht.
     ///
     /// Heute genau eine Frage: Gibt es `bwrap`, und ist es neu genug
-    /// ([`BwrapBackend::detect`], `SANDBOX_001` bis `SANDBOX_003`)? Der
+    /// (`PlatformBackend::detect`, `SANDBOX_001` bis `SANDBOX_003`)? Der
     /// Schnappschuss selbst kommt auch ohne `bwrap` zustande — er zeigt, was
     /// starten *würde* —, aber die Schaltfläche gehört dann aus, und der Grund
     /// dazu (`docs/UX.md` 5.3). Die drei Garantien prüft HUM-041, und sie
     /// lassen sich ohnehin erst an einer laufenden Sandbox prüfen.
     fn preflight(&self) -> Vec<Diagnostic> {
-        match BwrapBackend::detect(self.paths.clone()) {
+        match PlatformBackend::detect(self.paths.clone()) {
             Ok(_) => Vec::new(),
             Err(diagnostic) => vec![diagnostic],
         }
@@ -2689,7 +2689,7 @@ impl Inner {
     }
 
     /// Das Backend, das gestartet hat, und sein Handle; beides oder nichts.
-    fn running_parts(&self) -> Option<(BwrapBackend, Arc<SandboxHandle>)> {
+    fn running_parts(&self) -> Option<(PlatformBackend, Arc<SandboxHandle>)> {
         lock(&self.running)
             .as_ref()
             .map(|running| (running.backend.clone(), Arc::clone(&running.handle)))
@@ -2865,9 +2865,8 @@ impl Inner {
         // Ein Schnappschuss ist eine Anzeige, kein Start: Ohne `bwrap` steht
         // die Zeile trotzdem da, und der Start scheitert später mit dem
         // Befund, der dazu gehört (`SANDBOX_001`).
-        let backend = BwrapBackend::detect(self.paths.clone()).unwrap_or_else(|_| {
-            BwrapBackend::unchecked("bwrap", MIN_BWRAP_VERSION, self.paths.clone())
-        });
+        let backend = PlatformBackend::detect(self.paths.clone())
+            .unwrap_or_else(|_| PlatformBackend::fallback(self.paths.clone()));
         let backend = match approved {
             Some(dir) => backend.with_approved_work_dir(dir),
             None => backend,
@@ -3337,7 +3336,7 @@ fn started_without_key(mut found: Diagnostic) -> Diagnostic {
 struct Prepared {
     profile: SandboxProfile,
     session: SessionContext,
-    backend: BwrapBackend,
+    backend: PlatformBackend,
     /// Wer den Wert jeder Umgebungsvariablen zuletzt geschrieben hat.
     ///
     /// Dieselbe Reihenfolge, in der [`SandboxProfile::effective_env`]
@@ -3920,7 +3919,7 @@ fn check_event(result: &CheckResult) -> v1::SandboxEvent {
 /// Bericht —, und das ist `SANDBOX_013` und kein Durchlauf.
 ///
 /// Ein rotes Ergebnis ohne eigenen `Diagnostic` bleibt rot.
-/// [`BwrapBackend::isolation_check`] legt zu jedem roten Ergebnis einen an;
+/// [`SandboxBackend::isolation_check`] legt zu jedem roten Ergebnis einen an;
 /// ein zweites Backend (ADR-005 nennt Docker als späteren Kandidaten) muss das
 /// nicht tun, und diese Stelle darf aus einem fehlenden Befund keinen
 /// bestandenen Start machen. Geprüft wird deshalb `passed`, nie das
@@ -4708,6 +4707,7 @@ mod tests {
 
     /// A native executable in a per-user bin directory, as the ELF check
     /// wants it (HUM-278).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn native_program(dir: &Path, name: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::create_dir_all(dir).unwrap();
@@ -4723,6 +4723,8 @@ mod tests {
     /// A session started with a caller's command binds the configured agent
     /// by HUM-278's rules and puts its directory first on `PATH`; the
     /// caller's own command is not bound and not rewritten (HUM-280).
+    // Plant mit dem Linux-Sandbox-Backend (HUM-312).
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_callers_command_gets_the_configured_agent_on_its_path() {
         let home = tempfile::TempDir::new().unwrap();
@@ -4820,7 +4822,7 @@ mod tests {
         Prepared {
             profile,
             session,
-            backend: BwrapBackend::unchecked("bwrap", MIN_BWRAP_VERSION, paths),
+            backend: PlatformBackend::fallback(paths),
             env_origin: BTreeMap::new(),
             adapter_files: BTreeSet::new(),
             warnings: Vec::new(),
@@ -4970,7 +4972,7 @@ mod tests {
     /// Die zweite Mutationsprobe: Rot bleibt rot, auch ohne Befund daneben.
     ///
     /// Wer `passed` gegen `diagnostic.is_some()` tauschte — naheliegend, weil
-    /// [`BwrapBackend::isolation_check`] zu jedem roten Ergebnis einen Befund
+    /// [`SandboxBackend::isolation_check`] zu jedem roten Ergebnis einen Befund
     /// legt —, ließe ein Backend, das keinen mitschickt, mit einer roten
     /// Garantie durchstarten.
     #[test]

@@ -2,7 +2,8 @@
 # with .deb, archive and checksums. Since HUM-273 they are published as
 # regular releases (marked latest), no longer as pre-releases.
 #
-#   guard -> build -> check-deb -> release
+#   guard -> build -> check-deb ------------+-> release
+#         -> build-macos -> check-macos ----+
 #
 # guard      Tag hat die Form v0.0.N, der Commit liegt auf `main`, und der
 #            ci.yml-Lauf dieses Commits ist mit `success` beendet.
@@ -11,6 +12,12 @@
 #            .deb und tar.gz bauen, SHA256SUMS, Release-Notes.
 # check-deb  Das .deb in einem frischen Ubuntu-24.04-Container installieren,
 #            pruefen, mit --purge entfernen; lintian ohne Fehler und Warnungen.
+# build-macos  macOS-15: universal binaries (arm64 + x86_64), die Flutter-App,
+#            beides zu Humanitl.app, ad-hoc signiert, als gestaltetes .dmg und
+#            als .zip (HUM-326, packaging/macos).
+# check-macos  Ein frischer macOS-Runner haengt das .dmg ein und prueft
+#            Signatur, Architekturen, Version, den Start der App und die
+#            Seatbelt-Escape-Tests gegen die Programme im Buendel.
 # release    Tags only: GitHub release, regular (not a pre-release), latest.
 #
 # `workflow_dispatch` ist der Probelauf: Er baut und prueft alles mit der
@@ -334,10 +341,163 @@ jobs:
           set -euo pipefail
           ./packaging/deb/lintian.sh "artefacts/dist/humanitl_${VERSION}_amd64.deb"
 
+  build-macos:
+    name: build-macos
+    needs: guard
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: release-macos
+      - uses: ./.github/actions/setup-flutter
+        with:
+          protoc-plugin: "true"
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
+      - name: Install dmgbuild
+        # Writes the Finder layout of the disk image itself; no Finder is
+        # remote controlled on the runner. The package and its dependencies
+        # are pinned with hashes, like every action is pinned to a commit.
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/dmg"
+          "$RUNNER_TEMP/dmg/bin/pip" install --quiet --require-hashes --no-deps \
+            -r packaging/macos/dmg/requirements.txt
+          echo "DMGBUILD=$RUNNER_TEMP/dmg/bin/dmgbuild" >> "$GITHUB_ENV"
+
+      - name: Stamp the version into this checkout
+        run: |
+          set -euo pipefail
+          ./packaging/release/stamp-version.sh "$VERSION"
+
+      - name: Build universal humanitld, humanitl and humanitl-shim
+        run: |
+          set -euo pipefail
+          ./packaging/macos/build-binaries.sh "$RUNNER_TEMP/bin"
+          ./packaging/release/check-version.sh "$VERSION" "$RUNNER_TEMP/bin"
+
+      - name: Generate the Dart code
+        run: |
+          set -euo pipefail
+          make flutter-codegen
+
+      - name: Build the macOS app
+        run: |
+          set -euo pipefail
+          build_number="$(git rev-list --count HEAD)"
+          cd app
+          flutter build macos --release --build-name "$VERSION" --build-number "$build_number"
+
+      - name: Bundle, sign ad hoc, disk image and zip
+        run: |
+          set -euo pipefail
+          ./packaging/macos/build-app.sh "$VERSION" "$RUNNER_TEMP/bin" \
+            app/build/macos/Build/Products/Release/Humanitl.app dist-macos
+          ( cd dist-macos && shasum -a 256 Humanitl-*.dmg Humanitl-*.zip > SHA256SUMS-macos )
+          {
+            echo "### Humanitl $VERSION for macOS"
+            echo
+            echo '```'
+            ls -l dist-macos
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ needs.guard.outputs.artifact }}-macos
+          path: dist-macos/
+          if-no-files-found: error
+          retention-days: 14
+
+  check-macos:
+    name: check-macos
+    needs: [guard, build-macos]
+    # A runner that has never seen the build: the disk image is all it gets.
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.guard.outputs.artifact }}-macos
+          path: artefacts
+      - name: Mount the disk image and take the app out
+        run: |
+          set -euo pipefail
+          cd artefacts
+          shasum -a 256 -c SHA256SUMS-macos
+          mount="$RUNNER_TEMP/dmg-mount"
+          mkdir -p "$mount" "$RUNNER_TEMP/Applications"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" "Humanitl-$VERSION-macos.dmg"
+          test -L "$mount/Applications" || { echo "::error::the disk image has no Applications link"; exit 1; }
+          test -f "$mount/.background.tiff" -a -f "$mount/.DS_Store" || { echo "::error::the disk image has no background"; exit 1; }
+          ditto "$mount/Humanitl.app" "$RUNNER_TEMP/Applications/Humanitl.app"
+          hdiutil detach "$mount" || hdiutil detach -force "$mount"
+          echo "APP=$RUNNER_TEMP/Applications/Humanitl.app" >> "$GITHUB_ENV"
+      - name: Signature, architectures and version
+        run: |
+          set -euo pipefail
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          for program in "$APP/Contents/MacOS/Humanitl" "$APP"/Contents/MacOS/bin/*; do
+            archs="$(lipo -archs "$program")"
+            echo "$program: $archs"
+            [[ " $archs " == *" arm64 "* && " $archs " == *" x86_64 "* ]] ||
+              { echo "::error::$program is not universal: $archs"; exit 1; }
+          done
+          ./packaging/release/check-version.sh "$VERSION" "$APP/Contents/MacOS/bin"
+          got="$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")"
+          [[ "$got" == "$VERSION" ]] || { echo "::error::the app carries version $got"; exit 1; }
+      - name: The zip carries the same app and its notes
+        run: |
+          set -euo pipefail
+          # With plain unzip, which drops extended attributes, like many tools
+          # do: the signature must not live in them.
+          zipped="$RUNNER_TEMP/zip"
+          mkdir -p "$zipped"
+          /usr/bin/unzip -q "artefacts/Humanitl-$VERSION-macos.zip" -d "$zipped"
+          for file in Humanitl.app README.md LICENSE INSTALL.txt; do
+            test -e "$zipped/Humanitl/$file" || { echo "::error::the zip lacks Humanitl/$file"; exit 1; }
+          done
+          codesign --verify --deep --strict "$zipped/Humanitl/Humanitl.app"
+          # The same signed bundle: the code directory hash covers the
+          # executable and, through the sealed resources, every other file.
+          cdhash() { codesign -dvvv "$1" 2>&1 | sed -n 's/^CDHash=//p'; }
+          [[ "$(cdhash "$zipped/Humanitl/Humanitl.app")" == "$(cdhash "$APP")" ]] ||
+            { echo "::error::the app in the zip differs from the one in the disk image"; exit 1; }
+      - name: The app starts
+        run: |
+          set -euo pipefail
+          home="$RUNNER_TEMP/app-home"
+          mkdir -p "$home"
+          HOME="$home" "$APP/Contents/MacOS/Humanitl" > "$RUNNER_TEMP/app.log" 2>&1 &
+          pid=$!
+          sleep 10
+          if ! kill -0 "$pid" 2>/dev/null; then
+            echo "::error::the app ended within 10 s: $(tail -20 "$RUNNER_TEMP/app.log" | tr '\n' ' ')"
+            exit 1
+          fi
+          kill "$pid"
+      - name: Seatbelt escape tests against the bundled programs
+        run: |
+          set -euo pipefail
+          ./tests/escape/macos/run.sh "$APP/Contents/MacOS/bin"
+
   release:
     name: release
-    needs: [guard, build, check-deb]
-    # Nur ein Tag legt ein Release an. Der Probelauf endet mit check-deb.
+    needs: [guard, build, check-deb, build-macos, check-macos]
+    # Nur ein Tag legt ein Release an. Der Probelauf endet mit check-deb und
+    # check-macos.
     if: needs.guard.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -354,6 +514,19 @@ jobs:
         with:
           name: ${{ needs.guard.outputs.artifact }}
           path: artefacts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.guard.outputs.artifact }}-macos
+          path: artefacts/macos
+      - name: Add the macOS files and their sums to the Linux ones
+        # One SHA256SUMS for all assets; each half was summed where it was
+        # built, and both are checked here before anything is published.
+        run: |
+          set -euo pipefail
+          cd artefacts/macos
+          shasum -a 256 -c SHA256SUMS-macos
+          cp "Humanitl-$VERSION-macos.dmg" "Humanitl-$VERSION-macos.zip" ../dist/
+          cat SHA256SUMS-macos >> ../dist/SHA256SUMS
       - name: Create the release, if the tag still points at the checked commit
         # Pruefung und Anlegen in einem Schritt, damit zwischen beiden nichts
         # liegt. Zwischen guard und hier liegt der ganze Bau: Wer den Tag in der
@@ -416,6 +589,8 @@ jobs:
             --notes-file ../dist-meta/RELEASE_NOTES.md \
             "humanitl_${VERSION}_amd64.deb" \
             "humanitl-${VERSION}-linux-x86_64.tar.gz" \
+            "Humanitl-${VERSION}-macos.dmg" \
+            "Humanitl-${VERSION}-macos.zip" \
             SHA256SUMS
 
           # Das Fenster zwischen Pruefung und Anlegen schliessen: Zeigt der Tag

@@ -4,6 +4,8 @@
 /// technical detail in the language of the transport.
 library;
 
+import 'package:flutter/foundation.dart';
+
 import '../domain/domain.dart';
 import '../ui/shell_command.dart';
 import 'private_path.dart';
@@ -20,7 +22,13 @@ abstract final class ClientDiagnostics {
   /// It stands in `why` and never as a second action: `Diagnostic.fix` is one
   /// `FixAction`, the line carries `InstallService`, and the person who would
   /// rather type it reads it in the cause (HUM-044, diagnostic table).
-  static const String startUnitCommand = 'systemctl --user start humanitld';
+  ///
+  /// On macOS the daemon is a launchd agent, and `humanitl daemon install`
+  /// loads it (HUM-325).
+  static String get startUnitCommand =>
+      defaultTargetPlatform == TargetPlatform.macOS
+      ? 'humanitl daemon install'
+      : 'systemctl --user start humanitld';
 
   /// Command that restarts the installed user unit, offered as the fix for
   /// [tokenRejected] (HUM-058, row 4).
@@ -29,7 +37,12 @@ abstract final class ClientDiagnostics {
   /// starts, so a token that does not match belongs to another daemon or to
   /// an earlier run. A restart of the one the app talks to writes the pair
   /// anew; the next attempt of the connection reads it.
-  static const String restartUnitCommand = 'systemctl --user restart humanitld';
+  ///
+  /// On macOS `humanitl daemon restart` restarts the launchd agent (HUM-325).
+  static String get restartUnitCommand =>
+      defaultTargetPlatform == TargetPlatform.macOS
+      ? 'humanitl daemon restart'
+      : 'systemctl --user restart humanitld';
 
   /// Where a matching pair of app and daemon is downloaded, offered as the
   /// fix for [protoIncompatible].
@@ -179,7 +192,7 @@ abstract final class ClientDiagnostics {
       return diagnostic;
     }
     return diagnostic.copyWith(
-      fix: const FixAction.copyCommand(command: restartUnitCommand),
+      fix: FixAction.copyCommand(command: restartUnitCommand),
     );
   }
 

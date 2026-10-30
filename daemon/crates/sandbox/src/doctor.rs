@@ -915,6 +915,8 @@ pub enum DiskFacts {
 /// ihn [`Probe::collect`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct MachineFacts {
+    /// Auf welchem System gemessen wurde (HUM-324).
+    pub platform: Platform,
     /// `bwrap` und seine Fassung.
     pub bwrap: BwrapFacts,
     /// Nutzer-Namensräume.
@@ -939,12 +941,56 @@ pub struct MachineFacts {
     pub disk: DiskFacts,
 }
 
+/// Auf welchem System der Doctor urteilt (HUM-324).
+///
+/// Unter macOS gibt es kein bwrap, keine Nutzer-Namensräume, kein seccomp,
+/// kein systemd und keinen Tray über D-Bus. Die Zeilen bleiben dieselben, damit
+/// Oberfläche und `--json` dieselbe Form lesen; unter macOS urteilen sie über
+/// das, was dort an ihrer Stelle steht.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Platform {
+    /// Linux: die Zeilen wie beschrieben.
+    #[default]
+    Linux,
+    /// macOS.
+    MacOs {
+        /// `/usr/bin/sandbox-exec`, wenn es ausführbar ist.
+        sandbox_exec: Option<PathBuf>,
+        /// Die Datei des launchd-Agenten, wenn sie liegt.
+        launch_agent: Option<PathBuf>,
+    },
+}
+
 /// Urteilt über die Tatsachen; eine Zeile je [`CheckId::ALL`].
 ///
 /// Reine Funktion: Sie liest keine Datei, startet kein Programm und fasst das
 /// Netz nicht an. Alles, worüber sie urteilt, steht in `facts`.
 #[must_use]
 pub fn run(facts: &MachineFacts) -> DoctorReport {
+    if let Platform::MacOs {
+        sandbox_exec,
+        launch_agent,
+    } = &facts.platform
+    {
+        return DoctorReport {
+            checks: vec![
+                checks::seatbelt(sandbox_exec.as_deref()),
+                checks::not_on_macos(CheckId::Userns, "Seatbelt needs no user namespaces"),
+                checks::not_on_macos(
+                    CheckId::Seccomp,
+                    "the Seatbelt profile takes the place of seccomp",
+                ),
+                checks::mac_runtime_dir(&facts.runtime_dir),
+                checks::launch_agent(launch_agent.as_deref()),
+                checks::daemon(&facts.daemon),
+                checks::agent(&facts.agent),
+                checks::llm(&facts.llm),
+                checks::not_on_macos(CheckId::Tray, "no tray on macOS yet (HUM-329)"),
+                checks::not_on_macos(CheckId::Renderer, "Flutter renders with Metal"),
+                checks::disk_space(&facts.disk),
+            ],
+        };
+    }
     DoctorReport {
         checks: vec![
             checks::bwrap(&facts.bwrap),

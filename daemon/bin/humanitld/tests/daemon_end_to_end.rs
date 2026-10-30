@@ -19,6 +19,9 @@
 //! beschränkter Zeit weg. Gemessen wird an seinen Prozessen in `/proc` und am
 //! Protokoll des Daemons, nicht an dem, was der Ereignisstrom behauptet.
 
+// Einige Tests laufen nur unter Linux (Sandbox-Backend, systemd); ihre Helfer bleiben
+// sonst unbenutzt (HUM-312).
+#![cfg_attr(not(target_os = "linux"), allow(unused_imports, dead_code))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::os::unix::process::ExitStatusExt as _;
@@ -1868,6 +1871,8 @@ fn pid_from(line: &str) -> Option<u32> {
 /// `Inner::stop` genau an dieser Stelle zurück — vor dem Töten —, und die
 /// Sandbox lief weiter: 8,5 Minuten im einen, über 19 Minuten im anderen
 /// gemessenen Fall.
+// Startet eine Sandbox mit dem Linux-Backend (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_stop_ends_an_agent_that_ignores_sigterm_even_without_a_listener() {
     if !shim_is_built() {
@@ -1927,6 +1932,8 @@ async fn a_stop_ends_an_agent_that_ignores_sigterm_even_without_a_listener() {
 /// die Laufzeit beim Fallenlassen ohne Frist auf das blockierende `wait` auf
 /// den Prozess der Sandbox wartete, und das Kind hing über `--die-with-parent`
 /// an genau diesem Daemon.
+// Startet eine Sandbox mit dem Linux-Backend (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn the_end_of_the_daemon_ends_the_agent_it_started() {
     if !shim_is_built() {

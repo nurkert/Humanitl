@@ -26,4 +26,8 @@ module_name_repetitions = "allow"
 # `[workspace.dependencies]`.
 [dependencies]
 libc.workspace = true
+
+# seccomp exists only on Linux; elsewhere the binary refuses to run
+# (src/main.rs, HUM-312).
+[target.'cfg(target_os = "linux")'.dependencies]
 seccompiler.workspace = true

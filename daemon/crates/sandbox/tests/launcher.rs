@@ -12,6 +12,8 @@
 //! Plan über `bwrap` bis zum Bericht getestet, ohne dass der Test am Filter
 //! hängt.
 
+// Der Plan von `BwrapBackend` braucht `memfd_create`; bwrap gibt es nur unter Linux (HUM-312).
+#![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::ffi::OsString;

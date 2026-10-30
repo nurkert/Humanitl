@@ -32,7 +32,6 @@ use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
-use std::os::fd::OwnedFd;
 use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
@@ -40,7 +39,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use humanitl_config::{Env, Paths};
-use rustix::fs::{Access, MemfdFlags, access, memfd_create};
+use rustix::fs::{Access, access};
 
 use super::{
     AgentFacts, BwrapFacts, CommandRun, DaemonFacts, DiskFacts, LlmFacts, MachineFacts, Reading,
@@ -291,6 +290,7 @@ impl<'a> Probe<'a> {
             });
 
         MachineFacts {
+            platform: self.platform(),
             bwrap: bwrap_facts(bwrap_program.as_deref(), bwrap_version, self.path()),
             userns: UsernsFacts {
                 probe: reading(userns_probe),
@@ -436,13 +436,39 @@ impl<'a> Probe<'a> {
     /// `humanitl`-Unterverzeichnis darin: Über dessen Rechte entscheidet der
     /// Daemon beim Anlegen ([`humanitl_config::DIR_MODE`]), über die des
     /// Elternverzeichnisses die Anmeldung.
+    /// Linux, oder unter macOS die beiden Dinge, die dort zählen (HUM-324).
+    fn platform(&self) -> super::Platform {
+        if !cfg!(target_os = "macos") {
+            return super::Platform::Linux;
+        }
+        let sandbox_exec = PathBuf::from(crate::seatbelt::SANDBOX_EXEC);
+        let launch_agent = PathBuf::from(self.env.get("HOME").unwrap_or_default())
+            .join("Library/LaunchAgents/dev.humanitl.humanitld.plist");
+        super::Platform::MacOs {
+            sandbox_exec: access(&sandbox_exec, Access::EXEC_OK)
+                .is_ok()
+                .then_some(sandbox_exec),
+            launch_agent: launch_agent.is_file().then_some(launch_agent),
+        }
+    }
+
     fn runtime_dir(&self) -> RuntimeDirFacts {
+        if cfg!(target_os = "macos") && self.env.non_empty("XDG_RUNTIME_DIR").is_none() {
+            let path = PathBuf::from(self.env.get("HOME").unwrap_or_default())
+                .join("Library/Application Support")
+                .join(humanitl_config::MAC_APP_DIR)
+                .join("run");
+            return self.runtime_dir_at(path);
+        }
         let Some(dir) = self.env.non_empty("XDG_RUNTIME_DIR") else {
             return RuntimeDirFacts::Unset {
                 expected: PathBuf::from(format!("/run/user/{}", self.env.uid())),
             };
         };
-        let path = PathBuf::from(dir);
+        self.runtime_dir_at(PathBuf::from(dir))
+    }
+
+    fn runtime_dir_at(&self, path: PathBuf) -> RuntimeDirFacts {
         match std::fs::metadata(&path) {
             Ok(meta) => RuntimeDirFacts::Present {
                 mode: meta.permissions().mode() & 0o777,
@@ -677,8 +703,8 @@ fn exit_status(status: std::process::ExitStatus) -> RunOutcome {
 }
 
 /// Ein anonymer, seekbarer Puffer für die Ausgabe eines Aufrufs.
-fn scratch_file() -> Result<File, rustix::io::Errno> {
-    memfd_create("humanitl-doctor", MemfdFlags::CLOEXEC).map(|fd: OwnedFd| File::from(fd))
+fn scratch_file() -> std::io::Result<File> {
+    crate::platform::anonymous_file("humanitl-doctor").map(File::from)
 }
 
 /// Liest den Puffer eines Aufrufs von vorn, höchstens [`OUTPUT_CAP_BYTES`].
@@ -909,7 +935,9 @@ mod tests {
 
     use humanitl_config::Env;
 
-    use super::super::{BwrapFacts, DaemonFacts, LlmFacts, Reading, RuntimeDirFacts, SeccompLine};
+    #[cfg(not(target_os = "macos"))]
+    use super::super::RuntimeDirFacts;
+    use super::super::{BwrapFacts, DaemonFacts, LlmFacts, Reading, SeccompLine};
     use super::{DEFAULT_PATH, Probe, is_nvidia_module, parse_version};
     use crate::bwrap::{BwrapBackend, Version};
 
@@ -1092,6 +1120,8 @@ mod tests {
         assert_eq!(facts.seccomp.line, Reading::Found(SeccompLine::Missing));
     }
 
+    // Unter macOS gilt ohne XDG_RUNTIME_DIR das Verzeichnis unter Application Support (HUM-324).
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn the_runtime_dir_is_read_from_the_environment_with_its_mode() {
         let dir = tempfile::tempdir().unwrap();

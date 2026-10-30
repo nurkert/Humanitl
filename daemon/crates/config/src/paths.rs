@@ -20,6 +20,15 @@ use crate::env::Env;
 /// Der Name, unter dem Humanitl seine Verzeichnisse anlegt.
 pub const APP_DIR: &str = "humanitl";
 
+/// Der Name von Humanitl unter `~/Library` (macOS, HUM-324).
+pub const MAC_APP_DIR: &str = "Humanitl";
+
+/// Der längste Socket unter dem Laufzeitverzeichnis.
+const MAC_LONGEST_SOCKET: &str = "proxy/proxy.sock";
+
+/// `sun_path` unter macOS, mit der abschließenden Null.
+const MAC_SUN_PATH_MAX: usize = 104;
+
 /// Rechte für Verzeichnisse, die nur den Nutzer angehen (`0700`).
 pub const DIR_MODE: u32 = 0o700;
 
@@ -207,6 +216,40 @@ impl Paths {
             };
         }
 
+        // macOS hat weder `/run/user` noch ein `XDG_RUNTIME_DIR`, und sein
+        // temporäres Verzeichnis räumt Dateien weg, die drei Tage niemand
+        // angefasst hat; Socket und Token eines lange laufenden Daemons
+        // verschwänden dort. Ein eigenes Verzeichnis unter `Application
+        // Support` ist für Terminal, App und launchd dasselbe (HUM-324).
+        if cfg!(target_os = "macos") {
+            let path = self.mac_support_dir().join("run");
+            // Der längste Socket darunter ist `proxy/proxy.sock`; passt er
+            // nicht in `sun_path` (104 Bytes mit der Null), etwa unter einem
+            // sehr langen Kontonamen, bleibt nur das kurze temporäre
+            // Verzeichnis, mit Hinweis (Review HUM-324).
+            if path.join(MAC_LONGEST_SOCKET).as_os_str().len() < MAC_SUN_PATH_MAX {
+                return RuntimeDir {
+                    path,
+                    diagnostic: None,
+                };
+            }
+            let short = self
+                .tmp_base()
+                .join(format!("{APP_DIR}-{}", self.env.uid()));
+            let diagnostic = Diagnostic::builder(CONFIG_004, Severity::Info)
+                .why(format!(
+                    "{} is too long for a Unix socket path; using {} instead, which macOS \
+                     clears of files nobody touched for three days",
+                    path.display(),
+                    short.display()
+                ))
+                .build();
+            return RuntimeDir {
+                path: short,
+                diagnostic: Some(diagnostic),
+            };
+        }
+
         let uid = self.env.uid();
         let run_user = PathBuf::from(format!("/run/user/{uid}"));
         if exists(&run_user) {
@@ -233,6 +276,16 @@ impl Paths {
             path,
             diagnostic: Some(diagnostic),
         }
+    }
+
+    /// `~/Library/Application Support/Humanitl`, der Ort von Humanitl unter
+    /// macOS für alles, was kein XDG-Verzeichnis hat (HUM-324).
+    #[must_use]
+    pub fn mac_support_dir(&self) -> PathBuf {
+        self.home()
+            .join("Library")
+            .join("Application Support")
+            .join(MAC_APP_DIR)
     }
 
     /// Der gRPC-Socket des Daemons. Rechte `0600` in einem Verzeichnis `0700`.
@@ -288,6 +341,7 @@ mod tests {
 
     use std::path::{Path, PathBuf};
 
+    #[cfg(not(target_os = "macos"))]
     use humanitl_core::Severity;
 
     use super::Paths;
@@ -371,6 +425,36 @@ mod tests {
         );
     }
 
+    /// Unter macOS liegen Socket und Token unter `Application Support`, auch
+    /// ohne `XDG_RUNTIME_DIR`, und ohne Hinweis auf einen Rückfall (HUM-324).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn on_macos_the_runtime_dir_lies_under_application_support() {
+        let paths = Paths::new(Env::from_pairs([("HOME", "/Users/me")]));
+        let dir = paths.runtime_dir_with(&|_| false);
+        assert_eq!(
+            dir.path,
+            Path::new("/Users/me/Library/Application Support/Humanitl/run")
+        );
+        assert!(dir.diagnostic.is_none());
+        let long = Paths::new(
+            Env::from_pairs([
+                ("HOME", format!("/Users/{}", "x".repeat(50))),
+                ("TMPDIR", "/var/folders/a/T".to_owned()),
+            ])
+            .with_uid(501),
+        );
+        let fallback = long.runtime_dir_with(&|_| false);
+        assert_eq!(fallback.path, Path::new("/var/folders/a/T/humanitl-501"));
+        assert!(fallback.diagnostic.is_some(), "the fallback says why");
+        assert_eq!(
+            paths.daemon_socket(),
+            Path::new("/Users/me/Library/Application Support/Humanitl/run/daemon.sock")
+        );
+    }
+
+    // Der Rückfall nach /run/user und $TMPDIR gilt nicht unter macOS (HUM-324).
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn runtime_dir_falls_back_to_run_user_then_to_tmp() {
         let paths = paths(&[("HOME", "/home/x")]);
@@ -391,6 +475,8 @@ mod tests {
         assert!(diagnostic.why.contains("/tmp/humanitl-1000"));
     }
 
+    // Der Rückfall nach /run/user und $TMPDIR gilt nicht unter macOS (HUM-324).
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn tmpdir_moves_the_fallback() {
         let paths = paths(&[("HOME", "/home/x"), ("TMPDIR", "/var/tmp")]);

@@ -603,7 +603,14 @@ mod tests {
         use std::os::unix::ffi::OsStrExt as _;
 
         let dir = tempfile::tempdir().expect("a directory");
-        for name in [&b"bad\xffname.csv"[..], "gr\u{fc}n l.csv".as_bytes()] {
+        // APFS (macOS) nimmt nur Namen in gültigem UTF-8 an; der Name mit
+        // `\xff` gibt es dort gar nicht (HUM-312).
+        let names: &[&[u8]] = if cfg!(target_os = "linux") {
+            &[b"bad\xffname.csv", "gr\u{fc}n l.csv".as_bytes()]
+        } else {
+            &["gr\u{fc}n l.csv".as_bytes()]
+        };
+        for &name in names {
             let path = dir.path().join(OsStr::from_bytes(name));
             std::fs::write(&path, b"x").expect("the file");
             let word = super::shell_path(&path);

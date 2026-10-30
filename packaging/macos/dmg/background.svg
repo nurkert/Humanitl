@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Background of the macOS disk image (HUM-326), direction "Airlock" of
+     docs/DESIGN.md: a calm control room, hairlines instead of shadows, colour
+     only where it means something. Two chambers: Humanitl.app on the left,
+     the free slot of Applications on the right (dashed), a straight rail
+     between them whose chevrons brighten towards the destination.
+     660 x 420 points. Finder places Humanitl.app at (170, 196) and the
+     Applications link at (490, 196) with 112 pt icons; labels below them are
+     Finder's own and sit on the two name plates (settings.py). Colours are the design tokens
+     (app/packages/ui/lib/src/tokens/colors.dart); type is Inter, the face of
+     the app. Rendered with render-background.sh. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="420" viewBox="0 0 660 420">
+  <defs>
+    <radialGradient id="ambient" cx="330" cy="-40" r="380" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E8B84B" stop-opacity="0.11"/>
+      <stop offset="0.6" stop-color="#E8B84B" stop-opacity="0.02"/>
+      <stop offset="1" stop-color="#E8B84B" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="floor" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#12141A"/>
+      <stop offset="1" stop-color="#0F1115"/>
+    </linearGradient>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse" x="6" y="4">
+      <circle cx="0.5" cy="0.5" r="0.75" fill="#232838"/>
+    </pattern>
+    <radialGradient id="gridFade" cx="330" cy="196" r="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff" stop-opacity="1"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="gridMask"><rect width="660" height="420" fill="url(#gridFade)"/></mask>
+    <linearGradient id="chamberFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1B1F2A" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#151821" stop-opacity="0.35"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Floor, grid, one warm light from above -->
+  <rect width="660" height="420" fill="url(#floor)"/>
+  <rect width="660" height="420" fill="url(#grid)" mask="url(#gridMask)"/>
+  <rect width="660" height="420" fill="url(#ambient)"/>
+
+  <!-- Name and the one sentence of the README -->
+  <g font-family="Inter, Inter Variable, Helvetica Neue, sans-serif" text-anchor="middle">
+    <text x="330" y="58" font-size="24" font-weight="600" letter-spacing="-0.3" fill="#E6E8EE">Humanitl</text>
+    <text x="330" y="80" font-size="12.5" font-weight="400" fill="#A3A9B8">Your sandboxed agent uses the internet, one approved request at a time.</text>
+  </g>
+
+  <!-- Left chamber: the app. The accent hairline marks what you hold. -->
+  <rect x="86.5" y="112.5" width="167" height="183" rx="20" fill="url(#chamberFill)" stroke="#E8B84B" stroke-opacity="0.32"/>
+  <!-- Right chamber: the free slot, dashed -->
+  <rect x="406.5" y="112.5" width="167" height="183" rx="20" fill="#151821" fill-opacity="0.3" stroke="#384056" stroke-dasharray="4 4"/>
+
+  <!-- Name plates under Finder's labels. Finder draws them black in light
+       mode and white in dark mode; this grey (relative luminance 0.18) holds
+       both at about 4.5:1. -->
+  <rect x="113" y="259" width="114" height="22" rx="11" fill="#757A8A"/>
+  <rect x="433" y="259" width="114" height="22" rx="11" fill="#757A8A"/>
+
+  <!-- The rail: one hairline, three chevrons brightening towards the slot -->
+  <line x1="268" y1="196.5" x2="392" y2="196.5" stroke="#2A3040" stroke-width="1"/>
+  <g fill="none" stroke="#E8B84B" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 303 189 L 310 196.5 L 303 204" stroke-opacity="0.30"/>
+    <path d="M 325 189 L 332 196.5 L 325 204" stroke-opacity="0.62"/>
+    <path d="M 347 189 L 354 196.5 L 347 204" stroke-opacity="1"/>
+  </g>
+  <text x="330" y="226" font-family="Inter, Inter Variable, Helvetica Neue, sans-serif" font-size="11.5" font-weight="500" fill="#6B7186" text-anchor="middle">Drag to Applications</text>
+
+  <!-- Footer: what the first start asks for -->
+  <rect x="0" y="352" width="660" height="68" fill="#151821" fill-opacity="0.9"/>
+  <line x1="0" y1="352.5" x2="660" y2="352.5" stroke="#2A3040"/>
+  <g font-family="Inter, Inter Variable, Helvetica Neue, sans-serif" text-anchor="middle">
+    <text x="330" y="380" font-size="11.5" font-weight="400" fill="#A3A9B8">First start: System Settings › Privacy &amp; Security › <tspan fill="#E6E8EE" font-weight="500">Open Anyway</tspan></text>
+    <text x="330" y="399" font-size="10.5" font-weight="400" fill="#6B7186">Signed ad hoc · Apple Silicon and Intel · GPL-3.0</text>
+  </g>
+</svg>

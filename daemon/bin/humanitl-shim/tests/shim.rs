@@ -6,6 +6,7 @@
 //! only isolation in play. Everything the sandbox adds is ESC-1 and ESC-2's
 //! business (`tests/escape/`).
 
+#![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::fs;

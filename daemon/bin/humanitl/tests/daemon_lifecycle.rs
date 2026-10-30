@@ -11,6 +11,8 @@
 //! Eigene Datei und nicht `tests/cli.rs`: Die ist mit 5000 Zeilen groß genug,
 //! und diese Tests teilen eigene Helfer, die dort niemand braucht.
 
+// AppImage und systemd gibt es nur unter Linux (HUM-312).
+#![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

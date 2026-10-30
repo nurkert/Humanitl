@@ -18,7 +18,7 @@
 "daemon/bin/humanitl/src/cli.rs" = 2
 "daemon/bin/humanitl/src/cmd/mod.rs" = 3
 "daemon/bin/humanitl/src/cmd/run.rs" = 1
-"daemon/bin/humanitl/src/cmd/sandbox.rs" = 11
+"daemon/bin/humanitl/src/cmd/sandbox.rs" = 2
 "daemon/bin/humanitl/src/cmd/unit.rs" = 1
 "daemon/bin/humanitl/src/main.rs" = 2
 "daemon/bin/humanitl/src/render.rs" = 7
@@ -30,7 +30,7 @@
 "daemon/crates/core-types/src/diagnostics/mod.rs" = 3
 "daemon/crates/ipc/src/convert.rs" = 1
 "daemon/crates/ipc/src/fake/mod.rs" = 4
-"daemon/crates/ipc/src/sandbox.rs" = 31
+"daemon/crates/ipc/src/sandbox.rs" = 14
 "daemon/crates/ipc/src/server.rs" = 2
 "daemon/crates/ipc/src/summary.rs" = 1
 "daemon/crates/ipc/tests/sandbox_rpc.rs" = 1

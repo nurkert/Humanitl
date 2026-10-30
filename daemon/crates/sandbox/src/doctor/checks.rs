@@ -696,7 +696,9 @@ pub(super) fn daemon(facts: &DaemonFacts) -> CheckOutcome {
                              a package upgrade leaves the running daemon in place until it \
                              restarts, and restarting the app does not restart it"
                         ),
-                        FixAction::CopyCommand("systemctl --user restart humanitld".to_owned()),
+                        FixAction::CopyCommand(
+                            humanitl_core::diagnostics::RESTART_DAEMON_COMMAND.to_owned(),
+                        ),
                     ),
                 )
             } else {
@@ -712,7 +714,9 @@ pub(super) fn daemon(facts: &DaemonFacts) -> CheckOutcome {
                              read",
                             proto.0, proto.1, expected_proto.0, expected_proto.1
                         ),
-                        FixAction::CopyCommand("systemctl --user restart humanitld".to_owned()),
+                        FixAction::CopyCommand(
+                            humanitl_core::diagnostics::RESTART_DAEMON_COMMAND.to_owned(),
+                        ),
                     ),
                 )
             }
@@ -1158,6 +1162,70 @@ fn size(bytes: u64) -> String {
         format!("{mib:.1} MiB")
     } else {
         format!("{:.1} GiB", mib / 1024.0)
+    }
+}
+
+/// Zeile `bwrap` unter macOS: `sandbox-exec` ist da (HUM-324).
+pub(super) fn seatbelt(sandbox_exec: Option<&std::path::Path>) -> CheckOutcome {
+    match sandbox_exec {
+        Some(program) => CheckOutcome::ok(
+            CheckId::Bwrap,
+            format!("Seatbelt: {} (macOS has no bubblewrap)", program.display()),
+        ),
+        None => CheckOutcome::fail(
+            CheckId::Bwrap,
+            "no executable /usr/bin/sandbox-exec",
+            Diagnostic::builder(DOCTOR_001, Severity::Blocking)
+                .why(
+                    "/usr/bin/sandbox-exec is missing or not executable; it is part of macOS, \
+                     and the sandbox cannot start without it"
+                        .to_owned(),
+                )
+                .build(),
+        ),
+    }
+}
+
+/// Eine Linux-Zeile, die unter macOS nichts zu prüfen hat.
+pub(super) fn not_on_macos(id: CheckId, why: &str) -> CheckOutcome {
+    CheckOutcome::ok(id, format!("not needed on macOS: {why}"))
+}
+
+/// Zeile `runtime_dir` unter macOS: Das Verzeichnis unter `Application
+/// Support` legt der Daemon beim ersten Start selbst an; fehlt es, ist das
+/// kein Fehler.
+pub(super) fn mac_runtime_dir(facts: &RuntimeDirFacts) -> CheckOutcome {
+    match facts {
+        RuntimeDirFacts::Missing { path } => CheckOutcome::ok(
+            CheckId::RuntimeDir,
+            format!(
+                "{} is created by the daemon at its first start",
+                path.display()
+            ),
+        ),
+        other => runtime_dir(other),
+    }
+}
+
+/// Zeile `systemd_user` unter macOS: Der launchd-Agent ist eingerichtet.
+/// Nur eine Warnung wie unter Linux: Ohne ihn startet man `humanitld` von
+/// Hand.
+pub(super) fn launch_agent(plist: Option<&std::path::Path>) -> CheckOutcome {
+    match plist {
+        Some(path) => CheckOutcome::ok(
+            CheckId::SystemdUser,
+            format!("launchd agent {}", path.display()),
+        ),
+        None => CheckOutcome::warn(
+            CheckId::SystemdUser,
+            "no launchd agent dev.humanitl.humanitld",
+            finding(
+                DOCTOR_005,
+                Severity::Warning,
+                "the daemon is not set up as a launchd agent, so it does not start at login",
+                FixAction::InstallService,
+            ),
+        ),
     }
 }
 
@@ -1862,7 +1930,7 @@ mod tests {
         assert_eq!(
             diagnostic.fix,
             Some(FixAction::CopyCommand(
-                "systemctl --user restart humanitld".to_owned()
+                humanitl_core::diagnostics::RESTART_DAEMON_COMMAND.to_owned()
             ))
         );
 

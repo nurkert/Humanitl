@@ -25,11 +25,23 @@
 //! Argument mit einem NUL dahinter, dazu als `SCM_RIGHTS` genau die
 //! Untertanenseite des Pseudoterminals der Shell. Heraus kommen neun Bytes:
 //! `R`, `F` oder `E`, die Kennung und ein Wert (PID, Grund, Exit-Status).
+//!
+//! # Unter macOS: eine Start-Tür
+//!
+//! Seatbelt kennt keinen Namensraum, in dem ein PID 1 sitzen könnte, und
+//! macOS kein `SOCK_SEQPACKET`. Dort startet die Tür jede weitere Shell
+//! selbst (`SpawnSpec`): `sandbox-exec` mit demselben Profil, darin der
+//! Shim ohne Bridge, der das Terminal übernimmt, das Kommando startet und
+//! beim Ende dessen ganze Sitzung beendet (HUM-323). Ende und Exit-Code
+//! kommen vom Prozess selbst; endet die Sandbox, bekommt jede Shell `SIGTERM`.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::io::IoSlice;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd as _, OwnedFd};
+use std::os::unix::process::ExitStatusExt as _;
+use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -38,8 +50,8 @@ use humanitl_core::diagnostics::codes::TERM_002;
 use humanitl_core::{Diagnostic, Severity};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::net::{
-    AddressFamily, RecvFlags, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags,
-    SocketType, recv, sendmsg, socketpair,
+    AddressFamily, RecvFlags, SendAncillaryBuffer, SendAncillaryMessage, SocketFlags, SocketType,
+    recv, sendmsg, socketpair,
 };
 use rustix::termios::{Winsize, tcsetwinsize};
 
@@ -82,6 +94,13 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// `SOCK_CLOEXEC` gibt es unter macOS nicht; dort setzt [`pair`] das Flag
+/// danach (HUM-312).
+#[cfg(target_os = "linux")]
+const PAIR_FLAGS: SocketFlags = SocketFlags::CLOEXEC;
+#[cfg(not(target_os = "linux"))]
+const PAIR_FLAGS: SocketFlags = SocketFlags::empty();
+
 /// Das Paar für eine neue Sandbox: `(Seite des Daemons, Seite des Shims)`,
 /// beide mit `CLOEXEC`. Die Seite des Shims verliert es erst im Kind
 /// (`inherit.rs`).
@@ -90,13 +109,13 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 ///
 /// Der Fehler von `socketpair(2)`.
 pub(crate) fn pair() -> std::io::Result<(OwnedFd, OwnedFd)> {
-    socketpair(
-        AddressFamily::UNIX,
-        SocketType::SEQPACKET,
-        SocketFlags::CLOEXEC,
-        None,
-    )
-    .map_err(std::io::Error::from)
+    socketpair(AddressFamily::UNIX, SocketType::SEQPACKET, PAIR_FLAGS, None)
+        .map_err(std::io::Error::from)
+        .and_then(|(one, two)| {
+            crate::platform::set_cloexec(&one)?;
+            crate::platform::set_cloexec(&two)?;
+            Ok((one, two))
+        })
 }
 
 /// Wo eine Shell steht.
@@ -123,12 +142,57 @@ struct DoorState {
     closed: bool,
 }
 
+/// Wie weitere Shells starten: über die Tür des Shims (Linux) oder als
+/// eigener Prozess unter demselben Profil (macOS, HUM-323).
+#[derive(Debug)]
+enum Door {
+    Socket(OwnedFd),
+    Spawn(SpawnSpec),
+}
+
+/// Was eine Start-Tür braucht: das Programm, die Argumente bis vor das
+/// Kommando, die Umgebung.
+#[derive(Debug, Clone)]
+pub(crate) struct SpawnSpec {
+    /// `sandbox-exec`.
+    pub(crate) program: PathBuf,
+    /// Alles zwischen Programm und `--` vor dem Kommando.
+    pub(crate) args: Vec<OsString>,
+    /// Die Umgebung der Shell.
+    pub(crate) env: Vec<(String, String)>,
+}
+
+/// Was der Launcher für die Tür zu weiteren Shells mitgibt.
+#[derive(Debug)]
+pub(crate) enum DoorSeed {
+    /// Die Seite des Daemons am `SOCK_SEQPACKET`-Paar (Linux).
+    Socket(OwnedFd),
+    /// Wie eine Shell startet (macOS).
+    Spawn(SpawnSpec),
+}
+
+impl DoorSeed {
+    /// Die Tür dazu.
+    ///
+    /// # Errors
+    ///
+    /// Der Fehler beim Start des Lese-Fadens einer Socket-Tür.
+    pub(crate) fn open(self) -> std::io::Result<Arc<ShellDoor>> {
+        match self {
+            Self::Socket(socket) => ShellDoor::start(socket),
+            Self::Spawn(spec) => Ok(ShellDoor::spawning(spec)),
+        }
+    }
+}
+
 /// Die Seite des Daemons an der Tür zu weiteren Shells einer Sandbox.
 #[derive(Debug)]
 pub struct ShellDoor {
-    socket: OwnedFd,
+    door: Door,
     state: Mutex<DoorState>,
     changed: Condvar,
+    /// Die Prozesse einer Start-Tür, je Kennung.
+    children: Mutex<BTreeMap<u32, u32>>,
 }
 
 impl ShellDoor {
@@ -140,12 +204,13 @@ impl ShellDoor {
     /// Der Faden ließ sich nicht starten.
     pub(crate) fn start(socket: OwnedFd) -> std::io::Result<Arc<Self>> {
         let door = Arc::new(Self {
-            socket,
+            door: Door::Socket(socket),
             state: Mutex::new(DoorState {
                 next_id: 1,
                 ..DoorState::default()
             }),
             changed: Condvar::new(),
+            children: Mutex::new(BTreeMap::new()),
         });
         let reader = Arc::clone(&door);
         thread::Builder::new()
@@ -155,10 +220,38 @@ impl ShellDoor {
     }
 
     /// Liest Antworten, bis die Seite des Shims zu ist.
+    /// Eine Start-Tür (macOS, HUM-323); sie braucht keinen Lese-Faden.
+    pub(crate) fn spawning(spec: SpawnSpec) -> Arc<Self> {
+        Arc::new(Self {
+            door: Door::Spawn(spec),
+            state: Mutex::new(DoorState {
+                next_id: 1,
+                ..DoorState::default()
+            }),
+            changed: Condvar::new(),
+            children: Mutex::new(BTreeMap::new()),
+        })
+    }
+
+    /// Die Sandbox ist zu Ende: keine neuen Shells mehr, und die einer
+    /// Start-Tür bekommen `SIGTERM`. Eine Socket-Tür schließt der Shim selbst.
+    pub(crate) fn close(&self) {
+        lock(&self.state).closed = true;
+        self.changed.notify_all();
+        for &pid in lock(&self.children).values() {
+            if let Some(pid) = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap_or(0)) {
+                let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+            }
+        }
+    }
+
     fn read_answers(&self) {
+        let Door::Socket(socket) = &self.door else {
+            return;
+        };
         let mut buffer = [0u8; 64];
         loop {
-            match recv(&self.socket, &mut buffer[..], RecvFlags::empty()) {
+            match recv(socket, &mut buffer[..], RecvFlags::empty()) {
                 Ok((0, _)) => break,
                 Ok((n, full)) => {
                     if n == 9 && full == 9 {
@@ -237,7 +330,11 @@ impl ShellDoor {
             state.shells.insert(id, Phase::Asked);
             id
         };
-        match self.ask(id, &body, cols, rows) {
+        let asked = match &self.door {
+            Door::Socket(socket) => self.ask(socket, id, &body, cols, rows),
+            Door::Spawn(spec) => self.spawn(spec, id, command, cols, rows),
+        };
+        match asked {
             Ok(master) => Ok(Shell {
                 id,
                 master,
@@ -257,7 +354,70 @@ impl ShellDoor {
         }
     }
 
-    fn ask(&self, id: u32, body: &[u8], cols: u16, rows: u16) -> Result<OwnedFd, Diagnostic> {
+    /// Startet die Shell selbst, unter demselben Profil (macOS, HUM-323).
+    fn spawn(
+        self: &Arc<Self>,
+        spec: &SpawnSpec,
+        id: u32,
+        command: &[String],
+        cols: u16,
+        rows: u16,
+    ) -> Result<OwnedFd, Diagnostic> {
+        let pty = crate::bwrap::open_pty(cols, rows)?;
+        let (stdin, stdout, stderr) = pty.stdio()?;
+        let mut child = std::process::Command::new(&spec.program)
+            .args(&spec.args)
+            .arg("--")
+            .args(command)
+            .env_clear()
+            .envs(spec.env.iter().map(|(key, value)| (key, value)))
+            .stdin(stdin)
+            .stdout(stdout)
+            .stderr(stderr)
+            .spawn()
+            .map_err(|err| refused(&format!("cannot start {}: {err}", spec.program.display())))?;
+        drop(pty.slave);
+        drop(pty.reader);
+        lock(&self.children).insert(id, child.id());
+        let ended = {
+            let mut state = lock(&self.state);
+            state.shells.insert(id, Phase::Started);
+            state.closed
+        };
+        // Endete die Sandbox zwischen der Prüfung in `open` und hier, hat
+        // `close` diese Shell nicht mehr gesehen (Review HUM-323).
+        if ended {
+            let _ = child.kill();
+        }
+        self.changed.notify_all();
+        let door = Arc::clone(self);
+        thread::Builder::new()
+            .name(format!("sandbox-shell-{id}"))
+            .spawn(move || {
+                let code = child.wait().map_or(ENDED_WITH_SANDBOX, |status| {
+                    status
+                        .code()
+                        .or_else(|| status.signal().map(|signal| 128 + signal))
+                        .unwrap_or(ENDED_WITH_SANDBOX)
+                });
+                lock(&door.children).remove(&id);
+                let mut answer = [MARK_EXITED, 0, 0, 0, 0, 0, 0, 0, 0];
+                answer[1..5].copy_from_slice(&id.to_le_bytes());
+                answer[5..9].copy_from_slice(&code.to_le_bytes());
+                door.apply(&answer);
+            })
+            .map_err(|err| refused(&format!("cannot watch the shell: {err}")))?;
+        Ok(pty.master)
+    }
+
+    fn ask(
+        &self,
+        socket: &OwnedFd,
+        id: u32,
+        body: &[u8],
+        cols: u16,
+        rows: u16,
+    ) -> Result<OwnedFd, Diagnostic> {
         let pty = crate::bwrap::open_pty(cols, rows)?;
         let mut message = Vec::with_capacity(5 + body.len());
         message.push(MARK_SPAWN);
@@ -272,10 +432,10 @@ impl ShellDoor {
                 return Err(refused("cannot attach the terminal to the request"));
             }
             sendmsg(
-                &self.socket,
+                socket,
                 &[IoSlice::new(&message)],
                 &mut control,
-                SendFlags::NOSIGNAL,
+                crate::platform::SEND_NO_SIGNAL,
             )
             .map_err(|err| refused(&format!("the sandbox does not take the request: {err}")))?;
         }
@@ -518,8 +678,14 @@ fn gone(why: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+    // Alle Tests bis auf den letzten fahren `SOCK_SEQPACKET` mit `SCM_RIGHTS`,
+    // die Tür des Linux-Shims (HUM-299); unter macOS gibt es sie nicht
+    // (HUM-312).
+    #![cfg_attr(not(target_os = "linux"), allow(dead_code, unused_imports))]
 
     use super::*;
+    #[cfg(target_os = "linux")]
+    use rustix::net::SendFlags;
 
     fn answer(mark: u8, id: u32, value: i32) -> [u8; 9] {
         let id = id.to_le_bytes();
@@ -529,6 +695,7 @@ mod tests {
         ]
     }
 
+    #[cfg(target_os = "linux")]
     /// A fake shim on the other end of the pair: answers every request with
     /// `reply` and keeps the received terminal descriptors.
     fn fake_shim(
@@ -575,6 +742,7 @@ mod tests {
         requests
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_started_shell_carries_its_command_and_its_exit_code() {
         let (daemon, shim) = pair().unwrap();
@@ -593,6 +761,7 @@ mod tests {
         assert_eq!(seen, (1, vec!["bash".to_owned(), "-i".to_owned()]));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_door_counts_to_four_and_no_further() {
         let (daemon, shim) = pair().unwrap();
@@ -610,6 +779,7 @@ mod tests {
         assert!(door.open(&["sh".to_owned()], 80, 24).is_err());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_refusal_of_the_shim_is_a_diagnostic() {
         let (daemon, shim) = pair().unwrap();
@@ -620,6 +790,7 @@ mod tests {
         assert_eq!(door.live(), 0);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn answers_for_ids_nobody_asked_for_change_nothing() {
         let (daemon, shim) = pair().unwrap();
@@ -636,6 +807,7 @@ mod tests {
         drop(shell);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_shell_ends_with_its_sandbox() {
         let (daemon, shim) = pair().unwrap();

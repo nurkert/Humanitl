@@ -5,6 +5,9 @@
 //! [`AgentContext`]. One test at the end starts a real sandbox with a fake
 //! `pi` that does at start what pi 1.3.0 does, without any network.
 
+// Die Tests mit echter Sandbox laufen nur unter Linux; ihre Helfer bleiben
+// sonst unbenutzt (HUM-312).
+#![cfg_attr(not(target_os = "linux"), allow(unused_imports, dead_code))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::BTreeMap;
@@ -465,6 +468,8 @@ if env | grep -q sk-pi-test; then echo env_key=1; else echo env_key=0; fi
 ls -A /work
 "#;
 
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[test]
 fn a_fake_pi_finds_its_configuration_and_key_in_a_real_sandbox() {
     let Some((fx, backend)) =

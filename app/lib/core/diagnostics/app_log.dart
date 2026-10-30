@@ -73,11 +73,19 @@ class AppLog {
   /// Variable nicht gesetzt ist -- dieselbe Reihenfolge, die der Daemon für
   /// seine Verzeichnisse benutzt (`humanitl_config::Paths`) und die der
   /// Runner in C noch einmal nachbildet, weil er vor Dart läuft.
-  factory AppLog.resolve({Map<String, String>? environment}) {
+  ///
+  /// On macOS without `XDG_STATE_HOME` it lies under
+  /// `~/Library/Application Support/Humanitl`, next to the daemon's runtime
+  /// directory (HUM-325).
+  factory AppLog.resolve({Map<String, String>? environment, bool? macOS}) {
     final Map<String, String> env = environment ?? Platform.environment;
     final String? state = env['XDG_STATE_HOME'];
+    final String home = env['HOME'] ?? '.';
+    if ((state == null || state.isEmpty) && (macOS ?? Platform.isMacOS)) {
+      return AppLog('$home/Library/Application Support/Humanitl/$fileName');
+    }
     final String base = state == null || state.isEmpty
-        ? '${env['HOME'] ?? '.'}/.local/state'
+        ? '$home/.local/state'
         : state;
     return AppLog('$base/humanitl/$fileName');
   }
