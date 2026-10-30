@@ -1,0 +1,19 @@
+---
+// Eine englische Seite je Markdown-Datei unter docs/ (HUM-346), außer docs/README.md, aus
+// der die Startseite /en/docs/ entsteht (index.astro).
+import { getCollection } from 'astro:content';
+
+import DocPage from '../../../components/docs/DocPage.astro';
+import { docSlug, type DocEntry } from '../../../lib/docs';
+
+export async function getStaticPaths() {
+  const entries = await getCollection('docs');
+  return entries
+    .filter((entry) => entry.id !== 'readme')
+    .map((entry) => ({ params: { slug: docSlug(entry.id) }, props: { entry } }));
+}
+
+const { entry } = Astro.props as { entry: DocEntry };
+---
+
+<DocPage entry={entry} lang="en" />

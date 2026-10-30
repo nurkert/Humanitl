@@ -27,6 +27,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-344 | Eine README, die das Projekt zeigt | M | HUM-333 |
 | HUM-342 | Die Ampel unter macOS sitzt mittig in der Titelleiste der App | S | HUM-325 |
 | HUM-343 | Der Ordnerdialog öffnet sich unter macOS | S | HUM-325, HUM-326 |
+| HUM-346 | Die Docs zweisprachig auf humanitl.de | M | HUM-336 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -278,3 +279,64 @@ Akzeptanzkriterien:
 - Der Ordnerdialog öffnet sich in der gebauten App.
 
 Nicht in diesem Issue: den Projektordner beim Start der Sandbox optional zu machen. Der Inhaber hat am 2026-10-30 entschieden, dass der Ordner vorerst Pflicht bleibt; eine Sitzung ganz ohne Ordner (leeres `/work`) kann später sinnvoll sein und wird dann ein eigenes Issue.
+
+## HUM-346 · Die Docs zweisprachig auf humanitl.de
+
+Ziel: Die Docs auf humanitl.de sind sauber auf Deutsch und auf Englisch zu lesen, wie der
+Rest der Seite: Deutsch unter /docs/, Englisch unter /en/docs/. Die Originale in docs/
+bleiben unverändert; die Übersetzungen liegen daneben und tragen den Stand des Originals,
+auf dem sie beruhen, damit eine veraltete Übersetzung erkennbar bleibt.
+
+Festgelegt:
+- Übersetzungen liegen unter `docs/translations/de/<Pfad wie im Original>` (deutsche
+  Fassungen englischer Originale) und `docs/translations/en/<Pfad>` (englische Fassungen
+  von `CONFIG.md`, `DIAGNOSTICS.md`, `reference/parity.md`). Front Matter mit genau
+  `source`, `source-sha256` (SHA-256 der Bytes des Originals beim Übersetzen) und `lang`.
+- Eine Übersetzung behält die Gliederung ihres Originals (Zahl, Ebene und Reihenfolge der
+  Überschriften), jedes Linkziel, jeden Bildpfad, jeden Anker, jeden Codeblock Byte für
+  Byte, Bezeichner, Tabellen- und HTML-Struktur. Begriffe nach `docs/GLOSSARY.md`, zitierte
+  App-Texte nach `app/l10n/app_en.arb` und `app_de.arb`.
+- Fehlt eine Übersetzung oder ist sie veraltet, bricht der Bau nicht ab; die Seite zeigt
+  einen Hinweis, und `website/scripts/check-translations.mjs` listet beides.
+
+Dateien: docs/translations/**, website/src/content.config.ts, website/src/lib/docs.ts,
+docs-catalog.mjs, remark-docs.mjs, rehype-docs.mjs, website/src/layouts/Docs.astro,
+website/src/components/docs/{DocPage,DocsHome,LocalizedLinks,DocsNav}.astro,
+website/src/pages/docs/*, website/src/pages/en/docs/*, website/src/pages/sitemap.xml.ts,
+website/src/scripts/docs.ts, website/src/styles/docs.css, Block `docs` in den Locales,
+Base.astro (Sprachwahl und Docs-Link je Sprache), website/scripts/check-links.mjs,
+website/scripts/check-translations.mjs, website/scripts/docs-markdown.test.mjs,
+.github/workflows/website.yml.
+
+Akzeptanz:
+- Jede Datei unter docs/ hat eine Seite unter /docs/<slug>/ und unter /en/docs/<slug>/; die
+  Seite zeigt in der Sprache des Originals das Original, in der anderen Sprache die
+  Übersetzung. `<html lang>` und `lang` des Artikels nennen die Sprache des gezeigten Textes.
+- Jede Überschrift einer Übersetzung trägt die ID der Überschrift an derselben Stelle im
+  Original. Der Bau prüft Zahl und Ebenen; weichen sie ab, behält die Übersetzung ihre
+  eigenen IDs, der Bau meldet es mit einer Warnung, und `check-translations.mjs` nennt die
+  Datei.
+- Relative Verweise einer Übersetzung werden relativ zum Original aufgelöst und zeigen auf
+  die Seite derselben Sprache, mit Anker; Bilder laden dieselbe Datei wie das Original.
+- Jede Docs-Seite hat die Sprachwahl DE/EN der Website; sie führt auf dieselbe Seite und,
+  mit JavaScript, an dieselbe Stelle der anderen Sprache. hreflang-Paare im Kopf und in der
+  Sitemap, x-default ist die deutsche Seite.
+- Fehlt eine Übersetzung, zeigt die Seite das Original mit dem sichtbaren Hinweis „noch
+  nicht übersetzt" / „not translated yet"; Seitenleiste und Startseite kennzeichnen sie mit
+  dem Kürzel der Originalsprache. Passt `source-sha256` nicht zum Original, zeigt die Seite
+  die Übersetzung mit dem Hinweis, dass sich das Original geändert hat, und verweist auf
+  das Original.
+- Startseite der Docs in beiden Sprachen, mit übersetzten Gruppen, Beschriftungen und der
+  Einleitung der README in der Sprache der Seite.
+- `check-links.mjs` prüft zusätzlich: Gegenstück in der anderen Sprache, `<html lang>`,
+  hreflang, Sprachwahl, und dass kein Artikel in die Docs der anderen Sprache verweist.
+- `check-translations.mjs` listet fehlende, veraltete, abweichend gegliederte, verwaiste und
+  ungültige Übersetzungen und endet immer mit Status 0; website.yml ruft es nach dem Bau auf.
+- Tests in `docs-markdown.test.mjs` für die Zuordnung der IDs (auch den Rückfall) und für
+  die Verweise einer Übersetzung; 1440x900 und 390x844 ohne waagrechtes Scrollen.
+
+Offen außerhalb des Umfangs: `scripts/ci/lint-docs.sh` (H1 auf Zeile 1, `Applies to` auf
+Zeile 3) und `scripts/ci/check-doc-links.py` (Links relativ zur eigenen Datei) müssen
+`docs/translations/` ausnehmen oder relativ zum Original prüfen, sonst schlägt die CI fehl.
+Die Sicherheitsseite (HUM-345) verlinkt auf der englischen Fassung noch /docs/security/
+statt /en/docs/security/.

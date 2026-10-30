@@ -9,8 +9,8 @@ import { pathToFileURL } from 'node:url';
 
 import { createMarkdownProcessor } from '@astrojs/markdown-remark';
 
-import { docsRoot } from '../src/lib/docs-catalog.mjs';
-import rehypeDocs from '../src/lib/rehype-docs.mjs';
+import { docsRoot, localizeDocLinks, translationInfo } from '../src/lib/docs-catalog.mjs';
+import rehypeDocs, { alignHeadings } from '../src/lib/rehype-docs.mjs';
 import remarkDocs from '../src/lib/remark-docs.mjs';
 
 const processor = await createMarkdownProcessor({
@@ -153,4 +153,210 @@ test('links: files without extension go to blob, query and anchor stay with the 
   const { html } = await render('[licence](../../LICENSE) [ux](../UX.md?x=1#hello)');
   assert.match(html, /href="https:\/\/github\.com\/nurkert\/Humanitl\/blob\/main\/LICENSE"/);
   assert.match(html, /href="\/docs\/ux\/\?x=1#hello"/);
+});
+
+// ------------------------------------------------------------------ Übersetzungen (HUM-346)
+
+// Originale für die Übersetzungs-Tests, statt der echten Dateien unter docs/.
+const fixtureSources = new Map([
+  [
+    path.join(docsRoot, 'guides/fixture.md'),
+    '# Fixture guide\n\nApplies to: Humanitl 0.1\n\n## Without the app\n\n### Step `one`\n\n## Without the app\n\n## What the chain proves\n',
+  ],
+  [
+    path.join(docsRoot, 'guides/numbered.md'),
+    '# Numbered\n\n## 3.1 Colour\n\n## 3.2 Motion\n\n## 3.3 Type\n\n## Appendix\n',
+  ],
+  [path.join(docsRoot, 'adr/0099-fixture.md'), '# ADR-0099 · Fixture\n\nApplies to: Humanitl 0.1\n\nStatus: Accepted\nDate: 2026-10-30\n\n## Context\n'],
+]);
+
+const translationProcessor = await createMarkdownProcessor({
+  smartypants: false,
+  remarkPlugins: [remarkDocs],
+  rehypePlugins: [
+    [
+      rehypeDocs,
+      {
+        readSource: async (file) => {
+          if (!fixtureSources.has(file)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+          return fixtureSources.get(file);
+        },
+      },
+    ],
+  ],
+  syntaxHighlight: 'shiki',
+  shikiConfig: { theme: 'css-variables' },
+});
+
+/** Rendert eine Übersetzung so, als läge sie unter docs/translations/<lang>/<source>. */
+async function renderTranslation(markdown, source = 'guides/fixture.md', lang = 'de') {
+  const file = path.join(docsRoot, 'translations', lang, source);
+  const warnings = [];
+  const warn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    const { code, metadata } = await translationProcessor.render(markdown, {
+      fileURL: pathToFileURL(file),
+      frontmatter: { source, 'source-sha256': '0'.repeat(64), lang },
+    });
+    return { html: code, headings: metadata.headings, frontmatter: metadata.frontmatter, warnings };
+  } finally {
+    console.warn = warn;
+  }
+}
+
+test('a translation takes the heading ids of its original, by position', async () => {
+  const { html, headings, warnings } = await renderTranslation(
+    '# Leitfaden\n\nApplies to: Humanitl 0.1\n\n## Ohne die App\n\n### Schritt `eins`\n\n## Ohne die App\n\n## Was die Kette beweist\n',
+  );
+  assert.deepEqual(
+    headings.map((heading) => [heading.depth, heading.slug, heading.text]),
+    [
+      [1, 'fixture-guide', 'Leitfaden'],
+      [2, 'without-the-app', 'Ohne die App'],
+      [3, 'step-one', 'Schritt eins'],
+      [2, 'without-the-app-1', 'Ohne die App'],
+      [2, 'what-the-chain-proves', 'Was die Kette beweist'],
+    ],
+  );
+  assert.match(html, /<h2 id="without-the-app">Ohne die App<\/h2><a class="anchor" href="#without-the-app">/);
+  assert.match(html, /Abschnitt „Was die Kette beweist“/);
+  assert.match(html, /<span class="chip__k">Gilt für:<\/span> Humanitl 0.1/);
+  assert.deepEqual(warnings, []);
+});
+
+test('a translation with a different structure keeps its own ids and is reported', async () => {
+  const fewer = await renderTranslation('# Leitfaden\n\n## Ohne die App\n\n## Was die Kette beweist\n');
+  assert.deepEqual(
+    fewer.headings.map((heading) => heading.slug),
+    ['leitfaden', 'ohne-die-app', 'was-die-kette-beweist'],
+  );
+  assert.equal(fewer.warnings.length, 1);
+  assert.match(fewer.warnings[0], /translations\/de\/guides\/fixture\.md: 3 headings, the original has 5/);
+
+  const level = await renderTranslation('# L\n\n## A\n\n## B\n\n## C\n\n## D\n');
+  assert.deepEqual(level.headings.map((heading) => heading.slug), ['l', 'a', 'b', 'c', 'd']);
+  assert.match(level.warnings[0], /heading 3 is h2, in the original h3/);
+
+  const orphan = await renderTranslation('# Waise\n', 'guides/gone.md');
+  assert.deepEqual(orphan.headings.map((heading) => heading.slug), ['waise']);
+  assert.match(orphan.warnings[0], /original not readable \(ENOENT\)/);
+});
+
+/** Alle IDs im HTML, in Reihenfolge. */
+const idsIn = (html) => [...html.matchAll(/\sid="([^"]*)"/g)].map((match) => match[1]);
+
+test('fallback: every id of the original stays reachable as an empty anchor, nothing is duplicated', async () => {
+  // Das Original hat eine H3 und eine H2 mehr als die Übersetzung (etwa, weil es seither wuchs).
+  const { html, headings, frontmatter, warnings } = await renderTranslation(
+    '# Leitfaden\n\n## Ohne die App\n\n## Was die Kette beweist\n',
+  );
+  assert.deepEqual(
+    headings.map((heading) => heading.slug),
+    ['leitfaden', 'ohne-die-app', 'was-die-kette-beweist'],
+  );
+  const ids = idsIn(html);
+  for (const slug of ['fixture-guide', 'without-the-app', 'step-one', 'without-the-app-1', 'what-the-chain-proves']) {
+    assert.ok(ids.includes(slug), `id ${slug} missing in ${html}`);
+  }
+  assert.equal(new Set(ids).size, ids.length, `duplicate ids: ${ids}`);
+  assert.match(html, /<a id="fixture-guide" class="source-anchor" aria-hidden="true"><\/a><h1 id="leitfaden">/);
+  assert.equal(frontmatter.headingFallback, true);
+  assert.match(warnings[0], /3 headings, the original has 5; the page keeps its own heading ids, 5 anchor\(s\) of the original added/);
+});
+
+test('fallback: a heading the original gained gets its anchor where it would stand, matched by section numbers', async () => {
+  // Die Übersetzung kennt 3.2 noch nicht; die übrigen Abschnitte tragen dieselben Nummern.
+  const { html, warnings } = await renderTranslation(
+    '# Nummeriert\n\n## 3.1 Farbe\n\n## 3.3 Schrift\n\n## Anhang\n',
+    'guides/numbered.md',
+  );
+  assert.equal(warnings.length, 1);
+  // 3.2 steht vor 3.3, nicht am Ende und nicht vor 3.1.
+  assert.match(html, /<a id="32-motion"[^>]*><\/a><a id="33-type"[^>]*><\/a><div class="hwrap hwrap--h2"><h2 id="33-schrift">/);
+  assert.match(html, /<a id="31-colour"[^>]*><\/a><div class="hwrap hwrap--h2"><h2 id="31-farbe">/);
+  assert.match(html, /<a id="appendix"[^>]*><\/a><div class="hwrap hwrap--h2"><h2 id="anhang">/);
+});
+
+test('alignHeadings: by level, numbers decide, an added heading at the start shifts nothing', () => {
+  const h = (depth, digits = '') => ({ depth, digits });
+  // Original gewann vorne eine H2 ohne Nummer: Zuordnung über die Nummern bleibt richtig.
+  assert.deepEqual(alignHeadings([h(1), h(2, '1'), h(2, '2')], [h(1), h(2), h(2, '1'), h(2, '2')]), [0, -1, 1, 2]);
+  // Ebenen müssen passen.
+  assert.deepEqual(alignHeadings([h(1), h(3)], [h(1), h(2), h(3)]), [0, -1, 1]);
+  assert.deepEqual(alignHeadings([], [h(1)]), [-1]);
+});
+
+test('links in a translation resolve against the original, images against the same file', async () => {
+  const { html } = await renderTranslation(
+    [
+      '# Leitfaden',
+      '',
+      '[a](../UX.md#33-colour-means-state) [b](install.md) [c](../README.md#using-humanitl)',
+      '',
+      '[d](../../tests/escape/) [e](#without-the-app) [f](https://example.org/x.md)',
+      '',
+      '![Palette](img/palette.png)',
+    ].join('\n'),
+    'guides/fixture.md',
+  );
+  assert.match(html, /href="\/docs\/ux\/#33-colour-means-state"/);
+  assert.match(html, /href="\/docs\/guides\/install\/"/);
+  assert.match(html, /href="\/docs\/#using-humanitl"/);
+  assert.match(html, /href="https:\/\/github.com\/nurkert\/Humanitl\/tree\/main\/tests\/escape\/"/);
+  assert.match(html, /href="#without-the-app"/);
+  assert.match(html, /href="https:\/\/example.org\/x.md"/);
+  // Das Bild des Originals docs/guides/img/palette.png, vom Ordner der Übersetzung aus.
+  // Astro legt lokale Bilder als Platzhalter `__ASTRO_IMAGE_` mit dem Pfad als JSON ab.
+  assert.match(html, /&#x22;src&#x22;:&#x22;\.\.\/\.\.\/\.\.\/guides\/img\/palette\.png&#x22;/);
+});
+
+test('an English translation of a German original: links stay German until localised, words are English', async () => {
+  const { html } = await renderTranslation(
+    '# ADR-0099 · Fixture\n\nApplies to: Humanitl 0.1\n\nStatus: Accepted\nDate: 2026-10-30\n\n## Context\n\nSee [config](../CONFIG.md#stufen).\n',
+    'adr/0099-fixture.md',
+    'en',
+  );
+  assert.match(html, /<span class="chip__k">Applies to:<\/span>/);
+  assert.match(html, /<span class="chip" data-status="accepted"><span class="chip__k">Status:<\/span> Accepted<\/span>/);
+  assert.match(html, /<h2 id="context">/);
+  assert.match(html, /href="\/docs\/config\/#stufen"/);
+  const english = localizeDocLinks(html, 'en');
+  assert.match(english, /href="\/en\/docs\/config\/#stufen"/);
+  assert.doesNotMatch(english, /href="\/docs\//);
+});
+
+test('German words in German documents: meta keys, status values and alerts', async () => {
+  const { html } = await renderTranslation(
+    '# ADR-0099 · Beispiel\n\nApplies to: Humanitl 0.1\n\nStatus: Accepted\nDate: 2026-10-30\n\n## Kontext\n\n> [!WARNING]\n> Achtung.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n',
+    'adr/0099-fixture.md',
+  );
+  assert.match(html, /<span class="chip__k">Status:<\/span> Angenommen<\/span>/);
+  assert.match(html, /<span class="chip__k">Datum:<\/span> 2026-10-30/);
+  assert.match(html, /<p class="alert__title"><svg[^>]*>.*?<\/svg>Warnung<\/p>/);
+  assert.match(html, /aria-label="Tabelle: Kontext"/);
+});
+
+test('localizeDocLinks moves only docs links, and leaves code untouched', () => {
+  const html = '<a href="/docs/">a</a><a href="/docs/ux/#x">b</a><a href="/download/">c</a><code>href=&quot;/docs/&quot;</code>';
+  assert.equal(localizeDocLinks(html, 'de'), html);
+  assert.equal(
+    localizeDocLinks(html, 'en'),
+    '<a href="/en/docs/">a</a><a href="/en/docs/ux/#x">b</a><a href="/download/">c</a><code>href=&quot;/docs/&quot;</code>',
+  );
+});
+
+test('translationInfo: language and original come from the path, never from the front matter', () => {
+  const file = path.join(docsRoot, 'translations/de/guides/install.md');
+  assert.deepEqual(translationInfo(file, { source: 'guides/install.md', lang: 'de' }), {
+    lang: 'de',
+    source: 'guides/install.md',
+    sourcePath: path.join(docsRoot, 'guides/install.md'),
+  });
+  assert.equal(translationInfo(file, { source: '../../etc/passwd.md' }).source, 'guides/install.md');
+  assert.equal(translationInfo(file, { source: 'translations/en/CONFIG.md' }).source, 'guides/install.md');
+  assert.equal(translationInfo(file, { lang: 'fr' }).lang, 'de');
+  assert.equal(translationInfo(file, { source: 'ARCHITECTURE.md', lang: 'en' }).source, 'guides/install.md');
+  assert.equal(translationInfo(file, { source: 'ARCHITECTURE.md', lang: 'en' }).lang, 'de');
+  assert.equal(translationInfo(path.join(docsRoot, 'guides/install.md')), null);
 });

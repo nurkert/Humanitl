@@ -12,30 +12,38 @@ import type { DocGroup } from '../lib/docs';
 import '../styles/docs.css';
 
 interface Props {
+  /** Sprache der Seite (des Wegs und der Beschriftungen, HUM-346). */
+  lang?: 'de' | 'en';
   title: string;
   description: string;
   groups: DocGroup[];
   currentId: string;
   headings?: MarkdownHeading[];
-  /** Sprache des Dokuments: Das Inhaltsverzeichnis deutscher Seiten trägt lang="de". */
+  /** Sprache des gezeigten Textes; weicht sie von der Seite ab, trägt das Inhaltsverzeichnis sie als lang. */
   docLang?: 'de' | 'en';
+  /** Die Wege dieser Seite in jeder Sprache, für Sprachwahl und hreflang. */
+  alternates?: { lang: 'de' | 'en'; href: string }[];
 }
 
-const { title, description, groups, currentId, headings = [], docLang = 'en' } = Astro.props;
-const t = ui.en.docs;
+const { lang = 'en', title, description, groups, currentId, headings = [], docLang = lang, alternates } = Astro.props;
+const t = ui[lang].docs;
+// Weicht die Sprache des Textes ab, nennt <html lang> sie (Base); die Bedienelemente der Docs
+// tragen dann die Sprache der Seite als eigenes Attribut.
+const chromeLang = docLang !== lang ? lang : undefined;
 
 // H2 und H3; ab 60 Einträgen nur H2, sonst wird die Liste länger als nützlich.
 let toc = headings.filter((heading) => heading.depth === 2 || heading.depth === 3);
 if (toc.length > 60) toc = toc.filter((heading) => heading.depth === 2);
 const hasToc = toc.length >= 2;
-const currentGroup = groups.find((group) => group.items.some((item) => item.id === currentId))?.title ?? t.nav;
+const currentKey = groups.find((group) => group.items.some((item) => item.id === currentId))?.key;
+const currentGroup = (currentKey && t.groupTitles[currentKey as keyof typeof t.groupTitles]) || t.nav;
 ---
 
-<Base lang="en" title={title} description={description}>
-  <div class="docs" data-docs>
+<Base lang={lang} contentLang={docLang} alternates={alternates} title={title} description={description}>
+  <div class="docs" data-docs lang={chromeLang}>
     <aside class="docs__side">
       <nav class="docs__sidenav" aria-label={t.nav} data-sidenav>
-        <DocsNav groups={groups} currentId={currentId} />
+        <DocsNav groups={groups} currentId={currentId} lang={lang} />
       </nav>
     </aside>
 
@@ -88,7 +96,7 @@ const currentGroup = groups.find((group) => group.items.some((item) => item.id =
 
 
 
-  <div id="docs-menu" class="sheet" popover>
+  <div id="docs-menu" class="sheet" popover lang={chromeLang}>
     <div class="sheet__grip" aria-hidden="true"></div>
     <div class="sheet__head">
       <p class="sheet__title">{t.nav}</p>
@@ -97,13 +105,13 @@ const currentGroup = groups.find((group) => group.items.some((item) => item.id =
       </button>
     </div>
     <nav aria-label={`${t.nav} (menu)`} data-sheetnav>
-      <DocsNav groups={groups} currentId={currentId} />
+      <DocsNav groups={groups} currentId={currentId} lang={lang} />
     </nav>
   </div>
 
   {
     hasToc && (
-      <div id="docs-toc" class="sheet" popover>
+      <div id="docs-toc" class="sheet" popover lang={chromeLang}>
         <div class="sheet__grip" aria-hidden="true" />
         <div class="sheet__head">
           <p class="sheet__title">{t.onThisPage}</p>
@@ -119,7 +127,7 @@ const currentGroup = groups.find((group) => group.items.some((item) => item.id =
     )
   }
 
-  <p class="visually-hidden" aria-live="polite" data-live></p>
+  <p class="visually-hidden" aria-live="polite" data-live lang={chromeLang}></p>
 </Base>
 
 <script>

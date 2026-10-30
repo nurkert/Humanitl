@@ -1,0 +1,38 @@
+---
+// Hinweis über einem Text der Docs (HUM-346): noch nicht übersetzt, oder die Übersetzung
+// beruht auf einer älteren Fassung des Originals. Gemeinsam für Docs-Seiten und die
+// Einleitung der Startseite, damit beide dieselbe Fassung gleich kennzeichnen.
+import { ui } from '../../i18n/ui';
+import type { DocLang, VersionKind } from '../../lib/docs';
+
+interface Props {
+  /** Sprache der Seite; in ihr steht der Hinweis. */
+  lang: DocLang;
+  kind: VersionKind;
+  stale: boolean;
+  originalHref: string;
+  originalLang: DocLang;
+}
+
+const { lang, kind, stale, originalHref, originalLang } = Astro.props;
+const t = ui[lang].docs;
+---
+
+{
+  kind === 'missing' && (
+    <div class="doc-notice" role="note" data-notice="missing">
+      <p class="doc-notice__title">{t.notTranslatedTitle}</p>
+      <p>{t.notTranslated}</p>
+    </div>
+  )
+}
+{
+  stale && (
+    <div class="doc-notice doc-notice--stale" role="note" data-notice="stale">
+      <p class="doc-notice__title">{t.staleTitle}</p>
+      <p>
+        {t.stale} <a href={originalHref} hreflang={originalLang} data-lang-link>{t.staleLink}</a>
+      </p>
+    </div>
+  )
+}
