@@ -73,9 +73,12 @@ abstract final class ProtoVersion {
   /// model cannot be reached (`LLM_001`, HUM-251). Raised to 23 with
   /// further shells: the terminal pane opens one with `Exec` when
   /// `Info.capabilities` names `sandbox.exec` and shows it as a tab through
-  /// `TerminalInput.Open.shell_id` (HUM-314).
+  /// `TerminalInput.Open.shell_id` (HUM-314). Raised to 24 with
+  /// `BlockReason.clientAborted`: the history writes "aborted" for a flow
+  /// whose client gave up the TLS connection to the proxy before there was
+  /// anything to decide, instead of a block nobody made (HUM-316).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 23;
+  static const int minor = 24;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

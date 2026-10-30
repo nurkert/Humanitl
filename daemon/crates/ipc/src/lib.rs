@@ -51,7 +51,12 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `23` seit den weiteren Shells (HUM-299): die RPC `Exec` mit
+/// `24` seit dem abgebrochenen Tunnel (HUM-316): `BLOCK_REASON_CLIENT_ABORTED`
+/// kennzeichnet einen Flow, dessen Client die TLS-Verbindung zum Proxy
+/// abgebrochen, abgelehnt oder leer geschlossen hat, bevor es etwas zu
+/// entscheiden gab; `FlowSummary.error` trägt dazu
+/// `tls_handshake_failed:<klasse>`.
+/// `23` waren die weiteren Shells (HUM-299): die RPC `Exec` mit
 /// `ExecRequest` und `ExecResponse` öffnet neben dem Agenten eine Shell mit
 /// eigenem Terminal, `TerminalInput.Open.shell_id` hängt sich an deren
 /// Terminal, und `Info.capabilities` nennt `sandbox.exec`.
@@ -141,7 +146,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 23;
+pub const PROTO_MINOR: u32 = 24;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
