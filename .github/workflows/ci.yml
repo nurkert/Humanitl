@@ -277,22 +277,45 @@ jobs:
       - name: The daemon as a launchd agent (HUM-314)
         # A fresh runner: install the agent from the build, wait until the
         # daemon answers, check the sandbox through it, take it away again.
+        # Every step that fails says why in an annotation, with launchd's view
+        # and the daemon's log: the job log itself needs write access.
         run: |
-          set -euo pipefail
+          set -uo pipefail
           bin="$PWD/daemon/target/debug"
-          "$bin/humanitl" daemon install --bin-dir "$bin"
-          for _ in $(seq 1 50); do
+          log="$HOME/Library/Logs/Humanitl/humanitld.log"
+          annotate() {
+            local what="$1" out="$2" state
+            state="$(launchctl print "gui/$(id -u)/dev.humanitl.humanitld" 2>&1 | head -40 ||
+              launchctl print "user/$(id -u)/dev.humanitl.humanitld" 2>&1 | head -40)"
+            local text="$what failed%0A$out%0A--- launchctl ---%0A$state%0A--- log ---%0A$(tail -30 "$log" 2>/dev/null)"
+            text="${text//$'\n'/%0A}"
+            echo "::error title=launchd agent::$text"
+            exit 1
+          }
+          run() {
+            local out
+            out="$("$@" 2>&1)" || annotate "$*" "$out"
+            echo "$out"
+          }
+          run "$bin/humanitl" daemon install --bin-dir "$bin"
+          for _ in $(seq 1 75); do
             "$bin/humanitl" daemon status >/dev/null 2>&1 && break
             sleep 0.2
           done
-          "$bin/humanitl" daemon status
+          run "$bin/humanitl" daemon status
           "$bin/humanitl" doctor || true
-          (cd "$RUNNER_TEMP" && "$bin/humanitl" sandbox check)
-          "$bin/humanitl" daemon logs -n 20
-          "$bin/humanitl" daemon uninstall
+          (cd "$RUNNER_TEMP" && run "$bin/humanitl" sandbox check)
+          run "$bin/humanitl" daemon restart
+          for _ in $(seq 1 75); do
+            "$bin/humanitl" daemon status >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          run "$bin/humanitl" daemon status
+          run "$bin/humanitl" daemon logs -n 20
+          run "$bin/humanitl" daemon uninstall
+          sleep 1
           if "$bin/humanitl" daemon status >/dev/null 2>&1; then
-            echo "::error::the daemon still answers after uninstall"
-            exit 1
+            annotate "uninstall" "the daemon still answers after uninstall"
           fi
       - name: Documentation builds without warnings
         run: cd daemon && cargo doc --workspace --no-deps
