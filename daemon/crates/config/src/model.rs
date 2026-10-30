@@ -450,6 +450,9 @@ pub struct SandboxRef {
     /// Ob der Agent im Projektverzeichnis schreiben darf.
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "denied"))]
     pub work_mode: WorkMode,
+    /// Wohin die Änderungen des Agenten gehen. `direct` schreibt in das Projektverzeichnis; `disposable` legt es nur lesbar unter eine Schicht im Arbeitsspeicher, und nach dem Lauf entscheidet der Mensch, welche Änderungen er übernimmt (`humanitl sandbox changes`, `apply`, `discard`). `disposable` gibt es vorerst nur unter Linux (Overlay von bubblewrap); unter macOS lehnt der Start mit `SANDBOX_030` ab.
+    #[schemars(extend("x-tier" = "basic", "x-project-scope" = "denied"))]
+    pub mode: SandboxMode,
     /// Zusätzliche Umgebungsvariablen für die Sandbox; sie überschreiben gleichnamige Einträge aus dem `[env]` des Profils. Der Schlüssel lässt sich aus der Umgebung des Prozesses setzen und ist damit nur so vertrauenswürdig wie die Shell, aus der Humanitl startet; die Variablen des dynamischen Linkers (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) werden deshalb abgelehnt, sie liefen vor dem seccomp-Filter des Shims.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub env: BTreeMap<String, String>,
@@ -461,7 +464,41 @@ impl Default for SandboxRef {
             profile: "default".to_owned(),
             work_dir: None,
             work_mode: WorkMode::Rw,
+            mode: SandboxMode::Direct,
             env: BTreeMap::new(),
+        }
+    }
+}
+
+/// Wohin die Änderungen des Agenten am Projektverzeichnis gehen (HUM-350).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxMode {
+    /// In das Projektverzeichnis selbst, wie bisher.
+    #[default]
+    Direct,
+    /// In eine Schicht im Arbeitsspeicher über dem nur lesbaren Projektverzeichnis.
+    Disposable,
+}
+
+impl SandboxMode {
+    /// Der Name, wie er in `config.toml` und auf der Leitung steht.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Disposable => "disposable",
+        }
+    }
+
+    /// Liest `direct` oder `disposable`, ohne Rücksicht auf Groß- und
+    /// Kleinschreibung und Leerraum; alles andere ist `None`.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "direct" => Some(Self::Direct),
+            "disposable" => Some(Self::Disposable),
+            _ => None,
         }
     }
 }

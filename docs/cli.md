@@ -239,6 +239,42 @@ stops; it never outlives the session. At most four further shells live at a
 time; a fifth is refused with `TERM_002`. Without a terminal on `stdin` the
 command only watches the output until the shell ends.
 
+### A disposable session
+
+`humanitl run --disposable` (or `sandbox.mode = "disposable"` in
+`config.toml`) keeps the project folder untouched while the agent works. The
+folder lies read-only under a layer in RAM; the agent sees and changes `/work`
+as usual, and every change goes to that layer (HUM-350, `docs/SECURITY.md`
+section 5.2). When the agent ends, `run` says how many changes wait:
+
+```text
+$ humanitl sandbox changes
+Changes of sandbox 0193… in /home/me/project (3):
+  5c1d0e…  modified src/main.rs
+  a03b77…  added    notes.txt
+  9e41f2…  symlink  out -> /etc/shadow  [never applied: it is a symbolic link to /etc/shadow, which leaves the project]
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,3 +1,3 @@
+…
+$ humanitl sandbox apply 5c1d0e…
+Apply 1 change(s) to /home/me/project and discard 2 other(s)? [y/N] y
+applied: sandbox 0193…
+  applied    src/main.rs
+  discarded  notes.txt
+  discarded  out
+```
+
+`apply` without ids takes all changes, `discard` drops them all; both ask
+first (`--yes` for scripts). Nothing is written when one chosen change cannot
+be applied as it is: a file you changed in the project since the start is a
+conflict and needs `--overwrite`, and a symbolic link out of the project, a
+device, a FIFO or a socket is never written. setuid and setgid bits are
+dropped. A new disposable run waits until the changes of the last one are
+applied or discarded (`SANDBOX_030`); a run whose layer grows over its cap in
+RAM is stopped (`SANDBOX_032`). `humanitl sandbox run --disposable` keeps no
+layer after it ends: it lists the changes and drops them.
+
 ### Terminal, input and signals
 
 Without "A shell for the agent", the agent gets **no** PTY of this terminal. Its output arrives as bytes over the daemon's event

@@ -127,6 +127,8 @@ jobs:
           if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
+          # The disposable sandbox needs bwrap >= 0.11 (--overlay, HUM-350).
+          ./scripts/ci/install-bwrap-overlay.sh
 
           websocat_sha=66f8dd3a0394761556339117f8bb5123bddefd44e087af2a72ec22b0bd08d514
           curl -fsSL -o /tmp/websocat \
@@ -594,6 +596,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap socat python3
+          # ESC-5 also starts a disposable sandbox: bwrap >= 0.11 (HUM-350).
+          ./scripts/ci/install-bwrap-overlay.sh
       - name: Allow unprivileged user namespaces
         # Ubuntu 24.04 ships an AppArmor restriction that makes bwrap fail with
         # "Permission denied" (HUM-002 Fallstricke, needed from HUM-006 on).

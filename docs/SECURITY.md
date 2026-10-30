@@ -752,7 +752,89 @@ under `--ro-bind`.
 
 *What the user should do.* Read the diff before committing, especially new files and everything
 under `.github/`, `Makefile`, `package.json` (`scripts`) and build files. Start foreign
-repositories with `--work-mode ro`.
+repositories with `--work-mode ro`, or disposable.
+
+#### The disposable sandbox (HUM-350)
+
+The disposable sandbox is Linux-only for now: it needs the overlay of bubblewrap, and on macOS
+a disposable start is refused with `SANDBOX_030`, the daemon does not advertise
+`sandbox.disposable`, and `changes`, `apply` and `discard` answer with the same finding.
+
+With `sandbox.mode = "disposable"` (`humanitl run --disposable`) the agent writes nothing to the
+project folder while it runs. The folder is the read-only lower layer of an overlay at `/work`;
+every change goes to an upper layer the daemon creates before the start under
+`$XDG_RUNTIME_DIR/humanitl/disposable/<id>/` (mode `0700`, on tmpfs, so in RAM; the start is
+refused with `SANDBOX_030` when that directory is not on tmpfs, when bubblewrap is older than
+0.11, or when the project is mounted read-only). The opened project folder reaches bubblewrap as
+`/proc/self/fd/N`, so the folder that was checked is the lower layer (HUM-263). The daemon
+opens the project folder once before the start and keeps that descriptor: the baseline for the
+conflict check is taken on it before the sandbox starts, the launcher mounts only a folder with
+the same device and inode (a rename plus a new folder under the same path is refused with
+`SANDBOX_006`), and the diff and every write of an apply go through it, never through the path
+again. Entries of
+`mounts.extra_rw` are mounted read-only in this mode, so nothing writable from the host reaches
+the sandbox; masks and `tmpfs` under `/work` lie on the overlay as before.
+
+This is a new mount mode and a new write path back to the host, and its limits are part of the
+claim:
+
+- **Where the upper layer lives.** The sandbox never sees the path of the upper layer: `/run`
+  never comes from the host, and bubblewrap opens the overlay directories before it mounts. The
+  daemon reads the layer only after the sandbox has ended: bubblewrap is reaped and the
+  sandbox's first process is gone from `/proc` (compared with its start time, so a reused process
+  number does not count). When PID 1 of the sandbox ends, the kernel ends
+  every process in its PID namespace, and the overlay lives only as long as a process in its
+  mount namespace, so nothing writes into the layer while the daemon reads it.
+- **Its size.** The hard limit is the tmpfs of the runtime directory (logind sets it, by default
+  10 % of RAM). Below it the daemon measures the growth of that file system with `statvfs(2)`
+  every 250 ms against its state when the layer was created, before the start, and stops the
+  sandbox when it grows by more than 2 GiB or 200 000 entries, or by half of what was free at the
+  start if that is less (`SANDBOX_032`); `humanitl sandbox run --disposable` runs the same guard. Counting the file system
+  and not the tree means a directory with `chmod 000` hides nothing. Between two measurements an
+  agent can write past the cap, up to the hard limit; what other programs write to the same
+  tmpfs counts too and can only stop the sandbox earlier.
+- **Reading it.** The diff walks the upper layer with the same `openat2(RESOLVE_BENEATH |
+  RESOLVE_NO_SYMLINKS)` as the summary and never follows a symlink. Whiteouts (character device
+  `0:0`) are deletions, `user.overlay.opaque = "y"` hides the lower directory, and below an
+  opaque directory every directory hides the lower one too, so `rm -rf build && mkdir -p build/a`
+  deletes what lay in `build/a`; a file copied up but unchanged is no change. Files and
+  directories carrying `user.overlay.redirect` or `user.overlay.metacopy`, which an unprivileged
+  overlay never writes, are listed and never applied. Paths and diffs are agent data: paths are sanitised and carry a hash of their real
+  name, control and bidi characters in a diff are shown escaped.
+- **Applying.** Only what a human selects is written (`humanitl sandbox apply`, which asks
+  first). Every selected change is checked before the first write, and if one fails nothing is
+  written. The parent of each change is opened with `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`;
+  missing directories are created one by one with `O_NOFOLLOW`, so a symlink that appeared in the
+  project meanwhile stops the write instead of leading out. A file is written under its own name
+  with `O_CREAT | O_EXCL | O_NOFOLLOW` and moved into place with `renameat`, which replaces a
+  symlink at the target instead of following it; a change of mode only is written the same way,
+  as a new inode, so a hard link to the old file elsewhere keeps its mode. Directories are created
+  with owner `rwx` and get their final mode last, deepest first. Never written: a symlink whose
+  target is not a plain relative path inside the project (absolute, more leading `..` than its own
+  depth, or `..` after a name such as `sub/d/..`, which could resolve through another symlink and
+  leave the project), a device, FIFO or socket, setuid, setgid and sticky bits (dropped, and
+  said), and a hard link (each name becomes a file of its own). A file or directory the human
+  changed in the project since the start (type, size, `mtime` or mode differ from the snapshot
+  taken before the start) is a conflict and written only with `--overwrite`. Directly before each
+  `renameat`, `unlinkat` or `mkdirat` the target is compared again with what was there at the
+  check, when a directory is deleted every entry below it is compared before it goes (a changed or
+  newly created entry stops the removal, and a directory whose tree cannot be read completely is
+  refused before anything is written), and a deferred directory mode is set only on the same
+  inode with the same mode as when it was noted; a change in between stops the apply with
+  `partial`. A window of a few system calls stays
+  between that comparison and the write: Humanitl does not lock the human's folder. A removal that
+  stops midway can leave directories with mode `0700` and directories named `.humanitl-flat-*` in
+  the project, and the finding says so.
+- **Discarding.** `humanitl sandbox discard`, the rest after an apply, and the end of the daemon
+  remove the layer: without following a symlink, giving directories without permissions back
+  their mode, and flattening trees deeper than 64 levels instead of recursing. A layer a crashed
+  daemon left behind is removed at the next start. The recording keeps the decision (applied or
+  discarded, and which files) in the run's summary.
+
+What it does not change: requests the agent sent through the proxy are out, whatever happens to
+the layer. A disposable run says nothing about the agent's network traffic, and it is not a
+second line of defence for the masks above; it removes the write path to the project for the
+duration of the run, nothing more.
 
 ### 5.3 The agent's terminal output
 
@@ -1179,7 +1261,7 @@ and its state is `failed`; there is no "start anyway".
 | ESC-2 | [`esc-2-mounts.sh`](../tests/escape/esc-2-mounts.sh) | mount surface, exactly one socket, no host `/proc`, hostname |
 | ESC-3 | [`esc-3-egress.sh`](../tests/escape/esc-3-egress.sh) | no egress without the proxy; through the proxy every request no rule decides lands in the queue (`allow` rules and the LLM passthrough skip it); no DNS before the decision, proven on the host at the log of a recording name server |
 | ESC-4 | [`esc-4-rules.sh`](../tests/escape/esc-4-rules.sh) | the rule table including homograph, IP literal, WebSocket and body cap |
-| ESC-5 | [`esc-5-filesystem.sh`](../tests/escape/esc-5-filesystem.sh) | symlink marking, masked paths, OSC 52, audit tampering |
+| ESC-5 | [`esc-5-filesystem.sh`](../tests/escape/esc-5-filesystem.sh) | symlink marking, masked paths, OSC 52, audit tampering, a disposable run never writing to the project (HUM-350) |
 
 Besides the escape tests, CI runs the conformance matrix of real clients through the proxy
 (`daemon/crates/proxy/tests/conformance.rs`), the backpressure load test (1000 flows in 10 s), the
@@ -1321,3 +1403,4 @@ agent can still create a pseudo-terminal, and that a request through the door ar
 daemon as a flow (that the proxy holds it is the subject of the Linux suite, ESC-4). It runs in the CI job `macos` and in the release job `check-macos` against
 the binaries inside the disk image.
 
+| 0.1.0 | The disposable sandbox: the project folder as the read-only lower layer of an overlay, the upper layer in RAM under the runtime directory with a size cap, `mounts.extra_rw` read-only; changes are written back only on apply, never through a symlink, never as a symlink out of the project, a device or with setuid bits, and never over a file the human changed since the start without `--overwrite` (HUM-350, K-24). |
