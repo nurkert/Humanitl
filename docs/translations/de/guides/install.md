@@ -1,6 +1,6 @@
 ---
 source: guides/install.md
-source-sha256: d0bf705d78eeebbf350a03fc102ac16266ee043e7c4f0278bf965b59d0faaffa
+source-sha256: f8e858a6bc1d5aadc5ba337c77076fad4eae59e27bcd93313636970e7ae62f38
 lang: de
 ---
 # Humanitl installieren
@@ -51,6 +51,8 @@ installiert apt sie; das `.rpm` und das AUR-Paket geben dasselbe an, für dnf,
 zypper und pacman. GTK 3 und GLib kommen über die Bibliotheken der App mit. Die
 Tray-Bibliothek und `libsecret-tools` sind optional; das Paket empfiehlt
 `libsecret-tools`.
+Unter macOS braucht es dafür nichts: Der Zugangsschlüssel liegt in deinem
+Anmelde-Schlüsselbund, über das Systemwerkzeug `/usr/bin/security`.
 
 Unter GNOME braucht das Tray-Symbol zusätzlich die Shell-Erweiterung
 „AppIndicator and KStatusNotifierItem Support" (Debian:
@@ -515,7 +517,7 @@ dir, nicht dem Paket, und bleiben, wo sie sind:
 | `~/.local/share/humanitl/blobs/` | Bodies von Anfragen und Antworten aus der Aufzeichnung |
 | `~/.local/share/humanitl/audit/audit.jsonl` | die Audit-Kette |
 | `~/.local/share/humanitl/ca/ca.key`, `ca.crt` | die lokale CA, die der Proxy in der Sandbox benutzt; sie wird nie in die Vertrauensablage des Rechners aufgenommen |
-| `~/.local/share/humanitl/keys/` | ein als Datei gespeicherter Zugangsschlüssel, wenn der Schlüsselbund nicht verfügbar war |
+| `~/.local/share/humanitl/keys/` | ein als Datei gespeicherter Zugangsschlüssel, wenn der Schlüsselbund (unter macOS das Keychain) nicht verfügbar war |
 | `$XDG_RUNTIME_DIR/humanitl/` | Socket und Token des Daemons; nach der Abmeldung weg |
 
 Die Tabelle geht von den Vorgaben `XDG_CONFIG_HOME=~/.config` und

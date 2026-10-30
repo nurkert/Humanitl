@@ -1,6 +1,6 @@
 ---
 source: cli.md
-source-sha256: d1f1847ada8e819c363dcd624182d39ba0601a857b84bb4caf642d2f05de81bf
+source-sha256: 82129c3c71a300c13e44fc03f2923dc35059525c52cb98851cf3b113f2e77075
 lang: de
 ---
 # Die Kommandozeile
@@ -1381,11 +1381,12 @@ access key: set (secret-service:humanitl/llm, secret-service)
 History der Shell. An einem Terminal ist die Eingabe verborgen; aus einer Pipe
 wird alles bis zum Ende gelesen, ohne den abschließenden Zeilenumbruch
 (`printf '%s' "$KEY" | humanitl llm key set`). Der Daemon legt ihn im
-Schlüsselbund des Systems ab (`secret-tool`, Secret Service), sonst in
+Schlüsselbund des Systems ab (`secret-tool`, Secret Service; unter macOS der
+Anmelde-Schlüsselbund über `/usr/bin/security`, Verweis `keychain:humanitl/<NAME>`), sonst in
 `$XDG_DATA_HOME/humanitl/keys/llm.key` mit `0600` und meldet dann `CONFIG_019`.
 Danach enthält `config.toml` nur den Verweis `llm.api_key_ref`. Keine Ausgabe
 trägt den Schlüssel, auch `--json` nicht: Sie nennt `set`, `store`
-(`secret-service`, `file` oder `none`), `key_ref` und die Diagnostics.
+(`secret-service`, `keychain`, `file` oder `none`), `key_ref` und die Diagnostics.
 
 `status` meldet `LLM_009`, wenn `llm.api_key_ref` einen Schlüssel nennt, den der
 Speicher nicht herausgibt. `remove` entfernt Schlüssel und Verweis. Leerraum um

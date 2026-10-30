@@ -1,6 +1,6 @@
 ---
 source: SECURITY.md
-source-sha256: 6b9b20e1649b7616c4da7fb813f6eb4573010b166524fcc763976220c1242575
+source-sha256: 1ff59e84cfa1b91ad1cc278ab83558335031b6660c18bf2af205856ec2267480
 lang: de
 ---
 # Sicherheit
@@ -130,7 +130,7 @@ andere Projekte ebenfalls nutzen.
 | Zertifikatsspeicher des Systems | Vertrauensanker für die eigenen Verbindungen des Daemons zu Zielen (HUM-257) | `/etc/ssl/certs`, nur von root beschrieben; `webpki-roots`, wenn er keine brauchbare Wurzel enthält | der Speicher, dem `curl`, `apt` und der Browser vertrauen; wer ihn ändert, ist root und außerhalb des Modells |
 | der LLM-Host | sieht jeden Prompt | muss dem Nutzer gehören | ein erklärter Seitenkanal, keine technische Absicherung ([Abschnitt 5.1](#51-the-llm-passthrough)) |
 | Audit-Schlüsseldatei | HMAC-Schlüssel der Audit-Kette | `$XDG_DATA_HOME/humanitl/keys/audit.key`, `0600` in `0700` | schützt gegen andere Konten, nicht gegen dasselbe Konto |
-| Schlüsselbund des Systems (Secret Service) | der Zugangsschlüssel für das LLM (HUM-140) | `secret-tool` aus `libsecret-tools`; ohne Antwort `$XDG_DATA_HOME/humanitl/keys/llm.key`, `0600` in `0700` | schützt gegen andere Konten, nicht gegen dasselbe Konto; der Agent liest den Schlüssel in der Sandbox, weil er ihn braucht |
+| Schlüsselbund des Systems (Secret Service, unter macOS der Anmelde-Schlüsselbund) | der Zugangsschlüssel für das LLM (HUM-140, HUM-349) | `secret-tool` aus `libsecret-tools`, unter macOS `/usr/bin/security`; ohne Antwort `$XDG_DATA_HOME/humanitl/keys/llm.key`, `0600` in `0700` | schützt gegen andere Konten, nicht gegen dasselbe Konto; der Agent liest den Schlüssel in der Sandbox, weil er ihn braucht |
 
 **Nicht Teil der Isolations-TCB: die Flutter-Anwendung.** Sie ist ein gRPC-Client wie die
 Kommandozeile und kann die Sandbox nicht schwächen. Für die *Entscheidung* wird ihr aber
@@ -675,9 +675,32 @@ Session-Bus, ein Fehler oder 20 Sekunden ohne Antwort), liegt er in
 `CONFIG_019`, und das Formular sagt, welcher der beiden Fälle gilt. Die Datei wird nur gelesen,
 wenn sie diesem Konto gehört, kein Symlink ist und für niemanden sonst lesbar ist (sonst
 `LLM_009`). `config.toml` enthält nie den Schlüssel, nur seinen Verweis `llm.api_key_ref`
-(`secret-service:humanitl/llm` oder `file:llm`). Gesetzt wird er über den RPC `LlmKey`, aus dem
+(`secret-service:humanitl/llm`, `keychain:humanitl/llm` oder `file:llm`). Gesetzt wird er über den RPC `LlmKey`, aus dem
 Formular oder mit `humanitl llm key set`, das ihn von `stdin` liest; keine Antwort des Daemons
 trägt ihn zurück.
+
+*Unter macOS (HUM-349).* Der Schlüsselbund ist der Anmelde-Schlüsselbund (das Keychain),
+angesprochen mit dem Systemwerkzeug `/usr/bin/security`, mit demselben Dienst `humanitl` und dem
+Konto `llm`, dem Verweis `keychain:humanitl/llm` und denselben 20 Sekunden. Eine Client-Bibliothek
+gibt es nicht: Die App ist nur ad-hoc signiert, ein Eintrag, dessen Zugriffsliste unserem Programm
+vertraute, fragte also nach jedem Update. Ein von `security` angelegter Eintrag vertraut diesem von
+Apple signierten Werkzeug, und nur ihm; kein `-A`, kein `-T`. Der Schlüssel geht über `stdin` an
+`security -i`, nie auf dessen Kommandozeile, und kommt über `stdout` zurück. Weil der Exit-Code von
+`security -i` nichts beweist (eine Zeile, die es nicht verarbeiten kann, kann mit 0 enden), liest
+der Daemon den Eintrag zurück und vergleicht ihn, bevor er den Schlüssel als gespeichert meldet.
+Ein Schlüssel, den `security` nicht unverändert tragen kann (Zeichen außerhalb des druckbaren ASCII
+oder ein Befehl über 4000 Bytes), erreicht das Werkzeug nie. Nimmt das Keychain den Schlüssel nicht
+an, etwa weil es in einer Sitzung ohne Bildschirm gesperrt ist, liegt der Schlüssel wie unter Linux
+in der `0600`-Datei, und `CONFIG_019` sagt es, mit dem Grund. Ein Schlüssel, der schon in dieser
+Datei liegt, wirkt über seinen `file:`-Verweis weiter; setzt man erneut einen Schlüssel, zieht er
+ins Keychain um, und die Datei wird entfernt. Ein Eintrag im Keychain steht dem Konto genauso offen
+wie der Secret Service: **Jeder Prozess dieses Kontos, der außerhalb der Sandbox läuft, kann ihn
+mit `security find-generic-password -s humanitl -a llm -w` lesen**, ohne Rückfrage, weil die
+Zugriffsliste diesem Werkzeug vertraut und nicht einem Aufrufer. Gegenüber dem Agenten hält das
+Keychain wie der Secret Service: Das Seatbelt-Profil erreicht kein `securityd` (Mach-Dienste sind
+eine Erlaubnisliste ohne ihn), und `~/Library/Keychains` liegt in `/Users`, das nicht lesbar ist.
+`/usr/bin/security` selbst darf in der Sandbox gestartet werden; es findet dort nichts. Der Agent
+bekommt den Schlüssel nur als Sandbox-Datei der Session.
 
 *Mehrere gespeicherte Server (HUM-289).* `config.toml` darf mehrere Modellserver unter
 `[llm.servers.<name>]` enthalten, jeden mit eigenem Endpunkt und eigenem Schlüsselverweis; der
@@ -762,10 +785,11 @@ kann ihn deshalb in eine Anfrage an ein anderes Ziel stecken. Dort ist er ein Fu
 vor `?` und im Host; angehalten wird die Anfrage nur bei einem Host ohne erlaubende Regel oder
 mit `hold.hard_block_checksum_secrets`. Ein Schlüssel, der umkodiert hinausgeht (Base64,
 aufgeteilt, verschlüsselt), wird nicht wörtlich gefunden. Wer denselben Nutzer kontrolliert,
-liest den Schlüssel selbst mit `secret-tool lookup`; der Schlüsselbund schützt gegen andere
+liest den Schlüssel selbst mit `secret-tool lookup`, unter macOS mit
+`security find-generic-password`; der Schlüsselbund schützt gegen andere
 Nutzer, nicht gegen diesen. *Was zu tun ist:* einen Schlüssel mit so wenigen Rechten wie möglich
 anlegen, beim Anbieter widerrufbar, und `libsecret-tools` installieren, damit er nicht in der
-Datei landet.
+Datei landet; unter macOS den Anmelde-Schlüsselbund beim Setzen des Schlüssels entsperrt halten.
 
 ### 5.2 Das Projektverzeichnis `/work`
 
@@ -886,7 +910,11 @@ gehören zur Aussage:
   Sticky-Bits (verworfen, und das wird gesagt) und ein Hardlink (jeder Name wird eine eigene
   Datei). Eine Datei oder ein Verzeichnis, das der Mensch seit dem Start im Projekt geändert hat
   (Typ, Größe, `mtime` oder Modus weichen vom Schnappschuss vor dem Start ab), ist ein Konflikt
-  und wird nur mit `--overwrite` geschrieben. Direkt vor jedem `renameat`, `unlinkat` oder
+  und wird nur geschrieben, wenn er für genau diese Änderung bestätigt ist: Die App nennt jede
+  bestätigte Änderung in `ApplyChanges.overwrite_ids`, und ein Konflikt jeder anderen ausgewählten
+  Änderung, auch einer, die erst nach der Auswahl auftrat, stoppt die Übernahme vor dem ersten
+  Schreiben; `--overwrite` auf der Kommandozeile bestätigt jede ausgewählte Änderung (HUM-351).
+  Direkt vor jedem `renameat`, `unlinkat` oder
   `mkdirat` wird das Ziel erneut mit dem verglichen, was bei der Prüfung da war, beim Löschen
   eines Verzeichnisses wird jeder Eintrag darunter verglichen, bevor er geht (ein geänderter oder
   neu angelegter Eintrag hält das Entfernen an, und ein Verzeichnis, dessen Baum sich nicht
@@ -1461,8 +1489,8 @@ Masken zuletzt.
   neue Pseudo-Terminals anlegen; deren Follower-Seite trägt die Erweiterung
   `com.apple.sandbox.pty`, die nur sie bekommt.
 - **Dienste:** nur die Mach-Dienste, die gewöhnliche Werkzeuge für Nutzerdaten, Benachrichtigungen,
-  Logging und Einstellungen brauchen. Nicht erreichbar: `mDNSResponder` (DNS), `trustd`, die
-  Zwischenablage (Pasteboard) und launchd.
+  Logging und Einstellungen brauchen. Nicht erreichbar: `mDNSResponder` (DNS), `trustd`,
+  `securityd` (also kein Keychain), die Zwischenablage (Pasteboard) und launchd.
 
 Ohne Mounts werden die Sandbox-Pfade eines Profils abgebildet: `/work` ist das Projekt selbst,
 `/home/agent`, `/tmp`, `/etc/humanitl` und `/run/humanitl` liegen im Session-Verzeichnis unter dem
@@ -1527,3 +1555,4 @@ ein Pseudo-Terminal anlegen kann und dass eine Anfrage durch die Tür als Flow b
 die Binaries im Disk-Image.
 
 | 0.1.0 | Die Wegwerf-Sandbox: der Projektordner als schreibgeschützte untere Schicht eines Overlays, die obere Schicht im Arbeitsspeicher unter dem Laufzeitverzeichnis mit einer Größengrenze, `mounts.extra_rw` schreibgeschützt; Änderungen werden nur bei der Übernahme zurückgeschrieben, nie durch einen Symlink, nie als Symlink aus dem Projekt hinaus, als Gerät oder mit setuid-Bits und nie über eine Datei, die der Mensch seit dem Start geändert hat, ohne `--overwrite` (HUM-350, K-24). |
+| 0.1.0 | Der Bereich für Änderungen in der App: Ein Konflikt wird nur überschrieben, wenn er für genau diese Änderung bestätigt wurde (`ApplyChanges.overwrite_ids`); ein Konflikt, der nach der Auswahl auftritt, stoppt die Übernahme (HUM-351, K-24). |
