@@ -230,10 +230,13 @@ impl Context {
                 humanitl_sandbox::WorkDirSource::CurrentDir,
             );
         };
+        // Absolut, damit der Daemon die Datei nicht gegen sein eigenes
+        // Arbeitsverzeichnis deutet (HUM-296): `--config other.toml` heißt
+        // die Datei im aktuellen Verzeichnis dieses Aufrufs.
         let file = self
             .config_file
-            .clone()
-            .unwrap_or_else(|| self.paths.config_path());
+            .as_ref()
+            .map_or_else(|| self.paths.config_path(), |file| self.cwd.join(file));
         let source = humanitl_sandbox::WorkDirSource::from_origin(
             resolved.origin(humanitl_sandbox::WORK_DIR_KEY),
             &file,
@@ -628,5 +631,16 @@ mod tests {
             vec![("sandbox.work_dir".to_owned(), other.display().to_string())],
         );
         assert_eq!(picked(&flag), (PathBuf::from(&other), WorkDirSource::Flag));
+
+        // `--config other.toml` nennt die Datei im aktuellen Verzeichnis des
+        // Aufrufs, absolut, damit der Daemon sie nicht gegen sein eigenes
+        // deutet (HUM-296).
+        let resolved = bare.config().expect("resolves");
+        let mut named = context(&[], Vec::new());
+        named.config_file = Some(PathBuf::from("other.toml"));
+        assert_eq!(
+            named.work_dir(&resolved),
+            (thesis, WorkDirSource::ConfigFile(cwd.join("other.toml")))
+        );
     }
 }

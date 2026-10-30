@@ -89,6 +89,16 @@ real path. A stored folder that no longer exists is `SANDBOX_006` already in
 the plan, so Setup shows it red before any start. The start then mounts the
 folder only if the directory it opens still lies at the path it checked.
 
+**Only the daemon's config file declares a folder outside the home directory
+(HUM-296).** `humanitl run --config other.toml` sends the folder from
+`other.toml` to the daemon, and the daemon does not read that file. Below the
+home directory the folder starts as usual. Outside it the start ends with
+`SANDBOX_006` from `sandbox.work_dir in other.toml`; the sentence names the
+daemon's file, and the fix is the command that declares the folder there:
+`humanitl --config ~/.config/humanitl/config.toml config set sandbox.work_dir
+<dir>`. `humanitl sandbox run --config other.toml` starts without the daemon
+and keeps reading the declaration from the file it names.
+
 Every other configuration flag (`--hold-timeout-secs`, `--findings-enabled`
 and so on) belongs to the configuration and not to a session. The daemon
 accepts only two paths from the client — `llm.endpoint` and `hold.timeout_secs` —
