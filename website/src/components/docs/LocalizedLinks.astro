@@ -1,0 +1,15 @@
+---
+// Rendert den Inhalt und stellt dessen Verweise auf die Docs-Seiten der Sprache `lang` um
+// (HUM-346). Die Markdown-Plugins schreiben Verweise als `/docs/…`, weil dasselbe gerenderte
+// Dokument in beiden Sprachbäumen erscheinen kann (Original ohne Übersetzung).
+import { localizeDocLinks } from '../../lib/docs-catalog.mjs';
+
+interface Props {
+  lang: 'de' | 'en';
+}
+
+const { lang } = Astro.props;
+const html = await Astro.slots.render('default');
+---
+
+<Fragment set:html={localizeDocLinks(html, lang)} />

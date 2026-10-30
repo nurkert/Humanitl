@@ -1,13 +1,18 @@
 ---
 // Die Liste aller Docs-Seiten in Gruppen, für die Seitenleiste und das Menü auf dem Telefon.
+// Eine Seite, die in dieser Sprache nur im Original vorliegt, trägt das Kürzel der Sprache,
+// in der sie geschrieben ist (HUM-346).
+import { ui } from '../../i18n/ui';
 import type { DocGroup } from '../../lib/docs';
 
 interface Props {
   groups: DocGroup[];
   currentId?: string;
+  lang?: 'de' | 'en';
 }
 
-const { groups, currentId } = Astro.props;
+const { groups, currentId, lang = 'en' } = Astro.props;
+const t = ui[lang].docs;
 ---
 
 <div class="dnav">
@@ -18,7 +23,7 @@ const { groups, currentId } = Astro.props;
       const open = group.key !== 'decisions' || hasCurrent;
       return (
         <details class="dnav__group" open={open} data-group={group.key}>
-          <summary class="dnav__title">{group.title}</summary>
+          <summary class="dnav__title">{t.groupTitles[group.key as keyof typeof t.groupTitles] ?? group.key}</summary>
           <ul class="dnav__list">
             {group.items.map((item) => (
               <li>
@@ -28,13 +33,15 @@ const { groups, currentId } = Astro.props;
                   aria-current={item.id === currentId ? 'page' : undefined}
                 >
                   {item.number && <span class="dnav__num">{item.number}</span>}
-                  <span class="dnav__label">{item.label}</span>
-                  {item.german && (
+                  <span class="dnav__label" lang={item.number ? item.contentLang : undefined}>{item.label}</span>
+                  {item.kind === 'missing' && (
                     <span class="badge" aria-hidden="true">
-                      DE
+                      {item.contentLang.toUpperCase()}
                     </span>
                   )}
-                  {item.german && <span class="visually-hidden">(German)</span>}
+                  {item.kind === 'missing' && (
+                    <span class="visually-hidden">({t.otherLanguage[item.contentLang]})</span>
+                  )}
                 </a>
               </li>
             ))}

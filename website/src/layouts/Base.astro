@@ -9,25 +9,39 @@ import { alternates, defaultLang, languages, path, repoUrl, ui, type Lang, type 
 
 interface Props {
   lang: Lang;
-  /** Fehlt bei Seiten, die es nur in einer Sprache gibt (die Docs): dann keine hreflang-Paare und keine Sprachwahl. */
+  /** Fehlt bei Seiten außerhalb von `pages` (die Docs); die geben ihre Sprachfassungen über `alternates`. */
   page?: Page;
+  /**
+   * Sprachfassungen einer Seite ohne `page` (die Docs, HUM-346), für hreflang und die
+   * Sprachwahl. Fehlen beide, gibt es keine hreflang-Paare und keine Sprachwahl.
+   */
+  alternates?: { lang: Lang; href: string }[];
+  /**
+   * Sprache des Haupttextes, wenn sie von `lang` abweicht (eine Docs-Seite ohne Übersetzung,
+   * HUM-346): `<html lang>` nennt sie, Kopf- und Fußzeile behalten `lang` als eigenes Attribut.
+   */
+  contentLang?: Lang;
   title: string;
   description: string;
 }
 
-const { lang, page, title, description } = Astro.props;
+const { lang, page, title, description, alternates: pageAlternates, contentLang = lang } = Astro.props;
+const chromeLang = contentLang !== lang ? lang : undefined;
 const t = ui[lang];
 const site = Astro.site!;
 const canonical = new URL(Astro.url.pathname, site);
-const versions = page ? alternates(page) : [];
-// Unter /docs/ ist der Docs-Link aktiv; auf der Startseite der Docs als genau diese Seite.
-const docsCurrent = Astro.url.pathname === '/docs/' ? 'page' : Astro.url.pathname.startsWith('/docs/') ? 'true' : undefined;
+const versions = page ? alternates(page) : (pageAlternates ?? []);
+const xDefault = versions.find((version) => version.lang === defaultLang);
+// Die Docs je Sprache: /docs/ auf Deutsch, /en/docs/ auf Englisch (HUM-346). Darunter ist der
+// Docs-Link aktiv; auf der Startseite der Docs als genau diese Seite.
+const docsHome = lang === defaultLang ? '/docs/' : `/${lang}/docs/`;
+const docsCurrent = Astro.url.pathname === docsHome ? 'page' : Astro.url.pathname.startsWith(docsHome) ? 'true' : undefined;
 const home = path('home', lang);
 
 const nav = [
   { href: `${home}#module`, label: t.nav.how },
   { href: path('security', lang), label: t.nav.security, current: page === 'security' ? 'page' : undefined },
-  { href: '/docs/', label: t.nav.docs, current: docsCurrent },
+  { href: docsHome, label: t.nav.docs, current: docsCurrent },
 ];
 
 const jsonLd = {
@@ -46,7 +60,7 @@ const jsonLd = {
 ---
 
 <!doctype html>
-<html lang={lang}>
+<html lang={contentLang}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -61,7 +75,7 @@ const jsonLd = {
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
     {versions.map((version) => <link rel="alternate" hreflang={version.lang} href={new URL(version.href, site)} />)}
-    {page && <link rel="alternate" hreflang="x-default" href={new URL(path(page, defaultLang), site)} />}
+    {xDefault && <link rel="alternate" hreflang="x-default" href={new URL(xDefault.href, site)} />}
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="sitemap" href="/sitemap.xml" />
@@ -78,8 +92,8 @@ const jsonLd = {
     <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
   </head>
   <body>
-    <a class="skip" href="#main">{lang === 'de' ? 'Zum Inhalt' : 'Skip to content'}</a>
-    <header class="nav" data-nav>
+    <a class="skip" href="#main" lang={chromeLang}>{lang === 'de' ? 'Zum Inhalt' : 'Skip to content'}</a>
+    <header class="nav" data-nav lang={chromeLang}>
       <div class="nav__bar">
         <a class="nav__brand" href={home} aria-label={t.nav.home}>
           <Logo />
@@ -127,7 +141,7 @@ const jsonLd = {
 
     <slot />
 
-    <footer class="foot">
+    <footer class="foot" lang={chromeLang}>
       <div class="container foot__row">
         <a class="nav__brand" href={home} aria-label={t.nav.home}>
           <Logo />
@@ -136,7 +150,7 @@ const jsonLd = {
         <p class="foot__line">{t.footer.line}</p>
         <nav class="foot__links" aria-label={t.legal.imprint}>
           <a href={path('download', lang)}>{t.nav.download}</a>
-          <a href="/docs/">{t.nav.docs}</a>
+          <a href={docsHome}>{t.nav.docs}</a>
           <a href={repoUrl}>{t.footer.github}</a>
           <a href={path('imprint', lang)}>{t.legal.imprint}</a>
           <a href={path('privacy', lang)}>{t.legal.privacy}</a>
@@ -192,6 +206,7 @@ const jsonLd = {
     text-decoration: none;
   }
   .nav__brand :global(svg) {
+    flex-shrink: 0;
     width: 1.75rem;
     height: 1.75rem;
     filter: drop-shadow(0 4px 14px rgb(232 184 75 / 0.25));

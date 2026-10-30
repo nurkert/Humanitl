@@ -4,6 +4,27 @@
 // Ohne dieses Skript bleibt alles bedienbar; es fehlen nur Kopierknopf und Markierung.
 
 const live = document.querySelector<HTMLElement>('[data-live]');
+// Die Wörter des Kopierknopfs in der Sprache der Seite (HUM-346). Zeigt die Seite den Text der
+// anderen Sprache, nennt <html lang> diese; die Bedienelemente tragen dann die Sprache der Seite.
+const chromeLang = document.querySelector<HTMLElement>('[data-docs]')?.lang || document.documentElement.lang;
+const words =
+  chromeLang === 'de'
+    ? {
+        copy: 'Kopieren',
+        copyCode: 'Code kopieren',
+        copied: 'Kopiert',
+        announceCopied: 'In die Zwischenablage kopiert',
+        press: (keys: string) => `${keys} drücken`,
+        failed: (hint: string) => `Kopieren fehlgeschlagen. Der Code ist markiert. ${hint}.`,
+      }
+    : {
+        copy: 'Copy',
+        copyCode: 'Copy code',
+        copied: 'Copied',
+        announceCopied: 'Copied to clipboard',
+        press: (keys: string) => `Press ${keys}`,
+        failed: (hint: string) => `Copying failed. The code is selected. ${hint}.`,
+      };
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 function announce(message: string) {
@@ -42,27 +63,29 @@ for (const figure of document.querySelectorAll<HTMLElement>('.doc figure.code'))
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'code__copy';
-  button.textContent = 'Copy';
-  button.setAttribute('aria-label', 'Copy code');
+  // Steht im Artikel, spricht aber die Sprache der Seite.
+  button.lang = chromeLang;
+  button.textContent = words.copy;
+  button.setAttribute('aria-label', words.copyCode);
   const bar = figure.querySelector('.code__bar');
   (bar ?? figure).append(button);
   let timer = 0;
   const flash = (label: string) => {
     button.textContent = label;
     window.clearTimeout(timer);
-    timer = window.setTimeout(() => (button.textContent = 'Copy'), 1600);
+    timer = window.setTimeout(() => (button.textContent = words.copy), 1600);
   };
   button.addEventListener('click', async () => {
     const code = pre.textContent ?? '';
     try {
       await navigator.clipboard.writeText(code);
-      flash('Copied');
-      announce('Copied to clipboard');
+      flash(words.copied);
+      announce(words.announceCopied);
     } catch {
       selectText(pre);
-      const hint = isMac ? 'Press ⌘C' : 'Press Ctrl+C';
+      const hint = words.press(isMac ? '⌘C' : 'Ctrl+C');
       flash(hint);
-      announce(`Copying failed. The code is selected. ${hint}.`);
+      announce(words.failed(hint));
     }
   });
 }
@@ -142,3 +165,12 @@ for (const sheet of document.querySelectorAll<HTMLElement>('.sheet[popover]')) {
 // Seitenleiste: die aktuelle Seite sichtbar, nur innerhalb der Leiste gescrollt.
 const sidenav = document.querySelector<HTMLElement>('[data-sidenav]');
 revealInside(sidenav, sidenav?.querySelector<HTMLElement>('[aria-current="page"]') ?? null);
+
+// Sprachwechsel: dieselbe Stelle in der anderen Sprache (HUM-346). Die Überschriften einer
+// Übersetzung tragen die IDs des Originals, darum reicht es, den aktuellen Anker mitzunehmen.
+// Ohne Skript führt der Link auf den Anfang derselben Seite.
+document.addEventListener('click', (event) => {
+  const link = (event.target as Element | null)?.closest<HTMLAnchorElement>('.nav__lang a[hreflang], a[data-lang-link]');
+  if (!link || !location.hash || link.hash) return;
+  link.hash = location.hash;
+});
