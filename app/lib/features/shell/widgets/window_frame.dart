@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/ui.dart';
+import '../../../core/ui/ui_scale.dart';
 import '../../../l10n/l10n.dart';
 import '../../tray/desktop_ports.dart';
 import '../../tray/providers/attention.dart';
@@ -59,16 +60,31 @@ class WindowDragArea extends ConsumerWidget {
 /// empty and the bar leaves [trafficLightInset] free.
 bool get systemWindowButtons => defaultTargetPlatform == TargetPlatform.macOS;
 
-/// The room the traffic lights take at the left end of the bar on macOS.
+/// The room the traffic lights take at the left end of the bar on macOS, in
+/// pixels of the window.
 const double trafficLightInset = 72;
 
 /// The padding of a bar that doubles as title bar: [horizontal] on both
 /// sides, plus [trafficLightInset] on the left where the system draws its
 /// buttons.
-EdgeInsets titleBarPadding(double horizontal) => EdgeInsets.only(
-  left: horizontal + (systemWindowButtons ? trafficLightInset : 0),
-  right: horizontal,
-);
+///
+/// Die Ampel zeichnet das System, nicht die Anwendung; sie wächst nicht mit
+/// der Skalierung (HUM-356). Ihr Platz steht deshalb in Pixeln des Fensters
+/// und wird durch die Skalierung geteilt, die unter [context] gilt: Bei 50 %
+/// sind es 144 logische Pixel, die wieder 72 im Fenster ergeben, und der
+/// Inhalt beginnt nicht unter der Ampel. Andere native Bedienelemente legt
+/// die Anwendung nicht frei; die Knöpfe unter Linux zeichnet sie selbst.
+EdgeInsets titleBarPadding(BuildContext context, double horizontal) {
+  if (!systemWindowButtons) {
+    return EdgeInsets.symmetric(horizontal: horizontal);
+  }
+  final double scale =
+      (UiScaleScope.maybeOf(context)?.effective ?? uiScaleDefault) / 100;
+  return EdgeInsets.only(
+    left: horizontal + trafficLightInset / scale,
+    right: horizontal,
+  );
+}
 
 /// Minimize, maximize or restore, and close: the window buttons at the right
 /// end of the header bar.
@@ -138,7 +154,7 @@ class WindowBar extends StatelessWidget {
       height: tokens.sizes.headerBar,
       child: WindowDragArea(
         child: Padding(
-          padding: titleBarPadding(tokens.spacing.x3),
+          padding: titleBarPadding(context, tokens.spacing.x3),
           child: const Row(children: <Widget>[Spacer(), WindowButtons()]),
         ),
       ),

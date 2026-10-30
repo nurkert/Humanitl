@@ -8,6 +8,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/ui/ui.dart';
+import 'core/ui/ui_scale_host.dart';
 import 'features/shell/connection_gate.dart';
 import 'features/shell/providers/language.dart';
 import 'features/shell/providers/theme.dart';
@@ -67,9 +68,15 @@ class HumanitlApp extends ConsumerWidget {
         final HTokens tokens = mode.resolve(
           MediaQuery.platformBrightnessOf(context),
         );
+        // Die Skalierung (HUM-356) liegt unter Theme und Lokalisierung und
+        // über dem Navigator: Sein Overlay mit Menüs, Blättern und Dialogen
+        // wächst mit, und der Hinweis mit dem neuen Wert spricht die Sprache
+        // des Fensters.
         return HTheme(
           tokens: tokens,
-          child: ColoredBox(color: tokens.colors.bg0, child: child),
+          child: UiScaleHost(
+            child: ColoredBox(color: tokens.colors.bg0, child: child),
+          ),
         );
       },
     );

@@ -46,7 +46,7 @@ void main() {
 
     for (final bool expanded in <bool>[false, true]) {
       if (expanded) {
-        await pressCtrl(tester, LogicalKeyboardKey.digit0);
+        await pressRailToggle(tester);
         await tester.pumpAndSettle();
       }
       for (final Section section in Section.values) {

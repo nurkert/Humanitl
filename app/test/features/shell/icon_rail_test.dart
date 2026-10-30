@@ -1,4 +1,4 @@
-// Die Seitenleiste klappt auf und zu (HUM-254): Knopf, `Ctrl+0`, Palette,
+// Die Seitenleiste klappt auf und zu (HUM-254): Knopf, `Ctrl+Shift+0` (seit HUM-356), Palette,
 // Beschriftung nur ausgeklappt, reduzierte Bewegung, kein Überlauf in der
 // Zwischenbreite und ein Zustand, der den Neustart überlebt.
 
@@ -97,7 +97,10 @@ void main() {
   ) async {
     await tester.pumpWidget(railHarness());
     expect(railWidthOf(tester), railWidth);
-    expect(find.bySemanticsLabel('Expand sidebar (Ctrl+0)'), findsOneWidget);
+    expect(
+      find.bySemanticsLabel('Expand sidebar (Ctrl+Shift+0)'),
+      findsOneWidget,
+    );
 
     await tester.tap(toggle);
     await tester.pump();
@@ -108,7 +111,10 @@ void main() {
 
     await tester.pumpAndSettle();
     expect(railWidthOf(tester), railExpandedWidth);
-    expect(find.bySemanticsLabel('Collapse sidebar (Ctrl+0)'), findsOneWidget);
+    expect(
+      find.bySemanticsLabel('Collapse sidebar (Ctrl+Shift+0)'),
+      findsOneWidget,
+    );
 
     await tester.tap(toggle);
     await tester.pumpAndSettle();
@@ -227,18 +233,18 @@ void main() {
     }
   });
 
-  testWidgets('Ctrl+0 and the palette toggle the rail in the shell', (
+  testWidgets('Ctrl+Shift+0 and the palette toggle the rail in the shell', (
     WidgetTester tester,
   ) async {
     await pumpApp(tester, client: FakeDaemonClient.empty());
     expect(railWidthOf(tester), railWidth);
 
-    await pressCtrl(tester, LogicalKeyboardKey.digit0);
+    await pressRailToggle(tester);
     await tester.pump(HMotion.arrive);
     await tester.pump(HMotion.arrive);
     expect(railWidthOf(tester), railExpandedWidth);
 
-    await pressCtrl(tester, LogicalKeyboardKey.digit0);
+    await pressRailToggle(tester);
     await tester.pump(HMotion.arrive);
     await tester.pump(HMotion.arrive);
     expect(railWidthOf(tester), railWidth);
@@ -266,7 +272,7 @@ void main() {
       uiState: uiStateFileProvider.overrideWithValue(store),
     );
     expect(railWidthOf(tester), railWidth);
-    await pressCtrl(tester, LogicalKeyboardKey.digit0);
+    await pressRailToggle(tester);
     await tester.pump(HMotion.arrive);
     await tester.pump(HMotion.arrive);
 
@@ -286,7 +292,7 @@ void main() {
     expect(railWidthOf(tester), railExpandedWidth);
 
     // Und zurück: `false` steht danach in der Datei, nicht der alte Wert.
-    await pressCtrl(tester, LogicalKeyboardKey.digit0);
+    await pressRailToggle(tester);
     await tester.pump(HMotion.arrive);
     await tester.pump(HMotion.arrive);
     expect(
@@ -324,7 +330,7 @@ void main() {
     expect(
       tester.getSemantics(toggle),
       isSemantics(
-        label: 'Expand sidebar (Ctrl+0)',
+        label: 'Expand sidebar (Ctrl+Shift+0)',
         isButton: true,
         hasExpandedState: true,
         isExpanded: false,
@@ -336,7 +342,7 @@ void main() {
     expect(
       tester.getSemantics(toggle),
       isSemantics(
-        label: 'Collapse sidebar (Ctrl+0)',
+        label: 'Collapse sidebar (Ctrl+Shift+0)',
         hasExpandedState: true,
         isExpanded: true,
       ),

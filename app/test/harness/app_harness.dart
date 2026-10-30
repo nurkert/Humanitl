@@ -53,6 +53,17 @@ Future<void> pressCtrl(WidgetTester tester, LogicalKeyboardKey key) async {
   await tester.pump();
 }
 
+/// Klappt die Leiste mit ihrem Griff um: `Ctrl+Shift+0` (HUM-254; seit
+/// HUM-356 mit `Shift`, weil `Ctrl+0` die Skalierung zurücksetzt).
+Future<void> pressRailToggle(WidgetTester tester) async {
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+  await tester.sendKeyEvent(LogicalKeyboardKey.digit0);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  await tester.pump();
+}
+
 /// Opens the setup step [kind] (`SetupCheckKind.name`) by its "Details"
 /// button when it stands as one line (HUM-287).
 ///

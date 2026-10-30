@@ -138,10 +138,20 @@ void main() {
       TerminalZoom.reset,
     );
 
-    testWidgets('need Ctrl and nothing but Ctrl and Shift', (
+    const List<LogicalKeyboardKey> ctrlAlt = <LogicalKeyboardKey>[
+      LogicalKeyboardKey.controlLeft,
+      LogicalKeyboardKey.altLeft,
+    ];
+
+    // Seit HUM-356 `Ctrl+Alt`: `Ctrl` allein mit denselben Tasten skaliert
+    // die ganze Anwendung.
+    testWidgets('need Ctrl and Alt and nothing but Ctrl, Alt and Shift', (
       WidgetTester tester,
     ) async {
-      expect(await accepts(tester, zoomIn, LogicalKeyboardKey.equal), isTrue);
+      expect(
+        await accepts(tester, zoomIn, LogicalKeyboardKey.equal, held: ctrlAlt),
+        isTrue,
+      );
       expect(
         await accepts(
           tester,
@@ -153,16 +163,9 @@ void main() {
         reason: 'a plain = belongs to the agent',
       );
       expect(
-        await accepts(
-          tester,
-          zoomIn,
-          LogicalKeyboardKey.equal,
-          held: const <LogicalKeyboardKey>[
-            LogicalKeyboardKey.controlLeft,
-            LogicalKeyboardKey.altLeft,
-          ],
-        ),
+        await accepts(tester, zoomIn, LogicalKeyboardKey.equal),
         isFalse,
+        reason: 'Ctrl alone scales the application',
       );
       expect(
         await accepts(
@@ -171,15 +174,20 @@ void main() {
           LogicalKeyboardKey.minus,
           held: const <LogicalKeyboardKey>[
             LogicalKeyboardKey.controlLeft,
+            LogicalKeyboardKey.altLeft,
             LogicalKeyboardKey.metaLeft,
           ],
         ),
         isFalse,
       );
       expect(
+        await accepts(tester, reset, LogicalKeyboardKey.digit0, held: ctrlAlt),
+        isTrue,
+      );
+      expect(
         await accepts(tester, reset, LogicalKeyboardKey.digit0),
         isFalse,
-        reason: 'Ctrl+0 is the rail',
+        reason: 'Ctrl+0 resets the scale of the application',
       );
       expect(
         await accepts(
@@ -188,6 +196,7 @@ void main() {
           LogicalKeyboardKey.numpad0,
           held: const <LogicalKeyboardKey>[
             LogicalKeyboardKey.controlLeft,
+            LogicalKeyboardKey.altLeft,
             LogicalKeyboardKey.shiftLeft,
           ],
         ),
@@ -199,15 +208,33 @@ void main() {
       WidgetTester tester,
     ) async {
       expect(
-        await accepts(tester, zoomIn, LogicalKeyboardKey.equal, repeat: true),
+        await accepts(
+          tester,
+          zoomIn,
+          LogicalKeyboardKey.equal,
+          held: ctrlAlt,
+          repeat: true,
+        ),
         isTrue,
       );
       expect(
-        await accepts(tester, zoomOut, LogicalKeyboardKey.minus, repeat: true),
+        await accepts(
+          tester,
+          zoomOut,
+          LogicalKeyboardKey.minus,
+          held: ctrlAlt,
+          repeat: true,
+        ),
         isTrue,
       );
       expect(
-        await accepts(tester, reset, LogicalKeyboardKey.numpad0, repeat: true),
+        await accepts(
+          tester,
+          reset,
+          LogicalKeyboardKey.numpad0,
+          held: ctrlAlt,
+          repeat: true,
+        ),
         isFalse,
       );
     });

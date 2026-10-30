@@ -1449,5 +1449,13 @@
   "setupDisposableLabel": "Wegwerf-Sandbox",
   "setupDisposableHint": "Änderungen warten im Arbeitsspeicher, bis du sie übernimmst oder verwirfst.",
   "sandboxChangesStartDirect": "Die Änderungen des letzten Wegwerf-Laufs warten noch; ein direkter Start lässt sie weiter warten.",
-  "sandboxChangesOverwriteNeedsUpdate": "Dieser Daemon kann keine einzelne Datei überschreiben; aktualisiere Humanitl, um sie hier zu wählen, oder nimm humanitl sandbox apply --overwrite."
+  "sandboxChangesOverwriteNeedsUpdate": "Dieser Daemon kann keine einzelne Datei überschreiben; aktualisiere Humanitl, um sie hier zu wählen, oder nimm humanitl sandbox apply --overwrite.",
+  "shellScalePercent": "{percent} %",
+  "shellScaleNoticeLimited": "{value}, mehr lässt dieses Fenster nicht zu",
+  "shellPaletteScaleIn": "Größer (ganze Anwendung)",
+  "shellPaletteScaleOut": "Kleiner (ganze Anwendung)",
+  "shellPaletteScaleReset": "Originalgröße (ganze Anwendung)",
+  "shellRailShortcutKey": "Strg+Umschalt+0",
+  "settingsScaleLabel": "Skalierung",
+  "settingsScaleHelp": "Text und Bedienelemente wachsen gemeinsam. Jetzt {value}. Strg+Plus und Strg+Minus ändern sie in Schritten von 10 %, Strg+0 kehrt zu 100 % zurück."
 }

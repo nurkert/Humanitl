@@ -3,7 +3,7 @@
 ///
 /// Since HUM-254 it has two widths. Collapsed it is the rail of HUM-019,
 /// glyphs only, the name in a hover label. Expanded it also shows the name and
-/// the shortcut of every section. A button at its foot and `Ctrl+0` switch
+/// the shortcut of every section. A button at its foot and `Ctrl+Shift+0` switch
 /// between the two.
 library;
 
@@ -427,7 +427,8 @@ class _ToggleButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
-    final String shortcut = l10n.shellNavShortcutKey(0);
+    // `Ctrl+Shift+0` seit HUM-356; `Ctrl+0` setzt die Skalierung zurück.
+    final String shortcut = l10n.shellRailShortcutKey;
     final String label = expanded
         ? l10n.shellRailCollapse(shortcut)
         : l10n.shellRailExpand(shortcut);
