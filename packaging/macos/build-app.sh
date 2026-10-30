@@ -61,7 +61,21 @@ for name in humanitld humanitl humanitl-shim; do
   codesign --force --sign - --timestamp=none "$macos/bin/$name"
 done
 codesign --force --deep --sign - --timestamp=none "$stage/Humanitl.app"
+# `--deep` signiert ohne Entitlements; die App selbst bekommt ihre aus dem
+# Runner zurück. Ohne files.user-selected.read-only öffnet file_picker keinen
+# Ordnerdialog (HUM-343).
+codesign --force --sign - --timestamp=none \
+  --entitlements "$root/app/macos/Runner/Release.entitlements" "$stage/Humanitl.app"
 codesign --verify --deep --strict --verbose=2 "$stage/Humanitl.app"
+# Erst in eine Variable: `grep -q` am Ende einer Pipe könnte unter pipefail
+# einen falschen Abbruch melden.
+has_folder_entitlement() {
+  local ents
+  ents="$(codesign -d --entitlements - --xml "$1" 2>/dev/null || true)"
+  grep -q 'com.apple.security.files.user-selected.read-only' <<<"$ents"
+}
+has_folder_entitlement "$stage/Humanitl.app" ||
+  { echo "error: Humanitl.app lacks the entitlement files.user-selected.read-only" >&2; exit 1; }
 
 name="Humanitl-$version-macos"
 rm -f "$out/$name.zip" "$out/$name.dmg"
@@ -70,6 +84,12 @@ rm -f "$out/$name.zip" "$out/$name.dmg"
 install -m 0644 "$root/README.md" "$root/LICENSE" "$stage/"
 sed "s|@VERSION@|$version|g" "$here/INSTALL.txt" >"$stage/INSTALL.txt"
 ( cd "$work" && ditto -c -k --sequesterRsrc --keepParent "Humanitl" "$out/$name.zip" )
+# Auch das Zip, wie es ein einfaches `unzip` auspackt, trägt das Entitlement.
+unzipped="$work/unzipped"
+mkdir -p "$unzipped"
+/usr/bin/unzip -q "$out/$name.zip" -d "$unzipped"
+has_folder_entitlement "$unzipped/Humanitl/Humanitl.app" ||
+  { echo "error: the app in $name.zip lacks the entitlement files.user-selected.read-only" >&2; exit 1; }
 
 # dmgbuild draws the window (background, icon positions, no toolbars) without
 # remote controlling Finder, so a CI runner builds the same image.
