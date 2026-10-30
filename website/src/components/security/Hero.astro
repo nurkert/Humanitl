@@ -1,0 +1,119 @@
+---
+// Kopf der Seite: Titel, Lede, die drei Garantien als Sprungmarken, die genaue Aussage und
+// das, was sie nicht sagt. Rechts der Kasten mit der einen Tür (Diagramm H).
+import Rich from './Rich.astro';
+import Src from './Src.astro';
+
+interface Props {
+  s: any;
+  chapters: string[];
+}
+const { s, chapters } = Astro.props;
+const h = s.hero;
+const rays = [
+  { cls: 'h-ray h-ray--up', x: 189, y: 50, w: 2, h: 160, i: 0 },
+  { cls: 'h-ray h-ray--left', x: 40, y: 209, w: 150, h: 2, i: 1 },
+  { cls: 'h-ray h-ray--down', x: 189, y: 210, w: 2, h: 160, i: 2 },
+];
+const ticks = [
+  { x: 184, y: 49, w: 12, h: 2, lx: 200, ly: 72, t: 'ENETUNREACH' },
+  { x: 39, y: 204, w: 2, h: 12, lx: 52, ly: 196, t: 'EPERM' },
+  { x: 184, y: 369, w: 12, h: 2, lx: 200, ly: 356, t: 'EPERM' },
+];
+---
+
+<div class="sec-wide sec-hero">
+  <div class="sec-hero__text">
+    <p class="sec-eyebrow">{h.eyebrow}</p>
+    <h1 id="sec-hero-title" class="chrome sec-h1">{h.title}</h1>
+    <p class="lede sec-hero__lede">{h.lede}</p>
+    <Src src={h.src} prefix={s.srcPrefix} />
+    <ol class="sec-hero__chips" aria-label={h.chipsLabel}>
+      {
+        h.chips.map((chip: string, i: number) => (
+          <li>
+            <a class="pill pill--small sec-gchip" href={`#g${i + 1}`}>
+              <span class="sec-gchip__n">{i + 1}</span>
+              {chip}
+            </a>
+          </li>
+        ))
+      }
+    </ol>
+  </div>
+
+  <figure class="sec-hero__fig" data-loop>
+    <div class="sec-grid" aria-hidden="true"></div>
+    <svg class="sec-h" viewBox="0 0 640 420" role="img" aria-labelledby="h-t h-d">
+      <title id="h-t">{h.figTitle}</title>
+      <desc id="h-d">{h.figDesc}</desc>
+      <defs>
+        <pattern id="h-dots" width="20" height="20" patternUnits="userSpaceOnUse">
+          <circle cx="10" cy="10" r="1.2" fill="currentColor"></circle>
+        </pattern>
+        <filter id="h-blur" x="-60%" y="-120%" width="220%" height="340%">
+          <feGaussianBlur stdDeviation="12"></feGaussianBlur>
+        </filter>
+      </defs>
+      <g aria-hidden="true">
+        <g class="h-net">
+          <rect x="470" y="60" width="150" height="300" fill="url(#h-dots)"></rect>
+          <text x="470" y="48" class="sv-lbl sv-lbl--m">{h.figNet}</text>
+        </g>
+        <ellipse class="h-light" cx="436" cy="210" rx="44" ry="22" filter="url(#h-blur)"></ellipse>
+        <g class="h-box">
+          <rect class="sv-fill" x="40" y="50" width="360" height="320" rx="26"></rect>
+          <path class="sv-wall" d="M400 185 V76 A26 26 0 0 0 374 50 H66 A26 26 0 0 0 40 76 V344 A26 26 0 0 0 66 370 H374 A26 26 0 0 0 400 344 V235"></path>
+          <text x="62" y="82" class="sv-lbl sv-lbl--m">sandbox</text>
+        </g>
+        {rays.map((r) => <rect class={r.cls} x={r.x} y={r.y} width={r.w} height={r.h} style={`--i:${r.i}`} />)}
+        {
+          ticks.map((t, i) => (
+            <g class="h-tick" style={`--i:${i}`}>
+              <rect x={t.x} y={t.y} width={t.w} height={t.h} />
+              <text x={t.lx} y={t.ly} class="sv-lbl sv-lbl--deny">
+                {t.t}
+              </text>
+            </g>
+          ))
+        }
+        <circle class="h-ring" cx="190" cy="210" r="22"></circle>
+        <circle class="sv-agent" cx="190" cy="210" r="10"></circle>
+        <rect class="h-door" x="397" y="185" width="6" height="50" rx="2"></rect>
+        <text x="412" y="176" class="sv-lbl sv-lbl--m">127.0.0.1:3128</text>
+        <text x="412" y="256" class="sv-lbl">{h.figDoor}</text>
+      </g>
+    </svg>
+  </figure>
+
+  <div class="sec-hero__claim">
+    <blockquote class="sec-glass sec-claim">
+      <p class="sec-claim__label">{h.claimLabel}</p>
+      <Rich tag="p" class="sec-claim__text" text={h.claim} />
+      <Src src={h.claimSrc} prefix={s.srcPrefix} />
+    </blockquote>
+    <div class="sec-not">
+      <p class="sec-claim__label">{h.notLabel}</p>
+      <p>{h.not}</p>
+      <p class="sec-not__links">
+        <a href="#grenzen">{h.limitsLink}</a>
+        <a href="#macos">{h.macLink}</a>
+      </p>
+      <p class="sec-not__mac">{h.macNote}</p>
+    </div>
+  </div>
+
+  <nav class="sec-toc" aria-label={s.toc}>
+    <ul>
+      {
+        chapters.map((id, i) => (
+          <li>
+            <a class="pill pill--small" href={`#${id}`}>
+              {s.rail[i]}
+            </a>
+          </li>
+        ))
+      }
+    </ul>
+  </nav>
+</div>

@@ -1,0 +1,53 @@
+---
+// Band „Zusammen, nicht allein“ mit Diagramm T: drei Kreise, nur die Schnittmenge zählt.
+import Rich from './Rich.astro';
+import Src from './Src.astro';
+
+interface Props {
+  s: any;
+}
+const { s } = Astro.props;
+const t = s.proofs.together;
+const circles = [
+  { cx: 150, cy: 120, lx: 40, ly: -8, a: 'start' },
+  { cx: 270, cy: 120, lx: 380, ly: -8, a: 'end' },
+  { cx: 210, cy: 215, lx: 210, ly: 330, a: 'middle' },
+];
+const lens = 'M175.23 126.59 A95 95 0 0 1 244.77 126.59 A95 95 0 0 1 210 193.65 A95 95 0 0 1 175.23 126.59 Z';
+---
+
+<div class="sec-glass sec-together sec-rv" data-reveal>
+  <div class="sec-together__text">
+    <h3 class="sec-h3">{t.title}</h3>
+    <Rich tag="p" text={t.text} />
+    <Src src={t.src} prefix={s.srcPrefix} />
+  </div>
+  <figure class="sec-together__fig">
+    <svg viewBox="0 0 420 380" role="img" aria-labelledby="t-t t-d">
+      <title id="t-t">{t.figTitle}</title>
+      <desc id="t-d">{t.figDesc}</desc>
+      <defs>
+        <filter id="t-blur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="10"></feGaussianBlur></filter>
+      </defs>
+      <g aria-hidden="true" transform="translate(0 30)">
+        {
+          circles.map((c, i) => (
+            <g class="t-c" style={`--i:${i}`}>
+              <circle cx={c.cx} cy={c.cy} r="95" />
+              <text x={c.lx} y={c.ly} text-anchor={c.a} class="sv-lbl sv-lbl--m">
+                <tspan class="t-n">{i + 1}</tspan>
+                <tspan x={c.lx} dy="18" class="sv-lbl--s">
+                  {t.names[i]}
+                </tspan>
+              </text>
+            </g>
+          ))
+        }
+        <path class="t-glow" d={lens} filter="url(#t-blur)"></path>
+        <path class="t-lens" d={lens}></path>
+        <rect class="t-tick" x="209.5" y="196" width="1" height="16"></rect>
+        <text x="210" y="228" text-anchor="middle" class="t-center sv-lbl sv-lbl--s">{t.center}</text>
+      </g>
+    </svg>
+  </figure>
+</div>

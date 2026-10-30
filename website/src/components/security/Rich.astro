@@ -1,0 +1,14 @@
+---
+// Fließtext aus den Locales: `Backticks` werden zu <code>, alles andere wird maskiert.
+interface Props {
+  text: string;
+  tag?: string;
+  class?: string;
+}
+const { text, tag = 'span', class: cls } = Astro.props;
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const html = esc(text).replace(/`([^`]+)`/g, '<code>$1</code>');
+const Tag = tag as any;
+---
+
+<Tag class={cls} set:html={html} />
