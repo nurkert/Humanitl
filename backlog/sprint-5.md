@@ -6619,6 +6619,64 @@ folder in the file they named.
 1. The case has a test and either starts or ends in a `SANDBOX_006` whose fix
    names the daemon's config file.
 
+### Umsetzung (HUM-296)
+
+- **Entscheidung: Ablehnung (Variante 2).** Der Daemon liest keine Datei,
+  die ein Client nennt. Eigentümer- und Rechteprüfung trennen nicht den
+  Menschen vom Prozess: Jede Datei, die der Nutzer schreiben kann, kann auch
+  jedes Programm unter seiner Kennung schreiben, das den Socket erreicht.
+  Läse der Daemon sie als Erklärung, würde jeder solche Client mit einer
+  selbst geschriebenen Datei einen beliebigen Ordner außerhalb von `$HOME`
+  einhängen lassen, den `SetConfig` aus demselben Grund ablehnt (HUM-293).
+  Das erweiterte, was ein Aufrufer ohne Erklärung eines Menschen einhängt.
+  Die Ablehnung lässt alles, was eingehängt werden darf, wie es ist; nur Satz
+  und Abhilfe ändern sich, die Sicherheitsaussage im README bleibt.
+- **Satz und Abhilfe.** `work_dir::check_requested` gibt für einen Ordner,
+  der an Stufe 3 scheitert und dessen Quelle `ConfigFile(<datei>)` nicht
+  die Datei des Daemons (`Paths::config_path`) ist, `SANDBOX_006` mit dem
+  Satz „… counts as declared only in the daemon's config file <datei des
+  Daemons>, not in a config file other than the daemon's (<datei>)" und der
+  Abhilfe
+  `CopyCommand("humanitl --config <datei des Daemons> config set
+  sandbox.work_dir <aufgelöst>")` (`named_file_refused`, Pfade über
+  `shell_path`). Die Datei des Daemons als Quelle behält den allgemeinen Satz
+  und die Ordnerauswahl; der Fall des erklärten Texts, der über einen Verweis
+  woandershin führt (HUM-294), geht vor.
+- **`humanitl sandbox run --config`** startet ohne Daemon und prüft den
+  Ordner gegen die Datei, die es selbst liest; dort ist der Aufruf der
+  Mensch, kein Client am Socket. Unverändert.
+- **Doku.** `docs/cli.md` (Absatz zu `--config`), `docs/SECURITY.md` 5.2
+  (nur die eigene `config.toml` erklärt für den Daemon).
+  `docs/THREAT-MODEL.md` nennt die Erklärung nicht; unverändert.
+- **Tests.** `ipc::sandbox`:
+  `a_folder_outside_home_from_a_named_config_file_names_the_daemons_file`
+  (Start mit Quelle `other.toml` abgelehnt, Satz nennt beide Dateien, Abhilfe
+  genau der Befehl mit der Datei des Daemons; nach der Erklärung dort startet
+  dieselbe Anfrage). `ipc::work_dir`:
+  `only_the_daemons_config_file_declares_a_folder_outside_home` (dazu: Datei
+  des Daemons als Quelle behält Ordnerauswahl, erklärter Ordner startet
+  auch mit fremder Quelle).
+- **Mutationen.** `named_file_refused` nicht aufgerufen: 2 rot (beide neuen
+  Tests). Vergleich mit der Datei des Daemons entfernt: 1 rot
+  (`only_the_daemons_config_file_declares_a_folder_outside_home`). Datei
+  danach byte-gleich zurück (`cmp`).
+- **Review Runde 1 (Codex, zwei minor).** Der Vergleich der genannten Datei
+  mit der des Daemons geht über die aufgelösten Pfade (roh, wenn sich einer
+  nicht auflösen lässt); ein Verweis auf die Datei des Daemons heißt nicht
+  „eine andere Datei". Nur der Satz hängt daran, erklärt ist weiter allein,
+  was der Daemon gelesen hat. Die Kommandozeile schickt die Datei von
+  `--config` absolut (`Context::work_dir`, gegen ihr aktuelles Verzeichnis),
+  damit der Daemon einen relativen Pfad nicht gegen sein eigenes deutet.
+  Tests: Verweis-Fall in `only_the_daemons_config_file_declares_a_folder_outside_home`,
+  relativer Fall in `cmd::tests` (`Context::work_dir`). `cargo fmt` sauber.
+- **Review Runde 1 (Sonnet, minor).** Der Satz sagt „a config file other than
+  the daemon's (<datei>)" statt „a file named with --config": Auch ohne
+  `--config` kann die Datei der Kommandozeile eine andere sein (anderes
+  `XDG_CONFIG_HOME`). Test
+  `the_fix_quotes_the_daemons_file_and_the_folder_for_the_shell` (Datei des
+  Daemons und Ordner mit Leerzeichen und `'`); Mutation `.display()` statt
+  `shell_path` in der Abhilfe: rot.
+
 ---
 ## HUM-297 · RUSTSEC-2026-0414 in pulldown-cmark turns the dependency check red
 
