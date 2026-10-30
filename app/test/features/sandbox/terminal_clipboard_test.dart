@@ -196,21 +196,107 @@ void main() {
     variant: _linux,
   );
 
+  // HUM-353: `Ctrl+C` über einer Auswahl kopiert, statt OpenCode zu beenden.
+  testWidgets('ctrl_c_with_a_selection_copies_it_clears_it_and_sends_nothing', (
+    WidgetTester tester,
+  ) async {
+    final _Clipboard clipboard = _mockClipboard(tester);
+    final SandboxTestClient client = await _pumpFocused(tester);
+    await _selectLine(tester, client, 'zq-copy-8');
+    // Mit dem Tastaturprotokoll von kitty sähe der Agent auch das
+    // Loslassen der Taste `C` als eigene Folge, wenn es durchfiele.
+    _session(tester, client).terminal.write('\x1b[>1u');
+    await tester.pump();
+    client.typed.clear();
+
+    await _chord(tester, LogicalKeyboardKey.keyC);
+    await _settle(tester);
+
+    expect(clipboard.text, 'zq-copy-8', reason: 'the selection, copied');
+    expect(clipboard.writes, 1);
+    final String sent = utf8.decode(client.typed, allowMalformed: true);
+    expect(client.typed, isNot(contains(0x03)), reason: 'no SIGINT');
+    expect(sent, isNot(contains('[99;')), reason: 'no report of the C key');
+    expect(
+      _controller(tester).selection,
+      isNull,
+      reason: 'the selection is gone, so the next Ctrl+C interrupts',
+    );
+  }, variant: _linux);
+
   testWidgets(
-    'ctrl_c_with_a_selection_still_interrupts_the_agent_and_copies_nothing',
+    'ctrl_c_after_a_copy_or_without_a_selection_interrupts_the_agent',
     (WidgetTester tester) async {
       final _Clipboard clipboard = _mockClipboard(tester);
       final SandboxTestClient client = await _pumpFocused(tester);
-      await _selectLine(tester, client, 'zq-copy-8');
+      expect(_controller(tester).selection, isNull);
+
+      await _chord(tester, LogicalKeyboardKey.keyC);
+      await _settle(tester);
+      expect(client.typed, <int>[0x03], reason: 'Ctrl+C is SIGINT');
+      expect(clipboard.writes, 0, reason: 'and nothing to copy');
+
+      // Kopieren, dann noch einmal: Der zweite Druck ist wieder die
+      // Unterbrechung.
+      await _selectLine(tester, client, 'zq-copy-9');
+      client.typed.clear();
+      await _chord(tester, LogicalKeyboardKey.keyC);
+      await _settle(tester);
+      expect(client.typed, isEmpty);
+      expect(clipboard.writes, 1);
+      await _chord(tester, LogicalKeyboardKey.keyC);
+      await _settle(tester);
+      expect(client.typed, <int>[0x03]);
+      expect(clipboard.writes, 1, reason: 'one copy, not two');
+    },
+    variant: _linux,
+  );
+
+  // Eine Auswahl überlebt Ausgabe. Ist sie aus dem Bild gerollt, kopierte
+  // `Ctrl+C` still unsichtbaren Text, statt den Agenten zu unterbrechen.
+  testWidgets(
+    'ctrl_c_over_a_selection_scrolled_out_of_view_interrupts_and_drops_it',
+    (WidgetTester tester) async {
+      final _Clipboard clipboard = _mockClipboard(tester);
+      final SandboxTestClient client = await _pumpFocused(tester);
+      await _selectLine(tester, client, 'zq-copy-11');
+      final Terminal terminal = _session(tester, client).terminal;
+      terminal.write(List<String>.filled(200, 'filler').join('\r\n'));
+      await tester.pump();
+      expect(
+        _controller(tester).selectionFor(terminal.buffer),
+        isNotNull,
+        reason: 'the emulator keeps the selection through output',
+      );
+      client.typed.clear();
 
       await _chord(tester, LogicalKeyboardKey.keyC);
       await _settle(tester);
 
-      expect(client.typed, <int>[0x03], reason: 'Ctrl+C is SIGINT');
-      expect(clipboard.writes, 0, reason: 'and never a copy');
+      expect(client.typed, <int>[0x03], reason: 'the interrupt goes through');
+      expect(clipboard.writes, 0, reason: 'nothing invisible is copied');
+      expect(_controller(tester).selection, isNull, reason: 'and it is gone');
     },
     variant: _linux,
   );
+
+  // Auf Apple-Plattformen kopiert `Cmd+C`; `Ctrl+C` bleibt dort immer die
+  // Unterbrechung, wie in jedem Terminal von macOS.
+  testWidgets('ctrl_c_with_a_selection_still_interrupts_on_macos', (
+    WidgetTester tester,
+  ) async {
+    final _Clipboard clipboard = _mockClipboard(tester);
+    final SandboxTestClient client = await _pumpFocused(tester);
+    await _selectLine(tester, client, 'zq-copy-10');
+
+    await tester.sendKeyDownEvent(_ctrlKey, platform: 'macos');
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyC, platform: 'macos');
+    await tester.sendKeyUpEvent(_ctrlKey, platform: 'macos');
+    await _settle(tester);
+
+    expect(client.typed, <int>[0x03], reason: 'Ctrl+C is SIGINT on macOS');
+    expect(clipboard.writes, 0, reason: 'Cmd+C copies there, not Ctrl+C');
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
   testWidgets('ctrl_shift_v_pastes_and_plain_ctrl_v_reaches_the_agent', (
     WidgetTester tester,

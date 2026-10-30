@@ -3330,7 +3330,7 @@
   "sandboxTerminalSelectAll": "Select all",
   "@sandboxTerminalSelectAll": {"description": "Context menu entry over the terminal that selects the whole buffer, scrollback included. It replaces Ctrl+A, which belongs to the agent (start of line in readline) (HUM-313)."},
   "sandboxTerminalCopyKey": "Ctrl+Shift+C",
-  "@sandboxTerminalCopyKey": {"description": "The chord that copies the terminal selection, shown next to the Copy entry of the terminal menu. Plain Ctrl+C stays the interrupt of the agent. The modifiers are named as printed on the keyboard of the language (HUM-313)."},
+  "@sandboxTerminalCopyKey": {"description": "The chord that copies the terminal selection, shown next to the Copy entry of the terminal menu. Plain Ctrl+C stays the interrupt of the agent, except while visible text is selected: then it copies too (HUM-353). The modifiers are named as printed on the keyboard of the language (HUM-313)."},
   "sandboxTerminalPasteKey": "Ctrl+Shift+V",
   "@sandboxTerminalPasteKey": {"description": "The chord that pastes into the terminal, shown next to the Paste entry of the terminal menu. Plain Ctrl+V stays with the agent. The modifiers are named as printed on the keyboard of the language (HUM-313)."},
   "sandboxTerminalFloatEnter": "Float the terminal over the page (Ctrl+Shift+P)",
