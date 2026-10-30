@@ -309,15 +309,46 @@ class GrpcDaemonClient implements DaemonClient {
       _sandbox(pb.SandboxRequest()..plan = _plan(profile, workMode));
 
   @override
-  Stream<SandboxUpdate> startSandbox({String? profile, WorkMode? workMode}) {
+  Stream<SandboxUpdate> startSandbox({
+    String? profile,
+    WorkMode? workMode,
+    SandboxMode? sandboxMode,
+  }) {
     final pb.SandboxRequest_Plan plan = _plan(profile, workMode);
     return _sandbox(
       pb.SandboxRequest()
         ..start = (pb.SandboxRequest_Start()
           ..profile = plan.profile
-          ..workMode = plan.workMode),
+          ..workMode = plan.workMode
+          // Leer heißt: `sandbox.mode` aus der Konfiguration (HUM-350).
+          ..sandboxMode = sandboxMode?.wire ?? ''),
     );
   }
+
+  @override
+  Stream<SandboxUpdate> sandboxChanges() =>
+      _sandbox(pb.SandboxRequest()..changes = Empty());
+
+  @override
+  Stream<SandboxUpdate> applyChanges({
+    required String sandboxId,
+    required List<String> ids,
+    required List<String> overwriteIds,
+  }) => _sandbox(
+    pb.SandboxRequest()
+      ..applyChanges = (pb.SandboxRequest_ApplyChanges()
+        ..sandboxId = sandboxId
+        ..ids.addAll(ids)
+        // Je bestaetigte Datei, nie der Schalter fuer alle (HUM-351).
+        ..overwriteIds.addAll(overwriteIds)),
+  );
+
+  @override
+  Stream<SandboxUpdate> discardChanges({required String sandboxId}) => _sandbox(
+    pb.SandboxRequest()
+      ..discardChanges = (pb.SandboxRequest_DiscardChanges()
+        ..sandboxId = sandboxId),
+  );
 
   @override
   Stream<SandboxUpdate> stopSandbox() =>
@@ -405,12 +436,12 @@ class GrpcDaemonClient implements DaemonClient {
             // (HUM-138).
             yield SandboxUpdate.refusals(event.refusals.toDomain());
           case pb.SandboxEvent_Event.changes:
+            // The waiting changes of a disposable sandbox (HUM-350), shown by
+            // the changes panel (HUM-351).
+            yield SandboxUpdate.changes(event.changes.toDomain());
           case pb.SandboxEvent_Event.changesOutcome:
-            // The waiting changes of a disposable sandbox and the answer to
-            // apply or discard (HUM-350). This build has no changes panel
-            // yet; it arrives with HUM-351. Until then the command line shows
-            // them (`humanitl sandbox changes`).
-            break;
+            // The answer to apply or discard (HUM-350).
+            yield SandboxUpdate.changesOutcome(event.changesOutcome.toDomain());
           case pb.SandboxEvent_Event.notSet:
             break;
         }

@@ -11,6 +11,7 @@ library;
 import 'package:freezed_annotation/freezed_annotation.dart';
 
 import 'diagnostic.dart';
+import 'disposable.dart';
 import 'ids.dart';
 
 part 'sandbox.freezed.dart';
@@ -478,6 +479,17 @@ sealed class SandboxUpdate with _$SandboxUpdate {
   /// still stand (HUM-306). Comes last on the stream of the start that began
   /// the session.
   const factory SandboxUpdate.exit(int code) = SandboxUpdateExit;
+
+  /// The changes of a disposable run that wait for a decision (HUM-350). Comes
+  /// once after the agent ended on the stream of the start, and as the answer
+  /// to `Sandbox(Changes)`.
+  const factory SandboxUpdate.changes(DisposableChanges changes) =
+      SandboxUpdateChanges;
+
+  /// What became of those changes, the answer to apply and discard
+  /// (HUM-350).
+  const factory SandboxUpdate.changesOutcome(DisposableOutcome outcome) =
+      SandboxUpdateChangesOutcome;
 }
 
 /// Whether the sandbox reports refused attempts, mirror of the proto enum

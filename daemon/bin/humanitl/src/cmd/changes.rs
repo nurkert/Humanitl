@@ -83,6 +83,9 @@ pub async fn apply(
         sandbox_id: changes.sandbox_id.clone(),
         ids: ids.iter().map(|id| id.trim().to_owned()).collect(),
         overwrite,
+        // `--overwrite` gilt für jede gewählte Änderung; einzeln bestätigt
+        // nur die Oberfläche (HUM-351).
+        overwrite_ids: Vec::new(),
     };
     let outcome = outcome_of(ask(ctx, v1::sandbox_request::Op::ApplyChanges(request)).await?)?;
     report(ctx, &outcome);

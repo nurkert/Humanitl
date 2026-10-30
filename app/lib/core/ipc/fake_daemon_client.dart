@@ -199,6 +199,8 @@ class FakeDaemonClient implements DaemonClient {
       'empty' => FakeDaemonClient.empty(),
       'rules:broken' || 'broken-rules' => FakeDaemonClient.brokenRules(),
       'big_body' || 'big-body' => FakeDaemonClient.bigBody(),
+      // HUM-351: eine Wegwerf-Sandbox, deren Aenderungen warten.
+      'disposable' => FakeDaemonClient.disposable(),
       _ => FakeDaemonClient(),
     };
   }
@@ -1179,8 +1181,10 @@ class FakeDaemonClient implements DaemonClient {
   Stream<SandboxUpdate> startSandbox({
     String? profile,
     WorkMode? workMode,
+    SandboxMode? sandboxMode,
   }) async* {
     _check();
+    startModes.add(sandboxMode);
     await for (final SandboxUpdate update in planSandbox(
       profile: profile,
       workMode: workMode,
@@ -1191,7 +1195,8 @@ class FakeDaemonClient implements DaemonClient {
         yield SandboxUpdate.status(sandbox);
       }
     }
-    final Diagnostic? refusal = sandboxStartFailure;
+    final Diagnostic? refusal =
+        sandboxStartFailure ?? _disposableRefusal(sandboxMode);
     if (refusal != null) {
       sandbox = sandbox.copyWith(
         state: SandboxState.failed,
@@ -1219,6 +1224,7 @@ class FakeDaemonClient implements DaemonClient {
       yield SandboxUpdate.status(sandbox);
       return;
     }
+    _disposableRun = _isDisposable(sandboxMode);
     sandbox = sandbox.copyWith(
       state: SandboxState.running,
       agentRunning: true,
@@ -1252,6 +1258,10 @@ class FakeDaemonClient implements DaemonClient {
     // Agenten. Was der Fake dabei anders macht, steht an `endTerminals`.
     endTerminals();
     yield SandboxUpdate.status(sandbox);
+    // HUM-351: siehe `_endDisposableRun`.
+    if (_endDisposableRun() case final DisposableChanges changes) {
+      yield SandboxUpdate.changes(changes);
+    }
   }
 
   /// Schickt jedem offenen Terminal das Ende des Agenten, wie der Dienst es
@@ -3145,6 +3155,268 @@ class FakeDaemonClient implements DaemonClient {
       why: 'the model servers were not changed: $why',
     ),
   );
+
+  // --- Wegwerf-Sandbox (HUM-351) -------------------------------------------
+  //
+  // Der Fake spielt die drei Operationen so, wie `daemon/crates/ipc/src/
+  // disposable.rs` sie beantwortet: Jede gewaehlte Aenderung wird vor dem
+  // ersten Schreiben geprueft (abgelehnt, Konflikt ohne `overwrite`), eine
+  // gescheiterte Pruefung ist nur ein `SANDBOX_031`, und ein Abbruch mitten
+  // im Schreiben ist ein Befund plus `partial`. Er urteilt dabei nur ueber
+  // die Felder, die der Daemon in die Liste geschrieben hat; was als
+  // Konflikt gilt, bestimmt das Szenario.
+
+  /// Der Fake von `HUMANITL_FAKE=disposable`: ein Daemon, der Wegwerf-
+  /// Sandboxen kann, und ein frueherer Lauf, dessen Aenderungen warten.
+  ///
+  /// Die Liste traegt eine geaenderte Textdatei, eine neue, eine geloeschte,
+  /// einen Symlink aus dem Projekt hinaus und einen Konflikt
+  /// ([fakeDisposableChanges]). Jeder weitere Wegwerf-Lauf hinterlaesst nach
+  /// dem Stopp dieselbe Liste.
+  factory FakeDaemonClient.disposable({DateTime Function()? clock}) {
+    final FakeDaemonClient client = FakeDaemonClient(
+      info: disposableInfo,
+      script: const <ScriptedEvent>[],
+      clock: clock,
+    );
+    client.pendingChanges = fakeDisposableChanges();
+    client.disposableRunChanges = fakeDisposableChanges();
+    return client;
+  }
+
+  /// `GetInfo` eines Daemons, der `sandbox.disposable` nennt.
+  static final DaemonInfo disposableInfo = defaultInfo.copyWith(
+    protoMinor: 26,
+    capabilities: <String>[
+      ...defaultInfo.capabilities,
+      DaemonInfo.disposableCapability,
+    ],
+  );
+
+  /// Die Aenderungen, die auf eine Entscheidung warten, oder null.
+  DisposableChanges? pendingChanges;
+
+  /// Was ein Wegwerf-Lauf hinterlaesst, wenn er gestoppt wird, oder null fuer
+  /// einen Lauf ohne Aenderungen.
+  DisposableChanges? disposableRunChanges;
+
+  /// Die Kennung, an der das Schreiben abbricht (`partial`), oder null.
+  String? applyBreaksAt;
+
+  /// Jeder Modus, den ein Start mitschickte, aeltester zuerst; null fuer ein
+  /// leeres `Start.sandbox_mode`.
+  final List<SandboxMode?> startModes = <SandboxMode?>[];
+
+  /// Jedes `ApplyChanges`, aeltestes zuerst.
+  final List<FakeApplyCall> applyCalls = <FakeApplyCall>[];
+
+  /// Jedes `DiscardChanges` mit seiner Sandbox-Kennung, aeltestes zuerst.
+  final List<String> discardCalls = <String>[];
+
+  /// Wie oft `Sandbox(Changes)` gefragt wurde.
+  int changesCalls = 0;
+
+  /// Ob der laufende Lauf ein Wegwerf-Lauf ist.
+  bool _disposableRun = false;
+
+  /// Wie der Daemon: Ein leeres `Start.sandbox_mode` heisst `sandbox.mode`
+  /// aus der Konfiguration.
+  bool _isDisposable(SandboxMode? mode) =>
+      info.offersDisposable &&
+      (mode ?? configValues.sandboxMode) == SandboxMode.disposable;
+
+  /// `SANDBOX_030`, wenn ein Wegwerf-Start auf wartende Aenderungen trifft,
+  /// wie im Daemon (Voraussetzung 3, HUM-350).
+  Diagnostic? _disposableRefusal(SandboxMode? mode) =>
+      _isDisposable(mode) && pendingChanges != null
+      ? const Diagnostic(
+          code: 'SANDBOX_030',
+          severity: Severity.blocking,
+          title: 'Disposable sandbox not possible',
+          why:
+              'the changes of an earlier disposable run still wait for a '
+              'decision',
+          fix: FixAction.copyCommand(command: 'humanitl sandbox changes'),
+        )
+      : null;
+
+  /// Das Ende eines Wegwerf-Laufs: Seine Aenderungen warten ab jetzt.
+  ///
+  /// **Eine Abweichung mit Grund:** Der Daemon schickt `changes` auf dem
+  /// Strom des Starts, sobald der Agent endet. Der Strom des Fakes endet mit
+  /// `running`, weil sein Agent nie endet; also kommt die Liste mit dem
+  /// Stopp. Fuer die Oberflaeche zaehlt, dass sie ohne Frage auf dem Strom
+  /// einer Operation kommt, die die Sitzung beendet.
+  DisposableChanges? _endDisposableRun() {
+    if (!_disposableRun) {
+      return null;
+    }
+    _disposableRun = false;
+    final DisposableChanges? left = disposableRunChanges;
+    if (left == null || left.changes.isEmpty) {
+      return null;
+    }
+    return pendingChanges = left;
+  }
+
+  static Diagnostic _notApplied(String why, {String? command}) => Diagnostic(
+    code: 'SANDBOX_031',
+    severity: Severity.error,
+    title: 'Change of a disposable run not applied',
+    why: why,
+    fix: command == null ? null : FixAction.copyCommand(command: command),
+  );
+
+  @override
+  Stream<SandboxUpdate> sandboxChanges() async* {
+    _check();
+    changesCalls++;
+    final DisposableChanges? pending = pendingChanges;
+    if (pending == null) {
+      yield SandboxUpdate.diagnostic(
+        _notApplied('no changes of a disposable run are waiting'),
+      );
+      return;
+    }
+    yield SandboxUpdate.changes(pending);
+  }
+
+  @override
+  Stream<SandboxUpdate> applyChanges({
+    required String sandboxId,
+    required List<String> ids,
+    required List<String> overwriteIds,
+  }) async* {
+    _check();
+    applyCalls.add(
+      FakeApplyCall(
+        sandboxId: sandboxId,
+        ids: List<String>.unmodifiable(ids),
+        overwriteIds: List<String>.unmodifiable(overwriteIds),
+      ),
+    );
+    final DisposableChanges? pending = pendingChanges;
+    if (pending == null) {
+      yield SandboxUpdate.diagnostic(
+        _notApplied('no changes of a disposable run are waiting'),
+      );
+      return;
+    }
+    if (sandboxId.isNotEmpty && sandboxId != pending.sandboxId) {
+      yield SandboxUpdate.diagnostic(
+        _notApplied(
+          'the changes of sandbox $sandboxId are not the ones waiting',
+        ),
+      );
+      return;
+    }
+    if (ids.isEmpty && pending.truncated) {
+      yield SandboxUpdate.diagnostic(
+        _notApplied('the list is cut, so "apply all" is refused'),
+      );
+      return;
+    }
+    final Set<String> known = <String>{
+      for (final DisposableChange change in pending.changes) change.id,
+    };
+    for (final String id in ids) {
+      if (!known.contains(id)) {
+        yield SandboxUpdate.diagnostic(
+          _notApplied('$id names no waiting change'),
+        );
+        return;
+      }
+    }
+    final List<DisposableChange> chosen = <DisposableChange>[
+      for (final DisposableChange change in pending.changes)
+        if (ids.isEmpty || ids.contains(change.id)) change,
+    ];
+    for (final DisposableChange change in chosen) {
+      if (change.isRefused) {
+        yield SandboxUpdate.diagnostic(
+          _notApplied(
+            '${change.path}: ${change.refused}; nothing was written',
+            command: 'humanitl sandbox apply',
+          ),
+        );
+        return;
+      }
+      // Wie der Daemon seit Minor 26: nur eine einzeln genannte Kennung darf
+      // ueberschrieben werden (HUM-351).
+      if (change.hasConflict && !overwriteIds.contains(change.id)) {
+        yield SandboxUpdate.diagnostic(
+          _notApplied(
+            '${change.path}: ${change.conflict}; nothing was written',
+            command: 'humanitl sandbox apply --overwrite ${change.id}',
+          ),
+        );
+        return;
+      }
+    }
+    final List<String> written = <String>[];
+    final Set<String> writtenIds = <String>{};
+    for (final DisposableChange change in chosen) {
+      if (change.id == applyBreaksAt) {
+        yield SandboxUpdate.diagnostic(
+          _notApplied(
+            '${change.path}: writing failed (fake: No space left on device); '
+            '${written.length} written before it, the rest still waits',
+          ),
+        );
+        pendingChanges = pending.copyWith(
+          changes: <DisposableChange>[
+            for (final DisposableChange left in pending.changes)
+              if (!writtenIds.contains(left.id)) left,
+          ],
+        );
+        yield SandboxUpdate.changesOutcome(
+          DisposableOutcome(
+            sandboxId: pending.sandboxId,
+            outcome: DisposableOutcomeKind.partial,
+            applied: List<String>.unmodifiable(written),
+          ),
+        );
+        return;
+      }
+      written.add(change.path);
+      writtenIds.add(change.id);
+    }
+    pendingChanges = null;
+    yield SandboxUpdate.changesOutcome(
+      DisposableOutcome(
+        sandboxId: pending.sandboxId,
+        outcome: DisposableOutcomeKind.applied,
+        applied: List<String>.unmodifiable(written),
+        discarded: <String>[
+          for (final DisposableChange change in pending.changes)
+            if (!writtenIds.contains(change.id)) change.path,
+        ],
+      ),
+    );
+  }
+
+  @override
+  Stream<SandboxUpdate> discardChanges({required String sandboxId}) async* {
+    _check();
+    discardCalls.add(sandboxId);
+    final DisposableChanges? pending = pendingChanges;
+    if (pending == null) {
+      yield SandboxUpdate.diagnostic(
+        _notApplied('no changes of a disposable run are waiting'),
+      );
+      return;
+    }
+    pendingChanges = null;
+    yield SandboxUpdate.changesOutcome(
+      DisposableOutcome(
+        sandboxId: pending.sandboxId,
+        outcome: DisposableOutcomeKind.discarded,
+        discarded: <String>[
+          for (final DisposableChange change in pending.changes) change.path,
+        ],
+      ),
+    );
+  }
 }
 
 /// Builder of the events of one scripted flow.
@@ -4863,3 +5135,139 @@ enum ProbeKeyUse {
   /// The stored key, by `use_stored_key`.
   stored,
 }
+
+/// Ein `ApplyChanges`, wie der Fake es angenommen hat (HUM-351).
+class FakeApplyCall {
+  /// Legt den Vermerk an.
+  const FakeApplyCall({
+    required this.sandboxId,
+    required this.ids,
+    required this.overwriteIds,
+  });
+
+  /// `ApplyChanges.sandbox_id`.
+  final String sandboxId;
+
+  /// `ApplyChanges.ids`, in der geschickten Reihenfolge.
+  final List<String> ids;
+
+  /// `ApplyChanges.overwrite_ids`.
+  final List<String> overwriteIds;
+}
+
+/// Die Sandbox des Szenarios `disposable` (HUM-351).
+const String fakeDisposableSandbox = '018f0002-0000-7000-8000-0000000000d1';
+
+/// Die Aenderungen des Szenarios `disposable`: eine geaenderte Textdatei,
+/// eine neue, eine geloeschte, ein Symlink aus dem Projekt hinaus, ein
+/// Konflikt, eine Datei, deren setuid-Bit nicht mitgeht, und ein neues Bild
+/// ohne Text-Diff.
+///
+/// Die Saetze in `conflict` und `refused` stehen so da, wie der Daemon sie
+/// schreibt; der Fake erfindet keine eigenen Gruende (CONVENTIONS 4.7). Die
+/// Kennungen sind 16 Hex-Zeichen wie der Pfad-Hash des Daemons, aber hier
+/// fest gewaehlt, damit Tests und Goldens sie nennen koennen.
+DisposableChanges fakeDisposableChanges() => const DisposableChanges(
+  sandboxId: fakeDisposableSandbox,
+  workDir: FakeDaemonClient.defaultWorkDir,
+  changes: <DisposableChange>[
+    DisposableChange(
+      id: '6071829304a5b6c7',
+      path: 'assets/logo.png',
+      kind: DisposableChangeKind.added,
+      entry: 'file',
+      size: 18432,
+      mode: 420,
+      binary: true,
+      sha256:
+          'a29180f7e6d5c4b3a29180f7e6d5c9f2c1e4b7a6d5c3b4b3a29180f7e6d5c4b3',
+    ),
+    DisposableChange(
+      id: '0a1b2c3d4e5f6071',
+      path: 'README.md',
+      kind: DisposableChangeKind.modified,
+      entry: 'file',
+      size: 1184,
+      mode: 420,
+      sha256:
+          '9f2c1e4b7a6d5c3b2a1908f7e6d5c4b3a29180f7e6d5c4b3a29180f7e6d5c4b3',
+      diff:
+          '--- a/README.md\n'
+          '+++ b/README.md\n'
+          '@@ -1,5 +1,6 @@\n'
+          ' # acme\n'
+          ' \n'
+          '-Build with make.\n'
+          '+Build with make, then run the tests:\n'
+          '+\n'
+          '+    make test\n'
+          ' \n'
+          ' Licensed under MIT.\n',
+    ),
+    DisposableChange(
+      id: '1b2c3d4e5f607182',
+      path: 'docs/old-notes.txt',
+      kind: DisposableChangeKind.removed,
+      entry: 'file',
+    ),
+    DisposableChange(
+      id: '2c3d4e5f60718293',
+      path: 'link-to-home',
+      kind: DisposableChangeKind.symlink,
+      entry: 'symlink',
+      symlinkTarget: '../../.ssh',
+      refused:
+          'the symbolic link points outside the project folder '
+          '(../../.ssh)',
+    ),
+    DisposableChange(
+      id: '3d4e5f60718293a4',
+      path: 'scripts/run.sh',
+      kind: DisposableChangeKind.mode,
+      entry: 'file',
+      size: 212,
+      mode: 493,
+      strippedBits: 2048,
+      sha256:
+          '4b3a29180f7e6d5c4b3a29180f7e6d5c4b3a29180f7e6d5c9f2c1e4b7a6d5c3b',
+    ),
+    DisposableChange(
+      id: '4e5f60718293a4b5',
+      path: 'src/main.rs',
+      kind: DisposableChangeKind.modified,
+      entry: 'file',
+      size: 96,
+      mode: 420,
+      sha256:
+          'c4b3a29180f7e6d5c9f2c1e4b7a6d5c3b4b3a29180f7e6d5c4b3a29180f7e6d5',
+      conflict:
+          'the file in the project changed since the start (size 88 -> 91, '
+          'mtime 2026-10-30 14:02:11)',
+      diff:
+          '--- a/src/main.rs\n'
+          '+++ b/src/main.rs\n'
+          '@@ -1,3 +1,3 @@\n'
+          ' fn main() {\n'
+          '-    println!("hello");\n'
+          '+    println!("hello, world");\n'
+          ' }\n',
+    ),
+    DisposableChange(
+      id: '5f60718293a4b5c6',
+      path: 'src/util.rs',
+      kind: DisposableChangeKind.added,
+      entry: 'file',
+      size: 64,
+      mode: 420,
+      sha256:
+          'e6d5c4b3a29180f7e6d5c9f2c1e4b7a6d5c3b4b3a29180f7e6d5c4b3a29180f7',
+      diff:
+          '--- /dev/null\n'
+          '+++ b/src/util.rs\n'
+          '@@ -0,0 +1,3 @@\n'
+          '+pub fn twice(x: u32) -> u32 {\n'
+          '+    x * 2\n'
+          '+}\n',
+    ),
+  ],
+);
