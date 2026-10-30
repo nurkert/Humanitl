@@ -26,6 +26,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-345 | Die Sicherheitsseite von humanitl.de | M | HUM-333, HUM-336 |
 | HUM-344 | Eine README, die das Projekt zeigt | M | HUM-333 |
 | HUM-342 | Die Ampel unter macOS sitzt mittig in der Titelleiste der App | S | HUM-325 |
+| HUM-343 | Der Ordnerdialog öffnet sich unter macOS | S | HUM-325, HUM-326 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -265,3 +266,15 @@ Akzeptanzkriterien:
 - Die drei Knöpfe stehen senkrecht mittig auf der Kopfleiste der App (`HSize.headerBar`) und so weit vom linken Rand, dass sie mit dem Rest der Leiste fluchten; `trafficLightInset` reicht weiter für sie.
 - Sie bleiben dort nach Größenänderung, Fokuswechsel, Bildschirmwechsel und nach dem Verlassen des Vollbilds; im Vollbild bleibt die Leiste des Systems unberührt.
 - Die Titelleiste des Systems wird nicht vergrößert, damit sie keine Klicks auf Elemente der App abfängt.
+
+## HUM-343 · Der Ordnerdialog öffnet sich unter macOS
+
+Rückmeldung des Inhabers vom 2026-10-30: Unter macOS öffnet „Ordner wählen" (Projektordner der Sandbox) keinen Dialog. Ursache: `file_picker_darwin` öffnet `NSOpenPanel` nur, wenn die App das Entitlement `com.apple.security.files.user-selected.read-only` (oder read-write) trägt, auch ohne App-Sandbox; sonst gibt es einen Fehler zurück. Dazu signierte `packaging/macos/build-app.sh` das Bündel mit `--deep` neu und hätte jedes Entitlement entfernt.
+
+Akzeptanzkriterien:
+
+- Beide Entitlement-Dateien tragen `com.apple.security.files.user-selected.read-only`; die App bleibt ohne App-Sandbox.
+- `build-app.sh` signiert die App zuletzt mit `Release.entitlements` und bricht ab, wenn das Entitlement im fertigen Bündel fehlt; das gilt auch für das `.zip` nach einem einfachen `unzip`.
+- Der Ordnerdialog öffnet sich in der gebauten App.
+
+Nicht in diesem Issue: den Projektordner beim Start der Sandbox optional zu machen. Der Inhaber hat am 2026-10-30 entschieden, dass der Ordner vorerst Pflicht bleibt; eine Sitzung ganz ohne Ordner (leeres `/work`) kann später sinnvoll sein und wird dann ein eigenes Issue.
