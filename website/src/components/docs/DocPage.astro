@@ -1,0 +1,108 @@
+---
+// Eine Docs-Seite in einer Sprache (HUM-336, zweisprachig seit HUM-346). Zeigt das Original,
+// die Übersetzung oder, wenn sie fehlt, das Original mit Hinweis; eine veraltete Übersetzung
+// trägt einen Hinweis mit Verweis auf das Original.
+import { getCollection, render } from 'astro:content';
+
+import Docs from '../../layouts/Docs.astro';
+import { ui } from '../../i18n/ui';
+import {
+  blobUrl,
+  docAlternates,
+  docGroups,
+  docHref,
+  editUrl,
+  findItem,
+  historyUrl,
+  neighbours,
+  resolveVersion,
+  translationIndex,
+  type DocEntry,
+  type DocLang,
+} from '../../lib/docs';
+import { docsHome } from '../../lib/docs-catalog.mjs';
+import DocNotice from './DocNotice.astro';
+import LocalizedLinks from './LocalizedLinks.astro';
+
+interface Props {
+  entry: DocEntry;
+  lang: DocLang;
+}
+
+const { entry, lang } = Astro.props;
+const t = ui[lang].docs;
+const translations = await getCollection('translations');
+const version = resolveVersion(entry, lang, translationIndex(translations));
+const { Content, headings, remarkPluginFrontmatter } = await render(version.entry);
+const groups = docGroups(await getCollection('docs'), translations, lang);
+const item = findItem(groups, entry.id)!;
+const { prev, next } = neighbours(groups, entry.id);
+const groupTitle = t.groupTitles[item.groupKey as keyof typeof t.groupTitles] ?? item.groupKey;
+const originalHref = docHref(entry.id, version.originalLang);
+---
+
+<Docs
+  lang={lang}
+  docLang={version.contentLang}
+  title={`${item.title} · Humanitl Docs`}
+  description={item.summary || item.title}
+  groups={groups}
+  currentId={entry.id}
+  headings={headings}
+  alternates={docAlternates(entry.id)}
+>
+  <nav class="crumbs" aria-label={t.breadcrumb}>
+    <a href={docsHome(lang)}>Docs</a>
+    <span aria-hidden="true">/</span>
+    <span>{groupTitle}</span>
+  </nav>
+  <DocNotice
+    lang={lang}
+    kind={version.kind}
+    stale={version.stale}
+    originalHref={originalHref}
+    originalLang={version.originalLang}
+  />
+  <article
+    class="doc"
+    lang={version.contentLang}
+    data-version={version.kind}
+    data-stale={version.stale ? '' : undefined}
+    data-heading-fallback={remarkPluginFrontmatter?.headingFallback ? '' : undefined}
+  >
+    <LocalizedLinks lang={lang}><Content /></LocalizedLinks>
+  </article>
+
+  <Fragment slot="after">
+    <footer class="doc-foot">
+      <a class="doc-foot__src" href={blobUrl(version.file)}>{version.file}</a>
+      {
+        version.kind === 'translation' && (
+          <span class="doc-foot__of">
+            {t.translationOf} <a href={blobUrl(version.source)}>{version.source}</a>
+          </span>
+        )
+      }
+      <a href={editUrl(version.file)}>{t.editOnGitHub}</a>
+      <a href={historyUrl(version.file)}>{t.history}</a>
+    </footer>
+    {
+      (prev || next) && (
+        <nav class="pager" aria-label={t.pagination}>
+          {prev && (
+            <a class="pager__card" href={prev.href} rel="prev">
+              <span class="pager__k">← {t.previous}</span>
+              <span class="pager__t">{prev.number ? `${prev.number} · ${prev.label}` : prev.label}</span>
+            </a>
+          )}
+          {next && (
+            <a class="pager__card pager__card--next" href={next.href} rel="next">
+              <span class="pager__k">{t.next} →</span>
+              <span class="pager__t">{next.number ? `${next.number} · ${next.label}` : next.label}</span>
+            </a>
+          )}
+        </nav>
+      )
+    }
+  </Fragment>
+</Docs>

@@ -98,7 +98,10 @@ fi
 #
 # 1. Jede Seite unter docs/ beginnt mit einer H1 und nennt in Zeile 3 den
 #    Stand, für den sie gilt. Eine Seite ohne diese Zeile ist eine, die
-#    niemand gegen den Code abgeglichen hat.
+#    niemand gegen den Code abgeglichen hat. Ausgenommen ist
+#    docs/translations/ (HUM-346): Eine Übersetzung beginnt mit Front Matter,
+#    ihre Links und Anker gelten relativ zum Original, und
+#    website/scripts/check-translations.mjs prüft sie.
 APPLIES_TO="Applies to: Humanitl 0.1"
 while IFS= read -r -d '' page; do
   first="$(sed -n 1p "$page")"
@@ -111,7 +114,7 @@ while IFS= read -r -d '' page; do
     echo "lint-docs: $page: line 3 must be '$APPLIES_TO'" >&2
     fail=1
   fi
-done < <(find docs -name '*.md' -print0 | sort -z)
+done < <(find docs -path docs/translations -prune -o -name '*.md' -print0 | sort -z)
 
 # 2. Das README hat die zwölf Pflichtabschnitte, in dieser Reihenfolge und
 #    ohne weitere Abschnitte der zweiten Ebene dazwischen. Die ersten beiden,

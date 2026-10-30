@@ -1252,3 +1252,44 @@ html:has(.sheet:popover-open) {
     filter: none;
   }
 }
+
+/* ------------------------------------------------------------------ Sprachfassungen (HUM-346) */
+
+/* Hinweis über dem Artikel: Seite noch nicht übersetzt oder Original seither geändert. Ruhig
+   gehalten wie eine Hinweisbox, damit er gesehen wird, ohne den Text zu verdrängen. */
+.doc-notice {
+  --notice: #8fb4ff;
+  /* Dieselbe Breite wie die Lesespalte (.doc setzt --doc-measure nur für sich). */
+  max-width: 38rem;
+  margin: 0 0 1.75rem;
+  padding: 0.8rem 1rem 0.85rem 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--notice) 7%, transparent), transparent 45%),
+    rgb(255 255 255 / 0.02);
+  box-shadow: inset 2px 0 0 var(--notice);
+  color: var(--fg-1);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+.doc-notice--stale {
+  --notice: var(--accent);
+}
+.doc-notice p {
+  margin: 0;
+}
+.doc-notice__title {
+  margin-bottom: 0.2rem !important;
+  font: 500 0.7rem/1.4 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--notice);
+}
+.doc-notice a {
+  color: var(--fg);
+  text-underline-offset: 0.2em;
+}
+.doc-foot__of a {
+  font-family: var(--mono);
+}

@@ -7,6 +7,7 @@
     "build": "astro build",
     "preview": "astro preview",
     "check-links": "node scripts/check-links.mjs",
+    "check-translations": "node scripts/check-translations.mjs",
     "test": "node --test scripts/*.test.mjs"
   },
   "dependencies": {
