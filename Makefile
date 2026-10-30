@@ -83,6 +83,7 @@ deps-lint: ## Enforce the dependency direction (HUM-074) and the coupling ratche
 	python3 tools/tests/check_coupling_test.py
 	./packaging/release/release-notes-test.sh
 	./packaging/deb/maintscripts-test.sh
+	./packaging/rpm/scriptlets-test.sh
 
 # Die Sprachprüfung braucht nur `dart` und keine erzeugten Dateien (HUM-052): ARB-Parität,
 # Literale in den Features, Titel und Grund jedes Diagnose-Codes, das Glossar.

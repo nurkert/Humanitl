@@ -8,6 +8,7 @@ import Icon from '../Icon.astro';
 import Base from '../../layouts/Base.astro';
 import { languages, releasesUrl, ui, type Lang } from '../../i18n/ui';
 import { platformIcons } from '../../lib/platform-icons';
+import { loadAur } from '../../lib/aur';
 import { loadReleases, type Platform } from '../../lib/releases';
 import intercept from '../../assets/screens/intercept.png';
 
@@ -19,6 +20,8 @@ const t = ui[lang];
 const d = t.download;
 
 const releases = await loadReleases();
+// Nur wenn das AUR das Paket beim Bauen kennt, nennt die Linux-Seite es (HUM-339).
+const aur = await loadAur();
 const current = releases.find((release) => !release.prerelease) ?? releases[0];
 const number = (value: number) => value.toLocaleString(languages[lang].locale);
 // „1 Download“, „2 Downloads“: das Wort folgt der Zahl, in beiden Sprachen gleich.
@@ -173,6 +176,27 @@ const older = releases.filter((release) => release !== current).slice(0, 6);
                     {'script' in info && (
                       <p class="panel__note">
                         <a href="https://apt.nurkert.de/install/humanitl">{info.script}</a>
+                      </p>
+                    )}
+                    {'rpm' in info && files.some((file) => file.kind === 'rpm') && (
+                      <>
+                        <p class="panel__note panel__note--more">{info.rpm}</p>
+                        <div class="cmd">
+                          <pre><code>{info.rpmCommand.replace('@VERSION@', current.version)}</code></pre>
+                          <button
+                            class="cmd__copy"
+                            type="button"
+                            data-copy={info.rpmCommand.replace('@VERSION@', current.version)}
+                            aria-label={lang === 'de' ? 'Befehl kopieren' : 'Copy command'}
+                          >
+                            <Icon name="copy" />
+                          </button>
+                        </div>
+                      </>
+                    )}
+                    {'aur' in info && aur && (
+                      <p class="panel__note">
+                        <a href={aur.url}>{info.aur.replace('@AUR@', aur.version)}</a>
                       </p>
                     )}
                   </div>
@@ -521,6 +545,9 @@ const older = releases.filter((release) => release !== current).slice(0, 6);
     border: 1px solid var(--line-strong);
     color: var(--fg);
     font: 500 0.78rem/1 var(--mono);
+  }
+  .panel__note--more {
+    margin-top: 0.6rem;
   }
   .panel__note {
     color: var(--fg-2);

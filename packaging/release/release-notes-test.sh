@@ -146,6 +146,42 @@ chmod +x Humanitl-@VERSION@-x86_64.AppImage
 ./Humanitl-@VERSION@-x86_64.AppImage
 ```
 
+## Install on Fedora and openSUSE (x86_64)
+
+`humanitl-@VERSION@-1.x86_64.rpm` holds the same programs and files as the
+.deb. It needs glibc 2.39 or newer, so Fedora 40 and newer or openSUSE
+Tumbleweed; RHEL 9 and openSUSE Leap 15 are too old for it. The release run
+installs it in a Fedora 44 container; Tumbleweed is not checked.
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+sudo dnf install ./humanitl-@VERSION@-1.x86_64.rpm
+# openSUSE: sudo zypper install --allow-unsigned-rpm ./humanitl-@VERSION@-1.x86_64.rpm
+humanitl daemon install
+humanitl-app
+```
+
+To remove: `humanitl daemon uninstall`, then `sudo dnf remove humanitl`
+(openSUSE: `sudo zypper remove humanitl`).
+
+## Install on Arch Linux (AUR)
+
+The AUR package `humanitl-bin` installs the archive
+`humanitl-@VERSION@-linux-x86_64.tar.gz` of this release and checks its
+SHA-256. The release run builds it with makepkg and installs it in an Arch
+Linux container, but the maintainer publishes it to the AUR by hand after the
+release: until https://aur.archlinux.org/packages/humanitl-bin shows
+@VERSION@, it is not there yet.
+
+```sh
+git clone https://aur.archlinux.org/humanitl-bin.git
+cd humanitl-bin
+makepkg -si
+humanitl daemon install
+```
+
+To remove: `humanitl daemon uninstall`, then `sudo pacman -Rns humanitl-bin`.
+
 ## Install on macOS (Apple Silicon and Intel)
 
 Open `Humanitl-@VERSION@-macos.dmg` and drag Humanitl into Applications.
@@ -180,8 +216,10 @@ the Seatbelt escape tests against the binaries inside it.
   a service without a sandbox could be.
 - What the release run tests: build, version number of the programs,
   installation and removal without leftovers of the .deb in an Ubuntu 24.04
-  container, a start of the application under Xvfb, lintian. A desktop with a
-  real screen is not tested.
+  container, of the .rpm in a Fedora 44 container and of `humanitl-bin`, built
+  with makepkg, in an Arch Linux container, each time a start of the
+  application under Xvfb, lintian and rpmlint. A desktop with a real screen is
+  not tested.
 EOF
 )"
 
