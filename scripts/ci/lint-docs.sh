@@ -115,16 +115,19 @@ done < <(find docs -name '*.md' -print0 | sort -z)
 
 # 2. Das README hat die zwölf Pflichtabschnitte, in dieser Reihenfolge und
 #    ohne weitere Abschnitte der zweiten Ebene dazwischen. Die ersten beiden,
-#    Einzeiler und Screenshot, stehen vor der ersten Überschrift der zweiten
-#    Ebene; die übrigen zehn sind diese Überschriften.
+#    Einzeiler und Screenshot (echte Aufnahme unter images/readme/, HUM-344),
+#    stehen vor der ersten Überschrift der zweiten Ebene; die übrigen zehn
+#    sind diese Überschriften.
 ONE_LINER="Humanitl lets a sandboxed AI coding agent use the internet, one approved request at a time."
 head_part="$(sed '/^## /,$d' README.md)"
 if [[ "$head_part" != *"$ONE_LINER"* ]]; then
   echo "lint-docs: README.md: the one-liner must stand before the first section" >&2
   fail=1
 fi
-if [[ "$head_part" != *"(docs/img/intercept.png)"* ]]; then
-  echo "lint-docs: README.md: the screenshot docs/img/intercept.png must stand before the first section" >&2
+# Screenshot: eine echte Aufnahme unter images/readme/ (HUM-344), als
+# Markdown-Bild oder als <img src> in einem <picture> mit heller Variante.
+if ! grep -qE '(\(|src=")images/readme/intercept-dark\.png' <<<"$head_part"; then
+  echo "lint-docs: README.md: the screenshot images/readme/intercept-dark.png must stand before the first section" >&2
   fail=1
 fi
 README_SECTIONS=$'Why\nThe three guarantees\nWhat it does not protect against\nInstall\nFirst session\nCLI\nHow it works\nStatus\nContributing\nLicense'
