@@ -1,7 +1,8 @@
 ---
 // Die Startseite: ein angehefteter Bühnenabschnitt, in dem die echten Fenster der App
-// einfliegen, beim Scrollen vom Fächer auf eine gebogene Bühne wandern und dort als
-// endloses Karussell einrasten. Danach die drei Garantien und der Abschluss.
+// einfliegen und beim Scrollen vom Fächer auf einen steigenden Bogen wandern. Danach
+// scrollt die Seite normal; das Karussell dreht über Pfeile, Ziehen und Tasten weiter.
+// Danach die drei Garantien und der Abschluss.
 import { Picture } from 'astro:assets';
 
 import Icon from '../Icon.astro';
@@ -26,108 +27,268 @@ const n = modules.length;
 // Abstand eines Fensters zur Mitte im Ring, -3 bis 3: Intercept steht vorn.
 const ringOffset = (i: number) => ((i + Math.floor(n / 2)) % n) - Math.floor(n / 2);
 const formats = ['avif'] as const;
+// Die Dicke des Glases: sechs Konturen hintereinander, von hell (vorn) nach dunkel.
+const edges = [1, 2, 3, 4, 5, 6];
+const digits = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+const pad = (v: number) => String(v).padStart(2, '0');
 ---
 
 <Base lang={lang} page="home" title={t.meta.title} description={t.meta.description}>
   <main id="main">
     <noscript>
       <style is:inline>
-        /* Ohne Skript: ein Bildschirm mit dem Fächer aus CSS, dann geht die Seite normal weiter. */
+        /* Ohne Skript: ein ruhiger Fächer aus CSS, dann geht die Seite normal weiter. */
         .scene {
-          height: 100svh !important;
+          /* Die Beschriftung steht ohne Skript unter der Bühne; die Szene wächst mit ihr. */
+          height: auto !important;
+          overflow-x: clip;
+        }
+        /* Ring und Fenster tragen dieselbe Vorab-Transformation, damit der Ring unter dem
+           Fächer liegt. */
+        .rig {
+          transform: translateY(14vh) rotateX(8deg) scale(0.75);
         }
         .win {
-          opacity: calc(1 - max(0, abs(var(--d)) - 2)) !important;
-          transform: translate3d(-50%, -50%, 0) translate3d(calc(var(--d) * var(--w) * 0.34), calc(8vh + var(--d) * var(--d) * 0.6vh), calc(-1 * abs(var(--d)) * 18vw))
-            rotateY(calc(var(--d) * -16deg)) rotateX(7deg) scale(0.6) !important;
+          --o: 1 !important;
+          transform: translate(-50%, -50%) translate3d(calc(var(--w) * 1.3 * sin(var(--d) * 20deg)), 0, calc(var(--w) * -1.3 * (1 - cos(var(--d) * 20deg)) - var(--w) * 0.08 * abs(var(--d))))
+            rotateY(calc(var(--d) * -23deg)) !important;
+        }
+        .win[style*='--d: 3'],
+        .win[style*='--d: -3'] {
+          visibility: hidden;
+        }
+        .win[style*='--d: 2'],
+        .win[style*='--d: -2'] {
+          --shade: 0.45;
+        }
+        .ring {
+          opacity: 0.45 !important;
+          transform: translate(-50%, -50%) translate3d(0, calc(var(--w) / 1.855 / 2 + var(--t) + 2px), calc(var(--w) * -1.3)) rotateX(90deg) !important;
+        }
+        /* Modul 1 steht ruhig unter der Bühne, ohne Pfeile. */
+        .scene__sticky {
+          height: auto !important;
+          /* Senkrecht offen für die Beschriftung, waagrecht geschnitten: Licht und Ring
+             dürfen die Seite nicht verbreitern. */
+          overflow-x: clip !important;
+          overflow-y: visible !important;
+          padding-top: 100svh;
+        }
+        .world {
+          bottom: auto !important;
+          height: 100svh;
+          overflow: hidden;
         }
         .deck {
-          display: none;
+          position: relative !important;
+          inset: auto !important;
+        }
+        .cap {
+          position: relative !important;
+          inset: auto !important;
+          width: auto !important;
+          max-width: 44rem;
+          margin: 0 auto;
+          padding: 2rem var(--gutter) 4rem;
+          visibility: visible !important;
+        }
+        .cap__head {
+          opacity: 1 !important;
+        }
+        .cap__layer + .cap__layer,
+        .deck__controls {
+          display: none !important;
+        }
+        .odo__strip[data-odo-ones] {
+          transform: translateY(-1em);
+        }
+        @media (max-width: 699px) {
+          .scene {
+            --w: 86vw !important;
+          }
+          .rig {
+            transform: translateY(10vh) rotateX(8deg);
+          }
+          .ring {
+            display: none;
+          }
+          .win:not([style*='--d: 0']) {
+            visibility: hidden;
+          }
+        }
+        /* Telefon quer: Text links, der Fächer rechts daneben. */
+        @media (max-height: 500px) and (min-aspect-ratio: 16/10) {
+          .scene {
+            --w: 40vw !important;
+          }
+          .hero {
+            top: 0 !important;
+            bottom: auto !important;
+            height: 100svh !important;
+            left: 6vw !important;
+            right: auto !important;
+            width: 44vw !important;
+            align-content: center !important;
+            justify-items: start !important;
+            gap: 0.9rem !important;
+            text-align: left !important;
+          }
+          .hero__title {
+            font-size: clamp(1.6rem, 9vh, 2.4rem) !important;
+          }
+          .hero__lede {
+            font-size: 0.88rem !important;
+            line-height: 1.45 !important;
+          }
+          .hero__actions {
+            justify-content: flex-start !important;
+          }
+          .rig {
+            transform: translate(26vw, 2vh) rotateX(6deg) scale(0.8);
+          }
+          .ring {
+            display: none;
+          }
+          .win:not([style*='--d: 0']):not([style*='--d: 1']) {
+            visibility: hidden;
+          }
+          .win[style*='--d: 1'] {
+            --shade: 0.5;
+          }
         }
       </style>
     </noscript>
     <section class="scene" id="module" data-scene aria-label={t.stage.title} style={`--n: ${n}`}>
-      <div class="scene__sticky">
+      <div class="scene__sticky" data-sticky>
         <div class="sky" aria-hidden="true">
-          <div class="sky__spot"></div>
+          <div class="sky__spot" data-spot></div>
           <div class="sky__dust"></div>
           <div class="sky__dust sky__dust--far"></div>
         </div>
 
-        <header class="hero" data-hero>
-          <h1 class="hero__title chrome">
-            {t.hero.title.map((line) => <span>{line}</span>)}
-          </h1>
-          <p class="hero__lede lede">{t.hero.lede}</p>
-        </header>
+        <div class="hero">
+          <header class="hero__text" data-hero>
+            <h1 class="hero__title chrome">
+              {t.hero.title.map((line) => <span>{line}</span>)}
+            </h1>
+            <p class="hero__lede lede">{t.hero.lede}</p>
+          </header>
+          <div class="hero__actions" data-hero-actions>
+            <a class="pill pill--light" href={path('download', lang)}>
+              <Icon name="download" />
+              {t.hero.cta}
+              <span class="hero__for">{t.hero.ctaFor}</span>
+            </a>
+            <a class="hero__source" href={repoUrl}>
+              <Icon name="github" />
+              {t.hero.source}
+            </a>
+          </div>
+        </div>
 
         <div class="world" data-world>
-          <div class="ring" data-ring aria-hidden="true">
-            <div class="ring__floor"></div>
+          <div class="rig" data-rig>
+            <div class="ring" data-ring aria-hidden="true">
+              <div class="ring__floor"></div>
+              <div class="ring__ticks" data-ticks></div>
+              <div class="ring__metal"></div>
+              <div class="ring__pool" data-pool></div>
+            </div>
+            <ul class="wins" aria-roledescription="carousel" aria-label={t.stage.title}>
+              {
+                modules.map((module, i) => (
+                  <li
+                    class="win"
+                    data-win
+                    data-title={module.title}
+                    data-name={module.name}
+                    data-text={module.text}
+                    style={`--d: ${ringOffset(i)}`}
+                    role="group"
+                    aria-roledescription="slide"
+                    aria-label={`${i + 1} ${t.stage.of} ${n}: ${module.name}`}
+                  >
+                    <span class="win__shadow" aria-hidden="true" />
+                    <span class="win__back" aria-hidden="true" />
+                    {edges.map((k) => (
+                      <i class={k % 2 ? 'win__edge win__edge--odd' : 'win__edge'} style={`--k: ${k}`} aria-hidden="true" />
+                    ))}
+                    <span class="win__edgeLit" aria-hidden="true" />
+                    <div class="win__frame">
+                      <span class="win__glint" aria-hidden="true" />
+                      <span class="win__sweep" aria-hidden="true" />
+                      <Picture
+                        class="win__shot"
+                        src={module.image}
+                        alt={module.alt}
+                        formats={formats}
+                        fallbackFormat="webp"
+                        widths={[800, 1280, 1920, 2560]}
+                        sizes="(max-width: 52rem) 92vw, min(64vw, 72rem)"
+                        loading={Math.abs(ringOffset(i)) <= 2 ? 'eager' : 'lazy'}
+                        fetchpriority={i === 0 ? 'high' : 'auto'}
+                        decoding="async"
+                        draggable="false"
+                      />
+                      <span class="win__glaze" aria-hidden="true" />
+                      <span class="win__rim" aria-hidden="true" />
+                      <span class="win__shade" aria-hidden="true" />
+                    </div>
+                  </li>
+                ))
+              }
+            </ul>
           </div>
-          <ul class="wins" data-wins aria-roledescription="carousel" aria-label={t.stage.title}>
-            {
-              modules.map((module, i) => (
-                <li
-                  class="win"
-                  data-win
-                  data-title={module.title}
-                  data-name={module.name}
-                  data-text={module.text}
-                  style={`--d: ${ringOffset(i)}`}
-                  role="group"
-                  aria-roledescription="slide"
-                  aria-label={`${i + 1} ${t.stage.of} ${n}: ${module.name}`}
-                >
-                  <div class="win__frame">
-                    <Picture
-                      class="win__shot"
-                      src={module.image}
-                      alt={module.alt}
-                      formats={formats}
-                      fallbackFormat="webp"
-                      widths={[800, 1280, 1920, 2560]}
-                      sizes="(max-width: 52rem) 92vw, min(64vw, 72rem)"
-                      loading={i === 0 ? 'eager' : 'lazy'}
-                      fetchpriority={i === 0 ? 'high' : 'auto'}
-                      decoding="async"
-                    />
-                    <span class="win__sheen" aria-hidden="true"></span>
-                    <span class="win__shade" aria-hidden="true"></span>
-                  </div>
-                </li>
-              ))
-            }
-          </ul>
         </div>
 
-        <div class="hero__actions" data-hero-actions>
-          <a class="pill pill--light" href={path('download', lang)}>
-            <Icon name="download" />
-            {t.hero.cta}
-            <span class="hero__for">{t.hero.ctaFor}</span>
-          </a>
-          <a class="hero__source" href={repoUrl}>
-            <Icon name="github" />
-            {t.hero.source}
-          </a>
-        </div>
+        <div class="stage-hit" data-hit aria-hidden="true"></div>
 
         <div class="deck" data-deck>
-          <h2 class="deck__title chrome">{t.stage.title}</h2>
-          <button class="deck__arrow deck__arrow--prev" type="button" data-prev aria-label={t.stage.previous}>
-            <Icon name="chevronLeft" />
-          </button>
-          <button class="deck__arrow deck__arrow--next" type="button" data-next aria-label={t.stage.next}>
-            <Icon name="chevronRight" />
-          </button>
-          <div class="deck__caption" aria-live="polite">
-            <p class="deck__name" data-caption-name>{modules[0].name}</p>
-            <p class="deck__headline" data-caption-title>{modules[0].title}</p>
-            <p class="deck__text" data-caption-text>{modules[0].text}</p>
-          </div>
-          <div class="deck__track" aria-hidden="true">
-            <span class="deck__fill" data-fill></span>
+          <div class="cap" data-cap>
+            <div class="cap__head" data-cap-head>
+              <h2 class="deck__title">{t.stage.title}</h2>
+              <div class="cap__index" aria-hidden="true">
+                <span class="odo" data-odo>
+                  <span class="odo__col"><span class="odo__strip"><span>0</span></span></span>
+                  <span class="odo__col">
+                    <span class="odo__strip" data-odo-ones>{digits.map((v) => <span>{v}</span>)}</span>
+                  </span>
+                </span>
+                <span class="cap__of">/ {pad(n)}</span>
+              </div>
+            </div>
+            <div class="cap__layers">
+              {
+                [0, 1].map((k) => (
+                  <div class="cap__layer" data-layer aria-hidden="true">
+                    <p class="cap__name" data-cap-name>
+                      {k === 0 ? modules[0].name : ''}
+                    </p>
+                    <p class="cap__headline" data-cap-title>
+                      {k === 0 ? modules[0].title : ''}
+                    </p>
+                    <span class="cap__streak" data-streak />
+                    <p class="cap__text" data-cap-text>
+                      {k === 0 ? modules[0].text : ''}
+                    </p>
+                  </div>
+                ))
+              }
+            </div>
+            <p class="visually-hidden" aria-live="polite" data-live-text>
+              {`${modules[0].name}. ${modules[0].title} ${modules[0].text}`}
+            </p>
+            <div class="deck__controls" data-controls>
+              <button class="deck__arrow" type="button" data-prev aria-label={t.stage.previous}>
+                <Icon name="chevronLeft" />
+              </button>
+              <div class="deck__track" aria-hidden="true">
+                <span class="deck__fill" data-fill></span>
+              </div>
+              <button class="deck__arrow" type="button" data-next aria-label={t.stage.next}>
+                <Icon name="chevronRight" />
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -189,9 +350,15 @@ const formats = ['avif'] as const;
 
 <style>
   /* ---- Bühne ---------------------------------------------------------- */
+  /* --w ist die Breite eines Fensters auf der Bühne, --t die Dicke des Glases; beide
+     setzt das Skript je Bildausschnitt. Die Werte hier gelten ohne Skript. */
   .scene {
+    --w: min(48vw, 104vh);
+    --t: clamp(7px, calc(var(--w) * 0.013), 14px);
+    --r: calc(var(--w) * 0.016);
+    --pad: calc(var(--w) * 0.009);
     position: relative;
-    height: var(--scene-h, 600vh);
+    height: var(--scene-h, 220vh);
   }
   .scene__sticky {
     position: sticky;
@@ -215,6 +382,7 @@ const formats = ['avif'] as const;
     background:
       radial-gradient(42% 55% at 50% 0%, rgb(255 255 255 / 0.11), transparent 70%),
       radial-gradient(30% 40% at 50% 62%, rgb(214 224 255 / 0.07), transparent 70%);
+    will-change: transform;
   }
   /* Feiner Staub im unteren Drittel, aus Punkten gemalt statt aus einem Bild. */
   .sky__dust {
@@ -229,44 +397,73 @@ const formats = ['avif'] as const;
       radial-gradient(1.2px 1.2px at 24% 84%, rgb(255 255 255 / 0.35), transparent 60%);
     background-size: 340px 260px;
     mask-image: linear-gradient(180deg, transparent, #000 45%, #000 80%, transparent);
-    opacity: 0.7;
+    opacity: 0.25;
   }
   .sky__dust--far {
     background-size: 190px 150px;
-    opacity: 0.35;
+    opacity: 0.12;
     transform: translateY(-6%);
   }
 
   /* ---- Hero ----------------------------------------------------------- */
+  /* Grundform (16:9, 16:10, 4:3, Tablet): zentriert, die Knöpfe direkt unter der Lede. */
   .hero {
     position: absolute;
-    inset: clamp(5.5rem, 13vh, 8.5rem) var(--gutter) auto;
-    z-index: 3;
+    z-index: 5;
+    top: max(88px, 11vh);
+    left: var(--gutter);
+    right: var(--gutter);
     display: grid;
     justify-items: center;
-    gap: clamp(1rem, 2.2vh, 1.6rem);
+    gap: clamp(1.1rem, 2.8vh, 1.9rem);
     text-align: center;
+    pointer-events: none;
+  }
+  .hero > * {
+    pointer-events: auto;
+  }
+  .scene[data-live] .hero,
+  .scene[data-live] .hero * {
+    pointer-events: none;
+  }
+  .hero__text {
+    display: grid;
+    justify-items: inherit;
+    gap: clamp(0.9rem, 2.2vh, 1.5rem);
     will-change: transform, opacity;
   }
   .hero__title {
     display: grid;
-    font-size: clamp(2.3rem, 1.1rem + 4.6vw, 5.4rem);
+    font-size: clamp(2.3rem, min(1.1rem + 4.6vw, 9.5vh), 5.4rem);
     line-height: 1;
     font-weight: 650;
+    background: none;
+  }
+  /* Chrom je Zeile: die Zeilen steigen einzeln auf, darum trägt jede ihren Verlauf. */
+  .hero__title span {
+    background: var(--chrome);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: rise 1s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .hero__title span:nth-child(2) {
+    animation-delay: 0.11s;
   }
   .hero__lede {
     max-width: 36rem;
+    animation: rise 1s cubic-bezier(0.22, 1, 0.36, 1) 0.2s both;
   }
   .hero__actions {
-    position: absolute;
-    inset: auto var(--gutter) clamp(1.5rem, 6vh, 3.5rem);
-    z-index: 3;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     justify-content: center;
     gap: 0.75rem 1.5rem;
     will-change: transform, opacity;
+  }
+  .hero__actions > * {
+    animation: rise-cta 0.7s var(--ease-out) 1.25s both;
   }
   .hero__for {
     color: #4a4f5c;
@@ -287,103 +484,325 @@ const formats = ['avif'] as const;
     width: 1.1rem;
     height: 1.1rem;
   }
-  /* Ohne Skript erscheinen Überschrift und Knöpfe mit einem kurzen Einblenden. */
-  .hero > *,
-  .hero__actions {
-    animation: rise 1.1s var(--ease-out) both;
-  }
-  .hero__lede {
-    animation-delay: 0.12s;
-  }
-  .hero__actions {
-    animation-delay: 0.5s;
-  }
   @keyframes rise {
     from {
       opacity: 0;
       transform: translateY(18px);
     }
   }
+  @keyframes rise-cta {
+    from {
+      opacity: 0;
+      transform: translateY(14px);
+    }
+  }
 
-  /* ---- Fenster -------------------------------------------------------- */
+  .scene[data-cls='E'] .hero {
+    top: 12vh;
+  }
+  /* Breitbild: Text links, der Fächer rechts daneben. */
+  .scene[data-cls='A'] .hero {
+    top: 0;
+    bottom: 0;
+    left: 8vw;
+    right: auto;
+    width: 30vw;
+    align-content: center;
+    justify-items: start;
+    text-align: left;
+  }
+  .scene[data-cls='A'] .hero__title {
+    font-size: clamp(3rem, 6.2vh, 5.4rem);
+  }
+  .scene[data-cls='A'] .hero__actions,
+  .scene[data-cls='G'] .hero__actions {
+    justify-content: flex-start;
+  }
+  /* Telefon quer: dieselbe Teilung, kompakt. */
+  .scene[data-cls='G'] .hero {
+    top: 0;
+    bottom: 0;
+    left: 6vw;
+    right: auto;
+    width: 44vw;
+    align-content: center;
+    justify-items: start;
+    gap: 0.9rem;
+    text-align: left;
+  }
+  .scene[data-cls='G'] .hero__text {
+    gap: 0.6rem;
+  }
+  .scene[data-cls='G'] .hero__title {
+    font-size: clamp(1.6rem, 9vh, 2.4rem);
+  }
+  .scene[data-cls='G'] .hero__lede {
+    font-size: 0.88rem;
+    line-height: 1.45;
+  }
+  .scene[data-cls='G'] .hero__actions :global(.pill) {
+    --pill-h: 2.5rem;
+  }
+  /* Telefon hoch: Text oben, Knöpfe unten, der Kartenstapel dazwischen. */
+  .scene[data-cls='F'] .hero {
+    top: 13vh;
+    bottom: 5vh;
+    left: 6vw;
+    right: 6vw;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .scene[data-cls='F'] .hero__title {
+    font-size: clamp(1.7rem, 8.4vw, 2.6rem);
+  }
+  .scene[data-cls='F'] .hero__lede {
+    font-size: 0.98rem;
+  }
+  .scene[data-cls='F'] .hero__actions {
+    margin-top: auto;
+  }
+
+  /* ---- Welt, Rig und Ring --------------------------------------------- */
   .world {
     position: absolute;
     inset: 0;
     z-index: 2;
-    perspective: 2200px;
-    perspective-origin: 50% 42%;
-    touch-action: pan-y;
+    perspective: 2400px;
+    perspective-origin: 50% 50%;
+    pointer-events: none;
   }
-  .wins {
+  /* Das Rig ist die Kamera der Bühne: ein Punkt in der Mitte, der verschoben, gekippt,
+     gerollt und skaliert wird. Ring und Fenster hängen daran. */
+  .rig {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0;
+    height: 0;
+    transform-style: preserve-3d;
+    will-change: transform;
+  }
+  .ring {
+    --ring-band: clamp(12px, calc(var(--w) * 0.036), 36px);
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: var(--ring, calc(var(--w) * 2.72));
+    height: var(--ring, calc(var(--w) * 2.72));
+    transform-style: preserve-3d;
+    opacity: 0;
+    pointer-events: none;
+    /* Die äußersten Bogenstücke sieht man fast von der Kante: dort laufen sie als Strich
+       quer durch das Bild und unter die Beschriftung. Sie laufen weich aus. */
+    -webkit-mask-image: linear-gradient(90deg, transparent 4%, #000 26%, #000 74%, transparent 96%);
+    mask-image: linear-gradient(90deg, transparent 4%, #000 26%, #000 74%, transparent 96%);
+  }
+  .ring__floor,
+  .ring__metal,
+  .ring__ticks {
     position: absolute;
     inset: 0;
+    border-radius: 50%;
+  }
+  .ring__floor {
+    background: radial-gradient(closest-side, rgb(255 255 255 / 0.025), transparent);
+  }
+  /* Die Chromkante: ein Konus-Verlauf, auf ein schmales Band maskiert; fest im Licht. */
+  .ring__metal {
+    padding: var(--ring-band);
+    background: conic-gradient(
+      from 180deg,
+      #2a2d35,
+      #f4f5f8 8%,
+      #4a4e58 18%,
+      #1a1c21 35%,
+      #6a6f7b 46%,
+      #fff 50%,
+      #6a6f7b 54%,
+      #1a1c21 65%,
+      #4a4e58 82%,
+      #f4f5f8 92%,
+      #2a2d35
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box exclude,
+      linear-gradient(#000 0 0);
+  }
+  /* Teilstriche innen am Ring; sie drehen mit der Ringposition. */
+  .ring__ticks {
+    inset: calc(var(--ring-band) * 1.6);
+    background: repeating-conic-gradient(rgb(255 255 255 / 0.1) 0 0.2deg, transparent 0.2deg 2.5deg);
+    mask: radial-gradient(closest-side, transparent 96.5%, #000 96.8%, #000 99.4%, transparent 99.7%);
+    will-change: transform;
+  }
+  /* Der Lichtteich unter dem stehenden Fenster. */
+  .ring__pool {
+    position: absolute;
+    left: 50%;
+    top: calc(50% + var(--ring-r, calc(var(--w) * 1.3)));
+    width: calc(var(--w) * 1.2);
+    height: calc(var(--w) * 0.34);
+    translate: -50% -50%;
+    border-radius: 50%;
+    background: radial-gradient(closest-side, rgb(255 255 255 / 0.16), rgb(255 255 255 / 0.05) 50%, transparent);
+    opacity: 0;
+  }
+
+  /* ---- Fenster -------------------------------------------------------- */
+  .wins {
+    position: absolute;
+    left: 0;
+    top: 0;
     margin: 0;
     padding: 0;
     list-style: none;
     transform-style: preserve-3d;
   }
+  /* Ein Fenster ist ein Stapel aus Blättern. Das li selbst trägt weder overflow noch
+     opacity, sonst plättet der Browser den 3D-Stapel; die Deckkraft kommt als --o und
+     wird nur von den Blättern gelesen. */
   .win {
-    --w: min(62vw, 70rem);
+    --o: 0;
+    /* Deckkraft der Konturen; das Skript setzt sie steiler als --o, ohne Skript gleich. */
+    --oe: var(--o);
     position: absolute;
-    left: 50%;
-    top: 50%;
+    left: 0;
+    top: 0;
     width: var(--w);
     aspect-ratio: 2560 / 1380;
     transform-style: preserve-3d;
-    will-change: transform, opacity;
-    /* Der Startpunkt des Einflugs; das Skript führt jedes Fenster von hier in den Fächer. */
-    transform: translate3d(-50%, 20vh, -40vw) rotateX(30deg) scale(0.5);
-    opacity: 0;
+    transform: translate(-50%, -50%);
+    will-change: transform;
+    -webkit-user-drag: none;
+    user-select: none;
   }
-  @media (max-width: 52rem) {
-    .win {
-      --w: 92vw;
-    }
+  .win :global(img) {
+    -webkit-user-drag: none;
+    user-select: none;
+    pointer-events: none;
   }
-
-  /* Der Glaskörper: dicke, polierte Kante, oben hell angeleuchtet, unten ein Rest Licht. */
-  .win__frame {
-    position: absolute;
-    inset: 0;
-    padding: clamp(5px, 0.55vw, 11px);
-    border-radius: clamp(12px, 1.5vw, 26px);
-    border: 1px solid transparent;
-    background:
-      linear-gradient(180deg, #1a1d24, #0b0c10 60%, #121419) padding-box,
-      linear-gradient(
-          165deg,
-          rgb(255 255 255 / 1) 0%,
-          rgb(255 255 255 / 0.35) 14%,
-          rgb(255 255 255 / 0.08) 38%,
-          rgb(255 255 255 / 0.06) 62%,
-          rgb(255 255 255 / 0.55) 100%
-        )
-        border-box;
-    box-shadow:
-      0 50px 120px -40px rgb(0 0 0 / 0.95),
-      0 0 0 1px rgb(0 0 0 / 0.65),
-      inset 0 1px 0 rgb(255 255 255 / 0.35),
-      inset 0 -1px 0 rgb(255 255 255 / 0.08);
-    overflow: hidden;
-  }
-  /* Der Schein hinter dem vorderen Fenster: eine eigene Ebene, nur ihre Deckkraft wechselt. */
+  /* Der Schein hinter dem vorderen Fenster; nur seine Deckkraft wechselt. */
   .win::before {
     content: '';
     position: absolute;
-    inset: 6%;
-    border-radius: 30px;
-    box-shadow: 0 0 120px 10px rgb(220 228 255 / 0.2);
-    opacity: var(--glow, 0);
+    inset: -22% -14%;
+    border-radius: 50%;
+    background: radial-gradient(closest-side, rgb(232 236 245 / 0.2), rgb(232 236 245 / 0.07) 55%, transparent);
+    transform: translateZ(calc(var(--t) * -1 - 3px));
+    opacity: calc(var(--o) * var(--halo, 0));
     pointer-events: none;
   }
-  /* Abdunkeln der hinteren Fenster über eine schwarze Ebene statt über einen Filter. */
-  .win__shade {
+  /* Schatten auf dem Boden, flach unter die Unterkante gelegt. */
+  .win__shadow {
+    position: absolute;
+    left: -8%;
+    right: -8%;
+    top: 100%;
+    height: 60%;
+    transform-origin: 50% 0;
+    transform: translateY(calc(var(--t) + 2px)) rotateX(90deg) translateY(-50%);
+    background: radial-gradient(closest-side, rgb(0 0 0 / 0.75), transparent);
+    opacity: var(--oe);
+  }
+  .win__back {
     position: absolute;
     inset: 0;
-    border-radius: inherit;
-    background: #000;
-    opacity: var(--shade, 0);
-    pointer-events: none;
+    border-radius: var(--r);
+    background: #08090c;
+    border: 1px solid rgb(255 255 255 / 0.12);
+    transform: translateZ(calc(var(--t) * -1));
+    opacity: var(--o);
+  }
+  /* Die Dicke: Konturen in festen Abständen hinter dem Rahmen, jede mit dem Radius des
+     Rahmens, so dass auch die Ecken in jeder Drehung stimmen. */
+  .win__edge {
+    position: absolute;
+    inset: 0;
+    border-radius: var(--r);
+    border: 2px solid rgb(226 230 238 / 0.72);
+    transform: translateZ(calc(var(--t) * var(--k) / -7));
+    opacity: var(--oe);
+  }
+  .win__edge:nth-of-type(2) {
+    border-color: rgb(150 156 168 / 0.56);
+  }
+  .win__edge:nth-of-type(3) {
+    border-color: rgb(90 95 107 / 0.5);
+  }
+  .win__edge:nth-of-type(4) {
+    border-color: rgb(58 62 72 / 0.6);
+  }
+  .win__edge:nth-of-type(5) {
+    border-color: rgb(42 45 53 / 0.7);
+  }
+  .win__edge:nth-of-type(6) {
+    border-color: rgb(28 30 36 / 0.8);
+  }
+  /* Die angeleuchtete Kante: leuchtet in der Drehung als Körper auf. */
+  .win__edgeLit {
+    position: absolute;
+    inset: 0;
+    border-radius: var(--r);
+    /* Licht kommt von oben: die obere Kante glänzt am hellsten, die untere bleibt matt.
+       Sichtbar ist nur der Teil, der in der Drehung hinter dem Rahmen hervortritt. */
+    border: 2px solid;
+    border-color: rgb(255 255 255 / 0.95) rgb(255 255 255 / 0.8) rgb(255 255 255 / 0.3) rgb(255 255 255 / 0.8);
+    transform: translateZ(calc(var(--t) / -14));
+    opacity: var(--lit, 0);
+  }
+  /* Auf schwachen Geräten und am Telefon reichen drei Konturen mit breiterem Rand. */
+  .scene[data-lite] .win__edge--odd {
+    display: none;
+  }
+  .scene[data-lite] .win__edge {
+    border-width: 3px;
+  }
+  @media (max-width: 699px) {
+    /* Bei kleinen Ringen flimmern die feinen Teilstriche fast flach gesehen zu Strichellinien. */
+    .ring__ticks {
+      display: none;
+    }
+    .win__edge--odd {
+      display: none;
+    }
+    .win__edge {
+      border-width: 3px;
+    }
+  }
+
+  /* Der Rahmen (Bezel): ein Blatt, das overflow haben darf. Klarer weißer Rim oben. */
+  .win__frame {
+    position: absolute;
+    inset: 0;
+    padding: var(--pad);
+    border-radius: var(--r);
+    border: 1px solid transparent;
+    background:
+      linear-gradient(180deg, #191c23, #0e1014) padding-box,
+      linear-gradient(
+          172deg,
+          #fff 0%,
+          rgb(255 255 255 / 0.4) 10%,
+          rgb(255 255 255 / 0.06) 45%,
+          rgb(255 255 255 / 0.05) 70%,
+          rgb(255 255 255 / 0.28) 100%
+        )
+        border-box;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5);
+    overflow: hidden;
+    opacity: var(--o);
+  }
+  .win__frame :global(picture) {
+    position: relative;
+    z-index: 1;
+    display: block;
+    width: 100%;
+    height: 100%;
   }
   .win__shot,
   .win__frame :global(img) {
@@ -391,189 +810,471 @@ const formats = ['avif'] as const;
     height: 100%;
     object-fit: cover;
     object-position: top center;
-    border-radius: clamp(8px, 1vw, 17px);
+    border-radius: calc(var(--r) - var(--pad));
     background: #0f1115;
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 0.6);
   }
-  /* Spiegelndes Licht über dem Glas: ein breiter Streifen, der mit der Drehung des
-     Fensters seitlich wandert, verschoben nur über transform. */
-  .win__sheen {
+  /* Glanz HINTER dem Bildschirm: sichtbar nur im Rahmen, nie über dem Inhalt. */
+  .win__glint,
+  .win__sweep {
     position: absolute;
-    inset: 0 -60%;
+    z-index: 0;
+    top: -45%;
+    left: 31%;
+    width: 38%;
+    height: 120%;
+    background: radial-gradient(closest-side, rgb(255 255 255 / 0.85), transparent);
     pointer-events: none;
-    background: linear-gradient(
-      115deg,
-      transparent 30%,
-      rgb(255 255 255 / 0.08) 44%,
-      rgb(255 255 255 / 0.15) 50%,
-      rgb(255 255 255 / 0.04) 55%,
-      transparent 66%
-    );
-    transform: translate3d(var(--sx, 0px), 0, 0);
-    mix-blend-mode: screen;
   }
-  .win__frame::after {
+  .win__glint {
+    transform: translate3d(var(--gx, 0px), 0, 0);
+    opacity: var(--spec, 0.3);
+  }
+  .win__sweep {
+    transform: translate3d(var(--swx, 0px), 0, 0);
+    opacity: var(--swo, 0);
+  }
+  /* Ein Hauch über dem Glas: höchstens 0.045 Weiß oben, keine Blend-Modi. */
+  .win__glaze {
+    position: absolute;
+    z-index: 2;
+    inset: var(--pad);
+    border-radius: calc(var(--r) - var(--pad));
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.045), transparent 18%);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.12);
+    pointer-events: none;
+  }
+  /* Der Rim: eine 1 px feine Glanzlinie auf der Rahmenkante. Ein fester Verlauf hält die
+     Oberkante weiß; darüber wandert ein Glanzpunkt mit der Drehung (--gx) und im Morph
+     das Begleitlicht (--swx). Beides nur über transform und opacity. */
+  .win__rim {
+    position: absolute;
+    z-index: 3;
+    inset: -1px;
+    padding: 1px;
+    border-radius: var(--r);
+    overflow: hidden;
+    background: linear-gradient(
+      180deg,
+      rgb(255 255 255 / 0.55),
+      rgb(255 255 255 / 0.16) 20%,
+      rgb(255 255 255 / 0.04) 60%,
+      rgb(255 255 255 / 0.14)
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box exclude,
+      linear-gradient(#000 0 0);
+    pointer-events: none;
+  }
+  .win__rim::before,
+  .win__rim::after {
     content: '';
     position: absolute;
+    top: -55%;
+    left: 22%;
+    width: 56%;
+    height: 110%;
+    background: radial-gradient(closest-side, #fff, rgb(255 255 255 / 0.4) 45%, transparent);
+  }
+  .win__rim::before {
+    transform: translate3d(var(--gx, 0px), 0, 0);
+    opacity: var(--spec, 0.3);
+  }
+  .win__rim::after {
+    transform: translate3d(var(--swx, 0px), 0, 0);
+    opacity: var(--swo, 0);
+  }
+  /* Abdunkeln der hinteren Fenster über eine schwarze Ebene statt über einen Filter. */
+  .win__shade {
+    position: absolute;
+    z-index: 3;
     inset: 0;
-    border-radius: inherit;
-    background: linear-gradient(180deg, rgb(255 255 255 / 0.07), transparent 22%);
+    background: #000;
+    opacity: var(--shade, 0);
     pointer-events: none;
   }
 
-  /* Der Metallring der Bühne, flach gelegt unter den Fenstern. */
-  .ring {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 200vw;
-    aspect-ratio: 1;
-    transform: translate3d(-50%, -50%, 0);
-    transform-style: preserve-3d;
-    opacity: 0;
-    pointer-events: none;
-    will-change: transform, opacity;
-  }
-  .ring__floor {
+  /* ---- Trefferebene zum Ziehen ---------------------------------------- */
+  .stage-hit {
     position: absolute;
     inset: 0;
-    border-radius: 50%;
-    border: clamp(10px, 1.6vw, 28px) solid transparent;
-    background:
-      radial-gradient(closest-side, rgb(8 9 12 / 0.96) 86%, rgb(30 33 41 / 0.9) 97%, transparent 100%) padding-box,
-      conic-gradient(
-          from 180deg,
-          #2a2d35,
-          #f4f5f8 9%,
-          #5a5f6c 16%,
-          #1c1e24 28%,
-          #6d7280 40%,
-          #fdfdfe 50%,
-          #6d7280 60%,
-          #1c1e24 72%,
-          #5a5f6c 84%,
-          #f4f5f8 91%,
-          #2a2d35
-        )
-        border-box;
-    box-shadow:
-      0 0 0 1px rgb(255 255 255 / 0.18),
-      0 0 120px rgb(255 255 255 / 0.06);
+    z-index: 3;
+    pointer-events: none;
+    touch-action: pan-y;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .scene[data-live] .stage-hit {
+    pointer-events: auto;
+    cursor: grab;
+  }
+  .scene[data-dragging] .stage-hit {
+    cursor: grabbing;
   }
 
-  /* ---- Steuerung des Karussells ---------------------------------------- */
+  /* ---- Beschriftung und Steuerung ------------------------------------- */
   .deck {
     position: absolute;
     inset: 0;
     z-index: 4;
     pointer-events: none;
+  }
+  .cap {
+    position: absolute;
+    right: var(--cap-r, 5vw);
+    bottom: var(--cap-b, 9vh);
+    width: var(--cap-w, 34vw);
+    display: flex;
+    flex-direction: column;
+    gap: var(--cap-gap, clamp(0.6rem, 1.5vh, 1.1rem));
+    visibility: hidden;
+  }
+  .cap__head {
+    display: grid;
+    gap: 0.4rem;
     opacity: 0;
-    will-change: opacity;
-  }
-  :global(.deck[data-live]) {
-    pointer-events: none;
-  }
-  :global(.deck[data-live]) .deck__arrow {
-    pointer-events: auto;
   }
   .deck__title {
+    font: 500 0.72rem/1.3 var(--mono);
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--fg-2);
+  }
+  .cap__index {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.6rem;
+    line-height: 1;
+  }
+  /* Der Index als Zählwerk: Konturziffern, die Spalte rollt über transform. */
+  .odo {
+    display: flex;
+    font: 300 var(--idx, 8rem) / 1 var(--mono);
+    letter-spacing: -0.04em;
+    color: transparent;
+    -webkit-text-stroke: 1px rgb(255 255 255 / 0.35);
+  }
+  .odo__col {
+    display: block;
+    height: 1em;
+    overflow: hidden;
+  }
+  .odo__strip {
+    display: flex;
+    flex-direction: column;
+    will-change: transform;
+  }
+  .odo__strip > span {
+    display: block;
+    height: 1em;
+    line-height: 1;
+  }
+  .cap__of {
+    padding-bottom: 0.9em;
+    font: 500 0.8rem/1 var(--mono);
+    letter-spacing: 0.12em;
+    color: var(--fg-2);
+  }
+  .cap__layers {
+    position: relative;
+    display: grid;
+  }
+  /* Unsichtbare Messkopie: hält die Höhe der längsten Beschriftung frei. */
+  .cap__layers :global(.cap__probe) {
     position: absolute;
-    inset: clamp(5.5rem, 12vh, 8rem) var(--gutter) auto;
-    text-align: center;
-    font-size: clamp(1.7rem, 1rem + 2.6vw, 3.6rem);
+    inset: 0 0 auto;
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .cap__layer {
+    position: relative;
+    grid-area: 1 / 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .cap__name {
+    font: 500 0.78rem/1.3 var(--mono);
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .cap__headline {
+    font-size: var(--head, clamp(2rem, 1rem + 2.6vw, 4.2rem));
+    line-height: 0.98;
+    font-weight: 650;
+    letter-spacing: -0.015em;
+    text-transform: uppercase;
+    color: #e6e8ee;
+    text-wrap: balance;
+  }
+  .cap__headline :global(.wi) {
+    background: var(--chrome);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .cap__streak {
+    display: block;
+    width: 40%;
+    height: 1px;
+    margin: -0.2rem 0 -0.1rem;
+    background: linear-gradient(90deg, transparent, #fff, transparent);
+    opacity: 0;
+  }
+  .cap__text {
+    max-width: var(--text-w, 40ch);
+    font-size: var(--text, clamp(1.05rem, 0.9rem + 0.3vw, 1.2rem));
+    line-height: 1.5;
+    color: var(--fg-1);
+  }
+  /* Wort-Masken: jedes Wort steigt in seinem eigenen Fenster auf. */
+  .cap :global(.w) {
+    display: inline-block;
+    overflow: hidden;
+    vertical-align: top;
+    padding: 0.12em 0.04em 0.14em;
+    margin: -0.12em -0.04em -0.14em;
+  }
+  .cap :global(.wi) {
+    display: inline-block;
+  }
+  .deck__controls {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    margin-top: 0.3rem;
+    opacity: 0;
+  }
+  .deck__track {
+    position: relative;
+    flex: 1 1 auto;
+    max-width: min(22rem, 40vw);
+    height: 2px;
+    background: rgb(255 255 255 / 0.12);
+    overflow: hidden;
+  }
+  .deck__fill {
+    position: absolute;
+    inset: 0;
+    background: #fff;
+    transform-origin: left center;
+    transform: scaleX(0.1429);
   }
   .deck__arrow {
-    position: absolute;
-    top: 50%;
     display: grid;
+    flex: none;
     place-items: center;
-    width: 3.2rem;
-    height: 3.2rem;
-    margin-top: -1.6rem;
-    border: 0;
+    width: 2.75rem;
+    height: 2.75rem;
+    border: 1px solid var(--line-strong);
     border-radius: 50%;
-    background: transparent;
+    background: rgb(255 255 255 / 0.02);
     color: var(--fg-1);
     cursor: pointer;
     transition:
       color 0.3s var(--ease-out),
       background 0.3s var(--ease-out),
+      border-color 0.3s var(--ease-out),
       transform 0.3s var(--ease-out);
+  }
+  .scene[data-live] .deck__arrow {
+    pointer-events: auto;
   }
   .deck__arrow:hover {
     color: #fff;
+    border-color: rgb(255 255 255 / 0.4);
     background: rgb(255 255 255 / 0.06);
   }
   .deck__arrow:active {
     transform: scale(0.94);
   }
   .deck__arrow :global(svg) {
-    width: 2rem;
-    height: 2rem;
-    stroke-width: 1.25;
+    width: 1.4rem;
+    height: 1.4rem;
+    stroke-width: 1.4;
   }
-  .deck__arrow--prev {
-    left: clamp(0.5rem, 3vw, 3rem);
+
+  /* Bildausschnitte der Beschriftung, je Klasse aus dem Skript (data-cls). */
+  .scene[data-cls='A'] {
+    --cap-r: 7vw;
+    --cap-b: 7vh;
+    --cap-w: 27vw;
+    --idx: min(10rem, 12vh);
   }
-  .deck__arrow--next {
-    right: clamp(0.5rem, 3vw, 3rem);
+  /* Breitbild bis 16:10 und Telefon quer: Augenbraue und „/ 07“ stehen rechts neben den
+     großen Ziffern, das spart eine Zeile. */
+  .scene:is([data-cls='A'], [data-cls='B'], [data-cls='C'], [data-cls='G']) .cap__head {
+    grid-template-columns: auto 1fr;
+    column-gap: 0.9rem;
+    row-gap: 0.3rem;
   }
-  .deck__caption {
-    position: absolute;
-    inset: auto var(--gutter) clamp(4.4rem, 11vh, 7rem);
+  .scene:is([data-cls='A'], [data-cls='B'], [data-cls='C'], [data-cls='G']) .cap__index {
+    display: contents;
+  }
+  .scene:is([data-cls='A'], [data-cls='B'], [data-cls='C'], [data-cls='G']) .odo {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+  }
+  .scene:is([data-cls='A'], [data-cls='B'], [data-cls='C'], [data-cls='G']) .deck__title {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: end;
+  }
+  .scene:is([data-cls='A'], [data-cls='B'], [data-cls='C'], [data-cls='G']) .cap__of {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: start;
+    padding: 0;
+  }
+  .scene[data-cls='B'] {
+    --cap-r: 5vw;
+    --cap-b: 6.5vh;
+    --cap-w: 34vw;
+    --idx: min(8rem, 9.5vh);
+    --head: clamp(2rem, 1rem + 2.6vw, min(4.2rem, 5.6vh));
+    --cap-gap: clamp(0.5rem, 1.2vh, 1rem);
+    --text: clamp(0.98rem, 0.6rem + 0.55vw, 1.2rem);
+  }
+  /* Niedrige Fenster (bis 800 px): die Beschriftung wird kompakter, damit die Bühne groß
+     bleiben kann. */
+  @media (max-height: 800px) {
+    .scene:is([data-cls='B'], [data-cls='C']) {
+      --cap-b: 4.5vh;
+      --cap-w: 36vw;
+      --idx: min(8rem, 8.5vh);
+      --head: clamp(1.8rem, 1rem + 2.2vw, min(4.2rem, 5.4vh));
+      --text: 0.95rem;
+      --cap-gap: 0.55rem;
+    }
+  }
+  .scene[data-cls='C'] {
+    --cap-r: 5vw;
+    --cap-b: 6vh;
+    --cap-w: 34vw;
+    --idx: min(7rem, 9.5vh);
+    --head: clamp(2rem, 1rem + 2.4vw, min(3.4rem, 5.4vh));
+    --cap-gap: clamp(0.5rem, 1.2vh, 1rem);
+    --text: 1.02rem;
+  }
+  .scene[data-cls='D'] {
+    --cap-r: 5vw;
+    --cap-b: 5vh;
+    --cap-w: 52vw;
+    --idx: 6rem;
+    --head: 2.3rem;
+    --text: 1rem;
+  }
+  /* 4:3: der Index steht links neben dem Text. */
+  .scene[data-cls='D'] .cap {
     display: grid;
-    justify-items: center;
-    gap: 0.35rem;
+    grid-template-columns: auto 1fr;
+    column-gap: 1.6rem;
+    align-items: end;
+  }
+  .scene[data-cls='D'] .cap__head {
+    grid-row: 1 / span 2;
+    align-self: start;
+  }
+  .scene[data-cls='D'] .cap__layers,
+  .scene[data-cls='D'] .deck__controls {
+    grid-column: 2;
+  }
+  .scene[data-cls='E'] {
+    --idx: 7rem;
+    --head: 3rem;
+    --text: 1.08rem;
+    --text-w: 46ch;
+  }
+  .scene[data-cls='E'] .cap {
+    top: 60vh;
+    bottom: 3.5vh;
+    left: 7vw;
+    right: 7vw;
+    width: auto;
+  }
+  .scene[data-cls='E'] .cap__index {
+    position: absolute;
+    top: -0.2rem;
+    right: 0;
+  }
+  .scene[data-cls='E'] .deck__controls,
+  .scene[data-cls='F'] .deck__controls {
+    margin-top: auto;
+  }
+  .scene[data-cls='F'] {
+    --idx: 5.5rem;
+    --head: 1.9rem;
+    --text: 0.95rem;
+    --text-w: none;
+    --cap-gap: 0.7rem;
+  }
+  .scene[data-cls='F'] .cap {
+    top: 52vh;
+    bottom: 4vh;
+    left: 6vw;
+    right: 6vw;
+    width: auto;
+  }
+  .scene[data-cls='F'] .deck__title {
+    position: absolute;
+    top: calc(96px - 52vh);
+    left: 0;
+    right: 0;
     text-align: center;
   }
-  .deck__name {
-    font: 500 0.72rem/1 var(--mono);
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: var(--accent);
-  }
-  .deck__headline {
-    font-size: clamp(1.15rem, 0.9rem + 0.9vw, 1.7rem);
-    font-weight: 650;
-    text-transform: uppercase;
-    letter-spacing: 0.01em;
-    color: #d6d9e0;
-  }
-  .deck__text {
-    max-width: 40rem;
-    color: var(--fg-1);
-    font-size: clamp(0.95rem, 0.9rem + 0.25vw, 1.1rem);
-  }
-  .deck__track {
+  /* Telefon: die Konturziffer steht rechts hinter der Überschrift. */
+  .scene[data-cls='F'] .cap__index {
     position: absolute;
-    left: 50%;
-    bottom: clamp(1.8rem, 5vh, 3rem);
-    width: min(56vw, 34rem);
-    height: 6px;
-    transform: translateX(-50%);
-    border-radius: 999px;
-    border: 1px solid rgb(255 255 255 / 0.14);
-    background: rgb(255 255 255 / 0.03);
-    overflow: hidden;
+    top: -0.6rem;
+    right: 0;
+    z-index: -1;
   }
-  .deck__fill {
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    background: linear-gradient(90deg, rgb(255 255 255 / 0.5), #fff);
-    box-shadow: 0 0 14px rgb(255 255 255 / 0.6);
-    transform-origin: left center;
-    transform: scaleX(var(--fill, 0.14));
-    transition: transform 0.5s var(--ease-out);
+  .scene[data-cls='F'] .cap__layer {
+    gap: 0.55rem;
   }
-  @media (max-width: 52rem) {
-    .deck__arrow {
-      top: auto;
-      bottom: clamp(1rem, 4vh, 2.4rem);
-      margin-top: 0;
-    }
-    .deck__track {
-      width: 46vw;
-      bottom: clamp(2.3rem, 6.4vh, 3.9rem);
+  .scene[data-cls='F'] .deck__track {
+    max-width: none;
+  }
+  .scene[data-cls='F'] .deck__controls,
+  .scene[data-cls='E'] .deck__controls {
+    justify-content: space-between;
+  }
+  .scene[data-cls='G'] {
+    --idx: 3rem;
+    --head: 1.5rem;
+    --text: 0.85rem;
+    --text-w: none;
+    --cap-gap: 0.45rem;
+  }
+  .scene[data-cls='G'] .cap {
+    top: 16vh;
+    bottom: 5vh;
+    left: 54vw;
+    right: 6vw;
+    width: auto;
+    justify-content: center;
+  }
+  .scene[data-cls='G'] .cap__layer {
+    gap: 0.4rem;
+  }
+  .scene[data-cls='G'] .cap__text {
+    line-height: 1.4;
+  }
+  .scene[data-cls='G'] .deck__arrow {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hero__title span,
+    .hero__lede,
+    .hero__actions > * {
+      animation: none;
     }
   }
 
@@ -584,6 +1285,7 @@ const formats = ['avif'] as const;
   }
   .guarantees__inner {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: clamp(2.5rem, 5vh, 4rem);
   }
   .guarantees__head {
