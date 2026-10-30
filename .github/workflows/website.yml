@@ -54,8 +54,12 @@ jobs:
           # Das Impressum liegt auf der Seite des Inhabers, nicht im Repository. Forks
           # setzen ihre eigene Variable IMPRINT_URL.
           IMPRINT_URL: ${{ github.repository == 'nurkert/Humanitl' && 'https://nurkert.de/impressum' || vars.IMPRINT_URL }}
-      # Kein toter interner Link und kein toter Anker, auch nicht in den Docs (HUM-336).
+      # Kein toter interner Link und kein toter Anker, auch nicht in den Docs (HUM-336), und
+      # jede Docs-Seite in beiden Sprachen mit Sprachwahl und hreflang (HUM-346).
       - run: npm run check-links
+      # Fehlende und veraltete Übersetzungen der Docs, nur als Bericht (HUM-346): die Seite
+      # zeigt sie mit Hinweis an, und das Skript endet immer mit Status 0.
+      - run: npm run check-translations
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:

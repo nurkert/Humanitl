@@ -132,7 +132,12 @@ def check_file(path: Path, cache: dict[Path, set[str]]) -> list[str]:
 
 def default_files(root: Path) -> list[Path]:
     files = [root / name for name in TOP_LEVEL if (root / name).is_file()]
-    files += sorted((root / "docs").rglob("*.md"))
+    # Übersetzungen (HUM-346) behalten Linkziele und Anker ihres Originals,
+    # gelten also relativ zu docs/<source> statt zur eigenen Datei. Sie prüft
+    # website/scripts/check-translations.mjs, nicht dieses Skript.
+    translations = root / "docs" / "translations"
+    files += sorted(p for p in (root / "docs").rglob("*.md")
+                    if translations not in p.parents)
     return files
 
 
