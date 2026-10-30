@@ -3,6 +3,8 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ipc/convert.dart';
+import 'package:humanitl/core/ipc/generated/humanitl/v1/humanitl.pb.dart' as pb;
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/history/history_view.dart';
 
@@ -201,6 +203,37 @@ void main() {
         ),
         HistoryDecider.passthrough,
       );
+    });
+
+    test('an aborted tunnel was decided by nobody (HUM-316)', () {
+      // So kommt die Zeile aus der Aufzeichnung: `block`, ohne Quelle, denn
+      // die Tabelle `flows` führt keine. Vorher stand in der Regelspalte
+      // „manuell“, als hätte ein Mensch geblockt.
+      final Flow aborted = pb.FlowSummary(
+        flowId: '018f0004-0000-7000-8000-000000000316',
+        sessionId: testSession.value,
+        path: '',
+        authority: pb.Authority(host: 'llm.example', port: 443),
+        state: pb.FlowState.FLOW_STATE_RECORDED,
+        decision: pb.DecisionKind.DECISION_KIND_BLOCK,
+        blockReason: pb.BlockReason.BLOCK_REASON_CLIENT_ABORTED,
+        error: 'tls_handshake_failed:eof_before_finished',
+      ).toDomain();
+      expect(aborted.blockReason, BlockReason.clientAborted);
+      expect(historyDecider(aborted), HistoryDecider.client);
+      expect(historyVisualState(aborted), HFlowState.error);
+      expect(historyVisualState(aborted), isNot(HFlowState.blocked));
+
+      // Ein Block des Systems aus anderem Grund bleibt, was er war.
+      final Flow blocked = testFlow(
+        id: 'f',
+        decision: DecisionKind.block,
+        source: DecisionSource.user,
+        blockReason: BlockReason.user,
+        status: 403,
+      );
+      expect(historyDecider(blocked), HistoryDecider.manual);
+      expect(historyVisualState(blocked), HFlowState.blocked);
     });
 
     test('a rule id is shortened to its first eight characters', () {

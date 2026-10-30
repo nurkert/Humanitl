@@ -606,6 +606,7 @@ pub const fn block_reason_to_proto(reason: BlockReason) -> v1::BlockReason {
         Reason::ClientTimeout => v1::BlockReason::ClientTimeout,
         Reason::PrivateAddress => v1::BlockReason::PrivateAddress,
         Reason::Secret => v1::BlockReason::Secret,
+        Reason::ClientAborted => v1::BlockReason::ClientAborted,
     }
 }
 
@@ -1979,6 +1980,7 @@ fn block_reason_from_name(name: &str) -> v1::BlockReason {
         "client_timeout" => v1::BlockReason::ClientTimeout,
         "private_address" => v1::BlockReason::PrivateAddress,
         "secret" => v1::BlockReason::Secret,
+        "client_aborted" => v1::BlockReason::ClientAborted,
         _ => v1::BlockReason::Unspecified,
     }
 }
@@ -2621,6 +2623,35 @@ mod tests {
             decision_note: None,
             unresolved_findings: None,
         }
+    }
+
+    /// Ein abgebrochener Tunnel bleibt nach dem Neuladen, was er war: Grund
+    /// und Ursache reisen aus den Spalten in die Zeile (HUM-316). Ohne den
+    /// Namen in `block_reason_from_name` hiesse er dort `UNSPECIFIED`, und
+    /// die Oberflaechen schrieben wieder `block`.
+    #[test]
+    fn an_aborted_tunnel_survives_the_recording() {
+        let aborted = RecordedSummary {
+            method: "CONNECT".to_owned(),
+            path: String::new(),
+            decision: Some("block".to_owned()),
+            block_reason: Some(
+                humanitl_core::BlockReason::ClientAborted
+                    .as_str()
+                    .to_owned(),
+            ),
+            status: None,
+            error: Some("tls_handshake_failed:closed_after_handshake".to_owned()),
+            ..recorded_row()
+        };
+        let row = recorded_summary_to_proto(&aborted);
+        assert_eq!(row.block_reason, v1::BlockReason::ClientAborted as i32);
+        assert_eq!(row.decision, v1::DecisionKind::Block as i32);
+        assert_eq!(row.error, "tls_handshake_failed:closed_after_handshake");
+        assert_eq!(
+            super::block_reason_to_proto(humanitl_core::BlockReason::ClientAborted),
+            v1::BlockReason::ClientAborted
+        );
     }
 
     /// Die Zahl der offenen Funde reist aus der Spalte in die Zeile, und ein

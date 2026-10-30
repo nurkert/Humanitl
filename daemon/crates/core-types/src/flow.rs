@@ -101,6 +101,16 @@ pub enum BlockReason {
     /// stehen (`backlog/CONVENTIONS.md` 4.13: nie mehr behaupten als
     /// bewiesen ist).
     Secret,
+    /// Der Client hat die TLS-Verbindung zum Proxy aufgegeben, bevor eine
+    /// Anfrage zu entscheiden war: Er hat den Handschlag abgebrochen oder
+    /// abgelehnt, oder er hat den Tunnel danach leer geschlossen (HUM-316).
+    ///
+    /// Niemand hat geblockt. Der Grund steht trotzdem unter `Block`, weil
+    /// der Automat einen Flow nur über eine Entscheidung abschließt und weil
+    /// nichts zum Ziel ging; die Oberflächen zeigen ihn als „abgebrochen",
+    /// nie als Blockierung. Eine Antwort an den Client gibt es nicht, die
+    /// Verbindung ist schon zu; woran es lag, steht in `flows.error`.
+    ClientAborted,
 }
 
 impl BlockReason {
@@ -119,6 +129,7 @@ impl BlockReason {
             Self::ClientTimeout => "client_timeout",
             Self::PrivateAddress => "private_address",
             Self::Secret => "secret",
+            Self::ClientAborted => "client_aborted",
         }
     }
 
@@ -141,6 +152,8 @@ impl BlockReason {
     ///
     /// `NoRoute` und `ClientTimeout` sind dort nicht festgelegt; sie folgen der
     /// nächstliegenden Bedeutung (`502` beziehungsweise `408`).
+    /// `ClientAborted` geht nie als Antwort hinaus, der Client ist schon weg;
+    /// die Zahl folgt deshalb `ClientTimeout` (`408`).
     #[must_use]
     pub const fn http_status(self) -> u16 {
         match self {
@@ -153,7 +166,7 @@ impl BlockReason {
             Self::Timeout => 504,
             Self::HoldMemory | Self::HoldMaxFlows => 503,
             Self::NoRoute => 502,
-            Self::ClientTimeout => 408,
+            Self::ClientTimeout | Self::ClientAborted => 408,
         }
     }
 }
@@ -998,7 +1011,7 @@ mod tests {
     use crate::http::{Authority, HttpRequest, Method, Scheme};
     use crate::ids::{FlowId, RuleId, SessionId};
 
-    const BLOCK_REASONS: [BlockReason; 10] = [
+    const BLOCK_REASONS: [BlockReason; 11] = [
         BlockReason::User,
         BlockReason::Rule(RuleId::nil()),
         BlockReason::Timeout,
@@ -1009,6 +1022,7 @@ mod tests {
         BlockReason::HoldMaxFlows,
         BlockReason::ClientTimeout,
         BlockReason::PrivateAddress,
+        BlockReason::ClientAborted,
     ];
 
     const UPSTREAM_ERRORS: [UpstreamError; 5] = [
