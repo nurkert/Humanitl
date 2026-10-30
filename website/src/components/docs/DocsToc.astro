@@ -1,0 +1,22 @@
+---
+// Inhaltsverzeichnis einer Seite: H2 und H3, bei sehr langen Seiten nur H2.
+import type { MarkdownHeading } from 'astro';
+
+interface Props {
+  headings: MarkdownHeading[];
+}
+
+const { headings } = Astro.props;
+---
+
+<ol class="toc" data-toc>
+  {
+    headings.map((heading) => (
+      <li class:list={['toc__item', `toc__item--h${heading.depth}`]}>
+        <a href={`#${heading.slug}`} data-slug={heading.slug}>
+          {heading.text}
+        </a>
+      </li>
+    ))
+  }
+</ol>
