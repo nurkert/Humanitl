@@ -5002,7 +5002,7 @@ mod tests {
             .expect("models.json is there");
         let models = String::from_utf8_lossy(&models.content);
         assert!(
-            models.contains("\"apiKey\": \"!cat /etc/humanitl/pi/llm-api-key\""),
+            models.contains("\"apiKey\": \"!cat \\\"$HUMANITL_PI_KEY_FILE\\\"\""),
             "{models}"
         );
         assert!(

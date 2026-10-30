@@ -13,7 +13,7 @@
 //! `/tmp`, `/etc/humanitl` und `/run/humanitl` liegen im
 //! Sitzungsverzeichnis. Die Abbildung gilt für die Umgebung, das Kommando
 //! und den Text der Adapter-Dateien, damit ein Verweis wie
-//! `!cat /etc/humanitl/pi/llm-api-key` dort ankommt, wo die Datei liegt.
+//! `/etc/humanitl/pi/llm-api-key` dort ankommt, wo die Datei liegt.
 //!
 //! **Das Profil** ([`SeatbeltPolicy::render`]) verbietet alles und erlaubt
 //! dann: Lesen überall außer unter `/Users`, `/Volumes` und den temporären
@@ -982,6 +982,16 @@ mod tests {
         assert_eq!(map.map_path(Path::new("/workspace")), None);
         assert_eq!(map.map_path(Path::new("/tmp//etc")), None);
         assert_eq!(map.map_path(Path::new("/tmp/../etc")), None);
+    }
+
+    #[test]
+    fn a_key_path_with_a_space_and_an_apostrophe_is_mapped_whole() {
+        let root = "/Users/o'brien/Library/Application Support/Humanitl/s1/etc/humanitl";
+        let map = PathMap::new([("/etc/humanitl".to_owned(), PathBuf::from(root))]);
+        assert_eq!(
+            map.map_text(crate::agent::pi::API_KEY_DST),
+            format!("{root}/pi/llm-api-key")
+        );
     }
 
     #[test]

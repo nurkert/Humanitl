@@ -48,15 +48,20 @@ const WEB_SEARCH_FILE: &str = "agents/pi/web-search.json.tmpl";
 /// recorded `Authorization` header.
 pub const NO_KEY_PLACEHOLDER: &str = "humanitl-no-key";
 
-/// The `apiKey` value that makes pi read the key from this file.
+/// The variable that names the key file for [`api_key_command`].
+pub const ENV_KEY_FILE: &str = "HUMANITL_PI_KEY_FILE";
+
+/// The `apiKey` value that makes pi read the key from its file.
 ///
 /// pi runs a value that starts with `!` through `/bin/sh -c` and takes the
-/// trimmed standard output as the key. The path is a constant of the adapter
-/// and never a value from the configuration, so nothing a user or a project
-/// writes reaches that shell line.
+/// trimmed standard output as the key. The line names the path only through
+/// [`ENV_KEY_FILE`]: under macOS the file lies in the session directory, by
+/// default below `Application Support`, and a space or an apostrophe of that
+/// path stays out of the shell line (HUM-357). The variable holds the path,
+/// never the key.
 #[must_use]
-pub fn api_key_command(key_file: &str) -> String {
-    format!("!cat {key_file}")
+pub fn api_key_command() -> String {
+    format!("!cat \"${ENV_KEY_FILE}\"")
 }
 
 /// Reads a template as a JSON object.
