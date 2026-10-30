@@ -76,6 +76,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-305 | Pane boundaries can be dragged, and the sandbox terminal can grow | S | HUM-286, HUM-298 |
 | HUM-303 | The terminal takes the keyboard on hover and by shortcut | S | HUM-298 |
 | HUM-306 | The empty queue says the agent is working when a session runs | S | HUM-298 |
+| HUM-301 | The terminal text can be zoomed | S | HUM-298, HUM-303 |
 
 ---
 
@@ -8196,3 +8197,151 @@ it hides the one thing worth doing from there, looking at the agent.
 - **Offen.** Der Zustand eines anderen Clients kommt höchstens 5 s später
   an. Ein Strom des Daemons, der Sitzungsänderungen meldet, ersetzte die
   Frage; Kandidat für ein eigenes Issue.
+
+## HUM-301 · The terminal text can be zoomed
+
+### Context
+Owner report 2026-10-29: "ich kann den Text im Terminal von pi nicht mit Strg
+größer machen". Every terminal emulator on the desktop zooms with `Ctrl` and
+`+`/`-`; ours keeps the 13 px of `mono13` and hands those chords to the agent.
+On a large screen or from some distance pi is hard to read.
+
+### Specification
+1. `Ctrl` + `+` (also `Ctrl+=` and numpad `+`) makes the terminal text one
+   step larger, `Ctrl` + `-` (also numpad `-`) one step smaller, within 10 to
+   28 px, starting at the size the terminal has today (13). A reset chord
+   brings back the default. `Ctrl` + mouse wheel over the emulator zooms too,
+   and the scrollback does not move with it.
+2. The chords are bound in `shellShortcuts()` and take the way of the other
+   application keys through `TerminalPane._onKey` (HUM-298, HUM-303): with
+   the keyboard in the terminal they never reach the agent. They act only
+   while a terminal with a session is shown; otherwise the key goes on to
+   whoever else wants it. All other keys still go to the agent.
+3. The reset chord collides with no binding
+   (`app/lib/core/shortcuts/intents.dart`, intercept decision keys, editor,
+   CONVENTIONS 3.9). `Ctrl+0` is taken by `ToggleRailIntent` (HUM-254)
+   everywhere, also inside the terminal; when it collides, a free chord is
+   chosen and the reason is written down.
+4. The size survives a restart in the UI state file of HUM-254
+   (`UiStateFile`, `app/lib/core/ui_state/ui_state_file.dart`). An unreadable
+   or out-of-range value falls back to the default or the nearest bound.
+5. After a zoom the emulator recomputes columns and rows, and the new
+   geometry goes to the daemon through the existing throttled resize path
+   (`terminal_provider.dart`, HUM-305), so the TUI redraws.
+6. The command palette lists zoom in, zoom out and reset while a terminal is
+   shown; `docs/DESIGN.md` shortcut table, `docs/UX.md` 5.2 and CONVENTIONS
+   3.9 name the chords; labels in ARB (`en` source, `de` translation,
+   appended).
+
+### Acceptance criteria
+1. Widget tests: with the terminal focused, the zoom-in, zoom-out and reset
+   chords change the font size of the emulator, and none of them reaches the
+   agent as a byte; another key still does.
+2. Widget test: the three palette commands do the same, and they are listed
+   only while a terminal is shown.
+3. Widget test: `Ctrl` + wheel over the terminal zooms, the wheel alone does
+   not.
+4. Widget test: the size stops at 10 and 28.
+5. Widget test: a zoomed size is there again after a restart over the same
+   state file.
+6. Widget test: after a zoom the daemon receives a resize with the new
+   columns and rows.
+7. Each behaviour has a mutation proof; `make flutter-analyze` and the tests
+   of the touched packages are green; no golden changes.
+
+### Fallstricke
+- `Ctrl+0`, the reset of every browser and terminal, is the rail toggle here
+  (HUM-254) and reaches the shell from inside the terminal as well.
+- On a US layout `+` is `Shift+=`, on a German one `+` has its own key and
+  `=` is `Shift+0`. The activators have to accept `Shift` for zoom in and
+  must not mistake a German `Ctrl+Shift+0` for anything but the digit.
+- `Ctrl+Shift+-` is `Ctrl+_`, undo in readline; zoom out takes `-` without
+  `Shift` only.
+- The emulator's `Scrollable` registers for every wheel event; a `Listener`
+  around it is asked later in the hit-test path and loses the
+  `PointerSignalResolver` race, so `Ctrl` + wheel would scroll the
+  scrollback instead of zooming.
+
+### Umsetzung (HUM-301)
+
+- **Die Größe als Notiz im Kern.** `app/lib/core/ui/terminal_zoom.dart`
+  hält `terminalFontSizeProvider` (Vorgabe 13 = `mono13`, Grenzen 10 und 28,
+  Schritt 1) und schreibt sie unter `terminalFontSize` in die Zustandsdatei
+  (`UiStateFile`); die Vorgabe wird als `null` geschrieben, damit eine
+  spätere Vorgabe wieder greift. Gelesen wird einmal synchron beim ersten
+  Bau, wie bei der Leiste: asynchron meldete das Terminal erst 13 px an den
+  Daemon und sprünge einen Frame später. Ein Wert, den niemand so
+  geschrieben haben kann (kein Zahlwert, außerhalb der Grenzen), fällt auf
+  die Vorgabe oder die nächste Grenze zurück.
+- **Die Griffe.** `TerminalZoomIntent(TerminalZoom)` und
+  `TerminalZoomActivator` in `intents.dart`, in `shellShortcuts()`
+  gebunden. Größer: `Ctrl` mit `=`, `+` (deutsche Taste) oder Ziffernblock-
+  `+`, jeweils mit oder ohne `Shift`, denn das `+` der US-Belegung ist
+  `Shift+=`. Kleiner: `Ctrl` mit `-` oder Ziffernblock-`-`, nur ohne `Shift`,
+  weil `Ctrl+_` Rückgängig in readline ist. Größer und kleiner wiederholen
+  sich beim Halten, die Vorgabe nicht. Genau `Ctrl`: mit `Alt` oder `Meta`
+  nicht.
+- **Vorgabe auf `Ctrl+Shift+0`, nicht auf `Ctrl+0`.** `Ctrl+0` ist seit
+  HUM-254 die Leiste, in jedem Bereich und über `_onKey` auch aus dem
+  Terminal. Dieselbe Taste je nach Fokus mit zwei Bedeutungen hätte dem,
+  der die Leiste will, einen kleineren Text beschert und umgekehrt. Mit
+  `Shift` bleibt die Vorgabe auf der Taste, nach der man greift; Flutter
+  benennt die Taste nach ihrem Zeichen ohne Modifikatoren, also ist es auch
+  auf deutscher Belegung (`Shift+0` = `=`) die Null und kein Zoom.
+  Zusätzlich `Ctrl` mit der Null des Ziffernblocks, ohne `Shift`, weil
+  `Shift` diese Taste bei Num Lock zu `Insert` macht.
+- **Nur mit sichtbarem Terminal.** Die Shell bindet `TerminalZoomAction`,
+  die nur aktiv ist, solange `_terminalShown()` gilt; eine inaktive Aktion
+  lässt `Shortcuts` `ignored` antworten, die Taste geht unverändert weiter.
+  Im Terminal nehmen die Kürzel den Weg aller Shell-Kürzel durch
+  `TerminalPane._onKey` und erreichen den Agenten nie. Die Palette führt
+  die drei Befehle, solange ein Terminal zu sehen ist, auch über einer
+  Ebene, denn die Größe braucht keinen Fokus.
+- **Das Rad.** `_WheelZoom` in `terminal_pane.dart`: ein `RenderProxyBox`,
+  der sich im Trefferpfad **vor** seine Kinder setzt und so beim
+  `PointerSignalResolver` als erster meldet, nur für ein Rad mit `Ctrl`.
+  Ein `Listener` hätte verloren: Das `Scrollable` des Rücklaufs (und für
+  ein TUI das, das Mausberichte erzeugt) steht tiefer im Pfad und meldet
+  sich zuerst.
+- **Neue Geometrie.** Kein eigener Weg: Die neue Schrift ändert die Zellen,
+  `RenderTerminal` zählt Spalten und Zeilen neu und ruft `terminal.resize`,
+  und die Sitzung schickt das über den gedrosselten Pfad von HUM-305.
+- Tests: `test/features/shell/terminal_zoom_test.dart` (Kürzel im
+  fokussierten Terminal ohne Byte beim Agenten, `Enter` als Gegenprobe;
+  `Ctrl+0` bleibt die Leiste, `Ctrl+Shift+-` zoomt nicht; ohne Terminal tun
+  die Kürzel nichts; Palette nur mit Terminal; `Ctrl` + Rad mit Rücklauf im
+  Emulator, Rad allein nicht; Grenzen 10 und 28; Neustart über dieselbe
+  Datei; Resize mit weniger Spalten und Zeilen beim Daemon),
+  `test/core/ui/terminal_zoom_test.dart` (Vorgabe = `mono13` in allen
+  Themen, Lesen mit Rückfall, Schreiben mit `null` für die Vorgabe,
+  Aktivatoren: genau `Ctrl`, `Ctrl+0` nicht, Wiederholung nur beim Zoom),
+  `shortcuts_map_to_intents_test.dart` um die zehn Zoom-Zeilen ergänzt. Der
+  Tastensimulator kennt für `add`, Ziffernblock-`-` und Ziffernblock-`0`
+  keinen Linux-Code; diese Tasten kommen im Test als Android-Ereignis, die
+  Shortcuts sehen nur die logische Taste.
+- Mutationen, je rot und mit `cmp` byte-gleich zurück: Zoom nicht in
+  `shellShortcuts()`; `_onKey` überspringt den Zoom; Aktion immer aktiv;
+  Rad-Box nach den Kindern im Trefferpfad; ohne Begrenzung; ohne
+  Schreiben; Palette listet den Zoom immer; Schrift wieder aus `mono13`;
+  Vorgabe auf `Ctrl+0`; kleiner auch mit `Shift`; Vorgabe wiederholt sich;
+  `Alt` erlaubt; Bau liest einen anderen Schlüssel. Eine Prüfung in `_onKey`
+  auf eine inaktive Aktion wurde erwogen und weggelassen: Ein Emulator mit
+  der Tastatur ist immer zu sehen, der Fall ist unerreichbar und ließe sich
+  durch keinen Test belegen.
+- **Nach dem Review: gehaltene Griffe.** Codex und Sonnet fanden, dass
+  das Loslassen jedes Zoom-Griffs und die Wiederholungen der Vorgabe nicht
+  vom Aktivator angenommen werden und deshalb zum Emulator durchfielen; ein
+  Agent mit dem Tastaturprotokoll von kitty hätte so die zweite Hälfte eines
+  Griffs bekommen. `TerminalPane` merkt sich jetzt die physische Taste
+  eines genommenen Zoom-Griffs (`_heldZoomKey`) und behält jedes weitere
+  Ereignis dieser Taste bis zum Loslassen; die Vorgabe gilt dabei nur
+  einmal. Ein neues Drücken irgendeiner Taste löscht die Merkung, falls das
+  Loslassen nach einem Fokuswechsel woanders ankam. Test
+  `a_held_zoom_chord_never_falls_through_to_the_agent` (`Ctrl+=` und
+  `Ctrl+Shift+0` mit Drücken, drei Wiederholungen, Loslassen: jedes
+  Ereignis behandelt, kein Byte beim Agenten, Vorgabe einmal). Mutationen,
+  je rot und byte-gleich zurück: ohne Behalten; Merkung schon nach der
+  ersten Wiederholung vergessen; Vorgabe wiederholt sich. Nicht übernommen
+  (optional, minor): das Schreiben in die Zustandsdatei während eines
+  gehaltenen Zooms zu entprellen; es ist ein kleines JSON je Schritt, und
+  die Wiederholrate der Tastatur begrenzt es.

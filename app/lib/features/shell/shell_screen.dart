@@ -14,6 +14,7 @@ import '../../core/ipc/flow_reveal.dart';
 import '../../core/shortcuts/intents.dart';
 import '../../core/ui/settings_opener.dart';
 import '../../core/ui/terminal_placement.dart';
+import '../../core/ui/terminal_zoom.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
 import '../about/about_dialog.dart';
@@ -327,6 +328,20 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
             }
           }),
         ),
+      // Dasselbe wie die Zoom-Kürzel (HUM-301), und nur, solange ein
+      // Terminal zu sehen ist. Die Größe braucht keinen Fokus, also auch
+      // über einer Ebene.
+      if (_terminalShown())
+        for (final TerminalZoom zoom in TerminalZoom.values)
+          PaletteCommand(
+            id: 'terminal-${zoom.name}',
+            label: switch (zoom) {
+              TerminalZoom.zoomIn => l10n.shellPaletteTerminalZoomIn,
+              TerminalZoom.zoomOut => l10n.shellPaletteTerminalZoomOut,
+              TerminalZoom.reset => l10n.shellPaletteTerminalZoomReset,
+            },
+            run: () => ref.read(terminalFontSizeProvider.notifier).apply(zoom),
+          ),
     ];
   }
 
@@ -622,6 +637,10 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
               _requestTerminalFocus();
               return null;
             },
+          ),
+          TerminalZoomIntent: TerminalZoomAction(
+            fontSize: ref.read(terminalFontSizeProvider.notifier),
+            shown: _terminalShown,
           ),
           PaletteIntent: CallbackAction<PaletteIntent>(
             onInvoke: (PaletteIntent intent) {
