@@ -337,7 +337,9 @@ enum TerminalClipboard {
 ///
 /// **`Shift` is part of the chord, as in every terminal on Linux.** Plain
 /// `Ctrl+C` is the interrupt of the agent (`0x03`) and plain `Ctrl+V` is
-/// quoted insert in readline (`0x16`); both stay with the agent. On Apple
+/// quoted insert in readline (`0x16`); both stay with the agent. One
+/// exception (HUM-353): while visible text is selected, plain `Ctrl+C`
+/// copies it instead (`TerminalPane._onKey`, not on Apple platforms). On Apple
 /// platforms the chords are `Cmd+C` and `Cmd+V`, because `Cmd` never reaches
 /// a terminal program there.
 ///

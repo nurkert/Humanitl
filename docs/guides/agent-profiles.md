@@ -335,6 +335,21 @@ project can add its own provider with its own address. No guarantee falls with
 that, because all traffic there goes through the proxy and is held; which model
 is preset is still decided by Humanitl.
 
+### Ctrl+C does not quit OpenCode
+
+OpenCode 1.18.31 quits on `ctrl+c,ctrl+d,<leader>q` by default, and in
+Humanitl's terminal `Ctrl+C` reaches the agent as `0x03`, so a reflexive
+`Ctrl+C` to copy ended the session. Since HUM-353 the app's terminal copies
+on `Ctrl+C` while visible text is selected and sends nothing then; without
+a selection, and in `humanitl attach`, `Ctrl+C` still reaches the agent. The adapter writes
+`agents/opencode/tui.json.tmpl` as `~/.config/opencode/tui.json` with
+`"keybinds": { "app_exit": "ctrl+d,<leader>q" }` (HUM-353). Quit with
+`Ctrl+D` on an empty prompt or `Ctrl+X q`; `Ctrl+C` still clears the input
+(`input_clear`) and `Esc` still interrupts (`session_interrupt`). The file
+is not in the managed directory, so a `tui.json` in your project wins and
+can bind `app_exit` differently. Checked against the strings of the
+OpenCode 1.18.31 binary only.
+
 ### Files in the sandbox
 
 | Path in the sandbox | Content |
@@ -344,6 +359,7 @@ is preset is still decided by Humanitl.
 | `/etc/opencode/opencode.json` | the same file, in the managed directory that wins over the project |
 | `/etc/humanitl/opencode/models.json` | the model catalog, rendered from `agents/opencode/models.json` |
 | `/etc/humanitl/opencode/llm-api-key` | the access key, only if one is stored |
+| `~/.config/opencode/tui.json` | the key bindings of the interface: `app_exit` without `ctrl+c` (HUM-353) |
 | `~/.config/opencode/AGENTS.md` | the briefing of the agent in the language of `ui.language`, unless `agent.briefing.enabled = false` |
 
 `~` is the agent's home `/home/agent`, an empty tmpfs. Every file comes from a
@@ -588,7 +604,11 @@ the sandbox, and the extension finds none in the cleared environment.
 ### Terminal and checks
 
 pi is a full-screen TUI. `humanitl run --ask terminal` refuses it with
-`CLI_002`, as for OpenCode. Before the start the adapter checks:
+`CLI_002`, as for OpenCode. A single `Ctrl+C` does not quit pi: it clears
+the editor (`app.clear`), and only a second one within 500 ms exits, as
+does `Ctrl+D` on an empty editor (`app.exit`). The adapter therefore
+leaves pi's key bindings alone (HUM-353, checked against pi 1.4.0). Before
+the start the adapter checks:
 
 - `AGENT_001`: `pi` is not found; the fix is the npm command above.
 - `AGENT_002`: as for OpenCode, naming pi.

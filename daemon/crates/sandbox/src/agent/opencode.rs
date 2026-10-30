@@ -61,6 +61,20 @@
 //! lässt sich nicht einstellen. Für sie sagt das Briefing, dass ein Werkzeug,
 //! das früher aufgibt, die Frage zurückzieht und `curl` wartet.
 //!
+//! **`Ctrl+C` beendet `OpenCode` nicht (HUM-353).** Im Terminal von Humanitl
+//! geht `Ctrl+C` als `0x03` an den Agenten, und `OpenCode` 1.18.31 bindet
+//! `app_exit` in der Vorgabe an `ctrl+c,ctrl+d,<leader>q`. Der Adapter legt
+//! deshalb [`tui_dst`] an, mit `keybinds.app_exit` ohne `ctrl+c`. Die
+//! Tastenbelegung steht in dieser Fassung in `tui.json`; `keybinds` in
+//! `opencode.json` wirft `OpenCode` aus der Server-Konfiguration. Die Datei
+//! liegt nur im Konfigurationsverzeichnis und nicht im verwalteten: `OpenCode`
+//! liest `tui.json` von dort, dann `OPENCODE_TUI_CONFIG`, dann aus dem
+//! Projektbaum, und eine eigene Belegung im Projekt gewinnt. Das ist gewollt,
+//! denn die Belegung ist eine Vorgabe und keine Schranke. Die Ladereihenfolge
+//! von `tui.json` und das Verwerfen von `keybinds` in `opencode.json` sind an
+//! den Zeichenketten des Binärprogramms von 1.18.31 abgelesen, nicht in einem
+//! Lauf beobachtet.
+//!
 //! `OPENCODE_DISABLE_PROJECT_CONFIG` wäre der vierte Weg, schaltet aber
 //! dieselbe Variable auch die `AGENTS.md` des Projekts ab, also die Datei, aus
 //! der der Agent seine Arbeitsregeln liest. Der Adapter setzt sie deshalb
@@ -84,6 +98,7 @@ use crate::agent::briefing;
 use crate::agent::locate;
 use crate::agent::opencode_models::{
     DEFAULT_RULES, PROVIDER_ID, effective_models, permission_json, render_config, render_models,
+    render_tui,
 };
 use crate::agent::{
     AgentAdapter, AgentContext, SandboxFile, SandboxLookup, find_in_path, is_executable_file,
@@ -136,6 +151,16 @@ pub fn agent_config_dir(config_home: &Path) -> PathBuf {
 #[must_use]
 pub fn config_dst(config_home: &Path) -> PathBuf {
     agent_config_dir(config_home).join("opencode.json")
+}
+
+/// Die Konfiguration der Oberfläche, im Verzeichnis des Agenten (HUM-353).
+///
+/// Nur hier und nicht im verwalteten Verzeichnis: Eine `tui.json` des
+/// Projekts wird danach gelesen und gewinnt, wer dort `app_exit` anders
+/// belegt, behält seine Belegung.
+#[must_use]
+pub fn tui_dst(config_home: &Path) -> PathBuf {
+    agent_config_dir(config_home).join("tui.json")
 }
 
 /// Eine leere Datei, damit das Konfigurationsverzeichnis des Agenten existiert.
@@ -983,6 +1008,7 @@ impl AgentAdapter for OpenCodeAdapter {
         let key_file = ctx.llm_key.is_some().then_some(API_KEY_DST);
         let config = render_config(&base, &ctx.llm.models, key_file)?;
         let models = render_models(&ctx.llm.models)?;
+        let tui = render_tui()?;
 
         let config_home = ctx.config_home();
         let mut files = vec![
@@ -991,6 +1017,7 @@ impl AgentAdapter for OpenCodeAdapter {
             SandboxFile::read_only(config_dst(&config_home), config.clone().into_bytes()),
             SandboxFile::read_only(keep_dst(&config_home), Vec::new()),
             SandboxFile::read_only(MANAGED_CONFIG_DST, config.into_bytes()),
+            SandboxFile::read_only(tui_dst(&config_home), tui.into_bytes()),
         ];
         // Der Schlüssel als eigene Datei, nie in der Konfiguration selbst: Die
         // steht dreimal in der Sandbox und ist für den Menschen lesbar gedacht.
@@ -1131,6 +1158,7 @@ pub fn file_targets(config_home: &Path, briefing: bool) -> Vec<PathBuf> {
         config_dst(config_home),
         keep_dst(config_home),
         PathBuf::from(MANAGED_CONFIG_DST),
+        tui_dst(config_home),
     ];
     if briefing {
         targets.push(briefing_dst(config_home));

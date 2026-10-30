@@ -85,6 +85,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-350 | Disposable sandbox: the project folder as an overlay, with a diff, apply and discard | L | HUM-043, HUM-263, HUM-299 |
 | HUM-351 | The app shows the changes of a disposable sandbox and applies or discards them | M | HUM-350 |
 | HUM-352 | The floating terminal keeps its resize grip in the corner and grows equally in every corner | M | HUM-300, HUM-314, HUM-315 |
+| HUM-353 | Ctrl+C in the agent terminal no longer quits OpenCode, and copies a selection | S | HUM-037, HUM-274, HUM-308, HUM-313 |
 
 ---
 
@@ -8774,6 +8775,8 @@ und das stimmte nicht. Dieses Issue schließt die zweite Wand.
    `0x03` (SIGINT), auch mit Auswahl, und kopiert nie; das nackte `Ctrl+V`
    bleibt `0x16`. Gehaltene Griffe fügen einmal ein, Wiederholungen und
    Loslassen erreichen den Agenten nicht.
+   *Umgekehrt durch HUM-353:* Über einer sichtbaren Auswahl kopiert das
+   nackte `Ctrl+C` jetzt und schickt kein `0x03`.
 3. Die Griffe wirken nur, solange das Terminal die Tastatur hat. Keine
    Bindung der Anwendung (`shellShortcuts`, Intercept, Befundpause, Editor,
    Verlauf, Regelliste) feuert auf `Ctrl+Shift+C` oder `Ctrl+Shift+V`. Auf
@@ -10269,3 +10272,101 @@ Test zum Griff ersetzt `the_grip_keeps_off_the_title_buttons`),
   Regel, wie eine freie Lage ausweicht.
 - (B) Die Leiste mit Freigeben und Blockieren könnte nur die Knöpfe
   freihalten statt ihrer ganzen Breite.
+
+## HUM-353 · Ctrl+C in the agent terminal no longer quits OpenCode, and copies a selection
+
+### Kontext
+Meldung des Owners 2026-10-30: Im Terminal der Sandbox geht `Ctrl+C` als
+`0x03` an den Agenten (so gewollt seit HUM-313, kopiert wird mit
+`Ctrl+Shift+C`). OpenCode bindet `app_exit` in der Vorgabe an
+`ctrl+c,ctrl+d,<leader>q`. Wer aus Gewohnheit markiert und `Ctrl+C` drückt,
+um zu kopieren, beendet damit OpenCode und die Sitzung der Sandbox.
+
+### Ziel
+`Ctrl+C` beendet OpenCode in der Sandbox nicht mehr, und über einer Auswahl
+kopiert es, wie in den meisten Terminals unter Windows und in vielen unter
+Linux. Ohne Auswahl bleibt `Ctrl+C` das `0x03` des Agenten.
+
+### Akzeptanzkriterien
+1. Der OpenCode-Adapter legt `~/.config/opencode/tui.json` an (unter dem
+   `XDG_CONFIG_HOME`, das der Agent sieht), aus der einkompilierten Vorlage
+   `agents/opencode/tui.json.tmpl`, mit `keybinds.app_exit =
+   "ctrl+d,<leader>q"`. Sonst ist keine Taste umbelegt: `input_clear`
+   (`ctrl+c`, die Eingabe leeren) und `session_interrupt` (`escape`) bleiben
+   die Vorgaben von OpenCode.
+2. Die Belegung steht nicht in `opencode.json` und nicht im verwalteten
+   Verzeichnis `/etc/opencode`. Eine `tui.json` des Projekts (oder seiner
+   `.opencode`-Verzeichnisse) wird nach dem Konfigurationsverzeichnis gelesen
+   und gewinnt; wer dort `app_exit` anders belegt, behält seine Belegung.
+   Eine Konfiguration des Nutzers vom Host mergt der Adapter nicht, das
+   Heimatverzeichnis der Sandbox ist leer.
+3. pi: Ein einzelnes `Ctrl+C` beendet pi nicht (`app.clear` leert den
+   Editor, erst ein zweites binnen 500 ms beendet, ebenso `Ctrl+D` bei leerem
+   Editor). Keine Änderung am pi-Adapter; das Verhalten steht in
+   `docs/guides/agent-profiles.md`.
+4. Terminal der App, außer auf Apple-Plattformen: Ist sichtbar etwas ausgewählt,
+   kopiert das nackte `Ctrl+C` die Auswahl wie `Ctrl+Shift+C`, hebt sie auf
+   und schickt dem Agenten nichts, auch keine Wiederholung und kein Loslassen
+   (Tastaturprotokoll von kitty). Ohne Auswahl ist `Ctrl+C` `0x03`; nach dem
+   Kopieren also ist der nächste Druck wieder die Unterbrechung. Auf
+   Apple-Plattformen kopiert `Cmd+C`, und `Ctrl+C` bleibt immer `0x03`.
+5. `docs/UX.md` (Kopieren im Terminal), `docs/DESIGN.md` (Tabelle der
+   Griffe), `docs/guides/agent-profiles.md` (OpenCode und pi) und
+   `agents/opencode/README.md` nennen das Verhalten.
+
+### Tests
+- `daemon/crates/sandbox/tests/opencode_adapter.rs`:
+  `opencode_tui_config_takes_ctrl_c_out_of_app_exit` (Pfad, `$schema`, nur
+  `app_exit` im Block, `ctrl+c` nicht darin, keine `keybinds` in
+  `opencode.json` und im verwalteten Verzeichnis, keine `tui.json` unter
+  `/etc/opencode`); `opencode_writes_nothing_into_work` und
+  `briefing_can_be_switched_off` zählen die neue Datei mit.
+- `agent::opencode_models::tests::the_tui_template_renders_with_app_exit_without_ctrl_c`.
+- `app/test/features/sandbox/terminal_clipboard_test.dart`:
+  `ctrl_c_with_a_selection_copies_it_clears_it_and_sends_nothing`,
+  `ctrl_c_after_a_copy_or_without_a_selection_interrupts_the_agent`,
+  `ctrl_c_with_a_selection_still_interrupts_on_macos`,
+  `ctrl_c_over_a_selection_scrolled_out_of_view_interrupts_and_drops_it`. Der Test
+  `ctrl_c_with_a_selection_still_interrupts_the_agent_and_copies_nothing`
+  aus HUM-313 entfällt, sein Kriterium 2 ist mit diesem Issue umgekehrt.
+- Jeder Test mit Mutationsbeweis.
+
+### Fallstricke
+- **`keybinds` gehört in `tui.json`.** OpenCode 1.18.31 trennt Server- und
+  Oberflächen-Konfiguration: `keybinds`, `theme` und `tui` in
+  `opencode.json` wirft es aus der Server-Konfiguration und versucht, sie in
+  eine `tui.json` daneben umzuziehen. Eine Belegung in der vorhandenen
+  `opencode.json.tmpl` wäre wirkungslos geblieben.
+- **Reihenfolge der `tui.json`-Quellen** in 1.18.31: Konfigurationsverzeichnis,
+  `OPENCODE_TUI_CONFIG`, Projektbaum, `.opencode`-Verzeichnisse; spätere
+  gewinnen. Ein verwaltetes Verzeichnis für `tui.json` gibt es nicht.
+- **Geprüft nur an den Zeichenketten des Binärprogramms** von OpenCode
+  1.18.31 (`~/.opencode/bin/opencode`): `app_exit:H("ctrl+c,ctrl+d,<leader>q",
+  "Exit the application")`, `input_clear:H("ctrl+c"`,
+  `session_interrupt:H("escape"`, die Ladefunktion mit
+  `OPENCODE_TUI_CONFIG`. Starten ließ sich OpenCode in der Prüfumgebung
+  nicht; andere Fassungen wurden nicht geprüft.
+- **`ctrl+d` bleibt** in `app_exit`: In jeder Shell ist es das bewusste Ende
+  einer leeren Eingabe und kein Kopiergriff. In OpenCode liegt `ctrl+d`
+  zugleich auf `input_delete` (Vorgabe `ctrl+d,delete,shift+delete`), löscht
+  also bei Text in der Eingabe ein Zeichen; welche Bindung bei leerer
+  Eingabe greift, ist nur an den Zeichenketten abgelesen, nicht im Lauf
+  beobachtet. `<leader>q` (`Ctrl+X q`) bleibt als ausdrücklicher Weg.
+- **pi** an der Fassung 1.4.0 geprüft (`dist/core/keybindings.js`,
+  `handleCtrlC` in `interactive-mode.js`, `docs/keybindings.md` des Pakets).
+- **Die Auswahl entscheidet, nicht der Fokus.** Die Frage ist dieselbe wie in
+  `_copy`: `selectionFor` des Puffers, den das Terminal gerade zeigt. Eine
+  Auswahl des anderen Bildschirms zählt nicht, `Ctrl+C` geht dann an den
+  Agenten.
+- **Nur eine sichtbare Auswahl zählt** (Review-Befund). Im Emulator überlebt
+  eine Auswahl Tippen und Ausgabe. Ist sie aus dem Bild gerollt, kopierte
+  `Ctrl+C` still unsichtbaren Text, statt zu unterbrechen. Gezählt wird sie
+  deshalb nur, solange eine ihrer Zeilen im Fenster liegt (gefragt über
+  `RenderTerminal.getCellOffset` der Ansicht); sonst hebt `_onKey` sie auf,
+  und das `0x03` geht durch. Test
+  `ctrl_c_over_a_selection_scrolled_out_of_view_interrupts_and_drops_it`,
+  Mutationen (Sichtprüfung weg; Aufheben weg) je rot.
+- **Tastaturbelegungen ohne lateinisches `C`** (etwa Kyrillisch) melden eine
+  andere logische Taste; `Ctrl+C` geht dort wie bisher als `0x03` an den
+  Agenten und kopiert nicht. Dasselbe gilt für `TerminalClipboardActivator`
+  seit HUM-313; hingenommen.
