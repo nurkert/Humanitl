@@ -10,34 +10,45 @@ import 'package:flutter/widgets.dart';
 /// counterparts are derived by [HColorDerivation.lightState] so that nobody
 /// guesses a hex by hand (see the pitfalls of HUM-008).
 abstract final class HColors {
-  // --- Dark neutral ladder (hue ~230) ---------------------------------------
+  // --- Dark neutral ladder (achromatic since HUM-355) -----------------------
+  //
+  // Bis HUM-355 trug die Leiter ein kühles Blaugrau (Ton ~230). Neben dem
+  // Gelb der Marke wirkte das kalt und billig; seitdem ist jede Stufe ein
+  // reines Grau (R = G = B), und die Leuchtdichte jeder Stufe liegt so nahe
+  // an der alten, dass jede Kontrastzusage hält. Der Token-Test misst die
+  // Buntheit jeder Stufe in OKLab und lässt keinen Ton zurück.
 
   /// Application background, the darkest surface.
-  static const Color bg0 = Color(0xFF0F1115);
+  static const Color bg0 = Color(0xFF111111);
 
   /// Panel background.
-  static const Color bg1 = Color(0xFF151821);
+  static const Color bg1 = Color(0xFF171717);
 
   /// Raised surface inside a panel (rows, inputs).
-  static const Color bg2 = Color(0xFF1B1F2A);
+  static const Color bg2 = Color(0xFF1E1E1E);
 
   /// Highest surface (hover, pressed, selected fills).
-  static const Color bg3 = Color(0xFF232838);
+  static const Color bg3 = Color(0xFF262626);
 
   /// Hairline separator.
-  static const Color line = Color(0xFF2A3040);
+  static const Color line = Color(0xFF2E2E2E);
 
   /// Emphasised hairline (focused or active borders).
-  static const Color lineStrong = Color(0xFF384056);
+  ///
+  /// Auch die Druckfläche neutraler Controls; [fg1] misst auf ihr 4,57:1.
+  static const Color lineStrong = Color(0xFF3D3D3D);
 
-  /// Primary text.
-  static const Color fg0 = Color(0xFFE6E8EE);
+  /// Primary text. 12,35:1 auf [bg3], der hellsten dunklen Fläche.
+  static const Color fg0 = Color(0xFFE8E8E8);
 
-  /// Secondary text.
-  static const Color fg1 = Color(0xFFA3A9B8);
+  /// Secondary text. 6,36:1 auf [bg3].
+  static const Color fg1 = Color(0xFFA8A8A8);
 
   /// Tertiary text, disabled labels.
-  static const Color fg2 = Color(0xFF6B7186);
+  ///
+  /// Von der 4,5:1 ausgenommen (`docs/UX.md` 6); auf [bg3] misst die Stufe
+  /// 3,06:1 und hält damit die 3:1 einer Fläche.
+  static const Color fg2 = Color(0xFF707070);
 
   /// The single accent: focus, primary button, selection, links. Nothing else.
   ///
@@ -46,7 +57,7 @@ abstract final class HColors {
   /// dieses Gelb als Akzent, mit dunklem Vordergrund ([onAccent]). Der Wert
   /// liegt zwischen den beiden Enden des Verlaufs der Kachel, eine Spur
   /// gesättigter als #EBC05A, damit er auf `bg0` bis `bg3` nicht ins Beige
-  /// kippt. Er misst auf der hellsten dunklen Fläche (`bg3`) 7,95:1 und trägt
+  /// kippt. Er misst auf der hellsten dunklen Fläche (`bg3`) 8,21:1 und trägt
   /// [onAccent] mit 9,81:1.
   static const Color accent = Color(0xFFE8B84B);
 
@@ -56,55 +67,62 @@ abstract final class HColors {
   /// deshalb Schwarz auf Gelb, und die Oberfläche tut es ihr nach. Ein
   /// eigenes Token und nicht `bg0`, weil der Wert in beiden Themes derselbe
   /// ist: das helle Theme schreibt auf seinem Ocker [lAccent] ebenfalls dunkel
-  /// (4,65:1); Weiß erreichte dort nur 3,89:1.
-  static const Color onAccent = Color(0xFF14161C);
+  /// (4,65:1); Weiß erreichte dort nur 3,89:1. Seit HUM-355 ein reines Grau
+  /// wie die Leiter; die Faust des App-Icons behält ihr eigenes #14161C.
+  static const Color onAccent = Color(0xFF161616);
 
   /// Achtung: Warnungen, die kein Zustand eines Flows sind.
   ///
   /// Das Gelb der Marke, also derselbe Wert wie [accent]: Gelb heißt
   /// Achtung, wie beim Absperrband. Bis HUM-260 trugen Warnungen das Amber
-  /// von `held`; seit `held` cyan ist, wäre eine cyanfarbene Warnung neben
-  /// einer gelben Information verkehrt herum gelesen worden. Weil der Wert
+  /// von `held`; seit `held` nicht mehr gelb ist, trägt die Warnung das Gelb,
+  /// das jeder als Achtung liest. Weil der Wert
   /// mit dem Akzent zusammenfällt, steht eine Warnung nie als Farbe allein:
   /// immer mit Glyph (`triangleAlert`) oder Text, und ein Control in
   /// Warnfarbe ist trotzdem eines, das man anfassen kann (`docs/UX.md` 3.3,
   /// Regel 12).
   static const Color warning = accent;
 
-  /// Information: der Ton, der bis HUM-260 der Akzent war.
+  /// Information: ein helles, unbuntes Silber.
   ///
-  /// Ein Blau, das keine andere Farbe des Systems trägt; eine Information in
-  /// Gelb hätte neben einer Warnung in Gelb nichts mehr unterschieden.
-  static const Color info = Color(0xFF7C9CF5);
+  /// Bis HUM-355 das Blau, das bis HUM-260 der Akzent war (#7C9CF5). Blau
+  /// neben dem Gelb der Marke wirkte fremd, und jeder bunte Ton, der noch frei
+  /// wäre, liegt zu nah an einer Zustandsfarbe: Grün und Teal sind vergeben,
+  /// Violett trägt `passthroughLlm`, Orchidee trägt `held`. Eine Auskunft ist
+  /// deshalb leise: ein Silber knapp unter [fg0], das keine Zustandsfarbe
+  /// trägt und das Glyph `info` und sein Wort nie allein lässt. Der Abstand zu
+  /// [warning], zum Akzent und zu `held` steht in `tokens_test.dart`; der
+  /// knappste Fall ist `held` unter Deuteranopie (OKLab 0,11).
+  static const Color info = Color(0xFFE0E0E0);
 
-  // --- Light neutral ladder --------------------------------------------------
+  // --- Light neutral ladder (achromatic since HUM-355) -----------------------
 
   /// Light application background.
-  static const Color lBg0 = Color(0xFFFAFBFD);
+  static const Color lBg0 = Color(0xFFFBFBFB);
 
   /// Light panel background.
   static const Color lBg1 = Color(0xFFFFFFFF);
 
   /// Light raised surface.
-  static const Color lBg2 = Color(0xFFF3F5F9);
+  static const Color lBg2 = Color(0xFFF5F5F5);
 
   /// Light highest surface.
-  static const Color lBg3 = Color(0xFFE9ECF3);
+  static const Color lBg3 = Color(0xFFECECEC);
 
   /// Light hairline separator.
-  static const Color lLine = Color(0xFFE1E5EE);
+  static const Color lLine = Color(0xFFE5E5E5);
 
   /// Light emphasised hairline.
-  static const Color lLineStrong = Color(0xFFC9CFDC);
+  static const Color lLineStrong = Color(0xFFCFCFCF);
 
-  /// Light primary text.
-  static const Color lFg0 = Color(0xFF16181F);
+  /// Light primary text. 15,03:1 auf [lBg3], der dunkelsten hellen Fläche.
+  static const Color lFg0 = Color(0xFF181818);
 
-  /// Light secondary text.
-  static const Color lFg1 = Color(0xFF4B5162);
+  /// Light secondary text. 6,72:1 auf [lBg3].
+  static const Color lFg1 = Color(0xFF515151);
 
-  /// Light tertiary text.
-  static const Color lFg2 = Color(0xFF7C8294);
+  /// Light tertiary text. 3,25:1 auf [lBg3], wie [fg2] von 4,5:1 ausgenommen.
+  static const Color lFg2 = Color(0xFF828282);
 
   /// Light accent: das Gelb der Marke als Ocker.
   ///
@@ -122,23 +140,33 @@ abstract final class HColors {
   /// [warning].
   static const Color lWarning = lAccent;
 
-  /// Light information: das Blau, das bis HUM-260 der helle Akzent war.
-  static const Color lInfo = Color(0xFF5B7FE6);
+  /// Light information: ein dunkles Graphit, das Gegenstück zu [info].
+  ///
+  /// Bis HUM-355 das Blau #5B7FE6. Dunkler als das abgeleitete `timedOut`
+  /// (#717171), damit eine Auskunft nie wie eine abgelaufene Anfrage aussieht
+  /// (OKLab 0,18 auseinander), und mit 8,78:1 auf [lBg3] mehr als eine Fläche.
+  static const Color lInfo = Color(0xFF404040);
 
   // --- Dark state colours ----------------------------------------------------
 
   /// A request waits for a human decision.
   ///
-  /// Bis HUM-260 Amber (#E0B24A). Seit Gelb der Akzent ist, trägt `held` ein
-  /// kühles Himmelscyan, damit Akzent und Zustand nie verwechselt werden: die
-  /// Fläche zum Anfassen ist gelb, die Fläche zum Ablesen nicht
-  /// (`docs/UX.md` 3.3, Regel 8 und 9). Der Ton (198°) liegt zwischen dem
-  /// Teal von [allowedEdited] und dem Violett von [passthrough], die Helligkeit
-  /// über beiden: unter Deuteranopie fallen Cyan und Violett auf dasselbe
-  /// Blau, und nur die Helligkeit hält sie dann auseinander. Der Abstand zu
-  /// jeder anderen Zustandsfarbe und zum Akzent, normal und unter Protanopie
-  /// und Deuteranopie simuliert, steht in `tokens_test.dart`.
-  static const Color held = Color(0xFF79C9EC);
+  /// Bis HUM-260 Amber (#E0B24A), bis HUM-355 Himmelscyan (#79C9EC). Seit
+  /// Gelb der Akzent ist, darf `held` nicht gelb sein, damit Akzent und
+  /// Zustand nie verwechselt werden: die Fläche zum Anfassen ist gelb, die
+  /// Fläche zum Ablesen nicht (`docs/UX.md` 3.3, Regel 8 und 9). Das Cyan
+  /// passte als Blau nicht zum Gelb der Marke; seit HUM-355 trägt `held` eine
+  /// helle Orchidee (OKLCh-Ton 320°, Helligkeit 0,81, Buntheit 0,08).
+  ///
+  /// Der Ton ist der einzige, der in beiden Themes Abstand hält. Ein
+  /// kräftiges Magenta fiele unter Protanopie auf das Violett von
+  /// [passthrough], Teal auf [allowedEdited], ein Weiß im hellen Theme unter
+  /// Deuteranopie auf das abgeleitete Teal. Die Orchidee hält zu jeder
+  /// anderen Zustandsfarbe und zum Akzent mindestens 0,09 in OKLab, normal
+  /// und unter Protanopie und Deuteranopie simuliert, im dunklen wie im
+  /// abgeleiteten hellen Theme (#B56BC6); die Prüfung steht in
+  /// `tokens_test.dart`.
+  static const Color held = Color(0xFFD8B1E1);
 
   /// A request was allowed unchanged.
   static const Color allowed = Color(0xFF4FBF8C);
@@ -157,7 +185,10 @@ abstract final class HColors {
   static const Color blocked = Color(0xFFE5646E);
 
   /// A held request ran out of time.
-  static const Color timedOut = Color(0xFF8A90A2);
+  ///
+  /// Ein reines Grau wie die Leiter (bis HUM-355 #8A90A2): abgelaufen heißt
+  /// ohne Farbe.
+  static const Color timedOut = Color(0xFF909090);
 
   /// A rule decided without asking: [allowed] at 60 percent.
   static const Color autoRule = Color(0x994FBF8C);
@@ -229,7 +260,7 @@ abstract final class HColors {
   /// `POST`.
   static const Color methodPost = passthrough;
 
-  /// `PUT` and `PATCH`.
+  /// `PUT` and `PATCH`: the hue of [held], since HUM-355 the orchid.
   static const Color methodPutPatch = held;
 
   /// `DELETE`: [blocked] at 70 percent, so it never reads as a block.

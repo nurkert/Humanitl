@@ -238,7 +238,7 @@ class HShadcnBundle {
       ),
       // Die beiden Rollen, die ihr Wort im Ruhezustand in `mutedForeground`
       // schreiben. Das ist bei uns `fg2`, die Stufe, die `docs/UX.md` 6 für
-      // wirklich deaktivierte Controls freihält: auf `bg2` misst sie 3,39:1,
+      // wirklich deaktivierte Controls freihält: auf `bg2` misst sie 3,37:1,
       // und ein lebendes Control trägt sein Wort bei 4,5:1. Sie stehen hier,
       // weil der erste gewickelte Kontextmenü- oder Datum-Zeit-Wähler genau
       // solche Knöpfe mitbringt. Die übrigen sechs Rollen der Bibliothek
@@ -726,7 +726,7 @@ abstract final class HShadcnButtonStyle {
         final Color blocked = tokens.state.blocked;
         // Deaktiviert verliert auch dieser Button seinen Ton. Er behielte
         // sonst die Tönung der Zustandsfarbe, und `fg2` darauf misst über
-        // `bg3` 2,68:1 — unter jeder Grenze, die dieses System kennt. Ein
+        // `bg3` 2,70:1 — unter jeder Grenze, die dieses System kennt. Ein
         // totes Control sieht aus wie ein totes, gleich welches es war.
         final bool disabled = states.contains(WidgetState.disabled);
         return BoxDecoration(

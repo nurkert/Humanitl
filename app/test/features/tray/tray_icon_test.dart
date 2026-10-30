@@ -50,9 +50,10 @@ void main() {
       expect(trayIconIsFilled(TrayIconState.offline), isFalse);
     });
 
-    test('the digit reads on the cyan chip', () {
-      // Seit HUM-260 ist `held` Himmelscyan. Die Ziffer darauf ist Text und
-      // braucht 4,5:1, auf dem Cyan wie auf dem Rot einer Warnung.
+    test('the digit reads on the held chip', () {
+      // Seit HUM-355 ist `held` eine helle Orchidee. Die Ziffer darauf ist
+      // Text und braucht 4,5:1, auf der Orchidee wie auf dem Rot einer
+      // Warnung.
       for (final TrayIconState state in <TrayIconState>[
         TrayIconState.held,
         TrayIconState.alert,
@@ -67,7 +68,7 @@ void main() {
           reason: '${state.name} digit is ${ratio.toStringAsFixed(2)}',
         );
       }
-      // Gemessen: dunkle Ziffer auf Cyan. Weiß wäre dort unlesbar.
+      // Gemessen: dunkle Ziffer auf der Orchidee. Weiß wäre dort unlesbar.
       expect(
         HColorDerivation.contrast(
           trayIconInk(TrayIconState.held),
@@ -92,7 +93,7 @@ void main() {
     for (final TrayPixmap pixmap in pixmaps) {
       expect(pixmap.argb.length, pixmap.width * pixmap.height * 4);
     }
-    // Alpha first, then the held cyan: a chip that fills its own area.
+    // Alpha first, then the held orchid: a chip that fills its own area.
     final (int a, int r, int g, int b) = centre(pixmaps.first);
     expect(a, 255);
     expect(r, (HColors.held.r * 255).round());

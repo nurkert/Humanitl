@@ -30,7 +30,7 @@ import 'h_control.dart';
 /// für wirklich deaktivierte Controls freihält, und die Fläche trägt nicht den
 /// Akzent — der gehört dem, was man anfassen kann (3.3). Der Haken selbst
 /// bleibt `onAccent`: er kommt aus der Komponente der Bibliothek und ist dort
-/// fest an `primaryForeground` gebunden. Auf `fg2` misst er dunkel 3,90:1 —
+/// fest an `primaryForeground` gebunden. Auf `fg2` misst er dunkel 3,65:1 —
 /// über der Flächengrenze, unter der Textgrenze, und ein Haken ist eine
 /// Grafik.
 class HCheckbox extends StatelessWidget {
