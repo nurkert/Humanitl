@@ -265,6 +265,7 @@ and see the same queue, rules and history.
 | Try a rule first | `humanitl rules dry-run --action allow --host registry.npmjs.org` |
 | Ask what the rules say about a URL | `humanitl rules test https://registry.npmjs.org/left-pad` (exit 0 allow, 10 block, 11 ask) |
 | History | `humanitl flows list host:registry.npmjs.org` |
+| History with the traffic to the model | `humanitl flows list --passthrough` |
 | Verify the audit chain | `humanitl audit verify` |
 
 Editing a request before it goes out is only possible in the app.

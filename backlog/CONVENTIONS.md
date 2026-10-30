@@ -92,7 +92,7 @@ pub enum FlowState {
 }
 pub enum UpstreamError { Dns, Connect, Tls, PrivateAddress(IpAddr), Timeout }
 pub enum Decision { Allow, AllowEdited { request: HttpRequest }, Block { reason: BlockReason }, TimedOut }
-pub enum BlockReason { User, Rule(RuleId), Timeout, BodyCap, AuthorityMismatch, NoRoute, HoldMemory, HoldMaxFlows, ClientTimeout, PrivateAddress }
+pub enum BlockReason { User, Rule(RuleId), Timeout, BodyCap, AuthorityMismatch, NoRoute, HoldMemory, HoldMaxFlows, ClientTimeout, PrivateAddress, Secret, ClientAborted }
 // HTTP-Status je Grund: User/Rule/AuthorityMismatch/PrivateAddress 403, BodyCap 413, Timeout 504, HoldMemory/HoldMaxFlows 503, Upstream-Fehler (Failed) 502
 pub enum Decision { Allow, AllowEdited { request: HttpRequest }, Block { reason: BlockReason, note: Option<String> }, TimedOut }   // ersetzt die Zeile oben
 
@@ -420,6 +420,7 @@ Entscheidungen, die beim Bauen fielen und ab jetzt gelten. Wo 3.x anderes sagt, 
 - `Flow::apply(&mut self, input: TransitionInput, at: SystemTime) -> Result<FlowEvent, InvalidTransition>`; der Flow kennt seine ID selbst. Bei ungültigem Übergang bleiben Zustand und Historie unverändert.
 - `DecisionSource::System` darf aus `Analyzed` und `Held` nur ablehnen (`Block`, `TimedOut`), nie erlauben. Nur so sind `HoldMemory`, `HoldMaxFlows`, `BodyCap`, `ClientTimeout` ausdrückbar.
 - HTTP-Status: zusätzlich `NoRoute` 502, `ClientTimeout` 408.
+- `ClientAborted` (HUM-316) ist der Grund für einen Tunnel, den der Client vor jeder Anfrage aufgab: Handschlag abgelehnt oder abgebrochen, Tunnel leer geschlossen. Niemand hat geblockt; Kommandozeile und History schreiben `aborted` beziehungsweise „abgebrochen", nie `block`. Eine Antwort geht nie hinaus (`http_status` 408 nur der Vollständigkeit halber). Die Ursache steht in `flows.error` als `tls_handshake_failed:<klasse>`.
 
 **Diagnostics (HUM-063).**
 - Modul `humanitl_core::diagnostics` mit `codes.rs`; `humanitl_core::diag` ist ein Re-Export. Register umfasst zusätzlich den Bereich `IPC_001..009`. Reserviert und belegt: `SANDBOX_006` Mount verboten, `SANDBOX_007` Bridge-Richtung, `PROXY_007` HTTP/2 nicht verfügbar, `TERM_001` zweiter schreibender Terminal-Client, `CLI_002` Vollbild-TUI mit `--ask terminal`, `CONFIG_004` Runtime-Verzeichnis-Fallback (Info), `CONFIG_005` veralteter Schlüssel in Gebrauch (Info), `CONFIG_006` alter und neuer Schlüssel gleichzeitig gesetzt (Warning).

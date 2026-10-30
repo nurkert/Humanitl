@@ -619,7 +619,7 @@ impl FlowHandler {
             "the client refused the tls tunnel"
         );
         let flow_id = self
-            .record_connect_failure(meta, target, connect_headers)
+            .record_connect_failure(meta, target, connect_headers, &failure)
             .await;
         // `on_rejection` liefert die Zahl der Versuche seit der letzten Karte;
         // `on_drop` nur, ob das Muster fällig ist. `TLS_002` trägt keinen
@@ -631,6 +631,16 @@ impl FlowHandler {
             self.inner.handshakes.on_drop(&target.host).then_some(1)
         };
         if let Some(since_last) = report {
+            // Auf `info` nur, wenn auch eine Karte fällig ist: dasselbe
+            // Zählfenster, damit ein Client, der im Takt neu verbindet, das
+            // Protokoll nicht flutet. Jeder einzelne Versuch steht mit seiner
+            // Klasse ohnehin am Flow (HUM-316).
+            tracing::info!(
+                host = %target.host,
+                failure = failure.as_str(),
+                flow = %flow_id,
+                "the client aborted the tls tunnel"
+            );
             self.publish_diagnostic(
                 flow_id,
                 tls_observe::diagnostic_for(&failure, &target.host, hint, since_last),
@@ -653,17 +663,21 @@ impl FlowHandler {
     /// nichts, und `hold.hard_block_checksum_secrets` hat hier nichts zu
     /// entscheiden.
     ///
-    /// Der Flow endet als `Decided(Block { NoRoute })` durch das System. Kein
-    /// Grund, der einen Menschen nennt: Es hat niemand entschieden, der Client
-    /// hat aufgelegt, und es gab keinen Weg zum Ziel, weil der Proxy nie zu
-    /// ihm verbunden hat -- der Tunnel stand nie, oder er stand und blieb leer
-    /// (HUM-149). Woran es lag, steht in `flows.error`
-    /// ([`tls_observe::FLOW_ERROR`]) und im Befund am selben Flow.
+    /// Der Flow endet als `Decided(Block { ClientAborted })` durch das System
+    /// (HUM-316). Kein Grund, der einen Menschen nennt, und auch nicht mehr
+    /// `NoRoute`: Es hat niemand entschieden, der Client hat aufgelegt oder
+    /// abgelehnt, bevor eine Anfrage zu entscheiden war -- der Tunnel stand
+    /// nie, oder er stand und blieb leer (HUM-149). `Block` bleibt die Form,
+    /// weil der Automat nur über eine Entscheidung abschließt und nichts zum
+    /// Ziel ging; der eigene Grund lässt Kommandozeile und History „aborted"
+    /// statt „block" schreiben. Woran es lag, steht in `flows.error`
+    /// ([`tls_observe::flow_error`], mit Klasse) und im Befund am selben Flow.
     async fn record_connect_failure(
         &self,
         meta: &ConnectionContext,
         target: &Authority,
         connect_headers: &HeaderMap,
+        failure: &tls_observe::TlsFailure,
     ) -> FlowId {
         let request = Self::build_request(
             Method::CONNECT,
@@ -688,7 +702,7 @@ impl FlowHandler {
         // fortschreibt. Beide Wege gehen durch denselben Kanal des Recorders,
         // also genügt die Reihenfolge der Aufrufe.
         if let Some(recorder) = self.inner.recorder.as_ref() {
-            recorder.set_flow_error(flow.id, tls_observe::FLOW_ERROR);
+            recorder.set_flow_error(flow.id, &tls_observe::flow_error(failure));
         }
         if let Some(recorder) = self.inner.recorder.as_ref()
             && !report.findings.is_empty()
@@ -719,7 +733,7 @@ impl FlowHandler {
                 &mut flow,
                 TransitionInput::Decide {
                     decision: Decision::Block {
-                        reason: BlockReason::NoRoute,
+                        reason: BlockReason::ClientAborted,
                         note: None,
                     },
                     source: DecisionSource::System,

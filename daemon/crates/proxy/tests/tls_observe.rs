@@ -147,12 +147,17 @@ async fn a_client_without_a_trust_store_gets_one_tls_001_and_a_flow_with_an_erro
     assert_eq!(detail.summary.method, "CONNECT");
     assert_eq!(detail.summary.host, "example.com");
     assert_eq!(detail.summary.state, "recorded");
+    // Die Klasse steht am Flow, nicht nur in einer Protokollzeile (HUM-316).
     assert_eq!(
         detail.summary.error.as_deref(),
-        Some("tls_handshake_failed")
+        Some("tls_handshake_failed:alert_unknown_ca")
     );
-    // Nicht als Entscheidung eines Menschen: Das System hat den Flow beendet.
-    assert_eq!(detail.summary.block_reason.as_deref(), Some("no_route"));
+    // Nicht als Entscheidung eines Menschen und nicht als fehlender Weg: Der
+    // Client hat abgelehnt, bevor es etwas zu entscheiden gab (HUM-316).
+    assert_eq!(
+        detail.summary.block_reason.as_deref(),
+        Some("client_aborted")
+    );
     // Der `User-Agent` ist aufgezeichnet, also ist der Hinweis nachprüfbar.
     let request = detail
         .messages
@@ -263,7 +268,11 @@ async fn a_tunnel_closed_after_the_handshake_gets_one_tls_001_and_a_flow() {
     assert_eq!(detail.summary.method, "CONNECT");
     assert_eq!(
         detail.summary.error.as_deref(),
-        Some("tls_handshake_failed")
+        Some("tls_handshake_failed:closed_after_handshake")
+    );
+    assert_eq!(
+        detail.summary.block_reason.as_deref(),
+        Some("client_aborted")
     );
 }
 
@@ -393,7 +402,7 @@ async fn a_repeated_rejection_is_reported_once_but_recorded_every_time() {
     assert!(
         page.rows
             .iter()
-            .all(|row| row.error.as_deref() == Some("tls_handshake_failed")),
+            .all(|row| row.error.as_deref() == Some("tls_handshake_failed:alert_unknown_ca")),
         "{:?}",
         page.rows
             .iter()
@@ -465,7 +474,7 @@ async fn a_client_that_keeps_dropping_the_handshake_gets_tls_002() {
     // Drei Abbrüche ohne Alert in zehn Sekunden zum selben Host. Der Client
     // schließt die Verbindung mitten im Handschlag, statt ein Zertifikat zu
     // prüfen; genau so verhält sich ein Werkzeug mit Certificate Pinning.
-    let proxy = ProxyBuilder::new().start().await;
+    let proxy = ProxyBuilder::new().recording(true).start().await;
     let mut events = proxy.events();
 
     for _ in 0..3 {
@@ -484,6 +493,31 @@ async fn a_client_that_keeps_dropping_the_handshake_gets_tls_002() {
         "{:?}",
         diagnostic.fix
     );
+
+    // Jeder Abbruch steht mit seiner Klasse und als abgebrochen in der
+    // History, auch die, für die keine Karte kam (HUM-316). Ob der Proxy
+    // zuerst das Dateiende liest oder beim Schreiben seiner Antwort auf die
+    // geschlossene Verbindung stößt, entscheidet der Zeitplan; beides ist ein
+    // Abbruch vor dem fertigen Handschlag.
+    let recorder = proxy.recorder.as_ref().expect("recording is on");
+    recorder.flush().await;
+    let page = recorder.list_flows(&FlowQuery::default()).await.unwrap();
+    assert_eq!(page.rows.len(), 3, "every attempt is in the history");
+    for row in &page.rows {
+        assert!(
+            matches!(
+                row.error.as_deref(),
+                Some(
+                    "tls_handshake_failed:eof_before_finished"
+                        | "tls_handshake_failed:reset_before_finished"
+                )
+            ),
+            "{:?}",
+            row.error
+        );
+        assert_eq!(row.block_reason.as_deref(), Some("client_aborted"));
+        assert_eq!(row.decision.as_deref(), Some("block"));
+    }
 }
 
 /// `CONNECT`, dann den ersten Handschlagsatz schicken und auflegen.

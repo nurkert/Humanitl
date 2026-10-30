@@ -91,6 +91,12 @@ enum BlockReason {
   /// not `user`: an answer naming a human who never decided would be untrue
   /// (`backlog/CONVENTIONS.md` 4.13).
   secret,
+
+  /// Nobody blocked: the client gave up its TLS connection to the proxy
+  /// before there was a request to decide, by rejecting or breaking off the
+  /// handshake or by closing the tunnel empty (HUM-316). Nothing reached the
+  /// target; the cause stands in `FlowSummary.error`.
+  clientAborted,
 }
 
 /// Who decided.
