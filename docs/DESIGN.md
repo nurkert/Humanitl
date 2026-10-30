@@ -83,12 +83,19 @@ are shared by both themes. The constants behind them are `HColors`, `HType`,
 
 ### Colour rules
 
-- Dark first, with cool tinted neutrals (hue around 230).
+- Dark first, with neutral greys (R = G = B). Until HUM-355 the neutrals were
+  tinted cool (hue around 230); next to the brand yellow that read cold, so
+  every surface, line and text step is now achromatic, at the luminance of the
+  old step, and a token test holds the OKLab chroma of every grey below
+  0.004.
 - One accent, the brand yellow `#E8B84B`; in the light theme the ochre
-  `#A57A1C`. Text and glyphs on the accent are dark, `#14161C`, in both
+  `#A57A1C`. Text and glyphs on the accent are dark, `#161616`, in both
   themes. The accent marks focus, the primary button, selection and links,
-  and nothing else. Before HUM-260 the accent was the blue `#7C9CF5`, which is
-  now the `info` colour.
+  and nothing else. Before HUM-260 the accent was the blue `#7C9CF5`, which
+  was then the `info` colour until HUM-355.
+- No blue next to the yellow (HUM-355). `held` is a light orchid, `info` a
+  neutral silver (dark) or graphite (light). Blue and cyan survive only in the
+  terminal palette, because an agent that writes `ESC [ 34 m` means blue.
 - State colours mean states. Red means blocked and nothing else, which is why
   error and secret findings are orange.
 - Tints are at most 10 percent alpha (`HColors.tintAlpha`).
@@ -112,23 +119,23 @@ and [section 6](UX.md#6-accessibility-as-numbers).
 
 | Token | Dark | Light |
 |---|---|---|
-| `bg0` | `#0F1115` | `#FAFBFD` |
-| `bg1` | `#151821` | `#FFFFFF` |
-| `bg2` | `#1B1F2A` | `#F3F5F9` |
-| `bg3` | `#232838` | `#E9ECF3` |
-| `line` | `#2A3040` | `#E1E5EE` |
-| `lineStrong` | `#384056` | `#C9CFDC` |
-| `fg0` | `#E6E8EE` | `#16181F` |
-| `fg1` | `#A3A9B8` | `#4B5162` |
-| `fg2` | `#6B7186` | `#7C8294` |
+| `bg0` | `#111111` | `#FBFBFB` |
+| `bg1` | `#171717` | `#FFFFFF` |
+| `bg2` | `#1E1E1E` | `#F5F5F5` |
+| `bg3` | `#262626` | `#ECECEC` |
+| `line` | `#2E2E2E` | `#E5E5E5` |
+| `lineStrong` | `#3D3D3D` | `#CFCFCF` |
+| `fg0` | `#E8E8E8` | `#181818` |
+| `fg1` | `#A8A8A8` | `#515151` |
+| `fg2` | `#707070` | `#828282` |
 | `accent` | `#E8B84B` | `#A57A1C` |
 | `accentText` | `#E8B84B` | `#755714` |
 | `accentFill` | `#E8B84B` | `#A57A1C` |
-| `onAccent` | `#14161C` | `#14161C` |
+| `onAccent` | `#161616` | `#161616` |
 | `warning` | `#E8B84B` | `#A57A1C` |
 | `warningText` | `#E8B84B` | `#755714` |
-| `info` | `#7C9CF5` | `#5B7FE6` |
-| `infoText` | `#8FAAF6` | `#204FD4` |
+| `info` | `#E0E0E0` | `#404040` |
+| `infoText` | `#E0E0E0` | `#404040` |
 
 What the surfaces are for: `bg0` is the application background, `bg1` a
 panel, `bg2` a raised surface inside a panel (rows, inputs, hover), `bg3` the
@@ -141,18 +148,22 @@ with a glyph or a word, never as colour alone.
 
 | State | Dark area | Dark text | Light area | Light text |
 |---|---|---|---|---|
-| `held` | `#79C9EC` | `#79C9EC` | `#1C91C5` | `#136386` |
-| `allowed` | `#4FBF8C` | `#56C291` | `#36956A` | `#26684A` |
-| `allowedEdited` | `#57B99F` | `#62BEA5` | `#3E957E` | `#2B6656` |
+| `held` | `#D8B1E1` | `#D8B1E1` | `#B56BC6` | `#883B9A` |
+| `allowed` | `#4FBF8C` | `#4FBF8C` | `#36956A` | `#26684A` |
+| `allowedEdited` | `#57B99F` | `#5BBBA1` | `#3E957E` | `#2B6656` |
 | `blocked` | `#E5646E` | `#EB878F` | `#DC303D` | `#A81C27` |
-| `timedOut` | `#8A90A2` | `#A4A8B6` | `#6A7185` | `#565B6B` |
-| `autoRule` | `#994FBF8C` | `#99ECF8F3` | `#991C4E38` | `#99020705` |
-| `passthroughLlm` | `#B48AF0` | `#C09CF2` | `#9154E9` | `#7122E3` |
-| `error` | `#F0784F` | `#F28E6B` | `#EB4D17` | `#A2340E` |
+| `timedOut` | `#909090` | `#A7A7A7` | `#717171` | `#5A5A5A` |
+| `autoRule` | `#994FBF8C` | `#99E8F7F0` | `#991C4E38` | `#99020705` |
+| `passthroughLlm` | `#B48AF0` | `#BD98F2` | `#9154E9` | `#7122E3` |
+| `error` | `#F0784F` | `#F28A66` | `#EB4D17` | `#A2340E` |
 
 Eight-digit values are `#AARRGGBB`: `autoRule` is `allowed` at 60 percent
-alpha. `held` is a cool sky cyan since HUM-260; before that it was the amber
-`#E0B24A`, which would now collide with the yellow accent. `allowedEdited` is
+alpha. `held` is a light orchid since HUM-355; from HUM-260 to HUM-355 it
+was the sky cyan `#79C9EC`, which read as blue next to the yellow, and
+before that the amber `#E0B24A`, which would now collide with the yellow
+accent. The orchid is the one hue that keeps an OKLab distance of at least
+0.09 to every other state colour and the accent in both themes, under
+protanopia and deuteranopia too. `allowedEdited` is
 its own teal green and carries an accent pencil dot in its glyph.
 
 Each row of the image below shows, from left to right: the state rail, the
@@ -170,10 +181,10 @@ HTTP methods borrow hues but are never states: a `DELETE` is not a block.
 | Method | Dark area | Dark text | Light area | Light text |
 |---|---|---|---|---|
 | GET, HEAD | `#E8B84B` | `#E8B84B` | `#A57A1C` | `#755714` |
-| POST | `#B48AF0` | `#C09CF2` | `#9154E9` | `#7122E3` |
-| PUT, PATCH | `#79C9EC` | `#79C9EC` | `#1C91C5` | `#136386` |
-| DELETE | `#B3E5646E` | `#B3F6C8CC` | `#B3D42431` | `#B3560F14` |
-| other | `#6B7186` | `#9CA1B0` | `#7C8294` | `#585D6C` |
+| POST | `#B48AF0` | `#BD98F2` | `#9154E9` | `#7122E3` |
+| PUT, PATCH | `#D8B1E1` | `#D8B1E1` | `#B56BC6` | `#883B9A` |
+| DELETE | `#B3E5646E` | `#B3F5C4C8` | `#B3D42431` | `#B3560F14` |
+| other | `#707070` | `#9E9E9E` | `#828282` | `#5C5C5C` |
 
 `DELETE` is the blocked hue at 70 percent alpha. In a list the method badge
 stands neutral on `bg2` (`HMethodBadge(neutral: true)`), so that a reddish
@@ -186,26 +197,26 @@ The sandbox terminal maps the 16 ANSI colours onto the same ladder
 
 | Slot | Dark | Light |
 |---|---|---|
-| background | `#0F1115` | `#FAFBFD` |
-| foreground | `#E6E8EE` | `#16181F` |
+| background | `#111111` | `#FBFBFB` |
+| foreground | `#E8E8E8` | `#181818` |
 | cursor | `#E8B84B` | `#A57A1C` |
 | selection | `#1AE8B84B` | `#1AA57A1C` |
-| black | `#1B1F2A` | `#C9CFDC` |
+| black | `#1E1E1E` | `#CFCFCF` |
 | red | `#E5646E` | `#DC303D` |
 | green | `#4FBF8C` | `#36956A` |
 | yellow | `#E8B84B` | `#A57A1C` |
 | blue | `#6F8FEF` | `#3864E9` |
 | magenta | `#B48AF0` | `#9154E9` |
 | cyan | `#79C9EC` | `#1C91C5` |
-| white | `#A3A9B8` | `#4B5162` |
-| bright black | `#6B7186` | `#7C8294` |
+| white | `#A8A8A8` | `#515151` |
+| bright black | `#707070` | `#828282` |
 | bright red | `#EC9097` | `#BA1F2B` |
 | bright green | `#74CDA4` | `#28704F` |
 | bright yellow | `#EECA78` | `#795A15` |
 | bright blue | `#9DB3F4` | `#1847D6` |
 | bright magenta | `#D1B7F6` | `#7427E3` |
 | bright cyan | `#A6DBF2` | `#167098` |
-| bright white | `#E6E8EE` | `#16181F` |
+| bright white | `#E8E8E8` | `#181818` |
 
 ### Typography
 

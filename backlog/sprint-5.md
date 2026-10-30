@@ -86,6 +86,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-351 | The app shows the changes of a disposable sandbox and applies or discards them | M | HUM-350 |
 | HUM-352 | The floating terminal keeps its resize grip in the corner and grows equally in every corner | M | HUM-300, HUM-314, HUM-315 |
 | HUM-353 | Ctrl+C in the agent terminal no longer quits OpenCode, and copies a selection | S | HUM-037, HUM-274, HUM-308, HUM-313 |
+| HUM-355 | Neutral greys instead of blue-tinted ones, and no blue next to the brand yellow | M | HUM-260 |
 
 ---
 
@@ -10370,3 +10371,96 @@ Linux. Ohne Auswahl bleibt `Ctrl+C` das `0x03` des Agenten.
   andere logische Taste; `Ctrl+C` geht dort wie bisher als `0x03` an den
   Agenten und kopiert nicht. Dasselbe gilt für `TerminalClipboardActivator`
   seit HUM-313; hingenommen.
+---
+## HUM-355 · Neutral greys instead of blue-tinted ones, and no blue next to the brand yellow
+
+Owner request of 2026-10-30. The dark theme would look nobler on neutral
+grey surfaces than on the blue-tinted grey it inherited from the Airlock
+direction (hue ~230), and the blue of `info` and the sky cyan of `held` do
+not go with the yellow brand accent (HUM-260, `#E8B84B`).
+
+### Specification
+1. **Neutral dark ladder.** `bg0` to `bg3`, `line`, `lineStrong`, `fg0` to
+   `fg2`, `onAccent` and `timedOut` become pure greys (R = G = B). Starting
+   point of the owner: `bg0` #111111, `bg1` #171717, `bg2` #1E1E1E, `bg3`
+   #262626, `line` #2E2E2E, `lineStrong` #3D3D3D, `fg0` #E8E8E8, `fg1`
+   #A8A8A8, `fg2` #707070; every contrast promise in the token doc
+   comments, `docs/DESIGN.md`, `docs/UX.md` and the token tests is measured
+   again, not assumed. Chosen: the owner's values, `onAccent` #161616 and
+   `timedOut` #909090 (each the grey of the old luminance). Measured on the
+   strictest surface `bg3`: `fg0` 12.35:1, `fg1` 6.36:1, `fg2` 3.06:1 (the
+   exempt step, still above 3:1), accent 8.21:1, `onAccent` on the accent
+   9.81:1; `fg1` on `lineStrong` (the pressed fill of neutral controls)
+   4.57:1.
+2. **Neutral light ladder.** The same for `lBg*`, `lLine*` and `lFg*`, each
+   the grey of the old luminance: `lBg0` #FBFBFB, `lBg1` #FFFFFF, `lBg2`
+   #F5F5F5, `lBg3` #ECECEC, `lLine` #E5E5E5, `lLineStrong` #CFCFCF, `lFg0`
+   #181818, `lFg1` #515151, `lFg2` #828282. The narrow window of the ochre
+   `lAccent` holds unchanged (3.29:1 on `lBg3`, 4.65:1 for `onAccent`).
+3. **No blue next to the yellow.**
+   - `held` becomes a light orchid, `#D8B1E1` (OKLCh hue 320, lightness
+     0.81, chroma 0.08); the light theme derives `#B56BC6`, its word
+     `#883B9A`. Candidates rated on the swatch sheet for the owner:
+     A, orchid `#D8B1E1` (chosen): smallest OKLab distance to any other
+     state colour or the accent 0.093 dark and 0.090 light, normal and under
+     simulated protanopia and deuteranopia. B, rose magenta `#F2A6E0`: 0.093
+     dark, but 0.073 light against `autoRule` under deuteranopia, below the
+     0.08 floor. C, pearl white `#F2F2F2` with the glyph as marker: far from
+     everything in the dark theme, but `lightState` derives it to a grey
+     (#878787) that deuteranopia cannot tell from the derived teal of
+     `allowedEdited` (0.016), and it reads as plain text. Teal and cyan-green
+     fail against `allowedEdited` and `autoRule`; a saturated magenta falls
+     onto the violet of `passthroughLlm` under protanopia; warm sand or amber
+     is ruled out by the yellow accent.
+   - `info` and `lInfo` become neutral: a silver `#E0E0E0` in the dark
+     theme, a graphite `#404040` in the light one. Every free hue next to
+     the yellow is too close to a state colour; a quiet neutral that always
+     stands with its glyph and word is the one that keeps its distance
+     (0.11 to `held` under deuteranopia, 0.18 from the light `timedOut`).
+   - `methodPutPatch` follows `held` (orchid); the terminal palette keeps
+     its blue (#6F8FEF) and gets the old sky cyan (#79C9EC) as a constant
+     of its own, because an agent that writes `ESC [ 36 m` means cyan, not
+     orchid.
+4. **No hard-coded blue in the app.** A grep of `app/lib` and
+   `app/packages/ui/lib` for colour literals outside the tokens finds only
+   transparent colours and the brand mark of HUM-259; nothing to reroute.
+5. **Goldens.** All golden images are regenerated with
+   `make goldens-update`; the copies of goldens under `docs/img/` follow.
+6. **Comparison images for the owner.** Before and after screenshots with
+   real fonts of Intercept with held requests, History, the Sandbox page
+   with the docked terminal and the floating terminal, both themes, plus a
+   swatch sheet of the held candidates next to the other state colours on
+   `bg0` to `bg3` and `lBg0` to `lBg3`. The owner approves before merge.
+
+### Acceptance criteria
+1. Every grey token of both themes (and `info`, `lInfo`) has an OKLab
+   chroma of at most 0.004; a token test asserts it and fails with the old
+   blue `bg1` (#151821, 0.0185) put back.
+2. Contrast tests for the new values: `fg0` and `fg1` reach 4.5:1 and `fg2`
+   3:1 on every surface of their ladder; the accent clears 3:1 on every
+   surface and carries `onAccent` at 9.81:1 (light 4.65:1); every state
+   colour reaches 3:1 as an area and its text variant 4.5:1 on `bg0` to
+   `bg3` and `lBg0` to `lBg3`. The measured ratios in the doc comments match
+   the tests.
+3. `held`, its text variant, `info`, `infoText` and the `PUT` hue carry no
+   OKLab hue between 195 and 285 degrees in either theme; the old held
+   (#79C9EC) fails that test.
+4. `held` keeps an OKLab distance of at least 0.08 to every other state
+   colour and the accent, normal and under protanopia and deuteranopia, in
+   both themes (existing HUM-260 test), and `info` keeps it to warning,
+   accent and `held`.
+5. Goldens regenerated; `docs/DESIGN.md`, `docs/UX.md` and `BACKLOG.md`
+   section 5 name the new values.
+
+### Candidates for later issues
+- **OpenCode TUI theme.** OpenCode paints its own blue theme in the sandbox
+  terminal. Once HUM-353 writes the sandbox's `tui.json`, set a built-in
+  theme that fits neutral grey and yellow. The built-in `system` theme
+  takes the terminal's own ANSI palette (that is, `HTerminalPalette`) and
+  would follow these tokens without a second palette; among the fixed
+  themes, `gruvbox` (warm yellow accent on neutral dark) fits best. Not
+  verified against the running OpenCode version in this issue.
+- **macOS disk image background.** `packaging/macos/dmg/background.svg`
+  still carries the old blue-tinted hex values.
+- **Website.** The site of HUM-333 has its own palette; align it with the
+  neutral ladder if the owner wants that.
