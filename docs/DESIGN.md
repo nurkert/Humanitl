@@ -645,6 +645,7 @@ The table lists each binding as the app has it in 0.1, checked against
 | ``Ctrl+` `` (the key left of `1`, by position) | Give the keyboard to the terminal that is shown, without changing the layout; nothing while no terminal is shown (HUM-303) | `FocusTerminalIntent` | Everywhere, also inside the terminal |
 | `Ctrl` + `+` (also `Ctrl+=`, numpad `+`) / `Ctrl` + `-` (also numpad `-`) | Terminal text one step larger / smaller, 10 to 28 px, kept across restarts; `Ctrl` + wheel over the terminal does the same (HUM-301) | `TerminalZoomIntent` | While a terminal is shown, also inside it |
 | `Ctrl+Shift+0` (also `Ctrl` + numpad `0`) | Terminal text back to its default size; not `Ctrl+0`, which is the rail (HUM-301) | `TerminalZoomIntent` | While a terminal is shown, also inside it |
+| `Ctrl+Shift+C` / `Ctrl+Shift+V` (`Cmd+C` / `Cmd+V` on Apple platforms) | Copy the terminal selection / paste into the terminal; plain `Ctrl+C` and `Ctrl+V` stay with the agent (HUM-313) | `TerminalClipboardActivator`, no intent | Only inside the terminal |
 
 Three intents of CONVENTIONS 3.9 have no binding in 0.1, because a key that
 does nothing is worse than no key ([docs/UX.md, section 5](UX.md#5-keyboard-and-mouse)):
