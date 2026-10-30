@@ -17,6 +17,7 @@
 
 pub mod attach;
 pub mod audit;
+pub mod changes;
 pub mod config;
 pub mod daemon;
 pub mod doctor;

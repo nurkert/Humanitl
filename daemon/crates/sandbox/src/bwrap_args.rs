@@ -270,6 +270,13 @@ pub struct LaunchInputs {
     /// [`LaunchInputs::controlling_terminal`]. `None` renders nothing; that
     /// is the preview and every start without the daemon.
     pub control_fd: Option<RawFd>,
+    /// The upper layer and the overlay's work directory of a disposable
+    /// sandbox (HUM-350). With them the project folder is the read-only lower
+    /// layer of an overlay at `/work` (`--overlay-src LOWER --overlay UPPER
+    /// WORK /work`), and every entry of `mounts.extra_rw` is mounted
+    /// read-only, so nothing writable from the host reaches the sandbox.
+    /// `None` mounts the project as before.
+    pub overlay: Option<crate::disposable::OverlayDirs>,
 }
 
 impl LaunchInputs {
@@ -296,6 +303,7 @@ impl LaunchInputs {
             agent_program: None,
             controlling_terminal: false,
             control_fd: None,
+            overlay: None,
         }
     }
 
@@ -307,6 +315,13 @@ impl LaunchInputs {
     #[must_use]
     pub fn with_controlling_terminal(mut self, on: bool) -> Self {
         self.controlling_terminal = on;
+        self
+    }
+
+    /// The same inputs with the layer of a disposable sandbox (HUM-350).
+    #[must_use]
+    pub fn with_overlay(mut self, overlay: Option<crate::disposable::OverlayDirs>) -> Self {
+        self.overlay = overlay;
         self
     }
 
@@ -411,16 +426,25 @@ impl SandboxProfile {
         for (index, path) in self.mounts.extra_ro.iter().enumerate() {
             args.bind_source(false, path, inputs.extra_ro.get(index).copied(), path);
         }
+        // In a disposable sandbox the user's writable extensions are mounted
+        // read-only (HUM-350): a write there would reach the host past the
+        // overlay, and a second overlay per entry would be a second upper
+        // layer nobody reviews.
+        let extra_writable = inputs.overlay.is_none();
         for (index, path) in self.mounts.extra_rw.iter().enumerate() {
-            args.bind_source(true, path, inputs.extra_rw.get(index).copied(), path);
+            args.bind_source(
+                extra_writable,
+                path,
+                inputs.extra_rw.get(index).copied(),
+                path,
+            );
         }
 
         for (fd, dst) in &inputs.session_ro {
             args.bind_source(false, dst, Some(*fd), dst);
         }
 
-        let writable = self.effective_work_mode(ctx.work_mode) == WorkMode::Rw;
-        args.bind_source(writable, &ctx.work_src, inputs.work_dir, work_dst);
+        self.mount_work(&mut args, ctx, inputs, work_dst);
         for path in under_work {
             if inputs.renders(path) {
                 args.path("--tmpfs", path);
@@ -506,6 +530,37 @@ impl SandboxProfile {
         }
 
         args.0
+    }
+
+    /// Der Projektordner an `/work`: als Bind, oder bei einer
+    /// Wegwerf-Sandbox als untere Schicht eines Overlays (HUM-350).
+    fn mount_work(
+        &self,
+        args: &mut Args,
+        ctx: &SessionContext,
+        inputs: &LaunchInputs,
+        work_dst: &Path,
+    ) {
+        let Some(overlay) = &inputs.overlay else {
+            let writable = self.effective_work_mode(ctx.work_mode) == WorkMode::Rw;
+            args.bind_source(writable, &ctx.work_src, inputs.work_dir, work_dst);
+            return;
+        };
+        // `bwrap` takes the lower layer as a path; the opened folder is named
+        // through `/proc/self/fd/N`, so the folder that was checked is the
+        // one mounted (HUM-263). The shim closes the inherited descriptor
+        // before the agent starts, as for `SourceFd::ProcSelf`.
+        let lower = match inputs.work_dir {
+            None => ctx.work_src.clone(),
+            Some(SourceFd::BindFd(fd) | SourceFd::ProcSelf(fd)) => {
+                PathBuf::from(format!("/proc/self/fd/{fd}"))
+            }
+        };
+        args.path("--overlay-src", &lower);
+        args.push("--overlay");
+        args.push(&overlay.upper);
+        args.push(&overlay.work);
+        args.push(work_dst);
     }
 
     /// Dieselbe Liste als eine Zeile, wie eine Shell sie lesen würde.
@@ -891,6 +946,7 @@ mod tests {
                 agent_program: None,
                 controlling_terminal: false,
                 control_fd: None,
+                overlay: None,
             },
         );
         assert!(with.windows(2).any(|w| w == ["--json-status-fd", "11"]));
@@ -989,6 +1045,7 @@ mod tests {
                 agent_program: None,
                 controlling_terminal: false,
                 control_fd: None,
+                overlay: None,
             },
         );
         assert!(window_at(&args, &["--ro-bind-data", "40", "/work/.envrc"]).is_some());
@@ -1127,5 +1184,62 @@ mod tests {
             window_at(&proc_self, &["--bind", "/srv/data", "/srv/data"]).is_some(),
             "a missing descriptor falls back to the path, as in the preview"
         );
+    }
+
+    /// A disposable sandbox (HUM-350): the opened project folder is the
+    /// lower layer of an overlay at `/work`, the masks and the tmpfs under
+    /// `/work` come after it, and `mounts.extra_rw` is mounted read-only.
+    #[test]
+    fn a_disposable_sandbox_mounts_the_project_as_the_lower_layer() {
+        let profile = SandboxProfile::parse(
+            "version = 1\nname = \"x\"\n[mounts]\nextra_rw = [\"/srv/data\"]\ntmpfs = [\"/tmp\", \"/dev/shm\", \"/work/.git/hooks\"]\n",
+            Path::new("<t>"),
+        )
+        .expect("parses");
+        let overlay = crate::disposable::OverlayDirs {
+            upper: PathBuf::from("/run/user/1000/humanitl/disposable/l/upper"),
+            work: PathBuf::from("/run/user/1000/humanitl/disposable/l/work"),
+        };
+        let args = strings(
+            &profile,
+            &LaunchInputs {
+                work_dir: Some(SourceFd::BindFd(50)),
+                extra_rw: vec![SourceFd::BindFd(52)],
+                ..LaunchInputs::preview()
+            }
+            .with_overlay(Some(overlay.clone())),
+        );
+        let at = window_at(
+            &args,
+            &[
+                "--overlay-src",
+                "/proc/self/fd/50",
+                "--overlay",
+                "/run/user/1000/humanitl/disposable/l/upper",
+                "/run/user/1000/humanitl/disposable/l/work",
+                "/work",
+            ],
+        )
+        .unwrap_or_else(|| panic!("no overlay at /work: {args:?}"));
+        assert!(
+            !args.iter().any(|arg| arg == "--bind-fd" || arg == "--bind"),
+            "nothing writable from the host: {args:?}"
+        );
+        assert!(window_at(&args, &["--ro-bind-fd", "52", "/srv/data"]).is_some());
+        let hooks = window_at(&args, &["--tmpfs", "/work/.git/hooks"]).expect("hooks tmpfs");
+        assert!(hooks > at, "the tmpfs under /work lies on the overlay");
+        let mask = window_at(&args, &["--ro-bind-data", "16", "/work/.git/config"])
+            .or_else(|| window_at(&args, &["--ro-bind-data", "15", "/work/.git/config"]));
+        assert!(
+            mask.is_some_and(|mask| mask > at),
+            "the masks lie on the overlay: {args:?}"
+        );
+
+        // The preview names the folder by its path.
+        let preview = strings(
+            &profile,
+            &LaunchInputs::preview().with_overlay(Some(overlay)),
+        );
+        assert!(window_at(&preview, &["--overlay-src", "/home/u/proj"]).is_some());
     }
 }

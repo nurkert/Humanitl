@@ -432,6 +432,11 @@ impl IpcServer {
         // Further shells in the running sandbox (HUM-299): a client asks
         // before it offers the action.
         self.info.capabilities.push("sandbox.exec".to_owned());
+        // The disposable sandbox (HUM-350): a client asks before it offers
+        // the switch and the changes panel. Only where the overlay exists.
+        if cfg!(target_os = "linux") {
+            self.info.capabilities.push("sandbox.disposable".to_owned());
+        }
         self.sandbox = Some(sandbox);
         self
     }

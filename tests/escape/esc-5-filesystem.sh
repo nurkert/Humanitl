@@ -110,4 +110,10 @@ terminal_case osc8_and_title_are_inert
 audit_case audit_delete_is_detected
 audit_case audit_truncate_is_detected
 
+# The disposable sandbox (HUM-350, docs/SECURITY.md 5.2, K-24): the agent
+# writes, deletes and plants a symlink out of /work in a disposable run, and
+# the project folder on the host stays byte for byte as it was; only the apply
+# afterwards writes, and never the symlink or a setuid bit.
+cargo_case a_disposable_sandbox_never_writes_to_the_project humanitl-sandbox launcher
+
 esc_end

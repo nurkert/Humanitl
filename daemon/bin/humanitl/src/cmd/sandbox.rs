@@ -107,7 +107,11 @@ const EXIT_INTERRUPTED: u8 = 130;
 pub async fn run(ctx: &Context, cmd: &SandboxCmd) -> Result<u8, Failure> {
     match cmd {
         SandboxCmd::Argv { cmd } => argv(ctx, cmd),
-        SandboxCmd::Run { cmd, tests_dir } => start(ctx, cmd, tests_dir.as_deref()).await,
+        SandboxCmd::Run {
+            cmd,
+            tests_dir,
+            disposable,
+        } => start(ctx, cmd, tests_dir.as_deref(), *disposable).await,
         SandboxCmd::Check => check(ctx),
         SandboxCmd::Attach {
             read_only,
@@ -125,6 +129,13 @@ pub async fn run(ctx: &Context, cmd: &SandboxCmd) -> Result<u8, Failure> {
         SandboxCmd::Exec { detach_keys, cmd } => {
             crate::cmd::exec::run(ctx, cmd, detach_keys.as_deref()).await
         }
+        SandboxCmd::Changes { stat } => crate::cmd::changes::changes(ctx, *stat).await,
+        SandboxCmd::Apply {
+            ids,
+            overwrite,
+            yes,
+        } => crate::cmd::changes::apply(ctx, ids, *overwrite, *yes).await,
+        SandboxCmd::Discard { yes } => crate::cmd::changes::discard(ctx, *yes).await,
     }
 }
 
@@ -210,8 +221,16 @@ async fn start(
     ctx: &Context,
     command: &[OsString],
     tests_dir: Option<&Path>,
+    disposable: bool,
 ) -> Result<u8, Failure> {
     let resolved = ctx.config()?;
+    let disposable =
+        disposable || resolved.config.sandbox.mode == humanitl_config::SandboxMode::Disposable;
+    // Ohne das Overlay von bubblewrap gibt es keine Wegwerf-Sandbox (HUM-350).
+    #[cfg(not(target_os = "linux"))]
+    if disposable {
+        return Err(Failure::new(humanitl_sandbox::disposable::unsupported()));
+    }
 
     // Schritt 1 der Spezifikation: ohne Daemon kein Lauf. Er hält den
     // Proxy-Socket und das CA-Bundle; ohne beides hätte der Agent in der
@@ -229,6 +248,15 @@ async fn start(
             .detail(&format!("tests dir {} -> {TESTS_DIR_DST}", src.display()));
         setup.backend = setup.backend.with_read_only_bind(src, TESTS_DIR_DST);
     }
+    // The disposable sandbox (HUM-350): this command keeps no layer after it
+    // ends, so the changes are listed and dropped; `humanitl run --disposable`
+    // keeps them for apply.
+    #[cfg(target_os = "linux")]
+    let mut throwaway = if disposable {
+        Some(Throwaway::prepare(ctx, &mut setup)?)
+    } else {
+        None
+    };
     let plan = setup
         .backend
         .plan(&setup.profile, &setup.session)
@@ -251,11 +279,156 @@ async fn start(
     let handle = Arc::new(setup.backend.launch(&plan).map_err(Failure::new)?);
     ctx.render
         .detail(&format!("sandbox {} pid {}", handle.id, handle.pid));
+    #[cfg(target_os = "linux")]
+    if let Some(throwaway) = throwaway.as_mut() {
+        throwaway.watch(&handle).map_err(Failure::new)?;
+    }
 
     enforce_isolation(ctx, &setup.backend, &handle)?;
     let ended = wait_or_interrupt(Arc::clone(&handle), interrupts).await;
     report_refusals(ctx, &handle).await;
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(throwaway) = &throwaway {
+            throwaway.report(ctx, &handle);
+        }
+        drop(throwaway);
+    }
     ended
+}
+
+/// The layer of `sandbox run --disposable`; dropped, it is discarded.
+///
+/// It carries what the daemon's run carries (HUM-350): the project folder
+/// opened once before the start, the baseline taken on it before the start,
+/// and a size guard that stops the sandbox when the layer grows over its cap.
+#[cfg(target_os = "linux")]
+struct Throwaway {
+    layer: Option<humanitl_sandbox::Layer>,
+    lower: std::os::fd::OwnedFd,
+    baseline: humanitl_sandbox::worktree::TreeSnapshot,
+    guard: Option<humanitl_sandbox::SizeGuard>,
+    child_start: Option<u64>,
+}
+
+#[cfg(target_os = "linux")]
+impl Throwaway {
+    /// Opens the project folder, takes the baseline and creates the layer
+    /// before the plan, so the plan mounts exactly the opened folder.
+    fn prepare(ctx: &Context, setup: &mut Setup) -> Result<Self, Failure> {
+        use std::os::fd::{AsFd as _, AsRawFd as _};
+
+        let lower =
+            humanitl_sandbox::worktree::open_root(&setup.session.work_src).map_err(Failure::new)?;
+        let resolved =
+            std::fs::read_link(format!("/proc/self/fd/{}", lower.as_raw_fd())).map_err(|err| {
+                Failure::new(
+                    Diagnostic::builder(codes::SANDBOX_030, Severity::Blocking)
+                        .why(format!(
+                            "where the opened project folder lies cannot be read ({err})"
+                        ))
+                        .build(),
+                )
+            })?;
+        let stat = rustix::fs::fstat(&lower).map_err(|err| {
+            Failure::new(
+                Diagnostic::builder(codes::SANDBOX_030, Severity::Blocking)
+                    .why(format!(
+                        "the opened project folder cannot be inspected ({err})"
+                    ))
+                    .build(),
+            )
+        })?;
+        let baseline = humanitl_sandbox::disposable::baseline_at(lower.as_fd());
+        let layer =
+            humanitl_sandbox::Layer::create(&ctx.paths.runtime_dir().path).map_err(Failure::new)?;
+        setup.backend = setup
+            .backend
+            .clone()
+            .with_approved_work_dir(resolved)
+            .with_expected_work_inode(stat.st_dev, stat.st_ino)
+            .with_overlay(layer.dirs());
+        Ok(Self {
+            layer: Some(layer),
+            lower,
+            baseline,
+            guard: None,
+            child_start: None,
+        })
+    }
+
+    /// Starts the size guard for the running sandbox and notes the start
+    /// time of its first process.
+    fn watch(&mut self, handle: &Arc<SandboxHandle>) -> Result<(), Diagnostic> {
+        let Some(layer) = self.layer.as_ref() else {
+            return Ok(());
+        };
+        let stop = Arc::clone(handle);
+        self.guard = Some(humanitl_sandbox::SizeGuard::start(layer, move || {
+            let _ = stop.kill();
+        })?);
+        self.child_start = handle
+            .child_pid()
+            .and_then(|pid| humanitl_sandbox::disposable::start_ticks(Path::new("/proc"), pid));
+        Ok(())
+    }
+
+    /// Says what the run changed before the layer goes.
+    fn report(&self, ctx: &Context, handle: &SandboxHandle) {
+        use std::os::fd::AsFd as _;
+
+        if let Some(guard) = &self.guard {
+            guard.stop();
+            if let Some(tripped) = guard.tripped() {
+                ctx.render.diagnostic(&tripped);
+            }
+        }
+        let Some(layer) = self.layer.as_ref() else {
+            return;
+        };
+        if let Err(diagnostic) =
+            humanitl_sandbox::disposable::ensure_ended(handle, self.child_start)
+        {
+            ctx.render.diagnostic(&diagnostic);
+            return;
+        }
+        let Ok(upper) = humanitl_sandbox::worktree::open_root(&layer.upper()) else {
+            return;
+        };
+        let set =
+            humanitl_sandbox::disposable::scan(upper.as_fd(), self.lower.as_fd(), &self.baseline);
+        ctx.render.note(&format!(
+            "disposable: {} change(s) discarded, the project folder is untouched{}",
+            set.changes.len(),
+            if set.truncated {
+                " (list cut short)"
+            } else {
+                ""
+            }
+        ));
+        for change in &set.changes {
+            ctx.render.note(&format!(
+                "  {:<8} {}",
+                change.kind.as_str(),
+                change.display()
+            ));
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for Throwaway {
+    fn drop(&mut self) {
+        if let Some(layer) = self.layer.take()
+            && let Err((layer, diagnostic)) = layer.discard()
+        {
+            eprintln!(
+                "the upper layer {} stays until the daemon starts again: {}",
+                layer.dir().display(),
+                diagnostic.why
+            );
+        }
+    }
 }
 
 /// Wie lange nach dem Ende auf die letzten Zeilen über verweigerte Versuche

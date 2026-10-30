@@ -28,6 +28,7 @@ const DENIED_BY_CONVENTION: &[&str] = &[
     "llm.*",
     "sandbox.work_dir",
     "sandbox.work_mode",
+    "sandbox.mode",
     "sandbox.profile",
     "sandbox.env",
     "agent.adapter",

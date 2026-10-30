@@ -44,6 +44,11 @@ rustix = { version = "1.1", features = ["fs", "process", "pty", "termios", "net"
 # dann zu einem Befehl, wenn `shlex::try_quote` ihn zitieren kann und
 # `shlex::split` daraus wieder genau diesen einen Pfad macht.
 shlex.workspace = true
+# Die Wegwerf-Sandbox (HUM-350) vergleicht Dateien der oberen Schicht mit dem
+# Projekt über ihren Hash, gestreamt: Eine Datei der oberen Schicht kann so
+# groß sein wie die Grenze der Schicht, und `humanitl_core::http::sha256`
+# nimmt nur einen Puffer am Stück.
+sha2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

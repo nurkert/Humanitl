@@ -915,7 +915,83 @@ const SANDBOX_EVENT_FIELDS: &FieldTable = &[
         ".humanitl.v1.SandboxEvent.Retire",
         Some("event"),
     ),
+    // HUM-350: der elfte und zwölfte Arm, die wartenden Änderungen einer
+    // Wegwerf-Sandbox und was mit ihnen geschah.
+    (
+        "changes",
+        11,
+        ".humanitl.v1.DisposableChanges",
+        Some("event"),
+    ),
+    (
+        "changes_outcome",
+        12,
+        ".humanitl.v1.DisposableOutcome",
+        Some("event"),
+    ),
 ];
+
+/// `DisposableChange` vollständig (HUM-350): Die Kennung ist der Hash des
+/// Pfades, nie der Pfad; die Oberfläche wählt über sie aus.
+const DISPOSABLE_CHANGE_FIELDS: &FieldTable = &[
+    ("id", 1, "string", None),
+    ("path", 2, "string", None),
+    ("mangled", 3, "bool", None),
+    ("kind", 4, ".humanitl.v1.FileChangeKind", None),
+    ("entry", 5, "string", None),
+    ("size", 6, "uint64", None),
+    ("mode", 7, "uint32", None),
+    ("sha256", 8, "string", None),
+    ("symlink_target", 9, "string", None),
+    ("diff", 10, "string", None),
+    ("binary", 11, "bool", None),
+    ("conflict", 12, "string", None),
+    ("refused", 13, "string", None),
+    ("stripped_bits", 14, "uint32", None),
+    ("hardlinked", 15, "bool", None),
+];
+
+/// Ein Feld einer Nachricht, an seinem Namen.
+fn named_field(short: &str, name: &str) -> FieldDescriptorProto {
+    message(short)
+        .field
+        .into_iter()
+        .find(|field| field.name() == name)
+        .unwrap_or_else(|| panic!("{short} has no field {name}"))
+}
+
+#[test]
+fn a_disposable_change_keeps_its_shape() {
+    assert_eq!(
+        check_fields(
+            "DisposableChange",
+            &message("DisposableChange"),
+            DISPOSABLE_CHANGE_FIELDS
+        ),
+        Ok(())
+    );
+    for (op, number, type_name) in [
+        ("changes", 8, ".google.protobuf.Empty"),
+        (
+            "apply_changes",
+            9,
+            ".humanitl.v1.SandboxRequest.ApplyChanges",
+        ),
+        (
+            "discard_changes",
+            10,
+            ".humanitl.v1.SandboxRequest.DiscardChanges",
+        ),
+    ] {
+        let field = named_field("SandboxRequest", op);
+        assert_eq!(field.number(), number, "{op}");
+        assert_eq!(field.type_name(), type_name, "{op}");
+    }
+    assert_eq!(
+        named_field("SandboxRequest.Start", "sandbox_mode").number(),
+        9
+    );
+}
 
 /// `SandboxEvent.Refusals` und `SandboxEvent.Refusal` vollständig (HUM-138).
 const REFUSALS_FIELDS: &FieldTable = &[

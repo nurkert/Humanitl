@@ -53,7 +53,7 @@ use std::time::Duration;
 use humanitl_config::{Env, Paths, WorkMode};
 use humanitl_core::diagnostics::codes::{
     SANDBOX_001, SANDBOX_002, SANDBOX_003, SANDBOX_005, SANDBOX_006, SANDBOX_011, SANDBOX_012,
-    SANDBOX_013, SANDBOX_014, SANDBOX_015, SANDBOX_016, TERM_002,
+    SANDBOX_013, SANDBOX_014, SANDBOX_015, SANDBOX_016, SANDBOX_030, TERM_002,
 };
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{Diagnostic, DiagnosticCode, FixAction, Severity};
@@ -168,6 +168,11 @@ pub struct BwrapBackend {
     /// Der aufgelöste Ort, an dem der Aufrufer den Projektordner geprüft hat;
     /// siehe [`BwrapBackend::with_approved_work_dir`].
     approved_work_dir: Option<PathBuf>,
+    /// Die Schicht einer Wegwerf-Sandbox; siehe [`BwrapBackend::with_overlay`].
+    overlay: Option<crate::disposable::OverlayDirs>,
+    /// Gerät und Inode des Projektordners, den der Aufrufer schon geöffnet
+    /// hält; siehe [`BwrapBackend::with_expected_work_inode`].
+    expected_work_inode: Option<(u64, u64)>,
 }
 
 impl BwrapBackend {
@@ -217,6 +222,8 @@ impl BwrapBackend {
             output_sink: None,
             read_only_binds: Vec::new(),
             approved_work_dir: None,
+            overlay: None,
+            expected_work_inode: None,
         }
     }
 
@@ -226,6 +233,34 @@ impl BwrapBackend {
     #[must_use]
     pub fn fallback(paths: Paths) -> Self {
         Self::unchecked("bwrap", MIN_BWRAP_VERSION, paths)
+    }
+
+    /// Startet die Sandbox als Wegwerf-Sandbox (HUM-350): das
+    /// Projektverzeichnis nur lesbar als untere Schicht, `dirs` als obere
+    /// Schicht und Arbeitsverzeichnis des Overlays, `mounts.extra_rw` nur
+    /// lesbar. Die Verzeichnisse legt der Aufrufer an
+    /// (`crate::disposable::Layer::create`).
+    #[must_use]
+    pub fn with_overlay(mut self, dirs: crate::disposable::OverlayDirs) -> Self {
+        self.overlay = Some(dirs);
+        self
+    }
+
+    /// Bindet den Projektordner nur, wenn der hier geöffnete Ordner Gerät und
+    /// Inode `(dev, ino)` trägt (HUM-350): Der Aufrufer hält den Ordner schon
+    /// offen und schreibt später durch diesen Deskriptor; ein Umbenennen und
+    /// ein neuer Ordner unter demselben Pfad dazwischen hängte sonst einen
+    /// anderen Ordner ein als den, in den übernommen wird.
+    #[must_use]
+    pub const fn with_expected_work_inode(mut self, dev: u64, ino: u64) -> Self {
+        self.expected_work_inode = Some((dev, ino));
+        self
+    }
+
+    /// Die Schicht, wenn dies eine Wegwerf-Sandbox ist.
+    #[must_use]
+    pub const fn overlay(&self) -> Option<&crate::disposable::OverlayDirs> {
+        self.overlay.as_ref()
     }
 
     /// Wohin Ein- und Ausgabe der Sandbox gehen; Standard [`StdioMode::Inherit`].
@@ -422,6 +457,49 @@ impl BwrapBackend {
         let mut command = Command::new(program);
         command.env_clear();
         command
+    }
+
+    /// Die Bedingungen einer Wegwerf-Sandbox (HUM-350): `bwrap` kennt
+    /// `--overlay`, und die Sandbox sieht das Projekt schreibbar, sonst gäbe
+    /// es nichts zu verwerfen.
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_030`, wenn eine fehlt.
+    fn check_overlay(
+        &self,
+        profile: &SandboxProfile,
+        session: &SessionContext,
+    ) -> Result<(), Diagnostic> {
+        if self.overlay.is_none() {
+            return Ok(());
+        }
+        if self.version < crate::disposable::MIN_OVERLAY_VERSION {
+            return Err(Diagnostic::builder(SANDBOX_030, Severity::Blocking)
+                .why(format!(
+                    "{} is bubblewrap {}; a disposable sandbox needs --overlay, which came \
+                     with bubblewrap {}",
+                    self.program.display(),
+                    self.version,
+                    crate::disposable::MIN_OVERLAY_VERSION
+                ))
+                .fix(FixAction::CopyCommand(install_command().to_owned()))
+                .build());
+        }
+        if profile.effective_work_mode(session.work_mode) != WorkMode::Rw {
+            return Err(Diagnostic::builder(SANDBOX_030, Severity::Blocking)
+                .why(
+                    "a disposable sandbox shows the agent a writable project folder and keeps \
+                     its changes apart, but the project folder is mounted read-only here \
+                     (sandbox.work_mode or the profile)",
+                )
+                .fix(FixAction::ChangeSetting {
+                    key: "sandbox.work_mode".to_owned(),
+                    value: "rw".to_owned(),
+                })
+                .build());
+        }
+        Ok(())
     }
 
     pub(crate) fn check_work_dir(
@@ -810,6 +888,7 @@ impl SandboxBackend for BwrapBackend {
                 .build());
         }
 
+        self.check_overlay(profile, session)?;
         Self::check_work_dir(profile, session)?;
         policy.check_work_dir(&session.work_src)?;
         // Ab hier zählt der Deskriptor, nicht mehr der Pfad (HUM-263): Die
@@ -875,6 +954,7 @@ impl SandboxBackend for BwrapBackend {
             // become a controlling terminal inside the sandbox (`TIOCSTI`).
             controlling_terminal: self.stdio.pty_size().is_some(),
             control_fd: shim_door.as_ref().map(AsRawFd::as_raw_fd),
+            overlay: self.overlay.clone(),
         };
         let env = profile.effective_env(session, inputs.report_fd);
         let mut argv = vec![self.program.clone().into_os_string()];
@@ -1169,6 +1249,32 @@ impl PinnedMounts {
                 ))
                 .fix(crate::work_dir::choose_folder_fix())
                 .build());
+        }
+        if let Some((dev, ino)) = backend.expected_work_inode {
+            let stat = rustix::fs::fstat(work.fd()).map_err(|err| {
+                Diagnostic::builder(SANDBOX_006, Severity::Blocking)
+                    .why(format!(
+                        "the opened project directory {} cannot be inspected ({err})",
+                        session.work_src.display()
+                    ))
+                    .build()
+            })?;
+            // `st_dev` ist nicht auf jedem System `u64` (macOS: `i32`).
+            #[allow(clippy::useless_conversion, clippy::unnecessary_fallible_conversions)]
+            let found = (
+                u64::try_from(stat.st_dev).ok(),
+                u64::try_from(stat.st_ino).ok(),
+            );
+            if found != (Some(dev), Some(ino)) {
+                return Err(Diagnostic::builder(SANDBOX_006, Severity::Blocking)
+                    .why(format!(
+                        "the project directory {} is not the folder that was opened before the \
+                         start (another directory took its path), so it is not mounted",
+                        session.work_src.display()
+                    ))
+                    .fix(crate::work_dir::choose_folder_fix())
+                    .build());
+            }
         }
         let session_binds = backend
             .read_only_binds

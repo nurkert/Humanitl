@@ -47,6 +47,7 @@ const COMMAND: &[&str] = &["/bin/sleep", "30"];
 /// Alles, was eine Sitzung auf der Platte braucht.
 struct Fixture {
     _dir: tempfile::TempDir,
+    _runtime_dir: tempfile::TempDir,
     paths: Paths,
     work: PathBuf,
     _proxy: UnixListener,
@@ -65,8 +66,19 @@ impl Fixture {
     /// Legt Profil, Proxy-Socket, CA und Projektverzeichnis an.
     fn new() -> Self {
         let dir = tempfile::tempdir().expect("a temporary directory");
+        // Das Laufzeitverzeichnis unter `/dev/shm`, wo es das gibt: Die obere
+        // Schicht einer Wegwerf-Sandbox muss auf tmpfs liegen (HUM-350), und
+        // `/tmp` ist das auf den CI-Runnern nicht. Nur dieses: Ein Projekt
+        // unter `/dev` lehnt der Launcher ab.
+        let shm = Path::new("/dev/shm");
+        let runtime_dir = if shm.is_dir() {
+            tempfile::tempdir_in(shm)
+        } else {
+            tempfile::tempdir()
+        }
+        .expect("a temporary runtime directory");
         let home = dir.path().join("home");
-        let runtime = dir.path().join("runtime");
+        let runtime = runtime_dir.path().join("runtime");
         std::fs::create_dir_all(&home).expect("home");
         std::fs::create_dir_all(&runtime).expect("runtime");
         let paths = Paths::new(
@@ -129,6 +141,7 @@ impl Fixture {
 
         Self {
             _dir: dir,
+            _runtime_dir: runtime_dir,
             paths,
             work,
             _proxy: proxy,
@@ -158,6 +171,7 @@ impl Fixture {
                 ask_mode: String::new(),
                 cli_overrides: Vec::new(),
                 work_dir_source: None,
+                sandbox_mode: String::new(),
             })),
         }
     }
@@ -1146,5 +1160,208 @@ async fn refused_sockets_reach_the_stream_counted_before_the_exit() {
     assert!(
         !carries(&seen, "SANDBOX_019"),
         "a sandbox that reports says nothing about not reporting: {seen:?}"
+    );
+}
+
+/// Die wartenden Änderungen eines Stroms, wenn er welche trägt (HUM-350).
+fn disposable_changes(events: &[v1::SandboxEvent]) -> Option<&v1::DisposableChanges> {
+    events.iter().find_map(|event| match &event.event {
+        Some(v1::sandbox_event::Event::Changes(changes)) => Some(changes),
+        _ => None,
+    })
+}
+
+/// Das Ergebnis einer Übernahme oder eines Verwerfens (HUM-350).
+fn outcome(events: &[v1::SandboxEvent]) -> Option<&v1::DisposableOutcome> {
+    events.iter().find_map(|event| match &event.event {
+        Some(v1::sandbox_event::Event::ChangesOutcome(outcome)) => Some(outcome),
+        _ => None,
+    })
+}
+
+/// Die Wegwerf-Sandbox über die RPC (HUM-350): Der Agent schreibt, das
+/// Projekt bleibt unberührt, die Änderungen kommen ohne Frage nach dem Ende,
+/// ein zweiter Wegwerf-Start wartet auf die Entscheidung, die Übernahme
+/// schreibt nur die gewählte Datei, und die Aufzeichnung sagt, was geschah.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_disposable_run_keeps_the_project_and_applies_only_what_was_chosen() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    std::fs::write(fixture.work.join("readme.txt"), "before\n").expect("readme");
+    let service = fixture.service();
+    let mut start = fixture.start();
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.sandbox_mode = "disposable".to_owned();
+        inner.command = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "echo after > /work/readme.txt; echo kept > /work/kept.txt; \
+             echo dropped > /work/dropped.txt; ln -s /etc/shadow /work/out; exit 0"
+                .to_owned(),
+        ];
+    }
+    let seen = events_to_end(&service, start.clone()).await;
+    let listed = disposable_changes(&seen)
+        .unwrap_or_else(|| panic!("the changes come without anyone asking: {seen:?}"));
+    assert!(
+        summary(&seen).is_none(),
+        "a disposable run has no project summary"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.work.join("readme.txt")).expect("readme"),
+        "before\n",
+        "the project is untouched"
+    );
+    assert!(!fixture.work.join("kept.txt").exists());
+    let readme = listed
+        .changes
+        .iter()
+        .find(|change| change.path == "readme.txt")
+        .unwrap_or_else(|| panic!("readme.txt is listed: {listed:?}"));
+    assert!(readme.diff.contains("-before\n+after\n"), "{}", readme.diff);
+    let out = listed
+        .changes
+        .iter()
+        .find(|change| change.path == "out")
+        .unwrap_or_else(|| panic!("the link is listed: {listed:?}"));
+    assert!(!out.refused.is_empty(), "{out:?}");
+
+    // Ein zweiter Wegwerf-Start nimmt die wartenden Änderungen nicht weg.
+    let refused = events_to_end(&service, start).await;
+    assert!(carries(&refused, "SANDBOX_030"), "{refused:?}");
+
+    let ids: Vec<String> = listed
+        .changes
+        .iter()
+        .filter(|change| change.path == "readme.txt" || change.path == "kept.txt")
+        .map(|change| change.id.clone())
+        .collect();
+    let applied = events_to_end(
+        &service,
+        v1::SandboxRequest {
+            op: Some(v1::sandbox_request::Op::ApplyChanges(
+                v1::sandbox_request::ApplyChanges {
+                    sandbox_id: listed.sandbox_id.clone(),
+                    ids,
+                    overwrite: false,
+                },
+            )),
+        },
+    )
+    .await;
+    let done = outcome(&applied).unwrap_or_else(|| panic!("an outcome: {applied:?}"));
+    assert_eq!(done.outcome, "applied");
+    assert_eq!(
+        std::fs::read_to_string(fixture.work.join("readme.txt")).expect("readme"),
+        "after\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.work.join("kept.txt")).expect("kept"),
+        "kept\n"
+    );
+    assert!(!fixture.work.join("dropped.txt").exists());
+    assert!(std::fs::symlink_metadata(fixture.work.join("out")).is_err());
+    assert!(
+        done.discarded.iter().any(|path| path == "dropped.txt"),
+        "{done:?}"
+    );
+
+    assert_nothing_waits_and_the_decision_is_recorded(&fixture, &service, &listed.sandbox_id).await;
+}
+
+/// Nach einer Übernahme wartet nichts mehr, keine Schicht liegt mehr im
+/// Laufzeitverzeichnis, und die Aufzeichnung nennt die Entscheidung
+/// (HUM-350).
+async fn assert_nothing_waits_and_the_decision_is_recorded(
+    fixture: &Fixture,
+    service: &SandboxService,
+    sandbox_id: &str,
+) {
+    // Nichts wartet mehr, und keine Schicht liegt mehr im Laufzeitverzeichnis.
+    let after = events_to_end(
+        service,
+        v1::SandboxRequest {
+            op: Some(v1::sandbox_request::Op::Changes(())),
+        },
+    )
+    .await;
+    assert!(carries(&after, "SANDBOX_031"), "{after:?}");
+    let layers = fixture.paths.runtime_dir().path.join("disposable");
+    assert_eq!(
+        std::fs::read_dir(&layers).map_or(0, Iterator::count),
+        0,
+        "no upper layer stays behind"
+    );
+
+    fixture.recorder.flush().await;
+    let sandbox = humanitl_core::ids::SandboxId::parse(sandbox_id).expect("an id");
+    let row = fixture
+        .recorder
+        .get_session_summary(sandbox)
+        .await
+        .expect("the lookup works")
+        .unwrap_or_else(|| panic!("the decision on {sandbox} is in the recording"));
+    let stored: serde_json::Value = serde_json::from_str(&row.json).expect("json");
+    assert_eq!(stored["disposable"]["outcome"], "applied", "{}", row.json);
+    assert!(
+        stored["disposable"]["applied"]
+            .as_array()
+            .is_some_and(|paths| paths.iter().any(|path| path == "kept.txt")),
+        "{}",
+        row.json
+    );
+}
+
+/// Die Übernahme schreibt in den Ordner, der gestartet wurde, auch wenn sein
+/// Pfad inzwischen woanders hinführt (HUM-350, Review C1).
+///
+/// Mutationsbeweis: Öffnet `Waiting` den Projektordner beim Übernehmen wieder
+/// über den Pfad, landet `moved.txt` im neuen, leeren Ordner.
+#[tokio::test(flavor = "multi_thread")]
+async fn apply_writes_into_the_folder_that_was_started_even_if_its_path_moved() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    let service = fixture.service();
+    let mut start = fixture.start();
+    if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
+        inner.sandbox_mode = "disposable".to_owned();
+        inner.command = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "echo moved > /work/moved.txt; exit 0".to_owned(),
+        ];
+    }
+    let seen = events_to_end(&service, start).await;
+    let listed = disposable_changes(&seen)
+        .unwrap_or_else(|| panic!("the changes come without anyone asking: {seen:?}"));
+    // Der Mensch benennt den Ordner um und legt an seinen Platz einen neuen.
+    let moved = fixture.work.with_file_name("project-moved");
+    std::fs::rename(&fixture.work, &moved).expect("rename the project");
+    std::fs::create_dir(&fixture.work).expect("a new folder at the old path");
+    let applied = events_to_end(
+        &service,
+        v1::SandboxRequest {
+            op: Some(v1::sandbox_request::Op::ApplyChanges(
+                v1::sandbox_request::ApplyChanges {
+                    sandbox_id: listed.sandbox_id.clone(),
+                    ids: Vec::new(),
+                    overwrite: false,
+                },
+            )),
+        },
+    )
+    .await;
+    assert!(outcome(&applied).is_some(), "{applied:?}");
+    assert_eq!(
+        std::fs::read_to_string(moved.join("moved.txt")).expect("written where it started"),
+        "moved\n"
+    );
+    assert!(
+        !fixture.work.join("moved.txt").exists(),
+        "not into the new folder"
     );
 }

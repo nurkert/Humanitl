@@ -82,6 +82,8 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-300 | Terminal as picture-in-picture | M | HUM-298, HUM-302, HUM-303, HUM-305 |
 | HUM-314 | The terminal pane opens further shells as tabs | S | HUM-299, HUM-300, HUM-302, HUM-303, HUM-313 |
 | HUM-315 | The floating terminal docks on the Sandbox page, floats from the empty queue and keeps a title strip | S | HUM-300, HUM-303, HUM-306, HUM-314 |
+| HUM-350 | Disposable sandbox: the project folder as an overlay, with a diff, apply and discard | L | HUM-043, HUM-263, HUM-299 |
+| HUM-351 | The app shows the changes of a disposable sandbox and applies or discards them | M | HUM-350 |
 
 ---
 
@@ -9747,3 +9749,365 @@ eingestellte Modellserver. Drei Dinge stimmten nicht:
   Weg über `flows list --json`.
 - **`passthrough` nur nach Freigabe** (Sonnet, minor): ohne Entscheidung
   wieder ein Strich.
+
+---
+## HUM-350 · Disposable sandbox: the project folder as an overlay, with a diff, apply and discard
+
+Owner request 2026-10-29, put into 0.1.0 on 2026-10-30. Daemon, RPC and
+command line; the changes panel of the app is HUM-351, because it brings its
+own screen, ARB strings and fake scenarios and the issue would otherwise be
+too large to review in one diff.
+
+### Context
+Today the agent writes into the project folder directly (`work_mode = rw`)
+or not at all (`ro`). The owner wants a third way that lets the agent work
+freely and keeps the folder untouched until a human decides: the folder as
+the read-only lower layer of an overlay, every change in an upper layer in
+RAM, and afterwards a diff with "apply" (all or single files) or "discard".
+
+### Decision: the upper layer on the host, read after the end (option a)
+`--tmp-overlay` keeps the upper layer in a tmpfs that exists only in the
+sandbox's mount namespace; after the end nobody can read it. Two ways out:
+
+- **(a)** `--overlay-src LOWER --overlay UPPER WORK /work`, with `UPPER` and
+  `WORK` in a directory the daemon creates on the tmpfs of its runtime
+  directory (`$XDG_RUNTIME_DIR/humanitl/disposable/<id>/`, mode `0700`). The
+  daemon reads the layer after the sandbox has ended.
+- **(b)** The shim (PID 1) builds a diff or archive before it exits and sends
+  it out.
+
+Chosen is **(a)**, because its attack surface is smaller. (b) puts a diff
+engine into PID 1, the process that holds the sandbox together and runs with
+the agent's UID next to it, and opens a second channel out of the sandbox
+whose payload is agent-controlled bytes the daemon has to parse. (a) adds no
+code inside the sandbox and no channel: the daemon reads a directory nobody
+writes to any more, with the same `openat2(RESOLVE_BENEATH |
+RESOLVE_NO_SYMLINKS)` discipline as the session summary (HUM-043). The path
+of the upper layer is not visible inside: `/run` never comes from the host,
+and bubblewrap opens the overlay directories by descriptor before it mounts
+(`upperdir=/proc/self/fd/N` in the sandbox's mount table, measured with
+bubblewrap 0.13.1). The lower layer is the opened project folder as
+`/proc/self/fd/N` (HUM-263); the shim closes that descriptor before the agent
+starts, as for `SourceFd::ProcSelf`.
+
+The price of (a) is the size cap: an unprivileged daemon cannot mount an
+own tmpfs with `size=`. The hard limit is therefore the tmpfs of the runtime
+directory (logind, by default 10 % of RAM); below it the daemon measures that
+file system with `statvfs(2)` and stops the sandbox above its own cap. That is
+a cap with a measuring interval, not a kernel limit, and the spec says so.
+
+### Specification
+1. **Mode.** `sandbox.mode = "direct" | "disposable"` in `config.toml`
+   (tier `basic`, closed to project profiles: a project that switches back to
+   `direct` would give the agent the write path the human deselected). Per
+   start: `SandboxRequest.Start.sandbox_mode` (empty: the configuration),
+   `humanitl run --disposable`, `humanitl sandbox run --disposable`.
+2. **Mounts.** The project folder becomes `--overlay-src /proc/self/fd/N
+   --overlay UPPER WORK /work`; masks and `tmpfs` under `/work` follow as
+   before and lie on the overlay. Per mount type:
+   - project folder: overlay, upper layer reviewed and applied on request;
+   - `mounts.extra_rw` (the user's writable extensions, also the only way to
+     share a package cache): **read-only** (`--ro-bind-fd`). A second overlay
+     per entry would be a second upper layer nobody reviews, and a cache that
+     is only written inside a disposable run gains nothing; read-only keeps
+     the cache usable for reading and leaves no writable host path;
+   - `mounts.extra_ro`, adapter files, CA, shim, proxy socket: unchanged
+     (already read-only);
+   - `tmpfs` (`/tmp`, `/dev/shm`, the profile's list): unchanged, they never
+     came from the host.
+3. **Preconditions** (`SANDBOX_030`, blocking, each with a fix): bubblewrap
+   0.11 or newer (`--overlay`, fix: install command); the runtime directory
+   on tmpfs (fix: `XDG_RUNTIME_DIR=/run/user/<uid>`); the project mounted
+   writable for the agent's view (`work_mode = rw`); no earlier disposable run
+   with changes still waiting (fix: `humanitl sandbox changes`).
+4. **During the run.** A `SizeGuard` measures the growth of the file system
+   under the layer every 250 ms: more than 2 GiB or 200 000 entries (or half
+   of what was free at the start) stops the sandbox with `SANDBOX_032`. The
+   project snapshot of the summary is not taken; a disposable run has no
+   project summary, its changes are the summary.
+5. **After the run.** The layer and the baseline (the project's tree at the
+   start: type, size, `mtime`, mode, no hashes, no skipped names) wait in the
+   daemon. The start stream gets one `SandboxEvent.changes` without anyone
+   asking. Reading requires that the sandbox has ended: bubblewrap is reaped
+   and the sandbox's first process is gone from `/proc` (`SANDBOX_031`
+   otherwise).
+6. **The diff.** Walking the upper layer: a whiteout (character device `0:0`)
+   is a deletion of what the project has there; a directory with
+   `user.overlay.opaque = "y"` deletes every lower entry it does not have; a
+   regular file is added, modified (content hash differs) or mode-changed; a
+   file copied up but unchanged is no change; a symlink is added or modified
+   with its target. Each change carries a conflict note when the project's
+   entry differs from the baseline (for deletions and type changes of a
+   directory, the whole subtree). Never applicable (`refused`): a symlink
+   whose target leaves the project (lexically, never resolved), a device,
+   FIFO or socket, a path whose parent in the project is a symlink, an entry
+   with `user.overlay.redirect` or `user.overlay.metacopy`. Setuid, setgid
+   and sticky bits are reported as dropped, hard links as split. Text files up
+   to 1 MiB get a `diff -u` (Myers, at most 1000 changed lines, at most 64 KiB,
+   control and bidi characters escaped); everything else shows size and
+   SHA-256. Paths are sanitised and identified by the 16-hex path hash.
+   Budgets: 200 000 entries, 64 levels; a cut list refuses "apply all".
+7. **Apply.** `SandboxRequest.apply_changes` with the chosen ids (empty: all)
+   and `overwrite`. Every chosen change is checked first (refused, conflict
+   without `overwrite`); one failure writes nothing and the layer waits.
+   Writing: the parent opened beneath the project without symlinks, missing
+   directories created step by step with `O_NOFOLLOW` and the upper layer's
+   mode; a file under its own name (`O_CREAT | O_EXCL | O_NOFOLLOW`), mode
+   `& 0o777`, `fsync`, `renameat` over the target (replaces a symlink, never
+   follows it); a symlink via `symlinkat` and `renameat`; a deletion without
+   following a symlink. The rest is discarded; the layer goes. A write that
+   fails midway answers `partial` with what was written, and the layer waits.
+8. **Discard.** `SandboxRequest.discard_changes` removes the layer: never
+   following a symlink, giving directories without permissions `0700`,
+   flattening trees deeper than 64 levels instead of recursing. The daemon's
+   end discards a waiting layer, its start sweeps layers a crashed daemon left
+   behind. A waiting layer holds the daemon against `retire_if_idle`.
+9. **Recording.** After apply or discard the run's summary row
+   (`session_summaries`) carries `disposable: {outcome, applied, discarded}`.
+10. **Protocol.** `PROTO_MINOR` 25, `Info.capabilities` names
+    `sandbox.disposable`, `docs/PROTOCOL.md`; a daemon before 25 reads the new
+    operations as `status`.
+11. **Command line.** `humanitl sandbox changes [--stat]` (list with ids, then
+    the diffs), `humanitl sandbox apply [ID ...] [--overwrite] [--yes]` and
+    `humanitl sandbox discard [--yes]`, both asking on the terminal and
+    refusing without one unless `--yes`. `humanitl run` says after the end how
+    many changes wait and names the three commands.
+
+### Security
+A new mount mode and a new write path back to the host: `docs/SECURITY.md`
+(section 5.2, "The disposable sandbox", the CI table and the changelog) and
+`docs/THREAT-MODEL.md` (K-24, table and change history) describe it in the
+same change. The statement in `README.md` is untouched: the network, the one
+door and the filter are the same in both modes; the disposable mode only
+removes the write path to the project for the duration of the run. Declared
+limits: the size cap acts with a 250 ms interval below the hard limit of the
+runtime tmpfs; the conflict check compares type, size, `mtime` and mode, not
+content; requests the agent sent are out regardless of the layer; a daemon
+that ends drops a waiting layer.
+
+### Acceptance criteria
+1. A disposable run changes nothing in the project folder while it runs;
+   `extra_rw` is read-only.
+2. After the end, `humanitl sandbox changes` lists files changed, created and
+   deleted, with a text diff or size and hash.
+3. `apply` writes all or the chosen changes, never a symlink out of the
+   project, a device, a setuid bit or through a symlink in the project, and
+   never over a file changed since the start without `--overwrite`; nothing
+   is written when one check fails.
+4. `discard` and every apply leave no layer behind; the recording names the
+   decision and the files.
+5. The layer cannot grow beyond its cap without the sandbox being stopped.
+6. bubblewrap below 0.11, a runtime directory off tmpfs and a read-only
+   project are refused with `SANDBOX_030` and a fix.
+
+### Umsetzung (HUM-350)
+- **Sandbox-Crate.** Neues Modul `daemon/crates/sandbox/src/disposable/`:
+  `mod.rs` (`Layer` mit `create`, `discard`, `sweep`, `Budget`, `SizeGuard`
+  über `statvfs`, `ensure_ended`, `baseline`, `DisposableRecord`,
+  `remove_tree_at` mit flachem Umhängen ab Tiefe 64), `scan.rs` (Whiteouts,
+  opake Verzeichnisse, Kopie nach oben, Konflikte gegen die Grundlage,
+  Ablehnungen), `apply.rs` (`select` über den Pfad-Hash, `apply` mit
+  Vorprüfung, `ensure_dir`, `write_file` über `O_EXCL` und `renameat`),
+  `text_diff.rs` (Myers, `diff -u`, Maskierung). `LaunchInputs::overlay`,
+  `SandboxProfile::mount_work`, `BwrapBackend::with_overlay` und
+  `check_overlay` (`MIN_OVERLAY_VERSION` 0.11.0). `sha2` als
+  Workspace-Abhängigkeit der Crate (gestreamter Hash großer Dateien).
+- **Konfiguration.** `SandboxRef::mode` mit `SandboxMode` (`direct`,
+  `disposable`), Projekt-Profil gesperrt (CONVENTIONS 4.11), Schema-Fixture
+  und `docs/CONFIG.md` neu erzeugt.
+- **Daemon.** Neues Modul `daemon/crates/ipc/src/disposable.rs` (`Waiting`,
+  Wire-Form, Aufzeichnung); in `sandbox.rs` `launch` → `launch_with` und
+  `watch_layer`, `settle_disposable`, `disposable_changes`, `apply_changes`,
+  `discard_changes`, `drop_layer`, `finish_layer`; `retire_if_idle` und
+  `shutdown` kennen die wartende Schicht; die Zeile der Vorschau zeigt das
+  Overlay mit `LAYER`, die Mount-Tabelle den Ordner als `ro`. `humanitld`
+  räumt beim Start liegengebliebene Schichten weg. Fake: die drei
+  Operationen antworten `SANDBOX_031`.
+- **Befunde.** `SANDBOX_030` (Wegwerf-Sandbox nicht möglich), `SANDBOX_031`
+  (Änderung nicht übernommen, nichts wartet, Sandbox läuft noch),
+  `SANDBOX_032` (Schicht voll); Bereich `SANDBOX` bis 32 erweitert,
+  `docs/DIAGNOSTICS.md`, ARB en/de und `diagnostic_l10n.dart`.
+- **Vertrag.** `SandboxRequest.changes|apply_changes|discard_changes`,
+  `Start.sandbox_mode`, `SandboxEvent.changes|changes_outcome`,
+  `DisposableChange`, `DisposableChanges`, `DisposableOutcome`, `PROTO_MINOR`
+  25, `proto/descriptor.binpb` und `proto/generated.sha256` neu
+  (protoc 27.5, protoc_plugin 25.0.0); die App überspringt die beiden neuen
+  Ereignisse bis HUM-351 (`grpc_daemon_client.dart`).
+- **Kommandozeile.** `bin/humanitl/src/cmd/changes.rs`, `--disposable` an
+  `run` und `sandbox run`, `parity.rs`, `docs/reference/cli.md` und
+  `parity.md` (`cargo xtask docs`), `docs/cli.md` („A disposable session").
+- **Tests.** Einheiten in `disposable/tests.rs` (Kopie nach oben ohne
+  Änderung, hinzugefügt/geändert/Rechte, Whiteout für Datei und Baum, opakes
+  Verzeichnis, FIFO abgelehnt, setuid und harte Verweise, Verzeichnis ohne
+  Rechte, Symlink nach draußen abgelehnt ohne Schreiben, Symlink im Projekt
+  nach dem Start, Datei ersetzt Symlink ohne ihm zu folgen, Konflikte für
+  Datei, Teilbaum und neu angelegte Datei, Auswahl, neue Verzeichnisse,
+  Verwerfen samt `chmod 000`, `work/work` und 192 Ebenen, 20 000 Ebenen mit
+  1 MiB Stapel, Aufräumen, privates Verzeichnis und tmpfs, Grenze Bytes und
+  Einträge, Zombie), `text_diff` (Kontext, neue und gelöschte Datei, binär,
+  zwei Abschnitte, Maskierung, Obergrenze). Mit echtem bwrap:
+  `launcher.rs::a_disposable_sandbox_never_writes_to_the_project` (auch als
+  ESC-5-Fall), Plan-Tests für Overlay, Version und `ro`;
+  `ipc/tests/sandbox_start.rs::a_disposable_run_keeps_the_project_and_applies_only_what_was_chosen`
+  über die RPC samt zweitem Start (`SANDBOX_030`) und Aufzeichnung.
+  `proto_contract` kennt die neuen Felder; `bwrap_args` rendert das Overlay.
+- **Mutationsbeweise**, alle Dateien danach mit `cmp` byte-gleich zurück:
+  Overlay-Zweig in `to_bwrap_args` übergangen: `a_disposable_sandbox_never_writes_to_the_project`
+  rot („the project is untouched“) und der Plan-Test rot; Prüfung `escapes`
+  im Diff aus: `apply_refuses_a_symlink_out_of_the_project_and_writes_nothing`
+  rot; `chmod` in `open_dir_forcing` aus: `discard_leaves_no_upper_layer_behind`
+  rot; flaches Umhängen aus: `discard_flattens_a_tree_deeper_than_the_stack`
+  bricht mit Stapelüberlauf ab; Grenze greift nie: `the_size_cap_holds` rot;
+  Konfliktprüfung aus: `a_file_the_user_changed_since_the_start_is_not_overwritten_unasked`
+  rot; Sonderbits behalten: `setuid_and_setgid_bits_are_stripped_and_hardlinks_split`
+  rot.
+
+### Kandidaten (HUM-350)
+- (A) Fundscan (`SANDBOX_023`, `SANDBOX_026`) über die obere Schicht, bevor
+  übernommen wird: Heute bekommt nur ein direkter Lauf die Funde zu
+  Geheimnissen und zu Dateien, die der Rechner selbst ausführt.
+- (B) Die Konfliktprüfung über einen Hash statt über `mtime` und Größe für
+  Dateien unter einer Grenze; heute fällt eine Änderung, die beides erhält,
+  nicht auf.
+- (C) `sandbox.disposable_max_mb` als Einstellung statt der festen 2 GiB.
+- (D) Eine wartende Schicht über einen Neustart des Daemons hinweg behalten
+  (Grundlage mit ablegen), statt sie beim Abschied zu verwerfen.
+- (E) `humanitl sessions summary` zeigt die Entscheidung über eine
+  Wegwerf-Sandbox (heute nur im JSON der Aufzeichnung).
+- (F) Die Mount-Tabelle bekommt eine eigene Art `overlay` statt `ro`.
+- (G) Die Kosten des Text-Diffs über eine ganze Liste deckeln (Zeit oder Bytes
+  insgesamt): Myers bleibt je Datei unter 1000 Änderungen, aber viele Dateien
+  knapp darunter kosten zusammen viel.
+
+### Review Runde 1 (HUM-350)
+Codex (C) und Opus (O), alle Befunde übernommen; je ein Test, der ohne die
+Behebung rot ist (Mutationsbeweis, Dateien danach mit `cmp` zurück).
+- **O1 Symlink-Paar nach draußen.** `escapes` war lexikalisch; `sub/d -> ..`
+  plus `e -> sub/d/..` landete über dem Projekt. Jetzt `target_stays_inside`:
+  `..` nur am Anfang, höchstens so viele wie die eigene Tiefe, nichts
+  Absolutes; in Diff und Übernahme. Test `a_symlink_pair_that_leads_out_is_refused`.
+- **O2 Löschungen unter opaken Verzeichnissen.** `under_opaque` reist durch den
+  Lauf; darunter verdeckt jedes Verzeichnis die untere Schicht. Test
+  `deletions_below_a_plain_directory_inside_an_opaque_one_are_seen`.
+- **C1 Projekt per Deskriptor.** `Waiting::lower` hält den vor dem Start
+  geöffneten Ordner; das Backend bekommt seinen aufgelösten Ort als
+  `approved_work_dir`. Test `ipc/tests/sandbox_start.rs::apply_writes_into_the_folder_that_was_started_even_if_its_path_moved`
+  (echtes bwrap).
+- **C3/O5 Grundlage vor dem Start** (`baseline_at` auf demselben
+  Deskriptor, vor `launch_with`). Kein deterministischer Test: Der Fehler
+  war ein Zeitfenster.
+- **C4/O4 Grenze ab Anlegen der Schicht.** `Layer` misst beim Anlegen,
+  `SizeGuard::start` vergleicht damit. Test
+  `the_cap_counts_what_was_written_before_the_guard_started`.
+- **C2 Änderung während der Übernahme.** Vor jedem `renameat`, `unlinkat`,
+  `mkdirat` wird gegen den Stand der Vorprüfung verglichen; Abweichung heißt
+  `partial`. Restfenster in SECURITY.md 5.2 und K-24. Test
+  `a_file_changed_while_applying_stops_with_partial`.
+- **C5 Grenze in `sandbox run --disposable`.** `Throwaway` startet denselben
+  `SizeGuard`, öffnet den Ordner einmal und nimmt die Grundlage davor. Kein
+  Test ohne Daemon.
+- **C6 Nur Rechte.** Auch eine reine Rechteänderung schreibt einen neuen
+  Inode. Test `a_mode_change_writes_a_new_inode_and_leaves_a_hard_link_outside_alone`.
+- **C7 Verzeichnis `000`.** Anlegen mit Besitzer-`rwx`, endgültige Rechte am
+  Ende, tiefste zuerst. Test `a_directory_without_permissions_is_filled_before_its_mode_is_set`.
+- **C8** Rechte von Verzeichnissen zählen für Konflikte. Test
+  `a_directory_whose_mode_the_user_changed_is_a_conflict`.
+- **C9/O3** `redirect`/`metacopy` auch an Dateien. Test
+  `a_file_with_a_foreign_overlay_attribute_is_refused`.
+- **O6** Der Satz nennt die abgeschnittene Grundlage und ihre Zahl. Test
+  `a_cut_baseline_says_why_every_addition_is_a_conflict`.
+- **O7** Ein durch ein Verzeichnis ersetzter Symlink steht beim Namen in der
+  Ablehnung. Test `a_symlink_replaced_by_a_directory_is_named_in_the_refusal`.
+- **O8** `chmod_nofollow` über `O_PATH | O_NOFOLLOW` und `/proc/self/fd`
+  statt `chmodat`. Test `changing_a_mode_never_follows_a_symlink`.
+- **O9** `partial` nach einer Löschung nennt `0700`-Verzeichnisse und
+  `.humanitl-flat-*`. Test `a_removal_that_fails_names_what_may_be_left`.
+- **O10** U+061C, U+2028, U+2029, U+2060 bis U+2064 maskiert. Test
+  `line_separators_and_invisible_marks_are_shown_masked`.
+- **O11** `process_lives` vergleicht die Startzeit (Feld 22). Test
+  `a_reused_process_number_is_not_the_sandbox`.
+
+### Review Runde 2 (HUM-350)
+Codex, Delta der Runde 1; alle fünf übernommen, dazu die Härtung der Tests
+über `statvfs`. Mutationsbeweise wie oben, Dateien danach mit `cmp` zurück.
+- **Inode statt Ort.** `BwrapBackend::with_expected_work_inode`: Das Backend
+  hängt den Projektordner nur ein, wenn sein Deskriptor Gerät und Inode des
+  Ordners trägt, den Daemon und `sandbox run --disposable` vor dem Start
+  offen halten; sonst `SANDBOX_006`. Test
+  `launcher.rs::plan_of_a_disposable_sandbox_mounts_only_the_folder_the_caller_holds`.
+- **Löschen Eintrag für Eintrag.** `Expected` hält zum Eintrag den Baum
+  darunter aus der Vorprüfung; `remove_checked` vergleicht jeden Eintrag
+  unmittelbar vor dem Löschen, ein neuer oder geänderter hält an
+  (`partial`). Test `removing_a_directory_stops_at_what_the_user_changed_during_apply`.
+- **Aufgeschobene Rechte geprüft.** `DirModes` merkt Gerät, Inode und Rechte
+  beim Vormerken und setzt nur, wenn alles noch stimmt, über den geprüften
+  Deskriptor. Test `a_deferred_mode_is_not_set_on_a_directory_that_changed`.
+- **`RENAME_NOREPLACE` beim flachen Umhängen**, bei `EEXIST` der nächste
+  Name. Test `flattening_never_replaces_an_existing_directory`.
+- **Verdeckte Löschungen zählen** gegen das Budget von 200 000 Einträgen.
+  Test `hidden_deletions_count_against_the_budget`.
+- **Tests über `statvfs`** laufen nacheinander (ein `Mutex`), schreiben bis
+  zur Auslösung weiter (Größe und Einträge) beziehungsweise 64 MiB gegen
+  1 MiB vor dem Start des Wächters; die Mutationsbeweise bleiben rot.
+
+### Review Runde 3 (HUM-350)
+- **Unlesbarer Teilbaum.** `Expected::observe` lieferte bei einem
+  Verzeichnis, das sich nicht öffnen oder nicht vollständig lesen ließ, still
+  keinen Baum, und das Löschen lief dann ohne Vergleich je Eintrag. Jetzt ist
+  das ein Fehler der Vorprüfung: nichts wird geschrieben. Test
+  `an_unreadable_directory_is_never_removed_unchecked`; Mutation (wieder
+  `None`) rot.
+
+### Review Runde 4 (HUM-350)
+- **Datei durch Verzeichnis ersetzt.** Ohne Baum der Vorprüfung löschte
+  `remove` rekursiv; ein Verzeichnis, das der Mensch nach der Prüfung an die
+  Stelle einer Datei legte, verschwand samt Inhalt. Jetzt nur ein `unlinkat`
+  ohne `AT_REMOVEDIR` (`EISDIR`, `partial`). `remove_tree_at` läuft nur noch
+  über der oberen Schicht (Verwerfen, Aufräumen), im Projekt nie. Test
+  `removing_a_file_never_deletes_a_directory_that_took_its_place`; Mutation
+  (wieder rekursiv) rot.
+
+---
+## HUM-351 · The app shows the changes of a disposable sandbox and applies or discards them
+
+Follow-up of HUM-350, which built daemon, RPC and command line. This issue is
+the app half.
+
+### Specification
+1. **Switch.** The start flow (Sandbox page and the start in the empty
+   queue) gets a switch "Disposable" next to the project folder, shown only
+   when `Info.capabilities` names `sandbox.disposable`. It sends
+   `Start.sandbox_mode`; its default is `sandbox.mode` from `GetConfig`.
+   The settings form offers `sandbox.mode` as a basic setting.
+2. **Changes panel.** When a disposable run ends, the app receives
+   `SandboxEvent.changes` on the start stream, or asks with
+   `SandboxRequest.changes` after a reconnect. A panel on the Sandbox page
+   lists the changes: path (sanitised, with the 16-hex id as tooltip), kind
+   (added, modified, deleted, symlink, mode), size, and the badges
+   "conflict" (with the daemon's sentence), "never applied" (with its
+   reason), "mode bits dropped". A row expands to its `diff` in a monospace
+   view, or size and SHA-256 for binary entries.
+3. **Selection.** Every applicable row has a checkbox, checked by default;
+   refused rows cannot be checked; a conflicting row is unchecked by default
+   and checking it turns on "overwrite" with a confirmation. Buttons:
+   "Apply selected" (confirmation dialog naming the count and the folder,
+   sends `apply_changes` with the chosen ids) and "Discard all"
+   (confirmation, `discard_changes`). The outcome replaces the panel with a
+   one-line result; `SANDBOX_031` shows as a notice with its fix.
+4. **Start guard.** While changes wait, the start button explains that the
+   last disposable run waits for a decision (`SANDBOX_030`) and offers to
+   open the panel.
+5. **Fake.** `HUMANITL_FAKE=disposable` plays a run with a modified text
+   file, a new file, a deleted file, a symlink out of the project and a
+   conflict; `fake_daemon_client.dart` answers the three operations.
+6. **Strings.** All in ARB (en source, de translation); `proto_version.dart`
+   follows to 25.
+
+### Acceptance criteria
+1. A disposable start from the app writes nothing to the project folder; the
+   panel appears after the run without a click.
+2. Applying a subset writes exactly that subset; a refused row cannot be
+   selected; a conflict needs an explicit confirmation.
+3. Discard leaves nothing waiting; the start works again.
+4. Widget tests for the panel (rows, badges, diff, selection, both
+   confirmations) and a golden in both themes.

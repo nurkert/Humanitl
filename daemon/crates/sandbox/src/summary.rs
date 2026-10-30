@@ -402,6 +402,10 @@ pub struct SessionSummary {
     /// ([`SCAN_TOTAL_MAX_BYTES`]). Eine abgeschnittene Zusammenfassung darf
     /// nie aussehen wie eine vollständige.
     pub truncated: bool,
+    /// Was der Mensch mit den Änderungen einer Wegwerf-Sandbox getan hat
+    /// (HUM-350); `None` für jeden anderen Lauf.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disposable: Option<crate::disposable::DisposableRecord>,
 }
 
 impl SessionSummary {
@@ -418,6 +422,7 @@ impl SessionSummary {
             unprotected: Vec::new(),
             scanned_bytes: 0,
             truncated: false,
+            disposable: None,
         }
     }
 
