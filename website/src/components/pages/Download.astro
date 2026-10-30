@@ -1,0 +1,605 @@
+---
+// Die Download-Seite: die aktuelle Version mit ihren Zahlen, darunter je System ein Feld
+// mit den Dateien und den ersten Schritten. Welches System offen ist, wählt das Skript
+// nach dem Gerät des Besuchers; ohne Skript stehen beide untereinander.
+import { Picture } from 'astro:assets';
+
+import Icon from '../Icon.astro';
+import Base from '../../layouts/Base.astro';
+import { languages, releasesUrl, ui, type Lang } from '../../i18n/ui';
+import { platformIcons } from '../../lib/platform-icons';
+import { loadReleases, type Platform } from '../../lib/releases';
+import intercept from '../../assets/screens/intercept.png';
+
+interface Props {
+  lang: Lang;
+}
+const { lang } = Astro.props;
+const t = ui[lang];
+const d = t.download;
+
+const releases = await loadReleases();
+const current = releases.find((release) => !release.prerelease) ?? releases[0];
+const number = (value: number) => value.toLocaleString(languages[lang].locale);
+// „1 Download“, „2 Downloads“: das Wort folgt der Zahl, in beiden Sprachen gleich.
+const times = (value: number) => `${number(value)} ${value === 1 ? d.download : d.downloads}`;
+const date = (value: Date) => value.toLocaleDateString(languages[lang].locale, { day: 'numeric', month: 'long', year: 'numeric' });
+
+const platforms: { id: Platform; icon: keyof typeof platformIcons }[] = [
+  { id: 'macos', icon: 'apple' },
+  { id: 'linux', icon: 'linux' },
+];
+const total = releases.reduce((sum, release) => sum + release.totalDownloads, 0);
+const countFor = (platform: Platform) =>
+  releases.flatMap((release) => release.assets).filter((asset) => asset.platform === platform).reduce((sum, asset) => sum + asset.count, 0);
+const older = releases.filter((release) => release !== current).slice(0, 6);
+---
+
+<Base lang={lang} page="download" title={`${d.title} · Humanitl`} description={d.metaDescription}>
+  <main id="main" class="dl">
+    <div class="dl__sky" aria-hidden="true"></div>
+    <header class="container dl__head">
+      <div class="dl__copy">
+        <h1 class="chrome">{d.title}</h1>
+        <p class="lede">{d.lede}</p>
+        {
+          current && (
+            <dl class="stats">
+              <div class="stats__item">
+                <dt>{d.version}</dt>
+                <dd>
+                  <strong>{current.version}</strong>
+                  <span>
+                    {d.published} {date(current.publishedAt)} · <a href={current.url}>{d.whatsNew}</a>
+                  </span>
+                </dd>
+              </div>
+              {total > 0 && (
+                <div class="stats__item">
+                  <dt>{d.downloads}</dt>
+                  <dd>
+                    <strong>{number(total)}</strong>
+                    <span>
+                      {platforms
+                        .map((p) => ({ name: d.platforms[p.id].name, count: countFor(p.id) }))
+                        .filter((p) => p.count > 0)
+                        .map((p) => `${p.name} ${number(p.count)}`)
+                        .join(' · ')}
+                    </span>
+                  </dd>
+                </div>
+              )}
+            </dl>
+          )
+        }
+        {total > 0 && <p class="stats__note">{d.downloadsNote}</p>}
+      </div>
+      <div class="dl__art" aria-hidden="true">
+        <div class="dl__win">
+          <Picture src={intercept} alt="" formats={['avif']} fallbackFormat="webp" widths={[640, 1280]} sizes="(max-width: 52rem) 90vw, 40vw" loading="eager" />
+        </div>
+      </div>
+    </header>
+
+    <section class="container dl__pick" aria-label={d.systems}>
+      {
+        current ? (
+          <>
+            <div class="tabs" role="tablist" aria-label={d.systems} data-tabs hidden>
+              {platforms.map((p, i) => (
+                <button
+                  class="tabs__tab"
+                  type="button"
+                  role="tab"
+                  id={`tab-${p.id}`}
+                  aria-controls={`panel-${p.id}`}
+                  aria-selected={i === 0 ? 'true' : 'false'}
+                  tabindex={i === 0 ? 0 : -1}
+                  data-tab={p.id}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d={platformIcons[p.icon]} />
+                  </svg>
+                  {d.platforms[p.id].name}
+                  <span class="tabs__badge" data-recommended hidden>
+                    {d.recommended}
+                  </span>
+                </button>
+              ))}
+              <span class="tabs__glider" aria-hidden="true" />
+            </div>
+            {platforms.map((p) => {
+              const info = d.platforms[p.id];
+              const files = current.assets.filter((asset) => asset.platform === p.id);
+              const main = files[0];
+              // Der Befehl nennt die Datei dieser Version, nicht ein Muster für alle im Ordner.
+              const command = info.command.replace('@VERSION@', current.version);
+              return (
+                <article class="panel" role="tabpanel" id={`panel-${p.id}`} aria-labelledby={`tab-${p.id}`} data-panel={p.id}>
+                  <div class="panel__files">
+                    <h2 class="panel__name">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d={platformIcons[p.icon]} />
+                      </svg>
+                      {info.name}
+                    </h2>
+                    <p class="panel__req">{info.req}</p>
+                    {main ? (
+                      <a class="pill pill--light panel__main" href={main.url}>
+                        <Icon name="download" />
+                        {d.get}
+                        <span class="panel__meta">
+                          {d.kinds[main.kind]} · {main.sizeMb} MB
+                        </span>
+                      </a>
+                    ) : (
+                      <a class="pill" href={releasesUrl}>
+                        {d.toGitHub}
+                      </a>
+                    )}
+                    <ul class="files">
+                      {files.map((file) => (
+                        <li>
+                          <a href={file.url}>
+                            <span class="files__name">{file.name}</span>
+                            <span class="files__meta">
+                              {d.kinds[file.kind]} · {file.sizeMb} MB · {times(file.count)}
+                            </span>
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                    {current.checksumsUrl && (
+                      <a class="panel__sums" href={current.checksumsUrl}>
+                        <Icon name="shield" />
+                        {d.checksums}
+                      </a>
+                    )}
+                  </div>
+                  <div class="panel__steps">
+                    <h3>{d.steps}</h3>
+                    <ol>
+                      {info.steps.map((step) => (
+                        <li>{step}</li>
+                      ))}
+                    </ol>
+                    <p class="panel__note">{info.commandNote}</p>
+                    <div class="cmd">
+                      <pre><code>{command}</code></pre>
+                      <button class="cmd__copy" type="button" data-copy={command} aria-label={lang === 'de' ? 'Befehl kopieren' : 'Copy command'}>
+                        <Icon name="copy" />
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </>
+        ) : (
+          <div class="panel panel--empty">
+            <p>{d.none}</p>
+            <a class="pill" href={releasesUrl}>
+              {d.toGitHub}
+            </a>
+          </div>
+        )
+      }
+    </section>
+
+    {
+      older.length > 0 && (
+        <section class="container older" aria-labelledby="older-title">
+          <h2 id="older-title">{d.older}</h2>
+          <ul>
+            {older.map((release) => (
+              <li>
+                <a href={release.url}>
+                  <strong>{release.version}</strong>
+                  <span>{date(release.publishedAt)}</span>
+                  <span>{times(release.totalDownloads)}</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )
+    }
+  </main>
+</Base>
+
+<script>
+  import '../../scripts/download';
+</script>
+
+<style>
+  .dl {
+    position: relative;
+    padding: clamp(7.5rem, 16vh, 10rem) 0 clamp(4rem, 10vh, 7rem);
+    overflow: hidden;
+  }
+  .dl__sky {
+    position: absolute;
+    inset: -10% -10% auto;
+    height: 80vh;
+    background:
+      radial-gradient(40% 50% at 70% 10%, rgb(255 255 255 / 0.08), transparent 70%),
+      radial-gradient(30% 40% at 20% 0%, rgb(232 184 75 / 0.05), transparent 70%);
+    pointer-events: none;
+  }
+  .dl__head {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    align-items: center;
+    gap: clamp(2rem, 5vw, 5rem);
+  }
+  .dl__copy {
+    display: grid;
+    gap: 1.4rem;
+    justify-items: start;
+  }
+  .dl__copy h1 {
+    font-size: clamp(2.6rem, 1.4rem + 4.4vw, 5.2rem);
+  }
+  .stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.2rem 3rem;
+    margin: 0.6rem 0 0;
+  }
+  .stats__item {
+    display: grid;
+    gap: 0.35rem;
+  }
+  .stats dt {
+    font: 500 0.72rem/1 var(--mono);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--fg-2);
+  }
+  .stats dd {
+    display: grid;
+    gap: 0.25rem;
+    margin: 0;
+  }
+  .stats strong {
+    font-size: clamp(2rem, 1.5rem + 1.6vw, 2.9rem);
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    color: #fff;
+  }
+  .stats dd span {
+    color: var(--fg-1);
+    font-size: 0.9rem;
+  }
+  .stats__note {
+    color: var(--fg-2);
+    font-size: 0.82rem;
+  }
+
+  .dl__art {
+    perspective: 1600px;
+  }
+  .dl__win {
+    padding: 8px;
+    border-radius: 20px;
+    border: 1px solid transparent;
+    background:
+      linear-gradient(180deg, #1a1d24, #0b0c10 60%, #121419) padding-box,
+      linear-gradient(150deg, #fff, rgb(255 255 255 / 0.25) 16%, rgb(255 255 255 / 0.06) 45%, rgb(255 255 255 / 0.5)) border-box;
+    box-shadow:
+      0 60px 120px -50px rgb(0 0 0 / 0.95),
+      0 0 80px -20px rgb(220 228 255 / 0.18);
+    transform: rotateY(-18deg) rotateX(6deg) rotateZ(1deg);
+    animation: float-in 1.4s var(--ease-out) both;
+  }
+  .dl__win :global(img) {
+    width: 100%;
+    height: auto;
+    border-radius: 13px;
+  }
+  @keyframes float-in {
+    from {
+      opacity: 0;
+      transform: translateY(60px) rotateY(-30deg) rotateX(20deg) scale(0.9);
+    }
+  }
+  @media (max-width: 52rem) {
+    .dl__head {
+      grid-template-columns: 1fr;
+    }
+    .dl__art {
+      order: -1;
+      max-width: 34rem;
+    }
+  }
+
+  .dl__pick {
+    position: relative;
+    display: grid;
+    gap: 1.4rem;
+    margin-top: clamp(3rem, 8vh, 5rem);
+  }
+  .tabs {
+    position: relative;
+    display: inline-flex;
+    justify-self: start;
+    gap: 0.25rem;
+    padding: 0.3rem;
+    border-radius: 999px;
+    border: 1px solid var(--line-strong);
+    background: rgb(255 255 255 / 0.02);
+  }
+  .tabs[hidden] {
+    display: none;
+  }
+  .tabs__tab {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.65rem 1.2rem;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--fg-1);
+    font: 500 0.95rem/1 var(--font);
+    cursor: pointer;
+    transition: color 0.3s var(--ease-out);
+  }
+  .tabs__tab[aria-selected='true'] {
+    color: #07080b;
+  }
+  .tabs__tab svg {
+    width: 1.05rem;
+    height: 1.05rem;
+    fill: currentColor;
+  }
+  .tabs__badge {
+    padding: 0.18rem 0.45rem;
+    border-radius: 999px;
+    background: rgb(232 184 75 / 0.18);
+    color: var(--accent);
+    font: 500 0.66rem/1 var(--mono);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .tabs__tab[aria-selected='true'] .tabs__badge {
+    background: rgb(7 8 11 / 0.12);
+    color: #6b4e0c;
+  }
+  .tabs__glider {
+    position: absolute;
+    top: 0.3rem;
+    bottom: 0.3rem;
+    left: 0;
+    width: var(--gw, 0);
+    border-radius: 999px;
+    background: linear-gradient(180deg, #fff, #dfe2e8);
+    box-shadow: 0 8px 30px -8px rgb(255 255 255 / 0.4);
+    transform: translateX(var(--gx, 0));
+    transition: transform 0.5s var(--ease-out);
+  }
+
+  .panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+    gap: clamp(1.5rem, 4vw, 4rem);
+    padding: clamp(1.5rem, 3vw, 2.6rem);
+    border-radius: 24px;
+    border: 1px solid transparent;
+    background:
+      linear-gradient(180deg, rgb(18 20 26 / 0.92), rgb(9 10 13 / 0.92)) padding-box,
+      linear-gradient(165deg, rgb(255 255 255 / 0.55), rgb(255 255 255 / 0.07) 26%, rgb(255 255 255 / 0.04) 70%, rgb(255 255 255 / 0.22)) border-box;
+    box-shadow: 0 50px 120px -60px rgb(0 0 0 / 0.95);
+  }
+  .panel[hidden] {
+    display: none;
+  }
+  .panel--empty {
+    grid-template-columns: 1fr;
+    justify-items: start;
+    gap: 1.2rem;
+    color: var(--fg-1);
+  }
+  .panel__files {
+    display: grid;
+    align-content: start;
+    justify-items: start;
+    gap: 1rem;
+  }
+  .panel__name {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.7rem;
+    font-size: clamp(1.6rem, 1.2rem + 1.2vw, 2.2rem);
+    letter-spacing: -0.02em;
+  }
+  .panel__name svg {
+    width: 1.6rem;
+    height: 1.6rem;
+    fill: currentColor;
+  }
+  .panel__req {
+    color: var(--fg-1);
+  }
+  .panel__main {
+    --pill-h: 3.5rem;
+    margin-top: 0.4rem;
+    padding: 0 1.8rem;
+  }
+  .panel__meta {
+    color: #555b68;
+    font-weight: 500;
+  }
+  .files {
+    display: grid;
+    width: 100%;
+    margin: 0.4rem 0 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--line);
+  }
+  .files a {
+    display: grid;
+    gap: 0.15rem;
+    padding: 0.8rem 0;
+    border-bottom: 1px solid var(--line);
+    text-decoration: none;
+    transition: color 0.3s var(--ease-out);
+  }
+  .files__name {
+    font-family: var(--mono);
+    font-size: 0.86rem;
+    color: var(--fg);
+    overflow-wrap: anywhere;
+  }
+  .files__meta {
+    color: var(--fg-2);
+    font-size: 0.82rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .files a:hover .files__name {
+    text-decoration: underline;
+  }
+  .panel__sums {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    color: var(--fg-1);
+    font-size: 0.88rem;
+    text-decoration: none;
+  }
+  .panel__sums:hover {
+    color: var(--fg);
+  }
+  .panel__sums :global(svg) {
+    width: 1.05rem;
+    height: 1.05rem;
+  }
+  .panel__steps {
+    display: grid;
+    align-content: start;
+    gap: 1rem;
+  }
+  .panel__steps h3 {
+    font-size: 1rem;
+    color: var(--fg);
+  }
+  .panel__steps ol {
+    display: grid;
+    gap: 0.8rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    counter-reset: step;
+  }
+  .panel__steps li {
+    position: relative;
+    padding-left: 2.4rem;
+    color: var(--fg-1);
+    counter-increment: step;
+  }
+  .panel__steps li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 0.05rem;
+    display: grid;
+    place-items: center;
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 50%;
+    border: 1px solid var(--line-strong);
+    color: var(--fg);
+    font: 500 0.78rem/1 var(--mono);
+  }
+  .panel__note {
+    color: var(--fg-2);
+    font-size: 0.88rem;
+  }
+  .cmd {
+    position: relative;
+    border-radius: 14px;
+    border: 1px solid var(--line-strong);
+    background: #07080b;
+  }
+  .cmd pre {
+    margin: 0;
+    padding: 1rem 3.4rem 1rem 1.1rem;
+    overflow-x: auto;
+    color: #d5d8df;
+    line-height: 1.8;
+    font-size: 0.85rem;
+  }
+  .cmd__copy {
+    position: absolute;
+    top: 0.55rem;
+    right: 0.55rem;
+    display: grid;
+    place-items: center;
+    width: 2.2rem;
+    height: 2.2rem;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: rgb(255 255 255 / 0.03);
+    color: var(--fg-1);
+    cursor: pointer;
+    transition:
+      color 0.3s var(--ease-out),
+      background 0.3s var(--ease-out);
+  }
+  .cmd__copy:hover {
+    color: #fff;
+    background: rgb(255 255 255 / 0.08);
+  }
+  .cmd__copy :global(svg) {
+    width: 1.05rem;
+    height: 1.05rem;
+  }
+  :global(.cmd__copy[data-copied]) {
+    color: #5fcf8f;
+  }
+  @media (max-width: 52rem) {
+    .panel {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .older {
+    margin-top: clamp(3rem, 8vh, 5rem);
+  }
+  .older h2 {
+    margin-bottom: 1rem;
+    font-size: 1rem;
+    color: var(--fg-1);
+  }
+  .older ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--line);
+  }
+  .older a {
+    display: grid;
+    grid-template-columns: 6rem 1fr auto;
+    gap: 1rem;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--line);
+    color: var(--fg-2);
+    font-size: 0.9rem;
+    font-variant-numeric: tabular-nums;
+    text-decoration: none;
+  }
+  .older a:hover {
+    color: var(--fg);
+  }
+  .older strong {
+    color: var(--fg);
+    font-weight: 500;
+    font-family: var(--mono);
+  }
+</style>

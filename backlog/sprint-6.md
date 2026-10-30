@@ -19,6 +19,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-330 | Vorschau und Mounttabelle zeigen das Seatbelt-Profil | S | HUM-323 |
 | HUM-331 | Der Proxy nimmt unter macOS nur den Shim der laufenden Sitzung an | M | HUM-323 |
 | HUM-332 | Kleinere Folgen aus den Reviews von M12 | S | HUM-312, HUM-323 bis HUM-327 |
+| HUM-333 | Die Website humanitl.de | M | HUM-326 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -126,3 +127,21 @@ Aus der Review von HUM-327 (K-19, K-20): Unter macOS fehlen PID-Namensraum und s
 5. Eine App aus Downloads startet unter macOS aus einer vorübergehenden Kopie (App Translocation); `daemon install` erkennt das und verweigert mit Hinweis auf `/Applications`.
 6. Die Prüfung neuer macOS-Versionen: eine CI-Matrix über `macos-14`, `macos-15` und `macos-latest` für die Escape-Suite.
 7. Ein Probe für unprivilegiertes ICMP (`SOCK_DGRAM`, `IPPROTO_ICMP`) im Shim und in der Escape-Suite.
+
+## HUM-333 · Die Website humanitl.de
+
+Wunsch des Inhabers vom 2026-10-30: eine öffentliche Seite unter humanitl.de, gebaut von GitHub Actions und über GitHub Pages ausgeliefert (Domain, Zertifikat und Pages-Modus „GitHub Actions“ sind eingerichtet). Technik und Aufbau wie whowolf.de (Astro, statisch, Deutsch unter `/`, Englisch unter `/en/`, Impressum von nurkert.de), das Aussehen nach den Vorlagen des Inhabers: tiefschwarzer Raum, schwebende 3D-Glasfenster mit weißen Glanzkanten, Chrom-Überschrift, umrandete Pillen, kein Cyan und kein Magenta.
+
+Akzeptanzkriterien:
+
+- `website/` baut mit `npm ci && npm run build` ohne Fehler; `.github/workflows/website.yml` baut bei Änderungen an `website/`, bei jedem veröffentlichten Release und täglich und liefert nach Pages aus, mit festen Commit-Ständen der Actions und nur den Rechten `contents: read`, `pages: write`, `id-token: write`.
+- Startseite: Die Fenster der App fliegen beim Laden ein und stehen als Fächer unter der Überschrift. Ein angehefteter Abschnitt morpht sie beim Scrollen auf eine gebogene Bühne mit Metallring; danach rastet jedes Stück Scrollweg ein Modul ein, und erst nach dem letzten scrollt die Seite weiter. Pfeile, Wischen und Pfeiltasten drehen den Ring ohne Ende weiter.
+- Die Fenster zeigen echte Bildschirme der App (aufgenommen gegen `humanitld --fake fixtures/sessions/npm-install.jsonl`), keine erfundenen Oberflächen. Jede Aussage der Seite deckt sich mit `README.md` und `docs/SECURITY.md`; es gibt keine erfundenen Zahlen, Nutzer oder Zitate.
+- Download-Seite: aktuelle Version, Dateien je System mit Größe, Download-Zahlen aus der GitHub-API (beim Bauen geholt, nie vom Browser des Besuchers), Prüfsummen, erste Schritte mit kopierbarem Befehl. Das System des Besuchers ist vorgewählt; ohne Skript stehen beide Felder offen.
+- Impressum (beim Bauen von `IMPRINT_URL` geholt und auf wenige Tags reduziert) und Datenschutzerklärung; keine Cookies, kein Tracking, keine Inhalte Dritter, eine Content-Security-Policy ohne Inline-Skripte.
+- Bewegung nur über `transform` und `opacity`, gerechnet nur bei Änderungen; `prefers-reduced-motion` schaltet Einflug und weiche Übergänge ab; ohne Skript zeigt die Startseite den Fächer aus CSS.
+
+Fallstricke: Die Bilder aus `docs/img/` sind Golden-Bilder mit Blöcken statt Text und taugen nicht für die Seite. Das Abzeichen „fake“ in der Statusleiste der App ist abgeschnitten, die Bilder enden über der Statusleiste.
+
+Nicht in diesem Issue: weitere Abschnitte (Bento-Kacheln, Inspector), Doku-Seiten aus `docs/guides/`.
+
