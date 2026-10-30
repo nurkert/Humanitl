@@ -15,6 +15,8 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-318 | Linux-VM als zweites Backend auf macOS (später) | L | HUM-313 |
 | HUM-319 | Tray und Benachrichtigungen auf macOS (später) | M | HUM-315 |
 | HUM-320 | Vorschau und Mounttabelle zeigen das Seatbelt-Profil | S | HUM-313 |
+| HUM-321 | Der Proxy nimmt unter macOS nur den Shim der laufenden Sitzung an | M | HUM-313 |
+| HUM-322 | Kleinere Folgen aus den Reviews von M12 | S | HUM-312 bis HUM-317 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -101,3 +103,24 @@ Aus HUM-313: Der Plan-RPC baut seine Vorschau (`argv_preview`, Mounttabelle der 
 1. Unter macOS zeigt die Vorschau die Kommandozeile von `sandbox-exec` und den Text des Profils, ohne Seiteneffekt (kein Sitzungsverzeichnis, kein Port).
 2. Die Mounttabelle kommt aus derselben Beschreibung wie das Profil (`SeatbeltPolicy`): Projekt mit Modus, Sitzungsverzeichnis, zusätzliche Ordner, Masken.
 3. Der Schalter in der Oberfläche heißt neutral („Exakte Sandbox-Kommandozeile").
+
+## HUM-321 · Der Proxy nimmt unter macOS nur den Shim der laufenden Sitzung an
+
+### Kontext
+Aus der Review von HUM-317 (K-19, K-20): Unter macOS fehlen PID-Namensraum und seccomp. Ein Prozess, der sich mit `setsid` aus der Sitzung des Agenten löst, überlebt das Ende der Sitzung, und das Seatbelt-Profil erlaubt ihm weiter den Proxy-Socket des Daemons, der für den ganzen Lauf des Daemons gilt. Er kann Anfragen stellen, solange der Daemon läuft; `allow`-Regeln und der Passthrough gelten. Dazu erreicht jeder lokale Prozess jedes Kontos den Loopback-Port der Tür.
+
+### Spezifikation
+1. Der Proxy liest unter macOS bei jeder Verbindung auf dem Proxy-Socket die PID der Gegenseite (`getsockopt(LOCAL_PEERPID)`) und nimmt nur Verbindungen der Shims laufender Sitzungen an; der Daemon trägt die PID beim Start ein und beim Ende aus. Abgewiesene Verbindungen zählt und meldet er wie abgewiesene Sockets (HUM-138).
+2. Die Tür des Shims prüft die Gegenseite auf Loopback ebenso über ihre PID und nimmt nur Prozesse derselben Sitzung oder einer weiteren Shell der Sitzung an.
+3. Die Escape-Suite unter macOS bekommt Proben: ein mit `setsid` gelöster Prozess erreicht den Proxy nach dem Ende der Sitzung nicht mehr, ein Prozess außerhalb der Sandbox erreicht die Tür nicht.
+4. `docs/SECURITY.md` Abschnitt 12, K-19 und K-20 werden entsprechend eingeschränkt.
+
+## HUM-322 · Kleinere Folgen aus den Reviews von M12
+
+1. Die Titel im Register der Codes nennen unter macOS systemd (`DAEMON_008`, `DOCTOR_005`); sie werden plattformneutral oder je Plattform.
+2. Kopierbare Befehle nennen unter macOS `humanitl` ohne Pfad, der Befehl liegt aber nur im Bündel; sie nennen den Pfad aus `installServiceCandidate` oder die Anleitung zum Verlinken.
+3. Die Ampel des Fensters sitzt etwa 6 px über der Mitte der 40 px hohen Kopfleiste; im Vollbild bleibt die Lücke von 72 px. `MainFlutterWindow` richtet die Knöpfe aus, die Kopfleiste kennt den Vollbildzustand.
+4. Hinweise auf Tastenkürzel zeigen unter macOS „Ctrl"; sie zeigen ⌘, die `Ctrl`-Form bleibt wirksam.
+5. Eine App aus Downloads startet unter macOS aus einer vorübergehenden Kopie (App Translocation); `daemon install` erkennt das und verweigert mit Hinweis auf `/Applications`.
+6. Die Prüfung neuer macOS-Versionen: eine CI-Matrix über `macos-14`, `macos-15` und `macos-latest` für die Escape-Suite.
+7. Ein Probe für unprivilegiertes ICMP (`SOCK_DGRAM`, `IPPROTO_ICMP`) im Shim und in der Escape-Suite.

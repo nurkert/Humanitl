@@ -354,6 +354,71 @@ shell runs no start files (`bash --norc --noprofile`, `sh` without `ENV`), so an
 planted does not run when it opens. Isolating further shells from the agent (a sub-user namespace
 with another UID, or `hidepid`) is a candidate for a later issue.
 
+The channels K-19 to K-23 exist only on macOS, where the sandbox is Seatbelt instead of bwrap
+([ADR-0019](adr/0019-seatbelt-on-macos.md), [`SECURITY.md` section 12](SECURITY.md#12-macos-seatbelt-instead-of-bubblewrap)).
+
+### K-19 The shared loopback of macOS
+
+There is no network namespace on macOS, so the shim's door listens on a loopback port of the
+host, chosen free per session. Attacker (b) would try to reach other loopback services of the
+host from inside; the profile allows outbound loopback only to the session's own port, and
+`tests/escape/macos/run.sh` checks that another port is refused. In the other direction any
+local process of any account can connect to the door and reaches the proxy as if it were the
+agent. *Residual risk:* such a process sends with the session's rules: what an `allow` rule or the
+passthrough lets through goes out without a hold, the rest lands in the owner's queue, and the
+human sees it as the agent's. HUM-321 restricts the proxy to the session's shim.
+
+### K-20 No PID namespace on macOS
+
+The agent runs in a session of its own (the shim calls `setsid` for it). At the end of the
+command, and three seconds after a stop, the shim kills the processes of that session, in passes
+that repeat until one finds nobody, at most ten. A process that calls `setsid` itself leaves that
+session and outlives the sandbox, and so could one that keeps forking faster than the passes. It
+keeps the profile, and the profile allows it the daemon's proxy socket directly, not only the
+shim's door. *Residual risk:* such a process can keep sending requests for as long as the daemon
+runs, through launchd and across logins; `allow` rules and the passthrough apply, everything else
+is held in the queue after the session ended. It can also keep changing the project directory,
+which the summary of the session does not see. HUM-321 restricts the proxy socket to the shim of
+the running session; until then a restart of the daemon ends such a process's way out.
+
+### K-21 Reading by deny list, paths instead of descriptors on macOS
+
+On Linux the sandbox sees only the mounted trees. On macOS the profile allows reading everything
+outside `/Users`, `/Volumes`, `/private/var/folders` and `/private/tmp`, so attacker (b) reads all
+of `/etc` (the real `passwd` and `hosts`), `/Library`, `/Applications`, `/opt/homebrew` and
+`/usr/local/etc`. *Residual risk:* a credential in a system-wide configuration file reaches the
+agent and, through the passthrough, the model host without a hold. Keep secrets in the home
+directory, which stays unreadable.
+
+The profile names paths. The project directory is resolved and checked against the policy before
+the start, but not pinned by descriptor (HUM-263 on Linux). Seatbelt matches resolved paths, so a
+symbolic link swapped in leads nowhere; only a local process of the same account, outside the
+attackers of this model, could swap in another real directory under the same name between the
+check and the start. Attacker (b)
+cannot do this from inside: the profile lets the agent write only inside the resolved project, its
+session home and tmp.
+
+### K-22 Seatbelt is deprecated
+
+Apple marks `sandbox-exec` as deprecated and documents the profile language only by example; it
+the same kernel mechanism carries the sandboxes of Chrome, Codex and Claude Code, and the escape
+suite passed on macOS 15 (CI) and macOS 27 (development). A future macOS
+could change its behaviour without notice. The macOS escape suite runs on every commit in the CI
+job `macos` and against the bundled programs in every release, on the macOS version of GitHub's
+`macos-15` runners. A change in that version shows up as a red run before a release. On any other
+version the shim measures the guarantees at every start, and a red line stops the session
+(K-15). *Residual risk:* a regression the shim's probes do not cover reaches users of an
+untested version unnoticed.
+
+### K-23 Host-local side channels on macOS
+
+The profile allows POSIX semaphores and shared memory and the Mach services for user data,
+notifications, the system log and preferences, because ordinary tools need them. Each is a channel
+to processes on the same machine, not to the network. Attacker (b) could hand data to a
+cooperating host process through them; that process would then need its own way out, which the
+sandbox does not give it. *Residual risk:* entries in the system log are readable by the user's
+other processes.
+
 ## Assumptions
 
 | ID | Assumption | How to check it | If it breaks |
@@ -424,6 +489,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-29 | B1: the agent's own permission prompts are no boundary; OpenCode's for `webfetch` and `bash` are off | HUM-308 |
 | 2026-10-29 | K-18: further shells next to the agent through a socket pair only the daemon and PID 1 hold, forked inside with the agent's filter on top | HUM-299 |
 | 2026-10-29 | B1: a globally installed pi extension (`pi-web-access`) runs inside the agent with all its restrictions; its requests pass the proxy and are held there when no rule decides them; `agent.pi.web_access` closed to project profiles | HUM-309 |
+| 2026-10-30 | K-19 to K-23: macOS with Seatbelt; shared loopback, no PID namespace, paths instead of descriptors, a deprecated interface, host-local side channels | HUM-313, HUM-317, HUM-321 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

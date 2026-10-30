@@ -188,6 +188,45 @@ path of the daemon in the unpacked directory and enables it. There is no socket
 unit on this path; the daemon binds its socket itself. Keep the directory where
 it is, or run `daemon install` again after moving it.
 
+## Install on macOS
+
+Humanitl builds for macOS 12 or newer, on Apple Silicon and Intel; the release run tests it on
+macOS 15, and it was used on macOS 27. On other versions the isolation check at every start is
+what tells you the sandbox holds. The release carries
+`Humanitl-<version>-macos.dmg` and the same app as `Humanitl-<version>-macos.zip`.
+
+1. Open the disk image and drag Humanitl into Applications.
+2. The app is signed ad hoc, not with an Apple Developer ID, so macOS refuses the first start.
+   Allow it once under System Settings › Privacy & Security › Open Anyway, or in a terminal:
+
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/Humanitl.app
+   ```
+
+   Start the app from Applications, not from the disk image or Downloads: macOS runs a
+   quarantined app from a temporary copy, and the service would point at that copy.
+3. On the setup screen, "Set up the service" runs `humanitl daemon install`. It writes
+   `~/Library/LaunchAgents/dev.humanitl.humanitld.plist`, and launchd starts the daemon now and at
+   every login. Its log is `~/Library/Logs/Humanitl/humanitld.log`.
+
+The command line lies in the app; link it into your `PATH` if you use it often:
+
+```sh
+ln -s /Applications/Humanitl.app/Contents/MacOS/bin/humanitl /usr/local/bin/humanitl
+humanitl daemon status
+humanitl sandbox check        # three green lines
+humanitl daemon restart       # launchctl kickstart, after an update
+humanitl daemon uninstall     # removes the launch agent
+```
+
+Socket and token lie in `~/Library/Application Support/Humanitl/run`. The sandbox is Seatbelt,
+not bubblewrap; there is nothing to install for it. What it guarantees on macOS is in
+[`SECURITY.md` section 12](../SECURITY.md#12-macos-seatbelt-instead-of-bubblewrap). The agent must
+be readable from inside the sandbox, and the home directory is not: a single native binary such as
+OpenCode's may lie anywhere (the start allows that one file), but an agent with support files,
+pi with its Node modules for example, must be installed outside the home directory, through
+`npm install -g` with the Node of Homebrew. `brew install opencode` works as well.
+
 ## Install the agent
 
 Humanitl 0.1 ships two agent adapters, OpenCode (the default) and pi. Install
