@@ -408,7 +408,11 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
                   chipLabel: l10n.editorFindingChip,
                 ),
                 Expanded(child: _panes(draft, notifier, l10n)),
-                if (_prompting) _prompt(tokens, l10n),
+                // Die Bedienelemente unten (Senden, Verwerfen, beide Pausen,
+                // die Rückfrage zum Pseudonymisieren) bleiben greifbar, was
+                // auch schwebt: Der Editor ersetzt die Aktionsleiste, die
+                // das sonst sicherstellt (HUM-352, Review-Runde 1).
+                if (_prompting) HKeepClear(child: _prompt(tokens, l10n)),
                 MappingStrip(
                   replacements: draft.replacements,
                   headingLabel: l10n.editorMapping,
@@ -416,23 +420,25 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
                   typeLabel: l10n.editorMappingType,
                   originalLabel: l10n.editorMappingOriginal,
                 ),
-                _bottom(
-                  context,
-                  draft: draft,
-                  paused: paused,
-                  bar: _ActionBar(
+                HKeepClear(
+                  child: _bottom(
+                    context,
                     draft: draft,
-                    failure: widget.failure,
-                    canSend: widget.canSend && sendable,
-                    problem: problem,
-                    headerProblem: headerProblem,
-                    jsonError: rendered.jsonError,
-                    disabledReason: widget.sendDisabledReason,
-                    onSend: () => _requestSend(draft),
-                    onDiscard: () {
-                      notifier.reset(widget.source);
-                      widget.onClose();
-                    },
+                    paused: paused,
+                    bar: _ActionBar(
+                      draft: draft,
+                      failure: widget.failure,
+                      canSend: widget.canSend && sendable,
+                      problem: problem,
+                      headerProblem: headerProblem,
+                      jsonError: rendered.jsonError,
+                      disabledReason: widget.sendDisabledReason,
+                      onSend: () => _requestSend(draft),
+                      onDiscard: () {
+                        notifier.reset(widget.source);
+                        widget.onClose();
+                      },
+                    ),
                   ),
                 ),
               ],

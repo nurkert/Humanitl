@@ -901,8 +901,14 @@ class _InspectorPane extends StatelessWidget {
             ),
           ),
           // Freigeben und Blockieren bleiben greifbar, was auch schwebt
-          // (HUM-300).
+          // (HUM-300), solange es etwas zu entscheiden gibt. Ohne wartende
+          // Anfrage hält die Leiste nichts frei: Sonst wüchse das schwebende
+          // Terminal unten rechts nie über das Kontext-Pane hinaus, oben
+          // rechts aber bis zur Grenze, und dieselbe Hand bekäme je nach
+          // Ecke ein anderes Fenster (HUM-352). Kommt eine Anfrage, weicht
+          // das Fenster aus wie vor jedem anderen Bereich.
           HKeepClear(
+            enabled: !queueEmpty || (flow?.isHeld ?? false),
             child: ActionBar(
               flow: flow,
               onEdit: onEdit,

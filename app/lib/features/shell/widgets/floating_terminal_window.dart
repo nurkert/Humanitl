@@ -22,12 +22,24 @@ const double floatingTerminalTitleHeight = 28;
 /// The edge of the square in the inner corner that resizes the window.
 const double floatingTerminalGripSize = 14;
 
+/// What the header of the window (title bar and the banner under it) leaves
+/// free for the grip at [anchor] (HUM-352): the width of the grip on the
+/// side where it sits in the top row, nothing while it sits at the bottom.
+EdgeInsets floatingTerminalHeaderInset(FloatAnchor anchor) {
+  if (anchor.gripY != -1) {
+    return EdgeInsets.zero;
+  }
+  return anchor.gripX == -1
+      ? const EdgeInsets.only(left: floatingTerminalGripSize)
+      : const EdgeInsets.only(right: floatingTerminalGripSize);
+}
+
 /// The window: a title bar with the buttons, the terminal below, and the grip
-/// in the inner corner.
+/// in the corner across from the anchor.
 class FloatingTerminalWindow extends StatelessWidget {
-  /// Creates the window held to [corner].
+  /// Creates the window held to [anchor].
   const FloatingTerminalWindow({
-    required this.corner,
+    required this.anchor,
     required this.onDragStart,
     required this.onDragUpdate,
     required this.onDragEnd,
@@ -39,8 +51,9 @@ class FloatingTerminalWindow extends StatelessWidget {
     super.key,
   });
 
-  /// The corner the window holds to; the grip sits across from it.
-  final FloatCorner corner;
+  /// The anchor the window holds to; the grip sits across from it
+  /// ([FloatAnchor.gripX], [FloatAnchor.gripY]).
+  final FloatAnchor anchor;
 
   /// The title bar was taken by the hand.
   final VoidCallback onDragStart;
@@ -48,8 +61,9 @@ class FloatingTerminalWindow extends StatelessWidget {
   /// The title bar moved by the given distance.
   final ValueChanged<Offset> onDragUpdate;
 
-  /// The title bar was let go, or the drag was cancelled.
-  final VoidCallback onDragEnd;
+  /// The title bar was let go with the given velocity in logical pixels per
+  /// second, or the drag was cancelled ([Offset.zero]).
+  final ValueChanged<Offset> onDragEnd;
 
   /// The grip was taken by the hand.
   final VoidCallback onResizeStart;
@@ -70,10 +84,12 @@ class FloatingTerminalWindow extends StatelessWidget {
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
-    // Unten verankert, säße der Griff oben in der Titelleiste und auf dem
-    // Schließen- oder Zurück-Knopf (Review-Runde 1); er beginnt deshalb
-    // unter ihr.
-    final double gripTop = floatingTerminalTitleHeight;
+    // Der Griff sitzt in der Ecke des Fensters, gegenüber dem Anker. Steht
+    // er oben, liegt er in der Titelleiste; Titelleiste und Banner rücken
+    // dann auf seiner Seite um seine Breite ein, sodass weder Titel noch
+    // Knöpfe noch der Hinweis unter ihm liegen (HUM-352). Früher begann er
+    // unter der Titelleiste und lag so auf dem Hinweis.
+    final EdgeInsets headerInset = floatingTerminalHeaderInset(anchor);
     // Kein Schatten (`docs/DESIGN.md`, Antireferenz 5): Die kräftige Linie
     // und die Fläche `bg1` heben das Fenster von der Seite darunter ab.
     return Semantics(
@@ -95,30 +111,32 @@ class FloatingTerminalWindow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
                   _TitleBar(
+                    inset: headerInset,
                     onDragStart: onDragStart,
                     onDragUpdate: onDragUpdate,
                     onDragEnd: onDragEnd,
                     onBack: onBack,
                     onClose: onClose,
                   ),
-                  const Expanded(
+                  Expanded(
                     child: SandboxTerminal(
-                      key: Key('shell-terminal-floating-view'),
+                      key: const Key('shell-terminal-floating-view'),
                       catchUp: true,
                       floating: true,
+                      headerInset: headerInset,
                     ),
                   ),
                 ],
               ),
               Positioned(
-                left: corner.left ? null : 0,
-                right: corner.left ? 0 : null,
-                top: corner.top ? null : gripTop,
-                bottom: corner.top ? 0 : null,
+                left: anchor.gripX == -1 ? 0 : null,
+                right: anchor.gripX == -1 ? null : 0,
+                top: anchor.gripY == -1 ? 0 : null,
+                bottom: anchor.gripY == -1 ? null : 0,
                 width: floatingTerminalGripSize,
                 height: floatingTerminalGripSize,
                 child: _Grip(
-                  corner: corner,
+                  anchor: anchor,
                   onStart: onResizeStart,
                   onUpdate: onResizeUpdate,
                   onEnd: onResizeEnd,
@@ -135,6 +153,7 @@ class FloatingTerminalWindow extends StatelessWidget {
 /// The bar the window is dragged by, with "back to the sandbox" and "close".
 class _TitleBar extends StatelessWidget {
   const _TitleBar({
+    required this.inset,
     required this.onDragStart,
     required this.onDragUpdate,
     required this.onDragEnd,
@@ -142,9 +161,11 @@ class _TitleBar extends StatelessWidget {
     required this.onClose,
   });
 
+  /// The room the grip takes on one side of the bar (HUM-352).
+  final EdgeInsets inset;
   final VoidCallback onDragStart;
   final ValueChanged<Offset> onDragUpdate;
-  final VoidCallback onDragEnd;
+  final ValueChanged<Offset> onDragEnd;
   final VoidCallback onBack;
   final VoidCallback onClose;
 
@@ -162,12 +183,18 @@ class _TitleBar extends StatelessWidget {
         dragStartBehavior: DragStartBehavior.down,
         onPanStart: (DragStartDetails _) => onDragStart(),
         onPanUpdate: (DragUpdateDetails details) => onDragUpdate(details.delta),
-        onPanEnd: (DragEndDetails _) => onDragEnd(),
-        onPanCancel: onDragEnd,
+        // Die Geschwindigkeit beim Loslassen entscheidet mit, wohin das
+        // Fenster einrastet (HUM-352); ein abgebrochener Zug hat keine.
+        onPanEnd: (DragEndDetails details) =>
+            onDragEnd(details.velocity.pixelsPerSecond),
+        onPanCancel: () => onDragEnd(Offset.zero),
         child: Container(
           height: floatingTerminalTitleHeight,
           color: tokens.colors.bg2,
-          padding: EdgeInsets.only(left: tokens.spacing.x2),
+          padding: EdgeInsets.only(
+            left: tokens.spacing.x2 + inset.left,
+            right: inset.right,
+          ),
           child: Row(
             children: <Widget>[
               Expanded(
@@ -217,13 +244,13 @@ class _TitleBar extends StatelessWidget {
 /// The square in the inner corner that resizes the window.
 class _Grip extends StatelessWidget {
   const _Grip({
-    required this.corner,
+    required this.anchor,
     required this.onStart,
     required this.onUpdate,
     required this.onEnd,
   });
 
-  final FloatCorner corner;
+  final FloatAnchor anchor;
   final VoidCallback onStart;
   final ValueChanged<Offset> onUpdate;
   final VoidCallback onEnd;
@@ -231,11 +258,9 @@ class _Grip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
-    // Der Griff sitzt gegenüber der Ecke, an der das Fenster hängt: oben
-    // links oder unten rechts zieht schräg nach links oben, die anderen
-    // beiden nach rechts oben.
-    final bool falling =
-        corner == FloatCorner.topLeft || corner == FloatCorner.bottomRight;
+    // Der Griff sitzt gegenüber dem Anker: oben links oder unten rechts zieht
+    // schräg nach links oben, die anderen beiden nach rechts oben.
+    final bool falling = anchor.gripX == anchor.gripY;
     return MouseRegion(
       cursor: falling
           ? SystemMouseCursors.resizeUpLeftDownRight
@@ -251,9 +276,10 @@ class _Grip extends StatelessWidget {
         child: CustomPaint(
           painter: _GripPainter(
             color: tokens.colors.fg2,
-            // Die Linien laufen parallel zur Kante der freien Ecke.
-            towardsRight: !corner.left,
-            towardsBottom: !corner.top,
+            // Die Linien liegen in der Ecke des Fensters, in der der Griff
+            // sitzt, und laufen quer zu ihr.
+            towardsRight: anchor.gripX == 1,
+            towardsBottom: anchor.gripY == 1,
           ),
         ),
       ),
@@ -261,7 +287,8 @@ class _Grip extends StatelessWidget {
   }
 }
 
-/// Two short diagonal strokes in the free corner of the grip.
+/// Two short diagonal strokes in the corner of the grip that is the corner of
+/// the window.
 class _GripPainter extends CustomPainter {
   const _GripPainter({
     required this.color,

@@ -11,13 +11,24 @@
 /// **What it never covers.** Every region marked with `HKeepClear` -- the
 /// queue with its rows and notices, the bar with Allow and Block, the notices
 /// of the shell, an open sheet, a modal -- stays free. The window snaps to the
-/// corner the person chose; when something to keep clear lies there, it
-/// takes the next free corner, then the smallest size, and when no corner is
+/// anchor the person chose (a corner, the middle of an edge or the centre,
+/// HUM-352); when something to keep clear lies there, it takes the smallest
+/// size, then the next free corner, and when no corner is
 /// free it shrinks to a slim title strip that finds a place of its own
 /// (`placeTerminalStrip`, `floating_terminal_strip.dart`, HUM-315); only
 /// without room even for that it steps back until there is room. Two
 /// exceptions while a hand holds it: a resize never grows into such a region,
 /// a drag may pass over one, and both give way again when they are let go.
+///
+/// **Letting go (HUM-352).** A drag ends at an anchor, never in between. A
+/// calm drop takes the nearest anchor; a throw takes the next anchor in the
+/// direction of the throw (`FloatAnchor.release`). The window then glides
+/// there in `HMotion.arrive`, under reduced motion it jumps.
+///
+/// **Resizing (HUM-352).** One rule at every anchor: the window grows away
+/// from the edges it holds to, around its middle on a middle axis, up to the
+/// same share of the region at every anchor (`terminalFloatMaxIn`), and up to
+/// the edge of a region to keep clear rather than one step short of it.
 ///
 /// **The keyboard.** No focus scope of its own and no `HLayerScope`: the
 /// window is part of the work, not a layer above it, so the terminal in it
@@ -84,18 +95,48 @@ class FloatingTerminalLayer extends ConsumerStatefulWidget {
       _FloatingTerminalLayerState();
 }
 
-class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
+class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer>
+    with SingleTickerProviderStateMixin {
   /// Where the window's top left stands while it is dragged; null otherwise.
   Offset? _dragOrigin;
 
   /// The size while the grip is dragged; null otherwise.
   Size? _resizing;
 
-  /// The last place, region and corner the layout gave the window: where a
+  /// The last place, region and anchor the layout gave the window: where a
   /// drag or a resize starts from.
   Rect? _shown;
   Rect _region = Rect.zero;
-  FloatCorner _shownCorner = FloatCorner.bottomRight;
+  FloatAnchor _shownAnchor = FloatAnchor.bottomRight;
+
+  /// Where the window was let go, while it glides to its anchor (HUM-352).
+  Rect? _glideFrom;
+
+  /// Drives the glide from [_glideFrom] to the anchor. Kept at its duration
+  /// when the platform reports `disableAnimations` (`docs/UX.md` 2.10); the
+  /// reduced motion of this program drops the glide instead
+  /// ([HReducedMotion.displace]).
+  late final AnimationController _glide = AnimationController(
+    vsync: this,
+    duration: HMotion.arrive,
+    animationBehavior: AnimationBehavior.preserve,
+  )..addListener(_glided);
+
+  late final CurvedAnimation _glideCurve = CurvedAnimation(
+    parent: _glide,
+    curve: HMotion.enter,
+  );
+
+  void _glided() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      if (_glide.isCompleted) {
+        _glideFrom = null;
+      }
+    });
+  }
 
   /// The render box of the window's region, from its last layout: what a
   /// resize measures the regions to keep clear against.
@@ -155,6 +196,8 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
   void dispose() {
     HKeepClear.changes.removeListener(_regionsChanged);
     _linger?.cancel();
+    _glideCurve.dispose();
+    _glide.dispose();
     super.dispose();
   }
 
@@ -250,30 +293,64 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
     _region = region;
     final RenderObject? box = context.findRenderObject();
     _regionBox = box is RenderBox ? box : null;
-    final Rect? rect =
+    final Rect? target =
         _interactiveRect(region, inset) ?? _avoiding(region, geometry, inset);
-    _shown = rect;
-    if (rect == null) {
+    if (target == null) {
+      _shown = null;
+      _glideFrom = null;
       return _strip(region, geometry, inset);
     }
+    // Wo das Fenster gerade steht, auch mitten im Gleiten: Ein Zug, der dann
+    // beginnt, beginnt dort und nicht am Ziel (HUM-352, Review-Runde 1).
+    final Rect rect = _gliding(target);
+    _shown = rect;
     return Stack(
       children: <Widget>[
         Positioned.fromRect(
           rect: rect,
-          child: FloatingTerminalWindow(
-            corner: _shownCorner,
-            onDragStart: _dragStarted,
-            onDragUpdate: _dragged,
-            onDragEnd: _dragEnded,
-            onResizeStart: _resizeStarted,
-            onResizeUpdate: _resized,
-            onResizeEnd: _resizeEnded,
-            onBack: widget.onBack,
-            onClose: ref.read(terminalPlacementProvider.notifier).dock,
+          // Die Hinweise im Fenster (die erste Shell, eine Absage) halten
+          // nichts frei: Das Fenster wiche sonst sich selbst aus, nähme sie
+          // mit und käme im nächsten Bild zurück (HUM-352).
+          child: HKeepClearExempt(
+            child: FloatingTerminalWindow(
+              anchor: _shownAnchor,
+              onDragStart: _dragStarted,
+              onDragUpdate: _dragged,
+              onDragEnd: _dragEnded,
+              onResizeStart: _resizeStarted,
+              onResizeUpdate: _resized,
+              onResizeEnd: _resizeEnded,
+              onBack: widget.onBack,
+              onClose: ref.read(terminalPlacementProvider.notifier).dock,
+            ),
           ),
         ),
       ],
     );
+  }
+
+  /// Where the window stands while it glides to [target] after a drop: on
+  /// the way from where it was let go. Only the place glides, never the size;
+  /// a window that changes its size on the way would resize the session in
+  /// every frame, so a drop that changes the size jumps.
+  ///
+  /// **The way is checked, not only the goal.** The rule of the anchors keeps
+  /// the goal free; the way from a drop over Allow and Block would still
+  /// cross them for the length of the glide. When the rectangle the glide
+  /// sweeps touches a region to keep clear, the window jumps instead
+  /// (HUM-352, review round 1).
+  Rect _gliding(Rect target) {
+    final Rect? from = _glideFrom;
+    if (from == null || from.size != target.size || !_glide.isAnimating) {
+      return target;
+    }
+    final Rect swept = from.expandToInclude(target);
+    if (_keepClear().any((Rect zone) => zone.overlaps(swept))) {
+      _glide.stop();
+      _glideFrom = null;
+      return target;
+    }
+    return Rect.lerp(from, target, _glideCurve.value) ?? target;
   }
 
   /// The title strip in the first free corner from the chosen one, or
@@ -281,7 +358,7 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
   Widget _strip(Rect region, TerminalFloatGeometry geometry, double inset) {
     final FloatPlacement? placement = placeTerminalStrip(
       region: region,
-      corner: geometry.corner,
+      anchor: geometry.anchor,
       size: HTheme.of(context).sizes.terminalStrip,
       keepClear: _keepClear(),
       inset: inset,
@@ -335,7 +412,7 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
     if (placement == null) {
       return null;
     }
-    _shownCorner = placement.corner;
+    _shownAnchor = placement.anchor;
     return placement.rect;
   }
 
@@ -359,7 +436,7 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
     if (size != null) {
       return terminalFloatRectAt(
         region,
-        _shownCorner,
+        _shownAnchor,
         clampTerminalFloatSize(size, region: region.size),
         inset,
       );
@@ -373,6 +450,8 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
   void _dragStarted() {
     final Rect? shown = _shown;
     if (shown != null) {
+      _glide.stop();
+      _glideFrom = null;
       _dragFrom = shown.topLeft;
       setState(() => _dragOrigin = shown.topLeft);
     }
@@ -385,9 +464,9 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
     }
   }
 
-  /// Snaps to the corner of the quadrant the window was let go in, and keeps
-  /// that corner.
-  void _dragEnded() {
+  /// Snaps to the anchor the drop and its [velocity] point to
+  /// ([FloatAnchor.release]), keeps that anchor, and glides there.
+  void _dragEnded(Offset velocity) {
     // Ohne Zug kein Einrasten: Ein Klick auf die Titelleiste oder einen ihrer
     // Knöpfe endet als abgebrochener Zug, oder, steht der Zug allein in der
     // Arena, als Zug ohne Weg. Die Ecke, in die das Fenster gerade ausweicht,
@@ -406,9 +485,17 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
     // und das Loslassen können vor dem nächsten Frame ankommen.
     final Rect? shown = _interactiveRect(_region, 0) ?? _shown;
     if (shown != null) {
+      final double inset = HTheme.of(context).spacing.x3;
       ref
           .read(terminalFloatProvider.notifier)
-          .snapTo(FloatCorner.nearest(_region, shown.center));
+          .snapTo(FloatAnchor.release(_region, shown, inset, velocity));
+      final Duration glide = HReducedMotion.displace(context, HMotion.arrive);
+      if (glide > Duration.zero) {
+        _glideFrom = shown;
+        _glide
+          ..duration = glide
+          ..forward(from: 0);
+      }
     }
     setState(() => _dragOrigin = null);
   }
@@ -420,38 +507,36 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
     }
   }
 
-  /// The grip sits in the corner across from the one the window holds to, so
-  /// moving it away from that corner makes the window larger. Each direction
-  /// is taken only while the window does not grow into a region to keep
-  /// clear: the hand cannot pull it over Allow and Block.
+  /// The grip sits in the corner across from the anchor, so moving it away
+  /// from the anchor makes the window larger; on a middle axis the window
+  /// grows on both sides, by twice the way of the grip, so the grip stays
+  /// under the hand. Each direction grows only as far as the window does not
+  /// reach into a region to keep clear: the hand cannot pull it over Allow
+  /// and Block, and it stops at their edge, not one step of the pointer
+  /// before it (HUM-352).
   void _resized(Offset delta) {
     final Size? size = _resizing;
     if (size == null) {
       return;
     }
-    final double dx = _shownCorner.left ? delta.dx : -delta.dx;
-    final double dy = _shownCorner.top ? delta.dy : -delta.dy;
-    final List<Rect> keepClear = _keepClear();
-    final double inset = HTheme.of(context).spacing.x3;
-    bool free(Size candidate) {
-      final Rect rect = terminalFloatRectAt(
-        _region,
-        _shownCorner,
-        clampTerminalFloatSize(candidate, region: _region.size),
-        inset,
-      );
-      return !keepClear.any((Rect zone) => zone.overlaps(rect));
-    }
-
-    Size next = size;
-    final Size wider = Size(next.width + dx, next.height);
-    if (dx <= 0 || free(wider)) {
-      next = wider;
-    }
-    final Size taller = Size(next.width, next.height + dy);
-    if (dy <= 0 || free(taller)) {
-      next = taller;
-    }
+    final FloatAnchor anchor = _shownAnchor;
+    final double dx = delta.dx * anchor.gripX * (anchor.x == 0 ? 2 : 1);
+    final double dy = delta.dy * anchor.gripY * (anchor.y == 0 ? 2 : 1);
+    final Size next = growTerminalFloat(
+      region: _region,
+      anchor: anchor,
+      from: growTerminalFloat(
+        region: _region,
+        anchor: anchor,
+        from: size,
+        by: Size(dx, 0),
+        keepClear: _keepClear(),
+        inset: HTheme.of(context).spacing.x3,
+      ),
+      by: Size(0, dy),
+      keepClear: _keepClear(),
+      inset: HTheme.of(context).spacing.x3,
+    );
     setState(() => _resizing = next);
   }
 

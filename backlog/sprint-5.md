@@ -84,6 +84,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-315 | The floating terminal docks on the Sandbox page, floats from the empty queue and keeps a title strip | S | HUM-300, HUM-303, HUM-306, HUM-314 |
 | HUM-350 | Disposable sandbox: the project folder as an overlay, with a diff, apply and discard | L | HUM-043, HUM-263, HUM-299 |
 | HUM-351 | The app shows the changes of a disposable sandbox and applies or discards them | M | HUM-350 |
+| HUM-352 | The floating terminal keeps its resize grip in the corner and grows equally in every corner | M | HUM-300, HUM-314, HUM-315 |
 
 ---
 
@@ -10111,3 +10112,158 @@ the app half.
 3. Discard leaves nothing waiting; the start works again.
 4. Widget tests for the panel (rows, badges, diff, selection, both
    confirmations) and a golden in both themes.
+
+---
+## HUM-352 · The floating terminal keeps its resize grip in the corner and grows equally in every corner
+
+### Kontext
+Befund des Owners am 2026-10-30, mit Bildschirmfotos, zum schwebenden
+Terminal aus HUM-300 und HUM-315. Unten rechts angedockt saß der Griff zum
+Ändern der Größe oben links unter der Titelleiste, und Titel „Agent
+terminal" wie Hinweiszeile („Agent output is untrusted…") begannen unter
+seinen schrägen Strichen. Unten rechts ließ sich das Fenster außerdem nicht
+so weit nach links ziehen wie oben rechts. Am selben Tag hat der Owner den
+Umfang erweitert: Das Fenster soll sich wie ein Teil der Anwendung anfühlen,
+nicht wie ein Nachtrag, mit neun Ankern und einem Einrasten, das den Schwung
+der Hand ernst nimmt. Dazu kam ein dringender Fehler aus demselben Code: Über
+History, schwebend, „+ Shell" und ein Wechsel des Reiters ließen das Fenster
+mehrmals je Sekunde zwischen einem großen Fenster links oben und einem
+kleinen rechts oben springen; auch nach Schließen und erneutem Öffnen kam es
+mit dem Reiter der Shell sofort zurück.
+
+**Die Ursachen.** (1) Der Griff begann unten verankert bei 28 px, also unter
+der Titelleiste und auf dem Banner (Review-Runde 1 von HUM-300 hatte ihn
+dorthin gelegt, weg von den Knöpfen). (2) Die Rechnung der Größe ist an
+allen Ecken dieselbe (`terminalFloatMaxIn`); auf Intercept hielt aber die
+Leiste mit Freigeben und Blockieren unten in der Mitte auch dann frei, wenn
+nichts wartete, sodass das Fenster unten rechts nie über das Kontext-Pane
+hinauswuchs. Außerdem verwarf `_resized` einen Schritt, der in einen
+freizuhaltenden Bereich reichte, ganz und hielt damit um die Länge des
+letzten Zeigerschritts vor der Kante. (3) Der Hinweis zur ersten Shell
+(`TerminalTabNotices`, HUM-314) steht in einer `HNoticeLayer` im
+schwebenden Fenster selbst und meldete sich als `HKeepClear`: Das Fenster
+wich sich selbst aus, nahm den Hinweis mit, wurde dabei kleiner, und im
+nächsten Bild war die gewählte Ecke wieder frei. Dazu baute die verborgene
+Sandbox-Seite nur neu, wenn das Terminal zu ihr zurückkam, nicht wenn es
+ging; nach „Schließen" und erneutem Schweben blieb sie ein zweiter Wirt
+derselben Sitzung.
+
+### Spezifikation
+1. **Neun Anker.** `FloatCorner` wird `FloatAnchor` mit neun Werten auf
+   einem Raster von drei mal drei (`x`, `y` je -1, 0, 1): die vier Ecken,
+   die Mitten der vier Kanten (`topCenter`, `bottomCenter`, `centerLeft`,
+   `centerRight`) und `center`. Die Ecken behalten ihre Namen, ein in der
+   Zustandsdatei gespeicherter Anker (`terminalFloatCorner`) überlebt das
+   Update. Ein Anker hält `x3` Abstand zu den Kanten, an denen er hängt,
+   und liegt auf einer mittleren Achse mittig (`terminalFloatRectAt`, eine
+   Regel für alle). Ausweichen geht wie bisher in die Ecken, ausgehend von
+   der Ecke des Ankers (`homeCorner`: auf einer mittleren Achse rechts
+   beziehungsweise unten); eine Mitte nimmt das Fenster nur, wenn sie
+   gewählt ist.
+2. **Der Griff.** Er sitzt bündig in der Ecke des Fensters gegenüber dem
+   Anker (`gripX`, `gripY`); auf einer mittleren Achse rechts beziehungsweise
+   unten, also in der Ecke zur Mitte des Fensters hin, auf der Seite der
+   Vorgabe. Seine Striche liegen in dieser Ecke. Steht er oben, rücken
+   Titelleiste und Banner auf seiner Seite um seine Breite ein
+   (`floatingTerminalHeaderInset`, `TerminalPane.headerInset`); unten
+   rückt nichts ein.
+3. **Größe überall gleich.** Am Griff wächst das Fenster weg von den Kanten,
+   an denen es hängt, auf einer mittleren Achse nach beiden Seiten um den
+   doppelten Weg der Hand, an jedem Anker bis zu `terminalFloatMaxIn`. Die
+   Rechnung steht rein in `growTerminalFloat`: Ein Schritt, der in einen
+   freizuhaltenden Bereich reichte, wird bis an dessen Kante genommen statt
+   verworfen. Die Leiste mit Freigeben und Blockieren hält nur frei, solange
+   etwas wartet (`HKeepClear.enabled`); kommt eine Anfrage, weicht das
+   Fenster aus wie vor jedem anderen Bereich.
+4. **Einrasten mit Schwung.** Beim Loslassen zählt die Geschwindigkeit aus
+   `DragEndDetails` (`FloatAnchor.release`): unter
+   `terminalFloatFlingSpeed` (400 px/s) der nächste Anker, darüber vom
+   nächsten Anker ein Schritt auf dem Raster in Richtung des Wurfs, in acht
+   Richtungen geschnitten und nie über das Raster hinaus. Ein kurzer Wurf
+   aus einer Ecke landet beim Nachbarn, nicht zurück am Start. Das Fenster
+   gleitet in `HMotion.arrive` mit `enter` an seinen Platz, nur der Ort,
+   nie die Größe; unter reduzierter Bewegung springt es
+   (`HReducedMotion.displace`).
+   Ein abgebrochener Zug (`onPanCancel`, etwa wenn ein anderer Erkenner
+   gewinnt) zählt als ruhiges Loslassen ohne Geschwindigkeit: Nach echtem
+   Weg rastet das Fenster am nächsten Anker ein und speichert ihn, ohne Weg
+   bleibt alles, wie es war. Der Weg des Gleitens wird geprüft, nicht nur
+   das Ziel: Berührt das überstrichene Rechteck einen freizuhaltenden
+   Bereich, springt das Fenster. Ein Zug während des Gleitens beginnt dort,
+   wo das Fenster gerade steht.
+5. **Kein Ausweichen vor sich selbst.** `HKeepClearExempt` in `packages/ui`
+   nimmt jeden `HKeepClear` darunter aus; die schwebende Ebene legt ihn um
+   das Fenster. Die Sandbox-Seite baut bei jedem Wechsel des Wirts neu, auch
+   verborgen und auch beim Gehen.
+6. Streifen (HUM-315), Andocken und Schweben bleiben, wie sie sind; der
+   Anker wird gespeichert wie bisher die Ecke. `docs/UX.md` (5.2 und die
+   Tabelle der Bewegungen) und `docs/DESIGN.md` beschreiben Anker, Griff,
+   Einrasten und die Ausnahmen von `HKeepClear`.
+
+### Akzeptanzkriterien
+1. Widget-Test: An jedem der neun Anker liegt der Griff bündig in der Ecke
+   gegenüber und schneidet weder Titel noch Hinweis noch einen Knopf.
+2. Widget-Test: An jedem Anker erreicht der Griff dieselbe größte Größe;
+   auf Intercept mit leerer Warteschlange wächst das Fenster unten rechts so
+   groß wie oben rechts.
+3. Widget-Test: Jeder Anker ist mit einem ruhigen Zug erreichbar und wird
+   gespeichert.
+4. Widget-Test: Ein Wurf aus jeder Ecke zu jedem ihrer beiden Nachbarn
+   landet dort; derselbe Weg langsam landet wieder am Start.
+5. Widget-Test: History, schwebend, groß links oben, „+ Shell", zurück zum
+   Agenten: Kein Bereich im Fenster hält frei, 60 Bilder lang steht das
+   Fenster still, genau eine `TerminalView`. Dann schließen,
+   `Ctrl+Shift+P`, Reiter der Shell: dasselbe.
+6. Reine Tests: `terminalFloatRectAt` für alle Anker, `FloatAnchor.release`
+   (ruhig und geworfen), `growTerminalFloat` (gleiche Grenze überall, Halt an
+   der Kante), Ausweichen aus einer Mitte; `HKeepClear.enabled` und
+   `HKeepClearExempt`.
+7. Mutationsbeweise: ohne Einrücken, mit der Leiste, die immer freihält, ohne
+   Geschwindigkeit, ohne einen Anker, mit dem Fenster, das sich selbst
+   ausweicht, und mit der Sandbox-Seite, die nur beim Kommen neu baut.
+
+### Tests
+`app/test/features/shell/terminal_float_test.dart` (Kriterien 1 bis 4; der
+Test zum Griff ersetzt `the_grip_keeps_off_the_title_buttons`),
+`app/test/features/sandbox/terminal_tabs_test.dart` (Kriterium 5),
+`app/test/core/ui/terminal_float_test.dart` (Kriterium 6),
+`app/packages/ui/test/keep_clear_test.dart`.
+
+### Fallstricke
+- `flutter test` spielt Android; alle Fenster-Tests laufen mit
+  `TargetPlatformVariant.only(TargetPlatform.linux)`.
+- Ein Zug aus `tester.drag` hat keine Geschwindigkeit und gilt als ruhiges
+  Loslassen; nach dem Loslassen läuft das Gleiten `HMotion.arrive` lang, die
+  Tests pumpen es aus (`glideHome`).
+- Eine `HKeepClear`, die sich nur verschiebt, meldet nichts, und im Test
+  baute die Ebene ohne äußeren Anlass nicht neu; das Springen trat dort
+  nicht von selbst auf. Der Regressionstest beginnt deshalb wie beim Owner
+  groß (900 x 500) links oben und prüft die Ursache direkt: Kein Bereich,
+  den `HKeepClear.rectsIn` liefert, überlappt das Fenster.
+
+### Review-Runde 1 (Codex, Sonnet für Antigravity)
+- **Editor ohne freizuhaltenden Bereich** (Codex, major): Der Editor einer
+  gehaltenen Anfrage ersetzt die Aktionsleiste und hielt nichts frei; unten
+  in der Mitte lag das Fenster auf Senden und Verwerfen. Jetzt halten die
+  Bedienelemente unten im Editor (Leiste, beide Pausen) und die Rückfrage
+  zum Pseudonymisieren frei. Test
+  `the_window_keeps_off_the_controls_of_the_editor` (unten Mitte und unten
+  rechts); Mutation (ohne `HKeepClear` um `_bottom`) rot.
+- **Gleiten über die Leiste** (Codex major, Sonnet minor): Geprüft war nur
+  das Ziel. Berührt der Weg einen freizuhaltenden Bereich, springt das
+  Fenster jetzt. Test `a_window_let_go_over_the_bar_never_glides_across_it`;
+  Mutation (Weg ungeprüft) rot.
+- **Zug mitten im Gleiten** (Codex, Sonnet): `_shown` hielt das Ziel, ein Zug
+  begann dort. Jetzt hält es den gezeichneten Ort. Test
+  `a_drag_during_the_glide_starts_where_the_window_is`; Mutation rot.
+- **Abgebrochener Zug** (Sonnet, minor): rastet nach echtem Weg am nächsten
+  Anker ein und speichert ihn; so gewollt und in Spezifikation 4 sowie
+  `docs/UX.md` beschrieben.
+
+### Kandidaten (HUM-352)
+- (A) Freie Lage: Mit gehaltener Umschalttaste beim Loslassen bliebe das
+  Fenster, wo es ist, statt einzurasten. Vom Owner als erlaubt genannt,
+  hier nicht gebaut: Es braucht eine Speicherung der freien Lage und eine
+  Regel, wie eine freie Lage ausweicht.
+- (B) Die Leiste mit Freigeben und Blockieren könnte nur die Knöpfe
+  freihalten statt ihrer ganzen Breite.

@@ -30,7 +30,8 @@ import 'package:humanitl/features/sandbox/widgets/sandbox_terminal.dart'
 import 'package:humanitl/features/settings/settings_sheet.dart';
 import 'package:humanitl/features/shell/shell_screen.dart';
 import 'package:humanitl/features/shell/widgets/floating_terminal.dart'
-    show terminalFloatLinger;
+    show FloatingTerminalLayer, terminalFloatLinger;
+import 'package:humanitl_ui/humanitl_ui.dart' show HMotion, HSpace;
 import 'package:xterm2/ui.dart';
 
 import '../../harness/app_harness.dart';
@@ -119,6 +120,37 @@ List<Rect> decisionRects(WidgetTester tester) => <Rect>[
         when box.hasSize && !box.size.isEmpty)
       box.localToGlobal(Offset.zero) & box.size,
 ];
+
+/// Die Fläche, über der das Fenster schwebt.
+Rect layerRect(WidgetTester tester) =>
+    tester.getRect(find.byType(FloatingTerminalLayer));
+
+/// Lässt das Fenster nach dem Loslassen an seinen Anker gleiten (HUM-352).
+Future<void> glideHome(WidgetTester tester) async {
+  await settle(tester);
+  await tester.pump(HMotion.arrive);
+  await settle(tester);
+}
+
+/// [actual] ist [expected], bis auf Rundung im Layout.
+void expectSize(Size actual, Size expected, String reason) {
+  expect(actual.width, closeTo(expected.width, 0.01), reason: reason);
+  expect(actual.height, closeTo(expected.height, 0.01), reason: reason);
+}
+
+/// Zieht den Griff an [anchor] weit nach außen, in kleinen Schritten.
+Future<void> pullGripFar(WidgetTester tester, FloatAnchor anchor) async {
+  final TestGesture hand = await tester.startGesture(
+    tester.getCenter(find.byKey(const Key('shell-terminal-floating-grip'))),
+    kind: PointerDeviceKind.mouse,
+  );
+  for (int i = 0; i < 40; i++) {
+    await hand.moveBy(Offset(anchor.gripX * 40.0, anchor.gripY * 40.0));
+    await tester.pump();
+  }
+  await hand.up();
+  await settle(tester);
+}
 
 void main() {
   final TargetPlatformVariant linux = TargetPlatformVariant.only(
@@ -310,7 +342,7 @@ void main() {
     WidgetTester tester,
   ) async {
     final (Override state, String _) = stateFile(<String, Object?>{
-      terminalFloatCornerKey: FloatCorner.bottomLeft.name,
+      terminalFloatCornerKey: FloatAnchor.bottomLeft.name,
     });
     await pumpApp(
       tester,
@@ -451,7 +483,7 @@ void main() {
       Offset(-start.left + 100, -start.top + 150),
       kind: PointerDeviceKind.mouse,
     );
-    await settle(tester);
+    await glideHome(tester);
     final Rect snapped = tester.getRect(floating);
     expect(snapped.center.dx, lessThan(window.width / 2));
     expect(snapped.center.dy, lessThan(window.height / 2));
@@ -718,7 +750,7 @@ void main() {
       Offset(queue.left + 20 - start.left, 0),
       kind: PointerDeviceKind.mouse,
     );
-    await settle(tester);
+    await glideHome(tester);
     expect(readState(path)[terminalFloatCornerKey], 'bottomLeft');
     final Rect after = tester.getRect(floating);
     for (final Rect zone in decisionRects(tester)) {
@@ -732,7 +764,7 @@ void main() {
     WidgetTester tester,
   ) async {
     final (Override state, String path) = stateFile(<String, Object?>{
-      terminalFloatCornerKey: FloatCorner.bottomLeft.name,
+      terminalFloatCornerKey: FloatAnchor.bottomLeft.name,
     });
     await pumpApp(
       tester,
@@ -757,13 +789,15 @@ void main() {
     expect(readState(path)[terminalFloatCornerKey], 'bottomLeft');
   }, variant: linux);
 
-  // Sonnet: Unten verankert lag der Griff auf dem Schließen-Knopf.
-  testWidgets('the_grip_keeps_off_the_title_buttons', (
+  // Sonnet (HUM-300): Unten verankert lag der Griff auf dem Schließen-Knopf.
+  // Owner (HUM-352): Unten rechts lag er auf Titel und Hinweis. An jedem
+  // Anker sitzt er jetzt in der Ecke, und der Kopf rückt auf seiner Seite ein.
+  testWidgets('the_grip_keeps_off_title_hint_and_buttons_at_every_anchor', (
     WidgetTester tester,
   ) async {
-    for (final FloatCorner corner in FloatCorner.values) {
+    for (final FloatAnchor anchor in FloatAnchor.values) {
       final (Override state, String _) = stateFile(<String, Object?>{
-        terminalFloatCornerKey: corner.name,
+        terminalFloatCornerKey: anchor.name,
       });
       await pumpApp(
         tester,
@@ -773,15 +807,324 @@ void main() {
       );
       await pressCtrl(tester, LogicalKeyboardKey.digit2);
       await pressFloat(tester);
+      final Rect pip = tester.getRect(floating);
       final Rect grip = tester.getRect(
         find.byKey(const Key('shell-terminal-floating-grip')),
       );
-      final Rect title = tester.getRect(
-        find.byKey(const Key('shell-terminal-floating-title')),
+      // In der Ecke gegenüber dem Anker, bündig mit dem Fenster.
+      expect(
+        anchor.gripX == -1 ? grip.left : grip.right,
+        anchor.gripX == -1 ? pip.left : pip.right,
+        reason: '$anchor',
       );
-      expect(grip.overlaps(title), isFalse, reason: '$corner');
+      expect(
+        anchor.gripY == -1 ? grip.top : grip.bottom,
+        anchor.gripY == -1 ? pip.top : pip.bottom,
+        reason: '$anchor',
+      );
+      Rect within(Finder finder) =>
+          tester.getRect(find.descendant(of: floating, matching: finder));
+      final Map<String, Rect> header = <String, Rect>{
+        'title': within(find.text('Agent terminal')),
+        'hint': within(
+          find.text(
+            'Agent output is untrusted. Clipboard and link sequences are '
+            'filtered.',
+          ),
+        ),
+        'back': within(find.byKey(const Key('shell-terminal-floating-back'))),
+        'close': within(find.byKey(const Key('shell-terminal-floating-close'))),
+        'full window': within(
+          find.byKey(const Key('sandbox-terminal-full-window')),
+        ),
+      };
+      for (final MapEntry<String, Rect> part in header.entries) {
+        expect(
+          grip.overlaps(part.value),
+          isFalse,
+          reason: '$anchor: the grip $grip on the ${part.key} ${part.value}',
+        );
+      }
       await tester.pumpWidget(const SizedBox.shrink());
     }
+  }, variant: linux);
+
+  // HUM-352: Jeder der neun Anker ist mit der Hand erreichbar, und ein
+  // ruhiges Loslassen rastet am nächsten ein.
+  testWidgets('every_anchor_is_reachable_by_a_drag', (
+    WidgetTester tester,
+  ) async {
+    final (Override state, String path) = stateFile();
+    await pumpApp(
+      tester,
+      client: runningClient(),
+      size: window,
+      uiState: state,
+    );
+    await pressCtrl(tester, LogicalKeyboardKey.digit2);
+    await pressFloat(tester);
+    final Rect region = layerRect(tester);
+    for (final FloatAnchor anchor in <FloatAnchor>[
+      // Vom Start unten rechts aus alle anderen, dann zurück.
+      ...FloatAnchor.values.reversed.skip(1),
+      FloatAnchor.bottomRight,
+    ]) {
+      final Rect from = tester.getRect(floating);
+      final Rect target = terminalFloatRectAt(
+        region,
+        anchor,
+        from.size,
+        HSpace.x3,
+      );
+      // Ruhig gezogen, ein Stück neben das Ziel: Es rastet trotzdem dort ein.
+      await tester.timedDrag(
+        find.byKey(const Key('shell-terminal-floating-title')),
+        target.center - from.center + const Offset(25, -15),
+        const Duration(seconds: 2),
+      );
+      await glideHome(tester);
+      expect(tester.getRect(floating), target, reason: '$anchor');
+      expect(readState(path)[terminalFloatCornerKey], anchor.name);
+    }
+  }, variant: linux);
+
+  // HUM-352: Ein kurzer Wurf zählt mehr als der Abstand. Aus jeder Ecke
+  // landet er beim Nachbarn in seiner Richtung, nicht zurück am Start; ein
+  // langsames Loslassen nach demselben Weg bleibt am Start.
+  testWidgets('a_throw_from_each_corner_lands_on_its_neighbour', (
+    WidgetTester tester,
+  ) async {
+    for (final FloatAnchor corner in <FloatAnchor>[
+      FloatAnchor.topLeft,
+      FloatAnchor.topRight,
+      FloatAnchor.bottomLeft,
+      FloatAnchor.bottomRight,
+    ]) {
+      for (final (Offset way, FloatAnchor neighbour) in <(Offset, FloatAnchor)>[
+        (Offset(-corner.x * 60.0, 0), FloatAnchor.at(0, corner.y)),
+        (Offset(0, -corner.y * 60.0), FloatAnchor.at(corner.x, 0)),
+      ]) {
+        for (final bool fast in <bool>[true, false]) {
+          final (Override state, String path) = stateFile(<String, Object?>{
+            terminalFloatCornerKey: corner.name,
+          });
+          await pumpApp(
+            tester,
+            client: runningClient(),
+            size: window,
+            uiState: state,
+          );
+          await pressCtrl(tester, LogicalKeyboardKey.digit2);
+          await pressFloat(tester);
+          final Finder title = find.byKey(
+            const Key('shell-terminal-floating-title'),
+          );
+          if (fast) {
+            await tester.fling(
+              title,
+              way,
+              1500,
+              deviceKind: PointerDeviceKind.mouse,
+            );
+          } else {
+            await tester.timedDrag(title, way, const Duration(seconds: 2));
+          }
+          await glideHome(tester);
+          final FloatAnchor landed = fast ? neighbour : corner;
+          expect(
+            readState(path)[terminalFloatCornerKey],
+            landed.name,
+            reason: '$corner by $way, fast: $fast',
+          );
+          final Rect pip = tester.getRect(floating);
+          expect(
+            pip,
+            terminalFloatRectAt(layerRect(tester), landed, pip.size, HSpace.x3),
+          );
+          await tester.pumpWidget(const SizedBox.shrink());
+        }
+      }
+    }
+  }, variant: linux);
+
+  // HUM-352: Dieselbe Hand bekommt an jedem Anker dasselbe größte Fenster.
+  testWidgets('the_largest_window_is_the_same_at_every_anchor', (
+    WidgetTester tester,
+  ) async {
+    for (final FloatAnchor anchor in FloatAnchor.values) {
+      final (Override state, String _) = stateFile(<String, Object?>{
+        terminalFloatCornerKey: anchor.name,
+      });
+      await pumpApp(
+        tester,
+        client: runningClient(),
+        size: window,
+        uiState: state,
+      );
+      await pressCtrl(tester, LogicalKeyboardKey.digit2);
+      await pressFloat(tester);
+      await pullGripFar(tester, anchor);
+      expectSize(
+        tester.getSize(floating),
+        terminalFloatMaxIn(layerRect(tester).size),
+        '$anchor',
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  }, variant: linux);
+
+  // Owner (HUM-352): Auf Intercept wuchs das Fenster oben rechts bis zur
+  // Grenze, unten rechts nur über das Kontext-Pane: Die leere Leiste mit
+  // Freigeben und Blockieren hielt frei, obwohl nichts zu entscheiden war.
+  testWidgets('on_an_empty_queue_bottom_right_grows_as_far_as_top_right', (
+    WidgetTester tester,
+  ) async {
+    final Map<FloatAnchor, Size> grown = <FloatAnchor, Size>{};
+    for (final FloatAnchor anchor in <FloatAnchor>[
+      FloatAnchor.topRight,
+      FloatAnchor.bottomRight,
+    ]) {
+      final (Override state, String _) = stateFile(<String, Object?>{
+        terminalFloatCornerKey: anchor.name,
+      });
+      await pumpApp(
+        tester,
+        client: runningClient(),
+        size: window,
+        uiState: state,
+      );
+      await pressFloat(tester);
+      expect(headerTitle(tester), 'Intercept');
+      await pullGripFar(tester, anchor);
+      grown[anchor] = tester.getSize(floating);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+    expectSize(
+      grown[FloatAnchor.bottomRight]!,
+      grown[FloatAnchor.topRight]!,
+      'bottom right against top right',
+    );
+    expect(
+      grown[FloatAnchor.bottomRight]!.width,
+      greaterThan(terminalFloatDefaultSize.width),
+    );
+  }, variant: linux);
+
+  // --- HUM-352, Review-Runde 1 -----------------------------------------------
+
+  // Codex: Der Editor einer gehaltenen Anfrage ersetzt die Aktionsleiste und
+  // hielt nichts frei; unten in der Mitte lag das Fenster auf Senden und
+  // Verwerfen.
+  testWidgets('the_window_keeps_off_the_controls_of_the_editor', (
+    WidgetTester tester,
+  ) async {
+    for (final FloatAnchor anchor in <FloatAnchor>[
+      FloatAnchor.bottomCenter,
+      FloatAnchor.bottomRight,
+    ]) {
+      final (Override state, String _) = stateFile(<String, Object?>{
+        terminalFloatCornerKey: anchor.name,
+      });
+      await pumpApp(
+        tester,
+        client: HeldAndRunningClient(),
+        size: window,
+        uiState: state,
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      await settle(tester);
+      await tester.tap(find.byType(QueueRow).first);
+      await settle(tester);
+      await pressFloat(tester);
+      // Der Editor der gehaltenen Anfrage.
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyE);
+      for (int i = 0; i < 6; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(find.byKey(const Key('editor-send')), findsOneWidget);
+      final Rect pip = tester.getRect(floating);
+      for (final Key key in const <Key>[
+        Key('editor-send'),
+        Key('editor-discard'),
+      ]) {
+        final Rect control = tester.getRect(find.byKey(key));
+        expect(
+          pip.overlaps(control),
+          isFalse,
+          reason: '$anchor: $pip covers $key at $control',
+        );
+        expect(find.byKey(key).hitTestable(), findsOneWidget, reason: '$key');
+      }
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  }, variant: linux);
+
+  // Codex: Das Ziel des Einrastens war frei, der Weg dorthin nicht. Über
+  // Freigeben und Blockieren losgelassen, glitt das Fenster 180 ms über sie.
+  testWidgets('a_window_let_go_over_the_bar_never_glides_across_it', (
+    WidgetTester tester,
+  ) async {
+    await pumpApp(tester, client: HeldAndRunningClient(), size: window);
+    await tester.pump(const Duration(milliseconds: 100));
+    await settle(tester);
+    await tester.tap(find.byType(QueueRow).first);
+    await settle(tester);
+    await pressFloat(tester);
+    final Rect bar = tester.getRect(find.byType(ActionBar));
+    final Rect start = tester.getRect(floating);
+
+    await tester.drag(
+      find.byKey(const Key('shell-terminal-floating-title')),
+      bar.center - start.center,
+      kind: PointerDeviceKind.mouse,
+    );
+    for (int frame = 0; frame < 20; frame++) {
+      await tester.pump(const Duration(milliseconds: 16));
+      final Rect pip = tester.getRect(floating);
+      expect(pip.overlaps(bar), isFalse, reason: 'frame $frame: $pip on $bar');
+    }
+  }, variant: linux);
+
+  // Codex und Sonnet: Ein Zug, der mitten im Gleiten beginnt, begann am Ziel,
+  // und das Fenster sprang dorthin.
+  testWidgets('a_drag_during_the_glide_starts_where_the_window_is', (
+    WidgetTester tester,
+  ) async {
+    await pumpApp(tester, client: runningClient(), size: window);
+    await pressCtrl(tester, LogicalKeyboardKey.digit2);
+    await pressFloat(tester);
+    final Rect start = tester.getRect(floating);
+    final Rect region = layerRect(tester);
+    final Rect goal = terminalFloatRectAt(
+      region,
+      FloatAnchor.topLeft,
+      start.size,
+      HSpace.x3,
+    );
+    await tester.drag(
+      find.byKey(const Key('shell-terminal-floating-title')),
+      goal.center - start.center + const Offset(150, 100),
+      kind: PointerDeviceKind.mouse,
+    );
+    await tester.pump();
+    await tester.pump(HMotion.arrive ~/ 3);
+    final Rect midway = tester.getRect(floating);
+    expect(midway, isNot(goal), reason: 'still on the way');
+
+    final TestGesture hand = await tester.startGesture(
+      tester
+              .getRect(find.byKey(const Key('shell-terminal-floating-title')))
+              .centerLeft +
+          const Offset(60, 0),
+      kind: PointerDeviceKind.mouse,
+    );
+    await hand.moveBy(const Offset(30, 0));
+    await tester.pump();
+    final Rect held = tester.getRect(floating);
+    expect(held.top, closeTo(midway.top, 1), reason: '$held from $midway');
+    expect(held.left, closeTo(midway.left + 30, 1), reason: '$held');
+    await hand.up();
+    await glideHome(tester);
   }, variant: linux);
 
   // --- Review-Runde 2 ---------------------------------------------------------
