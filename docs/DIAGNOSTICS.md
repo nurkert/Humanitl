@@ -351,9 +351,9 @@ Schlüssel ist eine Gruppe
 
 Zugangsschlüssel nicht im Schlüsselbund
 
-**Auslöser.** Beim Hinterlegen des Zugangsschlüssels antwortet der Secret Service nicht, und der Schlüssel liegt im `0600`-Rückfall unter `$XDG_DATA_HOME/humanitl/keys`.
+**Auslöser.** Beim Hinterlegen des Zugangsschlüssels antwortet der Schlüsselbund des Systems nicht (Secret Service, unter macOS das Keychain über `/usr/bin/security`), und der Schlüssel liegt im `0600`-Rückfall unter `$XDG_DATA_HOME/humanitl/keys`.
 
-**Fix.** `CopyCommand`: `sudo apt-get install libsecret-tools` bringt `secret-tool`; danach `humanitl llm key set` erneut.
+**Fix.** `CopyCommand`: unter Linux bringt `sudo apt-get install libsecret-tools` das Programm `secret-tool`, unter macOS entsperrt `security unlock-keychain` den Schlüsselbund; danach `humanitl llm key set` erneut. Taugt der Schlüssel selbst nicht für `security`, gibt es keinen Vorschlag.
 
 #### CONFIG_020
 

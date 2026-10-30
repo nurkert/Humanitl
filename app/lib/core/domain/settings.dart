@@ -194,10 +194,10 @@ enum LlmKeyStore {
   /// No key is stored.
   none,
 
-  /// In the system keyring, through the Secret Service.
+  /// In the system keyring: the Secret Service, on macOS the Keychain.
   secretService,
 
-  /// In a file with mode 0600, because the Secret Service did not answer.
+  /// In a file with mode 0600, because the system keyring did not answer.
   file,
 }
 
@@ -223,7 +223,8 @@ final class LlmKeyStatus {
   /// Where it lies.
   final LlmKeyStore store;
 
-  /// `llm.api_key_ref`, such as `secret-service:humanitl/llm`.
+  /// `llm.api_key_ref`, such as `secret-service:humanitl/llm` or
+  /// `keychain:humanitl/llm`.
   final String keyRef;
 
   /// The fallback to the file (`CONFIG_019`), or `LLM_009` when the

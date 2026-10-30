@@ -30,7 +30,8 @@ final class SavedServer {
   final List<String> models;
 
   /// The reference to its access key, such as
-  /// `secret-service:humanitl/cloud`; empty without a key.
+  /// `secret-service:humanitl/cloud` or `keychain:humanitl/cloud`; empty
+  /// without a key.
   final String keyRef;
 
   /// True for the entry `llm.active` names.

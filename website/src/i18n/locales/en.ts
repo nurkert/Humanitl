@@ -77,7 +77,7 @@ const en: Copy = {
         id: 'settings',
         name: 'Model',
         title: 'Your model, your key.',
-        text: 'You enter the endpoint and the model yourself. On Linux the access key lives in the system keyring, otherwise in a file only your account can read. It never stands in the configuration.',
+        text: 'You enter the endpoint and the model yourself. On Linux the access key lives in the system keyring, on macOS in the login Keychain, otherwise in a file only your account can read. It never stands in the configuration.',
         alt: 'Humanitl, Settings: endpoint, model and access key of the language model.',
       },
     ],
