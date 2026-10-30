@@ -460,27 +460,43 @@ fn watchdog(child: libc::pid_t) {
 }
 
 /// Sends `signal` to every process in the session `sid`, the command's own
-/// (the child made it with `setsid`). A process that started yet another
-/// session escapes this; it stays under the profile, but outlives the stop
-/// (`docs/SECURITY.md`).
+/// (the child made it with `setsid`). A process may fork while a pass runs,
+/// so the passes repeat until one finds nobody, at most [`END_PASSES`] times.
+/// A process that started yet another session escapes this; it stays under
+/// the profile, but outlives the stop (`docs/SECURITY.md` section 12).
 fn end_session(sid: libc::pid_t, signal: c_int) {
+    for _ in 0..END_PASSES {
+        if end_session_once(sid, signal) == 0 {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// How often [`end_session`] looks again.
+const END_PASSES: usize = 10;
+
+/// One pass of [`end_session`]; how many processes it signalled.
+fn end_session_once(sid: libc::pid_t, signal: c_int) -> usize {
     let own = std::process::id();
-    let mut pids = vec![0 as libc::pid_t; 4096];
+    let mut pids = vec![0 as libc::pid_t; 8192];
     let bytes = c_int::try_from(pids.len() * std::mem::size_of::<libc::pid_t>()).unwrap_or(0);
     // SAFETY: the buffer holds `bytes` bytes of pid_t.
     let count = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
     let count = usize::try_from(count).unwrap_or(0).min(pids.len());
+    let mut signalled = 0;
     for &pid in &pids[..count] {
         if pid <= 1 || u32::try_from(pid).is_ok_and(|pid| pid == own) {
             continue;
         }
         // SAFETY: getsid(2) and kill(2) take integers only.
         unsafe {
-            if libc::getsid(pid) == sid {
-                libc::kill(pid, signal);
+            if libc::getsid(pid) == sid && libc::kill(pid, signal) == 0 {
+                signalled += 1;
             }
         }
     }
+    signalled
 }
 
 extern "C" fn forward(signal: c_int) {
