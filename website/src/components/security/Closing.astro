@@ -1,0 +1,28 @@
+---
+import { path, repoUrl, type Lang } from '../../i18n/ui';
+
+interface Props {
+  s: any;
+  k: any;
+  lang: Lang;
+}
+const { s, k, lang } = Astro.props;
+const c = s.closing;
+---
+
+<section class="sec-closing" aria-labelledby="sec-closing-title">
+  <div class="sec-closing__glow" aria-hidden="true"></div>
+  <div class="container sec-closing__inner sec-rv" data-reveal>
+    <h2 id="sec-closing-title" class="chrome sec-h2">{c.title}</h2>
+    <p class="lede">{c.text}</p>
+    <pre class="sec-oneliner" tabindex="0"><code><span class="sec-term__p">$</span> {k.closingCmd}</code></pre>
+    <p class="sec-closing__pills">
+      <a class="pill pill--light" href={path('download', lang)}>{c.download}</a>
+      <a class="pill" href="/docs/security/">SECURITY.md</a>
+      <a class="pill" href="/docs/threat-model/">THREAT-MODEL.md</a>
+      <a class="pill" href={`${repoUrl}/tree/main/tests/escape`}>{c.tests}</a>
+    </p>
+    <a class="sec-closing__home" href={path('home', lang)}>{c.home}</a>
+    <p class="sec-stand">{c.stand}</p>
+  </div>
+</section>

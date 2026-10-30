@@ -1,0 +1,78 @@
+---
+// Kapitel 4: selbst prüfen. Eine Leiter aus drei Wegen, die volle CI-Ausgabe unter macOS,
+// das Format der Linux-Evidenz und das Zeitfenster nach dem Start.
+import Rich from './Rich.astro';
+import Src from './Src.astro';
+import Term from './Term.astro';
+
+interface Props {
+  s: any;
+  k: any;
+}
+const { s, k } = Astro.props;
+const v = s.verify;
+---
+
+<section class="sec-section" id="pruefen" data-chapter aria-labelledby="sec-verify-title">
+  <div class="sec-wide">
+    <header class="sec-head sec-rv" data-reveal>
+      <p class="sec-eyebrow">{v.eyebrow}</p>
+      <h2 id="sec-verify-title" class="chrome sec-h2">{v.title}</h2>
+      <p class="lede">{v.lede}</p>
+    </header>
+
+    <ol class="sec-ladder" data-reveal>
+      {
+        v.ways.map((w: any, i: number) => (
+          <li class="sec-rung sec-rvi" style={`--i:${i}`}>
+            <span class="sec-rung__n" aria-hidden="true">
+              {i + 1}
+            </span>
+            <span class="sec-rung__link" aria-hidden="true" />
+            <code class="sec-rung__cmd">{k.ways[i]}</code>
+            <h3>{w.title}</h3>
+            <p>{w.text}</p>
+          </li>
+        ))
+      }
+    </ol>
+
+    <div class="sec-verify__grid">
+      <Term
+        class="sec-term--big"
+        caption={v.termCaption}
+        rows={[
+          { kind: 'cmd', text: k.check },
+          { kind: 'head', text: k.head },
+          ...k.macRows.map((r: any) => ({ kind: 'check', name: r.name, ev: r.ev })),
+        ]}
+      />
+      <aside class="sec-glass sec-format sec-rv" data-reveal>
+        <h3 class="sec-h3">{v.formatTitle}</h3>
+        <pre class="sec-shim" tabindex="0"><code>{k.format}</code></pre>
+        <p class="sec-format__map-title">{v.formatMap}</p>
+        <dl class="sec-format__map">
+          {
+            k.formatMap.map((m: string[]) => (
+              <div>
+                <dt>
+                  <code>{m[0]}</code>
+                </dt>
+                <dd>
+                  <code>{m[1]}</code>
+                </dd>
+              </div>
+            ))
+          }
+        </dl>
+        <p class="sec-foot">{v.formatNote}</p>
+      </aside>
+    </div>
+
+    <div class="sec-band sec-rv" data-reveal>
+      <h3 class="sec-h3">{v.windowTitle}</h3>
+      <Rich tag="p" text={v.window} />
+    </div>
+    <Src src={v.src} prefix={s.srcPrefix} />
+  </div>
+</section>

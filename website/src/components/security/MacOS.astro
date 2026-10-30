@@ -1,0 +1,112 @@
+---
+// Kapitel 8: macOS, ehrlich anders. Diagramm M, der Vergleich der drei Sätze und die
+// Kanäle K-19 bis K-23 aus dem Bedrohungsmodell.
+import Rich from './Rich.astro';
+import Src from './Src.astro';
+
+interface Props {
+  s: any;
+  k: any;
+}
+const { s } = Astro.props;
+const m = s.macos;
+---
+
+<section class="sec-section" id="macos" data-chapter aria-labelledby="sec-macos-title">
+  <div class="sec-wide">
+    <header class="sec-head sec-rv" data-reveal>
+      <p class="sec-eyebrow">{m.eyebrow}</p>
+      <h2 id="sec-macos-title" class="chrome sec-h2">{m.title}</h2>
+      <Rich tag="p" class="lede" text={m.lede} />
+      <Src src={m.src} prefix={s.srcPrefix} />
+    </header>
+
+    <div class="sec-macos__grid">
+      <figure class="sec-mfig" data-reveal>
+        <svg viewBox="0 0 760 300" role="img" aria-labelledby="m-t m-d">
+          <title id="m-t">{m.figTitle}</title>
+          <desc id="m-d">{m.figDesc}</desc>
+          <defs>
+            <clipPath id="m-clip"><rect x="680" y="140" width="80" height="160"></rect></clipPath>
+          </defs>
+          <g aria-hidden="true">
+            <g class="m-box" style="--i:0">
+              <rect class="sv-fill" x="20" y="40" width="320" height="220" rx="20"></rect>
+              <path class="sv-wall sv-wall--solid" d="M340 130 V60 A20 20 0 0 0 320 40 H40 A20 20 0 0 0 20 60 V240 A20 20 0 0 0 40 260 H320 A20 20 0 0 0 340 240 V170"></path>
+              <text x="40" y="70" class="sv-lbl sv-lbl--l2">Linux</text>
+              <rect class="m-if" x="48" y="110" width="44" height="26" rx="8"></rect>
+              <text x="70" y="128" text-anchor="middle" class="sv-lbl sv-lbl--s">lo</text>
+              <circle class="sv-agent" cx="180" cy="160" r="9"></circle>
+              <rect class="j-door-frame" x="337" y="130" width="6" height="40" rx="2"></rect>
+              <text x="328" y="196" text-anchor="end" class="sv-lbl sv-lbl--s">proxy.sock</text>
+            </g>
+            <g class="m-box" style="--i:1">
+              <rect class="sv-fill" x="420" y="40" width="260" height="220" rx="20"></rect>
+              <path class="sv-wall" d="M680 130 V60 A20 20 0 0 0 660 40 H440 A20 20 0 0 0 420 60 V240 A20 20 0 0 0 440 260 H660 A20 20 0 0 0 680 240 V170"></path>
+              <text x="440" y="70" class="sv-lbl sv-lbl--l2">macOS</text>
+              <rect class="m-if" x="448" y="100" width="50" height="26" rx="8"></rect>
+              <text x="473" y="118" text-anchor="middle" class="sv-lbl sv-lbl--s">en0</text>
+              <rect class="m-if" x="448" y="140" width="50" height="26" rx="8"></rect>
+              <text x="473" y="158" text-anchor="middle" class="sv-lbl sv-lbl--s">lo0</text>
+              <circle class="sv-agent" cx="590" cy="160" r="9"></circle>
+              <rect class="j-door-frame" x="677" y="130" width="6" height="40" rx="2"></rect>
+              <text x="670" y="196" text-anchor="end" class="sv-lbl sv-lbl--s">localhost:&lt;port&gt;</text>
+            </g>
+            <g class="m-membrane" style="--i:2">
+              <rect x="440" y="92" width="136" height="82" rx="10"></rect>
+              <text x="568" y="138" text-anchor="end" class="sv-lbl sv-lbl--s sv-lbl--deny">{m.fig.deny}</text>
+            </g>
+            <g class="m-other">
+              <g clip-path="url(#m-clip)">
+                <path class="m-arrow" d="M745 268 V200 Q745 152 692 152"></path>
+              </g>
+              <text x="732" y="294" text-anchor="end" class="sv-lbl sv-lbl--s sv-lbl--warn">{m.fig.other} · K-19</text>
+            </g>
+          </g>
+        </svg>
+      </figure>
+
+      <div class="sec-compare sec-rv" data-reveal>
+        <h3 class="sec-h3">{m.compareTitle}</h3>
+        {
+          m.rows.map((r: any) => (
+            <div class="sec-compare__row">
+              <p class="sec-compare__label">{r.label}</p>
+              <dl>
+              <div>
+                <dt>Linux</dt>
+                <dd>
+                  <Rich text={r.linux} />
+                </dd>
+              </div>
+              <div>
+                <dt>macOS</dt>
+                <dd>
+                  <Rich text={r.macos} />
+                </dd>
+              </div>
+              </dl>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+
+    <ul class="sec-kcards" data-reveal>
+      {
+        m.k.map((c: any, i: number) => (
+          <li class="sec-glass sec-kcard sec-rvi" style={`--i:${i}`}>
+            <p class="sec-kcard__id">{c.id}</p>
+            <h3 class="sec-h3">{c.title}</h3>
+            <Rich tag="p" text={c.text} />
+            <p class="sec-kcard__advice">
+              <span>{m.adviceLabel}</span> <Rich text={c.advice} />
+            </p>
+          </li>
+        ))
+      }
+    </ul>
+    <p class="sec-outlook">{m.outlook}</p>
+    <Src src={m.kSrc} prefix={s.srcPrefix} />
+  </div>
+</section>

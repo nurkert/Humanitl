@@ -1,0 +1,25 @@
+---
+// Die Quellmarke unter jeder Faktenaussage: kleine Mono-Verweise auf Dokument und Abschnitt.
+import { repoUrl } from '../../i18n/ui';
+
+type Ref = { label: string; href: string };
+interface Props {
+  src: Ref | Ref[];
+  prefix: string;
+  class?: string;
+}
+const { src, prefix, class: cls } = Astro.props;
+const refs = Array.isArray(src) ? src : [src];
+const href = (h: string) => (h.startsWith('gh:') ? `${repoUrl}/tree/main/${h.slice(3)}` : h);
+---
+
+<p class:list={['sec-srcs', cls]}>
+  {
+    refs.map((ref) => (
+      <a class="sec-src" href={href(ref.href)}>
+        <span class="visually-hidden">{prefix}: </span>
+        {ref.label}
+      </a>
+    ))
+  }
+</p>

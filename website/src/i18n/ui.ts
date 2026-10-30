@@ -18,6 +18,7 @@ export const langs = Object.keys(languages) as Lang[];
 export const pages = {
   home: { de: '', en: '' },
   download: { de: 'download', en: 'download' },
+  security: { de: 'sicherheit', en: 'security' },
   privacy: { de: 'datenschutz', en: 'privacy' },
   imprint: { de: 'impressum', en: 'imprint' },
 } satisfies Record<string, Record<Lang, string>>;

@@ -1,0 +1,33 @@
+---
+// Diagramm P2: der Pfad-Scan. Ein Balken fährt über bekannte Socket-Orte; übrig bleibt
+// genau einer.
+import Rich from './Rich.astro';
+
+interface Props {
+  s: any;
+  k: any;
+}
+const { s, k } = Astro.props;
+const d = s.proofs.door;
+const last = k.scan.length - 1;
+---
+
+<figure class="sec-mini sec-p2" data-reveal>
+  <p class="sec-mini__label">{d.label}</p>
+  <ul class="sec-scan">
+    {
+      k.scan.map((path: string, i: number) => (
+        <li class={i === last ? 'sec-scan__chip is-door' : 'sec-scan__chip'} style={`--i:${i}`}>
+          <code>{path}</code>
+          <span class="visually-hidden">{i === last ? d.present : d.absent}</span>
+          {i === last && (
+            <span class="sec-scan__found" aria-hidden="true">
+              {d.found}
+            </span>
+          )}
+        </li>
+      ))
+    }
+  </ul>
+  <figcaption class="sec-mini__cap"><Rich text={d.sub} /> <span class="visually-hidden">{d.found}: /run/humanitl/proxy.sock</span></figcaption>
+</figure>
