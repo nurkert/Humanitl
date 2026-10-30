@@ -18,6 +18,8 @@ const parity = <String, String>{
   'Humanitl.Decide': 'features/intercept/widgets/action_bar',
   'Humanitl.DiscoverLlm': 'features/setup/widgets/llm_discover_sheet',
   'Humanitl.Doctor': 'features/setup/widgets/doctor_list',
+  // "+ Shell" über dem Terminal der Sandbox (HUM-314).
+  'Humanitl.Exec': 'features/sandbox/widgets/terminal_tabs',
   'Humanitl.GetBody': 'features/history/history_detail',
   'Humanitl.GetConfig': 'features/settings/settings_sheet',
   'Humanitl.GetFlow': 'features/history/history_detail',

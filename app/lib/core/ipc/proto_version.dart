@@ -70,9 +70,12 @@ abstract final class ProtoVersion {
   /// reader here: the app sends no folder and writes `sandbox.work_dir`
   /// instead. Raised to 22 with `SandboxEvent.Status.llm`: the isolation tab
   /// draws the line of the model passthrough red while the daemon says the
-  /// model cannot be reached (`LLM_001`, HUM-251).
+  /// model cannot be reached (`LLM_001`, HUM-251). Raised to 23 with
+  /// further shells: the terminal pane opens one with `Exec` when
+  /// `Info.capabilities` names `sandbox.exec` and shows it as a tab through
+  /// `TerminalInput.Open.shell_id` (HUM-314).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 22;
+  static const int minor = 23;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

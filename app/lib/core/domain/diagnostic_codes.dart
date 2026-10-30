@@ -75,6 +75,12 @@ abstract final class DiagnosticCodes {
   /// (HUM-042, CONVENTIONS 4.10).
   static const String terminalSecondWriter = 'TERM_001';
 
+  /// The terminal of the sandbox cannot be reached, and for a further shell
+  /// (`Exec`, HUM-299): four further shells live already, the sandbox ended,
+  /// or it has no door for them. The terminal pane shows it as a notice over
+  /// its tabs (HUM-314).
+  static const String terminalUnavailable = 'TERM_002';
+
   /// The project directory cannot be used: it is missing, not a directory,
   /// not writable, or it lies outside the home directory. Raised by the
   /// daemon while planning a start (`sandbox.rs`, `work_dir_refused`).

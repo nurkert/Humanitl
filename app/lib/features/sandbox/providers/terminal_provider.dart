@@ -183,6 +183,12 @@ class TerminalSessionState {
 }
 
 /// The terminal of one sandbox: the emulator, and the stream that feeds it.
+///
+/// [shellId] names a further shell of that sandbox (`Exec`, HUM-314); empty
+/// is the agent's own terminal. Each shell has its own emulator, scrollback
+/// and stream, and everything below holds for it unchanged: the refusal of
+/// OSC 52, the throttled resize, the reader after `TERM_001`, the reconnect
+/// after `DAEMON_001`.
 @Riverpod(keepAlive: true)
 class TerminalSession extends _$TerminalSession {
   StreamController<TerminalCommand>? _input;
@@ -207,7 +213,7 @@ class TerminalSession extends _$TerminalSession {
   (int, int)? _resizeSent;
 
   @override
-  TerminalSessionState build(String sandboxId) {
+  TerminalSessionState build(String sandboxId, {String shellId = ''}) {
     final Terminal terminal = Terminal(maxLines: terminalScrollback);
     // What the human types goes up as bytes; what the daemon sends comes back
     // through the same pipe. `onOutput` is the keyboard, not the screen.
@@ -266,6 +272,7 @@ class TerminalSession extends _$TerminalSession {
         cols: terminal.viewWidth,
         rows: terminal.viewHeight,
         readOnly: readOnly,
+        shellId: shellId,
       ),
     );
     final DaemonClient client = ref.read(daemonClientProvider);
