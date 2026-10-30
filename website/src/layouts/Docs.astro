@@ -1,0 +1,127 @@
+---
+// Rahmen jeder Docs-Seite (HUM-336): Seitenleiste, Lesespalte, Inhaltsverzeichnis, auf dem
+// Telefon eine schwebende Leiste mit zwei Popovern. Die Popover-API öffnet und schließt
+// auch ohne JavaScript; das Skript ergänzt nur Kopierknöpfe, Scroll-Spy und Komfort.
+import type { MarkdownHeading } from 'astro';
+
+import DocsNav from '../components/docs/DocsNav.astro';
+import DocsToc from '../components/docs/DocsToc.astro';
+import Base from './Base.astro';
+import { ui } from '../i18n/ui';
+import type { DocGroup } from '../lib/docs';
+import '../styles/docs.css';
+
+interface Props {
+  title: string;
+  description: string;
+  groups: DocGroup[];
+  currentId: string;
+  headings?: MarkdownHeading[];
+  /** Sprache des Dokuments: Das Inhaltsverzeichnis deutscher Seiten trägt lang="de". */
+  docLang?: 'de' | 'en';
+}
+
+const { title, description, groups, currentId, headings = [], docLang = 'en' } = Astro.props;
+const t = ui.en.docs;
+
+// H2 und H3; ab 60 Einträgen nur H2, sonst wird die Liste länger als nützlich.
+let toc = headings.filter((heading) => heading.depth === 2 || heading.depth === 3);
+if (toc.length > 60) toc = toc.filter((heading) => heading.depth === 2);
+const hasToc = toc.length >= 2;
+const currentGroup = groups.find((group) => group.items.some((item) => item.id === currentId))?.title ?? t.nav;
+---
+
+<Base lang="en" title={title} description={description}>
+  <div class="docs" data-docs>
+    <aside class="docs__side">
+      <nav class="docs__sidenav" aria-label={t.nav} data-sidenav>
+        <DocsNav groups={groups} currentId={currentId} />
+      </nav>
+    </aside>
+
+    <!-- Vor dem Inhalt, damit Tastatur und Schaltersteuerung die Leiste zuerst erreichen. -->
+    <div class="dock" data-dock>
+      <button class="dock__btn" type="button" popovertarget="docs-menu">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+          <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+          ></path>
+        </svg>
+        <span class="dock__label">{currentGroup}</span>
+      </button>
+      {
+        hasToc && (
+          <>
+            <span class="dock__sep" aria-hidden="true" />
+            <button class="dock__btn" type="button" popovertarget="docs-toc">
+              <span class="dock__label">{t.onThisPage}</span>
+            </button>
+          </>
+        )
+      }
+    </div>
+    <main id="main" class="docs__main">
+      {
+        hasToc && (
+          <details class="toc-inline" data-toc-inline>
+            <summary>
+              {t.onThisPage} <span class="toc-inline__n">({toc.length})</span>
+            </summary>
+            <div lang={docLang}><DocsToc headings={toc} /></div>
+          </details>
+        )
+      }
+      <slot />
+      <slot name="after" />
+    </main>
+
+    {
+      hasToc && (
+        <aside class="docs__toc">
+          <nav aria-label={t.onThisPage} class="docs__tocnav" data-tocnav>
+            <p class="eyebrow">{t.onThisPage}</p>
+            <div lang={docLang}><DocsToc headings={toc} /></div>
+          </nav>
+        </aside>
+      )
+    }
+  </div>
+
+
+
+  <div id="docs-menu" class="sheet" popover>
+    <div class="sheet__grip" aria-hidden="true"></div>
+    <div class="sheet__head">
+      <p class="sheet__title">{t.nav}</p>
+      <button class="sheet__close" type="button" popovertarget="docs-menu" popovertargetaction="hide" autofocus>
+        <span aria-hidden="true">×</span><span class="visually-hidden">{t.close}</span>
+      </button>
+    </div>
+    <nav aria-label={`${t.nav} (menu)`} data-sheetnav>
+      <DocsNav groups={groups} currentId={currentId} />
+    </nav>
+  </div>
+
+  {
+    hasToc && (
+      <div id="docs-toc" class="sheet" popover>
+        <div class="sheet__grip" aria-hidden="true" />
+        <div class="sheet__head">
+          <p class="sheet__title">{t.onThisPage}</p>
+          <button class="sheet__close" type="button" popovertarget="docs-toc" popovertargetaction="hide" autofocus>
+            <span aria-hidden="true">×</span>
+            <span class="visually-hidden">{t.close}</span>
+          </button>
+        </div>
+        <nav aria-label={`${t.onThisPage} (menu)`} data-sheettoc>
+          <div lang={docLang}><DocsToc headings={toc} /></div>
+        </nav>
+      </div>
+    )
+  }
+
+  <p class="visually-hidden" aria-live="polite" data-live></p>
+</Base>
+
+<script>
+  import '../scripts/docs';
+</script>

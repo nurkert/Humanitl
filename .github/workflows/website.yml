@@ -8,6 +8,8 @@ on:
     branches: [main]
     paths:
       - 'website/**'
+      # Die Docs-Seiten entstehen aus docs/ (HUM-336).
+      - 'docs/**'
       - '.github/workflows/website.yml'
   # Ein neues Release erscheint sofort auf der Download-Seite. Ein Release aus release.yml
   # löst dieses Ereignis nicht aus (GITHUB_TOKEN startet keine Workflows); dort stößt der
@@ -43,6 +45,8 @@ jobs:
           cache: npm
           cache-dependency-path: website/package-lock.json
       - run: npm ci --no-audit --no-fund
+      # Die Markdown-Plugins der Docs an einem Fixture, auch für Hinweisboxen (HUM-336).
+      - run: npm test
       - run: npm run build
         env:
           # Nur lesend, damit die Abfrage der Releases nicht an das Limit der API stößt.
@@ -50,6 +54,8 @@ jobs:
           # Das Impressum liegt auf der Seite des Inhabers, nicht im Repository. Forks
           # setzen ihre eigene Variable IMPRINT_URL.
           IMPRINT_URL: ${{ github.repository == 'nurkert/Humanitl' && 'https://nurkert.de/impressum' || vars.IMPRINT_URL }}
+      # Kein toter interner Link und kein toter Anker, auch nicht in den Docs (HUM-336).
+      - run: npm run check-links
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
