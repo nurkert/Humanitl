@@ -126,6 +126,7 @@ void main() {
     final GrpcDaemonClient fallback = grpcClientFor(
       const LaunchOptions(),
       resolve: () => DaemonPaths.resolve(
+        macOS: false,
         environment: <String, String>{'TMPDIR': tmp.path},
         uid: uid,
         directoryExists: (String _) => false,
@@ -136,6 +137,7 @@ void main() {
     final GrpcDaemonClient session = grpcClientFor(
       const LaunchOptions(),
       resolve: () => DaemonPaths.resolve(
+        macOS: false,
         environment: <String, String>{'XDG_RUNTIME_DIR': tmp.path},
         uid: uid,
       ),

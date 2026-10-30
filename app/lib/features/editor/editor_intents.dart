@@ -16,6 +16,8 @@ library;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../../core/shortcuts/intents.dart' show withCommandOnMac;
+
 /// Die Auswahl pseudonymisieren. `Ctrl+R`.
 class PseudonymizeSelectionIntent extends Intent {
   /// Baut den Intent.
@@ -46,14 +48,16 @@ class NextFindingIntent extends Intent {
 /// und solange keiner offen ist, gibt es nichts zu schließen. Die Aktion dazu
 /// ist abgeschaltet, wenn ein Popover offen ist — dann gehört `Esc` dem
 /// Popover (`docs/UX.md` 5.2).
-Map<ShortcutActivator, Intent> editorShortcuts() => <ShortcutActivator, Intent>{
-  const SingleActivator(LogicalKeyboardKey.keyR, control: true):
-      const PseudonymizeSelectionIntent(),
-  const SingleActivator(
-    LogicalKeyboardKey.enter,
-    control: true,
-    includeRepeats: false,
-  ): const SendEditedIntent(),
-  const SingleActivator(LogicalKeyboardKey.escape): const CloseEditorIntent(),
-  const SingleActivator(LogicalKeyboardKey.f3): const NextFindingIntent(),
-};
+Map<ShortcutActivator, Intent> editorShortcuts() => withCommandOnMac(
+  <ShortcutActivator, Intent>{
+    const SingleActivator(LogicalKeyboardKey.keyR, control: true):
+        const PseudonymizeSelectionIntent(),
+    const SingleActivator(
+      LogicalKeyboardKey.enter,
+      control: true,
+      includeRepeats: false,
+    ): const SendEditedIntent(),
+    const SingleActivator(LogicalKeyboardKey.escape): const CloseEditorIntent(),
+    const SingleActivator(LogicalKeyboardKey.f3): const NextFindingIntent(),
+  },
+);

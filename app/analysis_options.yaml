@@ -10,6 +10,7 @@ analyzer:
     # hier, damit der naechste `pub get` sie nicht erneut anhaengt.
     - build/**
     - linux/**
+    - macos/**
   errors:
     invalid_annotation_target: ignore
 

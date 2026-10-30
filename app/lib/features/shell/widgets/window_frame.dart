@@ -7,6 +7,7 @@
 /// `window_manager`.
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -53,6 +54,22 @@ class WindowDragArea extends ConsumerWidget {
   }
 }
 
+/// Whether the system draws the window buttons itself: the traffic lights of
+/// macOS at the left end of the bar (HUM-315). Then [WindowButtons] stays
+/// empty and the bar leaves [trafficLightInset] free.
+bool get systemWindowButtons => defaultTargetPlatform == TargetPlatform.macOS;
+
+/// The room the traffic lights take at the left end of the bar on macOS.
+const double trafficLightInset = 72;
+
+/// The padding of a bar that doubles as title bar: [horizontal] on both
+/// sides, plus [trafficLightInset] on the left where the system draws its
+/// buttons.
+EdgeInsets titleBarPadding(double horizontal) => EdgeInsets.only(
+  left: horizontal + (systemWindowButtons ? trafficLightInset : 0),
+  right: horizontal,
+);
+
 /// Minimize, maximize or restore, and close: the window buttons at the right
 /// end of the header bar.
 ///
@@ -66,6 +83,9 @@ class WindowButtons extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (systemWindowButtons) {
+      return const SizedBox.shrink();
+    }
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     WindowPort window() => ref.read(desktopPortsProvider).window;
@@ -118,7 +138,7 @@ class WindowBar extends StatelessWidget {
       height: tokens.sizes.headerBar,
       child: WindowDragArea(
         child: Padding(
-          padding: EdgeInsets.symmetric(horizontal: tokens.spacing.x3),
+          padding: titleBarPadding(tokens.spacing.x3),
           child: const Row(children: <Widget>[Spacer(), WindowButtons()]),
         ),
       ),

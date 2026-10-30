@@ -85,13 +85,17 @@ Future<void> _run(List<String> args) async {
   );
 }
 
-/// The desktop this run talks to: the real one on Linux, none anywhere else.
+/// The desktop this run talks to: the real one on Linux, the window alone on
+/// macOS (HUM-315; tray and notifications are HUM-319), none anywhere else.
 ///
 /// This is the only place the real tray, the real notification and the real
 /// window are built. Every test and every headless run gets
 /// [DesktopPorts.inert], so nothing below the ports ever needs a session bus
 /// to be present (HUM-034).
 DesktopPorts desktopPortsForPlatform() {
+  if (Platform.isMacOS) {
+    return DesktopPorts.windowOnly(WindowManagerPort());
+  }
   if (!Platform.isLinux) {
     return DesktopPorts.inert();
   }

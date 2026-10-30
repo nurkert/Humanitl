@@ -15,6 +15,7 @@ import 'dart:async';
 
 // `Flow` is a domain type here, not the Flutter layout widget of the same
 // name; the widget is never used in this feature.
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -89,9 +90,14 @@ class _QueueRowState extends ConsumerState<QueueRow> {
   void _tap() {
     final Set<LogicalKeyboardKey> down =
         HardwareKeyboard.instance.logicalKeysPressed;
+    // On macOS a selection toggles with Cmd, where Ctrl-click opens the
+    // context menu (HUM-315).
     final bool control =
         down.contains(LogicalKeyboardKey.controlLeft) ||
-        down.contains(LogicalKeyboardKey.controlRight);
+        down.contains(LogicalKeyboardKey.controlRight) ||
+        (defaultTargetPlatform == TargetPlatform.macOS &&
+            (down.contains(LogicalKeyboardKey.metaLeft) ||
+                down.contains(LogicalKeyboardKey.metaRight)));
     final bool shift =
         down.contains(LogicalKeyboardKey.shiftLeft) ||
         down.contains(LogicalKeyboardKey.shiftRight);

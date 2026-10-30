@@ -32,6 +32,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../domain/domain.dart';
 import '../ipc/client_providers.dart';
 import '../ipc/connection.dart';
+import '../ipc/private_path.dart' show PathStat, lstatPath;
 import '../../l10n/l10n.dart';
 import 'hover_label.dart';
 import 'settings_opener.dart';
@@ -135,6 +136,7 @@ const List<String> installServiceArguments = <String>[
   String? runningExecutable,
   bool Function(String path)? exists,
   int Function(String path)? modeOf,
+  bool Function(String path)? adminOwned,
 }) {
   final String running = runningExecutable ?? Platform.resolvedExecutable;
   final int slash = running.lastIndexOf('/');
@@ -149,6 +151,7 @@ const List<String> installServiceArguments = <String>[
       exists ?? ((String path) => File(path).existsSync());
   final int Function(String) mode =
       modeOf ?? ((String path) => File(path).statSync().mode);
+  final bool Function(String) admin = adminOwned ?? _rootAdminOnMac;
   String? refusal;
   for (final String candidate in <String>[
     '$directory/bin/$installServiceBinary',
@@ -157,7 +160,7 @@ const List<String> installServiceArguments = <String>[
     if (candidate == running || !present(candidate)) {
       continue;
     }
-    switch (_ownedAllTheWayUp(candidate, mode)) {
+    switch (_ownedAllTheWayUp(candidate, mode, admin)) {
       case _Owned.yes:
         return (path: candidate, refusal: null);
       case _Owned.writableByOthers:
@@ -210,7 +213,16 @@ enum _Owned {
 /// `FileStat` aus `dart:io` gibt `mode` her, aber keine uid. Eine Datei, die
 /// einem anderen Konto gehört und `0755` trägt, kommt hier durch. Sie
 /// abzudecken hieße `stat(2)` über FFI.
-_Owned _ownedAllTheWayUp(String path, int Function(String) mode) {
+///
+/// **`root:admin` unter macOS zählt als Schutz** (HUM-315). `/Applications`
+/// trägt `drwxrwxr-x root:admin`, und dorthin legt jeder die App. Wer in der
+/// Gruppe `admin` ist, ist unter macOS Administrator und kommt mit `sudo`
+/// ohnehin an alles; jedes andere Konto darf dort nichts anlegen.
+_Owned _ownedAllTheWayUp(
+  String path,
+  int Function(String) mode,
+  bool Function(String) adminOwned,
+) {
   const int groupWrite = 0x10; // 0o020
   const int otherWrite = 0x2; // 0o002
   const int sticky = 0x200; // 0o1000
@@ -223,7 +235,7 @@ _Owned _ownedAllTheWayUp(String path, int Function(String) mode) {
       return _Owned.unmeasurable;
     }
     final bool othersMayWrite = bits & (groupWrite | otherWrite) != 0;
-    if (othersMayWrite && bits & sticky == 0) {
+    if (othersMayWrite && bits & sticky == 0 && !adminOwned(at)) {
       return _Owned.writableByOthers;
     }
     if (at == '/') {
@@ -231,6 +243,19 @@ _Owned _ownedAllTheWayUp(String path, int Function(String) mode) {
     }
     at = _directoryOf(at);
   }
+}
+
+/// Ob [path] unter macOS `root:admin` gehört (uid 0, gid 80) und niemand
+/// außer beiden schreiben darf; unter Linux nie.
+bool _rootAdminOnMac(String path) {
+  if (!Platform.isMacOS) {
+    return false;
+  }
+  final PathStat? stat = lstatPath(path);
+  return stat != null &&
+      stat.uid == 0 &&
+      stat.gid == 80 &&
+      stat.mode & 0x2 == 0; // 0o002: others may not write
 }
 
 /// Das Verzeichnis, in dem [path] liegt.

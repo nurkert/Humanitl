@@ -1,11 +1,14 @@
 /// Where the daemon's socket and token live on this machine, mirror of
 /// `humanitl_config::Paths::runtime_dir` (CONVENTIONS 3.4, 4.11).
 ///
-/// Order: `$XDG_RUNTIME_DIR/humanitl`, then `/run/user/<uid>/humanitl` when
-/// that directory exists, otherwise `$TMPDIR/humanitl-<uid>` (or `/tmp`).
+/// Order: `$XDG_RUNTIME_DIR/humanitl`, then on macOS
+/// `~/Library/Application Support/Humanitl/run` (HUM-314), then
+/// `/run/user/<uid>/humanitl` when that directory exists, otherwise
+/// `$TMPDIR/humanitl-<uid>` (or `/tmp`).
 /// The app never creates any of these; the daemon does, with mode `0700`.
 library;
 
+import 'dart:convert';
 import 'dart:ffi' as ffi;
 import 'dart:io';
 
@@ -37,6 +40,7 @@ class DaemonPaths {
     Map<String, String>? environment,
     int? uid,
     bool Function(String path)? directoryExists,
+    bool? macOS,
   }) {
     final Map<String, String> env = environment ?? Platform.environment;
     final bool Function(String) exists =
@@ -45,6 +49,26 @@ class DaemonPaths {
     final String? xdg = _nonEmpty(env['XDG_RUNTIME_DIR']);
     if (xdg != null) {
       return DaemonPaths(runtimeDir: '$xdg/$appDir');
+    }
+    // macOS clears its temporary directory of files nobody touched for three
+    // days, so the daemon keeps socket and token under Application Support.
+    // Unless the longest socket below it would not fit into `sun_path` (104
+    // bytes with the NUL); then the short temporary directory, like the
+    // daemon (`Paths::runtime_dir_with`). Without HOME the daemon takes
+    // `$TMPDIR/humanitl-<uid>-home` (`Paths::home`), and so does this mirror.
+    if (macOS ?? Platform.isMacOS) {
+      // Without the trailing slash of the macOS TMPDIR, as `PathBuf::join`.
+      final String tmp = (_nonEmpty(env['TMPDIR']) ?? '/tmp').replaceFirst(
+        RegExp(r'/+$'),
+        '',
+      );
+      final int id = uid ?? currentUid();
+      final String home = _nonEmpty(env['HOME']) ?? '$tmp/$appDir-$id-home';
+      final String support = '$home/$macRuntimeDir';
+      if (utf8.encode('$support/proxy/proxy.sock').length < 104) {
+        return DaemonPaths(runtimeDir: support);
+      }
+      return DaemonPaths(runtimeDir: '$tmp/$appDir-$id', fallbackUsed: true);
     }
     final int id = uid ?? currentUid();
     final String runUser = '/run/user/$id';
@@ -57,6 +81,11 @@ class DaemonPaths {
 
   /// Name of the daemon's directory below the runtime directory.
   static const String appDir = 'humanitl';
+
+  /// The runtime directory below the home on macOS, mirror of
+  /// `Paths::mac_support_dir().join("run")`.
+  static const String macRuntimeDir =
+      'Library/Application Support/Humanitl/run';
 
   /// Name of the socket file.
   static const String socketName = 'daemon.sock';
