@@ -19,6 +19,8 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/gestures.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -30,6 +32,7 @@ import '../../../core/shortcuts/intents.dart';
 import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/shell_glyph.dart';
 import '../../../core/ui/terminal_placement.dart';
+import '../../../core/ui/terminal_zoom.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../providers/terminal_provider.dart';
@@ -65,6 +68,19 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   final FocusNode _focus = FocusNode(debugLabel: 'terminal');
   final TerminalController _controller = TerminalController();
   final HContextMenuController _menu = HContextMenuController();
+
+  /// The physical key of a zoom chord whose press this pane took, until it
+  /// is released (HUM-301).
+  ///
+  /// The activators accept the press and, for larger and smaller, its
+  /// repeats; the release and the repeats of the reset they do not accept.
+  /// Those events would fall through to the emulator, and an agent that asks
+  /// for releases and repeats (the kitty keyboard protocol) would receive the
+  /// second half of a chord whose first half it never saw. So the pane
+  /// remembers the key and keeps every further event of it until the release.
+  /// A new press of any key ends the memory as well: the release may have
+  /// gone to another node after the focus moved.
+  PhysicalKeyboardKey? _heldZoomKey;
 
   @override
   void initState() {
@@ -224,6 +240,8 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   /// (HUM-298): Es steht in [shellShortcuts] und nimmt deshalb denselben Weg.
   /// Ebenso `Ctrl+Backquote`, die Tastatur ans Terminal (HUM-303): Steht der
   /// Fokus schon hier, tut es nichts, und der Agent bekommt kein Byte.
+  /// Und die Zoom-Kürzel (HUM-301): `Ctrl` mit `+`, `=` oder `-`, mit dem
+  /// Plus, Minus oder der Null des Ziffernblocks, und `Ctrl+Shift+0`.
   /// Alles andere gehört ihm, `Ctrl+C` als `0x03`, `Ctrl+P` als `0x10` und
   /// `Esc` eingeschlossen, das OpenCode und pi zum Abbrechen brauchen.
   ///
@@ -253,6 +271,9 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (event is KeyDownEvent) {
+      _heldZoomKey = null;
+    }
     for (final MapEntry<ShortcutActivator, Intent> binding
         in shellShortcuts().entries) {
       if (!binding.key.accepts(event, HardwareKeyboard.instance)) {
@@ -264,7 +285,19 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
       if (Actions.maybeFind<Intent>(context, intent: binding.value) == null) {
         break;
       }
+      if (binding.value is TerminalZoomIntent && event is KeyDownEvent) {
+        _heldZoomKey = event.physicalKey;
+      }
       Actions.maybeInvoke<Intent>(context, binding.value);
+      return KeyEventResult.handled;
+    }
+    // Der Rest eines Zoom-Griffs, den diese Ansicht genommen hat: die
+    // Wiederholungen der Vorgabe und das Loslassen (HUM-301). Die Vorgabe
+    // gilt dabei nicht noch einmal.
+    if (_heldZoomKey != null && event.physicalKey == _heldZoomKey) {
+      if (event is KeyUpEvent) {
+        _heldZoomKey = null;
+      }
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -408,35 +441,49 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
     // [_mayTakeKeyboard] (HUM-303). On entering, and on every movement
     // after: a text field that had the focus when the pointer came in may
     // have let go of it since.
-    child: MouseRegion(
-      onEnter: _hovered,
-      onHover: _hovered,
-      child: ColoredBox(
-        color: tokens.terminal.background,
-        child: TerminalView(
-          session.terminal,
-          controller: _controller,
-          focusNode: _focus,
-          autofocus: true,
-          shortcuts: _emulatorShortcuts(),
-          theme: _theme(tokens.terminal),
-          textStyle: TerminalStyle(
-            fontSize: tokens.typography.mono13.fontSize ?? 13,
-            fontFamily: HType.monoFamily,
-            fontFamilyFallback: HType.monoFallback,
+    child: _WheelZoom(
+      onZoom: _wheelZoomed,
+      child: MouseRegion(
+        onEnter: _hovered,
+        onHover: _hovered,
+        child: ColoredBox(
+          color: tokens.terminal.background,
+          child: TerminalView(
+            session.terminal,
+            controller: _controller,
+            focusNode: _focus,
+            autofocus: true,
+            shortcuts: _emulatorShortcuts(),
+            theme: _theme(tokens.terminal),
+            textStyle: TerminalStyle(
+              // `mono13` until somebody zooms (HUM-301). A new size changes
+              // the cells, the emulator counts columns and rows again and
+              // reports them through `onResize`, and the session sends them
+              // up on its throttled path (HUM-305): the agent redraws.
+              fontSize: ref.watch(terminalFontSizeProvider),
+              fontFamily: HType.monoFamily,
+              fontFamilyFallback: HType.monoFallback,
+            ),
+            padding: EdgeInsets.all(tokens.spacing.x2),
+            onSecondaryTapDown: (TapDownDetails details, CellOffset _) =>
+                _menu.open(details.globalPosition),
+            onKeyEvent: _onKey,
+            // A reader may not type, and nobody may while the session is not
+            // attached: the daemon drops those keys, and an emulator that still
+            // takes them shows a cursor waiting for an agent that never hears it.
+            readOnly:
+                session.readOnly || session.phase != TerminalPhase.attached,
           ),
-          padding: EdgeInsets.all(tokens.spacing.x2),
-          onSecondaryTapDown: (TapDownDetails details, CellOffset _) =>
-              _menu.open(details.globalPosition),
-          onKeyEvent: _onKey,
-          // A reader may not type, and nobody may while the session is not
-          // attached: the daemon drops those keys, and an emulator that still
-          // takes them shows a cursor waiting for an agent that never hears it.
-          readOnly: session.readOnly || session.phase != TerminalPhase.attached,
         ),
       ),
     ),
   );
+
+  /// `Ctrl` + wheel over the emulator: up is larger, down smaller (HUM-301).
+  void _wheelZoomed(bool larger) {
+    final TerminalFontSize size = ref.read(terminalFontSizeProvider.notifier);
+    larger ? size.zoomIn() : size.zoomOut();
+  }
 
   void _copy() {
     final BufferRange? selection = _controller.selection;
@@ -705,6 +752,68 @@ class _Idle extends StatelessWidget {
         style: tokens.typography.ui13.tinted(tokens.colors.fg1),
         textAlign: TextAlign.center,
       ),
+    );
+  }
+}
+
+/// Turns `Ctrl` + wheel over its child into a zoom of the terminal text
+/// (HUM-301), and keeps the wheel from scrolling the scrollback meanwhile.
+///
+/// **Why not a `Listener`.** Every `Scrollable` inside the emulator -- the
+/// scrollback and, for a full-screen TUI, the one that turns the wheel into
+/// mouse reports -- registers each wheel event with the
+/// `PointerSignalResolver`, and the first to register wins it. The event is
+/// handed along the hit-test path from the innermost box outwards, so a
+/// `Listener` around the emulator registers last and loses: `Ctrl` + wheel
+/// would scroll instead of zooming. This box enters itself into the path
+/// before its children and thus registers first, and only for a wheel with
+/// `Ctrl` held. Every other wheel event it leaves alone.
+class _WheelZoom extends SingleChildRenderObjectWidget {
+  const _WheelZoom({required this.onZoom, required super.child});
+
+  /// Called with `true` for a step larger, `false` for a step smaller.
+  final ValueChanged<bool> onZoom;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderWheelZoom(onZoom);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderWheelZoom renderObject) {
+    renderObject.onZoom = onZoom;
+  }
+}
+
+class _RenderWheelZoom extends RenderProxyBox {
+  _RenderWheelZoom(this.onZoom);
+
+  ValueChanged<bool> onZoom;
+
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    if (!size.contains(position)) {
+      return false;
+    }
+    // Before the children, not after them as every proxy does: the order of
+    // the path is the order in which the resolver hears the candidates.
+    result.add(BoxHitTestEntry(this, position));
+    hitTestChildren(result, position: position);
+    return true;
+  }
+
+  @override
+  void handleEvent(PointerEvent event, BoxHitTestEntry entry) {
+    if (event is! PointerScrollEvent ||
+        !HardwareKeyboard.instance.isControlPressed) {
+      return;
+    }
+    final double delta = event.scrollDelta.dy;
+    if (delta == 0) {
+      return;
+    }
+    GestureBinding.instance.pointerSignalResolver.register(
+      event,
+      (PointerSignalEvent _) => onZoom(delta < 0),
     );
   }
 }
