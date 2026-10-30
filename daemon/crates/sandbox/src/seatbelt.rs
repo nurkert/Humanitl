@@ -78,7 +78,9 @@ pub const PRIVATE_TREES: &[&str] = &["/Users", "/Volumes", "/private/var/folders
 /// Die Mach-Dienste, die gewöhnliche Werkzeuge brauchen und die nichts nach
 /// außen tragen: Benutzerdaten (`getpwuid`), Benachrichtigungen, Protokoll,
 /// Einstellungen. Nicht dabei: `mDNSResponder` (DNS), `trustd` (lädt
-/// Zertifikate nach), der Pasteboard-Server und `launchd` selbst.
+/// Zertifikate nach), der Pasteboard-Server, `launchd` selbst und jeder Dienst
+/// des Schlüsselbunds (`securityd`): `/usr/bin/security` darf der Agent
+/// starten, doch ohne diesen Dienst findet es nichts (HUM-349).
 pub const MACH_SERVICES: &[&str] = &[
     "com.apple.system.opendirectoryd.libinfo",
     "com.apple.system.notification_center",
@@ -1030,6 +1032,15 @@ mod tests {
     fn the_profile_denies_by_default_and_names_one_door() {
         let text = policy().render();
         assert!(text.contains("(deny default)"));
+        // Der Zugangsschlüssel liegt unter macOS im Keychain (HUM-349); nur
+        // diese Lücke in der Mach-Liste hält `security` von ihm fern.
+        for service in MACH_SERVICES {
+            let lower = service.to_lowercase();
+            assert!(
+                !lower.contains("secur") && !lower.contains("secd") && !lower.contains("keychain"),
+                "{service} opens the Keychain to the agent"
+            );
+        }
         assert!(text.contains(
             "(allow network-outbound (remote unix-socket (path-literal \"/private/var/folders/x/T/humanitl-501/proxy/proxy.sock\")))"
         ));

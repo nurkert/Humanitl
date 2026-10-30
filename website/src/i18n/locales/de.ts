@@ -76,7 +76,7 @@ const de = {
         id: 'settings',
         name: 'Modell',
         title: 'Dein Modell, dein Schlüssel.',
-        text: 'Endpunkt und Modell trägst du selbst ein. Der Zugangsschlüssel liegt unter Linux im Schlüsselbund des Systems, sonst in einer Datei, die nur dein Konto lesen kann. In der Konfiguration steht er nie.',
+        text: 'Endpunkt und Modell trägst du selbst ein. Der Zugangsschlüssel liegt unter Linux im Schlüsselbund des Systems, unter macOS im Anmelde-Schlüsselbund, sonst in einer Datei, die nur dein Konto lesen kann. In der Konfiguration steht er nie.',
         alt: 'Humanitl, Einstellungen: Endpunkt, Modell und Zugangsschlüssel des Sprachmodells.',
       },
     ],

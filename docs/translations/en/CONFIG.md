@@ -1,6 +1,6 @@
 ---
 source: CONFIG.md
-source-sha256: 2c288ed27b06c79332fb29d3a400fd68bd1475b3dffd895c694b0807e97aa5f5
+source-sha256: a21936d2f82403b17cd85bdbbf47d9653d09b9ad27b7fbf1c0db1d801f2ae09e
 lang: en
 ---
 # Configuration
@@ -165,11 +165,11 @@ The local LLM endpoint and what counts as passthrough.
 | Key | Type | Default | Tier | Project | Effect | Description |
 |---|---|---|---|---|---|---|
 | `llm.active` | string, optional | `-` | advanced | denied | yes | The name of the active entry from `llm.servers`. Only its endpoint gets the stored access key and counts as LLM passthrough. Empty as long as there are no entries. |
-| `llm.api_key_ref` | string, optional | `-` | advanced | denied | yes | Reference to the endpoint's access key, never the key itself: `secret-service:humanitl/llm` for the system keyring or `file:llm` for a file with `0600` under `$XDG_DATA_HOME/humanitl/keys`. It is set with `humanitl llm key set` or in the settings; the agent gets the key as a file in the sandbox, never via the command line. Empty means: no key. |
+| `llm.api_key_ref` | string, optional | `-` | advanced | denied | yes | Reference to the endpoint's access key, never the key itself: `secret-service:humanitl/llm` for the system keyring, on macOS `keychain:humanitl/llm`, or `file:llm` for a file with `0600` under `$XDG_DATA_HOME/humanitl/keys`. It is set with `humanitl llm key set` or in the settings; the agent gets the key as a file in the sandbox, never via the command line. Empty means: no key. |
 | `llm.endpoint` | string, optional | `-` | basic | denied | yes | OpenAI-compatible endpoint in the LAN. Traffic there is not held, but it is logged. |
 | `llm.models` | list of string | `[]` | basic | denied | yes | Models the endpoint offers. Empty means: the agent gets a placeholder model and a warning. |
 | `llm.passthrough_paths` | list of string | `["/v1/","/api/"]` | advanced | denied | yes | Path prefixes that count as LLM passthrough. A prefix should name one endpoint, not a whole API surface: the agent adapter therefore replaces `/v1/` and `/api/` with the endpoints that do inference, so that `POST /api/pull` and `POST /v1/files` do not go out without asking. A path that names more stays as it stands here. |
-| `llm.servers` | table of table | `{}` | advanced | denied | yes | Saved model servers, one entry per name with `endpoint`, `models` and `api_key_ref` (`secret-service:humanitl/NAME`). The entry that `llm.active` names supplies `llm.endpoint`, `llm.models` and `llm.api_key_ref`; the flat keys are its view. A name has 1 to 32 characters `a-z`, `0-9`, `-` and `_`. The table is maintained with `humanitl llm server` or in the settings; a change applies from the next session on. |
+| `llm.servers` | table of table | `{}` | advanced | denied | yes | Saved model servers, one entry per name with `endpoint`, `models` and `api_key_ref` (`secret-service:humanitl/NAME`, on macOS `keychain:humanitl/NAME`). The entry that `llm.active` names supplies `llm.endpoint`, `llm.models` and `llm.api_key_ref`; the flat keys are its view. A name has 1 to 32 characters `a-z`, `0-9`, `-` and `_`. The table is maintained with `humanitl llm server` or in the settings; a change applies from the next session on. |
 
 ### `pseudonyms`
 

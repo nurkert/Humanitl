@@ -68,7 +68,7 @@ Contacting the server does not save it. Open the settings with `Ctrl+,`
 2. "Model": the model the agent should use, for example `qwen2.5-coder:14b`.
    After a check, a click on a listed model fills it in.
 3. "Access key": only if the server asks for one. It goes into the system
-   keyring and never into `config.toml`.
+   keyring (on macOS the login Keychain) and never into `config.toml`.
 
 As the settings sheet says, changes are written to `config.toml` and take effect
 when the daemon starts next. Restart it once, while no session is running:

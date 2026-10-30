@@ -1367,11 +1367,12 @@ visible in `/proc/<pid>/cmdline` to every process of the same user and in the
 shell's history. At a terminal the input is hidden; from a pipe everything is
 read up to the end, without the trailing line break
 (`printf '%s' "$KEY" | humanitl llm key set`). The daemon stores it in the
-system keyring (`secret-tool`, Secret Service), otherwise in
+system keyring (`secret-tool`, Secret Service; on macOS the login Keychain
+through `/usr/bin/security`, reference `keychain:humanitl/<NAME>`), otherwise in
 `$XDG_DATA_HOME/humanitl/keys/llm.key` with `0600` and then reports `CONFIG_019`.
 Afterwards `config.toml` holds only the reference `llm.api_key_ref`. No output
 carries the key, not even `--json`: it names `set`, `store`
-(`secret-service`, `file` or `none`), `key_ref` and the Diagnostics.
+(`secret-service`, `keychain`, `file` or `none`), `key_ref` and the Diagnostics.
 
 `status` reports `LLM_009` if `llm.api_key_ref` names a key that the store
 does not hand out. `remove` removes key and reference. White space around
