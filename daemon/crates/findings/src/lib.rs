@@ -65,7 +65,7 @@ pub mod settings;
 
 pub use crate::content_type::ContentType;
 pub use crate::decode::{
-    Budget, ContentEncoding, DecodedBody, InflateError, Inflated, percent_decode,
+    Ambiguity, Budget, ContentEncoding, DecodedBody, InflateError, Inflated, percent_decode,
 };
 pub use crate::display::display_prefix;
 pub use crate::input::{ScanInput, ScanTarget, ScanTargets, SpanMap};
