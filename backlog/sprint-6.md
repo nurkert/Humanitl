@@ -30,6 +30,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-346 | Die Docs zweisprachig auf humanitl.de | M | HUM-336 |
 | HUM-339 | Linux: ein RPM für Fedora und openSUSE und das AUR-Paket humanitl-bin | M | HUM-335 |
 | HUM-337 | Download: der Knopf nennt das System, keine Empfehlung, neutrale Symbole, eine Tafel für die Zahlen | S | HUM-333, HUM-335 |
+| HUM-347 | Bühne: größeres Fokusfenster, Ring danach ausgerichtet, Tiefenschärfe nach hinten, Pfeile immer erreichbar | M | HUM-334 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -366,3 +367,14 @@ Akzeptanzkriterien:
 - Die Download-Seite spricht keine Empfehlung aus; sie öffnet still das Feld des Systems.
 - Apple-Logo und Tux sind entfernt (das Apple-Logo darf ohne Lizenz von Apple nicht stehen). macOS und Linux tragen selbst gezeichnete Symbole in der Strichstärke der Website; `platform-icons.ts` und sein Eintrag in `THIRD_PARTY.md` entfallen.
 - Version und Download-Zahlen stehen auf einer Tafel. Gezählt werden Installationsdateien aller Versionen; ein Balken teilt sie nach System auf, die Teile ergeben die Summe. Er wächst nur über `transform`.
+
+## HUM-347 · Bühne: größeres Fokusfenster, Ring danach ausgerichtet, Tiefenschärfe nach hinten, Pfeile immer erreichbar
+
+Wünsche des Inhabers vom 2026-10-30.
+
+Akzeptanzkriterien:
+
+- Im Karussell nimmt das Fokusfenster deutlich mehr Platz ein, auf Desktop-Formaten rund 25 bis 35 Prozent mehr Breite als vorher, soweit Rand und Höhe es zulassen. Der Ring ist dafür neu ausgerichtet; das Fenster schneidet die Beschriftung im Ruhezustand nicht.
+- Die hinteren Fenster werden nach hinten zunehmend unscharf, mit Bokeh-Scheiben. Das Fokusfenster bleibt scharf, ebenso alle Fenster in der Landing-Section.
+- Kein Filter wird pro Frame neu berechnet: die Unschärfe liegt fest in einer eigenen Ebene, das Skript setzt nur `opacity` und `transform`. Mit `data-lite` entfällt das Bokeh; ohne Skript und mit reduzierter Bewegung bleibt die Seite vollständig.
+- Die Pfeile erscheinen, sobald der Ring steht, sind ohne Suchen sichtbar und liegen in jeder Layout-Klasse im Bild und klickbar, über alle Module. Drag und Tastatur bleiben daneben bestehen.
