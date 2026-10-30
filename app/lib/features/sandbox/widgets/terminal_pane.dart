@@ -111,6 +111,7 @@ class TerminalPane extends ConsumerStatefulWidget {
     this.shellId = '',
     this.focusOnMount = false,
     this.floating = false,
+    this.headerInset = EdgeInsets.zero,
     this.tabs,
     this.notices,
     super.key,
@@ -123,6 +124,11 @@ class TerminalPane extends ConsumerStatefulWidget {
   /// terminal. Everything this pane does holds for a shell unchanged; only
   /// the line at its end names the shell instead of the agent.
   final String shellId;
+
+  /// The room the banner leaves on its left and right side: the floating
+  /// window keeps its resize grip free there (HUM-352). Only the horizontal
+  /// sides count.
+  final EdgeInsets headerInset;
 
   /// The row of tabs under the banner (HUM-314), or none.
   final Widget? tabs;
@@ -463,6 +469,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
             text: l10n.sandboxTerminalUntrustedBanner,
             floating: widget.floating,
             running: false,
+            inset: widget.headerInset,
           ),
           Expanded(child: _Idle(text: l10n.sandboxTerminalIdle)),
         ],
@@ -492,6 +499,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
           text: l10n.sandboxTerminalUntrustedBanner,
           floating: widget.floating,
           running: true,
+          inset: widget.headerInset,
         ),
         if (notice != null)
           _HeldStrip(
@@ -807,9 +815,13 @@ class _Banner extends StatelessWidget {
     required this.text,
     required this.floating,
     required this.running,
+    required this.inset,
   });
 
   final String text;
+
+  /// The room left on the sides (`TerminalPane.headerInset`).
+  final EdgeInsets inset;
 
   /// Whether the host is the floating window.
   final bool floating;
@@ -823,7 +835,10 @@ class _Banner extends StatelessWidget {
     return Container(
       constraints: const BoxConstraints(minHeight: terminalStripHeight),
       color: tokens.colors.bg2,
-      padding: EdgeInsets.only(left: tokens.spacing.x2),
+      padding: EdgeInsets.only(
+        left: tokens.spacing.x2 + inset.left,
+        right: inset.right,
+      ),
       child: Row(
         children: <Widget>[
           Expanded(

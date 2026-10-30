@@ -23,14 +23,28 @@ import 'package:flutter/widgets.dart';
 /// has no height; a rectangle of zero height still "overlaps" every rectangle
 /// across it in [Rect.overlaps], so [rectsIn] drops it.
 ///
+/// **A floater never keeps clear from itself.** A region inside the floater
+/// (below [HKeepClearExempt]) counts as nothing: the notices of the floating
+/// terminal stand in its own window, and a window that gave way to them took
+/// them along, found its place free again in the next frame and came back,
+/// several times a second (HUM-352).
+///
+/// **A region may hold nothing to keep free right now.** [enabled] false
+/// counts it as nothing, like a hidden one: the bar with Allow and Block
+/// while no request waits (HUM-352). When it turns true, [changes] tells the
+/// floater, and the floater gives way again.
+///
 /// The region itself draws nothing, takes no pointer and no focus; it is a
 /// proxy around [child].
 class HKeepClear extends StatelessWidget {
-  /// Marks [child] as a region nothing may float over.
-  const HKeepClear({required this.child, super.key});
+  /// Marks [child] as a region nothing may float over, while [enabled].
+  const HKeepClear({required this.child, this.enabled = true, super.key});
 
   /// What must stay free.
   final Widget child;
+
+  /// Whether [child] holds something that must stay free right now.
+  final bool enabled;
 
   static final Set<_RenderKeepClear> _regions = <_RenderKeepClear>{};
 
@@ -93,8 +107,11 @@ class HKeepClear extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) =>
-      _KeepClearBox(active: Visibility.of(context), child: child);
+  Widget build(BuildContext context) => _KeepClearBox(
+    active:
+        enabled && Visibility.of(context) && !HKeepClearExempt.covers(context),
+    child: child,
+  );
 }
 
 class _KeepClearBox extends SingleChildRenderObjectWidget {
@@ -154,4 +171,21 @@ class _RenderKeepClear extends RenderProxyBox {
       HKeepClear._changed();
     }
   }
+}
+
+/// The floater itself: every [HKeepClear] below it counts as nothing
+/// (HUM-352).
+///
+/// Whatever floats and asks [HKeepClear.rectsIn] wraps itself in this. Its
+/// own regions move with it; were they counted, it would give way to itself.
+class HKeepClearExempt extends InheritedWidget {
+  /// Exempts the regions in [child].
+  const HKeepClearExempt({required super.child, super.key});
+
+  /// Whether [context] lies inside a floater.
+  static bool covers(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<HKeepClearExempt>() != null;
+
+  @override
+  bool updateShouldNotify(HKeepClearExempt oldWidget) => false;
 }

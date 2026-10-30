@@ -20,16 +20,21 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/daemon_client.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
+import 'package:humanitl/core/ui/terminal_float.dart'
+    show terminalFloatCornerKey, terminalFloatSizeKey;
 import 'package:humanitl/core/ui_state/ui_state_file.dart';
 import 'package:humanitl/features/sandbox/providers/sandbox_status_provider.dart';
 import 'package:humanitl/features/sandbox/providers/terminal_provider.dart';
 import 'package:humanitl/features/sandbox/providers/terminal_tabs_provider.dart';
 import 'package:humanitl/features/sandbox/widgets/terminal_pane.dart';
-import 'package:humanitl_ui/humanitl_ui.dart' show HButton;
+import 'package:humanitl/features/shell/widgets/floating_terminal.dart'
+    show FloatingTerminalLayer;
+import 'package:humanitl_ui/humanitl_ui.dart' show HButton, HKeepClear;
 import 'package:xterm2/ui.dart';
 
 import '../../harness/app_harness.dart';
-import '../shell/terminal_float_test.dart' show floating, pressFloat, window;
+import '../shell/terminal_float_test.dart'
+    show floating, pressFloat, stateFile, window;
 import '../shell/terminal_full_window_test.dart' show settle;
 import 'harness.dart';
 
@@ -175,6 +180,34 @@ Future<void> _focusTerminal(WidgetTester tester) async {
   addTearDown(() => dir.deleteSync(recursive: true));
   final String path = '${dir.path}/${UiStateFile.fileName}';
   return (uiStateFileProvider.overrideWithValue(UiStateFile(path)), path);
+}
+
+/// Sechzig Bilder lang steht das schwebende Fenster still, und genau ein
+/// Terminal ist gebaut (HUM-352). Dazu hält nichts im Fenster selbst einen
+/// Bereich frei: Der Hinweis zur ersten Shell tat es, und das Fenster wich
+/// ihm aus, nahm ihn mit und kam im nächsten Bild zurück.
+Future<void> expectStill(WidgetTester tester) async {
+  final Rect still = tester.getRect(floating);
+  expect(find.descendant(of: floating, matching: _hint), findsOneWidget);
+  final List<Rect> keepClear = HKeepClear.rectsIn(
+    tester.renderObject<RenderBox>(find.byType(FloatingTerminalLayer)),
+  );
+  expect(
+    keepClear.where((Rect zone) => zone.overlaps(still)),
+    isEmpty,
+    reason: 'the window keeps nothing clear from itself',
+  );
+  for (int frame = 0; frame < 60; frame++) {
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(floating, findsOneWidget, reason: 'frame $frame');
+    expect(tester.getRect(floating), still, reason: 'frame $frame');
+    expect(
+      find.byType(TerminalView, skipOffstage: false),
+      findsOneWidget,
+      reason: 'one host only, frame $frame',
+    );
+  }
+  expect(tester.takeException(), isNull);
 }
 
 void main() {
@@ -604,6 +637,66 @@ void main() {
       reason: 'the tabs travel with the terminal',
     );
     expect(tester.takeException(), isNull);
+  }, variant: _linux);
+
+  // Owner (HUM-352): Über History, schwebend, groß links oben, „+ Shell" und
+  // zurück zum Agenten, danach sprang das Fenster mehrmals je Sekunde
+  // zwischen einem großen links oben und einem kleinen rechts oben. Der
+  // Hinweis zur ersten Shell steht im schwebenden Fenster selbst und hielt
+  // sich als Bereich frei, dem das Fenster ausweichen muss: Es wich sich
+  // selbst aus, nahm den Hinweis mit, wurde dabei kleiner, und im nächsten
+  // Bild war die gewählte Ecke wieder frei. Dazu blieb die verborgene
+  // Sandbox-Seite nach Schließen und erneutem Schweben ein zweiter Wirt.
+  testWidgets('a_new_shell_and_a_tab_switch_keep_the_float_still', (
+    WidgetTester tester,
+  ) async {
+    final (Override uiState, String _) = stateFile(<String, Object?>{
+      terminalFloatCornerKey: 'topLeft',
+      terminalFloatSizeKey: <double>[900, 500],
+    });
+    await pumpApp(
+      tester,
+      client: ShellClient(),
+      size: window,
+      uiState: uiState,
+    );
+    await pressCtrl(tester, LogicalKeyboardKey.digit2);
+    await settle(tester);
+    await pressFloat(tester);
+    expect(floating, findsOneWidget);
+
+    await tester.tap(find.descendant(of: floating, matching: _newShell));
+    await settle(tester);
+    expect(find.descendant(of: floating, matching: _hint), findsOneWidget);
+    await tester.tap(find.descendant(of: floating, matching: _agentTab));
+    await settle(tester);
+
+    await expectStill(tester);
+
+    // Zweiter Weg des Owners: Fenster mit dem X schließen, mit
+    // `Ctrl+Shift+P` wieder öffnen und dann den Reiter der Shell wählen.
+    await tester.tap(find.byKey(const Key('shell-terminal-floating-close')));
+    await settle(tester);
+    expect(floating, findsNothing);
+    await pressFloat(tester);
+    expect(floating, findsOneWidget);
+    await tester.tap(
+      find.descendant(
+        of: floating,
+        matching: find.byWidgetPredicate(
+          (Widget w) =>
+              w.key is ValueKey<String> &&
+              (w.key! as ValueKey<String>).value.startsWith(
+                'sandbox-terminal-tab-',
+              ) &&
+              !(w.key! as ValueKey<String>).value.contains('close') &&
+              (w.key! as ValueKey<String>).value !=
+                  'sandbox-terminal-tab-agent',
+        ),
+      ),
+    );
+    await settle(tester);
+    await expectStill(tester);
   }, variant: _linux);
 
   test('the_fake_refuses_an_unknown_shell_with_ipc_006', () async {
