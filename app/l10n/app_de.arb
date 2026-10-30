@@ -1359,5 +1359,14 @@
   "sandboxDiagnosticDismiss": "Ausblenden",
   "sandboxTerminalSelectAll": "Alles auswählen",
   "sandboxTerminalCopyKey": "Strg+Umschalt+C",
-  "sandboxTerminalPasteKey": "Strg+Umschalt+V"
+  "sandboxTerminalPasteKey": "Strg+Umschalt+V",
+  "sandboxTerminalFloatEnter": "Terminal über der Seite schweben lassen (Strg+Umschalt+P)",
+  "sandboxTerminalFloatLeave": "Terminal zurücklegen (Strg+Umschalt+P)",
+  "sandboxTerminalDockHere": "Terminal hierher zurückholen",
+  "shellFloatingTerminalTitle": "Terminal des Agenten",
+  "shellFloatingTerminalLabel": "Schwebendes Terminal des Agenten",
+  "shellFloatingTerminalBack": "Zurück zur Sandbox-Seite",
+  "shellFloatingTerminalClose": "Schwebendes Terminal schließen (Strg+Umschalt+P)",
+  "shellPaletteTerminalFloatEnter": "Terminal schweben lassen",
+  "shellPaletteTerminalFloatLeave": "Schwebendes Terminal zurücklegen"
 }

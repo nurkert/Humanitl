@@ -481,6 +481,23 @@ text below runs to the inner edge. A diagnostic as a notice is an
 slot. Notices take no focus, bind no key and do not close on Escape; global
 notices wait while any layer (`HLayerScope.openLayers`) is open.
 
+### HKeepClear and the floating terminal
+
+`HKeepClear` marks a region nothing floating may cover (HUM-300): the queue
+pane, the Intercept action bar, every notice column of an `HNoticeLayer`,
+every `HSheet` and every `HModal` inside the work (the command palette opts
+out, it lies above everything). It draws nothing and takes no pointer or
+focus; a region in a hidden section or without height counts as nothing.
+The floating terminal is the one floater today: a window over the sections
+only (never rail, header or status bar), `bg1` with a `lineStrong` hairline
+and the `card` radius, no shadow. A 28 px title bar in `bg2` (title `ui12`
+semibold, drag by it) carries a ghost button back to the Sandbox section and
+an `HIconButton` close; below it the terminal with its usual banner, which
+there keeps only the full-window button. A 14 px grip in the inner corner
+resizes it between 320 x 200 and 60 % of the sections (at most 960 x 640).
+It sits 12 px (`x3`) from the edges of a corner, bottom right by default,
+and snaps to the corner of the quadrant it is let go in.
+
 ### HContextMenu
 
 The right-click menu (`HMenuItem`, `HContextMenuController`). It appears
@@ -642,7 +659,8 @@ The table lists each binding as the app has it in 0.1, checked against
 | `Ctrl+,` | Settings | `SettingsIntent` | Everywhere |
 | `Ctrl+0` | Expand or collapse the icon rail | `ToggleRailIntent` | Everywhere |
 | `Ctrl+Shift+Enter` (also numpad `Enter`) | Show the terminal over the whole window, and back (HUM-298) | `ToggleTerminalFullWindowIntent` | Everywhere, also inside the terminal |
-| ``Ctrl+` `` (the key left of `1`, by position) | Give the keyboard to the terminal that is shown, without changing the layout; nothing while no terminal is shown (HUM-303) | `FocusTerminalIntent` | Everywhere, also inside the terminal |
+| `Ctrl+Shift+P` | Let the terminal float as a small window over the sections, and put it back (HUM-300); nothing while no agent runs | `ToggleTerminalFloatIntent` | Everywhere, also inside the terminal |
+| ``Ctrl+` `` (the key left of `1`, by position) | Give the keyboard to the terminal that is shown, without changing the layout; with a running agent and no terminal on the screen it lets the terminal float first (HUM-303, HUM-300) | `FocusTerminalIntent` | Everywhere, also inside the terminal |
 | `Ctrl` + `+` (also `Ctrl+=`, numpad `+`) / `Ctrl` + `-` (also numpad `-`) | Terminal text one step larger / smaller, 10 to 28 px, kept across restarts; `Ctrl` + wheel over the terminal does the same (HUM-301) | `TerminalZoomIntent` | While a terminal is shown, also inside it |
 | `Ctrl+Shift+0` (also `Ctrl` + numpad `0`) | Terminal text back to its default size; not `Ctrl+0`, which is the rail (HUM-301) | `TerminalZoomIntent` | While a terminal is shown, also inside it |
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` (`Cmd+C` / `Cmd+V` on Apple platforms) | Copy the terminal selection / paste into the terminal; plain `Ctrl+C` and `Ctrl+V` stay with the agent (HUM-313) | `TerminalClipboardActivator`, no intent | Only inside the terminal |

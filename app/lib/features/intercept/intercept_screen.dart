@@ -682,7 +682,10 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
                       onDragEnd: ref.read(paneRatiosProvider.notifier).commit,
                       onReset: ref.read(paneRatiosProvider.notifier).reset,
                       children: <Widget>[
-                        const QueuePane(),
+                        // Die Warteschlange mit ihren Zeilen und Hinweisen
+                        // bleibt frei: Das schwebende Terminal legt sich nie
+                        // darüber (HUM-300).
+                        const HKeepClear(child: QueuePane()),
                         _InspectorPane(
                           flow: selected,
                           selection: chosen,
@@ -897,13 +900,17 @@ class _InspectorPane extends StatelessWidget {
               ),
             ),
           ),
-          ActionBar(
-            flow: flow,
-            onEdit: onEdit,
-            onPseudonymize: onPseudonymize,
-            ruleMaxHeight: inspector.maxHeight.isFinite
-                ? inspector.maxHeight / 3
-                : null,
+          // Freigeben und Blockieren bleiben greifbar, was auch schwebt
+          // (HUM-300).
+          HKeepClear(
+            child: ActionBar(
+              flow: flow,
+              onEdit: onEdit,
+              onPseudonymize: onPseudonymize,
+              ruleMaxHeight: inspector.maxHeight.isFinite
+                  ? inspector.maxHeight / 3
+                  : null,
+            ),
           ),
         ],
       ),

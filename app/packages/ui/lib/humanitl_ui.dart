@@ -52,6 +52,7 @@ export 'src/widgets/h_focus_ring.dart';
 export 'src/widgets/h_glyph.dart';
 export 'src/widgets/h_hairline.dart';
 export 'src/widgets/h_icon_button.dart';
+export 'src/widgets/h_keep_clear.dart';
 export 'src/widgets/h_layer_scope.dart';
 export 'src/widgets/h_method_badge.dart';
 export 'src/widgets/h_modal.dart';

@@ -79,6 +79,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-301 | The terminal text can be zoomed | S | HUM-298, HUM-303 |
 | HUM-302 | Notices float as dismissible overlays and never push the layout | S | HUM-276, HUM-286 |
 | HUM-313 | Terminal copy and paste | S | HUM-042, HUM-301, HUM-303 |
+| HUM-300 | Terminal as picture-in-picture | M | HUM-298, HUM-302, HUM-303, HUM-305 |
 
 ---
 
@@ -8870,3 +8871,312 @@ Anwendung feuert auf die Griffe. Jeder Test mit Mutationsbeweis.
 - (B) Rückfrage vor einem mehrzeiligen Einfügen über `Terminal.isPasteSafe`,
   solange `DECSET 2004` aus ist.
 - (C) `Shift+Insert` fügt ein.
+
+---
+## HUM-300 · Terminal as picture-in-picture
+
+### Ziel
+Wunsch des Owners 2026-10-30: Während ein Agent läuft, schwebt das Terminal
+als kleines Fenster über den anderen Abschnitten (Intercept, History, Rules,
+Audit, Setup, Einstellungen), damit der Owner dem Agenten zusieht, während er
+dessen Anfragen entscheidet. HUM-298 hat dafür den Platz gelassen: „eine
+schwebende Ebene (HUM-300) wird ein dritter Wert in
+`terminalPlacementProvider` und ein dritter Wirt in der Shell", HUM-303 hat
+die Tastaturregel für diesen Wirt vorgedacht („eigener `FocusScope` nur unter
+dem Bereich der Shell, kein `HLayerScope`") und ``Ctrl+` `` ohne sichtbares
+Terminal ausdrücklich für das schwebende Terminal freigehalten.
+
+### Spezifikation
+1. **Dritte Platzierung.** `TerminalPlacement.floating` neben `pane` und
+   `fullWindow`. Genau ein Wirt zeigt die Sitzung: schwebt das Terminal, bleibt
+   das Pane der Sandbox leer (mit „Terminal hierher zurückholen"), auch wenn
+   der Abschnitt Sandbox gezeigt wird. Emulator und Rücklauf leben weiter in
+   `terminalSessionProvider`; der Wechsel öffnet die Sitzung nicht neu.
+2. **Umschalten.** Kürzel `Ctrl+Shift+P` (`ToggleTerminalFloatIntent` in
+   `shellShortcuts()`, ohne Wiederholung), ein Knopf links vom Vollfenster-Knopf
+   im Streifen über dem Terminal (Tooltip nennt das Kürzel), ein Befehl in der
+   Palette. Ohne laufenden Agenten tut das Kürzel nichts, der Knopf ist
+   deaktiviert und die Palette listet den Befehl nicht; ein schwebendes
+   Terminal lässt sich immer zurücklegen. ``Ctrl+` `` mit laufendem Agenten
+   und ohne sichtbares Terminal lässt es schweben und gibt ihm die Tastatur.
+   Das ganze Fenster (`Ctrl+Shift+Enter`) kehrt zum schwebenden Fenster
+   zurück, wenn es von dort kam.
+3. **Begründung des Kürzels.** `P` wie Picture-in-Picture, in der Familie
+   der `Ctrl+Shift`-Griffe, die das Terminal bewegen. Geprüft gegen jede
+   Bindung in `app/lib`, `app/packages` und CONVENTIONS 3.9: `Ctrl+Shift+Enter`
+   ganzes Fenster, ``Ctrl+` `` Fokus, `Ctrl` mit `+`/`-`/`=` und
+   `Ctrl+Shift+0` Zoom, `Ctrl+0` Leiste, `Ctrl+Shift+C`/`V` Kopieren und
+   Einfügen, `Ctrl+Shift+F`/`L` Gruppenentscheidungen, `Ctrl+F`/`L`/`Enter`
+   Einzelentscheidungen, `Ctrl+K` Palette, `Ctrl+,` Einstellungen,
+   `Ctrl+1..6` Abschnitte, `Ctrl+R` und `Ctrl+Enter` im Editor. Das nackte `P`
+   ist „Pseudonymisieren" in der Befundpause; `SingleActivator` verlangt seine
+   Modifikatoren genau, also trifft es `Ctrl+Shift+P` nicht. Der Agent verliert
+   nichts: Ein Terminal unter Linux schickt `Ctrl+Shift+P` als `0x10` wie
+   `Ctrl+P`, und `Ctrl+P` bleibt beim Agenten.
+4. **Das Fenster.** Es liegt nur über den Abschnitten, nie über Leiste,
+   Kopf- oder Statusleiste; Einstellungsblatt und Palette liegen darüber.
+   Titelleiste zum Ziehen mit „Zurück zur Sandbox-Seite" (legt zurück und
+   zeigt den Abschnitt) und „Schließen" (legt zurück, bleibt auf dem
+   Abschnitt; dasselbe wie das Kürzel). Losgelassen rastet es in die Ecke des
+   Quadranten ein. Ein Griff in der inneren Ecke ändert die Größe zwischen
+   320 x 200 und 60 % der Abschnitte (höchstens 960 x 640). Ecke und Größe
+   überleben einen Neustart in der Zustandsdatei (`UiStateFile`,
+   `terminalFloatCorner`, `terminalFloatSize`).
+5. **Nie über einer Entscheidung.** Vorgabe ist die Ecke unten rechts: Auf
+   Intercept ist das der untere Rand des Kontext-Panes, die einzige Ecke
+   ohne Entscheidung (links die Warteschlange mit Zeilen und Hinweisen unten
+   rechts in ihrer Spalte, in der Mitte unten die Leiste mit Freigeben und
+   Blockieren, oben rechts die Hinweise der Shell). Ausweichregel: Was frei
+   bleiben muss, markiert sich selbst mit `HKeepClear` (Warteschlange,
+   Aktionsleiste, jede Hinweisspalte eines `HNoticeLayer`, jedes `HSheet`,
+   jedes `HModal` in der Arbeit). Das Fenster nimmt die gewählte Ecke in der
+   gewählten Größe, sonst in der kleinsten, sonst die Ecke daneben, darüber
+   oder gegenüber; ist keine frei (ein Modal über der Arbeit), tritt es
+   zurück, bis wieder Platz ist.
+6. **Tastatur.** Kein eigener `FocusScope`, kein `HLayerScope`: Das
+   Terminal im Fenster nimmt die Tastatur unter derselben Regel wie im Pane
+   (Zeiger, ``Ctrl+` ``, Klick, HUM-303), sonst bleibt sie, wo sie ist. Aus der
+   Warteschlange geöffnet, bleibt sie in der Warteschlange, und `Enter` gibt
+   frei. Ein Terminal, das die Tastatur hatte, nimmt sie in den neuen Wirt
+   mit. Mit dem Fokus im schwebenden Terminal erreichen alle Kürzel der Shell
+   die Shell (`TerminalPane._onKey`), keines den Agenten.
+7. **Ende der Sitzung.** Endet der Agent, zeigt das Fenster das Ende vier
+   Sekunden lang so, wie das Pane es zeigen würde, und legt das Terminal dann
+   selbst zurück ins Pane. Ein neuer Agent in dieser Zeit hält es offen.
+   Solange es schwebt, fragt die Shell den Schnappschuss der Sandbox alle
+   fünf Sekunden nach (`AgentSessionFeed`), sonst hörte es vom Ende nichts.
+8. UI-Texte nur über ARB (`en` Quelle, `de` Übersetzung, angehängt);
+   `docs/UX.md` 5.2, `docs/DESIGN.md` (Kürzeltabelle, `HKeepClear`) und
+   CONVENTIONS 3.9 beschreiben die neue Platzierung.
+
+### Akzeptanzkriterien
+1. Widget-Test: `Ctrl+Shift+P` aus Intercept zeigt das schwebende Fenster,
+   der Abschnitt bleibt, genau eine `TerminalView` im ganzen Baum, das Pane
+   der Sandbox ist leer; dasselbe Kürzel legt zurück.
+2. Widget-Test: Derselbe Emulator (identisches `Terminal`) im Fenster, kein
+   zweites `Open` an den Daemon; der Knopf im Streifen schaltet, der Knopf im
+   leeren Pane legt zurück.
+3. Widget-Test: Ohne Agenten schwebt nichts, weder per Kürzel noch per Knopf.
+4. Widget-Test: Auf Intercept mit gehaltener Anfrage überdeckt das Fenster
+   weder Warteschlange noch Aktionsleiste noch einen Hinweis; Freigeben,
+   Blockieren und jede Zeile bleiben treffbar. Eine gespeicherte Ecke über der
+   Warteschlange weicht auf die nächste freie aus. Ein offenes Blatt schiebt
+   das Fenster zur Seite. Reine Tests der Regel: kleinere Größe vor anderer
+   Ecke, Reihenfolge der Ecken, `null` ohne freie Ecke, Berühren ist kein
+   Überdecken.
+5. Widget-Test: Aus der Warteschlange geöffnet, gibt `Enter` frei und der
+   Agent hört nichts; nach dem Zeiger über dem Fenster geht `Enter` an den
+   Agenten und entscheidet nichts. Mit dem Fokus im Fenster wirken
+   `Ctrl+1..6` und `Ctrl+Shift+P`, ohne den Agenten zu erreichen; danach hält
+   kein bloßer Bereich die Tastatur. ``Ctrl+` `` ohne sichtbares Terminal lässt
+   es schweben und gibt ihm die Tastatur; ohne Agenten tut es nichts.
+6. Widget-Test: Ziehen rastet in die Ecke ein und die Ecke übersteht einen
+   Neustart; der Griff ändert die Größe, gespeichert, nie unter dem Minimum.
+   Zurück zur Sandbox und Schließen tun, was sie sagen.
+7. Widget-Test: Endet der Agent, bleibt das Fenster `terminalFloatLinger`
+   lang und schließt dann; der Abschnitt bleibt.
+8. Jedes Verhalten hat einen Mutationsbeweis; `make flutter-analyze` und die
+   Tests der berührten Pakete sind grün; Goldens nur dort geändert, wo der
+   Streifen über dem Terminal den neuen Knopf bekommt.
+
+### Tests
+`test/features/shell/terminal_float_test.dart` (Widget-Tests der Kriterien
+1 bis 7), `test/core/ui/terminal_float_test.dart` (Regel, Gedächtnis,
+Platzierung), `app/packages/ui/test/keep_clear_test.dart` (nur gezeigte,
+nicht leere Bereiche zählen, Meldung nach dem Frame), eine Zeile in
+`shortcuts_map_to_intents_test.dart`, der Test von HUM-303 „ohne Terminal
+tut das Kürzel nichts" wird zu „ohne Agenten tut es nichts".
+
+### Fallstricke
+- Zwei Ansichten derselben Sitzung melden beide ihre Größe und nehmen beide
+  Tasten. Deshalb entscheidet allein die Platzierung, wer zeigt, auch auf dem
+  Abschnitt Sandbox.
+- Die Größe des Fensters ist die Größe der Sitzung: Ein schmales Fenster
+  lässt die Oberfläche des Agenten neu umbrechen, wie jedes Ziehen der Naht
+  (HUM-305).
+- Ein eigener `FocusScope` oder gar ein `HLayerScope` um das Fenster hielte
+  das Terminal für eine Ebene über der Arbeit; dann nähme es die Tastatur nie
+  (`_mayTakeKeyboard`), oder die Shell gäbe sie beim Schließen von Ebenen an
+  den falschen Knoten zurück.
+- Der Wechsel zwischen Pane und Fenster darf die Tastatur nicht pauschal der
+  Shell geben, wie es beim ganzen Fenster nötig ist: Dann verlöre die
+  Warteschlange sie, und `Enter` entschiede nach dem Öffnen nichts mehr.
+- Ein Bereich ohne Höhe überlappt in `Rect.overlaps` jedes Rechteck, das ihn
+  kreuzt; leere Bereiche zählen deshalb nicht.
+- Die Palette ist ein `HModal`, liegt aber über allem. Wiche das Fenster ihr
+  aus, würde es bei jedem `Ctrl+K` abgebaut und neu gebaut; sie verzichtet
+  deshalb auf `HKeepClear`.
+- Die Rechtecke der Bereiche stammen aus dem letzten Layout. Ein Blatt oder
+  Modal in einem Abschnitt (Regelblatt, Sammelentscheidung), das gerade erst
+  erscheint, kann einen Frame lang unter dem Fenster liegen, bevor dieses
+  ausweicht. Das Einstellungsblatt und die Palette liegen in der
+  Zeichenreihenfolge ohnehin darüber.
+
+### Umsetzung (HUM-300)
+
+- **Platzierung.** `core/ui/terminal_placement.dart`:
+  `TerminalPlacement.floating`, `toggleFloating`, `float`, `dock`; das ganze
+  Fenster merkt sich, ob es aus Pane oder Fenster kam.
+- **Regel und Gedächtnis.** `core/ui/terminal_float.dart`: `FloatCorner`,
+  Grenzen (`terminalFloatMinSize` 320 x 200, Vorgabe 480 x 300, höchstens
+  960 x 640 und 60 % der Abschnitte), die reine Funktion
+  `placeFloatingTerminal` und `terminalFloatProvider`, synchron aus der
+  Zustandsdatei gelesen wie der Zoom. `terminalFloatLinger` (4 s) steht beim
+  Wirt in der Shell: In `core/ui` kommt jede Dauer aus `HMotion`
+  (`design_system_test`), und das hier ist Lesezeit, keine Bewegung.
+- **Freihalten.** `HKeepClear` in `packages/ui` (Registrierung im
+  Render-Objekt, `Visibility.of` für verdeckte Abschnitte, leere Bereiche
+  zählen nicht, `changes` meldet nach dem Frame). Markiert: `HSheet`, `HModal`
+  (außer der Palette, `keepClear: false`), die Hinweisspalte von
+  `HNoticeLayer`, die Warteschlange und die Aktionsleiste in
+  `intercept_screen.dart`.
+- **Wirt.** `features/shell/widgets/floating_terminal.dart`
+  (`FloatingTerminalLayer`): `Stack` aus Abschnitten und Fenster, eingehängt
+  im `Expanded` neben der Leiste; Titelleiste, Griff (`DragStartBehavior.down`),
+  Ausweichen, Nachlauf am Ende. `SandboxTerminal(floating: true)`, im Fenster
+  ohne eigenen Schwebe-Knopf im Streifen. Das Einrasten rechnet aus dem Zug
+  selbst und nicht aus dem letzten Bild: Bewegungen und Loslassen können vor
+  dem nächsten Frame ankommen, und dann rastete das Fenster in der alten Ecke
+  ein (im ersten Testlauf gefunden).
+- **Shell.** `ToggleTerminalFloatIntent`, ``Ctrl+` `` lässt schweben,
+  `_terminalMoved` gibt die Tastatur nur beim ganzen Fenster pauschal der
+  Shell, sonst nimmt nur ein Terminal mit Tastatur sie mit
+  (`terminalHoldsKeyboard`), und landet sie auf einem Bereich, holt sie die
+  Shell. Palette `toggle-terminal-float`. `AgentSessionFeed` fragt nach,
+  solange das Terminal schwebt.
+- **Sandbox.** Knopf `FloatButton` (`sandbox-terminal-float`, Glyphe
+  `ShellGlyph.pictureInPicture`), leeres Pane mit
+  `sandbox-terminal-dock`.
+- **Doku.** `docs/UX.md` 5.2, `docs/DESIGN.md` (Kürzeltabelle, `HKeepClear`
+  und das schwebende Terminal), CONVENTIONS 3.9, ARB (9 Schlüssel, en und de,
+  angehängt).
+- **Tests.** `test/features/shell/terminal_float_test.dart` (15, nach
+  Review-Runde 1 22, davon
+  einer bei 1280 x 800, der Breite des Laptops des Owners: Freigeben,
+  Blockieren und jede Zeile bleiben mit offenem Fenster treffbar, und einer mit
+  schmalem Kontext-Pane, in dem das Fenster der Aktionsleiste nach oben
+  ausweicht), `test/core/ui/terminal_float_test.dart` (16),
+  `packages/ui/test/keep_clear_test.dart` (4), eine Zeile in
+  `shortcuts_map_to_intents_test.dart`, der umbenannte Test von HUM-303. Grün:
+  `test/features/shell`, `test/features/sandbox`, `test/features/intercept`,
+  `test/core` (außer drei Tests, die in der Sandbox der Agentensitzung keinen
+  Unix-Socket anlegen dürfen oder Eigentümer prüfen: `grpc_client_test`,
+  `rule_prefixes_round_trip_test`, `app_log_test`; sie berühren nichts aus
+  diesem Issue), `packages/ui`, alle Goldens über
+  `scripts/ci/goldens-placeholder.sh`; `flutter analyze` beider Pakete und
+  `dart format` ohne Befund. Gelaufen über einen Schatten des SDK mit
+  beschreibbarem `bin/cache` und `--no-pub`.
+- **Goldens neu:** `sandbox_header_*` (4) und `isolation_panel_*` (10), nur
+  der Knopf im Terminalstreifen.
+- **Mutationsbeweise**, je rot und danach mit `cmp` byte-gleich zurück:
+  Bindung aus `shellShortcuts()` entfernt; Warteschlange nicht freigehalten;
+  Aktionsleiste nicht freigehalten; kein Rückfall auf die kleinste Größe;
+  jeder Platzwechsel gibt die Tastatur der Shell; kein Schließen nach dem
+  Ende; verdeckte Abschnitte zählen; leere Bereiche zählen; Ecke und Größe
+  nicht geschrieben; Umschalten ohne laufenden Agenten. „Leere Bereiche
+  zählen" blieb zuerst grün, weil eine zweite Prüfung nach der Umrechnung
+  dasselbe abfing; die doppelte Prüfung ist entfernt.
+- **Gefunden im ersten Lauf:** das Einrasten aus dem letzten Bild (oben) und
+  `terminalFloatLinger` als Literal in `core/ui` (`design_system_test`).
+
+### Review-Runde 1 (Codex, Sonnet)
+
+Antigravity fiel aus; ein frischer Sonnet-Subagent ersetzte es mit demselben
+Auftrag. Alle Befunde übernommen.
+
+- **Gehaltene Kürzel (Codex, blockierend).** Ein Kürzel der Shell nahm im
+  Terminal nur das Drücken; Wiederholungen und Loslassen fielen zum Emulator
+  durch, und ein Agent mit dem Tastaturprotokoll von kitty sah das `P` von
+  `Ctrl+Shift+P`. `_heldChordKeys` (HUM-313) nimmt jetzt das Drücken jedes
+  Kürzels der Shell, und die Menge ist statisch, also allen Wirten gemeinsam:
+  Das Loslassen kommt nach dem Schweben im anderen Wirt an. Das nächste
+  Drücken derselben Taste räumt sie wie bisher. Test mit `CSI > 11 u`.
+- **Ende im Nachlauf (Codex).** Das Fenster zeigte nach dem Ende vier
+  Sekunden den Leerzustand. `SandboxTerminal` behält im schwebenden Wirt die
+  letzte Sitzung, bis der Wirt geht oder eine neue Sitzung sie ersetzt.
+- **Ende über dem ganzen Fenster (Codex).** Schweben, ganzes Fenster, Ende,
+  zurück: Das Fenster blieb stehen. Der Nachlauf zählt jetzt unabhängig von
+  der Platzierung; ist er vorbei, legt ein Fenster, das wieder schwebt,
+  sofort zurück.
+- **Halten mit der Hand (Codex, minor).** Entschieden: Der Griff lässt das
+  Fenster in keiner Richtung in einen freizuhaltenden Bereich wachsen; beim
+  Ziehen darf es kurz darüberstehen, weil die Hand am Fenster ist und der
+  Platz beim Loslassen entschieden wird. Getestet: Mitten im Zug am Griff
+  überdeckt es nichts, losgelassen über der Warteschlange weicht es aus.
+- **Klick auf die Titelleiste (Sonnet).** Ein Klick endete als Zug ohne Weg
+  (allein in der Arena gewinnt der Zug) oder als abgebrochener Zug und
+  speicherte die Ausweichecke als gewählte. Unter `kTouchSlop` Weg rastet
+  nichts ein.
+- **Griff auf dem Schließen-Knopf (Sonnet).** Unten verankert liegt der Griff
+  jetzt unter der Titelleiste.
+- **Dateigröße (Sonnet).** Fenster, Titelleiste, Griff und Maler stehen in
+  `floating_terminal_window.dart`, der Wirt bleibt in `floating_terminal.dart`.
+- **Doku (Sonnet).** `HKeepClear.changes` sagt, dass ein Bereich, der sich bei
+  gleicher Größe nur verschiebt, nichts meldet.
+- **Mutationsbeweise**, je rot und mit `cmp` zurück: nur Zoom-Kürzel gehalten;
+  eine Menge je Pane; Nachlauf mit leerer Sitzung; Rückkehr ins Fenster
+  ignoriert das Ende; Griff ohne Freihalten; Fenster bleibt, wo es
+  losgelassen wurde; Klick rastet ein; Griff in der Titelleiste.
+
+### Review-Runde 2 (Codex)
+
+Beide Befunde übernommen.
+
+- **Ende über dem ganzen Fenster, rechtzeitig zurück.** Schweben, ganzes
+  Fenster, Ende, zurück innerhalb der vier Sekunden: Das schwebende Fenster
+  wird neu gebaut, und die Sitzung stand nur im alten Widget; es zeigte den
+  Leerzustand. Die Sitzung steht jetzt in `lastFloatingSessionProvider`
+  (Sandbox-Feature): Ein laufender Agent schreibt sie, ein Wechsel ins
+  Schweben schreibt sie, das Zurücklegen ins Pane löscht sie, das ganze
+  Fenster lässt sie stehen.
+- **Ein Loslassen außerhalb jedes Terminals.** Kam das Loslassen einer
+  Kürzeltaste woanders an (etwa in der Palette, die `Ctrl+K` geöffnet hat),
+  blieb die Taste in der Menge, und die Wiederholungen eines späteren
+  Drückens, das woanders begann und per Zeiger ins Terminal kam, gingen
+  verloren. Ein Handler an `HardwareKeyboard` nimmt die Taste bei jedem
+  Loslassen heraus, nach einer Microtask, weil diese Handler vor der
+  Fokusverteilung laufen und das Terminal sein eigenes Loslassen noch in der
+  Menge finden muss. Jedes Pane meldet ihn an und ab; ein einmaliger Handler
+  für das ganze Programm überlebte das Zurücksetzen der Tastatur zwischen
+  zwei Widget-Tests nicht (im ersten Lauf gefunden).
+- **Mutationsbeweise**, je rot und mit `cmp` zurück: Sitzung beim ganzen
+  Fenster gelöscht; Loslassen woanders lässt die Taste in der Menge. Die
+  Beweise der Runde 1 zur Menge (nur Zoom, eine Menge je Pane, jetzt als
+  „neues Pane leert die Menge") und zum Nachlauf liefen nach dem Umbau erneut
+  rot.
+
+### Review-Runde 3 (Codex)
+
+Beide Befunde übernommen; danach keine weitere Runde.
+
+- **Eine neue Sandbox im Nachlauf.** Endete A und nannte der Status im
+  Nachlauf schon eine Sandbox B, deren Agent noch nicht lief, baute das
+  Fenster weiter den Emulator von A, und ganzes Fenster hin und zurück
+  konnte A neu anschließen. `lastFloatingSessionProvider` löscht die Sitzung,
+  sobald der Status eine andere Sandbox oder keine nennt, und
+  `SandboxTerminal` nimmt sie nur, solange der Status noch die beendete
+  Sandbox nennt. Die beiden Stellen sichern sich gegenseitig; der
+  Mutationsbeweis nimmt beide zugleich heraus.
+- **Kein Pane eingehängt.** Hing der Handler fürs Loslassen an den Panes,
+  fehlte er, solange keines stand (schwebendes Fenster mangels Platz
+  ausgeblendet, altes Pane fort), und die Taste blieb gehalten. Menge und
+  Handler gehören jetzt `HeldChordKeys` in `heldChordKeysProvider`: einmal
+  angemeldet für die Lebenszeit des Provider-Bereichs, beim Ende abgemeldet;
+  die Panes lesen und schreiben nur die Menge. Test ohne jedes Terminal in
+  `test/features/sandbox/held_chord_keys_test.dart`.
+- **Mutationsbeweise**, je rot und mit `cmp` zurück: Sandbox-Prüfung an
+  beiden Stellen entfernt; Handler nicht von der gemeinsamen Menge
+  angemeldet; eine Menge je Pane; Handler überlebt den Bereich; Loslassen
+  woanders lässt die Taste in der Menge.
+
+### Kandidaten (HUM-300)
+- (A) Der Knopf „Go to terminal" der leeren Warteschlange (HUM-306) könnte
+  das Terminal schweben lassen statt in den Abschnitt Sandbox zu wechseln.
+- (B) Auf dem Abschnitt Sandbox könnte das schwebende Terminal pausieren und
+  ins Pane zurückkehren, beim Verlassen wieder schweben.
+- (C) Das Fenster ohne Platz könnte statt zu verschwinden zu einer schmalen
+  Leiste mit Titel schrumpfen.
+- (D) Das schwebende Fenster mit der Tastatur verschieben und in der Größe
+  ändern (Review-Runde 1).
+- (E) `HKeepClear` meldet auch reine Verschiebungen bei gleicher Größe
+  (Review-Runde 1).
