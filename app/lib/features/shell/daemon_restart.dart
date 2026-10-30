@@ -27,6 +27,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/domain/domain.dart';
@@ -133,10 +134,27 @@ Future<DaemonRestart> restartUserDaemon(
   required String? cli,
   required int daemonMinor,
   required Future<bool?> Function() askSession,
+  bool? macOS,
 }) async {
-  final _Ran reload = await _run(run, daemonReloadCommand);
-  if (reload.failure case final String failure) {
-    return DaemonRestartFailed(failure);
+  // On macOS the daemon is a launchd agent (HUM-315): no unit to reload, and
+  // the restart is `humanitl daemon restart` (`launchctl kickstart -k`), which
+  // also starts an agent that retired with exit 0. The decision, retire only
+  // when idle, is the same on both systems.
+  final bool mac = macOS ?? defaultTargetPlatform == TargetPlatform.macOS;
+  if (mac && cli == null) {
+    return const DaemonRestartFailed(
+      'no humanitl command line lies next to this app; run humanitl daemon '
+      'retire-if-idle, then humanitl daemon restart',
+    );
+  }
+  final List<String> restart = mac
+      ? <String>[cli!, 'daemon', 'restart']
+      : daemonRestartCommand;
+  if (!mac) {
+    final _Ran reload = await _run(run, daemonReloadCommand);
+    if (reload.failure case final String failure) {
+      return DaemonRestartFailed(failure);
+    }
   }
   if (daemonMinor >= daemonRetireMinor) {
     if (cli == null) {
@@ -155,7 +173,7 @@ Future<DaemonRestart> restartUserDaemon(
     }
     switch (_outcome(retire.stdout)) {
       case 'retired':
-        return _restart(run);
+        return _restart(run, restart);
       case 'none':
         // This window is connected to a daemon, and the command line found
         // none: they do not look at the same daemon. Restarting would be a
@@ -176,12 +194,13 @@ Future<DaemonRestart> restartUserDaemon(
   if (await askSession() != false) {
     return const DaemonSessionHolds();
   }
-  return _restart(run);
+  return _restart(run, restart);
 }
 
-/// `systemctl --user restart humanitld.service`.
-Future<DaemonRestart> _restart(CommandRunner run) async {
-  final _Ran restart = await _run(run, daemonRestartCommand);
+/// [command]: `systemctl --user restart humanitld.service`, or on macOS
+/// `humanitl daemon restart`.
+Future<DaemonRestart> _restart(CommandRunner run, List<String> command) async {
+  final _Ran restart = await _run(run, command);
   return switch (restart.failure) {
     final String failure => DaemonRestartFailed(failure),
     null => const DaemonRestarted(),

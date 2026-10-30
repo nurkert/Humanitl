@@ -38,9 +38,21 @@ void main() {
     test('fällt auf ~/.local/state zurück, nie auf /tmp', () {
       final AppLog resolved = AppLog.resolve(
         environment: const <String, String>{'HOME': '/home/someone'},
+        macOS: false,
       );
       expect(resolved.path, '/home/someone/.local/state/humanitl/app.log');
       expect(resolved.path, isNot(startsWith('/tmp')));
+    });
+
+    test('liegt unter macOS unter Application Support', () {
+      final AppLog resolved = AppLog.resolve(
+        environment: const <String, String>{'HOME': '/Users/someone'},
+        macOS: true,
+      );
+      expect(
+        resolved.path,
+        '/Users/someone/Library/Application Support/Humanitl/app.log',
+      );
     });
 
     test('die Rotation liegt neben der Datei', () {

@@ -67,7 +67,7 @@ class HeaderBar extends ConsumerWidget {
         // bedient wird, faengt ihn selbst.
         child: WindowDragArea(
           child: Padding(
-            padding: EdgeInsets.symmetric(horizontal: tokens.spacing.x3),
+            padding: titleBarPadding(tokens.spacing.x3),
             child: Row(
               children: <Widget>[
                 const IgnorePointer(child: Wordmark()),

@@ -7,6 +7,7 @@
 /// [isTextInputFocused] first, because `Shortcuts` fires inside text fields.
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -85,17 +86,19 @@ const LogicalKeyboardKey railToggleKey = LogicalKeyboardKey.digit0;
 /// The bindings of HUM-019: one `Ctrl+<digit>` per section, `Ctrl+K`,
 /// `Ctrl+,` for the settings (HUM-069), `Ctrl+0` for the rail (HUM-254) and
 /// `Ctrl+Shift+Enter` for the terminal over the whole window (HUM-298).
-Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
-  for (int i = 0; i < navigationKeys.length; i++)
-    SingleActivator(navigationKeys[i], control: true): NavIntent(i),
-  const SingleActivator(LogicalKeyboardKey.keyK, control: true):
-      const PaletteIntent(),
-  const SingleActivator(LogicalKeyboardKey.comma, control: true):
-      const SettingsIntent(),
-  const SingleActivator(railToggleKey, control: true): const ToggleRailIntent(),
-  terminalFullWindowActivator: const ToggleTerminalFullWindowIntent(),
-  terminalFullWindowNumpadActivator: const ToggleTerminalFullWindowIntent(),
-};
+Map<ShortcutActivator, Intent> shellShortcuts() =>
+    withCommandOnMac(<ShortcutActivator, Intent>{
+      for (int i = 0; i < navigationKeys.length; i++)
+        SingleActivator(navigationKeys[i], control: true): NavIntent(i),
+      const SingleActivator(LogicalKeyboardKey.keyK, control: true):
+          const PaletteIntent(),
+      const SingleActivator(LogicalKeyboardKey.comma, control: true):
+          const SettingsIntent(),
+      const SingleActivator(railToggleKey, control: true):
+          const ToggleRailIntent(),
+      terminalFullWindowActivator: const ToggleTerminalFullWindowIntent(),
+      terminalFullWindowNumpadActivator: const ToggleTerminalFullWindowIntent(),
+    });
 
 /// The digit keys of the navigation shortcuts, in section order.
 ///
@@ -198,3 +201,29 @@ class NoteIntent extends Intent {
 // because `FilterIntent`, `ToggleDomainPanelIntent` and `NoteIntent` belong to
 // the vocabulary of CONVENTIONS 3.9 and come back with the screens that
 // answer them.
+
+/// On macOS every `Ctrl` chord answers to `Cmd` as well (HUM-315).
+///
+/// The `Ctrl` form stays, so the hints that name it remain true there; `Cmd`
+/// is what a Mac user presses first. [platform] defaults to
+/// [defaultTargetPlatform]; tests pass their own.
+Map<ShortcutActivator, Intent> withCommandOnMac(
+  Map<ShortcutActivator, Intent> shortcuts, {
+  TargetPlatform? platform,
+}) {
+  if ((platform ?? defaultTargetPlatform) != TargetPlatform.macOS) {
+    return shortcuts;
+  }
+  return <ShortcutActivator, Intent>{
+    ...shortcuts,
+    for (final MapEntry<ShortcutActivator, Intent> entry in shortcuts.entries)
+      if (entry.key case final SingleActivator chord when chord.control)
+        SingleActivator(
+          chord.trigger,
+          meta: true,
+          shift: chord.shift,
+          alt: chord.alt,
+          includeRepeats: chord.includeRepeats,
+        ): entry.value,
+  };
+}

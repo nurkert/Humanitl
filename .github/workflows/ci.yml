@@ -238,6 +238,14 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-key: macos
+      - uses: ./.github/actions/setup-flutter
+        with:
+          protoc-plugin: "true"
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
       - name: Clippy
         run: cd daemon && cargo clippy --workspace --all-targets -- -D warnings
       - name: Build the workspace
@@ -257,6 +265,15 @@ jobs:
           set -euo pipefail
           cd daemon && cargo build -p humanitl -p humanitld -p humanitl-shim
           cd .. && ./tests/escape/macos/run.sh daemon/target/debug
+      - name: The macOS app builds (HUM-315)
+        # The runner under app/macos, the Dart code that only macOS takes
+        # (lstat, the window, the restart through launchd) and its tests.
+        run: |
+          set -euo pipefail
+          make flutter-codegen
+          cd app
+          flutter test test/core/ipc test/core/ui test/features/shell
+          flutter build macos --debug
       - name: The daemon as a launchd agent (HUM-314)
         # A fresh runner: install the agent from the build, wait until the
         # daemon answers, check the sandbox through it, take it away again.
