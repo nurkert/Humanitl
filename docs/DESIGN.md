@@ -278,6 +278,7 @@ Everything is a multiple of the 4 px base unit.
 | `paneMinInspector` | 480 |
 | `paneMinContext` | 260 |
 | `paneRatio` | 28/44/28 (percent) |
+| `terminalStrip` | 240 x 28 |
 | `measureChars` | 90 (characters) |
 | `stateRail` | 4 |
 | `selectionRail` | 2 |
@@ -460,6 +461,49 @@ beside its target in the layout, never over it, takes no focus and binds no
 key. It arrives with `arrive` and `arriveOffset`, without blinking. Arrow up or
 down (`HPopoverArrow`).
 
+### HNoticeLayer and HNoticeCard
+
+Notices float; they never take a band of the layout (HUM-302). `HNoticeLayer`
+lays them over the top right of their region, 8 px from the edges: the window
+below the header row of the panes for global notices (at the header's real
+height, which grows with the text scale), the area under the sandbox header
+for its findings (never over the bottom two rows of the terminal). The queue
+cards stand at the bottom right of the list area, so the newest rows at the
+top stay clickable. A card is as wide as the region minus its insets, at most 420 px
+(`noticeMaxWidth`); cards stack with an 8 px gap and scroll beyond a bounded
+height. The region keeps its full size, so nothing moves and no terminal is
+resized when a notice comes or goes. `HNoticeCard` is the surface: `bg2`,
+`lineStrong` hairline, `card` radius, an optional state rail, no shadow. Its
+close affordance (`HNoticeDismiss`) is an `HIconButton` inside the card, 4 px
+from its top right corner, with its label on hover. Only the first line of
+the card (its `header`, the badges of a diagnostic) keeps clear of it; the
+text below runs to the inner edge. A diagnostic as a notice is an
+`HDiagnosticCard` with `dense: true` and the same affordance in its `dismiss`
+slot. Notices take no focus, bind no key and do not close on Escape; global
+notices wait while any layer (`HLayerScope.openLayers`) is open.
+
+### HKeepClear and the floating terminal
+
+`HKeepClear` marks a region nothing floating may cover (HUM-300): the queue
+pane, the Intercept action bar, every notice column of an `HNoticeLayer`,
+every `HSheet` and every `HModal` inside the work (the command palette opts
+out, it lies above everything). It draws nothing and takes no pointer or
+focus; a region in a hidden section or without height counts as nothing.
+The floating terminal is the one floater today: a window over the sections
+only (never rail, header or status bar), `bg1` with a `lineStrong` hairline
+and the `card` radius, no shadow. A 28 px title bar in `bg2` (title `ui12`
+semibold, drag by it) carries a ghost button back to the Sandbox section and
+an `HIconButton` close; below it the terminal with its usual banner, which
+there keeps only the full-window button. A 14 px grip in the inner corner
+resizes it between 320 x 200 and 60 % of the sections (at most 960 x 640).
+It sits 12 px (`x3`) from the edges of a corner, bottom right by default,
+and snaps to the corner of the quadrant it is let go in. Without a free corner it shrinks to a title strip of `terminalStrip`
+(240 x 28, HUM-315): `bg2` with the `lineStrong` hairline and the `card`
+radius like the window, the picture-in-picture glyph, "profile · tab" in
+`ui12` semibold, and a ghost button with the maximize glyph that opens it
+again. The strip takes the first free corner in the same order as the
+window; on the Sandbox page the window and the strip give way to the pane.
+
 ### HContextMenu
 
 The right-click menu (`HMenuItem`, `HContextMenuController`). It appears
@@ -621,6 +665,13 @@ The table lists each binding as the app has it in 0.1, checked against
 | `Ctrl+,` | Settings | `SettingsIntent` | Everywhere |
 | `Ctrl+0` | Expand or collapse the icon rail | `ToggleRailIntent` | Everywhere |
 | `Ctrl+Shift+Enter` (also numpad `Enter`) | Show the terminal over the whole window, and back (HUM-298) | `ToggleTerminalFullWindowIntent` | Everywhere, also inside the terminal |
+| `Ctrl+Shift+P` | Let the terminal float as a small window over the sections, and put it back (HUM-300); nothing while no agent runs | `ToggleTerminalFloatIntent` | Everywhere, also inside the terminal |
+| ``Ctrl+` `` (the key left of `1`, by position) | Give the keyboard to the terminal that is shown, without changing the layout; with a running agent and no terminal on the screen it lets the terminal float first (HUM-303, HUM-300) | `FocusTerminalIntent` | Everywhere, also inside the terminal |
+| `Ctrl` + `+` (also `Ctrl+=`, numpad `+`) / `Ctrl` + `-` (also numpad `-`) | Terminal text one step larger / smaller, 10 to 28 px, kept across restarts; `Ctrl` + wheel over the terminal does the same (HUM-301) | `TerminalZoomIntent` | While a terminal is shown, also inside it |
+| `Ctrl+Shift+0` (also `Ctrl` + numpad `0`) | Terminal text back to its default size; not `Ctrl+0`, which is the rail (HUM-301) | `TerminalZoomIntent` | While a terminal is shown, also inside it |
+| `Ctrl+Shift+C` / `Ctrl+Shift+V` (`Cmd+C` / `Cmd+V` on Apple platforms) | Copy the terminal selection / paste into the terminal; plain `Ctrl+C` and `Ctrl+V` stay with the agent (HUM-313) | `TerminalClipboardActivator`, no intent | Only inside the terminal |
+| `Ctrl+Shift+T` | Open a further shell in the running sandbox as a tab of the terminal; only while the daemon offers `sandbox.exec` and a session runs (HUM-314) | `OpenShellIntent` | Only in the terminal and its tabs |
+| `Ctrl+PageUp` / `Ctrl+PageDown` | Previous / next tab of the terminal, around the end; with the agent's tab alone the chords stay with the agent (HUM-314) | `SwitchTerminalTabIntent` | Only in the terminal and its tabs |
 
 Three intents of CONVENTIONS 3.9 have no binding in 0.1, because a key that
 does nothing is worse than no key ([docs/UX.md, section 5](UX.md#5-keyboard-and-mouse)):

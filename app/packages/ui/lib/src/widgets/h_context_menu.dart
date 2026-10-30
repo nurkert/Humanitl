@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import '../theme/h_theme.dart';
 import '../tokens/spacing.dart';
 import '../tokens/tokens.dart';
+import 'h_layer_scope.dart';
 
 /// Ein Eintrag eines Kontextmenüs.
 @immutable
@@ -150,6 +151,10 @@ class _HContextMenuState extends State<HContextMenu> {
       return;
     }
     _close();
+    // Before the menu is built, not after: a key pressed in the frame
+    // between the right click and the menu would still reach the holder,
+    // and over the terminal that is the agent (HUM-303).
+    HLayerScope.claimKeyboard();
     final HTokens tokens = HTheme.of(context);
     final OverlayEntry entry = OverlayEntry(
       builder: (BuildContext context) => _Menu(
@@ -246,8 +251,7 @@ class _Menu extends StatelessWidget {
                   },
                 ),
               },
-              child: FocusScope(
-                autofocus: true,
+              child: HLayerScope(
                 child: Semantics(
                   label: semanticsLabel,
                   container: true,

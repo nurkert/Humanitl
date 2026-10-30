@@ -22,6 +22,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/domain/domain.dart';
 import '../../core/ipc/connection.dart';
+import '../../core/recorder/recorder_health.dart';
 import '../../core/ui/h_resizable_panes.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
@@ -34,7 +35,6 @@ import 'providers/held_groups.dart';
 import 'providers/note.dart';
 import 'providers/pane_layout.dart';
 import 'providers/queue_freeze.dart';
-import 'providers/recorder_health.dart';
 import 'providers/selection.dart';
 import 'rule_sentence.dart';
 import 'widgets/action_bar.dart';
@@ -198,7 +198,10 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
       _handFocusBack();
       return;
     }
-    if (_focus.hasFocus) {
+    // A layer is about to open and has parked the keyboard on a scope around
+    // this screen; taking it back would let the next `Enter` decide in the
+    // frame before the layer stands (HUM-303).
+    if (_focus.hasFocus || HLayerScope.keyboardClaimed) {
       return;
     }
     final FocusNode? primary = FocusManager.instance.primaryFocus;
@@ -679,7 +682,10 @@ class _InterceptScreenState extends ConsumerState<InterceptScreen> {
                       onDragEnd: ref.read(paneRatiosProvider.notifier).commit,
                       onReset: ref.read(paneRatiosProvider.notifier).reset,
                       children: <Widget>[
-                        const QueuePane(),
+                        // Die Warteschlange mit ihren Zeilen und Hinweisen
+                        // bleibt frei: Das schwebende Terminal legt sich nie
+                        // darüber (HUM-300).
+                        const HKeepClear(child: QueuePane()),
                         _InspectorPane(
                           flow: selected,
                           selection: chosen,
@@ -894,13 +900,17 @@ class _InspectorPane extends StatelessWidget {
               ),
             ),
           ),
-          ActionBar(
-            flow: flow,
-            onEdit: onEdit,
-            onPseudonymize: onPseudonymize,
-            ruleMaxHeight: inspector.maxHeight.isFinite
-                ? inspector.maxHeight / 3
-                : null,
+          // Freigeben und Blockieren bleiben greifbar, was auch schwebt
+          // (HUM-300).
+          HKeepClear(
+            child: ActionBar(
+              flow: flow,
+              onEdit: onEdit,
+              onPseudonymize: onPseudonymize,
+              ruleMaxHeight: inspector.maxHeight.isFinite
+                  ? inspector.maxHeight / 3
+                  : null,
+            ),
           ),
         ],
       ),

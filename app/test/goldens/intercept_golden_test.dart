@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 import 'package:humanitl/app.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ui/agent_session.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/intercept/providers/diagnostics.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
@@ -136,15 +137,28 @@ Widget screen({
   required HThemeMode mode,
   required List<FlowDetail> details,
   List<SessionDiagnostic> found = const <SessionDiagnostic>[],
+  bool working = false,
 }) => ProviderScope(
   overrides: <Override>[
     ...overridesFor(details),
     themeModeProvider.overrideWith(() => FixedTheme(mode)),
+    if (working) agentSessionProvider.overrideWith(WorkingAgent.new),
     if (found.isNotEmpty)
       diagnosticsProvider.overrideWith(() => FixedDiagnostics(found)),
   ],
   child: const HumanitlApp(),
 );
+
+/// Ein Agent, der arbeitet, gleich was die Shell aus dem Sandbox-Schnappschuss
+/// meldet: Das Golden zeigt den Leerzustand, die Leitung prüft
+/// `empty_queue_session_test.dart` (HUM-306).
+class WorkingAgent extends AgentSessionNotifier {
+  @override
+  bool build() => true;
+
+  @override
+  void report({required bool running}) {}
+}
 
 /// Ein Befund, der nicht aus dem Strom kommt, sondern feststeht.
 class FixedDiagnostics extends Diagnostics {
@@ -226,6 +240,16 @@ void main() {
       fileName: 'intercept_empty_$name',
       constraints: window,
       builder: () => screen(mode: mode, details: const <FlowDetail>[]),
+    );
+
+    // Dieselbe leere Warteschlange, während der Agent einer Session arbeitet
+    // (HUM-306): kein Start, sondern der Weg zu seinem Terminal.
+    goldenTest(
+      'intercept_empty_working_$name',
+      fileName: 'intercept_empty_working_$name',
+      constraints: window,
+      builder: () =>
+          screen(mode: mode, details: const <FlowDetail>[], working: true),
     );
 
     goldenTest(

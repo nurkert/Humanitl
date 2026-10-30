@@ -92,4 +92,6 @@ const List<String> goldenNames = <String>[
   'status_llm_switch',
   // attention_notice_golden_test.dart (HUM-276)
   'attention_notice_banner',
+  // terminal_strip_golden_test.dart (HUM-315)
+  'terminal_strip',
 ];

@@ -7,6 +7,8 @@ import '../tokens/colors.dart';
 import '../tokens/spacing.dart';
 import '../tokens/tokens.dart';
 import '../tokens/typography.dart';
+import 'h_keep_clear.dart';
+import 'h_layer_scope.dart';
 
 /// A centred card over a scrim.
 ///
@@ -36,6 +38,7 @@ class HModal extends StatelessWidget {
     this.width = 420,
     this.scrimSemanticsLabel,
     this.bodyScrollController,
+    this.keepClear = true,
     super.key,
   });
 
@@ -66,6 +69,14 @@ class HModal extends StatelessWidget {
   /// body was seen to its end (HUM-249).
   final ScrollController? bodyScrollController;
 
+  /// Whether nothing floating may lie over the modal (`HKeepClear`,
+  /// HUM-300). True for every modal inside the work, which the floating
+  /// terminal of the application would otherwise cover. A modal that is
+  /// itself drawn above everything floating -- the command palette of the
+  /// shell -- passes false; the terminal then stays where it is under the
+  /// scrim instead of being taken down and built again for every palette.
+  final bool keepClear;
+
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
@@ -86,9 +97,13 @@ class HModal extends StatelessWidget {
               },
             ),
         },
+        // Ein Modal deckt die ganze Fläche ab, auch für das schwebende
+        // Terminal: Es tritt zurück, solange eines offen ist (HUM-300).
         child: HTheme.host(
           context,
-          FocusScope(autofocus: true, child: _card(context, tokens)),
+          keepClear
+              ? HKeepClear(child: HLayerScope(child: _card(context, tokens)))
+              : HLayerScope(child: _card(context, tokens)),
         ),
       ),
     );

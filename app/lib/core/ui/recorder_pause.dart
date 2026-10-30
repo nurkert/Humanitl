@@ -6,13 +6,17 @@
 /// ist, darunter, was ein Senden jetzt heißt, am Fuß die zwei Wege:
 /// unaufgezeichnet senden oder zurück. Das Widget entscheidet nichts; beide
 /// Knöpfe rufen, was der Aufrufer hineinreicht (`RecorderPause` in
-/// `providers/recorder_health.dart`).
+/// `core/recorder/recorder_health.dart`).
+///
+/// Zwei Features zeigen sie, die Entscheidungsleiste der Warteschlange und
+/// der Editor (HUM-269); deshalb steht sie im Kern wie die Pause mit offenen
+/// Funden (`findings_pause.dart`).
 library;
 
 import 'package:flutter/widgets.dart';
 
-import '../../../core/ui/ui.dart';
-import '../../../l10n/l10n.dart';
+import '../../l10n/l10n.dart';
+import 'ui.dart';
 
 /// Die Pause der Aufzeichnung.
 class RecorderPauseView extends StatelessWidget {
@@ -20,6 +24,7 @@ class RecorderPauseView extends StatelessWidget {
   const RecorderPauseView({
     required this.onSend,
     required this.onBack,
+    this.letterKeys = true,
     super.key,
   });
 
@@ -29,6 +34,14 @@ class RecorderPauseView extends StatelessWidget {
 
   /// Schließt die Pause, ohne zu senden.
   final VoidCallback onBack;
+
+  /// Falsch, wo die Taste `S` nicht gilt.
+  ///
+  /// Im Editor schreibt sie in das Feld mit dem Fokus (HUM-269); eine Taste
+  /// neben dem Knopf, die dort nichts auslöst, versprach etwas, das nicht
+  /// gilt. `Esc` gilt überall und bleibt stehen, wie in der Pause mit offenen
+  /// Funden.
+  final bool letterKeys;
 
   @override
   Widget build(BuildContext context) {
@@ -73,7 +86,9 @@ class RecorderPauseView extends StatelessWidget {
                     key: const Key('intercept-recorder-pause-send'),
                     variant: HButtonVariant.secondary,
                     label: l10n.interceptRecorderPauseSend,
-                    shortcut: l10n.interceptFindingsPauseKeySend,
+                    shortcut: letterKeys
+                        ? l10n.interceptFindingsPauseKeySend
+                        : null,
                     onPressed: onSend,
                   ),
                   _PauseButton(
@@ -105,12 +120,13 @@ class _PauseButton extends StatelessWidget {
 
   final HButtonVariant variant;
   final String label;
-  final String shortcut;
+  final String? shortcut;
   final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
+    final String? shortcut = this.shortcut;
     return HButton(
       variant: variant,
       onPressed: onPressed,
@@ -118,11 +134,13 @@ class _PauseButton extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           Text(label),
-          SizedBox(width: tokens.spacing.x2),
-          Text(
-            shortcut,
-            style: tokens.typography.mono11.tinted(tokens.colors.fg1),
-          ),
+          if (shortcut != null) ...<Widget>[
+            SizedBox(width: tokens.spacing.x2),
+            Text(
+              shortcut,
+              style: tokens.typography.mono11.tinted(tokens.colors.fg1),
+            ),
+          ],
         ],
       ),
     );

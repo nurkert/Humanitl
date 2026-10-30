@@ -1,12 +1,17 @@
 /// The terminal of the current session, for whichever host shows it
 /// (HUM-298).
 ///
-/// The Sandbox section shows it in its pane, the shell over the whole window,
-/// and a floating overlay later a third time (HUM-300). Every host builds this
+/// The Sandbox section shows it in its pane, the shell over the whole window
+/// and in the floating window over the sections (HUM-300). Every host builds this
 /// one widget, so all of them ask the same question -- which session runs? --
 /// in the same words, and all of them reach the same emulator: the session
 /// and its scrollback live in `terminalSessionProvider`, which outlives every
 /// host. Only one host shows it at a time (`terminalPlacementProvider`).
+///
+/// Since HUM-314 the terminal has tabs: the agent's, and further shells in
+/// the same sandbox. Every host shows the tab that is active
+/// (`terminalTabsProvider`), the floating window included, and each tab is
+/// the same `TerminalPane` with another session.
 library;
 
 import 'dart:async';
@@ -15,8 +20,12 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/shortcuts/intents.dart' show isTextInputFocused;
+import '../../../core/ui/terminal_placement.dart';
 import '../providers/sandbox_status_provider.dart';
+import '../providers/terminal_tabs_provider.dart';
 import 'terminal_pane.dart';
+import 'terminal_tabs.dart';
 
 /// The terminal of the running session, or its empty state.
 class SandboxTerminal extends ConsumerStatefulWidget {
@@ -28,6 +37,7 @@ class SandboxTerminal extends ConsumerStatefulWidget {
   const SandboxTerminal({
     this.focusOnMount = false,
     this.catchUp = false,
+    this.floating = false,
     super.key,
   });
 
@@ -37,14 +47,93 @@ class SandboxTerminal extends ConsumerStatefulWidget {
   /// Whether the session is asked for again when the terminal appears.
   final bool catchUp;
 
+  /// Whether the host is the floating window (`TerminalPane.floating`).
+  final bool floating;
+
   @override
   ConsumerState<SandboxTerminal> createState() => _SandboxTerminalState();
 }
 
+/// The session the floating window shows after its agent ended (HUM-300,
+/// review rounds 1 and 2).
+///
+/// When the agent ends, the floating window stays a moment to show the end
+/// before it closes; with the empty id of a session that no longer runs it
+/// showed the empty state instead of the exit line. The id lives here and
+/// not in the widget, because the window may be built anew in that moment:
+/// floating, then the whole window, the agent ends, back to floating. A new
+/// session replaces the id, putting the terminal back into its pane clears
+/// it. The pane and the whole window keep the rule they had: no running
+/// agent, no session.
+final NotifierProvider<LastFloatingSession, String>
+lastFloatingSessionProvider = NotifierProvider<LastFloatingSession, String>(
+  LastFloatingSession.new,
+);
+
+/// The notifier behind [lastFloatingSessionProvider].
+class LastFloatingSession extends Notifier<String> {
+  @override
+  String build() {
+    ref
+      ..listen<String>(sandboxStatusProvider.select(_runningId), (
+        String? _,
+        String id,
+      ) {
+        if (id.isNotEmpty) {
+          state = id;
+        }
+      }, fireImmediately: true)
+      // Names the status another sandbox, or none, the ended session is
+      // gone: a sandbox B that starts during the linger of A must never get
+      // A's emulator, nor an `attach` of A (review round 3).
+      ..listen<String>(sandboxStatusProvider.select(_sandboxId), (
+        String? _,
+        String id,
+      ) {
+        if (state.isNotEmpty && id != state) {
+          state = '';
+        }
+      })
+      ..listen<TerminalPlacement>(terminalPlacementProvider, (
+        TerminalPlacement? _,
+        TerminalPlacement next,
+      ) {
+        if (next == TerminalPlacement.pane) {
+          state = '';
+        } else if (next == TerminalPlacement.floating) {
+          final String id = _runningId(ref.read(sandboxStatusProvider));
+          if (id.isNotEmpty) {
+            state = id;
+          }
+        }
+      });
+    return '';
+  }
+
+  /// The id of the sandbox the status names, running or not, or empty.
+  static String _sandboxId(AsyncValue<SandboxStatus> snapshot) =>
+      snapshot.value?.sandboxId?.value ?? '';
+
+  /// The id of the session whose agent runs, or empty.
+  static String _runningId(AsyncValue<SandboxStatus> snapshot) {
+    final SandboxStatus? status = snapshot.value;
+    return status != null && status.agentRunning
+        ? (status.sandboxId?.value ?? '')
+        : '';
+  }
+}
+
 class _SandboxTerminalState extends ConsumerState<SandboxTerminal> {
+  /// The tab this host showed in its last build, to hand the keyboard to the
+  /// next one when somebody switches (HUM-314).
+  String? _shown;
+
   @override
   void initState() {
     super.initState();
+    // Every host starts the note, so it has seen the session before a
+    // floating window needs it.
+    ref.read(lastFloatingSessionProvider);
     if (widget.catchUp) {
       // A session may have started from the command line while another
       // section was showing; the same catch-up as the section does when it
@@ -61,10 +150,47 @@ class _SandboxTerminalState extends ConsumerState<SandboxTerminal> {
   Widget build(BuildContext context) {
     final SandboxStatus status =
         ref.watch(sandboxStatusProvider).value ?? const SandboxStatus();
-    return TerminalPane(
-      key: const Key('sandbox-terminal'),
-      sandboxId: status.agentRunning ? (status.sandboxId?.value ?? '') : '',
-      focusOnMount: widget.focusOnMount,
+    final String running = status.agentRunning
+        ? (status.sandboxId?.value ?? '')
+        : '';
+    // Only while the status still names the sandbox whose agent ended.
+    final String saved = widget.floating
+        ? ref.watch(lastFloatingSessionProvider)
+        : '';
+    final String ended = saved == (status.sandboxId?.value ?? '') ? saved : '';
+    final String sandboxId = running.isEmpty ? ended : running;
+    // Tabs only for the session whose agent runs: an ended one has no
+    // further shells left (they end with the agent, HUM-299).
+    final TerminalTabsState tabs = ref.watch(terminalTabsProvider);
+    final String active = tabs.sandboxId == sandboxId ? tabs.active : '';
+    // A switch of tabs is a request for the keyboard: whoever pressed
+    // `Ctrl+PageDown` or clicked a tab wants to type there.
+    // A switch the human did not start -- a shell whose `Exec` answered
+    // late, the end of the session -- never takes the keyboard from a text
+    // field (review round 1).
+    final bool switched =
+        _shown != null &&
+        _shown != active &&
+        (tabs.byUser || !isTextInputFocused());
+    _shown = active;
+    final bool withTabs = sandboxId.isNotEmpty && terminalTabsShown(ref);
+    return TerminalTabActions(
+      child: TerminalPane(
+        // One state per tab: selection, menu and focus belong to the
+        // emulator they were made in. The agent's tab keeps the key every
+        // host has always used.
+        key: active.isEmpty
+            ? const Key('sandbox-terminal')
+            : ValueKey<String>('sandbox-terminal-shell-$active'),
+        sandboxId: sandboxId,
+        shellId: active,
+        focusOnMount: widget.focusOnMount || switched,
+        floating: widget.floating,
+        tabs: withTabs ? const TerminalTabStrip() : null,
+        // With the strip only: without further shells there is nothing to
+        // say, and the terminal keeps the tree it had before HUM-314.
+        notices: withTabs ? const TerminalTabNotices() : null,
+      ),
     );
   }
 }

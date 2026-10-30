@@ -18,6 +18,10 @@
 /// der gehaltenen Fassung (HUM-161). Gezählt wird, was der Entwurf führt; einen
 /// zweiten Scan im Client gibt es nicht, den macht der Daemon beim Senden.
 ///
+/// Während einer Störung der Aufzeichnung steht an derselben Stelle die Pause
+/// der Aufzeichnung (HUM-269). Ob sie steht und was ihre Knöpfe tun, sagt der
+/// Wirt ([recorderPaused]); der Bildschirm zeigt sie nur.
+///
 /// Er kennt auch keinen fremden Provider. Was er zum Bauen braucht, reicht der
 /// Aufrufer als [DraftSource] herein; der Entwurf selbst lebt danach in
 /// `draftProvider(flowId)` und überlebt jedes Schließen mit `Esc`.
@@ -37,6 +41,7 @@ import '../../core/ui/fix_control.dart';
 import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/h_resizable_panes.dart';
 import '../../core/ui/pane_split.dart';
+import '../../core/ui/recorder_pause.dart';
 import '../../core/ui/ui.dart';
 import '../../core/ui/websocket_notice.dart';
 import '../../l10n/l10n.dart';
@@ -80,6 +85,9 @@ class EditorScreen extends ConsumerStatefulWidget {
     this.canSend = true,
     this.sendDisabledReason = '',
     this.failure,
+    this.recorderPaused = false,
+    this.onSendUnrecorded,
+    this.onRecorderPauseBack,
     super.key,
   });
 
@@ -133,6 +141,18 @@ class EditorScreen extends ConsumerStatefulWidget {
   /// hat, ist nicht hinausgegangen, und ein Editor, der sich trotzdem
   /// schlösse, behauptete das Gegenteil (`docs/UX.md` 4.4).
   final Diagnostic? failure;
+
+  /// Wahr, solange das Senden an der Pause einer gestörten Aufzeichnung
+  /// steht (HUM-250, HUM-269). Sie nimmt den Platz der Leiste, wie die Pause
+  /// mit offenen Funden.
+  final bool recorderPaused;
+
+  /// „Unaufgezeichnet senden", oder null, solange der Knopf noch nicht
+  /// annimmt (`HMotion.rearm`).
+  final VoidCallback? onSendUnrecorded;
+
+  /// Schließt die Pause der Aufzeichnung, ohne zu senden; auch `Esc`.
+  final VoidCallback? onRecorderPauseBack;
 
   @override
   ConsumerState<EditorScreen> createState() => _EditorScreenState();
@@ -189,19 +209,11 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   }
 
   void _send(Draft draft) {
-    final ({String body, String? jsonError}) rendered = renderBody(draft);
-    widget.onSend(
-      buildEditedRequest(
-        method: draft.method,
-        url: draft.url,
-        headers: <({String name, String value})>[
-          for (final HeaderEntry entry in draft.headers)
-            if (entry.name.isNotEmpty) (name: entry.name, value: entry.value),
-        ],
-        body: rendered.body,
-      ),
-      draft.replacements,
-    );
+    widget.onSend(editedRequestOf(draft), draft.replacements);
+    // Hält das Senden an der Pause der Aufzeichnung, verschwindet der Knopf
+    // mit der Leiste; der Fokus bleibt im Editor, damit `Esc` die Pause
+    // schließt und nicht gegen den Bildschirm darunter läuft.
+    _focus.requestFocus();
   }
 
   /// Sendet den Entwurf, oder öffnet die Pause, solange ein Fund offen ist.
@@ -243,6 +255,36 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
 
   /// Schließt die Pause; Schließen entscheidet nichts.
   void _closePause() => setState(() => _paused = false);
+
+  /// „Zurück" in der Pause der Aufzeichnung, mit Knopf oder `Esc`.
+  ///
+  /// Der Knopf, der eben gedrückt wurde, verschwindet mit der Pause; ohne
+  /// diesen Griff fiele der Fokus aus dem Editor, und `Esc` liefe danach
+  /// gegen den Bildschirm darunter (HUM-269, Review).
+  void _recorderPauseBack() {
+    widget.onRecorderPauseBack?.call();
+    _focus.requestFocus();
+  }
+
+  /// „Unaufgezeichnet senden" in der Pause der Aufzeichnung.
+  ///
+  /// Gesendet wird der Entwurf, wie er jetzt steht (der Wirt baut die Anfrage
+  /// beim Bestätigen neu). Die Felder blieben bearbeitbar, während die Pause
+  /// stand; ist in dieser Zeit ein Fund wieder offen geworden, etwa ein
+  /// zurückgetippter Wert, geht nichts hinaus. Die Pause der Aufzeichnung
+  /// schließt sich unbestätigt, und an ihrer Stelle steht die Pause mit
+  /// offenen Funden, wie beim ersten Klick auf „Senden" (HUM-161). Erst nach
+  /// ihr fragt die Aufzeichnung wieder (HUM-269, Review).
+  void _sendUnrecorded() {
+    final Draft? draft = ref.read(draftProvider(widget.flowId));
+    if (draft != null && openFindings(draft) > 0) {
+      widget.onRecorderPauseBack?.call();
+      setState(() => _paused = true);
+      _focus.requestFocus();
+      return;
+    }
+    widget.onSendUnrecorded?.call();
+  }
 
   /// Springt zum nächsten offenen Fund im Rumpf.
   ///
@@ -418,6 +460,10 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
           setState(() => _prompting = false);
           return null;
         }
+        if (widget.recorderPaused) {
+          _recorderPauseBack();
+          return null;
+        }
         if (paused) {
           _closePause();
           return null;
@@ -502,6 +548,10 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   /// bei `AllowEdited` nichts, der Daemon scannt die bearbeitete Fassung
   /// selbst ein zweites Mal (HUM-160). „Pseudonymisieren" heißt hier „Alle
   /// ersetzen": Der Editor ist schon offen.
+  ///
+  /// Steht die Pause der Aufzeichnung, steht sie vor beiden (HUM-269): Sie geht
+  /// erst auf, wenn ein Senden wirklich hinausginge, also nach der Pause mit
+  /// offenen Funden, und diese ist dann schon zu.
   Widget _bottom(
     BuildContext context, {
     required Draft draft,
@@ -522,7 +572,19 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
       switchInCurve: HMotion.enter,
       switchOutCurve: HMotion.exit,
       transitionBuilder: findingsPauseTransition,
-      child: paused
+      child: widget.recorderPaused
+          ? Padding(
+              key: const ValueKey<String>('editor-recorder-pause'),
+              padding: EdgeInsets.all(HTheme.of(context).spacing.x3),
+              child: RecorderPauseView(
+                letterKeys: false,
+                onSend: widget.onSendUnrecorded == null
+                    ? null
+                    : _sendUnrecorded,
+                onBack: _recorderPauseBack,
+              ),
+            )
+          : paused
           ? Padding(
               key: const ValueKey<String>('editor-pause'),
               padding: EdgeInsets.all(HTheme.of(context).spacing.x3),
@@ -549,7 +611,10 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
                         _closePause();
                         block();
                       },
-                onBack: _closePause,
+                onBack: () {
+                  _closePause();
+                  _focus.requestFocus();
+                },
               ),
             )
           : KeyedSubtree(key: const ValueKey<String>('editor-bar'), child: bar),

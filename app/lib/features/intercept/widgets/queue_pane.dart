@@ -24,10 +24,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/shortcuts/intents.dart';
+import '../../../core/ui/agent_session.dart';
 import '../../../core/ui/announce.dart';
+import '../../../core/ui/h_notice_layer.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../list_diff.dart';
+import '../providers/agent_asks.dart';
+import '../providers/diagnostics.dart';
 import '../providers/flows.dart';
 import '../providers/held_groups.dart';
 import '../providers/queue_freeze.dart';
@@ -385,57 +389,64 @@ class _QueuePaneState extends ConsumerState<QueuePane> {
           // halten könnte. Auch dieser Streifen zeichnet nichts, solange es
           // nichts zu melden gibt (HUM-106).
           //
+          // Seit HUM-302 schweben beide über der Liste, rechtsbündig unten in
+          // der Spalte, statt sie nach unten zu schieben: Die Zeile, auf die
+          // jemand gerade zielt, bleibt, wo sie war, wenn ein Befund kommt,
+          // und die obersten Zeilen bleiben frei.
           // Beide Streifen teilen sich ein Budget, und das Layout verteilt es:
           // Die Bitten des Agenten nehmen, was sie brauchen, der Befund-
-          // Streifen bekommt als einziges `Flexible` den Rest. Mit je eigener
-          // Schranke schöben die beiden zusammen die Warteschlange auf einem
-          // 800 Pixel hohen Schirm fast heraus; mit einer festen Aufteilung
-          // verfiele der Platz, den eine kurze Bitte übrig lässt.
-          ConstrainedBox(
-            constraints: const BoxConstraints(
-              maxHeight: interceptStripsMaxHeight,
-            ),
-            child: const Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                AgentAskStrip(),
-                Flexible(child: DiagnosticStrip()),
-              ],
-            ),
-          ),
+          // Streifen bekommt als einziges `Flexible` den Rest.
           Expanded(
-            child: MouseRegion(
-              onEnter: (PointerEnterEvent _) => _pointerEnter(),
-              onExit: (PointerExitEvent _) => _pointerLeave(),
-              child: Stack(
-                fit: StackFit.expand,
+            child: HNoticeLayer(
+              key: const Key('intercept-queue-notices'),
+              // Unten rechts in der Spalte: Oben stehen die neuesten
+              // Anfragen mit ihrem Blockieren, und die bleiben greifbar.
+              bottom: true,
+              maxHeight: interceptStripsMaxHeight,
+              scroll: false,
+              notices: const Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  AnimatedList(
-                    key: _listKey,
-                    initialItemCount: _items.length,
-                    padding: EdgeInsets.symmetric(vertical: tokens.spacing.x1),
-                    itemBuilder:
-                        (
-                          BuildContext context,
-                          int index,
-                          Animation<double> animation,
-                        ) {
-                          if (index >= _items.length) {
-                            return const SizedBox.shrink();
-                          }
-                          final QueueItem item = _items[index];
-                          return _ArrivingLine(
-                            animation: animation,
-                            start: _stagger[item.key] ?? 0,
-                            child: _line(item, cursor, members),
-                          );
-                        },
-                  ),
-                  if (_items.isEmpty) const QueueEmptyState(),
-                  if (pending > 0)
-                    NewArrivalsPill(count: pending, onMerge: _merge),
+                  AgentAskStrip(),
+                  _StripGap(),
+                  Flexible(child: DiagnosticStrip()),
                 ],
+              ),
+              child: MouseRegion(
+                onEnter: (PointerEnterEvent _) => _pointerEnter(),
+                onExit: (PointerExitEvent _) => _pointerLeave(),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    AnimatedList(
+                      key: _listKey,
+                      initialItemCount: _items.length,
+                      padding: EdgeInsets.symmetric(
+                        vertical: tokens.spacing.x1,
+                      ),
+                      itemBuilder:
+                          (
+                            BuildContext context,
+                            int index,
+                            Animation<double> animation,
+                          ) {
+                            if (index >= _items.length) {
+                              return const SizedBox.shrink();
+                            }
+                            final QueueItem item = _items[index];
+                            return _ArrivingLine(
+                              animation: animation,
+                              start: _stagger[item.key] ?? 0,
+                              child: _line(item, cursor, members),
+                            );
+                          },
+                    ),
+                    if (_items.isEmpty) const QueueEmptyState(),
+                    if (pending > 0)
+                      NewArrivalsPill(count: pending, onMerge: _merge),
+                  ],
+                ),
               ),
             ),
           ),
@@ -740,14 +751,21 @@ final int _setupSectionIndex = navigationKeys.length - 1;
 
 /// What the pane shows while nothing waits: no spinner, one quiet sentence,
 /// and the one action that changes it.
-class QueueEmptyState extends StatelessWidget {
+///
+/// Two cases (HUM-306). Without a session the action leads to the start.
+/// While the agent of a session runs, the queue is empty because the agent
+/// works without asking, and "Start session" would send somebody to start
+/// what already runs; the sentence then says that the agent works, and the
+/// action leads to its terminal.
+class QueueEmptyState extends ConsumerWidget {
   /// Creates the empty state.
   const QueueEmptyState({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
+    final bool working = ref.watch(agentSessionProvider);
     // Centred while there is room, scrolling instead of overflowing in a low
     // window: the shared header row (HUM-286) takes 48 px, and the empty
     // state must not run under the status bar at 600 px or at a large text
@@ -757,13 +775,18 @@ class QueueEmptyState extends StatelessWidget {
           SingleChildScrollView(
             child: ConstrainedBox(
               constraints: BoxConstraints(minHeight: constraints.maxHeight),
-              child: Center(child: _content(tokens, l10n, context)),
+              child: Center(child: _content(tokens, l10n, context, working)),
             ),
           ),
     );
   }
 
-  Widget _content(HTokens tokens, AppLocalizations l10n, BuildContext context) {
+  Widget _content(
+    HTokens tokens,
+    AppLocalizations l10n,
+    BuildContext context,
+    bool working,
+  ) {
     return Center(
       child: Padding(
         padding: EdgeInsets.all(tokens.spacing.x6),
@@ -778,7 +801,9 @@ class QueueEmptyState extends StatelessWidget {
             ),
             SizedBox(height: tokens.spacing.x4),
             Text(
-              l10n.interceptEmptyTitle,
+              working
+                  ? l10n.interceptEmptyWorkingTitle
+                  : l10n.interceptEmptyTitle,
               textAlign: TextAlign.center,
               // Every sentence somebody is meant to read is `fg1` or better;
               // `fg2` is for controls that are really disabled
@@ -787,7 +812,9 @@ class QueueEmptyState extends StatelessWidget {
             ),
             SizedBox(height: tokens.spacing.x2),
             Text(
-              l10n.interceptEmptyHint,
+              working
+                  ? l10n.interceptEmptyWorkingHint
+                  : l10n.interceptEmptyHint,
               textAlign: TextAlign.center,
               style: tokens.typography.ui12.tinted(tokens.colors.fg1),
             ),
@@ -803,16 +830,36 @@ class QueueEmptyState extends StatelessWidget {
             // `Sandbox(Start)` hinter den vier Prüfungen, und die liegen in
             // einem anderen Feature; diese Zeile führt dorthin, und dort
             // steht der Knopf, der den Zustand der Maschine kennt (ADR-018).
-            HButton(
-              key: const Key('queue-start-session'),
-              variant: HButtonVariant.primary,
-              size: HButtonSize.md,
-              onPressed: () => Actions.maybeInvoke<NavIntent>(
-                context,
-                NavIntent(_setupSectionIndex),
+            //
+            // Läuft der Agent einer Session, zeigt sie stattdessen sein
+            // Terminal (HUM-306): seit HUM-315 schwebend über diesem
+            // Abschnitt, mit der Tastatur, wie ``Ctrl+` `` es tut. Die Leiste
+            // bleibt, die Warteschlange auch, und die nächste Anfrage steht
+            // neben dem Terminal statt einen Abschnitt weiter. Welcher Wirt
+            // das Terminal zeigt, entscheidet die Shell; dieses Feature
+            // fragt nur danach (ADR-018, ARCHITECTURE 5).
+            if (working)
+              HButton(
+                key: const Key('queue-go-to-terminal'),
+                variant: HButtonVariant.primary,
+                size: HButtonSize.md,
+                onPressed: () => Actions.maybeInvoke<FocusTerminalIntent>(
+                  context,
+                  const FocusTerminalIntent(),
+                ),
+                child: Text(l10n.interceptEmptyGoToTerminal),
+              )
+            else
+              HButton(
+                key: const Key('queue-start-session'),
+                variant: HButtonVariant.primary,
+                size: HButtonSize.md,
+                onPressed: () => Actions.maybeInvoke<NavIntent>(
+                  context,
+                  NavIntent(_setupSectionIndex),
+                ),
+                child: Text(l10n.interceptEmptyStart),
               ),
-              child: Text(l10n.interceptEmptyStart),
-            ),
             SizedBox(height: tokens.spacing.x4),
             // The empty queue is the only teaching surface the program gets,
             // and it teaches the three keys once. The reversible key comes
@@ -875,4 +922,25 @@ class _InboxPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_InboxPainter oldDelegate) => oldDelegate.color != color;
+}
+
+/// Der Abstand des Rasters zwischen den Bitten des Agenten und den Befunden,
+/// nur wenn beide stehen (HUM-302).
+class _StripGap extends ConsumerWidget {
+  const _StripGap();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final bool asks = ref.watch(
+      agentAsksProvider.select((List<AgentAsk> all) => all.isNotEmpty),
+    );
+    final bool findings = ref.watch(
+      diagnosticsProvider.select(
+        (List<SessionDiagnostic> all) => all.isNotEmpty,
+      ),
+    );
+    return SizedBox(
+      height: asks && findings ? HTheme.of(context).spacing.x2 : 0,
+    );
+  }
 }

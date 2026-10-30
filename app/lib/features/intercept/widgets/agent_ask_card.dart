@@ -31,6 +31,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/domain/domain.dart';
 import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/daemon_client.dart';
+import '../../../core/ui/h_notice_layer.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/agent_asks.dart';
@@ -65,10 +66,18 @@ class AgentAskStrip extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
-            for (final AgentAsk ask in asks)
+            // Zwischen zwei Karten der Abstand des Rasters, unter der
+            // letzten keiner: Die Karten stehen unten in der Spalte, und den
+            // Abstand zu den Befunden darunter setzt der `QueuePane` (HUM-302).
+            for (final (int index, AgentAsk ask) in asks.indexed)
               _AskArrival(
                 key: ValueKey<String>('agent-ask:${ask.id}'),
-                child: AgentAskCard(ask: ask),
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    top: index == 0 ? 0 : HTheme.of(context).spacing.x2,
+                  ),
+                  child: AgentAskCard(ask: ask),
+                ),
               ),
           ],
         ),
@@ -105,92 +114,84 @@ class AgentAskCard extends ConsumerWidget {
       // abhält, über die Bedienelemente daneben zu laufen. Das Clipping gilt
       // für jedes Zeichen, gleich aus welchem Block.
       child: ClipRect(
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: tokens.colors.bg2,
-            border: Border(
-              left: BorderSide(color: rail, width: HSize.stateRail),
-              bottom: BorderSide(color: tokens.colors.line),
-            ),
+        // Eine schwebende Karte über der Warteschlange (HUM-302): eigene
+        // Fläche, Rahmen ringsum, das Schließen in der Ecke der Karte.
+        child: HNoticeCard(
+          rail: rail,
+          dismissLabel: l10n.interceptAgentAskDismiss,
+          onDismiss: () => ref.read(agentAsksProvider.notifier).dismiss(ask.id),
+          header: Row(
+            children: <Widget>[
+              HBadge(text: l10n.interceptAgentAskFrom, color: label),
+              SizedBox(width: tokens.spacing.x2),
+              Expanded(
+                child: Text(
+                  l10n.interceptAgentAskTitle,
+                  style: tokens.typography.ui13.semibold.tinted(
+                    tokens.colors.fg0,
+                  ),
+                ),
+              ),
+            ],
           ),
-          child: Padding(
-            padding: EdgeInsets.all(tokens.spacing.x2),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                Row(
-                  children: <Widget>[
-                    HBadge(text: l10n.interceptAgentAskFrom, color: label),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              // The agent's own words. `Text`, never `Text.rich`, never a
+              // `Linkify`, never inside a `SelectionArea`: whatever the
+              // model wrote stays a string on screen. The monospace face is
+              // the second signal that this is quoted material and not a
+              // sentence of the application's own.
+              Text(
+                ask.text,
+                key: const Key('intercept-agent-ask-text'),
+                maxLines: agentAskMaxLines,
+                overflow: TextOverflow.fade,
+                style: tokens.typography.mono12.tinted(tokens.colors.fg1),
+              ),
+              SizedBox(height: tokens.spacing.x2),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  HButton(
+                    key: const Key('intercept-agent-ask-open-rule'),
+                    // The keyboard leaves the queue before the sheet is
+                    // even built: an `Enter` in the frame between would
+                    // still allow the selected request (HUM-303).
+                    onPressed: () {
+                      HLayerScope.claimKeyboard();
+                      ref.read(agentAskRuleDraftProvider.notifier).open(ask);
+                    },
+                    child: Text(l10n.interceptAgentAskCreateRule),
+                  ),
+                  if (ask.suggestedTarget.isNotEmpty) ...<Widget>[
                     SizedBox(width: tokens.spacing.x2),
-                    Expanded(
+                    // **Nie rechts abschneiden.** Eine Ellipse macht aus
+                    // `pypi.org.attacker.com` ein `pypi.org…`, und das ist
+                    // Domain-Täuschung durch die eigene Oberfläche, genau in
+                    // dem Augenblick, in dem ein Mensch entscheidet. Der
+                    // Name bricht deshalb um; sichtbar ist immer der ganze.
+                    //
+                    // Die registrierbare Domäne wird auch nicht
+                    // hervorgehoben: Der Vorschlag des Agenten ist ein Text
+                    // aus der Sandbox und gehört zu keinem Flow, also sagt
+                    // der Daemon zu ihm keinen Apex (`FlowSummary.apex`
+                    // hängt an einer Anfrage, HUM-091). Ein hier abgeleiteter
+                    // wäre dieselbe Täuschung mit umgekehrtem Vorzeichen
+                    // (`backlog/CONVENTIONS.md` 4.13).
+                    Flexible(
                       child: Text(
-                        l10n.interceptAgentAskTitle,
-                        style: tokens.typography.ui13.semibold.tinted(
-                          tokens.colors.fg0,
+                        ask.suggestedTarget,
+                        key: const Key('intercept-agent-ask-host'),
+                        style: tokens.typography.mono12.tinted(
+                          tokens.colors.fg2,
                         ),
                       ),
                     ),
-                    HIconButton(
-                      glyph: HGlyph.close,
-                      semanticsLabel: l10n.interceptAgentAskDismiss,
-                      onPressed: () =>
-                          ref.read(agentAsksProvider.notifier).dismiss(ask.id),
-                    ),
                   ],
-                ),
-                SizedBox(height: tokens.spacing.x1),
-                // The agent's own words. `Text`, never `Text.rich`, never a
-                // `Linkify`, never inside a `SelectionArea`: whatever the
-                // model wrote stays a string on screen. The monospace face is
-                // the second signal that this is quoted material and not a
-                // sentence of the application's own.
-                Text(
-                  ask.text,
-                  key: const Key('intercept-agent-ask-text'),
-                  maxLines: agentAskMaxLines,
-                  overflow: TextOverflow.fade,
-                  style: tokens.typography.mono12.tinted(tokens.colors.fg1),
-                ),
-                SizedBox(height: tokens.spacing.x2),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    HButton(
-                      key: const Key('intercept-agent-ask-open-rule'),
-                      onPressed: () => ref
-                          .read(agentAskRuleDraftProvider.notifier)
-                          .open(ask),
-                      child: Text(l10n.interceptAgentAskCreateRule),
-                    ),
-                    if (ask.suggestedTarget.isNotEmpty) ...<Widget>[
-                      SizedBox(width: tokens.spacing.x2),
-                      // **Nie rechts abschneiden.** Eine Ellipse macht aus
-                      // `pypi.org.attacker.com` ein `pypi.org…`, und das ist
-                      // Domain-Täuschung durch die eigene Oberfläche, genau in
-                      // dem Augenblick, in dem ein Mensch entscheidet. Der
-                      // Name bricht deshalb um; sichtbar ist immer der ganze.
-                      //
-                      // Die registrierbare Domäne wird auch nicht
-                      // hervorgehoben: Der Vorschlag des Agenten ist ein Text
-                      // aus der Sandbox und gehört zu keinem Flow, also sagt
-                      // der Daemon zu ihm keinen Apex (`FlowSummary.apex`
-                      // hängt an einer Anfrage, HUM-091). Ein hier abgeleiteter
-                      // wäre dieselbe Täuschung mit umgekehrtem Vorzeichen
-                      // (`backlog/CONVENTIONS.md` 4.13).
-                      Flexible(
-                        child: Text(
-                          ask.suggestedTarget,
-                          key: const Key('intercept-agent-ask-host'),
-                          style: tokens.typography.mono12.tinted(
-                            tokens.colors.fg2,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ],
-            ),
+                ],
+              ),
+            ],
           ),
         ),
       ),

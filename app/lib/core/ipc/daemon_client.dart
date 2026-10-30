@@ -294,6 +294,25 @@ abstract class DaemonClient {
   /// would be two promises (`docs/SECURITY.md` 3.3).
   Stream<TerminalFrame> terminal(Stream<TerminalCommand> input);
 
+  /// `Exec`: a further shell in the running sandbox, next to the agent
+  /// (HUM-299, HUM-314).
+  ///
+  /// An empty [command] is an interactive shell; [cols] and [rows] are the
+  /// size of its terminal, 0 takes the daemon's default. The answer names the
+  /// shell for [TerminalOpen.shellId]. Only a daemon that names `sandbox.exec`
+  /// in its capabilities offers it. Throws a [DaemonException] with `TERM_002`
+  /// when four further shells live already or the sandbox has no door for
+  /// them, and with `IPC_006` when no session runs.
+  ///
+  /// There is no call that ends a shell: it ends with its process or with
+  /// the sandbox.
+  Future<ShellStarted> exec({
+    String sandboxId = '',
+    List<String> command = const <String>[],
+    int cols = 0,
+    int rows = 0,
+  });
+
   /// `Audit(head)`: the end of the chain, without reading it end to end
   /// (HUM-051).
   ///

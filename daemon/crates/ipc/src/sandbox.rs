@@ -6399,4 +6399,59 @@ mod tests {
             refused.why
         );
     }
+
+    /// `humanitl run --config other.toml` sends the folder of `other.toml`
+    /// with that file as its source (HUM-296). Only the daemon's own config
+    /// file declares a folder outside the home directory, so the start is
+    /// refused, and the fix is the command that writes the folder into that
+    /// file. After that declaration the same request starts.
+    #[tokio::test]
+    async fn a_folder_outside_home_from_a_named_config_file_names_the_daemons_file() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, paths) = live_service(&home, SandboxPorts::none());
+        let (_outside, canonical, mut start) = outside_dir();
+        let named = home.path().join("other.toml");
+        start.work_dir_source = Some(crate::work_dir::source_to_proto(
+            &WorkDirSource::ConfigFile(named.clone()),
+        ));
+        let inner = Arc::clone(&service.inner);
+        let refused = inner
+            .remember(&start)
+            .expect_err("a file the client names declares nothing");
+        assert_eq!(refused.code, codes::SANDBOX_006);
+        let daemon_file = paths.config_path();
+        assert!(
+            refused
+                .why
+                .contains(&format!("sandbox.work_dir in {}", named.display())),
+            "{}",
+            refused.why
+        );
+        assert!(
+            refused.why.contains(&format!(
+                "only in the daemon's config file {}",
+                daemon_file.display()
+            )),
+            "{}",
+            refused.why
+        );
+        assert_eq!(
+            refused.fix,
+            Some(FixAction::CopyCommand(format!(
+                "humanitl --config {} config set sandbox.work_dir {}",
+                daemon_file.display(),
+                canonical.display()
+            ))),
+            "the fix names the daemon's file"
+        );
+
+        declare_work_dir(&paths, &canonical);
+        inner.refresh_for_start();
+        assert_eq!(
+            inner
+                .remember(&start)
+                .expect("declared in the daemon's file"),
+            Some(canonical)
+        );
+    }
 }

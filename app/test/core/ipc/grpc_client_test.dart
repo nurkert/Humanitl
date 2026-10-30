@@ -40,7 +40,59 @@ class InfoOnly extends pbgrpc.HumanitlServiceBase {
       throw UnimplementedError('${invocation.memberName}');
 }
 
+/// Ein Daemon, dessen Start läuft und dessen Agent danach endet (HUM-306).
+class StartThenExit extends pbgrpc.HumanitlServiceBase {
+  @override
+  Stream<pb.SandboxEvent> sandbox(
+    ServiceCall call,
+    pb.SandboxRequest request,
+  ) async* {
+    yield pb.SandboxEvent(
+      status: pb.SandboxEvent_Status(
+        state: pb.SandboxState.SANDBOX_STATE_RUNNING,
+        agentRunning: true,
+      ),
+    );
+    yield pb.SandboxEvent(exit: pb.SandboxEvent_Exit(code: 3));
+  }
+
+  // Die übrigen Methoden der Schnittstelle ruft dieser Test nie.
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('${invocation.memberName}');
+}
+
 void main() {
+  // Der Daemon schickt nach dem Ende des Agenten kein `Status` mehr; ohne
+  // das `Exit` bliebe der Schnappschuss bei „der Agent läuft", und die leere
+  // Warteschlange sagte weiter, er arbeite (HUM-306).
+  test('the end of the agent on the start stream reaches the app', () async {
+    final Directory dir = Directory.systemTemp.createTempSync('hum306-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    Process.runSync('chmod', <String>['700', dir.path]);
+    final String socketPath = '${dir.path}/daemon.sock';
+    final File token = File('${dir.path}/token')..writeAsStringSync('secret\n');
+    Process.runSync('chmod', <String>['600', token.path]);
+    final Server server = Server.create(services: <Service>[StartThenExit()]);
+    await server.serve(
+      address: InternetAddress(socketPath, type: InternetAddressType.unix),
+      port: 0,
+    );
+    addTearDown(server.shutdown);
+    final GrpcDaemonClient client = GrpcDaemonClient(
+      socketPath: socketPath,
+      tokenPath: token.path,
+    );
+    addTearDown(client.close);
+
+    final List<SandboxUpdate> updates = await client
+        .startSandbox()
+        .toList()
+        .timeout(const Duration(seconds: 20));
+
+    expect(updates.last, const SandboxUpdate.exit(3));
+  });
+
   group('grpc_client_translates_status', () {
     test('UNAVAILABLE is DAEMON_001 with the socket in why', () {
       final Diagnostic diagnostic = translate(

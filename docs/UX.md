@@ -526,6 +526,146 @@ modifiers exactly, so `Ctrl+Shift+Enter` decides nothing
 (`the_chord_decides_nothing_in_the_focused_queue`). Not `Ctrl+Shift+F`: that
 is the group allow of the queue.
 
+**The terminal takes the keyboard on hover and by shortcut (HUM-303).** The
+pointer over the emulator hands it the keyboard at once, without a click, in
+its pane, over the whole window and floating (HUM-300). Two exceptions
+keep the focus where it is. A layer above the work -- a dialog, a sheet, a
+menu, the command palette -- holds the keyboard in a focus scope of its own,
+and the terminal takes the focus only from a node in its own scope or one of
+the scopes around it; that covers every such layer without a list, and the
+terminal's own context menu, which opens under the pointer and lets it
+through, is the case that needs it. Every such layer takes the keyboard
+when it opens, also from the terminal, and gives it back when it closes
+(`HLayerScope`); `autofocus` alone would yield to whatever already holds
+the focus, and `Esc` in the terminal's menu would reach the agent. A
+palette opened over a sheet hands the keyboard back to the sheet and does
+not offer the terminal. And a text field that has the focus keeps
+it while the pointer only crosses the terminal; whoever wants the terminal
+then clicks it or presses the shortcut. There is deliberately no delay of
+some 150 ms: it would leave a moment in which the pointer is on the terminal
+and an `Enter` meant for the agent still allows the selected request in the
+queue. Focus at once, and the decision keys never fire because focus moved by
+hover (`enter_goes_to_the_terminal_only_once_the_focus_moved`).
+
+``Ctrl+` `` gives the keyboard to the terminal that is shown and changes
+nothing in the layout. With no terminal on the screen and a running agent it
+lets the terminal float (HUM-300) and gives the floating terminal the
+keyboard; without an agent it does nothing. It asks by the physical key
+left of `1`, because on many layouts the backquote is a dead key or lies
+behind `AltGr`; on a German keyboard the chord is `Strg+^`. It is one more
+exception in the terminal and takes the way of the others through
+`TerminalPane._onKey`, so the agent never receives it. A layer
+above the work keeps the focus against the shortcut too; a text field does
+not, because the shortcut asks deliberately. The palette lists it while a
+terminal is shown.
+
+**The terminal floats as a picture in the picture (HUM-300).** While an
+agent runs, `Ctrl+Shift+P` or the button left of the full-window button in
+the strip above the terminal lets the terminal float as a small window over
+whatever section is shown, so the agent stays in sight while its requests
+are decided. It is the same session and the same emulator with its
+scrollback; exactly one place shows it. **On the Sandbox page it docks**
+(HUM-315): while that page shows, a floating terminal stands in its pane
+there, and leaving the page lets it float again. Docking for the page is a
+state of the view, not a choice: the toggle and the palette still say it
+floats. A terminal that had the keyboard in the window keeps it in the pane;
+leaving the page leaves the keyboard to the section asked for. An agent that
+ends while the page shows docks the terminal for good. The window
+has a title bar to drag it by, a button back to the Sandbox section and a
+close button (the same chord); it snaps to the corner of the quadrant it is
+let go in, a grip in the inner corner resizes it between 320 x 200 and 60 %
+of the sections (at most 960 x 640), and corner and size survive a restart in
+the state file of the interface. The default corner is bottom right: on
+Intercept that is the bottom of the context pane, the one corner without a
+decision. **It never covers what must stay clickable.** The queue with its
+rows and notices, the bar with Allow and Block, the notices of the shell, a
+sheet and a modal mark themselves as regions to keep clear (`HKeepClear`);
+the window takes the chosen corner at the chosen size, else the smallest
+size, else the corner beside, above or across. **Without a free corner it
+shrinks to a slim title strip** (HUM-315, `HSize.terminalStrip`, 240 x 28):
+the profile of the sandbox or "Terminal", the active tab, and a button; it
+takes the first corner in the same order that leaves room for it and never
+covers what must stay clickable either. The strip, or its button, opens the
+window in the next free corner, or with none free puts the terminal back
+into its pane and shows the Sandbox page. Only without room even for the
+strip (a modal over the work) it steps back. It hangs over the sections only,
+never over the rail, the header or the status bar, and the settings sheet
+and the command palette lie above it. **The keyboard stays where it is.**
+Opening the window from the queue leaves the keyboard in the queue, and
+`Enter` still allows; the terminal in the window takes the keyboard under
+the rule above -- hover, ``Ctrl+` ``, a click -- and then every shortcut of
+the shell keeps working from inside it, `Ctrl+Shift+P` included. A terminal
+that had the keyboard in its pane takes it along. **The end.** When the agent
+ends, the window shows the end as the pane would for four seconds and then
+puts the terminal back into its pane by itself. Without a running agent the
+chord does nothing and the button is disabled. "Go to terminal" of the empty
+queue (HUM-306) does what ``Ctrl+` `` does since HUM-315: it lets the
+terminal float over the queue and hands it the keyboard, or on the Sandbox
+page gives the keyboard to the terminal in its pane. The palette lists the toggle
+while an agent runs or the terminal floats. The whole window
+(`Ctrl+Shift+Enter`) returns to the floating window when it was opened from
+there. `Ctrl+Shift+P` reaches no agent: a Linux terminal sends it as `0x10`
+like `Ctrl+P`, which stays with the agent.
+
+**The terminal text can be zoomed (HUM-301).** `Ctrl` with `+` makes it one
+step larger, with `-` one step smaller, between 10 and 28 px; the default is
+the 13 px of `mono13`. `+` counts with or without `Shift`, because on a US
+keyboard it is `Shift+=`, and so does `Ctrl+=` and the plus of the keypad.
+`-` counts only without `Shift`: `Ctrl+Shift+-` is `Ctrl+_`, undo in
+readline, and stays with the agent. The reset is `Ctrl+Shift+0` (also `Ctrl`
+with the `0` of the keypad), **not `Ctrl+0`**: that chord, the reset of every
+browser and terminal, is the rail here (HUM-254), in every section and from
+inside the terminal; one chord with two meanings depending on where the
+focus sits would cost whoever wants the rail a smaller text and the other
+way round. `Ctrl` + wheel over the emulator zooms too, and the scrollback
+does not move meanwhile. The zoom chords are further exceptions in the
+terminal and take the way of the others through `TerminalPane._onKey`, so
+the agent never receives them; outside the terminal they act only while a
+terminal with a session is shown, otherwise the key goes on unchanged. The
+size survives a restart in the state file of the interface, and after a zoom
+the emulator counts its columns and rows again and sends them up on the
+throttled resize path (HUM-305), so the agent redraws. The palette lists
+the three commands while a terminal is shown.
+
+**Copy and paste in the terminal (HUM-313)** work as in every Linux
+terminal. `Ctrl+Shift+C` copies the selection, `Ctrl+Shift+V` pastes;
+plain `Ctrl+C` stays the interrupt of the agent and plain `Ctrl+V` the
+quoted insert of readline, both reach the agent. The two chords act only
+while the terminal has the keyboard and take the way of the other
+exceptions through `TerminalPane._onKey`; no binding of the application
+uses them elsewhere. The middle button pastes as long as the program does
+not take the mouse itself. The right click opens the menu with Copy
+(disabled without a selection), Paste and Select all, which stands in for
+`Ctrl+A`, the start of the line for the agent. A paste is bracketed while
+the program asked for it (`DECSET 2004`), so several lines arrive as one
+input, and every escape sequence in the pasted text is dropped, so an
+`ESC [201~` cannot end the bracket early. Selecting alone copies nothing:
+Flutter offers no primary selection on Linux, and the clipboard is filled
+only by an explicit action.
+
+**Further shells open as tabs of the terminal (HUM-314).** While a session
+runs and the daemon names `sandbox.exec` in its capabilities, a row of tabs
+stands under the banner: "Agent" first, always there, then one tab per
+further shell, then "+ Shell". Without the capability the row is absent and
+the terminal looks as before. "+ Shell" or `Ctrl+Shift+T` asks the daemon
+for an interactive shell next to the agent (`Exec`), with the size of the
+view, and shows it in a new tab; `Ctrl+PageUp` and `Ctrl+PageDown` walk the
+tabs around the end, and a switch hands the keyboard to the tab that
+appears. Every tab is the same terminal with everything above, zoom, copy
+and paste, the keyboard under the pointer and the refused clipboard of the
+agent included, and the floating window and the whole window show the tab
+that is active. The daemon allows four further shells; the button stops at
+four tabs, and when the daemon refuses (`TERM_002`, also for a shell this
+window does not show), the finding floats over the terminal as a notice.
+A shell that exits keeps its tab with the exit code, and a click closes it.
+The close glyph ends only the view: the daemon has no call that ends a
+shell, so a running one ends with its process or with the session. When
+the session ends, every shell tab goes with it. The first shell brings a
+one-time hint: do not type secrets there, the agent can read that shell
+(`docs/SECURITY.md` 4). The tab chords act only while they can: without
+the capability `Ctrl+Shift+T` does nothing, and with the agent's tab alone
+`Ctrl+PageUp` and `Ctrl+PageDown` stay with the agent.
+
 ### 5.3 Every bound key does something
 
 Every activator in `interceptShortcuts()` has an action in the same screen. A widget test compares the two key sets and fails if they differ; a binding without an action is deleted, not disabled. Today `/`, `Ctrl+D` and `N` are bound and mute.

@@ -370,14 +370,19 @@ class GrpcDaemonClient implements DaemonClient {
               yield SandboxUpdate.check(result);
             }
           case pb.SandboxEvent_Event.output:
-          case pb.SandboxEvent_Event.exit:
-            // The bytes of the agent and its exit code, filtered for a stream
-            // without a terminal (`TerminalPolicy::ColourOnly`). The terminal
-            // pane does not read them: it attaches to `Terminal`, which
-            // carries the same bytes filtered for a full-screen agent, with
-            // the scrollback and the geometry (HUM-042). Reading both would
-            // show every line twice.
+            // The bytes of the agent, filtered for a stream without a
+            // terminal (`TerminalPolicy::ColourOnly`). The terminal pane does
+            // not read them: it attaches to `Terminal`, which carries the
+            // same bytes filtered for a full-screen agent, with the scrollback
+            // and the geometry (HUM-042). Reading both would show every line
+            // twice.
             break;
+          case pb.SandboxEvent_Event.exit:
+            // The end of the agent. The snapshot does not follow on its own
+            // -- the daemon sends no `Status` after it --, and a snapshot
+            // that still says "the agent runs" made the empty queue claim
+            // that the agent works (HUM-306).
+            yield SandboxUpdate.exit(event.exit.code);
           case pb.SandboxEvent_Event.summary:
             // What the run left in the project (HUM-043). The daemon sends it
             // once, after the agent has ended. The findings inside it also
@@ -751,6 +756,27 @@ class GrpcDaemonClient implements DaemonClient {
     } on IOException catch (error) {
       throw DaemonException(_unreachable('$error'));
     }
+  }
+
+  @override
+  Future<ShellStarted> exec({
+    String sandboxId = '',
+    List<String> command = const <String>[],
+    int cols = 0,
+    int rows = 0,
+  }) async {
+    final pb.ExecResponse response = await _unary(
+      (CallOptions options) => _stub.exec(
+        pb.ExecRequest(
+          sandboxId: sandboxId,
+          command: command,
+          cols: cols,
+          rows: rows,
+        ),
+        options: options,
+      ),
+    );
+    return response.toDomain();
   }
 
   @override

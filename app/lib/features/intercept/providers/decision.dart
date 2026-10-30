@@ -19,13 +19,13 @@ import '../../../core/domain/domain.dart';
 import '../../../core/ipc/client_diagnostics.dart';
 import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/daemon_client.dart';
+import '../../../core/recorder/recorder_health.dart';
 import '../rule_sentence.dart';
 import '../../../core/domain/websocket.dart';
 import 'findings_pause.dart';
 import 'flows.dart';
 import 'timeout_rule.dart';
 import 'note.dart';
-import 'recorder_health.dart';
 import 'selection.dart';
 
 part 'decision.freezed.dart';
@@ -568,10 +568,16 @@ class InterceptDecision extends _$InterceptDecision {
   /// sent anyway; only the pause names them ([sendAnyway]). Holding the valve
   /// sends none, and the history then counts every finding as unresolved
   /// (HUM-160).
+  ///
+  /// [bypass] comes only from the recorder pause, when it resumes exactly
+  /// this release ([RecorderPause.confirm], HUM-269). A release that asks
+  /// through the modal first loses it there and stops at the pause once more
+  /// after the modal.
   Future<void> allow({
     bool remember = false,
     bool acknowledged = false,
     List<int> acknowledgedFindings = const <int>[],
+    RecorderBypass? bypass,
   }) async {
     final Flow? flow = _decidable();
     if (flow == null) {
@@ -643,6 +649,7 @@ class InterceptDecision extends _$InterceptDecision {
       flow,
       Decision.allow(acknowledgedFindings: acknowledgedFindings),
       rule,
+      bypass: bypass,
     );
   }
 
@@ -664,9 +671,18 @@ class InterceptDecision extends _$InterceptDecision {
   ///
   /// [bound] as in [RecorderPause.open]: a batch passes false, because its
   /// pause must outlive the cursor moving on after its first request left.
-  bool _recorderPaused(Future<void> Function() resume, {bool bound = true}) {
+  ///
+  /// [bypass] is the pass a release carries when the pause itself resumes it
+  /// (HUM-269, review round 2); with it, that one release goes through. Any
+  /// other release, including one scheduled from inside the resumed one,
+  /// carries none and stops.
+  bool _recorderPaused(
+    RecorderBypass? bypass,
+    RecorderResume resume, {
+    bool bound = true,
+  }) {
     final RecorderPause pause = ref.read(recorderPauseProvider.notifier);
-    if (!pause.owed) {
+    if (!pause.owes(bypass)) {
       return false;
     }
     ref.read(openFindingsPauseProvider.notifier).close();
@@ -1085,6 +1101,7 @@ class InterceptDecision extends _$InterceptDecision {
     List<int> acknowledgedFindings = const <int>[],
     FlowId? cardSeen,
     ShownRule? shownRule,
+    RecorderBypass? bypass,
   }) async {
     if (flows.isEmpty || state.isSending) {
       return;
@@ -1200,7 +1217,8 @@ class InterceptDecision extends _$InterceptDecision {
       // ersten mitgingen. Blockieren bleibt unberührt.
       if (kind != DecisionKind.block &&
           _recorderPaused(
-            () => sent.isEmpty
+            bypass,
+            (RecorderBypass resumed) => sent.isEmpty
                 ? _many(
                     asked,
                     kind,
@@ -1208,12 +1226,14 @@ class InterceptDecision extends _$InterceptDecision {
                     acknowledgedFindings: acknowledgedFindings,
                     cardSeen: cardSeen,
                     shownRule: shownRule,
+                    bypass: resumed,
                   )
                 : _many(
                     flows.sublist(index),
                     kind,
                     fromSelection: false,
                     cardSeen: cardSeen,
+                    bypass: resumed,
                   ),
             bound: flows.length == 1,
           )) {
@@ -1237,7 +1257,7 @@ class InterceptDecision extends _$InterceptDecision {
         size += flow.requestSize;
         sent.add(flow);
         if (kind != DecisionKind.block) {
-          ref.read(recorderPauseProvider.notifier).noteAllowSent();
+          ref.read(recorderPauseProvider.notifier).noteAllowSent(bypass);
         }
       } on DaemonException catch (error) {
         if (error.diagnostic.code == DiagnosticCodes.flowNotHeld) {
@@ -1512,6 +1532,7 @@ class InterceptDecision extends _$InterceptDecision {
     Decision decision,
     Rule? remember, {
     FlowId? id,
+    RecorderBypass? bypass,
   }) async {
     final FlowId? flowId = id ?? flow?.id;
     if (flowId == null || state.isSending) {
@@ -1522,7 +1543,11 @@ class InterceptDecision extends _$InterceptDecision {
     // für die Benachrichtigung unterwegs war (HUM-250, Review). Blockieren
     // bleibt unberührt.
     if (decision.kind != DecisionKind.block &&
-        _recorderPaused(() => _send(flow, decision, remember, id: id))) {
+        _recorderPaused(
+          bypass,
+          (RecorderBypass resumed) =>
+              _send(flow, decision, remember, id: id, bypass: resumed),
+        )) {
       return;
     }
     // Notiz, Merk-Entwurf und Findings-Pause gehören dem ausgewählten Flow.
@@ -1543,7 +1568,7 @@ class InterceptDecision extends _$InterceptDecision {
       }
       state = const DecisionProgress.idle();
       if (decision.kind != DecisionKind.block) {
-        ref.read(recorderPauseProvider.notifier).noteAllowSent();
+        ref.read(recorderPauseProvider.notifier).noteAllowSent(bypass);
       }
       ref
           .read(lastDecisionProvider.notifier)

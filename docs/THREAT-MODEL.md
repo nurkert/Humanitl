@@ -238,7 +238,9 @@ The agent's output is attacker-controlled. OSC 52 writes to the host clipboard, 
 foreign URL behind harmless text, title escapes change the window. The daemon filters before any
 byte reaches a client (`humanitl_core::TerminalFilter`, policies `ColourOnly` and `FullScreen`), in
 three spellings of every introducer and only as well-formed UTF-8; the ring buffer for late clients
-holds filtered bytes; the widget registers no OSC handler. *Residual risk:* a bug in filter or
+holds filtered bytes; the widget registers no clipboard handler and refuses OSC 52 writes and
+reads explicitly, as a second wall behind the filter (HUM-313); colour queries that pass the filter
+(OSC 4, 10, 11, `CSI ? 996 n`) the emulator answers with the colours of the theme. *Residual risk:* a bug in filter or
 widget, and text that merely looks like a Humanitl message, which is why the "a request waits"
 statement stands in a strip above the terminal drawn from the event stream.
 

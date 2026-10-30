@@ -2,6 +2,8 @@
 /// that bind them (HUM-019).
 library;
 
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -10,8 +12,10 @@ import '../../core/ipc/config_providers.dart';
 import '../../core/ipc/flow_handoff.dart';
 import '../../core/ipc/flow_reveal.dart';
 import '../../core/shortcuts/intents.dart';
+import '../../core/ui/h_notice_layer.dart';
 import '../../core/ui/settings_opener.dart';
 import '../../core/ui/terminal_placement.dart';
+import '../../core/ui/terminal_zoom.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
 import '../about/about_dialog.dart';
@@ -25,8 +29,10 @@ import '../rules/rules_screen.dart';
 import '../sandbox/providers/sandbox_status_provider.dart';
 import '../sandbox/sandbox_screen.dart';
 import '../sandbox/widgets/sandbox_terminal.dart';
+import '../sandbox/widgets/terminal_pane.dart' show terminalHoldsKeyboard;
 import '../settings/settings_sheet.dart';
 import '../setup/providers/setup_provider.dart';
+import 'agent_session_feed.dart';
 import 'providers/connection.dart';
 import 'providers/language.dart';
 import 'providers/navigation.dart';
@@ -35,6 +41,7 @@ import 'providers/setup_state.dart';
 import 'providers/theme.dart';
 import 'section.dart';
 import 'widgets/command_palette.dart';
+import 'widgets/floating_terminal.dart';
 import 'widgets/frozen_banner.dart';
 import 'widgets/frozen_sections.dart';
 import 'widgets/header_bar.dart';
@@ -90,6 +97,9 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
     debugLabel: 'terminal-full-window',
   );
 
+  /// Keeps the bit of `agentSessionProvider` fresh (HUM-306).
+  late final AgentSessionFeed _agentFeed;
+
   @override
   void initState() {
     super.initState();
@@ -110,33 +120,83 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
       },
       fireImmediately: true,
     );
+    // Die leere Warteschlange sagt, ob der Agent arbeitet (HUM-306); die
+    // Shell kennt Sandbox und Warteschlange und hält das eine Bit im Kern
+    // frisch (`agent_session_feed.dart`).
+    _agentFeed = AgentSessionFeed(ref);
+    // Ob die Sandbox-Seite zu sehen ist, steht für die Wirte des Terminals in
+    // einem Kern-Provider (HUM-315). Der erste Stand nach dem ersten Frame:
+    // Riverpod verbietet, einen Provider während des Baus zu ändern.
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      if (mounted) {
+        ref
+            .read(sandboxPageShownProvider.notifier)
+            .set(shown: ref.read(navigationProvider) == Section.sandbox);
+      }
+    });
   }
 
   @override
   void dispose() {
+    _agentFeed.dispose();
     _focus.dispose();
     _terminalScope.dispose();
     super.dispose();
   }
 
-  void _openPalette() => setState(() => _paletteOpen = true);
+  /// Whether the palette opened over another layer -- a sheet or a modal --
+  /// that held the keyboard (HUM-303).
+  ///
+  /// Then closing the palette hands the keyboard back to that layer
+  /// (`HLayerScope` does it), and nothing here may park it on the shell or
+  /// the terminal behind both; "Focus the terminal" is not offered either.
+  bool _paletteOverLayer = false;
+
+  void _openPalette() {
+    _paletteOverLayer = HLayerScope.holdsFocus();
+    HLayerScope.claimKeyboard();
+    setState(() => _paletteOpen = true);
+  }
 
   void _closePalette() {
     setState(() => _paletteOpen = false);
-    // The palette's field held the focus; without this the next Ctrl+2 would
-    // reach nobody. Over the whole window the keys go back to the terminal
-    // instead (HUM-298): the scope around it remembers which of its nodes had
-    // the focus, and the shell's shortcuts stay above it either way.
-    if (ref.read(terminalPlacementProvider) == TerminalPlacement.fullWindow) {
-      _terminalScope.requestFocus();
-    } else {
-      _focus.requestFocus();
+    if (!_paletteOverLayer) {
+      _keysBackAfterLayer();
     }
+  }
+
+  /// Makes sure the shell can hear keys again once a layer it opened -- the
+  /// palette, the settings sheet -- has closed (HUM-303).
+  ///
+  /// The layer gives the keyboard back to whoever had it before
+  /// (`HLayerScope`): the terminal that opened the settings with `Ctrl+,`
+  /// gets it again, and so does the queue. Only when that holder is gone --
+  /// the terminal over the whole window that the sheet ended -- would the
+  /// focus fall to the scope around the shell, and with it `Ctrl+2` and
+  /// `Ctrl+K` would reach nobody; then the shell takes it, or over the whole
+  /// window the terminal's scope (HUM-298). Checked after the hand-back: it
+  /// is requested while the frame ends and applied in a microtask, and this
+  /// check queues behind it.
+  void _keysBackAfterLayer() {
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      scheduleMicrotask(() {
+        if (!mounted || _focus.hasFocus) {
+          return;
+        }
+        if (ref.read(terminalPlacementProvider) ==
+            TerminalPlacement.fullWindow) {
+          _terminalScope.requestFocus();
+        } else {
+          _focus.requestFocus();
+        }
+      });
+    });
   }
 
   void _togglePalette() => _paletteOpen ? _closePalette() : _openPalette();
 
   void _openSettings() {
+    HLayerScope.claimKeyboard();
     ref.read(terminalPlacementProvider.notifier).leaveFullWindow();
     setState(() {
       _settingsOpen = true;
@@ -150,6 +210,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   /// The sheet hangs in the layout with the rail, so a terminal over the
   /// whole window steps back first (HUM-298).
   void _openSettingsAt(String? key) {
+    HLayerScope.claimKeyboard();
     ref.read(terminalPlacementProvider.notifier).leaveFullWindow();
     setState(() {
       _settingsOpen = true;
@@ -163,8 +224,9 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
       _settingsOpen = false;
       _settingsFocusKey = null;
     });
-    // The sheet held the focus; without this `Ctrl+K` would reach nobody.
-    _focus.requestFocus();
+    // The sheet gives the keyboard back to whoever opened it; the shell
+    // steps in only when that holder is gone.
+    _keysBackAfterLayer();
   }
 
   /// Die Befehle der Palette, für eine Verbindung, die [live] ist oder nicht.
@@ -242,7 +304,16 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
       PaletteCommand(
         id: 'about',
         label: l10n.shellPaletteAbout,
-        run: () => showHumanitlAbout(context),
+        // After the frame in which the palette goes: by then the palette has
+        // handed the keyboard back to whoever had it, and the dialog takes it
+        // from there and returns it when it closes. Pushed in the same frame,
+        // the palette's leaving would hand the keyboard to the first control
+        // of the page under the dialog, and `Esc` would stay there (HUM-303).
+        run: () => WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+          if (mounted) {
+            showHumanitlAbout(context);
+          }
+        }),
       ),
       // Dasselbe wie `Ctrl+Shift+Enter` und der Knopf über dem Terminal
       // (HUM-298). Am Ende, damit die Zeilen davor ihren Platz behalten.
@@ -254,7 +325,119 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
             : l10n.shellPaletteTerminalFullWindowEnter,
         run: ref.read(terminalPlacementProvider.notifier).toggleFullWindow,
       ),
+      // Dasselbe wie `Ctrl+Backquote` (HUM-303), und nur, solange ein
+      // Terminal zu sehen ist: Ohne eines täte der Befehl nichts, und ein
+      // Befehl, der nichts tut, gehört nicht in die Liste (`docs/UX.md` 5.3).
+      // Die Anfrage wartet bis nach dem Frame, in dem die Palette geht: Bis
+      // dahin hält deren Feld den Fokus, und aus einer Ebene über der Arbeit
+      // nimmt das Terminal ihn nicht (`TerminalPane._mayTakeKeyboard`).
+      if (!_paletteOverLayer && _terminalShown())
+        PaletteCommand(
+          id: 'focus-terminal',
+          label: l10n.shellPaletteFocusTerminal,
+          run: () => WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+            if (mounted) {
+              _requestTerminalFocus();
+            }
+          }),
+        ),
+      // Dasselbe wie die Zoom-Kürzel (HUM-301), und nur, solange ein
+      // Terminal zu sehen ist. Die Größe braucht keinen Fokus, also auch
+      // über einer Ebene.
+      if (_terminalShown())
+        for (final TerminalZoom zoom in TerminalZoom.values)
+          PaletteCommand(
+            id: 'terminal-${zoom.name}',
+            label: switch (zoom) {
+              TerminalZoom.zoomIn => l10n.shellPaletteTerminalZoomIn,
+              TerminalZoom.zoomOut => l10n.shellPaletteTerminalZoomOut,
+              TerminalZoom.reset => l10n.shellPaletteTerminalZoomReset,
+            },
+            run: () => ref.read(terminalFontSizeProvider.notifier).apply(zoom),
+          ),
+      // Dasselbe wie `Ctrl+Shift+P` und der Knopf über dem Terminal
+      // (HUM-300), und nur, solange es etwas zum Schweben gibt: einen
+      // laufenden Agenten, oder ein schwebendes Terminal zum Zurücklegen.
+      if (_agentRunning() ||
+          ref.read(terminalPlacementProvider) == TerminalPlacement.floating)
+        PaletteCommand(
+          id: 'toggle-terminal-float',
+          label:
+              ref.read(terminalPlacementProvider) == TerminalPlacement.floating
+              ? l10n.shellPaletteTerminalFloatLeave
+              : l10n.shellPaletteTerminalFloatEnter,
+          run: _toggleFloating,
+        ),
     ];
+  }
+
+  /// Whether a terminal with a session stands on the screen (HUM-303): over
+  /// the whole window, floating over the sections (HUM-300), or in its pane
+  /// while the Sandbox section shows.
+  bool _terminalShown() {
+    final TerminalPlacement placement = ref.read(terminalPlacementProvider);
+    return _agentRunning() &&
+        (placement == TerminalPlacement.fullWindow ||
+            placement == TerminalPlacement.floating ||
+            ref.read(navigationProvider) == Section.sandbox);
+  }
+
+  /// Whether the agent of a session runs: the same question the terminal
+  /// asks (`SandboxTerminal`).
+  bool _agentRunning() =>
+      ref.read(sandboxStatusProvider).value?.agentRunning ?? false;
+
+  /// Lets the terminal float, or puts it back (HUM-300). Without a running
+  /// agent nothing floats: the window would show the empty state and close
+  /// itself again. A floating window can always be put back.
+  void _toggleFloating() {
+    final TerminalPlacementNotifier placement = ref.read(
+      terminalPlacementProvider.notifier,
+    );
+    if (ref.read(terminalPlacementProvider) == TerminalPlacement.floating) {
+      placement.dock();
+    } else if (_agentRunning()) {
+      placement.float();
+    }
+  }
+
+  /// `Ctrl+Backquote` (HUM-303): the keyboard to the terminal that is shown.
+  ///
+  /// With a running agent and no terminal on the screen it lets the terminal
+  /// float first, as HUM-303 left room for (HUM-300), and asks one frame
+  /// later, once the window is built. Not while a layer holds the keyboard:
+  /// the terminal would refuse it, and a window opening behind a sheet helps
+  /// nobody.
+  void _focusTerminal() {
+    if (!_terminalShown() && _agentRunning() && !HLayerScope.holdsFocus()) {
+      ref.read(terminalPlacementProvider.notifier).float();
+      WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+        if (mounted) {
+          _requestTerminalFocus();
+        }
+      });
+      return;
+    }
+    _requestTerminalFocus();
+  }
+
+  /// Puts the floating terminal back into its pane and shows it there: the
+  /// "back to the sandbox" button of the floating window (HUM-300).
+  void _backToSandbox() {
+    ref.read(terminalPlacementProvider.notifier).dock();
+    _go(Section.sandbox);
+  }
+
+  /// Asks the terminal that is shown to take the keyboard (HUM-303).
+  ///
+  /// Not while a layer holds the keyboard: the terminal would refuse anyway
+  /// (`TerminalPane._mayTakeKeyboard`), and the shell does not ask what must
+  /// not happen.
+  void _requestTerminalFocus() {
+    if (HLayerScope.holdsFocus()) {
+      return;
+    }
+    ref.read(terminalFocusRequestProvider.notifier).request();
   }
 
   /// Räumt weg, was ein Bruch der Verbindung unbedienbar zurückließe.
@@ -345,8 +528,32 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   /// A section that is asked for ends the whole window: whoever presses
   /// `Ctrl+2` or picks "Go to History" in the palette wants to see History,
   /// and the queue that a handover opens has to be seen too.
-  void _sectionAsked(Section? previous, Section next) =>
-      ref.read(terminalPlacementProvider.notifier).leaveFullWindow();
+  ///
+  /// It also tells the hosts of the terminal whether the Sandbox page shows
+  /// (HUM-315): a floating terminal docks there and floats again when the
+  /// page goes. **The keyboard follows only onto the page.** A floating
+  /// terminal that had it keeps it in its pane, so typing goes on; leaving
+  /// the page asks for another section, and that section's own rule decides
+  /// (the queue takes the keyboard, and `Enter` decides as before).
+  void _sectionAsked(Section? previous, Section next) {
+    ref.read(terminalPlacementProvider.notifier).leaveFullWindow();
+    final TerminalPlacement before = ref.read(terminalHostProvider);
+    // Asked now: the floating window still stands and still holds the
+    // keyboard if it held it.
+    final bool hadKeyboard = terminalHoldsKeyboard();
+    ref
+        .read(sandboxPageShownProvider.notifier)
+        .set(shown: next == Section.sandbox);
+    if (before == TerminalPlacement.floating &&
+        ref.read(terminalHostProvider) == TerminalPlacement.pane &&
+        hadKeyboard) {
+      WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+        if (mounted) {
+          _requestTerminalFocus();
+        }
+      });
+    }
+  }
 
   /// Shows [section] and ends the whole window, also when [section] is
   /// already the one underneath: then the navigation does not change, and
@@ -358,13 +565,54 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
 
   /// Takes the keyboard when the terminal changes place.
   ///
-  /// The control that held the focus may just have been hidden, and a focus
-  /// that falls back to the root would leave every shortcut of the shell
-  /// mute, `Ctrl+Shift+Enter` included. The terminal takes the keys from
-  /// here one frame later, when its new host mounts it
-  /// (`TerminalPane.focusOnMount`).
-  void _terminalMoved(TerminalPlacement? previous, TerminalPlacement next) =>
+  /// **To or from the whole window** the control that held the focus may
+  /// just have been hidden, and a focus that falls back to the root would
+  /// leave every shortcut of the shell mute, `Ctrl+Shift+Enter` included.
+  /// The terminal takes the keys from here one frame later, when its new host
+  /// mounts it (`TerminalPane.focusOnMount`); the floating window does the
+  /// same through a request after the frame.
+  ///
+  /// **Between the pane and the floating window** nothing else is hidden, and
+  /// the keyboard stays where it is: whoever lets the terminal float from the
+  /// queue keeps deciding with `Enter` (HUM-300). Only a terminal that had the
+  /// keyboard takes it along to its new host. Should the focus nevertheless
+  /// end on a scope -- the window found no room, the holder went with the
+  /// old host --, the shell takes it, so its shortcuts keep working.
+  void _terminalMoved(TerminalPlacement? previous, TerminalPlacement next) {
+    if (previous == TerminalPlacement.fullWindow ||
+        next == TerminalPlacement.fullWindow) {
       _focus.requestFocus();
+      if (next == TerminalPlacement.floating) {
+        WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+          if (mounted) {
+            _requestTerminalFocus();
+          }
+        });
+      }
+      return;
+    }
+    // Asked now: the old host still stands, its emulator still has the
+    // keyboard if it had it.
+    final bool hadKeyboard = terminalHoldsKeyboard();
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      if (!mounted) {
+        return;
+      }
+      if (hadKeyboard) {
+        _requestTerminalFocus();
+      }
+      // Behind the change of focus just requested, which Flutter applies in
+      // a microtask of its own.
+      scheduleMicrotask(() {
+        final FocusNode? holder = FocusManager.instance.primaryFocus;
+        if (mounted &&
+            (holder == null || holder is FocusScopeNode) &&
+            !HLayerScope.keyboardClaimed) {
+          _focus.requestFocus();
+        }
+      });
+    });
+  }
 
   /// The terminal of the current session in place of rail, sections and
   /// status bar. The header bar stays: it is the title bar of the window,
@@ -390,8 +638,9 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   /// was. An [IndexedStack] keeps it, takes away its focus and tells every
   /// section through `Visibility.of` that it is not shown, so the decision
   /// keys of the queue are out of service while the terminal fills the
-  /// window. Its tickers stop with the [TickerMode]. A floating terminal
-  /// (HUM-300) becomes a sibling over [layout] in the same place.
+  /// window. Its tickers stop with the [TickerMode]. The floating terminal
+  /// (HUM-300) lives inside [layout], over the sections
+  /// (`FloatingTerminalLayer`).
   Widget _withTerminalHost({
     required bool fullWindow,
     required Widget layout,
@@ -522,6 +771,22 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                   return null;
                 },
               ),
+          FocusTerminalIntent: CallbackAction<FocusTerminalIntent>(
+            onInvoke: (FocusTerminalIntent intent) {
+              _focusTerminal();
+              return null;
+            },
+          ),
+          ToggleTerminalFloatIntent: CallbackAction<ToggleTerminalFloatIntent>(
+            onInvoke: (ToggleTerminalFloatIntent intent) {
+              _toggleFloating();
+              return null;
+            },
+          ),
+          TerminalZoomIntent: TerminalZoomAction(
+            fontSize: ref.read(terminalFontSizeProvider.notifier),
+            shown: _terminalShown,
+          ),
           PaletteIntent: CallbackAction<PaletteIntent>(
             onInvoke: (PaletteIntent intent) {
               _togglePalette();
@@ -570,40 +835,73 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                               .read(connectionStateProvider.notifier)
                               .retry,
                         ),
-                      const ShellNotices(),
+                      // Die Hinweise schweben oben rechts über den
+                      // Bereichen, unter der Kopfzeile der Panes, und
+                      // nehmen ihnen keine Höhe (HUM-302): Ein Terminal
+                      // behält seine Größe, wenn einer kommt oder geht.
                       Expanded(
-                        child: _withTerminalHost(
-                          fullWindow: fullWindow,
-                          layout: Stack(
-                            fit: StackFit.expand,
-                            children: <Widget>[
-                              Row(
-                                children: <Widget>[
-                                  IconRail(
-                                    active: section,
-                                    onSelect: navigation.go,
-                                    expanded: railExpanded,
-                                    onToggle: rail.toggle,
-                                  ),
-                                  Expanded(
-                                    child: _sections(section, frozen: !live),
-                                  ),
-                                ],
-                              ),
-                              // Das Blatt hängt zwischen Kopfleiste und
-                              // Statusleiste, wie jeder Pane: seine Kopfzeile
-                              // steht in derselben Reihe wie die der Queue, und
-                              // die Linie darunter läuft durch (HUM-286).
-                              if (_settingsOpen)
-                                Align(
-                                  alignment: Alignment.centerRight,
-                                  child: SettingsSheet(
-                                    onClose: _closeSettings,
-                                    focusKey: _settingsFocusKey,
-                                    focusSerial: _settingsFocusSerial,
-                                  ),
+                        child: HNoticeLayer(
+                          // Unter der Kopfzeile der Panes, so hoch sie bei
+                          // der aktuellen Textskalierung wirklich ist.
+                          top:
+                              HPaneHeader.rowHeight(context) +
+                              tokens.spacing.x2,
+                          // Solange eine Ebene offen ist -- das
+                          // Einstellungsblatt, das Regelblatt einer Bitte, ein
+                          // Modal --, hält sie die Tastatur, und ein Hinweis
+                          // läge über ihrem Inhalt; er wartet, bis sie zu ist.
+                          // Er bleibt im Provider und ist danach wieder da.
+                          notices: ValueListenableBuilder<int>(
+                            valueListenable: HLayerScope.openLayers,
+                            builder:
+                                (BuildContext context, int open, Widget? _) =>
+                                    open > 0 || _settingsOpen
+                                    ? const SizedBox.shrink()
+                                    : const ShellNotices(),
+                          ),
+                          child: _withTerminalHost(
+                            fullWindow: fullWindow,
+                            layout: Stack(
+                              fit: StackFit.expand,
+                              children: <Widget>[
+                                Row(
+                                  children: <Widget>[
+                                    IconRail(
+                                      active: section,
+                                      onSelect: navigation.go,
+                                      expanded: railExpanded,
+                                      onToggle: rail.toggle,
+                                    ),
+                                    // Das schwebende Terminal liegt über den
+                                    // Abschnitten und unter dem Blatt, nie
+                                    // über Leiste, Kopf- oder Statusleiste
+                                    // (HUM-300).
+                                    Expanded(
+                                      child: FloatingTerminalLayer(
+                                        onBack: _backToSandbox,
+                                        child: _sections(
+                                          section,
+                                          frozen: !live,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                            ],
+                                // Das Blatt hängt zwischen Kopfleiste und
+                                // Statusleiste, wie jeder Pane: seine Kopfzeile
+                                // steht in derselben Reihe wie die der Queue, und
+                                // die Linie darunter läuft durch (HUM-286).
+                                if (_settingsOpen)
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: SettingsSheet(
+                                      onClose: _closeSettings,
+                                      focusKey: _settingsFocusKey,
+                                      focusSerial: _settingsFocusSerial,
+                                    ),
+                                  ),
+                              ],
+                            ),
                           ),
                         ),
                       ),

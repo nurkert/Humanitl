@@ -74,6 +74,14 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-307 | The Intercept action bar keeps Allow and Block on one line | S | HUM-286 |
 | HUM-309 | pi gets web search and fetch through pi-web-access | S | HUM-274, HUM-304, HUM-308 |
 | HUM-305 | Pane boundaries can be dragged, and the sandbox terminal can grow | S | HUM-286, HUM-298 |
+| HUM-303 | The terminal takes the keyboard on hover and by shortcut | S | HUM-298 |
+| HUM-306 | The empty queue says the agent is working when a session runs | S | HUM-298 |
+| HUM-301 | The terminal text can be zoomed | S | HUM-298, HUM-303 |
+| HUM-302 | Notices float as dismissible overlays and never push the layout | S | HUM-276, HUM-286 |
+| HUM-313 | Terminal copy and paste | S | HUM-042, HUM-301, HUM-303 |
+| HUM-300 | Terminal as picture-in-picture | M | HUM-298, HUM-302, HUM-303, HUM-305 |
+| HUM-314 | The terminal pane opens further shells as tabs | S | HUM-299, HUM-300, HUM-302, HUM-303, HUM-313 |
+| HUM-315 | The floating terminal docks on the Sandbox page, floats from the empty queue and keeps a title strip | S | HUM-300, HUM-303, HUM-306, HUM-314 |
 
 ---
 
@@ -4966,6 +4974,52 @@ vollständig durchsucht gemeldet.
 ### Referenzen
 HUM-025, HUM-247, RFC 1950 §2.2, RFC 1951 §3.2.4, `backlog/CONVENTIONS.md` 4.13.
 
+### Umsetzung (HUM-266)
+
+- **Zweite Lesart.** `inflate` liest bei `deflate` weiter erst den zlib-Rahmen. Endet
+  er vollständig im Budget, vergleicht `raw_reading_differs` den nackten Strom gegen
+  dessen Ausgabe. Weicht er ab (anderer Inhalt, kürzer oder länger) und endet er
+  sauber, steht in `Inflated::ambiguity` der Wert `Ambiguity::Readings`, und
+  `decode_body` meldet `truncated: true` mit `FINDINGS_002` ohne `fix`. Bytes hinter
+  dem Ende des nackten Stroms zählen nicht als Bruch, denn Python
+  `zlib.decompressobj(-15)` liest den Strom davor trotzdem; genau so endet der
+  Polyglott. Dasselbe gilt für einen nackten Strom, der nach der Abweichung mitten
+  im Block aufhört (`UnexpectedEof`): Ein Empfänger, der stückweise entpackt, hat
+  den abweichenden Teil schon ausgeliefert (Befund aus dem Review). Ist der Inhalt
+  des nackten Stroms ungültig, bleibt es bei der zlib-Lesart ohne Befund.
+- **Wörterbuch.** Ein gültiger zlib-Kopf mit `FDICT` scheitert am Entpacker dieser
+  Crate immer, weil der Scan das Wörterbuch nicht hat; bisher galt dann still der
+  nackte Strom. Endet der sauber, meldet der Scan jetzt `Ambiguity::PresetDictionary`
+  als `FINDINGS_002` und durchsucht die nackte Lesart (Befund aus dem Review).
+- **Was durchsucht wird.** Die zlib-Lesart, nicht beide. `GetBody` liefert über
+  `inflate` dieselben Bytes aus, und nur dann zeigen die Fundstellen auf den Wert,
+  den die Oberfläche anzeigt (HUM-119). Die nackte Lesart als zweiten Eintrag zu
+  durchsuchen hieße, Bereiche zu liefern, die in `GetBody` auf andere Bytes zeigen.
+  Die Lücke ist benannt; das verlangt 4.13.
+- **Budget.** Je Lesart dieselbe Grenze: Die zweite Lesart bekommt eine Kopie des
+  Budgets vor der zlib-Lesart. Ihre Ausgabe wird stückweise verglichen und
+  verworfen, es liegen also höchstens 16 KiB zusätzlich im Speicher, und entpackt
+  werden höchstens `allowance + 1` Bytes. Läuft sie über das Budget, gilt sie als
+  verschieden, weil die zlib-Lesart ganz hineinpasste. Hat schon die zlib-Lesart
+  das Budget erreicht, gibt es keine zweite Lesart; der Body ist dann ohnehin als
+  gekürzt gemeldet. Der Vorschlag aus der Fix-Idee, beim ersten abweichenden Byte
+  abzubrechen, ist nicht übernommen: Erst das Ende zeigt, ob der nackte Strom eine
+  gültige Lesart ist, und ein Abbruch dort hätte jeden zufällig durchrutschenden
+  Stored-Kopf zum Befund gemacht.
+- **Tests.** `the_polyglot_has_two_valid_readings` prüft die Datei selbst,
+  `a_deflate_polyglot_is_reported_and_not_called_complete` das Kriterium,
+  `ordinary_zlib_and_raw_deflate_have_one_reading` gewöhnliche Bodies aller Stufen
+  einschließlich `none`, `the_second_reading_stays_inside_the_same_budget` die
+  Grenzfälle der zweiten Lesart,
+  `a_naked_reading_that_diverges_and_then_stops_short_is_a_reading` den
+  abgeschnittenen nackten Strom, `a_zlib_header_with_a_preset_dictionary_is_a_gap`
+  den Kopf mit Wörterbuch. Die drei Bodies liegen als
+  `body_decoder-deflate-polyglot.bin`, `body_decoder-deflate-truncated-divergence.bin`
+  und `body_decoder-deflate-preset-dictionary.bin` in den Regressionen und unter
+  denselben Namen ohne Präfix im Corpus.
+- **Kandidat bleibt offen.** Den Anfang eines kaputten Stroms zu durchsuchen gehört
+  nicht zu diesem Issue.
+
 ---
 
 ## HUM-267 · Ein Test scheitert zufällig an „Text file busy"
@@ -5076,6 +5130,107 @@ HUM-250 hält die erste Freigabe einer Sitzung während einer Störung der Aufze
 
 ### Referenzen
 HUM-250 (Umsetzung), HUM-047, `docs/UX.md` 5.4.
+
+### Umsetzung (HUM-269)
+
+- **Pause nach `core`.** `RecorderHealth`, `RecorderPause` und
+  `RecorderOutage` stehen jetzt in `app/lib/core/recorder/recorder_health.dart`,
+  die Ansicht `RecorderPauseView` in `app/lib/core/ui/recorder_pause.dart`
+  (wie `findings_pause.dart`). `sanitizeDiagnostic` zog mit nach
+  `app/lib/core/text/sanitize_diagnostic.dart`, weil der Kern kein Feature
+  importieren darf. Warteschlange, Shell (Statusleiste, Benachrichtigung) und
+  Editor lesen denselben Provider; damit gilt eine Bestätigung für alle drei,
+  einmal je Sitzung des Daemons. Inhaltlich ist an Pause und Störung nichts
+  geändert, nur zwei Methoden kamen dazu: `standsFor(resume)` und
+  `withdraw(resume)`.
+- **Editor.** `EditorHost._decide` fragt `RecorderPause.owed` unmittelbar
+  vor dem `Decide`, wie `_send` der Warteschlange; Blockieren hält nie an.
+  Die angehaltene Freigabe ist genau dieses `AllowEdited` mit dem
+  bearbeiteten Rumpf. Nach einer angenommenen Freigabe ruft der Wirt
+  `noteAllowSent`, die Sitzung gilt dann auch in der Warteschlange als
+  bestätigt. Der Bildschirm zeigt die Pause an der Stelle der Leiste (vor der
+  Pause mit offenen Funden, die beim Aufgehen schon zu ist), ohne die Taste
+  `S` (`letterKeys: false`, die Taste schriebe ins Feld); `Esc` schließt sie,
+  „Unaufgezeichnet senden“ nimmt erst nach `HMotion.rearm` an. Gezeigt wird
+  nur die eigene Pause (`standsFor`): Öffnet die Benachrichtigung ihre Pause,
+  während der Editor offen ist, setzte deren Knopf eine andere Freigabe fort.
+- **Aufräumen.** Geht der Editor, während seine Pause steht, nimmt er sie
+  mit (`withdraw` in einer Mikroaufgabe nach `dispose`); läuft die Frist ab,
+  ebenso. Sonst zeigte die Leiste der Warteschlange eine Pause, deren Knopf
+  eine Freigabe in einem abgebauten Widget fortsetzte.
+- **Tests.** `test/features/editor/editor_recorder_pause_test.dart`: Das
+  erste Senden hält an, vor `HMotion.rearm` nimmt der Knopf nicht an, danach
+  geht genau das bearbeitete `AllowEdited` hinaus und `owed` ist für die
+  Sitzung falsch; eine in der Warteschlange bestätigte Sitzung sendet ohne
+  Halt; `Esc` schließt, sendet nichts und bestätigt nichts; ein geschlossener
+  Editor nimmt seine Pause mit. Die bestehenden Tests von Warteschlange,
+  Shell, Editor und `states_recorder_failure` laufen unverändert, nur mit
+  neuen Importpfaden.
+- **Mutationsbeweise.** Ohne die Abfrage in `_decide` scheitern der erste,
+  dritte und vierte Test (das Senden geht ohne Pause hinaus), ohne `noteAllowSent`
+  der erste (die Sitzung bliebe unbestätigt), ohne `withdraw` in `dispose`
+  der vierte, und ohne die Anzeige der eigenen Pause im Editor der erste und
+  der dritte.
+- **Review-Runde 1 (Codex, Sonnet).** Alle Befunde übernommen.
+  - Codex (blockierend): `owed` war für jeden Sender falsch, solange eine
+    fortgesetzte Freigabe auf die Antwort des Daemons wartete (globales
+    `_resuming`). Eine zweite Freigabe aus Benachrichtigung oder
+    Warteschlange ging in dieser Zeit ohne Pause hinaus, auch wenn der Daemon
+    die erste danach abwies. Jetzt trägt nur die fortgesetzte Freigabe einen
+    Freibrief: `confirm` ruft sie in einer eigenen `Zone` mit einem einmaligen
+    Objekt auf, `owed` und `noteAllowSent` erkennen sie daran, und nach ihrem
+    Ende gilt er nicht mehr. Die Aufrufer müssen dafür kein Pfand durchreichen.
+    Test `a second send waits while the resumed one is refused`.
+  - Sonnet, statt Antigravity (alle minor): „Unaufgezeichnet senden“ baut
+    die Anfrage beim Bestätigen aus dem Entwurf, wie er dann steht
+    (`editedRequestOf` in `draft_ops.dart`, auch für den Knopf „Senden“),
+    Test `send unrecorded takes the draft as it stands then`. Ist im Entwurf
+    hinter der Pause wieder ein Fund offen (etwa ein zurückgetippter Wert),
+    geht nichts hinaus: Der Bildschirm schließt die Pause der Aufzeichnung
+    unbestätigt und zeigt die Pause mit offenen Funden, kein `noteAllowSent`;
+    der Wirt sendet einen solchen Entwurf auch bei einer Fortsetzung nicht
+    (`_current`). Test `a finding reopened behind the pause stops the send
+    there`. Die Pause des
+    Editors öffnet mit `bound: false`, eine weiterziehende Auswahl schließt
+    sie nicht mehr still (im selben Test). Nach „Zurück“ in beiden Pausen
+    holt der Editor den Fokus zurück. Die Bibliotheksdoku von `editor_host.dart`
+    zählt vier Dinge.
+  - Mutationsbeweise: Mit dem Freibrief ohne Prüfung der Zone (globaler
+    Schalter) scheitert der Test zur abgewiesenen Freigabe; mit der beim
+    Aufgehen gebauten Anfrage und mit `bound: true` scheitert der Test zum
+    Entwurf. Ohne die Prüfung im Bildschirm scheitert der Test zum wieder
+    offenen Fund (keine Pause mit offenen Funden), ohne beide Prüfungen geht
+    dort die Anfrage hinaus.
+- **Review-Runde 2 (Codex).** Beide Befunde übernommen.
+  - Blockierend: Die `Zone` aus Runde 1 erkannte alles, was aus der
+    fortgesetzten Freigabe stammt, nicht die Freigabe selbst. Ein Hörer, ein
+    Zeitgeber oder eine Mikroaufgabe, die sie plant, erbte den Freibrief und
+    ging ohne Pause hinaus, solange ihr `Decide` offen war. Jetzt gibt
+    `confirm` der einen fortgesetzten Freigabe einen `RecorderBypass` als
+    Argument (`RecorderResume`); sie reicht ihn ausdrücklich bis zum `Decide`
+    durch (`_send`, `_many` und `allow` in `decision.dart`, die Benachrichtigung
+    in `tray_host.dart`, `_decide` im Editor) und legt ihn bei `owes` und
+    `noteAllowSent` vor. Es gibt keinen Zustand drumherum mehr. Eine
+    Freigabe, die vor ihrem `Decide` erst das Modal fragt, verliert ihn dort
+    und hält nach dem Modal noch einmal an. Test `a release scheduled inside
+    the resumed one stops at the pause`.
+  - Minor: Überlappende Bestätigungen ersetzten den einen Freibrief. Jetzt
+    gilt eine Menge lebender Freibriefe, jeder bis zum Ende seiner eigenen
+    Freigabe, und jede angenommene Freigabe mit einem davon bestätigt die
+    Sitzung. Dabei fiel auf, dass `noteAllowSent` die Sitzung des Daemons
+    nicht nachzog: Kam die Bestätigung vor der ersten Frage nach `owes`,
+    löschte diese sie wieder. `noteAllowSent` zieht die Sitzung jetzt zuerst
+    nach. Test `overlapping confirmations: one success confirms, a later
+    refusal does not undo it` in `recorder_pause_test.dart`.
+  - Mutationsbeweise: Mit einer Prüfung, die den Freibrief nicht vergleicht
+    (globaler Schalter), scheitern der Test zur abgewiesenen Freigabe und der
+    zur geplanten Freigabe; mit nur einem Platz für Freibriefe und ohne das
+    Nachziehen der Sitzung in `noteAllowSent` scheitert der Test zu den
+    überlappenden Bestätigungen.
+- **Kandidat für ein eigenes Issue.** Öffnet die Benachrichtigung ihre Pause,
+  während der Editor offen ist, bleibt sie unsichtbar: Die Leiste der
+  Warteschlange ist verdeckt, und der Editor zeigt nur die eigene Pause
+  (`standsFor`). So war es schon vor HUM-269.
 
 ## HUM-270 · Flüsse aus einer Störung tragen keine eigene Markierung
 Sprint: 5 · Größe: S · Abhängigkeiten: HUM-250 · Blockiert: nichts · nach 0.1.0
@@ -6616,6 +6771,64 @@ folder in the file they named.
 1. The case has a test and either starts or ends in a `SANDBOX_006` whose fix
    names the daemon's config file.
 
+### Umsetzung (HUM-296)
+
+- **Entscheidung: Ablehnung (Variante 2).** Der Daemon liest keine Datei,
+  die ein Client nennt. Eigentümer- und Rechteprüfung trennen nicht den
+  Menschen vom Prozess: Jede Datei, die der Nutzer schreiben kann, kann auch
+  jedes Programm unter seiner Kennung schreiben, das den Socket erreicht.
+  Läse der Daemon sie als Erklärung, würde jeder solche Client mit einer
+  selbst geschriebenen Datei einen beliebigen Ordner außerhalb von `$HOME`
+  einhängen lassen, den `SetConfig` aus demselben Grund ablehnt (HUM-293).
+  Das erweiterte, was ein Aufrufer ohne Erklärung eines Menschen einhängt.
+  Die Ablehnung lässt alles, was eingehängt werden darf, wie es ist; nur Satz
+  und Abhilfe ändern sich, die Sicherheitsaussage im README bleibt.
+- **Satz und Abhilfe.** `work_dir::check_requested` gibt für einen Ordner,
+  der an Stufe 3 scheitert und dessen Quelle `ConfigFile(<datei>)` nicht
+  die Datei des Daemons (`Paths::config_path`) ist, `SANDBOX_006` mit dem
+  Satz „… counts as declared only in the daemon's config file <datei des
+  Daemons>, not in a config file other than the daemon's (<datei>)" und der
+  Abhilfe
+  `CopyCommand("humanitl --config <datei des Daemons> config set
+  sandbox.work_dir <aufgelöst>")` (`named_file_refused`, Pfade über
+  `shell_path`). Die Datei des Daemons als Quelle behält den allgemeinen Satz
+  und die Ordnerauswahl; der Fall des erklärten Texts, der über einen Verweis
+  woandershin führt (HUM-294), geht vor.
+- **`humanitl sandbox run --config`** startet ohne Daemon und prüft den
+  Ordner gegen die Datei, die es selbst liest; dort ist der Aufruf der
+  Mensch, kein Client am Socket. Unverändert.
+- **Doku.** `docs/cli.md` (Absatz zu `--config`), `docs/SECURITY.md` 5.2
+  (nur die eigene `config.toml` erklärt für den Daemon).
+  `docs/THREAT-MODEL.md` nennt die Erklärung nicht; unverändert.
+- **Tests.** `ipc::sandbox`:
+  `a_folder_outside_home_from_a_named_config_file_names_the_daemons_file`
+  (Start mit Quelle `other.toml` abgelehnt, Satz nennt beide Dateien, Abhilfe
+  genau der Befehl mit der Datei des Daemons; nach der Erklärung dort startet
+  dieselbe Anfrage). `ipc::work_dir`:
+  `only_the_daemons_config_file_declares_a_folder_outside_home` (dazu: Datei
+  des Daemons als Quelle behält Ordnerauswahl, erklärter Ordner startet
+  auch mit fremder Quelle).
+- **Mutationen.** `named_file_refused` nicht aufgerufen: 2 rot (beide neuen
+  Tests). Vergleich mit der Datei des Daemons entfernt: 1 rot
+  (`only_the_daemons_config_file_declares_a_folder_outside_home`). Datei
+  danach byte-gleich zurück (`cmp`).
+- **Review Runde 1 (Codex, zwei minor).** Der Vergleich der genannten Datei
+  mit der des Daemons geht über die aufgelösten Pfade (roh, wenn sich einer
+  nicht auflösen lässt); ein Verweis auf die Datei des Daemons heißt nicht
+  „eine andere Datei". Nur der Satz hängt daran, erklärt ist weiter allein,
+  was der Daemon gelesen hat. Die Kommandozeile schickt die Datei von
+  `--config` absolut (`Context::work_dir`, gegen ihr aktuelles Verzeichnis),
+  damit der Daemon einen relativen Pfad nicht gegen sein eigenes deutet.
+  Tests: Verweis-Fall in `only_the_daemons_config_file_declares_a_folder_outside_home`,
+  relativer Fall in `cmd::tests` (`Context::work_dir`). `cargo fmt` sauber.
+- **Review Runde 1 (Sonnet, minor).** Der Satz sagt „a config file other than
+  the daemon's (<datei>)" statt „a file named with --config": Auch ohne
+  `--config` kann die Datei der Kommandozeile eine andere sein (anderes
+  `XDG_CONFIG_HOME`). Test
+  `the_fix_quotes_the_daemons_file_and_the_folder_for_the_shell` (Datei des
+  Daemons und Ordner mit Leerzeichen und `'`); Mutation `.display()` statt
+  `shell_path` in der Abhilfe: rot.
+
 ---
 ## HUM-297 · RUSTSEC-2026-0414 in pulldown-cmark turns the dependency check red
 
@@ -7823,3 +8036,1551 @@ its splitter moves the cursor but never the boundary.
   Meldung je Intervall plus zwei. Neue Mutationen: Zug als Klick gezählt,
   Null-Anteil angenommen, gespeicherte Aufteilung beim Start ignoriert
   (Intercept und Editor) -- alle rot, Dateien byte-gleich zurück.
+
+---
+## HUM-303 · The terminal takes the keyboard on hover and by shortcut
+
+### Context
+Owner request 2026-10-29. Typing to the agent takes a click into the
+terminal first, in its pane as well as over the whole window (HUM-298). The
+owner wants the terminal to take the keyboard as soon as the pointer is over
+it, and a shortcut (owner proposal accepted: ``Ctrl+` ``) that gives it the
+keyboard wherever it is shown, without changing the layout.
+
+### Specification
+1. The pointer over the emulator hands it the keyboard, without a click, in
+   every host: the pane, the whole window and later the floating terminal
+   (HUM-300). The rule lives with the terminal widget, so every host gets it.
+2. Exceptions that keep the focus where it is: an open dialog, sheet, menu
+   or the command palette (input there must never slip into the terminal),
+   and a text field that has the focus while the pointer only crosses the
+   terminal. The rule chosen and why is documented in `docs/UX.md` 5.2.
+3. A core intent `FocusTerminalIntent`, bound in `shellShortcuts()` to
+   ``Ctrl+` ``, gives the keyboard to the terminal wherever it is shown and
+   changes nothing in the layout. With no terminal on the screen it does
+   nothing for now (HUM-300 will open the floating terminal). On layouts
+   where the backquote is a dead key the chord is matched by the physical
+   key. No repeats.
+4. The chord is not swallowed by the terminal: it takes the way of the
+   other application keys through `TerminalPane._onKey` and never reaches
+   the agent. It collides with no binding (`app/lib/core/shortcuts/intents.dart`,
+   intercept decision keys, editor, CONVENTIONS 3.9).
+5. The command palette lists it (while a terminal is shown); `docs/DESIGN.md`
+   shortcut table, `docs/UX.md` 5.2 and CONVENTIONS 3.9 name it; the palette
+   label is in ARB (`en` source, `de` translation, appended).
+
+### Acceptance criteria
+1. Widget test: hovering the terminal gives it the keyboard, and `Enter`
+   then reaches the agent as `0x0d`, not as an Allow.
+2. Widget test: with a held request selected and the focus in the queue,
+   `Enter` allows (counter-check) and the agent hears nothing; after the
+   pointer moved over the terminal and the focus actually moved, `Enter`
+   goes to the agent and the queue decides nothing. Never both.
+3. Widget tests: a text field, the terminal's context menu, an open sheet
+   and the palette keep the keyboard while the pointer is over the terminal.
+4. Widget tests: ``Ctrl+` `` gives the keyboard to the terminal in its pane
+   and over the whole window, leaves the layout as it was, does not reach the
+   agent, and does nothing with no terminal on the screen; the activator
+   matches the physical key, exactly `Ctrl`, no repeats.
+5. Each behaviour has a mutation proof; `make flutter-analyze` and the tests
+   of the touched packages are green; no golden changes.
+
+### Fallstricke
+- A delay before hover focus (say 150 ms) looks gentler and is the less safe
+  choice: while it runs, the pointer is on the terminal and an `Enter` meant
+  for the agent still allows the selected request.
+- `HModal`, `HSheet` and the menu of `HContextMenu` hold the keyboard in a
+  `FocusScope(autofocus: true)` of their own. The terminal's context menu
+  opens under the pointer, over the terminal, and lets hover through; a
+  hover rule without the scope check would take the keys from it at the next
+  movement.
+- The palette closes before it runs a command, and its field holds the focus
+  until the frame ends; a request for the keyboard from the palette has to
+  wait for that frame, or the scope rule refuses it.
+- `` ` `` is a dead key on German (`^`) and other layouts; a
+  `SingleActivator` on the logical backquote would match nothing there.
+
+### Umsetzung (HUM-303)
+
+- **Regel beim Terminal.** `TerminalPane._mayTakeKeyboard` gilt für jeden
+  Wirt (Pane, ganzes Fenster, später das schwebende Terminal). Ein
+  `MouseRegion` um den Emulator ruft sie bei `onEnter` und `onHover`; auch
+  bei jeder Bewegung, damit ein Textfeld, das den Fokus inzwischen abgegeben
+  hat, nicht verhindert, dass der Zeiger ihn holt.
+- **Entschieden: Fokus sofort, keine Verzögerung.** Zwei Ausnahmen halten
+  ihn. (1) Eine Ebene über der Arbeit: Das Terminal nimmt den Fokus nur von
+  einem Knoten, dessen Bereich sein eigener ist oder einer der Bereiche um
+  ihn. `HModal`, `HSheet` und das Menü von `HContextMenu` haben je einen
+  eigenen `FocusScope`, also deckt das Dialog, Blatt, Menü und Palette ohne
+  Liste. Gilt auch für das Kürzel. (2) Ein Textfeld mit Fokus, nur für den
+  Zeiger (`isTextInputFocused`); das Kürzel fragt ausdrücklich und darf es.
+  Eine Verzögerung von 150 ms wurde verworfen: In dieser Zeit stünde der
+  Zeiger auf dem Terminal, und ein `Enter` für den Agenten gäbe in der
+  Warteschlange frei.
+- **Kürzel.** `FocusTerminalIntent` und `TerminalFocusActivator` in
+  `core/shortcuts/intents.dart`: physische Taste links der 1 oder logischer
+  Backquote, genau `Ctrl`, nur `KeyDownEvent` (keine Wiederholung). In
+  `shellShortcuts()`, also nimmt das Terminal über `_onKey` denselben Weg wie
+  `Ctrl+K`. Die Shell zählt `terminalFocusRequestProvider`
+  (`core/ui/terminal_placement.dart`) hoch; jeder Wirt hört zu, nur der
+  sichtbare mit Sitzung handelt. Ohne sichtbares Terminal passiert nichts.
+- **Palette.** Befehl `focus-terminal` am Ende, nur solange ein Terminal mit
+  Sitzung zu sehen ist (ganzes Fenster oder Abschnitt Sandbox). Die Anfrage
+  wartet auf den Frame nach dem Schließen, weil bis dahin das Feld der
+  Palette den Fokus hält und die Bereichsregel ablehnen würde.
+- **Doku.** `docs/UX.md` 5.2, `docs/DESIGN.md` Kürzeltabelle,
+  CONVENTIONS 3.9, ARB `shellPaletteFocusTerminal` (en, de, angehängt).
+- **Tests.** `test/features/shell/terminal_keyboard_test.dart` (zwölf):
+  Zeiger gibt die Tastatur, `Enter` kommt als `0x0d` an; Warteschlange
+  neben dem Terminal (nimmt HUM-300 vorweg): `Enter` gibt zuerst frei,
+  Agent hört nichts; nach dem Darüberfahren steht der Fokus nachweislich im
+  Terminal, `Enter` geht an den Agenten, keine zweite Entscheidung;
+  Notizfeld behält den Fokus beim Darüberfahren; Kontextmenü des Terminals
+  und Einstellungsblatt behalten ihn unter dem Zeiger, `Esc` schließt das
+  Menü und erreicht den Agenten nicht; Palette behält ihn gegen Zeiger und
+  Kürzel, listet den Befehl nur mit sichtbarem Terminal, der Befehl gibt die
+  Tastatur; Kürzel im Pane und über dem ganzen Fenster, Layout bleibt;
+  Kürzel erreicht den Agenten nicht; ohne Terminal tut es nichts;
+  Aktivator: andere logische Taste auf derselben physischen Taste, kein
+  `Shift`, kein Wiederholen. Eine Zeile in
+  `shortcuts_map_to_intents_test.dart`. Keine Goldens geändert.
+- **Mutationsbeweise**, je rot und danach mit `cmp` byte-gleich zurück:
+  Zeiger-Handler entfernt; Bereichsregel aus; Textfeldregel aus; Bindung
+  entfernt; nur logischer Backquote; Wiederholung erlaubt; `Shift`
+  ignoriert; Wirt hört nicht auf die Anfrage; Shell ohne Action; Befehl
+  immer in der Palette; Palette-Anfrage ohne Warten auf den Frame (zuerst
+  grün, weil der ruhende Zeiger die Tastatur beim Verschwinden der Palette
+  brachte; der Test führt den Zeiger jetzt weg und nimmt `Enter`, dann rot).
+  Grün und so belassen: ohne `Visibility.of`-Prüfung, weil `ExcludeFocus`
+  des `IndexedStack` die Anfrage eines verdeckten Wirts schon abweist; die
+  Prüfung bleibt als zweite Wand. Bindung entfernt lässt
+  `the_chord_never_reaches_the_agent` grün: Der Emulator schickt für
+  `Ctrl+Backquote` im Test ohnehin kein Byte; der Test hält das Ergebnis
+  fest, nicht den Weg.
+- **Review (Codex, Sonnet), nachgebessert.** Kontextmenü, Blatt und Modal
+  nahmen den Fokus nicht, solange das Terminal ihn hielt:
+  `FocusScope(autofocus: true)` gibt nach, sobald im Bereich darum etwas
+  fokussiert ist. `Esc` im Terminalmenü ging an den Agenten, Tippen in einem
+  über dem Terminal geöffneten Blatt ebenso (Akzeptanzkriterium 3). Neu
+  `HLayerScope` (`packages/ui`, `h_layer_scope.dart`), von `HModal`,
+  `HSheet` und dem Menü von `HContextMenu` benutzt: Der Bereich fordert den
+  Fokus einen Frame nach dem Erscheinen selbst an, außer etwas darin hat ihn
+  schon. Zurück geht er beim Schließen an den, der ihn vorher hatte
+  (ausdrücklich; siehe zweite Runde).
+  `HLayerScope.holdsFocus()` sagt, ob gerade eine Ebene die Tastatur hat
+  (auch im Release-Build, anders als `debugLabel`). Palette über einem
+  Blatt oder Modal (Befund Codex): Die Shell merkt sich das beim Öffnen,
+  parkt den Fokus beim Schließen nicht auf sich oder dem Terminal, sondern
+  überlässt ihn der Ebene darunter, und bietet „Focus the terminal" dann
+  nicht an; `_requestTerminalFocus` fragt nicht, solange eine Ebene die
+  Tastatur hat. Tests: Menü und Blatt ohne Hilfsgriff, also auf dem echten
+  Weg (Menü über dem fokussierten Terminal nimmt die Tastatur, `Esc`
+  schließt es, der Agent hört nichts, das Terminal bekommt sie zurück;
+  Blatt mit `Ctrl+,` aus dem Terminal, `A` und `Enter` erreichen den Agenten
+  nicht); `the_palette_over_a_sheet_gives_the_keyboard_back_to_the_sheet`;
+  `hover_takes_the_keyboard_when_nobody_holds_it` (Befund Sonnet; ein
+  `primaryFocus` von `null` gibt es nach dem ersten Frame nicht, gemessen
+  wird mit dem Bereich als Halter, im Aufbau ohne Shell, weil die Shell den
+  Fokus sonst zurückholt); `packages/ui/test/layer_scope_test.dart` (drei, mit der zweiten Runde vier).
+  Mutationen rot: Ebene fordert den Fokus nicht an; Palette bietet den
+  Befehl über einer Ebene an; Schließen der Palette parkt auf der Shell;
+  ein Bereich als Halter wird abgewiesen. Grün und belassen: die Shell fragt
+  auch unter einer Ebene nach dem Terminal (die Bereichsregel des Terminals
+  weist ab; zweite Wand).
+- **Review zweite Runde (Codex), nachgebessert.** (1) Zwischen dem Öffnen
+  einer Ebene und ihrem ersten Bild lag ein Frame, in dem eine Taste noch
+  beim alten Halter ankam: `Esc` beim Agenten nach dem Rechtsklick, `Enter`
+  in der Warteschlange nach „Regel anlegen". Neu
+  `HLayerScope.claimKeyboard()`: Der Öffner ruft es im selben Callback, es
+  merkt sich den Halter und parkt die Tastatur auf dem Bereich um ihn, wo
+  keine Bindung der Arbeit lauscht. Öffner mit Griff: Kontextmenü
+  (`HContextMenu._open`), Palette und Einstellungen in der Shell, „Regel
+  anlegen" auf der Karte des Agenten. Die Ebene übernimmt den gemerkten
+  Halter und gibt ihm die Tastatur beim Schließen ausdrücklich zurück, denn
+  das Parken löscht das Gedächtnis des Bereichs. Kein Rückgeben, wenn eine
+  neuere Ebene offen ist; schließt eine Ebene, aus der heraus eine neuere
+  aufging, erbt die neuere deren früheren Halter (Palette, „Allow all",
+  Modal). Zwei Stellen nahmen die geparkte Tastatur sofort wieder an sich
+  und brauchten deshalb `HLayerScope.keyboardClaimed` (beansprucht oder
+  gebaut, aber noch ohne Tastatur): `InterceptScreen._syncFocus`, das
+  sich jeden Fokus auf einem Bereich darüber zurückholt, und
+  `TerminalPane._takeFocus`, das beim Zurückkehren ins Pane zugriff, sobald
+  die Sitzung wieder bekannt war -- also nachdem das Blatt die Tastatur
+  hatte; Tippen im Blatt ging dann an den Agenten. `_takeFocus` folgt jetzt
+  derselben Regel wie Zeiger und Kürzel. (2) Die Shell forderte beim
+  Schließen von Palette und Einstellungen den Fokus für sich an und
+  überstimmte damit die Rückgabe: Einstellungen, aus dem Terminal geöffnet,
+  gaben die Tastatur der Shell statt dem Terminal. Jetzt
+  `_keysBackAfterLayer`: nach der Rückgabe prüfen, und nur wenn der frühere
+  Halter weg ist (das Terminal des ganzen Fensters, das die Einstellungen
+  beenden), nimmt die Shell sie. Tests:
+  `esc_in_the_frame_the_menu_opens_does_not_reach_the_agent`,
+  `settings_opened_from_the_terminal_give_the_keys_back_to_it`,
+  `when_the_holder_is_gone_the_shell_takes_the_keys`,
+  `test/features/intercept/layer_opening_frame_test.dart` (`Enter` vor dem
+  ersten Bild des Regelblatts entscheidet nichts, mit Gegenprobe),
+  `a_layer_opened_from_a_closing_layer_returns_to_the_first_holder` in
+  `packages/ui`. Nicht mit Griff, weil außerhalb dieses Issues und ohne
+  Nachbarschaft zu Terminal oder Entscheidung im selben Bild: Stopp-Dialog,
+  Befehlsblatt der Sandbox, Blatt und Exportmenü der History, Regel-Editor,
+  Audit-Blatt, Suchblatt im Setup, Sammelmodal, About; für sie bleibt das
+  eine Bild bis zur Übernahme.
+  Mutationen, je rot und mit `cmp` byte-gleich zurück: Menü ohne Griff;
+  Regelblatt ohne Griff; Warteschlange nimmt die geparkte Tastatur;
+  gebaute, noch wartende Ebene zählt nicht als beansprucht; Terminal im
+  Pane nimmt die Tastatur beim Einhängen ohne Ebenenregel; Shell fordert
+  beim Schließen der Einstellungen den Fokus für sich; ohne ausdrückliche
+  Rückgabe; ohne Übergabe zwischen Ebenen (Test in `packages/ui` mit
+  Griff, denn ohne Griff stellt Flutters eigenes Gedächtnis den Halter
+  wieder her). Grün und belassen: die Ausweichstelle der Shell, wenn der
+  frühere Halter weg ist. In jedem erreichbaren Fall gibt Flutter die
+  Tastatur beim Abbau des Terminalbereichs schon an den zuletzt
+  fokussierten Knoten des Elternbereichs, die Shell; die Ausweichstelle
+  bleibt als zweite Wand für einen Halter, der ohne einen solchen Knoten
+  verschwindet. Ebenso grün und entfernt: die sofortige Anwendung der
+  Fokusänderung im Griff (`applyFocusChangesIfNeeded`). Flutter wendet
+  sie in einer Microtask an, und die läuft vor dem nächsten Ereignis der
+  Plattform; der Fehler im ersten Versuch lag am Zurückholen durch die
+  Warteschlange, nicht an der Microtask. Gefunden im vollen Lauf: „About"
+  aus der Palette öffnete den Dialog im selben Bild, in dem die Palette
+  ging; weil das Parken das Gedächtnis des Bereichs gelöscht hatte, gab
+  Flutter die Tastatur dem ersten Bedienelement der Seite unter dem
+  Dialog, der Warteschlange, und `Esc` schloss den Dialog nicht mehr
+  (`Escape closes About and the shell keys work again`). Der Befehl
+  öffnet den Dialog jetzt nach diesem Bild, wie „Focus the terminal";
+  Mutation (Dialog wieder im selben Bild) rot.
+- **Für HUM-300.** Das schwebende Terminal hält dieselbe Ebenenregel: Es
+  baut `TerminalPane` und erbt damit `_mayTakeKeyboard`; ein eigener
+  `FocusScope` für den schwebenden Wirt muss wie `_terminalScope` unter dem
+  Bereich der Shell hängen und darf kein `HLayerScope` sein, sonst hielte
+  das Terminal sich selbst für eine Ebene über der Arbeit.
+
+---
+## HUM-306 · The empty queue says the agent is working when a session runs
+
+### Context
+Owner report of 2026-10-29: Intercept showed "Start session" while a pi
+agent was running in the terminal. The empty state of the queue
+(`QueueEmptyState` in `features/intercept/widgets/queue_pane.dart`) offered
+its primary "Start session" whenever nothing waited, whether or not a session
+ran. With a running agent the queue is empty because the agent works without
+asking; a button that sends somebody to start what already runs is wrong, and
+it hides the one thing worth doing from there, looking at the agent.
+
+### Specification
+1. While the agent of a sandbox session runs, the empty queue says so: the
+   title says that the agent is working, the hint says that every request
+   that needs the person appears here. The words "nothing", "no" and "yet"
+   stay out, as for every empty state (`docs/UX.md` 4.1).
+2. Its one action is then "Go to terminal", filled like the start: it opens
+   the Sandbox section with the agent's terminal, rail and tabs, from where
+   `Ctrl+1` returns as from any section. The terminal over the whole window
+   (HUM-298) stays one chord away; a floating terminal (HUM-300) may later
+   take this button's place.
+3. Without a running agent (no session, or a sandbox whose agent has exited)
+   the empty state stays as it was: "The queue is open", the hint, and
+   "Start session" into Setup.
+4. The line with the three keys stands in both cases.
+5. Features do not import each other (ARCHITECTURE 5,
+   `tools/check-deps.sh`). The queue reads one bit from a provider in
+   `app/lib/core`; the shell, the composition root, feeds it from the
+   sandbox snapshot. "Running" means what the terminal asks: the agent runs,
+   not merely the sandbox.
+6. The empty state follows the session live: a session that starts or stops
+   while the queue is showing changes it without a reload. That includes
+   the end of the agent, which the daemon reports as `SandboxEvent.Exit` on
+   the stream of the start and follows with no `Status`, and a session
+   started or stopped on the command line, which sends this window nothing:
+   the daemon has no stream that announces sessions, so while the empty
+   queue is in view (Intercept shown, link live, terminal not over the
+   window, nothing held) the shell asks for the snapshot when the queue
+   comes into view, when the window comes back to the front, and every 5 s.
+   The question is the snapshot alone, without the isolation check; it
+   keeps the findings that stand and does not turn the sandbox screen red
+   when it goes unanswered.
+7. Without a live link the queue does not claim that the agent works.
+8. Strings come from ARB, English source and German translation, appended.
+
+### Acceptance criteria
+1. Widget test: with a running agent the empty queue shows the working title
+   and hint, "Go to terminal" and the three keys, and no "Start session";
+   the button opens the Sandbox section.
+2. Widget test: without a session the empty queue shows "Start session" as
+   before and no terminal button; the button opens Setup.
+3. Widget test: a sandbox whose agent has exited shows "Start session".
+4. Widget test: starting and stopping a session while the queue shows
+   switches the empty state both ways.
+5. Widget tests: the end of the agent on the start stream switches back at
+   once; a session started and stopped on the command line appears and
+   goes within one interval; no question while another section shows, one
+   at once on return; one at once when the window comes back to the front;
+   without a link no "working"; an unanswered question leaves the snapshot.
+6. A test holds the core's index of the Sandbox section to
+   `Section.sandbox.index`.
+7. Each behaviour has a mutation proof; `make flutter-analyze` and the tests
+   of intercept, shell and sandbox are green; existing goldens are
+   unchanged, a new golden shows the working state.
+
+### Umsetzung (HUM-306)
+
+- **Das eine Bit im Kern.** `core/ui/agent_session.dart`:
+  `agentSessionProvider` (`bool`, am Anfang `false`) mit `report(running:)`.
+  Gefüttert von `features/shell/agent_session_feed.dart` (`AgentSessionFeed`,
+  angelegt in `initState` der Shell, entsorgt mit ihr): Bit = Verbindung lebt
+  und `sandboxStatusProvider` sagt `agentRunning` (dieselbe Frage wie
+  `SandboxTerminal`). Der erste Stand geht nach dem ersten Frame hinüber, nicht
+  mit `fireImmediately`: Riverpod verbietet Schreiben während des Baus, und
+  `initState` gehört dazu.
+- **Ende des Agenten.** `GrpcDaemonClient` warf `SandboxEvent.Exit` weg, und
+  der Daemon schickt danach kein `Status`; der Schnappschuss blieb bei „läuft"
+  (Codex-Befund). Neu `SandboxUpdate.exit(code)`, im Notifier gefaltet zu
+  `agentRunning: false`. Der Fake schließt den Strom des Starts schon bei
+  `running` und schickt kein `Exit`; die Tests spielen den echten Ablauf mit
+  einem eigenen Client nach (`SessionClient.agentEnd`), der Fake bleibt, wie
+  er ist (gemeinsame Datei, und ein offener Start-Strom hielte jeden
+  `start()`-Aufruf der übrigen Tests an).
+- **Sitzungen von der Kommandozeile.** Der Daemon hat keinen Strom, der
+  Sitzungen ankündigt. Solange die leere Warteschlange zu sehen ist
+  (Intercept, Verbindung lebt, Terminal nicht im ganzen Fenster, nichts
+  gehalten), fragt die Shell nach dem Schnappschuss: sofort beim Eintreten,
+  wenn das Fenster nach vorn kommt (`AppLifecycleListener.onResume`), und alle
+  `agentSessionPollInterval` (5 s). Dafür `pollStatus()` im
+  Sandbox-Notifier: nur `Sandbox(Status)`, keine Isolationsprüfung. Sie nimmt
+  nur den Schnappschuss, keine Befunde und keine Logzeilen (der Daemon
+  wiederholt die Befunde seiner Vorabprüfung mit jedem Schnappschuss; sonst
+  stünde alle 5 s eine Kopie mehr da, und `sandboxCallProvider` spräche sie
+  der Frage zu). Sie erhöht `_snapshots` nicht (ein laufender Plan oder
+  Refresh behält seine Antwort, eine spätere Antwort der Frage fällt weg).
+  Jedes Ereignis eines anderen Aufrufs (Start, Stopp, `Exit`, Plan,
+  Refresh) zählt `_sessionEvents` hoch, und eine Antwort, die vor dem
+  letzten davon losging, fällt weg: Ein `Exit` ist neuer als ein
+  Schnappschuss von davor. Sie faltet auf den Stand bei Ankunft statt auf
+  den beim Fragen (sonst gingen Prüfergebnisse eines Starts dazwischen
+  verloren), und ein Fehlschlag lässt den Schnappschuss stehen. Immer nur
+  eine Frage zugleich, weitere Aufrufe schließen sich ihr an; nach
+  `sandboxPollDeadline` (10 s) gilt sie als verloren, ihre Antwort fällt
+  weg, und die nächste fragt neu. Ein `Stream.timeout` oder ein eigener
+  `StreamController` als Frist ließ in den Widget-Tests das Ende des Stroms
+  nie ankommen; deshalb ein Zähler (`_pollToken`) und ein Timer. Die
+  abgelaufene Anfrage selbst bleibt offen, bis der Daemon sie beendet.
+  Ein Zubringer je App: Eine zweite Shell im selben Prozess bleibt untätig
+  (`AgentSessionFeed.idle`).
+- **Ohne Verbindung** sagt die Warteschlange nicht „arbeitet" (Sonnet-Befund).
+- **Leerzustand.** `QueueEmptyState` ist ein `ConsumerWidget`. Mit laufendem
+  Agenten: Titel „The agent is working" / „Der Agent arbeitet", Hinweis
+  „Every request that needs you appears here." / „Jede Anfrage, die dich
+  braucht, erscheint hier.", Knopf `queue-go-to-terminal` „Go to terminal" /
+  „Zum Terminal". Ohne: alles wie vorher. Die Tastenzeile steht in beiden.
+  „Nothing waiting" ist nicht übernommen, die verbotenen Wörter aus
+  `docs/UX.md` 4.1 kommen nicht vor.
+- **Wohin der Knopf führt.** In den Sandbox-Abschnitt (`NavIntent`), nicht
+  ins ganze Fenster: Leiste und Tabs bleiben, `Ctrl+1` führt zurück, und
+  `Ctrl+Shift+Enter` führt von überall ins ganze Fenster.
+  `sandboxSectionIndex = 3` steht in `core/shortcuts/intents.dart` neben
+  `navigationKeys`, ein Test hält ihn an `Section.sandbox.index`.
+- **Tests.** `test/features/intercept/empty_queue_session_test.dart`, zwölf
+  Fälle über die ganze App: laufender Agent (Text, Knopf, Tastenzeile, kein
+  Start, Knopf öffnet Sandbox), ohne Session (Start, öffnet Setup), Sandbox
+  mit beendetem Agenten, Start und Stopp aus der App, ein Schnappschuss, der
+  vor der Shell steht, `Exit` auf dem Start-Strom, Sitzung der
+  Kommandozeile kommt und geht, keine Frage auf einem anderen Abschnitt und
+  sofort eine beim Zurückkehren, Fenster kommt nach vorn, ohne Verbindung
+  kein „arbeitet", unbeantwortete Frage lässt den Schnappschuss stehen,
+  eine alte Antwort nach dem `Exit` weckt den Agenten nicht, drei Fragen mit
+  wiederholtem Befund lassen einen Befund und seine Herkunft stehen, eine
+  hängende Frage wird nicht verdoppelt und gibt nach der Frist auf, eine
+  zweite Shell füttert nichts, Index. Dazu `test/core/ipc/grpc_client_test.dart` „the end of the agent on
+  the start stream reaches the app" gegen einen echten gRPC-Server auf einem
+  Unix-Socket.
+- **Goldens.** Bestehende unverändert. Neu
+  `intercept_empty_working_{dark,light}` in `intercept_golden_test.dart`, mit
+  einem festen `WorkingAgent`.
+- **Mutationsbeweise** (jede Datei danach byte-gleich zurück, mit `cmp`
+  geprüft), alle 20 rot: Warteschlange ignoriert das Bit; Feed ohne
+  Zuhörer am Schnappschuss; Feed ohne ersten Stand; `isUp` statt
+  `agentRunning`; Knopf nach Setup; Index 2; Tastenzeile fehlt; `Exit` nicht
+  gefaltet; keine wiederholte Frage; Frage auf jedem Abschnitt; keine Frage
+  beim Eintreten; kein `onResume`; Verbindung ignoriert; Frage nicht leise
+  (Sandbox-Ansicht wird rot); gRPC-Client wirft `Exit` weg; Frage achtet
+  nicht auf `_sessionEvents`; Frage faltet Befunde; keine Bündelung; keine
+  Frist; kein Schutz vor einer zweiten Shell.
+- **Offen.** Der Zustand eines anderen Clients kommt höchstens 5 s später
+  an. Ein Strom des Daemons, der Sitzungsänderungen meldet, ersetzte die
+  Frage; Kandidat für ein eigenes Issue.
+
+## HUM-301 · The terminal text can be zoomed
+
+### Context
+Owner report 2026-10-29: "ich kann den Text im Terminal von pi nicht mit Strg
+größer machen". Every terminal emulator on the desktop zooms with `Ctrl` and
+`+`/`-`; ours keeps the 13 px of `mono13` and hands those chords to the agent.
+On a large screen or from some distance pi is hard to read.
+
+### Specification
+1. `Ctrl` + `+` (also `Ctrl+=` and numpad `+`) makes the terminal text one
+   step larger, `Ctrl` + `-` (also numpad `-`) one step smaller, within 10 to
+   28 px, starting at the size the terminal has today (13). A reset chord
+   brings back the default. `Ctrl` + mouse wheel over the emulator zooms too,
+   and the scrollback does not move with it.
+2. The chords are bound in `shellShortcuts()` and take the way of the other
+   application keys through `TerminalPane._onKey` (HUM-298, HUM-303): with
+   the keyboard in the terminal they never reach the agent. They act only
+   while a terminal with a session is shown; otherwise the key goes on to
+   whoever else wants it. All other keys still go to the agent.
+3. The reset chord collides with no binding
+   (`app/lib/core/shortcuts/intents.dart`, intercept decision keys, editor,
+   CONVENTIONS 3.9). `Ctrl+0` is taken by `ToggleRailIntent` (HUM-254)
+   everywhere, also inside the terminal; when it collides, a free chord is
+   chosen and the reason is written down.
+4. The size survives a restart in the UI state file of HUM-254
+   (`UiStateFile`, `app/lib/core/ui_state/ui_state_file.dart`). An unreadable
+   or out-of-range value falls back to the default or the nearest bound.
+5. After a zoom the emulator recomputes columns and rows, and the new
+   geometry goes to the daemon through the existing throttled resize path
+   (`terminal_provider.dart`, HUM-305), so the TUI redraws.
+6. The command palette lists zoom in, zoom out and reset while a terminal is
+   shown; `docs/DESIGN.md` shortcut table, `docs/UX.md` 5.2 and CONVENTIONS
+   3.9 name the chords; labels in ARB (`en` source, `de` translation,
+   appended).
+
+### Acceptance criteria
+1. Widget tests: with the terminal focused, the zoom-in, zoom-out and reset
+   chords change the font size of the emulator, and none of them reaches the
+   agent as a byte; another key still does.
+2. Widget test: the three palette commands do the same, and they are listed
+   only while a terminal is shown.
+3. Widget test: `Ctrl` + wheel over the terminal zooms, the wheel alone does
+   not.
+4. Widget test: the size stops at 10 and 28.
+5. Widget test: a zoomed size is there again after a restart over the same
+   state file.
+6. Widget test: after a zoom the daemon receives a resize with the new
+   columns and rows.
+7. Each behaviour has a mutation proof; `make flutter-analyze` and the tests
+   of the touched packages are green; no golden changes.
+
+### Fallstricke
+- `Ctrl+0`, the reset of every browser and terminal, is the rail toggle here
+  (HUM-254) and reaches the shell from inside the terminal as well.
+- On a US layout `+` is `Shift+=`, on a German one `+` has its own key and
+  `=` is `Shift+0`. The activators have to accept `Shift` for zoom in and
+  must not mistake a German `Ctrl+Shift+0` for anything but the digit.
+- `Ctrl+Shift+-` is `Ctrl+_`, undo in readline; zoom out takes `-` without
+  `Shift` only.
+- The emulator's `Scrollable` registers for every wheel event; a `Listener`
+  around it is asked later in the hit-test path and loses the
+  `PointerSignalResolver` race, so `Ctrl` + wheel would scroll the
+  scrollback instead of zooming.
+
+### Umsetzung (HUM-301)
+
+- **Die Größe als Notiz im Kern.** `app/lib/core/ui/terminal_zoom.dart`
+  hält `terminalFontSizeProvider` (Vorgabe 13 = `mono13`, Grenzen 10 und 28,
+  Schritt 1) und schreibt sie unter `terminalFontSize` in die Zustandsdatei
+  (`UiStateFile`); die Vorgabe wird als `null` geschrieben, damit eine
+  spätere Vorgabe wieder greift. Gelesen wird einmal synchron beim ersten
+  Bau, wie bei der Leiste: asynchron meldete das Terminal erst 13 px an den
+  Daemon und sprünge einen Frame später. Ein Wert, den niemand so
+  geschrieben haben kann (kein Zahlwert, außerhalb der Grenzen), fällt auf
+  die Vorgabe oder die nächste Grenze zurück.
+- **Die Griffe.** `TerminalZoomIntent(TerminalZoom)` und
+  `TerminalZoomActivator` in `intents.dart`, in `shellShortcuts()`
+  gebunden. Größer: `Ctrl` mit `=`, `+` (deutsche Taste) oder Ziffernblock-
+  `+`, jeweils mit oder ohne `Shift`, denn das `+` der US-Belegung ist
+  `Shift+=`. Kleiner: `Ctrl` mit `-` oder Ziffernblock-`-`, nur ohne `Shift`,
+  weil `Ctrl+_` Rückgängig in readline ist. Größer und kleiner wiederholen
+  sich beim Halten, die Vorgabe nicht. Genau `Ctrl`: mit `Alt` oder `Meta`
+  nicht.
+- **Vorgabe auf `Ctrl+Shift+0`, nicht auf `Ctrl+0`.** `Ctrl+0` ist seit
+  HUM-254 die Leiste, in jedem Bereich und über `_onKey` auch aus dem
+  Terminal. Dieselbe Taste je nach Fokus mit zwei Bedeutungen hätte dem,
+  der die Leiste will, einen kleineren Text beschert und umgekehrt. Mit
+  `Shift` bleibt die Vorgabe auf der Taste, nach der man greift; Flutter
+  benennt die Taste nach ihrem Zeichen ohne Modifikatoren, also ist es auch
+  auf deutscher Belegung (`Shift+0` = `=`) die Null und kein Zoom.
+  Zusätzlich `Ctrl` mit der Null des Ziffernblocks, ohne `Shift`, weil
+  `Shift` diese Taste bei Num Lock zu `Insert` macht.
+- **Nur mit sichtbarem Terminal.** Die Shell bindet `TerminalZoomAction`,
+  die nur aktiv ist, solange `_terminalShown()` gilt; eine inaktive Aktion
+  lässt `Shortcuts` `ignored` antworten, die Taste geht unverändert weiter.
+  Im Terminal nehmen die Kürzel den Weg aller Shell-Kürzel durch
+  `TerminalPane._onKey` und erreichen den Agenten nie. Die Palette führt
+  die drei Befehle, solange ein Terminal zu sehen ist, auch über einer
+  Ebene, denn die Größe braucht keinen Fokus.
+- **Das Rad.** `_WheelZoom` in `terminal_pane.dart`: ein `RenderProxyBox`,
+  der sich im Trefferpfad **vor** seine Kinder setzt und so beim
+  `PointerSignalResolver` als erster meldet, nur für ein Rad mit `Ctrl`.
+  Ein `Listener` hätte verloren: Das `Scrollable` des Rücklaufs (und für
+  ein TUI das, das Mausberichte erzeugt) steht tiefer im Pfad und meldet
+  sich zuerst.
+- **Neue Geometrie.** Kein eigener Weg: Die neue Schrift ändert die Zellen,
+  `RenderTerminal` zählt Spalten und Zeilen neu und ruft `terminal.resize`,
+  und die Sitzung schickt das über den gedrosselten Pfad von HUM-305.
+- Tests: `test/features/shell/terminal_zoom_test.dart` (Kürzel im
+  fokussierten Terminal ohne Byte beim Agenten, `Enter` als Gegenprobe;
+  `Ctrl+0` bleibt die Leiste, `Ctrl+Shift+-` zoomt nicht; ohne Terminal tun
+  die Kürzel nichts; Palette nur mit Terminal; `Ctrl` + Rad mit Rücklauf im
+  Emulator, Rad allein nicht; Grenzen 10 und 28; Neustart über dieselbe
+  Datei; Resize mit weniger Spalten und Zeilen beim Daemon),
+  `test/core/ui/terminal_zoom_test.dart` (Vorgabe = `mono13` in allen
+  Themen, Lesen mit Rückfall, Schreiben mit `null` für die Vorgabe,
+  Aktivatoren: genau `Ctrl`, `Ctrl+0` nicht, Wiederholung nur beim Zoom),
+  `shortcuts_map_to_intents_test.dart` um die zehn Zoom-Zeilen ergänzt. Der
+  Tastensimulator kennt für `add`, Ziffernblock-`-` und Ziffernblock-`0`
+  keinen Linux-Code; diese Tasten kommen im Test als Android-Ereignis, die
+  Shortcuts sehen nur die logische Taste.
+- Mutationen, je rot und mit `cmp` byte-gleich zurück: Zoom nicht in
+  `shellShortcuts()`; `_onKey` überspringt den Zoom; Aktion immer aktiv;
+  Rad-Box nach den Kindern im Trefferpfad; ohne Begrenzung; ohne
+  Schreiben; Palette listet den Zoom immer; Schrift wieder aus `mono13`;
+  Vorgabe auf `Ctrl+0`; kleiner auch mit `Shift`; Vorgabe wiederholt sich;
+  `Alt` erlaubt; Bau liest einen anderen Schlüssel. Eine Prüfung in `_onKey`
+  auf eine inaktive Aktion wurde erwogen und weggelassen: Ein Emulator mit
+  der Tastatur ist immer zu sehen, der Fall ist unerreichbar und ließe sich
+  durch keinen Test belegen.
+- **Nach dem Review: gehaltene Griffe.** Codex und Sonnet fanden, dass
+  das Loslassen jedes Zoom-Griffs und die Wiederholungen der Vorgabe nicht
+  vom Aktivator angenommen werden und deshalb zum Emulator durchfielen; ein
+  Agent mit dem Tastaturprotokoll von kitty hätte so die zweite Hälfte eines
+  Griffs bekommen. `TerminalPane` merkt sich jetzt die physische Taste
+  eines genommenen Zoom-Griffs (`_heldZoomKey`) und behält jedes weitere
+  Ereignis dieser Taste bis zum Loslassen; die Vorgabe gilt dabei nur
+  einmal. Ein neues Drücken irgendeiner Taste löscht die Merkung, falls das
+  Loslassen nach einem Fokuswechsel woanders ankam. Test
+  `a_held_zoom_chord_never_falls_through_to_the_agent` (`Ctrl+=` und
+  `Ctrl+Shift+0` mit Drücken, drei Wiederholungen, Loslassen: jedes
+  Ereignis behandelt, kein Byte beim Agenten, Vorgabe einmal). Mutationen,
+  je rot und byte-gleich zurück: ohne Behalten; Merkung schon nach der
+  ersten Wiederholung vergessen; Vorgabe wiederholt sich. Nicht übernommen
+  (optional, minor): das Schreiben in die Zustandsdatei während eines
+  gehaltenen Zooms zu entprellen; es ist ein kleines JSON je Schritt, und
+  die Wiederholrate der Tastatur begrenzt es.
+---
+## HUM-302 · Notices float as dismissible overlays and never push the layout
+
+### Context
+Owner report of 2026-10-29, two complaints about the same thing.
+
+1. The finding "LLM endpoint is not on a private network" (`LLM_006`) has a
+   band of its own at the top of the Sandbox section, is oddly tall, and
+   makes the terminal re-wrap ("macht mir mein Terminal so witzig"). The
+   daemon puts `LLM_006` into every sandbox status while the endpoint is
+   public; the band stood between the sandbox header and the terminal, so
+   each status that brought it or took it away resized the PTY and the TUI
+   of the agent redrew. It could not be closed.
+2. In Intercept, the cards above the queue (findings of the daemon,
+   HUM-106, and the requests of the agent, HUM-073) are not clean overlays:
+   the close glyph of a finding sits beside the card instead of on it, which
+   leaves an empty column on the right, and every card pushes the queue list
+   down.
+
+The desktop notice of the shell (`UI_002`, HUM-276) and the return banner
+(HUM-034) are bands of the same kind, directly under the header, and push
+every pane.
+
+### Specification
+1. One shared overlay pattern in `app/lib/core/ui` (`HNoticeLayer`): notices
+   float above the content in a `Stack`, never in its `Column`, right-aligned
+   at the top of their region: the window below the header row of the panes
+   for global notices (`UI_002`, the return banner), the area under the
+   sandbox header for the findings of the Sandbox, the list area of the queue
+   column for the queue cards. The width is the region minus its inset on
+   both sides, at most 420 px; cards stack with the 8 px gap of the grid;
+   beyond a bounded height they scroll.
+2. The content keeps its full size whether a notice stands or not; a
+   running terminal is not resized when a notice appears or disappears. The
+   content keeps its element across arrivals and dismissals.
+3. Every card has its close affordance inside the card, top right, a 28 px
+   hit target with its label on hover (`HNoticeDismiss`). Details, fixes and
+   "Open request" stay on the card.
+4. A finding that stands, as opposed to an event, stays closed while it is
+   unchanged: the dismissal is keyed by the code plus a fingerprint of its
+   subject (code and cause; the cause names the endpoint of `LLM_006`), kept
+   in `ui-state.json`, and the card comes back when the subject changes. The
+   `showOnce` memory of HUM-276 for `UI_002` keeps working unchanged.
+5. Notices are passive: no autofocus, no `HLayerScope`, no shortcut, and
+   `Esc` closes none of them. They never cover the Intercept action bar: the
+   global notices start below the header row of the panes, at the top right,
+   and the queue cards stay in the queue column.
+6. Surfaces follow `docs/DESIGN.md` (HUM-286): `bg2`, strong hairline, card
+   radius, no shadow, `H*` widgets only. ARB keys are appended only.
+
+### Acceptance criteria
+1. A widget test shows a global notice without moving the queue pane, and a
+   Sandbox finding without changing the size of the terminal; the terminal
+   sends no resize when the finding comes or goes.
+2. A widget test closes a Sandbox finding with its close glyph; it stays
+   closed across a new status with the same finding and over a new screen
+   on the same state file, and comes back when its subject changes.
+3. A widget test shows the queue cards right-aligned over the queue column,
+   the first row of the list at the same place with and without them, and
+   the close glyph inside the card.
+4. A widget test shows that the arrival of a notice leaves the keyboard focus
+   where it was.
+5. Every new test has a mutation proof; only goldens the change alters are
+   regenerated.
+
+### Umsetzung (HUM-302)
+
+- **Fundorte.** Vier Bänder: `ShellNotices` (`UI_002` und Rückkehr-Banner)
+  unter der Kopfzeile der Shell; `_Diagnostics` im Sandbox-Bildschirm
+  zwischen Kopf und Terminal (dort stand `LLM_006`, das der Daemon in jeden
+  Sandbox-Status legt, solange der Endpunkt öffentlich ist); `AgentAskStrip`
+  und `DiagnosticStrip` über der Liste der Queue. Das eingefrorene Banner
+  (`FrozenBanner`) bleibt ein Band: Es ist ein Zustand der Verbindung, kein
+  wegklickbarer Hinweis.
+- **Gemeinsames Muster** in `app/lib/core/ui/h_notice_layer.dart`:
+  `HNoticeLayer` legt die Hinweise in einem `Stack` über die Region, oben
+  rechts, 8 px Abstand, Breite Region minus Abstand, höchstens
+  `noticeMaxWidth` (420 px); Inhalt immer erstes, Hinweise immer zweites
+  Kind, auch ohne Hinweis, damit das Element des Inhalts (Terminal) jede
+  Ankunft übersteht. `HNoticeCard` (bg2, `lineStrong`, Kartenradius,
+  optionale Zustandsschiene, kein Schatten), `HNoticeDismiss`
+  (`HIconButton` 28 px mit `HoverLabel`, 4 px aus der Ecke, in der Karte),
+  `HNoticeColumn` (8 px Abstand). Diagnosen bleiben `HDiagnosticCard`, mit
+  zwei neuen optionalen Parametern: `dense` (12 px Innenabstand, Titel 13/600,
+  Grund 12) und `dismiss` (Slot oben rechts in der Karte, Text hält Abstand),
+  dazu `detailMaxLines`. So bleiben alle bestehenden Tests auf
+  `HDiagnosticCard` gültig. Beschrieben in `docs/DESIGN.md`.
+- **Orte.** Shell: `HNoticeLayer` um den Bereich zwischen Kopfzeile und
+  Statusleiste, `top` = `HSize.paneHeader` + 8, damit kein Hinweis die
+  Kopfzeilen der Panes (Start/Stopp, Schließen des Blatts) und nie die
+  Aktionsleiste von Intercept verdeckt. Sandbox: über Terminal und Reitern,
+  höchstens ein Drittel der Höhe, dann rollt es. Queue: über der Liste,
+  höchstens `interceptStripsMaxHeight`, der Befund-Streifen rollt wie bisher
+  selbst (`scroll: false`). Die Karten der Agent-Bitten tragen jetzt
+  `HNoticeCard` (Rahmen ringsum, Schließen in der Ecke, `ClipRect` bleibt).
+- **Schließen mit Gedächtnis.** `app/lib/core/ui_state/dismissed_findings.dart`:
+  Schlüssel `findingDismissed.<code>` in `ui-state.json`, Liste von
+  Fingerabdrücken (FNV-1a, 32 Bit, über Code und Grund; der Grund nennt den
+  Gegenstand, bei `LLM_006` den Endpunkt), höchstens 8 je Code. Gilt für die
+  stehenden Befunde des Sandbox-Bildschirms (siehe Review-Runde). Der Satz
+  selbst landet nicht in der Datei.
+  `UI_002` behält `showOnce` und `noticeDismissed.UI_002` unverändert; die
+  Befunde der Queue sind Ereignisse und gehen weiter je Eintrag weg.
+- **Tastatur.** Kein Autofokus, kein eigener Fokusbereich, keine Kürzel,
+  `Esc` schließt nichts. Die Karten sind gewöhnliche Fokushalte; der globale
+  Hinweis ist jetzt mit `Tab` nach den Splittern erreichbar statt mit
+  `Shift+Tab` (Test angepasst).
+- **Tests.** Neu: `test/core/ui/notice_layer_test.dart` (Region behält
+  Größe, Zustand und Fokus; rechtsbündig, 420 px, 8 px Abstand; Schließen in
+  der Karte, 28 px, Beschriftung beim Überfahren; ohne Hinweis gehört die Ecke
+  der Region), `test/features/sandbox/notice_overlay_test.dart` (Terminal
+  behält Rechteck, kein `TerminalResize` bei Kommen und Gehen; Schließen
+  bleibt über neuen Status und neuen Bildschirm auf derselben Datei, nur der
+  eine von zwei Befunden geht, anderer Endpunkt bringt ihn zurück, Datei
+  trägt Fingerabdruck, nicht den Satz; Fokus bleibt im Terminal),
+  `test/features/intercept/queue_notices_test.dart` (erste Zeile bleibt
+  stehen, Karte rechtsbündig unter dem Queue-Kopf, Schließen in der Karte,
+  Fokus bleibt). Angepasst: `attention_notice_test` (schwebt oben rechts,
+  Leiste und Queue beginnen an der Kopfzeile und bleiben nach dem Schließen
+  stehen; Kontrast auf `bg2`; Tastatur), `return_banner_test` (Schließen ist
+  `HIconButton`).
+- **Mutationsbeweise** (je Datei byte-gleich zurückgestellt, mit `cmp`
+  geprüft): Sandbox-Befunde wieder als Band über dem Terminal: zwei rot
+  (Terminalgröße, Schließen). Shell-Hinweise wieder in der Spalte: drei rot.
+  Queue-Streifen wieder über der Liste: rot. Fingerabdruck nur aus dem Code:
+  rot (anderer Endpunkt kommt nicht wieder). Filter der geschlossenen Befunde
+  entfernt: rot. Ein Hinweis, der bei Ankunft den Fokus weiterreicht: drei
+  rot (Layer, Sandbox, Queue). Schließen ohne Schreiben in die Datei: rot.
+- **Goldens neu (16, nur die veränderten):**
+  `attention_notice_banner.{dark,light}-{de,en}` (Rahmen jetzt die Karte in
+  436 × 260), `intercept_diagnostic_tls_{dark,light}`,
+  `sandbox_header_failed_{dark,light}`,
+  `states_sandbox_failed.{dark,light}-{de,en}`,
+  `states_tls_rejected.{dark,light}-{de,en}`.
+- **Review-Runde (Sonnet).** Übernommen: (1, major) Dauerhaft geschlossen
+  wird nur, was steht. Befunde der Schwere Fehler oder blockierend im Status
+  sind Fehlschläge der letzten Operation und werden nur im Speicher
+  geschlossen (`features/sandbox/providers/closed_failures.dart`); das
+  Gedächtnis endet, sobald die Sandbox eine neue Operation beginnt (Übergang
+  nach `starting`/`stopping`) oder der Befund nicht mehr im Status steht. Ein
+  fehlgeschlagener Ordnerdialog (`UI_003`) gilt nur als genau dieses Objekt
+  geschlossen; der nächste Fehlschlag ist ein neues. Nichts davon landet in
+  `ui-state.json`. (2) Queue-Test auch mit einer Bitte des Agenten. (3) Die
+  Fokustests stellen den Fokus vorher auf eine Zeile bzw. das Terminal und
+  prüfen, dass er steht. (4) In `HNoticeCard` und `HDiagnosticCard` weicht nur
+  noch die erste Zeile (Abzeichen bzw. `header`) dem Schließen aus
+  (`noticeDismissClearance` = 4 + 28 + 8 px: Knopf mit Fokusring 32 px plus
+  4 px Abstand); Titel und Text darunter laufen bis an die Innenkante.
+  `HNoticeCard` hat dafür `header` und `child`. (5) Solange das
+  Einstellungsblatt offen ist, zeigt die Shell keine Hinweise; sie bleiben im
+  Provider und erscheinen nach dem Schließen wieder. Abgefragt wird
+  `_settingsOpen` der Shell und nicht `HLayerScope.holdsFocus()`, weil diese
+  statische Abfrage keinen Neubau auslöst.
+- **Weitere Mutationsbeweise** (byte-gleich zurückgestellt): Klassifizierung
+  „alles steht" (`isOperationFailure` immer false): rot (zweiter Fehlstart
+  bleibt unsichtbar, Datei bekommt einen Eintrag). Kein Zurücksetzen bei
+  neuer Operation: rot. Hinweise auch bei offenem Blatt: rot. Erste Zeile
+  ohne Abstand zum Schließen: rot.
+- **Review-Runde (Codex).** Übernommen: (1) Die Karten der Queue stehen
+  unten rechts in der Spalte (`HNoticeLayer.bottom`); die obersten Zeilen
+  mit ihrem Blockieren bleiben greifbar, ein Zeiger auf der ersten Zeile
+  trifft die Zeile. Damit verdecken sie auch die Pille „neue Anfragen" oben
+  nicht mehr. Den Abstand zwischen Bitten und Befunden setzt der `QueuePane`
+  (`_StripGap`), nur wenn beide stehen. (2) Geschlossene Fehlschläge
+  vergisst die Sandbox, sobald eine neue Operation gerufen wird (Plan,
+  Start, Stopp, Ordnerwahl: `closedFailuresProvider.newOperation()` in
+  `_apply`), nicht erst bei `starting`; eine Abfrage des Status behält sie.
+  Ein Start, der vor `starting` abgelehnt wird, zeigt seinen Fehlschlag beim
+  nächsten Versuch wieder. (3) Der Abstand der Shell-Hinweise nach oben ist
+  `HPaneHeader.rowHeight(context)` plus 8 px, also 96 + 8 bei doppelter
+  Schrift. (4) Über dem Terminal werden die Befunde höchstens so hoch, dass
+  unten zwei Zeilen des Emulators und sein Innenabstand frei bleiben
+  (`sandboxTerminalFreeRows`, aus Aufteilung und Mindesthöhen errechnet wie
+  in `HResizablePanes`), auch wenn das Terminal auf 160 px gezogen ist.
+  (5) Die Shell-Hinweise warten, solange irgendeine Ebene offen ist:
+  `HLayerScope.openLayers` (neu, `ValueListenable<int>`, nach dem Frame
+  aktualisiert) zählt Blätter, Modals und Menüs, darunter das Regelblatt
+  einer Bitte.
+- **Mutationsbeweise dieser Runde** (byte-gleich zurückgestellt): Karten der
+  Queue wieder oben: rot. Kein `newOperation()`: rot. Fester Abstand 56 px:
+  rot (doppelte Schrift). Keine Grenze über dem Terminal: rot. Nur
+  `_settingsOpen` statt offener Ebenen: rot (Regelblatt).
+- **Hinweis zur Prüfung.** Ein Zwischenstand ließ `DiagnosticStrip`
+  `agentAsksProvider` beobachten; der Streifentest ohne Fake-Client öffnete
+  darauf einen Abonnement-Versuch gegen den echten Daemon-Socket, der
+  scheiterte. Zurückgenommen, der Abstand steht jetzt im `QueuePane`.
+- **Offen.** Keins aus diesem Issue.
+
+## HUM-313 · Terminal copy and paste
+
+### Ziel
+Wunsch des Owners 2026-10-30: Kopieren und Einfügen im Terminal der Sandbox
+wie in jedem Terminal unter Linux. Bisher kopierte `Ctrl+Shift+C` (Vorgabe
+des Emulators), aber eingefügt wurde mit dem nackten `Ctrl+V`, das in
+readline das wörtliche Einfügen des nächsten Zeichens ist (`0x16`) und dem
+Agenten gehört; `Ctrl+Shift+V` kam als `0x16` beim Agenten an. Die mittlere
+Maustaste tat nichts, das Kontextmenü kannte kein „Alles auswählen".
+
+Beim Lesen fiel eine Lücke auf, die die Sicherheitsaussage betrifft:
+`TerminalView` aus `xterm2` setzt eigene Handler für OSC 52, sobald das
+Terminal keine hat (`??=`), und schreibt und **liest** damit die
+Zwischenablage des Menschen, solange das Terminal den Fokus hat. Der Filter
+des Daemons lässt OSC 52 nicht durch, also war die Lücke nicht erreichbar;
+`docs/SECURITY.md` 3.3 sagt aber, das Widget registriere keinen OSC-Handler,
+und das stimmte nicht. Dieses Issue schließt die zweite Wand.
+
+### Akzeptanzkriterien
+1. Mit der Tastatur im Terminal kopiert `Ctrl+Shift+C` die Auswahl in die
+   Zwischenablage, ohne ein Byte an den Agenten. Ohne Auswahl tut der Griff
+   nichts, auch dann kein `0x03`.
+2. `Ctrl+Shift+V` fügt die Zwischenablage ein. Das nackte `Ctrl+C` bleibt
+   `0x03` (SIGINT), auch mit Auswahl, und kopiert nie; das nackte `Ctrl+V`
+   bleibt `0x16`. Gehaltene Griffe fügen einmal ein, Wiederholungen und
+   Loslassen erreichen den Agenten nicht.
+3. Die Griffe wirken nur, solange das Terminal die Tastatur hat. Keine
+   Bindung der Anwendung (`shellShortcuts`, Intercept, Befundpause, Editor,
+   Verlauf, Regelliste) feuert auf `Ctrl+Shift+C` oder `Ctrl+Shift+V`. Auf
+   Apple-Plattformen sind es `Cmd+C` und `Cmd+V`.
+4. Einfügen klammert (`ESC [200~` … `ESC [201~`), wenn das Programm
+   `DECSET 2004` gesetzt hat; ein mehrzeiliger Text läuft dann nicht Zeile
+   für Zeile. Ein `ESC [201~` im eingefügten Text (und jede andere
+   Escape-Folge) fällt weg und beendet die Klammer nie früh.
+5. Ein Leser (`readOnly`) und eine nicht verbundene Sitzung fügen nicht ein,
+   weder per Griff noch per Menü noch per Mittelklick.
+6. Die mittlere Maustaste fügt ein, solange das Programm die Maus nicht
+   selbst nimmt (Mausberichte; mit `Shift` gilt die Regel des Emulators).
+7. Rechtsklick öffnet das Menü mit Kopieren (deaktiviert ohne Auswahl),
+   Einfügen und Alles auswählen; Kopieren und Einfügen nennen ihren Griff.
+   Das Menü ist das vorhandene `HContextMenu`, eine Ebene mit
+   `HLayerScope.claimKeyboard` (HUM-303).
+8. OSC 52 aus der Ausgabe des Agenten schreibt die Zwischenablage nicht und
+   liest sie nicht, auch am Filter des Daemons vorbei und mit Fokus im
+   Terminal; ebenso `OSC 1337 CopyToClipboard`. Kopiert wird nur auf eine
+   ausdrückliche Handlung des Menschen.
+9. UI-Texte über ARB (`en` Quelle, `de` Übersetzung, angehängt). Keine neue
+   Abhängigkeit in `app/pubspec.yaml`.
+
+### Tests
+`test/features/sandbox/terminal_clipboard_test.dart`, als Linux:
+`ctrl_shift_c_copies_the_selection_and_sends_nothing_to_the_agent`,
+`ctrl_c_with_a_selection_still_interrupts_the_agent_and_copies_nothing`,
+`ctrl_shift_v_pastes_and_plain_ctrl_v_reaches_the_agent`,
+`a_held_clipboard_chord_never_falls_through_to_the_agent`,
+`a_paste_is_bracketed_when_the_program_asked_and_201_is_stripped`,
+`a_reader_cannot_paste_by_chord`,
+`the_chords_do_nothing_while_the_terminal_lacks_the_keyboard`,
+`the_agent_cannot_write_or_read_the_clipboard_through_osc_52`,
+`the_middle_button_pastes_unless_the_program_takes_the_mouse`,
+`the_menu_offers_copy_paste_and_select_all`.
+`test/core/shortcuts/terminal_clipboard_activator_test.dart`: genau
+`Ctrl+Shift` unter Linux, genau `Cmd` auf macOS, und keine Tabelle der
+Anwendung feuert auf die Griffe. Jeder Test mit Mutationsbeweis.
+
+### Fallstricke
+- **Primäre Auswahl gibt es in Flutter nicht.** `Clipboard` kennt nur
+  `text/plain` der Zwischenablage; die GTK-Einbettung unter Linux spricht
+  `GDK_SELECTION_CLIPBOARD` an, nie `GDK_SELECTION_PRIMARY`, und unter
+  Wayland fehlt das Protokoll ganz. Ein Plugin dafür wäre eigener Code über
+  X11 und `zwp_primary_selection`, für eine Bequemlichkeit; das lohnt keine
+  neue Abhängigkeit. Deshalb kopiert das Auswählen mit der Maus **nichts**
+  (in die Zwischenablage gehört nicht jedes Ziehen der Maus, und „kopiert
+  wird nur auf ausdrückliche Handlung" bleibt wahr), und der Mittelklick
+  fügt die Zwischenablage ein. Kandidat für ein eigenes Issue, falls Flutter
+  die primäre Auswahl je anbietet.
+- `TerminalView` prüft seine eigenen Kürzel vor jeder Übersetzung in Bytes,
+  und seine Vorgabe bindet Einfügen auf `Ctrl+V` und fragt dabei nicht nach
+  `readOnly`. Die Tabelle des Emulators ist deshalb leer (`null` hieße
+  „Vorgabe"); die Griffe fragt `TerminalPane._onKey` selbst.
+- Ein Griff, den die Anwendung nicht nimmt, meldet der Emulator einem
+  Agenten mit dem Tastaturprotokoll von kitty als eigene Folge (`CSI 99;6 u`).
+  Der Griff gehört der Anwendung deshalb auch dann, wenn er nichts tun kann.
+  (Ohne dieses Protokoll schickt der Emulator für `Ctrl+Shift+C` nichts;
+  die erste Fassung dieses Abschnitts behauptete `0x03`, das hat die
+  Mutation in Review-Runde 1 widerlegt.)
+- Die Bereinigung beim Einfügen macht `Terminal.paste` von `xterm2`
+  (Escape-Folgen weg, Steuerbytes wie `0x03` und `0x1a` zu Leerzeichen,
+  Klammer bei `DECSET 2004`). `Terminal.textInput` täte nichts davon; der
+  Test misst das Ergebnis, nicht die Bibliothek.
+- Die OSC-52-Handler von `TerminalView` greifen nur, wo das Terminal keine
+  hat. Die Ablehnung muss deshalb in der Sitzung gesetzt sein, bevor die
+  Ansicht gebaut wird, also in `TerminalSession.build`.
+- Die Plattform: `flutter test` spielt Android, und dort wären die Griffe
+  dieselben wie unter Linux. Die Tests laufen trotzdem als Linux, damit der
+  Zweig für Apple nicht zufällig mitläuft.
+
+### Umsetzung (HUM-313)
+
+- **Griffe.** `TerminalClipboard` und `TerminalClipboardActivator` in
+  `app/lib/core/shortcuts/intents.dart`: `Ctrl+Shift+C`/`Ctrl+Shift+V`, genau
+  diese Modifikatoren, auf Apple `Cmd`. Nicht in `shellShortcuts()`, sondern
+  von `TerminalPane._onKey` nach den Shell-Kürzeln gefragt, also nur mit der
+  Tastatur im Terminal. Die physische Taste eines genommenen Griffs merkt
+  sich die Ansicht wie beim Zoom (`_heldChordKey`, vorher `_heldZoomKey`)
+  und behält Wiederholungen und Loslassen.
+- **Emulator ohne eigene Kürzel.** `_emulatorShortcuts` ist leer; damit gehen
+  `Ctrl+A` (wie seit HUM-042) und jetzt auch `Ctrl+V` an den Agenten.
+  **Verhaltensänderung:** Wer bisher mit `Ctrl+V` eingefügt hat, nimmt jetzt
+  `Ctrl+Shift+V`, das Menü oder die mittlere Taste.
+- **Einfügen** über `Terminal.paste`, zweimal gegen `readOnly` und die Phase
+  geprüft: vor dem Lesen der Zwischenablage und nach ihrer Antwort.
+  **Kopieren** über `selectionFor` und `getText(…, true)`, also ohne die
+  Leerzeichen am Zeilenende, mit denen der Emulator auffüllt.
+- **Mittelklick.** Ein `Listener` um den Emulator; er fügt ein, wenn
+  `mouseMode` `none` ist oder `Shift` gehalten wird und das Programm `Shift`
+  nicht ebenfalls beansprucht (`mouseShiftCaptureMode`), dieselbe Regel, mit
+  der der Emulator seine eigenen Klicks verteilt.
+- **Menü.** „Alles auswählen" (`SelectionMode.line` über den ganzen Puffer)
+  dazu, Kopieren und Einfügen mit Griff (`sandboxTerminalCopyKey`,
+  `sandboxTerminalPasteKey`, auf Apple ohne Anzeige).
+- **OSC 52.** `TerminalSession.build` setzt `onClipboardStore` auf eine
+  Funktion, die nichts tut, und `onClipboardQuery` auf eine, die `null`
+  liefert; `TerminalView` setzt dann keine eigenen. `docs/SECURITY.md` 3.3
+  und `docs/THREAT-MODEL.md` K-09 nennen das jetzt.
+- **Review-Runde 1 (Codex, Opus).** Alle Befunde übernommen.
+  - Codex: Jeder neue Tastendruck löschte die Merkung des gehaltenen
+    Griffs. `Ctrl+Shift+V` halten, eine andere Taste drücken, `V` loslassen:
+    das Loslassen ging an den Emulator und damit an einen Agenten mit dem
+    Loslass-Bericht von kitty. Jetzt eine Menge `_heldChordKeys`, je Taste bis
+    zu ihrem eigenen Loslassen; geleert, wenn das Terminal die Tastatur
+    verliert, und ein neues Drücken einer Taste darin gilt als neues Drücken.
+    Test `a_chord_key_released_after_another_press_stays_with_the_application`.
+    Das Leeren beim Fokusverlust hat keinen eigenen Test: Was es abdeckt,
+    deckt im erreichbaren Fall schon das Entfernen beim nächsten Drücken ab.
+  - Opus: `_paste` hält die Sitzung fest, in die eingefügt wurde, und fügt
+    nach der Antwort der Zwischenablage nur ein, wenn noch dieselbe Sitzung
+    gezeigt wird (der Zustand überlebt einen Wechsel der Sandbox). Ohne
+    eigenen Test: Ein Wechsel der Sitzung im Test braucht einen zweiten
+    Sandbox-Zustand im Fake, den es nicht gibt.
+  - Opus: „Kopieren" im Menü fragt wie `_copy` nach `selectionFor` des
+    aktuellen Puffers; eine Auswahl des anderen Bildschirms zählt nicht
+    (`copy_is_disabled_for_a_selection_of_the_other_screen`).
+  - Opus: `docs/SECURITY.md` 3.3 und K-09 genau: kein Handler für die
+    Zwischenablage; Farbabfragen (OSC 4, 10, 11, `CSI ? 996 n`) beantwortet
+    `TerminalView` mit den Farben des Themas, nur hinter dem Filter.
+  - Opus, Tests: `ctrl_shift_c_without_a_selection_sends_nothing`,
+    `a_reader_or_a_session_that_is_not_attached_cannot_paste_by_menu_or_click`,
+    `a_reader_by_the_time_the_clipboard_answers_does_not_paste`,
+    `shift_middle_click_pastes_past_mouse_reports_unless_the_program_claims_shift`.
+  - Mutationen, je rot und byte-gleich zurück: eine Merkung statt Menge;
+    zweite Prüfung in `_paste` weg; Menü fragt `selection` statt
+    `selectionFor`; Kopier-Griff ohne Auswahl fällt durch; Phase nicht
+    geprüft; `mouseShiftCaptureMode` übergangen; `Shift` übergangen. Der
+    Kopier-Griff ohne Auswahl wird mit eingeschaltetem kitty-Protokoll
+    geprüft, sonst schickt der Emulator ohnehin nichts. Gleichwertig und
+    deshalb ohne roten Test: „Kopieren" im Menü mit `selection` statt
+    `selectionFor`, denn der Emulator löscht die Auswahl selbst, sobald er
+    den Puffer wechselt (`RenderTerminal._onTerminalChange`); der Test
+    `copy_is_disabled_for_a_selection_of_the_other_screen` hält das Verhalten
+    trotzdem fest.
+- **Review-Runde 2 (Codex).** Übernommen. Das Leeren von `_heldChordKeys`
+  beim Fokusverlust (aus Runde 1) ließ das Loslassen wieder durch:
+  `Ctrl+Shift+V` halten, Fokus geht weg, der Zeiger über dem Terminal holt
+  ihn zurück (HUM-303), dann `V` loslassen. Das Leeren ist weg; jede Taste
+  bleibt bis zu ihrem eigenen Loslassen, ein verpasstes Loslassen räumt das
+  nächste Drücken derselben Taste. Test
+  `a_chord_key_released_after_the_focus_came_back_stays_with_the_application`;
+  Mutation (Leeren beim Fokusverlust wieder eingebaut) rot.
+
+### Kandidaten (HUM-313)
+- (A) Farbabfragen in `TerminalSession.build` beantworten oder ablehnen,
+  damit „kein OSC-Handler" wörtlich gilt.
+- (B) Rückfrage vor einem mehrzeiligen Einfügen über `Terminal.isPasteSafe`,
+  solange `DECSET 2004` aus ist.
+- (C) `Shift+Insert` fügt ein.
+
+---
+## HUM-300 · Terminal as picture-in-picture
+
+### Ziel
+Wunsch des Owners 2026-10-30: Während ein Agent läuft, schwebt das Terminal
+als kleines Fenster über den anderen Abschnitten (Intercept, History, Rules,
+Audit, Setup, Einstellungen), damit der Owner dem Agenten zusieht, während er
+dessen Anfragen entscheidet. HUM-298 hat dafür den Platz gelassen: „eine
+schwebende Ebene (HUM-300) wird ein dritter Wert in
+`terminalPlacementProvider` und ein dritter Wirt in der Shell", HUM-303 hat
+die Tastaturregel für diesen Wirt vorgedacht („eigener `FocusScope` nur unter
+dem Bereich der Shell, kein `HLayerScope`") und ``Ctrl+` `` ohne sichtbares
+Terminal ausdrücklich für das schwebende Terminal freigehalten.
+
+### Spezifikation
+1. **Dritte Platzierung.** `TerminalPlacement.floating` neben `pane` und
+   `fullWindow`. Genau ein Wirt zeigt die Sitzung: schwebt das Terminal, bleibt
+   das Pane der Sandbox leer (mit „Terminal hierher zurückholen"), auch wenn
+   der Abschnitt Sandbox gezeigt wird. Emulator und Rücklauf leben weiter in
+   `terminalSessionProvider`; der Wechsel öffnet die Sitzung nicht neu.
+2. **Umschalten.** Kürzel `Ctrl+Shift+P` (`ToggleTerminalFloatIntent` in
+   `shellShortcuts()`, ohne Wiederholung), ein Knopf links vom Vollfenster-Knopf
+   im Streifen über dem Terminal (Tooltip nennt das Kürzel), ein Befehl in der
+   Palette. Ohne laufenden Agenten tut das Kürzel nichts, der Knopf ist
+   deaktiviert und die Palette listet den Befehl nicht; ein schwebendes
+   Terminal lässt sich immer zurücklegen. ``Ctrl+` `` mit laufendem Agenten
+   und ohne sichtbares Terminal lässt es schweben und gibt ihm die Tastatur.
+   Das ganze Fenster (`Ctrl+Shift+Enter`) kehrt zum schwebenden Fenster
+   zurück, wenn es von dort kam.
+3. **Begründung des Kürzels.** `P` wie Picture-in-Picture, in der Familie
+   der `Ctrl+Shift`-Griffe, die das Terminal bewegen. Geprüft gegen jede
+   Bindung in `app/lib`, `app/packages` und CONVENTIONS 3.9: `Ctrl+Shift+Enter`
+   ganzes Fenster, ``Ctrl+` `` Fokus, `Ctrl` mit `+`/`-`/`=` und
+   `Ctrl+Shift+0` Zoom, `Ctrl+0` Leiste, `Ctrl+Shift+C`/`V` Kopieren und
+   Einfügen, `Ctrl+Shift+F`/`L` Gruppenentscheidungen, `Ctrl+F`/`L`/`Enter`
+   Einzelentscheidungen, `Ctrl+K` Palette, `Ctrl+,` Einstellungen,
+   `Ctrl+1..6` Abschnitte, `Ctrl+R` und `Ctrl+Enter` im Editor. Das nackte `P`
+   ist „Pseudonymisieren" in der Befundpause; `SingleActivator` verlangt seine
+   Modifikatoren genau, also trifft es `Ctrl+Shift+P` nicht. Der Agent verliert
+   nichts: Ein Terminal unter Linux schickt `Ctrl+Shift+P` als `0x10` wie
+   `Ctrl+P`, und `Ctrl+P` bleibt beim Agenten.
+4. **Das Fenster.** Es liegt nur über den Abschnitten, nie über Leiste,
+   Kopf- oder Statusleiste; Einstellungsblatt und Palette liegen darüber.
+   Titelleiste zum Ziehen mit „Zurück zur Sandbox-Seite" (legt zurück und
+   zeigt den Abschnitt) und „Schließen" (legt zurück, bleibt auf dem
+   Abschnitt; dasselbe wie das Kürzel). Losgelassen rastet es in die Ecke des
+   Quadranten ein. Ein Griff in der inneren Ecke ändert die Größe zwischen
+   320 x 200 und 60 % der Abschnitte (höchstens 960 x 640). Ecke und Größe
+   überleben einen Neustart in der Zustandsdatei (`UiStateFile`,
+   `terminalFloatCorner`, `terminalFloatSize`).
+5. **Nie über einer Entscheidung.** Vorgabe ist die Ecke unten rechts: Auf
+   Intercept ist das der untere Rand des Kontext-Panes, die einzige Ecke
+   ohne Entscheidung (links die Warteschlange mit Zeilen und Hinweisen unten
+   rechts in ihrer Spalte, in der Mitte unten die Leiste mit Freigeben und
+   Blockieren, oben rechts die Hinweise der Shell). Ausweichregel: Was frei
+   bleiben muss, markiert sich selbst mit `HKeepClear` (Warteschlange,
+   Aktionsleiste, jede Hinweisspalte eines `HNoticeLayer`, jedes `HSheet`,
+   jedes `HModal` in der Arbeit). Das Fenster nimmt die gewählte Ecke in der
+   gewählten Größe, sonst in der kleinsten, sonst die Ecke daneben, darüber
+   oder gegenüber; ist keine frei (ein Modal über der Arbeit), tritt es
+   zurück, bis wieder Platz ist.
+6. **Tastatur.** Kein eigener `FocusScope`, kein `HLayerScope`: Das
+   Terminal im Fenster nimmt die Tastatur unter derselben Regel wie im Pane
+   (Zeiger, ``Ctrl+` ``, Klick, HUM-303), sonst bleibt sie, wo sie ist. Aus der
+   Warteschlange geöffnet, bleibt sie in der Warteschlange, und `Enter` gibt
+   frei. Ein Terminal, das die Tastatur hatte, nimmt sie in den neuen Wirt
+   mit. Mit dem Fokus im schwebenden Terminal erreichen alle Kürzel der Shell
+   die Shell (`TerminalPane._onKey`), keines den Agenten.
+7. **Ende der Sitzung.** Endet der Agent, zeigt das Fenster das Ende vier
+   Sekunden lang so, wie das Pane es zeigen würde, und legt das Terminal dann
+   selbst zurück ins Pane. Ein neuer Agent in dieser Zeit hält es offen.
+   Solange es schwebt, fragt die Shell den Schnappschuss der Sandbox alle
+   fünf Sekunden nach (`AgentSessionFeed`), sonst hörte es vom Ende nichts.
+8. UI-Texte nur über ARB (`en` Quelle, `de` Übersetzung, angehängt);
+   `docs/UX.md` 5.2, `docs/DESIGN.md` (Kürzeltabelle, `HKeepClear`) und
+   CONVENTIONS 3.9 beschreiben die neue Platzierung.
+
+### Akzeptanzkriterien
+1. Widget-Test: `Ctrl+Shift+P` aus Intercept zeigt das schwebende Fenster,
+   der Abschnitt bleibt, genau eine `TerminalView` im ganzen Baum, das Pane
+   der Sandbox ist leer; dasselbe Kürzel legt zurück.
+2. Widget-Test: Derselbe Emulator (identisches `Terminal`) im Fenster, kein
+   zweites `Open` an den Daemon; der Knopf im Streifen schaltet, der Knopf im
+   leeren Pane legt zurück.
+3. Widget-Test: Ohne Agenten schwebt nichts, weder per Kürzel noch per Knopf.
+4. Widget-Test: Auf Intercept mit gehaltener Anfrage überdeckt das Fenster
+   weder Warteschlange noch Aktionsleiste noch einen Hinweis; Freigeben,
+   Blockieren und jede Zeile bleiben treffbar. Eine gespeicherte Ecke über der
+   Warteschlange weicht auf die nächste freie aus. Ein offenes Blatt schiebt
+   das Fenster zur Seite. Reine Tests der Regel: kleinere Größe vor anderer
+   Ecke, Reihenfolge der Ecken, `null` ohne freie Ecke, Berühren ist kein
+   Überdecken.
+5. Widget-Test: Aus der Warteschlange geöffnet, gibt `Enter` frei und der
+   Agent hört nichts; nach dem Zeiger über dem Fenster geht `Enter` an den
+   Agenten und entscheidet nichts. Mit dem Fokus im Fenster wirken
+   `Ctrl+1..6` und `Ctrl+Shift+P`, ohne den Agenten zu erreichen; danach hält
+   kein bloßer Bereich die Tastatur. ``Ctrl+` `` ohne sichtbares Terminal lässt
+   es schweben und gibt ihm die Tastatur; ohne Agenten tut es nichts.
+6. Widget-Test: Ziehen rastet in die Ecke ein und die Ecke übersteht einen
+   Neustart; der Griff ändert die Größe, gespeichert, nie unter dem Minimum.
+   Zurück zur Sandbox und Schließen tun, was sie sagen.
+7. Widget-Test: Endet der Agent, bleibt das Fenster `terminalFloatLinger`
+   lang und schließt dann; der Abschnitt bleibt.
+8. Jedes Verhalten hat einen Mutationsbeweis; `make flutter-analyze` und die
+   Tests der berührten Pakete sind grün; Goldens nur dort geändert, wo der
+   Streifen über dem Terminal den neuen Knopf bekommt.
+
+### Tests
+`test/features/shell/terminal_float_test.dart` (Widget-Tests der Kriterien
+1 bis 7), `test/core/ui/terminal_float_test.dart` (Regel, Gedächtnis,
+Platzierung), `app/packages/ui/test/keep_clear_test.dart` (nur gezeigte,
+nicht leere Bereiche zählen, Meldung nach dem Frame), eine Zeile in
+`shortcuts_map_to_intents_test.dart`, der Test von HUM-303 „ohne Terminal
+tut das Kürzel nichts" wird zu „ohne Agenten tut es nichts".
+
+### Fallstricke
+- Zwei Ansichten derselben Sitzung melden beide ihre Größe und nehmen beide
+  Tasten. Deshalb entscheidet allein die Platzierung, wer zeigt, auch auf dem
+  Abschnitt Sandbox.
+- Die Größe des Fensters ist die Größe der Sitzung: Ein schmales Fenster
+  lässt die Oberfläche des Agenten neu umbrechen, wie jedes Ziehen der Naht
+  (HUM-305).
+- Ein eigener `FocusScope` oder gar ein `HLayerScope` um das Fenster hielte
+  das Terminal für eine Ebene über der Arbeit; dann nähme es die Tastatur nie
+  (`_mayTakeKeyboard`), oder die Shell gäbe sie beim Schließen von Ebenen an
+  den falschen Knoten zurück.
+- Der Wechsel zwischen Pane und Fenster darf die Tastatur nicht pauschal der
+  Shell geben, wie es beim ganzen Fenster nötig ist: Dann verlöre die
+  Warteschlange sie, und `Enter` entschiede nach dem Öffnen nichts mehr.
+- Ein Bereich ohne Höhe überlappt in `Rect.overlaps` jedes Rechteck, das ihn
+  kreuzt; leere Bereiche zählen deshalb nicht.
+- Die Palette ist ein `HModal`, liegt aber über allem. Wiche das Fenster ihr
+  aus, würde es bei jedem `Ctrl+K` abgebaut und neu gebaut; sie verzichtet
+  deshalb auf `HKeepClear`.
+- Die Rechtecke der Bereiche stammen aus dem letzten Layout. Ein Blatt oder
+  Modal in einem Abschnitt (Regelblatt, Sammelentscheidung), das gerade erst
+  erscheint, kann einen Frame lang unter dem Fenster liegen, bevor dieses
+  ausweicht. Das Einstellungsblatt und die Palette liegen in der
+  Zeichenreihenfolge ohnehin darüber.
+
+### Umsetzung (HUM-300)
+
+- **Platzierung.** `core/ui/terminal_placement.dart`:
+  `TerminalPlacement.floating`, `toggleFloating`, `float`, `dock`; das ganze
+  Fenster merkt sich, ob es aus Pane oder Fenster kam.
+- **Regel und Gedächtnis.** `core/ui/terminal_float.dart`: `FloatCorner`,
+  Grenzen (`terminalFloatMinSize` 320 x 200, Vorgabe 480 x 300, höchstens
+  960 x 640 und 60 % der Abschnitte), die reine Funktion
+  `placeFloatingTerminal` und `terminalFloatProvider`, synchron aus der
+  Zustandsdatei gelesen wie der Zoom. `terminalFloatLinger` (4 s) steht beim
+  Wirt in der Shell: In `core/ui` kommt jede Dauer aus `HMotion`
+  (`design_system_test`), und das hier ist Lesezeit, keine Bewegung.
+- **Freihalten.** `HKeepClear` in `packages/ui` (Registrierung im
+  Render-Objekt, `Visibility.of` für verdeckte Abschnitte, leere Bereiche
+  zählen nicht, `changes` meldet nach dem Frame). Markiert: `HSheet`, `HModal`
+  (außer der Palette, `keepClear: false`), die Hinweisspalte von
+  `HNoticeLayer`, die Warteschlange und die Aktionsleiste in
+  `intercept_screen.dart`.
+- **Wirt.** `features/shell/widgets/floating_terminal.dart`
+  (`FloatingTerminalLayer`): `Stack` aus Abschnitten und Fenster, eingehängt
+  im `Expanded` neben der Leiste; Titelleiste, Griff (`DragStartBehavior.down`),
+  Ausweichen, Nachlauf am Ende. `SandboxTerminal(floating: true)`, im Fenster
+  ohne eigenen Schwebe-Knopf im Streifen. Das Einrasten rechnet aus dem Zug
+  selbst und nicht aus dem letzten Bild: Bewegungen und Loslassen können vor
+  dem nächsten Frame ankommen, und dann rastete das Fenster in der alten Ecke
+  ein (im ersten Testlauf gefunden).
+- **Shell.** `ToggleTerminalFloatIntent`, ``Ctrl+` `` lässt schweben,
+  `_terminalMoved` gibt die Tastatur nur beim ganzen Fenster pauschal der
+  Shell, sonst nimmt nur ein Terminal mit Tastatur sie mit
+  (`terminalHoldsKeyboard`), und landet sie auf einem Bereich, holt sie die
+  Shell. Palette `toggle-terminal-float`. `AgentSessionFeed` fragt nach,
+  solange das Terminal schwebt.
+- **Sandbox.** Knopf `FloatButton` (`sandbox-terminal-float`, Glyphe
+  `ShellGlyph.pictureInPicture`), leeres Pane mit
+  `sandbox-terminal-dock`.
+- **Doku.** `docs/UX.md` 5.2, `docs/DESIGN.md` (Kürzeltabelle, `HKeepClear`
+  und das schwebende Terminal), CONVENTIONS 3.9, ARB (9 Schlüssel, en und de,
+  angehängt).
+- **Tests.** `test/features/shell/terminal_float_test.dart` (15, nach
+  Review-Runde 1 22, davon
+  einer bei 1280 x 800, der Breite des Laptops des Owners: Freigeben,
+  Blockieren und jede Zeile bleiben mit offenem Fenster treffbar, und einer mit
+  schmalem Kontext-Pane, in dem das Fenster der Aktionsleiste nach oben
+  ausweicht), `test/core/ui/terminal_float_test.dart` (16),
+  `packages/ui/test/keep_clear_test.dart` (4), eine Zeile in
+  `shortcuts_map_to_intents_test.dart`, der umbenannte Test von HUM-303. Grün:
+  `test/features/shell`, `test/features/sandbox`, `test/features/intercept`,
+  `test/core` (außer drei Tests, die in der Sandbox der Agentensitzung keinen
+  Unix-Socket anlegen dürfen oder Eigentümer prüfen: `grpc_client_test`,
+  `rule_prefixes_round_trip_test`, `app_log_test`; sie berühren nichts aus
+  diesem Issue), `packages/ui`, alle Goldens über
+  `scripts/ci/goldens-placeholder.sh`; `flutter analyze` beider Pakete und
+  `dart format` ohne Befund. Gelaufen über einen Schatten des SDK mit
+  beschreibbarem `bin/cache` und `--no-pub`.
+- **Goldens neu:** `sandbox_header_*` (4) und `isolation_panel_*` (10), nur
+  der Knopf im Terminalstreifen.
+- **Mutationsbeweise**, je rot und danach mit `cmp` byte-gleich zurück:
+  Bindung aus `shellShortcuts()` entfernt; Warteschlange nicht freigehalten;
+  Aktionsleiste nicht freigehalten; kein Rückfall auf die kleinste Größe;
+  jeder Platzwechsel gibt die Tastatur der Shell; kein Schließen nach dem
+  Ende; verdeckte Abschnitte zählen; leere Bereiche zählen; Ecke und Größe
+  nicht geschrieben; Umschalten ohne laufenden Agenten. „Leere Bereiche
+  zählen" blieb zuerst grün, weil eine zweite Prüfung nach der Umrechnung
+  dasselbe abfing; die doppelte Prüfung ist entfernt.
+- **Gefunden im ersten Lauf:** das Einrasten aus dem letzten Bild (oben) und
+  `terminalFloatLinger` als Literal in `core/ui` (`design_system_test`).
+
+### Review-Runde 1 (Codex, Sonnet)
+
+Antigravity fiel aus; ein frischer Sonnet-Subagent ersetzte es mit demselben
+Auftrag. Alle Befunde übernommen.
+
+- **Gehaltene Kürzel (Codex, blockierend).** Ein Kürzel der Shell nahm im
+  Terminal nur das Drücken; Wiederholungen und Loslassen fielen zum Emulator
+  durch, und ein Agent mit dem Tastaturprotokoll von kitty sah das `P` von
+  `Ctrl+Shift+P`. `_heldChordKeys` (HUM-313) nimmt jetzt das Drücken jedes
+  Kürzels der Shell, und die Menge ist statisch, also allen Wirten gemeinsam:
+  Das Loslassen kommt nach dem Schweben im anderen Wirt an. Das nächste
+  Drücken derselben Taste räumt sie wie bisher. Test mit `CSI > 11 u`.
+- **Ende im Nachlauf (Codex).** Das Fenster zeigte nach dem Ende vier
+  Sekunden den Leerzustand. `SandboxTerminal` behält im schwebenden Wirt die
+  letzte Sitzung, bis der Wirt geht oder eine neue Sitzung sie ersetzt.
+- **Ende über dem ganzen Fenster (Codex).** Schweben, ganzes Fenster, Ende,
+  zurück: Das Fenster blieb stehen. Der Nachlauf zählt jetzt unabhängig von
+  der Platzierung; ist er vorbei, legt ein Fenster, das wieder schwebt,
+  sofort zurück.
+- **Halten mit der Hand (Codex, minor).** Entschieden: Der Griff lässt das
+  Fenster in keiner Richtung in einen freizuhaltenden Bereich wachsen; beim
+  Ziehen darf es kurz darüberstehen, weil die Hand am Fenster ist und der
+  Platz beim Loslassen entschieden wird. Getestet: Mitten im Zug am Griff
+  überdeckt es nichts, losgelassen über der Warteschlange weicht es aus.
+- **Klick auf die Titelleiste (Sonnet).** Ein Klick endete als Zug ohne Weg
+  (allein in der Arena gewinnt der Zug) oder als abgebrochener Zug und
+  speicherte die Ausweichecke als gewählte. Unter `kTouchSlop` Weg rastet
+  nichts ein.
+- **Griff auf dem Schließen-Knopf (Sonnet).** Unten verankert liegt der Griff
+  jetzt unter der Titelleiste.
+- **Dateigröße (Sonnet).** Fenster, Titelleiste, Griff und Maler stehen in
+  `floating_terminal_window.dart`, der Wirt bleibt in `floating_terminal.dart`.
+- **Doku (Sonnet).** `HKeepClear.changes` sagt, dass ein Bereich, der sich bei
+  gleicher Größe nur verschiebt, nichts meldet.
+- **Mutationsbeweise**, je rot und mit `cmp` zurück: nur Zoom-Kürzel gehalten;
+  eine Menge je Pane; Nachlauf mit leerer Sitzung; Rückkehr ins Fenster
+  ignoriert das Ende; Griff ohne Freihalten; Fenster bleibt, wo es
+  losgelassen wurde; Klick rastet ein; Griff in der Titelleiste.
+
+### Review-Runde 2 (Codex)
+
+Beide Befunde übernommen.
+
+- **Ende über dem ganzen Fenster, rechtzeitig zurück.** Schweben, ganzes
+  Fenster, Ende, zurück innerhalb der vier Sekunden: Das schwebende Fenster
+  wird neu gebaut, und die Sitzung stand nur im alten Widget; es zeigte den
+  Leerzustand. Die Sitzung steht jetzt in `lastFloatingSessionProvider`
+  (Sandbox-Feature): Ein laufender Agent schreibt sie, ein Wechsel ins
+  Schweben schreibt sie, das Zurücklegen ins Pane löscht sie, das ganze
+  Fenster lässt sie stehen.
+- **Ein Loslassen außerhalb jedes Terminals.** Kam das Loslassen einer
+  Kürzeltaste woanders an (etwa in der Palette, die `Ctrl+K` geöffnet hat),
+  blieb die Taste in der Menge, und die Wiederholungen eines späteren
+  Drückens, das woanders begann und per Zeiger ins Terminal kam, gingen
+  verloren. Ein Handler an `HardwareKeyboard` nimmt die Taste bei jedem
+  Loslassen heraus, nach einer Microtask, weil diese Handler vor der
+  Fokusverteilung laufen und das Terminal sein eigenes Loslassen noch in der
+  Menge finden muss. Jedes Pane meldet ihn an und ab; ein einmaliger Handler
+  für das ganze Programm überlebte das Zurücksetzen der Tastatur zwischen
+  zwei Widget-Tests nicht (im ersten Lauf gefunden).
+- **Mutationsbeweise**, je rot und mit `cmp` zurück: Sitzung beim ganzen
+  Fenster gelöscht; Loslassen woanders lässt die Taste in der Menge. Die
+  Beweise der Runde 1 zur Menge (nur Zoom, eine Menge je Pane, jetzt als
+  „neues Pane leert die Menge") und zum Nachlauf liefen nach dem Umbau erneut
+  rot.
+
+### Review-Runde 3 (Codex)
+
+Beide Befunde übernommen; danach keine weitere Runde.
+
+- **Eine neue Sandbox im Nachlauf.** Endete A und nannte der Status im
+  Nachlauf schon eine Sandbox B, deren Agent noch nicht lief, baute das
+  Fenster weiter den Emulator von A, und ganzes Fenster hin und zurück
+  konnte A neu anschließen. `lastFloatingSessionProvider` löscht die Sitzung,
+  sobald der Status eine andere Sandbox oder keine nennt, und
+  `SandboxTerminal` nimmt sie nur, solange der Status noch die beendete
+  Sandbox nennt. Die beiden Stellen sichern sich gegenseitig; der
+  Mutationsbeweis nimmt beide zugleich heraus.
+- **Kein Pane eingehängt.** Hing der Handler fürs Loslassen an den Panes,
+  fehlte er, solange keines stand (schwebendes Fenster mangels Platz
+  ausgeblendet, altes Pane fort), und die Taste blieb gehalten. Menge und
+  Handler gehören jetzt `HeldChordKeys` in `heldChordKeysProvider`: einmal
+  angemeldet für die Lebenszeit des Provider-Bereichs, beim Ende abgemeldet;
+  die Panes lesen und schreiben nur die Menge. Test ohne jedes Terminal in
+  `test/features/sandbox/held_chord_keys_test.dart`.
+- **Mutationsbeweise**, je rot und mit `cmp` zurück: Sandbox-Prüfung an
+  beiden Stellen entfernt; Handler nicht von der gemeinsamen Menge
+  angemeldet; eine Menge je Pane; Handler überlebt den Bereich; Loslassen
+  woanders lässt die Taste in der Menge.
+
+### Kandidaten (HUM-300)
+- (A) Der Knopf „Go to terminal" der leeren Warteschlange (HUM-306) könnte
+  das Terminal schweben lassen statt in den Abschnitt Sandbox zu wechseln.
+- (B) Auf dem Abschnitt Sandbox könnte das schwebende Terminal pausieren und
+  ins Pane zurückkehren, beim Verlassen wieder schweben.
+- (C) Das Fenster ohne Platz könnte statt zu verschwinden zu einer schmalen
+  Leiste mit Titel schrumpfen.
+- (D) Das schwebende Fenster mit der Tastatur verschieben und in der Größe
+  ändern (Review-Runde 1).
+- (E) `HKeepClear` meldet auch reine Verschiebungen bei gleicher Größe
+  (Review-Runde 1).
+
+---
+## HUM-314 · The terminal pane opens further shells as tabs
+
+### Kontext
+Folge-Issue von HUM-299, Punkt 8 und „Offen": Daemon, Shim, Vertrag und
+Kommandozeile öffnen weitere Shells in der laufenden Sandbox (`Exec`,
+`TerminalInput.Open.shell_id`, Fähigkeit `sandbox.exec`, höchstens vier,
+die fünfte `TERM_002`). Die Oberfläche kannte sie nicht; `parity.md` führte
+`Humanitl.Exec` als UI-Lücke. Die Terminal-Dateien der App sind seit HUM-298,
+HUM-300, HUM-301, HUM-303 und HUM-313 fertig, dieses Issue setzt darauf auf.
+
+Was der Daemon bietet und was nicht (ADR-018: jede Fähigkeit zuerst eine
+RPC): `Exec` startet eine Shell und nennt ihre Kennung, `Terminal` mit
+`Open.shell_id` hängt sich an ihr Terminal (ein Schreiber, beliebig viele
+Leser, `TERM_001`, Ring, Exit-Code), `Close` am Strom hängt ab. **Es gibt
+keine RPC, die eine Shell beendet, und keine, die die offenen Shells
+auflistet.** Ein Reiter kann deshalb nur seine Ansicht schließen; die Shell
+endet mit ihrem Prozess oder mit der Sitzung. Beides steht unten als
+Kandidat und wird hier nicht erfunden.
+
+### Spezifikation
+1. **Reiterleiste.** Unter dem Banner des Terminals steht eine Zeile mit
+   Reitern: zuerst „Agent", immer da und nicht schließbar, dann ein Reiter je
+   weiterer Shell („Shell 1", „Shell 2", je Sitzung ab 1 gezählt), am Ende
+   „+ Shell". Die Zeile steht, solange es etwas zu wählen gibt:
+   `Info.capabilities` nennt `sandbox.exec` und eine Sitzung mit laufendem
+   Agenten ist da, oder ein Shell-Reiter ist offen. Ohne die Fähigkeit fehlt
+   sie, und das Terminal sieht aus wie vor diesem Issue (kein Golden ändert
+   sich).
+2. **Öffnen.** „+ Shell" (Tooltip nennt `Ctrl+Shift+T`) ruft `Exec` mit der
+   laufenden Sitzung, leerem Kommando (interaktive Shell) und Spalten und
+   Zeilen der Ansicht, die gerade zu sehen ist. Der neue Reiter wird aktiv
+   und hängt sich mit `TerminalOpen.shellId` an genau die Kennung, die `Exec`
+   nannte. Während ein `Exec` unterwegs ist, tut der Knopf nichts.
+3. **Ein Terminal, viele Sitzungen.** Jeder Reiter zeigt dasselbe
+   `TerminalPane`, nur mit `shellId`; `terminalSessionProvider(sandboxId,
+   shellId: …)` hält je Shell eigenen Emulator, Rücklauf und Strom. Zoom,
+   Kopieren und Einfügen, Tastatur unter dem Zeiger, die Ablehnung von
+   OSC 52, gehaltene Griffe, `TERM_001` als Zuschauer und der Wiederanschluss
+   nach `DAEMON_001` gelten unverändert, ohne zweite Kopie der Logik. Ein
+   Reiter, der nicht zu sehen ist, bleibt angeschlossen. Das schwebende
+   Fenster (HUM-300) und das ganze Fenster (HUM-298) zeigen den aktiven
+   Reiter samt Leiste.
+4. **Schließen.** Jeder Shell-Reiter hat ein Schließen-Glyph. Es hängt diese
+   Ansicht ab (`TerminalDetach`) und verwirft ihren Emulator; die Shell läuft
+   weiter, bis sie endet oder die Sitzung endet, und belegt bis dahin einen
+   der vier Plätze im Daemon. Der Tooltip sagt das. Aktiv wird der Reiter
+   links davon.
+5. **Ende einer Shell.** Kommt der Exit-Code, trägt der Reiter ihn
+   („Shell 1 · exit 3"), unter dem Terminal steht „The shell ended with exit
+   code 3.", und ein Klick auf den Reiter schließt ihn.
+6. **Grenze.** Mit vier offenen Reitern ist „+ Shell" gesperrt (Tooltip sagt
+   warum). Lehnt der Daemon ab (`TERM_002`, auch für eine Shell, die dieses
+   Fenster nicht zeigt, etwa aus `humanitl sandbox exec`; `IPC_006` ohne
+   Sitzung), steht der Befund als schließbarer Hinweis über dem Terminal,
+   in der Hinweisebene von HUM-302 (`HNoticeLayer`, `HDiagnosticCard` mit
+   `dense`), nie über der unteren Hälfte des Terminals. Der nächste Versuch
+   räumt ihn.
+7. **Ende der Sitzung.** Endet der Agent oder nennt der Status eine andere
+   Sandbox, enden alle Shell-Reiter: Ansicht abgehängt, Emulator verworfen,
+   der Agent-Reiter wird aktiv. Im Daemon beendet PID 1 die Shells ohnehin
+   (HUM-299).
+8. **Tastatur.** `Ctrl+Shift+T` öffnet eine Shell, `Ctrl+PageUp` und
+   `Ctrl+PageDown` wechseln zum vorigen und nächsten Reiter, rundum. Ein
+   Wechsel gibt dem neuen Reiter die Tastatur, unter der Regel von HUM-303.
+   Geprüft gegen jede Bindung in `app/lib`, `app/packages` und CONVENTIONS
+   3.9: Keine nutzt `T`, `PageUp` oder `PageDown`; die `Ctrl+Shift`-Familie
+   des Terminals ist `Enter`, `P`, `0`, `C`, `V`, die der Warteschlange `F`
+   und `L`. Die Griffe stehen in `shellShortcuts()`, ihre Aktionen aber nur
+   im Wirt des Terminals (`TerminalTabActions`) und nur, solange sie etwas
+   tun können: `Ctrl+Shift+T` mit `sandbox.exec` und laufender Sitzung, der
+   Wechsel ab zwei Reitern. Sonst gehen die Tasten wie bisher an den
+   Emulator; `Ctrl+PageUp`/`Ctrl+PageDown` erreichen dann den Agenten als
+   `CSI 5;5~`/`CSI 6;5~`. Der Emulator macht aus `Ctrl` mit Buchstabe nur
+   ohne `Shift` ein Steuerbyte, `Ctrl+T` (`0x14`) bleibt also beim Agenten.
+9. **Vertrag.** `DaemonClient.exec` mit `GrpcDaemonClient` und
+   `FakeDaemonClient` (Grenze vier, `TERM_002`, `IPC_006` ohne Sitzung und
+   für eine unbekannte Kennung am Terminal, `endShell` spielt das Ende);
+   `TerminalOpen.shellId`; `ShellStarted`; `DaemonInfo.offersShells`;
+   `DiagnosticCodes.terminalUnavailable`. `ProtoVersion.minor` 23,
+   `docs/PROTOCOL.md`. `parity.dart` nennt `Humanitl.Exec` bei
+   `features/sandbox/widgets/terminal_tabs`, `docs/reference/parity.md`
+   ohne UI-Lücke.
+10. **Aufbau.** Reitermodell und Notifier in
+    `features/sandbox/providers/terminal_tabs_provider.dart`
+    (`terminalTabsProvider`, `shellsOfferedProvider`, `shellHintSeenProvider`),
+    Leiste, Hinweise und Aktionen in
+    `features/sandbox/widgets/terminal_tabs.dart`; `SandboxTerminal` setzt
+    sie um das `TerminalPane` zusammen. UI-Texte nur über ARB (`en`, `de`,
+    angehängt). `docs/UX.md` 5.2, `docs/DESIGN.md` (Kürzeltabelle) und
+    CONVENTIONS 3.9 nennen die Reiter und Griffe.
+
+### Sicherheit
+Eine weitere Shell läuft mit der UID des Agenten in dessen Sandbox und
+PID-Namensraum; der Agent kann lesen, was dort getippt wird, und in ihr
+Terminal schreiben (`docs/SECURITY.md` 4, K-18). Die Oberfläche sagt es: Mit
+dem ersten Shell-Reiter erscheint einmalig der Hinweis „Do not type secrets
+here; the agent can read this shell.", bis er geschlossen wird; danach nie
+wieder (`terminalShellHintSeen` in der Zustandsdatei der Oberfläche). Die
+Aussage in `README.md` bleibt unberührt: Die App öffnet keine neue Tür, sie
+ruft nur die RPC, die der Daemon schon hat, und filtert nichts selbst.
+
+### Akzeptanzkriterien
+1. Ohne `sandbox.exec` keine Leiste und kein „+ Shell"; `Ctrl+Shift+T` ruft
+   kein `Exec`, `Ctrl+PageDown` erreicht den Agenten.
+2. Ohne laufende Sitzung kein „+ Shell".
+3. „+ Shell" ruft `Exec` mit leerem Kommando und der Größe der Ansicht; der
+   neue Reiter ist aktiv, sein `Open` trägt genau die Kennung aus `Exec`,
+   er hat einen eigenen Emulator, und der Wechsel zurück zum Agenten zeigt
+   dessen Emulator ohne neues `Open` der Shell.
+4. Tasten in einem Shell-Reiter erreichen nur diese Shell.
+5. `TERM_002` steht als Hinweis über dem Terminal und lässt sich schließen;
+   mit vier Reitern ist der Knopf gesperrt, und `Ctrl+Shift+T` ruft kein
+   `Exec`.
+6. Eine beendete Shell zeigt ihren Exit-Code am Reiter und unter dem
+   Terminal; ein Klick schließt den Reiter und verwirft seinen Emulator.
+7. Schließen eines laufenden Shell-Reiters beendet nur dessen Strom.
+8. Das Ende der Sitzung beendet alle Shell-Reiter.
+9. `Ctrl+Shift+T` öffnet, `Ctrl+PageUp`/`Ctrl+PageDown` wechseln rundum, der
+   neue Reiter hat die Tastatur, kein Byte eines Griffs erreicht eine Shell.
+10. Der Hinweis zur Mitlesbarkeit kommt einmal mit der ersten Shell und wird
+    beim Schließen in die Zustandsdatei geschrieben.
+11. Das schwebende Fenster zeigt den aktiven Reiter samt Leiste.
+
+### Tests
+`app/test/features/sandbox/terminal_tabs_test.dart`, je ein Test pro
+Kriterium, gegen `FakeDaemonClient` (nie gegen den Socket des Daemons),
+Plattform Linux; dazu die Grenze und die unbekannte Kennung im Fake.
+`shortcuts_map_to_intents_test` kennt die drei neuen Griffe.
+
+### Umsetzung (HUM-314)
+- **Vertrag.** `DaemonClient.exec` (`ExecRequest`/`ExecResponse` in
+  `grpc_daemon_client.dart`, `ExecResponseToDomain` in `convert.dart`),
+  `TerminalOpen.shellId` bis auf den Draht, `ShellStarted` in
+  `core/domain/terminal.dart`. Der Fake führt Grenze und Kennungen wie der
+  Daemon (`<acht Hex-Zeichen>-<n>`), sein `terminal()` nimmt für eine Shell
+  einen eigenen Weg, der den Schreibplatz des Agenten nicht berührt, und
+  `endTerminals` räumt die Shells mit. Ein zweiter Schreiber derselben Shell
+  wird im Fake nicht abgelehnt (steht dort).
+- **Sitzung.** `TerminalSession.build(sandboxId, {shellId = ''})`; sonst
+  unverändert. `TerminalPane` bekommt `shellId`, `tabs` und `notices`; alle
+  Lesezugriffe gehen über einen Getter `_session`, die Exit-Zeile nennt bei
+  einer Shell die Shell. Die Hinweisebene legt sich nur um den Emulator,
+  solange die Leiste steht, damit der Baum ohne Fähigkeit derselbe bleibt.
+- **Reiter.** `TerminalTabs` hört auf die laufende Sitzung und räumt bei
+  jedem Wechsel; `close` hängt ab und invalidiert die Sitzung der Shell.
+  `SandboxTerminal` schlüsselt den Pane je Reiter (der Agent behält
+  `Key('sandbox-terminal')`) und gibt beim Wechsel die Tastatur.
+
+### Kandidaten (HUM-314)
+- (A) RPC zum Beenden einer weiteren Shell (etwa `Exec` mit `close`, oder
+  `SIGHUP` an ihre Sitzung über die Tür), damit das Schließen eines Reiters
+  die Shell auch beenden kann und ihren Platz freigibt.
+- (B) RPC, die die offenen Shells einer Sitzung auflistet, damit die App
+  nach einem Neustart oder für Shells aus `humanitl sandbox exec` Reiter
+  wieder anbieten kann (auch für `attach` ohne Kennung, HUM-299 „Offen").
+- (C) Eigener Befundcode für die Grenze (`TERM_003`) samt ARB, statt
+  `TERM_002` mit eigenem Satz.
+- (D) Ein Befehl „New shell" in der Befehlspalette.
+- (E) Weitere Shells vom Agenten trennen (andere UID oder `hidepid`), dann
+  kann der Hinweis zur Mitlesbarkeit entfallen (HUM-299, Kandidat).
+
+### Review Runde 1 (HUM-314)
+- **Status ohne Antwort beendet keine Reiter** (Codex, major). `TerminalTabs`
+  räumt nur auf eine `AsyncData` des Sandbox-Status hin; Laden und Fehler
+  zählen nicht. Gemessen: Riverpod 3 trägt in `AsyncError` den letzten Wert
+  weiter, der beschriebene Verlust trat mit dem heutigen Status also nicht
+  ein; die Wache macht die Regel unabhängig davon. Test
+  `a_failed_status_question_keeps_the_shell_tabs`; Mutation (Wache weg und
+  ein Fehler ohne Wert) rot.
+- **Eine Shell, die der Daemon nicht mehr kennt** (Codex, major). Endete sie
+  vor dem ersten Anhängen und kam das `Open` nach `FINISHED_RETENTION`,
+  antwortete es `IPC_006`, und der Reiter hieß für immer „Shell 1". Jetzt
+  „Shell 1 · ended" (ARB `sandboxTerminalTabShellGone`, en und de), ein Klick
+  schließt. Test `a_shell_the_daemon_no_longer_knows_shows_ended_and_closes`;
+  Mutation (`gone` immer falsch) rot.
+- **Tastatur nur auf Wunsch** (Sonnet, minor). Ein Wechsel, den der Mensch
+  nicht auslöste (späte Antwort von `Exec`, Ende der Sitzung), nimmt einem
+  Textfeld die Tastatur nicht mehr (`TerminalTabsState.byUser`,
+  `isTextInputFocused`).
+- **Fake** (Codex, minor): prüft beim `Open` einer Shell erst die Sandbox
+  (`IPC_006`), schließt den Strom einer Shell nach ihrem `Exit`, verwirft
+  Tasten danach und nimmt abgehängte Ströme aus seiner Liste. Tests
+  `the_fake_refuses_a_live_shell_of_another_sandbox`,
+  `the_fake_closes_a_shell_stream_after_its_exit`.
+
+---
+## HUM-315 · The floating terminal docks on the Sandbox page, floats from the empty queue and keeps a title strip
+
+### Kontext
+Folge-Issue von HUM-300, Kandidaten (A), (B) und (C). Der Owner hat am
+2026-10-30 alle drei Punkte entschieden und dazu das Kürzel bestätigt:
+`Ctrl+Shift+P` bleibt, nichts daran ändert sich. HUM-314 hat seither Reiter
+ins Terminal gebracht; der Streifen unten nennt den aktiven.
+
+### Spezifikation
+1. **Auf der Sandbox-Seite angedockt.** Solange der Abschnitt Sandbox zu
+   sehen ist, steht ein schwebendes Terminal in seinem Pane dort, an seinem
+   gewohnten Platz; ein Fenster über der eigenen Seite verdeckte nur deren
+   Pane. Wer die Seite verlässt, sieht es wieder schweben, solange die
+   Sitzung läuft und der Mensch es vorher schweben ließ. Das Andocken wegen
+   der Seite ist ein Zustand der Ansicht und keine Wahl:
+   `terminalPlacementProvider` bleibt `floating`, Knopf und Palette sagen
+   weiter „zurücklegen", und ein Druck darauf legt das Terminal wirklich
+   zurück, sodass es beim Verlassen nicht mehr schwebt.
+2. **Eine Regel für den Wirt.** Welcher Wirt zeigt, entscheidet allein
+   `terminalHostFor` in `core/ui/terminal_placement.dart` über die Wahl und
+   `sandboxPageShownProvider` (die Shell schreibt ihn bei jedem Wechsel des
+   Abschnitts), gelesen über `terminalHostProvider`. Wer zeigt (Pane,
+   schwebende Ebene), liest den Wirt; wer die Wahl ändert oder nennt
+   (Knöpfe, Kürzel, Palette, Zustandsabfrage), liest die Wahl.
+3. **Ende auf der Seite.** Endet der Agent, während die Seite zu sehen ist,
+   legt die Ebene das Terminal sofort zurück: Das Pane zeigt das Ende
+   selbst, und beim Verlassen schwebte sonst eine Sitzung, die vorbei ist.
+   Endet er anderswo, gilt der Nachlauf von HUM-300.
+4. **Tastatur beim Wechsel der Seite.** Hatte das schwebende Terminal die
+   Tastatur, behält das Pane sie beim Betreten der Seite; es wird
+   weitergetippt. Beim Verlassen nimmt sie das Terminal nicht mit: Wer
+   einen anderen Abschnitt verlangt, bekommt dessen Regel, die
+   Warteschlange nimmt die Tastatur, und `Enter` entscheidet wie bisher
+   (HUM-300, Spezifikation 6).
+5. **„Go to terminal".** Der Knopf der leeren Warteschlange (HUM-306)
+   wechselt nicht mehr den Abschnitt, sondern tut, was ``Ctrl+` `` tut
+   (`FocusTerminalIntent`): Ohne sichtbares Terminal schwebt es über der
+   Warteschlange und bekommt die Tastatur, nach der Regel von HUM-303
+   (`_mayTakeKeyboard`, nicht über einer Ebene). Schwebt es schon, bekommt
+   es nur die Tastatur. Auf der Sandbox-Seite bekommt das angedockte
+   Terminal die Tastatur. Zeigt die schwebende Ebene nur den Streifen (oder
+   gar nichts), legt die Anfrage das Terminal zurück, zeigt die
+   Sandbox-Seite und gibt dem Pane die Tastatur, wie ein Klick auf den
+   Streifen ohne Platz (Review-Runde 1). Der ausdrückliche Wunsch nach dem Terminal ist
+   der Unterschied zu `Ctrl+Shift+P` aus der Warteschlange, das die
+   Tastatur dort lässt.
+6. **Titelstreifen statt Verschwinden.** Findet das Fenster keine freie
+   Ecke, schrumpft es zu einem schmalen Streifen: Profil der Sandbox (oder
+   „Terminal"), der aktive Reiter aus HUM-314 („Agent", „Shell 1") und ein
+   Knopf. Größe als Token `HSize.terminalStrip` (240 x 28, so hoch wie
+   `hitMin` und die Titelleiste des Fensters). Er nimmt die erste Ecke in
+   derselben Reihenfolge wie das Fenster, die ihm Platz lässt
+   (`placeTerminalStrip`), und überdeckt nie, was `HKeepClear` markiert:
+   Warteschlange, Freigeben und Blockieren, Hinweise, Blätter, Modale. Nur
+   ohne Platz auch für ihn tritt er zurück. Er hält kein Terminal, ändert
+   die Größe der Sitzung also nicht und nimmt keine Taste.
+7. **Klick auf den Streifen.** Öffnet das Fenster in der nächsten freien
+   Ecke, gemessen an den Bereichen, wie sie jetzt stehen; ist keine frei,
+   legt er das Terminal zurück und zeigt die Sandbox-Seite. Weil das
+   Fenster von selbst zurückkehrt, sobald eine Ecke frei wird, ist der
+   zweite Fall der übliche; nur zurücklegen ohne die Seite zu zeigen hieße
+   das Terminal ganz zu verstecken, obwohl der Mensch es sehen wollte.
+8. UI-Texte nur über ARB (`en` Quelle, `de` Übersetzung, angehängt);
+   `docs/UX.md` 5.2 und `docs/DESIGN.md` (Token-Tabelle, `HKeepClear` und
+   das schwebende Terminal) beschreiben Andocken, Streifen und den Knopf.
+
+### Akzeptanzkriterien
+1. Widget-Test: Schwebend auf History, `Ctrl+4` zeigt das Terminal im Pane
+   der Sandbox-Seite mit demselben Emulator, kein Fenster, genau eine
+   `TerminalView`, die Wahl bleibt `floating`; `Ctrl+3` lässt es wieder
+   schweben. Ein nie geschwebtes Terminal schwebt beim Verlassen nicht.
+2. Widget-Test: Endet der Agent auf der Sandbox-Seite, ist die Wahl danach
+   `pane`, und beim Verlassen schwebt nichts.
+3. Widget-Test: Hatte das Fenster die Tastatur, hat sie das Pane nach
+   `Ctrl+4`; nach `Ctrl+1` hat sie das Terminal nicht, und kein bloßer
+   Bereich hält sie.
+4. Widget-Test: „Go to terminal" lässt das Terminal über Intercept
+   schweben, der Abschnitt bleibt, das Terminal hat die Tastatur; schwebt
+   es schon, bekommt es nur die Tastatur.
+5. Widget-Test: Ohne freie Ecke (History, offenes Einstellungsblatt, links
+   zu schmal für 320 x 200) steht der Streifen in 240 x 28, nicht über dem
+   Blatt, mit Profil und Reiter; geht das Blatt, wird er wieder Fenster;
+   ein Klick ohne Platz legt zurück und zeigt die Sandbox-Seite.
+6. Reine Tests: `placeTerminalStrip` (Ecke zu klein fürs Fenster, Reihenfolge,
+   `null` ohne Platz) und `terminalHostFor` samt Provider (die Seite ändert
+   die Wahl nie).
+7. Goldens `terminal_strip` in vier Varianten (dunkel und hell, en und de);
+   sonst ändert sich kein Golden.
+8. Mutationsbeweise für Andocken und erneutes Schweben, „Go to terminal"
+   und den Streifen statt Verschwinden.
+
+### Tests
+`app/test/features/shell/terminal_dock_test.dart` (Kriterien 1 bis 5),
+`app/test/core/ui/terminal_float_test.dart` (Kriterium 6),
+`app/test/goldens/terminal_strip_golden_test.dart`, das Token in
+`app/packages/ui/test/tokens_test.dart`. Angepasst: in
+`terminal_float_test.dart` das Schweben vom Pane aus (jetzt erst nach dem
+Verlassen der Seite, zurück über `Ctrl+4` statt über den entfallenen Knopf
+im leeren Pane) und der gehaltene Griff (der Wechsel des Wirts kommt jetzt
+vom schwebenden Fenster über History); in `empty_queue_session_test.dart`
+bleibt der Abschnitt nach „Go to terminal"; in `terminal_tabs_test.dart`
+schwebt das Terminal mit seinen Reitern über History statt über der
+Sandbox-Seite.
+
+### Fallstricke
+- Verdeckte Abschnitte bauen in Riverpod 3 bei geändertem Provider nicht
+  neu (ihre Abos ruhen unter `TickerMode`). Das Pane der Sandbox-Seite
+  baut deshalb bei jeder Rückkehr des Terminals ausdrücklich neu
+  (`setState`), wie es das vor diesem Issue schon tat; die Tastatur nimmt es
+  dabei nur aus dem ganzen Fenster.
+- Der Knopf „Terminal hierher zurückholen" im leeren Pane hat keinen Platz
+  mehr: Auf der eigenen Seite dockt das Terminal ohnehin an. Der
+  ARB-Schlüssel `sandboxTerminalDockHere` ist in en und de entfernt.
+- Der Streifen nimmt nur Ecken. Eine Lage, in der alle vier Ecken auch für
+  240 x 28 belegt sind (ein Modal über der Arbeit), lässt ihn zurücktreten
+  wie früher das Fenster.
+
+### Umsetzung (HUM-315)
+- **Wirt.** `core/ui/terminal_placement.dart`: `sandboxPageShownProvider`,
+  `terminalHostFor`, `terminalHostProvider`. Die Shell schreibt die Seite in
+  `_sectionAsked` (und einmal nach dem ersten Frame) und reicht dort die
+  Tastatur auf die Seite weiter.
+- **Ebene.** `FloatingTerminalLayer` zeigt nach dem Wirt, dockt bei einem
+  Ende auf der Seite sofort und baut ohne freie Ecke den Streifen
+  (`floating_terminal_strip.dart`: `FloatingTerminalStrip` ohne Provider,
+  `LiveFloatingTerminalStrip` fragt Profil und Reiter).
+- **Regel.** `core/ui/terminal_float.dart`: `placeTerminalStrip` teilt mit
+  `placeFloatingTerminal` die Ecken und die Prüfung (`_firstFree`).
+- **Token.** `HSize.terminalStrip` und `HSizeTokens.terminalStrip` in
+  `packages/ui`, `dump_tokens.dart`, Token-Tabelle in `docs/DESIGN.md`.
+- **Sandbox.** Pane nach dem Wirt, leeres Pane ohne Knopf;
+  `terminalActiveTabLabel` in `terminal_tabs.dart`.
+- **Warteschlange.** „Go to terminal" ruft `FocusTerminalIntent`.
+- **ARB.** 4 Schlüssel, en und de, angehängt; `sandboxTerminalDockHere`
+  entfernt, die Beschreibung von `interceptEmptyGoToTerminal` nachgezogen.
+- **Goldens neu:** `terminal_strip` (4: dunkel und hell, en und de); kein
+  anderes Golden geändert.
+- **Grün:** `test/features/shell`, `test/features/sandbox`,
+  `test/features/intercept`, `test/core/ui`, `test/core/shortcuts`,
+  `packages/ui`, alle Goldens; `flutter analyze` beider Pakete, `dart format`
+  und `tools/check_coupling.py` ohne Befund. Gelaufen über einen Schatten des
+  SDK mit `--no-pub`.
+- **Mutationsbeweise**, je rot und danach mit `cmp` byte-gleich zurück:
+  `terminalHostFor` ohne die Seite (Andocken und erneutes Schweben); „Go to
+  terminal" wechselt wieder den Abschnitt; ohne freie Ecke kein Streifen.
+
+### Kandidaten (HUM-315)
+- (A) Der Streifen nimmt nur die vier Ecken; er könnte entlang der Kanten
+  einen freien Platz suchen.
+- (B) `sandboxSectionIndex` in `core/shortcuts/intents.dart` hat keinen
+  Nutzer mehr außer seinem Test; streichen oder für einen künftigen Weg
+  behalten.
+
+### Review-Runde 1 (Codex, Sonnet)
+Kein blockierender oder schwerer Befund; die minor-Befunde übernommen.
+- **Tastatur ohne Fenster.** ``Ctrl+` `` und „Go to terminal" taten nichts,
+  solange nur der Streifen stand. Die Ebene hört jetzt auf
+  `terminalFocusRequestProvider` und legt dann zurück, zeigt die
+  Sandbox-Seite und fragt einen Frame später erneut, sodass das Pane die
+  Tastatur nimmt (ehemals Kandidat B). Test
+  `asking_for_the_terminal_with_only_the_strip_docks_it` (Rules, 900 x 280:
+  zu niedrig für das kleinste Fenster); Mutation (Anfrage ignoriert) rot.
+- **Verlassen mit der Tastatur im Pane.** Test
+  `the_pane_keeps_no_keyboard_after_leaving_and_ctrl_1_works`: nach
+  `Ctrl+2` hält das Terminal die Tastatur nicht, und `Ctrl+1` erreicht die
+  Shell.
+- **ARB.** `sandboxTerminalDockHere` entfernt, Beschreibung von
+  `interceptEmptyGoToTerminal` nachgezogen.

@@ -30,6 +30,14 @@ abstract class DaemonInfo with _$DaemonInfo {
   /// True when the daemon replays a recorded session instead of proxying.
   bool get isFake => capabilities.contains(fakeCapability);
 
+  /// The capability of a daemon that opens further shells in a running
+  /// sandbox (`Exec`, HUM-299).
+  static const String execCapability = 'sandbox.exec';
+
+  /// True when the daemon opens further shells next to the agent; the
+  /// terminal pane offers "+ Shell" only then (HUM-314).
+  bool get offersShells => capabilities.contains(execCapability);
+
   /// True when a session is running.
   bool get hasSession => sessionId.isNotEmpty;
 

@@ -26,6 +26,7 @@ library;
 import 'dart:convert';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/domain/http_request.dart';
 import 'anchoring.dart';
 import 'draft.dart';
 import 'pseudonym_naming.dart';
@@ -340,6 +341,23 @@ Draft replaceSelection(
     return (body: draft.body, jsonError: error.message);
   }
 }
+
+/// Die Anfrage, die aus [draft] hinausginge: Methode, Ziel, die benannten
+/// Kopfzeilen und der Body, wie [renderBody] ihn liefert.
+///
+/// Der Knopf „Senden" und die Pause der Aufzeichnung bauen sie beide hier
+/// (HUM-269, Review): Die Pause baut sie erst beim Bestätigen neu, damit
+/// hinausgeht, was dann im Entwurf steht, und nicht, was beim Aufgehen der
+/// Pause darin stand.
+EditedRequest editedRequestOf(Draft draft) => buildEditedRequest(
+  method: draft.method,
+  url: draft.url,
+  headers: <({String name, String value})>[
+    for (final HeaderEntry entry in draft.headers)
+      if (entry.name.isNotEmpty) (name: entry.name, value: entry.value),
+  ],
+  body: renderBody(draft).body,
+);
 
 /// Die nächste freie Fund-Nummer.
 int _nextIndex(Draft draft) => draft.findings.fold<int>(

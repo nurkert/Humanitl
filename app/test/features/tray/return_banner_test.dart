@@ -51,7 +51,10 @@ Future<void> tabTo(WidgetTester tester, Key key) async {
     if (context == null) {
       return false;
     }
-    return context.findAncestorWidgetOfExactType<HButton>()?.key == key;
+    // Springen ist ein `HButton`, das Schließen seit HUM-302 ein
+    // `HIconButton` in der Ecke der Karte.
+    return context.findAncestorWidgetOfExactType<HButton>()?.key == key ||
+        context.findAncestorWidgetOfExactType<HIconButton>()?.key == key;
   }
 
   for (int i = 0; i < 12 && !onIt(); i++) {

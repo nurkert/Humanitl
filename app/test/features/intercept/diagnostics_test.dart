@@ -11,6 +11,7 @@ import 'package:humanitl/core/body/body_span.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/flow_events.dart';
+import 'package:humanitl/core/text/sanitize_diagnostic.dart';
 import 'package:humanitl/features/intercept/providers/diagnostics.dart';
 
 import 'fixtures.dart';
