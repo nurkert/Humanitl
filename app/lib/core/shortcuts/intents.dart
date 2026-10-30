@@ -75,6 +75,41 @@ const SingleActivator terminalFullWindowNumpadActivator = SingleActivator(
   includeRepeats: false,
 );
 
+/// Let the terminal of the sandbox float over the sections, or put it back
+/// into its pane. `Ctrl+Shift+P` (HUM-300).
+class ToggleTerminalFloatIntent extends Intent {
+  /// Creates the intent.
+  const ToggleTerminalFloatIntent();
+}
+
+/// The chord that lets the terminal float and puts it back (HUM-300).
+///
+/// `P` for picture in picture, next to the `Enter` of the whole window in
+/// the same family of `Ctrl+Shift` chords that move the terminal. Checked
+/// against every binding of the application (`app/lib`, `app/packages`,
+/// CONVENTIONS 3.9): `P` alone is "Pseudonymise" in the findings pause of the
+/// queue, and [SingleActivator] demands its modifiers exactly, so that
+/// binding never matches `Ctrl+Shift+P`; no other binding uses `P`. The queue
+/// decides with `Enter`, `A`, `B`, `Ctrl+F`, `Ctrl+L`, `Ctrl+Shift+F` and
+/// `Ctrl+Shift+L`, none of which this is. `Ctrl+Shift+C` and `Ctrl+Shift+V`
+/// are copy and paste in the terminal (HUM-313), `Ctrl+Shift+0` the zoom
+/// reset (HUM-301), `Ctrl+Shift+Enter` the whole window (HUM-298).
+///
+/// **What the agent loses.** The terminal looks the chord up itself, like
+/// every chord of the shell, so the agent never receives it. A terminal on
+/// Linux sends `Ctrl+Shift+P` as `0x10`, the same byte as `Ctrl+P`, and
+/// `Ctrl+P` itself stays with the agent (the previous line in readline);
+/// only an agent that asked for the kitty keyboard protocol could have told
+/// the two apart.
+///
+/// No repeats: a held chord would open and close the window in turn.
+const SingleActivator terminalFloatActivator = SingleActivator(
+  LogicalKeyboardKey.keyP,
+  control: true,
+  shift: true,
+  includeRepeats: false,
+);
+
 /// Give the keyboard to the terminal wherever it is shown, without changing
 /// the layout. `Ctrl+Backquote` (HUM-303).
 class FocusTerminalIntent extends Intent {
@@ -309,8 +344,9 @@ const LogicalKeyboardKey railToggleKey = LogicalKeyboardKey.digit0;
 /// The bindings of HUM-019: one `Ctrl+<digit>` per section, `Ctrl+K`,
 /// `Ctrl+,` for the settings (HUM-069), `Ctrl+0` for the rail (HUM-254) and
 /// `Ctrl+Shift+Enter` for the terminal over the whole window (HUM-298) and
-/// `Ctrl+Backquote` for the keyboard to the terminal (HUM-303) and the zoom
-/// chords of the terminal (HUM-301).
+/// `Ctrl+Backquote` for the keyboard to the terminal (HUM-303), the zoom
+/// chords of the terminal (HUM-301) and `Ctrl+Shift+P` for the floating
+/// terminal (HUM-300).
 Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
   for (int i = 0; i < navigationKeys.length; i++)
     SingleActivator(navigationKeys[i], control: true): NavIntent(i),
@@ -321,6 +357,7 @@ Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
   const SingleActivator(railToggleKey, control: true): const ToggleRailIntent(),
   terminalFullWindowActivator: const ToggleTerminalFullWindowIntent(),
   terminalFullWindowNumpadActivator: const ToggleTerminalFullWindowIntent(),
+  terminalFloatActivator: const ToggleTerminalFloatIntent(),
   const TerminalFocusActivator(): const FocusTerminalIntent(),
   for (final TerminalZoom zoom in TerminalZoom.values)
     TerminalZoomActivator(zoom): TerminalZoomIntent(zoom),

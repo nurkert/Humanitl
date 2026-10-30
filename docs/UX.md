@@ -528,7 +528,7 @@ is the group allow of the queue.
 
 **The terminal takes the keyboard on hover and by shortcut (HUM-303).** The
 pointer over the emulator hands it the keyboard at once, without a click, in
-its pane, over the whole window and later floating (HUM-300). Two exceptions
+its pane, over the whole window and floating (HUM-300). Two exceptions
 keep the focus where it is. A layer above the work -- a dialog, a sheet, a
 menu, the command palette -- holds the keyboard in a focus scope of its own,
 and the terminal takes the focus only from a node in its own scope or one of
@@ -548,8 +548,9 @@ queue. Focus at once, and the decision keys never fire because focus moved by
 hover (`enter_goes_to_the_terminal_only_once_the_focus_moved`).
 
 ``Ctrl+` `` gives the keyboard to the terminal that is shown and changes
-nothing in the layout; with no terminal on the screen it does nothing for
-now (HUM-300 will open the floating terminal). It asks by the physical key
+nothing in the layout. With no terminal on the screen and a running agent it
+lets the terminal float (HUM-300) and gives the floating terminal the
+keyboard; without an agent it does nothing. It asks by the physical key
 left of `1`, because on many layouts the backquote is a dead key or lies
 behind `AltGr`; on a German keyboard the chord is `Strg+^`. It is one more
 exception in the terminal and takes the way of the others through
@@ -557,6 +558,40 @@ exception in the terminal and takes the way of the others through
 above the work keeps the focus against the shortcut too; a text field does
 not, because the shortcut asks deliberately. The palette lists it while a
 terminal is shown.
+
+**The terminal floats as a picture in the picture (HUM-300).** While an
+agent runs, `Ctrl+Shift+P` or the button left of the full-window button in
+the strip above the terminal lets the terminal float as a small window over
+whatever section is shown, so the agent stays in sight while its requests
+are decided. It is the same session and the same emulator with its
+scrollback; exactly one place shows it, and while it floats the pane in the
+Sandbox section is empty and offers "Put the terminal back here". The window
+has a title bar to drag it by, a button back to the Sandbox section and a
+close button (the same chord); it snaps to the corner of the quadrant it is
+let go in, a grip in the inner corner resizes it between 320 x 200 and 60 %
+of the sections (at most 960 x 640), and corner and size survive a restart in
+the state file of the interface. The default corner is bottom right: on
+Intercept that is the bottom of the context pane, the one corner without a
+decision. **It never covers what must stay clickable.** The queue with its
+rows and notices, the bar with Allow and Block, the notices of the shell, a
+sheet and a modal mark themselves as regions to keep clear (`HKeepClear`);
+the window takes the chosen corner at the chosen size, else the smallest
+size, else the corner beside, above or across, and steps back while no
+corner is free (a modal over the work). It hangs over the sections only,
+never over the rail, the header or the status bar, and the settings sheet
+and the command palette lie above it. **The keyboard stays where it is.**
+Opening the window from the queue leaves the keyboard in the queue, and
+`Enter` still allows; the terminal in the window takes the keyboard under
+the rule above -- hover, ``Ctrl+` ``, a click -- and then every shortcut of
+the shell keeps working from inside it, `Ctrl+Shift+P` included. A terminal
+that had the keyboard in its pane takes it along. **The end.** When the agent
+ends, the window shows the end as the pane would for four seconds and then
+puts the terminal back into its pane by itself. Without a running agent the
+chord does nothing and the button is disabled. The palette lists the toggle
+while an agent runs or the terminal floats. The whole window
+(`Ctrl+Shift+Enter`) returns to the floating window when it was opened from
+there. `Ctrl+Shift+P` reaches no agent: a Linux terminal sends it as `0x10`
+like `Ctrl+P`, which stays with the agent.
 
 **The terminal text can be zoomed (HUM-301).** `Ctrl` with `+` makes it one
 step larger, with `-` one step smaller, between 10 and 28 px; the default is

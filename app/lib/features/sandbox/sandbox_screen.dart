@@ -276,12 +276,38 @@ class _Body extends ConsumerWidget {
         if (here)
           SandboxTerminal(focusOnMount: cameBack)
         else
-          ColoredBox(
-            key: const Key('sandbox-terminal-elsewhere'),
-            color: HTheme.of(context).terminal.background,
-          ),
+          const _TerminalElsewhere(),
         _Details(status: status, onShowArgv: onShowArgv),
       ],
+    );
+  }
+}
+
+/// Where the terminal stands while another host shows it: an empty area in
+/// the colour of the terminal, and while it floats a button that puts it
+/// back here (HUM-300). Over the whole window nobody sees this pane.
+class _TerminalElsewhere extends ConsumerWidget {
+  const _TerminalElsewhere();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final HTokens tokens = HTheme.of(context);
+    final bool floating =
+        ref.watch(terminalPlacementProvider) == TerminalPlacement.floating;
+    return ColoredBox(
+      key: const Key('sandbox-terminal-elsewhere'),
+      color: tokens.terminal.background,
+      child: floating
+          ? Center(
+              child: HButton(
+                key: const Key('sandbox-terminal-dock'),
+                variant: HButtonVariant.secondary,
+                size: HButtonSize.sm,
+                onPressed: ref.read(terminalPlacementProvider.notifier).dock,
+                child: Text(context.l10n.sandboxTerminalDockHere),
+              ),
+            )
+          : null,
     );
   }
 }

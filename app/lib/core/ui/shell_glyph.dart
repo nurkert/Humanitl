@@ -38,6 +38,11 @@ enum ShellGlyph {
 
   /// Lucide `minimize-2`: put the terminal back into its pane (HUM-298).
   minimize,
+
+  /// After Lucide `picture-in-picture-2`: let the terminal float over the
+  /// sections (HUM-300). The corners of the frame are drawn sharp; at 14 px
+  /// the radius of the original is less than a pixel.
+  pictureInPicture,
 }
 
 /// Draws one [ShellGlyph] at [size] in [color].
@@ -206,6 +211,22 @@ class _ShellGlyphPainter extends CustomPainter {
           )
           ..drawLine(const Offset(14, 10), const Offset(21, 3), stroke)
           ..drawLine(const Offset(3, 21), const Offset(10, 14), stroke);
+      case ShellGlyph.pictureInPicture:
+        canvas
+          ..drawPath(
+            _polyline(const <Offset>[
+              Offset(21, 9),
+              Offset(21, 4),
+              Offset(2, 4),
+              Offset(2, 18),
+              Offset(8, 18),
+            ]),
+            stroke,
+          )
+          ..drawRRect(
+            RRect.fromLTRBR(12, 13, 22, 20, const Radius.circular(2)),
+            stroke,
+          );
       case ShellGlyph.audit:
         canvas
           ..drawPath(

@@ -45,12 +45,70 @@ import '../providers/terminal_provider.dart';
 /// The height of the two strips above the terminal.
 const double terminalStripHeight = 24;
 
+/// Whether the emulator of a terminal on the screen has the keyboard
+/// (HUM-300).
+///
+/// The shell asks it before the terminal changes its host: a terminal that
+/// had the keyboard in its pane gets it back in the floating window, one that
+/// did not leaves it where it is, with the queue. A `debugLabel` would answer
+/// the same in a test and nothing in a release build.
+bool terminalHoldsKeyboard() =>
+    _TerminalPaneState._live.any((FocusNode node) => node.hasPrimaryFocus);
+
+/// The physical keys of chords a terminal took, each until its release
+/// (HUM-301, HUM-313, HUM-300); why they are kept is told at the pane's
+/// field `_heldChordKeys`.
+///
+/// One instance for every terminal, with the lifetime of the provider scope:
+/// it registers its release handler on [HardwareKeyboard] once and removes it
+/// when the scope ends (review round 3). A release anywhere drops the key
+/// after a microtask, so the terminal that took the chord still finds its own
+/// release here.
+class HeldChordKeys {
+  /// Creates the set and registers the release handler.
+  HeldChordKeys() {
+    HardwareKeyboard.instance.addHandler(_dropReleased);
+  }
+
+  final Set<PhysicalKeyboardKey> _keys = <PhysicalKeyboardKey>{};
+
+  /// Whether [key] is held for a chord.
+  bool contains(PhysicalKeyboardKey key) => _keys.contains(key);
+
+  /// Holds [key] until its release.
+  void add(PhysicalKeyboardKey key) => _keys.add(key);
+
+  /// Lets [key] go.
+  void remove(PhysicalKeyboardKey key) => _keys.remove(key);
+
+  bool _dropReleased(KeyEvent event) {
+    if (event is KeyUpEvent) {
+      final PhysicalKeyboardKey key = event.physicalKey;
+      scheduleMicrotask(() => _keys.remove(key));
+    }
+    return false;
+  }
+
+  /// Removes the release handler.
+  void dispose() => HardwareKeyboard.instance.removeHandler(_dropReleased);
+}
+
+/// The one [HeldChordKeys] of the application.
+final Provider<HeldChordKeys> heldChordKeysProvider = Provider<HeldChordKeys>((
+  Ref ref,
+) {
+  final HeldChordKeys held = HeldChordKeys();
+  ref.onDispose(held.dispose);
+  return held;
+});
+
 /// The terminal of the running session.
 class TerminalPane extends ConsumerStatefulWidget {
   /// Shows the terminal of [sandboxId], or the reason there is none.
   const TerminalPane({
     required this.sandboxId,
     this.focusOnMount = false,
+    this.floating = false,
     super.key,
   });
 
@@ -65,11 +123,20 @@ class TerminalPane extends ConsumerStatefulWidget {
   /// nothing in the scope has the focus, and the shell always holds it.
   final bool focusOnMount;
 
+  /// Whether the host is the floating window (HUM-300). Its title bar carries
+  /// the buttons that put the terminal back, so the banner leaves out its own
+  /// float button; the button for the whole window stays.
+  final bool floating;
+
   @override
   ConsumerState<TerminalPane> createState() => _TerminalPaneState();
 }
 
 class _TerminalPaneState extends ConsumerState<TerminalPane> {
+  /// The focus nodes of every emulator that is mounted, for
+  /// [terminalHoldsKeyboard].
+  static final Set<FocusNode> _live = <FocusNode>{};
+
   final FocusNode _focus = FocusNode(debugLabel: 'terminal');
   final TerminalController _controller = TerminalController();
   final HContextMenuController _menu = HContextMenuController();
@@ -95,11 +162,34 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   /// cleared on the way, that release reached the agent. A release that went
   /// to another node meanwhile leaves the key in the set until its next
   /// press, and a new press of a key still in it counts as a new press.
-  final Set<PhysicalKeyboardKey> _heldChordKeys = <PhysicalKeyboardKey>{};
+  ///
+  /// **Every chord of the shell, and one set for every host** (HUM-300,
+  /// review round 1). `Ctrl+Shift+P` lets the terminal float or puts it back,
+  /// so the release of the `P` arrives in the emulator of the *other* host;
+  /// with a set per pane that release reached the agent. The set is shared
+  /// by all panes for that reason, and it takes the press of every chord of
+  /// the shell the pane hands on, not only the zoom.
+  ///
+  /// **A release anywhere ends it** (HUM-300, review round 2). The release of
+  /// a chord key can land outside every terminal -- the palette opened by
+  /// `Ctrl+K` holds the keyboard when the `K` comes up. Left in the set, the
+  /// key swallowed the repeats of a later press that began elsewhere and
+  /// reached the terminal by hover. A handler on [HardwareKeyboard] drops the
+  /// key on every release. Those handlers run *before* the focus system hands
+  /// the event to the terminal, so the drop waits for a microtask: the
+  /// terminal still finds its own release in the set and keeps it from the
+  /// agent, and the next event of the platform finds the set clean.
+  ///
+  /// The set and that handler live in [heldChordKeysProvider], not in a pane
+  /// (review round 3): with no pane mounted -- the floating window hidden for
+  /// lack of room, the old pane gone -- a handler owned by panes was gone too.
+  late final HeldChordKeys _heldChordKeys;
 
   @override
   void initState() {
     super.initState();
+    _live.add(_focus);
+    _heldChordKeys = ref.read(heldChordKeysProvider);
     _attach();
     if (widget.focusOnMount) {
       _takeFocus();
@@ -202,6 +292,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
 
   @override
   void dispose() {
+    _live.remove(_focus);
     _focus.dispose();
     _controller.dispose();
     super.dispose();
@@ -299,7 +390,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
       if (Actions.maybeFind<Intent>(context, intent: binding.value) == null) {
         break;
       }
-      if (binding.value is TerminalZoomIntent && event is KeyDownEvent) {
+      if (event is KeyDownEvent) {
         _heldChordKeys.add(event.physicalKey);
       }
       Actions.maybeInvoke<Intent>(context, binding.value);
@@ -347,7 +438,11 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          _Banner(text: l10n.sandboxTerminalUntrustedBanner),
+          _Banner(
+            text: l10n.sandboxTerminalUntrustedBanner,
+            floating: widget.floating,
+            running: false,
+          ),
           Expanded(child: _Idle(text: l10n.sandboxTerminalIdle)),
         ],
       );
@@ -374,7 +469,11 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        _Banner(text: l10n.sandboxTerminalUntrustedBanner),
+        _Banner(
+          text: l10n.sandboxTerminalUntrustedBanner,
+          floating: widget.floating,
+          running: true,
+        ),
         if (notice != null)
           _HeldStrip(
             text: l10n.sandboxTerminalHeldNotice(
@@ -673,12 +772,25 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
 ///
 /// This strip is the header of the terminal wherever it stands: in its pane
 /// and over the whole window, where it is the one row left above the
-/// emulator (HUM-298). The button sits at its right end, so it is in the same
-/// place in both layouts and a second click undoes the first.
+/// emulator (HUM-298). The buttons sit at its right end, so they are in the
+/// same place in every layout and a second click undoes the first: the
+/// floating window (HUM-300) and the whole window. In the floating window
+/// its own title bar puts the terminal back, so only the whole window stays
+/// here.
 class _Banner extends StatelessWidget {
-  const _Banner({required this.text});
+  const _Banner({
+    required this.text,
+    required this.floating,
+    required this.running,
+  });
 
   final String text;
+
+  /// Whether the host is the floating window.
+  final bool floating;
+
+  /// Whether a session runs in this terminal; without one it does not float.
+  final bool running;
 
   @override
   Widget build(BuildContext context) {
@@ -695,8 +807,54 @@ class _Banner extends StatelessWidget {
               style: tokens.typography.ui12.tinted(tokens.colors.fg1),
             ),
           ),
+          if (!floating) FloatButton(running: running),
           const FullWindowButton(),
         ],
+      ),
+    );
+  }
+}
+
+/// Lets the terminal float over the sections, or puts it back into its pane
+/// (HUM-300).
+///
+/// The same as `Ctrl+Shift+P`, and the tooltip says so. Disabled while no
+/// agent runs: a floating window over the empty state would show nothing
+/// worth watching and close itself again. It writes the placement and nothing
+/// else; the shell lays the window out from it.
+class FloatButton extends ConsumerWidget {
+  /// Creates the button; [running] says whether a session runs.
+  const FloatButton({required this.running, super.key});
+
+  /// Whether an agent runs in the terminal. A floating terminal can always
+  /// be put back, also after its agent ended.
+  final bool running;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final HTokens tokens = HTheme.of(context);
+    final AppLocalizations l10n = AppLocalizations.of(context);
+    final bool floating =
+        ref.watch(terminalPlacementProvider) == TerminalPlacement.floating;
+    final String label = floating
+        ? l10n.sandboxTerminalFloatLeave
+        : l10n.sandboxTerminalFloatEnter;
+    return HoverLabel(
+      label: label,
+      side: HoverLabelSide.below,
+      child: HButton(
+        key: const Key('sandbox-terminal-float'),
+        variant: HButtonVariant.ghost,
+        size: HButtonSize.sm,
+        semanticsLabel: label,
+        onPressed: floating || running
+            ? ref.read(terminalPlacementProvider.notifier).toggleFloating
+            : null,
+        child: ShellGlyphIcon(
+          ShellGlyph.pictureInPicture,
+          size: 14,
+          color: floating || running ? tokens.colors.fg1 : tokens.colors.fg2,
+        ),
       ),
     );
   }

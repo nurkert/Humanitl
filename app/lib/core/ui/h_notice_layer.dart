@@ -133,9 +133,16 @@ class HNoticeLayer extends StatelessWidget {
               bottom: bottom ? inset : null,
               right: inset,
               width: width,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(maxHeight: height),
-                child: scroll ? SingleChildScrollView(child: notices) : notices,
+              // Ein Hinweis bleibt frei: Das schwebende Terminal legt sich
+              // nicht über ihn (HUM-300). Ohne Hinweis ist die Fläche leer und
+              // hält nichts frei.
+              child: HKeepClear(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: height),
+                  child: scroll
+                      ? SingleChildScrollView(child: notices)
+                      : notices,
+                ),
               ),
             ),
           ],
