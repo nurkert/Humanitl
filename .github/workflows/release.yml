@@ -504,6 +504,8 @@ jobs:
     permissions:
       # Die einzige Stelle im Repository, die schreibt.
       contents: write
+      # Nur, um danach den Bau der Website anzustoßen (HUM-333).
+      actions: write
     env:
       VERSION: ${{ needs.guard.outputs.version }}
       CHECKED_SHA: ${{ needs.guard.outputs.sha }}
@@ -610,3 +612,11 @@ jobs:
           # Only now publish it, as a regular release marked latest.
           gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
           echo "published $tag as a release"
+      - name: The website shows the new release
+        # Ein Release, das dieser Lauf mit GITHUB_TOKEN veröffentlicht, startet keinen
+        # anderen Workflow; der Bau von humanitl.de wird deshalb ausdrücklich angestoßen,
+        # damit die Download-Seite die neue Version sofort zeigt (HUM-333). Scheitert das,
+        # holt der tägliche Lauf es nach; das Release selbst steht dann schon.
+        run: |
+          gh workflow run website.yml --repo "$GITHUB_REPOSITORY" --ref main ||
+            echo "::warning::the website build could not be triggered; its daily run will show $REF_NAME"
