@@ -257,6 +257,26 @@ jobs:
           set -euo pipefail
           cd daemon && cargo build -p humanitl -p humanitld -p humanitl-shim
           cd .. && ./tests/escape/macos/run.sh daemon/target/debug
+      - name: The daemon as a launchd agent (HUM-314)
+        # A fresh runner: install the agent from the build, wait until the
+        # daemon answers, check the sandbox through it, take it away again.
+        run: |
+          set -euo pipefail
+          bin="$PWD/daemon/target/debug"
+          "$bin/humanitl" daemon install --bin-dir "$bin"
+          for _ in $(seq 1 50); do
+            "$bin/humanitl" daemon status >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          "$bin/humanitl" daemon status
+          "$bin/humanitl" doctor || true
+          (cd "$RUNNER_TEMP" && "$bin/humanitl" sandbox check)
+          "$bin/humanitl" daemon logs -n 20
+          "$bin/humanitl" daemon uninstall
+          if "$bin/humanitl" daemon status >/dev/null 2>&1; then
+            echo "::error::the daemon still answers after uninstall"
+            exit 1
+          fi
       - name: Documentation builds without warnings
         run: cd daemon && cargo doc --workspace --no-deps
         env:

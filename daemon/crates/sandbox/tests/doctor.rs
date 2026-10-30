@@ -22,9 +22,9 @@ use humanitl_core::{Severity, diagnostics};
 use humanitl_sandbox::Version;
 use humanitl_sandbox::doctor::{
     AgentFacts, BwrapFacts, CheckId, CheckOutcome, CheckStatus, CommandRun, DaemonFacts, DiskFacts,
-    DoctorReport, LlmFacts, MachineFacts, NOT_MEASURED, PROBE_LLM_COMMAND, Reading, RendererFacts,
-    RunOutcome, RuntimeDirFacts, SeccompFacts, SeccompLine, SystemdFacts, TrayFacts, UsernsFacts,
-    run,
+    DoctorReport, LlmFacts, MachineFacts, NOT_MEASURED, PROBE_LLM_COMMAND, Platform, Reading,
+    RendererFacts, RunOutcome, RuntimeDirFacts, SeccompFacts, SeccompLine, SystemdFacts, TrayFacts,
+    UsernsFacts, run,
 };
 
 /// So lang darf ein Beleg werden, damit er in eine Tabellenzeile passt.
@@ -57,6 +57,7 @@ fn words(line: &str) -> Vec<String> {
 /// Eine Maschine, auf der alles stimmt.
 fn healthy() -> MachineFacts {
     MachineFacts {
+        platform: Platform::Linux,
         bwrap: BwrapFacts::Found {
             program: PathBuf::from("/usr/bin/bwrap"),
             version: Version(0, 11, 0),
@@ -133,6 +134,7 @@ fn healthy() -> MachineFacts {
 /// Eine Maschine, auf der nichts stimmt.
 fn broken() -> MachineFacts {
     MachineFacts {
+        platform: Platform::Linux,
         bwrap: BwrapFacts::Missing {
             searched: "/usr/bin:/bin".to_owned(),
         },
@@ -201,6 +203,7 @@ fn broken() -> MachineFacts {
 /// Eine Maschine, auf der sich nichts lesen ließ.
 fn blind() -> MachineFacts {
     MachineFacts {
+        platform: Platform::Linux,
         bwrap: BwrapFacts::Unreadable {
             program: PathBuf::from("/usr/bin/bwrap"),
             error: "EACCES".to_owned(),
@@ -437,4 +440,57 @@ fn the_report_of_a_machine_where_nothing_answers_is_still_eleven_lines() {
     for facts in [healthy(), broken(), blind()] {
         assert_eq!(run(&facts).checks.len(), CheckId::ALL.len());
     }
+}
+
+/// Unter macOS urteilen die Zeilen über Seatbelt und launchd, und keine
+/// Linux-Zeile ist rot (HUM-314).
+#[test]
+fn on_macos_the_linux_lines_are_not_needed_and_seatbelt_counts() {
+    let mut facts = healthy();
+    facts.platform = Platform::MacOs {
+        sandbox_exec: Some(PathBuf::from("/usr/bin/sandbox-exec")),
+        launch_agent: None,
+    };
+    let report = run(&facts);
+    let line = |id: CheckId| {
+        report
+            .checks
+            .iter()
+            .find(|check| check.id() == id)
+            .unwrap_or_else(|| panic!("a line {id:?}"))
+    };
+    assert_eq!(line(CheckId::Bwrap).status(), CheckStatus::Ok);
+    assert!(line(CheckId::Bwrap).evidence().contains("sandbox-exec"));
+    for id in [
+        CheckId::Userns,
+        CheckId::Seccomp,
+        CheckId::Tray,
+        CheckId::Renderer,
+    ] {
+        assert_eq!(line(id).status(), CheckStatus::Ok, "{id:?}");
+        assert!(
+            line(id).evidence().starts_with("not needed on macOS"),
+            "{id:?}"
+        );
+    }
+    assert_eq!(line(CheckId::SystemdUser).status(), CheckStatus::Warn);
+    assert_eq!(report.checks.len(), CheckId::ALL.len());
+
+    facts.platform = Platform::MacOs {
+        sandbox_exec: None,
+        launch_agent: Some(PathBuf::from("/Users/me/Library/LaunchAgents/x.plist")),
+    };
+    let report = run(&facts);
+    let bwrap = report
+        .checks
+        .iter()
+        .find(|check| check.id() == CheckId::Bwrap)
+        .unwrap();
+    assert_eq!(bwrap.status(), CheckStatus::Fail);
+    let agent = report
+        .checks
+        .iter()
+        .find(|check| check.id() == CheckId::SystemdUser)
+        .unwrap();
+    assert_eq!(agent.status(), CheckStatus::Ok);
 }

@@ -856,6 +856,10 @@ pub enum DaemonCmd {
     /// Show the journal of the daemon: journalctl --user -u humanitld.
     Logs(LogsArgs),
 
+    /// Restart the background service: launchctl kickstart on macOS,
+    /// systemctl --user restart on Linux.
+    Restart,
+
     /// Stop and disable the service and remove the unit daemon install wrote.
     Uninstall(UninstallArgs),
 
