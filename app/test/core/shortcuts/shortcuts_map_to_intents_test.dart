@@ -34,6 +34,7 @@ String describe(Intent intent) => switch (intent) {
   MoveRuleIntent(:final int delta) => 'MoveRule($delta)',
   ToggleGroupIntent(:final bool open) => 'ToggleGroup(open: $open)',
   TerminalZoomIntent(:final TerminalZoom zoom) => 'TerminalZoom(${zoom.name})',
+  SwitchTerminalTabIntent(:final int delta) => 'SwitchTerminalTab($delta)',
   _ => '${intent.runtimeType}',
 };
 
@@ -91,6 +92,10 @@ final List<KeyRow> shellTable = <KeyRow>[
   ctrl(LogicalKeyboardKey.numpadSubtract, 'TerminalZoom(zoomOut)'),
   ctrlShift(LogicalKeyboardKey.digit0, 'TerminalZoom(reset)'),
   ctrl(LogicalKeyboardKey.numpad0, 'TerminalZoom(reset)'),
+  // Weitere Shells als Reiter des Terminals (HUM-314).
+  ctrlShift(LogicalKeyboardKey.keyT, 'OpenShellIntent'),
+  ctrl(LogicalKeyboardKey.pageUp, 'SwitchTerminalTab(-1)'),
+  ctrl(LogicalKeyboardKey.pageDown, 'SwitchTerminalTab(1)'),
 ];
 
 /// Die Warteschlange (CONVENTIONS 3.9 und die Bindungen von HUM-029, HUM-072).

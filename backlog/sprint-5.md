@@ -80,6 +80,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-302 | Notices float as dismissible overlays and never push the layout | S | HUM-276, HUM-286 |
 | HUM-313 | Terminal copy and paste | S | HUM-042, HUM-301, HUM-303 |
 | HUM-300 | Terminal as picture-in-picture | M | HUM-298, HUM-302, HUM-303, HUM-305 |
+| HUM-314 | The terminal pane opens further shells as tabs | S | HUM-299, HUM-300, HUM-302, HUM-303, HUM-313 |
 
 ---
 
@@ -9226,3 +9227,189 @@ Beide Befunde übernommen; danach keine weitere Runde.
   ändern (Review-Runde 1).
 - (E) `HKeepClear` meldet auch reine Verschiebungen bei gleicher Größe
   (Review-Runde 1).
+
+---
+## HUM-314 · The terminal pane opens further shells as tabs
+
+### Kontext
+Folge-Issue von HUM-299, Punkt 8 und „Offen": Daemon, Shim, Vertrag und
+Kommandozeile öffnen weitere Shells in der laufenden Sandbox (`Exec`,
+`TerminalInput.Open.shell_id`, Fähigkeit `sandbox.exec`, höchstens vier,
+die fünfte `TERM_002`). Die Oberfläche kannte sie nicht; `parity.md` führte
+`Humanitl.Exec` als UI-Lücke. Die Terminal-Dateien der App sind seit HUM-298,
+HUM-300, HUM-301, HUM-303 und HUM-313 fertig, dieses Issue setzt darauf auf.
+
+Was der Daemon bietet und was nicht (ADR-018: jede Fähigkeit zuerst eine
+RPC): `Exec` startet eine Shell und nennt ihre Kennung, `Terminal` mit
+`Open.shell_id` hängt sich an ihr Terminal (ein Schreiber, beliebig viele
+Leser, `TERM_001`, Ring, Exit-Code), `Close` am Strom hängt ab. **Es gibt
+keine RPC, die eine Shell beendet, und keine, die die offenen Shells
+auflistet.** Ein Reiter kann deshalb nur seine Ansicht schließen; die Shell
+endet mit ihrem Prozess oder mit der Sitzung. Beides steht unten als
+Kandidat und wird hier nicht erfunden.
+
+### Spezifikation
+1. **Reiterleiste.** Unter dem Banner des Terminals steht eine Zeile mit
+   Reitern: zuerst „Agent", immer da und nicht schließbar, dann ein Reiter je
+   weiterer Shell („Shell 1", „Shell 2", je Sitzung ab 1 gezählt), am Ende
+   „+ Shell". Die Zeile steht, solange es etwas zu wählen gibt:
+   `Info.capabilities` nennt `sandbox.exec` und eine Sitzung mit laufendem
+   Agenten ist da, oder ein Shell-Reiter ist offen. Ohne die Fähigkeit fehlt
+   sie, und das Terminal sieht aus wie vor diesem Issue (kein Golden ändert
+   sich).
+2. **Öffnen.** „+ Shell" (Tooltip nennt `Ctrl+Shift+T`) ruft `Exec` mit der
+   laufenden Sitzung, leerem Kommando (interaktive Shell) und Spalten und
+   Zeilen der Ansicht, die gerade zu sehen ist. Der neue Reiter wird aktiv
+   und hängt sich mit `TerminalOpen.shellId` an genau die Kennung, die `Exec`
+   nannte. Während ein `Exec` unterwegs ist, tut der Knopf nichts.
+3. **Ein Terminal, viele Sitzungen.** Jeder Reiter zeigt dasselbe
+   `TerminalPane`, nur mit `shellId`; `terminalSessionProvider(sandboxId,
+   shellId: …)` hält je Shell eigenen Emulator, Rücklauf und Strom. Zoom,
+   Kopieren und Einfügen, Tastatur unter dem Zeiger, die Ablehnung von
+   OSC 52, gehaltene Griffe, `TERM_001` als Zuschauer und der Wiederanschluss
+   nach `DAEMON_001` gelten unverändert, ohne zweite Kopie der Logik. Ein
+   Reiter, der nicht zu sehen ist, bleibt angeschlossen. Das schwebende
+   Fenster (HUM-300) und das ganze Fenster (HUM-298) zeigen den aktiven
+   Reiter samt Leiste.
+4. **Schließen.** Jeder Shell-Reiter hat ein Schließen-Glyph. Es hängt diese
+   Ansicht ab (`TerminalDetach`) und verwirft ihren Emulator; die Shell läuft
+   weiter, bis sie endet oder die Sitzung endet, und belegt bis dahin einen
+   der vier Plätze im Daemon. Der Tooltip sagt das. Aktiv wird der Reiter
+   links davon.
+5. **Ende einer Shell.** Kommt der Exit-Code, trägt der Reiter ihn
+   („Shell 1 · exit 3"), unter dem Terminal steht „The shell ended with exit
+   code 3.", und ein Klick auf den Reiter schließt ihn.
+6. **Grenze.** Mit vier offenen Reitern ist „+ Shell" gesperrt (Tooltip sagt
+   warum). Lehnt der Daemon ab (`TERM_002`, auch für eine Shell, die dieses
+   Fenster nicht zeigt, etwa aus `humanitl sandbox exec`; `IPC_006` ohne
+   Sitzung), steht der Befund als schließbarer Hinweis über dem Terminal,
+   in der Hinweisebene von HUM-302 (`HNoticeLayer`, `HDiagnosticCard` mit
+   `dense`), nie über der unteren Hälfte des Terminals. Der nächste Versuch
+   räumt ihn.
+7. **Ende der Sitzung.** Endet der Agent oder nennt der Status eine andere
+   Sandbox, enden alle Shell-Reiter: Ansicht abgehängt, Emulator verworfen,
+   der Agent-Reiter wird aktiv. Im Daemon beendet PID 1 die Shells ohnehin
+   (HUM-299).
+8. **Tastatur.** `Ctrl+Shift+T` öffnet eine Shell, `Ctrl+PageUp` und
+   `Ctrl+PageDown` wechseln zum vorigen und nächsten Reiter, rundum. Ein
+   Wechsel gibt dem neuen Reiter die Tastatur, unter der Regel von HUM-303.
+   Geprüft gegen jede Bindung in `app/lib`, `app/packages` und CONVENTIONS
+   3.9: Keine nutzt `T`, `PageUp` oder `PageDown`; die `Ctrl+Shift`-Familie
+   des Terminals ist `Enter`, `P`, `0`, `C`, `V`, die der Warteschlange `F`
+   und `L`. Die Griffe stehen in `shellShortcuts()`, ihre Aktionen aber nur
+   im Wirt des Terminals (`TerminalTabActions`) und nur, solange sie etwas
+   tun können: `Ctrl+Shift+T` mit `sandbox.exec` und laufender Sitzung, der
+   Wechsel ab zwei Reitern. Sonst gehen die Tasten wie bisher an den
+   Emulator; `Ctrl+PageUp`/`Ctrl+PageDown` erreichen dann den Agenten als
+   `CSI 5;5~`/`CSI 6;5~`. Der Emulator macht aus `Ctrl` mit Buchstabe nur
+   ohne `Shift` ein Steuerbyte, `Ctrl+T` (`0x14`) bleibt also beim Agenten.
+9. **Vertrag.** `DaemonClient.exec` mit `GrpcDaemonClient` und
+   `FakeDaemonClient` (Grenze vier, `TERM_002`, `IPC_006` ohne Sitzung und
+   für eine unbekannte Kennung am Terminal, `endShell` spielt das Ende);
+   `TerminalOpen.shellId`; `ShellStarted`; `DaemonInfo.offersShells`;
+   `DiagnosticCodes.terminalUnavailable`. `ProtoVersion.minor` 23,
+   `docs/PROTOCOL.md`. `parity.dart` nennt `Humanitl.Exec` bei
+   `features/sandbox/widgets/terminal_tabs`, `docs/reference/parity.md`
+   ohne UI-Lücke.
+10. **Aufbau.** Reitermodell und Notifier in
+    `features/sandbox/providers/terminal_tabs_provider.dart`
+    (`terminalTabsProvider`, `shellsOfferedProvider`, `shellHintSeenProvider`),
+    Leiste, Hinweise und Aktionen in
+    `features/sandbox/widgets/terminal_tabs.dart`; `SandboxTerminal` setzt
+    sie um das `TerminalPane` zusammen. UI-Texte nur über ARB (`en`, `de`,
+    angehängt). `docs/UX.md` 5.2, `docs/DESIGN.md` (Kürzeltabelle) und
+    CONVENTIONS 3.9 nennen die Reiter und Griffe.
+
+### Sicherheit
+Eine weitere Shell läuft mit der UID des Agenten in dessen Sandbox und
+PID-Namensraum; der Agent kann lesen, was dort getippt wird, und in ihr
+Terminal schreiben (`docs/SECURITY.md` 4, K-18). Die Oberfläche sagt es: Mit
+dem ersten Shell-Reiter erscheint einmalig der Hinweis „Do not type secrets
+here; the agent can read this shell.", bis er geschlossen wird; danach nie
+wieder (`terminalShellHintSeen` in der Zustandsdatei der Oberfläche). Die
+Aussage in `README.md` bleibt unberührt: Die App öffnet keine neue Tür, sie
+ruft nur die RPC, die der Daemon schon hat, und filtert nichts selbst.
+
+### Akzeptanzkriterien
+1. Ohne `sandbox.exec` keine Leiste und kein „+ Shell"; `Ctrl+Shift+T` ruft
+   kein `Exec`, `Ctrl+PageDown` erreicht den Agenten.
+2. Ohne laufende Sitzung kein „+ Shell".
+3. „+ Shell" ruft `Exec` mit leerem Kommando und der Größe der Ansicht; der
+   neue Reiter ist aktiv, sein `Open` trägt genau die Kennung aus `Exec`,
+   er hat einen eigenen Emulator, und der Wechsel zurück zum Agenten zeigt
+   dessen Emulator ohne neues `Open` der Shell.
+4. Tasten in einem Shell-Reiter erreichen nur diese Shell.
+5. `TERM_002` steht als Hinweis über dem Terminal und lässt sich schließen;
+   mit vier Reitern ist der Knopf gesperrt, und `Ctrl+Shift+T` ruft kein
+   `Exec`.
+6. Eine beendete Shell zeigt ihren Exit-Code am Reiter und unter dem
+   Terminal; ein Klick schließt den Reiter und verwirft seinen Emulator.
+7. Schließen eines laufenden Shell-Reiters beendet nur dessen Strom.
+8. Das Ende der Sitzung beendet alle Shell-Reiter.
+9. `Ctrl+Shift+T` öffnet, `Ctrl+PageUp`/`Ctrl+PageDown` wechseln rundum, der
+   neue Reiter hat die Tastatur, kein Byte eines Griffs erreicht eine Shell.
+10. Der Hinweis zur Mitlesbarkeit kommt einmal mit der ersten Shell und wird
+    beim Schließen in die Zustandsdatei geschrieben.
+11. Das schwebende Fenster zeigt den aktiven Reiter samt Leiste.
+
+### Tests
+`app/test/features/sandbox/terminal_tabs_test.dart`, je ein Test pro
+Kriterium, gegen `FakeDaemonClient` (nie gegen den Socket des Daemons),
+Plattform Linux; dazu die Grenze und die unbekannte Kennung im Fake.
+`shortcuts_map_to_intents_test` kennt die drei neuen Griffe.
+
+### Umsetzung (HUM-314)
+- **Vertrag.** `DaemonClient.exec` (`ExecRequest`/`ExecResponse` in
+  `grpc_daemon_client.dart`, `ExecResponseToDomain` in `convert.dart`),
+  `TerminalOpen.shellId` bis auf den Draht, `ShellStarted` in
+  `core/domain/terminal.dart`. Der Fake führt Grenze und Kennungen wie der
+  Daemon (`<acht Hex-Zeichen>-<n>`), sein `terminal()` nimmt für eine Shell
+  einen eigenen Weg, der den Schreibplatz des Agenten nicht berührt, und
+  `endTerminals` räumt die Shells mit. Ein zweiter Schreiber derselben Shell
+  wird im Fake nicht abgelehnt (steht dort).
+- **Sitzung.** `TerminalSession.build(sandboxId, {shellId = ''})`; sonst
+  unverändert. `TerminalPane` bekommt `shellId`, `tabs` und `notices`; alle
+  Lesezugriffe gehen über einen Getter `_session`, die Exit-Zeile nennt bei
+  einer Shell die Shell. Die Hinweisebene legt sich nur um den Emulator,
+  solange die Leiste steht, damit der Baum ohne Fähigkeit derselbe bleibt.
+- **Reiter.** `TerminalTabs` hört auf die laufende Sitzung und räumt bei
+  jedem Wechsel; `close` hängt ab und invalidiert die Sitzung der Shell.
+  `SandboxTerminal` schlüsselt den Pane je Reiter (der Agent behält
+  `Key('sandbox-terminal')`) und gibt beim Wechsel die Tastatur.
+
+### Kandidaten (HUM-314)
+- (A) RPC zum Beenden einer weiteren Shell (etwa `Exec` mit `close`, oder
+  `SIGHUP` an ihre Sitzung über die Tür), damit das Schließen eines Reiters
+  die Shell auch beenden kann und ihren Platz freigibt.
+- (B) RPC, die die offenen Shells einer Sitzung auflistet, damit die App
+  nach einem Neustart oder für Shells aus `humanitl sandbox exec` Reiter
+  wieder anbieten kann (auch für `attach` ohne Kennung, HUM-299 „Offen").
+- (C) Eigener Befundcode für die Grenze (`TERM_003`) samt ARB, statt
+  `TERM_002` mit eigenem Satz.
+- (D) Ein Befehl „New shell" in der Befehlspalette.
+- (E) Weitere Shells vom Agenten trennen (andere UID oder `hidepid`), dann
+  kann der Hinweis zur Mitlesbarkeit entfallen (HUM-299, Kandidat).
+
+### Review Runde 1 (HUM-314)
+- **Status ohne Antwort beendet keine Reiter** (Codex, major). `TerminalTabs`
+  räumt nur auf eine `AsyncData` des Sandbox-Status hin; Laden und Fehler
+  zählen nicht. Gemessen: Riverpod 3 trägt in `AsyncError` den letzten Wert
+  weiter, der beschriebene Verlust trat mit dem heutigen Status also nicht
+  ein; die Wache macht die Regel unabhängig davon. Test
+  `a_failed_status_question_keeps_the_shell_tabs`; Mutation (Wache weg und
+  ein Fehler ohne Wert) rot.
+- **Eine Shell, die der Daemon nicht mehr kennt** (Codex, major). Endete sie
+  vor dem ersten Anhängen und kam das `Open` nach `FINISHED_RETENTION`,
+  antwortete es `IPC_006`, und der Reiter hieß für immer „Shell 1". Jetzt
+  „Shell 1 · ended" (ARB `sandboxTerminalTabShellGone`, en und de), ein Klick
+  schließt. Test `a_shell_the_daemon_no_longer_knows_shows_ended_and_closes`;
+  Mutation (`gone` immer falsch) rot.
+- **Tastatur nur auf Wunsch** (Sonnet, minor). Ein Wechsel, den der Mensch
+  nicht auslöste (späte Antwort von `Exec`, Ende der Sitzung), nimmt einem
+  Textfeld die Tastatur nicht mehr (`TerminalTabsState.byUser`,
+  `isTextInputFocused`).
+- **Fake** (Codex, minor): prüft beim `Open` einer Shell erst die Sandbox
+  (`IPC_006`), schließt den Strom einer Shell nach ihrem `Exit`, verwirft
+  Tasten danach und nimmt abgehängte Ströme aus seiner Liste. Tests
+  `the_fake_refuses_a_live_shell_of_another_sandbox`,
+  `the_fake_closes_a_shell_stream_after_its_exit`.

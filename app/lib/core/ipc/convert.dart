@@ -719,6 +719,7 @@ extension TerminalCommandToProto on TerminalCommand {
         cols: open.cols,
         rows: open.rows,
         readOnly: open.readOnly,
+        shellId: open.shellId,
       ),
     ),
     final TerminalKeys keys => pb.TerminalInput(data: keys.bytes),
@@ -727,6 +728,16 @@ extension TerminalCommandToProto on TerminalCommand {
     ),
     TerminalDetach() => pb.TerminalInput(close: wkt.Empty()),
   };
+}
+
+/// `ExecResponse` to [ShellStarted] (HUM-299, HUM-314).
+extension ExecResponseToDomain on pb.ExecResponse {
+  /// The shell the daemon started.
+  ShellStarted toDomain() => ShellStarted(
+    shellId: shellId,
+    sandboxId: sandboxId,
+    command: List<String>.unmodifiable(command),
+  );
 }
 
 /// `TerminalOutput` to [TerminalFrame] (HUM-042).
