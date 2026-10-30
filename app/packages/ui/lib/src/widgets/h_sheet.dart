@@ -8,6 +8,7 @@ import '../tokens/tokens.dart';
 import '../tokens/typography.dart';
 import 'h_hairline.dart';
 import 'h_icon_button.dart';
+import 'h_keep_clear.dart';
 import 'h_layer_scope.dart';
 import 'h_pane_header.dart';
 
@@ -83,7 +84,11 @@ class HSheet extends StatelessWidget {
               },
             ),
         },
-        child: HTheme.host(context, HLayerScope(child: _panel(context))),
+        // Nichts Schwebendes legt sich über ein Blatt (HUM-300).
+        child: HTheme.host(
+          context,
+          HKeepClear(child: HLayerScope(child: _panel(context))),
+        ),
       ),
     );
   }

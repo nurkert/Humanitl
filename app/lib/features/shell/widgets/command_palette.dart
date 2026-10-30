@@ -126,6 +126,9 @@ class _CommandPaletteState extends State<CommandPalette> {
       onDismiss: widget.onClose,
       scrimSemanticsLabel: l10n.shellPaletteClose,
       width: 480,
+      // Die Palette liegt über allem, auch über dem schwebenden Terminal;
+      // es muss ihr nicht ausweichen (HUM-300).
+      keepClear: false,
       child: CallbackShortcuts(
         bindings: <ShortcutActivator, VoidCallback>{
           const SingleActivator(LogicalKeyboardKey.arrowDown): () => _move(1),

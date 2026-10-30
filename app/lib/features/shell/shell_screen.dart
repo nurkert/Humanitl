@@ -29,6 +29,7 @@ import '../rules/rules_screen.dart';
 import '../sandbox/providers/sandbox_status_provider.dart';
 import '../sandbox/sandbox_screen.dart';
 import '../sandbox/widgets/sandbox_terminal.dart';
+import '../sandbox/widgets/terminal_pane.dart' show terminalHoldsKeyboard;
 import '../settings/settings_sheet.dart';
 import '../setup/providers/setup_provider.dart';
 import 'agent_session_feed.dart';
@@ -40,6 +41,7 @@ import 'providers/setup_state.dart';
 import 'providers/theme.dart';
 import 'section.dart';
 import 'widgets/command_palette.dart';
+import 'widgets/floating_terminal.dart';
 import 'widgets/frozen_banner.dart';
 import 'widgets/frozen_sections.dart';
 import 'widgets/header_bar.dart';
@@ -343,17 +345,77 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
             },
             run: () => ref.read(terminalFontSizeProvider.notifier).apply(zoom),
           ),
+      // Dasselbe wie `Ctrl+Shift+P` und der Knopf über dem Terminal
+      // (HUM-300), und nur, solange es etwas zum Schweben gibt: einen
+      // laufenden Agenten, oder ein schwebendes Terminal zum Zurücklegen.
+      if (_agentRunning() ||
+          ref.read(terminalPlacementProvider) == TerminalPlacement.floating)
+        PaletteCommand(
+          id: 'toggle-terminal-float',
+          label:
+              ref.read(terminalPlacementProvider) == TerminalPlacement.floating
+              ? l10n.shellPaletteTerminalFloatLeave
+              : l10n.shellPaletteTerminalFloatEnter,
+          run: _toggleFloating,
+        ),
     ];
   }
 
   /// Whether a terminal with a session stands on the screen (HUM-303): over
-  /// the whole window, or in its pane while the Sandbox section shows.
+  /// the whole window, floating over the sections (HUM-300), or in its pane
+  /// while the Sandbox section shows.
   bool _terminalShown() {
-    final bool running =
-        ref.read(sandboxStatusProvider).value?.agentRunning ?? false;
-    return running &&
-        (ref.read(terminalPlacementProvider) == TerminalPlacement.fullWindow ||
+    final TerminalPlacement placement = ref.read(terminalPlacementProvider);
+    return _agentRunning() &&
+        (placement == TerminalPlacement.fullWindow ||
+            placement == TerminalPlacement.floating ||
             ref.read(navigationProvider) == Section.sandbox);
+  }
+
+  /// Whether the agent of a session runs: the same question the terminal
+  /// asks (`SandboxTerminal`).
+  bool _agentRunning() =>
+      ref.read(sandboxStatusProvider).value?.agentRunning ?? false;
+
+  /// Lets the terminal float, or puts it back (HUM-300). Without a running
+  /// agent nothing floats: the window would show the empty state and close
+  /// itself again. A floating window can always be put back.
+  void _toggleFloating() {
+    final TerminalPlacementNotifier placement = ref.read(
+      terminalPlacementProvider.notifier,
+    );
+    if (ref.read(terminalPlacementProvider) == TerminalPlacement.floating) {
+      placement.dock();
+    } else if (_agentRunning()) {
+      placement.float();
+    }
+  }
+
+  /// `Ctrl+Backquote` (HUM-303): the keyboard to the terminal that is shown.
+  ///
+  /// With a running agent and no terminal on the screen it lets the terminal
+  /// float first, as HUM-303 left room for (HUM-300), and asks one frame
+  /// later, once the window is built. Not while a layer holds the keyboard:
+  /// the terminal would refuse it, and a window opening behind a sheet helps
+  /// nobody.
+  void _focusTerminal() {
+    if (!_terminalShown() && _agentRunning() && !HLayerScope.holdsFocus()) {
+      ref.read(terminalPlacementProvider.notifier).float();
+      WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+        if (mounted) {
+          _requestTerminalFocus();
+        }
+      });
+      return;
+    }
+    _requestTerminalFocus();
+  }
+
+  /// Puts the floating terminal back into its pane and shows it there: the
+  /// "back to the sandbox" button of the floating window (HUM-300).
+  void _backToSandbox() {
+    ref.read(terminalPlacementProvider.notifier).dock();
+    _go(Section.sandbox);
   }
 
   /// Asks the terminal that is shown to take the keyboard (HUM-303).
@@ -469,13 +531,54 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
 
   /// Takes the keyboard when the terminal changes place.
   ///
-  /// The control that held the focus may just have been hidden, and a focus
-  /// that falls back to the root would leave every shortcut of the shell
-  /// mute, `Ctrl+Shift+Enter` included. The terminal takes the keys from
-  /// here one frame later, when its new host mounts it
-  /// (`TerminalPane.focusOnMount`).
-  void _terminalMoved(TerminalPlacement? previous, TerminalPlacement next) =>
+  /// **To or from the whole window** the control that held the focus may
+  /// just have been hidden, and a focus that falls back to the root would
+  /// leave every shortcut of the shell mute, `Ctrl+Shift+Enter` included.
+  /// The terminal takes the keys from here one frame later, when its new host
+  /// mounts it (`TerminalPane.focusOnMount`); the floating window does the
+  /// same through a request after the frame.
+  ///
+  /// **Between the pane and the floating window** nothing else is hidden, and
+  /// the keyboard stays where it is: whoever lets the terminal float from the
+  /// queue keeps deciding with `Enter` (HUM-300). Only a terminal that had the
+  /// keyboard takes it along to its new host. Should the focus nevertheless
+  /// end on a scope -- the window found no room, the holder went with the
+  /// old host --, the shell takes it, so its shortcuts keep working.
+  void _terminalMoved(TerminalPlacement? previous, TerminalPlacement next) {
+    if (previous == TerminalPlacement.fullWindow ||
+        next == TerminalPlacement.fullWindow) {
       _focus.requestFocus();
+      if (next == TerminalPlacement.floating) {
+        WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+          if (mounted) {
+            _requestTerminalFocus();
+          }
+        });
+      }
+      return;
+    }
+    // Asked now: the old host still stands, its emulator still has the
+    // keyboard if it had it.
+    final bool hadKeyboard = terminalHoldsKeyboard();
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      if (!mounted) {
+        return;
+      }
+      if (hadKeyboard) {
+        _requestTerminalFocus();
+      }
+      // Behind the change of focus just requested, which Flutter applies in
+      // a microtask of its own.
+      scheduleMicrotask(() {
+        final FocusNode? holder = FocusManager.instance.primaryFocus;
+        if (mounted &&
+            (holder == null || holder is FocusScopeNode) &&
+            !HLayerScope.keyboardClaimed) {
+          _focus.requestFocus();
+        }
+      });
+    });
+  }
 
   /// The terminal of the current session in place of rail, sections and
   /// status bar. The header bar stays: it is the title bar of the window,
@@ -501,8 +604,9 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   /// was. An [IndexedStack] keeps it, takes away its focus and tells every
   /// section through `Visibility.of` that it is not shown, so the decision
   /// keys of the queue are out of service while the terminal fills the
-  /// window. Its tickers stop with the [TickerMode]. A floating terminal
-  /// (HUM-300) becomes a sibling over [layout] in the same place.
+  /// window. Its tickers stop with the [TickerMode]. The floating terminal
+  /// (HUM-300) lives inside [layout], over the sections
+  /// (`FloatingTerminalLayer`).
   Widget _withTerminalHost({
     required bool fullWindow,
     required Widget layout,
@@ -635,7 +739,13 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
               ),
           FocusTerminalIntent: CallbackAction<FocusTerminalIntent>(
             onInvoke: (FocusTerminalIntent intent) {
-              _requestTerminalFocus();
+              _focusTerminal();
+              return null;
+            },
+          ),
+          ToggleTerminalFloatIntent: CallbackAction<ToggleTerminalFloatIntent>(
+            onInvoke: (ToggleTerminalFloatIntent intent) {
+              _toggleFloating();
               return null;
             },
           ),
@@ -728,8 +838,18 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                                       expanded: railExpanded,
                                       onToggle: rail.toggle,
                                     ),
+                                    // Das schwebende Terminal liegt über den
+                                    // Abschnitten und unter dem Blatt, nie
+                                    // über Leiste, Kopf- oder Statusleiste
+                                    // (HUM-300).
                                     Expanded(
-                                      child: _sections(section, frozen: !live),
+                                      child: FloatingTerminalLayer(
+                                        onBack: _backToSandbox,
+                                        child: _sections(
+                                          section,
+                                          frozen: !live,
+                                        ),
+                                      ),
                                     ),
                                   ],
                                 ),
