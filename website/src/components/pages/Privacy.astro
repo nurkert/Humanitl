@@ -1,0 +1,34 @@
+---
+import Base from '../../layouts/Base.astro';
+import { ui, type Lang } from '../../i18n/ui';
+import '../../styles/prose.css';
+
+interface Props {
+  lang: Lang;
+}
+const { lang } = Astro.props;
+const t = ui[lang];
+---
+
+<Base lang={lang} page="privacy" title={`${t.legal.privacyTitle} · Humanitl`} description={t.legal.privacyTitle}>
+  <main id="main" class="legal">
+    <article class="container prose">
+      <h1 class="chrome">{t.legal.privacyTitle}</h1>
+      <p>{t.privacy.updated}</p>
+      {
+        t.privacy.sections.map((section) => (
+          <>
+            <h2>{section.title}</h2>
+            <p set:html={section.html} />
+          </>
+        ))
+      }
+    </article>
+  </main>
+</Base>
+
+<style>
+  .legal {
+    padding: clamp(8rem, 18vh, 11rem) 0 6rem;
+  }
+</style>

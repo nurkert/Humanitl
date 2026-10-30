@@ -1,0 +1,27 @@
+/* Lesetext der Rechtsseiten: schmal, ruhig, gut lesbar auf Schwarz. */
+.prose {
+  max-width: 44rem;
+  color: var(--fg-1);
+  line-height: 1.75;
+}
+.prose h1 {
+  margin-bottom: 1.8rem;
+  font-size: clamp(2rem, 1.4rem + 2.4vw, 3.2rem);
+}
+.prose h2,
+.prose h3 {
+  margin: 2.4rem 0 0.7rem;
+  color: var(--fg);
+  font-size: 1.2rem;
+}
+.prose p,
+.prose ul {
+  margin: 0 0 1rem;
+}
+.prose strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+.prose a {
+  color: var(--fg);
+}
