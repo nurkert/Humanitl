@@ -4972,6 +4972,52 @@ vollständig durchsucht gemeldet.
 ### Referenzen
 HUM-025, HUM-247, RFC 1950 §2.2, RFC 1951 §3.2.4, `backlog/CONVENTIONS.md` 4.13.
 
+### Umsetzung (HUM-266)
+
+- **Zweite Lesart.** `inflate` liest bei `deflate` weiter erst den zlib-Rahmen. Endet
+  er vollständig im Budget, vergleicht `raw_reading_differs` den nackten Strom gegen
+  dessen Ausgabe. Weicht er ab (anderer Inhalt, kürzer oder länger) und endet er
+  sauber, steht in `Inflated::ambiguity` der Wert `Ambiguity::Readings`, und
+  `decode_body` meldet `truncated: true` mit `FINDINGS_002` ohne `fix`. Bytes hinter
+  dem Ende des nackten Stroms zählen nicht als Bruch, denn Python
+  `zlib.decompressobj(-15)` liest den Strom davor trotzdem; genau so endet der
+  Polyglott. Dasselbe gilt für einen nackten Strom, der nach der Abweichung mitten
+  im Block aufhört (`UnexpectedEof`): Ein Empfänger, der stückweise entpackt, hat
+  den abweichenden Teil schon ausgeliefert (Befund aus dem Review). Ist der Inhalt
+  des nackten Stroms ungültig, bleibt es bei der zlib-Lesart ohne Befund.
+- **Wörterbuch.** Ein gültiger zlib-Kopf mit `FDICT` scheitert am Entpacker dieser
+  Crate immer, weil der Scan das Wörterbuch nicht hat; bisher galt dann still der
+  nackte Strom. Endet der sauber, meldet der Scan jetzt `Ambiguity::PresetDictionary`
+  als `FINDINGS_002` und durchsucht die nackte Lesart (Befund aus dem Review).
+- **Was durchsucht wird.** Die zlib-Lesart, nicht beide. `GetBody` liefert über
+  `inflate` dieselben Bytes aus, und nur dann zeigen die Fundstellen auf den Wert,
+  den die Oberfläche anzeigt (HUM-119). Die nackte Lesart als zweiten Eintrag zu
+  durchsuchen hieße, Bereiche zu liefern, die in `GetBody` auf andere Bytes zeigen.
+  Die Lücke ist benannt; das verlangt 4.13.
+- **Budget.** Je Lesart dieselbe Grenze: Die zweite Lesart bekommt eine Kopie des
+  Budgets vor der zlib-Lesart. Ihre Ausgabe wird stückweise verglichen und
+  verworfen, es liegen also höchstens 16 KiB zusätzlich im Speicher, und entpackt
+  werden höchstens `allowance + 1` Bytes. Läuft sie über das Budget, gilt sie als
+  verschieden, weil die zlib-Lesart ganz hineinpasste. Hat schon die zlib-Lesart
+  das Budget erreicht, gibt es keine zweite Lesart; der Body ist dann ohnehin als
+  gekürzt gemeldet. Der Vorschlag aus der Fix-Idee, beim ersten abweichenden Byte
+  abzubrechen, ist nicht übernommen: Erst das Ende zeigt, ob der nackte Strom eine
+  gültige Lesart ist, und ein Abbruch dort hätte jeden zufällig durchrutschenden
+  Stored-Kopf zum Befund gemacht.
+- **Tests.** `the_polyglot_has_two_valid_readings` prüft die Datei selbst,
+  `a_deflate_polyglot_is_reported_and_not_called_complete` das Kriterium,
+  `ordinary_zlib_and_raw_deflate_have_one_reading` gewöhnliche Bodies aller Stufen
+  einschließlich `none`, `the_second_reading_stays_inside_the_same_budget` die
+  Grenzfälle der zweiten Lesart,
+  `a_naked_reading_that_diverges_and_then_stops_short_is_a_reading` den
+  abgeschnittenen nackten Strom, `a_zlib_header_with_a_preset_dictionary_is_a_gap`
+  den Kopf mit Wörterbuch. Die drei Bodies liegen als
+  `body_decoder-deflate-polyglot.bin`, `body_decoder-deflate-truncated-divergence.bin`
+  und `body_decoder-deflate-preset-dictionary.bin` in den Regressionen und unter
+  denselben Namen ohne Präfix im Corpus.
+- **Kandidat bleibt offen.** Den Anfang eines kaputten Stroms zu durchsuchen gehört
+  nicht zu diesem Issue.
+
 ---
 
 ## HUM-267 · Ein Test scheitert zufällig an „Text file busy"
