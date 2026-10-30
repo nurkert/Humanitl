@@ -110,6 +110,67 @@ const SingleActivator terminalFloatActivator = SingleActivator(
   includeRepeats: false,
 );
 
+/// Open a further shell in the running sandbox, as a tab of the terminal.
+/// `Ctrl+Shift+T` (HUM-314).
+class OpenShellIntent extends Intent {
+  /// Creates the intent.
+  const OpenShellIntent();
+}
+
+/// The chord that opens a further shell (HUM-314).
+///
+/// `T` for tab, as in every terminal on Linux that has tabs. Checked against
+/// every binding of the application (`app/lib`, `app/packages`, CONVENTIONS
+/// 3.9): no binding uses `T`, with or without modifiers. The `Ctrl+Shift`
+/// family of the terminal is `Enter` (HUM-298), `P` (HUM-300), `0` (HUM-301),
+/// `C` and `V` (HUM-313); the queue has `Ctrl+Shift+F` and `Ctrl+Shift+L`.
+///
+/// **Only the terminal acts on it.** The action stands in the host of the
+/// terminal (`SandboxTerminal`) and only while "+ Shell" is offered, so the
+/// chord does nothing anywhere else and, without the capability, goes to the
+/// emulator as before. The agent loses little while it is offered: the
+/// emulator turns `Ctrl` with a letter into a control byte only without
+/// `Shift`, so `Ctrl+T` (`0x14`, transpose in readline) stays with the agent,
+/// and only an agent that asked for the kitty keyboard protocol could have
+/// told `Ctrl+Shift+T` apart.
+///
+/// No repeats: a held chord would open a shell per repeat.
+const SingleActivator openShellActivator = SingleActivator(
+  LogicalKeyboardKey.keyT,
+  control: true,
+  shift: true,
+  includeRepeats: false,
+);
+
+/// Show the next tab of the terminal ([delta] 1) or the previous one
+/// ([delta] -1), around the end. `Ctrl+PageDown` and `Ctrl+PageUp` (HUM-314).
+class SwitchTerminalTabIntent extends Intent {
+  /// Creates the intent.
+  const SwitchTerminalTabIntent(this.delta);
+
+  /// 1 for the next tab, -1 for the previous one.
+  final int delta;
+}
+
+/// The chords that switch between the tabs of the terminal (HUM-314).
+///
+/// The keys of every tabbed terminal and browser on Linux. No binding of the
+/// application uses `PageUp` or `PageDown` (checked as for
+/// [openShellActivator]). The action stands only while there is more than
+/// one tab; with the agent's terminal alone the chords reach the agent as
+/// `CSI 5;5~` and `CSI 6;5~`, as before. With repeats: holding the chord walks
+/// through the tabs.
+const SingleActivator previousTerminalTabActivator = SingleActivator(
+  LogicalKeyboardKey.pageUp,
+  control: true,
+);
+
+/// See [previousTerminalTabActivator].
+const SingleActivator nextTerminalTabActivator = SingleActivator(
+  LogicalKeyboardKey.pageDown,
+  control: true,
+);
+
 /// Give the keyboard to the terminal wherever it is shown, without changing
 /// the layout. `Ctrl+Backquote` (HUM-303).
 class FocusTerminalIntent extends Intent {
@@ -346,7 +407,8 @@ const LogicalKeyboardKey railToggleKey = LogicalKeyboardKey.digit0;
 /// `Ctrl+Shift+Enter` for the terminal over the whole window (HUM-298) and
 /// `Ctrl+Backquote` for the keyboard to the terminal (HUM-303), the zoom
 /// chords of the terminal (HUM-301) and `Ctrl+Shift+P` for the floating
-/// terminal (HUM-300).
+/// terminal (HUM-300), `Ctrl+Shift+T` for a further shell and
+/// `Ctrl+PageUp`/`Ctrl+PageDown` for its tabs (HUM-314).
 Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
   for (int i = 0; i < navigationKeys.length; i++)
     SingleActivator(navigationKeys[i], control: true): NavIntent(i),
@@ -361,6 +423,9 @@ Map<ShortcutActivator, Intent> shellShortcuts() => <ShortcutActivator, Intent>{
   const TerminalFocusActivator(): const FocusTerminalIntent(),
   for (final TerminalZoom zoom in TerminalZoom.values)
     TerminalZoomActivator(zoom): TerminalZoomIntent(zoom),
+  openShellActivator: const OpenShellIntent(),
+  previousTerminalTabActivator: const SwitchTerminalTabIntent(-1),
+  nextTerminalTabActivator: const SwitchTerminalTabIntent(1),
 };
 
 /// The digit keys of the navigation shortcuts, in section order.

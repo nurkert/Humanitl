@@ -629,6 +629,29 @@ input, and every escape sequence in the pasted text is dropped, so an
 Flutter offers no primary selection on Linux, and the clipboard is filled
 only by an explicit action.
 
+**Further shells open as tabs of the terminal (HUM-314).** While a session
+runs and the daemon names `sandbox.exec` in its capabilities, a row of tabs
+stands under the banner: "Agent" first, always there, then one tab per
+further shell, then "+ Shell". Without the capability the row is absent and
+the terminal looks as before. "+ Shell" or `Ctrl+Shift+T` asks the daemon
+for an interactive shell next to the agent (`Exec`), with the size of the
+view, and shows it in a new tab; `Ctrl+PageUp` and `Ctrl+PageDown` walk the
+tabs around the end, and a switch hands the keyboard to the tab that
+appears. Every tab is the same terminal with everything above, zoom, copy
+and paste, the keyboard under the pointer and the refused clipboard of the
+agent included, and the floating window and the whole window show the tab
+that is active. The daemon allows four further shells; the button stops at
+four tabs, and when the daemon refuses (`TERM_002`, also for a shell this
+window does not show), the finding floats over the terminal as a notice.
+A shell that exits keeps its tab with the exit code, and a click closes it.
+The close glyph ends only the view: the daemon has no call that ends a
+shell, so a running one ends with its process or with the session. When
+the session ends, every shell tab goes with it. The first shell brings a
+one-time hint: do not type secrets there, the agent can read that shell
+(`docs/SECURITY.md` 4). The tab chords act only while they can: without
+the capability `Ctrl+Shift+T` does nothing, and with the agent's tab alone
+`Ctrl+PageUp` and `Ctrl+PageDown` stay with the agent.
+
 ### 5.3 Every bound key does something
 
 Every activator in `interceptShortcuts()` has an action in the same screen. A widget test compares the two key sets and fails if they differ; a binding without an action is deleted, not disabled. Today `/`, `Ctrl+D` and `N` are bound and mute.

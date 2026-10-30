@@ -34,6 +34,7 @@ import 'package:xterm2/ui.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/shortcuts/intents.dart';
+import '../../../core/ui/h_notice_layer.dart';
 import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/shell_glyph.dart';
 import '../../../core/ui/terminal_placement.dart';
@@ -107,13 +108,30 @@ class TerminalPane extends ConsumerStatefulWidget {
   /// Shows the terminal of [sandboxId], or the reason there is none.
   const TerminalPane({
     required this.sandboxId,
+    this.shellId = '',
     this.focusOnMount = false,
     this.floating = false,
+    this.tabs,
+    this.notices,
     super.key,
   });
 
   /// The session this pane belongs to; empty while nothing runs.
   final String sandboxId;
+
+  /// The further shell this pane shows (HUM-314), or empty for the agent's
+  /// terminal. Everything this pane does holds for a shell unchanged; only
+  /// the line at its end names the shell instead of the agent.
+  final String shellId;
+
+  /// The row of tabs under the banner (HUM-314), or none.
+  final Widget? tabs;
+
+  /// Notices that float over the emulator (HUM-302, HUM-314), or none. The
+  /// host passes them for as long as it shows tabs, not only while one
+  /// stands: wrapping the emulator per notice would rebuild it on every
+  /// arrival.
+  final Widget? notices;
 
   /// Whether the terminal takes the keyboard when it is mounted (HUM-298).
   ///
@@ -279,7 +297,8 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   @override
   void didUpdateWidget(TerminalPane oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.sandboxId != widget.sandboxId) {
+    if (oldWidget.sandboxId != widget.sandboxId ||
+        oldWidget.shellId != widget.shellId) {
       _attach();
       // A host that asked for the keyboard before any session ran -- the
       // whole window over the empty state -- gets it when the session
@@ -298,6 +317,10 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
     super.dispose();
   }
 
+  /// The session of this pane: the agent's terminal or a further shell's.
+  TerminalSessionProvider get _session =>
+      terminalSessionProvider(widget.sandboxId, shellId: widget.shellId);
+
   void _attach() {
     if (widget.sandboxId.isEmpty) {
       return;
@@ -309,9 +332,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
       if (!mounted) {
         return;
       }
-      unawaited(
-        ref.read(terminalSessionProvider(widget.sandboxId).notifier).attach(),
-      );
+      unawaited(ref.read(_session.notifier).attach());
     });
   }
 
@@ -447,24 +468,22 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
         ],
       );
     }
-    final TerminalSessionState session = ref.watch(
-      terminalSessionProvider(widget.sandboxId),
-    );
+    final TerminalSessionState session = ref.watch(_session);
     // Der Abriss steht als letzte Zeile im Terminal selbst, dort, wo der
     // Blick ist (HUM-058, Zeile 19): einmal je Abriss, in der gedämpften
     // Farbe der Palette (SGR 90), und der Rücklauf darüber bleibt. Er ist
     // eine Zeile dieser Anwendung und kein Byte des Agenten; der Agent sieht
     // sie nie.
-    ref.listen<TerminalSessionState>(
-      terminalSessionProvider(widget.sandboxId),
-      (TerminalSessionState? previous, TerminalSessionState next) {
-        if (next.reconnecting && !(previous?.reconnecting ?? false)) {
-          next.terminal.write(
-            '\r\n\x1b[90m${l10n.sandboxTerminalReconnecting}\x1b[0m\r\n',
-          );
-        }
-      },
-    );
+    ref.listen<TerminalSessionState>(_session, (
+      TerminalSessionState? previous,
+      TerminalSessionState next,
+    ) {
+      if (next.reconnecting && !(previous?.reconnecting ?? false)) {
+        next.terminal.write(
+          '\r\n\x1b[90m${l10n.sandboxTerminalReconnecting}\x1b[0m\r\n',
+        );
+      }
+    });
     final TerminalNotice? notice = ref.watch(heldNoticeProvider);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -482,13 +501,28 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
               notice.path,
             ),
           ),
+        ?widget.tabs,
         if (_strip(l10n, session) case final Widget strip) strip,
-        Expanded(child: _view(tokens, l10n, session)),
+        Expanded(
+          child: switch (widget.notices) {
+            final Widget notices => HNoticeLayer(
+              // Never over the bottom rows, where the human types.
+              maxHeightFor: (double region) => region / 2,
+              notices: notices,
+              child: _view(tokens, l10n, session),
+            ),
+            null => _view(tokens, l10n, session),
+          },
+        ),
         // Das Ende bekommt einen sichtbaren Platz, und zwar jedes Ende
         // (HUM-136). Der Exit-Code zuerst, weil er die genaueste Auskunft
         // ist; danach, was über das Ende des Stroms zu sagen ist.
         if (session.exitCode case final int code)
-          _ExitStrip(text: l10n.sandboxTerminalExited(code))
+          _ExitStrip(
+            text: widget.shellId.isEmpty
+                ? l10n.sandboxTerminalExited(code)
+                : l10n.sandboxTerminalShellExited(code),
+          )
         else if (session.phase == TerminalPhase.detached)
           _ExitStrip(
             text: _endText(l10n, session),
@@ -645,10 +679,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   /// not the place for every drag of the mouse. Trailing blanks of each line
   /// are dropped, as every terminal does; the emulator pads lines with them.
   void _copy() {
-    final Buffer buffer = ref
-        .read(terminalSessionProvider(widget.sandboxId))
-        .terminal
-        .buffer;
+    final Buffer buffer = ref.read(_session).terminal.buffer;
     final BufferRange? selection = _controller.selectionFor(buffer);
     if (selection == null) {
       return;
@@ -671,10 +702,11 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   /// skip both.
   void _paste() {
     // The session the human pasted into. The state of this pane outlives a
-    // change of sandbox (`didUpdateWidget`), so the answer of the clipboard
-    // may arrive while another session is shown; it then goes nowhere.
-    final String id = widget.sandboxId;
-    if (!_mayPaste(ref.read(terminalSessionProvider(id)))) {
+    // change of sandbox or shell (`didUpdateWidget`), so the answer of the
+    // clipboard may arrive while another session is shown; it then goes
+    // nowhere.
+    final TerminalSessionProvider pasted = _session;
+    if (!_mayPaste(ref.read(pasted))) {
       return;
     }
     unawaited(
@@ -683,14 +715,12 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
         if (text == null || text.isEmpty || !mounted) {
           return;
         }
-        if (id != widget.sandboxId) {
+        if (pasted != _session) {
           return;
         }
         // Asked again: the clipboard answers later, and meanwhile the session
         // may have ended or handed the keyboard to somebody else.
-        final TerminalSessionState session = ref.read(
-          terminalSessionProvider(id),
-        );
+        final TerminalSessionState session = ref.read(pasted);
         if (_mayPaste(session)) {
           session.terminal.paste(text);
         }
@@ -704,10 +734,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   /// the agent. Selecting changes nothing outside the terminal; copying it is
   /// a step of its own.
   void _selectAll() {
-    final Buffer buffer = ref
-        .read(terminalSessionProvider(widget.sandboxId))
-        .terminal
-        .buffer;
+    final Buffer buffer = ref.read(_session).terminal.buffer;
     _controller.setSelection(
       buffer.createAnchor(0, 0),
       buffer.createAnchor(buffer.viewWidth, buffer.height - 1),
@@ -728,9 +755,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
         event.buttons != kMiddleMouseButton) {
       return;
     }
-    final Terminal terminal = ref
-        .read(terminalSessionProvider(widget.sandboxId))
-        .terminal;
+    final Terminal terminal = ref.read(_session).terminal;
     final bool programTakesTheMouse =
         terminal.mouseMode != MouseMode.none &&
         !(HardwareKeyboard.instance.isShiftPressed &&

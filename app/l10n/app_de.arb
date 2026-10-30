@@ -1368,5 +1368,19 @@
   "shellFloatingTerminalBack": "Zurück zur Sandbox-Seite",
   "shellFloatingTerminalClose": "Schwebendes Terminal schließen (Strg+Umschalt+P)",
   "shellPaletteTerminalFloatEnter": "Terminal schweben lassen",
-  "shellPaletteTerminalFloatLeave": "Schwebendes Terminal zurücklegen"
+  "shellPaletteTerminalFloatLeave": "Schwebendes Terminal zurücklegen",
+  "sandboxTerminalTabsLabel": "Terminal-Reiter",
+  "sandboxTerminalTabAgent": "Agent",
+  "sandboxTerminalTabShell": "Shell {number}",
+  "sandboxTerminalTabShellExited": "Shell {number} · Exit {code}",
+  "sandboxTerminalTabShellExitedHint": "Shell endete mit Exit-Code {code}; Klick schließt den Reiter",
+  "sandboxTerminalNewShell": "Shell",
+  "sandboxTerminalNewShellHint": "Weitere Shell in dieser Sandbox öffnen (Strg+Umschalt+T)",
+  "sandboxTerminalNewShellFull": "Vier weitere Shells sind offen; erst eine schließen",
+  "sandboxTerminalCloseShell": "Reiter von Shell {number} schließen; eine laufende Shell läuft weiter, bis sie endet oder die Sitzung endet",
+  "sandboxTerminalShellExited": "Die Shell endete mit Exit-Code {code}.",
+  "sandboxTerminalShellHint": "Hier keine Geheimnisse tippen; der Agent kann diese Shell mitlesen.",
+  "sandboxTerminalShellHintDismiss": "Verstanden",
+  "sandboxTerminalTabShellGone": "Shell {number} · beendet",
+  "sandboxTerminalTabShellGoneHint": "Shell beendet, Exit-Code unbekannt; Klick schließt den Reiter"
 }
