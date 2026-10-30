@@ -267,13 +267,29 @@ jobs:
           cd .. && ./tests/escape/macos/run.sh daemon/target/debug
       - name: The macOS app builds (HUM-315)
         # The runner under app/macos, the Dart code that only macOS takes
-        # (lstat, the window, the restart through launchd) and its tests.
+        # (lstat, the window, the restart through launchd) and its tests. A
+        # failing command leaves the end of its output in an annotation, so the
+        # reason shows on the run summary without opening the job log.
         run: |
-          set -euo pipefail
-          make flutter-codegen
+          set -uo pipefail
+          step() {
+            local out="$RUNNER_TEMP/app-step.log" text status=0
+            "$@" >"$out" 2>&1 || status=$?
+            cat "$out"
+            if (( status != 0 )); then
+              text="$* failed with $status"$'\n'"$(tail -40 "$out")"
+              # Workflow commands: first %, then CR and LF.
+              text="${text//%/%25}"
+              text="${text//$'\r'/%0D}"
+              text="${text//$'\n'/%0A}"
+              printf '::error title=macOS app::%s\n' "$text"
+              exit "$status"
+            fi
+          }
+          step make flutter-codegen
           cd app
-          flutter test test/core/ipc test/core/ui test/features/shell
-          flutter build macos --debug
+          step flutter test test/core/ipc test/core/ui test/features/shell
+          step flutter build macos --debug
       - name: The daemon as a launchd agent (HUM-314)
         # A fresh runner: install the agent from the build, wait until the
         # daemon answers, check the sandbox through it, take it away again.

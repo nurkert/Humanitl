@@ -89,7 +89,11 @@ protoc --proto_path=proto --dart_out=grpc:"$DART_OUT" "${PROTO_FILES[@]}"
 # Drift-Wachhund fuer CI: `generated/` ist gitignored, der Hash nicht. Ohne
 # Dateien gibt es keinen Hash: `sha256sum` ohne Argumente laese stdin und
 # schriebe den Hash ueber nichts als `-`, und der Wachhund waere blind.
-mapfile -t dart_files < <(cd "$DART_OUT" && find . -type f -name '*.dart' | LC_ALL=C sort)
+# Eine Schleife statt `mapfile`: die Bash 3.2 von macOS kennt es nicht (HUM-315).
+dart_files=()
+while IFS= read -r file; do
+  dart_files+=("$file")
+done < <(cd "$DART_OUT" && find . -type f -name '*.dart' | LC_ALL=C sort)
 if (( ${#dart_files[@]} == 0 )); then
   echo "protoc wrote no .dart files to $DART_OUT; refusing to write $HASH_FILE" >&2
   exit 1
@@ -98,7 +102,13 @@ fi
 # laesst nie einen halben Hash zurueck, den `git diff` fuer echt hielte.
 hash_tmp="$(mktemp "$HASH_FILE.XXXXXX")"
 trap 'rm -f "$hash_tmp"' EXIT
-( cd "$DART_OUT" && sha256sum -- "${dart_files[@]}" ) > "$hash_tmp"
+# `shasum -a 256` schreibt dasselbe Format, wo `sha256sum` fehlt (älteres macOS).
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256=(sha256sum)
+else
+  sha256=(shasum -a 256)
+fi
+( cd "$DART_OUT" && "${sha256[@]}" -- "${dart_files[@]}" ) > "$hash_tmp"
 mv -f "$hash_tmp" "$HASH_FILE"
 trap - EXIT
 
