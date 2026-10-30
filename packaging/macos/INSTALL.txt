@@ -1,0 +1,22 @@
+Humanitl @VERSION@ for macOS (Apple Silicon and Intel)
+=======================================================
+
+1. Drag Humanitl.app into Applications.
+
+2. This build is signed ad hoc, not with an Apple Developer ID. macOS
+   therefore refuses the first start. Allow it once, either in
+   System Settings > Privacy & Security > "Open Anyway", or in a terminal:
+
+       xattr -dr com.apple.quarantine /Applications/Humanitl.app
+
+3. Start Humanitl. On the setup screen, "Set up the service" installs the
+   background service as a launchd agent (`humanitl daemon install`); it then
+   starts at every login.
+
+The command line is inside the app:
+
+    /Applications/Humanitl.app/Contents/MacOS/bin/humanitl doctor
+
+The sandbox on macOS is Seatbelt (sandbox-exec). What it guarantees and how
+that differs from Linux is in section 12 of the security document:
+https://github.com/nurkert/Humanitl/blob/main/docs/SECURITY.md

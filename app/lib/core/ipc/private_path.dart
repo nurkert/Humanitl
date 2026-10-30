@@ -12,11 +12,13 @@
 /// `FileStat` knows neither the owner nor whether it followed a link, so the
 /// check calls `statx(2)` through FFI with `AT_SYMLINK_NOFOLLOW`. The layout of
 /// `struct statx` is the same on every Linux architecture, unlike
-/// `struct stat`.
+/// `struct stat`. macOS has no `statx`; there the check calls `lstat(2)`,
+/// whose `struct stat` has one layout on both Mac architectures (HUM-325).
 library;
 
 import 'dart:convert';
 import 'dart:ffi' as ffi;
+import 'dart:io' show Platform;
 
 /// What a checked path is expected to be.
 enum PrivateEntry {
@@ -30,10 +32,13 @@ enum PrivateEntry {
 /// Owner and mode of a path as `lstat` sees it, link not followed.
 class PathStat {
   /// Creates a stat record; [mode] carries the file type bits (`S_IFMT`).
-  const PathStat({required this.uid, required this.mode});
+  const PathStat({required this.uid, required this.mode, this.gid = -1});
 
   /// The owning user id.
   final int uid;
+
+  /// The owning group id, -1 when not read.
+  final int gid;
 
   /// Type and permission bits, as in `st_mode`.
   final int mode;
@@ -133,6 +138,9 @@ PrivatePathProblem? privatePathProblem(
 /// `lstat` through `statx(2)`: owner and mode of [path], a final symlink not
 /// followed. Null when the call fails.
 PathStat? lstatPath(String path) {
+  if (Platform.isMacOS) {
+    return _lstatMac(path);
+  }
   final List<int> bytes = utf8.encode(path);
   final ffi.Pointer<ffi.Uint8> name = _malloc(bytes.length + 1).cast();
   final ffi.Pointer<ffi.Uint8> buffer = _malloc(_statxSize).cast();
@@ -150,9 +158,11 @@ PathStat? lstatPath(String path) {
     if (result != 0) {
       return null;
     }
-    // struct statx: stx_uid at byte 20 (u32), stx_mode at byte 28 (u16).
+    // struct statx: stx_uid at byte 20 (u32), stx_gid at byte 24 (u32),
+    // stx_mode at byte 28 (u16).
     return PathStat(
       uid: buffer.cast<ffi.Uint32>()[5],
+      gid: buffer.cast<ffi.Uint32>()[6],
       mode: buffer.cast<ffi.Uint16>()[14],
     );
   } finally {
@@ -160,6 +170,39 @@ PathStat? lstatPath(String path) {
     _free(buffer.cast());
   }
 }
+
+/// `lstat(2)` on macOS: `struct stat` with 64-bit inodes, `st_mode` at byte 4
+/// (u16), `st_uid` at byte 16 and `st_gid` at byte 20 (u32), 144 bytes long.
+PathStat? _lstatMac(String path) {
+  final List<int> bytes = utf8.encode(path);
+  final ffi.Pointer<ffi.Uint8> name = _malloc(bytes.length + 1).cast();
+  final ffi.Pointer<ffi.Uint8> buffer = _malloc(_statxSize).cast();
+  try {
+    name.asTypedList(bytes.length + 1)
+      ..setAll(0, bytes)
+      ..[bytes.length] = 0;
+    if (_lstat(name, buffer) != 0) {
+      return null;
+    }
+    return PathStat(
+      uid: buffer.cast<ffi.Uint32>()[4],
+      gid: buffer.cast<ffi.Uint32>()[5],
+      mode: buffer.cast<ffi.Uint16>()[2],
+    );
+  } finally {
+    _free(name.cast());
+    _free(buffer.cast());
+  }
+}
+
+/// On Intel Macs the plain `lstat` symbol still has 32-bit inodes and another
+/// layout; `lstat$INODE64` is the one that matches. Apple Silicon has only
+/// the 64-bit one, under the plain name.
+final int Function(ffi.Pointer<ffi.Uint8>, ffi.Pointer<ffi.Uint8>) _lstat =
+    _libc.lookupFunction<
+      ffi.Int32 Function(ffi.Pointer<ffi.Uint8>, ffi.Pointer<ffi.Uint8>),
+      int Function(ffi.Pointer<ffi.Uint8>, ffi.Pointer<ffi.Uint8>)
+    >(ffi.Abi.current() == ffi.Abi.macosX64 ? r'lstat$INODE64' : 'lstat');
 
 const int _atFdCwd = -100;
 const int _atSymlinkNoFollow = 0x100;

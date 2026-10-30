@@ -119,7 +119,10 @@ impl Chain {
     }
 
     fn out(&self, name: &str) -> PathBuf {
-        self.dir.path().join(name)
+        // Kanonisch: Unter macOS liegt das temporäre Verzeichnis hinter dem
+        // Verweis `/var`, und der Export lehnt Pfade über Verweise ab
+        // (HUM-312).
+        self.dir.path().canonicalize().unwrap().join(name)
     }
 }
 
@@ -671,7 +674,8 @@ async fn a_line_being_written_behind_the_head_is_no_break() {
     let page = answer(&server, Op::Query(Query::default())).await;
     assert_eq!(page.entries, head.seq);
 
-    let out = dir.path().join("live.jsonl");
+    // Kanonisch, siehe `Fixture::out` (HUM-312).
+    let out = dir.path().canonicalize().unwrap().join("live.jsonl");
     let exported = answer(&server, export("jsonl", &out)).await;
     assert_eq!(exported.entries, head.seq);
     assert_eq!(

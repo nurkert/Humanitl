@@ -6,7 +6,7 @@
 //! process here carries: `PR_SET_NO_NEW_PRIVS`, the bridge filter of the
 //! parent, the same mounts, namespaces, environment and working directory.
 //! Before `exec` the child installs the agent's own filter on top, the silent
-//! gate ([`crate::seccomp::Gate::Silent`]), and proves it: `socket(AF_UNIX)`,
+//! gate ([`crate::linux::seccomp::Gate::Silent`]), and proves it: `socket(AF_UNIX)`,
 //! which the parent's filter still allows, must answer `EPERM`, or the shell
 //! never starts. Nobody enters the sandbox from outside; there is no `setns`
 //! and no `nsenter`.
@@ -59,7 +59,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use seccompiler::BpfProgram;
 
-use crate::seccomp;
+use crate::linux::seccomp;
 
 /// How many further shells may live at the same time.
 pub const MAX_SHELLS: usize = 4;
@@ -496,7 +496,7 @@ fn child(
     if seccomp::probe_socket(u64::from(unix), u64::from(stream)) != Err(libc::EPERM) {
         fail(b"the agent's filter does not refuse AF_UNIX", EXIT_SETUP);
     }
-    crate::reset_signal_dispositions();
+    crate::linux::reset_signal_dispositions();
     // SAFETY: `argv` and `envp` are NUL-terminated arrays of pointers to
     // NUL-terminated strings that the parent keeps alive; this copy of them
     // lives until the exec.
@@ -528,7 +528,7 @@ mod tests {
     use super::*;
 
     fn fd() -> OwnedFd {
-        let (a, _b) = crate::channel::channel().unwrap();
+        let (a, _b) = crate::linux::channel::channel().unwrap();
         a
     }
 

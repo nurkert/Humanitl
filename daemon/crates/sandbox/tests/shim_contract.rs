@@ -32,6 +32,8 @@
 //! `single_socket` melden hier deshalb `fail`; geprüft werden die Namen und die
 //! Grammatik, nie das Ergebnis einer Prüfung.
 
+// Der Shim mit seccomp läuft nur unter Linux (HUM-312).
+#![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::BTreeSet;

@@ -170,7 +170,7 @@ pub(crate) struct LaunchOnce {
     pub(crate) status: PipeReader,
     /// Die Seite des Daemons an der Tür zu weiteren Shells (HUM-299), nur
     /// für einen Start am eigenen Pseudoterminal.
-    pub(crate) shells: Option<OwnedFd>,
+    pub(crate) shells: Option<crate::shell::DoorSeed>,
 }
 
 /// Die vollständige Kommandozeile samt allem, was der Start braucht.
@@ -213,6 +213,10 @@ pub struct LaunchPlan {
     /// Diff des Laufs auftaucht. Die Zusammenfassung nennt die Liste, damit die
     /// Lücke benannt ist und nicht bloß vorhanden.
     pub unprotected: Vec<PathBuf>,
+    /// Ob [`LaunchPlan::env`] die Umgebung des Programms selbst ist
+    /// (`sandbox-exec` reicht sie an das Kommando weiter, HUM-323) oder
+    /// schon in `argv` steht (bwrap mit `--setenv`).
+    pub(crate) env_on_program: bool,
     /// Das Programm, `argv[0]`, aufgelöst.
     pub(crate) program: PathBuf,
     /// Was der Start einmal entnimmt; danach `None`.

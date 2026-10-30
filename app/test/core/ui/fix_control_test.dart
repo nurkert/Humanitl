@@ -433,6 +433,22 @@ void main() {
       );
     });
 
+    test('takes the command line of an app in /Applications on macOS', () {
+      // `/Applications` is `drwxrwxr-x root:admin` on every Mac (HUM-325).
+      const String app = '/Applications/Humanitl.app/Contents/MacOS';
+      int modes(String path) => path == '/Applications' ? 0x1FD : 0x1ED;
+      ({String? path, String? refusal}) candidate(bool rootAdmin) =>
+          installServiceCandidate(
+            runningExecutable: '$app/Humanitl',
+            exists: (String p) => p == '$app/bin/humanitl',
+            modeOf: modes,
+            adminOwned: (String p) => rootAdmin && p == '/Applications',
+          );
+      expect(candidate(true).path, '$app/bin/humanitl');
+      expect(candidate(false).path, isNull, reason: 'any other owner');
+      expect(candidate(false).refusal, contains('somebody other than you'));
+    });
+
     test('never falls back to PATH', () {
       expect(found('/opt/humanitl/humanitl-app', (String _) => false), isNull);
     });

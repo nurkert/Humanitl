@@ -49,6 +49,7 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl daemon status`](#humanitl-daemon-status) Ask the daemon who it is
 - [`humanitl daemon install`](#humanitl-daemon-install) Write the systemd user unit that starts the daemon at login
 - [`humanitl daemon logs`](#humanitl-daemon-logs) Show the journal of the daemon: journalctl --user -u humanitld
+- [`humanitl daemon restart`](#humanitl-daemon-restart) Restart the background service: launchctl kickstart on macOS, systemctl --user restart on Linux
 - [`humanitl daemon uninstall`](#humanitl-daemon-uninstall) Stop and disable the service and remove the unit daemon install wrote
 - [`humanitl daemon retire-if-idle`](#humanitl-daemon-retire-if-idle) Ask the daemon to end now if no agent session holds it (after an upgrade)
 - [`humanitl doctor`](#humanitl-doctor) Check this machine: one line per precondition, with a fix
@@ -1424,6 +1425,7 @@ Commands:
   status          Ask the daemon who it is
   install         Write the systemd user unit that starts the daemon at login
   logs            Show the journal of the daemon: journalctl --user -u humanitld
+  restart         Restart the background service: launchctl kickstart on macOS, systemctl --user restart on Linux
   uninstall       Stop and disable the service and remove the unit daemon install wrote
   retire-if-idle  Ask the daemon to end now if no agent session holds it (after an upgrade)
   help            Print this message or the help of the given subcommand(s)
@@ -1539,6 +1541,33 @@ Options:
 
   -n, --lines <N>
           How many lines to show; the default of journalctl without it
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl daemon restart
+
+```text
+Restart the background service: launchctl kickstart on macOS, systemctl --user restart on Linux
+
+Usage: humanitl daemon restart [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
 
   -v, --verbose...
           Explain what is happening; repeat for more

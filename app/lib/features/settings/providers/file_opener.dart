@@ -18,11 +18,14 @@ final Provider<FileOpener> fileOpenerProvider = Provider<FileOpener>(
   (Ref ref) => openWithDesktop,
 );
 
-/// `xdg-open PATH`, without a shell; false when it could not start or did
-/// not end with 0.
+/// `xdg-open PATH` (on macOS `open PATH`, HUM-325), without a shell; false
+/// when it could not start or did not end with 0.
 Future<bool> openWithDesktop(String path) async {
   try {
-    final ProcessResult result = await Process.run('xdg-open', <String>[path]);
+    final ProcessResult result = await Process.run(
+      Platform.isMacOS ? 'open' : 'xdg-open',
+      <String>[path],
+    );
     return result.exitCode == 0;
   } on ProcessException {
     return false;

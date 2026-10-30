@@ -13,6 +13,8 @@
 //! `pass`. Ohne diesen Umweg läse „kein bwrap auf dieser Maschine" sich in der
 //! Auswertung wie „die Maske hat gehalten".
 
+// Startet Sandboxen mit dem Linux-Backend (HUM-312).
+#![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::ffi::OsString;

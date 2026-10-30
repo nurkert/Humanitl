@@ -6,6 +6,7 @@ import 'package:humanitl/core/ipc/daemon_paths.dart';
 void main() {
   test('XDG_RUNTIME_DIR wins', () {
     final DaemonPaths paths = DaemonPaths.resolve(
+      macOS: false,
       environment: <String, String>{'XDG_RUNTIME_DIR': '/run/user/1000'},
       uid: 1000,
       directoryExists: (_) => false,
@@ -17,6 +18,7 @@ void main() {
 
   test('then /run/user/<uid> when it exists', () {
     final DaemonPaths paths = DaemonPaths.resolve(
+      macOS: false,
       environment: const <String, String>{},
       uid: 1234,
       directoryExists: (String path) => path == '/run/user/1234',
@@ -27,6 +29,7 @@ void main() {
 
   test('then TMPDIR or /tmp, flagged as a fallback', () {
     final DaemonPaths tmp = DaemonPaths.resolve(
+      macOS: false,
       environment: const <String, String>{},
       uid: 7,
       directoryExists: (_) => false,
@@ -35,6 +38,7 @@ void main() {
     expect(tmp.fallbackUsed, isTrue);
 
     final DaemonPaths custom = DaemonPaths.resolve(
+      macOS: false,
       environment: <String, String>{'TMPDIR': '/var/tmp'},
       uid: 7,
       directoryExists: (_) => false,
@@ -42,8 +46,51 @@ void main() {
     expect(custom.token, '/var/tmp/humanitl-7/token');
   });
 
+  test('on macOS the runtime directory lies under Application Support', () {
+    final DaemonPaths mac = DaemonPaths.resolve(
+      environment: <String, String>{'HOME': '/Users/me', 'TMPDIR': '/var/x/T/'},
+      uid: 501,
+      directoryExists: (_) => false,
+      macOS: true,
+    );
+    expect(
+      mac.socket,
+      '/Users/me/Library/Application Support/Humanitl/run/daemon.sock',
+    );
+    expect(mac.fallbackUsed, isFalse);
+    final DaemonPaths long = DaemonPaths.resolve(
+      environment: <String, String>{
+        'HOME': '/Users/${'x' * 50}',
+        'TMPDIR': '/var/x/T',
+      },
+      uid: 501,
+      directoryExists: (_) => false,
+      macOS: true,
+    );
+    expect(long.runtimeDir, '/var/x/T/humanitl-501');
+    expect(long.fallbackUsed, isTrue);
+    final DaemonPaths homeless = DaemonPaths.resolve(
+      environment: const <String, String>{},
+      uid: 501,
+      directoryExists: (_) => false,
+      macOS: true,
+    );
+    expect(
+      homeless.runtimeDir,
+      '/tmp/humanitl-501-home/Library/Application Support/Humanitl/run',
+    );
+    final DaemonPaths linux = DaemonPaths.resolve(
+      environment: <String, String>{'HOME': '/home/me'},
+      uid: 1000,
+      directoryExists: (_) => false,
+      macOS: false,
+    );
+    expect(linux.socket, '/tmp/humanitl-1000/daemon.sock');
+  });
+
   test('an empty XDG_RUNTIME_DIR counts as unset', () {
     final DaemonPaths paths = DaemonPaths.resolve(
+      macOS: false,
       environment: <String, String>{'XDG_RUNTIME_DIR': ''},
       uid: 1000,
       directoryExists: (String path) => path == '/run/user/1000',

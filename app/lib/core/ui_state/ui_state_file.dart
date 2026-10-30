@@ -28,11 +28,21 @@ class UiStateFile {
   /// `$XDG_STATE_HOME/humanitl/ui-state.json`, and `~/.local/state/...` when
   /// the variable is unset -- the same order the daemon uses for its own
   /// directories (`humanitl_config::Paths`).
-  factory UiStateFile.resolve({Map<String, String>? environment}) {
+  ///
+  /// On macOS without `XDG_STATE_HOME` it lies under
+  /// `~/Library/Application Support/Humanitl`, next to the daemon's runtime
+  /// directory (HUM-325).
+  factory UiStateFile.resolve({Map<String, String>? environment, bool? macOS}) {
     final Map<String, String> env = environment ?? Platform.environment;
     final String? state = env['XDG_STATE_HOME'];
+    final String home = env['HOME'] ?? '.';
+    if ((state == null || state.isEmpty) && (macOS ?? Platform.isMacOS)) {
+      return UiStateFile(
+        '$home/Library/Application Support/Humanitl/$fileName',
+      );
+    }
     final String base = state == null || state.isEmpty
-        ? '${env['HOME'] ?? '.'}/.local/state'
+        ? '$home/.local/state'
         : state;
     return UiStateFile('$base/humanitl/$fileName');
   }

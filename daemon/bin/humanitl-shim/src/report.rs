@@ -387,12 +387,8 @@ mod tests {
     use super::*;
 
     fn pipe() -> (OwnedFd, OwnedFd) {
-        let mut fds = [0 as libc::c_int; 2];
-        // SAFETY: `fds` is a valid two-element array for pipe2.
-        let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
-        assert_eq!(rc, 0);
-        // SAFETY: both descriptors were just created and belong to this test.
-        unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) }
+        let (reader, writer) = std::io::pipe().expect("a pipe");
+        (OwnedFd::from(reader), OwnedFd::from(writer))
     }
 
     #[test]
@@ -457,6 +453,8 @@ mod tests {
 
     /// The walk sees a socket in a place it reaches, keeps its bounds and
     /// stays out of `/proc`.
+    // Reads /sys and walks a Linux filesystem (HUM-323).
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_socket_walk_finds_a_socket_within_its_bounds() {
         // Direkt unter /tmp, nicht unter TMPDIR: der Suchlauf reicht drei
@@ -488,6 +486,8 @@ mod tests {
         let _ = fs::remove_file(&path);
     }
 
+    // Reads /sys and walks a Linux filesystem (HUM-323).
+    #[cfg(target_os = "linux")]
     #[test]
     fn interfaces_include_loopback() {
         let names = interfaces().unwrap();

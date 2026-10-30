@@ -722,7 +722,8 @@ fn value(rest: &mut impl Iterator<Item = OsString>, flag: &str) -> Result<PathBu
         .ok_or_else(|| usage(format!("{flag} needs a value")))
 }
 
-#[cfg(test)]
+// Plant mit `BwrapBackend`; bwrap gibt es nur unter Linux (HUM-312).
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

@@ -3,8 +3,9 @@
 Applies to: Humanitl 0.1
 
 **To install Humanitl, read [the install guide](guides/install.md).** It covers
-the prerequisites, the `.deb`, the AppImage, the archive, enabling the user
-service, checking the installation and uninstalling.
+the prerequisites, the `.deb`, the AppImage, the archive, the macOS disk image,
+enabling the user service, checking the installation and uninstalling. How the
+macOS app and its disk image are built is in `packaging/macos/` (HUM-326).
 
 This page keeps what the guide leaves out: the APT repository, switching
 between install forms, why the systemd unit is hardened the way it is, the

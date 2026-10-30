@@ -88,6 +88,26 @@ activates the units it ships. To remove: \`humanitl daemon uninstall\`, then
 \`humanitl-${version}-linux-x86_64.tar.gz\` runs without installation;
 \`INSTALL.txt\` inside it explains how.
 
+## Install on macOS (Apple Silicon and Intel)
+
+Open \`Humanitl-${version}-macos.dmg\` and drag Humanitl into Applications.
+The app is signed ad hoc, not with an Apple Developer ID, so macOS refuses the
+first start: allow it once under System Settings › Privacy & Security ›
+Open Anyway, or in a terminal:
+
+\`\`\`sh
+shasum -a 256 -c SHA256SUMS --ignore-missing
+xattr -dr com.apple.quarantine /Applications/Humanitl.app
+\`\`\`
+
+On the setup screen, "Set up the service" installs the daemon as a launchd
+agent. The command line is inside the app:
+\`/Applications/Humanitl.app/Contents/MacOS/bin/humanitl\`. The sandbox on
+macOS is Seatbelt; what it guarantees, and how that differs from Linux, is in
+\`docs/SECURITY.md\`. The release run checks the disk image on a fresh macOS
+runner: signature, both architectures, the version, a start of the app, and
+the Seatbelt escape tests against the binaries inside it.
+
 ## Milestone status (from README.md)
 
 $milestones

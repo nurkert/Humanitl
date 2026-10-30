@@ -204,9 +204,7 @@ void main() {
       expect(diagnostic.why, contains('does not match the session token'));
       expect(
         diagnostic.fix,
-        const FixAction.copyCommand(
-          command: ClientDiagnostics.restartUnitCommand,
-        ),
+        FixAction.copyCommand(command: ClientDiagnostics.restartUnitCommand),
       );
     });
 

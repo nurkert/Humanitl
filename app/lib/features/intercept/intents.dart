@@ -18,6 +18,7 @@ import 'package:flutter/widgets.dart';
 
 import '../../core/shortcuts/intents.dart'
     show
+        withCommandOnMac,
         AllowIntent,
         BlockIntent,
         EditIntent,
@@ -27,6 +28,7 @@ import '../../core/shortcuts/intents.dart'
 
 export '../../core/shortcuts/intents.dart'
     show
+        withCommandOnMac,
         AllowIntent,
         BlockIntent,
         EditIntent,
@@ -168,76 +170,77 @@ const List<LogicalKeyboardKey> rememberKeys = <LogicalKeyboardKey>[
 /// moved has not read the next URL (`docs/UX.md` 5.4). The screen refuses a
 /// repeat a second time, because a test harness -- and some platforms -- can
 /// deliver a plain down event for what a person meant as one press.
-Map<ShortcutActivator, Intent>
-interceptShortcuts() => <ShortcutActivator, Intent>{
-  const SingleActivator(LogicalKeyboardKey.enter, includeRepeats: false):
-      const AllowIntent(),
-  const SingleActivator(LogicalKeyboardKey.numpadEnter, includeRepeats: false):
-      const AllowIntent(),
-  const SingleActivator(LogicalKeyboardKey.keyA, includeRepeats: false):
-      const AllowIntent(),
-  const SingleActivator(
-    LogicalKeyboardKey.keyF,
-    control: true,
-    includeRepeats: false,
-  ): const AllowIntent(
-    chord: true,
-  ),
-  const SingleActivator(LogicalKeyboardKey.keyB, includeRepeats: false):
-      const BlockIntent(),
-  // `Ctrl+Enter` blocks with the note, from inside the field: a chord works
-  // where a single letter must not (HUM-072).
-  const SingleActivator(
-    LogicalKeyboardKey.enter,
-    control: true,
-    includeRepeats: false,
-  ): const BlockIntent(
-    chord: true,
-  ),
-  const SingleActivator(
-    LogicalKeyboardKey.keyL,
-    control: true,
-    includeRepeats: false,
-  ): const BlockIntent(
-    chord: true,
-  ),
-  const SingleActivator(LogicalKeyboardKey.keyJ): const NextFlowIntent(),
-  const SingleActivator(LogicalKeyboardKey.arrowDown): const NextFlowIntent(),
-  const SingleActivator(LogicalKeyboardKey.keyK): const PrevFlowIntent(),
-  const SingleActivator(LogicalKeyboardKey.arrowUp): const PrevFlowIntent(),
-  const SingleActivator(LogicalKeyboardKey.enter, shift: true):
-      const OpenRememberIntent(),
-  const SingleActivator(LogicalKeyboardKey.keyN): const NoteIntent(),
-  const SingleActivator(LogicalKeyboardKey.keyE): const EditIntent(),
-  // Keine Wiederholungen: Ein festgehaltenes `Esc`, das die Pause mit offenen
-  // Funden schließt, darf mit seiner Wiederholung nicht auch noch den Hinweis
-  // schließen (HUM-049).
-  const SingleActivator(LogicalKeyboardKey.escape, includeRepeats: false):
-      const CloseCoachMarkIntent(),
-  const SingleActivator(
-    LogicalKeyboardKey.keyF,
-    control: true,
-    shift: true,
-    includeRepeats: false,
-  ): const AllowGroupIntent(),
-  const SingleActivator(
-    LogicalKeyboardKey.keyL,
-    control: true,
-    shift: true,
-    includeRepeats: false,
-  ): const BlockGroupIntent(),
-  const SingleActivator(LogicalKeyboardKey.keyA, control: true):
-      const SelectGroupIntent(),
-  const SingleActivator(LogicalKeyboardKey.keyJ, shift: true):
-      const MergeArrivalsIntent(),
-  const SingleActivator(LogicalKeyboardKey.arrowRight): const ToggleGroupIntent(
-    open: true,
-  ),
-  const SingleActivator(LogicalKeyboardKey.arrowLeft): const ToggleGroupIntent(
-    open: false,
-  ),
-  for (int i = 0; i < rememberKeys.length; i++)
-    SingleActivator(rememberKeys[i]): RememberDurationIntent(i),
-  for (int i = 0; i < rememberKeys.length; i++)
-    SingleActivator(rememberKeys[i], shift: true): RememberTargetIntent(i),
-};
+Map<ShortcutActivator, Intent> interceptShortcuts() => withCommandOnMac(
+  <ShortcutActivator, Intent>{
+    const SingleActivator(LogicalKeyboardKey.enter, includeRepeats: false):
+        const AllowIntent(),
+    const SingleActivator(
+      LogicalKeyboardKey.numpadEnter,
+      includeRepeats: false,
+    ): const AllowIntent(),
+    const SingleActivator(LogicalKeyboardKey.keyA, includeRepeats: false):
+        const AllowIntent(),
+    const SingleActivator(
+      LogicalKeyboardKey.keyF,
+      control: true,
+      includeRepeats: false,
+    ): const AllowIntent(
+      chord: true,
+    ),
+    const SingleActivator(LogicalKeyboardKey.keyB, includeRepeats: false):
+        const BlockIntent(),
+    // `Ctrl+Enter` blocks with the note, from inside the field: a chord works
+    // where a single letter must not (HUM-072).
+    const SingleActivator(
+      LogicalKeyboardKey.enter,
+      control: true,
+      includeRepeats: false,
+    ): const BlockIntent(
+      chord: true,
+    ),
+    const SingleActivator(
+      LogicalKeyboardKey.keyL,
+      control: true,
+      includeRepeats: false,
+    ): const BlockIntent(
+      chord: true,
+    ),
+    const SingleActivator(LogicalKeyboardKey.keyJ): const NextFlowIntent(),
+    const SingleActivator(LogicalKeyboardKey.arrowDown): const NextFlowIntent(),
+    const SingleActivator(LogicalKeyboardKey.keyK): const PrevFlowIntent(),
+    const SingleActivator(LogicalKeyboardKey.arrowUp): const PrevFlowIntent(),
+    const SingleActivator(LogicalKeyboardKey.enter, shift: true):
+        const OpenRememberIntent(),
+    const SingleActivator(LogicalKeyboardKey.keyN): const NoteIntent(),
+    const SingleActivator(LogicalKeyboardKey.keyE): const EditIntent(),
+    // Keine Wiederholungen: Ein festgehaltenes `Esc`, das die Pause mit offenen
+    // Funden schließt, darf mit seiner Wiederholung nicht auch noch den Hinweis
+    // schließen (HUM-049).
+    const SingleActivator(LogicalKeyboardKey.escape, includeRepeats: false):
+        const CloseCoachMarkIntent(),
+    const SingleActivator(
+      LogicalKeyboardKey.keyF,
+      control: true,
+      shift: true,
+      includeRepeats: false,
+    ): const AllowGroupIntent(),
+    const SingleActivator(
+      LogicalKeyboardKey.keyL,
+      control: true,
+      shift: true,
+      includeRepeats: false,
+    ): const BlockGroupIntent(),
+    const SingleActivator(LogicalKeyboardKey.keyA, control: true):
+        const SelectGroupIntent(),
+    const SingleActivator(LogicalKeyboardKey.keyJ, shift: true):
+        const MergeArrivalsIntent(),
+    const SingleActivator(LogicalKeyboardKey.arrowRight):
+        const ToggleGroupIntent(open: true),
+    const SingleActivator(LogicalKeyboardKey.arrowLeft):
+        const ToggleGroupIntent(open: false),
+    for (int i = 0; i < rememberKeys.length; i++)
+      SingleActivator(rememberKeys[i]): RememberDurationIntent(i),
+    for (int i = 0; i < rememberKeys.length; i++)
+      SingleActivator(rememberKeys[i], shift: true): RememberTargetIntent(i),
+  },
+);

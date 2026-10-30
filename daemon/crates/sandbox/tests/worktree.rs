@@ -15,10 +15,15 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use humanitl_sandbox::worktree::{
-    Entry, FileChange, Kind, MAX_DEPTH, RESOLVE_FLAGS, Resolution, SnapshotLimits, TreeSnapshot,
-    diff, escapes, open_beneath, open_beneath_with, open_root, read_beneath, resolution, snapshot,
+    Entry, FileChange, Kind, MAX_DEPTH, Resolution, SnapshotLimits, TreeSnapshot, diff, escapes,
+    open_beneath_with, open_root, read_beneath, snapshot,
 };
-use rustix::fs::{Mode, OFlags, ResolveFlags};
+use rustix::fs::OFlags;
+// `openat2(2)` gibt es nur unter Linux (HUM-312).
+#[cfg(target_os = "linux")]
+use humanitl_sandbox::worktree::{RESOLVE_FLAGS, open_beneath, resolution};
+#[cfg(target_os = "linux")]
+use rustix::fs::{Mode, ResolveFlags};
 use rustix::io::Errno;
 
 /// Ein Baum, der bei jedem Test frisch entsteht.
@@ -349,6 +354,7 @@ fn symlink_inside_ok() {
 
 // --- die Garantie des Kernels ---------------------------------------------------
 
+#[cfg(target_os = "linux")]
 #[test]
 fn openat2_refuses_symlink_traversal() {
     let tree = Tree::new();
@@ -428,6 +434,7 @@ fn read_beneath_stops_at_the_cap() {
 /// `is_beneath` fängt `..` schon vorher ab und verdeckt damit, wenn
 /// `RESOLVE_BENEATH` fehlte; `RESOLVE_NO_MAGICLINKS` hat gar keinen Fall im
 /// Baum. Deshalb steht hier die Aussage selbst.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_resolve_flags_are_beneath_no_symlinks_and_no_magiclinks() {
     assert!(

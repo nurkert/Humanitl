@@ -105,8 +105,10 @@ mod inherit;
 pub mod launcher;
 pub mod os_release;
 mod pinned;
+mod platform;
 pub mod profile;
 pub mod refusals;
+pub mod seatbelt;
 pub mod shell;
 pub mod summary;
 pub mod work_dir;
@@ -139,6 +141,17 @@ pub use crate::handle::{
     SandboxHandle, StatusSnapshot, Termination,
 };
 pub use crate::launcher::{CheckResult, IsolationCheck, LaunchPlan, SandboxBackend, StdioMode};
+pub use crate::seatbelt::SeatbeltBackend;
+
+/// Das Sandbox-Backend dieses Systems: Seatbelt unter macOS, sonst bwrap
+/// (HUM-323). Daemon und Kommandozeile sprechen nur diesen Typ an.
+#[cfg(target_os = "macos")]
+pub type PlatformBackend = SeatbeltBackend;
+
+/// Das Sandbox-Backend dieses Systems: Seatbelt unter macOS, sonst bwrap
+/// (HUM-323). Daemon und Kommandozeile sprechen nur diesen Typ an.
+#[cfg(not(target_os = "macos"))]
+pub type PlatformBackend = BwrapBackend;
 pub use crate::os_release::{
     OS_RELEASE_FALLBACK_PATH, OS_RELEASE_PATH, PackageManager, install_command,
 };

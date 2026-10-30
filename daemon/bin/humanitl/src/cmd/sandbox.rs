@@ -12,7 +12,7 @@
 //!
 //! Deshalb ruft dieses Modul `humanitl-sandbox` unmittelbar auf, im Prozess
 //! der Kommandozeile: dasselbe [`SandboxProfile`], derselbe
-//! [`BwrapBackend`], derselbe [`LaunchPlan`](humanitl_sandbox::LaunchPlan) wie später im Daemon. Es gibt
+//! [`PlatformBackend`], derselbe [`LaunchPlan`](humanitl_sandbox::LaunchPlan) wie später im Daemon. Es gibt
 //! keine zweite Übersetzung des Profils und keine Fachlogik, die es nur hier
 //! gäbe; was hier passiert, ist Verdrahtung, die mit der `Sandbox`-RPC
 //! umzieht. Die Naht ist [`Wiring`]: sie sagt, woher Proxy-Socket und CA
@@ -45,10 +45,10 @@ use humanitl_core::diagnostics::codes;
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_sandbox::{
-    AdapterRegistry, AgentContext, BwrapBackend, CheckResult, INTERRUPT_GRACE, LaunchInputs,
-    MIN_BWRAP_VERSION, MountPolicy, Refusal, RefusalReason, RefusalReporting, Refusals,
-    SANDBOX_SHELL, SandboxBackend, SandboxFile, SandboxHandle, SandboxProfile, SandboxView,
-    SessionContext, StdioMode, WorkDirSource, shell_line,
+    AdapterRegistry, AgentContext, CheckResult, INTERRUPT_GRACE, LaunchInputs, MountPolicy,
+    PlatformBackend, Refusal, RefusalReason, RefusalReporting, Refusals, SANDBOX_SHELL,
+    SandboxBackend, SandboxFile, SandboxHandle, SandboxProfile, SandboxView, SessionContext,
+    StdioMode, WorkDirSource, shell_line,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -168,7 +168,7 @@ struct Setup {
     /// Die Sitzung, für die geplant wird.
     session: SessionContext,
     /// Das Backend, mit dem geplant und gestartet wird.
-    backend: BwrapBackend,
+    backend: PlatformBackend,
     /// Hält die Platzhalter am Leben, solange die Sandbox läuft.
     _wiring: Wiring,
 }
@@ -427,7 +427,7 @@ fn check_failure(results: &[CheckResult]) -> Failure {
 /// `backlog/CONVENTIONS.md` 4.12).
 fn enforce_isolation(
     ctx: &Context,
-    backend: &BwrapBackend,
+    backend: &PlatformBackend,
     handle: &SandboxHandle,
 ) -> Result<(), Failure> {
     let results = backend.isolation_check(handle);
@@ -703,12 +703,10 @@ fn prepare(
         agent_program: agent.program,
     };
 
-    let backend = match BwrapBackend::detect(paths.clone()) {
+    let backend = match PlatformBackend::detect(paths.clone()) {
         Ok(backend) => backend,
         // Die Vorschau braucht kein `bwrap`; der Start schon.
-        Err(_) if matches!(wiring, Wiring::Preview) => {
-            BwrapBackend::unchecked("bwrap", MIN_BWRAP_VERSION, paths)
-        }
+        Err(_) if matches!(wiring, Wiring::Preview) => PlatformBackend::fallback(paths),
         Err(diagnostic) => return Err(Failure::new(diagnostic)),
     };
     let backend = match approved {

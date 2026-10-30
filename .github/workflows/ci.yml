@@ -26,7 +26,9 @@ on:
     # through tools/ci-gate.sh and merges into main only on green (HUM-237).
     # main keeps its own run, because the release guard (release.yml) asks for
     # a green push run of exactly the tagged main commit.
-    branches: [main, "hum-*"]
+    # `macos-*` is the feature branch of M12 (backlog/sprint-6.md), which
+    # collects one commit per issue before it is merged (HUM-312).
+    branches: [main, "hum-*", "macos-*"]
   pull_request:
 
 # One run per ref. On an issue branch a new push supersedes the one in flight;
@@ -220,6 +222,127 @@ jobs:
       - name: Documentation builds without warnings
         # missing_docs is denied in every library crate, so a public item without
         # a doc comment fails here (CONVENTIONS.md 3.12).
+        run: cd daemon && cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+  macos:
+    name: macos
+    # Daemon, CLI and their tests on macOS (HUM-312, backlog/sprint-6.md).
+    # macos-15 is Apple Silicon; the Intel half of the release is cross-built
+    # in release.yml and only checked there. Linux stays the reference: what
+    # needs bwrap, seccomp or systemd is cfg-gated and runs in the jobs above.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: macos
+      - uses: ./.github/actions/setup-flutter
+        with:
+          protoc-plugin: "true"
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
+      - name: Clippy
+        run: cd daemon && cargo clippy --workspace --all-targets -- -D warnings
+      - name: Build the workspace
+        run: cd daemon && cargo build --workspace --all-targets
+      - name: Build and test the workspace
+        id: macos-test
+        run: |
+          set -o pipefail
+          cd daemon && cargo test --workspace 2>&1 | tee "$RUNNER_TEMP/macos-test.log"
+      - name: Name the tests that failed
+        if: failure() && steps.macos-test.outcome == 'failure'
+        run: ./scripts/ci/test-report.sh "$RUNNER_TEMP/macos-test.log"
+      - name: Seatbelt escape tests (HUM-323)
+        # A real daemon in an empty HOME, `humanitl sandbox check` with three
+        # green guarantees, then every way out the profile must refuse.
+        run: |
+          set -euo pipefail
+          cd daemon && cargo build -p humanitl -p humanitld -p humanitl-shim
+          cd .. && ./tests/escape/macos/run.sh daemon/target/debug
+      - name: The macOS app builds (HUM-325)
+        # The runner under app/macos, the Dart code that only macOS takes
+        # (lstat, the window, the restart through launchd) and its tests. A
+        # failing command leaves the end of its output in an annotation, so the
+        # reason shows on the run summary without opening the job log.
+        run: |
+          set -uo pipefail
+          step() {
+            local out="$RUNNER_TEMP/app-step.log" text status=0
+            "$@" >"$out" 2>&1 || status=$?
+            cat "$out"
+            if (( status != 0 )); then
+              text="$* failed with $status"$'\n'"$(tail -40 "$out")"
+              # Workflow commands: first %, then CR and LF.
+              text="${text//%/%25}"
+              text="${text//$'\r'/%0D}"
+              text="${text//$'\n'/%0A}"
+              printf '::error title=macOS app::%s\n' "$text"
+              exit "$status"
+            fi
+          }
+          step make flutter-codegen
+          cd app
+          step flutter test test/core/ipc test/core/ui test/features/shell
+          step flutter build macos --debug
+      - name: The daemon as a launchd agent (HUM-324)
+        # A fresh runner: install the agent from the build, wait until the
+        # daemon answers, check the sandbox through it, take it away again.
+        # Every step that fails says why in an annotation, with launchd's view
+        # and the daemon's log: the job log itself needs write access.
+        run: |
+          # Without -e (GitHub starts bash with it): every failure goes
+          # through annotate, and launchctl print exits 113 for a service
+          # that is gone, which must not end the step before the annotation.
+          set +e -uo pipefail
+          bin="$PWD/daemon/target/debug"
+          log="$HOME/Library/Logs/Humanitl/humanitld.log"
+          annotate() {
+            local what="$1" out="$2" state
+            state="$(launchctl print "gui/$(id -u)/dev.humanitl.humanitld" 2>&1 | head -40 ||
+              launchctl print "user/$(id -u)/dev.humanitl.humanitld" 2>&1 | head -40 ||
+              true)"
+            local text="$what failed%0A$out%0A--- launchctl ---%0A$state%0A--- log ---%0A$(tail -30 "$log" 2>/dev/null)"
+            text="${text//$'\n'/%0A}"
+            echo "::error title=launchd agent::$text"
+            exit 1
+          }
+          run() {
+            local out
+            out="$("$@" 2>&1)" || annotate "$*" "$out"
+            echo "$out"
+          }
+          run "$bin/humanitl" daemon install --bin-dir "$bin"
+          for _ in $(seq 1 75); do
+            "$bin/humanitl" daemon status >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          run "$bin/humanitl" daemon status
+          "$bin/humanitl" doctor || true
+          # The subshell's exit 1 does not end the step without -e.
+          (cd "$RUNNER_TEMP" && run "$bin/humanitl" sandbox check) || exit 1
+          run "$bin/humanitl" daemon restart
+          for _ in $(seq 1 75); do
+            "$bin/humanitl" daemon status >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          run "$bin/humanitl" daemon status
+          run "$bin/humanitl" daemon logs -n 20
+          run "$bin/humanitl" daemon uninstall
+          # launchd ends the daemon with SIGTERM; give it time to shut down.
+          for _ in $(seq 1 50); do
+            "$bin/humanitl" daemon status >/dev/null 2>&1 || break
+            sleep 0.2
+          done
+          if "$bin/humanitl" daemon status >/dev/null 2>&1; then
+            annotate "uninstall" "the daemon still answers 10s after uninstall"
+          fi
+      - name: Documentation builds without warnings
         run: cd daemon && cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: "-D warnings"

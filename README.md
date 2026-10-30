@@ -7,7 +7,7 @@ Humanitl lets a sandboxed AI coding agent use the internet, one approved request
 <p align="center">
   <a href="https://github.com/nurkert/Humanitl/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/nurkert/Humanitl/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: GPL-3.0-only" src="https://img.shields.io/badge/license-GPL--3.0--only-blue.svg"></a>
-  <img alt="Platform: Linux" src="https://img.shields.io/badge/platform-Linux-lightgrey.svg">
+  <img alt="Platform: Linux and macOS" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey.svg">
 </p>
 
 The agent runs in a sandbox that has no network interface. Its only way out is a moderating proxy
@@ -55,6 +55,11 @@ sandbox (`BACKLOG.md` 4.1):
    grep Seccomp /proc/self/status   # Seccomp: 2
    ```
 
+These three hold on Linux. On macOS the sandbox is Seatbelt: there are interfaces, but no
+process in the sandbox may use them except for the one door, and the profile takes the place of
+seccomp; [`docs/SECURITY.md` section 12](docs/SECURITY.md#12-macos-seatbelt-instead-of-bubblewrap)
+states the macOS guarantees and what macOS gives less than Linux.
+
 `humanitl sandbox check` runs all three in a short-lived sandbox, and the application shows them as
 the isolation ring. The full argument is in [`docs/SECURITY.md`](docs/SECURITY.md).
 
@@ -91,6 +96,17 @@ chmod +x Humanitl-<version>-x86_64.AppImage
 
 humanitl daemon status
 humanitl sandbox check
+```
+
+On macOS (Apple Silicon and Intel), open `Humanitl-<version>-macos.dmg` from the same page and
+drag Humanitl into Applications. The app is signed ad hoc, so allow the first start once under
+System Settings › Privacy & Security › Open Anyway; the setup screen then installs the daemon as
+a launchd agent. The sandbox there is Seatbelt instead of bubblewrap, and the three guarantees
+read differently; see [`docs/SECURITY.md`](docs/SECURITY.md#12-macos-seatbelt-instead-of-bubblewrap).
+
+```sh
+/Applications/Humanitl.app/Contents/MacOS/bin/humanitl daemon install
+/Applications/Humanitl.app/Contents/MacOS/bin/humanitl sandbox check
 ```
 
 Everything else, prerequisites, the agent, updates and removal, is in
@@ -174,8 +190,9 @@ Version 0.1.0 is the first release (milestone M5). In it: the sealed sandbox wit
 guarantees and five escape tests in CI; the intercept queue with allow, block, edit and rules; the
 OpenCode and pi agents against a model in your network, with terminal and isolation check; history, export
 and a hash-chained audit log; pseudonymisation in the editor; settings, German and English; `.deb`
-and AppImage. Not in it: holding responses or WebSocket frames, HTTP/2 to the destination, a Docker
-or micro-VM backend, a browser for the agent, macOS. What comes after the MVP is listed in
+and AppImage. Since then: macOS with a Seatbelt sandbox, a launchd agent and a disk image in every
+release (M12). Not in it: holding responses or WebSocket frames, HTTP/2 to the destination, a Docker
+or micro-VM backend, a browser for the agent. What comes after the MVP is listed in
 [`BACKLOG.md` section 9](BACKLOG.md#9-nach-dem-mvp-priorisiert).
 
 ## Contributing

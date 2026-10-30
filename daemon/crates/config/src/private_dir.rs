@@ -30,6 +30,8 @@ use rustix::io::Errno;
 
 use crate::paths::DIR_MODE;
 
+const _: () = assert!(DIR_MODE == 0o700, "private_dir sets Mode::RWXU");
+
 /// Die reale Nutzerkennung des laufenden Prozesses.
 #[must_use]
 pub fn process_uid() -> u32 {
@@ -94,8 +96,14 @@ pub fn ensure_private_dir(dir: &Path, uid: u32) -> Result<(), Diagnostic> {
             stat.st_uid
         )));
     }
-    rustix::fs::fchmod(&fd, Mode::from_raw_mode(DIR_MODE))
-        .map_err(|errno| io_refusal("set 0700 on the runtime directory", dir, &errno.into()))
+    rustix::fs::fchmod(
+        &fd,
+        // `Mode::RWXU` statt `from_raw_mode(DIR_MODE)`: `RawMode` ist auf
+        // macOS `u16`, `DIR_MODE` ein `u32` (HUM-312). Die Zusicherung oben
+        // hält beide gleich.
+        Mode::RWXU,
+    )
+    .map_err(|errno| io_refusal("set 0700 on the runtime directory", dir, &errno.into()))
 }
 
 /// Warum [`check_private`] einem Pfad nicht traut.

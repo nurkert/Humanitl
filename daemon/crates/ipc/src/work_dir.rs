@@ -332,17 +332,15 @@ mod tests {
         );
         assert!(!refused.why.contains(WORK_DIR_KEY), "{}", refused.why);
 
-        let outside = tempfile::tempdir().unwrap();
-        let refused = check_requested(&paths, None, outside.path(), &WorkDirSource::Flag)
+        let outside_dir = tempfile::tempdir().unwrap();
+        // Kanonisch, wie `sandbox.work_dir` nach `config set` dasteht; unter
+        // macOS liegt das temporäre Verzeichnis hinter `/var` (HUM-312).
+        let outside = outside_dir.path().canonicalize().unwrap();
+        let refused = check_requested(&paths, None, &outside, &WorkDirSource::Flag)
             .expect_err("outside home and not configured");
         assert!(refused.why.contains("from --work"), "{}", refused.why);
-        check_requested(
-            &paths,
-            Some(outside.path()),
-            outside.path(),
-            &WorkDirSource::Flag,
-        )
-        .expect("the configured folder is allowed");
+        check_requested(&paths, Some(&outside), &outside, &WorkDirSource::Flag)
+            .expect("the configured folder is allowed");
 
         let project = home.path().join("project");
         std::fs::create_dir_all(&project).unwrap();

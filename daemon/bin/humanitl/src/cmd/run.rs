@@ -482,7 +482,9 @@ fn outcome(exit: Option<i32>, failure: Option<Failure>) -> Result<u8, Failure> {
                      says why",
                 )
                 .fix(FixAction::CopyCommand(
-                    "journalctl --user -u humanitld -n 50".to_owned(),
+                    // `daemon logs` liest unter Linux das Journal und unter
+                    // macOS die Datei des launchd-Agenten (HUM-324).
+                    "humanitl daemon logs -n 50".to_owned(),
                 ))
                 .build(),
         )

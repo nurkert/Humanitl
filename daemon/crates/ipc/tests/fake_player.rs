@@ -772,7 +772,10 @@ fn shipped_fixtures_use_uuid_v7_ids() {
 async fn serves_the_contract_over_a_unix_socket() {
     use tonic::transport::{Endpoint, Server};
 
-    let dir = std::env::temp_dir().join(format!("humanitl-fake-{}", uuid::Uuid::now_v7()));
+    // Kurz genug für `sun_path`: Unter macOS ist schon das temporäre
+    // Verzeichnis 49 Zeichen lang, und die Grenze liegt bei 104 (HUM-312).
+    let id = uuid::Uuid::now_v7().simple().to_string();
+    let dir = std::env::temp_dir().join(format!("humanitl-fake-{}", &id[id.len() - 12..]));
     std::fs::create_dir_all(&dir).expect("temp dir");
     let socket = dir.join("daemon.sock");
 
