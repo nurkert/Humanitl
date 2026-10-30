@@ -20,6 +20,9 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-331 | Der Proxy nimmt unter macOS nur den Shim der laufenden Sitzung an | M | HUM-323 |
 | HUM-332 | Kleinere Folgen aus den Reviews von M12 | S | HUM-312, HUM-323 bis HUM-327 |
 | HUM-333 | Die Website humanitl.de | M | HUM-326 |
+| HUM-334 | Die Bühne von humanitl.de: Glas, Licht, Einflug und Morph | M | HUM-333 |
+| HUM-335 | Linux: das AppImage in jedem Release, APT und AppImage auf der Download-Seite | S | HUM-333 |
+| HUM-336 | Die Dokumentation aus docs/ auf humanitl.de | M | HUM-333 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -144,4 +147,50 @@ Akzeptanzkriterien:
 Fallstricke: Die Bilder aus `docs/img/` sind Golden-Bilder mit Blöcken statt Text und taugen nicht für die Seite. Das Abzeichen „fake“ in der Statusleiste der App ist abgeschnitten, die Bilder enden über der Statusleiste.
 
 Nicht in diesem Issue: weitere Abschnitte (Bento-Kacheln, Inspector), Doku-Seiten aus `docs/guides/`.
+
+## HUM-334 · Die Bühne von humanitl.de: Glas, Licht, Einflug und Morph
+
+Rückmeldung des Inhabers vom 2026-10-30 zur ersten Fassung (HUM-333): Die Spiegelung liegt so stark auf den Bildschirmen, dass man sie kaum sieht; der Morph vom Fächer zur Bühne ist nicht durchdacht; das Karussell soll nicht am Scrollweg hängen. Gewünscht ist ein elegantes, nicht gezwungenes Motion Design mit einem gut gewählten Bildausschnitt in jedem Seitenverhältnis.
+
+Akzeptanzkriterien:
+
+- Die Bildschirme sind klar lesbar: Glanz und Spiegelung liegen auf dem Rahmen und als feiner Hauch über dem Glas, nie als Schleier, der den Inhalt verdeckt.
+- Die Fenster haben eine sichtbare, glänzende Dicke (eine Glas- oder Metallkante, die in der Drehung als Körper erkennbar ist), ohne Bitmap-Texturen.
+- Beim Laden fliegen die Fenster nacheinander, gedreht und gestaffelt in ihre Plätze, so dass man den Aufbau sieht; die Bewegung wirkt ruhig und elegant.
+- Der Morph vom Fächer auf die Bühne ist choreografiert: jedes Fenster auf einer eigenen, stetigen Bahn ohne Durchdringungen oder Sprünge, mit Licht, das die Bewegung begleitet.
+- Nach dem Morph scrollt die Seite normal weiter. Das Karussell dreht nur über Pfeile, Wischen, Ziehen, waagrechtes Scrollen und die Pfeiltasten, ohne Ende in beide Richtungen.
+- Jedes Seitenverhältnis bekommt einen eigenen, bewusst gewählten Bildausschnitt: Breitbild, 16:10, 4:3, Hochformat-Tablet und Telefon. Auf dem Telefon darf die Bühne ganz anders aufgebaut sein.
+- Bewegung pro Frame nur über `transform` und `opacity`; `prefers-reduced-motion` ohne Einflug und mit sofortigen Übergängen; ohne Skript ein ruhiger Fächer; keine Inline-Skripte (CSP).
+- Inhalt und Texte bleiben, wie sie in HUM-333 wahr gemacht wurden.
+
+Nicht in diesem Issue: neue Abschnitte, neue Texte, neue Bildschirmaufnahmen.
+
+## HUM-335 · Linux: das AppImage in jedem Release, APT und AppImage auf der Download-Seite
+
+Wunsch des Inhabers vom 2026-10-30: Das Linux-Release soll ein AppImage mitliefern, und die Download-Seite soll den Weg über das APT-Repository `apt.nurkert.de` zeigen, der automatische Updates bringt. Bisher war das AppImage für 0.1.0 vorgesehen (HUM-060); es kommt jetzt schon in die 0.0.x-Releases. HUM-060 behält VERSION-Datei, Changelog und minisign.
+
+Akzeptanzkriterien:
+
+- `release.yml` baut im Job `build` aus denselben Programmen und demselben Flutter-Bundle wie das `.deb` mit `packaging/appimage/build-appimage.sh` das Bild `Humanitl-<version>-x86_64.AppImage`; `SHA256SUMS` enthält es.
+- Ein eigener Job `check-appimage` prüft es mit `packaging/appimage/check-appimage.sh` auf einem frischen Runner, ohne FUSE und ohne Installation; der Job `release` wartet auf ihn und hängt das Bild an das Release.
+- Die Release-Notes zeigen den Weg über das AppImage und sagen nicht mehr, dass es fehlt (`release-notes-test.sh` grün).
+- Die Download-Seite führt das AppImage als eigene Datei unter Linux und zeigt als empfohlenen Linux-Weg `curl -fsSL https://apt.nurkert.de/install/humanitl | sudo sh`, mit einem Hinweis auf das Skript und das `.deb` für alle, die keiner Pipe in eine Root-Shell trauen. Die Aussagen decken sich mit `docs/INSTALL.md`.
+- Ein Probelauf von `release.yml` (`workflow_dispatch`) auf dem Issue-Branch ist grün, bevor gemergt wird; der AppImage-Bau läuft sonst in keiner CI.
+
+Fallstricke: `build-appimage.sh` lädt `appimagetool` und die Laufzeit selbst, auf Fassung und Prüfsumme gepinnt; ohne Netz scheitert der Bau. Ein Release, das `release.yml` mit `GITHUB_TOKEN` veröffentlicht, startet keinen anderen Workflow (HUM-333).
+
+## HUM-336 · Die Dokumentation aus docs/ auf humanitl.de
+
+Wunsch des Inhabers vom 2026-10-30: Die Markdown-Dokumentation des Repositorys soll auf der Website durchstöbert werden können und schön gerendert sein.
+
+Akzeptanzkriterien:
+
+- Jede Markdown-Datei unter `docs/` (Anleitungen, Referenz, ADRs, Sicherheit, Architektur und die übrigen) erscheint als eigene Seite unter `/docs/`, aus genau der Datei im Repository gebaut, ohne Abschrift. Eine Startseite `/docs/` ordnet sie in Gruppen.
+- Navigation: eine Seitenleiste mit allen Gruppen und Seiten, die aktuelle Seite markiert; je Seite ein Inhaltsverzeichnis der Überschriften; auf dem Telefon eine eigene, bedienbare Form der Navigation. Vor- und Zurück-Verweise zwischen den Seiten einer Gruppe.
+- Darstellung im Stil der Website (tiefschwarz, Geist, ruhige Lesespalte): Überschriften mit Ankern, Code mit Hervorhebung und Kopierknopf, Tabellen, die auf schmalen Schirmen waagrecht scrollen, GitHub-Hinweisboxen (`> [!NOTE]` usw.), Bilder aus `docs/img/`, deutschsprachige Seiten mit `lang="de"`.
+- Verweise: relative Links zwischen Dokumenten zeigen auf die Seiten der Website (mit Anker), Links auf andere Dateien des Repositorys auf GitHub; kein toter interner Link, kein toter Anker im Bau.
+- `website.yml` baut auch bei Änderungen unter `docs/`. Die Navigation der Website führt zu den Docs, die Sitemap enthält sie.
+- Keine Inline-Skripte (CSP), kein Laden von Dritten; Bewegung nur über `transform` und `opacity`.
+
+Nicht in diesem Issue: eine Suche über alle Seiten, Übersetzungen der Dokumente.
 

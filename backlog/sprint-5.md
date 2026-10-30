@@ -1175,6 +1175,8 @@ Filtersprache.
 ## HUM-060 · Release 0.1.0
 Sprint: 5 · Größe: S · Abhängigkeiten: HUM-053, HUM-059, HUM-056, HUM-057, HUM-058 · Blockiert: keine
 
+> Nachtrag 2026-10-30 (HUM-335): Das AppImage liegt schon den 0.0.x-Releases bei, gebaut im Job `build` von `release.yml` auf ubuntu-24.04 und geprüft im Job `check-appimage`. Dieses Issue übernimmt es von dort; offen bleibt die glibc-Frage unten (ältester Runner), dazu VERSION-Datei, Changelog und minisign.
+
 ### Kontext
 HUM-053 hat das Packaging (deb, AppImage, systemd-Unit) gebaut. Es fehlt der reproduzierbare Weg vom Tag zum veröffentlichten, signierten Artefakt mit Changelog, sowie die Regeln, nach denen Versionen vergeben werden. Ohne das kann niemand nachprüfen, ob das heruntergeladene Binary dem Quellcode entspricht, und Sicherheits-Patches (HUM-056 Triage Schritt 6) hätten keinen Kanal.
 
