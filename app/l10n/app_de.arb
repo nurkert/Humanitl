@@ -1356,5 +1356,8 @@
   "shellPaletteTerminalZoomIn": "Terminaltext größer",
   "shellPaletteTerminalZoomOut": "Terminaltext kleiner",
   "shellPaletteTerminalZoomReset": "Terminaltext in Standardgröße",
-  "sandboxDiagnosticDismiss": "Ausblenden"
+  "sandboxDiagnosticDismiss": "Ausblenden",
+  "sandboxTerminalSelectAll": "Alles auswählen",
+  "sandboxTerminalCopyKey": "Strg+Umschalt+C",
+  "sandboxTerminalPasteKey": "Strg+Umschalt+V"
 }

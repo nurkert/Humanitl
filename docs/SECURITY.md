@@ -770,7 +770,14 @@ that starts with a C1 introducer never passes. Only well-formed, shortest-form U
 daemon: an overlong form such as `E0 82 9B` is `U+009B`, and surrogates and code points above
 `U+10FFFF` are dropped too. The ring buffer that serves a late client holds filtered bytes. Above
 the terminal widget a permanent banner says that agent output is not trustworthy, and the widget
-registers no OSC handler of its own.
+registers no clipboard handler: it refuses the clipboard requests of OSC 52 (and of the iTerm2
+`CopyToClipboard` sequence) explicitly, writing nothing and answering nothing, because the emulator
+would otherwise install handlers of its own that write and read the clipboard while the terminal
+has the focus (HUM-313). What the emulator does answer are colour queries: OSC 4, 10 and 11 and the
+colour-scheme query `CSI ? 996 n` get the colours of the theme back through the keyboard stream,
+and only those of them that passed the daemon filter reach it. Text reaches the clipboard only by an action of the user: `Ctrl+Shift+C`
+or the context menu; pasting is `Ctrl+Shift+V`, the menu or the middle button, bracketed while the
+program asked for it, with every escape sequence of the pasted text removed.
 
 **The controlling terminal (HUM-280).** bubblewrap runs with `--new-session` in every command
 line, and that stays: `setsid` before the shim detaches the whole sandbox from whatever terminal

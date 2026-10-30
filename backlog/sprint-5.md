@@ -78,6 +78,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-306 | The empty queue says the agent is working when a session runs | S | HUM-298 |
 | HUM-301 | The terminal text can be zoomed | S | HUM-298, HUM-303 |
 | HUM-302 | Notices float as dismissible overlays and never push the layout | S | HUM-276, HUM-286 |
+| HUM-313 | Terminal copy and paste | S | HUM-042, HUM-301, HUM-303 |
 
 ---
 
@@ -8591,3 +8592,180 @@ every pane.
   darauf einen Abonnement-Versuch gegen den echten Daemon-Socket, der
   scheiterte. Zurückgenommen, der Abstand steht jetzt im `QueuePane`.
 - **Offen.** Keins aus diesem Issue.
+
+## HUM-313 · Terminal copy and paste
+
+### Ziel
+Wunsch des Owners 2026-10-30: Kopieren und Einfügen im Terminal der Sandbox
+wie in jedem Terminal unter Linux. Bisher kopierte `Ctrl+Shift+C` (Vorgabe
+des Emulators), aber eingefügt wurde mit dem nackten `Ctrl+V`, das in
+readline das wörtliche Einfügen des nächsten Zeichens ist (`0x16`) und dem
+Agenten gehört; `Ctrl+Shift+V` kam als `0x16` beim Agenten an. Die mittlere
+Maustaste tat nichts, das Kontextmenü kannte kein „Alles auswählen".
+
+Beim Lesen fiel eine Lücke auf, die die Sicherheitsaussage betrifft:
+`TerminalView` aus `xterm2` setzt eigene Handler für OSC 52, sobald das
+Terminal keine hat (`??=`), und schreibt und **liest** damit die
+Zwischenablage des Menschen, solange das Terminal den Fokus hat. Der Filter
+des Daemons lässt OSC 52 nicht durch, also war die Lücke nicht erreichbar;
+`docs/SECURITY.md` 3.3 sagt aber, das Widget registriere keinen OSC-Handler,
+und das stimmte nicht. Dieses Issue schließt die zweite Wand.
+
+### Akzeptanzkriterien
+1. Mit der Tastatur im Terminal kopiert `Ctrl+Shift+C` die Auswahl in die
+   Zwischenablage, ohne ein Byte an den Agenten. Ohne Auswahl tut der Griff
+   nichts, auch dann kein `0x03`.
+2. `Ctrl+Shift+V` fügt die Zwischenablage ein. Das nackte `Ctrl+C` bleibt
+   `0x03` (SIGINT), auch mit Auswahl, und kopiert nie; das nackte `Ctrl+V`
+   bleibt `0x16`. Gehaltene Griffe fügen einmal ein, Wiederholungen und
+   Loslassen erreichen den Agenten nicht.
+3. Die Griffe wirken nur, solange das Terminal die Tastatur hat. Keine
+   Bindung der Anwendung (`shellShortcuts`, Intercept, Befundpause, Editor,
+   Verlauf, Regelliste) feuert auf `Ctrl+Shift+C` oder `Ctrl+Shift+V`. Auf
+   Apple-Plattformen sind es `Cmd+C` und `Cmd+V`.
+4. Einfügen klammert (`ESC [200~` … `ESC [201~`), wenn das Programm
+   `DECSET 2004` gesetzt hat; ein mehrzeiliger Text läuft dann nicht Zeile
+   für Zeile. Ein `ESC [201~` im eingefügten Text (und jede andere
+   Escape-Folge) fällt weg und beendet die Klammer nie früh.
+5. Ein Leser (`readOnly`) und eine nicht verbundene Sitzung fügen nicht ein,
+   weder per Griff noch per Menü noch per Mittelklick.
+6. Die mittlere Maustaste fügt ein, solange das Programm die Maus nicht
+   selbst nimmt (Mausberichte; mit `Shift` gilt die Regel des Emulators).
+7. Rechtsklick öffnet das Menü mit Kopieren (deaktiviert ohne Auswahl),
+   Einfügen und Alles auswählen; Kopieren und Einfügen nennen ihren Griff.
+   Das Menü ist das vorhandene `HContextMenu`, eine Ebene mit
+   `HLayerScope.claimKeyboard` (HUM-303).
+8. OSC 52 aus der Ausgabe des Agenten schreibt die Zwischenablage nicht und
+   liest sie nicht, auch am Filter des Daemons vorbei und mit Fokus im
+   Terminal; ebenso `OSC 1337 CopyToClipboard`. Kopiert wird nur auf eine
+   ausdrückliche Handlung des Menschen.
+9. UI-Texte über ARB (`en` Quelle, `de` Übersetzung, angehängt). Keine neue
+   Abhängigkeit in `app/pubspec.yaml`.
+
+### Tests
+`test/features/sandbox/terminal_clipboard_test.dart`, als Linux:
+`ctrl_shift_c_copies_the_selection_and_sends_nothing_to_the_agent`,
+`ctrl_c_with_a_selection_still_interrupts_the_agent_and_copies_nothing`,
+`ctrl_shift_v_pastes_and_plain_ctrl_v_reaches_the_agent`,
+`a_held_clipboard_chord_never_falls_through_to_the_agent`,
+`a_paste_is_bracketed_when_the_program_asked_and_201_is_stripped`,
+`a_reader_cannot_paste_by_chord`,
+`the_chords_do_nothing_while_the_terminal_lacks_the_keyboard`,
+`the_agent_cannot_write_or_read_the_clipboard_through_osc_52`,
+`the_middle_button_pastes_unless_the_program_takes_the_mouse`,
+`the_menu_offers_copy_paste_and_select_all`.
+`test/core/shortcuts/terminal_clipboard_activator_test.dart`: genau
+`Ctrl+Shift` unter Linux, genau `Cmd` auf macOS, und keine Tabelle der
+Anwendung feuert auf die Griffe. Jeder Test mit Mutationsbeweis.
+
+### Fallstricke
+- **Primäre Auswahl gibt es in Flutter nicht.** `Clipboard` kennt nur
+  `text/plain` der Zwischenablage; die GTK-Einbettung unter Linux spricht
+  `GDK_SELECTION_CLIPBOARD` an, nie `GDK_SELECTION_PRIMARY`, und unter
+  Wayland fehlt das Protokoll ganz. Ein Plugin dafür wäre eigener Code über
+  X11 und `zwp_primary_selection`, für eine Bequemlichkeit; das lohnt keine
+  neue Abhängigkeit. Deshalb kopiert das Auswählen mit der Maus **nichts**
+  (in die Zwischenablage gehört nicht jedes Ziehen der Maus, und „kopiert
+  wird nur auf ausdrückliche Handlung" bleibt wahr), und der Mittelklick
+  fügt die Zwischenablage ein. Kandidat für ein eigenes Issue, falls Flutter
+  die primäre Auswahl je anbietet.
+- `TerminalView` prüft seine eigenen Kürzel vor jeder Übersetzung in Bytes,
+  und seine Vorgabe bindet Einfügen auf `Ctrl+V` und fragt dabei nicht nach
+  `readOnly`. Die Tabelle des Emulators ist deshalb leer (`null` hieße
+  „Vorgabe"); die Griffe fragt `TerminalPane._onKey` selbst.
+- Ein Griff, den die Anwendung nicht nimmt, meldet der Emulator einem
+  Agenten mit dem Tastaturprotokoll von kitty als eigene Folge (`CSI 99;6 u`).
+  Der Griff gehört der Anwendung deshalb auch dann, wenn er nichts tun kann.
+  (Ohne dieses Protokoll schickt der Emulator für `Ctrl+Shift+C` nichts;
+  die erste Fassung dieses Abschnitts behauptete `0x03`, das hat die
+  Mutation in Review-Runde 1 widerlegt.)
+- Die Bereinigung beim Einfügen macht `Terminal.paste` von `xterm2`
+  (Escape-Folgen weg, Steuerbytes wie `0x03` und `0x1a` zu Leerzeichen,
+  Klammer bei `DECSET 2004`). `Terminal.textInput` täte nichts davon; der
+  Test misst das Ergebnis, nicht die Bibliothek.
+- Die OSC-52-Handler von `TerminalView` greifen nur, wo das Terminal keine
+  hat. Die Ablehnung muss deshalb in der Sitzung gesetzt sein, bevor die
+  Ansicht gebaut wird, also in `TerminalSession.build`.
+- Die Plattform: `flutter test` spielt Android, und dort wären die Griffe
+  dieselben wie unter Linux. Die Tests laufen trotzdem als Linux, damit der
+  Zweig für Apple nicht zufällig mitläuft.
+
+### Umsetzung (HUM-313)
+
+- **Griffe.** `TerminalClipboard` und `TerminalClipboardActivator` in
+  `app/lib/core/shortcuts/intents.dart`: `Ctrl+Shift+C`/`Ctrl+Shift+V`, genau
+  diese Modifikatoren, auf Apple `Cmd`. Nicht in `shellShortcuts()`, sondern
+  von `TerminalPane._onKey` nach den Shell-Kürzeln gefragt, also nur mit der
+  Tastatur im Terminal. Die physische Taste eines genommenen Griffs merkt
+  sich die Ansicht wie beim Zoom (`_heldChordKey`, vorher `_heldZoomKey`)
+  und behält Wiederholungen und Loslassen.
+- **Emulator ohne eigene Kürzel.** `_emulatorShortcuts` ist leer; damit gehen
+  `Ctrl+A` (wie seit HUM-042) und jetzt auch `Ctrl+V` an den Agenten.
+  **Verhaltensänderung:** Wer bisher mit `Ctrl+V` eingefügt hat, nimmt jetzt
+  `Ctrl+Shift+V`, das Menü oder die mittlere Taste.
+- **Einfügen** über `Terminal.paste`, zweimal gegen `readOnly` und die Phase
+  geprüft: vor dem Lesen der Zwischenablage und nach ihrer Antwort.
+  **Kopieren** über `selectionFor` und `getText(…, true)`, also ohne die
+  Leerzeichen am Zeilenende, mit denen der Emulator auffüllt.
+- **Mittelklick.** Ein `Listener` um den Emulator; er fügt ein, wenn
+  `mouseMode` `none` ist oder `Shift` gehalten wird und das Programm `Shift`
+  nicht ebenfalls beansprucht (`mouseShiftCaptureMode`), dieselbe Regel, mit
+  der der Emulator seine eigenen Klicks verteilt.
+- **Menü.** „Alles auswählen" (`SelectionMode.line` über den ganzen Puffer)
+  dazu, Kopieren und Einfügen mit Griff (`sandboxTerminalCopyKey`,
+  `sandboxTerminalPasteKey`, auf Apple ohne Anzeige).
+- **OSC 52.** `TerminalSession.build` setzt `onClipboardStore` auf eine
+  Funktion, die nichts tut, und `onClipboardQuery` auf eine, die `null`
+  liefert; `TerminalView` setzt dann keine eigenen. `docs/SECURITY.md` 3.3
+  und `docs/THREAT-MODEL.md` K-09 nennen das jetzt.
+- **Review-Runde 1 (Codex, Opus).** Alle Befunde übernommen.
+  - Codex: Jeder neue Tastendruck löschte die Merkung des gehaltenen
+    Griffs. `Ctrl+Shift+V` halten, eine andere Taste drücken, `V` loslassen:
+    das Loslassen ging an den Emulator und damit an einen Agenten mit dem
+    Loslass-Bericht von kitty. Jetzt eine Menge `_heldChordKeys`, je Taste bis
+    zu ihrem eigenen Loslassen; geleert, wenn das Terminal die Tastatur
+    verliert, und ein neues Drücken einer Taste darin gilt als neues Drücken.
+    Test `a_chord_key_released_after_another_press_stays_with_the_application`.
+    Das Leeren beim Fokusverlust hat keinen eigenen Test: Was es abdeckt,
+    deckt im erreichbaren Fall schon das Entfernen beim nächsten Drücken ab.
+  - Opus: `_paste` hält die Sitzung fest, in die eingefügt wurde, und fügt
+    nach der Antwort der Zwischenablage nur ein, wenn noch dieselbe Sitzung
+    gezeigt wird (der Zustand überlebt einen Wechsel der Sandbox). Ohne
+    eigenen Test: Ein Wechsel der Sitzung im Test braucht einen zweiten
+    Sandbox-Zustand im Fake, den es nicht gibt.
+  - Opus: „Kopieren" im Menü fragt wie `_copy` nach `selectionFor` des
+    aktuellen Puffers; eine Auswahl des anderen Bildschirms zählt nicht
+    (`copy_is_disabled_for_a_selection_of_the_other_screen`).
+  - Opus: `docs/SECURITY.md` 3.3 und K-09 genau: kein Handler für die
+    Zwischenablage; Farbabfragen (OSC 4, 10, 11, `CSI ? 996 n`) beantwortet
+    `TerminalView` mit den Farben des Themas, nur hinter dem Filter.
+  - Opus, Tests: `ctrl_shift_c_without_a_selection_sends_nothing`,
+    `a_reader_or_a_session_that_is_not_attached_cannot_paste_by_menu_or_click`,
+    `a_reader_by_the_time_the_clipboard_answers_does_not_paste`,
+    `shift_middle_click_pastes_past_mouse_reports_unless_the_program_claims_shift`.
+  - Mutationen, je rot und byte-gleich zurück: eine Merkung statt Menge;
+    zweite Prüfung in `_paste` weg; Menü fragt `selection` statt
+    `selectionFor`; Kopier-Griff ohne Auswahl fällt durch; Phase nicht
+    geprüft; `mouseShiftCaptureMode` übergangen; `Shift` übergangen. Der
+    Kopier-Griff ohne Auswahl wird mit eingeschaltetem kitty-Protokoll
+    geprüft, sonst schickt der Emulator ohnehin nichts. Gleichwertig und
+    deshalb ohne roten Test: „Kopieren" im Menü mit `selection` statt
+    `selectionFor`, denn der Emulator löscht die Auswahl selbst, sobald er
+    den Puffer wechselt (`RenderTerminal._onTerminalChange`); der Test
+    `copy_is_disabled_for_a_selection_of_the_other_screen` hält das Verhalten
+    trotzdem fest.
+- **Review-Runde 2 (Codex).** Übernommen. Das Leeren von `_heldChordKeys`
+  beim Fokusverlust (aus Runde 1) ließ das Loslassen wieder durch:
+  `Ctrl+Shift+V` halten, Fokus geht weg, der Zeiger über dem Terminal holt
+  ihn zurück (HUM-303), dann `V` loslassen. Das Leeren ist weg; jede Taste
+  bleibt bis zu ihrem eigenen Loslassen, ein verpasstes Loslassen räumt das
+  nächste Drücken derselben Taste. Test
+  `a_chord_key_released_after_the_focus_came_back_stays_with_the_application`;
+  Mutation (Leeren beim Fokusverlust wieder eingebaut) rot.
+
+### Kandidaten (HUM-313)
+- (A) Farbabfragen in `TerminalSession.build` beantworten oder ablehnen,
+  damit „kein OSC-Handler" wörtlich gilt.
+- (B) Rückfrage vor einem mehrzeiligen Einfügen über `Terminal.isPasteSafe`,
+  solange `DECSET 2004` aus ist.
+- (C) `Shift+Insert` fügt ein.

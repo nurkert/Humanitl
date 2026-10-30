@@ -14,11 +14,16 @@
 ///   that line with its next frame.
 /// * **No filter runs here.** The bytes arrive filtered from the daemon, and
 ///   the emulator gets no OSC handler of its own: the clipboard and the window
-///   title of the human belong to the human (`docs/SECURITY.md` 3.3).
+///   title of the human belong to the human (`docs/SECURITY.md` 3.3). The
+///   session even refuses the clipboard requests of OSC 52 outright
+///   (`terminal_provider.dart`, HUM-313), because the emulator would
+///   otherwise answer them itself. Copy and paste are actions of the human:
+///   a chord, the menu, the middle button.
 library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -69,18 +74,28 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   final TerminalController _controller = TerminalController();
   final HContextMenuController _menu = HContextMenuController();
 
-  /// The physical key of a zoom chord whose press this pane took, until it
-  /// is released (HUM-301).
+  /// The physical keys of zoom chords (HUM-301) and clipboard chords
+  /// (HUM-313) whose press this pane took, each until its own release.
   ///
   /// The activators accept the press and, for larger and smaller, its
-  /// repeats; the release and the repeats of the reset they do not accept.
+  /// repeats; the release and the repeats of the reset, of copy and of paste
+  /// they do not accept.
   /// Those events would fall through to the emulator, and an agent that asks
   /// for releases and repeats (the kitty keyboard protocol) would receive the
   /// second half of a chord whose first half it never saw. So the pane
   /// remembers the key and keeps every further event of it until the release.
-  /// A new press of any key ends the memory as well: the release may have
-  /// gone to another node after the focus moved.
-  PhysicalKeyboardKey? _heldZoomKey;
+  ///
+  /// **One entry per key, and another key does not end it** (review round 1
+  /// of HUM-313). Hold `Ctrl+Shift+V`, tap another key, release the `V`: with
+  /// a single slot cleared by every press, that release went to the agent.
+  ///
+  /// **A loss of focus does not end it either** (review round 2). Hold
+  /// `Ctrl+Shift+V`, let the focus go elsewhere, bring it back by hovering
+  /// over the terminal (HUM-303), then release the `V`: had the set been
+  /// cleared on the way, that release reached the agent. A release that went
+  /// to another node meanwhile leaves the key in the set until its next
+  /// press, and a new press of a key still in it counts as a new press.
+  final Set<PhysicalKeyboardKey> _heldChordKeys = <PhysicalKeyboardKey>{};
 
   @override
   void initState() {
@@ -242,37 +257,36 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   /// Fokus schon hier, tut es nichts, und der Agent bekommt kein Byte.
   /// Und die Zoom-Kürzel (HUM-301): `Ctrl` mit `+`, `=` oder `-`, mit dem
   /// Plus, Minus oder der Null des Ziffernblocks, und `Ctrl+Shift+0`.
-  /// Alles andere gehört ihm, `Ctrl+C` als `0x03`, `Ctrl+P` als `0x10` und
+  /// Dazu Kopieren und Einfügen (HUM-313), `Ctrl+Shift+C` und `Ctrl+Shift+V`,
+  /// die nicht in [shellShortcuts] stehen und nur hier gelten.
+  /// Alles andere gehört ihm, `Ctrl+C` als `0x03`, `Ctrl+V` als `0x16`,
+  /// `Ctrl+P` als `0x10` und
   /// `Esc` eingeschlossen, das OpenCode und pi zum Abbrechen brauchen.
   ///
   /// Hört an dieser Stelle des Baums niemand auf eine Absicht -- im Test etwa,
   /// der die Kachel ohne Schale zeigt --, bleibt die Taste beim Agenten.
-  /// Die Kürzel, die der Emulator selbst behandelt.
+  /// Die Kürzel, die der Emulator selbst behandelt: keine (HUM-313).
   ///
-  /// Seine Vorgabe bindet drei: Kopieren (`Ctrl+Shift+C`), Einfügen
-  /// (`Ctrl+V`) und **alles auswählen** (`Ctrl+A`). Die ersten beiden spiegeln
-  /// das Kontextmenü darüber und bleiben. Das dritte nicht: `Ctrl+A` ist in
-  /// readline und in jedem Programm auf bubbletea -- also auch in OpenCode --
-  /// der Sprung an den Zeilenanfang, und ein Terminal, in dem der nicht
-  /// ankommt, ist an dieser Stelle kaputt. Der Emulator prüft seine Kürzel vor
-  /// jeder Übersetzung in Bytes (`TerminalView._handleKeyEvent`), also hilft
-  /// hier nichts als das Kürzel selbst wegzunehmen; ausgewählt wird mit der
-  /// Maus und kopiert über das Menü.
+  /// Seine Vorgabe bindet drei, und keines davon bleibt. **Alles auswählen**
+  /// (`Ctrl+A`) ist in readline und in jedem Programm auf bubbletea -- also
+  /// auch in OpenCode -- der Sprung an den Zeilenanfang; das Kontextmenü
+  /// wählt stattdessen alles aus. **Einfügen** liegt dort auf `Ctrl+V`, und
+  /// das ist in readline das wörtliche Einfügen des nächsten Zeichens
+  /// (`0x16`); in jedem Terminal unter Linux fügt erst `Ctrl+Shift+V` ein.
+  /// Außerdem fragt seine Einfügen-Handlung nicht, ob die Ansicht nur liest.
+  /// **Kopieren** (`Ctrl+Shift+C`) wäre richtig gebunden, aber Kopieren und
+  /// Einfügen gehören zusammen an eine Stelle: [_onKey] fragt
+  /// [TerminalClipboardActivator], auf Apple-Plattformen mit `Cmd`.
   ///
-  /// Die Vorgabe kommt weiterhin aus dem Emulator und wird nur beschnitten:
-  /// Auf einem Mac trägt sie `Meta` statt `Ctrl`, und das soll sie behalten.
-  Map<ShortcutActivator, Intent> _emulatorShortcuts() {
-    final Map<ShortcutActivator, Intent> shortcuts =
-        Map<ShortcutActivator, Intent>.of(defaultTerminalShortcuts);
-    shortcuts.removeWhere(
-      (ShortcutActivator _, Intent intent) => intent is SelectAllTextIntent,
-    );
-    return shortcuts;
-  }
+  /// Der Emulator prüft seine Kürzel vor jeder Übersetzung in Bytes
+  /// (`TerminalView._handleKeyEvent`), also hilft nichts als die leere
+  /// Tabelle; `null` hieße „nimm deine Vorgabe".
+  static const Map<ShortcutActivator, Intent> _emulatorShortcuts =
+      <ShortcutActivator, Intent>{};
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is KeyDownEvent) {
-      _heldZoomKey = null;
+      _heldChordKeys.remove(event.physicalKey);
     }
     for (final MapEntry<ShortcutActivator, Intent> binding
         in shellShortcuts().entries) {
@@ -286,17 +300,36 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
         break;
       }
       if (binding.value is TerminalZoomIntent && event is KeyDownEvent) {
-        _heldZoomKey = event.physicalKey;
+        _heldChordKeys.add(event.physicalKey);
       }
       Actions.maybeInvoke<Intent>(context, binding.value);
       return KeyEventResult.handled;
     }
-    // Der Rest eines Zoom-Griffs, den diese Ansicht genommen hat: die
-    // Wiederholungen der Vorgabe und das Loslassen (HUM-301). Die Vorgabe
-    // gilt dabei nicht noch einmal.
-    if (_heldZoomKey != null && event.physicalKey == _heldZoomKey) {
+    // Kopieren und Einfügen (HUM-313), nur hier und nicht in der Schale:
+    // Außerhalb des Terminals bleiben die Griffe frei. Der Griff gehört der
+    // Anwendung auch dann, wenn er gerade nichts tun kann -- ohne Auswahl,
+    // oder während die Ansicht nur liest --, denn sonst meldete der Emulator
+    // einem Agenten mit dem Tastaturprotokoll von kitty die Taste als eigene
+    // Folge (`CSI 99;6 u`), mitten in einem Griff, der nicht ihm galt.
+    for (final TerminalClipboard action in TerminalClipboard.values) {
+      if (TerminalClipboardActivator(action)
+          .accepts(event, HardwareKeyboard.instance)) {
+        _heldChordKeys.add(event.physicalKey);
+        switch (action) {
+          case TerminalClipboard.copy:
+            _copy();
+          case TerminalClipboard.paste:
+            _paste();
+        }
+        return KeyEventResult.handled;
+      }
+    }
+    // Der Rest eines Griffs, den diese Ansicht genommen hat: die
+    // Wiederholungen und das Loslassen (HUM-301, HUM-313). Der Griff gilt
+    // dabei nicht noch einmal.
+    if (_heldChordKeys.contains(event.physicalKey)) {
       if (event is KeyUpEvent) {
-        _heldZoomKey = null;
+        _heldChordKeys.remove(event.physicalKey);
       }
       return KeyEventResult.handled;
     }
@@ -424,8 +457,11 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
     itemsBuilder: () => <HMenuItem>[
       HMenuItem(
         label: l10n.sandboxTerminalCopy,
-        enabled: _controller.selection != null,
+        // The same question as [_copy]: a selection of the other buffer
+        // (main or alternate screen) is no selection here.
+        enabled: _controller.selectionFor(session.terminal.buffer) != null,
         onSelected: _copy,
+        shortcut: _apple ? null : l10n.sandboxTerminalCopyKey,
       ),
       // Einfügen geht am Rohmodus vorbei: `Terminal.paste` ruft `onOutput`
       // auch dann, wenn die Ansicht nur liest, und die Bytes gingen hinauf,
@@ -433,9 +469,12 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
       // die Lüge, die der Kommentar am Cursor drei Zeilen tiefer ausschließt.
       HMenuItem(
         label: l10n.sandboxTerminalPaste,
-        enabled: !session.readOnly && session.phase == TerminalPhase.attached,
+        enabled: _mayPaste(session),
         onSelected: _paste,
+        shortcut: _apple ? null : l10n.sandboxTerminalPasteKey,
       ),
+      // Ersetzt `Ctrl+A` des Emulators, das dem Agenten gehört (HUM-313).
+      HMenuItem(label: l10n.sandboxTerminalSelectAll, onSelected: _selectAll),
     ],
     // The pointer over the emulator hands it the keyboard, within the rule of
     // [_mayTakeKeyboard] (HUM-303). On entering, and on every movement
@@ -446,33 +485,36 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
       child: MouseRegion(
         onEnter: _hovered,
         onHover: _hovered,
-        child: ColoredBox(
-          color: tokens.terminal.background,
-          child: TerminalView(
-            session.terminal,
-            controller: _controller,
-            focusNode: _focus,
-            autofocus: true,
-            shortcuts: _emulatorShortcuts(),
-            theme: _theme(tokens.terminal),
-            textStyle: TerminalStyle(
-              // `mono13` until somebody zooms (HUM-301). A new size changes
-              // the cells, the emulator counts columns and rows again and
-              // reports them through `onResize`, and the session sends them
-              // up on its throttled path (HUM-305): the agent redraws.
-              fontSize: ref.watch(terminalFontSizeProvider),
-              fontFamily: HType.monoFamily,
-              fontFamilyFallback: HType.monoFallback,
+        child: Listener(
+          onPointerDown: _middleClicked,
+          child: ColoredBox(
+            color: tokens.terminal.background,
+            child: TerminalView(
+              session.terminal,
+              controller: _controller,
+              focusNode: _focus,
+              autofocus: true,
+              shortcuts: _emulatorShortcuts,
+              theme: _theme(tokens.terminal),
+              textStyle: TerminalStyle(
+                // `mono13` until somebody zooms (HUM-301). A new size changes
+                // the cells, the emulator counts columns and rows again and
+                // reports them through `onResize`, and the session sends them
+                // up on its throttled path (HUM-305): the agent redraws.
+                fontSize: ref.watch(terminalFontSizeProvider),
+                fontFamily: HType.monoFamily,
+                fontFamilyFallback: HType.monoFallback,
+              ),
+              padding: EdgeInsets.all(tokens.spacing.x2),
+              onSecondaryTapDown: (TapDownDetails details, CellOffset _) =>
+                  _menu.open(details.globalPosition),
+              onKeyEvent: _onKey,
+              // A reader may not type, and nobody may while the session is not
+              // attached: the daemon drops those keys, and an emulator that still
+              // takes them shows a cursor waiting for an agent that never hears it.
+              readOnly:
+                  session.readOnly || session.phase != TerminalPhase.attached,
             ),
-            padding: EdgeInsets.all(tokens.spacing.x2),
-            onSecondaryTapDown: (TapDownDetails details, CellOffset _) =>
-                _menu.open(details.globalPosition),
-            onKeyEvent: _onKey,
-            // A reader may not type, and nobody may while the session is not
-            // attached: the daemon drops those keys, and an emulator that still
-            // takes them shows a cursor waiting for an agent that never hears it.
-            readOnly:
-                session.readOnly || session.phase != TerminalPhase.attached,
           ),
         ),
       ),
@@ -485,31 +527,118 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
     larger ? size.zoomIn() : size.zoomOut();
   }
 
+  /// Whether the menu and the chord name `Cmd` instead of `Ctrl+Shift`.
+  bool get _apple => switch (defaultTargetPlatform) {
+    TargetPlatform.iOS || TargetPlatform.macOS => true,
+    _ => false,
+  };
+
+  /// Whether pasted text would reach the agent: only a writer of an attached
+  /// session. Otherwise the daemon drops the bytes (see the menu).
+  bool _mayPaste(TerminalSessionState session) =>
+      !session.readOnly && session.phase == TerminalPhase.attached;
+
+  /// Copies the selection into the clipboard of the human (HUM-042, HUM-313).
+  ///
+  /// The one way text leaves the terminal for the host: a chord, a menu entry,
+  /// each an action of the human. A selection alone copies nothing -- Flutter
+  /// on Linux has no primary selection to put it in, and the clipboard is
+  /// not the place for every drag of the mouse. Trailing blanks of each line
+  /// are dropped, as every terminal does; the emulator pads lines with them.
   void _copy() {
-    final BufferRange? selection = _controller.selection;
+    final Buffer buffer = ref
+        .read(terminalSessionProvider(widget.sandboxId))
+        .terminal
+        .buffer;
+    final BufferRange? selection = _controller.selectionFor(buffer);
     if (selection == null) {
       return;
     }
-    final String text = ref
-        .read(terminalSessionProvider(widget.sandboxId))
-        .terminal
-        .buffer
-        .getText(selection);
-    unawaited(Clipboard.setData(ClipboardData(text: text)));
+    unawaited(
+      Clipboard.setData(ClipboardData(text: buffer.getText(selection, true))),
+    );
   }
 
+  /// Pastes the clipboard as input for the agent (HUM-042, HUM-313).
+  ///
+  /// [Terminal.paste] does the two things a paste needs and typing does not.
+  /// While the program asked for bracketed paste (`DECSET 2004`), the text
+  /// goes up between `ESC [200~` and `ESC [201~`, so a shell or an agent takes
+  /// several lines as one input instead of running them line by line. And it
+  /// drops every escape sequence of the pasted text, `ESC [201~` included,
+  /// which would end the bracket early and turn the rest into typed commands,
+  /// and replaces the control bytes that a terminal acts on (`0x03`, `0x1a`,
+  /// ...) by a blank. Typing the text instead ([Terminal.textInput]) would
+  /// skip both.
   void _paste() {
+    // The session the human pasted into. The state of this pane outlives a
+    // change of sandbox (`didUpdateWidget`), so the answer of the clipboard
+    // may arrive while another session is shown; it then goes nowhere.
+    final String id = widget.sandboxId;
+    if (!_mayPaste(ref.read(terminalSessionProvider(id)))) {
+      return;
+    }
     unawaited(
       Clipboard.getData(Clipboard.kTextPlain).then((ClipboardData? data) {
         final String? text = data?.text;
-        if (text != null && text.isNotEmpty && mounted) {
-          ref
-              .read(terminalSessionProvider(widget.sandboxId))
-              .terminal
-              .paste(text);
+        if (text == null || text.isEmpty || !mounted) {
+          return;
+        }
+        if (id != widget.sandboxId) {
+          return;
+        }
+        // Asked again: the clipboard answers later, and meanwhile the session
+        // may have ended or handed the keyboard to somebody else.
+        final TerminalSessionState session = ref.read(
+          terminalSessionProvider(id),
+        );
+        if (_mayPaste(session)) {
+          session.terminal.paste(text);
         }
       }),
     );
+  }
+
+  /// Selects the whole buffer, scrollback included (HUM-313).
+  ///
+  /// The menu entry that replaces `Ctrl+A` of the emulator, which belongs to
+  /// the agent. Selecting changes nothing outside the terminal; copying it is
+  /// a step of its own.
+  void _selectAll() {
+    final Buffer buffer = ref
+        .read(terminalSessionProvider(widget.sandboxId))
+        .terminal
+        .buffer;
+    _controller.setSelection(
+      buffer.createAnchor(0, 0),
+      buffer.createAnchor(buffer.viewWidth, buffer.height - 1),
+      mode: SelectionMode.line,
+    );
+  }
+
+  /// The middle button pastes, as on every Linux desktop (HUM-313).
+  ///
+  /// What it pastes is the clipboard: the primary selection, which X11 and
+  /// Wayland paste there, is not reachable from Flutter. Only while the
+  /// program in the terminal does not take the mouse itself: a full-screen
+  /// TUI with mouse reporting gets the click as its own (the emulator sends
+  /// it), unless `Shift` is held and the program did not claim that too --
+  /// the same rule the emulator applies to its own clicks.
+  void _middleClicked(PointerDownEvent event) {
+    if (event.kind != PointerDeviceKind.mouse ||
+        event.buttons != kMiddleMouseButton) {
+      return;
+    }
+    final Terminal terminal = ref
+        .read(terminalSessionProvider(widget.sandboxId))
+        .terminal;
+    final bool programTakesTheMouse =
+        terminal.mouseMode != MouseMode.none &&
+        !(HardwareKeyboard.instance.isShiftPressed &&
+            !terminal.mouseShiftCaptureMode);
+    if (!programTakesTheMouse) {
+      _paste();
+    }
   }
 
   /// The palette of this program, in the shape the emulator wants.
