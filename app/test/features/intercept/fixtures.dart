@@ -318,6 +318,22 @@ class TestDaemonClient implements DaemonClient {
   Stream<TerminalFrame> terminal(Stream<TerminalCommand> input) =>
       const Stream<TerminalFrame>.empty();
 
+  // Kein Daemon, also keine Sitzung, in der eine weitere Shell laufen könnte
+  // (HUM-314).
+  @override
+  Future<ShellStarted> exec({
+    String sandboxId = '',
+    List<String> command = const <String>[],
+    int cols = 0,
+    int rows = 0,
+  }) async => throw const DaemonException(
+    Diagnostic(
+      code: DiagnosticCodes.capabilityUnavailable,
+      severity: Severity.error,
+      why: 'this test client runs no session',
+    ),
+  );
+
   // Der Doctor und die Endpunkt-Probe (HUM-075, HUM-044) gehören dem
   // Setup-Bildschirm. Der leere Bericht ist hier die ehrliche Antwort: nicht
   // elf grüne Zeilen, sondern gar keine, denn dieser Client hat nichts

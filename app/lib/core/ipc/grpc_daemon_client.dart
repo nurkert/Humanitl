@@ -759,6 +759,27 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
+  Future<ShellStarted> exec({
+    String sandboxId = '',
+    List<String> command = const <String>[],
+    int cols = 0,
+    int rows = 0,
+  }) async {
+    final pb.ExecResponse response = await _unary(
+      (CallOptions options) => _stub.exec(
+        pb.ExecRequest(
+          sandboxId: sandboxId,
+          command: command,
+          cols: cols,
+          rows: rows,
+        ),
+        options: options,
+      ),
+    );
+    return response.toDomain();
+  }
+
+  @override
   Future<void> close() => _channel.shutdown();
 
   Future<T> _unary<T>(Future<T> Function(CallOptions options) call) async {

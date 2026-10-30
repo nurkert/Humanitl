@@ -12,7 +12,7 @@
 /// a second filter would be a second promise, and the one that counts is the
 /// one every client gets.
 ///
-/// These are the two types in `core/domain` that are not freezed. They carry
+/// These are the types in `core/domain` that are not freezed. They carry
 /// bytes and are never compared, sorted or rebuilt from a copy; an
 /// `operator ==` over a screenful of output would be a cost without a reader.
 library;
@@ -39,10 +39,16 @@ final class TerminalOpen extends TerminalCommand {
     required this.cols,
     required this.rows,
     this.readOnly = false,
+    this.shellId = '',
   });
 
   /// The sandbox to attach to; empty means the session that runs.
   final String sandboxId;
+
+  /// The further shell to attach to, as `Exec` named it (HUM-299, HUM-314);
+  /// empty means the agent's own terminal. An id under which no shell lives
+  /// is answered with `IPC_006`.
+  final String shellId;
 
   /// Columns of this client.
   final int cols;
@@ -129,4 +135,28 @@ final class TerminalExit extends TerminalFrame {
 
   /// What the agent returned.
   final int code;
+}
+
+/// A further shell the daemon started in the running sandbox (`Exec`,
+/// HUM-299).
+///
+/// It runs next to the agent, with the agent's limits and a terminal of its
+/// own; [TerminalOpen.shellId] attaches to that terminal. The agent can read
+/// what is typed there (same user, same PID namespace, `docs/SECURITY.md` 4).
+final class ShellStarted {
+  /// The answer of `Exec`.
+  const ShellStarted({
+    required this.shellId,
+    required this.sandboxId,
+    this.command = const <String>[],
+  });
+
+  /// The id for [TerminalOpen.shellId], `<session>-<n>`.
+  final String shellId;
+
+  /// The sandbox the shell runs in.
+  final String sandboxId;
+
+  /// The command that was really started.
+  final List<String> command;
 }
