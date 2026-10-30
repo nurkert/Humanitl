@@ -1,0 +1,20 @@
+# %post des RPM-Pakets humanitl (HUM-339), das Gegenstueck zum `postinst`
+# des .deb (HUM-284).
+#
+# rpm ruft `%post` nach jeder Installation (Argument 1) und nach jedem Update
+# (Argument 2, die Zahl der danach installierten Fassungen). In beiden Faellen
+# laedt jede laufende systemd-Nutzerinstanz die Units des Pakets neu, und ein
+# laufender Daemon ohne Agenten-Sitzung wird mit dem neuen Programm neu
+# gestartet. Bei einem Update laeuft das `%postun` der alten Fassung erst
+# danach, und es tut dann nichts (`postun.in`). Was der eingesetzte Teil im
+# Einzelnen tut und warum er nie die Installation abbricht, steht darin selbst
+# (`packaging/deb/maintscript-users.sh`).
+#
+# Kein `set -e`: Ein Scriptlet, das scheitert, laesst rpm mit Fehler enden,
+# obwohl das Paket installiert ist. Das Skript endet immer mit 0.
+
+#HUMANITL_USERS#
+
+humanitl_refresh_users restart || true
+
+exit 0

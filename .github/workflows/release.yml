@@ -1,8 +1,10 @@
 # Releases 0.0.x: from a tag on a green `main` commit to a GitHub release
-# with .deb, AppImage, archive and checksums. Since HUM-273 they are published as
+# with .deb, .rpm, AppImage, archive and checksums. Since HUM-273 they are published as
 # regular releases (marked latest), no longer as pre-releases.
 #
 #   guard -> build -> check-deb ------------+-> release
+#                  -> check-rpm ------------+
+#                  -> check-aur ------------+
 #                  -> check-appimage -------+
 #         -> build-macos -> check-macos ----+
 #
@@ -10,9 +12,17 @@
 #            ci.yml-Lauf dieses Commits ist mit `success` beendet.
 # build      Version in den Auscheckstand stempeln, Release-Bau von humanitld,
 #            humanitl, humanitl-shim und der Flutter-App, `--version` pruefen,
-#            .deb, AppImage und tar.gz bauen, SHA256SUMS, Release-Notes.
+#            .deb, .rpm, AppImage und tar.gz bauen, SHA256SUMS, Release-Notes,
+#            dazu die Dateien des AUR-Pakets humanitl-bin (dist-meta/aur/).
 # check-deb  Das .deb in einem frischen Ubuntu-24.04-Container installieren,
 #            pruefen, mit --purge entfernen; lintian ohne Fehler und Warnungen.
+# check-rpm  Das .rpm in einem frischen Fedora-44-Container mit dnf
+#            installieren, pruefen, entfernen; rpmlint ohne Fehler und
+#            Warnungen (packaging/rpm, HUM-339).
+# check-aur  Im Arch-Container aus den gerenderten AUR-Dateien und dem Archiv
+#            mit makepkg bauen, mit pacman installieren, pruefen, entfernen
+#            (packaging/aur/check-aur.sh, HUM-339). Hochgeladen ins AUR wird
+#            nichts; das macht der Maintainer von Hand (packaging/aur/README.md).
 # check-appimage  Das AppImage auf einem frischen Runner pruefen, ohne FUSE und
 #            ohne Installation (packaging/appimage/check-appimage.sh, HUM-335).
 # build-macos  macOS-15: universal binaries (arm64 + x86_64), die Flutter-App,
@@ -33,12 +43,12 @@
 # jetzt auf v0.0.* verengt: Ein Tag v0.1.0 loest hier nichts aus. 0.1.0 ist
 # HUM-060 (backlog/sprint-5.md) mit VERSION-Datei, Changelog und minisign;
 # das Issue erweitert diese Datei, statt eine zweite anzulegen. Das AppImage
-# liegt seit HUM-335 schon den 0.0.x-Releases bei.
+# liegt seit HUM-335 schon den 0.0.x-Releases bei, das RPM seit HUM-339.
 #
 # Sicherheit: Tag-Name und Eingabe gelangen nur ueber `env:` in Skripte und
 # werden dort gegen ^0\.0\.N$ geprueft, bevor sie irgendwo anders stehen.
 # Nur der Job `release` darf schreiben (contents: write). Jede Action ist auf
-# einen Commit-SHA gepinnt, das Container-Abbild auf einen Digest; der Tag im
+# einen Commit-SHA gepinnt, jedes Container-Abbild auf einen Digest; der Tag im
 # Kommentar ist Dokumentation, beide werden zusammen angehoben.
 
 name: release
@@ -224,11 +234,12 @@ jobs:
       - name: Install the packaging tools
         # dpkg-dev bringt dpkg-shlibdeps, patchelf entfernt den RUNPATH des
         # Build-Rechners aus den Plugin-Bibliotheken, musl-tools baut den Shim
-        # statisch wie im CI-Job rust-test.
+        # statisch wie im CI-Job rust-test, rpm bringt rpmbuild fuer das RPM
+        # (HUM-339; kompiliert wird dabei nichts, das Spec beschreibt nur den Baum).
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends dpkg-dev patchelf musl-tools
+          sudo apt-get install -y --no-install-recommends dpkg-dev patchelf musl-tools rpm
 
       - name: Stamp the version into this checkout
         # Nur in diesem Auscheckstand; committet wird nichts. Im Repository
@@ -278,11 +289,13 @@ jobs:
           ./packaging/release/check-version.sh "$VERSION" "$RUNNER_TEMP/bin" \
             app/build/linux/x64/release/bundle
 
-      - name: Build the .deb, the AppImage and the archive
+      - name: Build the .deb, the .rpm, the AppImage and the archive
         run: |
           set -euo pipefail
           bundle=app/build/linux/x64/release/bundle
           ./packaging/deb/build-deb.sh "$VERSION" "$RUNNER_TEMP/bin" "$bundle" dist
+          # Dieselben Programme, dasselbe Bundle und dieselbe Ablage wie im .deb (HUM-339).
+          ./packaging/rpm/build-rpm.sh "$VERSION" "$RUNNER_TEMP/bin" "$bundle" dist
           # Dieselben Programme und dasselbe Bundle wie im .deb (HUM-335); das
           # Werkzeug laedt das Skript selbst, auf Fassung und Pruefsumme gepinnt.
           ./packaging/appimage/build-appimage.sh "$VERSION" "$RUNNER_TEMP/bin" "$bundle" dist
@@ -292,6 +305,21 @@ jobs:
           mkdir -p dist-meta
           dpkg-deb --contents "dist/humanitl_${VERSION}_amd64.deb" > dist-meta/deb-contents.txt
           tar -tzf "dist/humanitl-${VERSION}-linux-x86_64.tar.gz" > dist-meta/tar-contents.txt
+          rpm_file="dist/humanitl-${VERSION}-1.x86_64.rpm"
+          rpm -qpi "$rpm_file"
+          {
+            rpm -qpi "$rpm_file"
+            echo
+            echo "## requires"
+            rpm -qp --requires "$rpm_file"
+            echo
+            echo "## files"
+            rpm -qplv "$rpm_file"
+          } > dist-meta/rpm-contents.txt
+          # Die Dateien des AUR-Pakets fuer genau dieses Archiv. Sie sind kein
+          # Release-Asset, sondern liegen nur im Workflow-Artefakt: Ins AUR
+          # laedt der Maintainer sie von Hand (packaging/aur/README.md).
+          ./packaging/aur/render.sh "$VERSION" "dist/humanitl-${VERSION}-linux-x86_64.tar.gz" dist-meta/aur
           {
             echo "### humanitl $VERSION"
             echo
@@ -315,6 +343,9 @@ jobs:
             dist/
             dist-meta/
           if-no-files-found: error
+          # dist-meta/aur/.SRCINFO beginnt mit einem Punkt; ohne diese Zeile
+          # liesse upload-artifact die Datei aus, und check-aur faende sie nicht.
+          include-hidden-files: true
           # Zwei Wochen genuegen fuer einen Probelauf; das Release selbst
           # haelt seine Dateien auf GitHub.
           retention-days: 14
@@ -371,6 +402,65 @@ jobs:
         run: |
           set -euo pipefail
           ./packaging/deb/lintian.sh "artefacts/dist/humanitl_${VERSION}_amd64.deb"
+
+  check-rpm:
+    name: check-rpm
+    needs: [guard, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Ein frisches Fedora 44. Das RPM verlangt glibc 2.39 (Bau auf Ubuntu
+    # 24.04); Fedora 40 ist die aelteste passende Ausgabe, aber am Ende ihrer
+    # Pflege, geprueft wird deshalb die aktuelle. Wie bei check-deb darf hier
+    # installiert und entfernt werden, und der Digest pinnt das Abbild.
+    container:
+      image: fedora:44@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.guard.outputs.artifact }}
+          path: artefacts
+      - name: Install, check and remove the .rpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd artefacts/dist && sha256sum -c SHA256SUMS --ignore-missing)
+          ./packaging/rpm/check-install.sh "artefacts/dist/humanitl-${VERSION}-1.x86_64.rpm" "$VERSION"
+      - name: rpmlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./packaging/rpm/rpmlint.sh "artefacts/dist/humanitl-${VERSION}-1.x86_64.rpm"
+
+  check-aur:
+    name: check-aur
+    needs: [guard, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Ein frisches Arch Linux mit base-devel (makepkg). check-aur.sh baut aus
+    # den gerenderten Dateien und dem Archiv dieses Laufs, statt es von GitHub
+    # zu laden, installiert, prueft und entfernt das Paket und vergleicht Pfade
+    # und Rechte mit dem .deb. Nichts davon geht ins AUR.
+    container:
+      image: archlinux:base-devel@sha256:624bdc7fc6615155d67bc34cf7146c0c9fd0e3c92943977da63a630e4ca49c30
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.guard.outputs.artifact }}
+          path: artefacts
+      - name: Build with makepkg, install, check and remove humanitl-bin
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd artefacts/dist && sha256sum -c SHA256SUMS --ignore-missing)
+          ./packaging/aur/check-aur.sh artefacts/dist-meta/aur \
+            "artefacts/dist/humanitl-${VERSION}-linux-x86_64.tar.gz" "$VERSION" \
+            "artefacts/dist/humanitl_${VERSION}_amd64.deb"
 
   build-macos:
     name: build-macos
@@ -526,9 +616,9 @@ jobs:
 
   release:
     name: release
-    needs: [guard, build, check-deb, check-appimage, build-macos, check-macos]
+    needs: [guard, build, check-deb, check-rpm, check-aur, check-appimage, build-macos, check-macos]
     # Nur ein Tag legt ein Release an. Der Probelauf endet mit check-deb,
-    # check-appimage und check-macos.
+    # check-rpm, check-aur, check-appimage und check-macos.
     if: needs.guard.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -621,6 +711,7 @@ jobs:
             --title "Humanitl $VERSION" \
             --notes-file ../dist-meta/RELEASE_NOTES.md \
             "humanitl_${VERSION}_amd64.deb" \
+            "humanitl-${VERSION}-1.x86_64.rpm" \
             "Humanitl-${VERSION}-x86_64.AppImage" \
             "humanitl-${VERSION}-linux-x86_64.tar.gz" \
             "Humanitl-${VERSION}-macos.dmg" \

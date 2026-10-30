@@ -1,0 +1,97 @@
+# Spec-Vorlage des RPM-Pakets humanitl (HUM-339). `build-rpm.sh` setzt die
+# Marken @...@ ein und baut daraus mit `rpmbuild -bb`; von Hand gebaut wird
+# aus dieser Datei nicht.
+#
+# Das Paket kompiliert nichts. Programme und Flutter-Bundle sind dieselben,
+# die ins .deb gehen, und `build-rpm.sh` hat den Baum unter @TREE@ schon in
+# der Form des .deb angelegt (Pfade, Rechte, Units). Der Abschnitt install
+# kopiert ihn nur. In Kommentaren dieser Datei steht kein Prozentzeichen:
+# rpm setzt Makros auch dort ein.
+
+# Nichts nachbearbeiten: Die Programme sind schon gestrippt
+# (`packaging/release/tidy-elf.sh`), und `brp-strip` traefe sonst libapp.so,
+# den AOT-Snapshot des Dart-Codes, der ungestrippt bleiben muss. Kein
+# Debug-Paket, keine Links unter /usr/lib/.build-id: Sie gehoerten zu keinem
+# Debug-Paket und blieben in einem fremden Verzeichnis liegen.
+%global debug_package %{nil}
+%global __os_install_post %{nil}
+%global _build_id_links none
+
+# Die Bibliotheken des Bundles sind privat. Sie bieten dem System nichts an,
+# und was Anwendung und Plugins von ihnen verlangen (libflutter_linux_gtk.so,
+# libapp.so, die Plugins), bringt das Paket selbst mit. Alle anderen
+# Abhaengigkeiten liest rpm aus den ELF-Dateien, auch die Mindestfassung von
+# glibc (`libc.so.6(GLIBC_2.39)(64bit)`); dnf und zypper setzen damit die
+# Untergrenze des Pakets selbst durch.
+%global __provides_exclude_from ^/usr/lib/humanitl/.*$
+%global __requires_exclude ^lib(flutter_linux_gtk|app|[a-z0-9_]+_plugin)\\.so.*$
+
+Name:           humanitl
+Version:        @VERSION@
+Release:        1
+Summary:        Human-in-the-loop network moderation for AI coding agents
+License:        GPL-3.0-only AND CC-BY-4.0 AND CC-BY-3.0 AND BSD-3-Clause AND MIT
+URL:            https://github.com/nurkert/Humanitl
+Packager:       Niko Burkert <humanitl@nurkert.de>
+ExclusiveArch:  x86_64
+
+# bubblewrap ist kein gelinktes, sondern ein gestartetes Programm: Ohne
+# `bwrap` gibt es keine Sandbox. Die Mindestfassung kommt wie beim .deb aus
+# `MIN_BWRAP_VERSION` in daemon/crates/sandbox/src/bwrap.rs.
+Requires:       bubblewrap >= @BWRAP_MIN@
+# Flutters Engine laedt libEGL.so.1 und libGLESv2.so.2 ueber libepoxy mit
+# dlopen; das sieht die automatische Ableitung nicht. Ohne die beiden bricht
+# `humanitl-app` mit "Couldn't open libEGL.so.1" ab. Als Soname verlangt,
+# damit Fedora (libglvnd) und openSUSE (libEGL1, libGLESv2-2) sie mit ihren
+# eigenen Paketen erfuellen.
+Requires:       libEGL.so.1()(64bit)
+Requires:       libGLESv2.so.2()(64bit)
+# Das Gegenstueck zu `Recommends: libsecret-tools` des .deb: Ablage der
+# Zugangsdaten im Schluesselbund ueber `secret-tool`. Als Datei verlangt,
+# weil das Paket auf Fedora libsecret und auf openSUSE secret-tool heisst.
+Recommends:     /usr/bin/secret-tool
+# Das Symbol im Infobereich braucht libayatana-appindicator3.
+Suggests:       libayatana-appindicator3.so.1()(64bit)
+
+%description
+Runs an AI coding agent in a sandbox without a network interface and
+holds every outbound request for human review.
+
+This is a 0.0.x early release ahead of the 0.1.0 MVP. It is unsigned and
+not meant for production use.
+
+%prep
+
+%build
+
+%install
+cp -a '@TREE@/.' '%{buildroot}/'
+
+# Die Scriptlets liest rpm aus Dateien statt aus dem Spec, damit keine Makros
+# in sie geraten (`scriptlets.sh`). Zwischen ihnen und dem naechsten
+# Abschnitt steht nichts: rpm haengt jede Zeile dort an das Scriptlet an.
+#
+# Das Paket besitzt nur seine eigenen Verzeichnisse. /usr/lib/systemd/user
+# und die Verzeichnisse von hicolor gehoeren systemd und hicolor-icon-theme.
+%post -f @POST@
+
+%postun -f @POSTUN@
+
+%files
+%defattr(-,root,root,-)
+/usr/lib/humanitl
+/usr/bin/humanitl
+/usr/bin/humanitl-app
+/usr/lib/systemd/user/humanitld.service
+/usr/lib/systemd/user/humanitld.socket
+/usr/share/applications/dev.humanitl.humanitl.desktop
+/usr/share/icons/hicolor/scalable/apps/humanitl.svg
+/usr/share/icons/hicolor/64x64/apps/humanitl.png
+/usr/share/icons/hicolor/128x128/apps/humanitl.png
+/usr/share/icons/hicolor/256x256/apps/humanitl.png
+/usr/share/humanitl
+%license /usr/share/licenses/humanitl
+
+%changelog
+* @CHANGELOG_DATE@ Niko Burkert <humanitl@nurkert.de> - @VERSION@-1
+- Early release @VERSION@ from commit @COMMIT@, not for production use.

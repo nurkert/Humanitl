@@ -197,7 +197,7 @@ Das AUR-Paket `humanitl-bin` nimmt das Archiv
 `humanitl-<version>-linux-x86_64.tar.gz` eines Release, prüft dessen SHA-256 und
 installiert es mit demselben Aufbau wie das `.deb`, Units und Menüeintrag
 eingeschlossen. Der Release-Lauf baut es mit makepkg und installiert und
-entfernt es in einem Arch-Linux-Container. Der Betreuer veröffentlicht es nach
+entfernt es in einem Arch-Linux-Container. Der Maintainer veröffentlicht es nach
 jedem Release von Hand im AUR, deshalb kann es eine Weile hinter der
 Release-Seite zurückliegen; solange
 <https://aur.archlinux.org/packages/humanitl-bin> nicht existiert, ist das Paket

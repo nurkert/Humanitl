@@ -1,0 +1,32 @@
+# Install-Skript des AUR-Pakets humanitl-bin (HUM-339).
+#
+# pacman liest diese Datei mit `source` und ruft danach `post_install`,
+# `post_upgrade` oder `post_remove`. Sie tut dasselbe wie `postinst` und
+# `postrm` des .deb (HUM-284): Nach einer Installation oder einem Update laedt
+# jede laufende systemd-Nutzerinstanz die Units des Pakets neu, und ein
+# laufender Daemon ohne Agenten-Sitzung wird mit dem neuen Programm neu
+# gestartet; nach dem Entfernen wird nur neu geladen. Der eingesetzte Teil
+# darunter ist Wort fuer Wort `packaging/deb/maintscript-users.sh`; was er
+# zusagt und warum er nie die Installation abbricht, steht dort.
+#
+# Menue und Symbol-Cache aktualisieren die alpm-Hooks der Pakete, denen diese
+# Caches gehoeren, selbst; hier steht dafuer keine Zeile. (Den Namen des
+# Werkzeugs nennt dieser Kommentar mit Absicht nicht: namcap warnt sonst, das
+# Skript rufe ein Programm, das schon ein Hook ruft.) Dass der Hook
+# 30-systemd-daemon-reload-user.hook von systemd nach jeder Transaktion mit
+# Units auch selbst `systemctl --user daemon-reload` anstoesst, schadet nicht;
+# ein zweites Neuladen ist harmlos.
+
+#HUMANITL_USERS#
+
+post_install() {
+  humanitl_refresh_users restart || true
+}
+
+post_upgrade() {
+  humanitl_refresh_users restart || true
+}
+
+post_remove() {
+  humanitl_refresh_users reload || true
+}
