@@ -6,8 +6,8 @@ export type Platform = 'macos' | 'linux';
 
 export interface Asset {
   platform: Platform;
-  /** Was die Datei ist, für die Beschriftung: Disk-Image, Zip, Debian-Paket, Archiv. */
-  kind: 'dmg' | 'zip' | 'deb' | 'tar';
+  /** Was die Datei ist, für die Beschriftung: Disk-Image, Zip, Debian-Paket, AppImage, Archiv. */
+  kind: 'dmg' | 'zip' | 'deb' | 'appimage' | 'tar';
   name: string;
   url: string;
   sizeMb: number;
@@ -31,6 +31,7 @@ const kinds: [Asset['kind'], Platform, RegExp][] = [
   ['dmg', 'macos', /macos\.dmg$/i],
   ['zip', 'macos', /macos\.zip$/i],
   ['deb', 'linux', /\.deb$/i],
+  ['appimage', 'linux', /x86_64\.AppImage$/i],
   ['tar', 'linux', /linux.*\.tar\.gz$/i],
 ];
 
