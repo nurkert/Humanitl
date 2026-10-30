@@ -3,6 +3,10 @@
 // einen Bogen, der nach rechts oben steigt; rechts unten entsteht Platz für die große
 // Beschriftung.
 //
+// Der Fächer (HUM-348) zeigt nur drei bis vier Scheiben, seitlich geneigt und nach hinten
+// gestaffelt, damit man ihre Dicke sieht. Die übrigen Fenster stehen unsichtbar auf ihren
+// Plätzen und blenden im Morph auf, so kommen alle sieben auf dem Ring an.
+//
 // Danach scrollt die Seite normal weiter, kein Skript bewegt sie. Das Karussell dreht
 // nur über Pfeile, Ziehen, Wischen, waagrechtes Scrollen und die Pfeiltasten, ohne Ende
 // in beide Richtungen.
@@ -173,8 +177,13 @@ function classify(vw: number, vh: number): Cls {
 
 const HERO_FAN: Profile = [
   [1, 1],
-  [2, 0.6],
+  [2, 0.8],
   [2.6, 0],
+];
+// Links der Front liegt im Fächer nichts: dort warten die Fenster unsichtbar auf den Morph.
+const HERO_NEG: Profile = [
+  [0, 1],
+  [0.6, 0],
 ];
 const STAGE_POS: Profile = [
   [2, 1],
@@ -203,6 +212,9 @@ const BETA_MIN: Record<Cls, number> = {
   G: -6,
 };
 
+// Neigung des Telefon-Stapels in Grad: dieselbe Blickrichtung wie der Fächer.
+const STACK_YAW = -28;
+
 // Wo die Front auf der Bühne steht: linker Rand als Anteil der Breite, null heißt mittig.
 const EDGE: Record<Cls, number | null> = {
   A: 0.04,
@@ -221,6 +233,9 @@ const CORNER = -12;
 
 // Perspektive der Bühne; dieselbe Tiefe wirkt stärker, die Front löst sich vom Bogen.
 const perspectiveOf = (Ws: number) => Math.max(1200, 2.4 * Ws);
+
+// Die Dicke muss im Fächer als Seitenwand zu lesen sein, auch verkleinert und geneigt.
+const slabT = (Ws: number) => clamp(0.03 * Ws, 10, 30);
 
 interface Box {
   l: number;
@@ -251,6 +266,32 @@ function params(p: Partial<Params>): Params {
     delta: 0.08,
     yaw: 0,
     ...p,
+  };
+}
+
+// Der Fächer der breiten Klassen: Scheiben fast parallel, jede vier Grad weiter gedreht.
+const FAN: Partial<Params> = {
+  tilt: 4,
+  phis: 16,
+  r: 1.3,
+  kappa: 0.25,
+  delta: 0.22,
+  yaw: -32,
+};
+
+/**
+ * Der Stapel am Telefon: die Karten rechts der Front staffeln sich schräg nach hinten, die
+ * unsichtbaren links liegen dicht hinter ihr und öffnen sich erst im Morph.
+ */
+function stackAt(d: number, Ws: number, H: number): Pose {
+  const s = d >= 0 ? d : -0.6 * d;
+  return {
+    x: Math.sign(d) * 0.13 * Ws * s,
+    y: -0.03 * H * s,
+    z: -0.24 * Ws * s,
+    rz: 0,
+    ry: STACK_YAW,
+    rx: 0,
   };
 }
 
@@ -353,32 +394,29 @@ function init(scene: HTMLElement) {
   function layout(cls: Cls): Layout {
     const g = clamp(vh * 0.036, 20, 56);
     const heroBottom = offsetIn(actions) + actions.offsetHeight;
-    const fanRoom = (k: number) => (vh - heroBottom - k * g) / 0.72;
+    const fanRoom = (k: number) => (vh - heroBottom - k * g) / 0.66;
     let Ws = 0;
     let Wh = 0;
     let hero: Params;
     let stage: Params;
     let heroProfile = HERO_FAN;
-    let heroNeg: Profile | null = null;
     let stagePos = STAGE_POS;
     // Keine Haltestrecke: Der Morph beginnt mit dem ersten Pixel Scrollweg, damit die
     // Bühne nie stehen bleibt, während die Seite sich schon bewegt (Inhaber, 2026-10-30).
     let hold = 0;
     let morph = 1;
-    let floor = true;
     let stack = false;
     switch (cls) {
       case "A":
-        Wh = Math.min(vw * 0.28, vh * 0.6);
+        Wh = Math.min(vw * 0.36, vh * 0.8);
         Ws = Math.min(vw * 0.47, vh * 1.12);
         hero = params({
-          cx: vw * 0.17,
-          cy: vh * 0.04,
-          tilt: 8,
-          phis: 20,
+          tilt: 4,
+          phis: 15,
           r: 1.3,
-          kappa: 1.15,
-          delta: 0.08,
+          kappa: 0.27,
+          delta: 0.22,
+          yaw: -32,
         });
         stage = params({
           cy: -vh * 0.06,
@@ -390,19 +428,19 @@ function init(scene: HTMLElement) {
           kappa: 1,
           delta: 0,
         });
+        // Der breite Schirm hat Platz für eine vierte Scheibe.
         heroProfile = [
           [1, 1],
-          [2, 0.6],
-          [3, 0.3],
+          [2, 0.75],
+          [3, 0.45],
           [3.4, 0],
         ];
         stagePos = PHONE_POS;
-        floor = false;
         break;
       case "B":
-        Wh = Math.min(vw * 0.36, fanRoom(2));
+        Wh = Math.min(vw * 0.42, fanRoom(1));
         Ws = Math.min(vw * 0.52, vh * 0.98);
-        hero = params({ tilt: 8 });
+        hero = params(FAN);
         stage = params({
           cy: -vh * 0.1,
           tilt: 2,
@@ -416,9 +454,9 @@ function init(scene: HTMLElement) {
         stagePos = PHONE_POS;
         break;
       case "C":
-        Wh = Math.min(vw * 0.4, fanRoom(2));
+        Wh = Math.min(vw * 0.46, fanRoom(1));
         Ws = Math.min(vw * 0.53, vh * 0.9);
-        hero = params({ tilt: 8 });
+        hero = params(FAN);
         stage = params({
           cy: -vh * 0.12,
           tilt: 2,
@@ -432,9 +470,9 @@ function init(scene: HTMLElement) {
         stagePos = PHONE_POS;
         break;
       case "D":
-        Wh = Math.min(vw * 0.46, fanRoom(1));
+        Wh = Math.min(vw * 0.52, fanRoom(1));
         Ws = vw * 0.6;
-        hero = params({ tilt: 10, phis: 18, delta: 0.12 });
+        hero = params({ ...FAN, phis: 14 });
         stage = params({
           cy: -vh * 0.15,
           tilt: 3,
@@ -445,25 +483,13 @@ function init(scene: HTMLElement) {
           kappa: 1,
           delta: 0,
         });
-        heroProfile = [
-          [1, 1],
-          [2, 0.5],
-          [2.6, 0],
-        ];
         // Bei 30° Winkelabstand stünde d = 3 schon hinter dem Scheitel des Bogens.
         stagePos = PHONE_POS;
         break;
       case "E":
-        Wh = vw * 0.72;
+        Wh = vw * 0.76;
         Ws = vw * 0.87;
-        // Der Fächer steht mittig im Raum zwischen den Knöpfen und dem unteren Rand.
-        hero = params({
-          cy: (heroBottom + vh) / 2 - vh / 2,
-          tilt: 9,
-          phis: 22,
-          r: 1.35,
-          kappa: 1.1,
-        });
+        hero = params({ ...FAN, phis: 10, delta: 0.26 });
         stage = params({
           cy: -vh * 0.16,
           tilt: 3,
@@ -474,18 +500,12 @@ function init(scene: HTMLElement) {
           kappa: 1,
           delta: 0,
         });
-        heroProfile = [
-          [1, 1],
-          [2, 0.35],
-          [2.6, 0],
-        ];
         stagePos = PHONE_POS;
-        floor = false;
         break;
       case "F":
         Wh = Math.min(vw * 0.86, vh * 0.3 * ASPECT);
         Ws = vw * 0.93;
-        hero = params({ tilt: 10 });
+        hero = params({ tilt: 4 });
         stage = params({
           cy: -vh * 0.16,
           tilt: 3,
@@ -497,27 +517,18 @@ function init(scene: HTMLElement) {
           delta: 0,
         });
         heroProfile = [
-          [1, 1],
-          [1.6, 0],
+          [2, 1],
+          [2.6, 0],
         ];
         stagePos = PHONE_POS;
         morph = 0.8;
-        floor = false;
         stack = true;
         break;
       case "G":
       default:
         Wh = vw * 0.4;
         Ws = Math.min(vw * 0.5, vh * 0.68 * ASPECT);
-        hero = params({
-          cx: vw * 0.26,
-          cy: vh * 0.04,
-          tilt: 6,
-          phis: 22,
-          r: 1.3,
-          kappa: 1.1,
-          yaw: -12,
-        });
+        hero = params({ ...FAN, phis: 12, delta: 0.2, yaw: -30 });
         stage = params({
           cy: vh * 0.06,
           tilt: 2,
@@ -528,16 +539,6 @@ function init(scene: HTMLElement) {
           kappa: 1,
           delta: 0,
         });
-        heroProfile = [
-          [0, 1],
-          [1, 0.5],
-          [1.6, 0],
-        ];
-        // Links steht der Text: im Hero treten nur die Nachbarn rechts der Front hervor.
-        heroNeg = [
-          [0, 1],
-          [0.6, 0],
-        ];
         // Telefon quer: rechts steht die Beschriftung, die Nachbarn rechts treten zurück.
         stagePos = [
           [0, 1],
@@ -546,7 +547,6 @@ function init(scene: HTMLElement) {
         ];
         hold = 0;
         morph = 0.65;
-        floor = false;
         break;
     }
     // Bildausschnitt der Bühne prüfen. Die Front steht fest am linken Rand ihrer Klasse
@@ -601,7 +601,7 @@ function init(scene: HTMLElement) {
     }
     hero.S = Wh / Ws;
     const H = Ws / ASPECT;
-    const T = clamp(0.013 * Ws, 7, 14);
+    const T = slabT(Ws);
     const P = perspectiveOf(Ws);
     const out: Layout = {
       cls,
@@ -615,33 +615,65 @@ function init(scene: HTMLElement) {
       hold,
       morph,
       heroProfile,
-      heroNeg: heroNeg ?? heroProfile,
+      heroNeg: HERO_NEG,
       stagePos,
       stageNeg: STAGE_NEG,
       stack,
     };
-    if (floor) {
-      // Der Boden liegt knapp über dem Rand: Unterkante der Front, Dicke und der
-      // sichtbare Ringabschnitt enden bei vh/2 - g unter der Mitte.
-      // Ist mehr Raum da, als der Fächer braucht, steigt der Boden um 40 % des Überschusses,
-      // damit über und unter dem Fächer kein Loch entsteht.
-      const spare = Math.max(0, vh - heroBottom - 2 * g - 0.6 * Wh);
-      const q = toWorld(hero, [0, H / 2 + T + 2, 0.06 * Ws]);
-      hero.cy = ((vh / 2 - g - 0.4 * spare) * (P - q[2])) / P - q[1];
-    }
-    if (cls === "G") {
-      // Telefon quer: die linke Kante der Front bleibt 16 px rechts vom Text.
-      const textRight = heroText.getBoundingClientRect().right;
-      const front = heroRect(hero, Ws, H, P);
-      if (front.l < textRight + 16) hero.cx += textRight + 16 - front.l;
-    }
-    if (stack) {
-      // Der Stapel steht mittig zwischen Lede und Knöpfen.
-      const textBottom = offsetIn(heroText) + heroText.offsetHeight;
-      const ctaTop = offsetIn(actions);
-      hero.cy = (textBottom + ctaTop) / 2 - vh / 2 + 0.05 * H * hero.S;
-    }
+    // Der Raum des Fächers: unter den Knöpfen oder rechts vom Text, im Hochformat zwischen
+    // Lede und Knöpfen. Der Fächer steht mittig darin und wird kleiner, bis er hineinpasst.
+    const side = cls === "A" || cls === "G";
+    const textRight = heroText.getBoundingClientRect().right;
+    const mx = Math.max(10, 0.03 * vw);
+    const room: Box = stack
+      ? {
+          l: 8,
+          r: vw - 8,
+          t: offsetIn(heroText) + heroText.offsetHeight + 8,
+          b: offsetIn(actions) - 8,
+        }
+      : {
+          l: side ? textRight + 20 : mx,
+          r: vw - mx,
+          t: (side ? navBottom : heroBottom) + 10,
+          b: vh - 0.6 * g,
+        };
+    fitFan(hero, room, stack, Ws, H, P, heroProfile);
     return out;
+  }
+
+  /** Rückt den Fächer mittig in den Raum und verkleinert ihn, bis er hineinpasst. */
+  function fitFan(
+    G: Params,
+    room: Box,
+    stack: boolean,
+    Ws: number,
+    H: number,
+    P: number,
+    shown: Profile,
+  ) {
+    const visible = [0, 1, 2, 3].filter((d) => profile(shown, d) > 0.01);
+    const T = slabT(Ws);
+    for (let k = 0; k < 80; k++) {
+      const rects = visible.map((d) =>
+        stack ? rectWith(G, stackAt(d, Ws, H), Ws, H, P) : stageRect(G, d, Ws),
+      );
+      const l = Math.min(...rects.map((v) => v.l));
+      const r = Math.max(...rects.map((v) => v.r));
+      const t = Math.min(...rects.map((v) => v.t));
+      const b = Math.max(...rects.map((v) => v.b));
+      // Die Dicke zählt mit: sie steht hinter der Vorderkante hervor.
+      const e = T * G.S;
+      if (r - l + 2 * e > room.r - room.l || b - t + 2 * e > room.b - room.t) {
+        G.S *= 0.985;
+        continue;
+      }
+      const dx = (room.l + room.r - l - r) / 2;
+      const dy = (room.t + room.b - t - b) / 2;
+      if (Math.abs(dx) + Math.abs(dy) < 0.5) break;
+      G.cx += dx;
+      G.cy += dy;
+    }
   }
 
   /** Projizierte Ecken eines Fensters mit Pose p unter G, im Umlaufsinn. */
@@ -724,10 +756,6 @@ function init(scene: HTMLElement) {
       rx: 0,
     };
     return rectWith(G, p, Ws, Ws / ASPECT, perspectiveOf(Ws));
-  }
-
-  function heroRect(G: Params, Ws: number, H: number, P: number): Box {
-    return rectWith(G, { x: 0, y: 0, z: 0, rz: 0, ry: G.yaw, rx: 0 }, Ws, H, P);
   }
 
   // Die Beschriftung hält die Höhe der längsten Fassung frei, damit Index und Augenbraue
@@ -824,17 +852,7 @@ function init(scene: HTMLElement) {
   /** Rang im Telefon-Stapel: d = +1 liegt direkt hinter der Front, d = -1 dahinter. */
   const rankOf = (d: number) => (d >= 0 ? (d <= 1 ? d : 2 * d - 1) : -2 * d);
 
-  function stackPose(d: number): Pose {
-    const rank = rankOf(d);
-    return {
-      x: 0,
-      y: -0.06 * lay.H * rank,
-      z: -0.1 * lay.Ws * rank,
-      rz: 0,
-      ry: 0,
-      rx: 0,
-    };
-  }
+  const stackPose = (d: number) => stackAt(d, lay.Ws, lay.H);
 
   /** Der Parametersatz für den Morph m, je Gruppe mit eigener Kurve. */
   function mixG(mm: number): Params {
@@ -873,9 +891,10 @@ function init(scene: HTMLElement) {
     const e = clamp((mm - 0.08 * rank) / (1 - 0.24));
     const ex = easeInOutCubic(map(e, 0, 0.75));
     const ezy = smoothstep(map(e, 0.35, 1));
-    // Äußere Karten starten an der x-Lage ihres inneren Nachbarn, damit sie ihn nie von
-    // innen überholen.
-    const x0 = Math.abs(d) > 1.5 ? morphPose(G, d - Math.sign(d), mm).x : h.x;
+    // Äußere Karten bleiben außerhalb ihres inneren Nachbarn, er überholt sie nie.
+    const inner =
+      Math.abs(d) > 1.5 ? morphPose(G, d - Math.sign(d), mm).x : h.x;
+    const x0 = d > 0 ? Math.max(h.x, inner) : Math.min(h.x, inner);
     const p: Pose = {
       x: lerp(x0, s.x, ex),
       y: lerp(h.y, s.y, ezy),
@@ -1009,9 +1028,7 @@ function init(scene: HTMLElement) {
     if (a < 0.5) shade = Math.min(shade, 0.05);
     if (lay.stack) {
       // Im Stapel liegen die hinteren Karten im Schatten der Front.
-      const r = rankOf(d);
-      const stackShade =
-        r < 1 ? 0.55 * r : Math.min(0.72, 0.55 + 0.15 * (r - 1));
+      const stackShade = Math.min(0.72, 0.26 * a);
       shade = lerp(stackShade, shade, smoothstep(map(mm, 0.2, 0.9)));
     }
     const yaw = p.ry;
@@ -1047,16 +1064,15 @@ function init(scene: HTMLElement) {
 
   // ---- Einflug --------------------------------------------------------------------
 
-  // Startzeiten je Hero-Abstand d, von innen nach außen; jedes spätere Fenster kommt
-  // hinter schon gelandeten an. d = ±3 fliegt nie.
+  // Startzeiten je Hero-Abstand d, von vorn nach hinten; jedes spätere Fenster kommt hinter
+  // schon gelandeten an. Was im Fächer unsichtbar steht, fliegt nie.
   const FAN_DELAY: Record<string, number> = {
     "0": 0,
-    "-1": 280,
-    "1": 400,
-    "-2": 580,
-    "2": 700,
+    "1": 300,
+    "2": 540,
+    "3": 740,
   };
-  const STACK_DELAY: Record<string, number> = { "-1": 0, "1": 160, "0": 320 };
+  const STACK_DELAY: Record<string, number> = { "2": 0, "1": 160, "0": 320 };
 
   function prepareIntro() {
     const G = lay.hero;
@@ -1667,10 +1683,15 @@ function init(scene: HTMLElement) {
     const ringIn = reduced ? 1 : introT0 < 0 ? 0 : clamp((tIntro - 500) / 1200);
     // Telefon quer: auf der Bühne läge der flach gesehene Ring quer über der Beschriftung.
     const ringStage = lay.cls === "G" ? 0 : 0.8;
+    // Im Fächer sieht man den Ring in A, F und G fast von der Kante: dort flimmerte er als
+    // Strichellinie unter den Scheiben.
+    const ringHero = lay.cls === "A" || lay.stack || lay.cls === "G" ? 0 : 0.32;
     put(
       ring,
       "opacity",
-      (ringIn * lerp(0.45, ringStage, smoothstep(map(m, 0.3, 0.9)))).toFixed(3),
+      (
+        ringIn * lerp(ringHero, ringStage, smoothstep(map(m, 0.3, 0.9)))
+      ).toFixed(3),
     );
     put(ticks, "transform", `rotate(${(pos * G.phis).toFixed(3)}deg)`);
     const nearest = Math.min(...ds.map((d) => Math.abs(d)));
@@ -1753,9 +1774,24 @@ function init(scene: HTMLElement) {
     const digit = ((odoQ % 10) + 10) % 10;
     put(odoStrip, "transform", `translate3d(0, ${(-digit).toFixed(4)}em, 0)`);
 
-    if (busy) schedule();
+    if (busy) {
+      // Die Lichtebenen sind nur in Bewegung eigene Ebenen; kurz nachlaufen, sonst pendelt
+      // das Attribut zwischen zwei Scroll-Ereignissen.
+      if (!moving) {
+        moving = true;
+        scene.toggleAttribute("data-moving", true);
+      }
+      clearTimeout(movingTimer);
+      movingTimer = window.setTimeout(() => {
+        moving = false;
+        scene.toggleAttribute("data-moving", false);
+      }, 400);
+      schedule();
+    }
   }
   let lastFrameStamp = 0;
+  let moving = false;
+  let movingTimer = 0;
 
   function schedule() {
     if (!frame) frame = requestAnimationFrame(render);

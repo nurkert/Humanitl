@@ -48,26 +48,44 @@ const pad = (v: number) => String(v).padStart(2, '0');
           height: auto !important;
           overflow-x: clip;
         }
-        /* Ring und Fenster tragen dieselbe Vorab-Transformation, damit der Ring unter dem
-           Fächer liegt. */
+        /* Alles fließt untereinander: Text, Knöpfe, Fächer, Beschriftung. So kann der Fächer
+           Text und Knöpfe bei keiner Höhe überdecken; ist der Platz knapp, wird die Seite
+           länger. Alle Maße hängen an --w, das Rig bewegt nur den Fächer in seine Mitte. */
+        .scene {
+          --w: min(68vw, 62vh) !important;
+        }
+        .hero {
+          position: relative !important;
+          inset: auto !important;
+          padding: max(88px, 11vh) var(--gutter) 0;
+        }
+        .world {
+          position: relative !important;
+          inset: auto !important;
+          height: calc(var(--w) * 0.78);
+          margin-top: 1.5rem;
+        }
         .rig {
-          transform: translateY(14vh) rotateX(8deg) scale(0.75);
+          transform: translateX(calc(var(--w) * -0.32)) rotateX(4deg);
         }
         .win {
           --o: 1 !important;
-          transform: translate(-50%, -50%) translate3d(calc(var(--w) * 1.3 * sin(var(--d) * 20deg)), 0, calc(var(--w) * -1.3 * (1 - cos(var(--d) * 20deg)) - var(--w) * 0.08 * abs(var(--d))))
-            rotateY(calc(var(--d) * -23deg)) !important;
+          transform: translate(-50%, -50%) translate3d(calc(var(--w) * 1.3 * sin(var(--d) * 16deg)), 0, calc(var(--w) * -1.3 * (1 - cos(var(--d) * 16deg)) - var(--w) * 0.22 * abs(var(--d))))
+            rotateY(calc(-32deg - var(--d) * 4deg)) !important;
         }
-        .win[style*='--d: 3'],
-        .win[style*='--d: -3'] {
+        /* Wie mit Skript: drei Scheiben, die Front und zwei gestaffelt rechts dahinter. */
+        .win[style*='--d: -'],
+        .win[style*='--d: 3'] {
           visibility: hidden;
         }
-        .win[style*='--d: 2'],
-        .win[style*='--d: -2'] {
-          --shade: 0.45;
+        .win[style*='--d: 1'] {
+          --shade: 0.12;
+        }
+        .win[style*='--d: 2'] {
+          --shade: 0.34;
         }
         .ring {
-          opacity: 0.45 !important;
+          opacity: 0.25 !important;
           transform: translate(-50%, -50%) translate3d(0, calc(var(--w) / 1.855 / 2 + var(--t) + 2px), calc(var(--w) * -1.3)) rotateX(90deg) !important;
         }
         /* Modul 1 steht ruhig unter der Bühne, ohne Pfeile. */
@@ -77,12 +95,6 @@ const pad = (v: number) => String(v).padStart(2, '0');
              dürfen die Seite nicht verbreitern. */
           overflow-x: clip !important;
           overflow-y: visible !important;
-          padding-top: 100svh;
-        }
-        .world {
-          bottom: auto !important;
-          height: 100svh;
-          overflow: hidden;
         }
         .deck {
           position: relative !important;
@@ -109,30 +121,37 @@ const pad = (v: number) => String(v).padStart(2, '0');
         }
         @media (max-width: 699px) {
           .scene {
-            --w: 86vw !important;
+            --w: min(72vw, 110vh) !important;
           }
           .rig {
-            transform: translateY(10vh) rotateX(8deg);
+            transform: translateX(calc(var(--w) * -0.13)) rotateX(4deg);
           }
           .ring {
             display: none;
           }
-          .win:not([style*='--d: 0']) {
-            visibility: hidden;
+          .win {
+            transform: translate(-50%, -50%) translate3d(calc(var(--w) * 0.13 * var(--d)), calc(var(--w) * -0.016 * var(--d)), calc(var(--w) * -0.24 * var(--d))) rotateY(-28deg) !important;
           }
         }
-        /* Telefon quer: Text links, der Fächer rechts daneben. */
-        @media (max-height: 500px) and (min-aspect-ratio: 16/10) {
+        /* Breit und niedrig: Text links, der Fächer rechts daneben. */
+        @media (max-height: 700px) and (min-aspect-ratio: 16/10) {
           .scene {
-            --w: 40vw !important;
+            --w: min(34vw, 66vh) !important;
+          }
+          .scene__sticky {
+            display: grid !important;
+            grid-template-columns: minmax(0, 46%) minmax(0, 1fr);
+            grid-template-rows: minmax(100svh, auto) auto;
+            align-items: center;
+          }
+          .deck {
+            grid-column: 1 / -1;
+          }
+          .world {
+            margin-top: 0;
           }
           .hero {
-            top: 0 !important;
-            bottom: auto !important;
-            height: 100svh !important;
-            left: 6vw !important;
-            right: auto !important;
-            width: 44vw !important;
+            padding: 76px 0 1rem 6vw;
             align-content: center !important;
             justify-items: start !important;
             gap: 0.9rem !important;
@@ -148,17 +167,8 @@ const pad = (v: number) => String(v).padStart(2, '0');
           .hero__actions {
             justify-content: flex-start !important;
           }
-          .rig {
-            transform: translate(26vw, 2vh) rotateX(6deg) scale(0.8);
-          }
           .ring {
             display: none;
-          }
-          .win:not([style*='--d: 0']):not([style*='--d: 1']) {
-            visibility: hidden;
-          }
-          .win[style*='--d: 1'] {
-            --shade: 0.5;
           }
         }
       </style>
@@ -381,7 +391,7 @@ const pad = (v: number) => String(v).padStart(2, '0');
      setzt das Skript je Bildausschnitt. Die Werte hier gelten ohne Skript. */
   .scene {
     --w: min(48vw, 104vh);
-    --t: clamp(7px, calc(var(--w) * 0.013), 14px);
+    --t: clamp(10px, calc(var(--w) * 0.03), 30px);
     --r: calc(var(--w) * 0.016);
     --pad: calc(var(--w) * 0.009);
     position: relative;
@@ -778,7 +788,7 @@ const pad = (v: number) => String(v).padStart(2, '0');
     /* Licht kommt von oben: die obere Kante glänzt am hellsten, die untere bleibt matt.
        Sichtbar ist nur der Teil, der in der Drehung hinter dem Rahmen hervortritt. */
     border: 2px solid;
-    border-color: rgb(255 255 255 / 0.95) rgb(255 255 255 / 0.8) rgb(255 255 255 / 0.3) rgb(255 255 255 / 0.8);
+    border-color: rgb(255 255 255 / 0.6) rgb(255 255 255 / 0.5) rgb(255 255 255 / 0.2) rgb(255 255 255 / 0.5);
     transform: translateZ(calc(var(--t) / -14));
     opacity: var(--lit, 0);
   }
@@ -787,7 +797,8 @@ const pad = (v: number) => String(v).padStart(2, '0');
     display: none;
   }
   .scene[data-lite] .win__edge {
-    border-width: 3px;
+    /* Jede zweite Kontur fehlt: die übrigen füllen ihren Abstand, sonst stehen dunkle Rippen. */
+    border-width: calc(var(--t) * 2 / 7);
   }
   @media (max-width: 699px) {
     /* Bei kleinen Ringen flimmern die feinen Teilstriche fast flach gesehen zu Strichellinien. */
@@ -798,11 +809,12 @@ const pad = (v: number) => String(v).padStart(2, '0');
       display: none;
     }
     .win__edge {
-      border-width: 3px;
+      border-width: calc(var(--t) * 2 / 7);
     }
   }
 
-  /* Der Rahmen (Bezel): ein Blatt, das overflow haben darf. Klarer weißer Rim oben. */
+  /* Der Rahmen (Bezel): ein Blatt, das overflow haben darf. Seine Kante bleibt leise, das
+     Licht liegt in der Fase der Glasscheibe (.win__rim). */
   .win__frame {
     position: absolute;
     inset: 0;
@@ -813,14 +825,13 @@ const pad = (v: number) => String(v).padStart(2, '0');
       linear-gradient(180deg, #191c23, #0e1014) padding-box,
       linear-gradient(
           172deg,
-          #fff 0%,
-          rgb(255 255 255 / 0.4) 10%,
-          rgb(255 255 255 / 0.06) 45%,
-          rgb(255 255 255 / 0.05) 70%,
-          rgb(255 255 255 / 0.28) 100%
+          rgb(255 255 255 / 0.22) 0%,
+          rgb(255 255 255 / 0.1) 12%,
+          rgb(255 255 255 / 0.05) 45%,
+          rgb(255 255 255 / 0.04) 70%,
+          rgb(255 255 255 / 0.1) 100%
         )
         border-box;
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5);
     overflow: hidden;
     opacity: var(--o);
   }
@@ -861,51 +872,85 @@ const pad = (v: number) => String(v).padStart(2, '0');
     transform: translate3d(var(--swx, 0px), 0, 0);
     opacity: var(--swo, 0);
   }
-  /* Ein Hauch über dem Glas: höchstens 0.045 Weiß oben, keine Blend-Modi. */
+  /* Ein Hauch über dem Glas: höchstens 0.04 Weiß oben, keine Blend-Modi. Am Rand kippt die
+     Fase vom Betrachter weg, dort wird die Scheibe als schmaler Saum dunkler. */
   .win__glaze {
     position: absolute;
     z-index: 2;
-    inset: var(--pad);
-    border-radius: calc(var(--r) - var(--pad));
-    background: linear-gradient(180deg, rgb(255 255 255 / 0.045), transparent 18%);
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.12);
+    inset: 0;
+    border-radius: var(--r);
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.04), transparent 16%);
+    box-shadow: inset 0 0 calc(var(--w) * 0.006) rgb(0 0 0 / 0.42);
     pointer-events: none;
   }
-  /* Der Rim: eine 1 px feine Glanzlinie auf der Rahmenkante. Ein fester Verlauf hält die
-     Oberkante weiß; darüber wandert ein Glanzpunkt mit der Drehung (--gx) und im Morph
-     das Begleitlicht (--swx). Beides nur über transform und opacity. */
+  /* Das Licht einer runden Glasscheibe über dem Bild (HUM-348): die Kante ist ganz
+     abgeschliffen, das Glanzband folgt dem gerundeten Rechteck knapp innerhalb der Kante
+     und läuft über die Breite der Fase weich nach innen aus. Nur eine Lichtebene, das Bild
+     darunter bleibt unverzerrt.
+
+     Die Maske ist das Abstandsfeld zum inneren Rechteck: vier lineare Bänder an den Seiten,
+     vier Viertelkreise in den Ecken, alle mit derselben Kurve --bevel, darum läuft das Band
+     ohne Knick um die Ecke. Das Grundlicht ist ein Konus (oben links am hellsten, unten am
+     schwächsten); darin wandern der Glanzpunkt (--gx) und das Begleitlicht (--swx), und die
+     Deckkraft folgt --lit und --oe. Pro Bild ändern sich nur transform und opacity. */
   .win__rim {
+    /* Ganze Pixel, und die Kacheln stoßen stumpf aneinander: eine Überlappung verdoppelte
+       das Alpha an den acht Stößen zu feinen hellen Linien quer durch das Band. */
+    --b: calc(var(--w) * 0.05);
+    --tile: calc(100% - var(--b) * 2);
+    --bevel: transparent, rgb(0 0 0 / 0.05) 22%, rgb(0 0 0 / 0.2) 44%, rgb(0 0 0 / 0.5) 64%, #000 83%, rgb(0 0 0 / 0.6) 93%, rgb(0 0 0 / 0.12) 100%;
+    --ground:
+      linear-gradient(to top, var(--bevel)) 50% 0 / var(--tile) var(--b) no-repeat,
+      linear-gradient(to bottom, var(--bevel)) 50% 100% / var(--tile) var(--b) no-repeat,
+      linear-gradient(to left, var(--bevel)) 0 50% / var(--b) var(--tile) no-repeat,
+      linear-gradient(to right, var(--bevel)) 100% 50% / var(--b) var(--tile) no-repeat,
+      radial-gradient(circle var(--b) at 100% 100%, var(--bevel)) 0 0 / var(--b) var(--b) no-repeat,
+      radial-gradient(circle var(--b) at 0 100%, var(--bevel)) 100% 0 / var(--b) var(--b) no-repeat,
+      radial-gradient(circle var(--b) at 100% 0, var(--bevel)) 0 100% / var(--b) var(--b) no-repeat,
+      radial-gradient(circle var(--b) at 0 0, var(--bevel)) 100% 100% / var(--b) var(--b) no-repeat;
     position: absolute;
-    z-index: 3;
+    z-index: 5;
     inset: -1px;
-    padding: 1px;
-    border-radius: var(--r);
     overflow: hidden;
-    background: linear-gradient(
-      180deg,
-      rgb(255 255 255 / 0.55),
-      rgb(255 255 255 / 0.16) 20%,
-      rgb(255 255 255 / 0.04) 60%,
-      rgb(255 255 255 / 0.14)
+    background: conic-gradient(
+      rgb(255 255 255 / 0.3),
+      rgb(255 255 255 / 0.22) 48deg,
+      rgb(255 255 255 / 0.11) 74deg,
+      rgb(255 255 255 / 0.06) 112deg,
+      rgb(255 255 255 / 0.03) 180deg,
+      rgb(255 255 255 / 0.065) 248deg,
+      rgb(255 255 255 / 0.17) 288deg,
+      rgb(255 255 255 / 0.38) 322deg,
+      rgb(255 255 255 / 0.3)
     );
-    -webkit-mask:
-      linear-gradient(#000 0 0) content-box,
-      linear-gradient(#000 0 0);
-    -webkit-mask-composite: xor;
-    mask:
-      linear-gradient(#000 0 0) content-box exclude,
-      linear-gradient(#000 0 0);
+    -webkit-mask: var(--ground);
+    mask: var(--ground);
+    opacity: calc((0.65 + 0.35 * var(--lit, 0)) * var(--oe));
     pointer-events: none;
+  }
+  @supports (width: round(1.5px, 1px)) {
+    .win__rim {
+      --b: round(calc(var(--w) * 0.05), 1px);
+    }
+  }
+  /* Eigene Ebenen nur, solange sich etwas bewegt (data-moving): die Maske wird einmal
+     gerastert, in Ruhe kosten drei Ebenen je Fenster nur Speicher. */
+  .scene[data-moving] .win__rim {
+    will-change: opacity;
+  }
+  .scene[data-moving] .win__rim::before,
+  .scene[data-moving] .win__rim::after {
+    will-change: transform, opacity;
   }
   .win__rim::before,
   .win__rim::after {
     content: '';
     position: absolute;
-    top: -55%;
-    left: 22%;
-    width: 56%;
-    height: 110%;
-    background: radial-gradient(closest-side, #fff, rgb(255 255 255 / 0.4) 45%, transparent);
+    top: -30%;
+    left: 20%;
+    width: 60%;
+    height: 80%;
+    background: radial-gradient(closest-side, rgb(255 255 255 / 0.42), rgb(255 255 255 / 0.14) 55%, transparent);
   }
   .win__rim::before {
     transform: translate3d(var(--gx, 0px), 0, 0);
@@ -1025,7 +1070,7 @@ const pad = (v: number) => String(v).padStart(2, '0');
   /* Abdunkeln der hinteren Fenster über eine schwarze Ebene statt über einen Filter. */
   .win__shade {
     position: absolute;
-    z-index: 5;
+    z-index: 6;
     inset: 0;
     background: #000;
     opacity: var(--shade, 0);

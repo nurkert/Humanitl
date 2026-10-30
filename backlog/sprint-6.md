@@ -33,6 +33,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-347 | Bühne: größeres Fokusfenster, Ring danach ausgerichtet, Tiefenschärfe nach hinten, Pfeile immer erreichbar | M | HUM-334 |
 | HUM-349 | Der Zugangsschlüssel unter macOS im Keychain | S | HUM-140, HUM-323 |
 | HUM-357 | macOS: pi liest den Modellschlüssel auch aus einem Pfad mit Leerzeichen | S | HUM-328 |
+| HUM-348 | Landing: wenige Scheiben seitlich geneigt mit sichtbarer Tiefe, Licht wie geschliffenes Glas | M | HUM-347 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -419,3 +420,14 @@ Akzeptanzkriterien:
 
 - Die Zeile in `models.json` nennt den Pfad nur über die Variable `HUMANITL_PI_KEY_FILE`; Leerzeichen und Apostrophe des Pfads erreichen die Shell-Zeile nicht. Die Variable trägt den Pfad, nie den Schlüssel.
 - Ein Test belegt, dass die Variable gesetzt ist und die Abbildung unter macOS sie mit umschreibt.
+
+## HUM-348 · Landing: wenige Scheiben seitlich geneigt mit sichtbarer Tiefe, Licht wie geschliffenes Glas
+
+Wünsche des Inhabers vom 2026-10-30.
+
+Akzeptanzkriterien:
+
+- In der Landing-Section stehen nur drei, höchstens vier Fenster, sauber gestaffelt und seitlich geneigt, sodass Dicke und Z-Tiefe jeder Scheibe sichtbar sind. Die übrigen blenden im Morph auf; alle sieben erreichen den Ring.
+- Jedes Fenster liegt vom Licht her unter einer abgerundeten Glasscheibe ohne harte Kante: ein weiches Band folgt dem Rand, läuft ohne Knick um die Ecken und fällt nach innen sanft ab.
+- Das ist nur Reflexion über dem Bild. Es gibt keine Brechung, der Screenshot wird nicht verzerrt, und kein Filter läuft pro Frame.
+- Der Fächer schneidet weder Text noch Knöpfe, erzeugt keinen waagrechten Überlauf, und die Fassung ohne Skript zeigt denselben Aufbau.
