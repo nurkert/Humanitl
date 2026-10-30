@@ -68,6 +68,7 @@ pub mod limits;
 pub mod listener;
 pub mod llm_discover;
 pub mod llm_probe;
+pub mod llm_warnings;
 pub mod meta;
 pub mod pipeline;
 pub mod registry;

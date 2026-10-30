@@ -751,7 +751,7 @@ Kein Modell konfiguriert
 
 Funde in einer durchgereichten Anfrage
 
-**Auslöser.** Eine durchgereichte Anfrage an das Sprachmodell trägt Funde: Geheimnisse oder personenbezogene Daten.
+**Auslöser.** Eine durchgereichte Anfrage an das Sprachmodell trägt Funde, vor denen in diesem Lauf am selben Endpunkt noch nicht oder vor mindestens 15 Minuten gewarnt wurde: Geheimnisse oder personenbezogene Daten. Funde, vor denen kürzlich gewarnt wurde, lösen keine neue Warnung aus, stehen aber weiter an jeder Anfrage in der Aufzeichnung.
 
 **Fix.** Kein Fix: Die Anfrage ist bereits gesendet; der Befund macht es sichtbar.
 

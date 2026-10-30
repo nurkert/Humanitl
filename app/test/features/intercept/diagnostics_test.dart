@@ -356,4 +356,256 @@ void main() {
     expect(fix.rule.matcher.path, isNot(contains('\u200B')));
     expect(fix.rule.note, isNot(contains('\u202E')));
   });
+
+  group('consecutive LLM_005 for one host collapse into one card (HUM-354)', () {
+    const FlowId first = FlowId('018f0001-0000-7000-8000-000000354001');
+    const FlowId second = FlowId('018f0001-0000-7000-8000-000000354002');
+    const FlowId third = FlowId('018f0001-0000-7000-8000-000000354003');
+
+    test('three warnings for one host are one card with a counter', () async {
+      final TestDaemonClient client = TestDaemonClient();
+      final ProviderContainer container = makeContainer(client);
+      expect(container.read(diagnosticsProvider), isEmpty);
+      await settle();
+
+      client
+        ..emit(llm005Event('192.168.1.50', 2, 2, first, 0))
+        ..emit(llm005Event('192.168.1.50', 1, 3, second, 1))
+        ..emit(llm005Event('192.168.1.50', 2, 5, third, 2));
+      await settle();
+
+      // Rot, sobald `_apply` jede Warnung wieder als eigene Karte anhängt.
+      final List<SessionDiagnostic> found = container.read(diagnosticsProvider);
+      expect(found, hasLength(1));
+      final SessionDiagnostic card = found.single;
+      expect(card.requests, 3);
+      expect(card.newFindings, 5);
+      expect(card.llmHost, '192.168.1.50');
+      // Die Karte trägt den Satz und den Fluss der jüngsten Warnung: „Anfrage
+      // öffnen" öffnet sie.
+      expect(card.flowId, third);
+      expect(card.diagnostic.why, llm005Why('192.168.1.50', 2, 5));
+      expect(card.at, testStart.add(const Duration(seconds: 2)));
+      // Die Id bleibt die der ersten, damit Ausblenden die Gruppe trifft.
+      expect(card.id, 0);
+    });
+
+    test('different hosts stay separate', () async {
+      final TestDaemonClient client = TestDaemonClient();
+      final ProviderContainer container = makeContainer(client);
+      expect(container.read(diagnosticsProvider), isEmpty);
+      await settle();
+
+      client
+        ..emit(llm005Event('a.example', 1, 1, first, 0))
+        ..emit(llm005Event('b.example', 1, 1, second, 1))
+        ..emit(llm005Event('a.example', 1, 2, third, 2));
+      await settle();
+
+      // Zwei Hosts sind zwei Dinge, und eine Warnung für B dazwischen
+      // unterbricht die Folge für A.
+      final List<SessionDiagnostic> found = container.read(diagnosticsProvider);
+      expect(found.map((SessionDiagnostic e) => e.llmHost).toList(), <String>[
+        'a.example',
+        'b.example',
+        'a.example',
+      ]);
+      expect(found.every((SessionDiagnostic e) => e.requests == 1), isTrue);
+    });
+
+    test('another code in between does not break the run', () async {
+      final TestDaemonClient client = TestDaemonClient();
+      final ProviderContainer container = makeContainer(client);
+      expect(container.read(diagnosticsProvider), isEmpty);
+      await settle();
+
+      client
+        ..emit(llm005Event('a.example', 1, 1, first, 0))
+        ..emit(FlowEvent.diagnostic(at: testStart, diagnostic: tls001()))
+        ..emit(llm005Event('a.example', 3, 4, second, 2));
+      await settle();
+
+      final List<SessionDiagnostic> found = container.read(diagnosticsProvider);
+      expect(found, hasLength(2));
+      expect(found.first.diagnostic.code, 'TLS_001');
+      // Die Gruppe rückt ans Ende, zur jüngsten Warnung.
+      expect(found.last.requests, 2);
+      expect(found.last.newFindings, 4);
+      expect(found.last.flowId, second);
+    });
+
+    test('dismissing the card dismisses the group', () async {
+      final TestDaemonClient client = TestDaemonClient();
+      final ProviderContainer container = makeContainer(client);
+      expect(container.read(diagnosticsProvider), isEmpty);
+      await settle();
+
+      client
+        ..emit(llm005Event('a.example', 1, 1, first, 0))
+        ..emit(llm005Event('a.example', 1, 2, second, 1));
+      await settle();
+      final SessionDiagnostic group = container
+          .read(diagnosticsProvider)
+          .single;
+      container.read(diagnosticsProvider.notifier).dismiss(group.id);
+      expect(container.read(diagnosticsProvider), isEmpty);
+
+      // Die nächste Warnung beginnt eine neue Karte.
+      client.emit(llm005Event('a.example', 1, 3, third, 2));
+      await settle();
+      final SessionDiagnostic fresh = container
+          .read(diagnosticsProvider)
+          .single;
+      expect(fresh.id, isNot(group.id));
+      expect(fresh.requests, 1);
+      expect(fresh.newFindings, 1);
+    });
+
+    test('a dismissed warning for another host still breaks the run', () async {
+      // A, B, B ausgeblendet, A: Die zweite Warnung für A folgt nicht auf die
+      // erste, also eine neue Karte. Rot, sobald die Folge wieder an den
+      // sichtbaren Karten statt an der zuletzt empfangenen Warnung hängt.
+      final TestDaemonClient client = TestDaemonClient();
+      final ProviderContainer container = makeContainer(client);
+      expect(container.read(diagnosticsProvider), isEmpty);
+      await settle();
+
+      client
+        ..emit(llm005Event('a.example', 1, 1, first, 0))
+        ..emit(llm005Event('b.example', 1, 1, second, 1));
+      await settle();
+      final SessionDiagnostic b = container.read(diagnosticsProvider).last;
+      expect(b.llmHost, 'b.example');
+      container.read(diagnosticsProvider.notifier).dismiss(b.id);
+
+      client.emit(llm005Event('a.example', 2, 3, third, 2));
+      await settle();
+      final List<SessionDiagnostic> found = container.read(diagnosticsProvider);
+      expect(found, hasLength(2));
+      expect(found.every((SessionDiagnostic e) => e.requests == 1), isTrue);
+      expect(found.last.flowId, third);
+    });
+
+    test(
+      'a group counts once against the cap and is dropped like any card',
+      () async {
+        final TestDaemonClient client = TestDaemonClient();
+        final ProviderContainer container = makeContainer(client);
+        expect(container.read(diagnosticsProvider), isEmpty);
+        await settle();
+
+        // Literale statt `maxSessionDiagnostics`, wie im Test der Grenze.
+        const int cap = 200;
+        for (int i = 0; i < cap - 1; i++) {
+          client.emit(
+            FlowEvent.diagnostic(
+              at: testStart,
+              diagnostic: tls001(why: 'n$i'),
+            ),
+          );
+        }
+        client
+          ..emit(llm005Event('a.example', 1, 1, first, 0))
+          ..emit(llm005Event('a.example', 1, 2, second, 1))
+          ..emit(llm005Event('a.example', 1, 3, third, 2));
+        await settle();
+        final Diagnostics notifier = container.read(
+          diagnosticsProvider.notifier,
+        );
+        // Drei Warnungen, eine Karte: Die Liste ist genau voll, nichts fiel.
+        expect(container.read(diagnosticsProvider), hasLength(cap));
+        expect(notifier.dropped, 0);
+        expect(container.read(diagnosticsProvider).last.requests, 3);
+
+        // Ein weiterer Befund drängt den ältesten hinaus, die Gruppe bleibt.
+        client.emit(
+          FlowEvent.diagnostic(
+            at: testStart,
+            diagnostic: tls001(why: 'more'),
+          ),
+        );
+        await settle();
+        List<SessionDiagnostic> found = container.read(diagnosticsProvider);
+        expect(found, hasLength(cap));
+        expect(notifier.dropped, 1);
+        expect(found.first.diagnostic.why, 'n1');
+        expect(
+          found.where((SessionDiagnostic e) => e.requests == 3),
+          hasLength(1),
+        );
+
+        // Verdrängt der Deckel die Gruppe selbst, beginnt die nächste Warnung
+        // eine neue Karte statt in eine verschwundene einzureihen.
+        for (int i = 0; i < cap; i++) {
+          client.emit(
+            FlowEvent.diagnostic(
+              at: testStart,
+              diagnostic: tls001(why: 'x$i'),
+            ),
+          );
+        }
+        client.emit(llm005Event('a.example', 1, 4, first, 3));
+        await settle();
+        found = container.read(diagnosticsProvider);
+        expect(found, hasLength(cap));
+        expect(found.last.requests, 1);
+        expect(found.last.newFindings, 1);
+        expect(notifier.dropped, 2 + cap);
+      },
+    );
+
+    test('a sentence in another form is never grouped', () {
+      // Ein Daemon vor HUM-354 schrieb keine Zahl neuer Funde. Lieber eine
+      // Karte zu viel als zwei Hosts in einer.
+      expect(
+        llmWarningOf(
+          const Diagnostic(
+            code: 'LLM_005',
+            severity: Severity.warning,
+            why:
+                'this request to your language model at a.example contains 4 '
+                'potential secret(s) or personal data.',
+          ),
+        ),
+        isNull,
+      );
+      expect(
+        llmWarningOf(
+          Diagnostic(
+            code: 'TLS_001',
+            severity: Severity.warning,
+            why: llm005Why('a.example', 1, 1),
+          ),
+        ),
+        isNull,
+      );
+      expect(
+        llmWarningOf(
+          Diagnostic(
+            code: 'LLM_005',
+            severity: Severity.warning,
+            why: llm005Why('[::1]', 2, 6),
+          ),
+        ),
+        (host: '[::1]', newFindings: 2),
+      );
+    });
+  });
 }
+
+/// Eine `LLM_005` an [flowId], [second] Sekunden nach [testStart].
+FlowEvent llm005Event(
+  String host,
+  int fresh,
+  int total,
+  FlowId flowId,
+  int second,
+) => FlowEvent.diagnostic(
+  at: testStart.add(Duration(seconds: second)),
+  flowId: flowId,
+  diagnostic: Diagnostic(
+    code: 'LLM_005',
+    severity: Severity.warning,
+    why: llm005Why(host, fresh, total),
+  ),
+);
