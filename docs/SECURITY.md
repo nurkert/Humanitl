@@ -825,7 +825,11 @@ claim:
   leave the project), a device, FIFO or socket, setuid, setgid and sticky bits (dropped, and
   said), and a hard link (each name becomes a file of its own). A file or directory the human
   changed in the project since the start (type, size, `mtime` or mode differ from the snapshot
-  taken before the start) is a conflict and written only with `--overwrite`. Directly before each
+  taken before the start) is a conflict and written only when it is confirmed for exactly that
+  change: the app names every confirmed change in `ApplyChanges.overwrite_ids`, and a conflict of
+  any other selected change, also one that appeared after the selection, stops the apply before
+  the first write; `--overwrite` on the command line confirms every selected change (HUM-351).
+  Directly before each
   `renameat`, `unlinkat` or `mkdirat` the target is compared again with what was there at the
   check, when a directory is deleted every entry below it is compared before it goes (a changed or
   newly created entry stops the removal, and a directory whose tree cannot be read completely is
@@ -1414,3 +1418,4 @@ daemon as a flow (that the proxy holds it is the subject of the Linux suite, ESC
 the binaries inside the disk image.
 
 | 0.1.0 | The disposable sandbox: the project folder as the read-only lower layer of an overlay, the upper layer in RAM under the runtime directory with a size cap, `mounts.extra_rw` read-only; changes are written back only on apply, never through a symlink, never as a symlink out of the project, a device or with setuid bits, and never over a file the human changed since the start without `--overwrite` (HUM-350, K-24). |
+| 0.1.0 | The changes panel of the app: a conflict is overwritten only when it was confirmed for exactly that change (`ApplyChanges.overwrite_ids`); a conflict that appears after the selection stops the apply (HUM-351, K-24). |

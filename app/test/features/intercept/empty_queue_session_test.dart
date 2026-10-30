@@ -109,8 +109,13 @@ class SessionClient extends FakeDaemonClient {
   Stream<SandboxUpdate> startSandbox({
     String? profile,
     WorkMode? workMode,
+    SandboxMode? sandboxMode,
   }) async* {
-    yield* super.startSandbox(profile: profile, workMode: workMode);
+    yield* super.startSandbox(
+      profile: profile,
+      workMode: workMode,
+      sandboxMode: sandboxMode,
+    );
     final Completer<void>? end = agentEnd;
     if (end != null) {
       await end.future;

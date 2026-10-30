@@ -20,6 +20,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/ipc/config_providers.dart';
+import '../../sandbox/providers/disposable_review.dart';
 import '../../sandbox/providers/sandbox_status_provider.dart';
 import '../../setup/providers/setup_provider.dart';
 import '../../setup/setup_screen.dart';
@@ -201,6 +202,12 @@ class _SetupHostState extends ConsumerState<SetupHost> {
     // `Sandbox(Start)`, dessen Ereignisse sich mit denen des ersten in
     // denselben Schnappschuss falten.
     final bool sandboxBusy = status.isUp || status.isBusy;
+    final bool offersDisposable =
+        ref.watch(daemonInfoProvider).value?.offersDisposable ?? false;
+    final DisposableReview review = ref.watch(disposableReviewProvider);
+    final bool disposable =
+        ref.watch(nextSandboxModeProvider) == SandboxMode.disposable;
+    final bool startRefused = offersDisposable && review.waiting && disposable;
     return SetupScreen(
       state: state,
       daemonAttempts: attempts,
@@ -217,6 +224,25 @@ class _SetupHostState extends ConsumerState<SetupHost> {
       ),
       workMode: status.workMode,
       sandboxLocked: sandboxBusy,
+      // Der Schalter „Wegwerf" (HUM-351): nur bei einem Daemon, der
+      // `sandbox.disposable` nennt, mit `sandbox.mode` als Vorgabe. Derselbe
+      // Wert wie im Kopf des Sandbox-Bildschirms, denn beide starten über
+      // `start()`.
+      disposable: offersDisposable ? disposable : null,
+      // Warten Änderungen eines Wegwerf-Laufs, sperrt nur ein Wegwerf-Start
+      // (der Daemon lehnt ihn mit `SANDBOX_030` ab); ein direkter Start geht
+      // und bekommt einen Hinweis. Der Weg zum Panel führt auf die
+      // Sandbox-Seite (HUM-351).
+      changesWaiting: offersDisposable && review.waiting
+          ? review.rows.length
+          : null,
+      onReviewChanges: () {
+        ref.read(disposableReviewProvider.notifier).show();
+        ref.read(navigationProvider.notifier).go(Section.sandbox);
+      },
+      onDisposable: (bool on) => ref
+          .read(sandboxModeChoiceProvider.notifier)
+          .choose(on ? SandboxMode.disposable : SandboxMode.direct),
       // Läuft schon eine Session, ist der Weg zur Warteschlange die eine
       // Aktion des fertigen Setups (HUM-287).
       onOpenIntercept: () =>
@@ -260,7 +286,7 @@ class _SetupHostState extends ConsumerState<SetupHost> {
       // `isUp`, ob eine Sandbox läuft. Ein Fehlschlag hinterlässt entweder
       // einen Befund im Schnappschuss oder einen `AsyncError`, und beide
       // lassen `isUp` falsch.
-      onStart: state.canStart && !sandboxBusy
+      onStart: state.canStart && !sandboxBusy && !startRefused
           ? () async {
               await ref.read(sandboxStatusProvider.notifier).start();
               if (!context.mounted) {

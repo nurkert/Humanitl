@@ -7,6 +7,7 @@ export 'daemon_info.dart';
 export 'decision.dart';
 export 'diagnostic.dart';
 export 'diagnostic_codes.dart';
+export 'disposable.dart';
 export 'doctor.dart';
 export 'flow.dart';
 export 'flow_event.dart';

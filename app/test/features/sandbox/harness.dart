@@ -34,8 +34,9 @@ const Duration sandboxTestUptime = Duration(minutes: 12, seconds: 5);
 
 /// Ein Fake ohne Skript; die Sandbox-Tests abonnieren nichts.
 class SandboxTestClient extends FakeDaemonClient {
-  /// Erzeugt den Client mit stehender Uhr.
-  SandboxTestClient()
+  /// Erzeugt den Client mit stehender Uhr; [info] ist die Antwort auf
+  /// `GetInfo`, etwa mit `sandbox.disposable` (HUM-351).
+  SandboxTestClient({super.info})
     : super(script: const <ScriptedEvent>[], clock: () => sandboxTestNow);
 
   /// Jede `Plan`-Anfrage, älteste zuerst: der Ordner, den die Oberfläche
@@ -104,9 +105,17 @@ class SandboxTestClient extends FakeDaemonClient {
   }
 
   @override
-  Stream<SandboxUpdate> startSandbox({String? profile, WorkMode? workMode}) {
+  Stream<SandboxUpdate> startSandbox({
+    String? profile,
+    WorkMode? workMode,
+    SandboxMode? sandboxMode,
+  }) {
     starts++;
-    return super.startSandbox(profile: profile, workMode: workMode);
+    return super.startSandbox(
+      profile: profile,
+      workMode: workMode,
+      sandboxMode: sandboxMode,
+    );
   }
 
   @override

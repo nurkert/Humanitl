@@ -17,14 +17,17 @@
 //!    mehreren Namen in der oberen Schicht wird je Name als eigene Datei
 //!    geschrieben, nie als harter Verweis.
 //! 5. **Nichts überschreiben, was der Mensch geändert hat**, außer er sagt es
-//!    ([`ApplyOptions::overwrite`]): Verglichen wird mit dem Stand beim Start
-//!    (Art, Größe, `mtime`, Rechte).
+//!    für genau diese Änderung ([`ApplyOptions::may_overwrite`]): Verglichen
+//!    wird mit dem Stand beim Start (Art, Größe, `mtime`, Rechte). Eine
+//!    Bestätigung für eine Datei erlaubt nie das Überschreiben einer anderen,
+//!    auch nicht einer, deren Konflikt erst nach der Auswahl entstand
+//!    (HUM-351).
 //! 6. **Atomar je Datei.** Eine Datei entsteht unter einem eigenen Namen im
 //!    Zielverzeichnis (`O_CREAT | O_EXCL | O_NOFOLLOW`) und wird erst danach
 //!    mit `renameat` an ihren Platz gesetzt; `renameat` ersetzt einen Symlink
 //!    am Ziel, statt ihm zu folgen.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
@@ -47,12 +50,23 @@ use super::scan::{
 const NAMED_IN_FINDING: usize = 5;
 
 /// Wie übernommen wird.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ApplyOptions {
-    /// Auch Dateien schreiben, die der Mensch seit dem Start im Projekt
-    /// geändert hat. Ohne diesen Schalter ist jeder Konflikt ein Abbruch vor
-    /// dem ersten Schreiben.
+    /// Auch jede gewählte Datei schreiben, die der Mensch seit dem Start im
+    /// Projekt geändert hat (`humanitl sandbox apply --overwrite`).
     pub overwrite: bool,
+    /// Die Kennungen ([`LayerChange::path_hash`]), deren Konflikt jemand
+    /// einzeln bestätigt hat (HUM-351). Ein Konflikt einer anderen gewählten
+    /// Änderung bricht ab, solange [`ApplyOptions::overwrite`] nicht gilt.
+    pub overwrite_ids: BTreeSet<String>,
+}
+
+impl ApplyOptions {
+    /// Ob `change` trotz eines Konflikts geschrieben werden darf.
+    #[must_use]
+    pub fn may_overwrite(&self, change: &LayerChange) -> bool {
+        self.overwrite || self.overwrite_ids.contains(&change.path_hash())
+    }
 }
 
 /// Was übernommen wurde.
@@ -121,8 +135,8 @@ pub fn select<'a>(set: &'a ChangeSet, ids: &[String]) -> Result<Vec<&'a LayerCha
 /// # Errors
 ///
 /// `SANDBOX_031` vor dem ersten Schreiben, wenn eine gewählte Änderung
-/// abgelehnt ist oder einen Konflikt hat (ohne
-/// [`ApplyOptions::overwrite`]). Ein Fehler beim Schreiben selbst ist kein
+/// abgelehnt ist oder einen Konflikt hat, den [`ApplyOptions::may_overwrite`]
+/// nicht erlaubt. Ein Fehler beim Schreiben selbst ist kein
 /// `Err`, sondern [`ApplyReport::failed`], damit der Aufrufer weiß, was schon
 /// geschrieben ist.
 pub fn apply(
@@ -130,7 +144,7 @@ pub fn apply(
     lower: BorrowedFd<'_>,
     baseline: &TreeSnapshot,
     chosen: &[&LayerChange],
-    options: ApplyOptions,
+    options: &ApplyOptions,
 ) -> Result<ApplyReport, Diagnostic> {
     let mut problems: Vec<String> = Vec::new();
     let mut planned: Vec<(&LayerChange, Expected)> = Vec::with_capacity(chosen.len());
@@ -148,7 +162,7 @@ pub fn apply(
             ));
             continue;
         }
-        if !options.overwrite {
+        if !options.may_overwrite(change) {
             let subtree = matches!(change.kind, ChangeKind::Removed | ChangeKind::Modified);
             if let Some(why) = conflict(lower, baseline, &change.rel, subtree) {
                 problems.push(format!("{}: {why}", change.display()));

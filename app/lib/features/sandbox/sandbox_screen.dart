@@ -29,10 +29,12 @@ import '../../core/ui/ui.dart';
 import '../../core/ui/work_dir_picker.dart';
 import '../../l10n/l10n.dart';
 import 'providers/closed_failures.dart';
+import 'providers/disposable_review.dart';
 import 'providers/sandbox_status_provider.dart';
 import 'sandbox_text.dart';
 import 'widgets/argv_sheet.dart';
 import 'widgets/arrive.dart';
+import 'widgets/changes_panel.dart';
 import 'widgets/env_tab.dart';
 import 'widgets/isolation_panel.dart';
 import 'widgets/log_tab.dart';
@@ -123,9 +125,11 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
     if (visible && !_visible) {
       // A session may have started next door -- from the command line, or in
       // a second window. One call catches up with all of it.
-      WidgetsBinding.instance.addPostFrameCallback(
-        (Duration _) => ref.read(sandboxStatusProvider.notifier).refresh(),
-      );
+      WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+        unawaited(ref.read(sandboxStatusProvider.notifier).refresh());
+        // Und ob Änderungen eines Wegwerf-Laufs warten (HUM-351).
+        unawaited(ref.read(disposableReviewProvider.notifier).fetch());
+      });
     }
     _visible = visible;
     // The host and not the choice: a terminal that floated before the whole
@@ -161,6 +165,11 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
 
     final AsyncValue<SandboxStatus> snapshot = ref.watch(sandboxStatusProvider);
     final SandboxStatus status = snapshot.value ?? const SandboxStatus();
+    final bool changesOpen = ref.watch(
+      disposableReviewProvider.select(
+        (DisposableReview review) => review.open && review.hasContent,
+      ),
+    );
     return ColoredBox(
       color: tokens.colors.bg0,
       child: Stack(
@@ -232,6 +241,7 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
                 onClose: () => setState(() => _argvOpen = false),
               ),
             ),
+          if (changesOpen) const ChangesPanel(),
           if (_asking)
             StopDialog(onCancel: _cancelStop, onConfirm: _confirmStop),
         ],

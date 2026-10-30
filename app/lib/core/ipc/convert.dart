@@ -709,6 +709,56 @@ extension SandboxRefusalsToDomain on pb.SandboxEvent_Refusals {
   );
 }
 
+/// `DisposableChange` to [DisposableChange] (HUM-351).
+extension DisposableChangeToDomain on pb.DisposableChange {
+  /// The domain form. A kind this build does not know becomes
+  /// [DisposableChangeKind.unknown]: the row stays, with its path, its id
+  /// and the daemon's sentences, and only the word for the kind is missing.
+  DisposableChange toDomain() => DisposableChange(
+    id: id,
+    path: path,
+    mangled: mangled,
+    kind:
+        enumFromWire(DisposableChangeKind.values, kind.value) ??
+        DisposableChangeKind.unknown,
+    entry: entry,
+    size: size.toInt(),
+    mode: mode,
+    sha256: sha256,
+    symlinkTarget: symlinkTarget,
+    diff: diff,
+    binary: binary,
+    conflict: conflict,
+    refused: refused,
+    strippedBits: strippedBits,
+    hardlinked: hardlinked,
+  );
+}
+
+/// `DisposableChanges` to [DisposableChanges] (HUM-351).
+extension DisposableChangesToDomain on pb.DisposableChanges {
+  /// The domain form, in the daemon's order (sorted by path).
+  DisposableChanges toDomain() => DisposableChanges(
+    sandboxId: sandboxId,
+    workDir: workDir,
+    changes: List<DisposableChange>.unmodifiable(
+      changes.map((pb.DisposableChange change) => change.toDomain()),
+    ),
+    truncated: truncated,
+  );
+}
+
+/// `DisposableOutcome` to [DisposableOutcome] (HUM-351).
+extension DisposableOutcomeToDomain on pb.DisposableOutcome {
+  /// The domain form.
+  DisposableOutcome toDomain() => DisposableOutcome(
+    sandboxId: sandboxId,
+    outcome: DisposableOutcomeKind.fromWire(outcome),
+    applied: List<String>.unmodifiable(applied),
+    discarded: List<String>.unmodifiable(discarded),
+  );
+}
+
 /// [TerminalCommand] to `TerminalInput` (HUM-042).
 extension TerminalCommandToProto on TerminalCommand {
   /// The wire form of one message to the terminal.
