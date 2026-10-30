@@ -1,8 +1,9 @@
-// Das Hinweisbanner des Schreibtischs (HUM-034, seit HUM-276 ein Banner):
-// welche Codes es überhaupt nennen darf, ob seine Schrift auf seiner eigenen
-// Fläche lesbar bleibt, ob es bei doppelter Textskalierung wächst statt
-// abzuschneiden (`docs/UX.md` 6), und wo es steht: unter der Kopfzeile, über
-// die ganze Fensterbreite, nicht in der Spalte der Queue.
+// Der Hinweis des Schreibtischs (HUM-034, seit HUM-276 ein Banner, seit
+// HUM-302 eine schwebende Karte): welche Codes er überhaupt nennen darf, ob
+// seine Schrift auf seiner Fläche lesbar bleibt, ob er bei doppelter
+// Textskalierung wächst statt abzuschneiden (`docs/UX.md` 6), und wo er
+// steht: oben rechts über den Bereichen, unter der Kopfzeile der Panes, ohne
+// Leiste oder Queue auch nur um ein Pixel zu verschieben.
 
 import 'dart:io' show File;
 
@@ -11,8 +12,12 @@ import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ui/h_notice_layer.dart';
 import 'package:humanitl/core/ui/ui.dart';
+import 'package:humanitl/features/intercept/providers/agent_asks.dart';
+import 'package:humanitl/features/intercept/widgets/agent_ask_card.dart';
 import 'package:humanitl/features/intercept/widgets/queue_pane.dart';
+import 'package:humanitl/features/settings/settings_sheet.dart';
 import 'package:humanitl/features/shell/providers/rail.dart';
 import 'package:humanitl/features/shell/widgets/header_bar.dart';
 import 'package:humanitl/features/shell/widgets/icon_rail.dart';
@@ -81,7 +86,7 @@ Widget banner({
 /// Ob der Fokus gerade auf der Schliessen-Taste des Banners liegt.
 bool dismissFocused() {
   final BuildContext? context = FocusManager.instance.primaryFocus?.context;
-  return context?.findAncestorWidgetOfExactType<HButton>()?.key ==
+  return context?.findAncestorWidgetOfExactType<HIconButton>()?.key ==
       const Key('attention-notice-dismiss');
 }
 
@@ -140,32 +145,28 @@ void main() {
   for (final HTokens tokens in <HTokens>[HTokens.dark, HTokens.light]) {
     final String theme = tokens.brightness.name;
 
-    test('$theme: everything written on the banner reaches 4.5:1', () {
-      // Das Banner liegt als Tönung seines Schweregrads auf `bg0`, und darauf
-      // steht jede seiner Zeilen, auch die Kopierzeile des Vorschlags.
+    test('$theme: everything written on the notice reaches 4.5:1', () {
+      // Die Karte liegt seit HUM-302 auf `bg2`, wie jede Karte, und darauf
+      // steht jede ihrer Zeilen, auch die Kopierzeile des Vorschlags. Der
+      // Schweregrad trägt nur noch Schiene und Badges.
+      for (final Color text in <Color>[tokens.colors.fg0, tokens.colors.fg1]) {
+        expect(
+          contrastOn(text, const <Color>[], tokens.colors.bg2),
+          greaterThanOrEqualTo(4.5),
+          reason: 'Text $text',
+        );
+      }
       for (final Color state in <Color>[
         tokens.colors.info,
         tokens.colors.warning,
         tokens.state.error,
       ]) {
-        final List<Color> band = <Color>[HColorDerivation.tint(state)];
-        for (final Color text in <Color>[
-          tokens.colors.fg0,
-          tokens.colors.fg1,
-        ]) {
-          expect(
-            contrastOn(text, band, tokens.colors.bg0),
-            greaterThanOrEqualTo(4.5),
-            reason: 'Text $text auf $state',
-          );
-        }
         // Die Beschriftung der Badges steht auf der Tönung derselben Farbe,
-        // die ihrerseits auf dem Banner liegt: ein Wort, 4,5:1.
+        // die ihrerseits auf der Karte liegt: ein Wort, 4,5:1.
         expect(
           contrastOn(tokens.stateTextOf(state), <Color>[
-            ...band,
             HColorDerivation.tint(state),
-          ], tokens.colors.bg0),
+          ], tokens.colors.bg2),
           greaterThanOrEqualTo(4.5),
           reason: 'Badge $state',
         );
@@ -243,23 +244,18 @@ void main() {
     await tester.pumpWidget(banner(diagnostic: diagnostic));
     await tester.pump();
 
-    expect(
-      tester.widget<Text>(find.byKey(const Key('attention-notice-title'))).data,
-      en.diagCONFIG001Title,
-    );
-    expect(
-      tester.widget<Text>(find.byKey(const Key('attention-notice-why'))).data,
-      diagnostic.why,
-    );
-    expect(find.byKey(const Key('attention-notice-detail')), findsNothing);
+    expect(find.text(en.diagCONFIG001Title), findsOneWidget);
+    // Genau einmal: im Grund-Platz, nicht noch einmal als Detail darunter.
+    expect(find.text(diagnostic.why), findsOneWidget);
   });
 
-  // Die beiden Breiten der Seitenleiste (HUM-254): Das Banner steht in beiden
-  // gleich, über Leiste und Queue, nicht in ihrer Spalte.
+  // Die beiden Breiten der Seitenleiste (HUM-254): Der Hinweis steht in
+  // beiden gleich, oben rechts über den Bereichen, und schiebt weder Leiste
+  // noch Queue (HUM-302).
   for (final bool expanded in <bool>[false, true]) {
     final String width = expanded ? 'expanded' : 'collapsed';
 
-    testWidgets('attention_notice_test: under the header, rail $width', (
+    testWidgets('attention_notice_test: floats top right, rail $width', (
       WidgetTester tester,
     ) async {
       const Size window = Size(1400, 900);
@@ -278,32 +274,36 @@ void main() {
       final Finder notice = find.byType(AttentionNoticeBanner);
       expect(notice, findsOneWidget);
       final Rect header = tester.getRect(find.byType(HeaderBar));
-      final Rect bannerRect = tester.getRect(notice);
+      final Rect card = tester.getRect(notice);
       final Rect rail = tester.getRect(find.byType(IconRail));
       final Rect queue = tester.getRect(find.byType(QueuePane));
 
-      // Direkt unter der Kopfzeile, von Rand zu Rand.
-      expect(bannerRect.top, header.bottom);
-      expect(bannerRect.left, 0);
-      expect(bannerRect.width, window.width);
-      // Leiste und Queue beginnen darunter; das Banner steht in keiner der
-      // beiden Spalten.
-      expect(rail.top, greaterThanOrEqualTo(bannerRect.bottom));
-      expect(queue.top, greaterThanOrEqualTo(bannerRect.bottom));
+      // Oben rechts, unter der Kopfzeile der Panes, höchstens 420 px breit.
+      expect(card.right, window.width - HSpace.x2);
+      expect(card.top, header.bottom + HSize.paneHeader + HSpace.x2);
+      expect(card.width, noticeMaxWidth);
+      // Leiste und Queue beginnen direkt unter der Kopfzeile: Der Hinweis
+      // nimmt ihnen keine Höhe, und er steht in keiner ihrer Spalten.
+      expect(rail.top, header.bottom);
+      expect(queue.top, header.bottom);
       expect(
         find.descendant(of: find.byType(QueuePane), matching: notice),
         findsNothing,
       );
-      // Die Schliessen-Taste steht am rechten Ende, im Fenster.
+      // Das Schließen steht in der Karte, oben rechts.
       final Rect dismiss = tester.getRect(
         find.byKey(const Key('attention-notice-dismiss')),
       );
-      expect(dismiss.right, lessThanOrEqualTo(window.width));
-      expect(dismiss.left, greaterThan(window.width / 2));
+      expect(card.contains(dismiss.topLeft), isTrue);
+      expect(dismiss.right, card.right - HSpace.x1);
+      expect(dismiss.top, card.top + HSpace.x1);
 
       await tester.tap(find.byKey(const Key('attention-notice-dismiss')));
       await tester.pump();
       expect(notice, findsNothing);
+      // Nach dem Schließen steht alles, wo es stand.
+      expect(tester.getRect(find.byType(QueuePane)), queue);
+      expect(tester.getRect(find.byType(IconRail)), rail);
     });
   }
 
@@ -326,12 +326,13 @@ void main() {
       await tester.pump();
     }
 
-    // Der Fokus steht beim Start im Intercept-Bildschirm. Von dort ist das
-    // Banner mit `Shift+Tab` erreichbar: Es liegt in der Lesefolge über den
-    // Panes. Ein `Tab` nach vorn bleibt heute in der Gruppe der Panes
-    // (`HResizablePanes`); das ist älter als dieses Banner.
+    // Der Fokus steht beim Start im Intercept-Bildschirm. Seit HUM-302
+    // schwebt der Hinweis über den Panes, oben rechts, und steht in der
+    // Lesefolge hinter ihren Nähten: `Tab` erreicht ihn nach den Splittern.
+    // Er nimmt den Fokus nie von sich aus.
     for (int i = 0; i < 40 && !dismissFocused(); i++) {
-      await shiftTab();
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
     }
     expect(dismissFocused(), isTrue);
 
@@ -357,5 +358,95 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.space);
     await tester.pump();
     expect(find.byType(AttentionNoticeBanner), findsNothing);
+  });
+
+  testWidgets('attention_notice_test: waits while the settings sheet is open', (
+    WidgetTester tester,
+  ) async {
+    // Das Blatt hält die Tastatur und steht rechts, wo der Hinweis schwebt;
+    // über seinem Inhalt hätte er nichts zu suchen (Review).
+    await pumpTrayShell(
+      tester,
+      desktop: FakeDesktop(
+        missing: TrayDiagnostics.trayUnavailable('no watcher'),
+      ),
+      uiState: trayUiState(),
+    );
+    expect(find.byType(AttentionNoticeBanner), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('header-settings-button')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(SettingsSheet), findsOneWidget);
+    expect(find.byType(AttentionNoticeBanner), findsNothing);
+
+    // Zu: Der Hinweis ist wieder da, er war nur verdeckt, nicht geschlossen.
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(SettingsSheet), findsNothing);
+    expect(find.byType(AttentionNoticeBanner), findsOneWidget);
+  });
+
+  testWidgets('attention_notice_test: stands below the pane headers at 2x', (
+    WidgetTester tester,
+  ) async {
+    // Bei doppelter Schrift ist die Kopfzeile eines Panes 96 px hoch, nicht
+    // 48; ein fester Abstand legte die Karte über ihre Bedienelemente
+    // (Review).
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await pumpTrayShell(
+      tester,
+      desktop: FakeDesktop(
+        missing: TrayDiagnostics.trayUnavailable('no watcher'),
+      ),
+      uiState: trayUiState(),
+      size: const Size(1600, 1100),
+    );
+    tester.takeException();
+    final Rect card = tester.getRect(find.byType(AttentionNoticeBanner));
+    final Rect queueHeader = tester.getRect(
+      find.byKey(const Key('intercept-queue-header')),
+    );
+    expect(queueHeader.height, greaterThan(HSize.paneHeader * 1.5));
+    expect(card.top, greaterThanOrEqualTo(queueHeader.bottom));
+  });
+
+  testWidgets('attention_notice_test: waits while the rule sheet is open', (
+    WidgetTester tester,
+  ) async {
+    // Jede Ebene hält die Tastatur und steht über der Arbeit, auch das
+    // Regelblatt einer Bitte des Agenten (Review).
+    final ProviderContainer container = await pumpTrayShell(
+      tester,
+      desktop: FakeDesktop(
+        missing: TrayDiagnostics.trayUnavailable('no watcher'),
+      ),
+      uiState: trayUiState(),
+    );
+    expect(find.byType(AttentionNoticeBanner), findsOneWidget);
+
+    container
+        .read(agentAskRuleDraftProvider.notifier)
+        .open(
+          AgentAsk(
+            id: 'ask-1',
+            at: DateTime.utc(2026, 10, 30),
+            text: 'please allow pypi.org',
+            suggestedHost: 'pypi.org',
+            suggestedPath: '/simple/',
+          ),
+        );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(AgentAskRuleSheet), findsOneWidget);
+    expect(find.byType(AttentionNoticeBanner), findsNothing);
+
+    container.read(agentAskRuleDraftProvider.notifier).close();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(AgentAskRuleSheet), findsNothing);
+    expect(find.byType(AttentionNoticeBanner), findsOneWidget);
   });
 }

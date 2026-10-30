@@ -1,7 +1,10 @@
 /// The notice slot of the shell: the return banner and the one diagnostic the
 /// desktop side raises (HUM-034).
 ///
-/// One place, always the same place, directly under the header. Both are rare
+/// One place, always the same place: the top right of the window, below the
+/// header row of the panes. Since HUM-302 the notices float there over the
+/// sections (`HNoticeLayer` in the shell) and no longer push them down, so a
+/// running terminal keeps its size when a notice comes or goes. Both are rare
 /// and both are dismissed by the person, so nothing here queues up behind
 /// anything else (`docs/UX.md` 4.9 and `backlog/CONVENTIONS.md` 4.13,
 /// predictability).
@@ -11,6 +14,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/ui/h_notice_layer.dart';
 import '../../../l10n/l10n.dart';
 import '../../intercept/providers/flows.dart';
 import '../../tray/attention_text.dart';
@@ -33,14 +37,8 @@ class ShellNotices extends ConsumerWidget {
     final ReturnNotice? banner = ref.watch(
       attentionProvider.select((AttentionState state) => state.banner),
     );
-    if (notice == null && banner == null) {
-      return const SizedBox.shrink();
-    }
     final AppLocalizations l10n = context.l10n;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      // Volle Fensterbreite, über Leiste und Panes (HUM-276).
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    return HNoticeColumn(
       children: <Widget>[
         if (notice != null)
           AttentionNoticeBanner(

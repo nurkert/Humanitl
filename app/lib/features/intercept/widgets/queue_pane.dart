@@ -26,9 +26,12 @@ import '../../../core/domain/domain.dart';
 import '../../../core/shortcuts/intents.dart';
 import '../../../core/ui/agent_session.dart';
 import '../../../core/ui/announce.dart';
+import '../../../core/ui/h_notice_layer.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../list_diff.dart';
+import '../providers/agent_asks.dart';
+import '../providers/diagnostics.dart';
 import '../providers/flows.dart';
 import '../providers/held_groups.dart';
 import '../providers/queue_freeze.dart';
@@ -386,57 +389,64 @@ class _QueuePaneState extends ConsumerState<QueuePane> {
           // halten könnte. Auch dieser Streifen zeichnet nichts, solange es
           // nichts zu melden gibt (HUM-106).
           //
+          // Seit HUM-302 schweben beide über der Liste, rechtsbündig unten in
+          // der Spalte, statt sie nach unten zu schieben: Die Zeile, auf die
+          // jemand gerade zielt, bleibt, wo sie war, wenn ein Befund kommt,
+          // und die obersten Zeilen bleiben frei.
           // Beide Streifen teilen sich ein Budget, und das Layout verteilt es:
           // Die Bitten des Agenten nehmen, was sie brauchen, der Befund-
-          // Streifen bekommt als einziges `Flexible` den Rest. Mit je eigener
-          // Schranke schöben die beiden zusammen die Warteschlange auf einem
-          // 800 Pixel hohen Schirm fast heraus; mit einer festen Aufteilung
-          // verfiele der Platz, den eine kurze Bitte übrig lässt.
-          ConstrainedBox(
-            constraints: const BoxConstraints(
-              maxHeight: interceptStripsMaxHeight,
-            ),
-            child: const Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                AgentAskStrip(),
-                Flexible(child: DiagnosticStrip()),
-              ],
-            ),
-          ),
+          // Streifen bekommt als einziges `Flexible` den Rest.
           Expanded(
-            child: MouseRegion(
-              onEnter: (PointerEnterEvent _) => _pointerEnter(),
-              onExit: (PointerExitEvent _) => _pointerLeave(),
-              child: Stack(
-                fit: StackFit.expand,
+            child: HNoticeLayer(
+              key: const Key('intercept-queue-notices'),
+              // Unten rechts in der Spalte: Oben stehen die neuesten
+              // Anfragen mit ihrem Blockieren, und die bleiben greifbar.
+              bottom: true,
+              maxHeight: interceptStripsMaxHeight,
+              scroll: false,
+              notices: const Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  AnimatedList(
-                    key: _listKey,
-                    initialItemCount: _items.length,
-                    padding: EdgeInsets.symmetric(vertical: tokens.spacing.x1),
-                    itemBuilder:
-                        (
-                          BuildContext context,
-                          int index,
-                          Animation<double> animation,
-                        ) {
-                          if (index >= _items.length) {
-                            return const SizedBox.shrink();
-                          }
-                          final QueueItem item = _items[index];
-                          return _ArrivingLine(
-                            animation: animation,
-                            start: _stagger[item.key] ?? 0,
-                            child: _line(item, cursor, members),
-                          );
-                        },
-                  ),
-                  if (_items.isEmpty) const QueueEmptyState(),
-                  if (pending > 0)
-                    NewArrivalsPill(count: pending, onMerge: _merge),
+                  AgentAskStrip(),
+                  _StripGap(),
+                  Flexible(child: DiagnosticStrip()),
                 ],
+              ),
+              child: MouseRegion(
+                onEnter: (PointerEnterEvent _) => _pointerEnter(),
+                onExit: (PointerExitEvent _) => _pointerLeave(),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    AnimatedList(
+                      key: _listKey,
+                      initialItemCount: _items.length,
+                      padding: EdgeInsets.symmetric(
+                        vertical: tokens.spacing.x1,
+                      ),
+                      itemBuilder:
+                          (
+                            BuildContext context,
+                            int index,
+                            Animation<double> animation,
+                          ) {
+                            if (index >= _items.length) {
+                              return const SizedBox.shrink();
+                            }
+                            final QueueItem item = _items[index];
+                            return _ArrivingLine(
+                              animation: animation,
+                              start: _stagger[item.key] ?? 0,
+                              child: _line(item, cursor, members),
+                            );
+                          },
+                    ),
+                    if (_items.isEmpty) const QueueEmptyState(),
+                    if (pending > 0)
+                      NewArrivalsPill(count: pending, onMerge: _merge),
+                  ],
+                ),
               ),
             ),
           ),
@@ -911,4 +921,25 @@ class _InboxPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_InboxPainter oldDelegate) => oldDelegate.color != color;
+}
+
+/// Der Abstand des Rasters zwischen den Bitten des Agenten und den Befunden,
+/// nur wenn beide stehen (HUM-302).
+class _StripGap extends ConsumerWidget {
+  const _StripGap();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final bool asks = ref.watch(
+      agentAsksProvider.select((List<AgentAsk> all) => all.isNotEmpty),
+    );
+    final bool findings = ref.watch(
+      diagnosticsProvider.select(
+        (List<SessionDiagnostic> all) => all.isNotEmpty,
+      ),
+    );
+    return SizedBox(
+      height: asks && findings ? HTheme.of(context).spacing.x2 : 0,
+    );
+  }
 }
