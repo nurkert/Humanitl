@@ -486,6 +486,13 @@ impl Shared {
         let _ = self.pty.set(master);
     }
 
+    /// Schließt die Tür zu weiteren Shells, wenn es eine gibt (HUM-313).
+    pub(crate) fn close_shells(&self) {
+        if let Some(door) = self.shells.get() {
+            door.close();
+        }
+    }
+
     /// Legt die Tür zu weiteren Shells ab; einmal je Start (HUM-299).
     pub(crate) fn set_shells(&self, door: Arc<crate::shell::ShellDoor>) {
         let _ = self.shells.set(door);

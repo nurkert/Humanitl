@@ -14,6 +14,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-317 | Sicherheitsaussage und Bedrohungsmodell für macOS | S | HUM-313 |
 | HUM-318 | Linux-VM als zweites Backend auf macOS (später) | L | HUM-313 |
 | HUM-319 | Tray und Benachrichtigungen auf macOS (später) | M | HUM-315 |
+| HUM-320 | Vorschau und Mounttabelle zeigen das Seatbelt-Profil | S | HUM-313 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -90,3 +91,13 @@ Entscheidung des Nutzers vom 2026-10-29: nach Seatbelt. Eine Linux-VM über `Vir
 ## HUM-319 · Tray und Benachrichtigungen auf macOS (später)
 
 Unter Linux laufen Tray und Benachrichtigungen über D-Bus (StatusNotifierItem, `org.freedesktop.Notifications`). Auf macOS braucht es ein `NSStatusItem` und `UNUserNotificationCenter` mit den Aktionen Erlauben, Blockieren, Anzeigen. Bis dahin zeigt die App auf macOS den Hinweis „kein Tray“ wie auf einem Linux ohne Tray.
+
+## HUM-320 · Vorschau und Mounttabelle zeigen das Seatbelt-Profil
+
+### Kontext
+Aus HUM-313: Der Plan-RPC baut seine Vorschau (`argv_preview`, Mounttabelle der Oberfläche, `humanitl sandbox argv`) aus `SandboxProfile::to_bwrap_args` und liest die Mounts aus deren Flags (`ipc/src/sandbox.rs`, `Prepared::argv`, `mounts_of`). Unter macOS startet aber `sandbox-exec` mit einem SBPL-Profil; die Vorschau zeigt dort eine bwrap-Zeile, die nie läuft.
+
+### Spezifikation
+1. Unter macOS zeigt die Vorschau die Kommandozeile von `sandbox-exec` und den Text des Profils, ohne Seiteneffekt (kein Sitzungsverzeichnis, kein Port).
+2. Die Mounttabelle kommt aus derselben Beschreibung wie das Profil (`SeatbeltPolicy`): Projekt mit Modus, Sitzungsverzeichnis, zusätzliche Ordner, Masken.
+3. Der Schalter in der Oberfläche heißt neutral („Exakte Sandbox-Kommandozeile").

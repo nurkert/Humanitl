@@ -96,10 +96,10 @@ use humanitl_recorder::Recorder;
 use humanitl_sandbox::agent::{opencode, pi};
 use humanitl_sandbox::summary::SessionSummary;
 use humanitl_sandbox::{
-    AdapterRegistry, AgentContext, AgentKey, BwrapBackend, CheckResult, IsolationCheck, KILL_GRACE,
-    LaunchInputs, MIN_BWRAP_VERSION, MountPolicy, SANDBOX_SHELL, SandboxBackend, SandboxFile,
-    SandboxHandle, SandboxProfile, SessionContext, StdioMode, Termination, WorkDirSource,
-    check_project_dir, shell_line,
+    AdapterRegistry, AgentContext, AgentKey, CheckResult, IsolationCheck, KILL_GRACE, LaunchInputs,
+    MountPolicy, PlatformBackend, SANDBOX_SHELL, SandboxBackend, SandboxFile, SandboxHandle,
+    SandboxProfile, SessionContext, StdioMode, Termination, WorkDirSource, check_project_dir,
+    shell_line,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -320,7 +320,7 @@ struct Running {
     /// (`BwrapBackend::with_report_timeout`). Ein zweites, frisch gefundenes
     /// Backend hätte eine andere Frist und prüfte damit unter anderen
     /// Bedingungen als es gestartet hat.
-    backend: BwrapBackend,
+    backend: PlatformBackend,
     started_at: SystemTime,
     profile: String,
     work_dir: PathBuf,
@@ -1353,7 +1353,7 @@ impl Inner {
     /// dazu (`docs/UX.md` 5.3). Die drei Garantien prüft HUM-041, und sie
     /// lassen sich ohnehin erst an einer laufenden Sandbox prüfen.
     fn preflight(&self) -> Vec<Diagnostic> {
-        match BwrapBackend::detect(self.paths.clone()) {
+        match PlatformBackend::detect(self.paths.clone()) {
             Ok(_) => Vec::new(),
             Err(diagnostic) => vec![diagnostic],
         }
@@ -2689,7 +2689,7 @@ impl Inner {
     }
 
     /// Das Backend, das gestartet hat, und sein Handle; beides oder nichts.
-    fn running_parts(&self) -> Option<(BwrapBackend, Arc<SandboxHandle>)> {
+    fn running_parts(&self) -> Option<(PlatformBackend, Arc<SandboxHandle>)> {
         lock(&self.running)
             .as_ref()
             .map(|running| (running.backend.clone(), Arc::clone(&running.handle)))
@@ -2865,9 +2865,8 @@ impl Inner {
         // Ein Schnappschuss ist eine Anzeige, kein Start: Ohne `bwrap` steht
         // die Zeile trotzdem da, und der Start scheitert später mit dem
         // Befund, der dazu gehört (`SANDBOX_001`).
-        let backend = BwrapBackend::detect(self.paths.clone()).unwrap_or_else(|_| {
-            BwrapBackend::unchecked("bwrap", MIN_BWRAP_VERSION, self.paths.clone())
-        });
+        let backend = PlatformBackend::detect(self.paths.clone())
+            .unwrap_or_else(|_| PlatformBackend::fallback(self.paths.clone()));
         let backend = match approved {
             Some(dir) => backend.with_approved_work_dir(dir),
             None => backend,
@@ -3337,7 +3336,7 @@ fn started_without_key(mut found: Diagnostic) -> Diagnostic {
 struct Prepared {
     profile: SandboxProfile,
     session: SessionContext,
-    backend: BwrapBackend,
+    backend: PlatformBackend,
     /// Wer den Wert jeder Umgebungsvariablen zuletzt geschrieben hat.
     ///
     /// Dieselbe Reihenfolge, in der [`SandboxProfile::effective_env`]
@@ -4823,7 +4822,7 @@ mod tests {
         Prepared {
             profile,
             session,
-            backend: BwrapBackend::unchecked("bwrap", MIN_BWRAP_VERSION, paths),
+            backend: PlatformBackend::fallback(paths),
             env_origin: BTreeMap::new(),
             adapter_files: BTreeSet::new(),
             warnings: Vec::new(),

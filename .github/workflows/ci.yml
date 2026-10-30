@@ -250,6 +250,13 @@ jobs:
       - name: Name the tests that failed
         if: failure() && steps.macos-test.outcome == 'failure'
         run: ./scripts/ci/test-report.sh "$RUNNER_TEMP/macos-test.log"
+      - name: Seatbelt escape tests (HUM-313)
+        # A real daemon in an empty HOME, `humanitl sandbox check` with three
+        # green guarantees, then every way out the profile must refuse.
+        run: |
+          set -euo pipefail
+          cd daemon && cargo build -p humanitl -p humanitld -p humanitl-shim
+          cd .. && ./tests/escape/macos/run.sh daemon/target/debug
       - name: Documentation builds without warnings
         run: cd daemon && cargo doc --workspace --no-deps
         env:

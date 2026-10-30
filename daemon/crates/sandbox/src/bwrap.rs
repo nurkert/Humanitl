@@ -220,6 +220,14 @@ impl BwrapBackend {
         }
     }
 
+    /// Ohne Prüfung, mit `bwrap` aus `PATH`: der Rückfall, wenn
+    /// [`Self::detect`] scheitert und trotzdem ein Plan gezeigt werden soll
+    /// (HUM-313, dieselbe Form wie [`crate::SeatbeltBackend::fallback`]).
+    #[must_use]
+    pub fn fallback(paths: Paths) -> Self {
+        Self::unchecked("bwrap", MIN_BWRAP_VERSION, paths)
+    }
+
     /// Wohin Ein- und Ausgabe der Sandbox gehen; Standard [`StdioMode::Inherit`].
     #[must_use]
     pub const fn with_stdio(mut self, stdio: StdioMode) -> Self {
@@ -416,7 +424,7 @@ impl BwrapBackend {
         command
     }
 
-    fn check_work_dir(
+    pub(crate) fn check_work_dir(
         profile: &SandboxProfile,
         session: &SessionContext,
     ) -> Result<(), Diagnostic> {
@@ -479,6 +487,15 @@ impl BwrapBackend {
     }
 
     fn check_proxy_socket(&self, session: &SessionContext) -> Result<(), Diagnostic> {
+        Self::check_proxy_socket_in(&self.paths, session)
+    }
+
+    /// [`Self::check_proxy_socket`] for any backend: the socket of these
+    /// paths, 0600, from the proxy directory and nowhere else (HUM-313).
+    pub(crate) fn check_proxy_socket_in(
+        paths: &Paths,
+        session: &SessionContext,
+    ) -> Result<(), Diagnostic> {
         let socket = session.proxy_socket_src.as_path();
         let shown = socket.display();
         let meta = std::fs::symlink_metadata(socket).map_err(|err| {
@@ -504,7 +521,7 @@ impl BwrapBackend {
         }
         // Nur die Datei aus dem Proxy-Verzeichnis, nie eine andere: der
         // gRPC-Socket daneben ist die Steuer-API (HUM-013).
-        let dir = normalize(&self.paths.proxy_socket_dir());
+        let dir = normalize(&paths.proxy_socket_dir());
         let written = normalize(socket);
         if !socket.is_absolute() || !written.starts_with(&dir) || written == dir {
             return Err(Diagnostic::builder(SANDBOX_006, Severity::Blocking)
@@ -517,7 +534,7 @@ impl BwrapBackend {
         Ok(())
     }
 
-    fn check_regular_file(path: &Path, what: &str) -> Result<(), Diagnostic> {
+    pub(crate) fn check_regular_file(path: &Path, what: &str) -> Result<(), Diagnostic> {
         let shown = path.display();
         let meta = std::fs::metadata(path)
             .map_err(|err| placeholder_diagnostic(format!("{what} {shown} is missing: {err}")))?;
@@ -529,7 +546,7 @@ impl BwrapBackend {
         Ok(())
     }
 
-    fn check_shim(session: &SessionContext) -> Result<(), Diagnostic> {
+    pub(crate) fn check_shim(session: &SessionContext) -> Result<(), Diagnostic> {
         let shim = session.shim_src.as_path();
         Self::check_regular_file(shim, "shim binary")?;
         if access(shim, Access::EXEC_OK).is_err() {
@@ -585,7 +602,7 @@ impl BwrapBackend {
     /// Raum wie die Einträge des Schnappschusses; nur so lässt sich eine
     /// Änderung einem ungeschützten Pfad zuordnen
     /// (`summary::SessionSummary::set_unprotected`).
-    fn unprotected_under_work(
+    pub(crate) fn unprotected_under_work(
         profile: &SandboxProfile,
         present: &BTreeSet<PathBuf>,
     ) -> Vec<PathBuf> {
@@ -608,7 +625,10 @@ impl BwrapBackend {
 
     /// Die Pfade unter `/work` (Sandbox-Sicht), die es im Projekt gibt: ein
     /// Verzeichnis je `mounts.tmpfs` darunter, eine Datei je Maske.
-    fn present_under_work(profile: &SandboxProfile, work_src: &Path) -> BTreeSet<PathBuf> {
+    pub(crate) fn present_under_work(
+        profile: &SandboxProfile,
+        work_src: &Path,
+    ) -> BTreeSet<PathBuf> {
         let work_dst = profile.mounts.work.dst.as_path();
         let mut present = BTreeSet::new();
         for path in &profile.mounts.tmpfs {
@@ -720,7 +740,7 @@ impl BwrapBackend {
 impl BwrapBackend {
     /// Eine Pipe, deren Schreibseite `bwrap` erbt: Sie liegt deshalb über den
     /// Standardströmen (`inherit.rs`). `name` steht im Befund.
-    fn inherited_pipe(name: &str) -> Result<(PipeReader, OwnedFd), Diagnostic> {
+    pub(crate) fn inherited_pipe(name: &str) -> Result<(PipeReader, OwnedFd), Diagnostic> {
         let (reader, writer) = std::io::pipe().map_err(|err| {
             placeholder_diagnostic(format!("cannot create the {name} pipe: {err}"))
         })?;
@@ -878,12 +898,13 @@ impl SandboxBackend for BwrapBackend {
             profile: profile.name.clone(),
             warnings,
             unprotected,
+            env_on_program: false,
             program: self.program.clone(),
             once: Mutex::new(Some(LaunchOnce {
                 inherit,
                 report: report_reader,
                 status: status_reader,
-                shells: shell_door,
+                shells: shell_door.map(crate::shell::DoorSeed::Socket),
             })),
         })
     }
@@ -902,68 +923,7 @@ impl SandboxBackend for BwrapBackend {
     ///   Deskriptoren ließen sich nicht übergeben (HUM-263), oder der Plan
     ///   war schon gestartet.
     fn launch(&self, plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic> {
-        let once = plan
-            .take_once()
-            .ok_or_else(|| Self::already_launched(plan))?;
-        let LaunchOnce {
-            inherit,
-            report,
-            status,
-            shells,
-        } = once;
-        let id = SandboxId::new();
-        let shared = Arc::new(Shared::default());
-        if let Some(sink) = self.output_sink.clone() {
-            shared.set_sink(sink);
-        }
-        let program = self.program.clone();
-        let args: Vec<OsString> = plan.argv.iter().skip(1).cloned().collect();
-        let stdio = self.stdio;
-
-        let (tx, rx) = mpsc::channel();
-        let supervisor_shared = Arc::clone(&shared);
-        thread::Builder::new()
-            .name(format!("sandbox-{}", plan.profile))
-            .spawn(move || supervise(&program, &args, inherit, stdio, &supervisor_shared, &tx))
-            .map_err(|err| {
-                Diagnostic::builder(SANDBOX_012, Severity::Blocking)
-                    .why(format!("cannot start the supervisor thread: {err}"))
-                    .build()
-            })?;
-        let pid = rx.recv().map_err(|_| {
-            Diagnostic::builder(SANDBOX_012, Severity::Blocking)
-                .why("the supervisor thread ended without starting bwrap")
-                .build()
-        })??;
-        let handle = SandboxHandle::new(id, pid, plan.argv_line(), Arc::clone(&shared));
-        // The door opens after `bwrap` holds its end, and a door that cannot
-        // open costs the further shells, never the session (HUM-299).
-        // `SandboxHandle::open_shell` then says that there is no door.
-        if let Some(socket) = shells
-            && let Ok(door) = crate::shell::ShellDoor::start(socket)
-        {
-            shared.set_shells(door);
-        }
-
-        // Ohne die Leser gäbe es weder Bericht noch Befund; dann lieber gar
-        // keine Sandbox als eine, über die niemand etwas sagen kann.
-        let readers = spawn_reader("sandbox-report", Arc::clone(&shared), report, read_report)
-            .and_then(|()| {
-                spawn_reader("sandbox-status", Arc::clone(&shared), status, read_status)
-            });
-        if let Err(err) = readers {
-            handle.kill();
-            return Err(Diagnostic::builder(SANDBOX_012, Severity::Blocking)
-                .why(format!("cannot start the reader threads for bwrap: {err}"))
-                .build());
-        }
-
-        // Ein frühes Ende, oder die erste Zeile des Shims: was zuerst kommt.
-        let _ = shared.wait_report(EARLY_EXIT_WINDOW, |report| !report.checks.is_empty());
-        if let Some(exit) = handle.try_wait() {
-            shared.verdict(exit)?;
-        }
-        Ok(handle)
+        launch_plan(&self.program, plan, self.stdio, self.output_sink.clone())
     }
 
     /// Ordnet den Bericht des Shims ([`crate::bridge_env`]) den drei Garantien zu.
@@ -979,56 +939,153 @@ impl SandboxBackend for BwrapBackend {
     /// `families` zusammen sind Garantie 3. Ohne jede Zeile tragen alle drei
     /// `SANDBOX_013`.
     fn isolation_check(&self, handle: &SandboxHandle) -> Vec<CheckResult> {
-        let report = handle.wait_for_report(self.report_timeout);
-        if report.checks.is_empty() {
-            let mut evidence = format!(
-                "no CHECK line from the shim within {:?}",
-                self.report_timeout
-            );
-            if report.closed {
-                evidence.push_str("; the report pipe is closed");
-            }
-            if report.other_lines > 0 {
-                let _ = std::fmt::Write::write_fmt(
-                    &mut evidence,
-                    format_args!("; {} other line(s) ignored", report.other_lines),
-                );
-            }
-            return IsolationCheck::ALL
-                .iter()
-                .map(|&check| CheckResult {
-                    check,
-                    passed: false,
-                    evidence: evidence.clone(),
-                    diagnostic: Some(
-                        Diagnostic::builder(SANDBOX_013, Severity::Blocking)
-                            .why(format!("{}: {evidence}", check.as_str()))
-                            .build(),
-                    ),
-                })
-                .collect();
-        }
-        vec![
-            check_from(
-                &report,
-                IsolationCheck::NoNetworkInterface,
-                &[CHECK_NO_INTERFACES],
-                SANDBOX_014,
-            ),
-            check_from(
-                &report,
-                IsolationCheck::SingleSocket,
-                &[CHECK_SINGLE_SOCKET, CHECK_BRIDGE_LISTENING],
-                SANDBOX_015,
-            ),
-            check_from(
-                &report,
-                IsolationCheck::SeccompActive,
-                &[CHECK_SECCOMP_APPLIED, CHECK_FAMILIES],
-                SANDBOX_016,
-            ),
-        ]
+        isolation_from_report(handle, self.report_timeout)
     }
+}
+
+/// The three guarantees from the shim's report, for every backend whose shim
+/// writes the same five `CHECK` lines (HUM-313); see
+/// [`BwrapBackend::isolation_check`](SandboxBackend::isolation_check).
+pub(crate) fn isolation_from_report(handle: &SandboxHandle, timeout: Duration) -> Vec<CheckResult> {
+    let report = handle.wait_for_report(timeout);
+    if report.checks.is_empty() {
+        let mut evidence = format!("no CHECK line from the shim within {timeout:?}");
+        if report.closed {
+            evidence.push_str("; the report pipe is closed");
+        }
+        if report.other_lines > 0 {
+            let _ = std::fmt::Write::write_fmt(
+                &mut evidence,
+                format_args!("; {} other line(s) ignored", report.other_lines),
+            );
+        }
+        return IsolationCheck::ALL
+            .iter()
+            .map(|&check| CheckResult {
+                check,
+                passed: false,
+                evidence: evidence.clone(),
+                diagnostic: Some(
+                    Diagnostic::builder(SANDBOX_013, Severity::Blocking)
+                        .why(format!("{}: {evidence}", check.as_str()))
+                        .build(),
+                ),
+            })
+            .collect();
+    }
+    vec![
+        check_from(
+            &report,
+            IsolationCheck::NoNetworkInterface,
+            &[CHECK_NO_INTERFACES],
+            SANDBOX_014,
+        ),
+        check_from(
+            &report,
+            IsolationCheck::SingleSocket,
+            &[CHECK_SINGLE_SOCKET, CHECK_BRIDGE_LISTENING],
+            SANDBOX_015,
+        ),
+        check_from(
+            &report,
+            IsolationCheck::SeccompActive,
+            &[CHECK_SECCOMP_APPLIED, CHECK_FAMILIES],
+            SANDBOX_016,
+        ),
+    ]
+}
+
+/// Starts a plan: the supervisor thread, the readers of report and status,
+/// and the wait for the first line or an early end. The same for every
+/// backend that starts one program with inherited descriptors (bwrap,
+/// `sandbox-exec`, HUM-313).
+///
+/// # Errors
+///
+/// As [`SandboxBackend::launch`].
+pub(crate) fn launch_plan(
+    program: &Path,
+    plan: &LaunchPlan,
+    stdio: StdioMode,
+    output_sink: Option<OutputSink>,
+) -> Result<SandboxHandle, Diagnostic> {
+    let once = plan
+        .take_once()
+        .ok_or_else(|| BwrapBackend::already_launched(plan))?;
+    let LaunchOnce {
+        inherit,
+        report,
+        status,
+        shells,
+    } = once;
+    let id = SandboxId::new();
+    let shared = Arc::new(Shared::default());
+    if let Some(sink) = output_sink {
+        shared.set_sink(sink);
+    }
+    let program = program.to_path_buf();
+    let args: Vec<OsString> = plan.argv.iter().skip(1).cloned().collect();
+    // bwrap carries the environment in `--setenv` and starts with an
+    // empty one; `sandbox-exec` hands its own environment to the command
+    // (HUM-313).
+    let env = if plan.env_on_program {
+        plan.env.clone()
+    } else {
+        Vec::new()
+    };
+
+    let (tx, rx) = mpsc::channel();
+    let supervisor_shared = Arc::clone(&shared);
+    thread::Builder::new()
+        .name(format!("sandbox-{}", plan.profile))
+        .spawn(move || {
+            supervise(
+                &program,
+                &args,
+                &env,
+                inherit,
+                stdio,
+                &supervisor_shared,
+                &tx,
+            );
+        })
+        .map_err(|err| {
+            Diagnostic::builder(SANDBOX_012, Severity::Blocking)
+                .why(format!("cannot start the supervisor thread: {err}"))
+                .build()
+        })?;
+    let pid = rx.recv().map_err(|_| {
+        Diagnostic::builder(SANDBOX_012, Severity::Blocking)
+            .why("the supervisor thread ended without starting bwrap")
+            .build()
+    })??;
+    let handle = SandboxHandle::new(id, pid, plan.argv_line(), Arc::clone(&shared));
+    // The door opens after `bwrap` holds its end, and a door that cannot
+    // open costs the further shells, never the session (HUM-299).
+    // `SandboxHandle::open_shell` then says that there is no door.
+    if let Some(seed) = shells
+        && let Ok(door) = seed.open()
+    {
+        shared.set_shells(door);
+    }
+
+    // Ohne die Leser gäbe es weder Bericht noch Befund; dann lieber gar
+    // keine Sandbox als eine, über die niemand etwas sagen kann.
+    let readers = spawn_reader("sandbox-report", Arc::clone(&shared), report, read_report)
+        .and_then(|()| spawn_reader("sandbox-status", Arc::clone(&shared), status, read_status));
+    if let Err(err) = readers {
+        handle.kill();
+        return Err(Diagnostic::builder(SANDBOX_012, Severity::Blocking)
+            .why(format!("cannot start the reader threads for bwrap: {err}"))
+            .build());
+    }
+
+    // Ein frühes Ende, oder die erste Zeile des Shims: was zuerst kommt.
+    let _ = shared.wait_report(EARLY_EXIT_WINDOW, |report| !report.checks.is_empty());
+    if let Some(exit) = handle.try_wait() {
+        shared.verdict(exit)?;
+    }
+    Ok(handle)
 }
 
 /// Ein Ergebnis aus den Zeilen zu `names`: alle müssen da und `ok` sein.
@@ -1204,6 +1261,7 @@ impl PinnedMounts {
 fn supervise(
     program: &Path,
     args: &[OsString],
+    env: &[(String, String)],
     inherit: Vec<OwnedFd>,
     stdio: StdioMode,
     shared: &Arc<Shared>,
@@ -1223,7 +1281,9 @@ fn supervise(
     };
     let spawned = {
         let mut command = BwrapBackend::scrubbed_command(program);
-        command.args(args);
+        command
+            .args(args)
+            .envs(env.iter().map(|(key, value)| (key, value)));
         if stdio == StdioMode::Capture {
             command
                 .stdin(Stdio::null())
@@ -1327,6 +1387,9 @@ fn supervise(
             Err(_) => break ExitStatus::default(),
         }
     };
+    // Weitere Shells einer Start-Tür enden mit der Sandbox (HUM-313); unter
+    // Linux erledigt das der PID-Namensraum.
+    shared.close_shells();
     // Erst die Leser einsammeln, dann den Zuhörer der Ausgabe loslassen, dann
     // den Status setzen. Ein Zuhörer, der bliebe, hielte seinen Kanal offen,
     // und wer auf dessen Ende wartet, wartete für immer — die Ausgabe ist zu
@@ -1358,7 +1421,7 @@ impl Pty {
     /// `Stdio::from` verbraucht seinen Deskriptor, also braucht jeder der drei
     /// einen eigenen. Sie zeigen auf dieselbe Beschreibung; das ist genau, was
     /// ein Terminal ist.
-    fn stdio(&self) -> Result<(Stdio, Stdio, Stdio), Diagnostic> {
+    pub(crate) fn stdio(&self) -> Result<(Stdio, Stdio, Stdio), Diagnostic> {
         let mut copies = Vec::with_capacity(3);
         for _ in 0..3 {
             copies.push(self.slave.try_clone().map_err(|err| {
