@@ -991,7 +991,25 @@ fn a_disposable_change_keeps_its_shape() {
         named_field("SandboxRequest.Start", "sandbox_mode").number(),
         9
     );
+    // Überschreiben je Datei (HUM-351): `overwrite_ids` neben dem alten
+    // Schalter, nicht an seiner Stelle.
+    assert_eq!(
+        check_fields(
+            "SandboxRequest.ApplyChanges",
+            &message("SandboxRequest.ApplyChanges"),
+            APPLY_CHANGES_FIELDS
+        ),
+        Ok(())
+    );
 }
+
+/// `SandboxRequest.ApplyChanges` vollständig (HUM-350, HUM-351).
+const APPLY_CHANGES_FIELDS: &FieldTable = &[
+    ("sandbox_id", 1, "string", None),
+    ("ids", 2, "repeated string", None),
+    ("overwrite", 3, "bool", None),
+    ("overwrite_ids", 4, "repeated string", None),
+];
 
 /// `SandboxEvent.Refusals` und `SandboxEvent.Refusal` vollständig (HUM-138).
 const REFUSALS_FIELDS: &FieldTable = &[

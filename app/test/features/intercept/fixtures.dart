@@ -305,7 +305,26 @@ class TestDaemonClient implements DaemonClient {
       const Stream<SandboxUpdate>.empty();
 
   @override
-  Stream<SandboxUpdate> startSandbox({String? profile, WorkMode? workMode}) =>
+  Stream<SandboxUpdate> startSandbox({
+    String? profile,
+    WorkMode? workMode,
+    SandboxMode? sandboxMode,
+  }) => const Stream<SandboxUpdate>.empty();
+
+  // Die Wegwerf-Sandbox (HUM-351): Dieser Client nennt die Fähigkeit nicht,
+  // also fragt niemand.
+  @override
+  Stream<SandboxUpdate> sandboxChanges() => const Stream<SandboxUpdate>.empty();
+
+  @override
+  Stream<SandboxUpdate> applyChanges({
+    required String sandboxId,
+    required List<String> ids,
+    required List<String> overwriteIds,
+  }) => const Stream<SandboxUpdate>.empty();
+
+  @override
+  Stream<SandboxUpdate> discardChanges({required String sandboxId}) =>
       const Stream<SandboxUpdate>.empty();
 
   @override

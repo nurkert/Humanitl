@@ -50,6 +50,7 @@ class NeverRanClient extends SandboxTestClient {
   Stream<SandboxUpdate> startSandbox({
     String? profile,
     WorkMode? workMode,
+    SandboxMode? sandboxMode,
   }) async* {
     // Der Daemon nimmt die Momentaufnahme `running` erst nach der
     // Isolationsprüfung; ein `exec`, das nach Millisekunden scheitert, ist

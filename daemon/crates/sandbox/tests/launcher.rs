@@ -1463,7 +1463,7 @@ fn a_disposable_sandbox_never_writes_to_the_project() {
         lower.as_fd(),
         &before,
         &chosen,
-        humanitl_sandbox::ApplyOptions::default(),
+        &humanitl_sandbox::ApplyOptions::default(),
     )
     .expect("apply");
     assert!(report.failed.is_none(), "{:?}", report.failed);

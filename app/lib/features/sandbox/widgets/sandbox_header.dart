@@ -12,10 +12,12 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/ipc/connection.dart';
 import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/ui.dart';
 import '../../../core/ui/work_dir_picker.dart';
 import '../../../l10n/l10n.dart';
+import '../providers/disposable_review.dart';
 import '../providers/sandbox_status_provider.dart';
 import '../sandbox_text.dart';
 
@@ -40,6 +42,11 @@ class SandboxHeader extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
+    final bool waiting = ref.watch(
+      disposableReviewProvider.select(
+        (DisposableReview review) => review.waiting,
+      ),
+    );
     // Die Kopfzeile des Screens, mit Höhe und Linie aus dem Token wie jede
     // andere (HUM-286).
     return ColoredBox(
@@ -90,7 +97,30 @@ class SandboxHeader extends ConsumerWidget {
               ),
             ),
             SizedBox(width: tokens.spacing.x3),
-            SandboxStartStop(status: status, onAskStop: onAskStop),
+            // Warten Änderungen eines Wegwerf-Laufs, stehen hier drei
+            // Controls statt zwei (HUM-351). Bei großer Schrift passen sie
+            // nicht mehr neben Zustand und Profil; dann rollen sie in sich,
+            // statt über den Rand zu laufen, und der Fokus holt jedes in
+            // Sicht.
+            if (waiting)
+              Flexible(
+                child: SingleChildScrollView(
+                  key: const Key('sandbox-header-trailing'),
+                  scrollDirection: Axis.horizontal,
+                  reverse: true,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      DisposableSwitch(status: status),
+                      SandboxStartStop(status: status, onAskStop: onAskStop),
+                    ],
+                  ),
+                ),
+              )
+            else ...<Widget>[
+              DisposableSwitch(status: status),
+              SandboxStartStop(status: status, onAskStop: onAskStop),
+            ],
           ],
         ),
       ),
@@ -194,13 +224,44 @@ class SandboxStartStop extends ConsumerWidget {
         child: Text(l10n.sandboxStop),
       );
     }
+    // Solange die Änderungen eines Wegwerf-Laufs warten, lehnt der Daemon
+    // nur einen weiteren Wegwerf-Start ab (`SANDBOX_030`); ein direkter Start
+    // geht und lässt die Änderungen warten. Der Knopf sperrt deshalb nur im
+    // Wegwerf-Modus und sagt es auf sich selbst; im direkten Modus sagt er,
+    // dass die Änderungen weiter warten. Daneben steht in beiden Fällen der
+    // Weg zum Panel (HUM-351).
+    final DisposableReview review = ref.watch(disposableReviewProvider);
+    final bool waiting = review.waiting;
+    final bool refused =
+        waiting && ref.watch(nextSandboxModeProvider) == SandboxMode.disposable;
     final HButton start = HButton(
       key: const Key('sandbox-start'),
-      onPressed: status.isBusy || blocking != null
+      onPressed: status.isBusy || blocking != null || refused
           ? null
           : () => unawaited(ref.read(sandboxStatusProvider.notifier).start()),
       child: Text(l10n.sandboxStart),
     );
+    if (waiting && blocking == null) {
+      final HTokens tokens = HTheme.of(context);
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          HButton(
+            key: const Key('sandbox-changes-open'),
+            variant: HButtonVariant.secondary,
+            onPressed: ref.read(disposableReviewProvider.notifier).show,
+            child: Text(l10n.sandboxChangesReview(review.rows.length)),
+          ),
+          SizedBox(width: tokens.spacing.x2),
+          HoverLabel(
+            label: refused
+                ? l10n.sandboxChangesStartBlocked
+                : l10n.sandboxChangesStartDirect,
+            child: start,
+          ),
+        ],
+      );
+    }
     if (blocking == null) {
       return start;
     }
@@ -223,5 +284,51 @@ class SandboxStartStop extends ConsumerWidget {
       return;
     }
     unawaited(ref.read(sandboxStatusProvider.notifier).stop());
+  }
+}
+
+/// Der Schalter „Wegwerf" vor dem Start (HUM-351).
+///
+/// Nur bei einem Daemon, der `sandbox.disposable` nennt; auf macOS nennt er
+/// die Fähigkeit nicht, und der Schalter fehlt. Seine Vorgabe ist
+/// `sandbox.mode` aus `GetConfig`; was er wählt, gilt für den nächsten Start
+/// und geht als `Start.sandbox_mode` mit. Solange eine Sandbox steht, ändert
+/// er nichts und ist aus.
+class DisposableSwitch extends ConsumerWidget {
+  /// Legt den Schalter für [status] an.
+  const DisposableSwitch({required this.status, super.key});
+
+  /// Was der Daemon zuletzt sagte.
+  final SandboxStatus status;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final bool offered =
+        ref.watch(daemonInfoProvider).value?.offersDisposable ?? false;
+    if (!offered) {
+      return const SizedBox.shrink();
+    }
+    final HTokens tokens = HTheme.of(context);
+    final AppLocalizations l10n = context.l10n;
+    final SandboxMode mode = ref.watch(nextSandboxModeProvider);
+    return Padding(
+      padding: EdgeInsets.only(right: tokens.spacing.x3),
+      child: HoverLabel(
+        label: l10n.sandboxDisposableHint,
+        // Die Zeile des Kopfs gibt keine Breite vor; das Kästchen streckt
+        // seine Beschriftung, also misst es sich an ihr.
+        child: IntrinsicWidth(
+          child: HCheckbox(
+            key: const Key('sandbox-disposable'),
+            label: l10n.sandboxDisposableLabel,
+            value: mode == SandboxMode.disposable,
+            enabled: !(status.isUp || status.isBusy),
+            onChanged: (bool on) => ref
+                .read(sandboxModeChoiceProvider.notifier)
+                .choose(on ? SandboxMode.disposable : SandboxMode.direct),
+          ),
+        ),
+      ),
+    );
   }
 }

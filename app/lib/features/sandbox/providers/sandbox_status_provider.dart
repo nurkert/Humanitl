@@ -14,9 +14,11 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import '../../../core/domain/domain.dart';
 import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/config_providers.dart';
+import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/daemon_client.dart';
 
 import 'closed_failures.dart';
+import 'disposable_review.dart';
 
 part 'sandbox_status_provider.g.dart';
 
@@ -258,10 +260,22 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
 
   /// Starts the sandbox. Every event of the start updates the snapshot as it
   /// arrives, so `starting` is on the screen before `running` is.
-  Future<void> start() => _apply(
-    (DaemonClient client) => client.startSandbox(),
-    call: SandboxCall.start,
-  );
+  ///
+  /// The mode of the switch "Disposable" goes along only to a daemon that
+  /// names `sandbox.disposable`, and only once somebody chose one
+  /// ([SandboxModeChoice]); otherwise the field stays empty and the daemon
+  /// takes `sandbox.mode` (HUM-351).
+  Future<void> start() {
+    final bool offered =
+        ref.read(daemonInfoProvider).value?.offersDisposable ?? false;
+    final SandboxMode? mode = offered
+        ? ref.read(sandboxModeChoiceProvider)
+        : null;
+    return _apply(
+      (DaemonClient client) => client.startSandbox(sandboxMode: mode),
+      call: SandboxCall.start,
+    );
+  }
 
   /// Asks for the snapshot alone, for a window that only needs to know
   /// whether a session runs (HUM-306): the shell asks every few seconds while
@@ -497,7 +511,23 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     // The agent ended; the sandbox around it may still stand, and that is
     // what the snapshot says from now on (HUM-306).
     SandboxUpdateExit() => current.copyWith(agentRunning: false),
+    // The changes of a disposable run (HUM-351): they belong to the panel,
+    // not to the snapshot, and the panel opens without a click.
+    SandboxUpdateChanges(:final DisposableChanges changes) => _changes(
+      current,
+      changes,
+    ),
+    // The answer to apply and discard travels on the panel's own call and
+    // never on this stream; should one arrive here, it says nothing about the
+    // sandbox.
+    SandboxUpdateChangesOutcome() => current,
   };
+
+  /// Hands [changes] to the panel and leaves the snapshot alone.
+  SandboxStatus _changes(SandboxStatus current, DisposableChanges changes) {
+    ref.read(disposableReviewProvider.notifier).arrived(changes);
+    return current;
+  }
 
   /// [checks] with [result] in the place of the earlier result for the same
   /// guarantee, or appended when there was none.

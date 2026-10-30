@@ -7,6 +7,7 @@
 library;
 
 import 'diagnostic.dart';
+import 'disposable.dart';
 
 /// The keys the settings form writes, in the order the form shows them.
 ///
@@ -61,6 +62,13 @@ abstract final class FormKeys {
     tlsTrustSystemStore,
     agentAdapter,
   ];
+
+  /// How the project folder is mounted: `direct` or `disposable` (HUM-350).
+  ///
+  /// Read only, and therefore not in [all]: `FORM_KEYS` of the daemon does
+  /// not take it, so `SetConfig` refuses it with `CONFIG_014`. The app reads
+  /// it as the default of the switch "Disposable" at the start (HUM-351).
+  static const String sandboxMode = 'sandbox.mode';
 
   /// The reference to the access key, as the daemon names it in the
   /// `ChangeSetting` fix of `LLM_002` (HUM-275).
@@ -154,6 +162,10 @@ final class ConfigValues {
 
   /// `agent.adapter`, default `opencode` (HUM-274).
   String get agentAdapter => _text(FormKeys.agentAdapter, 'opencode');
+
+  /// `sandbox.mode`, default `direct` (HUM-350).
+  SandboxMode get sandboxMode =>
+      SandboxMode.fromWire(_text(FormKeys.sandboxMode, 'direct'));
 
   /// `sandbox.work_dir`, empty when unset.
   String get sandboxWorkDir => _text(FormKeys.sandboxWorkDir, '');

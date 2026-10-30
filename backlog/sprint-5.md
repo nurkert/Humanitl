@@ -10120,6 +10120,68 @@ the app half.
 4. Widget tests for the panel (rows, badges, diff, selection, both
    confirmations) and a golden in both themes.
 
+### Umsetzung (HUM-351)
+- **Vertrag.** `SandboxRequest.ApplyChanges.overwrite_ids` (Feld 4,
+  `PROTO_MINOR` 26): Der Daemon überschreibt einen Konflikt nur, wenn die
+  Kennung dort steht; `overwrite` bleibt für `humanitl sandbox apply
+  --overwrite` und heißt „alle gewählten" (`ApplyOptions::may_overwrite`).
+  Die App setzt `overwrite` nie. `docs/PROTOCOL.md`, `docs/SECURITY.md` 5.2
+  und Änderungsprotokoll, `docs/THREAT-MODEL.md` K-24, `proto_contract`.
+- **App.** `core/domain/disposable.dart`; `DaemonClient.startSandbox(sandboxMode:)`,
+  `sandboxChanges`, `applyChanges(ids, overwriteIds)`, `discardChanges`;
+  `proto_version.dart` auf 26. Feature `sandbox`: `providers/disposable_review.dart`
+  (Auswahl, Bestätigung je Datei samt Satz des Daemons, Generationszähler gegen
+  späte Antworten von `fetch`, Abgleich nach neuem Lesen, Säubern aller
+  Agententexte mit `sanitizeBodyText`, Befunde mit `sanitizeDiagnostic`),
+  `widgets/changes_panel.dart`, `change_row.dart`, `diff_view.dart`,
+  `changes_confirm.dart` (die Rückfrage hält die gezeigte Auswahl und fragt
+  neu, wenn sie sich geändert hat). Schalter „Wegwerf" im Kopf und in der
+  Einrichtung nur mit `sandbox.disposable`; Vorgabe `sandbox.mode` aus
+  `GetConfig`, ohne Wahl bleibt `Start.sandbox_mode` leer.
+- **Startsperre, bewusst enger als Punkt 4.** Der Daemon lehnt nur einen
+  Wegwerf-Start ab, solange eine Schicht wartet; ein direkter Start geht. Kopf
+  und Einrichtung sperren deshalb nur einen Wegwerf-Start (mit dem Satz zu
+  `SANDBOX_030`); ein direkter Start bleibt möglich und bekommt einen
+  Hinweis, dass die Änderungen weiter warten. Beide zeigen „Änderungen prüfen
+  (N)".
+- **Panel ohne Klick.** Nach einem Lauf über den Strom des Starts (die Shell
+  wechselt auf die Sandbox-Seite), nach einer Wiederverbindung einmal je Lauf
+  über `Sandbox(Changes)`.
+- **Review Runde 2.** Überschreiben je Datei nur bei einem Daemon ab
+  Minor 26 (`perChangeOverwriteProvider`); ein Daemon mit 1.25 nennt
+  `sandbox.disposable`, liest `overwrite_ids` aber nicht: Die Zeile mit
+  Konflikt ist dann nicht wählbar und sagt, dass Humanitl aktualisiert werden
+  muss; nie Rückfall auf `overwrite`. Jede Rückfrage (Auswahl, „Alle
+  übernehmen", „Alle verwerfen") hält die Sandbox-Kennung und die gezeigten
+  Kennungen und fragt neu, wenn ein anderer Lauf mit denselben Pfaden die
+  Liste ersetzt hat. Jede Frage von `fetch` trägt ihre eigene Nummer; nur die
+  jüngste setzt den Stand.
+- **Review Runde 3.** Auch die Rückfrage zum Überschreiben hält den Lauf
+  (Kennung, Satz und Sandbox-Kennung), und „Alle verwerfen" hält jede
+  gezeigte Kennung. Damit ist jede Rückfrage, die schreibt oder verwirft, an
+  Lauf und genau das Gezeigte gebunden.
+- **Abweichung von Punkt 1.** `sandbox.mode` ist nicht im Einstellungsformular:
+  `FORM_KEYS` des Daemons nimmt den Schlüssel nicht. Siehe Kandidat (A).
+- **Fake.** `HUMANITL_FAKE=disposable`; ein leerer Startmodus folgt
+  `sandbox.mode` der Konfiguration, ein `partial` nimmt Geschriebenes nach
+  Kennung heraus.
+- **Mutationsbeweise**, Dateien danach mit `cmp` zurück: alle Kennungen statt
+  der gewählten; Überschreiben für alle Konflikte; `overwrite_ids` als alle
+  gewählten; Abgleich nach neuem Lesen aus; Generationsprüfung aus;
+  Gleichheitsprüfung der Rückfrage aus; Säubern aus; Startsperre der
+  Einrichtung aus; Fake-Modus und Fake-Teilschreiben. Daemon:
+  `may_overwrite` mit beliebiger Kennung (`a_conflict_not_named_for_overwrite_is_not_overwritten_even_if_another_is`
+  rot) und `options_of` mit `overwrite` aus `overwrite_ids`
+  (`overwrite_ids_name_only_the_confirmed_changes` rot).
+
+### Kandidaten (HUM-351)
+- (A) `sandbox.mode` als Schlüssel des Formulars (`FORM_KEYS`) und Zeile im
+  Einstellungsformular; gehört zu dem Issue, das die Wegwerf-Sandbox zur
+  Vorgabe macht.
+- (B) Diffs erst beim Aufklappen zeichnen und lange Diffs in einer
+  `ListView` statt einer Spalte (heute bis 64 KiB je Datei in einer
+  `Column`).
+
 ---
 ## HUM-352 · The floating terminal keeps its resize grip in the corner and grows equally in every corner
 

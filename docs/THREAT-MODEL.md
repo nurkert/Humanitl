@@ -123,7 +123,7 @@ Five further channels complete the model:
 | K-15 | the window between `exec` and `SIGKILL` | b | high | report read at once, `SIGKILL` without grace | open | - |
 | K-16 | recording outage | a, b, c | medium | outage reported to every client once per cause, cards marked "not recorded", first approval paused | declared | `daemon/crates/recorder` health tests, golden `states_recorder_failure` |
 | K-18 | the door for further shells (`humanitl sandbox exec`) | b | high | unnamed socket pair held only by the daemon and PID 1; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX`; at most four; dies with the sandbox | mitigated | `daemon/crates/ipc/tests/terminal.rs` (HUM-299) |
-| K-24 | the disposable sandbox: the upper layer and the way back into the project (`humanitl sandbox apply`) | b | high | project folder read-only as the lower layer of an overlay, upper layer in RAM under the daemon's runtime directory with a size cap, `mounts.extra_rw` read-only; applied only on a human's choice, checked before the first write, never through or as a symlink out of the project, no device, FIFO, socket or setuid bit, no overwrite of a file the human changed since the start without `--overwrite` | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350) |
+| K-24 | the disposable sandbox: the upper layer and the way back into the project (`humanitl sandbox apply`) | b | high | project folder read-only as the lower layer of an overlay, upper layer in RAM under the daemon's runtime directory with a size cap, `mounts.extra_rw` read-only; applied only on a human's choice, checked before the first write, never through or as a symlink out of the project, no device, FIFO, socket or setuid bit, no overwrite of a file the human changed since the start unless that change is confirmed one by one (`ApplyChanges.overwrite_ids` from the app, HUM-351) or every selected change is (`--overwrite`) | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350) |
 
 K-13 is the obvious channel and the only one considered closed outright. K-14 is here so that
 attacker (d) appears in a row. K-15 came with HUM-041: the check that proves the guarantees runs
@@ -456,8 +456,9 @@ never written, setuid, setgid and sticky bits are dropped, hard links become sep
 whiteouts and opaque directories only delete inside the project, and entries with overlay
 attributes an unprivileged overlay never writes (`redirect`, `metacopy`) are refused. The project folder is opened once
 before the start; the baseline is taken on that descriptor before the sandbox starts, the
-launcher mounts only a folder with the same inode, and diff and apply never reopen the path. A file the human changed since the start is a conflict and needs
-`--overwrite`, and the target is compared again directly before each write (a remaining window of
+launcher mounts only a folder with the same inode, and diff and apply never reopen the path. A file the human changed since the start is a conflict and is written only
+when it was confirmed for exactly that change (`overwrite_ids`, or `--overwrite` for all selected,
+HUM-351), and the target is compared again directly before each write (a remaining window of
 a few system calls, no lock on the folder); every selected change is
 checked before the first write, and one failing check writes nothing. Paths and diffs are agent
 data and are shown sanitised. *Residual risk:* what the human applies is the agent's content, as
@@ -541,6 +542,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-30 | K-19 to K-23: macOS with Seatbelt; shared loopback, no PID namespace, paths instead of descriptors, a deprecated interface, host-local side channels | HUM-323, HUM-327, HUM-331 |
 
 | 2026-10-30 | K-24: the disposable sandbox, an overlay over the read-only project with the upper layer in RAM and a size cap; changes reach the project only through a checked apply | HUM-350 |
+| 2026-10-30 | K-24: overwriting a conflict is confirmed per change (`overwrite_ids`); a confirmation for one file never covers another | HUM-351 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

@@ -213,9 +213,7 @@ impl Waiting {
             self.lower.as_fd(),
             &self.baseline,
             &chosen,
-            ApplyOptions {
-                overwrite: request.overwrite,
-            },
+            &options_of(request),
         )?;
         let applied: Vec<String> = report.applied.iter().map(|rel| display_path(rel)).collect();
         if let Some((_, failed)) = report.failed {
@@ -311,11 +309,65 @@ fn change_to_proto(change: &LayerChange, diff: Option<String>) -> v1::Disposable
     }
 }
 
+/// Wie eine Anfrage übernehmen will (HUM-351): Überschrieben wird je
+/// Kennung aus `overwrite_ids`; `overwrite` heißt weiter „alle gewählten",
+/// für `humanitl sandbox apply --overwrite`. Eine Bestätigung für eine Datei
+/// wird nie zu einer für alle.
+#[cfg(target_os = "linux")]
+fn options_of(request: &v1::sandbox_request::ApplyChanges) -> ApplyOptions {
+    ApplyOptions {
+        overwrite: request.overwrite,
+        overwrite_ids: request
+            .overwrite_ids
+            .iter()
+            .map(|id| id.trim().to_owned())
+            .collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+
+    /// Eine einzeln bestätigte Datei erlaubt nur ihr Überschreiben, nie das
+    /// einer anderen mit Konflikt (HUM-351).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn overwrite_ids_name_only_the_confirmed_changes() {
+        let change = |rel: &str| LayerChange {
+            rel: PathBuf::from(rel),
+            kind: ChangeKind::Modified,
+            what: Kind::File,
+            size: 3,
+            mode: 0o644,
+            stripped: 0,
+            sha256: None,
+            hardlinked: false,
+            conflict: Some("changed in the project after the start".to_owned()),
+            refused: None,
+        };
+        let confirmed = change("a.txt");
+        let other = change("b.txt");
+        let options = options_of(&v1::sandbox_request::ApplyChanges {
+            sandbox_id: String::new(),
+            ids: vec![confirmed.path_hash(), other.path_hash()],
+            overwrite: false,
+            overwrite_ids: vec![format!(" {} ", confirmed.path_hash())],
+        });
+        assert!(!options.overwrite);
+        assert!(options.may_overwrite(&confirmed));
+        assert!(!options.may_overwrite(&other));
+        // Der alte Schalter der Kommandozeile gilt für jede gewählte.
+        let all = options_of(&v1::sandbox_request::ApplyChanges {
+            sandbox_id: String::new(),
+            ids: Vec::new(),
+            overwrite: true,
+            overwrite_ids: Vec::new(),
+        });
+        assert!(all.may_overwrite(&other));
+    }
 
     #[test]
     fn the_mode_of_a_start_is_read_strictly() {
