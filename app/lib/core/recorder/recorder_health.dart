@@ -1,5 +1,9 @@
 /// Ob die Aufzeichnung gerade schreibt, wie der Daemon es sagt (HUM-250).
 ///
+/// Steht im Kern, seit zwei Features an derselben Pause halten: die
+/// Warteschlange und der Editor (HUM-269). Kein Feature importiert ein anderes
+/// (`docs/ARCHITECTURE.md` 5); was beide brauchen, liegt hier.
+///
 /// Die Sicherheitsaussage in `README.md` hängt an der Aufzeichnung: Was
 /// entschieden wird, ist danach nachlesbar. Ist die Platte voll oder die
 /// Datenbank gesperrt, gilt das nicht mehr, und die Oberfläche darf dann
@@ -30,10 +34,10 @@ import 'package:flutter/foundation.dart';
 import 'package:humanitl_ui/humanitl_ui.dart' show HMotion;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-import '../../../core/domain/domain.dart';
-import '../../../core/ipc/connection.dart';
-import '../../../core/ipc/flow_events.dart';
-import 'diagnostics.dart' show sanitizeDiagnostic;
+import '../domain/domain.dart';
+import '../ipc/connection.dart';
+import '../ipc/flow_events.dart';
+import '../text/sanitize_diagnostic.dart';
 
 part 'recorder_health.g.dart';
 
@@ -152,6 +156,22 @@ enum RecorderPauseState {
   bool get isOpen => this != closed;
 }
 
+/// Der Freibrief genau einer fortgesetzten Freigabe (HUM-269, Review).
+///
+/// [RecorderPause.confirm] gibt ihn der einen Freigabe, die an der Pause
+/// stand, als Argument mit; sie reicht ihn auf ihrem Weg bis zum `Decide`
+/// durch und legt ihn dort vor ([RecorderPause.owes],
+/// [RecorderPause.noteAllowSent]). Er hängt an keinem Zustand drumherum:
+/// Eine andere Freigabe, auch eine, die aus der fortgesetzten heraus geplant
+/// wurde, hat ihn nicht und hält an. Er gilt, bis die eine Freigabe zu Ende
+/// ist, danach nicht mehr.
+final class RecorderBypass {
+  RecorderBypass._();
+}
+
+/// Die angehaltene Freigabe; sie bekommt beim Fortsetzen ihren Freibrief.
+typedef RecorderResume = Future<void> Function(RecorderBypass bypass);
+
 /// Die Bestätigungs-Pause vor der ersten Freigabe während einer Störung
 /// (HUM-250, `docs/UX.md` 5.4).
 ///
@@ -166,17 +186,26 @@ enum RecorderPauseState {
 ///
 /// Was nach der Bestätigung geschieht, reicht der Aufrufer beim Öffnen
 /// herein: genau die Freigabe, die angehalten wurde, mit denselben
-/// Argumenten. Als bestätigt gilt die Sitzung erst, wenn diese Freigabe
-/// wirklich hinausging ([noteAllowSent]); weist sie sich selbst ab, steht die
-/// Pause beim nächsten Versuch wieder da. „Sitzung" ist die des Daemons:
-/// Nach einem Neustart fragt die Pause von vorn.
+/// Argumenten. Sie bekommt einen [RecorderBypass] und kommt mit ihm ohne
+/// erneuten Halt durch. Als bestätigt gilt die Sitzung erst, wenn eine solche
+/// Freigabe wirklich hinausging ([noteAllowSent]); weist sie sich selbst ab,
+/// steht die Pause beim nächsten Versuch wieder da. „Sitzung" ist die des
+/// Daemons: Nach einem Neustart fragt die Pause von vorn.
 @Riverpod(keepAlive: true)
 class RecorderPause extends _$RecorderPause {
   bool _acknowledged = false;
-  bool _resuming = false;
   String? _session;
   Timer? _arming;
-  Future<void> Function()? _resume;
+  RecorderResume? _resume;
+
+  /// Die Freibriefe der Freigaben, die gerade fortgesetzt werden.
+  ///
+  /// Mehrere zugleich sind möglich: Eine Freigabe der Warteschlange wartet
+  /// noch auf den Daemon, während die Pause des Editors schon bestätigt ist.
+  /// Jeder gilt, bis seine eigene Freigabe zu Ende ist, und jeder, der mit
+  /// einer angenommenen Freigabe vorgelegt wird, bestätigt die Sitzung, auch
+  /// wenn eine andere danach abgewiesen wird (HUM-269, Review Runde 2).
+  final Set<RecorderBypass> _live = <RecorderBypass>{};
 
   @override
   RecorderPauseState build() {
@@ -195,12 +224,21 @@ class RecorderPause extends _$RecorderPause {
     return RecorderPauseState.closed;
   }
 
+  /// Wahr, wenn eine Freigabe ohne Freibrief hier anhalten muss ([owes]).
+  bool get owed => owes(null);
+
   /// Wahr, wenn eine Freigabe hier anhalten muss: Die Aufzeichnung ist
-  /// gestört, und in dieser Sitzung wurde das noch nicht bestätigt.
-  bool get owed {
+  /// gestört, in dieser Sitzung wurde das noch nicht bestätigt, und [bypass]
+  /// ist nicht der Freibrief einer Freigabe, die gerade fortgesetzt wird.
+  ///
+  /// Jede andere Freigabe hält weiter an, auch während eine fortgesetzte noch
+  /// auf die Antwort des Daemons wartet: Weist der Daemon sie ab, ist die
+  /// Sitzung nicht bestätigt, und eine zweite, die in dieser Zeit ohne Halt
+  /// hinausging, wäre ungelesen unaufgezeichnet (HUM-269, Review).
+  bool owes(RecorderBypass? bypass) {
     _followSession();
     return !_acknowledged &&
-        !_resuming &&
+        !_live.contains(bypass) &&
         ref.read(recorderHealthProvider) != null;
   }
 
@@ -220,10 +258,14 @@ class RecorderPause extends _$RecorderPause {
     }
   }
 
-  /// Eine Freigabe ging während der Störung hinaus. Kam sie aus der Pause,
-  /// gilt die Sitzung damit als bestätigt.
-  void noteAllowSent() {
-    if (_resuming) {
+  /// Eine Freigabe ging während der Störung hinaus. Trug sie den Freibrief
+  /// einer fortgesetzten Freigabe ([bypass]), gilt die Sitzung damit als
+  /// bestätigt.
+  void noteAllowSent(RecorderBypass? bypass) {
+    // Erst die Sitzung nachziehen: Sonst löschte die nächste Frage nach
+    // [owes] eine Bestätigung, die vor ihr in dieser Sitzung kam.
+    _followSession();
+    if (_live.contains(bypass)) {
       _acknowledged = true;
     }
   }
@@ -238,7 +280,7 @@ class RecorderPause extends _$RecorderPause {
   /// die Auswahl weiterzieht. Ein Stapel umfasst mehrere Anfragen; seine
   /// Pause bleibt stehen, auch wenn die erste schon hinausging und der Cursor
   /// deshalb weiterrückte (HUM-250, Review).
-  void open(Future<void> Function() resume, {bool bound = true}) {
+  void open(RecorderResume resume, {bool bound = true}) {
     _resume = resume;
     _bound = bound;
     _arming?.cancel();
@@ -265,21 +307,42 @@ class RecorderPause extends _$RecorderPause {
     state = RecorderPauseState.closed;
   }
 
-  /// „Unaufgezeichnet senden": setzt die angehaltene Freigabe fort, ohne
-  /// erneut anzuhalten, und bestätigt die Sitzung, sobald sie hinausgeht
-  /// ([noteAllowSent]). Tut nichts, solange die Pause nicht offen ist oder
-  /// noch nicht [HMotion.rearm] stand.
+  /// Schließt sie, wenn sie noch für [resume] steht (HUM-269).
+  ///
+  /// Für einen Aufrufer, der geht, während seine Pause steht: Der Editor
+  /// schließt sich, oder seine Frist läuft ab. Seine angehaltene Freigabe
+  /// gehört einem Widget, das es dann nicht mehr gibt; eine Pause, die ein
+  /// anderer inzwischen für sich geöffnet hat, bleibt dagegen stehen.
+  void withdraw(RecorderResume resume) {
+    if (standsFor(resume)) {
+      close();
+    }
+  }
+
+  /// Wahr, solange die Pause offen ist und für [resume] steht (HUM-269).
+  ///
+  /// Wer die Pause selbst zeigt, zeigt nur die eigene: Hat inzwischen ein
+  /// anderer sie für seine Freigabe geöffnet, setzte „Unaufgezeichnet senden"
+  /// dessen Freigabe fort und nicht die, vor der sie hier zu stehen scheint.
+  bool standsFor(RecorderResume resume) =>
+      state.isOpen && identical(_resume, resume);
+
+  /// „Unaufgezeichnet senden": setzt die angehaltene Freigabe mit einem
+  /// eigenen [RecorderBypass] fort, ohne erneut anzuhalten, und bestätigt die
+  /// Sitzung, sobald sie hinausgeht ([noteAllowSent]). Tut nichts, solange
+  /// die Pause nicht offen ist oder noch nicht [HMotion.rearm] stand.
   Future<void> confirm() async {
-    final Future<void> Function()? resume = _resume;
+    final RecorderResume? resume = _resume;
     if (state != RecorderPauseState.armed || resume == null) {
       return;
     }
     close();
-    _resuming = true;
+    final RecorderBypass bypass = RecorderBypass._();
+    _live.add(bypass);
     try {
-      await resume();
+      await resume(bypass);
     } finally {
-      _resuming = false;
+      _live.remove(bypass);
     }
   }
 }

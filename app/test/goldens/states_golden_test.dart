@@ -26,7 +26,7 @@ import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/intercept/providers/diagnostics.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
 import 'package:humanitl/features/intercept/providers/now.dart';
-import 'package:humanitl/features/intercept/providers/recorder_health.dart';
+import 'package:humanitl/core/recorder/recorder_health.dart';
 import 'package:humanitl/features/intercept/widgets/action_bar.dart';
 import 'package:humanitl/features/intercept/widgets/request_card.dart';
 import 'package:humanitl/features/shell/providers/connection.dart';

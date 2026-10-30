@@ -14,7 +14,7 @@ import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ipc/flow_events.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/intercept/providers/decision.dart';
-import 'package:humanitl/features/intercept/providers/recorder_health.dart';
+import 'package:humanitl/core/recorder/recorder_health.dart';
 
 import 'fixtures.dart';
 import 'harness.dart';
@@ -114,7 +114,9 @@ void main() {
 
     // Hinter dem Überlauf liefert der Daemon die Störung nach: Sie bleibt,
     // und die offene Pause steht weiter.
-    container.read(recorderPauseProvider.notifier).open(() async {});
+    container
+        .read(recorderPauseProvider.notifier)
+        .open((RecorderBypass _) async {});
     events
       ..add(FlowEvent.lagged(at: testStart, dropped: 7))
       ..add(FlowEvent.diagnostic(at: testStart, diagnostic: _failure));
@@ -160,7 +162,7 @@ void main() {
       expect(pause.owed, isTrue);
 
       // Die fortgesetzte Freigabe weist sich selbst ab: keine Bestätigung.
-      pause.open(() async {});
+      pause.open((RecorderBypass _) async {});
       await Future<void>.delayed(
         HMotion.rearm + const Duration(milliseconds: 20),
       );
@@ -168,7 +170,7 @@ void main() {
       expect(pause.owed, isTrue);
 
       // Sie geht hinaus: bestätigt für diese Sitzung.
-      pause.open(() async => pause.noteAllowSent());
+      pause.open((RecorderBypass bypass) async => pause.noteAllowSent(bypass));
       await Future<void>.delayed(
         HMotion.rearm + const Duration(milliseconds: 20),
       );
@@ -317,5 +319,44 @@ void main() {
       client.decisions.map((RecordedDecision d) => d.flowId).toSet(),
       hasLength(3),
     );
+  });
+
+  test('overlapping confirmations: one success confirms, a later refusal does not undo it', () async {
+    // Eine Freigabe der Warteschlange ist bestätigt und wartet auf den
+    // Daemon; inzwischen wird die Pause des Editors bestätigt. Die erste
+    // geht hinaus, die zweite wird abgewiesen (HUM-269, Review Runde 2).
+    final (ProviderContainer container, StreamController<FlowEvent> events) =
+        _container();
+    events.add(FlowEvent.diagnostic(at: testStart, diagnostic: _failure));
+    await _settle();
+    final RecorderPause pause = container.read(recorderPauseProvider.notifier);
+    final Completer<void> first = Completer<void>();
+    final Completer<void> second = Completer<void>();
+
+    pause.open((RecorderBypass bypass) async {
+      await first.future;
+      pause.noteAllowSent(bypass);
+    });
+    await Future<void>.delayed(
+      HMotion.rearm + const Duration(milliseconds: 20),
+    );
+    final Future<void> queue = pause.confirm();
+
+    pause.open((RecorderBypass bypass) async {
+      await second.future;
+      // Abgewiesen: kein `noteAllowSent`.
+    });
+    await Future<void>.delayed(
+      HMotion.rearm + const Duration(milliseconds: 20),
+    );
+    final Future<void> editor = pause.confirm();
+
+    first.complete();
+    await queue;
+    expect(pause.owed, isFalse);
+
+    second.complete();
+    await editor;
+    expect(pause.owed, isFalse);
   });
 }

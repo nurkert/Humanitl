@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/body/body_view.dart';
 import '../../../core/domain/domain.dart';
+import '../../../core/recorder/recorder_health.dart';
 import '../../../core/text/format.dart';
 import '../../../core/ui/flow_visual_state.dart';
 import '../../../core/ui/ui.dart';
@@ -21,7 +22,6 @@ import '../../../l10n/l10n.dart';
 import '../providers/decision.dart';
 import '../providers/flows.dart';
 import '../providers/now.dart';
-import '../providers/recorder_health.dart';
 import '../providers/timeout_rule.dart';
 import '../rule_sentence.dart';
 import '../../../core/domain/websocket.dart';

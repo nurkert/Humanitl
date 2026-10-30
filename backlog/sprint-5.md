@@ -5082,6 +5082,107 @@ HUM-250 hält die erste Freigabe einer Sitzung während einer Störung der Aufze
 ### Referenzen
 HUM-250 (Umsetzung), HUM-047, `docs/UX.md` 5.4.
 
+### Umsetzung (HUM-269)
+
+- **Pause nach `core`.** `RecorderHealth`, `RecorderPause` und
+  `RecorderOutage` stehen jetzt in `app/lib/core/recorder/recorder_health.dart`,
+  die Ansicht `RecorderPauseView` in `app/lib/core/ui/recorder_pause.dart`
+  (wie `findings_pause.dart`). `sanitizeDiagnostic` zog mit nach
+  `app/lib/core/text/sanitize_diagnostic.dart`, weil der Kern kein Feature
+  importieren darf. Warteschlange, Shell (Statusleiste, Benachrichtigung) und
+  Editor lesen denselben Provider; damit gilt eine Bestätigung für alle drei,
+  einmal je Sitzung des Daemons. Inhaltlich ist an Pause und Störung nichts
+  geändert, nur zwei Methoden kamen dazu: `standsFor(resume)` und
+  `withdraw(resume)`.
+- **Editor.** `EditorHost._decide` fragt `RecorderPause.owed` unmittelbar
+  vor dem `Decide`, wie `_send` der Warteschlange; Blockieren hält nie an.
+  Die angehaltene Freigabe ist genau dieses `AllowEdited` mit dem
+  bearbeiteten Rumpf. Nach einer angenommenen Freigabe ruft der Wirt
+  `noteAllowSent`, die Sitzung gilt dann auch in der Warteschlange als
+  bestätigt. Der Bildschirm zeigt die Pause an der Stelle der Leiste (vor der
+  Pause mit offenen Funden, die beim Aufgehen schon zu ist), ohne die Taste
+  `S` (`letterKeys: false`, die Taste schriebe ins Feld); `Esc` schließt sie,
+  „Unaufgezeichnet senden“ nimmt erst nach `HMotion.rearm` an. Gezeigt wird
+  nur die eigene Pause (`standsFor`): Öffnet die Benachrichtigung ihre Pause,
+  während der Editor offen ist, setzte deren Knopf eine andere Freigabe fort.
+- **Aufräumen.** Geht der Editor, während seine Pause steht, nimmt er sie
+  mit (`withdraw` in einer Mikroaufgabe nach `dispose`); läuft die Frist ab,
+  ebenso. Sonst zeigte die Leiste der Warteschlange eine Pause, deren Knopf
+  eine Freigabe in einem abgebauten Widget fortsetzte.
+- **Tests.** `test/features/editor/editor_recorder_pause_test.dart`: Das
+  erste Senden hält an, vor `HMotion.rearm` nimmt der Knopf nicht an, danach
+  geht genau das bearbeitete `AllowEdited` hinaus und `owed` ist für die
+  Sitzung falsch; eine in der Warteschlange bestätigte Sitzung sendet ohne
+  Halt; `Esc` schließt, sendet nichts und bestätigt nichts; ein geschlossener
+  Editor nimmt seine Pause mit. Die bestehenden Tests von Warteschlange,
+  Shell, Editor und `states_recorder_failure` laufen unverändert, nur mit
+  neuen Importpfaden.
+- **Mutationsbeweise.** Ohne die Abfrage in `_decide` scheitern der erste,
+  dritte und vierte Test (das Senden geht ohne Pause hinaus), ohne `noteAllowSent`
+  der erste (die Sitzung bliebe unbestätigt), ohne `withdraw` in `dispose`
+  der vierte, und ohne die Anzeige der eigenen Pause im Editor der erste und
+  der dritte.
+- **Review-Runde 1 (Codex, Sonnet).** Alle Befunde übernommen.
+  - Codex (blockierend): `owed` war für jeden Sender falsch, solange eine
+    fortgesetzte Freigabe auf die Antwort des Daemons wartete (globales
+    `_resuming`). Eine zweite Freigabe aus Benachrichtigung oder
+    Warteschlange ging in dieser Zeit ohne Pause hinaus, auch wenn der Daemon
+    die erste danach abwies. Jetzt trägt nur die fortgesetzte Freigabe einen
+    Freibrief: `confirm` ruft sie in einer eigenen `Zone` mit einem einmaligen
+    Objekt auf, `owed` und `noteAllowSent` erkennen sie daran, und nach ihrem
+    Ende gilt er nicht mehr. Die Aufrufer müssen dafür kein Pfand durchreichen.
+    Test `a second send waits while the resumed one is refused`.
+  - Sonnet, statt Antigravity (alle minor): „Unaufgezeichnet senden“ baut
+    die Anfrage beim Bestätigen aus dem Entwurf, wie er dann steht
+    (`editedRequestOf` in `draft_ops.dart`, auch für den Knopf „Senden“),
+    Test `send unrecorded takes the draft as it stands then`. Ist im Entwurf
+    hinter der Pause wieder ein Fund offen (etwa ein zurückgetippter Wert),
+    geht nichts hinaus: Der Bildschirm schließt die Pause der Aufzeichnung
+    unbestätigt und zeigt die Pause mit offenen Funden, kein `noteAllowSent`;
+    der Wirt sendet einen solchen Entwurf auch bei einer Fortsetzung nicht
+    (`_current`). Test `a finding reopened behind the pause stops the send
+    there`. Die Pause des
+    Editors öffnet mit `bound: false`, eine weiterziehende Auswahl schließt
+    sie nicht mehr still (im selben Test). Nach „Zurück“ in beiden Pausen
+    holt der Editor den Fokus zurück. Die Bibliotheksdoku von `editor_host.dart`
+    zählt vier Dinge.
+  - Mutationsbeweise: Mit dem Freibrief ohne Prüfung der Zone (globaler
+    Schalter) scheitert der Test zur abgewiesenen Freigabe; mit der beim
+    Aufgehen gebauten Anfrage und mit `bound: true` scheitert der Test zum
+    Entwurf. Ohne die Prüfung im Bildschirm scheitert der Test zum wieder
+    offenen Fund (keine Pause mit offenen Funden), ohne beide Prüfungen geht
+    dort die Anfrage hinaus.
+- **Review-Runde 2 (Codex).** Beide Befunde übernommen.
+  - Blockierend: Die `Zone` aus Runde 1 erkannte alles, was aus der
+    fortgesetzten Freigabe stammt, nicht die Freigabe selbst. Ein Hörer, ein
+    Zeitgeber oder eine Mikroaufgabe, die sie plant, erbte den Freibrief und
+    ging ohne Pause hinaus, solange ihr `Decide` offen war. Jetzt gibt
+    `confirm` der einen fortgesetzten Freigabe einen `RecorderBypass` als
+    Argument (`RecorderResume`); sie reicht ihn ausdrücklich bis zum `Decide`
+    durch (`_send`, `_many` und `allow` in `decision.dart`, die Benachrichtigung
+    in `tray_host.dart`, `_decide` im Editor) und legt ihn bei `owes` und
+    `noteAllowSent` vor. Es gibt keinen Zustand drumherum mehr. Eine
+    Freigabe, die vor ihrem `Decide` erst das Modal fragt, verliert ihn dort
+    und hält nach dem Modal noch einmal an. Test `a release scheduled inside
+    the resumed one stops at the pause`.
+  - Minor: Überlappende Bestätigungen ersetzten den einen Freibrief. Jetzt
+    gilt eine Menge lebender Freibriefe, jeder bis zum Ende seiner eigenen
+    Freigabe, und jede angenommene Freigabe mit einem davon bestätigt die
+    Sitzung. Dabei fiel auf, dass `noteAllowSent` die Sitzung des Daemons
+    nicht nachzog: Kam die Bestätigung vor der ersten Frage nach `owes`,
+    löschte diese sie wieder. `noteAllowSent` zieht die Sitzung jetzt zuerst
+    nach. Test `overlapping confirmations: one success confirms, a later
+    refusal does not undo it` in `recorder_pause_test.dart`.
+  - Mutationsbeweise: Mit einer Prüfung, die den Freibrief nicht vergleicht
+    (globaler Schalter), scheitern der Test zur abgewiesenen Freigabe und der
+    zur geplanten Freigabe; mit nur einem Platz für Freibriefe und ohne das
+    Nachziehen der Sitzung in `noteAllowSent` scheitert der Test zu den
+    überlappenden Bestätigungen.
+- **Kandidat für ein eigenes Issue.** Öffnet die Benachrichtigung ihre Pause,
+  während der Editor offen ist, bleibt sie unsichtbar: Die Leiste der
+  Warteschlange ist verdeckt, und der Editor zeigt nur die eigene Pause
+  (`standsFor`). So war es schon vor HUM-269.
+
 ## HUM-270 · Flüsse aus einer Störung tragen keine eigene Markierung
 Sprint: 5 · Größe: S · Abhängigkeiten: HUM-250 · Blockiert: nichts · nach 0.1.0
 
