@@ -45,7 +45,7 @@
 //! # Die drei Garantien
 //!
 //! Gemessen wird in der Sandbox, die läuft: Der Shim schreibt seine Prüfzeilen
-//! von innen, [`BwrapBackend::isolation_check`] faltet sie zu den drei
+//! von innen, [`SandboxBackend::isolation_check`] faltet sie zu den drei
 //! Garantien, und dieses Modul reicht sie als [`v1::CheckResult`] weiter. Es
 //! prüft nichts selbst; eine zweite Prüfpipeline neben der vorhandenen wäre
 //! eine zweite Wahrheit über dieselbe Sandbox.
@@ -1347,7 +1347,7 @@ impl Inner {
     /// Was einem Start im Weg steht, bevor jemand ihn versucht.
     ///
     /// Heute genau eine Frage: Gibt es `bwrap`, und ist es neu genug
-    /// ([`BwrapBackend::detect`], `SANDBOX_001` bis `SANDBOX_003`)? Der
+    /// (`PlatformBackend::detect`, `SANDBOX_001` bis `SANDBOX_003`)? Der
     /// Schnappschuss selbst kommt auch ohne `bwrap` zustande — er zeigt, was
     /// starten *würde* —, aber die Schaltfläche gehört dann aus, und der Grund
     /// dazu (`docs/UX.md` 5.3). Die drei Garantien prüft HUM-041, und sie
@@ -3919,7 +3919,7 @@ fn check_event(result: &CheckResult) -> v1::SandboxEvent {
 /// Bericht —, und das ist `SANDBOX_013` und kein Durchlauf.
 ///
 /// Ein rotes Ergebnis ohne eigenen `Diagnostic` bleibt rot.
-/// [`BwrapBackend::isolation_check`] legt zu jedem roten Ergebnis einen an;
+/// [`SandboxBackend::isolation_check`] legt zu jedem roten Ergebnis einen an;
 /// ein zweites Backend (ADR-005 nennt Docker als späteren Kandidaten) muss das
 /// nicht tun, und diese Stelle darf aus einem fehlenden Befund keinen
 /// bestandenen Start machen. Geprüft wird deshalb `passed`, nie das
@@ -4972,7 +4972,7 @@ mod tests {
     /// Die zweite Mutationsprobe: Rot bleibt rot, auch ohne Befund daneben.
     ///
     /// Wer `passed` gegen `diagnostic.is_some()` tauschte — naheliegend, weil
-    /// [`BwrapBackend::isolation_check`] zu jedem roten Ergebnis einen Befund
+    /// [`SandboxBackend::isolation_check`] zu jedem roten Ergebnis einen Befund
     /// legt —, ließe ein Backend, das keinen mitschickt, mit einer roten
     /// Garantie durchstarten.
     #[test]
