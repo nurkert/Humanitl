@@ -302,6 +302,8 @@ async fn a_secret_in_a_name_no_rule_would_suspect_reaches_no_answer_at_all() {
     assert!(lines > 0, "the argv operation answers at all");
 }
 
+// Plant mit dem Linux-Sandbox-Backend (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_plan_answers_for_a_directory_that_does_not_apply_yet() {
     let home = TempDir::new().unwrap();
@@ -550,6 +552,8 @@ async fn a_project_directory_outside_the_home_is_refused() {
 /// Heimatverzeichnis kommt durch, und zwar aufgeloest.
 ///
 /// Waere die Pruefung ein pauschales Nein, faende dieser Test es.
+// Plant mit dem Linux-Sandbox-Backend (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_project_directory_under_the_home_is_accepted() {
     let home = TempDir::new().unwrap();

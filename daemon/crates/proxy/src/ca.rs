@@ -801,11 +801,13 @@ fn ca_params(short_id: &str, now: OffsetDateTime) -> CertificateParams {
 
 /// Acht Hex-Zeichen aus dem Hash der `machine-id`, damit zwei Installationen
 /// im `CN` unterscheidbar sind. Die `machine-id` selbst steht nicht im
-/// Zertifikat. Ohne `machine-id` (Container) zählt Zeit plus PID.
+/// Zertifikat. Unter macOS gilt die `IOPlatformUUID` des Rechners (HUM-312).
+/// Ohne beides (Container) zählt Zeit plus PID.
 fn short_id() -> String {
     let seed = MACHINE_ID_FILES
         .iter()
         .find_map(|path| fs::read_to_string(path).ok())
+        .or_else(platform_uuid)
         .map(|text| text.trim().to_owned())
         .filter(|text| !text.is_empty())
         .unwrap_or_else(|| {
@@ -823,6 +825,26 @@ fn short_id() -> String {
         .fold(String::with_capacity(8), |mut out, byte| {
             let _ = write!(out, "{byte:02x}");
             out
+        })
+}
+
+/// Die `IOPlatformUUID` aus `ioreg(8)`, das Gegenstück zur `machine-id`
+/// unter macOS; sonst `None`.
+fn platform_uuid() -> Option<String> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let output = std::process::Command::new("/usr/sbin/ioreg")
+        .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            (key.trim() == "\"IOPlatformUUID\"").then(|| value.trim().trim_matches('"').to_owned())
         })
 }
 

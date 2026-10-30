@@ -22,7 +22,11 @@ use tokio::net::UnixListener;
 /// Rechte der Socket-Datei.
 pub const SOCKET_MODE: u32 = 0o600;
 /// Obergrenze für einen Unix-Socket-Pfad (`sun_path`, inklusive Nullbyte).
-pub const SUN_PATH_MAX: usize = 108;
+///
+/// Aus `sockaddr_un` selbst gemessen: 108 unter Linux, 104 unter macOS
+/// (HUM-312).
+pub const SUN_PATH_MAX: usize =
+    std::mem::size_of::<libc::sockaddr_un>() - std::mem::offset_of!(libc::sockaddr_un, sun_path);
 
 /// Der Socket einer Sitzung. Lauscht und räumt sich beim Fallenlassen auf.
 #[derive(Debug)]
@@ -124,7 +128,14 @@ mod tests {
 
     use humanitl_core::diagnostics::codes::DAEMON_004;
 
-    use super::SessionSocket;
+    use super::{SUN_PATH_MAX, SessionSocket};
+
+    /// Die Grenze ist die des Systems, nicht die von Linux (HUM-312).
+    #[test]
+    fn the_sun_path_limit_is_the_one_of_this_system() {
+        let expected = if cfg!(target_os = "linux") { 108 } else { 104 };
+        assert_eq!(SUN_PATH_MAX, expected);
+    }
 
     /// Ein Symlink an der Stelle des Socket-Verzeichnisses wird abgewiesen,
     /// nicht verfolgt: sonst läge der Socket in einem Verzeichnis, das ein

@@ -38,8 +38,8 @@ use humanitl_core::diagnostics::codes::TERM_002;
 use humanitl_core::{Diagnostic, Severity};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::net::{
-    AddressFamily, RecvFlags, SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags,
-    SocketType, recv, sendmsg, socketpair,
+    AddressFamily, RecvFlags, SendAncillaryBuffer, SendAncillaryMessage, SocketFlags, SocketType,
+    recv, sendmsg, socketpair,
 };
 use rustix::termios::{Winsize, tcsetwinsize};
 
@@ -82,6 +82,13 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// `SOCK_CLOEXEC` gibt es unter macOS nicht; dort setzt [`pair`] das Flag
+/// danach (HUM-312).
+#[cfg(target_os = "linux")]
+const PAIR_FLAGS: SocketFlags = SocketFlags::CLOEXEC;
+#[cfg(not(target_os = "linux"))]
+const PAIR_FLAGS: SocketFlags = SocketFlags::empty();
+
 /// Das Paar für eine neue Sandbox: `(Seite des Daemons, Seite des Shims)`,
 /// beide mit `CLOEXEC`. Die Seite des Shims verliert es erst im Kind
 /// (`inherit.rs`).
@@ -90,13 +97,13 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 ///
 /// Der Fehler von `socketpair(2)`.
 pub(crate) fn pair() -> std::io::Result<(OwnedFd, OwnedFd)> {
-    socketpair(
-        AddressFamily::UNIX,
-        SocketType::SEQPACKET,
-        SocketFlags::CLOEXEC,
-        None,
-    )
-    .map_err(std::io::Error::from)
+    socketpair(AddressFamily::UNIX, SocketType::SEQPACKET, PAIR_FLAGS, None)
+        .map_err(std::io::Error::from)
+        .and_then(|(one, two)| {
+            crate::platform::set_cloexec(&one)?;
+            crate::platform::set_cloexec(&two)?;
+            Ok((one, two))
+        })
 }
 
 /// Wo eine Shell steht.
@@ -275,7 +282,7 @@ impl ShellDoor {
                 &self.socket,
                 &[IoSlice::new(&message)],
                 &mut control,
-                SendFlags::NOSIGNAL,
+                crate::platform::SEND_NO_SIGNAL,
             )
             .map_err(|err| refused(&format!("the sandbox does not take the request: {err}")))?;
         }
@@ -518,8 +525,14 @@ fn gone(why: &str) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+    // Alle Tests bis auf den letzten fahren `SOCK_SEQPACKET` mit `SCM_RIGHTS`,
+    // die Tür des Linux-Shims (HUM-299); unter macOS gibt es sie nicht
+    // (HUM-312).
+    #![cfg_attr(not(target_os = "linux"), allow(dead_code, unused_imports))]
 
     use super::*;
+    #[cfg(target_os = "linux")]
+    use rustix::net::SendFlags;
 
     fn answer(mark: u8, id: u32, value: i32) -> [u8; 9] {
         let id = id.to_le_bytes();
@@ -529,6 +542,7 @@ mod tests {
         ]
     }
 
+    #[cfg(target_os = "linux")]
     /// A fake shim on the other end of the pair: answers every request with
     /// `reply` and keeps the received terminal descriptors.
     fn fake_shim(
@@ -575,6 +589,7 @@ mod tests {
         requests
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_started_shell_carries_its_command_and_its_exit_code() {
         let (daemon, shim) = pair().unwrap();
@@ -593,6 +608,7 @@ mod tests {
         assert_eq!(seen, (1, vec!["bash".to_owned(), "-i".to_owned()]));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_door_counts_to_four_and_no_further() {
         let (daemon, shim) = pair().unwrap();
@@ -610,6 +626,7 @@ mod tests {
         assert!(door.open(&["sh".to_owned()], 80, 24).is_err());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_refusal_of_the_shim_is_a_diagnostic() {
         let (daemon, shim) = pair().unwrap();
@@ -620,6 +637,7 @@ mod tests {
         assert_eq!(door.live(), 0);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn answers_for_ids_nobody_asked_for_change_nothing() {
         let (daemon, shim) = pair().unwrap();
@@ -636,6 +654,7 @@ mod tests {
         drop(shell);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_shell_ends_with_its_sandbox() {
         let (daemon, shim) = pair().unwrap();

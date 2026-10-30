@@ -37,7 +37,9 @@
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{BufRead, BufReader, PipeReader, Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, PipeReader, Read};
+#[cfg(target_os = "linux")]
+use std::io::{Seek, SeekFrom, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStringExt as _;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
@@ -55,7 +57,9 @@ use humanitl_core::diagnostics::codes::{
 };
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{Diagnostic, DiagnosticCode, FixAction, Severity};
-use rustix::fs::{Access, MemfdFlags, SealFlags, access, fcntl_add_seals, memfd_create};
+use rustix::fs::{Access, access};
+#[cfg(target_os = "linux")]
+use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 use rustix::termios::{Winsize, tcsetwinsize};
 
@@ -674,6 +678,7 @@ impl BwrapBackend {
     /// Versiegelt gegen Wachsen, Schrumpfen und Schreiben: wer den Deskriptor
     /// erbt, kann den Inhalt nicht mehr ändern, und `bwrap` liest genau das,
     /// was der Launcher hineingelegt hat.
+    #[cfg(target_os = "linux")]
     fn sealed_memfd(name: &str, content: &[u8]) -> Result<OwnedFd, Diagnostic> {
         let fd = memfd_create(name, MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING)
             .map_err(|err| placeholder_diagnostic(format!("cannot create memfd {name}: {err}")))?;
@@ -691,6 +696,15 @@ impl BwrapBackend {
         )
         .map_err(|err| placeholder_diagnostic(format!("cannot seal memfd {name}: {err}")))?;
         Ok(fd)
+    }
+
+    /// Ohne `memfd_create(2)` gibt es keine versiegelte Datei; bwrap läuft
+    /// ohnehin nur unter Linux (HUM-312).
+    #[cfg(not(target_os = "linux"))]
+    fn sealed_memfd(name: &str, _content: &[u8]) -> Result<OwnedFd, Diagnostic> {
+        Err(placeholder_diagnostic(format!(
+            "cannot create memfd {name}: this system has no memfd_create"
+        )))
     }
 
     fn already_launched(plan: &LaunchPlan) -> Diagnostic {
@@ -1364,6 +1378,15 @@ impl Pty {
     }
 }
 
+/// `O_CLOEXEC` nimmt `posix_openpt` unter macOS nicht an; dort setzt
+/// [`open_pty`] das Flag danach (HUM-312).
+#[cfg(target_os = "linux")]
+const OPENPT_FLAGS: OpenptFlags = OpenptFlags::RDWR
+    .union(OpenptFlags::NOCTTY)
+    .union(OpenptFlags::CLOEXEC);
+#[cfg(not(target_os = "linux"))]
+const OPENPT_FLAGS: OpenptFlags = OpenptFlags::RDWR.union(OpenptFlags::NOCTTY);
+
 /// Öffnet ein Pseudoterminal und setzt seine Geometrie.
 ///
 /// Der Weg ist der von POSIX: `posix_openpt`, `grantpt`, `unlockpt`, den Namen
@@ -1385,8 +1408,13 @@ impl Pty {
 /// Größenänderung an die Vordergrundgruppe; [`SandboxHandle::resize`] und
 /// [`SandboxHandle::interrupt`] signalisieren zusätzlich selbst.
 pub(crate) fn open_pty(cols: u16, rows: u16) -> Result<Pty, Diagnostic> {
-    let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC)
+    let master = openpt(OPENPT_FLAGS)
         .map_err(|err| pty_failed(&format!("cannot open a pseudo terminal: {err}")))?;
+    crate::platform::set_cloexec(&master).map_err(|err| {
+        pty_failed(&format!(
+            "cannot mark the pseudo terminal close-on-exec: {err}"
+        ))
+    })?;
     grantpt(&master).map_err(|err| {
         pty_failed(&format!(
             "cannot grant the follower side of the pseudo terminal: {err}"
@@ -1566,6 +1594,7 @@ fn placeholder_diagnostic(why: String) -> Diagnostic {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+    #[cfg(target_os = "linux")]
     use std::io::Read;
     use std::path::Path;
 
@@ -1647,6 +1676,8 @@ mod tests {
 
     /// Ein memfd mit Inhalt liest sich von vorn, und danach lässt es sich
     /// weder beschreiben noch vergrößern.
+    // `memfd_create` gibt es nur unter Linux (HUM-312).
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_sealed_memfd_reads_its_content_from_the_start_and_refuses_writes() {
         let fd = BwrapBackend::sealed_memfd("humanitl-test", b"agent:x:1:1::/home/agent:/bin/sh\n")

@@ -224,6 +224,35 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
 
+  macos:
+    name: macos
+    # Daemon, CLI and their tests on macOS (HUM-312, backlog/sprint-6.md).
+    # macos-15 is Apple Silicon; the Intel half of the release is cross-built
+    # in release.yml and only checked there. Linux stays the reference: what
+    # needs bwrap, seccomp or systemd is cfg-gated and runs in the jobs above.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: macos
+      - name: Clippy
+        run: cd daemon && cargo clippy --workspace --all-targets -- -D warnings
+      - name: Build the workspace
+        run: cd daemon && cargo build --workspace --all-targets
+      - name: Build and test the workspace
+        id: macos-test
+        run: |
+          set -o pipefail
+          cd daemon && cargo test --workspace 2>&1 | tee "$RUNNER_TEMP/macos-test.log"
+      - name: Name the tests that failed
+        if: failure() && steps.macos-test.outcome == 'failure'
+        run: ./scripts/ci/test-report.sh "$RUNNER_TEMP/macos-test.log"
+      - name: Documentation builds without warnings
+        run: cd daemon && cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
   deps-lint:
     name: deps-lint
     runs-on: ubuntu-24.04

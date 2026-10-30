@@ -61,7 +61,7 @@ impl PinnedSource {
         let shown = path.display();
         let canonical = std::fs::canonicalize(path)
             .map_err(|err| format!("{shown} cannot be resolved: {err}"))?;
-        let mut flags = OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let mut flags = crate::platform::PATH_ONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
         if kind == SourceKind::Directory {
             flags |= OFlags::DIRECTORY;
         }
@@ -96,9 +96,8 @@ impl PinnedSource {
                 canonical.display()
             ));
         }
-        let resolved = std::fs::read_link(proc_path(fd.as_raw_fd())).map_err(|err| {
-            format!("cannot read where the opened {shown} lies (/proc/self/fd): {err}")
-        })?;
+        let resolved = crate::platform::opened_path(fd.as_fd())
+            .map_err(|err| format!("cannot read where the opened {shown} lies: {err}"))?;
         if resolved != canonical {
             return Err(format!(
                 "{shown} changed while it was opened: it resolved to {}, but the opened {} lies at {}",
@@ -120,6 +119,20 @@ impl PinnedSource {
     /// Objekt, den niemand außer diesem Prozess umbiegen kann.
     pub(crate) fn proc_path(&self) -> PathBuf {
         proc_path(self.fd.as_raw_fd())
+    }
+
+    /// Ein Pfad, über den sich das geöffnete Objekt prüfen und lesen lässt.
+    ///
+    /// Unter Linux [`Self::proc_path`], den niemand umbiegen kann. Unter
+    /// macOS der aufgelöste Pfad: Dort prüft `access(2)` unter `/dev/fd/N` das
+    /// Gerät statt der Datei, und `open` hat beim Anlegen bestätigt, dass der
+    /// Deskriptor an genau diesem Pfad liegt (HUM-312).
+    pub(crate) fn check_path(&self) -> PathBuf {
+        if cfg!(target_os = "linux") {
+            self.proc_path()
+        } else {
+            self.resolved.clone()
+        }
     }
 
     /// Die Nummer des Deskriptors.
@@ -149,7 +162,7 @@ impl SourceKind {
 }
 
 fn proc_path(fd: RawFd) -> PathBuf {
-    PathBuf::from(format!("/proc/self/fd/{fd}"))
+    crate::platform::fd_path(fd)
 }
 
 #[cfg(test)]
@@ -160,6 +173,9 @@ mod tests {
 
     use super::{PinnedSource, SourceKind};
 
+    // Liest das Verzeichnis über `/proc/self/fd/N`; unter macOS lässt sich ein
+    // Verzeichnis über `/dev/fd/N` nicht durchlaufen (HUM-312).
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_descriptor_keeps_the_checked_directory_after_a_swap() {
         let dir = tempfile::tempdir().unwrap();
@@ -215,6 +231,9 @@ mod tests {
         let socket = dir.path().join("sock");
         let _listener = UnixListener::bind(&socket).unwrap();
         let err = PinnedSource::open(&socket, SourceKind::DirectoryOrFile).unwrap_err();
-        assert!(err.contains("not a directory or a regular file"), "{err}");
+        // Linux öffnet den Socket mit `O_PATH` und weist ihn nach `fstat` ab,
+        // macOS weist schon das `open` ab (HUM-312); beides nennt die
+        // Erwartung.
+        assert!(err.contains("a directory or a regular file"), "{err}");
     }
 }

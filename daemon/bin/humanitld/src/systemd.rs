@@ -402,14 +402,30 @@ fn send_notification(target: &Path, state: &str) -> std::io::Result<()> {
     let socket = UnixDatagram::unbound()?;
     let bytes = target.as_os_str().as_bytes();
     if let Some(name) = bytes.strip_prefix(b"@") {
-        use std::os::linux::net::SocketAddrExt as _;
-
-        let address = std::os::unix::net::SocketAddr::from_abstract_name(name)?;
-        socket.send_to_addr(state.as_bytes(), &address)?;
+        send_abstract(&socket, name, state)?;
     } else {
         socket.send_to(state.as_bytes(), target)?;
     }
     Ok(())
+}
+
+/// Abstrakte Sockets gibt es nur unter Linux, und nur dort gibt es systemd.
+#[cfg(target_os = "linux")]
+fn send_abstract(socket: &UnixDatagram, name: &[u8], state: &str) -> std::io::Result<()> {
+    use std::os::linux::net::SocketAddrExt as _;
+
+    let address = std::os::unix::net::SocketAddr::from_abstract_name(name)?;
+    socket.send_to_addr(state.as_bytes(), &address)?;
+    Ok(())
+}
+
+/// Ohne abstrakte Sockets ist ein `@`-Ziel ein Fehler (HUM-312).
+#[cfg(not(target_os = "linux"))]
+fn send_abstract(_socket: &UnixDatagram, _name: &[u8], _state: &str) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "abstract sockets exist only on Linux",
+    ))
 }
 
 /// Woher der gRPC-Socket dieses Laufs kommt.
@@ -519,10 +535,13 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use std::collections::HashMap;
+    #[cfg(target_os = "linux")]
     use std::io;
     use std::path::Path;
 
-    use std::os::fd::{AsRawFd as _, IntoRawFd as _, OwnedFd, RawFd};
+    use std::os::fd::{AsRawFd as _, RawFd};
+    #[cfg(target_os = "linux")]
+    use std::os::fd::{IntoRawFd as _, OwnedFd};
 
     use super::{
         Handover, LISTEN_VARS, ListenEnv, adopt, check_path, claim_env, duplicate, handover,
@@ -632,6 +651,7 @@ mod tests {
         assert!(is_open(raw), "the refused descriptor is not closed");
     }
 
+    #[cfg(target_os = "linux")]
     /// Ein Stream-Socket, der gebunden ist, aber nicht lauscht.
     #[test]
     fn a_stream_socket_that_does_not_listen_is_refused() {
@@ -645,6 +665,7 @@ mod tests {
         assert!(is_open(raw), "the refused descriptor is not closed");
     }
 
+    #[cfg(target_os = "linux")]
     /// Führt `body` auf einem eigenen Faden aus, dessen Deskriptor-Tabelle
     /// privat ist (`close_range(2)` mit `CLOSE_RANGE_UNSHARE`), und lässt
     /// dort eine eigene Ein-Faden-`tokio`-Laufzeit über `body` laufen.
@@ -726,6 +747,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     /// Ein lauschender Socket am richtigen Pfad wird übernommen, und erst dann
     /// geht die übergebene Nummer zu.
     #[test]
@@ -754,6 +776,7 @@ mod tests {
         });
     }
 
+    #[cfg(target_os = "linux")]
     /// Ein Unix-Stream-Socket, gebunden an `path`, ohne `listen`.
     #[allow(unsafe_code)]
     fn bound_stream_socket(path: &Path) -> OwnedFd {
@@ -857,6 +880,7 @@ mod tests {
         assert_eq!(&buffer[..read], b"READY=1");
     }
 
+    #[cfg(target_os = "linux")]
     /// Ein führendes `@` ist ein abstrakter Socket, kein Dateiname.
     #[test]
     fn a_notification_reaches_an_abstract_socket() {

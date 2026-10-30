@@ -63,7 +63,9 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use humanitl_core::diagnostics::codes::{SANDBOX_011, SANDBOX_021};
 use humanitl_core::http::sha256;
 use humanitl_core::{Diagnostic, Severity};
-use rustix::fs::{AtFlags, FileType, Mode, OFlags, RawDir, ResolveFlags};
+use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+#[cfg(target_os = "linux")]
+use rustix::fs::{RawDir, ResolveFlags};
 use rustix::io::Errno;
 
 /// So viele Einträge nimmt ein Schnappschuss höchstens auf.
@@ -91,6 +93,7 @@ pub const DEFAULT_SKIP_PATHS: &[&str] = &[".git/objects"];
 /// Ein Eintrag ist höchstens 255 Bytes Name plus Kopf; mit 64 KiB liest
 /// `getdents64` jedes übliche Verzeichnis in wenigen Runden, und der Puffer ist
 /// nie zu klein für einen einzelnen Eintrag (was `EINVAL` gäbe).
+#[cfg(target_os = "linux")]
 const DIR_BUFFER_BYTES: usize = 64 * 1024;
 
 /// Die Flags, mit denen jeder Zugriff unter der Wurzel aufgelöst wird.
@@ -98,6 +101,7 @@ const DIR_BUFFER_BYTES: usize = 64 * 1024;
 /// Öffentlich, damit ein Test sie nennen kann: Fällt eines der drei weg, ist
 /// das eine Änderung an einer Sicherheitsaussage und keine an einer
 /// Konstanten.
+#[cfg(target_os = "linux")]
 pub const RESOLVE_FLAGS: ResolveFlags = ResolveFlags::BENEATH
     .union(ResolveFlags::NO_SYMLINKS)
     .union(ResolveFlags::NO_MAGICLINKS);
@@ -138,17 +142,21 @@ pub fn resolution() -> Resolution {
         1 => Resolution::Openat2,
         2 => Resolution::PerComponent,
         _ => {
-            let probe = rustix::fs::openat2(
+            // macOS hat kein `openat2(2)`; dort gilt immer der Weg
+            // Bestandteil für Bestandteil (HUM-312).
+            #[cfg(target_os = "linux")]
+            let found = match rustix::fs::openat2(
                 rustix::fs::CWD,
                 ".",
                 OFlags::PATH | OFlags::CLOEXEC,
                 Mode::empty(),
                 ResolveFlags::empty(),
-            );
-            let found = match probe {
+            ) {
                 Err(Errno::NOSYS | Errno::OPNOTSUPP) => Resolution::PerComponent,
                 _ => Resolution::Openat2,
             };
+            #[cfg(not(target_os = "linux"))]
+            let found = Resolution::PerComponent;
             RESOLVER.store(
                 match found {
                     Resolution::Openat2 => 1,
@@ -418,7 +426,10 @@ pub fn open_beneath_with(
         rel
     };
     match how {
+        #[cfg(target_os = "linux")]
         Resolution::Openat2 => rustix::fs::openat2(root, rel, oflags, Mode::empty(), RESOLVE_FLAGS),
+        #[cfg(not(target_os = "linux"))]
+        Resolution::Openat2 => open_per_component(root, rel, oflags),
         Resolution::PerComponent => open_per_component(root, rel, oflags),
     }
 }
@@ -627,8 +638,9 @@ impl Walker<'_> {
                 continue;
             };
             let raw_mode = stat.st_mode;
-            // `RawMode` ist auf Linux `u32`; diese Crate baut nur dort.
-            let mode = raw_mode & 0o7777;
+            // `RawMode` ist auf Linux `u32`, auf macOS `u16` (HUM-312).
+            #[allow(clippy::useless_conversion)]
+            let mode = u32::from(raw_mode) & 0o7777;
             let size = u64::try_from(stat.st_size).unwrap_or(0);
             let mtime_ns = i128::from(stat.st_mtime)
                 .saturating_mul(1_000_000_000)
@@ -742,11 +754,32 @@ impl Walker<'_> {
 /// früh aufhört, lässt sie stehen. Das genügt hier, weil [`Walker::walk`] je
 /// Verzeichnis genau einen frischen Deskriptor öffnet und ihn genau einmal
 /// liest.
+#[cfg(target_os = "linux")]
 fn dir_names(dir: BorrowedFd<'_>, room: usize) -> Result<(Vec<OsString>, bool), Errno> {
     let mut buffer = Vec::with_capacity(DIR_BUFFER_BYTES);
     let mut iter = RawDir::new(dir, buffer.spare_capacity_mut());
     let mut out = Vec::new();
     while let Some(entry) = iter.next() {
+        let entry = entry?;
+        let name = entry.file_name().to_bytes();
+        if name == b"." || name == b".." {
+            continue;
+        }
+        if out.len() >= room {
+            return Ok((out, true));
+        }
+        out.push(OsString::from_vec(name.to_vec()));
+    }
+    Ok((out, false))
+}
+
+/// Die Namen eines Verzeichnisses unter macOS, über `readdir(3)` statt
+/// `getdents64(2)` (HUM-312); sonst wie die Linux-Fassung.
+#[cfg(not(target_os = "linux"))]
+fn dir_names(dir: BorrowedFd<'_>, room: usize) -> Result<(Vec<OsString>, bool), Errno> {
+    let iter = rustix::fs::Dir::read_from(dir)?;
+    let mut out = Vec::new();
+    for entry in iter {
         let entry = entry?;
         let name = entry.file_name().to_bytes();
         if name == b"." || name == b".." {

@@ -13,6 +13,9 @@
 //! [`sandbox_required`] macht aus dem stillen Überspringen einen Fehlschlag
 //! mit der Zeile, die sagt, was zu installieren ist.
 
+// Einige Tests laufen nur unter Linux (Sandbox-Backend, systemd); ihre Helfer bleiben
+// sonst unbenutzt (HUM-312).
+#![cfg_attr(not(target_os = "linux"), allow(unused_imports, dead_code))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::ffi::OsString;
@@ -1043,6 +1046,8 @@ fn an_unknown_flag_is_exit_one_not_the_two_of_clap() {
     );
 }
 
+// Liest die Kommandozeile des Linux-Sandbox-Backends (HUM-312).
+#[cfg(target_os = "linux")]
 #[test]
 fn sandbox_argv_is_the_translation_of_the_profile() {
     let harness = Harness::new();
@@ -1861,6 +1866,8 @@ fn flows_show_prints_a_body_and_refuses_raw_together_with_json() {
     );
 }
 
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[test]
 fn sandbox_check_shows_the_three_guarantees() {
     let Some(_shim) = sandbox_required() else {
@@ -1877,6 +1884,8 @@ fn sandbox_check_shows_the_three_guarantees() {
     assert_eq!(text.matches('✓').count(), 3, "{text}");
 }
 
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[test]
 fn sandbox_run_exits_with_the_code_of_the_command() {
     // `sandbox_required` statt `sandbox_available`: Unter CI ist ein fehlendes
@@ -1910,6 +1919,8 @@ fn sandbox_run_without_a_daemon_is_exit_two() {
     );
 }
 
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[test]
 fn sigint_stops_the_sandbox_and_ends_with_130() {
     let Some(_shim) = sandbox_required() else {
@@ -1957,6 +1968,8 @@ fn sigint_stops_the_sandbox_and_ends_with_130() {
 
 /// `SIGINT` ist eine Bitte, kein Schlag: Der Agent hört sie, räumt auf und
 /// endet mit seinem eigenen Code, und der ist der Code der Kommandozeile.
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[test]
 fn sigint_reaches_the_agent_and_keeps_its_exit_code() {
     let Some(_shim) = sandbox_required() else {
@@ -2033,6 +2046,8 @@ fn sigint_reaches_the_agent_and_keeps_its_exit_code() {
 /// `nohup`-Aufruf und jeder Dienst, den systemd mit ignoriertem `SIGINT`
 /// startet — und genau so ist dieser Test am 2026-09-06 rot geworden, bevor
 /// `reset_signal_dispositions` da war.
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[test]
 fn an_ignored_sigint_of_the_launcher_does_not_reach_the_agent() {
     let Some(_shim) = sandbox_required() else {
@@ -3969,6 +3984,8 @@ fn daemon_install_appimage_resolves_a_relative_bin_dir() {
 /// Lässt sich im Bild etwas nicht lesen, liegt das am Bild: `DAEMON_011` mit
 /// dem Pfad im Bild und dem Weg zu einem neuen, nicht mit einem `ls` auf den
 /// Einhängepunkt und nicht mit der Schuld beim Ziel (HUM-165, Review).
+// AppImage und systemd gibt es nur unter Linux (HUM-312).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_appimage_blames_an_unreadable_image_file_on_the_image() {
     let harness = Harness::new();
@@ -4805,6 +4822,8 @@ fn daemon_install_appimage_same_version_again_never_touches_the_live_copy() {
 
 /// Scheitert `enable` nach der Kopie, geht die Kopie wieder, und `current`
 /// zeigt dorthin, wohin es vorher zeigte.
+// AppImage und systemd gibt es nur unter Linux (HUM-312).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_appimage_failed_enable_takes_the_copy_back() {
     let harness = Harness::new();
@@ -5587,11 +5606,14 @@ fn config_set_counts_a_daemon_only_when_it_answers() {
 
     let output = harness.run(["config", "set", "hold.timeout_secs", "300"]);
 
-    // Den Faden lösen: genug Verbindungen, dass er endet.
-    for _ in 0..10 {
-        let _ = std::os::unix::net::UnixStream::connect(&socket);
-    }
+    // Den Faden lösen: genug Verbindungen, dass er endet. Die Clients bleiben
+    // offen, bis er endet: macOS beantwortet `peer_addr` für einen schon
+    // geschlossenen Client mit `EINVAL` (HUM-312).
+    let clients: Vec<_> = (0..10)
+        .filter_map(|_| std::os::unix::net::UnixStream::connect(&socket).ok())
+        .collect();
     holder.join().expect("the holder ends");
+    drop(clients);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(
         stderr(&output).contains("no daemon is running, so it reads it when it starts"),
@@ -5708,6 +5730,8 @@ fn work_overrides_the_stored_folder_without_writing_it() {
 /// abgelehntes sagt genau das (HUM-293, Akzeptanzkriterium 2): kein
 /// `sandbox.work_dir` für einen Pfad, der in keiner Datei steht, und als
 /// Abhilfe zuerst der Weg, einen Ordner zu wählen.
+// Liest die Kommandozeile des Linux-Sandbox-Backends (HUM-312).
+#[cfg(target_os = "linux")]
 #[test]
 fn a_refused_current_directory_is_named_as_such() {
     let harness = Harness::new();

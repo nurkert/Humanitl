@@ -11,6 +11,9 @@
 //! eines, sagt er es auf stderr und endet grün: „kein `bwrap` auf dieser
 //! Maschine" ist eine Aussage über die Maschine, nicht über den Dienst.
 
+// Die Tests mit echter Sandbox laufen nur unter Linux; ihre Helfer bleiben
+// sonst unbenutzt (HUM-312).
+#![cfg_attr(not(target_os = "linux"), allow(unused_imports, dead_code))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::os::unix::fs::PermissionsExt as _;
@@ -687,6 +690,8 @@ async fn drain(mut stream: impl tokio_stream::Stream<Item = v1::SandboxEvent> + 
 /// Die Abwesenheit hängt an einer Anwesenheit: Nach dem Hinweis geht eine
 /// Zeile an den Agenten, und erst wenn dessen Echo da ist, wird das Fehlen des
 /// Hinweises behauptet (`backlog/CONVENTIONS.md` 4.22).
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn the_notice_switch_silences_the_stream() {
     let fixture = Fixture::new();
@@ -757,6 +762,8 @@ async fn the_notice_switch_silences_the_stream() {
 /// Die Abwesenheit in den Bytes hängt an einer Anwesenheit: Erst muss der
 /// Hinweis als Rahmen da sein, dann erst wird behauptet, dass er in den Bytes
 /// fehlt (`backlog/CONVENTIONS.md` 4.22).
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_notice_stands_beside_the_bytes_and_never_inside_them() {
     let Some((_fixture, service, mut client, seen)) = attacking_session(
@@ -825,6 +832,8 @@ async fn a_notice_stands_beside_the_bytes_and_never_inside_them() {
 /// dann nach einer Veränderung mit der neuen. Ohne diese Messung wäre „ein
 /// Resize erreicht den Agenten" eine Behauptung über eine Nachricht, die
 /// irgendwo hätte enden können.
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_resize_reaches_the_agent() {
     let fixture = Fixture::new();
@@ -882,6 +891,8 @@ async fn a_resize_reaches_the_agent() {
 ///
 /// Der Test hängt vier Fragen an eine Sitzung, weil jede davon einen echten
 /// Start braucht und ein Start hier zwei Sekunden kostet.
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn one_writer_many_readers() {
     let fixture = Fixture::new();
@@ -1076,6 +1087,8 @@ fn stop() -> v1::SandboxRequest {
 /// nicht verlassen; erreicht sie keinen Client, erreicht sie auch kein
 /// Terminal, das sie ausführen könnte (`BACKLOG.md` 4.2, `docs/SECURITY.md`
 /// 3.3, `tests/escape/esc-5-filesystem.sh`).
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn osc52_does_not_reach_host() {
     let Some((_fixture, service, mut client, seen)) = attacking_session(
@@ -1118,6 +1131,8 @@ async fn osc52_does_not_reach_host() {
 /// den Fenstertitel — beides sind Wege, mit denen die Ausgabe des Agenten
 /// etwas behauptet, das nicht von ihm kommt. Sichtbar bleibt der Text, die
 /// Folge nicht.
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn osc8_and_title_are_inert() {
     let Some((_fixture, service, mut client, seen)) = attacking_session(
@@ -1184,6 +1199,8 @@ async fn attacking_session(script: &str) -> Option<(Fixture, SandboxService, Cli
 /// werden **zwei** beendete Sitzungen: Was beim ersten Start einmalig entsteht
 /// (Fäden, Zwischenspeicher), fällt aus der Differenz heraus, was je Sitzung
 /// liegen bleibt, nicht.
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn two_sessions_leave_nothing_behind() {
     let fixture = Fixture::new();
@@ -1260,6 +1277,8 @@ async fn two_sessions_leave_nothing_behind() {
 /// einer Folge, eine Anfrage von ihm wartet auf einen Menschen, und dann endet
 /// er. Wer den Hinweis hier wegwirft, verschweigt genau den Fluss, der beim
 /// Ende noch offen war.
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_pending_notice_still_leaves_when_the_agent_ends() {
     // Der Agent schreibt eine halbe Folge und wartet: Der Filter steht danach
@@ -1351,6 +1370,8 @@ fn has_bash() -> bool {
 /// The agent is a copy of `/bin/true` in `~/.opencode/bin` of the fixture's
 /// home; the daemon's `PATH` names only system directories, so only the
 /// per-user search finds it. The test never runs the program.
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_shell_finds_the_configured_agent_on_its_path() {
     let fixture = Fixture::new_with(|env| env.with("PATH", "/usr/bin:/bin"));
@@ -1405,6 +1426,8 @@ async fn a_shell_finds_the_configured_agent_on_its_path() {
 /// This needs the controlling terminal: without it the byte `0x03` is just a
 /// byte, the line discipline has no foreground group to signal, `sleep 100`
 /// runs on, and the next line waits behind it far longer than [`WAIT`].
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn ctrl_c_interrupts_the_foreground_program_not_the_shell() {
     let fixture = Fixture::new();
@@ -1625,6 +1648,8 @@ fn assert_the_agents_limits(seen: &str, agent_seen: &str) {
 /// the shim's variables, and nothing above descriptor 2: neither of them
 /// holds the door for further shells, and PID 1's descriptors are closed to
 /// both. The shell's own size (101 by 33) shows that its terminal is its own.
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_further_shell_runs_next_to_the_agent_with_the_agents_limits() {
     let fixture = Fixture::new();
@@ -1709,6 +1734,8 @@ async fn exit_code(client: &mut Client, what: &str) -> i32 {
 /// Stopping the sandbox ends every further shell: its terminal sends the exit
 /// to every client, its id is gone, and its process is gone from the host
 /// (HUM-299, acceptance criterion 3).
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_further_shell_dies_with_the_sandbox() {
     let fixture = Fixture::new();
@@ -1755,6 +1782,8 @@ async fn a_further_shell_dies_with_the_sandbox() {
 /// At most four further shells live at a time; the fifth is refused with
 /// `TERM_002`, and once one ends its place is free again. Its exit code
 /// reaches its terminal (HUM-299, acceptance criterion 4).
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn the_fifth_further_shell_is_refused_until_one_ends() {
     let fixture = Fixture::new();
@@ -1828,6 +1857,8 @@ async fn exec_without_a_session_says_so() {
 /// A command that ends before anybody attaches still leaves its output and
 /// its exit code to the first client; after that its id is gone (HUM-299,
 /// review: `humanitl sandbox exec -- true`).
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_fast_shell_leaves_output_and_exit_for_the_first_client() {
     let fixture = Fixture::new();
@@ -1884,6 +1915,8 @@ async fn a_fast_shell_leaves_output_and_exit_for_the_first_client() {
 /// An id is valid only in its own session: the bare number of the shim, or
 /// the number with another session's part, reaches nothing (HUM-299, review:
 /// an old `attach --shell 1` must not reach a new session's shell).
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_shell_id_holds_only_in_its_own_session() {
     let fixture = Fixture::new();

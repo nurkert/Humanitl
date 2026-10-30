@@ -20,6 +20,8 @@
 //! eines, sagt er es auf stderr und endet grün: „kein `bwrap` auf dieser
 //! Maschine" ist eine Aussage über die Maschine.
 
+// Startet Sandboxen mit dem Linux-Backend (HUM-312).
+#![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::os::unix::fs::PermissionsExt as _;

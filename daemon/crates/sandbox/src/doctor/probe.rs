@@ -32,7 +32,6 @@ use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
-use std::os::fd::OwnedFd;
 use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
@@ -40,7 +39,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use humanitl_config::{Env, Paths};
-use rustix::fs::{Access, MemfdFlags, access, memfd_create};
+use rustix::fs::{Access, access};
 
 use super::{
     AgentFacts, BwrapFacts, CommandRun, DaemonFacts, DiskFacts, LlmFacts, MachineFacts, Reading,
@@ -677,8 +676,8 @@ fn exit_status(status: std::process::ExitStatus) -> RunOutcome {
 }
 
 /// Ein anonymer, seekbarer Puffer für die Ausgabe eines Aufrufs.
-fn scratch_file() -> Result<File, rustix::io::Errno> {
-    memfd_create("humanitl-doctor", MemfdFlags::CLOEXEC).map(|fd: OwnedFd| File::from(fd))
+fn scratch_file() -> std::io::Result<File> {
+    crate::platform::anonymous_file("humanitl-doctor").map(File::from)
 }
 
 /// Liest den Puffer eines Aufrufs von vorn, höchstens [`OUTPUT_CAP_BYTES`].

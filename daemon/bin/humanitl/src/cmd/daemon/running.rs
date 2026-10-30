@@ -212,17 +212,18 @@ fn hidden_daemon(proc_dir: &Path, owner: u32) -> bool {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use std::os::unix::fs::MetadataExt as _;
-
     use super::{MainPid, runs_from};
 
-    /// Das Konto dieses Tests.
+    /// Das Konto dieses Tests, aus `getuid(2)`: macOS hat kein `/proc`
+    /// (HUM-312).
     fn me() -> u32 {
-        std::fs::metadata("/proc/self").expect("/proc/self").uid()
+        rustix::process::getuid().as_raw()
     }
 
     /// Der Testprozess selbst läuft aus dem Verzeichnis seines Binaries, aus
     /// einem leeren Verzeichnis daneben läuft nichts.
+    // Fragt das echte `/proc`; das gibt es nur unter Linux (HUM-312).
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_running_test_binary_is_found_and_an_empty_directory_is_not() {
         let exe = std::env::current_exe().expect("the test binary");

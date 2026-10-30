@@ -4,6 +4,9 @@
 //! Dateien, Vorprüfung und die Passthrough-Regel. Alles davon ist eine reine
 //! Funktion über den [`AgentContext`]; keine Sandbox startet dafür.
 
+// Die Tests mit echter Sandbox laufen nur unter Linux; ihre Helfer bleiben
+// sonst unbenutzt (HUM-312).
+#![cfg_attr(not(target_os = "linux"), allow(unused_imports, dead_code))]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::BTreeMap;
@@ -1509,6 +1512,8 @@ fn bin_dir_with_opencode() -> (OsString, tempfile::TempDir) {
 /// Sandbox **mit** Adapter-Dateien die drei Garantien hält. Fehlt `bwrap`,
 /// sagt der Test das auf `stderr` und endet grün — genauso wie die übrigen
 /// Launcher-Tests.
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[test]
 fn the_adapter_files_arrive_in_a_real_sandbox_and_the_guarantees_hold() {
     let Some((fx, backend)) =
@@ -1598,6 +1603,8 @@ fn the_adapter_files_arrive_in_a_real_sandbox_and_the_guarantees_hold() {
 
 /// Die Adapter-Dateien sind in der Sandbox nicht beschreibbar, und `/work`
 /// bleibt frei von ihnen.
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[test]
 fn the_adapter_files_are_read_only_and_work_stays_clean() {
     let Some((fx, backend)) =
@@ -1663,6 +1670,8 @@ fn the_adapter_files_are_read_only_and_work_stays_clean() {
 /// Einweisung im Heimatverzeichnis liegt: `OpenCode` liest die `AGENTS.md` des
 /// Projekts zusätzlich, und was Humanitl dort ablegte, käme in den nächsten
 /// Commit des Nutzers (ADR-0014).
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
 #[test]
 fn the_briefing_leaves_the_project_directory_byte_identical() {
     let Some((fx, backend)) =

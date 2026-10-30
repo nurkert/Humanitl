@@ -322,12 +322,14 @@ fn sweep_stale(dir: &Path, name: &str, own: &Path, uid: u32) {
         if rustix::fs::flock(&fd, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_err() {
             continue;
         }
-        let (Ok(locked), Ok(named)) = (rustix::fs::fstat(&fd), std::fs::symlink_metadata(&path))
-        else {
+        // Über `std::fs::File` statt `rustix::fs::fstat`: `st_dev` ist auf
+        // macOS ein `i32`, `MetadataExt::dev` überall ein `u64` (HUM-312).
+        let file = std::fs::File::from(fd);
+        let (Ok(locked), Ok(named)) = (file.metadata(), std::fs::symlink_metadata(&path)) else {
             continue;
         };
-        let checked = locked.st_dev == meta.dev() && locked.st_ino == meta.ino();
-        if checked && locked.st_dev == named.dev() && locked.st_ino == named.ino() {
+        let checked = locked.dev() == meta.dev() && locked.ino() == meta.ino();
+        if checked && locked.dev() == named.dev() && locked.ino() == named.ino() {
             let _ = std::fs::remove_file(&path);
         }
     }

@@ -745,6 +745,9 @@ mod tests {
         assert!(under_test.base().config.llm.endpoint.is_none());
         let project = home.path().join("project");
         std::fs::create_dir_all(&project).unwrap();
+        // `config set` speichert den kanonischen Pfad; unter macOS liegt das
+        // temporäre Verzeichnis hinter `/var` (HUM-312).
+        let project = project.canonicalize().unwrap();
 
         crate::config_rpc::set(
             under_test.paths(),
