@@ -133,7 +133,17 @@ fn loaded() -> Vec<String> {
         .collect()
 }
 
+/// Wie lange [`unload_everywhere`] auf das Ende des Auftrags wartet: das
+/// `ExitTimeOut` von launchd (20 Sekunden) und ein Rand.
+const UNLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+
 /// Entlädt den Agenten aus jeder Domäne, in der er geladen ist.
+///
+/// `bootout` kehrt zurück, bevor launchd den Auftrag abgebaut hat; solange der
+/// Daemon nach SIGTERM noch aufräumt (eine laufende Sandbox bekommt ihre
+/// Gnadenfrist), zeigt `launchctl print` ihn weiter an. Gewartet wird so lange,
+/// wie launchd selbst wartet, bevor es SIGKILL schickt (`ExitTimeOut`, 20
+/// Sekunden), und etwas darüber; erst dann gilt er als hängengeblieben.
 ///
 /// # Errors
 ///
@@ -142,7 +152,13 @@ fn unload_everywhere() -> Result<(), Failure> {
     for domain in loaded() {
         let _ = launchctl(&["bootout", &format!("{domain}/{LABEL}")])?;
     }
-    match loaded().first() {
+    let deadline = std::time::Instant::now() + UNLOAD_TIMEOUT;
+    let mut still = loaded();
+    while !still.is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        still = loaded();
+    }
+    match still.first() {
         None => Ok(()),
         Some(domain) => Err(Failure::new(not_loaded(&format!(
             "{LABEL} is still loaded in {domain} after bootout"
