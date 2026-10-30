@@ -10,17 +10,25 @@
 ///
 /// Drei Festlegungen:
 ///
-/// * **Kein Zusammenfassen, aber eine Obergrenze.** Zwei Befunde sind zwei
-///   Karten, auch bei gleichem Code: Der Daemon entstört `TLS_001..003` je
-///   Host für 60 Sekunden und deckelt sie bei 32 je Fenster
-///   (`tls_observe.rs`), und was er dort schon zusammengefasst hat, wird hier
-///   nicht noch einmal zusammengefasst. **Diese Entstörung deckt aber nur die
-///   TLS-Codes.** `LLM_005` entsteht je durchgereichter Anfrage mit Funden
-///   (`pipeline.rs::warn_about_findings`), `PROXY_002` je widersprüchlicher
+/// * **Zusammengefasst wird nur `LLM_005`, und eine Obergrenze gilt immer.**
+///   Zwei Befunde sind zwei Karten, auch bei gleichem Code: Der Daemon
+///   entstört `TLS_001..003` je Host für 60 Sekunden und deckelt sie bei 32 je
+///   Fenster (`tls_observe.rs`), und was er dort schon zusammengefasst hat,
+///   wird hier nicht noch einmal zusammengefasst. Die eine Ausnahme ist
+///   `LLM_005` (HUM-354): Der Daemon warnt nur noch, wenn eine durchgereichte
+///   Anfrage einen Fund trägt, vor dem er in diesem Lauf noch nicht oder vor
+///   mehr als fünfzehn Minuten gewarnt hat (`pipeline.rs::warn_about_findings`),
+///   aber ein Agent, der laufend Neues in sein Gespräch holt, löst sie
+///   trotzdem im Takt seiner Anfragen aus. Folgt eine solche Warnung
+///   unmittelbar auf eine für denselben Host und steht deren Karte noch, wird
+///   daraus eine Karte mit Zähler ([SessionDiagnostic.requests],
+///   [SessionDiagnostic.newFindings]); sie trägt den Satz und den Fluss der
+///   jüngsten und rückt ans Ende. Eine Warnung für einen anderen Host
+///   unterbricht die Folge, auch wenn ihre Karte schon ausgeblendet ist. `PROXY_002` entsteht je widersprüchlicher
 ///   Zieladresse und `PROXY_005` je abgelehntem Übergang
-///   (`handler.rs::publish_diagnostic`, `publish_invalid_transition`) — alle
-///   drei ohne jedes Fenster und alle drei vom Agenten auslösbar. Eine Liste
-///   ohne Grenze wäre damit ein Speicherleck, das der Agent selbst füllt.
+///   (`handler.rs::publish_diagnostic`, `publish_invalid_transition`), beide
+///   ohne jedes Fenster und beide vom Agenten auslösbar. Eine Liste ohne
+///   Grenze wäre damit ein Speicherleck, das der Agent selbst füllt.
 ///   [maxSessionDiagnostics] ist die Grenze; der älteste Eintrag fällt heraus,
 ///   und [Diagnostics.dropped] zählt mit, damit der Verlust auf dem Schirm
 ///   steht und nicht verschwiegen wird (`backlog/CONVENTIONS.md` 4.13).
@@ -54,6 +62,9 @@ class SessionDiagnostic {
     required this.at,
     required this.diagnostic,
     this.flowId,
+    this.requests = 1,
+    this.newFindings,
+    this.llmHost,
   });
 
   /// Die laufende Nummer dieser Sitzung.
@@ -70,7 +81,22 @@ class SessionDiagnostic {
   final FlowId? flowId;
 
   /// Der Befund selbst, bereits bereinigt.
+  ///
+  /// Bei einer zusammengefassten `LLM_005`-Karte der jüngste.
   final Diagnostic diagnostic;
+
+  /// Wie viele Anfragen diese Karte zusammenfasst; 1 für jeden gewöhnlichen
+  /// Befund (HUM-354).
+  final int requests;
+
+  /// Wie viele neue Funde die zusammengefassten `LLM_005` gemeldet haben,
+  /// zusammengezählt; null bei jedem anderen Befund.
+  final int? newFindings;
+
+  /// Der Host des Sprachmodells, für den diese `LLM_005`-Karte steht; null
+  /// bei jedem anderen Befund und bei einem Satz, den [llmWarningOf] nicht
+  /// lesen kann. Nur Karten mit Host werden zusammengefasst.
+  final String? llmHost;
 
   @override
   bool operator ==(Object other) =>
@@ -78,10 +104,45 @@ class SessionDiagnostic {
       other.id == id &&
       other.at == at &&
       other.flowId == flowId &&
-      other.diagnostic == diagnostic;
+      other.diagnostic == diagnostic &&
+      other.requests == requests &&
+      other.newFindings == newFindings &&
+      other.llmHost == llmHost;
 
   @override
-  int get hashCode => Object.hash(id, at, flowId, diagnostic);
+  int get hashCode =>
+      Object.hash(id, at, flowId, diagnostic, requests, newFindings, llmHost);
+}
+
+/// Was die Karte aus dem Satz einer `LLM_005` liest: Host und neue Funde.
+typedef LlmWarning = ({String host, int newFindings});
+
+/// Die Form, in der der Daemon `LLM_005` schreibt
+/// (`daemon/crates/proxy/src/pipeline.rs`, `llm_warning_sentence`; dessen
+/// Test `the_llm_warning_sentence_is_pinned` und die Testvorlage `llm005Why`
+/// in `app/test/features/intercept/fixtures.dart` halten den Text fest).
+final RegExp _llmWarningSentence = RegExp(
+  r'language model at (\S+) carries [^:]*: (\d+) new, (\d+) in total',
+);
+
+/// Liest Host und Zahl der neuen Funde aus einer `LLM_005` (HUM-354).
+///
+/// Null für jeden anderen Code und für einen Satz in anderer Form, etwa von
+/// einem Daemon vor HUM-354. Eine solche Karte bleibt einzeln stehen: Lieber
+/// eine Karte zu viel als zwei Hosts in einer.
+LlmWarning? llmWarningOf(Diagnostic diagnostic) {
+  if (diagnostic.code != 'LLM_005') {
+    return null;
+  }
+  final RegExpMatch? match = _llmWarningSentence.firstMatch(diagnostic.why);
+  if (match == null) {
+    return null;
+  }
+  final int? fresh = int.tryParse(match.group(2)!);
+  if (fresh == null) {
+    return null;
+  }
+  return (host: match.group(1)!, newFindings: fresh);
 }
 
 /// So viele Befunde hält der Streifen zugleich.
@@ -96,6 +157,14 @@ const int maxSessionDiagnostics = 200;
 class Diagnostics extends _$Diagnostics {
   int _next = 0;
   int _dropped = 0;
+
+  /// Die Karte der zuletzt empfangenen `LLM_005`, oder null.
+  ///
+  /// Geführt unabhängig davon, was auf dem Schirm steht: Kam zuletzt eine
+  /// Warnung für einen anderen Host, ist die Folge unterbrochen, auch wenn
+  /// ihre Karte inzwischen ausgeblendet ist. Null nach einer `LLM_005`, deren
+  /// Satz [llmWarningOf] nicht lesen kann (HUM-354).
+  int? _lastLlmCard;
 
   /// Wie viele Befunde die Obergrenze aus der Liste gedrängt hat.
   ///
@@ -125,15 +194,49 @@ class Diagnostics extends _$Diagnostics {
       :final Diagnostic diagnostic,
       :final FlowId? flowId,
     )) {
-      final List<SessionDiagnostic> next = <SessionDiagnostic>[
-        ...state,
-        SessionDiagnostic(
-          id: _next++,
-          at: at,
-          flowId: flowId,
-          diagnostic: sanitizeDiagnostic(diagnostic),
-        ),
-      ];
+      final Diagnostic clean = sanitizeDiagnostic(diagnostic);
+      final LlmWarning? warning = llmWarningOf(clean);
+      final List<SessionDiagnostic> next = <SessionDiagnostic>[...state];
+      // Eingereiht wird nur in die Karte der unmittelbar vorigen `LLM_005`,
+      // und nur, solange sie offen ist und denselben Host nennt. Eine
+      // ausgeblendete oder vom Deckel verdrängte Karte nimmt nichts mehr auf.
+      final int group = warning == null || _lastLlmCard == null
+          ? -1
+          : next.indexWhere(
+              (SessionDiagnostic e) =>
+                  e.id == _lastLlmCard && e.llmHost == warning.host,
+            );
+      if (warning != null && group >= 0) {
+        // Dieselbe Karte, eine Anfrage mehr: Id bleibt, damit „Ausblenden"
+        // die ganze Gruppe trifft und nichts neu einblendet; Satz, Zeit und
+        // Fluss kommen von der jüngsten, damit „Anfrage öffnen" sie öffnet.
+        final SessionDiagnostic open = next.removeAt(group);
+        next.add(
+          SessionDiagnostic(
+            id: open.id,
+            at: at,
+            flowId: flowId,
+            diagnostic: clean,
+            requests: open.requests + 1,
+            newFindings: (open.newFindings ?? 0) + warning.newFindings,
+            llmHost: warning.host,
+          ),
+        );
+      } else {
+        next.add(
+          SessionDiagnostic(
+            id: _next++,
+            at: at,
+            flowId: flowId,
+            diagnostic: clean,
+            newFindings: warning?.newFindings,
+            llmHost: warning?.host,
+          ),
+        );
+      }
+      if (clean.code == 'LLM_005') {
+        _lastLlmCard = warning == null ? null : next.last.id;
+      }
       if (next.length > maxSessionDiagnostics) {
         _dropped += next.length - maxSessionDiagnostics;
         next.removeRange(0, next.length - maxSessionDiagnostics);
@@ -147,7 +250,8 @@ class Diagnostics extends _$Diagnostics {
   /// Das ist die Antwort „gesehen" eines Menschen und gilt nur in diesem
   /// Client: Der Daemon führt über einen Befund keinen Zustand, weil ein
   /// Befund nichts anhält. Ein späterer Befund desselben Codes ergibt eine
-  /// neue Karte.
+  /// neue Karte; bei einer zusammengefassten `LLM_005`-Karte geht die ganze
+  /// Gruppe, und die nächste Warnung beginnt eine neue.
   void dismiss(int id) {
     state = <SessionDiagnostic>[
       for (final SessionDiagnostic open in state)

@@ -151,8 +151,10 @@ The agent must send code to the model; these requests are not held. The model ho
 the second open channel and, unlike `/work`, one over the network. The rule is as narrow as
 possible: one host, one port, one scheme, `POST` and `GET`, and thirteen exact inference endpoints
 instead of the surfaces `/v1/` and `/api/` (HUM-261); a path with `..` segments is held (HUM-204).
-Traffic is recorded and scanned (`LLM_005`), and with `hold.hard_block_checksum_secrets` a
-checksum-confirmed secret is blocked (`HOLD_004`). The access key of a provider (HUM-140) lives in
+Traffic is recorded and scanned (`LLM_005`; every finding stays on its request, the warning
+repeats only for findings new in the run or last warned about 15 minutes or more ago; an expired
+or evicted fingerprint warns again, HUM-354), and with
+`hold.hard_block_checksum_secrets` a checksum-confirmed secret is blocked (`HOLD_004`). The access key of a provider (HUM-140) lives in
 the system keyring and reaches the agent only as a sandbox file; it is masked in the recording and a
 finding everywhere except in `Authorization` towards `llm.endpoint`. With several saved model
 servers (HUM-289) each has its own keyring item, and only the active server's origin gets a key and

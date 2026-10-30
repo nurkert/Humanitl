@@ -591,8 +591,18 @@ through (`allow`, `redact`) and carries a path pattern or prefixes, also when di
 `%2e%2e` or `..;` (HUM-204). Every other request to the same host is held normally.
 
 The traffic is fully recorded and runs through the findings detectors; a hit produces a warning
-(`LLM_005`, one per request, with count and host and never with the value found) but does not
-hold. One exception: with `hold.hard_block_checksum_secrets` on, the passthrough blocks a request
+(`LLM_005`, with host and counts and never with the value found) but does not hold. Every
+finding stays recorded with its request and visible in the history. Agents resend the whole
+conversation with every turn, so the warning is raised only for a request that carries at least
+one finding not warned about at this endpoint (`host:port`) in this run, or last warned about 15
+minutes or more ago; it says how many are new and how many the request carries in total
+(HUM-354). The daemon remembers what it warned about as detector kind plus the value hash the
+finding already carries, in memory only and capped per endpoint. The memory is cleared whenever
+a sandbox run starts, an entry expires 15 minutes after its warning, and a fingerprint that
+expired or fell out of the cap warns again. A warning that reached no open window is therefore
+repeated by the next request carrying the same finding once the entry has expired or a new run
+has started; without such a request no card follows, and the finding stays visible only in the
+history of its request. One exception: with `hold.hard_block_checksum_secrets` on, the passthrough blocks a request
 carrying a checksum-confirmed secret (API key, JWT, IBAN, credit card) as the system with
 `HOLD_004`, instead of letting it pass (HUM-159). Because the model usually sits in the local
 network, the rule carries `allow_private: true`; it is the only rule that deliberately points

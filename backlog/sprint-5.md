@@ -87,6 +87,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-352 | The floating terminal keeps its resize grip in the corner and grows equally in every corner | M | HUM-300, HUM-314, HUM-315 |
 | HUM-353 | Ctrl+C in the agent terminal no longer quits OpenCode, and copies a selection | S | HUM-037, HUM-274, HUM-308, HUM-313 |
 | HUM-355 | Neutral greys instead of blue-tinted ones, and no blue next to the brand yellow | M | HUM-260 |
+| HUM-354 | LLM_005 warns only about findings the model has not seen yet, and repeats collapse into one card | M | HUM-039, HUM-106, HUM-256, HUM-271 |
 
 ---
 
@@ -10464,3 +10465,99 @@ not go with the yellow brand accent (HUM-260, `#E8B84B`).
   still carries the old blue-tinted hex values.
 - **Website.** The site of HUM-333 has its own palette; align it with the
   neutral ladder if the owner wants that.
+
+## HUM-354 · LLM_005 warns only about findings the model has not seen yet, and repeats collapse into one card
+
+Owner report of 2026-10-30, with a screenshot: the warning card "LLM_005 ·
+The daemon reports: this request to your language model at <host> contains
+4 potential secret(s) or personal data. It was sent because the LLM
+endpoint is a declared trust boundary: traffic to it is logged, never held.
+[Open request]" comes back again and again. Cause: OpenCode and pi resend
+the whole conversation with every turn. Once a string that looks like a
+secret is in the context, every passthrough request to the model carries
+the same findings, and `pipeline.rs::warn_about_findings` raised `LLM_005`
+per request. Unlike `TLS_001..003` there was no debounce window (doc comment
+of `app/lib/features/intercept/providers/diagnostics.dart`).
+
+### Specification
+1. **Daemon: remember what was warned about.** Per session and per LLM
+   endpoint (`host:port`, so two model servers on one host stay apart), the
+   daemon remembers a fingerprint of every finding it
+   reported in `LLM_005`: the detector kind plus the SHA-256 of the value
+   that `Finding::value_hash` already carries (HUM-256, HUM-271). No
+   plaintext and no display prefix is stored; the memory lives only in the
+   daemon process, is never written and never sent. `LLM_005` is raised only
+   when a passthrough request carries at least one finding not warned about
+   in this run at this endpoint, or last warned about 15 minutes or more ago
+   (`WARNING_TTL`, measured from the warning, not from the last sighting). Findings are still recorded per flow
+   exactly as before (`Analyzed`, history, audit, flow detail): only the
+   warning is deduplicated.
+2. **Numbers in the sentence.** The why sentence says how many findings are
+   new and how many the request carries in total, in a fixed form the app
+   reads: `... at <host> carries potential secret(s) or personal data: <new>
+   new, <total> in total. Findings already warned about in this run repeat
+   only after 15 minutes; every finding stays recorded with its request.
+   ...`. The Rust test `the_llm_warning_sentence_is_pinned` and the Dart
+   fixture `llm005Why` hold the same text. No proto
+   field: the numbers ride in the sentence the daemon already sends.
+3. **Forgetting and bounded memory.** The daemon has one `SessionId` for its
+   whole lifetime and the event stream replays nothing, so a warning raised
+   while no window was open would otherwise stay silent until a restart.
+   The memory therefore forgets three ways, each erring to the loud side:
+   it is cleared at every sandbox run start (`SessionSettings::set`, which
+   the sandbox service calls at launch, owns the memory and
+   `RulesPipeline::with_warnings` takes it); an entry expires 15 minutes
+   after its warning; and at most 4096 fingerprints per pair of session and
+   endpoint are kept, the oldest dropped first, with at most 16 pairs, the
+   least recently used dropped first
+   (`daemon/crates/proxy/src/llm_warnings.rs`). An expired or dropped
+   fingerprint warns again when it reappears.
+4. **App: consecutive warnings collapse.** An `LLM_005` joins the card of
+   the `LLM_005` received immediately before it, if that one named the same
+   host and its card is still open (not dismissed, not pushed out by the
+   cap); otherwise it starts a new card. The run is tracked by the last
+   warning received, not by the visible cards: the
+   card counts requests and new findings ("3 requests, 5 new findings"),
+   carries the sentence, time and flow of the latest warning ("Open
+   request" opens it) and moves to the end. A warning for another host in
+   between breaks the run; another code in between does not. Dismissing the
+   card dismisses the group, and the next warning starts a new one. A
+   sentence the app cannot read (a daemon before this issue) is never
+   grouped. `maxSessionDiagnostics` keeps its semantics: a group counts as
+   one entry and is dropped like any other.
+5. **Docs.** `docs/DIAGNOSTICS.md` (from the register), `docs/SECURITY.md`
+   (K-02 passthrough paragraph) and `docs/THREAT-MODEL.md` say that the
+   warning repeats only for new findings and that every finding stays
+   recorded and visible in the history.
+
+### Acceptance criteria
+1. Two passthrough requests with the same finding raise one `LLM_005`; a
+   third with an additional finding raises a second one that says "1 new, 3
+   in total"; the findings stay on every flow
+   (`daemon/crates/proxy/tests/llm_warning_dedupe.rs`). Mutation proof: the
+   dedupe dropped, the test is red.
+2. Neither the stored fingerprints nor the diagnostic contain the secret
+   string or its display prefix (`llm_warnings.rs` unit test).
+3. Both caps hold and drop the oldest entry; a finding warns again after
+   15 minutes; a run start clears the memory; two ports of one host keep
+   separate memories (`llm_warnings.rs`, `session.rs`,
+   `llm_warning_dedupe.rs`). The sentence is pinned in
+   `pipeline.rs::tests::the_llm_warning_sentence_is_pinned`. Mutation
+   proofs: TTL, reset and port each dropped, a test is red.
+4. Three `LLM_005` for one host collapse into one card with counter;
+   different hosts stay separate, also when the warning for the other host
+   was dismissed; dismissing removes the group; a group counts once against
+   the cap (`app/test/features/intercept/diagnostics_test.dart`,
+   `diagnostic_card_test.dart`). Mutation proofs: the grouping dropped, and
+   the run tracked by visible cards, the tests are red.
+
+### Candidates for later issues
+- C1: replay recent diagnostics on `Subscribe`, so a warning raised while no
+  window was open still reaches the next one.
+- C2: a structured field for host and counts on `Diagnostic` instead of
+  reading the sentence, once a second diagnostic needs the same grouping.
+- C3: mark passthrough flows whose findings were deduplicated in the history,
+  so a quiet request with findings stands out there.
+- Keyed hashes (for example HMAC with a per-install key) for value hashes
+  that are logged or persisted, so a low-entropy value cannot be confirmed
+  by hashing guesses.

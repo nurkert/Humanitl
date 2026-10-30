@@ -517,3 +517,19 @@ ScriptedEvent timeoutAfter(FlowId id, Duration after) => ScriptedEvent(
   (FakeSessionState state, DateTime now) =>
       FlowEvent.timedOut(at: now, flowId: id),
 );
+
+/// Der Satz, den der Daemon für `LLM_005` schreibt, Zeichen für Zeichen
+/// (HUM-354).
+///
+/// Gegenstück ist `llm_warning_sentence` in
+/// `daemon/crates/proxy/src/pipeline.rs`; dessen Test
+/// `the_llm_warning_sentence_is_pinned` hält denselben Text fest. Wer den
+/// einen ändert, ändert den anderen mit, sonst prüfen die Tests der
+/// Oberfläche eine Form, die der Daemon nicht schreibt.
+String llm005Why(String host, int fresh, int total) =>
+    'this request to your language model at $host carries potential '
+    'secret(s) or personal data: $fresh new, $total in total. Findings '
+    'already warned about in this run repeat only after 15 minutes; every '
+    'finding stays recorded with its request. It was sent because the LLM '
+    'endpoint is a declared trust boundary: traffic to it is logged, never '
+    'held.';
