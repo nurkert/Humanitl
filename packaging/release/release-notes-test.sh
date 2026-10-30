@@ -106,8 +106,8 @@ expected="$(
 > **Early release on the way to 0.1.0.**
 > Humanitl @VERSION@ is an interim state before release 0.1.0. The artefacts
 > are **not signed**; `SHA256SUMS` protects against a damaged download,
-> not against a tampered release. A changelog and an AppImage come with 0.1.0
-> (HUM-060); signed packages come with 1.0.0.
+> not against a tampered release. A changelog comes with 0.1.0 (HUM-060);
+> signed packages come with 1.0.0.
 
 Built from commit `@SHA@` on `main`, after its CI run was green.
 
@@ -135,6 +135,17 @@ activates the units it ships. To remove: `humanitl daemon uninstall`, then
 `humanitl-@VERSION@-linux-x86_64.tar.gz` runs without installation;
 `INSTALL.txt` inside it explains how.
 
+The AppImage `Humanitl-@VERSION@-x86_64.AppImage` needs no installation
+either: make it executable and start it; `--cli daemon install` sets up the
+service from a copy under `~/.local/lib/humanitl/`, and every later start of
+a newer image refreshes that copy.
+
+```sh
+chmod +x Humanitl-@VERSION@-x86_64.AppImage
+./Humanitl-@VERSION@-x86_64.AppImage --cli daemon install
+./Humanitl-@VERSION@-x86_64.AppImage
+```
+
 ## Install on macOS (Apple Silicon and Intel)
 
 Open `Humanitl-@VERSION@-macos.dmg` and drag Humanitl into Applications.
@@ -161,7 +172,7 @@ the Seatbelt escape tests against the binaries inside it.
 
 ## What is still missing
 
-- No AppImage in the release assets, no signature, no man pages.
+- No signature, no man pages.
 - The systemd user unit `humanitld.service` is hardened as far as the sandbox
   allows, and the package ships `humanitld.socket` for socket activation. Some
   protections are left out on purpose because the sandbox needs them (see

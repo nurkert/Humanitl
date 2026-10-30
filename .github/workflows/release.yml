@@ -1,17 +1,20 @@
 # Releases 0.0.x: from a tag on a green `main` commit to a GitHub release
-# with .deb, archive and checksums. Since HUM-273 they are published as
+# with .deb, AppImage, archive and checksums. Since HUM-273 they are published as
 # regular releases (marked latest), no longer as pre-releases.
 #
 #   guard -> build -> check-deb ------------+-> release
+#                  -> check-appimage -------+
 #         -> build-macos -> check-macos ----+
 #
 # guard      Tag hat die Form v0.0.N, der Commit liegt auf `main`, und der
 #            ci.yml-Lauf dieses Commits ist mit `success` beendet.
 # build      Version in den Auscheckstand stempeln, Release-Bau von humanitld,
 #            humanitl, humanitl-shim und der Flutter-App, `--version` pruefen,
-#            .deb und tar.gz bauen, SHA256SUMS, Release-Notes.
+#            .deb, AppImage und tar.gz bauen, SHA256SUMS, Release-Notes.
 # check-deb  Das .deb in einem frischen Ubuntu-24.04-Container installieren,
 #            pruefen, mit --purge entfernen; lintian ohne Fehler und Warnungen.
+# check-appimage  Das AppImage auf einem frischen Runner pruefen, ohne FUSE und
+#            ohne Installation (packaging/appimage/check-appimage.sh, HUM-335).
 # build-macos  macOS-15: universal binaries (arm64 + x86_64), die Flutter-App,
 #            beides zu Humanitl.app, ad-hoc signiert, als gestaltetes .dmg und
 #            als .zip (HUM-326, packaging/macos).
@@ -28,8 +31,9 @@
 # Vorher stand hier das Geruest aus HUM-002 fuer alle `v*`-Tags (guard, make
 # check, leerer package-Schritt, Draft-Release ohne Dateien). Der Trigger ist
 # jetzt auf v0.0.* verengt: Ein Tag v0.1.0 loest hier nichts aus. 0.1.0 ist
-# HUM-060 (backlog/sprint-5.md) mit VERSION-Datei, Changelog, minisign und
-# AppImage; das Issue erweitert diese Datei, statt eine zweite anzulegen.
+# HUM-060 (backlog/sprint-5.md) mit VERSION-Datei, Changelog und minisign;
+# das Issue erweitert diese Datei, statt eine zweite anzulegen. Das AppImage
+# liegt seit HUM-335 schon den 0.0.x-Releases bei.
 #
 # Sicherheit: Tag-Name und Eingabe gelangen nur ueber `env:` in Skripte und
 # werden dort gegen ^0\.0\.N$ geprueft, bevor sie irgendwo anders stehen.
@@ -274,11 +278,14 @@ jobs:
           ./packaging/release/check-version.sh "$VERSION" "$RUNNER_TEMP/bin" \
             app/build/linux/x64/release/bundle
 
-      - name: Build the .deb and the archive
+      - name: Build the .deb, the AppImage and the archive
         run: |
           set -euo pipefail
           bundle=app/build/linux/x64/release/bundle
           ./packaging/deb/build-deb.sh "$VERSION" "$RUNNER_TEMP/bin" "$bundle" dist
+          # Dieselben Programme und dasselbe Bundle wie im .deb (HUM-335); das
+          # Werkzeug laedt das Skript selbst, auf Fassung und Pruefsumme gepinnt.
+          ./packaging/appimage/build-appimage.sh "$VERSION" "$RUNNER_TEMP/bin" "$bundle" dist
           ./packaging/release/build-tarball.sh "$VERSION" "$RUNNER_TEMP/bin" "$bundle" dist
           ./packaging/release/checksums.sh dist
           dpkg-deb --info "dist/humanitl_${VERSION}_amd64.deb"
@@ -311,6 +318,30 @@ jobs:
           # Zwei Wochen genuegen fuer einen Probelauf; das Release selbst
           # haelt seine Dateien auf GitHub.
           retention-days: 14
+
+  check-appimage:
+    name: check-appimage
+    needs: [guard, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Ohne Container: check-appimage.sh startet das Bild mit
+    # --appimage-extract-and-run, braucht also kein FUSE, und schreibt nur in ein
+    # Wegwerf-HOME. Installiert wird nichts (HUM-335).
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.guard.outputs.artifact }}
+          path: artefacts
+      - name: The AppImage runs and plans the service on its copy
+        run: |
+          set -euo pipefail
+          image="artefacts/dist/Humanitl-${VERSION}-x86_64.AppImage"
+          (cd artefacts/dist && sha256sum -c SHA256SUMS --ignore-missing)
+          chmod +x "$image"
+          ./packaging/appimage/check-appimage.sh "$image" "$VERSION"
 
   check-deb:
     name: check-deb
@@ -495,9 +526,9 @@ jobs:
 
   release:
     name: release
-    needs: [guard, build, check-deb, build-macos, check-macos]
-    # Nur ein Tag legt ein Release an. Der Probelauf endet mit check-deb und
-    # check-macos.
+    needs: [guard, build, check-deb, check-appimage, build-macos, check-macos]
+    # Nur ein Tag legt ein Release an. Der Probelauf endet mit check-deb,
+    # check-appimage und check-macos.
     if: needs.guard.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -590,6 +621,7 @@ jobs:
             --title "Humanitl $VERSION" \
             --notes-file ../dist-meta/RELEASE_NOTES.md \
             "humanitl_${VERSION}_amd64.deb" \
+            "Humanitl-${VERSION}-x86_64.AppImage" \
             "humanitl-${VERSION}-linux-x86_64.tar.gz" \
             "Humanitl-${VERSION}-macos.dmg" \
             "Humanitl-${VERSION}-macos.zip" \

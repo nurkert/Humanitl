@@ -170,6 +170,11 @@ const older = releases.filter((release) => release !== current).slice(0, 6);
                         <Icon name="copy" />
                       </button>
                     </div>
+                    {'script' in info && (
+                      <p class="panel__note">
+                        <a href="https://apt.nurkert.de/install/humanitl">{info.script}</a>
+                      </p>
+                    )}
                   </div>
                 </article>
               );
