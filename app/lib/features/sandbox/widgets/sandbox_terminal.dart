@@ -38,6 +38,7 @@ class SandboxTerminal extends ConsumerStatefulWidget {
     this.focusOnMount = false,
     this.catchUp = false,
     this.floating = false,
+    this.headerInset = EdgeInsets.zero,
     super.key,
   });
 
@@ -49,6 +50,9 @@ class SandboxTerminal extends ConsumerStatefulWidget {
 
   /// Whether the host is the floating window (`TerminalPane.floating`).
   final bool floating;
+
+  /// The room the banner leaves on its sides (`TerminalPane.headerInset`).
+  final EdgeInsets headerInset;
 
   @override
   ConsumerState<SandboxTerminal> createState() => _SandboxTerminalState();
@@ -186,6 +190,7 @@ class _SandboxTerminalState extends ConsumerState<SandboxTerminal> {
         shellId: active,
         focusOnMount: widget.focusOnMount || switched,
         floating: widget.floating,
+        headerInset: widget.headerInset,
         tabs: withTabs ? const TerminalTabStrip() : null,
         // With the strip only: without further shells there is nothing to
         // say, and the terminal keeps the tree it had before HUM-314.

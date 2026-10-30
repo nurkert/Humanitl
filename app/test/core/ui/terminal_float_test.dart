@@ -33,13 +33,13 @@ const Rect region = Rect.fromLTWH(0, 0, 1500, 800);
 const double inset = 12;
 
 FloatPlacement? place({
-  FloatCorner corner = FloatCorner.bottomRight,
+  FloatAnchor anchor = FloatAnchor.bottomRight,
   Size size = terminalFloatDefaultSize,
   List<Rect> keepClear = const <Rect>[],
   Rect within = region,
 }) => placeFloatingTerminal(
   region: within,
-  geometry: TerminalFloatGeometry(corner: corner, size: size),
+  geometry: TerminalFloatGeometry(anchor: anchor, size: size),
   keepClear: keepClear,
   inset: inset,
 );
@@ -48,7 +48,7 @@ void main() {
   group('placeFloatingTerminal', () {
     test('the_chosen_corner_at_the_chosen_size_when_nothing_is_in_the_way', () {
       final FloatPlacement? placed = place();
-      expect(placed?.corner, FloatCorner.bottomRight);
+      expect(placed?.anchor, FloatAnchor.bottomRight);
       expect(
         placed?.rect,
         const Rect.fromLTWH(1500 - 12 - 480, 800 - 12 - 300, 480, 300),
@@ -56,14 +56,14 @@ void main() {
     });
 
     test('the_default_corner_is_bottom_right', () {
-      expect(const TerminalFloatGeometry().corner, FloatCorner.bottomRight);
+      expect(const TerminalFloatGeometry().anchor, FloatAnchor.bottomRight);
     });
 
     test('a_region_to_keep_clear_in_the_corner_shrinks_it_first', () {
       // Eine Aktionsleiste links von der Ecke: 480 breit stößt an, 320 nicht.
       const Rect actionBar = Rect.fromLTWH(400, 700, 700, 100);
       final FloatPlacement? placed = place(keepClear: <Rect>[actionBar]);
-      expect(placed?.corner, FloatCorner.bottomRight);
+      expect(placed?.anchor, FloatAnchor.bottomRight);
       expect(placed?.rect.size, terminalFloatMinSize);
       expect(placed!.rect.overlaps(actionBar), isFalse);
     });
@@ -73,20 +73,20 @@ void main() {
       // Größe: dann die Ecke daneben, unten links.
       const Rect blocked = Rect.fromLTWH(700, 400, 800, 400);
       final FloatPlacement? placed = place(keepClear: <Rect>[blocked]);
-      expect(placed?.corner, FloatCorner.bottomLeft);
+      expect(placed?.anchor, FloatAnchor.bottomLeft);
       expect(placed!.rect.overlaps(blocked), isFalse);
     });
 
     test('the_order_is_beside_then_above_then_across', () {
       // Unten links und unten rechts besetzt: dann oben rechts.
       const List<Rect> bottom = <Rect>[Rect.fromLTWH(0, 400, 1500, 400)];
-      expect(place(keepClear: bottom)?.corner, FloatCorner.topRight);
+      expect(place(keepClear: bottom)?.anchor, FloatAnchor.topRight);
       // Dazu die rechte Hälfte oben: bleibt oben links.
       const List<Rect> more = <Rect>[
         Rect.fromLTWH(0, 400, 1500, 400),
         Rect.fromLTWH(700, 0, 800, 400),
       ];
-      expect(place(keepClear: more)?.corner, FloatCorner.topLeft);
+      expect(place(keepClear: more)?.anchor, FloatAnchor.topLeft);
     });
 
     test('nowhere_free_means_no_place_at_all', () {
@@ -111,23 +111,153 @@ void main() {
     });
   });
 
-  group('FloatCorner.nearest', () {
-    test('the_quadrant_decides', () {
+  // --- HUM-352 ---------------------------------------------------------------
+
+  group('FloatAnchor', () {
+    /// Das Fenster in Vorgabegröße an [anchor].
+    Rect at(FloatAnchor anchor) =>
+        terminalFloatRectAt(region, anchor, terminalFloatDefaultSize, inset);
+
+    test('nine_anchors_on_a_grid_of_three', () {
+      expect(FloatAnchor.values, hasLength(9));
       expect(
-        FloatCorner.nearest(region, const Offset(10, 10)),
-        FloatCorner.topLeft,
+        FloatAnchor.values.map((FloatAnchor a) => (a.x, a.y)).toSet(),
+        hasLength(9),
+      );
+    });
+
+    test('every_anchor_lies_inside_the_room_with_the_same_inset', () {
+      final Rect room = region.deflate(inset);
+      for (final FloatAnchor anchor in FloatAnchor.values) {
+        final Rect rect = at(anchor);
+        expect(room.contains(rect.topLeft), isTrue, reason: '$anchor');
+        expect(room.contains(rect.bottomRight - const Offset(1, 1)), isTrue);
+      }
+      expect(at(FloatAnchor.center).center, region.center);
+      expect(at(FloatAnchor.topCenter).top, inset);
+      expect(at(FloatAnchor.bottomCenter).bottom, region.bottom - inset);
+      expect(at(FloatAnchor.centerLeft).left, inset);
+      expect(at(FloatAnchor.centerRight).right, region.right - inset);
+    });
+
+    test('a_calm_drop_takes_the_nearest_anchor', () {
+      for (final FloatAnchor anchor in FloatAnchor.values) {
+        // Ein Stück daneben losgelassen, ohne Schwung.
+        final Rect dropped = at(anchor).shift(const Offset(30, -20));
+        expect(
+          FloatAnchor.release(region, dropped, inset, const Offset(100, 0)),
+          anchor,
+          reason: 'below the fling speed',
+        );
+      }
+    });
+
+    test('a_throw_takes_the_neighbour_in_its_direction', () {
+      // Von unten rechts kurz nach links geworfen: unten Mitte, nicht zurück.
+      final Rect barely = at(FloatAnchor.bottomRight)
+          .shift(const Offset(-40, 0));
+      expect(
+        FloatAnchor.release(region, barely, inset, const Offset(-1500, 0)),
+        FloatAnchor.bottomCenter,
       );
       expect(
-        FloatCorner.nearest(region, const Offset(1400, 10)),
-        FloatCorner.topRight,
+        FloatAnchor.release(region, barely, inset, const Offset(0, -1500)),
+        FloatAnchor.centerRight,
       );
       expect(
-        FloatCorner.nearest(region, const Offset(10, 700)),
-        FloatCorner.bottomLeft,
+        FloatAnchor.release(region, barely, inset, const Offset(-1000, -1000)),
+        FloatAnchor.center,
+      );
+      // Gegen den Rand wirft es nicht über das Raster hinaus.
+      expect(
+        FloatAnchor.release(region, barely, inset, const Offset(1500, 0)),
+        FloatAnchor.bottomRight,
+      );
+    });
+
+    test('a_middle_falls_back_to_the_corners_from_bottom_right', () {
+      // Die Mitte ist besetzt: Ausweichen in die Ecken, nie in eine andere
+      // Mitte.
+      final FloatPlacement? placed = place(
+        anchor: FloatAnchor.center,
+        keepClear: <Rect>[at(FloatAnchor.center)],
+      );
+      expect(placed?.anchor, FloatAnchor.bottomRight);
+      expect(
+        place(anchor: FloatAnchor.topCenter)?.anchor,
+        FloatAnchor.topCenter,
+      );
+    });
+
+    test('the_grip_sits_across_from_the_anchor', () {
+      expect(
+        (FloatAnchor.bottomRight.gripX, FloatAnchor.bottomRight.gripY),
+        (-1, -1),
       );
       expect(
-        FloatCorner.nearest(region, const Offset(1400, 700)),
-        FloatCorner.bottomRight,
+        (FloatAnchor.bottomLeft.gripX, FloatAnchor.bottomLeft.gripY),
+        (1, -1),
+      );
+      expect((FloatAnchor.topLeft.gripX, FloatAnchor.topLeft.gripY), (1, 1));
+      expect((FloatAnchor.center.gripX, FloatAnchor.center.gripY), (1, 1));
+      expect(
+        (FloatAnchor.bottomCenter.gripX, FloatAnchor.bottomCenter.gripY),
+        (1, -1),
+      );
+    });
+  });
+
+  group('growTerminalFloat', () {
+    Size grow(
+      FloatAnchor anchor,
+      Size by, {
+      List<Rect> keepClear = const <Rect>[],
+    }) => growTerminalFloat(
+      region: region,
+      anchor: anchor,
+      from: terminalFloatDefaultSize,
+      by: by,
+      keepClear: keepClear,
+      inset: inset,
+    );
+
+    test('the_largest_size_is_the_same_at_every_anchor', () {
+      final Set<Size> largest = <Size>{
+        for (final FloatAnchor anchor in FloatAnchor.values)
+          grow(anchor, const Size(5000, 5000)),
+      };
+      expect(largest, <Size>{terminalFloatMaxIn(region.size)});
+    });
+
+    test('it_stops_at_the_edge_of_a_region_to_keep_clear', () {
+      // Eine Leiste links neben dem Fenster unten rechts; ein großer Schritt
+      // endet an ihrer Kante statt vor ihr.
+      final Rect window = terminalFloatRectAt(
+        region,
+        FloatAnchor.bottomRight,
+        terminalFloatDefaultSize,
+        inset,
+      );
+      final Rect bar = Rect.fromLTRB(0, 700, window.left - 100, 800);
+      final Size grown = grow(
+        FloatAnchor.bottomRight,
+        const Size(300, 0),
+        keepClear: <Rect>[bar],
+      );
+      expect(grown.width, closeTo(terminalFloatDefaultSize.width + 100, 0.1));
+      final Rect after = terminalFloatRectAt(
+        region,
+        FloatAnchor.bottomRight,
+        grown,
+        inset,
+      );
+      expect(after.overlaps(bar), isFalse);
+    });
+
+    test('shrinking_is_always_taken_down_to_the_minimum', () {
+      expect(
+        grow(FloatAnchor.topLeft, const Size(-5000, -5000)),
+        terminalFloatMinSize,
       );
     });
   });
@@ -144,7 +274,7 @@ void main() {
     test('corner_and_size_survive_a_restart', () {
       final (ProviderContainer first, String path) = containerWith(null);
       first.read(terminalFloatProvider.notifier)
-        ..snapTo(FloatCorner.topLeft)
+        ..snapTo(FloatAnchor.topLeft)
         ..resize(const Size(600, 400));
       final Map<String, Object?> stored =
           jsonDecode(File(path).readAsStringSync()) as Map<String, Object?>;
@@ -158,7 +288,7 @@ void main() {
       expect(
         second.read(terminalFloatProvider),
         const TerminalFloatGeometry(
-          corner: FloatCorner.topLeft,
+          anchor: FloatAnchor.topLeft,
           size: Size(600, 400),
         ),
       );
@@ -235,12 +365,12 @@ void main() {
     const Size strip = Size(240, 28);
 
     FloatPlacement? placeStrip({
-      FloatCorner corner = FloatCorner.bottomRight,
+      FloatAnchor anchor = FloatAnchor.bottomRight,
       List<Rect> keepClear = const <Rect>[],
       Rect within = region,
     }) => placeTerminalStrip(
       region: within,
-      corner: corner,
+      anchor: anchor,
       size: strip,
       keepClear: keepClear,
       inset: inset,
@@ -252,7 +382,7 @@ void main() {
       const Rect taken = Rect.fromLTWH(0, 0, 1200, 800);
       expect(place(keepClear: <Rect>[taken]), isNull);
       final FloatPlacement? placed = placeStrip(keepClear: <Rect>[taken]);
-      expect(placed?.corner, FloatCorner.bottomRight);
+      expect(placed?.anchor, FloatAnchor.bottomRight);
       expect(
         placed?.rect,
         const Rect.fromLTWH(1500 - 12 - 240, 800 - 12 - 28, 240, 28),
@@ -264,15 +394,15 @@ void main() {
       // Unten rechts besetzt: der Streifen geht wie das Fenster daneben.
       const Rect bottomRight = Rect.fromLTWH(1000, 600, 500, 200);
       expect(
-        placeStrip(keepClear: <Rect>[bottomRight])?.corner,
-        FloatCorner.bottomLeft,
+        placeStrip(keepClear: <Rect>[bottomRight])?.anchor,
+        FloatAnchor.bottomLeft,
       );
       expect(
         placeStrip(
-          corner: FloatCorner.topLeft,
+          anchor: FloatAnchor.topLeft,
           keepClear: const <Rect>[Rect.fromLTWH(0, 0, 400, 100)],
-        )?.corner,
-        FloatCorner.topRight,
+        )?.anchor,
+        FloatAnchor.topRight,
       );
     });
 

@@ -57,6 +57,7 @@ Every duration, every curve and every distance comes from `HMotion`. A `Duration
 | Sidebar expands or collapses | "Here are the names" or "back to only the symbols" | 180 ms | `enter` open, `exit` closed | `HMotion.arrive` | Width of the icon rail from 48 to 200 px; the label is laid out at full width, only uncovered, and faded in from half width. Under reduced motion the width jumps, the fade-in keeps its duration (2.10, HUM-254). |
 | Caution tape runs | "Here is the barrier" or "the search is running" | 1200 ms per period, endless, as long as the cause persists | linear | `HMotion.cautionTape`, `HMotion.cautionTapePeriod` | Stripe pattern sideways by 16 px per period; the widget itself stands still. Under reduced motion the stripes stand still (3.6, HUM-260). |
 | Sheet slides in from the right | "This belongs to what stands on the left" | 180 ms | `enter` | `HMotion.arrive` | 8 px from the right (`HMotion.arriveOffset`) plus fade-in; the background stays put |
+| Floating terminal snaps to its anchor | "It holds here now" | 180 ms | `enter` | `HMotion.arrive` | Only the place, from where it was let go to its anchor; a drop that also changes the size jumps, so the session is not resized in every frame. Under reduced motion it jumps (2.10, HUM-352). |
 | Modal appears | "You have to answer here first" | 180 ms | `enter` | `HMotion.arrive` | no path, only fade-in of the modal and dimming of the background; a modal that flies in claims a direction it does not have |
 | Command palette opens | "The manual is here" | one frame | — | — | no motion. Whoever calls it is already typing. |
 | Section change (`Ctrl+1..5`) and tab change | "I am somewhere else now" | one frame | — | — | no cross-fade in the `IndexedStack`, no shift. The change is navigation, not an event. |
@@ -572,14 +573,21 @@ floats. A terminal that had the keyboard in the window keeps it in the pane;
 leaving the page leaves the keyboard to the section asked for. An agent that
 ends while the page shows docks the terminal for good. The window
 has a title bar to drag it by, a button back to the Sandbox section and a
-close button (the same chord); it snaps to the corner of the quadrant it is
-let go in, a grip in the inner corner resizes it between 320 x 200 and 60 %
-of the sections (at most 960 x 640), and corner and size survive a restart in
-the state file of the interface. The default corner is bottom right: on
+close button (the same chord); it snaps to one of nine anchors (the
+corners, the middles of the edges, the centre, HUM-352): let go calmly, to
+the nearest; thrown, to the next anchor in the direction of the throw, so a
+short flick from a corner reaches its neighbour instead of falling back. A
+drag that is cancelled after it moved counts as a calm drop and keeps the
+nearest anchor; a glide that would cross a region to keep clear jumps. A
+grip in the corner across from the anchor resizes it between 320 x 200 and
+60 % of the sections (at most 960 x 640), equally at every anchor, and anchor
+and size survive a restart in the state file of the interface. The default corner is bottom right: on
 Intercept that is the bottom of the context pane, the one corner without a
 decision. **It never covers what must stay clickable.** The queue with its
 rows and notices, the bar with Allow and Block, the notices of the shell, a
 sheet and a modal mark themselves as regions to keep clear (`HKeepClear`);
+the bar only while a request waits, and the notices inside the window never
+(HUM-352);
 the window takes the chosen corner at the chosen size, else the smallest
 size, else the corner beside, above or across. **Without a free corner it
 shrinks to a slim title strip** (HUM-315, `HSize.terminalStrip`, 240 x 28):
