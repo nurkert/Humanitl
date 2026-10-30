@@ -152,8 +152,9 @@ pub struct ServerList {
 /// Prüft den Namen eines Eintrags.
 ///
 /// Dieselbe Form wie der Name eines Schlüssels im Schlüsselbund
-/// (`secret-service:humanitl/<name>`), weil ein neuer Eintrag seinen
-/// Schlüssel unter seinem Namen ablegt.
+/// (`secret-service:humanitl/<name>`, unter macOS
+/// `keychain:humanitl/<name>`), weil ein neuer Eintrag seinen Schlüssel unter
+/// seinem Namen ablegt.
 ///
 /// # Errors
 ///

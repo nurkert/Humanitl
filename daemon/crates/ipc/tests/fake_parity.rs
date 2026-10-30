@@ -90,7 +90,8 @@ fn real() -> (IpcServer, tempfile::TempDir) {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     // Die Pfade liegen im selben Wegwerf-Verzeichnis: `LlmServers` und
     // `LlmKey` lesen `config.toml`, und kein Test liest die des Menschen
-    // (HUM-289). Ohne `PATH` findet der Speicher kein `secret-tool`.
+    // (HUM-289). Ohne `PATH` nimmt der Speicher keinen Schlüsselbund, weder
+    // `secret-tool` noch den von macOS.
     let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([
         ("HOME", dir.path().display().to_string()),
         (

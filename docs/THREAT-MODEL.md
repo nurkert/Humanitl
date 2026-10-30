@@ -155,7 +155,9 @@ Traffic is recorded and scanned (`LLM_005`; every finding stays on its request, 
 repeats only for findings new in the run or last warned about 15 minutes or more ago; an expired
 or evicted fingerprint warns again, HUM-354), and with
 `hold.hard_block_checksum_secrets` a checksum-confirmed secret is blocked (`HOLD_004`). The access key of a provider (HUM-140) lives in
-the system keyring and reaches the agent only as a sandbox file; it is masked in the recording and a
+the system keyring (on macOS the login Keychain, HUM-349; the Seatbelt profile reaches no
+`securityd` and no `~/Library/Keychains`, so the agent cannot ask for it) and reaches the agent
+only as a sandbox file; it is masked in the recording and a
 finding everywhere except in `Authorization` towards `llm.endpoint`. With several saved model
 servers (HUM-289) each has its own keyring item, and only the active server's origin gets a key and
 is the passthrough of the next session; a probe sends a saved server's key only to that server's own
@@ -542,6 +544,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-30 | K-19 to K-23: macOS with Seatbelt; shared loopback, no PID namespace, paths instead of descriptors, a deprecated interface, host-local side channels | HUM-323, HUM-327, HUM-331 |
 
 | 2026-10-30 | K-24: the disposable sandbox, an overlay over the read-only project with the upper layer in RAM and a size cap; changes reach the project only through a checked apply | HUM-350 |
+| 2026-10-30 | K-02: on macOS the provider access key lives in the login Keychain through `/usr/bin/security`, over `stdin` and read back; same class as the Secret Service: readable by every process of the account outside the sandbox, out of reach of the agent | HUM-349 |
 | 2026-10-30 | K-24: overwriting a conflict is confirmed per change (`overwrite_ids`); a confirmation for one file never covers another | HUM-351 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets

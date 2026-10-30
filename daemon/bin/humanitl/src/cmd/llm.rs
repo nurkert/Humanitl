@@ -122,7 +122,7 @@ async fn key(ctx: &Context, server: Option<&str>, cmd: &KeyCmd) -> Result<u8, Fa
         .map_err(|status| Failure::new(status_diagnostic(&status, "LlmKey")))?
         .into_inner();
 
-    let store = store_name(status.store);
+    let store = store_name(status.store, &status.key_ref);
     if ctx.render.is_json() {
         ctx.render.value(&json!({
             "set": status.set,
@@ -153,8 +153,12 @@ async fn key(ctx: &Context, server: Option<&str>, cmd: &KeyCmd) -> Result<u8, Fa
 }
 
 /// Der Ort eines Schlüssels in einem Wort.
-fn store_name(store: i32) -> &'static str {
+///
+/// Der Wert auf dem Draht unterscheidet die Schlüsselbünde nicht; das tut der
+/// Verweis (HUM-349).
+fn store_name(store: i32, key_ref: &str) -> &'static str {
     match v1::LlmKeyStore::try_from(store) {
+        Ok(v1::LlmKeyStore::SecretService) if key_ref.starts_with("keychain:") => "keychain",
         Ok(v1::LlmKeyStore::SecretService) => "secret-service",
         Ok(v1::LlmKeyStore::File) => "file",
         _ => "none",
@@ -532,8 +536,21 @@ fn server_json(result: &v1::DiscoverResult) -> Value {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use super::{models, product, server_json};
+    use super::{models, product, server_json, store_name};
     use humanitl_ipc::v1;
+
+    /// Der Draht kennt nur „Schlüsselbund"; die Ausgabe nennt den richtigen
+    /// (HUM-349).
+    #[test]
+    fn the_store_name_follows_the_reference() {
+        let keyring = v1::LlmKeyStore::SecretService as i32;
+        assert_eq!(store_name(keyring, "keychain:humanitl/llm"), "keychain");
+        assert_eq!(
+            store_name(keyring, "secret-service:humanitl/llm"),
+            "secret-service"
+        );
+        assert_eq!(store_name(v1::LlmKeyStore::File as i32, "file:llm"), "file");
+    }
 
     fn result() -> v1::DiscoverResult {
         v1::DiscoverResult {

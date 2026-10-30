@@ -1855,10 +1855,11 @@ message ProbeLlmResponse {
 // Wo ein Zugangsschluessel liegt (HUM-140).
 enum LlmKeyStore {
   LLM_KEY_STORE_UNSPECIFIED = 0;
-  // Im Schluesselbund des Systems ueber den Secret Service (`libsecret`).
+  // Im Schluesselbund des Systems: ueber den Secret Service (`libsecret`),
+  // unter macOS im Keychain. Welcher, sagt `key_ref` (HUM-349).
   LLM_KEY_STORE_SECRET_SERVICE = 1;
   // In einer Datei mit `0600` unter `$XDG_DATA_HOME/humanitl/keys`, wenn der
-  // Secret Service auf dieser Maschine nicht antwortet.
+  // Schluesselbund auf dieser Maschine nicht antwortet.
   LLM_KEY_STORE_FILE = 2;
 }
 

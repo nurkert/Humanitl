@@ -129,7 +129,7 @@ pub const OPEN: Gates<'static> = Gates {
 /// Beantwortet einen Auftrag an `LlmServers`.
 ///
 /// Blockiert: Es liest und schreibt `config.toml` und startet zum Löschen
-/// eines Schlüssels `secret-tool`. Der Dienst ruft es in
+/// eines Schlüssels das Werkzeug des Schlüsselbunds. Der Dienst ruft es in
 /// [`tokio::task::spawn_blocking`].
 ///
 /// Der ganze Ablauf steht unter [`servers::lock`]: das Lesen des Stands, das
@@ -222,10 +222,7 @@ fn change(
         // Der Server ist schon weg; der Schlüssel blieb. Das ist kein
         // Fehlschlag des Auftrags, aber der Mensch soll wissen, was liegt.
         left.severity = Severity::Warning;
-        left.fix = Some(FixAction::CopyCommand(format!(
-            "secret-tool clear service humanitl account {}",
-            key_ref.name()
-        )));
+        left.fix = keys.manual_clear(&key_ref);
         notes.push(convert::diagnostic_to_proto(&left));
     }
     Ok(listing(&servers::list(&table), notes))

@@ -134,8 +134,8 @@ fn llm_is_well_formed(llm: &LlmConfig) -> Result<(), Diagnostic> {
         return Err(out_of_range(
             "llm.api_key_ref",
             &format!("{reference:?}"),
-            "secret-service:humanitl/NAME or file:NAME, NAME of 1 to 32 characters a-z, 0-9, - \
-             and _",
+            "secret-service:humanitl/NAME, keychain:humanitl/NAME or file:NAME, NAME of 1 to 32 \
+             characters a-z, 0-9, - and _",
         ));
     }
     // Die Einträge unter `llm.servers` werden geprüft wie die flachen
@@ -158,8 +158,8 @@ fn llm_is_well_formed(llm: &LlmConfig) -> Result<(), Diagnostic> {
             return Err(out_of_range(
                 &format!("llm.servers.{name}.api_key_ref"),
                 &format!("{reference:?}"),
-                "secret-service:humanitl/NAME or file:NAME, NAME of 1 to 32 characters a-z, \
-                 0-9, - and _",
+                "secret-service:humanitl/NAME, keychain:humanitl/NAME or file:NAME, NAME of 1 to \
+                 32 characters a-z, 0-9, - and _",
             ));
         }
     }
