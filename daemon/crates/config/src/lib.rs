@@ -84,7 +84,7 @@ pub use crate::model::{
     TerminalConfig, Theme, TlsConfig, UiConfig, WorkMode,
 };
 pub use crate::origin::{Origin, Resolved};
-pub use crate::paths::{APP_DIR, DIR_MODE, FILE_MODE, Paths, RuntimeDir};
+pub use crate::paths::{APP_DIR, DIR_MODE, FILE_MODE, MAC_APP_DIR, Paths, RuntimeDir};
 pub use crate::pending::{PENDING_ISSUE_KEY, Readiness};
 pub use crate::profile::{
     BUILTIN_PROFILES, ConfigOverlay, DEFAULT_PROFILE, PROFILE_KEYS, PROFILE_RULES_SECTION, Profile,

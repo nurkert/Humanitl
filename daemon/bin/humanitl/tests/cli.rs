@@ -1146,7 +1146,12 @@ fn daemon_status_and_flows_list_speak_to_a_running_daemon() {
     let info: serde_json::Value = serde_json::from_str(&stdout(&status)).expect("JSON");
     assert_eq!(info["proto_major"], 1);
     assert!(info["daemon_version"].as_str().is_some());
-    assert_eq!(info["unit"], "active");
+    // Unter macOS antwortet launchd statt des falschen `systemctl` (HUM-314).
+    if cfg!(target_os = "linux") {
+        assert_eq!(info["unit"], "active");
+    } else {
+        assert!(info["unit"].is_string(), "{info}");
+    }
     // Die aufgezeichnete Sitzung des Fakes hält eine laufende Sandbox, und
     // `Sandbox(Status)` sagt es; `postinst` startet diesen Daemon nicht neu
     // (HUM-284).
@@ -2433,6 +2438,8 @@ fn unit_path(harness: &Harness) -> PathBuf {
     harness.path("config").join("systemd/user").join(UNIT_FILE)
 }
 
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_writes_one_unit_into_xdg_config_home() {
     let harness = Harness::new();
@@ -2481,6 +2488,8 @@ fn daemon_install_writes_one_unit_into_xdg_config_home() {
     );
 }
 
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_shows_the_unit_before_it_writes_it() {
     let harness = Harness::new();
@@ -2513,6 +2522,8 @@ fn daemon_install_shows_the_unit_before_it_writes_it() {
     assert!(text.contains("WantedBy=default.target"), "{text}");
 }
 
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_twice_writes_nothing_the_second_time() {
     let harness = Harness::new();
@@ -2530,6 +2541,8 @@ fn daemon_install_twice_writes_nothing_the_second_time() {
     assert_eq!(second["action"], "unchanged");
 }
 
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_refuses_a_unit_it_did_not_write() {
     let harness = Harness::new();
@@ -2554,6 +2567,8 @@ fn daemon_install_refuses_a_unit_it_did_not_write() {
     );
 }
 
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_without_systemctl_leaves_the_unit_and_starts_nothing() {
     let harness = Harness::new();
@@ -2695,6 +2710,8 @@ fn wants_link(harness: &Harness) -> PathBuf {
 /// `DAEMON_008`, die Unit-Datei verschwaende — und der Dienst startete beim
 /// naechsten Anmelden trotzdem, weil der Verweis im `default.target.wants`
 /// stehen bliebe.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn a_failed_enable_takes_the_wants_link_back_as_well() {
     let harness = Harness::new();
@@ -2752,6 +2769,8 @@ fn a_failed_enable_takes_the_wants_link_back_as_well() {
 /// `stop` traefe dann den Daemon, den der Mensch vorher selbst laufen hatte,
 /// und etwas anzuhalten, das man nicht gestartet hat, ist schlimmer als ein
 /// Rest im Gedaechtnis von systemd.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn a_failed_reload_stops_nothing() {
     use std::os::unix::fs::PermissionsExt as _;
@@ -2803,6 +2822,8 @@ fn a_failed_reload_stops_nothing() {
 /// Wer den Dienst schon vorher aktiviert hatte, behaelt die Aktivierung, auch
 /// wenn `daemon install` scheitert. Und die aeltere eigene Unit bekommt ihren
 /// Inhalt zurueck, statt zu verschwinden.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn a_failed_enable_keeps_an_enablement_that_was_there_before() {
     let harness = Harness::new();
@@ -2845,6 +2866,8 @@ fn a_failed_enable_keeps_an_enablement_that_was_there_before() {
 /// Ein zweiter `daemon install` schreibt nichts (`unchanged`). Sagte die
 /// Ankuendigung trotzdem „writes <pfad>", stuende auf `stderr` ein Satz, den
 /// derselbe Lauf gleich widerlegt.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn the_announcement_of_a_second_install_says_that_nothing_is_written() {
     let harness = Harness::new();
@@ -2889,6 +2912,8 @@ fn the_announcement_of_a_second_install_says_that_nothing_is_written() {
 /// `DAEMON_005` heisst: Die Datei gehoert jemand anderem und wird nicht
 /// angefasst. Ein „humanitl daemon install writes <pfad>" davor waere die
 /// Sorte Satz, gegen die dieses Produkt gebaut ist.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn a_foreign_unit_is_refused_without_announcing_a_write() {
     let harness = Harness::new();
@@ -3764,6 +3789,8 @@ fn logging_systemctl(harness: &Harness, name: &str) -> (PathBuf, PathBuf) {
 /// Socket-Unit bringt nur das Paket mit, und dann schreibt `daemon install`
 /// gar nichts, sondern aktiviert beide (HUM-053, `unit::SystemUnits`). Dieser
 /// Lauf hat kein Paket, der Test hält den ersten Weg fest.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_writes_units_and_calls_systemctl() {
     let harness = Harness::new();
@@ -3814,6 +3841,8 @@ fn daemon_install_writes_units_and_calls_systemctl() {
 /// Der Daemon sucht den Katalog unter `<exe>/../../share/humanitl/catalog` und
 /// das Profil in einem Vorfahren unter `profiles/sandbox`; beides muss deshalb
 /// relativ zu `bin/humanitld` in der Kopie liegen, nicht nur irgendwo darin.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_appimage_copies_binaries() {
     let harness = Harness::new();
@@ -3902,6 +3931,8 @@ fn daemon_install_appimage_copies_binaries() {
 /// Fehlt im `AppImage` der Katalog oder das Profil, wird nichts kopiert und
 /// keine Unit geschrieben: Der kopierte Daemon liefe sonst mit leerem Katalog
 /// oder ohne Sandbox-Profil (HUM-165).
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_appimage_without_catalog_or_profile_copies_nothing() {
     for missing in [
@@ -3952,6 +3983,8 @@ fn daemon_install_appimage_without_catalog_or_profile_copies_nothing() {
 /// `--bin-dir .` aus dem Verzeichnis `bin/` heraus: Katalog und Profil liegen
 /// im Verzeichnis darüber, nicht unter dem lexikalischen Elternteil `""` von
 /// `.` (HUM-165, Review).
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_appimage_resolves_a_relative_bin_dir() {
     let harness = Harness::new();
@@ -4037,6 +4070,8 @@ fn daemon_status_exit_2_when_down() {
 }
 
 /// Ohne Nutzersitzung liest `daemon logs` kein Journal und sagt, warum.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_logs_without_a_user_session_is_daemon_010() {
     let harness = Harness::new();
@@ -4053,6 +4088,8 @@ fn daemon_logs_without_a_user_session_is_daemon_010() {
 }
 
 /// `daemon logs` reicht seine Argumente an `journalctl` durch.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_logs_hands_its_arguments_to_journalctl() {
     let harness = Harness::new();
@@ -4495,6 +4532,8 @@ fn audit_export_that_breaks_leaves_no_file_behind() {
 
 /// Ohne Nutzersitzung schreibt `daemon install` nichts und nennt den einen
 /// Fix, der hilft.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_without_a_user_session_writes_nothing() {
     let harness = Harness::new();
@@ -4526,6 +4565,8 @@ fn daemon_install_without_a_user_session_writes_nothing() {
 
 /// Findet `systemctl` den Bus der Sitzung nicht, ist das dieselbe fehlende
 /// Sitzung und kein `DAEMON_008` mit einem Vorschlag, der ebenso scheitert.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_without_a_session_bus_is_daemon_010() {
     let harness = Harness::new();
@@ -4545,6 +4586,8 @@ fn daemon_install_without_a_session_bus_is_daemon_010() {
 }
 
 /// Eine fremde Unit hält auch das Kopieren aus dem `AppImage` auf.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_appimage_copies_nothing_before_the_checks() {
     let harness = Harness::new();
@@ -4566,6 +4609,8 @@ fn daemon_install_appimage_copies_nothing_before_the_checks() {
 }
 
 /// Ein Verzeichnis der Fassung, das ein Verweis ist, bekommt keine Binaries.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_appimage_refuses_a_linked_lib_directory() {
     let harness = Harness::new();
@@ -4595,6 +4640,8 @@ fn daemon_install_appimage_refuses_a_linked_lib_directory() {
 
 /// `--print` unter `APPIMAGE` zeigt, was die Unit wirklich bekäme: den
 /// Verweis `current`, nie den Einhängepunkt.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_appimage_print_names_the_copy() {
     let harness = Harness::new();
@@ -4615,6 +4662,8 @@ fn daemon_install_appimage_print_names_the_copy() {
 }
 
 /// `daemon install --json` schreibt nichts auf `stderr`.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_json_keeps_stderr_empty() {
     let harness = Harness::new();
@@ -4636,6 +4685,8 @@ fn daemon_install_json_keeps_stderr_empty() {
 
 /// `daemon logs` übersetzt den Exit-Code von `journalctl`, und ein fehlendes
 /// `journalctl` ist ein fehlendes Paket.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_logs_maps_the_exit_code_and_names_a_missing_journalctl() {
     let harness = Harness::new();
@@ -4789,6 +4840,8 @@ fn config_set_refuses_when_an_older_error_would_mask_the_new_one() {
 
 /// Dieselbe Fassung ein zweites Mal: `current` zeigt immer auf eine
 /// vollständige Kopie, und die alte geht erst, wenn die neue steht.
+// systemd und AppImage; unter macOS richtet `daemon install` einen launchd-Agenten ein (HUM-314).
+#[cfg(target_os = "linux")]
 #[test]
 fn daemon_install_appimage_same_version_again_never_touches_the_live_copy() {
     let harness = Harness::new();
@@ -5846,5 +5899,52 @@ fn sandbox_run_refuses_a_stored_folder_moved_out_of_home_by_a_link() {
     assert!(
         text.contains("a symbolic link in its path leads elsewhere"),
         "{text}"
+    );
+}
+
+/// Unter macOS schreibt `daemon install --print` die Datei des launchd-Agenten
+/// nur aus, mit `--json` als ein Wert, und fasst launchd nicht an (HUM-314).
+#[cfg(target_os = "macos")]
+#[test]
+fn daemon_install_print_shows_the_launch_agent_on_macos() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let harness = Harness::new();
+    let bin = harness.path("bin");
+    std::fs::create_dir_all(&bin).expect("a bin directory");
+    let daemon = bin.join("humanitld");
+    std::fs::write(&daemon, "#!/bin/sh\n").expect("a stand-in daemon");
+    std::fs::set_permissions(&daemon, std::fs::Permissions::from_mode(0o755)).expect("0755");
+    let bin_dir = bin.to_string_lossy().into_owned();
+
+    let output = harness.run(["daemon", "install", "--print", "--bin-dir", &bin_dir]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(
+        text.contains("<string>dev.humanitl.humanitld</string>"),
+        "{text}"
+    );
+    assert!(text.contains("humanitld</string>"), "{text}");
+    assert!(
+        !harness
+            .path("home/Library/LaunchAgents/dev.humanitl.humanitld.plist")
+            .exists(),
+        "--print writes nothing"
+    );
+
+    let json = harness.run([
+        "--json",
+        "daemon",
+        "install",
+        "--print",
+        "--bin-dir",
+        &bin_dir,
+    ]);
+    let value = json_of(&json);
+    assert!(
+        value["contents"]
+            .as_str()
+            .is_some_and(|contents| contents.contains("<key>RunAtLoad</key>")),
+        "{value}"
     );
 }

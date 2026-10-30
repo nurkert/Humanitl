@@ -108,7 +108,7 @@ impl WriterHandle {
                  daemon so that the guarantee \"everything is recorded\" holds again",
             )
             .with_fix(FixAction::CopyCommand(
-                "systemctl --user restart humanitld".to_owned(),
+                humanitl_core::diagnostics::RESTART_DAEMON_COMMAND.to_owned(),
             ))
         })
     }

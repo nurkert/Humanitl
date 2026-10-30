@@ -59,6 +59,7 @@ use crate::render::{table, tick};
 
 mod agent_session;
 mod image;
+mod launchd;
 mod manager;
 mod packaged;
 mod retire;
@@ -123,6 +124,11 @@ const SESSION_ENV_KEYS: &[&str] = &[
 /// durchkommt, `DAEMON_010` und `DAEMON_012` für `logs`, `DAEMON_005`,
 /// `DAEMON_010` und `DAEMON_014` für `uninstall`.
 pub async fn run(ctx: &Context, cmd: &DaemonCmd) -> Result<u8, Failure> {
+    // Unter macOS ist der Dienst ein launchd-Agent, keine systemd-Unit
+    // (HUM-314).
+    if cfg!(target_os = "macos") {
+        return launchd::run(ctx, cmd).await;
+    }
     match cmd {
         DaemonCmd::Status => status(ctx).await,
         DaemonCmd::Install(args) => {
@@ -136,6 +142,7 @@ pub async fn run(ctx: &Context, cmd: &DaemonCmd) -> Result<u8, Failure> {
             }
         }
         DaemonCmd::Logs(args) => logs(ctx, args),
+        DaemonCmd::Restart => restart(ctx).await,
         DaemonCmd::Uninstall(args) => uninstall(ctx, args).await,
         DaemonCmd::RetireIfIdle => retire::retire_if_idle(ctx).await,
     }
@@ -1128,6 +1135,30 @@ fn logs(ctx: &Context, args: &LogsArgs) -> Result<u8, Failure> {
     })
 }
 
+/// `daemon restart` unter Linux: `systemctl --user restart humanitld`
+/// (HUM-314; unter macOS `launchd::run`).
+async fn restart(ctx: &Context) -> Result<u8, Failure> {
+    let Some(systemctl) = find_in_path(ctx, "systemctl") else {
+        return Err(Failure::new(no_user_session(
+            "systemctl is not in PATH, so there is no systemd user service to restart",
+        )));
+    };
+    systemctl_run(ctx, &systemctl, &["--user", "restart", unit::UNIT_NAME])
+        .await
+        .map_err(|why| {
+            Failure::new(
+                Diagnostic::builder(codes::DAEMON_008, Severity::Blocking)
+                    .why(why)
+                    .fix(FixAction::CopyCommand(
+                        "systemctl --user status humanitld".to_owned(),
+                    ))
+                    .build(),
+            )
+        })?;
+    ctx.render.line(&format!("restarted {}", unit::UNIT_NAME));
+    Ok(EXIT_OK)
+}
+
 /// `DAEMON_010`: Es gibt keine Nutzersitzung, in der ein Nutzerdienst lebt.
 fn no_user_session(why: &str) -> Diagnostic {
     Diagnostic::builder(codes::DAEMON_010, Severity::Blocking)
@@ -1668,6 +1699,9 @@ async fn status(ctx: &Context) -> Result<u8, Failure> {
 /// wurde, ist kein Fehler, und ein erfundenes `inactive` wäre eine falsche
 /// Auskunft über eine Unit, die niemand installiert hat.
 async fn is_active(ctx: &Context) -> Option<String> {
+    if cfg!(target_os = "macos") {
+        return launchd::is_active().await;
+    }
     let systemctl = find_in_path(ctx, "systemctl")?;
     let mut command = tokio::process::Command::new(systemctl);
     command
@@ -1704,7 +1738,7 @@ pub fn check_proto(info: &v1::Info) -> Result<(), Failure> {
                 info.proto_major, info.proto_minor
             ))
             .fix(FixAction::CopyCommand(
-                "systemctl --user restart humanitld".to_owned(),
+                humanitl_core::diagnostics::RESTART_DAEMON_COMMAND.to_owned(),
             ))
             .build(),
     ))
