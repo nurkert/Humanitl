@@ -474,6 +474,46 @@ impl BwrapBackend {
         if self.overlay.is_none() {
             return Ok(());
         }
+        self.overlay_support(profile, session)
+    }
+
+    /// Ob diese Sitzung eine Wegwerf-Sandbox bekommen kann (HUM-357):
+    /// `bwrap` kennt `--overlay`, die Sandbox sieht das Projekt schreibbar,
+    /// und `runtime_dir`, unter dem die obere Schicht entstünde, liegt auf
+    /// tmpfs. Dieselben Bedingungen, die der Start einer Wegwerf-Sandbox
+    /// prüft, ohne etwas anzulegen; die Auflösung von `sandbox.mode = "auto"`
+    /// fragt sie vor dem Start ([`crate::resolve_mode`]).
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_030` mit dem ersten fehlenden Teil und seinem Fix.
+    pub fn disposable_support(
+        &self,
+        profile: &SandboxProfile,
+        session: &SessionContext,
+        runtime_dir: &Path,
+    ) -> Result<(), Diagnostic> {
+        #[cfg(target_os = "linux")]
+        {
+            self.overlay_support(profile, session)?;
+            self.overlay_host_support()?;
+            crate::disposable::probe_layer_dir(&runtime_dir.join(crate::disposable::DISPOSABLE_DIR))
+        }
+        // Das Overlay gibt es nur unter Linux (HUM-350).
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (profile, session, runtime_dir);
+            Err(crate::disposable::unsupported())
+        }
+    }
+
+    /// Fassung von `bwrap` und Schreibbarkeit des Projekts; siehe
+    /// [`BwrapBackend::disposable_support`].
+    fn overlay_support(
+        &self,
+        profile: &SandboxProfile,
+        session: &SessionContext,
+    ) -> Result<(), Diagnostic> {
         if self.version < crate::disposable::MIN_OVERLAY_VERSION {
             return Err(Diagnostic::builder(SANDBOX_030, Severity::Blocking)
                 .why(format!(
@@ -487,15 +527,44 @@ impl BwrapBackend {
                 .build());
         }
         if profile.effective_work_mode(session.work_mode) != WorkMode::Rw {
+            return Err(read_only_work(profile, session));
+        }
+        Ok(())
+    }
+
+    /// Was der Rechner für das Overlay können muss, über `bwrap` hinaus
+    /// (HUM-357): ein Kernel, der overlayfs ohne Rechte einhängt, und ein
+    /// `bwrap`, das nicht setuid installiert ist (bubblewrap lehnt
+    /// `--overlay` im setuid-Betrieb ab). Liest nur; hält keinen Deskriptor.
+    #[cfg(target_os = "linux")]
+    fn overlay_host_support(&self) -> Result<(), Diagnostic> {
+        let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+        if !crate::disposable::kernel_allows_overlay(&release) {
             return Err(Diagnostic::builder(SANDBOX_030, Severity::Blocking)
-                .why(
-                    "a disposable sandbox shows the agent a writable project folder and keeps \
-                     its changes apart, but the project folder is mounted read-only here \
-                     (sandbox.work_mode or the profile)",
-                )
+                .why(format!(
+                    "the kernel is {:?}; an unprivileged overlay needs Linux {}.{} or newer",
+                    release.trim(),
+                    crate::disposable::MIN_OVERLAY_KERNEL.0,
+                    crate::disposable::MIN_OVERLAY_KERNEL.1
+                ))
                 .fix(FixAction::ChangeSetting {
-                    key: "sandbox.work_mode".to_owned(),
-                    value: "rw".to_owned(),
+                    key: "sandbox.mode".to_owned(),
+                    value: "direct".to_owned(),
+                })
+                .build());
+        }
+        let setuid = std::fs::metadata(&self.program)
+            .is_ok_and(|meta| meta.permissions().mode() & 0o4000 != 0);
+        if setuid {
+            return Err(Diagnostic::builder(SANDBOX_030, Severity::Blocking)
+                .why(format!(
+                    "{} is installed setuid root, and bubblewrap refuses --overlay in setuid \
+                     mode",
+                    self.program.display()
+                ))
+                .fix(FixAction::ChangeSetting {
+                    key: "sandbox.mode".to_owned(),
+                    value: "direct".to_owned(),
                 })
                 .build());
         }
@@ -1759,6 +1828,48 @@ fn placeholder_diagnostic(why: String) -> Diagnostic {
         .build()
 }
 
+/// Der Befund eines nur lesbar eingehängten Projekts vor einer
+/// Wegwerf-Sandbox (HUM-350). Der Fix zeigt auf die Ursache (HUM-357): auf
+/// `sandbox.work_mode`, wenn die Sitzung `ro` verlangt, sonst auf das
+/// Profil, dessen `mounts.work.mode = "ro"` es erzwingt.
+fn read_only_work(profile: &SandboxProfile, session: &SessionContext) -> Diagnostic {
+    let builder = Diagnostic::builder(SANDBOX_030, Severity::Blocking);
+    if session.work_mode == WorkMode::Ro {
+        return builder
+            .why(
+                "a disposable sandbox shows the agent a writable project folder and keeps \
+                 its changes apart, but the project folder is mounted read-only here \
+                 (sandbox.work_mode = \"ro\")",
+            )
+            .fix(FixAction::ChangeSetting {
+                key: "sandbox.work_mode".to_owned(),
+                value: "rw".to_owned(),
+            })
+            .build();
+    }
+    let builder = builder.why(format!(
+        "a disposable sandbox shows the agent a writable project folder and keeps its changes \
+         apart, but the sandbox profile {:?} mounts the project folder read-only \
+         (mounts.work.mode = \"ro\" in profiles/sandbox/{}.toml)",
+        profile.name, profile.name
+    ));
+    if profile.name == "default" {
+        builder
+            .fix(FixAction::ChangeSetting {
+                key: "sandbox.mode".to_owned(),
+                value: "direct".to_owned(),
+            })
+            .build()
+    } else {
+        builder
+            .fix(FixAction::ChangeSetting {
+                key: "sandbox.profile".to_owned(),
+                value: "default".to_owned(),
+            })
+            .build()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -1863,6 +1974,144 @@ mod tests {
         assert_eq!(
             std::fs::File::from(empty).metadata().expect("meta").len(),
             0
+        );
+    }
+
+    /// Ein Profil mit `mounts.work.mode` und eine Sitzung mit `work_mode`.
+    #[cfg(target_os = "linux")]
+    fn work_setup(
+        profile_mode: &str,
+        session: humanitl_config::WorkMode,
+    ) -> (
+        crate::profile::SandboxProfile,
+        crate::profile::SessionContext,
+    ) {
+        let profile = crate::profile::SandboxProfile::parse(
+            &format!(
+                "version = 1\nname = \"strict\"\n[mounts]\nwork = {{ dst = \"/work\", mode = \"{profile_mode}\" }}\n"
+            ),
+            Path::new("<test>"),
+        )
+        .expect("the profile parses");
+        let context = crate::profile::SessionContext {
+            session: humanitl_core::ids::SessionId::nil(),
+            work_src: std::path::PathBuf::from("/home/u/proj"),
+            work_mode: session,
+            proxy_socket_src: std::path::PathBuf::from("/run/user/1000/humanitl/proxy/proxy.sock"),
+            ca_cert_src: std::path::PathBuf::from("/home/u/ca.crt"),
+            ca_bundle_src: std::path::PathBuf::from("/home/u/ca-bundle.crt"),
+            shim_src: std::path::PathBuf::from("/usr/lib/humanitl/humanitl-shim"),
+            session_env: Vec::new(),
+            command: vec!["true".into()],
+            files: Vec::new(),
+            agent_program: None,
+        };
+        (profile, context)
+    }
+
+    /// Ein tmpfs-Verzeichnis für das Laufzeitverzeichnis, oder `None`.
+    #[cfg(target_os = "linux")]
+    fn tmpfs_dir() -> Option<tempfile::TempDir> {
+        let dir = tempfile::tempdir_in("/dev/shm").ok()?;
+        crate::disposable::require_tmpfs(dir.path()).ok()?;
+        Some(dir)
+    }
+
+    /// Die Probe kennt, was `Layer::create` und das Einhängen verlangen,
+    /// ohne etwas anzulegen (HUM-357, Review): ein Verzeichnis der Schichten,
+    /// das nicht privat ist, und ein setuid installiertes `bwrap` sagen
+    /// nein, statt dass der Start erst beim Anlegen scheitert.
+    ///
+    /// Mutationsbeweis: `probe_layer_dir` ohne `check_private` oder
+    /// `overlay_host_support` ohne setuid-Prüfung, jeweils rot.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_probe_refuses_what_the_start_would_refuse() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let Some(runtime) = tmpfs_dir() else {
+            eprintln!("no tmpfs under /dev/shm; skipped");
+            return;
+        };
+        let env = Env::from_pairs([("HOME", "/home/u")]);
+        let paths = humanitl_config::Paths::new(env);
+        let (profile, ctx) = work_setup("rw", humanitl_config::WorkMode::Rw);
+        let plain = runtime.path().join("bwrap");
+        std::fs::write(&plain, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let backend = BwrapBackend::unchecked(&plain, Version(0, 11, 0), paths.clone());
+        backend
+            .disposable_support(&profile, &ctx, runtime.path())
+            .expect("everything is there");
+        assert!(
+            !runtime.path().join("disposable").exists(),
+            "the probe creates nothing"
+        );
+
+        let layers = runtime.path().join("disposable");
+        std::fs::create_dir(&layers).unwrap();
+        std::fs::set_permissions(&layers, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = backend
+            .disposable_support(&profile, &ctx, runtime.path())
+            .expect_err("a layer directory others can read");
+        assert_eq!(err.code.as_str(), "SANDBOX_030");
+        assert!(err.why.contains("private directory"), "{}", err.why);
+        std::fs::set_permissions(&layers, std::fs::Permissions::from_mode(0o700)).unwrap();
+        backend
+            .disposable_support(&profile, &ctx, runtime.path())
+            .expect("a private layer directory");
+
+        std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o4755)).unwrap();
+        if std::fs::metadata(&plain).unwrap().permissions().mode() & 0o4000 == 0 {
+            eprintln!("the setuid bit does not stick here; the setuid case is skipped");
+            return;
+        }
+        let err = backend
+            .disposable_support(&profile, &ctx, runtime.path())
+            .expect_err("setuid bubblewrap refuses --overlay");
+        assert_eq!(err.code.as_str(), "SANDBOX_030");
+        assert!(err.why.contains("setuid"), "{}", err.why);
+    }
+
+    /// Ein Profil, das `/work` nur lesbar einhängt, zeigt mit seinem Fix auf
+    /// das Profil, nicht auf `sandbox.work_mode` (HUM-357, Review).
+    ///
+    /// Mutationsbeweis: wieder immer `sandbox.work_mode` als Fix, rot.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_read_only_profile_is_named_as_the_cause() {
+        let env = Env::from_pairs([("HOME", "/home/u")]);
+        let backend = BwrapBackend::unchecked(
+            "/usr/bin/bwrap",
+            Version(0, 11, 0),
+            humanitl_config::Paths::new(env),
+        );
+        let (profile, ctx) = work_setup("ro", humanitl_config::WorkMode::Rw);
+        let err = backend
+            .overlay_support(&profile, &ctx)
+            .expect_err("the profile mounts /work read-only");
+        assert!(
+            err.why.contains("profiles/sandbox/strict.toml"),
+            "{}",
+            err.why
+        );
+        assert_eq!(
+            err.fix,
+            Some(humanitl_core::FixAction::ChangeSetting {
+                key: "sandbox.profile".to_owned(),
+                value: "default".to_owned(),
+            })
+        );
+        let (profile, ctx) = work_setup("rw", humanitl_config::WorkMode::Ro);
+        let err = backend
+            .overlay_support(&profile, &ctx)
+            .expect_err("the session asks for read-only");
+        assert_eq!(
+            err.fix,
+            Some(humanitl_core::FixAction::ChangeSetting {
+                key: "sandbox.work_mode".to_owned(),
+                value: "rw".to_owned(),
+            })
         );
     }
 }

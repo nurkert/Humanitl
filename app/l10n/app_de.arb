@@ -1457,5 +1457,15 @@
   "shellPaletteScaleReset": "Originalgröße (ganze Anwendung)",
   "shellRailShortcutKey": "Strg+Umschalt+0",
   "settingsScaleLabel": "Skalierung",
-  "settingsScaleHelp": "Text und Bedienelemente wachsen gemeinsam. Jetzt {value}. Strg+Plus und Strg+Minus ändern sie in Schritten von 10 %, Strg+0 kehrt zu 100 % zurück."
+  "settingsScaleHelp": "Text und Bedienelemente wachsen gemeinsam. Jetzt {value}. Strg+Plus und Strg+Minus ändern sie in Schritten von 10 %, Strg+0 kehrt zu 100 % zurück.",
+  "diagSANDBOX033Title": "Wegwerf-Sandbox nicht verfügbar, Lauf direkt",
+  "diagSANDBOX033Why": "Dieses System kann keine Wegwerf-Sandbox (nötig sind bubblewrap 0.11 oder neuer, ein Laufzeitverzeichnis im Arbeitsspeicher und ein beschreibbarer Projektordner), deshalb schreibt der Lauf direkt in den Projektordner. Wähle in den Einstellungen „Direkt“, um diesen Hinweis abzustellen.",
+  "settingsSandboxModeLabel": "Wohin der Agent schreibt",
+  "settingsSandboxModeHelp": "Wegwerf lässt den Projektordner unberührt, bis du die Änderungen übernimmst. Automatisch läuft als Wegwerf-Sandbox, wo dieses System es kann, sonst direkt.",
+  "settingsSandboxModeAuto": "Automatisch",
+  "settingsSandboxModeDirect": "Direkt",
+  "settingsSandboxModeDisposable": "Wegwerf",
+  "settingsSandboxModeNowDisposable": "Auf diesem System ist der nächste Start eine Wegwerf-Sandbox.",
+  "settingsSandboxModeNowDirect": "Auf diesem System ist der nächste Start direkt.",
+  "sandboxDisposableFellBack": "Wegwerf ist hier nicht verfügbar, dieser Start ist deshalb direkt: {reason}"
 }

@@ -6,8 +6,8 @@
 /// search, tiers, origins, reset per field and live reload behind the MVP. The
 /// form shows `hold.timeout_secs`, `hold.ask_mode`, `ui.language`, `ui.theme`,
 /// `ui.notifications`, `sandbox.work_dir`, the endpoint, the model, the
-/// access key, `tls.trust_system_store` (HUM-257) and `agent.adapter`
-/// (HUM-274); everything else stays
+/// access key, `tls.trust_system_store` (HUM-257), `agent.adapter`
+/// (HUM-274) and `sandbox.mode` (HUM-357); everything else stays
 /// in `config.toml`, one click away.
 ///
 /// Every value comes from `GetConfig` and goes back through `SetConfig` and
@@ -30,6 +30,7 @@ import '../../core/ui/work_dir_picker.dart' show directoryChooserProvider;
 import '../../l10n/l10n.dart';
 import 'providers/file_opener.dart';
 import 'widgets/model_section.dart';
+import 'widgets/sandbox_mode_row.dart';
 import 'widgets/setting_row.dart';
 
 /// The settings, as a sheet from the right.
@@ -426,6 +427,15 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
               ),
             ],
           ),
+        ),
+        // Wohin die Änderungen des Agenten gehen (HUM-357), mit dem, was der
+        // Daemon für dieses System daraus macht.
+        SandboxModeRow(
+          config: config,
+          refusal: _refusals[FormKeys.sandboxMode],
+          anchor: _anchors[FormKeys.sandboxMode],
+          onSelect: (String mode) =>
+              unawaited(_write(FormKeys.sandboxMode, mode)),
         ),
         // Das Opt-out des Vertrauens in die Zertifikatsablage des Systems
         // (HUM-257). Vorgabe an; was aus bedeutet, steht in der Hilfe.

@@ -450,7 +450,7 @@ pub struct SandboxRef {
     /// Ob der Agent im Projektverzeichnis schreiben darf.
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "denied"))]
     pub work_mode: WorkMode,
-    /// Wohin die Änderungen des Agenten gehen. `direct` schreibt in das Projektverzeichnis; `disposable` legt es nur lesbar unter eine Schicht im Arbeitsspeicher, und nach dem Lauf entscheidet der Mensch, welche Änderungen er übernimmt (`humanitl sandbox changes`, `apply`, `discard`). `disposable` gibt es vorerst nur unter Linux (Overlay von bubblewrap); unter macOS lehnt der Start mit `SANDBOX_030` ab.
+    /// Wohin die Änderungen des Agenten gehen. `direct` schreibt in das Projektverzeichnis; `disposable` legt es nur lesbar unter eine Schicht im Arbeitsspeicher, und nach dem Lauf entscheidet der Mensch, welche Änderungen er übernimmt (`humanitl sandbox changes`, `apply`, `discard`). `auto`, die Vorgabe, ist `disposable`, wo das System es kann (Linux, bubblewrap 0.11 oder neuer, Laufzeitverzeichnis auf tmpfs, Projekt schreibbar eingehängt), sonst `direct`, und der Start sagt dann mit `SANDBOX_033`, warum (HUM-357). Ein ausdrücklich gesetztes `disposable` fällt nie zurück: Wo es nicht geht, lehnt der Start mit `SANDBOX_030` ab. Unter macOS gibt es die Wegwerf-Sandbox nicht; `auto` ist dort still `direct`.
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "denied"))]
     pub mode: SandboxMode,
     /// Zusätzliche Umgebungsvariablen für die Sandbox; sie überschreiben gleichnamige Einträge aus dem `[env]` des Profils. Der Schlüssel lässt sich aus der Umgebung des Prozesses setzen und ist damit nur so vertrauenswürdig wie die Shell, aus der Humanitl startet; die Variablen des dynamischen Linkers (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) werden deshalb abgelehnt, sie liefen vor dem seccomp-Filter des Shims.
@@ -464,18 +464,28 @@ impl Default for SandboxRef {
             profile: "default".to_owned(),
             work_dir: None,
             work_mode: WorkMode::Rw,
-            mode: SandboxMode::Direct,
+            mode: SandboxMode::Auto,
             env: BTreeMap::new(),
         }
     }
 }
 
 /// Wohin die Änderungen des Agenten am Projektverzeichnis gehen (HUM-350).
+///
+/// Ob der Mensch einen Modus gewählt hat oder die Vorgabe gilt, steht im Wert
+/// selbst (HUM-357): `auto` ist die Vorgabe und darf auf `direct`
+/// zurückfallen, `disposable` ist eine Wahl und fällt nie zurück. Ein Wert
+/// statt einer Buchführung, welche Ebene den Schlüssel gesetzt hat: Wer
+/// `auto` ausdrücklich schreibt, will genau die Vorgabe, und Formular,
+/// Kommandozeile und Leitung kennen dieselben drei Namen.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SandboxMode {
-    /// In das Projektverzeichnis selbst, wie bisher.
+    /// Die Vorgabe: `disposable`, wo das System es kann, sonst `direct` mit
+    /// einem Hinweis (HUM-357).
     #[default]
+    Auto,
+    /// In das Projektverzeichnis selbst, wie vor HUM-350.
     Direct,
     /// In eine Schicht im Arbeitsspeicher über dem nur lesbaren Projektverzeichnis.
     Disposable,
@@ -486,16 +496,18 @@ impl SandboxMode {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Auto => "auto",
             Self::Direct => "direct",
             Self::Disposable => "disposable",
         }
     }
 
-    /// Liest `direct` oder `disposable`, ohne Rücksicht auf Groß- und
+    /// Liest `auto`, `direct` oder `disposable`, ohne Rücksicht auf Groß- und
     /// Kleinschreibung und Leerraum; alles andere ist `None`.
     #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
         match text.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
             "direct" => Some(Self::Direct),
             "disposable" => Some(Self::Disposable),
             _ => None,

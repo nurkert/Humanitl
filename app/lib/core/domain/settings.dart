@@ -61,14 +61,21 @@ abstract final class FormKeys {
     llmModels,
     tlsTrustSystemStore,
     agentAdapter,
+    sandboxMode,
   ];
 
-  /// How the project folder is mounted: `direct` or `disposable` (HUM-350).
-  ///
-  /// Read only, and therefore not in [all]: `FORM_KEYS` of the daemon does
-  /// not take it, so `SetConfig` refuses it with `CONFIG_014`. The app reads
-  /// it as the default of the switch "Disposable" at the start (HUM-351).
+  /// Where the agent's changes go: `auto` (the default), `direct` or
+  /// `disposable` (HUM-350, HUM-357). In `FORM_KEYS` of the daemon since
+  /// HUM-357; the app also reads it as the default of the switch
+  /// "Disposable" at the start (HUM-351).
   static const String sandboxMode = 'sandbox.mode';
+
+  /// The values of [sandboxMode], in the order the form shows them.
+  static const List<String> sandboxModes = <String>[
+    'auto',
+    'direct',
+    'disposable',
+  ];
 
   /// The reference to the access key, as the daemon names it in the
   /// `ChangeSetting` fix of `LLM_002` (HUM-275).
@@ -163,9 +170,19 @@ final class ConfigValues {
   /// `agent.adapter`, default `opencode` (HUM-274).
   String get agentAdapter => _text(FormKeys.agentAdapter, 'opencode');
 
-  /// `sandbox.mode`, default `direct` (HUM-350).
-  SandboxMode get sandboxMode =>
-      SandboxMode.fromWire(_text(FormKeys.sandboxMode, 'direct'));
+  /// `sandbox.mode` as written, default `auto` (HUM-357).
+  String get sandboxModeSetting => _text(FormKeys.sandboxMode, 'auto');
+
+  /// The mode `sandbox.mode` chooses outright, or null for `auto` and every
+  /// value this build does not know: what `auto` becomes, only the daemon
+  /// knows, and it says so in `SandboxStatus.effectiveSandboxMode`
+  /// (HUM-357).
+  SandboxMode? get sandboxMode =>
+      switch (sandboxModeSetting.trim().toLowerCase()) {
+        'direct' => SandboxMode.direct,
+        'disposable' => SandboxMode.disposable,
+        _ => null,
+      };
 
   /// `sandbox.work_dir`, empty when unset.
   String get sandboxWorkDir => _text(FormKeys.sandboxWorkDir, '');

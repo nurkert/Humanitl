@@ -31,14 +31,8 @@ void main() {
     containerOf(tester).read(navigationProvider.notifier).go(Section.setup);
     await tester.pumpAndSettle();
 
-    // Direkt: Der Start geht, und ein Hinweis sagt, dass Änderungen warten.
-    expect(startEnabled(tester), isTrue);
-    expect(find.byKey(const Key('setup-changes-hint')), findsOneWidget);
-    expect(find.text('Review changes (7)'), findsOneWidget);
-
-    // Wegwerf: gesperrt, mit dem Grund unter dem Knopf.
-    await tester.tap(find.byKey(const Key('setup-disposable')));
-    await tester.pumpAndSettle();
+    // Wegwerf, die Vorgabe dieses Systems (HUM-357): gesperrt, mit dem Grund
+    // unter dem Knopf.
     expect(startEnabled(tester), isFalse);
     expect(
       find.text(
@@ -47,6 +41,13 @@ void main() {
       ),
       findsOneWidget,
     );
+
+    // Direkt: Der Start geht, und ein Hinweis sagt, dass Änderungen warten.
+    await tester.tap(find.byKey(const Key('setup-disposable')));
+    await tester.pumpAndSettle();
+    expect(startEnabled(tester), isTrue);
+    expect(find.byKey(const Key('setup-changes-hint')), findsOneWidget);
+    expect(find.text('Review changes (7)'), findsOneWidget);
 
     // Das Panel ging nach dem ersten Lesen von selbst auf; geschlossen, damit
     // der Knopf zeigen muss, dass er es öffnet.

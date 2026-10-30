@@ -171,7 +171,9 @@ impl Fixture {
                 ask_mode: String::new(),
                 cli_overrides: Vec::new(),
                 work_dir_source: None,
-                sandbox_mode: String::new(),
+                // Direkt, unabhängig davon, ob dieser Rechner ein Overlay kann:
+                // Der Test gilt dem Terminal, nicht der Vorgabe `auto` (HUM-357).
+                sandbox_mode: "direct".to_owned(),
             })),
         }
     }
@@ -1556,7 +1558,7 @@ fn values_of<'a>(seen: &'a str, key: &str) -> Vec<&'a str> {
 /// refused (`tests/escape/esc-1-sockets.sh`, `socket_af_unix`).
 fn self_report(p: &str) -> String {
     format!(
-        r#"for n in net mnt pid user ipc uts; do printf '{p}-NS-%s=%s\n' $n "$(readlink /proc/self/ns/$n)"; done; grep -E '^(Seccomp|Seccomp_filters|NoNewPrivs):' /proc/self/status | while read -r k v; do printf '{p}-%s=%s\n' "${{k%:}}" "$v"; done; ls -1 /proc/$$/fd | sed 's/^/{p}-FD=/'; ls /proc/1/fd >/dev/null 2>&1 && printf '{p}-PID1-FD=open\n'; printf '{p}-PROXY=%s\n' "$HTTP_PROXY"; printf '{p}-PATH=%s\n' "$PATH"; printf '{p}-CWD=%s\n' "$PWD"; printf '{p}-SHIMVARS=%s\n' "$(env | grep -c '^HUMANITL_\(BRIDGES\|SECCOMP\|REPORT_FD\)')"; if command -v python3 >/dev/null 2>&1; then python3 -c 'import socket
+        r#"for n in net mnt pid user ipc uts; do printf '{p}-NS-%s=%s\n' $n "$(readlink /proc/self/ns/$n)"; done; grep -E '^(Seccomp|Seccomp_filters|NoNewPrivs):' /proc/self/status | while read -r k v; do printf '{p}-%s=%s\n' "${{k%:}}" "$v"; done; set -- /proc/$$/fd/*; for f in "$@"; do printf '{p}-FD=%s\n' "${{f##*/}}"; done; ls /proc/1/fd >/dev/null 2>&1 && printf '{p}-PID1-FD=open\n'; printf '{p}-PROXY=%s\n' "$HTTP_PROXY"; printf '{p}-PATH=%s\n' "$PATH"; printf '{p}-CWD=%s\n' "$PWD"; printf '{p}-SHIMVARS=%s\n' "$(env | grep -c '^HUMANITL_\(BRIDGES\|SECCOMP\|REPORT_FD\)')"; if command -v python3 >/dev/null 2>&1; then python3 -c 'import socket
 try:
     socket.socket(socket.AF_UNIX, socket.SOCK_STREAM).close()
     print("{p}-UNIX=ok")
@@ -1619,9 +1621,13 @@ fn assert_the_agents_limits(seen: &str, agent_seen: &str) {
     for (text, key) in [(seen, "SHELL-FD"), (agent_seen, "AGENT-FD")] {
         let fds = values_of(text, key);
         assert!(!fds.is_empty(), "{key}: {text:?}");
+        // Die Shell liest das Verzeichnis selbst (Glob statt `ls | sed`, eine
+        // Pipe der Shell erschien sonst je nach Takt als 3 und 4): Der offene
+        // Verzeichnisstrom ist der eine Deskriptor über 2, und er ist der
+        // niedrigste freie, also 3. Ein geerbter Deskriptor schöbe ihn höher.
         assert!(
-            fds.iter().all(|fd| ["0", "1", "2"].contains(fd)),
-            "{key}: nothing above descriptor 2, the door included: {fds:?}"
+            fds.iter().all(|fd| ["0", "1", "2", "3"].contains(fd)),
+            "{key}: nothing above descriptor 2 but the listing itself, the door included: {fds:?}"
         );
     }
     assert_eq!(value_of(seen, "SHELL-PID1-FD"), None, "{seen:?}");

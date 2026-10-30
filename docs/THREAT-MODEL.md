@@ -431,7 +431,22 @@ other processes.
 Linux-only for now: on macOS (Seatbelt) there is no overlay, a disposable start is refused with
 `SANDBOX_030`, and the channel does not exist there.
 
-With `sandbox.mode = "disposable"` (HUM-350) the project folder is the read-only lower layer of an
+*Who is covered (HUM-357).* The disposable sandbox is the default where the system allows it:
+`sandbox.mode = "auto"`, the default, resolves to disposable with bubblewrap 0.11 or newer (not
+setuid), Linux 5.11 or newer, a runtime directory on tmpfs with a private layer directory and a
+writable project; a setup that still fails before bubblewrap starts falls back too, never one
+after. Where one is missing, `auto` runs direct and
+the start warns with `SANDBOX_033`; such a run has none of the protections of this section, and
+the agent writes to the project folder directly, as before HUM-350. An explicit `disposable` never
+falls back; it refuses with `SANDBOX_030`. A project profile cannot set `sandbox.mode`
+(CONVENTIONS 4.11), so (b) cannot move a run from disposable to direct through a cloned
+repository; what decides is the system the human runs on and the human's own choice. Pending
+changes of an earlier run refuse every start except an explicit `direct`, checked before the
+mode is resolved, instead of letting a default fall back to direct over a layer nobody
+reviewed. A run without changes discards its layer at once (`no_changes`), but only after a complete
+scan; a directory that cannot be read marks the list incomplete, and the layer waits.
+
+With a disposable start (HUM-350) the project folder is the read-only lower layer of an
 overlay at `/work`, and the agent's changes go to an upper layer the daemon created under
 `$XDG_RUNTIME_DIR/humanitl/disposable/<id>/` (mode `0700`, tmpfs). After the run a human reviews
 the diff and applies all, some or none of it. The upper layer is written by attacker (b) and
@@ -546,6 +561,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-30 | K-24: the disposable sandbox, an overlay over the read-only project with the upper layer in RAM and a size cap; changes reach the project only through a checked apply | HUM-350 |
 | 2026-10-30 | K-02: on macOS the provider access key lives in the login Keychain through `/usr/bin/security`, over `stdin` and read back; same class as the Secret Service: readable by every process of the account outside the sandbox, out of reach of the agent | HUM-349 |
 | 2026-10-30 | K-24: overwriting a conflict is confirmed per change (`overwrite_ids`); a confirmation for one file never covers another | HUM-351 |
+| 2026-10-30 | K-24: the disposable sandbox becomes the default where the system allows it (`sandbox.mode = "auto"`); without the overlay the default runs direct with `SANDBOX_033`, an explicit `disposable` still refuses | HUM-357 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

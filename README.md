@@ -147,7 +147,7 @@ out of the sandbox:
 | Channel | Data can leave? | What it means |
 |---|---|---|
 | [The LLM passthrough](docs/SECURITY.md#51-the-llm-passthrough) | yes | Your language model sees every prompt the agent sends it, without a hold; that host is part of what you trust. |
-| [The project directory `/work`](docs/SECURITY.md#52-the-project-directory-work) | yes | It is writable; what the agent leaves there, a human may carry out later. |
+| [The project directory `/work`](docs/SECURITY.md#52-the-project-directory-work) | yes | It is writable; what the agent leaves there, a human may carry out later. Where the system allows it, the agent writes to a disposable layer by default, and only the changes you apply reach the folder; elsewhere it writes to the folder directly. |
 | [Terminal output](docs/SECURITY.md#5-declared-side-channels) | no | It comes from the agent and is filtered, not trusted. |
 | [Host names in the recording](docs/SECURITY.md#5-declared-side-channels) | no | They stand in plain text in the recording and in every export. |
 | [Package caches](docs/SECURITY.md#5-declared-side-channels) | no | They are per project and carry data between sessions of that project. |
@@ -317,7 +317,7 @@ prove is in [`docs/SECURITY.md` section 8](docs/SECURITY.md#8-the-audit-log).
 #### The sandbox, visible
 
 The Sandbox screen holds the agent's terminal, marked as untrusted output. On Linux it lists every
-path the agent sees: the project as `/work`, read-write or read-only, everything else read-only or
+path the agent sees: the project as `/work`, read-write, read-only or disposable, everything else read-only or
 empty, and "Show the exact command" opens the complete sandbox command line. On macOS the table and
 the command preview still show that Linux plan until HUM-330, not the Seatbelt profile that runs;
 what the agent can read there is under

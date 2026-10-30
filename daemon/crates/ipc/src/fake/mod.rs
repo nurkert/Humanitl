@@ -1382,6 +1382,11 @@ impl FakeDaemon {
                     // Der gespielte Agent fragt kein Modell; also scheitert auch
                     // keine Durchreiche (HUM-251).
                     llm: None,
+                    // Der Fake kennt keine Wegwerf-Sandbox (HUM-350); jeder
+                    // Start ist direkt, ohne Rückfall und ohne Hinweis
+                    // (HUM-357).
+                    sandbox_mode: "direct".to_owned(),
+                    sandbox_mode_notice: None,
                 },
             )),
         }

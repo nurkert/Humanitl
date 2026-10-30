@@ -142,7 +142,8 @@ pub use crate::bwrap_args::{
 #[cfg(target_os = "linux")]
 pub use crate::disposable::{ApplyOptions, ApplyReport, ChangeSet, Layer, LayerChange, SizeGuard};
 pub use crate::disposable::{
-    Budget, DisposableRecord, MIN_OVERLAY_VERSION, OverlayDirs, TmpfsCheck,
+    Budget, DisposableRecord, MIN_OVERLAY_VERSION, ModeChoice, OverlayDirs, TmpfsCheck,
+    resolve_mode,
 };
 pub use crate::handle::{
     CAPTURE_MAX_BYTES, CapturedOutput, INTERRUPT_GRACE, KILL_GRACE, OutputChunk, OutputSink,

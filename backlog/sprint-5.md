@@ -89,6 +89,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-355 | Neutral greys instead of blue-tinted ones, and no blue next to the brand yellow | M | HUM-260 |
 | HUM-354 | LLM_005 warns only about findings the model has not seen yet, and repeats collapse into one card | M | HUM-039, HUM-106, HUM-256, HUM-271 |
 | HUM-356 | The app scales: Ctrl+Plus, Ctrl+Minus, Ctrl+0 and a setting | M | HUM-301, HUM-254, HUM-352 |
+| HUM-357 | A sandbox opens disposable by default where the system allows it | M | HUM-350, HUM-351 |
 
 ---
 
@@ -10755,3 +10756,238 @@ Zwei der drei Griffe waren belegt: `Ctrl+0` klappte die Leiste um
 - (F) `Ctrl` + Rad zoomt weiter nur das Terminal, nicht die Anwendung;
   so gewollt und in `docs/UX.md` 5.2 beschrieben, bei Bedarf neu
   entscheiden.
+
+---
+## HUM-357 · A sandbox opens disposable by default where the system allows it
+
+Owner decision 2026-10-30: "in erster Linie soll es eine Wegwerfsandbox
+öffnen". Follow-up of HUM-350 (daemon, RPC, command line) and HUM-351 (the
+app), and the home of candidate (A) of HUM-351.
+
+### Context
+Since HUM-350 a disposable sandbox exists, but only on request
+(`sandbox.mode = "disposable"`, `--disposable`, the switch in the app). The
+default stayed `direct`: the agent writes to the project folder. The owner
+wants the disposable sandbox to be what a start gets, wherever the system can
+run one, without making Humanitl unusable where it cannot (bubblewrap before
+0.11, a runtime directory off tmpfs, a read-only project, macOS).
+
+### Specification
+1. **Default.** `sandbox.mode` gets a third value `auto`, and `auto` is the
+   default. The daemon resolves it for every plan and start: `disposable`
+   when the backend supports it (Linux, bubblewrap 0.11 or newer with
+   `--overlay`, the runtime directory on tmpfs, the project mounted
+   writable), otherwise `direct` with a visible, non-blocking notice: the
+   new diagnostic `SANDBOX_033` (warning) with the cause and the fix of the
+   missing condition, and the sentence that this run writes to the project
+   folder directly and that `sandbox.mode = "direct"` silences the notice.
+2. **Explicit versus default.** The distinction lives in the value, not in a
+   record of which layer set the key: `auto` may fall back, `disposable`
+   never does. An explicit `disposable` (configuration, `--disposable`,
+   `Start.sandbox_mode = "disposable"`) where the system cannot run it
+   refuses with `SANDBOX_030`, as today. Changes of an earlier disposable run
+   that still wait refuse a start with the default `auto` as well
+   (`SANDBOX_030`); the default never falls back to direct over a layer
+   nobody reviewed. On macOS `auto` is `direct` without a notice, because the
+   mode does not exist there.
+3. **Protocol.** `SandboxEvent.Status.sandbox_mode` (16) names the resolved
+   mode of the next start without a choice, `direct` or `disposable`, never
+   `auto`; `sandbox_mode_notice` (17) carries `SANDBOX_033` after a fallback
+   or `SANDBOX_030` when an explicit `disposable` will refuse.
+   `Start.sandbox_mode` takes `auto`. `PROTO_MINOR` 27, `docs/PROTOCOL.md`.
+4. **Settings.** `sandbox.mode` in `FORM_KEYS` and a row in the settings form
+   (Automatic, Direct, Disposable) with the resolved mode and, after a
+   fallback, the daemon's reason. Only for a daemon that names
+   `sandbox.disposable`.
+5. **Command line.** `humanitl run` follows `sandbox.mode`; `--disposable`
+   and the new `--direct` decide for one run and exclude each other. To a
+   daemon before 1.27 the run sends an empty mode instead of `auto`.
+   `humanitl sandbox run` gets `--direct` as well; it keeps no layer after it
+   ends, so `auto` is direct there (the escape suite and the demos read their
+   results from `/work`), and only `--disposable` or an explicit
+   `sandbox.mode = "disposable"` make it disposable.
+6. **App.** The switch in the Sandbox header and the checkbox in Setup start
+   at the resolved mode (an explicit `sandbox.mode` first, then
+   `Status.sandbox_mode`, then `direct`); the start sends `sandbox_mode` only
+   when the person changed the switch away from that default. After a
+   fallback the hint of the switch names the reason.
+7. **Docs.** `docs/CONFIG.md` regenerated from the model, `docs/cli.md`,
+   `docs/reference/cli.md`, `docs/UX.md`, `docs/SECURITY.md` 5.2 and the
+   changelog, `docs/THREAT-MODEL.md` K-24 and its history, `README.md`
+   where it describes `/work`, `backlog/CONVENTIONS.md`.
+8. **Profiles.** `profiles/sandbox/*.toml` set `work = { mode = "rw" }` and
+   need no change. The project-scope lock (CONVENTIONS 4.11) stays and now
+   also covers `auto`: a cloned repository can neither switch a run back to
+   direct nor turn an explicit `disposable` into `auto`.
+
+### Security
+The default changes who gets the protections of K-24. The statement in
+`README.md` is untouched: the network, the one door and the filter are the
+same in both modes. `docs/SECURITY.md` 5.2 and `docs/THREAT-MODEL.md` K-24
+say truthfully that on a system without `--overlay`, with a runtime
+directory off tmpfs or with a read-only project the agent writes to the
+project folder directly, as before HUM-350, and that the start warns with
+`SANDBOX_033`.
+
+### Acceptance criteria
+1. With bubblewrap 0.11, a runtime directory on tmpfs and a writable project,
+   a start without a mode is disposable; without one of them it is direct and
+   carries `SANDBOX_033` with cause and fix.
+2. An explicit `disposable` without support still refuses with
+   `SANDBOX_030` and never writes to the folder.
+3. `SetConfig` accepts `sandbox.mode`; the schema fixture and
+   `docs/CONFIG.md` are regenerated.
+4. `humanitl run --direct` and `--disposable` choose for one run and exclude
+   each other.
+5. The app's switch and checkbox start at the daemon's resolved mode, the
+   start sends nothing unless the person changed it, and the settings row
+   writes the mode and shows the reason of a fallback.
+
+### Umsetzung (HUM-357)
+- **Konfiguration.** `SandboxMode::Auto` als Vorgabe (`auto|direct|disposable`);
+  die Unterscheidung „ausdrücklich oder Vorgabe" steckt im Wert, nicht in einer
+  Buchführung der Ebenen. Schema-Fixture und `docs/CONFIG.md` neu erzeugt,
+  `backlog/CONVENTIONS.md` 3.7 und 4.11 nachgezogen, `profiles/default.toml`
+  nennt `mode` im auskommentierten Block. Die Sandbox-Profile setzen
+  `work = { mode = "rw" }` und bleiben unverändert.
+- **Sandbox-Crate.** `resolve_mode` und `ModeChoice` in `disposable/mod.rs`,
+  `fallback_notice` (`SANDBOX_033`, Warnung, Grund und Fix der fehlenden
+  Bedingung), `require_tmpfs` aus `Layer::create_with` herausgezogen (fragt das
+  nächste vorhandene Verzeichnis und legt nichts an),
+  `BwrapBackend::disposable_support` (Fassung, Schreibbarkeit, tmpfs; unter
+  macOS `unsupported`).
+- **Daemon.** `Prepared::wanted_mode` und `plan_mode`; `launch` löst den Wunsch
+  des Starts oder `sandbox.mode` auf, ein ausdrückliches `disposable` endet mit
+  `SANDBOX_030`, der Rückfall hängt `SANDBOX_033` an die Befunde des Starts.
+  Wartende Änderungen sperren auch einen Start mit `auto`. Die Vorschau zeigt
+  das Overlay nach dem aufgelösten Modus. `Status.sandbox_mode` (16) und
+  `sandbox_mode_notice` (17), `PROTO_MINOR` 27, `docs/PROTOCOL.md`,
+  Deskriptor und `proto/generated.sha256` neu. `FORM_KEYS` nimmt
+  `sandbox.mode`. Rust-Fake meldet `direct`.
+- **Befund.** `SANDBOX_033`, Bereich `SANDBOX` bis 33, `docs/DIAGNOSTICS.md`,
+  ARB en/de, `diagnostic_l10n.dart`.
+- **Kommandozeile.** `humanitl run --direct` (schließt `--disposable` aus),
+  `start_mode` schickt einem Daemon vor 1.27 statt `auto` ein leeres Feld.
+  `humanitl sandbox run --direct`; `auto` ist dort direkt
+  (`throwaway_wanted`), weil der Befehl keine Schicht hält und Fluchtprüfung
+  und Demos ihre Ergebnisse unter `/work` lesen. `parity.rs`,
+  `docs/reference/cli.md` und `parity.md` neu, `docs/cli.md`.
+- **App.** `SandboxStatus.effectiveSandboxMode` und `sandboxModeNotice`,
+  `ConfigValues.sandboxModeSetting`, `sandboxMode` nur noch für ausdrückliche
+  Werte; `defaultSandboxModeProvider` (ausdrückliches `sandbox.mode`, sonst
+  der Modus des Daemons, sonst `direct`), der Start schickt eine Wahl nur, wenn
+  sie von der Vorgabe abweicht; der Hinweis des Schalters nennt nach einem
+  Rückfall den Grund. `settings/widgets/sandbox_mode_row.dart` (Automatisch,
+  Direkt, Wegwerf, darunter der aufgelöste Modus und der Grund), nur mit
+  `sandbox.disposable`. Fake `disposable` meldet `disposable` als aufgelösten
+  Modus; `proto_version.dart` auf 27.
+- **Tests, die vorher stillschweigend direkt liefen.** `sandbox_start.rs`,
+  `terminal.rs`, `daemon_end_to_end.rs`, `sandbox_rpc.rs` und die Demos M3 und
+  M4 wählen `direct` ausdrücklich: Sie prüfen die Zusammenfassung oder die
+  Einhängungen eines direkten Laufs, und mit bubblewrap 0.11 und tmpfs wäre
+  die Vorgabe dort jetzt eine Wegwerf-Sandbox. `setup_disposable_test.dart`
+  folgt der neuen Vorgabe des Fakes.
+- **Tests.** `disposable/tests.rs`: Vorgabe wird Wegwerf, Rückfall mit
+  `SANDBOX_033` samt Fix, ausdrückliches `disposable` lehnt ab, `direct`
+  fragt nicht. `launcher.rs::the_disposable_probe_names_each_missing_condition`
+  (alte Fassung, `ro`, Laufzeitverzeichnis auf der Platte, nichts angelegt).
+  `ipc` `sandbox.rs`: Auflösung gegen alte Fassung, `ro` und tmpfs, Ablehnung
+  des ausdrücklichen Modus, Momentaufnahme mit Modus und Grund;
+  `sandbox_start.rs::a_start_without_a_mode_is_disposable_where_the_system_allows_it`
+  (echtes bwrap, misst den Zweig). `config_rpc`: `sandbox.mode` geschrieben,
+  `throwaway` abgelehnt. `proto_contract`: Felder 16 und 17. CLI: Flags,
+  Ausschluss, `start_mode`, `throwaway_wanted`. App:
+  `disposable_default_test.dart`, `sandbox_mode_row_test.dart`.
+- **Mutationsbeweise**, Dateien danach mit `cmp` zurück: Vorgabe wieder
+  `direct` (`auto` liefert nie Wegwerf):
+  `the_default_resolves_to_disposable_where_the_system_allows_it` und
+  `the_default_mode_resolves_against_the_system` rot; Rückfall entfernt
+  (Fehler der Probe geht bei `auto` durch):
+  `the_default_falls_back_to_direct_with_a_notice` und
+  `the_default_mode_resolves_against_the_system` rot; ausdrückliches
+  `disposable` fällt still zurück:
+  `an_explicit_disposable_refuses_instead_of_falling_back`,
+  `an_explicit_disposable_still_refuses_where_it_cannot_run` und
+  `the_snapshot_names_the_resolved_mode_and_its_reason` rot. App: Start
+  schickt jede Wahl und Vorgabe ohne Modus des Daemons, beide Male
+  `the switch starts at the mode the daemon resolved, …` rot.
+
+### Kandidaten (HUM-357)
+- (A) Die Momentaufnahme eines laufenden Laufs nennt dessen eigenen Modus
+  (heute: den des nächsten Starts), damit Einhängungstabelle und Zeile nicht
+  das Overlay eines künftigen Starts neben einem direkten Lauf zeigen.
+- (B) `humanitl doctor` prüft die Bedingungen der Wegwerf-Sandbox und nennt
+  `SANDBOX_033` schon vor dem ersten Start.
+- (C) Die Einrichtung zeigt den Grund eines Rückfalls auch am Kästchen
+  „Wegwerf", wie der Kopf der Sandbox-Seite.
+
+### Review Runde 1 (HUM-357)
+Codex und Opus; alle übernommen, je ein Test, der ohne die Behebung rot ist
+(Mutationsbeweis, Dateien danach mit `cmp` zurück).
+- **Sperre vor der Auflösung.** Wartende Änderungen sperren jeden Start außer
+  einem ausdrücklichen `direct`, bevor `auto` aufgelöst wird; sonst schrieb
+  eine zurückfallende Vorgabe direkt unter einer ungeprüften Schicht.
+  `disposable.rs::pending_guard`, Test
+  `waiting_changes_refuse_every_start_but_an_explicit_direct`.
+- **Probe wie der Start.** `BwrapBackend::disposable_support` prüft dazu,
+  nur lesend, das private Verzeichnis der Schichten (`probe_layer_dir`), ein
+  setuid installiertes `bwrap` und den Kernel (`kernel_allows_overlay`, ab
+  5.11). Scheitert das Anlegen trotzdem vor dem Start von bubblewrap mit
+  `SANDBOX_030`, fällt `auto` mit dem wirklichen Grund zurück
+  (`fallback_after`, `SetupFailure::Before`), danach nie. Tests
+  `the_probe_refuses_what_the_start_would_refuse`,
+  `the_kernel_must_be_5_11_or_newer_for_an_unprivileged_overlay`,
+  `only_the_default_falls_back_and_only_before_the_sandbox_ran`.
+- **Leere Schicht wartet nicht.** Ein Wegwerf-Lauf ohne Änderungen verwirft
+  seine Schicht sofort, zeichnet `no_changes` auf und schickt keine Liste.
+  Tests `an_empty_layer_leaves_nothing_to_decide`,
+  `sandbox_start.rs::a_disposable_run_without_changes_leaves_nothing_waiting`
+  (echtes bwrap).
+- **Einstellungen frisch.** Die Shell reicht den aufgelösten Modus über
+  `core/ipc/sandbox_mode_feed.dart` an das Formular (kein Feature importiert
+  ein anderes) und holt nach einem geschriebenen `sandbox.mode` eine neue
+  Momentaufnahme (`storedModeRead`). Der Fake löst `auto` bei jeder
+  Momentaufnahme auf. Test `writing the mode brings the resolved mode and
+  reason up to date`.
+- **Demos.** Die übrigen `$E2E_CLI run` in M3 mit `--direct`.
+- **Fix bei nur lesbarem Profil** zeigt auf `sandbox.profile` (oder bei
+  `default` auf `sandbox.mode = direct`) statt auf `sandbox.work_mode`. Test
+  `a_read_only_profile_is_named_as_the_cause`.
+- **Momentaufnahme bei wartenden Änderungen** trägt das `SANDBOX_030` der
+  Sperre in `sandbox_mode_notice`.
+- **`terminal.rs`, Deskriptor über 2.** Kein neuer Deskriptor im direkten
+  Weg: Die Probe liest nur Pfade (`statfs`, `stat`, `access`,
+  `/proc/sys/kernel/osrelease`) und hält nichts offen; der Test startet
+  direkt. Vermutlich das Fenster in `ls -1 /proc/$$/fd | sed`, in dem die
+  Shell die Enden der Pipe noch hält; zu wiederholen.
+
+### Kandidaten (HUM-357, Review)
+- (D) Ein echter Probelauf `bwrap --overlay` statt der gelesenen Bedingungen.
+- (B) bleibt: `humanitl doctor` nennt die Bedingungen des Overlays.
+
+### Review Runde 2 (HUM-357)
+- **Unlesbar ist nicht leer.** `opaque_removals` kehrte bei einem
+  Projektordner, den der Daemon nicht öffnen kann (Rechte `030`), still
+  zurück; ein opakes Verzeichnis darüber verdeckte dann jede Löschung, die
+  Liste war leer, und der neue Weg „ohne Änderungen" hätte die Schicht
+  verworfen. Jetzt macht jeder Lese- oder Öffnungsfehler in oberer und
+  unterer Schicht die Liste unvollständig, mit Grund
+  (`ChangeSet::incomplete`, höchstens 16 Sätze, im Protokoll des Daemons);
+  verworfen wird ohne Rückfrage nur nach einem vollständigen Scan ohne
+  Änderungen. Alle übrigen Pfade des Scans geprüft: Auch `statat` eines
+  verdeckten Namens in der oberen Schicht mit anderem Fehler als `ENOENT`
+  zählt jetzt. Test
+  `an_unreadable_lower_directory_under_an_opaque_one_makes_the_list_incomplete`;
+  Mutation (stilles `return` beim Öffnen) rot.
+
+### Review Runde 3 (HUM-357)
+- **Attribute nur bei `ENODATA` abwesend.** `has_xattr` und `is_opaque`
+  liefern ein `Result`; „fehlt" heißt nur `ENODATA` (und `ENOTSUP`: ein
+  Dateisystem ohne erweiterte Attribute trägt auch keines von Overlay).
+  Jeder andere Fehler macht die Liste unvollständig; ein unlesbares fremdes
+  Attribut zählt als vorhanden (abgelehnt), ein unlesbares Opak-Attribut als
+  nicht opak, damit keine erfundenen Löschungen dastehen. Naht für Tests:
+  `scan_with` mit eigenem `XattrReader`. Tests
+  `a_failed_read_of_the_opaque_marker_makes_the_list_incomplete` und
+  `a_failed_read_of_a_foreign_attribute_refuses_and_makes_the_list_incomplete`;
+  Mutationen (jeder Fehler `Ok(false)`) je rot.

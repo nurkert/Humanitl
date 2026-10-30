@@ -55,7 +55,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use humanitl_core::diagnostics::codes::SANDBOX_030;
+use humanitl_config::SandboxMode;
+use humanitl_core::diagnostics::codes::{SANDBOX_030, SANDBOX_033};
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use serde::{Deserialize, Serialize};
 
@@ -67,8 +68,8 @@ pub use crate::disposable::apply::{ApplyOptions, ApplyReport, apply, select};
 use crate::disposable::layer::is_tmpfs;
 #[cfg(target_os = "linux")]
 pub use crate::disposable::layer::{
-    Layer, SizeGuard, Usage, baseline, baseline_at, baseline_limits, ensure_ended, process_lives,
-    start_ticks, sweep,
+    Layer, SizeGuard, Usage, baseline, baseline_at, baseline_limits, ensure_ended, probe_layer_dir,
+    process_lives, require_tmpfs, start_ticks, sweep,
 };
 #[cfg(target_os = "linux")]
 pub(crate) use crate::disposable::layer::{chmod_nofollow, open_dir_forcing};
@@ -79,6 +80,26 @@ pub use crate::disposable::text_diff::{DIFF_MAX_BYTES, DIFF_MAX_OUTPUT, unified}
 /// Ab dieser `bwrap`-Fassung gibt es `--overlay-src` und `--overlay`
 /// (bubblewrap 0.11.0).
 pub const MIN_OVERLAY_VERSION: Version = Version(0, 11, 0);
+
+/// Ab dieser Kernel-Fassung darf ein Nutzer ohne Rechte overlayfs in seinem
+/// Namensraum einhängen (Linux 5.11).
+pub const MIN_OVERLAY_KERNEL: (u32, u32) = (5, 11);
+
+/// Ob der Kernel mit dieser Fassung (`/proc/sys/kernel/osrelease`, etwa
+/// `6.1.0-13-amd64`) overlayfs ohne Rechte einhängt (HUM-357). Eine Fassung,
+/// die sich nicht lesen lässt, zählt als zu alt: Die Probe sagt dann lieber
+/// `direct` mit Grund als einen Start, der beim Einhängen scheitert.
+#[must_use]
+pub fn kernel_allows_overlay(release: &str) -> bool {
+    let mut parts = release
+        .trim()
+        .split(|c: char| !c.is_ascii_digit())
+        .map(str::parse::<u32>);
+    match (parts.next(), parts.next()) {
+        (Some(Ok(major)), Some(Ok(minor))) => (major, minor) >= MIN_OVERLAY_KERNEL,
+        _ => false,
+    }
+}
 
 /// Das Verzeichnis unter dem Laufzeitverzeichnis, in dem die Schichten liegen.
 pub const DISPOSABLE_DIR: &str = "disposable";
@@ -144,7 +165,7 @@ impl Budget {
 /// Was in der Aufzeichnung steht, wenn der Mensch entschieden hat.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DisposableRecord {
-    /// `applied` oder `discarded`.
+    /// `applied`, `discarded` oder `no_changes` (ein Lauf ohne Änderungen, HUM-357).
     pub outcome: String,
     /// Die übernommenen Pfade, gesäubert wie in der Zusammenfassung.
     pub applied: Vec<String>,
@@ -166,6 +187,91 @@ pub fn unsupported() -> Diagnostic {
             value: "direct".to_owned(),
         })
         .build()
+}
+
+/// Der Modus, mit dem ein Start läuft, nachdem `sandbox.mode` aufgelöst ist
+/// (HUM-357).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModeChoice {
+    /// `direct` oder `disposable`, nie `auto`.
+    pub mode: SandboxMode,
+    /// Der Hinweis `SANDBOX_033`, wenn die Vorgabe `auto` auf `direct`
+    /// zurückgefallen ist; sonst keiner.
+    pub notice: Option<Diagnostic>,
+}
+
+impl ModeChoice {
+    /// Ob der Start eine Wegwerf-Sandbox ist.
+    #[must_use]
+    pub fn is_disposable(&self) -> bool {
+        self.mode == SandboxMode::Disposable
+    }
+
+    fn direct(notice: Option<Diagnostic>) -> Self {
+        Self {
+            mode: SandboxMode::Direct,
+            notice,
+        }
+    }
+}
+
+/// Löst den gewünschten Modus gegen das auf, was das System kann (HUM-357).
+///
+/// `support` prüft die Bedingungen einer Wegwerf-Sandbox (bubblewrap mit
+/// `--overlay`, Laufzeitverzeichnis auf tmpfs, Projekt schreibbar) und wird
+/// nur gefragt, wenn der Wunsch nicht `direct` ist.
+///
+/// - `direct` bleibt `direct`.
+/// - `disposable` ist eine Wahl des Menschen und fällt nie zurück: Fehlt eine
+///   Bedingung, endet der Start mit deren `SANDBOX_030`.
+/// - `auto` ist die Vorgabe: `disposable`, wenn alles da ist, sonst `direct`
+///   mit dem Hinweis `SANDBOX_033`, der den Grund nennt. Unter einem System
+///   ohne Overlay (macOS) gibt es den Modus gar nicht; dort ist `auto` still
+///   `direct`, denn ein Hinweis bei jedem Start sagte nur, was immer gilt.
+///
+/// # Errors
+///
+/// Der Befund von `support`, wenn `disposable` ausdrücklich gewünscht ist und
+/// nicht geht.
+pub fn resolve_mode(
+    wanted: SandboxMode,
+    support: impl FnOnce() -> Result<(), Diagnostic>,
+) -> Result<ModeChoice, Diagnostic> {
+    match wanted {
+        SandboxMode::Direct => Ok(ModeChoice::direct(None)),
+        SandboxMode::Disposable => support().map(|()| ModeChoice {
+            mode: SandboxMode::Disposable,
+            notice: None,
+        }),
+        SandboxMode::Auto if !cfg!(target_os = "linux") => Ok(ModeChoice::direct(None)),
+        SandboxMode::Auto => Ok(match support() {
+            Ok(()) => ModeChoice {
+                mode: SandboxMode::Disposable,
+                notice: None,
+            },
+            Err(reason) => ModeChoice::direct(Some(fallback_notice(&reason))),
+        }),
+    }
+}
+
+/// Der Hinweis, dass die Vorgabe auf `direct` zurückgefallen ist
+/// (`SANDBOX_033`, HUM-357): der Grund aus `reason`, dessen Fix, und wie der
+/// Mensch den Hinweis abstellt.
+#[must_use]
+pub fn fallback_notice(reason: &Diagnostic) -> Diagnostic {
+    let builder = Diagnostic::builder(SANDBOX_033, Severity::Warning).why(format!(
+        "{}; sandbox.mode is auto, so this run writes to the project folder directly. Fix \
+         the cause for a disposable sandbox, or set sandbox.mode = \"direct\" to silence this",
+        reason.why.trim_end_matches('.')
+    ));
+    match &reason.fix {
+        Some(fix) => builder.fix(fix.clone()),
+        None => builder.fix(FixAction::ChangeSetting {
+            key: "sandbox.mode".to_owned(),
+            value: "direct".to_owned(),
+        }),
+    }
+    .build()
 }
 
 /// Räumt Schichten auf, die ein früherer Daemon liegen ließ. Ohne Overlay
