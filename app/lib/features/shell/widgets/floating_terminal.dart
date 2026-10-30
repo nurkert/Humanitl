@@ -13,7 +13,9 @@
 /// of the shell, an open sheet, a modal -- stays free. The window snaps to the
 /// corner the person chose; when something to keep clear lies there, it
 /// takes the next free corner, then the smallest size, and when no corner is
-/// free it steps back until there is room (`placeFloatingTerminal`). Two
+/// free it shrinks to a slim title strip that finds a place of its own
+/// (`placeTerminalStrip`, `floating_terminal_strip.dart`, HUM-315); only
+/// without room even for that it steps back until there is room. Two
 /// exceptions while a hand holds it: a resize never grows into such a region,
 /// a drag may pass over one, and both give way again when they are let go.
 ///
@@ -29,6 +31,13 @@
 /// by itself. A new agent within that time keeps it open. The countdown runs
 /// wherever the terminal stands: a window that comes back from the whole
 /// window after the time is over closes at once.
+///
+/// **The Sandbox page.** While it shows, the terminal stands in its pane there
+/// and this layer draws nothing (`terminalHostProvider`, HUM-315); the choice
+/// to float stays and takes effect again on leaving the page. An agent that
+/// ends while the page shows docks the terminal at once: the pane shows the
+/// end itself, and leaving the page must not float a terminal whose session
+/// is over.
 library;
 
 import 'dart:async';
@@ -44,6 +53,7 @@ import '../../../core/ui/terminal_float.dart';
 import '../../../core/ui/terminal_placement.dart';
 import '../../../core/ui/ui.dart';
 import '../../sandbox/providers/sandbox_status_provider.dart';
+import 'floating_terminal_strip.dart';
 import 'floating_terminal_window.dart';
 
 /// How long a floating terminal stays after its agent ended, showing the end
@@ -117,7 +127,28 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
         if (next == TerminalPlacement.floating) {
           _closeIfEnded();
         }
+      })
+      ..listenManual<int>(terminalFocusRequestProvider, (int? _, int _) {
+        _focusAsked();
       });
+  }
+
+  /// Somebody asked for the terminal with the keyboard -- ``Ctrl+` ``, "Go
+  /// to terminal" of the empty queue -- while this layer shows only the
+  /// strip, or nothing: there is no emulator here to take it (HUM-315,
+  /// review). The same as a click on the strip without room: the terminal
+  /// goes back into its pane on the Sandbox page, and the request is asked
+  /// again one frame later, once the pane stands.
+  void _focusAsked() {
+    if (!mounted || !_shownHere || _shown != null) {
+      return;
+    }
+    widget.onBack();
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      if (mounted) {
+        ref.read(terminalFocusRequestProvider.notifier).request();
+      }
+    });
   }
 
   @override
@@ -127,13 +158,19 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
     super.dispose();
   }
 
+  /// Whether the person chose to let the terminal float, whatever page shows.
   bool get _floating =>
       ref.read(terminalPlacementProvider) == TerminalPlacement.floating;
+
+  /// Whether this layer shows the terminal now: it floats and the Sandbox
+  /// page does not show (HUM-315).
+  bool get _shownHere =>
+      ref.read(terminalHostProvider) == TerminalPlacement.floating;
 
   /// A region to keep clear came, went or changed its size: the place is
   /// computed anew.
   void _regionsChanged() {
-    if (mounted && _floating) {
+    if (mounted && _shownHere) {
       setState(() {});
     }
   }
@@ -149,6 +186,14 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
       return;
     }
     if (previous != true) {
+      return;
+    }
+    // Auf der Sandbox-Seite zeigt das Pane das Ende selbst; das Fenster
+    // schwebte erst beim Verlassen wieder, über einer Sitzung, die vorbei ist
+    // (HUM-315). Also gleich zurück, nach der Änderung, die das meldete.
+    if (_floating && ref.read(sandboxPageShownProvider)) {
+      _endShown = true;
+      _closeIfEnded();
       return;
     }
     _linger = Timer(terminalFloatLinger, () {
@@ -177,7 +222,7 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
   @override
   Widget build(BuildContext context) {
     final bool floating =
-        ref.watch(terminalPlacementProvider) == TerminalPlacement.floating;
+        ref.watch(terminalHostProvider) == TerminalPlacement.floating;
     final TerminalFloatGeometry geometry = ref.watch(terminalFloatProvider);
     return Stack(
       fit: StackFit.expand,
@@ -192,7 +237,8 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
     );
   }
 
-  /// The window at its place, or nothing while it fits nowhere.
+  /// The window at its place, else the strip at its place, or nothing while
+  /// not even the strip fits.
   Widget _place(
     BuildContext context,
     BoxConstraints constraints,
@@ -208,7 +254,7 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
         _interactiveRect(region, inset) ?? _avoiding(region, geometry, inset);
     _shown = rect;
     if (rect == null) {
-      return const SizedBox.shrink();
+      return _strip(region, geometry, inset);
     }
     return Stack(
       children: <Widget>[
@@ -228,6 +274,48 @@ class _FloatingTerminalLayerState extends ConsumerState<FloatingTerminalLayer> {
         ),
       ],
     );
+  }
+
+  /// The title strip in the first free corner from the chosen one, or
+  /// nothing while not even the strip fits (HUM-315).
+  Widget _strip(Rect region, TerminalFloatGeometry geometry, double inset) {
+    final FloatPlacement? placement = placeTerminalStrip(
+      region: region,
+      corner: geometry.corner,
+      size: HTheme.of(context).sizes.terminalStrip,
+      keepClear: _keepClear(),
+      inset: inset,
+    );
+    if (placement == null) {
+      return const SizedBox.shrink();
+    }
+    return Stack(
+      children: <Widget>[
+        Positioned.fromRect(
+          rect: placement.rect,
+          child: LiveFloatingTerminalStrip(onOpen: _openFromStrip),
+        ),
+      ],
+    );
+  }
+
+  /// The strip was pressed: the window in the next free corner, measured
+  /// against the regions as they stand now, or, with none free, the terminal
+  /// back in its pane on the Sandbox page (HUM-315). The second is what is
+  /// left: the person asked to see the terminal, and a pane on a page that
+  /// does not show would hide it altogether.
+  void _openFromStrip() {
+    final double inset = HTheme.of(context).spacing.x3;
+    final Rect? rect = _avoiding(
+      _region,
+      ref.read(terminalFloatProvider),
+      inset,
+    );
+    if (rect != null) {
+      setState(() {});
+      return;
+    }
+    widget.onBack();
   }
 
   /// The regions to keep clear, in the coordinates of the window's region.

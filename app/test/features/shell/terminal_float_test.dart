@@ -161,7 +161,13 @@ void main() {
         .terminal;
     expect(client.opens, 1);
 
+    // Auf der Sandbox-Seite bleibt es im Pane (HUM-315); es schwebt, sobald
+    // ein anderer Abschnitt zu sehen ist.
     await tester.tap(find.byKey(const Key('sandbox-terminal-float')));
+    await settle(tester);
+    expect(floating, findsNothing);
+    expect(placement(tester), TerminalPlacement.floating);
+    await pressCtrl(tester, LogicalKeyboardKey.digit2);
     await settle(tester);
     expect(floating, findsOneWidget);
     final Object after = tester
@@ -176,11 +182,18 @@ void main() {
     );
     expect(client.opens, 1, reason: 'no second Open for the same session');
 
-    // Der leere Platz bietet den Weg zurück an.
-    await tester.tap(find.byKey(const Key('sandbox-terminal-dock')));
+    // Zurück auf der Sandbox-Seite steht dieselbe Sitzung wieder im Pane.
+    await pressCtrl(tester, LogicalKeyboardKey.digit4);
     await settle(tester);
     expect(floating, findsNothing);
     expect(find.byKey(const Key('sandbox-terminal')), findsOneWidget);
+    expect(
+      identical(
+        tester.widget<TerminalView>(find.byType(TerminalView)).terminal,
+        before,
+      ),
+      isTrue,
+    );
     expect(client.opens, 1);
     expectOneView();
   }, variant: linux);
@@ -557,14 +570,21 @@ void main() {
   testWidgets('a_held_float_chord_never_reaches_the_agent', (
     WidgetTester tester,
   ) async {
+    // Seit HUM-315 bleibt das Terminal auf der Sandbox-Seite im Pane; der
+    // Wechsel des Wirts kommt deshalb vom schwebenden Fenster über History,
+    // das das Kürzel zurücklegt. Das Loslassen kommt dann woanders an.
     final SandboxTestClient client = runningClient();
     await pumpApp(tester, client: client, size: window);
-    await pressCtrl(tester, LogicalKeyboardKey.digit4);
+    await pressCtrl(tester, LogicalKeyboardKey.digit2);
     await settle(tester);
     await pressFocusTerminal(tester);
+    await settle(tester);
+    expect(floating, findsOneWidget);
     expect(terminalHasKeyboard(), isTrue);
     tester
-        .widget<TerminalView>(find.byType(TerminalView))
+        .widget<TerminalView>(
+          find.descendant(of: floating, matching: find.byType(TerminalView)),
+        )
         .terminal
         .write('\x1b[>11u');
     await tester.pump();
@@ -574,8 +594,7 @@ void main() {
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
     await tester.sendKeyDownEvent(LogicalKeyboardKey.keyP);
     await settle(tester);
-    expect(floating, findsOneWidget);
-    expect(terminalHasKeyboard(), isTrue, reason: 'the window took it along');
+    expect(floating, findsNothing, reason: 'the chord put it back');
     for (int i = 0; i < 3; i++) {
       await tester.sendKeyRepeatEvent(LogicalKeyboardKey.keyP);
     }
@@ -587,7 +606,8 @@ void main() {
     final String sent = utf8.decode(client.typed, allowMalformed: true);
     expect(sent, isNot(contains('[112;')), reason: 'no report of the P key');
     expect(client.typed, isNot(contains(0x10)));
-    expect(floating, findsOneWidget, reason: 'the chord toggled once');
+    expect(floating, findsNothing, reason: 'the chord toggled once');
+    expect(placement(tester), TerminalPlacement.pane);
   }, variant: linux);
 
   // Codex: Nach dem Ende zeigte das Fenster vier Sekunden den Leerzustand

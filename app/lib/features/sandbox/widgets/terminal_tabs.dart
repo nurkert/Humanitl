@@ -44,6 +44,20 @@ bool terminalTabsShown(WidgetRef ref) {
       (tabs.sandboxId.isNotEmpty && ref.watch(shellsOfferedProvider));
 }
 
+/// The name of the tab that is active: "Agent", or "Shell n" (HUM-315).
+///
+/// What the title strip of the floating terminal names when it has no room
+/// for the terminal itself. Without how a shell ended: the strip says which
+/// tab waits behind it, the tab itself says the rest.
+String terminalActiveTabLabel(TerminalTabsState tabs, AppLocalizations l10n) {
+  for (final ShellTab tab in tabs.shells) {
+    if (tab.shellId == tabs.active) {
+      return l10n.sandboxTerminalTabShell(tab.number);
+    }
+  }
+  return l10n.sandboxTerminalTabAgent;
+}
+
 /// Opens a further shell the size of the terminal that is shown.
 void openShellFrom(WidgetRef ref) {
   final TerminalTabsState tabs = ref.read(terminalTabsProvider);

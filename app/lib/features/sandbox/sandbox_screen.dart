@@ -128,12 +128,20 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
       );
     }
     _visible = visible;
-    ref.listen<TerminalPlacement>(terminalPlacementProvider, (
+    // The host and not the choice: a terminal that floated before the whole
+    // window comes back into this pane while the page shows (HUM-315). The
+    // section is built anew whenever the terminal comes back, also while it
+    // is hidden and its own watches rest. It takes the keyboard only coming
+    // from the whole window; from the floating window only when it had it
+    // there (the shell sees to that).
+    ref.listen<TerminalPlacement>(terminalHostProvider, (
       TerminalPlacement? previous,
       TerminalPlacement next,
     ) {
       if (next == TerminalPlacement.pane && previous != next) {
-        setState(() => _terminalCameBack = true);
+        setState(
+          () => _terminalCameBack = previous == TerminalPlacement.fullWindow,
+        );
       }
     });
 
@@ -249,9 +257,10 @@ class _Body extends ConsumerWidget {
     // sein Platz hier leer, in der Farbe des Terminals: Zwei Ansichten
     // derselben Sitzung würden beide ihre Größe melden und beide Tasten
     // nehmen. Die Sitzung selbst und ihr Rücklauf leben im Provider und
-    // überstehen den Wechsel.
-    final bool here =
-        ref.watch(terminalPlacementProvider) == TerminalPlacement.pane;
+    // überstehen den Wechsel. Gefragt wird der Wirt, nicht die Wahl: Ein
+    // schwebendes Terminal steht hier, solange diese Seite zu sehen ist
+    // (HUM-315).
+    final bool here = ref.watch(terminalHostProvider) == TerminalPlacement.pane;
     final PaneSplit split = ref.read(
       paneSplitProvider(sandboxPaneSplit).notifier,
     );
@@ -284,32 +293,18 @@ class _Body extends ConsumerWidget {
 }
 
 /// Where the terminal stands while another host shows it: an empty area in
-/// the colour of the terminal, and while it floats a button that puts it
-/// back here (HUM-300). Over the whole window nobody sees this pane.
-class _TerminalElsewhere extends ConsumerWidget {
+/// the colour of the terminal. Nobody sees it: over the whole window this
+/// section is hidden, and a floating terminal docks here while the page
+/// shows (HUM-315), so the button "Put the terminal back here" of HUM-300
+/// had nowhere left to stand.
+class _TerminalElsewhere extends StatelessWidget {
   const _TerminalElsewhere();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final HTokens tokens = HTheme.of(context);
-    final bool floating =
-        ref.watch(terminalPlacementProvider) == TerminalPlacement.floating;
-    return ColoredBox(
-      key: const Key('sandbox-terminal-elsewhere'),
-      color: tokens.terminal.background,
-      child: floating
-          ? Center(
-              child: HButton(
-                key: const Key('sandbox-terminal-dock'),
-                variant: HButtonVariant.secondary,
-                size: HButtonSize.sm,
-                onPressed: ref.read(terminalPlacementProvider.notifier).dock,
-                child: Text(context.l10n.sandboxTerminalDockHere),
-              ),
-            )
-          : null,
-    );
-  }
+  Widget build(BuildContext context) => ColoredBox(
+    key: const Key('sandbox-terminal-elsewhere'),
+    color: HTheme.of(context).terminal.background,
+  );
 }
 
 /// The tab bar and the open tab: the lower pane of the section.
