@@ -195,13 +195,32 @@ const PHONE_POS: Profile = [
 // Prüfung im Bildausschnitt nie zurück.
 const BETA_MIN: Record<Cls, number> = {
   A: -9,
-  B: -11,
-  C: -12,
-  D: -12,
-  E: -14,
+  B: -10,
+  C: -10,
+  D: -9,
+  E: -11,
   F: -5,
   G: -6,
 };
+
+// Wo die Front auf der Bühne steht: linker Rand als Anteil der Breite, null heißt mittig.
+const EDGE: Record<Cls, number | null> = {
+  A: 0.04,
+  B: 0.035,
+  C: 0.025,
+  D: 0.02,
+  E: null,
+  F: null,
+  G: 0.015,
+};
+// d = +1 darf um diesen Anteil der Leiste unter die Navigation gleiten: unscharf und
+// abgedunkelt stört es dort nicht, und die Front gewinnt die Höhe.
+const TUCK = 0.5;
+// Rand um die Beschriftung gegen d = +1: negativ, die Ecke darf unter den Kasten reichen.
+const CORNER = -12;
+
+// Perspektive der Bühne; dieselbe Tiefe wirkt stärker, die Front löst sich vom Bogen.
+const perspectiveOf = (Ws: number) => Math.max(1200, 2.4 * Ws);
 
 interface Box {
   l: number;
@@ -252,6 +271,8 @@ function init(scene: HTMLElement) {
   const deck = scene.querySelector<HTMLElement>("[data-deck]")!;
   const cap = scene.querySelector<HTMLElement>("[data-cap]")!;
   const capHead = scene.querySelector<HTMLElement>("[data-cap-head]")!;
+  // Ab hier sind Pfeile sichtbar und Drehen, Ziehen und Tastatur zugleich möglich (HUM-347).
+  const LIVE_AT = 0.85;
   const controls = scene.querySelector<HTMLElement>("[data-controls]")!;
   const fill = scene.querySelector<HTMLElement>("[data-fill]")!;
   const odo = scene.querySelector<HTMLElement>("[data-odo]")!;
@@ -261,6 +282,15 @@ function init(scene: HTMLElement) {
     "[data-nav] .nav__bar, [data-nav]",
   );
   const frontImg = wins[0]?.querySelector("img");
+  // Die Unschärfe: je Fenster die weiche Ebene, ihre Skalierung und die Lichtscheiben.
+  const dofs = wins.map((w) => w.querySelector<HTMLElement>("[data-dof]")!);
+  const dofInner = wins.map((w) =>
+    w.querySelector<HTMLElement>("[data-dof-in]")!,
+  );
+  const bokehs = wins.map((w) => w.querySelector<HTMLElement>("[data-bokeh]")!);
+  const feathers = wins.map((w) =>
+    w.querySelector<HTMLElement>("[data-feather]")!,
+  );
   const n = wins.length;
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const dev = import.meta.env.DEV;
@@ -340,7 +370,7 @@ function init(scene: HTMLElement) {
     switch (cls) {
       case "A":
         Wh = Math.min(vw * 0.28, vh * 0.6);
-        Ws = Math.min(vw * 0.38, vh * 0.9);
+        Ws = Math.min(vw * 0.47, vh * 1.12);
         hero = params({
           cx: vw * 0.17,
           cy: vh * 0.04,
@@ -351,13 +381,12 @@ function init(scene: HTMLElement) {
           delta: 0.08,
         });
         stage = params({
-          cx: -vw * 0.16,
-          cy: -vh * 0.08,
+          cy: -vh * 0.06,
           tilt: 3,
-          beta: -16,
+          beta: -14,
           rho: 0.55,
-          phis: 25,
-          r: 1.35,
+          phis: 30,
+          r: 1.2,
           kappa: 1,
           delta: 0,
         });
@@ -367,52 +396,52 @@ function init(scene: HTMLElement) {
           [3, 0.3],
           [3.4, 0],
         ];
+        stagePos = PHONE_POS;
         floor = false;
         break;
       case "B":
         Wh = Math.min(vw * 0.36, fanRoom(2));
-        Ws = Math.min(vw * 0.48, vh * 1.04);
+        Ws = Math.min(vw * 0.52, vh * 0.98);
         hero = params({ tilt: 8 });
         stage = params({
-          cx: -vw * 0.14,
-          cy: -vh * 0.11,
+          cy: -vh * 0.1,
           tilt: 2,
-          beta: -18,
+          beta: -15,
           rho: 0.55,
-          phis: 27,
-          r: 1.25,
+          phis: 33,
+          r: 1.08,
           kappa: 1,
           delta: 0,
         });
+        stagePos = PHONE_POS;
         break;
       case "C":
         Wh = Math.min(vw * 0.4, fanRoom(2));
-        Ws = Math.min(vw * 0.5, vh);
+        Ws = Math.min(vw * 0.53, vh * 0.9);
         hero = params({ tilt: 8 });
         stage = params({
-          cx: -vw * 0.14,
           cy: -vh * 0.12,
           tilt: 2,
-          beta: -19,
+          beta: -15,
           rho: 0.55,
-          phis: 27,
-          r: 1.25,
+          phis: 33,
+          r: 1.08,
           kappa: 1,
           delta: 0,
         });
+        stagePos = PHONE_POS;
         break;
       case "D":
         Wh = Math.min(vw * 0.46, fanRoom(1));
-        Ws = vw * 0.58;
+        Ws = vw * 0.6;
         hero = params({ tilt: 10, phis: 18, delta: 0.12 });
         stage = params({
-          cx: -vw * 0.1,
           cy: -vh * 0.15,
           tilt: 3,
-          beta: -14,
+          beta: -13,
           rho: 0.55,
-          phis: 30,
-          r: 1.15,
+          phis: 33,
+          r: 1.05,
           kappa: 1,
           delta: 0,
         });
@@ -426,7 +455,7 @@ function init(scene: HTMLElement) {
         break;
       case "E":
         Wh = vw * 0.72;
-        Ws = vw * 0.8;
+        Ws = vw * 0.87;
         // Der Fächer steht mittig im Raum zwischen den Knöpfen und dem unteren Rand.
         hero = params({
           cy: (heroBottom + vh) / 2 - vh / 2,
@@ -436,10 +465,9 @@ function init(scene: HTMLElement) {
           kappa: 1.1,
         });
         stage = params({
-          cx: -vw * 0.06,
           cy: -vh * 0.16,
           tilt: 3,
-          beta: -18,
+          beta: -14,
           rho: 0.55,
           phis: 32,
           r: 1.15,
@@ -456,7 +484,7 @@ function init(scene: HTMLElement) {
         break;
       case "F":
         Wh = Math.min(vw * 0.86, vh * 0.3 * ASPECT);
-        Ws = vw * 0.84;
+        Ws = vw * 0.93;
         hero = params({ tilt: 10 });
         stage = params({
           cy: -vh * 0.16,
@@ -480,7 +508,7 @@ function init(scene: HTMLElement) {
       case "G":
       default:
         Wh = vw * 0.4;
-        Ws = Math.min(vw * 0.46, vh * 0.6 * ASPECT);
+        Ws = Math.min(vw * 0.5, vh * 0.68 * ASPECT);
         hero = params({
           cx: vw * 0.26,
           cy: vh * 0.04,
@@ -491,8 +519,7 @@ function init(scene: HTMLElement) {
           yaw: -12,
         });
         stage = params({
-          cx: -vw * 0.21,
-          cy: vh * 0.02,
+          cy: vh * 0.06,
           tilt: 2,
           beta: -8,
           rho: 0.55,
@@ -522,46 +549,60 @@ function init(scene: HTMLElement) {
         floor = false;
         break;
     }
-    // Bildausschnitt der Bühne prüfen: die Front und d = +1 (und d = +2, solange es
-    // sichtbar ist) bleiben mindestens 16 px unter der Navigation, und die Beschriftung
-    // schneidet weder die Front noch d = +1; d = +2 ragt höchstens 15 % hinein. Erst nimmt
-    // der Bogen Steigung zurück bis zum Mindestwert der Klasse, dann sinkt die Bühne, und
-    // reicht der Platz dann nicht, wird sie kleiner.
+    // Bildausschnitt der Bühne prüfen. Die Front steht fest am linken Rand ihrer Klasse
+    // (Hochformat: mittig), alles Weitere läuft von dort. Sie bleibt mindestens 16 px unter
+    // der Navigation, d = +1 darf um TUCK der Leiste darunter gleiten; die Beschriftung
+    // schneidet die Front nicht, d = +1 höchstens mit der Ecke, d = +2 ragt höchstens 15 %
+    // hinein. Erst nimmt der Bogen Steigung zurück bis zum Mindestwert der Klasse, dann
+    // sinkt oder steigt die Bühne, und reicht der Platz dann nicht, wird sie kleiner.
     navBottom = nav ? nav.getBoundingClientRect().bottom : 0;
     const capBox = cap.getBoundingClientRect();
     const capOn = capBox.width > 0 && capBox.height > 0;
+    // Gegen d = +1 zählt auf breiten Schirmen nur der Text: die Konturziffer darf über dem
+    // unscharfen Nachbarn stehen, das staffelt die Tiefe.
+    const headBottom = capHead.getBoundingClientRect().bottom;
+    const textBox =
+      cls === "A" || cls === "B" || cls === "C"
+        ? new DOMRect(
+            capBox.left,
+            headBottom,
+            capBox.width,
+            capBox.bottom - headBottom,
+          )
+        : capBox;
     const betaMin = BETA_MIN[cls];
     const o1 = profile(stagePos, 1);
     const o2 = profile(stagePos, 2);
-    const cx0 = stage.cx;
-    for (let k = 0; k < 40; k++) {
+    const edge = EDGE[cls];
+    for (let k = 0; k < 60; k++) {
+      const f = stageRect(stage, 0, Ws);
+      stage.cx +=
+        edge === null ? (vw - f.l - f.r) / 2 : Math.round(edge * vw) - f.l;
       const rects = [0, 1, 2].map((d) => stageRect(stage, d, Ws));
-      // d = +2 und weiter blendet render() aus, sobald es in das Band der Navigation steigt.
-      const top = Math.min(rects[0].t, o1 > 0.3 ? rects[1].t : Infinity);
       const need = navBottom + 16;
+      const top = Math.min(
+        rects[0].t,
+        o1 > 0.3 ? rects[1].t + TUCK * navBottom : Infinity,
+      );
       const capHit =
         capOn &&
         (hitsQuad(capBox, rects[0].q) ||
-          (o1 > 0.3 && hitsQuad(capBox, rects[1].q)) ||
+          (o1 > 0.3 && hitsQuad(textBox, rects[1].q, CORNER)) ||
           (o2 > 0.3 && overlap(capBox, rects[2]) > 0.15));
       if (top >= need && !capHit) break;
       const high = top < need;
       if (high && stage.beta < betaMin - 0.01)
         stage.beta = Math.min(betaMin, stage.beta + 1);
       else if (high && !capHit) stage.cy += Math.min(need - top, 0.02 * vh) + 1;
-      else if (capHit && stage.cx > cx0 - 0.06 * vw) {
-        // Die Beschriftung stößt an: erst rückt die Bühne nach links, höchstens 6vw weiter
-        // als vorgesehen (dort ist Platz, links läuft der Bogen ohnehin aus dem Bild).
-        stage.cx -= 0.01 * vw;
-      } else if (capHit && top > need + 2) {
-        // Dann steigt sie in den freien Raum unter der Navigation.
+      else if (capHit && top > need + 2) {
+        // Die Beschriftung stößt an: die Bühne steigt in den freien Raum unter der Navigation.
         stage.cy -= Math.min(top - need, 0.02 * vh);
-      } else Ws *= 0.97;
+      } else Ws *= 0.985;
     }
     hero.S = Wh / Ws;
     const H = Ws / ASPECT;
     const T = clamp(0.013 * Ws, 7, 14);
-    const P = Math.max(1200, 3 * Ws);
+    const P = perspectiveOf(Ws);
     const out: Layout = {
       cls,
       Ws,
@@ -642,13 +683,13 @@ function init(scene: HTMLElement) {
     return boxOf(quadWith(G, p, Ws, H, P));
   }
 
-  /** Trennachsentest: schneidet der Kasten c (mit 16 px Rand) das konvexe Viereck q? */
-  function hitsQuad(c: DOMRect, q: [number, number][]): boolean {
+  /** Trennachsentest: schneidet der Kasten c (mit Rand e) das konvexe Viereck q? */
+  function hitsQuad(c: DOMRect, q: [number, number][], e = 16): boolean {
     const rect: [number, number][] = [
-      [c.left - 16, c.top - 16],
-      [c.right + 16, c.top - 16],
-      [c.right + 16, c.bottom + 16],
-      [c.left - 16, c.bottom + 16],
+      [c.left - e, c.top - e],
+      [c.right + e, c.top - e],
+      [c.right + e, c.bottom + e],
+      [c.left - e, c.bottom + e],
     ];
     const axes: [number, number][] = [
       [1, 0],
@@ -682,7 +723,7 @@ function init(scene: HTMLElement) {
       ry: -G.kappa * d * G.phis + G.yaw,
       rx: 0,
     };
-    return rectWith(G, p, Ws, Ws / ASPECT, Math.max(1200, 3 * Ws));
+    return rectWith(G, p, Ws, Ws / ASPECT, perspectiveOf(Ws));
   }
 
   function heroRect(G: Params, Ws: number, H: number, P: number): Box {
@@ -950,6 +991,7 @@ function init(scene: HTMLElement) {
     rank: number,
     a0: number,
     b0: number,
+    soft: number,
   ) {
     let nv: Vec = [0, 0, 1];
     nv = rotX(nv, p.rx);
@@ -994,7 +1036,8 @@ function init(scene: HTMLElement) {
     const halo =
       (1 - clamp(a)) * (0.55 + 0.45 * smootherstep(map(mm, 0.05, 0.9)));
     put(win, "--shade", (1 - (1 - shade) * b0).toFixed(3));
-    put(win, "--lit", (lit * a0 * a0 * b0).toFixed(3));
+    // Unscharfe Fenster tragen keine harte Lichtkante.
+    put(win, "--lit", (lit * a0 * a0 * b0 * (1 - 0.8 * soft)).toFixed(3));
     put(win, "--spec", glint.toFixed(3));
     put(win, "--gx", `${gx.toFixed(1)}px`);
     put(win, "--swx", `${swx.toFixed(1)}px`);
@@ -1432,7 +1475,7 @@ function init(scene: HTMLElement) {
     }
   }
 
-  const canTurn = () => liveState && m >= 0.98;
+  const canTurn = () => liveState;
   let turning = false;
 
   function turn(by: number) {
@@ -1548,6 +1591,8 @@ function init(scene: HTMLElement) {
     for (const i of byX) if (ops[i] > 0.01) visibleRank[i] = r++;
     const frontRank = visibleRank[ds.findIndex((d) => Math.abs(d) < 0.5)] ?? 0;
 
+    // Tiefenschärfe erst auf der Bühne: im Fächer bleibt alles scharf.
+    const focusOn = smoothstep(map(m, 0.55, 0.95));
     const halfH = lay.H / 2;
     wins.forEach((win, i) => {
       const p = poses[i];
@@ -1565,8 +1610,26 @@ function init(scene: HTMLElement) {
       const a = clamp(o / 0.35);
       const b = a > 0 ? o / a : 0;
       put(win, "--o", a.toFixed(3));
-      put(win, "--oe", (a * a * a * b).toFixed(3));
+      const off = Math.abs(ds[i]);
+      const soft = focusOn * smoothstep(map(off, 0.08, 1.2));
+      put(win, "--oe", (a * a * a * b * (1 - 0.6 * soft)).toFixed(3));
       put(win, "visibility", o <= 0.002 ? "hidden" : "");
+      // Die Schärfe wandert mit dem Fokus: die weiche Ebene ist am Fokus exakt 0 und ab
+      // |d| = 1.2 ganz da. Ihr Filter ist fest, pro Bild ändern sich nur opacity und scale.
+      if (o > 0.002) {
+        put(dofs[i], "opacity", soft.toFixed(3));
+        put(feathers[i], "opacity", (soft * a).toFixed(3));
+        put(
+          dofInner[i],
+          "transform",
+          `scale(${(1 + 0.04 * clamp(off) + 0.03 * clamp((off - 1) / 2)).toFixed(3)})`,
+        );
+        put(
+          bokehs[i],
+          "opacity",
+          (focusOn * smoothstep(map(off, 0.6, 1.8)) * o).toFixed(3),
+        );
+      }
       if (o > 0.002)
         light(
           win,
@@ -1578,6 +1641,7 @@ function init(scene: HTMLElement) {
           Math.abs(visibleRank[i] - frontRank),
           a,
           b,
+          soft,
         );
     });
     busy ||= intro && !allLanded;
@@ -1658,8 +1722,8 @@ function init(scene: HTMLElement) {
     }
     if (capScroll) captionScroll(reduced ? (m >= 0.5 ? 1 : 0) : ce);
     put(cap, "visibility", m > 0.6 ? "visible" : "hidden");
-    put(controls, "opacity", map(m, 0.8, 1).toFixed(3));
-    const isLive = m >= 0.85;
+    put(controls, "opacity", map(m, 0.8, LIVE_AT).toFixed(3));
+    const isLive = m >= LIVE_AT;
     if (isLive !== liveState) {
       liveState = isLive;
       deck.inert = !isLive;
