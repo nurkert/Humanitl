@@ -404,6 +404,13 @@ class GrpcDaemonClient implements DaemonClient {
             // What the filter refused the agent, the whole tally each time
             // (HUM-138).
             yield SandboxUpdate.refusals(event.refusals.toDomain());
+          case pb.SandboxEvent_Event.changes:
+          case pb.SandboxEvent_Event.changesOutcome:
+            // The waiting changes of a disposable sandbox and the answer to
+            // apply or discard (HUM-350). This build has no changes panel
+            // yet; it arrives with HUM-351. Until then the command line shows
+            // them (`humanitl sandbox changes`).
+            break;
           case pb.SandboxEvent_Event.notSet:
             break;
         }

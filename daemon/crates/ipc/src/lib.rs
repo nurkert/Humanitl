@@ -51,7 +51,12 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `24` seit dem abgebrochenen Tunnel (HUM-316): `BLOCK_REASON_CLIENT_ABORTED`
+/// `25` seit der Wegwerf-Sandbox (HUM-350): `SandboxRequest.Start.sandbox_mode`
+/// wählt `disposable`, die Operationen `changes`, `apply_changes` und
+/// `discard_changes` zeigen, übernehmen und verwerfen die Änderungen der
+/// oberen Schicht, `SandboxEvent.changes` und `.changes_outcome` tragen die
+/// Antworten, und `Info.capabilities` nennt `sandbox.disposable`.
+/// `24` war der abgebrochene Tunnel (HUM-316): `BLOCK_REASON_CLIENT_ABORTED`
 /// kennzeichnet einen Flow, dessen Client die TLS-Verbindung zum Proxy
 /// abgebrochen, abgelehnt oder leer geschlossen hat, bevor es etwas zu
 /// entscheiden gab; `FlowSummary.error` trägt dazu
@@ -146,7 +151,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 24;
+pub const PROTO_MINOR: u32 = 25;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -175,6 +180,7 @@ pub mod body;
 pub mod client;
 pub mod config_rpc;
 pub mod convert;
+pub mod disposable;
 pub mod domains;
 pub mod exec;
 pub mod fake;

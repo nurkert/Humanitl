@@ -1617,6 +1617,7 @@ fn start_request(work_dir: &Path, marker: &str) -> v1::SandboxRequest {
             ask_mode: String::new(),
             cli_overrides: Vec::new(),
             work_dir_source: None,
+            sandbox_mode: String::new(),
         })),
     }
 }

@@ -930,6 +930,41 @@ message SandboxRequest {
     // Daemon vor Minor 19 kennt die Operation nicht und antwortet mit einer
     // Momentaufnahme wie auf `status`.
     google.protobuf.Empty retire_if_idle = 7;
+    // Die Aenderungen einer Wegwerf-Sandbox, die auf eine Entscheidung
+    // warten (HUM-350). Die Antwort ist genau ein `SandboxEvent.changes`;
+    // ohne wartende Aenderungen oder solange die Sandbox laeuft ein
+    // `Diagnostic` (`SANDBOX_031`). Ein Daemon vor Minor 25 antwortet mit
+    // einer Momentaufnahme wie auf `status`.
+    google.protobuf.Empty changes = 8;
+    // Uebernimmt die gewaehlten Aenderungen in das Projektverzeichnis und
+    // verwirft den Rest (HUM-350). Die Antwort ist ein
+    // `SandboxEvent.changes_outcome`. Scheitert eine Pruefung vor dem ersten
+    // Schreiben, kommt nur ein `Diagnostic` (`SANDBOX_031`), nichts ist
+    // geschrieben, und die Schicht bleibt fuer einen zweiten Versuch.
+    ApplyChanges apply_changes = 9;
+    // Verwirft alle wartenden Aenderungen (HUM-350). Die Antwort ist ein
+    // `SandboxEvent.changes_outcome` mit `outcome = "discarded"`.
+    DiscardChanges discard_changes = 10;
+  }
+
+  // Welche Aenderungen einer Wegwerf-Sandbox uebernommen werden (HUM-350).
+  message ApplyChanges {
+    // Der Lauf, wie `DisposableChanges.sandbox_id`. Leer heisst: der eine,
+    // dessen Aenderungen warten; ein anderer ist `SANDBOX_031`.
+    string sandbox_id = 1;
+    // Die `DisposableChange.id` der gewaehlten Aenderungen. Leer heisst:
+    // alle, und das wird abgelehnt, wenn die Liste abgeschnitten ist.
+    repeated string ids = 2;
+    // Auch Dateien schreiben, die der Mensch seit dem Start im Projekt
+    // geaendert hat. Ohne den Schalter ist jeder Konflikt ein Abbruch vor
+    // dem ersten Schreiben.
+    bool overwrite = 3;
+  }
+
+  // Welche Aenderungen verworfen werden: immer alle (HUM-350).
+  message DiscardChanges {
+    // Wie `ApplyChanges.sandbox_id`.
+    string sandbox_id = 1;
   }
 
   // Start einer Sandbox-Session.
@@ -959,6 +994,12 @@ message SandboxRequest {
     // in jedem `SANDBOX_006` ueber dieses Verzeichnis; ohne Angabe heisst sie
     // "the work_dir of the request". Leer bei leerem `work_dir`.
     WorkDirSource work_dir_source = 8;
+    // `direct` oder `disposable` (HUM-350). Leer heisst: `sandbox.mode` aus
+    // der Konfiguration. Mit `disposable` liegt das Projektverzeichnis nur
+    // lesbar unter einer Schicht im Arbeitsspeicher, und nach dem Ende
+    // warten die Aenderungen auf `changes`, `apply_changes` oder
+    // `discard_changes`.
+    string sandbox_mode = 9;
   }
 
   // Ein Konfigurationswert, den der Client fuer diese Sitzung setzt.
@@ -1121,6 +1162,13 @@ message SandboxEvent {
     Refusals refusals = 9;
     // Die Antwort auf `SandboxRequest.retire_if_idle` (HUM-284).
     Retire retire = 10;
+    // Die wartenden Aenderungen einer Wegwerf-Sandbox (HUM-350). Kommt
+    // einmal nach dem Ende des Agenten auf dem Strom des Starts und als
+    // Antwort auf `SandboxRequest.changes`.
+    DisposableChanges changes = 11;
+    // Was mit den Aenderungen geschehen ist, als Antwort auf
+    // `apply_changes` und `discard_changes` (HUM-350).
+    DisposableOutcome changes_outcome = 12;
   }
 
   // Ob der Daemon sich verabschiedet (HUM-284).
@@ -1234,6 +1282,76 @@ message SandboxEvent {
 // Der Schluessel ist die Sandbox-Kennung allein: Sie ist eine UUIDv7 und damit
 // fuer sich eindeutig, und sie ist der eine Wert, den `humanitl sessions
 // summary <id>` zur Hand hat. Die Sitzung steht in der Antwort.
+// Eine Aenderung der oberen Schicht einer Wegwerf-Sandbox (HUM-350).
+//
+// Wie in `FileChange` ist jeder Pfad Anzeige und nie wieder ein Pfad: Die
+// Namen schreibt der Agent, der Daemon saeubert sie. Ausgewaehlt wird ueber
+// `id`.
+message DisposableChange {
+  // Die ersten 16 Hex-Zeichen des SHA-256 ueber die rohen Bytes des Pfades;
+  // die Kennung fuer `ApplyChanges.ids`.
+  string id = 1;
+  // Der Pfad relativ zum Projektverzeichnis, gesaeubert.
+  string path = 2;
+  // Ob die Anzeige den echten Namen veraendert hat.
+  bool mangled = 3;
+  FileChangeKind kind = 4;
+  // Was der Eintrag danach ist, bei `REMOVED` was er vorher war: `file`,
+  // `dir`, `symlink` oder `other`.
+  string entry = 5;
+  // Die Groesse danach, 0 fuer Geloeschtes.
+  uint64 size = 6;
+  // Die Rechte, mit denen geschrieben wuerde (nur `rwx`).
+  uint32 mode = 7;
+  // SHA-256 des neuen Inhalts einer Datei, hex; leer fuer alles andere.
+  string sha256 = 8;
+  // Das Ziel eines Symlinks, gesaeubert.
+  string symlink_target = 9;
+  // Der Unterschied im Format `diff -u`, Steuerzeichen maskiert, hoechstens
+  // 64 KiB. Leer, wenn es keinen Text-Diff gibt (`binary`) oder es keine
+  // Datei ist.
+  string diff = 10;
+  // Eine Datei ohne Text-Diff: Binaerinhalt, ueber 1 MiB oder zu viele
+  // geaenderte Zeilen. Dann sagen `size` und `sha256`, was sich geaendert hat.
+  bool binary = 11;
+  // Warum der Mensch zuerst hinsehen sollte: Die Datei im Projekt hat sich
+  // seit dem Start geaendert. Leer: unveraendert. Uebernommen wird sie nur mit
+  // `ApplyChanges.overwrite`.
+  string conflict = 12;
+  // Warum diese Aenderung nie auf den Host geschrieben wird (ein Symlink aus
+  // dem Projekt hinaus, ein Geraet, eine FIFO, ein Socket). Leer: sie darf.
+  string refused = 13;
+  // Die Bits, die nie geschrieben werden: setuid, setgid, sticky.
+  uint32 stripped_bits = 14;
+  // Ob die Datei in der oberen Schicht mehrere Namen hat; geschrieben wird
+  // sie trotzdem je Name als eigene Datei.
+  bool hardlinked = 15;
+}
+
+// Die wartenden Aenderungen einer Wegwerf-Sandbox (HUM-350).
+message DisposableChanges {
+  string sandbox_id = 1;
+  // Das Projektverzeichnis auf dem Host.
+  string work_dir = 2;
+  // Sortiert nach Pfad.
+  repeated DisposableChange changes = 3;
+  // Ob die Liste abgeschnitten ist; dann wird „alle uebernehmen" abgelehnt.
+  bool truncated = 4;
+}
+
+// Was mit den Aenderungen einer Wegwerf-Sandbox geschehen ist (HUM-350).
+message DisposableOutcome {
+  string sandbox_id = 1;
+  // `applied`: die gewaehlten sind geschrieben, der Rest verworfen;
+  // `discarded`: alle verworfen; `partial`: das Schreiben brach ab, die
+  // geschriebenen stehen in `applied`, die Schicht wartet weiter.
+  string outcome = 2;
+  // Die geschriebenen Pfade, gesaeubert.
+  repeated string applied = 3;
+  // Die verworfenen Pfade, gesaeubert.
+  repeated string discarded = 4;
+}
+
 message SessionSummaryRef {
   string sandbox_id = 1;
 }

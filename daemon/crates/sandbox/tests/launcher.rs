@@ -1261,3 +1261,230 @@ fn a_folder_that_no_longer_lies_where_it_was_approved_is_not_mounted() {
         err.why
     );
 }
+
+// --- die Wegwerf-Sandbox (HUM-350) --------------------------------------------
+
+/// Die Schicht eines Tests: im Laufzeitverzeichnis der Fixture, auf jedem
+/// Dateisystem (das temporäre Verzeichnis der CI liegt auf der Platte).
+fn layer(fx: &Fixture) -> humanitl_sandbox::Layer {
+    humanitl_sandbox::Layer::create_with(
+        &fx.paths.runtime_dir().path,
+        humanitl_sandbox::TmpfsCheck::Skip,
+    )
+    .expect("the layer")
+}
+
+#[test]
+fn plan_of_a_disposable_sandbox_mounts_the_project_as_the_lower_layer() {
+    let fx = fixture();
+    let layer = layer(&fx);
+    let data = fx.state.join("data");
+    std::fs::create_dir_all(&data).expect("data");
+    let extras = probe(&format!(
+        "[mounts]\nextra_rw = [{:?}]\n",
+        data.to_str().unwrap()
+    ));
+    let backend = fx.unchecked().with_overlay(layer.dirs());
+    let plan = backend.plan(&extras, &fx.context(&["true"])).expect("plan");
+    let args = strings(&plan.argv);
+    let at = window_at(&args, &["--overlay-src"]).expect("an overlay");
+    assert!(args[at + 1].starts_with("/proc/self/fd/"), "{args:?}");
+    let fd = args[at + 1].trim_start_matches("/proc/self/fd/").to_owned();
+    assert!(
+        plan.fds
+            .iter()
+            .any(|(planned, _)| planned.to_string() == fd),
+        "the opened project folder is inherited"
+    );
+    assert_eq!(args[at + 2], "--overlay");
+    assert_eq!(args[at + 3], layer.upper().to_string_lossy());
+    assert_eq!(args[at + 4], layer.work().to_string_lossy());
+    assert_eq!(args[at + 5], "/work");
+    assert!(
+        args.windows(3)
+            .any(|w| w[0] == "--ro-bind-fd" && w[2] == data.to_str().unwrap()),
+        "extra_rw is read-only in a disposable sandbox: {args:?}"
+    );
+    assert!(!args.iter().any(|arg| arg == "--bind-fd" || arg == "--bind"));
+}
+
+/// Review Runde 2, Punkt 1: Hält der Aufrufer den Projektordner schon offen,
+/// hängt das Backend nur denselben Inode ein. Ein Umbenennen und ein neuer
+/// Ordner unter demselben Pfad bestehen den Vergleich der Orte, nicht den der
+/// Inodes.
+///
+/// Mutationsbeweis: Ohne den Vergleich in `PinnedMounts::open` plant das
+/// Backend den neuen Ordner.
+#[test]
+fn plan_of_a_disposable_sandbox_mounts_only_the_folder_the_caller_holds() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let fx = fixture();
+    let layer = layer(&fx);
+    let meta = std::fs::metadata(&fx.work).expect("the project");
+    let backend = fx
+        .unchecked()
+        .with_overlay(layer.dirs())
+        .with_expected_work_inode(meta.dev(), meta.ino());
+    backend
+        .plan(&profile("default"), &fx.context(&["true"]))
+        .expect("the same folder plans");
+
+    let moved = fx.state.join("work-moved");
+    std::fs::rename(&fx.work, &moved).expect("rename");
+    std::fs::create_dir_all(fx.work.join(".git/hooks")).expect("a new folder at the path");
+    let err = backend
+        .plan(&profile("default"), &fx.context(&["true"]))
+        .expect_err("another folder under the same path");
+    assert_eq!(err.code.as_str(), "SANDBOX_006");
+    assert!(
+        err.why.contains("another directory took its path"),
+        "{}",
+        err.why
+    );
+}
+
+#[test]
+fn plan_of_a_disposable_sandbox_needs_overlay_support_and_a_writable_view() {
+    let fx = fixture();
+    let layer = layer(&fx);
+    let old = BwrapBackend::unchecked("/usr/bin/bwrap", Version(0, 10, 0), fx.paths.clone())
+        .with_overlay(layer.dirs());
+    let err = old
+        .plan(&profile("default"), &fx.context(&["true"]))
+        .expect_err("0.10 has no --overlay");
+    assert_eq!(err.code.as_str(), "SANDBOX_030");
+    assert!(err.why.contains("0.11.0"), "{}", err.why);
+    assert!(err.fix.is_some());
+
+    let mut ctx = fx.context(&["true"]);
+    ctx.work_mode = WorkMode::Ro;
+    let err = fx
+        .unchecked()
+        .with_overlay(layer.dirs())
+        .plan(&profile("default"), &ctx)
+        .expect_err("read-only and disposable");
+    assert_eq!(err.code.as_str(), "SANDBOX_030");
+    assert!(err.why.contains("read-only"), "{}", err.why);
+}
+
+/// Der Kern der Wegwerf-Sandbox mit echtem `bwrap`: Was der Agent schreibt,
+/// ändert, löscht und als Symlink anlegt, erreicht das Projekt nicht; der
+/// Diff nach dem Ende zeigt es, die Übernahme schreibt es (ohne den Symlink
+/// nach draußen und ohne setuid), und das Verwerfen lässt nichts zurück.
+///
+/// Mutationsbeweis: Mit dem gewöhnlichen Bind statt des Overlays (in
+/// `to_bwrap_args` den Zweig `inputs.overlay` übergehen) ist
+/// `the project is untouched` rot.
+#[test]
+fn a_disposable_sandbox_never_writes_to_the_project() {
+    use std::os::fd::AsFd as _;
+
+    let fx = fixture();
+    // `ESC5-SKIP` is the marker `tests/escape/esc-5-filesystem.sh` reads: a
+    // machine without the backend or without `--overlay` (bubblewrap 0.11)
+    // must never read as a sandbox that held.
+    let Some(real) = fx
+        .real()
+        .filter(|real| real.version() >= humanitl_sandbox::MIN_OVERLAY_VERSION)
+    else {
+        eprintln!("ESC5-SKIP no sandbox backend with --overlay on this machine");
+        return;
+    };
+    std::fs::write(fx.work.join("edit.txt"), "before\n").expect("edit");
+    std::fs::write(fx.work.join("gone.txt"), "gone\n").expect("gone");
+    std::fs::create_dir_all(fx.work.join("dir/sub")).expect("dir");
+    std::fs::write(fx.work.join("dir/sub/f"), "f\n").expect("f");
+    let data = fx.state.join("data");
+    std::fs::create_dir_all(&data).expect("data");
+    let mut extras = profile("default");
+    extras.mounts.extra_rw = vec![data.clone()];
+    let before = humanitl_sandbox::disposable::baseline(&fx.work).expect("baseline");
+    let layer = layer(&fx);
+    let backend = real.with_overlay(layer.dirs());
+    let script = format!(
+        "echo after > /work/edit.txt; echo new > /work/new.txt; rm /work/gone.txt; \
+         rm -r /work/dir; mkdir -p /work/dir; echo again > /work/dir/x; \
+         ln -s /etc/passwd /work/escape; chmod 4755 /work/new.txt 2>/dev/null; \
+         if echo no > {}/written 2>/dev/null; then echo EXTRA-RW-WRITABLE; fi; \
+         cat /work/edit.txt",
+        data.display()
+    );
+    let plan = backend
+        .plan(&extras, &fx.context(&["sh", "-c", &script]))
+        .expect("plan");
+    let handle = backend.launch(&plan).expect("bwrap starts");
+    let status = wait(&handle);
+    let output = handle.output().expect("captured");
+    assert!(status.success(), "{status}: {}", text(&output.stderr));
+    assert_eq!(
+        text(&output.stdout),
+        "after\n",
+        "the agent sees its own view"
+    );
+
+    let now = humanitl_sandbox::disposable::baseline(&fx.work).expect("after");
+    assert_eq!(now.entries(), before.entries(), "the project is untouched");
+    assert!(!data.join("written").exists(), "extra_rw stayed read-only");
+    humanitl_sandbox::disposable::ensure_ended(&handle, None).expect("the sandbox has ended");
+
+    let upper = humanitl_sandbox::worktree::open_root(&layer.upper()).expect("upper");
+    let lower = humanitl_sandbox::worktree::open_root(&fx.work).expect("lower");
+    let set = humanitl_sandbox::disposable::scan(upper.as_fd(), lower.as_fd(), &before);
+    let listed: Vec<(String, humanitl_sandbox::ChangeKind)> = set
+        .changes
+        .iter()
+        .map(|change| (change.rel.to_string_lossy().into_owned(), change.kind))
+        .collect();
+    for expected in [
+        ("edit.txt", humanitl_sandbox::ChangeKind::Modified),
+        ("new.txt", humanitl_sandbox::ChangeKind::Added),
+        ("gone.txt", humanitl_sandbox::ChangeKind::Removed),
+        ("dir/sub", humanitl_sandbox::ChangeKind::Removed),
+        ("dir/x", humanitl_sandbox::ChangeKind::Added),
+        ("escape", humanitl_sandbox::ChangeKind::SymlinkAdded),
+    ] {
+        assert!(
+            listed.contains(&(expected.0.to_owned(), expected.1)),
+            "{expected:?} is missing from {listed:?}"
+        );
+    }
+
+    // Alles außer dem Symlink nach draußen.
+    let ids: Vec<String> = set
+        .changes
+        .iter()
+        .filter(|change| change.refused.is_none())
+        .map(humanitl_sandbox::LayerChange::path_hash)
+        .collect();
+    let chosen = humanitl_sandbox::disposable::select(&set, &ids).expect("select");
+    let report = humanitl_sandbox::disposable::apply(
+        upper.as_fd(),
+        lower.as_fd(),
+        &before,
+        &chosen,
+        humanitl_sandbox::ApplyOptions::default(),
+    )
+    .expect("apply");
+    assert!(report.failed.is_none(), "{:?}", report.failed);
+    assert_eq!(
+        std::fs::read_to_string(fx.work.join("edit.txt")).unwrap(),
+        "after\n"
+    );
+    assert!(!fx.work.join("gone.txt").exists());
+    assert!(!fx.work.join("dir/sub").exists());
+    assert_eq!(
+        std::fs::read_to_string(fx.work.join("dir/x")).unwrap(),
+        "again\n"
+    );
+    assert!(std::fs::symlink_metadata(fx.work.join("escape")).is_err());
+    let mode = std::fs::metadata(fx.work.join("new.txt"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o7000, 0, "no setuid bit reaches the host");
+
+    let dir = layer.dir().to_path_buf();
+    layer.discard().map_err(|(_, err)| err).expect("discard");
+    assert!(!dir.exists(), "the upper layer is gone");
+}

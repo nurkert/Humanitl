@@ -17,7 +17,7 @@ Entfernen eines Codes.
 | daemon | `DAEMON` | 001 | 019 | 001-004 Start, Erreichbarkeit, Version des Daemons, 005-008 die Nutzer-Unit von `daemon install` (HUM-044), 009 Abschied (HUM-142), 010 Nutzersitzung, 011 Binaries aus dem `AppImage`, 012 `journalctl` (HUM-070), 013 der von systemd übergebene Socket (HUM-053), 014 `daemon uninstall` (HUM-077) |
 | ipc | `IPC` | 001 | 009 | gRPC-Schnittstelle, Token, Aufrufe gegen den Zustand |
 | config | `CONFIG` | 001 | 029 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel (HUM-070), 019-020 der Zugangsschlüssel des Modells (HUM-140, Bereich dafür bis 029 erweitert), 021 die gespeicherten Modellserver (HUM-289) |
-| sandbox | `SANDBOX` | 001 | 029 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043) |
+| sandbox | `SANDBOX` | 001 | 032 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043), 030-032 Wegwerf-Sandbox (HUM-350) |
 | proxy | `PROXY` | 001 | 019 | Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120) |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
 | llm | `LLM` | 001 | 009 | LLM-Endpunkt und seine Antworten, 009 der Zugangsschlüssel (HUM-140) |
@@ -572,6 +572,30 @@ Verweigerte Verbindungsversuche werden nicht gemeldet
 **Auslöser.** Der Kernel hat dem Filter des Agenten keinen Zuhörer gegeben; verweigert wird weiter mit `EPERM`, gezählt und gemeldet wird nichts.
 
 **Fix.** Kein Fix-Knopf: Der Text nennt den errno; `EBUSY` heißt, dass Humanitl selbst in einer Umgebung mit eigenem seccomp-Zuhörer läuft.
+
+#### SANDBOX_030
+
+Disposable sandbox not possible
+
+**Auslöser.** The start asked for a disposable sandbox, and one of its conditions is missing: bubblewrap 0.11 or newer, a runtime directory on tmpfs, a writable view of the project folder, or no changes of an earlier disposable run still pending.
+
+**Fix.** `CopyCommand` with the install command for a newer bubblewrap, `ChangeSetting` on `sandbox.work_mode` = `rw`, `SetEnv` for `XDG_RUNTIME_DIR` = `/run/user/<uid>`, or `CopyCommand` with `humanitl sandbox changes` for pending changes.
+
+#### SANDBOX_031
+
+Change of a disposable run not applied
+
+**Auslöser.** Applying the changes of a disposable run stopped at a path: the project file changed since the start, the change is not something Humanitl writes to the host (a symbolic link out of the project, a device, FIFO or socket), a parent in the project is a symbolic link now, there are no pending changes, or the write failed.
+
+**Fix.** `CopyCommand` with `humanitl sandbox apply --overwrite` after a look at the conflicting file, `CopyCommand` with `humanitl sandbox apply` and a smaller selection, or `CopyCommand` with `humanitl sandbox discard`.
+
+#### SANDBOX_032
+
+Disposable layer full
+
+**Auslöser.** The changes of a disposable run grew over the cap of the upper layer in RAM (bytes or entries), and the daemon stopped the sandbox so the agent cannot fill the memory.
+
+**Fix.** No fix for the run; the changes so far wait under `humanitl sandbox changes`. A task that needs more space runs without `--disposable`.
 
 ### Bereich proxy
 

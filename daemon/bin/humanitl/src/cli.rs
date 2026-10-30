@@ -347,6 +347,13 @@ pub struct RunArgs {
     /// from the configuration.
     #[arg(last = true, value_name = "CMD")]
     pub cmd: Vec<OsString>,
+
+    /// Keep the project folder untouched: it lies read-only under a layer in
+    /// RAM, and after the run `humanitl sandbox changes` shows what the agent
+    /// changed, `apply` writes it and `discard` drops it. The same as
+    /// sandbox.mode = "disposable" for this run.
+    #[arg(long)]
+    pub disposable: bool,
 }
 
 /// Die Unterkommandos von `humanitl audit`.
@@ -401,6 +408,11 @@ pub enum SandboxCmd {
         /// Host directory mounted at /tests/escape of the `test` profile.
         #[arg(long, value_name = "DIR")]
         tests_dir: Option<PathBuf>,
+        /// Run with the project folder read-only under a layer in RAM; at the
+        /// end the changes are listed and discarded (this command keeps no
+        /// layer; `humanitl run --disposable` keeps them for apply).
+        #[arg(long)]
+        disposable: bool,
         /// The command to run in the sandbox, after `--`.
         #[arg(last = true, value_name = "CMD", required = true)]
         cmd: Vec<OsString>,
@@ -459,6 +471,44 @@ pub enum SandboxCmd {
         /// or sh when the sandbox has no bash.
         #[arg(last = true, value_name = "CMD")]
         cmd: Vec<OsString>,
+    },
+
+    /// Show what a disposable run changed: files changed, created and
+    /// deleted, with a diff for text files and size and hash for others.
+    ///
+    /// Each row starts with the id that `humanitl sandbox apply` takes. A
+    /// conflict means the file changed in the project since the start; a
+    /// change marked "never applied" (a symbolic link out of the project, a
+    /// device, FIFO or socket) is not written to the host.
+    Changes {
+        /// Only the list, without the diffs.
+        #[arg(long)]
+        stat: bool,
+    },
+
+    /// Write the changes of a disposable run to the project folder and
+    /// discard the rest.
+    ///
+    /// Without IDs all changes; with IDs only those. Asks before it writes.
+    /// Nothing is written when one of the chosen changes cannot be applied as
+    /// it is; the changes keep waiting then.
+    Apply {
+        /// The ids from `humanitl sandbox changes`.
+        #[arg(value_name = "ID")]
+        ids: Vec<String>,
+        /// Also write files that changed in the project since the start.
+        #[arg(long)]
+        overwrite: bool,
+        /// Do not ask; for scripts.
+        #[arg(long)]
+        yes: bool,
+    },
+
+    /// Drop all changes of a disposable run. Asks first.
+    Discard {
+        /// Do not ask; for scripts.
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -1238,7 +1288,7 @@ mod tests {
             "--json after -- is the agent's"
         );
         let Cmd::Sandbox {
-            cmd: SandboxCmd::Run { cmd, tests_dir },
+            cmd: SandboxCmd::Run { cmd, tests_dir, .. },
         } = invocation.cli.cmd
         else {
             panic!("expected sandbox run");
@@ -1262,7 +1312,7 @@ mod tests {
         .expect("the command parses");
 
         let Cmd::Sandbox {
-            cmd: SandboxCmd::Run { cmd, tests_dir },
+            cmd: SandboxCmd::Run { cmd, tests_dir, .. },
         } = invocation.cli.cmd
         else {
             panic!("expected sandbox run");

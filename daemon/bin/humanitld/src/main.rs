@@ -389,6 +389,8 @@ async fn run_daemon(cli: &Cli, passed: Option<systemd::Passed>) -> Result<(), Di
         "proxy session started"
     );
 
+    sweep_disposable_layers(&xdg);
+
     // Der Dienst bleibt hier greifbar: Der Abschied unten braucht ihn, um die
     // Sandbox zu beenden, bevor der Daemon selbst geht (HUM-142). Er ist
     // billig zu klonen; der Zustand liegt hinter einem `Arc`.
@@ -2419,6 +2421,19 @@ fn shutdown_signal() -> impl Future<Output = &'static str> + Send + 'static {
                 "signal_error"
             }
         }
+    }
+}
+
+/// Schichten einer Wegwerf-Sandbox, die ein früherer Daemon liegen ließ
+/// (Absturz, `SIGKILL`), belegen Arbeitsspeicher; ohne die Grundlage vom
+/// Start ist ihre Übernahme nicht sicher, sie werden verworfen (HUM-350).
+fn sweep_disposable_layers(paths: &XdgPaths) {
+    let swept = humanitl_sandbox::disposable::sweep(&paths.runtime_dir().path);
+    if swept > 0 {
+        tracing::warn!(
+            layers = swept,
+            "discarded the upper layers of disposable sandboxes an earlier daemon left behind"
+        );
     }
 }
 

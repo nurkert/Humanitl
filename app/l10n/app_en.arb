@@ -3388,5 +3388,17 @@
   "historyDeciderClient": "client",
   "@historyDeciderClient": {"description": "Rule column (HUM-316): nobody and no rule decided; the client gave up its TLS connection to the proxy before there was a request to decide, by rejecting or breaking off the handshake or by closing the tunnel empty."},
   "historyDecisionAborted": "aborted",
-  "@historyDecisionAborted": {"description": "Decision field of the detail head (HUM-316) for a flow whose client gave up its TLS connection to the proxy before there was anything to decide. Not \"blocked\": nobody blocked it, and nothing reached the target."}
+  "@historyDecisionAborted": {"description": "Decision field of the detail head (HUM-316) for a flow whose client gave up its TLS connection to the proxy before there was anything to decide. Not \"blocked\": nobody blocked it, and nothing reached the target."},
+  "diagSANDBOX030Title": "Disposable sandbox not possible",
+  "@diagSANDBOX030Title": {"description": "Title of the diagnostic SANDBOX_030 (docs/DIAGNOSTICS.md): a disposable sandbox (HUM-350) cannot start because bubblewrap is too old, the runtime directory is not on tmpfs, the project folder is read-only, or earlier changes still wait."},
+  "diagSANDBOX030Why": "The disposable sandbox needs bubblewrap 0.11 or newer, a runtime directory in RAM, a writable view of the project folder and no changes still waiting from an earlier run.",
+  "@diagSANDBOX030Why": {"description": "Generic cause of SANDBOX_030. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "diagSANDBOX031Title": "Change of a disposable run not applied",
+  "@diagSANDBOX031Title": {"description": "Title of the diagnostic SANDBOX_031 (docs/DIAGNOSTICS.md): applying the changes of a disposable sandbox stopped (HUM-350); nothing of the selection is written when a check fails before the first write."},
+  "diagSANDBOX031Why": "A file changed in the project since the start, a change leaves the project or is not a file, or writing failed; the changes keep waiting.",
+  "@diagSANDBOX031Why": {"description": "Generic cause of SANDBOX_031. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "diagSANDBOX032Title": "Disposable layer full",
+  "@diagSANDBOX032Title": {"description": "Title of the diagnostic SANDBOX_032 (docs/DIAGNOSTICS.md): the upper layer of a disposable sandbox grew over its cap in RAM, and the daemon stopped the sandbox (HUM-350)."},
+  "diagSANDBOX032Why": "The changes of the disposable run grew over the cap of its layer in RAM, so the sandbox was stopped; what was written before still waits.",
+  "@diagSANDBOX032Why": {"description": "Generic cause of SANDBOX_032. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
 }

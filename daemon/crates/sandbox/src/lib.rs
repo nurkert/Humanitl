@@ -35,6 +35,9 @@
 //!   dem Bericht des Shims gelesen (HUM-138)
 //! - [`summary`] was ein Sandbox-Lauf im Projekt hinterlassen hat, in der Form,
 //!   die ein Mensch zu sehen bekommt (HUM-043)
+//! - [`disposable`] die Wegwerf-Sandbox: das Projekt als untere Schicht eines
+//!   Overlays, die obere im Arbeitsspeicher, Diff, Übernahme und Verwerfen
+//!   (HUM-350)
 //! - [`doctor`] die Vorbedingungen dieser Maschine, eine Zeile je Prüfung mit
 //!   `ok`, `warn` oder `fail` und einem Befund (HUM-075)
 //! - [`os_release`] welcher Paketverwalter auf dieser Maschine installiert,
@@ -99,6 +102,7 @@ pub mod agent_exit;
 pub mod bridge_env;
 pub mod bwrap;
 pub mod bwrap_args;
+pub mod disposable;
 pub mod doctor;
 pub mod handle;
 mod inherit;
@@ -134,6 +138,11 @@ pub use crate::bwrap_args::{
     DEFAULT_HOME, DEFAULT_USER, GROUP_DST, HOSTS_DST, IdentityFds, IdentityFiles, LaunchInputs,
     MaskFds, PASSWD_DST, PREVIEW_AGENT_FD_FIRST, PREVIEW_MASK_FD_FIRST, SANDBOX_SHELL, SourceFd,
     shell_line, shell_quote,
+};
+#[cfg(target_os = "linux")]
+pub use crate::disposable::{ApplyOptions, ApplyReport, ChangeSet, Layer, LayerChange, SizeGuard};
+pub use crate::disposable::{
+    Budget, DisposableRecord, MIN_OVERLAY_VERSION, OverlayDirs, TmpfsCheck,
 };
 pub use crate::handle::{
     CAPTURE_MAX_BYTES, CapturedOutput, INTERRUPT_GRACE, KILL_GRACE, OutputChunk, OutputSink,

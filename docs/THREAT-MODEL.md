@@ -123,6 +123,7 @@ Five further channels complete the model:
 | K-15 | the window between `exec` and `SIGKILL` | b | high | report read at once, `SIGKILL` without grace | open | - |
 | K-16 | recording outage | a, b, c | medium | outage reported to every client once per cause, cards marked "not recorded", first approval paused | declared | `daemon/crates/recorder` health tests, golden `states_recorder_failure` |
 | K-18 | the door for further shells (`humanitl sandbox exec`) | b | high | unnamed socket pair held only by the daemon and PID 1; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX`; at most four; dies with the sandbox | mitigated | `daemon/crates/ipc/tests/terminal.rs` (HUM-299) |
+| K-24 | the disposable sandbox: the upper layer and the way back into the project (`humanitl sandbox apply`) | b | high | project folder read-only as the lower layer of an overlay, upper layer in RAM under the daemon's runtime directory with a size cap, `mounts.extra_rw` read-only; applied only on a human's choice, checked before the first write, never through or as a symlink out of the project, no device, FIFO, socket or setuid bit, no overwrite of a file the human changed since the start without `--overwrite` | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350) |
 
 K-13 is the obvious channel and the only one considered closed outright. K-14 is here so that
 attacker (d) appears in a row. K-15 came with HUM-041: the check that proves the guarantees runs
@@ -421,6 +422,50 @@ cooperating host process through them; that process would then need its own way 
 sandbox does not give it. *Residual risk:* entries in the system log are readable by the user's
 other processes.
 
+### K-24 The disposable sandbox
+
+Linux-only for now: on macOS (Seatbelt) there is no overlay, a disposable start is refused with
+`SANDBOX_030`, and the channel does not exist there.
+
+With `sandbox.mode = "disposable"` (HUM-350) the project folder is the read-only lower layer of an
+overlay at `/work`, and the agent's changes go to an upper layer the daemon created under
+`$XDG_RUNTIME_DIR/humanitl/disposable/<id>/` (mode `0700`, tmpfs). After the run a human reviews
+the diff and applies all, some or none of it. The upper layer is written by attacker (b) and
+read by the daemon; applying it is a write path from the sandbox back to the host, so (b) tries
+four things. (1) *Write to the project or the host during the run.* The project is the lower
+layer and never written; `mounts.extra_rw` is mounted read-only in this mode; the path of the
+upper layer is not visible in the sandbox (`/run` never comes from the host, and bubblewrap opens
+the overlay directories by descriptor). (2) *Keep writing while the daemon reads.* The daemon
+reads and applies only after bubblewrap is reaped and the sandbox's first process is gone; with
+PID 1 the kernel ends the whole PID namespace, and the overlay's mount namespace ends with its
+last process. (3) *Fill the host's memory.* The tmpfs of the runtime directory is the hard
+limit; the daemon measures that file system's growth every 250 ms and stops the sandbox above
+2 GiB or 200 000 entries (or half of what was free), `SANDBOX_032`. Between two measurements
+the agent can write past the cap up to the hard limit. (4) *Make the apply write somewhere
+else or something else.* Every access to the layer and to the project goes through
+`openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS)`; a symlink the agent planted in the layer is
+never followed, a symlink whose target leaves the project is never written, and a symlink that
+appeared in the project meanwhile stops the write (`ELOOP`). A symlink target must be a plain
+relative path (leading `..` only, no more than the link's own depth), so a chain such as
+`sub/d -> ..` and `e -> sub/d/..` cannot lead above the project. Files are created with
+`O_CREAT | O_EXCL | O_NOFOLLOW` under a name of their own and moved into place with `renameat`,
+which replaces a symlink at the target instead of following it. Devices, FIFOs and sockets are
+never written, setuid, setgid and sticky bits are dropped, hard links become separate files,
+whiteouts and opaque directories only delete inside the project, and entries with overlay
+attributes an unprivileged overlay never writes (`redirect`, `metacopy`) are refused. The project folder is opened once
+before the start; the baseline is taken on that descriptor before the sandbox starts, the
+launcher mounts only a folder with the same inode, and diff and apply never reopen the path. A file the human changed since the start is a conflict and needs
+`--overwrite`, and the target is compared again directly before each write (a remaining window of
+a few system calls, no lock on the folder); every selected change is
+checked before the first write, and one failing check writes nothing. Paths and diffs are agent
+data and are shown sanitised. *Residual risk:* what the human applies is the agent's content, as
+in a direct session; review the diff, in particular files the host runs by itself (hooks,
+`Makefile`, `package.json` scripts, which the summary's finding `SANDBOX_026` names for direct
+sessions only so far). Requests the agent sent through the proxy are out, whatever happens to the
+layer. The conflict check compares type, size, `mtime` and mode, not content: a human edit that
+keeps all four is not noticed. A daemon that ends discards a pending layer; its changes are lost
+then, and the recording says so.
+
 ## Assumptions
 
 | ID | Assumption | How to check it | If it breaks |
@@ -492,6 +537,8 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-29 | K-18: further shells next to the agent through a socket pair only the daemon and PID 1 hold, forked inside with the agent's filter on top | HUM-299 |
 | 2026-10-29 | B1: a globally installed pi extension (`pi-web-access`) runs inside the agent with all its restrictions; its requests pass the proxy and are held there when no rule decides them; `agent.pi.web_access` closed to project profiles | HUM-309 |
 | 2026-10-30 | K-19 to K-23: macOS with Seatbelt; shared loopback, no PID namespace, paths instead of descriptors, a deprecated interface, host-local side channels | HUM-323, HUM-327, HUM-331 |
+
+| 2026-10-30 | K-24: the disposable sandbox, an overlay over the read-only project with the upper layer in RAM and a size cap; changes reach the project only through a checked apply | HUM-350 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

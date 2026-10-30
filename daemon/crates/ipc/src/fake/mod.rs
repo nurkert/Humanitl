@@ -1218,6 +1218,15 @@ impl FakeDaemon {
                     v1::sandbox_event::Retire { retired: false },
                 )),
             }],
+            // Der Fake startet keine Wegwerf-Sandbox; es wartet nie etwas
+            // (HUM-350). Derselbe Befund wie beim echten Dienst ohne Schicht.
+            Some(Op::Changes(()) | Op::ApplyChanges(_) | Op::DiscardChanges(_)) => {
+                vec![v1::SandboxEvent {
+                    event: Some(v1::sandbox_event::Event::Diagnostic(diagnostic_to_proto(
+                        &crate::disposable::nothing_pending(),
+                    ))),
+                }]
+            }
             Some(Op::Argv(())) => argv_lines(&self.state.session().work_dir),
             Some(Op::Plan(plan)) => vec![self.sandbox_status_for(
                 self.state.sandbox().1,

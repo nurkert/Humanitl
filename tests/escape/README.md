@@ -57,7 +57,7 @@ erscheint im XML als `<error>`, eine durchgekommene Probe als `<failure>`.
 | `refusals-proof.sh` | von `run.sh` eingelesen: startet nach den Suiten eine weitere Sandbox, lässt sie genau dreimal `socket(AF_UNIX)` und zweimal `socket(AF_INET, SOCK_DGRAM)` versuchen und entscheidet `esc-1/refusals_reported` an dem, was `humanitl sandbox run` danach über die verweigerten Versuche sagt (HUM-138) |
 | `esc-4-rules.sh` | ESC-4: die Regel-Tabelle, gegen die Regel-Engine aus HUM-022, für den Body-Cap gegen den laufenden Proxy und seit HUM-114 fünfzehnmal über `humanitl rules test` gegen den Daemon des Laufs; dazu `llm_cli_unreachable`, die einzige Probe der Sammlung für `humanitl llm test` |
 | `body_cap.py` | die zwei Anfragen von `rule_body_over_cap`: eine über dem Cap, eine genau auf dem Cap, über den Proxy-Socket |
-| `esc-5-filesystem.sh` | ESC-5: sieben Fälle gegen die gleichnamigen Integrationstests — fünf zu Dateisystem und Terminal (HUM-042, HUM-043), zwei zur Audit-Kette eines echten Daemons (HUM-050) |
+| `esc-5-filesystem.sh` | ESC-5: acht Fälle gegen die gleichnamigen Integrationstests — fünf zu Dateisystem und Terminal (HUM-042, HUM-043), zwei zur Audit-Kette eines echten Daemons (HUM-050), einer zur Wegwerf-Sandbox: ein Wegwerf-Lauf schreibt nie in das Projekt (HUM-350) |
 | `humanitl sandbox run --profile test --tests-dir tests/escape -- …` | der Start jeder Suite: dieselbe Kommandozeile, die der Nutzer aufruft (CONVENTIONS.md 3.11) |
 
 **Ein Fall heißt nie wie ein Agent.** Seit HUM-135 entscheidet der Daemon am

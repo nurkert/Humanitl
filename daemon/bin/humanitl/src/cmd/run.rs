@@ -120,6 +120,15 @@ pub async fn run(ctx: &Context, args: &RunArgs) -> Result<u8, Failure> {
         ask_mode: ask_mode_name(config.hold.ask_mode).to_owned(),
         cli_overrides: session_overrides(ctx),
         work_dir_source: Some(humanitl_ipc::work_dir::source_to_proto(&work_dir_source)),
+        // `--disposable` for this run, otherwise what the configuration says
+        // (HUM-350).
+        sandbox_mode: if args.disposable {
+            humanitl_config::SandboxMode::Disposable
+        } else {
+            config.sandbox.mode
+        }
+        .as_str()
+        .to_owned(),
     };
 
     let session = json!({
@@ -754,9 +763,22 @@ fn handle(ctx: &Context, event: v1::SandboxEvent) -> Option<Failure> {
             }
             None
         }
-        // `Retire` ist die Antwort auf `retire_if_idle` (HUM-284); auf dem
-        // Strom eines Starts kommt sie nie.
-        Event::Exit(_) | Event::Retire(_) => None,
+        // Die Änderungen einer Wegwerf-Sandbox warten (HUM-350). Die Zeile
+        // führt zu den Befehlen; Diff und Auswahl gehören zu ihnen.
+        Event::Changes(changes) => {
+            ctx.render.note(&format!(
+                "{} change(s) wait in the disposable layer of sandbox {}; the project folder \
+                 is untouched. Review: humanitl sandbox changes   Apply: humanitl sandbox apply   \
+                 Discard: humanitl sandbox discard",
+                changes.changes.len(),
+                sanitize_note(&changes.sandbox_id)
+            ));
+            None
+        }
+        // `Retire` ist die Antwort auf `retire_if_idle` (HUM-284), das
+        // Ergebnis einer Übernahme die auf `apply_changes` (HUM-350); auf dem
+        // Strom eines Starts kommt beides nie.
+        Event::Exit(_) | Event::Retire(_) | Event::ChangesOutcome(_) => None,
     }
 }
 
@@ -1045,8 +1067,12 @@ mod tests {
     fn only_a_callers_command_at_a_terminal_attaches() {
         let bash = RunArgs {
             cmd: vec![std::ffi::OsString::from("bash")],
+            disposable: false,
         };
-        let agent = RunArgs { cmd: Vec::new() };
+        let agent = RunArgs {
+            cmd: Vec::new(),
+            disposable: false,
+        };
         assert!(attaches(&bash, false, false, true));
         assert!(!attaches(&bash, false, false, false), "no terminal");
         assert!(!attaches(&bash, true, false, true), "--ask terminal");
@@ -1112,7 +1138,13 @@ mod tests {
     #[test]
     fn the_lines_name_the_chain_and_the_session() {
         let resolved = resolved("llm-only");
-        let text = session_lines(&resolved, &RunArgs { cmd: Vec::new() });
+        let text = session_lines(
+            &resolved,
+            &RunArgs {
+                cmd: Vec::new(),
+                disposable: false,
+            },
+        );
 
         assert!(text.contains("profile builtin default"), "{text}");
         assert!(text.contains("profile builtin llm-only"), "{text}");
@@ -1134,7 +1166,10 @@ mod tests {
 
     /// Kein Kommando hinter `--`.
     fn no_cmd() -> RunArgs {
-        RunArgs { cmd: Vec::new() }
+        RunArgs {
+            cmd: Vec::new(),
+            disposable: false,
+        }
     }
 
     #[test]
@@ -1193,6 +1228,7 @@ mod tests {
         for own in ["bash", "opencoded", "myopencode"] {
             let args = RunArgs {
                 cmd: vec![std::ffi::OsString::from(own)],
+                disposable: false,
             };
             assert!(
                 refuse_terminal_ask(&config, &args, true).is_ok(),
@@ -1205,6 +1241,7 @@ mod tests {
                 std::ffi::OsString::from("-c"),
                 std::ffi::OsString::from("opencode"),
             ],
+            disposable: false,
         };
         assert!(refuse_terminal_ask(&config, &shell, true).is_ok());
     }
@@ -1224,7 +1261,10 @@ mod tests {
                     std::ffi::OsString::from("say hello"),
                 ],
             ] {
-                let args = RunArgs { cmd };
+                let args = RunArgs {
+                    cmd,
+                    disposable: false,
+                };
                 let failure = refuse_terminal_ask(&config, &args, true)
                     .expect_err(&format!("{named} draws the whole screen"));
                 assert_eq!(failure.diagnostic.code.as_str(), "CLI_002", "{named}");
@@ -1241,6 +1281,7 @@ mod tests {
         config.agent.command = Some(vec!["mycode".to_owned()]);
         let args = RunArgs {
             cmd: vec![std::ffi::OsString::from("/opt/bin/mycode")],
+            disposable: false,
         };
         let failure =
             refuse_terminal_ask(&config, &args, true).expect_err("mycode is the agent here");
@@ -1249,6 +1290,7 @@ mod tests {
         // Und ein anderes Programm bleibt ein anderes.
         let other = RunArgs {
             cmd: vec![std::ffi::OsString::from("bash")],
+            disposable: false,
         };
         assert!(refuse_terminal_ask(&config, &other, true).is_ok());
     }

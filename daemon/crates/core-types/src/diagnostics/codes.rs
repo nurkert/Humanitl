@@ -90,9 +90,10 @@ pub static AREAS: &[AreaInfo] = &[
         area: "sandbox",
         prefix: "SANDBOX",
         first: 1,
-        last: 29,
+        last: 32,
         note: "001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, \
-               019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043)",
+               019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043), \
+               030-032 Wegwerf-Sandbox (HUM-350)",
     },
     AreaInfo {
         area: "proxy",
@@ -1572,6 +1573,33 @@ registry! {
     AGENT_007 => "agent", "pi web extension not installed", "#agent_007",
         "`agent.pi.web_access` is `on`, and no directory the sandbox reaches holds the package `pi-web-access`. pi starts without `web_search` and `fetch_content`.",
         "`CopyCommand` with `sudo npm install -g --ignore-scripts pi-web-access`, which puts the package under `/usr/local`, where the sandbox sees it read-only.";
+
+    // HUM-350: the disposable sandbox.
+    /// `sandbox.mode = "disposable"` cannot start as asked: bubblewrap is
+    /// older than 0.11 (no `--overlay`), the runtime directory is not a
+    /// tmpfs, so the upper layer would not live in RAM, the project folder is
+    /// mounted read-only (`sandbox.work_mode = "ro"` or the profile), or the
+    /// changes of an earlier disposable run still wait for apply or discard.
+    /// Blocking: the start would otherwise write to the project folder, which
+    /// is exactly what the mode promises not to do (HUM-350).
+    SANDBOX_030 => "sandbox", "Disposable sandbox not possible", "#sandbox_030",
+        "The start asked for a disposable sandbox, and one of its conditions is missing: bubblewrap 0.11 or newer, a runtime directory on tmpfs, a writable view of the project folder, or no changes of an earlier disposable run still pending.",
+        "`CopyCommand` with the install command for a newer bubblewrap, `ChangeSetting` on `sandbox.work_mode` = `rw`, `SetEnv` for `XDG_RUNTIME_DIR` = `/run/user/<uid>`, or `CopyCommand` with `humanitl sandbox changes` for pending changes.";
+    /// A change of a disposable run was not written to the project folder:
+    /// the user changed the file since the start (conflict), the change is a
+    /// symbolic link that leaves the project, a device, FIFO or socket, a
+    /// path whose parent in the project became a symbolic link, or writing
+    /// failed. Nothing of the selection is written when a check fails before
+    /// the first write; the upper layer stays for another attempt (HUM-350).
+    SANDBOX_031 => "sandbox", "Change of a disposable run not applied", "#sandbox_031",
+        "Applying the changes of a disposable run stopped at a path: the project file changed since the start, the change is not something Humanitl writes to the host (a symbolic link out of the project, a device, FIFO or socket), a parent in the project is a symbolic link now, there are no pending changes, or the write failed.",
+        "`CopyCommand` with `humanitl sandbox apply --overwrite` after a look at the conflicting file, `CopyCommand` with `humanitl sandbox apply` and a smaller selection, or `CopyCommand` with `humanitl sandbox discard`.";
+    /// The upper layer of a disposable run grew over its cap and the
+    /// sandbox was stopped. What the agent wrote before stays in the layer
+    /// and can be inspected, applied or discarded (HUM-350).
+    SANDBOX_032 => "sandbox", "Disposable layer full", "#sandbox_032",
+        "The changes of a disposable run grew over the cap of the upper layer in RAM (bytes or entries), and the daemon stopped the sandbox so the agent cannot fill the memory.",
+        "No fix for the run; the changes so far wait under `humanitl sandbox changes`. A task that needs more space runs without `--disposable`.";
 }
 
 /// Sucht einen Code im Register.
