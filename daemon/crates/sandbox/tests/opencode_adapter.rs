@@ -21,7 +21,7 @@ use humanitl_rules::{RequestKey, RuleSet, Verdict};
 use humanitl_sandbox::agent::briefing;
 use humanitl_sandbox::agent::opencode::{
     CONFIG_DST, MANAGED_CONFIG_DST, MODELS_DST, OLLAMA_INFERENCE_PATHS, OPENAI_INFERENCE_PATHS,
-    PLACEHOLDER_MODEL, briefing_dst, config_dst, keep_dst, passthrough_authority,
+    PLACEHOLDER_MODEL, briefing_dst, config_dst, keep_dst, passthrough_authority, tui_dst,
 };
 use humanitl_sandbox::agent::opencode_models::PROVIDER_ID;
 use humanitl_sandbox::{
@@ -740,6 +740,9 @@ fn opencode_writes_nothing_into_work() {
             // Das verwaltete Verzeichnis: die einzige Quelle, die nach der
             // Konfiguration eines geklonten Projekts gemergt wird.
             Path::new(MANAGED_CONFIG_DST),
+            // Die Tastenbelegung der Oberfläche (HUM-353), nur im
+            // Konfigurationsverzeichnis, damit ein Projekt sie übersteuern kann.
+            tui_dst(&ctx.config_home()).as_path(),
             // Die Einweisung (HUM-071), unter dem Konfigurationsverzeichnis
             // des Agenten und nicht im Projekt.
             briefing_dst(&ctx.config_home()).as_path(),
@@ -748,6 +751,64 @@ fn opencode_writes_nothing_into_work() {
     for file in &files {
         assert_eq!(file.mode, 0o444, "{:?} is writable", file.dst);
     }
+}
+
+// --- die Tastenbelegung (HUM-353) --------------------------------------------
+
+/// `Ctrl+C` beendet `OpenCode` nicht mehr; Beenden bleibt mit `Ctrl+D` und
+/// `Ctrl+X q`, und sonst ist keine Taste umbelegt.
+///
+/// `ctrl+c` ist die Vorgabe von `input_clear` (die Eingabe leeren); diese
+/// Belegung darf die Datei nicht berühren, und deshalb steht darin nur
+/// `app_exit`.
+#[test]
+fn opencode_tui_config_takes_ctrl_c_out_of_app_exit() {
+    let adapter = OpenCodeAdapter::new();
+    let ctx = context(Some("http://192.168.1.50:11434"));
+    let dst = tui_dst(&ctx.config_home());
+    assert_eq!(
+        dst,
+        Path::new("/home/agent/.config/opencode/tui.json"),
+        "the directory OpenCode reads its interface configuration from"
+    );
+
+    let tui: Value =
+        serde_json::from_slice(&file_at(adapter, &ctx, dst.to_str().unwrap())).unwrap();
+    assert_eq!(tui["$schema"], "https://opencode.ai/tui.json");
+    let keybinds = tui["keybinds"].as_object().expect("a keybinds block");
+    assert_eq!(
+        keybinds.keys().collect::<Vec<_>>(),
+        vec!["app_exit"],
+        "only the exit binding is changed; input_clear keeps ctrl+c"
+    );
+    let keys: Vec<&str> = keybinds["app_exit"]
+        .as_str()
+        .expect("a key list")
+        .split(',')
+        .map(str::trim)
+        .collect();
+    assert!(!keys.contains(&"ctrl+c"), "ctrl+c still quits: {keys:?}");
+    assert_eq!(keys, vec!["ctrl+d", "<leader>q"]);
+
+    // Nicht in `opencode.json`: Dort wirft `OpenCode` 1.18.31 `keybinds` weg,
+    // und im verwalteten Verzeichnis überstimmte der Block die Belegung eines
+    // Projekts.
+    for path in [CONFIG_DST, MANAGED_CONFIG_DST] {
+        let config: Value = serde_json::from_slice(&file_at(adapter, &ctx, path)).unwrap();
+        assert!(config.get("keybinds").is_none(), "{path} carries keybinds");
+    }
+    let managed_dir_files: Vec<_> = adapter
+        .files(&ctx)
+        .unwrap()
+        .iter()
+        .filter(|file| file.dst.starts_with("/etc/opencode"))
+        .map(|file| file.dst.clone())
+        .collect();
+    assert_eq!(
+        managed_dir_files,
+        vec![PathBuf::from(MANAGED_CONFIG_DST)],
+        "no tui.json in the managed directory, a project may rebind app_exit"
+    );
 }
 
 // --- die Einweisung (HUM-071) ------------------------------------------------
@@ -1050,7 +1111,7 @@ fn briefing_can_be_switched_off() {
     );
     assert_eq!(
         files.len(),
-        5,
+        6,
         "the configuration of the agent stays: {:?}",
         files.iter().map(|file| &file.dst).collect::<Vec<_>>()
     );

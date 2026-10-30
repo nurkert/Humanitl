@@ -1,6 +1,6 @@
 //! Die mitgelieferten Vorlagen des `OpenCode`-Adapters.
 //!
-//! Drei Dateien aus `agents/opencode/` beziehungsweise `rules/` sind
+//! Vier Dateien aus `agents/opencode/` beziehungsweise `rules/` sind
 //! einkompiliert. Zur Laufzeit wird nichts davon vom Dateisystem gelesen: was
 //! in der Sandbox landet, steht im Binary, und niemand kann es zwischen Bau und
 //! Start austauschen.
@@ -8,6 +8,8 @@
 //! - [`CONFIG_TEMPLATE`] wird zu `opencode.json`, der Konfiguration des Agenten.
 //! - [`MODELS_TEMPLATE`] wird zu `models.json` und ersetzt den Modellkatalog,
 //!   den `OpenCode` sonst aus dem Netz holt (`agents/opencode/README.md`).
+//! - [`TUI_TEMPLATE`] wird zu `tui.json`, der Tastenbelegung der Oberfläche
+//!   (HUM-353).
 //! - [`DEFAULT_RULES`] ist der mitgelieferte Regelsatz (HUM-038).
 //!
 //! Beide JSON-Vorlagen tragen ihre Platzhalter als Werte, nicht als
@@ -37,6 +39,19 @@ pub const PROVIDER_ID: &str = "humanitl-local";
 /// Ob der LLM-Server ein Modell dieses Namens kennt, weiß Humanitl nicht; der
 /// Adapter meldet deshalb `LLM_004` als Warnung.
 pub const PLACEHOLDER_MODEL: &str = "default";
+
+/// Die Vorlage für `tui.json`, die Konfiguration der Oberfläche (HUM-353).
+pub const TUI_TEMPLATE: &str = include_str!("../../../../../agents/opencode/tui.json.tmpl");
+
+/// Die Belegung von `app_exit`, die [`TUI_TEMPLATE`] trägt (HUM-353).
+///
+/// Die Vorgabe von `OpenCode` 1.18.31 ist `ctrl+c,ctrl+d,<leader>q`. Ohne
+/// `ctrl+c`: Im Terminal von Humanitl geht `Ctrl+C` als `0x03` an den Agenten,
+/// und ein Griff aus Gewohnheit, um zu kopieren, beendete sonst `OpenCode` und
+/// die Sitzung. `ctrl+d` bleibt, weil es in jeder Shell das bewusste Ende
+/// einer leeren Eingabe ist und kein Kopiergriff; `<leader>q` (`Ctrl+X q`)
+/// bleibt als ausdrücklicher Weg.
+pub const APP_EXIT_KEYS: &str = "ctrl+d,<leader>q";
 
 /// Der Schlüssel, unter dem in [`MODELS_TEMPLATE`] der Musterdatensatz eines
 /// Modells steht.
@@ -194,6 +209,37 @@ pub fn permission_json() -> Result<String, Diagnostic> {
         .map_err(|err| broken(FILE, &format!("permission could not be written ({err})")))
 }
 
+/// Rendert `tui.json`, die Konfiguration der Oberfläche (HUM-353).
+///
+/// Die Vorlage hat keine Platzhalter. Gelesen wird sie trotzdem, damit eine
+/// kaputte Vorlage als `AGENT_003` beim Start auffällt und nicht als
+/// Warnung von `OpenCode`, die im Vollbild niemand liest, und damit
+/// `keybinds.app_exit` genau [`APP_EXIT_KEYS`] ist: Ohne den Wert stünde
+/// `ctrl+c` wieder in der Vorgabe.
+///
+/// # Errors
+///
+/// Ein [`Diagnostic`] mit `AGENT_003`, wenn die Vorlage nicht die erwartete
+/// Form hat.
+pub fn render_tui() -> Result<String, Diagnostic> {
+    const FILE: &str = "agents/opencode/tui.json.tmpl";
+
+    let mut doc = parse_object(FILE, TUI_TEMPLATE)?;
+    let keybinds = object_mut(FILE, &mut doc, "keybinds")?;
+    if keybinds.get("app_exit").and_then(Value::as_str) != Some(APP_EXIT_KEYS) {
+        return Err(broken(
+            FILE,
+            &format!("keybinds.app_exit is not {APP_EXIT_KEYS:?}"),
+        ));
+    }
+    serde_json::to_string_pretty(&Value::Object(doc))
+        .map(|mut text| {
+            text.push('\n');
+            text
+        })
+        .map_err(|err| broken(FILE, &format!("could not be written back ({err})")))
+}
+
 /// Rendert den Modellkatalog `models.json` für eine Modell-Liste.
 ///
 /// Der Eintrag unter `{{MODEL_ID}}` ist die Vorlage eines Modelleintrags; sie
@@ -254,7 +300,17 @@ mod tests {
 
     use serde_json::Value;
 
-    use super::{PLACEHOLDER_MODEL, PROVIDER_ID, effective_models, render_config, render_models};
+    use super::{
+        APP_EXIT_KEYS, PLACEHOLDER_MODEL, PROVIDER_ID, effective_models, render_config,
+        render_models, render_tui,
+    };
+
+    #[test]
+    fn the_tui_template_renders_with_app_exit_without_ctrl_c() {
+        let doc: Value = serde_json::from_str(&render_tui().unwrap()).unwrap();
+        assert_eq!(doc["keybinds"]["app_exit"], APP_EXIT_KEYS);
+        assert!(!APP_EXIT_KEYS.split(',').any(|key| key.trim() == "ctrl+c"));
+    }
 
     #[test]
     fn empty_model_list_becomes_the_placeholder() {

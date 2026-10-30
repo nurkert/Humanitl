@@ -504,7 +504,9 @@ The queue is a single focus stop with arrow-key navigation inside. As long as th
 every key belongs to the agent -- backspace, arrows, Enter, `Ctrl+C` as `0x03`,
 `Ctrl+P` as `0x10` --, with exactly seven exceptions: `Ctrl+1` to `Ctrl+6` and
 `Ctrl+K`. Without them one could only get out of a full-screen TUI with the
-mouse, and that would violate 5.1. The way there is not the
+mouse, and that would violate 5.1. (Later issues added the zoom, copy and
+paste chords below; and while visible text is selected, plain `Ctrl+C`
+copies instead of sending `0x03`, HUM-353.) The way there is not the
 obvious one: the emulator translates `Ctrl+K` into `0x0b` and `Ctrl+6` into `0x1e`
 and reports the key as handled, so that the event no longer reaches any `Shortcuts`
 above it; `KeyEventResult.skipRemainingHandlers` would stop the
@@ -638,7 +640,12 @@ the three commands while a terminal is shown.
 **Copy and paste in the terminal (HUM-313)** work as in every Linux
 terminal. `Ctrl+Shift+C` copies the selection, `Ctrl+Shift+V` pastes;
 plain `Ctrl+C` stays the interrupt of the agent and plain `Ctrl+V` the
-quoted insert of readline, both reach the agent. The two chords act only
+quoted insert of readline, both reach the agent. One exception since
+HUM-353: while visible text is selected, plain `Ctrl+C` copies it like
+`Ctrl+Shift+C`, clears the selection and sends nothing; without one (a
+selection scrolled out of view is dropped) it is `0x03` again. On Apple
+platforms `Cmd+C` copies and
+`Ctrl+C` always goes to the agent. The two chords act only
 while the terminal has the keyboard and take the way of the other
 exceptions through `TerminalPane._onKey`; no binding of the application
 uses them elsewhere. The middle button pastes as long as the program does

@@ -163,6 +163,9 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
 
   final FocusNode _focus = FocusNode(debugLabel: 'terminal');
   final TerminalController _controller = TerminalController();
+
+  /// Der Emulator, um zu fragen, welche Zeilen er gerade zeigt (HUM-353).
+  final GlobalKey<TerminalViewState> _viewKey = GlobalKey<TerminalViewState>();
   final HContextMenuController _menu = HContextMenuController();
 
   /// The physical keys of zoom chords (HUM-301) and clipboard chords
@@ -376,8 +379,10 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   /// Und die Zoom-Kürzel (HUM-301): `Ctrl` mit `+`, `=` oder `-`, mit dem
   /// Plus, Minus oder der Null des Ziffernblocks, und `Ctrl+Shift+0`.
   /// Dazu Kopieren und Einfügen (HUM-313), `Ctrl+Shift+C` und `Ctrl+Shift+V`,
-  /// die nicht in [shellShortcuts] stehen und nur hier gelten.
-  /// Alles andere gehört ihm, `Ctrl+C` als `0x03`, `Ctrl+V` als `0x16`,
+  /// die nicht in [shellShortcuts] stehen und nur hier gelten. Dazu
+  /// `Ctrl+C`, solange etwas sichtbar ausgewählt ist (HUM-353): Es kopiert.
+  /// Alles andere gehört ihm, `Ctrl+C` ohne Auswahl als `0x03`, `Ctrl+V` als
+  /// `0x16`,
   /// `Ctrl+P` als `0x10` und
   /// `Esc` eingeschlossen, das OpenCode und pi zum Abbrechen brauchen.
   ///
@@ -401,6 +406,58 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   /// Tabelle; `null` hieße „nimm deine Vorgabe".
   static const Map<ShortcutActivator, Intent> _emulatorShortcuts =
       <ShortcutActivator, Intent>{};
+
+  /// Ob [event] das schlichte `Ctrl+C` ist, das über einer Auswahl kopiert
+  /// (HUM-353).
+  ///
+  /// Nicht auf Apple-Plattformen: Dort kopiert `Cmd+C`
+  /// ([TerminalClipboardActivator]), und `Ctrl+C` ist wie in jedem Terminal
+  /// von macOS immer die Unterbrechung.
+  static bool _isSelectionCopyChord(KeyEvent event) {
+    if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.keyC) {
+      return false;
+    }
+    if (defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.iOS) {
+      return false;
+    }
+    final HardwareKeyboard keyboard = HardwareKeyboard.instance;
+    return keyboard.isControlPressed &&
+        !keyboard.isShiftPressed &&
+        !keyboard.isAltPressed &&
+        !keyboard.isMetaPressed;
+  }
+
+  /// Ob im Puffer, den das Terminal gerade zeigt, eine Auswahl **sichtbar**
+  /// ist (HUM-353); der Puffer ist derselbe wie in [_copy].
+  ///
+  /// Eine Auswahl überlebt im Emulator Tippen und Ausgabe. Ist sie aus dem
+  /// Bild gerollt, hat der Mensch sie vergessen, und ein `Ctrl+C` kopierte
+  /// still unsichtbaren Text, statt den Agenten zu unterbrechen. Eine solche
+  /// Auswahl hebt diese Funktion deshalb auf und antwortet `false`; das
+  /// `0x03` geht dann durch. Sichtbar heißt: Mindestens eine ihrer Zeilen
+  /// liegt im Fenster, auch nur angeschnitten.
+  bool _hasVisibleSelection() {
+    final BufferRange? selection = _controller.selectionFor(
+      ref.read(_session).terminal.buffer,
+    );
+    if (selection == null) {
+      return false;
+    }
+    // `RenderTerminal` exportiert `xterm2` nicht; der Typ bleibt erschlossen.
+    final view = _viewKey.currentState?.renderTerminal;
+    if (view == null) {
+      return false;
+    }
+    final int top = view.getCellOffset(Offset.zero).y;
+    final int bottom = view.getCellOffset(Offset(0, view.size.height - 1)).y;
+    final BufferRange range = selection.normalized;
+    if (range.begin.y <= bottom && range.end.y >= top) {
+      return true;
+    }
+    _controller.clearSelection();
+    return false;
+  }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is KeyDownEvent) {
@@ -441,6 +498,18 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
         }
         return KeyEventResult.handled;
       }
+    }
+    // `Ctrl+C` über einer sichtbaren Auswahl kopiert sie (HUM-353), wie
+    // `Ctrl+Shift+C`, und hebt sie danach auf. Der Agent bekommt dann kein
+    // `0x03`: Wer markiert und `Ctrl+C` drückt, will kopieren, und OpenCode
+    // beendete sich in seiner Vorgabe auf genau diese Taste. Ohne sichtbare
+    // Auswahl bleibt `Ctrl+C` das `0x03` des Agenten, ein zweiter Druck nach
+    // dem Kopieren also wieder die Unterbrechung.
+    if (_isSelectionCopyChord(event) && _hasVisibleSelection()) {
+      _heldChordKeys.add(event.physicalKey);
+      _copy();
+      _controller.clearSelection();
+      return KeyEventResult.handled;
     }
     // Der Rest eines Griffs, den diese Ansicht genommen hat: die
     // Wiederholungen und das Loslassen (HUM-301, HUM-313). Der Griff gilt
@@ -632,6 +701,7 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
             color: tokens.terminal.background,
             child: TerminalView(
               session.terminal,
+              key: _viewKey,
               controller: _controller,
               focusNode: _focus,
               autofocus: true,
