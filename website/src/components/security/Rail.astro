@@ -1,0 +1,25 @@
+---
+// Die Kapitelleiste am linken Rand, nur auf sehr breiten Schirmen. Der aktive Punkt folgt
+// dem Lesen; ohne Skript ist sie eine gewöhnliche Sprungliste.
+interface Props {
+  s: any;
+  chapters: string[];
+}
+const { s, chapters } = Astro.props;
+---
+
+<nav class="sec-rail" aria-label={s.railLabel} data-rail>
+  <span class="sec-rail__ind" aria-hidden="true" data-rail-ind></span>
+  <ol>
+    {
+      chapters.map((id, i) => (
+        <li>
+          <a href={`#${id}`} data-rail-link={id} style={`--k:${i}`}>
+            <span class="sec-rail__dot" aria-hidden="true" />
+            <span class="sec-rail__label">{s.rail[i]}</span>
+          </a>
+        </li>
+      ))
+    }
+  </ol>
+</nav>

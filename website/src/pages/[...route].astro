@@ -4,6 +4,7 @@ import Download from '../components/pages/Download.astro';
 import Home from '../components/pages/Home.astro';
 import Imprint from '../components/pages/Imprint.astro';
 import Privacy from '../components/pages/Privacy.astro';
+import Security from '../components/pages/Security.astro';
 import { langs, pages, routeParam, type Lang, type Page } from '../i18n/ui';
 
 export function getStaticPaths() {
@@ -16,7 +17,7 @@ export function getStaticPaths() {
 }
 
 const { lang, page } = Astro.props as { lang: Lang; page: Page };
-const views = { home: Home, download: Download, privacy: Privacy, imprint: Imprint };
+const views = { home: Home, download: Download, privacy: Privacy, imprint: Imprint, security: Security };
 const View = views[page];
 ---
 

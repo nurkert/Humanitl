@@ -1,0 +1,27 @@
+---
+import Src from './Src.astro';
+
+interface Props {
+  s: any;
+}
+const { s } = Astro.props;
+const p = s.principles;
+---
+
+<div class="sec-wide sec-principles" data-reveal>
+  <h2 class="sec-h3 sec-principles__title sec-rvi" style="--i:0">{p.title}</h2>
+  <ol class="sec-principles__list">
+    {
+      p.items.map((item: any, i: number) => (
+        <li class="sec-glass sec-principle sec-rvi" style={`--i:${i + 1}`}>
+          <span class="sec-principle__n" aria-hidden="true">
+            {String(i + 1).padStart(2, '0')}
+          </span>
+          <h3>{item.title}</h3>
+          <p>{item.text}</p>
+          <Src src={item.src} prefix={s.srcPrefix} />
+        </li>
+      ))
+    }
+  </ol>
+</div>

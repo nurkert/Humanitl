@@ -1,0 +1,105 @@
+---
+// Kapitel 6: die Audit-Kette (Diagramm A) mit dem, was sie beweist und was nicht.
+import Rich from './Rich.astro';
+import Src from './Src.astro';
+
+interface Props {
+  s: any;
+  k: any;
+}
+const { s, k } = Astro.props;
+const a = s.audit;
+---
+
+<section class="sec-section" id="aufzeichnung" data-chapter aria-labelledby="sec-audit-title">
+  <div class="sec-wide">
+    <header class="sec-head sec-rv" data-reveal>
+      <p class="sec-eyebrow">{a.eyebrow}</p>
+      <h2 id="sec-audit-title" class="chrome sec-h2">{a.title}</h2>
+      <Rich tag="p" class="lede" text={a.lede} />
+    </header>
+
+    <div class="sec-chainwrap" data-reveal data-chain>
+      <p class="sec-chain__example">{a.example}</p>
+      <div class="sec-chain" role="img" aria-label={a.figLabel} data-chain-el>
+        <ol class="sec-chain__list" aria-hidden="true">
+          {
+            k.chain.map((seq: string, i: number) => (
+              <li class:list={['sec-blk', { 'is-anchor': seq === '0100', 'is-target': seq === '0099' }]} data-wide={i === 5 ? '' : undefined} style={`--i:${i}`}>
+                {i > 0 && <span class="sec-chain__link" />}
+                <span class="sec-blk__seq">seq {seq}</span>
+                <span>kind {k.chainKind}</span>
+                <span>prev {k.chainPrev[i]}</span>
+                <span>hash {k.chainHash[i]}</span>
+                {seq === '0100' && (
+                  <Fragment>
+                    <span class="sec-blk__anchor">{a.anchor}</span>
+                    <span class="sec-blk__drop" />
+                    <span class="sec-db">{k.anchorDb}</span>
+                  </Fragment>
+                )}
+                {seq === '0099' && <span class="sec-blk__alarm" />}
+              </li>
+            ))
+          }
+          <li class="sec-chain__tail">
+            <span class="sec-chain__dash" />
+            <span>{a.tail}</span>
+          </li>
+        </ol>
+        <p class="sec-chain__key" aria-hidden="true">HMAC-SHA256 · <code>{k.key}</code></p>
+      </div>
+      <p class="sec-chain__tamper">{a.tamperText}</p>
+      <p class="sec-chain__ctl">
+        <button class="pill pill--small" type="button" hidden aria-pressed="false" data-tamper data-on={a.tamperOn} data-off={a.tamperOff}>
+          {a.tamper}
+        </button>
+        <span class="visually-hidden" aria-live="polite" data-tamper-live></span>
+      </p>
+    </div>
+
+    <div class="sec-audit__cols">
+      <div class="sec-glass sec-audit__card sec-rv" data-reveal>
+        <h3 class="sec-h3 sec-ok-h">{a.provesTitle}</h3>
+        <Rich tag="p" text={a.proves} />
+        <h4>{a.notInLogTitle}</h4>
+        <p>{a.notInLog}</p>
+      </div>
+      <div class="sec-glass sec-audit__card sec-rv" data-reveal style="--i:1">
+        <h3 class="sec-h3">{a.notTitle}</h3>
+        <ol class="sec-list sec-list--num">
+          {a.not.map((n: string) => <li>{n}</li>)}
+        </ol>
+        <p class="sec-foot">{a.external}</p>
+      </div>
+    </div>
+
+    <div class="sec-audit__cmds sec-rv" data-reveal>
+      <div>
+        <h4>{a.commandsTitle}</h4>
+        <dl class="sec-manual">
+          {
+            k.auditCmds.map((c: string, i: number) => (
+              <div>
+                <dt>
+                  <code class="sec-cmd">{c}</code>
+                </dt>
+                <dd>
+                  <Rich text={a.commands[i]} />
+                </dd>
+              </div>
+            ))
+          }
+        </dl>
+      </div>
+      <div>
+        <h4>{a.testsTitle}</h4>
+        <ul class="sec-chips">
+          {k.auditTests.map((t: string) => <li class="sec-probe">{t}</li>)}
+        </ul>
+        <p class="sec-foot">{a.testsNote}</p>
+      </div>
+    </div>
+    <Src src={a.src} prefix={s.srcPrefix} />
+  </div>
+</section>

@@ -1,0 +1,46 @@
+---
+// Ein Terminalfenster. Jede Zeile trägt einen Deckel, der beim Einblenden wie getippt
+// zurückweicht; der Text selbst steht immer vollständig im DOM. Das HTML entsteht als
+// Zeichenkette, damit im <pre> kein Leerraum aus der Vorlage landet.
+export type Row =
+  | { kind: 'cmd'; text: string }
+  | { kind: 'head'; text: string }
+  | { kind: 'check'; name: string; ev: string[] }
+  | { kind: 'out'; text: string };
+interface Props {
+  caption: string;
+  rows: Row[];
+  note?: string;
+  class?: string;
+  reveal?: boolean;
+}
+const { caption, rows, note, class: cls, reveal = true } = Astro.props;
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const cover = '<span class="sec-cover" aria-hidden="true"></span>';
+const line = (row: Row): string => {
+  switch (row.kind) {
+    case 'cmd':
+      return `<span class="sec-term__p">$</span> ${esc(row.text)}`;
+    case 'head':
+      return `<span class="sec-term__head">${esc(row.text)}</span>`;
+    case 'out':
+      return `<span class="sec-term__out">${esc(row.text)}</span>`;
+    case 'check': {
+      const ev = row.ev
+        .map((part, i) => `<span class="sec-ev">${esc(part)}${i < row.ev.length - 1 ? '; ' : ''}</span>`)
+        .join('');
+      return `<span class="sec-term__ok">✓</span>  ${esc(row.name.padEnd(22, ' '))}<span class="sec-term__ev">${ev}</span>`;
+    }
+  }
+};
+const html = rows.map((row, l) => `<span class="sec-line" style="--l:${l}">${line(row)}${cover}</span>`).join('');
+---
+
+<figure class:list={['sec-term', cls]} data-reveal={reveal ? '' : undefined}>
+  <figcaption class="sec-term__bar">
+    <span class="sec-term__dots" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span>{caption}</span>
+  </figcaption>
+  <pre class="sec-term__body" tabindex="0"><code set:html={html} /></pre>
+  {note && <p class="sec-term__note">{note}</p>}
+</figure>

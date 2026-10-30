@@ -1,0 +1,52 @@
+---
+// Diagramm P3: der Boden als Tabelle. Jede Socket-Familie außer TCP endet mit EPERM.
+interface Props {
+  s: any;
+  k: any;
+}
+const { s, k } = Astro.props;
+const f = s.proofs.floor;
+---
+
+<div class="sec-mini sec-p3" data-reveal>
+  <table class="sec-table">
+    <caption>{f.caption}</caption>
+    <thead>
+      <tr><th scope="col"><code>socket()</code> · {f.colCall}</th><th scope="col">{f.colResult}</th></tr>
+    </thead>
+    <tbody>
+      {
+        k.floor.map((call: string, i: number) => (
+          <tr style={`--i:${i}`}>
+            <td>
+              <code>{call}</code>
+            </td>
+            <td>
+              <span class="sec-badge sec-badge--deny">EPERM</span>
+            </td>
+          </tr>
+        ))
+      }
+      <tr class="is-ok" style={`--i:${k.floor.length}`}>
+        <td><code>{k.floorOk}</code></td>
+        <td>
+          <span class="sec-badge sec-badge--ok">ok</span>
+          <a class="sec-table__note" href="#g1">{f.stream}</a>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <table class="sec-table sec-table--mac">
+    <caption>{f.macCaption}</caption>
+    <tbody>
+      {
+        k.floorMac.map((call: string, i: number) => (
+          <tr style={`--i:${i + 10}`}>
+            <td><code>{call}</code></td>
+            <td><span class="sec-badge sec-badge--deny">EPERM</span></td>
+          </tr>
+        ))
+      }
+    </tbody>
+  </table>
+</div>

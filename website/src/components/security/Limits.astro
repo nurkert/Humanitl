@@ -1,0 +1,185 @@
+---
+// Kapitel 7: was offen bleibt. Diagramm L, die zwei offenen Datenwege, die drei Kanäle ohne
+// neuen Datenweg, die bekannten Grenzen und das Bedrohungsmodell in Kürze.
+import Rich from './Rich.astro';
+import Src from './Src.astro';
+
+interface Props {
+  s: any;
+  k: any;
+}
+const { s, k } = Astro.props;
+const l = s.limits;
+const f = l.fig;
+const masks = [
+  { x: 52, w: 52, t: '.env' },
+  { x: 112, w: 92, t: '.git/hooks' },
+  { x: 212, w: 66, t: '.npmrc' },
+];
+const letters = ['a', 'b', 'c', 'd'];
+---
+
+<section class="sec-section" id="grenzen" data-chapter aria-labelledby="sec-limits-title">
+  <div class="sec-wide">
+    <header class="sec-head sec-rv" data-reveal>
+      <p class="sec-eyebrow">{l.eyebrow}</p>
+      <h2 id="sec-limits-title" class="chrome sec-h2">{l.title}</h2>
+      <p class="lede">{l.lede}</p>
+    </header>
+
+    <figure class="sec-lfig" data-reveal tabindex="0" role="region" aria-labelledby="l-t">
+      <div class="sec-grid" aria-hidden="true"></div>
+      <svg viewBox="0 0 800 360" role="img" aria-labelledby="l-t l-d">
+        <title id="l-t">{l.figTitle}</title>
+        <desc id="l-d">{l.figDesc}</desc>
+        <defs>
+          <clipPath id="l-clip"><rect x="330" y="20" width="320" height="160"></rect></clipPath>
+        </defs>
+        <g aria-hidden="true">
+          <g class="l-a" style="--i:0">
+            <rect class="sv-fill" x="30" y="40" width="300" height="260" rx="22"></rect>
+            <path class="sv-wall" d="M330 150 V62 A22 22 0 0 0 308 40 H52 A22 22 0 0 0 30 62 V278 A22 22 0 0 0 52 300 H308 A22 22 0 0 0 330 278 V200"></path>
+            <text x="48" y="68" class="sv-lbl sv-lbl--m">sandbox</text>
+            <circle class="sv-agent" cx="160" cy="170" r="9"></circle>
+          </g>
+          <g class="l-a" style="--i:1">
+            <rect class="j-door-frame" x="327" y="150" width="6" height="50" rx="2"></rect>
+            <rect class="l-line" x="333" y="184" width="87" height="2"></rect>
+          </g>
+          <g class="l-a" style="--i:2">
+            <rect class="sv-fill sv-lock" x="420" y="120" width="150" height="130" rx="28"></rect>
+            <text x="438" y="146" class="sv-lbl sv-lbl--m">{f.lock}</text>
+            <circle class="l-held" cx="456" cy="200" r="8"></circle>
+            <text x="472" y="205" class="sv-lbl sv-lbl--m">{f.held}</text>
+          </g>
+          <g class="l-a l-open" style="--i:3">
+            <g clip-path="url(#l-clip)">
+              <path class="l-llm" d="M333 166 H540 V60 H640"></path>
+            </g>
+            <rect class="sv-fill" x="640" y="40" width="140" height="40" rx="12"></rect>
+            <text x="710" y="65" text-anchor="middle" class="sv-lbl sv-lbl--m">{f.llmHost}</text>
+            <text x="392" y="50" class="sv-lbl sv-lbl--s">{f.llm}</text>
+          </g>
+          <g class="l-a l-open" style="--i:4">
+            <path class="j-folder" d="M60 280 h30 l8 8 h52 v40 h-90 z"></path>
+            <text x="68" y="314" class="sv-lbl sv-lbl--s">/work</text>
+            <g class="l-human">
+              <circle cx="214" cy="318" r="7"></circle>
+              <path d="M202 346 Q214 326 226 346 Z"></path>
+              <rect x="232" y="320" width="12" height="15" rx="2"></rect>
+            </g>
+            <text x="252" y="334" class="sv-lbl sv-lbl--s">{f.shared}</text>
+          </g>
+          {
+            masks.map((m, i) => (
+              <g class="l-a l-mask" style={`--i:${5 + i}`}>
+                <rect x={m.x} y="236" width={m.w} height="24" rx="12" />
+                <text x={m.x + m.w / 2} y="252" text-anchor="middle" class="sv-lbl sv-lbl--s">
+                  {m.t}
+                </text>
+              </g>
+            ))
+          }
+          <g class="l-a" style="--i:8">
+            {
+              f.quietNames.map((n: string, i: number) => (
+                <g>
+                  <circle class="l-quiet" cx={612 + 70 * i} cy="276" r="6" />
+                  <text x={612 + 70 * i} y="300" text-anchor="middle" class="sv-lbl sv-lbl--s">
+                    {n}
+                  </text>
+                </g>
+              ))
+            }
+            <text x="682" y="332" text-anchor="middle" class="sv-lbl sv-lbl--s sv-lbl--dim">{f.quiet}</text>
+          </g>
+        </g>
+      </svg>
+      <ul class="sec-legend sec-legend--fig" aria-hidden="true">
+        <li><span class="sec-legend__held"></span>{f.held}</li>
+        <li><span class="sec-legend__decl"></span>{s.path.legendDeclared}</li>
+      </ul>
+    </figure>
+
+    <h3 class="sec-h3 sec-subhead">{l.openTitle}</h3>
+    <div class="sec-open">
+      <article class="sec-glass sec-open__card sec-rv" data-reveal>
+        <span class="sec-open__glyph sec-open__glyph--llm" aria-hidden="true"></span>
+        <h4 class="sec-h3">{l.llm.title}</h4>
+        <Rich tag="p" text={l.llm.text} />
+        <Src src={l.llm.src} prefix={s.srcPrefix} />
+      </article>
+      <article class="sec-glass sec-open__card sec-rv" data-reveal style="--i:1">
+        <span class="sec-open__glyph sec-open__glyph--work" aria-hidden="true"></span>
+        <h4 class="sec-h3">{l.work.title}</h4>
+        <Rich tag="p" text={l.work.text} />
+        <Src src={l.work.src} prefix={s.srcPrefix} />
+      </article>
+    </div>
+
+    <h3 class="sec-h3 sec-subhead">{l.quietTitle}</h3>
+    <ul class="sec-quiet" data-reveal>
+      {
+        l.quiet.map((q: string, i: number) => (
+          <li class="sec-glass sec-rvi" style={`--i:${i}`}>
+            {q}
+          </li>
+        ))
+      }
+    </ul>
+
+    <blockquote class="sec-quote sec-rv" data-reveal>
+      <p class="chrome sec-quote__big">{l.classifier}</p>
+      <p class="sec-quote__note">{l.classifierNote}</p>
+      <Src src={l.classifierSrc} prefix={s.srcPrefix} />
+    </blockquote>
+
+    <div class="sec-limits__grid">
+      <div class="sec-rv" data-reveal>
+        <h3 class="sec-h3">{l.moreTitle}</h3>
+        <ol class="sec-list sec-list--num sec-list--cols">
+          {l.more.map((m: string) => <Rich tag="li" text={m} />)}
+        </ol>
+        <Src src={l.moreSrc} prefix={s.srcPrefix} />
+      </div>
+      <div class="sec-glass sec-who sec-rv" data-reveal style="--i:1">
+        <h3 class="sec-h3">{l.whoTitle}</h3>
+        <p>{l.whoLead}</p>
+        <ol class="sec-who__list">
+          {
+            l.attackers.map((a: string, i: number) => (
+              <li>
+                <span class="sec-who__k">{letters[i]}</span>
+                {a}
+              </li>
+            ))
+          }
+        </ol>
+        <h4>{l.boundariesTitle}</h4>
+        <dl class="sec-who__dl">
+          {
+            l.boundaries.map((b: string, i: number) => (
+              <div>
+                <dt>B{i + 1}</dt>
+                <dd>
+                  <Rich text={b} />
+                </dd>
+              </div>
+            ))
+          }
+        </dl>
+        <h4>{l.protectedTitle}</h4>
+        <p>{l.protected}</p>
+      </div>
+    </div>
+
+    <details class="sec-glass sec-out">
+      <summary>{l.outTitle}</summary>
+      <Rich tag="p" text={l.out} />
+      <p class="sec-claim__label">{l.tcbTitle}</p>
+      <p class="sec-tcb"><code>{k.tcb}</code></p>
+      <p class="sec-foot">{l.tcbNote}</p>
+    </details>
+    <Src src={l.src} prefix={s.srcPrefix} />
+  </div>
+</section>
