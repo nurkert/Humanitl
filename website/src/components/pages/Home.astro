@@ -1,0 +1,743 @@
+---
+// Die Startseite: ein angehefteter Bühnenabschnitt, in dem die echten Fenster der App
+// einfliegen, beim Scrollen vom Fächer auf eine gebogene Bühne wandern und dort als
+// endloses Karussell einrasten. Danach die drei Garantien und der Abschluss.
+import { Picture } from 'astro:assets';
+
+import Icon from '../Icon.astro';
+import Base from '../../layouts/Base.astro';
+import { path, repoUrl, securityUrl, ui, type Lang } from '../../i18n/ui';
+import intercept from '../../assets/screens/intercept.png';
+import notice from '../../assets/screens/notice.png';
+import history from '../../assets/screens/history.png';
+import rules from '../../assets/screens/rules.png';
+import sandbox from '../../assets/screens/sandbox.png';
+import palette from '../../assets/screens/palette.png';
+import settings from '../../assets/screens/settings.png';
+
+interface Props {
+  lang: Lang;
+}
+const { lang } = Astro.props;
+const t = ui[lang];
+const images = { intercept, notice, history, rules, sandbox, palette, settings };
+const modules = t.stage.modules.map((module) => ({ ...module, image: images[module.id as keyof typeof images] }));
+const n = modules.length;
+// Abstand eines Fensters zur Mitte im Ring, -3 bis 3: Intercept steht vorn.
+const ringOffset = (i: number) => ((i + Math.floor(n / 2)) % n) - Math.floor(n / 2);
+const formats = ['avif'] as const;
+---
+
+<Base lang={lang} page="home" title={t.meta.title} description={t.meta.description}>
+  <main id="main">
+    <noscript>
+      <style is:inline>
+        /* Ohne Skript: ein Bildschirm mit dem Fächer aus CSS, dann geht die Seite normal weiter. */
+        .scene {
+          height: 100svh !important;
+        }
+        .win {
+          opacity: calc(1 - max(0, abs(var(--d)) - 2)) !important;
+          transform: translate3d(-50%, -50%, 0) translate3d(calc(var(--d) * var(--w) * 0.34), calc(8vh + var(--d) * var(--d) * 0.6vh), calc(-1 * abs(var(--d)) * 18vw))
+            rotateY(calc(var(--d) * -16deg)) rotateX(7deg) scale(0.6) !important;
+        }
+        .deck {
+          display: none;
+        }
+      </style>
+    </noscript>
+    <section class="scene" id="module" data-scene aria-label={t.stage.title} style={`--n: ${n}`}>
+      <div class="scene__sticky">
+        <div class="sky" aria-hidden="true">
+          <div class="sky__spot"></div>
+          <div class="sky__dust"></div>
+          <div class="sky__dust sky__dust--far"></div>
+        </div>
+
+        <header class="hero" data-hero>
+          <h1 class="hero__title chrome">
+            {t.hero.title.map((line) => <span>{line}</span>)}
+          </h1>
+          <p class="hero__lede lede">{t.hero.lede}</p>
+        </header>
+
+        <div class="world" data-world>
+          <div class="ring" data-ring aria-hidden="true">
+            <div class="ring__floor"></div>
+          </div>
+          <ul class="wins" data-wins aria-roledescription="carousel" aria-label={t.stage.title}>
+            {
+              modules.map((module, i) => (
+                <li
+                  class="win"
+                  data-win
+                  data-title={module.title}
+                  data-name={module.name}
+                  data-text={module.text}
+                  style={`--d: ${ringOffset(i)}`}
+                  role="group"
+                  aria-roledescription="slide"
+                  aria-label={`${i + 1} ${t.stage.of} ${n}: ${module.name}`}
+                >
+                  <div class="win__frame">
+                    <Picture
+                      class="win__shot"
+                      src={module.image}
+                      alt={module.alt}
+                      formats={formats}
+                      fallbackFormat="webp"
+                      widths={[800, 1280, 1920, 2560]}
+                      sizes="(max-width: 52rem) 92vw, min(64vw, 72rem)"
+                      loading={i === 0 ? 'eager' : 'lazy'}
+                      fetchpriority={i === 0 ? 'high' : 'auto'}
+                      decoding="async"
+                    />
+                    <span class="win__sheen" aria-hidden="true"></span>
+                    <span class="win__shade" aria-hidden="true"></span>
+                  </div>
+                </li>
+              ))
+            }
+          </ul>
+        </div>
+
+        <div class="hero__actions" data-hero-actions>
+          <a class="pill pill--light" href={path('download', lang)}>
+            <Icon name="download" />
+            {t.hero.cta}
+            <span class="hero__for">{t.hero.ctaFor}</span>
+          </a>
+          <a class="hero__source" href={repoUrl}>
+            <Icon name="github" />
+            {t.hero.source}
+          </a>
+        </div>
+
+        <div class="deck" data-deck>
+          <h2 class="deck__title chrome">{t.stage.title}</h2>
+          <button class="deck__arrow deck__arrow--prev" type="button" data-prev aria-label={t.stage.previous}>
+            <Icon name="chevronLeft" />
+          </button>
+          <button class="deck__arrow deck__arrow--next" type="button" data-next aria-label={t.stage.next}>
+            <Icon name="chevronRight" />
+          </button>
+          <div class="deck__caption" aria-live="polite">
+            <p class="deck__name" data-caption-name>{modules[0].name}</p>
+            <p class="deck__headline" data-caption-title>{modules[0].title}</p>
+            <p class="deck__text" data-caption-text>{modules[0].text}</p>
+          </div>
+          <div class="deck__track" aria-hidden="true">
+            <span class="deck__fill" data-fill></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="guarantees" id="sicherheit" aria-labelledby="guarantees-title">
+      <div class="container guarantees__inner">
+        <header class="guarantees__head">
+          <h2 id="guarantees-title" class="chrome">{t.guarantees.title}</h2>
+          <p class="lede">{t.guarantees.lede}</p>
+        </header>
+        <ol class="guarantees__list">
+          {
+            t.guarantees.items.map((item) => (
+              <li>
+                <h3>{item.title}</h3>
+                <p>{item.text}</p>
+              </li>
+            ))
+          }
+        </ol>
+        <figure class="term">
+          <figcaption class="term__bar">
+            <span class="term__dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            {t.guarantees.check}
+          </figcaption>
+          <pre class="term__body"><code><span class="term__prompt">$</span> humanitl sandbox check
+<span class="term__head">   CHECK                 EVIDENCE</span>
+<span class="term__ok">✓</span>  no_network_interface  <span class="term__ev">no_interfaces ok: tcp_1.1.1.1:443:_EPERM; tcp_[2606:4700:4700::1111]:443:_EPERM; udp_1.1.1.1:53:_EPERM</span>
+<span class="term__ok">✓</span>  single_socket         <span class="term__ev">single_socket ok: door_…/proxy/proxy.sock:_answers; /var/run/syslog:_EPERM; bridge_listening ok</span>
+<span class="term__ok">✓</span>  seccomp_active        <span class="term__ev">seccomp_applied ok: sandbox_check(getpid(),_NULL,_0)_=_1; families ok: AF_ROUTE …_EPERM</span></code></pre>
+          <p class="term__src">{lang === 'de' ? 'Ausgabe unter macOS aus der CI des Projekts, gekürzt.' : 'Output on macOS from the project’s CI, shortened.'}</p>
+        </figure>
+        <a class="guarantees__more" href={securityUrl}>
+          {t.guarantees.more}
+          <Icon name="arrow" />
+        </a>
+      </div>
+    </section>
+
+    <section class="closing" aria-labelledby="closing-title">
+      <div class="closing__glow" aria-hidden="true"></div>
+      <div class="container closing__inner">
+        <h2 id="closing-title" class="chrome">{t.closing.title}</h2>
+        <p class="lede">{t.closing.text}</p>
+        <a class="pill pill--light closing__cta" href={path('download', lang)}>
+          <Icon name="download" />
+          {t.closing.cta}
+        </a>
+      </div>
+    </section>
+  </main>
+</Base>
+
+
+<script>
+  import '../../scripts/stage';
+</script>
+
+<style>
+  /* ---- Bühne ---------------------------------------------------------- */
+  .scene {
+    position: relative;
+    height: var(--scene-h, 600vh);
+  }
+  .scene__sticky {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    height: 100svh;
+    overflow: hidden;
+    isolation: isolate;
+  }
+
+  .sky {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+  }
+  .sky__spot {
+    position: absolute;
+    inset: -20% -10% auto;
+    height: 90%;
+    background:
+      radial-gradient(42% 55% at 50% 0%, rgb(255 255 255 / 0.11), transparent 70%),
+      radial-gradient(30% 40% at 50% 62%, rgb(214 224 255 / 0.07), transparent 70%);
+  }
+  /* Feiner Staub im unteren Drittel, aus Punkten gemalt statt aus einem Bild. */
+  .sky__dust {
+    position: absolute;
+    inset: 40% 0 0;
+    background-image:
+      radial-gradient(1px 1px at 12% 22%, rgb(255 255 255 / 0.55), transparent 60%),
+      radial-gradient(1px 1px at 37% 64%, rgb(255 255 255 / 0.4), transparent 60%),
+      radial-gradient(1.5px 1.5px at 58% 38%, rgb(255 255 255 / 0.45), transparent 60%),
+      radial-gradient(1px 1px at 81% 72%, rgb(255 255 255 / 0.35), transparent 60%),
+      radial-gradient(1px 1px at 69% 15%, rgb(255 255 255 / 0.3), transparent 60%),
+      radial-gradient(1.2px 1.2px at 24% 84%, rgb(255 255 255 / 0.35), transparent 60%);
+    background-size: 340px 260px;
+    mask-image: linear-gradient(180deg, transparent, #000 45%, #000 80%, transparent);
+    opacity: 0.7;
+  }
+  .sky__dust--far {
+    background-size: 190px 150px;
+    opacity: 0.35;
+    transform: translateY(-6%);
+  }
+
+  /* ---- Hero ----------------------------------------------------------- */
+  .hero {
+    position: absolute;
+    inset: clamp(5.5rem, 13vh, 8.5rem) var(--gutter) auto;
+    z-index: 3;
+    display: grid;
+    justify-items: center;
+    gap: clamp(1rem, 2.2vh, 1.6rem);
+    text-align: center;
+    will-change: transform, opacity;
+  }
+  .hero__title {
+    display: grid;
+    font-size: clamp(2.3rem, 1.1rem + 4.6vw, 5.4rem);
+    line-height: 1;
+    font-weight: 650;
+  }
+  .hero__lede {
+    max-width: 36rem;
+  }
+  .hero__actions {
+    position: absolute;
+    inset: auto var(--gutter) clamp(1.5rem, 6vh, 3.5rem);
+    z-index: 3;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem 1.5rem;
+    will-change: transform, opacity;
+  }
+  .hero__for {
+    color: #4a4f5c;
+    font-weight: 500;
+  }
+  .hero__source {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    color: var(--fg-1);
+    font-size: 0.92rem;
+    text-decoration: none;
+  }
+  .hero__source:hover {
+    color: var(--fg);
+  }
+  .hero__source :global(svg) {
+    width: 1.1rem;
+    height: 1.1rem;
+  }
+  /* Ohne Skript erscheinen Überschrift und Knöpfe mit einem kurzen Einblenden. */
+  .hero > *,
+  .hero__actions {
+    animation: rise 1.1s var(--ease-out) both;
+  }
+  .hero__lede {
+    animation-delay: 0.12s;
+  }
+  .hero__actions {
+    animation-delay: 0.5s;
+  }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(18px);
+    }
+  }
+
+  /* ---- Fenster -------------------------------------------------------- */
+  .world {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    perspective: 2200px;
+    perspective-origin: 50% 42%;
+    touch-action: pan-y;
+  }
+  .wins {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    transform-style: preserve-3d;
+  }
+  .win {
+    --w: min(62vw, 70rem);
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: var(--w);
+    aspect-ratio: 2560 / 1380;
+    transform-style: preserve-3d;
+    will-change: transform, opacity;
+    /* Der Startpunkt des Einflugs; das Skript führt jedes Fenster von hier in den Fächer. */
+    transform: translate3d(-50%, 20vh, -40vw) rotateX(30deg) scale(0.5);
+    opacity: 0;
+  }
+  @media (max-width: 52rem) {
+    .win {
+      --w: 92vw;
+    }
+  }
+
+  /* Der Glaskörper: dicke, polierte Kante, oben hell angeleuchtet, unten ein Rest Licht. */
+  .win__frame {
+    position: absolute;
+    inset: 0;
+    padding: clamp(5px, 0.55vw, 11px);
+    border-radius: clamp(12px, 1.5vw, 26px);
+    border: 1px solid transparent;
+    background:
+      linear-gradient(180deg, #1a1d24, #0b0c10 60%, #121419) padding-box,
+      linear-gradient(
+          165deg,
+          rgb(255 255 255 / 1) 0%,
+          rgb(255 255 255 / 0.35) 14%,
+          rgb(255 255 255 / 0.08) 38%,
+          rgb(255 255 255 / 0.06) 62%,
+          rgb(255 255 255 / 0.55) 100%
+        )
+        border-box;
+    box-shadow:
+      0 50px 120px -40px rgb(0 0 0 / 0.95),
+      0 0 0 1px rgb(0 0 0 / 0.65),
+      inset 0 1px 0 rgb(255 255 255 / 0.35),
+      inset 0 -1px 0 rgb(255 255 255 / 0.08);
+    overflow: hidden;
+  }
+  /* Der Schein hinter dem vorderen Fenster: eine eigene Ebene, nur ihre Deckkraft wechselt. */
+  .win::before {
+    content: '';
+    position: absolute;
+    inset: 6%;
+    border-radius: 30px;
+    box-shadow: 0 0 120px 10px rgb(220 228 255 / 0.2);
+    opacity: var(--glow, 0);
+    pointer-events: none;
+  }
+  /* Abdunkeln der hinteren Fenster über eine schwarze Ebene statt über einen Filter. */
+  .win__shade {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: #000;
+    opacity: var(--shade, 0);
+    pointer-events: none;
+  }
+  .win__shot,
+  .win__frame :global(img) {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top center;
+    border-radius: clamp(8px, 1vw, 17px);
+    background: #0f1115;
+  }
+  /* Spiegelndes Licht über dem Glas: ein breiter Streifen, der mit der Drehung des
+     Fensters seitlich wandert, verschoben nur über transform. */
+  .win__sheen {
+    position: absolute;
+    inset: 0 -60%;
+    pointer-events: none;
+    background: linear-gradient(
+      115deg,
+      transparent 30%,
+      rgb(255 255 255 / 0.08) 44%,
+      rgb(255 255 255 / 0.15) 50%,
+      rgb(255 255 255 / 0.04) 55%,
+      transparent 66%
+    );
+    transform: translate3d(var(--sx, 0px), 0, 0);
+    mix-blend-mode: screen;
+  }
+  .win__frame::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.07), transparent 22%);
+    pointer-events: none;
+  }
+
+  /* Der Metallring der Bühne, flach gelegt unter den Fenstern. */
+  .ring {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 200vw;
+    aspect-ratio: 1;
+    transform: translate3d(-50%, -50%, 0);
+    transform-style: preserve-3d;
+    opacity: 0;
+    pointer-events: none;
+    will-change: transform, opacity;
+  }
+  .ring__floor {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: clamp(10px, 1.6vw, 28px) solid transparent;
+    background:
+      radial-gradient(closest-side, rgb(8 9 12 / 0.96) 86%, rgb(30 33 41 / 0.9) 97%, transparent 100%) padding-box,
+      conic-gradient(
+          from 180deg,
+          #2a2d35,
+          #f4f5f8 9%,
+          #5a5f6c 16%,
+          #1c1e24 28%,
+          #6d7280 40%,
+          #fdfdfe 50%,
+          #6d7280 60%,
+          #1c1e24 72%,
+          #5a5f6c 84%,
+          #f4f5f8 91%,
+          #2a2d35
+        )
+        border-box;
+    box-shadow:
+      0 0 0 1px rgb(255 255 255 / 0.18),
+      0 0 120px rgb(255 255 255 / 0.06);
+  }
+
+  /* ---- Steuerung des Karussells ---------------------------------------- */
+  .deck {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    pointer-events: none;
+    opacity: 0;
+    will-change: opacity;
+  }
+  :global(.deck[data-live]) {
+    pointer-events: none;
+  }
+  :global(.deck[data-live]) .deck__arrow {
+    pointer-events: auto;
+  }
+  .deck__title {
+    position: absolute;
+    inset: clamp(5.5rem, 12vh, 8rem) var(--gutter) auto;
+    text-align: center;
+    font-size: clamp(1.7rem, 1rem + 2.6vw, 3.6rem);
+  }
+  .deck__arrow {
+    position: absolute;
+    top: 50%;
+    display: grid;
+    place-items: center;
+    width: 3.2rem;
+    height: 3.2rem;
+    margin-top: -1.6rem;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--fg-1);
+    cursor: pointer;
+    transition:
+      color 0.3s var(--ease-out),
+      background 0.3s var(--ease-out),
+      transform 0.3s var(--ease-out);
+  }
+  .deck__arrow:hover {
+    color: #fff;
+    background: rgb(255 255 255 / 0.06);
+  }
+  .deck__arrow:active {
+    transform: scale(0.94);
+  }
+  .deck__arrow :global(svg) {
+    width: 2rem;
+    height: 2rem;
+    stroke-width: 1.25;
+  }
+  .deck__arrow--prev {
+    left: clamp(0.5rem, 3vw, 3rem);
+  }
+  .deck__arrow--next {
+    right: clamp(0.5rem, 3vw, 3rem);
+  }
+  .deck__caption {
+    position: absolute;
+    inset: auto var(--gutter) clamp(4.4rem, 11vh, 7rem);
+    display: grid;
+    justify-items: center;
+    gap: 0.35rem;
+    text-align: center;
+  }
+  .deck__name {
+    font: 500 0.72rem/1 var(--mono);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .deck__headline {
+    font-size: clamp(1.15rem, 0.9rem + 0.9vw, 1.7rem);
+    font-weight: 650;
+    text-transform: uppercase;
+    letter-spacing: 0.01em;
+    color: #d6d9e0;
+  }
+  .deck__text {
+    max-width: 40rem;
+    color: var(--fg-1);
+    font-size: clamp(0.95rem, 0.9rem + 0.25vw, 1.1rem);
+  }
+  .deck__track {
+    position: absolute;
+    left: 50%;
+    bottom: clamp(1.8rem, 5vh, 3rem);
+    width: min(56vw, 34rem);
+    height: 6px;
+    transform: translateX(-50%);
+    border-radius: 999px;
+    border: 1px solid rgb(255 255 255 / 0.14);
+    background: rgb(255 255 255 / 0.03);
+    overflow: hidden;
+  }
+  .deck__fill {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(90deg, rgb(255 255 255 / 0.5), #fff);
+    box-shadow: 0 0 14px rgb(255 255 255 / 0.6);
+    transform-origin: left center;
+    transform: scaleX(var(--fill, 0.14));
+    transition: transform 0.5s var(--ease-out);
+  }
+  @media (max-width: 52rem) {
+    .deck__arrow {
+      top: auto;
+      bottom: clamp(1rem, 4vh, 2.4rem);
+      margin-top: 0;
+    }
+    .deck__track {
+      width: 46vw;
+      bottom: clamp(2.3rem, 6.4vh, 3.9rem);
+    }
+  }
+
+  /* ---- Garantien ------------------------------------------------------- */
+  .guarantees {
+    position: relative;
+    padding: clamp(6rem, 14vh, 10rem) 0 clamp(5rem, 10vh, 8rem);
+  }
+  .guarantees__inner {
+    display: grid;
+    gap: clamp(2.5rem, 5vh, 4rem);
+  }
+  .guarantees__head {
+    display: grid;
+    gap: 1.2rem;
+    justify-items: start;
+  }
+  .guarantees__head h2 {
+    font-size: clamp(2rem, 1.2rem + 3.4vw, 4.4rem);
+  }
+  .guarantees__list {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: clamp(1.5rem, 3vw, 3rem);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .guarantees__list li {
+    display: grid;
+    align-content: start;
+    gap: 0.7rem;
+    padding-top: 1.4rem;
+    border-top: 1px solid var(--line-strong);
+    position: relative;
+  }
+  /* Eine helle Kante oben links, wie das Licht auf den Fensterrahmen. */
+  .guarantees__list li::before {
+    content: '';
+    position: absolute;
+    top: -1px;
+    left: 0;
+    width: 3.5rem;
+    height: 1px;
+    background: #fff;
+    box-shadow: 0 0 12px rgb(255 255 255 / 0.7);
+  }
+  .guarantees__list h3 {
+    font-size: 1.25rem;
+    letter-spacing: -0.01em;
+  }
+  .guarantees__list p {
+    color: var(--fg-1);
+    max-width: 30rem;
+  }
+  @media (max-width: 52rem) {
+    .guarantees__list {
+      grid-template-columns: 1fr;
+    }
+  }
+  .term {
+    margin: 0;
+    border-radius: 16px;
+    border: 1px solid transparent;
+    background:
+      linear-gradient(180deg, #101217, #0a0b0f) padding-box,
+      linear-gradient(170deg, rgb(255 255 255 / 0.7), rgb(255 255 255 / 0.08) 30%, rgb(255 255 255 / 0.05) 70%, rgb(255 255 255 / 0.3)) border-box;
+    box-shadow: 0 40px 100px -40px rgb(0 0 0 / 0.95);
+    max-width: 62rem;
+  }
+  .term__bar {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    padding: 0.8rem 1.1rem;
+    border-bottom: 1px solid var(--line);
+    color: var(--fg-2);
+    font-size: 0.85rem;
+  }
+  .term__dots {
+    display: inline-flex;
+    gap: 0.4rem;
+  }
+  .term__dots i {
+    width: 0.65rem;
+    height: 0.65rem;
+    border-radius: 50%;
+    background: #2a2e37;
+  }
+  .term__body {
+    margin: 0;
+    padding: 1.2rem 1.3rem 1.4rem;
+    overflow-x: auto;
+    color: #d5d8df;
+    line-height: 1.85;
+    font-size: clamp(0.82rem, 0.78rem + 0.2vw, 0.95rem);
+  }
+  .term__prompt {
+    color: var(--fg-2);
+  }
+  .term__ok {
+    color: #5fcf8f;
+  }
+  .term__head {
+    color: var(--fg-2);
+  }
+  .term__ev {
+    color: var(--fg-2);
+  }
+  .term__src {
+    padding: 0 1.3rem 1.1rem;
+    color: var(--fg-2);
+    font-size: 0.78rem;
+  }
+  .guarantees__more {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    justify-self: start;
+    color: var(--fg-1);
+    text-decoration: none;
+    font-size: 0.95rem;
+  }
+  .guarantees__more:hover {
+    color: var(--fg);
+  }
+  .guarantees__more :global(svg) {
+    width: 1.1rem;
+    height: 1.1rem;
+    transition: transform 0.3s var(--ease-out);
+  }
+  .guarantees__more:hover :global(svg) {
+    transform: translateX(3px);
+  }
+
+  /* ---- Abschluss ------------------------------------------------------- */
+  .closing {
+    position: relative;
+    padding: clamp(7rem, 18vh, 12rem) 0 clamp(6rem, 14vh, 9rem);
+    overflow: hidden;
+    text-align: center;
+  }
+  .closing__glow {
+    position: absolute;
+    inset: auto -10% -40%;
+    height: 120%;
+    background:
+      radial-gradient(50% 55% at 50% 100%, rgb(160 172 205 / 0.16), transparent 70%),
+      radial-gradient(28% 30% at 50% 78%, rgb(255 255 255 / 0.08), transparent 70%);
+    pointer-events: none;
+  }
+  .closing__inner {
+    position: relative;
+    display: grid;
+    justify-items: center;
+    gap: 1.4rem;
+  }
+  .closing h2 {
+    font-size: clamp(2rem, 1.1rem + 3.8vw, 4.8rem);
+  }
+  .closing__cta {
+    --pill-h: 3.6rem;
+    margin-top: 1rem;
+    padding: 0 2.2rem;
+    font-size: 1.02rem;
+  }
+</style>
