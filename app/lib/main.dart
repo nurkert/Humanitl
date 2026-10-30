@@ -13,6 +13,7 @@ import 'app.dart';
 import 'core/diagnostics/diagnostics.dart';
 import 'core/ipc/client_providers.dart';
 import 'core/ipc/launch_options.dart';
+import 'core/ui/ui_scale.dart' show appMinimumLayoutSize;
 import 'features/about/about_dialog.dart' show appVersion;
 import 'features/about/licences.dart';
 import 'features/settings/gallery_screen.dart';
@@ -36,7 +37,10 @@ const String galleryFlag = '--gallery';
 const String windowTitle = 'Humanitl';
 
 /// The smallest window the three-pane layout fits into (HUM-019 Schritt 7).
-const Size windowMinimumSize = Size(1100, 700);
+///
+/// The same measure bounds the scaling (HUM-356): no scale above 100 %
+/// makes the logical window smaller than this.
+const Size windowMinimumSize = appMinimumLayoutSize;
 
 /// Starts the application, or the design gallery when it was asked for.
 ///

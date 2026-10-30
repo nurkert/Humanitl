@@ -617,17 +617,17 @@ while an agent runs or the terminal floats. The whole window
 there. `Ctrl+Shift+P` reaches no agent: a Linux terminal sends it as `0x10`
 like `Ctrl+P`, which stays with the agent.
 
-**The terminal text can be zoomed (HUM-301).** `Ctrl` with `+` makes it one
-step larger, with `-` one step smaller, between 10 and 28 px; the default is
-the 13 px of `mono13`. `+` counts with or without `Shift`, because on a US
-keyboard it is `Shift+=`, and so does `Ctrl+=` and the plus of the keypad.
-`-` counts only without `Shift`: `Ctrl+Shift+-` is `Ctrl+_`, undo in
-readline, and stays with the agent. The reset is `Ctrl+Shift+0` (also `Ctrl`
-with the `0` of the keypad), **not `Ctrl+0`**: that chord, the reset of every
-browser and terminal, is the rail here (HUM-254), in every section and from
-inside the terminal; one chord with two meanings depending on where the
-focus sits would cost whoever wants the rail a smaller text and the other
-way round. `Ctrl` + wheel over the emulator zooms too, and the scrollback
+**The terminal text can be zoomed (HUM-301).** `Ctrl+Alt` with `+` makes it
+one step larger, with `-` one step smaller, between 10 and 28 px; the default
+is the 13 px of `mono13`. `+` counts with or without `Shift`, because on a US
+keyboard it is `Shift+=`, and so does `Ctrl+Alt+=` and the plus of the
+keypad. `-` counts only without `Shift`: with `Shift` it is `Ctrl+_`, undo in
+readline. The reset is `Ctrl+Alt+0` (also with the `0` of the keypad). Until
+HUM-356 these chords had no `Alt`; `Ctrl` alone with the same keys scales the
+whole application now (5.5), and since the scaling grows the terminal text
+along with everything else, the terminal zoom stays as the finer control one
+modifier further. What the agent loses is `Ctrl+Alt+-` (`ESC` `0x1f`, the
+meta form of readline's undo), only while a terminal is shown. `Ctrl` + wheel over the emulator zooms too, and the scrollback
 does not move meanwhile. The zoom chords are further exceptions in the
 terminal and take the way of the others through `TerminalPane._onKey`, so
 the agent never receives them; outside the terminal they act only while a
@@ -714,6 +714,64 @@ Mandatory test: holding `Enter` down for 500 ms produces exactly one `Decide`, n
 The two decisions are also larger than everything else: `HSize.hitMin` (28 px) is the lower bound for minor things, allow and block measure at least 32 px in height and 120 px in width, as HUM-028 names it for the release valve anyway. A 28 px target next to another 28 px target is exactly the geometry in which a hasty click misses — and what lies next to it here is the irreversible action.
 
 The note field when blocking (HUM-072) is temporary: hidden until `N`, closed on `Escape` or on a decision, never a permanent line of the action bar. A permanently visible optional text field adds a focus stop, a border and a character counter to the bar and invites typing where the normal way is a key press.
+
+### 5.5 The whole application scales (HUM-356)
+
+On a 4K screen without desktop scaling everything is too small. The
+application therefore scales as a whole, text and controls together, and
+never as an enlarged picture: at a scale `s` it lays itself out in the window
+size divided by `s` logical pixels and paints with the device pixel ratio
+times `s` (`UiScaleHost`, `RenderUiScale`). Every layout rule sees the smaller
+logical window and reflows in it, so the grid of 3.7, the three panes, the
+anchors and the largest size of the floating terminal and the rows of the
+terminal stay what they are at 100 %, only larger. Pointer, hover, drag and
+throw, text input, menus, hover labels, sheets and dialogs are all inside
+the scaled tree and meet the pointer where it is.
+
+| Way | Steps |
+|---|---|
+| Settings, Interface, "Scale" | 90, 100, 110, 125, 150, 175, 200 % |
+| `Ctrl` + `+` (also `Ctrl+=`, `Ctrl+Shift+=`, numpad `+`) | 10 % larger, up to 300 % |
+| `Ctrl` + `-` (also numpad `-`) | 10 % smaller, down to 50 % |
+| `Ctrl+0` (also numpad `0`) | back to 100 % |
+| Palette: "Larger", "Smaller", "Original size (whole app)" | as the keys |
+
+On macOS `Cmd` counts as well as `Ctrl`. The keys snap to tens: from 125 %
+one step up is 130 %, one step down 120 %. Larger and smaller repeat while
+held, the reset does not. A short notice under the window header shows the
+value that now applies ("125%"; de "125 %") for 2 s (`HMotion.copyFeedback`), without motion,
+focus or hit target, and says it to a screen reader.
+
+**The keys belong to the application, also inside the terminal.** These are
+the zoom chords of every browser; terminal programs hardly use them, and the
+terminal looks them up like the other chords of the shell, so a full-screen
+TUI that has the keyboard cannot swallow them. `Ctrl+0` used to toggle the
+rail (HUM-254); the rail is `Ctrl+Shift+0` now, and the terminal zoom moved
+to `Ctrl+Alt` (5.2).
+
+**The window bounds the scale.** The three panes need at least 1100 x 700
+logical pixels, the minimum size of the window. Above 100 % the scale that
+applies is at most the largest whole percentage that keeps that much
+(1920 x 1080 allows 154 %, 3840 x 2160 the full 300 %), and the notice then
+says "154%, the largest this window allows"; so does a step up that the
+window refuses, also when the choice is exactly at the limit or at 100 % in a
+window of the minimum size, and such a step writes nothing. On macOS the room
+for the traffic lights stays 72 pixels of the window at every scale, because
+the system draws them. The choice itself is kept: when
+the window grows again, the chosen scale returns; when it shrinks, the scale
+follows in the same frame. The keys count from the scale that applies, so
+`Ctrl+-` at a clamped 200 % in a window that allows 154 % gives 150 %. Below
+100 % nothing is clamped.
+
+**The terminal** keeps its font size in logical pixels; scaled, it shows the
+same text larger in fewer columns and rows, counts them again and sends them
+up on the throttled resize path (HUM-305), so the agent redraws. **Hairlines**
+stay sharp at 125 % and 175 %: `HHairline` snaps to whole physical pixels
+(`docs/DESIGN.md`, HHairline).
+
+The choice survives a restart in the state file of the interface
+(`uiScale`), read before the first frame, so the window never shows a frame
+at 100 % first. 100 % is written as no choice.
 
 ---
 

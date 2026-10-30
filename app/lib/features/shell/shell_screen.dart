@@ -16,6 +16,7 @@ import '../../core/ui/h_notice_layer.dart';
 import '../../core/ui/settings_opener.dart';
 import '../../core/ui/terminal_placement.dart';
 import '../../core/ui/terminal_zoom.dart';
+import '../../core/ui/ui_scale.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
 import '../about/about_dialog.dart';
@@ -368,6 +369,23 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
               ? l10n.shellPaletteTerminalFloatLeave
               : l10n.shellPaletteTerminalFloatEnter,
           run: _toggleFloating,
+        ),
+      // Dasselbe wie `Ctrl` mit `+`, `-` und `0` (HUM-356), in jedem
+      // Abschnitt: Die Skalierung braucht weder Daemon noch Terminal. Am
+      // Ende, damit die Zeilen davor ihren Platz behalten.
+      for (final UiScaleStep step in UiScaleStep.values)
+        PaletteCommand(
+          id: 'scale-${step.name}',
+          label: switch (step) {
+            UiScaleStep.zoomIn => l10n.shellPaletteScaleIn,
+            UiScaleStep.zoomOut => l10n.shellPaletteScaleOut,
+            UiScaleStep.reset => l10n.shellPaletteScaleReset,
+          },
+          // Die Grenze beim Ausführen, nicht beim Bau der Liste: Das Fenster
+          // kann sich dazwischen geändert haben.
+          run: () => ref
+              .read(uiScaleProvider.notifier)
+              .step(step, limit: UiScaleScope.limitOf(context)),
         ),
     ];
   }
@@ -803,6 +821,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
             fontSize: ref.read(terminalFontSizeProvider.notifier),
             shown: _terminalShown,
           ),
+          UiScaleIntent: UiScaleAction(ref.read(uiScaleProvider.notifier)),
           PaletteIntent: CallbackAction<PaletteIntent>(
             onInvoke: (PaletteIntent intent) {
               _togglePalette();

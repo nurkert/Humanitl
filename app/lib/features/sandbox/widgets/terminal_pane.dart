@@ -376,8 +376,10 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   /// (HUM-298): Es steht in [shellShortcuts] und nimmt deshalb denselben Weg.
   /// Ebenso `Ctrl+Backquote`, die Tastatur ans Terminal (HUM-303): Steht der
   /// Fokus schon hier, tut es nichts, und der Agent bekommt kein Byte.
-  /// Und die Zoom-Kürzel (HUM-301): `Ctrl` mit `+`, `=` oder `-`, mit dem
-  /// Plus, Minus oder der Null des Ziffernblocks, und `Ctrl+Shift+0`.
+  /// Und die Zoom-Kürzel des Terminals (HUM-301): seit HUM-356 `Ctrl+Alt`
+  /// mit `+`, `=`, `-` oder `0` und den Tasten des Ziffernblocks. `Ctrl` allein
+  /// mit denselben Tasten skaliert die ganze Anwendung (HUM-356) und nimmt
+  /// denselben Weg, damit ein TUI die Griffe nicht verschluckt.
   /// Dazu Kopieren und Einfügen (HUM-313), `Ctrl+Shift+C` und `Ctrl+Shift+V`,
   /// die nicht in [shellShortcuts] stehen und nur hier gelten. Dazu
   /// `Ctrl+C`, solange etwas sichtbar ausgewählt ist (HUM-353): Es kopiert.

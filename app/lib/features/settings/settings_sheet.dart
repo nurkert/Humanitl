@@ -25,6 +25,7 @@ import '../../core/domain/domain.dart';
 import '../../core/ipc/config_providers.dart';
 import '../../core/ipc/daemon_client.dart';
 import '../../core/ui/ui.dart';
+import '../../core/ui/ui_scale.dart';
 import '../../core/ui/work_dir_picker.dart' show directoryChooserProvider;
 import '../../l10n/l10n.dart';
 import 'providers/file_opener.dart';
@@ -364,6 +365,10 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
             ),
           ),
         ),
+        // Die Skalierung der ganzen Anwendung (HUM-356). Sie gehört diesem
+        // Rechner und seinem Schirm, nicht der Konfiguration des Daemons, und
+        // steht deshalb in der Zustandsdatei der Oberfläche; sie gilt sofort.
+        const _ScaleRow(),
         SettingRow(
           label: l10n.settingsNotificationsLabel,
           refusal: _refusals[FormKeys.uiNotifications],
@@ -489,6 +494,39 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Die Stufen der Skalierung (HUM-356), mit dem Wert, der gerade gilt.
+///
+/// Eine Stufe über der Grenze des Fensters bleibt wählbar: Sie gilt, sobald
+/// das Fenster groß genug ist, und bis dahin sagt der Hinweis, wie weit es
+/// trägt. Die Tasten erreichen auch die Werte zwischen den Stufen; dann ist
+/// keine Stufe gewählt, und die Hilfe nennt den Wert.
+class _ScaleRow extends ConsumerWidget {
+  const _ScaleRow();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final AppLocalizations l10n = context.l10n;
+    final int preferred = ref.watch(uiScaleProvider);
+    final int effective = UiScaleScope.maybeOf(context)?.effective ?? preferred;
+    return SettingRow(
+      label: l10n.settingsScaleLabel,
+      help: l10n.settingsScaleHelp(l10n.shellScalePercent(effective)),
+      child: HChoiceChips<int>(
+        key: const Key('settings-scale'),
+        options: <HSegmentOption<int>>[
+          for (final int percent in uiScalePresets)
+            HSegmentOption<int>(
+              value: percent,
+              label: l10n.shellScalePercent(percent),
+            ),
+        ],
+        selected: <int>{preferred},
+        onToggle: ref.read(uiScaleProvider.notifier).choose,
+      ),
     );
   }
 }

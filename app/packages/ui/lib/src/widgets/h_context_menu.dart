@@ -156,9 +156,16 @@ class _HContextMenuState extends State<HContextMenu> {
     // and over the terminal that is the agent (HUM-303).
     HLayerScope.claimKeyboard();
     final HTokens tokens = HTheme.of(context);
+    // Die Position kommt global, das Menü steht im Overlay. Unter einer
+    // Skalierung der ganzen Anwendung (HUM-356) oder einem Overlay, das nicht
+    // in der Ecke des Fensters beginnt, sind das verschiedene Koordinaten.
+    final RenderObject? box = overlay.context.findRenderObject();
+    final Offset at = box is RenderBox && box.hasSize
+        ? box.globalToLocal(globalPosition)
+        : globalPosition;
     final OverlayEntry entry = OverlayEntry(
       builder: (BuildContext context) => _Menu(
-        at: globalPosition,
+        at: at,
         items: items,
         tokens: tokens,
         semanticsLabel: widget.semanticsLabel,

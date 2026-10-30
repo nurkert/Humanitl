@@ -1,9 +1,10 @@
 // Der Text im Terminal lässt sich vergrößern und verkleinern (HUM-301).
 //
-// `Ctrl` mit `+`, `=` oder dem Plus des Ziffernblocks macht ihn größer,
-// `Ctrl` mit `-` kleiner, `Ctrl+Shift+0` und `Ctrl` mit der Null des
-// Ziffernblocks bringen die Vorgabe zurück; `Ctrl` mit dem Mausrad über dem
-// Emulator zoomt auch. Keiner dieser Griffe erreicht den Agenten, und
+// `Ctrl+Alt` mit `+`, `=` oder dem Plus des Ziffernblocks macht ihn größer,
+// `Ctrl+Alt` mit `-` kleiner, `Ctrl+Alt` mit der Null der Zahlenreihe oder
+// des Ziffernblocks bringt die Vorgabe zurück; `Ctrl` mit dem Mausrad über
+// dem Emulator zoomt auch. Seit HUM-356 mit `Alt`: `Ctrl` allein mit diesen
+// Tasten skaliert die ganze Anwendung (`ui_scale_test.dart`). Keiner dieser Griffe erreicht den Agenten, und
 // keiner tut etwas, solange kein Terminal zu sehen ist. Die Größe übersteht
 // einen Neustart, und nach jedem Zoom geht die neue Geometrie zum Daemon.
 //
@@ -55,13 +56,18 @@ final Set<LogicalKeyboardKey> _androidOnly = <LogicalKeyboardKey>{
   LogicalKeyboardKey.numpad0,
 };
 
-/// [key] mit gehaltenem `Ctrl`, und mit `Shift`, wenn [shift] gilt.
+/// [key] mit gehaltenem `Ctrl` und, solange [alt] gilt, `Alt` -- dem Griff
+/// des Terminal-Zooms seit HUM-356 --, und mit `Shift`, wenn [shift] gilt.
 Future<void> chord(
   WidgetTester tester,
   LogicalKeyboardKey key, {
   bool shift = false,
+  bool alt = true,
 }) async {
   await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+  if (alt) {
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+  }
   if (shift) {
     await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
   }
@@ -77,6 +83,9 @@ Future<void> chord(
   );
   if (shift) {
     await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+  }
+  if (alt) {
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
   }
   await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
   await tester.pump();
@@ -142,7 +151,7 @@ void main() {
     await chord(tester, LogicalKeyboardKey.numpadSubtract);
     expect(fontSize(tester), 15);
 
-    await chord(tester, LogicalKeyboardKey.digit0, shift: true);
+    await chord(tester, LogicalKeyboardKey.digit0);
     expect(fontSize(tester), terminalFontSizeDefault, reason: 'reset');
     await chord(tester, LogicalKeyboardKey.equal);
     await chord(tester, LogicalKeyboardKey.numpad0);
@@ -157,9 +166,11 @@ void main() {
     expect(client.typed, <int>[0x0d]);
   }, variant: linux);
 
-  /// `Ctrl+0` bleibt die Leiste (HUM-254), auch aus dem Terminal, und
-  /// `Ctrl+Shift+-` -- `Ctrl+_`, Rückgängig in readline -- zoomt nicht.
-  testWidgets('ctrl_0_stays_the_rail_and_ctrl_shift_minus_does_not_zoom', (
+  /// `Ctrl+Shift+0` ist die Leiste (HUM-254, seit HUM-356), auch aus dem
+  /// Terminal, und `Ctrl+Alt+Shift+-` -- mit `Ctrl+_`, Rückgängig in
+  /// readline -- zoomt nicht. `Ctrl` mit `+` und `0` ohne `Alt` skaliert die
+  /// Anwendung und lässt die Schrift des Terminals stehen.
+  testWidgets('ctrl_shift_0_is_the_rail_and_shift_minus_does_not_zoom', (
     WidgetTester tester,
   ) async {
     await pumpSandboxWithTerminalFocused(tester);
@@ -170,12 +181,16 @@ void main() {
     );
     final bool railBefore = container.read(railExpandedProvider);
 
-    await chord(tester, LogicalKeyboardKey.digit0);
-    expect(fontSize(tester), 14, reason: 'Ctrl+0 is not the reset');
+    await chord(tester, LogicalKeyboardKey.digit0, shift: true, alt: false);
+    expect(fontSize(tester), 14, reason: 'Ctrl+Shift+0 is not the reset');
     expect(container.read(railExpandedProvider), !railBefore);
 
     await chord(tester, LogicalKeyboardKey.minus, shift: true);
-    expect(fontSize(tester), 14, reason: 'Ctrl+Shift+- is not zoom out');
+    expect(fontSize(tester), 14, reason: 'Ctrl+Alt+Shift+- is not zoom out');
+
+    await chord(tester, LogicalKeyboardKey.equal, alt: false);
+    await chord(tester, LogicalKeyboardKey.digit0, alt: false);
+    expect(fontSize(tester), 14, reason: 'Ctrl alone scales the application');
   }, variant: linux);
 
   testWidgets('without_a_terminal_on_the_screen_the_chords_do_nothing', (
@@ -288,8 +303,9 @@ void main() {
     );
     client.typed.clear();
 
-    // `Ctrl+=` gehalten: jede Wiederholung ein Schritt.
+    // `Ctrl+Alt+=` gehalten: jede Wiederholung ein Schritt.
     await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
     expect(await tester.sendKeyDownEvent(LogicalKeyboardKey.equal), isTrue);
     for (int i = 0; i < 3; i++) {
       expect(await tester.sendKeyRepeatEvent(LogicalKeyboardKey.equal), isTrue);
@@ -299,14 +315,15 @@ void main() {
       isTrue,
       reason: 'the release stays with the application',
     );
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
     await tester.pump();
     expect(fontSize(tester), 17);
 
-    // `Ctrl+Shift+0` gehalten: einmal die Vorgabe, die Wiederholungen und
+    // `Ctrl+Alt+0` gehalten: einmal die Vorgabe, die Wiederholungen und
     // das Loslassen nimmt die Anwendung, ohne sie noch einmal anzuwenden.
     await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
-    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
     expect(await tester.sendKeyDownEvent(LogicalKeyboardKey.digit0), isTrue);
     await tester.pump();
     expect(fontSize(tester), terminalFontSizeDefault);
@@ -324,7 +341,7 @@ void main() {
       );
     }
     expect(await tester.sendKeyUpEvent(LogicalKeyboardKey.digit0), isTrue);
-    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
     await tester.pump();
     expect(fontSize(tester), 14, reason: 'the reset applied once');
@@ -371,7 +388,7 @@ void main() {
     expect(fontSize(tester), 15, reason: 'the size survived the restart');
 
     // Und die Vorgabe gilt wieder als keine Wahl.
-    await chord(tester, LogicalKeyboardKey.digit0, shift: true);
+    await chord(tester, LogicalKeyboardKey.digit0);
     expect(fontSize(tester), terminalFontSizeDefault);
     expect(
       (jsonDecode(File(path).readAsStringSync())

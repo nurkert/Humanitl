@@ -88,6 +88,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-353 | Ctrl+C in the agent terminal no longer quits OpenCode, and copies a selection | S | HUM-037, HUM-274, HUM-308, HUM-313 |
 | HUM-355 | Neutral greys instead of blue-tinted ones, and no blue next to the brand yellow | M | HUM-260 |
 | HUM-354 | LLM_005 warns only about findings the model has not seen yet, and repeats collapse into one card | M | HUM-039, HUM-106, HUM-256, HUM-271 |
+| HUM-356 | The app scales: Ctrl+Plus, Ctrl+Minus, Ctrl+0 and a setting | M | HUM-301, HUM-254, HUM-352 |
 
 ---
 
@@ -10623,3 +10624,134 @@ of `app/lib/features/intercept/providers/diagnostics.dart`).
 - Keyed hashes (for example HMAC with a per-install key) for value hashes
   that are logged or persisted, so a low-entropy value cannot be confirmed
   by hashing guesses.
+---
+## HUM-356 · The app scales: Ctrl+Plus, Ctrl+Minus, Ctrl+0 and a setting
+
+### Kontext
+Wunsch des Owners am 2026-10-30: Auf einem 4K-Schirm ist alles zu klein.
+`Ctrl` + `+` und `Ctrl` + `-` sollen die ganze Anwendung skalieren, `Ctrl+0`
+zurücksetzen; eine Einstellung bietet feste Stufen, die Tasten feinere.
+Text und Elemente wachsen gemeinsam. Der Owner hat ausdrücklich verlangt,
+dass die Skalierung nie Ausrichtung, Raster oder Layouts zerstört.
+
+Zwei der drei Griffe waren belegt: `Ctrl+0` klappte die Leiste um
+(HUM-254), `Ctrl` mit `+` und `-` zoomte die Schrift des Terminals
+(HUM-301), dessen Vorgabe auf `Ctrl+Shift+0` lag.
+
+### Spezifikation
+1. **Logische Pixeldichte statt Bild.** `UiScaleHost` (`core/ui/ui_scale_host.dart`)
+   steht im `builder` von `WidgetsApp`, unter Theme und Lokalisierung und
+   über dem Navigator mit seinem Overlay. Bei einem Faktor `s` legt
+   `RenderUiScale` den Inhalt in `Fenster / s` an und malt ihn um `s`
+   vergrößert; Treffertest und `applyPaintTransform` gehen durch dieselbe
+   Matrix. Die `MediaQuery` darunter meldet Größe und Ränder geteilt durch
+   `s` und die Pixeldichte mal `s`. Bei 100 % ist der Wirt ein reiner
+   Durchgang ohne Schicht.
+2. **Stufen und Tasten.** Die Einstellung (Interface, „Scale") bietet 90,
+   100, 110, 125, 150, 175 und 200 %. `Ctrl` + `+` (auch `Ctrl+=`,
+   `Ctrl+Shift+=`, Plus des Ziffernblocks), `Ctrl` + `-` (auch Minus des
+   Ziffernblocks) und `Ctrl+0` (auch Null des Ziffernblocks) gehen um 10 %
+   zwischen 50 und 300 % und rasten auf Zehnern ein; auf macOS zählt `Cmd`
+   wie `Ctrl`. Die Palette bietet dieselben drei Befehle in jedem Abschnitt.
+   Ein Hinweis unter der Kopfleiste zeigt 2 s lang den Wert, der jetzt
+   gilt (`HMotion.copyFeedback`), ohne Bewegung, Fokus und Treffer, und sagt
+   ihn einem Screenreader.
+   Die Wahl steht in der Zustandsdatei der Oberfläche (`uiScale`), gelesen
+   vor dem ersten Bild; 100 % wird als keine Wahl geschrieben.
+3. **Die Griffe gehören der Anwendung, auch im Terminal.** Sie stehen in
+   `shellShortcuts()`, und das Terminal schlägt sie wie die anderen Griffe
+   der Shell selbst nach; kein TUI kann sie verschlucken. Die Leiste zieht
+   auf `Ctrl+Shift+0` um, der Zoom des Terminals auf `Ctrl+Alt` mit
+   denselben Tasten (Vorgabe `Ctrl+Alt+0`). Der Agent verliert dabei nur
+   `Ctrl+Alt+-` und nur, solange ein Terminal zu sehen ist.
+4. **Grenze aus dem Fenster.** Über 100 % gilt höchstens die größte ganze
+   Prozentzahl, bei der das logische Fenster noch 1100 x 700 misst
+   (`appMinimumLayoutSize`, zugleich die Mindestgröße des nativen
+   Fensters). Die Wahl bleibt stehen; wächst das Fenster, kehrt sie zurück,
+   schrumpft es, folgt die Grenze im selben Bild. Die Tasten rechnen von dem,
+   was gilt; ein Schritt nach oben an der Grenze ändert nichts, auch wenn die
+   Wahl genau an ihr steht und auch bei 100 % im Fenster der Mindestgröße,
+   und der Hinweis sagt „154%, the largest this window allows". Die Palette
+   liest die Grenze beim Ausführen. Unter 100 % wird nichts begrenzt. Auf
+   macOS bleibt der Platz der Ampel 72 Pixel des Fensters
+   (`titleBarPadding` teilt durch die Skalierung).
+5. **Haarlinien bleiben scharf.** `HHairline` zeichnet über
+   `RenderHairline` ganze physische Pixel: Bei ganzzahligem Verhältnis wie
+   bisher (Pixel für Pixel dasselbe Bild), bei 125 % oder 175 % auf ganze
+   Pixel gerundet, ohne Kantenglättung. Das Verhältnis kommt aus der
+   `MediaQuery`, nicht aus der Lage auf dem Schirm: Eine Lage veraltete in
+   einer Schicht, die beim Rollen verschoben, aber nicht neu gemalt wird.
+6. **Terminal und schwebendes Fenster.** Die Schrift des Terminals bleibt in
+   logischen Pixeln; skaliert zählt es weniger Spalten und Zeilen und meldet
+   sie auf dem gedrosselten Weg (HUM-305). Anker, größte Größe und
+   freizuhaltende Bereiche des schwebenden Terminals (HUM-352) rechnen im
+   skalierten logischen Raum, ohne Änderung an ihrem Code. Ein Kontextmenü
+   rechnet die globale Zeigerposition in die Koordinaten seines Overlays um
+   (`HContextMenu`).
+7. `docs/UX.md` 5.5 (neu) und 5.2, `docs/DESIGN.md` (Tastentabelle,
+   `HHairline`), `backlog/CONVENTIONS.md` 3.9.
+
+### Akzeptanzkriterien
+1. Widget-Test: Intercept, History, Rules, Sandbox, Audit und Setup bei jeder
+   Stufe in 1920 x 1080 und 3840 x 2160: kein Überlauf, keine Ausnahme, das
+   logische Fenster nie unter 1100 x 700.
+2. Widget-Test: Bei 150 % in 1920 x 1080 legt sich die Shell in 1280 x 720
+   an und malt 1920 breit.
+3. Widget-Test: 1280 x 800 mit 200 % gilt als 114 %; größer wieder 200 %,
+   kleiner wieder 114 %; ein Schritt an der Grenze zeigt den Hinweis mit der
+   Grenze, auch bei einer Wahl gleich der Grenze; im Fenster 1100 x 700
+   bleibt `Ctrl+Plus` bei 100 % und schreibt nichts; jede Seite passt bei
+   1210 x 770 mit 110, 125 und 200 %.
+4. Widget-Test: Die Griffe in einem Abschnitt und mit der Tastatur im
+   Terminal; kein Byte an den Agenten, die Schrift des Terminals bleibt, die
+   neue Geometrie geht zum Daemon. `Ctrl+Shift+0` bleibt die Leiste.
+5. Widget-Test: Palette, Einstellung, Neustart über derselben Datei.
+6. Widget-Test: Ein Kontextmenü öffnet bei 150 % unter dem Zeiger; der
+   Platz der Ampel auf macOS bleibt bei 50, 100 und 200 % 72 Pixel des
+   Fensters; ein Befehl der Palette rechnet mit der Grenze beim Ausführen.
+7. Reine Tests: Grenze, geltende Skalierung, Schritte, Speicherung, die
+   Aktivatoren (auch macOS), `RenderUiScale` (Layout, Treffer, Schicht),
+   `RenderHairline` (Rechnung und gemaltes Rechteck).
+8. Goldens: Intercept dunkel bei 100, 150 und 200 %.
+9. Mutationsbeweise: ohne Grenze (Überlauf rot), Transform ohne neues
+   Layout und ohne `MediaQuery` (Umbruch rot), ohne Speicherung (rot),
+   Kontextmenü ohne Umrechnung (rot), Haarlinie ohne Raster (rot); aus der
+   Review-Runde: Grenze nur über 100 %, Hinweis ohne Abweisung, Ampel ohne
+   Teilung, Grenze der Palette beim Bau, Haarlinie ohne `MediaQuery` (je
+   rot).
+
+### Tests
+`app/test/core/ui/ui_scale_test.dart`, `app/test/features/shell/ui_scale_test.dart`,
+`app/test/goldens/ui_scale_golden_test.dart`; angepasst
+`app/test/core/shortcuts/shortcuts_map_to_intents_test.dart`,
+`app/test/core/ui/terminal_zoom_test.dart`,
+`app/test/features/shell/terminal_zoom_test.dart`,
+`app/test/features/shell/icon_rail_test.dart`,
+`app/test/features/shell/settings_entry_test.dart`.
+
+### Fallstricke
+- `getSize` im Test liefert die Größe in eigenen Koordinaten; die gemalte
+  Größe gibt `getRect`.
+- Der `Divider` aus `shadcn_flutter` malte eine Linie mit eckigem Ende, die
+  einen halben Pixel über ihre Fläche hinausreicht; ein Rechteck statt
+  dessen verschob in 170 Goldens einzelne Pixel. Bei ganzzahligem
+  Verhältnis malt `RenderHairline` deshalb genau diese Linie.
+- Die Grenze nimmt nur Vergrößerung zurück; sonst schrumpfte jeder Test mit
+  einem Fenster unter 1100 x 700.
+
+### Kandidaten für eigene Issues
+- (A) Rahmen von Boxen (`borderWidth`, rund 50 Stellen) auf das Pixelraster
+  ziehen wie `HHairline`.
+- (B) Die Skalierung pro Bildschirm merken, wenn das Fenster zwischen
+  Schirmen verschiedener Dichte wandert.
+- (C) Haarlinien unter einem Renderer, der Kanten immer glättet (Impeller
+  mit MSAA), auch in der Lage einrasten, ohne an einer veralteten Lage zu
+  hängen.
+- (D) Unter Windows meldet `AltGr` sich als `Ctrl+Alt`; die Griffe des
+  Terminal-Zooms träfen dort Zeichen wie `AltGr+0` (`}`) auf deutscher
+  Belegung.
+- (E) Prüfen, welche Overlays aus `shadcn_flutter` `View` oder die
+  `MediaQuery` direkt lesen und unter der Skalierung falsch messen.
+- (F) `Ctrl` + Rad zoomt weiter nur das Terminal, nicht die Anwendung;
+  so gewollt und in `docs/UX.md` 5.2 beschrieben, bei Bedarf neu
+  entscheiden.
