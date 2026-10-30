@@ -32,7 +32,8 @@ class SettingsIntent extends Intent {
   const SettingsIntent();
 }
 
-/// Expand or collapse the icon rail. `Ctrl+0` (HUM-254).
+/// Expand or collapse the icon rail. `Ctrl+Shift+0` (HUM-254; `Ctrl+0`
+/// until HUM-356).
 class ToggleRailIntent extends Intent {
   /// Creates the intent.
   const ToggleRailIntent();
@@ -92,8 +93,8 @@ class ToggleTerminalFloatIntent extends Intent {
 /// binding never matches `Ctrl+Shift+P`; no other binding uses `P`. The queue
 /// decides with `Enter`, `A`, `B`, `Ctrl+F`, `Ctrl+L`, `Ctrl+Shift+F` and
 /// `Ctrl+Shift+L`, none of which this is. `Ctrl+Shift+C` and `Ctrl+Shift+V`
-/// are copy and paste in the terminal (HUM-313), `Ctrl+Shift+0` the zoom
-/// reset (HUM-301), `Ctrl+Shift+Enter` the whole window (HUM-298).
+/// are copy and paste in the terminal (HUM-313), `Ctrl+Shift+0` the rail
+/// (HUM-356), `Ctrl+Shift+Enter` the whole window (HUM-298).
 ///
 /// **What the agent loses.** The terminal looks the chord up itself, like
 /// every chord of the shell, so the agent never receives it. A terminal on
@@ -221,13 +222,14 @@ class TerminalFocusActivator extends ShortcutActivator {
 
 /// What a zoom chord does to the text of the terminal (HUM-301).
 enum TerminalZoom {
-  /// One step larger. `Ctrl` + `+`, `Ctrl+=`, `Ctrl` + numpad `+`.
+  /// One step larger. `Ctrl+Alt` + `+`, `Ctrl+Alt+=`, `Ctrl+Alt` + numpad
+  /// `+` (HUM-356; before, `Ctrl` alone).
   zoomIn,
 
-  /// One step smaller. `Ctrl` + `-`, `Ctrl` + numpad `-`.
+  /// One step smaller. `Ctrl+Alt` + `-`, `Ctrl+Alt` + numpad `-`.
   zoomOut,
 
-  /// Back to the default size. `Ctrl+Shift+0`, `Ctrl` + numpad `0`.
+  /// Back to the default size. `Ctrl+Alt+0`, `Ctrl+Alt` + numpad `0`.
   reset,
 }
 
@@ -241,35 +243,74 @@ class TerminalZoomIntent extends Intent {
   final TerminalZoom zoom;
 }
 
-/// The chords that zoom the text of the terminal (HUM-301).
+/// Die Tasten einer Zoom-Familie: größer, kleiner, zurück.
 ///
-/// **Zoom in** takes `+` with or without `Shift`: on a US layout `+` is
-/// `Shift+=`, on a German one it has its own key, and the keypad has one of
-/// its own. Flutter names a key by what it types without modifiers, so the US
-/// chord arrives as `equal` with `Shift` and the German one as `add`.
+/// Dieselben Tasten für die Skalierung der Anwendung ([UiScaleActivator])
+/// und für die Schrift des Terminals ([TerminalZoomActivator]); die beiden
+/// unterscheiden sich nur im Modifikator.
 ///
-/// **Zoom out** takes `-` only without `Shift`: `Ctrl+Shift+-` is `Ctrl+_`,
-/// undo in readline, and stays with the agent.
+/// **Größer** nimmt `+` mit oder ohne `Shift`: Auf einer US-Tastatur ist `+`
+/// `Shift+=`, auf einer deutschen hat es eine eigene Taste, und der
+/// Ziffernblock hat noch eine. Flutter benennt eine Taste nach dem, was sie
+/// ohne Modifikator tippt; der US-Griff kommt als `equal` mit `Shift` an, der
+/// deutsche als `add`.
 ///
-/// **Reset is `Ctrl+Shift+0`, not `Ctrl+0`.** `Ctrl+0` is the reset of every
-/// browser and terminal and here the toggle of the rail ([railToggleKey],
-/// HUM-254), in every section and from inside the terminal as well. Two
-/// meanings for one chord, one of them only while the terminal has the
-/// keyboard, would leave whoever wants the rail with a smaller text and the
-/// other way round. `Shift` with the same key keeps the reset next to the
-/// digit people reach for; [SingleActivator] demands its modifiers exactly,
-/// so the rail binding does not match it. On a German keyboard
-/// `Shift+0` types `=`, but the key is still named `digit0`, so the chord is
-/// the same there and is not mistaken for zoom in. `Ctrl` with the `0` of the
-/// keypad resets as well, without `Shift`, because `Shift` turns that key
-/// into `Insert` while Num Lock is on.
+/// **Kleiner** nimmt `-` nur ohne `Shift`: `Ctrl+Shift+-` ist `Ctrl+_`, Undo
+/// in readline, und bleibt beim Agenten.
 ///
-/// Zoom in and out repeat while held, the reset does not. Exactly `Ctrl` as
-/// the other modifier: with `Alt` or `Meta` it is another chord. None of these
-/// keys is bound anywhere else in the application with `Ctrl` (checked
-/// against every `SingleActivator` in `app/lib` and `app/packages` and
-/// CONVENTIONS 3.9). The terminal looks them up like the other keys of the
-/// shell, so they never reach the agent.
+/// **Zurück** nimmt die `0` der Zahlenreihe und des Ziffernblocks, beide ohne
+/// `Shift`: `Ctrl+Shift+0` ist die Leiste ([railToggleKey]), und `Shift`
+/// macht aus der `0` des Ziffernblocks bei Num Lock `Insert`.
+///
+/// Größer und kleiner wiederholen sich beim Halten, zurück nicht.
+enum _ZoomKeys {
+  larger(<LogicalKeyboardKey>[
+    LogicalKeyboardKey.equal,
+    LogicalKeyboardKey.add,
+    LogicalKeyboardKey.numpadAdd,
+  ]),
+  smaller(<LogicalKeyboardKey>[
+    LogicalKeyboardKey.minus,
+    LogicalKeyboardKey.numpadSubtract,
+  ]),
+  reset(<LogicalKeyboardKey>[
+    LogicalKeyboardKey.digit0,
+    LogicalKeyboardKey.numpad0,
+  ]);
+
+  const _ZoomKeys(this.keys);
+
+  final List<LogicalKeyboardKey> keys;
+
+  /// Ob [event] eine Taste dieser Familie ist, gedrückt oder (außer bei
+  /// [reset]) wiederholt, mit einem `Shift`, das die Familie zulässt. Die
+  /// übrigen Modifikatoren prüft der Aufrufer.
+  bool matches(KeyEvent event, HardwareKeyboard state) {
+    final bool down =
+        event is KeyDownEvent || (event is KeyRepeatEvent && this != reset);
+    if (!down || !keys.contains(event.logicalKey)) {
+      return false;
+    }
+    return this == larger || !state.isShiftPressed;
+  }
+}
+
+/// The chords that zoom the text of the terminal (HUM-301): `Ctrl+Alt` with
+/// the keys of [_ZoomKeys].
+///
+/// **`Ctrl+Alt` since HUM-356.** `Ctrl` with `+`, `-` and `0` scales the
+/// whole application now ([UiScaleActivator]), as in every browser; the
+/// owner asked for exactly these chords on 2026-10-30. The scaling grows the
+/// terminal text along with everything else, so the terminal zoom stays as
+/// the finer, separate control, one modifier further. `Ctrl+Alt` with these
+/// keys is bound nowhere else in the application (checked against every
+/// activator in `app/lib` and `app/packages` and CONVENTIONS 3.9). What the
+/// agent loses: a terminal sends `Ctrl+Alt+-` as `ESC` and `0x1f`, the meta
+/// form of readline's undo; only that, and only while a terminal is shown.
+///
+/// Exactly `Ctrl` and `Alt`: with `Meta` it is another chord. The terminal
+/// looks them up like the other keys of the shell, so they never reach the
+/// agent.
 class TerminalZoomActivator extends ShortcutActivator {
   /// Creates the activator for [zoom].
   const TerminalZoomActivator(this.zoom);
@@ -277,49 +318,109 @@ class TerminalZoomActivator extends ShortcutActivator {
   /// The chord this activator stands for.
   final TerminalZoom zoom;
 
-  @override
-  Iterable<LogicalKeyboardKey> get triggers => switch (zoom) {
-    TerminalZoom.zoomIn => const <LogicalKeyboardKey>[
-      LogicalKeyboardKey.equal,
-      LogicalKeyboardKey.add,
-      LogicalKeyboardKey.numpadAdd,
-    ],
-    TerminalZoom.zoomOut => const <LogicalKeyboardKey>[
-      LogicalKeyboardKey.minus,
-      LogicalKeyboardKey.numpadSubtract,
-    ],
-    TerminalZoom.reset => const <LogicalKeyboardKey>[
-      LogicalKeyboardKey.digit0,
-      LogicalKeyboardKey.numpad0,
-    ],
+  _ZoomKeys get _keys => switch (zoom) {
+    TerminalZoom.zoomIn => _ZoomKeys.larger,
+    TerminalZoom.zoomOut => _ZoomKeys.smaller,
+    TerminalZoom.reset => _ZoomKeys.reset,
   };
 
   @override
-  bool accepts(KeyEvent event, HardwareKeyboard state) {
-    final bool down =
-        event is KeyDownEvent ||
-        (event is KeyRepeatEvent && zoom != TerminalZoom.reset);
-    if (!down ||
-        !triggers.contains(event.logicalKey) ||
-        !state.isControlPressed ||
-        state.isAltPressed ||
-        state.isMetaPressed) {
-      return false;
-    }
-    final bool shift = state.isShiftPressed;
-    return switch (zoom) {
-      TerminalZoom.zoomIn => true,
-      TerminalZoom.zoomOut => !shift,
-      TerminalZoom.reset =>
-        event.logicalKey == LogicalKeyboardKey.digit0 ? shift : !shift,
-    };
-  }
+  Iterable<LogicalKeyboardKey> get triggers => _keys.keys;
+
+  @override
+  bool accepts(KeyEvent event, HardwareKeyboard state) =>
+      state.isControlPressed &&
+      state.isAltPressed &&
+      !state.isMetaPressed &&
+      _keys.matches(event, state);
 
   @override
   String debugDescribeKeys() => switch (zoom) {
-    TerminalZoom.zoomIn => 'Ctrl + Plus / Equal / Numpad Add',
-    TerminalZoom.zoomOut => 'Ctrl + Minus / Numpad Subtract',
-    TerminalZoom.reset => 'Ctrl + Shift + 0 / Ctrl + Numpad 0',
+    TerminalZoom.zoomIn => 'Ctrl + Alt + Plus / Equal / Numpad Add',
+    TerminalZoom.zoomOut => 'Ctrl + Alt + Minus / Numpad Subtract',
+    TerminalZoom.reset => 'Ctrl + Alt + 0 / Numpad 0',
+  };
+}
+
+/// What a scale chord does to the whole application (HUM-356).
+enum UiScaleStep {
+  /// One step larger, 10 %. `Ctrl` + `+`, `Ctrl+=`, `Ctrl` + numpad `+`.
+  zoomIn,
+
+  /// One step smaller, 10 %. `Ctrl` + `-`, `Ctrl` + numpad `-`.
+  zoomOut,
+
+  /// Back to 100 %. `Ctrl+0`, `Ctrl` + numpad `0`.
+  reset,
+}
+
+/// Make the whole application larger, smaller or 100 % again (HUM-356).
+class UiScaleIntent extends Intent {
+  /// Creates the intent for [step].
+  const UiScaleIntent(this.step);
+
+  /// Which way the scale changes.
+  final UiScaleStep step;
+}
+
+/// The chords that scale the whole application (HUM-356): `Ctrl` with the
+/// keys of [_ZoomKeys], on macOS `Cmd` as well.
+///
+/// **They belong to the application, also inside the terminal.** These are
+/// the zoom chords of every browser and of the desktop, and terminal
+/// programs hardly use them: `Ctrl+=` and `Ctrl+0` send nothing a TUI
+/// reads, and `Ctrl+-` had been the terminal zoom since HUM-301 already. The
+/// terminal looks them up like the other keys of the shell, so a TUI that
+/// has the keyboard cannot swallow them; the setting and the palette work
+/// too.
+///
+/// **`Ctrl+0` resets, and the rail moved to `Ctrl+Shift+0`.** Until HUM-356
+/// `Ctrl+0` toggled the rail ([railToggleKey], HUM-254) and the terminal zoom
+/// reset sat on `Ctrl+Shift+0`. The owner asked for the browser chords on
+/// 2026-10-30; the rail keeps its digit and takes `Shift`, the terminal zoom
+/// takes `Alt` ([TerminalZoomActivator]).
+///
+/// Exactly one of `Ctrl` or, on macOS, `Cmd`; no `Alt`. `Ctrl` and `Cmd`
+/// together are another chord.
+class UiScaleActivator extends ShortcutActivator {
+  /// Creates the activator for [step]. [platform] defaults to
+  /// [defaultTargetPlatform]; tests pass their own.
+  const UiScaleActivator(this.step, {this.platform});
+
+  /// The chord this activator stands for.
+  final UiScaleStep step;
+
+  /// The platform whose modifier counts, or null for the running one.
+  final TargetPlatform? platform;
+
+  _ZoomKeys get _keys => switch (step) {
+    UiScaleStep.zoomIn => _ZoomKeys.larger,
+    UiScaleStep.zoomOut => _ZoomKeys.smaller,
+    UiScaleStep.reset => _ZoomKeys.reset,
+  };
+
+  @override
+  Iterable<LogicalKeyboardKey> get triggers => _keys.keys;
+
+  @override
+  bool accepts(KeyEvent event, HardwareKeyboard state) {
+    final bool mac =
+        (platform ?? defaultTargetPlatform) == TargetPlatform.macOS;
+    final bool control = state.isControlPressed;
+    final bool meta = state.isMetaPressed;
+    // Genau einer der beiden: `Ctrl`, oder auf macOS `Cmd`.
+    final bool one = mac ? control != meta : control && !meta;
+    if (!one || state.isAltPressed) {
+      return false;
+    }
+    return _keys.matches(event, state);
+  }
+
+  @override
+  String debugDescribeKeys() => switch (step) {
+    UiScaleStep.zoomIn => 'Ctrl + Plus / Equal / Numpad Add',
+    UiScaleStep.zoomOut => 'Ctrl + Minus / Numpad Subtract',
+    UiScaleStep.reset => 'Ctrl + 0 / Numpad 0',
   };
 }
 
@@ -350,7 +451,7 @@ enum TerminalClipboard {
 /// of the application uses `C` or `V` with `Ctrl` and `Shift` (checked against
 /// every `SingleActivator` in `app/lib` and `app/packages` and CONVENTIONS
 /// 3.9; `Ctrl+Shift+F` and `Ctrl+Shift+L` are the group decisions of the
-/// queue, `Ctrl+Shift+Enter` the full window, `Ctrl+Shift+0` the zoom reset).
+/// queue, `Ctrl+Shift+Enter` the full window, `Ctrl+Shift+0` the rail).
 ///
 /// Exactly these modifiers: `Ctrl+Alt+Shift+C` is another chord. No repeats:
 /// a held chord copies or pastes once; the terminal keeps the repeats and the
@@ -396,21 +497,38 @@ class TerminalClipboardActivator extends ShortcutActivator {
   };
 }
 
-/// The key that expands and collapses the rail, with `Ctrl` (HUM-254).
+/// The key that expands and collapses the rail, with `Ctrl+Shift` (HUM-254).
 ///
 /// Not `Ctrl+B`: CONVENTIONS 3.9 keeps that for `AddRuleIntent`, and a plain
 /// `B` blocks a held request, so a chord whose `Ctrl` came a moment late
 /// would decide instead of changing the layout. The zero belongs to the key
 /// family of the rail and is unbound without `Ctrl` in every section.
+///
+/// **With `Shift` since HUM-356.** `Ctrl+0` is the reset of the scaling now,
+/// as in every browser ([UiScaleActivator]); the owner asked for it on
+/// 2026-10-30. The rail keeps its digit; [SingleActivator] demands its
+/// modifiers exactly, so neither chord matches the other. On a German
+/// keyboard `Shift+0` types `=`, but the key is still named `digit0`, so the
+/// chord is the same there. In the terminal `Ctrl+Shift+0` sends nothing a
+/// TUI reads.
 const LogicalKeyboardKey railToggleKey = LogicalKeyboardKey.digit0;
 
+/// The chord of the rail (HUM-254, HUM-356): `Ctrl+Shift+0`.
+const SingleActivator railToggleActivator = SingleActivator(
+  railToggleKey,
+  control: true,
+  shift: true,
+);
+
 /// The bindings of HUM-019: one `Ctrl+<digit>` per section, `Ctrl+K`,
-/// `Ctrl+,` for the settings (HUM-069), `Ctrl+0` for the rail (HUM-254) and
+/// `Ctrl+,` for the settings (HUM-069), `Ctrl+Shift+0` for the rail (HUM-254)
+/// and
 /// `Ctrl+Shift+Enter` for the terminal over the whole window (HUM-298) and
 /// `Ctrl+Backquote` for the keyboard to the terminal (HUM-303), the zoom
 /// chords of the terminal (HUM-301) and `Ctrl+Shift+P` for the floating
 /// terminal (HUM-300), `Ctrl+Shift+T` for a further shell and
-/// `Ctrl+PageUp`/`Ctrl+PageDown` for its tabs (HUM-314).
+/// `Ctrl+PageUp`/`Ctrl+PageDown` for its tabs (HUM-314), and `Ctrl` with
+/// `+`, `-` and `0` for the scaling of the whole application (HUM-356).
 Map<ShortcutActivator, Intent> shellShortcuts() =>
     withCommandOnMac(<ShortcutActivator, Intent>{
       for (int i = 0; i < navigationKeys.length; i++)
@@ -419,8 +537,7 @@ Map<ShortcutActivator, Intent> shellShortcuts() =>
           const PaletteIntent(),
       const SingleActivator(LogicalKeyboardKey.comma, control: true):
           const SettingsIntent(),
-      const SingleActivator(railToggleKey, control: true):
-          const ToggleRailIntent(),
+      railToggleActivator: const ToggleRailIntent(),
       terminalFullWindowActivator: const ToggleTerminalFullWindowIntent(),
       terminalFullWindowNumpadActivator: const ToggleTerminalFullWindowIntent(),
       terminalFloatActivator: const ToggleTerminalFloatIntent(),
@@ -430,6 +547,8 @@ Map<ShortcutActivator, Intent> shellShortcuts() =>
       openShellActivator: const OpenShellIntent(),
       previousTerminalTabActivator: const SwitchTerminalTabIntent(-1),
       nextTerminalTabActivator: const SwitchTerminalTabIntent(1),
+      for (final UiScaleStep step in UiScaleStep.values)
+        UiScaleActivator(step): UiScaleIntent(step),
     });
 
 /// The digit keys of the navigation shortcuts, in section order.

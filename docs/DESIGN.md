@@ -534,6 +534,25 @@ pointer. Disabled entries stay in place so the order never changes.
 A 1 px separator, horizontal or vertical, in `line` or `lineStrong`. The design
 uses hairlines where others use shadows.
 
+It takes `hairline` (1 logical px) in the layout and draws whole physical
+pixels (HUM-356, `RenderHairline`). Where a logical pixel is a whole number of
+physical ones (100 %, 200 %, a screen of double density) it draws exactly as
+before, a line through the middle of its box. At a fractional ratio, such as
+the application scaled to 125 % or 175 %, it rounds its thickness to whole
+physical pixels (at least one) and draws without anti-aliasing, so the line
+covers whole rows of pixels instead of a soft band across two. The ratio comes
+from the `MediaQuery` (device pixel ratio times scale), so a change of scale
+reaches every line, also one in a cached layer.
+
+It deliberately does not ask where it stands on the screen: a list that moves
+its rows as layers while scrolling does not repaint them, and a position read
+at paint time would go stale. A rectangle exactly one physical pixel thick
+without anti-aliasing covers exactly one row wherever it starts; that holds for
+Skia's aliased rasterization. A renderer that always smooths edges (Impeller
+with MSAA) still draws a narrow band at a fractional position. Borders of boxes
+(`borderWidth`) are not snapped yet; they behave like any Flutter border at a
+fractional device pixel ratio.
+
 ### HFocusRing
 
 The one focus ring of the system: 2 px of accent outside the control, shown in
@@ -587,7 +606,7 @@ right; modals are only for destructive confirmations.
 | Part | Size | Notes |
 |---|---|---|
 | Header bar | 40 px | App mark, session, isolation ring, window controls |
-| Icon rail | 48 px collapsed, 200 px expanded | Intercept, History, Rules, Sandbox, Audit, Setup; `Ctrl+0` toggles |
+| Icon rail | 48 px collapsed, 200 px expanded | Intercept, History, Rules, Sandbox, Audit, Setup; `Ctrl+Shift+0` toggles |
 | Status bar | 24 px | Daemon connection, quiet text |
 | Pane header | 48 px, border included | `paneHeaderHeight`, always `HPaneHeader`; the same row as the first rail item |
 | Rail item | 48 px | `railItemHeight`; starts directly under the header bar |
@@ -682,12 +701,13 @@ The table lists each binding as the app has it in 0.1, checked against
 | `Ctrl+1` to `Ctrl+6` | Go to Intercept, History, Rules, Sandbox, Audit, Setup | `NavIntent` | Everywhere |
 | `Ctrl+K` | Command palette | `PaletteIntent` | Everywhere |
 | `Ctrl+,` | Settings | `SettingsIntent` | Everywhere |
-| `Ctrl+0` | Expand or collapse the icon rail | `ToggleRailIntent` | Everywhere |
+| `Ctrl+Shift+0` | Expand or collapse the icon rail (`Ctrl+0` until HUM-356) | `ToggleRailIntent` | Everywhere |
+| `Ctrl` + `+` (also `Ctrl+=`, numpad `+`) / `Ctrl` + `-` (also numpad `-`) / `Ctrl+0` (also numpad `0`); `Cmd` on macOS | Scale the whole application one step of 10 % larger / smaller / back to 100 %, between 50 and 300 %, kept across restarts (HUM-356) | `UiScaleIntent` | Everywhere, also inside the terminal |
 | `Ctrl+Shift+Enter` (also numpad `Enter`) | Show the terminal over the whole window, and back (HUM-298) | `ToggleTerminalFullWindowIntent` | Everywhere, also inside the terminal |
 | `Ctrl+Shift+P` | Let the terminal float as a small window over the sections, and put it back (HUM-300); nothing while no agent runs | `ToggleTerminalFloatIntent` | Everywhere, also inside the terminal |
 | ``Ctrl+` `` (the key left of `1`, by position) | Give the keyboard to the terminal that is shown, without changing the layout; with a running agent and no terminal on the screen it lets the terminal float first (HUM-303, HUM-300) | `FocusTerminalIntent` | Everywhere, also inside the terminal |
-| `Ctrl` + `+` (also `Ctrl+=`, numpad `+`) / `Ctrl` + `-` (also numpad `-`) | Terminal text one step larger / smaller, 10 to 28 px, kept across restarts; `Ctrl` + wheel over the terminal does the same (HUM-301) | `TerminalZoomIntent` | While a terminal is shown, also inside it |
-| `Ctrl+Shift+0` (also `Ctrl` + numpad `0`) | Terminal text back to its default size; not `Ctrl+0`, which is the rail (HUM-301) | `TerminalZoomIntent` | While a terminal is shown, also inside it |
+| `Ctrl+Alt` + `+` (also `Ctrl+Alt+=`, numpad `+`) / `Ctrl+Alt` + `-` (also numpad `-`) | Terminal text one step larger / smaller, 10 to 28 px, kept across restarts; `Ctrl` + wheel over the terminal does the same (HUM-301; `Ctrl` alone until HUM-356) | `TerminalZoomIntent` | While a terminal is shown, also inside it |
+| `Ctrl+Alt+0` (also `Ctrl+Alt` + numpad `0`) | Terminal text back to its default size (HUM-301, HUM-356) | `TerminalZoomIntent` | While a terminal is shown, also inside it |
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` (`Cmd+C` / `Cmd+V` on Apple platforms) | Copy the terminal selection / paste into the terminal; plain `Ctrl+C` and `Ctrl+V` stay with the agent (HUM-313), except that plain `Ctrl+C` copies while text is selected (HUM-353, not on Apple platforms) | `TerminalClipboardActivator`, no intent | Only inside the terminal |
 | `Ctrl+Shift+T` | Open a further shell in the running sandbox as a tab of the terminal; only while the daemon offers `sandbox.exec` and a session runs (HUM-314) | `OpenShellIntent` | Only in the terminal and its tabs |
 | `Ctrl+PageUp` / `Ctrl+PageDown` | Previous / next tab of the terminal, around the end; with the agent's tab alone the chords stay with the agent (HUM-314) | `SwitchTerminalTabIntent` | Only in the terminal and its tabs |
