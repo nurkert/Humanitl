@@ -25,7 +25,7 @@ use humanitl_sandbox::agent::pi::{
     WEB_ACCESS_INSTALL_COMMAND, WebAccessLookup, briefing_dst, file_targets, find_web_access,
     models_dst, settings_dst, web_search_dst,
 };
-use humanitl_sandbox::agent::pi_config::NO_KEY_PLACEHOLDER;
+use humanitl_sandbox::agent::pi_config::{ENV_KEY_FILE, NO_KEY_PLACEHOLDER};
 use humanitl_sandbox::{
     AdapterRegistry, AgentAdapter, AgentContext, AgentKey, Mount, OpenCodeAdapter, PiAdapter,
     SandboxBackend, SandboxProfile, SandboxView, files_inside_work,
@@ -174,8 +174,14 @@ fn pi_reads_the_key_through_a_file_and_nowhere_else() {
 
     assert_eq!(
         provider(&ctx)["apiKey"],
-        Value::String(format!("!cat {API_KEY_DST}")),
+        Value::String(format!("!cat \"${ENV_KEY_FILE}\"")),
         "models.json names the command that reads the key file"
+    );
+    assert!(
+        adapter
+            .env(&ctx)
+            .contains(&(ENV_KEY_FILE.to_owned(), API_KEY_DST.to_owned())),
+        "the command finds the path in the variable"
     );
     let files = adapter.files(&ctx).unwrap();
     let secret: Vec<_> = files.iter().filter(|file| file.secret).collect();
@@ -221,7 +227,7 @@ fn pi_without_a_key_gets_the_placeholder_and_a_plan_an_empty_file() {
     let plan = context(Some("http://192.168.1.50:11434")).with_llm_key(AgentKey::Withheld);
     assert_eq!(
         provider(&plan)["apiKey"],
-        Value::String(format!("!cat {API_KEY_DST}"))
+        Value::String(format!("!cat \"${ENV_KEY_FILE}\""))
     );
     let files = PiAdapter::new().files(&plan).unwrap();
     let secret = files
@@ -456,7 +462,7 @@ fn pi_preflight_says_nothing_about_node_for_other_commands() {
 const FAKE_PI: &str = r#"
 A="$PI_CODING_AGENT_DIR"
 echo "offline=$PI_OFFLINE skip=$PI_SKIP_VERSION_CHECK telemetry=$PI_TELEMETRY"
-command=$(sed -n 's/^ *"apiKey": "!\(.*\)",*$/\1/p' "$A/models.json")
+command=$(sed -n 's/^ *"apiKey": "!\(.*\)",*$/\1/p' "$A/models.json" | sed 's/\\"/"/g')
 key=$(/bin/sh -c "$command")
 if [ "$key" = "sk-pi-test-0123456789abcdef" ]; then echo key=arrived; else echo "key=missing [$command]"; fi
 grep -q '"baseUrl": "http://192.168.1.50:11434/v1"' "$A/models.json" && echo base=ok
