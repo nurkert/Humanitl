@@ -12,7 +12,7 @@
 /// entschieden (`core/body/body_providers.dart`: „Warteschlange und History
 /// lesen ihr Detail aus je eigenem Provider").
 ///
-/// # Drei Dinge, die hier und nicht im Editor stehen
+/// # Vier Dinge, die hier und nicht im Editor stehen
 ///
 /// 1. **Das Senden wartet auf die Antwort.** `decide` wirft eine
 ///    `DaemonException` — `IPC_003`, wenn die Frist abgelaufen ist, während
@@ -28,7 +28,15 @@
 ///    es nicht mehr, wenn `Recorded` kommt.
 /// 3. **Nach der Frist wird nicht mehr gesendet.** Der Editor bleibt lesbar,
 ///    der Knopf ist aus und sagt, warum (HUM-058 liefert das Banner dazu).
+/// 4. **Während einer Störung der Aufzeichnung hält das erste Senden an.**
+///    Dieselbe Pause wie in der Warteschlange und dieselbe Bestätigung für
+///    die Sitzung (HUM-250, HUM-269): Wer sie dort schon bestätigt hat, sendet
+///    hier ohne Halt, und wer hier bestätigt, wird dort nicht mehr gefragt.
+///    Gefragt wird unmittelbar vor dem `Decide`, wie in `_send` der
+///    Warteschlange; Blockieren hält nie an.
 library;
+
+import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -39,9 +47,11 @@ import '../../core/domain/domain.dart';
 import '../../core/ipc/client_providers.dart';
 import '../../core/ipc/daemon_client.dart';
 import '../../core/ipc/flow_events.dart';
+import '../../core/recorder/recorder_health.dart';
 import '../../l10n/l10n.dart';
 import 'editor_screen.dart';
 import 'model/draft.dart';
+import 'model/draft_ops.dart';
 import 'providers/draft_provider.dart';
 import 'providers/editor_detail.dart';
 
@@ -86,6 +96,30 @@ class _EditorHostState extends ConsumerState<EditorHost> {
   bool _sending = false;
   bool _overdue = false;
 
+  /// Die Freigabe, die an der Pause der Aufzeichnung angehalten ist, oder
+  /// null. Gezeigt wird die Pause hier nur, solange sie für genau diese steht
+  /// ([RecorderPause.standsFor]).
+  RecorderResume? _held;
+
+  /// Vor dem ersten Gebrauch gelesen und danach behalten: [dispose] braucht
+  /// ihn, und dort gibt es `ref` nicht mehr.
+  late final RecorderPause _pause = ref.read(recorderPauseProvider.notifier);
+
+  @override
+  void dispose() {
+    // Der Editor geht, während seine Pause steht. Ihre Freigabe gehört diesem
+    // Wirt; stünde die Pause weiter, zeigte die Leiste der Warteschlange sie,
+    // und ihr Knopf setzte eine Freigabe fort, die niemand mehr sieht.
+    // Hinter dem Abbau und nicht in ihm: Den Provider im Abbau des Baums zu
+    // ändern, baute andere Widgets mitten darin neu.
+    final RecorderResume? held = _held;
+    if (held != null) {
+      final RecorderPause pause = _pause;
+      scheduleMicrotask(() => pause.withdraw(held));
+    }
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final AppLocalizations l10n = context.l10n;
@@ -110,6 +144,9 @@ class _EditorHostState extends ConsumerState<EditorHost> {
     if (body == null) {
       return const SizedBox.shrink();
     }
+    final RecorderPauseState pause = ref.watch(recorderPauseProvider);
+    final RecorderResume? held = _held;
+    final bool recorderPaused = held != null && _pause.standsFor(held);
     return EditorScreen(
       key: Key('editor-${widget.flowId.value}'),
       flowId: widget.flowId,
@@ -135,6 +172,12 @@ class _EditorHostState extends ConsumerState<EditorHost> {
       onSend: _send,
       onBlock: _block,
       sendRefused: detail.summary.sendRefusal != null,
+      recorderPaused: recorderPaused,
+      onSendUnrecorded:
+          recorderPaused && pause == RecorderPauseState.armed && !_overdue
+          ? () => unawaited(_pause.confirm())
+          : null,
+      onRecorderPauseBack: _pause.close,
     );
   }
 
@@ -159,6 +202,11 @@ class _EditorHostState extends ConsumerState<EditorHost> {
           if (mounted && !_overdue) {
             setState(() => _overdue = true);
           }
+          // Nach der Frist gibt es nichts mehr fortzusetzen.
+          final RecorderResume? held = _held;
+          if (held != null) {
+            _pause.withdraw(held);
+          }
         case FlowEventRecorded(:final FlowId flowId)
             when flowId == widget.flowId:
           // Nur schließen. Den Entwurf räumt `DraftNotifier` selbst weg: Er
@@ -181,8 +229,14 @@ class _EditorHostState extends ConsumerState<EditorHost> {
   /// bleibt im Editor stehen.
   Future<void> _block() => _decide(const Decision.block());
 
-  Future<void> _decide(Decision decision) async {
+  /// [bypass] trägt nur die Freigabe, die die Pause der Aufzeichnung selbst
+  /// fortsetzt ([RecorderPause.confirm]); jede andere hält dort an.
+  Future<void> _decide(Decision decision, {RecorderBypass? bypass}) async {
     if (_sending) {
+      return;
+    }
+    if (decision.kind != DecisionKind.block &&
+        _recorderPaused(decision, bypass)) {
       return;
     }
     setState(() {
@@ -191,6 +245,11 @@ class _EditorHostState extends ConsumerState<EditorHost> {
     });
     try {
       await ref.read(daemonClientProvider).decide(widget.flowId, decision);
+      if (decision.kind != DecisionKind.block) {
+        // Kam die Freigabe aus der Pause, gilt die Sitzung jetzt als
+        // bestätigt, für den Editor wie für die Warteschlange.
+        _pause.noteAllowSent(bypass);
+      }
     } on DaemonException catch (error) {
       // Der Editor bleibt stehen und zeigt, warum nichts hinausging. Ihn zu
       // schließen hieße, eine Anfrage für gesendet auszugeben, die der Daemon
@@ -207,5 +266,56 @@ class _EditorHostState extends ConsumerState<EditorHost> {
       setState(() => _sending = false);
       widget.onClose();
     }
+  }
+
+  /// Wahr, nachdem die Pause der Aufzeichnung für [decision] aufging: Die
+  /// Aufzeichnung ist gestört, und die Sitzung hat das noch nicht bestätigt
+  /// (HUM-250, `docs/UX.md` 5.4).
+  ///
+  /// „Unaufgezeichnet senden" setzt diese Freigabe fort; die Pause fragt
+  /// dabei nicht noch einmal ([RecorderPause.owed]). Ist der Editor bis dahin
+  /// zu, geht nichts hinaus.
+  ///
+  /// Gesendet wird, was beim Bestätigen im Entwurf steht: Die Felder bleiben
+  /// bearbeitbar, solange die Pause steht, und ein Geheimnis, das jemand in
+  /// dieser Zeit noch löscht, ginge sonst trotzdem hinaus (HUM-269, Review).
+  ///
+  /// Nicht an die Auswahl gebunden (`bound: false`): Der Editor gehört zu
+  /// seinem Fluss und geht selbst, wenn die Auswahl weiterzieht; seine Pause
+  /// nimmt er dann mit ([dispose]).
+  bool _recorderPaused(Decision decision, RecorderBypass? bypass) {
+    if (!_pause.owes(bypass)) {
+      return false;
+    }
+    late final RecorderResume resume;
+    resume = (RecorderBypass resumed) async {
+      if (mounted && identical(_held, resume)) {
+        _held = null;
+        final Decision? current = _current(decision);
+        if (current != null) {
+          await _decide(current, bypass: resumed);
+        }
+      }
+    };
+    setState(() => _held = resume);
+    _pause.open(resume, bound: false);
+    return true;
+  }
+
+  /// [decision] mit dem Entwurf, wie er jetzt steht, oder null, wenn darin
+  /// inzwischen wieder ein Fund offen ist.
+  ///
+  /// Den offenen Fund fängt schon der Bildschirm ab und zeigt die Pause mit
+  /// offenen Funden (`EditorScreen`, „Unaufgezeichnet senden"); hier steht
+  /// nur die Sperre dahinter, damit keine Fortsetzung an ihr vorbeigeht.
+  Decision? _current(Decision decision) {
+    final Draft? draft = ref.read(draftProvider(widget.flowId));
+    if (decision is! DecisionAllowEdited || draft == null) {
+      return decision;
+    }
+    if (openFindings(draft) > 0) {
+      return null;
+    }
+    return Decision.allowEdited(request: editedRequestOf(draft));
   }
 }

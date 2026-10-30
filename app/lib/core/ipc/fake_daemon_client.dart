@@ -1268,6 +1268,12 @@ class FakeDaemonClient implements DaemonClient {
   /// Phase --, und was das Schliessen ausloest, misst
   /// `daemon/crates/ipc/tests/terminal.rs`.
   void endTerminals({int code = 0}) {
+    // Die Stroeme weiterer Shells enden wie bei `endShell`: das Exit, dann
+    // ist der Strom zu. `endShell` nimmt sie dabei aus `_terminals`, damit
+    // die Schleife darunter ihnen kein zweites Exit schickt.
+    for (final String id in List<String>.of(_shellTerminals.keys)) {
+      endShell(id, code: code);
+    }
     for (final StreamController<TerminalFrame> out
         in List<StreamController<TerminalFrame>>.of(_terminals)) {
       if (!out.isClosed) {
@@ -1284,6 +1290,9 @@ class FakeDaemonClient implements DaemonClient {
     // den es nicht mehr gibt.
     _terminals.clear();
     _terminalWriter = null;
+    // Mit der Sitzung enden ihre weiteren Shells (HUM-299, HUM-314).
+    _liveShells.clear();
+    _shellTerminals.clear();
   }
 
   @override
@@ -1374,6 +1383,9 @@ class FakeDaemonClient implements DaemonClient {
     bool writes = false;
 
     void release() {
+      // Ein Strom an einer weiteren Shell faellt aus ihrer Liste, sobald er
+      // abhaengt oder abgebrochen wird (HUM-314).
+      _forgetShellStream(out);
       if (writes) {
         if (identical(_terminalWriter, out)) {
           _terminalWriter = null;
@@ -1393,6 +1405,11 @@ class FakeDaemonClient implements DaemonClient {
     }
 
     void onCommand(TerminalCommand command) {
+      // Nach dem Ende einer Shell ist ihr Strom zu (HUM-314); was danach
+      // noch kommt, faellt weg.
+      if (out.isClosed) {
+        return;
+      }
       if (!opened) {
         // Die erste Nachricht ist `Open`; alles davor gehoert niemandem.
         if (command is TerminalDetach) {
@@ -1403,6 +1420,16 @@ class FakeDaemonClient implements DaemonClient {
           return;
         }
         opened = true;
+        // Das Terminal einer weiteren Shell (HUM-314): eigener Weg, der
+        // Schreibplatz des Agenten bleibt unberuehrt.
+        if (command.shellId.isNotEmpty) {
+          if (!_openShellTerminal(command, out)) {
+            finish();
+            return;
+          }
+          writes = !command.readOnly;
+          return;
+        }
         writes = !command.readOnly;
         if (writes && _terminalWriter != null) {
           writes = false;
@@ -2942,6 +2969,154 @@ class FakeDaemonClient implements DaemonClient {
     return left.scheme == right.scheme &&
         left.host.toLowerCase() == right.host.toLowerCase() &&
         left.port == right.port;
+  }
+
+  // --- Weitere Shells (HUM-299, HUM-314) ----------------------------------
+  //
+  // Der Fake fuehrt die Grenze und die Kennungen wie der Daemon: hoechstens
+  // [maxShells] leben zugleich, die fuenfte ist `TERM_002`, ohne laufende
+  // Sitzung `IPC_006`, und eine Kennung, unter der keine Shell lebt,
+  // beantwortet `Terminal` mit `IPC_006`. Er startet keinen Prozess: Das
+  // Terminal einer Shell gibt Tasten zurueck wie das des Agenten, und
+  // [endShell] spielt ihr Ende. Einen zweiten Schreiber derselben Shell lehnt
+  // der Fake nicht ab.
+
+  /// How many further shells live at a time, as in the shim and the daemon.
+  static const int maxShells = 4;
+
+  /// Every `Exec` received, oldest first: (cols, rows, command).
+  final List<(int, int, List<String>)> execCalls = <(int, int, List<String>)>[];
+
+  /// What `Exec` throws instead of answering, when set.
+  Diagnostic? execFailure;
+
+  /// The ids of the further shells that live, in the order they started.
+  List<String> get liveShells => List<String>.unmodifiable(_liveShells);
+
+  final List<String> _liveShells = <String>[];
+
+  /// The open terminal streams per shell id.
+  final Map<String, List<StreamController<TerminalFrame>>> _shellTerminals =
+      <String, List<StreamController<TerminalFrame>>>{};
+
+  int _shellCounter = 0;
+
+  @override
+  Future<ShellStarted> exec({
+    String sandboxId = '',
+    List<String> command = const <String>[],
+    int cols = 0,
+    int rows = 0,
+  }) async {
+    _check();
+    execCalls.add((cols, rows, List<String>.unmodifiable(command)));
+    if (execFailure case final Diagnostic failure) {
+      throw DaemonException(failure);
+    }
+    final String running = sandbox.sandboxId?.value ?? '';
+    if (sandbox.state != SandboxState.running ||
+        running.isEmpty ||
+        (sandboxId.isNotEmpty && sandboxId != running)) {
+      throw const DaemonException(
+        Diagnostic(
+          code: DiagnosticCodes.capabilityUnavailable,
+          severity: Severity.error,
+          title: 'No running session',
+          why: 'no session runs that a further shell could join',
+        ),
+      );
+    }
+    if (_liveShells.length >= maxShells) {
+      throw const DaemonException(
+        Diagnostic(
+          code: DiagnosticCodes.terminalUnavailable,
+          severity: Severity.error,
+          title: 'No further shell',
+          why:
+              'four further shells already run in this sandbox; end one '
+              'of them with exit, then open a new one',
+        ),
+      );
+    }
+    _shellCounter++;
+    final String tag = running.replaceAll('-', '');
+    final String short = tag.length <= 8 ? tag : tag.substring(tag.length - 8);
+    final String id = '$short-$_shellCounter';
+    _liveShells.add(id);
+    return ShellStarted(
+      shellId: id,
+      sandboxId: running,
+      command: command.isEmpty ? const <String>['bash', '-i'] : command,
+    );
+  }
+
+  /// Ends the further shell [id] with [code], as its process would: every
+  /// terminal attached to it gets the exit code, and its place is free again.
+  void endShell(String id, {int code = 0}) {
+    _liveShells.remove(id);
+    final List<StreamController<TerminalFrame>> outs =
+        _shellTerminals.remove(id) ?? <StreamController<TerminalFrame>>[];
+    for (final StreamController<TerminalFrame> out in outs) {
+      _terminals.remove(out);
+      if (!out.isClosed) {
+        // Wie der Daemon: das Exit, dann ist der Strom zu.
+        out.add(TerminalExit(code));
+        unawaited(out.close());
+      }
+    }
+  }
+
+  /// Removes [out] from the streams of every shell.
+  void _forgetShellStream(StreamController<TerminalFrame> out) {
+    for (final List<StreamController<TerminalFrame>> outs
+        in _shellTerminals.values) {
+      outs.remove(out);
+    }
+  }
+
+  /// Attaches [out] to the terminal of the shell [open] names; false, with
+  /// `IPC_006` in the stream, when no shell lives under that id.
+  bool _openShellTerminal(
+    TerminalOpen open,
+    StreamController<TerminalFrame> out,
+  ) {
+    // Wie der Daemon: erst die Sandbox, dann die Shell darin.
+    final String running = sandbox.sandboxId?.value ?? '';
+    final bool otherSandbox =
+        open.sandboxId.isNotEmpty && open.sandboxId != running;
+    if (otherSandbox || !_liveShells.contains(open.shellId)) {
+      out.addError(
+        DaemonException(
+          Diagnostic(
+            code: DiagnosticCodes.capabilityUnavailable,
+            severity: Severity.error,
+            title: 'No such shell',
+            why: otherSandbox
+                ? 'the sandbox ${open.sandboxId} does not run'
+                : 'no further shell lives under the id ${open.shellId}',
+          ),
+        ),
+      );
+      return false;
+    }
+    _shellTerminals
+        .putIfAbsent(open.shellId, () => <StreamController<TerminalFrame>>[])
+        .add(out);
+    out
+      ..add(
+        TerminalGeometry(
+          cols: open.cols == 0 ? 80 : open.cols,
+          rows: open.rows == 0 ? 24 : open.rows,
+        ),
+      )
+      ..add(
+        TerminalOutput(
+          Uint8List.fromList(
+            utf8.encode('humanitl fake shell ${open.shellId}\r\n'),
+          ),
+        ),
+      );
+    return true;
   }
 
   void _serverCheck() {

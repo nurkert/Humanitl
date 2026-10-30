@@ -8,6 +8,8 @@ import '../tokens/tokens.dart';
 import '../tokens/typography.dart';
 import 'h_hairline.dart';
 import 'h_icon_button.dart';
+import 'h_keep_clear.dart';
+import 'h_layer_scope.dart';
 import 'h_pane_header.dart';
 
 /// A panel that slides in from the right: rule from request, history detail,
@@ -82,9 +84,10 @@ class HSheet extends StatelessWidget {
               },
             ),
         },
+        // Nichts Schwebendes legt sich über ein Blatt (HUM-300).
         child: HTheme.host(
           context,
-          FocusScope(autofocus: true, child: _panel(context)),
+          HKeepClear(child: HLayerScope(child: _panel(context))),
         ),
       ),
     );

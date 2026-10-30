@@ -33,6 +33,8 @@ String describe(Intent intent) => switch (intent) {
   RememberTargetIntent(:final int index) => 'RememberTarget($index)',
   MoveRuleIntent(:final int delta) => 'MoveRule($delta)',
   ToggleGroupIntent(:final bool open) => 'ToggleGroup(open: $open)',
+  TerminalZoomIntent(:final TerminalZoom zoom) => 'TerminalZoom(${zoom.name})',
+  SwitchTerminalTabIntent(:final int delta) => 'SwitchTerminalTab($delta)',
   _ => '${intent.runtimeType}',
 };
 
@@ -74,6 +76,26 @@ final List<KeyRow> shellTable = <KeyRow>[
   ctrl(LogicalKeyboardKey.digit0, 'ToggleRailIntent'),
   ctrlShift(LogicalKeyboardKey.enter, 'ToggleTerminalFullWindowIntent'),
   ctrlShift(LogicalKeyboardKey.numpadEnter, 'ToggleTerminalFullWindowIntent'),
+  // Das schwebende Terminal (HUM-300).
+  ctrlShift(LogicalKeyboardKey.keyP, 'ToggleTerminalFloatIntent'),
+  ctrl(LogicalKeyboardKey.backquote, 'FocusTerminalIntent'),
+  // Der Zoom des Terminals (HUM-301): `+` mit und ohne `Shift`, weil es auf
+  // US-Belegung `Shift+=` ist; `-` nur ohne, weil `Ctrl+_` dem Agenten
+  // gehört; die Vorgabe mit `Ctrl+Shift+0`, weil `Ctrl+0` die Leiste ist.
+  ctrl(LogicalKeyboardKey.equal, 'TerminalZoom(zoomIn)'),
+  ctrlShift(LogicalKeyboardKey.equal, 'TerminalZoom(zoomIn)'),
+  ctrl(LogicalKeyboardKey.add, 'TerminalZoom(zoomIn)'),
+  ctrlShift(LogicalKeyboardKey.add, 'TerminalZoom(zoomIn)'),
+  ctrl(LogicalKeyboardKey.numpadAdd, 'TerminalZoom(zoomIn)'),
+  ctrlShift(LogicalKeyboardKey.numpadAdd, 'TerminalZoom(zoomIn)'),
+  ctrl(LogicalKeyboardKey.minus, 'TerminalZoom(zoomOut)'),
+  ctrl(LogicalKeyboardKey.numpadSubtract, 'TerminalZoom(zoomOut)'),
+  ctrlShift(LogicalKeyboardKey.digit0, 'TerminalZoom(reset)'),
+  ctrl(LogicalKeyboardKey.numpad0, 'TerminalZoom(reset)'),
+  // Weitere Shells als Reiter des Terminals (HUM-314).
+  ctrlShift(LogicalKeyboardKey.keyT, 'OpenShellIntent'),
+  ctrl(LogicalKeyboardKey.pageUp, 'SwitchTerminalTab(-1)'),
+  ctrl(LogicalKeyboardKey.pageDown, 'SwitchTerminalTab(1)'),
 ];
 
 /// Die Warteschlange (CONVENTIONS 3.9 und die Bindungen von HUM-029, HUM-072).
@@ -179,6 +201,14 @@ Future<List<String>> pumpBindings(
   return log;
 }
 
+/// Tasten, für die der Simulator keinen Linux-Code kennt; sie kommen als
+/// Android-Ereignis (HUM-301). Die Shortcuts sehen nur die logische Taste.
+final Set<LogicalKeyboardKey> _androidOnly = <LogicalKeyboardKey>{
+  LogicalKeyboardKey.add,
+  LogicalKeyboardKey.numpadSubtract,
+  LogicalKeyboardKey.numpad0,
+};
+
 /// Drückt [row] mit seinen Modifikatoren.
 Future<void> press(WidgetTester tester, KeyRow row) async {
   if (row.control) {
@@ -190,7 +220,16 @@ Future<void> press(WidgetTester tester, KeyRow row) async {
   if (row.alt) {
     await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
   }
-  await tester.sendKeyEvent(row.key);
+  // Das `+` einer deutschen Tastatur liegt auf der Taste rechts vom `Ü`
+  // (HUM-301); der Simulator kennt für `add` keinen Linux-Code, also
+  // kommt es als Android-Ereignis.
+  await tester.sendKeyEvent(
+    row.key,
+    platform: _androidOnly.contains(row.key) ? 'android' : null,
+    physicalKey: row.key == LogicalKeyboardKey.add
+        ? PhysicalKeyboardKey.bracketRight
+        : null,
+  );
   if (row.alt) {
     await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
   }
@@ -203,9 +242,34 @@ Future<void> press(WidgetTester tester, KeyRow row) async {
   await tester.pump();
 }
 
+/// Die Zeilen, die zu [activator] gehören, als Text: zum Vergleich der
+/// beiden Richtungen.
+///
+/// Ein Zoom-Aktivator des Terminals (HUM-301) steht für mehrere Tasten und
+/// Modifikatoren und damit für mehrere Zeilen.
+List<String> activatorLabels(ShortcutActivator activator) {
+  if (activator is TerminalZoomActivator) {
+    return <String>[
+      for (final LogicalKeyboardKey key in activator.triggers)
+        for (final bool shift in <bool>[false, true])
+          if (activator.zoom == TerminalZoom.zoomIn ||
+              (activator.zoom == TerminalZoom.reset &&
+                  shift == (key == LogicalKeyboardKey.digit0)) ||
+              (activator.zoom == TerminalZoom.zoomOut && !shift))
+            'Ctrl+${shift ? 'Shift+' : ''}${key.keyLabel}',
+    ];
+  }
+  return <String>[activatorLabel(activator)];
+}
+
 /// Die Zeile, die zu [activator] gehört, als Text: zum Vergleich der beiden
 /// Richtungen.
 String activatorLabel(ShortcutActivator activator) {
+  // Die Tastatur ans Terminal fragt nach der physischen Taste links der 1
+  // (HUM-303); ihre Zeile steht unter dem Namen dieser Taste auf US-Belegung.
+  if (activator is TerminalFocusActivator) {
+    return 'Ctrl+${LogicalKeyboardKey.backquote.keyLabel}';
+  }
   final SingleActivator single = activator as SingleActivator;
   return '${single.control ? 'Ctrl+' : ''}${single.shift ? 'Shift+' : ''}'
       '${single.alt ? 'Alt+' : ''}${single.trigger.keyLabel}';
@@ -250,7 +314,8 @@ void main() {
         <String>{
           for (final MapEntry<ShortcutActivator, Intent> entry
               in bindings.entries)
-            '${activatorLabel(entry.key)} -> ${describe(entry.value)}',
+            for (final String label in activatorLabels(entry.key))
+              '$label -> ${describe(entry.value)}',
         },
         <String>{
           for (final KeyRow row in table) '${rowLabel(row)} -> ${row.intent}',

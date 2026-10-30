@@ -22,10 +22,10 @@ import '../../../core/domain/domain.dart';
 import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/flow_events.dart';
+import '../../../core/recorder/recorder_health.dart';
 import '../../../l10n/l10n.dart';
 import '../../intercept/providers/decision.dart';
 import '../../intercept/providers/flows.dart';
-import '../../intercept/providers/recorder_health.dart';
 import '../../../core/domain/websocket.dart';
 import '../../tray/attention_text.dart';
 import '../../tray/desktop_ports.dart';
@@ -347,7 +347,13 @@ class _TrayHostState extends ConsumerState<TrayHost> {
     if (mounted) {
       ref
           .read(recorderPauseProvider.notifier)
-          .open(() => ref.read(interceptDecisionProvider.notifier).allow());
+          .open(
+            // Der Freibrief geht mit, damit genau diese Freigabe nach der
+            // Bestätigung nicht ein zweites Mal anhält (HUM-269, Review).
+            (RecorderBypass bypass) => ref
+                .read(interceptDecisionProvider.notifier)
+                .allow(bypass: bypass),
+          );
     }
     return true;
   }

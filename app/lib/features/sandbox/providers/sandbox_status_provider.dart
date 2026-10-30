@@ -16,6 +16,8 @@ import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/config_providers.dart';
 import '../../../core/ipc/daemon_client.dart';
 
+import 'closed_failures.dart';
+
 part 'sandbox_status_provider.g.dart';
 
 /// How many log lines the screen keeps.
@@ -24,6 +26,10 @@ part 'sandbox_status_provider.g.dart';
 /// (`humanitl history`). A bound is what keeps a long session from turning
 /// the list into the memory profile of the whole run.
 const int sandboxLogLimit = 2000;
+
+/// How long a background question for the snapshot waits for an event
+/// before it gives up (HUM-306).
+const Duration sandboxPollDeadline = Duration(seconds: 10);
 
 /// Riverpod 3 retries a failed provider on its own and reports `AsyncLoading`
 /// with the error tucked inside while it does. A screen whose whole job is to
@@ -257,6 +263,75 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     call: SandboxCall.start,
   );
 
+  /// Asks for the snapshot alone, for a window that only needs to know
+  /// whether a session runs (HUM-306): the shell asks every few seconds while
+  /// the empty queue shows, because a session started or stopped on the
+  /// command line sends this window nothing.
+  ///
+  /// Lighter than [refresh] in three ways. It measures no isolation. It
+  /// keeps the findings that stand, because a finding of the last start must
+  /// not vanish from the setup screen because time passed. And it counts as
+  /// no newer question: it takes the current count of [_snapshots] without
+  /// raising it, so a plan or refresh in flight keeps its answer, and an
+  /// answer of this call that arrives after one of them began is dropped. A
+  /// failure leaves the snapshot alone; the next question comes anyway, and
+  /// a red sandbox screen because a background question went unanswered
+  /// would be a claim nobody asked for.
+  ///
+  /// It touches the snapshot only: a finding or a log line on its stream is
+  /// not taken, because the daemon repeats the findings of its preflight
+  /// with every snapshot, and a question every five seconds would pile up a
+  /// copy each time and claim them for itself (`sandboxCallProvider`).
+  ///
+  /// Only one question at a time: while one is in flight, another call
+  /// joins it. After [sandboxPollDeadline] without an end the question
+  /// counts as lost: its answer, should it still come, is dropped, and the
+  /// next call asks anew, so a daemon that hangs does not hold every later
+  /// question back. An answer that set out before the last event of any
+  /// other call is dropped as well ([_sessionEvents]): an `Exit` that
+  /// arrived meanwhile is newer than a snapshot taken before it.
+  Future<void> pollStatus() {
+    final Future<void>? running = _poll;
+    if (running != null) {
+      return running;
+    }
+    final int token = ++_pollToken;
+    final Timer deadline = Timer(sandboxPollDeadline, () {
+      if (token == _pollToken) {
+        _pollToken++;
+        _poll = null;
+      }
+    });
+    final Future<void> asked =
+        _apply(
+          (DaemonClient client) => client.sandboxStatus(),
+          call: SandboxCall.status,
+          clearDiagnostics: false,
+          generation: _snapshots,
+          poll: token,
+        ).whenComplete(() {
+          deadline.cancel();
+          if (token == _pollToken) {
+            _poll = null;
+          }
+        });
+    return _poll = asked;
+  }
+
+  /// The count of questions of [pollStatus]; a question whose number is no
+  /// longer the count was given up and its answer is dropped.
+  int _pollToken = 0;
+
+  /// The question of [pollStatus] in flight, if one is.
+  Future<void>? _poll;
+
+  /// How many events the other calls have folded in so far (HUM-306).
+  ///
+  /// A start, a stop, a plan and a refresh each count every event they
+  /// fold; a question of [pollStatus] takes the count when it sets out and
+  /// drops its answer when the count moved.
+  int _sessionEvents = 0;
+
   /// Stops the sandbox.
   Future<void> stop() => _apply(
     (DaemonClient client) => client.stopSandbox(),
@@ -293,15 +368,27 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     bool clearDiagnostics = true,
     int? choice,
     int? generation,
+    int? poll,
   }) async {
+    // A question of [pollStatus] carries its number; it is the quiet kind.
+    final bool quiet = poll != null;
     // A plan of a folder choice counts only while no newer choice exists
     // (HUM-293); its late events would show the older folder.
     // An answer of a refresh or a plan counts only while no newer one was
     // asked for (HUM-295).
+    final int sessionEvents = _sessionEvents;
     bool superseded() =>
         (choice != null && choice != _chooses) ||
-        (generation != null && generation != _snapshots);
+        (generation != null && generation != _snapshots) ||
+        (quiet && sessionEvents != _sessionEvents) ||
+        (poll != null && poll != _pollToken);
     final DaemonClient client = ref.read(daemonClientProvider);
+    // Eine Operation, kein Blick auf den Stand: Was ihre Vorgängerin an
+    // Fehlschlägen meldete und jemand geschlossen hat, gilt für sie nicht
+    // mehr (HUM-302).
+    if (call != SandboxCall.status && call != SandboxCall.isolationCheck) {
+      ref.read(closedFailuresProvider.notifier).newOperation();
+    }
     SandboxStatus current = state.value ?? const SandboxStatus();
     // A new operation starts without the findings of the last one: a
     // diagnostic that named the previous failure would otherwise keep the
@@ -314,11 +401,24 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
         if (superseded()) {
           return;
         }
+        // A background question folds onto what stands now, not onto what
+        // stood when it was asked: a start that measured the guarantees in
+        // between would otherwise lose them to an answer that set out
+        // earlier (HUM-306).
+        if (quiet) {
+          // Only the snapshot itself; see [pollStatus].
+          if (update is! SandboxUpdateStatus) {
+            continue;
+          }
+          current = state.value ?? current;
+        } else {
+          _sessionEvents++;
+        }
         current = _fold(current, update, call);
         state = AsyncData<SandboxStatus>(current);
       }
     } on DaemonException catch (error, stack) {
-      if (!superseded()) {
+      if (!superseded() && !quiet) {
         state = AsyncError<SandboxStatus>(error, stack);
       }
     }
@@ -394,6 +494,9 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     SandboxUpdateRefusals(:final SandboxRefusals refusals) => current.copyWith(
       refusals: refusals,
     ),
+    // The agent ended; the sandbox around it may still stand, and that is
+    // what the snapshot says from now on (HUM-306).
+    SandboxUpdateExit() => current.copyWith(agentRunning: false),
   };
 
   /// [checks] with [result] in the place of the earlier result for the same

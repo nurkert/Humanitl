@@ -15,8 +15,9 @@
 use std::path::{Path, PathBuf};
 
 use humanitl_config::{Paths, Resolved};
-use humanitl_core::Diagnostic;
 use humanitl_core::block::sanitize_note;
+use humanitl_core::shell::shell_path;
+use humanitl_core::{Diagnostic, FixAction};
 use humanitl_sandbox::{MountPolicy, WORK_DIR_KEY, WorkDirSource, work_dir_refused};
 
 use crate::v1;
@@ -137,6 +138,9 @@ pub fn check_requested(
         ));
     }
     if !allowed {
+        if let Some(refused) = named_file_refused(paths, dir, &resolved, from) {
+            return Err(refused);
+        }
         return Err(work_dir_refused(
             dir,
             from,
@@ -149,6 +153,56 @@ pub fn check_requested(
         ));
     }
     Ok(resolved)
+}
+
+/// Der Befund für einen Ordner außerhalb des Heimatverzeichnisses, den eine
+/// andere Datei als die Konfiguration des Daemons nennt (HUM-296), sonst
+/// nichts.
+///
+/// `humanitl run --config other.toml` schickt `sandbox.work_dir` aus
+/// `other.toml` mit dieser Datei als Quelle. Erklärt ist ein Ordner außerhalb
+/// von `$HOME` aber nur in der Datei, die der Daemon selbst liest
+/// ([`Paths::config_path`]); eine Datei, die ein Client nennt, liest er dafür
+/// nicht. Sonst könnte jeder Prozess, der den Socket erreicht, mit einer
+/// selbst geschriebenen Datei einen beliebigen Ordner zur Erklärung machen,
+/// den `SetConfig` aus demselben Grund ablehnt. Der Satz sagt das, und die
+/// Abhilfe ist der Befehl, der den Ordner in genau diese Datei schreibt.
+fn named_file_refused(
+    paths: &Paths,
+    dir: &Path,
+    resolved: &Path,
+    from: &WorkDirSource,
+) -> Option<Diagnostic> {
+    let WorkDirSource::ConfigFile(named) = from else {
+        return None;
+    };
+    let daemon_file = paths.config_path();
+    // Derselbe Ort zählt, nicht dieselbe Schreibweise: Ein Verweis auf die
+    // Datei des Daemons ist keine andere Datei. Lässt sich ein Pfad nicht
+    // auflösen, gilt er, wie er geschrieben ist. Das betrifft nur den Satz;
+    // erklärt ist weiterhin allein, was der Daemon selbst gelesen hat.
+    let located = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if located(named) == located(&daemon_file) {
+        return None;
+    }
+    let mut refused = work_dir_refused(
+        dir,
+        from,
+        &format!(
+            "it lies outside {}, and a folder outside your home directory counts as declared \
+             only in the daemon's config file {}, not in a config file other than the \
+             daemon's ({}); declare it there",
+            paths.home().display(),
+            daemon_file.display(),
+            named.display()
+        ),
+    );
+    refused.fix = Some(FixAction::CopyCommand(format!(
+        "humanitl --config {} config set {WORK_DIR_KEY} {}",
+        shell_path(&daemon_file),
+        shell_path(resolved)
+    )));
+    Some(refused)
 }
 
 /// Der Ordner, den der erklärte Text `configured` nennt: sein aufgelöster
@@ -362,5 +416,107 @@ mod tests {
             &WorkDirSource::Flag,
         )
         .expect_err("the link target was never declared");
+    }
+
+    /// Ein Ordner außerhalb des Heimatverzeichnisses aus einer Datei, die
+    /// der Client mit `--config` nennt, ist nicht erklärt; der Befund nennt
+    /// die Datei des Daemons, und die Abhilfe schreibt genau dorthin
+    /// (HUM-296). Steht er in der Datei des Daemons, startet er, gleich
+    /// welche Datei der Client nennt.
+    #[test]
+    fn only_the_daemons_config_file_declares_a_folder_outside_home() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = paths_in(home.path());
+        let outside = tempfile::tempdir().unwrap();
+        let outside = outside.path().canonicalize().unwrap();
+        let named = WorkDirSource::ConfigFile(home.path().join("other.toml"));
+
+        let refused = check_requested(&paths, None, &outside, &named)
+            .expect_err("a file the client names declares nothing");
+        assert_eq!(refused.code, SANDBOX_006);
+        let daemon_file = paths.config_path();
+        assert!(
+            refused.why.contains(&format!(
+                "only in the daemon's config file {}",
+                daemon_file.display()
+            )),
+            "{}",
+            refused.why
+        );
+        assert_eq!(
+            refused.fix,
+            Some(FixAction::CopyCommand(format!(
+                "humanitl --config {} config set {WORK_DIR_KEY} {}",
+                daemon_file.display(),
+                outside.display()
+            )))
+        );
+
+        // Die Datei des Daemons als Quelle behält den allgemeinen Satz und
+        // die Ordnerauswahl.
+        let own = WorkDirSource::ConfigFile(daemon_file.clone());
+        let refused = check_requested(&paths, None, &outside, &own).expect_err("not declared");
+        assert!(
+            !refused.why.contains("other than the daemon's"),
+            "{}",
+            refused.why
+        );
+        assert_eq!(
+            refused.fix,
+            Some(humanitl_sandbox::choose_folder_fix()),
+            "{}",
+            refused.why
+        );
+
+        // Ein Verweis auf die Datei des Daemons ist keine andere Datei.
+        std::fs::create_dir_all(daemon_file.parent().unwrap()).unwrap();
+        std::fs::write(&daemon_file, "").unwrap();
+        let link = home.path().join("link.toml");
+        std::os::unix::fs::symlink(&daemon_file, &link).unwrap();
+        let refused = check_requested(&paths, None, &outside, &WorkDirSource::ConfigFile(link))
+            .expect_err("not declared");
+        assert!(
+            !refused.why.contains("other than the daemon's"),
+            "{}",
+            refused.why
+        );
+        assert_eq!(refused.fix, Some(humanitl_sandbox::choose_folder_fix()));
+
+        check_requested(&paths, Some(&outside), &outside, &named)
+            .expect("declared in the daemon's file");
+    }
+
+    /// Die Abhilfe ist ein Befehl zum Kopieren: Datei des Daemons und Ordner
+    /// mit Leerzeichen und `'` kommen als je ein Wort der Shell an (HUM-296).
+    #[test]
+    fn the_fix_quotes_the_daemons_file_and_the_folder_for_the_shell() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path().canonicalize().unwrap();
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let paths = Paths::new(Env::from_pairs([
+            ("HOME", home.display().to_string()),
+            (
+                "XDG_CONFIG_HOME",
+                root.join("Niko's config").display().to_string(),
+            ),
+        ]));
+        let outside = root.join("Data 'x' y");
+        std::fs::create_dir_all(&outside).unwrap();
+        let named = WorkDirSource::ConfigFile(root.join("other.toml"));
+
+        let refused = check_requested(&paths, None, &outside, &named).expect_err("not declared");
+        // Druckbares ASCII mit einzelnen Leerzeichen steht in einfachen
+        // Anführungszeichen, ein `'` darin wird `'\''`.
+        let quoted =
+            |path: &Path| format!("'{}'", path.display().to_string().replace('\'', r"'\''"));
+        assert_eq!(
+            refused.fix,
+            Some(FixAction::CopyCommand(format!(
+                "humanitl --config {} config set {WORK_DIR_KEY} {}",
+                quoted(&paths.config_path()),
+                quoted(&outside)
+            )))
+        );
     }
 }

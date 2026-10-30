@@ -5,7 +5,9 @@
 /// * [TerminalSession] holds the emulator and the one bidirectional stream to
 ///   the daemon. What arrives has been filtered there, once, for every client;
 ///   this app adds no second filter and registers no OSC handler
-///   (`docs/SECURITY.md` 3.3).
+///   (`docs/SECURITY.md` 3.3). The clipboard requests of OSC 52 it refuses
+///   outright, because the emulator's view would answer them otherwise
+///   (HUM-313).
 /// * [HeldNotice] watches the flow events every screen already watches and
 ///   says what the agent is waiting for. It is deliberately **not** read out
 ///   of the terminal stream: a full-screen agent redraws over that line with
@@ -34,6 +36,14 @@ part 'terminal_provider.g.dart';
 /// cannot: its ring buffer holds the last 64 KiB and is there for a client
 /// that attaches late, not for a human scrolling back through an afternoon.
 const int terminalScrollback = 10000;
+
+/// An OSC 52 write of the agent: dropped, the clipboard stays as it was
+/// (HUM-313).
+void _refuseClipboardStore(String selector, String text) {}
+
+/// An OSC 52 read of the agent: refused, so no answer goes back up and the
+/// agent learns nothing of the clipboard (HUM-313).
+String? _refuseClipboardQuery(String selector) => null;
 
 /// How many flows the strip remembers by their request line.
 ///
@@ -173,6 +183,12 @@ class TerminalSessionState {
 }
 
 /// The terminal of one sandbox: the emulator, and the stream that feeds it.
+///
+/// [shellId] names a further shell of that sandbox (`Exec`, HUM-314); empty
+/// is the agent's own terminal. Each shell has its own emulator, scrollback
+/// and stream, and everything below holds for it unchanged: the refusal of
+/// OSC 52, the throttled resize, the reader after `TERM_001`, the reconnect
+/// after `DAEMON_001`.
 @Riverpod(keepAlive: true)
 class TerminalSession extends _$TerminalSession {
   StreamController<TerminalCommand>? _input;
@@ -197,12 +213,21 @@ class TerminalSession extends _$TerminalSession {
   (int, int)? _resizeSent;
 
   @override
-  TerminalSessionState build(String sandboxId) {
+  TerminalSessionState build(String sandboxId, {String shellId = ''}) {
     final Terminal terminal = Terminal(maxLines: terminalScrollback);
     // What the human types goes up as bytes; what the daemon sends comes back
     // through the same pipe. `onOutput` is the keyboard, not the screen.
     terminal.onOutput = (String data) =>
         _send(TerminalKeys(Uint8List.fromList(utf8.encode(data))));
+    // The clipboard of the human is closed to the agent (HUM-313,
+    // `docs/SECURITY.md` 3.3): OSC 52 neither writes it nor reads it back.
+    // The daemon already drops OSC 52; this is the second wall, and it has to
+    // be set here. `TerminalView` installs handlers of its own that write and
+    // read the clipboard while it has the focus, but only where the terminal
+    // has none (`??=`), so these two refusals keep it out.
+    terminal
+      ..onClipboardStore = _refuseClipboardStore
+      ..onClipboardQuery = _refuseClipboardQuery;
     terminal.onResize = (
       int width,
       int height,
@@ -247,6 +272,7 @@ class TerminalSession extends _$TerminalSession {
         cols: terminal.viewWidth,
         rows: terminal.viewHeight,
         readOnly: readOnly,
+        shellId: shellId,
       ),
     );
     final DaemonClient client = ref.read(daemonClientProvider);

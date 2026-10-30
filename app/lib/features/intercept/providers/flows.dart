@@ -21,7 +21,7 @@ import '../../../core/domain/domain.dart';
 import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/flow_events.dart';
-import 'diagnostics.dart' show sanitizeDiagnostic;
+import '../../../core/text/sanitize_diagnostic.dart';
 import 'now.dart';
 
 part 'flows.g.dart';

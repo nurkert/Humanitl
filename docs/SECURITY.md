@@ -686,7 +686,16 @@ reads them all) under one shared budget of `limits.preview_cap_bytes` and
 `limits.max_decompress_ratio`. Bytes after the end of a `deflate` or `br` stream, or after the
 last complete gzip member, that cannot be read as another member make the scan search the decoded
 part before them and report the rest as a gap (`FINDINGS_002`) instead of calling the body fully
-searched (HUM-247). A key written differently from literal or URL-encoded (a JSON escape, `+` as
+searched (HUM-247). A `deflate` body is read with the zlib frame of RFC 1950 first and as a raw
+RFC 1951 stream only when the frame is broken; when the frame reads completely, the raw reading
+is compared against it under the same limits. A body whose raw reading differs from the zlib
+reading is reported as a gap (`FINDINGS_002`) with the zlib reading searched, since a receiver
+that only knows the raw stream would get content the scan never saw; this holds when the raw
+stream ends cleanly, has bytes behind its end, or stops short in the middle after it has already
+diverged, because a streaming receiver has delivered that content by then. A valid zlib header
+that asks for a preset dictionary (`FDICT`) is a gap as well: the scan has no dictionary, searches
+the raw reading and says that the zlib reading was not searched (HUM-266). A key
+written differently from literal or URL-encoded (a JSON escape, `+` as
 a space in a form) is no hit.
 
 *What stays open.* The agent can read the key; it needs it. A subverted agent can therefore put it
@@ -706,7 +715,9 @@ end up in the file.
 is the one a person declared in `config.toml`; a stored folder gets this check at every start
 against the path it resolves to then, and a declaration outside `$HOME` holds only for the path
 its text really names, so a link put into a parent directory later cannot move the project
-elsewhere (HUM-294). `sandbox.work_mode = "ro"` is
+elsewhere (HUM-294). For the daemon only its own `config.toml` declares; a file a client names
+with `--config` declares nothing, and its folder outside `$HOME` is refused with the command
+that declares it in the daemon's file (HUM-296). `sandbox.work_mode = "ro"` is
 possible and the suggestion for analysis-only sessions. Paths through which written files would
 later be **executed** on the host are covered (full list in `profiles/sandbox/default.toml`):
 
@@ -771,7 +782,14 @@ that starts with a C1 introducer never passes. Only well-formed, shortest-form U
 daemon: an overlong form such as `E0 82 9B` is `U+009B`, and surrogates and code points above
 `U+10FFFF` are dropped too. The ring buffer that serves a late client holds filtered bytes. Above
 the terminal widget a permanent banner says that agent output is not trustworthy, and the widget
-registers no OSC handler of its own.
+registers no clipboard handler: it refuses the clipboard requests of OSC 52 (and of the iTerm2
+`CopyToClipboard` sequence) explicitly, writing nothing and answering nothing, because the emulator
+would otherwise install handlers of its own that write and read the clipboard while the terminal
+has the focus (HUM-313). What the emulator does answer are colour queries: OSC 4, 10 and 11 and the
+colour-scheme query `CSI ? 996 n` get the colours of the theme back through the keyboard stream,
+and only those of them that passed the daemon filter reach it. Text reaches the clipboard only by an action of the user: `Ctrl+Shift+C`
+or the context menu; pasting is `Ctrl+Shift+V`, the menu or the middle button, bracketed while the
+program asked for it, with every escape sequence of the pasted text removed.
 
 **The controlling terminal (HUM-280).** bubblewrap runs with `--new-session` in every command
 line, and that stays: `setsid` before the shim detaches the whole sandbox from whatever terminal
