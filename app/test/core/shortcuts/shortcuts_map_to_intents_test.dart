@@ -34,6 +34,7 @@ String describe(Intent intent) => switch (intent) {
   MoveRuleIntent(:final int delta) => 'MoveRule($delta)',
   ToggleGroupIntent(:final bool open) => 'ToggleGroup(open: $open)',
   TerminalZoomIntent(:final TerminalZoom zoom) => 'TerminalZoom(${zoom.name})',
+  UiScaleIntent(:final UiScaleStep step) => 'UiScale(${step.name})',
   SwitchTerminalTabIntent(:final int delta) => 'SwitchTerminalTab($delta)',
   _ => '${intent.runtimeType}',
 };
@@ -63,7 +64,14 @@ KeyRow ctrlShift(LogicalKeyboardKey key, String intent) =>
 KeyRow alt(LogicalKeyboardKey key, String intent) =>
     (key: key, control: false, shift: false, alt: true, intent: intent);
 
-/// Die Shell: `Ctrl+1..6`, `Ctrl+K`, `Ctrl+,`, `Ctrl+0` (HUM-254).
+KeyRow ctrlAlt(LogicalKeyboardKey key, String intent) =>
+    (key: key, control: true, shift: false, alt: true, intent: intent);
+
+KeyRow ctrlShiftAlt(LogicalKeyboardKey key, String intent) =>
+    (key: key, control: true, shift: true, alt: true, intent: intent);
+
+/// Die Shell: `Ctrl+1..6`, `Ctrl+K`, `Ctrl+,`, `Ctrl+Shift+0` (HUM-254,
+/// HUM-356).
 final List<KeyRow> shellTable = <KeyRow>[
   ctrl(LogicalKeyboardKey.digit1, 'Nav(0)'),
   ctrl(LogicalKeyboardKey.digit2, 'Nav(1)'),
@@ -73,25 +81,37 @@ final List<KeyRow> shellTable = <KeyRow>[
   ctrl(LogicalKeyboardKey.digit6, 'Nav(5)'),
   ctrl(LogicalKeyboardKey.keyK, 'PaletteIntent'),
   ctrl(LogicalKeyboardKey.comma, 'SettingsIntent'),
-  ctrl(LogicalKeyboardKey.digit0, 'ToggleRailIntent'),
+  ctrlShift(LogicalKeyboardKey.digit0, 'ToggleRailIntent'),
   ctrlShift(LogicalKeyboardKey.enter, 'ToggleTerminalFullWindowIntent'),
   ctrlShift(LogicalKeyboardKey.numpadEnter, 'ToggleTerminalFullWindowIntent'),
   // Das schwebende Terminal (HUM-300).
   ctrlShift(LogicalKeyboardKey.keyP, 'ToggleTerminalFloatIntent'),
   ctrl(LogicalKeyboardKey.backquote, 'FocusTerminalIntent'),
-  // Der Zoom des Terminals (HUM-301): `+` mit und ohne `Shift`, weil es auf
-  // US-Belegung `Shift+=` ist; `-` nur ohne, weil `Ctrl+_` dem Agenten
-  // gehört; die Vorgabe mit `Ctrl+Shift+0`, weil `Ctrl+0` die Leiste ist.
-  ctrl(LogicalKeyboardKey.equal, 'TerminalZoom(zoomIn)'),
-  ctrlShift(LogicalKeyboardKey.equal, 'TerminalZoom(zoomIn)'),
-  ctrl(LogicalKeyboardKey.add, 'TerminalZoom(zoomIn)'),
-  ctrlShift(LogicalKeyboardKey.add, 'TerminalZoom(zoomIn)'),
-  ctrl(LogicalKeyboardKey.numpadAdd, 'TerminalZoom(zoomIn)'),
-  ctrlShift(LogicalKeyboardKey.numpadAdd, 'TerminalZoom(zoomIn)'),
-  ctrl(LogicalKeyboardKey.minus, 'TerminalZoom(zoomOut)'),
-  ctrl(LogicalKeyboardKey.numpadSubtract, 'TerminalZoom(zoomOut)'),
-  ctrlShift(LogicalKeyboardKey.digit0, 'TerminalZoom(reset)'),
-  ctrl(LogicalKeyboardKey.numpad0, 'TerminalZoom(reset)'),
+  // Der Zoom des Terminals (HUM-301), seit HUM-356 mit `Ctrl+Alt`: `+` mit
+  // und ohne `Shift`, weil es auf US-Belegung `Shift+=` ist; `-` nur ohne,
+  // weil `Ctrl+_` dem Agenten gehört; die Vorgabe mit der `0` ohne `Shift`.
+  ctrlAlt(LogicalKeyboardKey.equal, 'TerminalZoom(zoomIn)'),
+  ctrlShiftAlt(LogicalKeyboardKey.equal, 'TerminalZoom(zoomIn)'),
+  ctrlAlt(LogicalKeyboardKey.add, 'TerminalZoom(zoomIn)'),
+  ctrlShiftAlt(LogicalKeyboardKey.add, 'TerminalZoom(zoomIn)'),
+  ctrlAlt(LogicalKeyboardKey.numpadAdd, 'TerminalZoom(zoomIn)'),
+  ctrlShiftAlt(LogicalKeyboardKey.numpadAdd, 'TerminalZoom(zoomIn)'),
+  ctrlAlt(LogicalKeyboardKey.minus, 'TerminalZoom(zoomOut)'),
+  ctrlAlt(LogicalKeyboardKey.numpadSubtract, 'TerminalZoom(zoomOut)'),
+  ctrlAlt(LogicalKeyboardKey.digit0, 'TerminalZoom(reset)'),
+  ctrlAlt(LogicalKeyboardKey.numpad0, 'TerminalZoom(reset)'),
+  // Die Skalierung der ganzen Anwendung (HUM-356): dieselben Tasten mit
+  // `Ctrl` allein, wie in jedem Browser.
+  ctrl(LogicalKeyboardKey.equal, 'UiScale(zoomIn)'),
+  ctrlShift(LogicalKeyboardKey.equal, 'UiScale(zoomIn)'),
+  ctrl(LogicalKeyboardKey.add, 'UiScale(zoomIn)'),
+  ctrlShift(LogicalKeyboardKey.add, 'UiScale(zoomIn)'),
+  ctrl(LogicalKeyboardKey.numpadAdd, 'UiScale(zoomIn)'),
+  ctrlShift(LogicalKeyboardKey.numpadAdd, 'UiScale(zoomIn)'),
+  ctrl(LogicalKeyboardKey.minus, 'UiScale(zoomOut)'),
+  ctrl(LogicalKeyboardKey.numpadSubtract, 'UiScale(zoomOut)'),
+  ctrl(LogicalKeyboardKey.digit0, 'UiScale(reset)'),
+  ctrl(LogicalKeyboardKey.numpad0, 'UiScale(reset)'),
   // Weitere Shells als Reiter des Terminals (HUM-314).
   ctrlShift(LogicalKeyboardKey.keyT, 'OpenShellIntent'),
   ctrl(LogicalKeyboardKey.pageUp, 'SwitchTerminalTab(-1)'),
@@ -245,18 +265,27 @@ Future<void> press(WidgetTester tester, KeyRow row) async {
 /// Die Zeilen, die zu [activator] gehören, als Text: zum Vergleich der
 /// beiden Richtungen.
 ///
-/// Ein Zoom-Aktivator des Terminals (HUM-301) steht für mehrere Tasten und
-/// Modifikatoren und damit für mehrere Zeilen.
+/// Ein Zoom-Aktivator des Terminals (HUM-301) und einer der Skalierung
+/// (HUM-356) stehen für mehrere Tasten und Modifikatoren und damit für
+/// mehrere Zeilen: Größer mit und ohne `Shift`, kleiner und zurück ohne.
 List<String> activatorLabels(ShortcutActivator activator) {
-  if (activator is TerminalZoomActivator) {
+  final (bool larger, String alt) = switch (activator) {
+    TerminalZoomActivator(:final TerminalZoom zoom) => (
+      zoom == TerminalZoom.zoomIn,
+      'Alt+',
+    ),
+    UiScaleActivator(:final UiScaleStep step) => (
+      step == UiScaleStep.zoomIn,
+      '',
+    ),
+    _ => (false, ''),
+  };
+  if (activator is TerminalZoomActivator || activator is UiScaleActivator) {
     return <String>[
-      for (final LogicalKeyboardKey key in activator.triggers)
+      for (final LogicalKeyboardKey key in activator.triggers!)
         for (final bool shift in <bool>[false, true])
-          if (activator.zoom == TerminalZoom.zoomIn ||
-              (activator.zoom == TerminalZoom.reset &&
-                  shift == (key == LogicalKeyboardKey.digit0)) ||
-              (activator.zoom == TerminalZoom.zoomOut && !shift))
-            'Ctrl+${shift ? 'Shift+' : ''}${key.keyLabel}',
+          if (larger || !shift)
+            'Ctrl+${shift ? 'Shift+' : ''}$alt${key.keyLabel}',
     ];
   }
   return <String>[activatorLabel(activator)];
