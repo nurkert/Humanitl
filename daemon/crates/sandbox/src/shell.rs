@@ -32,7 +32,7 @@
 //! macOS kein `SOCK_SEQPACKET`. Dort startet die Tür jede weitere Shell
 //! selbst (`SpawnSpec`): `sandbox-exec` mit demselben Profil, darin der
 //! Shim ohne Bridge, der das Terminal übernimmt, das Kommando startet und
-//! beim Ende dessen ganze Sitzung beendet (HUM-313). Ende und Exit-Code
+//! beim Ende dessen ganze Sitzung beendet (HUM-323). Ende und Exit-Code
 //! kommen vom Prozess selbst; endet die Sandbox, bekommt jede Shell `SIGTERM`.
 
 use std::collections::BTreeMap;
@@ -143,7 +143,7 @@ struct DoorState {
 }
 
 /// Wie weitere Shells starten: über die Tür des Shims (Linux) oder als
-/// eigener Prozess unter demselben Profil (macOS, HUM-313).
+/// eigener Prozess unter demselben Profil (macOS, HUM-323).
 #[derive(Debug)]
 enum Door {
     Socket(OwnedFd),
@@ -220,7 +220,7 @@ impl ShellDoor {
     }
 
     /// Liest Antworten, bis die Seite des Shims zu ist.
-    /// Eine Start-Tür (macOS, HUM-313); sie braucht keinen Lese-Faden.
+    /// Eine Start-Tür (macOS, HUM-323); sie braucht keinen Lese-Faden.
     pub(crate) fn spawning(spec: SpawnSpec) -> Arc<Self> {
         Arc::new(Self {
             door: Door::Spawn(spec),
@@ -354,7 +354,7 @@ impl ShellDoor {
         }
     }
 
-    /// Startet die Shell selbst, unter demselben Profil (macOS, HUM-313).
+    /// Startet die Shell selbst, unter demselben Profil (macOS, HUM-323).
     fn spawn(
         self: &Arc<Self>,
         spec: &SpawnSpec,
@@ -385,7 +385,7 @@ impl ShellDoor {
             state.closed
         };
         // Endete die Sandbox zwischen der Prüfung in `open` und hier, hat
-        // `close` diese Shell nicht mehr gesehen (Review HUM-313).
+        // `close` diese Shell nicht mehr gesehen (Review HUM-323).
         if ended {
             let _ = child.kill();
         }

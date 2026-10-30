@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rechnet das App-Symbol für macOS aus `packaging/deb/humanitl.svg` (HUM-315).
+# Rechnet das App-Symbol für macOS aus `packaging/deb/humanitl.svg` (HUM-325).
 #
 # macOS legt Symbole auf ein Raster: Die Kachel nimmt 824 von 1024 Pixeln ein,
 # zentriert, mit durchsichtigem Rand. Das SVG füllt seine Fläche fast ganz;

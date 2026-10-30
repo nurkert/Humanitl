@@ -915,7 +915,7 @@ pub enum DiskFacts {
 /// ihn [`Probe::collect`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct MachineFacts {
-    /// Auf welchem System gemessen wurde (HUM-314).
+    /// Auf welchem System gemessen wurde (HUM-324).
     pub platform: Platform,
     /// `bwrap` und seine Fassung.
     pub bwrap: BwrapFacts,
@@ -941,7 +941,7 @@ pub struct MachineFacts {
     pub disk: DiskFacts,
 }
 
-/// Auf welchem System der Doctor urteilt (HUM-314).
+/// Auf welchem System der Doctor urteilt (HUM-324).
 ///
 /// Unter macOS gibt es kein bwrap, keine Nutzer-Namensräume, kein seccomp,
 /// kein systemd und keinen Tray über D-Bus. Die Zeilen bleiben dieselben, damit

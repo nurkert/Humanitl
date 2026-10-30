@@ -2,7 +2,7 @@
 /// `humanitl_config::Paths::runtime_dir` (CONVENTIONS 3.4, 4.11).
 ///
 /// Order: `$XDG_RUNTIME_DIR/humanitl`, then on macOS
-/// `~/Library/Application Support/Humanitl/run` (HUM-314), then
+/// `~/Library/Application Support/Humanitl/run` (HUM-324), then
 /// `/run/user/<uid>/humanitl` when that directory exists, otherwise
 /// `$TMPDIR/humanitl-<uid>` (or `/tmp`).
 /// The app never creates any of these; the daemon does, with mode `0700`.

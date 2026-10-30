@@ -1,7 +1,7 @@
 import Cocoa
 import FlutterMacOS
 
-// The window of the app (HUM-315): title Humanitl, 1280 x 720 at the first
+// The window of the app (HUM-325): title Humanitl, 1280 x 720 at the first
 // start, and no second title bar. The Flutter header bar is the title bar, as
 // on Linux (HUM-255); macOS keeps its traffic lights at the left end of it.
 class MainFlutterWindow: NSWindow {

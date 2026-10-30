@@ -125,7 +125,7 @@ const SESSION_ENV_KEYS: &[&str] = &[
 /// `DAEMON_010` und `DAEMON_014` für `uninstall`.
 pub async fn run(ctx: &Context, cmd: &DaemonCmd) -> Result<u8, Failure> {
     // Unter macOS ist der Dienst ein launchd-Agent, keine systemd-Unit
-    // (HUM-314).
+    // (HUM-324).
     if cfg!(target_os = "macos") {
         return launchd::run(ctx, cmd).await;
     }
@@ -1136,7 +1136,7 @@ fn logs(ctx: &Context, args: &LogsArgs) -> Result<u8, Failure> {
 }
 
 /// `daemon restart` unter Linux: `systemctl --user restart humanitld`
-/// (HUM-314; unter macOS `launchd::run`).
+/// (HUM-324; unter macOS `launchd::run`).
 async fn restart(ctx: &Context) -> Result<u8, Failure> {
     let Some(systemctl) = find_in_path(ctx, "systemctl") else {
         return Err(Failure::new(no_user_session(

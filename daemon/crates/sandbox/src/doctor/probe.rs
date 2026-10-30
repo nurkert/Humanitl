@@ -436,7 +436,7 @@ impl<'a> Probe<'a> {
     /// `humanitl`-Unterverzeichnis darin: Über dessen Rechte entscheidet der
     /// Daemon beim Anlegen ([`humanitl_config::DIR_MODE`]), über die des
     /// Elternverzeichnisses die Anmeldung.
-    /// Linux, oder unter macOS die beiden Dinge, die dort zählen (HUM-314).
+    /// Linux, oder unter macOS die beiden Dinge, die dort zählen (HUM-324).
     fn platform(&self) -> super::Platform {
         if !cfg!(target_os = "macos") {
             return super::Platform::Linux;
@@ -1120,7 +1120,7 @@ mod tests {
         assert_eq!(facts.seccomp.line, Reading::Found(SeccompLine::Missing));
     }
 
-    // Unter macOS gilt ohne XDG_RUNTIME_DIR das Verzeichnis unter Application Support (HUM-314).
+    // Unter macOS gilt ohne XDG_RUNTIME_DIR das Verzeichnis unter Application Support (HUM-324).
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn the_runtime_dir_is_read_from_the_environment_with_its_mode() {

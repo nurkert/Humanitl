@@ -3,7 +3,7 @@
 //! On Linux the process model with bridges, seccomp filter and exec lives in
 //! `linux.rs`, whose module documentation holds the launcher contract. On
 //! macOS the shim runs under the Seatbelt profile of `sandbox-exec` and lives
-//! in `macos.rs` (HUM-313). Both share the bridge (`bridge.rs`) and the report
+//! in `macos.rs` (HUM-323). Both share the bridge (`bridge.rs`) and the report
 //! (`report.rs`). Elsewhere the binary exists so that the workspace builds,
 //! and refuses to run (HUM-312).
 #![deny(missing_docs)]

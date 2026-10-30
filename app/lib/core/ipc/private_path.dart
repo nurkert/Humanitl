@@ -13,7 +13,7 @@
 /// check calls `statx(2)` through FFI with `AT_SYMLINK_NOFOLLOW`. The layout of
 /// `struct statx` is the same on every Linux architecture, unlike
 /// `struct stat`. macOS has no `statx`; there the check calls `lstat(2)`,
-/// whose `struct stat` has one layout on both Mac architectures (HUM-315).
+/// whose `struct stat` has one layout on both Mac architectures (HUM-325).
 library;
 
 import 'dart:convert';

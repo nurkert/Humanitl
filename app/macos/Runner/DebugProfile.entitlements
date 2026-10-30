@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- No App Sandbox (HUM-315): the app reaches the daemon socket and token
+<!-- No App Sandbox (HUM-325): the app reaches the daemon socket and token
      under ~/Library/Application Support/Humanitl/run, reads config.toml and
      starts the command line next to itself. A sandboxed app would see none of
-     that. The agent's sandbox is Seatbelt, set by the daemon (HUM-313). -->
+     that. The agent's sandbox is Seatbelt, set by the daemon (HUM-323). -->
 <plist version="1.0">
 <dict>
 	<key>com.apple.security.cs.allow-jit</key>

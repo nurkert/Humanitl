@@ -100,5 +100,5 @@ same workflow as a Linux user.
 
 ## Affected issues
 
-`HUM-313` (the backend), `HUM-317` (this record and the security documents),
+`HUM-323` (the backend), `HUM-317` (this record and the security documents),
 `HUM-318` (the VM backend). See [`backlog/sprint-6.md`](../../backlog/sprint-6.md).

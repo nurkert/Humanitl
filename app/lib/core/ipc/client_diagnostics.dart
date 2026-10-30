@@ -24,7 +24,7 @@ abstract final class ClientDiagnostics {
   /// rather type it reads it in the cause (HUM-044, diagnostic table).
   ///
   /// On macOS the daemon is a launchd agent, and `humanitl daemon install`
-  /// loads it (HUM-315).
+  /// loads it (HUM-325).
   static String get startUnitCommand =>
       defaultTargetPlatform == TargetPlatform.macOS
       ? 'humanitl daemon install'
@@ -38,7 +38,7 @@ abstract final class ClientDiagnostics {
   /// an earlier run. A restart of the one the app talks to writes the pair
   /// anew; the next attempt of the connection reads it.
   ///
-  /// On macOS `humanitl daemon restart` restarts the launchd agent (HUM-315).
+  /// On macOS `humanitl daemon restart` restarts the launchd agent (HUM-325).
   static String get restartUnitCommand =>
       defaultTargetPlatform == TargetPlatform.macOS
       ? 'humanitl daemon restart'

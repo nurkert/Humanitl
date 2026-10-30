@@ -20,7 +20,7 @@ abstract final class HType {
     'DejaVu Sans',
     'Liberation Sans',
     'Roboto',
-    // macOS (HUM-315): the system font when none of the above is installed.
+    // macOS (HUM-325): the system font when none of the above is installed.
     '.AppleSystemUIFont',
     'Helvetica Neue',
     'sans-serif',
@@ -36,7 +36,7 @@ abstract final class HType {
     'DejaVu Sans Mono',
     'Liberation Mono',
     'Noto Sans Mono',
-    // macOS (HUM-315): without them an unknown family falls back to the
+    // macOS (HUM-325): without them an unknown family falls back to the
     // proportional system font, and the terminal grid breaks.
     'SF Mono',
     'Menlo',

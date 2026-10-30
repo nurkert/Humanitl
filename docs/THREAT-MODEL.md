@@ -489,7 +489,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-29 | B1: the agent's own permission prompts are no boundary; OpenCode's for `webfetch` and `bash` are off | HUM-308 |
 | 2026-10-29 | K-18: further shells next to the agent through a socket pair only the daemon and PID 1 hold, forked inside with the agent's filter on top | HUM-299 |
 | 2026-10-29 | B1: a globally installed pi extension (`pi-web-access`) runs inside the agent with all its restrictions; its requests pass the proxy and are held there when no rule decides them; `agent.pi.web_access` closed to project profiles | HUM-309 |
-| 2026-10-30 | K-19 to K-23: macOS with Seatbelt; shared loopback, no PID namespace, paths instead of descriptors, a deprecated interface, host-local side channels | HUM-313, HUM-317, HUM-321 |
+| 2026-10-30 | K-19 to K-23: macOS with Seatbelt; shared loopback, no PID namespace, paths instead of descriptors, a deprecated interface, host-local side channels | HUM-323, HUM-317, HUM-321 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

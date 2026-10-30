@@ -20,7 +20,7 @@ use crate::env::Env;
 /// Der Name, unter dem Humanitl seine Verzeichnisse anlegt.
 pub const APP_DIR: &str = "humanitl";
 
-/// Der Name von Humanitl unter `~/Library` (macOS, HUM-314).
+/// Der Name von Humanitl unter `~/Library` (macOS, HUM-324).
 pub const MAC_APP_DIR: &str = "Humanitl";
 
 /// Der längste Socket unter dem Laufzeitverzeichnis.
@@ -220,13 +220,13 @@ impl Paths {
         // temporäres Verzeichnis räumt Dateien weg, die drei Tage niemand
         // angefasst hat; Socket und Token eines lange laufenden Daemons
         // verschwänden dort. Ein eigenes Verzeichnis unter `Application
-        // Support` ist für Terminal, App und launchd dasselbe (HUM-314).
+        // Support` ist für Terminal, App und launchd dasselbe (HUM-324).
         if cfg!(target_os = "macos") {
             let path = self.mac_support_dir().join("run");
             // Der längste Socket darunter ist `proxy/proxy.sock`; passt er
             // nicht in `sun_path` (104 Bytes mit der Null), etwa unter einem
             // sehr langen Kontonamen, bleibt nur das kurze temporäre
-            // Verzeichnis, mit Hinweis (Review HUM-314).
+            // Verzeichnis, mit Hinweis (Review HUM-324).
             if path.join(MAC_LONGEST_SOCKET).as_os_str().len() < MAC_SUN_PATH_MAX {
                 return RuntimeDir {
                     path,
@@ -279,7 +279,7 @@ impl Paths {
     }
 
     /// `~/Library/Application Support/Humanitl`, der Ort von Humanitl unter
-    /// macOS für alles, was kein XDG-Verzeichnis hat (HUM-314).
+    /// macOS für alles, was kein XDG-Verzeichnis hat (HUM-324).
     #[must_use]
     pub fn mac_support_dir(&self) -> PathBuf {
         self.home()
@@ -426,7 +426,7 @@ mod tests {
     }
 
     /// Unter macOS liegen Socket und Token unter `Application Support`, auch
-    /// ohne `XDG_RUNTIME_DIR`, und ohne Hinweis auf einen Rückfall (HUM-314).
+    /// ohne `XDG_RUNTIME_DIR`, und ohne Hinweis auf einen Rückfall (HUM-324).
     #[cfg(target_os = "macos")]
     #[test]
     fn on_macos_the_runtime_dir_lies_under_application_support() {
@@ -453,7 +453,7 @@ mod tests {
         );
     }
 
-    // Der Rückfall nach /run/user und $TMPDIR gilt nicht unter macOS (HUM-314).
+    // Der Rückfall nach /run/user und $TMPDIR gilt nicht unter macOS (HUM-324).
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn runtime_dir_falls_back_to_run_user_then_to_tmp() {
@@ -475,7 +475,7 @@ mod tests {
         assert!(diagnostic.why.contains("/tmp/humanitl-1000"));
     }
 
-    // Der Rückfall nach /run/user und $TMPDIR gilt nicht unter macOS (HUM-314).
+    // Der Rückfall nach /run/user und $TMPDIR gilt nicht unter macOS (HUM-324).
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn tmpdir_moves_the_fallback() {

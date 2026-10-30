@@ -1165,7 +1165,7 @@ fn size(bytes: u64) -> String {
     }
 }
 
-/// Zeile `bwrap` unter macOS: `sandbox-exec` ist da (HUM-314).
+/// Zeile `bwrap` unter macOS: `sandbox-exec` ist da (HUM-324).
 pub(super) fn seatbelt(sandbox_exec: Option<&std::path::Path>) -> CheckOutcome {
     match sandbox_exec {
         Some(program) => CheckOutcome::ok(

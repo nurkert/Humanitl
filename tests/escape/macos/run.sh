@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Escape-Tests für das Seatbelt-Backend unter macOS (HUM-313).
+# Escape-Tests für das Seatbelt-Backend unter macOS (HUM-323).
 #
 # Startet einen Daemon in einem eigenen, leeren HOME und TMPDIR, fährt
 # `humanitl sandbox check` und versucht dann in einer Sandbox genau das, was

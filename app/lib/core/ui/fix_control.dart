@@ -214,7 +214,7 @@ enum _Owned {
 /// einem anderen Konto gehört und `0755` trägt, kommt hier durch. Sie
 /// abzudecken hieße `stat(2)` über FFI.
 ///
-/// **`root:admin` unter macOS zählt als Schutz** (HUM-315). `/Applications`
+/// **`root:admin` unter macOS zählt als Schutz** (HUM-325). `/Applications`
 /// trägt `drwxrwxr-x root:admin`, und dorthin legt jeder die App. Wer in der
 /// Gruppe `admin` ist, ist unter macOS Administrator und kommt mit `sudo`
 /// ohnehin an alles; jedes andere Konto darf dort nichts anlegen.

@@ -453,7 +453,7 @@ mod tests {
 
     /// The walk sees a socket in a place it reaches, keeps its bounds and
     /// stays out of `/proc`.
-    // Reads /sys and walks a Linux filesystem (HUM-313).
+    // Reads /sys and walks a Linux filesystem (HUM-323).
     #[cfg(target_os = "linux")]
     #[test]
     fn the_socket_walk_finds_a_socket_within_its_bounds() {
@@ -486,7 +486,7 @@ mod tests {
         let _ = fs::remove_file(&path);
     }
 
-    // Reads /sys and walks a Linux filesystem (HUM-313).
+    // Reads /sys and walks a Linux filesystem (HUM-323).
     #[cfg(target_os = "linux")]
     #[test]
     fn interfaces_include_loopback() {

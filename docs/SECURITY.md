@@ -1198,7 +1198,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.0 | OpenCode no longer asks before `webfetch` and `bash`; the proxy is the one place that asks. Its `bash` waits as long as a held request (HUM-308). |
 | 0.1.x | Further shells next to the agent: the daemon asks PID 1 over an unnamed `SOCK_SEQPACKET` pair only it and PID 1 hold; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX`; at most four, ending with their process or the sandbox (HUM-299). |
 | 0.1.x | pi loads the globally installed extension `pi-web-access` (`agent.pi.web_access`, default `auto`, closed to project profiles); its requests go through the proxy like every other (HUM-309). |
-| 0.1.x | macOS: Seatbelt as the sandbox backend, a generated SBPL profile per session, the three guarantees restated and measured by the shim; the daemon as a launchd agent; socket and token under `~/Library/Application Support/Humanitl/run` (HUM-313, HUM-317, [section 12](#12-macos-seatbelt-instead-of-bubblewrap)). |
+| 0.1.x | macOS: Seatbelt as the sandbox backend, a generated SBPL profile per session, the three guarantees restated and measured by the shim; the daemon as a launchd agent; socket and token under `~/Library/Application Support/Humanitl/run` (HUM-323, HUM-317, [section 12](#12-macos-seatbelt-instead-of-bubblewrap)). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap
 

@@ -214,7 +214,7 @@ pub struct LaunchPlan {
     /// Lücke benannt ist und nicht bloß vorhanden.
     pub unprotected: Vec<PathBuf>,
     /// Ob [`LaunchPlan::env`] die Umgebung des Programms selbst ist
-    /// (`sandbox-exec` reicht sie an das Kommando weiter, HUM-313) oder
+    /// (`sandbox-exec` reicht sie an das Kommando weiter, HUM-323) oder
     /// schon in `argv` steht (bwrap mit `--setenv`).
     pub(crate) env_on_program: bool,
     /// Das Programm, `argv[0]`, aufgelöst.
