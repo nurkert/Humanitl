@@ -124,6 +124,16 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
     // Shell kennt Sandbox und Warteschlange und hält das eine Bit im Kern
     // frisch (`agent_session_feed.dart`).
     _agentFeed = AgentSessionFeed(ref);
+    // Ob die Sandbox-Seite zu sehen ist, steht für die Wirte des Terminals in
+    // einem Kern-Provider (HUM-315). Der erste Stand nach dem ersten Frame:
+    // Riverpod verbietet, einen Provider während des Baus zu ändern.
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      if (mounted) {
+        ref
+            .read(sandboxPageShownProvider.notifier)
+            .set(shown: ref.read(navigationProvider) == Section.sandbox);
+      }
+    });
   }
 
   @override
@@ -518,8 +528,32 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   /// A section that is asked for ends the whole window: whoever presses
   /// `Ctrl+2` or picks "Go to History" in the palette wants to see History,
   /// and the queue that a handover opens has to be seen too.
-  void _sectionAsked(Section? previous, Section next) =>
-      ref.read(terminalPlacementProvider.notifier).leaveFullWindow();
+  ///
+  /// It also tells the hosts of the terminal whether the Sandbox page shows
+  /// (HUM-315): a floating terminal docks there and floats again when the
+  /// page goes. **The keyboard follows only onto the page.** A floating
+  /// terminal that had it keeps it in its pane, so typing goes on; leaving
+  /// the page asks for another section, and that section's own rule decides
+  /// (the queue takes the keyboard, and `Enter` decides as before).
+  void _sectionAsked(Section? previous, Section next) {
+    ref.read(terminalPlacementProvider.notifier).leaveFullWindow();
+    final TerminalPlacement before = ref.read(terminalHostProvider);
+    // Asked now: the floating window still stands and still holds the
+    // keyboard if it held it.
+    final bool hadKeyboard = terminalHoldsKeyboard();
+    ref
+        .read(sandboxPageShownProvider.notifier)
+        .set(shown: next == Section.sandbox);
+    if (before == TerminalPlacement.floating &&
+        ref.read(terminalHostProvider) == TerminalPlacement.pane &&
+        hadKeyboard) {
+      WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+        if (mounted) {
+          _requestTerminalFocus();
+        }
+      });
+    }
+  }
 
   /// Shows [section] and ends the whole window, also when [section] is
   /// already the one underneath: then the navigation does not change, and

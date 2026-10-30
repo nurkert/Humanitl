@@ -248,6 +248,10 @@ void _sizes(StringBuffer out) {
       <String>['`paneMinInspector`', _px(s.paneMinInspector)],
       <String>['`paneMinContext`', _px(s.paneMinContext)],
       <String>['`paneRatio`', '$q/$i/$c'],
+      <String>[
+        '`terminalStrip`',
+        '${_px(s.terminalStrip.width)} x ${_px(s.terminalStrip.height)}',
+      ],
       <String>['`measureChars`', '${s.measureChars}'],
       <String>['`stateRail`', _px(HSize.stateRail)],
       <String>['`selectionRail`', _px(HSize.selectionRail)],

@@ -166,8 +166,10 @@ typedef FloatPlacement = ({Rect rect, FloatCorner corner});
 ///
 /// **Null is an answer, not a failure.** When no corner is free -- a modal
 /// covers everything, a sheet and the queue take both sides --, the window
-/// steps back until there is room again; the session and its scrollback stay
-/// where they always live. Covering a decision would be the failure.
+/// shrinks to its title strip ([placeTerminalStrip], HUM-315) or, without
+/// room even for that, steps back until there is room again; the session and
+/// its scrollback stay where they always live. Covering a decision would be
+/// the failure.
 FloatPlacement? placeFloatingTerminal({
   required Rect region,
   required TerminalFloatGeometry geometry,
@@ -178,16 +180,54 @@ FloatPlacement? placeFloatingTerminal({
     geometry.size,
     region: region.size,
   );
-  final FloatCorner first = geometry.corner;
+  return _firstFree(
+    region: region,
+    first: geometry.corner,
+    sizes: <Size>[
+      chosen,
+      if (chosen != terminalFloatMinSize) terminalFloatMinSize,
+    ],
+    keepClear: keepClear,
+    inset: inset,
+  );
+}
+
+/// Where the slim title strip of the floating terminal goes while no corner
+/// leaves room for the window, or null when not even the strip fits
+/// (HUM-315).
+///
+/// The same corners in the same order as [placeFloatingTerminal], from the
+/// corner the person chose, with the one [size] of the strip
+/// (`HSize.terminalStrip`). The same rule as for the window: inside
+/// [region], and over none of [keepClear].
+FloatPlacement? placeTerminalStrip({
+  required Rect region,
+  required FloatCorner corner,
+  required Size size,
+  required List<Rect> keepClear,
+  required double inset,
+}) => _firstFree(
+  region: region,
+  first: corner,
+  sizes: <Size>[size],
+  keepClear: keepClear,
+  inset: inset,
+);
+
+/// The first rectangle of [sizes] in the corners from [first] on that lies
+/// inside [region] and overlaps none of [keepClear].
+FloatPlacement? _firstFree({
+  required Rect region,
+  required FloatCorner first,
+  required List<Size> sizes,
+  required List<Rect> keepClear,
+  required double inset,
+}) {
   final List<FloatCorner> corners = <FloatCorner>[
     first,
     first.acrossX,
     first.acrossY,
     first.acrossX.acrossY,
-  ];
-  final List<Size> sizes = <Size>[
-    chosen,
-    if (chosen != terminalFloatMinSize) terminalFloatMinSize,
   ];
   final Rect room = region.deflate(inset);
   for (final FloatCorner corner in corners) {

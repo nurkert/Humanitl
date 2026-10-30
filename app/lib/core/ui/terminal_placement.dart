@@ -95,6 +95,61 @@ class TerminalPlacementNotifier extends Notifier<TerminalPlacement> {
   }
 }
 
+/// Whether the Sandbox section is the one the shell shows (HUM-315).
+///
+/// The shell knows its sections, the hosts of the terminal do not, and a
+/// feature may not ask the shell (ARCHITECTURE 5); the shell writes this
+/// note whenever the section changes, and [terminalHostProvider] reads it.
+final NotifierProvider<SandboxPageShown, bool> sandboxPageShownProvider =
+    NotifierProvider<SandboxPageShown, bool>(SandboxPageShown.new);
+
+/// The notifier behind [sandboxPageShownProvider].
+class SandboxPageShown extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  /// Notes whether the Sandbox section is shown.
+  void set({required bool shown}) {
+    if (state != shown) {
+      state = shown;
+    }
+  }
+}
+
+/// The host that shows the terminal for the placement the person [chosen]
+/// (HUM-315).
+///
+/// **A floating terminal docks on the Sandbox page.** While that page shows,
+/// the terminal stands in its pane there, where it belongs, and a window
+/// over the same page would only cover the page's own copy of it. The choice
+/// stays: [terminalPlacementProvider] keeps [TerminalPlacement.floating],
+/// and leaving the page lets the terminal float again. Docking because of
+/// the page is a state of the view, never a decision of the person.
+///
+/// This is the one rule that turns a choice into a host; every host and the
+/// shell ask it through [terminalHostProvider] and nowhere else.
+TerminalPlacement terminalHostFor(
+  TerminalPlacement chosen, {
+  required bool sandboxPageShown,
+}) => chosen == TerminalPlacement.floating && sandboxPageShown
+    ? TerminalPlacement.pane
+    : chosen;
+
+/// The host that shows the terminal now: [terminalHostFor] over the choice
+/// in [terminalPlacementProvider] and the page in [sandboxPageShownProvider]
+/// (HUM-315).
+///
+/// Who decides what is shown reads this one; who changes or names the
+/// person's choice (the buttons, the palette, the shortcuts) reads
+/// [terminalPlacementProvider].
+final Provider<TerminalPlacement> terminalHostProvider =
+    Provider<TerminalPlacement>(
+      (Ref ref) => terminalHostFor(
+        ref.watch(terminalPlacementProvider),
+        sandboxPageShown: ref.watch(sandboxPageShownProvider),
+      ),
+    );
+
 /// How often somebody asked for the keyboard to go to the terminal
 /// (HUM-303).
 ///

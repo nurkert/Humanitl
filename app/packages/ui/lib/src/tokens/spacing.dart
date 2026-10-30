@@ -149,6 +149,15 @@ abstract final class HSize {
   /// Default width ratio of the three intercept panes, in percent.
   static const (int, int, int) paneRatio = (28, 44, 28);
 
+  /// Size of the slim title strip the floating terminal shrinks to while no
+  /// corner of the sections leaves room for its window (HUM-315).
+  ///
+  /// As high as the title bar of the window and as [hitMin], so the strip is
+  /// one target; wide enough for the name of the sandbox, the active tab and
+  /// the button, and narrow enough to find a corner beside the queue and the
+  /// decision where the smallest window (320 x 200) finds none.
+  static const Size terminalStrip = Size(240, 28);
+
   /// Width of the state rail on the left edge of a row.
   static const double stateRail = 4;
 
@@ -325,6 +334,7 @@ class HSizeTokens {
     this.paneMinInspector = HSize.paneMinInspector,
     this.paneMinContext = HSize.paneMinContext,
     this.paneRatio = HSize.paneRatio,
+    this.terminalStrip = HSize.terminalStrip,
   });
 
   /// The sizes of the design direction.
@@ -380,4 +390,7 @@ class HSizeTokens {
 
   /// Default pane ratio in percent.
   final (int, int, int) paneRatio;
+
+  /// Size of the title strip of the floating terminal without room (HUM-315).
+  final Size terminalStrip;
 }
