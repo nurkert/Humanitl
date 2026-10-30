@@ -1,4 +1,4 @@
-# dmgbuild settings for the Humanitl disk image (HUM-316).
+# dmgbuild settings for the Humanitl disk image (HUM-326).
 #
 # dmgbuild writes the Finder layout (.DS_Store) itself, without remote
 # controlling Finder, so the image looks the same when it is built on a CI

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Legt die Binaries, den Katalog und das Sandbox-Profil in die Flutter-App,
 # signiert alles ad-hoc und packt Humanitl-<version>-macos.dmg und .zip
-# (HUM-316).
+# (HUM-326).
 #
 # Aufruf: packaging/macos/build-app.sh <0.0.N> <bin-dir> <Humanitl.app> <out-dir>
 #

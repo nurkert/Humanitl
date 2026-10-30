@@ -1216,7 +1216,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.0 | OpenCode no longer asks before `webfetch` and `bash`; the proxy is the one place that asks. Its `bash` waits as long as a held request (HUM-308). |
 | 0.1.x | Further shells next to the agent: the daemon asks PID 1 over an unnamed `SOCK_SEQPACKET` pair only it and PID 1 hold; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX`; at most four, ending with their process or the sandbox (HUM-299). |
 | 0.1.x | pi loads the globally installed extension `pi-web-access` (`agent.pi.web_access`, default `auto`, closed to project profiles); its requests go through the proxy like every other (HUM-309). |
-| 0.1.x | macOS: Seatbelt as the sandbox backend, a generated SBPL profile per session, the three guarantees restated and measured by the shim; the daemon as a launchd agent; socket and token under `~/Library/Application Support/Humanitl/run` (HUM-323, HUM-317, [section 12](#12-macos-seatbelt-instead-of-bubblewrap)). |
+| 0.1.x | macOS: Seatbelt as the sandbox backend, a generated SBPL profile per session, the three guarantees restated and measured by the shim; the daemon as a launchd agent; socket and token under `~/Library/Application Support/Humanitl/run` (HUM-323, HUM-327, [section 12](#12-macos-seatbelt-instead-of-bubblewrap)). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap
 
@@ -1224,7 +1224,7 @@ macOS has no network namespace, no mount namespace and no seccomp. There the san
 Seatbelt, the sandbox of the macOS kernel: the daemon writes one SBPL profile per session and
 starts the shim under `/usr/bin/sandbox-exec -f <profile>`. The kernel holds the shim and every
 process it starts to that profile; no child can drop it. The decision and the alternatives,
-among them a Linux VM with the bwrap backend inside (HUM-318), are in
+among them a Linux VM with the bwrap backend inside (HUM-328), are in
 [ADR-0019](adr/0019-seatbelt-on-macos.md).
 
 ### The three guarantees on macOS
@@ -1288,7 +1288,7 @@ These are the points where macOS gives less than Linux. Each is a channel in
    daemon directly: as long as the daemon runs, it can still send requests, the passthrough and
    `allow` rules apply, and everything else is held in the queue after the session has ended.
    On Linux the PID namespace ends every process and seccomp refuses `AF_UNIX`. Restricting the
-   proxy socket to the shim of the running session is HUM-321. Until then, after a session on
+   proxy socket to the shim of the running session is HUM-331. Until then, after a session on
    macOS that you do not trust, restart the daemon (`humanitl daemon restart`).
 3. **A deny list instead of an allow list for reading** (K-21). On Linux the sandbox sees `/usr`,
    `/etc/ssl` and a few files, with a generated `passwd` and `hosts`. On macOS it reads everything

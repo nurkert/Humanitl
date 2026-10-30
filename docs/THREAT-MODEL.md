@@ -368,7 +368,7 @@ host from inside; the profile allows outbound loopback only to the session's own
 local process of any account can connect to the door and reaches the proxy as if it were the
 agent. *Residual risk:* such a process sends with the session's rules: what an `allow` rule or the
 passthrough lets through goes out without a hold, the rest lands in the owner's queue, and the
-human sees it as the agent's. HUM-321 restricts the proxy to the session's shim.
+human sees it as the agent's. HUM-331 restricts the proxy to the session's shim.
 
 ### K-20 No PID namespace on macOS
 
@@ -380,7 +380,7 @@ keeps the profile, and the profile allows it the daemon's proxy socket directly,
 shim's door. *Residual risk:* such a process can keep sending requests for as long as the daemon
 runs, through launchd and across logins; `allow` rules and the passthrough apply, everything else
 is held in the queue after the session ended. It can also keep changing the project directory,
-which the summary of the session does not see. HUM-321 restricts the proxy socket to the shim of
+which the summary of the session does not see. HUM-331 restricts the proxy socket to the shim of
 the running session; until then a restart of the daemon ends such a process's way out.
 
 ### K-21 Reading by deny list, paths instead of descriptors on macOS
@@ -491,7 +491,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-29 | B1: the agent's own permission prompts are no boundary; OpenCode's for `webfetch` and `bash` are off | HUM-308 |
 | 2026-10-29 | K-18: further shells next to the agent through a socket pair only the daemon and PID 1 hold, forked inside with the agent's filter on top | HUM-299 |
 | 2026-10-29 | B1: a globally installed pi extension (`pi-web-access`) runs inside the agent with all its restrictions; its requests pass the proxy and are held there when no rule decides them; `agent.pi.web_access` closed to project profiles | HUM-309 |
-| 2026-10-30 | K-19 to K-23: macOS with Seatbelt; shared loopback, no PID namespace, paths instead of descriptors, a deprecated interface, host-local side channels | HUM-323, HUM-317, HUM-321 |
+| 2026-10-30 | K-19 to K-23: macOS with Seatbelt; shared loopback, no PID namespace, paths instead of descriptors, a deprecated interface, host-local side channels | HUM-323, HUM-327, HUM-331 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

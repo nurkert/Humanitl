@@ -1,4 +1,4 @@
-# dmgbuild and its two dependencies, pinned with hashes (HUM-316). Installed
+# dmgbuild and its two dependencies, pinned with hashes (HUM-326). Installed
 # with `pip install --require-hashes --no-deps -r` in the release job, so no
 # other version and no other package reaches the build of the disk image.
 dmgbuild==1.6.5 --hash=sha256:e19ab8c5e8238e6455d9ccb9175817be7fd62b9cdd1eef20f63dd88e0ec469ab

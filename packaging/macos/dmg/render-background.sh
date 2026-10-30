@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rechnet den Hintergrund des Disk-Images aus background.svg (HUM-316): eine
+# Rechnet den Hintergrund des Disk-Images aus background.svg (HUM-326): eine
 # TIFF-Datei mit 1x und 2x, damit Finder auf Retina-Displays scharf zeichnet,
 # dazu preview.png (2x) zum Ansehen.
 #

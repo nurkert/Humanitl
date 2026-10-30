@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Baut humanitld, humanitl und humanitl-shim für beide Mac-Architekturen und
-# verbindet je Programm die beiden zu einem Universal-Binary (HUM-316).
+# verbindet je Programm die beiden zu einem Universal-Binary (HUM-326).
 #
 # Aufruf: packaging/macos/build-binaries.sh <out-dir>
 #

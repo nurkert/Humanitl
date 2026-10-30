@@ -278,7 +278,7 @@ class DesktopPorts {
   );
 
   /// The window alone, without notification or tray: macOS until both have
-  /// a port there (HUM-325, HUM-319).
+  /// a port there (HUM-325, HUM-329).
   factory DesktopPorts.windowOnly(WindowPort window) => DesktopPorts(
     window: window,
     notifications: _InertNotifications(),
