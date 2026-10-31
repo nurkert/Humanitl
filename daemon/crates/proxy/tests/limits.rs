@@ -1055,6 +1055,31 @@ async fn silent_target(read_everything: bool) -> u16 {
     port
 }
 
+/// Ob eine Antwort so lang ist, wie ihr `Content-Length` zusagt: der Kopf samt
+/// Leerzeile und jedes angekündigte Byte des Rumpfs.
+fn answer_is_whole(answer: &str) -> bool {
+    let Some((head, body)) = answer.split_once("\r\n\r\n") else {
+        return false;
+    };
+    let announced = head.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("content-length")
+            .then(|| value.trim().parse::<usize>().ok())?
+    });
+    announced == Some(body.len())
+}
+
+/// Der Maßstab für [`a_stalled_streamed_upload_ends_with_limit_004`]: Ein
+/// gekürzter Rumpf, ein halber Kopf und nichts gelten nicht als Antwort.
+#[test]
+fn a_cut_answer_is_not_whole() {
+    let whole = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 5\r\n\r\nHallo";
+    assert!(answer_is_whole(whole));
+    assert!(!answer_is_whole(&whole[..whole.len() - 1]));
+    assert!(!answer_is_whole("HTTP/1.1 502 Bad Gateway\r\nContent-Le"));
+    assert!(!answer_is_whole(""));
+}
+
 /// Ein gestreamter Upload, der beim Ziel hängen bleibt, endet nach der
 /// passenden Frist mit `LIMIT_004` (Review zu HUM-057): Das Ziel nimmt den
 /// ganzen Rumpf und antwortet nie (`limits.header_timeout_secs`), oder es
@@ -1105,17 +1130,31 @@ async fn a_stalled_streamed_upload_ends_with_limit_004() {
             let _ = keep.send(write_half).await;
         });
         let mut answer = Vec::new();
-        tokio::time::timeout(Duration::from_secs(20), read_half.read_to_end(&mut answer))
-            .await
-            .unwrap_or_else(|_| panic!("reads={reads}: the proxy gives up on the target"))
-            .expect("readable");
+        let read =
+            tokio::time::timeout(Duration::from_secs(20), read_half.read_to_end(&mut answer))
+                .await
+                .unwrap_or_else(|_| panic!("reads={reads}: the proxy gives up on the target"));
         writer.abort();
         drop(parked.try_recv());
         let answer = String::from_utf8_lossy(&answer);
+        // Liest das Ziel nicht, liegt beim Schließen noch Upload im
+        // Empfangspuffer des Proxys. Linux meldet das dem Client auf einem
+        // Unix-Socket als `ECONNRESET`, aber erst nach allen zugestellten
+        // Bytes: Der Abbruch ersetzt nur das Dateiende, nie die Antwort
+        // (HUM-361). Hingenommen wird er darum nur dort, und die Antwort muss
+        // danach ganz dastehen. Im anderen Fall ist der Rumpf gelesen, und ein
+        // Abbruch ist ein Fehler.
+        if let Err(err) = read {
+            assert!(
+                !reads && err.kind() == std::io::ErrorKind::ConnectionReset,
+                "reads={reads}: {err}, after {answer:?}"
+            );
+        }
         assert!(
             answer.starts_with("HTTP/1.1 502 "),
             "reads={reads}: {answer}"
         );
+        assert!(answer_is_whole(&answer), "reads={reads}: cut: {answer:?}");
 
         events.wait_for("recorded").await;
         let flow = first_flow(&events.seen);
