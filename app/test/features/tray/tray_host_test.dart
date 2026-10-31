@@ -3,6 +3,8 @@
 // Notification entscheidet und was passiert, wenn der Weg zurück ins Leere
 // führt.
 
+import 'dart:async';
+
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
@@ -10,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/app.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
+import 'package:humanitl/core/ipc/config_providers.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ipc/flow_events.dart';
 import 'package:humanitl/features/intercept/providers/decision.dart';
@@ -39,11 +42,24 @@ Future<void> drainDecision(WidgetTester tester) async {
 }
 
 /// Baut die App über [client] und [desktop] und lässt das Gate durch.
+/// Eine Konfiguration, die erst auf Zuruf ankommt.
+class GatedConfig extends ConfigSetting {
+  /// Erzeugt sie mit der Antwort [gate].
+  GatedConfig(this.gate);
+
+  /// Vervollständigt die Antwort.
+  final Completer<ConfigValues> gate;
+
+  @override
+  Future<ConfigValues> build() => gate.future;
+}
+
 Future<ProviderContainer> pumpDesktop(
   WidgetTester tester, {
   required FakeDaemonClient client,
   required FakeDesktop desktop,
   bool focused = true,
+  List<Override> overrides = const <Override>[],
 }) async {
   await tester.binding.setSurfaceSize(const Size(1400, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -58,6 +74,7 @@ Future<ProviderContainer> pumpDesktop(
       // Eine stehende Uhr: der 250-ms-Ticker der Queue wuerde den Test mit
       // einem laufenden Timer beenden.
       nowProvider.overrideWith(() => TrayFixedNow(DateTime.now())),
+      ...overrides,
     ],
   );
   addTearDown(container.dispose);
@@ -112,6 +129,91 @@ void main() {
     expect(desktop.tray.face.state, TrayIconState.held);
     expect(desktop.tray.face.count, 2);
     expect(desktop.tray.face.title, '2 requests held');
+  });
+
+  testWidgets('a_failed_request_for_notifications_shows_the_system_sentence', (
+    WidgetTester tester,
+  ) async {
+    await pumpDesktop(
+      tester,
+      client: FakeDaemonClient.empty(),
+      desktop: FakeDesktop(
+        missing: TrayDiagnostics.notificationsFailed('Not allowed here'),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Notifications could not be set up'), findsOneWidget);
+    expect(find.text('Not allowed here'), findsOneWidget);
+    expect(find.text('Notifications are not allowed'), findsNothing);
+  });
+
+  testWidgets('ui_notifications_off_keeps_the_notice_away_until_switched_on', (
+    WidgetTester tester,
+  ) async {
+    final FakeDaemonClient client = FakeDaemonClient.empty();
+    await client.setConfig(FormKeys.uiNotifications, 'false');
+    final ProviderContainer container = await pumpDesktop(
+      tester,
+      client: client,
+      desktop: FakeDesktop(
+        missing: TrayDiagnostics.notificationsDenied('Notifications denied'),
+      ),
+    );
+    await tester.pump();
+
+    expect(container.read(configProvider).hasValue, isTrue);
+    expect(find.byType(AttentionNoticeBanner), findsNothing);
+
+    await container
+        .read(configProvider.notifier)
+        .write(FormKeys.uiNotifications, 'true');
+    await tester.pump();
+
+    expect(find.byType(AttentionNoticeBanner), findsOneWidget);
+  });
+
+  testWidgets('the_notice_waits_for_the_config_instead_of_the_fallback', (
+    WidgetTester tester,
+  ) async {
+    final Completer<ConfigValues> gate = Completer<ConfigValues>();
+    await pumpDesktop(
+      tester,
+      client: FakeDaemonClient.empty(),
+      overrides: <Override>[
+        configProvider.overrideWith(() => GatedConfig(gate)),
+      ],
+      desktop: FakeDesktop(
+        missing: TrayDiagnostics.notificationsDenied('Notifications denied'),
+      ),
+    );
+    await tester.pump();
+    expect(find.byType(AttentionNoticeBanner), findsNothing);
+
+    gate.complete(ConfigValues.empty);
+    await tester.pump();
+    await tester.pump();
+    expect(find.byType(AttentionNoticeBanner), findsOneWidget);
+  });
+
+  testWidgets('refused_notifications_on_macos_say_so_and_not_no_tray', (
+    WidgetTester tester,
+  ) async {
+    await pumpDesktop(
+      tester,
+      client: FakeDaemonClient.empty(),
+      desktop: FakeDesktop(
+        missing: TrayDiagnostics.notificationsDenied('Notifications denied'),
+      ),
+    );
+
+    expect(find.text('Notifications are not allowed'), findsOneWidget);
+    expect(find.text('This desktop has no tray'), findsNothing);
+    expect(find.text(DiagnosticCodes.noTray), findsOneWidget);
+    expect(
+      find.text(TrayDiagnostics.notificationSettingsCommand),
+      findsOneWidget,
+    );
   });
 
   testWidgets('tray_init_failure_single_diagnostic', (

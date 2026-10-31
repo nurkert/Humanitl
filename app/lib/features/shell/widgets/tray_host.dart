@@ -20,6 +20,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/ipc/client_providers.dart';
+import '../../../core/ipc/config_providers.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/flow_events.dart';
 import '../../../core/recorder/recorder_health.dart';
@@ -145,12 +146,32 @@ class _TrayHostState extends ConsumerState<TrayHost> {
     _attention.connectionChanged(connected: ref.read(linkLiveProvider));
     _push(ref.read(attentionProvider));
     final Diagnostic? missing = await _ports.tray.start();
-    // Einmal geschlossen heißt für immer geschlossen, auch über einen
-    // Neustart hinweg (HUM-276). Erkannt wird das fehlende Tray trotzdem;
-    // nur das Banner bleibt weg.
-    if (missing != null &&
-        mounted &&
-        !ref.read(dismissedNoticesProvider).contains(missing.code)) {
+    if (missing == null || !mounted) {
+      return;
+    }
+    if (TrayDiagnostics.concernsNotifications(missing)) {
+      // Wer `ui.notifications` abgeschaltet hat, vermisst nichts. Bis die
+      // Konfiguration da ist, gilt der Schalter als an, das sagt also noch
+      // nichts: Der Hinweis wartet auf eine Antwort des Daemons, und wird der
+      // Schalter später eingeschaltet, kommt er dann (HUM-373).
+      ref.listenManual(configProvider, (
+        AsyncValue<ConfigValues>? previous,
+        AsyncValue<ConfigValues> next,
+      ) {
+        if (next.hasValue && ref.read(notificationsEnabledProvider)) {
+          _showMissing(missing);
+        }
+      }, fireImmediately: true);
+      return;
+    }
+    _showMissing(missing);
+  }
+
+  /// Einmal geschlossen heißt für immer geschlossen, auch über einen Neustart
+  /// hinweg (HUM-276). Erkannt wird das fehlende Tray trotzdem; nur das Banner
+  /// bleibt weg.
+  void _showMissing(Diagnostic missing) {
+    if (!ref.read(dismissedNoticesProvider).contains(missing.code)) {
       ref.read(attentionNoticeProvider.notifier).showOnce(missing);
     }
   }

@@ -869,10 +869,12 @@ registry! {
     /// Die Arbeitsumgebung bietet keinen Platz fuer ein Anzeigesymbol
     /// (GNOME ohne die AppIndicator-Erweiterung). Die Anwendung laeuft
     /// weiter, der Zaehler steht im Fenstertitel; der Fix verweist auf die
-    /// Erweiterung (HUM-034).
+    /// Erweiterung (HUM-034). Unter macOS steht der Eintrag in der Menueleiste
+    /// immer; dort meldet die App denselben Code, wenn das System ihr keine
+    /// Mitteilungen erlaubt (HUM-373).
     UI_002 => "ui", "Kein Platz für das Anzeigesymbol", "#ui_002",
-        "Die Arbeitsumgebung bietet keinen Platz für das Anzeigesymbol im Systembereich.",
-        "Kein Fix: Das Fenster bleibt der Weg zur Warteschlange.";
+        "Die Arbeitsumgebung bietet keinen Platz für das Anzeigesymbol im Systembereich, oder macOS erlaubt der App keine Mitteilungen.",
+        "`OpenUrl` zur AppIndicator-Erweiterung, unter macOS `CopyCommand` zu den Mitteilungs-Einstellungen. Das Fenster bleibt der Weg zur Warteschlange.";
 
     // HUM-037: der Agent-Adapter und seine Vorprüfung. Neue Einträge stehen am
     // Ende des Registers, nicht bei ihrem Bereich; die Reihenfolge im Quelltext

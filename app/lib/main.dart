@@ -19,6 +19,8 @@ import 'features/about/licences.dart';
 import 'features/settings/gallery_screen.dart';
 import 'features/tray/desktop_ports.dart';
 import 'features/tray/platform/dbus_notifications.dart';
+import 'features/tray/platform/macos_notifications.dart';
+import 'features/tray/platform/macos_tray.dart';
 import 'features/tray/platform/sni_tray.dart';
 import 'features/tray/platform/window_port.dart';
 import 'features/tray/providers/attention.dart';
@@ -89,8 +91,8 @@ Future<void> _run(List<String> args) async {
   );
 }
 
-/// The desktop this run talks to: the real one on Linux, the window alone on
-/// macOS (HUM-325; tray and notifications are HUM-329), none anywhere else.
+/// The desktop this run talks to: the real one on Linux and macOS (HUM-373),
+/// none anywhere else.
 ///
 /// This is the only place the real tray, the real notification and the real
 /// window are built. Every test and every headless run gets
@@ -98,7 +100,11 @@ Future<void> _run(List<String> args) async {
 /// to be present (HUM-034).
 DesktopPorts desktopPortsForPlatform() {
   if (Platform.isMacOS) {
-    return DesktopPorts.windowOnly(WindowManagerPort());
+    return DesktopPorts(
+      window: WindowManagerPort(),
+      notifications: MacNotificationPort(),
+      tray: MacTrayPort(),
+    );
   }
   if (!Platform.isLinux) {
     return DesktopPorts.inert();
