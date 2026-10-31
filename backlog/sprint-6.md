@@ -53,6 +53,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-377 | macOS: kleinere Lücken der Sandbox | M | HUM-323, HUM-324 |
 | HUM-374 | macOS: Wegwerf-Sandbox auf einem APFS-Klon | L | HUM-323, HUM-350, HUM-357 |
 | HUM-376 | macOS: Sandbox-Bildschirm und `sandbox argv` zeigen, was wirklich läuft | M | HUM-323, HUM-330 |
+| HUM-375 | Website: Das Glanzband folgt den Ecken der Fenster | S | HUM-348 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -809,3 +810,7 @@ Akzeptanz:
 - `backend` meldet immer das echte Backend. Profile setzen `backend = "auto"`, `bwrap` bleibt gültig, `seatbelt` nur auf macOS, alles andere ist `CONFIG_003`.
 - `PROTO_MINOR` steigt auf 28.
 - Die App sagt unter Seatbelt nicht mehr „sieht nur /work"; unter Linux bleibt ihr Text unverändert.
+
+## HUM-375 · Website: Das Glanzband folgt den Ecken der Fenster
+
+Das Band der Glaskante lief in den Ecken mit dem Radius der Fase statt dem des Rahmens und ließ die Spitzen dunkel. Akzeptanz: Die Eckkacheln kommen aus `website/scripts/generate-rim.mjs`, ihre Tiefe ist der Abstand zum Rand mit Radius `--r`, und das Band läuft ohne Sprung in die Seiten über.
