@@ -22,6 +22,7 @@
 //! Startfehler.
 
 use std::os::fd::{AsFd as _, OwnedFd};
+use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::JoinHandle;
@@ -220,6 +221,8 @@ pub struct StatusSnapshot {
 #[derive(Debug, Default)]
 pub(crate) struct Shared {
     exit: Mutex<Option<ExitStatus>>,
+    /// Was mit dem Ende der Sandbox verschwindet (HUM-368).
+    session_dir: Mutex<Option<PathBuf>>,
     exited: Condvar,
     report: Mutex<ReportSnapshot>,
     report_changed: Condvar,
@@ -356,12 +359,64 @@ fn alive_from_stat(stat: &str, started_at_ticks: Option<u64>) -> Option<bool> {
     Some(state != "Z")
 }
 
+/// Wie lange weitere Shells nach dem Ende der Sandbox noch laufen dürfen; ihr
+/// Shim tötet sie nach drei Sekunden.
+const SESSION_DIR_GRACE: Duration = Duration::from_secs(4);
+
+/// Löscht `dir` nach [`SESSION_DIR_GRACE`], wenn es dann noch dasselbe ist:
+/// Ein neuer Start derselben Sitzung legt es neu an.
+fn remove_session_dir_later(dir: PathBuf) {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let Ok(before) = std::fs::metadata(&dir).map(|meta| meta.ino()) else {
+        return;
+    };
+    std::thread::spawn(move || {
+        std::thread::sleep(SESSION_DIR_GRACE);
+        if std::fs::metadata(&dir).is_ok_and(|meta| meta.ino() == before) {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    });
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Shared {
+    /// Das Verzeichnis der Sitzung verschwindet mit der Sandbox. Unter Linux
+    /// liegen ihre Dateien in memfds und vergehen mit ihr; unter macOS liegen
+    /// sie hier, der Zugangsschlüssel des Modells eingeschlossen.
+    pub(crate) fn remove_at_exit(&self, dir: PathBuf) {
+        let ended = lock(&self.exit).is_some();
+        if ended {
+            self.remove_session_dir(dir);
+        } else {
+            *lock(&self.session_dir) = Some(dir);
+            // Das Ende kann zwischen beiden Blicken gekommen sein.
+            if lock(&self.exit).is_some()
+                && let Some(dir) = lock(&self.session_dir).take()
+            {
+                self.remove_session_dir(dir);
+            }
+        }
+    }
+
+    /// Ohne offene weitere Shell gibt es nichts abzuwarten, und in einem
+    /// kurzlebigen Prozess wie `humanitl sandbox run` überlebte kein Faden.
+    fn remove_session_dir(&self, dir: PathBuf) {
+        if self.shells.get().is_some_and(|door| door.live() > 0) {
+            remove_session_dir_later(dir);
+        } else {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
     pub(crate) fn set_exit(&self, status: ExitStatus) {
+        // Vor dem Status: Wer auf ihn wartet, beendet womöglich gleich den Prozess.
+        if let Some(dir) = lock(&self.session_dir).take() {
+            self.remove_session_dir(dir);
+        }
         *lock(&self.exit) = Some(status);
         self.exited.notify_all();
     }
@@ -697,6 +752,12 @@ pub struct SandboxHandle {
 }
 
 impl SandboxHandle {
+    /// Merkt [`dir`](Self) vor: Es verschwindet mit der Sandbox, auch wenn
+    /// niemand mehr ein Handle hält ([`Shared::remove_at_exit`]).
+    pub fn remove_at_exit(&self, dir: PathBuf) {
+        self.shared.remove_at_exit(dir);
+    }
+
     pub(crate) fn new(id: SandboxId, pid: u32, argv_display: String, shared: Arc<Shared>) -> Self {
         Self {
             id,

@@ -43,6 +43,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-364 | Proxy: Klartext-HTTP im `CONNECT`-Tunnel, damit `pi` 1.x sein lokales Modell erreicht | S | HUM-024 |
 | HUM-367 | Statusleiste: Daemon-Neustart auch mit laufender Sitzung, ohne `systemctl`-Hinweis | S | HUM-284 |
 | HUM-365 | macOS: OpenCode 2 startet in der Sandbox, mit einem eigenen Port je Sitzung | M | HUM-323 |
+| HUM-368 | macOS: Das Sitzungsverzeichnis samt Zugangsschlüssel verschwindet mit der Sandbox | S | HUM-323 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -654,3 +655,13 @@ Akzeptanz:
 - Der Server bleibt am Proxy, nur die Oberfläche geht an ihm vorbei.
 - `single_socket` prüft weiter einen fremden Port und wählt dafür nie den des Agenten.
 - `README.md`, `docs/SECURITY.md` und `docs/THREAT-MODEL.md` nennen den zweiten Port.
+
+## HUM-368 · macOS: Das Sitzungsverzeichnis samt Zugangsschlüssel verschwindet mit der Sandbox
+
+Unter Linux liegt der Schlüssel des Modells in einem memfd. Unter macOS lag er als Datei im Sitzungsverzeichnis, und das blieb bis zu sieben Tage liegen.
+
+Akzeptanz:
+
+- Endet die Sandbox, ist das Sitzungsverzeichnis nach der Frist weiterer Shells weg, auch wenn niemand mehr ein Handle hält; ein neuer Start derselben Sitzung behält seines.
+- Unter Linux ändert sich nichts.
+- `docs/SECURITY.md` nennt die Datei auf der Platte und den Fall nach einem Absturz.
