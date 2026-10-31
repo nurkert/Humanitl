@@ -75,6 +75,10 @@ enum MountMode {
 
   /// A link, not a mount (`--symlink`).
   symlink,
+
+  /// A path the policy refuses, neither read nor written: not a mount, a rule
+  /// of a backend that has no mounts (Seatbelt, HUM-376).
+  denied,
 }
 
 /// Where a mount or an environment variable comes from, mirror of
@@ -105,6 +109,11 @@ abstract class MountEntry with _$MountEntry {
     required MountMode mode,
     @Default(ValueOrigin.profile) ValueOrigin origin,
     @Default('') String linkTarget,
+
+    /// The names the profile file has for this path (`/work`), where a
+    /// backend without mounts shows real paths instead (HUM-376). Empty
+    /// under bubblewrap.
+    @Default('') String profilePath,
   }) = _MountEntry;
 
   const MountEntry._();
@@ -238,13 +247,21 @@ abstract class SandboxStatus with _$SandboxStatus {
     SandboxId? sandboxId,
     DateTime? startedAt,
     @Default('') String profile,
-    @Default('bwrap') String backend,
+
+    /// The backend the daemon named, `bwrap` or `seatbelt`; empty until it
+    /// has said (HUM-376).
+    @Default('') String backend,
     @Default('') String llmEndpoint,
     String? workDirHost,
     @Default(WorkMode.rw) WorkMode workMode,
     @Default(<MountEntry>[]) List<MountEntry> mounts,
     @Default(<EnvEntry>[]) List<EnvEntry> env,
     @Default('') String argvPreview,
+
+    /// The text of the policy that really limits the sandbox, where the
+    /// backend has one: `sandbox.sb` under Seatbelt (HUM-376). Empty under
+    /// bubblewrap, whose command line says everything.
+    @Default('') String policyText,
     @Default(false) bool agentRunning,
     @Default(<Diagnostic>[]) List<Diagnostic> diagnostics,
     @Default(<IsolationCheckResult>[]) List<IsolationCheckResult> checks,
@@ -411,6 +428,11 @@ abstract class SandboxStatus with _$SandboxStatus {
   List<MountEntry> get extraHostPaths => mounts
       .where((MountEntry mount) => mount.origin == ValueOrigin.user)
       .toList();
+
+  /// True when a policy limits the sandbox and not a mount table: the agent
+  /// sees the real file system, and "sees only /work" would be false
+  /// (HUM-376).
+  bool get usesPolicy => backend == 'seatbelt';
 
   /// The project mount, the one the sentence is about.
   MountEntry? get workMount {

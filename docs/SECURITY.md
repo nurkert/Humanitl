@@ -195,7 +195,9 @@ one would be a second listener to a second Unix socket and is refused with `CONF
 bridge in the direction `out` with `SANDBOX_007`.
 
 Everything else the agent needs comes from an allowlist whose complete form is the bwrap
-argument list (`humanitl sandbox argv`). In short, from `profiles/sandbox/default.toml`:
+argument list on Linux and the `sandbox-exec` line with its generated `sandbox.sb` on macOS
+(`humanitl sandbox argv` prints the one that runs). In short, on Linux, from
+`profiles/sandbox/default.toml`:
 
 - read-only binds of `/usr`, `/etc/ssl`, `/etc/alternatives`, `/etc/ld.so.cache`,
   `/etc/localtime`, and the symlinks `/lib`, `/lib64`, `/bin`, `/sbin` into `/usr`;

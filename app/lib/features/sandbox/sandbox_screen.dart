@@ -238,6 +238,7 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
               alignment: Alignment.centerRight,
               child: ArgvSheet(
                 argv: status.argvPreview,
+                policy: status.policyText,
                 onClose: () => setState(() => _argvOpen = false),
               ),
             ),

@@ -392,6 +392,7 @@ impl DaemonApi for FakeDaemon {
                 "fake".to_owned(),
                 "proxy.h1".to_owned(),
                 "findings.regex".to_owned(),
+                "sandbox.run".to_owned(),
                 "sandbox.bwrap".to_owned(),
             ],
             session_id: self.state.session().id.to_string(),
@@ -1366,6 +1367,7 @@ impl FakeDaemon {
                     sandbox_id: sandbox_id.to_string(),
                     session_id: session.id.to_string(),
                     backend: "bwrap".to_owned(),
+                    policy_text: String::new(),
                     llm_endpoint: session.llm_endpoint,
                     started_at: running.then(|| timestamp(SystemTime::now())),
                     profile: FAKE_PROFILE.to_owned(),
@@ -1668,6 +1670,7 @@ fn mount(src: &str, dst: &str, mode: v1::MountMode, origin: v1::ValueOrigin) -> 
         mode: mode as i32,
         origin: origin as i32,
         link_target: String::new(),
+        profile_path: String::new(),
     }
 }
 

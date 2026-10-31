@@ -4,8 +4,10 @@
 # das Netz-Namespace erreicht, was der Shim vor seccomp aufmacht und welche
 # Umgebung der Agent vorfindet. Aus ihr entsteht deterministisch eine einzige
 # bwrap-Kommandozeile, die die Oberflaeche woertlich anzeigt
-# (`humanitl sandbox argv`). Wer wissen will, was die Sandbox tut, liest diese
-# Datei und die Zeile, nicht den Quelltext.
+# (`humanitl sandbox argv`). Unter macOS entstehen aus ihr stattdessen die Zeile
+# von `sandbox-exec` und ein Seatbelt-Profil, beide ebenso woertlich angezeigt
+# (HUM-376). Wer wissen will, was die Sandbox tut, liest diese Datei und die
+# Zeile, nicht den Quelltext.
 #
 # Drei Quellen fuellen die Sandbox, und nur diese drei:
 #
@@ -27,10 +29,12 @@
 # Argument fuer Argument, also auch den Beitrag des Adapters.
 version = 1
 name = "default"
-description = "bwrap sandbox: no network interface, one proxy socket, seccomp after bridge"
+description = "default sandbox: no network interface, one proxy socket, seccomp after bridge"
 
 [sandbox]
-backend = "bwrap"
+# `auto` nimmt das Backend des Systems: bwrap unter Linux, Seatbelt unter macOS.
+# Was laeuft, zeigt `humanitl sandbox argv`.
+backend = "auto"
 hostname = "sandbox"
 # Entspricht --unshare-all; ausgeschrieben, damit die Zeile lesbar bleibt.
 # Keine Auswahl: ein Profil, das einen Namensraum weglaesst, wird abgelehnt.

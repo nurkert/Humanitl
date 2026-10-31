@@ -5,9 +5,11 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/features/sandbox/sandbox_text.dart';
+import 'package:humanitl/l10n/generated/app_localizations.dart';
 
 Map<String, Object?> _arb(String name) =>
     jsonDecode(File('l10n/$name').readAsStringSync()) as Map<String, Object?>;
@@ -33,6 +35,28 @@ void main() {
         expect(mode.isWritable, isFalse, reason: mode.name);
       }
     }
+  });
+
+  test('under Seatbelt the sentence does not claim a private view', () {
+    final AppLocalizations l10n = lookupAppLocalizations(const Locale('en'));
+    const SandboxStatus namespaces = SandboxStatus(
+      workDirHost: '/Users/nik/proj',
+    );
+    expect(workDirSentence(l10n, namespaces), contains('sees only /work'));
+    final String seatbelt = workDirSentence(
+      l10n,
+      namespaces.copyWith(backend: 'seatbelt'),
+    );
+    expect(seatbelt, isNot(contains('/work ')));
+    expect(seatbelt, contains('/Users/nik/proj'));
+    expect(seatbelt, contains('can read the rest of the system'));
+
+    const SandboxStatus none = SandboxStatus();
+    expect(workDirSentence(l10n, none), contains('mounted'));
+    expect(
+      workDirSentence(l10n, none.copyWith(backend: 'seatbelt')),
+      isNot(contains('mounted')),
+    );
   });
 
   test('a withheld value is not an empty one', () {

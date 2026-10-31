@@ -93,7 +93,9 @@ class MountsTab extends StatelessWidget {
                     ],
                     SizedBox(height: tokens.spacing.x2),
                     Text(
-                      l10n.sandboxMountsSystemNote,
+                      status.usesPolicy
+                          ? l10n.sandboxPolicyNote
+                          : l10n.sandboxMountsSystemNote,
                       style: tokens.typography.ui12.tinted(tokens.colors.fg1),
                     ),
                   ],
@@ -108,8 +110,13 @@ class MountsTab extends StatelessWidget {
                 : SandboxTable(
                     scrollKey: const PageStorageKey<String>('sandbox-mounts'),
                     columns: <String>[
-                      l10n.sandboxMountsColDst,
-                      l10n.sandboxMountsColSrc,
+                      if (status.usesPolicy) ...<String>[
+                        l10n.sandboxPolicyColPath,
+                        l10n.sandboxPolicyColProfilePath,
+                      ] else ...<String>[
+                        l10n.sandboxMountsColDst,
+                        l10n.sandboxMountsColSrc,
+                      ],
                       l10n.sandboxMountsColMode,
                       l10n.sandboxMountsColOrigin,
                     ],
@@ -124,12 +131,17 @@ class MountsTab extends StatelessWidget {
                               strong: true,
                               color: tokens.colors.fg0,
                             ),
-                            mount.hasHostPath
-                                ? SandboxCell(mount.src, mono: true)
-                                : SandboxCell(
-                                    l10n.sandboxMountNoHostPath,
-                                    color: tokens.colors.fg2,
-                                  ),
+                            // Without mounts both paths are the same one, so
+                            // the second column says what the profile calls it.
+                            if (status.usesPolicy)
+                              SandboxCell(mount.profilePath, mono: true)
+                            else if (mount.hasHostPath)
+                              SandboxCell(mount.src, mono: true)
+                            else
+                              SandboxCell(
+                                l10n.sandboxMountNoHostPath,
+                                color: tokens.colors.fg2,
+                              ),
                             SandboxCell(
                               sandboxMountModeText(l10n, mount),
                               color: sandboxMountModeColor(tokens, mount.mode),
@@ -151,7 +163,12 @@ class MountsTab extends StatelessWidget {
               vertical: tokens.spacing.x1,
             ),
             child: Text(
-              l10n.sandboxMountsCount(status.mounts.length),
+              status.usesPolicy
+                  ? l10n.sandboxPolicyBackendCount(
+                      l10n.sandboxMountsCount(status.mounts.length),
+                      status.backend,
+                    )
+                  : l10n.sandboxMountsCount(status.mounts.length),
               style: tokens.typography.ui11.tinted(tokens.colors.fg2),
             ),
           ),
