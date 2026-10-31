@@ -176,6 +176,8 @@ pub(crate) struct LaunchOnce {
 /// Die vollständige Kommandozeile samt allem, was der Start braucht.
 #[derive(Debug)]
 pub struct LaunchPlan {
+    /// Das Verzeichnis der Sitzung, wenn das Backend eines anlegt (HUM-368).
+    pub session_dir: Option<std::path::PathBuf>,
     /// Die ganze Liste, `argv[0]` ist das Programm. Wird wörtlich angezeigt.
     pub argv: Vec<OsString>,
     /// Die Umgebung des Befehls in der Sandbox, alphabetisch: dieselben Paare,

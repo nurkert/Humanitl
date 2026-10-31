@@ -1502,6 +1502,11 @@ Adapter-Dateien, sodass der Agent seine Konfiguration dort findet, wo der Adapte
 Das sind die Punkte, an denen macOS weniger bietet als Linux. Jeder ist ein Kanal in
 [`THREAT-MODEL.md`](THREAT-MODEL.md) mit seiner Folge.
 
+0. **Die Dateien einer Session liegen auf der Platte** (HUM-368). Unter Linux sind sie memfds. Unter
+   macOS liegen sie im Session-Verzeichnis, `0700` unter `~/Library/Application Support/Humanitl/run/sessions`,
+   auch der Zugangsschlüssel des Modells, und das Verzeichnis verschwindet mit dem Ende der Sandbox.
+   Nach einem Absturz des Daemons bleibt es, bis ein späterer Plan es wegräumt, höchstens sieben Tage,
+   und ein Backup während einer Session kann es enthalten.
 1. **Loopback wird mit dem Rechner geteilt** (K-19). Die Tür lauscht auf einem Loopback-Port, den
    jeder lokale Prozess jedes Kontos erreichen kann. Ein solcher Prozess erreicht nur den Proxy,
    aber mit den Regeln der Session: Was eine `allow`-Regel oder die LLM-Durchleitung durchlässt,

@@ -1039,6 +1039,7 @@ impl SandboxBackend for BwrapBackend {
             .map(|fd| (fd.as_raw_fd(), fd.as_raw_fd()))
             .collect();
         Ok(LaunchPlan {
+            session_dir: None,
             argv,
             env,
             fds,
