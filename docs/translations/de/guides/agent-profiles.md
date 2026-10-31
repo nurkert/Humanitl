@@ -1,6 +1,6 @@
 ---
 source: guides/agent-profiles.md
-source-sha256: dc3979f0593211801b58c46ee883c7465e50c1ef6a2f22c1f9a79f07fef77926
+source-sha256: 17259704a898aff7ad971295ba033dd40857fbbac2c11768184cf924edcab6d2
 lang: de
 ---
 # Agentenprofile und Adapter
@@ -446,6 +446,17 @@ sudo npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 Eine globale npm-Installation landet unter `/usr/local` (oder `/usr` mit dem npm einer
 Distribution). Das Installationsskript von `pi.dev` legt pi unter `$HOME` ab, das die Sandbox
 nicht sieht; ein Node.js aus nvm unter `$HOME` ist ebenfalls nicht sichtbar.
+
+Unter macOS nimmst du Node.js aus Homebrew und dessen npm. Der `PATH` der Sandbox enthält
+`/opt/homebrew/bin`, und der Rest deines Home ist nicht sichtbar:
+
+```sh
+brew install node
+/opt/homebrew/bin/npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+```
+
+Auf einem Intel-Mac liegt Homebrew stattdessen unter `/usr/local`; `/usr/local/bin` steht im
+selben `PATH`.
 
 ### Auswählen
 
