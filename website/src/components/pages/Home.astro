@@ -26,6 +26,9 @@ import rules from '../../assets/screens/rules.png';
 import sandbox from '../../assets/screens/sandbox.png';
 import palette from '../../assets/screens/palette.png';
 import settings from '../../assets/screens/settings.png';
+import fogFar from '../../assets/fog/far.webp';
+import fogNear from '../../assets/fog/near.webp';
+import fogRays from '../../assets/fog/rays.webp';
 
 interface Props {
   lang: Lang;
@@ -38,6 +41,12 @@ const n = modules.length;
 // Abstand eines Fensters zur Mitte im Ring, -3 bis 3: Intercept steht vorn.
 const ringOffset = (i: number) => ((i + Math.floor(n / 2)) % n) - Math.floor(n / 2);
 const formats = ['avif'] as const;
+// Nebel (HUM-341): weich genug für kleine Bilder, die Tiefe von hinten nach vorn.
+const fogLayers = [
+  { id: 'far', src: fogFar },
+  { id: 'rays', src: fogRays },
+  { id: 'near', src: fogNear },
+];
 // Der Knopf führt auf dem Mac direkt zum Disk-Image der aktuellen Version (HUM-337).
 const releases = await loadReleases();
 const current = releases.find((release) => !release.prerelease) ?? releases[0];
@@ -100,6 +109,15 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
         .ring {
           opacity: 0.25 !important;
           transform: translate(-50%, -50%) translate3d(0, calc(var(--w) / 1.855 / 2 + var(--t) + 2px), calc(var(--w) * -1.3)) rotateX(90deg) !important;
+        }
+        /* Der Nebel steht still über dem ersten Bild, nicht über der ganzen Szene. */
+        .fog {
+          opacity: 1 !important;
+          bottom: auto !important;
+          height: 100svh;
+        }
+        .fog__layer {
+          --fog-in: 1 !important;
         }
         /* Modul 1 steht ruhig unter der Bühne, ohne Pfeile. */
         .scene__sticky {
@@ -190,6 +208,15 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
       <div class="scene__sticky" data-sticky>
         <div class="sky" aria-hidden="true">
           <div class="sky__spot" data-spot></div>
+          <div class="fog" data-fog>
+            {
+              fogLayers.map((layer) => (
+                <div class={`fog__layer fog__layer--${layer.id}`} data-fog-layer={layer.id}>
+                  <Picture src={layer.src} alt="" formats={formats} fallbackFormat="webp" widths={[800, 1280]} sizes="100vw" quality={55} loading="eager" fetchpriority="low" decoding="async" draggable="false" />
+                </div>
+              ))
+            }
+          </div>
           <div class="sky__dust"></div>
           <div class="sky__dust sky__dust--far"></div>
         </div>
@@ -420,6 +447,109 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     background-size: 190px 150px;
     opacity: 0.12;
     transform: translateY(-6%);
+  }
+
+  /* Nebel und Lichtstrahlen (HUM-341): vorgerechnete Bilder hinter den Fenstern. Bewegt
+     werden nur transform, translate und opacity; das Skript blendet die Ebenen im Morph aus
+     und nimmt sie danach aus dem Layout. Die Stärke hängt an Tokens, ein helles Thema setzt
+     nur diese. Die Bilder selbst sind hell und tragen die Form im Alpha. */
+  .scene {
+    --fog-far: 0.18;
+    --fog-near: 0.2;
+    --fog-rays: 0.22;
+  }
+  .fog {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+  }
+  /* --fog-in hebt jede Ebene erst, wenn ihr Bild dekodiert ist: nichts springt ins Bild. */
+  .fog__layer {
+    --fog-in: 0;
+    position: absolute;
+    inset: -8%;
+    transition:
+      translate 1.6s var(--ease-out),
+      opacity 1.6s var(--ease-out);
+  }
+  .fog__layer[data-ready] {
+    --fog-in: 1;
+  }
+  .fog__layer--far {
+    opacity: calc(var(--fog-far) * var(--fog-in));
+  }
+  .fog__layer--near {
+    opacity: calc(var(--fog-near) * var(--fog-in));
+  }
+  .fog__layer--rays {
+    opacity: calc(var(--fog-rays) * var(--fog-in));
+  }
+  .fog__layer :global(img) {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: 50% 100%;
+  }
+  .fog__layer--rays :global(img) {
+    object-position: 50% 0;
+    transform-origin: 30% -40%;
+  }
+  /* Die Drift läuft allein im Compositor, einmal nach dem Einflug, und läuft weich aus. Drei
+     große Alphaflächen je Bild kosten sonst dauerhaft fast eine halbe Kern-Last. Am Ende
+     schreibt das Skript die Pose fest und setzt data-rest, dann steht kein Bild mehr an. */
+  .scene:not([data-lite]) .fog[data-drift] .fog__layer[data-ready]:not([data-rest]) :global(img) {
+    will-change: transform;
+    animation: fog-drift 24s cubic-bezier(0.3, 0.5, 0.4, 1) both;
+  }
+  .scene:not([data-lite]) .fog[data-drift] .fog__layer--near[data-ready]:not([data-rest]) :global(img) {
+    animation-name: fog-drift-near;
+  }
+  .scene:not([data-lite]) .fog[data-drift] .fog__layer--rays[data-ready]:not([data-rest]) :global(img) {
+    animation-name: fog-sway;
+  }
+  .fog[data-paused] :global(img) {
+    animation-play-state: paused !important;
+  }
+  @keyframes fog-drift {
+    from {
+      transform: translate3d(-1.2%, 0.3%, 0) scale(1.02);
+    }
+    to {
+      transform: translate3d(1.2%, -0.3%, 0) scale(1.04);
+    }
+  }
+  @keyframes fog-drift-near {
+    from {
+      transform: translate3d(1.5%, -0.3%, 0) scale(1.04);
+    }
+    to {
+      transform: translate3d(-1.5%, 0.3%, 0) scale(1.02);
+    }
+  }
+  @keyframes fog-sway {
+    from {
+      transform: rotate(-0.6deg);
+      opacity: 0.8;
+    }
+    to {
+      transform: rotate(0.6deg);
+      opacity: 1;
+    }
+  }
+  /* Schwache Geräte: keine Drift, die vorderste Ebene entfällt. */
+  .scene[data-lite] .fog__layer--near {
+    display: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fog__layer {
+      transition: none;
+    }
+  }
+  @media print {
+    .fog {
+      display: none;
+    }
   }
 
   /* ---- Hero ----------------------------------------------------------- */
