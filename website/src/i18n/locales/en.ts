@@ -14,6 +14,8 @@ const en: Copy = {
     home: 'Humanitl, home',
     language: 'Language',
     docs: 'Docs',
+    themeLight: 'Switch to light mode',
+    themeDark: 'Switch to dark mode',
   },
   hero: {
     title: ['You decide', 'what goes out.'],
