@@ -1,0 +1,175 @@
+---
+// Das Schema einer Anfrage, einmal quer und einmal hoch. Beide Fassungen teilen Markup und
+// Bewegung und unterscheiden sich nur in den Koordinaten. Ohne Skript steht der Endzustand.
+interface Props {
+  f: any;
+  title: string;
+  desc: string;
+  layout: 'wide' | 'tall';
+}
+const { f, title, desc, layout } = Astro.props;
+const G = {
+  wide: {
+    w: 1200,
+    h: 430,
+    box: { x: 20, y: 60, w: 340, h: 310 },
+    wall: 'M360 195 V84 A24 24 0 0 0 336 60 H44 A24 24 0 0 0 20 84 V346 A24 24 0 0 0 44 370 H336 A24 24 0 0 0 360 346 V255',
+    door: { x: 356, y: 195, w: 8, h: 60 },
+    doorText: { x: 420, y: 212, a: 'middle' },
+    boxText: { x: 44, y: 92 },
+    agent: { x: 110, y: 225 },
+    agentText: { x: 110, y: 196 },
+    wallHit: { x: 360, y: 120 },
+    ghostText: { x: 44, y: 128 },
+    errText: { x: 44, y: 150 },
+    errLines: ['ENETUNREACH · EPERM'],
+    ca: { x: 44, y: 316, w: 164 },
+    line: [126, 225, 1050, 225],
+    proxy: { x: 480, y: 90, w: 300, h: 270 },
+    proxyText: { x: 500, y: 120 },
+    hold: { x: 630, y: 225 },
+    name: { x: 630, y: 158, a: 'middle' },
+    nameNote: { x: 630, y: 180, a: 'middle' },
+    body: { x: 630, y: 284, a: 'middle' },
+    bodyNote: { x: 630, y: 306, a: 'middle' },
+    you: { x: 630, y: 30 },
+    youText: { x: 656, y: 38, a: 'start' },
+    youLine: [630, 58, 630, 90],
+    dns: { x: 840, y: 120, w: 120, h: 46 },
+    dnsNote: { x: 900, y: 106, a: 'middle' },
+    dnsLine: [900, 166, 900, 225],
+    dest: { x: 1050, y: 190, w: 126, h: 70 },
+    destText: { x: 1113, y: 178, a: 'middle' },
+    audit: { x: 480, y: 386, step: 44, w: 36 },
+  },
+  tall: {
+    w: 420,
+    h: 880,
+    box: { x: 14, y: 14, w: 392, h: 250 },
+    wall: 'M180 264 H38 A24 24 0 0 1 14 240 V38 A24 24 0 0 1 38 14 H382 A24 24 0 0 1 406 38 V240 A24 24 0 0 1 382 264 H240',
+    door: { x: 180, y: 260, w: 60, h: 8 },
+    doorText: { x: 252, y: 298, a: 'start' },
+    boxText: { x: 34, y: 46 },
+    agent: { x: 210, y: 96 },
+    agentText: { x: 210, y: 68 },
+    wallHit: { x: 70, y: 264 },
+    ghostText: { x: 232, y: 126 },
+    errText: { x: 232, y: 150 },
+    errLines: ['ENETUNREACH', 'EPERM'],
+    ca: { x: 222, y: 208, w: 176 },
+    line: [210, 112, 210, 760],
+    proxy: { x: 14, y: 330, w: 392, h: 250 },
+    proxyText: { x: 34, y: 362 },
+    hold: { x: 210, y: 455 },
+    name: { x: 34, y: 412, a: 'start' },
+    nameNote: { x: 34, y: 436, a: 'start' },
+    body: { x: 246, y: 450, a: 'start' },
+    bodyNote: { x: 246, y: 474, a: 'start' },
+    you: { x: 340, y: 628 },
+    youText: { x: 308, y: 636, a: 'end' },
+    youLine: [340, 580, 340, 600],
+    dns: { x: 34, y: 642, w: 120, h: 46 },
+    dnsNote: { x: 34, y: 630, a: 'start' },
+    dnsLine: [154, 665, 210, 665],
+    dest: { x: 130, y: 760, w: 160, h: 64 },
+    destText: { x: 228, y: 750, a: 'start' },
+    audit: { x: 34, y: 846, step: 34, w: 28 },
+  },
+}[layout];
+const blocks = [0, 1, 2, 3, 4, 5];
+const id = `hm-flow-${layout}`;
+const vars = [
+  `--ax:${G.agent.x}px`,
+  `--ay:${G.agent.y}px`,
+  `--hx:${G.hold.x}px`,
+  `--hy:${G.hold.y}px`,
+  `--dx:${G.dest.x + G.dest.w / 2}px`,
+  `--dy:${G.dest.y + G.dest.h / 2}px`,
+  `--gx:${G.wallHit.x}px`,
+  `--gy:${G.wallHit.y}px`,
+].join(';');
+---
+
+<svg class:list={['hm-flow', `hm-flow--${layout}`]} viewBox={`0 0 ${G.w} ${G.h}`} role="img" aria-labelledby={`${id}-t ${id}-d`} style={vars}>
+  <title id={`${id}-t`}>{title}</title>
+  <desc id={`${id}-d`}>{desc}</desc>
+  <g aria-hidden="true">
+    <rect class="hm-f-fill" x={G.box.x} y={G.box.y} width={G.box.w} height={G.box.h} rx="24"></rect>
+    <path class="hm-f-wall" d={G.wall}></path>
+    <text class="hm-f-t" x={G.boxText.x} y={G.boxText.y}>{f.sandbox}</text>
+    <circle class="hm-f-agent" cx={G.agent.x} cy={G.agent.y} r="11"></circle>
+    <text class="hm-f-t" x={G.agentText.x} y={G.agentText.y} text-anchor="middle">{f.agent}</text>
+
+    <!-- Der Versuch ohne Proxy endet an der Wand. -->
+    <line class="hm-f-ghost" data-f="ghost" x1={G.agent.x} y1={G.agent.y} x2={G.wallHit.x} y2={G.wallHit.y}></line>
+    <g class="hm-f-ghostdot" data-f="ghostdot"><circle r="6"></circle></g>
+    <g class="hm-f-x" data-f="x" transform={`translate(${G.wallHit.x} ${G.wallHit.y})`}>
+      <circle r="13"></circle>
+      <path d="M-5 -5 5 5M5 -5 -5 5"></path>
+    </g>
+    <g data-f="x">
+      <text class="hm-f-s" x={G.ghostText.x} y={G.ghostText.y}>{f.ghost}</text>
+      {
+        G.errLines.map((line, i) => (
+          <text class="hm-f-s hm-f-deny" x={G.errText.x} y={G.errText.y + i * 22}>
+            {line}
+          </text>
+        ))
+      }
+    </g>
+
+    <!-- Der Weg durch die Tür. -->
+    <line class="hm-f-path" x1={G.line[0]} y1={G.line[1]} x2={G.line[2]} y2={G.line[3]}></line>
+    <rect class="hm-f-door" x={G.door.x} y={G.door.y} width={G.door.w} height={G.door.h} rx="3"></rect>
+    <text class="hm-f-s" x={G.doorText.x} y={G.doorText.y} text-anchor={G.doorText.a}>{f.door}</text>
+
+    <g data-f="ca">
+      <rect class="hm-f-pill" x={G.ca.x} y={G.ca.y} width={G.ca.w} height="32" rx="16"></rect>
+      <text class="hm-f-s" x={G.ca.x + G.ca.w / 2} y={G.ca.y + 21} text-anchor="middle">{f.ca}</text>
+    </g>
+
+    <rect class="hm-f-proxy" x={G.proxy.x} y={G.proxy.y} width={G.proxy.w} height={G.proxy.h} rx="22"></rect>
+    <text class="hm-f-t" x={G.proxyText.x} y={G.proxyText.y}>{f.proxy}</text>
+
+    <g data-f="name">
+      <text class="hm-f-t hm-f-held" x={G.name.x} y={G.name.y} text-anchor={G.name.a}>api.example.com</text>
+      <text class="hm-f-s" x={G.nameNote.x} y={G.nameNote.y} text-anchor={G.nameNote.a}>{f.name}</text>
+    </g>
+    <g data-f="body">
+      <text class="hm-f-t" x={G.body.x} y={G.body.y} text-anchor={G.body.a}>POST /upload</text>
+      <text class="hm-f-s" x={G.bodyNote.x} y={G.bodyNote.y} text-anchor={G.bodyNote.a}>{f.body}</text>
+    </g>
+
+    <g transform={`translate(${G.hold.x} ${G.hold.y})`}>
+      <circle class="hm-f-hold" data-f="hold" r="22"></circle>
+      <path class="hm-f-ok" data-f="ok" d="M-8 0 -2 6 9 -6"></path>
+    </g>
+
+    <line class="hm-f-link" data-f="you" x1={G.youLine[0]} y1={G.youLine[1]} x2={G.youLine[2]} y2={G.youLine[3]}></line>
+    <g class="hm-f-you" data-f="you" transform={`translate(${G.you.x} ${G.you.y})`}>
+      <circle cy="-6" r="9"></circle>
+      <path d="M-17 24 Q0 -2 17 24 Z"></path>
+    </g>
+    <text class="hm-f-t" data-f="you" x={G.youText.x} y={G.youText.y} text-anchor={G.youText.a}>{f.you}</text>
+
+    <line class="hm-f-link" data-f="dns" x1={G.dnsLine[0]} y1={G.dnsLine[1]} x2={G.dnsLine[2]} y2={G.dnsLine[3]}></line>
+    <g data-f="dns">
+      <rect class="hm-f-pill hm-f-pill--on" x={G.dns.x} y={G.dns.y} width={G.dns.w} height={G.dns.h} rx="12"></rect>
+      <text class="hm-f-t" x={G.dns.x + G.dns.w / 2} y={G.dns.y + 28} text-anchor="middle">DNS</text>
+      <text class="hm-f-s" x={G.dnsNote.x} y={G.dnsNote.y} text-anchor={G.dnsNote.a}>{f.dnsNote}</text>
+    </g>
+
+    <rect class="hm-f-fill hm-f-dest" x={G.dest.x} y={G.dest.y} width={G.dest.w} height={G.dest.h} rx="16"></rect>
+    <text class="hm-f-t" x={G.destText.x} y={G.destText.y} text-anchor={G.destText.a}>{f.dest}</text>
+
+    <g class="hm-f-pkt" data-f="pkt">
+      <rect x="-34" y="-15" width="68" height="30" rx="15"></rect>
+      <text x="0" y="5" text-anchor="middle">POST</text>
+    </g>
+
+    <g>
+      {blocks.map((i) => <rect class="hm-f-blk" data-f={i === 5 ? 'audit' : undefined} x={G.audit.x + i * G.audit.step} y={G.audit.y} width={G.audit.w} height="16" rx="4" />)}
+      <text class="hm-f-s" data-f="audit" x={G.audit.x + 6 * G.audit.step + 8} y={G.audit.y + 13}>{f.audit}</text>
+    </g>
+  </g>
+</svg>
