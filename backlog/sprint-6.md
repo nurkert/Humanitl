@@ -38,6 +38,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-358 | Startseite: sechs Sektionen unter dem Karussell, die erklären, überzeugen und die Unterseiten anteasern | M | HUM-333, HUM-345, HUM-359 |
 | HUM-341 | Landing: dezenter Nebel mit Lichtstrahlen hinter den Fenstern | S | HUM-334, HUM-348 |
 | HUM-338 | Website: heller Modus, folgt dem System, Umschalter in der Navigation | M | HUM-341, HUM-358 |
+| HUM-361 | Flaky-Test: `a_stalled_streamed_upload_ends_with_limit_004` nimmt den Abbruch nach der Antwort hin | S | HUM-057 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -555,3 +556,35 @@ Folge-Kandidaten:
 
 - Helle Aufnahmen der App für die Bühne, die Karussellbilder und die Download-Seite.
 - `og.jpg` zeigt weiter die dunkle Bühne.
+
+## HUM-361 · Flaky-Test: `a_stalled_streamed_upload_ends_with_limit_004` nimmt den Abbruch nach der Antwort hin
+
+### Kontext
+
+CI-Lauf 41155320737 fiel in `daemon/crates/proxy/tests/limits.rs:1111` mit `readable: Os { code: 104, kind: ConnectionReset }`, der Lauf danach bestand. Zu klären war, ob der Test wettläuft oder der Proxy die Antwort mit `LIMIT_004` verliert.
+
+### Befund
+
+Der Proxy verliert nichts, die Ursache liegt im Test. Im Fall `reads=false` liest das Ziel nicht, darum liegt beim Schließen noch Upload im Empfangspuffer des Proxys. Linux meldet das dem Client auf einem Unix-Socket als `ECONNRESET`, aber erst, wenn dessen Empfangspuffer leer ist. Der Abbruch ersetzt also das Dateiende, nicht die Antwort. `read_to_end` gibt dann den Fehler zurück, obwohl die Antwort schon im Puffer des Tests steht, und `.expect("readable")` wirft sie weg.
+
+Gemessen in einem Linux-Container (aarch64, 2 CPUs, acht parallele Läufe): 6 Fehlschläge in 120 Läufen am unveränderten Test, 7 in 120 am instrumentierten. In allen 7 instrumentierten Fehlschlägen stand die vollständige Antwort da, 306 Bytes mit 105 Bytes Rumpf, dieselbe Länge wie im Gutfall. Ohne parallele Last 0 in 20. Unter macOS 0 in 40, dort tritt der Fehler nicht auf. Warum der Abbruch nur in etwa jedem zwanzigsten Lauf statt des Dateiendes ankommt, ist nicht gemessen.
+
+Der Weg des Agenten läuft über die Brücke des Shims (`daemon/bin/humanitl-shim/src/bridge.rs`). Nach dem Code behandelt `pump` einen Lesefehler wie ein Dateiende: Was gelesen wurde, ist weitergereicht, danach folgt `shutdown(Write)`. Durch die Brücke hindurch gemessen ist das nicht.
+
+### Spezifikation
+
+- Nur der Test ändert sich, der Proxy bleibt. Den Rest des Uploads wegzulesen brächte für den Client nichts und kostete Bandbreite für einen Rumpf, den niemand mehr braucht.
+- `ConnectionReset` wird nur bei `reads=false` hingenommen. Bei `reads=true` ist der Rumpf gelesen, dort bleibt jeder Lesefehler rot.
+- In beiden Fällen, auch nach sauberem Dateiende, muss die Antwort ganz dastehen: `502` und so viele Rumpf-Bytes, wie `Content-Length` zusagt (`answer_is_whole`). Das ist strenger als vorher.
+
+### Akzeptanzkriterien
+
+- 360 Läufe unter derselben Last wie oben: 0 Fehlschläge.
+- Rot ohne Grenze: Mutant ohne `Stall::NoResponseHead` (`reads=true: the proxy gives up on the target`), Mutant ohne `Stall::NotReading` (`reads=false: the proxy gives up on the target`), Mutant ohne `upload_stalled`-Befund (`LIMIT_004 at the flow`).
+- Rot ohne Antwort im Fall mit Abbruch: Mutant mit Panik im Handler bei `Stall::NotReading` und Mutant mit falschem `Content-Length` dort, beide mit leerer Antwort an der `502`-Zusicherung. `a_cut_answer_is_not_whole` hält den Maßstab für gekürzte Antworten fest.
+
+Folge-Kandidaten:
+
+- Dieselbe Form haben weitere `read_to_end` mit `.expect` auf eine vorzeitige Antwort: `limits.rs` (413 und 503) und `Proxy::raw_exchange`. Rot wurden sie hier nicht.
+- `backlog/sprint-3.md` und der Kommentar an `write_refusal` (`core.rs`) sagen, mit dem Abbruch gehe die `503` verloren. Für den Unix-Socket spricht die Messung hier dagegen; die Begründung sollte nachgeprüft werden.
+- `bridge.rs` schließt die TCP-Seite, wenn beide Richtungen fertig sind. Schreibt der Agent dann noch, kann auf TCP ein echtes `RST` entstehen. Ob ihm das die Antwort nimmt, ist nicht geprüft.
