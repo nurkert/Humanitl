@@ -75,24 +75,8 @@ impl Layer {
                 ))
             })?;
         private_dir(&base)?;
-        let stat = rustix::fs::statfs(&base).map_err(|err| {
-            not_possible(&format!(
-                "the file system under {} cannot be inspected ({err})",
-                base.display()
-            ))
-        })?;
-        if check == TmpfsCheck::Require && !is_tmpfs(&stat) {
-            return Err(Diagnostic::builder(SANDBOX_030, Severity::Blocking)
-                .why(format!(
-                    "{} is not on tmpfs, so the upper layer of a disposable sandbox would \
-                     not live in RAM and could outlive the session on disk",
-                    base.display()
-                ))
-                .fix(FixAction::SetEnv {
-                    key: "XDG_RUNTIME_DIR".to_owned(),
-                    value: format!("/run/user/{}", rustix::process::getuid().as_raw()),
-                })
-                .build());
+        if check == TmpfsCheck::Require {
+            require_tmpfs(&base)?;
         }
         let vfs = rustix::fs::statvfs(&base).map_err(|err| {
             not_possible(&format!(
@@ -490,6 +474,44 @@ impl Drop for SizeGuard {
     }
 }
 
+/// Prüft, dass `dir` auf tmpfs liegt, die obere Schicht dort also im
+/// Arbeitsspeicher bliebe (HUM-350).
+///
+/// Gibt es `dir` noch nicht, zählt das nächste Verzeichnis darüber, das es
+/// gibt: Das Laufzeitverzeichnis legt erst die Schicht an, und die Probe vor
+/// dem Start (HUM-357) soll es nicht schon anlegen.
+///
+/// # Errors
+///
+/// `SANDBOX_030`, wenn das Dateisystem kein tmpfs ist oder sich nicht
+/// befragen lässt.
+pub fn require_tmpfs(dir: &Path) -> Result<(), Diagnostic> {
+    let existing = dir
+        .ancestors()
+        .find(|candidate| candidate.exists())
+        .unwrap_or(dir);
+    let stat = rustix::fs::statfs(existing).map_err(|err| {
+        not_possible(&format!(
+            "the file system under {} cannot be inspected ({err})",
+            existing.display()
+        ))
+    })?;
+    if is_tmpfs(&stat) {
+        return Ok(());
+    }
+    Err(Diagnostic::builder(SANDBOX_030, Severity::Blocking)
+        .why(format!(
+            "{} is not on tmpfs, so the upper layer of a disposable sandbox would \
+             not live in RAM and could outlive the session on disk",
+            dir.display()
+        ))
+        .fix(FixAction::SetEnv {
+            key: "XDG_RUNTIME_DIR".to_owned(),
+            value: format!("/run/user/{}", rustix::process::getuid().as_raw()),
+        })
+        .build())
+}
+
 pub(crate) fn is_tmpfs(stat: &rustix::fs::StatFs) -> bool {
     #[allow(clippy::useless_conversion, clippy::unnecessary_fallible_conversions)]
     let kind = u64::try_from(stat.f_type).ok();
@@ -499,8 +521,6 @@ pub(crate) fn is_tmpfs(stat: &rustix::fs::StatFs) -> bool {
 /// Legt ein Verzeichnis `0700` an, wenn es fehlt, und prüft, dass es ein
 /// Verzeichnis dieses Nutzers ohne Rechte für andere ist.
 fn private_dir(path: &Path) -> Result<(), Diagnostic> {
-    use std::os::unix::fs::MetadataExt as _;
-
     match std::fs::DirBuilder::new().mode(0o700).create(path) {
         Ok(()) => {}
         Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -511,6 +531,15 @@ fn private_dir(path: &Path) -> Result<(), Diagnostic> {
             )));
         }
     }
+    check_private(path)
+}
+
+/// Prüft, ohne etwas anzulegen, dass `path` ein Verzeichnis dieses Nutzers
+/// ohne Rechte für andere ist (HUM-350); die Probe vor dem Start fragt es,
+/// wenn es das Verzeichnis schon gibt (HUM-357).
+fn check_private(path: &Path) -> Result<(), Diagnostic> {
+    use std::os::unix::fs::MetadataExt as _;
+
     let meta = std::fs::symlink_metadata(path)
         .map_err(|err| not_possible(&format!("{} cannot be inspected ({err})", path.display())))?;
     let mine = meta.uid() == rustix::process::getuid().as_raw();
@@ -522,6 +551,37 @@ fn private_dir(path: &Path) -> Result<(), Diagnostic> {
         )));
     }
     Ok(())
+}
+
+/// Was [`Layer::create`] am Laufzeitverzeichnis verlangt, nur gelesen
+/// (HUM-357): `dir` (das Verzeichnis der Schichten) liegt auf tmpfs, ist,
+/// wenn es das schon gibt, ein privates Verzeichnis dieses Nutzers, und
+/// sonst lässt sich unter dem nächsten vorhandenen Verzeichnis darüber
+/// anlegen. Legt nichts an und hält keinen Deskriptor.
+///
+/// # Errors
+///
+/// `SANDBOX_030` mit der ersten fehlenden Bedingung.
+pub fn probe_layer_dir(dir: &Path) -> Result<(), Diagnostic> {
+    require_tmpfs(dir)?;
+    if std::fs::symlink_metadata(dir).is_ok() {
+        return check_private(dir);
+    }
+    let existing = dir
+        .ancestors()
+        .find(|candidate| candidate.exists())
+        .unwrap_or(dir);
+    rustix::fs::access(
+        existing,
+        rustix::fs::Access::WRITE_OK | rustix::fs::Access::EXEC_OK,
+    )
+    .map_err(|err| {
+        not_possible(&format!(
+            "{} cannot be created, {} is not writable ({err})",
+            dir.display(),
+            existing.display()
+        ))
+    })
 }
 
 fn not_possible(why: &str) -> Diagnostic {

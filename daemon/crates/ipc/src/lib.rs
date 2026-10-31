@@ -51,7 +51,11 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `26` seit dem Überschreiben je Datei (HUM-351):
+/// `27` seit der Wegwerf-Sandbox als Vorgabe (HUM-357):
+/// `SandboxEvent.Status.sandbox_mode` nennt den Modus, den der nächste Start
+/// bekäme, und `sandbox_mode_notice` den Grund, wenn er von `sandbox.mode`
+/// abweicht; `Start.sandbox_mode` kennt `auto`.
+/// `26` war das Überschreiben je Datei (HUM-351):
 /// `SandboxRequest.ApplyChanges.overwrite_ids` nennt die Kennungen, deren
 /// Konflikt jemand einzeln bestätigt hat; nur diese werden überschrieben,
 /// `overwrite` bleibt für die Kommandozeile und heißt „alle gewählten".
@@ -155,7 +159,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 26;
+pub const PROTO_MINOR: u32 = 27;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

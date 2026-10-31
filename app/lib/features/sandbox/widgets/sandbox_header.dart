@@ -290,10 +290,12 @@ class SandboxStartStop extends ConsumerWidget {
 /// Der Schalter „Wegwerf" vor dem Start (HUM-351).
 ///
 /// Nur bei einem Daemon, der `sandbox.disposable` nennt; auf macOS nennt er
-/// die Fähigkeit nicht, und der Schalter fehlt. Seine Vorgabe ist
-/// `sandbox.mode` aus `GetConfig`; was er wählt, gilt für den nächsten Start
-/// und geht als `Start.sandbox_mode` mit. Solange eine Sandbox steht, ändert
-/// er nichts und ist aus.
+/// die Fähigkeit nicht, und der Schalter fehlt. Seine Vorgabe ist der Modus,
+/// den der Daemon für einen Start ohne Wahl nennt (HUM-357,
+/// [defaultSandboxModeProvider]); was er wählt, gilt für den nächsten Start
+/// und geht als `Start.sandbox_mode` mit, wenn es von der Vorgabe abweicht.
+/// Ist die Vorgabe auf `direct` zurückgefallen, sagt sein Hinweis warum.
+/// Solange eine Sandbox steht, ändert er nichts und ist aus.
 class DisposableSwitch extends ConsumerWidget {
   /// Legt den Schalter für [status] an.
   const DisposableSwitch({required this.status, super.key});
@@ -311,10 +313,19 @@ class DisposableSwitch extends ConsumerWidget {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final SandboxMode mode = ref.watch(nextSandboxModeProvider);
+    // Der Grund steht nur, solange niemand gewählt hat: Wer selbst `direct`
+    // wählt, braucht keine Erklärung, warum es `direct` ist.
+    final Diagnostic? fellBack = ref.watch(sandboxModeChoiceProvider) == null
+        ? status.sandboxModeNotice
+        : null;
     return Padding(
       padding: EdgeInsets.only(right: tokens.spacing.x3),
       child: HoverLabel(
-        label: l10n.sandboxDisposableHint,
+        label: fellBack == null
+            ? l10n.sandboxDisposableHint
+            : l10n.sandboxDisposableFellBack(
+                DiagnosticL10n.resolve(fellBack, l10n).cause,
+              ),
         // Die Zeile des Kopfs gibt keine Breite vor; das Kästchen streckt
         // seine Beschriftung, also misst es sich an ihr.
         child: IntrinsicWidth(

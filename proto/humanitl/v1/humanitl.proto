@@ -1005,8 +1005,10 @@ message SandboxRequest {
     // in jedem `SANDBOX_006` ueber dieses Verzeichnis; ohne Angabe heisst sie
     // "the work_dir of the request". Leer bei leerem `work_dir`.
     WorkDirSource work_dir_source = 8;
-    // `direct` oder `disposable` (HUM-350). Leer heisst: `sandbox.mode` aus
-    // der Konfiguration. Mit `disposable` liegt das Projektverzeichnis nur
+    // `auto`, `direct` oder `disposable` (HUM-350, HUM-357). Leer heisst:
+    // `sandbox.mode` aus der Konfiguration. `auto` faellt auf `direct`
+    // zurueck, wo das System keine Wegwerf-Sandbox kann, und meldet das mit
+    // `SANDBOX_033`; `disposable` lehnt dort mit `SANDBOX_030` ab. Mit `disposable` liegt das Projektverzeichnis nur
     // lesbar unter einer Schicht im Arbeitsspeicher, und nach dem Ende
     // warten die Aenderungen auf `changes`, `apply_changes` oder
     // `discard_changes`.
@@ -1277,6 +1279,18 @@ message SandboxEvent {
     // sich, kommt auf dem Strom des Starts eine neue Momentaufnahme; jeder
     // andere Client liest ihn, wenn er sie holt.
     Diagnostic llm = 15;
+    // Der Modus, den ein Start mit diesem Plan und leerem
+    // `Start.sandbox_mode` bekaeme (HUM-357): `direct` oder `disposable`, nie
+    // `auto`. Der Daemon loest `sandbox.mode` dafuer gegen das auf, was das
+    // System kann. Gilt fuer den naechsten Start, auch waehrend eine Sandbox
+    // laeuft. Leer im Schnappschuss eines Befunds (`failed`) und bei einem
+    // Daemon vor Minor 27.
+    string sandbox_mode = 16;
+    // Warum `sandbox_mode` nicht ist, was `sandbox.mode` verlangt (HUM-357):
+    // `SANDBOX_033`, wenn die Vorgabe `auto` auf `direct` zurueckfaellt, oder
+    // `SANDBOX_030`, wenn ein ausdrueckliches `disposable` hier nicht geht
+    // und der Start ablehnen wird. Fehlt, wenn der Modus gilt wie verlangt.
+    Diagnostic sandbox_mode_notice = 17;
   }
 
   // Eine Zeile aus dem Log der Sandbox.

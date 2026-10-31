@@ -70,6 +70,35 @@ use std::io::Write as _;
 use crate::cli::RunArgs;
 use crate::cmd::{Context, EXIT_CHECK, EXIT_USER, Failure, from_proto, status_diagnostic};
 
+/// Ab dieser Minor kennt der Daemon `auto` in `Start.sandbox_mode`
+/// (HUM-357).
+const AUTO_MODE_MINOR: u32 = 27;
+
+/// `Start.sandbox_mode` dieses Laufs (HUM-350, HUM-357): `--disposable` oder
+/// `--direct` für diesen einen Lauf, sonst `sandbox.mode` der Konfiguration,
+/// wie dieser Aufruf sie auflöst. Die Auflösung von `auto` gegen das System
+/// macht der Daemon; ein Daemon vor Minor 27 kennt das Wort nicht und bekommt
+/// ein leeres Feld, also seine eigene Konfiguration, die dort `direct` oder
+/// `disposable` sein kann, aber nie `auto`.
+fn start_mode(
+    args: &RunArgs,
+    configured: humanitl_config::SandboxMode,
+    daemon_minor: u32,
+) -> String {
+    use humanitl_config::SandboxMode;
+    let mode = if args.disposable {
+        SandboxMode::Disposable
+    } else if args.direct {
+        SandboxMode::Direct
+    } else {
+        configured
+    };
+    if mode == SandboxMode::Auto && daemon_minor < AUTO_MODE_MINOR {
+        return String::new();
+    }
+    mode.as_str().to_owned()
+}
+
 /// Führt `humanitl run` aus.
 ///
 /// # Errors
@@ -120,15 +149,7 @@ pub async fn run(ctx: &Context, args: &RunArgs) -> Result<u8, Failure> {
         ask_mode: ask_mode_name(config.hold.ask_mode).to_owned(),
         cli_overrides: session_overrides(ctx),
         work_dir_source: Some(humanitl_ipc::work_dir::source_to_proto(&work_dir_source)),
-        // `--disposable` for this run, otherwise what the configuration says
-        // (HUM-350).
-        sandbox_mode: if args.disposable {
-            humanitl_config::SandboxMode::Disposable
-        } else {
-            config.sandbox.mode
-        }
-        .as_str()
-        .to_owned(),
+        sandbox_mode: start_mode(args, config.sandbox.mode, info.proto_minor),
     };
 
     let session = json!({
@@ -1055,7 +1076,7 @@ mod tests {
 
     use super::{
         Config, attaches, chain, check_line, inline_rules, refusal_summary, refuse_terminal_ask,
-        session_lines, signal_stops_session, state_name,
+        session_lines, signal_stops_session, start_mode, state_name,
     };
     use crate::cli::RunArgs;
     use crate::cmd::{EXIT_CHECK, EXIT_USER};
@@ -1068,10 +1089,12 @@ mod tests {
         let bash = RunArgs {
             cmd: vec![std::ffi::OsString::from("bash")],
             disposable: false,
+            direct: false,
         };
         let agent = RunArgs {
             cmd: Vec::new(),
             disposable: false,
+            direct: false,
         };
         assert!(attaches(&bash, false, false, true));
         assert!(!attaches(&bash, false, false, false), "no terminal");
@@ -1143,6 +1166,7 @@ mod tests {
             &RunArgs {
                 cmd: Vec::new(),
                 disposable: false,
+                direct: false,
             },
         );
 
@@ -1169,6 +1193,7 @@ mod tests {
         RunArgs {
             cmd: Vec::new(),
             disposable: false,
+            direct: false,
         }
     }
 
@@ -1229,6 +1254,7 @@ mod tests {
             let args = RunArgs {
                 cmd: vec![std::ffi::OsString::from(own)],
                 disposable: false,
+                direct: false,
             };
             assert!(
                 refuse_terminal_ask(&config, &args, true).is_ok(),
@@ -1242,6 +1268,7 @@ mod tests {
                 std::ffi::OsString::from("opencode"),
             ],
             disposable: false,
+            direct: false,
         };
         assert!(refuse_terminal_ask(&config, &shell, true).is_ok());
     }
@@ -1264,6 +1291,7 @@ mod tests {
                 let args = RunArgs {
                     cmd,
                     disposable: false,
+                    direct: false,
                 };
                 let failure = refuse_terminal_ask(&config, &args, true)
                     .expect_err(&format!("{named} draws the whole screen"));
@@ -1282,6 +1310,7 @@ mod tests {
         let args = RunArgs {
             cmd: vec![std::ffi::OsString::from("/opt/bin/mycode")],
             disposable: false,
+            direct: false,
         };
         let failure =
             refuse_terminal_ask(&config, &args, true).expect_err("mycode is the agent here");
@@ -1291,6 +1320,7 @@ mod tests {
         let other = RunArgs {
             cmd: vec![std::ffi::OsString::from("bash")],
             disposable: false,
+            direct: false,
         };
         assert!(refuse_terminal_ask(&config, &other, true).is_ok());
     }
@@ -1371,5 +1401,44 @@ mod tests {
         assert!(SESSION_OVERRIDE_KEYS.contains(&"llm.endpoint"));
         assert!(SESSION_OVERRIDE_KEYS.contains(&"hold.timeout_secs"));
         assert!(!SESSION_OVERRIDE_KEYS.contains(&"sandbox.profile"));
+    }
+
+    /// `humanitl run` follows `sandbox.mode`, by default `auto`; `--disposable`
+    /// and `--direct` decide for one run. A daemon before minor 27 does not
+    /// know `auto` and gets an empty field (HUM-357).
+    #[test]
+    fn the_start_mode_follows_the_flags_then_the_configuration() {
+        use humanitl_config::SandboxMode;
+        let args = |disposable: bool, direct: bool| RunArgs {
+            cmd: Vec::new(),
+            disposable,
+            direct,
+        };
+        assert_eq!(
+            start_mode(&args(false, false), SandboxMode::Auto, 27),
+            "auto"
+        );
+        assert_eq!(start_mode(&args(false, false), SandboxMode::Auto, 26), "");
+        assert_eq!(
+            start_mode(&args(false, false), SandboxMode::Direct, 27),
+            "direct"
+        );
+        assert_eq!(
+            start_mode(&args(false, false), SandboxMode::Disposable, 26),
+            "disposable"
+        );
+        assert_eq!(
+            start_mode(&args(true, false), SandboxMode::Direct, 27),
+            "disposable"
+        );
+        assert_eq!(
+            start_mode(&args(false, true), SandboxMode::Auto, 27),
+            "direct"
+        );
+        assert_eq!(
+            start_mode(&args(false, true), SandboxMode::Disposable, 26),
+            "direct"
+        );
+        assert_eq!(SandboxMode::default(), SandboxMode::Auto);
     }
 }

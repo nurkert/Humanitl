@@ -991,6 +991,27 @@ fn a_disposable_change_keeps_its_shape() {
         named_field("SandboxRequest.Start", "sandbox_mode").number(),
         9
     );
+    // Die Wegwerf-Sandbox als Vorgabe (HUM-357): Die Momentaufnahme nennt
+    // den aufgelösten Modus und den Grund einer Abweichung.
+    let status = message("SandboxEvent.Status");
+    assert!(
+        status
+            .field
+            .iter()
+            .any(|field| field.name() == "sandbox_mode"
+                && field.number() == 16
+                && field.r#type() == Type::String),
+        "SandboxEvent.Status names the resolved mode in field 16"
+    );
+    assert!(
+        status
+            .field
+            .iter()
+            .any(|field| field.name() == "sandbox_mode_notice"
+                && field.number() == 17
+                && field.type_name() == ".humanitl.v1.Diagnostic"),
+        "SandboxEvent.Status carries the reason of a fallback in field 17"
+    );
     // Überschreiben je Datei (HUM-351): `overwrite_ids` neben dem alten
     // Schalter, nicht an seiner Stelle.
     assert_eq!(

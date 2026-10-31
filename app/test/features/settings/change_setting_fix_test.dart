@@ -30,7 +30,11 @@ Diagnostic llm002({String key = FormKeys.llmApiKeyRef}) => Diagnostic(
 );
 
 FakeDaemonClient needsKey({String key = FormKeys.llmApiKeyRef}) =>
-    FakeDaemonClient()
+    // Die Zeile `sandbox.mode` steht nur bei einem Daemon, der
+    // `sandbox.disposable` nennt (HUM-357).
+    (key == FormKeys.sandboxMode
+          ? FakeDaemonClient(info: FakeDaemonClient.disposableInfo)
+          : FakeDaemonClient())
       ..llmProbeFailure = llm002(key: key)
       ..configValues = const ConfigValues(
         values: <String, Object?>{
@@ -99,6 +103,7 @@ const Map<String, Key> fieldOf = <String, Key>{
   FormKeys.tlsTrustSystemStore: Key('settings-trust-system-store'),
   FormKeys.agentAdapter: Key('settings-agent'),
   FormKeys.llmApiKeyRef: Key('settings-key-input'),
+  FormKeys.sandboxMode: Key('settings-sandbox-mode'),
 };
 
 void main() {

@@ -241,11 +241,38 @@ command only watches the output until the shell ends.
 
 ### A disposable session
 
-`humanitl run --disposable` (or `sandbox.mode = "disposable"` in
-`config.toml`) keeps the project folder untouched while the agent works. The
-folder lies read-only under a layer in RAM; the agent sees and changes `/work`
-as usual, and every change goes to that layer (HUM-350, `docs/SECURITY.md`
-section 5.2). When the agent ends, `run` says how many changes wait:
+`humanitl run` keeps the project folder untouched while the agent works,
+wherever the system allows it: `sandbox.mode` defaults to `auto`, which the
+daemon resolves to a disposable sandbox on Linux with bubblewrap 0.11 or
+newer, a runtime directory on tmpfs and the project mounted writable
+(HUM-357). The folder lies read-only under a layer in RAM; the agent sees and
+changes `/work` as usual, and every change goes to that layer (HUM-350,
+`docs/SECURITY.md` section 5.2). When the agent ends, `run` says how many
+changes wait.
+
+Where one of these conditions is missing, `auto` runs direct, as before
+HUM-350: the agent writes to the project folder, and the start says so with
+the warning `SANDBOX_033`, which names the cause and its fix, for example:
+
+```text
+warning[SANDBOX_033]: Disposable sandbox not available, running direct
+  why: /usr/bin/bwrap is bubblewrap 0.9.0; a disposable sandbox needs --overlay, which came with bubblewrap 0.11.0; sandbox.mode is auto, so this run writes to the project folder directly. Fix the cause for a disposable sandbox, or set sandbox.mode = "direct" to silence this
+  fix: …
+```
+
+An explicit choice never falls back: `--disposable` or `sandbox.mode =
+"disposable"` refuses such a start with `SANDBOX_030` instead of writing to
+the folder. `--direct` or `sandbox.mode = "direct"` lets the agent write to
+the folder directly without a notice. On macOS there is no disposable
+sandbox; `auto` runs direct there without a notice, and `disposable` refuses.
+
+```text
+$ humanitl run              # disposable where the system allows it
+$ humanitl run --direct     # this run writes to the project folder
+$ humanitl run --disposable # disposable or nothing
+```
+
+The changes wait for a decision:
 
 ```text
 $ humanitl sandbox changes
@@ -272,8 +299,14 @@ conflict and needs `--overwrite`, and a symbolic link out of the project, a
 device, a FIFO or a socket is never written. setuid and setgid bits are
 dropped. A new disposable run waits until the changes of the last one are
 applied or discarded (`SANDBOX_030`); a run whose layer grows over its cap in
-RAM is stopped (`SANDBOX_032`). `humanitl sandbox run --disposable` keeps no
-layer after it ends: it lists the changes and drops them.
+RAM is stopped (`SANDBOX_032`); this holds for the default `auto` as well, so
+a run with changes still waiting asks for `humanitl sandbox changes` first or
+for `--direct`. A disposable run that changed nothing leaves nothing waiting. `humanitl sandbox run --disposable` keeps no layer after it
+ends: it lists the changes and drops them. For that reason `sandbox run`
+treats the default `auto` as direct and runs disposable only with
+`--disposable` or an explicit `sandbox.mode = "disposable"` (`--direct`
+overrides the latter); its callers, the escape suite and the demos, read
+their results from `/work`.
 
 ### Terminal, input and signals
 

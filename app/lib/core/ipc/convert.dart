@@ -671,6 +671,12 @@ extension SandboxStatusToDomain on pb.SandboxEvent_Status {
     agentRunning: agentRunning,
     refusals: hasRefusals() ? refusals.toDomain() : null,
     llmDiagnostic: hasLlm() ? llm.toDomain() : null,
+    effectiveSandboxMode: sandboxMode.isEmpty
+        ? null
+        : SandboxMode.fromWire(sandboxMode),
+    sandboxModeNotice: hasSandboxModeNotice()
+        ? sandboxModeNotice.toDomain()
+        : null,
   );
 }
 

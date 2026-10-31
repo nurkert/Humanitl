@@ -792,7 +792,34 @@ The disposable sandbox is Linux-only for now: it needs the overlay of bubblewrap
 a disposable start is refused with `SANDBOX_030`, the daemon does not advertise
 `sandbox.disposable`, and `changes`, `apply` and `discard` answer with the same finding.
 
-With `sandbox.mode = "disposable"` (`humanitl run --disposable`) the agent writes nothing to the
+**Who gets it (HUM-357).** It is the default where the system allows it: `sandbox.mode` defaults
+to `auto`, and the daemon resolves `auto` to a disposable sandbox when bubblewrap is 0.11 or
+newer and not installed setuid, the kernel is Linux 5.11 or newer (unprivileged overlayfs), the
+runtime directory is on tmpfs with a private layer directory (or one that can be created), and
+the project is mounted writable. The probe only reads and creates nothing. Should the overlay
+setup still fail before bubblewrap starts, `auto` falls back the same way with the real reason;
+once the sandbox has started, nothing falls back any more. When one of these is missing, `auto`
+runs **direct**, exactly as before HUM-350: the agent writes to the project
+folder, and none of the protections below apply. The start says so with the warning
+`SANDBOX_033`, which names the missing condition and its fix; the app shows the same reason at the
+switch and in Settings, and the snapshot of the sandbox names the mode the next start gets
+(`SandboxEvent.Status.sandbox_mode`). Only the default falls back. An explicit choice,
+`sandbox.mode = "disposable"`, `humanitl run --disposable` or the switch in the app, refuses
+such a start with `SANDBOX_030` and never writes to the folder. The distinction lives in the value,
+not in the knowledge of which layer set it: `auto` is the default and may fall back, `disposable`
+never does. A project profile cannot set `sandbox.mode` at all (CONVENTIONS 4.11), so a cloned
+repository can neither switch back to direct nor turn an explicit `disposable` into `auto`. On
+macOS `auto` is direct without a notice, because the mode does not exist there. While changes of
+an earlier disposable run wait, every start except an explicit `direct` is refused
+(`SANDBOX_030`), checked before the mode is resolved, so a default that would fall back never
+writes directly under changes nobody has looked at; the snapshot names that refusal. A disposable
+run that changed nothing leaves nothing waiting: its layer is removed at once and the recording
+says `no_changes`. That holds only for a complete scan: any directory of the layer or of the
+project that cannot be read (a project folder with mode `030` under an opaque directory hides
+its deletions) marks the list incomplete, and the layer waits for review as before.
+`humanitl sandbox run`, which keeps no layer after it ends, treats `auto` as direct.
+
+With a disposable start the agent writes nothing to the
 project folder while it runs. The folder is the read-only lower layer of an overlay at `/work`;
 every change goes to an upper layer the daemon creates before the start under
 `$XDG_RUNTIME_DIR/humanitl/disposable/<id>/` (mode `0700`, on tmpfs, so in RAM; the start is
@@ -1442,3 +1469,4 @@ the binaries inside the disk image.
 
 | 0.1.0 | The disposable sandbox: the project folder as the read-only lower layer of an overlay, the upper layer in RAM under the runtime directory with a size cap, `mounts.extra_rw` read-only; changes are written back only on apply, never through a symlink, never as a symlink out of the project, a device or with setuid bits, and never over a file the human changed since the start without `--overwrite` (HUM-350, K-24). |
 | 0.1.0 | The changes panel of the app: a conflict is overwritten only when it was confirmed for exactly that change (`ApplyChanges.overwrite_ids`); a conflict that appears after the selection stops the apply (HUM-351, K-24). |
+| 0.1.0 | The disposable sandbox is the default where the system allows it: `sandbox.mode = "auto"` resolves to disposable with bubblewrap 0.11 or newer, a runtime directory on tmpfs and a writable project, and otherwise runs direct, as before, with the warning `SANDBOX_033`; an explicit `disposable` still refuses with `SANDBOX_030` and never falls back (HUM-357, K-24). |

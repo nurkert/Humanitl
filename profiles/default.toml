@@ -38,6 +38,7 @@ description = "Ask for everything no rule decides. Full moderation with the desk
 # [config.sandbox]
 # profile = "default"        # die Datei profiles/sandbox/default.toml
 # work_mode = "rw"           # ro | rw
+# mode = "auto"              # auto | direct | disposable (HUM-357)
 
 # [config.agent]
 # adapter = "opencode"

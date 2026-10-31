@@ -11,6 +11,7 @@ import '../../core/domain/domain.dart';
 import '../../core/ipc/config_providers.dart';
 import '../../core/ipc/flow_handoff.dart';
 import '../../core/ipc/flow_reveal.dart';
+import '../../core/ipc/sandbox_mode_feed.dart';
 import '../../core/shortcuts/intents.dart';
 import '../../core/ui/h_notice_layer.dart';
 import '../../core/ui/settings_opener.dart';
@@ -118,6 +119,39 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
       (String? _, String? workDir) {
         if (workDir != null) {
           ref.read(sandboxStatusProvider.notifier).storedWorkDirRead(workDir);
+        }
+      },
+      fireImmediately: true,
+    );
+    // Was der Daemon aus `sandbox.mode` macht, steht in der Momentaufnahme;
+    // die Einstellungen lesen es aus dem Kern, und ein geschriebener Modus
+    // holt eine neue Momentaufnahme (HUM-357). Dasselbe Muster wie für den
+    // Ordner: Kein Feature importiert ein anderes.
+    // Erst nach dem ersten Frame: Der Zuhörer baut die Momentaufnahme, und
+    // Riverpod verbietet, einen Provider während des Baus zu ändern.
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      if (!mounted) {
+        return;
+      }
+      ref.listenManual<SandboxModeResolution>(
+        sandboxStatusProvider.select(
+          (AsyncValue<SandboxStatus> status) => SandboxModeResolution(
+            mode: status.value?.effectiveSandboxMode,
+            notice: status.value?.sandboxModeNotice,
+          ),
+        ),
+        (SandboxModeResolution? _, SandboxModeResolution resolved) =>
+            ref.read(resolvedSandboxModeProvider.notifier).set(resolved),
+        fireImmediately: true,
+      );
+    });
+    ref.listenManual<String?>(
+      configProvider.select(
+        (AsyncValue<ConfigValues> config) => config.value?.sandboxModeSetting,
+      ),
+      (String? _, String? mode) {
+        if (mode != null) {
+          ref.read(sandboxStatusProvider.notifier).storedModeRead(mode);
         }
       },
       fireImmediately: true,

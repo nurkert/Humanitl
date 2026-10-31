@@ -42,6 +42,7 @@ import '../../../core/ipc/config_providers.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/daemon_client.dart';
 import '../../../core/text/sanitize_diagnostic.dart';
+import 'sandbox_status_provider.dart';
 
 part 'disposable_review.g.dart';
 
@@ -576,7 +577,10 @@ class DisposableReviewNotifier extends _$DisposableReviewNotifier {
 /// Null heißt: `Start.sandbox_mode` bleibt leer, und der Daemon nimmt
 /// `sandbox.mode` aus seiner Konfiguration, denselben Wert, den der Schalter
 /// dann anzeigt. So schickt ein Start nie einen Wert, den der Mensch nicht
-/// gewählt hat und der Daemon nicht ohnehin nähme.
+/// gewählt hat und der Daemon nicht ohnehin nähme. Eine Wahl, die der
+/// Vorgabe gleicht ([defaultSandboxModeProvider]), geht ebenfalls nicht mit
+/// (HUM-357): Sonst würde aus der Vorgabe `auto`, die auf `direct`
+/// zurückfallen darf, ein ausdrückliches `disposable`, das ablehnt.
 @Riverpod(keepAlive: true)
 class SandboxModeChoice extends _$SandboxModeChoice {
   @override
@@ -586,8 +590,29 @@ class SandboxModeChoice extends _$SandboxModeChoice {
   void choose(SandboxMode mode) => state = mode;
 }
 
+/// Der Modus, den ein Start ohne Wahl des Schalters bekommt (HUM-357): ein
+/// ausdrückliches `sandbox.mode` aus `GetConfig`, sonst, für die Vorgabe
+/// `auto`, was der Daemon daraus für dieses System macht
+/// (`SandboxStatus.effectiveSandboxMode`), sonst `direct`.
+///
+/// Der ausdrückliche Wert geht vor die Momentaufnahme, weil diese erst beim
+/// nächsten Plan nachzieht: Wer im Formular gerade `direct` gewählt hat, sieht
+/// den Schalter sofort aus. Über `auto` entscheidet allein der Daemon; die App
+/// rät nicht, ob das System ein Overlay kann (ADR-018).
+@Riverpod(keepAlive: true)
+SandboxMode defaultSandboxMode(Ref ref) => sandboxModeDefault(
+  ref.watch(configProvider).value,
+  ref.watch(sandboxStatusProvider).value,
+);
+
+/// Die Regel von [defaultSandboxModeProvider] für einen Leser, der den
+/// Provider nicht beobachten darf: der Start selbst, dessen Zustand die
+/// Momentaufnahme ist.
+SandboxMode sandboxModeDefault(ConfigValues? config, SandboxStatus? status) =>
+    config?.sandboxMode ?? status?.effectiveSandboxMode ?? SandboxMode.direct;
+
 /// Der Modus, mit dem der nächste Start läuft: die Wahl des Schalters, sonst
-/// `sandbox.mode` aus `GetConfig`, sonst `direct` (HUM-351).
+/// [defaultSandboxModeProvider] (HUM-351, HUM-357).
 ///
 /// Der Daemon lehnt nur einen Wegwerf-Start ab, solange Änderungen warten
 /// (`SANDBOX_030`); ein direkter Start geht. Die Startknöpfe sperren deshalb
@@ -595,8 +620,7 @@ class SandboxModeChoice extends _$SandboxModeChoice {
 @Riverpod(keepAlive: true)
 SandboxMode nextSandboxMode(Ref ref) =>
     ref.watch(sandboxModeChoiceProvider) ??
-    ref.watch(configProvider).value?.sandboxMode ??
-    SandboxMode.direct;
+    ref.watch(defaultSandboxModeProvider);
 
 /// Ob der Daemon eine Bestätigung je Datei kennt (`ApplyChanges.overwrite_ids`,
 /// Minor 26, HUM-351).

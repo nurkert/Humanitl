@@ -1368,6 +1368,59 @@ fn plan_of_a_disposable_sandbox_needs_overlay_support_and_a_writable_view() {
     assert!(err.why.contains("read-only"), "{}", err.why);
 }
 
+/// Die Probe, gegen die `sandbox.mode = "auto"` auflöst (HUM-357): dieselben
+/// Bedingungen wie der Plan einer Wegwerf-Sandbox, ohne Schicht und ohne
+/// etwas anzulegen, und jede fehlende mit ihrem eigenen Satz.
+#[test]
+fn the_disposable_probe_names_each_missing_condition() {
+    let fx = fixture();
+    let ctx = fx.context(&["true"]);
+    let shm = Path::new("/dev/shm");
+    let on_tmpfs = rustix::fs::statfs(shm)
+        .is_ok_and(|stat| u64::try_from(stat.f_type).ok() == Some(0x0102_1994));
+    if on_tmpfs {
+        fx.unchecked()
+            .disposable_support(&profile("default"), &ctx, shm)
+            .expect("bubblewrap 0.11, rw and a tmpfs runtime directory");
+    } else {
+        eprintln!("/dev/shm is not tmpfs here; the positive case is skipped");
+    }
+
+    let old = BwrapBackend::unchecked("/usr/bin/bwrap", Version(0, 9, 0), fx.paths.clone());
+    let err = old
+        .disposable_support(&profile("default"), &ctx, shm)
+        .expect_err("0.9 has no --overlay");
+    assert_eq!(err.code.as_str(), "SANDBOX_030");
+    assert!(err.why.contains("bubblewrap 0.9.0"), "{}", err.why);
+
+    let mut ro = fx.context(&["true"]);
+    ro.work_mode = WorkMode::Ro;
+    let err = fx
+        .unchecked()
+        .disposable_support(&profile("default"), &ro, shm)
+        .expect_err("read-only project");
+    assert_eq!(err.code.as_str(), "SANDBOX_030");
+    assert!(err.why.contains("read-only"), "{}", err.why);
+
+    // Ein Laufzeitverzeichnis auf der Platte, das es noch nicht gibt: Die
+    // Probe fragt das nächste vorhandene Verzeichnis darüber und legt nichts an.
+    let disk = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("hum357-runtime-{}", std::process::id()));
+    let disk_is_tmpfs = rustix::fs::statfs(Path::new(env!("CARGO_TARGET_TMPDIR")))
+        .is_ok_and(|stat| u64::try_from(stat.f_type).ok() == Some(0x0102_1994));
+    if disk_is_tmpfs {
+        eprintln!("the target directory is on tmpfs here; the disk case is skipped");
+        return;
+    }
+    let err = fx
+        .unchecked()
+        .disposable_support(&profile("default"), &ctx, &disk)
+        .expect_err("a runtime directory on disk");
+    assert_eq!(err.code.as_str(), "SANDBOX_030");
+    assert!(err.why.contains("not on tmpfs"), "{}", err.why);
+    assert!(!disk.exists(), "the probe created the runtime directory");
+}
+
 /// Der Kern der Wegwerf-Sandbox mit echtem `bwrap`: Was der Agent schreibt,
 /// ändert, löscht und als Symlink anlegt, erreicht das Projekt nicht; der
 /// Diff nach dem Ende zeigt es, die Übernahme schreibt es (ohne den Symlink
