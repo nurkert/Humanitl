@@ -60,6 +60,11 @@ pub struct ConnectionContext {
     /// CGNAT). In M1 ein Test-Hook; später setzt ihn die
     /// LLM-Passthrough-Regel (`backlog/CONVENTIONS.md` 4.10).
     pub allow_private: bool,
+    /// Der Tunnel trägt Klartext-HTTP statt TLS (HUM-364): `CONNECT` zu einem
+    /// `http://`-Ziel, wie ihn undici mit `proxyTunnel` schickt. Es gibt dann
+    /// keinen Handschlag und keine SNI; `Host` und Tunnelziel müssen trotzdem
+    /// dasselbe sein.
+    pub cleartext: bool,
 }
 
 /// Der bisherige Name des Verbindungskontexts (HUM-015).
@@ -75,6 +80,7 @@ impl ConnectionContext {
             sni: None,
             client_addr: None,
             allow_private: false,
+            cleartext: false,
         }
     }
 
@@ -84,6 +90,19 @@ impl ConnectionContext {
         Self {
             connect_target: Some(target),
             sni,
+            // Auch ein `CONNECT` in einem Klartext-Tunnel endet in TLS.
+            cleartext: false,
+            ..self.clone()
+        }
+    }
+
+    /// Der Kontext eines Tunnels, in dem Klartext-HTTP steht (HUM-364).
+    #[must_use]
+    pub fn cleartext_tunnel(&self, target: Authority) -> Self {
+        Self {
+            connect_target: Some(target),
+            sni: None,
+            cleartext: true,
             ..self.clone()
         }
     }
@@ -92,7 +111,7 @@ impl ConnectionContext {
     /// auf ihr TLS terminiert hat.
     #[must_use]
     pub const fn is_tunnel(&self) -> bool {
-        self.connect_target.is_some()
+        self.connect_target.is_some() && !self.cleartext
     }
 }
 
@@ -167,18 +186,19 @@ impl AuthorityRefusal {
 ///
 /// Die Reihenfolge ist die aus `backlog/sprint-2.md` HUM-023:
 ///
-/// 1. Das Schema muss zur Verbindung passen: In einem Tunnel ist es `https`,
-///    ohne Tunnel `http`. `http` im Tunnel wäre eine Herabstufung auf
-///    Klartext, `https` ohne Tunnel überspränge die SNI-Prüfung; beides ist
+/// 1. Das Schema muss zur Verbindung passen: In einem TLS-Tunnel ist es
+///    `https`, ohne TLS `http`. `http` im TLS-Tunnel wäre eine Herabstufung
+///    auf Klartext, `https` ohne TLS überspränge die SNI-Prüfung; beides ist
 ///    ein Widerspruch.
 /// 2. `A` ist die Authority der Anfrage: bei HTTP/2 `:authority`, bei
 ///    HTTP/1.1 der `Host`-Kopf, der dort Pflicht ist. Trägt die Anfragezeile
 ///    eine Absolut-Form, muss deren Host dem `Host`-Kopf gleichen. Mehr als
 ///    ein `Host` ist ein Widerspruch mit sich selbst.
-/// 3. Fehlt `A` der Port, gilt der Standardport des Schemas: 443 im Tunnel,
-///    sonst 80.
-/// 4. Im Tunnel zu `C` muss `A == C` sein, und die SNI muss `C.host` sein.
-///    Fehlt die SNI und ist `C.host` ein DNS-Name, ist das ein Mismatch.
+/// 3. Fehlt `A` der Port, gilt der Standardport des Schemas: 443 im
+///    TLS-Tunnel, sonst 80.
+/// 4. Im Tunnel zu `C` muss `A == C` sein. Im TLS-Tunnel muss zudem die SNI
+///    `C.host` sein; fehlt sie und ist `C.host` ein DNS-Name, ist das ein
+///    Mismatch.
 /// 5. Ohne Tunnel ist `A` maßgeblich, das Schema `http`.
 ///
 /// # Errors
@@ -198,18 +218,18 @@ pub fn check_authority<B>(
 
 /// Schritt 1: Das Schema der Anfrage muss das der Verbindung sein.
 ///
-/// Der Weg nach draußen hat genau zwei Formen. `http://` geht im Klartext an
-/// den Proxy, `https://` geht durch ein `CONNECT`, das der Proxy mit TLS
-/// terminiert. Jede andere Paarung ist ein Widerspruch, und beide Richtungen
-/// sind gefährlich:
+/// Der Weg nach draußen hat zwei Formen. `http://` geht im Klartext an den
+/// Proxy, direkt oder durch einen Klartext-Tunnel (HUM-364), `https://` geht
+/// durch ein `CONNECT`, das der Proxy mit TLS terminiert. Jede andere Paarung
+/// ist ein Widerspruch, und beide Richtungen sind gefährlich:
 ///
-/// - `http://` **im Tunnel** wäre eine Herabstufung. Der Client hat einen
+/// - `http://` **im TLS-Tunnel** wäre eine Herabstufung. Der Client hat einen
 ///   TLS-Tunnel aufgebaut, die Anfrage darin verlangt aber Klartext; der
 ///   Weiterleiter richtet sich nach dem Schema der Anfrage
 ///   ([`Scheme::is_secure`]) und schickte sie unverschlüsselt hinaus. Aus
 ///   einem `CONNECT` würde so ein Klartext-Egress, den niemand freigegeben
 ///   hat.
-/// - `https://` **ohne Tunnel** würde die SNI-Prüfung überspringen. Es gäbe
+/// - `https://` **ohne TLS** würde die SNI-Prüfung überspringen. Es gäbe
 ///   keinen Handschlag zum Vergleichen, und der Proxy müsste TLS selbst
 ///   aufbauen, ohne dass ein `CONNECT` das Ziel genannt hätte. Der einzige Weg
 ///   zu `https` ist deshalb das `CONNECT` (`backlog/sprint-2.md` HUM-023,
@@ -232,6 +252,13 @@ fn check_scheme(ctx: &ConnectionContext, uri: &http::Uri) -> Result<Scheme, Auth
             "the request line names scheme {named} inside a tunnel that carries {connection}; \
              a request that asks for cleartext inside a TLS tunnel would leave the proxy \
              unencrypted",
+            named = named.as_str(),
+            connection = connection.as_str(),
+        )
+    } else if ctx.cleartext {
+        format!(
+            "the request line names scheme {named} inside a tunnel that carries {connection}; \
+             this tunnel had no TLS handshake to compare the target against",
             named = named.as_str(),
             connection = connection.as_str(),
         )
@@ -352,6 +379,10 @@ fn check_tunnel(
             ),
             None,
         ));
+    }
+    // Ohne TLS gibt es keinen Handschlag, dessen Name zu vergleichen wäre.
+    if ctx.cleartext {
+        return Ok(());
     }
     match &ctx.sni {
         Some(sni) if *sni != target.host => Err(refuse(
@@ -481,6 +512,39 @@ mod tests {
             AuthorityError::Mismatch(refusal) => &refusal.why,
             AuthorityError::NoTarget(why) => why,
         }
+    }
+
+    #[test]
+    fn a_tls_tunnel_inside_a_cleartext_tunnel_keeps_its_sni_check() {
+        let ctx = ConnectionContext::plain(SessionId::new())
+            .cleartext_tunnel(authority("llm.local", 8080))
+            .tunnel(authority("github.com", 443), Some(dns("evil.io")));
+        let req = request("/", &[("host", "github.com")]);
+        assert!(matches!(
+            check_authority(&ctx, &req),
+            Err(AuthorityError::Mismatch(_))
+        ));
+    }
+
+    #[test]
+    fn a_cleartext_tunnel_carries_http_and_holds_the_host_to_its_target() {
+        let ctx = ConnectionContext::plain(SessionId::new())
+            .cleartext_tunnel(authority("llm.local", 8080));
+        let req = request("/v1/models", &[("host", "llm.local:8080")]);
+        let target = check_authority(&ctx, &req).unwrap();
+        assert_eq!(target.scheme, Scheme::Http);
+        assert_eq!(target.authority, authority("llm.local", 8080));
+
+        let forged = request("/v1/models", &[("host", "evil.io")]);
+        assert!(matches!(
+            check_authority(&ctx, &forged),
+            Err(AuthorityError::Mismatch(_))
+        ));
+        let secure = request("https://llm.local:8080/", &[("host", "llm.local:8080")]);
+        assert!(matches!(
+            check_authority(&ctx, &secure),
+            Err(AuthorityError::Mismatch(_))
+        ));
     }
 
     #[test]

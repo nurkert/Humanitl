@@ -745,6 +745,27 @@ impl Proxy {
         text
     }
 
+    /// `CONNECT host:port`, dann [`request`](Self) im Klartext durch den Tunnel,
+    /// wie undici mit `proxyTunnel` zu einem `http://`-Ziel (HUM-364).
+    pub async fn cleartext_tunnel(&self, target: &str, request: &str) -> String {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let mut stream = UnixStream::connect(&self.socket).await.unwrap();
+        let connect = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n");
+        stream.write_all(connect.as_bytes()).await.unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            let byte = tokio::time::timeout(WAIT, stream.read_u8()).await;
+            head.push(byte.unwrap().unwrap());
+        }
+        assert!(head.starts_with(b"HTTP/1.1 200"), "{head:?}");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = Vec::new();
+        let read = tokio::time::timeout(WAIT, stream.read_to_end(&mut answer)).await;
+        read.unwrap().unwrap();
+        String::from_utf8_lossy(&answer).into_owned()
+    }
+
     /// `CONNECT host:port`, dann TLS gegen den Proxy (der Client vertraut nur
     /// der Test-CA und bietet `h2` und `http/1.1`), dann HTTP/1.1 im Tunnel.
     pub async fn tls_client(&self, host: &str, port: u16) -> TlsClient {

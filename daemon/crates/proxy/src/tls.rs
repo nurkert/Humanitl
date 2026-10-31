@@ -24,13 +24,74 @@
 //! wird serverseitig verglichen.
 
 use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use humanitl_core::HostName;
 use rustls::ServerConfig;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
+
+/// Ob das erste Byte eines Tunnels eine HTTP-Anfrage beginnt (HUM-364).
+///
+/// Methoden sind Großbuchstaben, ein TLS-Handschlag beginnt mit `0x16`. Alles
+/// andere bleibt beim Handschlag, damit dessen Scheitern sichtbar wird wie
+/// bisher.
+#[must_use]
+pub const fn starts_http(first: u8) -> bool {
+    first.is_ascii_uppercase()
+}
+
+/// Ein Strom, von dem das erste Byte schon gelesen wurde und der es beim
+/// nächsten Lesen zurückgibt (HUM-364).
+#[derive(Debug)]
+pub struct Rewound<I> {
+    first: Option<u8>,
+    inner: I,
+}
+
+impl<I> Rewound<I> {
+    /// Hängt [`first`](Self) wieder vor [`inner`](Self).
+    pub const fn new(first: Option<u8>, inner: I) -> Self {
+        Self { first, inner }
+    }
+}
+
+impl<I: AsyncRead + Unpin> AsyncRead for Rewound<I> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if buf.remaining() > 0
+            && let Some(first) = self.first.take()
+        {
+            buf.put_slice(&[first]);
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<I: AsyncWrite + Unpin> AsyncWrite for Rewound<I> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
 
 /// Terminiert TLS auf `io` und liefert den Strom samt der SNI des Clients.
 ///

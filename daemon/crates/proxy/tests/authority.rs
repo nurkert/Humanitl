@@ -74,6 +74,51 @@ async fn authority_ok() {
     );
 }
 
+/// HUM-364: Klartext im Tunnel wird eine gewöhnliche `http`-Anfrage, gehalten
+/// und entschieden wie jede andere, statt am Handschlag zu scheitern.
+#[tokio::test(flavor = "multi_thread")]
+async fn cleartext_in_a_tunnel_is_held_like_any_request() {
+    let proxy = ProxyBuilder::new().start().await;
+    let mut events = proxy.events();
+    let _decider = proxy.decide_with(user_block());
+
+    let answer = proxy
+        .cleartext_tunnel(
+            "llm.example:8080",
+            "GET /v1/models HTTP/1.1\r\nHost: llm.example:8080\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+    assert!(answer.starts_with("HTTP/1.1 403"), "{answer}");
+    assert!(answer.contains("reason: user"), "{answer}");
+
+    events.wait_for("recorded").await;
+    assert_eq!(events.count("held"), 1, "the human is asked");
+    let request = events.received_request();
+    assert_eq!(request.scheme, Scheme::Http);
+    assert_eq!(request.authority.to_string(), "llm.example:8080");
+}
+
+/// HUM-364: Ohne TLS bleibt die Bindung an das Tunnelziel.
+#[tokio::test(flavor = "multi_thread")]
+async fn cleartext_in_a_tunnel_cannot_name_another_host() {
+    let proxy = ProxyBuilder::new().start().await;
+    let mut events = proxy.events();
+    let _decider = proxy.decide_with(Decision::Allow);
+
+    let answer = proxy
+        .cleartext_tunnel(
+            "llm.example:8080",
+            "GET / HTTP/1.1\r\nHost: evil.io\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+    assert!(answer.starts_with("HTTP/1.1 403"), "{answer}");
+    assert!(answer.contains("reason: authority_mismatch"), "{answer}");
+
+    events.wait_for("recorded").await;
+    assert_eq!(events.count("held"), 0);
+    assert_eq!(events.count("forwarded"), 0);
+}
+
 /// `CONNECT github.com:443` mit `Host: evil.io` darin ist keine Anfrage an
 /// `evil.io`: `403`, kein `Held`, und verbucht wird das echte Ziel.
 #[tokio::test(flavor = "multi_thread")]
