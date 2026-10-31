@@ -40,6 +40,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-338 | Website: heller Modus, folgt dem System, Umschalter in der Navigation | M | HUM-341, HUM-358 |
 | HUM-361 | Flaky-Test: `a_stalled_streamed_upload_ends_with_limit_004` nimmt den Abbruch nach der Antwort hin | S | HUM-057 |
 | HUM-360 | Website auf Telefonen: Download-Felder passen in die Breite, Pfeile und Zählwerk der Bühne stehen frei | S | HUM-337, HUM-347, HUM-338 |
+| HUM-364 | Proxy: Klartext-HTTP im `CONNECT`-Tunnel, damit `pi` 1.x sein lokales Modell erreicht | S | HUM-024 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -614,3 +615,16 @@ Zwei alte Mängel. Auf der Download-Seite reichte das Feld bei 320 px bis 647 px
 Folge-Kandidaten:
 
 - `src/styles/docs.css` hat zwei Regeln mit demselben Minifier-Verlust (`.code__copy` und die Blatt-Leiste); in Chrome fehlt dort die Unschärfe.
+
+## HUM-364 · Proxy: Klartext-HTTP im `CONNECT`-Tunnel, damit `pi` 1.x sein lokales Modell erreicht
+
+`pi` 1.x tunnelt mit undici (`proxyTunnel: true`) auch `http://`-Ziele: `CONNECT 127.0.0.1:8080`, danach Klartext. Der Proxy erwartete im Tunnel immer TLS, die Verbindung starb, `pi` meldete `Connection error`, und kein Flow erschien. Nachgestellt in der macOS-Sandbox mit `curl -p`; die Ursache ist nicht plattformgebunden.
+
+Akzeptanz:
+
+- Beginnt ein Tunnel mit einem Großbuchstaben, wird er als Klartext-HTTP bedient, sonst wie bisher als TLS, auch beim Scheitern des Handschlags.
+- Die Anfrage läuft denselben Weg wie jede andere: Regeln, Hold, Aufzeichnung, Sperre für private Adressen.
+- `Host` bleibt an das Tunnelziel gebunden; `https://` im Klartext-Tunnel wird abgelehnt.
+- Ein `CONNECT` im Klartext-Tunnel behält die SNI-Prüfung seines TLS.
+- Der Blick in den Tunnel und der Handschlag teilen sich eine Frist.
+- Ein abgelehnter Handschlag erreicht den Client weiter als Alert (`conf_13`).
