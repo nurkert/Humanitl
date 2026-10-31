@@ -90,6 +90,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-354 | LLM_005 warns only about findings the model has not seen yet, and repeats collapse into one card | M | HUM-039, HUM-106, HUM-256, HUM-271 |
 | HUM-356 | The app scales: Ctrl+Plus, Ctrl+Minus, Ctrl+0 and a setting | M | HUM-301, HUM-254, HUM-352 |
 | HUM-357 | A sandbox opens disposable by default where the system allows it | M | HUM-350, HUM-351 |
+| HUM-362 | rpmlint on Fedora 44 accepts the RPM again | S | — |
 
 ---
 
@@ -10991,3 +10992,23 @@ Codex und Opus; alle übernommen, je ein Test, der ohne die Behebung rot ist
   `a_failed_read_of_the_opaque_marker_makes_the_list_incomplete` und
   `a_failed_read_of_a_foreign_attribute_refuses_and_makes_the_list_incomplete`;
   Mutationen (jeder Fehler `Ok(false)`) je rot.
+
+---
+
+## HUM-362 · rpmlint on Fedora 44 accepts the RPM again
+
+**Anlass.** Die Release-Pipeline von v0.0.14 brach im Job `check-rpm` beim
+Schritt `rpmlint` ab; veroeffentlicht wurde deshalb nichts. Nachgebaut mit den
+Programmen aus dem 0.0.13-Paket und den Paketdateien von `main`, im selben
+Fedora-44-Abbild wie die CI: rpmlint 2.8 meldet die Dubletten der
+Flutter-Assets als `E: files-duplicated-waste`, die Ausnahme in
+`packaging/rpm/humanitl.rpmlintrc` erwartete `W:`. Damit griff sie nicht, und
+rpmlint meldete zusaetzlich die ungenutzte Ausnahme.
+
+**Umsetzung.** Die Ausnahme passt auf beide Stufen (`[EW]`); der Kommentar
+sagt, warum.
+
+**Akzeptanz.** `packaging/rpm/rpmlint.sh` auf dem nachgebauten RPM endet mit
+"0 errors, 0 warnings" (lokal geprueft); der naechste Tag laeuft durch
+`check-rpm`.
+
