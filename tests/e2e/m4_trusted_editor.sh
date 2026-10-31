@@ -569,9 +569,12 @@ cp "$M4_DIR/fake-agent/fake_agent.py" "$M4_PROJECT/fake_agent.py"
 cp "$M4_FIXTURE" "$M4_PROJECT/m4_request.json"
 
 # `humanitl run` im Projektverzeichnis, wie ein Mensch ihn startet (HUM-067).
+# `--direct` (HUM-357): Dieses Demo prüft, was ein direkter Lauf im
+# Projektordner hinterlässt; die Vorgabe `auto` wäre auf einem System mit
+# Overlay eine Wegwerf-Sandbox, deren Änderungen erst nach `apply` ankommen.
 (
     cd "$M4_PROJECT" &&
-        humanitl -v run -- /usr/bin/python3 /work/fake_agent.py --request /work/m4_request.json \
+        humanitl -v run --direct -- /usr/bin/python3 /work/fake_agent.py --request /work/m4_request.json \
             > "$M4_AGENT_OUT" 2> "$M4_AGENT_ERR"
 ) &
 M4_RUN_PID=$!
@@ -758,7 +761,7 @@ e2e_expect "the restarted daemon runs with the new hold timeout" "$M4_HOLD_SHORT
 
 (
     cd "$M4_PROJECT" &&
-        humanitl -v run -- /usr/bin/python3 /work/fake_agent.py --request /work/m4_request.json \
+        humanitl -v run --direct -- /usr/bin/python3 /work/fake_agent.py --request /work/m4_request.json \
             > "$M4_AGENT2_OUT" 2> "$M4_AGENT2_ERR"
 ) &
 M4_RUN_PID=$!

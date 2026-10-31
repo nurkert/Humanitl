@@ -120,7 +120,7 @@ below lists the flag names and their short aliases.
 | `--resolver-nameserver` | - | `STRING,_OPTIONAL` | `resolver.nameserver` |
 | `--resolver-prefer` | - | `ipv4`, `ipv6` | `resolver.prefer` |
 | `--resolver-test-ca` | - | `STRING,_OPTIONAL` | `resolver.test_ca` |
-| `--sandbox-mode` | - | `direct`, `disposable` | `sandbox.mode` |
+| `--sandbox-mode` | - | `auto`, `direct`, `disposable` | `sandbox.mode` |
 | `--sandbox-profile` | - | `STRING` | `sandbox.profile` |
 | `--sandbox-work-dir` | `--work` | `STRING,_OPTIONAL` | `sandbox.work_dir` |
 | `--sandbox-work-mode` | `--work-mode` | `ro`, `rw` | `sandbox.work_mode` |
@@ -199,13 +199,16 @@ Arguments:
 
 Options:
       --disposable
-          Keep the project folder untouched: it lies read-only under a layer in RAM, and after the run `humanitl sandbox changes` shows what the agent changed, `apply` writes it and `discard` drops it. The same as sandbox.mode = "disposable" for this run
+          Keep the project folder untouched: it lies read-only under a layer in RAM, and after the run `humanitl sandbox changes` shows what the agent changed, `apply` writes it and `discard` drops it. The same as sandbox.mode = "disposable" for this run: where the system cannot do it, the start refuses instead of writing to the folder. Without this flag and without --direct the run follows sandbox.mode, by default "auto": disposable where the system allows it, otherwise direct with a notice
 
       --json
           Machine-readable output: one JSON value on stdout, diagnostics included
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory
+
+      --direct
+          Let the agent write to the project folder directly, as without the disposable sandbox. The same as sandbox.mode = "direct" for this run
 
   -v, --verbose...
           Explain what is happening; repeat for more
@@ -280,7 +283,10 @@ Options:
           Read this config file instead of the one in the user's config directory
 
       --disposable
-          Run with the project folder read-only under a layer in RAM; at the end the changes are listed and discarded (this command keeps no layer; `humanitl run --disposable` keeps them for apply)
+          Run with the project folder read-only under a layer in RAM; at the end the changes are listed and discarded (this command keeps no layer; `humanitl run --disposable` keeps them for apply). Without this flag the run is direct unless sandbox.mode is "disposable": the default "auto" means direct here, because nothing could apply the changes afterwards
+
+      --direct
+          Run direct even if sandbox.mode is "disposable"
 
   -v, --verbose...
           Explain what is happening; repeat for more

@@ -59,6 +59,7 @@ pub static PARITY: &[(&str, &str)] = &[
     ("Humanitl.Rules", "rules test"),
     ("Humanitl.Rules", "rules update"),
     ("Humanitl.Sandbox", "run"),
+    ("Humanitl.Sandbox", "run --direct"),
     ("Humanitl.Sandbox", "run --disposable"),
     ("Humanitl.Sandbox", "sandbox apply"),
     ("Humanitl.Sandbox", "sandbox changes"),

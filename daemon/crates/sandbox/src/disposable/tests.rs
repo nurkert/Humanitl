@@ -1399,3 +1399,215 @@ fn removing_a_file_never_deletes_a_directory_that_took_its_place() {
         "human\n"
     );
 }
+
+/// Ein `SANDBOX_030`, wie ihn die Probe für ein altes bubblewrap liefert.
+fn old_bwrap() -> Diagnostic {
+    Diagnostic::builder(SANDBOX_030, Severity::Blocking)
+        .why("/usr/bin/bwrap is bubblewrap 0.9.0; a disposable sandbox needs --overlay")
+        .fix(FixAction::CopyCommand("install bubblewrap".to_owned()))
+        .build()
+}
+
+/// Die Vorgabe `auto` ist eine Wegwerf-Sandbox, wo das System sie kann
+/// (HUM-357).
+///
+/// Mutationsbeweis: `auto` wieder als `direct` (der Arm `Auto` liefert
+/// `ModeChoice::direct(None)`) ist rot.
+#[test]
+fn the_default_resolves_to_disposable_where_the_system_allows_it() {
+    assert_eq!(SandboxMode::default(), SandboxMode::Auto);
+    let choice = resolve_mode(SandboxMode::default(), || Ok(())).unwrap();
+    assert_eq!(choice.mode, SandboxMode::Disposable);
+    assert!(choice.notice.is_none());
+    assert!(choice.is_disposable());
+}
+
+/// Ohne Overlay fällt die Vorgabe auf `direct` zurück und sagt es: ein
+/// Hinweis `SANDBOX_033`, nicht blockierend, mit dem Grund und dessen Fix
+/// (HUM-357).
+///
+/// Mutationsbeweis: Rückfall entfernt (der Fehler der Probe geht durch) ist
+/// rot.
+#[test]
+fn the_default_falls_back_to_direct_with_a_notice() {
+    let choice = resolve_mode(SandboxMode::Auto, || Err(old_bwrap()))
+        .expect("the default never refuses for want of an overlay");
+    assert_eq!(choice.mode, SandboxMode::Direct);
+    let notice = choice.notice.expect("a notice");
+    assert_eq!(notice.code.as_str(), "SANDBOX_033");
+    assert_eq!(notice.severity, Severity::Warning);
+    assert!(notice.why.contains("bubblewrap 0.9.0"), "{}", notice.why);
+    assert!(notice.why.contains("directly"), "{}", notice.why);
+    assert!(
+        notice.why.contains("sandbox.mode = \"direct\""),
+        "{}",
+        notice.why
+    );
+    assert_eq!(
+        notice.fix,
+        Some(FixAction::CopyCommand("install bubblewrap".to_owned()))
+    );
+}
+
+/// Ein ausdrückliches `disposable` fällt nie zurück (HUM-357): Wo es nicht
+/// geht, lehnt der Start mit dem `SANDBOX_030` der Probe ab.
+///
+/// Mutationsbeweis: `disposable` wie `auto` behandelt (still `direct`) ist
+/// rot.
+#[test]
+fn an_explicit_disposable_refuses_instead_of_falling_back() {
+    let err = resolve_mode(SandboxMode::Disposable, || Err(old_bwrap()))
+        .expect_err("an explicit choice is not overruled");
+    assert_eq!(err.code.as_str(), "SANDBOX_030");
+    let choice = resolve_mode(SandboxMode::Disposable, || Ok(())).unwrap();
+    assert!(choice.is_disposable());
+    assert!(choice.notice.is_none());
+}
+
+/// `direct` fragt die Probe gar nicht (HUM-357).
+#[test]
+fn direct_never_probes() {
+    let choice = resolve_mode(SandboxMode::Direct, || {
+        panic!("direct must not probe the overlay")
+    })
+    .unwrap();
+    assert_eq!(choice.mode, SandboxMode::Direct);
+    assert!(choice.notice.is_none());
+}
+
+/// Overlay ohne Rechte gibt es ab Linux 5.11 (HUM-357, Review).
+///
+/// Mutationsbeweis: Schwelle auf 5.10, rot.
+#[test]
+fn the_kernel_must_be_5_11_or_newer_for_an_unprivileged_overlay() {
+    assert!(!kernel_allows_overlay("5.10.0-28-amd64"));
+    assert!(kernel_allows_overlay("5.11.0"));
+    assert!(kernel_allows_overlay("6.1.0-13-amd64\n"));
+    assert!(!kernel_allows_overlay("4.19.0"));
+    assert!(!kernel_allows_overlay(""));
+    assert!(!kernel_allows_overlay("garbage"));
+}
+
+/// Ein Projektordner, den der Daemon nicht lesen kann (Rechte `030`), unter
+/// einem opaken Verzeichnis der Schicht: Die verdeckten Löschungen sind dann
+/// unbekannt, und die Liste muss das sagen, statt „nichts geändert" zu
+/// melden, das die Schicht ungesehen verwerfen ließe (HUM-357, Review
+/// Runde 2).
+///
+/// Mutationsbeweis: `opaque_removals` kehrt beim Öffnen wieder still zurück,
+/// rot.
+#[test]
+fn an_unreadable_lower_directory_under_an_opaque_one_makes_the_list_incomplete() {
+    let fx = fixture();
+    let base = fx.baseline();
+    fs::create_dir(fx.upper.join("dir")).unwrap();
+    fs::set_permissions(
+        fx.upper.join("dir"),
+        fs::metadata(fx.lower.join("dir")).unwrap().permissions(),
+    )
+    .unwrap();
+    if !opaque(&fx.upper.join("dir")) {
+        return;
+    }
+    let mode = fs::metadata(fx.lower.join("dir")).unwrap().permissions();
+    fs::set_permissions(fx.lower.join("dir"), fs::Permissions::from_mode(0o030)).unwrap();
+    if fs::read_dir(fx.lower.join("dir")).is_ok() {
+        fs::set_permissions(fx.lower.join("dir"), mode).unwrap();
+        eprintln!("skipping: this user reads a directory with mode 030 (root?)");
+        return;
+    }
+    let set = fx.scan(&base);
+    fs::set_permissions(fx.lower.join("dir"), mode).unwrap();
+    assert!(
+        set.truncated,
+        "an unreadable lower directory is not an empty one: {set:?}"
+    );
+    assert!(
+        set.incomplete
+            .iter()
+            .any(|why| why.contains("dir") && why.contains("cannot be read")),
+        "{:?}",
+        set.incomplete
+    );
+}
+
+/// Ein Lesefehler am Opak-Attribut (etwa `EIO`) heißt nicht „nicht opak"
+/// (HUM-357, Review Runde 3): Ein gelöschtes und leer wieder angelegtes
+/// Verzeichnis sähe sonst unverändert aus, die Liste wäre leer und
+/// vollständig, und die Schicht ginge als `no_changes`.
+///
+/// Mutationsbeweis: `is_opaque` wieder mit jedem Fehler `Ok(false)`, rot.
+#[test]
+fn a_failed_read_of_the_opaque_marker_makes_the_list_incomplete() {
+    fn broken(fd: &OwnedFd, name: &str, buf: &mut [u8]) -> Result<usize, rustix::io::Errno> {
+        if name == "user.overlay.opaque" {
+            return Err(rustix::io::Errno::IO);
+        }
+        rustix::fs::fgetxattr(fd, name, buf)
+    }
+    let fx = fixture();
+    let base = fx.baseline();
+    fs::create_dir(fx.upper.join("dir")).unwrap();
+    fs::set_permissions(
+        fx.upper.join("dir"),
+        fs::metadata(fx.lower.join("dir")).unwrap().permissions(),
+    )
+    .unwrap();
+    let (upper, lower) = fx.fds();
+    let set = super::scan::scan_with(
+        upper.as_fd(),
+        lower.as_fd(),
+        &base,
+        super::scan::MAX_SCAN_ENTRIES,
+        broken,
+    );
+    assert!(
+        set.truncated,
+        "an unknown opaque marker is not an absent one: {set:?}"
+    );
+    assert!(
+        set.incomplete
+            .iter()
+            .any(|why| why.contains("dir") && why.contains("hides")),
+        "{:?}",
+        set.incomplete
+    );
+    assert!(
+        set.changes
+            .iter()
+            .all(|change| change.kind != ChangeKind::Removed),
+        "no deletions are invented: {set:?}"
+    );
+}
+
+/// Ein fremdes Overlay-Attribut, das sich nicht lesen lässt, zählt als
+/// vorhanden, und die Liste ist unvollständig (HUM-357, Review Runde 3).
+///
+/// Mutationsbeweis: `has_xattr` wieder mit jedem Fehler `Ok(false)`, rot.
+#[test]
+fn a_failed_read_of_a_foreign_attribute_refuses_and_makes_the_list_incomplete() {
+    fn broken(_fd: &OwnedFd, name: &str, _buf: &mut [u8]) -> Result<usize, rustix::io::Errno> {
+        if name == "user.overlay.redirect" {
+            return Err(rustix::io::Errno::IO);
+        }
+        Err(rustix::io::Errno::NODATA)
+    }
+    let fx = fixture();
+    let base = fx.baseline();
+    fs::write(fx.upper.join("new.txt"), "new\n").unwrap();
+    let (upper, lower) = fx.fds();
+    let set = super::scan::scan_with(
+        upper.as_fd(),
+        lower.as_fd(),
+        &base,
+        super::scan::MAX_SCAN_ENTRIES,
+        broken,
+    );
+    assert!(set.truncated, "{set:?}");
+    let new = set
+        .changes
+        .iter()
+        .find(|change| change.rel == Path::new("new.txt"))
+        .expect("listed");
+    assert!(new.refused.is_some(), "{new:?}");
+}

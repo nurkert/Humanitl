@@ -116,10 +116,18 @@ impl LayerChange {
 pub struct ChangeSet {
     /// Die Änderungen, sortiert nach Pfad.
     pub changes: Vec<LayerChange>,
-    /// Ob ein Budget gegriffen hat; dann zeigt die Liste nicht alles, und
-    /// „alles übernehmen" wird abgelehnt.
+    /// Ob ein Budget gegriffen hat oder sich etwas nicht lesen ließ; dann
+    /// zeigt die Liste nicht alles, und „alles übernehmen" wird abgelehnt.
+    /// Eine Liste, die so unvollständig ist, gilt nie als „nichts geändert"
+    /// (HUM-357).
     pub truncated: bool,
+    /// Warum die Liste unvollständig ist, höchstens `MAX_INCOMPLETE`
+    /// Sätze (HUM-357).
+    pub incomplete: Vec<String>,
 }
+
+/// So viele Gründe einer unvollständigen Liste stehen höchstens darin.
+pub const MAX_INCOMPLETE: usize = 16;
 
 /// Liest die obere Schicht und vergleicht sie mit dem Projekt.
 ///
@@ -140,12 +148,25 @@ pub(crate) fn scan_with_budget(
     baseline: &TreeSnapshot,
     budget: usize,
 ) -> ChangeSet {
+    scan_with(upper, lower, baseline, budget, fgetxattr)
+}
+
+/// Wie [`scan_with_budget`], mit eigenem Leser der Attribute; für Tests, die
+/// einen Lesefehler brauchen.
+pub(crate) fn scan_with(
+    upper: BorrowedFd<'_>,
+    lower: BorrowedFd<'_>,
+    baseline: &TreeSnapshot,
+    budget: usize,
+    read_xattr: XattrReader,
+) -> ChangeSet {
     let mut scanner = Scanner {
         lower,
         baseline,
         out: ChangeSet::default(),
         seen: 0,
         budget,
+        read_xattr,
     };
     scanner.walk(upper, Path::new(""), &Walk::default());
     scanner.out.changes.sort_by(|a, b| a.rel.cmp(&b.rel));
@@ -388,28 +409,78 @@ struct Scanner<'a> {
     /// So viele Einträge höchstens, aus oberer Schicht und verdeckter unterer
     /// zusammen.
     budget: usize,
+    /// Liest ein erweitertes Attribut; `fgetxattr`, in Tests ein Fehler auf
+    /// Bestellung (HUM-357, Review Runde 3).
+    read_xattr: XattrReader,
+}
+
+/// Wie [`rustix::fs::fgetxattr`]: Länge des Werts in `buf` oder der Fehler.
+pub(crate) type XattrReader = fn(&OwnedFd, &str, &mut [u8]) -> Result<usize, Errno>;
+
+/// Der echte Leser.
+fn fgetxattr(fd: &OwnedFd, name: &str, buf: &mut [u8]) -> Result<usize, Errno> {
+    rustix::fs::fgetxattr(fd, name, buf)
 }
 
 impl Scanner<'_> {
+    /// Das erste fremde Overlay-Attribut an `fd`. Lässt sich eines nicht
+    /// lesen, zählt es als vorhanden (die Änderung steht abgelehnt da), und
+    /// die Liste ist unvollständig (HUM-357, Review Runde 3).
+    fn foreign_attr(&mut self, fd: &OwnedFd, rel: &Path) -> Option<&'static str> {
+        for attr in FOREIGN_XATTRS {
+            match has_xattr(self.read_xattr, fd, attr) {
+                Ok(false) => {}
+                Ok(true) => return Some(attr),
+                Err(err) => {
+                    self.incomplete(format!(
+                        "the attribute {attr} of {} in the layer cannot be read ({err})",
+                        shown(rel)
+                    ));
+                    return Some(attr);
+                }
+            }
+        }
+        None
+    }
+
+    /// Die Liste ist unvollständig, mit Grund (HUM-357): Jeder Lese- oder
+    /// Öffnungsfehler in oberer oder unterer Schicht landet hier, nie als
+    /// stilles Weglassen, denn eine verdeckte Löschung, die so verloren
+    /// ginge, sähe wie „nichts geändert" aus.
+    fn incomplete(&mut self, why: String) {
+        self.out.truncated = true;
+        if self.out.incomplete.len() < MAX_INCOMPLETE {
+            self.out.incomplete.push(why);
+        }
+    }
+
     fn walk(&mut self, up: BorrowedFd<'_>, rel: &Path, at: &Walk) {
         let room = self.budget.saturating_sub(self.seen);
         let (names, more) = match dir_names(up, room) {
             Ok(read) => read,
-            Err(_err) => {
-                self.out.truncated = true;
+            Err(err) => {
+                self.incomplete(format!(
+                    "{} in the layer cannot be read ({err})",
+                    shown(rel)
+                ));
                 return;
             }
         };
         if more {
-            self.out.truncated = true;
+            self.incomplete(format!("the list stops at {} entries", self.budget));
         }
         self.seen += names.len();
         for name in &names {
             let child = rel.join(name);
-            let Ok(stat) = rustix::fs::statat(up, name.as_os_str(), AtFlags::SYMLINK_NOFOLLOW)
-            else {
-                self.out.truncated = true;
-                continue;
+            let stat = match rustix::fs::statat(up, name.as_os_str(), AtFlags::SYMLINK_NOFOLLOW) {
+                Ok(stat) => stat,
+                Err(err) => {
+                    self.incomplete(format!(
+                        "{} in the layer cannot be inspected ({err})",
+                        shown(&child)
+                    ));
+                    continue;
+                }
             };
             let lower = lower_at(self.lower, &child);
             match FileType::from_raw_mode(stat.st_mode) {
@@ -485,11 +556,17 @@ impl Scanner<'_> {
         lower: &Lower,
         at: &Walk,
     ) {
-        let Ok(dir) = open_dir_forcing(up, name) else {
-            self.out.truncated = true;
-            return;
+        let dir = match open_dir_forcing(up, name) {
+            Ok(dir) => dir,
+            Err(err) => {
+                self.incomplete(format!(
+                    "{} in the layer cannot be opened ({err})",
+                    shown(rel)
+                ));
+                return;
+            }
         };
-        let foreign = FOREIGN_XATTRS.iter().find(|attr| has_xattr(&dir, attr));
+        let foreign = self.foreign_attr(&dir, rel);
         let lower_is_dir = matches!(lower, Lower::Present(entry) if entry.kind == Kind::Dir);
         let change = match lower {
             Lower::Present(entry) if entry.kind == Kind::Dir => (entry.mode & 0o777
@@ -513,12 +590,27 @@ impl Scanner<'_> {
             change.refused = Some(format!("it carries the overlay attribute {attr}"));
             self.push(change);
         }
-        let opaque = is_opaque(&dir);
+        let opaque = match is_opaque(self.read_xattr, &dir) {
+            Ok(opaque) => opaque,
+            // Unbekannt heißt weder opak noch nicht opak: Die Liste ist
+            // unvollständig und wartet. Als opak gezählt, stünden Löschungen
+            // darin, die es nicht gab.
+            Err(err) => {
+                self.incomplete(format!(
+                    "whether {} in the layer hides the project's entries cannot be read ({err})",
+                    shown(rel)
+                ));
+                false
+            }
+        };
         if lower_is_dir && (opaque || at.under_opaque) {
             self.opaque_removals(&dir, rel);
         }
         if at.depth + 1 >= MAX_DEPTH {
-            self.out.truncated = true;
+            self.incomplete(format!(
+                "{} lies deeper than {MAX_DEPTH} levels",
+                shown(rel)
+            ));
             return;
         }
         let replaced =
@@ -530,30 +622,55 @@ impl Scanner<'_> {
     /// Ein opakes Verzeichnis verdeckt alles darunter in der unteren
     /// Schicht: Was dort liegt und oben fehlt, ist gelöscht.
     fn opaque_removals(&mut self, up_dir: &OwnedFd, rel: &Path) {
-        let Ok(lower_dir) = open_beneath(
+        // Unlesbar heißt nicht leer (HUM-357, Review): Ein Projektordner mit
+        // Rechten `030` verdeckt sonst jede Löschung darunter, und die Liste
+        // sähe aus, als hätte der Agent nichts geändert.
+        let lower_dir = match open_beneath(
             self.lower,
             rel,
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        ) else {
-            return;
+        ) {
+            Ok(dir) => dir,
+            Err(err) => {
+                self.incomplete(format!(
+                    "{} in the project cannot be read, so what the agent deleted below it \
+                     is not known ({err})",
+                    shown(rel)
+                ));
+                return;
+            }
         };
         let room = self.budget.saturating_sub(self.seen);
-        let Ok((names, more)) = dir_names(lower_dir.as_fd(), room) else {
-            self.out.truncated = true;
-            return;
+        let (names, more) = match dir_names(lower_dir.as_fd(), room) {
+            Ok(read) => read,
+            Err(err) => {
+                self.incomplete(format!(
+                    "{} in the project cannot be listed, so what the agent deleted below it \
+                     is not known ({err})",
+                    shown(rel)
+                ));
+                return;
+            }
         };
         if more {
-            self.out.truncated = true;
+            self.incomplete(format!("the list stops at {} entries", self.budget));
         }
         // Die verdeckten Einträge zählen gegen dasselbe Budget wie die der
         // oberen Schicht (Review Runde 2).
         self.seen += names.len();
         for name in names {
             let above = rustix::fs::statat(up_dir, name.as_os_str(), AtFlags::SYMLINK_NOFOLLOW);
-            if matches!(above, Err(Errno::NOENT)) {
-                let child = rel.join(&name);
-                let lower = lower_at(self.lower, &child);
-                self.whiteout(&child, &lower);
+            let child = rel.join(&name);
+            match above {
+                Err(Errno::NOENT) => {
+                    let lower = lower_at(self.lower, &child);
+                    self.whiteout(&child, &lower);
+                }
+                Ok(_) => {}
+                Err(err) => self.incomplete(format!(
+                    "{} in the layer cannot be inspected ({err})",
+                    shown(&child)
+                )),
             }
         }
     }
@@ -567,13 +684,19 @@ impl Scanner<'_> {
         lower: &Lower,
         at: &Walk,
     ) {
-        let Ok(fd) = open_upper_file(up, name) else {
-            self.out.truncated = true;
-            return;
+        let fd = match open_upper_file(up, name) {
+            Ok(fd) => fd,
+            Err(err) => {
+                self.incomplete(format!(
+                    "{} in the layer cannot be opened ({err})",
+                    shown(rel)
+                ));
+                return;
+            }
         };
-        let foreign = FOREIGN_XATTRS.iter().find(|attr| has_xattr(&fd, attr));
+        let foreign = self.foreign_attr(&fd, rel);
         let Some(new_hash) = hash_fd(fd) else {
-            self.out.truncated = true;
+            self.incomplete(format!("{} in the layer cannot be read", shown(rel)));
             return;
         };
         let mut change = match lower {
@@ -616,9 +739,15 @@ impl Scanner<'_> {
         lower: &Lower,
         at: &Walk,
     ) {
-        let Ok(target) = rustix::fs::readlinkat(up, name, Vec::new()) else {
-            self.out.truncated = true;
-            return;
+        let target = match rustix::fs::readlinkat(up, name, Vec::new()) {
+            Ok(target) => target,
+            Err(err) => {
+                self.incomplete(format!(
+                    "the link {} in the layer cannot be read ({err})",
+                    shown(rel)
+                ));
+                return;
+            }
         };
         let target = PathBuf::from(OsString::from_vec(target.into_bytes()));
         let what = Kind::Symlink {
@@ -654,6 +783,16 @@ impl Scanner<'_> {
     }
 }
 
+/// Ein Pfad der Schicht für einen Satz, gesäubert wie in der Liste; die
+/// Wurzel heißt „the project root".
+fn shown(rel: &Path) -> String {
+    if rel.as_os_str().is_empty() {
+        "the project root".to_owned()
+    } else {
+        display_path(rel)
+    }
+}
+
 fn type_name(kind: FileType) -> &'static str {
     match kind {
         FileType::Fifo => "FIFO",
@@ -664,17 +803,28 @@ fn type_name(kind: FileType) -> &'static str {
     }
 }
 
-fn has_xattr(fd: &OwnedFd, name: &str) -> bool {
+/// Ob `name` an `fd` steht. Nur `ENODATA` heißt „fehlt", und `ENOTSUP`: Ein
+/// Dateisystem ohne erweiterte Attribute kann keines tragen, auch keines,
+/// das Overlay geschrieben hätte. Jeder andere Fehler ist ein Fehler
+/// (HUM-357, Review Runde 3).
+fn has_xattr(read: XattrReader, fd: &OwnedFd, name: &str) -> Result<bool, Errno> {
     let mut buf = [0_u8; 8];
-    match rustix::fs::fgetxattr(fd, name, &mut buf[..]) {
-        Ok(_) | Err(Errno::RANGE) => true,
-        Err(_) => false,
+    match read(fd, name, &mut buf[..]) {
+        Ok(_) | Err(Errno::RANGE) => Ok(true),
+        Err(Errno::NODATA | Errno::NOTSUP) => Ok(false),
+        Err(err) => Err(err),
     }
 }
 
-fn is_opaque(fd: &OwnedFd) -> bool {
+/// Ob `fd` ein opakes Verzeichnis ist (`user.overlay.opaque = "y"`); Fehler
+/// wie in [`has_xattr`]. Ein längerer Wert (`ERANGE`) ist nicht `"y"`.
+fn is_opaque(read: XattrReader, fd: &OwnedFd) -> Result<bool, Errno> {
     let mut buf = [0_u8; 8];
-    matches!(rustix::fs::fgetxattr(fd, OPAQUE_XATTR, &mut buf[..]), Ok(len) if buf.get(..len) == Some(b"y".as_slice()))
+    match read(fd, OPAQUE_XATTR, &mut buf[..]) {
+        Ok(len) => Ok(buf.get(..len) == Some(b"y".as_slice())),
+        Err(Errno::NODATA | Errno::NOTSUP | Errno::RANGE) => Ok(false),
+        Err(err) => Err(err),
+    }
 }
 
 /// Öffnet eine Datei der oberen Schicht; fehlt das Leserecht (der Agent darf

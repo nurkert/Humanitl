@@ -90,10 +90,11 @@ pub static AREAS: &[AreaInfo] = &[
         area: "sandbox",
         prefix: "SANDBOX",
         first: 1,
-        last: 32,
+        last: 33,
         note: "001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, \
                019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043), \
-               030-032 Wegwerf-Sandbox (HUM-350)",
+               030-032 Wegwerf-Sandbox (HUM-350), 033 Vorgabe fällt auf direkt zurück \
+               (HUM-357)",
     },
     AreaInfo {
         area: "proxy",
@@ -1609,6 +1610,17 @@ registry! {
     SANDBOX_032 => "sandbox", "Disposable layer full", "#sandbox_032",
         "The changes of a disposable run grew over the cap of the upper layer in RAM (bytes or entries), and the daemon stopped the sandbox so the agent cannot fill the memory.",
         "No fix for the run; the changes so far wait under `humanitl sandbox changes`. A task that needs more space runs without `--disposable`.";
+    // HUM-357: the disposable sandbox as the default.
+    /// `sandbox.mode` is `auto` (the default) and the system cannot run a
+    /// disposable sandbox: bubblewrap older than 0.11, a runtime directory
+    /// off tmpfs, or a project folder mounted read-only. The run starts in
+    /// direct mode, as before HUM-350; the sentence names the cause. A
+    /// warning, not a refusal: only an explicit `sandbox.mode =
+    /// "disposable"` refuses (`SANDBOX_030`). Never on macOS, where the mode
+    /// does not exist (HUM-357).
+    SANDBOX_033 => "sandbox", "Disposable sandbox not available, running direct", "#sandbox_033",
+        "The default `sandbox.mode = \"auto\"` asks for a disposable sandbox where the system allows one, and this system does not: bubblewrap is older than 0.11, the runtime directory is not on tmpfs, or the project folder is mounted read-only. This run writes to the project folder directly.",
+        "The fix of the cause (install command for a newer bubblewrap, `SetEnv` for `XDG_RUNTIME_DIR`, `ChangeSetting` on `sandbox.work_mode` = `rw`), or `sandbox.mode = \"direct\"` to choose direct mode and silence this notice.";
 }
 
 /// Sucht einen Code im Register.

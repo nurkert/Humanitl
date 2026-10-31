@@ -128,6 +128,24 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     _reconcileWorkDir();
   }
 
+  /// Takes note of `sandbox.mode` as the configuration holds it now, and
+  /// asks for a new snapshot once it changed (HUM-357, review): the mode the
+  /// daemon resolves for the next start, and the reason of a fallback, come
+  /// with the snapshot, and a write in the settings would otherwise leave the
+  /// old ones on the screen. The first value noted is the one the snapshot
+  /// already reflects.
+  void storedModeRead(String mode) {
+    final String? before = _storedMode;
+    _storedMode = mode;
+    if (before == null || before == mode) {
+      return;
+    }
+    unawaited(refresh());
+  }
+
+  /// The `sandbox.mode` last noted by [storedModeRead].
+  String? _storedMode;
+
   /// Plans once when the stored folder is not the one the snapshot was
   /// planned with, and the snapshot allows it now.
   ///
@@ -263,14 +281,22 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
   ///
   /// The mode of the switch "Disposable" goes along only to a daemon that
   /// names `sandbox.disposable`, and only once somebody chose one
-  /// ([SandboxModeChoice]); otherwise the field stays empty and the daemon
-  /// takes `sandbox.mode` (HUM-351).
+  /// ([SandboxModeChoice]) that differs from the default
+  /// ([defaultSandboxModeProvider]); otherwise the field stays empty and the
+  /// daemon takes `sandbox.mode` (HUM-351, HUM-357). A choice equal to the
+  /// default would turn the default `auto`, which may fall back to direct,
+  /// into an explicit mode the person never changed.
   Future<void> start() {
     final bool offered =
         ref.read(daemonInfoProvider).value?.offersDisposable ?? false;
-    final SandboxMode? mode = offered
+    final SandboxMode? choice = offered
         ? ref.read(sandboxModeChoiceProvider)
         : null;
+    final SandboxMode fallback = sandboxModeDefault(
+      ref.read(configProvider).value,
+      state.value,
+    );
+    final SandboxMode? mode = choice == fallback ? null : choice;
     return _apply(
       (DaemonClient client) => client.startSandbox(sandboxMode: mode),
       call: SandboxCall.start,

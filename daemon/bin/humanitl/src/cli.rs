@@ -351,9 +351,18 @@ pub struct RunArgs {
     /// Keep the project folder untouched: it lies read-only under a layer in
     /// RAM, and after the run `humanitl sandbox changes` shows what the agent
     /// changed, `apply` writes it and `discard` drops it. The same as
-    /// sandbox.mode = "disposable" for this run.
-    #[arg(long)]
+    /// sandbox.mode = "disposable" for this run: where the system cannot do
+    /// it, the start refuses instead of writing to the folder. Without this
+    /// flag and without --direct the run follows sandbox.mode, by default
+    /// "auto": disposable where the system allows it, otherwise direct with a
+    /// notice.
+    #[arg(long, conflicts_with = "direct")]
     pub disposable: bool,
+
+    /// Let the agent write to the project folder directly, as without the
+    /// disposable sandbox. The same as sandbox.mode = "direct" for this run.
+    #[arg(long)]
+    pub direct: bool,
 }
 
 /// Die Unterkommandos von `humanitl audit`.
@@ -410,9 +419,15 @@ pub enum SandboxCmd {
         tests_dir: Option<PathBuf>,
         /// Run with the project folder read-only under a layer in RAM; at the
         /// end the changes are listed and discarded (this command keeps no
-        /// layer; `humanitl run --disposable` keeps them for apply).
-        #[arg(long)]
+        /// layer; `humanitl run --disposable` keeps them for apply). Without
+        /// this flag the run is direct unless sandbox.mode is "disposable":
+        /// the default "auto" means direct here, because nothing could apply
+        /// the changes afterwards.
+        #[arg(long, conflicts_with = "direct")]
         disposable: bool,
+        /// Run direct even if sandbox.mode is "disposable".
+        #[arg(long)]
+        direct: bool,
         /// The command to run in the sandbox, after `--`.
         #[arg(last = true, value_name = "CMD", required = true)]
         cmd: Vec<OsString>,
@@ -1319,6 +1334,49 @@ mod tests {
         };
         assert_eq!(tests_dir.as_deref(), Some(Path::new("tests/escape")));
         assert_eq!(cmd, ["/bin/sh", "/tests/escape/esc-1-sockets.sh"]);
+    }
+
+    /// `--direct` and `--disposable` choose the mode of one run, for `run`
+    /// and `sandbox run`, and never both at once (HUM-357).
+    #[test]
+    fn direct_and_disposable_are_flags_of_one_run_and_exclude_each_other() {
+        let invocation = parse(["humanitl", "run", "--direct"]).expect("--direct parses");
+        let Cmd::Run(args) = invocation.cli.cmd else {
+            panic!("expected run");
+        };
+        assert!(args.direct && !args.disposable);
+
+        let invocation =
+            parse(["humanitl", "sandbox", "run", "--direct", "--", "true"]).expect("parses");
+        let Cmd::Sandbox {
+            cmd: SandboxCmd::Run {
+                direct, disposable, ..
+            },
+        } = invocation.cli.cmd
+        else {
+            panic!("expected sandbox run");
+        };
+        assert!(direct && !disposable);
+
+        for argv in [
+            &["humanitl", "run", "--direct", "--disposable"][..],
+            &[
+                "humanitl",
+                "sandbox",
+                "run",
+                "--disposable",
+                "--direct",
+                "--",
+                "true",
+            ][..],
+        ] {
+            let refused = parse(argv.iter().copied()).expect_err("both at once");
+            assert_eq!(
+                refused.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{argv:?}"
+            );
+        }
     }
 
     #[test]

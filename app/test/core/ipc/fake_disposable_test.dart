@@ -26,7 +26,24 @@ void main() {
           'the configuration makes it a disposable start while changes wait',
     );
 
-    final FakeDaemonClient direct = FakeDaemonClient.disposable();
+    // Ohne ausdrücklichen Modus gilt, was der Fake als aufgelösten Modus
+    // nennt: hier `disposable`, also lehnt auch die Vorgabe ab, solange
+    // Änderungen warten (HUM-357).
+    final FakeDaemonClient byDefault = FakeDaemonClient.disposable();
+    final List<SandboxUpdate> refused = await byDefault.startSandbox().toList();
+    expect(
+      refused.whereType<SandboxUpdateDiagnostic>().map(
+        (SandboxUpdateDiagnostic d) => d.diagnostic.code,
+      ),
+      contains('SANDBOX_030'),
+    );
+
+    final FakeDaemonClient direct = FakeDaemonClient.disposable()
+      ..configValues = const ConfigValues(
+        values: <String, Object?>{
+          'sandbox': <String, Object?>{'mode': 'direct'},
+        },
+      );
     final List<SandboxUpdate> started = await direct.startSandbox().toList();
     expect(started.whereType<SandboxUpdateDiagnostic>(), isEmpty);
   });

@@ -82,9 +82,12 @@ abstract final class ProtoVersion {
   /// panel reads `SandboxEvent.changes` and answers with `apply_changes` or
   /// `discard_changes` (HUM-351); 26 because the panel names every confirmed
   /// conflict in `ApplyChanges.overwrite_ids` instead of setting `overwrite`
-  /// for the whole call (HUM-351).
+  /// for the whole call (HUM-351). Raised to 27 with the disposable sandbox
+  /// as the default: the switch and the settings row read
+  /// `SandboxEvent.Status.sandbox_mode` and `sandbox_mode_notice`, and the
+  /// form writes `sandbox.mode` (HUM-357).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 26;
+  static const int minor = 27;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

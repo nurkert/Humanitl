@@ -91,6 +91,10 @@ fn service_with_work_dir(home: &TempDir, work_dir: Option<PathBuf>) -> SandboxSe
     let mut config = Config::default();
     "test".clone_into(&mut config.sandbox.profile);
     config.sandbox.work_dir = work_dir;
+    // Direkt: Diese Tests lesen die Einhängungen eines direkten Plans, und die
+    // Vorgabe `auto` wäre auf einem Rechner mit Overlay und tmpfs eine
+    // Wegwerf-Sandbox mit `/work` als untere Schicht (HUM-357).
+    config.sandbox.mode = humanitl_config::SandboxMode::Direct;
 
     SandboxService::new(
         SessionResolver::for_config(Paths::new(env), config),

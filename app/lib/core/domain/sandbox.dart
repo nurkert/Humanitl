@@ -260,6 +260,18 @@ abstract class SandboxStatus with _$SandboxStatus {
     /// The daemon decides this from the flows; the screen only draws it
     /// (ADR-018).
     Diagnostic? llmDiagnostic,
+
+    /// The mode a start without a choice of its own gets, mirror of
+    /// `SandboxEvent.Status.sandbox_mode` (HUM-357): the daemon resolves
+    /// `sandbox.mode = auto` against what the system can do. Null when the
+    /// daemon did not say (before contract 1.27, or a failed snapshot).
+    SandboxMode? effectiveSandboxMode,
+
+    /// Why [effectiveSandboxMode] is not what `sandbox.mode` asks for, mirror
+    /// of `sandbox_mode_notice` (HUM-357): `SANDBOX_033` when the default
+    /// fell back to direct, `SANDBOX_030` when an explicit `disposable` cannot
+    /// run here. Null when the mode holds as asked.
+    Diagnostic? sandboxModeNotice,
   }) = _SandboxStatus;
 
   const SandboxStatus._();
