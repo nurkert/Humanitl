@@ -428,6 +428,25 @@ Die Zeile `daemon` wird auch dann `fail`, wenn der Daemon eine andere
 Hauptversion des Vertrags spricht; dann versteht keine Seite die Nachrichten der
 anderen. Alles andere ist eine Warnung: Es läuft, nur nicht so bequem.
 
+### Die Zeilen unter macOS
+
+Die Bezeichner bleiben dieselben, `--json` liest sich auf beiden Systemen gleich. Gemessen wird
+etwas anderes (HUM-372):
+
+| Bezeichner | Prüft unter macOS | `fail`, wenn |
+|---|---|---|
+| `bwrap` | `/usr/bin/sandbox-exec` ist ausführbar; die Sandbox ist Seatbelt | es fehlt |
+| `userns` | nichts: `ok` mit „not needed on macOS"; der Einrichtungsschirm blendet die Zeile aus | nie |
+| `seccomp` | nichts: `ok` mit „not needed on macOS", das Seatbelt-Profil tritt an die Stelle; der Einrichtungsschirm blendet die Zeile aus | nie |
+| `runtime_dir` | `~/Library/Application Support/Humanitl/run` oder, falls gesetzt, `$XDG_RUNTIME_DIR` gehört uns und hat genau 0700; ein fehlendes Verzeichnis ist `ok`, der Daemon legt es an | eins davon nicht gilt |
+| `systemd_user` | `~/Library/LaunchAgents/dev.humanitl.humanitld.plist` existiert | nie; ohne ihn startest du `humanitld` von Hand |
+| `tray` | nichts: `ok` mit „not needed on macOS", dort gibt es noch keinen Tray (HUM-329) | nie |
+| `renderer` | nichts: `ok` mit „not needed on macOS", Flutter rendert mit Metal | nie |
+
+`daemon`, `agent`, `llm` und `disk_space` sind dieselben wie unter Linux. Die Kommandozeile liegt in
+der App und nicht im `PATH`:
+`/Applications/Humanitl.app/Contents/MacOS/bin/humanitl doctor`.
+
 ### Was eine Zeile bedeutet
 
 Jede Zeile, die nicht `ok` ist, trägt eine `Diagnostic` mit Code, Grund und
@@ -529,6 +548,12 @@ beginnt, ist eine Zeile ohne Messung.
 Schreibt die systemd-User-Unit, die den Daemon bei jeder Anmeldung startet. Es ist
 der eingreifendste Befehl dieses Produkts außerhalb der Sandbox, und deshalb ist
 hier vollständig beschrieben, was er tut.
+
+Unter macOS schreibt er stattdessen den launchd-Agenten
+`~/Library/LaunchAgents/dev.humanitl.humanitld.plist`; launchd startet den Daemon
+sofort und bei jeder Anmeldung, und der Rest dieses Abschnitts betrifft Linux. Ein
+Update unter macOS ersetzt die App, danach startet `humanitl daemon restart` den
+neuen Daemon.
 
 ```
 humanitl daemon install [--print] [--no-start] [--bin-dir DIR]
@@ -905,6 +930,10 @@ Reicht das Journal des Dienstes durch.
 ```
 humanitl daemon logs [-f] [-n N]
 ```
+
+Unter macOS gibt es kein Journal: Der Befehl liest
+`~/Library/Logs/Humanitl/humanitld.log`, mit `-f` wie `tail -f`, und eine fehlende
+Datei endet mit `DAEMON_008`. Der Rest dieses Abschnitts betrifft Linux.
 
 Der Befehl startet `journalctl --user -u humanitld.service` als Kind und gibt ihm
 sein eigenes Terminal. `-n N` und `-f` werden unverändert weitergegeben. Endet

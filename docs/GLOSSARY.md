@@ -125,6 +125,9 @@ they replace (HUM-086). Sandbox, Diagnostic and Finding stay unchanged.
 | no network interface | No network interface | Kein Netzwerk-Interface | `sandboxGuaranteeNoInterface` | |
 | one socket | Exactly one socket, to Humanitl | Genau ein Socket, zu Humanitl | `sandboxGuaranteeOneSocket` | |
 | seccomp active | New sockets forbidden (seccomp) | Neue Sockets verboten (seccomp) | `sandboxGuaranteeSeccomp` | |
+| no way out | No way out | Kein Weg nach außen | `sandboxGuaranteeNoWayOutMacos` | guarantee 1 on macOS |
+| one door | Exactly one door, to Humanitl | Genau eine Tür, zu Humanitl | `sandboxGuaranteeOneDoorMacos` | guarantee 2 on macOS |
+| held to the profile | Held to the Seatbelt profile | An das Seatbelt-Profil gehalten | `sandboxGuaranteeProfileMacos` | guarantee 3 on macOS |
 | project folder | Project folder | Projektordner | `setupCheckProject` | |
 | work dir | Work directory | Arbeitsverzeichnis | `sandboxWorkDirectory` | `/work` stays |
 | agent is waiting | The agent is waiting for you | Der Agent wartet auf dich | `commonAgentWaiting` | "du" form |

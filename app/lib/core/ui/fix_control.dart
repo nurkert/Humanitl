@@ -88,6 +88,12 @@ final Provider<EnvWriter> envWriterProvider = Provider<EnvWriter>(
 /// [installServiceArguments].
 const String installServiceCommand = 'humanitl daemon install';
 
+/// [installServiceCommand] so, wie ein Mensch die Zeile auf diesem System tippt.
+///
+/// Unter macOS liegt die Kommandozeile in der App und nicht im `PATH`, dort
+/// steht deshalb der volle Pfad (HUM-372).
+String get installServiceLine => '${commandLineProgram()} daemon install';
+
 /// Name der Kommandozeile neben der laufenden Anwendung.
 const String installServiceBinary = 'humanitl';
 
@@ -388,7 +394,7 @@ FixAction _commandLineFix(Object? fix) {
       return FixAction.copyCommand(command: command);
     }
   }
-  return const FixAction.copyCommand(command: installServiceCommand);
+  return FixAction.copyCommand(command: installServiceLine);
 }
 
 /// Der Befund eines fehlgeschlagenen Versuchs.
@@ -401,7 +407,7 @@ Diagnostic _installFailed(String why) => Diagnostic(
   code: DiagnosticCodes.daemonUnreachable,
   severity: Severity.error,
   why: why,
-  fix: const FixAction.copyCommand(command: installServiceCommand),
+  fix: FixAction.copyCommand(command: installServiceLine),
 );
 
 /// Was ein Klick auf [FixAction.installService] startet. In Tests ersetzt.
@@ -792,7 +798,7 @@ class _FixControlState extends ConsumerState<FixControl> {
                     : l10n.setupFixInstallServiceRun,
               ),
             ),
-            Text(installServiceCommand, style: style),
+            Text(installServiceLine, style: style),
           ],
         ),
         if (failure != null) ...<Widget>[
@@ -817,7 +823,7 @@ class _FixControlState extends ConsumerState<FixControl> {
             text: switch (failure.fix) {
               FixActionCopyCommand(:final String command) => command,
               FixActionOpenUrl(:final String url) => url,
-              _ => installServiceCommand,
+              _ => installServiceLine,
             },
             style: style,
             reflow: true,

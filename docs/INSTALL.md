@@ -11,8 +11,9 @@ macOS app and its disk image are built is in `packaging/macos/` (HUM-326).
 This page keeps what the guide leaves out: the APT repository, switching
 between install forms, why the systemd unit is hardened the way it is, the
 runtime directory without logind, building the packages and the manual test
-matrix. Shipped code links to two sections of this page (`#hardening` and
-`#xdg_runtime_dir-ohne-logind`); both anchors stay.
+matrix. Shipped code links to three sections of this page (`#hardening`,
+`#xdg_runtime_dir-ohne-logind` and `#runtime-directory-on-macos`); all three
+anchors stay.
 
 ## APT repository
 
@@ -200,6 +201,35 @@ Which file that is depends on the shell:
 The line takes effect after the next login. From then on daemon, command line
 and app find the same directory. That the clients find it without this line is
 HUM-222.
+
+## Runtime directory on macOS
+
+On macOS socket and token lie in `~/Library/Application Support/Humanitl/run`, for daemon, CLI and
+app alike. `XDG_RUNTIME_DIR` is not part of a macOS session, and `/run/user` does not exist.
+
+Only when that path is too long for a Unix socket (104 bytes, which takes a very long account
+name) do all three use `$TMPDIR/humanitl-<uid>` instead; macOS clears that directory of files
+nobody touched for three days. If a client refuses the directory there, compare it with `ls -ld`:
+it has to belong to your account with mode `0700`. Correct the mode with `chmod 700`. A directory
+that belongs to another account takes an administrator to remove. Then restart the daemon, so it
+writes socket and token anew:
+
+```sh
+/Applications/Humanitl.app/Contents/MacOS/bin/humanitl daemon restart
+```
+
+## macOS at a glance
+
+The command line lies in the app and not on `PATH`. The table gives the full path; the guide shows
+how to [link it](guides/install.md#install-on-macos).
+
+| Task | On macOS |
+|---|---|
+| Install | Drag `Humanitl.app` from the disk image into Applications, allow the first start, then "Install and start" on the setup screen, or `/Applications/Humanitl.app/Contents/MacOS/bin/humanitl daemon install`. This writes the launchd agent `~/Library/LaunchAgents/dev.humanitl.humanitld.plist`. |
+| Update | Replace `Humanitl.app` in Applications with the new version, then `/Applications/Humanitl.app/Contents/MacOS/bin/humanitl daemon restart`. There is no package manager and no `apt upgrade`; the agent keeps pointing at the same path. |
+| Check | `/Applications/Humanitl.app/Contents/MacOS/bin/humanitl doctor`. The [lines on macOS](cli.md#the-lines-on-macos) say what it measures there. |
+| Log | `/Applications/Humanitl.app/Contents/MacOS/bin/humanitl daemon logs`, which reads `~/Library/Logs/Humanitl/humanitld.log`. |
+| Uninstall | `/Applications/Humanitl.app/Contents/MacOS/bin/humanitl daemon uninstall`, then delete the app. |
 
 ## Building the packages
 
