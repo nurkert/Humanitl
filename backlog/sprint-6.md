@@ -44,6 +44,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-367 | Statusleiste: Daemon-Neustart auch mit laufender Sitzung, ohne `systemctl`-Hinweis | S | HUM-284 |
 | HUM-365 | macOS: OpenCode 2 startet in der Sandbox, mit einem eigenen Port je Sitzung | M | HUM-323 |
 | HUM-369 | macOS: `/dev/stdout`, `/dev/stderr` und `/dev/fd/N` sind in der Sandbox beschreibbar | S | HUM-323 |
+| HUM-366 | macOS: Git funktioniert in der Sandbox, `.git/config` bleibt maskiert | S | HUM-323 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -659,3 +660,14 @@ Akzeptanz:
 ## HUM-369 · macOS: `/dev/stdout`, `/dev/stderr` und `/dev/fd/N` sind in der Sandbox beschreibbar
 
 Skripte, die nach `/dev/stdout` schreiben, endeten mit `Operation not permitted`. Akzeptanz: Die drei Pfade sind beschreibbar und öffnen nur, was der Prozess schon hält; `tests/escape/macos/run.sh` prüft es.
+
+## HUM-366 · macOS: Git funktioniert in der Sandbox, `.git/config` bleibt maskiert
+
+Unter Linux liegt über `.git/config` eine leere Datei, unter macOS verbietet Seatbelt das Lesen, und jeder Git-Befehl endete mit `unable to access '.git/config': Operation not permitted`.
+
+Akzeptanz:
+
+- Ist `.git` ein Verzeichnis und `.git/config` maskiert, zeigt `GIT_COMMON_DIR` auf ein Verzeichnis der Sitzung mit gefilterter `config` und leeren Hooks; `objects`, `refs` und die übrigen Ablagen sind Verweise auf die echten. Das setzt ein `git` der Sitzung, nur wenn das Repository am Ort das Projekt ist.
+- Status, Log, Commit, Branch und Checkout wirken im echten Repository.
+- Der Inhalt der echten `config` bleibt unlesbar, auch über `git config`.
+- Die Maske selbst bleibt, und die Hooks des Projekts laufen nicht.
