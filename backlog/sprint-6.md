@@ -45,6 +45,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-365 | macOS: OpenCode 2 startet in der Sandbox, mit einem eigenen Port je Sitzung | M | HUM-323 |
 | HUM-369 | macOS: `/dev/stdout`, `/dev/stderr` und `/dev/fd/N` sind in der Sandbox beschreibbar | S | HUM-323 |
 | HUM-366 | macOS: Git funktioniert in der Sandbox, `.git/config` bleibt maskiert | S | HUM-323 |
+| HUM-368 | macOS: Das Sitzungsverzeichnis samt Zugangsschlüssel verschwindet mit der Sandbox | S | HUM-323 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -671,3 +672,13 @@ Akzeptanz:
 - Status, Log, Commit, Branch und Checkout wirken im echten Repository.
 - Der Inhalt der echten `config` bleibt unlesbar, auch über `git config`.
 - Die Maske selbst bleibt, und die Hooks des Projekts laufen nicht.
+
+## HUM-368 · macOS: Das Sitzungsverzeichnis samt Zugangsschlüssel verschwindet mit der Sandbox
+
+Unter Linux liegt der Schlüssel des Modells in einem memfd. Unter macOS lag er als Datei im Sitzungsverzeichnis, und das blieb bis zu sieben Tage liegen.
+
+Akzeptanz:
+
+- Endet die Sandbox, ist das Sitzungsverzeichnis nach der Frist weiterer Shells weg, auch wenn niemand mehr ein Handle hält; ein neuer Start derselben Sitzung behält seines.
+- Unter Linux ändert sich nichts.
+- `docs/SECURITY.md` nennt die Datei auf der Platte und den Fall nach einem Absturz.

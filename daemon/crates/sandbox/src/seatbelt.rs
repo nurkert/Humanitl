@@ -1093,6 +1093,7 @@ impl SandboxBackend for SeatbeltBackend {
             .map(|fd| (fd.as_raw_fd(), fd.as_raw_fd()))
             .collect();
         Ok(LaunchPlan {
+            session_dir: Some(layout.root.clone()),
             argv,
             env,
             fds,
@@ -1113,7 +1114,12 @@ impl SandboxBackend for SeatbeltBackend {
     }
 
     fn launch(&self, plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic> {
-        crate::bwrap::launch_plan(&self.program, plan, self.stdio, self.output_sink.clone())
+        let handle =
+            crate::bwrap::launch_plan(&self.program, plan, self.stdio, self.output_sink.clone())?;
+        if let Some(dir) = &plan.session_dir {
+            handle.remove_at_exit(dir.clone());
+        }
+        Ok(handle)
     }
 
     fn isolation_check(&self, handle: &SandboxHandle) -> Vec<CheckResult> {
