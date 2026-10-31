@@ -115,7 +115,7 @@ fn parses_default_profile() {
 
     assert_eq!(profile.version, 1);
     assert_eq!(profile.name, "default");
-    assert_eq!(profile.sandbox.backend, "bwrap");
+    assert_eq!(profile.sandbox.backend, "auto");
     assert_eq!(profile.sandbox.hostname, "sandbox");
     assert_eq!(
         profile.sandbox.unshare,

@@ -132,6 +132,39 @@ async fn the_snapshot_lists_the_project_the_socket_and_the_certificate() {
 
     assert_eq!(status.profile, "test");
     assert_eq!(status.work_mode, "rw");
+
+    // Unter Seatbelt gibt es kein `/work`: Die Tabelle nennt die echten Pfade,
+    // und was gesperrt ist, steht als eigene Zeile darin (HUM-376).
+    #[cfg(target_os = "macos")]
+    {
+        let project = home.path().join("project").canonicalize().unwrap();
+        let project = project.display().to_string();
+        assert!(
+            status
+                .mounts
+                .iter()
+                .any(|m| m.dst == project && m.mode == v1::MountMode::Rw as i32),
+            "the project is writable: {:?}",
+            status.mounts
+        );
+        assert!(
+            status
+                .mounts
+                .iter()
+                .any(|m| m.dst == "/Users" && m.mode == v1::MountMode::Denied as i32),
+            "the private trees are denied: {:?}",
+            status.mounts
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    assert_the_linux_mount_table(&status, &home);
+}
+
+/// Die Tabelle unter Linux: feste Ziele, das Projekt als einzige schreibbare
+/// Einhängung.
+#[cfg(not(target_os = "macos"))]
+fn assert_the_linux_mount_table(status: &v1::sandbox_event::Status, home: &TempDir) {
     let dsts: Vec<&str> = status.mounts.iter().map(|m| m.dst.as_str()).collect();
     for required in [
         "/work",
@@ -177,14 +210,39 @@ async fn every_mount_of_the_table_stands_in_the_command_line() {
     )
     .await;
 
-    assert!(status.argv_preview.contains("--cap-drop ALL"));
-    assert!(status.argv_preview.contains("--unshare-net"));
-    for mount in &status.mounts {
-        assert!(
-            status.argv_preview.contains(&mount.dst),
-            "the command line does not mention {}",
-            mount.dst
-        );
+    // Unter macOS begrenzt nicht die Zeile die Sandbox, sondern das Profil
+    // (HUM-376); dort muss jeder Pfad der Tabelle stehen.
+    // Eine Datei im Sitzungsbaum steht dort nicht einzeln, ihr `subpath` deckt
+    // sie.
+    #[cfg(target_os = "macos")]
+    {
+        assert!(status.argv_preview.starts_with("/usr/bin/sandbox-exec -f "));
+        assert!(!status.argv_preview.contains("--unshare"));
+        assert!(status.policy_text.contains("(deny default)"));
+        for mount in &status.mounts {
+            let covered = Path::new(&mount.dst).ancestors().any(|path| {
+                status
+                    .policy_text
+                    .contains(&format!("(subpath \"{}\")", path.display()))
+            });
+            assert!(
+                covered || status.policy_text.contains(&mount.dst),
+                "the sandbox policy does not mention {}",
+                mount.dst
+            );
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        assert!(status.argv_preview.contains("--cap-drop ALL"));
+        assert!(status.argv_preview.contains("--unshare-net"));
+        for mount in &status.mounts {
+            assert!(
+                status.argv_preview.contains(&mount.dst),
+                "the command line does not mention {}",
+                mount.dst
+            );
+        }
     }
 }
 
@@ -240,11 +298,19 @@ async fn only_the_evidence_keeps_its_value_and_everything_else_is_withheld() {
             .unwrap_or_else(|| panic!("{key} is named"));
         assert!(entry.withheld, "{key} must be withheld");
         assert!(entry.value.is_empty(), "{key} has no value on the wire");
+        #[cfg(not(target_os = "macos"))]
         assert!(
             status
                 .argv_preview
                 .contains(&format!("--setenv {key} '<withheld>'")),
             "the command line withholds {key} too: {}",
+            status.argv_preview
+        );
+        // Unter macOS steht die Umgebung gar nicht in der Zeile (HUM-376).
+        #[cfg(target_os = "macos")]
+        assert!(
+            !status.argv_preview.contains(&format!("{key}=")),
+            "the command line must not carry {key}: {}",
             status.argv_preview
         );
     }

@@ -59,6 +59,7 @@ String sandboxMountModeLabel(AppLocalizations l10n, MountMode mode) =>
       MountMode.proc => l10n.sandboxMountModeProc,
       MountMode.dev => l10n.sandboxMountModeDev,
       MountMode.symlink => l10n.sandboxMountModeSymlink,
+      MountMode.denied => l10n.sandboxMountModeDenied,
     };
 
 /// The same label for [mount], naming where a link points.
@@ -73,9 +74,9 @@ String sandboxMountModeText(AppLocalizations l10n, MountEntry mount) =>
 
 /// The hue of a mount mode.
 ///
-/// Only one of the seven is coloured: a writable bind is the single line in
+/// Only one of the eight is coloured: a writable bind is the single line in
 /// the table through which the agent can change something on this machine.
-/// Colouring the other six would turn a table into a decoration and make the
+/// Colouring the other seven would turn a table into a decoration and make the
 /// one that matters harder to find (`docs/UX.md` 3.3).
 Color sandboxMountModeColor(HTokens tokens, MountMode mode) =>
     mode.isWritable ? tokens.colors.warningText : tokens.colors.fg1;
@@ -202,10 +203,17 @@ String workDirSentence(AppLocalizations l10n, SandboxStatus status) {
   final MountEntry? work = status.workMount;
   final String? dir = work?.src ?? status.workDirHost;
   if (dir == null || dir.isEmpty) {
-    return l10n.sandboxMountsSentenceNoWork;
+    return status.usesPolicy
+        ? l10n.sandboxPolicySentenceNoWork
+        : l10n.sandboxMountsSentenceNoWork;
   }
   final WorkMode mode = work == null
       ? status.workMode
       : (work.mode == MountMode.ro ? WorkMode.ro : WorkMode.rw);
-  return l10n.sandboxMountsSentence(dir, sandboxWorkModeLabel(l10n, mode));
+  final String label = sandboxWorkModeLabel(l10n, mode);
+  // Without mounts the agent sees the real file system; the sentence of
+  // bubblewrap would be false here (HUM-376).
+  return status.usesPolicy
+      ? l10n.sandboxPolicySentence(dir, label)
+      : l10n.sandboxMountsSentence(dir, label);
 }

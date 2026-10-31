@@ -267,7 +267,10 @@ pub struct SandboxProfile {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SandboxSection {
-    /// Der Name des Backends; im MVP nur `bwrap`.
+    /// Der Name des Backends: `auto` nimmt das des Systems (HUM-376). Wer das
+    /// eigene Backend ausdrücklich nennt, bekommt es, und `bwrap` bleibt für
+    /// bestehende Profile überall gültig. Was wirklich läuft, sagt immer
+    /// [`crate::SandboxBackend::name`], nie dieses Feld.
     pub backend: String,
     /// Der Hostname in der Sandbox. Muss [`HOSTNAME`] sein.
     pub hostname: String,
@@ -289,7 +292,7 @@ pub struct SandboxSection {
 impl Default for SandboxSection {
     fn default() -> Self {
         Self {
-            backend: "bwrap".to_owned(),
+            backend: crate::AUTO_BACKEND.to_owned(),
             hostname: HOSTNAME.to_owned(),
             unshare: Namespace::ALL.to_vec(),
             die_with_parent: true,
@@ -1657,10 +1660,16 @@ impl SandboxProfile {
         if self.name.trim().is_empty() {
             return Err(range(format!("{where_}: name is empty")));
         }
-        if self.sandbox.backend != "bwrap" {
+        let backend = self.sandbox.backend.as_str();
+        if ![crate::AUTO_BACKEND, "bwrap", crate::PLATFORM_BACKEND_NAME].contains(&backend) {
+            let platform = match crate::PLATFORM_BACKEND_NAME {
+                "bwrap" => String::new(),
+                other => format!(" and \"{other}\""),
+            };
             return Err(range(format!(
-                "{where_}: sandbox.backend = {:?}, the only backend of this build is \"bwrap\"",
-                self.sandbox.backend
+                "{where_}: sandbox.backend = {:?}, this build knows \"{}\", \"bwrap\"{platform}",
+                self.sandbox.backend,
+                crate::AUTO_BACKEND,
             )));
         }
         if self.sandbox.hostname != HOSTNAME {
@@ -1977,7 +1986,7 @@ name = "minimal"
     #[test]
     fn defaults_fill_a_minimal_profile() {
         let profile = parse(MINIMAL).expect("minimal profile parses");
-        assert_eq!(profile.sandbox.backend, "bwrap");
+        assert_eq!(profile.sandbox.backend, crate::AUTO_BACKEND);
         assert!(profile.sandbox.unshare.contains(&Namespace::Net));
         assert_eq!(profile.network.proxy_port, 3128);
         assert_eq!(profile.network.bridges.len(), 1);
@@ -2013,6 +2022,26 @@ name = "minimal"
         let text = "version = 1\nname = \"x\"\n[sandbox]\nbackend = \"docker\"\n";
         let err = parse(text).expect_err("docker is not a backend of this build");
         assert_eq!(err.code.as_str(), "CONFIG_003");
+        // Der Text nennt jeden Wert, den dieser Build annimmt.
+        let shown = format!("{err:?}");
+        for known in [crate::AUTO_BACKEND, "bwrap", crate::PLATFORM_BACKEND_NAME] {
+            assert!(shown.contains(known), "{known} is missing: {shown}");
+        }
+    }
+
+    /// Bestehende Profile nennen `bwrap` und laufen weiter; `seatbelt` gilt
+    /// nur, wo es Seatbelt gibt (HUM-376).
+    #[test]
+    fn the_named_backends_are_the_ones_of_this_build() {
+        let with =
+            |name: &str| format!("version = 1\nname = \"x\"\n[sandbox]\nbackend = \"{name}\"\n");
+        parse(&with("auto")).expect("auto is the default");
+        parse(&with("bwrap")).expect("existing profiles keep working");
+        assert_eq!(
+            parse(&with("seatbelt")).is_ok(),
+            cfg!(target_os = "macos"),
+            "seatbelt exists only on macOS"
+        );
     }
 
     #[test]

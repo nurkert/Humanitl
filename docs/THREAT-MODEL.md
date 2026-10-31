@@ -207,7 +207,8 @@ communication between two processes that both belong to the attacker, not egress
 
 One wrong mount voids everything: `/tmp/.X11-unix` gives keyboard and screen, the Wayland socket
 the same, D-Bus starts host processes, `/var/run/docker.sock` is root on the host. The profile is an
-allowlist; the full bwrap line is visible in `humanitl sandbox argv`; the argument builder refuses
+allowlist; the full command line of the sandbox (bwrap on Linux, `sandbox-exec` with its Seatbelt
+profile on macOS) is visible in `humanitl sandbox argv`; the argument builder refuses
 `$XDG_RUNTIME_DIR`, `/tmp`, `/run`, `/home`, `~/.ssh`, `~/.gitconfig`, `~/.netrc` and these sockets
 (`SANDBOX_006`); the isolation check looks for unexpected sockets in the running sandbox; and after
 the filter `AF_UNIX` is refused anyway. *Residual risk:* a user writing their own profile that adds

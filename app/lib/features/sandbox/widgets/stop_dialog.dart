@@ -55,7 +55,9 @@ class StopDialog extends StatelessWidget {
           ),
         ],
         child: Text(
-          l10n.sandboxStopBody,
+          sandboxUsesRealPaths
+              ? l10n.sandboxStopBodyPolicy
+              : l10n.sandboxStopBody,
           style: tokens.typography.ui13.tinted(tokens.colors.fg1),
         ),
       ),

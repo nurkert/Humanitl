@@ -9,7 +9,6 @@
 "app/lib/core/ipc/grpc_daemon_client.dart" = 1
 "app/lib/core/ui/shell_command.dart" = 1
 "app/lib/features/setup/setup_text.dart" = 2
-"app/test/core/ipc/generated_smoke_test.dart" = 2
 "app/test/features/sandbox/daemon_live_test.dart" = 1
 "app/test/features/sandbox/harness.dart" = 3
 "app/test/features/sandbox/sandbox_screen_test.dart" = 1
@@ -30,13 +29,13 @@
 "daemon/crates/core-types/src/diagnostics/mod.rs" = 3
 "daemon/crates/ipc/src/convert.rs" = 1
 "daemon/crates/ipc/src/fake/mod.rs" = 4
-"daemon/crates/ipc/src/sandbox.rs" = 14
-"daemon/crates/ipc/src/server.rs" = 2
+"daemon/crates/ipc/src/sandbox.rs" = 13
+"daemon/crates/ipc/src/server.rs" = 1
 "daemon/crates/ipc/src/summary.rs" = 1
 "daemon/crates/ipc/tests/sandbox_rpc.rs" = 1
 "daemon/crates/ipc/tests/sandbox_start.rs" = 9
 "daemon/crates/ipc/tests/terminal.rs" = 5
-"proto/humanitl/v1/humanitl.proto" = 3
+"proto/humanitl/v1/humanitl.proto" = 2
 
 [proxy_engine]
 

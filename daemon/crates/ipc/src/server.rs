@@ -81,9 +81,10 @@ use crate::{
 ///
 /// Die Liste ist eine Zusage, keine Absichtserklärung: `findings.regex` fehlt,
 /// solange die zugehörige RPC `UNIMPLEMENTED` liefert (HUM-025). Ein Client,
-/// der danach schaltet, soll nicht in einen Fehler laufen. `sandbox.bwrap`
-/// kommt erst mit [`IpcServer::with_sandbox`] dazu, also genau dann, wenn
-/// dieser Daemon wirklich eine Sandbox planen und starten kann (HUM-040).
+/// der danach schaltet, soll nicht in einen Fehler laufen. `sandbox.run` und
+/// sein alter Name kommen erst mit
+/// [`IpcServer::with_sandbox`] dazu, also genau dann, wenn dieser Daemon
+/// wirklich eine Sandbox planen und starten kann (HUM-040, HUM-376).
 pub const CAPABILITIES: &[&str] = &["hold", "proxy.h1"];
 
 /// Vorgabe für `ListFlowsRequest.limit`, wie im Vertrag beschrieben.
@@ -430,6 +431,9 @@ impl IpcServer {
     /// eine leere Tabelle zu zeigen, die wie „nichts eingehängt" aussieht.
     #[must_use]
     pub fn with_sandbox(mut self, sandbox: SandboxService) -> Self {
+        // Neutral, whatever backend this system has (HUM-376); the old name
+        // stays as an alias for clients that ask by the old name.
+        self.info.capabilities.push("sandbox.run".to_owned());
         self.info.capabilities.push("sandbox.bwrap".to_owned());
         // Further shells in the running sandbox (HUM-299): a client asks
         // before it offers the action.

@@ -44,11 +44,13 @@ use humanitl_config::{Config, Env, Paths, Resolved};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
+#[cfg(not(target_os = "macos"))]
+use humanitl_sandbox::LaunchInputs;
 use humanitl_sandbox::{
-    AdapterRegistry, AgentContext, CheckResult, INTERRUPT_GRACE, LaunchInputs, MountPolicy,
-    PlatformBackend, Refusal, RefusalReason, RefusalReporting, Refusals, SANDBOX_SHELL,
-    SandboxBackend, SandboxFile, SandboxHandle, SandboxProfile, SandboxView, SessionContext,
-    StdioMode, WorkDirSource, shell_line,
+    AdapterRegistry, AgentContext, CheckResult, INTERRUPT_GRACE, MountPolicy, PlatformBackend,
+    Refusal, RefusalReason, RefusalReporting, Refusals, SANDBOX_SHELL, SandboxBackend, SandboxFile,
+    SandboxHandle, SandboxProfile, SandboxView, SessionContext, StdioMode, WorkDirSource,
+    shell_line,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -204,17 +206,26 @@ fn argv(ctx: &Context, command: &[OsString]) -> Result<u8, Failure> {
     // Die Vorschau, nicht der Plan: feste Deskriptornummern, alles unter
     // `/work` als vorhanden. Der Plan legt Deskriptoren an und verlangt
     // Socket, CA und Shim; nichts davon braucht, wer nur nachsehen will.
-    let mut args = vec![setup.backend.program().as_os_str().to_owned()];
-    args.extend(setup.profile.to_bwrap_args(
-        &setup.session,
-        &LaunchInputs::preview_with_agent_files(
-            setup.session.files.iter().map(|file| file.dst.clone()),
-        ),
-    ));
+    #[cfg(target_os = "macos")]
+    let preview = setup.backend.preview(&setup.profile, &setup.session, false);
+    #[cfg(target_os = "macos")]
+    let args = preview.argv.clone();
+    #[cfg(not(target_os = "macos"))]
+    let args = {
+        let mut args = vec![setup.backend.program().as_os_str().to_owned()];
+        args.extend(setup.profile.to_bwrap_args(
+            &setup.session,
+            &LaunchInputs::preview_with_agent_files(
+                setup.session.files.iter().map(|file| file.dst.clone()),
+            ),
+        ));
+        args
+    };
     let line = shell_line(&args);
 
     if ctx.render.is_json() {
-        ctx.render.value(&json!({
+        #[allow(unused_mut)] // Nur unter macOS kommt etwas dazu.
+        let mut value = json!({
             "profile": setup.profile.name,
             "program": setup.backend.program().display().to_string(),
             "argv": args
@@ -222,11 +233,47 @@ fn argv(ctx: &Context, command: &[OsString]) -> Result<u8, Failure> {
                 .map(|arg| arg.to_string_lossy().into_owned())
                 .collect::<Vec<String>>(),
             "argv_line": line,
-        }));
+        });
+        #[cfg(target_os = "macos")]
+        {
+            value["backend"] = json!(setup.backend.name());
+            value["policy"] = json!(preview.policy_text);
+            value["rules"] = preview_rules_json(&preview);
+        }
+        ctx.render.value(&value);
     } else {
         ctx.render.line(&line);
+        // Unter macOS begrenzt nicht die Zeile die Sandbox, sondern das Profil
+        // (HUM-376).
+        #[cfg(target_os = "macos")]
+        {
+            ctx.render.line("");
+            ctx.render.line(&preview.policy_text);
+        }
     }
     Ok(EXIT_OK)
+}
+
+/// Die Tabelle der Vorschau für `sandbox argv --json`: echter Pfad, Recht und
+/// die Namen aus der Profildatei.
+#[cfg(target_os = "macos")]
+fn preview_rules_json(preview: &humanitl_sandbox::SeatbeltPreview) -> serde_json::Value {
+    use humanitl_sandbox::PolicyAccess;
+    preview
+        .rows
+        .iter()
+        .map(|rule| {
+            json!({
+                "path": rule.path.display().to_string(),
+                "access": match rule.access {
+                    PolicyAccess::ReadOnly => "read",
+                    PolicyAccess::ReadWrite => "write",
+                    PolicyAccess::Denied => "denied",
+                },
+                "profile_paths": rule.names,
+            })
+        })
+        .collect()
 }
 
 /// `sandbox run`: starten, durchreichen, mit dem Code des Befehls enden.
