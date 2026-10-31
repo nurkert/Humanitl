@@ -406,13 +406,23 @@ Die Kanäle K-19 bis K-23 gibt es nur auf macOS, wo die Sandbox Seatbelt statt b
 
 Auf macOS gibt es keinen Netzwerk-Namespace, also lauscht die Tür des Shims auf einem
 Loopback-Port des Rechners, frei gewählt je Session. Angreifer (b) würde versuchen, von innen
-andere Loopback-Dienste des Rechners zu erreichen; das Profil erlaubt ausgehendes Loopback nur zum
-eigenen Port der Session, und `tests/escape/macos/run.sh` prüft, dass ein anderer Port verweigert
+andere Loopback-Dienste des Rechners zu erreichen; das Profil erlaubt ausgehendes Loopback nur zu
+den eigenen Ports der Session, und `tests/escape/macos/run.sh` prüft, dass ein anderer Port verweigert
 wird. In der anderen Richtung kann sich jeder lokale Prozess jedes Kontos mit der Tür verbinden und
 erreicht den Proxy, als wäre er der Agent. *Restrisiko:* Ein solcher Prozess sendet mit den Regeln
 der Session: Was eine `allow`-Regel oder die Durchleitung durchlässt, geht ohne Anhalten hinaus, der
 Rest landet in der Warteschlange des Besitzers, und der Mensch sieht es als Anfrage des Agenten.
 HUM-331 beschränkt den Proxy auf den Shim der Session.
+
+Das Profil erlaubt außerdem einen zweiten, zufälligen Port der Session, auf dem ein Agent seinen
+eigenen lokalen Server betreiben darf (HUM-365): OpenCode 2 spricht mit einem, und ein fester Port
+ließe die Sandbox an einen Dienst des Rechners. Seatbelt kennt nur `localhost`, das beide Adressen
+umfasst, also ist ein Session-Port auf `127.0.0.1` und `[::1]` frei und nie einer der festen
+Dienst-Ports von OpenCode. *Restrisiko:* Jeder lokale Prozess erreicht auch diesen Server, darum
+schützt ihn der Adapter mit einem Passwort je Session. Es schützt vor anderen lokalen Prozessen,
+nicht vor dem Agenten: Der Wert steht in dessen Umgebung und kann in einer Aufzeichnung landen. Ein
+Prozess des Rechners, der diesen Port während der Session auf der anderen Adresse bindet, wird von
+innen erreichbar; er müsste dafür genau diesen zufälligen Port treffen.
 
 ### K-20 Kein PID-Namespace auf macOS
 

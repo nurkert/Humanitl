@@ -51,7 +51,21 @@ use std::time::Duration;
 use libc::c_int;
 
 use crate::bridge::{self, Bound, Bridge};
+
 use crate::report::{Check, Report};
+
+/// Die Variable mit dem zweiten Port der Sitzung (`ENV_AGENT_PORT`).
+const AGENT_PORT_ENV: &str = "HUMANITL_AGENT_PORT";
+
+/// Ein Port, der weder `own` noch der des Agenten ist.
+fn other_port(own: u16, agent: Option<u16>) -> u16 {
+    let next = |port: u16| if port == u16::MAX { 1024 } else { port + 1 };
+    let mut port = next(own);
+    while Some(port) == agent || port == own {
+        port = next(port);
+    }
+    port
+}
 
 const EXIT_USAGE: i32 = 125;
 const EXIT_SETUP: i32 = 126;
@@ -232,11 +246,12 @@ fn single_door(door: &Path, own: SocketAddr) -> (bool, String) {
         Err(err) => format!("does not answer: {err}"),
     };
     let foreign = refused(UnixStream::connect(FOREIGN_SOCKET).map(drop));
-    let other_port = if own.port() == u16::MAX {
-        1
-    } else {
-        own.port() + 1
-    };
+    // Der zweite Port der Sitzung gehört dem Agenten (HUM-365) und taugt nicht
+    // als Beispiel für einen fremden.
+    let agent_port = env::var(AGENT_PORT_ENV)
+        .ok()
+        .and_then(|port| port.parse::<u16>().ok());
+    let other_port = other_port(own.port(), agent_port);
     let other = SocketAddr::from(([127, 0, 0, 1], other_port));
     let loopback = refused(TcpStream::connect_timeout(&other, Duration::from_secs(2)).map(drop));
     (
@@ -649,4 +664,16 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, Option<Str
         }
     }
     Err(Some("no command after --".to_owned()))
+}
+
+#[cfg(test)]
+mod other_port_tests {
+    use super::other_port;
+
+    #[test]
+    fn the_foreign_port_is_never_the_agents() {
+        assert_eq!(other_port(4000, None), 4001);
+        assert_eq!(other_port(4000, Some(4001)), 4002);
+        assert_eq!(other_port(u16::MAX, Some(1024)), 1025);
+    }
 }

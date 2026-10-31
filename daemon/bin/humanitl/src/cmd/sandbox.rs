@@ -1064,6 +1064,9 @@ fn agent_contribution(
 
     let mut command = adapter.command(&agent_ctx);
     let program = humanitl_sandbox::agent::bind_agent_program(&agent_ctx, &mut command);
+    if cfg!(target_os = "macos") {
+        command = adapter.on_shared_loopback(command);
+    }
     Ok(AgentContribution {
         command,
         program,

@@ -42,6 +42,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-360 | Website auf Telefonen: Download-Felder passen in die Breite, Pfeile und Zählwerk der Bühne stehen frei | S | HUM-337, HUM-347, HUM-338 |
 | HUM-364 | Proxy: Klartext-HTTP im `CONNECT`-Tunnel, damit `pi` 1.x sein lokales Modell erreicht | S | HUM-024 |
 | HUM-367 | Statusleiste: Daemon-Neustart auch mit laufender Sitzung, ohne `systemctl`-Hinweis | S | HUM-284 |
+| HUM-365 | macOS: OpenCode 2 startet in der Sandbox, mit einem eigenen Port je Sitzung | M | HUM-323 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -640,3 +641,16 @@ Akzeptanz:
 - Läuft eine Sitzung, fragt der Knopf in der Leiste nach; der Fokus steht auf Abbrechen, `Escape` bricht ab, und nur die zweite Antwort stoppt die Sitzung und startet neu.
 - Die Antwort gilt genau der Sandbox, nach der gefragt wurde.
 - Ein Daemon, der busy bleibt, wird nie neu gestartet. Start, Stopp, unbekannter Zustand und eine fehlende Kommandozeile ruhen wie bisher.
+
+## HUM-365 · macOS: OpenCode 2 startet in der Sandbox, mit einem eigenen Port je Sitzung
+
+OpenCode 2 spricht mit einem lokalen Server auf Port 49374 oder, mit `--standalone`, auf einem beliebigen. Beides verbietet das Seatbelt-Profil, die Oberfläche blieb bei `Starting background server...` stehen. Unter Linux hat jede Sandbox ihr eigenes Loopback.
+
+Akzeptanz:
+
+- Das Profil erlaubt neben der Tür genau einen zweiten, zufälligen Port der Sitzung; `HUMANITL_AGENT_PORT` nennt ihn.
+- Der Port 49374 bleibt gesperrt, damit die Sandbox keinen Dienst des Hosts erreicht.
+- Der Adapter startet den Server auf diesem Port mit einem Passwort je Sitzung und beendet ihn mit der Oberfläche; Fassungen vor 2 starten unverändert.
+- Der Server bleibt am Proxy, nur die Oberfläche geht an ihm vorbei.
+- `single_socket` prüft weiter einen fremden Port und wählt dafür nie den des Agenten.
+- `README.md`, `docs/SECURITY.md` und `docs/THREAT-MODEL.md` nennen den zweiten Port.

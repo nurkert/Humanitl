@@ -2662,10 +2662,7 @@ impl Inner {
             );
         }
         let agent = AgentFacts {
-            command: prepared
-                .session
-                .command
-                .first()
+            command: humanitl_sandbox::agent::opencode::shown_program(&prepared.session.command)
                 .map(|command| command.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             path: sandbox_path_of(prepared),
@@ -3598,6 +3595,9 @@ impl Inner {
         } else {
             humanitl_sandbox::agent::bind_agent_program(&ctx, &mut command)
         };
+        if cfg!(target_os = "macos") && !ctx.agent_command_from_caller {
+            command = adapter.on_shared_loopback(command);
+        }
         Ok(AgentContribution {
             command,
             program,

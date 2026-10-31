@@ -590,7 +590,7 @@ const en: Copy = {
             'The socket file is bound, never its directory. Everything else is an allowlist; a denylist refuses `$XDG_RUNTIME_DIR`, `/run`, `/home`, `~/.ssh`, X11, Wayland, D-Bus and Docker with `SANDBOX_006`. There is no `/etc/resolv.conf`, and the project folder and extra mounts are pinned by descriptor.',
           manual: ['exactly one line: `/run/humanitl/proxy.sock`', '`sandbox`'],
           note: '`-xtype s` because bwrap binds the socket over an empty file; no `-xdev` because `/work`, `/tmp`, `/dev/shm` and `/home/agent` are separate mounts.',
-          mac: 'Allowed are the daemon’s proxy socket and the session’s loopback port. Measured: the door answers, `/var/run/syslog` and a foreign loopback port do not.',
+          mac: 'Allowed are the daemon’s proxy socket, the session’s loopback port and a second random port for the agent’s own server. Measured: the door answers, `/var/run/syslog` and a foreign loopback port do not.',
           src: [
             { label: 'SECURITY.md §3', href: '/en/docs/security/#3-guarantee-2-exactly-one-door' },
             { label: 'esc-2-mounts.sh', href: 'gh:tests/escape' },
@@ -842,7 +842,7 @@ const en: Copy = {
         {
           label: 'Guarantee 2',
           linux: 'Exactly one door: `/run/humanitl/proxy.sock`',
-          macos: 'Exactly one door: the proxy socket and the session’s loopback port',
+          macos: 'Exactly one door: the proxy socket and the session’s loopback port, plus one port for the agent’s own server',
         },
         { label: 'Guarantee 3', linux: 'seccomp', macos: 'The kernel holds the process to the profile' },
       ],
@@ -851,7 +851,7 @@ const en: Copy = {
         {
           id: 'K-19',
           title: 'Shared loopback',
-          text: 'Any local process, of any account, can reach the door and sends with the session’s rules. Whatever matches allow or passthrough leaves without a hold; everything else is held as if it came from the agent. In return the agent reaches no other loopback port.',
+          text: 'Any local process, of any account, can reach the door and sends with the session’s rules. Whatever matches allow or passthrough leaves without a hold; everything else is held as if it came from the agent. In return the agent reaches no loopback port beyond its session’s two.',
           advice: 'Fix planned: HUM-331.',
         },
         {
