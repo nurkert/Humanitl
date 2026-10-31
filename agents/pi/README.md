@@ -13,7 +13,15 @@ downloaded.
 | `web-search.json.tmpl` | `~/.pi/agent/web-search.json` | Only with `pi-web-access`: lets the proxy resolve host names (`ssrf.trustEnvProxy`) |
 
 The briefing is the shared one of `agents/opencode/briefing.*.md`, written to
-`~/.pi/agent/AGENTS.md`.
+`~/.pi/agent/AGENTS.md`. The skill `humanitl` is the shared one of
+`agents/skill/SKILL.*.md` (HUM-364), written read-only to
+`~/.pi/agent/skills/humanitl/SKILL.md`: pi 1.4.0 scans `<agent-dir>/skills`
+recursively for `SKILL.md` and lists name and description in the system
+prompt; a skill there needs no trust prompt. Checked with pi's own
+`DefaultResourceLoader` on a temporary agent directory: the skill loads
+without diagnostics. It is the only skill Humanitl ships, and it follows
+`agent.briefing.enabled`. pi's `bash` has no default timeout, so there is no
+tool timeout to raise (HUM-308).
 
 ## How the templates are filled
 
