@@ -368,12 +368,21 @@ The channels K-19 to K-23 exist only on macOS, where the sandbox is Seatbelt ins
 
 There is no network namespace on macOS, so the shim's door listens on a loopback port of the
 host, chosen free per session. Attacker (b) would try to reach other loopback services of the
-host from inside; the profile allows outbound loopback only to the session's own port, and
+host from inside; the profile allows outbound loopback only to the session's own ports, and
 `tests/escape/macos/run.sh` checks that another port is refused. In the other direction any
 local process of any account can connect to the door and reaches the proxy as if it were the
 agent. *Residual risk:* such a process sends with the session's rules: what an `allow` rule or the
 passthrough lets through goes out without a hold, the rest lands in the owner's queue, and the
 human sees it as the agent's. HUM-331 restricts the proxy to the session's shim.
+
+The profile also allows a second random port of the session, on which an agent may run its own
+local server (HUM-365): OpenCode 2 talks to one, and a fixed port would let the sandbox reach a
+service of the host. Seatbelt can name only `localhost`, which covers both addresses, so a session
+port is one that is free on `127.0.0.1` and `[::1]` and never OpenCode's fixed service ports.
+*Residual risk:* any local process reaches that server too, so the adapter guards it with a
+password per session. It protects against other local processes, not against the agent: the
+value is in the agent's environment and can end up in a recording. A host process that binds that port on the other address while the session
+runs becomes reachable from inside; it would have to pick that random port during the session.
 
 ### K-20 No PID namespace on macOS
 

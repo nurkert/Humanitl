@@ -112,6 +112,48 @@ pub const ADAPTER_ID: &str = "opencode";
 /// Das Kommando, das ohne `agent.command` gestartet wird.
 pub const DEFAULT_COMMAND: &str = "opencode";
 
+/// Der Start von `OpenCode` 2 auf geteiltem Loopback (HUM-365).
+///
+/// Ab Version 2 spricht die Oberfläche mit einem lokalen Server: dem
+/// Hintergrunddienst auf dem festen Port 49374 oder mit `--standalone` auf
+/// einem beliebigen. Beides verbietet das Seatbelt-Profil, und die Oberfläche
+/// bleibt ohne Meldung leer. Den festen Port zu erlauben ließe die Sandbox an
+/// einen Dienst des Hosts, also startet dieses Skript den Server selbst auf
+/// dem zufälligen Port der Sitzung, mit einem Passwort, weil jeder lokale
+/// Prozess diesen Port erreicht (K-19), und beendet ihn mit der Oberfläche.
+/// Der Server bleibt am Proxy; nur die Oberfläche, die allein mit ihm spricht,
+/// geht an ihm vorbei. Fassungen vor 2 und andere Programme kennen `--server`
+/// nicht und starten unverändert.
+pub const SHARED_LOOPBACK_START: &str = r#"program="$1"; shift
+case "$("$program" --version 2>/dev/null)" in
+  v[2-9].*|[2-9].*|v[1-9][0-9].*|[1-9][0-9].*) ;;
+  *) exec "$program" "$@" ;;
+esac
+address="127.0.0.1:$HUMANITL_AGENT_PORT"
+OPENCODE_SERVER_PASSWORD="$(od -An -N24 -tx1 /dev/urandom | tr -d ' 
+')"
+export OPENCODE_SERVER_PASSWORD
+"$program" serve --hostname 127.0.0.1 --port "$HUMANITL_AGENT_PORT" >/dev/null 2>&1 &
+server=$!
+trap 'kill "$server" 2>/dev/null' EXIT
+tries=0
+until /usr/bin/curl --noproxy '*' --silent --output /dev/null "http://$address/"; do
+  tries=$((tries + 1))
+  [ "$tries" -lt 100 ] || break
+  sleep 0.1
+done
+NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 "$program" --server "http://$address" "$@"
+"#;
+
+/// Das Programm eines Kommandos, auch wenn [`SHARED_LOOPBACK_START`] es trägt.
+#[must_use]
+pub fn shown_program(command: &[OsString]) -> Option<&OsString> {
+    match command {
+        [_, _, script, _, program, ..] if script == SHARED_LOOPBACK_START => Some(program),
+        _ => command.first(),
+    }
+}
+
 /// Das Verzeichnis, in dem die Dateien dieses Adapters in der Sandbox liegen.
 pub const OPENCODE_DIR: &str = "/etc/humanitl/opencode";
 
@@ -956,6 +998,18 @@ impl AgentAdapter for OpenCodeAdapter {
             .unwrap_or_else(|| vec![OsString::from(DEFAULT_COMMAND)])
     }
 
+    fn on_shared_loopback(&self, command: Vec<OsString>) -> Vec<OsString> {
+        let mut wrapped = vec![
+            OsString::from("/bin/sh"),
+            OsString::from("-c"),
+            OsString::from(SHARED_LOOPBACK_START),
+            // `sh -c` nimmt das erste Argument als `$0`.
+            OsString::from(DEFAULT_COMMAND),
+        ];
+        wrapped.extend(command);
+        wrapped
+    }
+
     fn env(&self, ctx: &AgentContext) -> Vec<(String, String)> {
         let ca = ctx.ca_path_sandbox.to_string_lossy().into_owned();
         let home = ctx.home.to_string_lossy().into_owned();
@@ -1190,6 +1244,28 @@ mod tests {
     /// Die Vorschläge nennen das Binary aus seinen Bytes (HUM-215): Ein Name
     /// mit Leerzeichen bleibt ein Wort, und ein Byte, das kein UTF-8 ist,
     /// bleibt dieses Byte statt `U+FFFD`.
+    #[test]
+    fn on_shared_loopback_the_program_reaches_the_script_as_first_argument() {
+        use std::ffi::OsString;
+
+        use crate::agent::AgentAdapter as _;
+        use crate::agent::opencode::{DEFAULT_COMMAND, OpenCodeAdapter, SHARED_LOOPBACK_START};
+
+        let wrapped = OpenCodeAdapter.on_shared_loopback(vec![
+            OsString::from("/run/agent/opencode"),
+            OsString::from("--x"),
+        ]);
+        assert_eq!(&wrapped[..2], ["/bin/sh", "-c"]);
+        assert_eq!(wrapped[3], DEFAULT_COMMAND);
+        assert_eq!(wrapped[4], "/run/agent/opencode");
+        assert_eq!(wrapped[5], "--x");
+        assert!(!SHARED_LOOPBACK_START.contains("49374"));
+        assert_eq!(
+            crate::agent::opencode::shown_program(&wrapped).unwrap(),
+            "/run/agent/opencode"
+        );
+    }
+
     #[test]
     fn the_fixes_quote_the_binary_from_its_bytes() {
         use std::ffi::OsStr;

@@ -35,7 +35,7 @@
 
 use std::ffi::OsString;
 use std::fmt::Write as _;
-use std::net::{Ipv4Addr, SocketAddr, TcpListener};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Component, Path, PathBuf};
@@ -259,9 +259,34 @@ pub struct SeatbeltPolicy {
     pub door: PathBuf,
     /// Der Loopback-Port der Sitzung.
     pub port: u16,
+    /// Der zweite Port der Sitzung: Hier darf ein Agent seinen eigenen lokalen
+    /// Server betreiben (HUM-365). Unter Linux hat er dafür ein ganzes eigenes
+    /// Loopback; hier ist Loopback geteilt, und das Profil nennt deshalb genau
+    /// einen zufälligen Port statt eines festen, hinter dem ein Dienst des
+    /// Hosts lauschen könnte.
+    pub agent_port: u16,
 }
 
 impl SeatbeltPolicy {
+    /// Der Netzwerkteil des Profils.
+    fn render_network(&self, out: &mut String) {
+        out.push_str(
+            ";; Network: the proxy socket and the session's two loopback ports, nothing else.\n",
+        );
+        let _ = writeln!(
+            out,
+            "(allow network-outbound (remote unix-socket (path-literal {})))",
+            quote_path(&self.door)
+        );
+        for port in [self.port, self.agent_port] {
+            let local = quote(&format!("localhost:{port}"));
+            let _ = writeln!(out, "(allow network-outbound (remote ip {local}))");
+            let _ = writeln!(out, "(allow network-bind (local ip {local}))");
+            let _ = writeln!(out, "(allow network-inbound (local ip {local}))");
+        }
+        out.push('\n');
+    }
+
     /// Das Profil als SBPL-Text.
     #[must_use]
     pub fn render(&self) -> String {
@@ -346,18 +371,7 @@ impl SeatbeltPolicy {
              (extension \"com.apple.sandbox.pty\")))\n\n",
         );
 
-        out.push_str(
-            ";; Network: the proxy socket and the session's loopback port, nothing else.\n",
-        );
-        let _ = writeln!(
-            out,
-            "(allow network-outbound (remote unix-socket (path-literal {})))",
-            quote_path(&self.door)
-        );
-        let local = quote(&format!("localhost:{}", self.port));
-        let _ = writeln!(out, "(allow network-outbound (remote ip {local}))");
-        let _ = writeln!(out, "(allow network-bind (local ip {local}))");
-        let _ = writeln!(out, "(allow network-inbound (local ip {local}))\n");
+        self.render_network(&mut out);
 
         if !self.masked.is_empty() {
             out.push_str(";; Masks of the profile: neither read nor written.\n");
@@ -593,7 +607,7 @@ impl SeatbeltBackend {
         layout: &SessionLayout,
         files: Vec<PathBuf>,
         door: &Path,
-        port: u16,
+        ports: (u16, u16),
     ) -> SeatbeltPolicy {
         // Masken wie unter Linux nur über das, was es im Projekt gibt; was
         // fehlt, nennt der Plan als ungeschützt (HUM-043).
@@ -645,7 +659,8 @@ impl SeatbeltBackend {
             masked,
             locked,
             door: door.to_path_buf(),
-            port,
+            port: ports.0,
+            agent_port: ports.1,
         }
     }
 }
@@ -683,6 +698,27 @@ fn canonical(path: &Path) -> Result<PathBuf, Diagnostic> {
 }
 
 /// Ein freier Loopback-Port für die Tür dieser Sitzung.
+/// Die Ports, die `OpenCode` für seinen Hintergrunddienst fest wählt (HUM-365).
+/// Hinter ihnen kann ein Dienst des Hosts lauschen, also sind sie nie der Port
+/// einer Sitzung.
+const AGENT_SERVICE_PORTS: [u16; 2] = [49_374, 49_375];
+
+/// Ein Port für diese Sitzung: frei auf beiden Loopback-Adressen, denn das
+/// Profil kennt nur `localhost` und erlaubt damit IPv4 und IPv6 zugleich. Wer
+/// auf `[::1]` lauscht, stünde sonst dem Agenten offen (HUM-365).
+fn session_port(taken: Option<u16>) -> Result<u16, Diagnostic> {
+    loop {
+        let port = free_port()?;
+        if Some(port) == taken || AGENT_SERVICE_PORTS.contains(&port) {
+            continue;
+        }
+        let v6 = TcpListener::bind((Ipv6Addr::LOCALHOST, port));
+        if v6.is_ok() || v6.is_err_and(|err| err.kind() == std::io::ErrorKind::AddrNotAvailable) {
+            return Ok(port);
+        }
+    }
+}
+
 fn free_port() -> Result<u16, Diagnostic> {
     TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
         .and_then(|listener| listener.local_addr())
@@ -802,19 +838,32 @@ impl SandboxBackend for SeatbeltBackend {
         let mut warnings = profile.unmask_diagnostics();
         place_files(session, &map, &mut warnings)?;
         let files = place_agent(session, &map, &shim)?;
-        let port = free_port()?;
+        let port = session_port(None)?;
+        let agent_port = session_port(Some(port))?;
         let unprotected = BwrapBackend::unprotected_under_work(
             profile,
             &BwrapBackend::present_under_work(profile, &work),
         );
         let policy_text = self
-            .policy(profile, session, &work, &layout, files, &door, port)
+            .policy(
+                profile,
+                session,
+                &work,
+                &layout,
+                files,
+                &door,
+                (port, agent_port),
+            )
             .render();
         write_file(&layout.profile(), policy_text.as_bytes(), 0o444)?;
 
         let (report_reader, report_writer) = BwrapBackend::inherited_pipe("report")?;
         let (status_reader, status_writer) = BwrapBackend::inherited_pipe("status")?;
-        let env = session_env(profile, session, &map, &layout, &door, port, &report_writer);
+        let mut env = session_env(profile, session, &map, &layout, &door, port, &report_writer);
+        env.push((
+            crate::agent::ENV_AGENT_PORT.to_owned(),
+            agent_port.to_string(),
+        ));
         // Weitere Shells: derselbe Shim ohne Bridge unter demselben Profil,
         // nur am eigenen Terminal des Daemons (wie unter Linux, HUM-299). Den
         // Bericht und die Bridge der Sitzung bekommen sie nicht.
@@ -1035,7 +1084,19 @@ mod tests {
             locked: vec![PathBuf::from("/Users/me/project/.git")],
             door: PathBuf::from("/private/var/folders/x/T/humanitl-501/proxy/proxy.sock"),
             port: 41_234,
+            agent_port: 41_235,
         }
+    }
+
+    #[test]
+    fn a_session_port_avoids_the_taken_and_a_v6_listener() {
+        let first = session_port(None).unwrap();
+        let v6 = TcpListener::bind((Ipv6Addr::LOCALHOST, 0)).unwrap();
+        let busy = v6.local_addr().unwrap().port();
+        let second = session_port(Some(first)).unwrap();
+        assert_ne!(first, second);
+        assert_ne!(second, busy);
+        assert!(!AGENT_SERVICE_PORTS.contains(&second));
     }
 
     #[test]
@@ -1055,7 +1116,9 @@ mod tests {
             "(allow network-outbound (remote unix-socket (path-literal \"/private/var/folders/x/T/humanitl-501/proxy/proxy.sock\")))"
         ));
         assert!(text.contains("(allow network-outbound (remote ip \"localhost:41234\"))"));
-        assert_eq!(text.matches("network-outbound").count(), 2, "{text}");
+        assert!(text.contains("(allow network-bind (local ip \"localhost:41235\"))"));
+        assert_eq!(text.matches("network-outbound").count(), 3, "{text}");
+        assert_eq!(text.matches("network-bind").count(), 2, "{text}");
         assert!(!text.contains("(allow network*)"));
         assert!(text.contains("(deny file-write* (literal \"/Users/me/project/.git\"))"));
         assert!(text.contains("(deny file-read-data file-write* (regex #\"^/dev/ttys[0-9]+$\"))"));
