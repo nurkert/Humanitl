@@ -25,6 +25,7 @@ class MainFlutterWindow: NSWindow {
     self.center()
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+    DesktopBridge.shared.install(messenger: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
 

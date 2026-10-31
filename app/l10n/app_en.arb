@@ -3550,5 +3550,11 @@
   "settingsSandboxModeNowDirect": "On this system the next start is direct.",
   "@settingsSandboxModeNowDirect": {"description": "Under sandbox.mode: what the daemon resolved for the next start (HUM-357)."},
   "sandboxDisposableFellBack": "Disposable is not available here, so this start is direct: {reason}",
-  "@sandboxDisposableFellBack": {"description": "Tooltip of the Disposable switch when the default sandbox.mode = auto fell back to direct (HUM-357); reason is the cause the daemon named (SANDBOX_033).", "placeholders": {"reason": {"type": "String"}}}
+  "@sandboxDisposableFellBack": {"description": "Tooltip of the Disposable switch when the default sandbox.mode = auto fell back to direct (HUM-357); reason is the cause the daemon named (SANDBOX_033).", "placeholders": {"reason": {"type": "String"}}},
+  "trayNoticeNotificationsDeniedTitle": "Notifications are not allowed",
+  "@trayNoticeNotificationsDeniedTitle": {"description": "Title of the UI_002 notice on macOS when the system refuses notifications (HUM-373)."},
+  "trayNoticeNotificationsDeniedWhy": "A held request cannot announce itself, so it shows only in the menu bar and on the Dock icon. Allow Humanitl under System Settings, Notifications.",
+  "@trayNoticeNotificationsDeniedWhy": {"description": "Cause of the UI_002 notice on macOS when the system refuses notifications (HUM-373)."},
+  "trayNoticeNotificationsFailedTitle": "Notifications could not be set up",
+  "@trayNoticeNotificationsFailedTitle": {"description": "Title of the UI_002 notice on macOS when the system could not be asked for the permission (HUM-373). The system's own sentence stands below it."}
 }

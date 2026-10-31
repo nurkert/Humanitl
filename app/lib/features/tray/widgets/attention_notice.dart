@@ -74,6 +74,17 @@ class AttentionNoticeBanner extends StatelessWidget {
   /// client raises itself, the sender's own sentence for anything else.
   static (String, String) _text(AppLocalizations l10n, Diagnostic diagnostic) =>
       switch (diagnostic.code) {
+        // Derselbe Code, ein anderer Grund: macOS ohne Mitteilungen (HUM-373).
+        DiagnosticCodes.noTray
+            when diagnostic.title == TrayDiagnostics.notificationsDeniedTitle =>
+          (
+            l10n.trayNoticeNotificationsDeniedTitle,
+            l10n.trayNoticeNotificationsDeniedWhy,
+          ),
+        // Keine Absage, sondern ein Fehler: Der Satz des Systems ist der Grund.
+        DiagnosticCodes.noTray
+            when diagnostic.title == TrayDiagnostics.notificationsFailedTitle =>
+          (l10n.trayNoticeNotificationsFailedTitle, diagnostic.why),
         DiagnosticCodes.noTray => (
           l10n.trayNoticeNoTrayTitle,
           l10n.trayNoticeNoTrayWhy,

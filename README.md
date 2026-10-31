@@ -343,7 +343,7 @@ opens the command palette, `Ctrl+,` the settings.
   ([`docs/guides/agent-profiles.md`](docs/guides/agent-profiles.md)).
 - A session summary with the touched files and a secret scan over the diff
   (`humanitl sessions summary`).
-- English and German interface, dark and light theme, an optional tray icon on Linux.
+- English and German interface, dark and light theme, an optional tray icon on Linux, a menu bar item on macOS.
 
 ## CLI
 
