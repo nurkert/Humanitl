@@ -1,6 +1,6 @@
 ---
 source: SECURITY.md
-source-sha256: 935654b80ffe1356c6825dbe4d3987f4abecbb5d229a500deb30a4c3d2e57bee
+source-sha256: ef83c66616b66b452e804fa3b482e9a604a17ddf9b3ed5ed77c8696302e992b2
 lang: de
 ---
 # Sicherheit
@@ -1367,8 +1367,8 @@ Log als Beleg übergeben lässt (HUM-214). ESC-5 führt `audit_delete_is_detecte
 
 ## 9. Was wir in der CI prüfen
 
-Nichts in diesem Dokument muss man glauben. Drei Wege, nachzusehen, vom schnellsten zum
-gründlichsten:
+Die Garantien in diesem Dokument lassen sich prüfen, nicht nur lesen. Drei Wege, nachzusehen,
+vom schnellsten zum gründlichsten:
 
 **1. Die genaue Kommandozeile.** Die vollständige Isolationsrichtlinie ist ein einziger
 bwrap-Aufruf. Er wird im Fenster gezeigt (Sandbox, Isolation, „Genauen Befehl anzeigen") und auf

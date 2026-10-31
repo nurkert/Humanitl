@@ -1,5 +1,6 @@
 ---
 import { path, repoUrl, type Lang } from '../../i18n/ui';
+import { docsHome } from '../../lib/docs-catalog.mjs';
 
 interface Props {
   s: any;
@@ -18,8 +19,8 @@ const c = s.closing;
     <pre class="sec-oneliner" tabindex="0"><code><span class="sec-term__p">$</span> {k.closingCmd}</code></pre>
     <p class="sec-closing__pills">
       <a class="pill pill--light" href={path('download', lang)}>{c.download}</a>
-      <a class="pill" href="/docs/security/">SECURITY.md</a>
-      <a class="pill" href="/docs/threat-model/">THREAT-MODEL.md</a>
+      <a class="pill" href={`${docsHome(lang)}security/`}>SECURITY.md</a>
+      <a class="pill" href={`${docsHome(lang)}threat-model/`}>THREAT-MODEL.md</a>
       <a class="pill" href={`${repoUrl}/tree/main/tests/escape`}>{c.tests}</a>
     </p>
     <a class="sec-closing__home" href={path('home', lang)}>{c.home}</a>

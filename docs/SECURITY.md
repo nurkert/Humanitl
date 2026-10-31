@@ -1264,8 +1264,8 @@ ESC-5 runs `audit_delete_is_detected` and `audit_truncate_is_detected` against a
 
 ## 9. What we verify in CI
 
-Nothing in this document has to be believed. Three ways to look, from the quickest to the most
-thorough:
+The guarantees in this document can be checked, not only read. Three ways to look, from the
+quickest to the most thorough:
 
 **1. The exact command line.** The complete isolation policy is one bwrap call. It is shown in the
 window (Sandbox, Isolation, "Show command line") and on the command line:

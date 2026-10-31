@@ -34,6 +34,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-349 | Der Zugangsschlüssel unter macOS im Keychain | S | HUM-140, HUM-323 |
 | HUM-357 | macOS: pi liest den Modellschlüssel auch aus einem Pfad mit Leerzeichen | S | HUM-328 |
 | HUM-348 | Landing: wenige Scheiben seitlich geneigt mit sichtbarer Tiefe, Licht wie geschliffenes Glas | M | HUM-347 |
+| HUM-359 | Website: Aussagen, die Code und Doku nicht decken, und falsche Sprachlinks | S | HUM-333, HUM-345, HUM-346 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -431,3 +432,33 @@ Akzeptanzkriterien:
 - Jedes Fenster liegt vom Licht her unter einer abgerundeten Glasscheibe ohne harte Kante: ein weiches Band folgt dem Rand, läuft ohne Knick um die Ecken und fällt nach innen sanft ab.
 - Das ist nur Reflexion über dem Bild. Es gibt keine Brechung, der Screenshot wird nicht verzerrt, und kein Filter läuft pro Frame.
 - Der Fächer schneidet weder Text noch Knöpfe, erzeugt keinen waagrechten Überlauf, und die Fassung ohne Skript zeigt denselben Aufbau.
+
+## HUM-359 · Website: Aussagen, die Code und Doku nicht decken, und falsche Sprachlinks
+
+### Kontext
+
+Ein Abgleich von humanitl.de mit `README.md`, `docs/SECURITY.md` und `docs/THREAT-MODEL.md` fand Sätze, die mehr versprechen, als die Software hält. Der Rechtstext sagte, du entscheidest Anfrage für Anfrage; `allow`-Regeln und der Passthrough zum Modell laufen aber ohne Halt. Der Passthrough läuft vor allen Regeln, mitgelieferte Regeln sind nicht „deine". Der Agent sieht unter Linux auch `/usr` und Teile von `/etc`, unter macOS fast alles außerhalb von `/Users` (K-21). Der Modellverkehr ist im Verlauf standardmäßig ausgeblendet, ein Ausfall der Aufzeichnung hinterlässt eine Lücke (K-16). Unter macOS besteht die Tür aus Socket und Loopback-Port (K-19), die Prüfung läuft nach dem Start (K-15), und der Agent kann den Modellschlüssel lesen. Dazu führten die englischen Seiten auf die deutschen Docs.
+
+### Spezifikation
+
+- `website/src/i18n/locales/de.ts` und `en.ts` sagen dasselbe; jeder geänderte Satz ist durch `README.md`, `docs/SECURITY.md` oder `docs/THREAT-MODEL.md` gedeckt.
+- `privacy.sections` App nennt freigegebene Anfragen, eingeschaltete Regeln und den Modellaufruf ohne Rückfrage; `privacy.updated` trägt das neue Datum.
+- `hero.lede`, `meta.title` und `meta.description` beschreiben Anfragen richtig: Anfragen ans Sprachmodell gehen durch, über jede andere entscheidet eine Regel, oder sie wartet. `hero.title` bleibt, seine Entscheidung liegt beim Inhaber.
+- `stage.modules` Sandbox, Verlauf, Modell und Intercept, `guarantees.lede`, `guarantees.items[1]`, `securityPage.proofs.lede`, `securityPage.closing.text` und `download.platforms.macos.req` werden nach den Belegen oben gefasst.
+- „Nothing in this document has to be believed." in `docs/SECURITY.md` §9 entfällt, die Übersetzung zieht mit.
+- Alle `/docs/…`-Verweise in `en.ts` zeigen auf `/en/docs/…`; `website/src/components/security/Closing.astro` nimmt `docsHome(lang)`.
+- `docs/guides/agent-profiles.md`, Abschnitt „Using pi", nennt den Weg unter macOS über das npm aus Homebrew, die Übersetzung zieht mit.
+
+### Akzeptanzkriterien
+
+- `de.ts` und `en.ts` enthalten keinen der beanstandeten Sätze mehr: „Anfrage für Anfrage", „Was keine deiner Regeln erlaubt", „sonst nichts von deinem Rechner", „Nachlesen, was rausging", „Ein einziger Socket führt", „jede mit einem Befehl prüfbar", „Nichts davon muss man glauben", „Getestet mit macOS 15 und 27", jeweils auch nicht in der englischen Entsprechung.
+- `hero.title`, `website/src/scripts/stage.ts` und `website/src/components/pages/Home.astro` bleiben unverändert.
+- In der gebauten Seite trägt keine Seite unter `/en/security/` einen Verweis auf `/docs/…`; alle Anker lösen auf, `npm run check-links` ist grün.
+- Die englische Sicherheitsseite führt in `Closing.astro` auf `/en/docs/security/` und `/en/docs/threat-model/`, die deutsche auf `/docs/security/` und `/docs/threat-model/`.
+- `npm run check-translations` führt `docs/translations/de/SECURITY.md` und `docs/translations/de/guides/agent-profiles.md` als aktuell, `scripts/ci/lint-docs.sh` und `scripts/ci/check-doc-links.py` sind grün.
+
+Folge-Kandidaten:
+
+- `scripts/check-links.mjs` könnte auch außerhalb der Doc-Artikel prüfen, dass englische Seiten nur auf englische Docs verweisen.
+- `docs/translations/de/DESIGN.md` und `docs/translations/de/UX.md` sind seit HUM-356 veraltet und brauchen dessen Abschnitte zur Skalierung.
+- Der Installationshinweis in `daemon/crates/sandbox/src/agent/pi.rs` und `docs/guides/install.md` nennen unter macOS noch `sudo npm`.
