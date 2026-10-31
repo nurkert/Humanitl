@@ -310,14 +310,20 @@ fn sandbox_view(
         return (humanitl_sandbox::SandboxView::default(), None);
     };
     // `sandbox.env` gewinnt über das `[env]` des Profils, genau wie beim
-    // Start (`SandboxProfile::effective_env`).
-    let path = config
-        .sandbox
-        .env
-        .get("PATH")
-        .or_else(|| profile.env.get("PATH"))
-        .cloned();
-    (humanitl_sandbox::SandboxView::of_profile(&profile), path)
+    // Start (`SandboxProfile::effective_env`), und die Sicht ist die des
+    // Backends: Unter macOS gibt es keine Einhängungen (HUM-377).
+    let path = humanitl_sandbox::agent::effective_sandbox_path(
+        config
+            .sandbox
+            .env
+            .get("PATH")
+            .or_else(|| profile.env.get("PATH"))
+            .map(String::as_str),
+    );
+    (
+        humanitl_sandbox::SandboxView::of_platform(&profile, None),
+        path,
+    )
 }
 
 /// Die Tatsache, die beide Zeilen aus dem Client später ersetzen.

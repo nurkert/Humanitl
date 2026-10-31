@@ -176,13 +176,26 @@ fn unload_everywhere() -> Result<(), Failure> {
 pub async fn run(ctx: &Context, cmd: &DaemonCmd) -> Result<u8, Failure> {
     match cmd {
         DaemonCmd::Status => super::status(ctx).await,
-        DaemonCmd::Install(args) => install(ctx, args),
+        // `--refresh` erneuert die Kopie aus einem `AppImage`; die gibt es hier
+        // nicht, und ein Durchlauf von `install` hielte den Agenten an.
+        DaemonCmd::Install(args) => match refresh_skip(args) {
+            Some(skip) => {
+                super::report_refresh_skip(ctx, &skip);
+                Ok(EXIT_OK)
+            }
+            None => install(ctx, args),
+        },
         DaemonCmd::Logs(args) => logs(ctx, args),
         DaemonCmd::Restart => restart(ctx),
         DaemonCmd::Uninstall(_) => uninstall(ctx),
         // Eine Frage an den Daemon, unabhängig vom Dienstverwalter.
         DaemonCmd::RetireIfIdle => super::retire::retire_if_idle(ctx).await,
     }
+}
+
+/// Warum `--refresh` hier nichts tut; `None` ohne den Schalter.
+fn refresh_skip(args: &InstallArgs) -> Option<super::RefreshSkip> {
+    args.refresh.then_some(super::RefreshSkip::NotAppImage)
 }
 
 fn install(ctx: &Context, args: &InstallArgs) -> Result<u8, Failure> {
@@ -296,7 +309,31 @@ fn daemon_binary(args: &InstallArgs) -> Result<PathBuf, Failure> {
                 .build(),
         ));
     }
-    Ok(daemon.canonicalize().unwrap_or(daemon))
+    let daemon = daemon.canonicalize().unwrap_or(daemon);
+    if runs_from_a_transient_place(&daemon) {
+        return Err(Failure::new(
+            Diagnostic::builder(codes::DAEMON_007, Severity::Blocking)
+                .why(format!(
+                    "{} lies on a mounted disk image or in a translocated copy of the app, which \
+                     goes away; launchd would lose the daemon at the next login. Move \
+                     Humanitl.app to /Applications and open it from there",
+                    daemon.display()
+                ))
+                .fix(FixAction::CopyCommand("open /Applications".to_owned()))
+                .build(),
+        ));
+    }
+    Ok(daemon)
+}
+
+/// Ob dieser aufgelöste Pfad auf einem eingebundenen Laufwerk oder in der
+/// Kopie liegt, aus der macOS eine App aus dem Quarantäne-Bereich startet
+/// (App Translocation). Beide Orte überleben keinen Neustart.
+fn runs_from_a_transient_place(path: &Path) -> bool {
+    path.starts_with("/Volumes")
+        || path
+            .components()
+            .any(|part| part.as_os_str() == "AppTranslocation")
 }
 
 fn uninstall(ctx: &Context) -> Result<u8, Failure> {
@@ -477,6 +514,39 @@ mod tests {
             text.contains(MARKER),
             "uninstall finds its own file by this line"
         );
+    }
+
+    #[test]
+    fn refresh_does_nothing_and_a_plain_install_runs() {
+        let args = |refresh| InstallArgs {
+            print: false,
+            no_start: false,
+            bin_dir: None,
+            refresh,
+        };
+        assert_eq!(
+            refresh_skip(&args(true)),
+            Some(super::super::RefreshSkip::NotAppImage)
+        );
+        assert_eq!(refresh_skip(&args(false)), None);
+    }
+
+    #[test]
+    fn a_disk_image_and_a_translocated_app_are_no_home_for_the_daemon() {
+        for path in [
+            "/Volumes/Humanitl/Humanitl.app/Contents/MacOS/bin/humanitld",
+            "/private/var/folders/x/y/AppTranslocation/ABC/d/Humanitl.app/Contents/MacOS/bin/humanitld",
+        ] {
+            assert!(runs_from_a_transient_place(Path::new(path)), "{path}");
+        }
+        for path in [
+            "/Applications/Humanitl.app/Contents/MacOS/bin/humanitld",
+            "/Users/me/Applications/Humanitl.app/Contents/MacOS/bin/humanitld",
+            "/opt/homebrew/bin/humanitld",
+            "/Users/me/Volumes/humanitld",
+        ] {
+            assert!(!runs_from_a_transient_place(Path::new(path)), "{path}");
+        }
     }
 
     #[test]
