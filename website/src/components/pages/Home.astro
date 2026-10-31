@@ -2,12 +2,22 @@
 // Die Startseite: ein angehefteter Bühnenabschnitt, in dem die echten Fenster der App
 // einfliegen und beim Scrollen vom Fächer auf einen steigenden Bogen wandern. Danach
 // scrollt die Seite normal; das Karussell dreht über Pfeile, Ziehen und Tasten weiter.
-// Danach die drei Garantien und der Abschluss.
+// Darunter die Sektionen aus src/components/home (HUM-358): ein Angriff, warum er endet, was
+// offen bleibt, der Preis im Alltag, Agenten und Systeme, Reifegrad und Download.
 import { Picture } from 'astro:assets';
 
+import '../../styles/home.css';
+
+import Attack from '../home/Attack.astro';
+import Daily from '../home/Daily.astro';
+import Maturity from '../home/Maturity.astro';
+import Open from '../home/Open.astro';
+import Support from '../home/Support.astro';
+import Why from '../home/Why.astro';
 import Icon from '../Icon.astro';
 import Base from '../../layouts/Base.astro';
-import { path, repoUrl, securityUrl, ui, type Lang } from '../../i18n/ui';
+import { path, repoUrl, ui, type Lang } from '../../i18n/ui';
+import { docsHome } from '../../lib/docs-catalog.mjs';
 import { loadReleases } from '../../lib/releases';
 import intercept from '../../assets/screens/intercept.png';
 import notice from '../../assets/screens/notice.png';
@@ -36,6 +46,9 @@ const macHref = current?.assets.find((asset) => asset.kind === 'dmg')?.url;
 const edges = [1, 2, 3, 4, 5, 6];
 const digits = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 const pad = (v: number) => String(v).padStart(2, '0');
+const h = t.home;
+const security = path('security', lang);
+const screenAlt = (id: string) => t.stage.modules.find((module) => module.id === id)?.alt ?? '';
 ---
 
 <Base lang={lang} page="home" title={t.meta.title} description={t.meta.description}>
@@ -323,26 +336,12 @@ const pad = (v: number) => String(v).padStart(2, '0');
       </div>
     </section>
 
-    <section class="guarantees" id="sicherheit" aria-labelledby="guarantees-title">
-      <div class="container guarantees__inner">
-        <header class="guarantees__head">
-          <h2 id="guarantees-title" class="chrome">{t.guarantees.title}</h2>
-          <p class="lede">{t.guarantees.lede}</p>
-        </header>
-        <ol class="guarantees__list">
-          {
-            t.guarantees.items.map((item) => (
-              <li>
-                <h3>{item.title}</h3>
-                <p>{item.text}</p>
-              </li>
-            ))
-          }
-        </ol>
+    <Attack c={h.attack} href={`${security}#weg`} />
+    <Why c={h.why} href={`${security}#pruefen`}>
         <figure class="term">
           <figcaption class="term__bar">
             <span class="term__dots" aria-hidden="true"><i></i><i></i><i></i></span>
-            {t.guarantees.check}
+            {h.why.check}
           </figcaption>
           <pre class="term__body"><code><span class="term__prompt">$</span> humanitl sandbox check
 <span class="term__head">   CHECK                 EVIDENCE</span>
@@ -351,31 +350,11 @@ const pad = (v: number) => String(v).padStart(2, '0');
 <span class="term__ok">✓</span>  seccomp_active        <span class="term__ev">seccomp_applied ok: sandbox_check(getpid(),_NULL,_0)_=_1; families ok: AF_ROUTE …_EPERM</span></code></pre>
           <p class="term__src">{lang === 'de' ? 'Ausgabe unter macOS aus der CI des Projekts, gekürzt.' : 'Output on macOS from the project’s CI, shortened.'}</p>
         </figure>
-        <a class="guarantees__more" href={securityUrl}>
-          {t.guarantees.more}
-          <Icon name="arrow" />
-        </a>
-      </div>
-    </section>
-
-    <section class="closing" aria-labelledby="closing-title">
-      <div class="closing__glow" aria-hidden="true"></div>
-      <div class="container closing__inner">
-        <h2 id="closing-title" class="chrome">{t.closing.title}</h2>
-        <p class="lede">{t.closing.text}</p>
-        <a
-          class="pill pill--light closing__cta"
-          href={path('download', lang)}
-          data-smart-download
-          data-mac-href={macHref}
-          data-label-macos={t.closing.ctaMac}
-          data-label-linux={t.closing.ctaLinux}
-        >
-          <Icon name="download" />
-          <span data-smart-label>{t.closing.cta}</span>
-        </a>
-      </div>
-    </section>
+    </Why>
+    <Open c={h.open} href={`${security}#grenzen`} macHref={`${security}#macos`} />
+    <Daily c={h.daily} href={`${docsHome(lang)}reference/rules/`} altHeld={screenAlt('intercept')} altRules={screenAlt('rules')} />
+    <Support c={h.support} href={`${docsHome(lang)}guides/agent-profiles/`} />
+    <Maturity c={h.maturity} cta={t.closing} download={path('download', lang)} macHref={macHref} />
   </main>
 </Base>
 
@@ -383,6 +362,7 @@ const pad = (v: number) => String(v).padStart(2, '0');
 <script>
   import '../../scripts/stage';
   import '../../scripts/smart-download';
+  import '../../scripts/home';
 </script>
 
 <style>
@@ -1483,63 +1463,6 @@ const pad = (v: number) => String(v).padStart(2, '0');
   }
 
   /* ---- Garantien ------------------------------------------------------- */
-  .guarantees {
-    position: relative;
-    padding: clamp(6rem, 14vh, 10rem) 0 clamp(5rem, 10vh, 8rem);
-  }
-  .guarantees__inner {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: clamp(2.5rem, 5vh, 4rem);
-  }
-  .guarantees__head {
-    display: grid;
-    gap: 1.2rem;
-    justify-items: start;
-  }
-  .guarantees__head h2 {
-    font-size: clamp(2rem, 1.2rem + 3.4vw, 4.4rem);
-  }
-  .guarantees__list {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: clamp(1.5rem, 3vw, 3rem);
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-  .guarantees__list li {
-    display: grid;
-    align-content: start;
-    gap: 0.7rem;
-    padding-top: 1.4rem;
-    border-top: 1px solid var(--line-strong);
-    position: relative;
-  }
-  /* Eine helle Kante oben links, wie das Licht auf den Fensterrahmen. */
-  .guarantees__list li::before {
-    content: '';
-    position: absolute;
-    top: -1px;
-    left: 0;
-    width: 3.5rem;
-    height: 1px;
-    background: #fff;
-    box-shadow: 0 0 12px rgb(255 255 255 / 0.7);
-  }
-  .guarantees__list h3 {
-    font-size: 1.25rem;
-    letter-spacing: -0.01em;
-  }
-  .guarantees__list p {
-    color: var(--fg-1);
-    max-width: 30rem;
-  }
-  @media (max-width: 52rem) {
-    .guarantees__list {
-      grid-template-columns: 1fr;
-    }
-  }
   .term {
     margin: 0;
     border-radius: 16px;
@@ -1593,57 +1516,5 @@ const pad = (v: number) => String(v).padStart(2, '0');
     padding: 0 1.3rem 1.1rem;
     color: var(--fg-2);
     font-size: 0.78rem;
-  }
-  .guarantees__more {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    justify-self: start;
-    color: var(--fg-1);
-    text-decoration: none;
-    font-size: 0.95rem;
-  }
-  .guarantees__more:hover {
-    color: var(--fg);
-  }
-  .guarantees__more :global(svg) {
-    width: 1.1rem;
-    height: 1.1rem;
-    transition: transform 0.3s var(--ease-out);
-  }
-  .guarantees__more:hover :global(svg) {
-    transform: translateX(3px);
-  }
-
-  /* ---- Abschluss ------------------------------------------------------- */
-  .closing {
-    position: relative;
-    padding: clamp(7rem, 18vh, 12rem) 0 clamp(6rem, 14vh, 9rem);
-    overflow: hidden;
-    text-align: center;
-  }
-  .closing__glow {
-    position: absolute;
-    inset: auto -10% -40%;
-    height: 120%;
-    background:
-      radial-gradient(50% 55% at 50% 100%, rgb(160 172 205 / 0.16), transparent 70%),
-      radial-gradient(28% 30% at 50% 78%, rgb(255 255 255 / 0.08), transparent 70%);
-    pointer-events: none;
-  }
-  .closing__inner {
-    position: relative;
-    display: grid;
-    justify-items: center;
-    gap: 1.4rem;
-  }
-  .closing h2 {
-    font-size: clamp(2rem, 1.1rem + 3.8vw, 4.8rem);
-  }
-  .closing__cta {
-    --pill-h: 3.6rem;
-    margin-top: 1rem;
-    padding: 0 2.2rem;
-    font-size: 1.02rem;
   }
 </style>

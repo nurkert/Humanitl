@@ -1,0 +1,57 @@
+---
+// Sektion 3: was offen bleibt. Links die Aussage, rechts die vier Wege, die sie ausnimmt.
+import Rich from '../security/Rich.astro';
+import More from './More.astro';
+
+interface Props {
+  c: any;
+  href: string;
+  macHref: string;
+}
+const { c, href, macHref } = Astro.props;
+---
+
+<section class="hm-sec" id="offen" aria-labelledby="hm-open-title">
+  <div class="hm-wide hm-open">
+    <header class="hm-open__head hm-rv" data-hm-reveal>
+      <h2 id="hm-open-title" class="chrome hm-h2">{c.title}</h2>
+      <p class="hm-open__say">{c.statement}</p>
+      <p class="lede">{c.lede}</p>
+      <More href={href} text={c.more} />
+    </header>
+    <ul class="hm-open__list">
+      {
+        c.items.map((item: any, i: number) => (
+          <li class="hm-open__item" data-hm-reveal style={`--i:${i}`}>
+            <span class="hm-gap" aria-hidden="true">
+              <i class="hm-gap__line" />
+              <i class="hm-gap__wall" />
+              <i class="hm-gap__dot" />
+            </span>
+            <h3>
+              <Rich text={item.title} />
+            </h3>
+            <Rich tag="p" text={item.text} />
+          </li>
+        ))
+      }
+      <li class="hm-open__quiet hm-rv" data-hm-reveal>
+        <h3>{c.quietTitle}</h3>
+        <dl>
+          {
+            c.quiet.map((q: any) => (
+              <div>
+                <dt>{q.title}</dt>
+                <dd>{q.text}</dd>
+              </div>
+            ))
+          }
+        </dl>
+      </li>
+      <li class="hm-open__mac hm-rv" data-hm-reveal>
+        <p>{c.macos}</p>
+        <More href={macHref} text={c.macosMore} />
+      </li>
+    </ul>
+  </div>
+</section>

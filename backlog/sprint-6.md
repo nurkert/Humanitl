@@ -35,6 +35,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-357 | macOS: pi liest den Modellschlüssel auch aus einem Pfad mit Leerzeichen | S | HUM-328 |
 | HUM-348 | Landing: wenige Scheiben seitlich geneigt mit sichtbarer Tiefe, Licht wie geschliffenes Glas | M | HUM-347 |
 | HUM-359 | Website: Aussagen, die Code und Doku nicht decken, und falsche Sprachlinks | S | HUM-333, HUM-345, HUM-346 |
+| HUM-358 | Startseite: sechs Sektionen unter dem Karussell, die erklären, überzeugen und die Unterseiten anteasern | M | HUM-333, HUM-345, HUM-359 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -462,3 +463,34 @@ Folge-Kandidaten:
 - `scripts/check-links.mjs` könnte auch außerhalb der Doc-Artikel prüfen, dass englische Seiten nur auf englische Docs verweisen.
 - `docs/translations/de/DESIGN.md` und `docs/translations/de/UX.md` sind seit HUM-356 veraltet und brauchen dessen Abschnitte zur Skalierung.
 - Der Installationshinweis in `daemon/crates/sandbox/src/agent/pi.rs` und `docs/guides/install.md` nennen unter macOS noch `sudo npm`.
+
+## HUM-358 · Startseite: sechs Sektionen unter dem Karussell, die erklären, überzeugen und die Unterseiten anteasern
+
+### Kontext
+
+Die Startseite endete nach dem Karussell mit drei Garantien und einem Abschluss. Wer noch nicht weiß, dass er Humanitl braucht, erfuhr dort weder, was passiert, noch was es kostet, und die Unterseiten blieben ungenannt. Eine simulierte Persona-Befragung (keine Marktdaten) ergab die Reihenfolge: erst ein Angriff, dann die Mechanik, dann was offen bleibt, dann der Preis im Alltag, Unterstützung und Reifegrad. Hero und Karussell bleiben, entgegen dem Rat der Befragung. Stoppzahlen sind nicht gemessen und erscheinen deshalb nicht.
+
+### Spezifikation
+
+- Unter dem Karussell stehen in dieser Reihenfolge sechs Sektionen aus `website/src/components/home/`: ein Angriff, durchgespielt; warum es hält; was offen bleibt; was es im Alltag kostet; Agenten und Systeme; Reifegrad und Download. Sie ersetzen den Garantien-Block und den alten Abschluss; die Ausgabe von `humanitl sandbox check` und der Download-Knopf (`smart-download.ts`) bleiben.
+- Texte stehen unter `home` in `website/src/i18n/locales/de.ts` und `en.ts` und sagen dasselbe. Jeder Satz ist durch `README.md`, `docs/SECURITY.md`, `docs/THREAT-MODEL.md` oder den benannten Leitfaden gedeckt.
+- Jede Sektion führt mit einem sprachrichtigen Verweis auf ihre Unterseite (Sicherheit `#weg`, `#pruefen`, `#grenzen`, `#macos`, Docs `reference/rules/`, `guides/agent-profiles/`, Download).
+- Das Schema einer Anfrage läuft einmal ab und lässt sich wiederholen. Reine Abfolge, keine Dauerschleife.
+- Bewegung nur über `transform` und `opacity`, ausgelöst von `website/src/scripts/home.ts` ohne scroll-Listener. Ohne Skript und bei reduzierter Bewegung steht der Endzustand. Farben kommen aus Tokens (`website/src/styles/home.css`).
+
+### Akzeptanzkriterien
+
+- `hero.title`, `website/src/scripts/stage.ts`, Hero und Karussell bleiben unverändert.
+- `npx astro build`, `npm test` und `npm run check-links` sind grün.
+- Von 320 px bis 3440 px gibt es keinen waagrechten Scroll der Seite.
+- Ohne Skript und mit `prefers-reduced-motion: reduce` sind alle Sektionen vollständig sichtbar.
+- Die Startseite enthält weder „Physik statt Vertrauen" noch „ehrlich" als Selbstlob, „Garantie" ohne Geltungsbereich oder „jede Anfrage", keine Stoppzahlen, keine Testimonials und keine Fremdlogos.
+- „Was offen bleibt" nennt alle fünf erklärten Kanäle aus `README.md` samt ihren Grenzen, und ohne Halt geht nur, was zum erklärten Passthrough passt.
+- Das Schema startet auch auf niedrigen Fenstern, Fokus zeigt ein noch nicht aufgetretenes Element sofort, und gedruckt steht der Endzustand.
+- Aussagen zu einem externen Audit, zu Cloud-Modellen und zur APT-Signatur fehlen, bis der Inhaber sie entschieden hat.
+
+Folge-Kandidaten:
+
+- Echte Messung der Halte pro Lauf, um die Sektion zum Alltag zu belegen.
+- Ein Bildschirm der Regeln mit gespeicherten eigenen Regeln; die vorhandene Aufnahme zeigt nur die mitgelieferten.
+- Satz zum externen Audit, zu Cloud-Modellen und zur APT-Signatur, sobald der Inhaber entschieden hat.

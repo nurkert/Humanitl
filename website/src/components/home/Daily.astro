@@ -1,0 +1,65 @@
+---
+// Sektion 4: der Preis im Alltag. Zwei echte Bildschirme, drei Sätze und die Uhr für den
+// Fall, dass niemand antwortet. Zahlen über Halte gibt es nicht, also stehen keine hier.
+import { Picture } from 'astro:assets';
+
+import intercept from '../../assets/screens/intercept.png';
+import rules from '../../assets/screens/rules.png';
+import Rich from '../security/Rich.astro';
+import More from './More.astro';
+
+interface Props {
+  c: any;
+  href: string;
+  altHeld: string;
+  altRules: string;
+}
+const { c, href, altHeld, altRules } = Astro.props;
+const sizes = '(min-width: 60rem) 40vw, 90vw';
+---
+
+<section class="hm-sec" id="alltag" aria-labelledby="hm-daily-title">
+  <div class="hm-wide">
+    <header class="hm-head hm-rv" data-hm-reveal>
+      <h2 id="hm-daily-title" class="chrome hm-h2">{c.title}</h2>
+      <p class="lede">{c.lede}</p>
+    </header>
+
+    <div class="hm-daily">
+      <div class="hm-shots" data-hm-reveal>
+        <figure class="hm-shot hm-shot--a">
+          <Picture src={intercept} formats={['avif']} widths={[640, 1280]} sizes={sizes} alt={altHeld} loading="lazy" decoding="async" />
+          <figcaption>{c.shotHeld}</figcaption>
+        </figure>
+        <figure class="hm-shot hm-shot--b">
+          <Picture src={rules} formats={['avif']} widths={[640, 1280]} sizes={sizes} alt={altRules} loading="lazy" decoding="async" />
+          <figcaption>{c.shotRules}</figcaption>
+        </figure>
+      </div>
+      <ol class="hm-beats">
+        {
+          c.beats.map((beat: any, i: number) => (
+            <li class="hm-beat" data-hm-reveal style={`--i:${i}`}>
+              <h3>{beat.title}</h3>
+              <Rich tag="p" text={beat.text} />
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+
+    <div class="hm-clock" data-hm-reveal>
+      <h3>{c.timeout.title}</h3>
+      <div class="hm-clock__bar" aria-hidden="true">
+        <span class="hm-clock__fill"></span>
+        <span class="hm-clock__ticks"><b>0 s</b><b>300 s</b></span>
+      </div>
+      <p class="hm-clock__verdict">{c.timeout.verdict}</p>
+      <Rich tag="p" class="hm-clock__text" text={c.timeout.text} />
+    </div>
+
+    <div class="hm-foot hm-rv" data-hm-reveal>
+      <More href={href} text={c.more} />
+    </div>
+  </div>
+</section>

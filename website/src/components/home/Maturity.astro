@@ -1,0 +1,50 @@
+---
+// Sektion 6: Reifegrad und Download, der Abschluss der Startseite. Der Knopf ist derselbe
+// wie zuvor: Er nennt das System des Besuchers (smart-download.ts).
+import Icon from '../Icon.astro';
+import Rich from '../security/Rich.astro';
+import More from './More.astro';
+
+interface Props {
+  c: any;
+  cta: { cta: string; ctaMac: string; ctaLinux: string };
+  download: string;
+  macHref?: string;
+}
+const { c, cta, download, macHref } = Astro.props;
+---
+
+<section class="hm-sec hm-end" id="reife" aria-labelledby="hm-end-title">
+  <div class="hm-end__glow" aria-hidden="true"></div>
+  <div class="container hm-end__inner">
+    <header class="hm-end__head hm-rv" data-hm-reveal>
+      <h2 id="hm-end-title" class="chrome hm-end__title">{c.title}</h2>
+      <p class="lede">{c.lede}</p>
+    </header>
+    <dl class="hm-facts" data-hm-reveal>
+      {
+        c.facts.map((fact: any, i: number) => (
+          <div style={`--i:${i}`}>
+            <dt>{fact.k}</dt>
+            <dd>{fact.v}</dd>
+          </div>
+        ))
+      }
+    </dl>
+    <div class="hm-sums hm-glass hm-rv" data-hm-reveal>
+      <Rich tag="h3" text={c.sumsTitle} />
+      <ul>
+        <li class="hm-spec__yes"><Icon name="check" /><span>{c.sumsYes}</span></li>
+        <li class="hm-spec__no"><Icon name="cross" /><span>{c.sumsNo}</span></li>
+      </ul>
+      <p>{c.sumsNote}</p>
+    </div>
+    <div class="hm-end__act hm-rv" data-hm-reveal>
+      <a class="pill pill--light hm-end__cta" href={download} data-smart-download data-mac-href={macHref} data-label-macos={cta.ctaMac} data-label-linux={cta.ctaLinux}>
+        <Icon name="download" />
+        <span data-smart-label>{cta.cta}</span>
+      </a>
+      <More href={download} text={c.more} />
+    </div>
+  </div>
+</section>
