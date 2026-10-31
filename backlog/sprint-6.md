@@ -47,6 +47,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-366 | macOS: Git funktioniert in der Sandbox, `.git/config` bleibt maskiert | S | HUM-323 |
 | HUM-368 | macOS: Das Sitzungsverzeichnis samt Zugangsschlüssel verschwindet mit der Sandbox | S | HUM-323 |
 | HUM-373 | macOS: Eintrag in der Menüleiste und Benachrichtigungen für angehaltene Anfragen | M | HUM-034, HUM-325, HUM-329 |
+| HUM-370 | macOS: Der Agent kann die Dateien seines Adapters nicht ersetzen | S | HUM-323 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -711,3 +712,7 @@ Der Runner bekommt `DesktopBridge.swift` mit zwei `FlutterMethodChannel` (`human
 - Bei verweigerter Erlaubnis erscheint `UI_002` einmal, der Text nennt die Einstellung, und der Hinweis bleibt nach dem Schließen weg (HUM-276).
 - Linux bleibt unverändert.
 - Dart-Tests gegen einen falschen Kanal decken beide Adapter ab; `flutter build macos --debug` übersetzt das Swift. Das Verhalten am echten Mac prüft ein Mensch.
+
+## HUM-370 · macOS: Der Agent kann die Dateien seines Adapters nicht ersetzen
+
+Unter Linux sind die Dateien des Adapters schreibgeschützte Einhängungen, unter macOS lagen sie im beschreibbaren Home der Sitzung. Akzeptanz: Datei, Ordner darüber und `home` selbst lassen sich weder ändern noch umbenennen, ein Hardlink wird verweigert, und neue Dateien im Home bleiben möglich.

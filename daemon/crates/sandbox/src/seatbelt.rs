@@ -281,6 +281,25 @@ pub struct SeatbeltPolicy {
 }
 
 impl SeatbeltPolicy {
+    /// Hält [`files`](Self) unter dem schreibbaren [`home`](Self) unveränderlich
+    /// (HUM-370): die Datei selbst und die Ordner bis `home` einschließlich, sonst legte der
+    /// Agent per Umbenennen eine eigene an ihre Stelle. Unter Linux sind es
+    /// schreibgeschützte Einhängungen.
+    fn protect(&mut self, files: &[PathBuf], home: &Path) {
+        for file in files {
+            self.locked.push(file.clone());
+            let parents = file.ancestors().skip(1);
+            self.locked.extend(
+                parents
+                    .take_while(|dir| *dir != home)
+                    .map(Path::to_path_buf),
+            );
+            self.locked.push(home.to_path_buf());
+        }
+        self.locked.sort();
+        self.locked.dedup();
+    }
+
     /// Der Netzwerkteil des Profils.
     fn render_network(&self, out: &mut String) {
         out.push_str(
@@ -803,8 +822,9 @@ fn write_file(path: &Path, content: &[u8], mode: u32) -> Result<(), Diagnostic> 
 fn place_files(
     session: &SessionContext,
     map: &PathMap,
+    home: &Path,
     warnings: &mut Vec<Diagnostic>,
-) -> Result<(), Diagnostic> {
+) -> Result<Vec<PathBuf>, Diagnostic> {
     // Die Dateien der Sitzung: CA, Bündel, Adapter-Dateien.
     let ca = std::fs::read(&session.ca_cert_src)
         .map_err(|err| layout_failed(&session.ca_cert_src, &err))?;
@@ -813,6 +833,7 @@ fn place_files(
     let mapped = |dst: &str| map.map_path(Path::new(dst)).unwrap_or_default();
     write_file(&mapped(CA_CERT_DST), &ca, 0o444)?;
     write_file(&mapped(CA_BUNDLE_DST), &bundle, 0o444)?;
+    let mut protected = Vec::new();
     for file in &session.files {
         let Some(target) = map
             .map_path(&file.dst)
@@ -837,8 +858,11 @@ fn place_files(
             }
         };
         write_file(&target, &content, file.mode)?;
+        if target.starts_with(home) {
+            protected.push(target);
+        }
     }
-    Ok(())
+    Ok(protected)
 }
 
 /// Was aus der echten `.git/config` in die der Sitzung wandert (HUM-366):
@@ -1027,7 +1051,7 @@ impl SandboxBackend for SeatbeltBackend {
         let shim = canonical(&session.shim_src)?;
         let map = layout.path_map(&work, &door, &shim);
         let mut warnings = profile.unmask_diagnostics();
-        place_files(session, &map, &mut warnings)?;
+        let protected = place_files(session, &map, &layout.home(), &mut warnings)?;
         let files = place_agent(session, &map, &shim)?;
         let port = session_port(None)?;
         let agent_port = session_port(Some(port))?;
@@ -1035,7 +1059,7 @@ impl SandboxBackend for SeatbeltBackend {
             profile,
             &BwrapBackend::present_under_work(profile, &work),
         );
-        let policy = self.policy(
+        let mut policy = self.policy(
             profile,
             session,
             &work,
@@ -1044,6 +1068,7 @@ impl SandboxBackend for SeatbeltBackend {
             &door,
             (port, agent_port),
         );
+        policy.protect(&protected, &layout.home());
         let git_bin = place_git(&layout, &work, &policy.masked)?;
         let policy_text = policy.render();
         write_file(&layout.profile(), policy_text.as_bytes(), 0o444)?;
@@ -1265,6 +1290,19 @@ mod tests {
             door: PathBuf::from("/private/var/folders/x/T/humanitl-501/proxy/proxy.sock"),
             port: 41_234,
             agent_port: 41_235,
+        }
+    }
+
+    #[test]
+    fn adapter_files_and_their_folders_stay_put() {
+        let mut policy = policy();
+        let home = layout().home();
+        let file = home.join(".pi/agent/models.json");
+        policy.protect(std::slice::from_ref(&file), &home);
+        let text = policy.render();
+        for path in [file, home.join(".pi/agent"), home.join(".pi"), home.clone()] {
+            let rule = format!("(literal {})", quote_path(&path));
+            assert!(text.contains(&rule), "{rule}\n{text}");
         }
     }
 
