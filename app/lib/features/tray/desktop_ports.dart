@@ -5,7 +5,7 @@
 /// Everything below them talks to a session bus that no test has, so the
 /// default is deliberately inert: an app that was not wired up in `main`
 /// shows no tray, sends no notification and touches no window title. The
-/// Linux implementations live next door in `platform/`.
+/// Linux and macOS implementations live next door in `platform/`.
 library;
 
 import 'package:flutter/foundation.dart' show immutable;
@@ -273,14 +273,6 @@ class DesktopPorts {
   /// session bus is missing.
   factory DesktopPorts.inert() => DesktopPorts(
     window: const _InertWindow(),
-    notifications: _InertNotifications(),
-    tray: _InertTray(),
-  );
-
-  /// The window alone, without notification or tray: macOS until both have
-  /// a port there (HUM-325, HUM-329).
-  factory DesktopPorts.windowOnly(WindowPort window) => DesktopPorts(
-    window: window,
     notifications: _InertNotifications(),
     tray: _InertTray(),
   );

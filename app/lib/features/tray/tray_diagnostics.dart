@@ -28,6 +28,51 @@ abstract final class TrayDiagnostics {
     docsUrl: extensionUrl,
   );
 
+  /// What the fix of [notificationsDenied] runs.
+  static const String notificationSettingsCommand =
+      'open x-apple.systempreferences:com.apple.preference.notifications';
+
+  /// `UI_002` on macOS: the menu bar item stands, but the system refused the
+  /// notification (HUM-373). A held request reaches nobody who is elsewhere,
+  /// so this is the same fact as a missing tray.
+  ///
+  /// It shares `UI_002` with [trayUnavailable], and the notice tells the two
+  /// apart by [notificationsDeniedTitle]. The fix is a command to copy,
+  /// because `openUrl` only shows an address to copy as well, and this one
+  /// means nothing in a browser.
+  static Diagnostic notificationsDenied(String why) => Diagnostic(
+    code: DiagnosticCodes.noTray,
+    severity: Severity.info,
+    title: notificationsDeniedTitle,
+    why: why,
+    fix: const FixAction.copyCommand(command: notificationSettingsCommand),
+  );
+
+  /// The title that marks [notificationsDenied]; the notice replaces it with
+  /// the localised one.
+  static const String notificationsDeniedTitle =
+      'Notifications are not allowed';
+
+  /// `UI_002` on macOS: the system could not be asked for the permission at
+  /// all (HUM-373). Not a refusal, so the sentence of the system stands in the
+  /// cause slot and no setting is offered that would not help.
+  static Diagnostic notificationsFailed(String why) => Diagnostic(
+    code: DiagnosticCodes.noTray,
+    severity: Severity.info,
+    title: notificationsFailedTitle,
+    why: why,
+  );
+
+  /// The title that marks [notificationsFailed].
+  static const String notificationsFailedTitle =
+      'Notifications could not be set up';
+
+  /// True for a [diagnostic] that is about notifications and not about the
+  /// tray. It says nothing to somebody who switched `ui.notifications` off.
+  static bool concernsNotifications(Diagnostic diagnostic) =>
+      diagnostic.title == notificationsDeniedTitle ||
+      diagnostic.title == notificationsFailedTitle;
+
   /// `IPC_003`: a notification button was pressed for a request that had
   /// already left the queue.
   ///

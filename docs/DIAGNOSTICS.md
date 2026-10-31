@@ -1275,9 +1275,9 @@ Es läuft schon eine Sitzung
 
 Kein Platz für das Anzeigesymbol
 
-**Auslöser.** Die Arbeitsumgebung bietet keinen Platz für das Anzeigesymbol im Systembereich.
+**Auslöser.** Die Arbeitsumgebung bietet keinen Platz für das Anzeigesymbol im Systembereich, oder macOS erlaubt der App keine Mitteilungen.
 
-**Fix.** Kein Fix: Das Fenster bleibt der Weg zur Warteschlange.
+**Fix.** `OpenUrl` zur AppIndicator-Erweiterung, unter macOS `CopyCommand` zu den Mitteilungs-Einstellungen. Das Fenster bleibt der Weg zur Warteschlange.
 
 #### UI_003
 

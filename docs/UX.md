@@ -452,6 +452,8 @@ This is the only surface the human sees while the agent is stuck. It therefore g
 
 **The window** carries no title bar of the toolkit (HUM-255). The header bar of the app is the title bar: dragging on its free surface, on the wordmark, section title or badges moves the window, a double click maximises or restores, and its controls stay controls. On the right stand minimise, maximise and close as ghost buttons with hover and semantics labels, also on splash and setup of a cold start (there in a narrow bar that is a grip as well), also under tiling window managers that may ignore the first two. Close does exactly what closing via the window manager does; it is not the "Quit" of the tray menu.
 
+**On macOS** (HUM-373) the tray is a menu bar item with the same icon and the same menu; a click opens the menu, as on every item there. The notification comes from the notification centre with the same text and buttons, and a click on the message itself acts as "Show". Closing the last window does not end the app, because daemon and agent run on: the Dock icon stays, carries the count as a badge and brings the window back. "Quit" in the menu bar item and Cmd-Q end the app. If the system refuses notifications, `UI_002` says so once and names the setting.
+
 **The return** replays nothing. Whoever comes back after fifteen arrivals sees the queue as it is, without arrival animations for things that happened minutes ago — an animation answers "what has just arrived", and none of this has just arrived (2.1). What happened during the absence stands in two calm forms: the return banner names the longest waiting time and leads to the oldest flow, the timeout counter in the status bar names the refusals (4.8).
 
 ### 4.10 Setup as a short onboarding

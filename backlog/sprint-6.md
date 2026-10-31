@@ -46,6 +46,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-369 | macOS: `/dev/stdout`, `/dev/stderr` und `/dev/fd/N` sind in der Sandbox beschreibbar | S | HUM-323 |
 | HUM-366 | macOS: Git funktioniert in der Sandbox, `.git/config` bleibt maskiert | S | HUM-323 |
 | HUM-368 | macOS: Das Sitzungsverzeichnis samt Zugangsschlüssel verschwindet mit der Sandbox | S | HUM-323 |
+| HUM-373 | macOS: Eintrag in der Menüleiste und Benachrichtigungen für angehaltene Anfragen | M | HUM-034, HUM-325, HUM-329 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -682,3 +683,31 @@ Akzeptanz:
 - Endet die Sandbox, ist das Sitzungsverzeichnis nach der Frist weiterer Shells weg, auch wenn niemand mehr ein Handle hält; ein neuer Start derselben Sitzung behält seines.
 - Unter Linux ändert sich nichts.
 - `docs/SECURITY.md` nennt die Datei auf der Platte und den Fall nach einem Absturz.
+
+## HUM-373 · macOS: Eintrag in der Menüleiste und Benachrichtigungen für angehaltene Anfragen
+
+### Kontext
+Auf macOS gab es bis hierher weder Tray noch Benachrichtigung noch Aktionsknöpfe. Eine angehaltene Anfrage blieb stumm, solange das Fenster nicht im Blick war, und der Agent wartete bis zum Hold-Timeout. Schloss man das letzte Fenster, endete die App, während Daemon und Agent weiterliefen. HUM-329 hatte das für später vorgemerkt.
+
+### Spezifikation
+Der Runner bekommt `DesktopBridge.swift` mit zwei `FlutterMethodChannel` (`humanitl/tray`, `humanitl/notifications`): `NSStatusItem`, Dock-Plakette und `UNUserNotificationCenter`. Dart implementiert dieselben Ports wie Linux (`MacTrayPort`, `MacNotificationPort`), ohne neue Abstraktion und ohne neue Abhängigkeit. Wörter, Zahl und die Regeln, wann etwas erscheint, bleiben in Dart.
+
+- Das Symbol kommt aus `renderTrayIcon` in 18 und 36 Pixeln, die Plakette aus `trayIconLabel`.
+- Die Anfrage reist in `userInfo`, weil die Tasten einer Kategorie fest sind. Ein Klick auf die Mitteilung wirkt wie `Show`.
+- Ein Klick, der die App startet, wartet im Runner, bis Dart `start` ruft.
+- `start` fragt nach der Erlaubnis für Mitteilungen. Eine Absage ist `UI_002` mit eigenem Text und einem Befehl zu den Einstellungen statt des GNOME-Fixes.
+- Scheitert schon die Frage, steht der Satz des Systems in `UI_002`, ohne Fix.
+- Bei `ui.notifications = false` bleibt der Hinweis weg. Er wartet auf die Konfiguration des Daemons und kommt, sobald der Schalter an ist.
+- Das letzte Fenster zu schließen beendet die App nicht. Ein Klick aufs Dock-Symbol holt das Fenster zurück. App Nap ist abgeschaltet, damit Herzschlag und Bündelfenster weiterlaufen.
+
+### Akzeptanzkriterien
+
+- Der Eintrag in der Menüleiste zeigt dasselbe Menü wie unter Linux (Anzeigen, Trenner, Zahl deaktiviert, Beenden) und dasselbe Symbol in allen vier Zuständen; der Tooltip trägt beide Zeilen.
+- Die Dock-Plakette zeigt die Beschriftung des Symbols (`9+` über der Grenze, `?` ohne Daemon) und nichts, wenn nichts wartet.
+- Bei nicht fokussiertem oder geschlossenem Fenster erscheint genau eine Mitteilung mit dem Text aus `notificationFor`; weitere ersetzen sie, ohne Stapel. Mit einem Befund fehlt `Allow`.
+- `Allow` und `Block` entscheiden die genannte Anfrage über dieselben Prüfungen in `TrayHost`, ohne dass das Fenster nach vorn kommt. `Show` holt es nach vorn auf die Anfrage.
+- `withdraw` entfernt die Mitteilung, auch wenn es einen noch nicht zugestellten `post` überholt.
+- Nach dem Schließen des letzten Fensters läuft die App weiter, Benachrichtigungen kommen weiter, Dock-Symbol und Menü holen das Fenster zurück, `Quit` und Cmd-Q beenden.
+- Bei verweigerter Erlaubnis erscheint `UI_002` einmal, der Text nennt die Einstellung, und der Hinweis bleibt nach dem Schließen weg (HUM-276).
+- Linux bleibt unverändert.
+- Dart-Tests gegen einen falschen Kanal decken beide Adapter ab; `flutter build macos --debug` übersetzt das Swift. Das Verhalten am echten Mac prüft ein Mensch.
