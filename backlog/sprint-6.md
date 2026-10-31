@@ -39,6 +39,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-341 | Landing: dezenter Nebel mit Lichtstrahlen hinter den Fenstern | S | HUM-334, HUM-348 |
 | HUM-338 | Website: heller Modus, folgt dem System, Umschalter in der Navigation | M | HUM-341, HUM-358 |
 | HUM-361 | Flaky-Test: `a_stalled_streamed_upload_ends_with_limit_004` nimmt den Abbruch nach der Antwort hin | S | HUM-057 |
+| HUM-360 | Website auf Telefonen: Download-Felder passen in die Breite, Pfeile und Zählwerk der Bühne stehen frei | S | HUM-337, HUM-347, HUM-338 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -588,3 +589,28 @@ Folge-Kandidaten:
 - Dieselbe Form haben weitere `read_to_end` mit `.expect` auf eine vorzeitige Antwort: `limits.rs` (413 und 503) und `Proxy::raw_exchange`. Rot wurden sie hier nicht.
 - `backlog/sprint-3.md` und der Kommentar an `write_refusal` (`core.rs`) sagen, mit dem Abbruch gehe die `503` verloren. Für den Unix-Socket spricht die Messung hier dagegen; die Begründung sollte nachgeprüft werden.
 - `bridge.rs` schließt die TCP-Seite, wenn beide Richtungen fertig sind. Schreibt der Agent dann noch, kann auf TCP ein echtes `RST` entstehen. Ob ihm das die Antwort nimmt, ist nicht geprüft.
+
+## HUM-360 · Website auf Telefonen: Download-Felder passen in die Breite, Pfeile und Zählwerk der Bühne stehen frei
+
+### Kontext
+
+Zwei alte Mängel. Auf der Download-Seite reichte das Feld bei 320 px bis 647 px; `overflow-x: clip` schnitt Knopf und Schritte mitten im Wort ab. Ursache sind Grid-Spalten `1fr` und `auto`, deren Untergrenze der Mindestinhalt ist, also die längste Befehlszeile und die `nowrap`-Pille. Auf der Bühne ragten bei Klasse F die Pfeile aus dem Bild (unterer Rand 657 von 640), und die Konturziffer `cap__index` lag auf `cap__headline` (320 px: x 156 bis 301, y 323 bis 411 gegen Überschrift 369 bis 458). Dazu fehlte der Navigation in Chrome der Glaskörper: Der Minifier behält je Regel nur den letzten der beiden Namen `backdrop-filter` und `-webkit-backdrop-filter`, im Build stand nur die Präfixfassung, die Chrome nicht auswertet.
+
+### Spezifikation
+
+- Download: Alle Spalten von `.dl__head`, `.dl__pick`, `.panel`, `.panel__files` und `.panel__steps` unterhalb der Zweispaltigkeit sind `minmax(0, 1fr)`. Bis 34 rem bricht `.panel__main` zwischen Wort und Dateiangabe um. Befehle behalten ihre Zeilen und rollen im eigenen Kasten, der per Tastatur erreichbar ist; der Kopieren-Knopf steht darüber in eigener Zeile, damit kein Text unter ihm hindurchläuft.
+- Bühne, Klasse F: Die Pfeile stehen immer absolut am Boden von `.cap`, die Abstände rechnen in `svh`. Die Regel für kurze Telefone gilt bis 719 px Höhe und verkleinert nur die Schrift. Das Abschneiden des Textes auf drei Zeilen entfällt. Bis 619 px hält `--cap-t` den Platz des längsten Textes frei, die Bühne richtet sich in `stage.ts` danach.
+- Zählwerk: In Klasse F steht es klein rechts in der Zeile der Augenbraue, die große Konturziffer entfällt dort. Der Titel `deck__title` wird ausgeblendet, aber nicht aus dem Barrierebaum genommen, wo das Fenster an die Navigation reicht.
+- Navigation: `backdrop-filter` steht in der Hauptregel, der Präfix für Safari vor 18 in einem eigenen `@supports not`-Block, den der Minifier nicht zusammenlegt.
+
+### Akzeptanzkriterien
+
+- `npx astro build`, `npm test` und `npm run check-links` sind grün.
+- macOS- und Linux-Feld, de und en, 320, 360, 390, 430 und 768 px: Das Feld endet im Viewport, kein Element ragt heraus, kein waagrechter Scroll der Seite; Befehle rollen nur im eigenen Kasten.
+- 320x568, 320x640, 360x560, 360x640, 375x667, 390x844, 430x932, de und en, hell und dunkel: Beide Pfeile liegen in allen 7 Modulen im Bild, `elementFromPoint` trifft sie, ein Klick schaltet weiter, der Text endet über den Pfeilen.
+- `cap__index` überschneidet in keinem Modul Überschrift oder Augenbraue.
+- Der berechnete `backdrop-filter` der gescrollten Navigation ist in Chrome nicht `none`.
+
+Folge-Kandidaten:
+
+- `src/styles/docs.css` hat zwei Regeln mit demselben Minifier-Verlust (`.code__copy` und die Blatt-Leiste); in Chrome fehlt dort die Unschärfe.
