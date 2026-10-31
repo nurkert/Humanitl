@@ -403,7 +403,8 @@ keeps the profile, and the profile allows it the daemon's proxy socket directly,
 shim's door. *Residual risk:* such a process can keep sending requests for as long as the daemon
 runs, through launchd and across logins; `allow` rules and the passthrough apply, everything else
 is held in the queue after the session ended. It can also keep changing the project directory,
-which the summary of the session does not see. HUM-331 restricts the proxy socket to the shim of
+which the summary of the session does not see; in a disposable run the project is out of its
+reach, and the clone only through a descriptor it already held (K-24). HUM-331 restricts the proxy socket to the shim of
 the running session; until then a restart of the daemon ends such a process's way out.
 
 ### K-21 Reading by deny list, paths instead of descriptors on macOS
@@ -446,8 +447,8 @@ other processes.
 
 ### K-24 The disposable sandbox
 
-Linux-only for now: on macOS (Seatbelt) there is no overlay, a disposable start is refused with
-`SANDBOX_030`, and the channel does not exist there.
+On macOS (Seatbelt) there is no overlay; the layer is an APFS clone of the project (HUM-374,
+below). The way back is the same code.
 
 *Who is covered (HUM-357).* The disposable sandbox is the default where the system allows it:
 `sandbox.mode = "auto"`, the default, resolves to disposable with bubblewrap 0.11 or newer (not
@@ -463,6 +464,22 @@ changes of an earlier run refuse every start except an explicit `direct`, checke
 mode is resolved, instead of letting a default fall back to direct over a layer nobody
 reviewed. A run without changes discards its layer at once (`no_changes`), but only after a complete
 scan; a directory that cannot be read marks the list incomplete, and the layer waits.
+
+*macOS (HUM-374).* In direct runs a mask behind a symbolic link is denied on its resolved target
+too, with the folders above it locked. The daemon clones the opened project to a sibling of the session directories,
+removes every present mask from the clone before the start and denies every configured mask in
+the profile, present or not; the root of the clone is locked and opened only by descriptor against
+the device and inode taken after cloning; the real project is denied for reading and writing, also outside the private trees, and
+`mounts.extra_rw` is read-only. `auto` resolves to disposable there too, and a clone that fails runs
+direct with `SANDBOX_033`, without the protections of this section; an explicit `disposable`
+refuses with `SANDBOX_030`. Before anything reads the clone the daemon
+renames it, which ends path access for a process that outlived the sandbox (K-20). *Residual
+risk:* a descriptor such a process opened for writing before the end stays usable, so it can
+change the bytes of that one file after the human reviewed it; there is no size cap, so the agent
+can fill the volume as in direct mode; the clone lies on disk until apply, discard or the next
+daemon start; a file whose kind, size, `mtime` and mode the agent restored is not listed, and is
+then not applied either. Measured with a real `sandbox-exec` run, see
+[`SECURITY.md` section 12](SECURITY.md#the-disposable-sandbox-on-macos-hum-374).
 
 With a disposable start (HUM-350) the project folder is the read-only lower layer of an
 overlay at `/work`, and the agent's changes go to an upper layer the daemon created under
@@ -581,6 +598,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-30 | K-24: overwriting a conflict is confirmed per change (`overwrite_ids`); a confirmation for one file never covers another | HUM-351 |
 | 2026-10-31 | K-02: the boundary is the saved server the session resolved to; `llm.server` from run, project or profile chooses among the user's saved servers, never defines one; an unknown name refuses the start | HUM-400 |
 | 2026-10-30 | K-24: the disposable sandbox becomes the default where the system allows it (`sandbox.mode = "auto"`); without the overlay the default runs direct with `SANDBOX_033`, an explicit `disposable` still refuses | HUM-357 |
+| 2026-10-31 | K-24: the disposable sandbox on macOS, an APFS clone with the masks removed, the real project sealed and the clone renamed before it is read; a held write descriptor and the missing size cap stay as residual risks | HUM-374 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

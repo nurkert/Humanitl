@@ -672,7 +672,7 @@
         },
         "mode": {
           "default": "auto",
-          "description": "Wohin die Änderungen des Agenten gehen. `direct` schreibt in das Projektverzeichnis; `disposable` legt es nur lesbar unter eine Schicht im Arbeitsspeicher, und nach dem Lauf entscheidet der Mensch, welche Änderungen er übernimmt (`humanitl sandbox changes`, `apply`, `discard`). `auto`, die Vorgabe, ist `disposable`, wo das System es kann (Linux, bubblewrap 0.11 oder neuer, Laufzeitverzeichnis auf tmpfs, Projekt schreibbar eingehängt), sonst `direct`, und der Start sagt dann mit `SANDBOX_033`, warum (HUM-357). Ein ausdrücklich gesetztes `disposable` fällt nie zurück: Wo es nicht geht, lehnt der Start mit `SANDBOX_030` ab. Unter macOS gibt es die Wegwerf-Sandbox nicht; `auto` ist dort still `direct`.",
+          "description": "Wohin die Änderungen des Agenten gehen. `direct` schreibt in das Projektverzeichnis; `disposable` legt es nur lesbar unter eine Schicht (unter Linux im Arbeitsspeicher), und nach dem Lauf entscheidet der Mensch, welche Änderungen er übernimmt (`humanitl sandbox changes`, `apply`, `discard`). `auto`, die Vorgabe, ist `disposable`, wo das System es kann (Linux, bubblewrap 0.11 oder neuer, Laufzeitverzeichnis auf tmpfs, Projekt schreibbar eingehängt), sonst `direct`, und der Start sagt dann mit `SANDBOX_033`, warum (HUM-357). Ein ausdrücklich gesetztes `disposable` fällt nie zurück: Wo es nicht geht, lehnt der Start mit `SANDBOX_030` ab. Unter macOS ist die Schicht ein APFS-Klon des Projekts statt eines Overlays; geht der Klon nicht, gilt dieselbe Regel (HUM-374).",
           "oneOf": [
             {
               "const": "auto",

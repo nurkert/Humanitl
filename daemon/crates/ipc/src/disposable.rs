@@ -10,34 +10,25 @@
 //!
 //! Die Fachlogik (Diff, Prüfung, Schreiben) liegt in
 //! `humanitl_sandbox::disposable`; hier stehen nur der Zustand, die
-//! Wire-Form und die Aufzeichnung.
+//! Wire-Form und die Aufzeichnung. Unter macOS ist die Schicht ein Klon des
+//! Projekts (HUM-374), der Rest ist derselbe.
 
-#[cfg(target_os = "linux")]
 use std::os::fd::AsFd as _;
-#[cfg(target_os = "linux")]
 use std::path::PathBuf;
-#[cfg(target_os = "linux")]
 use std::sync::Arc;
 
 use humanitl_config::SandboxMode;
 use humanitl_core::diagnostics::codes;
-#[cfg(target_os = "linux")]
 use humanitl_core::ids::{SandboxId, SessionId};
 use humanitl_core::{Diagnostic, FixAction, Severity};
-#[cfg(target_os = "linux")]
 use humanitl_sandbox::disposable::{self, ChangeSet, DisposableRecord, LayerChange};
-#[cfg(target_os = "linux")]
 use humanitl_sandbox::summary::{ChangeKind, SessionSummary, display_path};
-#[cfg(target_os = "linux")]
-use humanitl_sandbox::worktree::{Kind, TreeSnapshot, open_root};
-#[cfg(target_os = "linux")]
+use humanitl_sandbox::worktree::{Kind, TreeSnapshot};
 use humanitl_sandbox::{ApplyOptions, Layer, SandboxHandle, SizeGuard};
 
-#[cfg(target_os = "linux")]
 use crate::v1;
 
 /// Eine obere Schicht, deren Änderungen auf den Menschen warten.
-#[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub(crate) struct Waiting {
     /// Der Lauf.
@@ -59,14 +50,7 @@ pub(crate) struct Waiting {
     pub(crate) guard: Option<SizeGuard>,
 }
 
-/// Ohne das Overlay von bubblewrap entsteht nie eine Schicht; der Typ hat
-/// keinen Wert (HUM-350).
-#[cfg(not(target_os = "linux"))]
-#[derive(Debug)]
-pub(crate) enum Waiting {}
-
 /// Was eine Übernahme ergab.
-#[cfg(target_os = "linux")]
 pub(crate) struct Applied {
     /// Die Antwort an den Client.
     pub(crate) outcome: v1::DisposableOutcome,
@@ -92,7 +76,6 @@ pub fn nothing_pending() -> Diagnostic {
 }
 
 /// Der Befund, wenn ein Start auf wartende Änderungen trifft.
-#[cfg(target_os = "linux")]
 #[must_use]
 pub(crate) fn pending_blocks_start(sandbox: SandboxId) -> Diagnostic {
     Diagnostic::builder(codes::SANDBOX_030, Severity::Blocking)
@@ -115,7 +98,6 @@ pub(crate) fn pending_blocks_start(sandbox: SandboxId) -> Diagnostic {
 ///
 /// `SANDBOX_030` mit `humanitl sandbox changes` als Fix, wenn `pending` eine
 /// Sandbox nennt und `wanted` nicht `direct` ist.
-#[cfg(target_os = "linux")]
 pub(crate) fn pending_guard(
     wanted: SandboxMode,
     pending: Option<SandboxId>,
@@ -133,8 +115,6 @@ pub(crate) enum SetupFailure {
     /// Bevor bubblewrap startete; nichts lief.
     Before(Diagnostic),
     /// Die Sandbox lief schon oder es ist nicht sicher, dass sie nicht lief.
-    /// Ohne Overlay (macOS) gibt es nur [`SetupFailure::Before`].
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     After(Diagnostic),
 }
 
@@ -161,12 +141,10 @@ pub(crate) fn fallback_after(
 }
 
 /// Der Ausgang eines Wegwerf-Laufs, der nichts geändert hat (HUM-357).
-#[cfg(target_os = "linux")]
 pub(crate) const NO_CHANGES: &str = "no_changes";
 
 /// Ob eine Liste nichts zu entscheiden lässt: keine Änderung und nichts
 /// abgeschnitten (HUM-357). Eine abgeschnittene leere Liste ist kein „nichts".
-#[cfg(target_os = "linux")]
 #[must_use]
 pub(crate) fn nothing_to_decide(changes: &v1::DisposableChanges) -> bool {
     changes.changes.is_empty() && !changes.truncated
@@ -200,7 +178,6 @@ pub(crate) fn parse_mode(text: &str) -> Result<Option<SandboxMode>, Diagnostic> 
 /// # Errors
 ///
 /// `SANDBOX_031`, wenn sie einen anderen nennt.
-#[cfg(target_os = "linux")]
 pub(crate) fn check_id(waiting: &Waiting, asked: &str) -> Result<(), Diagnostic> {
     let asked = asked.trim();
     if asked.is_empty() || asked == waiting.sandbox.to_string() {
@@ -217,7 +194,6 @@ pub(crate) fn check_id(waiting: &Waiting, asked: &str) -> Result<(), Diagnostic>
         .build())
 }
 
-#[cfg(target_os = "linux")]
 impl Waiting {
     /// Liest die obere Schicht und vergleicht sie mit dem Projekt.
     ///
@@ -227,7 +203,30 @@ impl Waiting {
     /// beiden Wurzeln nicht zu öffnen ist.
     fn scan(&self) -> Result<ChangeSet, Diagnostic> {
         disposable::ensure_ended(&self.handle, self.child_start)?;
-        let upper = open_root(&self.layer.upper())?;
+        let upper = self.layer.open_upper()?;
+        // Unter macOS ist die Schicht ein Klon, und erst der versiegelte ist
+        // außer Reichweite eines Prozesses, der die Sandbox überlebt hat
+        // (HUM-374).
+        if cfg!(target_os = "macos") {
+            self.layer.is_sealed().then_some(()).ok_or_else(|| {
+                Diagnostic::builder(codes::SANDBOX_031, Severity::Error)
+                    .why(format!(
+                        "the clone of sandbox {} is not sealed yet, so a process that outlived \
+                         the sandbox could still change it",
+                        self.sandbox
+                    ))
+                    .fix(FixAction::CopyCommand(
+                        "humanitl sandbox discard".to_owned(),
+                    ))
+                    .build()
+            })?;
+            return Ok(disposable::scan_clone(
+                upper.as_fd(),
+                self.lower.as_fd(),
+                &self.baseline,
+                self.layer.masks(),
+            ));
+        }
         Ok(disposable::scan(
             upper.as_fd(),
             self.lower.as_fd(),
@@ -247,7 +246,7 @@ impl Waiting {
         for why in &set.incomplete {
             tracing::warn!(sandbox = %self.sandbox, why = %why, "the list of a disposable layer is incomplete");
         }
-        let upper = open_root(&self.layer.upper())?;
+        let upper = self.layer.open_upper()?;
         let lower = self.lower.as_fd();
         let changes = set
             .changes
@@ -278,7 +277,7 @@ impl Waiting {
         check_id(self, &request.sandbox_id)?;
         let set = self.scan()?;
         let chosen = disposable::select(&set, &request.ids)?;
-        let upper = open_root(&self.layer.upper())?;
+        let upper = self.layer.open_upper()?;
         let report = disposable::apply(
             upper.as_fd(),
             self.lower.as_fd(),
@@ -329,7 +328,6 @@ impl Waiting {
 }
 
 /// Die Antwort auf `apply_changes` und `discard_changes`.
-#[cfg(target_os = "linux")]
 pub(crate) fn outcome(
     sandbox: SandboxId,
     outcome: &str,
@@ -344,7 +342,6 @@ pub(crate) fn outcome(
     }
 }
 
-#[cfg(target_os = "linux")]
 fn change_to_proto(change: &LayerChange, diff: Option<String>) -> v1::DisposableChange {
     let kind = match change.kind {
         ChangeKind::Added => v1::FileChangeKind::Added,
@@ -384,7 +381,6 @@ fn change_to_proto(change: &LayerChange, diff: Option<String>) -> v1::Disposable
 /// Kennung aus `overwrite_ids`; `overwrite` heißt weiter „alle gewählten",
 /// für `humanitl sandbox apply --overwrite`. Eine Bestätigung für eine Datei
 /// wird nie zu einer für alle.
-#[cfg(target_os = "linux")]
 fn options_of(request: &v1::sandbox_request::ApplyChanges) -> ApplyOptions {
     ApplyOptions {
         overwrite: request.overwrite,
@@ -404,7 +400,6 @@ mod tests {
 
     /// Eine einzeln bestätigte Datei erlaubt nur ihr Überschreiben, nie das
     /// einer anderen mit Konflikt (HUM-351).
-    #[cfg(target_os = "linux")]
     #[test]
     fn overwrite_ids_name_only_the_confirmed_changes() {
         let change = |rel: &str| LayerChange {
@@ -453,7 +448,6 @@ mod tests {
         assert_eq!(err.code.as_str(), "CONFIG_003");
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_change_travels_with_its_id_and_sanitized_path() {
         let change = LayerChange {
@@ -485,7 +479,6 @@ mod tests {
     /// (HUM-357, Review).
     ///
     /// Mutationsbeweis: die Sperre nur für `disposable`, rot.
-    #[cfg(target_os = "linux")]
     #[test]
     fn waiting_changes_refuse_every_start_but_an_explicit_direct() {
         let pending = Some(humanitl_core::ids::SandboxId::new());
@@ -526,7 +519,6 @@ mod tests {
     /// die Schicht geht dann ohne Warten (HUM-357, Review).
     ///
     /// Mutationsbeweis: `nothing_to_decide` immer falsch, rot.
-    #[cfg(target_os = "linux")]
     #[test]
     fn an_empty_layer_leaves_nothing_to_decide() {
         let empty = v1::DisposableChanges::default();

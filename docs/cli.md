@@ -246,7 +246,9 @@ command only watches the output until the shell ends.
 wherever the system allows it: `sandbox.mode` defaults to `auto`, which the
 daemon resolves to a disposable sandbox on Linux with bubblewrap 0.11 or
 newer, a runtime directory on tmpfs and the project mounted writable
-(HUM-357). The folder lies read-only under a layer in RAM; the agent sees and
+(HUM-357), and on macOS when the project is writable and an APFS clone of it
+succeeds (HUM-374). On Linux the folder lies read-only under a layer in RAM, on
+macOS the agent works in the clone; the agent sees and
 changes `/work` as usual, and every change goes to that layer (HUM-350,
 `docs/SECURITY.md` section 5.2). When the agent ends, `run` says how many
 changes wait.
@@ -300,7 +302,7 @@ conflict and needs `--overwrite`, and a symbolic link out of the project, a
 device, a FIFO or a socket is never written. setuid and setgid bits are
 dropped. A new disposable run waits until the changes of the last one are
 applied or discarded (`SANDBOX_030`); a run whose layer grows over its cap in
-RAM is stopped (`SANDBOX_032`); this holds for the default `auto` as well, so
+RAM is stopped on Linux (`SANDBOX_032`); this holds for the default `auto` as well, so
 a run with changes still waiting asks for `humanitl sandbox changes` first or
 for `--direct`. A disposable run that changed nothing leaves nothing waiting. `humanitl sandbox run --disposable` keeps no layer after it
 ends: it lists the changes and drops them. For that reason `sandbox run`

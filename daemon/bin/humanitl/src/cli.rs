@@ -348,8 +348,8 @@ pub struct RunArgs {
     #[arg(last = true, value_name = "CMD")]
     pub cmd: Vec<OsString>,
 
-    /// Keep the project folder untouched: it lies read-only under a layer in
-    /// RAM, and after the run `humanitl sandbox changes` shows what the agent
+    /// Keep the project folder untouched: it lies read-only under a layer (in
+    /// RAM on Linux, an APFS clone on macOS), and after the run `humanitl sandbox changes` shows what the agent
     /// changed, `apply` writes it and `discard` drops it. The same as
     /// sandbox.mode = "disposable" for this run: where the system cannot do
     /// it, the start refuses instead of writing to the folder. Without this
@@ -417,8 +417,8 @@ pub enum SandboxCmd {
         /// Host directory mounted at /tests/escape of the `test` profile.
         #[arg(long, value_name = "DIR")]
         tests_dir: Option<PathBuf>,
-        /// Run with the project folder read-only under a layer in RAM; at the
-        /// end the changes are listed and discarded (this command keeps no
+        /// Run with the project folder read-only under a layer (in RAM on
+        /// Linux, an APFS clone on macOS); at the end the changes are listed and discarded (this command keeps no
         /// layer; `humanitl run --disposable` keeps them for apply). Without
         /// this flag the run is direct unless sandbox.mode is "disposable":
         /// the default "auto" means direct here, because nothing could apply

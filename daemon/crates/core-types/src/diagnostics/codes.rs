@@ -1599,8 +1599,8 @@ registry! {
     /// Blocking: the start would otherwise write to the project folder, which
     /// is exactly what the mode promises not to do (HUM-350).
     SANDBOX_030 => "sandbox", "Disposable sandbox not possible", "#sandbox_030",
-        "The start asked for a disposable sandbox, and one of its conditions is missing: bubblewrap 0.11 or newer, a runtime directory on tmpfs, a writable view of the project folder, or no changes of an earlier disposable run still pending.",
-        "`CopyCommand` with the install command for a newer bubblewrap, `ChangeSetting` on `sandbox.work_mode` = `rw`, `SetEnv` for `XDG_RUNTIME_DIR` = `/run/user/<uid>`, or `CopyCommand` with `humanitl sandbox changes` for pending changes.";
+        "The start asked for a disposable sandbox, and one of its conditions is missing: bubblewrap 0.11 or newer, a runtime directory on tmpfs, a writable view of the project folder, or no changes of an earlier disposable run still pending. On macOS the project must be clonable: an APFS volume shared with the runtime directory and every file readable.",
+        "`CopyCommand` with the install command for a newer bubblewrap, `ChangeSetting` on `sandbox.work_mode` = `rw`, `SetEnv` for `XDG_RUNTIME_DIR` = `/run/user/<uid>`, `CopyCommand` with `humanitl sandbox changes` for pending changes, or on macOS `ChangeSetting` on `sandbox.mode` = `direct`.";
     /// A change of a disposable run was not written to the project folder:
     /// the user changed the file since the start (conflict), the change is a
     /// symbolic link that leaves the project, a device, FIFO or socket, a
@@ -1622,10 +1622,10 @@ registry! {
     /// off tmpfs, or a project folder mounted read-only. The run starts in
     /// direct mode, as before HUM-350; the sentence names the cause. A
     /// warning, not a refusal: only an explicit `sandbox.mode =
-    /// "disposable"` refuses (`SANDBOX_030`). Never on macOS, where the mode
-    /// does not exist (HUM-357).
+    /// "disposable"` refuses (`SANDBOX_030`). On macOS for a read-only project
+    /// or a failed clone (HUM-357, HUM-374).
     SANDBOX_033 => "sandbox", "Disposable sandbox not available, running direct", "#sandbox_033",
-        "The default `sandbox.mode = \"auto\"` asks for a disposable sandbox where the system allows one, and this system does not: bubblewrap is older than 0.11, the runtime directory is not on tmpfs, or the project folder is mounted read-only. This run writes to the project folder directly.",
+        "The default `sandbox.mode = \"auto\"` asks for a disposable sandbox where the system allows one, and this system does not: bubblewrap is older than 0.11, the runtime directory is not on tmpfs, the project folder is mounted read-only, or on macOS the project cannot be cloned. This run writes to the project folder directly.",
         "The fix of the cause (install command for a newer bubblewrap, `SetEnv` for `XDG_RUNTIME_DIR`, `ChangeSetting` on `sandbox.work_mode` = `rw`), or `sandbox.mode = \"direct\"` to choose direct mode and silence this notice.";
 }
 

@@ -239,11 +239,6 @@ async fn start(
 ) -> Result<u8, Failure> {
     let resolved = ctx.config()?;
     let disposable = throwaway_wanted(disposable, direct, resolved.config.sandbox.mode);
-    // Ohne das Overlay von bubblewrap gibt es keine Wegwerf-Sandbox (HUM-350).
-    #[cfg(not(target_os = "linux"))]
-    if disposable {
-        return Err(Failure::new(humanitl_sandbox::disposable::unsupported()));
-    }
 
     // Schritt 1 der Spezifikation: ohne Daemon kein Lauf. Er hält den
     // Proxy-Socket und das CA-Bundle; ohne beides hätte der Agent in der
@@ -270,7 +265,6 @@ async fn start(
     // The disposable sandbox (HUM-350): this command keeps no layer after it
     // ends, so the changes are listed and dropped; `humanitl run --disposable`
     // keeps them for apply.
-    #[cfg(target_os = "linux")]
     let mut throwaway = if disposable {
         Some(Throwaway::prepare(ctx, &mut setup)?)
     } else {
@@ -298,7 +292,6 @@ async fn start(
     let handle = Arc::new(setup.backend.launch(&plan).map_err(Failure::new)?);
     ctx.render
         .detail(&format!("sandbox {} pid {}", handle.id, handle.pid));
-    #[cfg(target_os = "linux")]
     if let Some(throwaway) = throwaway.as_mut() {
         throwaway.watch(&handle).map_err(Failure::new)?;
     }
@@ -306,9 +299,8 @@ async fn start(
     enforce_isolation(ctx, &setup.backend, &handle)?;
     let ended = wait_or_interrupt(Arc::clone(&handle), interrupts).await;
     report_refusals(ctx, &handle).await;
-    #[cfg(target_os = "linux")]
     {
-        if let Some(throwaway) = &throwaway {
+        if let Some(throwaway) = &mut throwaway {
             throwaway.report(ctx, &handle);
         }
         drop(throwaway);
@@ -447,7 +439,6 @@ fn throwaway_wanted(disposable: bool, direct: bool, mode: humanitl_config::Sandb
 /// It carries what the daemon's run carries (HUM-350): the project folder
 /// opened once before the start, the baseline taken on it before the start,
 /// and a size guard that stops the sandbox when the layer grows over its cap.
-#[cfg(target_os = "linux")]
 struct Throwaway {
     layer: Option<humanitl_sandbox::Layer>,
     lower: std::os::fd::OwnedFd,
@@ -456,15 +447,68 @@ struct Throwaway {
     child_start: Option<u64>,
 }
 
-#[cfg(target_os = "linux")]
 impl Throwaway {
     /// Opens the project folder, takes the baseline and creates the layer
     /// before the plan, so the plan mounts exactly the opened folder.
     fn prepare(ctx: &Context, setup: &mut Setup) -> Result<Self, Failure> {
-        use std::os::fd::{AsFd as _, AsRawFd as _};
+        use std::os::fd::AsFd as _;
 
         let lower =
             humanitl_sandbox::worktree::open_root(&setup.session.work_src).map_err(Failure::new)?;
+        let baseline = humanitl_sandbox::disposable::baseline_at(lower.as_fd());
+        let layer = Self::place_layer(ctx, setup, &lower)?;
+        Ok(Self {
+            layer: Some(layer),
+            lower,
+            baseline,
+            guard: None,
+            child_start: None,
+        })
+    }
+
+    /// macOS: clones the opened folder (HUM-374); the clone is the project
+    /// of the sandbox, and what fails refuses the run.
+    #[cfg(target_os = "macos")]
+    fn place_layer(
+        ctx: &Context,
+        setup: &mut Setup,
+        lower: &std::os::fd::OwnedFd,
+    ) -> Result<humanitl_sandbox::Layer, Failure> {
+        use std::os::fd::AsFd as _;
+
+        let resolved = humanitl_sandbox::disposable::fd_path(lower.as_fd()).map_err(|err| {
+            Failure::new(
+                Diagnostic::builder(codes::SANDBOX_030, Severity::Blocking)
+                    .why(format!(
+                        "where the opened project folder lies cannot be read ({err})"
+                    ))
+                    .build(),
+            )
+        })?;
+        let layer = humanitl_sandbox::Layer::clone_project(
+            &ctx.paths.runtime_dir().path,
+            lower.as_fd(),
+            &resolved,
+            humanitl_sandbox::SeatbeltBackend::clone_masks(&setup.profile, &resolved),
+        )
+        .map_err(Failure::new)?;
+        setup.backend = setup
+            .backend
+            .clone()
+            .with_approved_work_dir(resolved)
+            .with_clone(layer.dirs().upper);
+        Ok(layer)
+    }
+
+    /// Linux: the layer of the overlay over exactly the opened folder.
+    #[cfg(not(target_os = "macos"))]
+    fn place_layer(
+        ctx: &Context,
+        setup: &mut Setup,
+        lower: &std::os::fd::OwnedFd,
+    ) -> Result<humanitl_sandbox::Layer, Failure> {
+        use std::os::fd::AsRawFd as _;
+
         let resolved =
             std::fs::read_link(format!("/proc/self/fd/{}", lower.as_raw_fd())).map_err(|err| {
                 Failure::new(
@@ -475,7 +519,7 @@ impl Throwaway {
                         .build(),
                 )
             })?;
-        let stat = rustix::fs::fstat(&lower).map_err(|err| {
+        let stat = rustix::fs::fstat(lower).map_err(|err| {
             Failure::new(
                 Diagnostic::builder(codes::SANDBOX_030, Severity::Blocking)
                     .why(format!(
@@ -484,7 +528,6 @@ impl Throwaway {
                     .build(),
             )
         })?;
-        let baseline = humanitl_sandbox::disposable::baseline_at(lower.as_fd());
         let layer =
             humanitl_sandbox::Layer::create(&ctx.paths.runtime_dir().path).map_err(Failure::new)?;
         setup.backend = setup
@@ -493,13 +536,7 @@ impl Throwaway {
             .with_approved_work_dir(resolved)
             .with_expected_work_inode(stat.st_dev, stat.st_ino)
             .with_overlay(layer.dirs());
-        Ok(Self {
-            layer: Some(layer),
-            lower,
-            baseline,
-            guard: None,
-            child_start: None,
-        })
+        Ok(layer)
     }
 
     /// Starts the size guard for the running sandbox and notes the start
@@ -508,6 +545,11 @@ impl Throwaway {
         let Some(layer) = self.layer.as_ref() else {
             return Ok(());
         };
+        // Unter macOS teilt sich der Klon das Volume mit dem Rechner, und die
+        // Grenze misst ein ganzes Dateisystem (HUM-374).
+        if cfg!(target_os = "macos") {
+            return Ok(());
+        }
         let stop = Arc::clone(handle);
         self.guard = Some(humanitl_sandbox::SizeGuard::start(layer, move || {
             let _ = stop.kill();
@@ -519,7 +561,7 @@ impl Throwaway {
     }
 
     /// Says what the run changed before the layer goes.
-    fn report(&self, ctx: &Context, handle: &SandboxHandle) {
+    fn report(&mut self, ctx: &Context, handle: &SandboxHandle) {
         use std::os::fd::AsFd as _;
 
         if let Some(guard) = &self.guard {
@@ -528,7 +570,7 @@ impl Throwaway {
                 ctx.render.diagnostic(&tripped);
             }
         }
-        let Some(layer) = self.layer.as_ref() else {
+        let Some(layer) = self.layer.as_mut() else {
             return;
         };
         if let Err(diagnostic) =
@@ -537,11 +579,28 @@ impl Throwaway {
             ctx.render.diagnostic(&diagnostic);
             return;
         }
-        let Ok(upper) = humanitl_sandbox::worktree::open_root(&layer.upper()) else {
+        let clone = cfg!(target_os = "macos");
+        if clone && let Err(diagnostic) = layer.seal() {
+            ctx.render.diagnostic(&diagnostic);
             return;
+        }
+        let upper = match layer.open_upper() {
+            Ok(upper) => upper,
+            Err(diagnostic) => {
+                ctx.render.diagnostic(&diagnostic);
+                return;
+            }
         };
-        let set =
-            humanitl_sandbox::disposable::scan(upper.as_fd(), self.lower.as_fd(), &self.baseline);
+        let set = if clone {
+            humanitl_sandbox::disposable::scan_clone(
+                upper.as_fd(),
+                self.lower.as_fd(),
+                &self.baseline,
+                layer.masks(),
+            )
+        } else {
+            humanitl_sandbox::disposable::scan(upper.as_fd(), self.lower.as_fd(), &self.baseline)
+        };
         ctx.render.note(&format!(
             "disposable: {} change(s) discarded, the project folder is untouched{}",
             set.changes.len(),

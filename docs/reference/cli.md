@@ -201,7 +201,7 @@ Arguments:
 
 Options:
       --disposable
-          Keep the project folder untouched: it lies read-only under a layer in RAM, and after the run `humanitl sandbox changes` shows what the agent changed, `apply` writes it and `discard` drops it. The same as sandbox.mode = "disposable" for this run: where the system cannot do it, the start refuses instead of writing to the folder. Without this flag and without --direct the run follows sandbox.mode, by default "auto": disposable where the system allows it, otherwise direct with a notice
+          Keep the project folder untouched: it lies read-only under a layer (in RAM on Linux, an APFS clone on macOS), and after the run `humanitl sandbox changes` shows what the agent changed, `apply` writes it and `discard` drops it. The same as sandbox.mode = "disposable" for this run: where the system cannot do it, the start refuses instead of writing to the folder. Without this flag and without --direct the run follows sandbox.mode, by default "auto": disposable where the system allows it, otherwise direct with a notice
 
       --json
           Machine-readable output: one JSON value on stdout, diagnostics included
@@ -286,7 +286,7 @@ Options:
           Read this config file instead of the one in the user's config directory
 
       --disposable
-          Run with the project folder read-only under a layer in RAM; at the end the changes are listed and discarded (this command keeps no layer; `humanitl run --disposable` keeps them for apply). Without this flag the run is direct unless sandbox.mode is "disposable": the default "auto" means direct here, because nothing could apply the changes afterwards
+          Run with the project folder read-only under a layer (in RAM on Linux, an APFS clone on macOS); at the end the changes are listed and discarded (this command keeps no layer; `humanitl run --disposable` keeps them for apply). Without this flag the run is direct unless sandbox.mode is "disposable": the default "auto" means direct here, because nothing could apply the changes afterwards
 
       --direct
           Run direct even if sandbox.mode is "disposable"
