@@ -169,7 +169,7 @@ const older = releases.filter((release) => release !== current).slice(0, 6);
                     </ol>
                     <p class="panel__note">{info.commandNote}</p>
                     <div class="cmd">
-                      <pre><code>{command}</code></pre>
+                      <pre tabindex="0"><code>{command}</code></pre>
                       <button class="cmd__copy" type="button" data-copy={command} aria-label={lang === 'de' ? 'Befehl kopieren' : 'Copy command'}>
                         <Icon name="copy" />
                       </button>
@@ -183,7 +183,7 @@ const older = releases.filter((release) => release !== current).slice(0, 6);
                       <>
                         <p class="panel__note panel__note--more">{info.rpm}</p>
                         <div class="cmd">
-                          <pre><code>{info.rpmCommand.replace('@VERSION@', current.version)}</code></pre>
+                          <pre tabindex="0"><code>{info.rpmCommand.replace('@VERSION@', current.version)}</code></pre>
                           <button
                             class="cmd__copy"
                             type="button"
@@ -405,7 +405,7 @@ const older = releases.filter((release) => release !== current).slice(0, 6);
   }
   @media (max-width: 52rem) {
     .dl__head {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
     }
     .dl__art {
       order: -1;
@@ -416,6 +416,8 @@ const older = releases.filter((release) => release !== current).slice(0, 6);
   .dl__pick {
     position: relative;
     display: grid;
+    /* Eine Spalte `auto` wüchse mit dem längsten Befehl über den Bildschirm hinaus. */
+    grid-template-columns: minmax(0, 1fr);
     gap: 1.4rem;
     margin-top: clamp(3rem, 8vh, 5rem);
   }
@@ -483,13 +485,14 @@ const older = releases.filter((release) => release !== current).slice(0, 6);
     display: none;
   }
   .panel--empty {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     justify-items: start;
     gap: 1.2rem;
     color: var(--fg-1);
   }
   .panel__files {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     align-content: start;
     justify-items: start;
     gap: 1rem;
@@ -565,6 +568,7 @@ const older = releases.filter((release) => release !== current).slice(0, 6);
   }
   .panel__steps {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     align-content: start;
     gap: 1rem;
   }
@@ -613,9 +617,10 @@ const older = releases.filter((release) => release !== current).slice(0, 6);
     border: 1px solid var(--line-strong);
     background: #07080b;
   }
+  /* Der Kopieren-Knopf steht über dem Befehl in eigener Zeile, auf jeder Breite. */
   .cmd pre {
+    padding: 3.1rem 1.1rem 1rem;
     margin: 0;
-    padding: 1rem 3.4rem 1rem 1.1rem;
     overflow-x: auto;
     color: var(--term-fg);
     line-height: 1.8;
@@ -651,7 +656,20 @@ const older = releases.filter((release) => release !== current).slice(0, 6);
   }
   @media (max-width: 52rem) {
     .panel {
-      grid-template-columns: 1fr;
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+  /* Telefone: Der Knopf bricht zwischen Wort und Dateiangabe um. Befehle behalten ihre
+     Zeilen und rollen in ihrem Kasten. */
+  @media (max-width: 34rem) {
+    .panel__main {
+      flex-wrap: wrap;
+      row-gap: 0.25rem;
+      max-width: 100%;
+      padding: 0.7rem 1.4rem;
+      border-radius: 28px;
+      white-space: normal;
+      text-align: center;
     }
   }
 

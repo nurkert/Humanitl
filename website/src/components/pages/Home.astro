@@ -1540,37 +1540,60 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     top: -0.2rem;
     right: 0;
   }
-  .scene[data-cls='E'] .deck__controls,
-  .scene[data-cls='F'] .deck__controls {
+  .scene[data-cls='E'] .deck__controls {
     margin-top: auto;
   }
   .scene[data-cls='F'] {
-    --idx: 5.5rem;
+    --idx: 1.1rem;
     --head: 1.9rem;
     --text: 0.95rem;
     --text-w: none;
     --cap-gap: 0.7rem;
   }
+  /* Die Pfeile stehen fest am Boden der Beschriftung, darüber liegt der freigehaltene Text. */
   .scene[data-cls='F'] .cap {
-    top: 52vh;
-    bottom: 4vh;
+    top: var(--cap-t, 52svh);
+    bottom: 4svh;
     left: 6vw;
     right: 6vw;
     width: auto;
+    padding-bottom: 3.25rem;
+  }
+  .scene[data-cls='F'] .deck__controls {
+    position: absolute;
+    inset: auto 0 0;
+    margin: 0;
+  }
+  /* Der Kopf hat im Hochformat keine eigene Zeile; seine Kinder liegen absolut. */
+  .scene[data-cls='F'] .cap__head {
+    margin-bottom: calc(-1 * var(--cap-gap));
   }
   .scene[data-cls='F'] .deck__title {
     position: absolute;
-    top: calc(96px - 52vh);
+    top: calc(96px - var(--cap-t, 52svh));
     left: 0;
     right: 0;
     text-align: center;
   }
-  /* Telefon: die Konturziffer steht rechts hinter der Überschrift. */
+  /* Telefon: das Zählwerk steht klein rechts in der Zeile der Augenbraue, die Überschrift
+     bleibt frei. */
   .scene[data-cls='F'] .cap__index {
     position: absolute;
-    top: -0.6rem;
+    top: 0;
     right: 0;
-    z-index: -1;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .scene[data-cls='F'] .odo {
+    letter-spacing: -0.02em;
+    -webkit-text-stroke: 0;
+    color: var(--fg-1);
+  }
+  .scene[data-cls='F'] .cap__of {
+    padding-bottom: 0;
+  }
+  .scene[data-cls='F'] .cap__name {
+    padding-right: 5.5rem;
   }
   .scene[data-cls='F'] .cap__layer {
     gap: 0.55rem;
@@ -1578,29 +1601,29 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
   .scene[data-cls='F'] .deck__track {
     max-width: none;
   }
-  /* Kurze Telefone: die Pfeile stehen fest am Boden der Beschriftung, der Text weicht. */
-  @media (max-height: 619px) {
+  /* Kurze Telefone: Schrift und Abstände werden kleiner, die Pfeile bleiben unberührt. */
+  @media (max-height: 719px) {
     .scene[data-cls='F'] {
       --head: 1.5rem;
       --text: 0.85rem;
       --cap-gap: 0.4rem;
     }
-    .scene[data-cls='F'] .cap__index {
-      display: none;
+  }
+  /* Sehr kurze Telefone: Die Beschriftung hält die Höhe ihres längsten Textes (rund 17,5 rem
+     samt Pfeilen und Boden), die Bühne richtet sich in stage.ts danach. */
+  @media (max-height: 619px) {
+    .scene[data-cls='F'] {
+      --cap-t: min(52svh, 100svh - 17.5rem);
     }
     .scene[data-cls='F'] .cap {
-      padding-bottom: 3.25rem;
+      bottom: 0.75rem;
     }
-    .scene[data-cls='F'] .deck__controls {
-      position: absolute;
-      inset: auto 0 0;
-      margin: 0;
-    }
-    .scene[data-cls='F'] .cap__text {
-      display: -webkit-box;
-      overflow: hidden;
-      -webkit-box-orient: vertical;
-      -webkit-line-clamp: 3;
+  }
+  /* Kurz oder kurz und breit: Das Fenster reicht bis an die Navigation und läge unter dem
+     Titel; Screenreader lesen ihn weiter. */
+  @media (max-height: 679px), (max-height: 739px) and (min-width: 400px) {
+    .scene[data-cls='F'] .deck__title {
+      opacity: 0;
     }
   }
   .scene[data-cls='F'] .deck__controls,
