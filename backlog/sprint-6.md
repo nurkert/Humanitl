@@ -37,6 +37,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-359 | Website: Aussagen, die Code und Doku nicht decken, und falsche Sprachlinks | S | HUM-333, HUM-345, HUM-346 |
 | HUM-358 | Startseite: sechs Sektionen unter dem Karussell, die erklären, überzeugen und die Unterseiten anteasern | M | HUM-333, HUM-345, HUM-359 |
 | HUM-341 | Landing: dezenter Nebel mit Lichtstrahlen hinter den Fenstern | S | HUM-334, HUM-348 |
+| HUM-338 | Website: heller Modus, folgt dem System, Umschalter in der Navigation | M | HUM-341, HUM-358 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -523,3 +524,34 @@ Wunsch des Inhabers: ganz am Anfang der Startseite etwas leicht beleuchteter Neb
 Folge-Kandidaten:
 
 - Ein helles Thema braucht dunkle Fassungen der Bilder; die Tokens regeln nur die Stärke, die Farbe steckt im Bild.
+
+## HUM-338 · Website: heller Modus, folgt dem System, Umschalter in der Navigation
+
+### Kontext
+
+Wunsch des Inhabers: Die Seite bekommt einen hellen Modus. Ohne Wahl folgt sie dem System, ein Umschalter lässt wählen. Maßstab ist die dunkle Seite; die bleibt, wie sie ist, bis auf `--fg-2` (#737A8C wird #808799), weil der alte Wert die 4,5:1 auf Panels verfehlt. Die App hat ein helles Thema (`HThemeMode`, `app/lib/features/shell/providers/theme.dart`), die Aufnahmen der Bühne bleiben trotzdem dunkel; helle Aufnahmen wären ein eigenes Issue.
+
+### Spezifikation
+
+- Farben hängen an Tokens in `website/src/styles/global.css`. `--dark` und `--light` sind ein Schalterpaar: Das aktive steht auf `initial`, das andere ist leer, darum liefert `var(--dark, a) var(--light, b)` je Thema genau einen Wert, auch für Verläufe, Schatten und Zahlen. Nur der Schalterblock kennt `prefers-color-scheme` und `[data-theme]`. Papier nimmt immer die helle Fassung.
+- `website/public/theme.js` lädt blockierend und extern im Kopf, weil die CSP Inline-Skripte verbietet. Es setzt `data-theme` aus `localStorage` (`humanitl-theme`) vor dem ersten Bild, gleicht `theme-color` und `color-scheme` an und setzt `data-theme-js`, das den Umschalter sichtbar macht. Ohne Skript gilt das System, der Umschalter fehlt.
+- Der Umschalter steht in der Navigation (`src/scripts/nav.ts`), wechselt zwischen Hell und Dunkel und nennt das Ziel im `aria-label` aus den Locales. Wer beim Stand des Systems ankommt, löst die Wahl; die Seite folgt dem System dann wieder live.
+- Bühne im Hellen: Die Fenster bleiben dunkles Glas, die Überschrift wird dunkler Stahl, der Ring dunkler Stahl auf hellem Boden. Hintere Fenster sinken in dunklen Schiefer statt in Schwarz. Bokeh entfällt, ohne Lichtpunkte im Dunkeln ergibt es keinen Sinn. Hinten einkommende Fenster steigen über den CSS-Faktor `--st-ramp` steiler auf, sonst steht eine blasse Geisterscheibe im Raum. Farben kommen nur über CSS, pro Bild bleiben es `transform` und `opacity`.
+- Nebel: `far` und `near` gibt es als `far-light.webp` und `near-light.webp` in Schiefer aus `generate-fog.mjs`, die dunklen Fassungen bleiben Byte für Byte gleich. Die Strahlen bleiben weiß. Beide Fassungen laden `lazy`, so dass nur die im Layout liegende geholt wird; jedes Bild blendet einzeln auf, sobald es dekodiert ist, auch nach einem Themenwechsel; das löst die Vorgabe „lädt sofort" aus HUM-341 für diese beiden Ebenen ab.
+- Terminals (`.term`, `.sec-term`, `.sec-oneliner`, `.sec-cmd`, `.cmd`) bleiben in beiden Themen dunkle Gegenstände. Codeblöcke der Docs werden hell, dort zählt das Lesen.
+- `--accent` bleibt `#E8B84B` für Flächen. Gelbe Schrift nimmt `--accent-ink`, im Hellen `#7A5600`.
+- Bis 380 px Breite entfällt in der Navigation die Wortmarke, damit Sprachwahl, Umschalter und Download-Knopf von 320 px an ungeschnitten stehen.
+
+### Akzeptanzkriterien
+
+- `npx astro build`, `npm test` und `npm run check-links` sind grün.
+- Text erreicht in beiden Themen mindestens 4,5:1, große Schrift 3:1, gemessen an gerenderten Pixeln.
+- Mit gespeicherter Wahl gegen das System zeigt schon das erste Bild die gewählte Farbe.
+- Ohne Wahl folgt die Seite einem Systemwechsel ohne Neuladen.
+- Ohne Skript gilt das System und der Umschalter fehlt; gesperrter Speicher wirft keinen Fehler.
+- Von 320 px bis 3440 px gibt es keinen waagrechten Scroll, der Download-Knopf ist bei 320 px ganz sichtbar.
+
+Folge-Kandidaten:
+
+- Helle Aufnahmen der App für die Bühne, die Karussellbilder und die Download-Seite.
+- `og.jpg` zeigt weiter die dunkle Bühne.

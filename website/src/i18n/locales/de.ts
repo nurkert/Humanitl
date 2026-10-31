@@ -13,6 +13,8 @@ const de = {
     home: 'Humanitl, zur Startseite',
     language: 'Sprache',
     docs: 'Doku',
+    themeLight: 'Zum hellen Design wechseln',
+    themeDark: 'Zum dunklen Design wechseln',
   },
   hero: {
     title: ['Du entscheidest,', 'was rausgeht.'],

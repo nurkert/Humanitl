@@ -28,6 +28,8 @@ import palette from '../../assets/screens/palette.png';
 import settings from '../../assets/screens/settings.png';
 import fogFar from '../../assets/fog/far.webp';
 import fogNear from '../../assets/fog/near.webp';
+import fogFarLight from '../../assets/fog/far-light.webp';
+import fogNearLight from '../../assets/fog/near-light.webp';
 import fogRays from '../../assets/fog/rays.webp';
 
 interface Props {
@@ -42,10 +44,11 @@ const n = modules.length;
 const ringOffset = (i: number) => ((i + Math.floor(n / 2)) % n) - Math.floor(n / 2);
 const formats = ['avif'] as const;
 // Nebel (HUM-341): weich genug für kleine Bilder, die Tiefe von hinten nach vorn.
+// Far und near gibt es je Thema; lazy, damit nur die Fassung lädt, die im Layout liegt (HUM-338).
 const fogLayers = [
-  { id: 'far', src: fogFar },
-  { id: 'rays', src: fogRays },
-  { id: 'near', src: fogNear },
+  { id: 'far', tones: [{ tone: 'dark', src: fogFar }, { tone: 'light', src: fogFarLight }], loading: 'lazy' as const },
+  { id: 'rays', tones: [{ tone: 'all', src: fogRays }], loading: 'eager' as const },
+  { id: 'near', tones: [{ tone: 'dark', src: fogNear }, { tone: 'light', src: fogNearLight }], loading: 'lazy' as const },
 ];
 // Der Knopf führt auf dem Mac direkt zum Disk-Image der aktuellen Version (HUM-337).
 const releases = await loadReleases();
@@ -116,7 +119,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
           bottom: auto !important;
           height: 100svh;
         }
-        .fog__layer {
+        .fog__tone {
           --fog-in: 1 !important;
         }
         /* Modul 1 steht ruhig unter der Bühne, ohne Pfeile. */
@@ -212,7 +215,11 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
             {
               fogLayers.map((layer) => (
                 <div class={`fog__layer fog__layer--${layer.id}`} data-fog-layer={layer.id}>
-                  <Picture src={layer.src} alt="" formats={formats} fallbackFormat="webp" widths={[800, 1280]} sizes="100vw" quality={55} loading="eager" fetchpriority="low" decoding="async" draggable="false" />
+                  {layer.tones.map((entry) => (
+                    <div class={`fog__tone fog__tone--${entry.tone}`} data-fog-tone>
+                      <Picture src={entry.src} alt="" formats={formats} fallbackFormat="webp" widths={[800, 1280]} sizes="100vw" quality={55} loading={layer.loading} fetchpriority="low" decoding="async" draggable="false" />
+                    </div>
+                  ))}
                 </div>
               ))
             }
@@ -401,6 +408,24 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     --t: clamp(10px, calc(var(--w) * 0.03), 30px);
     --r: calc(var(--w) * 0.016);
     --pad: calc(var(--w) * 0.009);
+    /* Die Bühne im hellen Raum (HUM-338): die Scheiben bleiben dunkles Glas, Licht wird zu
+       Luft und Schatten. Das Skript liest keine dieser Farben, sie kommen nur über CSS. */
+    --st-spot: rgb(255 255 255 / var(--dark, 0.11) var(--light, 0.95));
+    --st-spot-2: rgb(214 224 255 / var(--dark, 0.07) var(--light, 0.4));
+    --st-halo: var(--dark, 232 236 245) var(--light, 255 255 255);
+    --st-halo-k: var(--dark, 1) var(--light, 4);
+    --st-floor-shadow: rgb(var(--shadow) / var(--dark, 0.75) var(--light, 0.34));
+    --st-far: var(--dark, #000000) var(--light, #2b2f39);
+    --st-feather: var(--dark, rgb(16 18 24)) var(--light, #eceef2);
+    --st-m0: var(--dark, #ffffff) var(--light, #d8dce4);
+    --st-m1: var(--dark, #f4f5f8) var(--light, #a9afbb);
+    --st-m2: var(--dark, #6a6f7b) var(--light, #6a7080);
+    --st-m3: var(--dark, #4a4e58) var(--light, #4a4f5b);
+    --st-m4: var(--dark, #1a1c21) var(--light, #23262e);
+    --st-m5: var(--dark, #2a2d35) var(--light, #4a4f5b);
+    /* Hinten einkommende Fenster: Halbtransparenz liest sich auf Hell als blasse Geisterscheibe,
+       darum steigt die Deckkraft dort steiler. Das Skript setzt weiter nur --o und --oe. */
+    --st-ramp: var(--dark, 1) var(--light, 6);
     position: relative;
     height: var(--scene-h, 220vh);
   }
@@ -424,8 +449,8 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     inset: -20% -10% auto;
     height: 90%;
     background:
-      radial-gradient(42% 55% at 50% 0%, rgb(255 255 255 / 0.11), transparent 70%),
-      radial-gradient(30% 40% at 50% 62%, rgb(214 224 255 / 0.07), transparent 70%);
+      radial-gradient(42% 55% at 50% 0%, var(--st-spot), transparent 70%),
+      radial-gradient(30% 40% at 50% 62%, var(--st-spot-2), transparent 70%);
     will-change: transform;
   }
   /* Feiner Staub im unteren Drittel, aus Punkten gemalt statt aus einem Bild. */
@@ -433,12 +458,12 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     position: absolute;
     inset: 40% 0 0;
     background-image:
-      radial-gradient(1px 1px at 12% 22%, rgb(255 255 255 / 0.55), transparent 60%),
-      radial-gradient(1px 1px at 37% 64%, rgb(255 255 255 / 0.4), transparent 60%),
-      radial-gradient(1.5px 1.5px at 58% 38%, rgb(255 255 255 / 0.45), transparent 60%),
-      radial-gradient(1px 1px at 81% 72%, rgb(255 255 255 / 0.35), transparent 60%),
-      radial-gradient(1px 1px at 69% 15%, rgb(255 255 255 / 0.3), transparent 60%),
-      radial-gradient(1.2px 1.2px at 24% 84%, rgb(255 255 255 / 0.35), transparent 60%);
+      radial-gradient(1px 1px at 12% 22%, rgb(var(--ink) / 0.55), transparent 60%),
+      radial-gradient(1px 1px at 37% 64%, rgb(var(--ink) / 0.4), transparent 60%),
+      radial-gradient(1.5px 1.5px at 58% 38%, rgb(var(--ink) / 0.45), transparent 60%),
+      radial-gradient(1px 1px at 81% 72%, rgb(var(--ink) / 0.35), transparent 60%),
+      radial-gradient(1px 1px at 69% 15%, rgb(var(--ink) / 0.3), transparent 60%),
+      radial-gradient(1.2px 1.2px at 24% 84%, rgb(var(--ink) / 0.35), transparent 60%);
     background-size: 340px 260px;
     mask-image: linear-gradient(180deg, transparent, #000 45%, #000 80%, transparent);
     opacity: 0.25;
@@ -451,38 +476,50 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
 
   /* Nebel und Lichtstrahlen (HUM-341): vorgerechnete Bilder hinter den Fenstern. Bewegt
      werden nur transform, translate und opacity; das Skript blendet die Ebenen im Morph aus
-     und nimmt sie danach aus dem Layout. Die Stärke hängt an Tokens, ein helles Thema setzt
-     nur diese. Die Bilder selbst sind hell und tragen die Form im Alpha. */
+     und nimmt sie danach aus dem Layout. Die Stärke hängt an Tokens; die Farbe steckt im Bild,
+     darum gibt es far und near je Thema (HUM-338). Die Strahlen sind in beiden weißes Licht. */
   .scene {
-    --fog-far: 0.18;
-    --fog-near: 0.2;
-    --fog-rays: 0.22;
+    --fog-far: var(--dark, 0.18) var(--light, 0.2);
+    --fog-near: var(--dark, 0.2) var(--light, 0.22);
+    --fog-rays: var(--dark, 0.22) var(--light, 0.7);
   }
   .fog {
     position: absolute;
     inset: 0;
     opacity: 0;
   }
-  /* --fog-in hebt jede Ebene erst, wenn ihr Bild dekodiert ist: nichts springt ins Bild. */
   .fog__layer {
-    --fog-in: 0;
     position: absolute;
     inset: -8%;
-    transition:
-      translate 1.6s var(--ease-out),
-      opacity 1.6s var(--ease-out);
-  }
-  .fog__layer[data-ready] {
-    --fog-in: 1;
+    transition: translate 1.6s var(--ease-out);
   }
   .fog__layer--far {
-    opacity: calc(var(--fog-far) * var(--fog-in));
+    opacity: var(--fog-far);
   }
   .fog__layer--near {
-    opacity: calc(var(--fog-near) * var(--fog-in));
+    opacity: var(--fog-near);
   }
   .fog__layer--rays {
-    opacity: calc(var(--fog-rays) * var(--fog-in));
+    opacity: var(--fog-rays);
+  }
+  /* Nur die Fassung des Themas liegt im Layout; die andere lädt dank loading="lazy" gar nicht. */
+  /* --fog-in hebt jedes Bild erst, wenn es dekodiert ist, auch nach einem Themenwechsel: nichts
+     springt ins Bild. */
+  .fog__tone {
+    --fog-in: 0;
+    position: absolute;
+    inset: 0;
+    opacity: var(--fog-in);
+    transition: opacity 1.6s var(--ease-out);
+  }
+  .fog__tone[data-ready] {
+    --fog-in: 1;
+  }
+  .fog__tone--dark {
+    display: var(--dark, block) var(--light, none);
+  }
+  .fog__tone--light {
+    display: var(--dark, none) var(--light, block);
   }
   .fog__layer :global(img) {
     display: block;
@@ -498,14 +535,14 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
   /* Die Drift läuft allein im Compositor, einmal nach dem Einflug, und läuft weich aus. Drei
      große Alphaflächen je Bild kosten sonst dauerhaft fast eine halbe Kern-Last. Am Ende
      schreibt das Skript die Pose fest und setzt data-rest, dann steht kein Bild mehr an. */
-  .scene:not([data-lite]) .fog[data-drift] .fog__layer[data-ready]:not([data-rest]) :global(img) {
+  .scene:not([data-lite]) .fog[data-drift] .fog__tone[data-ready]:not([data-rest]) :global(img) {
     will-change: transform;
     animation: fog-drift 24s cubic-bezier(0.3, 0.5, 0.4, 1) both;
   }
-  .scene:not([data-lite]) .fog[data-drift] .fog__layer--near[data-ready]:not([data-rest]) :global(img) {
+  .scene:not([data-lite]) .fog[data-drift] .fog__layer--near .fog__tone[data-ready]:not([data-rest]) :global(img) {
     animation-name: fog-drift-near;
   }
-  .scene:not([data-lite]) .fog[data-drift] .fog__layer--rays[data-ready]:not([data-rest]) :global(img) {
+  .scene:not([data-lite]) .fog[data-drift] .fog__layer--rays .fog__tone[data-ready]:not([data-rest]) :global(img) {
     animation-name: fog-sway;
   }
   .fog[data-paused] :global(img) {
@@ -542,7 +579,8 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     display: none;
   }
   @media (prefers-reduced-motion: reduce) {
-    .fog__layer {
+    .fog__layer,
+    .fog__tone {
       transition: none;
     }
   }
@@ -613,7 +651,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     animation: rise-cta 0.7s var(--ease-out) 1.25s both;
   }
   .hero__for {
-    color: #4a4f5c;
+    color: var(--cta-dim);
     font-weight: 500;
   }
   .hero__source {
@@ -753,24 +791,24 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     border-radius: 50%;
   }
   .ring__floor {
-    background: radial-gradient(closest-side, rgb(255 255 255 / 0.025), transparent);
+    background: radial-gradient(closest-side, rgb(var(--ink) / 0.025), transparent);
   }
   /* Die Chromkante: ein Konus-Verlauf, auf ein schmales Band maskiert; fest im Licht. */
   .ring__metal {
     padding: var(--ring-band);
     background: conic-gradient(
       from 180deg,
-      #2a2d35,
-      #f4f5f8 8%,
-      #4a4e58 18%,
-      #1a1c21 35%,
-      #6a6f7b 46%,
-      #fff 50%,
-      #6a6f7b 54%,
-      #1a1c21 65%,
-      #4a4e58 82%,
-      #f4f5f8 92%,
-      #2a2d35
+      var(--st-m5),
+      var(--st-m1) 8%,
+      var(--st-m3) 18%,
+      var(--st-m4) 35%,
+      var(--st-m2) 46%,
+      var(--st-m0) 50%,
+      var(--st-m2) 54%,
+      var(--st-m4) 65%,
+      var(--st-m3) 82%,
+      var(--st-m1) 92%,
+      var(--st-m5)
     );
     -webkit-mask:
       linear-gradient(#000 0 0) content-box,
@@ -783,7 +821,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
   /* Teilstriche innen am Ring; sie drehen mit der Ringposition. */
   .ring__ticks {
     inset: calc(var(--ring-band) * 1.6);
-    background: repeating-conic-gradient(rgb(255 255 255 / 0.1) 0 0.2deg, transparent 0.2deg 2.5deg);
+    background: repeating-conic-gradient(rgb(var(--ink) / 0.1) 0 0.2deg, transparent 0.2deg 2.5deg);
     mask: radial-gradient(closest-side, transparent 96.5%, #000 96.8%, #000 99.4%, transparent 99.7%);
     will-change: transform;
   }
@@ -796,7 +834,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     height: calc(var(--w) * 0.34);
     translate: -50% -50%;
     border-radius: 50%;
-    background: radial-gradient(closest-side, rgb(255 255 255 / 0.16), rgb(255 255 255 / 0.05) 50%, transparent);
+    background: radial-gradient(closest-side, rgb(var(--ink) / 0.16), rgb(var(--ink) / 0.05) 50%, transparent);
     opacity: 0;
   }
 
@@ -839,7 +877,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     position: absolute;
     inset: -22% -14%;
     border-radius: 50%;
-    background: radial-gradient(closest-side, rgb(232 236 245 / 0.2), rgb(232 236 245 / 0.07) 55%, transparent);
+    background: radial-gradient(closest-side, rgb(var(--st-halo) / calc(0.2 * var(--st-halo-k))), rgb(var(--st-halo) / calc(0.07 * var(--st-halo-k))) 55%, transparent);
     transform: translateZ(calc(var(--t) * -1 - 3px));
     opacity: calc(var(--o) * var(--halo, 0));
     pointer-events: none;
@@ -853,7 +891,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     height: 60%;
     transform-origin: 50% 0;
     transform: translateY(calc(var(--t) + 2px)) rotateX(90deg) translateY(-50%);
-    background: radial-gradient(closest-side, rgb(0 0 0 / 0.75), transparent);
+    background: radial-gradient(closest-side, var(--st-floor-shadow), transparent);
     opacity: var(--oe);
   }
   .win__back {
@@ -863,7 +901,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     background: #08090c;
     border: 1px solid rgb(255 255 255 / 0.12);
     transform: translateZ(calc(var(--t) * -1));
-    opacity: var(--o);
+    opacity: calc(var(--o) * var(--st-ramp));
   }
   /* Die Dicke: Konturen in festen Abständen hinter dem Rahmen, jede mit dem Radius des
      Rahmens, so dass auch die Ecken in jeder Drehung stimmen. */
@@ -873,7 +911,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     border-radius: var(--r);
     border: 2px solid rgb(226 230 238 / 0.72);
     transform: translateZ(calc(var(--t) * var(--k) / -7));
-    opacity: var(--oe);
+    opacity: calc(var(--oe) * var(--st-ramp));
   }
   .win__edge:nth-of-type(2) {
     border-color: rgb(150 156 168 / 0.56);
@@ -943,7 +981,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
         )
         border-box;
     overflow: hidden;
-    opacity: var(--o);
+    opacity: calc(var(--o) * var(--st-ramp));
   }
   .win__frame :global(picture) {
     position: relative;
@@ -1035,7 +1073,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     );
     -webkit-mask: var(--ground);
     mask: var(--ground);
-    opacity: calc((0.65 + 0.35 * var(--lit, 0)) * var(--oe));
+    opacity: calc((0.65 + 0.35 * var(--lit, 0)) * var(--oe) * var(--st-ramp));
     pointer-events: none;
   }
   @supports (width: round(1.5px, 1px)) {
@@ -1118,10 +1156,10 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     position: absolute;
     inset: -1px;
     border-radius: var(--r);
-    border: 2px solid rgb(16 18 24);
+    border: 2px solid var(--st-feather);
     box-shadow:
-      0 0 calc(var(--w) * 0.012) calc(var(--w) * 0.004) rgb(16 18 24),
-      inset 0 0 calc(var(--w) * 0.006) rgb(16 18 24);
+      0 0 calc(var(--w) * 0.012) calc(var(--w) * 0.004) var(--st-feather),
+      inset 0 0 calc(var(--w) * 0.006) var(--st-feather);
     transform: translateZ(1px);
     opacity: 0;
     pointer-events: none;
@@ -1129,18 +1167,22 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
   /* Bokeh um die fernen Fenster: Scheiben hinter dem Körper, nur ihre Deckkraft wechselt. */
   .win__bokeh {
     --disc: calc(var(--w) * 0.06);
-    --a: rgb(255 255 255 / 0.11);
-    --a2: rgb(255 255 255 / 0.2);
-    --b: rgb(170 200 255 / 0.13);
-    --b2: rgb(170 200 255 / 0.24);
-    --c: rgb(255 214 170 / 0.09);
-    --c2: rgb(255 214 170 / 0.17);
+    --a: var(--dark, rgb(255 255 255 / 0.11)) var(--light, rgb(70 80 100 / 0.06));
+    --a2: var(--dark, rgb(255 255 255 / 0.2)) var(--light, rgb(70 80 100 / 0.11));
+    --b: var(--dark, rgb(170 200 255 / 0.13)) var(--light, rgb(70 100 170 / 0.08));
+    --b2: var(--dark, rgb(170 200 255 / 0.24)) var(--light, rgb(70 100 170 / 0.14));
+    --c: var(--dark, rgb(255 214 170 / 0.09)) var(--light, rgb(190 130 50 / 0.07));
+    --c2: var(--dark, rgb(255 214 170 / 0.17)) var(--light, rgb(190 130 50 / 0.13));
     position: absolute;
     inset: -30% -18%;
     border-radius: 0;
     transform: translateZ(calc(var(--t) * -1 - 4px));
     opacity: 0;
     pointer-events: none;
+  }
+  /* Bokeh braucht Lichtpunkte im Dunkeln; im hellen Raum gäbe es nur blasse Eier. */
+  .win__bokeh {
+    display: var(--dark, block) var(--light, none);
   }
   /* Eigene Ebenen nur, solange der Ring steht: im Fächer und ohne Skript kosten sie Speicher. */
   .scene[data-live] .win__feather,
@@ -1177,12 +1219,12 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
   .scene[data-lite] .win__dofIn::after {
     display: none;
   }
-  /* Abdunkeln der hinteren Fenster über eine schwarze Ebene statt über einen Filter. */
+  /* Hintere Fenster versinken über eine Ebene in der Raumfarbe statt über einen Filter. */
   .win__shade {
     position: absolute;
     z-index: 6;
     inset: 0;
-    background: #000;
+    background: var(--st-far);
     opacity: var(--shade, 0);
     pointer-events: none;
   }
@@ -1227,6 +1269,13 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     gap: 0.4rem;
     opacity: 0;
   }
+  /* In diesen Bildausschnitten steht das Zählwerk über dunklem Glas; Hell-Schrift hielte dort nicht. */
+  .scene:is([data-cls='A'], [data-cls='B'], [data-cls='C'], [data-cls='G']) .cap__head {
+    justify-self: start;
+    padding: var(--light, 0.3rem 0.8rem 0.3rem 0.5rem) var(--dark, 0);
+    border-radius: 14px;
+    background: var(--dark, transparent) var(--light, rgb(243 244 247 / 0.9));
+  }
   .deck__title {
     font: 500 0.72rem/1.3 var(--mono);
     letter-spacing: 0.22em;
@@ -1245,7 +1294,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     font: 300 var(--idx, 8rem) / 1 var(--mono);
     letter-spacing: -0.04em;
     color: transparent;
-    -webkit-text-stroke: 1px rgb(255 255 255 / 0.35);
+    -webkit-text-stroke: 1px rgb(var(--ink) / 0.35);
   }
   .odo__col {
     display: block;
@@ -1290,7 +1339,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     font: 500 0.78rem/1.3 var(--mono);
     letter-spacing: 0.22em;
     text-transform: uppercase;
-    color: var(--accent);
+    color: var(--accent-ink);
   }
   .cap__headline {
     font-size: var(--head, clamp(2rem, 1rem + 2.6vw, 4.2rem));
@@ -1298,7 +1347,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     font-weight: 650;
     letter-spacing: -0.015em;
     text-transform: uppercase;
-    color: #e6e8ee;
+    color: var(--strong-soft);
     text-wrap: balance;
   }
   .cap__headline :global(.wi) {
@@ -1312,7 +1361,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     width: 40%;
     height: 1px;
     margin: -0.2rem 0 -0.1rem;
-    background: linear-gradient(90deg, transparent, #fff, transparent);
+    background: linear-gradient(90deg, transparent, var(--strong), transparent);
     opacity: 0;
   }
   .cap__text {
@@ -1344,13 +1393,13 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     flex: 1 1 auto;
     max-width: min(22rem, 40vw);
     height: 2px;
-    background: rgb(255 255 255 / 0.12);
+    background: rgb(var(--ink) / 0.12);
     overflow: hidden;
   }
   .deck__fill {
     position: absolute;
     inset: 0;
-    background: #fff;
+    background: var(--strong);
     transform-origin: left center;
     transform: scaleX(0.1429);
   }
@@ -1360,9 +1409,9 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     place-items: center;
     width: 2.75rem;
     height: 2.75rem;
-    border: 1px solid rgb(255 255 255 / 0.32);
+    border: 1px solid rgb(var(--ink) / 0.32);
     border-radius: 50%;
-    background: rgb(255 255 255 / 0.07);
+    background: rgb(var(--ink) / 0.07);
     color: var(--fg);
     cursor: pointer;
     transition:
@@ -1375,9 +1424,9 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     pointer-events: auto;
   }
   .deck__arrow:hover {
-    color: #fff;
-    border-color: rgb(255 255 255 / 0.6);
-    background: rgb(255 255 255 / 0.14);
+    color: var(--strong);
+    border-color: rgb(var(--ink) / 0.6);
+    background: rgb(var(--ink) / 0.14);
   }
   .deck__arrow:active {
     transform: scale(0.94);
@@ -1599,8 +1648,8 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     border: 1px solid transparent;
     background:
       linear-gradient(180deg, #101217, #0a0b0f) padding-box,
-      linear-gradient(170deg, rgb(255 255 255 / 0.7), rgb(255 255 255 / 0.08) 30%, rgb(255 255 255 / 0.05) 70%, rgb(255 255 255 / 0.3)) border-box;
-    box-shadow: 0 40px 100px -40px rgb(0 0 0 / 0.95);
+      linear-gradient(170deg, rgb(var(--rim) / calc(0.7 * var(--rim-k))), rgb(var(--rim) / calc(0.08 * var(--rim-k))) 30%, rgb(var(--rim) / calc(0.05 * var(--rim-k))) 70%, rgb(var(--rim) / calc(0.3 * var(--rim-k)))) border-box;
+    box-shadow: 0 40px 100px -40px rgb(var(--shadow) / calc(0.95 * var(--shadow-k)));
     max-width: 62rem;
   }
   .term__bar {
@@ -1620,13 +1669,13 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     width: 0.65rem;
     height: 0.65rem;
     border-radius: 50%;
-    background: #2a2e37;
+    background: var(--term-dot);
   }
   .term__body {
     margin: 0;
     padding: 1.2rem 1.3rem 1.4rem;
     overflow-x: auto;
-    color: #d5d8df;
+    color: var(--term-fg);
     line-height: 1.85;
     font-size: clamp(0.82rem, 0.78rem + 0.2vw, 0.95rem);
   }
@@ -1634,7 +1683,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     color: var(--fg-2);
   }
   .term__ok {
-    color: #5fcf8f;
+    color: var(--ok);
   }
   .term__head {
     color: var(--fg-2);

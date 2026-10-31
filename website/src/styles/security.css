@@ -4,10 +4,11 @@
    sich nur transform und opacity. */
 
 .sec {
-  --sec-ok: #5fcf8f;
-  --sec-deny: #e5675c;
+  --sec-ok: var(--ok);
+  --sec-deny: var(--deny);
   --sec-held: var(--accent);
-  --sec-grid: rgb(255 255 255 / 0.035);
+  --sec-held-ink: var(--accent-ink);
+  --sec-grid: rgb(var(--ink) / 0.035);
   --sec-ease: var(--ease-out);
   --sec-ease-io: cubic-bezier(0.65, 0, 0.35, 1);
   --sec-snap: cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -87,7 +88,7 @@
   font-family: var(--mono);
   font-size: 0.86em;
   color: var(--fg);
-  background: rgb(255 255 255 / 0.06);
+  background: rgb(var(--ink) / 0.06);
   padding: 0.06em 0.34em;
   border-radius: 5px;
   overflow-wrap: anywhere;
@@ -129,9 +130,9 @@
   border-radius: 18px;
   background:
     linear-gradient(var(--bg-1), var(--bg-1)) padding-box,
-    linear-gradient(180deg, rgb(255 255 255 / 0.55), rgb(255 255 255 / 0.1) 55%, rgb(255 255 255 / 0.26)) border-box;
+    linear-gradient(180deg, rgb(var(--rim) / calc(0.55 * var(--rim-k))), rgb(var(--rim) / calc(0.1 * var(--rim-k))) 55%, rgb(var(--rim) / calc(0.26 * var(--rim-k)))) border-box;
   box-shadow:
-    0 10px 30px -12px rgb(0 0 0 / 0.9),
+    0 10px 30px -12px rgb(var(--shadow) / calc(0.9 * var(--shadow-k))),
     inset 0 1px 0 rgb(255 255 255 / 0.08);
 }
 .sec-glass::before {
@@ -140,7 +141,7 @@
   inset: 0;
   z-index: -1;
   border-radius: inherit;
-  background: radial-gradient(70% 60% at 18% 0%, rgb(255 255 255 / 0.06), transparent 70%);
+  background: radial-gradient(70% 60% at 18% 0%, var(--dark, rgb(255 255 255 / 0.06)) var(--light, rgb(255 255 255 / 0.9)), transparent 70%);
   pointer-events: none;
 }
 
@@ -201,7 +202,7 @@
   padding: 0.38rem 0.62rem 0.38rem 1.35rem;
   border-radius: 999px;
   border: 1px solid var(--line-strong);
-  background: rgb(255 255 255 / 0.025) !important;
+  background: rgb(var(--ink) / 0.025) !important;
   color: var(--fg-1) !important;
   font: 500 0.74rem/1.25 var(--mono) !important;
   overflow-wrap: anywhere;
@@ -235,8 +236,8 @@
   border: 1px solid transparent;
   background:
     linear-gradient(var(--sec-term-bg), var(--sec-term-bg)) padding-box,
-    linear-gradient(170deg, rgb(255 255 255 / 0.6), rgb(255 255 255 / 0.08) 30%, rgb(255 255 255 / 0.05) 70%, rgb(255 255 255 / 0.28)) border-box;
-  box-shadow: 0 40px 100px -40px rgb(0 0 0 / 0.95);
+    linear-gradient(170deg, rgb(var(--rim) / calc(0.6 * var(--rim-k))), rgb(var(--rim) / calc(0.08 * var(--rim-k))) 30%, rgb(var(--rim) / calc(0.05 * var(--rim-k))) 70%, rgb(var(--rim) / calc(0.28 * var(--rim-k)))) border-box;
+  box-shadow: 0 40px 100px -40px rgb(var(--shadow) / calc(0.95 * var(--shadow-k)));
 }
 .sec-term__bar {
   display: flex;
@@ -256,12 +257,12 @@
   width: 0.62rem;
   height: 0.62rem;
   border-radius: 50%;
-  background: #2a2e37;
+  background: var(--term-dot);
 }
 .sec-term__body {
   padding: 1.1rem 1.2rem 1.3rem;
   overflow-x: auto;
-  color: #d5d8df;
+  color: var(--term-fg);
   line-height: 1.85;
   font-size: clamp(0.74rem, 0.7rem + 0.3vw, 0.92rem) !important;
   white-space: pre;
@@ -308,20 +309,20 @@
   vector-effect: non-scaling-stroke;
 }
 .sv-fill {
-  fill: rgb(255 255 255 / 0.035);
+  fill: rgb(var(--ink) / 0.035);
 }
 .sv-wall,
 .sv-wall-r {
   fill: none;
-  stroke: rgb(255 255 255 / 0.55);
+  stroke: rgb(var(--ink) / 0.55);
   stroke-width: 2;
 }
 .sv-wall--solid {
-  stroke: rgb(255 255 255 / 0.8);
+  stroke: rgb(var(--ink) / 0.8);
   stroke-width: 3;
 }
 .sv-lock {
-  stroke: rgb(255 255 255 / 0.35);
+  stroke: rgb(var(--ink) / 0.35);
   stroke-width: 1.5;
 }
 .sv-agent {
@@ -552,11 +553,11 @@
   opacity: 0.45;
 }
 .h-light {
-  fill: #fff;
+  fill: var(--dark, #ffffff) var(--light, #e8b84b);
   opacity: 0.85;
 }
 .h-ray {
-  fill: rgb(255 255 255 / 0.55);
+  fill: rgb(var(--ink) / 0.55);
   transform-box: fill-box;
 }
 .h-ray--up {
@@ -573,12 +574,12 @@
 }
 .h-ring {
   fill: none;
-  stroke: rgb(255 255 255 / 0.4);
+  stroke: rgb(var(--ink) / 0.4);
   transform-box: fill-box;
   transform-origin: center;
 }
 .h-door {
-  fill: #fff;
+  fill: var(--strong);
 }
 .h-box {
   transform-box: fill-box;
@@ -722,20 +723,20 @@
   stroke-dasharray: 6 6;
 }
 .j-blk {
-  fill: rgb(255 255 255 / 0.07);
-  stroke: rgb(255 255 255 / 0.28);
+  fill: rgb(var(--ink) / 0.07);
+  stroke: rgb(var(--ink) / 0.28);
 }
 .j-blk-new {
-  fill: rgb(255 255 255 / 0.28);
-  stroke: #fff;
+  fill: rgb(var(--ink) / 0.28);
+  stroke: var(--strong);
 }
 .j-agent-ring {
   fill: none;
-  stroke: rgb(255 255 255 / 0.22);
+  stroke: rgb(var(--ink) / 0.22);
 }
 .j-folder {
-  fill: rgb(255 255 255 / 0.06);
-  stroke: rgb(255 255 255 / 0.5);
+  fill: rgb(var(--ink) / 0.06);
+  stroke: rgb(var(--ink) / 0.5);
 }
 .j-hit {
   fill: var(--sec-deny);
@@ -743,22 +744,22 @@
 }
 .j-fake rect {
   fill: var(--void);
-  stroke: rgb(255 255 255 / 0.4);
+  stroke: rgb(var(--ink) / 0.4);
 }
 .j-fake path {
   stroke: var(--sec-deny);
   stroke-width: 2;
 }
 .j-door-light {
-  fill: #fff;
+  fill: var(--dark, #ffffff) var(--light, #e8b84b);
   opacity: 0.85;
 }
 .j-door-frame {
-  fill: #fff;
+  fill: var(--strong);
 }
 .j-tile rect {
-  fill: rgb(255 255 255 / 0.04);
-  stroke: rgb(255 255 255 / 0.25);
+  fill: rgb(var(--ink) / 0.04);
+  stroke: rgb(var(--ink) / 0.25);
 }
 .j-tile--ok rect {
   stroke: var(--sec-ok);
@@ -796,7 +797,7 @@
 }
 .j-timer circle {
   fill: none;
-  stroke: rgb(255 255 255 / 0.3);
+  stroke: rgb(var(--ink) / 0.3);
 }
 .j-tick {
   fill: var(--fg);
@@ -805,20 +806,20 @@
   opacity: 0;
 }
 .j-link {
-  fill: rgb(255 255 255 / 0.3);
+  fill: rgb(var(--ink) / 0.3);
 }
 .j-btn rect {
-  fill: rgb(255 255 255 / 0.05);
-  stroke: rgb(255 255 255 / 0.3);
+  fill: rgb(var(--ink) / 0.05);
+  stroke: rgb(var(--ink) / 0.3);
 }
 .j-btn--0 > rect:first-child {
-  fill: rgb(255 255 255 / 0.14);
+  fill: rgb(var(--ink) / 0.14);
   transform-box: fill-box;
   transform-origin: center;
 }
 .j-btn-ring {
   fill: none !important;
-  stroke: #fff !important;
+  stroke: var(--strong) !important;
   stroke-width: 2;
 }
 .j-btn--1,
@@ -826,16 +827,16 @@
   opacity: 0.4;
 }
 .j-upline {
-  fill: #fff;
+  fill: var(--strong);
   transform-box: fill-box;
   transform-origin: 0 50%;
 }
 .j-uphead {
-  fill: #fff;
+  fill: var(--strong);
 }
 .j-pkt-body {
-  fill: #151820;
-  stroke: rgb(255 255 255 / 0.65);
+  fill: var(--dark, #151820) var(--light, #e4e6ec);
+  stroke: rgb(var(--ink) / 0.65);
 }
 .j-pkt-held {
   fill: rgb(232 184 75 / 0.16);
@@ -1128,7 +1129,7 @@
 .sec-states__fill {
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, rgb(255 255 255 / 0.85), rgb(255 255 255 / 0.35));
+  background: linear-gradient(90deg, rgb(var(--ink) / 0.85), rgb(var(--ink) / 0.35));
   transform-origin: 0 50%;
   transition: transform 1.4s var(--sec-ease-io);
 }
@@ -1163,7 +1164,7 @@
   height: 0.8rem;
   border-radius: 50%;
   background: var(--void);
-  box-shadow: inset 0 0 0 1.5px #fff;
+  box-shadow: inset 0 0 0 1.5px var(--strong);
 }
 .sec-state.is-held .sec-state__dot {
   background: var(--sec-held);
@@ -1178,7 +1179,7 @@
   opacity: 0.5;
 }
 .sec-state.is-held code {
-  color: var(--sec-held) !important;
+  color: var(--sec-held-ink) !important;
 }
 [data-sec-live] [data-pending]:not([data-shown]) .sec-states__fill {
   transform: scaleX(0);
@@ -1209,7 +1210,7 @@
     height: auto;
   }
   .sec-states__fill {
-    background: linear-gradient(180deg, rgb(255 255 255 / 0.85), rgb(255 255 255 / 0.35));
+    background: linear-gradient(180deg, rgb(var(--ink) / 0.85), rgb(var(--ink) / 0.35));
     transform-origin: 50% 0;
   }
   [data-sec-live] [data-pending]:not([data-shown]) .sec-states__fill {
@@ -1279,8 +1280,8 @@
   text-transform: none;
   font-size: 0.95rem !important;
   padding: 0.3rem 0.7rem !important;
-  border: 1px solid rgb(95 207 143 / 0.45);
-  background: rgb(95 207 143 / 0.08) !important;
+  border: 1px solid rgb(var(--ok-rgb) / 0.45);
+  background: rgb(var(--ok-rgb) / 0.08) !important;
 }
 .sec-block {
   min-width: 0;
@@ -1322,7 +1323,7 @@
   padding: 0.8rem 1rem;
   border-radius: 10px;
   border: 1px dashed var(--line-strong);
-  background: rgb(255 255 255 / 0.02);
+  background: rgb(var(--ink) / 0.02);
   overflow-x: auto;
   font-size: 0.78rem !important;
   line-height: 1.7;
@@ -1348,7 +1349,7 @@
   padding: 1.1rem 1.2rem;
   border-radius: 14px;
   border: 1px solid var(--line);
-  background: rgb(255 255 255 / 0.02);
+  background: rgb(var(--ink) / 0.02);
 }
 @media (min-width: 64rem) {
   .sec-proof__top {
@@ -1381,7 +1382,7 @@
   max-width: 34rem;
 }
 .p-arrow {
-  fill: rgb(255 255 255 / 0.6);
+  fill: rgb(var(--ink) / 0.6);
   transform-box: fill-box;
   transform-origin: 0 50%;
   transition: transform 0.6s var(--sec-ease);
@@ -1425,7 +1426,7 @@
   overflow: hidden;
   border-radius: 14px;
   border: 1px solid var(--line);
-  background: rgb(255 255 255 / 0.015);
+  background: rgb(var(--ink) / 0.015);
 }
 .sec-scan__chip {
   position: relative;
@@ -1449,7 +1450,7 @@
 }
 .sec-scan__chip:not(.is-door) code {
   text-decoration: line-through;
-  text-decoration-color: rgb(229 103 92 / 0.8);
+  text-decoration-color: rgb(var(--deny-rgb) / 0.8);
 }
 .sec-scan__chip.is-door {
   opacity: 1;
@@ -1461,7 +1462,7 @@
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  border: 1px solid #fff;
+  border: 1px solid var(--strong);
   box-shadow: inset 0 0 18px rgb(255 255 255 / 0.12);
   transition: opacity 0.4s var(--sec-ease) 0.9s;
 }
@@ -1486,7 +1487,7 @@
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, transparent calc(100% - 36px), rgb(255 255 255 / 0.07) calc(100% - 2px), rgb(255 255 255 / 0.85) calc(100% - 2px));
+  background: linear-gradient(180deg, transparent calc(100% - 36px), rgb(var(--ink) / 0.07) calc(100% - 2px), rgb(var(--ink) / 0.85) calc(100% - 2px));
   transform: translateY(-100%);
   pointer-events: none;
 }
@@ -1553,13 +1554,13 @@
 }
 .sec-badge--deny {
   color: var(--sec-deny);
-  background: rgb(229 103 92 / 0.1);
-  border: 1px solid rgb(229 103 92 / 0.35);
+  background: rgb(var(--deny-rgb) / 0.1);
+  border: 1px solid rgb(var(--deny-rgb) / 0.35);
 }
 .sec-badge--ok {
   color: var(--sec-ok);
-  background: rgb(95 207 143 / 0.1);
-  border: 1px solid rgb(95 207 143 / 0.4);
+  background: rgb(var(--ok-rgb) / 0.1);
+  border: 1px solid rgb(var(--ok-rgb) / 0.4);
 }
 [data-sec-live] [data-pending]:not([data-shown]) .sec-table tr {
   opacity: 0;
@@ -1589,8 +1590,8 @@
   margin-inline: auto;
 }
 .t-c circle {
-  fill: rgb(255 255 255 / 0.02);
-  stroke: rgb(255 255 255 / 0.5);
+  fill: rgb(var(--ink) / 0.02);
+  stroke: rgb(var(--ink) / 0.5);
 }
 .t-c {
   transition: opacity 0.6s var(--sec-ease);
@@ -1603,12 +1604,12 @@
   fill: var(--fg);
 }
 .t-lens {
-  fill: rgb(255 255 255 / 0.18);
-  stroke: #fff;
+  fill: rgb(var(--ink) / 0.18);
+  stroke: var(--strong);
   stroke-width: 1.5;
 }
 .t-glow {
-  fill: #fff;
+  fill: var(--dark, #ffffff) var(--light, #e8b84b);
   opacity: 0.35;
 }
 .t-center {
@@ -1658,7 +1659,7 @@
   border: 1px solid transparent;
   background:
     linear-gradient(var(--bg-1), var(--bg-1)) padding-box,
-    linear-gradient(180deg, rgb(255 255 255 / 0.7), rgb(255 255 255 / 0.15)) border-box;
+    linear-gradient(180deg, rgb(var(--rim) / calc(0.7 * var(--rim-k))), rgb(var(--rim) / calc(0.15 * var(--rim-k)))) border-box;
   font: 600 0.85rem/1 var(--mono);
   color: var(--fg);
 }
@@ -1878,7 +1879,7 @@
   border: 1px solid transparent;
   background:
     linear-gradient(var(--bg-1), var(--bg-1)) padding-box,
-    linear-gradient(180deg, rgb(255 255 255 / 0.5), rgb(255 255 255 / 0.1) 60%, rgb(255 255 255 / 0.22)) border-box;
+    linear-gradient(180deg, rgb(var(--rim) / calc(0.5 * var(--rim-k))), rgb(var(--rim) / calc(0.1 * var(--rim-k))) 60%, rgb(var(--rim) / calc(0.22 * var(--rim-k)))) border-box;
   font: 500 0.74rem/1.5 var(--mono);
   color: var(--fg-1);
   transition:
@@ -1895,7 +1896,7 @@
   font-weight: 600;
 }
 .sec-blk.is-anchor {
-  box-shadow: 0 0 0 3px var(--void), 0 0 0 4px rgb(255 255 255 / 0.55);
+  box-shadow: 0 0 0 3px var(--void), 0 0 0 4px rgb(var(--ink) / 0.55);
 }
 .sec-blk__anchor {
   font-size: 0.68rem;
@@ -1909,7 +1910,7 @@
   top: 50%;
   width: 1.6rem;
   height: 1px;
-  background: rgb(255 255 255 / 0.55);
+  background: rgb(var(--ink) / 0.55);
   transform-origin: 0 50%;
   transition:
     transform 0.4s var(--sec-ease),
@@ -1923,7 +1924,7 @@
   width: 1px;
   height: 2rem;
   margin-top: 4px;
-  background: rgb(255 255 255 / 0.5);
+  background: rgb(var(--ink) / 0.5);
   transform-origin: 50% 0;
   transition: transform 0.5s var(--sec-ease) 0.8s;
 }
@@ -2103,7 +2104,7 @@
   transition-delay: calc(var(--i) * 120ms);
 }
 .l-line {
-  fill: rgb(255 255 255 / 0.6);
+  fill: rgb(var(--ink) / 0.6);
 }
 .l-held {
   fill: var(--sec-held);
@@ -2126,7 +2127,7 @@
 }
 .l-mask rect {
   fill: var(--void);
-  stroke: rgb(255 255 255 / 0.3);
+  stroke: rgb(var(--ink) / 0.3);
 }
 .l-quiet {
   fill: var(--fg-2);
@@ -2300,11 +2301,11 @@
 }
 .m-if {
   fill: none;
-  stroke: rgb(255 255 255 / 0.4);
+  stroke: rgb(var(--ink) / 0.4);
 }
 .m-membrane rect {
-  fill: rgb(229 103 92 / 0.08);
-  stroke: rgb(229 103 92 / 0.55);
+  fill: rgb(var(--deny-rgb) / 0.08);
+  stroke: rgb(var(--deny-rgb) / 0.55);
   stroke-dasharray: 4 4;
 }
 .m-membrane {
@@ -2423,7 +2424,7 @@
   height: 120%;
   background:
     radial-gradient(50% 55% at 50% 100%, rgb(160 172 205 / 0.16), transparent 70%),
-    radial-gradient(28% 30% at 50% 78%, rgb(255 255 255 / 0.08), transparent 70%);
+    radial-gradient(28% 30% at 50% 78%, rgb(var(--ink) / 0.08), transparent 70%);
   pointer-events: none;
 }
 .sec-closing__inner {
@@ -2507,7 +2508,7 @@
     text-transform: uppercase;
     padding: 0.35rem 0.55rem;
     border-radius: 6px;
-    background: rgb(3 4 5 / 0.85);
+    background: var(--chip-glass);
     opacity: 0;
     transform: translateX(-4px);
     transition:
@@ -2529,7 +2530,7 @@
     width: 1.05rem;
     height: 1.05rem;
     border-radius: 50%;
-    border: 1px solid rgb(255 255 255 / 0.7);
+    border: 1px solid rgb(var(--ink) / 0.7);
     transform: translateY(calc(var(--k, 0) * 2.25rem));
     transition:
       transform 0.5s var(--sec-ease),
@@ -2862,7 +2863,7 @@
     padding: 1.3rem 1.2rem;
     border-radius: 16px;
     border: 1px solid var(--line-strong);
-    background: rgb(12 14 19 / 0.92);
+    background: var(--card-glass);
   }
   .sec-hero__chips,
   .sec-closing__pills {
@@ -2893,7 +2894,7 @@
   }
 }
 .t-tick {
-  fill: rgb(255 255 255 / 0.7);
+  fill: rgb(var(--ink) / 0.7);
 }
 
 /* ---- Nachträge (HUM-345, Review) --------------------------------------------------- */
