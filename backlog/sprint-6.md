@@ -48,6 +48,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-368 | macOS: Das Sitzungsverzeichnis samt Zugangsschlüssel verschwindet mit der Sandbox | S | HUM-323 |
 | HUM-373 | macOS: Eintrag in der Menüleiste und Benachrichtigungen für angehaltene Anfragen | M | HUM-034, HUM-325, HUM-329 |
 | HUM-370 | macOS: Der Agent kann die Dateien seines Adapters nicht ersetzen | S | HUM-323 |
+| HUM-371 | macOS: Ein Projekt kann OpenCode nicht umkonfigurieren | S | HUM-037, HUM-323 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -716,3 +717,7 @@ Der Runner bekommt `DesktopBridge.swift` mit zwei `FlutterMethodChannel` (`human
 ## HUM-370 · macOS: Der Agent kann die Dateien seines Adapters nicht ersetzen
 
 Unter Linux sind die Dateien des Adapters schreibgeschützte Einhängungen, unter macOS lagen sie im beschreibbaren Home der Sitzung. Akzeptanz: Datei, Ordner darüber und `home` selbst lassen sich weder ändern noch umbenennen, ein Hardlink wird verweigert, und neue Dateien im Home bleiben möglich.
+
+## HUM-371 · macOS: Ein Projekt kann OpenCode nicht umkonfigurieren
+
+Das verwaltete Verzeichnis von OpenCode liegt unter macOS außerhalb jeder Sitzung, die Datei des Adapters entfiel mit `SANDBOX_011` bei jedem Start, und die `opencode.json` eines Projekts gewann. Akzeptanz: Unter macOS setzt der Adapter `OPENCODE_DISABLE_PROJECT_CONFIG`, das Projekt zählt nicht mehr, die Warnung entfällt, und `docs/SECURITY.md` nennt den Unterschied zu Linux.
