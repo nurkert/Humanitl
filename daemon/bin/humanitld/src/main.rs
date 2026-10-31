@@ -2438,11 +2438,14 @@ fn shutdown_signal() -> impl Future<Output = &'static str> + Send + 'static {
 /// Start ist ihre Übernahme nicht sicher, sie werden verworfen (HUM-350).
 fn sweep_disposable_layers(paths: &XdgPaths) {
     let swept = humanitl_sandbox::disposable::sweep(&paths.runtime_dir().path);
-    if swept > 0 {
+    if swept.removed > 0 {
         tracing::warn!(
-            layers = swept,
+            layers = swept.removed,
             "discarded the upper layers of disposable sandboxes an earlier daemon left behind"
         );
+    }
+    for failed in &swept.failed {
+        tracing::error!(why = %failed.why, "a disposable layer of an earlier daemon stays on disk");
     }
 }
 

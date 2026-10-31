@@ -825,9 +825,8 @@ repositories with `--work-mode ro`, or disposable.
 
 #### The disposable sandbox (HUM-350)
 
-The disposable sandbox is Linux-only for now: it needs the overlay of bubblewrap, and on macOS
-a disposable start is refused with `SANDBOX_030`, the daemon does not advertise
-`sandbox.disposable`, and `changes`, `apply` and `discard` answer with the same finding.
+This section describes the overlay on Linux. On macOS the same mode runs on an APFS clone of the
+project instead; [section 12](#the-disposable-sandbox-on-macos-hum-374) says what differs.
 
 **Who gets it (HUM-357).** It is the default where the system allows it: `sandbox.mode` defaults
 to `auto`, and the daemon resolves `auto` to a disposable sandbox when bubblewrap is 0.11 or
@@ -845,8 +844,7 @@ switch and in Settings, and the snapshot of the sandbox names the mode the next 
 such a start with `SANDBOX_030` and never writes to the folder. The distinction lives in the value,
 not in the knowledge of which layer set it: `auto` is the default and may fall back, `disposable`
 never does. A project profile cannot set `sandbox.mode` at all (CONVENTIONS 4.11), so a cloned
-repository can neither switch back to direct nor turn an explicit `disposable` into `auto`. On
-macOS `auto` is direct without a notice, because the mode does not exist there. While changes of
+repository can neither switch back to direct nor turn an explicit `disposable` into `auto`. While changes of
 an earlier disposable run wait, every start except an explicit `direct` is refused
 (`SANDBOX_030`), checked before the mode is resolved, so a default that would fall back never
 writes directly under changes nobody has looked at; the snapshot names that refusal. A disposable
@@ -1398,6 +1396,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.0 | OpenCode no longer asks before `webfetch` and `bash`; the proxy is the one place that asks. Its `bash` waits as long as a held request (HUM-308). |
 | 0.1.x | Further shells next to the agent: the daemon asks PID 1 over an unnamed `SOCK_SEQPACKET` pair only it and PID 1 hold; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX`; at most four, ending with their process or the sandbox (HUM-299). |
 | 0.1.x | pi loads the globally installed extension `pi-web-access` (`agent.pi.web_access`, default `auto`, closed to project profiles); its requests go through the proxy like every other (HUM-309). |
+| 0.1.x | macOS: the disposable sandbox on an APFS clone, masks removed from the clone and denied in it, the real project sealed, the clone renamed before it is read, and a failed clone that is never silent: `auto` warns with `SANDBOX_033`, an explicit `disposable` refuses with `SANDBOX_030` (HUM-374, K-24). |
 | 0.1.x | macOS: Seatbelt as the sandbox backend, a generated SBPL profile per session, the three guarantees restated and measured by the shim; the daemon as a launchd agent; socket and token under `~/Library/Application Support/Humanitl/run` (HUM-323, HUM-327, [section 12](#12-macos-seatbelt-instead-of-bubblewrap)). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap
@@ -1516,6 +1515,66 @@ names both:
 - **No nested sandbox, and a real identity.** `sandbox-exec` inside the sandbox fails, so a tool
   that wants to set up its own sandbox cannot. `whoami` and `hostname` show the real account and
   machine; there is no generated `passwd` or `hosts`.
+
+### The disposable sandbox on macOS (HUM-374)
+
+macOS has no overlay. At the start the daemon clones the opened project folder with
+`fclonefileat(2)` to `<runtime directory>/disposable/<id>/upper` (`~/Library/Application
+Support/Humanitl/run`, mode `0700`). The clone shares its blocks with the project until something
+writes. It sits beside the session directories, not in one, because it has to outlive the sandbox
+until a human applied or discarded the changes. The profile makes the clone the writable project;
+the real project is denied for reading and writing at the very end of the profile, also where it
+lies outside the private trees (such as `/opt`), and `mounts.extra_rw` is read-only as on Linux.
+`sandbox changes`, `apply` and `discard`, the changes panel, the conflict check and every rule of
+the way back are the same code as on Linux.
+
+**Masks.** `clonefile` copies everything, also `.env` and `.git/config`. So the daemon removes
+every present mask from the clone before the sandbox starts: what is not there cannot leak through
+a gap in the profile. The profile denies every configured mask in the clone, present at the start
+or not, so the agent cannot create anything in its place, and the existing folders above a mask
+can be neither renamed nor removed. So in a project without `.git` a disposable run has no working
+`git init`. The absence of a mask is not listed as a deletion. Anything found on a masked path, in
+any ASCII case, and anything but a directory on the way to one, is refused on apply. A mask that is
+a symbolic link takes its target along. The real files stay in the real project, which the agent
+cannot reach. A configured mask reached through a symbolic link inside the project cannot be held
+in a clone, so the clone counts as failed. In a direct run the profile denies the resolved target
+of such a mask as well and locks the folders above it, which also holds when `auto` falls back.
+
+The root of the clone can be neither removed nor renamed, and the daemon opens it only by
+descriptor, without following a symbolic link, and compares device and inode with the values taken
+right after cloning. Anything else in its place ends in `SANDBOX_031`. Dropping a layer clears file
+flags and ACLs first, because the agent can set them and `clonefile` carries them along. A layer
+that still cannot be removed is reported, never counted as discarded.
+
+**When the clone fails.** `auto` resolves to disposable on macOS as well, with a writable project.
+A clone can still fail: a volume that is not APFS, a project and runtime directory on different
+volumes, a file in the project the daemon cannot read (`clonefile` takes the whole tree or
+nothing), no room for the clone, a runtime directory inside the project, or a mask behind a
+symbolic link. Then the rule of Linux holds: `auto` runs **direct** with the warning `SANDBOX_033`,
+which names the reason, and the agent writes to the project folder with none of the protections
+of this section. An explicit `disposable` refuses with `SANDBOX_030` and never writes to the
+folder. A read-only project also runs direct with `SANDBOX_033`.
+
+**What differs from Linux.**
+
+- **After the end.** There is no PID namespace, so a process can outlive the sandbox (K-20). Before
+  anyone reads the clone the daemon renames it (`sealed`). The profile names paths, so the
+  survivor loses access through relative paths, absolute paths and the new name alike
+  (measured). The profile denies the new name from the start, so this holds wherever the runtime
+  directory lies. A descriptor it opened for writing before the end stays usable: such a process can
+  still change the bytes of that one file, also after you looked at the diff.
+- **No size cap.** `SANDBOX_032` does not exist here. The clone lies on the same volume as the rest
+  of the machine, and a guard that measures a whole file system would stop the sandbox for what
+  other programs write. The agent can fill the volume, as it can in direct mode.
+- **On disk, not in RAM.** The clone survives a crash of the daemon until its next start, which
+  removes it. Blocks of the project and of the agent's changes stay on disk until then.
+- **What counts as a change.** A file whose kind, size, `mtime` and mode still match the baseline
+  counts as untouched and is not read. An agent that restores all of them hides its edit from the
+  list; the edit is then not applied, so this loses work and writes nothing. A file the human
+  changes during the run is not an agent's change, and an agent's change over it is a conflict.
+- **Paths.** The agent works under the path of the clone, not of the project; absolute paths into
+  the project, such as those in build caches, do not resolve. A rename that changes only the case
+  of a name on a case-insensitive volume is not seen.
 
 ### What we verify for macOS
 

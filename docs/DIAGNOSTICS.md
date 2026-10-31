@@ -577,9 +577,9 @@ Verweigerte Verbindungsversuche werden nicht gemeldet
 
 Disposable sandbox not possible
 
-**Auslöser.** The start asked for a disposable sandbox, and one of its conditions is missing: bubblewrap 0.11 or newer, a runtime directory on tmpfs, a writable view of the project folder, or no changes of an earlier disposable run still pending.
+**Auslöser.** The start asked for a disposable sandbox, and one of its conditions is missing: bubblewrap 0.11 or newer, a runtime directory on tmpfs, a writable view of the project folder, or no changes of an earlier disposable run still pending. On macOS the project must be clonable: an APFS volume shared with the runtime directory and every file readable.
 
-**Fix.** `CopyCommand` with the install command for a newer bubblewrap, `ChangeSetting` on `sandbox.work_mode` = `rw`, `SetEnv` for `XDG_RUNTIME_DIR` = `/run/user/<uid>`, or `CopyCommand` with `humanitl sandbox changes` for pending changes.
+**Fix.** `CopyCommand` with the install command for a newer bubblewrap, `ChangeSetting` on `sandbox.work_mode` = `rw`, `SetEnv` for `XDG_RUNTIME_DIR` = `/run/user/<uid>`, `CopyCommand` with `humanitl sandbox changes` for pending changes, or on macOS `ChangeSetting` on `sandbox.mode` = `direct`.
 
 #### SANDBOX_031
 
@@ -601,7 +601,7 @@ Disposable layer full
 
 Disposable sandbox not available, running direct
 
-**Auslöser.** The default `sandbox.mode = "auto"` asks for a disposable sandbox where the system allows one, and this system does not: bubblewrap is older than 0.11, the runtime directory is not on tmpfs, or the project folder is mounted read-only. This run writes to the project folder directly.
+**Auslöser.** The default `sandbox.mode = "auto"` asks for a disposable sandbox where the system allows one, and this system does not: bubblewrap is older than 0.11, the runtime directory is not on tmpfs, the project folder is mounted read-only, or on macOS the project cannot be cloned. This run writes to the project folder directly.
 
 **Fix.** The fix of the cause (install command for a newer bubblewrap, `SetEnv` for `XDG_RUNTIME_DIR`, `ChangeSetting` on `sandbox.work_mode` = `rw`), or `sandbox.mode = "direct"` to choose direct mode and silence this notice.
 

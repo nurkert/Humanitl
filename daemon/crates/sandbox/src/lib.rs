@@ -89,7 +89,9 @@
 //! ```
 // `unsafe` ist verboten, außer in `inherit.rs`: Dort nimmt der Hook zwischen
 // `fork` und `exec` `FD_CLOEXEC` von den Deskriptoren, die `bwrap` erben soll
-// (HUM-263). Die Standardbibliothek hat dafür keinen sicheren Weg.
+// (HUM-263). Die Standardbibliothek hat dafür keinen sicheren Weg. Dazu
+// `disposable/clone.rs` unter macOS: der Aufruf von `fclonefileat(2)`
+// (HUM-374), den auch rustix nicht kennt.
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
@@ -139,7 +141,6 @@ pub use crate::bwrap_args::{
     MaskFds, PASSWD_DST, PREVIEW_AGENT_FD_FIRST, PREVIEW_MASK_FD_FIRST, SANDBOX_SHELL, SourceFd,
     shell_line, shell_quote,
 };
-#[cfg(target_os = "linux")]
 pub use crate::disposable::{ApplyOptions, ApplyReport, ChangeSet, Layer, LayerChange, SizeGuard};
 pub use crate::disposable::{
     Budget, DisposableRecord, MIN_OVERLAY_VERSION, ModeChoice, OverlayDirs, TmpfsCheck,
