@@ -1507,6 +1507,11 @@ Das sind die Punkte, an denen macOS weniger bietet als Linux. Jeder ist ein Kana
    auch der Zugangsschlüssel des Modells, und das Verzeichnis verschwindet mit dem Ende der Sandbox.
    Nach einem Absturz des Daemons bleibt es, bis ein späterer Plan es wegräumt, höchstens sieben Tage,
    und ein Backup während einer Session kann es enthalten.
+0. **Ein Projekt kann OpenCode nicht konfigurieren** (HUM-371). Das verwaltete
+   Konfigurationsverzeichnis von OpenCode liegt unter macOS außerhalb jeder Session, also schaltet der
+   Adapter die Konfiguration des Projekts mit `OPENCODE_DISABLE_PROJECT_CONFIG` ab. Eine
+   `opencode.json` im Projekt wirkt dort in der Sandbox nicht, ebenso wenig sein
+   `.opencode`-Verzeichnis oder seine `AGENTS.md`; unter Linux zählen sie, unter der verwalteten Datei.
 1. **Loopback wird mit dem Rechner geteilt** (K-19). Die Tür lauscht auf einem Loopback-Port, den
    jeder lokale Prozess jedes Kontos erreichen kann. Ein solcher Prozess erreicht nur den Proxy,
    aber mit den Regeln der Session: Was eine `allow`-Regel oder die LLM-Durchleitung durchlässt,
