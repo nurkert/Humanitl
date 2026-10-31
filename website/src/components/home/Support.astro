@@ -1,0 +1,66 @@
+---
+// Sektion 5: womit Humanitl heute läuft und womit nicht, ohne Fremdlogos.
+import Icon from '../Icon.astro';
+import Rich from '../security/Rich.astro';
+import More from './More.astro';
+
+interface Props {
+  c: any;
+  href: string;
+}
+const { c, href } = Astro.props;
+---
+
+<section class="hm-sec" id="systeme" aria-labelledby="hm-support-title">
+  <div class="hm-wide">
+    <header class="hm-head hm-rv" data-hm-reveal>
+      <h2 id="hm-support-title" class="chrome hm-h2">{c.title}</h2>
+      <p class="lede">{c.lede}</p>
+    </header>
+
+    <table class="hm-spec">
+      <thead class="visually-hidden">
+        <tr>
+          <th scope="col">{c.topic}</th>
+          <th scope="col">{c.yes}</th>
+          <th scope="col">{c.no}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {
+          c.rows.map((row: any, i: number) => (
+            <tr data-hm-reveal style={`--i:${i}`}>
+              <th scope="row">{row.topic}</th>
+              <td>
+                <ul>
+                  {row.yes.map((text: string) => (
+                    <li class="hm-spec__yes">
+                      <Icon name="check" />
+                      <Rich text={text} />
+                    </li>
+                  ))}
+                </ul>
+              </td>
+              <td>
+                {row.no.length > 0 && (
+                  <ul>
+                    {row.no.map((text: string) => (
+                      <li class="hm-spec__no">
+                        <Icon name="cross" />
+                        <Rich text={text} />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </td>
+            </tr>
+          ))
+        }
+      </tbody>
+    </table>
+
+    <div class="hm-foot hm-rv" data-hm-reveal>
+      <More href={href} text={c.more} />
+    </div>
+  </div>
+</section>

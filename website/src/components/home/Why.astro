@@ -1,0 +1,49 @@
+---
+// Sektion 2: warum die Sperre hält. Das Schema läuft einmal ab, sobald es im Blick ist, und
+// endet im selben Bild, das ohne Skript steht. Der Schlitz nimmt die echte Prüfausgabe auf.
+import Rich from '../security/Rich.astro';
+import Flow from './Flow.astro';
+import More from './More.astro';
+
+interface Props {
+  c: any;
+  href: string;
+}
+const { c, href } = Astro.props;
+---
+
+<section class="hm-sec" id="sicherheit" aria-labelledby="hm-why-title">
+  <div class="hm-wide" data-hm-flow>
+    <header class="hm-head hm-rv" data-hm-reveal>
+      <h2 id="hm-why-title" class="chrome hm-h2">{c.title}</h2>
+      <p class="lede">{c.lede}</p>
+    </header>
+
+    <div class="hm-why">
+      <figure class="hm-flowfig hm-glass">
+        <Flow f={c.fig} title={c.figTitle} desc={c.figDesc} layout="wide" />
+        <Flow f={c.fig} title={c.figTitle} desc={c.figDesc} layout="tall" />
+        <button class="hm-replay" type="button" data-hm-replay hidden>{c.replay}</button>
+      </figure>
+      <ol class="hm-claims">
+        {
+          c.claims.map((claim: any, i: number) => (
+            <li class="hm-claim" style={`--i:${i}`}>
+              <h3>{claim.title}</h3>
+              <Rich tag="p" text={claim.text} />
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+
+    <div class="hm-check hm-rv" data-hm-reveal>
+      <slot />
+      <Rich tag="p" class="hm-note" text={c.checkNote} />
+    </div>
+
+    <div class="hm-foot hm-rv" data-hm-reveal>
+      <More href={href} text={c.more} />
+    </div>
+  </div>
+</section>

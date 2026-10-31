@@ -1,0 +1,15 @@
+---
+// Der leise Verweis am Ende jeder Startseiten-Sektion auf ihre Unterseite (HUM-358).
+import Icon from '../Icon.astro';
+
+interface Props {
+  href: string;
+  text: string;
+}
+const { href, text } = Astro.props;
+---
+
+<a class="hm-more" href={href}>
+  <span class="hm-more__text">{text}</span>
+  <span class="hm-more__ring"><Icon name="arrow" /></span>
+</a>

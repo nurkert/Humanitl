@@ -1,0 +1,72 @@
+---
+// Sektion 1: ein gedachtes postinstall-Skript und wo jeder seiner vier Versuche endet.
+// Das Markup zeigt den Endzustand; home.ts spielt die Zeilen nacheinander ab.
+import Rich from '../security/Rich.astro';
+import More from './More.astro';
+
+interface Props {
+  c: any;
+  href: string;
+}
+const { c, href } = Astro.props;
+---
+
+<section class="hm-sec" id="angriff" aria-labelledby="hm-attack-title">
+  <div class="hm-wide">
+    <header class="hm-head hm-rv" data-hm-reveal>
+      <h2 id="hm-attack-title" class="chrome hm-h2">{c.title}</h2>
+      <p class="lede">{c.lede}</p>
+    </header>
+
+    <div class="hm-run">
+      <div class="hm-run__top" aria-hidden="true">
+        <span>{c.attempt}</span>
+        <span class="hm-track hm-track--head">
+          <i class="hm-track__wall"></i>
+          <b>{c.inside}</b>
+          <b>{c.outside}</b>
+        </span>
+        <span>{c.stop}</span>
+      </div>
+      <ol class="hm-run__list">
+        {
+          c.rows.map((row: any) => (
+            <li class:list={['hm-row', `hm-row--${row.state}`]} data-hm-reveal data-hm-step>
+              <div class="hm-row__try">
+                <h3>{row.title}</h3>
+                <code>{row.cmd}</code>
+              </div>
+              <div class="hm-track" aria-hidden="true">
+                <i class="hm-track__wall" />
+                <i class="hm-track__line" />
+                <i class="hm-track__mark" />
+                <span class="hm-track__mover">
+                  <i class="hm-track__dot" />
+                </span>
+              </div>
+              <div class="hm-row__end">
+                <p class="hm-verdict">{row.verdict}</p>
+                <Rich tag="p" text={row.text} />
+                <dl class="hm-os">
+                  {row.systems.map((s: any) => (
+                    <div>
+                      <dt>{s.os}</dt>
+                      <dd>
+                        <Rich text={s.text} />
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+
+    <div class="hm-foot hm-rv" data-hm-reveal>
+      <p class="hm-note">{c.note}</p>
+      <More href={href} text={c.more} />
+    </div>
+  </div>
+</section>
