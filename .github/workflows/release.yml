@@ -9,7 +9,8 @@
 #         -> build-macos -> check-macos ----+
 #
 # guard      Tag hat die Form v0.0.N, der Commit liegt auf `main`, und der
-#            ci.yml-Lauf dieses Commits ist mit `success` beendet.
+#            ci.yml-Lauf dieses Commits ist mit `success` beendet. Im
+#            Probelauf nimmt guard die Version aus dem Zweignamen (unten).
 # build      Version in den Auscheckstand stempeln, Release-Bau von humanitld,
 #            humanitl, humanitl-shim und der Flutter-App, `--version` pruefen,
 #            .deb, .rpm, AppImage und tar.gz bauen, SHA256SUMS, Release-Notes,
@@ -33,10 +34,28 @@
 #            Seatbelt-Escape-Tests gegen die Programme im Buendel.
 # release    Tags only: GitHub release, regular (not a pre-release), latest.
 #
-# `workflow_dispatch` ist der Probelauf: Er baut und prueft alles mit der
-# eingegebenen Version, laedt die Artefakte als Workflow-Artefakt hoch und
-# legt kein Release an. Wie man eine Vorabversion schneidet, steht in
-# CONTRIBUTING.md.
+# Probelauf (HUM-363): Er baut und prueft alles wie ein Tag-Lauf, laedt die
+# Artefakte als Workflow-Artefakt hoch und legt kein Release an; der Job
+# `release` wird uebersprungen. Ausgeloest wird er auf drei Wegen:
+#
+#   release-dry/0.0.N   Push dieses Zweigs durch tools/release.sh auf die
+#                       Spitze von main, bevor der Tag v0.0.N entsteht. Die
+#                       Version ist N, und guard ist so streng wie beim Tag:
+#                       Liegt der Commit nicht auf main oder ist sein
+#                       ci.yml-Lauf nicht gruen, ist der Probelauf rot.
+#   release-dry/hum-NNN Push durch tools/commit-issue.sh, wenn ein Issue-Commit
+#                       einen Pfad aus tools/release-dry-paths.txt beruehrt.
+#                       Version 0.0.NNN (die Issue-Nummer, nicht 0.0.0, damit
+#                       ein Stempeln, das nichts schreibt, in check-version
+#                       auffaellt); der Commit liegt noch nicht auf main, guard
+#                       warnt deshalb nur.
+#   workflow_dispatch   Von Hand unter Actions mit einer eingegebenen Version;
+#                       guard warnt nur.
+#
+# Ein Tag wird nur gesetzt, wenn der Probelauf seines Commits gruen ist: Ein
+# roter Tag-Lauf hinterliesse eine Nummer ohne Release, denn Tags werden nie
+# verschoben (v0.0.14). Wie man eine Vorabversion schneidet, steht in
+# CONTRIBUTING.md: nur mit tools/release.sh.
 #
 # Vorher stand hier das Geruest aus HUM-002 fuer alle `v*`-Tags (guard, make
 # check, leerer package-Schritt, Draft-Release ohne Dateien). Der Trigger ist
@@ -45,9 +64,12 @@
 # das Issue erweitert diese Datei, statt eine zweite anzulegen. Das AppImage
 # liegt seit HUM-335 schon den 0.0.x-Releases bei, das RPM seit HUM-339.
 #
-# Sicherheit: Tag-Name und Eingabe gelangen nur ueber `env:` in Skripte und
-# werden dort gegen ^0\.0\.N$ geprueft, bevor sie irgendwo anders stehen.
-# Nur der Job `release` darf schreiben (contents: write). Jede Action ist auf
+# Sicherheit: Tag-Name, Zweigname und Eingabe gelangen nur ueber `env:` in
+# Skripte und werden dort gegen ^0\.0\.N$ beziehungsweise ^hum-NNN$ geprueft,
+# bevor sie irgendwo anders stehen. Nur der Job `release` darf schreiben
+# (contents: write), und er laeuft nur fuer einen Tag-Push: Ein Probelauf
+# erreicht ihn weder ueber guard (publish ist dort false) noch ueber seine
+# eigene Bedingung, die das Ereignis noch einmal prueft. Jede Action ist auf
 # einen Commit-SHA gepinnt, jedes Container-Abbild auf einen Digest; der Tag im
 # Kommentar ist Dokumentation, beide werden zusammen angehoben.
 
@@ -57,6 +79,12 @@ on:
   push:
     tags:
       - "v0.0.*"
+    # Probelaeufe (HUM-363): tools/release.sh und tools/commit-issue.sh pushen
+    # diese Zweige, weil das Werkzeug nur git-Zugriff hat und kein Token, das
+    # workflow_dispatch ausloesen koennte.
+    branches:
+      - "release-dry/0.0.*"
+      - "release-dry/hum-*"
   workflow_dispatch:
     inputs:
       version:
@@ -65,7 +93,8 @@ on:
         type: string
 
 # Nie zwei Laeufe fuer dieselbe Referenz gleichzeitig, und nie einen halb
-# abbrechen: Ein halb angelegtes Release waere schlimmer als ein spaetes.
+# abbrechen: Ein halb angelegtes Release waere schlimmer als ein spaetes. Ein
+# Probelauf-Zweig ist eine eigene Referenz und haelt keinen Tag-Lauf auf.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -105,7 +134,7 @@ jobs:
       # nie mit einem geprueften verwechselt wird.
       artifact: ${{ steps.version.outputs.artifact }}
     steps:
-      - name: Version from the tag or the dry-run input
+      - name: Version from the tag, the dry-run branch or the dry-run input
         id: version
         env:
           EVENT: ${{ github.event_name }}
@@ -119,16 +148,42 @@ jobs:
           LC_ALL: C
         run: |
           set -euo pipefail
-          if [[ "$EVENT" == "push" ]]; then
-            if [[ "$REF_TYPE" != "tag" ]]; then
-              echo "::error::release runs on tags only, got a push of $REF_TYPE"
-              exit 1
-            fi
+          # publish: nur ein Tag legt ein Release an. strict: Ein Verstoss im
+          # naechsten Schritt (Commit nicht auf main, CI nicht gruen) ist ein
+          # Fehler statt einer Warnung; so prueft der Probelauf von
+          # tools/release.sh dasselbe, was der Tag-Lauf danach prueft.
+          if [[ "$EVENT" == "push" && "$REF_TYPE" == "tag" ]]; then
             candidate="${REF_NAME#v}"
             publish=true
-          else
+            strict=true
+          elif [[ "$EVENT" == "push" && "$REF_TYPE" == "branch" ]]; then
+            publish=false
+            dry="${REF_NAME#release-dry/}"
+            if [[ "$dry" == "$REF_NAME" ]]; then
+              echo "::error::a branch push runs a dry run only on release-dry/*, got '$REF_NAME'"
+              exit 1
+            fi
+            if [[ "$dry" == hum-* ]]; then
+              # Issue-Zweig vor dem Merge: Die Nummer ist nach dieser Pruefung
+              # nur noch Ziffern; 10# nimmt fuehrende Nullen (hum-002) als
+              # Dezimalzahl.
+              if [[ ! "$dry" =~ ^hum-([0123456789]{1,6})$ ]]; then
+                echo "::error::'$REF_NAME' is not release-dry/hum-NNN"
+                exit 1
+              fi
+              candidate="0.0.$((10#${BASH_REMATCH[1]}))"
+              strict=false
+            else
+              candidate="$dry"
+              strict=true
+            fi
+          elif [[ "$EVENT" == "workflow_dispatch" ]]; then
             candidate="$INPUT_VERSION"
             publish=false
+            strict=false
+          else
+            echo "::error::unexpected event '$EVENT'"
+            exit 1
           fi
           # Das enge Muster ist die eigentliche Sperre gegen einen praeparierten
           # Tag-Namen: Nach dieser Zeile ist die Version nur noch Ziffern und Punkte.
@@ -148,10 +203,11 @@ jobs:
           {
             echo "version=$candidate"
             echo "publish=$publish"
+            echo "strict=$strict"
             echo "sha=$SHA"
             echo "artifact=$artifact"
           } >> "$GITHUB_OUTPUT"
-          echo "version $candidate, publish $publish, commit $SHA, artifact $artifact"
+          echo "version $candidate, publish $publish, strict $strict, commit $SHA, artifact $artifact"
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -162,13 +218,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.sha }}
-          PUBLISH: ${{ steps.version.outputs.publish }}
+          STRICT_GUARD: ${{ steps.version.outputs.strict }}
         run: |
           set -euo pipefail
-          # Im Probelauf ist ein Verstoss eine Warnung: Er soll auch einen
-          # Zweig bauen koennen. Fuer einen Tag ist er ein Fehler.
+          # Im Probelauf eines Issue-Zweigs oder von Hand ist ein Verstoss eine
+          # Warnung: Er soll auch einen Zweig bauen koennen. Fuer einen Tag und
+          # fuer den Probelauf release-dry/0.0.N ist er ein Fehler.
           complain() {
-            if [[ "$PUBLISH" == "true" ]]; then
+            if [[ "$STRICT_GUARD" == "true" ]]; then
               echo "::error::$1"
               exit 1
             fi
@@ -618,8 +675,14 @@ jobs:
     name: release
     needs: [guard, build, check-deb, check-rpm, check-aur, check-appimage, build-macos, check-macos]
     # Nur ein Tag legt ein Release an. Der Probelauf endet mit check-deb,
-    # check-rpm, check-aur, check-appimage und check-macos.
-    if: needs.guard.outputs.publish == 'true'
+    # check-rpm, check-aur, check-appimage und check-macos. Die Bedingung
+    # prueft das Ereignis selbst noch einmal, damit kein Probelauf-Zweig
+    # diesen Job erreicht, selbst wenn guard einmal falsch rechnete.
+    if: >-
+      needs.guard.outputs.publish == 'true' &&
+      github.event_name == 'push' &&
+      github.ref_type == 'tag' &&
+      startsWith(github.ref, 'refs/tags/v0.0.')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

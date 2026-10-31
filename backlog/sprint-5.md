@@ -91,6 +91,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-356 | The app scales: Ctrl+Plus, Ctrl+Minus, Ctrl+0 and a setting | M | HUM-301, HUM-254, HUM-352 |
 | HUM-357 | A sandbox opens disposable by default where the system allows it | M | HUM-350, HUM-351 |
 | HUM-362 | rpmlint on Fedora 44 accepts the RPM again | S | — |
+| HUM-363 | A release tag is set only on a commit whose release dry run is green | M | HUM-237, HUM-362 |
 
 ---
 
@@ -11012,3 +11013,128 @@ sagt, warum.
 "0 errors, 0 warnings" (lokal geprueft); der naechste Tag laeuft durch
 `check-rpm`.
 
+---
+
+## HUM-363 · A release tag is set only on a commit whose release dry run is green
+
+Sprint: 5 · Größe: M · Abhängigkeiten: HUM-237, HUM-362
+
+**Anlass.** Wunsch des Owners vom 2026-10-31: Ein Release-Tag soll nie wieder
+scheitern, und die Liste der Releases auf GitHub soll keine übersprungene
+Version mehr haben. v0.0.14 scheiterte im Workflow `release` (Job
+`check-rpm`, Schritt `rpmlint`) erst nach dem Push des Tags. Tags werden nie
+verschoben (CONTRIBUTING.md), also hat 0.0.14 kein Release, und 0.0.15 folgte
+(HUM-362 behob den rpmlint-Filter). Die normale CI (`ci.yml`, auf `hum-*` und
+`main`) fährt die Paketjobs von `release.yml` nicht: build, check-deb,
+check-rpm, check-appimage, check-aur, build-macos, check-macos. `release.yml`
+hat zwar einen Probelauf über `workflow_dispatch`, aber das Werkzeug kann ihn
+nicht auslösen: Es hat nur git-Zugriff, kein `gh` und kein Token, und liest
+den Stand über die öffentliche Actions-API (`tools/ci-gate.sh`).
+
+**Umsetzung.**
+
+1. *Probelauf per Push.* `release.yml` läuft zusätzlich auf Pushes der
+   Branches `release-dry/0.0.*` und `release-dry/hum-*`. `guard` nimmt die
+   Version aus dem Branchnamen, nur über `env:` und gegen dasselbe enge Muster
+   geprüft wie beim Tag: `release-dry/0.0.N` ergibt `0.0.N` mit einem `guard`,
+   der so streng ist wie beim Tag (Commit auf `main`, `ci.yml` grün, sonst
+   Fehler); `release-dry/hum-NNN` ergibt `0.0.NNN` mit Warnungen statt Fehlern,
+   weil der Commit noch nicht auf `main` liegt. Die Issue-Nummer statt `0.0.0`,
+   weil `0.0.0` im Repository steht und ein Stempeln, das nichts schreibt, mit
+   `0.0.0` in `check-version` nicht auffiele. Neue Ausgabe `strict` neben
+   `publish`. Der Job `release` (der einzige mit `contents: write`) prüft
+   zusätzlich zu `publish == 'true'` selbst, dass das Ereignis ein Tag-Push
+   auf `refs/tags/v0.0.*` ist. Gepinnte SHAs und Digests, Rechte und
+   `concurrency` bleiben, wie sie waren.
+2. *`tools/release.sh 0.0.N [commit]`.* Prüft, dass N genau eins mehr ist als
+   der höchste `v0.0.*`-Tag auf `origin` (`git ls-remote`, nicht die lokalen
+   Tags), dass das Ziel die Spitze von `origin/main` ist und dass deren
+   `ci.yml`-Lauf auf `main` grün ist. Pusht den Commit als
+   `release-dry/0.0.N`, wartet über `tools/ci-gate.sh` auf den Probelauf mit
+   jedem Job grün außer dem übersprungenen `release`, prüft die Nummer noch
+   einmal und dass der Commit noch Vorfahre von `origin/main` ist (sonst kein
+   Tag), setzt erst dann den annotierten Tag `v0.0.N` („Humanitl 0.0.N") auf
+   denselben Commit, auch wenn `main` inzwischen weiter ist (genau er ist
+   geprüft, eine Lücke entsteht nicht; das Skript sagt es), pusht ihn, löscht den Probelauf-Branch und wartet auf den
+   Lauf des Tags (jeder Job grün) und nennt die Adresse des Releases. Roter
+   Probelauf: Ende mit dem roten Job und Schritt, kein Tag, der Branch bleibt
+   für einen neu gestarteten Versuch. Roter Tag-Lauf: Hinweis auf „Re-run
+   failed jobs" in genau diesem Lauf, der Tag bleibt.
+3. *`tools/ci-gate.sh`* bekommt `HUMANITL_CI_BRANCH` (nur Läufe dieses Branches
+   oder Tags, als `branch=` an die API und als Filter auf `head_branch`) und
+   `HUMANITL_CI_EVERY_JOB=1` mit `HUMANITL_CI_MAY_SKIP` (ein grüner Lauf zählt
+   nur, wenn jeder Job grün ist außer den genannten übersprungenen; ohne
+   Jobliste kein Urteil; trifft die Abfrage der Jobliste die Ratengrenze,
+   wartet das Tor wie bei den Läufen bis zur Frist). Ohne den Branchfilter sähe das Tor nach dem Tag-Push
+   den schon grünen Probelauf desselben Commits und meldete grün, bevor der
+   Tag-Lauf begann. Ohne die Jobprüfung wäre ein Lauf mit übersprungenem
+   `guard` (alles übersprungen) grün.
+4. *Tor beim Merge.* `tools/commit-issue.sh --ci` und `--land` lesen
+   `tools/release-dry-paths.txt` aus dem zu landenden Commit und aus seinem
+   Elternteil und nehmen die Vereinigung, dazu die Liste selbst; fehlt sie in
+   einem der beiden Stände, ist der Probelauf Pflicht. So entgeht ein Commit,
+   der `release.yml` ändert und die Liste kürzt oder löscht, dem Probelauf
+   nicht. Berührt er einen
+   dieser Pfade, pusht das Skript denselben Commit zusätzlich als
+   `release-dry/hum-NNN`, wartet nach `ci.yml` auf den Probelauf und merged nur,
+   wenn beide grün sind; danach löscht es den Branch. Die Liste: `release.yml`,
+   `.github/actions/`, `packaging/`, `app/linux/`, `app/macos/`,
+   `app/pubspec.yaml`, der Versionstest des Exports, `daemon/Cargo.toml`,
+   `daemon/rust-toolchain.toml`, `daemon/.cargo/`, `tests/escape/macos/` und die
+   Liste selbst. Nicht darin: `daemon/Cargo.lock` und `app/pubspec.lock`; sie ändern sich mit fast
+   jeder Abhängigkeit, und `ci.yml` übersetzt sie auf Linux und macOS arm64.
+   Seit 2026-10-01 hätten 11 von 77 Merges den Probelauf ausgelöst, mit den
+   Lock-Dateien 18.
+5. *Doku.* CONTRIBUTING.md (Releases nur mit `tools/release.sh`, Tag von Hand
+   nicht mehr vorgesehen; Probelauf vor dem Merge), Kopfkommentar von
+   `release.yml`, `make tools-test` fährt `tools/tests/release_test.sh`.
+
+**Akzeptanz.**
+
+- Ein Push auf `release-dry/0.0.N` oder `release-dry/hum-NNN` fährt jeden
+  Bau- und Prüfjob von `release.yml` und nie den Job `release`; jeder andere
+  Branchname ist in `guard` ein Fehler.
+- `tools/release.sh` setzt keinen Tag bei rotem oder unentschiedenem
+  Probelauf, lehnt eine Lücke oder eine vergebene Nummer ab, lehnt ein Ziel
+  ab, das nicht die Spitze von `origin/main` ist, und lehnt ab, wenn `ci.yml`
+  auf `main` rot ist. Belegt in `tools/tests/release_test.sh` gegen ein
+  Wegwerf-`origin` mit nachgestelltem Tor.
+- `tools/commit-issue.sh` merged einen Commit, der einen Pfad der Liste
+  berührt, nur nach grünem Probelauf; ein Commit ohne solche Pfade braucht
+  genau ein Tor wie bisher. Belegt in `tools/tests/commit_issue_test.sh`
+  (Fälle 11 bis 14d, darunter gekürzte, gelöschte und fehlende Liste).
+- `tools/release.sh` taggt bei weitergezogenem `main` den geprüften Commit und
+  sagt es; bei umgeschriebenem `main` setzt es keinen Tag.
+- Mutationsbeweise: Jede der Prüfungen (roter Probelauf ignoriert, Lücke
+  erlaubt, Wiederholung erlaubt, Spitze ungeprüft, rote CI ignoriert, keine
+  zweite Nummernprüfung, umgeschriebenes `main` getaggt, weitergezogenes
+  `main` verschwiegen, Probelauf ohne Jobprüfung, Tag-Tor ohne Branchfilter;
+  in `ci-gate.sh` Branchfilter aus, Jobprüfung aus, übersprungen immer
+  erlaubt, fehlende Jobliste grün, Ratengrenze der Jobliste gibt auf; in
+  `commit-issue.sh` Probelauf nie, immer, rot ignoriert, Branch nicht
+  gelöscht, fehlende Liste ohne Probelauf, nur Liste des Commits, rote CI
+  verschweigt den Probelauf-Branch) macht den zugehörigen Test rot.
+
+**Fallstricke.**
+
+- Ein Tag-Lauf hat `head_branch` gleich dem Tag-Namen; darauf baut der Filter
+  in `ci-gate.sh`. Liefert die API das anders, wartet das Tor nach dem Tag bis
+  zur Frist und meldet „kein Urteil" (Exit 3); der Tag steht dann schon und ist
+  in Ordnung, nur die Auskunft fehlt.
+- Ein Push desselben Commits auf einen schon bestehenden Probelauf-Branch
+  startet keinen neuen Lauf; das Tor wertet dann den jüngsten Versuch des
+  vorhandenen Laufs aus. Das ist gewollt (Neustart in der Oberfläche), heißt
+  aber: Wer einen frischen Lauf will, löscht den Branch vorher.
+- Ohne Token erlaubt die API 60 Anfragen je Stunde und Adresse. Ein Release
+  wartet dreimal (CI, Probelauf, Tag-Lauf), bis zu zwei Stunden; das Tor
+  schläft bei erreichter Grenze bis zu deren Ende.
+
+**Kandidaten (HUM-363, Review).** Keine Befunde dieses Issues, mögliche
+eigene Issues:
+
+- Ein Lint in `ci.yml`, dass jedes Crate `version.workspace = true` trägt;
+  sonst ginge eine Versionsangabe in `daemon/crates/*/Cargo.toml` am Stempeln
+  vorbei, ohne den Probelauf auszulösen. Alternative:
+  `daemon/crates/*/Cargo.toml` in die Liste aufnehmen.
+- Ob `profiles/` und `catalog/` in die Liste gehören, soweit das Paket sie
+  mitliefert.
