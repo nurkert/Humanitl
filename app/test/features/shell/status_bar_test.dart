@@ -18,6 +18,7 @@ import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
 import 'package:humanitl/features/shell/daemon_restart.dart';
 import 'package:humanitl/features/shell/queue_pressure.dart';
+import 'package:humanitl/features/sandbox/providers/sandbox_status_provider.dart';
 import 'package:humanitl/features/shell/widgets/status_bar.dart';
 import 'package:humanitl/l10n/l10n.dart';
 
@@ -349,12 +350,7 @@ void main() {
 
     await pumpBar(daemon: '0.0.5', app: '0.0.6');
     expect(find.byKey(notice), findsOneWidget);
-    expect(
-      find.text(
-        'Not the version of this app (0.0.6) · systemctl --user restart humanitld',
-      ),
-      findsOneWidget,
-    );
+    expect(find.text('Not the version of this app (0.0.6)'), findsOneWidget);
     expect(
       tester.widget<Text>(find.byKey(notice)).style?.color,
       HTokens.dark.colors.warningText,
@@ -515,8 +511,9 @@ void main() {
         <String>['systemctl', '--user', 'daemon-reload'],
         retire,
       ]);
-      expect(find.byKey(blocked), findsOneWidget);
-      expect(enabled(tester), isFalse);
+      // The fresh snapshot shows the session; ending it takes a second answer.
+      expect(enabled(tester), isTrue);
+      expect(client.sandbox.state, SandboxState.running);
     });
 
     testWidgets('a refresh without a snapshot keeps the button resting', (
@@ -606,14 +603,13 @@ void main() {
       expect(ran, <List<String>>[
         <String>['systemctl', '--user', 'daemon-reload'],
       ]);
-      expect(find.byKey(blocked), findsOneWidget);
+      expect(client.sandbox.state, SandboxState.running);
     });
 
-    testWidgets('a running session disables it, with the reason', (
+    testWidgets('a start or stop under way disables it, with the reason', (
       WidgetTester tester,
     ) async {
       for (final SandboxState held in <SandboxState>[
-        SandboxState.running,
         SandboxState.starting,
         SandboxState.stopping,
       ]) {
@@ -632,6 +628,100 @@ void main() {
       }
     });
 
+    testWidgets('a running session is only stopped after the second answer', (
+      WidgetTester tester,
+    ) async {
+      final FakeDaemonClient client = FakeDaemonClient.empty()
+        ..sandbox = defaultSandbox_().copyWith(state: SandboxState.running);
+      final List<List<String>> ran = await pumpRestart(tester, client);
+      await click(tester);
+      expect(find.text('End session and restart'), findsOneWidget);
+      expect(ran, isEmpty);
+      expect(client.sandbox.state, SandboxState.running);
+
+      await tester.tap(find.byKey(const Key('status-daemon-restart-cancel')));
+      await tester.pump();
+      expect(
+        find.byKey(const Key('status-daemon-restart-confirm')),
+        findsNothing,
+      );
+      expect(client.sandbox.state, SandboxState.running);
+      expect(ran, isEmpty);
+
+      await click(tester);
+      await tester.tap(find.byKey(const Key('status-daemon-restart-confirm')));
+      await tester.pumpAndSettle();
+      expect(client.sandbox.state, SandboxState.stopped);
+      expect(ran, <List<String>>[
+        <String>['systemctl', '--user', 'daemon-reload'],
+        retire,
+        <String>['systemctl', '--user', 'restart', 'humanitld.service'],
+      ]);
+    });
+
+    testWidgets('the question takes the focus on cancel and gives it back', (
+      WidgetTester tester,
+    ) async {
+      final FakeDaemonClient client = FakeDaemonClient.empty()
+        ..sandbox = defaultSandbox_().copyWith(state: SandboxState.running);
+      await pumpRestart(tester, client);
+      final FocusNode before = FocusNode(debugLabel: 'before');
+      addTearDown(before.dispose);
+      FocusManager.instance.rootScope.setFirstFocus(FocusScopeNode());
+      before.attach(tester.element(find.byType(StatusBar)));
+      FocusManager.instance.rootScope.requestFocus(before);
+      await tester.pump();
+      await click(tester);
+      await tester.pump();
+      expect(FocusManager.instance.primaryFocus?.debugLabel, 'restart-cancel');
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(
+        find.byKey(const Key('status-daemon-restart-confirm')),
+        findsNothing,
+      );
+      expect(client.sandbox.state, SandboxState.running);
+    });
+
+    testWidgets('without a command line a running session rests', (
+      WidgetTester tester,
+    ) async {
+      final FakeDaemonClient client = FakeDaemonClient.empty()
+        ..sandbox = defaultSandbox_().copyWith(state: SandboxState.running);
+      await pumpRestart(tester, client, cliPath: null);
+      expect(enabled(tester), isFalse);
+      expect(find.byKey(blocked), findsOneWidget);
+    });
+
+    testWidgets('an answer never carries over to another sandbox', (
+      WidgetTester tester,
+    ) async {
+      final FakeDaemonClient client = FakeDaemonClient.empty()
+        ..sandbox = defaultSandbox_().copyWith(
+          state: SandboxState.running,
+          sandboxId: const SandboxId('first'),
+        );
+      await pumpRestart(tester, client);
+      await click(tester);
+      expect(
+        find.byKey(const Key('status-daemon-restart-confirm')),
+        findsOneWidget,
+      );
+      final ProviderContainer container = ProviderScope.containerOf(
+        tester.element(find.byType(StatusBar)),
+      );
+      client.sandbox = client.sandbox.copyWith(
+        sandboxId: const SandboxId('second'),
+      );
+      await container.read(sandboxStatusProvider.notifier).refresh();
+      await tester.pump();
+      expect(
+        find.byKey(const Key('status-daemon-restart-confirm')),
+        findsNothing,
+      );
+      expect(client.sandbox.state, SandboxState.running);
+    });
+
     testWidgets('the German sentence fits the smallest window', (
       WidgetTester tester,
     ) async {
@@ -643,10 +733,8 @@ void main() {
       final FakeDaemonClient client = FakeDaemonClient.empty()
         ..sandbox = defaultSandbox_().copyWith(state: SandboxState.running);
       await pumpRestart(tester, client, locale: const Locale('de'));
-      expect(
-        find.text('Möglich, sobald die Agenten-Sitzung beendet ist'),
-        findsOneWidget,
-      );
+      await click(tester);
+      expect(find.text('Sitzung beenden, neu starten'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 

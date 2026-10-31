@@ -38,6 +38,60 @@ void main() {
     ]);
   });
 
+  group('restartAfterStop (HUM-367)', () {
+    const String cli = '/x/humanitl';
+
+    /// Answers `retire-if-idle` with [outcomes] in turn; the last one stays.
+    CommandRunner answering(List<String> outcomes) {
+      int asked = 0;
+      return (String executable, List<String> args) async {
+        ran.add(<String>[executable, ...args]);
+        if (!args.contains('retire-if-idle')) {
+          return ProcessResult(1, 0, '', '');
+        }
+        final String outcome = outcomes[asked.clamp(0, outcomes.length - 1)];
+        asked++;
+        return ProcessResult(1, 0, '{"outcome":"$outcome"}', '');
+      };
+    }
+
+    Future<DaemonRestart> restart(CommandRunner runner, void Function() stop) =>
+        restartAfterStop(
+          runner,
+          stop: () async => stop(),
+          cli: cli,
+          daemonMinor: 23,
+          askSession: () async => true,
+          macOS: true,
+          pause: Duration.zero,
+        );
+
+    test('it stops first and waits out the moment the session ends', () async {
+      final List<String> order = <String>[];
+      final DaemonRestart outcome = await restart(
+        answering(<String>['busy', 'busy', 'retired']),
+        () => order.add('stop:${ran.length}'),
+      );
+      expect(order, <String>['stop:0']);
+      expect(outcome, isA<DaemonRestarted>());
+      expect(
+        ran.where((List<String> c) => c.last == 'retire-if-idle').length,
+        3,
+      );
+      expect(ran.last, <String>[cli, 'daemon', 'restart']);
+    });
+
+    test('a daemon that stays busy is never restarted', () async {
+      final DaemonRestart outcome = await restart(
+        answering(<String>['busy']),
+        () {},
+      );
+      expect(outcome, isA<DaemonSessionHolds>());
+      expect(ran.where((List<String> c) => c.last == 'restart'), isEmpty);
+      expect(ran.length, restartAfterStopAttempts);
+    });
+  });
+
   test('an old daemon without retire is asked, then restarted', () async {
     final DaemonRestart outcome = await restartUserDaemon(
       run,
