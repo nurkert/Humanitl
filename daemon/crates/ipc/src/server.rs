@@ -350,8 +350,10 @@ impl IpcServer {
             };
             let llm = resolved.config.llm;
             // Welcher Endpunkt und welcher Verweis zusammengehören: ohne
-            // Namen der aktive Server (die flachen Schlüssel sind seine
-            // Ansicht), mit Namen genau dieser Eintrag. Eine Datei ohne
+            // Namen der Server, den diese Auflösung wählt (`llm.server` aus
+            // `config.toml` oder dem Profil `default`, sonst der aktive; die
+            // flachen Schlüssel sind seine Ansicht, HUM-400), mit Namen
+            // genau dieser Eintrag. Eine Datei ohne
             // Einträge kennt nur den abgeleiteten Server `default`.
             let (configured, reference) = if server.is_empty()
                 || (llm.servers.is_empty() && server == humanitl_config::servers::MIGRATED_NAME)

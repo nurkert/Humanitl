@@ -25,6 +25,7 @@ pub mod exec;
 pub mod flows;
 pub mod llm;
 pub mod moderate;
+pub mod plan;
 pub mod rules;
 pub mod run;
 pub mod sandbox;

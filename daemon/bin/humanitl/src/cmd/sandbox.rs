@@ -114,6 +114,7 @@ pub async fn run(ctx: &Context, cmd: &SandboxCmd) -> Result<u8, Failure> {
             direct,
         } => start(ctx, cmd, tests_dir.as_deref(), *disposable, *direct).await,
         SandboxCmd::Check => check(ctx),
+        SandboxCmd::Plan => crate::cmd::plan::run(ctx).await,
         SandboxCmd::Attach {
             read_only,
             detach_keys,
@@ -188,6 +189,17 @@ struct Setup {
 /// `sandbox argv`: die Kommandozeile, ohne zu starten.
 fn argv(ctx: &Context, command: &[OsString]) -> Result<u8, Failure> {
     let resolved = ctx.config()?;
+    // Ein Name ohne gespeicherten Server: dieselbe Ablehnung wie beim Start
+    // (HUM-400), statt einer Zeile ohne Modell.
+    if let Some(refused) = resolved
+        .config
+        .llm
+        .choice
+        .as_ref()
+        .and_then(humanitl_config::servers::ServerChoice::refusal)
+    {
+        return Err(Failure::new(refused));
+    }
     let setup = prepare(ctx, &resolved, Wiring::Preview, command)?;
     // Die Vorschau, nicht der Plan: feste Deskriptornummern, alles unter
     // `/work` als vorhanden. Der Plan legt Deskriptoren an und verlangt
@@ -241,6 +253,12 @@ async fn start(
         .get_info(())
         .await
         .map_err(|status| Failure::new(status_diagnostic(&status, "GetInfo")))?;
+    // Der Server der Sitzung (HUM-400): Dieser Befehl startet die Sandbox im
+    // eigenen Prozess, und die Durchreiche des Proxys ist die, die der Daemon
+    // zuletzt eingerichtet hat. Nie ein Agent für den einen Server und eine
+    // Durchreiche zum anderen.
+    let passthrough = daemon_passthrough(&mut client).await?;
+    session_server_gate(&resolved.config, passthrough.as_ref()).map_err(Failure::new)?;
 
     let mut setup = prepare(ctx, &resolved, Wiring::Daemon, command)?;
     if let Some(dir) = tests_dir {
@@ -296,6 +314,117 @@ async fn start(
         drop(throwaway);
     }
     ended
+}
+
+/// Die mitgelieferte Durchreiche, die der Daemon gerade hält, als Regel;
+/// `None` ohne eine (HUM-400).
+async fn daemon_passthrough(
+    client: &mut humanitl_ipc::client::Client,
+) -> Result<Option<humanitl_core::rule::Rule>, Failure> {
+    let response = client
+        .rules(humanitl_ipc::v1::RulesRequest {
+            op: Some(humanitl_ipc::v1::rules_request::Op::List(())),
+        })
+        .await
+        .map_err(|status| Failure::new(status_diagnostic(&status, "Rules")))?
+        .into_inner();
+    let Some(wire) = response.rules.iter().find(|rule| rule.passthrough_llm) else {
+        return Ok(None);
+    };
+    humanitl_ipc::convert::rule_from_proto(wire, SessionId::new())
+        .map(Some)
+        .map_err(|error| {
+            Failure::new(
+                Diagnostic::builder(codes::CONFIG_021, Severity::Error)
+                    .why(format!(
+                        "the daemon's passthrough to the language model cannot be read ({error}); \
+                         without it this command cannot tell whether the proxy lets the agent's \
+                         server through"
+                    ))
+                    .fix(FixAction::CopyCommand("humanitl run".to_owned()))
+                    .build(),
+            )
+        })
+}
+
+/// Lässt `sandbox run` nur zu, wenn der Proxy genau den Server durchlässt,
+/// für den der Agent eingerichtet wird (HUM-400).
+///
+/// `CONFIG_021` für einen Namen ohne gespeicherten Server, wie beim Start
+/// über den Daemon. Sonst wird die Durchreiche, die diese Konfiguration
+/// bekäme, mit derselben Funktion gebaut, mit der der Daemon sie baut
+/// ([`humanitl_ipc::session::session_passthrough`]), und als Bedingung mit
+/// der Regel verglichen, die der Daemon hält (`daemon`, aus
+/// [`daemon_passthrough`]): Schema, Host, Port, Methoden und die genauen
+/// Inferenzpfade, typisiert und nicht als Text. Das gilt für jede Wahl, auch
+/// für `llm.active` aus einer anderen `--config` und für einen Endpunkt ohne
+/// gespeicherten Server: Dieser Befehl kann die Sitzung des Daemons nicht
+/// umstellen, und sonst spräche der Agent mit dem einen Server, während der
+/// Proxy den anderen durchließe. Der Weg mit eigenem Server ist
+/// `humanitl run`.
+///
+/// # Errors
+///
+/// `CONFIG_021` in beiden Fällen.
+fn session_server_gate(
+    config: &Config,
+    daemon: Option<&humanitl_core::rule::Rule>,
+) -> Result<(), Diagnostic> {
+    if let Some(refused) = config
+        .llm
+        .choice
+        .as_ref()
+        .and_then(humanitl_config::servers::ServerChoice::refusal)
+    {
+        return Err(refused);
+    }
+    let wanted = humanitl_ipc::session::session_passthrough(config);
+    let same = match (&wanted, daemon) {
+        (None, None) => true,
+        (Some(wanted), Some(held)) => {
+            wanted.matcher == held.matcher && wanted.action == held.action
+        }
+        _ => false,
+    };
+    if same {
+        return Ok(());
+    }
+    let chosen = config.llm.choice.as_ref().map_or_else(
+        || "this configuration".to_owned(),
+        |choice| format!("{} (the model server {})", choice.source, choice.name),
+    );
+    Err(Diagnostic::builder(codes::CONFIG_021, Severity::Error)
+        .why(format!(
+            "{chosen} sets up the agent for {}, and the daemon passes model traffic to {}; \
+             humanitl sandbox run starts the sandbox in this process and cannot give the \
+             daemon's session another server, so the agent would talk to one server while the \
+             proxy lets another through. Start the session with humanitl run, which resolves \
+             its own server",
+            describe_passthrough(wanted.as_ref()),
+            describe_passthrough(daemon)
+        ))
+        .fix(FixAction::CopyCommand("humanitl run".to_owned()))
+        .build())
+}
+
+/// Eine Durchreiche für den Satz eines Befunds; verglichen wird nie dieser
+/// Text, sondern die Bedingung selbst.
+fn describe_passthrough(rule: Option<&humanitl_core::rule::Rule>) -> String {
+    let Some(rule) = rule else {
+        return "no server".to_owned();
+    };
+    let matcher = &rule.matcher;
+    format!(
+        "{}://{}{} ({})",
+        matcher
+            .scheme
+            .map_or_else(|| "any".to_owned(), |scheme| scheme.to_string()),
+        matcher.host,
+        matcher
+            .port
+            .map_or_else(String::new, |port| format!(" port {port}")),
+        matcher.path_prefixes.join(", ")
+    )
 }
 
 /// Ob `sandbox run` eine Wegwerf-Sandbox startet (HUM-357).
@@ -1308,6 +1437,101 @@ fn shim_path(wiring: &Wiring) -> Result<PathBuf, Failure> {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    /// `sandbox run` lehnt einen unbekannten Server ab und jede
+    /// Konfiguration, deren Durchreiche nicht die des Daemons ist (HUM-400).
+    ///
+    /// Mutationsbeweise: Ein Abgleich nur für Projekt und Lauf ließe den Fall
+    /// `llm.active` aus einer anderen `--config` durch; ein Abgleich nur auf
+    /// `host:port` ließe `/a/v1` gegen `/b/v1` durch.
+    #[test]
+    fn sandbox_run_never_splits_agent_and_passthrough() {
+        use humanitl_config::servers::{ServerChoice, ServerSource};
+
+        let config = |endpoint: Option<&str>, choice: Option<ServerChoice>| {
+            let mut config = humanitl_config::Config::default();
+            config.agent.adapter = "opencode".to_owned();
+            config.llm.endpoint = endpoint.map(|text| text.parse().unwrap());
+            config.llm.choice = choice;
+            config
+        };
+        let saved = |name: &str, source: ServerSource| ServerChoice {
+            name: name.to_owned(),
+            source,
+            known: true,
+            saved: vec!["a".to_owned(), "b".to_owned()],
+        };
+        // The daemon's rule as `Rules(List)` carries it over the wire.
+        let daemon_on = |endpoint: &str| {
+            let rule = humanitl_ipc::session::session_passthrough(&config(Some(endpoint), None))
+                .expect("a passthrough");
+            humanitl_ipc::convert::rule_from_proto(
+                &humanitl_ipc::convert::rule_to_proto(&rule),
+                humanitl_core::ids::SessionId::new(),
+            )
+            .expect("the rule crosses the wire")
+        };
+        let gate = |config: &humanitl_config::Config, held: Option<&humanitl_core::rule::Rule>| {
+            super::session_server_gate(config, held)
+        };
+
+        let unknown = gate(
+            &config(
+                None,
+                Some(ServerChoice {
+                    known: false,
+                    ..saved("gone", ServerSource::Run)
+                }),
+            ),
+            None,
+        )
+        .expect_err("an unsaved server is refused");
+        assert_eq!(unknown.code.as_str(), "CONFIG_021");
+        assert!(unknown.why.contains("gone"), "{}", unknown.why);
+
+        let a = daemon_on("https://model.lan/a/v1");
+        // `llm.active` from another --config: B for the agent, A at the proxy.
+        let split = gate(
+            &config(
+                Some("https://other.lan/v1"),
+                Some(saved("b", ServerSource::Default)),
+            ),
+            Some(&a),
+        )
+        .expect_err("the active server of another config is refused");
+        assert!(split.why.contains("humanitl run"), "{}", split.why);
+        // Same host and port, other inference paths.
+        assert!(
+            gate(&config(Some("https://model.lan/b/v1"), None), Some(&a)).is_err(),
+            "another path on the same host is another server"
+        );
+        // Same host and path, other scheme.
+        assert!(gate(&config(Some("http://model.lan:443/a/v1"), None), Some(&a)).is_err());
+        // An endpoint without any passthrough at the daemon.
+        assert!(gate(&config(Some("https://model.lan/a/v1"), None), None).is_err());
+        // IPv6, written two ways: the typed rule is the same.
+        let v6 = daemon_on("http://[::1]:8080/v1");
+        assert!(
+            gate(
+                &config(Some("http://[0:0:0:0:0:0:0:1]:8080/v1"), None),
+                Some(&v6)
+            )
+            .is_ok()
+        );
+
+        assert!(
+            gate(
+                &config(
+                    Some("https://model.lan/a/v1"),
+                    Some(saved("a", ServerSource::Project("/p".into())))
+                ),
+                Some(&a)
+            )
+            .is_ok(),
+            "the daemon passes the chosen server: no mismatch"
+        );
+        assert!(gate(&config(None, None), None).is_ok(), "no model at all");
+    }
 
     use std::ffi::OsString;
     use std::os::unix::process::ExitStatusExt as _;

@@ -150,6 +150,10 @@ pub async fn run(ctx: &Context, args: &RunArgs) -> Result<u8, Failure> {
         cli_overrides: session_overrides(ctx),
         work_dir_source: Some(humanitl_ipc::work_dir::source_to_proto(&work_dir_source)),
         sandbox_mode: start_mode(args, config.sandbox.mode, info.proto_minor),
+        // `--llm NAME`: der gespeicherte Server für genau diesen Lauf
+        // (HUM-400). Ein älterer Daemon kennt das Feld nicht und nähme die
+        // Wahl ohne ihn; das wäre ein anderer Server als der verlangte.
+        llm_server: run_server(ctx, info.proto_minor)?,
     };
 
     let session = json!({
@@ -174,7 +178,7 @@ pub async fn run(ctx: &Context, args: &RunArgs) -> Result<u8, Failure> {
     } else {
         None
     };
-    let code = drive(ctx, &mut client, start, moderate, keys).await?;
+    let code = drive(ctx, &mut client, start, moderate, keys, info.proto_minor).await?;
     if ctx.render.is_json() {
         let mut value = session;
         value["exit_code"] = json!(code);
@@ -231,6 +235,7 @@ async fn drive(
     start: v1::sandbox_request::Start,
     moderate: bool,
     keys: Option<humanitl_config::DetachKeys>,
+    minor: u32,
 ) -> Result<u8, Failure> {
     // **Erst die Signale, dann alles andere.** `open_moderation` setzt für
     // `--ask terminal` den Rohmodus (`cmd/moderate.rs`), und danach dauert der
@@ -481,7 +486,7 @@ async fn drive(
             moderation.output(&chunk.data);
             continue;
         }
-        if let Some(found) = handle(ctx, event) {
+        if let Some(found) = handle(ctx, event, minor) {
             failure.get_or_insert(found);
         }
     }
@@ -723,7 +728,9 @@ async fn stop(client: &mut Client) {
 
 /// Verarbeitet ein Ereignis der Sitzung; ein Befund kommt als Fehlschlag
 /// zurück.
-fn handle(ctx: &Context, event: v1::SandboxEvent) -> Option<Failure> {
+/// `minor` ist die Vertrags-Minor des Daemons; vor 1.28 kennt er die Wahl
+/// des Servers nicht (HUM-400).
+fn handle(ctx: &Context, event: v1::SandboxEvent, minor: u32) -> Option<Failure> {
     use v1::sandbox_event::Event;
 
     match event.event? {
@@ -749,6 +756,14 @@ fn handle(ctx: &Context, event: v1::SandboxEvent) -> Option<Failure> {
         Event::Status(status) => {
             ctx.render
                 .detail(&format!("[humanitl] sandbox {}", state_name(status.state)));
+            // Der Server der Sitzung steht beim Start da, auch ohne `-v`:
+            // Ein Projekt kann einen anderen wählen als den aktiven (HUM-400).
+            if status.state == v1::SandboxState::Starting as i32 {
+                ctx.render.note(&format!(
+                    "[humanitl] {}",
+                    crate::cmd::plan::server_line(status.llm_server.as_ref(), minor)
+                ));
+            }
             None
         }
         Event::ArgvLine(line) => {
@@ -980,6 +995,33 @@ fn session_overrides(ctx: &Context) -> Vec<v1::sandbox_request::CliOverride> {
         .collect()
 }
 
+/// Der Server aus `--llm NAME` für `Start.llm_server` (HUM-400).
+///
+/// # Errors
+///
+/// `CLI_004`, wenn ein Server genannt ist und der Daemon vor Vertrag 1.28
+/// spricht: Er überginge das Feld still.
+fn run_server(ctx: &Context, minor: u32) -> Result<String, Failure> {
+    let Some(server) = crate::cmd::plan::llm_server_pair(ctx) else {
+        return Ok(String::new());
+    };
+    if minor < crate::cmd::plan::SERVER_CHOICE_MINOR {
+        return Err(Failure::new(
+            Diagnostic::builder(codes::CLI_004, Severity::Error)
+                .why(format!(
+                    "the daemon speaks contract 1.{minor}, and --llm {server} needs 1.{}; it \
+                     would start with another server",
+                    crate::cmd::plan::SERVER_CHOICE_MINOR
+                ))
+                .fix(FixAction::CopyCommand(
+                    "systemctl --user restart humanitld.service".to_owned(),
+                ))
+                .build(),
+        ));
+    }
+    Ok(server)
+}
+
 /// `ro` oder `rw`, wie das Protokoll den Modus schreibt.
 const fn work_mode_name(mode: humanitl_config::WorkMode) -> &'static str {
     match mode {
@@ -1004,6 +1046,13 @@ fn session_lines(resolved: &humanitl_config::Resolved, args: &RunArgs) -> String
         )
     ));
     lines.push(format!("agent: {}", config.agent.adapter));
+    lines.push(format!(
+        "llm server: {}",
+        config.llm.choice.as_ref().map_or_else(
+            || "-".to_owned(),
+            |choice| format!("{} (from {})", choice.name, choice.source)
+        )
+    ));
     lines.push(format!(
         "llm endpoint: {}",
         config

@@ -323,6 +323,8 @@ async fn a_plan_answers_for_a_directory_that_does_not_apply_yet() {
                 work_dir: other.display().to_string(),
                 work_mode: "ro".to_owned(),
                 work_dir_source: None,
+                llm_server: String::new(),
+                session_profile: String::new(),
             })),
         },
     )
@@ -418,6 +420,8 @@ fn plan_profile(name: &str) -> v1::SandboxRequest {
             work_dir: String::new(),
             work_mode: String::new(),
             work_dir_source: None,
+            llm_server: String::new(),
+            session_profile: String::new(),
         })),
     }
 }
@@ -430,6 +434,8 @@ fn plan_work_dir(dir: &str) -> v1::SandboxRequest {
             work_dir: dir.to_owned(),
             work_mode: String::new(),
             work_dir_source: None,
+            llm_server: String::new(),
+            session_profile: String::new(),
         })),
     }
 }

@@ -519,4 +519,27 @@ void main() {
     );
     expect(displayEndpoint('not a url'), 'not a url');
   });
+
+  testWidgets('a server names the profiles that choose it (HUM-400)', (
+    WidgetTester tester,
+  ) async {
+    final FakeDaemonClient client = twoServers();
+    client.savedServers = <SavedServer>[
+      const SavedServer(
+        name: 'cloud',
+        endpoint: 'https://api.example.com/v1',
+        keyRef: 'secret-service:humanitl/cloud',
+        profiles: <String>['research', 'team'],
+      ),
+      client.savedServers.last,
+    ];
+    await openSettings(tester, client);
+
+    expect(find.text('Chosen by profile research, team'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('settings-server-profiles-home')),
+      findsNothing,
+      reason: 'no profile chooses home',
+    );
+  }, variant: linux);
 }

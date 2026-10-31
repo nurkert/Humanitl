@@ -176,6 +176,7 @@ impl Fixture {
                 // `auto` wäre hier, mit bubblewrap 0.11 und dem
                 // Laufzeitverzeichnis unter `/dev/shm`, eine Wegwerf-Sandbox.
                 sandbox_mode: "direct".to_owned(),
+                llm_server: String::new(),
             })),
         }
     }

@@ -101,6 +101,10 @@ pub struct SessionRequest {
     pub ask_mode: Option<AskMode>,
     /// Einzelne Konfigurationswerte, `(Pfad, Text)`.
     pub overrides: Vec<(String, String)>,
+    /// Der gespeicherte Modellserver für genau diesen Lauf
+    /// (`Start.llm_server`, HUM-400). Er geht Projekt, Profil und
+    /// `llm.active` vor und wählt nur unter `llm.servers`.
+    pub llm_server: Option<String>,
 }
 
 impl SessionRequest {
@@ -122,6 +126,9 @@ impl SessionRequest {
         }
         if let Some(mode) = self.ask_mode {
             pairs.push(("hold.ask_mode".to_owned(), ask_mode_name(mode).to_owned()));
+        }
+        if let Some(server) = self.llm_server.as_ref() {
+            pairs.push((humanitl_config::servers::SERVER.to_owned(), server.clone()));
         }
         pairs
     }
@@ -177,6 +184,13 @@ impl SessionResolver {
         }
     }
 
+    /// Ob [`SessionResolver::current`] von der Platte liest; falsch für
+    /// einen Resolver aus [`SessionResolver::for_config`].
+    #[must_use]
+    pub const fn is_live(&self) -> bool {
+        self.live
+    }
+
     /// Die Pfade, gegen die aufgelöst wird.
     #[must_use]
     pub const fn paths(&self) -> &Paths {
@@ -226,6 +240,79 @@ impl SessionResolver {
     /// Profil, das es nicht gibt, `CONFIG_002` für einen unbekannten
     /// Schlüssel.
     pub fn resolve(&self, request: &SessionRequest) -> Result<Resolved, Diagnostic> {
+        let resolved = self.resolve_unchecked(request)?;
+        // Ein Projekt, ein Profil oder der Lauf nennt einen Server, den es
+        // nicht gibt: Die Sitzung startet nicht, statt still `llm.active` zu
+        // nehmen (HUM-400).
+        if let Some(refusal) = resolved
+            .config
+            .llm
+            .choice
+            .as_ref()
+            .and_then(humanitl_config::servers::ServerChoice::refusal)
+        {
+            return Err(refusal);
+        }
+        Ok(resolved)
+    }
+
+    /// Was ein Start mit diesem Plan auflösen würde, ohne etwas zu prüfen,
+    /// das nur der Start prüft (HUM-400).
+    ///
+    /// Dasselbe Profil der Sitzung, dasselbe Projekt-Profil und derselbe
+    /// Server des Laufs wie [`SessionResolver::resolve`], und ohne die
+    /// Ablehnung eines unbekannten Servers: Der Schnappschuss zeigt die Wahl
+    /// und ihren Befund, bevor jemand startet. `project` ist wie beim Start
+    /// das Projektverzeichnis dieser Auflösung (ein Paar `sandbox.work_dir`
+    /// auf der Ebene der Kommandozeile, damit sein Projekt-Profil gilt);
+    /// danach steht in `sandbox.work_dir` wieder der Wert der Konfiguration
+    /// ohne Wunsch, aber nur dann. Der Ordner aus der Anfrage ist noch nicht
+    /// geprüft, und
+    /// als Wert der Konfiguration gälte er sonst bei dieser Prüfung als
+    /// eingetragen. Ohne `project` gilt der Ordner aus der Konfiguration. Ein
+    /// Resolver aus [`SessionResolver::for_config`] liefert seinen festen
+    /// Grundstand.
+    ///
+    /// # Errors
+    ///
+    /// `CONFIG_001`, wenn es das Profil nicht gibt, und die Befunde des
+    /// Ladens; nie `CONFIG_021`.
+    pub fn resolve_plan(
+        &self,
+        profile: Option<String>,
+        project: Option<&Path>,
+        llm_server: Option<String>,
+    ) -> Result<Resolved, Diagnostic> {
+        if !self.live {
+            return Ok(self.base.clone());
+        }
+        let stored = self.current().map_or_else(
+            |_| self.base.config.sandbox.work_dir.clone(),
+            |now| now.config.sandbox.work_dir,
+        );
+        let selection = ProfileSelection { name: profile };
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        if let Some(dir) = project {
+            pairs.push(("sandbox.work_dir".to_owned(), dir.display().to_string()));
+        }
+        if let Some(server) = llm_server {
+            pairs.push((humanitl_config::servers::SERVER.to_owned(), server));
+        }
+        let cwd = project.map(Path::to_path_buf).or_else(|| stored.clone());
+        let mut resolved =
+            humanitl_config::resolve(&selection, cwd.as_deref(), self.env(), &pairs)?;
+        // Nur ein Ordner, den diese Anfrage selbst hineingelegt hat, wird
+        // zurückgesetzt. Setzt das Profil der Sitzung `sandbox.work_dir`,
+        // gilt dieser Wert, wie beim Start.
+        if project.is_some() {
+            resolved.config.sandbox.work_dir = stored;
+        }
+        Ok(resolved)
+    }
+
+    /// [`SessionResolver::resolve`] ohne die Ablehnung eines unbekannten
+    /// Servers (HUM-400).
+    fn resolve_unchecked(&self, request: &SessionRequest) -> Result<Resolved, Diagnostic> {
         for (path, _) in &request.overrides {
             check_override_key(path)?;
         }
@@ -435,6 +522,19 @@ impl BundledRules {
 /// `None` heißt in jedem Fall: es wird gefragt. Ohne `llm.endpoint` gibt es
 /// nichts durchzulassen, und ein unbekannter Adapter bekommt keine erfundene
 /// Regel — er bekommt einen Befund.
+/// Die erklärte Durchreiche, die eine Sitzung mit dieser Konfiguration
+/// bekäme: dieselbe Regel, die [`bundled_rules`] in den Speicher legt
+/// (HUM-400).
+///
+/// Für `humanitl sandbox run`, das die Sandbox im eigenen Prozess startet
+/// und prüfen muss, ob der Proxy genau den Server durchlässt, für den der
+/// Agent eingerichtet wird. Befunde (ein unbekannter Adapter) fallen hier
+/// weg; ohne Regel ist das Ergebnis `None`, wie im Speicher.
+#[must_use]
+pub fn session_passthrough(config: &Config) -> Option<Rule> {
+    llm_passthrough_rule(config, &mut Vec::new())
+}
+
 fn llm_passthrough_rule(config: &Config, diagnostics: &mut Vec<Diagnostic>) -> Option<Rule> {
     config.llm.endpoint.as_ref()?;
     let registry = AdapterRegistry::builtin();

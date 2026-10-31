@@ -51,7 +51,12 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `27` seit der Wegwerf-Sandbox als Vorgabe (HUM-357):
+/// `28` seit dem Server je Projekt und Profil (HUM-400):
+/// `SandboxRequest.Start.llm_server` und `.Plan.llm_server` wählen einen
+/// gespeicherten Server für einen Lauf, `SandboxEvent.Status.llm_server`
+/// (`LlmServerChoice`) nennt den Server der Sitzung und woher die Wahl kommt,
+/// und `LlmServer.profiles` die Profile, die ihn wählen.
+/// `27` war die Wegwerf-Sandbox als Vorgabe (HUM-357):
 /// `SandboxEvent.Status.sandbox_mode` nennt den Modus, den der nächste Start
 /// bekäme, und `sandbox_mode_notice` den Grund, wenn er von `sandbox.mode`
 /// abweicht; `Start.sandbox_mode` kennt `auto`.
@@ -159,7 +164,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 27;
+pub const PROTO_MINOR: u32 = 28;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

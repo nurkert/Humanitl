@@ -117,6 +117,156 @@ pub const SERVERS: &str = "llm.servers";
 /// Der Pfad des Namens des aktiven Eintrags.
 pub const ACTIVE: &str = "llm.active";
 
+/// Der Pfad des Namens, mit dem ein Projekt, ein Profil oder ein einzelner
+/// Lauf einen der gespeicherten Server wählt (HUM-400).
+///
+/// Er wählt nur aus `llm.servers`: Endpunkt, Modelle und Schlüssel kommen
+/// immer aus dem Eintrag, den der Nutzer selbst gespeichert hat. Gesetzt,
+/// geht er `llm.active` vor; ein Name ohne Eintrag lässt keinen Endpunkt und
+/// keinen Schlüssel gelten, und der Start einer Sitzung lehnt dann ab
+/// ([`ServerChoice::refusal`]).
+pub const SERVER: &str = "llm.server";
+
+/// Woher die Wahl des Servers einer Sitzung kommt (HUM-400).
+///
+/// Die Rangfolge ist die der Ebenen beim Laden: ein Lauf vor dem Projekt,
+/// das Projekt vor einem Profil, ein Profil vor `llm.active`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServerSource {
+    /// Dieser eine Lauf: `humanitl run --llm NAME`, `Start.llm_server`, eine
+    /// Umgebungsvariable oder ein Argument der Kommandozeile.
+    Run,
+    /// Das Projekt-Profil, mit seinem Pfad.
+    Project(std::path::PathBuf),
+    /// Ein Profil der Sitzung (`profiles/*.toml`), mit seinem Namen.
+    Profile(String),
+    /// `llm.server` in `config.toml`: eine Vorgabe des Nutzers wie
+    /// `llm.active`, aber ein anderer Schlüssel, und der Befund nennt ihn.
+    Config,
+    /// Die Vorgabe des Nutzers: `llm.active`.
+    Default,
+}
+
+impl ServerSource {
+    /// Die Quelle zur Ebene, aus der `llm.server` kommt.
+    #[must_use]
+    pub fn of(origin: &Origin) -> Self {
+        match origin {
+            Origin::Cli | Origin::Env(_) => Self::Run,
+            Origin::ProfileProject(path) => Self::Project(path.clone()),
+            Origin::ProfileBuiltin(name) | Origin::ProfileGlobal(name) => {
+                Self::Profile(name.clone())
+            }
+            Origin::Global => Self::Config,
+            Origin::Default => Self::Default,
+        }
+    }
+
+    /// Der Kurzname: `run`, `project`, `profile` oder `default`.
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::Run => "run",
+            Self::Project(_) => "project",
+            Self::Profile(_) => "profile",
+            Self::Config | Self::Default => "default",
+        }
+    }
+}
+
+impl std::fmt::Display for ServerSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Run => f.write_str("this run"),
+            Self::Project(path) => write!(f, "the project profile {}", path.display()),
+            Self::Profile(name) => write!(f, "the profile {name}"),
+            Self::Config => write!(f, "{SERVER} in config.toml"),
+            Self::Default => f.write_str("llm.active"),
+        }
+    }
+}
+
+/// Der gespeicherte Server, den eine Auflösung gewählt hat, und woher die
+/// Wahl kommt (HUM-400).
+///
+/// Steht in [`crate::LlmConfig::choice`], solange Endpunkt und Schlüssel aus
+/// einem gespeicherten Eintrag kommen oder ein gewählter Name keinen nennt;
+/// fehlt, wenn kein Server gilt oder eine höhere Ebene `llm.endpoint` selbst
+/// setzt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerChoice {
+    /// Der Name des Servers.
+    pub name: String,
+    /// Woher der Name kommt.
+    pub source: ServerSource,
+    /// Ob unter dem Namen ein Server gespeichert ist. Falsch heißt: kein
+    /// Endpunkt, keine Modelle und kein Schlüssel gelten, und eine Sitzung
+    /// startet nicht.
+    pub known: bool,
+    /// Die Namen der gespeicherten Server, für den Befund.
+    pub saved: Vec<String>,
+}
+
+impl ServerChoice {
+    /// Der Befund, mit dem ein Start ablehnt, wenn der gewählte Name keinen
+    /// gespeicherten Server nennt; `None`, wenn es ihn gibt.
+    ///
+    /// Nie ein stiller Rückfall auf `llm.active`: Wer im Projekt oder im
+    /// Profil einen Server nennt, will genau diesen, und ein anderer bekäme
+    /// sonst den Verkehr des Modells, ohne dass jemand es sähe.
+    #[must_use]
+    pub fn refusal(&self) -> Option<Diagnostic> {
+        if self.known {
+            return None;
+        }
+        let saved = if self.saved.is_empty() {
+            "none".to_owned()
+        } else {
+            self.saved.join(", ")
+        };
+        // Ein Name, der keiner sein kann, steht in Anführungszeichen: Er kam
+        // vielleicht aus einem geklonten Repository.
+        let name = if check_name(&self.name).is_ok() {
+            self.name.clone()
+        } else {
+            format!("{:?}", self.name)
+        };
+        let remove = match &self.source {
+            ServerSource::Run => "leave out --llm".to_owned(),
+            ServerSource::Project(path) => format!("remove {SERVER} from {}", path.display()),
+            ServerSource::Profile(name) => format!("remove {SERVER} from the profile {name}"),
+            ServerSource::Config | ServerSource::Default => {
+                format!("remove {SERVER} from config.toml")
+            }
+        };
+        Some(
+            Diagnostic::builder(CONFIG_021, Severity::Error)
+                .why(format!(
+                    "{} names the model server {name} in {SERVER}, and no server of that name is \
+                     saved (saved: {saved}); the session does not start, and no endpoint gets a \
+                     key. Save it with humanitl llm server add, or {remove}",
+                    self.source
+                ))
+                .fix(FixAction::CopyCommand(if check_name(&self.name).is_ok() {
+                    format!("humanitl llm server add {name} URL")
+                } else {
+                    "humanitl llm server ls".to_owned()
+                }))
+                .build(),
+        )
+    }
+}
+
+/// Was [`project`] über den gemischten Stand hinaus liefert.
+#[derive(Debug, Default)]
+pub(crate) struct Projection {
+    /// Die Befunde des Projizierens.
+    pub diagnostics: Vec<Diagnostic>,
+    /// Der gewählte Server, wenn einer gilt oder ein gewählter Name keinen
+    /// nennt.
+    pub choice: Option<ServerChoice>,
+}
+
 /// Der Name des Eintrags, zu dem eine Datei mit flachen Werten wird.
 pub const MIGRATED_NAME: &str = "default";
 
@@ -518,26 +668,36 @@ pub fn mirror_of(table: &toml::Table, segments: &[String], value: Option<&TomlVa
     )]
 }
 
-/// Setzt beim Laden die Werte des aktiven Eintrags an die Stelle der flachen
-/// Schlüssel (HUM-289) und hält dabei die eine Regel des Schlüssels: Ein
-/// Verweis wirkt nur zusammen mit dem Endpunkt **desselben** Eintrags.
+/// Setzt beim Laden die Werte des gewählten Eintrags an die Stelle der
+/// flachen Schlüssel (HUM-289, HUM-400) und hält dabei die eine Regel des
+/// Schlüssels: Ein Verweis wirkt nur zusammen mit dem Endpunkt **desselben**
+/// Eintrags.
+///
+/// Gewählt ist der Eintrag, den [`SERVER`] nennt, sonst der, den [`ACTIVE`]
+/// nennt. Welche Ebene den Namen gesetzt hat, sagt die Quelle der Wahl
+/// ([`ServerSource`]); der Rang der Ebenen ist die Rangfolge Lauf, Projekt,
+/// Profil, Vorgabe. Der Name, der gilt, heißt unten der *Wähler*.
 ///
 /// `flat` ist der gemischte Stand aller Ebenen, Blattpfad für Blattpfad;
 /// `layer_of` sagt, in welcher Ebene ein Pfad zuletzt gesetzt wurde (oder
 /// beiseitegelegt, HUM-283).
 ///
-/// - Ein flacher Schlüssel aus einer Ebene über der, die `llm.active` setzt
-///   (Umgebung, Kommandozeile), bleibt stehen. Kommen Endpunkt und Verweis
-///   danach nicht mehr aus einem Eintrag, fällt der Verweis weg: Der
-///   hinterlegte Schlüssel geht dann nirgendwohin (`CONFIG_021`, Warnung).
-///   Ohne Einträge gilt dasselbe für die flachen Schlüssel untereinander.
+/// - Ein flacher Schlüssel aus einer Ebene über der des Wählers (Umgebung,
+///   Kommandozeile) bleibt stehen. Kommen Endpunkt und Verweis danach nicht
+///   mehr aus einem Eintrag, fällt der Verweis weg: Der hinterlegte Schlüssel
+///   geht dann nirgendwohin (`CONFIG_021`, Warnung). Ohne Einträge gilt
+///   dasselbe für die flachen Schlüssel untereinander.
+/// - Nennt [`SERVER`] keinen Eintrag, fallen Endpunkt, Modelle und Verweis
+///   ganz weg (`CONFIG_021`, Warnung), und die Wahl steht mit
+///   `known = false` da: Der Start einer Sitzung lehnt dann ab, statt still
+///   `llm.active` zu nehmen.
 /// - Gibt es Einträge, aber keinen aktiven (`llm.active` fehlt oder nennt
 ///   keinen), oder nennt `llm.active` einen Eintrag ohne Einträge, fallen
 ///   Endpunkt, Modelle und Verweis ganz weg (`CONFIG_021`, Warnung).
 /// - Tragen zwei Einträge denselben Verweis, wirkt er bei keinem
 ///   (`CONFIG_021`, Warnung): Sonst ginge ein Schlüssel an zwei Herkünfte.
 /// - Jeder Endpunkt wird voll geprüft (Text nach HUM-283, Adresse, Schema
-///   `http` oder `https`, Host). Beim aktiven Eintrag gilt ein abgelehnter
+///   `http` oder `https`, Host). Beim gewählten Eintrag gilt ein abgelehnter
 ///   als nicht gesetzt, bei einem anderen ist er eine Warnung, und der
 ///   Eintrag lässt sich erst nach der Korrektur aktivieren.
 ///
@@ -550,7 +710,7 @@ pub(crate) fn project(
     flat: &mut BTreeMap<String, TomlValue>,
     origins: &mut BTreeMap<String, Origin>,
     layer_of: &dyn Fn(&str) -> Option<usize>,
-) -> Result<Vec<Diagnostic>, Diagnostic> {
+) -> Result<Projection, Diagnostic> {
     let mut diagnostics = Vec::new();
     let servers = flat
         .get(SERVERS)
@@ -563,6 +723,15 @@ pub(crate) fn project(
         .get(ACTIVE)
         .and_then(TomlValue::as_str)
         .map(ToOwned::to_owned);
+    // Die Wahl eines Projekts, eines Profils oder eines Laufs geht der
+    // Vorgabe des Nutzers vor (HUM-400).
+    let chosen = chosen_server(flat, origins);
+
+    if let Some((name, source)) = &chosen
+        && let Some(done) = project_unentered(flat, origins, layer_of, &servers, name, source)
+    {
+        return Ok(done);
+    }
 
     if servers.is_empty() {
         if let Some(name) = active {
@@ -574,51 +743,193 @@ pub(crate) fn project(
         } else {
             withhold_split_key(flat, origins, layer_of, &mut diagnostics, None);
         }
-        return Ok(diagnostics);
+        return Ok(Projection {
+            diagnostics,
+            choice: None,
+        });
     }
 
     for (name, entry) in &servers {
         check_entry_shape(name, entry, &servers_origin)?;
     }
 
+    let (selected, selector, source) = match chosen {
+        Some((name, source)) => (Some(name), SERVER, source),
+        None => (active, ACTIVE, ServerSource::Default),
+    };
+
     let shared = shared_references(&servers);
     diagnostics.extend(entry_findings(
         &servers,
         &shared,
-        active.as_deref(),
+        selected.as_deref(),
         &servers_origin,
     ));
 
-    let Some(active) = active else {
+    let Some(selected) = selected else {
         diagnostics.push(no_active(&format!(
             "{SERVERS} (from {servers_origin}) has entries, and {ACTIVE} names none of them"
         )));
         clear_view(flat, origins);
-        return Ok(diagnostics);
+        return Ok(Projection {
+            diagnostics,
+            choice: None,
+        });
     };
-    let Some(entry) = servers.get(&active).and_then(TomlValue::as_table) else {
+    let Some(entry) = servers.get(&selected).and_then(TomlValue::as_table) else {
+        // Der Wähler, der den Namen trägt, nicht immer `llm.active`.
+        let selector_origin = origins.get(selector).cloned().unwrap_or(Origin::Default);
         diagnostics.push(no_active(&format!(
-            "{ACTIVE} (from {active_origin}) names the server {active}, and {SERVERS} has no such \
-             entry (servers: {})",
+            "{selector} (from {selector_origin}) names the server {selected}, and {SERVERS} has \
+             no such entry (servers: {})",
             servers.keys().cloned().collect::<Vec<_>>().join(", ")
         )));
         clear_view(flat, origins);
-        return Ok(diagnostics);
+        return Ok(Projection {
+            diagnostics,
+            choice: None,
+        });
     };
 
+    copy_entry(
+        flat,
+        origins,
+        layer_of,
+        &Selected {
+            name: &selected,
+            selector,
+            entry,
+            shared: shared.contains(&selected),
+            origin: &servers_origin,
+        },
+        &mut diagnostics,
+    );
+    withhold_split_key(
+        flat,
+        origins,
+        layer_of,
+        &mut diagnostics,
+        Some((&selected, selector)),
+    );
+    // Setzt eine höhere Ebene den Endpunkt selbst, gilt kein gespeicherter
+    // Server, und keiner wird als gewählt angezeigt.
+    let choice = endpoint_from_entry(layer_of, selector).then(|| ServerChoice {
+        name: selected.clone(),
+        source,
+        known: true,
+        saved: servers.keys().cloned().collect(),
+    });
+    Ok(Projection {
+        diagnostics,
+        choice,
+    })
+}
+
+/// Der Name, den `llm.server` nennt, und woher er kommt; `None` ohne ihn.
+fn chosen_server(
+    flat: &BTreeMap<String, TomlValue>,
+    origins: &BTreeMap<String, Origin>,
+) -> Option<(String, ServerSource)> {
+    let name = flat.get(SERVER).and_then(TomlValue::as_str)?;
+    let source = ServerSource::of(origins.get(SERVER).unwrap_or(&Origin::Default));
+    Some((name.to_owned(), source))
+}
+
+/// Ein gewählter Name, unter dem kein Eintrag steht, als fertiges Ergebnis
+/// des Projizierens (HUM-400); `None`, wenn es den Eintrag gibt.
+///
+/// Zwei Fälle: Eine Datei mit flachen Werten und ohne Einträge zeigt ihren
+/// Server als `default` (HUM-289), und ihn zu nennen, wählt genau diese
+/// Werte. Jeder andere Name ohne Eintrag lässt nichts gelten und steht mit
+/// `known = false` da; beim Laden ist das eine Warnung, damit `GetConfig`,
+/// Doctor und der Daemon selbst weiterlaufen, und der Start einer Sitzung
+/// macht daraus die Ablehnung ([`ServerChoice::refusal`]).
+fn project_unentered(
+    flat: &mut BTreeMap<String, TomlValue>,
+    origins: &mut BTreeMap<String, Origin>,
+    layer_of: &dyn Fn(&str) -> Option<usize>,
+    servers: &toml::Table,
+    name: &str,
+    source: &ServerSource,
+) -> Option<Projection> {
+    let mut diagnostics = Vec::new();
+    let implicit_default = servers.is_empty()
+        && name == MIGRATED_NAME
+        && FIELDS
+            .iter()
+            .any(|field| flat.contains_key(&format!("llm.{field}")));
+    if implicit_default {
+        withhold_split_key(flat, origins, layer_of, &mut diagnostics, None);
+        let choice = endpoint_from_entry(layer_of, SERVER).then(|| ServerChoice {
+            name: name.to_owned(),
+            source: source.clone(),
+            known: true,
+            saved: vec![MIGRATED_NAME.to_owned()],
+        });
+        return Some(Projection {
+            diagnostics,
+            choice,
+        });
+    }
+    if servers.contains_key(name) && check_name(name).is_ok() {
+        return None;
+    }
+    let choice = ServerChoice {
+        name: name.to_owned(),
+        source: source.clone(),
+        known: false,
+        saved: servers.keys().cloned().collect(),
+    };
+    if let Some(mut refused) = choice.refusal() {
+        refused.severity = Severity::Warning;
+        diagnostics.push(refused);
+    }
+    clear_view(flat, origins);
+    Some(Projection {
+        diagnostics,
+        choice: Some(choice),
+    })
+}
+
+/// Der gewählte Eintrag, wie [`copy_entry`] ihn braucht.
+struct Selected<'a> {
+    /// Sein Name.
+    name: &'a str,
+    /// Der Pfad, der ihn gewählt hat: [`SERVER`] oder [`ACTIVE`].
+    selector: &'static str,
+    /// Seine Felder.
+    entry: &'a toml::Table,
+    /// Ob ein anderer Eintrag denselben Verweis trägt.
+    shared: bool,
+    /// Die Ebene, aus der `llm.servers` kommt.
+    origin: &'a Origin,
+}
+
+/// Setzt die Felder des gewählten Eintrags an die Stelle der flachen
+/// Schlüssel, soweit keine höhere Ebene als die des Wählers sie selbst
+/// gesetzt hat.
+fn copy_entry(
+    flat: &mut BTreeMap<String, TomlValue>,
+    origins: &mut BTreeMap<String, Origin>,
+    layer_of: &dyn Fn(&str) -> Option<usize>,
+    selected: &Selected<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let name = selected.name;
+    let servers_origin = selected.origin;
     let mut endpoint_refused = false;
     for field in FIELDS {
         let path = format!("llm.{field}");
         // Eine höhere Ebene hat den flachen Schlüssel selbst gesetzt (oder
         // beiseitegelegt): Sie gewinnt, wie sie es ohne Einträge täte; ob der
         // Schlüssel dann noch mitgeht, entscheidet `withhold_split_key`.
-        if layer_of(&path) > layer_of(ACTIVE) {
+        if layer_of(&path) > layer_of(selected.selector) {
             continue;
         }
-        let mut value = entry.get(field).cloned();
+        let mut value = selected.entry.get(field).cloned();
         if field == "endpoint"
             && let Some(text) = value.as_ref().and_then(TomlValue::as_str)
-            && let Err(mut refused) = check_endpoint(&active, text)
+            && let Err(mut refused) = check_endpoint(name, text)
         {
             // Wie ein beiseitegelegter `llm.endpoint` (HUM-283): Der Satz
             // trägt dessen Marke, damit Doctor und Setup ihn an der Zeile
@@ -626,7 +937,7 @@ pub(crate) fn project(
             // Schlüssel in den aktiven Eintrag.
             refused.severity = Severity::Warning;
             refused.why = format!(
-                "{SERVERS}.{active}.endpoint (from {servers_origin}): {}; the endpoint is \
+                "{SERVERS}.{name}.endpoint (from {servers_origin}): {}; the endpoint is \
                  ignored until it is corrected",
                 refused.why
             );
@@ -636,7 +947,7 @@ pub(crate) fn project(
         }
         // Ohne brauchbaren Endpunkt hat der Schlüssel kein Ziel, und ein
         // geteilter Verweis gälte für zwei: In beiden Fällen keiner.
-        if field == "api_key_ref" && (shared.contains(&active) || endpoint_refused) {
+        if field == "api_key_ref" && (selected.shared || endpoint_refused) {
             value = None;
         }
         if let Some(value) = value {
@@ -647,8 +958,12 @@ pub(crate) fn project(
             origins.insert(path, Origin::Default);
         }
     }
-    withhold_split_key(flat, origins, layer_of, &mut diagnostics, Some(&active));
-    Ok(diagnostics)
+}
+
+/// Ob `llm.endpoint` aus dem Eintrag kommt, den `selector` wählt, und nicht
+/// aus einer höheren Ebene.
+fn endpoint_from_entry(layer_of: &dyn Fn(&str) -> Option<usize>, selector: &str) -> bool {
+    layer_of("llm.endpoint") <= layer_of(selector)
 }
 
 /// Die Befunde über die Einträge selbst: geteilte Verweise und Endpunkte
@@ -706,9 +1021,10 @@ fn entry_findings(
 /// Nimmt den Verweis heraus, wenn Endpunkt und Verweis nicht aus einem
 /// Eintrag kommen.
 ///
-/// Mit aktivem Eintrag ([`project`] hat beide schon aus ihm gesetzt) heißt
-/// das: Eine höhere Ebene hat `llm.endpoint` oder `llm.api_key_ref` selbst
-/// gesetzt. Ohne Einträge: Die beiden flachen Schlüssel stammen aus
+/// Mit gewähltem Eintrag ([`project`] hat beide schon aus ihm gesetzt) heißt
+/// das: Eine höhere Ebene als die des Wählers (`selected`: Name und Pfad,
+/// [`SERVER`] oder [`ACTIVE`]) hat `llm.endpoint` oder `llm.api_key_ref`
+/// selbst gesetzt. Ohne Einträge: Die beiden flachen Schlüssel stammen aus
 /// verschiedenen Ebenen, etwa der Endpunkt aus der Umgebung und der Verweis
 /// aus `config.toml`.
 fn withhold_split_key(
@@ -716,7 +1032,7 @@ fn withhold_split_key(
     origins: &mut BTreeMap<String, Origin>,
     layer_of: &dyn Fn(&str) -> Option<usize>,
     diagnostics: &mut Vec<Diagnostic>,
-    active: Option<&str>,
+    selected: Option<(&str, &str)>,
 ) {
     const ENDPOINT: &str = "llm.endpoint";
     const KEY: &str = "llm.api_key_ref";
@@ -724,14 +1040,23 @@ fn withhold_split_key(
         return;
     }
     let shown = |path: &str| origins.get(path).cloned().unwrap_or(Origin::Default);
-    let why = match active {
-        Some(name) if layer_of(ENDPOINT) > layer_of(ACTIVE) => Some(format!(
-            "{ENDPOINT} from {} overrides the active server {name}; its key is not sent",
-            shown(ENDPOINT)
+    let label = |selector: &str| {
+        if selector == ACTIVE {
+            "the active server"
+        } else {
+            "the chosen server"
+        }
+    };
+    let why = match selected {
+        Some((name, selector)) if layer_of(ENDPOINT) > layer_of(selector) => Some(format!(
+            "{ENDPOINT} from {} overrides {} {name}; its key is not sent",
+            shown(ENDPOINT),
+            label(selector)
         )),
-        Some(name) if layer_of(KEY) > layer_of(ACTIVE) => Some(format!(
-            "{KEY} from {} is not the key of the active server {name}; it is not sent",
-            shown(KEY)
+        Some((name, selector)) if layer_of(KEY) > layer_of(selector) => Some(format!(
+            "{KEY} from {} is not the key of {} {name}; it is not sent",
+            shown(KEY),
+            label(selector)
         )),
         None if flat.contains_key(ENDPOINT) && layer_of(ENDPOINT) != layer_of(KEY) => {
             Some(format!(

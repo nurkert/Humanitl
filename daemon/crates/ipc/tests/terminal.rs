@@ -174,6 +174,7 @@ impl Fixture {
                 // Direkt, unabhängig davon, ob dieser Rechner ein Overlay kann:
                 // Der Test gilt dem Terminal, nicht der Vorgabe `auto` (HUM-357).
                 sandbox_mode: "direct".to_owned(),
+                llm_server: String::new(),
             })),
         }
     }
