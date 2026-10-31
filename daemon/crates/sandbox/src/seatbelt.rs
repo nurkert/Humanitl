@@ -230,6 +230,9 @@ impl SessionLayout {
                 crate::agent::AGENT_CONFIG_DIR.to_owned(),
                 self.etc().join("humanitl"),
             ),
+            // Unbenutzt: `OpenCode` sucht sie hier nie (HUM-371), der Adapter
+            // setzt dafür `ENV_NO_PROJECT_CONFIG`.
+            ("/etc/opencode".to_owned(), self.etc().join("opencode")),
             (
                 CA_BUNDLE_DST.to_owned(),
                 self.etc().join("ssl/certs/ca-certificates.crt"),
@@ -1232,7 +1235,12 @@ mod tests {
                 .unwrap(),
             layout().root.join("etc/humanitl/pi/llm-api-key")
         );
-        assert_eq!(map.map_path(Path::new("/etc/opencode/opencode.json")), None);
+        assert_eq!(
+            map.map_path(Path::new("/etc/opencode/opencode.json"))
+                .unwrap(),
+            layout().root.join("etc/opencode/opencode.json")
+        );
+        assert_eq!(map.map_path(Path::new("/etc/passwd")), None);
         assert_eq!(map.map_path(Path::new("/workspace")), None);
         assert_eq!(map.map_path(Path::new("/tmp//etc")), None);
         assert_eq!(map.map_path(Path::new("/tmp/../etc")), None);

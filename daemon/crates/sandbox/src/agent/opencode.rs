@@ -41,6 +41,10 @@
 //! legt seine Konfiguration deshalb an drei Orte und setzt zusätzlich
 //! [`ENV_PERMISSION`].
 //!
+//! Unter macOS liegt das verwaltete Verzeichnis außerhalb jeder Sitzung; dort
+//! setzt der Adapter statt dessen [`ENV_NO_PROJECT_CONFIG`] (HUM-371), und die
+//! Datei des Projekts gilt gar nicht.
+//!
 //! Für `provider` gilt das **nicht**: der Merge ist additiv. Ein Projekt kann
 //! einen eigenen Provider mit eigener `baseURL` hinzufügen, und `opencode
 //! models` listet ihn dann; ebenso einen weiteren Modelleintrag unter
@@ -80,7 +84,9 @@
 //! `OPENCODE_DISABLE_PROJECT_CONFIG` wäre der vierte Weg, schaltet aber
 //! dieselbe Variable auch die `AGENTS.md` des Projekts ab, also die Datei, aus
 //! der der Agent seine Arbeitsregeln liest. Der Adapter setzt sie deshalb
-//! nicht. Was ein Projekt darüber hinaus darf, entscheidet HUM-043
+//! unter Linux nicht; unter macOS gibt es keinen anderen Weg (HUM-371), und
+//! dort gelten weder Provider, `tui.json` noch `AGENTS.md` des Projekts. Was
+//! ein Projekt darüber hinaus darf, entscheidet HUM-043
 //! („`/work`-Härtung"). Neue Ziele, die eine Projekt-Konfiguration hinzufügt,
 //! gehen ohnehin durch den Proxy und werden gehalten.
 
@@ -274,6 +280,15 @@ pub const ENV_MODELS_PATH: &str = "OPENCODE_MODELS_PATH";
 pub const ENV_DISABLE_MODELS_FETCH: &str = "OPENCODE_DISABLE_MODELS_FETCH";
 /// Die Konfiguration liegt außerhalb von `/work`.
 pub const ENV_CONFIG: &str = "OPENCODE_CONFIG";
+
+/// Lässt `OpenCode` die Konfiguration des Projekts ignorieren (HUM-371), unter
+/// macOS an Stelle von [`MANAGED_CONFIG_DST`]: Dessen verwaltetes Verzeichnis
+/// liegt dort unter `/Library/Application Support/opencode`, einem Ort, den
+/// keine Sitzung beschreiben kann. Gemessen an 2.2.3 am Server, beide Namen.
+pub const ENV_NO_PROJECT_CONFIG: [&str; 2] = [
+    "OPENCODE_DISABLE_PROJECT_CONFIG",
+    "OPENCODE_CONFIG_PROJECT_DISABLE",
+];
 /// Kein Teilen der Sitzung von allein.
 pub const ENV_AUTO_SHARE: &str = "OPENCODE_AUTO_SHARE";
 /// Kein Teilen der Sitzung überhaupt.
@@ -1056,6 +1071,12 @@ impl AgentAdapter for OpenCodeAdapter {
         ]
         .into_iter()
         .map(|(key, value)| (key.to_owned(), value))
+        .chain(
+            ENV_NO_PROJECT_CONFIG
+                .iter()
+                .filter(|_| cfg!(target_os = "macos"))
+                .map(|key| ((*key).to_owned(), "1".to_owned())),
+        )
         // Scheitert die Vorlage, bleibt die Variable weg statt leer zu stehen:
         // `OPENCODE_PERMISSION=""` wäre ungültiges JSON, und `OpenCode` würde
         // es mit einer Warnung verwerfen. Denselben Fehler meldet `files()`

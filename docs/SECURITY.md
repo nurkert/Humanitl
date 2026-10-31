@@ -1426,6 +1426,11 @@ These are the points where macOS gives less than Linux. Each is a channel in
    the model's access key included, and the directory is removed when the sandbox ends. After a crash
    of the daemon it stays until a later plan clears it, at most seven days, and a backup taken during a
    session can contain it.
+0. **A project cannot configure OpenCode** (HUM-371). The managed configuration directory of
+   OpenCode lies outside any session on macOS, so the adapter turns the project's own OpenCode
+   configuration off with `OPENCODE_DISABLE_PROJECT_CONFIG`. An `opencode.json` in the project has
+   no effect in the sandbox there, and neither has its `.opencode` directory or `AGENTS.md`; on
+   Linux they count, below the managed file.
 1. **Loopback is shared with the host** (K-19). The door listens on a loopback port that every
    local process of every account can reach. Such a process reaches only the proxy, but with the
    session's rules: what an `allow` rule or the LLM passthrough lets through goes out without a
