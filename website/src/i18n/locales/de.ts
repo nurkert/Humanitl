@@ -1,9 +1,9 @@
 // Deutsche Texte, die Quelle der Form: en.ts ist gegen diesen Typ geprüft.
 const de = {
   meta: {
-    title: 'Humanitl · Du entscheidest, was rausgeht',
+    title: 'Humanitl · Sandbox ohne Netz für KI-Agenten',
     description:
-      'Humanitl sperrt deinen KI-Coding-Agenten in eine Sandbox ohne Netz. Was keine deiner Regeln erlaubt, hält es an, bis du entscheidest. Lokal, quelloffen, für Linux und macOS.',
+      'Humanitl sperrt deinen KI-Coding-Agenten in eine Sandbox ohne Netz. Anfragen an dein Sprachmodell gehen durch. Über jede andere Anfrage entscheidet eine Regel, oder sie wartet auf dich. Lokal, quelloffen, für Linux und macOS.',
   },
   nav: {
     how: 'So funktioniert es',
@@ -16,7 +16,7 @@ const de = {
   },
   hero: {
     title: ['Du entscheidest,', 'was rausgeht.'],
-    lede: 'Dein KI-Agent arbeitet in einer Sandbox ohne Netz. Was keine deiner Regeln erlaubt, hält Humanitl an, bis du entscheidest.',
+    lede: 'Dein KI-Agent arbeitet in einer Sandbox ohne Netz. Anfragen ans Sprachmodell gehen durch, über alle anderen entscheidet eine Regel oder du.',
     cta: 'Download',
     ctaFor: 'für macOS und Linux',
     ctaForMac: 'für macOS',
@@ -33,7 +33,7 @@ const de = {
       {
         id: 'intercept',
         name: 'Intercept',
-        title: 'Was keine Regel erlaubt, hält an.',
+        title: 'Was keine Regel entscheidet, hält an.',
         text: 'Kopfzeilen, Parameter, Body: Du siehst, was dein Agent senden will, und gibst es frei, änderst es oder blockierst es.',
         alt: 'Humanitl, Bereich Intercept: 15 angehaltene Anfragen an registry.npmjs.org, die erste mit allen Kopfzeilen, darunter Allow, Edit + Allow und Block.',
       },
@@ -47,8 +47,8 @@ const de = {
       {
         id: 'history',
         name: 'Verlauf',
-        title: 'Nachlesen, was rausging.',
-        text: 'Die Anfragen landen im Verlauf, filterbar nach Host, Entscheidung und Funden. Fällt die Aufzeichnung aus, läuft der Verkehr weiter, und die App sagt es an jeder Karte.',
+        title: 'Ein Verlauf zum Nachlesen.',
+        text: 'Die Anfragen landen im Verlauf, filterbar nach Host, Entscheidung und Funden. Fällt die Aufzeichnung aus, bleibt dort eine Lücke, und die App sagt es. Verkehr zum Sprachmodell ist standardmäßig ausgeblendet.',
         alt: 'Humanitl, Bereich History: eine Tabelle der Anfragen mit Zeit, Methode, Host, Pfad und Entscheidung.',
       },
       {
@@ -62,8 +62,8 @@ const de = {
         id: 'sandbox',
         name: 'Sandbox',
         title: 'Eine Sandbox ohne Netz.',
-        text: 'Der Agent sieht sein Projekt und sonst nichts von deinem Rechner. Sein einziger Weg nach draußen führt durch Humanitl.',
-        alt: 'Humanitl, Bereich Sandbox: das Terminal des Agenten und die Tabelle der Pfade, die er sieht.',
+        text: 'Dein Home-Verzeichnis bleibt zu, außer dem Projektordner und Ordnern, die du im Profil freigibst. Hinaus führen nur der Weg durch Humanitl, der Projektordner und Ordner, die das Profil beschreibbar macht.',
+        alt: 'Humanitl, Bereich Sandbox: das Terminal des Agenten und die Tabelle der Pfade.',
       },
       {
         id: 'palette',
@@ -76,14 +76,14 @@ const de = {
         id: 'settings',
         name: 'Modell',
         title: 'Dein Modell, dein Schlüssel.',
-        text: 'Endpunkt und Modell trägst du selbst ein. Der Zugangsschlüssel liegt unter Linux im Schlüsselbund des Systems, unter macOS im Anmelde-Schlüsselbund, sonst in einer Datei, die nur dein Konto lesen kann. In der Konfiguration steht er nie.',
+        text: 'Endpunkt und Modell trägst du selbst ein. Der Agent braucht den Zugangsschlüssel und kann ihn lesen, nimm also einen mit wenig Rechten. Er liegt im Schlüsselbund des Systems, sonst in einer Datei nur für dein Konto, nie in der Konfiguration.',
         alt: 'Humanitl, Einstellungen: Endpunkt, Modell und Zugangsschlüssel des Sprachmodells.',
       },
     ],
   },
   guarantees: {
     title: 'Physik statt Vertrauen.',
-    lede: 'Drei Garantien, jede mit einem Befehl prüfbar. Unter Linux mit bubblewrap und seccomp, unter macOS mit Seatbelt. Offen und sichtbar bleiben zwei Kanäle: der Projektordner und die erklärte Verbindung zum Sprachmodell.',
+    lede: 'Drei Garantien, alle mit einem Befehl prüfbar, der eine eigene kurzlebige Sandbox startet. Jede Sitzung misst sie, nachdem der Agent gestartet ist, und ein rotes Ergebnis stoppt die Sitzung. Unter Linux mit bubblewrap und seccomp, unter macOS mit Seatbelt. Offen und sichtbar bleiben zwei Kanäle: der Projektordner und die erklärte Verbindung zum Sprachmodell.',
     items: [
       {
         title: 'Kein Weg nach draußen.',
@@ -91,7 +91,7 @@ const de = {
       },
       {
         title: 'Genau eine Tür.',
-        text: 'Ein einziger Socket führt aus der Sandbox, und er führt zu Humanitl. Dort entscheidest du.',
+        text: 'Unter Linux führt ein einziger Socket aus der Sandbox, unter macOS der Proxy-Socket und der Loopback-Port der Sitzung. Alles endet bei Humanitl, dort entscheiden Regeln oder du.',
       },
       {
         title: 'Der Kernel hält dicht.',
@@ -136,7 +136,7 @@ const de = {
     platforms: {
       macos: {
         name: 'macOS',
-        req: 'Apple Silicon und Intel. Getestet mit macOS 15 und 27.',
+        req: 'Apple Silicon und Intel, macOS 12 oder neuer. Die Ausbruchstests für macOS laufen auf den macOS-15-Runnern von GitHub und liefen während der Entwicklung auf macOS 27; andere Versionen sind nicht getestet.',
         steps: [
           'Humanitl.app in den Ordner Programme ziehen.',
           'Die App ist nur ad hoc signiert, macOS verweigert deshalb den ersten Start. Einmal erlauben unter Systemeinstellungen › Datenschutz & Sicherheit › „Trotzdem öffnen“.',
@@ -172,7 +172,7 @@ const de = {
       'Diese Seite wurde aus einer Kopie (Fork) des Humanitl-Projekts gebaut. Wer sie öffentlich betreibt, braucht in der Regel ein eigenes Impressum und hinterlegt dafür in seinem Repository die Variable IMPRINT_URL.',
   },
   privacy: {
-    updated: 'Stand: 30. Oktober 2026',
+    updated: 'Stand: 31. Oktober 2026',
     sections: [
       {
         title: 'Kurz gesagt',
@@ -192,7 +192,7 @@ const de = {
       },
       {
         title: 'Die App',
-        html: 'Humanitl läuft lokal auf deinem Rechner und sendet <strong>keine Daten an uns</strong>: kein Konto, keine Telemetrie, keine Absturzberichte. Was die App ins Netz lässt, entscheidest du Anfrage für Anfrage.',
+        html: 'Humanitl läuft lokal auf deinem Rechner und sendet <strong>keine Daten an uns</strong>: kein Konto, keine Telemetrie, keine Absturzberichte. Anfragen des Agenten gehen nur hinaus, wenn du sie freigibst oder eine eingeschaltete Regel sie erlaubt. Eine Ausnahme: Aufrufe an das Sprachmodell, das du eingetragen hast, gehen ohne Rückfrage hinaus, und wer es betreibt, sieht sie.',
       },
       {
         title: 'Deine Rechte',
@@ -389,7 +389,7 @@ const de = {
     proofs: {
       eyebrow: 'Kapitel 3',
       title: 'Drei Sätze. Drei Beweise.',
-      lede: 'Jeder Satz lässt sich aus der laufenden Sandbox prüfen. Nichts davon muss man glauben.',
+      lede: 'Jeder Satz lässt sich aus der laufenden Sandbox prüfen. Die Befehle stehen dabei.',
       checkLabel: 'Prüfung',
       termCaption: 'macOS, CI des Projekts, gekürzt',
       manualTitle: 'Von Hand unter Linux, in der Sandbox',
@@ -714,7 +714,7 @@ const de = {
     },
     closing: {
       title: 'Lies es nach',
-      text: 'Jede Aussage auf dieser Seite steht in den Dokumenten und in den Tests. Und auf deinem Rechner:',
+      text: 'Jede Aussage auf dieser Seite steht in den Dokumenten, die Garantien auch in den Tests. Und auf deinem Rechner:',
       download: 'Humanitl herunterladen',
       tests: 'tests/escape auf GitHub',
       home: 'Zur Startseite',

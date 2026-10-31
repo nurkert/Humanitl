@@ -2,9 +2,9 @@ import type { Copy } from './de';
 
 const en: Copy = {
   meta: {
-    title: 'Humanitl · You decide what goes out',
+    title: 'Humanitl · A sandbox without a network for AI agents',
     description:
-      'Humanitl puts your AI coding agent in a sandbox without a network. Whatever none of your rules allows, it holds until you decide. Local, open source, for Linux and macOS.',
+      'Humanitl puts your AI coding agent in a sandbox without a network. Requests to your language model pass. Any other request is decided by a rule, or it waits for you. Local, open source, for Linux and macOS.',
   },
   nav: {
     how: 'How it works',
@@ -17,7 +17,7 @@ const en: Copy = {
   },
   hero: {
     title: ['You decide', 'what goes out.'],
-    lede: 'Your AI agent works in a sandbox without a network. Whatever none of your rules allows, Humanitl holds until you decide.',
+    lede: 'Your AI agent works in a sandbox without a network. Requests to the language model pass; a rule or you decide on all others.',
     cta: 'Download',
     ctaFor: 'for macOS and Linux',
     ctaForMac: 'for macOS',
@@ -34,7 +34,7 @@ const en: Copy = {
       {
         id: 'intercept',
         name: 'Intercept',
-        title: 'What no rule allows, stops.',
+        title: 'What no rule decides, stops.',
         text: 'Headers, parameters, body: you see what your agent wants to send, and you allow it, edit it or block it.',
         alt: 'Humanitl, Intercept: 15 held requests to registry.npmjs.org, the first with all its headers, below it Allow, Edit + Allow and Block.',
       },
@@ -48,8 +48,8 @@ const en: Copy = {
       {
         id: 'history',
         name: 'History',
-        title: 'Read back what went out.',
-        text: 'Requests land in the history, filterable by host, decision and findings. If recording fails, traffic goes on, and the app says so on every card.',
+        title: 'A history you can read back.',
+        text: 'Requests land in the history, filterable by host, decision and findings. If recording fails, a gap stays there and the app says so. Traffic to the language model is hidden by default.',
         alt: 'Humanitl, History: a table of requests with time, method, host, path and decision.',
       },
       {
@@ -63,8 +63,8 @@ const en: Copy = {
         id: 'sandbox',
         name: 'Sandbox',
         title: 'A sandbox without a network.',
-        text: 'The agent sees its project and nothing else of your machine. Its only way out goes through Humanitl.',
-        alt: 'Humanitl, Sandbox: the agent’s terminal and the table of paths it sees.',
+        text: 'Your home directory stays closed, except the project folder and folders you share in the profile. The only ways out are through Humanitl, the project folder and folders the profile makes writable.',
+        alt: 'Humanitl, Sandbox: the agent’s terminal and the table of paths.',
       },
       {
         id: 'palette',
@@ -77,14 +77,14 @@ const en: Copy = {
         id: 'settings',
         name: 'Model',
         title: 'Your model, your key.',
-        text: 'You enter the endpoint and the model yourself. On Linux the access key lives in the system keyring, on macOS in the login Keychain, otherwise in a file only your account can read. It never stands in the configuration.',
+        text: 'You enter the endpoint and the model yourself. The agent needs the access key and can read it, so use one with few rights. It lives in the system keyring, otherwise in a file only for your account, never in the configuration.',
         alt: 'Humanitl, Settings: endpoint, model and access key of the language model.',
       },
     ],
   },
   guarantees: {
     title: 'Physics, not trust.',
-    lede: 'Three guarantees, each checkable with one command. On Linux with bubblewrap and seccomp, on macOS with Seatbelt. Two channels stay open and visible: the project folder and the declared connection to the language model.',
+    lede: 'Three guarantees, all checkable with one command that starts its own short-lived sandbox. Each session measures them after the agent has started, and a red result stops the session. On Linux with bubblewrap and seccomp, on macOS with Seatbelt. Two channels stay open and visible: the project folder and the declared connection to the language model.',
     items: [
       {
         title: 'No way out.',
@@ -92,7 +92,7 @@ const en: Copy = {
       },
       {
         title: 'Exactly one door.',
-        text: 'A single socket leads out of the sandbox, and it leads to Humanitl. That is where you decide.',
+        text: 'On Linux a single socket leads out of the sandbox, on macOS the proxy socket and the session’s loopback port. All of it ends at Humanitl, where rules or you decide.',
       },
       {
         title: 'The kernel holds.',
@@ -137,7 +137,7 @@ const en: Copy = {
     platforms: {
       macos: {
         name: 'macOS',
-        req: 'Apple Silicon and Intel. Tested on macOS 15 and 27.',
+        req: 'Apple Silicon and Intel, macOS 12 or newer. The macOS escape tests run on GitHub’s macOS 15 runners and were run on macOS 27 during development; other versions are not tested.',
         steps: [
           'Drag Humanitl.app into Applications.',
           'The app is signed ad hoc only, so macOS refuses the first start. Allow it once in System Settings › Privacy & Security › “Open Anyway”.',
@@ -173,7 +173,7 @@ const en: Copy = {
       'This page was built from a copy (fork) of the Humanitl project. Whoever runs it publicly usually needs an imprint of their own and sets the repository variable IMPRINT_URL for it.',
   },
   privacy: {
-    updated: 'As of 30 October 2026',
+    updated: 'As of 31 October 2026',
     sections: [
       {
         title: 'In short',
@@ -193,7 +193,7 @@ const en: Copy = {
       },
       {
         title: 'The app',
-        html: 'Humanitl runs locally on your machine and sends <strong>no data to us</strong>: no account, no telemetry, no crash reports. What the app lets onto the network, you decide request by request.',
+        html: 'Humanitl runs locally on your machine and sends <strong>no data to us</strong>: no account, no telemetry, no crash reports. The agent’s requests go out only when you approve them or a rule that is switched on allows them. One exception: calls to the language model you entered go out without asking, and whoever runs it sees them.',
       },
       {
         title: 'Your rights',
@@ -266,13 +266,13 @@ const en: Copy = {
       eyebrow: 'Security · Humanitl',
       title: 'Proof, not promise',
       lede: 'The agent reaches the network only through one door, and it leads to Humanitl. That is not because it honours a proxy variable: tools that ignore the proxy fail. The argument fits in three sentences, and you can check each one from inside the running sandbox.',
-      src: { label: 'README.md · The three guarantees', href: '/docs/security/#1-the-claim' },
+      src: { label: 'README.md · The three guarantees', href: '/en/docs/security/#1-the-claim' },
       chipsLabel: 'The three guarantees',
       chips: ['No network interface', 'Exactly one door', 'The kernel opens no new door'],
       claimLabel: 'The precise claim',
       claim:
         'The sandbox has no network interface, there is no way out, and the kernel refuses every socket family except loopback TCP. Its only ways in and out are the project directory `/work` and exactly one Unix socket to the proxy. Every byte on that socket is either an HTTP request you approved or a call to the declared LLM host, and both are recorded.',
-      claimSrc: { label: 'SECURITY.md §1', href: '/docs/security/#1-the-claim' },
+      claimSrc: { label: 'SECURITY.md §1', href: '/en/docs/security/#1-the-claim' },
       notLabel: 'What it does not say',
       not: 'It does not say the agent cannot get data out. It says: not over the network, except through requests a human or a rule approved, and through the declared LLM host. Recording holds while the recorder works; if it fails, traffic visibly continues unrecorded. The three guarantees hold together; none of them holds alone.',
       limitsLink: 'What stays open',
@@ -290,22 +290,22 @@ const en: Copy = {
         {
           title: 'Physics, not trust',
           text: 'Fail-closed: whatever ignores the proxy finds no other way.',
-          src: { label: 'ADR-0019', href: '/docs/adr/0019-seatbelt-on-macos/' },
+          src: { label: 'ADR-0019', href: '/en/docs/adr/0019-seatbelt-on-macos/' },
         },
         {
           title: 'Established building blocks',
           text: 'Kernel namespaces, seccomp, Seatbelt. The argument fits in three sentences and one command checks it.',
-          src: { label: 'README.md', href: '/docs/security/#1-the-claim' },
+          src: { label: 'README.md', href: '/en/docs/security/#1-the-claim' },
         },
         {
           title: 'Honest about limits',
           text: '“A security promise that hides its exceptions is none.” The project folder and the LLM connection are declared and visible in the app.',
-          src: { label: 'SECURITY.md §5', href: '/docs/security/#5-declared-side-channels' },
+          src: { label: 'SECURITY.md §5', href: '/en/docs/security/#5-declared-side-channels' },
         },
         {
           title: 'The human decides',
           text: 'A request no rule decides is held and shown with headers, parameters and body. With no answer after 300 s it is blocked, never allowed.',
-          src: { label: 'SECURITY.md §6', href: '/docs/security/#6-the-proxy' },
+          src: { label: 'SECURITY.md §6', href: '/en/docs/security/#6-the-proxy' },
         },
       ],
     },
@@ -320,33 +320,33 @@ const en: Copy = {
           title: 'Inside the box',
           text: 'The agent sends a request. On Linux it runs in bubblewrap with `--unshare-all`: its own namespaces for user, pid, net, ipc, uts and cgroup. `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` point to `127.0.0.1:3128`, `NO_PROXY` is empty.',
           mono: 'POST https://api.github.com/…',
-          src: [{ label: 'SECURITY.md §3', href: '/docs/security/#3-guarantee-2-exactly-one-door' }],
+          src: [{ label: 'SECURITY.md §3', href: '/en/docs/security/#3-guarantee-2-exactly-one-door' }],
         },
         {
           title: 'The walls',
           text: 'A tool that ignores the proxy tries directly. Inside the box there is only `lo`: no address, no route, no DNS. `connect()` to the network ends with `ENETUNREACH`, and without `CAP_NET_ADMIN` no device can be added.',
           mono: 'Guarantee 1',
-          src: [{ label: 'SECURITY.md §2', href: '/docs/security/#2-guarantee-1-no-network-interface' }],
+          src: [{ label: 'SECURITY.md §2', href: '/en/docs/security/#2-guarantee-1-no-network-interface' }],
         },
         {
           title: 'The one door',
           text: 'The shim runs as PID 1, listens on `127.0.0.1:3128` and hands every connection to exactly one bound socket file: `/run/humanitl/proxy.sock`. No X11, Wayland, D-Bus or Docker sockets, no `~/.ssh`, no `daemon.sock`. On macOS the door sits on a free loopback port per session.',
           mono: 'Guarantee 2',
-          src: [{ label: 'SECURITY.md §3', href: '/docs/security/#3-guarantee-2-exactly-one-door' }],
+          src: [{ label: 'SECURITY.md §3', href: '/en/docs/security/#3-guarantee-2-exactly-one-door' }],
         },
         {
           title: 'The floor',
           text: 'seccomp allows `socket()` only for `AF_INET` and `AF_INET6` with `SOCK_STREAM`. `AF_UNIX`, `AF_NETLINK`, `AF_PACKET`, `AF_VSOCK`, `SOCK_DGRAM` and `SOCK_RAW` end in `EPERM`, as do `ptrace`, `io_uring`, `process_vm`, `keyctl` and every x32 call. Seccomp allows TCP; that a TCP socket still leads nowhere is the work of the empty network namespace.',
           mono: 'Guarantee 3',
-          src: [{ label: 'SECURITY.md §4', href: '/docs/security/#4-guarantee-3-no-new-doors' }],
+          src: [{ label: 'SECURITY.md §4', href: '/en/docs/security/#4-guarantee-3-no-new-doors' }],
         },
         {
           title: 'The airlock',
           text: 'humanitld buffers the whole body, up to 32 MiB, and checks the rules: first match wins, the default is ask. If host, SNI or CONNECT authority disagree, it blocks. With `hold.hard_block_checksum_secrets` (default: off), secrets with a valid checksum, such as IBANs and card numbers, are hard-blocked. The host name stays a string: not even a DNS lookup leaves before you decide. After 300 s without an answer: block, never allow. One exception to buffering: with the hard block off, an upload above the cap that matches an `allow` or `ask` rule with `stream: true` is decided from method, destination and headers alone; its body leaves unscanned and is recorded only up to `limits.recorder_max_body_bytes`. With the hard block on, `stream: true` never applies.',
           mono: '',
           src: [
-            { label: 'SECURITY.md §6', href: '/docs/security/#6-the-proxy' },
-            { label: '§7', href: '/docs/security/#7-the-rules-engine' },
+            { label: 'SECURITY.md §6', href: '/en/docs/security/#6-the-proxy' },
+            { label: '§7', href: '/en/docs/security/#7-the-rules-engine' },
           ],
         },
         {
@@ -354,8 +354,8 @@ const en: Copy = {
           text: 'Allow, edit or block. With the hard block on, an edited request leaves only if a second scan finds no such secret left. A block note reaches the agent as a 403 with `X-Humanitl-Note`.',
           mono: '',
           src: [
-            { label: 'SECURITY.md §7', href: '/docs/security/#7-the-rules-engine' },
-            { label: 'ARCHITECTURE.md', href: '/docs/architecture/' },
+            { label: 'SECURITY.md §7', href: '/en/docs/security/#7-the-rules-engine' },
+            { label: 'ARCHITECTURE.md', href: '/en/docs/architecture/' },
           ],
         },
         {
@@ -363,15 +363,15 @@ const en: Copy = {
           text: 'Only after you allow is the name resolved, once, and the address pinned to the connection, against DNS rebinding. Upstream the proxy speaks HTTP/1.1. Every flow lands in `humanitl.db`, except during a recording outage, bodies as blobs, the event in `audit.jsonl` with a hash chain. Only two things leave without a hold: matches of an allow rule and calls to the declared LLM host.',
           mono: '',
           src: [
-            { label: 'SECURITY.md §7', href: '/docs/security/#7-the-rules-engine' },
-            { label: '§8', href: '/docs/security/#8-the-audit-log' },
+            { label: 'SECURITY.md §7', href: '/en/docs/security/#7-the-rules-engine' },
+            { label: '§8', href: '/en/docs/security/#8-the-audit-log' },
           ],
         },
       ],
       statesLabel: 'The life of a flow',
       heldName: 'Held',
       branches: 'allow rule: no hold · block rule: straight to Decided(Block) · timeout 300 s: block',
-      statesSrc: { label: 'ARCHITECTURE.md', href: '/docs/architecture/' },
+      statesSrc: { label: 'ARCHITECTURE.md', href: '/en/docs/architecture/' },
       figTitle: 'The journey of one request',
       figDesc:
         'The journey of a request in seven stations: the agent in the box, direct attempts end at the walls, the only door leads to the proxy, the kernel refuses further socket families, the proxy holds the request, the human allows it, and only then is the name resolved and the request recorded. Beside it two declared paths: the LLM host without a hold and the shared project folder.',
@@ -390,7 +390,7 @@ const en: Copy = {
     proofs: {
       eyebrow: 'Chapter 3',
       title: 'Three sentences. Three proofs.',
-      lede: 'Each sentence can be checked from inside the running sandbox. None of it has to be believed.',
+      lede: 'Each sentence can be checked from inside the running sandbox. The commands are right here.',
       checkLabel: 'Check',
       termCaption: 'macOS, project CI, shortened',
       manualTitle: 'By hand on Linux, inside the sandbox',
@@ -406,8 +406,8 @@ const en: Copy = {
           note: '',
           mac: 'Here the sentence reads “no way out”. The interfaces exist, but the profile makes `connect`, `bind` and `sendto` end in `EPERM` except to the door, and there is no name resolution. Measured: TCP to a public IPv4 and IPv6 address and a UDP datagram, all refused.',
           src: [
-            { label: 'SECURITY.md §2', href: '/docs/security/#2-guarantee-1-no-network-interface' },
-            { label: '§12', href: '/docs/security/#12-macos-seatbelt-instead-of-bubblewrap' },
+            { label: 'SECURITY.md §2', href: '/en/docs/security/#2-guarantee-1-no-network-interface' },
+            { label: '§12', href: '/en/docs/security/#12-macos-seatbelt-instead-of-bubblewrap' },
             { label: 'esc-1-sockets.sh', href: 'gh:tests/escape' },
           ],
         },
@@ -419,7 +419,7 @@ const en: Copy = {
           note: '`-xtype s` because bwrap binds the socket over an empty file; no `-xdev` because `/work`, `/tmp`, `/dev/shm` and `/home/agent` are separate mounts.',
           mac: 'Allowed are the daemon’s proxy socket and the session’s loopback port. Measured: the door answers, `/var/run/syslog` and a foreign loopback port do not.',
           src: [
-            { label: 'SECURITY.md §3', href: '/docs/security/#3-guarantee-2-exactly-one-door' },
+            { label: 'SECURITY.md §3', href: '/en/docs/security/#3-guarantee-2-exactly-one-door' },
             { label: 'esc-2-mounts.sh', href: 'gh:tests/escape' },
           ],
         },
@@ -431,7 +431,7 @@ const en: Copy = {
           note: '',
           mac: 'Here the sentence reads “the kernel holds the process to the profile”. `sandbox_check(getpid())` reports the process as sandboxed; `AF_ROUTE`, `AF_SYSTEM` and `AF_NDRV` end in `EPERM`. `AF_INET SOCK_RAW` ends in `EPERM` too, but that any unprivileged process gets anyway; it stays in the check only as a floor.',
           src: [
-            { label: 'SECURITY.md §4', href: '/docs/security/#4-guarantee-3-no-new-doors' },
+            { label: 'SECURITY.md §4', href: '/en/docs/security/#4-guarantee-3-no-new-doors' },
             { label: 'esc-1-sockets.sh', href: 'gh:tests/escape' },
           ],
         },
@@ -463,8 +463,8 @@ const en: Copy = {
         title: 'Together, not alone',
         text: 'Seccomp allows TCP, the empty namespace makes it useless; the door is the only one because the kernel opens no other. If a check fails, the session is stopped, state `failed`. There is no “start anyway”. The CLI exits with code 3 and the finding of the first failed check.',
         src: [
-          { label: 'SECURITY.md §9', href: '/docs/security/#9-what-we-verify-in-ci' },
-          { label: 'Install guide', href: '/docs/guides/install/' },
+          { label: 'SECURITY.md §9', href: '/en/docs/security/#9-what-we-verify-in-ci' },
+          { label: 'Install guide', href: '/en/docs/guides/install/' },
         ],
         figTitle: 'Three guarantees, one claim',
         figDesc: 'Three overlapping guarantees; only their intersection makes the claim.',
@@ -489,9 +489,9 @@ const en: Copy = {
       window:
         'The checks run after the agent has started, with an upper bound of 10 s in the daemon and 15 s for `sandbox run`. A red check stops the session, it does not prevent it. The threat model lists this window as open (K-15).',
       src: [
-        { label: 'SECURITY.md §9', href: '/docs/security/#9-what-we-verify-in-ci' },
-        { label: 'SECURITY.md §4', href: '/docs/security/#4-guarantee-3-no-new-doors' },
-        { label: 'THREAT-MODEL.md', href: '/docs/threat-model/' },
+        { label: 'SECURITY.md §9', href: '/en/docs/security/#9-what-we-verify-in-ci' },
+        { label: 'SECURITY.md §4', href: '/en/docs/security/#4-guarantee-3-no-new-doors' },
+        { label: 'THREAT-MODEL.md', href: '/en/docs/threat-model/' },
       ],
     },
     tests: {
@@ -528,7 +528,7 @@ const en: Copy = {
       alsoTitle: 'Also in CI',
       also: 'Conformance matrix of real clients, backpressure test with 1000 flows in 10 s, the shim static and under 2 MB, nightly fuzzing.',
       src: [
-        { label: 'SECURITY.md §9', href: '/docs/security/#9-what-we-verify-in-ci' },
+        { label: 'SECURITY.md §9', href: '/en/docs/security/#9-what-we-verify-in-ci' },
         { label: 'tests/escape', href: 'gh:tests/escape' },
         { label: 'tests/escape/macos', href: 'gh:tests/escape/macos' },
       ],
@@ -567,7 +567,7 @@ const en: Copy = {
       ],
       testsTitle: 'Tests',
       testsNote: 'Limit 3 is documented by its own test.',
-      src: [{ label: 'SECURITY.md §8', href: '/docs/security/#8-the-audit-log' }],
+      src: [{ label: 'SECURITY.md §8', href: '/en/docs/security/#8-the-audit-log' }],
     },
     limits: {
       eyebrow: 'Chapter 7',
@@ -589,12 +589,12 @@ const en: Copy = {
       llm: {
         title: 'LLM passthrough',
         text: 'A rule, not a hole in the filter: exactly one host, port and scheme, only POST and GET. By default `/v1/` and `/api/` expand into 13 exact inference and info endpoints, so `/api/pull` or `/v1/files` are held; a path you add to `llm.passthrough_paths` yourself stays a prefix and covers everything below it. Paths with `..` never match. Everything is recorded and scanned for secrets. If the endpoint holds a name instead of an address, the resolver decides anew for every request where it leads, the router or `169.254.169.254` included; better use an IP or `resolver.overrides`. The model sees every prompt without a hold; the LLM host is part of what you trust.',
-        src: { label: 'SECURITY.md §5.1', href: '/docs/security/#51-the-llm-passthrough' },
+        src: { label: 'SECURITY.md §5.1', href: '/en/docs/security/#51-the-llm-passthrough' },
       },
       work: {
         title: 'The project folder /work',
         text: 'Only a subpath, never `$HOME`, read-only if you like. Masked by default are among others `.git/hooks`, `.github/workflows`, `.vscode`, `.env`, `.envrc`, `.git/config` and `.npmrc`. A profile can lift a mask with `mounts.unmask`, which shows as `SANDBOX_020` at start; `.envrc` and `.git/config` cannot be unmasked. A mask only applies where the path exists in the project; the summary names missing paths, and writing there raises `SANDBOX_025`. What sits in the folder a human may carry out later; the session summary lists touched files, outward symlinks and a secret scan.',
-        src: { label: 'SECURITY.md §5.2', href: '/docs/security/#52-the-project-directory-work' },
+        src: { label: 'SECURITY.md §5.2', href: '/en/docs/security/#52-the-project-directory-work' },
       },
       quietTitle: 'No new data path',
       quiet: [
@@ -605,8 +605,8 @@ const en: Copy = {
       classifier: 'You are the classifier.',
       classifierNote: 'An approved request goes out. A base64 body to api.github.com looks legitimate.',
       classifierSrc: [
-        { label: 'README.md', href: '/docs/security/#5-declared-side-channels' },
-        { label: 'THREAT-MODEL.md', href: '/docs/threat-model/' },
+        { label: 'README.md', href: '/en/docs/security/#5-declared-side-channels' },
+        { label: 'THREAT-MODEL.md', href: '/en/docs/threat-model/' },
       ],
       moreTitle: 'Known limits',
       more: [
@@ -622,7 +622,7 @@ const en: Copy = {
         'the `/tmp` fallback of the runtime directory weakens availability',
         'if recording fails, traffic visibly continues unrecorded',
       ],
-      moreSrc: { label: 'SECURITY.md §5.6', href: '/docs/security/#56-other-known-limits' },
+      moreSrc: { label: 'SECURITY.md §5.6', href: '/en/docs/security/#56-other-known-limits' },
       whoTitle: 'Against whom',
       whoLead: 'The attacker is always code running as the agent:',
       attackers: [
@@ -647,8 +647,8 @@ const en: Copy = {
       tcbNote:
         'The app is not part of the isolation, but it is trusted with the decision; it shows bodies as text, never in a web view.',
       src: [
-        { label: 'THREAT-MODEL.md', href: '/docs/threat-model/' },
-        { label: 'SECURITY.md §5', href: '/docs/security/#5-declared-side-channels' },
+        { label: 'THREAT-MODEL.md', href: '/en/docs/threat-model/' },
+        { label: 'SECURITY.md §5', href: '/en/docs/security/#5-declared-side-channels' },
       ],
     },
     macos: {
@@ -656,8 +656,8 @@ const en: Copy = {
       title: 'macOS: honestly different',
       lede: 'On macOS, Seatbelt confines the agent: one generated SBPL profile per session, started with `/usr/bin/sandbox-exec`. The kernel holds the shim and every child to the profile, no child can drop it, and whatever is not allowed is denied.',
       src: [
-        { label: 'ADR-0019', href: '/docs/adr/0019-seatbelt-on-macos/' },
-        { label: 'SECURITY.md §12', href: '/docs/security/#12-macos-seatbelt-instead-of-bubblewrap' },
+        { label: 'ADR-0019', href: '/en/docs/adr/0019-seatbelt-on-macos/' },
+        { label: 'SECURITY.md §12', href: '/en/docs/security/#12-macos-seatbelt-instead-of-bubblewrap' },
       ],
       figTitle: 'Linux and macOS side by side',
       figDesc:
@@ -707,11 +707,11 @@ const en: Copy = {
         },
       ],
       outlook: 'A Linux VM backend through Virtualization.framework, with bubblewrap inside, is planned (HUM-328).',
-      kSrc: { label: 'THREAT-MODEL.md', href: '/docs/threat-model/' },
+      kSrc: { label: 'THREAT-MODEL.md', href: '/en/docs/threat-model/' },
     },
     closing: {
       title: 'Read it yourself',
-      text: 'Every claim on this page is in the documents and the tests. And on your machine:',
+      text: 'Every claim on this page is in the documents, the guarantees also in the tests. And on your machine:',
       download: 'Download Humanitl',
       tests: 'tests/escape on GitHub',
       home: 'Back to home',

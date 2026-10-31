@@ -455,6 +455,17 @@ A global npm install lands under `/usr/local` (or `/usr` with a distribution's
 npm). The installer script from `pi.dev` puts pi under `$HOME`, which the
 sandbox does not see; a Node.js from nvm under `$HOME` is not visible either.
 
+On macOS, take Node.js from Homebrew and use its npm. The sandbox's `PATH`
+contains `/opt/homebrew/bin`, and the rest of your home is not visible:
+
+```sh
+brew install node
+/opt/homebrew/bin/npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+```
+
+On an Intel Mac, Homebrew lives under `/usr/local` instead; `/usr/local/bin` is
+on the same `PATH`.
+
 ### Select
 
 ```sh
