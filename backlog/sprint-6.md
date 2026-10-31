@@ -46,6 +46,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-369 | macOS: `/dev/stdout`, `/dev/stderr` und `/dev/fd/N` sind in der Sandbox beschreibbar | S | HUM-323 |
 | HUM-366 | macOS: Git funktioniert in der Sandbox, `.git/config` bleibt maskiert | S | HUM-323 |
 | HUM-368 | macOS: Das Sitzungsverzeichnis samt Zugangsschlüssel verschwindet mit der Sandbox | S | HUM-323 |
+| HUM-372 | macOS: App und CLI nennen, was dort wirklich läuft | M | HUM-324, HUM-325, HUM-327 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -682,3 +683,18 @@ Akzeptanz:
 - Endet die Sandbox, ist das Sitzungsverzeichnis nach der Frist weiterer Shells weg, auch wenn niemand mehr ein Handle hält; ein neuer Start derselben Sitzung behält seines.
 - Unter Linux ändert sich nichts.
 - `docs/SECURITY.md` nennt die Datei auf der Platte und den Fall nach einem Absturz.
+
+## HUM-372 · macOS: App und CLI nennen, was dort wirklich läuft
+
+Die App bevorzugt ARB-Text vor dem Satz des Daemons (`diagnostic_l10n.dart`). Deshalb stand unter macOS auf dem Schirm, was unter Linux gilt: „No network interface" und „seccomp", obwohl die Interfaces dort existieren und `docs/SECURITY.md` Abschnitt 12 etwas anderes zusagt, dazu systemd, `journalctl` und bubblewrap, wo launchd und `sandbox-exec` fehlen. Vorschläge nannten `humanitl …`, das auf dem Mac nicht im `PATH` liegt, `systemctl` und `XDG_RUNTIME_DIR=/run/user/<uid>`.
+
+Akzeptanz:
+
+- Unter macOS sagt das Isolations-Panel die drei Garantien aus `docs/SECURITY.md` Abschnitt 12. Kein Text behauptet dort „kein Netzwerk-Interface" oder seccomp.
+- Für keinen Code des Registers nennt die App unter macOS systemd, `systemctl`, `journalctl`, bubblewrap, seccomp, Nutzer-Namensräume, `XDG_RUNTIME_DIR` oder `/run/user`, auf Englisch wie auf Deutsch; unter Linux bleiben alle Texte, wie sie sind.
+- Die Einrichtung zeigt unter macOS „Sandbox (Seatbelt)" und „launchd agent" statt `bwrap` und `systemd_user`; die Zeilen `userns` und `seccomp` entfallen dort, solange sie `ok` sind, denn sie messen nichts.
+- Vorschläge der App und von `humanitl` nennen unter macOS die Kommandozeile mit vollem Pfad, `/Applications/Humanitl.app/Contents/MacOS/bin/humanitl`; das gilt für `RESTART_DAEMON_COMMAND`, `ClientDiagnostics` und `packaging/macos/INSTALL.txt`. `changes.rs` benutzt `RESTART_DAEMON_COMMAND`.
+- Die Hilfe zu `tls.trust_system_store` nennt den Neustart des laufenden Systems.
+- Kein Vorschlag nennt unter macOS `/run/user/<uid>`; der Rückfall des Laufzeitverzeichnisses verlinkt `docs/INSTALL.md#runtime-directory-on-macos` statt des XDG-Abschnitts.
+- `docs/INSTALL.md` und `docs/cli.md` nennen Installation, Update und `doctor` unter macOS, die deutschen Übersetzungen ziehen mit.
+- Die Plattform wählt in Dart `defaultTargetPlatform`, Funktionen nehmen zum Testen `platform:` an. `app/test/l10n/macos_text_test.dart` prüft beide Richtungen.

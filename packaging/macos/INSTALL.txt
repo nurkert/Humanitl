@@ -9,11 +9,14 @@ Humanitl @VERSION@ for macOS (Apple Silicon and Intel)
 
        xattr -dr com.apple.quarantine /Applications/Humanitl.app
 
-3. Start Humanitl. On the setup screen, "Set up the service" installs the
-   background service as a launchd agent (`humanitl daemon install`); it then
-   starts at every login.
+3. Start Humanitl. On the setup screen, "Install and start" installs the
+   background service as a launchd agent; it then starts at every login. In
+   a terminal the same step is:
 
-The command line is inside the app:
+       /Applications/Humanitl.app/Contents/MacOS/bin/humanitl daemon install
+
+The command line is inside the app and not on your PATH, so call it by its
+full path:
 
     /Applications/Humanitl.app/Contents/MacOS/bin/humanitl doctor
 

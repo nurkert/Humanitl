@@ -7,6 +7,7 @@
 /// screen uses (`features/sandbox/sandbox_text.dart`).
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart' show Color;
 
 import '../../core/domain/domain.dart';
@@ -104,7 +105,18 @@ Color setupSeverityColor(HTokens tokens, Severity severity) =>
 /// (`humanitl_sandbox::doctor::CheckId`); this is their heading. A line this
 /// build does not know keeps its identifier as its heading rather than
 /// disappearing: a daemon that grew a twelfth check must be able to show it.
-String doctorCheckTitle(AppLocalizations l10n, String id) => switch (id) {
+///
+/// The identifiers stay on macOS, where `bwrap` checks `sandbox-exec` and
+/// `systemd_user` the launchd agent. The heading names what was checked
+/// (HUM-372). Without [platform], [defaultTargetPlatform] decides.
+String doctorCheckTitle(
+  AppLocalizations l10n,
+  String id, {
+  TargetPlatform? platform,
+}) => switch (id) {
+  DoctorCheckId.bwrap when _macOS(platform) => l10n.doctorCheckBwrapMacos,
+  DoctorCheckId.systemdUser when _macOS(platform) =>
+    l10n.doctorCheckSystemdUserMacos,
   DoctorCheckId.bwrap => l10n.doctorCheckBwrap,
   DoctorCheckId.userns => l10n.doctorCheckUserns,
   DoctorCheckId.seccomp => l10n.doctorCheckSeccomp,
@@ -118,6 +130,27 @@ String doctorCheckTitle(AppLocalizations l10n, String id) => switch (id) {
   DoctorCheckId.diskSpace => l10n.doctorCheckDiskSpace,
   _ => id,
 };
+
+bool _macOS(TargetPlatform? platform) =>
+    (platform ?? defaultTargetPlatform) == TargetPlatform.macOS;
+
+/// The doctor lines worth showing on this system.
+///
+/// macOS has neither user namespaces nor seccomp. The daemon sends the two
+/// lines anyway, as `ok` with "not needed", because the eleven lines are the
+/// contract; a green mark beside a mechanism that does not run there would
+/// claim something that was never measured (HUM-372). A line that is not `ok`
+/// always stays.
+List<DoctorCheck> shownDoctorChecks(
+  List<DoctorCheck> checks, {
+  TargetPlatform? platform,
+}) => <DoctorCheck>[
+  for (final DoctorCheck check in checks)
+    if (!_macOS(platform) ||
+        check.status != DoctorStatus.ok ||
+        (check.id != DoctorCheckId.userns && check.id != DoctorCheckId.seccomp))
+      check,
+];
 
 /// The state one doctor line stands in, in the vocabulary of the four rows.
 ///
