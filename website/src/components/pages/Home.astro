@@ -1036,9 +1036,9 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
      und läuft über die Breite der Fase weich nach innen aus. Nur eine Lichtebene, das Bild
      darunter bleibt unverzerrt.
 
-     Die Maske ist das Abstandsfeld zum inneren Rechteck: vier lineare Bänder an den Seiten,
-     vier Viertelkreise in den Ecken, alle mit derselben Kurve --bevel, darum läuft das Band
-     ohne Knick um die Ecke. Das Grundlicht ist ein Konus (oben links am hellsten, unten am
+     Die Maske ist das Abstandsfeld zum Rand des Fensters: vier lineare Bänder an den Seiten,
+     in den Ecken vier Kacheln aus scripts/generate-rim.mjs mit derselben Kurve --bevel und dem
+     Radius --r, denn ein Verlauf kennt nur Kreise um eine Mitte und ließe die Ecke dunkel. Das Grundlicht ist ein Konus (oben links am hellsten, unten am
      schwächsten); darin wandern der Glanzpunkt (--gx) und das Begleitlicht (--swx), und die
      Deckkraft folgt --lit und --oe. Pro Bild ändern sich nur transform und opacity. */
   .win__rim {
@@ -1052,10 +1052,10 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
       linear-gradient(to bottom, var(--bevel)) 50% 100% / var(--tile) var(--b) no-repeat,
       linear-gradient(to left, var(--bevel)) 0 50% / var(--b) var(--tile) no-repeat,
       linear-gradient(to right, var(--bevel)) 100% 50% / var(--b) var(--tile) no-repeat,
-      radial-gradient(circle var(--b) at 100% 100%, var(--bevel)) 0 0 / var(--b) var(--b) no-repeat,
-      radial-gradient(circle var(--b) at 0 100%, var(--bevel)) 100% 0 / var(--b) var(--b) no-repeat,
-      radial-gradient(circle var(--b) at 100% 0, var(--bevel)) 0 100% / var(--b) var(--b) no-repeat,
-      radial-gradient(circle var(--b) at 0 0, var(--bevel)) 100% 100% / var(--b) var(--b) no-repeat;
+      url('/rim/tl.png') 0 0 / var(--b) var(--b) no-repeat,
+      url('/rim/tr.png') 100% 0 / var(--b) var(--b) no-repeat,
+      url('/rim/bl.png') 0 100% / var(--b) var(--b) no-repeat,
+      url('/rim/br.png') 100% 100% / var(--b) var(--b) no-repeat;
     position: absolute;
     z-index: 5;
     inset: -1px;
