@@ -93,6 +93,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-362 | rpmlint on Fedora 44 accepts the RPM again | S | — |
 | HUM-363 | A release tag is set only on a commit whose release dry run is green | M | HUM-237, HUM-362 |
 | HUM-364 | OpenCode and pi know that the network is slow on purpose, through the briefing and a Humanitl skill | M | HUM-071, HUM-073, HUM-274, HUM-308, HUM-309 |
+| HUM-401 | What the agent reads from the proxy says nothing about a person deciding | M | HUM-073, HUM-364 |
 
 ---
 
@@ -11290,3 +11291,48 @@ skill.** No further skill, extension or MCP configuration is shipped.
   these values, but the agent reads them. Hiding them needs a change in the
   proxy (`humanitl_proxy::meta`, `humanitl_core::block`) and in the tests
   that pin those bodies.
+
+---
+
+## HUM-401 · What the agent reads from the proxy says nothing about a person deciding
+
+**Anlass.** Entscheidung des Owners vom 2026-10-31 (HUM-364): Nichts, was der
+Agent in der Sandbox liest, soll verraten, dass ein Mensch entscheidet oder
+dass eine Anfrage auf einen Menschen wartet; langsame, schwankende Latenz ist
+eine Eigenschaft der Umgebung. Einweisung und Skill halten das seit HUM-364
+ein. Die Ausgabe des Proxys selbst verraet es noch:
+
+- `GET http://humanitl.internal/` beginnt mit
+  `humanitl session=... ask=ui|terminal|none timeout=... llm=...`
+  (`daemon/crates/proxy/src/meta.rs`), und die Regeltabelle endet mit der
+  Vorgabezeile `ask * * *`.
+- Der Rumpf einer `403` und `GET /why/<flow>` tragen `reason: user`
+  (`BlockReason::User`, `core-types/src/flow.rs`), wenn ein Mensch abgelehnt
+  hat; `note:` kann den Satz eines Menschen enthalten.
+- Weitere Stellen pruefen: Kopfzeilen der Antworten, Texte von `POST /ask`,
+  Hinweise in `502/503/504`, der Banner `Blocked by Humanitl.`.
+
+**Ziel.** Fuer den Agenten sind alle diese Antworten neutral: eine Ablehnung
+heisst "hier nicht erlaubt", ohne zu sagen, wer entschieden hat; die Haltezeit
+heisst Latenz oder Frist, nicht "ask"; die Vorgabe der Regeltabelle heisst
+etwa `default * * *` mit einer neutralen Wirkung. Im Daemon, in der App, im
+Audit und in der History bleibt alles unveraendert sichtbar, auch dass ein
+Mensch entschieden hat; nur was in die Sandbox geht, wird neutral.
+
+**Pruefen und entscheiden.**
+- Ob `note:` (freier Text eines Menschen bei der Ablehnung) weiter an den
+  Agenten geht; er ist nuetzlich ("nimm den Spiegel X"), verraet aber eine
+  Person durch seinen Ton. Vorschlag: weiterreichen, im App-Dialog klar
+  beschriften, dass der Satz an den Agenten geht.
+- Kompatibilitaet: Einweisung und Skill (HUM-364) zitieren Felder dieser
+  Ausgabe; beide im selben Commit nachziehen. Tests, die `ask=` oder
+  `reason: user` erwarten, anpassen.
+- Sicherheitsaussage unberuehrt; SECURITY.md nur, falls sie die Ausgabe
+  woertlich zitiert.
+
+**Akzeptanz.** Ein Test laeuft ueber alle Antworten, die der Proxy an die
+Sandbox gibt (Meta-Endpunkte, alle Ablehnungs- und Fehlerrueempfe), und findet
+keine Woerter, die auf eine Person oder Freigabe hindeuten (dieselbe Wortliste
+wie der Test aus HUM-364); App, Audit und History zeigen weiter, wer
+entschieden hat.
+
