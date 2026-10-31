@@ -25,6 +25,21 @@
 /// (`backlog/CONVENTIONS.md` 4.13).
 library;
 
+import 'package:flutter/foundation.dart';
+
+/// Wo die Kommandozeile unter macOS liegt: in der App, nicht im `PATH`
+/// (`packaging/macos/INSTALL.txt`).
+const String macCommandLinePath =
+    '/Applications/Humanitl.app/Contents/MacOS/bin/humanitl';
+
+/// Die Kommandozeile, wie sie in einem Vorschlag zum Kopieren steht (HUM-372).
+///
+/// Ohne [platform] gilt [defaultTargetPlatform]; Tests geben ihre eigene an.
+String commandLineProgram({TargetPlatform? platform}) =>
+    (platform ?? defaultTargetPlatform) == TargetPlatform.macOS
+    ? macCommandLinePath
+    : 'humanitl';
+
 /// Ein Name, den eine Shell als Variable zuweisen kann.
 ///
 /// Dieselbe Menge, die POSIX für einen Namen zulässt. Ein Schlüssel, der sie

@@ -1203,8 +1203,25 @@ pub(super) fn mac_runtime_dir(facts: &RuntimeDirFacts) -> CheckOutcome {
                 path.display()
             ),
         ),
-        other => runtime_dir(other),
+        other => mac_runtime_finding(runtime_dir(other)),
     }
+}
+
+/// Nimmt einem Befund der Zeile `runtime_dir` unter macOS, was es dort nicht
+/// gibt (HUM-372): `/run/user/<uid>` existiert nicht, der Vorschlag führte ins
+/// Leere, und das geprüfte Verzeichnis kommt meist gar nicht aus
+/// `XDG_RUNTIME_DIR`. Der Grund nennt den Pfad, das genügt zum Handeln.
+fn mac_runtime_finding(mut outcome: CheckOutcome) -> CheckOutcome {
+    if let Some(diagnostic) = outcome.diagnostic.as_mut() {
+        if matches!(&diagnostic.fix, Some(FixAction::SetEnv { key, .. }) if key == "XDG_RUNTIME_DIR")
+        {
+            diagnostic.fix = None;
+        }
+        if let Some(rest) = diagnostic.why.strip_prefix("XDG_RUNTIME_DIR points at ") {
+            diagnostic.why = format!("the runtime directory {rest}");
+        }
+    }
+    outcome
 }
 
 /// Zeile `systemd_user` unter macOS: Der launchd-Agent ist eingerichtet.
@@ -1244,8 +1261,8 @@ mod tests {
         SystemdFacts, TrayFacts, UsernsFacts,
     };
     use super::{
-        agent, bwrap, daemon, disk_space, install_command, kernel_version, llm, renderer,
-        runtime_dir, seccomp, systemd_user, tray, userns,
+        agent, bwrap, daemon, disk_space, install_command, kernel_version, llm, mac_runtime_dir,
+        renderer, runtime_dir, seccomp, systemd_user, tray, userns,
     };
     use crate::bwrap::{BwrapBackend, Version};
     use crate::os_release::PackageManager;
@@ -1551,6 +1568,39 @@ mod tests {
             why_of(&missing)
         );
         assert_ne!(why_of(&missing), diagnostic.why, "two different machines");
+    }
+
+    /// Unter macOS gibt es kein `/run/user`: Kein Befund schlägt es vor, und
+    /// der Grund behauptet nicht, der Pfad komme aus `XDG_RUNTIME_DIR`
+    /// (HUM-372).
+    #[test]
+    fn on_macos_a_bad_runtime_dir_offers_no_run_user() {
+        let outcomes = [
+            RuntimeDirFacts::Present {
+                path: PathBuf::from("/Users/me/run"),
+                mode: 0o700,
+                owner_uid: 0,
+                our_uid: 501,
+                is_dir: true,
+            },
+            RuntimeDirFacts::Present {
+                path: PathBuf::from("/Users/me/run"),
+                mode: 0o700,
+                owner_uid: 501,
+                our_uid: 501,
+                is_dir: false,
+            },
+        ]
+        .map(|facts| mac_runtime_dir(&facts));
+        for outcome in outcomes {
+            let diagnostic = outcome.diagnostic.unwrap();
+            assert_eq!(diagnostic.fix, None);
+            assert!(
+                !diagnostic.why.contains("XDG_RUNTIME_DIR"),
+                "{}",
+                diagnostic.why
+            );
+        }
     }
 
     #[test]

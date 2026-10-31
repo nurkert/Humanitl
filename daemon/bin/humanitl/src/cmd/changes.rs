@@ -148,7 +148,7 @@ async fn ask(ctx: &Context, op: v1::sandbox_request::Op) -> Result<Vec<v1::Sandb
                     info.proto_minor
                 ))
                 .fix(FixAction::CopyCommand(
-                    "systemctl --user restart humanitld.service".to_owned(),
+                    humanitl_core::diagnostics::RESTART_DAEMON_COMMAND.to_owned(),
                 ))
                 .build(),
         ));

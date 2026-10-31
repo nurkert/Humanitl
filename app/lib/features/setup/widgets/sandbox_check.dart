@@ -52,7 +52,7 @@ class SandboxCheck extends StatelessWidget {
     // elf, die Liste zeigt neun: `daemon` und `llm` haben eine eigene Zeile auf
     // diesem Bildschirm, und eine Ueberschrift, die sie mitzaehlt, verspricht
     // zwei Zeilen, die niemand findet.
-    final List<DoctorCheck> shown = machineLines(report);
+    final List<DoctorCheck> shown = shownDoctorChecks(machineLines(report));
     return SetupCheckRow(
       check: check,
       title: setupCheckTitle(l10n, SetupCheckKind.sandbox),

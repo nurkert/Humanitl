@@ -2251,6 +2251,8 @@ fn check_sun_path(socket: &Path, owner: DirOwner) -> Result<(), Diagnostic> {
             socket.display()
         ));
     let diagnostic = match owner {
+        // Unter macOS gibt es kein `/run/user` (HUM-372).
+        DirOwner::Daemon if cfg!(target_os = "macos") => diagnostic,
         DirOwner::Daemon => diagnostic.fix(FixAction::SetEnv {
             key: "XDG_RUNTIME_DIR".to_owned(),
             value: format!("/run/user/{}", XdgPaths::from_process().env().uid()),
@@ -2674,9 +2676,15 @@ mod tests {
         assert!(!deep.exists(), "nothing may be created for a refused path");
 
         let error = Runtime::at(deep.join("daemon.sock"), DirOwner::Daemon).unwrap_err();
-        assert!(
-            matches!(error.fix, Some(FixAction::SetEnv { ref key, .. }) if key == "XDG_RUNTIME_DIR")
-        );
+        if cfg!(target_os = "macos") {
+            // Dort gibt es kein `/run/user`, das der Vorschlag nennen könnte
+            // (HUM-372).
+            assert_eq!(error.fix, None);
+        } else {
+            assert!(
+                matches!(error.fix, Some(FixAction::SetEnv { ref key, .. }) if key == "XDG_RUNTIME_DIR")
+            );
+        }
         assert!(!deep.exists());
     }
 
