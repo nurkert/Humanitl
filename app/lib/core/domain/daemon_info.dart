@@ -39,7 +39,7 @@ abstract class DaemonInfo with _$DaemonInfo {
   bool get offersShells => capabilities.contains(execCapability);
 
   /// The capability of a daemon that can run a disposable sandbox: the
-  /// project folder under a layer in RAM, reviewed and applied afterwards
+  /// project folder under a separate layer, reviewed and applied afterwards
   /// (HUM-350). A daemon on macOS does not name it.
   static const String disposableCapability = 'sandbox.disposable';
 

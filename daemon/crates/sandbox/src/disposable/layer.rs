@@ -1,7 +1,7 @@
 //! Die obere Schicht auf dem Host: Anlegen, Messen, Verwerfen, und was vor
-//! dem Lesen feststehen muss (HUM-350). Nur unter Linux: Das Overlay kommt
-//! von bubblewrap, und der Rest (tmpfs-Prüfung über `statfs`, `/proc`,
-//! `openat2`) ist dort zu Hause.
+//! dem Lesen feststehen muss (HUM-350). Unter Linux trägt sie ein Overlay,
+//! unter macOS einen Klon des Projekts (HUM-374); das Verwerfen und Aufräumen
+//! ist dasselbe.
 
 use std::ffi::OsStr;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
@@ -21,6 +21,13 @@ use crate::worktree::{SnapshotLimits, TreeSnapshot};
 
 use super::{Budget, DISPOSABLE_DIR, GUARD_INTERVAL, MAX_DEPTH, OverlayDirs, TmpfsCheck};
 
+/// Der Name der oberen Schicht in ihrem Verzeichnis.
+const UPPER: &str = "upper";
+
+/// Der Name des Klons, nachdem [`Layer::seal`] ihn umbenannt hat. Das Profil
+/// verbietet ihn von Anfang an (HUM-374).
+pub(crate) const SEALED: &str = "sealed";
+
 /// Die magische Zahl von tmpfs in `statfs(2)`.
 const TMPFS_MAGIC: u64 = 0x0102_1994;
 
@@ -39,6 +46,15 @@ pub struct Layer {
     /// Dagegen misst [`SizeGuard`] das Wachstum, damit nichts, was der
     /// Agent vor dem Anlaufen der Messung schreibt, ungezählt bleibt.
     start: Usage,
+    /// Die Pfade relativ zum Projekt, die im Klon fehlen, weil sie maskiert
+    /// sind (macOS, HUM-374); unter Linux leer.
+    masks: Vec<PathBuf>,
+    /// Ob [`Layer::seal`] den Klon schon aus der Reichweite der Sandbox
+    /// genommen hat.
+    sealed: bool,
+    /// Gerät und Inode des Klons, gleich nach dem Klonen gemessen: Daran
+    /// erkennt jedes spätere Öffnen, dass es noch dieser Baum ist (HUM-374).
+    clone_id: Option<(rustix::fs::Dev, u64)>,
 }
 
 impl Layer {
@@ -96,8 +112,18 @@ impl Layer {
             dir,
             budget,
             start: usage,
+            masks: Vec::new(),
+            sealed: false,
+            clone_id: None,
         };
-        for path in [layer.dir.clone(), layer.upper(), layer.work()] {
+        // Unter macOS entsteht `upper` erst mit dem Klon, und ein Overlay,
+        // das `work` bräuchte, gibt es nicht.
+        let dirs = if cfg!(target_os = "macos") {
+            vec![layer.dir.clone()]
+        } else {
+            vec![layer.dir.clone(), layer.upper(), layer.work()]
+        };
+        for path in dirs {
             std::fs::DirBuilder::new()
                 .mode(0o700)
                 .create(&path)
@@ -117,7 +143,176 @@ impl Layer {
     pub fn at(dir: impl Into<PathBuf>, budget: Budget) -> Result<Self, Errno> {
         let dir = dir.into();
         let start = Usage::of(&dir)?;
-        Ok(Self { dir, budget, start })
+        Ok(Self {
+            dir,
+            budget,
+            start,
+            masks: Vec::new(),
+            sealed: false,
+            clone_id: None,
+        })
+    }
+
+    /// Legt eine Schicht an und klont das geöffnete Projekt hinein, ohne
+    /// die Masken (macOS, HUM-374). `project` ist der Pfad von `lower`,
+    /// `masks` sind relativ zu ihm.
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_030`, wenn die Schicht nicht entsteht, das Volume kein APFS
+    /// ist, der Klon scheitert oder eine Maske im Klon bliebe. Eine
+    /// angefangene Schicht wird dabei entfernt.
+    #[cfg(target_os = "macos")]
+    pub fn clone_project(
+        runtime_dir: &Path,
+        lower: BorrowedFd<'_>,
+        project: &Path,
+        masks: Vec<PathBuf>,
+    ) -> Result<Self, Diagnostic> {
+        let mut layer = Self::create_with(runtime_dir, TmpfsCheck::Skip)?;
+        let filled = layer.dir.canonicalize().map_err(|err| err.to_string());
+        let filled = filled
+            .map_err(|err| super::clone::refused(&format!("the layer has no path ({err})")))
+            .and_then(|dir| {
+                let parent = rustix::fs::open(
+                    &dir,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .map_err(|err| {
+                    super::clone::refused(&format!("the layer cannot be opened ({err})"))
+                })?;
+                super::clone::clone_project(
+                    lower,
+                    parent.as_fd(),
+                    OsStr::new(UPPER),
+                    project,
+                    &dir,
+                    &masks,
+                )?;
+                let stat = rustix::fs::statat(&parent, UPPER, AtFlags::SYMLINK_NOFOLLOW).map_err(
+                    |err| super::clone::refused(&format!("the clone has no identity ({err})")),
+                )?;
+                Ok((dir, (stat.st_dev, stat.st_ino)))
+            });
+        match filled {
+            Ok((dir, id)) => {
+                layer.dir = dir;
+                layer.masks = masks;
+                layer.clone_id = Some(id);
+                Ok(layer)
+            }
+            Err(diagnostic) => {
+                // Ein angefangener Klon kann ein Geheimnis tragen, bevor die
+                // Masken fort sind. Bleibt er liegen, sagt das der Befund
+                // statt des Grundes, und auch `auto` läuft nicht weiter.
+                match layer.discard() {
+                    Ok(()) => Err(diagnostic),
+                    Err((_, failed)) => Err(failed),
+                }
+            }
+        }
+    }
+
+    /// Nimmt den Klon aus der Reichweite der Sandbox (macOS, HUM-374).
+    ///
+    /// Das Profil erlaubt den Pfad, nicht den Inode: Unter dem neuen Namen
+    /// verweigert es jedem Prozess, der die Sandbox überlebt hat (K-20), neue
+    /// Zugriffe. Mehrmals rufen schadet nicht.
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_031`, wenn das Umbenennen scheitert; [`Layer::is_sealed`]
+    /// bleibt dann `false`, und die Liste wird nicht gelesen.
+    pub fn seal(&mut self) -> Result<(), Diagnostic> {
+        if self.sealed {
+            return Ok(());
+        }
+        let failed = |err: Errno| {
+            still_running(&format!(
+                "the clone in {} could not be taken out of the sandbox's reach ({err})",
+                self.dir.display()
+            ))
+        };
+        let anchor = self.anchor().map_err(failed)?;
+        let stat = rustix::fs::statat(&anchor, UPPER, AtFlags::SYMLINK_NOFOLLOW).map_err(failed)?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::Directory {
+            return Err(self.swapped());
+        }
+        self.check_identity(&stat)?;
+        rustix::fs::renameat(&anchor, UPPER, &anchor, SEALED).map_err(failed)?;
+        self.sealed = true;
+        Ok(())
+    }
+
+    /// Öffnet die obere Schicht, ohne einem Symlink zu folgen, und prüft, dass
+    /// es noch der Baum vom Klonen ist. Jedes Lesen der Schicht geht hierüber
+    /// (HUM-374).
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_031`, wenn sie sich nicht öffnen lässt oder ein anderer Baum
+    /// an ihrer Stelle liegt.
+    pub fn open_upper(&self) -> Result<OwnedFd, Diagnostic> {
+        let name = if self.sealed { SEALED } else { UPPER };
+        let opened = self.anchor().and_then(|anchor| {
+            rustix::fs::openat(
+                &anchor,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+        });
+        let fd = opened.map_err(|err| match err {
+            Errno::LOOP | Errno::NOTDIR => self.swapped(),
+            other => discard_failed(&self.dir, &format!("it cannot be opened ({other})")),
+        })?;
+        let stat = rustix::fs::fstat(&fd)
+            .map_err(|err| discard_failed(&self.dir, &format!("no stat ({err})")))?;
+        self.check_identity(&stat)?;
+        Ok(fd)
+    }
+
+    /// Das Verzeichnis der Schicht, geöffnet ohne einem Symlink zu folgen.
+    fn anchor(&self) -> Result<OwnedFd, Errno> {
+        rustix::fs::open(
+            &self.dir,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+    }
+
+    fn check_identity(&self, stat: &rustix::fs::Stat) -> Result<(), Diagnostic> {
+        match self.clone_id {
+            Some(id) if id != (stat.st_dev, stat.st_ino) => Err(self.swapped()),
+            _ => Ok(()),
+        }
+    }
+
+    /// Der Befund, wenn an der Stelle der Schicht etwas anderes liegt.
+    fn swapped(&self) -> Diagnostic {
+        Diagnostic::builder(SANDBOX_031, Severity::Error)
+            .why(format!(
+                "the layer in {} is not the tree the daemon created any more, so nothing is \
+                 read or applied from it",
+                self.dir.display()
+            ))
+            .fix(FixAction::CopyCommand(
+                "humanitl sandbox discard".to_owned(),
+            ))
+            .build()
+    }
+
+    /// Ob der Klon aus der Reichweite der Sandbox ist.
+    #[must_use]
+    pub const fn is_sealed(&self) -> bool {
+        self.sealed
+    }
+
+    /// Die Pfade, die im Klon fehlen, weil sie maskiert sind.
+    #[must_use]
+    pub fn masks(&self) -> &[PathBuf] {
+        &self.masks
     }
 
     /// Dieselbe Schicht mit einer anderen Grenze; für Tests.
@@ -142,7 +337,7 @@ impl Layer {
     /// Die obere Schicht.
     #[must_use]
     pub fn upper(&self) -> PathBuf {
-        self.dir.join("upper")
+        self.dir.join(if self.sealed { SEALED } else { UPPER })
     }
 
     /// Das Arbeitsverzeichnis des Overlays.
@@ -196,22 +391,35 @@ impl Layer {
 /// `SIGKILL`). Ohne die Grundlage vom Start ist ihre Übernahme nicht sicher;
 /// sie werden verworfen. Gibt zurück, wie viele es waren.
 #[must_use]
-pub fn sweep(runtime_dir: &Path) -> usize {
+pub fn sweep(runtime_dir: &Path) -> Swept {
     let base = runtime_dir.join(DISPOSABLE_DIR);
+    let mut swept = Swept::default();
     let Ok(entries) = std::fs::read_dir(&base) else {
-        return 0;
+        return swept;
     };
-    let mut removed = 0;
     for entry in entries.flatten() {
         let path = entry.path();
         let is_dir = entry
             .file_type()
             .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink());
-        if is_dir && remove_dir(&path).is_ok() {
-            removed += 1;
+        if is_dir {
+            match remove_dir(&path) {
+                Ok(()) => swept.removed += 1,
+                Err(err) => swept.failed.push(discard_failed(&path, &err.to_string())),
+            }
         }
     }
-    removed
+    swept
+}
+
+/// Was [`sweep`] getan hat.
+#[derive(Debug, Default)]
+pub struct Swept {
+    /// So viele Schichten sind weg.
+    pub removed: usize,
+    /// Warum die übrigen bleiben; eine kann Inhalt des Projekts tragen, also
+    /// meldet der Aufrufer jede (HUM-374).
+    pub failed: Vec<Diagnostic>,
 }
 
 /// Prüft, dass die Sandbox beendet ist und nichts mehr in ihre Schicht
@@ -222,6 +430,8 @@ pub fn sweep(runtime_dir: &Path) -> usize {
 /// lebt nur, solange ein Prozess darin lebt. Geprüft wird deshalb beides,
 /// was der Daemon sehen kann: `bwrap` ist eingesammelt, und der Init-Prozess
 /// der Sandbox ist in `/proc` nicht mehr als lebender Prozess zu finden.
+/// Unter macOS gibt es weder Namensraum noch `/proc`; dort zählt das
+/// Einsammeln, und [`Layer::seal`] hält überlebende Prozesse fern.
 ///
 /// # Errors
 ///
@@ -601,8 +811,16 @@ fn discard_failed(dir: &Path, why: &str) -> Diagnostic {
             dir.display()
         ))
         .fix(FixAction::CopyCommand(format!(
-            "chmod -R u+rwx {0} && rm -rf {0}",
-            crate::bwrap_args::shell_quote(&dir.to_string_lossy())
+            "{1}chmod -R u+rwx {0} && rm -rf {0}",
+            crate::bwrap_args::shell_quote(&dir.to_string_lossy()),
+            if cfg!(target_os = "macos") {
+                format!(
+                    "chflags -R nouchg,nouappnd {0} && chmod -RN {0} && ",
+                    crate::bwrap_args::shell_quote(&dir.to_string_lossy())
+                )
+            } else {
+                String::new()
+            }
         )))
         .build()
 }
@@ -706,9 +924,29 @@ fn flatten(
 fn unlink(parent: BorrowedFd<'_>, name: &OsStr, flags: AtFlags) -> std::io::Result<()> {
     match rustix::fs::unlinkat(parent, name, flags) {
         Ok(()) | Err(Errno::NOENT) => Ok(()),
+        // `uchg`, `uappnd` oder eine Verbots-ACL: Der Agent darf sie setzen,
+        // und `clonefile` trägt sie aus dem Projekt mit (HUM-374).
+        Err(Errno::PERM | Errno::ACCESS) => {
+            unlock(parent, name);
+            match rustix::fs::unlinkat(parent, name, flags) {
+                Ok(()) | Err(Errno::NOENT) => Ok(()),
+                Err(err) => Err(err.into()),
+            }
+        }
         Err(err) => Err(err.into()),
     }
 }
+
+/// Nimmt Dateiflags und ACLs von `name` und `parent`; nur in Bäumen, die dem
+/// Daemon gehören.
+#[cfg(target_os = "macos")]
+fn unlock(parent: BorrowedFd<'_>, name: &OsStr) {
+    super::clone::unlock(parent, name);
+}
+
+/// Unter Linux gibt es nichts abzunehmen, was ein Nutzer ohne Rechte setzt.
+#[cfg(not(target_os = "macos"))]
+fn unlock(_parent: BorrowedFd<'_>, _name: &OsStr) {}
 
 /// Öffnet ein Verzeichnis unter `parent` zum Lesen; fehlt das Leserecht,
 /// bekommt es vorher `0700`. Folgt nie einem Symlink: geöffnet wird mit
@@ -719,6 +957,7 @@ pub(crate) fn open_dir_forcing(parent: BorrowedFd<'_>, name: &OsStr) -> std::io:
     match rustix::fs::openat(parent, name, flags, Mode::empty()) {
         Ok(fd) => Ok(fd),
         Err(Errno::ACCESS) => {
+            unlock(parent, name);
             chmod_nofollow(parent, name, 0o700, FileType::Directory)?;
             Ok(rustix::fs::openat(parent, name, flags, Mode::empty())?)
         }
@@ -738,6 +977,7 @@ pub(crate) fn open_dir_forcing(parent: BorrowedFd<'_>, name: &OsStr) -> std::io:
 ///
 /// `EINVAL`, wenn der Eintrag nicht von der Art `kind` ist (ein Symlink
 /// eingeschlossen), sonst der `errno` des Kernels.
+#[cfg(target_os = "linux")]
 pub(crate) fn chmod_nofollow(
     parent: BorrowedFd<'_>,
     name: &OsStr,
@@ -758,5 +998,31 @@ pub(crate) fn chmod_nofollow(
     rustix::fs::chmod(
         format!("/proc/self/fd/{}", fd.as_raw_fd()),
         Mode::from_raw_mode(mode),
+    )
+}
+
+/// Setzt die Rechte von `name` unter `parent`, ohne einem Symlink zu folgen:
+/// macOS kennt `AT_SYMLINK_NOFOLLOW` für `fchmodat(2)`.
+///
+/// # Errors
+///
+/// `EINVAL`, wenn der Eintrag nicht von der Art `kind` ist (ein Symlink
+/// eingeschlossen), sonst der `errno` des Kernels.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn chmod_nofollow(
+    parent: BorrowedFd<'_>,
+    name: &OsStr,
+    mode: u32,
+    kind: FileType,
+) -> Result<(), Errno> {
+    let stat = rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)?;
+    if FileType::from_raw_mode(stat.st_mode) != kind {
+        return Err(Errno::INVAL);
+    }
+    rustix::fs::chmodat(
+        parent,
+        name,
+        crate::worktree::raw_mode(mode),
+        AtFlags::SYMLINK_NOFOLLOW,
     )
 }

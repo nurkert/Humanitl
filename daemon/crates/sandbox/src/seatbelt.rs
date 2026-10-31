@@ -32,6 +32,12 @@
 //! fünf `CHECK`-Zeilen wie unter Linux; die Zuordnung zu den drei Garantien
 //! ist dieselbe ([`crate::bwrap`]). Was sie unter macOS bedeuten, steht in
 //! `bin/humanitl-shim/src/macos.rs` und in `docs/SECURITY.md`.
+//!
+//! **Die Wegwerf-Sandbox (HUM-374).** Mit [`SeatbeltBackend::with_clone`] ist
+//! `/work` ein Klon des Projekts statt des Projekts selbst; die Masken gelten
+//! im Klon, das echte Projekt steht als `sealed` ganz am Ende des Profils,
+//! und `mounts.extra_rw` ist wie unter Linux nur lesbar, damit kein Schreiben
+//! an der Durchsicht vorbeigeht.
 
 use humanitl_core::shell::shell_path;
 use std::ffi::OsString;
@@ -313,6 +319,10 @@ pub struct SeatbeltPolicy {
     /// Ordner zwischen Projekt und einer Maske; sie dürfen weder umbenannt
     /// noch gelöscht werden.
     pub locked: Vec<PathBuf>,
+    /// Bäume, die weder gelesen noch geschrieben werden: bei einer
+    /// Wegwerf-Sandbox das echte Projekt. Es kann außerhalb von
+    /// [`PRIVATE_TREES`] liegen und wäre sonst samt seiner Masken lesbar.
+    pub sealed: Vec<PathBuf>,
     /// Der Proxy-Socket, die einzige Tür.
     pub door: PathBuf,
     /// Der Loopback-Port der Sitzung.
@@ -454,6 +464,12 @@ impl SeatbeltPolicy {
 
         self.render_network(&mut out);
 
+        self.render_denials(&mut out);
+        out
+    }
+
+    /// Die Verbote am Ende des Profils; die letzte passende Regel gewinnt.
+    fn render_denials(&self, out: &mut String) {
         if !self.masked.is_empty() {
             out.push_str(";; Masks of the profile: neither read nor written.\n");
             out.push_str("(deny file-read* file-write*");
@@ -469,7 +485,14 @@ impl SeatbeltPolicy {
             }
             out.push_str(")\n");
         }
-        out
+        if !self.sealed.is_empty() {
+            out.push_str(";; The real project of a disposable sandbox.\n");
+            out.push_str("(deny file-read* file-write*");
+            for path in &self.sealed {
+                let _ = write!(out, " (subpath {})", quote_path(path));
+            }
+            out.push_str(")\n");
+        }
     }
 }
 
@@ -501,6 +524,7 @@ pub struct SeatbeltBackend {
     output_sink: Option<OutputSink>,
     read_only_binds: Vec<(PathBuf, PathBuf)>,
     approved_work_dir: Option<PathBuf>,
+    clone: Option<PathBuf>,
 }
 
 impl SeatbeltBackend {
@@ -532,6 +556,7 @@ impl SeatbeltBackend {
             output_sink: None,
             read_only_binds: Vec::new(),
             approved_work_dir: None,
+            clone: None,
         }
     }
 
@@ -569,6 +594,61 @@ impl SeatbeltBackend {
     pub fn with_approved_work_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.approved_work_dir = Some(dir.into());
         self
+    }
+
+    /// Eine Wegwerf-Sandbox: `clone` ist das Projekt des Agenten, das echte
+    /// bekommt er nicht zu sehen (HUM-374).
+    #[must_use]
+    pub fn with_clone(mut self, clone: impl Into<PathBuf>) -> Self {
+        self.clone = Some(clone.into());
+        self
+    }
+
+    /// Was dieses Backend für eine Wegwerf-Sandbox braucht, soweit es sich
+    /// ohne Klon sagen lässt: ein schreibbares Projekt. Ob der Klon gelingt,
+    /// zeigt erst der Start (HUM-374).
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_030`, wenn das Projekt nur lesbar ist.
+    pub fn disposable_support(
+        &self,
+        profile: &SandboxProfile,
+        session: &SessionContext,
+        _runtime_dir: &Path,
+    ) -> Result<(), Diagnostic> {
+        if profile.effective_work_mode(session.work_mode) == WorkMode::Rw {
+            Ok(())
+        } else {
+            Err(crate::bwrap::read_only_work(profile, session))
+        }
+    }
+
+    /// Alle eingestellten Masken unter dem Projekt, relativ zu ihm, ob es sie
+    /// beim Start gibt oder nicht, dazu die Ziele vorhandener Symlink-Masken
+    /// im Projekt (HUM-374). Was es davon gibt, kommt nicht mit in den Klon;
+    /// was es nicht gibt, darf der Agent dort nicht anlegen.
+    #[must_use]
+    pub fn clone_masks(profile: &SandboxProfile, project: &Path) -> Vec<PathBuf> {
+        let present = present_masks(profile, project);
+        let mut masks: Vec<PathBuf> = profile
+            .mounts
+            .tmpfs
+            .iter()
+            .cloned()
+            .chain(profile.effective_masked_files())
+            .filter_map(|path| under_work(&path))
+            .filter(|rest| !rest.as_os_str().is_empty())
+            .chain(
+                resolved_masks(project, &present)
+                    .iter()
+                    .filter_map(|path| path.strip_prefix(project).ok())
+                    .map(Path::to_path_buf),
+            )
+            .collect();
+        masks.sort();
+        masks.dedup();
+        masks
     }
 
     /// Der geprüfte Projektordner.
@@ -741,27 +821,35 @@ impl SeatbeltBackend {
         &self,
         profile: &SandboxProfile,
         session: &SessionContext,
+        project: &Path,
         work: &Path,
         layout: &SessionLayout,
         files: Vec<PathBuf>,
         door: &Path,
         ports: (u16, u16),
     ) -> SeatbeltPolicy {
-        // Masken wie unter Linux nur über das, was es im Projekt gibt; was
-        // fehlt, nennt der Plan als ungeschützt (HUM-043).
-        let masked = masks_in_project(profile, work);
-        // Die Ordner zwischen Projekt und Maske dürfen weder umbenannt noch
-        // gelöscht werden: Sonst zöge `mv .git .gitx` die Maske von
-        // `.git/hooks` ab, und `mv .gitx .git` brächte den Inhalt zurück
-        // (Review HUM-323).
-        let mut locked: Vec<PathBuf> = masked
-            .iter()
-            .flat_map(|path| path.ancestors().skip(1))
-            .filter(|dir| dir.starts_with(work) && *dir != work)
-            .map(Path::to_path_buf)
-            .collect();
-        locked.sort();
-        locked.dedup();
+        // Direkt wie unter Linux nur über das, was es im Projekt gibt; was
+        // fehlt, nennt der Plan als ungeschützt (HUM-043). Ein Klon trägt jede
+        // eingestellte Maske, denn was der Agent dort anlegt, käme sonst mit
+        // der Übernahme ins Projekt. Gefragt wird das echte Projekt: Im Klon
+        // fehlen sie schon.
+        let disposable = work != project;
+        let present = present_masks(profile, project);
+        let resolved = resolved_masks(project, &present);
+        let relative = if disposable {
+            Self::clone_masks(profile, project)
+        } else {
+            present
+        };
+        let mut masked: Vec<PathBuf> = relative.iter().map(|rest| work.join(rest)).collect();
+        // Seatbelt prüft den aufgelösten Pfad: Eine Maske, die über einen
+        // Symlink führt, hielte nur auf ihrem Ziel.
+        masked.extend(resolved.iter().map(|path| {
+            path.strip_prefix(project)
+                .map_or_else(|_| path.clone(), |rest| work.join(rest))
+        }));
+        masked.sort();
+        masked.dedup();
 
         let mut read_only: Vec<PathBuf> = profile
             .mounts
@@ -774,12 +862,34 @@ impl SeatbeltBackend {
                 .iter()
                 .filter_map(|(src, _)| src.canonicalize().ok()),
         );
-        let writable: Vec<PathBuf> = profile
+        let mut writable: Vec<PathBuf> = profile
             .mounts
             .extra_rw
             .iter()
             .filter_map(|path| path.canonicalize().ok())
             .collect();
+        // Was der Agent dort schriebe, ginge an der Durchsicht vorbei; unter
+        // Linux hängt dieselbe Regel `extra_rw` nur lesbar ein (HUM-350).
+        if disposable {
+            read_only.append(&mut writable);
+        }
+        // Die Ordner zwischen Projekt und Maske dürfen weder umbenannt noch
+        // gelöscht werden: Sonst zöge `mv .git .gitx` die Maske von
+        // `.git/hooks` ab, und `mv .gitx .git` brächte den Inhalt zurück
+        // (Review HUM-323).
+        // Ein Ziel außerhalb des Projekts zählt überall, wo das Profil Ordner
+        // ändern lässt: Sonst zöge `mv` dort die Maske ebenso ab (HUM-374).
+        let mutable: Vec<PathBuf> = writable
+            .iter()
+            .cloned()
+            .chain([layout.home(), layout.tmp()])
+            .collect();
+        let mut locked = locked_above(work, &mutable, &masked);
+        // Die Wurzel eines Klons bleibt, wo sie ist: Wer sie löscht und dort
+        // einen Symlink hinterlegt, lenkte alles Lesen danach um (HUM-374).
+        if disposable {
+            locked.push(work.to_path_buf());
+        }
         SeatbeltPolicy {
             work: work.to_path_buf(),
             work_writable: profile.effective_work_mode(session.work_mode) == WorkMode::Rw,
@@ -790,6 +900,17 @@ impl SeatbeltBackend {
             files,
             masked,
             locked,
+            // Dazu der Name, unter dem der Klon nach dem Ende liegt: Liegt das
+            // Laufzeitverzeichnis außerhalb von `PRIVATE_TREES`, wäre er sonst
+            // lesbar (HUM-374).
+            sealed: if disposable {
+                vec![
+                    project.to_path_buf(),
+                    work.with_file_name(crate::disposable::SEALED),
+                ]
+            } else {
+                Vec::new()
+            },
             door: door.to_path_buf(),
             port: ports.0,
             agent_port: ports.1,
@@ -1041,6 +1162,7 @@ exec {real} "$@"
 fn place_git(
     layout: &SessionLayout,
     work: &Path,
+    project: &Path,
     masked: &[PathBuf],
 ) -> Result<Option<PathBuf>, Diagnostic> {
     let real = work.join(".git");
@@ -1056,7 +1178,8 @@ fn place_git(
     };
     let shadow = layout.git();
     std::fs::create_dir_all(shadow.join("hooks")).map_err(|err| layout_failed(&shadow, &err))?;
-    let config = std::fs::read_to_string(real.join("config")).unwrap_or_default();
+    // Aus dem Projekt: In einem Klon ist die Maske schon entfernt (HUM-374).
+    let config = std::fs::read_to_string(project.join(".git/config")).unwrap_or_default();
     write_file(
         &shadow.join("config"),
         git_format_config(&config).as_bytes(),
@@ -1116,6 +1239,46 @@ pub(crate) fn masks_in_project(profile: &SandboxProfile, work: &Path) -> Vec<Pat
         .collect()
 }
 
+/// Die vorhandenen Masken, relativ zum Projekt.
+fn present_masks(profile: &SandboxProfile, project: &Path) -> Vec<PathBuf> {
+    BwrapBackend::present_under_work(profile, project)
+        .iter()
+        .filter_map(|path| under_work(path))
+        .filter(|rest| !rest.as_os_str().is_empty())
+        .collect()
+}
+
+/// Wohin vorhandene Masken wirklich führen, wo das nicht ihr eigener Pfad ist:
+/// ein Symlink auf dem Weg oder am Ende (HUM-374).
+fn resolved_masks(project: &Path, present: &[PathBuf]) -> Vec<PathBuf> {
+    present
+        .iter()
+        .filter_map(|rest| {
+            let path = project.join(rest);
+            path.canonicalize().ok().filter(|real| *real != path)
+        })
+        .collect()
+}
+
+/// Die vorhandenen Ordner über den Masken, die sich ändern ließen: unter
+/// `work` ohne `work` selbst, unter `mutable` samt dessen Wurzel, denn die
+/// lässt sich dort ebenso umbenennen.
+fn locked_above(work: &Path, mutable: &[PathBuf], masked: &[PathBuf]) -> Vec<PathBuf> {
+    let mut locked: Vec<PathBuf> = masked
+        .iter()
+        .flat_map(|path| path.ancestors().skip(1))
+        .filter(|dir| {
+            (dir.starts_with(work) && *dir != work)
+                || mutable.iter().any(|root| dir.starts_with(root))
+        })
+        .filter(|dir| dir.symlink_metadata().is_ok())
+        .map(Path::to_path_buf)
+        .collect();
+    locked.sort();
+    locked.dedup();
+    locked
+}
+
 /// Ob ein Pfad unter dem Projekt liegt, als Pfad relativ zu ihm.
 fn under_work(path: &Path) -> Option<PathBuf> {
     let rest = path.strip_prefix(WORK_DST).ok()?;
@@ -1134,7 +1297,11 @@ impl SandboxBackend for SeatbeltBackend {
         profile: &SandboxProfile,
         session: &SessionContext,
     ) -> Result<LaunchPlan, Diagnostic> {
-        let work = self.check(profile, session)?;
+        let project = self.check(profile, session)?;
+        let work = match &self.clone {
+            Some(clone) => canonical(clone)?,
+            None => project.clone(),
+        };
         let layout = self.create_layout(session)?;
         // Kanonisch: Seatbelt vergleicht aufgelöste Pfade, und unter macOS
         // liegt das Laufzeitverzeichnis hinter dem Verweis `/var`.
@@ -1148,11 +1315,12 @@ impl SandboxBackend for SeatbeltBackend {
         let agent_port = session_port(Some(port))?;
         let unprotected = BwrapBackend::unprotected_under_work(
             profile,
-            &BwrapBackend::present_under_work(profile, &work),
+            &BwrapBackend::present_under_work(profile, &project),
         );
         let mut policy = self.policy(
             profile,
             session,
+            &project,
             &work,
             &layout,
             files,
@@ -1160,7 +1328,7 @@ impl SandboxBackend for SeatbeltBackend {
             (port, agent_port),
         );
         policy.protect(&protected, &layout.home());
-        let git_bin = place_git(&layout, &work, &policy.masked)?;
+        let git_bin = place_git(&layout, &work, &project, &policy.masked)?;
         let policy_text = policy.render();
         write_file(&layout.profile(), policy_text.as_bytes(), 0o444)?;
 
@@ -1403,6 +1571,7 @@ mod tests {
             files: vec![PathBuf::from("/Users/me/.opencode/bin/opencode")],
             masked: vec![PathBuf::from("/Users/me/project/.git/hooks")],
             locked: vec![PathBuf::from("/Users/me/project/.git")],
+            sealed: vec![],
             door: PathBuf::from("/private/var/folders/x/T/humanitl-501/proxy/proxy.sock"),
             port: 41_234,
             agent_port: 41_235,
@@ -1449,9 +1618,9 @@ mod tests {
         };
         let config = work.join(".git/config");
 
-        assert!(place_git(&session, &work, &[]).unwrap().is_none());
+        assert!(place_git(&session, &work, &work, &[]).unwrap().is_none());
         assert_eq!(
-            place_git(&session, &work, &[config]).unwrap(),
+            place_git(&session, &work, &work, &[config]).unwrap(),
             Some(session.git_bin())
         );
         assert_eq!(std::fs::read(session.git().join("config")).unwrap(), b"");
@@ -1547,6 +1716,88 @@ mod tests {
             .find(|line| line.starts_with("(allow file-write*"))
             .unwrap();
         assert!(!writes.contains("/Users/me/project\""), "{writes}");
+    }
+
+    /// Mutationsbeweis: `sealed` weggelassen oder vor den Erlaubnissen, rot.
+    /// Ein Projekt unter `/opt` läge außerhalb von [`PRIVATE_TREES`], und die
+    /// Masken gelten nur im Klon (HUM-374).
+    #[test]
+    fn a_disposable_profile_ends_with_the_real_project_sealed() {
+        let clone = PathBuf::from("/private/var/folders/x/T/humanitl-501/disposable/1/upper");
+        let mut policy = policy();
+        policy.work.clone_from(&clone);
+        policy.masked = vec![clone.join(".git/hooks")];
+        policy.locked = vec![clone.join(".git")];
+        policy.sealed = vec![PathBuf::from("/opt/project")];
+        let text = policy.render();
+        let sealed = text
+            .find("(deny file-read* file-write* (subpath \"/opt/project\"))")
+            .expect(&text);
+        assert!(sealed > text.rfind("(allow file-write*").unwrap());
+        assert!(sealed > text.rfind("(allow file-read*").unwrap());
+        assert!(text.contains(&format!(
+            "(deny file-read* file-write* (subpath \"{}/.git/hooks\"))",
+            clone.display()
+        )));
+        assert!(!text.contains("/Users/me/project"), "{text}");
+    }
+
+    /// Mutationsbeweis: ohne `resolved_masks` bliebe `metadata/config` lesbar,
+    /// ohne die Sperre ließe sich `metadata` wegbenennen.
+    #[test]
+    fn a_mask_behind_a_symlink_covers_its_target_and_locks_the_way() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(project.join("metadata")).unwrap();
+        std::fs::write(project.join("metadata/config"), "x").unwrap();
+        std::fs::write(project.join("secret"), "x").unwrap();
+        std::os::unix::fs::symlink("metadata", project.join(".git")).unwrap();
+        std::os::unix::fs::symlink("secret", project.join(".env")).unwrap();
+        let present = [PathBuf::from(".git/config"), PathBuf::from(".env")];
+
+        let resolved = resolved_masks(&project, &present);
+        assert_eq!(
+            resolved,
+            vec![project.join("metadata/config"), project.join("secret")]
+        );
+        let locked = locked_above(&project, &[], &resolved);
+        assert_eq!(locked, vec![project.join("metadata")]);
+    }
+
+    /// `.git` führt nach `/opt/data/metadata`, und `/opt/data` steht in
+    /// `mounts.extra_rw`. Mutationsbeweis: nur unter `work` gesperrt, und `mv`
+    /// zöge die Maske ab.
+    #[test]
+    fn an_external_target_locks_its_folders_where_they_can_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let (project, data) = (root.join("project"), root.join("data"));
+        std::fs::create_dir_all(data.join("metadata")).unwrap();
+        std::fs::create_dir(&project).unwrap();
+        std::fs::write(data.join("metadata/config"), "x").unwrap();
+        std::os::unix::fs::symlink(data.join("metadata"), project.join(".git")).unwrap();
+
+        let resolved = resolved_masks(&project, &[PathBuf::from(".git/config")]);
+        assert_eq!(resolved, vec![data.join("metadata/config")]);
+        let locked = locked_above(&project, std::slice::from_ref(&data), &resolved);
+        assert_eq!(locked, vec![data.clone(), data.join("metadata")]);
+        assert!(
+            locked_above(&project, &[], &resolved).is_empty(),
+            "not writable, nothing to lock"
+        );
+        let policy = SeatbeltPolicy { locked, ..policy() };
+        assert!(
+            policy
+                .render()
+                .contains(&format!("(literal {})", quote_path(&data.join("metadata"))))
+        );
+    }
+
+    #[test]
+    fn locks_stop_at_what_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().canonicalize().unwrap();
+        assert!(locked_above(&work, &[], &[work.join(".git/hooks")]).is_empty());
     }
 
     #[test]

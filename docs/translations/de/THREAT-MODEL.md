@@ -490,8 +490,8 @@ dieser Prozess bräuchte dann seinen eigenen Weg nach draußen, den die Sandbox 
 
 ### K-24 Die Wegwerf-Sandbox
 
-Vorerst nur auf Linux: Auf macOS (Seatbelt) gibt es kein Overlay, ein Wegwerf-Start wird mit
-`SANDBOX_030` verweigert, und der Kanal existiert dort nicht.
+Auf macOS (Seatbelt) gibt es kein Overlay; die Schicht ist dort ein APFS-Klon des Projekts
+(HUM-374, Einzelheiten und Restrisiken im englischen Original). Der Weg zurück ist derselbe Code.
 
 Mit `sandbox.mode = "disposable"` (HUM-350) ist der Projektordner die nur lesbare untere Schicht
 eines Overlays unter `/work`, und die Änderungen des Agenten gehen in eine obere Schicht, die der

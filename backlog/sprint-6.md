@@ -51,6 +51,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-371 | macOS: Ein Projekt kann OpenCode nicht umkonfigurieren | S | HUM-037, HUM-323 |
 | HUM-372 | macOS: App und CLI nennen, was dort wirklich läuft | M | HUM-324, HUM-325, HUM-327 |
 | HUM-377 | macOS: kleinere Lücken der Sandbox | M | HUM-323, HUM-324 |
+| HUM-374 | macOS: Wegwerf-Sandbox auf einem APFS-Klon | L | HUM-323, HUM-350, HUM-357 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -756,3 +757,38 @@ Akzeptanz:
 - `daemon install --refresh` tut unter macOS nichts und fasst launchd nicht an.
 - Das Ziel von `--tests-dir` (`/tests/escape`) ist auf den echten Ordner abgebildet.
 - `tests/escape/macos/run.sh` prüft Git, Adapter-Dateien und ein nur lesbares Projekt; der CI-Job `macos` fährt das volle `flutter test`.
+
+## HUM-374 · macOS: Wegwerf-Sandbox auf einem APFS-Klon
+
+Unter Linux liegt das Projekt nur lesbar unter einem Overlay, und `sandbox changes`, `apply` und `discard` samt Panel arbeiten am Ende auf der oberen Schicht. Unter macOS fehlte das: `auto` lief still direkt, der Agent schrieb ins Projekt, und ein ausdrückliches `disposable` lehnte ab. Jetzt klont der Daemon das geöffnete Projekt mit `fclonefileat(2)` nach `<Laufzeitverzeichnis>/disposable/<id>/upper`, Seatbelt bekommt den Klon als beschreibbares Projekt, und Diff, Übernahme und Verwerfen bleiben derselbe Code.
+
+Entscheidungen:
+
+- Der Klon liegt neben den Sitzungsverzeichnissen, nicht in ihnen: Eine Sitzung endet mit der Sandbox (`LaunchPlan.session_dir`, HUM-368), die Änderungen warten bis `apply` oder `discard`.
+- Masken entfernt der Daemon vor dem Start aus dem Klon; zusätzlich verbietet das Profil dieselben Pfade im Klon. Eine Maske hinter einem Symlink im Projekt lässt sich nicht sicher entfernen und zählt als gescheiterter Klon.
+- Das echte Projekt steht als `sealed` am Ende des Profils, auch außerhalb der privaten Bäume; `mounts.extra_rw` ist nur lesbar.
+- Ein Klon trägt keine Whiteouts. `scan_clone` behandelt jedes Verzeichnis wie ein opakes, und was gegenüber der Grundlage gleich ist, gilt als unberührt, damit Änderungen des Menschen nicht als Änderungen des Agenten erscheinen.
+- Vor dem ersten Lesen benennt `Layer::seal` den Klon um: Das Profil prüft Pfade, und ein Prozess, der die Sandbox überlebt hat, verliert so den Zugriff (K-20).
+- Scheitert der Klon, gilt die Regel von Linux: `auto` läuft direkt mit der Warnung `SANDBOX_033`, die den Grund nennt, ein ausdrückliches `disposable` lehnt mit `SANDBOX_030` ab.
+- `fclonefileat` steht in einem eigenen `extern`-Block; keine neue Abhängigkeit, `daemon/Cargo.toml` bleibt.
+
+Akzeptanz:
+
+- Unter macOS ist `auto` bei schreibbarem Projekt eine Wegwerf-Sandbox, `Info.capabilities` nennt `sandbox.disposable`, und ein Lauf schreibt nichts ins Projekt.
+- `sandbox changes`, `apply` und `discard` arbeiten wie unter Linux; Änderung, Neuanlage, Löschung einer Datei, eines Verzeichnisses und eines Symlinks erscheinen mit der richtigen Art.
+- `.env`, `.git/config` und `.git/hooks` liegen nicht im Klon, sind dort nicht anzulegen, ihr Fehlen ist keine Löschung, und etwas auf einer Maske wird nie geschrieben. Das gilt für jede eingestellte Maske, auch eine, die es beim Start nicht gibt.
+- Im direkten Lauf gilt eine Maske hinter einem Symlink auch für ihr aufgelöstes Ziel, die Ordner darüber sind gesperrt.
+- Die Wurzel des Klons lässt sich nicht löschen oder umbenennen; Lesen und Versiegeln öffnen sie über einen Deskriptor ohne Symlink und vergleichen Gerät und Inode, sonst `SANDBOX_031`. Der künftige Name `sealed` ist im Profil von Anfang an verboten.
+- `uchg`, `uappnd` und ACLs halten weder das Entfernen einer Maske noch das Verwerfen auf; was bleibt, wird gemeldet, nie als verworfen gezählt.
+- Das echte Projekt ist für den Agenten weder lesbar noch schreibbar, auch unter `/opt`.
+- Eine Datei, die der Mensch während des Laufs ändert, ist keine Änderung des Agenten; ändern beide, ist es ein Konflikt.
+- Kein APFS, verschiedene Volumes, eine unlesbare Datei oder ein Laufzeitverzeichnis im Projekt: `disposable` lehnt mit `why` und `fix` ab, `auto` läuft direkt und warnt mit `SANDBOX_033`; nie still.
+- Die Schicht überlebt das Ende der Sandbox und verschwindet mit `apply`, `discard` oder dem nächsten Start des Daemons; ein Lauf ohne Änderungen hinterlässt keine.
+- Nach dem Ende scheitert ein überlebender Prozess beim Öffnen von Dateien im Klon, relativ wie absolut.
+- `docs/SECURITY.md` Abschnitt 12 und `docs/THREAT-MODEL.md` K-24 nennen die Grenzen: gehaltener Schreib-Deskriptor, keine Größengrenze, Klon auf der Platte.
+
+Folge-Kandidaten:
+
+- `tests/escape/macos/run.sh` um einen Wegwerf-Lauf ergänzen, damit Masken und Versiegelung in der CI laufen.
+- Eine Größengrenze für den Klon, die nicht das ganze Volume misst.
+- Eine Schicht auf dem Volume des Projekts, damit Projekte auf externen APFS-Volumes einen Klon bekommen.

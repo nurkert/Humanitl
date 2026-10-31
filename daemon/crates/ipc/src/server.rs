@@ -435,8 +435,9 @@ impl IpcServer {
         // before it offers the action.
         self.info.capabilities.push("sandbox.exec".to_owned());
         // The disposable sandbox (HUM-350): a client asks before it offers
-        // the switch and the changes panel. Only where the overlay exists.
-        if cfg!(target_os = "linux") {
+        // the switch and the changes panel. On Linux with the overlay, on
+        // macOS with an APFS clone (HUM-374).
+        if cfg!(any(target_os = "linux", target_os = "macos")) {
             self.info.capabilities.push("sandbox.disposable".to_owned());
         }
         self.sandbox = Some(sandbox);

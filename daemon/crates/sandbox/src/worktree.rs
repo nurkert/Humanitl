@@ -96,6 +96,21 @@ pub const DEFAULT_SKIP_PATHS: &[&str] = &[".git/objects"];
 #[cfg(target_os = "linux")]
 const DIR_BUFFER_BYTES: usize = 64 * 1024;
 
+/// Wie ein Verzeichnis geöffnet wird, das nur Anker für weitere Zugriffe ist:
+/// `O_PATH` unter Linux. macOS kennt es nicht, dort reicht `O_RDONLY`.
+#[cfg(target_os = "linux")]
+pub(crate) const DIR_ANCHOR: OFlags = OFlags::PATH;
+/// Wie ein Verzeichnis geöffnet wird, das nur Anker für weitere Zugriffe ist:
+/// `O_PATH` unter Linux. macOS kennt es nicht, dort reicht `O_RDONLY`.
+#[cfg(not(target_os = "linux"))]
+pub(crate) const DIR_ANCHOR: OFlags = OFlags::RDONLY;
+
+/// Rechte als [`Mode`]; `RawMode` ist auf Linux `u32`, auf macOS `u16`.
+#[allow(clippy::cast_possible_truncation, clippy::unnecessary_cast)]
+pub(crate) const fn raw_mode(mode: u32) -> Mode {
+    Mode::from_raw_mode((mode & 0o7777) as rustix::fs::RawMode)
+}
+
 /// Die Flags, mit denen jeder Zugriff unter der Wurzel aufgelöst wird.
 ///
 /// Öffentlich, damit ein Test sie nennen kann: Fällt eines der drei weg, ist
@@ -776,7 +791,7 @@ pub(crate) fn dir_names(dir: BorrowedFd<'_>, room: usize) -> Result<(Vec<OsStrin
 /// Die Namen eines Verzeichnisses unter macOS, über `readdir(3)` statt
 /// `getdents64(2)` (HUM-312); sonst wie die Linux-Fassung.
 #[cfg(not(target_os = "linux"))]
-fn dir_names(dir: BorrowedFd<'_>, room: usize) -> Result<(Vec<OsString>, bool), Errno> {
+pub(crate) fn dir_names(dir: BorrowedFd<'_>, room: usize) -> Result<(Vec<OsString>, bool), Errno> {
     let iter = rustix::fs::Dir::read_from(dir)?;
     let mut out = Vec::new();
     for entry in iter {

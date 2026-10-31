@@ -205,7 +205,7 @@ Arguments:
 
 Options:
       --disposable
-          Keep the project folder untouched: it lies read-only under a layer in RAM, and after the run `humanitl sandbox changes` shows what the agent changed, `apply` writes it and `discard` drops it. The same as sandbox.mode = "disposable" for this run
+          Keep the project folder untouched: it lies read-only under a layer (in RAM on Linux, an APFS clone on macOS), and after the run `humanitl sandbox changes` shows what the agent changed, `apply` writes it and `discard` drops it. The same as sandbox.mode = "disposable" for this run
 
       --json
           Machine-readable output: one JSON value on stdout, diagnostics included
@@ -286,7 +286,7 @@ Options:
           Read this config file instead of the one in the user's config directory
 
       --disposable
-          Run with the project folder read-only under a layer in RAM; at the end the changes are listed and discarded (this command keeps no layer; `humanitl run --disposable` keeps them for apply)
+          Run with the project folder read-only under a layer (in RAM on Linux, an APFS clone on macOS); at the end the changes are listed and discarded (this command keeps no layer; `humanitl run --disposable` keeps them for apply)
 
   -v, --verbose...
           Explain what is happening; repeat for more
