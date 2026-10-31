@@ -357,7 +357,11 @@ impl SeatbeltPolicy {
         for dir in &self.writable {
             let _ = write!(out, " (subpath {})", quote_path(dir));
         }
-        out.push_str(" (literal \"/dev/null\") (literal \"/dev/tty\"))\n");
+        // `/dev/stdout` und `/dev/fd/N` öffnen nur, was der Prozess schon hält.
+        out.push_str(
+            " (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/stdout\") \
+             (literal \"/dev/stderr\") (regex #\"^/dev/fd/[0-9]+$\"))\n",
+        );
         // Fremde Terminals des Nutzers bleiben zu: Das eigene erbt der Agent
         // als Deskriptor und erreicht es als `/dev/tty`; `stat` bleibt
         // erlaubt, sonst fände `ttyname(3)` das eigene nicht. Ein neues legt er
@@ -1120,6 +1124,7 @@ mod tests {
         assert_eq!(text.matches("network-outbound").count(), 3, "{text}");
         assert_eq!(text.matches("network-bind").count(), 2, "{text}");
         assert!(!text.contains("(allow network*)"));
+        assert!(text.contains("(literal \"/dev/stdout\")"));
         assert!(text.contains("(deny file-write* (literal \"/Users/me/project/.git\"))"));
         assert!(text.contains("(deny file-read-data file-write* (regex #\"^/dev/ttys[0-9]+$\"))"));
         // Die Masken stehen nach allen Erlaubnissen, denn die letzte passende

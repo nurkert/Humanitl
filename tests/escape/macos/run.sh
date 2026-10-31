@@ -101,12 +101,14 @@ probe write_etc        sh -c "echo x > \"\$HOME/../etc/humanitl/ca.crt\""
 probe rename_git       sh -c "mv .git .gitx"
 probe other_terminal   sh -c "for t in /dev/ttys*; do [ -c \"\$t\" ] && exec 3<>\"\$t\" && exit 0; done; exit 1"
 '
-expected_ok='write_project read_project own_pty'
+expected_ok='write_project read_project own_pty write_stdout write_fd'
 out="$(cd "$project" && "$bin/humanitl" sandbox run --work "$project" -- /bin/sh -c "
 REAL_HOME='$HOME'
 $probes
 echo x > new.txt && echo write_project works
 cat readme >/dev/null && echo read_project works
+sh -c 'echo x > /dev/stdout' >/dev/null && echo write_stdout works
+sh -c 'echo x > /dev/fd/1' >/dev/null && echo write_fd works
 python3 -c 'import os; m, s = os.openpty(); os.write(s, b\"x\"); print(\"own_pty works\")'
 " 2>&1 || true)"
 while read -r name verdict _; do
