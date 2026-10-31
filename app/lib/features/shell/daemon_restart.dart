@@ -97,6 +97,20 @@ bool agentSessionHolds(AsyncValue<SandboxStatus> status) {
   };
 }
 
+/// Whether [status] says that the sandbox runs, so that one press can stop it
+/// (HUM-367). Everything else that holds the daemon stays as it is: a start
+/// or a stop under way ends by itself, and unknown is not a session anybody
+/// may end.
+bool agentSessionStoppable(AsyncValue<SandboxStatus> status) =>
+    !status.hasError && status.value?.state == SandboxState.running;
+
+/// How often and how far apart [restartAfterStop] asks again: the session
+/// ends a moment after the stop returns, and until then the daemon says busy.
+const int restartAfterStopAttempts = 20;
+
+/// The pause between two of those attempts.
+const Duration restartAfterStopPause = Duration(milliseconds: 500);
+
 /// How a restart ended.
 sealed class DaemonRestart {
   const DaemonRestart();
@@ -125,6 +139,7 @@ final class DaemonRestartFailed extends DaemonRestart {
 }
 
 /// Runs the restart for a daemon that speaks contract minor [daemonMinor].
+/// [reload] is false when an earlier attempt already reloaded the units.
 ///
 /// [cli] is the command line next to this app. [askSession] asks
 /// `Sandbox(Status)` afresh for the old path and answers true, false or null
@@ -135,6 +150,7 @@ Future<DaemonRestart> restartUserDaemon(
   required int daemonMinor,
   required Future<bool?> Function() askSession,
   bool? macOS,
+  bool reload = true,
 }) async {
   // On macOS the daemon is a launchd agent (HUM-325): no unit to reload, and
   // the restart is `humanitl daemon restart` (`launchctl kickstart -k`), which
@@ -150,9 +166,9 @@ Future<DaemonRestart> restartUserDaemon(
   final List<String> restart = mac
       ? <String>[cli!, 'daemon', 'restart']
       : daemonRestartCommand;
-  if (!mac) {
-    final _Ran reload = await _run(run, daemonReloadCommand);
-    if (reload.failure case final String failure) {
+  if (!mac && reload) {
+    final _Ran reloaded = await _run(run, daemonReloadCommand);
+    if (reloaded.failure case final String failure) {
       return DaemonRestartFailed(failure);
     }
   }
@@ -195,6 +211,40 @@ Future<DaemonRestart> restartUserDaemon(
     return const DaemonSessionHolds();
   }
   return _restart(run, restart);
+}
+
+/// Stops the agent session, then restarts as [restartUserDaemon] does
+/// (HUM-367): the person agreed to lose the session, not to skip the check.
+/// The daemon still decides at each attempt, so a session started meanwhile
+/// keeps the daemon running and ends in [DaemonSessionHolds].
+Future<DaemonRestart> restartAfterStop(
+  CommandRunner run, {
+  required Future<void> Function() stop,
+  required String? cli,
+  required int daemonMinor,
+  required Future<bool?> Function() askSession,
+  bool? macOS,
+  Duration pause = restartAfterStopPause,
+}) async {
+  await stop();
+  DaemonRestart outcome = const DaemonSessionHolds();
+  for (int attempt = 0; attempt < restartAfterStopAttempts; attempt++) {
+    if (attempt > 0) {
+      await Future<void>.delayed(pause);
+    }
+    outcome = await restartUserDaemon(
+      run,
+      cli: cli,
+      daemonMinor: daemonMinor,
+      askSession: askSession,
+      macOS: macOS,
+      reload: attempt == 0,
+    );
+    if (outcome is! DaemonSessionHolds) {
+      return outcome;
+    }
+  }
+  return outcome;
 }
 
 /// [command]: `systemctl --user restart humanitld.service`, or on macOS

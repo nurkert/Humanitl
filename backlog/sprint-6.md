@@ -41,6 +41,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-361 | Flaky-Test: `a_stalled_streamed_upload_ends_with_limit_004` nimmt den Abbruch nach der Antwort hin | S | HUM-057 |
 | HUM-360 | Website auf Telefonen: Download-Felder passen in die Breite, Pfeile und Zählwerk der Bühne stehen frei | S | HUM-337, HUM-347, HUM-338 |
 | HUM-364 | Proxy: Klartext-HTTP im `CONNECT`-Tunnel, damit `pi` 1.x sein lokales Modell erreicht | S | HUM-024 |
+| HUM-367 | Statusleiste: Daemon-Neustart auch mit laufender Sitzung, ohne `systemctl`-Hinweis | S | HUM-284 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -628,3 +629,14 @@ Akzeptanz:
 - Ein `CONNECT` im Klartext-Tunnel behält die SNI-Prüfung seines TLS.
 - Der Blick in den Tunnel und der Handschlag teilen sich eine Frist.
 - Ein abgelehnter Handschlag erreicht den Client weiter als Alert (`conf_13`).
+
+## HUM-367 · Statusleiste: Daemon-Neustart auch mit laufender Sitzung, ohne `systemctl`-Hinweis
+
+Nach einem Update läuft der alte Daemon weiter. Die Leiste nannte auch auf dem Mac `systemctl`, und der Knopf war gesperrt, solange eine Sitzung lief.
+
+Akzeptanz:
+
+- Die Leiste nennt keinen Befehl mehr.
+- Läuft eine Sitzung, fragt der Knopf in der Leiste nach; der Fokus steht auf Abbrechen, `Escape` bricht ab, und nur die zweite Antwort stoppt die Sitzung und startet neu.
+- Die Antwort gilt genau der Sandbox, nach der gefragt wurde.
+- Ein Daemon, der busy bleibt, wird nie neu gestartet. Start, Stopp, unbekannter Zustand und eine fehlende Kommandozeile ruhen wie bisher.
