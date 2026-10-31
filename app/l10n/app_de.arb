@@ -1468,5 +1468,8 @@
   "settingsSandboxModeDisposable": "Wegwerf",
   "settingsSandboxModeNowDisposable": "Auf diesem System ist der nächste Start eine Wegwerf-Sandbox.",
   "settingsSandboxModeNowDirect": "Auf diesem System ist der nächste Start direkt.",
-  "sandboxDisposableFellBack": "Wegwerf ist hier nicht verfügbar, dieser Start ist deshalb direkt: {reason}"
+  "sandboxDisposableFellBack": "Wegwerf ist hier nicht verfügbar, dieser Start ist deshalb direkt: {reason}",
+  "trayNoticeNotificationsDeniedTitle": "Mitteilungen sind nicht erlaubt",
+  "trayNoticeNotificationsDeniedWhy": "Eine angehaltene Anfrage kann sich nicht melden und steht deshalb nur in der Menüleiste und am Dock-Symbol. Erlaube Humanitl unter Systemeinstellungen, Mitteilungen.",
+  "trayNoticeNotificationsFailedTitle": "Mitteilungen ließen sich nicht einrichten"
 }

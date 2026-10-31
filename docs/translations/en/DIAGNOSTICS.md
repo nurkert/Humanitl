@@ -1272,9 +1272,9 @@ A session is already running
 
 No room for the tray icon
 
-**Trigger.** The desktop environment offers no room for the tray icon in the system area.
+**Trigger.** The desktop environment offers no room for the tray icon in the system area, or macOS does not allow the app to show notifications.
 
-**Fix.** No fix: the window remains the way to the queue.
+**Fix.** `OpenUrl` to the AppIndicator extension, on macOS `CopyCommand` to the notification settings. The window remains the way to the queue.
 
 #### UI_003
 
