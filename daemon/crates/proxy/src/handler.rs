@@ -44,6 +44,7 @@ use hyper::header::{HeaderName, HeaderValue};
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode, Version};
 use hyper_util::rt::{TokioIo, TokioTimer};
+use tokio::io::AsyncReadExt as _;
 
 use crate::body::{self, BufferError, ResponseBody};
 use crate::ca::LeafCache;
@@ -440,7 +441,8 @@ impl FlowHandler {
 
     /// `CONNECT`: mit `200` bestätigen, dann die Verbindung übernehmen, TLS mit
     /// dem Leaf des Ziels terminieren und die entschlüsselte Verbindung erneut
-    /// bedienen.
+    /// bedienen. Beginnt der Tunnel mit einer HTTP-Anfrage statt mit einem
+    /// Handschlag, wird er ohne TLS bedient (HUM-364).
     ///
     /// Der Tunnel baut nichts nach oben auf: Der `CONNECT` endet am lokalen
     /// TLS-Endpunkt des Proxys. Erst eine erlaubte Anfrage darin löst einen
@@ -491,16 +493,35 @@ impl FlowHandler {
                     return;
                 }
             };
+            // Der Anfang des Tunnels entscheidet, was in ihm steht (HUM-364): undici
+            // tunnelt mit `proxyTunnel` auch `http://`-Ziele, dort kommt kein
+            // Handschlag, sondern gleich die Anfrage. Sie läuft durch denselben
+            // Handler wie jede andere; `Host` und Tunnelziel bleiben gebunden.
+            let mut io = TokioIo::new(upgraded);
+            let mut head = vec![0_u8; 16 * 1024];
+            let deadline = tokio::time::Instant::now() + handshake_timeout;
+            let Ok(read) = tokio::time::timeout_at(deadline, io.read(&mut head)).await else {
+                tracing::debug!(
+                    host = %authority.host,
+                    timeout = ?handshake_timeout,
+                    "nothing arrived within the header timeout; closing the tunnel"
+                );
+                return;
+            };
+            head.truncate(read.unwrap_or(0));
+            let cleartext = head.first().copied().is_some_and(tls::starts_http);
+            let io = tls::Rewound::new(head, io);
+            if cleartext {
+                let inner_meta = meta.cleartext_tunnel(authority);
+                serve_connection(handler, io, inner_meta, slot).await;
+                return;
+            }
             // Die Frist um den Handschlag: Wer den Tunnel öffnet und nie ein
             // `ClientHello` schickt, hielt bis HUM-120 diese Aufgabe und ihren
             // Dateideskriptor für immer. Weder hyper noch `tokio_rustls` spannt
             // hier eine Uhr — die Kopf-Frist des inneren `serve_connection`
             // beginnt erst nach dem Handschlag.
-            let accepted = tokio::time::timeout(
-                handshake_timeout,
-                tls::accept(server_config, TokioIo::new(upgraded)),
-            )
-            .await;
+            let accepted = tokio::time::timeout_at(deadline, tls::accept(server_config, io)).await;
             match accepted {
                 Ok(Ok((stream, sni))) => {
                     handler.note_missing_sni(sni.as_ref(), &authority);

@@ -59,6 +59,33 @@ fn tier1() -> Arc<dyn Scanner> {
     Arc::new(Tier1Scanner::new(&FindingsSettings::default()).unwrap())
 }
 
+/// HUM-364: `pi` 1.x erreicht sein lokales Modell durch einen Klartext-Tunnel,
+/// und daneben gilt die Sperre für private Adressen weiter.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cleartext_tunnel_reaches_the_llm_and_nothing_beside_it() {
+    let upstream = FakeUpstream::ollama().await;
+    let port = upstream.port();
+    let proxy = ProxyBuilder::new()
+        .rules(&rules(port))
+        .allow_private(false)
+        .ask(Duration::from_secs(30))
+        .start()
+        .await;
+    let _decider = proxy.decide_with(Decision::Allow);
+    let target = format!("127.0.0.1:{port}");
+
+    let request =
+        |path: &str| format!("GET {path} HTTP/1.1\r\nHost: {target}\r\nConnection: close\r\n\r\n");
+    let answer = proxy
+        .cleartext_tunnel(&target, &request("/v1/models"))
+        .await;
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+
+    let beside = proxy.cleartext_tunnel(&target, &request("/admin")).await;
+    assert!(beside.starts_with("HTTP/1.1 502"), "{beside}");
+    assert!(beside.contains("upstream_private_address"), "{beside}");
+}
+
 /// Die Durchreiche trifft den Endpunkt und nichts daneben.
 ///
 /// Alles, was sie nicht trifft, landet in der Warteschlange, und die
