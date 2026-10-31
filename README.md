@@ -173,7 +173,7 @@ Each point is a channel in the threat model
   HUM-331 restricts that socket, restart the daemon (`humanitl daemon restart`) after a session
   you do not trust.
 - **A deny list instead of an allow list for reading (K-21).** The sandbox reads everything outside
-  `/Users`, `/Volumes`, `/private/var/folders` and `/private/tmp`, among them all of `/etc`,
+  `/Users`, `/Volumes`, `/private/var/folders`, `/private/tmp` and `/private/var/tmp`, among them all of `/etc`,
   `/opt/homebrew` and `/usr/local/etc`. A credential in a configuration file there is readable by
   the agent, which could send it to the LLM passthrough without a hold. Keep secrets in your home
   directory.

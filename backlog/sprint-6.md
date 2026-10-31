@@ -50,6 +50,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-370 | macOS: Der Agent kann die Dateien seines Adapters nicht ersetzen | S | HUM-323 |
 | HUM-371 | macOS: Ein Projekt kann OpenCode nicht umkonfigurieren | S | HUM-037, HUM-323 |
 | HUM-372 | macOS: App und CLI nennen, was dort wirklich läuft | M | HUM-324, HUM-325, HUM-327 |
+| HUM-377 | macOS: kleinere Lücken der Sandbox | M | HUM-323, HUM-324 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -737,3 +738,21 @@ Akzeptanz:
 - Kein Vorschlag nennt unter macOS `/run/user/<uid>`; der Rückfall des Laufzeitverzeichnisses verlinkt `docs/INSTALL.md#runtime-directory-on-macos` statt des XDG-Abschnitts.
 - `docs/INSTALL.md` und `docs/cli.md` nennen Installation, Update und `doctor` unter macOS, die deutschen Übersetzungen ziehen mit.
 - Die Plattform wählt in Dart `defaultTargetPlatform`, Funktionen nehmen zum Testen `platform:` an. `app/test/l10n/macos_text_test.dart` prüft beide Richtungen.
+
+## HUM-377 · macOS: kleinere Lücken der Sandbox
+
+`sandbox.env.PATH` blieb unter macOS ohne Wirkung, obwohl `AGENT_006` es vorschlägt. Vorprüfung und Doctor urteilten gegen die Einhängungen des Linux-Profils, also endete `humanitl sandbox run -- opencode` mit `AGENT_004` für `/opt/homebrew/bin/opencode`, das gestartet wäre. Dazu kommen mehrere kleine Stellen an Profil, Einweisung, launchd-Agent und Prüfungen.
+
+Akzeptanz:
+
+- Die Vorprüfung kennt die Masken des Projekts auch unter seinem echten Pfad, mit derselben Auswahl wie der Plan.
+- Der eingestellte `PATH` gilt, `SEARCH_PATH` steht ohne Doppelte dahinter, ein gebundener Agent bleibt vorn. Der unveränderte Linux-Pfad des ausgelieferten Profils stellt `/usr/bin` nicht vor Homebrew.
+- `GLOBAL_NODE_MODULES` nennt unter macOS `/opt/homebrew/lib/node_modules`.
+- Vorprüfung, `humanitl sandbox run` und Doctor urteilen unter macOS gegen das, was Seatbelt erlaubt, und rechnen mit demselben Suchpfad wie der Start. Ein Programm unter `/opt/homebrew` ergibt kein `AGENT_004`, eines in einem privaten Baum eines, dessen Text Seatbelt nennt und keine Einhängungen. Die Vorschläge lauten unter macOS ohne `sudo`, wo Homebrew dem Nutzer gehört.
+- `/private/var/tmp` ist für das Lesen gesperrt.
+- Die Einweisung sagt unter macOS: `$TMPDIR` statt `/tmp`, Masken antworten mit `EPERM` (auch `.git/config`, `git` selbst funktioniert, HUM-366), verschachteltes `sandbox-exec` scheitert, `whoami` und `hostname` sind echt. Das Wort `/tmp` übersteht die Pfadabbildung. Linux-Text und `TOKEN_BUDGET` bleiben. `docs/SECURITY.md` Abschnitt 12 sagt dasselbe; `/private/tmp` wird nie geöffnet.
+- Das Verzeichnis einer laufenden Sitzung übersteht das Aufräumen in jedem Alter; das einer beendeten geht nach `STALE_SESSION`.
+- `daemon install` weist unter macOS einen Daemon unter `/Volumes` oder in `AppTranslocation` mit `DAEMON_007` ab und nennt `/Applications`.
+- `daemon install --refresh` tut unter macOS nichts und fasst launchd nicht an.
+- Das Ziel von `--tests-dir` (`/tests/escape`) ist auf den echten Ordner abgebildet.
+- `tests/escape/macos/run.sh` prüft Git, Adapter-Dateien und ein nur lesbares Projekt; der CI-Job `macos` fährt das volle `flutter test`.
