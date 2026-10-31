@@ -41,17 +41,27 @@
 //!   keine FIFO, keinen Socket, keine setuid-, setgid- oder Sticky-Bits, und
 //!   keine Datei, die der Mensch seit dem Start geändert hat, ohne dass er es
 //!   ausdrücklich für diese Datei sagt (`ApplyOptions::may_overwrite`).
+//!
+//! # macOS (HUM-374)
+//!
+//! Dort gibt es kein Overlay. Die „obere Schicht" ist ein vollständiger
+//! APFS-Klon des Projekts (`clone`), den die Sandbox als ihr Projekt
+//! beschreibt. Er trägt keine Whiteouts; [`scan_clone`] vergleicht deshalb
+//! jedes Verzeichnis mit dem Projekt, und was der Agent nicht angefasst hat,
+//! erkennt es an der Grundlage. Übernahme und Verwerfen sind dieselben. Ohne
+//! PID-Namensraum kann ein Prozess die Sandbox überleben; darum benennt
+//! [`Layer::seal`] den Klon nach dem Ende um, und das Profil, das Pfade
+//! prüft, lässt ihn nicht mehr heran. Eine Grenze wie [`SizeGuard`] gibt es
+//! dort nicht: Sie misst ein ganzes Dateisystem, und unter macOS teilt sich
+//! der Klon das Volume mit dem Rest des Rechners.
 
-#[cfg(target_os = "linux")]
 mod apply;
-#[cfg(target_os = "linux")]
+#[cfg(target_os = "macos")]
+mod clone;
 mod layer;
-#[cfg(target_os = "linux")]
 mod scan;
 mod text_diff;
 
-#[cfg(not(target_os = "linux"))]
-use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -62,19 +72,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::bwrap::Version;
 
-#[cfg(target_os = "linux")]
 pub use crate::disposable::apply::{ApplyOptions, ApplyReport, apply, select};
+#[cfg(target_os = "macos")]
+pub use crate::disposable::clone::fd_path;
 #[cfg(all(test, target_os = "linux"))]
 use crate::disposable::layer::is_tmpfs;
-#[cfg(target_os = "linux")]
 pub use crate::disposable::layer::{
-    Layer, SizeGuard, Usage, baseline, baseline_at, baseline_limits, ensure_ended, probe_layer_dir,
-    process_lives, require_tmpfs, start_ticks, sweep,
+    Layer, SizeGuard, Swept, Usage, baseline, baseline_at, baseline_limits, ensure_ended,
+    probe_layer_dir, process_lives, require_tmpfs, start_ticks, sweep,
 };
-#[cfg(target_os = "linux")]
-pub(crate) use crate::disposable::layer::{chmod_nofollow, open_dir_forcing};
-#[cfg(target_os = "linux")]
-pub use crate::disposable::scan::{ChangeSet, LayerChange, scan};
+pub(crate) use crate::disposable::layer::{SEALED, chmod_nofollow, open_dir_forcing};
+pub use crate::disposable::scan::{ChangeSet, LayerChange, scan, scan_clone};
 pub use crate::disposable::text_diff::{DIFF_MAX_BYTES, DIFF_MAX_OUTPUT, unified};
 
 /// Ab dieser `bwrap`-Fassung gibt es `--overlay-src` und `--overlay`
@@ -173,14 +181,14 @@ pub struct DisposableRecord {
     pub discarded: Vec<String>,
 }
 
-/// Der Befund unter einem System ohne das Overlay von bubblewrap: Die
-/// Wegwerf-Sandbox gibt es vorerst nur unter Linux (HUM-350).
+/// Der Befund, wenn bubblewrap außerhalb von Linux läuft: Dort fehlt sein
+/// Overlay (HUM-350). macOS hat Seatbelt und den Klon (HUM-374).
 #[must_use]
 pub fn unsupported() -> Diagnostic {
     Diagnostic::builder(SANDBOX_030, Severity::Blocking)
         .why(
-            "the disposable sandbox needs the overlay of bubblewrap, which exists only on \
-             Linux; on this system the agent works in the project folder or not at all",
+            "this sandbox backend has no disposable mode: the overlay of bubblewrap exists \
+             only on Linux, and on macOS the mode comes from the Seatbelt backend",
         )
         .fix(FixAction::ChangeSetting {
             key: "sandbox.mode".to_owned(),
@@ -225,9 +233,9 @@ impl ModeChoice {
 /// - `disposable` ist eine Wahl des Menschen und fällt nie zurück: Fehlt eine
 ///   Bedingung, endet der Start mit deren `SANDBOX_030`.
 /// - `auto` ist die Vorgabe: `disposable`, wenn alles da ist, sonst `direct`
-///   mit dem Hinweis `SANDBOX_033`, der den Grund nennt. Unter einem System
-///   ohne Overlay (macOS) gibt es den Modus gar nicht; dort ist `auto` still
-///   `direct`, denn ein Hinweis bei jedem Start sagte nur, was immer gilt.
+///   mit dem Hinweis `SANDBOX_033`, der den Grund nennt. Unter macOS meldet
+///   `support` nur ein nur lesbares Projekt; ob der Klon gelingt, zeigt der
+///   Start; scheitert er, fällt `auto` ebenso zurück (HUM-374).
 ///
 /// # Errors
 ///
@@ -243,7 +251,6 @@ pub fn resolve_mode(
             mode: SandboxMode::Disposable,
             notice: None,
         }),
-        SandboxMode::Auto if !cfg!(target_os = "linux") => Ok(ModeChoice::direct(None)),
         SandboxMode::Auto => Ok(match support() {
             Ok(()) => ModeChoice {
                 mode: SandboxMode::Disposable,
@@ -274,13 +281,8 @@ pub fn fallback_notice(reason: &Diagnostic) -> Diagnostic {
     .build()
 }
 
-/// Räumt Schichten auf, die ein früherer Daemon liegen ließ. Ohne Overlay
-/// gibt es keine; nichts zu tun.
-#[cfg(not(target_os = "linux"))]
-#[must_use]
-pub fn sweep(_runtime_dir: &Path) -> usize {
-    0
-}
-
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
+
+#[cfg(test)]
+mod clone_tests;

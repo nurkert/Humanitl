@@ -39,10 +39,10 @@ use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use rustix::io::Errno;
 
 use crate::summary::{ChangeKind, display_path};
-use crate::worktree::{Kind, TreeSnapshot, open_beneath};
+use crate::worktree::{DIR_ANCHOR, Kind, TreeSnapshot, open_beneath, raw_mode};
 
 use super::scan::{
-    ChangeSet, LayerChange, Lower, conflict, entry_of, lower_at, open_upper_file, same,
+    ChangeSet, LayerChange, Lower, conflict, entry_of, lower_at, mode_bits, open_upper_file, same,
     target_stays_inside,
 };
 
@@ -312,7 +312,7 @@ pub(crate) struct DirModes(Vec<DeferredMode>);
 struct DeferredMode {
     rel: PathBuf,
     mode: u32,
-    dev: u64,
+    dev: rustix::fs::Dev,
     ino: u64,
     seen_mode: u32,
 }
@@ -328,7 +328,7 @@ impl DirModes {
         let dir = open_beneath(
             lower,
             rel,
-            OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            DIR_ANCHOR | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         )
         .map_err(|err| parent_problem(rel, err))?;
         let stat =
@@ -338,7 +338,7 @@ impl DirModes {
             mode: mode & 0o777,
             dev: stat.st_dev,
             ino: stat.st_ino,
-            seen_mode: stat.st_mode & 0o7777,
+            seen_mode: mode_bits(&stat) & 0o7777,
         });
         Ok(())
     }
@@ -351,13 +351,13 @@ impl DirModes {
             let dir = open_beneath(
                 lower,
                 &rel,
-                OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                DIR_ANCHOR | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             )
             .map_err(|err| (rel.clone(), err.to_string()))?;
             let stat = rustix::fs::fstat(&dir).map_err(|err| (rel.clone(), err.to_string()))?;
             if stat.st_dev != deferred.dev
                 || stat.st_ino != deferred.ino
-                || stat.st_mode & 0o7777 != deferred.seen_mode
+                || mode_bits(&stat) & 0o7777 != deferred.seen_mode
             {
                 return Err((
                     rel,
@@ -367,11 +367,14 @@ impl DirModes {
                 ));
             }
             // Über den geprüften Deskriptor, nicht über den Pfad.
-            rustix::fs::chmod(
+            #[cfg(target_os = "linux")]
+            let done = rustix::fs::chmod(
                 format!("/proc/self/fd/{}", std::os::fd::AsRawFd::as_raw_fd(&dir)),
-                Mode::from_raw_mode(deferred.mode),
-            )
-            .map_err(|err| (rel.clone(), err.to_string()))?;
+                raw_mode(deferred.mode),
+            );
+            #[cfg(not(target_os = "linux"))]
+            let done = rustix::fs::fchmod(&dir, raw_mode(deferred.mode));
+            done.map_err(|err| (rel.clone(), err.to_string()))?;
         }
         Ok(())
     }
@@ -451,11 +454,7 @@ pub(crate) fn apply_one(
                 if matches!(present, Lower::Present(_)) {
                     remove(&parent, name, expected)?;
                 }
-                match rustix::fs::mkdirat(
-                    &parent,
-                    name,
-                    Mode::from_raw_mode((change.mode & 0o777) | 0o700),
-                ) {
+                match rustix::fs::mkdirat(&parent, name, raw_mode((change.mode & 0o777) | 0o700)) {
                     Ok(()) | Err(Errno::EXIST) => {}
                     Err(err) => return Err(format!("the directory cannot be created ({err})")),
                 }
@@ -596,14 +595,14 @@ fn write_file(
         parent,
         &temp,
         OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::from_raw_mode(0o600),
+        raw_mode(0o600),
     )
     .map_err(|err| format!("a temporary file cannot be created next to it ({err})"))?;
     let written = (|| -> std::io::Result<()> {
         let mut from = File::from(source);
         let mut to = File::from(target);
         std::io::copy(&mut from, &mut to)?;
-        rustix::fs::fchmod(&to, Mode::from_raw_mode(mode))?;
+        rustix::fs::fchmod(&to, raw_mode(mode))?;
         to.sync_all()?;
         Ok(())
     })()
@@ -649,7 +648,7 @@ fn ensure_dir(
             Ok(fd) => fd,
             Err(Errno::NOENT) => {
                 let mode = upper_mode(upper, &walked).unwrap_or(0o755);
-                match rustix::fs::mkdirat(&current, part, Mode::from_raw_mode(mode | 0o700)) {
+                match rustix::fs::mkdirat(&current, part, raw_mode(mode | 0o700)) {
                     Ok(()) => modes.later(lower, &walked, mode)?,
                     Err(Errno::EXIST) => {}
                     Err(err) => return Err(parent_problem(&walked, err)),
@@ -669,11 +668,12 @@ fn upper_mode(upper: BorrowedFd<'_>, rel: &Path) -> Option<u32> {
     let dir = open_beneath(
         upper,
         parent,
-        OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        DIR_ANCHOR | OFlags::DIRECTORY | OFlags::CLOEXEC,
     )
     .ok()?;
     let stat = rustix::fs::statat(&dir, name, AtFlags::SYMLINK_NOFOLLOW).ok()?;
-    (FileType::from_raw_mode(stat.st_mode) == FileType::Directory).then_some(stat.st_mode & 0o777)
+    (FileType::from_raw_mode(stat.st_mode) == FileType::Directory)
+        .then_some(mode_bits(&stat) & 0o777)
 }
 
 fn parent_problem(rel: &Path, err: Errno) -> String {

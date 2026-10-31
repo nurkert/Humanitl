@@ -1833,7 +1833,7 @@ fn placeholder_diagnostic(why: String) -> Diagnostic {
 /// Wegwerf-Sandbox (HUM-350). Der Fix zeigt auf die Ursache (HUM-357): auf
 /// `sandbox.work_mode`, wenn die Sitzung `ro` verlangt, sonst auf das
 /// Profil, dessen `mounts.work.mode = "ro"` es erzwingt.
-fn read_only_work(profile: &SandboxProfile, session: &SessionContext) -> Diagnostic {
+pub(crate) fn read_only_work(profile: &SandboxProfile, session: &SessionContext) -> Diagnostic {
     let builder = Diagnostic::builder(SANDBOX_030, Severity::Blocking);
     if session.work_mode == WorkMode::Ro {
         return builder

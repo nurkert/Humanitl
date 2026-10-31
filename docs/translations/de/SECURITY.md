@@ -886,9 +886,9 @@ mit `--work-mode ro` starten oder als Wegwerf-Sandbox.
 
 #### Die Wegwerf-Sandbox (HUM-350)
 
-Die Wegwerf-Sandbox gibt es vorerst nur unter Linux: Sie braucht das Overlay von bubblewrap, und
-unter macOS wird ein Wegwerf-Start mit `SANDBOX_030` verweigert, der Daemon bietet
-`sandbox.disposable` nicht an, und `changes`, `apply` und `discard` antworten mit demselben Befund.
+Dieser Abschnitt beschreibt das Overlay unter Linux. Unter macOS läuft derselbe Modus auf einem
+APFS-Klon des Projekts (HUM-374); was dort anders ist, steht im englischen Original,
+`docs/SECURITY.md` Abschnitt 12.
 
 Mit `sandbox.mode = "disposable"` (`humanitl run --disposable`) schreibt der Agent nichts in den
 Projektordner, während er läuft. Der Ordner ist die schreibgeschützte untere Schicht eines

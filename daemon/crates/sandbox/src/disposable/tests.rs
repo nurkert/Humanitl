@@ -663,7 +663,7 @@ fn sweep_removes_layers_a_crashed_daemon_left() {
     let two = Layer::create_with(&runtime, TmpfsCheck::Skip).unwrap();
     tree_in(&one.upper());
     assert_ne!(one.dir(), two.dir());
-    assert_eq!(sweep(&runtime), 2);
+    assert_eq!(sweep(&runtime).removed, 2);
     assert_eq!(
         fs::read_dir(runtime.join(DISPOSABLE_DIR)).unwrap().count(),
         0

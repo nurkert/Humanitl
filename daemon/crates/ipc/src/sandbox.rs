@@ -1610,11 +1610,7 @@ impl Inner {
         let disposable = run.disposable;
         self.attend(plan, output, llm, tx).await;
         match disposable {
-            #[cfg(target_os = "linux")]
             Some(waiting) => self.settle_disposable(waiting, tx).await,
-            // Ohne Overlay entsteht nie eine Schicht (HUM-350).
-            #[cfg(not(target_os = "linux"))]
-            Some(waiting) => match waiting {},
             None => self.summarize(watch, sandbox, tx).await,
         }
     }
@@ -1622,7 +1618,6 @@ impl Inner {
     /// Nach dem Ende einer Wegwerf-Sandbox: die Grenze anhalten, die Schicht
     /// ablegen und die Änderungen einmal schicken, ohne dass ein Client
     /// fragen muss (HUM-350).
-    #[cfg(target_os = "linux")]
     async fn settle_disposable(
         self: &Arc<Self>,
         mut waiting: crate::disposable::Waiting,
@@ -1633,6 +1628,13 @@ impl Inner {
             if let Some(tripped) = guard.tripped() {
                 let _ = tx.send(diagnostic_event(&tripped)).await;
             }
+        }
+        // Der Klon unter macOS geht aus der Reichweite der Sandbox, bevor
+        // ihn jemand liest (HUM-374). Scheitert das, liest ihn niemand, und
+        // der Mensch sieht warum.
+        #[cfg(target_os = "macos")]
+        if let Err(diagnostic) = waiting.layer.seal() {
+            let _ = tx.send(diagnostic_event(&diagnostic)).await;
         }
         let this = Arc::clone(self);
         let listed = tokio::task::spawn_blocking(move || {
@@ -2259,10 +2261,7 @@ impl Inner {
         // Die obere Schicht liegt im Arbeitsspeicher und gehört zu diesem
         // Daemon; mit ihm geht sie (HUM-350). Die Aufzeichnung sagt es.
         if let Some(waiting) = lock(&self.disposable).take() {
-            #[cfg(target_os = "linux")]
             self.drop_layer(waiting, "discarded");
-            #[cfg(not(target_os = "linux"))]
-            match waiting {}
         }
         ended
     }
@@ -2421,19 +2420,11 @@ impl Inner {
 
     /// Wartende Änderungen sperren jeden Start außer einem ausdrücklichen
     /// `direct` (HUM-357); siehe [`crate::disposable::pending_guard`].
-    #[cfg(target_os = "linux")]
     fn pending_guard(&self, wanted: SandboxMode) -> Result<(), Diagnostic> {
         let pending = lock(&self.disposable)
             .as_ref()
             .map(|waiting| waiting.sandbox);
         crate::disposable::pending_guard(wanted, pending)
-    }
-
-    /// Ohne Overlay wartet nie eine Schicht.
-    #[cfg(not(target_os = "linux"))]
-    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
-    fn pending_guard(&self, _wanted: SandboxMode) -> Result<(), Diagnostic> {
-        Ok(())
     }
 
     /// Löst `wanted` für diesen Plan auf (HUM-357); siehe
@@ -2446,10 +2437,10 @@ impl Inner {
         humanitl_sandbox::resolve_mode(wanted, || self.disposable_support(prepared))
     }
 
-    /// Ob dieser Plan eine Wegwerf-Sandbox bekommen kann: ein Sandbox-Backend
-    /// mit Overlay, das Projekt schreibbar, das Laufzeitverzeichnis auf tmpfs
-    /// (HUM-357).
-    #[cfg(target_os = "linux")]
+    /// Ob dieser Plan eine Wegwerf-Sandbox bekommen kann: unter Linux ein
+    /// Sandbox-Backend mit Overlay, das Projekt schreibbar, das
+    /// Laufzeitverzeichnis auf tmpfs (HUM-357); unter macOS ein schreibbares
+    /// Projekt (HUM-374).
     fn disposable_support(&self, prepared: &Prepared) -> Result<(), Diagnostic> {
         prepared.backend.disposable_support(
             &prepared.profile,
@@ -2458,21 +2449,14 @@ impl Inner {
         )
     }
 
-    /// Ohne Overlay gibt es keine Wegwerf-Sandbox (HUM-350).
-    #[cfg(not(target_os = "linux"))]
-    #[allow(clippy::unused_self)]
-    fn disposable_support(&self, _prepared: &Prepared) -> Result<(), Diagnostic> {
-        Err(humanitl_sandbox::disposable::unsupported())
-    }
-
     /// Der Start einer Wegwerf-Sandbox: die obere Schicht vor dem Plan, damit
     /// der Plan sie nennt, und jeder Weg hinaus vor dem Handle räumt sie
     /// wieder weg (HUM-350).
     ///
     /// Ein Fehler trägt, ob die Sandbox schon lief
     /// ([`crate::disposable::SetupFailure`]): Nur davor darf die Vorgabe
-    /// `auto` noch auf `direct` zurückfallen (HUM-357).
-    #[cfg(target_os = "linux")]
+    /// `auto` noch auf `direct` zurückfallen (HUM-357). Unter macOS entsteht
+    /// hier der Klon; scheitert er, gilt dasselbe (HUM-374).
     fn launch_disposable(
         &self,
         prepared: &Prepared,
@@ -2494,6 +2478,15 @@ impl Inner {
         // Die Grundlage vor dem Start (C3, O5): Was der Mensch ab jetzt
         // ändert, ist ein Konflikt, auch in den ersten Augenblicken des Laufs.
         let baseline = humanitl_sandbox::disposable::baseline_at(std::os::fd::AsFd::as_fd(&lower));
+        #[cfg(target_os = "macos")]
+        let layer = humanitl_sandbox::Layer::clone_project(
+            &self.paths.runtime_dir().path,
+            std::os::fd::AsFd::as_fd(&lower),
+            &resolved,
+            humanitl_sandbox::SeatbeltBackend::clone_masks(&prepared.profile, &resolved),
+        )
+        .map_err(Before)?;
+        #[cfg(not(target_os = "macos"))]
         let layer =
             humanitl_sandbox::Layer::create(&self.paths.runtime_dir().path).map_err(Before)?;
         let meta = lower
@@ -2545,28 +2538,15 @@ impl Inner {
         }
     }
 
-    /// Ohne Overlay gibt es keine Wegwerf-Sandbox (HUM-350).
-    #[cfg(not(target_os = "linux"))]
-    #[allow(clippy::unused_self)]
-    fn launch_disposable(
-        &self,
-        _prepared: &Prepared,
-        _plan: &v1::sandbox_request::Plan,
-        _output: Option<humanitl_sandbox::OutputSink>,
-    ) -> Result<Launched, crate::disposable::SetupFailure> {
-        Err(crate::disposable::SetupFailure::Before(
-            humanitl_sandbox::disposable::unsupported(),
-        ))
-    }
-
     /// Die Grundlage und die Grenze einer gestarteten Wegwerf-Sandbox.
     ///
     /// Die Grundlage entsteht hier, nach dem Start: Der Agent schreibt nie in
     /// das Projekt, sie hält nur fest, was der **Mensch** währenddessen
     /// ändert. Lässt sich das Projekt nicht lesen oder die Schicht nicht
     /// messen, endet die Sandbox, denn ohne Grundlage gäbe es keine sichere
-    /// Übernahme und ohne Messung keine Grenze.
-    #[cfg(target_os = "linux")]
+    /// Übernahme und ohne Messung keine Grenze. Unter macOS gibt es keine
+    /// Grenze: Das Volume des Klons teilt der Agent mit dem Rest des Rechners,
+    /// und `SizeGuard` misst ein ganzes Dateisystem (HUM-374).
     fn watch_layer(
         &self,
         layer: humanitl_sandbox::Layer,
@@ -2574,11 +2554,16 @@ impl Inner {
         prepared: &Prepared,
         pinned: Pinned,
     ) -> Result<crate::disposable::Waiting, Diagnostic> {
-        let stop = Arc::clone(&handle);
-        // Gemessen gegen den Stand beim Anlegen der Schicht (C4, O4).
-        let guarded = humanitl_sandbox::SizeGuard::start(&layer, move || {
-            let _ = stop.kill();
-        });
+        let guarded = if cfg!(target_os = "macos") {
+            Ok(None)
+        } else {
+            let stop = Arc::clone(&handle);
+            // Gemessen gegen den Stand beim Anlegen der Schicht (C4, O4).
+            humanitl_sandbox::SizeGuard::start(&layer, move || {
+                let _ = stop.kill();
+            })
+            .map(Some)
+        };
         let guard = match guarded {
             Ok(guard) => guard,
             Err(diagnostic) => {
@@ -2607,7 +2592,7 @@ impl Inner {
             baseline: pinned.baseline,
             handle,
             child_start,
-            guard: Some(guard),
+            guard,
         })
     }
 
@@ -2639,11 +2624,13 @@ impl Inner {
             (Some(dirs), None) => backend.with_overlay(dirs),
             (None, _) => backend,
         };
-        #[cfg(not(target_os = "linux"))]
-        if let Some(dirs) = overlay {
-            drop(dirs);
-            return Err(humanitl_sandbox::disposable::unsupported());
-        }
+        // Unter macOS ist die obere Schicht der Klon: Er wird das Projekt der
+        // Sandbox (HUM-374).
+        #[cfg(target_os = "macos")]
+        let backend = match overlay {
+            Some(dirs) => backend.with_clone(dirs.upper),
+            None => backend,
+        };
         // Der Zuhörer hängt nur an dem Backend, das startet, und nicht an dem,
         // das gehalten wird: Ein gehaltener Sender schlösse seinen Kanal nie,
         // und wer auf dessen Ende wartet, wartete für immer. Beide tragen
@@ -2746,7 +2733,7 @@ impl Inner {
     /// Die Schicht, die die Zeile einer Wegwerf-Sandbox zeigt (HUM-350): an
     /// der Stelle der Kennung, die erst der Start vergibt, steht `LAYER`.
     fn overlay_preview(&self, disposable: bool) -> Option<humanitl_sandbox::OverlayDirs> {
-        // Ohne Overlay zeigt die Zeile keines; der Start lehnt ab (HUM-350).
+        // Unter macOS gibt es keine Mount-Zeile, die sie zeigen könnte.
         let possible = cfg!(target_os = "linux");
         (possible && disposable).then(|| {
             let layer = self
@@ -2764,7 +2751,6 @@ impl Inner {
 
     /// `Op::Changes`: die wartenden Änderungen einer Wegwerf-Sandbox
     /// (HUM-350).
-    #[cfg(target_os = "linux")]
     fn disposable_changes(&self, tx: &mpsc::Sender<v1::SandboxEvent>) {
         let slot = lock(&self.disposable);
         let event = match slot.as_ref().map(crate::disposable::Waiting::changes) {
@@ -2781,7 +2767,6 @@ impl Inner {
     /// `Op::ApplyChanges`: schreibt die gewählten Änderungen und verwirft den
     /// Rest (HUM-350). Scheitert eine Prüfung vor dem ersten Schreiben, bleibt
     /// alles, wie es war.
-    #[cfg(target_os = "linux")]
     fn apply_changes(
         &self,
         request: &v1::sandbox_request::ApplyChanges,
@@ -2829,7 +2814,6 @@ impl Inner {
     }
 
     /// `Op::DiscardChanges`: verwirft alle wartenden Änderungen (HUM-350).
-    #[cfg(target_os = "linux")]
     fn discard_changes(
         &self,
         request: &v1::sandbox_request::DiscardChanges,
@@ -2856,8 +2840,10 @@ impl Inner {
         let sandbox = waiting.sandbox;
         let discarded = waiting.discarded_paths();
         let failed = self.drop_layer(waiting, "discarded");
+        // Was sich nicht entfernen ließ, ist nicht verworfen: kein Erfolg.
         if let Some(diagnostic) = &failed {
             let _ = tx.blocking_send(diagnostic_event(diagnostic));
+            return;
         }
         let _ = tx.blocking_send(v1::SandboxEvent {
             event: Some(v1::sandbox_event::Event::ChangesOutcome(
@@ -2867,7 +2853,6 @@ impl Inner {
     }
 
     /// Verwirft eine Schicht und hält es in der Aufzeichnung fest.
-    #[cfg(target_os = "linux")]
     fn drop_layer(&self, waiting: crate::disposable::Waiting, outcome: &str) -> Option<Diagnostic> {
         let record = humanitl_sandbox::DisposableRecord {
             outcome: outcome.to_owned(),
@@ -2886,54 +2871,26 @@ impl Inner {
     /// Entfernt die Schicht und legt die Entscheidung in der Aufzeichnung
     /// ab. Eine Schicht, die sich nicht entfernen lässt, ist ein Befund; sie
     /// verschwindet spätestens beim nächsten Start des Daemons.
-    #[cfg(target_os = "linux")]
     fn finish_layer(
         &self,
         waiting: crate::disposable::Waiting,
         record: humanitl_sandbox::DisposableRecord,
     ) -> Option<Diagnostic> {
-        if let Some(recorder) = self.recorder.as_ref() {
-            let summary = waiting.summary(self.session, record);
-            if let Ok(json) = serde_json::to_string(&summary) {
-                recorder.store_session_summary(self.session, summary.sandbox, &json);
-            }
-        }
-        waiting
+        // Geschriebenes bleibt geschrieben; verworfen ist erst, was weg ist.
+        let claims_gone = record.outcome != "applied";
+        let summary = waiting.summary(self.session, record);
+        let failed = waiting
             .layer
             .discard()
             .err()
-            .map(|(_, diagnostic)| diagnostic)
-    }
-
-    /// `Op::Changes` ohne Overlay: Es gibt keine Wegwerf-Sandbox (HUM-350).
-    #[cfg(not(target_os = "linux"))]
-    #[allow(clippy::unused_self)]
-    fn disposable_changes(&self, tx: &mpsc::Sender<v1::SandboxEvent>) {
-        let _ = tx.blocking_send(diagnostic_event(
-            &humanitl_sandbox::disposable::unsupported(),
-        ));
-    }
-
-    /// `Op::ApplyChanges` ohne Overlay (HUM-350).
-    #[cfg(not(target_os = "linux"))]
-    #[allow(clippy::unused_self)]
-    fn apply_changes(
-        &self,
-        _request: &v1::sandbox_request::ApplyChanges,
-        tx: &mpsc::Sender<v1::SandboxEvent>,
-    ) {
-        self.disposable_changes(tx);
-    }
-
-    /// `Op::DiscardChanges` ohne Overlay (HUM-350).
-    #[cfg(not(target_os = "linux"))]
-    #[allow(clippy::unused_self)]
-    fn discard_changes(
-        &self,
-        _request: &v1::sandbox_request::DiscardChanges,
-        tx: &mpsc::Sender<v1::SandboxEvent>,
-    ) {
-        self.disposable_changes(tx);
+            .map(|(_, diagnostic)| diagnostic);
+        if let Some(recorder) = self.recorder.as_ref()
+            && (failed.is_none() || !claims_gone)
+            && let Ok(json) = serde_json::to_string(&summary)
+        {
+            recorder.store_session_summary(self.session, summary.sandbox, &json);
+        }
+        failed
     }
 
     /// Der Schnappschuss, wie ihn die Oberfläche zeigt.
@@ -4568,14 +4525,26 @@ const fn start_may_refresh(facts: &Facts) -> bool {
 /// Die Antwort auf `SandboxRequest.retire_if_idle` (HUM-284).
 /// Der geöffnete Projektordner einer Wegwerf-Sandbox und seine Grundlage,
 /// beide vor dem Start genommen (HUM-350).
-#[cfg(target_os = "linux")]
 struct Pinned {
     lower: std::os::fd::OwnedFd,
     baseline: humanitl_sandbox::worktree::TreeSnapshot,
 }
 
 /// Wo der geöffnete Projektordner liegt.
-#[cfg(target_os = "linux")]
+#[cfg(target_os = "macos")]
+fn pinned_path(lower: &std::os::fd::OwnedFd) -> Result<PathBuf, Diagnostic> {
+    humanitl_sandbox::disposable::fd_path(std::os::fd::AsFd::as_fd(lower)).map_err(|err| {
+        Diagnostic::builder(codes::SANDBOX_030, Severity::Blocking)
+            .why(format!(
+                "where the opened project folder lies cannot be read ({err}); the disposable \
+                 sandbox needs it to clone exactly that folder"
+            ))
+            .build()
+    })
+}
+
+/// Wo der geöffnete Projektordner liegt.
+#[cfg(not(target_os = "macos"))]
 fn pinned_path(lower: &std::os::fd::OwnedFd) -> Result<PathBuf, Diagnostic> {
     use std::os::fd::AsRawFd as _;
 
@@ -4590,7 +4559,6 @@ fn pinned_path(lower: &std::os::fd::OwnedFd) -> Result<PathBuf, Diagnostic> {
 }
 
 /// Der Projektordner liegt nicht mehr dort, wo er geprüft wurde.
-#[cfg(target_os = "linux")]
 fn moved_work_dir(approved: &std::path::Path, now: &std::path::Path) -> Diagnostic {
     Diagnostic::builder(codes::SANDBOX_006, Severity::Blocking)
         .why(format!(
