@@ -33,6 +33,7 @@
 //! ist dieselbe ([`crate::bwrap`]). Was sie unter macOS bedeuten, steht in
 //! `bin/humanitl-shim/src/macos.rs` und in `docs/SECURITY.md`.
 
+use humanitl_core::shell::shell_path;
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
@@ -191,6 +192,18 @@ impl SessionLayout {
     #[must_use]
     pub fn etc(&self) -> PathBuf {
         self.root.join("etc")
+    }
+
+    /// Das Git-Verzeichnis, das der Agent statt `.git/config` sieht (HUM-366).
+    #[must_use]
+    pub fn git(&self) -> PathBuf {
+        self.root.join("git")
+    }
+
+    /// Wo das `git` der Sitzung liegt (HUM-366), außerhalb des Schreibbaren.
+    #[must_use]
+    pub fn git_bin(&self) -> PathBuf {
+        self.root.join("bin")
     }
 
     /// Das Gegenstück zu `/run/humanitl`.
@@ -518,6 +531,40 @@ impl SeatbeltBackend {
         self.paths.runtime_dir().path.join("sessions")
     }
 
+    /// Weitere Shells: derselbe Shim ohne Bridge unter demselben Profil, nur am
+    /// eigenen Terminal des Daemons (wie unter Linux, HUM-299). Den Bericht und
+    /// die Bridge der Sitzung bekommen sie nicht.
+    fn shell_seed(
+        &self,
+        layout: &SessionLayout,
+        shim: &Path,
+        work: &Path,
+        env: &[(String, String)],
+    ) -> Option<crate::shell::DoorSeed> {
+        self.stdio.pty_size().map(|_| {
+            crate::shell::DoorSeed::Spawn(crate::shell::SpawnSpec {
+                program: self.program.clone(),
+                args: vec![
+                    "-f".into(),
+                    layout.profile().into_os_string(),
+                    shim.as_os_str().to_owned(),
+                    "--no-bridge".into(),
+                    "--chdir".into(),
+                    work.as_os_str().to_owned(),
+                    "--controlling-terminal".into(),
+                ],
+                env: env
+                    .iter()
+                    .filter(|(key, _)| {
+                        key != crate::bridge_env::ENV_REPORT_FD
+                            && key != crate::bridge_env::ENV_BRIDGES
+                    })
+                    .cloned()
+                    .collect(),
+            })
+        })
+    }
+
     /// Legt das Verzeichnis der Sitzung frisch an und räumt alte weg.
     fn create_layout(&self, session: &SessionContext) -> Result<SessionLayout, Diagnostic> {
         let parent = self.sessions_dir();
@@ -656,7 +703,7 @@ impl SeatbeltBackend {
             work: work.to_path_buf(),
             work_writable: profile.effective_work_mode(session.work_mode) == WorkMode::Rw,
             session: layout.root.clone(),
-            session_writable: vec![layout.home(), layout.tmp()],
+            session_writable: vec![layout.home(), layout.tmp(), layout.git()],
             read_only,
             writable,
             files,
@@ -794,6 +841,146 @@ fn place_files(
     Ok(())
 }
 
+/// Was aus der echten `.git/config` in die der Sitzung wandert (HUM-366):
+/// Schlüssel und erlaubte Werte. Ohne das Format läse Git ein sha256- oder
+/// reftable-Repository falsch und beschädigte dessen Index; mehr braucht es
+/// nicht, und Zugangsdaten oder `core.sshCommand` kommen so nie durch.
+fn allowed_git_value(section: &str, key: &str, value: &str) -> bool {
+    let boolean = matches!(value, "true" | "false");
+    match (section, key) {
+        ("core", "repositoryformatversion") => matches!(value, "0" | "1"),
+        ("core", "ignorecase" | "precomposeunicode") => boolean,
+        ("extensions", "objectformat") => matches!(value, "sha1" | "sha256"),
+        ("extensions", "refstorage") => matches!(value, "files" | "reftable"),
+        _ => false,
+    }
+}
+
+/// Die `config` der Sitzung aus der echten: nur, was
+/// [`allowed_git_value`] durchlässt.
+fn git_format_config(real: &str) -> String {
+    let mut sections: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    let mut section = String::new();
+    for line in real.lines().map(str::trim) {
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            name.trim().to_ascii_lowercase().clone_into(&mut section);
+        } else if let Some((key, value)) = line.split_once('=') {
+            let (key, value) = (key.trim().to_ascii_lowercase(), value.trim());
+            if allowed_git_value(&section, &key, value) {
+                sections
+                    .entry(section.clone())
+                    .or_default()
+                    .push(format!("\t{key} = {value}\n"));
+            }
+        }
+    }
+    let mut out = String::new();
+    for (name, lines) in sections {
+        let _ = writeln!(out, "[{name}]");
+        out.extend(lines);
+    }
+    out
+}
+
+/// Das `git`, das der Agent zuerst auf dem Suchpfad findet. Es setzt die
+/// Variablen nur, wenn das Repository an diesem Ort das Projekt ist; in jedem
+/// anderen Repository, bei `clone` und `init` ist es das echte Git.
+fn git_wrapper(real: &Path, work: &Path, shadow: &Path) -> String {
+    let real = shell_path(real);
+    let git_dir = shell_path(&work.join(".git"));
+    let tree = shell_path(work);
+    let common = shell_path(shadow);
+    format!(
+        r#"#!/bin/sh
+dir=$(pwd -P)
+skip=
+for arg in "$@"; do
+  if [ -n "$skip" ]; then
+    [ "$skip" = C ] && dir=$(cd "$dir" 2>/dev/null && cd "$arg" 2>/dev/null && pwd -P)
+    skip=
+    continue
+  fi
+  case "$arg" in
+    -C) skip=C ;;
+    -c) skip=c ;;
+    clone|init) exec {real} "$@" ;;
+    -*) ;;
+    *) break ;;
+  esac
+done
+while [ -n "$dir" ]; do
+  if [ -e "$dir/.git" ]; then
+    if [ "$dir" = {tree} ]; then
+      GIT_DIR={git_dir} GIT_COMMON_DIR={common} GIT_WORK_TREE={tree}
+      export GIT_DIR GIT_COMMON_DIR GIT_WORK_TREE
+    fi
+    break
+  fi
+  dir=${{dir%/*}}
+done
+exec {real} "$@"
+"#
+    )
+}
+
+/// Macht Git im Projekt benutzbar, obwohl `.git/config` maskiert ist (HUM-366).
+///
+/// Unter Linux liegt über der Datei eine leere; Seatbelt kann nur verbieten,
+/// und Git bricht ab, wenn es sie nicht lesen kann. `GIT_COMMON_DIR` zeigt
+/// deshalb auf ein Verzeichnis der Sitzung mit gefilterter `config` und leeren
+/// Hooks, dessen Objekte und Refs die echten sind. `HEAD` und `index` bleiben
+/// über `GIT_DIR` die des Projekts. Die Maske selbst ändert das nicht. Gesetzt
+/// werden die Variablen von [`git_wrapper`], nicht in der Umgebung: Dort
+/// kaperten sie jedes andere Repository. Gibt das Verzeichnis des Wrappers
+/// zurück; ohne `.git`-Verzeichnis, ohne Maske oder ohne Git gibt es nichts zu tun.
+fn place_git(
+    layout: &SessionLayout,
+    work: &Path,
+    masked: &[PathBuf],
+) -> Result<Option<PathBuf>, Diagnostic> {
+    let real = work.join(".git");
+    if !real.is_dir() || !masked.contains(&real.join("config")) {
+        return Ok(None);
+    }
+    let Some(program) = SEARCH_PATH
+        .split(':')
+        .map(|dir| Path::new(dir).join("git"))
+        .find(|path| path.is_file())
+    else {
+        return Ok(None);
+    };
+    let shadow = layout.git();
+    std::fs::create_dir_all(shadow.join("hooks")).map_err(|err| layout_failed(&shadow, &err))?;
+    let config = std::fs::read_to_string(real.join("config")).unwrap_or_default();
+    write_file(
+        &shadow.join("config"),
+        git_format_config(&config).as_bytes(),
+        0o600,
+    )?;
+    for entry in [
+        "objects",
+        "refs",
+        "packed-refs",
+        "logs",
+        "info",
+        "shallow",
+        "reftable",
+        "worktrees",
+        "modules",
+    ] {
+        std::os::unix::fs::symlink(real.join(entry), shadow.join(entry))
+            .map_err(|err| layout_failed(&shadow, &err))?;
+    }
+    let bin = layout.git_bin();
+    write_file(
+        &bin.join("git"),
+        git_wrapper(&program, work, &shadow).as_bytes(),
+        0o555,
+    )?;
+    Ok(Some(bin))
+}
+
 /// Das Agent-Programm: ein Verweis im Sitzungsverzeichnis auf die Datei, die
 /// die Suche geprüft hat; lesbar wird nur sie. Gibt die einzeln lesbaren
 /// Dateien zurück.
@@ -848,17 +1035,17 @@ impl SandboxBackend for SeatbeltBackend {
             profile,
             &BwrapBackend::present_under_work(profile, &work),
         );
-        let policy_text = self
-            .policy(
-                profile,
-                session,
-                &work,
-                &layout,
-                files,
-                &door,
-                (port, agent_port),
-            )
-            .render();
+        let policy = self.policy(
+            profile,
+            session,
+            &work,
+            &layout,
+            files,
+            &door,
+            (port, agent_port),
+        );
+        let git_bin = place_git(&layout, &work, &policy.masked)?;
+        let policy_text = policy.render();
         write_file(&layout.profile(), policy_text.as_bytes(), 0o444)?;
 
         let (report_reader, report_writer) = BwrapBackend::inherited_pipe("report")?;
@@ -868,31 +1055,14 @@ impl SandboxBackend for SeatbeltBackend {
             crate::agent::ENV_AGENT_PORT.to_owned(),
             agent_port.to_string(),
         ));
-        // Weitere Shells: derselbe Shim ohne Bridge unter demselben Profil,
-        // nur am eigenen Terminal des Daemons (wie unter Linux, HUM-299). Den
-        // Bericht und die Bridge der Sitzung bekommen sie nicht.
-        let shells = self.stdio.pty_size().map(|_| {
-            crate::shell::DoorSeed::Spawn(crate::shell::SpawnSpec {
-                program: self.program.clone(),
-                args: vec![
-                    "-f".into(),
-                    layout.profile().into_os_string(),
-                    shim.clone().into_os_string(),
-                    "--no-bridge".into(),
-                    "--chdir".into(),
-                    work.clone().into_os_string(),
-                    "--controlling-terminal".into(),
-                ],
-                env: env
-                    .iter()
-                    .filter(|(key, _)| {
-                        key != crate::bridge_env::ENV_REPORT_FD
-                            && key != crate::bridge_env::ENV_BRIDGES
-                    })
-                    .cloned()
-                    .collect(),
-            })
-        });
+        if let Some(bin) = git_bin {
+            for (key, value) in &mut env {
+                if key == "PATH" {
+                    *value = format!("{}:{value}", bin.display());
+                }
+            }
+        }
+        let shells = self.shell_seed(&layout, &shim, &work, &env);
 
         let mut argv: Vec<OsString> = vec![
             self.program.clone().into_os_string(),
@@ -904,7 +1074,7 @@ impl SandboxBackend for SeatbeltBackend {
             "--status-fd".into(),
             status_writer.as_raw_fd().to_string().into(),
             "--chdir".into(),
-            work.clone().into_os_string(),
+            work.as_os_str().to_owned(),
         ];
         if self.stdio.pty_size().is_some() {
             argv.push("--controlling-terminal".into());
@@ -1090,6 +1260,56 @@ mod tests {
             port: 41_234,
             agent_port: 41_235,
         }
+    }
+
+    #[test]
+    fn the_session_config_keeps_the_format_and_nothing_else() {
+        let real = "[core]\n\trepositoryformatversion = 1\n\tsshCommand = x\n\
+                    \tfsmonitor = y\n\tignorecase = true\n\
+                    [extensions]\n\tobjectformat = sha256\n\tpartialclone = origin\n\
+                    [remote \"origin\"]\n\turl = https://token@example.com/x\n";
+        let config = git_format_config(real);
+        assert_eq!(
+            config,
+            "[core]\n\trepositoryformatversion = 1\n\tignorecase = true\n\
+             [extensions]\n\tobjectformat = sha256\n"
+        );
+        assert_eq!(git_format_config("[core]\n\tignorecase = $(x)\n"), "");
+    }
+
+    #[test]
+    fn git_gets_the_filtered_config_beside_the_real_objects() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let work = root.join("project");
+        std::fs::create_dir_all(work.join(".git")).unwrap();
+        std::fs::write(work.join(".git/config"), "[core]\n\tsshCommand = x\n").unwrap();
+        let session = SessionLayout {
+            root: root.join("session"),
+        };
+        let config = work.join(".git/config");
+
+        assert!(place_git(&session, &work, &[]).unwrap().is_none());
+        assert_eq!(
+            place_git(&session, &work, &[config]).unwrap(),
+            Some(session.git_bin())
+        );
+        assert_eq!(std::fs::read(session.git().join("config")).unwrap(), b"");
+        assert_eq!(
+            std::fs::read_link(session.git().join("objects")).unwrap(),
+            work.join(".git/objects")
+        );
+    }
+
+    #[test]
+    fn the_wrapper_quotes_its_paths_and_leaves_clone_alone() {
+        let script = git_wrapper(
+            Path::new("/usr/bin/git"),
+            Path::new("/Users/me/my project"),
+            Path::new("/s/git"),
+        );
+        assert!(script.contains("'/Users/me/my project'"), "{script}");
+        assert!(script.contains("clone|init) exec /usr/bin/git"), "{script}");
     }
 
     #[test]
