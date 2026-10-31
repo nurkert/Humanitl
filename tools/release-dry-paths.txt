@@ -1,0 +1,41 @@
+# Pfade, deren Aenderung vor dem Merge einen Probelauf von release.yml
+# verlangt (HUM-363).
+#
+# `tools/commit-issue.sh --ci` und `--land` lesen diese Datei aus dem Commit,
+# der gelandet werden soll, und aus seinem Elternteil, nie aus dem
+# Arbeitsbaum, und nehmen die Vereinigung beider Listen. Ein Commit, der die
+# Liste kuerzt oder loescht, wird also noch nach der alten geprueft, und
+# aendert er die Liste selbst (sie steht unten), laeuft der Probelauf immer.
+# Fehlt die Datei in einem der beiden Staende, laeuft er ebenfalls. Beruehrt der Commit
+# einen dieser Pfade, pusht das Skript neben `hum-NNN-slug` den Zweig
+# `release-dry/hum-NNN` auf denselben Commit und merged erst, wenn ci.yml und
+# der Probelauf von release.yml beide gruen sind.
+#
+# Hier steht, was release.yml baut oder prueft und ci.yml nicht abdeckt: RPM,
+# AppImage, AUR, Tarball, das universelle macOS-Buendel mit .dmg und .zip, der
+# Release-Bau der App und das Stempeln der Version. Was ci.yml ohnehin baut
+# (Rust auf Linux und macOS arm64, die App als Debug-Bau auf beiden, das .deb
+# in e2e-m4-package), steht nicht hier, damit der macOS-Teil des Probelaufs
+# nur laeuft, wo er etwas Neues pruefen kann.
+#
+# Bewusst nicht in der Liste: `daemon/Cargo.lock` und `app/pubspec.lock`.
+# Sie aendern sich mit fast jeder neuen Abhaengigkeit, und ci.yml uebersetzt
+# sie auf Linux und macOS. Ungeprueft bleibt damit nur die x86_64-Haelfte des
+# macOS-Buendels; faellt sie, faellt sie im Probelauf von tools/release.sh,
+# bevor ein Tag entsteht.
+#
+# Eine Zeile je Pfadangabe fuer `git diff -- <pfad>`; ein Verzeichnis meint
+# alles darunter. Leerzeilen und Zeilen mit `#` am Anfang zaehlen nicht.
+
+.github/workflows/release.yml
+.github/actions/
+packaging/
+app/linux/
+app/macos/
+app/pubspec.yaml
+app/test/features/history/history_export_version_test.dart
+daemon/Cargo.toml
+daemon/rust-toolchain.toml
+daemon/.cargo/
+tests/escape/macos/
+tools/release-dry-paths.txt

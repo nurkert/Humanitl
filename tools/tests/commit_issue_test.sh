@@ -42,6 +42,10 @@ cat > "$work/gate" << 'EOF'
 set -euo pipefail
 echo "$1" >> "$GATE_DIR/shas"
 n=$(wc -l < "$GATE_DIR/shas")
+# HUM-363: welcher Lauf gemeint ist, und welche Zweige origin in dem
+# Augenblick hat.
+refs="$(git -C "$GATE_DIR/origin.git" for-each-ref --format='%(refname)=%(objectname)' refs/heads | tr '\n' ' ')"
+echo "workflow=${HUMANITL_CI_WORKFLOW:-ci.yml} branch=${HUMANITL_CI_BRANCH:-} every=${HUMANITL_CI_EVERY_JOB:-} skip=${HUMANITL_CI_MAY_SKIP:-} sha=$1 refs=$refs" >> "$GATE_DIR/calls"
 if [[ -f "$GATE_DIR/race" && "$n" -eq 1 ]]; then
   f=$(cat "$GATE_DIR/race")
   f=${f:-other.txt}
@@ -75,6 +79,9 @@ setup() {
   git clone -q "$dir/origin.git" "$dir/clone" 2> /dev/null
   mkdir -p "$dir/clone/tools"
   cp "$script" "$dir/clone/tools/commit-issue.sh"
+  # Ohne Liste der Release-Pfade waere jeder Commit ein Fall fuer den
+  # Probelauf (HUM-363); die Faelle davor beruehren `packaging/` nicht.
+  printf 'packaging/\n' > "$dir/clone/tools/release-dry-paths.txt"
   echo base > "$dir/clone/base.txt"
   git -C "$dir/clone" add -A
   git -C "$dir/clone" commit -q -m base
@@ -400,6 +407,110 @@ ci "$d" HUM-911 refused a.txt <<< "body" > "$d/out" 2>&1 || rc=$?
 check refused_exits_0 same "$rc" 0
 check refused_gate_ran_twice same "$(wc -l < "$d/shas")" 2
 check refused_merged same "$(git -C "$d/origin.git" log -1 --format=%s main)" "merge: HUM-911 refused"
+
+# 11. HUM-363: Der Commit beruehrt einen Pfad aus tools/release-dry-paths.txt.
+#     Neben dem Issue-Zweig steht release-dry/hum-NNN auf demselben Commit,
+#     das Tor wartet nach ci.yml auch auf den Probelauf mit jedem Job gruen,
+#     und nach dem Merge ist der Zweig wieder weg.
+with_release_paths() { # <dir>: legt die Liste auf main
+  printf '# Kommentar\n\npackaging/\n' > "$1/clone/tools/release-dry-paths.txt"
+  git -C "$1/clone" add tools/release-dry-paths.txt
+  git -C "$1/clone" commit -q -m "release paths"
+  git -C "$1/clone" push -q origin main
+}
+d="$(setup drygreen)"
+with_release_paths "$d"
+printf '0\n0\n' > "$d/rc"
+mkdir -p "$d/clone/packaging"
+echo pkg > "$d/clone/packaging/build.sh"
+rc=0
+ci "$d" HUM-917 drygreen packaging/build.sh <<< "body" > "$d/out" 2>&1 || rc=$?
+tested="$(head -n 1 "$d/shas" 2> /dev/null || true)"
+check drygreen_exits_0 same "$rc" 0
+check drygreen_two_gates same "$(wc -l < "$d/shas")" 2
+check drygreen_same_sha same "$(sed -n 2p "$d/shas")" "$tested"
+check drygreen_first_is_ci grep -q "^workflow=ci.yml branch= " <(sed -n 1p "$d/calls")
+check drygreen_second_is_dry grep -q "^workflow=release.yml branch=release-dry/hum-917 every=1 skip=release sha=$tested" \
+  <(sed -n 2p "$d/calls")
+check drygreen_dry_branch_at_tested grep -q "refs/heads/release-dry/hum-917=$tested" <(sed -n 2p "$d/calls")
+check drygreen_dry_pushed_before_ci grep -q "refs/heads/release-dry/hum-917=$tested" <(sed -n 1p "$d/calls")
+check drygreen_merged same "$(git -C "$d/origin.git" log -1 --format=%s main)" "merge: HUM-917 drygreen"
+check drygreen_dry_branch_deleted not git -C "$d/origin.git" rev-parse --verify --quiet refs/heads/release-dry/hum-917
+
+# 12. Roter Probelauf bei gruener CI: kein Merge, beide Zweige bleiben.
+d="$(setup dryred)"
+with_release_paths "$d"
+printf '0\n1\n' > "$d/rc"
+before="$(git -C "$d/origin.git" rev-parse main)"
+mkdir -p "$d/clone/packaging"
+echo pkg > "$d/clone/packaging/build.sh"
+rc=0
+ci "$d" HUM-918 dryred packaging/build.sh <<< "body" > "$d/out" 2>&1 || rc=$?
+check dryred_exits_nonzero not same "$rc" 0
+check dryred_main_unchanged same "$(git -C "$d/origin.git" rev-parse main)" "$before"
+check dryred_branch_kept git -C "$d/origin.git" rev-parse --verify --quiet refs/heads/hum-918-dryred
+check dryred_dry_branch_kept git -C "$d/origin.git" rev-parse --verify --quiet refs/heads/release-dry/hum-918
+check dryred_says_so grep -q "release dry run on release-dry/hum-918 is red" "$d/out"
+
+# 13. Die Liste liegt auf main, der Commit beruehrt keinen ihrer Pfade: kein
+#     Probelauf, ein Tor.
+d="$(setup drynone)"
+with_release_paths "$d"
+echo 0 > "$d/rc"
+echo a > "$d/clone/a.txt"
+rc=0
+ci "$d" HUM-919 drynone a.txt <<< "body" > "$d/out" 2>&1 || rc=$?
+check drynone_exits_0 same "$rc" 0
+check drynone_one_gate same "$(wc -l < "$d/shas")" 1
+check drynone_no_dry_branch not grep -q "release-dry" "$d/calls"
+
+# 14. Ein Commit, der packaging/ aendert und zugleich die Liste kuerzt, bekommt
+#     den Probelauf trotzdem: Die Liste des Elternteils zaehlt mit, und die
+#     Liste selbst steht in ihr.
+d="$(setup dryshrink)"
+printf '0\n0\n' > "$d/rc"
+printf 'nothing/\n' > "$d/clone/tools/release-dry-paths.txt"
+mkdir -p "$d/clone/packaging"
+echo pkg > "$d/clone/packaging/build.sh"
+rc=0
+ci "$d" HUM-920 dryshrink tools/release-dry-paths.txt packaging/build.sh <<< "body" > "$d/out" 2>&1 || rc=$?
+check dryshrink_exits_0 same "$rc" 0
+check dryshrink_two_gates same "$(wc -l < "$d/shas")" 2
+
+# 14b. Dasselbe mit geloeschter Liste.
+d="$(setup drydelete)"
+printf '0\n0\n' > "$d/rc"
+rm "$d/clone/tools/release-dry-paths.txt"
+mkdir -p "$d/clone/packaging"
+echo pkg > "$d/clone/packaging/build.sh"
+rc=0
+ci "$d" HUM-921 drydelete tools/release-dry-paths.txt packaging/build.sh <<< "body" > "$d/out" 2>&1 || rc=$?
+check drydelete_exits_0 same "$rc" 0
+check drydelete_two_gates same "$(wc -l < "$d/shas")" 2
+
+# 14c. Fehlt die Liste schon auf main, laeuft der Probelauf fuer jeden Commit,
+#      auch fuer einen, der keinen Release-Pfad beruehrt.
+d="$(setup drynolist)"
+printf '0\n0\n' > "$d/rc"
+git -C "$d/clone" rm -q tools/release-dry-paths.txt
+git -C "$d/clone" commit -q -m "no list"
+git -C "$d/clone" push -q origin main
+echo a > "$d/clone/a.txt"
+rc=0
+ci "$d" HUM-922 drynolist a.txt <<< "body" > "$d/out" 2>&1 || rc=$?
+check drynolist_exits_0 same "$rc" 0
+check drynolist_two_gates same "$(wc -l < "$d/shas")" 2
+
+# 14d. ci.yml rot bei laufendem Probelauf: Die Meldung sagt, dass auch
+#      release-dry/hum-NNN auf origin bleibt.
+d="$(setup dryci)"
+echo 1 > "$d/rc"
+mkdir -p "$d/clone/packaging"
+echo pkg > "$d/clone/packaging/build.sh"
+rc=0
+ci "$d" HUM-923 dryci packaging/build.sh <<< "body" > "$d/out" 2>&1 || rc=$?
+check dryci_exits_nonzero not same "$rc" 0
+check dryci_says_dry_stays grep -q "release-dry/hum-923 stays on origin" "$d/out"
 
 if [[ "$fails" -ne 0 ]]; then
   echo "commit_issue_test: $fails Pruefung(en) rot" >&2
