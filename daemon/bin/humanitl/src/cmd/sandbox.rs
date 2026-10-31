@@ -1063,14 +1063,16 @@ struct AgentContribution {
 ///
 /// Trägt in den Kontext ein, was die Sandbox vom Dateibaum sieht.
 ///
-/// Die Sicht des Profils (`SandboxView::of_profile`: Einhängungen, Verweise,
-/// Überdeckungen), der wirksame Suchpfad und das Arbeitsverzeichnis
+/// Die Sicht des Backends (`SandboxView::of_platform`: unter Linux Einhängungen,
+/// Verweise und Überdeckungen des Profils, unter macOS das Seatbelt-Profil,
+/// HUM-377), der wirksame Suchpfad und das Arbeitsverzeichnis
 /// (`[mounts].work.dst`). Ein nacktes Kommando löst der Agent in der Sandbox
 /// gegen diese Angaben auf, und die Vorprüfung muss dieselbe Frage stellen;
 /// ohne sie suchte sie nur im `PATH` des Hosts und verweigerte einen Start,
 /// der funktioniert (HUM-139).
 fn with_sandbox_view(ctx: AgentContext, config: &Config, profile: &SandboxProfile) -> AgentContext {
-    ctx.with_sandbox_view(SandboxView::of_profile(profile))
+    let view = SandboxView::of_platform(profile, Some(&ctx.work_dir_host));
+    ctx.with_sandbox_view(view)
         .with_sandbox_path(effective_sandbox_path(config, profile).map(OsString::from))
         .with_work_dir_sandbox(profile.mounts.work.dst.clone())
 }
@@ -1084,15 +1086,15 @@ fn with_sandbox_view(ctx: AgentContext, config: &Config, profile: &SandboxProfil
 /// `sandbox.env.PATH` auf ein eingehängtes Verzeichnis wäre ein Befund, obwohl
 /// es läuft, und einer auf ein leeres Verzeichnis bliebe unbemerkt, obwohl das
 /// `exec` mit 127 endet (HUM-139).
-fn effective_sandbox_path<'a>(
-    config: &'a Config,
-    profile: &'a SandboxProfile,
-) -> Option<&'a String> {
-    config
-        .sandbox
-        .env
-        .get("PATH")
-        .or_else(|| profile.env.get("PATH"))
+fn effective_sandbox_path(config: &Config, profile: &SandboxProfile) -> Option<String> {
+    humanitl_sandbox::agent::effective_sandbox_path(
+        config
+            .sandbox
+            .env
+            .get("PATH")
+            .or_else(|| profile.env.get("PATH"))
+            .map(String::as_str),
+    )
 }
 
 /// Die Vorschau ([`Wiring::Preview`]) hält kein Befund auf. `sandbox argv` ist
@@ -1608,6 +1610,17 @@ mod tests {
             &profile,
         );
 
+        // Unter macOS gelten weder Einhängungen noch Verweise des Profils.
+        if cfg!(target_os = "macos") {
+            assert!(ctx.sandbox_view.seatbelt);
+            assert!(
+                ctx.sandbox_view
+                    .symlinks
+                    .iter()
+                    .all(|(link, _)| link != Path::new("/bin"))
+            );
+            return;
+        }
         assert_eq!(
             ctx.sandbox_path,
             Some(OsString::from("/usr/local/bin:/usr/bin:/bin"))
@@ -1657,7 +1670,12 @@ mod tests {
             &profile,
         );
 
-        assert_eq!(ctx.sandbox_path, Some(OsString::from("/mounted/bin")));
+        let expected = if cfg!(target_os = "macos") {
+            format!("/mounted/bin:{}", humanitl_sandbox::seatbelt::SEARCH_PATH)
+        } else {
+            "/mounted/bin".to_owned()
+        };
+        assert_eq!(ctx.sandbox_path, Some(OsString::from(expected)));
     }
 
     #[test]

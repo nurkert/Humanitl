@@ -771,8 +771,8 @@ pub(super) fn agent(facts: &AgentFacts) -> CheckOutcome {
                         format!(
                             "the adapter {adapter} starts {command}, and no usable executable \
                              of that name lies in {place}{passed_over}. {command} is a script \
-                             that the sandbox only finds under one of its mounts, such as \
-                             /usr/local: {install}"
+                             that the sandbox {}: {install}",
+                            crate::agent::SCRIPT_PLACE
                         )
                     } else {
                         format!(

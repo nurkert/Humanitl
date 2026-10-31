@@ -176,6 +176,32 @@ pub const TEMPLATE_DE_FILE: &str = "agents/opencode/briefing.de.md";
 /// billigen Stolperdraht fest.
 pub const TOKEN_BUDGET: usize = 270;
 
+/// Was unter macOS anders ist, in beiden Sprachen (HUM-377). Es hängt am
+/// Backend und nicht am Ask-Modus, steht deshalb nicht in den Vorlagen und
+/// zählt nicht zu [`TOKEN_BUDGET`], das die Linux-Einweisung begrenzt.
+///
+/// `tests/escape/macos/run.sh` prüft `/tmp`, die Maske auf `.git/config` und
+/// das verschachtelte `sandbox-exec`, nicht `whoami` und `hostname`, die von
+/// Hand gemessen sind. `/tmp` ist unter macOS die echte `/private/tmp`, das Profil verbietet sie, und das Abbilden
+/// der Pfade erreicht nur Umgebung, Kommando und Adapter-Dateien, nicht einen
+/// fest verdrahteten Pfad im Programm des Agenten.
+///
+/// Der Punkt direkt hinter `/tmp` ist Absicht: Diese Datei läuft durch
+/// [`crate::seatbelt::PathMap::map_text`], und nur so bleibt dort der Name
+/// stehen, den ein Agent aus dem Gedächtnis schreibt.
+pub const SEATBELT_NOTE_EN: &str = "macOS sandbox (Seatbelt): temporary files go to `$TMPDIR`; a \
+     write outside it, `$HOME` and a writable project ends in `EPERM`, and so does /tmp. A masked \
+     file answers `EPERM`, not \"not found\"; `.git/config` is one, and `git` itself works. \
+     A nested `sandbox-exec` fails. `whoami` and \
+     `hostname` show the real machine.";
+
+/// [`SEATBELT_NOTE_EN`] auf Deutsch.
+pub const SEATBELT_NOTE_DE: &str = "macOS-Sandbox (Seatbelt): Temporäre Dateien gehören nach \
+     `$TMPDIR`; ein Schreibzugriff außerhalb davon, von `$HOME` und einem beschreibbaren Projekt \
+     endet mit `EPERM`, auch in /tmp. Eine maskierte Datei antwortet mit `EPERM`, nicht mit \
+     „nicht gefunden\"; `.git/config` ist eine, `git` selbst funktioniert. Ein verschachteltes `sandbox-exec` scheitert. `whoami` und `hostname` \
+     zeigen die echte Maschine.";
+
 /// Der Platzhalter für den Satz, der von `hold.ask_mode` abhängt.
 pub const PLACEHOLDER_ASK_MODE: &str = "{ask_mode}";
 
@@ -289,6 +315,35 @@ pub(crate) const fn variant_for(ask_mode: AskMode) -> &'static str {
         AskMode::Ui | AskMode::Terminal => VARIANT_ASK,
         AskMode::None => VARIANT_NONE,
     }
+}
+
+/// [`render`] für eine Sitzung auf diesem System: unter macOS mit
+/// [`SEATBELT_NOTE_EN`] am Ende.
+///
+/// # Errors
+///
+/// Wie [`render`].
+pub fn render_for_session(
+    language: Language,
+    ask_mode: AskMode,
+    timeout_secs: u64,
+    llm_host: Option<&str>,
+) -> Result<String, Diagnostic> {
+    let text = render(language, ask_mode, timeout_secs, llm_host)?;
+    Ok(if cfg!(target_os = "macos") {
+        with_seatbelt_note(&text, language)
+    } else {
+        text
+    })
+}
+
+/// Der Text mit dem Absatz für macOS.
+fn with_seatbelt_note(text: &str, language: Language) -> String {
+    let note = match language {
+        Language::En => SEATBELT_NOTE_EN,
+        Language::De => SEATBELT_NOTE_DE,
+    };
+    format!("{text}\n{note}\n")
 }
 
 /// Trennt den Rumpf der Vorlage von den Varianten.
@@ -409,8 +464,9 @@ mod tests {
     use humanitl_config::{AskMode, Language};
 
     use super::{
-        PLACEHOLDER_ASK_MODE, PLACEHOLDER_LLM_HOST, TEMPLATE_DE, TEMPLATE_EN, render,
-        split_variants, strip_comments, tidy,
+        PLACEHOLDER_ASK_MODE, PLACEHOLDER_LLM_HOST, SEATBELT_NOTE_DE, SEATBELT_NOTE_EN,
+        TEMPLATE_DE, TEMPLATE_EN, render, render_for_session, split_variants, strip_comments, tidy,
+        with_seatbelt_note,
     };
 
     /// Ein Endpunkt, wie ihn `passthrough_authority` liefert.
@@ -616,6 +672,28 @@ mod tests {
                 assert!(text.contains(skill), "{language:?}: {text}");
             }
         }
+    }
+
+    #[test]
+    fn the_seatbelt_note_follows_the_briefing_and_names_what_differs() {
+        for (language, note) in [
+            (Language::En, SEATBELT_NOTE_EN),
+            (Language::De, SEATBELT_NOTE_DE),
+        ] {
+            let plain = render(language, AskMode::Ui, 30, None).unwrap();
+            let text = with_seatbelt_note(&plain, language);
+            assert!(text.starts_with(&plain));
+            assert!(text.ends_with(&format!("{note}\n")));
+            for fact in ["`$TMPDIR`", "/tmp", "`EPERM`", "`sandbox-exec`", "`whoami`"] {
+                assert!(note.contains(fact), "{fact} is missing: {note}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_session_briefing_carries_the_note_only_on_macos() {
+        let text = render_for_session(Language::En, AskMode::Ui, 30, None).unwrap();
+        assert_eq!(text.contains("Seatbelt"), cfg!(target_os = "macos"));
     }
 
     #[test]
