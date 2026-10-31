@@ -444,6 +444,19 @@ pub enum SandboxCmd {
     /// Start a short-lived sandbox and show the three isolation guarantees.
     Check,
 
+    /// Show what a start in this project would get, without starting:
+    /// profile, project folder, mode, and the saved model server with the
+    /// place its choice comes from (this run, the project, a profile or
+    /// llm.active).
+    ///
+    /// Takes the flags of `humanitl run`: `--profile NAME` is the session
+    /// profile here (not the profile of the sandbox backend; that is
+    /// `--sandbox-profile`), and
+    /// `--llm NAME` shows the server a `humanitl run --llm NAME` would get.
+    /// Asks the daemon (Sandbox Plan); while a session runs, it shows that
+    /// session's server.
+    Plan,
+
     /// Attach this terminal to the running session.
     ///
     /// One client writes, any number watch. Ctrl+C goes to the session's
@@ -1145,9 +1158,27 @@ pub fn config_pairs(matches: &ArgMatches) -> Vec<(String, String)> {
                 .try_get_one::<String>(flag.path)
                 .ok()
                 .flatten()
-                .map(|value| (flag.path.to_owned(), value.clone()))
+                .map(|value| llm_pair(flag.path, value))
         })
         .collect()
+}
+
+/// `--llm` nimmt eine Adresse oder den Namen eines gespeicherten Servers
+/// (HUM-400).
+///
+/// Ein Wert ohne `://` ist keine Adresse, die `llm.endpoint` annähme (nur
+/// `http` und `https`), und wird zum Namen: `--llm work` ist
+/// `--llm-server work`. Ein Name wählt nur unter den Servern, die der Nutzer
+/// gespeichert hat; ein unbekannter lässt den Start mit `CONFIG_021`
+/// ablehnen.
+fn llm_pair(path: &str, value: &str) -> (String, String) {
+    if path == "llm.endpoint" && !value.contains("://") {
+        return (
+            humanitl_config::servers::SERVER.to_owned(),
+            value.to_owned(),
+        );
+    }
+    (path.to_owned(), value.to_owned())
 }
 
 /// Der Name des Flags zu einem Schema-Pfad: `hold.timeout_secs` wird
@@ -1254,6 +1285,32 @@ mod tests {
                 flag_name(key)
             );
         }
+    }
+
+    /// `--llm NAME` wählt einen gespeicherten Server, `--llm URL` setzt den
+    /// Endpunkt wie bisher (HUM-400).
+    #[test]
+    fn llm_takes_an_address_or_the_name_of_a_saved_server() {
+        let pairs = |value: &str| {
+            parse(["humanitl", "run", "--llm", value])
+                .expect("the flag parses")
+                .config
+        };
+        assert_eq!(
+            pairs("work"),
+            vec![("llm.server".to_owned(), "work".to_owned())]
+        );
+        assert_eq!(
+            pairs("http://127.0.0.1:1234/v1"),
+            vec![(
+                "llm.endpoint".to_owned(),
+                "http://127.0.0.1:1234/v1".to_owned()
+            )]
+        );
+        let named = parse(["humanitl", "run", "--llm-server", "work"])
+            .expect("the generated flag parses")
+            .config;
+        assert_eq!(named, vec![("llm.server".to_owned(), "work".to_owned())]);
     }
 
     #[test]

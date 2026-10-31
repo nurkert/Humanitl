@@ -403,6 +403,7 @@
           "/v1/",
           "/api/"
         ],
+        "server": null,
         "servers": {}
       },
       "description": "Der lokale LLM-Endpunkt und was als Passthrough gilt.",
@@ -460,6 +461,16 @@
           "x-project-scope": "denied",
           "x-tier": "advanced"
         },
+        "server": {
+          "default": null,
+          "description": "Der Name eines Eintrags aus `llm.servers`, der für die Sitzung statt `llm.active` gilt: gesetzt im Projekt-Profil, in einem Profil oder für einen Lauf (`humanitl run --llm NAME`). Er wählt nur unter den gespeicherten Servern und legt nie selbst einen Endpunkt, ein Modell oder einen Schlüssel fest. Rangfolge: Lauf vor Projekt vor Profil vor `llm.active`. Ein Name, den es nicht gibt, lässt die Sitzung nicht starten.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-project-scope": "allowed",
+          "x-tier": "advanced"
+        },
         "servers": {
           "additionalProperties": {
             "additionalProperties": false,
@@ -500,7 +511,7 @@
         }
       },
       "type": "object",
-      "x-project-scope": "denied",
+      "x-project-scope": "allowed",
       "x-tier": "basic"
     },
     "pseudonyms": {

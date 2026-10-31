@@ -120,6 +120,11 @@ const REGISTER: &[(&str, &str)] = &[
     ("llm.endpoint", "effective"),
     ("llm.models", "effective"),
     ("llm.passthrough_paths", "effective"),
+    // Gelesen beim Laden: Der Eintrag, den `llm.server` nennt, geht dem
+    // aktiven vor und liefert die flachen Schlüssel der Sitzung; ein Name
+    // ohne Eintrag lässt den Start ablehnen (`servers::project`,
+    // `SessionResolver::resolve`, HUM-400).
+    ("llm.server", "effective"),
     // Die Einträge tragen dieselben drei Felder wie die flachen Schlüssel
     // und haben deren Leser: Der aktive wird beim Laden zu ihnen (HUM-289).
     ("llm.servers", "effective"),

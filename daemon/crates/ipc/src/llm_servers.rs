@@ -225,12 +225,23 @@ fn change(
         left.fix = keys.manual_clear(&key_ref);
         notes.push(convert::diagnostic_to_proto(&left));
     }
-    Ok(listing(&servers::list(&table), notes))
+    Ok(listing(
+        &servers::list(&table),
+        &humanitl_config::profile_servers(paths),
+        notes,
+    ))
 }
 
 /// Die Antwort aus einer Liste.
+///
+/// `uses` nennt je Server die Profile, die ihn mit `llm.server` wählen
+/// (HUM-400, [`humanitl_config::profile_servers`]).
 #[must_use]
-pub fn listing(list: &ServerList, diagnostics: Vec<v1::Diagnostic>) -> v1::LlmServerList {
+pub fn listing(
+    list: &ServerList,
+    uses: &std::collections::BTreeMap<String, Vec<String>>,
+    diagnostics: Vec<v1::Diagnostic>,
+) -> v1::LlmServerList {
     v1::LlmServerList {
         servers: list
             .servers
@@ -241,6 +252,7 @@ pub fn listing(list: &ServerList, diagnostics: Vec<v1::Diagnostic>) -> v1::LlmSe
                 models: entry.models.clone(),
                 key_ref: entry.api_key_ref.clone().unwrap_or_default(),
                 active: list.active.as_deref() == Some(entry.name.as_str()),
+                profiles: uses.get(&entry.name).cloned().unwrap_or_default(),
             })
             .collect(),
         active: list.active.clone().unwrap_or_default(),

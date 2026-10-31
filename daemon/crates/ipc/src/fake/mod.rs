@@ -681,8 +681,11 @@ impl DaemonApi for FakeDaemon {
         // `GetConfig` zeigt danach die Ansicht des aktiven Servers, wie der
         // Dienst sie in `config.toml` schreibt.
         self.follow_active(&after);
+        // Der Fake hat kein Profilverzeichnis; kein Profil wählt einen
+        // seiner Server (HUM-400).
         Ok(crate::llm_servers::listing(
             &humanitl_config::servers::list(&after),
+            &std::collections::BTreeMap::new(),
             Vec::new(),
         ))
     }
@@ -1387,6 +1390,15 @@ impl FakeDaemon {
                     // (HUM-357).
                     sandbox_mode: "direct".to_owned(),
                     sandbox_mode_notice: None,
+                    // Der Fake kennt weder Projekt- noch Profilwahl (HUM-400):
+                    // Es gilt sein aktiver Server, als Vorgabe.
+                    llm_server: humanitl_config::servers::active_name(&self.state.llm_servers())
+                        .map(|name| v1::LlmServerChoice {
+                            name,
+                            source: v1::llm_server_choice::Source::Default.into(),
+                            detail: String::new(),
+                            refusal: None,
+                        }),
                 },
             )),
         }

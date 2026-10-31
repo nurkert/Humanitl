@@ -1512,5 +1512,15 @@
   "macosDiagDAEMON005Why": "Am Ort des launchd-Agenten liegt schon eine plist-Datei, die Humanitl nicht geschrieben hat.",
   "macosDiagDAEMON006Title": "plist des Agenten nicht schreibbar",
   "macosDiagDAEMON006Why": "Die plist-Datei des launchd-Agenten lässt sich nicht lesen, schreiben oder beiseitelegen: Rechte, Verzeichnis oder Dateisystem.",
-  "macosDiagDAEMON007Why": "Neben der Kommandozeile liegt kein humanitld, das der launchd-Agent starten könnte."
+  "macosDiagDAEMON007Why": "Neben der Kommandozeile liegt kein humanitld, das der launchd-Agent starten könnte.",
+  "sandboxLlmServer": "Modellserver {name} · {source}",
+  "sandboxLlmServerSourceRun": "dieser Lauf",
+  "sandboxLlmServerSourceProject": "vom Projekt",
+  "sandboxLlmServerSourceProfile": "aus Profil {name}",
+  "sandboxLlmServerSourceActive": "Vorgabe",
+  "sandboxLlmServerSourceUnknown": "Herkunft unbekannt",
+  "sandboxLlmServerHint": "Der Modellverkehr dieser Sitzung geht an den gespeicherten Server {name}, und nur dieser Server bekommt seinen Zugangsschlüssel.",
+  "sandboxLlmServerHintProject": "Die Projektdatei {path} wählt den gespeicherten Server {name} für diese Sitzung. Nur dieser Server bekommt seinen Zugangsschlüssel. Ein Projekt kann nur unter den Servern wählen, die du gespeichert hast.",
+  "sandboxLlmServerMissing": "Kein gespeicherter Server heißt {name}. Der Start wird abgelehnt, bis du ihn in den Einstellungen speicherst oder die Wahl entfernst.",
+  "settingsServerProfiles": "Gewählt von Profil {names}"
 }

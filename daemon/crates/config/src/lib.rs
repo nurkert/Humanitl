@@ -93,7 +93,7 @@ pub use crate::profile::{
 };
 pub use crate::resolve::{
     ProfileSelection, available_profiles, discover, discover_with, profile_exists, profile_layers,
-    resolve, sources_for, sources_with_global,
+    profile_servers, resolve, sources_for, sources_with_global,
 };
 pub use crate::schema::{Field, json_schema};
 pub use crate::scope::{PROJECT_SCOPE_KEY, ProjectScope};

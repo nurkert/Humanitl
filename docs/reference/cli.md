@@ -18,6 +18,7 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl sandbox run`](#humanitl-sandbox-run) Start a sandbox with CMD as the agent and exit with its exit code
 - [`humanitl sandbox argv`](#humanitl-sandbox-argv) Print the bwrap command line for the current profile without starting it
 - [`humanitl sandbox check`](#humanitl-sandbox-check) Start a short-lived sandbox and show the three isolation guarantees
+- [`humanitl sandbox plan`](#humanitl-sandbox-plan) Show what a start in this project would get, without starting: profile, project folder, mode, and the saved model server with the place its choice comes from (this run, the project, a profile or llm.active)
 - [`humanitl sandbox attach`](#humanitl-sandbox-attach) Attach this terminal to the running session
 - [`humanitl sandbox exec`](#humanitl-sandbox-exec) Open a further shell in the running sandbox, next to the agent
 - [`humanitl sandbox changes`](#humanitl-sandbox-changes) Show what a disposable run changed: files changed, created and deleted, with a diff for text files and size and hash for others
@@ -112,6 +113,7 @@ below lists the flag names and their short aliases.
 | `--llm-endpoint` | `--llm` | `STRING,_OPTIONAL` | `llm.endpoint` |
 | `--llm-models` | - | `LIST_OF_STRING` | `llm.models` |
 | `--llm-passthrough-paths` | - | `LIST_OF_STRING` | `llm.passthrough_paths` |
+| `--llm-server` | - | `STRING,_OPTIONAL` | `llm.server` |
 | `--pseudonyms-max-response-bytes` | - | `INTEGER` | `pseudonyms.max_response_bytes` |
 | `--pseudonyms-translate-responses` | - | `true`, `false` | `pseudonyms.translate_responses` |
 | `--recorder-inline-max-bytes` | - | `INTEGER` | `recorder.inline_max_bytes` |
@@ -234,6 +236,7 @@ Commands:
   run      Start a sandbox with CMD as the agent and exit with its exit code
   argv     Print the bwrap command line for the current profile without starting it
   check    Start a short-lived sandbox and show the three isolation guarantees
+  plan     Show what a start in this project would get, without starting: profile, project folder, mode, and the saved model server with the place its choice comes from (this run, the project, a profile or llm.active)
   attach   Attach this terminal to the running session
   exec     Open a further shell in the running sandbox, next to the agent
   changes  Show what a disposable run changed: files changed, created and deleted, with a diff for text files and size and hash for others
@@ -357,6 +360,35 @@ Options:
 
   -h, --help
           Print help
+```
+
+## humanitl sandbox plan
+
+```text
+Show what a start in this project would get, without starting: profile, project folder, mode, and the saved model server with the place its choice comes from (this run, the project, a profile or llm.active).
+
+Takes the flags of `humanitl run`: `--profile NAME` is the session profile here (not the profile of the sandbox backend; that is `--sandbox-profile`), and `--llm NAME` shows the server a `humanitl run --llm NAME` would get. Asks the daemon (Sandbox Plan); while a session runs, it shows that session's server.
+
+Usage: humanitl sandbox plan [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ## humanitl sandbox attach

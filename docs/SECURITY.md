@@ -129,7 +129,9 @@ with `CONFIG_003`, and the daemon does not start. This covers `hold.hard_block_c
 (HUM-208) and `limits.recorder_max_body_bytes` (HUM-209): before, a project profile could switch
 off the hard block for IBANs and card numbers, or shrink the recording of every body to 1 KiB
 while an approval sent the whole body. The full list is the column "Projekt" in
-[`CONFIG.md`](CONFIG.md).
+[`CONFIG.md`](CONFIG.md). Under `llm` a project profile may set exactly one key, `llm.server`
+(HUM-400): it chooses one of the model servers the user saved and can never define an endpoint,
+a model or a key (section 5.1).
 
 Toolchain for reproducible builds: Rust 1.95.0 (pinned in `daemon/rust-toolchain.toml`,
 minimum 1.88), Flutter 3.47.2 (pinned in `app/.fvmrc`), `bubblewrap` 0.8 or newer. `socat` is
@@ -678,6 +680,41 @@ after the key was stored; otherwise the stored item is deleted again. A switch a
 session; a running session keeps the server, the key and the passthrough it started with, and the
 active server cannot be removed while a session runs or starts; no switch and no removal that deletes a key happens while a start is resolving its configuration, and endpoint or key reference of a server never change while its key is being stored (one lock for the daemon and the command line). Removing a server deletes its
 keyring item on request, and only when no other server refers to it.
+
+*A server per project, profile or run (HUM-400).* The key `llm.server` names one of the saved
+servers for a session, and it beats `llm.active`: `humanitl run --llm NAME` (or the start field,
+`Start.llm_server`) beats the project profile, the project profile beats a session profile, and a
+session profile beats `llm.active`. **The trust boundary of the passthrough is therefore the saved
+server the session resolved to**, no longer "the active server": only that server's endpoint is
+the session's passthrough, only its origin gets its key, and the mask of the recording and
+`http://humanitl.internal/` name that server. The check of the key at the start compares with the
+session's choice, never with the globally active server, and the daemon builds the passthrough,
+the key file and the mask from the configuration resolved for that start (one session per daemon:
+the next start replaces them). `humanitl sandbox run`, which starts the sandbox in its own process
+and cannot set the daemon's session, refuses to start whenever the passthrough its own configuration
+would get (built with the daemon's function and compared as scheme, host, port, methods and exact
+inference paths) is not the one the daemon holds, for every choice of a server and for an endpoint
+without one (`CONFIG_021`, with `humanitl run` as the way), so an agent never
+talks to one server while the proxy lets another through. `llm.server` only chooses: endpoint, models and key always come from the entry
+the user saved under `[llm.servers.<name>]`, every other key under `llm` stays closed to a project
+profile, and a name without a saved entry applies no endpoint and no key at all. Such a name never
+falls back to `llm.active`: the start is refused with `CONFIG_021`, which names the place that chose
+it, the saved servers and the fix (save the server or remove the key). An endpoint from the
+environment or the command line above the choice still wins, and then the stored key is withheld
+as before.
+
+**A deliberate widening.** A project file can now choose among the user's saved servers. A
+hostile repository can thereby route the model traffic of its own session (prompts, the code the
+agent reads) to another of the user's saved servers than the active one, for example to a company
+server instead of a local one. It cannot add a server, change an endpoint, read a key or send one
+server's key to another server's origin. We decided against a confirmation the first time a project
+chooses: the choice is limited to servers the user saved on purpose, each with its own key, and the
+choice is visible before and at every start. The sandbox header of the app shows the server with
+its source (the badge turns to the colour of a hold when the project chose), the hover names the
+project file, `humanitl sandbox plan` and `humanitl run` print the server and where the choice comes
+from, and `SandboxEvent.Status.llm_server` carries both to every client. Whoever keeps a server
+that no repository should reach should not save it, or should not run untrusted repositories while
+it is saved.
 
 *How it reaches the sandbox.* When a session starts, the daemon fetches the key and places it as
 the file `/etc/humanitl/opencode/llm-api-key` in the sandbox, from a memfd through
@@ -1480,4 +1517,5 @@ the binaries inside the disk image.
 
 | 0.1.0 | The disposable sandbox: the project folder as the read-only lower layer of an overlay, the upper layer in RAM under the runtime directory with a size cap, `mounts.extra_rw` read-only; changes are written back only on apply, never through a symlink, never as a symlink out of the project, a device or with setuid bits, and never over a file the human changed since the start without `--overwrite` (HUM-350, K-24). |
 | 0.1.0 | The changes panel of the app: a conflict is overwritten only when it was confirmed for exactly that change (`ApplyChanges.overwrite_ids`); a conflict that appears after the selection stops the apply (HUM-351, K-24). |
+| 0.1.0 | A project profile, a session profile or one run (`humanitl run --llm NAME`) chooses one of the saved model servers with `llm.server`; only the chosen server is the session's passthrough and gets its key; an unknown name refuses the start with `CONFIG_021` and never falls back to `llm.active`; the choice and its source stand in the sandbox header and in `humanitl sandbox plan` (HUM-400, K-02). |
 | 0.1.0 | The disposable sandbox is the default where the system allows it: `sandbox.mode = "auto"` resolves to disposable with bubblewrap 0.11 or newer, a runtime directory on tmpfs and a writable project, and otherwise runs direct, as before, with the warning `SANDBOX_033`; an explicit `disposable` still refuses with `SANDBOX_030` and never falls back (HUM-357, K-24). |

@@ -37,6 +37,7 @@ struct Fixture {
     rules: Arc<RulesStore>,
     settings: Arc<SessionSettings>,
     work: String,
+    config_home: std::path::PathBuf,
 }
 
 impl Fixture {
@@ -86,7 +87,37 @@ impl Fixture {
             rules,
             settings,
             work: work.display().to_string(),
+            config_home,
         }
+    }
+
+    /// Schreibt die `config.toml` des Nutzers.
+    fn user_config(&self, text: &str) {
+        let dir = self.config_home.join("humanitl");
+        std::fs::create_dir_all(&dir).expect("the humanitl config directory");
+        std::fs::write(dir.join("config.toml"), text).expect("config.toml");
+    }
+
+    /// Schreibt das Projekt-Profil `<projekt>/.humanitl/profile.toml`.
+    fn project_profile(&self, text: &str) {
+        let dir = std::path::Path::new(&self.work).join(".humanitl");
+        std::fs::create_dir_all(&dir).expect("the project profile directory");
+        std::fs::write(dir.join("profile.toml"), text).expect("profile.toml");
+    }
+
+    /// Die erklärte Durchreiche im Regelspeicher, als `host:port`.
+    fn passthrough_target(&self) -> Option<String> {
+        self.rules
+            .list()
+            .into_iter()
+            .find(|stored| stored.rule.passthrough_llm)
+            .map(|stored| {
+                format!(
+                    "{}:{}",
+                    stored.rule.matcher.host,
+                    stored.rule.matcher.port.unwrap_or_default()
+                )
+            })
     }
 
     /// Ein Start mit diesem Wunsch.
@@ -479,4 +510,143 @@ async fn a_profile_rule_cannot_grant_itself_the_rank_of_the_passthrough() {
              itself a passthrough"
         );
     }
+}
+
+/// Zwei gespeicherte Server; aktiv ist `home` (HUM-400).
+const TWO_SERVERS: &str = r#"
+[llm]
+active = "home"
+
+[llm.servers.home]
+endpoint = "http://home.lan:11434"
+models = ["qwen3"]
+
+[llm.servers.work]
+endpoint = "http://work.lan:8080/v1"
+models = ["big"]
+"#;
+
+/// Die Wahl des Servers in den Momentaufnahmen eines Stroms.
+fn server_choices(events: &[v1::SandboxEvent]) -> Vec<v1::LlmServerChoice> {
+    events
+        .iter()
+        .filter_map(|event| match &event.event {
+            Some(v1::sandbox_event::Event::Status(status)) => status.llm_server.clone(),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Ein Projekt wählt einen anderen gespeicherten Server als den aktiven, und
+/// genau er ist die Durchreiche der Sitzung und das Ziel, das
+/// `http://humanitl.internal/` nennt (HUM-400).
+///
+/// Mutationsbeweis: Wer `llm.server` des Projekts übergeht, bekommt hier die
+/// Durchreiche zu `home.lan` und fällt.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_project_server_is_the_passthrough_of_the_session() {
+    let fixture = Fixture::new();
+    fixture.user_config(TWO_SERVERS);
+    fixture.project_profile("[config.llm]\nserver = \"work\"\n");
+
+    let seen = fixture.run(v1::sandbox_request::Start::default()).await;
+
+    assert_eq!(
+        fixture.passthrough_target().as_deref(),
+        Some("work.lan:8080"),
+        "the passthrough goes to the project's server, not the active one: {seen:?}"
+    );
+    assert_eq!(fixture.settings.get().llm.as_deref(), Some("work.lan:8080"));
+    let choices = server_choices(&seen);
+    let choice = choices.last().expect("a snapshot names the server");
+    assert_eq!(choice.name, "work");
+    assert_eq!(
+        choice.source,
+        v1::llm_server_choice::Source::Project as i32,
+        "{choice:?}"
+    );
+    assert!(
+        choice.detail.ends_with(".humanitl/profile.toml"),
+        "{choice:?}"
+    );
+    assert!(choice.refusal.is_none());
+}
+
+/// Die Gegenprobe: ohne Projekt-Profil der aktive Server, als Vorgabe.
+#[tokio::test(flavor = "multi_thread")]
+async fn without_a_choice_the_active_server_is_the_passthrough() {
+    let fixture = Fixture::new();
+    fixture.user_config(TWO_SERVERS);
+
+    let seen = fixture.run(v1::sandbox_request::Start::default()).await;
+
+    assert_eq!(
+        fixture.passthrough_target().as_deref(),
+        Some("home.lan:11434")
+    );
+    let choices = server_choices(&seen);
+    let choice = choices.last().expect("a snapshot names the server");
+    assert_eq!(choice.name, "home");
+    assert_eq!(choice.source, v1::llm_server_choice::Source::Default as i32);
+}
+
+/// `Start.llm_server` (`humanitl run --llm NAME`) geht dem Projekt vor.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_server_of_the_run_beats_the_project() {
+    let fixture = Fixture::new();
+    fixture.user_config(TWO_SERVERS);
+    fixture.project_profile("[config.llm]\nserver = \"work\"\n");
+
+    let seen = fixture
+        .run(v1::sandbox_request::Start {
+            llm_server: "home".to_owned(),
+            ..v1::sandbox_request::Start::default()
+        })
+        .await;
+
+    assert_eq!(
+        fixture.passthrough_target().as_deref(),
+        Some("home.lan:11434")
+    );
+    let choices = server_choices(&seen);
+    let choice = choices.last().expect("a snapshot names the server");
+    assert_eq!(choice.source, v1::llm_server_choice::Source::Run as i32);
+}
+
+/// Ein Name ohne gespeicherten Server lässt die Sitzung nicht starten, und
+/// keine Durchreiche entsteht, auch nicht zum aktiven Server.
+///
+/// Mutationsbeweis: Ein stiller Rückfall auf `llm.active` brächte hier die
+/// Durchreiche zu `home.lan` und keinen `CONFIG_021`.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unknown_server_refuses_the_start_without_a_fallback() {
+    let fixture = Fixture::new();
+    fixture.user_config(TWO_SERVERS);
+    fixture.project_profile("[config.llm]\nserver = \"gone\"\n");
+
+    let seen = fixture.run(v1::sandbox_request::Start::default()).await;
+
+    assert!(
+        codes(&seen).contains(&"CONFIG_021".to_owned()),
+        "the start says which server is missing: {seen:?}"
+    );
+    assert!(
+        !fixture.has_passthrough(),
+        "no passthrough, in particular not to the active server: {:#?}",
+        fixture.rules.list()
+    );
+    assert_eq!(fixture.settings.get().llm, None);
+    let refused = seen
+        .iter()
+        .find_map(|event| match &event.event {
+            Some(v1::sandbox_event::Event::Diagnostic(diagnostic))
+                if diagnostic.code == "CONFIG_021" =>
+            {
+                Some(diagnostic.why.clone())
+            }
+            _ => None,
+        })
+        .expect("the finding");
+    assert!(refused.contains("gone"), "{refused}");
+    assert!(refused.contains("project profile"), "{refused}");
 }

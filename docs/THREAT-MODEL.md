@@ -162,13 +162,22 @@ finding everywhere except in `Authorization` towards `llm.endpoint`. With severa
 servers (HUM-289) each has its own keyring item, and only the active server's origin gets a key and
 is the passthrough of the next session; a probe sends a saved server's key only to that server's own
 origin, never to another's; an endpoint from the environment or the command line above the active
-server, a shared reference or a missing active server leaves the key unsent. *Residual risk:*
+server, a shared reference or a missing active server leaves the key unsent. Since HUM-400 the
+boundary is the saved server the session resolved to: `llm.server` from the run, the project
+profile or a session profile beats `llm.active`, only that server is the passthrough and gets its
+key, and a name without a saved entry refuses the start (`CONFIG_021`) instead of falling back.
+*Residual risk:*
 complete.
 Whoever steers the agent through prompt injection can put project content into a prompt. If
 `llm.endpoint` is a name, whoever controls that name can redirect the passthrough between two
 requests, and because the rule carries `allow_private`, the router or `169.254.169.254` are valid
 targets; use an address or `resolver.overrides`. The agent can read the key and send it elsewhere,
-where it is a finding but held only at a host without an allowing rule.
+where it is a finding but held only at a host without an allowing rule. A cloned repository can
+choose another of the user's saved servers with `llm.server` in its project profile and so route
+the model traffic of its own session there, for example to a company server instead of a local
+one; it cannot define a server, an endpoint or a key, and the choice is shown with its
+source in the sandbox header, in `humanitl sandbox plan` and at the start of `humanitl run`. No
+confirmation is asked; do not save a server that no repository may reach.
 
 ### K-03 The socket directory of the proxy
 
@@ -570,6 +579,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-30 | K-24: the disposable sandbox, an overlay over the read-only project with the upper layer in RAM and a size cap; changes reach the project only through a checked apply | HUM-350 |
 | 2026-10-30 | K-02: on macOS the provider access key lives in the login Keychain through `/usr/bin/security`, over `stdin` and read back; same class as the Secret Service: readable by every process of the account outside the sandbox, out of reach of the agent | HUM-349 |
 | 2026-10-30 | K-24: overwriting a conflict is confirmed per change (`overwrite_ids`); a confirmation for one file never covers another | HUM-351 |
+| 2026-10-31 | K-02: the boundary is the saved server the session resolved to; `llm.server` from run, project or profile chooses among the user's saved servers, never defines one; an unknown name refuses the start | HUM-400 |
 | 2026-10-30 | K-24: the disposable sandbox becomes the default where the system allows it (`sandbox.mode = "auto"`); without the overlay the default runs direct with `SANDBOX_033`, an explicit `disposable` still refuses | HUM-357 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets

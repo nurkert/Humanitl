@@ -180,8 +180,17 @@ async fn dispatch(invocation: Invocation) -> u8 {
 /// überall sonst das Profil der Sitzung. Wer unter `sandbox` das Sitzungsprofil
 /// meint, setzt es über seine Konfigurations-Flags; wer unter `run` das
 /// bwrap-Profil meint, schreibt `--sandbox-profile`.
+///
+/// `sandbox plan` ist die Ausnahme unter `sandbox` und spricht wie `run`
+/// (HUM-400): Es zeigt, was ein `humanitl run` bekäme, und nimmt deshalb
+/// dessen Flags; `--profile` ist dort das Profil der Sitzung, das auch einen
+/// Server wählen kann, und das Profil des Sandbox-Backends heißt
+/// `--sandbox-profile`.
 const fn profile_means(cmd: &Cmd) -> ProfileMeaning {
     match cmd {
+        Cmd::Sandbox {
+            cmd: crate::cli::SandboxCmd::Plan,
+        } => ProfileMeaning::Session,
         Cmd::Sandbox { .. } => ProfileMeaning::Sandbox,
         _ => ProfileMeaning::Session,
     }
@@ -227,6 +236,13 @@ mod tests {
                 cmd: crate::cli::SandboxCmd::Check
             }),
             ProfileMeaning::Sandbox
+        );
+        assert_eq!(
+            profile_means(&Cmd::Sandbox {
+                cmd: crate::cli::SandboxCmd::Plan
+            }),
+            ProfileMeaning::Session,
+            "sandbox plan previews a run and takes its flags (HUM-400)"
         );
     }
 }

@@ -46,7 +46,9 @@ const MIB: u64 = 1024 * KIB;
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// Der lokale LLM-Endpunkt und was als Passthrough gilt.
-    #[schemars(extend("x-tier" = "basic", "x-project-scope" = "denied"))]
+    // Die Gruppe ist im Projekt-Profil erlaubt, weil `llm.server` es ist
+    // (HUM-400); jeder andere Schlüssel unter `llm` bleibt gesperrt.
+    #[schemars(extend("x-tier" = "basic", "x-project-scope" = "allowed"))]
     pub llm: LlmConfig,
     /// Wie lange und auf welchem Weg gefragt wird, bevor eine Anfrage weiterläuft.
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "allowed"))]
@@ -111,6 +113,18 @@ pub struct LlmConfig {
     /// Der Name des aktiven Eintrags aus `llm.servers`. Nur sein Endpunkt bekommt den hinterlegten Zugangsschlüssel und gilt als LLM-Passthrough. Leer, solange es keine Einträge gibt.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub active: Option<String>,
+    /// Der Name eines Eintrags aus `llm.servers`, der für die Sitzung statt `llm.active` gilt: gesetzt im Projekt-Profil, in einem Profil oder für einen Lauf (`humanitl run --llm NAME`). Er wählt nur unter den gespeicherten Servern und legt nie selbst einen Endpunkt, ein Modell oder einen Schlüssel fest. Rangfolge: Lauf vor Projekt vor Profil vor `llm.active`. Ein Name, den es nicht gibt, lässt die Sitzung nicht starten.
+    // Erlaubt im Projekt-Profil (HUM-400), als einziger Schlüssel unter
+    // `llm`: Der Name wählt nur aus, was der Nutzer selbst gespeichert hat;
+    // Endpunkt, Modelle und Schlüssel bleiben gesperrt.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
+    pub server: Option<String>,
+    /// Der Server, den die Auflösung gewählt hat, und woher die Wahl kommt
+    /// (HUM-400). Kein Schlüssel der Datei: Das Laden setzt ihn nach dem
+    /// Mischen aller Ebenen ([`crate::servers::ServerChoice`]).
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub choice: Option<crate::servers::ServerChoice>,
 }
 
 impl Default for LlmConfig {
@@ -122,6 +136,8 @@ impl Default for LlmConfig {
             api_key_ref: None,
             servers: BTreeMap::new(),
             active: None,
+            server: None,
+            choice: None,
         }
     }
 }
@@ -154,9 +170,10 @@ impl LlmConfig {
     /// jeder Stelle, die den Schlüssel benutzt, noch einmal geprüft wird:
     /// Ein Verweis wirkt nur zusammen mit dem Endpunkt **desselben**
     /// Eintrags. Ohne gespeicherte Server sind das die flachen Schlüssel;
-    /// mit ihnen muss der Eintrag, den `llm.active` nennt, genau diesen
-    /// Verweis tragen, kein anderer Eintrag denselben, und sein Endpunkt
-    /// dieselbe Herkunft (Schema, Host, Port) haben wie `llm.endpoint`.
+    /// mit ihnen muss der Eintrag, den die Sitzung gewählt hat
+    /// ([`LlmConfig::selected_server`]), genau diesen Verweis tragen, kein
+    /// anderer Eintrag denselben, und sein Endpunkt dieselbe Herkunft
+    /// (Schema, Host, Port) haben wie `llm.endpoint`.
     #[must_use]
     pub fn key_goes_with_endpoint(&self) -> bool {
         if self.servers.is_empty() {
@@ -165,7 +182,10 @@ impl LlmConfig {
         let Some(reference) = self.api_key_ref.as_deref() else {
             return true;
         };
-        let Some(entry) = self.active.as_ref().and_then(|name| self.servers.get(name)) else {
+        let Some(entry) = self
+            .selected_server()
+            .and_then(|name| self.servers.get(name))
+        else {
             return false;
         };
         if entry.api_key_ref.as_deref() != Some(reference) {
@@ -188,6 +208,16 @@ impl LlmConfig {
             (Some(endpoint), Some(origin)) => endpoint.origin() == origin,
             _ => false,
         }
+    }
+
+    /// Der Name des Eintrags, der für diese Auflösung gilt (HUM-400):
+    /// `llm.server`, wenn ein Projekt, ein Profil oder der Lauf ihn setzt,
+    /// sonst `llm.active`. Nie der global aktive, wenn die Sitzung einen
+    /// anderen gewählt hat: Nur der Endpunkt des gewählten bekommt seinen
+    /// Schlüssel.
+    #[must_use]
+    pub fn selected_server(&self) -> Option<&str> {
+        self.server.as_deref().or(self.active.as_deref())
     }
 
     /// Host und Port des Endpunkts, normalisiert wie der Proxy jede Anfrage

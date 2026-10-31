@@ -243,19 +243,24 @@ pub fn load(sources: &Sources) -> Result<Resolved, Diagnostic> {
             .and_then(|uses| uses.iter().map(|used| used.layer).max());
         canonical.max(aliased).max(set_aside.get(path).copied())
     };
-    diagnostics.extend(crate::servers::project(&mut flat, &mut origins, &layer_of)?);
+    let projection = crate::servers::project(&mut flat, &mut origins, &layer_of)?;
+    diagnostics.extend(projection.diagnostics);
 
     let table = nest(&flat)?;
-    let config: Config = TomlValue::Table(table)
-        .try_into()
-        .map_err(|err: toml::de::Error| {
-            Diagnostic::builder(CONFIG_003, Severity::Error)
-                .why(format!(
-                    "the merged configuration does not fit the schema: {err}"
-                ))
-                .build()
-        })?;
+    let mut config: Config =
+        TomlValue::Table(table)
+            .try_into()
+            .map_err(|err: toml::de::Error| {
+                Diagnostic::builder(CONFIG_003, Severity::Error)
+                    .why(format!(
+                        "the merged configuration does not fit the schema: {err}"
+                    ))
+                    .build()
+            })?;
     config.validate()?;
+    // Welcher gespeicherte Server gilt und woher die Wahl kommt (HUM-400):
+    // kein Schlüssel der Datei, sondern das Ergebnis des Projizierens.
+    config.llm.choice = projection.choice;
 
     Ok(Resolved {
         config,

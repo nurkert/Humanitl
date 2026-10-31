@@ -16,7 +16,7 @@ configuration flags in `docs/CONFIG.md`.
 
 ```
 humanitl run [--profile NAME] [--work DIR] [--work-mode ro|rw]
-             [--ask ui|terminal|none] [--llm URL] [-- CMD...]
+             [--ask ui|terminal|none] [--llm URL|NAME] [-- CMD...]
 ```
 
 Starts a session in the project directory: the daemon builds the sandbox, the
@@ -51,6 +51,7 @@ agent runs inside it, and `humanitl run` ends with the agent's exit code.
 | `--work-mode ro\|rw` | `sandbox.work_mode` | Whether the agent may write in the project. |
 | `--ask ui\|terminal\|none` | `hold.ask_mode` | Where a held request is decided. See below. |
 | `--llm URL` | `llm.endpoint` | The language model of this session. From it comes the declared passthrough: a rule in rank 1 that is not held and overtakes your own block rules, for the inference paths of this one host. It stands as a rule of its own in the list, under `http://humanitl.internal/` and in the recording. If the address is not in your own network according to its name, the start reports `LLM_006`; the session starts anyway. Nothing is resolved for this. |
+| `--llm NAME` | `llm.server` | One of the saved model servers for this run (HUM-400): a value without `://` is a name, not an address, and is the same as `--llm-server NAME`. It beats the server the project profile, a session profile or `llm.active` chooses, and only this server is the passthrough and gets its stored key. A name that is not saved refuses the start with `CONFIG_021`; there is no fallback to the active server. A daemon before contract 1.28 cannot take the choice and gets `CLI_004` instead of a start with another server. At the start `humanitl run` prints the server of the session and where the choice comes from (`[humanitl] llm server: work (chosen by the project profile …)`). |
 | `-- CMD...` | `agent.command` | The command in the sandbox, instead of the agent from the configuration. `-- bash` is the way to look at the sandbox from the inside, and to start the agent by hand there (see "A shell for the agent"). |
 
 **Where the project directory comes from (HUM-293).** `humanitl run`,
@@ -1493,6 +1494,46 @@ removed only with `--use NEXT` while there are others (`CONFIG_021`
 otherwise), and the last one takes the flat keys with it. Names have 1 to 32
 characters `a-z`, `0-9`, `-` and `_`. The table never shows a key, only its
 reference, and the endpoint without user, password or query.
+
+**A server per project or profile (HUM-400).** `llm.server = "NAME"` in the
+project profile (`<project>/.humanitl/profile.toml`, under `[config.llm]`) or
+in a session profile (`profiles/*.toml`) chooses one of these servers for the
+sessions of that project or profile, instead of the active one. The order is
+`humanitl run --llm NAME`, then the project, then the profile, then
+`llm.active`. The key only chooses among the servers saved here; it can never
+add one, and endpoint, models and key stay closed to a project profile. A
+name that is not saved refuses the start (`CONFIG_021`, with the place that
+chose it). `humanitl sandbox plan` shows which server a start in the current
+project would get and where the choice comes from:
+
+```
+$ humanitl sandbox plan
+sandbox profile: default
+work dir: /home/me/src/app (rw)
+mode: disposable
+llm server: work (chosen by the project profile /home/me/src/app/.humanitl/profile.toml)
+llm endpoint: https://llm.work.example/v1
+```
+
+`sandbox plan` takes the flags of `humanitl run`: `--profile NAME` is the
+session profile (which may choose a server, too), `--sandbox-profile NAME` the
+bwrap profile, `--llm NAME` the server of the run. With `--llm NAME` it shows
+the server of that run; a daemon before contract 1.28 cannot plan with a
+server or a session profile and gets `CLI_004`, and against such a daemon the
+server line reads `unknown (daemon 1.N)`; with `--json` one object
+with `llm_server.name`, `.source` (`run`, `project`, `profile`, `default`),
+`.detail` and `.saved`. A name that is not saved ends the plan with exit 1 and
+the same `CONFIG_021` the start would give. The settings list under each
+server the profiles that choose it.
+
+`humanitl sandbox run` starts the sandbox in its own process and cannot set
+the daemon's session. It refuses a server that is not saved, and any
+configuration whose passthrough (scheme, host, port, methods, exact inference
+paths, built as the daemon builds it) is not the one the daemon holds, whether
+the server comes from the project, `--llm`, a profile, another `--config` or
+an endpoint without a saved server (`CONFIG_021`): the agent would talk to one
+server while the proxy lets another through. `humanitl run` gives the session
+its own server.
 
 ## The global switches
 

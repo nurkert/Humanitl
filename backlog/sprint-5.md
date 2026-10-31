@@ -94,6 +94,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-363 | A release tag is set only on a commit whose release dry run is green | M | HUM-237, HUM-362 |
 | HUM-364 | OpenCode and pi know that the network is slow on purpose, through the briefing and a Humanitl skill | M | HUM-071, HUM-073, HUM-274, HUM-308, HUM-309 |
 | HUM-401 | What the agent reads from the proxy says nothing about a person deciding | M | HUM-073, HUM-364 |
+| HUM-400 | A project or sandbox profile picks one of the saved model servers | M | HUM-289, HUM-277, HUM-066 |
 
 ---
 
@@ -11336,3 +11337,113 @@ keine Woerter, die auf eine Person oder Freigabe hindeuten (dieselbe Wortliste
 wie der Test aus HUM-364); App, Audit und History zeigen weiter, wer
 entschieden hat.
 
+
+---
+## HUM-400 · A project or sandbox profile picks one of the saved model servers
+
+Sprint: 5 · Größe: M · Abhängigkeiten: HUM-289, HUM-277, HUM-066
+
+**Anlass.** Wunsch des Owners vom 2026-10-31, so bald wie möglich: je Projekt
+und je Profil ein anderer der gespeicherten Modellserver (HUM-289), etwa der
+Firmenserver für das Firmenprojekt und der lokale für alles andere, ohne vor
+jedem Start in den Einstellungen umzuschalten.
+
+**Umsetzung.**
+
+1. *Konfiguration.* Neuer Schlüssel `llm.server` (ein Name), setzbar im
+   Projekt-Profil, in einem Profil der Session und für einen Lauf. Er nennt
+   einen Eintrag aus `llm.servers` des Nutzers und kann nie selbst einen
+   Endpunkt, Modelle oder einen Schlüssel festlegen. Rangfolge je Start: Lauf
+   (`humanitl run --llm NAME`, `Start.llm_server`) vor Projekt vor Profil vor
+   `llm.active`. Ein Name ohne gespeicherten Eintrag lehnt den Start mit einem
+   klaren Befund ab (`CONFIG_021`: welche Quelle welchen fehlenden Server
+   nennt, welche gespeichert sind; Behebung `humanitl llm server add` oder den
+   Schlüssel entfernen), nie ein stiller Rückfall. `backlog/CONVENTIONS.md`
+   4.11 begründet, warum dieser Schlüssel im Projekt-Profil erlaubt ist,
+   Endpunkte und Schlüssel aber nicht.
+2. *Je Sitzung.* Der aufgelöste Server der Session ist ihre Durchreiche und
+   der einzige Endpunkt, der seinen Schlüssel bekommt; Durchreiche,
+   Schlüsseldatei, Maske der Aufzeichnung und `SessionState.llm` kommen aus
+   der Auflösung dieses einen Starts, nie aus dem global aktiven Server.
+   `LlmConfig::key_goes_with_endpoint` prüft gegen die Wahl der Session.
+3. *RPC und Status.* `SandboxEvent.Status.llm_server` (`LlmServerChoice`:
+   Name, Quelle `run`/`project`/`profile`/`default`, Pfad oder Profilname,
+   Ablehnung), `Start.llm_server`, `Plan.llm_server`, `LlmServer.profiles`;
+   Vertrag 1.28, `docs/PROTOCOL.md`.
+4. *Oberfläche und CLI.* Der Kopf der Sandbox (mit dem Startknopf) zeigt
+   Server und Herkunft und sperrt den Start bei einem nicht gespeicherten
+   Namen; die Liste „Server" der Einstellungen nennt je Server die Profile,
+   die ihn wählen. `humanitl run --llm NAME` (ein Wert ohne `://` ist ein
+   Name) und `humanitl sandbox plan` mit Server und Herkunft.
+5. *Sicherheit.* `docs/SECURITY.md` 5.1 und `docs/THREAT-MODEL.md` K-02: Die
+   Grenze ist der gespeicherte Server, den die Session aufgelöst hat. Eine
+   Datei des Projekts kann unter den gespeicherten Servern wählen; das ist
+   eine bewusste Erweiterung (ein feindliches Repository kann den
+   Modellverkehr seiner eigenen Session an einen anderen gespeicherten Server
+   lenken, etwa an den Firmenserver statt an den lokalen), und sie wird
+   benannt. Entschieden: keine Rückfrage beim ersten Mal, die Wahl steht mit
+   ihrer Herkunft sichtbar vor und bei jedem Start.
+
+**Abweichung von der Vorlage.** Der Auftrag nannte die Sandbox-Profile
+`profiles/sandbox/*.toml`. Die sind die bwrap-Politik (Einhängungen, Filter,
+Brücke) und tragen keine Konfigurationswerte; Werte stehen in den Profilen der
+Session (`profiles/*.toml` unter `[config.*]`, HUM-066), die schon als Ebene
+zwischen `config.toml` und Projekt geladen werden. `llm.server` steht deshalb
+dort: ohne zweiten Lader, mit der Rangfolge der Ebenen, und ohne die Datei der
+Sandbox-Politik mit der Wahl eines Netzziels zu vermischen. Ebenso gibt es
+`humanitl sandbox plan` vorher nicht; das Unterkommando ist neu.
+
+**Tests.** Rangfolge Lauf vor Projekt vor Profil vor `llm.active` und
+Ablehnung eines unbekannten Namens ohne Rückfall
+(`crates/config/tests/session_server.rs`); das Projekt kann keinen Endpunkt,
+Server oder Schlüssel festlegen (dieselbe Datei, `CONFIG_003`); Durchreiche
+und `SessionState.llm` gehen an den Server der Session, Status trägt Name und
+Quelle, ein unbekannter Name startet nichts
+(`crates/ipc/tests/session_config.rs`); der Schlüssel geht nur mit dem Server
+der Session (`sandbox.rs`,
+`the_session_server_gets_its_key_and_not_the_active_one`); `--llm NAME` und
+die Zeilen von `sandbox plan` (`cli.rs`, `cmd/plan.rs`); die Oberfläche zeigt
+Server und Herkunft und sperrt den Start (`test/features/sandbox/`).
+
+**Mutationsbeweise.** `llm.server` des Projekts übergehen (rot in
+`a_project_beats_a_profile_and_the_active_server` und
+`the_project_server_is_the_passthrough_of_the_session`); stiller Rückfall auf
+`llm.active` bei unbekanntem Namen (rot in
+`an_unknown_name_applies_no_server_and_refuses_without_a_fallback` und
+`an_unknown_server_refuses_the_start_without_a_fallback`); Schlüssel gegen den
+global aktiven Server statt den der Session prüfen (rot in
+`only_the_chosen_server_gets_its_key` und
+`the_session_server_gets_its_key_and_not_the_active_one`).
+
+**Fallstricke.**
+
+- `--llm` war bisher nur der Zweitname von `--llm-endpoint`. Ein Wert ohne
+  `://` wird jetzt zum Namen; eine Adresse ohne Schema war schon vorher keine
+  gültige (`llm.endpoint` nimmt nur `http` und `https`).
+- Ein Daemon vor 1.28 kennt `Start.llm_server` nicht und startete still mit
+  einem anderen Server; die Kommandozeile lehnt `--llm NAME` gegen ihn mit
+  `CLI_004` ab.
+- Ein Endpunkt aus Umgebung oder Kommandozeile über der Wahl gewinnt wie
+  bisher; dann gilt kein gespeicherter Server, der Schlüssel bleibt zurück,
+  und der Status nennt keinen Server.
+- Der Schnappschuss ohne laufende Sitzung löst für die Wahl mit dem
+  Projektordner auf; sonst zeigte er den aktiven Server, während das Projekt
+  einen anderen wählt.
+
+**Nachtrag aus dem Review (Codex, Opus).** `humanitl sandbox run` lehnt einen
+nicht gespeicherten Server ab und jede Konfiguration, deren Durchreiche (mit
+der Funktion des Daemons gebaut, typisiert verglichen) nicht die des Daemons
+ist (`CONFIG_021`, Weg `humanitl run`);
+`Plan.session_profile` und ein Schnappschuss aus einer einzigen Auflösung;
+`sandbox plan` mit den Flags von `run`; „unknown (daemon 1.N)" gegen einen
+älteren Daemon; `ServerSource::Config` für `llm.server` aus `config.toml`.
+
+**Kandidaten (HUM-400).** Eine Rückfrage, wenn ein Projekt zum ersten Mal
+einen Server wählt (Vertrauen beim ersten Mal, gemerkt je Projektpfad und
+Inhalt des Profils; Entscheidung des Owners offen); eine Wahl je Lauf im
+Startbereich der App (`Start.llm_server`); die Liste der Projekte, die einen
+Server wählen, sobald der Daemon zuletzt benutzte Projekte kennt;
+`Plan.cli_overrides`, damit `sandbox plan --llm URL` den Endpunkt zeigt;
+`plan_config` liest bei jeder Abfrage `config.toml` und die Profile neu (ein
+Zwischenspeicher je Änderungszeit); das Abzeichen nach einem abgelehnten
+Start über die Kommandozeile.

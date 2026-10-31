@@ -1620,6 +1620,7 @@ fn start_request(work_dir: &Path, marker: &str) -> v1::SandboxRequest {
             // Direkt, unabhängig davon, ob dieser Rechner ein Overlay kann:
             // Der Test gilt nicht der Vorgabe `auto` (HUM-357).
             sandbox_mode: "direct".to_owned(),
+            llm_server: String::new(),
         })),
     }
 }
