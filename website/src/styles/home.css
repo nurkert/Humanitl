@@ -4,14 +4,15 @@
    Farben sind Tokens, damit ein heller Modus sie später umdefinieren kann. */
 
 :root {
-  --hm-ok: #5fcf8f;
-  --hm-deny: #e5675c;
+  --hm-ok: var(--ok);
+  --hm-deny: var(--deny);
   --hm-held: var(--accent);
+  --hm-held-ink: var(--accent-ink);
   --hm-wide: min(100% - 2 * var(--gutter), 88rem);
-  --hm-rule: rgb(255 255 255 / 0.5);
-  --hm-surface: rgb(255 255 255 / 0.035);
-  --hm-held-soft: rgb(232 184 75 / 0.12);
-  --hm-deny-soft: rgb(229 103 92 / 0.14);
+  --hm-rule: rgb(var(--ink) / 0.5);
+  --hm-surface: rgb(var(--ink) / 0.035);
+  --hm-held-soft: rgb(232 184 75 / var(--dark, 0.12) var(--light, 0.2));
+  --hm-deny-soft: rgb(var(--deny-rgb) / 0.14);
   --hm-snap: cubic-bezier(0.34, 1.4, 0.64, 1);
 }
 
@@ -52,7 +53,7 @@
   font-family: var(--mono);
   font-size: 0.86em;
   color: var(--fg);
-  background: rgb(255 255 255 / 0.06);
+  background: rgb(var(--ink) / 0.06);
   padding: 0.08em 0.32em;
   border-radius: 5px;
   overflow-wrap: anywhere;
@@ -67,8 +68,8 @@
   border-radius: 18px;
   background:
     linear-gradient(var(--bg-1), var(--bg-1)) padding-box,
-    linear-gradient(170deg, rgb(255 255 255 / 0.5), rgb(255 255 255 / 0.07) 32%, rgb(255 255 255 / 0.05) 70%, rgb(255 255 255 / 0.24)) border-box;
-  box-shadow: 0 40px 100px -40px rgb(0 0 0 / 0.95);
+    linear-gradient(170deg, rgb(var(--rim) / calc(0.5 * var(--rim-k))), rgb(var(--rim) / calc(0.07 * var(--rim-k))) 32%, rgb(var(--rim) / calc(0.05 * var(--rim-k))) 70%, rgb(var(--rim) / calc(0.24 * var(--rim-k)))) border-box;
+  box-shadow: 0 40px 100px -40px rgb(var(--shadow) / calc(0.95 * var(--shadow-k)));
 }
 .hm-foot {
   display: flex;
@@ -152,8 +153,8 @@
   border-radius: 20px;
   background:
     linear-gradient(var(--bg-1), var(--bg-1)) padding-box,
-    linear-gradient(170deg, rgb(255 255 255 / 0.55), rgb(255 255 255 / 0.07) 30%, rgb(255 255 255 / 0.05) 72%, rgb(255 255 255 / 0.26)) border-box;
-  box-shadow: 0 50px 120px -50px rgb(0 0 0 / 0.95);
+    linear-gradient(170deg, rgb(var(--rim) / calc(0.55 * var(--rim-k))), rgb(var(--rim) / calc(0.07 * var(--rim-k))) 30%, rgb(var(--rim) / calc(0.05 * var(--rim-k))) 72%, rgb(var(--rim) / calc(0.26 * var(--rim-k)))) border-box;
+  box-shadow: 0 50px 120px -50px rgb(var(--shadow) / calc(0.95 * var(--shadow-k)));
   overflow: hidden;
 }
 .hm-run__top {
@@ -199,7 +200,7 @@
   font-size: 1.02rem;
 }
 .hm-row--held .hm-row__end .hm-verdict {
-  color: var(--hm-held);
+  color: var(--hm-held-ink);
 }
 .hm-os {
   display: grid;
@@ -258,7 +259,7 @@
   left: 0;
   width: var(--wall);
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgb(229 103 92 / 0.8));
+  background: linear-gradient(90deg, transparent, rgb(var(--deny-rgb) / 0.8));
   transform-origin: left;
 }
 .hm-track__mover {
@@ -275,7 +276,7 @@
   margin-top: -5px;
   border-radius: 50%;
   background: var(--hm-deny);
-  box-shadow: 0 1px 8px rgb(229 103 92 / 0.6);
+  box-shadow: 0 1px 8px rgb(var(--deny-rgb) / 0.6);
 }
 .hm-track__mark {
   position: absolute;
@@ -416,7 +417,7 @@
   fill: var(--hm-deny);
 }
 .hm-flow .hm-f-held {
-  fill: var(--hm-held);
+  fill: var(--hm-held-ink);
 }
 .hm-f-fill {
   fill: var(--hm-surface);
@@ -442,7 +443,7 @@
   stroke-dasharray: 4 5;
 }
 .hm-f-ghost {
-  stroke: rgb(229 103 92 / 0.55);
+  stroke: rgb(var(--deny-rgb) / 0.55);
   stroke-width: 1.5;
   stroke-dasharray: 3 6;
 }
@@ -460,7 +461,7 @@
   stroke-linecap: round;
 }
 .hm-f-proxy {
-  fill: rgb(255 255 255 / 0.05);
+  fill: rgb(var(--ink) / 0.05);
   stroke: var(--line-strong);
   stroke-width: 1.5;
 }
@@ -501,7 +502,7 @@
   fill: var(--void);
 }
 .hm-f-blk {
-  fill: rgb(255 255 255 / 0.12);
+  fill: rgb(var(--ink) / 0.12);
 }
 .hm-f-blk[data-f='audit'] {
   fill: var(--hm-ok);
@@ -768,8 +769,8 @@
   border-radius: 14px;
   background:
     linear-gradient(var(--bg-1), var(--bg-1)) padding-box,
-    linear-gradient(170deg, rgb(255 255 255 / 0.6), rgb(255 255 255 / 0.08) 35%, rgb(255 255 255 / 0.28)) border-box;
-  box-shadow: 0 40px 90px -30px rgb(0 0 0 / 0.95);
+    linear-gradient(170deg, rgb(var(--rim) / calc(0.6 * var(--rim-k))), rgb(var(--rim) / calc(0.08 * var(--rim-k))) 35%, rgb(var(--rim) / calc(0.28 * var(--rim-k)))) border-box;
+  box-shadow: 0 40px 90px -30px rgb(var(--shadow) / calc(0.95 * var(--shadow-k)));
 }
 .hm-shot img {
   width: 100%;
@@ -967,7 +968,7 @@
   height: 120%;
   background:
     radial-gradient(50% 55% at 50% 100%, rgb(160 172 205 / 0.16), transparent 70%),
-    radial-gradient(28% 30% at 50% 78%, rgb(255 255 255 / 0.08), transparent 70%);
+    radial-gradient(28% 30% at 50% 78%, rgb(var(--ink) / 0.08), transparent 70%);
   pointer-events: none;
 }
 .hm-end__inner {

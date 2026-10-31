@@ -26,7 +26,7 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
-  scrollbar-color: #2a2e38 transparent;
+  scrollbar-color: var(--scroll) transparent;
 }
 .docs__sidenav {
   margin-left: -0.75rem;
@@ -121,11 +121,11 @@
 }
 .dnav__link:hover {
   color: var(--fg);
-  background: rgb(255 255 255 / 0.04);
+  background: rgb(var(--ink) / 0.04);
 }
 .dnav__link[aria-current='page'] {
   color: var(--fg);
-  background: rgb(255 255 255 / 0.07);
+  background: rgb(var(--ink) / 0.07);
   box-shadow:
     inset 0 0 0 1px var(--line),
     inset 0 1px 0 rgb(255 255 255 / 0.06);
@@ -201,7 +201,7 @@
   margin: 0 0 2.4rem;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: rgb(255 255 255 / 0.015);
+  background: rgb(var(--ink) / 0.015);
 }
 .toc-inline > summary {
   padding: 0.8rem 1rem;
@@ -268,7 +268,7 @@
   background: var(--fg-2);
 }
 .chip[data-status='accepted']::before {
-  background: #7fd1ae;
+  background: var(--doc-mark);
 }
 .chip--flag {
   text-transform: uppercase;
@@ -280,7 +280,7 @@
 /* ------------------------------------------------------------------ Lesespalte */
 
 .doc {
-  --doc-text: #c2c6d0;
+  --doc-text: var(--dark, #c2c6d0) var(--light, #2b303b);
   /* 38rem statt 68ch: `ch` ist in Geist die Breite der Ziffer 0, Buchstaben sind schmaler.
      So landet eine Zeile bei rund 70 bis 75 Zeichen. */
   --doc-measure: 38rem;
@@ -313,7 +313,7 @@
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  filter: drop-shadow(0 1px 0 rgb(255 255 255 / 0.1));
+  filter: var(--dark, drop-shadow(0 1px 0 rgb(255 255 255 / 0.1))) var(--light, none);
   text-wrap: balance;
 }
 
@@ -406,7 +406,7 @@
   position: absolute;
   inset: -0.35rem -0.75rem;
   border-radius: 10px;
-  background: rgb(255 255 255 / 0.05);
+  background: rgb(var(--ink) / 0.05);
   opacity: 0;
   pointer-events: none;
 }
@@ -431,7 +431,7 @@
 }
 .doc a {
   color: var(--fg);
-  text-decoration-color: rgb(255 255 255 / 0.28);
+  text-decoration-color: rgb(var(--ink) / 0.28);
   text-underline-offset: 0.22em;
 }
 .doc a:hover {
@@ -453,9 +453,9 @@
   font-size: 0.86em;
   padding: 0.12em 0.38em;
   border-radius: 6px;
-  background: rgb(255 255 255 / 0.06);
+  background: rgb(var(--ink) / 0.06);
   border: 1px solid var(--line);
-  color: #e6e8ee;
+  color: var(--strong-soft);
   /* Bricht ein Bezeichner um, bekommt jedes Stück seinen eigenen, geschlossenen Chip. */
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
@@ -539,18 +539,18 @@
 /* ------------------------------------------------------------------ Code */
 
 .doc {
-  --astro-code-foreground: #d4d7df;
+  --astro-code-foreground: var(--dark, #d4d7df) var(--light, #22262f);
   --astro-code-background: transparent;
-  --astro-code-token-keyword: #9fb3d9;
-  --astro-code-token-string: #b8d4b0;
-  --astro-code-token-string-expression: #b8d4b0;
-  --astro-code-token-constant: #e8c27a;
-  --astro-code-token-function: #eceef3;
-  --astro-code-token-parameter: #c4c8d2;
-  /* Mindestens 4.5:1 auf #0f1117; Kommentare tragen in Shell-Beispielen oft Bedeutung. */
-  --astro-code-token-comment: #8a91a3;
-  --astro-code-token-punctuation: #7d8496;
-  --astro-code-token-link: #9fb3d9;
+  --astro-code-token-keyword: var(--dark, #9fb3d9) var(--light, #2f4f8f);
+  --astro-code-token-string: var(--dark, #b8d4b0) var(--light, #2c6a2f);
+  --astro-code-token-string-expression: var(--dark, #b8d4b0) var(--light, #2c6a2f);
+  --astro-code-token-constant: var(--dark, #e8c27a) var(--light, #7a5600);
+  --astro-code-token-function: var(--dark, #eceef3) var(--light, #14161c);
+  --astro-code-token-parameter: var(--dark, #c4c8d2) var(--light, #3a404d);
+  /* Mindestens 4.5:1 auf dem Codegrund beider Themen; Kommentare tragen in Shell-Beispielen oft Bedeutung. */
+  --astro-code-token-comment: var(--code-dim);
+  --astro-code-token-punctuation: var(--dark, #7d8496) var(--light, #5a6170);
+  --astro-code-token-link: var(--dark, #9fb3d9) var(--light, #2f4f8f);
 }
 
 .code {
@@ -558,7 +558,7 @@
   margin: 1.5rem 0;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: linear-gradient(180deg, #0f1117, #0b0d12);
+  background: linear-gradient(180deg, var(--dark, #0f1117, #0b0d12) var(--light, #ffffff, #f6f7f9));
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
 }
 li .code {
@@ -577,7 +577,7 @@ li .code {
   text-transform: uppercase;
   letter-spacing: 0.1em;
   /* Heller als --fg-2, weil der Untergrund der Codeleiste heller ist als --void (4.5:1). */
-  color: #8a91a3;
+  color: var(--code-dim);
 }
 .code pre {
   margin: 0;
@@ -588,7 +588,7 @@ li .code {
   background: transparent !important;
   color: var(--astro-code-foreground);
   scrollbar-width: thin;
-  scrollbar-color: #2a2e38 transparent;
+  scrollbar-color: var(--scroll) transparent;
 }
 .code pre:focus-visible {
   outline-offset: -2px;
@@ -603,7 +603,7 @@ li .code {
   margin-left: auto;
   border-radius: 999px;
   border: 1px solid var(--line);
-  background: rgb(255 255 255 / 0.06);
+  background: rgb(var(--ink) / 0.06);
   color: var(--fg-1);
   font: 500 0.72rem/1 var(--mono);
   cursor: pointer;
@@ -621,7 +621,7 @@ li .code {
   opacity: 0;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  background: rgb(20 22 28 / 0.8);
+  background: var(--dark, rgb(20 22 28 / 0.8)) var(--light, rgb(255 255 255 / 0.9));
 }
 .code--bare:hover .code__copy,
 .code--bare:focus-within .code__copy {
@@ -641,13 +641,13 @@ li .code {
   border: 1px solid var(--line);
   border-radius: 12px;
   scrollbar-width: thin;
-  scrollbar-color: #2a2e38 transparent;
+  scrollbar-color: var(--scroll) transparent;
   /* Statische Scroll-Schatten: zeigen an, dass rechts oder links noch Spalten liegen. */
   background:
     linear-gradient(90deg, var(--void) 30%, transparent) left / 2.5rem 100% no-repeat local,
     linear-gradient(270deg, var(--void) 30%, transparent) right / 2.5rem 100% no-repeat local,
-    radial-gradient(farthest-side at 0 50%, rgb(0 0 0 / 0.6), transparent) left / 0.9rem 100% no-repeat scroll,
-    radial-gradient(farthest-side at 100% 50%, rgb(0 0 0 / 0.6), transparent) right / 0.9rem 100% no-repeat scroll;
+    radial-gradient(farthest-side at 0 50%, rgb(var(--shadow) / calc(0.6 * var(--shadow-k))), transparent) left / 0.9rem 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, rgb(var(--shadow) / calc(0.6 * var(--shadow-k))), transparent) right / 0.9rem 100% no-repeat scroll;
 }
 .table-wrap:focus-visible {
   outline-offset: 2px;
@@ -665,7 +665,7 @@ li .code {
   font-weight: 600;
   font-size: 0.8125rem;
   color: var(--fg);
-  background: rgb(255 255 255 / 0.035);
+  background: rgb(var(--ink) / 0.035);
   border-bottom: 1px solid var(--line-strong);
   white-space: nowrap;
 }
@@ -686,7 +686,7 @@ li .code {
   border-top: 0;
 }
 .doc tbody tr:hover td {
-  background: rgb(255 255 255 / 0.025);
+  background: rgb(var(--ink) / 0.025);
 }
 .doc td img {
   max-width: 100%;
@@ -696,28 +696,28 @@ li .code {
 /* ------------------------------------------------------------------ Hinweisboxen */
 
 .alert {
-  --alert: #8fb4ff;
+  --alert: var(--dark, #8fb4ff) var(--light, #2a5fc7);
   margin: 1.5rem 0;
   padding: 1rem 1.15rem 1rem 1.3rem;
   border: 1px solid var(--line);
   border-radius: 12px;
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--alert) 7%, transparent), transparent 45%),
-    rgb(255 255 255 / 0.02);
+    rgb(var(--ink) / 0.02);
   box-shadow: inset 2px 0 0 var(--alert);
   color: var(--fg-1);
 }
 .alert--tip {
-  --alert: #7fd1ae;
+  --alert: var(--dark, #7fd1ae) var(--light, #12703f);
 }
 .alert--important {
-  --alert: #b9a2ff;
+  --alert: var(--dark, #b9a2ff) var(--light, #6741b8);
 }
 .alert--warning {
-  --alert: var(--accent);
+  --alert: var(--accent-ink);
 }
 .alert--caution {
-  --alert: #ff8a7a;
+  --alert: var(--dark, #ff8a7a) var(--light, #b8322a);
 }
 .doc .alert__title {
   display: flex;
@@ -792,13 +792,13 @@ li .code {
   border: 1px solid transparent;
   text-decoration: none;
   background:
-    linear-gradient(180deg, rgb(18 20 26 / 0.9), rgb(9 10 13 / 0.9)) padding-box,
+    linear-gradient(180deg, var(--dark, rgb(18 20 26 / 0.9)) var(--light, #ffffff), var(--dark, rgb(9 10 13 / 0.9)) var(--light, #f8f9fb)) padding-box,
     linear-gradient(
         165deg,
-        rgb(255 255 255 / 0.28),
-        rgb(255 255 255 / 0.06) 30%,
-        rgb(255 255 255 / 0.03) 70%,
-        rgb(255 255 255 / 0.12)
+        rgb(var(--ink) / 0.28),
+        rgb(var(--ink) / 0.06) 30%,
+        rgb(var(--ink) / 0.03) 70%,
+        rgb(var(--ink) / 0.12)
       )
       border-box;
   transition: transform 0.35s var(--ease-out);
@@ -810,7 +810,7 @@ li .code {
   inset: -1px;
   border-radius: inherit;
   padding: 1px;
-  background: linear-gradient(165deg, rgb(255 255 255 / 0.6), rgb(255 255 255 / 0.12) 40%, rgb(255 255 255 / 0.3));
+  background: linear-gradient(165deg, rgb(var(--ink) / 0.6), rgb(var(--ink) / 0.12) 40%, rgb(var(--ink) / 0.3));
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
@@ -887,9 +887,9 @@ li .code {
   font: 0.86em var(--mono);
   padding: 0.1em 0.35em;
   border-radius: 6px;
-  background: rgb(255 255 255 / 0.06);
+  background: rgb(var(--ink) / 0.06);
   border: 1px solid var(--line);
-  color: #e6e8ee;
+  color: var(--strong-soft);
 }
 .dhome__meta {
   display: flex;
@@ -988,7 +988,7 @@ li .code {
   color: var(--fg);
 }
 .adrs__row:hover {
-  background: rgb(255 255 255 / 0.025);
+  background: rgb(var(--ink) / 0.025);
 }
 .adrs__num {
   font: 0.8125rem/1.5 var(--mono);
@@ -1013,10 +1013,10 @@ li .code {
   border: 0;
   border-radius: 22px 22px 0 0;
   padding: 0.5rem 1rem calc(1rem + env(safe-area-inset-bottom));
-  background: linear-gradient(180deg, #11131a, #0a0b0f 40%);
+  background: linear-gradient(180deg, var(--dark, #11131a, #0a0b0f 40%) var(--light, #ffffff, #f8f9fb 40%));
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 0.1),
-    0 -30px 80px -20px rgb(0 0 0 / 0.8);
+    0 -30px 80px -20px rgb(var(--shadow) / calc(0.8 * var(--shadow-k)));
   color: var(--fg);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1040,7 +1040,7 @@ li .code {
   }
 }
 .sheet::backdrop {
-  background: rgb(0 0 0 / 0.55);
+  background: rgb(0 0 0 / var(--dark, 0.55) var(--light, 0.28));
   opacity: 0;
   transition:
     opacity 0.3s var(--ease-out),
@@ -1063,7 +1063,7 @@ html:has(.sheet:popover-open) {
   height: 4px;
   margin: 0.25rem auto 0.4rem;
   border-radius: 2px;
-  background: rgb(255 255 255 / 0.2);
+  background: rgb(var(--ink) / 0.2);
 }
 .sheet__head {
   position: sticky;
@@ -1074,13 +1074,13 @@ html:has(.sheet:popover-open) {
   justify-content: space-between;
   margin: 0 -1rem 0.5rem;
   padding: 0 0.5rem 0 1.75rem;
-  background: #11131a;
+  background: var(--dark, #11131a) var(--light, #ffffff);
 }
 .sheet__title {
   font: 500 0.75rem/1 var(--mono);
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  color: #8a91a3;
+  color: var(--code-dim);
 }
 .sheet__close {
   width: 44px;
@@ -1160,11 +1160,11 @@ html:has(.sheet:popover-open) {
     padding: 0.25rem;
     border-radius: 999px;
     border: 1px solid var(--line-strong);
-    background: rgb(10 11 15 / 0.72);
+    background: var(--nav-glass);
     backdrop-filter: blur(18px) saturate(1.3);
     -webkit-backdrop-filter: blur(18px) saturate(1.3);
     box-shadow:
-      0 20px 50px -20px rgb(0 0 0 / 0.9),
+      0 20px 50px -20px rgb(var(--shadow) / calc(0.9 * var(--shadow-k))),
       inset 0 1px 0 rgb(255 255 255 / 0.08);
   }
   .dock__btn {
@@ -1182,7 +1182,7 @@ html:has(.sheet:popover-open) {
     cursor: pointer;
   }
   .dock__btn:hover {
-    background: rgb(255 255 255 / 0.06);
+    background: rgb(var(--ink) / 0.06);
   }
   .dock__label {
     overflow: hidden;
@@ -1258,7 +1258,7 @@ html:has(.sheet:popover-open) {
 /* Hinweis über dem Artikel: Seite noch nicht übersetzt oder Original seither geändert. Ruhig
    gehalten wie eine Hinweisbox, damit er gesehen wird, ohne den Text zu verdrängen. */
 .doc-notice {
-  --notice: #8fb4ff;
+  --notice: var(--dark, #8fb4ff) var(--light, #2a5fc7);
   /* Dieselbe Breite wie die Lesespalte (.doc setzt --doc-measure nur für sich). */
   max-width: 38rem;
   margin: 0 0 1.75rem;
@@ -1267,14 +1267,14 @@ html:has(.sheet:popover-open) {
   border-radius: 12px;
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--notice) 7%, transparent), transparent 45%),
-    rgb(255 255 255 / 0.02);
+    rgb(var(--ink) / 0.02);
   box-shadow: inset 2px 0 0 var(--notice);
   color: var(--fg-1);
   font-size: 0.9rem;
   line-height: 1.55;
 }
 .doc-notice--stale {
-  --notice: var(--accent);
+  --notice: var(--accent-ink);
 }
 .doc-notice p {
   margin: 0;
