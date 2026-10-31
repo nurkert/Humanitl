@@ -14,7 +14,7 @@ name = "test"
 description = "escape-test sandbox: like default, plus /tests/escape read-only"
 
 [sandbox]
-backend = "bwrap"
+backend = "auto"
 hostname = "sandbox"
 unshare = ["user", "pid", "net", "ipc", "uts", "cgroup"]
 die_with_parent = true

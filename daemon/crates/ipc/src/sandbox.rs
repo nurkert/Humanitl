@@ -93,13 +93,14 @@ use humanitl_core::{Diagnostic, FixAction, FlowEvent, Severity};
 use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::session::{SessionSettings, SessionState};
 use humanitl_recorder::Recorder;
+#[cfg(not(target_os = "macos"))]
+use humanitl_sandbox::LaunchInputs;
 use humanitl_sandbox::agent::{opencode, pi};
 use humanitl_sandbox::summary::SessionSummary;
 use humanitl_sandbox::{
-    AdapterRegistry, AgentContext, AgentKey, CheckResult, IsolationCheck, KILL_GRACE, LaunchInputs,
-    MountPolicy, PlatformBackend, SANDBOX_SHELL, SandboxBackend, SandboxFile, SandboxHandle,
-    SandboxProfile, SessionContext, StdioMode, Termination, WorkDirSource, check_project_dir,
-    shell_line,
+    AdapterRegistry, AgentContext, AgentKey, CheckResult, IsolationCheck, KILL_GRACE, MountPolicy,
+    PlatformBackend, SANDBOX_SHELL, SandboxBackend, SandboxFile, SandboxHandle, SandboxProfile,
+    SessionContext, StdioMode, Termination, WorkDirSource, check_project_dir, shell_line,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -215,6 +216,7 @@ pub static VISIBLE_ENV: &[&str] = &[
     humanitl_sandbox::ENV_SECCOMP_TYPES,
     humanitl_sandbox::ENV_SECCOMP_DENY,
     humanitl_sandbox::ENV_REPORT_FD,
+    humanitl_sandbox::agent::ENV_AGENT_PORT,
     // 4b. Was steuert ihn: der Adapter. Keine dieser Variablen trägt einen
     // Wert, den der Mensch nicht sehen soll; sie schalten Selbstaktualisierung,
     // Telemetrie und Rechte ab, und genau das will der Bildschirm belegen.
@@ -2921,7 +2923,7 @@ impl Inner {
         state: Option<v1::SandboxState>,
     ) -> Result<v1::sandbox_event::Status, Diagnostic> {
         let prepared = self.prepare_keyed_with(config, choice, plan, &[], KeyNeed::Plan)?;
-        let argv = prepared.argv();
+        let shown = prepared.shown();
         let Facts {
             id,
             started_at,
@@ -2963,9 +2965,10 @@ impl Inner {
             work_mode: work_mode_name(prepared.session.work_mode).to_owned(),
             started_at: started_at.map(crate::convert::timestamp),
             profile: prepared.profile.name.clone(),
-            mounts: mounts_of(&argv, &prepared),
-            env: env_of(&prepared),
-            argv_preview: shell_line(&argv),
+            mounts: shown.mounts,
+            env: shown.env,
+            argv_preview: shell_line(&shown.argv),
+            policy_text: shown.policy_text,
             agent_running,
             refusals: self.running_refusals(),
             llm: self
@@ -3034,7 +3037,7 @@ impl Inner {
             state: v1::SandboxState::Failed.into(),
             sandbox_id: id.unwrap_or_default(),
             session_id: self.session.to_string(),
-            backend: "bwrap".to_owned(),
+            backend: humanitl_sandbox::PLATFORM_BACKEND_NAME.to_owned(),
             llm_endpoint: config
                 .llm
                 .endpoint
@@ -3048,6 +3051,7 @@ impl Inner {
             mounts: Vec::new(),
             env: Vec::new(),
             argv_preview: String::new(),
+            policy_text: String::new(),
             agent_running,
             refusals: self.running_refusals(),
             llm: self
@@ -3964,7 +3968,9 @@ struct Prepared {
     /// zusammenführt; der letzte Schreiber gewinnt. Ein Schlüssel, der hier
     /// fehlt, gilt als von Hand geschrieben und wird zurückgehalten.
     env_origin: BTreeMap<String, v1::ValueOrigin>,
-    /// Die Ziele der Dateien des Adapters; für die Herkunftsspalte.
+    /// Die Ziele der Dateien des Adapters; für die Herkunftsspalte der
+    /// Tabelle unter Linux. Die Tabelle unter Seatbelt hat diese Spalte nicht.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     adapter_files: BTreeSet<PathBuf>,
     /// Befunde der Vorbereitung, die den Start nicht aufhalten (HUM-280).
     warnings: Vec<Diagnostic>,
@@ -3978,6 +3984,15 @@ struct Prepared {
     /// [`Prepared::wanted_mode`], aufgelöst gegen das System: der Modus eines
     /// Starts ohne eigenen Wunsch, mit dem Grund einer Abweichung (HUM-357).
     plan_mode: humanitl_sandbox::ModeChoice,
+}
+
+/// Was ein Schnappschuss über den Plan sagt, aus einem Guss.
+#[derive(Debug)]
+struct Shown {
+    argv: Vec<OsString>,
+    mounts: Vec<v1::Mount>,
+    env: Vec<v1::EnvVar>,
+    policy_text: String,
 }
 
 impl Prepared {
@@ -4002,6 +4017,7 @@ impl Prepared {
     /// **Nur zur Anzeige.** Gestartet wird die Liste, die
     /// [`SandboxProfile::to_bwrap_args`] beim Start selbst baut; diese hier
     /// geht an die Oberfläche und über sie in die Zwischenablage.
+    #[cfg(not(target_os = "macos"))]
     fn argv(&self) -> Vec<OsString> {
         let mut args = vec![self.backend.program().as_os_str().to_owned()];
         // The daemon starts every session at its own pseudo-terminal, so the
@@ -4021,6 +4037,44 @@ impl Prepared {
         args
     }
 
+    /// Die Kommandozeile von `sandbox-exec` (HUM-376). Die Umgebung steht dort
+    /// nicht in der Zeile, es gibt also keinen Wert zurückzuhalten.
+    #[cfg(target_os = "macos")]
+    fn argv(&self) -> Vec<OsString> {
+        self.seatbelt().argv
+    }
+
+    /// Die Vorschau des Seatbelt-Backends für diesen Plan.
+    #[cfg(target_os = "macos")]
+    fn seatbelt(&self) -> humanitl_sandbox::SeatbeltPreview {
+        self.backend.preview(&self.profile, &self.session, true)
+    }
+
+    /// Was der Schnappschuss von diesem Plan zeigt.
+    #[cfg(not(target_os = "macos"))]
+    fn shown(&self) -> Shown {
+        let argv = self.argv();
+        Shown {
+            mounts: mounts_of(&argv, self),
+            env: env_of(self),
+            policy_text: String::new(),
+            argv,
+        }
+    }
+
+    /// Was der Schnappschuss von diesem Plan zeigt: alles aus derselben
+    /// Beschreibung, aus der auch das Profil entsteht (HUM-376).
+    #[cfg(target_os = "macos")]
+    fn shown(&self) -> Shown {
+        let preview = self.seatbelt();
+        Shown {
+            mounts: preview.rows.iter().map(mount_of_rule).collect(),
+            env: seatbelt_env_of(self, &preview),
+            argv: preview.argv,
+            policy_text: preview.policy_text,
+        }
+    }
+
     /// Ersetzt in `--setenv <KEY> <VALUE>` jeden Wert, den auch die
     /// Umgebungstabelle zurückhält, durch [`WITHHELD_PLACEHOLDER`].
     ///
@@ -4030,6 +4084,7 @@ impl Prepared {
     ///
     /// Die Einhängungen bleiben unberührt: `--setenv` steht hinter
     /// `--clearenv` und damit hinter allem, was die Tabelle liest.
+    #[cfg(not(target_os = "macos"))]
     fn redact_hidden_values(&self, args: &mut [OsString]) {
         let setenv = OsString::from("--setenv");
         let mut index = 0;
@@ -4042,6 +4097,7 @@ impl Prepared {
     }
 
     /// Die Ziele, die aus der Sitzung stammen und nicht aus dem Profil.
+    #[cfg(any(not(target_os = "macos"), test))]
     fn session_dsts(&self) -> BTreeSet<PathBuf> {
         let mut dsts = BTreeSet::new();
         dsts.insert(self.profile.mounts.work.dst.clone());
@@ -4057,6 +4113,7 @@ impl Prepared {
     /// Sie stehen getrennt, weil der Satz im Einhänge-Reiter sie namentlich
     /// nennen muss: Er behauptet, der Agent sehe nur das Projekt, und jede
     /// dieser Erweiterungen ist eine Ausnahme davon.
+    #[cfg(any(not(target_os = "macos"), test))]
     fn user_dsts(&self) -> BTreeSet<PathBuf> {
         self.profile
             .mounts
@@ -4068,11 +4125,73 @@ impl Prepared {
     }
 }
 
+/// Eine Regel des Seatbelt-Profils als Zeile der Tabelle (HUM-376).
+///
+/// Ohne Mount-Namensraum sind Pfad in der Sandbox und Pfad auf dem Rechner
+/// derselbe; der Name aus der Profildatei steht in einem eigenen Feld.
+#[cfg(target_os = "macos")]
+fn mount_of_rule(rule: &humanitl_sandbox::PolicyRow) -> v1::Mount {
+    use humanitl_sandbox::{PolicyAccess, PolicySource};
+    let path = rule.path.display().to_string();
+    let mode = match rule.access {
+        PolicyAccess::ReadOnly => v1::MountMode::Ro,
+        PolicyAccess::ReadWrite => v1::MountMode::Rw,
+        PolicyAccess::Denied => v1::MountMode::Denied,
+    };
+    let origin = match rule.source {
+        PolicySource::Profile => v1::ValueOrigin::Profile,
+        PolicySource::Session => v1::ValueOrigin::Session,
+        PolicySource::User => v1::ValueOrigin::User,
+    };
+    v1::Mount {
+        dst: path.clone(),
+        src: path,
+        mode: mode.into(),
+        origin: origin.into(),
+        link_target: String::new(),
+        profile_path: rule.names.join(", "),
+    }
+}
+
+/// Die Umgebung, die der Agent unter Seatbelt wirklich bekommt (HUM-376).
+///
+/// Dieselbe Regel wie [`env_of`]: Was niemand zugeordnet hat, gilt als von
+/// Hand geschrieben. Nur was allein das Backend setzt, zählt zur Sitzung.
+#[cfg(target_os = "macos")]
+fn seatbelt_env_of(
+    prepared: &Prepared,
+    preview: &humanitl_sandbox::SeatbeltPreview,
+) -> Vec<v1::EnvVar> {
+    preview
+        .env
+        .iter()
+        .map(|(key, value)| {
+            let origin = if preview.backend_env.contains(key) {
+                v1::ValueOrigin::Session
+            } else {
+                prepared.origin_of(key)
+            };
+            let withheld = !shows_env_value(key, origin);
+            v1::EnvVar {
+                key: key.clone(),
+                value: if withheld {
+                    String::new()
+                } else {
+                    value.clone()
+                },
+                origin: origin.into(),
+                withheld,
+            }
+        })
+        .collect()
+}
+
 /// Die Einhängungen, wie sie in der Kommandozeile stehen.
 ///
 /// Gelesen wird der Argumentvektor selbst und nur bis zum ersten `--`; was
 /// danach kommt, ist der Shim mit dem Befehl des Agenten und hängt nichts ein.
 /// Damit kann die Tabelle keinen Mount verlieren, den die Zeile hat.
+#[cfg(any(not(target_os = "macos"), test))]
 fn mounts_of(argv: &[OsString], prepared: &Prepared) -> Vec<v1::Mount> {
     let session_dsts = prepared.session_dsts();
     let user_dsts = prepared.user_dsts();
@@ -4101,6 +4220,7 @@ fn mounts_of(argv: &[OsString], prepared: &Prepared) -> Vec<v1::Mount> {
                 src: std::mem::take(&mut lower),
                 mode: v1::MountMode::Ro.into(),
                 link_target: String::new(),
+                profile_path: String::new(),
             });
             index += 4;
             continue;
@@ -4159,6 +4279,7 @@ fn mounts_of(argv: &[OsString], prepared: &Prepared) -> Vec<v1::Mount> {
             mode: mode.into(),
             origin: origin.into(),
             link_target,
+            profile_path: String::new(),
         });
         index += arity + 1;
     }
@@ -4189,6 +4310,7 @@ fn sandbox_path_of(prepared: &Prepared) -> String {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn env_of(prepared: &Prepared) -> Vec<v1::EnvVar> {
     prepared
         .profile
@@ -5242,9 +5364,20 @@ mod tests {
 
         let argv = shell_line(&prepared.argv());
         assert!(!argv.contains(KEY), "the key reached argv: {argv}");
+        #[cfg(not(target_os = "macos"))]
         assert!(
             argv.contains("PI_OFFLINE"),
             "the adapter contributed: {argv}"
+        );
+        // Unter macOS steht die Umgebung nicht in der Zeile (HUM-376).
+        #[cfg(target_os = "macos")]
+        assert!(
+            prepared
+                .shown()
+                .env
+                .iter()
+                .any(|entry| entry.key == "PI_OFFLINE"),
+            "the adapter contributed"
         );
         for (name, value) in &prepared.session.session_env {
             assert!(
@@ -5840,6 +5973,57 @@ mod tests {
             origin("/run/humanitl/proxy.sock"),
             v1::ValueOrigin::Session as i32
         );
+    }
+
+    /// Unter macOS zeigt der Schnappschuss, was läuft: `sandbox-exec`, das
+    /// Profil und die echten Pfade, keine Linux-Zeile (HUM-376).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_snapshot_shows_seatbelt_and_never_a_linux_line() {
+        let mut prepared = preview_prepared();
+        for key in humanitl_sandbox::RESERVED_ENV {
+            prepared
+                .env_origin
+                .insert((*key).to_owned(), v1::ValueOrigin::Session);
+        }
+        let shown = prepared.shown();
+        let line = shell_line(&shown.argv);
+        assert!(line.starts_with("/usr/bin/sandbox-exec -f "), "{line}");
+        assert!(!line.contains("--unshare"), "{line}");
+        assert!(shown.policy_text.contains("(deny default)"));
+
+        let work = shown
+            .mounts
+            .iter()
+            .find(|mount| mount.profile_path == "/work")
+            .expect("the project is a row");
+        // Aufgelöst: Unter macOS liegt `/home` hinter einem Verweis.
+        assert!(work.dst.ends_with("/home/u/proj"), "{}", work.dst);
+        assert_eq!(work.src, work.dst);
+        assert_eq!(work.mode, v1::MountMode::Rw as i32);
+        assert_eq!(work.origin, v1::ValueOrigin::Session as i32);
+        let users = shown
+            .mounts
+            .iter()
+            .find(|mount| mount.dst == "/Users")
+            .expect("the private trees are rows");
+        assert_eq!(users.mode, v1::MountMode::Denied as i32);
+
+        let env = |key: &str| shown.env.iter().find(|entry| entry.key == key);
+        let tmpdir = env("TMPDIR").expect("the backend sets TMPDIR");
+        assert!(!tmpdir.withheld);
+        assert!(tmpdir.value.ends_with("/tmp/"), "{}", tmpdir.value);
+        assert_eq!(tmpdir.origin, v1::ValueOrigin::Session as i32);
+
+        // Platzhalter sind keine Geheimnisse: Der Bildschirm nennt sie.
+        for (key, placeholder) in [
+            (humanitl_sandbox::agent::ENV_AGENT_PORT, "AGENT_PORT"),
+            (humanitl_sandbox::ENV_REPORT_FD, "REPORT_FD"),
+        ] {
+            let entry = env(key).expect("the backend sets it");
+            assert!(!entry.withheld, "{key}");
+            assert_eq!(entry.value, placeholder);
+        }
     }
 
     /// Ein Ergebnis der Isolationsprüfung, wie es vom Backend käme.

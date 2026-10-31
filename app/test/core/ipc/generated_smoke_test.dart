@@ -17,14 +17,14 @@ void main() {
       ..daemonVersion = '0.0.0'
       ..protoMajor = 1
       ..protoMinor = 0
-      ..capabilities.addAll(['sandbox.bwrap', 'proxy.h1'])
+      ..capabilities.addAll(['sandbox.run', 'proxy.h1'])
       ..sessionId = '018f0000-0000-7000-8000-000000000001';
 
     final decoded = Info.fromBuffer(info.writeToBuffer());
 
     expect(decoded, info);
     expect(decoded.protoMajor, 1);
-    expect(decoded.capabilities, ['sandbox.bwrap', 'proxy.h1']);
+    expect(decoded.capabilities, ['sandbox.run', 'proxy.h1']);
   });
 
   test('FlowEvent.held survives a buffer roundtrip', () {

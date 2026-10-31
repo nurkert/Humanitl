@@ -209,8 +209,11 @@ humanitl run --profile work
 ## Sandbox profiles
 
 A sandbox profile is the complete policy of the sandbox. From it the daemon
-builds one bubblewrap command line, which `humanitl sandbox argv` and the
-Sandbox screen of the app show word for word. The bundled
+builds one bubblewrap command line on Linux and one `sandbox-exec` line with a
+generated Seatbelt profile on macOS. `humanitl sandbox argv` and the Sandbox
+screen of the app show the one that runs, word for word; on macOS ports and the
+status descriptors appear as the placeholders `SESSION_PORT`, `AGENT_PORT`,
+`STATUS_FD` and `REPORT_FD`. The bundled
 `profiles/sandbox/default.toml` comments every line; in short:
 
 | Table | What it holds |

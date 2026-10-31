@@ -603,6 +603,7 @@ extension MountToDomain on pb.Mount {
     mode: mode.toDomain(),
     origin: origin.toDomain(),
     linkTarget: linkTarget,
+    profilePath: profilePath,
   );
 }
 
@@ -668,6 +669,7 @@ extension SandboxStatusToDomain on pb.SandboxEvent_Status {
       env.map((pb.EnvVar entry) => entry.toDomain()),
     ),
     argvPreview: argvPreview,
+    policyText: policyText,
     agentRunning: agentRunning,
     refusals: hasRefusals() ? refusals.toDomain() : null,
     llmDiagnostic: hasLlm() ? llm.toDomain() : null,

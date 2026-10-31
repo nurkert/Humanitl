@@ -275,6 +275,7 @@ class FakeDaemonClient implements DaemonClient {
     protoMinor: 0,
     capabilities: <String>[
       DaemonInfo.fakeCapability,
+      'sandbox.run',
       'sandbox.bwrap',
       'proxy.h1',
     ],

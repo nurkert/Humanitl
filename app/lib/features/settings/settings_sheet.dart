@@ -386,7 +386,9 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
         SettingGroupTitle(l10n.settingsSectionProject),
         SettingRow(
           label: l10n.settingsWorkDirLabel,
-          help: l10n.settingsWorkDirHelp,
+          help: sandboxUsesRealPaths
+              ? l10n.settingsWorkDirHelpPolicy
+              : l10n.settingsWorkDirHelp,
           refusal: _refusals[FormKeys.sandboxWorkDir],
           refusalKey: const Key('settings-workdir-refusal'),
           anchor: _anchors[FormKeys.sandboxWorkDir],
