@@ -71,9 +71,10 @@ typed-errors-lint: ## Typed errors (HUM-063) and the test reporter (HUM-133) che
 # Die Werkzeuge, die entscheiden, ob ein Issue-Zweig nach main kommt (HUM-237):
 # das CI-Tor gegen eine nachgestellte API, der Commit-Ablauf gegen ein
 # Wegwerf-origin. Beide brauchen nur bash, git und python3.
-tools-test: ## Tests of tools/ci-gate.sh and tools/commit-issue.sh --ci (HUM-237)
+tools-test: ## Tests of tools/ci-gate.sh, tools/commit-issue.sh --ci (HUM-237) and tools/release.sh (HUM-363)
 	./tools/tests/ci_gate_test.sh
 	./tools/tests/commit_issue_test.sh
+	./tools/tests/release_test.sh
 
 deps-lint: ## Enforce the dependency direction (HUM-074) and the coupling ratchet (HUM-145)
 	./tools/check-deps.sh

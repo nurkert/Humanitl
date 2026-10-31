@@ -42,6 +42,23 @@
 #                         Authorization-Kopf mit (5000 statt 60 Anfragen je
 #                         Stunde). Noetig ist es nicht.
 #   HUMANITL_CI_WORKFLOW  Dateiname des Workflows, Vorgabe ci.yml
+#   HUMANITL_CI_BRANCH    optional: nur Laeufe dieses Zweigs oder Tags zaehlen
+#                         (`head_branch` des Laufs; bei einem Tag-Push ist das
+#                         der Tag-Name). Noetig, wo derselbe Commit mehrere
+#                         Laeufe desselben Workflows hat, etwa der Probelauf
+#                         auf `release-dry/0.0.N` und danach der Lauf des Tags
+#                         `v0.0.N` (HUM-363). Ohne den Filter saehe das Tor
+#                         nach dem Tag-Push den schon gruenen Probelauf und
+#                         meldete gruen, bevor der Tag-Lauf ueberhaupt begann.
+#   HUMANITL_CI_EVERY_JOB  1: Ein Lauf mit `success` gilt nur, wenn auch jeder
+#                         einzelne Job mit `success` endete. Ein
+#                         uebersprungener Job ist sonst Teil eines gruenen
+#                         Laufs; im Probelauf von release.yml hiesse das, ein
+#                         uebersprungener guard nimmt alle Pruefungen mit, und
+#                         der Lauf waere trotzdem gruen (HUM-363).
+#   HUMANITL_CI_MAY_SKIP  Jobnamen, durch Leerzeichen getrennt, die unter
+#                         HUMANITL_CI_EVERY_JOB=1 uebersprungen sein duerfen,
+#                         etwa `release` im Probelauf.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -57,6 +74,9 @@ limit="${2:-3600}"
 poll="${HUMANITL_CI_POLL:-60}"
 [[ "$poll" =~ ^[0-9]+$ ]] || { echo "ci-gate: HUMANITL_CI_POLL ist keine Zahl: $poll" >&2; exit 2; }
 workflow="${HUMANITL_CI_WORKFLOW:-ci.yml}"
+branch="${HUMANITL_CI_BRANCH:-}"
+every_job="${HUMANITL_CI_EVERY_JOB:-0}"
+may_skip="${HUMANITL_CI_MAY_SKIP:-}"
 api="${HUMANITL_CI_API:-https://api.github.com}"
 
 # Eine volle SHA wird so genommen, wie sie ist: Sie muss nicht lokal vorliegen,
@@ -156,9 +176,12 @@ nap() {
 # run_number, bei gleicher Nummer der hoechste Versuch; so zaehlt ein
 # erneut gestarteter Lauf und nicht sein roter Vorgaenger.
 latest_run() {
-  python3 -I -c '
-import json, sys
+  CI_GATE_BRANCH="$branch" python3 -I -c '
+import json, os, sys
 runs = json.load(sys.stdin).get("workflow_runs") or []
+want = os.environ.get("CI_GATE_BRANCH", "")
+if want:
+    runs = [r for r in runs if r.get("head_branch") == want]
 if not runs:
     print("none")
 else:
@@ -184,11 +207,36 @@ for j in sorted(jobs, key=lambda j: j.get("name", "")):
 '
 }
 
+# Unter HUMANITL_CI_EVERY_JOB=1: jeder Job, der nicht mit success endete und
+# nicht in HUMANITL_CI_MAY_SKIP als uebersprungen erlaubt ist, als eine Zeile.
+# Exit 1, wenn es einen gibt, Exit 4, wenn die Liste leer ist.
+unfinished_jobs() {
+  CI_GATE_MAY_SKIP="$may_skip" python3 -I -c '
+import json, os, sys
+jobs = json.load(sys.stdin).get("jobs") or []
+if not jobs:
+    sys.exit(4)
+may_skip = set(os.environ.get("CI_GATE_MAY_SKIP", "").split())
+bad = 0
+for j in sorted(jobs, key=lambda j: j.get("name", "")):
+    conclusion = j.get("conclusion") or j.get("status") or "-"
+    if conclusion == "success" or (conclusion == "skipped" and j.get("name") in may_skip):
+        continue
+    print("  %s: %s" % (j.get("name", "?"), conclusion))
+    bad = 1
+sys.exit(bad)
+'
+}
+
 # Nur Push-Laeufe: Ein Lauf fuer einen Pull Request derselben SHA prueft einen
 # anderen Stand (den Merge mit dem Ziel) und darf das Tor nicht oeffnen.
 runs_url="$api/repos/$repo/actions/workflows/$workflow/runs?head_sha=$sha&event=push&per_page=20"
+if [[ -n "$branch" ]]; then
+  # Ein Zweigname wie release-dry/0.0.7 traegt einen Schraegstrich.
+  runs_url+="&branch=$(python3 -I -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$branch")"
+fi
 short="${sha:0:12}"
-echo "ci-gate: warte auf $workflow fuer $short in $repo (Frist ${limit}s)"
+echo "ci-gate: warte auf $workflow fuer $short${branch:+ auf $branch} in $repo (Frist ${limit}s)"
 start=$(date +%s)
 last=""
 first=1
@@ -260,10 +308,49 @@ done
 echo "ci-gate: Lauf $run_id: $conclusion ($html)"
 # Die Jobliste ist nur Auskunft; das Urteil steht schon im Lauf. Scheitert
 # ihre Abfrage, entscheidet das Skript trotzdem und sagt, was fehlt.
-if jobs_body="$(fetch "$api/repos/$repo/actions/runs/$run_id/jobs?per_page=100")"; then
-  report_jobs <<< "$jobs_body" || echo "ci-gate: Jobliste nicht lesbar" >&2
+jobs_ok=0
+# Unter HUMANITL_CI_EVERY_JOB=1 entscheidet die Jobliste mit; eine erreichte
+# Ratengrenze (Exit 75) ist dann wie in der Schleife oben kein Fehler, sondern
+# ein Grund zu warten, solange die Frist reicht.
+while :; do
+  frc=0
+  jobs_body="$(fetch "$api/repos/$repo/actions/runs/$run_id/jobs?per_page=100")" || frc=$?
+  if ((frc == 75)) && [[ "$every_job" == 1 ]] && (($(date +%s) - start < limit)); then
+    [[ "$jobs_body" =~ ^[0-9]+$ ]] || jobs_body=60
+    echo "ci-gate: Ratengrenze der API erreicht, warte ${jobs_body}s auf die Jobliste" >&2
+    nap "$jobs_body"
+    continue
+  fi
+  break
+done
+if ((frc == 0)); then
+  if report_jobs <<< "$jobs_body"; then
+    jobs_ok=1
+  else
+    echo "ci-gate: Jobliste nicht lesbar" >&2
+  fi
 else
   echo "ci-gate: Jobs des Laufs $run_id nicht lesbar; Einzelheiten auf $html" >&2
+fi
+
+# Unter HUMANITL_CI_EVERY_JOB=1 entscheidet auch die Jobliste. Ohne sie gibt
+# es kein Urteil: Ein gruener Lauf, dessen Jobs niemand gesehen hat, koennte
+# lauter uebersprungene sein.
+if [[ "$every_job" == 1 && "$conclusion" == success ]]; then
+  if ((!jobs_ok)); then
+    echo "ci-gate: kein Urteil; die Jobliste des Laufs $run_id fehlt, jeder Job muss gruen sein ($html)" >&2
+    exit 3
+  fi
+  jrc=0
+  bad="$(unfinished_jobs <<< "$jobs_body")" || jrc=$?
+  if ((jrc == 4)); then
+    echo "ci-gate: rot; der Lauf $run_id hat keine Jobs, nicht mergen ($html)" >&2
+    exit 1
+  elif ((jrc != 0)); then
+    echo "ci-gate: rot; der Lauf ist gruen, aber nicht jeder Job:" >&2
+    echo "$bad" >&2
+    exit 1
+  fi
 fi
 
 case "$conclusion" in

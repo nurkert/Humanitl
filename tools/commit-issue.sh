@@ -39,10 +39,24 @@
 # das Skript das lokale main nach, und nur, wenn dabei keine lokale Aenderung
 # verloren gehen kann.
 #
+# Probelauf des Releases (HUM-363): Beruehrt der Commit einen Pfad aus
+# `tools/release-dry-paths.txt` (die Liste aus dem Commit und seinem
+# Elternteil zusammen; fehlt sie in einem, immer), pusht das
+# Skript denselben Commit zusaetzlich als `release-dry/hum-NNN`. Das loest den
+# Probelauf von `.github/workflows/release.yml` aus, der RPM, AppImage, AUR und
+# macOS baut und prueft, was ci.yml nicht abdeckt. Gemergt wird dann erst,
+# wenn ci.yml gruen ist und im Probelauf jeder Job gruen ist ausser dem
+# uebersprungenen `release`. Nach dem Merge wird der Zweig wieder geloescht;
+# bei rotem Probelauf bleibt er wie der Issue-Zweig stehen.
+#
 # Umgebung: HUMANITL_REMOTE (Vorgabe origin), HUMANITL_CI_GATE (Befehl, der
-# eine SHA nimmt und wie tools/ci-gate.sh endet; der Test ersetzt ihn),
-# HUMANITL_CI_TIMEOUT (Sekunden, Vorgabe 3600), HUMANITL_LAND_ATTEMPTS,
-# CLAUDE_SESSION_URL (wird als Zeile `Claude-Session:` angehaengt).
+# eine SHA nimmt und wie tools/ci-gate.sh endet; der Test ersetzt ihn. Fuer
+# den Probelauf bekommt er HUMANITL_CI_WORKFLOW=release.yml,
+# HUMANITL_CI_BRANCH, HUMANITL_CI_EVERY_JOB=1 und HUMANITL_CI_MAY_SKIP=release
+# in der Umgebung), HUMANITL_CI_TIMEOUT (Sekunden, Vorgabe 3600),
+# HUMANITL_RELEASE_DRY_TIMEOUT (Sekunden fuer den Probelauf, Vorgabe 7200),
+# HUMANITL_LAND_ATTEMPTS, CLAUDE_SESSION_URL (wird als Zeile
+# `Claude-Session:` angehaengt).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -53,6 +67,7 @@ fi
 remote="${HUMANITL_REMOTE:-origin}"
 gate="${HUMANITL_CI_GATE:-tools/ci-gate.sh}"
 ci_timeout="${HUMANITL_CI_TIMEOUT:-3600}"
+dry_timeout="${HUMANITL_RELEASE_DRY_TIMEOUT:-7200}"
 attempts="${HUMANITL_LAND_ATTEMPTS:-3}"
 
 die() {
@@ -222,8 +237,29 @@ advance_local_main() {
   done
 }
 
+# Beruehrt <sha> einen Pfad aus tools/release-dry-paths.txt? Gezaehlt wird die
+# Vereinigung der Listen aus dem Elternteil und aus <sha>, dazu die Liste
+# selbst: Ein Commit, der release.yml aendert und zugleich die Liste kuerzt
+# oder loescht, entgeht dem Probelauf so nicht. Fehlt die Liste in einem der
+# beiden Staende, ist der Probelauf Pflicht, statt still zu entfallen. Mit
+# --no-renames steht bei einer Umbenennung auch der alte Pfad in der Liste,
+# und die Pfade sind woertlich gemeint, ein Verzeichnis meint alles darunter.
+release_dry_needed() {
+  local sha="$1" rev list line paths=(tools/release-dry-paths.txt)
+  local -x GIT_LITERAL_PATHSPECS=1
+  for rev in "$sha^" "$sha"; do
+    list="$(git show "$rev:tools/release-dry-paths.txt" 2> /dev/null)" || return 0
+    while IFS= read -r line; do
+      line="${line%$'\r'}"
+      [[ -z "$line" || "$line" == \#* ]] && continue
+      paths+=("$line")
+    done <<< "$list"
+  done
+  [[ -n "$(git diff --no-renames --name-only "$sha^" "$sha" -- "${paths[@]}")" ]]
+}
+
 land() {
-  local branch="$1" issue slug sha main_sha merge rc attempt
+  local branch="$1" issue slug sha main_sha merge rc attempt dry
   [[ "$branch" =~ ^(hum-[0-9]+)-([a-z0-9][a-z0-9-]*)$ ]] \
     || die "branch '$branch' is not of the form hum-NNN-slug"
   issue="$(tr '[:lower:]' '[:upper:]' <<< "${BASH_REMATCH[1]}")"
@@ -256,14 +292,36 @@ land() {
     echo "commit-issue: pushing $branch (${sha:0:12})"
     git push -q --force-with-lease="refs/heads/$branch" "$remote" "refs/heads/$branch:refs/heads/$branch"
 
+    # Der Probelauf laeuft auf GitHub neben ci.yml; gepusht wird er deshalb
+    # vor dem ersten Warten. `+`: Der Zweig gehoert diesem Issue, und nach
+    # einem Umsetzen zeigt er auf den neuen Commit.
+    dry=""
+    if release_dry_needed "$sha"; then
+      dry="release-dry/${branch%-"$slug"}"
+      echo "commit-issue: ${sha:0:12} touches release paths (tools/release-dry-paths.txt); pushing $dry for the release dry run"
+      git push -q "$remote" "+$sha:refs/heads/$dry"
+    fi
+
     rc=0
     $gate "$sha" "$ci_timeout" || rc=$?
     case "$rc" in
       0) ;;
-      1) die "CI is red for ${sha:0:12}; fix, amend the commit on $branch, switch back, then run --land $branch" ;;
+      1) die "CI is red for ${sha:0:12}; fix, amend the commit on $branch, switch back, then run --land $branch${dry:+ ($dry stays on $remote; --land pushes it again)}" ;;
       3) die "CI gave no verdict for ${sha:0:12}; run --land $branch again once it does" ;;
       *) die "tools/ci-gate.sh failed with $rc for ${sha:0:12} (API or network?); run --land $branch again" ;;
     esac
+
+    if [[ -n "$dry" ]]; then
+      rc=0
+      HUMANITL_CI_WORKFLOW=release.yml HUMANITL_CI_BRANCH="$dry" HUMANITL_CI_EVERY_JOB=1 \
+        HUMANITL_CI_MAY_SKIP=release $gate "$sha" "$dry_timeout" || rc=$?
+      case "$rc" in
+        0) ;;
+        1) die "the release dry run on $dry is red for ${sha:0:12}; fix, amend the commit on $branch, switch back, then run --land $branch" ;;
+        3) die "the release dry run on $dry gave no verdict for ${sha:0:12}; run --land $branch again once it does" ;;
+        *) die "tools/ci-gate.sh failed with $rc for the release dry run of ${sha:0:12} (API or network?); run --land $branch again" ;;
+      esac
+    fi
 
     # Gemergt wird nur, solange main der Elternteil des Getesteten ist.
     main_sha="$(fetch_main)"
@@ -280,6 +338,9 @@ land() {
       continue
     fi
     git push -q "$remote" --delete "$branch" || echo "commit-issue: could not delete $remote/$branch" >&2
+    if [[ -n "$dry" ]]; then
+      git push -q "$remote" --delete "$dry" || echo "commit-issue: could not delete $remote/$dry" >&2
+    fi
     advance_local_main "$merge"
     git update-ref -d "refs/heads/$branch"
     git fetch -q "$remote" main

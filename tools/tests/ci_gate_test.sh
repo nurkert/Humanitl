@@ -39,6 +39,12 @@ case "$1" in
     ;;
   */actions/runs/*/jobs\?*)
     [[ -f "$dir/jobs.fail" ]] && exit 22
+    # jobs.rate: die erste Abfrage der Jobs trifft die Ratengrenze.
+    if [[ -f "$dir/jobs.rate" ]]; then
+      mv "$dir/jobs.rate" "$dir/jobs.rate.used"
+      echo 0
+      exit 75
+    fi
     cat "$dir/jobs.json"
     ;;
   *) exit 22 ;;
@@ -46,9 +52,9 @@ esac
 EOF
 chmod +x "$work/fetch"
 
-run_json() { # id status conclusion [run_number] [attempt]
-  printf '{"id": %s, "status": "%s", "conclusion": %s, "run_number": %s, "run_attempt": %s, "html_url": "https://example.invalid/runs/%s"}' \
-    "$1" "$2" "$3" "${4:-1}" "${5:-1}" "$1"
+run_json() { # id status conclusion [run_number] [attempt] [head_branch]
+  printf '{"id": %s, "status": "%s", "conclusion": %s, "run_number": %s, "run_attempt": %s, "head_branch": "%s", "html_url": "https://example.invalid/runs/%s"}' \
+    "$1" "$2" "$3" "${4:-1}" "${5:-1}" "${6:-hum-1-x}" "$1"
 }
 
 jobs_green='{"jobs": [
@@ -80,9 +86,12 @@ case_() {
   done
   printf '%s' "${JOBS:-$jobs_green}" > "$dir/jobs.json"
   [[ -z "${JOBS_FAIL:-}" ]] || : > "$dir/jobs.fail"
+  [[ -z "${JOBS_RATE:-}" ]] || : > "$dir/jobs.rate"
   local out rc=0
   out="$(CI_GATE_FAKE="$dir" HUMANITL_CI_FETCH="$work/fetch" HUMANITL_CI_REPO=owner/name \
-    HUMANITL_CI_POLL=0 HUMANITL_CI_FIRST_WAIT="${FIRST_WAIT:-0}" "$gate" "${REF:-$sha}" "$limit" 2>&1)" || rc=$?
+    HUMANITL_CI_POLL=0 HUMANITL_CI_FIRST_WAIT="${FIRST_WAIT:-0}" HUMANITL_CI_BRANCH="${BRANCH:-}" \
+    HUMANITL_CI_EVERY_JOB="${EVERY:-0}" HUMANITL_CI_MAY_SKIP="${SKIP:-}" \
+    "$gate" "${REF:-$sha}" "$limit" 2>&1)" || rc=$?
   if [[ "$rc" -ne "$want" ]]; then
     echo "FAIL $name: exit $rc, erwartet $want"
     sed 's/^/    /' <<< "$out"
@@ -164,6 +173,54 @@ else
   echo "FAIL first_wait_took_its_time"
   fails=$((fails + 1))
 fi
+
+# HUM-363: Derselbe Commit hat einen gruenen Probelauf auf release-dry/0.0.3,
+# aber noch keinen Lauf des Tags v0.0.3. Mit dem Filter auf den Tag ist das
+# kein Urteil; ohne ihn waere es gruen, bevor der Tag-Lauf ueberhaupt begann.
+dry_green="$(run_json 7 completed '"success"' 5 1 release-dry/0.0.3)"
+BRANCH=v0.0.3 case_ branch_filter_ignores_other_branch 3 'kein Urteil' 0 -- \
+  "$(runs "$dry_green")"
+BRANCH=v0.0.3 case_ branch_filter_takes_its_run 1 'Lauf 8: failure' 60 -- \
+  "$(runs "$(run_json 8 completed '"failure"' 6 1 v0.0.3)" "$dry_green")"
+BRANCH=release-dry/0.0.3 case_ branch_filter_dry 0 'Lauf 7: success' 60 -- \
+  "$(runs "$(run_json 8 in_progress null 6 1 v0.0.3)" "$dry_green")"
+if grep -q "&branch=release-dry%2F0.0.3" "$work/branch_filter_dry/urls"; then
+  echo "ok   branch_filter_in_url"
+else
+  echo "FAIL branch_filter_in_url"
+  sed 's/^/    /' "$work/branch_filter_dry/urls"
+  fails=$((fails + 1))
+fi
+if ! grep -q "branch=" "$work/success/urls"; then
+  echo "ok   no_branch_no_filter"
+else
+  echo "FAIL no_branch_no_filter"
+  fails=$((fails + 1))
+fi
+
+# HUM-363: Unter HUMANITL_CI_EVERY_JOB=1 macht ein uebersprungener Job einen
+# gruenen Lauf rot; nur die in HUMANITL_CI_MAY_SKIP genannten duerfen
+# uebersprungen sein. Ohne Jobliste gibt es kein Urteil.
+jobs_dry='{"jobs": [
+  {"name": "guard", "conclusion": "success", "steps": []},
+  {"name": "check-rpm", "conclusion": "success", "steps": []},
+  {"name": "release", "conclusion": "skipped", "steps": []}]}'
+jobs_guard_skipped='{"jobs": [
+  {"name": "guard", "conclusion": "skipped", "steps": []},
+  {"name": "check-rpm", "conclusion": "skipped", "steps": []},
+  {"name": "release", "conclusion": "skipped", "steps": []}]}'
+green_run="$(runs "$(run_json 7 completed '"success"')")"
+EVERY=1 SKIP=release JOBS="$jobs_dry" case_ every_job_allows_named_skip 0 'gruen' 60 -- "$green_run"
+EVERY=1 JOBS="$jobs_dry" case_ every_job_refuses_unnamed_skip 1 'release: skipped' 60 -- "$green_run"
+EVERY=1 SKIP=release JOBS="$jobs_guard_skipped" case_ every_job_skipped_guard_is_red 1 'guard: skipped' 60 -- "$green_run"
+JOBS="$jobs_guard_skipped" case_ without_every_job_skips_pass 0 'gruen' 60 -- "$green_run"
+EVERY=1 JOBS='{"jobs": []}' case_ every_job_no_jobs_is_red 1 'keine Jobs' 60 -- "$green_run"
+EVERY=1 JOBS_FAIL=1 case_ every_job_without_job_list_no_verdict 3 'Jobliste' 60 -- "$green_run"
+# Die Jobliste trifft einmal die Ratengrenze: warten und erneut fragen, statt
+# ohne Urteil aufzugeben.
+EVERY=1 SKIP=release JOBS="$jobs_dry" JOBS_RATE=1 case_ every_job_jobs_rate_limit_waits 0 'warte 0s auf die Jobliste' 60 -- "$green_run"
+EVERY=1 JOBS="$jobs_red" case_ every_job_red_run_stays_red 1 'rot \(failure\)' 60 -- \
+  "$(runs "$(run_json 7 completed '"failure"')")"
 
 # Der Weg ueber curl, mit einem nachgestellten curl im PATH: Er schreibt die
 # Koepfe und den Koerper aus Dateien in die Ziele von -D und -o und gibt den

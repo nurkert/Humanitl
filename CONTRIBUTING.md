@@ -129,6 +129,22 @@ Nach roter CI bleibt der Branch liegen: nachbessern, Commit ergänzen, zurück
 auf einen anderen Branch wechseln (der Issue-Branch darf nirgends ausgecheckt
 sein), dann `tools/commit-issue.sh --land hum-NNN-kurztitel`.
 
+**Probelauf des Releases vor dem Merge (HUM-363).** Berührt der Commit einen
+Pfad aus `tools/release-dry-paths.txt` (Paketierung, `release.yml`, die
+Runner unter `app/linux` und `app/macos`, das Workspace-Manifest und weitere,
+die Datei begründet die Auswahl), pusht das Skript denselben Commit zusätzlich
+als `release-dry/hum-NNN`. Das löst den Probelauf von
+`.github/workflows/release.yml` aus, der RPM, AppImage, AUR und das
+macOS-Bündel baut und prüft, was `ci.yml` nicht abdeckt. Gemergt wird erst,
+wenn `ci.yml` grün ist und im Probelauf jeder Job grün ist außer dem
+übersprungenen `release`. Bei Rot bleiben beide Branches liegen, der Weg ist
+derselbe wie oben; die Meldung bei roter CI nennt auch den Probelauf-Branch.
+Gelesen wird die Liste aus dem Commit und seinem Elternteil zusammen, nie aus
+dem Arbeitsbaum: Ein Commit, der die Liste kürzt oder löscht, wird noch nach
+der alten geprüft, eine Änderung der Liste selbst löst den Probelauf immer
+aus, und fehlt die Liste in einem der beiden Stände, läuft er ebenfalls. Der
+macOS-Teil läuft so nur, wo er etwas Neues prüfen kann.
+
 Das lokale `main` zieht das Skript nur nach, wenn dabei nichts verloren gehen
 kann. Hat einer der Pfade, die der Merge verändert, lokale Änderungen (auch
 Rechte, gestaged oder nicht), oder ist `main` in einem anderen Arbeitsbaum
@@ -268,29 +284,52 @@ Maintainer selbst hochgeladen (`packaging/aur/README.md`). Seit HUM-273 erschein
 („Latest“), nicht mehr als Pre-Release; es ist weiterhin nicht signiert und
 nicht für den produktiven Einsatz gedacht. Signaturen kommen mit 1.0.0.
 
-So wird eine Vorabversion geschnitten:
+So wird eine Vorabversion geschnitten, und nur so (HUM-363):
 
-1. Auf GitHub nachsehen, dass der CI-Lauf des Commits auf `main` grün ist,
-   etwa mit `tools/ci-gate.sh <sha>`. Seit HUM-238 bekommt jeder Commit auf
-   `main` seinen eigenen Lauf, der nicht abgebrochen wird, wenn ein neuerer
-   kommt; jeder grüne Commit von `main` lässt sich taggen.
-2. Den Tag auf genau diesen Commit setzen und nur den Tag pushen:
+```sh
+tools/release.sh 0.0.N
+```
 
-   ```sh
-   git fetch origin
-   git tag -a v0.0.3 -m "Humanitl 0.0.3" origin/main
-   git push origin v0.0.3
-   ```
+Das Skript setzt den Tag erst, wenn derselbe Commit den ganzen Release-Bau
+schon bestanden hat:
 
-3. Den Lauf beobachten. Der Job `guard` bricht ab, wenn der Tag nicht die Form
-   `v0.0.N` hat, der Commit nicht auf `main` liegt oder sein CI-Lauf nicht mit
-   `success` endete; läuft CI noch, wartet er bis zu 45 Minuten. `check-deb`
-   installiert das Paket in einem frischen Ubuntu-24.04-Container, prüft es und
-   entfernt es wieder, und erst danach legt `release` das Release an.
+1. `0.0.N` ist genau die nächste Nummer, eins mehr als der höchste
+   `v0.0.*`-Tag auf `origin`; eine Lücke oder eine schon vergebene Nummer
+   lehnt es ab.
+2. Ziel ist die Spitze von `origin/main` (ein zweites Argument darf nur genau
+   diese Spitze nennen), und ihr `ci.yml`-Lauf auf `main` ist grün
+   (`tools/ci-gate.sh`).
+3. Es pusht den Commit als Branch `release-dry/0.0.N`. Das startet den
+   Probelauf von `release.yml` mit genau dieser Version: alle Bau- und
+   Prüfjobs, `guard` so streng wie beim Tag, ohne den Job `release`. Das
+   Skript wartet, bis jeder Job grün ist.
+4. Erst dann setzt es den annotierten Tag `v0.0.N` („Humanitl 0.0.N") auf
+   denselben Commit, pusht ihn und löscht den Probelauf-Branch. Ist `main`
+   während des Probelaufs weitergezogen, sitzt der Tag trotzdem auf dem
+   geprüften Commit und nicht auf der neuen Spitze; das Skript sagt es. Genau
+   dieser Commit ist vollständig geprüft und liegt auf `main`, eine Lücke
+   entsteht nicht. Ist er nicht mehr Vorfahre von `origin/main` (`main` wurde
+   umgeschrieben), setzt es keinen Tag.
+5. Es wartet auf den Lauf des Tags und nennt die Adresse des Releases.
 
-Ein Tag wird nie verschoben oder neu gesetzt. Schlägt ein Lauf fehl, wird der
-Fehler auf `main` behoben und die nächste Nummer getaggt; der misslungene Tag
-kann gelöscht werden, seine Nummer wird nicht wieder vergeben.
+Ist der Probelauf rot, endet das Skript mit dem roten Job und Schritt, und es
+gibt keinen Tag. Der Fehler wird auf `main` behoben, dann derselbe Aufruf mit
+derselben Nummer. War es ein Ausreißer, lässt sich der Probelauf in der
+Actions-Oberfläche neu starten („Re-run failed jobs"); der erneute Aufruf
+wertet den neuen Versuch aus. Scheitert der Lauf des Tags trotz grünem
+Probelauf, sagt das Skript es und verweist auf genau diesen Lauf: dort „Re-run
+failed jobs". Der Tag bleibt, wo er ist.
+
+Einen Tag von Hand zu setzen (`git tag` und `git push origin v0.0.N`) ist
+nicht mehr vorgesehen: So entstand v0.0.14, dessen Lauf nach dem Tag in
+`check-rpm` scheiterte und das deshalb kein Release hat. Der Job `guard` prüft
+beim Tag weiterhin selbst, dass der Tag die Form `v0.0.N` hat, der Commit auf
+`main` liegt und sein CI-Lauf mit `success` endete (läuft CI noch, wartet er
+bis zu 45 Minuten).
+
+Ein Tag wird nie verschoben oder neu gesetzt. Ist ein Tag-Lauf trotz allem
+endgültig gescheitert, wird der Fehler auf `main` behoben und die nächste
+Nummer geschnitten; seine Nummer wird nicht wieder vergeben.
 
 Die Versionsnummer steht im Repository weiter als `0.0.0`. Der Workflow setzt
 sie nur in seinem eigenen Auscheckstand in `daemon/Cargo.toml` und
@@ -299,13 +338,15 @@ der App mit `flutter build linux --build-name`. Dass `humanitl --version`,
 `humanitld --version` und die App dieselbe Nummer tragen, prüft der Lauf und
 scheitert sonst.
 
-**Probelauf.** Unter „Actions", Workflow „release", „Run workflow" mit einer
-Version wie `0.0.3` baut alles, prüft das Paket im Container und lädt die
+**Probelauf.** Er baut alles, prüft die Pakete in Containern und lädt die
 Dateien als Workflow-Artefakt `humanitl-dry-run-<commit>` hoch (ein Tag-Lauf
-nennt sein Artefakt `humanitl-release`), legt aber kein Release
-an. Der Probelauf darf auch einen Branch bauen; dass der Commit nicht auf
-`main` liegt oder CI nicht grün ist, steht dann als Warnung im Lauf statt als
-Fehler. Die Schritte lassen sich lokal einzeln nachfahren, die Skripte liegen
+nennt sein Artefakt `humanitl-release`), legt aber kein Release an. Ausgelöst
+wird er durch einen Push auf `release-dry/0.0.N` (`tools/release.sh`), auf
+`release-dry/hum-NNN` (`tools/commit-issue.sh`, Version `0.0.NNN`, siehe oben)
+oder unter „Actions", Workflow „release", „Run workflow" mit einer Version.
+Außer bei `release-dry/0.0.N` darf er auch einen Commit bauen, der nicht auf
+`main` liegt; dass der Commit nicht auf `main` liegt oder CI nicht grün ist,
+steht dann als Warnung im Lauf statt als Fehler. Die Schritte lassen sich lokal einzeln nachfahren, die Skripte liegen
 unter `packaging/release/` und `packaging/deb/`. Das Paket wird dabei nie auf
 dem eigenen Rechner installiert, sondern nur in einem Wegwerf-Container, so wie
 es `packaging/deb/check-install.sh` verlangt.
