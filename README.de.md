@@ -83,7 +83,7 @@ schreibt je Sitzung ein Profil, und der Kernel hält den Shim und jeden seiner P
 | # | Linux | macOS |
 |---|---|---|
 | 1 | Kein Netzwerk-Interface | **Kein Weg nach draußen.** Die Interfaces gibt es, aber jedes `connect`, `bind` und `sendto` außer zur Tür endet in `EPERM`; es gibt keine Namensauflösung. |
-| 2 | Genau eine Tür | **Genau eine Tür.** Erlaubt sind der Proxy-Socket des Daemons und der Loopback-Port der Sitzung, über den der Shim zu ihm weiterreicht. |
+| 2 | Genau eine Tür | **Genau eine Tür.** Erlaubt sind der Proxy-Socket des Daemons, der Loopback-Port der Sitzung, über den der Shim zu ihm weiterreicht, und ein zweiter, zufälliger Port der Sitzung für den eigenen lokalen Server des Agenten. |
 | 3 | seccomp | **Der Kernel hält den Prozess am Profil fest.** `AF_ROUTE`, `AF_SYSTEM`, `AF_NDRV` und Raw-Sockets werden schon bei `socket(2)` verweigert. |
 
 Einzelheiten in [`docs/SECURITY.md` Abschnitt 12](docs/SECURITY.md#12-macos-seatbelt-instead-of-bubblewrap).
