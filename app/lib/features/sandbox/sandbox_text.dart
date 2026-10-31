@@ -6,6 +6,7 @@
 /// none of them has to import another (ARCHITECTURE 5).
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart' show Color;
 
 import '../../core/domain/domain.dart';
@@ -116,12 +117,26 @@ String sandboxUptimeText(Duration duration) {
 /// Word for word the sentence from `docs/SECURITY.md` section 1 and
 /// BACKLOG.md 4.1. The panel makes a claim the product makes elsewhere; two
 /// wordings would be two claims.
-String isolationCheckSentence(AppLocalizations l10n, IsolationCheck check) =>
-    switch (check) {
-      IsolationCheck.noNetworkInterface => l10n.isolationCheck1,
-      IsolationCheck.singleSocket => l10n.isolationCheck2,
-      IsolationCheck.seccompActive => l10n.isolationCheck3,
-    };
+///
+/// On macOS the guarantees read differently (`docs/SECURITY.md` section 12):
+/// the interfaces exist there and there is no seccomp, so the Linux sentences
+/// would be false statements about security (HUM-372). Without [platform],
+/// [defaultTargetPlatform] decides; tests pass their own.
+String isolationCheckSentence(
+  AppLocalizations l10n,
+  IsolationCheck check, {
+  TargetPlatform? platform,
+}) => (platform ?? defaultTargetPlatform) == TargetPlatform.macOS
+    ? switch (check) {
+        IsolationCheck.noNetworkInterface => l10n.isolationCheck1Macos,
+        IsolationCheck.singleSocket => l10n.isolationCheck2Macos,
+        IsolationCheck.seccompActive => l10n.isolationCheck3Macos,
+      }
+    : switch (check) {
+        IsolationCheck.noNetworkInterface => l10n.isolationCheck1,
+        IsolationCheck.singleSocket => l10n.isolationCheck2,
+        IsolationCheck.seccompActive => l10n.isolationCheck3,
+      };
 
 /// The word for what one guarantee looks like right now.
 ///

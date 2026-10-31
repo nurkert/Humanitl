@@ -239,11 +239,21 @@ pub fn own_runtime_dir_fix() -> FixAction {
 }
 
 /// Der Abschnitt hinter [`own_runtime_dir_fix`].
-pub const OWN_RUNTIME_DIR_DOC_URL: &str =
-    "https://github.com/nurkert/Humanitl/blob/main/docs/INSTALL.md#xdg_runtime_dir-ohne-logind";
+///
+/// Unter macOS gibt es kein `XDG_RUNTIME_DIR` für die Sitzung; dort führt der
+/// Link in den eigenen Abschnitt (HUM-372).
+pub const OWN_RUNTIME_DIR_DOC_URL: &str = if cfg!(target_os = "macos") {
+    "https://github.com/nurkert/Humanitl/blob/main/docs/INSTALL.md#runtime-directory-on-macos"
+} else {
+    "https://github.com/nurkert/Humanitl/blob/main/docs/INSTALL.md#xdg_runtime_dir-ohne-logind"
+};
 
 /// Der Satz, den jeder Befund mit [`own_runtime_dir_fix`] im `why` trägt.
-pub const OWN_RUNTIME_DIR_HINT: &str = "daemon, CLI and app must all see the same XDG_RUNTIME_DIR, set for the whole session (see the linked section for bash and zsh), and it takes effect after logging in again; HUM-222 will let the clients find the directory themselves";
+pub const OWN_RUNTIME_DIR_HINT: &str = if cfg!(target_os = "macos") {
+    "the path under ~/Library/Application Support is too long for a socket, so daemon, CLI and app use the temporary directory; the linked section says what to do about it"
+} else {
+    "daemon, CLI and app must all see the same XDG_RUNTIME_DIR, set for the whole session (see the linked section for bash and zsh), and it takes effect after logging in again; HUM-222 will let the clients find the directory themselves"
+};
 
 /// Ein Verzeichnis, das der Daemon nicht übernimmt (`DAEMON_004`).
 ///
@@ -422,6 +432,7 @@ mod tests {
     /// Link und Satz, wörtlich; `app/test/core/ipc/private_path_test.dart`
     /// prüft dieselben Literale gegen die Dart-Seite.
     #[test]
+    #[cfg(not(target_os = "macos"))]
     fn the_fallback_fix_links_the_install_section() {
         assert_eq!(
             own_runtime_dir_fix(),
@@ -432,6 +443,24 @@ mod tests {
         assert_eq!(
             OWN_RUNTIME_DIR_HINT,
             "daemon, CLI and app must all see the same XDG_RUNTIME_DIR, set for the whole session (see the linked section for bash and zsh), and it takes effect after logging in again; HUM-222 will let the clients find the directory themselves"
+        );
+    }
+
+    /// Unter macOS führt der Rückfall nicht in den Abschnitt über
+    /// `XDG_RUNTIME_DIR` (HUM-372). Dieselben Literale prüft
+    /// `app/test/l10n/macos_text_test.dart`.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn the_fallback_fix_on_macos_links_its_own_section() {
+        assert_eq!(
+            own_runtime_dir_fix(),
+            FixAction::OpenUrl(
+                "https://github.com/nurkert/Humanitl/blob/main/docs/INSTALL.md#runtime-directory-on-macos".to_owned()
+            )
+        );
+        assert_eq!(
+            OWN_RUNTIME_DIR_HINT,
+            "the path under ~/Library/Application Support is too long for a socket, so daemon, CLI and app use the temporary directory; the linked section says what to do about it"
         );
     }
 

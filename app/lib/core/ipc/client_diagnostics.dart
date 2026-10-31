@@ -24,10 +24,11 @@ abstract final class ClientDiagnostics {
   /// rather type it reads it in the cause (HUM-044, diagnostic table).
   ///
   /// On macOS the daemon is a launchd agent, and `humanitl daemon install`
-  /// loads it (HUM-325).
+  /// loads it (HUM-325). The command line lies in the app there and not on
+  /// `PATH`, so the line names its full path (HUM-372).
   static String get startUnitCommand =>
       defaultTargetPlatform == TargetPlatform.macOS
-      ? 'humanitl daemon install'
+      ? '$macCommandLinePath daemon install'
       : 'systemctl --user start humanitld';
 
   /// Command that restarts the installed user unit, offered as the fix for
@@ -38,10 +39,11 @@ abstract final class ClientDiagnostics {
   /// an earlier run. A restart of the one the app talks to writes the pair
   /// anew; the next attempt of the connection reads it.
   ///
-  /// On macOS `humanitl daemon restart` restarts the launchd agent (HUM-325).
+  /// On macOS `humanitl daemon restart` restarts the launchd agent (HUM-325),
+  /// by the full path for the same reason as [startUnitCommand] (HUM-372).
   static String get restartUnitCommand =>
       defaultTargetPlatform == TargetPlatform.macOS
-      ? 'humanitl daemon restart'
+      ? '$macCommandLinePath daemon restart'
       : 'systemctl --user restart humanitld';
 
   /// Where a matching pair of app and daemon is downloaded, offered as the
@@ -117,6 +119,20 @@ abstract final class ClientDiagnostics {
   static const String ownRuntimeDirHint =
       'daemon, CLI and app must all see the same XDG_RUNTIME_DIR, set for the whole session (see the linked section for bash and zsh), and it takes effect after logging in again; HUM-222 will let the clients find the directory themselves';
 
+  /// Section behind [runtimeUntrusted] in the fallback on macOS (HUM-372),
+  /// mirror of the macOS value of
+  /// `humanitl_config::private_dir::OWN_RUNTIME_DIR_DOC_URL`.
+  static const String macRuntimeDirDocUrl =
+      'https://github.com/nurkert/Humanitl/blob/main/docs/INSTALL.md#runtime-directory-on-macos';
+
+  /// The macOS counterpart of [ownRuntimeDirHint], mirror of the macOS value
+  /// of `humanitl_config::private_dir::OWN_RUNTIME_DIR_HINT`.
+  ///
+  /// macOS has no session-wide `XDG_RUNTIME_DIR`. The fallback exists there
+  /// because the path under `Application Support` is too long for a socket.
+  static const String macRuntimeDirHint =
+      'the path under ~/Library/Application Support is too long for a socket, so daemon, CLI and app use the temporary directory; the linked section says what to do about it';
+
   /// `DAEMON_001`: the runtime directory or the token is a symlink, belongs to
   /// another account or is open to group and others (HUM-212). The token
   /// there is not read.
@@ -131,11 +147,14 @@ abstract final class ClientDiagnostics {
     required bool fallback,
   }) {
     if (fallback) {
+      final bool mac = defaultTargetPlatform == TargetPlatform.macOS;
       return Diagnostic(
         code: DiagnosticCodes.daemonUnreachable,
         severity: Severity.error,
-        why: '${problem.why}; $ownRuntimeDirHint',
-        fix: const FixAction.openUrl(url: ownRuntimeDirDocUrl),
+        why: '${problem.why}; ${mac ? macRuntimeDirHint : ownRuntimeDirHint}',
+        fix: FixAction.openUrl(
+          url: mac ? macRuntimeDirDocUrl : ownRuntimeDirDocUrl,
+        ),
       );
     }
     return Diagnostic(
@@ -242,7 +261,7 @@ abstract final class ClientDiagnostics {
   /// Command that starts a session in the current directory, offered as the
   /// fix for [folderDialogFailed]: the way to a project folder that needs no
   /// dialog.
-  static const String runInFolderCommand = 'humanitl run';
+  static String get runInFolderCommand => '${commandLineProgram()} run';
 
   /// `UI_003`: the desktop's folder dialog did not open (HUM-282).
   ///
@@ -257,7 +276,7 @@ abstract final class ClientDiagnostics {
           'The desktop could not show a folder dialog ($error). Open a '
           'terminal in the project folder and run `$runInFolderCommand` '
           'there.',
-      fix: const FixAction.copyCommand(command: runInFolderCommand),
+      fix: FixAction.copyCommand(command: runInFolderCommand),
     );
   }
 }

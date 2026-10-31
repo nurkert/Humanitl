@@ -152,7 +152,10 @@ abstract class DoctorReport with _$DoctorReport {
 /// found, and so that a heading can be looked up per line.
 abstract final class DoctorCheckId {
   /// Is `bwrap` there, and is it new enough?
-  static const String bwrap = 'bwrap';
+  static const String sandboxTool = 'bwrap';
+
+  /// The same check under its Linux name.
+  static const String bwrap = sandboxTool;
 
   /// May this user open a namespace?
   static const String userns = 'userns';
