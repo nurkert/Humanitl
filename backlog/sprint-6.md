@@ -43,6 +43,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-364 | Proxy: Klartext-HTTP im `CONNECT`-Tunnel, damit `pi` 1.x sein lokales Modell erreicht | S | HUM-024 |
 | HUM-367 | Statusleiste: Daemon-Neustart auch mit laufender Sitzung, ohne `systemctl`-Hinweis | S | HUM-284 |
 | HUM-365 | macOS: OpenCode 2 startet in der Sandbox, mit einem eigenen Port je Sitzung | M | HUM-323 |
+| HUM-369 | macOS: `/dev/stdout`, `/dev/stderr` und `/dev/fd/N` sind in der Sandbox beschreibbar | S | HUM-323 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -654,3 +655,7 @@ Akzeptanz:
 - Der Server bleibt am Proxy, nur die Oberfläche geht an ihm vorbei.
 - `single_socket` prüft weiter einen fremden Port und wählt dafür nie den des Agenten.
 - `README.md`, `docs/SECURITY.md` und `docs/THREAT-MODEL.md` nennen den zweiten Port.
+
+## HUM-369 · macOS: `/dev/stdout`, `/dev/stderr` und `/dev/fd/N` sind in der Sandbox beschreibbar
+
+Skripte, die nach `/dev/stdout` schreiben, endeten mit `Operation not permitted`. Akzeptanz: Die drei Pfade sind beschreibbar und öffnen nur, was der Prozess schon hält; `tests/escape/macos/run.sh` prüft es.
