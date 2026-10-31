@@ -1455,8 +1455,8 @@ die Alternativen, darunter eine Linux-VM mit dem bwrap-Backend darin (HUM-328), 
 
 | # | Unter Linux | Unter macOS | Vom Shim gemessen als |
 |---|---|---|---|
-| 1 | Kein Netzwerk-Interface | **Kein Weg nach draußen.** Die Interfaces existieren, aber jedes `connect`, `bind` und `sendto` außer den beiden unten endet mit `EPERM`; es gibt keine Namensauflösung. | eine TCP-Verbindung zu einer öffentlichen IPv4- und IPv6-Adresse und ein UDP-Datagramm, alle verweigert (`no_interfaces`) |
-| 2 | Genau eine Tür | **Genau eine Tür.** Erlaubt sind der Proxy-Socket des Daemons und der Loopback-Port der Session, über den der Shim zu ihm weiterleitet. | die Tür antwortet, `/var/run/syslog` und ein fremder Loopback-Port nicht (`single_socket`, `bridge_listening`) |
+| 1 | Kein Netzwerk-Interface | **Kein Weg nach draußen.** Die Interfaces existieren, aber jedes `connect`, `bind` und `sendto` außer den dreien unten endet mit `EPERM`; es gibt keine Namensauflösung. | eine TCP-Verbindung zu einer öffentlichen IPv4- und IPv6-Adresse und ein UDP-Datagramm, alle verweigert (`no_interfaces`) |
+| 2 | Genau eine Tür | **Genau eine Tür.** Erlaubt sind der Proxy-Socket des Daemons, der Loopback-Port der Session, über den der Shim zu ihm weiterleitet, und ein zweiter, zufälliger Port der Session für den eigenen lokalen Server des Agenten (HUM-365). | die Tür antwortet, `/var/run/syslog` und ein fremder Loopback-Port nicht (`single_socket`, `bridge_listening`) |
 | 3 | seccomp | **Der Kernel hält den Prozess an das Profil.** Routing-, System- und Treiber-Sockets werden bei `socket(2)` verweigert; unprivilegiertes ICMP hat keine entfernte Adresse, die das Profil erlaubt. | `sandbox_check(getpid())` meldet den Prozess als in der Sandbox; `AF_ROUTE`, `AF_SYSTEM`, `AF_NDRV` und `AF_INET SOCK_RAW` enden mit `EPERM` (`seccomp_applied`, `families`). Der Raw-Socket wird jedem unprivilegierten Prozess ohnehin verweigert; er bleibt als Boden in der Liste. |
 
 Die Namen der Prüfungen sind die von Linux, sodass die Isolationsanzeige und
@@ -1506,7 +1506,8 @@ Das sind die Punkte, an denen macOS weniger bietet als Linux. Jeder ist ein Kana
    jeder lokale Prozess jedes Kontos erreichen kann. Ein solcher Prozess erreicht nur den Proxy,
    aber mit den Regeln der Session: Was eine `allow`-Regel oder die LLM-Durchleitung durchlässt,
    geht ohne Anhalten hinaus, alles andere landet in deiner Warteschlange. Der Agent wiederum
-   erreicht keinen anderen Loopback-Port, kann also nicht mit Datenbanken oder anderen Diensten
+   erreicht keinen anderen Loopback-Port als die Tür und den einen zufälligen Port der Session für
+   seinen eigenen Server (HUM-365), kann also nicht mit Datenbanken oder anderen Diensten
    des Rechners sprechen.
 2. **Es gibt keinen PID-Namespace** (K-20). Der Befehl läuft in einer eigenen Session; an ihrem
    Ende und drei Sekunden nach einem Anhalten beendet der Shim die Prozesse dieser Session, in

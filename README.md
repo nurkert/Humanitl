@@ -99,7 +99,7 @@ starts to that profile.
 | # | Linux | macOS |
 |---|---|---|
 | 1 | No network interface | **No way out.** The interfaces exist, but every `connect`, `bind` and `sendto` except the door ends in `EPERM`; there is no name resolution. |
-| 2 | Exactly one door | **Exactly one door.** Allowed are the daemon's proxy socket and the session's loopback port on which the shim relays to it. |
+| 2 | Exactly one door | **Exactly one door.** Allowed are the daemon's proxy socket, the session's loopback port on which the shim relays to it, and a second random port of the session for the agent's own local server. |
 | 3 | seccomp | **The kernel holds the process to the profile.** `AF_ROUTE`, `AF_SYSTEM`, `AF_NDRV` and raw sockets are refused at `socket(2)`. |
 
 The checks carry the Linux names, so the isolation panel and `humanitl sandbox check` read the same
@@ -166,7 +166,7 @@ Each point is a channel in the threat model
 - **Loopback is shared with the host (K-19).** The door listens on a loopback port that every
   local process of every account can reach. Such a process reaches only the proxy, but with the
   session's rules: what an `allow` rule or the LLM passthrough lets through goes out without a
-  hold. The agent in turn reaches no other loopback port.
+  hold. The agent in turn reaches no other loopback port than these two of its session.
 - **There is no PID namespace (K-20).** At the end of a session the shim kills the processes of
   its session, best effort. A process that starts another session outlives the sandbox and, while
   the daemon runs, can still send requests through the proxy socket under the profile. Until

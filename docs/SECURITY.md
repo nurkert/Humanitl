@@ -1376,8 +1376,8 @@ among them a Linux VM with the bwrap backend inside (HUM-328), are in
 
 | # | On Linux | On macOS | Measured by the shim as |
 |---|---|---|---|
-| 1 | No network interface | **No way out.** The interfaces exist, but every `connect`, `bind` and `sendto` except the two below ends in `EPERM`; there is no name resolution. | a TCP connection to a public IPv4 and IPv6 address and a UDP datagram, all refused (`no_interfaces`) |
-| 2 | Exactly one door | **Exactly one door.** Allowed are the proxy socket of the daemon and the loopback port of the session on which the shim relays to it. | the door answers, `/var/run/syslog` and a foreign loopback port do not (`single_socket`, `bridge_listening`) |
+| 1 | No network interface | **No way out.** The interfaces exist, but every `connect`, `bind` and `sendto` except the three below ends in `EPERM`; there is no name resolution. | a TCP connection to a public IPv4 and IPv6 address and a UDP datagram, all refused (`no_interfaces`) |
+| 2 | Exactly one door | **Exactly one door.** Allowed are the proxy socket of the daemon, the loopback port of the session on which the shim relays to it, and a second random port of the session for the agent's own local server (HUM-365). | the door answers, `/var/run/syslog` and a foreign loopback port do not (`single_socket`, `bridge_listening`) |
 | 3 | seccomp | **The kernel holds the process to the profile.** Routing, system and driver sockets are refused at `socket(2)`; unprivileged ICMP has no remote address the profile allows. | `sandbox_check(getpid())` reports the process as sandboxed; `AF_ROUTE`, `AF_SYSTEM`, `AF_NDRV` and `AF_INET SOCK_RAW` end in `EPERM` (`seccomp_applied`, `families`). The raw socket is refused to any unprivileged process anyway; it stays in the list as a floor. |
 
 The check names are the ones of Linux, so the isolation panel and `humanitl sandbox check` read
@@ -1424,8 +1424,9 @@ These are the points where macOS gives less than Linux. Each is a channel in
 1. **Loopback is shared with the host** (K-19). The door listens on a loopback port that every
    local process of every account can reach. Such a process reaches only the proxy, but with the
    session's rules: what an `allow` rule or the LLM passthrough lets through goes out without a
-   hold, everything else lands in your queue. The agent in turn reaches no other loopback port, so
-   it cannot talk to databases or other services of the host.
+   hold, everything else lands in your queue. The agent in turn reaches no other loopback port than
+   the door and the one random port of the session on which it may run its own server (HUM-365),
+   so it cannot talk to databases or other services of the host.
 2. **There is no PID namespace** (K-20). The command runs in a session of its own; at its end, and
    three seconds after a stop, the shim kills the processes of that session, in passes that repeat
    until one finds nobody (at most ten). This is best effort, not a namespace: a process that

@@ -690,6 +690,10 @@ impl SandboxFile {
     }
 }
 
+/// Die Umgebungsvariable mit dem zweiten Port der Sitzung unter macOS
+/// (HUM-365): dem einzigen, auf dem ein Agent selbst lauschen darf.
+pub const ENV_AGENT_PORT: &str = "HUMANITL_AGENT_PORT";
+
 /// Der Port, über den ein Agent in Humanitl hineinwächst.
 ///
 /// Ein Adapter ist zustandslos: jede Methode bekommt den [`AgentContext`] und
@@ -703,6 +707,12 @@ pub trait AgentAdapter: Send + Sync {
     ///
     /// Bei gesetztem [`AgentContext::agent_command_override`] genau dieses.
     fn command(&self, ctx: &AgentContext) -> Vec<OsString>;
+
+    /// Das Kommando, nachdem sein Programm gebunden ist, für eine Sandbox auf
+    /// geteiltem Loopback (HUM-365). Fast jeder Adapter lässt es, wie es ist.
+    fn on_shared_loopback(&self, command: Vec<OsString>) -> Vec<OsString> {
+        command
+    }
 
     /// Die Umgebungsvariablen des Agenten, zusätzlich zum Env-Kit, das der
     /// Launcher setzt (`humanitl_proxy::ca::ENV_KIT`, HUM-014).

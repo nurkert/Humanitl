@@ -589,7 +589,7 @@ const de = {
             'Eingebunden wird die Socket-Datei, nie ihr Verzeichnis. Alles andere ist eine Positivliste; eine Sperrliste weist `$XDG_RUNTIME_DIR`, `/run`, `/home`, `~/.ssh`, X11, Wayland, D-Bus und Docker mit `SANDBOX_006` ab. Es gibt kein `/etc/resolv.conf`, und Projektordner und Zusatz-Mounts sind per Deskriptor festgenagelt.',
           manual: ['genau eine Zeile: `/run/humanitl/proxy.sock`', '`sandbox`'],
           note: '`-xtype s`, weil bwrap den Socket über eine leere Datei bindet; kein `-xdev`, weil `/work`, `/tmp`, `/dev/shm` und `/home/agent` eigene Mounts sind.',
-          mac: 'Erlaubt sind der Proxy-Socket des Daemons und der Loopback-Port der Sitzung. Gemessen: Die Tür antwortet, `/var/run/syslog` und ein fremder Loopback-Port nicht.',
+          mac: 'Erlaubt sind der Proxy-Socket des Daemons, der Loopback-Port der Sitzung und ein zweiter, zufälliger Port für den eigenen Server des Agenten. Gemessen: Die Tür antwortet, `/var/run/syslog` und ein fremder Loopback-Port nicht.',
           src: [
             { label: 'SECURITY.md §3', href: '/docs/security/#3-guarantee-2-exactly-one-door' },
             { label: 'esc-2-mounts.sh', href: 'gh:tests/escape' },
@@ -845,7 +845,7 @@ const de = {
         {
           label: 'Garantie 2',
           linux: 'Genau eine Tür: `/run/humanitl/proxy.sock`',
-          macos: 'Genau eine Tür: Proxy-Socket und Loopback-Port der Sitzung',
+          macos: 'Genau eine Tür: Proxy-Socket und Loopback-Port der Sitzung, dazu ein Port für den eigenen Server des Agenten',
         },
         { label: 'Garantie 3', linux: 'seccomp', macos: 'Der Kernel hält den Prozess am Profil' },
       ],
