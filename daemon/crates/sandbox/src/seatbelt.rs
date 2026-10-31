@@ -17,7 +17,7 @@
 //!
 //! **Das Profil** ([`SeatbeltPolicy::render`]) verbietet alles und erlaubt
 //! dann: Lesen überall außer unter `/Users`, `/Volumes` und den temporären
-//! Verzeichnissen; dort nur das Projekt, das Sitzungsverzeichnis, die
+//! Verzeichnissen ([`PRIVATE_TREES`]); dort nur das Projekt, das Sitzungsverzeichnis, die
 //! zusätzlichen Ordner des Profils und einzelne Dateien (Shim, Agent).
 //! Schreiben nur im Projekt (bei `rw`), im Sitzungsverzeichnis und an den
 //! Terminals. Netz nur zum Proxy-Socket und zum Loopback-Port der Sitzung.
@@ -63,18 +63,54 @@ pub const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 /// Der Name des Profils im Sitzungsverzeichnis.
 pub const PROFILE_FILE: &str = "sandbox.sb";
 
+/// Die Datei im Sitzungsverzeichnis, die den Prozess der Sitzung nennt. Der
+/// Agent liest sie und kann sie nicht ändern: Das Verzeichnis selbst ist für
+/// ihn nicht beschreibbar.
+pub const SESSION_PID_FILE: &str = "pid";
+
 /// Wie alt ein Sitzungsverzeichnis werden darf, bevor ein neuer Plan es
-/// wegräumt. Eine Sitzung, die so lange läuft, behält ihr Verzeichnis, weil
-/// der Shim es bis zum Ende offen hält und es dabei jünger bleibt
-/// (`home` und `tmp` ändern sich mit jeder Arbeit).
+/// wegräumt. Das Alter allein sagt nichts über eine laufende Sitzung: Die
+/// Zeit am Verzeichnis ändert sich nicht, wenn darunter in `home` oder `tmp`
+/// gearbeitet wird. Eine Sitzung, deren Prozess noch lebt
+/// ([`SESSION_PID_FILE`]), behält ihr Verzeichnis deshalb in jedem Alter.
 pub const STALE_SESSION: Duration = Duration::from_secs(7 * 24 * 3600);
 
 /// Die Suchpfade unter macOS, nach dem Verzeichnis des Agenten.
 pub const SEARCH_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
+/// Der Suchpfad des ausgelieferten Profils (`profiles/sandbox/default.toml`).
+/// Er beschreibt die Einhängungen unter Linux und ist keine Wahl des Nutzers:
+/// Unter macOS stellte er `/usr/bin` vor Homebrew.
+const SHIPPED_PROFILE_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
+
+/// Der Suchpfad einer Sitzung unter macOS: der eingestellte
+/// (`sandbox.env.PATH`, `[env].PATH` des Profils) und dahinter
+/// [`SEARCH_PATH`] ohne Doppelte. Vor- und Nachprüfung rechnen mit derselben
+/// Funktion, sonst urteilte die Vorprüfung über einen anderen Pfad als den,
+/// unter dem das `exec` läuft. Der unveränderte Pfad des ausgelieferten
+/// Profils zählt als nicht eingestellt, damit Homebrew vorn bleibt.
+#[must_use]
+pub fn session_search_path(configured: Option<&str>) -> String {
+    let mut entries: Vec<&str> = configured
+        .filter(|path| !path.is_empty() && *path != SHIPPED_PROFILE_PATH)
+        .map_or_else(Vec::new, |path| path.split(':').collect());
+    for dir in SEARCH_PATH.split(':') {
+        if !entries.contains(&dir) {
+            entries.push(dir);
+        }
+    }
+    entries.join(":")
+}
+
 /// Wo unter macOS niemand außer dem Profil lesen darf: Heimverzeichnisse,
 /// Laufwerke und die temporären Verzeichnisse aller Programme.
-pub const PRIVATE_TREES: &[&str] = &["/Users", "/Volumes", "/private/var/folders", "/private/tmp"];
+pub const PRIVATE_TREES: &[&str] = &[
+    "/Users",
+    "/Volumes",
+    "/private/var/folders",
+    "/private/tmp",
+    "/private/var/tmp",
+];
 
 /// Die Mach-Dienste, die gewöhnliche Werkzeuge brauchen und die nichts nach
 /// außen tragen: Benutzerdaten (`getpwuid`), Benachrichtigungen, Protokoll,
@@ -110,6 +146,12 @@ impl PathMap {
             .collect();
         entries.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
         Self { entries }
+    }
+
+    /// Dieselbe Abbildung mit weiteren Einträgen.
+    #[must_use]
+    pub fn with_entries(self, extra: impl IntoIterator<Item = (String, PathBuf)>) -> Self {
+        Self::new(self.entries.into_iter().chain(extra))
     }
 
     /// Der Host-Pfad für einen Sandbox-Pfad, oder `None`, wenn kein Eintrag
@@ -515,7 +557,7 @@ impl SeatbeltBackend {
     }
 
     /// Ein weiterer nur lesbarer Ort. Unter macOS liegt er unter seinem
-    /// eigenen Pfad; das Ziel unter `/run/humanitl` wird darauf abgebildet.
+    /// eigenen Pfad; das Ziel wird darauf abgebildet ([`Self::bind_entries`]).
     #[must_use]
     pub fn with_read_only_bind(mut self, src: impl Into<PathBuf>, dst: impl Into<PathBuf>) -> Self {
         self.read_only_binds.push((src.into(), dst.into()));
@@ -585,6 +627,29 @@ impl SeatbeltBackend {
                     .collect(),
             })
         })
+    }
+
+    /// Die Abbildung der Sitzung samt den nur lesbaren Orten.
+    fn session_map(
+        &self,
+        layout: &SessionLayout,
+        work: &Path,
+        door: &Path,
+        shim: &Path,
+    ) -> PathMap {
+        layout
+            .path_map(work, door, shim)
+            .with_entries(self.bind_entries())
+    }
+
+    /// Die nur lesbaren Orte als Einträge der Abbildung, ihr Ziel auf den
+    /// aufgelösten Pfad: `--tests-dir` nennt `/tests/escape`, und das Kommando
+    /// muss dort ankommen, wo das Profil das Lesen erlaubt.
+    fn bind_entries(&self) -> Vec<(String, PathBuf)> {
+        self.read_only_binds
+            .iter()
+            .filter_map(|(src, dst)| Some((dst.to_str()?.to_owned(), src.canonicalize().ok()?)))
+            .collect()
     }
 
     /// Legt das Verzeichnis der Sitzung frisch an und räumt alte weg.
@@ -684,13 +749,7 @@ impl SeatbeltBackend {
     ) -> SeatbeltPolicy {
         // Masken wie unter Linux nur über das, was es im Projekt gibt; was
         // fehlt, nennt der Plan als ungeschützt (HUM-043).
-        let present = BwrapBackend::present_under_work(profile, work);
-        let masked: Vec<PathBuf> = present
-            .iter()
-            .filter_map(|path| under_work(path))
-            .filter(|rest| !rest.as_os_str().is_empty())
-            .map(|rest| work.join(rest))
-            .collect();
+        let masked = masks_in_project(profile, work);
         // Die Ordner zwischen Projekt und Maske dürfen weder umbenannt noch
         // gelöscht werden: Sonst zöge `mv .git .gitx` die Maske von
         // `.git/hooks` ab, und `mv .gitx .git` brächte den Inhalt zurück
@@ -738,7 +797,25 @@ impl SeatbeltBackend {
     }
 }
 
-/// Entfernt Sitzungsverzeichnisse, die älter sind als [`STALE_SESSION`].
+/// Ob der Prozess, den dieses Sitzungsverzeichnis nennt, noch lebt.
+///
+/// Ein fremder Prozess unter einer wiederverwendeten Nummer zählt als lebend;
+/// das kostet nur Aufschub bis zum nächsten Plan.
+fn session_is_live(dir: &Path) -> bool {
+    std::fs::read_to_string(dir.join(SESSION_PID_FILE))
+        .ok()
+        .and_then(|text| text.trim().parse::<i32>().ok())
+        .and_then(rustix::process::Pid::from_raw)
+        .is_some_and(|pid| {
+            !matches!(
+                rustix::process::test_kill_process(pid),
+                Err(rustix::io::Errno::SRCH)
+            )
+        })
+}
+
+/// Entfernt Sitzungsverzeichnisse, die älter sind als [`STALE_SESSION`] und
+/// deren Prozess nicht mehr lebt.
 fn sweep_stale(parent: &Path) {
     let Ok(entries) = std::fs::read_dir(parent) else {
         return;
@@ -750,7 +827,7 @@ fn sweep_stale(parent: &Path) {
             .ok()
             .and_then(|at| SystemTime::now().duration_since(at).ok())
             .is_some_and(|age| age > STALE_SESSION);
-        if old {
+        if old && !session_is_live(&entry.path()) {
             let _ = std::fs::remove_dir_all(entry.path());
         }
     }
@@ -1028,6 +1105,17 @@ fn place_agent(
     Ok(files)
 }
 
+/// Die Masken des Profils als echte Pfade im Projekt: nur was es dort gibt,
+/// wie im Plan. Die Sicht der Vorprüfung nimmt dieselbe Auswahl (HUM-377).
+pub(crate) fn masks_in_project(profile: &SandboxProfile, work: &Path) -> Vec<PathBuf> {
+    BwrapBackend::present_under_work(profile, work)
+        .iter()
+        .filter_map(|path| under_work(path))
+        .filter(|rest| !rest.as_os_str().is_empty())
+        .map(|rest| work.join(rest))
+        .collect()
+}
+
 /// Ob ein Pfad unter dem Projekt liegt, als Pfad relativ zu ihm.
 fn under_work(path: &Path) -> Option<PathBuf> {
     let rest = path.strip_prefix(WORK_DST).ok()?;
@@ -1052,7 +1140,7 @@ impl SandboxBackend for SeatbeltBackend {
         // liegt das Laufzeitverzeichnis hinter dem Verweis `/var`.
         let door = canonical(&session.proxy_socket_src)?;
         let shim = canonical(&session.shim_src)?;
-        let map = layout.path_map(&work, &door, &shim);
+        let map = self.session_map(&layout, &work, &door, &shim);
         let mut warnings = profile.unmask_diagnostics();
         let protected = place_files(session, &map, &layout.home(), &mut warnings)?;
         let files = place_agent(session, &map, &shim)?;
@@ -1147,6 +1235,15 @@ impl SandboxBackend for SeatbeltBackend {
         if let Some(dir) = &plan.session_dir {
             handle.remove_at_exit(dir.clone());
         }
+        // Für `sweep_stale`. Scheitert das Schreiben, läuft die Sitzung
+        // trotzdem; sie verliert nur den Schutz vor dem Wegräumen nach sieben
+        // Tagen.
+        let dir = self.sessions_dir().join(plan.session.to_string());
+        let _ = write_file(
+            &dir.join(SESSION_PID_FILE),
+            handle.pid.to_string().as_bytes(),
+            0o444,
+        );
         Ok(handle)
     }
 
@@ -1156,7 +1253,8 @@ impl SandboxBackend for SeatbeltBackend {
 }
 
 /// Die Umgebung des Agenten unter macOS: die des Profils, abgebildet, mit
-/// eigenem Port, eigenem Suchpfad und der Tür als echtem Pfad.
+/// eigenem Port, dem Suchpfad aus [`session_search_path`] und der Tür als
+/// echtem Pfad.
 fn session_env(
     profile: &SandboxProfile,
     session: &SessionContext,
@@ -1179,10 +1277,20 @@ fn session_env(
     let agent_dir = map
         .map_path(Path::new(crate::agent::AGENT_PROGRAM_DIR))
         .unwrap_or_else(|| layout.run().join("agent"));
+    // Das Verzeichnis des Agenten steht in `effective_env` schon vorn; es
+    // zählt nicht zum eingestellten Pfad und bleibt das erste.
+    let agent_dir = agent_dir.display().to_string();
+    let configured = env.get("PATH").map(|path| {
+        path.split(':')
+            .filter(|dir| *dir != agent_dir)
+            .collect::<Vec<_>>()
+            .join(":")
+    });
+    let path = session_search_path(configured.as_deref());
     let path = if session.agent_program.is_some() {
-        format!("{}:{SEARCH_PATH}", agent_dir.display())
+        format!("{agent_dir}:{path}")
     } else {
-        SEARCH_PATH.to_owned()
+        path
     };
     env.insert("PATH".to_owned(), path);
     env.insert("TMPDIR".to_owned(), format!("{}/", layout.tmp().display()));
@@ -1439,6 +1547,159 @@ mod tests {
             .find(|line| line.starts_with("(allow file-write*"))
             .unwrap();
         assert!(!writes.contains("/Users/me/project\""), "{writes}");
+    }
+
+    #[test]
+    fn the_configured_path_comes_first_and_the_system_search_path_follows() {
+        assert_eq!(session_search_path(None), SEARCH_PATH);
+        assert_eq!(session_search_path(Some("")), SEARCH_PATH);
+        assert_eq!(
+            session_search_path(Some("/nix/bin:/usr/bin")),
+            "/nix/bin:/usr/bin:/opt/homebrew/bin:/usr/local/bin:/bin:/usr/sbin:/sbin"
+        );
+    }
+
+    #[test]
+    fn the_path_of_the_shipped_profile_does_not_put_usr_bin_before_homebrew() {
+        let shipped = include_str!("../../../../profiles/sandbox/default.toml");
+        assert!(shipped.contains(&format!("PATH = \"{SHIPPED_PROFILE_PATH}\"")));
+        assert_eq!(session_search_path(Some(SHIPPED_PROFILE_PATH)), SEARCH_PATH);
+    }
+
+    /// Die Sitzung und nicht nur die Rechnung: `session_env` überschrieb
+    /// `sandbox.env.PATH`, obwohl `AGENT_006` genau diese Einstellung vorschlägt.
+    fn env_path(session_env: Vec<(String, String)>, agent: bool) -> String {
+        let profile =
+            SandboxProfile::parse("version = 1\nname = \"x\"\n", Path::new("<t>")).unwrap();
+        let session = SessionContext {
+            session: humanitl_core::SessionId::nil(),
+            work_src: PathBuf::from("/Users/me/project"),
+            work_mode: WorkMode::Rw,
+            proxy_socket_src: PathBuf::from("/d/proxy.sock"),
+            ca_cert_src: PathBuf::from("/d/ca.crt"),
+            ca_bundle_src: PathBuf::from("/d/ca-bundle.crt"),
+            shim_src: PathBuf::from("/d/humanitl-shim"),
+            session_env,
+            command: vec!["true".into()],
+            files: Vec::new(),
+            agent_program: agent.then(|| {
+                crate::agent::AgentProgram::new(
+                    PathBuf::from("/Users/me/.opencode/bin/opencode"),
+                    std::ffi::OsStr::new("opencode"),
+                )
+            }),
+        };
+        let report: OwnedFd = std::fs::File::open("/dev/null").unwrap().into();
+        session_env_of(&profile, &session, &report)
+            .into_iter()
+            .find(|(key, _)| key == "PATH")
+            .unwrap()
+            .1
+    }
+
+    fn session_env_of(
+        profile: &SandboxProfile,
+        session: &SessionContext,
+        report: &OwnedFd,
+    ) -> Vec<(String, String)> {
+        let door = Path::new("/d/proxy.sock");
+        session_env(profile, session, &map(), &layout(), door, 41_234, report)
+    }
+
+    #[test]
+    fn sandbox_env_path_reaches_the_agent() {
+        let configured = vec![("PATH".to_owned(), "/work/tools:/nix/bin".to_owned())];
+        assert_eq!(
+            env_path(configured.clone(), false),
+            format!("/Users/me/project/tools:/nix/bin:{SEARCH_PATH}")
+        );
+        let run = layout().run();
+        assert_eq!(
+            env_path(configured, true),
+            format!(
+                "{}/agent:/Users/me/project/tools:/nix/bin:{SEARCH_PATH}",
+                run.display()
+            ),
+            "the bound agent stays first"
+        );
+    }
+
+    #[test]
+    fn without_a_configured_path_the_system_search_path_stands_alone() {
+        assert_eq!(env_path(Vec::new(), false), SEARCH_PATH);
+    }
+
+    #[test]
+    fn the_system_temp_dirs_are_private_and_the_profile_says_so() {
+        let text = policy().render();
+        assert!(text.contains("(subpath \"/private/var/tmp\")"), "{text}");
+        assert!(text.contains("(subpath \"/private/tmp\")"), "{text}");
+        assert!(
+            !text.contains("(allow file-read* (subpath \"/private/tmp\")"),
+            "the real temp dir stays closed"
+        );
+    }
+
+    #[test]
+    fn the_briefing_note_keeps_the_name_tmp_through_the_mapping() {
+        for note in [
+            crate::agent::briefing::SEATBELT_NOTE_EN,
+            crate::agent::briefing::SEATBELT_NOTE_DE,
+        ] {
+            let mapped = map().map_text(note);
+            assert!(mapped.contains("/tmp"), "{mapped}");
+            assert!(!mapped.contains("sessions/s1"), "{mapped}");
+        }
+    }
+
+    #[test]
+    fn a_read_only_bind_is_mapped_for_the_command() {
+        let tests = tempfile::tempdir().unwrap();
+        let paths = Paths::new(humanitl_config::Env::from_process());
+        let backend = SeatbeltBackend::unchecked(SANDBOX_EXEC, paths)
+            .with_read_only_bind(tests.path(), "/tests/escape");
+        let map = map().with_entries(backend.bind_entries());
+        let real = tests.path().canonicalize().unwrap();
+        assert_eq!(
+            map.map_text("/bin/sh /tests/escape/esc-1-sockets.sh"),
+            format!("/bin/sh {}/esc-1-sockets.sh", real.display())
+        );
+    }
+
+    /// Ein Sitzungsverzeichnis, älter als [`STALE_SESSION`].
+    fn aged_session(parent: &Path, name: &str, pid: Option<u32>) -> PathBuf {
+        let dir = parent.join(name);
+        std::fs::create_dir_all(dir.join("home")).unwrap();
+        if let Some(pid) = pid {
+            std::fs::write(dir.join(SESSION_PID_FILE), pid.to_string()).unwrap();
+        }
+        let aged = SystemTime::now() - STALE_SESSION - Duration::from_secs(60);
+        std::fs::File::open(&dir)
+            .unwrap()
+            .set_modified(aged)
+            .unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_old_directory_of_a_running_session_survives_the_sweep() {
+        let parent = tempfile::tempdir().unwrap();
+        let mut gone = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let gone_pid = gone.id();
+        gone.wait().unwrap();
+
+        let running = aged_session(parent.path(), "running", Some(std::process::id()));
+        let ended = aged_session(parent.path(), "ended", Some(gone_pid));
+        let unknown = aged_session(parent.path(), "unknown", None);
+        let young = parent.path().join("young");
+        std::fs::create_dir(&young).unwrap();
+
+        sweep_stale(parent.path());
+
+        assert!(running.exists(), "the session still runs");
+        assert!(!ended.exists(), "its process is gone");
+        assert!(!unknown.exists(), "a directory without a process is stale");
+        assert!(young.exists());
     }
 
     #[test]

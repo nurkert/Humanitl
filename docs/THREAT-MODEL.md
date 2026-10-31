@@ -400,8 +400,8 @@ the running session; until then a restart of the daemon ends such a process's wa
 ### K-21 Reading by deny list, paths instead of descriptors on macOS
 
 On Linux the sandbox sees only the mounted trees. On macOS the profile allows reading everything
-outside `/Users`, `/Volumes`, `/private/var/folders` and `/private/tmp`, so attacker (b) reads all
-of `/etc` (the real `passwd` and `hosts`), `/Library`, `/Applications`, `/opt/homebrew` and
+outside `/Users`, `/Volumes`, `/private/var/folders`, `/private/tmp` and `/private/var/tmp`, so
+attacker (b) reads all of `/etc` (the real `passwd` and `hosts`), `/Library`, `/Applications`, `/opt/homebrew` and
 `/usr/local/etc`. *Residual risk:* a credential in a system-wide configuration file reaches the
 agent and, through the passthrough, the model host without a hold. Keep secrets in the home
 directory, which stays unreadable.

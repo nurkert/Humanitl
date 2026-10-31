@@ -1470,8 +1470,8 @@ liegt, für den Agenten schreibgeschützt, als `sandbox.sb` im Session-Verzeichn
 standardmäßig. In SBPL gewinnt die letzte passende Regel, deshalb kommen die Verweigerungen der
 Masken zuletzt.
 
-- **Lesen:** das ganze System außer `/Users`, `/Volumes`, `/private/var/folders` und
-  `/private/tmp`; von diesen nur das Projekt, das Session-Verzeichnis, die zusätzlichen Ordner des
+- **Lesen:** das ganze System außer `/Users`, `/Volumes`, `/private/var/folders`,
+  `/private/tmp` und `/private/var/tmp`; von diesen nur das Projekt, das Session-Verzeichnis, die zusätzlichen Ordner des
   Profils und einzelne Dateien: der Shim und das Programm des Agenten, das der Start aufgelöst hat.
   Die Ordner darüber dürfen nach Namen aufgelistet (`file-read-metadata`), nicht gelesen werden.
 - **Schreiben:** das Projekt (wenn es `rw` eingehängt ist), das eigene `home` und `tmp` der
@@ -1496,6 +1496,10 @@ Ohne Mounts werden die Sandbox-Pfade eines Profils abgebildet: `/work` ist das P
 `/home/agent`, `/tmp`, `/etc/humanitl` und `/run/humanitl` liegen im Session-Verzeichnis unter dem
 Laufzeitverzeichnis. Die Abbildung gilt für die Umgebung, den Befehl und den Text der
 Adapter-Dateien, sodass der Agent seine Konfiguration dort findet, wo der Adapter sie abgelegt hat.
+In ein laufendes Programm reicht sie nicht hinein: Ein `/tmp`, das ein Programm fest verdrahtet oder
+ein Werkzeugaufruf des Agenten zusammensetzt, ist das echte `/private/tmp`, und Lesen oder Schreiben
+dort endet mit `EPERM`. Temporäre Dateien gehören nach `$TMPDIR`, dem `tmp` der Sitzung. Das echte
+`/tmp` wird nie geöffnet, denn es teilt sich alle Programme des Rechners.
 
 ### Was anders ist, und was daraus folgt
 
@@ -1532,7 +1536,8 @@ Das sind die Punkte, an denen macOS weniger bietet als Linux. Jeder ist ein Kana
    nach einer Session unter macOS, der du nicht traust, den Daemon neu (`humanitl daemon restart`).
 3. **Eine Sperrliste statt einer Erlaubnisliste fürs Lesen** (K-21). Unter Linux sieht die Sandbox
    `/usr`, `/etc/ssl` und ein paar Dateien, mit einer erzeugten `passwd` und `hosts`. Unter macOS
-   liest sie alles außerhalb von `/Users`, `/Volumes`, `/private/var/folders` und `/private/tmp`,
+   liest sie alles außerhalb von `/Users`, `/Volumes`, `/private/var/folders`, `/private/tmp` und
+   `/private/var/tmp`,
    darunter ganz `/etc`, `/Library`, `/Applications`, `/opt/homebrew` und `/usr/local/etc`. Eine
    Zugangsangabe in einer Konfigurationsdatei dort (einer Datenbank oder eines Homebrew-Dienstes)
    kann der Agent lesen, und er könnte sie ohne Anhalten an die LLM-Durchleitung schicken. Bewahre
@@ -1549,6 +1554,17 @@ Das sind die Punkte, an denen macOS weniger bietet als Linux. Jeder ist ein Kana
 5. **Seitenkanäle innerhalb des Rechners, die keinen neuen Weg nach draußen tragen** (K-23):
    POSIX-Semaphoren und Shared Memory, das Systemlog. Keiner davon verlässt den Rechner.
 
+Zwei weitere Unterschiede sind keine Kanäle; sie ändern, was ein Programm drinnen sieht, und die
+Einweisung nennt beide:
+
+- **Masken antworten mit `EPERM`.** Unter Linux ist eine maskierte Datei leer, unter macOS scheitert
+  das Öffnen, `cat .git/config` wird also verweigert. `git` funktioniert im Projekt trotzdem: Der
+  Agent nutzt das `git` der Sitzung, das im `PATH` vorn steht, während `.git/config` maskiert bleibt
+  (HUM-366). Das Profil wird dafür nicht geöffnet.
+- **Keine verschachtelte Sandbox, eine echte Identität.** `sandbox-exec` in der Sandbox scheitert,
+  ein Werkzeug mit eigener Sandbox kann sie also nicht aufbauen. `whoami` und `hostname` zeigen das
+  echte Konto und die echte Maschine; ein erzeugtes `passwd` oder `hosts` gibt es nicht.
+
 ### Was wir für macOS prüfen
 
 `tests/escape/macos/run.sh` startet einen Daemon in einem leeren Home und führt
@@ -1557,11 +1573,15 @@ Proben zusichern. Dann versucht es aus einer echten Sandbox heraus jeden Weg nac
 Profil verweigern muss, und zählt eine Probe als verweigert, wenn der Befehl fehlschlägt (die
 Zeilen des Shims sind die, die die errno nennen): direktes TCP und TLS,
 DNS, UDP, IPv6, Raw- und Routing-Sockets, `syslog` und `mDNSResponder`, einen anderen
-Loopback-Port, das Lesen des Home-Verzeichnisses, von `/Users` und der verdeckten `.env`, das
-Schreiben von `.git/hooks`, `/private/tmp` und `/Library`, das Umschreiben oder Entfernen des
+Loopback-Port, das Lesen des Home-Verzeichnisses, von `/Users`, `/private/var/tmp`, der verdeckten `.env` und von
+`.git/config`, das Schreiben von `.git/hooks`, `/private/tmp`, dem echten `/tmp` und `/Library`, ein
+verschachteltes `sandbox-exec`, das Umschreiben oder Entfernen des
 Profils, das Schreiben der Adapter-Dateien, das Umbenennen von `.git`, das Öffnen eines anderen
 Terminals. Es prüft, dass ein Hintergrundprozess mit der Sandbox endet, dass der Agent weiterhin
-ein Pseudo-Terminal anlegen kann und dass eine Anfrage durch die Tür als Flow beim Daemon ankommt
+ein Pseudo-Terminal anlegen und nach `$TMPDIR` schreiben kann, dass `git` in einem in der Sandbox
+angelegten Repository funktioniert, dass `.git/config` eines echten Repositorys verweigert bleibt,
+dass die Adapter-Dateien ankommen, dass ein nur lesbares Projekt gelesen, aber nicht beschrieben
+werden kann und dass eine Anfrage durch die Tür als Flow beim Daemon ankommt
 (dass der Proxy sie anhält, ist Gegenstand der Linux-Suite, ESC-4). Es läuft im CI-Job `macos` und im Release-Job `check-macos` gegen
 die Binaries im Disk-Image.
 

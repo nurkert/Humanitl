@@ -64,7 +64,7 @@ use humanitl_core::rule::Rule;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::agent::opencode::{
-    command_preflight, install_fix, passthrough_authority, passthrough_rule,
+    command_preflight, install_fix_for, passthrough_authority, passthrough_rule,
     placeholder_model_finding,
 };
 use crate::agent::opencode_models::DEFAULT_RULES;
@@ -97,9 +97,14 @@ pub const API_KEY_DST: &str = "/etc/humanitl/pi/llm-api-key";
 ///
 /// A global npm install lands under `/usr/local` (or `/usr` with a
 /// distribution's npm), inside the read-only `/usr` mount. The `pi.dev`
-/// installer puts pi under `$HOME`, which the sandbox does not mount.
-pub const INSTALL_COMMAND: &str =
-    "sudo npm install -g --ignore-scripts @earendil-works/pi-coding-agent";
+/// installer puts pi under `$HOME`, which the sandbox does not mount. On macOS
+/// the npm of Homebrew writes to `/opt/homebrew` as the user, and `sudo` would
+/// leave root-owned files there (HUM-377).
+pub const INSTALL_COMMAND: &str = if cfg!(target_os = "macos") {
+    "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
+} else {
+    "sudo npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
+};
 
 /// The documentation of pi; stands in `docs` of its findings.
 pub const DOCS_URL: &str =
@@ -115,14 +120,27 @@ pub const WEB_ACCESS_PACKAGE: &str = "pi-web-access";
 /// How the web extension is installed where the sandbox sees it: globally,
 /// next to pi, under the read-only `/usr` mount. `--ignore-scripts` like for
 /// pi itself: the package needs no install script.
-pub const WEB_ACCESS_INSTALL_COMMAND: &str = "sudo npm install -g --ignore-scripts pi-web-access";
+pub const WEB_ACCESS_INSTALL_COMMAND: &str = if cfg!(target_os = "macos") {
+    "npm install -g --ignore-scripts pi-web-access"
+} else {
+    "sudo npm install -g --ignore-scripts pi-web-access"
+};
 
 /// The documentation of the web extension; stands in `docs` of `AGENT_007`.
 pub const WEB_ACCESS_DOCS_URL: &str = "https://github.com/nicobailon/pi-web-access";
 
 /// Where a global npm install puts its packages, as paths in the sandbox, in
-/// the order they are searched after the directory that holds pi itself.
-pub const GLOBAL_NODE_MODULES: &[&str] = &["/usr/local/lib/node_modules", "/usr/lib/node_modules"];
+/// the order they are searched after the directory that holds pi itself. On
+/// macOS Homebrew comes first, as its `bin` does on the search path.
+pub const GLOBAL_NODE_MODULES: &[&str] = if cfg!(target_os = "macos") {
+    &[
+        "/opt/homebrew/lib/node_modules",
+        "/usr/local/lib/node_modules",
+        "/usr/lib/node_modules",
+    ]
+} else {
+    &["/usr/local/lib/node_modules", "/usr/lib/node_modules"]
+};
 
 /// The agent directory of pi.
 pub const ENV_AGENT_DIR: &str = "PI_CODING_AGENT_DIR";
@@ -332,10 +350,20 @@ fn node_preflight(ctx: &AgentContext, command: &OsStr) -> Option<Diagnostic> {
     } else {
         find_in_path(&interpreter, ctx.host_path.as_deref()).filter(|path| is_executable_file(path))
     };
+    let seatbelt = ctx.sandbox_view.seatbelt;
     let (where_host, fix) = match on_host {
         // An absolute `#!` line names the one path the kernel starts; a copy
         // of node elsewhere does not change it. Reinstalling pi with an npm
         // whose node lies under a mount writes a line the sandbox can start.
+        _ if absolute && own_program && ctx.sandbox_view.seatbelt => (
+            format!(
+                "the #! line names that absolute path, and the Seatbelt profile does not let the \
+                 sandbox read it; reinstall pi with a Node.js outside your home directory, such \
+                 as the one of Homebrew, whose npm writes a #! line the sandbox can start: \
+                 {INSTALL_COMMAND}"
+            ),
+            FixAction::CopyCommand(INSTALL_COMMAND.to_owned()),
+        ),
         _ if absolute && own_program => (
             format!(
                 "the #! line names that absolute path, and the sandbox does not mount it; \
@@ -347,9 +375,15 @@ fn node_preflight(ctx: &AgentContext, command: &OsStr) -> Option<Diagnostic> {
         // Another command than pi with such a line: copying node elsewhere
         // does not change the line, and pi's installer is not its fix.
         _ if absolute => (
-            "the #! line names that absolute path, and the sandbox does not mount it; point \
-             the line at a Node.js under one of the mounts"
-                .to_owned(),
+            if seatbelt {
+                "the #! line names that absolute path, and the Seatbelt profile does not let the \
+                 sandbox read it; point the line at a Node.js outside your home directory"
+                    .to_owned()
+            } else {
+                "the #! line names that absolute path, and the sandbox does not mount it; point \
+                 the line at a Node.js under one of the mounts"
+                    .to_owned()
+            },
             FixAction::OpenUrl(NODE_DOWNLOAD_URL.to_owned()),
         ),
         Some(node) if ctx.reaches_program(&node) => {
@@ -360,8 +394,9 @@ fn node_preflight(ctx: &AgentContext, command: &OsStr) -> Option<Diagnostic> {
                 .to_string();
             (
                 format!(
-                    "{} is mounted, but the sandbox PATH does not name {dir}",
-                    node.display()
+                    "{} is {}, but the sandbox PATH does not name {dir}",
+                    node.display(),
+                    if seatbelt { "readable" } else { "mounted" }
                 ),
                 FixAction::ChangeSetting {
                     key: "sandbox.env.PATH".to_owned(),
@@ -371,10 +406,15 @@ fn node_preflight(ctx: &AgentContext, command: &OsStr) -> Option<Diagnostic> {
         }
         Some(node) => (
             format!(
-                "{} lies on this machine where the sandbox does not mount it",
-                node.display()
+                "{} lies on this machine where the sandbox {}",
+                node.display(),
+                if seatbelt {
+                    "may not read it"
+                } else {
+                    "does not mount it"
+                }
             ),
-            FixAction::CopyCommand(install_fix(&node)),
+            FixAction::CopyCommand(install_fix_for(ctx, &node)),
         ),
         None => (
             "this machine has no Node.js in PATH either".to_owned(),
@@ -628,7 +668,7 @@ impl AgentAdapter for PiAdapter {
         // checked source as the passthrough rule (HUM-071).
         if ctx.briefing.enabled {
             let llm_host = passthrough_authority(&ctx.llm);
-            let text = briefing::render(
+            let text = briefing::render_for_session(
                 ctx.language,
                 ctx.hold.ask_mode,
                 ctx.hold.timeout_secs,
@@ -688,6 +728,17 @@ mod tests {
     use std::path::Path;
 
     use super::node_interpreter;
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn on_macos_homebrew_is_searched_and_no_fix_says_sudo() {
+        assert_eq!(
+            super::GLOBAL_NODE_MODULES.first(),
+            Some(&"/opt/homebrew/lib/node_modules")
+        );
+        assert!(!super::INSTALL_COMMAND.contains("sudo"));
+        assert!(!super::WEB_ACCESS_INSTALL_COMMAND.contains("sudo"));
+    }
 
     fn script(dir: &Path, text: &[u8]) -> std::path::PathBuf {
         let path = dir.join("pi");

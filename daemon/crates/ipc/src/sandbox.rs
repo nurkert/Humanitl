@@ -3553,14 +3553,20 @@ impl Inner {
             // Reihenfolge, die der Start selbst anwendet; eine Vorprüfung gegen
             // einen anderen PATH als den, unter dem das `exec` läuft, beantwortet
             // die falsche Frage.
-            .with_sandbox_view(humanitl_sandbox::SandboxView::of_profile(profile))
+            .with_sandbox_view(humanitl_sandbox::SandboxView::of_platform(
+                profile,
+                Some(work_src),
+            ))
             .with_sandbox_path(
-                config
-                    .sandbox
-                    .env
-                    .get("PATH")
-                    .or_else(|| profile.env.get("PATH"))
-                    .map(OsString::from),
+                humanitl_sandbox::agent::effective_sandbox_path(
+                    config
+                        .sandbox
+                        .env
+                        .get("PATH")
+                        .or_else(|| profile.env.get("PATH"))
+                        .map(String::as_str),
+                )
+                .map(OsString::from),
             )
             .with_work_dir_sandbox(profile.mounts.work.dst.clone())
             .with_llm_key(key);

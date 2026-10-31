@@ -129,7 +129,7 @@ Siehe [`docs/SECURITY.md`](docs/SECURITY.md#what-is-different-and-what-follows):
   und kann, solange der Daemon läuft, weiter Anfragen über den Proxy-Socket stellen. Bis HUM-331
   das schließt: nach einer Sitzung, der du nicht traust, `humanitl daemon restart`.
 - **K-21, Sperrliste statt Freigabeliste beim Lesen:** Die Sandbox liest alles außerhalb von
-  `/Users`, `/Volumes`, `/private/var/folders` und `/private/tmp`, darunter ganz `/etc`,
+  `/Users`, `/Volumes`, `/private/var/folders`, `/private/tmp` und `/private/var/tmp`, darunter ganz `/etc`,
   `/opt/homebrew` und `/usr/local/etc`. Zugangsdaten in einer Konfigurationsdatei dort kann der Agent
   lesen und ohne Halt an die LLM-Durchleitung schicken. Geheimnisse gehören ins Home-Verzeichnis.
 - **K-22, Seatbelt ist abgekündigt:** Getestet auf macOS 15 (CI) und benutzt auf macOS 27, andere

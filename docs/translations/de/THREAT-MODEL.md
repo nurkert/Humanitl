@@ -442,7 +442,8 @@ solchen Prozess.
 ### K-21 Lesen per Sperrliste, Pfade statt Deskriptoren auf macOS
 
 Auf Linux sieht die Sandbox nur die eingehängten Bäume. Auf macOS erlaubt das Profil, alles
-außerhalb von `/Users`, `/Volumes`, `/private/var/folders` und `/private/tmp` zu lesen, also liest
+außerhalb von `/Users`, `/Volumes`, `/private/var/folders`, `/private/tmp` und `/private/var/tmp` zu
+lesen, also liest
 Angreifer (b) ganz `/etc` (die echten `passwd` und `hosts`), `/Library`, `/Applications`,
 `/opt/homebrew` und `/usr/local/etc`. *Restrisiko:* Zugangsdaten in einer systemweiten
 Konfigurationsdatei erreichen den Agenten und über die Durchleitung den Modell-Host, ohne
