@@ -32,6 +32,14 @@
 //! held. `models.json` is read from the agent directory only, so a project
 //! cannot rewrite the base URL of the bundled provider.
 //!
+//! **The skill `humanitl` (HUM-364).** Next to the briefing the adapter
+//! places one read-only skill in `<agent-dir>/skills` ([`skill_dst`]), the
+//! fuller guidance on waiting, refusals and the meta endpoint
+//! ([`crate::agent::skill`]). It is the one exception to HUM-309's "no skills
+//! shipped by Humanitl"; no further skill, extension or MCP configuration is
+//! bundled. pi's `bash` has no default timeout, so there is no tool timeout
+//! to raise (HUM-308).
+//!
 //! **Web access (HUM-309).** pi has no web tool of its own. The npm package
 //! `pi-web-access` adds `web_search` and `fetch_content`. `pi install` would
 //! write to `~/.pi/agent` on the host, which the sandbox does not see, so the
@@ -66,7 +74,7 @@ use crate::agent::pi_config::{
 };
 use crate::agent::{
     AgentAdapter, AgentContext, Reach, SandboxFile, SandboxLookup, briefing, find_in_path,
-    is_executable_file,
+    is_executable_file, skill,
 };
 
 /// The id of the adapter as it stands in `agent.adapter`.
@@ -172,8 +180,23 @@ pub fn briefing_dst(home: &Path) -> PathBuf {
     agent_dir(home).join("AGENTS.md")
 }
 
+/// The skill `humanitl` (HUM-364), in pi's user skills directory.
+///
+/// pi 1.4.0 scans `<agent-dir>/skills` recursively for `SKILL.md`
+/// (`userDirs.skills = join(agentDir, "skills")` in its bundle) and lists
+/// name and description in the system prompt. A skill there needs no trust
+/// prompt; only the project's `.pi/skills` does.
+#[must_use]
+pub fn skill_dst(home: &Path) -> PathBuf {
+    agent_dir(home)
+        .join(skill::SKILLS_DIR_NAME)
+        .join(skill::SKILL_NAME)
+        .join(skill::SKILL_FILE_NAME)
+}
+
 /// The files the adapter creates, as paths, in the order of
-/// [`AgentAdapter::files`] without the key file.
+/// [`AgentAdapter::files`] without the key file. `briefing` is
+/// `agent.briefing.enabled` and covers the briefing and the skill.
 #[must_use]
 pub fn file_targets(home: &Path, briefing: bool, web_access: bool) -> Vec<PathBuf> {
     let mut targets = vec![models_dst(home), settings_dst(home)];
@@ -182,6 +205,7 @@ pub fn file_targets(home: &Path, briefing: bool, web_access: bool) -> Vec<PathBu
     }
     if briefing {
         targets.push(briefing_dst(home));
+        targets.push(skill_dst(home));
     }
     targets
 }
@@ -603,15 +627,29 @@ impl AgentAdapter for PiAdapter {
         // The same briefing as for OpenCode, with the host from the same
         // checked source as the passthrough rule (HUM-071).
         if ctx.briefing.enabled {
+            let llm_host = passthrough_authority(&ctx.llm);
             let text = briefing::render(
                 ctx.language,
                 ctx.hold.ask_mode,
                 ctx.hold.timeout_secs,
-                passthrough_authority(&ctx.llm).as_deref(),
+                llm_host.as_deref(),
             )?;
             files.push(SandboxFile::read_only(
                 briefing_dst(&ctx.home),
                 text.into_bytes(),
+            ));
+            // The skill belongs to the briefing (HUM-364): the briefing
+            // points to it, and switching the briefing off means no text of
+            // Humanitl in the agent at all.
+            let skill = skill::render(
+                ctx.language,
+                ctx.hold.ask_mode,
+                ctx.hold.timeout_secs,
+                llm_host.as_deref(),
+            )?;
+            files.push(SandboxFile::read_only(
+                skill_dst(&ctx.home),
+                skill.into_bytes(),
             ));
         }
         Ok(files)

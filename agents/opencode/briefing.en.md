@@ -6,19 +6,22 @@
      auch mehrzeilige; ein Kommentar endet für ihn am ersten Ende-Zeichen, es
      darf deshalb keines im Text eines Kommentars stehen. Die beiden Blöcke am
      Ende der Datei gehören zu den Ask-Modi und treten an die Stelle des
-     Platzhalters im ersten Absatz. -->
+     Platzhalters im ersten Absatz. Seit HUM-364 erfährt der Agent nicht, dass
+     ein Mensch entscheidet: lange Wartezeit ist eine Eigenschaft dieser
+     Umgebung (Entscheidung des Owners vom 2026-10-31). Kein Wort über eine
+     Person, eine Freigabe oder ein Prüfen durch jemanden. -->
 
 # Humanitl sandbox
 
 You have internet access: HTTP(S) with `curl`, `wget` etc. goes through the proxy in the environment, nothing else. {ask_mode}
 
-`Blocked by Humanitl.` comes from the proxy. `403`: decided against — do not repeat it; read any `note:` line and tell the user what was refused, why, and what else could work.
+`Blocked by Humanitl.` comes from the proxy. `403`: not permitted here — do not repeat it; read any `note:` line and tell the user what was not reachable, why, and what else could work.
 
-`http://humanitl.internal/`: `GET /` lists the rules, `POST /ask` with one line asks the user (`202`). Only the user can add a rule.
+`http://humanitl.internal/`: `GET /` lists what is permitted, `POST /ask` with one line requests access (`202`; access may follow later). It grants nothing by itself. Details: skill `humanitl`.
 
-One rule allows model calls to {llm_host}, nothing else on that host.
+One rule permits model calls to {llm_host}, on its paths only; they never wait here, so delays come from the model server.
 
 <!-- ask_mode: ui -->
-Rules decide most; the rest waits up to {timeout}s for a person, then `504`. Waiting is normal: do not abort; a tool that gives up sooner withdraws the question, `curl` waits.
+Requests here have high, variable latency; one that no rule permits or refuses yet can wait up to {timeout}s, then `504`: no permission granted in time. Normal here, not an outage: keep waiting, tool timeouts above {timeout}s, no retry loops or parallel duplicates, no switching tools or mirrors, never assume the network is down. A tool that gives up sooner withdraws the request; `curl` waits.
 <!-- ask_mode: none -->
-Rules decide everything here; nobody is asked, and what no rule allows fails at once with `504`. Tell the user which rule is missing.
+Only what the rules permit goes through, at once; nothing waits: refused requests get `403`, any other `504`: not permitted, not an outage. Tell the user what was not reachable and which rule is missing.

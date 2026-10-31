@@ -11,6 +11,7 @@ hier gelesen und nichts nachgeladen.
 | `tui.json.tmpl` | `~/.config/opencode/tui.json` | Tastenbelegung der Oberfläche: `Ctrl+C` beendet OpenCode nicht (HUM-353) |
 | `models.json` | `/etc/humanitl/opencode/models.json` | Ersatz für den Modellkatalog, den OpenCode sonst aus dem Netz holt |
 | `briefing.en.md`, `briefing.de.md` | `~/.config/opencode/AGENTS.md` | Die Einweisung des Agenten, in der Sprache aus `ui.language` |
+| `../skill/SKILL.en.md`, `../skill/SKILL.de.md` | `~/.config/opencode/skills/humanitl/SKILL.md` | Der Skill `humanitl` mit der ausführlichen Fassung, für OpenCode und pi gemeinsam (HUM-364) |
 | `update-models.sh` | — | Entwickler-Werkzeug, das das Schema-Skelett gegen die echte Quelle abgleicht |
 
 ## Warum eine gebündelte `models.json`
@@ -140,8 +141,9 @@ zurückzieht und `curl` wartet.
 
 ## Die Einweisung des Agenten
 
-`briefing.{en,de}.md` sind der einzige Text, den Humanitl dem Agenten mitgibt
-(ADR-0014, HUM-071). Er landet als `~/.config/opencode/AGENTS.md` in der
+`briefing.{en,de}.md` sind der Text, den Humanitl dem Agenten in jedes
+Kontextfenster legt (ADR-0014, HUM-071); die ausführliche Fassung steht im Skill
+`humanitl` (siehe unten). Er landet als `~/.config/opencode/AGENTS.md` in der
 Sandbox und **nie** unter `/work`: OpenCode liest die `AGENTS.md` des Projekts
 zusätzlich, und eine Datei, die Humanitl dort ablegte, stünde im Diff des
 Nutzers und irgendwann in einem fremden Repository. `agent.briefing.enabled =
@@ -179,6 +181,11 @@ Aussage für Aussage mit dem Beleg im Code — einschließlich des Meta-Endpunkt
 `http://humanitl.internal/` (HUM-073) und seiner Grenze: `POST /ask` legt dem
 Nutzer eine Bitte vor und legt nie eine Regel an.
 
+Seit HUM-364 erfährt der Agent nicht, dass ein Mensch entscheidet
+(Entscheidung des Owners vom 2026-10-31): Die Wartezeit steht als hohe,
+schwankende Latenz der Umgebung da, `403` als „hier nicht erlaubt", `504` nach
+der Frist als „keine Erlaubnis rechtzeitig", `POST /ask` als Antrag auf Zugang.
+
 Drei Platzhalter werden beim Start ersetzt: `{ask_mode}` durch den Block, der
 zu `hold.ask_mode` passt, `{timeout}` durch `hold.timeout_secs` und
 `{llm_host}` durch Host und Port der Durchreiche. Der Host kommt aus
@@ -186,6 +193,24 @@ zu `hold.ask_mode` passt, `{timeout}` durch `hold.timeout_secs` und
 Durchreichregel; entsteht dort keine Regel, fällt die ganze Zeile weg.
 HTML-Kommentare entfernt der Renderer; ein Kommentar endet dabei am ersten
 `-->`, es darf deshalb keines im Text eines Kommentars stehen.
+
+## Der Skill `humanitl` (HUM-364)
+
+`agents/skill/SKILL.{en,de}.md` ist der eine Skill, den Humanitl mitliefert; er
+kehrt die Haltung „keine Skills von Humanitl" aus HUM-309 für genau diesen Text
+um. OpenCode 1.18.31 sucht globale Skills in jedem Konfigurationsverzeichnis
+unter `{skill,skills}/**/SKILL.md`, das erste ist `$XDG_CONFIG_HOME/opencode`;
+der Adapter legt ihn deshalb nur lesbar nach
+`~/.config/opencode/skills/humanitl/SKILL.md`. Geprüft mit
+`opencode debug skill` in einem leeren, temporären Heimatverzeichnis: der
+Skill erscheint mit Name, Beschreibung und Ort. Das Modell sieht nur Name und
+Beschreibung und lädt den Text, wenn eine Anfrage langsam ist, scheitert,
+abgelehnt oder blockiert wird, oder vor netzlastiger Arbeit.
+
+Der Skill trägt die Platzhalter des Briefings und dazu `{max_time}`
+(`hold.timeout_secs` plus 60 Sekunden, der Vorschlag für `curl --max-time`).
+Er kommt und geht mit `agent.briefing.enabled`. Die Belege für jede Aussage
+stehen im Modulkommentar von `daemon/crates/sandbox/src/agent/skill.rs`.
 
 ## Wie `models.json` erneuert wird
 
