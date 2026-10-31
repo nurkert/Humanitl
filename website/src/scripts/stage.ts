@@ -153,6 +153,9 @@ const norm = ([x, y, z]: Vec): Vec => {
 };
 const dot = (a: Vec, b: Vec) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
+// Bis hierher reicht der Nebel im Morph (HUM-341).
+const FOG_END = 0.3;
+
 // Weltlicht: oben vorn leicht links, fest im Raum.
 const LIGHT = norm([-0.3, -0.85, 0.45]);
 const LIGHT_FLAT = norm([LIGHT[0], 0, LIGHT[2]]);
@@ -308,6 +311,11 @@ function init(scene: HTMLElement) {
   const heroText = scene.querySelector<HTMLElement>("[data-hero]")!;
   const actions = scene.querySelector<HTMLElement>("[data-hero-actions]")!;
   const spot = scene.querySelector<HTMLElement>("[data-spot]")!;
+  // Nebel (HUM-341): Tiefe je Ebene für die Parallaxe, vorn bewegt sich mehr.
+  const fog = scene.querySelector<HTMLElement>("[data-fog]")!;
+  const fogDepth: Record<string, number> = { far: 0.25, rays: 0.6, near: 0.9 };
+  const fogLayers = [...fog.querySelectorAll<HTMLElement>("[data-fog-layer]")];
+  let fogGone = false;
   const hit = scene.querySelector<HTMLElement>("[data-hit]")!;
   const deck = scene.querySelector<HTMLElement>("[data-deck]")!;
   const cap = scene.querySelector<HTMLElement>("[data-cap]")!;
@@ -1707,6 +1715,32 @@ function init(scene: HTMLElement) {
     );
     put(spot, "opacity", lerp(1, 0.8, m).toFixed(3));
 
+    // Der Nebel gehört zum Anfang: er kommt mit dem Einflug und ist bei m = 0,3 ganz weg.
+    // Danach liegt er nicht mehr im Layout und belegt keine Ebenen.
+    const fogOff = m >= FOG_END;
+    if (fogOff !== fogGone) {
+      fogGone = fogOff;
+      fog.hidden = fogOff;
+    }
+    if (!fogOff) {
+      const fogIn = reduced ? 1 : introT0 < 0 ? 0 : clamp(tIntro / 1800);
+      put(
+        fog,
+        "opacity",
+        (fogIn * (1 - smoothstep(map(m, 0, FOG_END)))).toFixed(3),
+      );
+      for (const layer of fogLayers) {
+        const depth = fogDepth[layer.dataset.fogLayer!];
+        // Die Strahlen hängen wie der Lichtkegel an der Bühne, der Nebel nur an ihrer Fahrt.
+        const x = depth === fogDepth.rays ? G.cx : G.cx - lay.hero.cx;
+        put(
+          layer,
+          "transform",
+          `translate3d(${(depth * x).toFixed(1)}px, ${(depth * (G.cy - lay.hero.cy)).toFixed(1)}px, 0)`,
+        );
+      }
+    }
+
     // Überschrift und Lede gehen schneller als das Rig nach oben: Kran-Parallaxe.
     put(heroText, "opacity", (1 - easeOutQuad(map(m, 0, 0.38))).toFixed(3));
     put(
@@ -1797,6 +1831,34 @@ function init(scene: HTMLElement) {
     if (!frame) frame = requestAnimationFrame(render);
   }
 
+  // Der Zeiger schiebt die Ebenen um wenige Pixel; den weichen Lauf macht eine Transition auf
+  // translate. Ganze Pixel und höchstens ein Schreiben je Bild halten das billig.
+  let fogPointer = 0;
+  let fogX = 0;
+  let fogY = 0;
+  if (!reduced && window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
+    window.addEventListener(
+      "pointermove",
+      (event) => {
+        fogX = event.clientX / vw - 0.5;
+        fogY = event.clientY / vh - 0.5;
+        if (fogPointer || lite || fogGone) return;
+        fogPointer = requestAnimationFrame(() => {
+          fogPointer = 0;
+          for (const layer of fogLayers) {
+            const depth = fogDepth[layer.dataset.fogLayer!];
+            put(
+              layer,
+              "translate",
+              `${Math.round(-28 * depth * fogX)}px ${Math.round(-16 * depth * fogY)}px`,
+            );
+          }
+        });
+      },
+      { passive: true },
+    );
+  }
+
   // ---- Scrollen -------------------------------------------------------------------
 
   function read() {
@@ -1814,7 +1876,14 @@ function init(scene: HTMLElement) {
       // Liegt die fertige Bühne weit unterhalb des Bildes, und dreht sich nichts mehr, gibt
       // es nichts zu malen: kein Bild je Scroll-Ereignis für eine unsichtbare Bühne.
       const past = window.scrollY - sceneTop - scene.offsetHeight > vh;
-      if (past && m >= 1 && !springOn && !dragging) return;
+      if (past && m >= 1 && !springOn && !dragging) {
+        // Ein Sprung am Morph vorbei: ohne Bild käme der Nebel sonst nie aus dem Layout.
+        if (!fogGone) {
+          fogGone = true;
+          fog.hidden = true;
+        }
+        return;
+      }
       schedule();
     },
     { passive: true },
@@ -2012,6 +2081,29 @@ function init(scene: HTMLElement) {
   read();
   m = reduced ? (mRaw >= 0.5 ? 1 : 0) : mRaw;
   deck.inert = true;
+  if (!reduced) fog.dataset.drift = "";
+  // Jede Ebene kommt, sobald ihr Bild dekodiert ist; der Einflug wartet nicht darauf.
+  for (const layer of fogLayers) {
+    layer
+      .querySelector("img")!
+      .decode()
+      .catch(() => undefined)
+      .then(() => {
+        layer.dataset.ready = "";
+      });
+  }
+  // Ausgelaufen: Pose festschreiben, Animation und Ebenen-Hinweis entfernen.
+  fog.addEventListener("animationend", (event) => {
+    const img = event.target as HTMLElement;
+    for (const animation of img.getAnimations()) {
+      animation.commitStyles();
+      animation.cancel();
+    }
+    img.closest<HTMLElement>("[data-fog-layer]")!.dataset.rest = "";
+  });
+  const fogPause = () => fog.toggleAttribute("data-paused", document.hidden);
+  document.addEventListener("visibilitychange", fogPause);
+  fogPause();
   fillLayer(layers[0], 0);
   hideLayer(layers[1]);
   wins.forEach((win, i) =>

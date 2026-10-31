@@ -36,6 +36,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-348 | Landing: wenige Scheiben seitlich geneigt mit sichtbarer Tiefe, Licht wie geschliffenes Glas | M | HUM-347 |
 | HUM-359 | Website: Aussagen, die Code und Doku nicht decken, und falsche Sprachlinks | S | HUM-333, HUM-345, HUM-346 |
 | HUM-358 | Startseite: sechs Sektionen unter dem Karussell, die erklären, überzeugen und die Unterseiten anteasern | M | HUM-333, HUM-345, HUM-359 |
+| HUM-341 | Landing: dezenter Nebel mit Lichtstrahlen hinter den Fenstern | S | HUM-334, HUM-348 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -494,3 +495,31 @@ Folge-Kandidaten:
 - Echte Messung der Halte pro Lauf, um die Sektion zum Alltag zu belegen.
 - Ein Bildschirm der Regeln mit gespeicherten eigenen Regeln; die vorhandene Aufnahme zeigt nur die mitgelieferten.
 - Satz zum externen Audit, zu Cloud-Modellen und zur APT-Signatur, sobald der Inhaber entschieden hat.
+
+## HUM-341 · Landing: dezenter Nebel mit Lichtstrahlen hinter den Fenstern
+
+### Kontext
+
+Wunsch des Inhabers: ganz am Anfang der Startseite etwas leicht beleuchteter Nebel mit Lichtstrahlen. Fenster und Überschrift bleiben der Blickfang, der Raum bleibt dunkel. Die Bühne bewegt pro Bild nur `transform` und `opacity`; dabei bleibt es.
+
+### Spezifikation
+
+- Drei vorgerechnete Ebenen in `website/src/assets/fog/` (`far`, `rays`, `near`), erzeugt von `website/scripts/generate-fog.mjs` aus festem Rauschen mit `sharp`, von Hand und nicht im Build. Die Strahlen folgen `LIGHT` aus `website/src/scripts/stage.ts`. Ausgeliefert über `Picture` als AVIF mit WebP als Rückfall.
+- Die Ebenen liegen in `.sky`, also hinter den Fenstern und vor dem Hintergrund. Die Stärke hängt an `--fog-far`, `--fog-near` und `--fog-rays`.
+- Eine einmalige CSS-Animation auf `transform` und `opacity` lässt die Ebenen 24 Sekunden im Compositor driften und weich auslaufen; danach hält die letzte Pose ohne Animation und ohne `will-change`, bei verborgenem Dokument pausiert sie. Der Zeiger verschiebt sie über `translate` mit Transition, der Morph über `transform`. Kein Filter, kein Canvas, kein Blend-Modus.
+- Die Bilder laden sofort mit `fetchpriority="low"`. Jede Ebene blendet auf, sobald ihr Bild dekodiert ist; der Einflug wartet nicht darauf.
+- Der Nebel kommt mit dem Einflug, ist bei `m = 0,3` ganz ausgeblendet und liegt danach nicht mehr im Layout, auch nach einem Sprung am Morph vorbei.
+- Bei reduzierter Bewegung steht er still. Mit `data-lite` entfallen Drift, Zeiger und die Anzeige der vorderen Ebene; ihr Bild (rund 4 KB) lädt trotzdem, weil es sonst ein Inline-Skript bräuchte, das die CSP verbietet. Ohne Skript steht er still über dem ersten Bild.
+
+### Akzeptanzkriterien
+
+- `npx astro build`, `npm test` und `npm run check-links` sind grün.
+- Jede ausgelieferte AVIF-Datei ist kleiner als 60 KB.
+- Während der Drift ohne Eingabe gibt es weder Paint noch Layout noch rAF.
+- Nach dem Auslaufen läuft keine Animation mehr, und die Leerlauflast aller Browserprozesse liegt nahe am Stand ohne Nebel.
+- Von 320 px bis 3440 px gibt es keinen waagrechten Scroll der Seite.
+- Der Kontrast der Lede bleibt über 4,5:1 gegen den hellsten Hintergrund unter ihr.
+
+Folge-Kandidaten:
+
+- Ein helles Thema braucht dunkle Fassungen der Bilder; die Tokens regeln nur die Stärke, die Farbe steckt im Bild.
