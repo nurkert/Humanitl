@@ -52,6 +52,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-372 | macOS: App und CLI nennen, was dort wirklich läuft | M | HUM-324, HUM-325, HUM-327 |
 | HUM-377 | macOS: kleinere Lücken der Sandbox | M | HUM-323, HUM-324 |
 | HUM-374 | macOS: Wegwerf-Sandbox auf einem APFS-Klon | L | HUM-323, HUM-350, HUM-357 |
+| HUM-376 | macOS: Sandbox-Bildschirm und `sandbox argv` zeigen, was wirklich läuft | M | HUM-323, HUM-330 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -792,3 +793,19 @@ Folge-Kandidaten:
 - `tests/escape/macos/run.sh` um einen Wegwerf-Lauf ergänzen, damit Masken und Versiegelung in der CI laufen.
 - Eine Größengrenze für den Klon, die nicht das ganze Volume misst.
 - Eine Schicht auf dem Volume des Projekts, damit Projekte auf externen APFS-Volumes einen Klon bekommen.
+
+## HUM-376 · macOS: Sandbox-Bildschirm und `sandbox argv` zeigen, was wirklich läuft
+
+Unter Seatbelt zeigten CLI und App bisher die bwrap-Sicht: eine Zeile, die auf macOS nie läuft, und Aussagen, die dort nicht gelten. Beide zeigen künftig, was wirklich gestartet wird.
+
+Akzeptanz:
+
+- `Status.argv_preview`, `Sandbox(Argv)` und die CLI nennen unter macOS die `sandbox-exec`-Zeile, `Status.policy_text` trägt `sandbox.sb`.
+- Die Vorschau hat keine Seiteneffekte und setzt für das, was erst beim Start feststeht, die Platzhalter `SESSION_PORT`, `AGENT_PORT`, `STATUS_FD` und `REPORT_FD` ein.
+- Zeile, Profil und Umgebung der Vorschau gleichen dem Plan Byte für Byte, bis auf diese Platzhalter; ein Test hält das fest.
+- Die Tabelle kommt aus `SeatbeltPolicy` und nutzt `MOUNT_MODE_DENIED` und `Mount.profile_path`.
+- Die Umgebung zeigt echte Werte, was nicht zugeordnet werden kann, bleibt zurückgehalten.
+- `sandbox.run` steht neben dem Alias `sandbox.bwrap`.
+- `backend` meldet immer das echte Backend. Profile setzen `backend = "auto"`, `bwrap` bleibt gültig, `seatbelt` nur auf macOS, alles andere ist `CONFIG_003`.
+- `PROTO_MINOR` steigt auf 28.
+- Die App sagt unter Seatbelt nicht mehr „sieht nur /work"; unter Linux bleibt ihr Text unverändert.

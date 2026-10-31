@@ -767,6 +767,8 @@ fn under_sandbox_the_profile_flag_always_names_the_bwrap_profile() {
     // das der Normalfall und kein Fehler.
     let output = harness.run(["--profile", "test", "sandbox", "argv"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
+    // Unter Seatbelt nennt das Profil nur Ordner, die es gibt (HUM-376).
+    #[cfg(not(target_os = "macos"))]
     assert!(
         stdout(&output).contains("/tests/escape"),
         "the test profile is the one that mounts the escape directory: {}",
@@ -785,6 +787,7 @@ fn under_sandbox_the_profile_flag_always_names_the_bwrap_profile() {
     .expect("the session profile");
     let output = harness.run(["--profile", "test", "sandbox", "argv"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
+    #[cfg(not(target_os = "macos"))]
     assert!(
         stdout(&output).contains("/tests/escape"),
         "a session profile of the same name must not change what sandbox means: {}",
@@ -1109,11 +1112,28 @@ fn sandbox_argv_needs_no_daemon_and_no_bwrap_files() {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let value: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("JSON");
     assert_eq!(value["profile"], "default");
+    #[cfg(not(target_os = "macos"))]
     assert!(
         value["argv_line"].as_str().is_some_and(|line| {
             line.contains("--unshare-net") && line.contains("--cap-drop ALL")
         })
     );
+    // Was unter macOS wirklich läuft, keine Zeile der Linux-Sandbox (HUM-376).
+    #[cfg(target_os = "macos")]
+    {
+        assert_eq!(value["backend"], "seatbelt");
+        let line = value["argv_line"].as_str().expect("an argv line");
+        assert!(line.starts_with("/usr/bin/sandbox-exec -f "), "{line}");
+        assert!(!line.contains("--unshare"), "{line}");
+        let policy = value["policy"].as_str().expect("the profile");
+        assert!(policy.contains("(deny default)"), "{policy}");
+        let rules = value["rules"].as_array().expect("the table");
+        assert!(
+            rules
+                .iter()
+                .any(|rule| { rule["access"] == "write" && rule["profile_paths"][0] == "/work" })
+        );
+    }
 }
 
 #[test]
@@ -2140,6 +2160,8 @@ fn an_ignored_sigint_of_the_launcher_does_not_reach_the_agent() {
     );
 }
 
+// Unter macOS steht die Umgebung nicht in der Zeile von `sandbox-exec`.
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn sandbox_env_from_the_config_reaches_the_argv() {
     // HUM-045: `FixAction::SetEnv` schreibt nach `sandbox.env`. Der Knopf ist
@@ -5735,11 +5757,28 @@ fn argv_from(harness: &Harness, cwd: &Path, flags: &[&str]) -> Output {
 }
 
 /// Ob die Kommandozeile `dir` als `/work` einhängt.
+#[cfg(not(target_os = "macos"))]
 fn mounts_as_work(output: &Output, dir: &Path) -> bool {
     let parts = shlex::split(stdout(output).trim()).expect("one shell command");
     parts
         .windows(2)
         .any(|pair| pair[0] == dir.display().to_string() && pair[1] == "/work")
+}
+
+/// Ob die Kommandozeile in `dir` arbeitet; unter macOS gibt es kein `/work`,
+/// und unter der Zeile steht das Profil (HUM-376). Getrennt wird an dessen
+/// Anfang: Die Zeile selbst darf gequotete Zeilenumbrüche enthalten.
+#[cfg(target_os = "macos")]
+fn mounts_as_work(output: &Output, dir: &Path) -> bool {
+    let text = stdout(output);
+    let (line, _) = text
+        .split_once("\n\n;; Humanitl Seatbelt profile")
+        .expect("line and profile");
+    let parts = shlex::split(line).expect("one shell command");
+    let dir = dir.canonicalize().expect("the folder exists");
+    parts
+        .windows(2)
+        .any(|pair| pair[0] == "--chdir" && pair[1] == dir.display().to_string())
 }
 
 /// Nach einer Wahl im Setup läuft `humanitl sandbox run` aus `~` in dem

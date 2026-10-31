@@ -237,6 +237,65 @@ void main() {
     }
   });
 
+  testWidgets('under Seatbelt the sheet and the table show what runs', (
+    WidgetTester tester,
+  ) async {
+    const String policy = '(version 1)\n(deny default)\n';
+    final _SeatbeltClient client = _SeatbeltClient();
+    client.sandbox = client.sandbox.copyWith(
+      backend: 'seatbelt',
+      argvPreview: '/usr/bin/sandbox-exec -f /x/sandbox.sb /x/shim',
+      policyText: policy,
+      mounts: const <MountEntry>[
+        MountEntry(dst: '/', src: '/', mode: MountMode.ro),
+        MountEntry(dst: '/Users', src: '/Users', mode: MountMode.denied),
+        MountEntry(
+          dst: '/Users/nik/proj',
+          src: '/Users/nik/proj',
+          mode: MountMode.rw,
+          origin: ValueOrigin.session,
+          profilePath: '/work',
+        ),
+      ],
+    );
+    await pumpSandbox(tester, client: client);
+
+    await openTab(tester, 'sandbox-tab-mounts');
+    expect(
+      find.byKey(const ValueKey<String>('mount-/Users/nik/proj')),
+      findsOneWidget,
+    );
+    expect(find.text('/work'), findsOneWidget);
+    expect(find.text('no access'), findsOneWidget);
+    expect(find.text('In the sandbox'), findsNothing);
+    expect(find.textContaining('sandbox backend: seatbelt'), findsOneWidget);
+    expect(find.textContaining('sees only /work'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('sandbox-show-argv')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(
+      tester.widget<Text>(find.byKey(const Key('sandbox-argv-text'))).data,
+      startsWith('/usr/bin/sandbox-exec'),
+    );
+    expect(
+      tester.widget<Text>(find.byKey(const Key('sandbox-policy-text'))).data,
+      policy,
+    );
+    expect(find.byKey(const Key('sandbox-policy-copy')), findsOneWidget);
+  });
+
+  testWidgets('under bubblewrap the sheet has no profile', (
+    WidgetTester tester,
+  ) async {
+    await pumpSandbox(tester, client: SandboxTestClient());
+    await tester.tap(find.byKey(const Key('sandbox-show-argv')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.byKey(const Key('sandbox-policy-text')), findsNothing);
+    expect(find.byKey(const Key('sandbox-policy-copy')), findsNothing);
+  });
+
   testWidgets('workdir_picker_disabled_while_running', (
     WidgetTester tester,
   ) async {
@@ -427,5 +486,17 @@ class HButtonFinder {
       }
     }
     return false;
+  }
+}
+
+/// A daemon whose plan comes from the Seatbelt backend: the fake would answer
+/// with its bubblewrap table.
+class _SeatbeltClient extends SandboxTestClient {
+  @override
+  Stream<SandboxUpdate> planSandbox({
+    String? profile,
+    WorkMode? workMode,
+  }) async* {
+    yield SandboxUpdate.status(sandbox);
   }
 }

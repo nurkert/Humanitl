@@ -74,7 +74,8 @@ message Info {
   uint32 proto_major = 2;
   // Minor der Proto. Steigt bei additiven Aenderungen.
   uint32 proto_minor = 3;
-  // Zum Beispiel `sandbox.bwrap`, `proxy.h1`, `proxy.h2`, `findings.regex`.
+  // Zum Beispiel `sandbox.run`, `proxy.h1`, `proxy.h2`, `findings.regex`.
+  // Der alte Name von `sandbox.run` bleibt als Alias, auch unter macOS (HUM-376).
   repeated string capabilities = 4;
   // Aktuelle Session, leer wenn keine laeuft.
   string session_id = 5;
@@ -1131,6 +1132,9 @@ enum MountMode {
   MOUNT_MODE_DEV = 6;
   // `--symlink`: ein Verweis, kein Mount.
   MOUNT_MODE_SYMLINK = 7;
+  // Unter Seatbelt: Das Profil verbietet Lesen und Schreiben. Ein Pfad ohne
+  // Einhaengung, nur eine Regel (HUM-376).
+  MOUNT_MODE_DENIED = 8;
 }
 
 // Woher ein Mount oder eine Umgebungsvariable stammt.
@@ -1164,6 +1168,11 @@ message Mount {
   // anderen Modus. Ein eigenes Feld, weil das Ziel eines Verweises innerhalb
   // der Sandbox liegt und kein Wirtspfad ist.
   string link_target = 5;
+  // Unter Seatbelt gibt es keine eigene Sicht auf das Dateisystem: `dst` und
+  // `src` sind derselbe echte Pfad, und die Namen, unter denen die Profildatei
+  // ihn fuehrt (`/work`, `/tmp`), stehen hier, durch `, ` getrennt. Leer, wo
+  // die Datei ihn nicht nennt, und immer unter Linux (HUM-376).
+  string profile_path = 6;
 }
 
 // Eine Umgebungsvariable, die die Sandbox setzt.
@@ -1349,6 +1358,12 @@ message SandboxEvent {
     // sein Endpunkt. Fehlt, wenn kein gespeicherter Server gilt, und bei
     // einem Daemon vor Minor 28.
     LlmServerChoice llm_server = 18;
+    // Das Regelwerk, das die Sandbox wirklich begrenzt, wenn das Backend eines
+    // hat: unter Seatbelt der Text von `sandbox.sb`. Leer unter Linux, dort
+    // sagt `argv_preview` alles, und im Schnappschuss eines Befunds. Was erst
+    // der Start festlegt, steht als `SESSION_PORT` und `AGENT_PORT` darin
+    // (HUM-376).
+    string policy_text = 19;
   }
 
   // Eine Zeile aus dem Log der Sandbox.

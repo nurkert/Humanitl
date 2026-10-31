@@ -1522,5 +1522,17 @@
   "sandboxLlmServerHint": "Der Modellverkehr dieser Sitzung geht an den gespeicherten Server {name}, und nur dieser Server bekommt seinen Zugangsschlüssel.",
   "sandboxLlmServerHintProject": "Die Projektdatei {path} wählt den gespeicherten Server {name} für diese Sitzung. Nur dieser Server bekommt seinen Zugangsschlüssel. Ein Projekt kann nur unter den Servern wählen, die du gespeichert hast.",
   "sandboxLlmServerMissing": "Kein gespeicherter Server heißt {name}. Der Start wird abgelehnt, bis du ihn in den Einstellungen speicherst oder die Wahl entfernst.",
-  "settingsServerProfiles": "Gewählt von Profil {names}"
+  "settingsServerProfiles": "Gewählt von Profil {names}",
+  "sandboxMountModeDenied": "kein Zugriff",
+  "sandboxPolicySentence": "Der Agent arbeitet in {hostPath} ({mode}). Den Rest des Systems kann er lesen, aber nicht /Users, /Volumes oder die temporären Ordner, und außerhalb dieser Sitzung schreibt er nichts.",
+  "sandboxPolicyNote": "Die Tabelle stammt aus dem Seatbelt-Profil, das wirklich läuft. Netz: nur der Socket zu Humanitl und die zwei Loopback-Ports dieser Sitzung. Das Profil selbst steht beim exakten Befehl.",
+  "sandboxPolicyColPath": "Pfad",
+  "sandboxPolicyColProfilePath": "In der Profildatei",
+  "sandboxPolicyBackendCount": "{count} · Sandbox-Backend: {backend}",
+  "sandboxPolicyArgvHint": "Dieser Befehl startet die Sandbox, das Profil darunter begrenzt sie, und die Tabelle stammt aus diesem Profil. SESSION_PORT, AGENT_PORT, STATUS_FD und REPORT_FD legt erst der Start fest.",
+  "sandboxPolicyTitle": "Seatbelt-Profil (sandbox.sb)",
+  "sandboxPolicyCopy": "Profil kopieren",
+  "sandboxPolicySentenceNoWork": "Es ist noch kein Projektordner gesetzt; der Agent erreicht nichts von deiner Arbeit.",
+  "sandboxStopBodyPolicy": "Der Agent läuft. Ein Stopp beendet seine Session; nicht gesicherte Arbeit in seinem Terminal geht verloren. Die Dateien im Projektordner bleiben.",
+  "settingsWorkDirHelpPolicy": "Der Agent arbeitet hier unter dem echten Pfad. Ohne ihn der Ordner, in dem Humanitl startet."
 }

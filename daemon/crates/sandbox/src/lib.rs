@@ -152,7 +152,10 @@ pub use crate::handle::{
     SandboxHandle, StatusSnapshot, Termination,
 };
 pub use crate::launcher::{CheckResult, IsolationCheck, LaunchPlan, SandboxBackend, StdioMode};
-pub use crate::seatbelt::SeatbeltBackend;
+pub use crate::seatbelt::{
+    PREVIEW_AGENT_PORT, PREVIEW_REPORT_FD, PREVIEW_SESSION_PORT, PREVIEW_STATUS_FD, PolicyAccess,
+    PolicyRow, PolicySource, SeatbeltBackend, SeatbeltPreview,
+};
 
 /// Das Sandbox-Backend dieses Systems: Seatbelt unter macOS, sonst bwrap
 /// (HUM-323). Daemon und Kommandozeile sprechen nur diesen Typ an.
@@ -163,6 +166,19 @@ pub type PlatformBackend = SeatbeltBackend;
 /// (HUM-323). Daemon und Kommandozeile sprechen nur diesen Typ an.
 #[cfg(not(target_os = "macos"))]
 pub type PlatformBackend = BwrapBackend;
+
+/// Der Name des Backends dieses Systems, auch dort, wo gar keins gebaut wurde
+/// (der Schnappschuss eines Befunds): derselbe wie
+/// [`SandboxBackend::name`] von [`PlatformBackend`] (HUM-376).
+pub const PLATFORM_BACKEND_NAME: &str = if cfg!(target_os = "macos") {
+    "seatbelt"
+} else {
+    "bwrap"
+};
+
+/// Der Wert von `sandbox.backend`, der das Backend dem System überlässt
+/// (HUM-376).
+pub const AUTO_BACKEND: &str = "auto";
 pub use crate::os_release::{
     OS_RELEASE_FALLBACK_PATH, OS_RELEASE_PATH, PackageManager, install_command,
 };

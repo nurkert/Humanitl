@@ -43,7 +43,7 @@ use humanitl_core::shell::shell_path;
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
-use std::os::fd::{AsRawFd as _, OwnedFd};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
@@ -132,6 +132,13 @@ pub const MACH_SERVICES: &[&str] = &[
     "com.apple.cfprefsd.daemon",
     "com.apple.cfprefsd.agent",
 ];
+
+mod preview;
+
+pub use preview::{
+    PREVIEW_AGENT_PORT, PREVIEW_REPORT_FD, PREVIEW_SESSION_PORT, PREVIEW_STATUS_FD, PolicyAccess,
+    PolicyRow, PolicySource, SeatbeltPreview,
+};
 
 /// Die Abbildung der Sandbox-Pfade des Profils auf echte Pfade.
 ///
@@ -1149,6 +1156,29 @@ exec {real} "$@"
     )
 }
 
+/// Das echte Git auf dem Suchpfad.
+fn git_program() -> Option<PathBuf> {
+    SEARCH_PATH
+        .split(':')
+        .map(|dir| Path::new(dir).join("git"))
+        .find(|path| path.is_file())
+}
+
+/// Ob die Sitzung ihr eigenes `git` bekommt ([`place_git`]).
+fn git_applies(work: &Path, masked: &[PathBuf]) -> bool {
+    let real = work.join(".git");
+    real.is_dir() && masked.contains(&real.join("config")) && git_program().is_some()
+}
+
+/// Setzt `bin` vor den Suchpfad der Umgebung.
+fn prepend_to_path(env: &mut [(String, String)], bin: &Path) {
+    for (key, value) in env {
+        if key == "PATH" {
+            *value = format!("{}:{value}", bin.display());
+        }
+    }
+}
+
 /// Macht Git im Projekt benutzbar, obwohl `.git/config` maskiert ist (HUM-366).
 ///
 /// Unter Linux liegt über der Datei eine leere; Seatbelt kann nur verbieten,
@@ -1166,14 +1196,10 @@ fn place_git(
     masked: &[PathBuf],
 ) -> Result<Option<PathBuf>, Diagnostic> {
     let real = work.join(".git");
-    if !real.is_dir() || !masked.contains(&real.join("config")) {
+    if !git_applies(work, masked) {
         return Ok(None);
     }
-    let Some(program) = SEARCH_PATH
-        .split(':')
-        .map(|dir| Path::new(dir).join("git"))
-        .find(|path| path.is_file())
-    else {
+    let Some(program) = git_program() else {
         return Ok(None);
     };
     let shadow = layout.git();
@@ -1340,11 +1366,7 @@ impl SandboxBackend for SeatbeltBackend {
             agent_port.to_string(),
         ));
         if let Some(bin) = git_bin {
-            for (key, value) in &mut env {
-                if key == "PATH" {
-                    *value = format!("{}:{value}", bin.display());
-                }
-            }
+            prepend_to_path(&mut env, &bin);
         }
         let shells = self.shell_seed(&layout, &shim, &work, &env);
 
@@ -1430,7 +1452,7 @@ fn session_env(
     layout: &SessionLayout,
     door: &Path,
     port: u16,
-    report: &OwnedFd,
+    report: &impl AsRawFd,
 ) -> Vec<(String, String)> {
     let linux_door = format!("127.0.0.1:{}", profile.network.proxy_port);
     let own_door = format!("127.0.0.1:{port}");

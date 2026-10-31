@@ -90,8 +90,11 @@ abstract final class ProtoVersion {
   /// `SandboxEvent.Status.llm_server` and shows the session's saved server
   /// with the source of the choice, and the server list of the settings reads
   /// `LlmServer.profiles` (HUM-400).
+  /// Raised to 29 with what really runs: the mounts tab and the command sheet
+  /// read `Status.policy_text`, `Mount.profile_path`, `MOUNT_MODE_DENIED` and
+  /// `Status.backend` (HUM-376).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 28;
+  static const int minor = 29;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';
