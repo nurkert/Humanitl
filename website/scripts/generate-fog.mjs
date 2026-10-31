@@ -1,4 +1,4 @@
-// Erzeugt die drei Nebelebenen der Startseite (HUM-341) aus Rauschen. Das Skript läuft von
+// Erzeugt die Nebelebenen der Startseite (HUM-341) aus Rauschen. Das Skript läuft von
 // Hand, nicht im Build; das Ergebnis liegt in src/assets/fog/, die AVIF- und WebP-Fassungen
 // baut Astro daraus. Der Startwert ist fest, zwei Läufe liefern dieselben Bilder.
 //
@@ -68,7 +68,7 @@ function density(x, y, scale, seed) {
 
 // Beleuchtete Schwaden: die Dichte gilt als Höhenfeld, ihre Neigung zum Licht ergibt die
 // Helligkeit. Daraus kommt der räumliche Eindruck, das Alpha trägt nur die Form.
-function fogLayer({ scale, seed, low, high, relief, mask, peak }) {
+function fogLayer({ scale, seed, low, high, relief, mask, peak, shadow = [120, 124, 134], lit: bright = [245, 248, 252] }) {
   const data = new Uint8Array(W * H * 4);
   const e = 1 / W;
   for (let y = 0; y < H; y++) {
@@ -82,9 +82,9 @@ function fogLayer({ scale, seed, low, high, relief, mask, peak }) {
       const lit = smooth(0.1, 0.95, 0.5 + 0.5 * (n[0] * LIGHT[0] + n[1] * LIGHT[1] + n[2] * LIGHT[2]));
       const a = peak * smooth(low, high, d) * mask(u, v);
       const i = (y * W + x) * 4;
-      data[i] = 120 + 125 * lit;
-      data[i + 1] = 124 + 124 * lit;
-      data[i + 2] = 134 + 118 * lit;
+      data[i] = shadow[0] + (bright[0] - shadow[0]) * lit;
+      data[i + 1] = shadow[1] + (bright[1] - shadow[1]) * lit;
+      data[i + 2] = shadow[2] + (bright[2] - shadow[2]) * lit;
       data[i + 3] = 255 * a;
     }
   }
@@ -122,25 +122,32 @@ function raysLayer() {
 
 // Unter dem Text bleibt der Nebel dünn: die Dichte sitzt seitlich und zum Boden hin.
 const sides = (u) => 0.45 + 0.55 * Math.abs(2 * u - 1);
+const far = {
+  scale: 2.4,
+  seed: 3.7,
+  low: 0.36,
+  high: 0.72,
+  relief: 30,
+  peak: 0.85,
+  mask: (u, v) => smooth(0.12, 0.5, v) * smooth(1, 0.7, v) * sides(u),
+};
+const near = {
+  scale: 1.5,
+  seed: 11.2,
+  low: 0.34,
+  high: 0.68,
+  relief: 24,
+  peak: 0.95,
+  mask: (u, v) => smooth(0.56, 0.92, v) * (0.6 + 0.4 * sides(u)),
+};
+// Dieselben Schwaden für den hellen Raum (HUM-338): Schiefer statt Licht, sonst stünde ein
+// grauer Schleier auf dem Papier. Die Strahlen bleiben weiß und gelten für beide Themen.
+const slate = { shadow: [58, 66, 84], lit: [122, 132, 150] };
 const layers = {
-  far: fogLayer({
-    scale: 2.4,
-    seed: 3.7,
-    low: 0.36,
-    high: 0.72,
-    relief: 30,
-    peak: 0.85,
-    mask: (u, v) => smooth(0.12, 0.5, v) * smooth(1, 0.7, v) * sides(u),
-  }),
-  near: fogLayer({
-    scale: 1.5,
-    seed: 11.2,
-    low: 0.34,
-    high: 0.68,
-    relief: 24,
-    peak: 0.95,
-    mask: (u, v) => smooth(0.56, 0.92, v) * (0.6 + 0.4 * sides(u)),
-  }),
+  far: fogLayer(far),
+  'far-light': fogLayer({ ...far, ...slate }),
+  near: fogLayer(near),
+  'near-light': fogLayer({ ...near, ...slate }),
   rays: raysLayer(),
 };
 

@@ -2083,14 +2083,20 @@ function init(scene: HTMLElement) {
   deck.inert = true;
   if (!reduced) fog.dataset.drift = "";
   // Jede Ebene kommt, sobald ihr Bild dekodiert ist; der Einflug wartet nicht darauf.
-  for (const layer of fogLayers) {
-    layer
-      .querySelector("img")!
-      .decode()
-      .catch(() => undefined)
-      .then(() => {
-        layer.dataset.ready = "";
-      });
+  // Far und near haben eine Fassung je Thema: Die andere lädt erst, wenn ein Themenwechsel sie
+  // ins Layout bringt, dann blendet sie genauso auf (HUM-338).
+  for (const tone of fog.querySelectorAll<HTMLElement>("[data-fog-tone]")) {
+    const img = tone.querySelector("img")!;
+    const show = () => {
+      img
+        .decode()
+        .catch(() => undefined)
+        .then(() => {
+          tone.dataset.ready = "";
+        });
+    };
+    if (img.complete && img.naturalWidth > 0) show();
+    else img.addEventListener("load", show, { once: true });
   }
   // Ausgelaufen: Pose festschreiben, Animation und Ebenen-Hinweis entfernen.
   fog.addEventListener("animationend", (event) => {
@@ -2099,7 +2105,7 @@ function init(scene: HTMLElement) {
       animation.commitStyles();
       animation.cancel();
     }
-    img.closest<HTMLElement>("[data-fog-layer]")!.dataset.rest = "";
+    img.closest<HTMLElement>("[data-fog-tone]")!.dataset.rest = "";
   });
   const fogPause = () => fog.toggleAttribute("data-paused", document.hidden);
   document.addEventListener("visibilitychange", fogPause);
