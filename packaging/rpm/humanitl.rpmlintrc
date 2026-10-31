@@ -40,8 +40,9 @@ addFilter(r"no-documentation$")
 addFilter(r"files-duplicate /usr/lib/humanitl/data/flutter_assets/packages/country_flags/res/si/")
 # files-duplicated-waste nennt nur die Summe aller Dubletten des Pakets, keinen
 # Pfad; enger als auf dieses Paket laesst sie sich nicht fassen. Wer neue
-# Dubletten einfuehrt, sieht sie trotzdem an files-duplicate oben.
-addFilter(r"humanitl\.x86_64: W: files-duplicated-waste ")
+# Dubletten einfuehrt, sieht sie trotzdem an files-duplicate oben. rpmlint 2.8
+# (Fedora 44) meldet sie als Fehler, aeltere Fassungen als Warnung (HUM-362).
+addFilter(r"humanitl\.x86_64: [EW]: files-duplicated-waste ")
 
 # `rm -f` in den Scriptlets loescht nur die eigene Zwischendatei unter /run
 # (`mktemp -p /run humanitl-postinst.XXXXXX` in
