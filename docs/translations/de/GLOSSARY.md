@@ -1,6 +1,6 @@
 ---
 source: GLOSSARY.md
-source-sha256: d20688ed2902bff8c071c5207dcf766bf5a5cd2114ab47e675a8434e73012cd9
+source-sha256: f5ae5987ad1b76a73c3b5f06cb6085e32ab917c00f9f449d458643b79b1d57c6
 lang: de
 ---
 # Glossar
@@ -130,6 +130,9 @@ das sie ersetzen (HUM-086). Sandbox, Diagnostic und Finding bleiben unverändert
 | kein Netzwerk-Interface | No network interface | Kein Netzwerk-Interface | `sandboxGuaranteeNoInterface` | |
 | ein Socket | Exactly one socket, to Humanitl | Genau ein Socket, zu Humanitl | `sandboxGuaranteeOneSocket` | |
 | seccomp aktiv | New sockets forbidden (seccomp) | Neue Sockets verboten (seccomp) | `sandboxGuaranteeSeccomp` | |
+| kein Weg nach außen | No way out | Kein Weg nach außen | `sandboxGuaranteeNoWayOutMacos` | Garantie 1 unter macOS |
+| eine Tür | Exactly one door, to Humanitl | Genau eine Tür, zu Humanitl | `sandboxGuaranteeOneDoorMacos` | Garantie 2 unter macOS |
+| an das Profil gehalten | Held to the Seatbelt profile | An das Seatbelt-Profil gehalten | `sandboxGuaranteeProfileMacos` | Garantie 3 unter macOS |
 | Projektordner | Project folder | Projektordner | `setupCheckProject` | |
 | Arbeitsverzeichnis | Work directory | Arbeitsverzeichnis | `sandboxWorkDirectory` | `/work` bleibt |
 | Agent wartet | The agent is waiting for you | Der Agent wartet auf dich | `commonAgentWaiting` | „du"-Form |

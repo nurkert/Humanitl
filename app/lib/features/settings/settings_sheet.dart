@@ -22,6 +22,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/domain/domain.dart';
+import '../../core/ipc/client_diagnostics.dart';
 import '../../core/ipc/config_providers.dart';
 import '../../core/ipc/daemon_client.dart';
 import '../../core/ui/ui.dart';
@@ -442,7 +443,9 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
         SettingGroupTitle(l10n.settingsSectionConnections),
         SettingRow(
           label: l10n.settingsTrustSystemStoreLabel,
-          help: l10n.settingsTrustSystemStoreHelp,
+          help: l10n.settingsTrustSystemStoreHelp(
+            ClientDiagnostics.restartUnitCommand,
+          ),
           refusal: _refusals[FormKeys.tlsTrustSystemStore],
           refusalKey: const Key('settings-trust-system-store-refusal'),
           anchor: _anchors[FormKeys.tlsTrustSystemStore],

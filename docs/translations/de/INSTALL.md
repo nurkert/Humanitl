@@ -1,6 +1,6 @@
 ---
 source: INSTALL.md
-source-sha256: e654fe93fd75d845baac5f3d2ade3def63b053b1562f15a3af08ab2d47d05e75
+source-sha256: b99d75439862eb0795f5c419036fc66f792ccabced590d76026a8b841c044a47
 lang: de
 ---
 # Installation: Notizen für Maintainer
@@ -16,8 +16,8 @@ und die Deinstallation. Wie die macOS-App und ihr Disk-Image gebaut werden, steh
 Diese Seite bewahrt, was die Anleitung weglässt: das APT-Repository, den Wechsel zwischen
 Installationsformen, warum die systemd-Unit so gehärtet ist, wie sie ist, das
 Laufzeitverzeichnis ohne logind, das Bauen der Pakete und die manuelle Testmatrix.
-Ausgelieferter Code verlinkt auf zwei Abschnitte dieser Seite (`#hardening` und
-`#xdg_runtime_dir-ohne-logind`); beide Anker bleiben.
+Ausgelieferter Code verlinkt auf drei Abschnitte dieser Seite (`#hardening`,
+`#xdg_runtime_dir-ohne-logind` und `#runtime-directory-on-macos`); alle drei Anker bleiben.
 
 ## APT-Repository
 
@@ -198,6 +198,36 @@ Welche Datei das ist, hängt von der Shell ab:
 
 Die Zeile wirkt ab der nächsten Anmeldung. Von da an finden Daemon, Kommandozeile und App
 dasselbe Verzeichnis. Dass die Clients es auch ohne diese Zeile finden, ist HUM-222.
+
+## Laufzeitverzeichnis unter macOS
+
+Unter macOS liegen Socket und Token für Daemon, Kommandozeile und App in
+`~/Library/Application Support/Humanitl/run`. `XDG_RUNTIME_DIR` gehört nicht zu einer macOS-Sitzung,
+und `/run/user` gibt es nicht.
+
+Nur wenn dieser Pfad für einen Unix-Socket zu lang ist (104 Bytes, dazu braucht es einen sehr langen
+Kontonamen), nehmen alle drei stattdessen `$TMPDIR/humanitl-<uid>`; dort löscht macOS Dateien, die
+drei Tage niemand angefasst hat. Lehnt ein Client das Verzeichnis dort ab, prüfe es mit `ls -ld`: Es
+muss deinem Konto gehören und den Modus `0700` haben. Den Modus korrigierst du mit `chmod 700`. Ein
+Verzeichnis eines anderen Kontos kann nur ein Administrator entfernen. Starte danach den Daemon neu,
+damit er Socket und Token neu schreibt:
+
+```sh
+/Applications/Humanitl.app/Contents/MacOS/bin/humanitl daemon restart
+```
+
+## macOS auf einen Blick
+
+Die Kommandozeile liegt in der App und nicht im `PATH`. Die Tabelle nennt den vollen Pfad; die
+Anleitung zeigt, wie du sie [verlinkst](guides/install.md#install-on-macos).
+
+| Aufgabe | Unter macOS |
+|---|---|
+| Installieren | `Humanitl.app` aus dem Disk-Image in Programme ziehen, den ersten Start erlauben, dann „Installieren und starten" im Einrichtungsschirm oder `/Applications/Humanitl.app/Contents/MacOS/bin/humanitl daemon install`. Das schreibt den launchd-Agenten `~/Library/LaunchAgents/dev.humanitl.humanitld.plist`. |
+| Aktualisieren | `Humanitl.app` in Programme durch die neue Fassung ersetzen, dann `/Applications/Humanitl.app/Contents/MacOS/bin/humanitl daemon restart`. Es gibt keinen Paketmanager und kein `apt upgrade`; der Agent zeigt weiter auf denselben Pfad. |
+| Prüfen | `/Applications/Humanitl.app/Contents/MacOS/bin/humanitl doctor`. Die [Zeilen unter macOS](cli.md#the-lines-on-macos) sagen, was dort gemessen wird. |
+| Protokoll | `/Applications/Humanitl.app/Contents/MacOS/bin/humanitl daemon logs`, das `~/Library/Logs/Humanitl/humanitld.log` liest. |
+| Deinstallieren | `/Applications/Humanitl.app/Contents/MacOS/bin/humanitl daemon uninstall`, dann die App löschen. |
 
 ## Pakete bauen
 

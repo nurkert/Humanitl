@@ -449,6 +449,25 @@ different major version of the contract — then neither side understands the
 other's messages. Everything else is a warning: it runs, just not as
 comfortably.
 
+### The lines on macOS
+
+The identifiers stay the same, so `--json` reads alike on both systems. What is measured differs
+(HUM-372):
+
+| Identifier | On macOS it checks | `fail` if |
+|---|---|---|
+| `bwrap` | `/usr/bin/sandbox-exec` is executable; the sandbox is Seatbelt | it is missing |
+| `userns` | nothing: `ok` with "not needed on macOS"; the setup screen hides the line | never |
+| `seccomp` | nothing: `ok` with "not needed on macOS", the Seatbelt profile takes its place; the setup screen hides the line | never |
+| `runtime_dir` | `~/Library/Application Support/Humanitl/run`, or `$XDG_RUNTIME_DIR` if it is set, belongs to us and has exactly 0700; a missing directory is `ok`, the daemon creates it | one of these does not hold |
+| `systemd_user` | `~/Library/LaunchAgents/dev.humanitl.humanitld.plist` exists | never; without it you start `humanitld` by hand |
+| `tray` | nothing: `ok` with "not needed on macOS", there is no tray there yet (HUM-329) | never |
+| `renderer` | nothing: `ok` with "not needed on macOS", Flutter renders with Metal | never |
+
+`daemon`, `agent`, `llm` and `disk_space` are the same as on Linux. The command line lies in the
+app and not on `PATH`:
+`/Applications/Humanitl.app/Contents/MacOS/bin/humanitl doctor`.
+
 ### What a line means
 
 Every line that is not `ok` carries a `Diagnostic` with code, reason and
@@ -550,6 +569,12 @@ without a measurement.
 Writes the systemd user unit that starts the daemon at every login.
 It is the most invasive command of this product outside the sandbox, and
 that is why what it does is described here in full.
+
+On macOS it writes the launchd agent
+`~/Library/LaunchAgents/dev.humanitl.humanitld.plist` instead; launchd starts the
+daemon now and at every login, and the rest of this section is about Linux. An
+update on macOS replaces the app, then `humanitl daemon restart` starts the new
+daemon.
 
 ```
 humanitl daemon install [--print] [--no-start] [--bin-dir DIR]
@@ -929,6 +954,10 @@ Passes the service's journal through.
 ```
 humanitl daemon logs [-f] [-n N]
 ```
+
+On macOS there is no journal: the command reads
+`~/Library/Logs/Humanitl/humanitld.log`, with `-f` like `tail -f`, and a missing
+file ends with `DAEMON_008`. The rest of this section is about Linux.
 
 The command starts `journalctl --user -u humanitld.service` as a child and gives
 it its own terminal. `-n N` and `-f` are passed on unchanged. If

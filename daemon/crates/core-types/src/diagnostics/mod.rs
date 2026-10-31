@@ -18,8 +18,10 @@ pub use codes::{AREAS, AreaInfo, CODES, CodeInfo, lookup, lookup_str};
 
 /// Der Befehl, der den Daemon dieses Systems neu startet, als Vorschlag in
 /// Befunden: unter Linux systemd, unter macOS der launchd-Agent (HUM-324).
+/// Die Kommandozeile liegt dort in der App und nicht im `PATH`, der Befehl
+/// nennt deshalb den vollen Pfad (HUM-372).
 pub const RESTART_DAEMON_COMMAND: &str = if cfg!(target_os = "macos") {
-    "humanitl daemon restart"
+    "/Applications/Humanitl.app/Contents/MacOS/bin/humanitl daemon restart"
 } else {
     "systemctl --user restart humanitld"
 };
