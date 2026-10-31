@@ -975,6 +975,28 @@ pub fn is_executable_file(path: &Path) -> bool {
 /// Einhängung `/usr` hinein.
 pub const DEFAULT_SANDBOX_PATH: &str = "/bin:/usr/bin";
 
+/// Wo die Sandbox dieses Systems ein Skript samt Paket findet, für die Befunde.
+pub const SCRIPT_PLACE: &str = if cfg!(target_os = "macos") {
+    "can only read outside /Users and /Volumes, such as under /opt/homebrew or /usr/local"
+} else {
+    "only finds under one of its mounts, such as /usr/local"
+};
+
+/// Der Suchpfad, unter dem das `exec` auf diesem System läuft, aus dem
+/// eingestellten (`sandbox.env.PATH` vor `[env].PATH`).
+///
+/// Unter Linux ist es der eingestellte. Unter macOS hängt der Plan die
+/// Suchpfade des Systems an ([`crate::seatbelt::session_search_path`]), und die
+/// Vorprüfung beantwortet sonst die falsche Frage (HUM-139, HUM-377).
+#[must_use]
+pub fn effective_sandbox_path(configured: Option<&str>) -> Option<String> {
+    if cfg!(target_os = "macos") {
+        Some(crate::seatbelt::session_search_path(configured))
+    } else {
+        configured.map(str::to_owned)
+    }
+}
+
 /// Wie viele Verweise eine Auflösung folgen darf, bevor sie aufgibt.
 ///
 /// Derselbe Deckel wie `ELOOP` im Kern (40).
@@ -1075,6 +1097,9 @@ pub struct SandboxView {
     /// scheiterte drinnen mit 127, während der Host es findet (HUM-043,
     /// HUM-139).
     pub covered: Vec<PathBuf>,
+    /// Ob die Sicht aus dem Seatbelt-Profil stammt ([`SandboxView::of_seatbelt`]).
+    /// Es gibt dann keine Einhängungen, und die Befunde sagen das so.
+    pub seatbelt: bool,
 }
 
 impl SandboxView {
@@ -1085,6 +1110,7 @@ impl SandboxView {
             mounts,
             symlinks,
             covered: Vec::new(),
+            seatbelt: false,
         }
     }
 
@@ -1130,6 +1156,77 @@ impl SandboxView {
                 .chain(profile.effective_masked_files())
                 .collect(),
         )
+    }
+
+    /// Die Sicht, gegen die dieses System urteilt: unter macOS die des
+    /// Seatbelt-Profils, sonst die Einhängungen des Profils.
+    ///
+    /// `work` ist der Projektordner, soweit bekannt: Unter macOS liegt er unter
+    /// seinem eigenen Pfad, ein Kommando mit diesem Pfad startet also.
+    #[must_use]
+    pub fn of_platform(profile: &crate::profile::SandboxProfile, work: Option<&Path>) -> Self {
+        if cfg!(target_os = "macos") {
+            Self::of_seatbelt(profile, work)
+        } else {
+            Self::of_profile(profile)
+        }
+    }
+
+    /// Die Sicht des Seatbelt-Profils (HUM-377): Es gibt keine Einhängungen,
+    /// und lesen darf der Agent alles außer
+    /// [`crate::seatbelt::PRIVATE_TREES`]; darin nur den Projektordner und die
+    /// zusätzlichen Ordner des Profils, aufgelöst wie im Plan.
+    ///
+    /// Die Einhängungen des Linux-Profils (`/usr`, `/etc/ssl`) und seine
+    /// Verweise (`/bin` auf `usr/bin`) gelten hier nicht. Wer gegen sie urteilt,
+    /// hält `/opt/homebrew/bin/opencode` für unerreichbar, obwohl es startet.
+    #[must_use]
+    pub fn of_seatbelt(profile: &crate::profile::SandboxProfile, work: Option<&Path>) -> Self {
+        let private: Vec<PathBuf> = crate::seatbelt::PRIVATE_TREES
+            .iter()
+            .map(PathBuf::from)
+            .collect();
+        let work = work.and_then(|work| work.canonicalize().ok());
+        let granted = profile
+            .mounts
+            .extra_ro
+            .iter()
+            .chain(&profile.mounts.extra_rw)
+            .filter_map(|path| path.canonicalize().ok())
+            .chain(work.clone())
+            .collect();
+        // Das Projekt ist unter seinem echten Pfad erlaubt, also gelten seine
+        // Masken auch dort und nicht nur unter `/work`: Sonst bestünde ein
+        // Skript in `.git/hooks` die Vorprüfung und das Profil verböte es.
+        let in_project = work.map_or_else(Vec::new, |work| {
+            crate::seatbelt::masks_in_project(profile, &work)
+        });
+        Self::readable_beside(Path::new("/"), &private, granted).with_covered(
+            profile
+                .mounts
+                .tmpfs
+                .iter()
+                .cloned()
+                .chain(profile.effective_masked_files())
+                .filter(|path| path.starts_with(crate::profile::WORK_DST))
+                .chain(in_project)
+                .collect(),
+        )
+    }
+
+    /// Alles unter `root` außer `private`, dazu `granted`. Ein Baum, der sich
+    /// nicht lesen lässt, ergibt die leere Sicht, und die heißt „unbekannt".
+    fn readable_beside(root: &Path, private: &[PathBuf], granted: Vec<PathBuf>) -> Self {
+        let mut roots = Vec::new();
+        let mut symlinks = Vec::new();
+        collect_readable(root, private, &mut roots, &mut symlinks);
+        if roots.is_empty() {
+            return Self::default();
+        }
+        roots.extend(granted);
+        let mut view = Self::same_path(roots, symlinks);
+        view.seatbelt = true;
+        view
     }
 
     /// Dieselbe Sicht mit einer Einhängung mehr.
@@ -1316,6 +1413,33 @@ impl SandboxView {
     }
 }
 
+/// Sammelt, was unter `dir` lesbar ist: jeden Eintrag außer `private`, und wo
+/// ein privater Baum tiefer liegt, die Einträge des Ordners dazwischen.
+/// Verweise wie `/tmp` auf `private/tmp` werden als Verweise geführt, damit
+/// die Auflösung ihnen folgt und im privaten Baum endet.
+fn collect_readable(
+    dir: &Path,
+    private: &[PathBuf],
+    roots: &mut Vec<PathBuf>,
+    symlinks: &mut Vec<(PathBuf, PathBuf)>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for path in entries.flatten().map(|entry| entry.path()) {
+        if private.contains(&path) {
+            continue;
+        }
+        if let Ok(target) = std::fs::read_link(&path) {
+            symlinks.push((path, target));
+        } else if private.iter().any(|tree| tree.starts_with(&path)) {
+            collect_readable(&path, private, roots, symlinks);
+        } else {
+            roots.push(path);
+        }
+    }
+}
+
 /// Setzt die Auflösung hinter einem Verweis fort.
 ///
 /// Ein absolutes Ziel beginnt wieder an der Wurzel der Sandbox, ein relatives
@@ -1380,6 +1504,165 @@ mod tests {
         std::fs::write(&path, b"#!/bin/sh\nexit 0\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
+    }
+
+    /// Ein Baum wie unter macOS: `tree/Users` und `tree/private/tmp` sind zu,
+    /// `tree/tmp` führt dorthin, `tree/opt` ist frei.
+    fn mac_tree() -> (tempfile::TempDir, Vec<PathBuf>) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        for sub in [
+            "Users/me/tools",
+            "opt/homebrew/bin",
+            "private/tmp",
+            "private/etc",
+        ] {
+            std::fs::create_dir_all(root.join(sub)).unwrap();
+        }
+        std::os::unix::fs::symlink("private/tmp", root.join("tmp")).unwrap();
+        for file in [
+            "opt/homebrew/bin/opencode",
+            "Users/me/tools/x",
+            "private/tmp/y",
+        ] {
+            crate::test_support::write_program(&root.join(file), "#!/bin/sh\n");
+        }
+        let private = vec![root.join("Users"), root.join("private/tmp")];
+        (dir, private)
+    }
+
+    #[test]
+    fn seatbelt_opens_what_the_profile_does_not_deny() {
+        let (dir, private) = mac_tree();
+        let root = dir.path().canonicalize().unwrap();
+        let view = SandboxView::readable_beside(&root, &private, Vec::new());
+        assert!(view.seatbelt);
+        let homebrew = root.join("opt/homebrew/bin/opencode");
+        assert_eq!(
+            view.look_up(&homebrew),
+            SandboxLookup::Startable(homebrew.clone())
+        );
+        assert_eq!(
+            view.look_up(&root.join("Users/me/tools/x")),
+            SandboxLookup::Missing
+        );
+        assert_eq!(
+            view.look_up(&root.join("private/tmp/y")),
+            SandboxLookup::Missing
+        );
+        assert_eq!(
+            view.look_up(&root.join("tmp/y")),
+            SandboxLookup::Missing,
+            "a link at the root leads into the denied tree"
+        );
+    }
+
+    #[test]
+    fn seatbelt_opens_a_folder_the_profile_grants_inside_a_denied_tree() {
+        let (dir, private) = mac_tree();
+        let root = dir.path().canonicalize().unwrap();
+        let tools = root.join("Users/me/tools");
+        let view = SandboxView::readable_beside(&root, &private, vec![tools.clone()]);
+        assert_eq!(
+            view.look_up(&tools.join("x")),
+            SandboxLookup::Startable(tools.join("x"))
+        );
+    }
+
+    /// `humanitl sandbox run -- opencode` unter macOS, mit dem Programm an
+    /// diesem Ort des Baums.
+    fn seatbelt_findings(
+        root: &Path,
+        private: &[PathBuf],
+        dir: &Path,
+        sandbox_path: &Path,
+    ) -> Vec<humanitl_core::Diagnostic> {
+        let view = SandboxView::readable_beside(root, private, Vec::new());
+        let ctx = AgentContext::new(SessionId::nil(), root.join("work"), LlmConfig::default())
+            .with_command_from_caller(vec![OsString::from("opencode")])
+            .with_host_path(Some(dir.as_os_str().to_owned()))
+            .with_sandbox_view(view)
+            .with_sandbox_path(Some(sandbox_path.as_os_str().to_owned()));
+        super::AgentAdapter::preflight(&super::OpenCodeAdapter::new(), &ctx)
+    }
+
+    #[test]
+    fn a_homebrew_agent_passes_the_preflight_under_seatbelt() {
+        let (dir, private) = mac_tree();
+        let root = dir.path().canonicalize().unwrap();
+        let bin = root.join("opt/homebrew/bin");
+        let findings = seatbelt_findings(&root, &private, &bin, &bin);
+        assert!(
+            findings
+                .iter()
+                .all(|found| found.code.as_str() != "AGENT_004"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn an_agent_in_a_denied_tree_gets_a_finding_about_seatbelt_and_not_about_mounts() {
+        let (dir, private) = mac_tree();
+        let root = dir.path().canonicalize().unwrap();
+        let bin = root.join("Users/me/tools");
+        crate::test_support::write_program(&bin.join("opencode"), "#!/bin/sh\n");
+        let findings = seatbelt_findings(&root, &private, &bin, &root.join("private/etc"));
+        let found = findings
+            .iter()
+            .find(|found| found.code.as_str() == "AGENT_004")
+            .expect("AGENT_004");
+        assert!(found.why.contains("Seatbelt"), "{}", found.why);
+        assert!(!found.why.contains("mounts only"), "{}", found.why);
+    }
+
+    #[test]
+    fn an_unreadable_root_is_the_unknown_view_and_not_a_finding() {
+        let view = SandboxView::readable_beside(Path::new("/does/not/exist"), &[], Vec::new());
+        assert_eq!(view, SandboxView::default());
+    }
+
+    #[test]
+    fn a_program_under_a_project_mask_is_not_startable_under_its_real_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().canonicalize().unwrap();
+        std::fs::create_dir_all(work.join(".git/hooks")).unwrap();
+        let hook = work.join(".git/hooks/pre-commit");
+        let tool = work.join("tool");
+        crate::test_support::write_program(&hook, "#!/bin/sh\n");
+        crate::test_support::write_program(&tool, "#!/bin/sh\n");
+        let mut profile =
+            crate::profile::SandboxProfile::parse("version = 1\nname = \"x\"\n", Path::new("<t>"))
+                .unwrap();
+        for mask in ["/work/.git/hooks", "/work/.absent"] {
+            profile.mounts.tmpfs.push(PathBuf::from(mask));
+        }
+
+        let view = SandboxView::of_seatbelt(&profile, Some(&work));
+
+        assert_eq!(view.look_up(&hook), SandboxLookup::Missing);
+        assert_eq!(view.look_up(&tool), SandboxLookup::Startable(tool.clone()));
+        assert!(view.covered.contains(&PathBuf::from("/work/.git/hooks")));
+        assert!(
+            !view.covered.contains(&work.join(".absent")),
+            "only what exists, as in the plan"
+        );
+    }
+
+    #[test]
+    fn the_seatbelt_view_ignores_the_mounts_and_links_of_the_linux_profile() {
+        let profile = crate::profile::SandboxProfile::parse(
+            "version = 1\nname = \"x\"\n[mounts]\nro = [\"/usr\"]\n\
+             symlinks = [[\"usr/bin\", \"/bin\"]]\n",
+            Path::new("<t>"),
+        )
+        .unwrap();
+        let view = SandboxView::of_seatbelt(&profile, None);
+        assert!(view.seatbelt);
+        // Unter Linux ist `/bin` auf vielen Systemen selbst ein Verweis; die Aussage
+        // gilt dem macOS-Host.
+        if cfg!(target_os = "macos") {
+            assert!(view.symlink_at(Path::new("/bin")).is_none());
+        }
     }
 
     #[test]

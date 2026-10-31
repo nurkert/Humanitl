@@ -265,6 +265,9 @@ pub const MANAGED_CONFIG_DST: &str = "/etc/opencode/opencode.json";
 /// Die Adresse, unter der `OpenCode` installiert wird; steht im Fix von `AGENT_001`.
 pub const INSTALL_COMMAND: &str = "curl -fsSL https://opencode.ai/install | bash";
 
+/// Das Verzeichnis, in dem Homebrew auf Apple Silicon Programme ablegt.
+const HOMEBREW_BIN: &str = "/opt/homebrew/bin";
+
 /// Die Dokumentation von `OpenCode`; steht in `docs` von `AGENT_001`.
 pub const DOCS_URL: &str = "https://opencode.ai/docs/";
 
@@ -625,7 +628,7 @@ fn not_reachable_in_sandbox(ctx: &AgentContext, binary: &Path, docs: &str) -> Di
         // des Adapters: Ein `agent.command = ["mycode"]` würde
         // sonst zu `install … /usr/local/bin/opencode`, und der
         // Vorschlag benennte die Datei beim Kopieren um.
-        .fix(FixAction::CopyCommand(install_fix(binary)))
+        .fix(FixAction::CopyCommand(install_fix_for(ctx, binary)))
         .docs(docs)
         .build()
 }
@@ -641,8 +644,17 @@ fn script_not_reachable_in_sandbox(
     binary: &Path,
     adapter: &dyn AgentAdapter,
 ) -> Diagnostic {
-    Diagnostic::builder(AGENT_004, Severity::Blocking)
-        .why(format!(
+    let why = if ctx.sandbox_view.seatbelt {
+        format!(
+            "{}, so the exec would fail after the start. {} is a script that needs its package \
+             files beside it; copying the one file does not help. Install it where the sandbox \
+             can read it: {}",
+            seatbelt_denies(binary),
+            adapter.program(),
+            adapter.install_command()
+        )
+    } else {
+        format!(
             "{} is on this machine, but the sandbox mounts only {} and its PATH is {}, so the \
          command is not there and the exec would fail after the start. {} is a script that \
          needs its package files beside it; copying the one file does not help. Install it \
@@ -652,7 +664,10 @@ fn script_not_reachable_in_sandbox(
             ctx.sandbox_path_display(),
             adapter.program(),
             adapter.install_command()
-        ))
+        )
+    };
+    Diagnostic::builder(AGENT_004, Severity::Blocking)
+        .why(why)
         .fix(FixAction::CopyCommand(adapter.install_command().to_owned()))
         .docs(adapter.docs_url())
         .build()
@@ -666,6 +681,13 @@ fn starts_own_program(named: &OsStr, adapter: &dyn AgentAdapter) -> bool {
 
 /// The sentence of `AGENT_004` for a native program.
 fn native_unreachable_why(ctx: &AgentContext, binary: &Path) -> String {
+    if ctx.sandbox_view.seatbelt {
+        return format!(
+            "{}, so the exec would fail after the start. Put the binary outside these trees, \
+             or add its directory to `[mounts].extra_ro` of the sandbox profile.",
+            seatbelt_denies(binary)
+        );
+    }
     format!(
         "{} is on this machine, but the sandbox mounts only {} and its PATH is {}, so the \
              command is not there and the exec would fail after the start. Put the binary under \
@@ -675,6 +697,38 @@ fn native_unreachable_why(ctx: &AgentContext, binary: &Path) -> String {
         binary.display(),
         mounts_of(ctx),
         ctx.sandbox_path_display()
+    )
+}
+
+/// Der Anfang der Befunde unter macOS: Es gibt keine Einhängungen, das Profil
+/// verbietet das Lesen dieser Bäume (HUM-377).
+fn seatbelt_denies(binary: &Path) -> String {
+    format!(
+        "{} is on this machine, but the Seatbelt profile lets the sandbox read neither {} \
+         except the project and the extra folders of the sandbox profile",
+        binary.display(),
+        crate::seatbelt::PRIVATE_TREES.join(", ")
+    )
+}
+
+/// [`install_fix`] für das Backend dieses Kontexts: Unter macOS gehört
+/// `/opt/homebrew/bin` dem Nutzer und braucht kein `sudo`.
+pub(crate) fn install_fix_for(ctx: &AgentContext, binary: &Path) -> String {
+    let homebrew = Path::new(HOMEBREW_BIN);
+    if ctx.sandbox_view.seatbelt && homebrew.is_dir() {
+        user_install_fix(binary, homebrew)
+    } else {
+        install_fix(binary)
+    }
+}
+
+/// Der Befehl, der ein Binary ohne `sudo` in dieses Verzeichnis legt.
+fn user_install_fix(binary: &Path, dir: &Path) -> String {
+    let destination = dir.join(binary.file_name().unwrap_or(OsStr::new(DEFAULT_COMMAND)));
+    format!(
+        "install -m 0755 {} {}",
+        shell_path(binary),
+        shell_path(&destination)
     )
 }
 
@@ -741,11 +795,15 @@ fn not_on_the_sandbox_path(ctx: &AgentContext, binary: &Path, docs: &str) -> Dia
     let dir = binary.parent().unwrap_or(Path::new("/")).display();
     Diagnostic::builder(AGENT_004, Severity::Blocking)
         .why(format!(
-            "{} is on this machine and the sandbox mounts {}, but its PATH is {} and does not \
+            "{} is on this machine and the sandbox {}, but its PATH is {} and does not \
              name {dir}; inside, execvp searches only that PATH, so the exec would fail after \
              the start.",
             binary.display(),
-            mounts_of(ctx),
+            if ctx.sandbox_view.seatbelt {
+                "may read it".to_owned()
+            } else {
+                format!("mounts {}", mounts_of(ctx))
+            },
             ctx.sandbox_path_display()
         ))
         // Der nackte Pfad, nicht die erklärte Fassung: Der Wert wird kopiert
@@ -800,8 +858,8 @@ fn not_found_why(
         )
     } else {
         format!(
-            "{program} is a script that the sandbox only finds under one of its mounts, such as \
-             /usr/local: {install}"
+            "{program} is a script that the sandbox {}: {install}",
+            super::SCRIPT_PLACE
         )
     };
     format!(
@@ -1128,7 +1186,7 @@ impl AgentAdapter for OpenCodeAdapter {
             // einen Host, der gar nicht durchgereicht wird — und der Agent
             // wunderte sich, warum sein Modell in der Warteschlange steht.
             let llm_host = passthrough_authority(&ctx.llm);
-            let text = briefing::render(
+            let text = briefing::render_for_session(
                 ctx.language,
                 ctx.hold.ask_mode,
                 ctx.hold.timeout_secs,
@@ -1338,6 +1396,19 @@ mod tests {
         assert_eq!(
             install_fix(bad),
             r"sudo install -m 0755 $'/opt/bin/my\x20code\xff' $'/usr/local/bin/my\x20code\xff'"
+        );
+    }
+
+    #[test]
+    fn the_homebrew_fix_needs_no_sudo() {
+        use std::path::Path;
+
+        assert_eq!(
+            super::user_install_fix(
+                Path::new("/Users/me/My Tools/opencode"),
+                Path::new("/opt/homebrew/bin")
+            ),
+            "install -m 0755 '/Users/me/My Tools/opencode' /opt/homebrew/bin/opencode"
         );
     }
 
