@@ -355,6 +355,36 @@ pub fn available_profiles(paths: &Paths) -> (Vec<ProfileSummary>, Vec<Diagnostic
     (summaries, diagnostics)
 }
 
+/// Welche Profile der Sitzung einen gespeicherten Server wählen (HUM-400):
+/// je Servername die Namen der Profile, deren `llm.server` ihn nennt, nach
+/// Namen sortiert.
+///
+/// Dieselben Profile wie [`available_profiles`], also die mitgelieferten
+/// und die Dateien des Profilverzeichnisses, nie ein Projekt-Profil: Der
+/// Daemon kennt kein Verzeichnis aller Projekte. Ein Profil, das sich nicht
+/// lesen lässt, wählt nichts; [`available_profiles`] meldet es.
+#[must_use]
+pub fn profile_servers(paths: &Paths) -> std::collections::BTreeMap<String, Vec<String>> {
+    let mut uses: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    let (summaries, _) = available_profiles(paths);
+    for summary in summaries.into_iter().filter(|summary| !summary.broken) {
+        let Ok(profile) = summary.source.load() else {
+            continue;
+        };
+        if let Some(server) = profile
+            .overlay
+            .get(crate::servers::SERVER)
+            .and_then(toml::Value::as_str)
+        {
+            uses.entry(server.to_owned())
+                .or_default()
+                .push(summary.name);
+        }
+    }
+    uses
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

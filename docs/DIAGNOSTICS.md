@@ -367,9 +367,9 @@ Zugangsschlüssel nicht gespeichert
 
 Modellserver nicht geändert
 
-**Auslöser.** `LlmServers` oder `humanitl llm server` bekommt einen ungültigen, doppelten oder unbekannten Namen, einen Endpunkt, der keiner ist, oder soll den aktiven Server ohne Nachfolger oder während einer Sitzung entfernen; `LlmKey` trifft einen Server, der sich beim Ablegen geändert hat oder dessen Verweis ein anderer trägt; `SetConfig` nennt einen Server, der nicht mehr aktiv ist; oder beim Laden gibt es keinen gültigen aktiven Server, einen geteilten Verweis oder einen Endpunkt, der nicht vom aktiven Server kommt.
+**Auslöser.** `LlmServers` oder `humanitl llm server` bekommt einen ungültigen, doppelten oder unbekannten Namen, einen Endpunkt, der keiner ist, oder soll den aktiven Server ohne Nachfolger oder während einer Sitzung entfernen; `LlmKey` trifft einen Server, der sich beim Ablegen geändert hat oder dessen Verweis ein anderer trägt; `SetConfig` nennt einen Server, der nicht mehr aktiv ist; oder beim Laden gibt es keinen gültigen aktiven Server, einen geteilten Verweis oder einen Endpunkt, der nicht vom aktiven Server kommt; oder `llm.server` aus Lauf, Projekt oder Profil nennt einen Server, der nicht gespeichert ist, und die Sitzung startet nicht (HUM-400).
 
-**Fix.** `CopyCommand`: `humanitl llm server ls` zeigt die Namen; beim Entfernen des aktiven Servers `--use NAME` mit dem Nachfolger.
+**Fix.** `CopyCommand`: `humanitl llm server ls` zeigt die Namen; beim Entfernen des aktiven Servers `--use NAME` mit dem Nachfolger; bei einem nicht gespeicherten `llm.server` `humanitl llm server add NAME URL`, oder den Schlüssel an der genannten Stelle entfernen.
 
 ### Bereich sandbox
 

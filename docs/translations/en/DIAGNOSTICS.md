@@ -372,9 +372,9 @@ Access key not stored
 
 Model servers not changed
 
-**Trigger.** `LlmServers` or `humanitl llm server` receives an invalid, duplicate or unknown name, an endpoint that is not one, or is to remove the active server without a successor or during a session; `LlmKey` hits a server that changed while the key was being stored or whose reference another one carries; `SetConfig` names a server that is no longer active; or on loading there is no valid active server, a shared reference or an endpoint that does not come from the active server.
+**Trigger.** `LlmServers` or `humanitl llm server` receives an invalid, duplicate or unknown name, an endpoint that is not one, or is to remove the active server without a successor or during a session; `LlmKey` hits a server that changed while the key was being stored or whose reference another one carries; `SetConfig` names a server that is no longer active; or on loading there is no valid active server, a shared reference or an endpoint that does not come from the active server; or `llm.server` from a run, the project or a profile names a server that is not saved, and the session does not start (HUM-400).
 
-**Fix.** `CopyCommand`: `humanitl llm server ls` shows the names; when removing the active server, `--use NAME` with the successor.
+**Fix.** `CopyCommand`: `humanitl llm server ls` shows the names; when removing the active server, `--use NAME` with the successor; for an `llm.server` that is not saved, `humanitl llm server add NAME URL`, or remove the key at the place named.
 
 ### Area sandbox
 

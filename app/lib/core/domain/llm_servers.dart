@@ -18,6 +18,7 @@ final class SavedServer {
     this.models = const <String>[],
     this.keyRef = '',
     this.active = false,
+    this.profiles = const <String>[],
   });
 
   /// The name: 1 to 32 characters `a-z`, `0-9`, `-` and `_`.
@@ -37,6 +38,11 @@ final class SavedServer {
   /// True for the entry `llm.active` names.
   final bool active;
 
+  /// The session profiles whose `llm.server` names this entry, sorted by
+  /// name (HUM-400). Projects are not listed: the daemon only knows the
+  /// project it is starting.
+  final List<String> profiles;
+
   /// The default model, or empty.
   String get model => models.isEmpty ? '' : models.first;
 
@@ -50,11 +56,18 @@ final class SavedServer {
       other.endpoint == endpoint &&
       _same(other.models, models) &&
       other.keyRef == keyRef &&
-      other.active == active;
+      other.active == active &&
+      _same(other.profiles, profiles);
 
   @override
-  int get hashCode =>
-      Object.hash(name, endpoint, Object.hashAll(models), keyRef, active);
+  int get hashCode => Object.hash(
+    name,
+    endpoint,
+    Object.hashAll(models),
+    keyRef,
+    active,
+    Object.hashAll(profiles),
+  );
 }
 
 /// The saved servers after a request.

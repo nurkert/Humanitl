@@ -1047,31 +1047,40 @@ impl Inner {
     /// start that holds its claim but has not published yet resolves the
     /// same file. The whole snapshot is built from this one value, never from
     /// a second read of the slot, so endpoint and preview cannot come from two
-    /// configurations. A resolution that fails falls back to the slot; the
-    /// start reports the same diagnostic itself.
-    fn plan_config(&self) -> Arc<Config> {
-        let held = {
-            let pending = lock(&self.pending);
-            let held = pending.claimed || lock(&self.running).is_some();
-            drop(pending);
-            held
-        };
-        if held
-            && self
-                .session_config
-                .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            return self.config();
+    /// configurations.
+    ///
+    /// Since HUM-400 the fresh resolution is the one a start with this plan
+    /// would get: the session profile (`Plan.session_profile`), the project
+    /// profile of the plan's folder (or the stored one) and the server of the
+    /// run (`Plan.llm_server`), so preview, `opencode.json`, endpoint and
+    /// server all name the same saved server. A resolution that fails falls
+    /// back to the slot; the second value is its diagnostic when the plan
+    /// asked for a session profile (`CONFIG_001` for one that does not
+    /// exist), otherwise the start reports it itself.
+    fn plan_config(&self, plan: &v1::sandbox_request::Plan) -> (Arc<Config>, Option<Diagnostic>) {
+        if self.holds_session_config() {
+            return (self.config(), None);
         }
-        match self.resolver.current() {
-            Ok(now) => Arc::new(now.config),
+        let project = non_empty(&plan.work_dir).map(PathBuf::from).or_else(|| {
+            lock(&self.pending)
+                .starting_work_dir
+                .as_ref()
+                .map(|(dir, _)| dir.clone())
+        });
+        let profile = non_empty(&plan.session_profile);
+        let asked = profile.is_some();
+        match self
+            .resolver
+            .resolve_plan(profile, project.as_deref(), non_empty(&plan.llm_server))
+        {
+            Ok(now) => (Arc::new(now.config), None),
             Err(diagnostic) => {
                 tracing::debug!(
                     code = %diagnostic.code,
                     why = %diagnostic.why,
                     "configuration not read afresh; the previous one answers"
                 );
-                self.config()
+                (self.config(), asked.then_some(diagnostic))
             }
         }
     }
@@ -1261,8 +1270,9 @@ impl Inner {
         mut between: impl FnMut(),
     ) -> Vec<v1::SandboxEvent> {
         let (events, wish) = self.consistent(
-            |config| {
-                let built = self.plan_events(config, plan);
+            plan,
+            |config, refused| {
+                let built = self.plan_events(config, refused, plan);
                 between();
                 built
             },
@@ -1283,14 +1293,15 @@ impl Inner {
     /// its session that often answers with the last one.
     fn consistent<T>(
         &self,
-        mut build: impl FnMut(&Arc<Config>) -> T,
+        plan: &v1::sandbox_request::Plan,
+        mut build: impl FnMut(&Arc<Config>, Option<&Diagnostic>) -> T,
         mut discard: impl FnMut(T),
     ) -> T {
         let mut attempt = 1;
         loop {
             let before = self.generation();
-            let config = self.plan_config();
-            let answer = build(&config);
+            let (config, refused) = self.plan_config(plan);
+            let answer = build(&config, refused.as_ref());
             if self.generation() == before || attempt >= SNAPSHOT_ATTEMPTS {
                 return answer;
             }
@@ -1312,10 +1323,17 @@ impl Inner {
     fn plan_events(
         &self,
         config: &Arc<Config>,
+        refused: Option<&Diagnostic>,
         plan: &v1::sandbox_request::Plan,
     ) -> (Vec<v1::SandboxEvent>, Option<PlanChoice>) {
         let mut events = Vec::new();
-        let wish = match self.plan_choice(config, plan) {
+        // Ein Profil der Sitzung, das sich nicht auflösen lässt (HUM-400):
+        // derselbe Befund wie beim Start, und kein Schnappschuss, der ein
+        // anderes Profil zeigte.
+        let wish = match refused.map_or_else(
+            || self.plan_choice(config, plan),
+            |found| Err(found.clone()),
+        ) {
             Ok(wish) => wish,
             Err(diagnostic) => {
                 events.push(diagnostic_event(&diagnostic));
@@ -1389,8 +1407,16 @@ impl Inner {
     /// Die Kommandozeile, Argument für Argument, als eigene Ereignisse.
     fn argv(&self, plan: &v1::sandbox_request::Plan, tx: &mpsc::Sender<v1::SandboxEvent>) {
         match self.consistent(
-            |config| {
-                self.prepare_keyed_with(config, &self.pending_choice(), plan, &[], KeyNeed::Plan)
+            plan,
+            |config, refused| match refused {
+                Some(diagnostic) => Err(diagnostic.clone()),
+                None => self.prepare_keyed_with(
+                    config,
+                    &self.pending_choice(),
+                    plan,
+                    &[],
+                    KeyNeed::Plan,
+                ),
             },
             drop,
         ) {
@@ -1798,6 +1824,11 @@ impl Inner {
                 .iter()
                 .map(|entry| (entry.path.trim().to_owned(), entry.value.clone()))
                 .collect(),
+            // Der Server dieses Laufs (HUM-400). Was die Auflösung daraus,
+            // aus dem Projekt und den Profilen wählt, ist der Server der
+            // Sitzung: ihre Durchreiche, ihr Schlüssel, ihr Ziel der Maske.
+            // Ein Name ohne Eintrag lehnt hier ab (`CONFIG_021`).
+            llm_server: non_empty(&start.llm_server),
         };
         let resolved = self.resolver.resolve(&request)?;
         let mut diagnostics = resolved.diagnostics.clone();
@@ -2991,7 +3022,27 @@ impl Inner {
                 .notice
                 .as_ref()
                 .map(crate::convert::diagnostic_to_proto),
+            llm_server: config
+                .llm
+                .choice
+                .as_ref()
+                .map(crate::convert::server_choice_to_proto),
         })
+    }
+
+    /// Ob der Platz der Konfiguration gerade die einer Sitzung hält: ein
+    /// Start mit Anspruch oder eine gehaltene Sandbox, die ihre schon
+    /// abgelegt hat (HUM-277).
+    fn holds_session_config(&self) -> bool {
+        let held = {
+            let pending = lock(&self.pending);
+            let held = pending.claimed || lock(&self.running).is_some();
+            drop(pending);
+            held
+        };
+        held && self
+            .session_config
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Der Schnappschuss, den ein Befund übrig lässt: alles, was ohne Profil
@@ -3050,6 +3101,11 @@ impl Inner {
             // Ohne Plan kein aufgelöster Modus (HUM-357).
             sandbox_mode: String::new(),
             sandbox_mode_notice: None,
+            llm_server: config
+                .llm
+                .choice
+                .as_ref()
+                .map(crate::convert::server_choice_to_proto),
         }
     }
 
@@ -4559,6 +4615,8 @@ fn plan_of(start: &v1::sandbox_request::Start) -> v1::sandbox_request::Plan {
         work_dir: start.work_dir.clone(),
         work_mode: start.work_mode.clone(),
         work_dir_source: start.work_dir_source.clone(),
+        llm_server: start.llm_server.clone(),
+        session_profile: start.session_profile.clone(),
     }
 }
 
@@ -4985,6 +5043,69 @@ mod tests {
             ),
             "the key went to the agent beside an endpoint of another origin"
         );
+    }
+
+    /// The session's server gets its key, not the globally active one
+    /// (HUM-400). A project chose `cloud` while `home` is active: the start
+    /// hands the agent the key of `cloud` beside the endpoint of `cloud`, and
+    /// never the key of `home` beside it.
+    ///
+    /// Mutation proof: a check against `llm.active` instead of the session's
+    /// choice withholds the key of `cloud` here and fails the first assert.
+    #[test]
+    fn the_session_server_gets_its_key_and_not_the_active_one() {
+        const KEY: &str = "sk-sandbox-0123456789abcdef";
+        let home = tempfile::TempDir::new().unwrap();
+        let paths = humanitl_config::Paths::new(humanitl_config::Env::from_pairs([(
+            "XDG_DATA_HOME",
+            home.path().join("data").display().to_string(),
+        )]));
+        let keys =
+            KeyStore::for_paths(&paths).with_secret_tool(Some(fake_secret_tool(home.path())));
+        let stored = keys
+            .store(&humanitl_config::secret::ApiKey::new(KEY).unwrap())
+            .unwrap();
+        let key_ref = stored.key_ref.to_string();
+        let service = service_with(
+            &home,
+            "opencode",
+            Some(&key_ref),
+            SandboxPorts::none().with_keys(keys),
+        );
+        let mut config = (*service.inner.config()).clone();
+        config.llm.servers.insert(
+            "home".to_owned(),
+            humanitl_config::LlmServer {
+                endpoint: Some("http://192.168.1.20:11434".to_owned()),
+                models: Vec::new(),
+                api_key_ref: Some("file:home".to_owned()),
+            },
+        );
+        config.llm.servers.insert(
+            "cloud".to_owned(),
+            humanitl_config::LlmServer {
+                endpoint: Some(KEYED_ENDPOINT.to_owned()),
+                models: Vec::new(),
+                api_key_ref: Some(key_ref.clone()),
+            },
+        );
+        config.llm.active = Some("home".to_owned());
+        config.llm.server = Some("cloud".to_owned());
+        assert!(
+            matches!(
+                service.inner.agent_key(&config, KeyNeed::Start).unwrap(),
+                AgentKey::Key(_)
+            ),
+            "the session's server did not get its key"
+        );
+
+        // The key of the active server beside the endpoint of the session's
+        // server goes nowhere.
+        config.llm.api_key_ref = Some("file:home".to_owned());
+        assert!(matches!(
+            service.inner.agent_key(&config, KeyNeed::Start).unwrap(),
+            AgentKey::None
+        ));
     }
 
     /// Der Zugangsschlüssel kommt aus der Attrappe des Speichers in eine
@@ -6486,6 +6607,197 @@ mod tests {
         (service, paths)
     }
 
+    /// Two saved servers in `config.toml` of a [`live_service`]; `home` is
+    /// active (HUM-400).
+    fn save_two_servers(paths: &humanitl_config::Paths) {
+        let mut text = std::fs::read_to_string(paths.config_path()).unwrap();
+        text.push_str(
+            "\n[llm]\nactive = \"home\"\n\n[llm.servers.home]\nendpoint = \
+             \"http://home.lan:11434\"\nmodels = [\"qwen3\"]\n\n[llm.servers.work]\nendpoint = \
+             \"https://llm.work.example/v1\"\nmodels = [\"big\"]\n",
+        );
+        std::fs::write(paths.config_path(), text).unwrap();
+    }
+
+    /// The events of a `Plan`.
+    fn plan_events_of(
+        service: &SandboxService,
+        plan: &v1::sandbox_request::Plan,
+    ) -> Vec<v1::SandboxEvent> {
+        service.inner.consistent_plan(plan, || {})
+    }
+
+    fn status_of(events: &[v1::SandboxEvent]) -> v1::sandbox_event::Status {
+        events
+            .iter()
+            .find_map(|event| match &event.event {
+                Some(v1::sandbox_event::Event::Status(status)) => Some(status.clone()),
+                _ => None,
+            })
+            .expect("a Plan answers with a status")
+    }
+
+    /// A plan builds its whole snapshot from one resolution (HUM-400,
+    /// review): the project chooses `work`, and the endpoint, the server and
+    /// the `opencode.json` of the preview all name `work`, never `home`.
+    ///
+    /// Mutation proof: a preview from the configuration without the project
+    /// (as before the review) writes `home.lan` into `opencode.json` here.
+    #[test]
+    fn a_plan_builds_endpoint_server_and_preview_from_one_resolution() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, paths) = live_service(&home, SandboxPorts::none());
+        save_two_servers(&paths);
+        // The stored project chooses nothing; the folder of this plan
+        // chooses `work`.
+        let other = home.path().join("other");
+        std::fs::create_dir_all(other.join(".humanitl")).unwrap();
+        std::fs::write(
+            other.join(".humanitl/profile.toml"),
+            "[config.llm]\nserver = \"work\"\n",
+        )
+        .unwrap();
+
+        let plan = v1::sandbox_request::Plan {
+            work_dir: other.display().to_string(),
+            ..v1::sandbox_request::Plan::default()
+        };
+        let status = status_of(&plan_events_of(&service, &plan));
+        assert_eq!(status.llm_endpoint, "https://llm.work.example/v1");
+        let server = status.llm_server.expect("the server stands");
+        assert_eq!(server.name, "work");
+        assert_eq!(server.source, v1::llm_server_choice::Source::Project as i32);
+
+        let prepared = service.inner.consistent(
+            &plan,
+            |config, _| {
+                service.inner.prepare_keyed_with(
+                    config,
+                    &service.inner.pending_choice(),
+                    &plan,
+                    &[],
+                    KeyNeed::Plan,
+                )
+            },
+            drop,
+        );
+        let prepared = prepared.expect("the preview is built");
+        let opencode_json = prepared
+            .session
+            .files
+            .iter()
+            .find(|file| file.dst == Path::new(opencode::CONFIG_DST))
+            .expect("opencode.json is there");
+        let text = String::from_utf8_lossy(&opencode_json.content);
+        assert!(text.contains("llm.work.example"), "{text}");
+        assert!(!text.contains("home.lan"), "{text}");
+    }
+
+    /// A plan names a session profile, and the snapshot is the one a start
+    /// with that profile would get, with the server the profile chooses
+    /// (HUM-400, review). An unknown profile is `CONFIG_001`, as at the start.
+    #[test]
+    fn a_plan_takes_the_session_profile_and_its_server() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, paths) = live_service(&home, SandboxPorts::none());
+        save_two_servers(&paths);
+        std::fs::write(
+            paths.profiles_dir().join("team.toml"),
+            "[config.llm]\nserver = \"work\"\n",
+        )
+        .unwrap();
+
+        let without = status_of(&plan_events_of(
+            &service,
+            &v1::sandbox_request::Plan::default(),
+        ));
+        assert_eq!(
+            without.llm_server.map(|server| server.name).as_deref(),
+            Some("home"),
+            "without the profile the active server"
+        );
+
+        let status = status_of(&plan_events_of(
+            &service,
+            &v1::sandbox_request::Plan {
+                session_profile: "team".to_owned(),
+                ..v1::sandbox_request::Plan::default()
+            },
+        ));
+        let server = status.llm_server.expect("the server stands");
+        assert_eq!(server.name, "work");
+        assert_eq!(server.source, v1::llm_server_choice::Source::Profile as i32);
+        assert_eq!(server.detail, "team");
+        assert_eq!(status.llm_endpoint, "https://llm.work.example/v1");
+
+        let events = plan_events_of(
+            &service,
+            &v1::sandbox_request::Plan {
+                session_profile: "nope".to_owned(),
+                ..v1::sandbox_request::Plan::default()
+            },
+        );
+        assert!(
+            events.iter().any(|event| matches!(
+                &event.event,
+                Some(v1::sandbox_event::Event::Diagnostic(found)) if found.code == "CONFIG_001"
+            )),
+            "{events:?}"
+        );
+    }
+
+    /// The folder of a plan is resolved like the start's, and still checked
+    /// against the configuration without the wish (HUM-400, review): a
+    /// folder outside the home directory stays `SANDBOX_006`.
+    ///
+    /// Mutation proof: leaving the plan's folder in `sandbox.work_dir` after
+    /// the resolution makes it count as the configured folder, and the plan
+    /// accepts it.
+    #[test]
+    fn the_folder_of_a_plan_is_not_taken_for_the_configured_one() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, _paths) = live_service(&home, SandboxPorts::none());
+        let (_outside, _canonical, plan) = outside_dir();
+        let events = plan_events_of(&service, &plan);
+        assert!(
+            events.iter().any(|event| matches!(
+                &event.event,
+                Some(v1::sandbox_event::Event::Diagnostic(found)) if found.code == "SANDBOX_006"
+            )),
+            "{events:?}"
+        );
+    }
+
+    /// A session profile that sets `sandbox.work_dir` moves the folder of
+    /// the plan, as it moves the start's (HUM-400, review round 2).
+    ///
+    /// Mutation proof: resetting the folder after every resolution, not only
+    /// after one the plan injected, previews the stored folder here.
+    #[test]
+    fn a_session_profile_folder_reaches_the_plan() {
+        let home = tempfile::TempDir::new().unwrap();
+        let (service, paths) = live_service(&home, SandboxPorts::none());
+        let elsewhere = home.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let elsewhere = elsewhere.canonicalize().unwrap();
+        std::fs::write(
+            paths.profiles_dir().join("team.toml"),
+            format!(
+                "[config.sandbox]\nwork_dir = {:?}\n",
+                elsewhere.display().to_string()
+            ),
+        )
+        .unwrap();
+        let status = status_of(&plan_events_of(
+            &service,
+            &v1::sandbox_request::Plan {
+                session_profile: "team".to_owned(),
+                ..v1::sandbox_request::Plan::default()
+            },
+        ));
+        assert_eq!(status.work_dir, elsewhere.display().to_string());
+    }
+
     /// The `llm_endpoint` of the snapshot a `Plan` returns.
     async fn planned_endpoint(service: &SandboxService) -> String {
         use tokio_stream::StreamExt as _;
@@ -6842,8 +7154,10 @@ mod tests {
         let inner = Arc::clone(&service.inner);
         let mut claim = None;
         let mut builds = 0;
+        let plan = v1::sandbox_request::Plan::default();
         let endpoint = inner.consistent(
-            |config| {
+            &plan,
+            |config, _| {
                 builds += 1;
                 if builds == 1 {
                     // In the middle of the first build a start claims and
@@ -6869,7 +7183,8 @@ mod tests {
         // Bounded: a session that changes on every build gets the last one.
         let mut restless = 0;
         inner.consistent(
-            |_| {
+            &plan,
+            |_, _| {
                 restless += 1;
                 inner.bump_generation();
             },

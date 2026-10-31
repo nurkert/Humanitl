@@ -1,5 +1,5 @@
-/// The header of the sandbox screen: state, profile, project folder, start
-/// and stop (HUM-040).
+/// The header of the sandbox screen: state, profile, model server, project
+/// folder, start and stop (HUM-040, HUM-400).
 ///
 /// It is one row and it never reflows: the state stands on the left, the two
 /// controls that change something on the right, and the same action is always
@@ -64,6 +64,7 @@ class SandboxHeader extends ConsumerWidget {
               color: tokens.colors.fg2,
               textColor: tokens.colors.fg1,
             ),
+            SandboxServerBadge(status: status),
             // Der Picker bekommt den ganzen Rest und steht rechts. Ein `Spacer`
             // daneben teilte den Platz mit ihm, und der Pfad bekäme die Hälfte
             // dessen, was da ist.
@@ -194,6 +195,71 @@ class SandboxStateIndicator extends StatelessWidget {
   }
 }
 
+/// The saved model server of the session and where its choice comes from
+/// (HUM-400).
+///
+/// Ein Projekt kann einen anderen der gespeicherten Server wählen als den
+/// aktiven; das soll vor dem Start zu sehen sein, nicht erst in den
+/// Einstellungen. Der Chip nennt Namen und Herkunft als Text, die Farbe
+/// unterstreicht nur: Durchreiche wie in der Statusleiste, die Farbe des
+/// Haltens, wenn eine Datei des Projekts gewählt hat, Fehler, wenn der Name
+/// keinen gespeicherten Server nennt und der Start abgelehnt wird. Ohne
+/// gespeicherten Server steht nichts da.
+class SandboxServerBadge extends StatelessWidget {
+  /// Shows the server of [status].
+  const SandboxServerBadge({required this.status, super.key});
+
+  /// What the daemon last said.
+  final SandboxStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final LlmServerChoice? server = status.llmServer;
+    if (server == null) {
+      return const SizedBox.shrink();
+    }
+    final HTokens tokens = HTheme.of(context);
+    final AppLocalizations l10n = context.l10n;
+    final String hint = !server.saved
+        ? l10n.sandboxLlmServerMissing(server.name)
+        : server.source == LlmServerSource.project
+        ? l10n.sandboxLlmServerHintProject(server.detail, server.name)
+        : l10n.sandboxLlmServerHint(server.name);
+    final Color color = !server.saved
+        ? tokens.state.error
+        : server.source == LlmServerSource.project
+        ? tokens.state.held
+        : tokens.state.passthroughLlm;
+    return Padding(
+      padding: EdgeInsets.only(left: tokens.spacing.x2),
+      child: HoverLabel(
+        label: hint,
+        child: HBadge(
+          key: const Key('sandbox-llm-server'),
+          text: l10n.sandboxLlmServer(
+            server.name,
+            sandboxServerSource(l10n, server),
+          ),
+          color: color,
+          semanticsLabel: hint,
+        ),
+      ),
+    );
+  }
+}
+
+/// Where the choice of [server] comes from, as the short word of the chip.
+String sandboxServerSource(AppLocalizations l10n, LlmServerChoice server) =>
+    switch (server.source) {
+      LlmServerSource.run => l10n.sandboxLlmServerSourceRun,
+      LlmServerSource.project => l10n.sandboxLlmServerSourceProject,
+      LlmServerSource.profile => l10n.sandboxLlmServerSourceProfile(
+        server.detail,
+      ),
+      LlmServerSource.active => l10n.sandboxLlmServerSourceActive,
+      LlmServerSource.unknown => l10n.sandboxLlmServerSourceUnknown,
+    };
+
 /// One control, never two: start while nothing runs, stop while it does.
 class SandboxStartStop extends ConsumerWidget {
   /// Creates the control for [status].
@@ -212,7 +278,7 @@ class SandboxStartStop extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final AppLocalizations l10n = context.l10n;
-    final Diagnostic? blocking = status.blocking;
+    final Diagnostic? blocking = status.startRefusal;
     final bool up = status.isUp || status.state == SandboxState.stopping;
     if (up) {
       return HButton(
@@ -266,11 +332,15 @@ class SandboxStartStop extends ConsumerWidget {
       return start;
     }
     // A control that is off says why on itself, not only in the card below
-    // it (`docs/UX.md` 5.3).
+    // it (`docs/UX.md` 5.3). Ein nicht gespeicherter Server sagt seinen
+    // Namen, nicht nur den Titel des Befunds (HUM-400).
+    final LlmServerChoice? server = status.llmServer;
     return HoverLabel(
-      label: l10n.sandboxStartBlocked(
-        DiagnosticL10n.resolve(blocking, l10n).title,
-      ),
+      label: status.blocking == null && server != null && !server.saved
+          ? l10n.sandboxLlmServerMissing(server.name)
+          : l10n.sandboxStartBlocked(
+              DiagnosticL10n.resolve(blocking, l10n).title,
+            ),
       child: start,
     );
   }

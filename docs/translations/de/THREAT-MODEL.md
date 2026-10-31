@@ -175,13 +175,22 @@ eigenen Eintrag im Schlüsselbund, und nur der Ursprung des aktiven Servers beko
 und ist die Durchleitung der nächsten Session; eine Probe schickt den Schlüssel eines
 gespeicherten Servers nur an dessen eigenen Ursprung, nie an den eines anderen; ein Endpunkt aus
 der Umgebung oder der Kommandozeile über dem aktiven Server, ein geteilter Verweis oder ein
-fehlender aktiver Server lassen den Schlüssel ungesendet. *Restrisiko:* vollständig.
+fehlender aktiver Server lassen den Schlüssel ungesendet. Seit HUM-400 ist die Grenze der
+gespeicherte Server, den die Session aufgelöst hat: `llm.server` aus dem Lauf, dem Projekt-Profil
+oder einem Profil der Session geht `llm.active` vor, nur dieser Server ist die Durchleitung und
+bekommt seinen Schlüssel, und ein Name ohne gespeicherten Eintrag lehnt den Start ab
+(`CONFIG_021`), statt zurückzufallen. *Restrisiko:* vollständig.
 Wer den Agenten über Prompt-Injection lenkt, kann Projektinhalte in einen Prompt legen. Ist
 `llm.endpoint` ein Name, kann, wer diesen Namen kontrolliert, die Durchleitung zwischen zwei
 Anfragen umlenken, und weil die Regel `allow_private` trägt, sind der Router oder
 `169.254.169.254` gültige Ziele; nimm eine Adresse oder `resolver.overrides`. Der Agent kann den
 Schlüssel lesen und anderswohin schicken, wo er ein Fund ist, aber nur bei einem Host ohne
-erlaubende Regel angehalten wird.
+erlaubende Regel angehalten wird. Ein geklontes Repository kann mit `llm.server` in seinem
+Projekt-Profil einen anderen der gespeicherten Server des Nutzers wählen und so den Modellverkehr
+seiner eigenen Session dorthin lenken, etwa an einen Firmenserver statt an einen lokalen; es kann
+keinen Server, keinen Endpunkt und keinen Schlüssel festlegen, und die Wahl steht mit ihrer
+Herkunft im Kopf der Sandbox, in `humanitl sandbox plan` und beim Start von `humanitl run`. Eine
+Rückfrage gibt es nicht; speichere keinen Server, den kein Repository erreichen darf.
 
 ### K-03 Das Socket-Verzeichnis des Proxys
 
@@ -610,6 +619,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-10-30 | K-24: die Wegwerf-Sandbox, ein Overlay über dem nur lesbaren Projekt mit der oberen Schicht im RAM und einer Größengrenze; Änderungen erreichen das Projekt nur über eine geprüfte Übernahme | HUM-350 |
 | 2026-10-30 | K-02: unter macOS liegt der Zugangsschlüssel des Anbieters im Anmelde-Schlüsselbund über `/usr/bin/security`, über `stdin` und zurückgelesen; dieselbe Klasse wie der Secret Service: lesbar für jeden Prozess des Kontos außerhalb der Sandbox, außer Reichweite des Agenten | HUM-349 |
 | 2026-10-30 | K-24: das Überschreiben eines Konflikts wird je Änderung bestätigt (`overwrite_ids`); eine Bestätigung für eine Datei deckt nie eine andere ab | HUM-351 |
+| 2026-10-31 | K-02: die Grenze ist der gespeicherte Server, den die Session aufgelöst hat; `llm.server` aus Lauf, Projekt oder Profil wählt unter den gespeicherten Servern des Nutzers, legt nie einen an; ein unbekannter Name lehnt den Start ab | HUM-400 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

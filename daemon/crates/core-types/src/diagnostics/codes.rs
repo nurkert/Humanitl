@@ -1561,9 +1561,13 @@ registry! {
     /// Schlüssel), zwei Server mit demselben Verweis (dann wirkt er für
     /// keinen), oder Endpunkt und Verweis kommen nicht aus einem Eintrag,
     /// etwa ein Endpunkt aus der Umgebung (dann geht kein Schlüssel hinaus).
+    /// Seit HUM-400 auch: `llm.server` aus einem Lauf, dem Projekt-Profil
+    /// oder einem Profil nennt keinen gespeicherten Server. Beim Laden eine
+    /// Warnung, ohne Endpunkt und Schlüssel; der Start einer Sitzung lehnt
+    /// damit als Fehler ab, statt auf `llm.active` zurückzufallen.
     CONFIG_021 => "config", "Modellserver nicht geändert", "#config_021",
-        "`LlmServers` oder `humanitl llm server` bekommt einen ungültigen, doppelten oder unbekannten Namen, einen Endpunkt, der keiner ist, oder soll den aktiven Server ohne Nachfolger oder während einer Sitzung entfernen; `LlmKey` trifft einen Server, der sich beim Ablegen geändert hat oder dessen Verweis ein anderer trägt; `SetConfig` nennt einen Server, der nicht mehr aktiv ist; oder beim Laden gibt es keinen gültigen aktiven Server, einen geteilten Verweis oder einen Endpunkt, der nicht vom aktiven Server kommt.",
-        "`CopyCommand`: `humanitl llm server ls` zeigt die Namen; beim Entfernen des aktiven Servers `--use NAME` mit dem Nachfolger.";
+        "`LlmServers` oder `humanitl llm server` bekommt einen ungültigen, doppelten oder unbekannten Namen, einen Endpunkt, der keiner ist, oder soll den aktiven Server ohne Nachfolger oder während einer Sitzung entfernen; `LlmKey` trifft einen Server, der sich beim Ablegen geändert hat oder dessen Verweis ein anderer trägt; `SetConfig` nennt einen Server, der nicht mehr aktiv ist; oder beim Laden gibt es keinen gültigen aktiven Server, einen geteilten Verweis oder einen Endpunkt, der nicht vom aktiven Server kommt; oder `llm.server` aus Lauf, Projekt oder Profil nennt einen Server, der nicht gespeichert ist, und die Sitzung startet nicht (HUM-400).",
+        "`CopyCommand`: `humanitl llm server ls` zeigt die Namen; beim Entfernen des aktiven Servers `--use NAME` mit dem Nachfolger; bei einem nicht gespeicherten `llm.server` `humanitl llm server add NAME URL`, oder den Schlüssel an der genannten Stelle entfernen.";
 
     // HUM-274: pi is a Node script.
     /// The agent command is a script whose `#!` line asks for Node.js

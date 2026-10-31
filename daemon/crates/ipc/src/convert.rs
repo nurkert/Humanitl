@@ -229,6 +229,31 @@ pub fn check_result_to_proto(result: &CheckResult) -> v1::CheckResult {
     }
 }
 
+/// Übersetzt die Wahl des Modellservers einer Sitzung in ihre Wire-Form
+/// (HUM-400). Ein Name, den kein gespeicherter Server trägt, kam vielleicht
+/// aus einem geklonten Repository und geht deshalb bereinigt hinaus.
+#[must_use]
+pub fn server_choice_to_proto(
+    choice: &humanitl_config::servers::ServerChoice,
+) -> v1::LlmServerChoice {
+    use humanitl_config::servers::ServerSource;
+    use v1::llm_server_choice::Source;
+
+    let (source, detail) = match &choice.source {
+        ServerSource::Run => (Source::Run, String::new()),
+        ServerSource::Project(path) => (Source::Project, path.display().to_string()),
+        ServerSource::Profile(name) => (Source::Profile, name.clone()),
+        ServerSource::Config => (Source::Default, "config.toml".to_owned()),
+        ServerSource::Default => (Source::Default, String::new()),
+    };
+    v1::LlmServerChoice {
+        name: sanitize_note(&choice.name),
+        source: source.into(),
+        detail: sanitize_note(&detail),
+        refusal: choice.refusal().as_ref().map(diagnostic_to_proto),
+    }
+}
+
 /// Übersetzt den Stand der verweigerten Versuche in seine Wire-Form (HUM-138).
 ///
 /// Familie und Typ sind hier schon Namen, die der Wirt geprüft hat
