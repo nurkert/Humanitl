@@ -42,6 +42,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-360 | Website auf Telefonen: Download-Felder passen in die Breite, Pfeile und Zählwerk der Bühne stehen frei | S | HUM-337, HUM-347, HUM-338 |
 | HUM-364 | Proxy: Klartext-HTTP im `CONNECT`-Tunnel, damit `pi` 1.x sein lokales Modell erreicht | S | HUM-024 |
 | HUM-367 | Statusleiste: Daemon-Neustart auch mit laufender Sitzung, ohne `systemctl`-Hinweis | S | HUM-284 |
+| HUM-375 | Website: Das Glanzband folgt den Ecken der Fenster | S | HUM-348 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -640,3 +641,7 @@ Akzeptanz:
 - Läuft eine Sitzung, fragt der Knopf in der Leiste nach; der Fokus steht auf Abbrechen, `Escape` bricht ab, und nur die zweite Antwort stoppt die Sitzung und startet neu.
 - Die Antwort gilt genau der Sandbox, nach der gefragt wurde.
 - Ein Daemon, der busy bleibt, wird nie neu gestartet. Start, Stopp, unbekannter Zustand und eine fehlende Kommandozeile ruhen wie bisher.
+
+## HUM-375 · Website: Das Glanzband folgt den Ecken der Fenster
+
+Das Band der Glaskante lief in den Ecken mit dem Radius der Fase statt dem des Rahmens und ließ die Spitzen dunkel. Akzeptanz: Die Eckkacheln kommen aus `website/scripts/generate-rim.mjs`, ihre Tiefe ist der Abstand zum Rand mit Radius `--r`, und das Band läuft ohne Sprung in die Seiten über.
