@@ -18,12 +18,13 @@ use humanitl_config::{AgentBriefing, AskMode, HoldConfig, Language, LlmConfig};
 use humanitl_core::rule::{Action, HostPattern};
 use humanitl_core::{HostName, Method, Scheme, SessionId, Severity};
 use humanitl_rules::{RequestKey, RuleSet, Verdict};
-use humanitl_sandbox::agent::briefing;
 use humanitl_sandbox::agent::opencode::{
     CONFIG_DST, MANAGED_CONFIG_DST, MODELS_DST, OLLAMA_INFERENCE_PATHS, OPENAI_INFERENCE_PATHS,
-    PLACEHOLDER_MODEL, briefing_dst, config_dst, keep_dst, passthrough_authority, tui_dst,
+    PLACEHOLDER_MODEL, briefing_dst, config_dst, keep_dst, passthrough_authority, skill_dst,
+    tui_dst,
 };
 use humanitl_sandbox::agent::opencode_models::PROVIDER_ID;
+use humanitl_sandbox::agent::{briefing, skill};
 use humanitl_sandbox::{
     AdapterRegistry, AgentAdapter, AgentContext, OpenCodeAdapter, SandboxBackend, SandboxProfile,
     SandboxView, files_inside_work,
@@ -746,6 +747,9 @@ fn opencode_writes_nothing_into_work() {
             // Die Einweisung (HUM-071), unter dem Konfigurationsverzeichnis
             // des Agenten und nicht im Projekt.
             briefing_dst(&ctx.config_home()).as_path(),
+            // Der Skill `humanitl` (HUM-364), dort, wo OpenCode globale
+            // Skills sucht.
+            skill_dst(&ctx.config_home()).as_path(),
         ]
     );
     for file in &files {
@@ -828,7 +832,12 @@ const WORST_ENDPOINT: &str = "http://ollama.services.example.internal:11434";
 /// vierstellige Frist) 731 Zeichen und 184 Token in `o200k_base`. Wer den Text
 /// über diese Grenze wachsen lässt, zählt vorher nach; die Zahl hier wird
 /// nicht heraufgesetzt, ohne dass das Skript grün ist.
-const BRIEFING_MAX_CHARS: usize = 780;
+///
+/// Nachgezählt am 2026-10-31 nach HUM-364 (Sätze über lange Wartezeiten und
+/// der Verweis auf den Skill, ohne Wort über einen Menschen): derselbe Fall hat
+/// 1056 Zeichen (englisch, `ui`) und höchstens 266 Token,
+/// die Grenze der Token ist 270.
+const BRIEFING_MAX_CHARS: usize = 1080;
 
 /// Die Einweisung liegt im Heimatverzeichnis des Agenten, nie unter `/work`.
 ///
@@ -924,8 +933,8 @@ fn briefing_placeholders_replaced() {
 fn briefing_names_the_meta_endpoint_and_its_limit() {
     let adapter = OpenCodeAdapter::new();
     for (language, only_the_user) in [
-        (Language::En, "Only the user can add a rule."),
-        (Language::De, "Nur der Nutzer kann eine Regel anlegen."),
+        (Language::En, "It grants nothing by itself."),
+        (Language::De, "Er gewährt von sich aus nichts."),
     ] {
         let ctx = context(Some(WORST_ENDPOINT)).with_language(language);
         let text = String::from_utf8(file_at(
@@ -1109,12 +1118,118 @@ fn briefing_can_be_switched_off() {
             .any(|file| file.dst == briefing_dst(&ctx.config_home())),
         "the briefing is gone"
     );
+    assert!(
+        !files
+            .iter()
+            .any(|file| file.dst == skill_dst(&ctx.config_home())),
+        "the skill goes with the briefing (HUM-364)"
+    );
     assert_eq!(
         files.len(),
         6,
         "the configuration of the agent stays: {:?}",
         files.iter().map(|file| &file.dst).collect::<Vec<_>>()
     );
+}
+
+// --- der Skill `humanitl` (HUM-364) -----------------------------------------
+
+/// Der Skill liegt nur lesbar dort, wo `OpenCode` 1.18.31 globale Skills sucht
+/// (`<config>/opencode/skills/<name>/SKILL.md`), folgt einem eigenen
+/// `XDG_CONFIG_HOME`, und sein Kopf trägt Name und Beschreibung.
+#[test]
+fn opencode_skill_is_written_read_only_where_opencode_finds_it() {
+    let adapter = OpenCodeAdapter::new();
+    for (config_home, expected) in [
+        (
+            None,
+            "/home/agent/.config/opencode/skills/humanitl/SKILL.md",
+        ),
+        (
+            Some(PathBuf::from("/etc/xdg-of-the-user")),
+            "/etc/xdg-of-the-user/opencode/skills/humanitl/SKILL.md",
+        ),
+    ] {
+        let ctx = context(Some(WORST_ENDPOINT)).with_config_home(config_home);
+        let files = adapter.files(&ctx).unwrap();
+        let file = files
+            .iter()
+            .find(|file| file.dst == Path::new(expected))
+            .unwrap_or_else(|| panic!("no skill at {expected}"));
+        assert_eq!(file.dst, skill_dst(&ctx.config_home()));
+        assert_eq!(file.mode, 0o444, "the agent may not rewrite the skill");
+        assert!(!file.secret);
+
+        let text = String::from_utf8(file.content.clone()).expect("the skill is UTF-8");
+        let head = skill::front_matter(&text).expect("the front matter parses");
+        assert_eq!(head.name, "humanitl");
+        assert!(
+            head.description.contains("slow") && head.description.contains("refused"),
+            "{}",
+            head.description
+        );
+        assert!(
+            text.contains("ollama.services.example.internal:11434"),
+            "{text}"
+        );
+    }
+}
+
+/// Die Frist der Sitzung steht im Skill, keine Klammer bleibt stehen, und der
+/// Skill spricht in der Sprache des Briefings.
+#[test]
+fn opencode_skill_renders_the_timeout_in_both_languages() {
+    let adapter = OpenCodeAdapter::new();
+    for (language, up_to) in [(Language::En, "up to 90s"), (Language::De, "bis zu 90s")] {
+        let ctx = context(Some(WORST_ENDPOINT))
+            .with_language(language)
+            .with_hold(HoldConfig {
+                timeout_secs: 90,
+                ..HoldConfig::default()
+            });
+        let text = String::from_utf8(file_at(
+            adapter,
+            &ctx,
+            "/home/agent/.config/opencode/skills/humanitl/SKILL.md",
+        ))
+        .unwrap();
+        assert!(!text.contains('{'), "{language:?}: {text}");
+        assert!(text.contains(up_to), "{language:?}: {text}");
+        assert!(text.contains("curl --max-time 150"), "{language:?}: {text}");
+        assert!(!text.contains("300"), "{language:?}: {text}");
+    }
+}
+
+/// Das Briefing erklärt lange Wartezeiten in beiden Ask-Modi und verweist auf
+/// den Skill (HUM-364), so wie es in der Sandbox liegt.
+#[test]
+fn opencode_briefing_explains_latency_in_both_ask_modes() {
+    let adapter = OpenCodeAdapter::new();
+    for (ask_mode, needle) in [
+        (AskMode::Ui, "Requests here have high, variable latency"),
+        (AskMode::Terminal, "no retry loops or parallel duplicates"),
+        (AskMode::None, "`504`: not permitted, not an outage"),
+    ] {
+        let ctx = context(Some(WORST_ENDPOINT)).with_hold(HoldConfig {
+            ask_mode,
+            ..HoldConfig::default()
+        });
+        let text = String::from_utf8(file_at(
+            adapter,
+            &ctx,
+            "/home/agent/.config/opencode/AGENTS.md",
+        ))
+        .unwrap();
+        assert!(text.contains(needle), "{ask_mode:?}: {text}");
+        assert!(
+            text.contains("they never wait here, so delays come from the model server."),
+            "{ask_mode:?}: {text}"
+        );
+        assert!(
+            text.contains("Details: skill `humanitl`."),
+            "{ask_mode:?}: {text}"
+        );
+    }
 }
 
 #[test]

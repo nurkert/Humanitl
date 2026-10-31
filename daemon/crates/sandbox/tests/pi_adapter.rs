@@ -16,16 +16,16 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
 use humanitl_config::secret::ApiKey;
-use humanitl_config::{AgentBriefing, LlmConfig, PiWebAccess};
+use humanitl_config::{AgentBriefing, AskMode, HoldConfig, Language, LlmConfig, PiWebAccess};
 use humanitl_core::{FixAction, SessionId, Severity};
-use humanitl_sandbox::agent::files_on_reserved_targets;
 use humanitl_sandbox::agent::opencode_models::{PLACEHOLDER_MODEL, PROVIDER_ID};
 use humanitl_sandbox::agent::pi::{
     API_KEY_DST, DOCS_URL, INSTALL_COMMAND, NODE_DOWNLOAD_URL, VISIBLE_ENV, WEB_ACCESS_DOCS_URL,
     WEB_ACCESS_INSTALL_COMMAND, WebAccessLookup, briefing_dst, file_targets, find_web_access,
-    models_dst, settings_dst, web_search_dst,
+    models_dst, settings_dst, skill_dst, web_search_dst,
 };
 use humanitl_sandbox::agent::pi_config::{ENV_KEY_FILE, NO_KEY_PLACEHOLDER};
+use humanitl_sandbox::agent::{files_on_reserved_targets, skill};
 use humanitl_sandbox::{
     AdapterRegistry, AgentAdapter, AgentContext, AgentKey, Mount, OpenCodeAdapter, PiAdapter,
     SandboxBackend, SandboxProfile, SandboxView, files_inside_work,
@@ -274,6 +274,92 @@ fn pi_briefing_lies_in_the_agent_directory_and_can_be_switched_off() {
             .any(|file| file.dst.ends_with("AGENTS.md")),
         "a switched-off briefing is no file at all"
     );
+    assert!(
+        !PiAdapter::new()
+            .files(&off)
+            .unwrap()
+            .iter()
+            .any(|file| file.dst.ends_with("SKILL.md")),
+        "the skill goes with the briefing (HUM-364)"
+    );
+}
+
+/// The skill `humanitl` lies read-only in pi's user skills directory
+/// (`<agent-dir>/skills/<name>/SKILL.md`, pi 1.4.0), follows the home of the
+/// profile, and its front matter carries name and description (HUM-364).
+#[test]
+fn pi_skill_is_written_read_only_where_pi_finds_it() {
+    for (home, expected) in [
+        (None, "/home/agent/.pi/agent/skills/humanitl/SKILL.md"),
+        (
+            Some("/home/other"),
+            "/home/other/.pi/agent/skills/humanitl/SKILL.md",
+        ),
+    ] {
+        let mut ctx = context(Some("http://192.168.1.50:11434"));
+        if let Some(home) = home {
+            ctx = ctx.with_home(PathBuf::from(home));
+        }
+        let files = PiAdapter::new().files(&ctx).unwrap();
+        let file = files
+            .iter()
+            .find(|file| file.dst == Path::new(expected))
+            .unwrap_or_else(|| panic!("no skill at {expected}"));
+        assert_eq!(file.dst, skill_dst(&ctx.home));
+        assert_eq!(file.mode, 0o444, "the agent may not rewrite the skill");
+        assert!(!file.secret);
+
+        let text = String::from_utf8(file.content.clone()).unwrap();
+        let head = skill::front_matter(&text).expect("the front matter parses");
+        assert_eq!(head.name, "humanitl");
+        assert!(head.description.contains("slow"), "{}", head.description);
+        assert!(text.contains("192.168.1.50:11434"), "{text}");
+    }
+}
+
+/// The timeout of the session is rendered into the skill in both languages,
+/// and the briefing of pi explains latency in both ask modes (HUM-364).
+#[test]
+fn pi_skill_and_briefing_render_the_hold_of_the_session() {
+    for (language, up_to, waiting, unasked) in [
+        (
+            Language::En,
+            "up to 90s",
+            "Requests here have high, variable latency",
+            "`504`: not permitted, not an outage",
+        ),
+        (
+            Language::De,
+            "bis zu 90s",
+            "Anfragen haben hier hohe, schwankende Latenz",
+            "`504`: nicht erlaubt, kein Ausfall",
+        ),
+    ] {
+        let hold = HoldConfig {
+            timeout_secs: 90,
+            ..HoldConfig::default()
+        };
+        let ctx = context(Some("http://192.168.1.50:11434"))
+            .with_language(language)
+            .with_hold(hold.clone());
+        let skill = file_at(&ctx, &skill_dst(Path::new(HOME)));
+        assert!(!skill.contains('{'), "{language:?}: {skill}");
+        assert!(skill.contains(up_to), "{language:?}: {skill}");
+        assert!(
+            skill.contains("curl --max-time 150"),
+            "{language:?}: {skill}"
+        );
+        let briefing = file_at(&ctx, &briefing_dst(Path::new(HOME)));
+        assert!(briefing.contains(waiting), "{language:?}: {briefing}");
+
+        let none = ctx.with_hold(HoldConfig {
+            ask_mode: AskMode::None,
+            ..hold
+        });
+        let briefing = file_at(&none, &briefing_dst(Path::new(HOME)));
+        assert!(briefing.contains(unasked), "{language:?}: {briefing}");
+        assert!(!briefing.contains(waiting), "{language:?}: {briefing}");
+    }
 }
 
 #[test]
@@ -468,6 +554,8 @@ if [ "$key" = "sk-pi-test-0123456789abcdef" ]; then echo key=arrived; else echo 
 grep -q '"baseUrl": "http://192.168.1.50:11434/v1"' "$A/models.json" && echo base=ok
 grep -q '"defaultModel": "qwen3"' "$A/settings.json" && echo settings=ok
 grep -q 'Blocked by Humanitl.' "$A/AGENTS.md" && echo briefing=ok
+head -n 2 "$A/skills/humanitl/SKILL.md" | grep -q '^name: humanitl$' && echo skill=ok
+if echo x > "$A/skills/humanitl/SKILL.md" 2>/dev/null; then echo skill_rc=0; else echo skill_rc=1; fi
 if echo '{}' > "$A/settings.json" 2>/dev/null; then echo settings_rc=0; else echo settings_rc=1; fi
 mkdir -p "$A/sessions" && echo '{}' > "$A/auth.json" && echo agent_dir=writable
 if env | grep -q sk-pi-test; then echo env_key=1; else echo env_key=0; fi
@@ -515,6 +603,8 @@ fn a_fake_pi_finds_its_configuration_and_key_in_a_real_sandbox() {
         "base=ok",
         "settings=ok",
         "briefing=ok",
+        "skill=ok",
+        "skill_rc=1",
         "settings_rc=1",
         "agent_dir=writable",
         "env_key=0",
