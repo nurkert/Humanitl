@@ -106,7 +106,9 @@ Seitenkanäle sind erklärt, in der App sichtbar und nicht geschlossen
 ([`docs/SECURITY.md`](docs/SECURITY.md#5-declared-side-channels)):
 
 - **Die LLM-Durchleitung zum Sprachmodell:** Daten können hinaus. Dein Modell sieht jeden Prompt des
-  Agenten ohne Halt; dieser Host gehört zu dem, dem du vertraust.
+  Agenten ohne Halt; dieser Host gehört zu dem, dem du vertraust. Ein Projekt kann für seine
+  Sitzungen einen anderen deiner gespeicherten Modellserver wählen, also gehört jeder gespeicherte
+  Server dazu.
 - **Das Projektverzeichnis `/work`:** Daten können hinaus. Es ist beschreibbar; was der Agent dort
   hinterlässt, trägt vielleicht später ein Mensch hinaus.
 - **Die Terminalausgabe** kommt vom Agenten und wird gefiltert, nicht geglaubt.

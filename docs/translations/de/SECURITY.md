@@ -145,7 +145,9 @@ dort mit `CONFIG_003` verweigert, und der Daemon startet nicht. Das betrifft
 Vorher konnte ein Projekt-Profil die harte Sperre für IBANs und Kartennummern abschalten oder
 die Aufzeichnung jedes Bodys auf 1 KiB verkleinern, während eine Freigabe den ganzen Body
 schickte. Die vollständige Liste ist die Spalte „Projekt" in
-[`CONFIG.md`](CONFIG.md).
+[`CONFIG.md`](CONFIG.md). Unter `llm` darf ein Projekt-Profil genau einen Schlüssel setzen,
+`llm.server` (HUM-400): Er wählt einen der Modellserver, die der Nutzer gespeichert hat, und kann
+nie einen Endpunkt, ein Modell oder einen Schlüssel festlegen (Abschnitt 5.1).
 
 Toolchain für reproduzierbare Builds: Rust 1.95.0 (festgelegt in `daemon/rust-toolchain.toml`,
 mindestens 1.88), Flutter 3.47.2 (festgelegt in `app/.fvmrc`), `bubblewrap` 0.8 oder neuer.
@@ -726,6 +728,45 @@ sonst wird der gespeicherte Eintrag wieder gelöscht. Ein Wechsel gilt für die 
 eine laufende Session behält den Server, den Schlüssel und die Durchleitung, mit denen sie
 gestartet ist, und der aktive Server lässt sich nicht entfernen, während eine Session läuft oder startet; kein Wechsel und keine Entfernung, die einen Schlüssel löscht, geschieht, während ein Start seine Konfiguration auflöst, und Endpunkt oder Schlüsselverweis eines Servers ändern sich nie, während sein Schlüssel gespeichert wird (eine Sperre für den Daemon und die Kommandozeile). Das Entfernen eines Servers löscht seinen
 Eintrag im Schlüsselbund auf Wunsch, und nur, wenn kein anderer Server darauf verweist.
+
+*Ein Server je Projekt, Profil oder Lauf (HUM-400).* Der Schlüssel `llm.server` nennt einen der
+gespeicherten Server für eine Session und geht `llm.active` vor: `humanitl run --llm NAME` (oder
+das Feld des Starts, `Start.llm_server`) geht dem Projekt-Profil vor, das Projekt-Profil einem
+Profil der Session, und ein Profil der Session `llm.active`. **Die Vertrauensgrenze der
+Durchleitung ist damit der gespeicherte Server, den die Session aufgelöst hat**, nicht mehr „der
+aktive Server": Nur sein Endpunkt ist die Durchleitung der Session, nur sein Origin bekommt
+seinen Schlüssel, und die Maske der Aufzeichnung und `http://humanitl.internal/` nennen diesen
+Server. Die Prüfung des Schlüssels beim Start vergleicht mit der Wahl der Session, nie mit dem
+global aktiven Server, und der Daemon baut Durchleitung, Schlüsseldatei und Maske aus der
+Konfiguration, die für diesen Start aufgelöst wurde (eine Session je Daemon: der nächste Start
+ersetzt sie). `humanitl sandbox run` startet die Sandbox im eigenen Prozess und kann die Session
+des Daemons nicht umstellen; es startet nicht, sobald die Durchleitung, die seine eigene
+Konfiguration bekäme (mit der Funktion des Daemons gebaut und als Schema, Host, Port, Methoden und
+genaue Inferenzpfade verglichen), nicht die ist, die der Daemon hält, für jede Wahl eines Servers
+und für einen Endpunkt ohne einen (`CONFIG_021`, mit `humanitl run` als Weg), damit nie ein
+Agent mit dem einen Server spricht, während der Proxy den anderen durchlässt. `llm.server` wählt
+nur: Endpunkt, Modelle und Schlüssel kommen immer aus dem Eintrag,
+den der Nutzer unter `[llm.servers.<name>]` gespeichert hat, jeder andere Schlüssel unter `llm`
+bleibt für ein Projekt-Profil gesperrt, und ein Name ohne gespeicherten Eintrag lässt gar keinen
+Endpunkt und keinen Schlüssel gelten. Ein solcher Name fällt nie auf `llm.active` zurück: Der
+Start wird mit `CONFIG_021` abgelehnt, der die Stelle nennt, die ihn gewählt hat, die
+gespeicherten Server und die Behebung (Server speichern oder den Schlüssel entfernen). Ein
+Endpunkt aus der Umgebung oder der Kommandozeile über der Wahl gewinnt weiterhin, und dann wird
+der gespeicherte Schlüssel wie bisher zurückgehalten.
+
+**Eine bewusste Erweiterung.** Eine Datei des Projekts kann jetzt unter den gespeicherten
+Servern des Nutzers wählen. Ein feindliches Repository kann damit den Modellverkehr seiner
+eigenen Session (Prompts, den Code, den der Agent liest) an einen anderen gespeicherten Server
+lenken als den aktiven, etwa an einen Firmenserver statt an einen lokalen. Es kann keinen Server
+anlegen, keinen Endpunkt ändern, keinen Schlüssel lesen und nie den Schlüssel eines Servers an den
+Origin eines anderen schicken. Gegen eine Rückfrage bei der ersten Wahl eines Projekts haben wir
+uns entschieden: Die Wahl ist auf Server begrenzt, die der Nutzer bewusst gespeichert hat, jeder
+mit eigenem Schlüssel, und sie ist vor und bei jedem Start sichtbar. Der Kopf der Sandbox in der
+App zeigt den Server mit seiner Herkunft (das Abzeichen nimmt die Farbe des Haltens an, wenn das
+Projekt gewählt hat), der Hinweis nennt die Projektdatei, `humanitl sandbox plan` und
+`humanitl run` geben Server und Herkunft aus, und `SandboxEvent.Status.llm_server` trägt beides
+zu jedem Client. Wer einen Server hat, den kein Repository erreichen soll, speichert ihn nicht,
+oder führt keine fremden Repositories aus, solange er gespeichert ist.
 
 *Wie er in die Sandbox kommt.* Wenn eine Session startet, holt der Daemon den Schlüssel und legt
 ihn als Datei `/etc/humanitl/opencode/llm-api-key` in die Sandbox, aus einem memfd über
@@ -1566,4 +1607,5 @@ ein Pseudo-Terminal anlegen kann und dass eine Anfrage durch die Tür als Flow b
 die Binaries im Disk-Image.
 
 | 0.1.0 | Die Wegwerf-Sandbox: der Projektordner als schreibgeschützte untere Schicht eines Overlays, die obere Schicht im Arbeitsspeicher unter dem Laufzeitverzeichnis mit einer Größengrenze, `mounts.extra_rw` schreibgeschützt; Änderungen werden nur bei der Übernahme zurückgeschrieben, nie durch einen Symlink, nie als Symlink aus dem Projekt hinaus, als Gerät oder mit setuid-Bits und nie über eine Datei, die der Mensch seit dem Start geändert hat, ohne `--overwrite` (HUM-350, K-24). |
+| 0.1.0 | Ein Projekt-Profil, ein Profil der Session oder ein Lauf (`humanitl run --llm NAME`) wählt mit `llm.server` einen der gespeicherten Modellserver; nur der gewählte Server ist die Durchleitung der Session und bekommt seinen Schlüssel; ein unbekannter Name lehnt den Start mit `CONFIG_021` ab und fällt nie auf `llm.active` zurück; Wahl und Herkunft stehen im Kopf der Sandbox und in `humanitl sandbox plan` (HUM-400, K-02). |
 | 0.1.0 | Der Bereich für Änderungen in der App: Ein Konflikt wird nur überschrieben, wenn er für genau diese Änderung bestätigt wurde (`ApplyChanges.overwrite_ids`); ein Konflikt, der nach der Auswahl auftritt, stoppt die Übernahme (HUM-351, K-24). |

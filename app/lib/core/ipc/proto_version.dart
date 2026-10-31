@@ -85,9 +85,13 @@ abstract final class ProtoVersion {
   /// for the whole call (HUM-351). Raised to 27 with the disposable sandbox
   /// as the default: the switch and the settings row read
   /// `SandboxEvent.Status.sandbox_mode` and `sandbox_mode_notice`, and the
-  /// form writes `sandbox.mode` (HUM-357).
+  /// form writes `sandbox.mode` (HUM-357). Raised to 28 with the server per
+  /// project and profile: the sandbox header reads
+  /// `SandboxEvent.Status.llm_server` and shows the session's saved server
+  /// with the source of the choice, and the server list of the settings reads
+  /// `LlmServer.profiles` (HUM-400).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 27;
+  static const int minor = 28;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

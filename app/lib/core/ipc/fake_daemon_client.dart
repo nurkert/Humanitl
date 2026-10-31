@@ -2858,6 +2858,8 @@ class FakeDaemonClient implements DaemonClient {
           models: server.models,
           keyRef: server.keyRef,
           active: server.name == activeServer,
+          // Die Profile, die ihn wählen, wie der Test sie setzt (HUM-400).
+          profiles: server.profiles,
         ),
     ]),
     active: activeServer,

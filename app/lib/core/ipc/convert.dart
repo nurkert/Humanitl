@@ -677,6 +677,25 @@ extension SandboxStatusToDomain on pb.SandboxEvent_Status {
     sandboxModeNotice: hasSandboxModeNotice()
         ? sandboxModeNotice.toDomain()
         : null,
+    llmServer: hasLlmServer() ? llmServer.toDomain() : null,
+  );
+}
+
+/// `LlmServerChoice` to [LlmServerChoice] (HUM-400).
+extension LlmServerChoiceToDomain on pb.LlmServerChoice {
+  /// The domain form. A source this build does not know reads as
+  /// [LlmServerSource.unknown], so the badge still names the server.
+  LlmServerChoice toDomain() => LlmServerChoice(
+    name: name,
+    source: switch (source) {
+      pb.LlmServerChoice_Source.SOURCE_RUN => LlmServerSource.run,
+      pb.LlmServerChoice_Source.SOURCE_PROJECT => LlmServerSource.project,
+      pb.LlmServerChoice_Source.SOURCE_PROFILE => LlmServerSource.profile,
+      pb.LlmServerChoice_Source.SOURCE_DEFAULT => LlmServerSource.active,
+      _ => LlmServerSource.unknown,
+    },
+    detail: detail,
+    refusal: hasRefusal() ? refusal.toDomain() : null,
   );
 }
 
@@ -971,6 +990,7 @@ extension LlmServerListToDomain on pb.LlmServerList {
           models: List<String>.unmodifiable(server.models),
           keyRef: server.keyRef,
           active: server.active,
+          profiles: List<String>.unmodifiable(server.profiles),
         ),
       ),
     ),

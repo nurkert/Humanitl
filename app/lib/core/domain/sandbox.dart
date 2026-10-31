@@ -272,6 +272,12 @@ abstract class SandboxStatus with _$SandboxStatus {
     /// fell back to direct, `SANDBOX_030` when an explicit `disposable` cannot
     /// run here. Null when the mode holds as asked.
     Diagnostic? sandboxModeNotice,
+
+    /// The saved model server of this session and where the choice comes
+    /// from, mirror of `SandboxEvent.Status.llm_server` (HUM-400): the
+    /// running session's while one runs, otherwise the one a start would
+    /// get. Null when no saved server applies or the daemon did not say.
+    LlmServerChoice? llmServer,
   }) = _SandboxStatus;
 
   const SandboxStatus._();
@@ -287,6 +293,11 @@ abstract class SandboxStatus with _$SandboxStatus {
   ///
   /// Stopping then takes nothing away, so it does not ask (HUM-040).
   bool get agentExited => isUp && !agentRunning;
+
+  /// Why a start would be refused before it begins: the blocking diagnostic,
+  /// or the refusal of a model server that is not saved (HUM-400). Null when
+  /// nothing stands in the way.
+  Diagnostic? get startRefusal => blocking ?? llmServer?.refusal;
 
   /// The blocking diagnostic that forbids a start, if there is one.
   Diagnostic? get blocking {
@@ -570,4 +581,65 @@ abstract class SandboxRefusals with _$SandboxRefusals {
     0,
     (int sum, SandboxRefusal entry) => sum + entry.count,
   );
+}
+
+/// Where the choice of a session's model server comes from (HUM-400).
+enum LlmServerSource {
+  /// This one run: the start, `humanitl run --llm NAME`.
+  run,
+
+  /// `llm.server` in the project profile.
+  project,
+
+  /// `llm.server` in a session profile.
+  profile,
+
+  /// The user's default, `llm.active`.
+  active,
+
+  /// A source this build does not know.
+  unknown,
+}
+
+/// The saved model server of a session and where the choice comes from,
+/// mirror of `LlmServerChoice` (HUM-400).
+///
+/// This server is the session's passthrough and the only endpoint that gets
+/// its key. A project can choose another of the user's saved servers than
+/// the active one; the header shows which one and why.
+final class LlmServerChoice {
+  /// Creates a choice.
+  const LlmServerChoice({
+    required this.name,
+    this.source = LlmServerSource.unknown,
+    this.detail = '',
+    this.refusal,
+  });
+
+  /// The server's name.
+  final String name;
+
+  /// Where the choice comes from.
+  final LlmServerSource source;
+
+  /// The project profile's path or the profile's name, by [source].
+  final String detail;
+
+  /// `CONFIG_021` when no server of that name is saved; a start is then
+  /// refused with exactly this finding.
+  final Diagnostic? refusal;
+
+  /// True when a server of that name is saved.
+  bool get saved => refusal == null;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LlmServerChoice &&
+      other.name == name &&
+      other.source == source &&
+      other.detail == detail &&
+      other.refusal == refusal;
+
+  @override
+  int get hashCode => Object.hash(name, source, detail, refusal);
 }

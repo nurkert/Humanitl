@@ -25,7 +25,14 @@ use serde_json::Value;
 /// Die gesperrten Schlüssel, wörtlich aus CONVENTIONS.md 4.11. `gruppe.*`
 /// meint jedes Blatt der Gruppe.
 const DENIED_BY_CONVENTION: &[&str] = &[
-    "llm.*",
+    // `llm.*` außer `llm.server` (HUM-400): Der Name wählt nur unter den
+    // gespeicherten Servern des Nutzers.
+    "llm.endpoint",
+    "llm.passthrough_paths",
+    "llm.models",
+    "llm.api_key_ref",
+    "llm.servers",
+    "llm.active",
     "sandbox.work_dir",
     "sandbox.work_mode",
     "sandbox.mode",

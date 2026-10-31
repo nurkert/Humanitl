@@ -266,7 +266,10 @@ async fn run(passed: Result<Option<systemd::Passed>, Diagnostic>) -> Result<(), 
             refuse_passed_for_fake(passed.as_ref())?;
             run_fake(&cli, &path).await
         }
-        None => run_daemon(&cli, passed).await,
+        // Auf dem Heap: Der Zustand des Daemons trägt die aufgelöste
+        // Konfiguration, und mit der Wahl des Servers je Sitzung (HUM-400)
+        // wurde der Future größer als `clippy::large_futures` zulässt.
+        None => Box::pin(run_daemon(&cli, passed)).await,
     }
 }
 

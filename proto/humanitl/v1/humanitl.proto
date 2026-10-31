@@ -1013,6 +1013,14 @@ message SandboxRequest {
     // warten die Aenderungen auf `changes`, `apply_changes` oder
     // `discard_changes`.
     string sandbox_mode = 9;
+    // Der Name eines gespeicherten Modellservers (`llm.servers`), der fuer
+    // genau diesen Lauf gilt (HUM-400): `humanitl run --llm NAME` oder die
+    // Wahl im Startbereich. Leer heisst: die Wahl von Projekt, Profil oder
+    // `llm.active`. Er waehlt nur unter den Servern, die der Nutzer
+    // gespeichert hat; ein Name ohne Eintrag ist `CONFIG_021`, und nichts
+    // startet. Ein Daemon vor Minor 28 kennt das Feld nicht und nimmt die
+    // Wahl ohne ihn.
+    string llm_server = 10;
   }
 
   // Ein Konfigurationswert, den der Client fuer diese Sitzung setzt.
@@ -1034,7 +1042,50 @@ message SandboxRequest {
     string work_mode = 3;
     // Wie `Start.work_dir_source` (HUM-293).
     WorkDirSource work_dir_source = 4;
+    // Wie `Start.llm_server` (HUM-400): Der Schnappschuss nennt in
+    // `Status.llm_server` den Server, den ein Start mit dieser Wahl bekaeme.
+    string llm_server = 5;
+    // Wie `Start.session_profile` (HUM-400): Der Schnappschuss ist dann der,
+    // den ein Start mit diesem Profil der Sitzung bekaeme, samt dem Server,
+    // den das Profil waehlt. Ein Profil, das es nicht gibt, ist `CONFIG_001`
+    // wie beim Start. Leer heisst: das Profil ohne Wunsch.
+    string session_profile = 6;
   }
+}
+
+// Welcher gespeicherte Modellserver fuer eine Sitzung gilt und woher die
+// Wahl kommt (HUM-400).
+//
+// Der Server ist die Durchreiche der Sitzung und der einzige Endpunkt, der
+// ihren Schluessel bekommt. Fehlt die Nachricht im Schnappschuss, gilt kein
+// gespeicherter Server: keiner ist eingetragen, oder ein Endpunkt aus einer
+// hoeheren Ebene (`--llm URL`, `HUMANITL_LLM__ENDPOINT`) steht an seiner
+// Stelle, und dann geht kein hinterlegter Schluessel hinaus.
+message LlmServerChoice {
+  enum Source {
+    // Keine Angabe: ein Daemon vor Minor 28.
+    SOURCE_UNSPECIFIED = 0;
+    // Dieser eine Lauf: `Start.llm_server`, `humanitl run --llm NAME` oder
+    // eine Umgebungsvariable.
+    SOURCE_RUN = 1;
+    // `llm.server` im Projekt-Profil; `detail` ist sein Pfad.
+    SOURCE_PROJECT = 2;
+    // `llm.server` in einem Profil der Sitzung; `detail` ist sein Name.
+    SOURCE_PROFILE = 3;
+    // Die Vorgabe des Nutzers: `llm.active` (oder `llm.server` in
+    // `config.toml`).
+    SOURCE_DEFAULT = 4;
+  }
+  // Der Name des Servers.
+  string name = 1;
+  Source source = 2;
+  // Pfad des Projekt-Profils oder Name des Profils, je nach `source`;
+  // sonst leer.
+  string detail = 3;
+  // `CONFIG_021`, wenn der Name keinen gespeicherten Server nennt: Dann gilt
+  // kein Endpunkt und kein Schluessel, und ein Start lehnt mit genau diesem
+  // Befund ab. Fehlt, wenn es den Server gibt.
+  Diagnostic refusal = 4;
 }
 
 // Woher ein Projektverzeichnis kommt, das ein Client in `work_dir` schickt
@@ -1291,6 +1342,13 @@ message SandboxEvent {
     // `SANDBOX_030`, wenn ein ausdrueckliches `disposable` hier nicht geht
     // und der Start ablehnen wird. Fehlt, wenn der Modus gilt wie verlangt.
     Diagnostic sandbox_mode_notice = 17;
+    // Der gespeicherte Modellserver dieser Sitzung und woher die Wahl kommt
+    // (HUM-400). Waehrend eine Sandbox laeuft der ihre; sonst der, den ein
+    // Start mit diesem Plan bekaeme, mit dem Projekt-Profil des
+    // Projektverzeichnisses und `Plan.llm_server`. `llm_endpoint` ist dann
+    // sein Endpunkt. Fehlt, wenn kein gespeicherter Server gilt, und bei
+    // einem Daemon vor Minor 28.
+    LlmServerChoice llm_server = 18;
   }
 
   // Eine Zeile aus dem Log der Sandbox.
@@ -1935,6 +1993,11 @@ message LlmServer {
   string key_ref = 4;
   // Wahr fuer den Eintrag, den `llm.active` nennt.
   bool active = 5;
+  // Die Profile der Sitzung (`profiles/*.toml`, eigene und mitgelieferte),
+  // deren `llm.server` diesen Server nennt, nach Namen sortiert (HUM-400).
+  // Projekte stehen hier nicht: Der Daemon kennt nur das Projekt, das er
+  // gerade startet.
+  repeated string profiles = 6;
 }
 
 // Auftrag an `LlmServers`. Genau eine Operation.

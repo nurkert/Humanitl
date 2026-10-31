@@ -650,4 +650,43 @@ void main() {
       ),
     );
   });
+
+  test('HUM-400: the server of the session arrives with name, source and '
+      'refusal', () {
+    final SandboxStatus project = pb.SandboxEvent_Status(
+      llmServer: pb.LlmServerChoice(
+        name: 'work',
+        source: pb.LlmServerChoice_Source.SOURCE_PROJECT,
+        detail: '/p/.humanitl/profile.toml',
+      ),
+    ).toDomain();
+    expect(
+      project.llmServer,
+      const LlmServerChoice(
+        name: 'work',
+        source: LlmServerSource.project,
+        detail: '/p/.humanitl/profile.toml',
+      ),
+    );
+    expect(project.startRefusal, isNull);
+
+    final SandboxStatus missing = pb.SandboxEvent_Status(
+      llmServer: pb.LlmServerChoice(
+        name: 'gone',
+        source: pb.LlmServerChoice_Source.SOURCE_RUN,
+        refusal: pb.Diagnostic(code: 'CONFIG_021', why: 'not saved'),
+      ),
+    ).toDomain();
+    expect(missing.llmServer?.source, LlmServerSource.run);
+    expect(missing.llmServer?.saved, isFalse);
+    expect(missing.startRefusal?.code, 'CONFIG_021');
+
+    expect(pb.SandboxEvent_Status().toDomain().llmServer, isNull);
+    final SavedServers listed = pb.LlmServerList(
+      servers: <pb.LlmServer>[
+        pb.LlmServer(name: 'work', profiles: <String>['team', 'work']),
+      ],
+    ).toDomain();
+    expect(listed.servers.single.profiles, <String>['team', 'work']);
+  });
 }

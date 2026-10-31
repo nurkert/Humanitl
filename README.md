@@ -146,7 +146,7 @@ out of the sandbox:
 
 | Channel | Data can leave? | What it means |
 |---|---|---|
-| [The LLM passthrough](docs/SECURITY.md#51-the-llm-passthrough) | yes | Your language model sees every prompt the agent sends it, without a hold; that host is part of what you trust. |
+| [The LLM passthrough](docs/SECURITY.md#51-the-llm-passthrough) | yes | Your language model sees every prompt the agent sends it, without a hold; that host is part of what you trust. A project can choose another of your saved model servers for its sessions, so every server you saved is. |
 | [The project directory `/work`](docs/SECURITY.md#52-the-project-directory-work) | yes | It is writable; what the agent leaves there, a human may carry out later. Where the system allows it, the agent writes to a disposable layer by default, and only the changes you apply reach the folder; elsewhere it writes to the folder directly. |
 | [Terminal output](docs/SECURITY.md#5-declared-side-channels) | no | It comes from the agent and is filtered, not trusted. |
 | [Host names in the recording](docs/SECURITY.md#5-declared-side-channels) | no | They stand in plain text in the recording and in every export. |
@@ -335,7 +335,7 @@ opens the command palette, `Ctrl+,` the settings.
 
 - `humanitl doctor` and the setup checklist: one line per precondition, each with its fix.
 - Any OpenAI-compatible model server or Ollama, found with `humanitl llm discover` and tested with
-  `humanitl llm test`, with several saved servers. The access key lives in the system keyring on
+  `humanitl llm test`, with several saved servers, chosen per project or profile. The access key lives in the system keyring on
   Linux and in the login Keychain on macOS, otherwise in a `0600` file, never in the
   configuration. The passthrough is logged, never
   held.

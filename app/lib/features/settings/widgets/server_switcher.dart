@@ -323,6 +323,15 @@ class _ServerRow extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: tokens.typography.mono11.tinted(tokens.colors.fg1),
           ),
+          // Welche Profile diesen Server wählen (HUM-400): Wer ihn entfernt
+          // oder umbenennt, sieht vorher, welche Sitzungen danach nicht mehr
+          // starten.
+          if (server.profiles.isNotEmpty)
+            Text(
+              l10n.settingsServerProfiles(server.profiles.join(', ')),
+              key: ValueKey<String>('settings-server-profiles-$name'),
+              style: tokens.typography.ui11.tinted(tokens.colors.fg1),
+            ),
           if (checked case final String said)
             Text(
               said,
