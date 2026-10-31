@@ -315,7 +315,8 @@ at most 120 when the model asks for longer; in OpenCode 1.18.31 that limit is
 fixed in its code. When a tool gives up, it closes the connection, the proxy
 ends the flow as `client_timeout` and the card leaves the queue in Intercept before
 you decided. The briefing tells the agent so and that `curl` waits, unless the model
-passes its own timeout. For `bash`
+passes its own timeout; the skill `humanitl` (below) names a `curl --max-time`
+above the hold. For `bash`
 the adapter raises the default timeout with
 `OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` (see the next table).
 
@@ -361,6 +362,20 @@ OpenCode 1.18.31 binary only.
 | `/etc/humanitl/opencode/llm-api-key` | the access key, only if one is stored |
 | `~/.config/opencode/tui.json` | the key bindings of the interface: `app_exit` without `ctrl+c` (HUM-353) |
 | `~/.config/opencode/AGENTS.md` | the briefing of the agent in the language of `ui.language`, unless `agent.briefing.enabled = false` |
+| `~/.config/opencode/skills/humanitl/SKILL.md` | the skill `humanitl` in the language of `ui.language`, together with the briefing (HUM-364) |
+
+**The skill `humanitl` (HUM-364).** Next to the briefing both adapters place
+one skill where the agent looks for its own skills: OpenCode 1.18.31 in
+`<config>/opencode/skills/`, pi 1.4.0 in `<agent-dir>/skills/`. The agent sees
+only its name and description and loads the text when a network request is
+slow, fails, is refused or blocked, or before network-heavy work. It explains
+how to wait (generous timeouts above `hold.timeout_secs`, no retry loops, no
+parallel duplicates, no switching tools or mirrors), how to read an answer of
+the proxy (`403`, `502`, `503`, `504`), the endpoints of `http://humanitl.internal/`
+and how to report a refusal. Like the briefing, it presents the latency as a
+property of the environment and never tells the agent that a person decides
+(owner decision of 2026-10-31). `agent.briefing.enabled = false` switches off
+both. It is the only skill Humanitl ships.
 
 `~` is the agent's home `/home/agent`, an empty tmpfs. Every file comes from a
 sealed memfd and is mounted read-only. No adapter file may lie under `/work`:
@@ -490,6 +505,7 @@ writable in the tmpfs home; only the files Humanitl places are read-only.
 | `~/.pi/agent/web-search.json` | only with web access: `ssrf.trustEnvProxy = true` (see "Web search and fetch") |
 | `/etc/humanitl/pi/llm-api-key` | the access key, only if one is stored |
 | `~/.pi/agent/AGENTS.md` | the briefing in the language of `ui.language`, unless `agent.briefing.enabled = false` |
+| `~/.pi/agent/skills/humanitl/SKILL.md` | the skill `humanitl` in the language of `ui.language`, together with the briefing (HUM-364) |
 
 Both JSON files are parsed and rebuilt with a JSON library, never filled in as
 text: a model name with a quotation mark cannot inject structure. With an empty

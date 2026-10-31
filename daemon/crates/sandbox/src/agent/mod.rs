@@ -31,6 +31,7 @@ pub mod opencode;
 pub mod opencode_models;
 pub mod pi;
 pub mod pi_config;
+pub mod skill;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};

@@ -38,10 +38,11 @@ from pathlib import Path
 
 # Beide Sprachen hoechstens so viele Token. Dieselbe Zahl steht als
 # TOKEN_BUDGET in daemon/crates/sandbox/src/agent/briefing.rs, und dort steht
-# auch, warum es 185 sind und nicht die 160 aus backlog/sprint-3.md: der
-# Meta-Endpunkt kam nach der Schaetzung dazu, und deutscher Text kostet in
-# jedem BPE-Tokenisierer rund 13 Prozent mehr als derselbe englische.
-BUDGET = 185
+# auch, warum es 270 sind und nicht die 160 aus backlog/sprint-3.md: der
+# Meta-Endpunkt kam nach der Schaetzung dazu, HUM-364 die Saetze ueber lange
+# Wartezeiten, und deutscher Text kostet in jedem BPE-Tokenisierer rund
+# 13 Prozent mehr als derselbe englische.
+BUDGET = 270
 
 # Die Kodierung, an der geprueft wird, und die, die nur berichtet wird.
 ENFORCED = "o200k_base"

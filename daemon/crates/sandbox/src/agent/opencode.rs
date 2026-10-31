@@ -59,7 +59,9 @@
 //! [`bash_default_timeout_ms`] über `hold.timeout_secs`; die von `webfetch`
 //! steht in 1.18.31 fest im Code (Vorgabe 30, höchstens 120 Sekunden) und
 //! lässt sich nicht einstellen. Für sie sagt das Briefing, dass ein Werkzeug,
-//! das früher aufgibt, die Frage zurückzieht und `curl` wartet.
+//! das früher aufgibt, die Frage zurückzieht und `curl` wartet; der Skill
+//! `humanitl` ([`skill_dst`], HUM-364) nennt dazu die Frist für
+//! `curl --max-time`.
 //!
 //! **`Ctrl+C` beendet `OpenCode` nicht (HUM-353).** Im Terminal von Humanitl
 //! geht `Ctrl+C` als `0x03` an den Agenten, und `OpenCode` 1.18.31 bindet
@@ -100,6 +102,7 @@ use crate::agent::opencode_models::{
     DEFAULT_RULES, PROVIDER_ID, effective_models, permission_json, render_config, render_models,
     render_tui,
 };
+use crate::agent::skill;
 use crate::agent::{
     AgentAdapter, AgentContext, SandboxFile, SandboxLookup, find_in_path, is_executable_file,
 };
@@ -229,6 +232,21 @@ pub const BRIEFING_FILE_NAME: &str = "AGENTS.md";
 #[must_use]
 pub fn briefing_dst(config_home: &Path) -> PathBuf {
     agent_config_dir(config_home).join(BRIEFING_FILE_NAME)
+}
+
+/// Der Skill `humanitl` (HUM-364), dort, wo `OpenCode` 1.18.31 globale
+/// Skills sucht.
+///
+/// `Skill.discovery` durchsucht jedes Konfigurationsverzeichnis mit
+/// `{skill,skills}/**/SKILL.md`, und das erste ist `Global.Path.config`,
+/// dasselbe Verzeichnis wie [`briefing_dst`]. Nie unter `/work`: ein Skill
+/// in `.opencode/skills` des Projekts landete im Diff des Nutzers.
+#[must_use]
+pub fn skill_dst(config_home: &Path) -> PathBuf {
+    agent_config_dir(config_home)
+        .join(skill::SKILLS_DIR_NAME)
+        .join(skill::SKILL_NAME)
+        .join(skill::SKILL_FILE_NAME)
 }
 
 /// Die dritte Ablage derselben Konfiguration: das verwaltete Verzeichnis.
@@ -1088,15 +1106,29 @@ impl AgentAdapter for OpenCodeAdapter {
             // für den `llm_passthrough` keine Regel baut, nennte das Briefing
             // einen Host, der gar nicht durchgereicht wird — und der Agent
             // wunderte sich, warum sein Modell in der Warteschlange steht.
+            let llm_host = passthrough_authority(&ctx.llm);
             let text = briefing::render(
                 ctx.language,
                 ctx.hold.ask_mode,
                 ctx.hold.timeout_secs,
-                passthrough_authority(&ctx.llm).as_deref(),
+                llm_host.as_deref(),
             )?;
             files.push(SandboxFile::read_only(
                 briefing_dst(&config_home),
                 text.into_bytes(),
+            ));
+            // Der Skill gehört zum Briefing (HUM-364): das Briefing verweist
+            // auf ihn, und wer die Einweisung abschaltet, will auch keinen
+            // zweiten Text von Humanitl im Agenten.
+            let skill = skill::render(
+                ctx.language,
+                ctx.hold.ask_mode,
+                ctx.hold.timeout_secs,
+                llm_host.as_deref(),
+            )?;
+            files.push(SandboxFile::read_only(
+                skill_dst(&config_home),
+                skill.into_bytes(),
             ));
         }
         Ok(files)
@@ -1203,7 +1235,7 @@ pub(crate) fn passthrough_rule(llm: &LlmConfig) -> Option<Rule> {
 ///
 /// Für die Anzeige und für Tests; die Reihenfolge ist die von
 /// [`AgentAdapter::files`]. `briefing` ist `agent.briefing.enabled`: steht es
-/// aus, fehlt die Instruktionsdatei auch hier.
+/// aus, fehlen die Instruktionsdatei und der Skill (HUM-364) auch hier.
 #[must_use]
 pub fn file_targets(config_home: &Path, briefing: bool) -> Vec<PathBuf> {
     let mut targets = vec![
@@ -1216,6 +1248,7 @@ pub fn file_targets(config_home: &Path, briefing: bool) -> Vec<PathBuf> {
     ];
     if briefing {
         targets.push(briefing_dst(config_home));
+        targets.push(skill_dst(config_home));
     }
     targets
 }

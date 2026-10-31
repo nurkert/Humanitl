@@ -23,23 +23,39 @@
 //! | Aussage | Beleg im Code |
 //! |---|---|
 //! | Internetzugang über HTTP(S) mit `curl`, `wget` und anderen Clients, durch den Proxy der Umgebung, sonst nichts | `--unshare-all` in `crate::bwrap_args` (kein anderer Weg hinaus), `humanitl_proxy::ca::ENV_KIT` mit `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, leerem `NO_PROXY` und `NODE_USE_ENV_PROXY=1` für Nodes `fetch` (HUM-304); pi stellt seinen Dispatcher selbst auf dieselben Variablen ein |
-//! | Regeln entscheiden das meiste, der Rest wartet auf einen Menschen | `humanitl_proxy::pipeline::RulesPipeline` über `AskPipeline` |
 //! | Ein Rumpf mit `Blocked by Humanitl.` kommt vom Proxy | `humanitl_core::block::BANNER` |
-//! | `403` heißt: gegen die Anfrage entschieden | `BlockReason::User`, `Rule`, `AuthorityMismatch`, `PrivateAddress`, `Secret` |
+//! | `403` heißt: hier nicht erlaubt | `BlockReason::User`, `Rule`, `AuthorityMismatch`, `PrivateAddress`, `Secret` |
 //! | Eine `note:`-Zeile kann dabeistehen | `humanitl_core::block::block_response` |
-//! | Mit Frage endet die abgelaufene Frist in `504` | `BlockReason::Timeout` aus `Decision::TimedOut` |
-//! | Ohne Frage scheitert eine Anfrage ohne Regel sofort mit `504` | `ask_mode = none` setzt die Frist auf null, der Flow endet sofort als `TimedOut` |
-//! | Gibt ein Werkzeug früher auf, ist die Frage weg; `curl` wartet (nur mit Frage, HUM-308) | Bricht der Client ab, endet der Flow in `HoldQueue::hold` als `ClientTimeout`, und die Karte verlässt die Warteschlange. `webfetch` von `OpenCode` 1.18.31 gibt nach 30, höchstens 120 Sekunden auf, fest im Code; `curl` hat keine eigene Gesamtfrist, `bash` von pi 1.4.0 keine Vorgabefrist, und die von `OpenCode` hebt `opencode::bash_default_timeout_ms` über `hold.timeout_secs` |
+//! | `GET http://humanitl.internal/` listet, was erlaubt ist | `humanitl_proxy::meta::MetaEndpoint::respond`, `200` mit Kurzstatus und einer Zeile je geltender Regel |
+//! | `POST /ask` mit einer Zeile beantragt Zugang, Antwort `202`, Zugang kann später folgen | `MetaEndpoint::ask`: `202 queued`, dazu `FlowEvent::AgentAsk` und eine Karte in der Oberfläche; legt der Mensch danach eine Regel an, gilt sie für die nächste Anfrage |
+//! | `/ask` gewährt von sich aus nichts | `/ask` erzeugt ein Ereignis und nie eine Regel (ADR-0014, HUM-073 „Nicht-Ziel") |
 //! | Eine Regel deckt die Modell-Aufrufe, andere Pfade nicht | `OpenCodeAdapter::llm_passthrough` baut **eine** Regel: nur dieser Host, dieses Schema, dieser Port, `GET`/`POST` und die Pfade aus `llm.passthrough_paths`; `POST /api/pull` und `POST /v1/files` fallen durch und gehen den Weg jeder anderen Anfrage |
+//! | Modell-Aufrufe warten hier nie, eine Verzögerung kommt vom Modellserver (HUM-364) | `Matched { Allow }` mit `passthrough_llm` wird in `humanitl_proxy::pipeline::RulesPipeline` zu `Decision::Allow` mit Quelle `Passthrough`, ohne Hold; Funde warnen (`LLM_005`) statt anzuhalten; die Notiz der Regel sagt „Logged, never held." |
+//! | Mit Frage: hohe, schwankende Latenz bis `{timeout}`s, dann `504`, weil keine Erlaubnis rechtzeitig kam (HUM-364) | Was keine Regel erlaubt oder blockt, hält `HoldQueue::hold` bis `hold.timeout_secs` (Vorgabe 300); solange kommt keine Antwort, danach `BlockReason::Timeout` aus `Decision::TimedOut` |
+//! | Tool-Fristen über `{timeout}`s, keine Schleifen, keine parallelen Duplikate, kein Wechsel von Werkzeug oder Spiegel (HUM-364) | Jede neue Anfrage ist ein neuer Flow und wartet von vorn; viele gleichzeitig enden in `503` (`BlockReason::HoldMaxFlows`) |
+//! | Gibt ein Werkzeug früher auf, ist die Anfrage weg; `curl` wartet (nur mit Frage, HUM-308) | Bricht der Client ab, endet der Flow in `HoldQueue::hold` als `ClientTimeout`, und die Karte verlässt die Warteschlange. `webfetch` von `OpenCode` 1.18.31 gibt nach 30, höchstens 120 Sekunden auf, fest im Code; `curl` hat keine eigene Gesamtfrist, `bash` von pi 1.4.0 keine Vorgabefrist, und die von `OpenCode` hebt `opencode::bash_default_timeout_ms` über `hold.timeout_secs` |
+//! | Ohne Frage geht nur durch, was Regeln erlauben, nichts wartet, alles andere sofort `504` | `ask_mode = none` setzt die Frist auf null, der Flow endet sofort als `TimedOut` |
+//! | Mehr im Skill `humanitl` (HUM-364) | Beide Adapter legen ihn neben dem Briefing an, solange `agent.briefing.enabled` gilt ([`crate::agent::skill`]) |
 //!
-//! Der Satz über das Modell sagt ausdrücklich *„eine Regel erlaubt"* und nicht
-//! *„läuft ohne Warten durch"*. Eine `allow`-Regel des Nutzers wartet ebenfalls
-//! nicht; „ohne Warten" wäre also kein Merkmal der Durchreiche, sondern eine
-//! Aussage, die für jede erlaubte Anfrage gilt — und im Modus `none` obendrein
-//! irreführend, weil dort auch das Abgelehnte nicht wartet.
-//! | `GET http://humanitl.internal/` listet die Regeln | `humanitl_proxy::meta::MetaEndpoint::respond`, `200` mit Kurzstatus und einer Zeile je geltender Regel |
-//! | `POST /ask` mit einer Zeile fragt den Nutzer, Antwort `202` | `MetaEndpoint::ask`: `202 queued`, dazu `FlowEvent::AgentAsk` und eine Karte in der Oberfläche |
-//! | Nur der Nutzer kann eine Regel anlegen | `/ask` erzeugt ein Ereignis und nie eine Regel (ADR-0014, HUM-073 „Nicht-Ziel") |
+//! **Kein Mensch im Text (HUM-364).** Entscheidung des Owners vom
+//! 2026-10-31: Der Agent erfährt nicht, dass ein Mensch über seine Anfragen
+//! entscheidet. Die Wartezeit steht als Eigenschaft der Umgebung da, `403` als
+//! „hier nicht erlaubt", `504` als „keine Erlaubnis rechtzeitig", `/ask` als
+//! Antrag auf Zugang. Jede dieser Aussagen bleibt wahr; sie lässt nur weg, wer
+//! entscheidet. „Der Nutzer" im Text ist der, mit dem der Agent spricht, und
+//! dem sagt er, was nicht erreichbar war.
+//!
+//! Der Satz über das Modell sagt zuerst *„eine Regel erlaubt"* und nicht nur
+//! *„läuft ohne Warten durch"*. Eine `allow`-Regel wartet ebenfalls nicht;
+//! „ohne Warten" allein wäre also kein Merkmal der Durchreiche. Seit HUM-364
+//! folgt dennoch „wartet hier nie", und zwar mit seiner Folge für den Agenten:
+//! eine langsame Antwort des Modells ist eine Sache des Modellservers, nicht
+//! des Proxys. Der Satz gilt in beiden Ask-Modi.
+//!
+//! **Kein Weg vorbei am Proxy im Text.** Der Block für `ui` nennt den Wechsel
+//! von Werkzeug oder Spiegel als etwas, das gegen die Wartezeit nicht hilft:
+//! jede neue Anfrage geht durch denselben Proxy und wartet ebenso. Ein Weg
+//! vorbei am Proxy wird dabei nicht genannt, weder bejaht noch verneint.
 //!
 //! **Warum `504` in den Ask-Modus-Blöcken steht und nicht im gemeinsamen
 //! Text.** Der Code ist in beiden Modi derselbe, die Ursache nicht: mit Frage
@@ -127,7 +143,30 @@ pub const TEMPLATE_DE_FILE: &str = "agents/opencode/briefing.de.md";
 /// nicht nur aus Platzgründen: Hat ein Werkzeug aufgegeben, ist die Frage weg,
 /// und nur ein neuer Abruf fragt erneut. Das `403` bleibt „nicht wiederholen".
 ///
-/// 185 ist die Grenze knapp über dem gemessenen Wert, also weiter ein
+/// **Nachgezählt am 2026-10-31 nach HUM-364, Grenze 270.** Der Owner will,
+/// dass die Agenten eine lange Wartezeit nicht für einen Ausfall halten, und
+/// zwar als Eigenschaft der Umgebung: der Agent erfährt nicht, dass ein
+/// Mensch entscheidet. Der Block für `ui` sagt deshalb, dass Anfragen hier
+/// hohe, schwankende Latenz haben, dass eine, die noch keine Regel erlaubt
+/// oder ablehnt, bis zur Frist warten kann (eine erlaubte läuft so lange wie
+/// der Server braucht, eine abgelehnte endet sofort mit `403`), dass ein
+/// `504` danach heißt, dass keine Erlaubnis rechtzeitig kam, und was der
+/// Agent dann nicht tut (Schleifen, parallele Duplikate, Wechsel von Werkzeug
+/// oder Spiegel, Schluss auf ein totes Netz); er nennt Tool-Fristen über der
+/// Frist. Der Block für `none` sagt, dass nichts wartet, Abgelehntes `403`
+/// bekommt und alles andere `504`, „nicht erlaubt" und kein Ausfall. Der Satz
+/// über das Modell sagt, dass die Regel nur auf ihren Pfaden gilt
+/// (`llm.passthrough_paths` kann auch Pfade nennen, die kein Modell-Aufruf
+/// sind, etwa `/api/pull`; „sonst nichts auf diesem Host" wäre dann falsch),
+/// dass diese Aufrufe hier nie warten und eine Verzögerung vom Modellserver
+/// kommt; nach dem Meta-Endpunkt
+/// steht der Verweis auf den Skill `humanitl`. Gemessen: englisch 250 (`ui`)
+/// und 205 (`none`), deutsch 266 und 215. Jede dieser Aussagen ist genau das
+/// Verhalten, das das Briefing verhindern soll, und keine passt in den Skill
+/// allein: der wird nur geladen, wenn das Modell ihn für passend hält
+/// (`docs/skills.md` von pi: „A model might fail to load a relevant skill").
+///
+/// 270 ist die Grenze knapp über dem gemessenen Wert, also weiter ein
 /// Stolperdraht und kein Freibrief. Wer den Text wachsen lässt, zählt nach und
 /// streicht anderswo; wer die Grenze heben will, nennt die Aussage, die den
 /// Platz wert ist.
@@ -135,7 +174,7 @@ pub const TEMPLATE_DE_FILE: &str = "agents/opencode/briefing.de.md";
 /// Gezählt wird mit `tools/briefing-tokens.py`. In dieser Crate liegt kein
 /// Tokenisierer; die Tests halten deshalb zusätzlich eine Zeichengrenze als
 /// billigen Stolperdraht fest.
-pub const TOKEN_BUDGET: usize = 185;
+pub const TOKEN_BUDGET: usize = 270;
 
 /// Der Platzhalter für den Satz, der von `hold.ask_mode` abhängt.
 pub const PLACEHOLDER_ASK_MODE: &str = "{ask_mode}";
@@ -193,10 +232,7 @@ pub fn render(
         Language::De => (TEMPLATE_DE_FILE, TEMPLATE_DE),
     };
 
-    let wanted = match ask_mode {
-        AskMode::Ui | AskMode::Terminal => VARIANT_ASK,
-        AskMode::None => VARIANT_NONE,
-    };
+    let wanted = variant_for(ask_mode);
     let (body, variants) = split_variants(template);
     let variant = variants
         .iter()
@@ -244,6 +280,17 @@ pub fn render(
     Ok(text)
 }
 
+/// Der Name der Variante, die zu einem Ask-Modus gehört.
+///
+/// Auch der Skill `humanitl` ([`crate::agent::skill`]) wählt seine Variante
+/// hiermit, damit Briefing und Skill nie verschiedene Modi beschreiben.
+pub(crate) const fn variant_for(ask_mode: AskMode) -> &'static str {
+    match ask_mode {
+        AskMode::Ui | AskMode::Terminal => VARIANT_ASK,
+        AskMode::None => VARIANT_NONE,
+    }
+}
+
 /// Trennt den Rumpf der Vorlage von den Varianten.
 ///
 /// Alles vor der ersten Markerzeile ist Rumpf; danach folgt je Marker ein
@@ -254,6 +301,17 @@ pub fn render(
 /// Ohne Marker ist die ganze Vorlage Rumpf und die Liste leer; [`render`]
 /// meldet das als `AGENT_003`.
 fn split_variants(template: &str) -> (&str, Vec<(String, String)>) {
+    split_variants_with(template, false)
+}
+
+/// Wie [`split_variants`], mit der Wahl, ob die Zeilen einer Variante zu
+/// einem Absatz zusammenfließen (`keep_lines = false`, das Briefing) oder als
+/// Zeilen stehen bleiben (`true`, der Skill mit Überschrift und Liste je
+/// Variante).
+pub(crate) fn split_variants_with(
+    template: &str,
+    keep_lines: bool,
+) -> (&str, Vec<(String, String)>) {
     let mut offset = 0;
     let mut start = None;
     for line in template.split_inclusive('\n') {
@@ -276,6 +334,11 @@ fn split_variants(template: &str) -> (&str, Vec<(String, String)>) {
             continue;
         }
         if let Some((_, text)) = variants.last_mut() {
+            if keep_lines {
+                text.push_str(line.trim_end());
+                text.push('\n');
+                continue;
+            }
             if !text.is_empty() && !trimmed.is_empty() {
                 text.push(' ');
             }
@@ -300,7 +363,7 @@ fn variant_name(line: &str) -> Option<String> {
 /// Ein Kommentar ohne Ende schluckt den Rest der Datei. Das ist die
 /// vorsichtige Seite: eher fehlt ein Satz im Briefing, als dass ein Hinweis
 /// für Übersetzer beim Agenten landet.
-fn strip_comments(text: &str) -> String {
+pub(crate) fn strip_comments(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(open) = rest.find(COMMENT_OPEN) {
@@ -317,7 +380,7 @@ fn strip_comments(text: &str) -> String {
 
 /// Räumt den gerenderten Text auf: keine doppelten Leerzeilen, kein Leerraum
 /// am Rand, genau ein Zeilenende am Schluss.
-fn tidy(text: &str) -> String {
+pub(crate) fn tidy(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut last_was_blank = true;
     for line in text.lines() {
@@ -394,8 +457,8 @@ mod tests {
     #[test]
     fn ask_mode_none_replaces_the_sentence_about_waiting() {
         for (language, waiting) in [
-            (Language::En, "Waiting is normal"),
-            (Language::De, "Warten ist normal"),
+            (Language::En, "Requests here have high, variable latency"),
+            (Language::De, "Anfragen haben hier hohe, schwankende Latenz"),
         ] {
             let asked = render(language, AskMode::Ui, 300, None).unwrap();
             assert!(asked.contains(waiting), "{asked}");
@@ -427,8 +490,8 @@ mod tests {
     #[test]
     fn the_meta_endpoint_is_named_together_with_its_limit() {
         for (language, only_the_user) in [
-            (Language::En, "Only the user can add a rule."),
-            (Language::De, "Nur der Nutzer kann eine Regel anlegen."),
+            (Language::En, "It grants nothing by itself."),
+            (Language::De, "Er gewährt von sich aus nichts."),
         ] {
             for ask_mode in [AskMode::Ui, AskMode::None] {
                 let text = render(language, ask_mode, 300, Some(HOST)).unwrap();
@@ -484,12 +547,12 @@ mod tests {
         for (language, gives_up, waits) in [
             (
                 Language::En,
-                "a tool that gives up sooner withdraws the question",
+                "A tool that gives up sooner withdraws the request",
                 "`curl` waits.",
             ),
             (
                 Language::De,
-                "gibt ein Tool früher auf, ist die Frage weg",
+                "Gibt ein Tool früher auf, ist die Anfrage weg",
                 "`curl` wartet.",
             ),
         ] {
@@ -498,6 +561,60 @@ mod tests {
             assert!(asked.contains(waits), "{asked}");
             let unasked = render(language, AskMode::None, 300, Some(HOST)).unwrap();
             assert!(!unasked.contains(gives_up), "{unasked}");
+        }
+    }
+
+    /// Lange Wartezeit ist kein Ausfall, in beiden Ask-Modi mit dem, was dort
+    /// wahr ist (HUM-364): mit Frage Sekunden bis Minuten Warten, ohne
+    /// Wiederholung in einer Schleife und ohne Wechsel von Werkzeug oder
+    /// Host; ohne Frage wird nichts angehalten, und ein `504` ist eine
+    /// fehlende Regel. Das Modell wird nie angehalten, in beiden Modi, und
+    /// der Verweis auf den Skill steht immer da.
+    #[test]
+    fn latency_is_explained_in_both_ask_modes() {
+        for (language, asked_lines, unasked_lines, model, skill) in [
+            (
+                Language::En,
+                &[
+                    "Requests here have high, variable latency",
+                    "no retry loops or parallel duplicates, no switching tools or mirrors",
+                ][..],
+                &[
+                    "nothing waits",
+                    "refused requests get `403`",
+                    "`504`: not permitted, not an outage",
+                ][..],
+                "they never wait here, so delays come from the model server.",
+                "Details: skill `humanitl`.",
+            ),
+            (
+                Language::De,
+                &[
+                    "Anfragen haben hier hohe, schwankende Latenz",
+                    "keine Schleifen oder parallelen Duplikate, kein Tool- oder Spiegelwechsel",
+                ][..],
+                &[
+                    "nichts wartet",
+                    "Abgelehntes bekommt `403`",
+                    "`504`: nicht erlaubt, kein Ausfall",
+                ][..],
+                "sie warten hier nie, Verzögerung kommt vom Modellserver.",
+                "Mehr: Skill `humanitl`.",
+            ),
+        ] {
+            let asked = render(language, AskMode::Ui, 300, Some(HOST)).unwrap();
+            let unasked = render(language, AskMode::None, 300, Some(HOST)).unwrap();
+            for line in asked_lines {
+                assert!(asked.contains(line), "{language:?}: {line:?}: {asked}");
+                assert!(!unasked.contains(line), "{language:?}: {line:?}: {unasked}");
+            }
+            for line in unasked_lines {
+                assert!(unasked.contains(line), "{language:?}: {line:?}: {unasked}");
+            }
+            for text in [&asked, &unasked] {
+                assert!(text.contains(model), "{language:?}: {text}");
+                assert!(text.contains(skill), "{language:?}: {text}");
+            }
         }
     }
 

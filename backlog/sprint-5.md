@@ -92,6 +92,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-357 | A sandbox opens disposable by default where the system allows it | M | HUM-350, HUM-351 |
 | HUM-362 | rpmlint on Fedora 44 accepts the RPM again | S | — |
 | HUM-363 | A release tag is set only on a commit whose release dry run is green | M | HUM-237, HUM-362 |
+| HUM-364 | OpenCode and pi know that the network is slow on purpose, through the briefing and a Humanitl skill | M | HUM-071, HUM-073, HUM-274, HUM-308, HUM-309 |
 
 ---
 
@@ -11138,3 +11139,154 @@ eigene Issues:
   `daemon/crates/*/Cargo.toml` in die Liste aufnehmen.
 - Ob `profiles/` und `catalog/` in die Liste gehören, soweit das Paket sie
   mitliefert.
+
+## HUM-364 · OpenCode and pi know that the network is slow on purpose, through the briefing and a Humanitl skill
+
+Sprint: 5 · Size: M · Dependencies: HUM-071, HUM-073, HUM-274, HUM-308, HUM-309
+
+### Context
+Owner request of 2026-10-31, high priority: our agents OpenCode and pi must
+learn automatically that network requests can take much longer than usual and
+must not be surprised by high latency. The owner suggested installing a
+Humanitl skill automatically. The briefing (HUM-071) already said that a
+request waits up to `hold.timeout_secs` and "Waiting is normal: do not
+abort". In practice agents still give up, retry in loops, switch tools or
+conclude there is no internet when a request is held or slow (also observed: a
+subagent returning its prompt).
+
+**Owner decision of 2026-10-31 (framing).** The agent must not learn that a
+human approves or that it waits for a person. Slow, variable latency is a
+property of this environment. No text the agent reads speaks of a person, a
+human, an approval, a review or "the user decides": `403` means the
+destination or request is not permitted in this environment, `504` after the
+wait means no permission was granted in time, and `POST /ask` requests access
+to a destination, access may follow later. Every statement stays true to the
+behaviour; it only leaves out who decides. "The user" may appear as the one
+the agent talks to and reports to.
+
+**This reverses HUM-309's stance "no skills shipped by Humanitl" for this one
+skill.** No further skill, extension or MCP configuration is shipped.
+
+### Specification
+1. **Briefing** (`agents/opencode/briefing.{en,de}.md`, both ask modes, both
+   languages in sync, every sentence verified, tokens re-counted):
+   - `ui`/`terminal`: requests here have high, variable latency; one that no rule permits or refuses yet waits up to
+     `{timeout}`s, then `504`: no permission granted in time; normal here, not
+     an outage; keep waiting, tool timeouts above `{timeout}`s, no retry
+     loops or parallel duplicates, no switching tools or mirrors, never assume
+     the network is down; a tool that gives up sooner withdraws the request,
+     `curl` waits.
+   - `none`: only what the rules permit goes through, at once; nothing waits; refused requests get `403`,
+     any other fails at once with `504`: not permitted, not an outage.
+   - Both: `403` "not permitted here"; `GET /` lists what is permitted,
+     `POST /ask` requests access (`202`; access may follow later) and grants
+     nothing by itself; model calls through the passthrough never wait here,
+     so delays come from the model server; a pointer to the skill `humanitl`.
+   - No wording that names a way past the proxy (HUM-071 pitfall).
+2. **Skill** `agents/skill/SKILL.{en,de}.md`, agentskills.io format, front
+   matter `name: humanitl` and a quoted `description` that routes on slow,
+   hanging, failing, refused or blocked requests (`403`, `502`, `503`, `504`,
+   `Blocked by Humanitl.`) and before network-heavy work. Content: the proxy as
+   the only way out, how to read an answer (`reason:`, `flow:`, `host:`,
+   `note:`; `403`, `504`, `502 upstream_*`, `503 hold_*`), the meta endpoint
+   (`GET /`, `GET /why/<flow>`, `POST /ask`, ten per minute), how to report a
+   refusal, and per ask mode how to wait (`curl --max-time {max_time}` with
+   `{max_time}` = `hold.timeout_secs` + 60, no loops, no parallel duplicates,
+   no tool or mirror switch, no "network down"). Rendered like the briefing
+   (comments stripped, variant per ask mode, placeholders, `AGENT_003` on a
+   broken template or front matter). Installed read-only by both adapters
+   together with the briefing (`agent.briefing.enabled`):
+   - OpenCode 1.18.31: `<config>/opencode/skills/humanitl/SKILL.md`
+     (`Skill.discovery` scans every config directory with
+     `{skill,skills}/**/SKILL.md`; the first is `Global.Path.config`).
+   - pi 1.4.0: `<agent-dir>/skills/humanitl/SKILL.md`
+     (`userDirs.skills = join(agentDir, "skills")`, no trust prompt).
+3. **Agent-side timeouts.** Check that the timeouts from HUM-308 cover the
+   hold; raise them where a switch exists.
+4. **Tests** in `daemon/crates/sandbox`: skill path and read-only mode per
+   agent, front matter parses, `{timeout}` and `{max_time}` rendered, the
+   briefing carries the latency sentences in both ask modes, no text speaks
+   of a person, the token budget test passes. Mutation proofs: skill dropped
+   from the adapter files (red), `{timeout}` left unrendered (red).
+5. **Docs**: `docs/guides/agent-profiles.md` (files tables, one paragraph),
+   `agents/opencode/README.md`, `agents/pi/README.md`.
+
+### Non-goal
+- No change to the proxy, the hold, `hold.timeout_secs` or the meta endpoint.
+- No new configuration key; the skill follows `agent.briefing.enabled`.
+- No skill in `/work` or in `~/.agents/skills` (shared by both agents and
+  read by OpenCode only as an external skill that can be switched off).
+
+### Acceptance criteria
+- [ ] Both agents find the skill in their installed version; it is read-only
+      and outside `/work`.
+- [ ] The briefing explains high latency in `ui`/`terminal` and the immediate
+      `504` in `none`, in both languages, within `TOKEN_BUDGET`.
+- [ ] Neither briefing nor skill tells the agent about a person deciding.
+- [ ] Every statement of the skill has its evidence in
+      `daemon/crates/sandbox/src/agent/skill.rs`.
+
+### Umsetzung (HUM-364)
+
+- **Gemessen, OpenCode 1.18.31** (`~/.opencode/bin/opencode`, Zeichenketten
+  des Binärprogramms): `Skill.discovery` liest `~/.claude/skills` und
+  `~/.agents/skills` (externe Skills, abschaltbar), dann jedes Verzeichnis aus
+  `Config.directories` mit `{skill,skills}/**/SKILL.md`, dann `skills.paths`
+  und `skills.urls`; `ConfigPaths.directories` beginnt mit
+  `Global.Path.config`. Ein Skill ohne `description` erscheint nicht in der
+  Liste für das Modell. Ausgeführt mit leerem, temporärem `HOME` und
+  `XDG_CONFIG_HOME`: `opencode debug skill` listet `humanitl` mit Beschreibung
+  und Ort `<XDG_CONFIG_HOME>/opencode/skills/humanitl/SKILL.md`. Die
+  Berechtigung `skill` steht in der Vorlage nicht und gilt damit nach der
+  Vorgabe `"*": "allow"`.
+- **Gemessen, pi 1.4.0** (`/usr/local/lib/node_modules/@earendil-works/pi-coding-agent`,
+  nie `~/.pi`): `docs/skills.md` und `dist/bundle`: Skills des Nutzers unter
+  `join(agentDir, "skills")`, rekursiv; Name, Beschreibung und Ort stehen im
+  Systemprompt, sobald `read` oder `bash` aktiv ist; nur Projekt-Skills
+  brauchen die Vertrauensfrage. Mit `DefaultResourceLoader` auf einem
+  temporären Agentenverzeichnis geladen: `humanitl` ohne Diagnose.
+- **Fristen (Punkt 3).** `OpenCode` `bash`: `bash_default_timeout_ms` hebt die
+  Vorgabe schon auf `hold.timeout_secs` + 60 s (HUM-308), reicht also.
+  `OpenCode` `webfetch`: höchstens 120 s, fest im Code, nicht einstellbar;
+  Briefing und Skill sagen, dass ein Werkzeug, das früher aufgibt, die Anfrage
+  beendet, und dass `curl` wartet. pi `bash`: keine Vorgabefrist, nichts zu
+  heben. Keine Änderung an den Fristen.
+- **Token.** `tools/briefing-tokens.py`, ungünstigster Fall: englisch 250
+  (`ui`) und 205 (`none`), deutsch 266 und 215 in `o200k_base`.
+  `TOKEN_BUDGET` steigt von 185 auf 270, die Zeichengrenze im Test von 780
+  auf 1080; die Begründung steht an `TOKEN_BUDGET`.
+- **Code.** Neues Modul `daemon/crates/sandbox/src/agent/skill.rs` (`render`,
+  strenger Kopfleser `front_matter`, Belegtabelle); `briefing.rs` teilt
+  `variant_for`, `split_variants_with` (Zeilen einer Variante bleiben im
+  Skill Zeilen), `strip_comments` und `tidy`. `opencode::skill_dst`,
+  `pi::skill_dst`, beide `file_targets` und `files()` legen den Skill neben
+  dem Briefing an.
+- **Tests.** `skill.rs`: beide Varianten, Kopf und Beschreibung, Frist und
+  `curl --max-time`, Zeile zum Modell, Meta-Endpunkte, Größe, strenger
+  Kopfleser, kein Wort über eine Person in Briefing und Skill.
+  `briefing.rs`: Latenz in beiden Ask-Modi. `tests/opencode_adapter.rs` und
+  `tests/pi_adapter.rs`: Pfad, Modus `0o444`, eigenes `XDG_CONFIG_HOME`
+  beziehungsweise `HOME`, Frist in beiden Sprachen, abgeschaltetes Briefing
+  ohne Skill; der Lauf mit falschem pi in echter Sandbox prüft zusätzlich,
+  dass der Skill ankommt und nicht beschreibbar ist.
+- **Review (Codex, Sonnet), übernommen.** Die Wartezeit gilt nur für
+  Anfragen, die noch keine Regel erlaubt oder ablehnt; Erlaubtes dauert so
+  lange wie der Server, Abgelehntes endet sofort mit `403`, auch im Modus
+  `none` (dort `504` nur für den Rest). Die Modellregel gilt „auf ihren
+  Pfaden“: `llm.passthrough_paths` kann Pfade nennen, die kein Modell-Aufruf
+  sind (`/api/pull`), „sonst nichts auf diesem Host“ wäre dann falsch.
+  `503 hold_memory` ist ein Byte-Budget (`limits.hold_max_bytes`). Der Skill
+  nennt `502 upstream_private_address:<Adresse>`, eine Zeile für jeden
+  anderen Status oder Grund und `429` mit `retry-after` für `POST /ask`; der
+  Rat nach einem `504` ist in beiden Ask-Modi derselbe Satz. Der Test gegen
+  Wörter über eine Person vergleicht ganze Wörter. Nachgezählt: englisch 250
+  (`ui`) und 205 (`none`), deutsch 266 und 215; `TOKEN_BUDGET` 270, die
+  Zeichengrenze im Test 1080.
+
+### Candidate for a new issue (not in HUM-364)
+- The proxy's own output still hints at a human in the loop: `GET
+  http://humanitl.internal/` shows `ask=ui|terminal|none` and the default
+  row, and `403` bodies carry `reason: user`. Briefing and skill do not name
+  these values, but the agent reads them. Hiding them needs a change in the
+  proxy (`humanitl_proxy::meta`, `humanitl_core::block`) and in the tests
+  that pin those bodies.
