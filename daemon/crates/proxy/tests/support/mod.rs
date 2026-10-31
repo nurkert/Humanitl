@@ -745,6 +745,27 @@ impl Proxy {
         text
     }
 
+    /// `CONNECT host:port`, dann [`request`](Self) im Klartext durch den Tunnel,
+    /// wie undici mit `proxyTunnel` zu einem `http://`-Ziel (HUM-364).
+    pub async fn cleartext_tunnel(&self, target: &str, request: &str) -> String {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let mut stream = UnixStream::connect(&self.socket).await.unwrap();
+        let connect = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n");
+        stream.write_all(connect.as_bytes()).await.unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            let byte = tokio::time::timeout(WAIT, stream.read_u8()).await;
+            head.push(byte.unwrap().unwrap());
+        }
+        assert!(head.starts_with(b"HTTP/1.1 200"), "{head:?}");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = Vec::new();
+        let read = tokio::time::timeout(WAIT, stream.read_to_end(&mut answer)).await;
+        read.unwrap().unwrap();
+        String::from_utf8_lossy(&answer).into_owned()
+    }
+
     /// `CONNECT host:port`, dann TLS gegen den Proxy (der Client vertraut nur
     /// der Test-CA und bietet `h2` und `http/1.1`), dann HTTP/1.1 im Tunnel.
     pub async fn tls_client(&self, host: &str, port: u16) -> TlsClient {
@@ -788,6 +809,40 @@ impl Proxy {
             },
             alpn,
             _outer: outer,
+        }
+    }
+
+    /// Der Fehler eines Handschlags, der nur `h2` anbietet: Das Leaf des Proxys
+    /// kennt es nicht, und der Client muss das als Alert erfahren.
+    pub async fn tls_error_offering_h2(&self, host: &str, port: u16) -> String {
+        let stream = UnixStream::connect(&self.socket).await.unwrap();
+        let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+            .await
+            .unwrap();
+        let _outer = tokio::spawn(async move {
+            let _ = conn.with_upgrades().await;
+        });
+        let connect = Request::builder()
+            .method(Method::CONNECT)
+            .uri(format!("{host}:{port}"))
+            .body(Full::new(Bytes::new()))
+            .unwrap();
+        let response = sender.send_request(connect).await.unwrap();
+        let upgraded = hyper::upgrade::on(response).await.unwrap();
+        let mut config = ClientConfig::builder_with_provider(self.ca.provider())
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(TrustAnything(self.ca.provider())))
+            .with_no_client_auth();
+        config.alpn_protocols = vec![b"h2".to_vec()];
+        let name = ServerName::try_from(host.to_owned()).unwrap();
+        match TlsConnector::from(Arc::new(config))
+            .connect(name, TokioIo::new(upgraded))
+            .await
+        {
+            Ok(_) => "the handshake succeeded".to_owned(),
+            Err(err) => err.to_string(),
         }
     }
 
