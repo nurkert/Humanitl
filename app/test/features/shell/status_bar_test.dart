@@ -481,7 +481,7 @@ void main() {
         tester,
         FakeDaemonClient.empty(),
       );
-      expect(find.text('Restart daemon'), findsOneWidget);
+      expect(find.text('Update daemon'), findsOneWidget);
       expect(enabled(tester), isTrue);
       expect(find.byKey(blocked), findsNothing);
 
@@ -511,8 +511,11 @@ void main() {
         <String>['systemctl', '--user', 'daemon-reload'],
         retire,
       ]);
-      // The fresh snapshot shows the session; ending it takes a second answer.
-      expect(enabled(tester), isTrue);
+      // Ending the session takes a second answer.
+      expect(
+        find.byKey(const Key('status-daemon-restart-confirm')),
+        findsOneWidget,
+      );
       expect(client.sandbox.state, SandboxState.running);
     });
 
@@ -604,6 +607,27 @@ void main() {
         <String>['systemctl', '--user', 'daemon-reload'],
       ]);
       expect(client.sandbox.state, SandboxState.running);
+    });
+
+    testWidgets('a daemon that says busy without a session is answered', (
+      WidgetTester tester,
+    ) async {
+      // The window sees no session, the daemon says it holds one.
+      final FakeDaemonClient client = FakeDaemonClient.empty();
+      await pumpRestart(tester, client, outcome: 'busy');
+      await click(tester);
+      expect(
+        find.byKey(const Key('status-daemon-restart-confirm')),
+        findsOneWidget,
+        reason: 'the press must not end in silence',
+      );
+      expect(FocusManager.instance.primaryFocus?.debugLabel, 'restart-cancel');
+      await tester.tap(find.byKey(const Key('status-daemon-restart-confirm')));
+      // Every attempt waits for the daemon; the pauses run on timers.
+      for (int n = 0; n < restartAfterStopAttempts * 2; n++) {
+        await tester.pump(restartAfterStopPause);
+      }
+      expect(find.byKey(failed), findsOneWidget);
     });
 
     testWidgets('a start or stop under way disables it, with the reason', (

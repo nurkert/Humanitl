@@ -49,7 +49,7 @@ the user service (HUM-284):
   session that runs keeps its daemon; a daemon from this version on ends by
   itself once the session is over, and the next connection starts the new
   program through the socket. Until then the app shows the version notice
-  with a "Restart daemon" button. The daemon of 0.0.6 does not know the
+  with a "Update daemon" button. The daemon of 0.0.6 does not know the
   request; for it `postinst` asks `humanitl --json daemon status` and runs
   `try-restart` only on `agent_session` `none`. That old daemon reports
   `stopped` for the whole of a start, so a start that runs or begins before

@@ -400,7 +400,7 @@ Every code is explained in [DIAGNOSTICS.md](../DIAGNOSTICS.md).
   agent session is running, the daemon keeps running until it ends; a daemon of
   any release after 0.0.6 then ends by itself, and the next connection starts the new
   version. Until then the app's status bar names the other version and offers
-  **Restart daemon** once no session runs; the command line equivalent is
+  **Update daemon** once no session runs; the command line equivalent is
   `systemctl --user daemon-reload && systemctl --user restart humanitld`.
 - **RPM:** `sudo dnf install ./humanitl-<newer>-1.x86_64.rpm` (openSUSE:
   `sudo zypper install --allow-unsigned-rpm ./…rpm`). The scriptlet reloads and

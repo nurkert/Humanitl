@@ -1,4 +1,4 @@
-/// "Restart daemon" next to the version notice of the status bar (HUM-284).
+/// "Update daemon" next to the version notice of the status bar (HUM-284).
 library;
 
 import 'package:flutter/services.dart';
@@ -23,9 +23,10 @@ import '../daemon_restart.dart';
 /// snapshot only decides what is offered; whether the restart happens is
 /// decided by the daemon itself (`humanitl daemon retire-if-idle`, see
 /// `daemon_restart.dart`).
-/// When the daemon says a session holds it, the button rests until a fresh
-/// snapshot arrives; a refresh that brings none leaves it resting, because
-/// nobody knows then.
+/// When the daemon says a session holds it, the bar asks about the fresh
+/// snapshot, also if that shows none (HUM-381): the press must not end in
+/// silence. A start or stop under way, or a refresh that brings no snapshot,
+/// leaves the button resting, because nobody knows then.
 class DaemonRestartControl extends ConsumerStatefulWidget {
   /// Creates the control for a daemon that speaks contract minor
   /// [daemonMinor].
@@ -52,6 +53,12 @@ class _DaemonRestartControlState extends ConsumerState<DaemonRestartControl> {
 
   /// True while the bar asks whether the running session may end.
   bool _asking = false;
+
+  /// True when the daemon said busy and the question stands for that.
+  bool _daemonBusy = false;
+
+  /// The state of the sandbox the busy answer was about.
+  SandboxState? _askedState;
 
   /// Takes the focus when the question appears: the safe answer comes first.
   final FocusNode _cancelFocus = FocusNode(debugLabel: 'restart-cancel');
@@ -94,14 +101,18 @@ class _DaemonRestartControlState extends ConsumerState<DaemonRestartControl> {
       _askedAbout = sandbox;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _asking) {
+      if (mounted && (_asking || _daemonBusy)) {
         _cancelFocus.requestFocus();
       }
     });
   }
 
   void _cancel() {
-    setState(() => _asking = false);
+    setState(() {
+      _held = _held && !_daemonBusy;
+      _asking = false;
+      _daemonBusy = false;
+    });
     _focusBefore?.requestFocus();
     _focusBefore = null;
   }
@@ -131,12 +142,17 @@ class _DaemonRestartControlState extends ConsumerState<DaemonRestartControl> {
         daemonMinor: widget.daemonMinor,
         askSession: () => _askSession(client),
       ),
+      stopped: true,
     );
   }
 
-  Future<void> _run(Future<DaemonRestart> Function() restart) async {
+  Future<void> _run(
+    Future<DaemonRestart> Function() restart, {
+    bool stopped = false,
+  }) async {
     setState(() {
       _asking = false;
+      _daemonBusy = false;
       _busy = true;
       _failure = null;
     });
@@ -149,8 +165,30 @@ class _DaemonRestartControlState extends ConsumerState<DaemonRestartControl> {
         case DaemonRestarted():
           break;
         case DaemonSessionHolds():
+          // Der Daemon sagt besetzt, auch wenn dieses Fenster keine Sitzung
+          // sieht: Ohne Antwort stünde der Knopf hier stumm (HUM-381). Beim
+          // ersten Mal fragt die Leiste, ob die Sitzung enden darf.
+          final SandboxStatus? before = ref.read(sandboxStatusProvider).value;
           setState(() => _held = true);
           await ref.read(sandboxStatusProvider.notifier).refresh();
+          if (!mounted) {
+            return;
+          }
+          final SandboxStatus? now = ref.read(sandboxStatusProvider).value;
+          if (stopped) {
+            setState(
+              () => _failure = 'the daemon still says a session holds it',
+            );
+          } else if (now != null &&
+              !identical(now, before) &&
+              (now.state == SandboxState.stopped ||
+                  now.state == SandboxState.running)) {
+            // Gefragt wird nur nach einem frischen, klaren Stand. Ein Start
+            // oder Stopp läuft zu Ende, und ohne Antwort weiß niemand etwas.
+            _daemonBusy = true;
+            _askedState = now.state;
+            _ask(now.sandboxId);
+          }
         case DaemonRestartFailed(:final String detail):
           setState(() => _failure = detail);
       }
@@ -173,6 +211,13 @@ class _DaemonRestartControlState extends ConsumerState<DaemonRestartControl> {
       if (_held && next.hasValue && !identical(previous?.value, next.value)) {
         setState(() => _held = false);
       }
+      // Ein anderer Stand ist eine andere Frage, auch nach `busy`.
+      if (_daemonBusy &&
+          next.hasValue &&
+          (next.value?.sandboxId != _askedAbout ||
+              next.value?.state != _askedState)) {
+        setState(() => _daemonBusy = false);
+      }
       // Another sandbox is another question: the answer never carries over.
       if (_asking &&
           (!agentSessionStoppable(next) ||
@@ -188,7 +233,8 @@ class _DaemonRestartControlState extends ConsumerState<DaemonRestartControl> {
         ref.watch(daemonCliProvider) != null;
     final bool holds = !stoppable && (_held || agentSessionHolds(status));
     final bool asking =
-        _asking && stoppable && status.value?.sandboxId == _askedAbout;
+        (_daemonBusy && ref.watch(daemonCliProvider) != null) ||
+        (_asking && stoppable && status.value?.sandboxId == _askedAbout);
     final TextStyle style = tokens.typography.ui11.tinted(tokens.colors.fg1);
     final String? failure = _failure;
     // The bar is narrow, so the answer that names what is lost stands alone.
@@ -231,7 +277,9 @@ class _DaemonRestartControlState extends ConsumerState<DaemonRestartControl> {
       children: <Widget>[
         HButton(
           key: const Key('status-daemon-restart'),
-          variant: HButtonVariant.ghost,
+          // Mit Rahmen: Die Leiste ist sonst Text, und das ist der eine Griff
+          // in ihr (HUM-381).
+          variant: HButtonVariant.secondary,
           onPressed: holds || _busy
               ? null
               : stoppable
