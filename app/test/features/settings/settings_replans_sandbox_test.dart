@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/work_dir_picker.dart';
+import 'package:humanitl_ui/humanitl_ui.dart';
 
 import '../../harness/app_harness.dart';
 
@@ -74,8 +75,18 @@ Future<void> chooseInSettings(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-String pathText(WidgetTester tester, String key) =>
-    tester.widget<Text>(find.byKey(ValueKey<String>(key))).data!;
+/// Der volle Pfad an [key]. Kürzt die Zeile ihn in der Mitte (HUM-406), steht
+/// er ungekürzt am [HMiddleEllipsis] darüber.
+String pathText(WidgetTester tester, String key) {
+  final Finder text = find.byKey(ValueKey<String>(key));
+  final Finder whole = find.ancestor(
+    of: text,
+    matching: find.byType(HMiddleEllipsis),
+  );
+  return whole.evaluate().isEmpty
+      ? tester.widget<Text>(text).data!
+      : tester.widget<HMiddleEllipsis>(whole.first).text;
+}
 
 void main() {
   testWidgets('a folder chosen in the settings shows in the sandbox header '

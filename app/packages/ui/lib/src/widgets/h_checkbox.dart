@@ -70,6 +70,13 @@ class HCheckbox extends StatelessWidget {
     // Deaktiviert heißt sichtbar deaktiviert: `fg2` ist genau dafür da.
     final Color labelColor = enabled ? tokens.colors.fg0 : tokens.colors.fg2;
     final Color hintColor = enabled ? tokens.colors.fg1 : tokens.colors.fg2;
+    final TextStyle labelStyle = tokens.typography.ui13.tinted(labelColor);
+    // Das Kästchen steht mittig auf der ersten Zeile der Beschriftung, auch
+    // bei größerer Textskalierung. Vorher saß es mit festen acht Pixeln
+    // Abstand oben einen Pixel unter der Mitte der Zeile (HUM-406).
+    final double labelLine =
+        MediaQuery.textScalerOf(context).scale(labelStyle.fontSize!) *
+        labelStyle.height!;
     return Semantics(
       checked: value,
       enabled: enabled,
@@ -89,8 +96,10 @@ class HCheckbox extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Padding(
-                    padding: EdgeInsets.only(top: tokens.spacing.x2),
+                  Container(
+                    height: labelLine,
+                    margin: EdgeInsets.only(top: tokens.spacing.x1),
+                    alignment: Alignment.center,
                     child: ExcludeFocus(
                       child: IgnorePointer(
                         child: shad.Checkbox(
@@ -134,10 +143,7 @@ class HCheckbox extends StatelessWidget {
                       children: <Widget>[
                         Padding(
                           padding: EdgeInsets.only(top: tokens.spacing.x1),
-                          child: Text(
-                            label,
-                            style: tokens.typography.ui13.tinted(labelColor),
-                          ),
+                          child: Text(label, style: labelStyle),
                         ),
                         if (hint != null)
                           Text(

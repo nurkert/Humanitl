@@ -323,6 +323,7 @@ History; a queue row stays 36 px in every state.
 | `checkStagger` | 120 ms |
 | `cautionTape` | 1200 ms |
 | `arriveOffset` | 8 px |
+| `hoverGrow` | 2 px |
 | `leaveOffset` | 12 px |
 | `breatheBelow` | 0.2 |
 | `breatheMinOpacity` | 0.72 |
@@ -354,9 +355,14 @@ Four roles, no fifth (`HButtonVariant`):
 | `ghost` | No surface until hovered | Quiet actions, the isolation ring |
 | `danger` | The blocked hue | Destructive actions, including Block |
 
-Sizes: `sm` is 28 px minimum height, `md` is 32 px. States: rest, hovered,
+Sizes: `sm` is 28 px minimum height, `md` is 32 px, and `bar` is 20 px with
+`ui11`, the one named exception below `hitMin`: it exists only for the 24 px
+status bar, where 20 px plus the ring on both sides is exactly the bar and the
+label shares the baseline of the text beside it. States: rest, hovered,
 pressed, focused (ring outside the button, 2 px gap on the primary button),
-disabled (`onPressed: null`). The pressed fill runs for `press` (120 ms) and
+disabled (`onPressed: null`). Every role reserves the same 2 px for the ring in
+the layout; the gap of the primary button is painted beyond that, so buttons of
+different roles in one row are equally tall and stand on one baseline. The pressed fill runs for `press` (120 ms) and
 keeps its full duration under reduced motion.
 
 ### HIconButton
@@ -364,6 +370,21 @@ keeps its full duration under reduced motion.
 A glyph that is also a 28 px hit target, for close affordances and wherever a
 label would be noise. Quiet role: no surface at rest, `bg2` under the pointer,
 `bg3` when pressed, focus ring outside. Always has a `semanticsLabel`.
+`HIconButton.builder` takes any glyph (the shell's own) in the stroke colour of
+the state; an icon-only control is never an `HButton` with a glyph as label,
+which stood 6 px wider and put glyph centres of two stacked strips 3 px apart.
+
+### HKeyHint
+
+The shortcut after a label (`Enter`, `E`, `B`), `mono11` in `fg1`, set on the
+baseline of the `ui13` label before it in any centred row and at any text
+scale.
+
+### HMiddleEllipsis
+
+One line that shortens in the middle, for paths: the whole path when it fits,
+otherwise a third of the room for the start, two thirds for the end, and `…`
+between them, so the project name stays readable.
 
 ### HPill
 
@@ -382,14 +403,23 @@ One row of the queue, the rule list or History. Three densities: `row` (36),
 | State | Look |
 |---|---|
 | Rest | 4 px state rail on the left, glyph, title, trailing content |
-| Hovered | `bg2` fill; the action slot on the right reveals its action |
+| Hovered | `bg2` fill and the hover scale (see below); the action slot on the right fades in its action |
 | Selected | `bg3` fill; the accent replaces the state rail over the full 4 px |
 | In selection | Accent rail without the cursor fill (multi-select) |
 | Focused | Ring drawn on the row's own edge (`HFocusRing.inline`) |
 
 Hover and selection never share a fill: Enter allows the selected row, and
 allowing cannot be undone. The action slot is always reserved (28 px) and never
-moves text.
+moves text; the row content is vertically centred, so a revealed control taller
+than the text cannot push it down.
+
+**Hover in every list** (rules, History, queue, audit, changes; `HHoverScale`):
+the fill changes over `press` (120 ms) on `enter`, and the row scales evenly
+around its centre until its side edges stand `hoverGrow` (2 px) further out,
+over the same duration. The scale is painted only: the row keeps its layout
+size, its neighbours and its hit area never move, and it is never a
+translation. Under reduced motion (`MediaQuery.disableAnimations`) only the
+colour changes.
 
 | Held | Hovered | Selected |
 |---|---|---|
@@ -414,6 +444,9 @@ glyphs are painted, not loaded from an icon font.
 
 ### HBadge and HMethodBadge
 
+`HMethodBadge` is at least four monospace characters wide (`POST`), so hosts
+after it form one column in the queue; longer methods grow.
+
 `HBadge` is a small tinted label: 11/500, radius 2, 10 percent area tint, chip
 18 px tall inside a reserved 28 px. Area colour and text colour are separate
 (`color` and `textColor`); the text defaults to the text variant of the area
@@ -434,7 +467,8 @@ drawn by the library with our metrics: 2 px accent, 2 px gap), disabled.
 ### HCheckbox
 
 A box with its label and an optional `hint` sentence that says what ticking it
-costs. Box 14 px (`tick`). States: off, on (accent fill, `onAccent` tick),
+costs. Box 14 px (`tick`), centred on the first line of the label at any text
+scale; the box lines up with the left edge of a button below it. States: off, on (accent fill, `onAccent` tick),
 focused, disabled (everything in `fg2`, no accent).
 
 ### HSegmented and HChoiceChips

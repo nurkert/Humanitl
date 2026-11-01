@@ -156,15 +156,21 @@ class WorkDirPicker extends ConsumerWidget {
     final HTokens tokens = HTheme.of(context);
     final String? locked = lockedLabel;
     final String? dir = workDir == null || workDir!.isEmpty ? null : workDir;
-    final Widget text = Text(
-      dir ?? noneLabel,
-      key: ValueKey<String>('${_keyName(buttonKey)}-path'),
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: tokens.typography.ui13.tinted(
-        dir == null ? tokens.colors.fg1 : tokens.colors.fg0,
-      ),
-    );
+    // Ein Pfad kürzt in der Mitte, nicht am Ende: Am Ende gekürzt fiel genau
+    // der Name des Projekts weg (HUM-406). Passt er, steht er ganz da.
+    final Widget text = dir == null
+        ? Text(
+            noneLabel,
+            key: ValueKey<String>('${_keyName(buttonKey)}-path'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: tokens.typography.ui13.tinted(tokens.colors.fg1),
+          )
+        : HMiddleEllipsis(
+            dir,
+            textKey: ValueKey<String>('${_keyName(buttonKey)}-path'),
+            style: tokens.typography.ui13.tinted(tokens.colors.fg0),
+          );
     // Der ganze Pfad steht beim Verweilen da, auch wenn die Zeile ihn kürzt.
     final Widget path = dir == null
         ? text
@@ -233,11 +239,12 @@ class WorkDirPicker extends ConsumerWidget {
             MediaQuery.textScalerOf(context).scale(compactBelow);
         Widget row = lockable;
         if (compact) {
-          final Widget iconButton = HButton(
+          // Ein Glyph-Knopf in der Breite jedes anderen (HUM-406).
+          final Widget iconButton = HIconButton(
             key: buttonKey,
+            glyph: HGlyph.folder,
             onPressed: choose,
             semanticsLabel: chooseLabel,
-            child: glyph,
           );
           row = Row(
             mainAxisSize: MainAxisSize.min,

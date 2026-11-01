@@ -198,6 +198,16 @@ abstract final class HMotion {
   /// Das Anderthalbfache von [arriveOffset]: Gehen muss als längerer Weg
   /// lesbar sein als Kommen.
   static const double leaveOffset = arriveOffset * 1.5;
+
+  /// Wie weit eine überfahrene Zeile an jeder Seitenkante wächst (HUM-406).
+  ///
+  /// Die Zeile skaliert gleichmäßig um ihre Mitte, und zwar so, dass ihre
+  /// Seitenkanten genau diese Strecke nach außen gehen, egal wie breit sie
+  /// ist. Ein fester Faktor wäre an einer breiten Zeile der History ein
+  /// sichtbarer Sprung der Schrift zur Seite, an einer schmalen nichts. Die
+  /// Skalierung ist nur gemalt: Layout, Nachbarn und Trefferfläche bleiben,
+  /// wo sie sind.
+  static const double hoverGrow = 2;
 }
 
 /// Löst Bewegung gegen die Systemeinstellung „Animationen reduzieren" auf.

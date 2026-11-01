@@ -25,9 +25,18 @@ import '../tokens/tokens.dart';
 /// Der Abstand entsteht nur, wo er gebraucht wird. Wer [over] die deckende
 /// Füllung seines Controls reicht, bekommt ihn, sobald der Ring gegen diese
 /// Füllung unter [HColorDerivation.areaMinContrast] fällt — beim Primärbutton
-/// also, sonst nirgends. Der Ring bliebe sonst überall zwei Pixel breiter und
-/// verschöbe den Dichte-Rhythmus für ein Problem, das ein einziges Control
-/// hat.
+/// also, sonst nirgends.
+///
+/// **Der Abstand kostet kein Layout (HUM-406).** Reserviert wird immer genau
+/// [width], ob mit Abstand oder ohne; ein Ring mit Abstand malt die zwei
+/// Pixel über den reservierten Rand hinaus. Bis HUM-406 reservierte der
+/// Primärbutton [width] plus [gap] und stand damit vier Pixel höher im Layout
+/// als ein Sekundärbutton daneben: in einer Zeile mit `start`-Ausrichtung
+/// standen die Flächen zwei Pixel versetzt, und keine Grundlinie fluchtete.
+/// Gleiche Rollen, gleiches Layout; was übersteht, ist Farbe, kein Platz.
+/// Der Ring eines Primärbuttons malt damit zwei Pixel über seinen Kasten
+/// hinaus; wer ihn setzt, hält zu einem abschneidenden Vorfahren (Scrollen,
+/// `ClipRect`) diese zwei Pixel Abstand, sonst fehlt dem Ring eine Kante.
 ///
 /// Zwei Formen, weil es zwei Geometrien gibt:
 ///
@@ -83,8 +92,9 @@ class HFocusRing extends StatelessWidget {
       fill.a == 1.0 &&
       HColorDerivation.contrast(ring, fill) < HColorDerivation.areaMinContrast;
 
-  /// Wie viel [HFocusRing.new] auf jeder Seite freihält: der Ring, und über
-  /// einer Füllung wie [fill] zusätzlich der [gap].
+  /// Wie weit der Ring von [HFocusRing.new] auf jeder Seite über die Fläche
+  /// des Controls hinausreicht: der Ring, und über einer Füllung wie [fill]
+  /// zusätzlich der [gap]. Im Layout freigehalten wird davon nur [width].
   static double reservedFor(Color? fill, Color ring) =>
       needsGap(fill, ring) ? width + gap : width;
 
@@ -109,15 +119,19 @@ class HFocusRing extends StatelessWidget {
     final HTokens tokens = HTheme.of(context);
     final double inner = radius ?? 0;
     final double reserved = reservedFor(over, tokens.colors.accent);
+    // Die Lücke liegt außerhalb des reservierten Rands: Der Maler wächst um
+    // sie über die eigene Kante hinaus, das Layout nicht (HUM-406).
+    final double outset = _reserve ? reserved - width : 0;
     final Widget painted = CustomPaint(
       foregroundPainter: visible
           ? _HFocusRingPainter(
               color: tokens.colors.accent,
               radius: _reserve ? inner + reserved : inner,
+              outset: outset,
             )
           : null,
       child: _reserve
-          ? Padding(padding: EdgeInsets.all(reserved), child: child)
+          ? Padding(padding: const EdgeInsets.all(width), child: child)
           : child,
     );
     return painted;
@@ -125,17 +139,25 @@ class HFocusRing extends StatelessWidget {
 }
 
 class _HFocusRingPainter extends CustomPainter {
-  const _HFocusRingPainter({required this.color, required this.radius});
+  const _HFocusRingPainter({
+    required this.color,
+    required this.radius,
+    this.outset = 0,
+  });
 
   final Color color;
   final double radius;
+
+  /// Wie weit der Ring über die eigene Kante hinaus liegt: die Lücke über
+  /// einer Füllung, gegen die er sonst verschwände.
+  final double outset;
 
   @override
   void paint(Canvas canvas, Size size) {
     // Die halbe Strichbreite liegt auf dem Rechteck, also wird das Rechteck um
     // eine halbe Strichbreite eingerückt und der Ring liegt bündig auf der
     // äußeren Kante.
-    final double inset = HFocusRing.width / 2;
+    final double inset = HFocusRing.width / 2 - outset;
     final RRect ring = RRect.fromRectAndRadius(
       Rect.fromLTWH(
         inset,
@@ -156,5 +178,7 @@ class _HFocusRingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_HFocusRingPainter oldDelegate) =>
-      oldDelegate.color != color || oldDelegate.radius != radius;
+      oldDelegate.color != color ||
+      oldDelegate.radius != radius ||
+      oldDelegate.outset != outset;
 }

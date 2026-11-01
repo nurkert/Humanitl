@@ -210,16 +210,14 @@ class _TitleBar extends StatelessWidget {
               HoverLabel(
                 label: l10n.shellFloatingTerminalBack,
                 side: HoverLabelSide.below,
-                child: HButton(
+                child: HIconButton.builder(
                   key: const Key('shell-terminal-floating-back'),
-                  variant: HButtonVariant.ghost,
-                  size: HButtonSize.sm,
                   semanticsLabel: l10n.shellFloatingTerminalBack,
                   onPressed: onBack,
-                  child: ShellGlyphIcon(
+                  icon: (Color color) => ShellGlyphIcon(
                     ShellGlyph.sandbox,
                     size: 14,
-                    color: tokens.colors.fg1,
+                    color: color,
                   ),
                 ),
               ),

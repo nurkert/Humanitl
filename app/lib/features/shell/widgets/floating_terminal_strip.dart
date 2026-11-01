@@ -122,16 +122,14 @@ class FloatingTerminalStrip extends StatelessWidget {
                   HoverLabel(
                     label: l10n.shellTerminalStripOpen,
                     side: HoverLabelSide.below,
-                    child: HButton(
+                    child: HIconButton.builder(
                       key: const Key('shell-terminal-strip-open'),
-                      variant: HButtonVariant.ghost,
-                      size: HButtonSize.sm,
                       semanticsLabel: l10n.shellTerminalStripOpen,
                       onPressed: onOpen,
-                      child: ShellGlyphIcon(
+                      icon: (Color color) => ShellGlyphIcon(
                         ShellGlyph.maximize,
                         size: 14,
-                        color: tokens.colors.fg1,
+                        color: color,
                       ),
                     ),
                   ),

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 import 'package:shadcn_flutter/shadcn_flutter.dart' as shad;
@@ -11,6 +13,7 @@ import '../tokens/typography.dart';
 import 'h_animated_fill.dart';
 import 'h_control.dart';
 import 'h_focus_ring.dart';
+import 'h_hover_scale.dart';
 
 /// Eine Zeile der Queue, der Regelliste oder der History.
 ///
@@ -28,6 +31,10 @@ import 'h_focus_ring.dart';
 ///   überfahrene Zeile aus wie die ausgewählte, läse jemand die eine und
 ///   sendete die andere (3.4). Der Wechsel läuft über [HMotion.press], nicht
 ///   über den Rail-Wisch.
+/// * **Hover-Bewegung.** Dazu wächst die Zeile über [HHoverScale] leicht um
+///   ihre Mitte, nur gemalt, nie als Verschiebung; Nachbarn und Inhalt
+///   bleiben stehen, und unter reduzierter Bewegung bleibt nur die Farbe
+///   (HUM-406). Der Aktionsslot blendet über dieselbe Dauer ein.
 /// * **Rail.** Die Auswahl **ersetzt** die Zustands-Rail über die vollen vier
 ///   Pixel, sie überlagert sie nicht (3.4, 3.5). Jedes Mitglied einer
 ///   Mehrfachauswahl trägt dieselbe Akzent-Rail ([inSelection]), auch ohne
@@ -40,8 +47,9 @@ import 'h_focus_ring.dart';
 /// * **Fokus.** Die Zeile ist ein Fokusstopp und zeigt den Ring auf ihrer
 ///   eigenen Kante ([HFocusRing.inline]); eine Zeile von Rand zu Rand hat kein
 ///   Außen, in das ein Ring passen könnte (5.1, 6).
-/// * **Aktionsslot.** [actionSlot] ist immer [HSize.rowActionSlot] breit und
-///   bei Ruhe leer. Hover **und** Fokus decken die Aktion darin auf; er
+/// * **Aktionsslot.** [actionSlot] ist immer [HSize.rowActionSlot] breit,
+///   höchstens so hoch wie [minHeight] und bei Ruhe leer; sein Control darf
+///   mit Fokusring größer sein und malt dann über den Slot hinaus. Hover **und** Fokus decken die Aktion darin auf; er
 ///   ersetzt nichts, verschiebt nichts und lässt keinen Text neu umbrechen
 ///   (3.4).
 ///
@@ -283,6 +291,12 @@ class _HRowState extends State<HRow> {
     final Widget content = ConstrainedBox(
       constraints: BoxConstraints(minHeight: widget.minHeight),
       child: Stack(
+        // Mittig und nicht oben: Der Inhalt ist oft niedriger als die
+        // Mindesthöhe, und oben angeschlagen stand er nicht in der Mitte der
+        // Zeile. Schlimmer, er sprang: Sobald der Aktionsslot bei Hover ein
+        // Control von [HSize.hitMin] aufdeckte, wurde der Inhalt höher und
+        // die Schrift rutschte zwei Pixel nach unten (HUM-406).
+        alignment: AlignmentDirectional.centerStart,
         children: <Widget>[
           Positioned(
             left: 0,
@@ -311,9 +325,25 @@ class _HRowState extends State<HRow> {
                 ],
                 if (widget.actionSlot != null) ...<Widget>[
                   SizedBox(width: tokens.spacing.x2),
+                  // Ein fester Kasten, aufgedeckt wie leer: nie höher als die
+                  // Mindesthöhe der Zeile. Das Control darin misst mit seinem
+                  // Fokusring mehr als der Slot (28 plus zweimal zwei Pixel)
+                  // und steht deshalb in einer [OverflowBox]: Es behält seine
+                  // volle Zielfläche von [HSize.hitMin], der Ring malt über den
+                  // Kasten hinaus, und die Zeile wächst nicht. Vorher wurde
+                  // eine 28-px-Zeile der History bei Hover 32 px hoch und
+                  // schob ihre Nachbarn, und die Zielfläche schrumpfte in der
+                  // Breite auf 24 px (HUM-406, Review).
                   SizedBox(
                     width: HSize.rowActionSlot,
-                    child: revealed ? widget.actionSlot : null,
+                    height: math.min(HSize.rowActionSlot, widget.minHeight),
+                    child: revealed
+                        ? OverflowBox(
+                            maxWidth: double.infinity,
+                            maxHeight: double.infinity,
+                            child: _FadeIn(child: widget.actionSlot!),
+                          )
+                        : null,
                   ),
                 ],
                 SizedBox(width: tokens.spacing.x3),
@@ -345,37 +375,40 @@ class _HRowState extends State<HRow> {
         child: MouseRegion(
           onEnter: (PointerEnterEvent _) => _setHovered(true),
           onExit: (PointerExitEvent _) => _setHovered(false),
-          child: HFocusRing.inline(
-            visible: _focused,
-            child: HAnimatedFill(
-              color: background,
-              builder: (BuildContext context, Color fill) => shad.Clickable(
-                enabled: enabled,
-                focusNode: _focus,
-                onPressed: widget.onTap,
-                behavior: HitTestBehavior.opaque,
-                disableTransition: true,
-                // Der Hover gehört der `MouseRegion` darüber und nur ihr:
-                // zwei Schreiber auf denselben Zustand sind einer zu viel,
-                // und gelesen wird ohnehin nur `_hovered`. Dekoration und
-                // Zeiger sind hier feste Werte, also braucht diese Zeile
-                // keinen Zustandsspeicher.
-                disableHoverEffect: true,
-                // Die Pfeiltasten gehören dem Bildschirm: die Warteschlange
-                // ist ein einziger Fokusstopp mit Navigation darin
-                // (`docs/UX.md` 5.2, und [HPassThroughIntent]).
-                shortcuts: hArrowsToScreen,
-                // Eine Zeile von Rand zu Rand hat kein Außen, in das ein Ring
-                // passte; ihren zeichnet [HFocusRing.inline] auf der eigenen
-                // Kante.
-                disableFocusOutline: true,
-                mouseCursor: WidgetStatePropertyAll<MouseCursor>(
-                  enabled ? SystemMouseCursors.click : MouseCursor.defer,
+          child: HHoverScale(
+            hovered: _hovered,
+            child: HFocusRing.inline(
+              visible: _focused,
+              child: HAnimatedFill(
+                color: background,
+                builder: (BuildContext context, Color fill) => shad.Clickable(
+                  enabled: enabled,
+                  focusNode: _focus,
+                  onPressed: widget.onTap,
+                  behavior: HitTestBehavior.opaque,
+                  disableTransition: true,
+                  // Der Hover gehört der `MouseRegion` darüber und nur ihr:
+                  // zwei Schreiber auf denselben Zustand sind einer zu viel,
+                  // und gelesen wird ohnehin nur `_hovered`. Dekoration und
+                  // Zeiger sind hier feste Werte, also braucht diese Zeile
+                  // keinen Zustandsspeicher.
+                  disableHoverEffect: true,
+                  // Die Pfeiltasten gehören dem Bildschirm: die Warteschlange
+                  // ist ein einziger Fokusstopp mit Navigation darin
+                  // (`docs/UX.md` 5.2, und [HPassThroughIntent]).
+                  shortcuts: hArrowsToScreen,
+                  // Eine Zeile von Rand zu Rand hat kein Außen, in das ein Ring
+                  // passte; ihren zeichnet [HFocusRing.inline] auf der eigenen
+                  // Kante.
+                  disableFocusOutline: true,
+                  mouseCursor: WidgetStatePropertyAll<MouseCursor>(
+                    enabled ? SystemMouseCursors.click : MouseCursor.defer,
+                  ),
+                  decoration: WidgetStatePropertyAll<Decoration>(
+                    BoxDecoration(color: fill),
+                  ),
+                  child: content,
                 ),
-                decoration: WidgetStatePropertyAll<Decoration>(
-                  BoxDecoration(color: fill),
-                ),
-                child: content,
               ),
             ),
           ),
@@ -383,4 +416,43 @@ class _HRowState extends State<HRow> {
       ),
     );
   }
+}
+
+/// Blendet den aufgedeckten Aktionsslot über [HMotion.press] ein, statt ihn
+/// schlagartig hinzustellen (HUM-406).
+///
+/// Mit [AnimationBehavior.preserve]: Ein Einblenden ist Rückmeldung, kein
+/// Weg, und behält unter reduzierter Bewegung seine Dauer (`docs/UX.md`
+/// 2.10).
+class _FadeIn extends StatefulWidget {
+  const _FadeIn({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_FadeIn> createState() => _FadeInState();
+}
+
+class _FadeInState extends State<_FadeIn> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: HMotion.press,
+    animationBehavior: AnimationBehavior.preserve,
+  )..forward();
+
+  late final CurvedAnimation _curve = CurvedAnimation(
+    parent: _controller,
+    curve: HMotion.enter,
+  );
+
+  @override
+  void dispose() {
+    _curve.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      FadeTransition(opacity: _curve, child: widget.child);
 }

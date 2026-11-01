@@ -50,7 +50,7 @@ HControlPreview? _previewOf(HButtonPreview? preview) => switch (preview) {
   HButtonPreview.focused => HControlPreview.focused,
 };
 
-/// Button-Mindesthöhen. Beide erreichen das 28-px-Ziel des Designs.
+/// Button-Mindesthöhen. [sm] und [md] erreichen das 28-px-Ziel des Designs.
 ///
 /// Mindesthöhen und keine festen Höhen: bei `TextScaler.linear(2.0)` misst
 /// `ui13` allein 40 px Zeilenhöhe, und eine feste Höhe schluckte den Überlauf
@@ -60,17 +60,34 @@ enum HButtonSize {
   sm,
 
   /// 32 px, for a standalone action.
-  md;
+  md,
+
+  /// 20 px with `ui11`, only for the 24 px status bar (HUM-406).
+  ///
+  /// Die eine benannte Ausnahme vom 28-px-Ziel: Die Leiste ist 24 px hoch,
+  /// und ein `sm`-Button stand mit Fokusring 32 px hoch darin, ragte unten
+  /// heraus und schnitt die Unterlängen seiner Beschriftung ab. 20 px plus
+  /// zweimal der Ring sind genau die Leiste; die Schrift ist die der Leiste,
+  /// damit Beschriftung und Text daneben auf einer Grundlinie stehen.
+  bar;
 
   /// Mindesthöhe in logischen Pixeln.
-  double get minHeight =>
-      this == HButtonSize.sm ? HSize.hitMin : HSize.hitDecision.height;
+  double get minHeight => switch (this) {
+    HButtonSize.sm => HSize.hitMin,
+    HButtonSize.md => HSize.hitDecision.height,
+    HButtonSize.bar => HSize.statusBar - 2 * HFocusRingMetrics.width,
+  };
 
   /// Horizontal padding.
-  double get padding => this == HButtonSize.sm ? HSpace.x2 + 2 : HSpace.x3;
+  double get padding => switch (this) {
+    HButtonSize.sm => HSpace.x2 + 2,
+    HButtonSize.md => HSpace.x3,
+    HButtonSize.bar => HSpace.x2,
+  };
 
   /// Vertical padding.
-  double get verticalPadding => HSpace.x1;
+  double get verticalPadding =>
+      this == HButtonSize.bar ? HSpace.unit / 2 : HSpace.x1;
 
   /// Die Mindesthöhe der Beschriftung, damit der Kasten [minHeight] erreicht.
   ///
@@ -184,7 +201,21 @@ class HButton extends StatelessWidget {
               // widthFactor und heightFactor 1: der Button schrumpft auf seine
               // Beschriftung, auch wenn er in einer Spalte ohne feste Höhe
               // steht.
-              child: Center(widthFactor: 1, heightFactor: 1, child: child),
+              child: Center(
+                widthFactor: 1,
+                heightFactor: 1,
+                child: size == HButtonSize.bar
+                    // Schriftgröße und Zeilenhöhe der Leiste; Farbe und
+                    // Gewicht bleiben die der Rolle.
+                    ? DefaultTextStyle.merge(
+                        style: TextStyle(
+                          fontSize: tokens.typography.ui11.fontSize,
+                          height: tokens.typography.ui11.height,
+                        ),
+                        child: child,
+                      )
+                    : child,
+              ),
             ),
       ),
     );

@@ -39,6 +39,7 @@ class HBadge extends StatelessWidget {
     this.onTap,
     this.semanticsLabel,
     this.focusNode,
+    this.minLabelWidth = 0,
     super.key,
   });
 
@@ -75,6 +76,11 @@ class HBadge extends StatelessWidget {
   /// Ein von außen gehaltener Fokusknoten, für einen Badge mit [onTap].
   final FocusNode? focusNode;
 
+  /// Die Mindestbreite der Beschriftung; ein kürzeres Wort steht mittig
+  /// darin. Für Abzeichen, die untereinander eine Spalte bilden, etwa die
+  /// Methode in der Warteschlange (HUM-406).
+  final double minLabelWidth;
+
   /// Mindesthöhe des sichtbaren Chips, unabhängig vom Hit-Target.
   static const double chipHeight = 18;
 
@@ -95,9 +101,12 @@ class HBadge extends StatelessWidget {
     // dehnt sich auf die einlaufenden Constraints, und damit wird jeder Badge
     // in einer Spalte zu einem Balken über die volle Breite.
     Widget label() => ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: HBadge.chipHeight),
+      constraints: BoxConstraints(
+        minHeight: HBadge.chipHeight,
+        minWidth: minLabelWidth,
+      ),
       child: Center(
-        widthFactor: 1,
+        widthFactor: minLabelWidth > 0 ? null : 1,
         heightFactor: 1,
         child: Text(text, maxLines: 1, overflow: TextOverflow.clip),
       ),

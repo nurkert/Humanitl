@@ -212,14 +212,7 @@ class _BlockButtonState extends State<BlockButton> {
                           ),
                         ),
                         SizedBox(width: tokens.spacing.x2),
-                        ExcludeSemantics(
-                          child: Text(
-                            widget.shortcutHint,
-                            style: tokens.typography.mono11.tinted(
-                              tokens.colors.fg1,
-                            ),
-                          ),
-                        ),
+                        ExcludeSemantics(child: HKeyHint(widget.shortcutHint)),
                       ],
                     ),
                   ),

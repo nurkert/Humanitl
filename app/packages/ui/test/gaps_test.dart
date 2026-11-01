@@ -52,11 +52,35 @@ void main() {
       final Size ring = tester.getSize(find.byType(HFocusRing));
       final Size fill = tester.getSize(find.byType(HAnimatedFill));
       expect(HFocusRing.gap, greaterThanOrEqualTo(HFocusRing.width));
-      expect(
-        ring.height - fill.height,
-        2 * (HFocusRing.width + HFocusRing.gap),
+      // Im Layout hält der Ring nur seine eigene Breite frei, wie bei jeder
+      // anderen Rolle: gleich hohe Buttons in einer Zeile (HUM-406). Die
+      // Lücke malt er über den reservierten Rand hinaus.
+      expect(ring.height - fill.height, 2 * HFocusRing.width);
+      expect(ring.width - fill.width, 2 * HFocusRing.width);
+      final RenderObject painter = tester.renderObject(
+        find
+            .descendant(
+              of: find.byType(HFocusRing),
+              matching: find.byType(CustomPaint),
+            )
+            .first,
       );
-      expect(ring.width - fill.width, 2 * (HFocusRing.width + HFocusRing.gap));
+      const double out = HFocusRing.gap - HFocusRing.width / 2;
+      final RRect outer = RRect.fromRectAndRadius(
+        Rect.fromLTRB(-out, -out, ring.width + out, ring.height + out),
+        const Radius.circular(
+          HRadius.control + HFocusRing.width + HFocusRing.gap,
+        ),
+      );
+      // Der Ring ist das letzte, was gemalt wird, und liegt mit Lücke
+      // außerhalb des Layouts.
+      expect(
+        painter,
+        paints..something(
+          (Symbol method, List<dynamic> arguments) =>
+              method == #drawRRect && arguments.first == outer,
+        ),
+      );
       // Und nur dort: der Ring wächst über einer Füllung, gegen die er
       // verschwände, nicht über jeder.
       for (final HTokens tokens in <HTokens>[HTokens.dark, HTokens.light]) {
