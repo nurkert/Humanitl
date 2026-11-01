@@ -581,8 +581,9 @@ void main() {
     await tester.sendKeyUpEvent(_shiftKey, platform: 'linux');
     await tester.sendKeyUpEvent(_ctrlKey, platform: 'linux');
     await _settle(tester);
-    // Die Modifikatoren selbst meldet das Protokoll (`CSI 57441…u`); sie
-    // gehören dem Agenten. Die Taste `C` (Codepunkt 99) nicht, und `0x03` nie.
+    // Die Modifikatoren allein meldet das Protokoll nur mit „alle Tasten als
+    // Folgen“ (HUM-410); hier geht es um die Taste `C` (Codepunkt 99), die
+    // nie beim Agenten ankommt, und um `0x03`, das nie gesendet wird.
     final String sent = utf8.decode(client.typed, allowMalformed: true);
     expect(sent, isNot(contains('[99;')), reason: 'no report of the C key');
     expect(client.typed, isNot(contains(0x03)));
@@ -785,6 +786,91 @@ void main() {
     },
     variant: _linux,
   );
+
+  // HUM-410: Shift, Strg, Alt und Super allein meldet das Protokoll von kitty
+  // nur, wenn das Programm alle Tasten als Folgen verlangt (Flag 8). xterm2
+  // 5.2.0 schickte sie schon im Modus „eindeutig“ (`CSI > 1 u`), in dem
+  // OpenCode läuft, als `CSI 57441 u`, und der Owner sah bei jedem Shift ein
+  // Zeichen aus dem privaten Bereich im Eingabefeld.
+  testWidgets('a_lone_modifier_sends_nothing_when_the_program_did_not_ask', (
+    WidgetTester tester,
+  ) async {
+    _mockClipboard(tester);
+    final SandboxTestClient client = await _pumpFocused(tester);
+    _session(tester, client).terminal.write('\x1b[>1u');
+    await tester.pump();
+
+    for (final LogicalKeyboardKey key in <LogicalKeyboardKey>[
+      LogicalKeyboardKey.shiftLeft,
+      LogicalKeyboardKey.shiftRight,
+      LogicalKeyboardKey.controlLeft,
+      LogicalKeyboardKey.controlRight,
+      LogicalKeyboardKey.altLeft,
+      LogicalKeyboardKey.altRight,
+      LogicalKeyboardKey.metaLeft,
+      LogicalKeyboardKey.metaRight,
+    ]) {
+      await tester.sendKeyDownEvent(key, platform: 'linux');
+      await tester.sendKeyUpEvent(key, platform: 'linux');
+    }
+    await _settle(tester);
+    expect(client.typed, isEmpty, reason: 'no report of a lone modifier');
+
+    // Mit Shift getippt kommt der Buchstabe weiter an, nur die Taste allein
+    // bleibt stumm.
+    await tester.sendKeyDownEvent(_shiftKey, platform: 'linux');
+    await tester.sendKeyEvent(
+      LogicalKeyboardKey.keyA,
+      platform: 'linux',
+      character: 'A',
+    );
+    await tester.sendKeyUpEvent(_shiftKey, platform: 'linux');
+    await _settle(tester);
+    expect(client.typed, _bytes('A'));
+  }, variant: _linux);
+
+  testWidgets('a_program_that_asks_for_every_key_still_hears_the_modifier', (
+    WidgetTester tester,
+  ) async {
+    _mockClipboard(tester);
+    final SandboxTestClient client = await _pumpFocused(tester);
+    _session(tester, client).terminal.write('\x1b[>9u');
+    await tester.pump();
+
+    await tester.sendKeyDownEvent(_shiftKey, platform: 'linux');
+    await tester.sendKeyUpEvent(_shiftKey, platform: 'linux');
+    await _settle(tester);
+    expect(
+      utf8.decode(client.typed, allowMalformed: true),
+      contains('[57441'),
+      reason: 'flag 8 asks for every key, Shift included',
+    );
+  }, variant: _linux);
+
+  // Codex, Review HUM-410: xterm2 5.4.0 überlässt das Ziehen einem Programm
+  // mit Mausberichten, und ohne Markierung gibt es nichts zu kopieren.
+  testWidgets('dragging_selects_even_while_the_program_reports_the_mouse', (
+    WidgetTester tester,
+  ) async {
+    _mockClipboard(tester);
+    final SandboxTestClient client = await _pumpFocused(tester);
+    final Terminal terminal = _session(tester, client).terminal;
+    terminal.write('\r\nzq-drag-me-please\r\n\x1b[?1000h');
+    await tester.pump();
+    expect(_controller(tester).selection, isNull);
+
+    final Rect view = tester.getRect(find.byType(TerminalView));
+    final TestGesture gesture = await tester.startGesture(
+      view.topLeft + const Offset(12, 12),
+      kind: PointerDeviceKind.mouse,
+    );
+    await tester.pump();
+    await gesture.moveTo(view.topLeft + const Offset(160, 40));
+    await tester.pump();
+    await gesture.up();
+    await _settle(tester);
+    expect(_controller(tester).selection, isNotNull);
+  }, variant: _linux);
 }
 
 /// Was der Fake beim Anschluss in das Terminal schreibt.

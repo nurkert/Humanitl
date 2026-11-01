@@ -722,6 +722,11 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
               onSecondaryTapDown: (TapDownDetails details, CellOffset _) =>
                   _menu.open(details.globalPosition),
               onKeyEvent: _onKey,
+              // Ziehen markiert auch dann, wenn das Programm die Maus meldet
+              // (`CSI ? 1000 h`, OpenCode): so hielt es xterm2 bis 5.2.0, und
+              // ohne Markierung gäbe es nichts zu kopieren. Klick und Rad
+              // bleiben beim Programm (HUM-410).
+              dragOverridesMouseReporting: true,
               // A reader may not type, and nobody may while the session is not
               // attached: the daemon drops those keys, and an emulator that still
               // takes them shows a cursor waiting for an agent that never hears it.
