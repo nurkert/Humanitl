@@ -360,11 +360,14 @@ async fn run_daemon(cli: &Cli, passed: Option<systemd::Passed>) -> Result<(), Di
     // Sitzung beschreiben darf. Ohne sie wären `humanitl run --ask none` und
     // `--llm` Dekoration: Der Proxy läuft schon, wenn die Sitzung startet
     // (HUM-067).
-    let settings = Arc::new(SessionSettings::new(SessionState::for_config(
-        config.hold.ask_mode,
-        config.hold.timeout_secs,
-        llm_authority(&config),
-    )));
+    let settings = Arc::new(SessionSettings::new(
+        SessionState::for_config(
+            config.hold.ask_mode,
+            config.hold.timeout_secs,
+            llm_authority(&config),
+        )
+        .with_llm_alias(&config.llm),
+    ));
     // Ein Port fuer den ganzen Lauf: Der Zaehler, den `daemon status` zeigt,
     // und der Zwischenspeicher gehoeren derselben Instanz (HUM-024).
     let resolver = Arc::new(ResolverPort::from_config(&config.resolver)?);
@@ -1812,6 +1815,9 @@ fn build_handler(
             scanner: Arc::clone(scanner),
             recorder: Some(recorder.clone()),
             meta: Some(Arc::new(meta)),
+            // Das Ziel von `llm.humanitl.internal` folgt der Sitzung, die
+            // gerade läuft, nicht der Konfiguration beim Start (HUM-387).
+            settings: Some(Arc::clone(settings)),
         },
     ))
 }

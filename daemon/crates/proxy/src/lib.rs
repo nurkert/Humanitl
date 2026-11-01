@@ -49,6 +49,9 @@
 //! - [`limits`]: die Befunde der Grenzen aus `limits.*` (`LIMIT_001`,
 //!   `LIMIT_004`, `LIMIT_005`) und der Regelvorschlag mit `stream: true`
 //!   (HUM-057).
+//! - [`llm_alias`]: der reservierte Name `llm.humanitl.internal`, den der
+//!   Proxy vor den Regeln auf ein Sprachmodell auf dem Loopback umsetzt und
+//!   auf nichts sonst (HUM-387).
 //! - [`suggestion`]: ein Vorschlag, der ein Geheimnis der Masken trüge,
 //!   verlässt den Daemon nicht; das `why` sagt stattdessen, warum er fehlt
 //!   (HUM-271).
@@ -66,6 +69,7 @@ pub mod handler;
 pub mod hold;
 pub mod limits;
 pub mod listener;
+pub mod llm_alias;
 pub mod llm_discover;
 pub mod llm_probe;
 pub mod llm_warnings;
@@ -93,6 +97,7 @@ pub use crate::handler::{
 };
 pub use crate::hold::{DomainSink, EditCount, HoldQueue};
 pub use crate::listener::SessionSocket;
+pub use crate::llm_alias::{LlmAliasTarget, is_llm_alias, map_llm_alias};
 pub use crate::llm_discover::{
     CONNECT_TIMEOUT, DEFAULT_PORTS, Found, LocalNet, PARALLEL, PROBE_TIMEOUT, Scan, Subnet,
     discover, local_net,

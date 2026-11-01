@@ -53,9 +53,11 @@ use crate::edit;
 use crate::findings::{self, NoScan, Scanner};
 use crate::hold::HoldQueue;
 use crate::limits;
+use crate::llm_alias;
 use crate::meta::{self, ArchivedFlow, MetaEndpoint, MetaReply, MetaRequest};
 use crate::pipeline::FlowPipeline;
 use crate::registry::FlowRecord;
+use crate::session::SessionSettings;
 use crate::tls_observe::{self, HandshakeWatch};
 use crate::trust::{self, TrustSource};
 use crate::upstream::{self, Outgoing, Upstream};
@@ -256,6 +258,9 @@ struct Inner {
     recorder: Option<Recorder>,
     /// Der Meta-Endpunkt, falls diese Sitzung einen hat (HUM-073).
     meta: Option<Arc<MetaEndpoint>>,
+    /// Die Einstellungen der laufenden Sitzung; aus ihnen kommt das Ziel des
+    /// reservierten Namens `llm.humanitl.internal` (HUM-387).
+    settings: Option<Arc<SessionSettings>>,
     /// Das Zählfenster der gescheiterten Handschläge dieser Sitzung (HUM-045).
     handshakes: HandshakeWatch,
     /// Das Zählfenster der stehengebliebenen Anfrage-Rümpfe (HUM-120).
@@ -275,15 +280,21 @@ pub struct HandlerPorts {
     pub recorder: Option<Recorder>,
     /// Der Meta-Endpunkt `humanitl.internal` (HUM-073).
     pub meta: Option<Arc<MetaEndpoint>>,
+    /// Die Einstellungen der Sitzung, aus denen das Ziel von
+    /// `llm.humanitl.internal` kommt (HUM-387). Ohne sie erreicht der Name
+    /// nichts, und jede Anfrage an ihn wird abgelehnt.
+    pub settings: Option<Arc<SessionSettings>>,
 }
 
 impl Default for HandlerPorts {
-    /// Keine Detektoren ([`NoScan`]), keine Aufzeichnung, kein Meta-Endpunkt.
+    /// Keine Detektoren ([`NoScan`]), keine Aufzeichnung, kein Meta-Endpunkt,
+    /// kein Ziel für den Namen des Sprachmodells.
     fn default() -> Self {
         Self {
             scanner: Arc::new(NoScan),
             recorder: None,
             meta: None,
+            settings: None,
         }
     }
 }
@@ -293,6 +304,7 @@ impl std::fmt::Debug for HandlerPorts {
         f.debug_struct("HandlerPorts")
             .field("recorder", &self.recorder.is_some())
             .field("meta", &self.meta.is_some())
+            .field("settings", &self.settings.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -371,6 +383,7 @@ impl FlowHandler {
                 scanner,
                 recorder,
                 meta: None,
+                settings: None,
             },
         )
     }
@@ -401,6 +414,7 @@ impl FlowHandler {
                 scanner: ports.scanner,
                 recorder: ports.recorder,
                 meta: ports.meta,
+                settings: ports.settings,
                 handshakes: HandshakeWatch::new(),
                 idle_bodies: PressureWatch::new(),
             }),
@@ -813,6 +827,25 @@ impl FlowHandler {
             .uri()
             .path_and_query()
             .map_or_else(|| "/".to_owned(), ToString::to_string);
+
+        // Der Name des Sprachmodells (HUM-387): vor Body, Detektoren und
+        // Regeln auf das eingestellte Ziel umgesetzt, oder abgelehnt. Warum
+        // genau hier: [`crate::llm_alias`].
+        let authority = if llm_alias::is_llm_alias(&authority.host) {
+            let target = self
+                .inner
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.llm_alias());
+            match llm_alias::map_llm_alias(target.as_ref(), scheme, &authority) {
+                Ok(target) => target,
+                Err(diagnostic) => {
+                    return self.refuse_llm_alias(&meta, req, scheme, authority, diagnostic);
+                }
+            }
+        } else {
+            authority
+        };
 
         // Die Weiche zum Meta-Endpunkt: vor Body, Detektoren, Regeln und damit
         // vor jeder Auflösung. Warum genau hier: [`FlowHandler::serve_meta`].
@@ -1601,6 +1634,35 @@ impl FlowHandler {
         );
         let reason = refusal.reason();
         self.refuse_before_pipeline(meta, request, reason, Some(refusal.diagnostic()))
+    }
+
+    /// Lehnt eine Anfrage an `llm.humanitl.internal` ab, für die der Name
+    /// kein Ziel hat (HUM-387): ohne Rumpf, ohne Regel, ohne Auflösung.
+    ///
+    /// Der Fluss steht unter dem Namen, denn die Anfrage ging nirgendwohin;
+    /// der Befund sagt, wofür der Name steht.
+    fn refuse_llm_alias(
+        &self,
+        meta: &ConnectionContext,
+        req: Request<Incoming>,
+        scheme: Scheme,
+        authority: Authority,
+        diagnostic: Diagnostic,
+    ) -> Response<ResponseBody> {
+        let path_and_query = req
+            .uri()
+            .path_and_query()
+            .map_or_else(|| "/".to_owned(), ToString::to_string);
+        let (parts, _incoming) = req.into_parts();
+        let request = Self::build_request(
+            parts.method,
+            scheme,
+            authority,
+            path_and_query,
+            parts.headers,
+            BodyRef::empty(),
+        );
+        self.refuse_before_pipeline(meta, request, BlockReason::NoRoute, Some(diagnostic))
     }
 
     /// Leitet eine erlaubte Anfrage weiter und streamt die Antwort zurück.

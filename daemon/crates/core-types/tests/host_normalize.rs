@@ -168,3 +168,62 @@ fn is_private_covers_special_ranges_and_embedded_ipv4() {
         assert_eq!(host.is_private(), expected, "input {input}");
     }
 }
+
+/// Loopback ist `127.0.0.0/8`, `::1`, die mapped Form und der Name
+/// `localhost` selbst, sonst nichts (HUM-387). `::1` als IPv4-compatible
+/// gelesen wäre `0.0.0.1`; die Prüfung darf es trotzdem nicht verlieren.
+#[test]
+fn loopback_is_the_loopback_of_this_machine_and_nothing_else() {
+    for input in [
+        "127.0.0.1",
+        "127.1.2.3",
+        "[::1]",
+        "::1",
+        "[::ffff:127.0.0.1]",
+        "localhost",
+        "LOCALHOST.",
+    ] {
+        let host = HostName::parse(input).unwrap_or_else(|err| panic!("{input}: {err}"));
+        assert!(host.is_loopback(), "{input} is loopback");
+    }
+    for input in [
+        "192.168.1.50",
+        "10.0.0.1",
+        "0.0.0.0",
+        "[::]",
+        "[::2]",
+        "foo.localhost",
+        "localhost.example",
+        "llm.humanitl.internal",
+    ] {
+        let host = HostName::parse(input).unwrap_or_else(|err| panic!("{input}: {err}"));
+        assert!(!host.is_loopback(), "{input} is not loopback");
+    }
+}
+
+/// Der reservierte Name des Sprachmodells, normalisiert verglichen, und nur
+/// er (HUM-387).
+#[test]
+fn the_llm_alias_is_exactly_the_reserved_name() {
+    for input in [
+        humanitl_core::LLM_ALIAS_HOST,
+        "LLM.Humanitl.Internal",
+        "llm.humanitl.internal.",
+    ] {
+        assert!(HostName::parse(input).unwrap().is_llm_alias(), "{input}");
+    }
+    for input in [
+        "humanitl.internal",
+        "x.llm.humanitl.internal",
+        "llm.humanitl.internal.evil.io",
+        "llm-humanitl.internal",
+        "127.0.0.1",
+    ] {
+        assert!(!HostName::parse(input).unwrap().is_llm_alias(), "{input}");
+    }
+    assert!(
+        !HostName::parse(humanitl_core::LLM_ALIAS_HOST)
+            .unwrap()
+            .is_meta()
+    );
+}

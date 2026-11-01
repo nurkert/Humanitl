@@ -154,6 +154,10 @@ fn pi_models_point_at_the_endpoint_of_the_user() {
             "https://llm.example.net/api/v1/",
             "https://llm.example.net/api/v1",
         ),
+        // pi tunnels a loopback address through the proxy (undici), so it
+        // keeps the real address and never the reserved name (HUM-387).
+        ("http://127.0.0.1:8080/v1", "http://127.0.0.1:8080/v1"),
+        ("http://localhost:8080", "http://localhost:8080/v1"),
     ] {
         let provider = provider(&context(Some(endpoint)));
         assert_eq!(

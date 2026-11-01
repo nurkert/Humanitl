@@ -51,7 +51,7 @@ use humanitl_proxy::{
     AskPipeline, AsyncStream, ClientTls, ConnectionContext, Direct, Egress, FlowHandler,
     FlowPipeline, HandlerPorts, HoldQueue, MetaEndpoint, MetaStatus, PassthroughPipeline,
     ProxyCore, ProxyLimits, ResolveError, Resolver, ResolverPort, RulesPipeline, Scanner,
-    SecondScan, TrustAnchors, Upstream,
+    SecondScan, SessionSettings, SessionState, TrustAnchors, Upstream,
 };
 use humanitl_recorder::{Recorder, RecorderSettings, SessionMeta};
 use hyper::body::Incoming;
@@ -196,6 +196,9 @@ pub struct ProxyBuilder {
     hard_block_checksum_secrets: bool,
     recording: bool,
     meta: bool,
+    /// `llm.endpoint` der Sitzung, fuer den Namen `llm.humanitl.internal`
+    /// (HUM-387); ohne ihn hat der Name kein Ziel.
+    llm_endpoint: Option<url::Url>,
     /// Datenordner und Sitzung eines frueheren Proxys (`restart_of`).
     restart: Option<(PathBuf, SessionId)>,
 }
@@ -223,6 +226,7 @@ impl Default for ProxyBuilder {
             // Wie im Daemon: Der Meta-Endpunkt gehoert zu jeder Sitzung. Ein
             // Test, der zeigen will, was ohne ihn geschieht, schaltet ihn ab.
             meta: true,
+            llm_endpoint: None,
             recording: false,
             restart: None,
         }
@@ -367,6 +371,13 @@ impl ProxyBuilder {
     /// Der Meta-Endpunkt `humanitl.internal` (HUM-073). Vorgabe: an.
     pub fn meta(mut self, on: bool) -> Self {
         self.meta = on;
+        self
+    }
+
+    /// `llm.endpoint` der Sitzung (HUM-387): Liegt er auf dem Loopback,
+    /// steht `llm.humanitl.internal` fuer ihn.
+    pub fn llm_endpoint(mut self, endpoint: &str) -> Self {
+        self.llm_endpoint = Some(url::Url::parse(endpoint).unwrap());
         self
     }
 
@@ -561,6 +572,13 @@ impl ProxyBuilder {
                 scanner,
                 recorder: recorder.clone(),
                 meta,
+                settings: Some(Arc::new(SessionSettings::new(
+                    SessionState::for_config(humanitl_config::AskMode::Ui, 30, None)
+                        .with_llm_alias(&humanitl_config::LlmConfig {
+                            endpoint: self.llm_endpoint.clone(),
+                            ..humanitl_config::LlmConfig::default()
+                        }),
+                ))),
             },
         );
 

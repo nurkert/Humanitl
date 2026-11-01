@@ -410,6 +410,10 @@ impl Upstream {
                 }
                 Ok(*ip)
             }
+            // Der Name des Sprachmodells wird nie aufgelöst (HUM-387): Der
+            // Handler setzt ihn vor den Regeln auf das Ziel um oder lehnt ab.
+            // Kommt er trotzdem hier an, fragt niemand den Namensdienst.
+            HostName::Dns(_) if authority.host.is_llm_alias() => Err(UpstreamError::Dns),
             // Erst hier, nach `Decided(Allow | AllowEdited)`, verlässt eine
             // Frage den Rechner (ADR-006).
             HostName::Dns(name) => {

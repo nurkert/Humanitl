@@ -59,6 +59,44 @@ pub fn openai_base_url(endpoint: &Url) -> String {
     base.as_str().trim_end_matches('/').to_owned()
 }
 
+/// Wahr, wenn der Host des Endpunkts der Loopback dieses Rechners ist:
+/// `127.0.0.0/8`, `::1` oder `localhost` ([`humanitl_core::HostName::is_loopback`],
+/// HUM-387).
+///
+/// Ein Host, den der Proxy nicht annähme, ist kein Loopback.
+#[must_use]
+pub fn is_loopback(endpoint: &Url) -> bool {
+    endpoint
+        .host_str()
+        .and_then(|host| humanitl_core::HostName::parse(host).ok())
+        .is_some_and(|host| host.is_loopback())
+}
+
+/// Die Basis-Adresse wie [`openai_base_url`], mit dem reservierten Namen
+/// [`humanitl_core::LLM_ALIAS_HOST`] statt des Hosts, wenn der Endpunkt auf
+/// dem Loopback liegt ([`is_loopback`]); sonst genau [`openai_base_url`]
+/// (HUM-387).
+///
+/// Für einen Agenten, dessen HTTP-Client eine Loopback-Adresse am Proxy
+/// vorbei anspricht, wie `OpenCode` 2.2.5. Schema, Port und Pfad bleiben;
+/// ein Endpunkt ohne Port behält den Vorgabeport seines Schemas, und den
+/// erwartet der Proxy auch unter dem Namen.
+#[must_use]
+pub fn openai_base_url_via_alias(endpoint: &Url) -> String {
+    if !is_loopback(endpoint) {
+        return openai_base_url(endpoint);
+    }
+    let mut aliased = endpoint.clone();
+    // Scheitert nur bei einer Adresse ohne Host, und die ist kein Loopback.
+    if aliased
+        .set_host(Some(humanitl_core::LLM_ALIAS_HOST))
+        .is_err()
+    {
+        return openai_base_url(endpoint);
+    }
+    openai_base_url(&aliased)
+}
+
 /// Der Pfad eines Endpunkts der OpenAI-kompatiblen API, etwa `/models` oder
 /// `/chat/completions`, unter der Basis dieses Endpunkts.
 ///
@@ -298,8 +336,8 @@ mod tests {
     use url::Url;
 
     use super::{
-        check_text, cleaned, display, openai_base_path, openai_base_url, openai_path, path_prefix,
-        probe_paths, probe_plan, serves_native_ollama,
+        check_text, cleaned, display, openai_base_path, openai_base_url, openai_base_url_via_alias,
+        openai_path, path_prefix, probe_paths, probe_plan, serves_native_ollama,
     };
 
     /// Die Adresse des Besitzers vom 2026-10-23 mit dem Anführungszeichen am
@@ -495,6 +533,43 @@ mod tests {
             assert_eq!(
                 serves_native_ollama(&endpoint),
                 prefix.is_empty(),
+                "for {endpoint}"
+            );
+        }
+    }
+
+    /// Ein Endpunkt auf dem Loopback bekommt den reservierten Namen, mit
+    /// Schema, Port und Pfad; jeder andere bleibt, wie er ist (HUM-387).
+    #[test]
+    fn a_loopback_endpoint_gets_the_reserved_name() {
+        for (endpoint, expected) in [
+            (
+                "http://127.0.0.1:8080/v1",
+                "http://llm.humanitl.internal:8080/v1",
+            ),
+            (
+                "http://127.0.0.2:8080",
+                "http://llm.humanitl.internal:8080/v1",
+            ),
+            (
+                "http://[::1]:11434/",
+                "http://llm.humanitl.internal:11434/v1",
+            ),
+            (
+                "http://LOCALHOST:8080/api/v1/",
+                "http://llm.humanitl.internal:8080/api/v1",
+            ),
+            ("https://localhost/v1", "https://llm.humanitl.internal/v1"),
+            ("http://192.168.1.50:11434", "http://192.168.1.50:11434/v1"),
+            ("http://model.lan:8080/v1", "http://model.lan:8080/v1"),
+            (
+                "http://foo.localhost:8080/v1",
+                "http://foo.localhost:8080/v1",
+            ),
+        ] {
+            assert_eq!(
+                openai_base_url_via_alias(&url(endpoint)),
+                expected,
                 "for {endpoint}"
             );
         }

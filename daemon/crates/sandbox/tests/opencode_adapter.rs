@@ -163,6 +163,74 @@ fn opencode_config_appends_v1_only_once() {
     );
 }
 
+/// Ein Endpunkt auf dem Loopback bekommt in der `baseURL` den reservierten
+/// Namen, mit Schema, Port und Pfad; jeder andere die echte Adresse
+/// (HUM-387). `OpenCode` 2.2.5 schickte eine Loopback-Adresse am Proxy
+/// vorbei, und die Sandbox verweigerte die Verbindung.
+#[test]
+fn opencode_writes_the_reserved_name_for_a_loopback_endpoint() {
+    let adapter = OpenCodeAdapter::new();
+    for (endpoint, base, briefed) in [
+        (
+            "http://127.0.0.1:8080/v1",
+            "http://llm.humanitl.internal:8080/v1",
+            "llm.humanitl.internal:8080",
+        ),
+        (
+            "http://[::1]:11434",
+            "http://llm.humanitl.internal:11434/v1",
+            "llm.humanitl.internal:11434",
+        ),
+        (
+            "http://localhost:8080/v1",
+            "http://llm.humanitl.internal:8080/v1",
+            "llm.humanitl.internal:8080",
+        ),
+        (
+            "http://192.168.1.50:11434",
+            "http://192.168.1.50:11434/v1",
+            "192.168.1.50:11434",
+        ),
+        (
+            "http://model.lan:8080/v1",
+            "http://model.lan:8080/v1",
+            "model.lan:8080",
+        ),
+    ] {
+        let ctx = context(Some(endpoint)).with_models(vec!["m".to_owned()]);
+        for dst in [CONFIG_DST, MANAGED_CONFIG_DST] {
+            let doc: Value = serde_json::from_slice(&file_at(adapter, &ctx, dst)).unwrap();
+            assert_eq!(
+                doc["provider"][PROVIDER_ID]["options"]["baseURL"],
+                Value::String(base.to_owned()),
+                "{endpoint} in {dst}"
+            );
+        }
+        let llm = LlmConfig {
+            endpoint: Some(url::Url::parse(endpoint).unwrap()),
+            ..LlmConfig::default()
+        };
+        assert_eq!(
+            humanitl_sandbox::agent::opencode::agent_authority(&llm).as_deref(),
+            Some(briefed),
+            "{endpoint}"
+        );
+        // Das Briefing nennt den Host so, wie der Agent ihn anspricht.
+        let text = String::from_utf8(file_at(
+            adapter,
+            &ctx,
+            "/home/agent/.config/opencode/AGENTS.md",
+        ))
+        .unwrap();
+        assert!(text.contains(briefed), "{endpoint}: {text}");
+        // Die Durchreiche bleibt beim echten Ziel: Der Proxy setzt den Namen
+        // um, bevor sie entscheidet.
+        let rule = adapter.llm_passthrough(&llm).unwrap();
+        let (host, _, _) = humanitl_sandbox::agent::opencode::passthrough_target(&llm).unwrap();
+        assert_eq!(rule.matcher.host, HostPattern::Exact(host), "{endpoint}");
+    }
+}
+
 #[test]
 fn opencode_models_placeholder_when_empty() {
     let adapter = OpenCodeAdapter::new();
