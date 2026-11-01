@@ -241,6 +241,11 @@ String? setupStepHeadline(AppLocalizations l10n, SetupCheck check) {
       code == DiagnosticCodes.noProjectFolder
           ? l10n.setupHeadProjectNone
           : l10n.setupHeadProjectRefused,
+    // Ein Befund des Plans, der nicht den Ordner betrifft, ist keine Zeile
+    // des Doctors: Die Überschrift sagt nur, dass die Sandbox so nicht
+    // startet, und die Karte darunter nennt Code und Grund (HUM-384).
+    (SetupCheckKind.sandbox, SetupCheckState.failed) when check.planFinding =>
+      l10n.setupHeadSandboxPlanRefused,
     (SetupCheckKind.sandbox, SetupCheckState.failed) =>
       l10n.setupHeadSandboxFailed,
     (SetupCheckKind.sandbox, SetupCheckState.unmeasured) =>

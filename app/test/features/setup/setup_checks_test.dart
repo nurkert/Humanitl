@@ -54,7 +54,11 @@ void main() {
     () {
       final SetupState state = checksOver(
         report(<DoctorCheck>[
-          line('bwrap', DoctorStatus.fail, code: 'DOCTOR_001'),
+          line(
+            DoctorCheckId.sandboxTool,
+            DoctorStatus.fail,
+            code: 'DOCTOR_001',
+          ),
           line('userns', DoctorStatus.ok),
           line('seccomp', DoctorStatus.ok),
           line('runtime_dir', DoctorStatus.ok),
@@ -69,7 +73,7 @@ void main() {
   test('an unmeasured line keeps the row out of green and the start shut', () {
     final SetupState state = checksOver(
       report(<DoctorCheck>[
-        line('bwrap', DoctorStatus.ok),
+        line(DoctorCheckId.sandboxTool, DoctorStatus.ok),
         line(
           'seccomp',
           DoctorStatus.warn,
@@ -92,7 +96,7 @@ void main() {
     // "nur failed und checking sperren" durch jede andere Pruefung hier.
     final SetupState state = checksOver(
       report(<DoctorCheck>[
-        line('bwrap', DoctorStatus.ok),
+        line(DoctorCheckId.sandboxTool, DoctorStatus.ok),
         line('disk_space', DoctorStatus.warn, code: 'DOCTOR_011'),
       ]),
     );
@@ -111,7 +115,7 @@ void main() {
           DoctorStatus.warn,
           code: DiagnosticCodes.doctorNotPerformed,
         ),
-        line('bwrap', DoctorStatus.fail, code: 'DOCTOR_001'),
+        line(DoctorCheckId.sandboxTool, DoctorStatus.fail, code: 'DOCTOR_001'),
       ]),
     );
     expect(state[SetupCheckKind.sandbox].state, SetupCheckState.failed);
@@ -134,7 +138,7 @@ void main() {
     // gesunden Rechner eine Luecke, und der gruene Satz ist unerreichbar.
     final SetupState state = checksOver(
       report(<DoctorCheck>[
-        line('bwrap', DoctorStatus.ok),
+        line(DoctorCheckId.sandboxTool, DoctorStatus.ok),
         line('llm', DoctorStatus.ok),
         line(
           'daemon',
@@ -189,7 +193,7 @@ void main() {
         DaemonInfo(daemonVersion: '0.0.0', protoMajor: 1, protoMinor: 4),
       ),
       doctor: AsyncValue<DoctorReport>.data(
-        report(<DoctorCheck>[line('bwrap', DoctorStatus.ok)]),
+        report(<DoctorCheck>[line(DoctorCheckId.sandboxTool, DoctorStatus.ok)]),
       ),
       sandbox: const AsyncValue<SandboxStatus>.data(
         SandboxStatus(workDirHost: '/etc', diagnostics: <Diagnostic>[refused]),
@@ -214,7 +218,7 @@ void main() {
         DaemonInfo(daemonVersion: '0.0.0', protoMajor: 1, protoMinor: 4),
       ),
       doctor: AsyncValue<DoctorReport>.data(
-        report(<DoctorCheck>[line('bwrap', DoctorStatus.ok)]),
+        report(<DoctorCheck>[line(DoctorCheckId.sandboxTool, DoctorStatus.ok)]),
       ),
       sandbox: const AsyncValue<SandboxStatus>.data(SandboxStatus()),
       sandboxCall: SandboxCall.plan,
@@ -224,10 +228,12 @@ void main() {
     expect(state.canStart, isFalse);
   });
 
-  test('an error about the folder is not a green folder', () {
+  test('an error of the plan is not a green start', () {
     // `SandboxStatus.blocking` antwortet nur auf `Severity.blocking`. Ein
     // Befund, den der Daemon `error` nennt, ist ebenso ein Fehlschlag, und
-    // eine Zeile, die darueber gruen bliebe, widerspraeche dem Daemon.
+    // eine Zeile, die darueber gruen bliebe, widerspraeche dem Daemon. Ein
+    // Platzhalter, der sich nicht anlegen liess, ist kein Fehler des
+    // Ordners: Er steht im Schritt der Sandbox (HUM-384).
     const Diagnostic failed = Diagnostic(
       code: 'SANDBOX_011',
       severity: Severity.error,
@@ -238,7 +244,7 @@ void main() {
         DaemonInfo(daemonVersion: '0.0.0', protoMajor: 1, protoMinor: 4),
       ),
       doctor: AsyncValue<DoctorReport>.data(
-        report(<DoctorCheck>[line('bwrap', DoctorStatus.ok)]),
+        report(<DoctorCheck>[line(DoctorCheckId.sandboxTool, DoctorStatus.ok)]),
       ),
       sandbox: const AsyncValue<SandboxStatus>.data(
         SandboxStatus(
@@ -249,8 +255,10 @@ void main() {
       sandboxCall: SandboxCall.plan,
       llm: LlmProbeState.idle,
     );
-    expect(state[SetupCheckKind.project].state, SetupCheckState.failed);
-    expect(state[SetupCheckKind.project].diagnostic?.code, 'SANDBOX_011');
+    expect(state[SetupCheckKind.project].state, SetupCheckState.ok);
+    expect(state[SetupCheckKind.sandbox].state, SetupCheckState.failed);
+    expect(state[SetupCheckKind.sandbox].diagnostic?.code, 'SANDBOX_011');
+    expect(state[SetupCheckKind.sandbox].planFinding, isTrue);
     expect(state.canStart, isFalse);
   });
 
@@ -270,7 +278,7 @@ void main() {
         DaemonInfo(daemonVersion: '0.0.0', protoMajor: 1, protoMinor: 4),
       ),
       doctor: AsyncValue<DoctorReport>.data(
-        report(<DoctorCheck>[line('bwrap', DoctorStatus.ok)]),
+        report(<DoctorCheck>[line(DoctorCheckId.sandboxTool, DoctorStatus.ok)]),
       ),
       sandbox: const AsyncValue<SandboxStatus>.data(
         SandboxStatus(
@@ -287,6 +295,86 @@ void main() {
     );
   });
 
+  /// Der Fall vom Bildschirm (HUM-384): Ein alter Daemon liest ein neueres
+  /// gebündeltes Profil und lehnt dessen `sandbox.backend` ab.
+  const Diagnostic backendRefused = Diagnostic(
+    code: 'CONFIG_003',
+    severity: Severity.blocking,
+    why:
+        'sandbox.backend = auto, the only backend of this build is another one',
+  );
+
+  SetupState planWith(
+    List<Diagnostic> diagnostics, {
+    List<DoctorCheck>? doctor,
+    SandboxCall call = SandboxCall.plan,
+  }) => setupChecks(
+    daemon: const DaemonLinkUp(
+      DaemonInfo(daemonVersion: '0.0.0', protoMajor: 1, protoMinor: 4),
+    ),
+    doctor: AsyncValue<DoctorReport>.data(
+      report(
+        doctor ??
+            <DoctorCheck>[line(DoctorCheckId.sandboxTool, DoctorStatus.ok)],
+      ),
+    ),
+    sandbox: AsyncValue<SandboxStatus>.data(
+      SandboxStatus(workDirHost: '/home/u/proj', diagnostics: diagnostics),
+    ),
+    sandboxCall: call,
+    llm: LlmProbeState.idle,
+  );
+
+  test('a plan finding that is not about the folder leaves the folder '
+      'green and blocks the sandbox step', () {
+    final SetupState state = planWith(<Diagnostic>[backendRefused]);
+    expect(state[SetupCheckKind.project].state, SetupCheckState.ok);
+    expect(state[SetupCheckKind.project].diagnostic, isNull);
+    expect(state[SetupCheckKind.project].detail, '/home/u/proj');
+    final SetupCheck machine = state[SetupCheckKind.sandbox];
+    expect(machine.state, SetupCheckState.failed);
+    expect(machine.diagnostic, backendRefused);
+    expect(machine.planFinding, isTrue);
+    expect(state.canStart, isFalse);
+  });
+
+  test('a finding with the folder fix stays on the folder, whatever its '
+      'code', () {
+    const Diagnostic moved = Diagnostic(
+      code: 'SANDBOX_011',
+      severity: Severity.blocking,
+      why: 'the project folder moved',
+      fix: FixAction.changeSetting(key: 'sandbox.work_dir', value: ''),
+    );
+    final SetupState state = planWith(<Diagnostic>[moved]);
+    expect(state[SetupCheckKind.project].state, SetupCheckState.failed);
+    expect(state[SetupCheckKind.project].diagnostic, moved);
+    expect(state[SetupCheckKind.sandbox].state, SetupCheckState.ok);
+  });
+
+  test('a failing doctor line keeps the sandbox step before a plan '
+      'finding', () {
+    final SetupState state = planWith(
+      <Diagnostic>[backendRefused],
+      doctor: <DoctorCheck>[
+        line(DoctorCheckId.sandboxTool, DoctorStatus.fail, code: 'DOCTOR_001'),
+      ],
+    );
+    expect(state[SetupCheckKind.sandbox].diagnostic?.code, 'DOCTOR_001');
+    expect(state[SetupCheckKind.sandbox].planFinding, isFalse);
+    expect(state[SetupCheckKind.project].state, SetupCheckState.ok);
+  });
+
+  test('a refused start is no plan finding of the sandbox step', () {
+    // Die Befunde einer Geste stehen unter dem Knopf (`sandboxFailure`),
+    // nicht in einem Schritt.
+    final SetupState state = planWith(<Diagnostic>[
+      backendRefused,
+    ], call: SandboxCall.start);
+    expect(state[SetupCheckKind.sandbox].state, SetupCheckState.ok);
+    expect(state.sandboxFailure?.diagnostic, backendRefused);
+  });
+
   /// `docs/UX.md` 7: Jeder abgeleitete Provider gibt einen Typ mit
   /// Wertgleichheit zurueck. Ohne sie ist jede Antwort ein neues, nie gleiches
   /// Objekt, und `SetupHost`, seine vier Zeilen und die neun Zeilen darunter
@@ -295,7 +383,7 @@ void main() {
   /// `ref.listen` wacht mit ihnen auf.
   test('two folds over the same answers are the same state', () {
     final DoctorReport doctor = report(<DoctorCheck>[
-      line('bwrap', DoctorStatus.ok),
+      line(DoctorCheckId.sandboxTool, DoctorStatus.ok),
       line('userns', DoctorStatus.ok),
     ]);
     expect(checksOver(doctor), checksOver(doctor));
@@ -304,7 +392,7 @@ void main() {
     // Und eine Zeile, die sich wirklich aendert, ist ein anderer Zustand.
     final SetupState other = checksOver(
       report(<DoctorCheck>[
-        line('bwrap', DoctorStatus.fail, code: 'DOCTOR_001'),
+        line(DoctorCheckId.sandboxTool, DoctorStatus.fail, code: 'DOCTOR_001'),
         line('userns', DoctorStatus.ok),
       ]),
     );

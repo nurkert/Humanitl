@@ -106,6 +106,7 @@ class SetupCheck {
     this.diagnostic,
     this.detail = '',
     this.daemon,
+    this.planFinding = false,
   });
 
   /// Which of the four.
@@ -128,6 +129,16 @@ class SetupCheck {
   /// person's language (HUM-052); [detail] stays empty then.
   final DaemonInfo? daemon;
 
+  /// True when [diagnostic] is a finding of `Sandbox(Plan)` or
+  /// `Sandbox(Status)` that is not about the project folder (HUM-384).
+  ///
+  /// Only the machine row carries one: a plan can refuse for a reason that
+  /// has nothing to do with the folder -- a `sandbox.backend` this build does
+  /// not have (`CONFIG_003`), a missing launcher -- and such a finding is
+  /// neither a doctor line nor the folder's fault. The headline names it
+  /// neutrally, and "check again" asks for a new plan as well.
+  final bool planFinding;
+
   /// True when this row is green: measured, and in order.
   ///
   /// The one state a start happens in. Every other one keeps the button shut,
@@ -142,10 +153,12 @@ class SetupCheck {
       other.state == state &&
       other.diagnostic == diagnostic &&
       other.detail == detail &&
-      other.daemon == daemon;
+      other.daemon == daemon &&
+      other.planFinding == planFinding;
 
   @override
-  int get hashCode => Object.hash(kind, state, diagnostic, detail, daemon);
+  int get hashCode =>
+      Object.hash(kind, state, diagnostic, detail, daemon, planFinding);
 }
 
 /// The finding of the last `Sandbox` call, and whether that call arrived.
@@ -608,7 +621,7 @@ SetupState setupChecks({
       _daemonCheck(daemon),
       _llmCheck(measured, llmLine),
       _projectCheck(sandbox, sandboxCall),
-      _sandboxCheck(doctor),
+      _withPlanFinding(_sandboxCheck(doctor), sandbox, sandboxCall),
     ],
     unmeasuredLines: machineLines(report).where(_isBlind).length,
     sandboxFailure: _sandboxFailure(sandbox, sandboxCall),
@@ -794,7 +807,7 @@ SetupCheck _projectCheck(
     );
   }
   final Diagnostic? planFailure = sandboxCall.isAboutTheFolder
-      ? _worstFailure(status.diagnostics)
+      ? _worstFailure(status.diagnostics.where(isProjectFolderFinding))
       : null;
   if (planFailure != null) {
     return SetupCheck(
@@ -821,6 +834,61 @@ SetupCheck _projectCheck(
     kind: SetupCheckKind.project,
     state: SetupCheckState.ok,
     detail: dir,
+  );
+}
+
+/// True when [diagnostic] is about the project folder (HUM-384).
+///
+/// The daemon raises `SANDBOX_006` for a folder it will not mount and marks
+/// it with the one fix that cures it, a `ChangeSetting` on `sandbox.work_dir`
+/// -- "choose another folder" (`humanitl_sandbox::choose_folder_fix`). The
+/// client adds `CONFIG_013` for a folder nobody chose. Every other finding a
+/// plan carries is about something else: an old daemon that reads a newer
+/// bundled profile and answers `CONFIG_003` for its `sandbox.backend`, a
+/// launcher that is missing, a placeholder that could not be created. Read as
+/// a verdict on the folder, such a finding put "This folder cannot be used"
+/// over a folder that was fine and offered the picker as the only way out.
+bool isProjectFolderFinding(Diagnostic diagnostic) =>
+    diagnostic.code == DiagnosticCodes.noProjectFolder ||
+    diagnostic.code == DiagnosticCodes.workDirRefused ||
+    switch (diagnostic.fix) {
+      FixActionChangeSetting(:final String key) =>
+        key == FormKeys.sandboxWorkDir,
+      _ => false,
+    };
+
+/// The machine row, with a refusing plan finding that is not about the folder
+/// (HUM-384).
+///
+/// `Sandbox(Plan)` and `Sandbox(Status)` answer whether a start would go, and
+/// not every reason they give is the folder's. Such a finding blocks the start
+/// all the same, so it has to stand somewhere true: in the step that asks
+/// whether a sandbox starts at all. A failing doctor line keeps the row, with
+/// its own headline and evidence; the plan's finding comes next, once the
+/// machine itself is in order, and it outranks every softer verdict, because
+/// it is a measured refusal.
+SetupCheck _withPlanFinding(
+  SetupCheck machine,
+  AsyncValue<SandboxStatus> sandbox,
+  SandboxCall sandboxCall,
+) {
+  if (!sandboxCall.isAboutTheFolder ||
+      machine.state == SetupCheckState.failed) {
+    return machine;
+  }
+  final Diagnostic? refusal = _worstFailure(
+    (sandbox.value?.diagnostics ?? const <Diagnostic>[]).where(
+      (Diagnostic diagnostic) => !isProjectFolderFinding(diagnostic),
+    ),
+  );
+  if (refusal == null) {
+    return machine;
+  }
+  return SetupCheck(
+    kind: SetupCheckKind.sandbox,
+    state: SetupCheckState.failed,
+    diagnostic: refusal,
+    planFinding: true,
   );
 }
 
@@ -952,7 +1020,7 @@ SetupCheck _fromDoctorLine(SetupCheckKind kind, DoctorCheck? line) {
 /// row that stayed green over one would say the folder is in order while the
 /// daemon said the opposite. The ranking is the severity the daemon put on the
 /// finding, so the card under the row shows the gravest of them.
-Diagnostic? _worstFailure(List<Diagnostic> diagnostics) {
+Diagnostic? _worstFailure(Iterable<Diagnostic> diagnostics) {
   Diagnostic? worst;
   for (final Diagnostic diagnostic in diagnostics) {
     if (!diagnostic.isFailure) {

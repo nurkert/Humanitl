@@ -3740,5 +3740,7 @@
   "shellUpdateCopy": "Copy command",
   "@shellUpdateCopy": {"description": "Button beside the update notice when the app cannot install the update itself; copies the command the daemon names, for instance the upgrade through the package manager (HUM-382)."},
   "shellUpdateRestartFailed": "Humanitl {version} is installed, but the daemon could not be restarted: {why}",
-  "@shellUpdateRestartFailed": {"description": "Status bar after the update was installed and the daemon restart failed (HUM-382). Nothing was relaunched; why is the failed command and its output, untranslated.", "placeholders": {"version": {"type": "String"}, "why": {"type": "String"}}}
+  "@shellUpdateRestartFailed": {"description": "Status bar after the update was installed and the daemon restart failed (HUM-382). Nothing was relaunched; why is the failed command and its output, untranslated.", "placeholders": {"version": {"type": "String"}, "why": {"type": "String"}}},
+  "setupHeadSandboxPlanRefused": "The sandbox cannot start with this setup",
+  "@setupHeadSandboxPlanRefused": {"description": "Headline of the open machine step when the start plan of the daemon refuses for a reason that is not the project folder, for example CONFIG_003 for a sandbox backend this build does not have. The finding card under it names code and cause (HUM-384)."}
 }
