@@ -600,6 +600,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-31 | K-02: the boundary is the saved server the session resolved to; `llm.server` from run, project or profile chooses among the user's saved servers, never defines one; an unknown name refuses the start | HUM-400 |
 | 2026-10-30 | K-24: the disposable sandbox becomes the default where the system allows it (`sandbox.mode = "auto"`); without the overlay the default runs direct with `SANDBOX_033`, an explicit `disposable` still refuses | HUM-357 |
 | 2026-10-31 | K-24: the disposable sandbox on macOS, an APFS clone with the masks removed, the real project sealed and the clone renamed before it is read; a held write descriptor and the missing size cap stay as residual risks | HUM-374 |
+| 2026-11-01 | The reserved name `llm.humanitl.internal` for a model on the loopback: mapped by the proxy only to the configured endpoint, scheme and port, before the rules, never resolved; every other use refused with `PROXY_003`. No new door, the sandbox profile is unchanged | HUM-387 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

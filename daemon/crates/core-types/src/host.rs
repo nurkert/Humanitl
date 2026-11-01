@@ -25,6 +25,21 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// Menschen vorbei.
 pub const META_HOST: &str = "humanitl.internal";
 
+/// Der reservierte Name, unter dem ein Agent ein Sprachmodell auf dem
+/// Loopback des Hosts erreicht (HUM-387).
+///
+/// `OpenCode` schickt Anfragen an eine Loopback-`baseURL` an `HTTP_PROXY`
+/// vorbei, auch mit leerem `NO_PROXY`; in der Sandbox endet das als
+/// verweigerte Verbindung. Ein Name geht durch den Proxy. Der Adapter
+/// schreibt deshalb diesen Namen in die `baseURL`, und der Proxy setzt ihn auf
+/// genau das Ziel aus `llm.endpoint` um, wenn dessen Host Loopback ist, und
+/// auf nichts sonst. Er wird nie aufgelöst und nie an einen Upstream
+/// weitergereicht; was er erreicht, steht in `docs/SECURITY.md`.
+pub const LLM_ALIAS_HOST: &str = "llm.humanitl.internal";
+
+/// Der Name, den ein Endpunkt auf dem Loopback als Host trägt.
+const LOCALHOST: &str = "localhost";
+
 /// Ein Text ließ sich nicht als Host lesen.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("invalid host {input:?}: {reason}")]
@@ -144,6 +159,37 @@ impl HostName {
     #[must_use]
     pub fn is_meta(&self) -> bool {
         matches!(self, Self::Dns(name) if name == META_HOST)
+    }
+
+    /// Wahr, wenn dieser Host der reservierte Name des Sprachmodells ist
+    /// ([`LLM_ALIAS_HOST`], HUM-387).
+    ///
+    /// Wie [`HostName::is_meta`] am normalisierten Namen: `LLM.HUMANITL.INTERNAL`
+    /// und `llm.humanitl.internal.` gehören dazu, `x.llm.humanitl.internal`
+    /// nicht.
+    #[must_use]
+    pub fn is_llm_alias(&self) -> bool {
+        matches!(self, Self::Dns(name) if name == LLM_ALIAS_HOST)
+    }
+
+    /// Wahr, wenn der Host den Loopback dieses Rechners meint: eine Adresse
+    /// aus `127.0.0.0/8`, `::1`, eine IPv4-mapped Loopback-Adresse
+    /// (`::ffff:127.0.0.1`) oder der Name `localhost` selbst (HUM-387).
+    ///
+    /// Andere Namen unter `localhost` (`foo.localhost`) zählen nicht: Ihre
+    /// Auflösung hängt am Namensdienst, und die Frage stellt sich nur für den
+    /// Namen, den ein Mensch als Endpunkt einträgt.
+    #[must_use]
+    pub fn is_loopback(&self) -> bool {
+        match self {
+            Self::Dns(name) => name == LOCALHOST,
+            Self::Ip(IpAddr::V4(v4)) => v4.is_loopback(),
+            // `to_ipv4` machte aus `::1` die Adresse `0.0.0.1`; nur die
+            // mapped Form trägt eine IPv4-Adresse, die gemeint ist.
+            Self::Ip(IpAddr::V6(v6)) => {
+                v6.is_loopback() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+            }
+        }
     }
 
     /// Wahr, wenn der Host eine Adresse aus einem privaten oder lokalen Bereich ist.

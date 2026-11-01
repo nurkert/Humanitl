@@ -23,8 +23,9 @@
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
-use humanitl_config::AskMode;
+use humanitl_config::{AskMode, LlmConfig};
 
+use crate::llm_alias::LlmAliasTarget;
 use crate::llm_warnings::LlmWarningMemory;
 
 /// Die drei Werte, die eine Sitzung mitbringt.
@@ -41,6 +42,13 @@ pub struct SessionState {
     pub hold_timeout: Duration,
     /// Der Endpunkt des Sprachmodells als `host:port`, falls einer gilt.
     pub llm: Option<String>,
+    /// Das Ziel des reservierten Namens `llm.humanitl.internal`, falls der
+    /// Endpunkt auf dem Loopback liegt (HUM-387).
+    ///
+    /// `None` heißt: Der Name erreicht nichts, und jede Anfrage an ihn wird
+    /// abgelehnt ([`crate::llm_alias`]). [`SessionState::for_config`] setzt
+    /// es nie; der Aufrufer nennt es mit [`SessionState::with_llm_alias`].
+    pub llm_alias: Option<LlmAliasTarget>,
 }
 
 impl SessionState {
@@ -57,7 +65,17 @@ impl SessionState {
                 AskMode::Ui | AskMode::Terminal => Duration::from_secs(timeout_secs),
             },
             llm,
+            llm_alias: None,
         }
+    }
+
+    /// Derselbe Zustand mit dem Ziel des reservierten Namens für diesen
+    /// Endpunkt ([`LlmAliasTarget::for_llm`], HUM-387): das Ziel, wenn
+    /// `llm.endpoint` auf dem Loopback liegt, sonst keines.
+    #[must_use]
+    pub fn with_llm_alias(mut self, llm: &LlmConfig) -> Self {
+        self.llm_alias = LlmAliasTarget::for_llm(llm);
+        self
     }
 }
 
@@ -100,6 +118,12 @@ impl SessionSettings {
     #[must_use]
     pub fn hold_timeout(&self) -> Duration {
         self.get().hold_timeout
+    }
+
+    /// Das Ziel des reservierten Namens, das jetzt gilt (HUM-387).
+    #[must_use]
+    pub fn llm_alias(&self) -> Option<LlmAliasTarget> {
+        self.get().llm_alias
     }
 
     /// Setzt den Stand für die Sitzung, die gerade startet.

@@ -49,7 +49,7 @@ pub use crate::flow::{
     AnswerRefused, BlockReason, Decision, DecisionSource, Flow, FlowState, InvalidTransition,
     MetaAnswer, Transition, TransitionInput, UpstreamError,
 };
-pub use crate::host::{HostName, HostParseError, META_HOST, ip_is_private};
+pub use crate::host::{HostName, HostParseError, LLM_ALIAS_HOST, META_HOST, ip_is_private};
 pub use crate::http::{
     Authority, BodyRef, HeaderMap, HeaderName, HttpRequest, Method, Scheme, Upgrade, Version,
 };

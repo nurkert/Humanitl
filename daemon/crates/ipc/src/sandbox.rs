@@ -1859,11 +1859,16 @@ impl Inner {
             diagnostics.push(diagnostic);
         }
         if let Some(settings) = self.settings.as_ref() {
-            settings.set(SessionState::for_config(
-                resolved.config.hold.ask_mode,
-                resolved.config.hold.timeout_secs,
-                llm_authority(&resolved.config),
-            ));
+            settings.set(
+                SessionState::for_config(
+                    resolved.config.hold.ask_mode,
+                    resolved.config.hold.timeout_secs,
+                    llm_authority(&resolved.config),
+                )
+                // Der Name des Sprachmodells steht für den Endpunkt dieser
+                // Sitzung, und nur, wenn er auf dem Loopback liegt (HUM-387).
+                .with_llm_alias(&resolved.config.llm),
+            );
         }
         tracing::info!(
             session = %self.session,

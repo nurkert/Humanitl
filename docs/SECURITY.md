@@ -626,6 +626,35 @@ authentication in a company network. Prefer the IP address, or pin the name unde
 `resolver.overrides`. Whoever has no own machine switches the passthrough off and lets inference
 be held as well: inconvenient, but honest. Look at line 4 of the isolation panel once per start.
 
+#### The reserved name `llm.humanitl.internal` (HUM-387)
+
+*Why it exists.* OpenCode 2.2.5 sends its model requests to a loopback `baseURL`
+(`http://127.0.0.1:8080/v1`) directly, past `HTTP_PROXY`, even with an empty `NO_PROXY`. On macOS
+the Seatbelt profile refuses that connection (`deny network-outbound`), on Linux `127.0.0.1` of
+the sandbox has nothing behind it, and the agent cannot reach a model on the user's own machine.
+A name goes through the proxy. pi tunnels a loopback address through the proxy itself and keeps it.
+
+*What Humanitl does.* When the host of `llm.endpoint` is a loopback address (`127.0.0.0/8`,
+`::1`, or `localhost` itself), the OpenCode adapter writes the reserved name
+`llm.humanitl.internal` into the `baseURL` instead, with the same scheme, port and path. The
+proxy maps exactly that name, with exactly that scheme and port, to the configured endpoint, and
+does so before body, detectors and rules. The name is never resolved and never handed to a
+resolver or upstream as a name. A request to it with another port or scheme, or in a session whose
+`llm.endpoint` is not on the loopback (or is not set), is refused at once with `PROXY_003` and
+`no_route`: it is never held, no human can approve it, and nothing is connected. The name
+therefore reaches the one model endpoint the user configured and no other service of the host;
+the sandbox profile and its one door are unchanged.
+
+Because the mapping comes before the rules, the request then runs under the real target: the LLM
+passthrough of section 5.1 decides it as it decides a request to `127.0.0.1:8080`, with
+`allow_private` from that one rule only, the access key is no finding at its own target, and a
+`block` rule of the user for the target applies exactly as it does for the real address; for
+the passthrough endpoints the passthrough still ranks first. The recording and
+`humanitl flows list` show the real target (`127.0.0.1:8080`), which is where the bytes went;
+the `Host` header the agent sent (`llm.humanitl.internal:8080`) is recorded unchanged, and the
+upstream gets the `Host` of the real target. A refused request went nowhere and is recorded under
+the name itself.
+
 #### The access key of the model (HUM-140)
 
 *Where it lives.* In the system keyring through the Secret Service (`gnome-keyring`, `kwallet`),
@@ -1600,3 +1629,4 @@ the binaries inside the disk image.
 | 0.1.0 | The changes panel of the app: a conflict is overwritten only when it was confirmed for exactly that change (`ApplyChanges.overwrite_ids`); a conflict that appears after the selection stops the apply (HUM-351, K-24). |
 | 0.1.0 | A project profile, a session profile or one run (`humanitl run --llm NAME`) chooses one of the saved model servers with `llm.server`; only the chosen server is the session's passthrough and gets its key; an unknown name refuses the start with `CONFIG_021` and never falls back to `llm.active`; the choice and its source stand in the sandbox header and in `humanitl sandbox plan` (HUM-400, K-02). |
 | 0.1.0 | The disposable sandbox is the default where the system allows it: `sandbox.mode = "auto"` resolves to disposable with bubblewrap 0.11 or newer, a runtime directory on tmpfs and a writable project, and otherwise runs direct, as before, with the warning `SANDBOX_033`; an explicit `disposable` still refuses with `SANDBOX_030` and never falls back (HUM-357, K-24). |
+| 0.1.x | OpenCode reaches a model on the loopback through the proxy: the adapter writes the reserved name `llm.humanitl.internal` into the `baseURL`, and the proxy maps that name only to the configured loopback endpoint with its scheme and port, before the rules; any other use of the name is refused with `PROXY_003` and never resolved ([section 5.1](#the-reserved-name-llmhumanitlinternal-hum-387), HUM-387). |

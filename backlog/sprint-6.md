@@ -59,6 +59,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-381 | Statusleiste: Ein besetzter Daemon lässt den Neustart-Knopf nicht stumm | S | HUM-284, HUM-367 |
 | HUM-379 | macOS: Der Ordner-Dialog kann neue Ordner anlegen | S | HUM-293 |
 | HUM-383 | macOS: Im Vollbild nimmt die Kopfleiste den Platz der Ampel ein | S | HUM-342, HUM-378 |
+| HUM-387 | OpenCode erreicht ein lokales Modell über den Proxy | M | HUM-037, HUM-039, HUM-365 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -848,3 +849,16 @@ Akzeptanzkriterien:
 - Die Ampel zeichnet weiter das System, in nativer Größe und Gestalt; die App zeichnet und skaliert sie nicht.
 - Unter Linux ändert sich nichts: Die App hört den Kanal dort nicht ab, und der Rand bleibt symmetrisch.
 - Widget-Tests mit einem gefälschten Kanal decken alle drei Zustände, die Endwerte der Animation, reduzierte Bewegung, den Start im Vollbild und Linux ab. Ob das Einblenden auf einem echten Mac erkannt wird, prüft ein Mensch: Vollbild betreten, Zeiger an den oberen Rand und wieder weg, Vollbild verlassen, jeweils bei 100 % und 150 % sowie mit „Menüleiste im Vollbild immer anzeigen".
+
+## HUM-387 · OpenCode erreicht ein lokales Modell über den Proxy
+
+Gemessen am 2026-11-01: `OpenCode` 2.2.5 schickt Anfragen an eine Loopback-`baseURL` (`http://127.0.0.1:8080/v1`) unmittelbar und übergeht `HTTP_PROXY`, auch mit leerem `NO_PROXY`; eine LAN-Adresse oder ein Name geht durch den Proxy. Unter Seatbelt verweigert das Profil die direkte Verbindung (`deny network-outbound remote:*:8080`), unter Linux steht auf `127.0.0.1` der Sandbox nichts. pi ist nicht betroffen, undici tunnelt durch den Proxy.
+
+Akzeptanzkriterien:
+
+- Liegt der Host von `llm.endpoint` auf dem Loopback (`127.0.0.0/8`, `::1`, `localhost`), schreibt der OpenCode-Adapter in die `baseURL` den reservierten Namen `llm.humanitl.internal` mit demselben Schema, Port und Pfad (`llm_endpoint::openai_base_url_via_alias`); jeder andere Endpunkt behält seine Adresse. Briefing und Skill nennen den Host so, wie der Agent ihn anspricht. pi behält seine `baseURL`.
+- Der Proxy setzt den Namen vor Body, Detektoren und Regeln auf genau das eingestellte Ziel um (`llm_alias::map_llm_alias`, Ziel aus den Einstellungen der laufenden Sitzung) und auf nichts sonst. Eine Anfrage an den Namen mit anderem Port oder Schema, oder ohne Endpunkt auf dem Loopback, wird sofort mit `PROXY_003` und `no_route` abgelehnt: nie gehalten, nie aufgelöst, nichts verbunden. `Upstream::resolve` löst den Namen auch dann nicht auf, wenn er dort ankäme.
+- Nach der Umsetzung läuft die Anfrage unter dem echten Ziel: Die bestehende Durchreiche entscheidet sie (`DecisionSource::Passthrough`, ungehalten, aufgezeichnet), `allow_private` kommt nur aus dieser Regel, der Zugangsschlüssel ist an seinem Ziel kein Fund. Der Fluss steht unter dem echten Ziel; der `Host`-Kopf des Agenten mit dem Namen bleibt in der Aufzeichnung, nach oben geht der `Host` des Ziels. Eine abgelehnte Anfrage steht unter dem Namen.
+- Kein neuer Port, keine Änderung am Sandbox-Profil. `docs/SECURITY.md` Abschnitt 5.1 sagt, was der Name erreicht und warum; Änderungsliste in `SECURITY.md` und `THREAT-MODEL.md`.
+- Tests: Adapter schreibt den Namen für `127.0.0.1`, `::1` und `localhost` und sonst die echte Adresse; der Proxy setzt nur auf das eingestellte Ziel um, lehnt andere Ports, anderes Schema und den Fall ohne Loopback-Endpunkt ab; ein Integrationstest mit einem Upstream auf `127.0.0.1` zeigt Durchreiche ohne Auflösung, auch durch einen Klartext-Tunnel. Mutationsbeweise: ohne Portprüfung, ohne Umsetzung im Handler, mit der echten Adresse im Adapter wird je ein Test rot.
+- Ende-zu-Ende unter macOS mit `llm.endpoint = "http://127.0.0.1:8080/v1"` und `opencode run`: `humanitl flows list --passthrough` zeigt die Modellanfrage an `127.0.0.1:8080`, und `log show` enthält für den `opencode`-Prozess des Laufs kein `deny network-outbound remote:*:8080`.

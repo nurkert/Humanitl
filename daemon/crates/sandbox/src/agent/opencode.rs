@@ -134,7 +134,9 @@ pub const DEFAULT_COMMAND: &str = "opencode";
 /// geht an ihm vorbei. Fassungen vor 2 und andere Programme kennen `--server`
 /// nicht und starten unverändert.
 pub const SHARED_LOOPBACK_START: &str = r#"program="$1"; shift
-case "$("$program" --version 2>/dev/null)" in
+# `opencode --version` sagt `opencode v2.2.5`; zählt nur das letzte Wort.
+version="$("$program" --version 2>/dev/null)"
+case "${version##* }" in
   v[2-9].*|[2-9].*|v[1-9][0-9].*|[1-9][0-9].*) ;;
   *) exec "$program" "$@" ;;
 esac
@@ -151,7 +153,7 @@ until /usr/bin/curl --noproxy '*' --silent --output /dev/null "http://$address/"
   [ "$tries" -lt 100 ] || break
   sleep 0.1
 done
-NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 "$program" --server "http://$address" "$@"
+NO_PROXY="$address" no_proxy="$address" "$program" --server "http://$address" "$@"
 "#;
 
 /// Das Programm eines Kommandos, auch wenn [`SHARED_LOOPBACK_START`] es trägt.
@@ -447,6 +449,21 @@ pub fn passthrough_target(llm: &LlmConfig) -> Option<(HostName, Scheme, u16)> {
 #[must_use]
 pub fn passthrough_authority(llm: &LlmConfig) -> Option<String> {
     let (host, _, port) = passthrough_target(llm)?;
+    Some(format!("{host}:{port}"))
+}
+
+/// Der Host der Durchreiche, wie `OpenCode` ihn anspricht (HUM-387):
+/// [`passthrough_authority`], bei einem Endpunkt auf dem Loopback mit dem
+/// reservierten Namen [`humanitl_core::LLM_ALIAS_HOST`] statt des Hosts.
+///
+/// Der Proxy setzt den Namen auf das eingestellte Ziel um, bevor die Regel
+/// entscheidet; die Durchreiche gilt deshalb unter beiden Namen.
+#[must_use]
+pub fn agent_authority(llm: &LlmConfig) -> Option<String> {
+    let (host, _, port) = passthrough_target(llm)?;
+    if host.is_loopback() {
+        return Some(format!("{}:{port}", humanitl_core::LLM_ALIAS_HOST));
+    }
     Some(format!("{host}:{port}"))
 }
 
@@ -1152,9 +1169,13 @@ impl AgentAdapter for OpenCodeAdapter {
     }
 
     fn files(&self, ctx: &AgentContext) -> Result<Vec<SandboxFile>, Diagnostic> {
+        // Ein Endpunkt auf dem Loopback bekommt den reservierten Namen
+        // (HUM-387): `OpenCode` schickt eine Loopback-Adresse am Proxy vorbei,
+        // einen Namen durch ihn, und der Proxy setzt den Namen auf genau
+        // diesen Endpunkt um.
         let base = ctx.llm.endpoint.as_ref().map_or_else(
             || format!("http://127.0.0.1:{}/v1", ctx.proxy_port),
-            llm_endpoint::openai_base_url,
+            llm_endpoint::openai_base_url_via_alias,
         );
         let key_file = ctx.llm_key.is_some().then_some(API_KEY_DST);
         let config = render_config(&base, &ctx.llm.models, key_file)?;
@@ -1185,7 +1206,9 @@ impl AgentAdapter for OpenCodeAdapter {
             // für den `llm_passthrough` keine Regel baut, nennte das Briefing
             // einen Host, der gar nicht durchgereicht wird — und der Agent
             // wunderte sich, warum sein Modell in der Warteschlange steht.
-            let llm_host = passthrough_authority(&ctx.llm);
+            // Unter dem Namen, den der Agent in seiner `baseURL` sieht
+            // (HUM-387).
+            let llm_host = agent_authority(&ctx.llm);
             let text = briefing::render_for_session(
                 ctx.language,
                 ctx.hold.ask_mode,
@@ -1372,6 +1395,11 @@ mod tests {
         assert_eq!(wrapped[4], "/run/agent/opencode");
         assert_eq!(wrapped[5], "--x");
         assert!(!SHARED_LOOPBACK_START.contains("49374"));
+        assert!(SHARED_LOOPBACK_START.contains("${version##* }"));
+        // Nur der eigene Server geht am Proxy vorbei, nie ein anderer Port von
+        // 127.0.0.1, etwa ein lokales Modell (HUM-386).
+        assert!(SHARED_LOOPBACK_START.contains(r#"NO_PROXY="$address""#));
+        assert!(!SHARED_LOOPBACK_START.contains("NO_PROXY=127.0.0.1 "));
         assert_eq!(
             crate::agent::opencode::shown_program(&wrapped).unwrap(),
             "/run/agent/opencode"
