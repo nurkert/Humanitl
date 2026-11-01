@@ -33,6 +33,7 @@ import 'providers/file_opener.dart';
 import 'widgets/model_section.dart';
 import 'widgets/sandbox_mode_row.dart';
 import 'widgets/setting_row.dart';
+import 'widgets/update_row.dart';
 
 /// The settings, as a sheet from the right.
 class SettingsSheet extends ConsumerWidget {
@@ -458,6 +459,15 @@ class _SettingsFormState extends ConsumerState<_SettingsForm> {
             onChanged: (bool on) =>
                 unawaited(_write(FormKeys.tlsTrustSystemStore, '$on')),
           ),
+        ),
+        // Updates von Humanitl selbst (HUM-382): die tägliche Frage an
+        // GitHub ein- und ausschalten, und jetzt sofort fragen.
+        SettingGroupTitle(l10n.settingsSectionUpdates),
+        UpdateRow(
+          config: config,
+          refusal: _refusals[FormKeys.updateCheck],
+          anchor: _anchors[FormKeys.updateCheck],
+          onToggle: (bool on) => unawaited(_write(FormKeys.updateCheck, '$on')),
         ),
         SettingGroupTitle(l10n.settingsSectionFile),
         SettingRow(

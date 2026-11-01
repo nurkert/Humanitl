@@ -31,6 +31,7 @@ pub mod run;
 pub mod sandbox;
 pub mod sessions;
 pub mod unit;
+pub mod update;
 
 use std::path::{Path, PathBuf};
 

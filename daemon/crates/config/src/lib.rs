@@ -81,7 +81,7 @@ pub use crate::model::{
     AgentBriefing, AgentRef, AskMode, AuditConfig, Config, DetachKeys, Experimental,
     FindingsConfig, HoldConfig, IpPreference, Language, Limits, LlmConfig, LlmServer,
     PiAgentConfig, PiWebAccess, PseudonymConfig, RecorderConfig, ResolverConfig, SandboxMode,
-    SandboxRef, TerminalConfig, Theme, TlsConfig, UiConfig, WorkMode,
+    SandboxRef, TerminalConfig, Theme, TlsConfig, UiConfig, UpdateConfig, WorkMode,
 };
 pub use crate::origin::{Origin, Resolved};
 pub use crate::paths::{APP_DIR, DIR_MODE, FILE_MODE, MAC_APP_DIR, Paths, RuntimeDir};

@@ -840,6 +840,25 @@
       "type": "object",
       "x-project-scope": "allowed",
       "x-tier": "basic"
+    },
+    "update": {
+      "additionalProperties": false,
+      "default": {
+        "check": true
+      },
+      "description": "Updates von Humanitl selbst (HUM-382).",
+      "properties": {
+        "check": {
+          "default": true,
+          "description": "Fragt höchstens einmal am Tag bei GitHub (`api.github.com`, `github.com`), ob es ein neueres Release gibt, und prüft dessen signiertes Manifest. Gesendet wird nur, was jeder Download sendet; installiert wird nie ohne Klick. Aus fragt der Daemon nur, wenn jemand ausdrücklich prüft (`humanitl update check`, „Jetzt prüfen\"). Das Projekt-Profil kann den Schlüssel nicht setzen.",
+          "type": "boolean",
+          "x-project-scope": "denied",
+          "x-tier": "basic"
+        }
+      },
+      "type": "object",
+      "x-project-scope": "denied",
+      "x-tier": "basic"
     }
   },
   "title": "Config",

@@ -17,6 +17,7 @@ import '../../intercept/providers/flows.dart';
 import '../queue_pressure.dart';
 import 'daemon_restart_control.dart';
 import 'llm_server_item.dart';
+import 'update_notice.dart';
 
 /// The version of a build nobody stamped (HUM-277).
 const String _devBuild = '0.0.0';
@@ -136,6 +137,14 @@ class StatusBar extends ConsumerWidget {
                   color: tokens.state.passthroughLlm,
                 ),
               ],
+              // HUM-382: a newer release, quiet, with its one click. Not
+              // flexible: a loose flex beside the spacer would keep its share
+              // of the bar even while it draws nothing.
+              SizedBox(width: tokens.spacing.x2),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 360),
+                child: UpdateNotice(daemonMinor: info.protoMinor),
+              ),
               const Spacer(),
               const RecorderStatusLabel(),
               const QueuePressureLabel(),

@@ -522,6 +522,20 @@ layer. The conflict check compares type, size, `mtime` and mode, not content: a 
 keeps all four is not noticed. A daemon that ends discards a pending layer; its changes are lost
 then, and the recording says so.
 
+### K-25 Updates from inside the app
+
+The daemon fetches the latest release from GitHub once a day and installs it on a click (HUM-382).
+An attacker who controls the network path, GitHub's storage or the GitHub account could try to
+ship code that runs as the user with the daemon's rights, outside every sandbox. The binding is
+the Ed25519 signature over the update manifest, checked against a public key compiled into the
+daemon before any field is read; the manifest binds version, URL prefix, size and SHA-256 of the
+file, and the daemon refuses an older or equal version, a URL outside the release downloads, a
+redirect off GitHub and any byte that does not match. The agent cannot reach this path: it runs
+over its own connection stack, never through the proxy. Packages from APT and dnf are upgraded by
+their package manager through `pkexec`, with the repository's signatures. *Residual risk:* a stolen
+release key ships malware to every installation that clicks; the check tells GitHub that this
+address runs Humanitl and which version. Turned off with `update.check = false`.
+
 ## Assumptions
 
 | ID | Assumption | How to check it | If it breaks |
@@ -565,6 +579,8 @@ These attackers are not defended against, and Humanitl does not claim to:
 - **Exfiltration through `/work`.** All three attackers can write into the project. Humanitl shows
   the touched files, symlinks and secrets at the end of a run, but whatever a human later commits,
   pushes or mails leaves without Humanitl.
+- **The release key** (K-25). Whoever holds the private key that signs the update manifests can
+  ship code that installations accept on a click.
 - **The human as classifier.** A base64 body to `api.github.com` looks legitimate. Humanitl puts
   findings first, groups by host, removes noise with rules, asks back before approving whole
   groups and lets a timeout end in `block`. It cannot read the human's attention.
@@ -599,6 +615,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-30 | K-24: overwriting a conflict is confirmed per change (`overwrite_ids`); a confirmation for one file never covers another | HUM-351 |
 | 2026-10-31 | K-02: the boundary is the saved server the session resolved to; `llm.server` from run, project or profile chooses among the user's saved servers, never defines one; an unknown name refuses the start | HUM-400 |
 | 2026-10-30 | K-24: the disposable sandbox becomes the default where the system allows it (`sandbox.mode = "auto"`); without the overlay the default runs direct with `SANDBOX_033`, an explicit `disposable` still refuses | HUM-357 |
+| 2026-11-01 | K-25: updates from inside the app, bound to an Ed25519 release key built into the daemon; daily check of GitHub on by default, `update.check` turns it off; packages through `pkexec` and their package manager | HUM-382 |
 | 2026-10-31 | K-24: the disposable sandbox on macOS, an APFS clone with the masks removed, the real project sealed and the clone renamed before it is read; a held write descriptor and the missing size cap stay as residual risks | HUM-374 |
 | 2026-11-01 | The reserved name `llm.humanitl.internal` for a model on the loopback: mapped by the proxy only to the configured endpoint, scheme and port, before the rules, never resolved; every other use refused with `PROXY_003`. No new door, the sandbox profile is unchanged | HUM-387 |
 

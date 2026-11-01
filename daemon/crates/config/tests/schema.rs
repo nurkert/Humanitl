@@ -185,6 +185,7 @@ fn every_key_of_the_conventions_is_reachable() {
         "ui.theme",
         "ui.notifications",
         "experimental.h2_upstream",
+        "update.check",
     ];
 
     let leaves = schema::leaf_paths();

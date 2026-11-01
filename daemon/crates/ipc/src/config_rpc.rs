@@ -66,6 +66,9 @@ pub const FORM_KEYS: &[&str] = &[
     // Where the agent's changes go (HUM-357): `auto`, `direct` or
     // `disposable`. Closed to project profiles; here only the human writes.
     "sandbox.mode",
+    // Whether the daemon asks GitHub once a day for a newer release
+    // (HUM-382). Closed to project profiles; here only the human writes.
+    "update.check",
 ];
 
 /// The key of the agent choice in the form (HUM-274).

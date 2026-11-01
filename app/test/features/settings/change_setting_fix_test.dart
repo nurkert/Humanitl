@@ -104,6 +104,7 @@ const Map<String, Key> fieldOf = <String, Key>{
   FormKeys.agentAdapter: Key('settings-agent'),
   FormKeys.llmApiKeyRef: Key('settings-key-input'),
   FormKeys.sandboxMode: Key('settings-sandbox-mode'),
+  FormKeys.updateCheck: Key('settings-update-check'),
 };
 
 void main() {

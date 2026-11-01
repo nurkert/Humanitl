@@ -818,6 +818,61 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
+  Future<UpdateStatus> checkUpdate({
+    bool force = false,
+    String appimage = '',
+  }) async {
+    // Unary in effect: `Check` answers with exactly one status. A question to
+    // GitHub can take longer than an ordinary call, so no deadline here; the
+    // daemon bounds its own requests.
+    await for (final UpdateEvent event in _update(
+      // The generator calls the field `check_1`: every message already has a
+      // method `check()`.
+      pb.UpdateRequest()
+        ..check_1 = (pb.UpdateRequest_Check()
+          ..force = force
+          ..appimage = appimage),
+    )) {
+      if (event case UpdateEventStatus(:final UpdateStatus status)) {
+        return status;
+      }
+    }
+    throw DaemonException(
+      _unreachable('the daemon ended Update(check) without a status'),
+    );
+  }
+
+  @override
+  Stream<UpdateEvent> applyUpdate(String version, {String appimage = ''}) =>
+      _update(
+        pb.UpdateRequest()
+          ..apply = (pb.UpdateRequest_Apply()
+            ..version = version
+            ..appimage = appimage),
+      );
+
+  /// One `Update` call, translated event by event. No deadline: a download
+  /// takes as long as the line needs, and the daemon bounds every stall.
+  Stream<UpdateEvent> _update(pb.UpdateRequest request) async* {
+    final CallOptions options = await _options(timeout: null);
+    try {
+      await for (final pb.UpdateEvent event in _stub.update(
+        request,
+        options: options,
+      )) {
+        final UpdateEvent? domain = event.toDomain();
+        if (domain != null) {
+          yield domain;
+        }
+      }
+    } on GrpcError catch (error) {
+      throw DaemonException(_translate(error));
+    } on IOException catch (error) {
+      throw DaemonException(_unreachable('$error'));
+    }
+  }
+
+  @override
   Future<void> close() => _channel.shutdown();
 
   Future<T> _unary<T>(Future<T> Function(CallOptions options) call) async {

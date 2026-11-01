@@ -70,6 +70,8 @@ pub static PARITY: &[(&str, &str)] = &[
     ("Humanitl.Subscribe", "run --ask terminal"),
     ("Humanitl.Terminal", "sandbox attach"),
     ("Humanitl.Terminal", "sandbox attach --shell"),
+    ("Humanitl.Update", "update apply"),
+    ("Humanitl.Update", "update check"),
 ];
 
 #[cfg(test)]

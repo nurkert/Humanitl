@@ -101,23 +101,47 @@ impl Outcome {
 ///
 /// Keine eigenen: Jede Antwort, auch keine, ist ein [`Outcome`].
 pub async fn retire_if_idle(ctx: &Context) -> Result<u8, Failure> {
-    let outcome = if daemon_absent(
-        ctx.paths.token_path().exists(),
-        ctx.paths.daemon_socket().exists(),
-    ) {
-        Outcome::NoDaemon
-    } else {
-        match ctx.connect_running().await {
-            Ok(mut client) => ask(&mut client).await,
-            Err(_) => Outcome::Unknown,
-        }
-    };
+    let outcome = outcome(ctx).await;
     if ctx.render.is_json() {
         ctx.render.value(&json!({ "outcome": outcome.name() }));
     } else {
         println!("{}: {}", outcome.name(), outcome.sentence());
     }
     Ok(EXIT_OK)
+}
+
+/// Bittet den Daemon, zu enden, wenn ihn nichts hält, und sagt, was daraus
+/// wurde; ohne Ausgabe. Auch `daemon install --refresh` fragt so (HUM-382).
+pub async fn outcome(ctx: &Context) -> Outcome {
+    if daemon_absent(
+        ctx.paths.token_path().exists(),
+        ctx.paths.daemon_socket().exists(),
+    ) || nothing_listens(&ctx.paths.daemon_socket())
+    {
+        Outcome::NoDaemon
+    } else {
+        match ctx.connect_running().await {
+            Ok(mut client) => ask(&mut client).await,
+            Err(_) => Outcome::Unknown,
+        }
+    }
+}
+
+/// Ob am Socket nachweislich niemand lauscht: Die Datei liegt da, aber eine
+/// Verbindung wird abgewiesen (`ECONNREFUSED`) oder die Datei ist inzwischen
+/// weg. Das ist ein Socket, den ein beendeter Daemon zurückgelassen hat; ohne
+/// Daemon gibt es keine Sitzung (HUM-382). Jeder andere Fehler, und jede
+/// Verbindung, die zustande kommt, heißt: nachfragen; was dann nicht lesbar
+/// antwortet, bleibt `unknown`. Ein Socket, den systemd hält
+/// (`humanitld.socket`), nimmt die Verbindung an und zählt nicht als leer.
+fn nothing_listens(socket: &std::path::Path) -> bool {
+    match std::os::unix::net::UnixStream::connect(socket) {
+        Ok(_) => false,
+        Err(err) => matches!(
+            err.kind(),
+            std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
+        ),
+    }
 }
 
 /// Ob kein Daemon läuft: Ihm fehlt das Token oder der Socket.
@@ -163,7 +187,22 @@ async fn ask(client: &mut Client) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::Outcome;
+    use super::{Outcome, nothing_listens};
+
+    /// Ein zurückgelassener Socket ohne Zuhörer ist kein Daemon; einer, an
+    /// dem jemand lauscht, ist einer.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_stale_socket_is_no_daemon() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("daemon.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        assert!(!nothing_listens(&socket));
+        drop(listener);
+        assert!(socket.exists(), "the socket file stays behind");
+        assert!(nothing_listens(&socket));
+        assert!(nothing_listens(&dir.path().join("missing.sock")));
+    }
     use humanitl_ipc::v1;
     use v1::sandbox_event::Event;
 

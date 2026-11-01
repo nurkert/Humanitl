@@ -62,6 +62,14 @@ service Humanitl {
   // innen, sie traegt dieselben Grenzen wie der Agent, endet mit ihrem
   // Prozess oder mit der Sandbox, und hoechstens vier leben gleichzeitig.
   rpc Exec(ExecRequest) returns (ExecResponse);
+  // Updates von Humanitl selbst (HUM-382): `Check` fragt das letzte Release
+  // auf GitHub und prueft dessen signiertes Manifest, `Apply` laedt das Zip
+  // des Manifests, prueft Groesse, SHA-256 und Signatur des Buendels und
+  // tauscht App, Archiv-Ordner oder AppImage aus; ein Paket aus apt oder dnf
+  // aktualisiert der Client mit `UpdateStatus.upgrade_command`. `Check` antwortet mit genau einem
+  // `UpdateEvent.status`, `Apply` mit Fortschritt und am Ende genau einem
+  // `UpdateEvent.installed`. Jede Weigerung kommt als Status mit Diagnostic.
+  rpc Update(UpdateRequest) returns (stream UpdateEvent);
 }
 
 // ---------- Info ----------
@@ -2069,4 +2077,120 @@ message LlmServerList {
   // Was dazu zu sagen ist, etwa dass der Schluessel eines entfernten
   // Servers nicht geloescht werden konnte.
   repeated Diagnostic diagnostics = 4;
+}
+
+// ---------- Update (HUM-382) ----------
+
+// Ein Auftrag an den Updater des Daemons.
+message UpdateRequest {
+  // Nach einem neueren Release fragen.
+  message Check {
+    // Wahr: jetzt bei GitHub fragen, auch wenn `update.check` aus ist oder die
+    // letzte Frage keinen Tag alt ist. Falsch: die gemerkte Antwort, und nur
+    // wenn `update.check` an ist und die letzte Frage mindestens einen Tag
+    // zurueckliegt, vorher eine neue.
+    bool force = 1;
+    // Der Pfad des AppImages, aus dem die fragende App laeuft (`$APPIMAGE`);
+    // leer sonst. Nur damit kennt der Daemon die Datei, die ein Update
+    // ersetzt; er prueft sie selbst.
+    string appimage = 2;
+  }
+  // Das Release installieren, das `Check` angeboten hat.
+  message Apply {
+    // Die Version, die der Client angeboten hat, zum Beispiel `0.0.42`. Der
+    // Daemon prueft das Manifest neu; nennt es eine andere Version, bricht er
+    // ab, statt etwas anderes zu installieren als gezeigt.
+    string version = 1;
+    // Wie `Check.appimage`.
+    string appimage = 2;
+  }
+  oneof op {
+    Check check = 1;
+    Apply apply = 2;
+  }
+}
+
+// Was der Daemon ueber Updates weiss.
+message UpdateStatus {
+  // Die Version dieses Daemons.
+  string current_version = 1;
+  // Die Version des letzten Releases laut signiertem Manifest; leer, solange
+  // niemand gefragt hat.
+  string latest_version = 2;
+  // Wahr, wenn `latest_version` neuer ist als `current_version`.
+  bool available = 3;
+  // Wahr, wenn ein Klick hier installieren kann: `Apply` bei
+  // `APP_BUNDLE`, `ARCHIVE` und `APPIMAGE`, `upgrade_command` bei `APT` und
+  // `DNF`.
+  bool can_apply = 4;
+  // Wann zuletzt erfolgreich gefragt wurde; fehlt, wenn noch nie.
+  google.protobuf.Timestamp checked_at = 5;
+  // Groesse des Zips in Bytes; 0, wenn keins angeboten wird.
+  uint64 size = 6;
+  // Warum `can_apply` falsch ist, mit dem Befehl zum Kopieren; fehlt, wenn
+  // es nichts zu sagen gibt.
+  Diagnostic notice = 7;
+  // Wie diese Installation ein Update bekommt.
+  UpdateMethod method = 8;
+  // Bei `UPDATE_METHOD_APT` und `UPDATE_METHOD_DNF` der feste Aufruf, den der
+  // Client in der Sitzung des Menschen startet (`pkexec` braucht deren
+  // Polkit-Agenten, den ein Dienst des Daemons nicht hat), ohne Shell; leer
+  // sonst. `Apply` lehnt diese Wege ab.
+  repeated string upgrade_command = 9;
+}
+
+// Woher eine Installation ihre Updates bekommt.
+enum UpdateMethod {
+  UPDATE_METHOD_UNSPECIFIED = 0;
+  // macOS: das signierte Zip ersetzt `Humanitl.app` (`Apply`).
+  UPDATE_METHOD_APP_BUNDLE = 1;
+  // Linux, entpacktes Archiv in einem Ordner des Nutzers: das signierte
+  // Archiv ersetzt den Ordner (`Apply`).
+  UPDATE_METHOD_ARCHIVE = 2;
+  // Linux, AppImage in einem Ordner des Nutzers: das signierte AppImage
+  // ersetzt die Datei (`Apply`).
+  UPDATE_METHOD_APPIMAGE = 3;
+  // Paket aus dem apt-Repository: `upgrade_command` ueber pkexec.
+  UPDATE_METHOD_APT = 4;
+  // Paket aus dem dnf-Repository: `upgrade_command` ueber pkexec.
+  UPDATE_METHOD_DNF = 5;
+  // Kein Weg aus der App: AUR, ein Paket ohne Repository, kein pkexec, ein
+  // Ordner ohne Schreibrecht. `notice` nennt den Befehl zum Kopieren.
+  UPDATE_METHOD_MANUAL = 6;
+}
+
+// Abschnitte eines `Apply`.
+enum UpdateStage {
+  UPDATE_STAGE_UNSPECIFIED = 0;
+  // Das Zip wird geladen; `done_bytes` von `total_bytes`.
+  UPDATE_STAGE_DOWNLOADING = 1;
+  // Entpacken, Signatur und Version des Buendels pruefen.
+  UPDATE_STAGE_VERIFYING = 2;
+  // Die alte App wird gegen die neue getauscht.
+  UPDATE_STAGE_INSTALLING = 3;
+}
+
+// Wie weit ein `Apply` ist.
+message UpdateProgress {
+  UpdateStage stage = 1;
+  uint64 done_bytes = 2;
+  uint64 total_bytes = 3;
+}
+
+// Die neue App liegt an ihrem Platz.
+message UpdateInstalled {
+  // Die installierte Version.
+  string version = 1;
+  // Was die App neu startet: das Buendel (`/Applications/Humanitl.app`),
+  // das Programm der App im Archiv-Ordner oder das AppImage.
+  string app_path = 2;
+}
+
+// Ein Ereignis eines `Update`-Auftrags.
+message UpdateEvent {
+  oneof event {
+    UpdateStatus status = 1;
+    UpdateProgress progress = 2;
+    UpdateInstalled installed = 3;
+  }
 }

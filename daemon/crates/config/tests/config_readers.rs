@@ -166,6 +166,9 @@ const REGISTER: &[(&str, &str)] = &[
     // Gelesen in der Oberfläche: `themeModeProvider` startet aus dem Wert, den
     // `configProvider` meldet, und folgt ihm (HUM-069).
     ("ui.theme", "effective"),
+    // Gelesen im Update-RPC (`humanitl_ipc::update`), bevor eine Frage ohne
+    // `force` zu GitHub geht (HUM-382).
+    ("update.check", "effective"),
 ];
 
 fn repo_root() -> PathBuf {

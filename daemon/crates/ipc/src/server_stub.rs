@@ -113,6 +113,38 @@ pub trait DaemonApi: Send + Sync + 'static {
         .build())
     }
 
+    /// Updates von Humanitl selbst (HUM-382).
+    ///
+    /// Die Vorgabe kennt kein neueres Release: `Check` antwortet mit dem
+    /// Stand ohne Angebot, `Apply` mit `UPDATE_004`. Ein Fake fragt nie
+    /// GitHub.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `UPDATE_004` für `Apply`, `IPC_006` ohne Operation.
+    async fn update(&self, request: v1::UpdateRequest) -> Result<Vec<v1::UpdateEvent>, Diagnostic> {
+        match request.op {
+            Some(v1::update_request::Op::Check(_)) => Ok(vec![v1::UpdateEvent {
+                event: Some(v1::update_event::Event::Status(v1::UpdateStatus {
+                    current_version: env!("CARGO_PKG_VERSION").to_owned(),
+                    ..v1::UpdateStatus::default()
+                })),
+            }]),
+            Some(v1::update_request::Op::Apply(_)) => Err(Diagnostic::builder(
+                humanitl_core::diagnostics::codes::UPDATE_004,
+                humanitl_core::Severity::Error,
+            )
+            .why("this daemon installs no updates".to_owned())
+            .build()),
+            None => Err(Diagnostic::builder(
+                humanitl_core::diagnostics::codes::IPC_006,
+                humanitl_core::Severity::Error,
+            )
+            .why("an Update request needs check or apply".to_owned())
+            .build()),
+        }
+    }
+
     /// Prüft oder exportiert das Audit-Log.
     ///
     /// # Errors
@@ -376,6 +408,7 @@ impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
     type SandboxStream = BoxStream<Result<v1::SandboxEvent, Status>>;
     type TerminalStream = BoxStream<Result<v1::TerminalOutput, Status>>;
     type DiscoverLlmStream = BoxStream<Result<v1::DiscoverResult, Status>>;
+    type UpdateStream = BoxStream<Result<v1::UpdateEvent, Status>>;
 
     async fn get_info(&self, request: Request<()>) -> Result<Response<v1::Info>, Status> {
         self.check_token(&request)?;
@@ -487,6 +520,21 @@ impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
             .await
             .map(Response::new)
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+    }
+
+    async fn update(
+        &self,
+        request: Request<v1::UpdateRequest>,
+    ) -> Result<Response<Self::UpdateStream>, Status> {
+        self.check_token(&request)?;
+        let events = self
+            .api
+            .update(request.into_inner())
+            .await
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        Ok(Response::new(Box::pin(tokio_stream::iter(
+            events.into_iter().map(Ok),
+        ))))
     }
 
     async fn audit(

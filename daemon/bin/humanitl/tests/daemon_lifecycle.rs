@@ -282,7 +282,8 @@ fn refresh_of_the_same_version_calls_nothing() {
 #[test]
 fn refresh_replaces_an_older_copy_restarts_and_only_then_retires_it() {
     let harness = Harness::new();
-    let _daemon = FakeServer::start(&harness);
+    // Ohne Sitzung: Erst nach `retired` stellt `--refresh` um (HUM-382).
+    let _daemon = FakeServer::start_idle(&harness);
     let bin = image_tree(&harness);
     let (fakebin, log) = fake_systemctl(&harness, NEVER);
     let path = path_with(&fakebin);
@@ -328,6 +329,44 @@ fn refresh_replaces_an_older_copy_restarts_and_only_then_retires_it() {
     );
 }
 
+/// Hält eine Sitzung den Daemon, erneuert `--refresh` nichts (HUM-382): Die
+/// Kopie bleibt, `current` zeigt weiter auf sie, und kein Neustart geht an
+/// systemd. Der Standard-Fake spielt eine laufende Sitzung und sagt auf
+/// `retire_if_idle` nie `retired`.
+#[test]
+fn refresh_leaves_the_copy_while_a_session_holds_the_daemon() {
+    let harness = Harness::new();
+    let _daemon = FakeServer::start(&harness);
+    let bin = image_tree(&harness);
+    let (fakebin, log) = fake_systemctl(&harness, NEVER);
+    let path = path_with(&fakebin);
+    let old = install_an_older_copy(&harness, &bin, &path);
+    let name_before = current_name(&harness);
+    let before = calls(&log).len();
+
+    let output = run(
+        &harness,
+        &bin.join("humanitl"),
+        &["--json", "daemon", "install", "--refresh"],
+        &path,
+        true,
+    );
+
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value = json(&output);
+    assert_eq!(value["action"], "session_holds", "{value}");
+    assert_eq!(current_name(&harness), name_before);
+    assert!(
+        old.exists(),
+        "the older copy went while a session held the daemon"
+    );
+    let since = calls(&log)[before..].to_owned();
+    assert!(
+        !since.contains("restart") && !since.contains("enable"),
+        "systemctl was asked while a session held the daemon: {since}"
+    );
+}
+
 /// Eine Einrichtung von vor HUM-165: Die Kopie trug nur Daemon und Shim,
 /// flach und ohne `bin/`, und die Unit nannte `current/humanitld`. `--refresh`
 /// erkennt sie trotzdem, legt eine vollständige Kopie an und schreibt die Unit
@@ -336,7 +375,8 @@ fn refresh_replaces_an_older_copy_restarts_and_only_then_retires_it() {
 #[test]
 fn refresh_replaces_a_flat_copy_from_before_hum_165() {
     let harness = Harness::new();
-    let _daemon = FakeServer::start(&harness);
+    // Ohne Sitzung: Erst nach `retired` stellt `--refresh` um (HUM-382).
+    let _daemon = FakeServer::start_idle(&harness);
     let bin = image_tree(&harness);
     let (fakebin, _log) = fake_systemctl(&harness, NEVER);
     let path = path_with(&fakebin);
@@ -982,7 +1022,8 @@ fn a_first_install_restarts_a_service_that_was_already_active() {
 #[test]
 fn the_appimage_entry_refreshes_before_it_starts_the_app() {
     let harness = Harness::new();
-    let _daemon = FakeServer::start(&harness);
+    // Ohne Sitzung: Erst nach `retired` stellt `--refresh` um (HUM-382).
+    let _daemon = FakeServer::start_idle(&harness);
     let bin = image_tree(&harness);
     let (fakebin, log) = fake_systemctl(&harness, NEVER);
     let path = path_with(&fakebin);

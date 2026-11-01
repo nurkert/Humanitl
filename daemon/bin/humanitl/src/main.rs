@@ -209,6 +209,7 @@ async fn run(ctx: &Context, command: Cmd) -> Result<u8, Failure> {
         Cmd::Config { cmd } => cmd::config::run(ctx, &cmd).await,
         Cmd::Run(args) => cmd::run::run(ctx, &args).await,
         Cmd::Audit { cmd } => cmd::audit::run(ctx, &cmd).await,
+        Cmd::Update { cmd } => cmd::update::run(ctx, &cmd).await,
     }
 }
 

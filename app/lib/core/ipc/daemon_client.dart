@@ -399,6 +399,25 @@ abstract class DaemonClient {
     DateTime? to,
   });
 
+  /// `Update(check)`: what the daemon knows about a newer release (HUM-382).
+  ///
+  /// With [force] false the daemon answers what it remembers, and asks
+  /// GitHub first only when `update.check` is on and its last question is a
+  /// day old; with [force] true it asks now. Throws a [DaemonException] with
+  /// `UPDATE_001` or `UPDATE_002` when the question or the signed manifest
+  /// fails. [appimage] is the AppImage this app runs from (`$APPIMAGE`),
+  /// empty otherwise; only with it does the daemon know the file an update
+  /// replaces, and it checks that file itself.
+  Future<UpdateStatus> checkUpdate({bool force = false, String appimage = ''});
+
+  /// `Update(apply)`: downloads, checks and installs [version] (HUM-382).
+  ///
+  /// Yields progress and ends with exactly one [UpdateEventInstalled]. Every
+  /// refusal ends the stream with a [DaemonException] (`UPDATE_002` to
+  /// `UPDATE_005`); the installed app then stays as it was. [appimage] as
+  /// in [checkUpdate].
+  Stream<UpdateEvent> applyUpdate(String version, {String appimage = ''});
+
   /// Releases the transport. The client is unusable afterwards.
   Future<void> close();
 }
