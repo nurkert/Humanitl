@@ -211,6 +211,15 @@ pub static AREAS: &[AreaInfo] = &[
                `hold.hard_block_checksum_secrets` (HUM-049); 001-003 sind nicht \
                vergeben",
     },
+    AreaInfo {
+        area: "update",
+        prefix: "UPDATE",
+        first: 1,
+        last: 9,
+        note: "Updates of Humanitl itself (HUM-382): asking GitHub for the \
+               latest release, the signed manifest, the download and the \
+               exchange of the app bundle",
+    },
 ];
 
 macro_rules! registry {
@@ -1627,6 +1636,36 @@ registry! {
     SANDBOX_033 => "sandbox", "Disposable sandbox not available, running direct", "#sandbox_033",
         "The default `sandbox.mode = \"auto\"` asks for a disposable sandbox where the system allows one, and this system does not: bubblewrap is older than 0.11, the runtime directory is not on tmpfs, the project folder is mounted read-only, or on macOS the project cannot be cloned. This run writes to the project folder directly.",
         "The fix of the cause (install command for a newer bubblewrap, `SetEnv` for `XDG_RUNTIME_DIR`, `ChangeSetting` on `sandbox.work_mode` = `rw`), or `sandbox.mode = \"direct\"` to choose direct mode and silence this notice.";
+    // HUM-382: updates from inside the app.
+    /// The daemon could not learn the latest release: GitHub did not answer,
+    /// answered with an error status, redirected somewhere it may not go, or
+    /// sent something that is not a release with an update manifest.
+    UPDATE_001 => "update", "Update check failed", "#update_001",
+        "Asking `api.github.com` for the latest release, or fetching its manifest and signature from `github.com`, failed: no answer, an error status, a redirect outside GitHub, a body over its cap, or a release without `update-macos.json` and `update-macos.json.sig`.",
+        "`OpenUrl` on the releases page, where the newest version can be downloaded by hand; the check repeats on its own the next day.";
+    /// The update manifest was refused before anything was downloaded: the
+    /// signature is missing or does not match the key built into Humanitl,
+    /// or the signed text is not a manifest this daemon accepts (HUM-382).
+    UPDATE_002 => "update", "Update manifest refused", "#update_002",
+        "The manifest of the latest release carries no valid Ed25519 signature of the Humanitl release key, cannot be read, names a version that is not newer than this one or differs from the release tag, names a download outside `https://github.com/nurkert/Humanitl/releases/download/`, or needs a newer macOS than this Mac runs.",
+        "No automatic fix: nothing is installed. `OpenUrl` on the releases page; a refused signature is worth a report, because only a release built by the project's pipeline carries one.";
+    /// The download did not match the signed manifest, or the app inside it
+    /// failed its checks: size, SHA-256, code signature, entitlement or
+    /// bundle version (HUM-382).
+    UPDATE_003 => "update", "Downloaded update refused", "#update_003",
+        "The zip that was downloaded is larger or smaller than the manifest says, its SHA-256 differs, it does not unpack to `Humanitl/Humanitl.app`, the app fails `codesign --verify --deep --strict`, lacks the entitlement `com.apple.security.files.user-selected.read-only`, or its version is not the one the manifest names.",
+        "No automatic fix: the download is deleted and the installed app stays as it was. Try again later, or `OpenUrl` on the releases page for the manual download.";
+    /// This installation cannot replace itself: not macOS, not running from
+    /// an app bundle, a bundle on a disk image or in App Translocation, or a
+    /// folder this user may not write (HUM-382).
+    UPDATE_004 => "update", "Update cannot be installed here", "#update_004",
+        "`Apply` was asked on Linux, where the package manager installs updates, or the daemon does not run from a `Humanitl.app`, runs from a disk image under `/Volumes` or from App Translocation, or may not write the folder that holds the app.",
+        "Under Linux `CopyCommand` with the upgrade command of the package manager (apt, dnf, AUR); on macOS `OpenUrl` on the releases page, or move Humanitl.app to /Applications first.";
+    /// Replacing the app bundle failed; the previous app was put back
+    /// (HUM-382).
+    UPDATE_005 => "update", "Update could not be installed", "#update_005",
+        "Unpacking the zip or moving the new app into place failed after all checks passed, for example on a full disk or a folder that changed meanwhile. The previous app was restored under its old name; if even that failed, the sentence names where it lies.",
+        "No automatic fix; the sentence names the step and the path. Try again, or `OpenUrl` on the releases page for the manual download.";
 }
 
 /// Sucht einen Code im Register.

@@ -62,7 +62,12 @@ abstract final class FormKeys {
     tlsTrustSystemStore,
     agentAdapter,
     sandboxMode,
+    updateCheck,
   ];
+
+  /// Whether the daemon asks GitHub once a day, at most, for a newer release
+  /// (HUM-382). Default true.
+  static const String updateCheck = 'update.check';
 
   /// Where the agent's changes go: `auto` (the default), `direct` or
   /// `disposable` (HUM-350, HUM-357). In `FORM_KEYS` of the daemon since
@@ -163,6 +168,12 @@ final class ConfigValues {
 
   /// `tls.trust_system_store`, default true (HUM-257).
   bool get tlsTrustSystemStore => switch (at(FormKeys.tlsTrustSystemStore)) {
+    final bool on => on,
+    _ => true,
+  };
+
+  /// `update.check`, default true (HUM-382).
+  bool get updateCheck => switch (at(FormKeys.updateCheck)) {
     final bool on => on,
     _ => true,
   };

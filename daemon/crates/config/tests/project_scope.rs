@@ -54,6 +54,7 @@ const DENIED_BY_CONVENTION: &[&str] = &[
     "limits.recorder_max_body_bytes",
     "audit.*",
     "terminal.*",
+    "update.*",
 ];
 
 /// Ein Verzeichnis, in dem die Tests ihre Dateien anlegen.

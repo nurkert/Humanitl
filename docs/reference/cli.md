@@ -57,6 +57,9 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl daemon uninstall`](#humanitl-daemon-uninstall) Stop and disable the service and remove the unit daemon install wrote
 - [`humanitl daemon retire-if-idle`](#humanitl-daemon-retire-if-idle) Ask the daemon to end now if no agent session holds it (after an upgrade)
 - [`humanitl doctor`](#humanitl-doctor) Check this machine: one line per precondition, with a fix
+- [`humanitl update`](#humanitl-update) Check for a newer Humanitl and install it
+- [`humanitl update check`](#humanitl-update-check) Ask GitHub now whether a newer release exists
+- [`humanitl update apply`](#humanitl-update-apply) Install the newer release this installation can take
 - [`humanitl llm`](#humanitl-llm) Find LLM servers in the local network
 - [`humanitl llm discover`](#humanitl-llm-discover) Search the local /24 for OpenAI-compatible servers and Ollama
 - [`humanitl llm test`](#humanitl-llm-test) Ask one endpoint what it is: which API answered, its models, how long
@@ -132,6 +135,7 @@ below lists the flag names and their short aliases.
 | `--ui-notifications` | - | `true`, `false` | `ui.notifications` |
 | `--ui-terminal-notices` | - | `true`, `false` | `ui.terminal_notices` |
 | `--ui-theme` | - | `dark`, `light`, `system` | `ui.theme` |
+| `--update-check` | - | `true`, `false` | `update.check` |
 
 ## humanitl
 
@@ -150,6 +154,7 @@ Commands:
   config    The resolved configuration and its schema
   daemon    The background service
   doctor    Check this machine: one line per precondition, with a fix
+  update    Check for a newer Humanitl and install it
   llm       Find LLM servers in the local network
   help      Print this message or the help of the given subcommand(s)
 
@@ -1806,6 +1811,96 @@ Options:
           Contact llm.endpoint as part of the report; without this, doctor opens no connection at all.
 
           The endpoint is named on stderr before it is contacted. The probe runs in the daemon (ProbeLlm): GET requests for the model list of the endpoint (and /api/tags first on a plain Ollama server without a path prefix), no credentials, no redirects.
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## humanitl update
+
+```text
+Check for a newer Humanitl and install it
+
+Usage: humanitl update [OPTIONS] <COMMAND>
+
+Commands:
+  check  Ask GitHub now whether a newer release exists
+  apply  Install the newer release this installation can take
+  help   Print this message or the help of the given subcommand(s)
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl update check
+
+```text
+Ask GitHub now whether a newer release exists.
+
+The daemon fetches the release's update manifest and checks its Ed25519 signature against the key built into Humanitl before it believes the version. It asks even when update.check is off.
+
+Usage: humanitl update check [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## humanitl update apply
+
+```text
+Install the newer release this installation can take.
+
+macOS app, unpacked archive or `AppImage`: the daemon downloads the file the signed manifest names, checks size and SHA-256, unpacks, checks and swaps it, keeping the previous version until the swap succeeded. A package from the apt or dnf repository: runs `pkexec apt-get install --only-upgrade -y humanitl` or `pkexec dnf upgrade -y humanitl`. Anything else (AUR, a package without repository) prints the command to run.
+
+Usage: humanitl update apply [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory

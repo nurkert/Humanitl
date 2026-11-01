@@ -93,8 +93,11 @@ abstract final class ProtoVersion {
   /// Raised to 29 with what really runs: the mounts tab and the command sheet
   /// read `Status.policy_text`, `Mount.profile_path`, `MOUNT_MODE_DENIED` and
   /// `Status.backend` (HUM-376).
+  /// Raised to 30 with updates from inside the app: the status bar notice
+  /// reads `Update(check)` and installs with `Update(apply)`, and the
+  /// settings row "Check now" asks with `force` (HUM-382).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 29;
+  static const int minor = 30;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

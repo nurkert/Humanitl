@@ -423,6 +423,32 @@ void main() {
       );
     });
 
+    test('takes bin beside app in the release archive', () {
+      // HUM-382: `<root>/app/humanitl` und `<root>/bin/humanitl`.
+      const String root = '/home/u/humanitl-0.0.5-linux-x86_64';
+      expect(
+        found('$root/app/humanitl', (String p) => p == '$root/bin/humanitl'),
+        '$root/bin/humanitl',
+      );
+      // Nur neben einem Ordner `app`, nicht irgendwo darüber.
+      expect(
+        found(
+          '/home/u/other/humanitl',
+          (String p) => p == '/home/u/bin/humanitl',
+        ),
+        isNull,
+      );
+      // Dieselbe Prüfung des Eigentums wie an den anderen Orten.
+      expect(
+        found(
+          '$root/app/humanitl',
+          (String p) => p == '$root/bin/humanitl',
+          (String p) => p == '$root/bin' ? 0x1FF : 0x1ED,
+        ),
+        isNull,
+      );
+    });
+
     test('never starts the application itself', () {
       expect(
         found(

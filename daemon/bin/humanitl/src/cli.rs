@@ -162,6 +162,13 @@ pub enum Cmd {
     /// Check this machine: one line per precondition, with a fix.
     Doctor(DoctorArgs),
 
+    /// Check for a newer Humanitl and install it.
+    Update {
+        /// Was mit dem Update geschehen soll.
+        #[command(subcommand)]
+        cmd: UpdateCmd,
+    },
+
     /// Find LLM servers in the local network.
     Llm {
         /// Was mit dem LLM-Server geschehen soll.
@@ -538,6 +545,27 @@ pub enum SandboxCmd {
         #[arg(long)]
         yes: bool,
     },
+}
+
+/// Die Unterkommandos von `humanitl update` (HUM-382).
+#[derive(Debug, Subcommand)]
+pub enum UpdateCmd {
+    /// Ask GitHub now whether a newer release exists.
+    ///
+    /// The daemon fetches the release's update manifest and checks its
+    /// Ed25519 signature against the key built into Humanitl before it
+    /// believes the version. It asks even when update.check is off.
+    Check,
+    /// Install the newer release this installation can take.
+    ///
+    /// macOS app, unpacked archive or `AppImage`: the daemon downloads the
+    /// file the signed manifest names, checks size and SHA-256, unpacks,
+    /// checks and swaps it, keeping the previous version until the swap
+    /// succeeded. A package from the apt or dnf repository: runs
+    /// `pkexec apt-get install --only-upgrade -y humanitl` or
+    /// `pkexec dnf upgrade -y humanitl`. Anything else (AUR, a package
+    /// without repository) prints the command to run.
+    Apply,
 }
 
 /// Die Unterkommandos von `humanitl sessions`.

@@ -56,7 +56,9 @@ internet at all.
 
 Humanitl makes internet access possible under human control: the agent asks, the proxy holds, a
 person decides, and everything is recorded. Humanitl runs locally on your machine and sends no data
-to us: no account, no telemetry, no crash reports.
+to us: no account, no telemetry, no crash reports. The one connection it makes for itself is a
+daily look at GitHub for a newer release, which you can turn off
+([updates](#updates-from-inside-the-app)).
 
 ## The three guarantees
 
@@ -258,6 +260,28 @@ shasum -a 256 -c SHA256SUMS --ignore-missing           # macOS
 
 Releases before 1.0.0 are **not signed**: `SHA256SUMS` protects against a damaged download, not
 against a tampered release. Signed packages come with 1.0.0.
+
+### Updates from inside the app
+
+Once a day at most, the daemon asks GitHub whether a newer release exists
+(`api.github.com`, then `github.com` for the release's files). This is the one connection the
+daemon makes for itself; it never goes through the agent's proxy and sends nothing but what any
+download sends (the address and a `User-Agent: Humanitl/<version>` header). A newer release shows as
+a quiet notice in the status bar; nothing is installed without a click.
+
+Before the daemon believes anything about a release, it checks the release's update manifest
+(`update-macos.json`, `update-linux-x86_64.json`, `update-linux-x86_64-appimage.json`) against an
+Ed25519 key built into Humanitl. The manifest names version, download address (only under
+`https://github.com/nurkert/Humanitl/releases/download/`), SHA-256 and size; a missing or wrong
+signature, an older or equal version or a mismatching download is refused. On macOS, the
+signature and the entitlements of the new app are checked like the release build does, then
+`Humanitl.app` is swapped and the previous one kept until the swap succeeded. An unpacked archive
+or an AppImage in a folder of your own is swapped the same way. A package from the APT or dnf
+repository is upgraded by its package manager through `pkexec`, with its own signatures; the AUR
+and a package installed from a file get the command to copy. A stolen release key could sign a
+malicious update; a GitHub account taken over without the key cannot. Turn the daily check off in
+the settings or with `update.check = false`; `humanitl update check` and "Check now" still ask
+when you do ([`docs/SECURITY.md`](docs/SECURITY.md#updates-from-inside-the-app)).
 
 Prerequisites in detail, the agent, updates and removal:
 [`docs/guides/install.md`](docs/guides/install.md).

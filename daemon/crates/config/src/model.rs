@@ -89,6 +89,9 @@ pub struct Config {
     /// Schalter für unfertige Wege. Alles hier darf ohne Ankündigung wegfallen.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub experimental: Experimental,
+    /// Updates von Humanitl selbst (HUM-382).
+    #[schemars(extend("x-tier" = "basic", "x-project-scope" = "denied"))]
+    pub update: UpdateConfig,
 }
 
 /// Der OpenAI-kompatible Endpunkt im eigenen Netz.
@@ -813,6 +816,25 @@ impl DetachKeys {
             Self::Prefix(byte) => Some(format!("Ctrl+{} d", char::from(byte | 0x40))),
             Self::Disabled => None,
         }
+    }
+}
+
+/// Updates von Humanitl selbst (HUM-382).
+///
+/// Die Frage nach einem neueren Release ist die eine Verbindung, die der
+/// Daemon für sich selbst aufbaut: zu `api.github.com` und `github.com`, nie
+/// über den Proxy der Sandbox.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct UpdateConfig {
+    /// Fragt höchstens einmal am Tag bei GitHub (`api.github.com`, `github.com`), ob es ein neueres Release gibt, und prüft dessen signiertes Manifest. Gesendet wird nur, was jeder Download sendet; installiert wird nie ohne Klick. Aus fragt der Daemon nur, wenn jemand ausdrücklich prüft (`humanitl update check`, „Jetzt prüfen"). Das Projekt-Profil kann den Schlüssel nicht setzen.
+    #[schemars(extend("x-tier" = "basic", "x-project-scope" = "denied"))]
+    pub check: bool,
+}
+
+impl Default for UpdateConfig {
+    fn default() -> Self {
+        Self { check: true }
     }
 }
 

@@ -53,7 +53,7 @@ use humanitl_proxy::hold::NotHeld;
 use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::{
     CONNECT_TIMEOUT, ClientTls, Direct, FlowFilter, FlowRegistry, HoldQueue, LlmProbe, Resolver,
-    ResolverPort, Scan, Subnet, Upstream,
+    ResolverPort, Scan, SelfUpdate, Subnet, UpdateSource, Upstream,
 };
 use humanitl_recorder::{
     Cursor, CursorKey, Dir, FlowDetail as RecordedDetail, FlowQuery, Recorder, SortKey,
@@ -137,6 +137,11 @@ pub struct IpcServer {
     /// steht dann in `llm_probe_error` und geht als Antwort an den Aufrufer,
     /// statt still zu verschwinden.
     llm_probe: Option<Arc<LlmProbe>>,
+    /// Netz und Signatur der Updates (HUM-382); `None`, wenn der Stapel
+    /// nicht gebaut werden konnte.
+    self_update: Option<Arc<SelfUpdate>>,
+    /// Was der Daemon über Updates weiß, und wo er läuft.
+    updates: Arc<UpdateSetup>,
     llm_probe_error: Option<Diagnostic>,
     /// Die Sandbox dieser Sitzung: Einhängungen, Umgebung, Kommandozeile,
     /// Start und Stopp (HUM-040). `None` in einem Daemon, der ohne Sandbox
@@ -157,6 +162,17 @@ pub struct IpcServer {
     /// der Speicher der Pfade dieses Dienstes ([`KeyStore::for_paths`]);
     /// Tests setzen eine Attrappe ein.
     keys: Option<KeyStore>,
+}
+
+/// Woraus der Update-RPC liest (HUM-382).
+#[derive(Debug)]
+struct UpdateSetup {
+    /// Der Stand: letzte Antwort, letzter Versuch, ein laufendes `Apply`.
+    updater: crate::update::Updater,
+    /// Der Pfad des Daemons, aus dem [`crate::update::detect`] den Weg liest.
+    exe: std::path::PathBuf,
+    /// Der Rechner, im Test ein Baum unter einem Wegwerf-Verzeichnis.
+    host: crate::update::Host,
 }
 
 /// Was der Doctor über diese Installation wissen muss.
@@ -245,6 +261,16 @@ impl IpcServer {
     #[must_use]
     pub fn new(queue: Arc<HoldQueue>, config: &Config, session: Option<SessionId>) -> Self {
         let registry = Arc::clone(queue.registry());
+        let self_update = build_self_update(config, UpdateSource::github())
+            .inspect_err(|diagnostic| {
+                tracing::warn!(
+                    code = %diagnostic.code,
+                    why = %diagnostic.why,
+                    "updates are not available in this daemon"
+                );
+            })
+            .ok()
+            .map(Arc::new);
         let probe = build_llm_probe(config).map(Arc::new);
         if let Err(diagnostic) = probe.as_ref() {
             tracing::warn!(
@@ -260,7 +286,13 @@ impl IpcServer {
                 daemon_version: env!("CARGO_PKG_VERSION").to_owned(),
                 proto_major: PROTO_MAJOR,
                 proto_minor: PROTO_MINOR,
-                capabilities: CAPABILITIES.iter().map(|name| (*name).to_owned()).collect(),
+                capabilities: CAPABILITIES
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    // Updates von Humanitl selbst (HUM-382): ein Client fragt,
+                    // bevor er den Hinweis und die Einstellung zeigt.
+                    .chain(self_update.is_some().then(|| "update".to_owned()))
+                    .collect(),
                 session_id: session.map(|id| id.to_string()).unwrap_or_default(),
             },
             body_cap_bytes: config.limits.hold_body_cap_bytes,
@@ -272,6 +304,12 @@ impl IpcServer {
             domains: None,
             llm_probe: probe.as_ref().ok().map(Arc::clone),
             llm_probe_error: probe.err(),
+            self_update,
+            updates: Arc::new(UpdateSetup {
+                updater: crate::update::Updater::new(env!("CARGO_PKG_VERSION")),
+                exe: std::env::current_exe().unwrap_or_default(),
+                host: crate::update::Host::this(),
+            }),
             sandbox: None,
             audit: None,
             audit_log: None,
@@ -469,6 +507,45 @@ impl IpcServer {
         self.llm_probe = Some(Arc::new(probe));
         self.llm_probe_error = None;
         self
+    }
+
+    /// Derselbe Dienst mit einer anderen Update-Quelle und einem anderen
+    /// Ort der Installation; für Tests gegen einen Fake von GitHub am
+    /// Loopback (HUM-382).
+    ///
+    /// `public_key` ist die rohe öffentliche Hälfte eines Testschlüssels,
+    /// `allow_private` erlaubt Loopback und Klartext. `exe` und `root`
+    /// ersetzen den Pfad des Daemons und die Wurzel, unter der die Ablage der
+    /// Paketmanager gesucht wird.
+    ///
+    /// # Errors
+    ///
+    /// Wie der Verbindungsstapel des Daemons.
+    pub fn with_update_source(
+        mut self,
+        config: &Config,
+        latest_url: url::Url,
+        download_prefix: String,
+        public_key: [u8; 32],
+        exe: std::path::PathBuf,
+        root: std::path::PathBuf,
+    ) -> Result<Self, Diagnostic> {
+        let source = UpdateSource {
+            latest_url,
+            download_prefix,
+            public_key,
+            allow_private: true,
+        };
+        self.self_update = Some(Arc::new(build_self_update(config, Ok(source))?));
+        self.updates = Arc::new(UpdateSetup {
+            updater: crate::update::Updater::new(env!("CARGO_PKG_VERSION")),
+            exe,
+            host: crate::update::Host {
+                root,
+                macos: cfg!(target_os = "macos"),
+            },
+        });
+        Ok(self)
     }
 
     /// Derselbe Dienst, der aus der Aufzeichnung liest.
@@ -1500,6 +1577,7 @@ impl v1::humanitl_server::Humanitl for IpcServer {
     type SandboxStream = BoxStream<Result<v1::SandboxEvent, Status>>;
     type TerminalStream = BoxStream<Result<v1::TerminalOutput, Status>>;
     type DiscoverLlmStream = BoxStream<Result<v1::DiscoverResult, Status>>;
+    type UpdateStream = BoxStream<Result<v1::UpdateEvent, Status>>;
 
     async fn get_info(&self, _request: Request<()>) -> Result<Response<v1::Info>, Status> {
         Ok(Response::new(self.info.clone()))
@@ -2087,13 +2165,42 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         Ok(Response::new(list))
     }
 
-    /// Was ein Sandbox-Lauf im Projektverzeichnis hinterlassen hat.
+    /// Updates von Humanitl selbst (HUM-382).
     ///
-    /// Dieselbe Reihenfolge wie bei `GetBody` und `ProbeLlm`: erst die Anfrage
-    /// lesen, dann fragen, ob dieser Daemon sie beantworten kann. Eine Kennung,
-    /// die keine ist, bleibt auch mit Aufzeichnung keine; andersherum
-    /// antwortete ein Daemon ohne Aufzeichnung auf denselben Unsinn
-    /// `RECORDER_001` und der Fake `IPC_005`.
+    /// `Check` fragt GitHub, wenn `force` gesetzt ist oder `update.check` an
+    /// ist und der letzte Versuch einen Tag zurückliegt, und antwortet sonst
+    /// mit dem gemerkten Stand. `Apply` prüft das Manifest neu, lädt, prüft
+    /// und tauscht; der Strom trägt den Fortschritt.
+    async fn update(
+        &self,
+        request: Request<v1::UpdateRequest>,
+    ) -> Result<Response<Self::UpdateStream>, Status> {
+        let Some(self_update) = self.self_update.clone() else {
+            return Err(diagnostic_to_status(
+                &Diagnostic::builder(codes::UPDATE_001, Severity::Error)
+                    .why("this daemon could not build its connection to GitHub".to_owned())
+                    .build(),
+            ));
+        };
+        match request.into_inner().op {
+            Some(v1::update_request::Op::Check(check)) => {
+                let event = self.update_check(&self_update, &check).await?;
+                Ok(Response::new(Box::pin(tokio_stream::once(Ok(event)))))
+            }
+            Some(v1::update_request::Op::Apply(apply)) => {
+                let rx = self.update_apply(self_update, &apply).await?;
+                Ok(Response::new(Box::pin(
+                    tokio_stream::wrappers::ReceiverStream::new(rx),
+                )))
+            }
+            None => Err(diagnostic_to_status(
+                &Diagnostic::builder(codes::IPC_006, Severity::Error)
+                    .why("an Update request needs check or apply".to_owned())
+                    .build(),
+            )),
+        }
+    }
+
     /// Eine weitere Shell in der laufenden Sandbox (HUM-299).
     ///
     /// Ohne Sandbox wie `Terminal`: `IPC_006`. Jeder Befund geht als Status
@@ -2121,6 +2228,13 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
     }
 
+    /// Was ein Sandbox-Lauf im Projektverzeichnis hinterlassen hat.
+    ///
+    /// Dieselbe Reihenfolge wie bei `GetBody` und `ProbeLlm`: erst die Anfrage
+    /// lesen, dann fragen, ob dieser Daemon sie beantworten kann. Eine Kennung,
+    /// die keine ist, bleibt auch mit Aufzeichnung keine; andersherum
+    /// antwortete ein Daemon ohne Aufzeichnung auf denselben Unsinn
+    /// `RECORDER_001` und der Fake `IPC_005`.
     async fn get_session_summary(
         &self,
         request: Request<v1::SessionSummaryRef>,
@@ -2184,6 +2298,194 @@ fn build_llm_probe(config: &Config) -> Result<LlmProbe, Diagnostic> {
         Duration::from_secs(config.limits.header_timeout_secs),
     );
     Ok(LlmProbe::new(upstream))
+}
+
+impl IpcServer {
+    /// Wo der Daemon vermerkt, welche Version er zuletzt an welches Ziel
+    /// installiert hat (HUM-382, Untergrenze gegen Downgrades).
+    fn update_ledger(&self) -> std::path::PathBuf {
+        self.doctor.paths.data_dir().join("update-installed.json")
+    }
+
+    /// Der AppImage-Pfad einer Anfrage, wenn er leer ist oder der Daemon ihm
+    /// traut ([`crate::update::appimage_trusted`]).
+    fn trusted_appimage<'a>(&self, requested: &'a str) -> Result<&'a str, Diagnostic> {
+        if requested.is_empty() {
+            return Ok(requested);
+        }
+        let data = self.doctor.paths.data_dir();
+        if crate::update::appimage_trusted(
+            Path::new(requested),
+            &data.join(crate::update::APPIMAGE_RECORD),
+            &self.update_ledger(),
+        ) {
+            Ok(requested)
+        } else {
+            Err(Diagnostic::builder(codes::UPDATE_004, Severity::Error)
+                .why(
+                    "the AppImage named in the request is not the one this daemon was installed \
+                     from; start Humanitl from its AppImage once, then update"
+                        .to_owned(),
+                )
+                .build())
+        }
+    }
+
+    /// `Update(Check)` (HUM-382): fragt, wenn es fällig oder verlangt ist,
+    /// und antwortet mit dem Stand.
+    async fn update_check(
+        &self,
+        self_update: &SelfUpdate,
+        check: &v1::update_request::Check,
+    ) -> Result<v1::UpdateEvent, Status> {
+        let updates = &self.updates;
+        // Dieselbe Rückholung wie vor `Apply`, aber nur, wenn gerade keines
+        // läuft: Ein laufender Tausch ist kein stehen gebliebener.
+        // Ein AppImage-Pfad, dem der Daemon nicht traut, zählt für `Check`
+        // nicht: weder Rückholung noch Erkennung über ihn.
+        let appimage = self.trusted_appimage(&check.appimage).unwrap_or_default();
+        if let Ok(_guard) = Arc::clone(&updates.updater.applying).try_lock_owned() {
+            update_recover(updates, appimage)
+                .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        }
+        let install = update_install(updates, appimage);
+        let paths = self.doctor.paths.clone();
+        let enabled = tokio::task::spawn_blocking(move || update_check_enabled(&paths))
+            .await
+            .unwrap_or(true);
+        let now = std::time::SystemTime::now();
+        if check.force || (enabled && updates.updater.due(now)) {
+            updates.updater.attempted(now);
+            match self_update.latest(install.manifest()).await {
+                Ok(release) => {
+                    let version = release.version.to_string();
+                    let floor = crate::update::installed_floor(
+                        &install,
+                        env!("CARGO_PKG_VERSION"),
+                        &self.update_ledger(),
+                    );
+                    updates.updater.record(
+                        crate::update::Offer {
+                            newer: crate::update::above_floor(&version, floor),
+                            version,
+                            size: release.size,
+                        },
+                        now,
+                    );
+                }
+                Err(diagnostic) if check.force => {
+                    return Err(diagnostic_to_status(&diagnostic));
+                }
+                Err(diagnostic) => tracing::info!(
+                    code = %diagnostic.code,
+                    why = %diagnostic.why,
+                    "the daily update check failed"
+                ),
+            }
+        }
+        Ok(v1::UpdateEvent {
+            event: Some(v1::update_event::Event::Status(
+                updates.updater.status(&install),
+            )),
+        })
+    }
+
+    /// `Update(Apply)` (HUM-382): alle Prüfungen vor dem ersten Byte, dann
+    /// eine Aufgabe, die lädt, prüft und tauscht.
+    async fn update_apply(
+        &self,
+        self_update: Arc<SelfUpdate>,
+        apply: &v1::update_request::Apply,
+    ) -> Result<tokio::sync::mpsc::Receiver<Result<v1::UpdateEvent, Status>>, Status> {
+        let Ok(guard) = Arc::clone(&self.updates.updater.applying).try_lock_owned() else {
+            return Err(diagnostic_to_status(
+                &Diagnostic::builder(codes::UPDATE_005, Severity::Error)
+                    .why("another update is being installed right now".to_owned())
+                    .build(),
+            ));
+        };
+        // Unter der Sperre und vor allem anderen, auch vor jeder Anfrage ins
+        // Netz: einen stehen gebliebenen Tausch zurückholen. Erst danach gibt
+        // es ein Ziel, das die Erkennung findet (Review zu HUM-382).
+        // Ein AppImage-Pfad aus der Anfrage, der nicht vermerkt ist, wird vor
+        // jeder Änderung im Dateisystem abgelehnt.
+        let appimage = self
+            .trusted_appimage(&apply.appimage)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        update_recover(&self.updates, appimage)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        let install = update_install(&self.updates, appimage);
+        crate::update::refusal(&install)
+            .map_or(Ok(()), |diagnostic| Err(diagnostic_to_status(&diagnostic)))?;
+        let release = self_update
+            .latest(install.manifest())
+            .await
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        let version = release.version.to_string();
+        let ledger = self.update_ledger();
+        let floor = crate::update::installed_floor(&install, env!("CARGO_PKG_VERSION"), &ledger);
+        crate::update::offer_matches(&apply.version, &version, floor)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        if matches!(install, crate::update::Install::AppBundle(_)) {
+            crate::update::macos_at_least(&release.min_os)
+                .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        }
+        let work = crate::update::Workdir::create(&self.doctor.paths.runtime_dir().path)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        let (tx, rx) = tokio::sync::mpsc::channel(32);
+        let total = release.size;
+        let dest = work.path().join("download");
+        let fetch = {
+            let tx = tx.clone();
+            let dest = dest.clone();
+            async move {
+                let step = (total / 100).max(256 * 1024);
+                let mut next = 0;
+                self_update
+                    .download(&release, &dest, |done| {
+                        if done >= next || done == total {
+                            next = done.saturating_add(step);
+                            crate::update::send_progress(
+                                &tx,
+                                v1::UpdateStage::Downloading,
+                                done,
+                                total,
+                            );
+                        }
+                    })
+                    .await
+            }
+        };
+        tokio::spawn(crate::update::finish_apply(
+            fetch, install, version, work, dest, total, tx, guard, ledger,
+        ));
+        Ok(rx)
+    }
+}
+
+/// Baut den Verbindungsstapel der Updates (HUM-382).
+///
+/// Wie bei der Endpunkt-Probe ein eigener Stapel mit dem Egress `Direct`:
+/// Die Frage nach einem Release ist die eine Verbindung, die der Daemon für
+/// sich selbst aufbaut, und sie geht nie über den Proxy der Sandbox. Die
+/// Vertrauensanker entscheidet `tls.trust_system_store` wie überall.
+fn build_self_update(
+    config: &Config,
+    source: Result<UpdateSource, Diagnostic>,
+) -> Result<SelfUpdate, Diagnostic> {
+    let source = source?;
+    let resolver = Arc::new(ResolverPort::from_config(&config.resolver)?);
+    let client_tls = ClientTls::configured(config.tls.trust_system_store, &[], false)?;
+    let upstream = Upstream::new(
+        Arc::new(Direct::new(Duration::from_secs(
+            config.limits.connect_timeout_secs,
+        ))),
+        resolver as Arc<dyn Resolver>,
+        client_tls,
+        config.resolver.prefer,
+        Duration::from_secs(config.limits.header_timeout_secs),
+    );
+    Ok(SelfUpdate::new(upstream, source, env!("CARGO_PKG_VERSION")))
 }
 
 /// Der Befund für einen Daemon ohne Endpunkt-Probe.
@@ -2342,6 +2644,30 @@ where
     Ok(())
 }
 
+/// Der Weg dieser Installation; `appimage` aus dem Auftrag, leer heißt keins.
+fn update_install(updates: &UpdateSetup, appimage: &str) -> crate::update::Install {
+    let appimage = (!appimage.is_empty()).then(|| Path::new(appimage));
+    crate::update::detect(&updates.exe, appimage, &updates.host)
+}
+
+/// [`crate::update::recover_local`] für diese Installation.
+fn update_recover(updates: &UpdateSetup, appimage: &str) -> Result<(), Diagnostic> {
+    let appimage = (!appimage.is_empty()).then(|| Path::new(appimage));
+    crate::update::recover_local(&updates.exe, appimage, &updates.host)
+}
+
+/// `update.check` aus der Konfiguration, wie sie jetzt auf der Platte steht;
+/// unlesbar heißt an, die Vorgabe.
+fn update_check_enabled(paths: &humanitl_config::Paths) -> bool {
+    humanitl_config::resolve(
+        &humanitl_config::ProfileSelection::default(),
+        None,
+        paths.env(),
+        &[],
+    )
+    .map_or(true, |resolved| resolved.config.update.check)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -2355,11 +2681,11 @@ mod tests {
         Authority, BodyRef, Diagnostic, Flow, FlowEvent, FlowId, HostName, HttpRequest, Method,
         Scheme, SessionId, Severity, TransitionInput,
     };
+    use humanitl_proxy::ConnMeta;
     use humanitl_proxy::registry::FlowRecord;
-    use humanitl_proxy::{ConnMeta, FlowRegistry, HoldQueue};
     use tonic::Request;
 
-    use super::{CAPABILITIES, IpcServer, unfinished};
+    use super::{CAPABILITIES, FlowRegistry, HoldQueue, IpcServer, unfinished};
     use crate::v1;
     use crate::v1::humanitl_server::Humanitl as _;
 
@@ -2540,7 +2866,11 @@ mod tests {
             .into_inner();
         assert_eq!(info.proto_major, crate::PROTO_MAJOR);
         assert_eq!(info.proto_minor, crate::PROTO_MINOR);
-        assert_eq!(info.capabilities, CAPABILITIES);
+        // Dazu `update`, weil der Stapel der Updates gebaut werden konnte
+        // (HUM-382).
+        let mut expected: Vec<&str> = CAPABILITIES.to_vec();
+        expected.push("update");
+        assert_eq!(info.capabilities, expected);
         assert!(!info.session_id.is_empty());
     }
 

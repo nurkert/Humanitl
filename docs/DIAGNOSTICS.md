@@ -34,6 +34,7 @@ Entfernen eines Codes.
 | agent | `AGENT` | 001 | 009 | Agent-Adapter: Startkommando, Vorlagen, Vorprüfung vor dem Start |
 | edit | `EDIT` | 001 | 009 | Die bearbeitete Anfrage einer `AllowEdited`-Entscheidung (HUM-047) |
 | hold | `HOLD` | 001 | 009 | Was eine Freigabe verweigert, obwohl ein Mensch sie wollte: 004 ein bestätigtes Geheimnis unter `hold.hard_block_checksum_secrets` (HUM-049); 001-003 sind nicht vergeben |
+| update | `UPDATE` | 001 | 009 | Updates of Humanitl itself (HUM-382): asking GitHub for the latest release, the signed manifest, the download and the exchange of the app bundle |
 
 ## Codes
 
@@ -1388,4 +1389,46 @@ Bestätigtes Geheimnis gesperrt
 **Auslöser.** Die Anfrage oder ihre bearbeitete Fassung trägt einen prüfsummen-bestätigten Fund der Art IBAN, Kreditkarte, API-Schlüssel oder JWT, und `hold.hard_block_checksum_secrets` ist an.
 
 **Fix.** `ChangeSetting` auf `hold.hard_block_checksum_secrets = false`; sonst geht die Anfrage nur ohne den Wert hinaus, im Editor ersetzt oder vom Agenten neu gestellt.
+
+### Bereich update
+
+#### UPDATE_001
+
+Update check failed
+
+**Auslöser.** Asking `api.github.com` for the latest release, or fetching its manifest and signature from `github.com`, failed: no answer, an error status, a redirect outside GitHub, a body over its cap, or a release without `update-macos.json` and `update-macos.json.sig`.
+
+**Fix.** `OpenUrl` on the releases page, where the newest version can be downloaded by hand; the check repeats on its own the next day.
+
+#### UPDATE_002
+
+Update manifest refused
+
+**Auslöser.** The manifest of the latest release carries no valid Ed25519 signature of the Humanitl release key, cannot be read, names a version that is not newer than this one or differs from the release tag, names a download outside `https://github.com/nurkert/Humanitl/releases/download/`, or needs a newer macOS than this Mac runs.
+
+**Fix.** No automatic fix: nothing is installed. `OpenUrl` on the releases page; a refused signature is worth a report, because only a release built by the project's pipeline carries one.
+
+#### UPDATE_003
+
+Downloaded update refused
+
+**Auslöser.** The zip that was downloaded is larger or smaller than the manifest says, its SHA-256 differs, it does not unpack to `Humanitl/Humanitl.app`, the app fails `codesign --verify --deep --strict`, lacks the entitlement `com.apple.security.files.user-selected.read-only`, or its version is not the one the manifest names.
+
+**Fix.** No automatic fix: the download is deleted and the installed app stays as it was. Try again later, or `OpenUrl` on the releases page for the manual download.
+
+#### UPDATE_004
+
+Update cannot be installed here
+
+**Auslöser.** `Apply` was asked on Linux, where the package manager installs updates, or the daemon does not run from a `Humanitl.app`, runs from a disk image under `/Volumes` or from App Translocation, or may not write the folder that holds the app.
+
+**Fix.** Under Linux `CopyCommand` with the upgrade command of the package manager (apt, dnf, AUR); on macOS `OpenUrl` on the releases page, or move Humanitl.app to /Applications first.
+
+#### UPDATE_005
+
+Update could not be installed
+
+**Auslöser.** Unpacking the zip or moving the new app into place failed after all checks passed, for example on a full disk or a folder that changed meanwhile. The previous app was restored under its old name; if even that failed, the sentence names where it lies.
+
+**Fix.** No automatic fix; the sentence names the step and the path. Try again, or `OpenUrl` on the releases page for the manual download.
 

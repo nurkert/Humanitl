@@ -51,7 +51,12 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `28` seit dem Server je Projekt und Profil (HUM-400):
+/// `30` seit den Updates aus der App (HUM-382): die RPC `Update` mit
+/// `UpdateRequest` (`Check`, `Apply`) und dem Strom aus `UpdateEvent`
+/// (`UpdateStatus` mit `UpdateMethod`, `UpdateProgress`, `UpdateInstalled`),
+/// und `Info.capabilities` nennt `update`.
+/// `29` war, was wirklich läuft (HUM-376).
+/// `28` war der Server je Projekt und Profil (HUM-400):
 /// `SandboxRequest.Start.llm_server` und `.Plan.llm_server` wählen einen
 /// gespeicherten Server für einen Lauf, `SandboxEvent.Status.llm_server`
 /// (`LlmServerChoice`) nennt den Server der Sitzung und woher die Wahl kommt,
@@ -164,7 +169,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 29;
+pub const PROTO_MINOR: u32 = 30;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -210,6 +215,7 @@ pub mod terminal;
 /// Werkzeug, das nur die Unit-Tests dieser Crate benutzen (HUM-267).
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod update;
 pub mod validate;
 pub mod work_dir;
 

@@ -286,6 +286,15 @@ const GROUP_OVERRIDES: &[GroupOverride] = &[
         after_higher: "true",
     },
     GroupOverride {
+        group: "update",
+        path: "update.check",
+        lower: "false",
+        higher: "true",
+        read: |config| config.update.check.to_string(),
+        after_lower: "false",
+        after_higher: "true",
+    },
+    GroupOverride {
         group: "findings",
         path: "findings.email_allow_domains",
         lower: "[\"a.example\"]",

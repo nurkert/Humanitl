@@ -236,6 +236,14 @@ Sprache, Erscheinungsbild und Meldungen der Oberfläche.
 | `ui.terminal_notices` | boolean | `true` | advanced | allowed | ja | Hinweiszeile des Daemons, wenn eine Anfrage des Agenten auf eine Entscheidung wartet oder entschieden ist. Sie geht als eigener Rahmen an jeden Client, nie in den Bytestrom des Agenten: Wer am Terminal sitzt, bekommt sie zwischen die Bytes geschrieben, und die Oberfläche zeigt sie im Streifen über dem Terminal. Der Streifen bleibt in jedem Fall, weil er aus dem Ereignisstrom kommt; dieser Schalter betrifft nur den Rahmen. |
 | `ui.theme` | dark \| light \| system | `"dark"` | advanced | allowed | ja | Erscheinungsbild der Oberfläche. |
 
+### `update`
+
+Updates von Humanitl selbst (HUM-382).
+
+| Schlüssel | Typ | Vorgabe | Stufe | Projekt | Wirkung | Beschreibung |
+|---|---|---|---|---|---|---|
+| `update.check` | boolean | `true` | basic | denied | ja | Fragt höchstens einmal am Tag bei GitHub (`api.github.com`, `github.com`), ob es ein neueres Release gibt, und prüft dessen signiertes Manifest. Gesendet wird nur, was jeder Download sendet; installiert wird nie ohne Klick. Aus fragt der Daemon nur, wenn jemand ausdrücklich prüft (`humanitl update check`, „Jetzt prüfen"). Das Projekt-Profil kann den Schlüssel nicht setzen. |
+
 ## Alte Namen
 
 Diese Schlüssel funktionieren weiter. Steht der alte neben dem heutigen Namen, gewinnt der

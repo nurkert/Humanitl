@@ -1003,3 +1003,39 @@ extension LlmServerListToDomain on pb.LlmServerList {
     ),
   );
 }
+
+/// `UpdateStatus` (HUM-382).
+extension UpdateStatusToDomain on pb.UpdateStatus {
+  /// The domain status.
+  UpdateStatus toDomain() => UpdateStatus(
+    currentVersion: currentVersion,
+    latestVersion: latestVersion,
+    available: available,
+    canApply: canApply,
+    checkedAt: hasCheckedAt() ? _dateTime(checkedAt) : null,
+    size: size.toInt(),
+    notice: hasNotice() ? notice.toDomain() : null,
+    method: enumFromWire(UpdateMethod.values, method.value),
+    upgradeCommand: List<String>.unmodifiable(upgradeCommand),
+  );
+}
+
+/// `UpdateEvent` (HUM-382); null for an arm this build does not know.
+extension UpdateEventToDomain on pb.UpdateEvent {
+  /// The domain event.
+  UpdateEvent? toDomain() => switch (whichEvent()) {
+    pb.UpdateEvent_Event.status => UpdateEventStatus(status.toDomain()),
+    pb.UpdateEvent_Event.progress => UpdateEventProgress(
+      UpdateProgress(
+        stage: enumFromWire(UpdateStage.values, progress.stage.value),
+        doneBytes: progress.doneBytes.toInt(),
+        totalBytes: progress.totalBytes.toInt(),
+      ),
+    ),
+    pb.UpdateEvent_Event.installed => UpdateEventInstalled(
+      version: installed.version,
+      appPath: installed.appPath,
+    ),
+    pb.UpdateEvent_Event.notSet => null,
+  };
+}

@@ -133,7 +133,41 @@ pub async fn run(ctx: &Context, cmd: &DaemonCmd) -> Result<u8, Failure> {
         DaemonCmd::Status => status(ctx).await,
         DaemonCmd::Install(args) => {
             let appimage = ctx.env.non_empty("APPIMAGE").is_some();
-            match args.refresh.then(|| refresh_skip(ctx, appimage)).flatten() {
+            if let Some(image) = ctx.env.non_empty("APPIMAGE")
+                && let Err(why) = record_appimage(&ctx.paths.data_dir(), Path::new(image))
+            {
+                ctx.render
+                    .detail(&format!("the AppImage path was not recorded: {why}"));
+            }
+            let mut skip = args.refresh.then(|| refresh_skip(ctx, appimage)).flatten();
+            // Erneuern heißt neu starten. Ohne Prüfung beendete der Neustart
+            // eine laufende Sitzung, sobald ein neues AppImage startet, etwa
+            // nach einem Update aus der App (HUM-382, Review). Erst wenn der
+            // Daemon selbst sagt, dass ihn nichts hält, und geendet hat, wird
+            // `current` umgestellt; sonst bleibt die Kopie, wie sie ist, und
+            // der nächste Start des AppImages versucht es wieder.
+            if args.refresh && skip.is_none() {
+                let outcome = retire::outcome(ctx).await;
+                // Ein Daemon vor Vertrag 1.19 kennt die Bitte nicht; für ihn
+                // gilt dieselbe Regel wie im Neustart der App: weiter nur,
+                // wenn ein frisches `Sandbox(Status)` keine Sitzung zeigt.
+                let old_daemon_idle = if outcome == retire::Outcome::Unsupported {
+                    match ctx.connect_running().await {
+                        Ok(mut client) => {
+                            agent_session::ask(&mut client).await
+                                == agent_session::AgentSession::None
+                        }
+                        Err(_) => false,
+                    }
+                } else {
+                    false
+                };
+                skip = refresh_gate(outcome, old_daemon_idle);
+                if outcome == retire::Outcome::Retired {
+                    wait_until_gone(ctx).await;
+                }
+            }
+            match skip {
                 Some(skip) => {
                     report_refresh_skip(ctx, &skip);
                     Ok(EXIT_OK)
@@ -532,6 +566,66 @@ enum RefreshSkip {
     NotInstalled,
     /// Die installierte Kopie ist schon diese Fassung.
     UpToDate(String),
+    /// Eine Sitzung hält den Daemon, oder niemand kann es sagen; die Kopie
+    /// bleibt, bis er frei ist (HUM-382).
+    SessionHolds,
+}
+
+/// Vermerkt, aus welchem `AppImage` dieser Lauf kommt, unter
+/// `<data_dir>/appimage-path` mit `0600` (HUM-382). Der Daemon ersetzt und
+/// holt nur ein `AppImage` zurück, dessen Pfad hier steht oder das er selbst
+/// installiert hat; ein beliebiger Pfad aus einer Anfrage genügt nicht.
+fn record_appimage(data_dir: &Path, image: &Path) -> Result<(), String> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    if !image.is_absolute() {
+        return Err(format!("{} is not an absolute path", image.display()));
+    }
+    std::fs::create_dir_all(data_dir).map_err(|err| err.to_string())?;
+    let record = data_dir.join(humanitl_ipc::update::APPIMAGE_RECORD);
+    let next = data_dir.join(format!("{}.next", humanitl_ipc::update::APPIMAGE_RECORD));
+    let _ = std::fs::remove_file(&next);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&next)
+        .map_err(|err| format!("{}: {err}", next.display()))?;
+    writeln!(file, "{}", image.display())
+        .and_then(|()| file.sync_all())
+        .map_err(|err| format!("{}: {err}", next.display()))?;
+    std::fs::rename(&next, &record).map_err(|err| format!("{}: {err}", record.display()))
+}
+
+/// Ob `--refresh` nach der Bitte `retire-if-idle` weitermachen darf.
+///
+/// Nur wenn der Daemon geendet hat oder nachweislich keiner läuft (Token
+/// oder Socket fehlen). Ein Daemon vor Vertrag 1.19, der die Bitte nicht
+/// kennt, nur dann, wenn `old_daemon_idle` sagt, dass ein frisches
+/// `Sandbox(Status)` keine Sitzung zeigt. Eine Sitzung, die ihn hält, und
+/// eine unlesbare Antwort halten die Erneuerung an.
+fn refresh_gate(outcome: retire::Outcome, old_daemon_idle: bool) -> Option<RefreshSkip> {
+    match outcome {
+        retire::Outcome::Retired | retire::Outcome::NoDaemon => None,
+        retire::Outcome::Unsupported if old_daemon_idle => None,
+        retire::Outcome::Unsupported | retire::Outcome::Busy | retire::Outcome::Unknown => {
+            Some(RefreshSkip::SessionHolds)
+        }
+    }
+}
+
+/// Wartet, bis ein Daemon, der eben zugesagt hat zu enden, nicht mehr
+/// antwortet; höchstens [`READY_TIMEOUT`]. Sonst sähe `enable --now` ihn noch
+/// laufen, und `try-restart` fände ihn danach schon beendet: Der neue Daemon
+/// startete gar nicht.
+async fn wait_until_gone(ctx: &Context) {
+    let deadline = tokio::time::Instant::now() + READY_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
+        if ctx.connect_running().await.is_err() {
+            return;
+        }
+        tokio::time::sleep(READY_PAUSE).await;
+    }
 }
 
 impl RefreshSkip {
@@ -541,6 +635,7 @@ impl RefreshSkip {
             Self::NotAppImage => "not_appimage",
             Self::NotInstalled => "not_installed",
             Self::UpToDate(_) => "up_to_date",
+            Self::SessionHolds => "session_holds",
         }
     }
 }
@@ -623,6 +718,9 @@ fn report_refresh_skip(ctx: &Context, skip: &RefreshSkip) {
         RefreshSkip::UpToDate(version) => {
             format!("--refresh: the installed copy is already {version}; nothing to do")
         }
+        RefreshSkip::SessionHolds => "--refresh: an agent session holds the daemon; the copy \
+                                      is refreshed on the next start after the session"
+            .to_owned(),
     });
 }
 
@@ -1747,6 +1845,54 @@ pub fn check_proto(info: &v1::Info) -> Result<(), Failure> {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    #[test]
+    fn the_appimage_path_is_recorded_for_the_daemon_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data/humanitl");
+        let image = dir.path().join("Apps/Humanitl.AppImage");
+        super::record_appimage(&data, &image).unwrap();
+        let record = data.join(humanitl_ipc::update::APPIMAGE_RECORD);
+        assert_eq!(
+            std::fs::metadata(&record).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(humanitl_ipc::update::appimage_trusted(
+            &image,
+            &record,
+            &data.join("ledger.json")
+        ));
+        assert!(!humanitl_ipc::update::appimage_trusted(
+            &dir.path().join("Victim.AppImage"),
+            &record,
+            &data.join("ledger.json")
+        ));
+        assert!(super::record_appimage(&data, std::path::Path::new("rel.AppImage")).is_err());
+    }
+
+    #[test]
+    fn refresh_waits_for_a_session_and_for_an_unreadable_answer() {
+        use super::{RefreshSkip, refresh_gate, retire::Outcome};
+        for idle in [false, true] {
+            assert_eq!(
+                refresh_gate(Outcome::Busy, idle),
+                Some(RefreshSkip::SessionHolds)
+            );
+            assert_eq!(
+                refresh_gate(Outcome::Unknown, idle),
+                Some(RefreshSkip::SessionHolds)
+            );
+            assert_eq!(refresh_gate(Outcome::Retired, idle), None);
+            assert_eq!(refresh_gate(Outcome::NoDaemon, idle), None);
+        }
+        // Ein Daemon vor 1.19: nur wenn `Sandbox(Status)` keine Sitzung zeigt.
+        assert_eq!(
+            refresh_gate(Outcome::Unsupported, false),
+            Some(RefreshSkip::SessionHolds)
+        );
+        assert_eq!(refresh_gate(Outcome::Unsupported, true), None);
+    }
 
     use std::os::unix::fs::MetadataExt as _;
 

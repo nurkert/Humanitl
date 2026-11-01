@@ -123,7 +123,8 @@ const List<String> installServiceArguments = <String>[
 /// (HUM-044, Schritt 7): Was hier läuft, schreibt eine systemd-Unit, und der
 /// einzige Pfad, dem diese Anwendung dafür traut, ist ihr eigener Nachbar.
 ///
-/// **Zwei Orte, in dieser Reihenfolge.** Das Paket legt beides in denselben
+/// **Zwei Orte, in dieser Reihenfolge**, dazu im Release-Archiv ein dritter
+/// (`<root>/bin` neben `<root>/app`, HUM-382). Das Paket legt beides in denselben
 /// Baum, aber nicht auf dieselbe Ebene (HUM-053, `backlog/sprint-4.md`): Das
 /// Flutter-Binary liegt als `/usr/lib/humanitl/humanitl`, die Kommandozeile
 /// eine Ebene tiefer als `/usr/lib/humanitl/bin/humanitl`, und `/usr/bin/humanitl`
@@ -158,10 +159,20 @@ const List<String> installServiceArguments = <String>[
   final int Function(String) mode =
       modeOf ?? ((String path) => File(path).statSync().mode);
   final bool Function(String) admin = adminOwned ?? _rootAdminOnMac;
+  // Das Release-Archiv legt die App unter `<root>/app/humanitl` und die
+  // Kommandozeile unter `<root>/bin/humanitl` (HUM-382,
+  // `packaging/release/build-tarball.sh`): ein dritter Ort, nur wenn die App
+  // in einem Ordner `app` liegt, mit derselben Prüfung des Eigentums.
+  final int parentSlash = directory.lastIndexOf('/');
+  final String? archiveBin =
+      parentSlash > 0 && directory.substring(parentSlash + 1) == 'app'
+      ? '${directory.substring(0, parentSlash)}/bin/$installServiceBinary'
+      : null;
   String? refusal;
   for (final String candidate in <String>[
     '$directory/bin/$installServiceBinary',
     '$directory/$installServiceBinary',
+    ?archiveBin,
   ]) {
     if (candidate == running || !present(candidate)) {
       continue;

@@ -1357,6 +1357,15 @@ const EXPECTED_RPCS: &[(&str, &str, &str, bool, bool)] = &[
         false,
         false,
     ),
+    // HUM-382: Updates von Humanitl selbst. Server-Strom: `Check` liefert
+    // genau einen Stand, `Apply` Fortschritt und am Ende `installed`.
+    (
+        "Update",
+        ".humanitl.v1.UpdateRequest",
+        ".humanitl.v1.UpdateEvent",
+        false,
+        true,
+    ),
 ];
 
 #[test]

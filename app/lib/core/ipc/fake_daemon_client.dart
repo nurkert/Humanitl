@@ -88,7 +88,7 @@ class RecordedDecision {
 }
 
 /// [DaemonClient] without a daemon.
-class FakeDaemonClient implements DaemonClient {
+class FakeDaemonClient with FakeUpdates implements DaemonClient {
   /// Creates a fake that answers `GetInfo` with [info] (or [defaultInfo]),
   /// or throws [infoFailure] when given, and replays [script] (or
   /// [defaultScript]) on `subscribe`.
@@ -2653,7 +2653,8 @@ class FakeDaemonClient implements DaemonClient {
       }
       value = seconds;
     } else if (key == FormKeys.uiNotifications ||
-        key == FormKeys.tlsTrustSystemStore) {
+        key == FormKeys.tlsTrustSystemStore ||
+        key == FormKeys.updateCheck) {
       if (text != 'true' && text != 'false') {
         refuse('$key takes true or false, and $text is none');
       }
@@ -5302,3 +5303,86 @@ DisposableChanges fakeDisposableChanges() => const DisposableChanges(
     ),
   ],
 );
+
+// --- Updates (HUM-382) ----------------------------------------------------
+//
+// Ein Mixin am Ende der Datei, damit dieser Abschnitt die Klasse oben nur in
+// ihrer Kopfzeile berührt. Der Fake prüft nichts: Ob es ein Update gibt und
+// ob es sich installieren lässt, sagt der Test, wie sonst der Daemon.
+
+/// The scriptable update half of [FakeDaemonClient].
+mixin FakeUpdates {
+  /// What `Update(check)` answers. The fake daemon is no build, so by default
+  /// nothing is available.
+  UpdateStatus updateStatus = const UpdateStatus(currentVersion: '0.0.0');
+
+  /// When set, `Update(check)` throws it instead of answering.
+  Diagnostic? updateCheckFailure;
+
+  /// The `force` flag of every `Update(check)`, in call order.
+  final List<bool> updateChecks = <bool>[];
+
+  /// The `appimage` of every `Update(check)` and `Update(apply)`, in call
+  /// order.
+  final List<String> updateAppImages = <String>[];
+
+  /// The version of every `Update(apply)`, in call order.
+  final List<String> updateApplies = <String>[];
+
+  /// What `Update(apply)` yields when [applyScript] is null: progress, then
+  /// the installed app.
+  List<UpdateEvent> applyEvents = const <UpdateEvent>[
+    UpdateEventProgress(
+      UpdateProgress(
+        stage: UpdateStage.downloading,
+        doneBytes: 512,
+        totalBytes: 1024,
+      ),
+    ),
+    UpdateEventProgress(UpdateProgress(stage: UpdateStage.verifying)),
+    UpdateEventProgress(UpdateProgress(stage: UpdateStage.installing)),
+    UpdateEventInstalled(
+      version: '0.0.99',
+      appPath: '/Applications/Humanitl.app',
+    ),
+  ];
+
+  /// When set, `Update(apply)` ends with it after [applyEvents].
+  Diagnostic? applyFailure;
+
+  /// When set, `Update(apply)` returns this stream instead; a test drives
+  /// the stages itself.
+  Stream<UpdateEvent> Function(String version)? applyScript;
+
+  /// `Update(check)`.
+  Future<UpdateStatus> checkUpdate({
+    bool force = false,
+    String appimage = '',
+  }) async {
+    updateChecks.add(force);
+    updateAppImages.add(appimage);
+    if (updateCheckFailure case final Diagnostic failure) {
+      throw DaemonException(failure);
+    }
+    return updateStatus;
+  }
+
+  /// `Update(apply)`.
+  Stream<UpdateEvent> applyUpdate(String version, {String appimage = ''}) {
+    updateApplies.add(version);
+    updateAppImages.add(appimage);
+    if (applyScript case final Stream<UpdateEvent> Function(String) script) {
+      return script(version);
+    }
+    return _applyScripted();
+  }
+
+  Stream<UpdateEvent> _applyScripted() async* {
+    for (final UpdateEvent event in applyEvents) {
+      yield event;
+    }
+    if (applyFailure case final Diagnostic failure) {
+      throw DaemonException(failure);
+    }
+  }
+}

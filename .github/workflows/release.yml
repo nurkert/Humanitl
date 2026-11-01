@@ -385,6 +385,22 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Sign the update manifests of the archive and the AppImage
+        # HUM-382: Die App eines entpackten Archivs oder eines AppImages
+        # aktualisiert sich selbst, aber nur mit einem Manifest, das dieser
+        # Schluessel signiert hat. Das Geheimnis sieht nur dieser Schritt; das
+        # Skript schreibt es in eine Datei mit 0600 und loescht sie. Ein
+        # Tag-Lauf ohne Geheimnis bricht ab.
+        env:
+          HUMANITL_UPDATE_SIGNING_KEY: ${{ secrets.HUMANITL_UPDATE_SIGNING_KEY }}
+          REQUIRE_SIGNING: ${{ needs.guard.outputs.publish == 'true' && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          ./packaging/release/sign-update.sh "$VERSION" \
+            "dist/humanitl-${VERSION}-linux-x86_64.tar.gz" update-linux-x86_64.json 0 dist
+          ./packaging/release/sign-update.sh "$VERSION" \
+            "dist/Humanitl-${VERSION}-x86_64.AppImage" update-linux-x86_64-appimage.json 0 dist
+
       - name: Release notes
         env:
           SHA: ${{ github.sha }}
@@ -589,6 +605,18 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Sign the update manifest of the zip
+        # HUM-382: Die App laedt das Zip nur, wenn dieses Manifest mit dem
+        # Release-Schluessel signiert ist; min_os ist das Deployment-Target
+        # der App. Das Geheimnis sieht nur dieser Schritt.
+        env:
+          HUMANITL_UPDATE_SIGNING_KEY: ${{ secrets.HUMANITL_UPDATE_SIGNING_KEY }}
+          REQUIRE_SIGNING: ${{ needs.guard.outputs.publish == 'true' && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          ./packaging/release/sign-update.sh "$VERSION" \
+            "dist-macos/Humanitl-${VERSION}-macos.zip" update-macos.json 12.0 dist-macos
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ needs.guard.outputs.artifact }}-macos
@@ -711,7 +739,8 @@ jobs:
           set -euo pipefail
           cd artefacts/macos
           shasum -a 256 -c SHA256SUMS-macos
-          cp "Humanitl-$VERSION-macos.dmg" "Humanitl-$VERSION-macos.zip" ../dist/
+          cp "Humanitl-$VERSION-macos.dmg" "Humanitl-$VERSION-macos.zip" \
+            update-macos.json update-macos.json.sig ../dist/
           cat SHA256SUMS-macos >> ../dist/SHA256SUMS
       - name: Create the release, if the tag still points at the checked commit
         # Pruefung und Anlegen in einem Schritt, damit zwischen beiden nichts
@@ -779,6 +808,9 @@ jobs:
             "humanitl-${VERSION}-linux-x86_64.tar.gz" \
             "Humanitl-${VERSION}-macos.dmg" \
             "Humanitl-${VERSION}-macos.zip" \
+            update-macos.json update-macos.json.sig \
+            update-linux-x86_64.json update-linux-x86_64.json.sig \
+            update-linux-x86_64-appimage.json update-linux-x86_64-appimage.json.sig \
             SHA256SUMS
 
           # Das Fenster zwischen Pruefung und Anlegen schliessen: Zeigt der Tag

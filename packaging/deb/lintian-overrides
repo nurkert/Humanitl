@@ -35,3 +35,8 @@ humanitl: no-manual-page [usr/bin/humanitl-app]
 # als Systemschriften.
 humanitl: opentype-font-prohibits-installable-embedding * [usr/lib/humanitl/data/flutter_assets/*]
 humanitl: truetype-font-wrong-filename [usr/lib/humanitl/data/flutter_assets/*]
+
+# Der Daemon liest nur, ob `/var/lib/dpkg/info/humanitl.list` existiert, um zu
+# wissen, ob dpkg ihn installiert hat und ein Update ueber apt laufen muss
+# (HUM-382). Er schreibt nichts in die Datenbank; das Update selbst macht apt.
+humanitl: uses-dpkg-database-directly [usr/lib/humanitl/bin/humanitld]

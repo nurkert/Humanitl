@@ -191,14 +191,20 @@ type TerminalInputs = Arc<std::sync::Mutex<Vec<&'static str>>>;
 impl FakeServer {
     /// Startet den Dienst und wartet, bis Socket und Token da sind.
     pub fn start(harness: &Harness) -> Self {
-        Self::start_with(harness, false, None, false)
+        Self::start_with(harness, false, None, false, false)
     }
 
     /// Wie [`FakeServer::start`], aber `GetInfo` nennt `version` als Fassung
     /// des Daemons (HUM-210): ein älterer Daemon, der nach einem Update noch
     /// antwortet.
     pub fn start_with_version(harness: &Harness, version: &str) -> Self {
-        Self::start_with(harness, false, Some(version.to_owned()), false)
+        Self::start_with(harness, false, Some(version.to_owned()), false, false)
+    }
+
+    /// Wie [`FakeServer::start`], aber ohne Sitzung: `retire_if_idle` sagt
+    /// `retired` (HUM-382). Der Standard-Fake spielt eine laufende Sitzung.
+    pub fn start_idle(harness: &Harness) -> Self {
+        Self::start_with(harness, false, None, false, true)
     }
 
     /// Wie [`FakeServer::start`], aber `Audit(Export)` meldet Erfolg und
@@ -206,7 +212,7 @@ impl FakeServer {
     /// schreibt, die der Aufrufer nicht hat, etwa ein eigenes `/tmp` unter
     /// `PrivateTmp`.
     pub fn start_with_silent_export(harness: &Harness) -> Self {
-        Self::start_with(harness, true, None, false)
+        Self::start_with(harness, true, None, false, false)
     }
 
     /// Wie [`FakeServer::start`], aber `Terminal` liest nach dem `Open` keine
@@ -214,7 +220,7 @@ impl FakeServer {
     /// Strom bleibt offen, bis der Client geht, und alles, was er schickt,
     /// staut sich im Transport.
     pub fn start_with_stalled_terminal(harness: &Harness) -> Self {
-        Self::start_with(harness, false, None, true)
+        Self::start_with(harness, false, None, true, false)
     }
 
     fn start_with(
@@ -222,6 +228,7 @@ impl FakeServer {
         silent_export: bool,
         version: Option<String>,
         stall_terminal: bool,
+        idle: bool,
     ) -> Self {
         let paths = harness.paths();
         let socket = paths.daemon_socket();
@@ -259,6 +266,7 @@ impl FakeServer {
                             version,
                             terminal_inputs: recorded,
                             stall_terminal,
+                            idle,
                         }),
                         token,
                     ));
@@ -401,6 +409,10 @@ struct SilentExport {
     terminal_inputs: TerminalInputs,
     /// Wahr, wenn `Terminal` nach dem `Open` nichts mehr liest.
     stall_terminal: bool,
+    /// Wahr, wenn `retire_if_idle` mit „ich ende" antwortet: ein Daemon ohne
+    /// Sitzung (HUM-382). Der Fake läuft danach weiter, wie ein Daemon, den
+    /// systemd sofort wieder startet.
+    idle: bool,
 }
 
 #[tonic::async_trait]
@@ -431,6 +443,13 @@ impl DaemonApi for SilentExport {
         self.inner.rules(request).await
     }
     fn sandbox(&self, request: v1::SandboxRequest) -> BoxStream<v1::SandboxEvent> {
+        if self.idle && matches!(request.op, Some(v1::sandbox_request::Op::RetireIfIdle(()))) {
+            return Box::pin(tonic::codegen::tokio_stream::iter(vec![v1::SandboxEvent {
+                event: Some(v1::sandbox_event::Event::Retire(
+                    v1::sandbox_event::Retire { retired: true },
+                )),
+            }]));
+        }
         self.inner.sandbox(request)
     }
     fn terminal(&self, input: BoxStream<v1::TerminalInput>) -> BoxStream<v1::TerminalOutput> {

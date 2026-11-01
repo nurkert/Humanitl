@@ -1537,6 +1537,29 @@ an endpoint without a saved server (`CONFIG_021`): the agent would talk to one
 server while the proxy lets another through. `humanitl run` gives the session
 its own server.
 
+## `humanitl update`
+
+`humanitl update check` asks the daemon to look at GitHub now, even when `update.check` is off,
+and prints whether a newer release exists. The daemon believes a version only after the release's
+update manifest passed its Ed25519 signature check (`UPDATE_002` otherwise); without an answer from
+GitHub the command ends with `UPDATE_001`. `--json` prints one object with `current_version`,
+`latest_version`, `available`, `can_apply`, `method` and `upgrade_command`.
+
+`humanitl update apply` installs that release the way this installation takes it (HUM-382):
+
+| `method` | What happens |
+|---|---|
+| `app_bundle` | macOS: the daemon downloads the zip, checks size, SHA-256, code signature, entitlement and version, and swaps `Humanitl.app` |
+| `archive` | Linux, an unpacked release archive in a folder of your own: the same with the `tar.gz`, swapping the folder |
+| `appimage` | Linux, run from an AppImage (`$APPIMAGE`): the same with the AppImage file |
+| `apt`, `dnf` | the command line runs `pkexec apt-get install --only-upgrade -y humanitl` or `pkexec dnf upgrade -y humanitl`, a fixed argument vector without a shell |
+| `manual` | nothing runs; the finding (`UPDATE_004`) names the command to copy, for example for the AUR |
+
+The previous version stays as `<name>.previous` until the new one is in place and is moved back if
+the swap fails (`UPDATE_005`). Afterwards the daemon still runs the old program; restart it with
+`humanitl daemon retire-if-idle` and `humanitl daemon restart` (macOS) or
+`systemctl --user restart humanitld.service` (Linux), which never ends a running session.
+
 ## The global switches
 
 Five switches apply to every subcommand, because `clap` carries them as

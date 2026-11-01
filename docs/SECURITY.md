@@ -1194,6 +1194,105 @@ The suggestion `LIMIT_001` offers at a block is an `ask` rule with `stream: true
 With the hard block on, `stream: true` never applies and `LIMIT_001` suggests raising the cap
 instead.
 
+### Updates from inside the app
+
+Since HUM-382 the daemon asks GitHub at most once a day whether a newer release exists, and
+installs one when a person clicks "Update" (or runs `humanitl update apply`). This is the one
+connection the daemon makes for itself. It is not part of the sandbox's door: it uses its own
+connection stack with the egress `Direct` (the same construction as the endpoint probe), never the
+proxy the agent talks to, and no request of the agent can trigger it.
+
+**What is contacted.** `https://api.github.com/repos/nurkert/Humanitl/releases/latest` for the
+latest release, then the release's files under
+`https://github.com/nurkert/Humanitl/releases/download/`, and the storage GitHub redirects a
+download to (`objects.githubusercontent.com`, `release-assets.githubusercontent.com`; a redirect
+anywhere else, or over plain HTTP, is refused with `UPDATE_001`). The requests carry the address,
+`Accept` and `User-Agent: Humanitl/<version>`, nothing else: no identifier, no configuration, no
+statistics. GitHub learns the IP address and the installed version, as with any download.
+
+**How the signature binds an update to the key.** The release pipeline writes one manifest per
+installable file (`update-macos.json` for the zip, `update-linux-x86_64.json` for the archive,
+`update-linux-x86_64-appimage.json` for the AppImage) with `version`, `url`, `sha256`, `size` and
+`min_os`, and signs its exact bytes with Ed25519 (`openssl pkeyutl -sign -rawin`) using the
+repository secret `HUMANITL_UPDATE_SIGNING_KEY`
+([`packaging/release/sign-update.sh`](../packaging/release/sign-update.sh)). The step checks that
+the secret matches the public key built into the daemon before it signs; a tag build without the
+secret fails. The daemon verifies the signature against `RELEASE_KEY` in
+`daemon/crates/proxy/src/self_update.rs` (raw 32 bytes, base64) with the Ed25519 implementation of
+the TLS stack it already ships (ring through rustls) before it reads a single field. Then:
+
+- the version must be of the form `MAJOR.MINOR.PATCH`, equal to the release tag, and newer than
+  the highest of three: the running daemon, what is installed at the target now (the bundle's
+  `Info.plist` on macOS) and the highest version this daemon ever installed there, kept in
+  `update-installed.json` under the data directory. The record is written before the swap; if it cannot be written, nothing is swapped, and a failed swap resets it. A replayed older
+  manifest is refused, also while the restart after an update still waits for a session to end;
+- the URL must lie under `https://github.com/nurkert/Humanitl/releases/download/` after `..`
+  segments are resolved, without user info, query or fragment, and it must be exactly
+  `…/download/v<version>/<file>` with the file name of the manifest's kind
+  (`Humanitl-<version>-macos.zip`, `humanitl-<version>-linux-x86_64.tar.gz`,
+  `Humanitl-<version>-x86_64.AppImage`), so a signed manifest of one kind or release never stands
+  in for another;
+- the download is counted and hashed while it is written; one byte more than `size` aborts, and a
+  different SHA-256 refuses (`UPDATE_003`);
+- `Apply` checks the manifest afresh and refuses when it now names another version than the one the
+  person was offered.
+
+**How it is installed.** All work happens in a `0700` directory under the runtime directory, which
+is removed afterwards. On macOS the zip is unpacked with `ditto`, the app must pass
+`codesign --verify --deep --strict`, carry the entitlement
+`com.apple.security.files.user-selected.read-only` and the manifest's version in its `Info.plist`,
+like `packaging/macos/build-app.sh` checks; the copy placed next to the target is checked again.
+An AppImage is replaced or restored only at a path the daemon trusts: the one `humanitl daemon install` recorded from the AppImage itself (`<data_dir>/appimage-path`, `0600`) or one the daemon installed before; any other path in a request is refused with `UPDATE_004` before anything on disk changes. An unpacked archive must hold exactly `humanitl-<version>-linux-x86_64/` with the three programs
+and the app; an AppImage is taken as the signed bytes. Then the target is renamed to
+`.previous`, the new one moved into place, and `.previous` removed only after that succeeded; if
+the second step fails, `.previous` is moved back (`UPDATE_005`). A swap that stopped halfway
+(target missing, `.previous` present) is restored before anything else, under the lock of `Apply`
+and before any request to GitHub, with the target taken from the path of the running installation; `.previous` is never
+deleted while the target is missing, and if it cannot be moved back the update refuses. A bundle under `/Volumes`, in App
+Translocation, a build tree or a folder this user cannot write is never touched (`UPDATE_004`).
+The download by the daemon carries no quarantine flag, so Gatekeeper does not stop the new app;
+the signature check above replaces it for this one path, and the ad-hoc code signature only proves
+that the bundle is intact, not who built it.
+
+**Packages.** A package from the APT or dnf repository is never replaced by the daemon. The app
+runs a fixed argument vector without a shell, `pkexec apt-get install --only-upgrade -y humanitl`
+or `pkexec dnf upgrade -y humanitl`, and only if the daemon named exactly this vector; polkit asks
+for the administrator password and the package manager verifies its repository signatures. The
+daemon does not run `pkexec` itself: as a user service it has no polkit agent of the session. The
+AUR, a package installed from a file and a machine without `pkexec` get the command to copy
+(`UPDATE_004`); no AUR helper is ever run.
+
+**The restart.** After a swap the app restarts the daemon through the existing retire-if-idle path:
+the daemon ends only when no start holds a claim and no sandbox runs, so an agent session is never
+cut off without the existing second answer. A restart that fails is shown in the status bar and
+nothing is relaunched; a session that holds the daemon is no failure, the new app then offers the
+existing restart button. An AppImage refreshes its copy of the daemon on every start
+(`humanitl daemon install --refresh`); since HUM-382 that switches the copy and restarts only after
+`retire-if-idle` answered `retired` (or no daemon runs; a daemon older than contract 1.19 only when
+a fresh `Sandbox(Status)` shows no session), so relaunching the new AppImage never ends
+a session. The app of an unpacked archive finds its command line at `<root>/bin/humanitl` beside
+`<root>/app`, with the same ownership check as the other places.
+
+**What this does not cover.**
+
+- A stolen release key signs malicious updates that every installation accepts. The key lives only
+  as a repository secret, is visible only to the two signing steps of `release.yml`, and is never
+  printed. A new key needs a release that ships the new public key, signed with the old one.
+- A GitHub account taken over without the key cannot ship an update of its own. What it can do:
+  withhold updates or break the check (`UPDATE_001`); serve an older signed manifest (refused as not
+  newer than the installed version floor); serve a signed manifest under the wrong tag (refused,
+  version and tag must match) or under the wrong kind (refused, the file name is bound to the
+  manifest); delete a release so the previous one becomes "latest" again (refused as not newer);
+  and learn which addresses run which version.
+- The check reveals to GitHub that a Humanitl installation exists at this address and which
+  version it runs.
+- A package from the APT or dnf repository is as trustworthy as that repository's signing key;
+  the app only starts the package manager.
+
+**How to turn it off.** `update.check = false` in `config.toml`, or the switch "Check for updates
+automatically" in the settings. Then the daemon connects only when someone asks explicitly
+(`humanitl update check`, "Check now"). The key is closed to project profiles.
+
 ### Service hardening
 
 The systemd unit (`packaging/systemd/humanitld.service`) runs as a user service, never as a system
@@ -1428,6 +1527,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | Further shells next to the agent: the daemon asks PID 1 over an unnamed `SOCK_SEQPACKET` pair only it and PID 1 hold; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX`; at most four, ending with their process or the sandbox (HUM-299). |
 | 0.1.x | pi loads the globally installed extension `pi-web-access` (`agent.pi.web_access`, default `auto`, closed to project profiles); its requests go through the proxy like every other (HUM-309). |
 | 0.1.x | macOS: the disposable sandbox on an APFS clone, masks removed from the clone and denied in it, the real project sealed, the clone renamed before it is read, and a failed clone that is never silent: `auto` warns with `SANDBOX_033`, an explicit `disposable` refuses with `SANDBOX_030` (HUM-374, K-24). |
+| 0.1.x | Updates from inside the app: a daily check of GitHub (`update.check`, default on), manifests signed with Ed25519 and checked against a built-in key, size and SHA-256 checked while downloading, code signature and version checked before an atomic swap with restore; APT and dnf packages through `pkexec` and their package manager (HUM-382, [Updates](#updates-from-inside-the-app), K-25). |
 | 0.1.x | macOS: Seatbelt as the sandbox backend, a generated SBPL profile per session, the three guarantees restated and measured by the shim; the daemon as a launchd agent; socket and token under `~/Library/Application Support/Humanitl/run` (HUM-323, HUM-327, [section 12](#12-macos-seatbelt-instead-of-bubblewrap)). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap

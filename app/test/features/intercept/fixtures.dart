@@ -353,6 +353,17 @@ class TestDaemonClient implements DaemonClient {
     ),
   );
 
+  // Updates gehören der Statusleiste (HUM-382); dieser Client hat keine.
+  @override
+  Future<UpdateStatus> checkUpdate({
+    bool force = false,
+    String appimage = '',
+  }) async => const UpdateStatus();
+
+  @override
+  Stream<UpdateEvent> applyUpdate(String version, {String appimage = ''}) =>
+      const Stream<UpdateEvent>.empty();
+
   // Der Doctor und die Endpunkt-Probe (HUM-075, HUM-044) gehören dem
   // Setup-Bildschirm. Der leere Bericht ist hier die ehrliche Antwort: nicht
   // elf grüne Zeilen, sondern gar keine, denn dieser Client hat nichts

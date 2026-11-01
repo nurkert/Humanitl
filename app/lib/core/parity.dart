@@ -34,4 +34,6 @@ const parity = <String, String>{
   'Humanitl.SetConfig': 'core/ui/fix_control',
   'Humanitl.Subscribe': 'features/intercept/widgets/queue_pane',
   'Humanitl.Terminal': 'features/sandbox/widgets/terminal_pane',
+  // The notice "Humanitl X is available" with its Update button (HUM-382).
+  'Humanitl.Update': 'features/shell/widgets/update_notice',
 };

@@ -20,3 +20,4 @@ export 'rule.dart';
 export 'sandbox.dart';
 export 'settings.dart';
 export 'terminal.dart';
+export 'update.dart';

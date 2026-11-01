@@ -39,6 +39,7 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 | `Humanitl.SetConfig` | Ausnahme | `core/ui/fix_control` |
 | `Humanitl.Subscribe` | `humanitl run --ask terminal` | `features/intercept/widgets/queue_pane` |
 | `Humanitl.Terminal` | `humanitl sandbox attach`<br>`humanitl sandbox attach --shell` | `features/sandbox/widgets/terminal_pane` |
+| `Humanitl.Update` | `humanitl update apply`<br>`humanitl update check` | `features/shell/widgets/update_notice` |
 
 ## UI-Lücken
 

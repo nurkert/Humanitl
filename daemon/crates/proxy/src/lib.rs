@@ -78,6 +78,7 @@ pub mod pipeline;
 pub mod registry;
 pub mod resolver;
 pub mod rules_store;
+pub mod self_update;
 pub mod session;
 pub mod suggestion;
 pub mod tls;
@@ -116,6 +117,7 @@ pub use crate::resolver::{
     ResolverMetrics, ResolverPort, ResolverStats, SystemResolver,
 };
 pub use crate::rules_store::{Origin, ReloadReport, RulesStore, StoredRule};
+pub use crate::self_update::{SelfUpdate, UpdateSource};
 pub use crate::session::{SessionSettings, SessionState};
 pub use crate::tls_observe::{
     HandshakeWatch, TlsFailure, ToolHint, classify, diagnostic_for, tool_hint,
