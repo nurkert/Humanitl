@@ -33,6 +33,7 @@ class DaemonCheck extends StatelessWidget {
     required this.check,
     required this.onRetry,
     this.attempts = 0,
+    this.reconnecting = false,
     this.view = SetupStepView.focused,
     super.key,
   });
@@ -45,6 +46,15 @@ class DaemonCheck extends StatelessWidget {
 
   /// How many attempts failed so far; 0 hides the line.
   final int attempts;
+
+  /// True while a connection that stood a moment ago is taken up again within
+  /// its grace (HUM-385).
+  ///
+  /// A restart of the service takes the socket away for a second or two. The
+  /// row then asks, says why it is asking, and offers nothing to install: the
+  /// service was answering a moment ago. Once the grace is over, the finding
+  /// of the connection stands here as before, with its remedy.
+  final bool reconnecting;
 
   /// Tries the connection again, now.
   final VoidCallback onRetry;
@@ -67,7 +77,13 @@ class DaemonCheck extends StatelessWidget {
       title: setupCheckTitle(l10n, SetupCheckKind.daemon),
       view: view,
       primaryFix: fixIsPrimary,
-      body: down && attempts > 0
+      body: down && reconnecting
+          ? Text(
+              l10n.setupDaemonReconnecting,
+              key: const Key('setup-daemon-reconnecting'),
+              style: tokens.typography.mono12.tinted(tokens.colors.fg1),
+            )
+          : down && attempts > 0
           ? Text(
               l10n.setupDaemonAttempts(attempts),
               key: const Key('setup-daemon-attempts'),

@@ -49,6 +49,12 @@ SetupState setupState(Ref ref) => setupChecks(
 DaemonLink daemonLinkOf(ConnectionStatus status) => switch (status) {
   ConnectionConnecting() => const DaemonLinkConnecting(),
   ConnectionConnected(:final DaemonInfo info) => DaemonLinkUp(info),
+  // Eine Verbindung, die eben noch stand, kommt vielleicht gleich wieder,
+  // etwa nach `humanitl daemon restart` (HUM-385). Solange ihre Frist läuft,
+  // fragt die Zeile noch, ohne Befund und ohne den Knopf, der einen
+  // installierten Dienst neu installieren will. Danach steht der Befund wie
+  // bisher.
+  ConnectionFrozen(settling: true) => const DaemonLinkConnecting(),
   // Beide Fehlschläge sind für die Zeile dasselbe: Der Dienst antwortet nicht.
   // Was sie unterscheidet, entscheidet die Shell und nicht die Zeile -- ob der
   // Bildschirm der Setup-Bildschirm ist oder die Shell mit einem Banner

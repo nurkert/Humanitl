@@ -104,7 +104,9 @@ class StatusBar extends ConsumerWidget {
                             decoration: BoxDecoration(
                               // Orange und nicht rot: Rot heißt in diesem Programm
                               // blockiert und nichts anderes (`docs/UX.md` 3.3). Es
-                              // ist dieselbe Farbe, die das Banner darüber trägt.
+                              // ist dieselbe Farbe, die das Banner bei einem Ausfall
+                              // trägt; während es nur neu verbindet (HUM-385), ist
+                              // das Banner neutral und der Punkt sagt schon getrennt.
                               color: live
                                   ? tokens.state.allowed
                                   : tokens.stateColor(HFlowState.error),

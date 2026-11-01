@@ -3742,5 +3742,9 @@
   "shellUpdateRestartFailed": "Humanitl {version} is installed, but the daemon could not be restarted: {why}",
   "@shellUpdateRestartFailed": {"description": "Status bar after the update was installed and the daemon restart failed (HUM-382). Nothing was relaunched; why is the failed command and its output, untranslated.", "placeholders": {"version": {"type": "String"}, "why": {"type": "String"}}},
   "setupHeadSandboxPlanRefused": "The sandbox cannot start with this setup",
-  "@setupHeadSandboxPlanRefused": {"description": "Headline of the open machine step when the start plan of the daemon refuses for a reason that is not the project folder, for example CONFIG_003 for a sandbox backend this build does not have. The finding card under it names code and cause (HUM-384)."}
+  "@setupHeadSandboxPlanRefused": {"description": "Headline of the open machine step when the start plan of the daemon refuses for a reason that is not the project folder, for example CONFIG_003 for a sandbox backend this build does not have. The finding card under it names code and cause (HUM-384)."},
+  "setupDaemonReconnecting": "It answered a moment ago · reconnecting",
+  "@setupDaemonReconnecting": {"description": "Line under the background service step while a connection that stood a moment ago is taken up again, for example after humanitl daemon restart. Shown for the first few seconds instead of the failure and its install button (HUM-385)."},
+  "shellReconnectingTitle": "Reconnecting to the background service",
+  "@shellReconnectingTitle": {"description": "Calm title of the banner over the queue while a connection that stood a moment ago is taken up again within a few seconds, for example after a restart of the service. After that the banner shows shellFrozenTitle with the reason (HUM-385)."}
 }

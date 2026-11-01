@@ -1564,5 +1564,7 @@
   "diagUPDATE005Why": "Die neue Fassung ließ sich nach allen Prüfungen nicht an ihren Platz bringen. Die vorherige wird zurückgelegt; scheitert auch das, nennt der Befund, wo sie liegt.",
   "shellUpdateCopy": "Befehl kopieren",
   "shellUpdateRestartFailed": "Humanitl {version} ist installiert, aber der Daemon ließ sich nicht neu starten: {why}",
-  "setupHeadSandboxPlanRefused": "Mit dieser Einrichtung startet die Sandbox nicht"
+  "setupHeadSandboxPlanRefused": "Mit dieser Einrichtung startet die Sandbox nicht",
+  "setupDaemonReconnecting": "Hat eben noch geantwortet · verbinde neu",
+  "shellReconnectingTitle": "Verbinde neu mit dem Hintergrunddienst"
 }
