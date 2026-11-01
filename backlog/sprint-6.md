@@ -61,6 +61,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-383 | macOS: Im Vollbild nimmt die Kopfleiste den Platz der Ampel ein | S | HUM-342, HUM-378 |
 | HUM-387 | OpenCode erreicht ein lokales Modell über den Proxy | M | HUM-037, HUM-039, HUM-365 |
 | HUM-382 | Signierte Updates aus der App, ein Klick, macOS und Linux | L | HUM-284, HUM-326, HUM-325 |
+| HUM-388 | Website: neue Bilder im neutralen Grau mit einer echten Beispielsitzung | S | HUM-333, HUM-355 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -886,3 +887,12 @@ Folge-Kandidaten:
 - Schlüsselwechsel: ein Release, das einen zweiten öffentlichen Schlüssel einführt, signiert mit dem alten.
 - Manifeste für weitere Architekturen (aarch64 unter Linux), sobald es Builds dafür gibt.
 - Den Zeitpunkt der letzten Frage über einen Neustart des Daemons hinaus merken.
+
+## HUM-388 · Website: neue Bilder im neutralen Grau mit einer echten Beispielsitzung
+
+Rückmeldung des Inhabers vom 2026-11-01: Die Bilder auf humanitl.de zeigen noch das alte blaugraue Grau (vor HUM-355), und ihre Beispieldaten sind dünn (fünfzehnmal dieselbe npm-Anfrage).
+
+Akzeptanzkriterien:
+
+- Neue Sitzung `fixtures/sessions/showcase.jsonl`: ein Agent, der den PDF-Export eines Rechnungsdienstes repariert; Sprachmodell im LAN über die Durchreiche, ein `curl`-Upload der `.env` nach `paste.rs` mit drei Funden, npm, GitHub-API, eine von der mitgelieferten Regel geblockte Anfrage an `models.dev`, eine GraphQL-Anfrage mit Token und eine Fehlermeldung an Sentry. Alle Ids UUIDv7, alle Schlüssel erfunden oder Beispielwerte der Anbieter, nichts, was die Geheimnis-Erkennung von GitHub beim Push anschlägt. `fixtures/sessions/README.md` beschreibt sie.
+- Die sieben Bilder unter `website/src/assets/screens/` sind neu aufgenommen, vom aktuellen `main` gegen den Fake-Daemon mit dieser Sitzung, 2560 × 1352 px. Die Statusleiste mit `Daemon 0.0.0 · fake` ist abgeschnitten, alle vier Ecken bleiben rund und durchsichtig.

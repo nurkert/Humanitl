@@ -186,6 +186,18 @@ Sieben Vorgänge, jeder für einen anderen Bildschirm:
 6. Ein `TLS_001`-Befund samt Vorschlag, `CURL_CA_BUNDLE` zu setzen.
 7. Ein WebSocket-Upgrade auf `wss://ws.example.org/agent`, ebenfalls gehalten.
 
-Die Schlüssel und Adressen in beiden Dateien sind erfunden. Sie sehen echt
-genug aus, damit die Detektoren aus HUM-021 später an ihnen geprüft werden
-können.
+### `showcase.jsonl`
+
+Die Sitzung hinter den Bildern und dem Video auf humanitl.de: Ein Agent repariert
+den PDF-Export eines Rechnungsdienstes. Das Sprachmodell läuft im LAN
+(`192.168.1.50:8080`), seine Anfragen gehen durch die Durchreiche. Zuerst will
+`curl` die `.env` des Projekts nach `paste.rs` hochladen, mit drei Funden
+(Stripe-Testschlüssel, AWS-Beispielschlüssel, E-Mail-Adresse). Danach sieben `GET` an
+`registry.npmjs.org`, eine Abfrage der GitHub-API, `models.dev` von der
+mitgelieferten Regel geblockt, eine GraphQL-Anfrage mit GitHub-Token und eine
+Fehlermeldung an Sentry. Für die Aufnahmen läuft sie mit
+`--hold-timeout-secs 3600`, für das Video zusätzlich mit `--pause-at 500`.
+
+Die Schlüssel und Adressen in allen Dateien sind erfunden; die AWS-Werte sind
+die Beispielwerte aus der AWS-Dokumentation. Sie sehen echt genug aus, damit
+die Detektoren aus HUM-021 später an ihnen geprüft werden können.

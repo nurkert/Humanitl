@@ -746,7 +746,7 @@ fn a_malformed_body_b64_line_in_a_fixture_is_config_001() {
 
 #[test]
 fn shipped_fixtures_use_uuid_v7_ids() {
-    for name in ["npm-install.jsonl", "mixed.jsonl"] {
+    for name in ["npm-install.jsonl", "mixed.jsonl", "showcase.jsonl"] {
         let session = Session::load(&fixture(name)).expect("fixture parses");
         let ids = session.flow_id_texts();
         assert!(!ids.is_empty(), "{name} has flows");
