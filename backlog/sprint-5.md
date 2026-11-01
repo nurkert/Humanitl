@@ -99,6 +99,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-407 | Intercept can be paused from the header, after a question, under a running caution tape | M | HUM-406 |
 | HUM-404 | Settings as an overlay from below, with categories and search | L | HUM-406 |
 | HUM-405 | Model servers, thought anew: a default, cards, a detail per server and who uses which | L | HUM-404, HUM-400 |
+| HUM-408 | All traffic out of the proxy can go through an upstream proxy (HTTP CONNECT or SOCKS5) | L | HUM-404 |
 
 ---
 
@@ -11659,3 +11660,57 @@ Sandbox.
 - Neustart des Daemons beendet die Pause.
 - Absperrband sichtbar, solange pausiert, in jeder Sektion; Goldens und
   Screenshots mit echter Schrift.
+
+---
+
+## HUM-408 · All traffic out of the proxy can go through an upstream proxy (HTTP CONNECT or SOCKS5)
+
+**Anlass.** Owner am 2026-11-01: In den Einstellungen soll sich sauber ein
+Proxy einstellen lassen, über den alles geleitet wird. Kein zweiter
+MITM-Proxy, sondern ein gewöhnlicher Proxy, über den die Sandbox mit dem Netz
+verbunden ist, etwa der Firmenproxy.
+
+**Ziel.** Der Egress-Port (`daemon/crates/proxy/src/egress/`, ADR-017) bekommt
+die beiden lange vorgesehenen Adapter `HttpProxy` (HTTP `CONNECT`, auch zu
+einem Proxy über TLS) und `Socks5h` (SOCKS5 mit Namensauflösung beim Proxy).
+Mit gesetztem Upstream-Proxy baut der Humanitl-Proxy jede Verbindung nach
+außen über ihn auf; Entscheidung, Halten, Mitschnitt, Funde und Regeln bleiben
+unverändert davor. Die Sandbox merkt nichts davon.
+
+**Konfiguration.** `egress.proxy` (URL `http://`, `https://` oder
+`socks5h://`, leer für direkt), `egress.no_proxy` (Liste von Hosts, Domänen
+mit führendem Punkt und CIDR, etwa das lokale Modell), Zugangsdaten nur als
+Verweis in den Schlüsselbund wie beim Modellschlüssel (HUM-140), nie in
+`config.toml`, auf einer Kommandozeile oder im Log. Die Einstellung sitzt im
+Overlay aus HUM-404 unter „Netz“: Feld, Ausnahmeliste, Zugangsdaten, „Prüfen“
+(eine Verbindung über den Proxy zu einem festen, harmlosen Ziel, nur auf
+Knopfdruck). Ob der Verkehr zum Modellserver ebenfalls über den Proxy geht,
+entscheidet die Ausnahmeliste; die Vorgabe nimmt private Adressen aus.
+
+**Sicherheit.**
+- Heute löst Humanitl jeden Namen selbst auf, prüft die Adresse (keine
+  privaten und keine Loopback-Ziele ohne Freigabe) und verbindet genau zu
+  dieser angehefteten IP. Über einen Upstream-Proxy löst der Proxy erneut auf.
+  Vorschlag: Humanitl löst weiter selbst auf und prüft, wo es kann; der
+  `CONNECT` geht mit dem Hostnamen. Kann Humanitl nicht auflösen (Netze, die
+  externes DNS nur dem Proxy erlauben), geht der Name nach der Entscheidung
+  unaufgelöst an den Proxy. Der Rest der Garantie, dass ein Name nicht auf ein
+  internes Ziel zeigt, liegt dann beim Upstream-Proxy. Ziele als IP prüft
+  Humanitl immer selbst.
+- `docs/SECURITY.md` und `docs/THREAT-MODEL.md` beschreiben das im selben
+  Commit; die README-Aussage bleibt wahr, weil die Entscheidung des Menschen
+  vor jeder Verbindung unverändert ist.
+- Der Upstream-Proxy sieht Ziele und, bei Klartext-HTTP, Inhalte; die
+  Einstellung sagt das in einem Satz.
+
+**Akzeptanz.**
+- Mit `egress.proxy` gesetzt erreicht ein erlaubter Request sein Ziel über
+  einen Test-Proxy (HTTP `CONNECT` und SOCKS5h, je ein Integrationstest mit
+  einem lokalen Proxy), und kein Socket geht direkt zum Ziel
+  (Mutationsbeweis: ein Egress, der direkt verbindet, fällt durch).
+- Ein Host aus `no_proxy` geht direkt.
+- Zugangsdaten erscheinen weder in `config.toml` noch in Logs oder im
+  Mitschnitt (Test).
+- `humanitl doctor` und die App zeigen einen nicht erreichbaren Upstream-Proxy
+  als Diagnose mit `why` und `fix`; `humanitl config` und die Einstellung im
+  Overlay setzen ihn; ARB Deutsch und Englisch.
