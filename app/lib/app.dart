@@ -8,6 +8,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/ui/ui.dart';
+import 'core/ui/traffic_lights.dart';
 import 'core/ui/ui_scale_host.dart';
 import 'features/shell/connection_gate.dart';
 import 'features/shell/providers/language.dart';
@@ -75,7 +76,9 @@ class HumanitlApp extends ConsumerWidget {
         return HTheme(
           tokens: tokens,
           child: UiScaleHost(
-            child: ColoredBox(color: tokens.colors.bg0, child: child),
+            child: TrafficLightSync(
+              child: ColoredBox(color: tokens.colors.bg0, child: child),
+            ),
           ),
         );
       },

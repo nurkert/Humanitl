@@ -17,6 +17,7 @@ final class DesktopBridge: NSObject, UNUserNotificationCenterDelegate {
   // 18 and 36 pixels, for one and two pixels per point.
   private static let iconPoints: CGFloat = 18
 
+  private var windowChannel: FlutterMethodChannel?
   private var trayChannel: FlutterMethodChannel?
   private var notificationChannel: FlutterMethodChannel?
   private var statusItem: NSStatusItem?
@@ -49,6 +50,11 @@ final class DesktopBridge: NSObject, UNUserNotificationCenterDelegate {
   // Called from `awakeFromNib`, so before the system can hand over a response:
   // the delegate has to be set before the app finishes launching.
   func install(messenger: FlutterBinaryMessenger) {
+    let window = FlutterMethodChannel(name: "humanitl/window", binaryMessenger: messenger)
+    window.setMethodCallHandler { [weak self] call, result in
+      self?.handleWindow(call, result: result)
+    }
+    windowChannel = window
     let tray = FlutterMethodChannel(name: "humanitl/tray", binaryMessenger: messenger)
     let notifications = FlutterMethodChannel(
       name: "humanitl/notifications", binaryMessenger: messenger)
@@ -292,5 +298,20 @@ final class DesktopBridge: NSObject, UNUserNotificationCenterDelegate {
       }
     }
     completionHandler()
+  }
+
+  // MARK: The window
+
+  private func handleWindow(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    switch call.method {
+    case "setHeaderBar":
+      let height = (call.arguments as? [String: Any])?["height"] as? Double
+      if let height, let window = NSApp.windows.compactMap({ $0 as? MainFlutterWindow }).first {
+        window.headerBarHeight = CGFloat(height)
+      }
+      result(nil)
+    default:
+      result(FlutterMethodNotImplemented)
+    }
   }
 }

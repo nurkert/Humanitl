@@ -54,6 +54,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-374 | macOS: Wegwerf-Sandbox auf einem APFS-Klon | L | HUM-323, HUM-350, HUM-357 |
 | HUM-376 | macOS: Sandbox-Bildschirm und `sandbox argv` zeigen, was wirklich läuft | M | HUM-323, HUM-330 |
 | HUM-375 | Website: Das Glanzband folgt den Ecken der Fenster | S | HUM-348 |
+| HUM-378 | macOS: Die Ampel bleibt beim Skalieren mittig auf der Kopfleiste | S | HUM-342, HUM-356 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -814,3 +815,7 @@ Akzeptanz:
 ## HUM-375 · Website: Das Glanzband folgt den Ecken der Fenster
 
 Das Band der Glaskante lief in den Ecken mit dem Radius der Fase statt dem des Rahmens und ließ die Spitzen dunkel. Akzeptanz: Die Eckkacheln kommen aus `website/scripts/generate-rim.mjs`, ihre Tiefe ist der Abstand zum Rand mit Radius `--r`, und das Band läuft ohne Sprung in die Seiten über.
+
+## HUM-378 · macOS: Die Ampel bleibt beim Skalieren mittig auf der Kopfleiste
+
+Die Knöpfe zeichnet das System in nativer Größe. Akzeptanz: Bei jeder Skalierung der App stehen sie senkrecht mittig auf der Kopfleiste, die Dart als Höhe meldet; ihre Größe und ihr Abstand vom linken Rand bleiben.
