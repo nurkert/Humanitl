@@ -913,7 +913,7 @@ Anspruch und keine Sandbox wird gehalten, und von diesem Moment an bekommt kein
 Start mehr einen. Dann endet er mit seinem üblichen Abschied;
 `systemctl --user restart humanitld.service` oder die nächste Verbindung über den
 Socket startet das Programm, das jetzt installiert ist. Das `postinst` des
-Pakets und der Knopf „Daemon neu starten" in der Statusleiste nutzen es nach einem
+Pakets und der Knopf „Daemon aktualisieren" in der Statusleiste nutzen es nach einem
 Upgrade.
 
 Die Antwort ist ein Wort, unter `--json` das Feld `outcome`: `retired` (er endet

@@ -428,7 +428,7 @@ Jeder Code ist in [DIAGNOSTICS.md](../DIAGNOSTICS.md) erklärt.
   Version neu. Läuft eine Agenten-Session, läuft der Daemon weiter, bis sie
   endet; ein Daemon jedes Release nach 0.0.6 beendet sich dann von selbst, und
   die nächste Verbindung startet die neue Version. Bis dahin nennt die
-  Statusleiste der App die andere Version und bietet **Daemon neu starten** an,
+  Statusleiste der App die andere Version und bietet **Daemon aktualisieren** an,
   sobald keine Session läuft; auf der Kommandozeile entspricht dem
   `systemctl --user daemon-reload && systemctl --user restart humanitld`.
 - **RPM:** `sudo dnf install ./humanitl-<newer>-1.x86_64.rpm` (openSUSE:

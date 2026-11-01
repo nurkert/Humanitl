@@ -940,7 +940,7 @@ The daemon decides under the same lock under which a start takes its claim
 held, and from that moment on no start gets one. It then ends with its usual
 farewell; `systemctl --user restart humanitld.service`, or the next connection
 through the socket, starts the program that is installed now. The package's
-`postinst` and the "Restart daemon" button of the status bar use it after an
+`postinst` and the "Update daemon" button of the status bar use it after an
 upgrade.
 
 The answer is one word, under `--json` the field `outcome`: `retired` (it ends

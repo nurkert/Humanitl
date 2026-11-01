@@ -53,7 +53,7 @@ Menü und Icon-Cache aktualisieren die Trigger von `desktop-file-utils` und
   `systemctl --user restart humanitld.service` die neue Version. Eine laufende Session behält
   ihren Daemon; ein Daemon ab dieser Version beendet sich von selbst, sobald die Session
   vorbei ist, und die nächste Verbindung startet das neue Programm über den Socket. Bis dahin
-  zeigt die App den Versionshinweis mit einem Knopf „Daemon neu starten". Der Daemon von 0.0.6
+  zeigt die App den Versionshinweis mit einem Knopf „Daemon aktualisieren". Der Daemon von 0.0.6
   kennt die Anfrage nicht; für ihn fragt `postinst` `humanitl --json daemon status` und führt
   `try-restart` nur bei `agent_session` `none` aus. Dieser alte Daemon meldet während eines
   ganzen Starts `stopped`, also kann ein Start, der vor dem Neustart läuft oder beginnt,
