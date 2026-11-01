@@ -257,6 +257,12 @@ class _SetupHostState extends ConsumerState<SetupHost> {
       },
       onRecheck: () {
         unawaited(ref.read(setupDoctorProvider.notifier).refresh());
+        // Steht unter dem Schritt ein Befund des Plans (HUM-384), kam er
+        // nicht vom Doctor, und nur ein neuer Plan sagt, ob er noch gilt.
+        // Eine laufende Sandbox plant nicht neu: Ihr Zustand ist der Lauf.
+        if (state[SetupCheckKind.sandbox].planFinding && !sandboxBusy) {
+          unawaited(ref.read(sandboxStatusProvider.notifier).plan());
+        }
         _contactSaved(forced: true);
       },
       onProbeLlm: (String endpoint) {

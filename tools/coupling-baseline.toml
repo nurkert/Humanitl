@@ -12,7 +12,7 @@
 "app/test/features/sandbox/daemon_live_test.dart" = 1
 "app/test/features/sandbox/harness.dart" = 3
 "app/test/features/sandbox/sandbox_screen_test.dart" = 1
-"app/test/features/setup/setup_checks_test.dart" = 12
+"app/test/features/setup/setup_checks_test.dart" = 1
 "app/test/features/setup/setup_test.dart" = 1
 "daemon/bin/humanitl/src/cli.rs" = 2
 "daemon/bin/humanitl/src/cmd/mod.rs" = 3

@@ -63,6 +63,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-382 | Signierte Updates aus der App, ein Klick, macOS und Linux | L | HUM-284, HUM-326, HUM-325 |
 | HUM-388 | Website: neue Bilder im neutralen Grau mit einer echten Beispielsitzung | S | HUM-333, HUM-355 |
 | HUM-389 | Website: Glas, Video im vorderen Fenster, gerades Karussell mit Autoplay | M | HUM-333, HUM-375, HUM-388 |
+| HUM-384 | Setup: Ein Befund des Plans steht dort, worüber er etwas sagt | S | HUM-287, HUM-262 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -910,3 +911,16 @@ Akzeptanzkriterien:
 - Die Pfeile stehen links unter den Bildern, daneben je Modul ein Segment. Ohne Zeiger über den Fenstern füllt sich das aktive Segment in 5 s und das Karussell dreht weiter; Zeiger, Tastaturfokus, verborgener Tab, Bühne außer Sicht und laufende Bewegung halten an, eine Bedienung startet die Zeit neu. Unter reduzierter Bewegung kein automatisches Weiterdrehen.
 - Der Wechsel ist eine Bewegung mit einer Kurve (720 ms, `cubic-bezier(0.22,1,0.36,1)`), unterbrechbar, ohne dass ein Fenster durch ein näheres hindurchspringt; das umlaufende Fenster blendet aus und am anderen Ende ein.
 - Hell und dunkel, Telefone ab 320 px ohne waagerechtes Scrollen wie in HUM-360.
+
+## HUM-384 · Setup: Ein Befund des Plans steht dort, worüber er etwas sagt
+
+Fall vom 2026-11-01: Ein älterer Daemon las ein neueres gebündeltes Profil und lehnte dessen `sandbox.backend` mit `CONFIG_003` ab („sandbox.backend = auto, the only backend of this build is bwrap"). Das Setup hängte jeden Befund von `Sandbox(Plan)` und `Sandbox(Status)` an die Zeile „Project folder" und schrieb „This folder cannot be used" darüber, obwohl der Ordner in Ordnung war; die einzige Abhilfe auf dem Schirm war die Ordnerauswahl.
+
+Akzeptanzkriterien:
+
+- Ein Befund gilt als Befund über den Ordner, wenn er `SANDBOX_006` oder `CONFIG_013` ist oder die Abhilfe `ChangeSetting` auf `sandbox.work_dir` trägt (`isProjectFolderFinding`). Nur solche Befunde machen die Zeile „Project folder" rot und tragen die Überschrift „This folder cannot be used" samt Ordnerknopf.
+- Jeder andere scheiternde Befund von Plan oder Status macht den Schritt „Sandbox check" rot, mit der Befundkarte (Code, Grund, Abhilfe) und der neutralen Überschrift „The sandbox cannot start with this setup" (`setupHeadSandboxPlanRefused`, en und de). Die Ordnerzeile bleibt dabei grün und nennt den Ordner; der Start bleibt gesperrt, und der Satz unter dem Knopf nennt „Sandbox check".
+- Eine scheiternde Zeile des Doctors behält den Schritt mit ihrer eigenen Überschrift; der Befund des Plans folgt, sobald die Maschine in Ordnung ist.
+- „Check again" fragt bei einem Befund des Plans auch einen neuen Plan an, solange keine Sandbox läuft oder startet; ein geheilter Plan macht den Schritt wieder grün.
+- Befunde einer Geste (`Start`, `Stop`, `IsolationCheck`) stehen wie bisher unter dem Startknopf und in keinem Schritt.
+- Unit-Tests in `setup_checks_test.dart` und Widget-Tests in `plan_finding_step_test.dart` decken beide Fälle, den Vorrang des Doctors und die erneute Prüfung ab; ohne die Trennung oder ohne den neuen Plan werden sie rot.
