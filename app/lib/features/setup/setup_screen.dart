@@ -76,6 +76,7 @@ class SetupScreen extends StatefulWidget {
     required this.onWorkMode,
     required this.onStart,
     this.daemonAttempts = 0,
+    this.daemonReconnecting = false,
     this.activeServer = '',
     this.onOpenIntercept,
     this.disposable,
@@ -109,6 +110,11 @@ class SetupScreen extends StatefulWidget {
   /// The name of the active saved model server, or empty when none is
   /// saved; the model row names it above the field (HUM-289).
   final String activeServer;
+
+  /// True while a connection that stood a moment ago is being taken up again
+  /// within its grace (HUM-385); the daemon row then says so instead of
+  /// counting failed attempts.
+  final bool daemonReconnecting;
 
   /// How many attempts to reach the daemon failed so far, or 0 while it
   /// answers. The first row shows the count, so a screen that keeps trying
@@ -298,6 +304,7 @@ class _SetupScreenState extends State<SetupScreen> {
                   check: state[SetupCheckKind.daemon],
                   onRetry: widget.onRetry,
                   attempts: widget.daemonAttempts,
+                  reconnecting: widget.daemonReconnecting,
                   view: _view(l10n, state, SetupCheckKind.daemon),
                 ),
                 LlmCheck(

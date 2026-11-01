@@ -897,9 +897,11 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                       ),
                       if (link case ConnectionFrozen(
                         :final Diagnostic diagnostic,
+                        :final bool settling,
                       ))
                         FrozenBanner(
                           diagnostic: diagnostic,
+                          settling: settling,
                           onReconnect: ref
                               .read(connectionStateProvider.notifier)
                               .retry,

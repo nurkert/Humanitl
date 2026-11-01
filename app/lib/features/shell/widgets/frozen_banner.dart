@@ -10,6 +10,13 @@
 /// verbinden". Kein Schließen: Der Zustand geht nicht weg, weil jemand das
 /// Banner wegklickt, und ein Banner, das man schließen kann, ließe einen
 /// stehengebliebenen Bildschirm ohne Erklärung zurück.
+///
+/// Solange eine Verbindung, die eben noch stand, in ihrer Frist ist
+/// (`ConnectionFrozen.settling`, HUM-385), sagt das Banner ruhig, dass das
+/// Fenster neu verbindet: ohne Warnfarbe, ohne den Satz des Transports und
+/// ohne Knopf, denn der nächste Versuch läuft schon. Die Folge für die
+/// Warteschlange steht trotzdem da; sie gilt auch für zwei Sekunden. Endet die
+/// Frist ohne Antwort, wird daraus das Banner von oben, mit Grund und Knopf.
 library;
 
 import 'package:flutter/widgets.dart';
@@ -24,8 +31,13 @@ class FrozenBanner extends StatelessWidget {
   const FrozenBanner({
     required this.diagnostic,
     required this.onReconnect,
+    this.settling = false,
     super.key,
   });
+
+  /// True while the window takes a connection that stood a moment ago up
+  /// again, within its grace (HUM-385).
+  final bool settling;
 
   /// Warum die Verbindung weg ist. Der Text kommt aus dem Transport oder aus
   /// dem Daemon und wird hier nicht ersetzt (`docs/UX.md` 4.4).
@@ -38,13 +50,20 @@ class FrozenBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
-    final Color tone = tokens.stateTextColor(HFlowState.error);
+    final Color tone = settling
+        ? tokens.colors.fg1
+        : tokens.stateTextColor(HFlowState.error);
+    final String title = settling
+        ? l10n.shellReconnectingTitle
+        : l10n.shellFrozenTitle;
     return Semantics(
       container: true,
-      label: '${l10n.shellFrozenTitle}. ${l10n.shellFrozenConsequence}',
+      label: '$title. ${l10n.shellFrozenConsequence}',
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: HColorDerivation.tint(tokens.stateColor(HFlowState.error)),
+          color: settling
+              ? tokens.colors.bg1
+              : HColorDerivation.tint(tokens.stateColor(HFlowState.error)),
           border: Border(bottom: BorderSide(color: tokens.colors.line)),
         ),
         child: Padding(
@@ -55,7 +74,11 @@ class FrozenBanner extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              HGlyphIcon(HGlyph.triangleAlert, size: HSize.glyph, color: tone),
+              HGlyphIcon(
+                settling ? HGlyph.hourglass : HGlyph.triangleAlert,
+                size: HSize.glyph,
+                color: tone,
+              ),
               SizedBox(width: tokens.spacing.x2),
               Expanded(
                 child: Column(
@@ -63,8 +86,12 @@ class FrozenBanner extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
                     Text(
-                      l10n.shellFrozenTitle,
-                      key: const Key('shell-frozen-title'),
+                      title,
+                      key: Key(
+                        settling
+                            ? 'shell-reconnecting-title'
+                            : 'shell-frozen-title',
+                      ),
                       style: tokens.typography.ui13.medium.tinted(
                         tokens.colors.fg0,
                       ),
@@ -74,7 +101,7 @@ class FrozenBanner extends StatelessWidget {
                       key: const Key('shell-frozen-consequence'),
                       style: tokens.typography.ui12.tinted(tokens.colors.fg1),
                     ),
-                    if (diagnostic.why.isNotEmpty)
+                    if (!settling && diagnostic.why.isNotEmpty)
                       Text(
                         diagnostic.why,
                         key: const Key('shell-frozen-why'),
@@ -87,12 +114,14 @@ class FrozenBanner extends StatelessWidget {
                   ],
                 ),
               ),
-              SizedBox(width: tokens.spacing.x2),
-              HButton(
-                key: const Key('shell-frozen-reconnect'),
-                onPressed: onReconnect,
-                child: Text(l10n.shellFrozenReconnect),
-              ),
+              if (!settling) ...<Widget>[
+                SizedBox(width: tokens.spacing.x2),
+                HButton(
+                  key: const Key('shell-frozen-reconnect'),
+                  onPressed: onReconnect,
+                  child: Text(l10n.shellFrozenReconnect),
+                ),
+              ],
             ],
           ),
         ),

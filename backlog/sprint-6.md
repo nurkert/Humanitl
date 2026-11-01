@@ -64,6 +64,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-388 | Website: neue Bilder im neutralen Grau mit einer echten Beispielsitzung | S | HUM-333, HUM-355 |
 | HUM-389 | Website: Glas, Video im vorderen Fenster, gerades Karussell mit Autoplay | M | HUM-333, HUM-375, HUM-388 |
 | HUM-384 | Setup: Ein Befund des Plans steht dort, worüber er etwas sagt | S | HUM-287, HUM-262 |
+| HUM-385 | Verbindung: Eine kurze Lücke nach einem Neustart zeigt erst „verbinde neu" | S | HUM-044, HUM-058 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -924,3 +925,15 @@ Akzeptanzkriterien:
 - „Check again" fragt bei einem Befund des Plans auch einen neuen Plan an, solange keine Sandbox läuft oder startet; ein geheilter Plan macht den Schritt wieder grün.
 - Befunde einer Geste (`Start`, `Stop`, `IsolationCheck`) stehen wie bisher unter dem Startknopf und in keinem Schritt.
 - Unit-Tests in `setup_checks_test.dart` und Widget-Tests in `plan_finding_step_test.dart` decken beide Fälle, den Vorrang des Doctors und die erneute Prüfung ab; ohne die Trennung oder ohne den neuen Plan werden sie rot.
+
+## HUM-385 · Verbindung: Eine kurze Lücke nach einem Neustart zeigt erst „verbinde neu"
+
+Fall vom 2026-11-01: Gleich nach `humanitl daemon restart` verlor das Fenster die Verbindung für einen Moment. Der Setup-Bildschirm zeigte sofort „The background service does not answer" mit `DAEMON_001` und dem Primärknopf „Install and start", dazu das Banner über der Warteschlange, obwohl der Dienst installiert war und nach ein, zwei Sekunden wieder antwortete.
+
+Akzeptanzkriterien:
+
+- Bricht eine Verbindung, die in diesem Lauf stand, mit `DAEMON_001`, trägt `ConnectionFrozen` `settling: true`, solange weniger als `connectionSettleAttempts` (3) Versuche gescheitert sind, beim Takt von zwei Sekunden also rund vier Sekunden. Die Shell bleibt dabei eingefroren; `linkLiveProvider` sagt weiter nein.
+- In der Frist zeigt das Banner ruhig „Reconnecting to the background service" (`shellReconnectingTitle`) mit der Folge für die Warteschlange, ohne Warnfarbe, ohne den Satz des Transports und ohne Knopf. Die Zeile des Dienstes im Setup fragt („The answer is on its way") und sagt „It answered a moment ago · reconnecting" (`setupDaemonReconnecting`), ohne Befundkarte und ohne „Install and start". Beide Schlüssel in en und de.
+- Kommt der Dienst in der Frist zurück, war nie ein Fehlschlag zu sehen. Bleibt er weg, steht ab dem dritten gescheiterten Versuch der Befund wie bisher, mit Grund, Abhilfe und Knopf, und fällt bis zur nächsten stehenden Verbindung nicht in die Ruhe zurück.
+- Keine Frist für einen Befund, der eine Antwort ist (`DAEMON_002`, `IPC_001`), für einen Kaltstart ohne je stehende Verbindung und ohne Takt (`connectionReconnectProvider` null), weil sonst kein Versuch die Ruhe beendete.
+- Widget-Tests in `test/features/shell/reconnect_grace_test.dart` mit Fake-Client und gefälschter Zeit decken die Rückkehr in der Frist, den dauerhaften Ausfall, `IPC_001` und den fehlenden Takt ab; jede der vier Bedingungen, einzeln entfernt, macht einen Test rot.

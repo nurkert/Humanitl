@@ -53,6 +53,27 @@ Duration? connectionHeartbeat(Ref ref) => const Duration(seconds: 2);
 @Riverpod(keepAlive: true)
 Duration? connectionReconnect(Ref ref) => const Duration(seconds: 2);
 
+/// How many failed attempts a connection that stood may take to come back
+/// before the window says that it is gone (HUM-385).
+///
+/// `humanitl daemon restart` takes the socket away for a second or two. The
+/// heartbeat notices that as `DAEMON_001`, and the window used to answer it at
+/// once with the full failure: the banner over the queue, and on the setup
+/// screen "The background service does not answer" with "Install and start"
+/// as the one action, for a service that was installed and came back two
+/// seconds later. Three attempts are the failure the heartbeat saw and the
+/// first two of the two-second timer, so about four seconds in which the
+/// window says, calmly, that it is reconnecting. After that the failure
+/// stands as before, with its finding and its remedy.
+///
+/// The grace holds only for `DAEMON_001`, only for a connection that stood in
+/// this run, and only while [connectionReconnectProvider] tries again on its
+/// own: without the timer no further attempt would come, and the calm state
+/// would hide a real failure for good. Every other finding -- a daemon of
+/// another major (`DAEMON_002`), a token that does not match (`IPC_001`) --
+/// is an answer and not an absence, and shows at once.
+const int connectionSettleAttempts = 3;
+
 /// Riverpod 3 retries a failed provider on its own (backoff from 200 ms, ten
 /// attempts) and reports `AsyncLoading` with the error tucked inside while it
 /// does, so the gate would never see the failure. Reconnecting is explicit
@@ -127,11 +148,20 @@ sealed class ConnectionStatus with _$ConnectionStatus {
   /// [retrying] means the same as it does on [ConnectionFailed]: an attempt
   /// somebody asked for is in flight, and the banner keeps standing while it
   /// runs. [attempts] counts the failed attempts since the connection broke.
+  ///
+  /// [settling] is true while the break may still be a short one: the daemon
+  /// did not answer (`DAEMON_001`) and fewer than [connectionSettleAttempts]
+  /// attempts failed since the connection stood (HUM-385). The shell stays
+  /// frozen all the same -- nothing on screen comes from the daemon -- but the
+  /// banner and the setup screen say that the window is reconnecting instead
+  /// of offering to install a service that is installed. [diagnostic] travels
+  /// with it unchanged and is shown as soon as the grace is over.
   const factory ConnectionStatus.frozen({
     required Diagnostic diagnostic,
     required DaemonInfo info,
     @Default(false) bool retrying,
     @Default(1) int attempts,
+    @Default(false) bool settling,
   }) = ConnectionFrozen;
 
   const ConnectionStatus._();
@@ -181,6 +211,15 @@ class DaemonConnection extends _$DaemonConnection {
   /// start of this run while none ever did. Reset by [_connected].
   int _attempts = 0;
 
+  /// True while a break of a connection that stood is still within its grace
+  /// ([connectionSettleAttempts], HUM-385).
+  ///
+  /// Set only by the first failure after a connection stood, cleared by the
+  /// first failure that ends the grace and by [_connected]. Once cleared it
+  /// does not come back before the connection stands again: a failure that was
+  /// shown is never folded back into "reconnecting".
+  bool _settling = false;
+
   @override
   ConnectionStatus build() {
     ref.onDispose(_stopTimers);
@@ -226,15 +265,24 @@ class DaemonConnection extends _$DaemonConnection {
     _broke = null;
     _requested = false;
     _attempts = 0;
+    _settling = false;
     return ConnectionStatus.connected(info: info);
   }
 
   ConnectionStatus _failed(Diagnostic diagnostic) {
     _stopHeartbeat();
     _startReconnect();
+    // Der erste Fehlschlag nach einer stehenden Verbindung darf eine kurze
+    // Lücke sein, jeder weitere nur, solange die Frist noch läuft (HUM-385).
+    final bool stood = _broke == null && _known != null;
     _broke = diagnostic;
     _requested = false;
     _attempts++;
+    _settling =
+        (stood || _settling) &&
+        diagnostic.code == DiagnosticCodes.daemonUnreachable &&
+        _attempts < connectionSettleAttempts &&
+        ref.read(connectionReconnectProvider) != null;
     final DaemonInfo? known = _known;
     if (known == null) {
       // Kaltstart: Es gibt keine Shell, die stehen bleiben könnte, und der
@@ -248,6 +296,7 @@ class DaemonConnection extends _$DaemonConnection {
       diagnostic: diagnostic,
       info: known,
       attempts: _attempts,
+      settling: _settling,
     );
   }
 
@@ -300,6 +349,7 @@ class DaemonConnection extends _$DaemonConnection {
             info: known,
             retrying: _requested,
             attempts: _attempts,
+            settling: _settling,
           );
   }
 

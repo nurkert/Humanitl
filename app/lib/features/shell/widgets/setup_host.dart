@@ -188,11 +188,14 @@ class _SetupHostState extends ConsumerState<SetupHost> {
       }
     });
     final SetupState state = ref.watch(setupStateProvider);
-    final int attempts = switch (ref.watch(connectionStateProvider)) {
+    final ConnectionStatus link = ref.watch(connectionStateProvider);
+    final int attempts = switch (link) {
       ConnectionFailed(:final int attempts) ||
       ConnectionFrozen(:final int attempts) => attempts,
       _ => 0,
     };
+    // Eine Verbindung, die eben noch stand, innerhalb ihrer Frist (HUM-385).
+    final bool reconnecting = link is ConnectionFrozen && link.settling;
     final AsyncValue<SandboxStatus> sandbox = ref.watch(sandboxStatusProvider);
     final SandboxStatus status = sandbox.value ?? const SandboxStatus();
     // Ein Start laeuft schon, oder eine Sandbox steht. Beides sperrt den
@@ -210,6 +213,7 @@ class _SetupHostState extends ConsumerState<SetupHost> {
     final bool startRefused = offersDisposable && review.waiting && disposable;
     return SetupScreen(
       state: state,
+      daemonReconnecting: reconnecting,
       daemonAttempts: attempts,
       report: ref.watch(setupDoctorProvider).value ?? DoctorReport.empty,
       // Das Feld zeigt eine Messung nur für die Adresse, die in ihm steht.
