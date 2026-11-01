@@ -4,7 +4,7 @@
 // scrollt die Seite normal; das Karussell dreht über Pfeile, Ziehen und Tasten weiter.
 // Darunter die Sektionen aus src/components/home (HUM-358): ein Angriff, warum er endet, was
 // offen bleibt, der Preis im Alltag, Agenten und Systeme, Reifegrad und Download.
-import { Picture } from 'astro:assets';
+import { Picture, getImage } from 'astro:assets';
 
 import '../../styles/home.css';
 
@@ -61,6 +61,11 @@ const pad = (v: number) => String(v).padStart(2, '0');
 const h = t.home;
 const security = path('security', lang);
 const screenAlt = (id: string) => t.stage.modules.find((module) => module.id === id)?.alt ?? '';
+// Das vordere Fenster zeigt einen kurzen Ablauf im Programm (HUM-389). Bis das Video läuft, und
+// bei reduzierter Bewegung immer, steht dieselbe Aufnahme wie im Bild als Poster davor.
+// Seitenverhältnis der Aufnahmen aus der Datei selbst, alle sieben haben dasselbe Maß.
+const aspect = intercept.width / intercept.height;
+const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'webp', quality: 70 });
 ---
 
 <Base lang={lang} page="home" title={t.meta.title} description={t.meta.description}>
@@ -111,7 +116,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
         }
         .ring {
           opacity: 0.25 !important;
-          transform: translate(-50%, -50%) translate3d(0, calc(var(--w) / 1.855 / 2 + var(--t) + 2px), calc(var(--w) * -1.3)) rotateX(90deg) !important;
+          transform: translate(-50%, -50%) translate3d(0, calc(var(--w) / var(--aspect) / 2 + var(--t) + 2px), calc(var(--w) * -1.3)) rotateX(90deg) !important;
         }
         /* Der Nebel steht still über dem ersten Bild, nicht über der ganzen Szene. */
         .fog {
@@ -207,7 +212,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
         }
       </style>
     </noscript>
-    <section class="scene" id="module" data-scene aria-label={t.stage.title} style={`--n: ${n}`}>
+    <section class="scene" id="module" data-scene data-aspect={aspect} aria-label={t.stage.title} style={`--n: ${n}; --aspect: ${aspect}`}>
       <div class="scene__sticky" data-sticky>
         <div class="sky" aria-hidden="true">
           <div class="sky__spot" data-spot></div>
@@ -277,7 +282,6 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
                     aria-roledescription="slide"
                     aria-label={`${i + 1} ${t.stage.of} ${n}: ${module.name}`}
                   >
-                    <span class={`win__bokeh win__bokeh--${(i % 3) + 1}`} data-bokeh aria-hidden="true" />
                     <span class="win__feather" data-feather aria-hidden="true" />
                     <span class="win__shadow" aria-hidden="true" />
                     <span class="win__back" aria-hidden="true" />
@@ -301,11 +305,29 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
                         decoding="async"
                         draggable="false"
                       />
+                      {module.id === 'intercept' && (
+                        <video
+                          class="win__video"
+                          data-video
+                          muted
+                          loop
+                          playsinline
+                          preload="metadata"
+                          poster={workflowPoster.src}
+                          disablepictureinpicture
+                          disableremoteplayback
+                          aria-hidden="true"
+                          tabindex="-1"
+                        >
+                          <source src="/media/workflow.webm" type="video/webm" />
+                          <source src="/media/workflow.mp4" type="video/mp4" />
+                        </video>
+                      )}
                       <span class="win__glaze" aria-hidden="true" />
                       <span class="win__rim" aria-hidden="true" />
                       <span class="win__dof" data-dof aria-hidden="true">
                         <span class="win__dofIn" data-dof-in>
-                          <Picture src={module.image} alt="" formats={formats} fallbackFormat="webp" width={160} loading="eager" decoding="async" draggable="false" />
+                          <Picture src={module.image} alt="" formats={formats} fallbackFormat="webp" width={400} loading={Math.abs(ringOffset(i)) <= 2 ? 'eager' : 'lazy'} decoding="async" draggable="false" />
                         </span>
                       </span>
                       <span class="win__shade" aria-hidden="true" />
@@ -354,16 +376,20 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
             <p class="visually-hidden" aria-live="polite" data-live-text>
               {`${modules[0].name}. ${modules[0].title} ${modules[0].text}`}
             </p>
-            <div class="deck__controls" data-controls>
-              <button class="deck__arrow" type="button" data-prev aria-label={t.stage.previous}>
-                <Icon name="chevronLeft" />
-              </button>
-              <div class="deck__track" aria-hidden="true">
-                <span class="deck__fill" data-fill></span>
-              </div>
-              <button class="deck__arrow" type="button" data-next aria-label={t.stage.next}>
-                <Icon name="chevronRight" />
-              </button>
+          </div>
+          <div class="deck__controls" data-controls>
+            <button class="deck__arrow" type="button" data-prev aria-label={t.stage.previous}>
+              <Icon name="chevronLeft" />
+            </button>
+            <button class="deck__arrow" type="button" data-next aria-label={t.stage.next}>
+              <Icon name="chevronRight" />
+            </button>
+            <div class="deck__track" aria-hidden="true">
+              {modules.map(() => (
+                <span class="deck__seg">
+                  <span class="deck__segFill" data-seg />
+                </span>
+              ))}
             </div>
           </div>
         </div>
@@ -406,8 +432,13 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
   .scene {
     --w: min(48vw, 104vh);
     --t: clamp(10px, calc(var(--w) * 0.03), 30px);
-    --r: calc(var(--w) * 0.016);
-    --pad: calc(var(--w) * 0.009);
+    /* Das Glas liegt knapp um die Aufnahme (HUM-389): ein schmaler Rahmen, und die Ecken sind
+       konzentrisch, außen der Radius der Aufnahme plus die Breite des Rahmens. Die Aufnahmen
+       haben 34 px Eckradius bei 2560 px Breite, gemessen an ihrem Alphakanal. */
+    --aspect: 1.8935;
+    --r-shot: calc(var(--w) * 0.0132);
+    --pad: calc(var(--w) * 0.005);
+    --r: calc(var(--r-shot) + var(--pad));
     /* Die Bühne im hellen Raum (HUM-338): die Scheiben bleiben dunkles Glas, Licht wird zu
        Luft und Schatten. Das Skript liest keine dieser Farben, sie kommen nur über CSS. */
     --st-spot: rgb(255 255 255 / var(--dark, 0.11) var(--light, 0.95));
@@ -859,7 +890,9 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     left: 0;
     top: 0;
     width: var(--w);
-    aspect-ratio: 2560 / 1380;
+    /* Innen genau das Verhältnis der Aufnahme, damit object-fit nichts von ihren runden Ecken
+       abschneidet; dazu der Rahmen oben und unten. */
+    height: calc((var(--w) - 2 * var(--pad)) / var(--aspect) + 2 * var(--pad));
     transform-style: preserve-3d;
     transform: translate(-50%, -50%);
     will-change: transform;
@@ -996,9 +1029,23 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     height: 100%;
     object-fit: cover;
     object-position: top center;
-    border-radius: calc(var(--r) - var(--pad));
-    background: #0f1115;
+    border-radius: var(--r-shot);
+    background: #111111;
     box-shadow: 0 0 0 1px rgb(0 0 0 / 0.6);
+  }
+  /* Der Ablauf im vorderen Fenster liegt genau über der Aufnahme: absolut, mit ihrem Maß und
+     Radius, so verschiebt das Laden des Videos nichts. Es ist durchsichtig, bis das Poster oder ein Bild gemalt ist. */
+  .win__video {
+    position: absolute;
+    z-index: 1;
+    inset: var(--pad);
+    width: calc(100% - 2 * var(--pad));
+    height: calc(100% - 2 * var(--pad));
+    object-fit: cover;
+    object-position: top center;
+    border-radius: var(--r-shot);
+    background: transparent;
+    pointer-events: none;
   }
   /* Glanz HINTER dem Bildschirm: sichtbar nur im Rahmen, nie über dem Inhalt. */
   .win__glint,
@@ -1044,7 +1091,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
   .win__rim {
     /* Ganze Pixel, und die Kacheln stoßen stumpf aneinander: eine Überlappung verdoppelte
        das Alpha an den acht Stößen zu feinen hellen Linien quer durch das Band. */
-    --b: calc(var(--w) * 0.05);
+    --b: calc(var(--w) * 0.0225);
     --tile: calc(100% - var(--b) * 2);
     --bevel: transparent, rgb(0 0 0 / 0.05) 22%, rgb(0 0 0 / 0.2) 44%, rgb(0 0 0 / 0.5) 64%, #000 83%, rgb(0 0 0 / 0.6) 93%, rgb(0 0 0 / 0.12) 100%;
     --ground:
@@ -1078,7 +1125,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
   }
   @supports (width: round(1.5px, 1px)) {
     .win__rim {
-      --b: round(calc(var(--w) * 0.05), 1px);
+      --b: round(calc(var(--w) * 0.0225), 1px);
     }
   }
   /* Eigene Ebenen nur, solange sich etwas bewegt (data-moving): die Maske wird einmal
@@ -1108,10 +1155,10 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     transform: translate3d(var(--swx, 0px), 0, 0);
     opacity: var(--swo, 0);
   }
-  /* Tiefenschärfe: über dem scharfen Bildschirm liegt dieselbe Aufnahme in 160 px, groß
-     gezogen und weichgezeichnet. Der Filter ist fest und sitzt auf dem Bild innerhalb einer
-     eigenen Ebene, er wird also einmal gerastert; das Skript blendet nur deren opacity und
-     skaliert sie. Ohne Skript bleibt die Deckkraft 0. */
+  /* Tiefenschärfe: über dem scharfen Bildschirm liegt dieselbe Aufnahme in 400 px mit einem
+     milden Gaußfilter (HUM-389). Der Filter ist fest und sitzt auf dem Bild innerhalb einer
+     eigenen Ebene, er wird also einmal gerastert; das Skript blendet nur deren opacity, und die
+     steigt mit der Tiefe sanft an. Ohne Skript bleibt die Deckkraft 0. */
   .win__dof {
     position: absolute;
     z-index: 4;
@@ -1127,7 +1174,8 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     position: absolute;
     inset: var(--pad);
     display: block;
-    will-change: transform;
+    overflow: hidden;
+    border-radius: var(--r-shot);
   }
   .win__dof :global(picture) {
     position: absolute;
@@ -1137,18 +1185,9 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     border-radius: 0;
     box-shadow: none;
     background: none;
-    filter: blur(calc(var(--w) * 0.012));
-  }
-  /* Lichter im Bild werden in der Unschärfe zu Scheiben; sie liegen fest in der weichen Ebene. */
-  .win__dofIn::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    --disc: calc(var(--w) * 0.05);
-    background:
-      radial-gradient(circle var(--disc) at 18% 26%, rgb(255 255 255 / 0.05) 80%, rgb(255 255 255 / 0.1) 94%, transparent),
-      radial-gradient(circle calc(var(--disc) * 0.7) at 71% 18%, rgb(190 214 255 / 0.05) 80%, rgb(190 214 255 / 0.1) 94%, transparent),
-      radial-gradient(circle calc(var(--disc) * 1.3) at 84% 72%, rgb(255 226 190 / 0.04) 80%, rgb(255 226 190 / 0.08) 94%, transparent);
+    filter: blur(calc(var(--w) * 0.0042));
+    /* Der Filter zieht die Ränder nach innen; leicht vergrößert bleibt die Fläche gedeckt. */
+    transform: scale(1.02);
   }
   /* Die harte Kontur verläuft: ein weicher Saum in der Farbe des Körpers liegt über der
      Kante, nur seine Deckkraft wechselt. Ohne Skript bleibt sie 0. */
@@ -1164,60 +1203,9 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     opacity: 0;
     pointer-events: none;
   }
-  /* Bokeh um die fernen Fenster: Scheiben hinter dem Körper, nur ihre Deckkraft wechselt. */
-  .win__bokeh {
-    --disc: calc(var(--w) * 0.06);
-    --a: var(--dark, rgb(255 255 255 / 0.11)) var(--light, rgb(70 80 100 / 0.06));
-    --a2: var(--dark, rgb(255 255 255 / 0.2)) var(--light, rgb(70 80 100 / 0.11));
-    --b: var(--dark, rgb(170 200 255 / 0.13)) var(--light, rgb(70 100 170 / 0.08));
-    --b2: var(--dark, rgb(170 200 255 / 0.24)) var(--light, rgb(70 100 170 / 0.14));
-    --c: var(--dark, rgb(255 214 170 / 0.09)) var(--light, rgb(190 130 50 / 0.07));
-    --c2: var(--dark, rgb(255 214 170 / 0.17)) var(--light, rgb(190 130 50 / 0.13));
-    position: absolute;
-    inset: -30% -18%;
-    border-radius: 0;
-    transform: translateZ(calc(var(--t) * -1 - 4px));
-    opacity: 0;
-    pointer-events: none;
-  }
-  /* Bokeh braucht Lichtpunkte im Dunkeln; im hellen Raum gäbe es nur blasse Eier. */
-  .win__bokeh {
-    display: var(--dark, block) var(--light, none);
-  }
-  /* Eigene Ebenen nur, solange der Ring steht: im Fächer und ohne Skript kosten sie Speicher. */
-  .scene[data-live] .win__feather,
-  .scene[data-live] .win__bokeh {
+  /* Eigene Ebene nur, solange der Ring steht: im Fächer und ohne Skript kostet sie Speicher. */
+  .scene[data-live] .win__feather {
     will-change: opacity;
-  }
-  .win__bokeh--1 {
-    background:
-      radial-gradient(circle calc(var(--disc) * 1) at 13% 13%, var(--a) 80%, var(--a2) 93%, transparent),
-      radial-gradient(circle calc(var(--disc) * 0.6) at 41% 11%, var(--b) 80%, var(--b2) 93%, transparent),
-      radial-gradient(circle calc(var(--disc) * 1.4) at 84% 16%, var(--c) 80%, var(--c2) 93%, transparent),
-      radial-gradient(circle calc(var(--disc) * 0.8) at 92% 62%, var(--b) 80%, var(--b2) 93%, transparent),
-      radial-gradient(circle calc(var(--disc) * 0.5) at 66% 90%, var(--a) 80%, var(--a2) 93%, transparent),
-      radial-gradient(circle calc(var(--disc) * 0.7) at 7% 70%, var(--c) 80%, var(--c2) 93%, transparent);
-  }
-  .win__bokeh--2 {
-    background:
-      radial-gradient(circle calc(var(--disc) * 1.2) at 24% 13%, var(--b) 80%, var(--b2) 93%, transparent),
-      radial-gradient(circle calc(var(--disc) * 0.55) at 58% 10%, var(--c) 80%, var(--c2) 93%, transparent),
-      radial-gradient(circle calc(var(--disc) * 0.8) at 91% 28%, var(--a) 80%, var(--a2) 93%, transparent),
-      radial-gradient(circle calc(var(--disc) * 1) at 85% 86%, var(--b) 80%, var(--b2) 93%, transparent),
-      radial-gradient(circle calc(var(--disc) * 0.6) at 8% 44%, var(--c) 80%, var(--c2) 93%, transparent);
-  }
-  .win__bokeh--3 {
-    background:
-      radial-gradient(circle calc(var(--disc) * 0.7) at 7% 27%, var(--c) 80%, var(--c2) 93%, transparent),
-      radial-gradient(circle calc(var(--disc) * 1.3) at 49% 14%, var(--a) 80%, var(--a2) 93%, transparent),
-      radial-gradient(circle calc(var(--disc) * 0.6) at 86% 10%, var(--b) 80%, var(--b2) 93%, transparent),
-      radial-gradient(circle calc(var(--disc) * 1) at 92% 52%, var(--c) 80%, var(--c2) 93%, transparent),
-      radial-gradient(circle calc(var(--disc) * 0.8) at 27% 87%, var(--b) 80%, var(--b2) 93%, transparent);
-  }
-  /* Auf schwachen Geräten bleibt die weiche Ebene, die großen Scheiben entfallen. */
-  .scene[data-lite] .win__bokeh,
-  .scene[data-lite] .win__dofIn::after {
-    display: none;
   }
   /* Hintere Fenster versinken über eine Ebene in der Raumfarbe statt über einen Filter. */
   .win__shade {
@@ -1381,27 +1369,40 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
   .cap :global(.wi) {
     display: inline-block;
   }
+  /* Steuerung unter den Fenstern, links bündig (HUM-389): beide Pfeile zusammen, daneben je
+     Modul ein Abschnitt. Auf breiten Schirmen setzt das Skript die Lage unter die linke
+     Unterkante des vorderen Fensters (--ctl-x, --ctl-y, --ctl-w); sonst steht sie am Boden
+     der Beschriftung. */
   .deck__controls {
+    position: absolute;
+    left: var(--ctl-x, 5vw);
+    top: var(--ctl-y, auto);
+    width: min(26rem, var(--ctl-w, 40vw));
     display: flex;
     align-items: center;
-    gap: 0.9rem;
-    margin-top: 0.3rem;
+    gap: 0.6rem;
     opacity: 0;
   }
   .deck__track {
-    position: relative;
+    display: flex;
     flex: 1 1 auto;
-    max-width: min(22rem, 40vw);
+    gap: 5px;
+    margin-left: 0.6rem;
+  }
+  .deck__seg {
+    position: relative;
+    flex: 1 1 0;
     height: 2px;
-    background: rgb(var(--ink) / 0.12);
+    border-radius: 1px;
+    background: rgb(var(--ink) / 0.14);
     overflow: hidden;
   }
-  .deck__fill {
+  .deck__segFill {
     position: absolute;
     inset: 0;
     background: var(--strong);
     transform-origin: left center;
-    transform: scaleX(0.1429);
+    transform: scaleX(0);
   }
   .deck__arrow {
     display: grid;
@@ -1518,8 +1519,7 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     grid-row: 1 / span 2;
     align-self: start;
   }
-  .scene[data-cls='D'] .cap__layers,
-  .scene[data-cls='D'] .deck__controls {
+  .scene[data-cls='D'] .cap__layers {
     grid-column: 2;
   }
   .scene[data-cls='E'] {
@@ -1540,8 +1540,15 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     top: -0.2rem;
     right: 0;
   }
+  .scene[data-cls='E'] .cap {
+    padding-bottom: 3.6rem;
+  }
   .scene[data-cls='E'] .deck__controls {
-    margin-top: auto;
+    left: 7vw;
+    right: 7vw;
+    top: auto;
+    bottom: 3.5vh;
+    width: auto;
   }
   .scene[data-cls='F'] {
     --idx: 1.1rem;
@@ -1550,7 +1557,8 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     --text-w: none;
     --cap-gap: 0.7rem;
   }
-  /* Die Pfeile stehen fest am Boden der Beschriftung, darüber liegt der freigehaltene Text. */
+  /* Die Pfeile stehen fest am Boden der Beschriftung, darüber liegt der freigehaltene Text.
+     Die Steuerung liegt in .deck, nicht in .cap; ihre Kanten folgen denen der Beschriftung. */
   .scene[data-cls='F'] .cap {
     top: var(--cap-t, 52svh);
     bottom: 4svh;
@@ -1560,9 +1568,11 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     padding-bottom: 3.25rem;
   }
   .scene[data-cls='F'] .deck__controls {
-    position: absolute;
-    inset: auto 0 0;
-    margin: 0;
+    left: 6vw;
+    right: 6vw;
+    top: auto;
+    bottom: 4svh;
+    width: auto;
   }
   /* Der Kopf hat im Hochformat keine eigene Zeile; seine Kinder liegen absolut. */
   .scene[data-cls='F'] .cap__head {
@@ -1598,9 +1608,6 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
   .scene[data-cls='F'] .cap__layer {
     gap: 0.55rem;
   }
-  .scene[data-cls='F'] .deck__track {
-    max-width: none;
-  }
   /* Kurze Telefone: Schrift und Abstände werden kleiner, die Pfeile bleiben unberührt. */
   @media (max-height: 719px) {
     .scene[data-cls='F'] {
@@ -1618,6 +1625,9 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     .scene[data-cls='F'] .cap {
       bottom: 0.75rem;
     }
+    .scene[data-cls='F'] .deck__controls {
+      bottom: 0.75rem;
+    }
   }
   /* Kurz oder kurz und breit: Das Fenster reicht bis an die Navigation und läge unter dem
      Titel; Screenreader lesen ihn weiter. */
@@ -1625,10 +1635,6 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
     .scene[data-cls='F'] .deck__title {
       opacity: 0;
     }
-  }
-  .scene[data-cls='F'] .deck__controls,
-  .scene[data-cls='E'] .deck__controls {
-    justify-content: space-between;
   }
   .scene[data-cls='G'] {
     --idx: 3rem;
@@ -1650,6 +1656,16 @@ const screenAlt = (id: string) => t.stage.modules.find((module) => module.id ===
   }
   .scene[data-cls='G'] .cap__text {
     line-height: 1.4;
+  }
+  .scene[data-cls='G'] .cap {
+    padding-bottom: 2.9rem;
+  }
+  .scene[data-cls='G'] .deck__controls {
+    left: 57vw;
+    right: 4vw;
+    top: auto;
+    bottom: 5vh;
+    width: auto;
   }
   .scene[data-cls='G'] .deck__arrow {
     width: 2.25rem;

@@ -62,6 +62,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-387 | OpenCode erreicht ein lokales Modell über den Proxy | M | HUM-037, HUM-039, HUM-365 |
 | HUM-382 | Signierte Updates aus der App, ein Klick, macOS und Linux | L | HUM-284, HUM-326, HUM-325 |
 | HUM-388 | Website: neue Bilder im neutralen Grau mit einer echten Beispielsitzung | S | HUM-333, HUM-355 |
+| HUM-389 | Website: Glas, Video im vorderen Fenster, gerades Karussell mit Autoplay | M | HUM-333, HUM-375, HUM-388 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -896,3 +897,16 @@ Akzeptanzkriterien:
 
 - Neue Sitzung `fixtures/sessions/showcase.jsonl`: ein Agent, der den PDF-Export eines Rechnungsdienstes repariert; Sprachmodell im LAN über die Durchreiche, ein `curl`-Upload der `.env` nach `paste.rs` mit drei Funden, npm, GitHub-API, eine von der mitgelieferten Regel geblockte Anfrage an `models.dev`, eine GraphQL-Anfrage mit Token und eine Fehlermeldung an Sentry. Alle Ids UUIDv7, alle Schlüssel erfunden oder Beispielwerte der Anbieter, nichts, was die Geheimnis-Erkennung von GitHub beim Push anschlägt. `fixtures/sessions/README.md` beschreibt sie.
 - Die sieben Bilder unter `website/src/assets/screens/` sind neu aufgenommen, vom aktuellen `main` gegen den Fake-Daemon mit dieser Sitzung, 2560 × 1352 px. Die Statusleiste mit `Daemon 0.0.0 · fake` ist abgeschnitten, alle vier Ecken bleiben rund und durchsichtig.
+
+## HUM-389 · Website: Glas, Video im vorderen Fenster, gerades Karussell mit Autoplay
+
+Rückmeldung des Inhabers vom 2026-11-01 zur Startseite.
+
+Akzeptanzkriterien:
+
+- Glas: Rahmen und Glanzband um die Bilder sind schmaler (Rahmen 0,005 · Breite, Band 0,0225 · Breite) und konzentrisch zu den Ecken der Bilder, deren Radius aus den Bildern gemessen ist; die Eckkacheln unter `public/rim/` sind dazu neu erzeugt.
+- Das vordere Fenster der Bühne zeigt ein Video eines echten Ablaufs in der App (`public/media/workflow.webm` und `.mp4`, aufgenommen mit `showcase.jsonl` aus HUM-388): stumm, in Schleife, `playsinline`, `preload="metadata"`, Vorschaubild ist das Intercept-Bild. Es spielt nur, wenn es zu sehen ist, und bleibt unter reduzierter Bewegung beim Vorschaubild; fällt es aus, bleibt das Bild.
+- Karussell: Die Fenster stehen gerade zum Betrachter, jede Oberkante waagerecht; die Bahn darf nach rechts steigen. Keine Bokeh-Kreise mehr, die Tiefenunschärfe ist ein milder gaußscher Weichzeichner. Das Fenster im Fokus ist größer.
+- Die Pfeile stehen links unter den Bildern, daneben je Modul ein Segment. Ohne Zeiger über den Fenstern füllt sich das aktive Segment in 5 s und das Karussell dreht weiter; Zeiger, Tastaturfokus, verborgener Tab, Bühne außer Sicht und laufende Bewegung halten an, eine Bedienung startet die Zeit neu. Unter reduzierter Bewegung kein automatisches Weiterdrehen.
+- Der Wechsel ist eine Bewegung mit einer Kurve (720 ms, `cubic-bezier(0.22,1,0.36,1)`), unterbrechbar, ohne dass ein Fenster durch ein näheres hindurchspringt; das umlaufende Fenster blendet aus und am anderen Ende ein.
+- Hell und dunkel, Telefone ab 320 px ohne waagerechtes Scrollen wie in HUM-360.

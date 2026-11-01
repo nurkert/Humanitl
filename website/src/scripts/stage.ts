@@ -8,8 +8,10 @@
 // Plätzen und blenden im Morph auf, so kommen alle sieben auf dem Ring an.
 //
 // Danach scrollt die Seite normal weiter, kein Skript bewegt sie. Das Karussell dreht
-// nur über Pfeile, Ziehen, Wischen, waagrechtes Scrollen und die Pfeiltasten, ohne Ende
-// in beide Richtungen.
+// über Pfeile, Ziehen, Wischen, waagrechtes Scrollen und die Pfeiltasten, ohne Ende in beide
+// Richtungen, und von selbst alle fünf Sekunden, solange niemand mit ihm arbeitet (HUM-389).
+// Auf dem Bogen schauen alle Fenster gerade zum Betrachter, ihre Oberkante bleibt waagrecht;
+// nur der Weg steigt nach rechts.
 //
 // Die Geometrie hängt an einem Parametersatz G (Größe, Lage, Kippung, Rolle des Bogens,
 // Winkelabstand, Radius). Der Morph mischt Parameter, nicht Posen: so bleibt die
@@ -32,6 +34,8 @@ interface Params {
   kappa: number;
   delta: number;
   yaw: number;
+  /** Wie weit das Fenster im Fokus vor den Bogen tritt, in Fensterbreiten (HUM-389). */
+  lift: number;
 }
 
 /** Pose eines Fensters in Rig-Koordinaten. rx kippt um die Unterkante (Einflug). */
@@ -66,7 +70,14 @@ interface Layout {
 
 type Vec = [number, number, number];
 
-const ASPECT = 2560 / 1380;
+// Seitenverhältnis der Aufnahmen, aus dem importierten Bild (data-aspect an der Szene).
+const ASPECT =
+  Number(document.querySelector<HTMLElement>("[data-scene]")?.dataset.aspect) ||
+  2560 / 1352;
+// Breite des Glasrahmens in Fensterbreiten, wie --pad in Home.astro.
+const PAD = 0.005;
+/** Höhe eines Fensters: die Aufnahme mit ihrem Verhältnis plus der Rahmen oben und unten. */
+const heightOf = (Ws: number) => (Ws * (1 - 2 * PAD)) / ASPECT + 2 * PAD * Ws;
 const RAD = Math.PI / 180;
 
 // ---- Kleine Mathematik ------------------------------------------------------------
@@ -193,10 +204,12 @@ const STAGE_POS: Profile = [
   [3, 0.5],
   [3.4, 0],
 ];
+// Links der Front steht auf der Bühne nichts mehr (HUM-389): das gehende Fenster blendet auf
+// dem Weg nach d = -1 aus, links unter der Front liegen die Pfeile.
 const STAGE_NEG: Profile = [
   [0, 1],
-  [1, 0.42],
-  [1.6, 0],
+  [0.45, 0.8],
+  [0.95, 0],
 ];
 const PHONE_POS: Profile = [
   [2, 1],
@@ -234,6 +247,10 @@ const TUCK = 0.5;
 // Rand um die Beschriftung gegen d = +1: negativ, die Ecke darf unter den Kasten reichen.
 const CORNER = -12;
 
+// Bildausschnitte, in denen die Steuerung unter der Front steht statt an der Beschriftung.
+const CTL_FREE = new Set<Cls>(["A", "B", "C", "D"]);
+const ctlGapOf = (vh: number) => clamp(vh * 0.022, 14, 28);
+
 // Perspektive der Bühne; dieselbe Tiefe wirkt stärker, die Front löst sich vom Bogen.
 const perspectiveOf = (Ws: number) => Math.max(1200, 2.4 * Ws);
 
@@ -268,6 +285,7 @@ function params(p: Partial<Params>): Params {
     kappa: 1.15,
     delta: 0.08,
     yaw: 0,
+    lift: 0,
     ...p,
   };
 }
@@ -281,6 +299,12 @@ const FAN: Partial<Params> = {
   delta: 0.22,
   yaw: -32,
 };
+
+// Die Bühne (HUM-389): jedes Fenster frontal und waagrecht. kappa und yaw drehen nicht mehr,
+// rho = 0 hebt die Rolle des Bogens am Fenster auf. Das Fenster im Fokus tritt um LIFT vor:
+// es wird größer, und beim Wechsel liegt das ankommende Fenster immer vor dem gehenden.
+const LIFT = 0.16;
+const FLAT: Partial<Params> = { kappa: 0, yaw: 0, rho: 0, lift: LIFT };
 
 /**
  * Der Stapel am Telefon: die Karten rechts der Front staffeln sich schräg nach hinten, die
@@ -323,7 +347,8 @@ function init(scene: HTMLElement) {
   // Ab hier sind Pfeile sichtbar und Drehen, Ziehen und Tastatur zugleich möglich (HUM-347).
   const LIVE_AT = 0.85;
   const controls = scene.querySelector<HTMLElement>("[data-controls]")!;
-  const fill = scene.querySelector<HTMLElement>("[data-fill]")!;
+  // Je Modul ein Abschnitt; der aktive füllt sich im Selbstlauf (HUM-389).
+  const segs = [...scene.querySelectorAll<HTMLElement>("[data-seg]")];
   const odo = scene.querySelector<HTMLElement>("[data-odo]")!;
   const live = scene.querySelector<HTMLElement>("[data-live-text]")!;
   const layerEls = [...scene.querySelectorAll<HTMLElement>("[data-layer]")];
@@ -331,17 +356,18 @@ function init(scene: HTMLElement) {
     "[data-nav] .nav__bar, [data-nav]",
   );
   const frontImg = wins[0]?.querySelector("img");
-  // Die Unschärfe: je Fenster die weiche Ebene, ihre Skalierung und die Lichtscheiben.
+  // Die Unschärfe: je Fenster die weiche Ebene und ihr Saum.
   const dofs = wins.map((w) => w.querySelector<HTMLElement>("[data-dof]")!);
-  const dofInner = wins.map((w) =>
-    w.querySelector<HTMLElement>("[data-dof-in]")!,
-  );
-  const bokehs = wins.map((w) => w.querySelector<HTMLElement>("[data-bokeh]")!);
   const feathers = wins.map((w) =>
     w.querySelector<HTMLElement>("[data-feather]")!,
   );
   const n = wins.length;
-  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // Der Ablauf im vorderen Fenster (HUM-389) und sein Fenster.
+  const video = scene.querySelector<HTMLVideoElement>("[data-video]");
+  const videoWin = video ? wins.findIndex((w) => w.contains(video)) : -1;
+  // Kann sich zur Laufzeit ändern; dann halten Autoplay und Video sofort an (unten).
+  const reducedQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+  let reduced = reducedQuery.matches;
   const dev = import.meta.env.DEV;
 
   // Abstand auf dem Ring, gefaltet in [-n/2, n/2): jedes Fenster hat links und rechts Nachbarn.
@@ -363,6 +389,16 @@ function init(scene: HTMLElement) {
   let target = 0;
   let springOn = false;
   let wheelTimer = 0;
+  // Ein Wechsel per Pfeil, Taste oder Selbstlauf ist eine einzige Kurve für alle Fenster. Ein
+  // weiterer Klick mitten in der Fahrt hängt eine zweite Kurve an, die sich zur ersten addiert:
+  // so ändert sich das Ziel ohne Sprung in Lage oder Richtung (HUM-389).
+  let tweens: { t0: number; delta: number }[] = [];
+  let tweenBase = 0;
+  // Ziehen oder waagrechtes Scrollen: der Ring folgt der Hand, steerDir ist ihre Richtung.
+  let steering = false;
+  let steerDir = 1;
+  // Vortritt je Fenster, 0 bis 1: folgt schnell dem Fenster, das zum Fokus wird.
+  const liftW: number[] = [];
   let introT0 = -1;
   let introDone = reduced;
   let introStarts: Pose[] = [];
@@ -417,7 +453,7 @@ function init(scene: HTMLElement) {
     switch (cls) {
       case "A":
         Wh = Math.min(vw * 0.36, vh * 0.8);
-        Ws = Math.min(vw * 0.47, vh * 1.12);
+        Ws = Math.min(vw * 0.52, vh * 1.2);
         hero = params({
           tilt: 4,
           phis: 15,
@@ -427,14 +463,13 @@ function init(scene: HTMLElement) {
           yaw: -32,
         });
         stage = params({
+          ...FLAT,
           cy: -vh * 0.06,
           tilt: 3,
           beta: -14,
-          rho: 0.55,
-          phis: 30,
+          phis: 32,
           r: 1.2,
-          kappa: 1,
-          delta: 0,
+          delta: 0.05,
         });
         // Der breite Schirm hat Platz für eine vierte Scheibe.
         heroProfile = [
@@ -447,66 +482,62 @@ function init(scene: HTMLElement) {
         break;
       case "B":
         Wh = Math.min(vw * 0.42, fanRoom(1));
-        Ws = Math.min(vw * 0.52, vh * 0.98);
+        Ws = Math.min(vw * 0.58, vh * 1.05);
         hero = params(FAN);
         stage = params({
+          ...FLAT,
           cy: -vh * 0.1,
           tilt: 2,
           beta: -15,
-          rho: 0.55,
-          phis: 33,
+          phis: 35,
           r: 1.08,
-          kappa: 1,
-          delta: 0,
+          delta: 0.05,
         });
         stagePos = PHONE_POS;
         break;
       case "C":
         Wh = Math.min(vw * 0.46, fanRoom(1));
-        Ws = Math.min(vw * 0.53, vh * 0.9);
+        Ws = Math.min(vw * 0.58, vh * 0.98);
         hero = params(FAN);
         stage = params({
+          ...FLAT,
           cy: -vh * 0.12,
           tilt: 2,
           beta: -15,
-          rho: 0.55,
-          phis: 33,
+          phis: 35,
           r: 1.08,
-          kappa: 1,
-          delta: 0,
+          delta: 0.05,
         });
         stagePos = PHONE_POS;
         break;
       case "D":
         Wh = Math.min(vw * 0.52, fanRoom(1));
-        Ws = vw * 0.6;
+        Ws = vw * 0.66;
         hero = params({ ...FAN, phis: 14 });
         stage = params({
+          ...FLAT,
           cy: -vh * 0.15,
           tilt: 3,
           beta: -13,
-          rho: 0.55,
-          phis: 33,
+          phis: 35,
           r: 1.05,
-          kappa: 1,
-          delta: 0,
+          delta: 0.05,
         });
         // Bei 30° Winkelabstand stünde d = 3 schon hinter dem Scheitel des Bogens.
         stagePos = PHONE_POS;
         break;
       case "E":
         Wh = vw * 0.76;
-        Ws = vw * 0.87;
+        Ws = vw * 0.9;
         hero = params({ ...FAN, phis: 10, delta: 0.26 });
         stage = params({
+          ...FLAT,
           cy: -vh * 0.16,
           tilt: 3,
           beta: -14,
-          rho: 0.55,
-          phis: 32,
+          phis: 34,
           r: 1.15,
-          kappa: 1,
-          delta: 0,
+          delta: 0.05,
         });
         stagePos = PHONE_POS;
         break;
@@ -515,14 +546,13 @@ function init(scene: HTMLElement) {
         Ws = vw * 0.93;
         hero = params({ tilt: 4 });
         stage = params({
+          ...FLAT,
           cy: -vh * 0.16,
           tilt: 3,
           beta: -5,
-          rho: 0.6,
           phis: 17,
           r: 2.4,
-          kappa: 0.55,
-          delta: 0,
+          delta: 0.05,
         });
         heroProfile = [
           [2, 1],
@@ -535,17 +565,16 @@ function init(scene: HTMLElement) {
       case "G":
       default:
         Wh = vw * 0.4;
-        Ws = Math.min(vw * 0.5, vh * 0.68 * ASPECT);
+        Ws = Math.min(vw * 0.54, vh * 0.7 * ASPECT);
         hero = params({ ...FAN, phis: 12, delta: 0.2, yaw: -30 });
         stage = params({
+          ...FLAT,
           cy: vh * 0.06,
           tilt: 2,
           beta: -8,
-          rho: 0.55,
-          phis: 28,
+          phis: 30,
           r: 1.2,
-          kappa: 1,
-          delta: 0,
+          delta: 0.05,
         });
         // Telefon quer: rechts steht die Beschriftung, die Nachbarn rechts treten zurück.
         stagePos = [
@@ -579,6 +608,11 @@ function init(scene: HTMLElement) {
           )
         : capBox;
     const betaMin = BETA_MIN[cls];
+    // Auf breiten Schirmen stehen Pfeile und Abschnitte unter der linken Unterkante der Front
+    // (HUM-389); sie brauchen ihre Höhe unter dem Fenster.
+    const ctlFree = CTL_FREE.has(cls);
+    const ctlGap = ctlGapOf(vh);
+    const ctlH = controls.offsetHeight || 44;
     const o1 = profile(stagePos, 1);
     const o2 = profile(stagePos, 2);
     const edge = EDGE[cls];
@@ -597,18 +631,21 @@ function init(scene: HTMLElement) {
         (hitsQuad(capBox, rects[0].q) ||
           (o1 > 0.3 && hitsQuad(textBox, rects[1].q, CORNER)) ||
           (o2 > 0.3 && overlap(capBox, rects[2]) > 0.15));
-      if (top >= need && !capHit) break;
+      const low = ctlFree && rects[0].b + ctlGap + ctlH > vh - 14;
+      if (top >= need && !capHit && !low) break;
       const high = top < need;
       if (high && stage.beta < betaMin - 0.01)
         stage.beta = Math.min(betaMin, stage.beta + 1);
-      else if (high && !capHit) stage.cy += Math.min(need - top, 0.02 * vh) + 1;
-      else if (capHit && top > need + 2) {
-        // Die Beschriftung stößt an: die Bühne steigt in den freien Raum unter der Navigation.
+      else if (high && !capHit && !low)
+        stage.cy += Math.min(need - top, 0.02 * vh) + 1;
+      else if ((capHit || low) && top > need + 2) {
+        // Beschriftung oder Steuerung stoßen an: die Bühne steigt in den freien Raum unter
+        // der Navigation.
         stage.cy -= Math.min(top - need, 0.02 * vh);
       } else Ws *= 0.985;
     }
     hero.S = Wh / Ws;
-    const H = Ws / ASPECT;
+    const H = heightOf(Ws);
     const T = slabT(Ws);
     const P = perspectiveOf(Ws);
     const out: Layout = {
@@ -758,12 +795,15 @@ function init(scene: HTMLElement) {
     const p: Pose = {
       x: R * Math.sin(phi),
       y: 0,
-      z: -R * (1 - Math.cos(phi)) - G.delta * Math.abs(d) * Ws,
+      z:
+        -R * (1 - Math.cos(phi)) -
+        G.delta * Math.abs(d) * Ws +
+        (d === 0 ? G.lift * Ws : 0),
       rz: -(1 - G.rho) * G.beta,
       ry: -G.kappa * d * G.phis + G.yaw,
       rx: 0,
     };
-    return rectWith(G, p, Ws, Ws / ASPECT, perspectiveOf(Ws));
+    return rectWith(G, p, Ws, heightOf(Ws), perspectiveOf(Ws));
   }
 
   // Die Beschriftung hält die Höhe der längsten Fassung frei, damit Index und Augenbraue
@@ -817,6 +857,20 @@ function init(scene: HTMLElement) {
     const b = project(toWorld(lay.stage, slotVec(lay.stage, 1)));
     pxPerStep = clamp(Math.hypot(b[0] - a[0], b[1] - a[1]), 140, 700);
     if (lite) scene.dataset.lite = "";
+    // Die Steuerung unter der linken Unterkante der Front, so breit wie diese (höchstens
+    // 26 rem, das setzt das CSS). In den übrigen Bildausschnitten stellt das CSS sie hin.
+    if (CTL_FREE.has(lay.cls)) {
+      const f = stageRect(lay.stage, 0, lay.Ws);
+      controls.style.setProperty("--ctl-x", `${Math.round(f.l)}px`);
+      controls.style.setProperty(
+        "--ctl-y",
+        `${Math.round(f.b + ctlGapOf(vh))}px`,
+      );
+      controls.style.setProperty("--ctl-w", `${Math.round(f.r - f.l)}px`);
+    } else {
+      for (const k of ["--ctl-x", "--ctl-y", "--ctl-w"])
+        controls.style.removeProperty(k);
+    }
   }
 
   // ---- Geometrie ------------------------------------------------------------------
@@ -835,18 +889,21 @@ function init(scene: HTMLElement) {
     return [vw / 2 + v[0] * k, vh / 2 + v[1] * k];
   }
 
-  function slotVec(G: Params, d: number): Vec {
+  /** Platz auf dem Bogen; lw ist der Anteil des Vortritts im Fokus (0 bis 1). */
+  function slotVec(G: Params, d: number, lw = 0): Vec {
     const phi = d * G.phis * RAD;
     const R = G.r * lay.Ws;
     return [
       R * Math.sin(phi),
       0,
-      -R * (1 - Math.cos(phi)) - G.delta * Math.abs(d) * lay.Ws,
+      -R * (1 - Math.cos(phi)) -
+        G.delta * Math.abs(d) * lay.Ws +
+        G.lift * lw * lay.Ws,
     ];
   }
 
-  function slotPose(G: Params, d: number, rho: number): Pose {
-    const [x, y, z] = slotVec(G, d);
+  function slotPose(G: Params, d: number, rho: number, lw = 0): Pose {
+    const [x, y, z] = slotVec(G, d, lw);
     return {
       x,
       y,
@@ -884,17 +941,18 @@ function init(scene: HTMLElement) {
       kappa: lerp(h.kappa, s.kappa, eArc),
       delta: lerp(h.delta, s.delta, eArc),
       yaw: lerp(h.yaw, s.yaw, eArc),
+      lift: lerp(h.lift, s.lift, eArc),
     };
   }
 
-  /** Pose von Fenster i im Morph; ρ ist je Fenster gestaffelt. */
-  function morphPose(G: Params, d: number, mm: number): Pose {
+  /** Pose von Fenster i im Morph; ρ ist je Fenster gestaffelt, lw ist sein Vortritt. */
+  function morphPose(G: Params, d: number, mm: number, lw = 0): Pose {
     const mi = clamp((mm - 0.04 * Math.abs(d)) / 0.88);
     const rho = lerp(lay.hero.rho, lay.stage.rho, smoothstep(mi));
-    if (!lay.stack) return slotPose(G, d, rho);
+    if (!lay.stack) return slotPose(G, d, rho, lw);
     // Telefon hoch: der Stapel fächert sich zum Bogen auf, Kanal für Kanal.
     const h = stackPose(d);
-    const s = slotPose(lay.stage, d, rho);
+    const s = slotPose(lay.stage, d, rho, lw * smoothstep(mm));
     const rank = Math.min(3, rankOf(d));
     const e = clamp((mm - 0.08 * rank) / (1 - 0.24));
     const ex = easeInOutCubic(map(e, 0, 0.75));
@@ -1483,6 +1541,16 @@ function init(scene: HTMLElement) {
 
   // ---- Karussell ------------------------------------------------------------------
 
+  // Dauer und Kurve eines Wechsels: schnell los, lang und weich aus.
+  const TURN_MS = 720;
+  const easeTurn = bezier(0.22, 1, 0.36, 1);
+
+  /** Der Ring steht: ansagen (außer nach dem Selbstlauf) und den Selbstlauf weiterlaufen lassen. */
+  function settled() {
+    if (!lastTurnAuto) announceSettled();
+    syncAuto();
+  }
+
   function springStep(h: number) {
     const w = 11;
     const z = 0.86;
@@ -1494,30 +1562,185 @@ function init(scene: HTMLElement) {
       pos = target;
       vel = 0;
       springOn = false;
-      turning = false;
-      announceSettled();
+      settled();
     }
   }
 
-  const canTurn = () => liveState;
-  let turning = false;
-
-  function turn(by: number) {
-    if (!canTurn()) return;
-    // Nach Ziehen oder Wischen zählt die Position, nicht ein altes Ziel; nur während eine
-    // Pfeil-Drehung noch läuft, zählt ein weiterer Klick vom Ziel aus weiter.
-    clearTimeout(wheelTimer);
-    const base = springOn && turning ? Math.round(target) : Math.round(pos);
-    turning = true;
-    target = clamp(base + by, Math.round(pos) - 3, Math.round(pos) + 3);
-    if (reduced) {
+  /** Die laufenden Kurven eines Wechsels auswerten; fertige gehen in die Basis über. */
+  function tweenStep(now: number) {
+    tweens = tweens.filter((tw) => {
+      if (now - tw.t0 < TURN_MS) return true;
+      tweenBase += tw.delta;
+      return false;
+    });
+    if (!tweens.length) {
       pos = target;
-      vel = 0;
-      turning = false;
-      announceSettled();
-    } else springOn = true;
+      tweenBase = target;
+      settled();
+      return;
+    }
+    let p = tweenBase;
+    for (const tw of tweens) p += tw.delta * easeTurn((now - tw.t0) / TURN_MS);
+    pos = p;
+  }
+
+  /** Bricht Kurven und Feder ab; der Ring bleibt, wo er gerade ist. */
+  function holdRing() {
+    tweens = [];
+    tweenBase = pos;
+    springOn = false;
+    vel = 0;
+  }
+
+  const canTurn = () => liveState;
+  let lastTurnAuto = false;
+
+  function turn(by: number, auto = false) {
+    if (!canTurn()) return;
+    clearTimeout(wheelTimer);
+    steering = false;
+    lastTurnAuto = auto;
+    // Nach Ziehen oder Wischen zählt die Position; während eine Fahrt läuft, zählt ein
+    // weiterer Klick von ihrem Ziel aus weiter.
+    if (!tweens.length) {
+      holdRing();
+      target = Math.round(pos);
+    }
+    const goal = clamp(target + by, Math.round(pos) - 3, Math.round(pos) + 3);
+    const dest = tweens.reduce((sum, tw) => sum + tw.delta, tweenBase);
+    target = goal;
+    if (reduced) {
+      holdRing();
+      pos = target;
+      tweenBase = target;
+      settled();
+    } else if (Math.abs(goal - dest) > 1e-6) {
+      tweens.push({ t0: performance.now(), delta: goal - dest });
+    }
+    // Ein Eingriff von Hand startet die Zeit neu, auch wenn er den Fokus am Ende nicht wechselt.
+    if (!auto) restartAuto();
     schedule();
   }
+
+  /** Welches Fenster den Vortritt hat: das Ziel, beim Ziehen das in Zugrichtung kommende. */
+  function liftIndex(): number {
+    if (!steering) return mod(Math.round(target));
+    return mod(steerDir > 0 ? Math.ceil(pos - 1e-3) : Math.floor(pos + 1e-3));
+  }
+
+  // ---- Selbstlauf -----------------------------------------------------------------
+  // Der aktive Abschnitt füllt sich in AUTO_MS, dann dreht der Ring eins weiter. Er hält, solange
+  // der Zeiger über einem Fenster steht, die Tastatur in der Steuerung ist, der Tab verborgen
+  // oder die Bühne aus dem Bild ist, und bei reduzierter Bewegung läuft er nie. Die Füllung ist
+  // eine Web Animation: pausiert hält sie ihren Stand, und pro Bild rechnet kein Skript.
+
+  const AUTO_MS = 5000;
+  const autoOn =
+    !reduced && segs.length === n && typeof segs[0]?.animate === "function";
+  let autoAnim: Animation | null = null;
+  let hoverWins = false;
+  let keyFocus = false;
+
+  const inMotion = () =>
+    tweens.length > 0 || springOn || dragging || steering;
+
+  function autoAllowed() {
+    return (
+      liveState &&
+      inView &&
+      !document.hidden &&
+      !hoverWins &&
+      !keyFocus &&
+      !inMotion()
+    );
+  }
+
+  function paintSegs() {
+    segs.forEach((seg, i) =>
+      put(
+        seg,
+        "transform",
+        i < active || ((!autoOn || reduced) && i === active)
+          ? "scaleX(1)"
+          : "scaleX(0)",
+      ),
+    );
+  }
+
+  /** Neuer Abschnitt oder Eingriff von Hand: die Füllung beginnt von vorn. */
+  function restartAuto() {
+    autoAnim?.cancel();
+    autoAnim = null;
+    paintSegs();
+    if (!autoOn || reduced || !liveState) return;
+    const anim = segs[active].animate(
+      [{ transform: "scaleX(0)" }, { transform: "scaleX(1)" }],
+      { duration: AUTO_MS, easing: "linear", fill: "forwards" },
+    );
+    autoAnim = anim;
+    anim.pause();
+    anim.onfinish = () => {
+      if (autoAnim === anim && autoAllowed()) turn(1, true);
+    };
+    syncAuto();
+  }
+
+  function syncAuto() {
+    const anim = autoAnim;
+    if (!anim) return;
+    const run = autoAllowed();
+    if (run && anim.playState === "finished") turn(1, true);
+    else if (run && anim.playState === "paused") anim.play();
+    else if (!run && anim.playState === "running") anim.pause();
+  }
+
+  /** Steht der Punkt (Viewport) über einem sichtbaren Fenster? Aus den Posen des letzten Bildes. */
+  function overWindow(x: number, y: number): boolean {
+    if (!lastG) return false;
+    const G = lastG;
+    return lastPoses.some((p, i) => {
+      if (lastOps[i] < 0.05) return false;
+      const q = [-1, 1].flatMap((sx) =>
+        [-1, 1].map((sy) =>
+          project(
+            toWorld(G, winPoint(p, (sx * lay.Ws) / 2, (sy * lay.H) / 2)),
+          ),
+        ),
+      );
+      const xs = q.map((v) => v[0]);
+      const ys = q.map((v) => v[1]);
+      return (
+        x >= Math.min(...xs) &&
+        x <= Math.max(...xs) &&
+        y >= Math.min(...ys) &&
+        y <= Math.max(...ys)
+      );
+    });
+  }
+  let lastG: Params | null = null;
+  let lastPoses: Pose[] = [];
+  let lastOps: number[] = [];
+
+  // ---- Video im vorderen Fenster ----------------------------------------------------
+  // Läuft nur, wenn sein Fenster nah am Fokus und sichtbar ist, die Bühne im Bild und der Tab
+  // vorn; bei reduzierter Bewegung bleibt das Poster stehen.
+  let videoShown = false;
+  let sceneSeen = false;
+  function syncVideo() {
+    if (!video) return;
+    const want = !reduced && !document.hidden && sceneSeen && videoShown;
+    if (want && video.paused) {
+      video.muted = true;
+      video.play().catch(() => undefined);
+    } else if (!want && !video.paused) video.pause();
+  }
+
+  reducedQuery.addEventListener("change", (event) => {
+    reduced = event.matches;
+    restartAuto();
+    syncVideo();
+    if (reduced && video) video.currentTime = 0;
+  });
 
   // ---- Ein Bild -------------------------------------------------------------------
 
@@ -1544,6 +1767,20 @@ function init(scene: HTMLElement) {
         left -= h;
       }
       busy ||= springOn;
+    }
+    if (tweens.length) {
+      tweenStep(now);
+      busy ||= tweens.length > 0;
+    }
+    // Der Vortritt wechselt in rund 50 ms: lange bevor sich gehendes und kommendes Fenster
+    // auf halbem Weg in gleicher Tiefe träfen, liegt das kommende schon davor.
+    const liftAt = liftIndex();
+    const kLift = reduced ? 1 : 1 - Math.exp(-dt / 0.05);
+    for (let i = 0; i < n; i++) {
+      const goal = i === liftAt ? 1 : 0;
+      liftW[i] += (goal - liftW[i]) * kLift;
+      if (Math.abs(goal - liftW[i]) < 1e-3) liftW[i] = goal;
+      else busy = true;
     }
     if (odoQ !== odoTarget) busy = odoStep(Math.min(dt, 1 / 30)) || busy;
 
@@ -1573,7 +1810,7 @@ function init(scene: HTMLElement) {
     const ops: number[] = [];
     let allLanded = true;
     ds.forEach((d, i) => {
-      let p = morphPose(G, d, m);
+      let p = morphPose(G, d, m, liftW[i]);
       let o = opacityOf(d, m);
       if (introT0 >= 0 && !introDone) {
         const [q, io] = introBlend(i, p, now);
@@ -1589,6 +1826,9 @@ function init(scene: HTMLElement) {
       ops.push(o);
     });
     guard(poses, ds);
+    lastG = G;
+    lastPoses = poses;
+    lastOps = ops;
 
     // Fenster jenseits von d = +1 blenden aus, sobald sie in das Band der Navigation steigen:
     // dort schimmerte der Bildschirm durch die halbtransparente Leiste.
@@ -1615,6 +1855,15 @@ function init(scene: HTMLElement) {
     for (const i of byX) if (ops[i] > 0.01) visibleRank[i] = r++;
     const frontRank = visibleRank[ds.findIndex((d) => Math.abs(d) < 0.5)] ?? 0;
 
+    // Das Video läuft nur nah am Fokus; weiter hinten deckt die weiche Ebene es ganz zu.
+    if (videoWin >= 0) {
+      const shown = ops[videoWin] > 0.05 && Math.abs(ds[videoWin]) < 1.25;
+      if (shown !== videoShown) {
+        videoShown = shown;
+        syncVideo();
+      }
+    }
+
     // Tiefenschärfe erst auf der Bühne: im Fächer bleibt alles scharf.
     const focusOn = smoothstep(map(m, 0.55, 0.95));
     const halfH = lay.H / 2;
@@ -1635,24 +1884,15 @@ function init(scene: HTMLElement) {
       const b = a > 0 ? o / a : 0;
       put(win, "--o", a.toFixed(3));
       const off = Math.abs(ds[i]);
-      const soft = focusOn * smoothstep(map(off, 0.08, 1.2));
+      // Die Unschärfe steigt sanft mit der Tiefe: bei |d| = 1 knapp zur Hälfte, ab 2 ganz.
+      const soft = focusOn * smoothstep(map(off, 0.1, 2.2));
       put(win, "--oe", (a * a * a * b * (1 - 0.6 * soft)).toFixed(3));
       put(win, "visibility", o <= 0.002 ? "hidden" : "");
-      // Die Schärfe wandert mit dem Fokus: die weiche Ebene ist am Fokus exakt 0 und ab
-      // |d| = 1.2 ganz da. Ihr Filter ist fest, pro Bild ändern sich nur opacity und scale.
+      // Die Schärfe wandert mit dem Fokus: die weiche Ebene ist am Fokus exakt 0. Ihr Filter
+      // ist fest, pro Bild ändert sich nur ihre opacity.
       if (o > 0.002) {
         put(dofs[i], "opacity", soft.toFixed(3));
-        put(feathers[i], "opacity", (soft * a).toFixed(3));
-        put(
-          dofInner[i],
-          "transform",
-          `scale(${(1 + 0.04 * clamp(off) + 0.03 * clamp((off - 1) / 2)).toFixed(3)})`,
-        );
-        put(
-          bokehs[i],
-          "opacity",
-          (focusOn * smoothstep(map(off, 0.6, 1.8)) * o).toFixed(3),
-        );
+        put(feathers[i], "opacity", (0.5 * soft * a).toFixed(3));
       }
       if (o > 0.002)
         light(
@@ -1783,6 +2023,9 @@ function init(scene: HTMLElement) {
       liveState = isLive;
       deck.inert = !isLive;
       scene.toggleAttribute("data-live", isLive);
+      // Auf der Bühne beginnt der Selbstlauf mit einem frischen Abschnitt, im Fächer hält er.
+      if (isLive) restartAuto();
+      else syncAuto();
     }
 
     // Aktives Modul: Wechsel mitten im Ziehen oder Drehen, synchron zur Bewegung.
@@ -1795,16 +2038,9 @@ function init(scene: HTMLElement) {
         win.setAttribute("aria-hidden", i === active ? "false" : "true"),
       );
       caption(active, dir);
+      restartAuto();
     }
 
-    // Fortschritt: Füllung pro Bild; beim Sprung von 7 auf 1 atmet sie kurz.
-    const q = mod(pos + 0.5) - 0.5;
-    const scale = clamp((q + 1) / n, 1 / n, 1);
-    const toJump = Math.abs(q - (n - 0.5));
-    const toJump2 = Math.abs(q + 0.5);
-    const breath = 1 - 0.65 * (1 - clamp(Math.min(toJump, toJump2) / 0.3));
-    put(fill, "transform", `scaleX(${scale.toFixed(4)})`);
-    put(fill, "opacity", breath.toFixed(3));
     const digit = ((odoQ % 10) + 10) % 10;
     put(odoStrip, "transform", `translate3d(0, ${(-digit).toFixed(4)}em, 0)`);
 
@@ -1876,7 +2112,7 @@ function init(scene: HTMLElement) {
       // Liegt die fertige Bühne weit unterhalb des Bildes, und dreht sich nichts mehr, gibt
       // es nichts zu malen: kein Bild je Scroll-Ereignis für eine unsichtbare Bühne.
       const past = window.scrollY - sceneTop - scene.offsetHeight > vh;
-      if (past && m >= 1 && !springOn && !dragging) {
+      if (past && m >= 1 && !springOn && !tweens.length && !dragging) {
         // Ein Sprung am Morph vorbei: ohne Bild käme der Nebel sonst nie aus dem Layout.
         if (!fogGone) {
           fogGone = true;
@@ -1909,10 +2145,57 @@ function init(scene: HTMLElement) {
   let inView = false;
   new IntersectionObserver(
     (entries) => {
-      for (const e of entries) inView = e.intersectionRatio >= 0.5;
+      for (const e of entries) {
+        inView = e.intersectionRatio >= 0.5;
+        sceneSeen = e.isIntersecting;
+      }
+      syncAuto();
+      syncVideo();
     },
     { threshold: [0, 0.5, 1] },
   ).observe(sticky);
+  document.addEventListener("visibilitychange", () => {
+    syncAuto();
+    syncVideo();
+  });
+  // Zeiger über einem Fenster hält den Selbstlauf; nur die Maus, ein Finger schwebt nicht.
+  const setHover = (on: boolean) => {
+    if (on === hoverWins) return;
+    hoverWins = on;
+    syncAuto();
+  };
+  hit.addEventListener("pointermove", (event) => {
+    if (event.pointerType === "mouse")
+      setHover(overWindow(event.clientX, event.clientY));
+  });
+  hit.addEventListener("pointerleave", () => setHover(false));
+  // Tastaturfokus in der Steuerung hält ihn auch; ein Mausklick auf einen Pfeil nicht.
+  deck.addEventListener("focusin", (event) => {
+    const el = event.target as HTMLElement;
+    let visible = false;
+    try {
+      visible = el.matches(":focus-visible");
+    } catch {
+      /* ältere Browser kennen :focus-visible nicht */
+    }
+    keyFocus = visible;
+    syncAuto();
+  });
+  deck.addEventListener("focusout", (event) => {
+    if (deck.contains(event.relatedTarget as Node | null)) return;
+    keyFocus = false;
+    syncAuto();
+  });
+  // Die letzte Quelle fehlt oder ist kaputt: das Bild darunter bleibt, das Video geht. Auch
+  // dann, wenn beide schon gescheitert sind, bevor dieses Skript lief.
+  const dropVideo = () => {
+    if (video) video.hidden = true;
+  };
+  if (video?.networkState === HTMLMediaElement.NETWORK_NO_SOURCE) dropVideo();
+  video?.addEventListener("error", dropVideo);
+  video
+    ?.querySelector("source:last-of-type")
+    ?.addEventListener("error", dropVideo);
   document.addEventListener("keydown", (event) => {
     if (
       !inView ||
@@ -1966,14 +2249,17 @@ function init(scene: HTMLElement) {
       if (Math.hypot(dx, dy) < 6) return;
       // Ab der Schwelle gilt der ganze Weg seit dem Aufsetzen, damit der Ring 1:1 folgt.
       dragMoved = true;
-      springOn = false;
-      vel = 0;
+      holdRing();
       pos0 = pos;
       samples = [];
+      steering = true;
       scene.toggleAttribute("data-dragging", true);
+      syncAuto();
     }
     const b = mixG(m).beta * RAD;
-    pos = pos0 - (dx * Math.cos(b) + dy * Math.sin(b)) / pxPerStep;
+    const next = pos0 - (dx * Math.cos(b) + dy * Math.sin(b)) / pxPerStep;
+    if (Math.abs(next - pos) > 1e-3) steerDir = Math.sign(next - pos);
+    pos = next;
     const t = performance.now();
     samples.push({ t, p: pos });
     while (samples.length > 2 && t - samples[0].t > 80) samples.shift();
@@ -1984,7 +2270,12 @@ function init(scene: HTMLElement) {
     if (!dragging) return;
     dragging = false;
     scene.toggleAttribute("data-dragging", false);
-    if (!dragMoved) return;
+    if (!dragMoved) {
+      syncAuto();
+      return;
+    }
+    steering = false;
+    lastTurnAuto = false;
     swallowClick = true;
     window.setTimeout(() => (swallowClick = false), 0);
     let v = 0;
@@ -2005,6 +2296,7 @@ function init(scene: HTMLElement) {
       vel = v;
       springOn = true;
     }
+    restartAuto();
     schedule();
   }
   hit.addEventListener(
@@ -2038,18 +2330,23 @@ function init(scene: HTMLElement) {
       if (!canTurn() || Math.abs(event.deltaX) <= 1.2 * Math.abs(event.deltaY))
         return;
       event.preventDefault();
-      springOn = false;
-      vel = 0;
+      holdRing();
+      steering = true;
+      lastTurnAuto = false;
       const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? vw : 1;
       pos += (event.deltaX * unit) / pxPerStep;
+      if (Math.abs(event.deltaX) > 0.5) steerDir = Math.sign(event.deltaX);
+      tweenBase = pos;
+      syncAuto();
       clearTimeout(wheelTimer);
       wheelTimer = window.setTimeout(() => {
         target = Math.round(pos);
-        turning = false;
+        steering = false;
         if (reduced) {
           pos = target;
           announceSettled();
         } else springOn = true;
+        restartAuto();
         schedule();
       }, 140);
       schedule();
@@ -2069,6 +2366,11 @@ function init(scene: HTMLElement) {
       pxPerStep,
       active,
       springOn,
+      tweening: tweens.length > 0,
+      auto: autoAnim
+        ? { state: autoAnim.playState, t: autoAnim.currentTime }
+        : null,
+      liftW: [...liftW],
       introDone,
       introAge: introT0 > 0 ? performance.now() - introT0 : -1,
       stage: { ...lay.stage, Ws: lay.Ws },
@@ -2110,6 +2412,8 @@ function init(scene: HTMLElement) {
   const fogPause = () => fog.toggleAttribute("data-paused", document.hidden);
   document.addEventListener("visibilitychange", fogPause);
   fogPause();
+  wins.forEach((_, i) => liftW.push(i === 0 ? 1 : 0));
+  paintSegs();
   fillLayer(layers[0], 0);
   hideLayer(layers[1]);
   wins.forEach((win, i) =>

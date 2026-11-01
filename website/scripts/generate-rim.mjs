@@ -6,7 +6,9 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
 
 const SIZE = 192;
-const RADIUS = 0.016 / 0.05;
+// Außenradius des Rahmens (--r = --r-shot + --pad = 0.0132 + 0.005) durch die Breite des Bandes
+// (--b = 0.0225), HUM-389. --r-shot folgt dem Eckradius der Aufnahmen (34 px bei 2560 px).
+const RADIUS = 0.0182 / 0.0225;
 const STOPS = [
   [0, 0],
   [0.22, 0.05],
