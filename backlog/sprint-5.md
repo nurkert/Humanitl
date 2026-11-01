@@ -95,6 +95,10 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-364 | OpenCode and pi know that the network is slow on purpose, through the briefing and a Humanitl skill | M | HUM-071, HUM-073, HUM-274, HUM-308, HUM-309 |
 | HUM-401 | What the agent reads from the proxy says nothing about a person deciding | M | HUM-073, HUM-364 |
 | HUM-400 | A project or sandbox profile picks one of the saved model servers | M | HUM-289, HUM-277, HUM-066 |
+| HUM-406 | The controls of the last days stand clean, and hover moves by scale, not by a jump | M | HUM-352, HUM-356, HUM-351, HUM-284 |
+| HUM-407 | Intercept can be paused from the header, after a question, under a running caution tape | M | HUM-406 |
+| HUM-404 | Settings as an overlay from below, with categories and search | L | HUM-406 |
+| HUM-405 | Model servers, thought anew: a default, cards, a detail per server and who uses which | L | HUM-404, HUM-400 |
 
 ---
 
@@ -11447,3 +11451,211 @@ Server wählen, sobald der Daemon zuletzt benutzte Projekte kennt;
 `plan_config` liest bei jeder Abfrage `config.toml` und die Profile neu (ein
 Zwischenspeicher je Änderungszeit); das Abzeichen nach einem abgelehnten
 Start über die Kommandozeile.
+
+---
+
+## HUM-406 · The controls of the last days stand clean, and hover moves by scale, not by a jump
+
+**Anlass.** Owner am 2026-11-01: Viele Bedienelemente aus den Tagen seit dem
+2026-10-29 genügen seinem Anspruch an UI und UX nicht, ausdrücklich die
+Checkbox „Disposable sandbox“ samt Knopfzeile auf der Setup-Seite und die
+Knöpfe zum Neustart und Update des Daemons in der Statusleiste („furchtbar
+aligned“). Dazu: Beim Fahren mit der Maus durch eine Liste, etwa die Regeln,
+zucken die überfahrenen Einträge, weil der Hover-Effekt schlagartig und als
+Verschiebung kommt. Er soll animiert sein und nur skalieren, damit nichts in
+eine Richtung ausschlägt. Die Tests sahen das nicht: Goldens zeigen Text als
+Blöcke, und niemand hat die Oberfläche vor dem Merge angesehen.
+
+**Umfang.** Alles, was seit dem 2026-10-29 in `app/lib` und
+`app/packages/ui` an sichtbarer Oberfläche dazukam, mindestens:
+- Setup-Seite: Checkbox „Disposable sandbox“ mit Hinweis, Knöpfe „Start a
+  session“ und „Review changes“, die Zeile `SANDBOX_030` darunter.
+- Statusleiste: Daemon-Version, Neustart-, Update- und Abbrechen-Knöpfe,
+  ihre Rückfrage und ihre Fehlerzeile (`daemon_restart_control.dart`), das
+  LLM-Abzeichen.
+- Sandbox-Seite: Kopfzeile (Zustand, Profil, Pfad, der heute abgeschnitten
+  wird), Panel „Changes of the disposable run“ mit Zeilen, Abzeichen und
+  Fußleiste, die Reiter unten.
+- Schwebendes Terminal, Titelleiste, Reiter weiterer Shells, Zoom.
+- Hinweis-Karten (`HNoticeLayer`), Leiste von Intercept, Kopfleiste.
+- Hover jeder Liste mit Zeilen (Regeln, History, Queue, Audit, Änderungen):
+  Das Hervorheben läuft über `HMotion` (Dauer `press` oder `arrive`, Kurve
+  `enter`) und, wo es eine Bewegung gibt, als leichte Skalierung um die Mitte
+  der Zeile, nie als Verschiebung. Die Zeile ändert dabei weder ihre Größe im
+  Layout noch die Lage ihrer Nachbarn. Mit „Bewegung reduzieren“ des Systems
+  (`MediaQuery.disableAnimations`) nur der Farbwechsel.
+
+**Vorgehen.** Vorher Screenshots mit echter Schrift unter xvfb (Linux,
+dunkel und hell, Deutsch und Englisch) von jeder genannten Stelle, Befunde
+gegen `docs/DESIGN.md` (Abstände, Raster, Höhen, Grundlinien, Kontrast)
+listen, beheben, nachher dieselben Screenshots. Beide Sätze gehen an den
+Owner. Gemeinsame Ursachen werden in `humanitl_ui` behoben, nicht Stelle für
+Stelle.
+
+**Akzeptanz.**
+- Knöpfe einer Zeile sind gleich hoch und stehen auf einer Grundlinie; eine
+  Checkbox mit Hinweis fluchtet mit den Knöpfen darunter; nichts wird
+  abgeschnitten, was in die Breite passt.
+- Kein Hover in einer Liste verschiebt Inhalt; Mutationsbeweis: Ein Test misst
+  die Lage der Nachbarzeile vor und während des Hovers und fällt, wenn der
+  Effekt wieder als Verschiebung oder mit Größenänderung im Layout kommt.
+- Goldens nachgezogen, `make flutter-analyze` grün, `docs/DESIGN.md` nennt
+  den Hover-Effekt.
+
+---
+
+## HUM-404 · Settings as an overlay from below, with categories and search
+
+**Anlass.** Owner am 2026-11-01: Die Einstellungen sind heute eine lange
+Liste in einer Schublade von rechts (`settings_sheet.dart`). Er will eine
+saubere, unkomplizierte Erfahrung: ein Overlay, das von unten einfährt und
+etwa 75 % des Fensters bedeckt, darin die Einstellungen geordnet,
+durchsuchbar und übersichtlich. Entscheidungen vom selben Tag (Rückfrage):
+Kategorien links und eine Suche oben; Schalter und Auswahlen gelten wie
+heute sofort, Server und Schlüssel bekommen eigene Formulare (HUM-405).
+
+**Gestalt.**
+- Overlay von unten, Höhe etwa 75 % des Fensters, volle Breite bis auf einen
+  Rand, darunter die App abgedunkelt. Einfahren mit `HMotion` (Kurve
+  `enter`), Ausfahren mit `exit`; mit reduzierter Bewegung nur Einblenden.
+  Öffnen wie heute über das Zahnrad und `Ctrl+,`; Schließen mit `Esc`, Klick
+  auf die abgedunkelte Fläche oder ✕. Der Fokus bleibt im Overlay, beim
+  Schließen geht er an das Zahnrad zurück. `SettingsOpener.open(key)` springt
+  weiter an eine Einstellung (Fix-Knöpfe aus Diagnosen).
+- Kopf: Titel, Suchfeld (`Ctrl+F`, im Overlay auch beim ersten Tippen), ✕.
+- Links die Kategorien: Modelle, Agent, Sandbox (Projektordner, wohin der
+  Agent schreibt), Anfragen (Haltezeit, wo gefragt wird), Ansicht (Sprache,
+  Darstellung, Skalierung, Benachrichtigungen), Netz (System-Zertifikate),
+  Daemon (Version, Neustart, Update, `config.toml`). Die Liste wächst mit
+  künftigen Einstellungen, ohne dass eine Seite zur Liste ohne Ende wird.
+- Rechts die Einstellungen der Kategorie als Zeilen: links Name und ein
+  kurzer Hilfetext, rechts das Bedienelement, alle an einer gemeinsamen
+  Kante. Längere Erklärungen hinter einem Info-Symbol statt als Absatz.
+  Der Hinweis „gilt ab der nächsten Sitzung“ steht nur an Zeilen, für die er
+  zutrifft, nicht als Block über allem.
+- Suche: über Namen, Hilfetexte und Stichwörter jeder Einstellung (je Sprache
+  aus ARB). Treffer erscheinen gruppiert nach Kategorie; Wahl eines Treffers
+  öffnet die Kategorie, scrollt hin und hebt die Zeile kurz hervor. Keine
+  Treffer: ein Satz und ein Knopf, der die Suche leert.
+- Rückmeldung beim sofortigen Schreiben: kurz „gespeichert“ an der Zeile;
+  eine Ablehnung des Daemons steht als Diagnose an der Zeile wie heute.
+
+**Struktur.** Ein Register der Einstellungen (Kategorie, Schlüssel, Titel,
+Hilfe, Stichwörter, Widget-Fabrik) statt einer handgeschriebenen Spalte;
+Suche, Navigation und Sprungziele lesen dasselbe Register. `settings_sheet.dart`
+zerfällt in Overlay, Navigation, Suche und je eine Datei pro Kategorie. Keine
+Fachlogik in der App (ADR-018): Gelesen und geschrieben wird wie heute über
+`GetConfig`/`SetConfig` und die vorhandenen RPCs.
+
+**Akzeptanz.**
+- Jede Einstellung, die das heutige Blatt kennt, ist im Overlay erreichbar
+  und über die Suche auf Deutsch und Englisch findbar (ein Test geht das
+  Register gegen die Liste der Schlüssel des alten Blatts durch).
+- Tastatur: Tab-Reihenfolge Suche, Kategorien, Inhalt; Pfeiltasten in den
+  Kategorien; `Esc` leert erst die Suche, dann schließt es.
+- Kein Überlauf bei 90 % bis 200 % Skalierung und in einem Fenster von
+  960 × 600; Goldens dunkel und hell, Deutsch und Englisch; Screenshots mit
+  echter Schrift für den Owner.
+- `docs/UX.md` und `docs/DESIGN.md` beschreiben das Overlay.
+
+---
+
+## HUM-405 · Model servers, thought anew: a default, cards, a detail per server and who uses which
+
+**Anlass.** Owner am 2026-11-01: Die Verwaltung mehrerer Modellserver ist in
+den Einstellungen nicht sauber bedacht und soll frisch gedacht werden. Heute
+stehen oben Felder, die zum „aktiven“ Server gehören, darunter eine Liste mit
+„Use / Check / Rename / Remove“, Endpunkt und Modell eines anderen Servers
+lassen sich nur nach einem Wechsel ändern, und welche Profile oder Projekte
+welchen Server nutzen (HUM-400), steht nur als Text da und ist in der App
+nicht änderbar. Entscheidung vom selben Tag: ein Standard plus eine
+Zuordnung.
+
+**Gestalt (Kategorie Modelle im Overlay aus HUM-404).**
+- „Aktiv“ heißt in der Oberfläche „Standard“. Die Felder für den aktiven
+  Server oben fallen weg.
+- Jeder Server ist eine Karte: Name, Host, Standardmodell, Stern beim
+  Standard, Zustand des Schlüssels (hinterlegt, keiner), Ergebnis der letzten
+  Prüfung in dieser App-Sitzung. Eine Karte „Server hinzufügen“ am Ende;
+  mit genau einem Server ist er Standard, ohne dass jemand wählen muss.
+- Klick auf eine Karte öffnet die Detailansicht für diesen Server, jeden,
+  nicht nur den Standard: Name, Adresse, Schlüssel (nie angezeigt, nur
+  ersetzen oder entfernen), Modelle mit „Prüfen“ (holt die Liste), das
+  Standardmodell, „Als Standard“, unter „Mehr“ Umbenennen und Entfernen mit
+  der Rückfrage von heute. Speichern und Abbrechen; nichts geht beim Tippen
+  hinaus, nur „Prüfen“ kontaktiert den Server (Regel aus HUM-069/HUM-140).
+- Darunter „Wer nutzt welchen Server“: Standard, das aktuelle Projekt (mit
+  dem Hinweis „aus dem Projekt“) und jedes Sitzungsprofil, je mit einem
+  Auswahlfeld. Auch der Statusleisten-Schalter (HUM-289) sagt „Standard“.
+
+**Daemon.** `LlmServers` braucht eine Operation, die einem Profil oder dem
+Projekt einen Server zuordnet oder die Zuordnung entfernt, und eine, die
+Endpunkt und Modelle eines bestehenden Servers ändert, der nicht Standard
+ist; beides schreibt die Datei, die heute von Hand bearbeitet wird, und
+prüft den Namen wie HUM-400 (`CONFIG_021`). PROTO-Version steigt.
+Sicherheit: Ein Schlüssel geht weiter nur an den Ursprung seines Servers;
+die Projekt-Zuordnung liegt im Projektordner, den der Agent beschreiben
+kann. Deshalb gilt: Weicht der Server, den das Projekt wählt, vom Standard
+ab und hat ihn der Mensch für dieses Projekt noch nicht bestätigt, fragt die
+App beim Start einmal nach (der Daemon merkt sich die Bestätigung je
+Projektpfad und Servername außerhalb des Projekts). Das beantwortet die
+offene Frage aus HUM-400; `docs/SECURITY.md` und `docs/THREAT-MODEL.md`
+nennen es im selben Commit.
+
+**Akzeptanz.**
+- Endpunkt, Modelle und Schlüssel jedes Servers lassen sich ändern, ohne ihn
+  zum Standard zu machen; ein Test prüft, dass ein in der Detailansicht
+  getippter Schlüssel nur an den Ursprung genau dieses Servers geht.
+- Zuordnungen für Profil und Projekt lassen sich in der App setzen und
+  entfernen und stehen danach in `humanitl sandbox plan`.
+- Ein Projekt, das einen neuen, unbestätigten Server wählt, startet erst nach
+  der Rückfrage; Mutationsbeweis: ohne die Prüfung im Daemon fällt der Test.
+- Goldens, Screenshots mit echter Schrift, ARB Deutsch und Englisch.
+
+---
+
+## HUM-407 · Intercept can be paused from the header, after a question, under a running caution tape
+
+**Anlass.** Owner am 2026-11-01: Ein Klick auf die Pille „Intercept ON“ in
+der Kopfleiste soll das Abfangen ausschalten, nach einer Rückfrage. Solange es
+aus ist, läuft oben ein Absperrband (HUM-260), damit immer sichtbar ist, dass
+gerade etwas nicht sauber ist, die Arbeit aber einfach weitergeht.
+
+**Bedeutung von „aus“ (Vorschlag, Owner bestätigt oder korrigiert).**
+- Was keine Regel entscheidet, wird nicht mehr gehalten, sondern
+  weitergereicht. Block-Regeln, harte Sperren (geprüfte Geheimnisse,
+  HUM-049), die Grenzen der Sandbox und der Mitschnitt bleiben; jede so
+  weitergereichte Anfrage steht in History und Audit mit einem eigenen Grund
+  (etwa `paused`), und Beginn und Ende der Pause stehen im Audit.
+- Die Pause gilt für die laufende Sitzung des Daemons; sie endet beim
+  Einschalten, beim Neustart des Daemons und beim Start einer neuen Sitzung,
+  damit niemand sie vergisst. Keine Einstellung macht sie dauerhaft.
+- Was der Agent liest, verrät die Pause nicht (HUM-364, HUM-401).
+
+**Gestalt.** Die Pille ist ein Knopf (Tooltip, Tastatur). Klick öffnet eine
+Rückfrage (`HModal`): ein Satz, was passiert, ein Satz, was bleibt;
+Abbrechen ist vorgewählt, „Abfangen pausieren“ braucht einen bewussten Druck
+(`docs/UX.md` 5.4). Während der Pause sagt die Pille „Intercept PAUSED“ in
+der Warnfarbe, und über der Kopfleiste oder direkt darunter läuft das
+Absperrband über die ganze Breite (mit reduzierter Bewegung stehend). Ein
+Klick auf die Pille schaltet ohne Rückfrage wieder ein.
+
+**Daemon.** Ein RPC (oder eine Operation an einem vorhandenen) setzt und
+liest den Zustand; die App zeigt nur an (ADR-018). Die Kommandozeile bekommt
+dasselbe (`humanitl intercept pause|resume|status`). PROTO-Version steigt.
+Weil die Pause die Aussage „jede neue Anfrage wartet auf einen Menschen“ für
+ihre Dauer aufhebt, ändern `README.md` (falls dort zitiert),
+`docs/SECURITY.md` und `docs/THREAT-MODEL.md` sich im selben Commit: die
+Pause ist eine bewusste Entscheidung des Menschen, sichtbar, protokolliert,
+und kann nur über den Socket des Daemons gesetzt werden, nicht aus der
+Sandbox.
+
+**Akzeptanz.**
+- Mit Pause geht eine Anfrage ohne passende Regel durch und steht mit Grund
+  `paused` in der History; eine passende Block-Regel und eine harte Sperre
+  greifen weiter; Mutationsbeweis für beides.
+- Aus der Sandbox lässt sich die Pause nicht setzen (Test über den Proxy und
+  `humanitl.internal`).
+- Neustart des Daemons beendet die Pause.
+- Absperrband sichtbar, solange pausiert, in jeder Sektion; Goldens und
+  Screenshots mit echter Schrift.
