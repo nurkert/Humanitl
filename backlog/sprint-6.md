@@ -57,6 +57,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-378 | macOS: Die Ampel bleibt beim Skalieren mittig auf der Kopfleiste | S | HUM-342, HUM-356 |
 | HUM-380 | Intercept: Der Inhalt des Block-Knopfs steht mittig | S | HUM-206 |
 | HUM-381 | Statusleiste: Ein besetzter Daemon lässt den Neustart-Knopf nicht stumm | S | HUM-284, HUM-367 |
+| HUM-379 | macOS: Der Ordner-Dialog kann neue Ordner anlegen | S | HUM-293 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -829,3 +830,7 @@ Der Knopf hat eine Mindestbreite, sein Inhalt stand linksbündig darin. Akzeptan
 ## HUM-381 · Statusleiste: Ein besetzter Daemon lässt den Neustart-Knopf nicht stumm
 
 Meldet der Daemon besetzt, obwohl das Fenster keine Sitzung sieht, tat der Knopf nichts. Akzeptanz: Die Leiste fragt dann, ob die Sitzung enden darf; bleibt der Daemon danach besetzt, nennt sie den Grund. Neu gestartet wird weiter nur nach `retire-if-idle`. Der Knopf heißt auf beiden Systemen „Update daemon“ und hat einen Rahmen. Ein Start oder Stopp und ein ausbleibender Stand ruhen wie bisher.
+
+## HUM-379 · macOS: Der Ordner-Dialog kann neue Ordner anlegen
+
+`file_picker` setzt `canCreateDirectories` nie. Akzeptanz: Projektordner und Audit-Export öffnen unter macOS ein `NSOpenPanel` mit „Neuer Ordner"; unter Linux bleibt das XDG-Portal, dessen Dialoge das selbst anbieten.

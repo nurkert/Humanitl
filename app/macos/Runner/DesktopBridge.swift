@@ -18,6 +18,7 @@ final class DesktopBridge: NSObject, UNUserNotificationCenterDelegate {
   private static let iconPoints: CGFloat = 18
 
   private var windowChannel: FlutterMethodChannel?
+  private var folderChannel: FlutterMethodChannel?
   private var trayChannel: FlutterMethodChannel?
   private var notificationChannel: FlutterMethodChannel?
   private var statusItem: NSStatusItem?
@@ -55,6 +56,11 @@ final class DesktopBridge: NSObject, UNUserNotificationCenterDelegate {
       self?.handleWindow(call, result: result)
     }
     windowChannel = window
+    let folder = FlutterMethodChannel(name: "humanitl/folder", binaryMessenger: messenger)
+    folder.setMethodCallHandler { [weak self] call, result in
+      self?.chooseFolder(call, result: result)
+    }
+    folderChannel = folder
     let tray = FlutterMethodChannel(name: "humanitl/tray", binaryMessenger: messenger)
     let notifications = FlutterMethodChannel(
       name: "humanitl/notifications", binaryMessenger: messenger)
@@ -312,6 +318,32 @@ final class DesktopBridge: NSObject, UNUserNotificationCenterDelegate {
       result(nil)
     default:
       result(FlutterMethodNotImplemented)
+    }
+  }
+
+  // MARK: The folder dialog
+
+  // `NSOpenPanel` offers "New Folder" only when asked to (HUM-379).
+  private func chooseFolder(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard call.method == "chooseFolder" else {
+      result(FlutterMethodNotImplemented)
+      return
+    }
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = true
+    panel.canChooseFiles = false
+    panel.canCreateDirectories = true
+    panel.allowsMultipleSelection = false
+    if let title = (call.arguments as? [String: Any])?["title"] as? String {
+      panel.message = title
+    }
+    let answer: (NSApplication.ModalResponse) -> Void = { response in
+      result(response == .OK ? panel.url?.path : nil)
+    }
+    if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+      panel.beginSheetModal(for: window, completionHandler: answer)
+    } else {
+      panel.begin(completionHandler: answer)
     }
   }
 }

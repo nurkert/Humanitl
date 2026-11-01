@@ -22,6 +22,8 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -37,7 +39,24 @@ typedef DirectoryChooser = Future<String?> Function();
 /// portal on Linux; a widget test has no portal, so the test overrides this
 /// provider instead of the whole picker.
 final Provider<DirectoryChooser> directoryChooserProvider =
-    Provider<DirectoryChooser>((Ref ref) => FilePicker.getDirectoryPath);
+    Provider<DirectoryChooser>((Ref ref) => chooseDirectory);
+
+/// The folder dialog of the system.
+///
+/// On macOS the Runner opens it (HUM-379): `file_picker` never allows new
+/// folders there, and a project often starts as one. The XDG portal on Linux
+/// offers them by itself.
+Future<String?> chooseDirectory({String? dialogTitle}) {
+  if (defaultTargetPlatform == TargetPlatform.macOS) {
+    return folderChannel.invokeMethod<String>('chooseFolder', <String, Object?>{
+      'title': dialogTitle,
+    });
+  }
+  return FilePicker.getDirectoryPath(dialogTitle: dialogTitle);
+}
+
+/// The channel to the folder dialog of the Runner.
+const MethodChannel folderChannel = MethodChannel('humanitl/folder');
 
 /// What went wrong the last time the folder dialog was asked for, or null.
 ///

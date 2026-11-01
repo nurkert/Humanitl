@@ -11,7 +11,6 @@ library;
 import 'dart:async';
 import 'dart:io';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 // `KeepAliveLink` lebt in riverpod 3 im Nebeneingang `misc.dart`.
@@ -22,6 +21,7 @@ import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/daemon_client.dart';
 import '../../../core/ui/shell_command.dart';
+import '../../../core/ui/work_dir_picker.dart';
 
 /// Der Kopf der Kette: Nummer, Hash, Zahl der Records und der Anker.
 ///
@@ -341,7 +341,7 @@ final Provider<AuditFolderChooser> auditFolderChooserProvider =
     Provider<AuditFolderChooser>(
       (Ref ref) =>
           ({required String dialogTitle}) =>
-              FilePicker.getDirectoryPath(dialogTitle: dialogTitle),
+              chooseDirectory(dialogTitle: dialogTitle),
     );
 
 /// Ob unter einem Pfad schon etwas liegt. Ersetzbar in Tests.
