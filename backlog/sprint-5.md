@@ -100,6 +100,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-404 | Settings as an overlay from below, with categories and search | L | HUM-406 |
 | HUM-405 | Model servers, thought anew: a default, cards, a detail per server and who uses which | L | HUM-404, HUM-400 |
 | HUM-408 | All traffic out of the proxy can go through an upstream proxy (HTTP CONNECT or SOCKS5) | L | HUM-404 |
+| HUM-409 | Files and folders dragged onto the sandbox are copied in or mounted, after one clear choice | L | HUM-406, HUM-351 |
 
 ---
 
@@ -11714,3 +11715,66 @@ entscheidet die Ausnahmeliste; die Vorgabe nimmt private Adressen aus.
 - `humanitl doctor` und die App zeigen einen nicht erreichbaren Upstream-Proxy
   als Diagnose mit `why` und `fix`; `humanitl config` und die Einstellung im
   Overlay setzen ihn; ARB Deutsch und Englisch.
+
+---
+
+## HUM-409 · Files and folders dragged onto the sandbox are copied in or mounted, after one clear choice
+
+**Anlass.** Owner am 2026-11-01: Dateien und Ordner per Drag & Drop in die
+Sandbox bringen, wahlweise hineinkopieren oder einbinden, mit sauberer UI und
+UX-Gestaltung.
+
+**Ablauf.**
+1. Zieht der Mensch Dateien oder Ordner über das Fenster, zeigt die Sandbox-
+   Seite und das schwebende Terminal eine Drop-Fläche: eine ruhige, gestrichelte
+   Kontur in der Akzentfarbe, die mit `HMotion` (`arrive`, Kurve `enter`)
+   erscheint, dazu ein Satz („Hier ablegen, um es der Sandbox zu geben“) und die
+   Zahl der Einträge. Außerhalb der Flächen nimmt die App nichts an, und das
+   sagt der Zeiger. Mit reduzierter Bewegung nur Einblenden.
+2. Nach dem Ablegen erscheint eine Karte direkt an der Ablagestelle (kein
+   Modal mitten im Fenster): oben die Einträge mit Symbol, Name, Größe
+   beziehungsweise Zahl der Dateien, darunter zwei große, gleichwertige
+   Wahlflächen:
+   - **Kopieren**: Ziel `/work/<Name>` (änderbar, Vorschlag ohne Kollision).
+     Gilt sofort, auch während eine Sitzung läuft. In einer Wegwerf-Sandbox
+     landet die Kopie in ihrer Schicht und erscheint später unter den
+     Änderungen (HUM-351) als vom Menschen hinzugefügt, nicht als Werk des
+     Agenten.
+   - **Einbinden**: Ziel `/mnt/<Name>` (änderbar), Schalter „nur lesen“ (Vorgabe)
+     oder „lesen und schreiben“. Eine laufende Sandbox kann nachträglich keine
+     Ordner einhängen; die Fläche sagt das in einem Satz und bietet „beim
+     nächsten Start“ oder „jetzt neu starten“. Einbindungen gelten für die
+     Sitzung oder, per Häkchen, dauerhaft für das Projekt.
+   `Enter` wählt nichts vor; `Esc` bricht ab. Bei Ordnern über einer Grenze
+   (Größe oder Zahl der Dateien) zeigt die Karte das vor dem Kopieren und
+   empfiehlt Einbinden.
+3. Fortschritt beim Kopieren als schmale Leiste in der Karte, abbrechbar; danach
+   ein kurzer Hinweis („3 Dateien liegen in /work/assets“) mit „Im Terminal
+   zeigen“.
+4. Eingebundene Pfade stehen in der Mounttabelle der Sandbox-Seite mit Herkunft
+   „von dir hinzugefügt“ und einem Knopf zum Entfernen (wirkt ab dem nächsten
+   Start).
+
+**Sicherheit.** Nur was der Mensch selbst ablegt, wird sichtbar. Lesen ist die
+Vorgabe; Schreiben braucht die bewusste Wahl. Pfade, die Geheimnisse tragen
+oder das System betreffen (`~/.ssh`, `~/.gnupg`, Schlüsselbund, der
+Konfigurationsordner von Humanitl, `/`, `$HOME` als Ganzes, Sockets, Geräte),
+werden abgelehnt oder nur nach einer ausdrücklichen Warnung angenommen; die
+Liste steht an einer Stelle im Daemon. Symbolische Links in kopierten Ordnern
+werden nicht verfolgt. Jede Freigabe steht im Audit. Die Entscheidung trifft
+der Daemon über ein RPC (ADR-018); die App reicht nur Pfade weiter.
+`docs/SECURITY.md` und `docs/THREAT-MODEL.md` nennen die neue Art, Pfade
+sichtbar zu machen, im selben Commit; die drei Garantien bleiben unberührt,
+weil nur der Mensch über den Socket des Daemons Pfade hinzufügen kann.
+
+**Akzeptanz.**
+- Kopieren in eine laufende direkte und in eine Wegwerf-Sandbox; Einbinden nur
+  lesen und lesen und schreiben beim nächsten Start; Test, dass ein nur lesend
+  eingebundener Ordner aus der Sandbox nicht beschreibbar ist (Escape-Test).
+- Ein abgelegtes `~/.ssh` wird abgelehnt (Mutationsbeweis: ohne die Liste geht
+  es durch); ein Symlink nach außen wird nicht verfolgt.
+- Drop-Fläche, Karte und Fortschritt als Goldens (dunkel, hell, Deutsch,
+  Englisch) und als Screenshots mit echter Schrift für den Owner; Tastatur und
+  Screenreader bedienen die Karte vollständig.
+- Linux und macOS (Seatbelt-Profil bekommt die Einbindung ebenso); ARB Deutsch
+  und Englisch; `docs/UX.md` beschreibt den Ablauf.
