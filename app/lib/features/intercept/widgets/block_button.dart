@@ -184,38 +184,44 @@ class _BlockButtonState extends State<BlockButton> {
                       color: HColorDerivation.fade(blocked, 0.4),
                     ),
                   ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      HGlyphIcon(
-                        HGlyph.shieldX,
-                        size: 14,
-                        color: progress > 0 ? tokens.colors.fg0 : blocked,
-                      ),
-                      SizedBox(width: tokens.spacing.x2),
-                      Flexible(
-                        child: ExcludeSemantics(
-                          child: Text(
-                            widget.label,
-                            key: const Key('intercept-block-label'),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: tokens.typography.ui13.medium.tinted(
-                              foreground,
+                  // Mittig in der Mindestbreite, wie die Beschriftung des
+                  // Ventils daneben (HUM-380).
+                  child: Center(
+                    widthFactor: 1,
+                    heightFactor: 1,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        HGlyphIcon(
+                          HGlyph.shieldX,
+                          size: 14,
+                          color: progress > 0 ? tokens.colors.fg0 : blocked,
+                        ),
+                        SizedBox(width: tokens.spacing.x2),
+                        Flexible(
+                          child: ExcludeSemantics(
+                            child: Text(
+                              widget.label,
+                              key: const Key('intercept-block-label'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: tokens.typography.ui13.medium.tinted(
+                                foreground,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      SizedBox(width: tokens.spacing.x2),
-                      ExcludeSemantics(
-                        child: Text(
-                          widget.shortcutHint,
-                          style: tokens.typography.mono11.tinted(
-                            tokens.colors.fg1,
+                        SizedBox(width: tokens.spacing.x2),
+                        ExcludeSemantics(
+                          child: Text(
+                            widget.shortcutHint,
+                            style: tokens.typography.mono11.tinted(
+                              tokens.colors.fg1,
+                            ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 );
               },
