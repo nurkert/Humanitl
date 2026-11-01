@@ -101,6 +101,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-405 | Model servers, thought anew: a default, cards, a detail per server and who uses which | L | HUM-404, HUM-400 |
 | HUM-408 | All traffic out of the proxy can go through an upstream proxy (HTTP CONNECT or SOCKS5) | L | HUM-404 |
 | HUM-409 | Files and folders dragged onto the sandbox are copied in or mounted, after one clear choice | L | HUM-406, HUM-351 |
+| HUM-410 | A lone Shift, Ctrl, Alt or Super no longer types a stray glyph in the terminal | S | HUM-042, HUM-313 |
 
 ---
 
@@ -11778,3 +11779,32 @@ weil nur der Mensch über den Socket des Daemons Pfade hinzufügen kann.
   Screenreader bedienen die Karte vollständig.
 - Linux und macOS (Seatbelt-Profil bekommt die Einbindung ebenso); ARB Deutsch
   und Englisch; `docs/UX.md` beschreibt den Ablauf.
+
+---
+
+## HUM-410 · A lone Shift, Ctrl, Alt or Super no longer types a stray glyph in the terminal
+
+**Anlass.** Owner am 2026-11-01: Bei jedem Druck auf Shift, wohl auch auf
+andere Tasten, erscheint im Eingabefeld von OpenCode oder pi im Terminal ein
+Zeichen, das wie ein O mit einer Tilde darunter aussieht; der Agent selbst
+sieht es offenbar nicht.
+
+**Ursache.** OpenCode schaltet das Tastaturprotokoll von kitty im Modus
+„eindeutig“ ein (`CSI > 1 u`). Modifikatortasten allein meldet das Protokoll
+nur, wenn das Programm alle Tasten als Folgen verlangt (Flag 8). xterm2 5.2.0
+schickte sie trotzdem als `CSI 57441 u` und so weiter; der Codepunkt liegt im
+privaten Bereich von Unicode, und die Eingabezeile malte ihn als Glyphe.
+xterm2 5.4.0 (2026-10-21) behebt genau das („private-use keys only with
+report-all“).
+
+**Umsetzung.** xterm2 exakt auf 5.4.0. Die Zwischenablage-Folgen von iTerm2
+(OSC 1337) und kitty (OSC 5522) liefen schon in 5.2.0 über dieselbe Weigerung
+wie OSC 52 (HUM-313); 5.4.0 kann sie zusätzlich abschalten, und das geschieht
+am `Terminal`. Der Daemon filtert diese Folgen ohnehin.
+
+**Akzeptanz.** Im Modus `CSI > 1 u` schicken Shift, Alt und Super allein keine
+Bytes, Shift mit `A` schickt `A`; im Modus `CSI > 9 u` kommt Shift weiter als
+`CSI 57441` an. Mutationsbeweis: Mit xterm2 5.2.0 fällt der erste Test. Die
+übrigen Tests des Terminals (Kopieren, Einfügen, `Ctrl+C`, Zoom, Reiter)
+bleiben grün.
+

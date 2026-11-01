@@ -214,7 +214,15 @@ class TerminalSession extends _$TerminalSession {
 
   @override
   TerminalSessionState build(String sandboxId, {String shellId = ''}) {
-    final Terminal terminal = Terminal(maxLines: terminalScrollback);
+    // Die Zwischenablage-Folgen von iTerm2 (OSC 1337) und kitty (OSC 5522)
+    // laufen wie OSC 52 über `onClipboardStore`, das unten verweigert. Seit
+    // xterm2 5.4.0 lassen sie sich zusätzlich ganz abschalten; das ist die
+    // dritte Wand (HUM-410): die Zwischenablage gehört dem Menschen.
+    final Terminal terminal = Terminal(
+      maxLines: terminalScrollback,
+      allowITerm2ClipboardCapture: false,
+      allowKittyClipboard: false,
+    );
     // What the human types goes up as bytes; what the daemon sends comes back
     // through the same pipe. `onOutput` is the keyboard, not the screen.
     terminal.onOutput = (String data) =>

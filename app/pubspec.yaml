@@ -58,7 +58,7 @@ dependencies:
   # Er malt das Fenster, und ein Wechsel der Fassung wechselt das Aussehen und
   # den Umfang der Escape-Folgen, die er versteht. Die Bytes kommen gefiltert
   # aus dem Daemon; das Widget registriert zusaetzlich keinen OSC-Handler.
-  xterm2: 5.2.0
+  xterm2: 5.4.0
   # Liest den gebuendelten Domain-Katalog (`assets/catalog/domains.yaml`,
   # HUM-094). Genau die Fassung, die die Werkzeugkette ohnehin aufloest;
   # `yaml` ist eine reine Dart-Bibliothek ohne Plugin und ohne Netz.
