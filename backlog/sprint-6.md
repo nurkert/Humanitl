@@ -55,6 +55,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-376 | macOS: Sandbox-Bildschirm und `sandbox argv` zeigen, was wirklich läuft | M | HUM-323, HUM-330 |
 | HUM-375 | Website: Das Glanzband folgt den Ecken der Fenster | S | HUM-348 |
 | HUM-378 | macOS: Die Ampel bleibt beim Skalieren mittig auf der Kopfleiste | S | HUM-342, HUM-356 |
+| HUM-380 | Intercept: Der Inhalt des Block-Knopfs steht mittig | S | HUM-206 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -819,3 +820,7 @@ Das Band der Glaskante lief in den Ecken mit dem Radius der Fase statt dem des R
 ## HUM-378 · macOS: Die Ampel bleibt beim Skalieren mittig auf der Kopfleiste
 
 Die Knöpfe zeichnet das System in nativer Größe. Akzeptanz: Bei jeder Skalierung der App stehen sie senkrecht mittig auf der Kopfleiste, die Dart als Höhe meldet; ihre Größe und ihr Abstand vom linken Rand bleiben.
+
+## HUM-380 · Intercept: Der Inhalt des Block-Knopfs steht mittig
+
+Der Knopf hat eine Mindestbreite, sein Inhalt stand linksbündig darin. Akzeptanz: Symbol, Beschriftung und Taste stehen als Gruppe mittig, bei jeder Breite.
