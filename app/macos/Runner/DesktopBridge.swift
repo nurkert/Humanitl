@@ -316,9 +316,20 @@ final class DesktopBridge: NSObject, UNUserNotificationCenterDelegate {
         window.headerBarHeight = CGFloat(height)
       }
       result(nil)
+    case "getTrafficLights":
+      // Dart asks once when it starts listening: a window restored in full
+      // screen entered it before anyone heard (HUM-383).
+      let window = NSApp.windows.compactMap({ $0 as? MainFlutterWindow }).first
+      window?.resumeFullScreenWatch()
+      result((window?.trafficLightState ?? .windowed).rawValue)
     default:
       result(FlutterMethodNotImplemented)
     }
+  }
+
+  // Where the traffic lights stand, whenever that changes (HUM-383).
+  func reportTrafficLights(_ state: TrafficLightState) {
+    windowChannel?.invokeMethod("trafficLights", arguments: state.rawValue)
   }
 
   // MARK: The folder dialog

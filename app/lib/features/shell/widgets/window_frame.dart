@@ -12,6 +12,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/ui/hover_label.dart';
+import '../../../core/ui/traffic_lights.dart';
 import '../../../core/ui/ui.dart';
 import '../../../core/ui/ui_scale.dart';
 import '../../../l10n/l10n.dart';
@@ -68,6 +69,12 @@ const double trafficLightInset = 72;
 /// sides, plus [trafficLightInset] on the left where the system draws its
 /// buttons.
 ///
+/// Im Vollbild blendet macOS die Ampel aus, bis der Zeiger den oberen Rand
+/// erreicht (HUM-383). Solange sie verborgen ist, gibt die Leiste ihren Platz
+/// frei; [TrafficLightRoom] trägt, wie viel davon gerade frei bleibt, und
+/// gleitet zwischen beiden Werten. Wer hier liest, baut in jedem Bild der
+/// Bewegung neu.
+///
 /// Die Ampel zeichnet das System, nicht die Anwendung; sie wächst nicht mit
 /// der Skalierung (HUM-356). Ihr Platz steht deshalb in Pixeln des Fensters
 /// und wird durch die Skalierung geteilt, die unter [context] gilt: Bei 50 %
@@ -81,7 +88,7 @@ EdgeInsets titleBarPadding(BuildContext context, double horizontal) {
   final double scale =
       (UiScaleScope.maybeOf(context)?.effective ?? uiScaleDefault) / 100;
   return EdgeInsets.only(
-    left: horizontal + trafficLightInset / scale,
+    left: horizontal + TrafficLightRoom.of(context) * trafficLightInset / scale,
     right: horizontal,
   );
 }

@@ -58,6 +58,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-380 | Intercept: Der Inhalt des Block-Knopfs steht mittig | S | HUM-206 |
 | HUM-381 | Statusleiste: Ein besetzter Daemon lässt den Neustart-Knopf nicht stumm | S | HUM-284, HUM-367 |
 | HUM-379 | macOS: Der Ordner-Dialog kann neue Ordner anlegen | S | HUM-293 |
+| HUM-383 | macOS: Im Vollbild nimmt die Kopfleiste den Platz der Ampel ein | S | HUM-342, HUM-378 |
 
 ## HUM-312 · Daemon, CLI und Tests bauen auf macOS
 
@@ -834,3 +835,16 @@ Meldet der Daemon besetzt, obwohl das Fenster keine Sitzung sieht, tat der Knopf
 ## HUM-379 · macOS: Der Ordner-Dialog kann neue Ordner anlegen
 
 `file_picker` setzt `canCreateDirectories` nie. Akzeptanz: Projektordner und Audit-Export öffnen unter macOS ein `NSOpenPanel` mit „Neuer Ordner"; unter Linux bleibt das XDG-Portal, dessen Dialoge das selbst anbieten.
+
+## HUM-383 · macOS: Im Vollbild nimmt die Kopfleiste den Platz der Ampel ein
+
+Rückmeldung des Inhabers vom 2026-11-01: Im Vollbild blendet macOS die Ampel aus, die Kopfleiste hält aber weiter 72 pt frei, und ihre Elemente stehen seltsam weit rechts. Sie sollen beim Eintritt ins Vollbild nach links in den freien Platz gleiten, beim Einblenden der Ampel (der Zeiger erreicht den oberen Bildschirmrand) wieder Platz machen und beim Ausblenden zurückgleiten.
+
+Akzeptanzkriterien:
+
+- `MainFlutterWindow.swift` beobachtet `willEnterFullScreen`, `didEnterFullScreen`, `willExitFullScreen` und `didExitFullScreen` und erkennt im Vollbild, ob die Titelleiste samt Ampel eingeblendet ist. Es meldet über `humanitl/window` genau einen von drei Zuständen, `windowed`, `fullScreenHidden` oder `fullScreenRevealed`, und nur bei einer Änderung; `getTrafficLights` liefert den aktuellen Zustand für ein Fenster, das schon im Vollbild startet.
+- In Dart hält `trafficLightStateProvider` den Zustand. `titleBarPadding` lässt links im Fenster und bei eingeblendeter Ampel `trafficLightInset` geteilt durch die Skalierung frei, bei verborgener Ampel nur den normalen Rand, und gleitet zwischen beiden mit `HMotion.arrive` und `HMotion.enter`. Unter reduzierter Bewegung springt der Rand ohne Animation.
+- Nach dem Verlassen des Vollbilds gilt das Layout von HUM-342 und HUM-378 unverändert, auch die Meldung der Höhe der Kopfleiste.
+- Die Ampel zeichnet weiter das System, in nativer Größe und Gestalt; die App zeichnet und skaliert sie nicht.
+- Unter Linux ändert sich nichts: Die App hört den Kanal dort nicht ab, und der Rand bleibt symmetrisch.
+- Widget-Tests mit einem gefälschten Kanal decken alle drei Zustände, die Endwerte der Animation, reduzierte Bewegung, den Start im Vollbild und Linux ab. Ob das Einblenden auf einem echten Mac erkannt wird, prüft ein Mensch: Vollbild betreten, Zeiger an den oberen Rand und wieder weg, Vollbild verlassen, jeweils bei 100 % und 150 % sowie mit „Menüleiste im Vollbild immer anzeigen".
