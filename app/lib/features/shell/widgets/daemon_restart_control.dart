@@ -246,25 +246,28 @@ class _DaemonRestartControlState extends ConsumerState<DaemonRestartControl> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
+            // Beide Antworten in der Größe der Leiste: gleich hoch, auf der
+            // Grundlinie des Texts daneben, und ohne Überstand nach unten
+            // (HUM-406).
             HButton(
               key: const Key('status-daemon-restart-cancel'),
               focusNode: _cancelFocus,
               variant: HButtonVariant.ghost,
+              size: HButtonSize.bar,
               onPressed: _cancel,
-              child: Text(l10n.sandboxStopCancel, style: style),
+              child: Text(l10n.sandboxStopCancel),
             ),
             SizedBox(width: tokens.spacing.x1),
             Flexible(
               child: HButton(
                 key: const Key('status-daemon-restart-confirm'),
                 variant: HButtonVariant.ghost,
+                size: HButtonSize.bar,
                 onPressed: _stopAndRestart,
                 child: Text(
                   l10n.shellStatusRestartStopAndRestart,
                   overflow: TextOverflow.ellipsis,
-                  style: tokens.typography.ui11.medium.tinted(
-                    tokens.colors.warningText,
-                  ),
+                  style: TextStyle(color: tokens.colors.warningText),
                 ),
               ),
             ),
@@ -280,12 +283,13 @@ class _DaemonRestartControlState extends ConsumerState<DaemonRestartControl> {
           // Mit Rahmen: Die Leiste ist sonst Text, und das ist der eine Griff
           // in ihr (HUM-381).
           variant: HButtonVariant.secondary,
+          size: HButtonSize.bar,
           onPressed: holds || _busy
               ? null
               : stoppable
               ? () => _ask(status.value?.sandboxId)
               : _restart,
-          child: Text(l10n.shellStatusRestartDaemon, style: style),
+          child: Text(l10n.shellStatusRestartDaemon),
         ),
         if (holds) ...<Widget>[
           SizedBox(width: tokens.spacing.x2),

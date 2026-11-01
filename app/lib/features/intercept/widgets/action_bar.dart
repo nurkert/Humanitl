@@ -453,10 +453,7 @@ class _ActionBarState extends ConsumerState<ActionBar> {
             children: <Widget>[
               Text(l10n.interceptNoteAdd),
               SizedBox(width: tokens.spacing.x2),
-              Text(
-                l10n.interceptKeyNote,
-                style: tokens.typography.mono11.tinted(tokens.colors.fg1),
-              ),
+              HKeyHint(l10n.interceptKeyNote),
             ],
           ),
         ),
@@ -482,10 +479,7 @@ class _ActionBarState extends ConsumerState<ActionBar> {
               children: <Widget>[
                 Text(l10n.interceptEditAllow),
                 SizedBox(width: tokens.spacing.x2),
-                Text(
-                  l10n.interceptKeyEdit,
-                  style: tokens.typography.mono11.tinted(tokens.colors.fg1),
-                ),
+                HKeyHint(l10n.interceptKeyEdit),
               ],
             ),
           );

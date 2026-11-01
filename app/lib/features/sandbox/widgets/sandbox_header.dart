@@ -65,6 +65,10 @@ class SandboxHeader extends ConsumerWidget {
               textColor: tokens.colors.fg1,
             ),
             SandboxServerBadge(status: status),
+            // Abstand zum Pfad: Ein langer Pfad füllt den Rest bis an das
+            // Abzeichen heran, und ohne Lücke las er sich als dessen Teil
+            // (HUM-406).
+            SizedBox(width: tokens.spacing.x3),
             // Der Picker bekommt den ganzen Rest und steht rechts. Ein `Spacer`
             // daneben teilte den Platz mit ihm, und der Pfad bekäme die Hälfte
             // dessen, was da ist.

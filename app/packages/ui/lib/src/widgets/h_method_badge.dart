@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import '../theme/h_theme.dart';
+import '../tokens/spacing.dart';
 import '../tokens/tokens.dart';
 import 'h_badge.dart';
 
@@ -46,12 +47,21 @@ class HMethodBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final String upper = method.toUpperCase();
+    // Vier Zeichen Mindestbreite, so breit wie `POST`: In der Warteschlange
+    // stehen die Hosts sonst je nach Methode an anderer Stelle, `GET` sieben
+    // Pixel weiter links als `POST` (HUM-406). Längere Methoden wachsen.
+    final double minLabelWidth =
+        MediaQuery.textScalerOf(context)
+            .scale(tokens.typography.mono11.fontSize!) *
+        HSize.monoAdvance *
+        4;
     if (neutral) {
       return HBadge(
         text: upper,
         color: tokens.colors.fg1,
         background: tokens.colors.bg2,
         mono: true,
+        minLabelWidth: minLabelWidth,
         semanticsLabel: semanticsLabel ?? upper,
       );
     }
@@ -62,6 +72,7 @@ class HMethodBadge extends StatelessWidget {
       // auf der eigenen Tönung misst `DELETE` sonst 2,65:1 (`docs/UX.md` 6).
       textColor: tokens.methodTextColor(method),
       mono: true,
+      minLabelWidth: minLabelWidth,
       semanticsLabel: semanticsLabel ?? upper,
     );
   }

@@ -443,6 +443,9 @@ class _StartRow extends StatelessWidget {
         Wrap(
           spacing: tokens.spacing.x2,
           runSpacing: tokens.spacing.x2,
+          // Gleich hohe Knöpfe auf einer Linie, auch wenn eine Beschriftung
+          // bei großer Schrift höher wird als die andere (HUM-406).
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: <Widget>[
             HButton(
               key: const Key('setup-start'),

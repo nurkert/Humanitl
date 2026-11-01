@@ -150,7 +150,6 @@ class SettingsButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final HTokens tokens = HTheme.of(context);
     final String label = context.l10n.shellSettingsButton;
     // Ein `HButton` in der stillen Variante wie der Ring daneben: Fokus,
     // Enter, Leertaste und Druckzustand wie bei jedem Control
@@ -160,16 +159,12 @@ class SettingsButton extends StatelessWidget {
     return HoverLabel(
       label: label,
       side: HoverLabelSide.below,
-      child: HButton(
+      child: HIconButton.builder(
         key: const Key('header-settings-button'),
-        variant: HButtonVariant.ghost,
         semanticsLabel: label,
         onPressed: onPressed,
-        child: ShellGlyphIcon(
-          ShellGlyph.settings,
-          size: 16,
-          color: tokens.colors.fg1,
-        ),
+        icon: (Color color) =>
+            ShellGlyphIcon(ShellGlyph.settings, size: 16, color: color),
       ),
     );
   }

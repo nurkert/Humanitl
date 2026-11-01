@@ -944,7 +944,6 @@ class FloatButton extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = AppLocalizations.of(context);
     final bool floating =
         ref.watch(terminalPlacementProvider) == TerminalPlacement.floating;
@@ -954,19 +953,14 @@ class FloatButton extends ConsumerWidget {
     return HoverLabel(
       label: label,
       side: HoverLabelSide.below,
-      child: HButton(
+      child: HIconButton.builder(
         key: const Key('sandbox-terminal-float'),
-        variant: HButtonVariant.ghost,
-        size: HButtonSize.sm,
         semanticsLabel: label,
         onPressed: floating || running
             ? ref.read(terminalPlacementProvider.notifier).toggleFloating
             : null,
-        child: ShellGlyphIcon(
-          ShellGlyph.pictureInPicture,
-          size: 14,
-          color: floating || running ? tokens.colors.fg1 : tokens.colors.fg2,
-        ),
+        icon: (Color color) =>
+            ShellGlyphIcon(ShellGlyph.pictureInPicture, size: 14, color: color),
       ),
     );
   }
@@ -983,7 +977,6 @@ class FullWindowButton extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = AppLocalizations.of(context);
     final bool full =
         ref.watch(terminalPlacementProvider) == TerminalPlacement.fullWindow;
@@ -995,18 +988,16 @@ class FullWindowButton extends ConsumerWidget {
     return HoverLabel(
       label: label,
       side: HoverLabelSide.below,
-      child: HButton(
+      child: HIconButton.builder(
         key: const Key('sandbox-terminal-full-window'),
-        variant: HButtonVariant.ghost,
-        size: HButtonSize.sm,
         semanticsLabel: label,
         onPressed: ref
             .read(terminalPlacementProvider.notifier)
             .toggleFullWindow,
-        child: ShellGlyphIcon(
+        icon: (Color color) => ShellGlyphIcon(
           full ? ShellGlyph.minimize : ShellGlyph.maximize,
           size: 14,
-          color: tokens.colors.fg1,
+          color: color,
         ),
       ),
     );

@@ -8,6 +8,7 @@
 /// als Wort und nie als Farbe allein (`docs/UX.md` 3.3).
 library;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 
 import '../../../core/domain/domain.dart';
@@ -64,6 +65,7 @@ class ChangeRow extends StatefulWidget {
 
 class _ChangeRowState extends State<ChangeRow> {
   bool _open = false;
+  bool _hovered = false;
 
   @override
   Widget build(BuildContext context) {
@@ -77,8 +79,33 @@ class _ChangeRowState extends State<ChangeRow> {
         change.symlinkTarget.isNotEmpty ||
         change.sha256.isNotEmpty ||
         change.kind == DisposableChangeKind.removed;
-    return Padding(
+    // Hover wie in jeder Liste: animierte Füllung und eine leichte
+    // Skalierung um die Mitte, nie eine Verschiebung (HUM-406).
+    return MouseRegion(
       key: ValueKey<String>('change-row-$id'),
+      onEnter: (PointerEnterEvent _) => setState(() => _hovered = true),
+      onExit: (PointerExitEvent _) => setState(() => _hovered = false),
+      child: HHoverScale(
+        hovered: _hovered,
+        child: HAnimatedFill(
+          color: _hovered ? tokens.colors.bg2 : const Color(0x00000000),
+          builder: (BuildContext context, Color fill) => ColoredBox(
+            color: fill,
+            child: _body(tokens, l10n, change, id, hasDetail),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _body(
+    HTokens tokens,
+    AppLocalizations l10n,
+    DisposableChange change,
+    String id,
+    bool hasDetail,
+  ) {
+    return Padding(
       padding: EdgeInsets.symmetric(vertical: tokens.spacing.x1),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -103,7 +130,12 @@ class _ChangeRowState extends State<ChangeRow> {
                 ),
               ),
               SizedBox(width: tokens.spacing.x2),
+              // Eng und nicht locker: Die Abzeichen stehen rechtsbündig vor
+              // dem Pfeil, und der Pfeil steht in jeder Zeile an derselben
+              // Kante. Locker war die Gruppe so breit wie ihr Inhalt, und der
+              // Pfeil sprang mit jeder Breite der Abzeichen (HUM-406).
               Flexible(
+                fit: FlexFit.tight,
                 child: Wrap(
                   alignment: WrapAlignment.end,
                   crossAxisAlignment: WrapCrossAlignment.center,

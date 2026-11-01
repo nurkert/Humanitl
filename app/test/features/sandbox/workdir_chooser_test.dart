@@ -88,7 +88,8 @@ void main() {
     );
 
     expect(tester.takeException(), isNull);
-    expect(tester.widget<HButton>(pickerButton).enabled, isTrue);
+    // Schmal steht der Knopf als Glyph-Knopf da (HUM-406).
+    expect(tester.widget<HIconButton>(pickerButton).onPressed, isNotNull);
     expect(
       find.descendant(of: pickerButton, matching: find.text('Change…')),
       findsNothing,
@@ -117,7 +118,7 @@ void main() {
       chosenDirectory: '/home/nik/clients/beta',
     );
 
-    expect(tester.widget<HButton>(pickerButton).enabled, isFalse);
+    expect(tester.widget<HIconButton>(pickerButton).onPressed, isNull);
     expect(
       find.ancestor(
         of: pickerButton,

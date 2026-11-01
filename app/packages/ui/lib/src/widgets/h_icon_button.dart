@@ -26,7 +26,7 @@ import 'h_glyph.dart';
 class HIconButton extends StatelessWidget {
   /// Creates an icon button showing [glyph].
   const HIconButton({
-    required this.glyph,
+    required HGlyph this.glyph,
     required this.onPressed,
     required this.semanticsLabel,
     this.color,
@@ -34,10 +34,34 @@ class HIconButton extends StatelessWidget {
     this.autofocus = false,
     this.focusNode,
     super.key,
-  });
+  }) : icon = null;
 
-  /// The glyph to draw.
-  final HGlyph glyph;
+  /// Creates an icon button whose icon comes from [icon], for a glyph that is
+  /// not an [HGlyph], etwa ein Glyph der Shell (HUM-406).
+  ///
+  /// Vorher standen solche Knöpfe als `HButton` mit einem Glyph als
+  /// Beschriftung da: 34 statt 28 px breit, mit dem Polster einer
+  /// Beschriftung. Neben einem [HIconButton] in derselben Leiste standen die
+  /// Mitten der Glyphen dann drei Pixel versetzt, und zwei Leisten
+  /// übereinander fluchteten nicht. [icon] bekommt die Strichfarbe des
+  /// Zustands, damit Hover, Fokus und Deaktiviert aussehen wie bei jedem
+  /// anderen Glyph-Knopf.
+  const HIconButton.builder({
+    required Widget Function(Color color) this.icon,
+    required this.onPressed,
+    required this.semanticsLabel,
+    this.color,
+    this.autofocus = false,
+    this.focusNode,
+    super.key,
+  }) : glyph = null,
+       size = HSize.glyph;
+
+  /// The glyph to draw, or null when [icon] draws it.
+  final HGlyph? glyph;
+
+  /// Draws the icon in the stroke colour of the current state.
+  final Widget Function(Color color)? icon;
 
   /// Invoked on tap. Null disables the button.
   final VoidCallback? onPressed;
@@ -93,7 +117,9 @@ class HIconButton extends StatelessWidget {
           return SizedBox.square(
             dimension: HSize.hitMin,
             child: Center(
-              child: HGlyphIcon(glyph, size: size, color: stroke),
+              child:
+                  icon?.call(stroke) ??
+                  HGlyphIcon(glyph!, size: size, color: stroke),
             ),
           );
         },

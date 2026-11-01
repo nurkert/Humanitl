@@ -641,57 +641,75 @@ class _RowState extends State<_Row> {
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: widget.onOpen,
-          child: ColoredBox(
-            color: _hovered ? tokens.colors.bg2 : tokens.colors.bg0,
-            child: SizedBox(
-              height: HSize.rowHistory,
-              child: Row(
-                children: <Widget>[
-                  _Cell(
-                    width: AuditColumns.seq,
-                    alignment: Alignment.centerRight,
-                    child: Text(
-                      '${row.seq}',
-                      style: tokens.typography.mono12.tinted(tokens.colors.fg1),
-                    ),
-                  ),
-                  _Cell(
-                    width: AuditColumns.time,
-                    child: Text(
-                      auditRowTime(row),
-                      style: tokens.typography.mono12.tinted(tokens.colors.fg1),
-                    ),
-                  ),
-                  _Cell(
-                    width: AuditColumns.kind,
-                    child: Text(
-                      row.kind,
-                      style: tokens.typography.ui12.tinted(tokens.colors.fg0),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  _Cell(
-                    width: AuditColumns.session,
-                    child: Text(
-                      auditShortSession(row.session),
-                      style: tokens.typography.mono12.tinted(tokens.colors.fg2),
-                    ),
-                  ),
-                  Expanded(
-                    child: _Cell(
-                      width: null,
-                      child: Text(
-                        auditSummary(row),
-                        style: tokens.typography.ui12.tinted(tokens.colors.fg1),
-                        overflow: TextOverflow.ellipsis,
-                        semanticsLabel: l10n.auditRowSemantics(
-                          row.seq,
-                          row.kind,
+          // Hover wie in jeder Liste: animierte Füllung und eine leichte
+          // Skalierung um die Mitte, nie eine Verschiebung (HUM-406).
+          child: HHoverScale(
+            hovered: _hovered,
+            child: HAnimatedFill(
+              color: _hovered ? tokens.colors.bg2 : tokens.colors.bg0,
+              builder: (BuildContext context, Color fill) => ColoredBox(
+                color: fill,
+                child: SizedBox(
+                  height: HSize.rowHistory,
+                  child: Row(
+                    children: <Widget>[
+                      _Cell(
+                        width: AuditColumns.seq,
+                        alignment: Alignment.centerRight,
+                        child: Text(
+                          '${row.seq}',
+                          style: tokens.typography.mono12.tinted(
+                            tokens.colors.fg1,
+                          ),
                         ),
                       ),
-                    ),
+                      _Cell(
+                        width: AuditColumns.time,
+                        child: Text(
+                          auditRowTime(row),
+                          style: tokens.typography.mono12.tinted(
+                            tokens.colors.fg1,
+                          ),
+                        ),
+                      ),
+                      _Cell(
+                        width: AuditColumns.kind,
+                        child: Text(
+                          row.kind,
+                          style: tokens.typography.ui12.tinted(
+                            tokens.colors.fg0,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      _Cell(
+                        width: AuditColumns.session,
+                        child: Text(
+                          auditShortSession(row.session),
+                          style: tokens.typography.mono12.tinted(
+                            tokens.colors.fg2,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: _Cell(
+                          width: null,
+                          child: Text(
+                            auditSummary(row),
+                            style: tokens.typography.ui12.tinted(
+                              tokens.colors.fg1,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                            semanticsLabel: l10n.auditRowSemantics(
+                              row.seq,
+                              row.kind,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           ),

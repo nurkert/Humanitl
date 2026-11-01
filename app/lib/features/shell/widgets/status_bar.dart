@@ -84,68 +84,91 @@ class StatusBar extends ConsumerWidget {
           padding: EdgeInsets.symmetric(horizontal: tokens.spacing.x3),
           child: Row(
             children: <Widget>[
-              Semantics(
-                label: live
-                    ? l10n.shellStatusConnected
-                    : l10n.shellStatusDisconnected,
-                child: SizedBox.square(
-                  key: const Key('status-connection-dot'),
-                  dimension: 8,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      // Orange und nicht rot: Rot heißt in diesem Programm
-                      // blockiert und nichts anderes (`docs/UX.md` 3.3). Es
-                      // ist dieselbe Farbe, die das Banner darüber trägt.
-                      color: live
-                          ? tokens.state.allowed
-                          : tokens.stateColor(HFlowState.error),
-                      shape: BoxShape.circle,
-                    ),
+              // Die linke Gruppe nimmt den Platz, der übrig ist, und gibt ihn
+              // nach innen weiter. Vorher teilte sich ein `Spacer` den Rest
+              // mit dem flexiblen Neustart-Knopf, und die Sitzung rechts stand
+              // mitten in der Leiste, sobald der Knopf weniger brauchte als
+              // seinen Anteil (HUM-406).
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (BuildContext context, BoxConstraints room) => Row(
+                    children: <Widget>[
+                      Semantics(
+                        label: live
+                            ? l10n.shellStatusConnected
+                            : l10n.shellStatusDisconnected,
+                        child: SizedBox.square(
+                          key: const Key('status-connection-dot'),
+                          dimension: 8,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              // Orange und nicht rot: Rot heißt in diesem Programm
+                              // blockiert und nichts anderes (`docs/UX.md` 3.3). Es
+                              // ist dieselbe Farbe, die das Banner darüber trägt.
+                              color: live
+                                  ? tokens.state.allowed
+                                  : tokens.stateColor(HFlowState.error),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ),
+                      ),
+                      SizedBox(width: tokens.spacing.x2),
+                      Text(
+                        l10n.shellStatusDaemon(info.daemonVersion),
+                        key: const Key('status-daemon-version'),
+                        style: style,
+                      ),
+                      if (_otherBuild) ...<Widget>[
+                        SizedBox(width: tokens.spacing.x2),
+                        // Der Hinweis nimmt seine eigene Breite, höchstens ein
+                        // Drittel; den Rest bekommt der Knopf mit Rückfrage
+                        // oder Fehlerzeile. Zwei `Flexible` teilten den Platz
+                        // fest auf, und die Fehlerzeile wurde gekürzt, obwohl
+                        // daneben Platz frei stand (HUM-406).
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: room.maxWidth / 3,
+                          ),
+                          child: Text(
+                            l10n.shellStatusDaemonMismatch(appVersion),
+                            key: const Key('status-daemon-mismatch'),
+                            overflow: TextOverflow.ellipsis,
+                            style: tokens.typography.ui11.medium.tinted(
+                              tokens.colors.warningText,
+                            ),
+                          ),
+                        ),
+                        // HUM-284: the same restart as a button, for this user only
+                        // and never during an agent session.
+                        SizedBox(width: tokens.spacing.x2),
+                        Flexible(
+                          child: DaemonRestartControl(
+                            daemonMinor: info.protoMinor,
+                          ),
+                        ),
+                      ],
+                      if (info.isFake) ...<Widget>[
+                        SizedBox(width: tokens.spacing.x2),
+                        HBadge(
+                          text: l10n.shellStatusFake,
+                          color: tokens.state.passthroughLlm,
+                        ),
+                      ],
+                      // HUM-382: a newer release, quiet, with its one
+                      // click. Not flexible: a second flex would take half
+                      // of the room from the restart control even while it
+                      // draws nothing. Capped at 360 px.
+                      SizedBox(width: tokens.spacing.x2),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 360),
+                        child: UpdateNotice(daemonMinor: info.protoMinor),
+                      ),
+                    ],
                   ),
                 ),
               ),
-              SizedBox(width: tokens.spacing.x2),
-              Text(
-                l10n.shellStatusDaemon(info.daemonVersion),
-                key: const Key('status-daemon-version'),
-                style: style,
-              ),
-              if (_otherBuild) ...<Widget>[
-                SizedBox(width: tokens.spacing.x2),
-                Flexible(
-                  child: Text(
-                    l10n.shellStatusDaemonMismatch(appVersion),
-                    key: const Key('status-daemon-mismatch'),
-                    overflow: TextOverflow.ellipsis,
-                    style: tokens.typography.ui11.medium.tinted(
-                      tokens.colors.warningText,
-                    ),
-                  ),
-                ),
-                // HUM-284: the same restart as a button, for this user only
-                // and never during an agent session.
-                SizedBox(width: tokens.spacing.x2),
-                Flexible(
-                  flex: 2,
-                  child: DaemonRestartControl(daemonMinor: info.protoMinor),
-                ),
-              ],
-              if (info.isFake) ...<Widget>[
-                SizedBox(width: tokens.spacing.x2),
-                HBadge(
-                  text: l10n.shellStatusFake,
-                  color: tokens.state.passthroughLlm,
-                ),
-              ],
-              // HUM-382: a newer release, quiet, with its one click. Not
-              // flexible: a loose flex beside the spacer would keep its share
-              // of the bar even while it draws nothing.
-              SizedBox(width: tokens.spacing.x2),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 360),
-                child: UpdateNotice(daemonMinor: info.protoMinor),
-              ),
-              const Spacer(),
+              SizedBox(width: tokens.spacing.x3),
               const RecorderStatusLabel(),
               const QueuePressureLabel(),
               // HUM-289: the active saved model server and its quick switch,
