@@ -155,12 +155,14 @@ void main() {
     expect(find.byKey(const Key('settings-probe-failure')), findsOneWidget);
     expect(focusIsWithin(const Key('settings-key-input')), isFalse);
 
-    await tester.tap(
-      find.descendant(
-        of: find.byKey(const Key('settings-probe-failure')),
-        matching: find.byKey(const Key('fix-open-settings')),
-      ),
+    final Finder fix = find.descendant(
+      of: find.byKey(const Key('settings-probe-failure')),
+      matching: find.byKey(const Key('fix-open-settings')),
     );
+    // Der Name steht seit HUM-414 über der Adresse; der Befund liegt tiefer.
+    await tester.ensureVisible(fix);
+    await tester.pumpAndSettle();
+    await tester.tap(fix);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('settings-overlay')), findsOneWidget);
     expect(focusIsWithin(const Key('settings-key-input')), isTrue);

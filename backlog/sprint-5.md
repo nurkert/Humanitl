@@ -103,6 +103,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-409 | Files and folders dragged onto the sandbox are copied in or mounted, after one clear choice | L | HUM-406, HUM-351 |
 | HUM-410 | A lone Shift, Ctrl, Alt or Super no longer types a stray glyph in the terminal | S | HUM-042, HUM-313 |
 | HUM-411 | The disposable box in the sandbox header stands on the middle of the buttons beside it | S | HUM-406 |
+| HUM-414 | Model servers as a calm list with the chosen server's settings beside it | M | HUM-405 |
 
 ---
 
@@ -11867,3 +11868,41 @@ niemand ein. Es ändert sich nichts außer der Sperrdatei.
 
 **Akzeptanz.** `cargo deny check advisories licenses bans` grün; der Build
 der Workspace-Crates unverändert.
+
+---
+
+## HUM-414 · Model servers as a calm list with the chosen server's settings beside it
+
+**Anlass.** Owner am 2026-11-02 nach HUM-405: eine schöne Liste, die man
+einfach anklickt, die gewählte Zeile hervorgehoben, und in der Liste selbst
+nichts zum Einstellen. Die Gestalt kommt aus fünf Interviews mit
+Sicherheitsleuten, denen gute UX wichtig ist (Pentest, SOC, KI-Startup,
+Datenschutz unter Linux, AppSec im Konzern), dazu eine Bewertung mit
+`impeccable` (vorher 22/40 nach Nielsen) und `ui-ux-pro-max`.
+
+**Gestalt.** Zwei getrennte Abschnitte, „Server“ und „Wer nutzt welchen
+Server“. Die Liste zeigt je Server Name, `host:port` und „Standard“; ein
+Zeichen für das Ergebnis der letzten Prüfung erst nach einer Prüfung. Die
+gewählte Zeile trägt Grund und Akzentkante wie die Kategorie-Spalte; die
+Liste ist ein Tab-Stopp, Pfeile wählen, Enter springt in die Einstellungen,
+Esc zurück, `Ctrl+N` fügt hinzu. Daneben stehen die Einstellungen des
+gewählten Servers: Name, Adresse mit Herkunft (dieser Rechner, lokales Netz,
+entfernt) und einer Warnung bei http zu einem entfernten Host, Prüfen mit
+Ergebnis daneben, Modell als Auswahl mit freier Eingabe, der Schlüssel nie
+sichtbar mit „geht nur an <origin>“ und einer Warnung vor dem Speichern,
+wenn ein Wechsel der Herkunft ihn entfernt, „Als Standard“, „Genutzt von“,
+Entfernen unten mit einer Rückfrage, die Profile und Projekt nennt. Speichern
+und Abbrechen ausdrücklich; wer mit ungespeicherten Änderungen eine andere
+Zeile wählt, das Overlay schließt, die Kategorie wechselt oder von einer
+Korrektur aus springt, bekommt „Speichern, Verwerfen, Weiter bearbeiten“.
+Der Dialog vor einem Projektserver nennt Ordner, volle Adresse und das
+Risiko in Klartext; „Nicht erlauben“ hat den Fokus.
+
+**Akzeptanz.** Kein neuer RPC; das Verhalten aus HUM-405 bleibt. Tests für
+Liste, Tastatur, Rückfrage bei ungespeicherten Änderungen (Mutationsbeweis),
+Leerzustand, Standard nicht entfernbar, Umbenennen; Goldens; Screenshots mit
+echter Schrift; keine Datei über etwa 550 Zeilen.
+
+**Kandidaten (brauchen den Daemon).** Bestätigung eines Projektservers
+widerrufen; „nur dieses Mal“; Bindung an die Herkunft statt an den Namen;
+Änderungsprotokoll je Server.

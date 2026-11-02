@@ -34,6 +34,30 @@ class SettingsController extends ChangeNotifier {
   Timer? _highlightTimer;
   bool _disposed = false;
 
+  UnsavedGuard? _guard;
+
+  /// Registers [guard] for a form of the page that can hold a change, or
+  /// clears it with null. One form at a time: the page shows one category.
+  void guardUnsaved(UnsavedGuard? guard) => _guard = guard;
+
+  /// Clears the guard, but only if it is still [guard]: a page that goes
+  /// does not drop the guard of the page that came after it.
+  void releaseUnsaved(UnsavedGuard guard) {
+    if (_guard == guard) {
+      _guard = null;
+    }
+  }
+
+  /// Runs [proceed] at once, or, while a form holds a change, after its own
+  /// question was answered with save or discard. Closing the overlay and
+  /// choosing another category go through here (HUM-414).
+  void leave(VoidCallback proceed) {
+    final UnsavedGuard? guard = _guard;
+    if (guard == null || !guard(proceed)) {
+      proceed();
+    }
+  }
+
   /// How long a row stays lit after a jump to it.
   static const Duration highlightFor = Duration(milliseconds: 1200);
 
@@ -145,6 +169,11 @@ class SettingsController extends ChangeNotifier {
     super.dispose();
   }
 }
+
+/// A form that would lose a change: given what should happen next, it
+/// returns false when it holds no change, or true when it asks first and
+/// runs `proceed` itself once the change was saved or discarded.
+typedef UnsavedGuard = bool Function(VoidCallback proceed);
 
 /// Puts the [SettingsController] of the open overlay above its rows.
 class SettingsScope extends InheritedNotifier<SettingsController> {

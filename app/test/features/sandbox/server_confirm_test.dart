@@ -57,14 +57,31 @@ void main() {
     await settle(tester);
     expect(find.byKey(const Key('sandbox-server-confirm')), findsOneWidget);
     expect(
-      find.textContaining('Use the server work for this project?'),
+      find.textContaining('Allow this project’s model server?'),
       findsOneWidget,
     );
     final String body = tester
         .widget<Text>(find.byKey(const Key('sandbox-server-confirm-body')))
         .data!;
-    expect(body, contains(project));
-    expect(body, contains('home'));
+    expect(body, contains('work'));
+    expect(body, contains('a server you don’t control'));
+    // Ordner und Server stehen ganz da, der Ordner in seiner eigenen Zeile.
+    expect(find.text(project), findsOneWidget);
+    expect(find.text('work  http://work.lan:8080'), findsOneWidget);
+    expect(find.text('Don’t allow'), findsOneWidget);
+    expect(
+      find.text('Your default server is home. Don’t allow starts no session.'),
+      findsOneWidget,
+    );
+    bool focused = false;
+    FocusManager.instance.primaryFocus?.context?.visitAncestorElements((
+      Element element,
+    ) {
+      focused =
+          element.widget.key == const Key('sandbox-server-confirm-cancel');
+      return !focused;
+    });
+    expect(focused, isTrue, reason: 'Don’t allow is the preselected answer');
     expect(client.startModes, isEmpty, reason: 'nothing started yet');
 
     // Der Fokus steht auf Abbrechen; Enter bricht ab.

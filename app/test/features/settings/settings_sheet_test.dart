@@ -134,7 +134,7 @@ void main() {
     await openDefaultServer(tester, client);
 
     expect(find.byKey(const Key('settings-overlay')), findsOneWidget);
-    expect(find.text('Set, in the system keyring'), findsOneWidget);
+    expect(find.text('Stored in the system keyring'), findsOneWidget);
 
     // Ein neuer Schlüssel geht hinein, und danach steht er nirgends: nicht
     // im Feld, nicht in einem Text, und der Fake kennt nur seine Länge.
@@ -151,7 +151,7 @@ void main() {
     expect(client.setKeyServers, <String>['default']);
     expect(input.controller.text, isEmpty, reason: 'emptied after storing');
     expect(anyTextContains(tester, secret), isFalse);
-    expect(find.text('Set, in the system keyring'), findsOneWidget);
+    expect(find.text('Stored in the system keyring'), findsOneWidget);
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
   testWidgets(
@@ -195,11 +195,11 @@ void main() {
       expect(client.probedEndpoints, <String>['http://192.168.1.20:11434/']);
       expect(client.probeKeyUses, <ProbeKeyUse>[ProbeKeyUse.none]);
       expect(find.byKey(const Key('settings-probe-result')), findsOneWidget);
-      expect(find.text('gpt-oss:20b'), findsOneWidget);
 
-      await tester.tap(
-        find.byKey(const ValueKey<String>('settings-model-phi-4')),
-      );
+      // Die Modelle stehen am Modellfeld zur Wahl (HUM-414).
+      await press(tester, 'settings-model-pick');
+      expect(find.text('gpt-oss:20b'), findsOneWidget);
+      await tester.tap(find.text('phi-4').last);
       await tester.pumpAndSettle();
       expect(client.serverRequests, isEmpty, reason: 'a pick is not a save');
       await press(tester, 'settings-server-save');
