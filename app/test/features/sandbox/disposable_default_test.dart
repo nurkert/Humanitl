@@ -63,6 +63,7 @@ Future<void> startAndStop(WidgetTester tester) async {
 }
 
 void main() {
+  alignment();
   testWidgets('the switch starts at the mode the daemon resolved, and the '
       'start sends nothing unless it was changed', (WidgetTester tester) async {
     final SandboxTestClient client = clientWith(SandboxMode.disposable);
@@ -124,5 +125,29 @@ void main() {
     await tester.tap(find.byKey(const Key('sandbox-start')));
     await settle(tester);
     expect(client.startModes, <SandboxMode?>[null]);
+  });
+}
+
+/// Die senkrechte Mitte von [finder] im Fenster.
+double centerY(WidgetTester tester, Finder finder) =>
+    tester.getRect(finder).center.dy;
+
+void alignment() {
+  testWidgets('the disposable box stands on the middle of the start button '
+      '(HUM-411)', (WidgetTester tester) async {
+    await pumpSandbox(tester, client: clientWith(SandboxMode.disposable));
+    await settle(tester);
+    final Finder box = find.byKey(const Key('sandbox-disposable'));
+    final double label = centerY(
+      tester,
+      find.descendant(of: box, matching: find.byType(Text)),
+    );
+    final double start = centerY(
+      tester,
+      find.byKey(const Key('sandbox-start')),
+    );
+    // Vorher stand die Beschriftung 7,5 px über der Mitte des Knopfs, weil
+    // das Kästchen sich auf die ganze Höhe der Leiste zog.
+    expect((label - start).abs(), lessThan(0.75));
   });
 }
