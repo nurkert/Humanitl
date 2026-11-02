@@ -1,7 +1,10 @@
-// Goldens der gespeicherten Modellserver (HUM-289): die Liste im Abschnitt
-// Modell der Einstellungen, die Rückfrage vor dem Entfernen des aktiven
-// Servers und der Schnellwechsel der Statusleiste mit offenem Menü. Je in
-// den vier Varianten aus `support/golden_variants.dart`.
+// Goldens der gespeicherten Modellserver (HUM-289, frisch gedacht in
+// HUM-405): die Karten mit „Wer nutzt welchen Server", die Detailansicht
+// eines Servers mit ungespeicherter Änderung, ein neuer Server, die
+// Rückfrage vor dem Entfernen des Standards, der Schnellwechsel der
+// Statusleiste mit offenem Menü und die eine Rückfrage vor dem Start, wenn
+// das Projekt einen unbestätigten Server wählt. Je in den vier Varianten aus
+// `support/golden_variants.dart`.
 //
 // Erneuern mit `make goldens-update`.
 
@@ -12,12 +15,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
+import 'package:humanitl/l10n/l10n.dart';
+import 'package:humanitl/features/sandbox/widgets/server_confirm_dialog.dart';
 import 'package:humanitl/features/shell/widgets/llm_server_item.dart';
 
 import 'settings_golden_test.dart' show configured, settleSheet, sheet;
 import 'support/golden_variants.dart';
 
-/// Zwei gespeicherte Server, `home` aktiv mit Schlüssel, `cloud` ohne.
+/// Drei gespeicherte Server, `home` Standard mit Schlüssel, `cloud` ohne,
+/// `work` mit eigenem; ein Projekt, das `work` wählt, und ein Profil.
 FakeDaemonClient twoServers() => configured()
   ..savedServers = <SavedServer>[
     const SavedServer(
@@ -31,27 +37,73 @@ FakeDaemonClient twoServers() => configured()
       models: <String>['qwen2.5-coder:14b'],
       keyRef: 'secret-service:humanitl/llm',
     ),
+    const SavedServer(
+      name: 'work',
+      endpoint: 'https://llm.corp.example:8443/v1',
+      models: <String>['llama-3.3-70b'],
+      keyRef: 'secret-service:humanitl/work',
+    ),
   ]
-  ..activeServer = 'home';
+  ..activeServer = 'home'
+  ..profileUses = const <ProfileUse>[
+    ProfileUse(
+      name: 'llm-only',
+      server: 'cloud',
+      description:
+          'Pure inference. Only the configured LLM endpoint is reachable.',
+    ),
+  ]
+  ..projectUse = const ProjectUse(dir: '/home/u/src/acme', server: 'work');
 
-/// Das Blatt, bis zur Liste gerollt.
+/// Das Overlay mit den Karten.
 Future<void> showServers(WidgetTester tester) async {
   await settleSheet(tester);
-  await tester.ensureVisible(find.byKey(const Key('settings-servers')));
+}
+
+/// Die Detailansicht von [name].
+Future<void> openServer(WidgetTester tester, String name) async {
+  await settleSheet(tester);
+  await tester.tap(find.byKey(ValueKey<String>('settings-server-$name')));
   await tester.pumpAndSettle();
 }
 
-/// Dasselbe, danach „Entfernen" am aktiven Server.
-Future<void> askRemove(WidgetTester tester) async {
-  await showServers(tester);
-  final Finder remove = find.byKey(
-    const ValueKey<String>('settings-server-remove-home'),
+/// Die Detailansicht von `cloud` mit einer geänderten Adresse.
+Future<void> editCloud(WidgetTester tester) async {
+  await openServer(tester, 'cloud');
+  await tester.enterText(
+    find.descendant(
+      of: find.byKey(const Key('settings-endpoint')),
+      matching: find.byType(EditableText),
+    ),
+    'https://api.example.com/v2',
   );
-  await tester.ensureVisible(remove);
-  await tester.pumpAndSettle();
-  await tester.tap(remove);
   await tester.pumpAndSettle();
 }
+
+/// Die Detailansicht eines neuen Servers.
+Future<void> addServer(WidgetTester tester) async {
+  await settleSheet(tester);
+  await tester.tap(find.byKey(const Key('settings-server-add')));
+  await tester.pumpAndSettle();
+}
+
+/// Die Detailansicht des Standards, danach „Mehr" und „Entfernen".
+Future<void> askRemove(WidgetTester tester) async {
+  await openServer(tester, 'home');
+  await tester.tap(find.byKey(const Key('settings-server-more')));
+  await tester.pumpAndSettle();
+  final Finder remove = find.text(
+    lookupAppLocalizationsFor(tester).settingsServerRemove,
+  );
+  await tester.tap(remove.last);
+  await tester.pumpAndSettle();
+}
+
+/// Die Übersetzungen der Variante unter dem Overlay.
+AppLocalizations lookupAppLocalizationsFor(WidgetTester tester) =>
+    AppLocalizations.of(
+      tester.element(find.byKey(const Key('settings-server-more'))),
+    );
 
 /// Der Eintrag der Statusleiste, das Menü offen.
 Future<void> openSwitch(WidgetTester tester) async {
@@ -81,6 +133,47 @@ void main() {
     constraints: window,
     pumpBeforeTest: askRemove,
     builder: (GoldenVariant variant) => sheet(variant, twoServers()),
+  );
+
+  goldenVariants(
+    'settings_server_detail',
+    constraints: window,
+    pumpBeforeTest: editCloud,
+    builder: (GoldenVariant variant) => sheet(variant, twoServers()),
+  );
+
+  goldenVariants(
+    'settings_server_new',
+    constraints: window,
+    pumpBeforeTest: addServer,
+    builder: (GoldenVariant variant) => sheet(variant, twoServers()),
+  );
+
+  goldenVariants(
+    'sandbox_server_confirm',
+    constraints: const BoxConstraints.tightFor(width: 720, height: 420),
+    pumpBeforeTest: (WidgetTester tester) async {
+      await tester.pump();
+      await tester.pumpAndSettle();
+    },
+    builder: (GoldenVariant variant) => goldenFrame(
+      variant: variant,
+      background: variant.tokens.colors.bg0,
+      overrides: <Override>[
+        daemonClientProvider.overrideWithValue(twoServers()),
+      ],
+      child: ServerConfirmDialog(
+        server: const LlmServerChoice(
+          name: 'work',
+          source: LlmServerSource.project,
+          detail: '/home/u/src/acme/.humanitl/profile.toml',
+          projectDir: '/home/u/src/acme',
+          unconfirmed: Diagnostic(code: 'CONFIG_022', severity: Severity.error),
+        ),
+        onCancel: () {},
+        onConfirm: () {},
+      ),
+    ),
   );
 
   goldenVariants(

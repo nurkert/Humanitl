@@ -716,6 +716,14 @@ session; a running session keeps the server, the key and the passthrough it star
 active server cannot be removed while a session runs or starts; no switch and no removal that deletes a key happens while a start is resolving its configuration, and endpoint or key reference of a server never change while its key is being stored (one lock for the daemon and the command line). Removing a server deletes its
 keyring item on request, and only when no other server refers to it.
 
+*Editing a server (HUM-405).* The address and models of every saved server can be changed without
+making it the default (`LlmServers(Edit)`). A stored key belongs to the origin (scheme, host, port)
+it was stored for: when an edit gives the endpoint another origin, the daemon drops the server's key
+reference and deletes the keyring item unless another server refers to it, and the settings say so
+before Save; the key has to be entered again for the new address. A path on the same origin keeps
+the key. A stored key therefore never moves to a new origin, and never to the origin of another
+saved server, without being entered again.
+
 *A server per project, profile or run (HUM-400).* The key `llm.server` names one of the saved
 servers for a session, and it beats `llm.active`: `humanitl run --llm NAME` (or the start field,
 `Start.llm_server`) beats the project profile, the project profile beats a session profile, and a
@@ -742,14 +750,40 @@ as before.
 hostile repository can thereby route the model traffic of its own session (prompts, the code the
 agent reads) to another of the user's saved servers than the active one, for example to a company
 server instead of a local one. It cannot add a server, change an endpoint, read a key or send one
-server's key to another server's origin. We decided against a confirmation the first time a project
-chooses: the choice is limited to servers the user saved on purpose, each with its own key, and the
-choice is visible before and at every start. The sandbox header of the app shows the server with
-its source (the badge turns to the colour of a hold when the project chose), the hover names the
-project file, `humanitl sandbox plan` and `humanitl run` print the server and where the choice comes
-from, and `SandboxEvent.Status.llm_server` carries both to every client. Whoever keeps a server
-that no repository should reach should not save it, or should not run untrusted repositories while
-it is saved.
+server's key to another server's origin. The choice is limited to servers the user saved on
+purpose, each with its own key, and it is visible before and at every start. The sandbox header of
+the app shows the server with its source (the badge turns to the colour of a hold when the project
+chose), the hover names the project file, `humanitl sandbox plan` and `humanitl run` print the
+server and where the choice comes from, and `SandboxEvent.Status.llm_server` carries both to every
+client.
+
+*Confirmed once per project folder (HUM-405).* HUM-400 left open whether a project's first choice
+needs a question; HUM-405 answers it with yes. The project profile lies in the folder the agent
+writes, so a running agent can change `llm.server` there for the next session. **When the server a
+project chooses is not the default (`llm.active`) and the human has not confirmed this server for
+this project folder, the session does not start** (`CONFIG_022`, checked by the daemon in the
+resolution of every start, and by `humanitl sandbox run`); no passthrough is set up and no key is
+fetched. The app asks once before the start, with Cancel preselected; the command line names
+`humanitl llm server confirm NAME --project DIR`. The confirmation is stored per resolved project
+folder and server name in `$XDG_DATA_HOME/humanitl/project-servers.toml`, in the daemon's data
+directory and never in the project, so the agent cannot issue it itself. A choice of the default
+needs no confirmation: the traffic then goes where it would go without the project; without saved
+entries the server `default` derived from the flat values counts as the default. A choice the
+project makes indirectly counts as the project's: when the project profile names a bundled profile
+with `name` and that profile (or the user's own copy of it, which shadows it) carries `llm.server`,
+the start asks the same question, also when the human names the same profile at the same time. A
+confirmation covers one server under one name: a project that switches to another non-default
+server asks again, and removing, renaming or re-adding a server, renaming another server to that
+name, or giving it an endpoint of another origin drops every confirmation of that name, before the
+change is written. Assigning
+a server to a project through the daemon (`LlmServers(Assign)`, the settings of the app or
+`humanitl llm server assign`) is the human's choice and counts as the confirmation for that folder.
+The daemon writes the project file relative to the opened project folder with `O_NOFOLLOW`, as a
+new file renamed into place within the same opened `.humanitl` folder: a link the agent put at
+`.humanitl` or `.humanitl/profile.toml` refuses the write (`CONFIG_015`) and its target is never
+touched. Whoever keeps a server that no repository should reach should still not save it: a
+confirmation is a decision about a folder, and a later change of the repository's content under
+the same folder and name is not asked again.
 
 *How it reaches the sandbox.* When a session starts, the daemon fetches the key and places it as
 the file `/etc/humanitl/opencode/llm-api-key` in the sandbox, from a memfd through
@@ -1780,5 +1814,6 @@ the binaries inside the disk image.
 | 0.1.0 | The disposable sandbox: the project folder as the read-only lower layer of an overlay, the upper layer in RAM under the runtime directory with a size cap, `mounts.extra_rw` read-only; changes are written back only on apply, never through a symlink, never as a symlink out of the project, a device or with setuid bits, and never over a file the human changed since the start without `--overwrite` (HUM-350, K-24). |
 | 0.1.0 | The changes panel of the app: a conflict is overwritten only when it was confirmed for exactly that change (`ApplyChanges.overwrite_ids`); a conflict that appears after the selection stops the apply (HUM-351, K-24). |
 | 0.1.0 | A project profile, a session profile or one run (`humanitl run --llm NAME`) chooses one of the saved model servers with `llm.server`; only the chosen server is the session's passthrough and gets its key; an unknown name refuses the start with `CONFIG_021` and never falls back to `llm.active`; the choice and its source stand in the sandbox header and in `humanitl sandbox plan` (HUM-400, K-02). |
+| 0.1.0 | A project that chooses a saved server other than the default starts only after the human confirmed that server for that project folder once (`CONFIG_022`); the confirmation lives in the daemon's data directory, never in the project; the daemon writes the project file without following a link (HUM-405, K-02). |
 | 0.1.0 | The disposable sandbox is the default where the system allows it: `sandbox.mode = "auto"` resolves to disposable with bubblewrap 0.11 or newer, a runtime directory on tmpfs and a writable project, and otherwise runs direct, as before, with the warning `SANDBOX_033`; an explicit `disposable` still refuses with `SANDBOX_030` and never falls back (HUM-357, K-24). |
 | 0.1.x | OpenCode reaches a model on the loopback through the proxy: the adapter writes the reserved name `llm.humanitl.internal` into the `baseURL`, and the proxy maps that name only to the configured loopback endpoint with its scheme and port, before the rules; any other use of the name is refused with `PROXY_003` and never resolved ([section 5.1](#the-reserved-name-llmhumanitlinternal-hum-387), HUM-387). |

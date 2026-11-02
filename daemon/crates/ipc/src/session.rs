@@ -253,6 +253,15 @@ impl SessionResolver {
         {
             return Err(refusal);
         }
+        // Das Projekt-Profil liegt im Ordner, den der Agent beschreiben kann.
+        // Wählt es einen anderen Server als den Standard, startet die Sitzung
+        // erst, wenn diese Wahl für diesen Ordner bestätigt ist; die
+        // Bestätigung liegt im Datenverzeichnis, nie im Projekt (HUM-405).
+        if let Some(refusal) =
+            humanitl_config::assign::unconfirmed(&self.paths, &resolved.config.llm)
+        {
+            return Err(refusal);
+        }
         Ok(resolved)
     }
 

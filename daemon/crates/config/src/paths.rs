@@ -123,6 +123,17 @@ impl Paths {
         self.xdg_data().join(APP_DIR)
     }
 
+    /// Die bestätigten Server der Projekte (HUM-405): je Projektordner die
+    /// Namen der gespeicherten Server, die der Mensch für ihn bestätigt hat.
+    ///
+    /// Im Datenverzeichnis und nie im Projekt: Das Projekt kann der Agent
+    /// beschreiben, und eine Bestätigung, die dort läge, könnte er selbst
+    /// ausstellen.
+    #[must_use]
+    pub fn project_servers_path(&self) -> PathBuf {
+        self.data_dir().join("project-servers.toml")
+    }
+
     /// Die Datenbank der Aufzeichnung.
     #[must_use]
     pub fn db_path(&self) -> PathBuf {

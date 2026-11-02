@@ -714,6 +714,9 @@ extension LlmServerChoiceToDomain on pb.LlmServerChoice {
     },
     detail: detail,
     refusal: hasRefusal() ? refusal.toDomain() : null,
+    unconfirmed: hasUnconfirmed() ? unconfirmed.toDomain() : null,
+    projectDir: projectDir,
+    projectPath: projectPath,
   );
 }
 
@@ -1017,6 +1020,25 @@ extension LlmServerListToDomain on pb.LlmServerList {
     diagnostics: List<Diagnostic>.unmodifiable(
       diagnostics.map((pb.Diagnostic finding) => finding.toDomain()),
     ),
+    profiles: List<ProfileUse>.unmodifiable(
+      profiles.map(
+        (pb.LlmProfileUse profile) => ProfileUse(
+          name: profile.name,
+          server: profile.server,
+          builtin: profile.builtin,
+          description: profile.description,
+        ),
+      ),
+    ),
+    project: hasProject() && project.dir.isNotEmpty
+        ? ProjectUse(
+            dir: project.dir,
+            server: project.server,
+            confirmed: project.confirmed,
+            effectiveServer: project.effectiveServer,
+            viaProfile: project.viaProfile,
+          )
+        : null,
   );
 }
 

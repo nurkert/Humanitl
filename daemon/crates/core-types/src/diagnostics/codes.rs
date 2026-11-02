@@ -1671,6 +1671,16 @@ registry! {
     IPC_007 => "ipc", "Intercept-Anfrage ohne Operation", "#ipc_007",
         "Eine `Intercept`-Anfrage nennt weder `status` noch `pause` noch `resume`; meist ein Client, der älter oder neuer ist als der Daemon.",
         "`CopyCommand` mit `humanitl intercept status`, das den Stand liest; sonst ohne Fix.";
+    /// Das Projekt-Profil wählt mit `llm.server` einen gespeicherten Server,
+    /// der nicht der Standard (`llm.active`) ist, und für diesen
+    /// Projektordner ist diese Wahl noch nicht bestätigt (HUM-405). Die
+    /// Datei liegt im Projektordner, den der Agent beschreiben kann; ein
+    /// Start lehnt deshalb ab, bis die Wahl einmal bestätigt ist. Gemerkt
+    /// wird die Bestätigung je Projektordner und Servername im
+    /// Datenverzeichnis des Daemons, nie im Projekt.
+    CONFIG_022 => "config", "Server des Projekts nicht bestätigt", "#config_022",
+        "`.humanitl/profile.toml` im Projektordner nennt mit `llm.server` einen gespeicherten Server, der nicht der Standard ist, und für diesen Ordner und diesen Server liegt keine Bestätigung vor. Die Sitzung startet nicht; kein Endpunkt bekommt einen Schlüssel.",
+        "`CopyCommand` mit `humanitl llm server confirm NAME --project ORDNER`; die App fragt beim Start einmal nach. Wer den Server nicht will, entfernt `llm.server` aus `.humanitl/profile.toml`.";
 }
 
 /// Sucht einen Code im Register.

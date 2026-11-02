@@ -73,6 +73,10 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl llm server use`](#humanitl-llm-server-use) Make a server the active one, from the next session on
 - [`humanitl llm server rename`](#humanitl-llm-server-rename) Rename a server. Its key stays where it is
 - [`humanitl llm server rm`](#humanitl-llm-server-rm) Remove a server and, unless --keep-key, its key from the keyring
+- [`humanitl llm server edit`](#humanitl-llm-server-edit) Change the address or the models of a saved server without making it the default. Its key stays and goes only to its own address
+- [`humanitl llm server assign`](#humanitl-llm-server-assign) Let a session profile or a project use a saved server. A project's choice made here counts as confirmed for that folder
+- [`humanitl llm server unassign`](#humanitl-llm-server-unassign) Remove the server a session profile or a project uses; it then uses the default
+- [`humanitl llm server confirm`](#humanitl-llm-server-confirm) Confirm the saved server the project in a folder chooses, so that a session there starts with it
 - [`humanitl intercept`](#humanitl-intercept) Pause intercepting, resume it, or show whether it is paused
 - [`humanitl intercept status`](#humanitl-intercept-status) Show whether intercepting is on or paused, and since when
 - [`humanitl intercept pause`](#humanitl-intercept-pause) Pause intercepting until you resume it, the next session starts or the daemon stops
@@ -2172,12 +2176,16 @@ The active server is what `llm.endpoint`, `llm.models` and `llm.api_key_ref` sho
 Usage: humanitl llm server [OPTIONS] <COMMAND>
 
 Commands:
-  ls      List the saved servers; the active one is marked
-  add     Save a server. Its key follows with `humanitl llm key set --server NAME`
-  use     Make a server the active one, from the next session on
-  rename  Rename a server. Its key stays where it is
-  rm      Remove a server and, unless --keep-key, its key from the keyring
-  help    Print this message or the help of the given subcommand(s)
+  ls        List the saved servers; the active one is marked
+  add       Save a server. Its key follows with `humanitl llm key set --server NAME`
+  use       Make a server the active one, from the next session on
+  rename    Rename a server. Its key stays where it is
+  rm        Remove a server and, unless --keep-key, its key from the keyring
+  edit      Change the address or the models of a saved server without making it the default. Its key stays and goes only to its own address
+  assign    Let a session profile or a project use a saved server. A project's choice made here counts as confirmed for that folder
+  unassign  Remove the server a session profile or a project uses; it then uses the default
+  confirm   Confirm the saved server the project in a folder chooses, so that a session there starts with it
+  help      Print this message or the help of the given subcommand(s)
 
 Options:
       --json
@@ -2354,6 +2362,144 @@ Options:
 
       --keep-key
           Leave the key of the server in the keyring
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl llm server edit
+
+```text
+Change the address or the models of a saved server without making it the default. Its key stays and goes only to its own address
+
+Usage: humanitl llm server edit [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          The saved server
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --url <URL>
+          The new address, as it would stand in `llm.endpoint`
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+      --model <MODEL>
+          The models, repeatable; the first is the default. Replaces the list; without it the models stay
+
+      --no-models
+          Remove every model of the server
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl llm server assign
+
+```text
+Let a session profile or a project use a saved server. A project's choice made here counts as confirmed for that folder
+
+Usage: humanitl llm server assign [OPTIONS] <--profile <PROFILE>|--project [<DIR>]> <NAME>
+
+Arguments:
+  <NAME>
+          The saved server
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --profile <PROFILE>
+          A session profile (`profiles/<name>.toml`)
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+      --project [<DIR>]
+          A project folder; the current directory when given without a value
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+  -h, --help
+          Print help
+```
+
+## humanitl llm server unassign
+
+```text
+Remove the server a session profile or a project uses; it then uses the default
+
+Usage: humanitl llm server unassign [OPTIONS] <--profile <PROFILE>|--project [<DIR>]>
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --profile <PROFILE>
+          A session profile (`profiles/<name>.toml`)
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+      --project [<DIR>]
+          A project folder; the current directory when given without a value
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+  -h, --help
+          Print help
+```
+
+## humanitl llm server confirm
+
+```text
+Confirm the saved server the project in a folder chooses, so that a session there starts with it
+
+Usage: humanitl llm server confirm [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+          The saved server the project chooses
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --project <DIR>
+          The project folder; the current directory without it
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
 
   -v, --verbose...
           Explain what is happening; repeat for more

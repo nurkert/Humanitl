@@ -439,9 +439,10 @@ and again below 5 percent the glyph breathes three times, never below
 
 ### HGlyphIcon
 
-Draws one `HGlyph` (20 shapes after the Lucide icons) at a size and colour. The
+Draws one `HGlyph` (21 shapes after the Lucide icons) at a size and colour. The
 glyphs are painted, not loaded from an icon font. `info`, `search` and `check`
-came with the settings overlay (HUM-404).
+came with the settings overlay (HUM-404), the filled `star` with the default
+model server (HUM-405).
 
 ### HBadge and HMethodBadge
 
@@ -544,6 +545,25 @@ HUM-404), built from the parts above. The settings come up from below:
 - **Search.** Hits replace the page, grouped by category under a 12/600
   heading, each a list entry with its help as a second line. No hits: one
   sentence and a "Clear search" button.
+- **Models (HUM-405).** The saved model servers stand as cards in a grid that
+  fits as many as possible at 216 px or more and stretches them to fill the
+  row: `bg2` with the `line` hairline and the `card` radius, the hairline
+  `lineStrong` and the card a little larger under the pointer (`HHoverScale`,
+  scale only). A card shows the name (mono 12/500), the host (mono 11, `fg1`),
+  the default model (13), a hairline, the key state with the `lock` glyph and
+  the last check of this app session (`check` in `allowed`, `triangleAlert` in
+  `error`, `minus` in `fg2` before any). The default carries the filled `star`
+  in the accent and the word "Default" (11/500, `accentText`). The card "Add
+  server" is the same size, `bg1` until hovered, with the `plus` glyph. A
+  click opens the detail view in place of the cards: "All servers" as a
+  ghost button with a left chevron, the name (mono 14/600), the star, "More"
+  (Rename, Remove) as a menu at the right edge, then the rows Endpoint, Model
+  and Access key in the row grid above, and a footer with "Make default" on
+  the left and "Unsaved changes", Cancel and the primary Save on the right.
+  Under the cards, "Who uses which server" is a bordered table of rows, each
+  with a name, a second line in `fg2` and a menu button with the current
+  server at the right edge; an unconfirmed project server adds a line with
+  `triangleAlert` in `warningText`.
 
 The keys are in [Interaction](#shortcuts) and in
 [docs/UX.md, section 4.12](UX.md#412-settings).

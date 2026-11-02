@@ -309,6 +309,24 @@ class _HGlyphPainter extends CustomPainter {
           ]),
           stroke,
         );
+      case HGlyph.star:
+        // Fünf Zacken um (12, 12.6), die innere Ecke bei 0,45 des Radius,
+        // gefüllt und mit derselben runden Kante wie jeder Strich.
+        final Path star = _polyline(const <Offset>[
+          Offset(12, 2.6),
+          Offset(14.6, 8.9),
+          Offset(21.5, 9.5),
+          Offset(16.3, 14),
+          Offset(17.9, 20.7),
+          Offset(12, 17.1),
+          Offset(6.1, 20.7),
+          Offset(7.7, 14),
+          Offset(2.5, 9.5),
+          Offset(9.4, 8.9),
+        ], close: true);
+        canvas
+          ..drawPath(star, fill)
+          ..drawPath(star, stroke..strokeWidth = 1.5);
     }
     canvas.restore();
   }

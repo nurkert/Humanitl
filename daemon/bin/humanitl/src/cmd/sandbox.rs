@@ -301,6 +301,12 @@ async fn start(
     // Durchreiche zum anderen.
     let passthrough = daemon_passthrough(&mut client).await?;
     session_server_gate(&resolved.config, passthrough.as_ref()).map_err(Failure::new)?;
+    // Dieselbe Bestätigung wie beim Start über den Daemon (HUM-405): Ein
+    // Projekt wählt einen anderen Server als den Standard erst, wenn diese
+    // Wahl für diesen Ordner bestätigt ist.
+    if let Some(refused) = humanitl_config::assign::unconfirmed(&ctx.paths, &resolved.config.llm) {
+        return Err(Failure::new(refused));
+    }
 
     let mut setup = prepare(ctx, &resolved, Wiring::Daemon, command)?;
     if let Some(dir) = tests_dir {

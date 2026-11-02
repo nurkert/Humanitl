@@ -85,6 +85,42 @@ FakeDaemonClient configured() =>
         configPath: '/home/u/.config/humanitl/config.toml',
       );
 
+/// [client] with its flat endpoint as the one saved server `default`, the
+/// way the daemon lists a configuration without entries (HUM-289).
+FakeDaemonClient withDefault(FakeDaemonClient client) => client
+  ..savedServers = <SavedServer>[
+    SavedServer(
+      name: 'default',
+      endpoint: client.configValues.llmEndpoint,
+      models: client.configValues.llmModels,
+      keyRef: client.llmKey.keyRef,
+    ),
+  ]
+  ..activeServer = 'default';
+
+/// The settings, open on the detail view of the default server (HUM-405).
+Future<void> openDefaultServer(
+  WidgetTester tester,
+  FakeDaemonClient client,
+) async {
+  await openSettings(tester, withDefault(client));
+  final Finder card = find.byKey(
+    const ValueKey<String>('settings-server-default'),
+  );
+  await tester.ensureVisible(card);
+  await tester.tap(card);
+  await tester.pumpAndSettle();
+}
+
+/// Taps the button with [key] once it is on screen.
+Future<void> press(WidgetTester tester, String key) async {
+  final Finder target = find.byKey(Key(key));
+  await tester.ensureVisible(target);
+  await tester.pumpAndSettle();
+  await tester.tap(target);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('the key card says "set" and never shows the value', (
     WidgetTester tester,
@@ -95,7 +131,7 @@ void main() {
         store: LlmKeyStore.secretService,
         keyRef: 'secret-service:humanitl/llm',
       );
-    await openSettings(tester, client);
+    await openDefaultServer(tester, client);
 
     expect(find.byKey(const Key('settings-overlay')), findsOneWidget);
     expect(find.text('Set, in the system keyring'), findsOneWidget);
@@ -110,9 +146,9 @@ void main() {
     );
     expect(input.obscureText, isTrue);
 
-    await tester.tap(find.byKey(const Key('settings-key-store')));
-    await tester.pumpAndSettle();
+    await press(tester, 'settings-server-save');
     expect(client.setKeyLengths, <int>[secret.length]);
+    expect(client.setKeyServers, <String>['default']);
     expect(input.controller.text, isEmpty, reason: 'emptied after storing');
     expect(anyTextContains(tester, secret), isFalse);
     expect(find.text('Set, in the system keyring'), findsOneWidget);
@@ -127,17 +163,18 @@ void main() {
           store: LlmKeyStore.file,
           keyRef: 'file:llm',
         );
-      await openSettings(tester, client);
+      await openDefaultServer(tester, client);
       expect(find.byKey(const Key('settings-key-state')), findsOneWidget);
       expect(
         tester.widget<Text>(find.byKey(const Key('settings-key-state'))).data,
         contains('in a file only you can read'),
       );
 
-      await tester.tap(find.byKey(const Key('settings-key-remove')));
-      await tester.pumpAndSettle();
+      await press(tester, 'settings-key-remove');
+      expect(client.llmKey.set, isTrue, reason: 'nothing before Save');
+      await press(tester, 'settings-server-save');
       expect(client.llmKey.set, isFalse);
-      expect(find.text('Not set'), findsOneWidget);
+      expect(find.text('No key'), findsOneWidget);
     },
     variant: TargetPlatformVariant.only(TargetPlatform.linux),
   );
@@ -152,10 +189,9 @@ void main() {
           flavor: LlmFlavor.openAiCompatible,
           endpointIsPrivate: true,
         );
-      await openSettings(tester, client);
+      await openDefaultServer(tester, client);
 
-      await tester.tap(find.byKey(const Key('settings-check')));
-      await tester.pumpAndSettle();
+      await press(tester, 'settings-check');
       expect(client.probedEndpoints, <String>['http://192.168.1.20:11434/']);
       expect(client.probeKeyUses, <ProbeKeyUse>[ProbeKeyUse.none]);
       expect(find.byKey(const Key('settings-probe-result')), findsOneWidget);
@@ -165,10 +201,13 @@ void main() {
         find.byKey(const ValueKey<String>('settings-model-phi-4')),
       );
       await tester.pumpAndSettle();
-      expect(client.configWrites.last, (
-        'llm.models',
-        '["phi-4","qwen2.5-coder:14b"]',
-      ));
+      expect(client.serverRequests, isEmpty, reason: 'a pick is not a save');
+      await press(tester, 'settings-server-save');
+      expect(client.serverRequests, <String>['edit default']);
+      expect(client.savedServers.single.models, <String>[
+        'phi-4',
+        'qwen2.5-coder:14b',
+      ]);
     },
     variant: TargetPlatformVariant.only(TargetPlatform.linux),
   );
@@ -182,16 +221,14 @@ void main() {
           store: LlmKeyStore.secretService,
           keyRef: 'secret-service:humanitl/llm',
         );
-      await openSettings(tester, client);
+      await openDefaultServer(tester, client);
 
-      await tester.tap(find.byKey(const Key('settings-check')));
-      await tester.pumpAndSettle();
+      await press(tester, 'settings-check');
       await tester.enterText(
         find.byKey(const Key('settings-key-input')),
         secret,
       );
-      await tester.tap(find.byKey(const Key('settings-check')));
-      await tester.pumpAndSettle();
+      await press(tester, 'settings-check');
       expect(client.probeKeyUses, <ProbeKeyUse>[
         ProbeKeyUse.stored,
         ProbeKeyUse.typed,
@@ -204,8 +241,7 @@ void main() {
         reason: 'the typed key went out once and does not wait in the form',
       );
 
-      await tester.tap(find.byKey(const Key('settings-check')));
-      await tester.pumpAndSettle();
+      await press(tester, 'settings-check');
       expect(client.probeKeyUses.last, ProbeKeyUse.stored);
     },
     variant: TargetPlatformVariant.only(TargetPlatform.linux),
@@ -215,11 +251,14 @@ void main() {
     WidgetTester tester,
   ) async {
     final FakeDaemonClient client = configured();
-    await openSettings(tester, client);
+    await openDefaultServer(tester, client);
 
     await tester.enterText(find.byKey(const Key('settings-key-input')), secret);
     await tester.enterText(
-      find.byKey(const Key('settings-endpoint')),
+      find.descendant(
+        of: find.byKey(const Key('settings-endpoint')),
+        matching: find.byType(EditableText),
+      ),
       'http://192.168.1.30:11434/',
     );
     await tester.pump();
@@ -228,16 +267,12 @@ void main() {
       isEmpty,
       reason: 'editing the endpoint empties the key before anything is saved',
     );
-    await tester.testTextInput.receiveAction(TextInputAction.done);
-    await tester.pumpAndSettle();
-    expect(client.configWrites.last, (
-      'llm.endpoint',
-      'http://192.168.1.30:11434/',
-    ));
+    await press(tester, 'settings-server-save');
+    expect(client.savedServers.single.endpoint, 'http://192.168.1.30:11434/');
+    expect(client.setKeyLengths, isEmpty, reason: 'no key went with it');
     expect(keyFieldText(tester), isEmpty);
 
-    await tester.tap(find.byKey(const Key('settings-check')));
-    await tester.pumpAndSettle();
+    await press(tester, 'settings-check');
     expect(client.probedEndpoints.last, 'http://192.168.1.30:11434/');
     expect(client.probeKeyUses, <ProbeKeyUse>[ProbeKeyUse.none]);
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
@@ -246,13 +281,15 @@ void main() {
     'an endpoint outside the private network carries LLM_006 beside it',
     (WidgetTester tester) async {
       final FakeDaemonClient client = configured();
-      await openSettings(tester, client);
+      await openDefaultServer(tester, client);
       await tester.enterText(
-        find.byKey(const Key('settings-endpoint')),
+        find.descendant(
+          of: find.byKey(const Key('settings-endpoint')),
+          matching: find.byType(EditableText),
+        ),
         'https://api.example.com/v1',
       );
-      await tester.tap(find.byKey(const Key('settings-check')));
-      await tester.pumpAndSettle();
+      await press(tester, 'settings-check');
       expect(find.byKey(const Key('settings-probe-LLM_006')), findsOneWidget);
     },
     variant: TargetPlatformVariant.only(TargetPlatform.linux),
@@ -379,7 +416,7 @@ void main() {
     WidgetTester tester,
   ) async {
     final FakeDaemonClient client = configured();
-    await openSettings(tester, client);
+    await openDefaultServer(tester, client);
     await tester.enterText(
       find.byKey(const Key('settings-key-input')),
       ' "$secret"\n',
@@ -390,8 +427,7 @@ void main() {
       isTrue,
       reason: 'the pasted key still carries quotes or blanks',
     );
-    await tester.tap(find.byKey(const Key('settings-key-store')));
-    await tester.pumpAndSettle();
+    await press(tester, 'settings-server-save');
     expect(client.setKeyLengths, <int>[secret.length]);
     expect(anyTextContains(tester, secret), isFalse);
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
@@ -401,18 +437,17 @@ void main() {
     WidgetTester tester,
   ) async {
     final FakeDaemonClient client = configured();
-    await openSettings(tester, client);
+    await openDefaultServer(tester, client);
     await tester.enterText(
-      find.byKey(const Key('settings-endpoint')),
+      find.descendant(
+        of: find.byKey(const Key('settings-endpoint')),
+        matching: find.byType(EditableText),
+      ),
       'http://192.168.1.30:11434/"',
     );
     await tester.pump();
-    await tester.testTextInput.receiveAction(TextInputAction.done);
-    await tester.pumpAndSettle();
-    expect(client.configWrites.last, (
-      'llm.endpoint',
-      'http://192.168.1.30:11434/',
-    ));
+    await press(tester, 'settings-server-save');
+    expect(client.savedServers.single.endpoint, 'http://192.168.1.30:11434/');
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
   // HUM-274: the agent of the next session is chosen in the form. The control

@@ -42,6 +42,7 @@ import 'widgets/mounts_tab.dart';
 import 'widgets/sandbox_header.dart';
 import 'widgets/sandbox_tabs.dart';
 import 'widgets/sandbox_terminal.dart';
+import 'widgets/server_confirm_dialog.dart';
 import 'widgets/stop_dialog.dart';
 
 /// How much of the height the terminal keeps.
@@ -91,6 +92,7 @@ class SandboxScreen extends ConsumerStatefulWidget {
 class _SandboxScreenState extends ConsumerState<SandboxScreen> {
   bool _visible = false;
   bool _asking = false;
+  bool _askingServer = false;
   bool _argvOpen = false;
 
   /// True for the one build in which the terminal comes back from the whole
@@ -114,6 +116,15 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
   void _confirmStop() {
     setState(() => _asking = false);
     unawaited(ref.read(sandboxStatusProvider.notifier).stop());
+  }
+
+  void _askServer() => setState(() => _askingServer = true);
+
+  void _cancelServer() => setState(() => _askingServer = false);
+
+  void _confirmServer() {
+    setState(() => _askingServer = false);
+    unawaited(ref.read(sandboxStatusProvider.notifier).confirmServerAndStart());
   }
 
   void _showArgv() => setState(() => _argvOpen = true);
@@ -186,7 +197,11 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: <Widget>[
-                    SandboxHeader(status: status, onAskStop: _askStop),
+                    SandboxHeader(
+                      status: status,
+                      onAskStop: _askStop,
+                      onAskServer: _askServer,
+                    ),
                     // Befunde schweben oben rechts über Terminal und
                     // Reitern, direkt unter dem Kopf mit dem Startknopf, an
                     // dem sie entstanden sind (HUM-302). Sie nehmen dem
@@ -245,6 +260,14 @@ class _SandboxScreenState extends ConsumerState<SandboxScreen> {
           if (changesOpen) const ChangesPanel(),
           if (_asking)
             StopDialog(onCancel: _cancelStop, onConfirm: _confirmStop),
+          if (_askingServer)
+            if (status.llmServer case final LlmServerChoice server
+                when server.needsConfirmation)
+              ServerConfirmDialog(
+                server: server,
+                onCancel: _cancelServer,
+                onConfirm: _confirmServer,
+              ),
         ],
       ),
     );

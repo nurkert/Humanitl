@@ -100,8 +100,13 @@ abstract final class ProtoVersion {
   /// sets `Intercept` behind `intercept.pause` and follows
   /// `FlowEvent.intercept`, and the history names `DECISION_SOURCE_PAUSED`
   /// (HUM-407).
+  /// Raised to 32 with the model servers thought anew: the Models category
+  /// edits each server with `LlmServers(edit)`, sets "Who uses which server"
+  /// with `assign` and reads `LlmServerList.profiles` and `.project`, and the
+  /// start asks once with `confirm_project` while
+  /// `LlmServerChoice.unconfirmed` is set (HUM-405).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 31;
+  static const int minor = 32;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

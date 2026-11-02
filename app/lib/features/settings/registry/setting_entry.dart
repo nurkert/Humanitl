@@ -9,7 +9,8 @@ import '../../../l10n/l10n.dart';
 
 /// The categories of the overlay, in the order of the left column.
 enum SettingsCategory {
-  /// Endpoint, model, access key and the saved servers.
+  /// The saved model servers, each with endpoint, models and key, and who
+  /// uses which one (HUM-405).
   models,
 
   /// The coding agent a new session starts.
@@ -60,6 +61,14 @@ abstract final class SettingIds {
 
   /// The path of `config.toml`, with Open and Copy path.
   static const String configFile = 'daemon.config_file';
+
+  /// The cards of the saved model servers (HUM-405); the table
+  /// `llm.servers` of `config.toml` behind them.
+  static const String llmServers = 'llm.servers';
+
+  /// "Who uses which server": `llm.server` of the project and of each
+  /// session profile, and the default (HUM-405).
+  static const String llmServerUsage = 'llm.server';
 }
 
 /// What a row builder gets from the page: the configuration as the daemon
@@ -141,7 +150,7 @@ class SettingEntry {
 
   /// Draws the row. Null for an entry another entry's builder draws along
   /// with its own, such as the model and the access key under the endpoint
-  /// in one `ModelSection`.
+  /// in the detail view of a server (HUM-405).
   final SettingBuilder? build;
 
   /// Whether the entry stands in the overlay for a daemon described by

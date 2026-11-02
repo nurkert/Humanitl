@@ -174,6 +174,20 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
       },
       fireImmediately: true,
     );
+    // Wer welchen Server nutzt, ändern die Einstellungen (HUM-405); der Kopf
+    // der Sandbox nennt den Server des nächsten Starts aus der
+    // Momentaufnahme und holt nach jeder Änderung eine neue. Nicht beim
+    // ersten Wert: Den kennt die Momentaufnahme schon.
+    ref.listenManual<AsyncValue<SavedServers>>(llmServersProvider, (
+      AsyncValue<SavedServers>? previous,
+      AsyncValue<SavedServers> next,
+    ) {
+      final SavedServers? before = previous?.value;
+      final SavedServers? now = next.value;
+      if (before != null && now != null && before != now) {
+        ref.read(sandboxStatusProvider.notifier).serversChanged();
+      }
+    });
     // Die leere Warteschlange sagt, ob der Agent arbeitet (HUM-306); die
     // Shell kennt Sandbox und Warteschlange und hält das eine Bit im Kern
     // frisch (`agent_session_feed.dart`).

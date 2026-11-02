@@ -178,6 +178,43 @@ class LlmServersSetting extends _$LlmServersSetting {
   Future<SavedServers> activate(String name) async =>
       _settled(await ref.read(daemonClientProvider).activateLlmServer(name));
 
+  /// Changes the endpoint and, when given, the models of [name] without
+  /// making it the default (HUM-405).
+  Future<SavedServers> edit(
+    String name, {
+    String? endpoint,
+    List<String>? models,
+  }) async => _settled(
+    await ref
+        .read(daemonClientProvider)
+        .editLlmServer(name, endpoint: endpoint, models: models),
+  );
+
+  /// Lets the session profile [profile] or the project folder [projectDir]
+  /// use [server]; an empty [server] gives it back to the default (HUM-405).
+  Future<SavedServers> assign({
+    required String server,
+    String? profile,
+    String? projectDir,
+  }) async => _settled(
+    await ref
+        .read(daemonClientProvider)
+        .assignLlmServer(
+          server: server,
+          profile: profile,
+          projectDir: projectDir,
+        ),
+  );
+
+  /// Confirms the server [server] the project in [projectDir] chooses, for
+  /// that folder (HUM-405).
+  Future<SavedServers> confirmProject(String projectDir, String server) async =>
+      _settled(
+        await ref
+            .read(daemonClientProvider)
+            .confirmProjectServer(projectDir, server),
+      );
+
   /// Takes [list] as the new state and asks for what follows from it.
   Future<SavedServers> _settled(SavedServers list) async {
     state = AsyncValue<SavedServers>.data(list);

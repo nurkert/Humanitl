@@ -2987,11 +2987,7 @@ impl Inner {
                 .notice
                 .as_ref()
                 .map(crate::convert::diagnostic_to_proto),
-            llm_server: config
-                .llm
-                .choice
-                .as_ref()
-                .map(crate::convert::server_choice_to_proto),
+            llm_server: crate::convert::session_server_to_proto(&self.paths, &config.llm),
         })
     }
 
@@ -3067,11 +3063,7 @@ impl Inner {
             // Ohne Plan kein aufgelöster Modus (HUM-357).
             sandbox_mode: String::new(),
             sandbox_mode_notice: None,
-            llm_server: config
-                .llm
-                .choice
-                .as_ref()
-                .map(crate::convert::server_choice_to_proto),
+            llm_server: crate::convert::session_server_to_proto(&self.paths, &config.llm),
         }
     }
 

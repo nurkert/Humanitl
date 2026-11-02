@@ -636,6 +636,9 @@ final class LlmServerChoice {
     this.source = LlmServerSource.unknown,
     this.detail = '',
     this.refusal,
+    this.unconfirmed,
+    this.projectDir = '',
+    this.projectPath = '',
   });
 
   /// The server's name.
@@ -651,8 +654,29 @@ final class LlmServerChoice {
   /// refused with exactly this finding.
   final Diagnostic? refusal;
 
+  /// `CONFIG_022` while the project chooses a server other than the default
+  /// that is not confirmed for its folder; a start is refused with exactly
+  /// this finding until it is (HUM-405).
+  final Diagnostic? unconfirmed;
+
+  /// The project folder whose profile makes the choice, for
+  /// [LlmServerSource.project]; empty otherwise (HUM-405).
+  final String projectDir;
+
+  /// The same folder exactly as the daemon resolved it, for the
+  /// confirmation only; [projectDir] is cleaned for display (HUM-405).
+  final String projectPath;
+
+  /// The folder to send back in a confirmation: the exact one when the
+  /// daemon sent it, else the shown one.
+  String get confirmPath => projectPath.isEmpty ? projectDir : projectPath;
+
   /// True when a server of that name is saved.
   bool get saved => refusal == null;
+
+  /// True while a start waits for the one question about the project's
+  /// server (HUM-405).
+  bool get needsConfirmation => unconfirmed != null;
 
   @override
   bool operator ==(Object other) =>
@@ -660,8 +684,19 @@ final class LlmServerChoice {
       other.name == name &&
       other.source == source &&
       other.detail == detail &&
-      other.refusal == refusal;
+      other.refusal == refusal &&
+      other.unconfirmed == unconfirmed &&
+      other.projectDir == projectDir &&
+      other.projectPath == projectPath;
 
   @override
-  int get hashCode => Object.hash(name, source, detail, refusal);
+  int get hashCode => Object.hash(
+    name,
+    source,
+    detail,
+    refusal,
+    unconfirmed,
+    projectDir,
+    projectPath,
+  );
 }

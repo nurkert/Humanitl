@@ -51,7 +51,17 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `31` seit der Pause des Abfangens (HUM-407): die RPC `Intercept` mit
+/// `32` seit den Modellservern, frisch gedacht (HUM-405):
+/// `LlmServersRequest.Edit` ändert Endpunkt und Modelle eines Servers, ohne
+/// ihn zum Standard zu machen, `.Assign` ordnet einem Profil der Sitzung
+/// oder einem Projekt einen Server zu oder nimmt die Zuordnung weg,
+/// `.ConfirmProject` bestätigt die Wahl eines Projekts für seinen Ordner,
+/// `LlmServerList.profiles` nennt jedes Profil mit seinem Server
+/// (`LlmProfileUse`), `LlmServerList.project` den Projektordner mit
+/// seinem Server (`LlmProjectUse`), und `LlmServerChoice.unconfirmed` und `.project_dir`
+/// sagen, dass ein Start mit `CONFIG_022` ablehnt, bis die Wahl des
+/// Projekts bestätigt ist.
+/// `31` war die Pause des Abfangens (HUM-407): die RPC `Intercept` mit
 /// `InterceptRequest` (`Status`, `Pause`, `Resume`) und `InterceptStatus`,
 /// der Arm `FlowEvent.intercept` mit `InterceptChanged` und
 /// `InterceptResumeReason`, die Herkunft `DECISION_SOURCE_PAUSED`, und
@@ -174,7 +184,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 31;
+pub const PROTO_MINOR: u32 = 32;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

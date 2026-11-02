@@ -102,4 +102,8 @@ const List<String> goldenNames = <String>[
   'intercept_pill_on',
   'intercept_pill_paused',
   'intercept_pause_modal',
+  // llm_servers_golden_test.dart (HUM-405)
+  'settings_server_detail',
+  'settings_server_new',
+  'sandbox_server_confirm',
 ];

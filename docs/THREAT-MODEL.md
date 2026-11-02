@@ -176,8 +176,17 @@ where it is a finding but held only at a host without an allowing rule. A cloned
 choose another of the user's saved servers with `llm.server` in its project profile and so route
 the model traffic of its own session there, for example to a company server instead of a local
 one; it cannot define a server, an endpoint or a key, and the choice is shown with its
-source in the sandbox header, in `humanitl sandbox plan` and at the start of `humanitl run`. No
-confirmation is asked; do not save a server that no repository may reach.
+source in the sandbox header, in `humanitl sandbox plan` and at the start of `humanitl run`. Since
+HUM-405 a choice of a server other than the default starts only after the human confirmed that
+server once for that project folder (`CONFIG_022`); the confirmation lives in the daemon's data
+directory, outside every project, so the agent, which can rewrite the project profile, cannot
+issue it. A bundled profile the project names with `name`, whose copy carries a server the human
+assigned, counts as the project's choice and asks the same question. The confirmation names a folder
+and a server, not the content of the repository: a repository that changes under a confirmed folder
+keeps the confirmation for the same name; removing, renaming or re-adding a server, or a new origin
+of its endpoint, drops it. An edit that moves a server to another origin drops its key, so a stored
+key never follows an address it was not entered for. Do not save a server that no repository may
+reach.
 
 ### K-03 The socket directory of the proxy
 
@@ -634,6 +643,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-30 | K-02: on macOS the provider access key lives in the login Keychain through `/usr/bin/security`, over `stdin` and read back; same class as the Secret Service: readable by every process of the account outside the sandbox, out of reach of the agent | HUM-349 |
 | 2026-10-30 | K-24: overwriting a conflict is confirmed per change (`overwrite_ids`); a confirmation for one file never covers another | HUM-351 |
 | 2026-10-31 | K-02: the boundary is the saved server the session resolved to; `llm.server` from run, project or profile chooses among the user's saved servers, never defines one; an unknown name refuses the start | HUM-400 |
+| 2026-11-02 | K-02: a project's choice of a server other than the default is confirmed once per project folder and name, stored in the daemon's data directory; the daemon refuses the start until then and writes the project file without following links | HUM-405 |
 | 2026-10-30 | K-24: the disposable sandbox becomes the default where the system allows it (`sandbox.mode = "auto"`); without the overlay the default runs direct with `SANDBOX_033`, an explicit `disposable` still refuses | HUM-357 |
 | 2026-11-01 | K-26: pausing intercept, set only over the daemon socket, never from the sandbox; held nothing while on, block rules and the hard block stay; ends on resume, with the next session and with the daemon; logged and shown as a caution tape | HUM-407 |
 | 2026-11-01 | K-25: updates from inside the app, bound to an Ed25519 release key built into the daemon; daily check of GitHub on by default, `update.check` turns it off; packages through `pkexec` and their package manager | HUM-382 |

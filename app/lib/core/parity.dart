@@ -27,8 +27,9 @@ const parity = <String, String>{
   // The header pill and the question before a pause (HUM-407).
   'Humanitl.Intercept': 'features/shell/widgets/intercept_pill',
   'Humanitl.ListFlows': 'features/history/history_screen',
-  'Humanitl.LlmKey': 'features/settings/widgets/model_section',
-  'Humanitl.LlmServers': 'features/settings/widgets/server_switcher',
+  'Humanitl.LlmKey': 'features/settings/widgets/servers/server_detail',
+  // Karten, Detailansicht und „Wer nutzt welchen Server“ (HUM-405).
+  'Humanitl.LlmServers': 'features/settings/categories/models_category',
   'Humanitl.ProbeLlm': 'features/setup/widgets/llm_check',
   'Humanitl.Rules': 'features/rules/rules_screen',
   'Humanitl.Sandbox': 'features/sandbox/sandbox_screen',

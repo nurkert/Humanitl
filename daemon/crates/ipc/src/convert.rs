@@ -246,12 +246,37 @@ pub fn server_choice_to_proto(
         ServerSource::Config => (Source::Default, "config.toml".to_owned()),
         ServerSource::Default => (Source::Default, String::new()),
     };
+    let project_path = match &choice.source {
+        ServerSource::Project(path) => humanitl_config::assign::project_of(path)
+            .map(|dir| dir.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+    let project_dir = sanitize_note(&project_path);
     v1::LlmServerChoice {
         name: sanitize_note(&choice.name),
         source: source.into(),
         detail: sanitize_note(&detail),
         refusal: choice.refusal().as_ref().map(diagnostic_to_proto),
+        unconfirmed: None,
+        project_dir,
+        project_path,
     }
+}
+
+/// Die Wahl des Servers einer Konfiguration in ihrer Wire-Form, mit der
+/// offenen Bestätigung eines Projekts (`CONFIG_022`, HUM-405); `None`, wenn
+/// kein gespeicherter Server gewählt ist.
+#[must_use]
+pub fn session_server_to_proto(
+    paths: &humanitl_config::Paths,
+    llm: &humanitl_config::LlmConfig,
+) -> Option<v1::LlmServerChoice> {
+    let mut wire = server_choice_to_proto(llm.choice.as_ref()?);
+    wire.unconfirmed = humanitl_config::assign::unconfirmed(paths, llm)
+        .as_ref()
+        .map(diagnostic_to_proto);
+    Some(wire)
 }
 
 /// Übersetzt den Stand der verweigerten Versuche in seine Wire-Form (HUM-138).

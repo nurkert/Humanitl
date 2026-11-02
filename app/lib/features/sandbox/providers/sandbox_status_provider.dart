@@ -303,6 +303,65 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     );
   }
 
+  /// Confirms the server the project picks for its folder and starts
+  /// (HUM-405).
+  ///
+  /// The answer of the one question before a start: the daemon stores the
+  /// confirmation outside the project, and the start that follows passes
+  /// its check. A refusal of the confirmation stands as a finding of the
+  /// start, and nothing starts.
+  Future<void> confirmServerAndStart() async {
+    final LlmServerChoice? server = state.value?.llmServer;
+    if (server == null || !server.needsConfirmation) {
+      return start();
+    }
+    try {
+      await ref
+          .read(llmServersProvider.notifier)
+          .confirmProject(server.confirmPath, server.name);
+    } on DaemonException catch (error) {
+      final SandboxStatus? now = state.value;
+      if (now != null) {
+        state = AsyncValue<SandboxStatus>.data(
+          now.copyWith(
+            diagnostics: <Diagnostic>[...now.diagnostics, error.diagnostic],
+          ),
+        );
+      }
+      return;
+    }
+    final SandboxStatus? now = state.value;
+    if (now != null) {
+      // Bestätigt: Der Start fragt nicht noch einmal, auch wenn die neue
+      // Momentaufnahme noch unterwegs ist.
+      state = AsyncValue<SandboxStatus>.data(
+        now.copyWith(
+          llmServer: LlmServerChoice(
+            name: server.name,
+            source: server.source,
+            detail: server.detail,
+            refusal: server.refusal,
+            projectDir: server.projectDir,
+            projectPath: server.projectPath,
+          ),
+        ),
+      );
+    }
+    return start();
+  }
+
+  /// Takes note that the saved servers or who uses them changed, and asks
+  /// for a new snapshot while nothing runs, so the header names the server
+  /// the next start gets (HUM-405). The settings change them, and no feature
+  /// imports another one; the shell hands the change in here.
+  void serversChanged() {
+    final SandboxStatus? current = state.value;
+    if (current == null || current.isUp || current.isBusy) {
+      return;
+    }
+    unawaited(refresh());
+  }
+
   /// Asks for the snapshot alone, for a window that only needs to know
   /// whether a session runs (HUM-306): the shell asks every few seconds while
   /// the empty queue shows, because a session started or stopped on the

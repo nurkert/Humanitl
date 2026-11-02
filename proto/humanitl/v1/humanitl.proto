@@ -1125,6 +1125,18 @@ message LlmServerChoice {
   // kein Endpunkt und kein Schluessel, und ein Start lehnt mit genau diesem
   // Befund ab. Fehlt, wenn es den Server gibt.
   Diagnostic refusal = 4;
+  // `CONFIG_022`, wenn das Projekt einen anderen gespeicherten Server als
+  // den Standard waehlt und diese Wahl fuer diesen Projektordner noch nicht
+  // bestaetigt ist (`LlmServersRequest.ConfirmProject`); ein Start lehnt
+  // dann mit genau diesem Befund ab (HUM-405). Fehlt sonst.
+  Diagnostic unconfirmed = 5;
+  // Der Projektordner, dessen Profil die Wahl trifft, bei `SOURCE_PROJECT`;
+  // sonst leer (HUM-405). Fuer die Anzeige bereinigt.
+  string project_dir = 6;
+  // Derselbe Ordner unbereinigt, genau wie der Daemon ihn aufloest; nur
+  // fuer `LlmServersRequest.ConfirmProject.project_dir` zurueck, nie zur
+  // Anzeige (HUM-405, Review).
+  string project_path = 7;
 }
 
 // Woher ein Projektverzeichnis kommt, das ein Client in `work_dir` schickt
@@ -2085,13 +2097,71 @@ message LlmServersRequest {
   message Activate {
     string name = 1;
   }
+  // Endpunkt und Modelle eines gespeicherten Servers aendern, ohne ihn zum
+  // Standard zu machen (HUM-405). Beim aktiven Server aendert sich seine
+  // Ansicht `llm.endpoint` und `llm.models` mit. Bei derselben Herkunft
+  // bleibt der Verweis auf den Schluessel; bei einer anderen (Schema, Host,
+  // Port) faellt er weg, und der Schluessel wird geloescht, wenn kein
+  // anderer Server ihn traegt. Er geht nie ungefragt an eine neue Herkunft.
+  message Edit {
+    // Die Modelle, das voreingestellte zuerst.
+    message Models {
+      repeated string names = 1;
+    }
+    string name = 1;
+    // Fehlt: der Endpunkt bleibt. Geprueft wie bei `Add`.
+    optional string endpoint = 2;
+    // Fehlt: die Modelle bleiben. Leer: keine Modelle mehr.
+    Models models = 3;
+  }
+  // Einem Profil der Sitzung oder einem Projekt einen gespeicherten Server
+  // zuordnen, oder die Zuordnung entfernen (HUM-405). Geschrieben wird
+  // `llm.server` unter `[config.llm]` der Profildatei; ein mitgeliefertes
+  // Profil bekommt dafuer eine eigene Kopie. Das Profil `default` gilt fuer
+  // jede Sitzung und wird nicht zugeordnet; dafuer ist `Activate` da.
+  message Assign {
+    // Der gespeicherte Server; leer entfernt die Zuordnung.
+    string server = 1;
+    oneof target {
+      // Ein Profil der Sitzung (`profiles/<name>.toml`).
+      string profile = 2;
+      // Ein Projektordner, absolut; geschrieben wird
+      // `<ordner>/.humanitl/profile.toml`. Eine Zuordnung, die der Daemon
+      // so bekommt, gilt fuer diesen Ordner zugleich als bestaetigt.
+      string project_dir = 3;
+    }
+  }
+  // Den Server bestaetigen, den ein Projekt waehlt, fuer genau diesen
+  // Projektordner (HUM-405). Gemerkt wird das Paar aus Ordner und Name im
+  // Datenverzeichnis des Daemons, nie im Projekt.
+  message ConfirmProject {
+    // Der Projektordner, absolut.
+    string project_dir = 1;
+    // Der gespeicherte Server, den das Projekt waehlt.
+    string server = 2;
+  }
   oneof op {
     List list = 1;
     Add add = 2;
     Rename rename = 3;
     Remove remove = 4;
     Activate activate = 5;
+    Edit edit = 6;
+    Assign assign = 7;
+    ConfirmProject confirm_project = 8;
   }
+}
+
+// Ein Profil der Sitzung und der Server, den es waehlt (HUM-405).
+message LlmProfileUse {
+  // Der Name des Profils.
+  string name = 1;
+  // `llm.server` des Profils; leer, wenn es keinen waehlt.
+  string server = 2;
+  // Wahr fuer ein mitgeliefertes Profil ohne eigene Datei.
+  bool builtin = 3;
+  // Ein Satz darueber, wofuer es da ist; leer ohne.
+  string description = 4;
 }
 
 // Die gespeicherten Server nach einem Auftrag.
@@ -2107,6 +2177,32 @@ message LlmServerList {
   // Was dazu zu sagen ist, etwa dass der Schluessel eines entfernten
   // Servers nicht geloescht werden konnte.
   repeated Diagnostic diagnostics = 4;
+  // Jedes Profil der Sitzung ausser `default`, nach Namen sortiert, mit dem
+  // Server, den es waehlt (HUM-405). Ein Profil, das sich nicht lesen
+  // laesst, fehlt.
+  repeated LlmProfileUse profiles = 5;
+  // Der Projektordner aus `sandbox.work_dir` und der Server, den sein
+  // Projekt-Profil waehlt (HUM-405); fehlt ohne Projektordner.
+  LlmProjectUse project = 6;
+}
+
+// Der Projektordner und der Server, den er waehlt (HUM-405).
+message LlmProjectUse {
+  // Der Projektordner, wie die Konfiguration ihn nennt.
+  string dir = 1;
+  // `llm.server`, wie es in `<dir>/.humanitl/profile.toml` selbst steht;
+  // leer ohne. Diese Zeile schreibt und entfernt `Assign`.
+  string server = 2;
+  // Wahr, wenn `effective_server` fuer diesen Ordner bestaetigt ist oder der
+  // Standard ist, ein Start also ohne Rueckfrage geht; falsch ohne Wahl.
+  bool confirmed = 3;
+  // Der Server, den das Projekt fuer den naechsten Start wirklich waehlt:
+  // seine eigene Zeile, oder die des mitgelieferten Profils, das es mit
+  // `name` nennt; leer, wenn es keinen waehlt (HUM-405).
+  string effective_server = 4;
+  // Das Profil, ueber das `effective_server` kommt, wenn das Projekt-Profil
+  // selbst keine Zeile traegt; sonst leer.
+  string via_profile = 5;
 }
 
 // ---------- Update (HUM-382) ----------
