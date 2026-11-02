@@ -310,7 +310,6 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
                           class="win__video"
                           data-video
                           muted
-                          loop
                           playsinline
                           preload="metadata"
                           poster={workflowPoster.src}
@@ -319,8 +318,8 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
                           aria-hidden="true"
                           tabindex="-1"
                         >
-                          <source src="/media/workflow.webm" type="video/webm" />
-                          <source src="/media/workflow.mp4" type="video/mp4" />
+                          <source src="/media/workflow.mp4" type='video/mp4; codecs="avc1.640028"' />
+                          <source src="/media/workflow.webm" type='video/webm; codecs="vp9"' />
                         </video>
                       )}
                       <span class="win__glaze" aria-hidden="true" />
@@ -849,12 +848,12 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
       linear-gradient(#000 0 0) content-box exclude,
       linear-gradient(#000 0 0);
   }
-  /* Teilstriche innen am Ring; sie drehen mit der Ringposition. */
+  /* Teilstriche innen am Ring; sie stehen still (HUM-412), gedreht flimmerte das feine Muster
+     fast von der Kante gesehen als wandernde Strichellinie. */
   .ring__ticks {
     inset: calc(var(--ring-band) * 1.6);
     background: repeating-conic-gradient(rgb(var(--ink) / 0.1) 0 0.2deg, transparent 0.2deg 2.5deg);
     mask: radial-gradient(closest-side, transparent 96.5%, #000 96.8%, #000 99.4%, transparent 99.7%);
-    will-change: transform;
   }
   /* Der Lichtteich unter dem stehenden Fenster. */
   .ring__pool {
@@ -1034,7 +1033,9 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     box-shadow: 0 0 0 1px rgb(0 0 0 / 0.6);
   }
   /* Der Ablauf im vorderen Fenster liegt genau über der Aufnahme: absolut, mit ihrem Maß und
-     Radius, so verschiebt das Laden des Videos nichts. Es ist durchsichtig, bis das Poster oder ein Bild gemalt ist. */
+     Radius, so verschiebt das Laden des Videos nichts. Es bleibt unsichtbar, bis das Skript ein
+     gemaltes Bild des Videos sieht (data-on), und wird es wieder, sobald es anhält, hängt oder
+     ausfällt; darunter steht immer die Aufnahme (stage/video.ts). */
   .win__video {
     position: absolute;
     z-index: 1;
@@ -1045,7 +1046,17 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     object-position: top center;
     border-radius: var(--r-shot);
     background: transparent;
+    opacity: 0;
+    transition: opacity 0.32s var(--ease-out);
     pointer-events: none;
+  }
+  .win__video[data-on] {
+    opacity: 1;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .win__video {
+      transition: none;
+    }
   }
   /* Glanz HINTER dem Bildschirm: sichtbar nur im Rahmen, nie über dem Inhalt. */
   .win__glint,
@@ -1128,13 +1139,21 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
       --b: round(calc(var(--w) * 0.0225), 1px);
     }
   }
-  /* Eigene Ebenen nur, solange sich etwas bewegt (data-moving): die Maske wird einmal
-     gerastert, in Ruhe kosten drei Ebenen je Fenster nur Speicher. */
-  .scene[data-moving] .win__rim {
+  /* Eigene Ebenen für alles Licht, das sich pro Bild ändert, solange die Bühne im Bild ist
+     (data-awake). Dann ändert ein Bild nur opacity und transform fertiger Ebenen, und weder die
+     Maske noch der Rahmen mit der Aufnahme wird neu gerastert. Früher entstanden die Ebenen
+     erst mit der ersten Bewegung und vergingen 400 ms nach der letzten: Jeder Scrollzug begann
+     mit dem Rastern von gut zwanzig Ebenen und einer Stilberechnung der ganzen Bühne, und
+     Glanz, Begleitlicht und Schatten malten den Rahmen samt Aufnahme in jedem Bild neu. Außer
+     Sicht fallen die Ebenen weg; verborgene Fenster belegen ohnehin keine. */
+  .scene[data-awake] .win__rim,
+  .scene[data-awake] .win__shade {
     will-change: opacity;
   }
-  .scene[data-moving] .win__rim::before,
-  .scene[data-moving] .win__rim::after {
+  .scene[data-awake] .win__rim::before,
+  .scene[data-awake] .win__rim::after,
+  .scene[data-awake] .win__glint,
+  .scene[data-awake] .win__sweep {
     will-change: transform, opacity;
   }
   .win__rim::before,
@@ -1203,8 +1222,9 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     opacity: 0;
     pointer-events: none;
   }
-  /* Eigene Ebene nur, solange der Ring steht: im Fächer und ohne Skript kostet sie Speicher. */
-  .scene[data-live] .win__feather {
+  /* Eigene Ebene, solange die Bühne im Bild ist: ihre Deckkraft steigt schon ab m = 0,55, eine
+     Ebene, die erst bei m = 0,85 (data-live) entstand, kam mitten im Morph. Ohne Skript keine. */
+  .scene[data-awake] .win__feather {
     will-change: opacity;
   }
   /* Hintere Fenster versinken über eine Ebene in der Raumfarbe statt über einen Filter. */
@@ -1403,6 +1423,14 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     background: var(--strong);
     transform-origin: left center;
     transform: scaleX(0);
+    /* Wechselt ein Abschnitt seinen Stand (voll, leer), läuft er hin statt zu springen; die
+       Füllung im Selbstlauf ist eine Web Animation und liegt über dieser Transition. */
+    transition: transform 0.36s var(--ease-out);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .deck__segFill {
+      transition: none;
+    }
   }
   .deck__arrow {
     display: grid;

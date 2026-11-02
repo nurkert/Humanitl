@@ -63,6 +63,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-382 | Signierte Updates aus der App, ein Klick, macOS und Linux | L | HUM-284, HUM-326, HUM-325 |
 | HUM-388 | Website: neue Bilder im neutralen Grau mit einer echten Beispielsitzung | S | HUM-333, HUM-355 |
 | HUM-389 | Website: Glas, Video im vorderen Fenster, gerades Karussell mit Autoplay | M | HUM-333, HUM-375, HUM-388 |
+| HUM-412 | Website: the morph follows the scroll without jumps, the front window is never empty, the carousel stays calm under touch and trackpad | M | HUM-389 |
 | HUM-384 | Setup: Ein Befund des Plans steht dort, worüber er etwas sagt | S | HUM-287, HUM-262 |
 | HUM-385 | Verbindung: Eine kurze Lücke nach einem Neustart zeigt erst „verbinde neu" | S | HUM-044, HUM-058 |
 
@@ -937,3 +938,52 @@ Akzeptanzkriterien:
 - Kommt der Dienst in der Frist zurück, war nie ein Fehlschlag zu sehen. Bleibt er weg, steht ab dem dritten gescheiterten Versuch der Befund wie bisher, mit Grund, Abhilfe und Knopf, und fällt bis zur nächsten stehenden Verbindung nicht in die Ruhe zurück.
 - Keine Frist für einen Befund, der eine Antwort ist (`DAEMON_002`, `IPC_001`), für einen Kaltstart ohne je stehende Verbindung und ohne Takt (`connectionReconnectProvider` null), weil sonst kein Versuch die Ruhe beendete.
 - Widget-Tests in `test/features/shell/reconnect_grace_test.dart` mit Fake-Client und gefälschter Zeit decken die Rückkehr in der Frist, den dauerhaften Ausfall, `IPC_001` und den fehlenden Takt ab; jede der vier Bedingungen, einzeln entfernt, macht einen Test rot.
+
+## HUM-412 · Website: the morph follows the scroll without jumps, the front window is never empty, the carousel stays calm under touch and trackpad
+
+Rückmeldung des Inhabers vom 2026-11-02: Der Morph der Bildschirme beim
+Scrollen ist sehr glitchy, das animierte vordere Fenster ist auf dem Telefon
+nach kurzer Zeit leer, und das Karussell flackert und glitcht beim
+Durchscrollen und Wischen. Die Choreografie selbst bleibt in diesem Issue,
+wie sie ist; wie sie aussehen soll, klärt der Inhaber gesondert.
+
+Ursachen (belegt mit Bildfolgen und Proben in headless Firefox, Android-UA):
+- Der Morph sprang: Der Nachläufer setzte `m` auf den Scrollwert, sobald der
+  Abstand groß wurde, ein Wischen am Telefon übersprang so fast die halbe
+  Strecke in einem Bild.
+- Die Adressleiste am Telefon baute die Bühne mitten im Morph neu auf
+  (`innerHeight` statt der stabilen Höhe des angehefteten Abschnitts).
+- `will-change` kam und ging mit jeder Geste; Glanz, Streiflicht und
+  Schatten malten den Rahmen mit dem Bild in jedem Frame neu; jeder
+  Scroll-Event las `offsetHeight`.
+- Das Video: Ein abgelehntes `play()`, eine Pause durch den Browser oder ein
+  Stocken ließen es auf dem stehen, was es zuletzt gemalt hatte, oft dem
+  fast leeren ersten Bild der Aufnahme.
+- Karussell: Die Richtung, die das angehobene Fenster bestimmt, wechselte bei
+  jedem Event; senkrechtes Wischen und senkrechtes Trackpad-Scrollen über der
+  Bühne drehten den Ring und ließen ihn zurückfedern.
+
+Akzeptanzkriterien:
+- Der Morph folgt dem Scrollen über eine kritisch gedämpfte Feder und
+  springt nie, solange die Bühne zu sehen ist; außer Sicht steht er direkt
+  auf dem Scrollwert. Eine Änderung der Fensterhöhe durch die Adressleiste
+  verschiebt die Bühne nicht.
+- Das Video wird erst sichtbar, wenn es wirklich läuft (zwei Bilder mit
+  fortschreitender Medienzeit); jede Pause, jedes Stocken, jeder Fehler
+  zeigt das Bild darunter. Eine Pause durch den Browser wird wiederholt,
+  ein abgelehntes Abspielen bei der nächsten Geste. `mp4` steht vor `webm`.
+- Das Karussell entscheidet die Achse einer Geste einmal (Touch und Rad,
+  auch mit Schwung); senkrecht scrollt die Seite, waagrecht dreht der Ring.
+  Die Richtung hat eine Hysterese; eine Größenänderung während des Ziehens
+  springt nicht.
+- `will-change` hängt an der Sichtbarkeit der Bühne, nicht an Gesten.
+- Die Beschriftung des Moduls wechselt während Ziehen, Rad oder mehreren
+  Schritten einmal, wenn der Ring steht, mit der üblichen Überblendung; der
+  Zähler steht in Ruhe auf ganzen Pixeln. Die Segmente laufen aus dem
+  gemalten Wert aus, statt auf null zu springen. Die Striche des Rings drehen
+  nicht mehr mit; auf dem Telefon im Hochformat entfällt der Ring, der durch
+  Zähler und Beschriftung lief.
+- Die Schleife des Videos überspringt den fast leeren Anfang der Aufnahme
+  (Beginn bei 2,2 s, wo die erste gehaltene Anfrage steht).
+- Tests für Feder und Gesten mit Mutationsbeweis; kein waagrechter Überlauf
+  ab 320 px; reduzierte Bewegung und die Fassung ohne Skript unverändert.

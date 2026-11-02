@@ -19,6 +19,15 @@
 // transform, opacity und Custom Properties, die Deckkraft und Verschiebung von
 // Lichtebenen steuern. Ein einziger rAF-Loop läuft nur, solange sich etwas bewegt.
 
+import { type Follow, followStep } from "./stage/follow.mjs";
+import {
+  createDirectionLatch,
+  createWheelAxis,
+  WHEEL_IDLE_MS,
+  wheelPixels,
+} from "./stage/gesture.mjs";
+import { frontVideo } from "./stage/video";
+
 type Cls = "A" | "B" | "C" | "D" | "E" | "F" | "G";
 
 /** Parametersatz der Bühne; Längen in px, Winkel in Grad, r in Fensterbreiten. */
@@ -329,7 +338,6 @@ function init(scene: HTMLElement) {
   const world = scene.querySelector<HTMLElement>("[data-world]")!;
   const rig = scene.querySelector<HTMLElement>("[data-rig]")!;
   const ring = scene.querySelector<HTMLElement>("[data-ring]")!;
-  const ticks = scene.querySelector<HTMLElement>("[data-ticks]")!;
   const pool = scene.querySelector<HTMLElement>("[data-pool]")!;
   const wins = [...scene.querySelectorAll<HTMLElement>("[data-win]")];
   const heroText = scene.querySelector<HTMLElement>("[data-hero]")!;
@@ -362,12 +370,13 @@ function init(scene: HTMLElement) {
     w.querySelector<HTMLElement>("[data-feather]")!,
   );
   const n = wins.length;
-  // Der Ablauf im vorderen Fenster (HUM-389) und sein Fenster.
-  const video = scene.querySelector<HTMLVideoElement>("[data-video]");
-  const videoWin = video ? wins.findIndex((w) => w.contains(video)) : -1;
   // Kann sich zur Laufzeit ändern; dann halten Autoplay und Video sofort an (unten).
   const reducedQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
   let reduced = reducedQuery.matches;
+  // Der Ablauf im vorderen Fenster (HUM-389) und sein Fenster.
+  const videoEl = scene.querySelector<HTMLVideoElement>("[data-video]");
+  const videoWin = videoEl ? wins.findIndex((w) => w.contains(videoEl)) : -1;
+  const video = frontVideo(videoEl, reduced);
   const dev = import.meta.env.DEV;
 
   // Abstand auf dem Ring, gefaltet in [-n/2, n/2): jedes Fenster hat links und rechts Nachbarn.
@@ -378,12 +387,15 @@ function init(scene: HTMLElement) {
   let vh = 0;
   let lay!: Layout;
   let sceneTop = 0;
+  let sceneH = 0;
   let pxPerStep = 400;
   let navBottom = 0;
 
-  // Zustand: Morph (roh aus dem Scrollweg und geglättet), Ringposition, Einflug.
+  // Zustand: Morph (roh aus dem Scrollweg und geglättet, mit Geschwindigkeit), Ringposition,
+  // Einflug.
   let mRaw = 0;
   let m = 0;
+  const follow: Follow = { m: 0, v: 0 };
   let pos = 0;
   let vel = 0;
   let target = 0;
@@ -393,9 +405,15 @@ function init(scene: HTMLElement) {
   // weiterer Klick mitten in der Fahrt hängt eine zweite Kurve an, die sich zur ersten addiert:
   // so ändert sich das Ziel ohne Sprung in Lage oder Richtung (HUM-389).
   let tweens: { t0: number; delta: number }[] = [];
+  // Seit dem ersten Klick liefen mehrere Kurven zugleich; erst wenn alle stehen, wechselt die
+  // Beschriftung (render).
+  let multiTurn = false;
   let tweenBase = 0;
-  // Ziehen oder waagrechtes Scrollen: der Ring folgt der Hand, steerDir ist ihre Richtung.
+  // Ziehen oder waagrechtes Scrollen: der Ring folgt der Hand, steerDir ist ihre Richtung. Sie
+  // kippt erst nach einer Gegenbewegung von 0,06 Fenstern, sonst wechselte der Vortritt beim
+  // Zittern der Hand im Takt der Ereignisse (stage/gesture.mjs).
   let steering = false;
+  const steerLatch = createDirectionLatch();
   let steerDir = 1;
   // Vortritt je Fenster, 0 bis 1: folgt schnell dem Fenster, das zum Fokus wird.
   const liftW: number[] = [];
@@ -833,14 +851,23 @@ function init(scene: HTMLElement) {
     layersBox.style.minHeight = `${Math.ceil(max)}px`;
   }
 
+  /**
+   * Die Höhe, in der die Bühne rechnet: die des angehefteten Abschnitts (100svh), nicht
+   * innerHeight. Auf Telefonen ändert innerHeight sich, sobald die Adressleiste beim Scrollen
+   * ein- oder ausfährt; die Bühne baute sich dann mitten im Morph neu auf und sprang, und ihre
+   * Projektion rechnete mit einer anderen Mitte als die Perspektive der .world.
+   */
+  const stableHeight = () => sticky.clientHeight || window.innerHeight;
+
   function measure() {
     vw = window.innerWidth;
-    vh = window.innerHeight;
+    vh = stableHeight();
     const cls = classify(vw, vh);
     scene.dataset.cls = cls;
     reserveCaption();
     lay = layout(cls);
     scene.style.setProperty("--w", `${lay.Ws.toFixed(1)}px`);
+    odoEm = parseFloat(getComputedStyle(odoStrip).fontSize) || 0;
     scene.style.setProperty("--t", `${lay.T.toFixed(2)}px`);
     world.style.perspective = `${Math.round(lay.P)}px`;
     const D = 2 * (lay.stage.r * lay.Ws + 0.06 * lay.Ws);
@@ -852,6 +879,7 @@ function init(scene: HTMLElement) {
     const total = reduced ? 1.6 : 1 + lay.hold + lay.morph + 0.08;
     scene.style.setProperty("--scene-h", `${Math.round(total * vh)}px`);
     sceneTop = scene.getBoundingClientRect().top + window.scrollY;
+    sceneH = Math.round(total * vh);
     // Pixel pro Fenster entlang des Bogens: projizierter Abstand von Front und d = +1.
     const a = project(toWorld(lay.stage, [0, 0, 0]));
     const b = project(toWorld(lay.stage, slotVec(lay.stage, 1)));
@@ -1234,6 +1262,8 @@ function init(scene: HTMLElement) {
     shown: -1,
   }));
   let front = 0;
+  // Welches Modul die Beschriftung zeigt; sie folgt active, aber nicht in jeder Bewegung.
+  let capShown = 0;
   const changes: number[] = [];
   let burstTimer = 0;
   let enterTimer = 0;
@@ -1270,7 +1300,9 @@ function init(scene: HTMLElement) {
     l.shown = idx;
     l.el.style.visibility = "";
     l.el.style.opacity = "";
-    measureLines(l);
+    // Zeilen braucht nur die Beschriftung am Telefon; das Messen erzwingt ein Layout, und
+    // fillLayer läuft mitten in der Drehung.
+    if (phoneCaption()) measureLines(l);
   }
 
   /** Zeilennummern für den Zeilen-Wischer am Telefon, aus der Lage der Masken. */
@@ -1408,10 +1440,14 @@ function init(scene: HTMLElement) {
     announce(mod(Math.round(pos)));
   }
 
-  /** Wechsel des aktiven Moduls, mitten in der Bewegung; r ist die Drehrichtung. */
+  /**
+   * Wechsel der Beschriftung; r ist die Drehrichtung. Bei einem einzelnen Schritt (Pfeil,
+   * Taste, Selbstlauf) mitten in der Bewegung, beim Ziehen, Wischen und mehreren Schritten
+   * erst, wenn der Ring steht (render). Das Zählwerk läuft immer mit.
+   */
   function caption(idx: number, r: number) {
     if (!dragging && !springOn) announce(idx);
-    odoTo(idx, r);
+    capShown = idx;
     if (capScroll) {
       // Im Morph treibt der Scrollweg die Beschriftung; nur den Inhalt tauschen.
       fillLayer(layers[front], idx);
@@ -1504,6 +1540,8 @@ function init(scene: HTMLElement) {
   let odoTarget = 1;
   let odoShown = 0;
   const odoStrip = odo.querySelector<HTMLElement>("[data-odo-ones]")!;
+  // Höhe einer Ziffer in px (1em der Spalte); measure() setzt sie je Bildausschnitt.
+  let odoEm = 0;
 
   function odoTo(idx: number, r: number) {
     const from = ((Math.round(odoTarget) % 10) + 10) % 10;
@@ -1574,6 +1612,7 @@ function init(scene: HTMLElement) {
       return false;
     });
     if (!tweens.length) {
+      multiTurn = false;
       pos = target;
       tweenBase = target;
       settled();
@@ -1587,6 +1626,7 @@ function init(scene: HTMLElement) {
   /** Bricht Kurven und Feder ab; der Ring bleibt, wo er gerade ist. */
   function holdRing() {
     tweens = [];
+    multiTurn = false;
     tweenBase = pos;
     springOn = false;
     vel = 0;
@@ -1616,6 +1656,7 @@ function init(scene: HTMLElement) {
       settled();
     } else if (Math.abs(goal - dest) > 1e-6) {
       tweens.push({ t0: performance.now(), delta: goal - dest });
+      if (tweens.length > 1) multiTurn = true;
     }
     // Ein Eingriff von Hand startet die Zeit neu, auch wenn er den Fokus am Ende nicht wechselt.
     if (!auto) restartAuto();
@@ -1655,27 +1696,53 @@ function init(scene: HTMLElement) {
     );
   }
 
+  // Ohne den Cache von put(): commitStyles() schreibt den Stil an ihm vorbei. Die Werte gehen
+  // über eine Transition im CSS, so springt beim Wechsel kein Abschnitt.
   function paintSegs() {
-    segs.forEach((seg, i) =>
-      put(
-        seg,
-        "transform",
+    segs.forEach((seg, i) => {
+      seg.style.transform =
         i < active || ((!autoOn || reduced) && i === active)
           ? "scaleX(1)"
-          : "scaleX(0)",
-      ),
-    );
+          : "scaleX(0)";
+    });
   }
+
+  /** Füllstand eines Abschnitts, wie er gerade gemalt ist. */
+  function segScale(seg: HTMLElement): number {
+    const t = getComputedStyle(seg).transform;
+    return !t || t === "none" ? 0 : new DOMMatrixReadOnly(t).a;
+  }
+
+  // Ein neu gestarteter Abschnitt läuft erst in dieser Zeit leer, statt auf 0 zu springen.
+  const DRAIN_MS = 240;
 
   /** Neuer Abschnitt oder Eingriff von Hand: die Füllung beginnt von vorn. */
   function restartAuto() {
-    autoAnim?.cancel();
+    // Den gemalten Stand übernehmen, bevor die Animation geht; sonst fiele der alte Abschnitt
+    // für ein Bild auf seinen Grundwert zurück und liefe dann erst zum neuen.
+    const from = autoAnim ? segScale(segs[active]) : 0;
+    if (autoAnim) {
+      try {
+        autoAnim.commitStyles();
+      } catch {
+        /* nicht gerenderte Elemente können nichts übernehmen */
+      }
+      autoAnim.cancel();
+    }
     autoAnim = null;
     paintSegs();
     if (!autoOn || reduced || !liveState) return;
+    const drain = from > 0.01 ? DRAIN_MS : 0;
+    const total = AUTO_MS + drain;
     const anim = segs[active].animate(
-      [{ transform: "scaleX(0)" }, { transform: "scaleX(1)" }],
-      { duration: AUTO_MS, easing: "linear", fill: "forwards" },
+      drain
+        ? [
+            { transform: `scaleX(${from.toFixed(3)})` },
+            { transform: "scaleX(0)", offset: drain / total },
+            { transform: "scaleX(1)" },
+          ]
+        : [{ transform: "scaleX(0)" }, { transform: "scaleX(1)" }],
+      { duration: total, easing: "linear", fill: "forwards" },
     );
     autoAnim = anim;
     anim.pause();
@@ -1721,25 +1788,12 @@ function init(scene: HTMLElement) {
   let lastPoses: Pose[] = [];
   let lastOps: number[] = [];
 
-  // ---- Video im vorderen Fenster ----------------------------------------------------
-  // Läuft nur, wenn sein Fenster nah am Fokus und sichtbar ist, die Bühne im Bild und der Tab
-  // vorn; bei reduzierter Bewegung bleibt das Poster stehen.
-  let videoShown = false;
-  let sceneSeen = false;
-  function syncVideo() {
-    if (!video) return;
-    const want = !reduced && !document.hidden && sceneSeen && videoShown;
-    if (want && video.paused) {
-      video.muted = true;
-      video.play().catch(() => undefined);
-    } else if (!want && !video.paused) video.pause();
-  }
-
+  // Das Video läuft nur, wenn sein Fenster nah am Fokus und sichtbar ist, die Bühne im Bild
+  // und der Tab vorn; bei reduzierter Bewegung bleibt das Bild stehen (stage/video.ts).
   reducedQuery.addEventListener("change", (event) => {
     reduced = event.matches;
     restartAuto();
-    syncVideo();
-    if (reduced && video) video.currentTime = 0;
+    video.setReduced(reduced);
   });
 
   // ---- Ein Bild -------------------------------------------------------------------
@@ -1750,13 +1804,15 @@ function init(scene: HTMLElement) {
     lastNow = now;
     let busy = false;
 
-    // Folger: der Morph läuft dem Scrollweg weich hinterher.
-    if (reduced) m = mRaw >= 0.5 ? 1 : 0;
-    else if (Math.abs(mRaw - m) > 0.5) m = mRaw;
+    // Folger: der Morph läuft dem Scrollweg als Feder hinterher und springt nie, solange man
+    // die Bühne sieht (stage/follow.mjs). Außer Sicht steht er sofort am Ziel, etwa nach einem
+    // Sprung über einen Anker.
+    if (reduced) setMorph(mRaw >= 0.5 ? 1 : 0);
+    else if (!stageOnScreen()) setMorph(mRaw);
     else {
-      m += (mRaw - m) * (1 - Math.exp(-dt / 0.09));
-      if (Math.abs(mRaw - m) < 1e-4) m = mRaw;
-      else busy = true;
+      follow.m = m;
+      busy = followStep(follow, mRaw, dt) || busy;
+      m = follow.m;
     }
 
     if (springOn) {
@@ -1856,13 +1912,8 @@ function init(scene: HTMLElement) {
     const frontRank = visibleRank[ds.findIndex((d) => Math.abs(d) < 0.5)] ?? 0;
 
     // Das Video läuft nur nah am Fokus; weiter hinten deckt die weiche Ebene es ganz zu.
-    if (videoWin >= 0) {
-      const shown = ops[videoWin] > 0.05 && Math.abs(ds[videoWin]) < 1.25;
-      if (shown !== videoShown) {
-        videoShown = shown;
-        syncVideo();
-      }
-    }
+    if (videoWin >= 0)
+      video.setShown(ops[videoWin] > 0.05 && Math.abs(ds[videoWin]) < 1.25);
 
     // Tiefenschärfe erst auf der Bühne: im Fächer bleibt alles scharf.
     const focusOn = smoothstep(map(m, 0.55, 0.95));
@@ -1912,7 +1963,8 @@ function init(scene: HTMLElement) {
     if (intro && allLanded) introDone = true;
 
     // Der Ring: Boden der Bühne, mit den Fenstern gerollt und gekippt. Die Größe folgt
-    // dem Radius über scale, die Teilstriche drehen mit der Ringposition.
+    // dem Radius über scale. Die Teilstriche stehen still: fast von der Kante gesehen
+    // ließ ihr Drehen das feine Muster als wandernde Strichellinie flimmern.
     const R = G.r * lay.Ws;
     const ringScale =
       (R + 0.06 * lay.Ws) / (lay.stage.r * lay.Ws + 0.06 * lay.Ws);
@@ -1930,7 +1982,9 @@ function init(scene: HTMLElement) {
     );
     const ringIn = reduced ? 1 : introT0 < 0 ? 0 : clamp((tIntro - 500) / 1200);
     // Telefon quer: auf der Bühne läge der flach gesehene Ring quer über der Beschriftung.
-    const ringStage = lay.cls === "G" ? 0 : 0.8;
+    // Telefon hoch: dort lief die Vorderkante des fast flach gesehenen Rings als gestrichelte
+    // Linie quer durch Zählwerk und Beschriftung.
+    const ringStage = lay.cls === "G" || lay.stack ? 0 : 0.8;
     // Im Fächer sieht man den Ring in A, F und G fast von der Kante: dort flimmerte er als
     // Strichellinie unter den Scheiben.
     const ringHero = lay.cls === "A" || lay.stack || lay.cls === "G" ? 0 : 0.32;
@@ -1941,7 +1995,6 @@ function init(scene: HTMLElement) {
         ringIn * lerp(ringHero, ringStage, smoothstep(map(m, 0.3, 0.9)))
       ).toFixed(3),
     );
-    put(ticks, "transform", `rotate(${(pos * G.phis).toFixed(3)}deg)`);
     const nearest = Math.min(...ds.map((d) => Math.abs(d)));
     put(
       pool,
@@ -2037,31 +2090,34 @@ function init(scene: HTMLElement) {
       wins.forEach((win, i) =>
         win.setAttribute("aria-hidden", i === active ? "false" : "true"),
       );
-      caption(active, dir);
+      odoTo(active, dir);
+    }
+    // Die Beschriftung wechselt bei einem einzelnen Schritt mitten in der Bewegung, sonst erst,
+    // wenn die Hand losgelassen hat und der Ring steht. Früher tauschte jeder überstrichene
+    // Index Text, Wort-Masken und Abschnitte mitten im Ziehen: beim schnellen Wischen blitzten
+    // Texte auf und verschwanden ohne Übergang, und die Füllung der Abschnitte sprang.
+    // Mehrere Schritte bleiben mehrere, bis die letzte Kurve steht (multiTurn), auch wenn die
+    // erste schon fertig ist. Das gilt auch im Morph ab LIVE_AT, wo capScroll noch gilt.
+    const handMotion = dragging || steering || springOn || multiTurn;
+    if (capShown !== active && !handMotion) {
+      caption(active, Math.sign(wrap(active - capShown)) || 1);
       restartAuto();
     }
 
     const digit = ((odoQ % 10) + 10) % 10;
-    put(odoStrip, "transform", `translate3d(0, ${(-digit).toFixed(4)}em, 0)`);
+    // In Ruhe auf ganze Pixel: die Spalte ist eine eigene Ebene, ein Bruchteil ließe die
+    // Konturziffern unscharf stehen.
+    put(
+      odoStrip,
+      "transform",
+      odoQ === odoTarget
+        ? `translate3d(0, ${-Math.round(digit * odoEm)}px, 0)`
+        : `translate3d(0, ${(-digit).toFixed(4)}em, 0)`,
+    );
 
-    if (busy) {
-      // Die Lichtebenen sind nur in Bewegung eigene Ebenen; kurz nachlaufen, sonst pendelt
-      // das Attribut zwischen zwei Scroll-Ereignissen.
-      if (!moving) {
-        moving = true;
-        scene.toggleAttribute("data-moving", true);
-      }
-      clearTimeout(movingTimer);
-      movingTimer = window.setTimeout(() => {
-        moving = false;
-        scene.toggleAttribute("data-moving", false);
-      }, 400);
-      schedule();
-    }
+    if (busy) schedule();
   }
   let lastFrameStamp = 0;
-  let moving = false;
-  let movingTimer = 0;
 
   function schedule() {
     if (!frame) frame = requestAnimationFrame(render);
@@ -2097,6 +2153,19 @@ function init(scene: HTMLElement) {
 
   // ---- Scrollen -------------------------------------------------------------------
 
+  /** Setzt den Morph ohne Lauf, die Feder steht. */
+  function setMorph(value: number) {
+    m = value;
+    follow.m = value;
+    follow.v = 0;
+  }
+
+  /** Liegt der angeheftete Abschnitt im Bild? Aus gecachten Maßen, ohne Layout zu lesen. */
+  function stageOnScreen(): boolean {
+    const p = window.scrollY - sceneTop;
+    return p > -vh && p < sceneH;
+  }
+
   function read() {
     const p = window.scrollY - sceneTop;
     mRaw = clamp((p - lay.hold * vh) / (lay.morph * vh));
@@ -2107,11 +2176,10 @@ function init(scene: HTMLElement) {
     "scroll",
     () => {
       read();
-      const leaving = mRaw <= 0 || mRaw >= 1;
-      if (leaving && Math.abs(mRaw - m) > 0.2) m = mRaw;
       // Liegt die fertige Bühne weit unterhalb des Bildes, und dreht sich nichts mehr, gibt
-      // es nichts zu malen: kein Bild je Scroll-Ereignis für eine unsichtbare Bühne.
-      const past = window.scrollY - sceneTop - scene.offsetHeight > vh;
+      // es nichts zu malen: kein Bild je Scroll-Ereignis für eine unsichtbare Bühne. Die Höhe
+      // kommt aus measure(); ein Lesen von offsetHeight erzwänge hier je Ereignis ein Layout.
+      const past = window.scrollY - sceneTop - sceneH > vh;
       if (past && m >= 1 && !springOn && !tweens.length && !dragging) {
         // Ein Sprung am Morph vorbei: ohne Bild käme der Nebel sonst nie aus dem Layout.
         if (!fogGone) {
@@ -2125,15 +2193,28 @@ function init(scene: HTMLElement) {
     { passive: true },
   );
 
-  let resizeTimer = 0;
+  // Neu vermessen höchstens einmal je Bild und nur, wenn sich Breite oder die Höhe des
+  // angehefteten Abschnitts wirklich geändert haben. Die Adressleiste eines Telefons ändert nur
+  // innerHeight; früher baute das die Bühne 150 ms später mitten im Morph neu auf.
+  let resizeFrame = 0;
   window.addEventListener("resize", () => {
-    clearTimeout(resizeTimer);
-    resizeTimer = window.setTimeout(() => {
-      measure();
+    if (resizeFrame) return;
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = 0;
+      if (window.innerWidth !== vw || stableHeight() !== vh) {
+        measure();
+        if (phoneCaption())
+          for (const l of layers) if (l.words.length) measureLines(l);
+        // Der Zug läuft weiter: von hier aus mit dem neuen Maßstab, ohne Sprung.
+        if (dragMoved && dragging) {
+          pos0 = pos;
+          ax = lastX;
+          ay = lastY;
+        }
+      }
       read();
-      for (const l of layers) if (l.words.length) measureLines(l);
       schedule();
-    }, 150);
+    });
   });
 
   // ---- Eingaben -------------------------------------------------------------------
@@ -2147,16 +2228,17 @@ function init(scene: HTMLElement) {
     (entries) => {
       for (const e of entries) {
         inView = e.intersectionRatio >= 0.5;
-        sceneSeen = e.isIntersecting;
+        video.setSeen(e.isIntersecting);
+        // Die Lichtebenen sind eigene Ebenen, solange die Bühne im Bild ist (Home.astro).
+        scene.toggleAttribute("data-awake", e.isIntersecting);
       }
       syncAuto();
-      syncVideo();
     },
     { threshold: [0, 0.5, 1] },
   ).observe(sticky);
   document.addEventListener("visibilitychange", () => {
     syncAuto();
-    syncVideo();
+    video.sync();
   });
   // Zeiger über einem Fenster hält den Selbstlauf; nur die Maus, ein Finger schwebt nicht.
   const setHover = (on: boolean) => {
@@ -2186,16 +2268,6 @@ function init(scene: HTMLElement) {
     keyFocus = false;
     syncAuto();
   });
-  // Die letzte Quelle fehlt oder ist kaputt: das Bild darunter bleibt, das Video geht. Auch
-  // dann, wenn beide schon gescheitert sind, bevor dieses Skript lief.
-  const dropVideo = () => {
-    if (video) video.hidden = true;
-  };
-  if (video?.networkState === HTMLMediaElement.NETWORK_NO_SOURCE) dropVideo();
-  video?.addEventListener("error", dropVideo);
-  video
-    ?.querySelector("source:last-of-type")
-    ?.addEventListener("error", dropVideo);
   document.addEventListener("keydown", (event) => {
     if (
       !inView ||
@@ -2222,6 +2294,8 @@ function init(scene: HTMLElement) {
   let ax = 0;
   let ay = 0;
   let pos0 = 0;
+  let lastX = 0;
+  let lastY = 0;
   let swallowClick = false;
   let samples: { t: number; p: number }[] = [];
 
@@ -2243,10 +2317,20 @@ function init(scene: HTMLElement) {
 
   hit.addEventListener("pointermove", (event) => {
     if (!dragging || event.pointerId !== dragId) return;
+    lastX = event.clientX;
+    lastY = event.clientY;
     const dx = event.clientX - ax;
     const dy = event.clientY - ay;
     if (!dragMoved) {
       if (Math.hypot(dx, dy) < 6) return;
+      // Ein Finger, der eher senkrecht läuft, scrollt die Seite (touch-action: pan-y). Früher
+      // drehte auch er den Ring an, bis der Browser mit pointercancel übernahm; dann federte
+      // der Ring zurück, und der Selbstlauf begann von vorn: jedes Scrollen über die Bühne
+      // ließ sie zucken.
+      if (event.pointerType !== "mouse" && Math.abs(dy) >= Math.abs(dx)) {
+        dragging = false;
+        return;
+      }
       // Ab der Schwelle gilt der ganze Weg seit dem Aufsetzen, damit der Ring 1:1 folgt.
       dragMoved = true;
       holdRing();
@@ -2258,7 +2342,8 @@ function init(scene: HTMLElement) {
     }
     const b = mixG(m).beta * RAD;
     const next = pos0 - (dx * Math.cos(b) + dy * Math.sin(b)) / pxPerStep;
-    if (Math.abs(next - pos) > 1e-3) steerDir = Math.sign(next - pos);
+    if (pos === pos0) steerLatch.reset(next - pos0);
+    steerDir = steerLatch.push(next - pos);
     pos = next;
     const t = performance.now();
     samples.push({ t, p: pos });
@@ -2323,19 +2408,30 @@ function init(scene: HTMLElement) {
   );
   hit.addEventListener("dragstart", (event) => event.preventDefault());
 
-  // Waagrechtes Trackpad-Scrollen dreht live; senkrecht bleibt immer Sache der Seite.
+  // Waagrechtes Trackpad-Scrollen dreht live; senkrecht bleibt immer Sache der Seite. Die Achse
+  // gilt für die ganze Geste samt Nachlauf, entschieden an ihren ersten Pixeln
+  // (stage/gesture.mjs); ein einzelnes rauschendes Ereignis dreht nichts mehr.
+  const wheelAxis = createWheelAxis();
   sticky.addEventListener(
     "wheel",
     (event) => {
-      if (!canTurn() || Math.abs(event.deltaX) <= 1.2 * Math.abs(event.deltaY))
+      const [px, py] = wheelPixels(event, vw);
+      const axis = wheelAxis(px, py, performance.now());
+      if (axis === "y" || !canTurn()) return;
+      if (axis === null) {
+        // Noch offen: nicht drehen, aber eine waagrechte Geste nicht als Blättern im Verlauf
+        // an den Browser geben.
+        if (Math.abs(px) > Math.abs(py)) event.preventDefault();
         return;
+      }
       event.preventDefault();
+      const delta = px / pxPerStep;
+      if (!steering) steerLatch.reset(delta);
       holdRing();
       steering = true;
       lastTurnAuto = false;
-      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? vw : 1;
-      pos += (event.deltaX * unit) / pxPerStep;
-      if (Math.abs(event.deltaX) > 0.5) steerDir = Math.sign(event.deltaX);
+      pos += delta;
+      steerDir = steerLatch.push(delta);
       tweenBase = pos;
       syncAuto();
       clearTimeout(wheelTimer);
@@ -2348,7 +2444,7 @@ function init(scene: HTMLElement) {
         } else springOn = true;
         restartAuto();
         schedule();
-      }, 140);
+      }, WHEEL_IDLE_MS);
       schedule();
     },
     { passive: false },
@@ -2371,6 +2467,7 @@ function init(scene: HTMLElement) {
         ? { state: autoAnim.playState, t: autoAnim.currentTime }
         : null,
       liftW: [...liftW],
+      lift: liftIndex(),
       introDone,
       introAge: introT0 > 0 ? performance.now() - introT0 : -1,
       stage: { ...lay.stage, Ws: lay.Ws },
@@ -2381,7 +2478,7 @@ function init(scene: HTMLElement) {
 
   measure();
   read();
-  m = reduced ? (mRaw >= 0.5 ? 1 : 0) : mRaw;
+  setMorph(reduced ? (mRaw >= 0.5 ? 1 : 0) : mRaw);
   deck.inert = true;
   if (!reduced) fog.dataset.drift = "";
   // Jede Ebene kommt, sobald ihr Bild dekodiert ist; der Einflug wartet nicht darauf.
