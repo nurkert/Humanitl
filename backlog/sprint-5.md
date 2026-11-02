@@ -11850,3 +11850,20 @@ der ersten Zeile. Die Goldens bleiben unverändert.
 **Akzeptanz.** Ein Test misst die senkrechte Mitte der Beschriftung gegen
 die des Knopfs „Starten" (Abweichung unter 0,75 px). Mutationsbeweis: ohne
 `MainAxisSize.min` 7,5 px, der Test fällt.
+
+---
+
+## HUM-416 · pulldown-cmark 0.13.6 closes RUSTSEC-2026-0433
+
+**Anlass.** Am 2026-11-02 erschien RUSTSEC-2026-0433 (quadratisches Parsen
+verschachtelter Wikilinks mit `ENABLE_WIKILINKS` in pulldown-cmark bis
+0.13.5). `cargo deny` lässt seitdem jeden CI-Lauf im Schritt „Licenses,
+advisories, duplicate crates“ scheitern.
+
+**Umsetzung.** `Cargo.lock` hebt pulldown-cmark auf 0.13.6. Die Bibliothek
+kommt nur zur Bauzeit über `prost-build` (Doc-Kommentare der generierten
+Protobuf-Typen) und liest keine fremden Eingaben; Wikilinks schaltet dort
+niemand ein. Es ändert sich nichts außer der Sperrdatei.
+
+**Akzeptanz.** `cargo deny check advisories licenses bans` grün; der Build
+der Workspace-Crates unverändert.
