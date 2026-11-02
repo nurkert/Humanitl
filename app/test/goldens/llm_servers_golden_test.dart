@@ -63,9 +63,10 @@ Future<void> openSwitch(WidgetTester tester) async {
 }
 
 void main() {
+  // Ein Fenster der Shell: Das Overlay (HUM-404) bedeckt drei Viertel davon.
   const BoxConstraints window = BoxConstraints.tightFor(
-    width: 560,
-    height: 1100,
+    width: 1100,
+    height: 1000,
   );
 
   goldenVariants(

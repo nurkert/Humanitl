@@ -291,6 +291,24 @@ class _HGlyphPainter extends CustomPainter {
           ], close: true),
           stroke,
         );
+      case HGlyph.info:
+        canvas
+          ..drawCircle(const Offset(12, 12), 10, stroke)
+          ..drawLine(const Offset(12, 16), const Offset(12, 12), stroke)
+          ..drawLine(const Offset(12, 8), const Offset(12.01, 8), stroke);
+      case HGlyph.search:
+        canvas
+          ..drawCircle(const Offset(11, 11), 8, stroke)
+          ..drawLine(const Offset(21, 21), const Offset(16.65, 16.65), stroke);
+      case HGlyph.check:
+        canvas.drawPath(
+          _polyline(const <Offset>[
+            Offset(20, 6),
+            Offset(9, 17),
+            Offset(4, 12),
+          ]),
+          stroke,
+        );
     }
     canvas.restore();
   }

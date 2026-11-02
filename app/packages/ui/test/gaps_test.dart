@@ -1154,6 +1154,10 @@ void main() {
         HGlyph.square,
         // HUM-282: der Knopf, der den Projektordner wählt.
         HGlyph.folder,
+        // HUM-404: Info, Suche und Gespeichert in den Einstellungen.
+        HGlyph.info,
+        HGlyph.search,
+        HGlyph.check,
       ]) {
         expect(HGlyph.values, contains(glyph));
       }

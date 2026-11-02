@@ -16,6 +16,7 @@ import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
 import 'package:humanitl/features/intercept/providers/now.dart';
+import 'package:humanitl/features/settings/settings_overlay.dart';
 import 'package:humanitl/features/shell/section.dart';
 import 'package:humanitl/features/shell/widgets/header_bar.dart';
 import 'package:humanitl/features/shell/widgets/icon_rail.dart';
@@ -201,18 +202,25 @@ void main() {
     _expectOneGrid(tester, 'Intercept', Section.intercept);
   });
 
-  testWidgets('the settings sheet header continues the pane header line', (
+  // Die Einstellungen sind seit HUM-404 kein Blatt im Raster mehr, sondern
+  // ein Overlay über dem ganzen Fenster: von unten, drei Viertel hoch, bis auf
+  // einen Rand so breit wie das Fenster. Das Raster darunter bleibt, wie es
+  // war.
+  testWidgets('the settings overlay rises from below over three quarters', (
     WidgetTester tester,
   ) async {
     await _pump(tester);
     await pressCtrl(tester, LogicalKeyboardKey.comma);
     await tester.pumpAndSettle();
-    _expectSheetOnGrid(
-      tester,
-      find.byKey(const Key('settings-sheet')),
-      find.byKey(const Key('intercept-queue-header')),
-      'settings',
+    final Size window = tester.getSize(find.byType(HeaderBar));
+    final Rect panel = tester.getRect(
+      find.byKey(const Key('settings-overlay')),
     );
+    final double height = tester.getSize(find.byType(SettingsOverlay)).height;
+    expect(panel.bottom, moreOrLessEquals(height), reason: 'flush at the foot');
+    expect(panel.height, moreOrLessEquals(height * 0.75));
+    expect(panel.left, moreOrLessEquals(HSpace.x4));
+    expect(panel.right, moreOrLessEquals(window.width - HSpace.x4));
     _expectOneGrid(tester, 'Intercept with settings', Section.intercept);
   });
 
@@ -273,18 +281,10 @@ void main() {
     expect(tester.takeException(), isNull, reason: 'intercept');
     await pressCtrl(tester, LogicalKeyboardKey.comma);
     await tester.pumpAndSettle();
-    _expectSheetOnGrid(
-      tester,
-      find.byKey(const Key('settings-sheet')),
-      find.byKey(const Key('intercept-queue-header')),
-      'settings x2',
-    );
-    // Bei doppelter Schrift läuft eine Zeile des Einstellungsformulars über
-    // (eine `Row` mit `MainAxisSize.min` im Rumpf, 469 px breit). Das ist der
-    // Rumpf des Blatts und nicht seine Kopfzeile, und es steht vor HUM-286;
-    // es ist als eigenes Issue gemeldet. Hier wird es abgeräumt, damit es die
-    // Prüfung der übrigen Bildschirme nicht verdeckt.
-    tester.takeException();
+    // Seit HUM-404 legt jede Zeile ihr Control unter den Text, wenn es neben
+    // ihm nicht passt; bei doppelter Schrift läuft nichts mehr über.
+    expect(find.byKey(const Key('settings-overlay')), findsOneWidget);
+    expect(tester.takeException(), isNull, reason: 'settings x2');
     await pressCtrl(tester, LogicalKeyboardKey.comma);
     await tester.pumpAndSettle();
     for (final Section section in <Section>[

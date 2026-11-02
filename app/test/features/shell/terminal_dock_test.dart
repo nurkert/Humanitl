@@ -12,7 +12,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/ui/terminal_placement.dart';
 import 'package:humanitl/features/sandbox/providers/sandbox_status_provider.dart';
-import 'package:humanitl/features/settings/settings_sheet.dart';
 import 'package:humanitl/features/shell/shell_screen.dart';
 import 'package:humanitl/features/shell/widgets/floating_terminal.dart';
 import 'package:xterm2/ui.dart';
@@ -219,26 +218,26 @@ void main() {
   });
 
   group('the title strip', () {
-    /// History mit offenem Einstellungsblatt in einem Fenster, dessen linker
-    /// Rest zu schmal für das kleinste Fenster ist, aber breit genug für den
-    /// Streifen.
+    /// Rules in einem Fenster, das zu niedrig für das kleinste Fenster ist
+    /// (200 hoch und der Rand), aber hoch genug für den Streifen.
+    ///
+    /// Bis HUM-404 schuf das Einstellungsblatt von rechts die Enge; das
+    /// Overlay von unten liegt über dem schwebenden Terminal, statt ihm Platz
+    /// zu nehmen, also schafft sie hier die Höhe des Fensters.
     Future<void> leaveNoCornerFree(WidgetTester tester) async {
       await pumpApp(
         tester,
         client: runningClient(),
-        size: const Size(870, 700),
+        size: const Size(900, 280),
       );
-      await pressCtrl(tester, LogicalKeyboardKey.digit2);
+      await pressCtrl(tester, LogicalKeyboardKey.digit3);
       await pressFloat(tester);
-      await pressCtrl(tester, LogicalKeyboardKey.comma);
       await settle(tester);
       await settle(tester);
-      expect(find.byType(SettingsSheet), findsOneWidget);
       final Rect region = tester.getRect(find.byType(FloatingTerminalLayer));
-      final double left = region.width - SettingsSheet.sheetWidth;
       expect(
-        left,
-        allOf(greaterThanOrEqualTo(240 + 24), lessThan(320 + 24)),
+        region.height,
+        allOf(greaterThanOrEqualTo(28 + 24), lessThan(200 + 24)),
         reason: 'the setup of the test: room for the strip, not the window',
       );
     }
@@ -253,11 +252,6 @@ void main() {
       final Rect at = tester.getRect(strip);
       expect(at.size, const Size(240, 28), reason: 'HSize.terminalStrip');
       expect(
-        at.overlaps(tester.getRect(find.byType(SettingsSheet))),
-        isFalse,
-        reason: 'never over the sheet',
-      );
-      expect(
         find.text('default · Agent'),
         findsOneWidget,
         reason: 'the profile of the sandbox and the active tab',
@@ -270,8 +264,9 @@ void main() {
       await leaveNoCornerFree(tester);
       expect(strip, findsOneWidget);
 
-      // Das Blatt geht, die Ecke ist frei: der Streifen wird wieder Fenster.
-      await pressCtrl(tester, LogicalKeyboardKey.comma);
+      // Das Fenster wächst, die Ecke ist frei: der Streifen wird wieder
+      // Fenster.
+      await tester.binding.setSurfaceSize(const Size(900, 700));
       await settle(tester);
       await settle(tester);
       expect(strip, findsNothing);

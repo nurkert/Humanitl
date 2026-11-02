@@ -12,10 +12,11 @@
 //  - `action_bar_edited` fehlt: „Editierte Version senden" steht nicht in der
 //    Aktionsleiste, sondern im Editor (HUM-047), und `editor_replaced_glow`
 //    zeigt es.
-//  - `settings_group_with_expert`, `settings_search_results` und
-//    `settings_env_overridden` gehören zum Formular aus dem Schema, das die
-//    zweite Umfangsentscheidung vom 2026-09-18 hinter das MVP verschoben hat.
-//    An ihrer Stelle stehen die drei Zustände des handgebauten Formulars.
+//  - `settings_group_with_expert` und `settings_env_overridden` gehören zum
+//    Formular aus dem Schema, das die zweite Umfangsentscheidung vom
+//    2026-09-18 hinter das MVP verschoben hat. An ihrer Stelle stehen die
+//    Zustände des handgebauten Overlays; `settings_search_results` gibt es
+//    seit HUM-404 wieder, als Suche über das Register.
 //
 // Die Namen mit `states_` gehören zu HUM-058 und stehen in derselben Form;
 // welche Zustände dort fehlen, weil HUM-054 sie schon festhält, sagt
@@ -67,6 +68,9 @@ const List<String> goldenNames = <String>[
   'settings_form',
   'settings_probe_result',
   'settings_refusal',
+  'settings_category',
+  'settings_search_results',
+  'settings_search_empty',
   // setup_golden_test.dart
   'setup_checklist',
   'setup_firstrun',

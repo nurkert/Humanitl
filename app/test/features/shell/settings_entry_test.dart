@@ -18,7 +18,7 @@ import 'package:humanitl/l10n/l10n.dart';
 import '../../harness/app_harness.dart';
 
 const Key gear = Key('header-settings-button');
-const Key sheet = Key('settings-sheet');
+const Key sheet = Key('settings-overlay');
 
 /// Deutsch, unabhängig von Konfiguration und Rechner.
 class German extends LanguageSetting {

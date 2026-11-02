@@ -54,9 +54,8 @@ void main() {
     builder: () => shell(HThemeMode.light),
   );
 
-  // Das offene Einstellungsblatt neben der Queue (HUM-286): Die Kopfzeile des
-  // Blatts endet auf derselben Linie wie die der Queue, und das Blatt hängt
-  // zwischen Kopf- und Statusleiste.
+  // Die offenen Einstellungen über der Shell (HUM-404): von unten, drei
+  // Viertel hoch, die Anwendung dahinter abgedunkelt.
   for (final HThemeMode mode in <HThemeMode>[
     HThemeMode.dark,
     HThemeMode.light,
@@ -71,7 +70,7 @@ void main() {
   }
 }
 
-/// Öffnet das Blatt mit `Ctrl+,`, wie es ein Mensch täte.
+/// Öffnet die Einstellungen mit `Ctrl+,`, wie es ein Mensch täte.
 Future<void> _openSettings(WidgetTester tester) async {
   await tester.pumpAndSettle();
   await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);

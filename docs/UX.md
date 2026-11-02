@@ -309,11 +309,11 @@ One grid for the whole shell (HUM-286). Each surface used to invent its own geom
 
 **Highlights and bars are flush.** The active rail item fills its whole row edge to edge, fill and accent mark from the line above to the next item, without a margin. The action bar of the inspector is a footer of its pane: full width from seam to seam, down to the status bar, separated from the card by one border, with no inner card and no inset. The seams between panes are one hairline, never a strip of background beside a line (3.2).
 
-**Sheets hang between the bars.** A side sheet starts under the window header and ends at the status bar, like a pane; its header is the same `HPaneHeader`, so the divider continues across the window when the sheet is open. A screen mounts its sheet at its own top, never inside a region below its header (the narrow rule editor of Rules is mounted by the screen, not by the list).
+**Sheets hang between the bars.** A side sheet starts under the window header and ends at the status bar, like a pane; its header is the same `HPaneHeader`, so the divider continues across the window when the sheet is open. The settings are no side sheet since HUM-404: they are an overlay over the whole window and stand outside this grid (4.12). A screen mounts its sheet at its own top, never inside a region below its header (the narrow rule editor of Rules is mounted by the screen, not by the list).
 
 **Views without a header.** Setup and Audit open with content, not with a pane header (a document and a status card). They start with the panel padding under the window header. When one of them gets a header, it is an `HPaneHeader`.
 
-**Checked by** `app/test/features/shell/layout_grid_test.dart`: in Intercept (with and without the settings sheet), History, Rules and Sandbox, at text scale 1 and 2, every visible pane header starts under the window header and ends on the same line, and the active rail item fills its row; the settings sheet, the narrow rule editor sheet and the sandbox command sheet start under the window header and their header line continues the one beside them. Between two panes, Tab goes pane, splitter, pane (`app/test/core/ui/design_system_test.dart`).
+**Checked by** `app/test/features/shell/layout_grid_test.dart`: in Intercept (with and without the settings overlay), History, Rules and Sandbox, at text scale 1 and 2, every visible pane header starts under the window header and ends on the same line, and the active rail item fills its row; the narrow rule editor sheet and the sandbox command sheet start under the window header and their header line continues the one beside them; the settings overlay rises from the bottom edge over three quarters of the window, 16 px from each side. Between two panes, Tab goes pane, splitter, pane (`app/test/core/ui/design_system_test.dart`).
 
 ---
 
@@ -501,6 +501,26 @@ The owner asked on 2026-11-01 for a way to stop intercepting for a while without
 
 **What the agent reads.** No text in the sandbox names the pause or a person (HUM-364, HUM-401). That requests stop waiting is observable all the same, by their timing.
 
+### 4.12 Settings
+
+The settings are one overlay that comes up from below over three quarters of the window, the application dimmed behind it (HUM-404). It opens from the gear in the header and with `Ctrl+,`, and a diagnostic's `ChangeSetting` fix opens it at its setting. The look is in `docs/DESIGN.md`, "Settings overlay".
+
+**Order before quantity.** The settings stand in categories in a column on the left (Models, Agent, Sandbox, Requests, Interface, Network, Daemon), so no page becomes a list without end as settings are added. One register (`app/lib/features/settings/registry/settings_registry.dart`) names for every setting its category, its key, its name, its help, its longer explanation, its search words in both languages and the widget that draws it; the column, the search and the jump of a fix all read it.
+
+**One row, one setting.** Name and a short help on the left, the control on the right, every control of a page on one edge. Longer explanations stand behind the info button and open in place; nothing above the rows explains the page. "Applies from the next session" stands only under the rows a running session does not pick up: the endpoint, the model, the access key, the agent, the project folder and where the agent writes. Language, appearance, scale, notifications, the hold timeout and where a request is asked apply at once.
+
+**The daemon itself.** The category Daemon shows the version, the restart, the update check and `config.toml`. The restart is the control of the status bar (HUM-284, HUM-367) with the label "Restart daemon": the same question during a session, the same daemon that decides by itself whether it may go. The shell hands it in; the settings carry no restart of their own. A scale step the window cannot carry stands as a line under Scale ("Now 114 %: the window is too small for more"), not behind the info button: it is a state, not an explanation.
+
+**Writing is immediate and says so.** A switch or a choice writes at once through `SetConfig`; "Saved" stands beside the name for two seconds. A refusal of the daemon stands under the row in its own words (4.4). Endpoint, model and key keep their form with "Check" and "Store key"; their own forms per server are HUM-405. Nothing in the overlay decides what a value means (ADR-018).
+
+**Search.** The field at the top searches names, helps, explanations, search words, category names and configuration keys in the language of the interface; case, umlauts and `ß` do not matter, and every word must occur. Hits replace the page, grouped by category in the order of the column; choosing one opens its category, scrolls to the row, puts the keyboard on its control and lights the row for a moment. A fix that opens the overlay before the daemon answered `GetConfig` or `GetInfo` keeps its target and lands as soon as the row stands; a setting the daemon then turns out not to offer drops it. No hits: one sentence and "Clear search". A setting the daemon does not offer (where the agent writes, on macOS) is neither drawn nor found.
+
+**Keys.** On opening the cursor is in the search field; typing anywhere in the overlay outside a text field starts a search with that character, and `Ctrl+F` puts the cursor back into the field. `Tab` goes search, categories, page, close button: the column is one stop, at the chosen category, and `Up`, `Down`, `Home` and `End` move between the categories and choose as they go. `Enter` in the search opens the first hit. `Esc` empties the search first and closes the overlay after that, and while it slides out typing starts no search; a click on the dimmed application and the close button close it too. `Ctrl+,` over the command palette or the question before pausing intercept opens nothing: the settings would lie beneath and take the keyboard. The overlay holds the keyboard while it is open; on closing, the keyboard goes back to the gear when the gear opened it, and otherwise to whoever held it before, the terminal included (5.2).
+
+**Narrow and large.** The overlay works in a window of 960 x 600 and at every step of the scale. Below 760 px of panel width the column of categories narrows from 200 to 160 px and stays a column: seven names fit, and a menu in its place would hide where one is. A row whose control does not fit beside its text puts the control under it.
+
+**Checked by** `app/test/features/settings/settings_overlay_test.dart` (register against the rows of the old sheet, search in German and English, every setting found and reached, grouping and the empty state, the keys, the gear, "Saved", info and the next-session note, no overflow at 960 x 600 and at every step of the scale) and the goldens `settings_*` in `app/test/goldens/settings_golden_test.dart`.
+
 ## 5. Keyboard and mouse
 
 ### 5.1 Parity
@@ -620,8 +640,9 @@ covers what must stay clickable either. The strip, or its button, opens the
 window in the next free corner, or with none free puts the terminal back
 into its pane and shows the Sandbox page. Only without room even for the
 strip (a modal over the work) it steps back. It hangs over the sections only,
-never over the rail, the header or the status bar, and the settings sheet
-and the command palette lie above it. **The keyboard stays where it is.**
+never over the rail, the header or the status bar, and the settings overlay
+and the command palette lie above it; under the overlay it stays where it is,
+dimmed, and takes no click. **The keyboard stays where it is.**
 Opening the window from the queue leaves the keyboard in the queue, and
 `Enter` still allows; the terminal in the window takes the keyboard under
 the rule above -- hover, ``Ctrl+` ``, a click -- and then every shortcut of

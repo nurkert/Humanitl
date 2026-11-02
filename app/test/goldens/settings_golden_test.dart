@@ -1,12 +1,12 @@
-// Goldens des Einstellungsformulars (HUM-069 mit HUM-140, HUM-054): das
-// Formular mit gespeichertem Schlüssel, das Ergebnis von „Prüfen" mit den
-// gefundenen Modellen und ein Wert, den der Daemon zurückweist. Je in den
-// vier Varianten aus `support/golden_variants.dart`.
+// Goldens des Einstellungs-Overlays (HUM-069 mit HUM-140, HUM-054, als
+// Overlay mit Kategorien und Suche seit HUM-404): die Kategorie Modelle mit
+// gespeichertem Schlüssel, das Ergebnis von „Prüfen", ein Wert, den der
+// Daemon zurückweist, die Kategorie Ansicht, Treffer der Suche und eine Suche
+// ohne Treffer. Je in den vier Varianten aus `support/golden_variants.dart`.
 //
-// Die drei Namen der Spezifikation (`settings_group_with_expert`,
-// `settings_search_results`, `settings_env_overridden`) gehören zum Formular
-// aus dem Schema, das die zweite Umfangsentscheidung vom 2026-09-18 hinter das
-// MVP verschoben hat; siehe `support/golden_names.dart`.
+// `settings_group_with_expert` und `settings_env_overridden` gehören zum
+// Formular aus dem Schema, das die zweite Umfangsentscheidung vom 2026-09-18
+// hinter das MVP verschoben hat; siehe `support/golden_names.dart`.
 //
 // Erneuern mit `make goldens-update`.
 
@@ -17,7 +17,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
-import 'package:humanitl/features/settings/settings_sheet.dart';
+import 'package:humanitl/features/settings/registry/setting_entry.dart';
+import 'package:humanitl/features/settings/settings_overlay.dart';
 
 import 'support/golden_variants.dart';
 
@@ -51,18 +52,16 @@ FakeDaemonClient configured() => FakeDaemonClient.empty()
     endpointIsPrivate: true,
   );
 
-/// Das Blatt über [client], rechts im Bild wie in der Shell.
+/// Das Overlay über [client], über dem ganzen Bild wie in der Shell.
 Widget sheet(GoldenVariant variant, FakeDaemonClient client) => goldenFrame(
   variant: variant,
   background: variant.tokens.colors.bg0,
   overrides: <Override>[daemonClientProvider.overrideWithValue(client)],
-  child: Align(
-    alignment: Alignment.centerRight,
-    child: SettingsSheet(onClose: () {}),
-  ),
+  child: SettingsOverlay(onClose: () {}),
 );
 
-/// Lässt Konfiguration und Schlüsselstatus ankommen.
+/// Lässt Konfiguration und Schlüsselstatus ankommen und das Overlay
+/// einfahren.
 Future<void> settleSheet(WidgetTester tester) async {
   await tester.pump();
   await tester.pump();
@@ -76,19 +75,47 @@ Future<void> probe(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-/// Dasselbe, danach eine Frist von null Sekunden, die der Daemon abweist.
+/// Die Kategorie [category].
+Future<void> Function(WidgetTester) category(SettingsCategory category) =>
+    (WidgetTester tester) async {
+      await settleSheet(tester);
+      await tester.tap(
+        find.byKey(ValueKey<String>('settings-nav-${category.name}')),
+      );
+      await tester.pumpAndSettle();
+    };
+
+/// Die Kategorie Anfragen, danach eine Frist von null Sekunden, die der
+/// Daemon abweist.
 Future<void> refuseTimeout(WidgetTester tester) async {
-  await settleSheet(tester);
+  await category(SettingsCategory.requests)(tester);
   await tester.enterText(find.byKey(const Key('settings-timeout')), '0');
   await tester.testTextInput.receiveAction(TextInputAction.done);
   await tester.pumpAndSettle();
 }
 
+/// [text] im Suchfeld.
+Future<void> Function(WidgetTester) search(String text) =>
+    (WidgetTester tester) async {
+      await settleSheet(tester);
+      await tester.enterText(
+        find.descendant(
+          of: find.byKey(const Key('settings-search')),
+          matching: find.byType(EditableText),
+        ),
+        text,
+      );
+      await tester.pumpAndSettle();
+    };
+
 void main() {
+  // Ein Fenster der Shell: Das Overlay bedeckt drei Viertel davon.
   const BoxConstraints window = BoxConstraints.tightFor(
-    width: 560,
-    height: 1100,
+    width: 1100,
+    height: 900,
   );
+  // Das kleinste Fenster der Aufgabe, für die Seiten mit wenig Inhalt.
+  const BoxConstraints small = BoxConstraints.tightFor(width: 960, height: 600);
 
   goldenVariants(
     'settings_form',
@@ -106,8 +133,30 @@ void main() {
 
   goldenVariants(
     'settings_refusal',
-    constraints: window,
+    constraints: small,
     pumpBeforeTest: refuseTimeout,
+    builder: (GoldenVariant variant) => sheet(variant, configured()),
+  );
+
+  goldenVariants(
+    'settings_category',
+    constraints: small,
+    pumpBeforeTest: category(SettingsCategory.interface),
+    builder: (GoldenVariant variant) => sheet(variant, configured()),
+  );
+
+  // „e" trifft in beiden Sprachen Zeilen mehrerer Kategorien.
+  goldenVariants(
+    'settings_search_results',
+    constraints: small,
+    pumpBeforeTest: search('e'),
+    builder: (GoldenVariant variant) => sheet(variant, configured()),
+  );
+
+  goldenVariants(
+    'settings_search_empty',
+    constraints: small,
+    pumpBeforeTest: search('zzqx'),
     builder: (GoldenVariant variant) => sheet(variant, configured()),
   );
 }

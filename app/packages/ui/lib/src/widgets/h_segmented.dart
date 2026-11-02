@@ -98,6 +98,7 @@ class HChoiceChips<T> extends StatelessWidget {
     required this.selected,
     required this.onToggle,
     this.enabled = true,
+    this.alignment = WrapAlignment.start,
     super.key,
   });
 
@@ -113,12 +114,18 @@ class HChoiceChips<T> extends StatelessWidget {
   /// Falsch für etwas, das niemand ändern darf.
   final bool enabled;
 
+  /// Wohin die Chips einer Zeile rücken, wenn sie umbrechen: an den Anfang,
+  /// oder ans Ende, wo ein Control an der rechten Kante einer Zeile steht
+  /// (die Einstellungen, HUM-404).
+  final WrapAlignment alignment;
+
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     return HTheme.host(
       context,
       Wrap(
+        alignment: alignment,
         spacing: tokens.spacing.x1,
         runSpacing: tokens.spacing.x1,
         children: <Widget>[

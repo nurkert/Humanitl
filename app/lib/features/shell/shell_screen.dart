@@ -33,7 +33,7 @@ import '../sandbox/providers/sandbox_status_provider.dart';
 import '../sandbox/sandbox_screen.dart';
 import '../sandbox/widgets/sandbox_terminal.dart';
 import '../sandbox/widgets/terminal_pane.dart' show terminalHoldsKeyboard;
-import '../settings/settings_sheet.dart';
+import '../settings/settings_overlay.dart';
 import '../setup/providers/setup_provider.dart';
 import 'agent_session_feed.dart';
 import 'providers/connection.dart';
@@ -45,6 +45,7 @@ import 'providers/setup_state.dart';
 import 'providers/theme.dart';
 import 'section.dart';
 import 'widgets/command_palette.dart';
+import 'widgets/daemon_restart_control.dart';
 import 'widgets/floating_terminal.dart';
 import 'widgets/frozen_banner.dart';
 import 'widgets/frozen_sections.dart';
@@ -71,13 +72,25 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   final FocusNode _focus = FocusNode(debugLabel: 'shell');
   bool _paletteOpen = false;
 
-  /// Whether the settings sheet is open (HUM-069). A sheet and not a section:
-  /// the rail stays the five places of the work plus setup, and the settings
-  /// lie over whichever of them is showing (`BACKLOG.md` 5, "Sheet").
+  /// Whether the settings overlay is open (HUM-069, HUM-404). A layer and
+  /// not a section: the rail stays the five places of the work plus setup,
+  /// and the settings lie over whichever of them is showing.
   bool _settingsOpen = false;
 
   /// Whether the question before a pause of intercepting is open (HUM-407).
   bool _pauseAsk = false;
+
+  /// Whether the open overlay is sliding out; it stays built until it is
+  /// gone ([_settingsClosed]).
+  bool _settingsClosing = false;
+
+  /// Whether the gear opened the overlay; then the keyboard goes back to
+  /// the gear when it closes (HUM-404). Opened by `Ctrl+,` or a fix, it goes
+  /// back to whoever held it, the terminal included (HUM-303).
+  bool _settingsFromGear = false;
+
+  /// The node of the gear in the header.
+  final FocusNode _gear = FocusNode(debugLabel: 'header-settings-button');
 
   /// The key whose field the open sheet scrolls to and focuses, and how often
   /// that was asked for (HUM-275).
@@ -181,6 +194,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   void dispose() {
     _agentFeed.dispose();
     _focus.dispose();
+    _gear.dispose();
     _terminalScope.dispose();
     super.dispose();
   }
@@ -248,11 +262,13 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
     _keysBackAfterLayer();
   }
 
-  void _openSettings() {
+  void _openSettings({bool fromGear = false}) {
     HLayerScope.claimKeyboard();
     ref.read(terminalPlacementProvider.notifier).leaveFullWindow();
     setState(() {
       _settingsOpen = true;
+      _settingsClosing = false;
+      _settingsFromGear = fromGear;
       _settingsFocusKey = null;
     });
   }
@@ -267,19 +283,42 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
     ref.read(terminalPlacementProvider.notifier).leaveFullWindow();
     setState(() {
       _settingsOpen = true;
+      _settingsClosing = false;
+      _settingsFromGear = false;
       _settingsFocusKey = key;
       _settingsFocusSerial++;
     });
   }
 
+  /// Lets the overlay slide out; it is taken away in [_settingsClosed].
   void _closeSettings() {
+    if (!_settingsOpen || _settingsClosing) {
+      return;
+    }
+    setState(() => _settingsClosing = true);
+  }
+
+  void _settingsClosed() {
+    final bool toGear = _settingsFromGear;
     setState(() {
       _settingsOpen = false;
+      _settingsClosing = false;
+      _settingsFromGear = false;
       _settingsFocusKey = null;
     });
-    // The sheet gives the keyboard back to whoever opened it; the shell
-    // steps in only when that holder is gone.
+    // The overlay gives the keyboard back to whoever opened it; the shell
+    // steps in only when that holder is gone. Opened by the gear, the gear
+    // takes it, after the hand-back of the layer.
     _keysBackAfterLayer();
+    if (toGear) {
+      WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+        scheduleMicrotask(() {
+          if (mounted && _gear.context != null) {
+            _gear.requestFocus();
+          }
+        });
+      });
+    }
   }
 
   /// Die Befehle der Palette, für eine Verbindung, die [live] ist oder nicht.
@@ -887,7 +926,15 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
           ),
           SettingsIntent: CallbackAction<SettingsIntent>(
             onInvoke: (SettingsIntent intent) {
-              _settingsOpen ? _closeSettings() : _openSettings();
+              // Über der Frage vor dem Pausieren und über der Palette öffnet
+              // `Ctrl+,` nichts: Die Einstellungen lägen darunter, nähmen die
+              // Tastatur, und `Esc` träfe, was niemand sieht (HUM-404).
+              if (_pauseAsk || _paletteOpen) {
+                return null;
+              }
+              _settingsOpen && !_settingsClosing
+                  ? _closeSettings()
+                  : _openSettings();
               return null;
             },
           ),
@@ -910,8 +957,9 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                       HeaderBar(
                         section: section,
                         onPalette: _togglePalette,
-                        onSettings: _openSettings,
+                        onSettings: () => _openSettings(fromGear: true),
                         onAskPause: _askPause,
+                        settingsFocus: _gear,
                       ),
                       // Solange das Abfangen pausiert ist, läuft das
                       // Absperrband über die ganze Breite, in jeder Sektion
@@ -983,19 +1031,6 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                                     ),
                                   ],
                                 ),
-                                // Das Blatt hängt zwischen Kopfleiste und
-                                // Statusleiste, wie jeder Pane: seine Kopfzeile
-                                // steht in derselben Reihe wie die der Queue, und
-                                // die Linie darunter läuft durch (HUM-286).
-                                if (_settingsOpen)
-                                  Align(
-                                    alignment: Alignment.centerRight,
-                                    child: SettingsSheet(
-                                      onClose: _closeSettings,
-                                      focusKey: _settingsFocusKey,
-                                      focusSerial: _settingsFocusSerial,
-                                    ),
-                                  ),
                               ],
                             ),
                           ),
@@ -1011,6 +1046,25 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                     ],
                   ),
                 ),
+                // Die Einstellungen liegen über dem ganzen Fenster, auch über
+                // dem schwebenden Terminal, das darunter abgedunkelt stehen
+                // bleibt, statt ihnen auszuweichen (HUM-404). Nur die Palette
+                // liegt noch darüber.
+                if (_settingsOpen)
+                  SettingsOverlay(
+                    onClose: _closeSettings,
+                    onClosed: _settingsClosed,
+                    closing: _settingsClosing,
+                    focusKey: _settingsFocusKey,
+                    focusSerial: _settingsFocusSerial,
+                    // Derselbe Neustart wie in der Statusleiste (HUM-284),
+                    // als Zeile der Kategorie Daemon (HUM-404).
+                    daemonRestart: DaemonRestartControl(
+                      daemonMinor: widget.info.protoMinor,
+                      size: HButtonSize.sm,
+                      label: context.l10n.settingsRestartButton,
+                    ),
+                  ),
                 if (_pauseAsk) InterceptPauseDialog(onClose: _closePauseAsk),
                 if (_paletteOpen)
                   CommandPalette(
