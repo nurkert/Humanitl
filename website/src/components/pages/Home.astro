@@ -42,6 +42,9 @@ const modules = t.stage.modules.map((module) => ({ ...module, image: images[modu
 const n = modules.length;
 // Abstand eines Fensters zur Mitte im Ring, -3 bis 3: Intercept steht vorn.
 const ringOffset = (i: number) => ((i + Math.floor(n / 2)) % n) - Math.floor(n / 2);
+// Platz im Stapel der Startseite: vorn steht das Fenster mit dem Ablauf, dahinter Modul 1, 2 …
+// (HUM-413). Wer ohne Skript vorn landete, steht links und bleibt verborgen.
+const stackOffset = (i: number) => (ringOffset(i) + 1 === 0 ? -1 : ringOffset(i) + 1);
 const formats = ['avif'] as const;
 // Nebel (HUM-341): weich genug für kleine Bilder, die Tiefe von hinten nach vorn.
 // Far und near gibt es je Thema; lazy, damit nur die Fassung lädt, die im Layout liegt (HUM-338).
@@ -150,6 +153,7 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
         }
         .cap__head {
           opacity: 1 !important;
+          transform: none !important;
         }
         .cap__layer + .cap__layer,
         .deck__controls {
@@ -258,6 +262,10 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
               {t.hero.source}
             </a>
           </div>
+          <a class="hero__hint" href="#module-cap" data-scroll-hint>
+            {t.hero.scroll}
+            <Icon name="chevronDown" />
+          </a>
         </div>
 
         <div class="world" data-world>
@@ -269,6 +277,51 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
               <div class="ring__pool" data-pool></div>
             </div>
             <ul class="wins" aria-roledescription="carousel" aria-label={t.stage.title}>
+              {/* Das Fenster mit dem aufgenommenen Ablauf (HUM-413): nur im Stapel der
+                  Startseite, vorn. Es gehört zu keinem Modul und verlässt die Bühne im Morph
+                  nach links; das Karussell zeigt danach alle sieben Module als Aufnahme. */}
+              <li class="win win--lead" data-lead style="--d: 0" role="presentation" aria-hidden="true">
+                <span class="win__shadow" />
+                <span class="win__back" />
+                {edges.map((k) => (
+                  <i class={k % 2 ? 'win__edge win__edge--odd' : 'win__edge'} style={`--k: ${k}`} />
+                ))}
+                <span class="win__edgeLit" />
+                <div class="win__frame">
+                  <span class="win__glint" />
+                  <span class="win__sweep" />
+                  <Picture
+                    class="win__shot"
+                    src={intercept}
+                    alt=""
+                    formats={formats}
+                    fallbackFormat="webp"
+                    widths={[800, 1280, 1920, 2560]}
+                    sizes="(max-width: 52rem) 92vw, min(64vw, 72rem)"
+                    loading="eager"
+                    fetchpriority="high"
+                    decoding="async"
+                    draggable="false"
+                  />
+                  <video
+                    class="win__video"
+                    data-video
+                    muted
+                    playsinline
+                    preload="metadata"
+                    poster={workflowPoster.src}
+                    disablepictureinpicture
+                    disableremoteplayback
+                    tabindex="-1"
+                  >
+                    <source src="/media/workflow.mp4" type='video/mp4; codecs="avc1.640028"' />
+                    <source src="/media/workflow.webm" type='video/webm; codecs="vp9"' />
+                  </video>
+                  <span class="win__glaze" />
+                  <span class="win__rim" />
+                  <span class="win__shade" />
+                </div>
+              </li>
               {
                 modules.map((module, i) => (
                   <li
@@ -277,7 +330,7 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
                     data-title={module.title}
                     data-name={module.name}
                     data-text={module.text}
-                    style={`--d: ${ringOffset(i)}`}
+                    style={`--d: ${stackOffset(i)}`}
                     role="group"
                     aria-roledescription="slide"
                     aria-label={`${i + 1} ${t.stage.of} ${n}: ${module.name}`}
@@ -301,27 +354,10 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
                         widths={[800, 1280, 1920, 2560]}
                         sizes="(max-width: 52rem) 92vw, min(64vw, 72rem)"
                         loading={Math.abs(ringOffset(i)) <= 2 ? 'eager' : 'lazy'}
-                        fetchpriority={i === 0 ? 'high' : 'auto'}
+                        fetchpriority="auto"
                         decoding="async"
                         draggable="false"
                       />
-                      {module.id === 'intercept' && (
-                        <video
-                          class="win__video"
-                          data-video
-                          muted
-                          playsinline
-                          preload="metadata"
-                          poster={workflowPoster.src}
-                          disablepictureinpicture
-                          disableremoteplayback
-                          aria-hidden="true"
-                          tabindex="-1"
-                        >
-                          <source src="/media/workflow.mp4" type='video/mp4; codecs="avc1.640028"' />
-                          <source src="/media/workflow.webm" type='video/webm; codecs="vp9"' />
-                        </video>
-                      )}
                       <span class="win__glaze" aria-hidden="true" />
                       <span class="win__rim" aria-hidden="true" />
                       <span class="win__dof" data-dof aria-hidden="true">
@@ -341,7 +377,7 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
         <div class="stage-hit" data-hit aria-hidden="true"></div>
 
         <div class="deck" data-deck>
-          <div class="cap" data-cap>
+          <div class="cap" id="module-cap" data-cap>
             <div class="cap__head" data-cap-head>
               <h2 class="deck__title">{t.stage.title}</h2>
               <div class="cap__index" aria-hidden="true">
@@ -380,9 +416,6 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
             <button class="deck__arrow" type="button" data-prev aria-label={t.stage.previous}>
               <Icon name="chevronLeft" />
             </button>
-            <button class="deck__arrow" type="button" data-next aria-label={t.stage.next}>
-              <Icon name="chevronRight" />
-            </button>
             <div class="deck__track" aria-hidden="true">
               {modules.map(() => (
                 <span class="deck__seg">
@@ -390,6 +423,9 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
                 </span>
               ))}
             </div>
+            <button class="deck__arrow" type="button" data-next aria-label={t.stage.next}>
+              <Icon name="chevronRight" />
+            </button>
           </div>
         </div>
       </div>
@@ -699,6 +735,53 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     width: 1.1rem;
     height: 1.1rem;
   }
+  /* Der Hinweis unter den Knöpfen (HUM-413): ein leiser Knopf, der zum Karussell scrollt. */
+  .hero__hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    /* Fingerfläche mindestens 44 px hoch, auch wenn der Knopf klein aussieht. */
+    min-height: 2.75rem;
+    margin-top: clamp(-0.4rem, -0.6vh, 0rem);
+    padding: 0 0.85rem 0 1rem;
+    border: 1px solid rgb(var(--ink) / 0.14);
+    border-radius: 999px;
+    background: rgb(var(--ink) / 0.03);
+    color: var(--fg-2);
+    font: 500 0.72rem/1 var(--mono);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    text-decoration: none;
+    animation: rise-cta 0.7s var(--ease-out) 1.6s both;
+    transition:
+      color 0.3s var(--ease-out),
+      border-color 0.3s var(--ease-out),
+      background 0.3s var(--ease-out);
+  }
+  .hero__hint:hover {
+    color: var(--fg);
+    border-color: rgb(var(--ink) / 0.3);
+    background: rgb(var(--ink) / 0.06);
+  }
+  .hero__hint:focus-visible {
+    outline: 2px solid var(--strong);
+    outline-offset: 3px;
+  }
+  .hero__hint :global(svg) {
+    width: 1rem;
+    height: 1rem;
+    animation: hint-bob 2.6s ease-in-out 2.4s infinite;
+  }
+  @keyframes hint-bob {
+    0%,
+    60%,
+    100% {
+      transform: translate3d(0, 0, 0);
+    }
+    30% {
+      transform: translate3d(0, 3px, 0);
+    }
+  }
   @keyframes rise {
     from {
       opacity: 0;
@@ -715,7 +798,24 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   .scene[data-cls='E'] .hero {
     top: 12vh;
   }
-  /* Breitbild: Text links, der Fächer rechts daneben. */
+  /* Breitbild bis 16:10: Text links, der Stapel rechts daneben (HUM-413). Die Front des
+     Stapels darf so die rechte Hälfte füllen. */
+  .scene:is([data-cls='B'], [data-cls='C']) .hero {
+    top: 0;
+    bottom: 0;
+    left: 6vw;
+    right: auto;
+    width: 34vw;
+    align-content: center;
+    justify-items: start;
+    text-align: left;
+  }
+  .scene:is([data-cls='B'], [data-cls='C']) .hero__title {
+    font-size: clamp(2.4rem, min(5.8vh, 3.7vw), 5.4rem);
+  }
+  .scene:is([data-cls='B'], [data-cls='C']) .hero__actions {
+    justify-content: flex-start;
+  }
   .scene[data-cls='A'] .hero {
     top: 0;
     bottom: 0;
@@ -777,6 +877,33 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   .scene[data-cls='F'] .hero__actions {
     margin-top: auto;
   }
+  .scene:is([data-cls='F'], [data-cls='G']) .hero__hint {
+    padding: 0 0.75rem 0 0.85rem;
+    font-size: 0.66rem;
+  }
+  /* Kurze Telefone: der Hinweis bleibt, Text und Abstände rücken zusammen, damit der Stapel
+     zwischen Lede und Knöpfen groß bleibt. */
+  @media (max-height: 700px) {
+    .scene[data-cls='F'] .hero {
+      top: 11.5vh;
+      bottom: 1.5vh;
+    }
+    .scene[data-cls='F'] .hero__lede {
+      font-size: 0.9rem;
+      line-height: 1.45;
+    }
+    .scene[data-cls='F'] .hero__hint {
+      margin-top: 0.1rem;
+    }
+  }
+  @media (max-height: 420px) {
+    .scene[data-cls='G'] .hero {
+      gap: 0.55rem;
+    }
+    .scene[data-cls='G'] .hero__hint {
+      margin-top: -0.2rem;
+    }
+  }
 
   /* ---- Welt, Rig und Ring --------------------------------------------- */
   .world {
@@ -810,8 +937,8 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     pointer-events: none;
     /* Die äußersten Bogenstücke sieht man fast von der Kante: dort laufen sie als Strich
        quer durch das Bild und unter die Beschriftung. Sie laufen weich aus. */
-    -webkit-mask-image: linear-gradient(90deg, transparent 4%, #000 26%, #000 74%, transparent 96%);
-    mask-image: linear-gradient(90deg, transparent 4%, #000 26%, #000 74%, transparent 96%);
+    -webkit-mask-image: linear-gradient(90deg, transparent 4%, #000 26%, #000 calc(var(--ring-end, 96%) - 22%), transparent var(--ring-end, 96%));
+    mask-image: linear-gradient(90deg, transparent 4%, #000 26%, #000 calc(var(--ring-end, 96%) - 22%), transparent var(--ring-end, 96%));
   }
   .ring__floor,
   .ring__metal,
@@ -1277,12 +1404,40 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     display: flex;
     flex-direction: column;
     gap: var(--cap-gap, clamp(0.6rem, 1.5vh, 1.1rem));
+    /* Die Beschriftung erscheint als Ganzes, sobald der Morph die Bühne fast erreicht hat
+       (data-cap-in, HUM-413); verborgen wird sie erst, wenn ihr Ausgang gelaufen ist. */
     visibility: hidden;
+    transition: visibility 0s linear 0.34s;
+  }
+  .scene[data-cap-in] .cap {
+    visibility: visible;
+    transition-delay: 0s;
+  }
+  /* Der Ring beginnt zurückzudrehen: die Beschriftung ist sofort weg, ohne Ausgang. */
+  .scene[data-cap-cut] .cap,
+  .scene[data-cap-cut] .cap__head {
+    visibility: hidden;
+    transition: none;
   }
   .cap__head {
     display: grid;
     gap: 0.4rem;
     opacity: 0;
+    transform: translate3d(0, 10px, 0);
+    transition:
+      opacity 0.3s var(--ease-out),
+      transform 0.5s var(--ease-out);
+  }
+  .scene[data-cap-in] .cap__head {
+    opacity: 1;
+    transform: none;
+    transition-duration: 0.5s, 0.7s;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cap,
+    .cap__head {
+      transition: none;
+    }
   }
   /* In diesen Bildausschnitten steht das Zählwerk über dunklem Glas; Hell-Schrift hielte dort nicht. */
   .scene:is([data-cls='A'], [data-cls='B'], [data-cls='C'], [data-cls='G']) .cap__head {
@@ -1396,25 +1551,31 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   .cap :global(.wi) {
     display: inline-block;
   }
-  /* Steuerung unter den Fenstern, links bündig (HUM-389): beide Pfeile zusammen, daneben je
-     Modul ein Abschnitt. Auf breiten Schirmen setzt das Skript die Lage unter die linke
-     Unterkante des vorderen Fensters (--ctl-x, --ctl-y, --ctl-w); sonst steht sie am Boden
-     der Beschriftung. */
+  /* Steuerung (HUM-413): eine ruhige Leiste, mittig unter dem Fenster im Fokus; die Pfeile
+     rahmen die Abschnitte, je Modul einer. Auf breiten Schirmen setzt das Skript Mitte,
+     Oberkante und Breite aus der Front (--ctl-x, --ctl-y, --ctl-w); im Hochformat steht sie
+     mittig am Boden, in Reichweite des Daumens, über dem sicheren Rand des Geräts. */
   .deck__controls {
     position: absolute;
-    left: var(--ctl-x, 5vw);
+    left: var(--ctl-x, 50%);
     top: var(--ctl-y, auto);
-    width: min(26rem, var(--ctl-w, 40vw));
+    width: min(24rem, var(--ctl-w, 80vw));
+    translate: -50% 0;
     display: flex;
     align-items: center;
-    gap: 0.6rem;
+    gap: 0.35rem;
+    padding: 0.3rem;
+    border: 1px solid rgb(var(--ink) / 0.12);
+    border-radius: 999px;
+    background: var(--dark, rgb(255 255 255 / 0.035)) var(--light, rgb(255 255 255 / 0.72));
+    box-shadow: 0 10px 30px -18px rgb(var(--shadow) / var(--dark, 0.9) var(--light, 0.35));
     opacity: 0;
   }
   .deck__track {
     display: flex;
     flex: 1 1 auto;
     gap: 5px;
-    margin-left: 0.6rem;
+    margin: 0 0.55rem;
   }
   .deck__seg {
     position: relative;
@@ -1445,9 +1606,9 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     place-items: center;
     width: 2.75rem;
     height: 2.75rem;
-    border: 1px solid rgb(var(--ink) / 0.32);
+    border: 1px solid transparent;
     border-radius: 50%;
-    background: rgb(var(--ink) / 0.07);
+    background: rgb(var(--ink) / 0.06);
     color: var(--fg);
     cursor: pointer;
     transition:
@@ -1461,8 +1622,12 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   }
   .deck__arrow:hover {
     color: var(--strong);
-    border-color: rgb(var(--ink) / 0.6);
-    background: rgb(var(--ink) / 0.14);
+    border-color: rgb(var(--ink) / 0.24);
+    background: rgb(var(--ink) / 0.12);
+  }
+  .deck__arrow:focus-visible {
+    outline: 2px solid var(--strong);
+    outline-offset: 2px;
   }
   .deck__arrow:active {
     transform: scale(0.94);
@@ -1505,14 +1670,16 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     align-self: start;
     padding: 0;
   }
+  /* Die Beschriftung bleibt kompakt: je weniger sie in die Höhe baut, desto größer darf das
+     Fenster im Fokus werden, ohne dass ein Nachbar sie berührt (HUM-413). */
   .scene[data-cls='B'] {
     --cap-r: 4vw;
-    --cap-b: 6.5vh;
-    --cap-w: 30vw;
-    --idx: min(8rem, 9.5vh);
-    --head: clamp(2rem, 1rem + 2.6vw, min(4.2rem, 5.6vh));
-    --cap-gap: clamp(0.5rem, 1.2vh, 1rem);
-    --text: clamp(0.98rem, 0.6rem + 0.55vw, 1.2rem);
+    --cap-b: 6vh;
+    --cap-w: 29vw;
+    --idx: min(6.5rem, 8vh);
+    --head: clamp(1.9rem, 0.9rem + 2.2vw, min(3.8rem, 5vh));
+    --cap-gap: clamp(0.5rem, 1.1vh, 0.9rem);
+    --text: clamp(0.95rem, 0.6rem + 0.45vw, 1.12rem);
   }
   /* Niedrige Fenster (bis 800 px): die Beschriftung wird kompakter, damit die Bühne groß
      bleiben kann. */
@@ -1528,12 +1695,12 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   }
   .scene[data-cls='C'] {
     --cap-r: 4vw;
-    --cap-b: 6vh;
-    --cap-w: 31vw;
-    --idx: min(7rem, 9.5vh);
-    --head: clamp(2rem, 1rem + 2.4vw, min(3.4rem, 5.4vh));
-    --cap-gap: clamp(0.5rem, 1.2vh, 1rem);
-    --text: 1.02rem;
+    --cap-b: 5.5vh;
+    --cap-w: 30vw;
+    --idx: min(6rem, 8vh);
+    --head: clamp(1.9rem, 0.9rem + 2.1vw, min(3.2rem, 5vh));
+    --cap-gap: clamp(0.5rem, 1.1vh, 0.9rem);
+    --text: 0.98rem;
   }
   .scene[data-cls='D'] {
     --cap-r: 4vw;
@@ -1564,8 +1731,8 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     --text-w: 46ch;
   }
   .scene[data-cls='E'] .cap {
-    top: 60vh;
-    bottom: 3.5vh;
+    top: var(--cap-t, 60vh);
+    bottom: auto;
     left: 7vw;
     right: 7vw;
     width: auto;
@@ -1575,15 +1742,10 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     top: -0.2rem;
     right: 0;
   }
-  .scene[data-cls='E'] .cap {
-    padding-bottom: 3.6rem;
-  }
-  .scene[data-cls='E'] .deck__controls {
-    left: 7vw;
-    right: 7vw;
+  .scene:is([data-cls='E'], [data-cls='F']) .deck__controls {
     top: auto;
-    bottom: 3.5vh;
-    width: auto;
+    bottom: max(3svh, calc(env(safe-area-inset-bottom, 0px) + 12px));
+    width: min(24rem, calc(100vw - 2 * max(5vw, env(safe-area-inset-left, 0px) + 12px)));
   }
   .scene[data-cls='F'] {
     --idx: 1.1rem;
@@ -1594,31 +1756,27 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   }
   /* Die Pfeile stehen fest am Boden der Beschriftung, darüber liegt der freigehaltene Text.
      Die Steuerung liegt in .deck, nicht in .cap; ihre Kanten folgen denen der Beschriftung. */
+  /* Telefon hoch: die Beschriftung beginnt unter der Front (--cap-t aus der Rechnung), die
+     Steuerung steht darunter am Boden. */
   .scene[data-cls='F'] .cap {
     top: var(--cap-t, 52svh);
-    bottom: 4svh;
-    left: 6vw;
-    right: 6vw;
-    width: auto;
-    padding-bottom: 3.25rem;
-  }
-  .scene[data-cls='F'] .deck__controls {
-    left: 6vw;
-    right: 6vw;
-    top: auto;
-    bottom: 4svh;
+    bottom: auto;
+    left: max(6vw, calc(env(safe-area-inset-left, 0px) + 14px));
+    right: max(6vw, calc(env(safe-area-inset-right, 0px) + 14px));
     width: auto;
   }
   /* Der Kopf hat im Hochformat keine eigene Zeile; seine Kinder liegen absolut. */
   .scene[data-cls='F'] .cap__head {
     margin-bottom: calc(-1 * var(--cap-gap));
   }
+  /* Der Titel der Bühne stünde im Hochformat über der Front; Screenreader lesen ihn weiter. */
   .scene[data-cls='F'] .deck__title {
     position: absolute;
-    top: calc(96px - var(--cap-t, 52svh));
-    left: 0;
-    right: 0;
-    text-align: center;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   /* Telefon: das Zählwerk steht klein rechts in der Zeile der Augenbraue, die Überschrift
      bleibt frei. */
@@ -1651,26 +1809,6 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
       --cap-gap: 0.4rem;
     }
   }
-  /* Sehr kurze Telefone: Die Beschriftung hält die Höhe ihres längsten Textes (rund 17,5 rem
-     samt Pfeilen und Boden), die Bühne richtet sich in stage.ts danach. */
-  @media (max-height: 619px) {
-    .scene[data-cls='F'] {
-      --cap-t: min(52svh, 100svh - 17.5rem);
-    }
-    .scene[data-cls='F'] .cap {
-      bottom: 0.75rem;
-    }
-    .scene[data-cls='F'] .deck__controls {
-      bottom: 0.75rem;
-    }
-  }
-  /* Kurz oder kurz und breit: Das Fenster reicht bis an die Navigation und läge unter dem
-     Titel; Screenreader lesen ihn weiter. */
-  @media (max-height: 679px), (max-height: 739px) and (min-width: 400px) {
-    .scene[data-cls='F'] .deck__title {
-      opacity: 0;
-    }
-  }
   .scene[data-cls='G'] {
     --idx: 3rem;
     --head: 1.5rem;
@@ -1693,14 +1831,14 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     line-height: 1.4;
   }
   .scene[data-cls='G'] .cap {
-    padding-bottom: 2.9rem;
+    padding-bottom: 3.2rem;
   }
+  /* Telefon quer: die Leiste steht am Boden der Beschriftung, rechts in Reichweite des Daumens. */
   .scene[data-cls='G'] .deck__controls {
-    left: 57vw;
-    right: 4vw;
+    left: calc(57vw + (39vw - max(0px, env(safe-area-inset-right, 0px) - 4vw)) / 2);
     top: auto;
-    bottom: 5vh;
-    width: auto;
+    bottom: max(4vh, calc(env(safe-area-inset-bottom, 0px) + 8px));
+    width: min(20rem, 39vw);
   }
   .scene[data-cls='G'] .deck__arrow {
     width: 2.25rem;
@@ -1710,7 +1848,9 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   @media (prefers-reduced-motion: reduce) {
     .hero__title span,
     .hero__lede,
-    .hero__actions > * {
+    .hero__actions > *,
+    .hero__hint,
+    .hero__hint :global(svg) {
       animation: none;
     }
   }
