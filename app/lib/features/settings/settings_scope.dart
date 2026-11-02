@@ -81,6 +81,18 @@ class SettingsController extends ChangeNotifier {
   /// The row a jump has just landed on, while it is lit.
   String? get highlighted => _highlighted;
 
+  /// The setting a jump wants to land on while its row does not stand yet
+  /// (HUM-405). A page that draws the row only after a step of its own, such
+  /// as the Models category, which opens the detail of a server for the
+  /// endpoint, reads it, takes that step and calls [reveal] itself. Set by
+  /// the overlay without a notification: the page is built anew with it.
+  String? get wanted => _wanted;
+  String? _wanted;
+
+  /// Notes [key] as the target of a jump; null when none waits.
+  // ignore: use_setters_to_change_properties
+  void want(String? key) => _wanted = key;
+
   /// The node around the control of [key]; it takes no focus itself, a jump
   /// hands the focus to the first control inside it (HUM-275).
   FocusNode anchor(String key) => _anchors.putIfAbsent(
@@ -106,6 +118,7 @@ class SettingsController extends ChangeNotifier {
     // Ohne Dauer: Der Sprung ist die Antwort auf einen Klick, keine
     // Bewegung, die etwas erklärt (`docs/UX.md` 2.1).
     unawaited(Scrollable.ensureVisible(row, alignment: 0.1));
+    _wanted = null;
     _anchors[key]?.traversalDescendants.firstOrNull?.requestFocus();
     _highlighted = key;
     _highlightTimer?.cancel();

@@ -30,6 +30,7 @@
 //! - [`llm_endpoint`] die eine Lesart von `llm.endpoint`: Basis, Präfix, Pfade
 //! - [`pasted`] was eine Zwischenablage an einem eingefügten Wert hinterlässt
 //! - [`servers`] gespeicherte Modellserver und der aktive davon
+//! - [`assign`] wer welchen Server nutzt: Profil, Projekt, Bestätigung
 //!
 //! ```
 //! use humanitl_config::{Env, Sources, load};
@@ -49,6 +50,7 @@
 #![deny(missing_docs)]
 
 pub mod alias;
+pub mod assign;
 pub mod edit;
 pub mod env;
 pub mod llm_endpoint;

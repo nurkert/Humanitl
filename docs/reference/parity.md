@@ -32,8 +32,8 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 | `Humanitl.GetSessionSummary` | `humanitl sessions summary` | fehlt |
 | `Humanitl.Intercept` | `humanitl intercept pause`<br>`humanitl intercept resume`<br>`humanitl intercept status` | `features/shell/widgets/intercept_pill` |
 | `Humanitl.ListFlows` | `humanitl flows list` | `features/history/history_screen` |
-| `Humanitl.LlmKey` | `humanitl llm key remove`<br>`humanitl llm key set`<br>`humanitl llm key status` | `features/settings/widgets/model_section` |
-| `Humanitl.LlmServers` | `humanitl llm server add`<br>`humanitl llm server ls`<br>`humanitl llm server rename`<br>`humanitl llm server rm`<br>`humanitl llm server use` | `features/settings/widgets/server_switcher` |
+| `Humanitl.LlmKey` | `humanitl llm key remove`<br>`humanitl llm key set`<br>`humanitl llm key status` | `features/settings/widgets/servers/server_detail` |
+| `Humanitl.LlmServers` | `humanitl llm server add`<br>`humanitl llm server assign`<br>`humanitl llm server confirm`<br>`humanitl llm server edit`<br>`humanitl llm server ls`<br>`humanitl llm server rename`<br>`humanitl llm server rm`<br>`humanitl llm server unassign`<br>`humanitl llm server use` | `features/settings/categories/models_category` |
 | `Humanitl.ProbeLlm` | `humanitl llm test` | `features/setup/widgets/llm_check` |
 | `Humanitl.Rules` | `humanitl rules add`<br>`humanitl rules disable`<br>`humanitl rules dry-run`<br>`humanitl rules enable`<br>`humanitl rules list`<br>`humanitl rules reload`<br>`humanitl rules remove`<br>`humanitl rules reorder`<br>`humanitl rules test`<br>`humanitl rules update` | `features/rules/rules_screen` |
 | `Humanitl.Sandbox` | `humanitl run`<br>`humanitl run --direct`<br>`humanitl run --disposable`<br>`humanitl sandbox apply`<br>`humanitl sandbox changes`<br>`humanitl sandbox discard`<br>`humanitl sandbox plan` | `features/sandbox/sandbox_screen` |

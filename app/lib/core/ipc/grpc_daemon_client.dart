@@ -569,6 +569,48 @@ class GrpcDaemonClient implements DaemonClient {
       ..activate = (pb.LlmServersRequest_Activate()..name = name),
   );
 
+  @override
+  Future<SavedServers> editLlmServer(
+    String name, {
+    String? endpoint,
+    List<String>? models,
+  }) {
+    final pb.LlmServersRequest_Edit edit = pb.LlmServersRequest_Edit()
+      ..name = name;
+    if (endpoint != null) {
+      edit.endpoint = endpoint;
+    }
+    if (models != null) {
+      edit.models = pb.LlmServersRequest_Edit_Models()..names.addAll(models);
+    }
+    return _llmServers(pb.LlmServersRequest()..edit = edit);
+  }
+
+  @override
+  Future<SavedServers> assignLlmServer({
+    required String server,
+    String? profile,
+    String? projectDir,
+  }) {
+    final pb.LlmServersRequest_Assign assign = pb.LlmServersRequest_Assign()
+      ..server = server;
+    if (profile != null) {
+      assign.profile = profile;
+    } else if (projectDir != null) {
+      assign.projectDir = projectDir;
+    }
+    return _llmServers(pb.LlmServersRequest()..assign = assign);
+  }
+
+  @override
+  Future<SavedServers> confirmProjectServer(String projectDir, String server) =>
+      _llmServers(
+        pb.LlmServersRequest()
+          ..confirmProject = (pb.LlmServersRequest_ConfirmProject()
+            ..projectDir = projectDir
+            ..server = server),
+      );
+
   Future<SavedServers> _llmServers(pb.LlmServersRequest request) async {
     final pb.LlmServerList list = await _unary(
       (CallOptions options) => _stub.llmServers(request, options: options),

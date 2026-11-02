@@ -38,10 +38,21 @@ struct Fixture {
     settings: Arc<SessionSettings>,
     work: String,
     config_home: std::path::PathBuf,
+    paths: Paths,
 }
 
 impl Fixture {
     fn new() -> Self {
+        Self::build(false)
+    }
+
+    /// Ein Dienst, der wie der Daemon bei jeder Frage von der Platte liest
+    /// (HUM-277); für Momentaufnahmen und Pläne vor einem Start.
+    fn live() -> Self {
+        Self::build(true)
+    }
+
+    fn build(live: bool) -> Self {
         let dir = tempfile::tempdir().expect("a temporary directory");
         let home = dir.path().join("home");
         let work = home.join("project");
@@ -62,11 +73,23 @@ impl Fixture {
             ),
         ]);
         let paths = Paths::new(env);
+        let kept = paths.clone();
         let session = SessionId::new();
 
         // Der Grundstand: die Vorgaben, so wie der Daemon ohne eigene
         // `config.toml` startet.
-        let resolver = SessionResolver::for_config(paths, Config::default());
+        let resolver = if live {
+            let base = humanitl_config::resolve(
+                &humanitl_config::ProfileSelection::default(),
+                None,
+                paths.env(),
+                &[],
+            )
+            .expect("the defaults resolve");
+            SessionResolver::new(paths, base)
+        } else {
+            SessionResolver::for_config(paths, Config::default())
+        };
         let rules = Arc::new(RulesStore::in_memory(session));
         let settings = Arc::new(SessionSettings::new(SessionState::for_config(
             AskMode::Ui,
@@ -88,7 +111,15 @@ impl Fixture {
             settings,
             work: work.display().to_string(),
             config_home,
+            paths: kept,
         }
+    }
+
+    /// Bestätigt die Wahl des Servers `server` für den Projektordner, wie
+    /// die Rückfrage der App beim Start es tut (HUM-405).
+    fn confirm(&self, server: &str) {
+        humanitl_config::assign::confirm(&self.paths, std::path::Path::new(&self.work), server)
+            .expect("the confirmation is stored");
     }
 
     /// Schreibt die `config.toml` des Nutzers.
@@ -118,6 +149,37 @@ impl Fixture {
                     stored.rule.matcher.port.unwrap_or_default()
                 )
             })
+    }
+
+    /// Der Plan eines Starts in diesem Projekt mit diesem Profil der Sitzung,
+    /// wie `humanitl sandbox plan` ihn zeigt.
+    async fn plan(&self, profile: &str) -> v1::sandbox_event::Status {
+        let mut stream = self.service.stream(v1::SandboxRequest {
+            op: Some(v1::sandbox_request::Op::Plan(v1::sandbox_request::Plan {
+                work_dir: self.work.clone(),
+                session_profile: profile.to_owned(),
+                ..v1::sandbox_request::Plan::default()
+            })),
+        });
+        let mut last = None;
+        while let Some(event) = stream.next().await {
+            if let Some(v1::sandbox_event::Event::Status(status)) = event.event {
+                last = Some(status);
+            }
+        }
+        last.expect("a plan answers with a status")
+    }
+
+    /// Ein Auftrag an `LlmServers`, wie die App ihn schickt.
+    fn servers(&self, op: v1::llm_servers_request::Op) -> v1::LlmServerList {
+        let keys = humanitl_config::secret::KeyStore::for_paths(&self.paths).with_secret_tool(None);
+        humanitl_ipc::llm_servers::answer(
+            &self.paths,
+            &keys,
+            &humanitl_ipc::llm_servers::OPEN,
+            &v1::LlmServersRequest { op: Some(op) },
+        )
+        .expect("the servers answer")
     }
 
     /// Ein Start mit diesem Wunsch.
@@ -548,6 +610,8 @@ async fn the_project_server_is_the_passthrough_of_the_session() {
     let fixture = Fixture::new();
     fixture.user_config(TWO_SERVERS);
     fixture.project_profile("[config.llm]\nserver = \"work\"\n");
+    // Seit HUM-405 erst nach der Bestätigung für diesen Ordner.
+    fixture.confirm("work");
 
     let seen = fixture.run(v1::sandbox_request::Start::default()).await;
 
@@ -570,6 +634,74 @@ async fn the_project_server_is_the_passthrough_of_the_session() {
         "{choice:?}"
     );
     assert!(choice.refusal.is_none());
+    assert!(choice.unconfirmed.is_none(), "{choice:?}");
+}
+
+/// Ein Projekt, das einen anderen Server als den Standard wählt, startet
+/// nicht, solange diese Wahl für seinen Ordner nicht bestätigt ist; keine
+/// Durchreiche entsteht, und die Momentaufnahme sagt es vor dem Start
+/// (HUM-405).
+///
+/// Mutationsbeweis: Ohne die Prüfung in `SessionResolver::resolve` startet
+/// die Sitzung mit der Durchreiche zu `work.lan`, und der Test fällt.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unconfirmed_project_server_does_not_start() {
+    let fixture = Fixture::new();
+    fixture.user_config(TWO_SERVERS);
+    fixture.project_profile("[config.llm]\nserver = \"work\"\n");
+
+    let before = Fixture::live();
+    before.user_config(TWO_SERVERS);
+    before.project_profile("[config.llm]\nserver = \"work\"\n");
+    let planned = before.plan("").await;
+    let shown = planned.llm_server.expect("the plan names the server");
+    assert_eq!(
+        shown
+            .unconfirmed
+            .as_ref()
+            .map(|finding| finding.code.as_str()),
+        Some("CONFIG_022"),
+        "{shown:?}"
+    );
+    assert!(!shown.project_dir.is_empty(), "{shown:?}");
+
+    let seen = fixture.run(v1::sandbox_request::Start::default()).await;
+
+    assert!(
+        codes(&seen).contains(&"CONFIG_022".to_owned()),
+        "the start waits for the confirmation: {seen:?}"
+    );
+    assert!(
+        !fixture.has_passthrough(),
+        "no passthrough before the confirmation: {:#?}",
+        fixture.rules.list()
+    );
+    assert_eq!(fixture.settings.get().llm, None);
+
+    // Bestätigt für einen anderen Server, gilt nichts für diesen.
+    fixture.confirm("home");
+    let again = fixture.run(v1::sandbox_request::Start::default()).await;
+    assert!(
+        codes(&again).contains(&"CONFIG_022".to_owned()),
+        "{again:?}"
+    );
+}
+
+/// Wählt das Projekt den Standard, fragt niemand: Der Verkehr geht dorthin,
+/// wohin er ohne das Projekt auch ginge (HUM-405).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_choosing_the_default_needs_no_confirmation() {
+    let fixture = Fixture::new();
+    fixture.user_config(TWO_SERVERS);
+    fixture.project_profile("[config.llm]\nserver = \"home\"\n");
+
+    let seen = fixture.run(v1::sandbox_request::Start::default()).await;
+
+    assert!(!codes(&seen).contains(&"CONFIG_022".to_owned()), "{seen:?}");
+    assert_eq!(
+        fixture.passthrough_target().as_deref(),
+        Some("home.lan:11434")
+    );
 }
 
 /// Die Gegenprobe: ohne Projekt-Profil der aktive Server, als Vorgabe.
@@ -649,4 +781,174 @@ async fn an_unknown_server_refuses_the_start_without_a_fallback() {
         .expect("the finding");
     assert!(refused.contains("gone"), "{refused}");
     assert!(refused.contains("project profile"), "{refused}");
+}
+
+/// Eine Zuordnung, wie die App sie über `LlmServers(Assign)` setzt, steht
+/// danach im Plan, den `humanitl sandbox plan` zeigt; für ein Projekt gilt
+/// sie zugleich als bestätigt, und ohne Zuordnung gilt wieder der Standard
+/// (HUM-405).
+#[tokio::test(flavor = "multi_thread")]
+async fn assignments_stand_in_the_plan() {
+    use v1::llm_servers_request::{Assign, Op, assign::Target};
+
+    let fixture = Fixture::live();
+    fixture.user_config(&format!(
+        "{TWO_SERVERS}
+[sandbox]
+work_dir = {:?}
+",
+        fixture.work
+    ));
+
+    let listed = fixture.servers(Op::Assign(Assign {
+        server: "work".to_owned(),
+        target: Some(Target::ProjectDir(fixture.work.clone())),
+    }));
+    assert!(
+        listed
+            .profiles
+            .iter()
+            .all(|profile| profile.name != "default")
+    );
+    let project = listed.project.expect("the configured project is listed");
+    assert_eq!(project.server, "work");
+    assert!(
+        project.confirmed,
+        "an assignment through the daemon confirms"
+    );
+    let planned = fixture.plan("").await;
+    let choice = planned.llm_server.expect("the plan names the server");
+    assert_eq!(choice.name, "work");
+    assert_eq!(choice.source, v1::llm_server_choice::Source::Project as i32);
+    assert!(choice.unconfirmed.is_none(), "{choice:?}");
+
+    fixture.servers(Op::Assign(Assign {
+        server: String::new(),
+        target: Some(Target::ProjectDir(fixture.work.clone())),
+    }));
+    let listed = fixture.servers(Op::Assign(Assign {
+        server: "work".to_owned(),
+        target: Some(Target::Profile("llm-only".to_owned())),
+    }));
+    let row = listed
+        .profiles
+        .iter()
+        .find(|profile| profile.name == "llm-only")
+        .expect("the profile is listed");
+    assert_eq!(row.server, "work");
+    let planned = fixture.plan("llm-only").await;
+    let choice = planned.llm_server.expect("the plan names the server");
+    assert_eq!(choice.name, "work");
+    assert_eq!(choice.source, v1::llm_server_choice::Source::Profile as i32);
+    assert_eq!(choice.detail, "llm-only");
+
+    let planned = fixture.plan("").await;
+    let choice = planned.llm_server.expect("the plan names the server");
+    assert_eq!(choice.name, "home");
+    assert_eq!(choice.source, v1::llm_server_choice::Source::Default as i32);
+}
+
+/// Der Mensch ordnet einem mitgelieferten Profil einen Server zu; ein
+/// Projekt, das dieses Profil mit `name` wählt, bringt den Server damit
+/// nicht unbestätigt in seine Sitzung (HUM-405, Review).
+///
+/// Mutationsbeweis: Ohne `project_owns_profile_choice` im Laden steht die
+/// Wahl als die des Profils da, `unconfirmed` fragt nicht, und die Sitzung
+/// bekommt die Durchreiche zu `work.lan`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bundled_profile_the_project_names_needs_the_confirmation_too() {
+    use v1::llm_servers_request::{Assign, Op, assign::Target};
+
+    let fixture = Fixture::new();
+    fixture.user_config(TWO_SERVERS);
+    fixture.servers(Op::Assign(Assign {
+        server: "work".to_owned(),
+        target: Some(Target::Profile("llm-only".to_owned())),
+    }));
+    fixture.project_profile("name = \"llm-only\"\n");
+
+    let seen = fixture.run(v1::sandbox_request::Start::default()).await;
+    assert!(
+        codes(&seen).contains(&"CONFIG_022".to_owned()),
+        "the profile the project chose brings its server only after the confirmation: {seen:?}"
+    );
+    assert!(!fixture.has_passthrough(), "{:#?}", fixture.rules.list());
+
+    // „Wer nutzt welchen Server" zeigt dieselbe Wahl, über das Profil und
+    // unbestätigt; die eigene Zeile des Projekts bleibt leer.
+    fixture.user_config(&format!(
+        "{TWO_SERVERS}\n[sandbox]\nwork_dir = {:?}\n",
+        fixture.work
+    ));
+    let listed = fixture.servers(Op::List(v1::llm_servers_request::List {}));
+    let project = listed.project.expect("the configured project is listed");
+    assert_eq!(project.server, "", "{project:?}");
+    assert_eq!(project.effective_server, "work", "{project:?}");
+    assert_eq!(project.via_profile, "llm-only", "{project:?}");
+    assert!(!project.confirmed, "{project:?}");
+    fixture.confirm("work");
+    let listed = fixture.servers(Op::List(v1::llm_servers_request::List {}));
+    assert!(listed.project.expect("listed").confirmed);
+
+    // Wer das Profil selbst wählt, bekommt den Server ohne Rückfrage, solange
+    // das Projekt es nicht ebenfalls nennt.
+    let own = Fixture::new();
+    own.user_config(TWO_SERVERS);
+    own.servers(Op::Assign(Assign {
+        server: "work".to_owned(),
+        target: Some(Target::Profile("llm-only".to_owned())),
+    }));
+    let seen = own
+        .run(v1::sandbox_request::Start {
+            session_profile: "llm-only".to_owned(),
+            ..v1::sandbox_request::Start::default()
+        })
+        .await;
+    assert!(!codes(&seen).contains(&"CONFIG_022".to_owned()), "{seen:?}");
+    assert_eq!(own.passthrough_target().as_deref(), Some("work.lan:8080"));
+}
+
+/// Eine Bestätigung gilt dem Server, den der Mensch unter dem Namen sah:
+/// Umbenennen, Entfernen und eine neue Herkunft nehmen sie weg (HUM-405,
+/// Review).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_confirmation_does_not_pass_to_another_server_of_the_same_name() {
+    use v1::llm_servers_request::{Edit, Op, Remove, Rename};
+
+    let fixture = Fixture::new();
+    fixture.user_config(TWO_SERVERS);
+    fixture.project_profile("[config.llm]\nserver = \"work\"\n");
+    let project = std::path::Path::new(&fixture.work);
+    let confirmed = || humanitl_config::assign::is_confirmed(&fixture.paths, project, "work");
+
+    fixture.confirm("work");
+    fixture.servers(Op::Edit(Edit {
+        name: "work".to_owned(),
+        endpoint: Some("http://work.lan:8080/v2".to_owned()),
+        models: None,
+    }));
+    assert!(confirmed(), "the same origin keeps the confirmation");
+    fixture.servers(Op::Edit(Edit {
+        name: "work".to_owned(),
+        endpoint: Some("http://elsewhere.lan:8080/v1".to_owned()),
+        models: None,
+    }));
+    assert!(!confirmed(), "a new origin drops it");
+
+    fixture.confirm("work");
+    fixture.servers(Op::Rename(Rename {
+        name: "home".to_owned(),
+        new_name: "spare".to_owned(),
+    }));
+    assert!(confirmed(), "renaming another server leaves it");
+    fixture.servers(Op::Remove(Remove {
+        name: "work".to_owned(),
+        delete_key: false,
+        replacement: String::new(),
+    }));
+    fixture.servers(Op::Rename(Rename {
+        name: "spare".to_owned(),
+        new_name: "work".to_owned(),
+    }));
+    assert!(!confirmed(), "a server renamed to work inherits nothing");
 }

@@ -58,7 +58,7 @@ use crate::alias;
 use crate::env::Env;
 use crate::model::Config;
 use crate::origin::{Origin, Resolved};
-use crate::profile::{ConfigOverlay, Profile, ProfileSource, builtin_text};
+use crate::profile::{ConfigOverlay, DEFAULT_PROFILE, Profile, ProfileSource, builtin_text};
 use crate::schema::{self, Field};
 use crate::scope::ProjectScope;
 
@@ -261,6 +261,14 @@ pub fn load(sources: &Sources) -> Result<Resolved, Diagnostic> {
     // Welcher gespeicherte Server gilt und woher die Wahl kommt (HUM-400):
     // kein Schlüssel der Datei, sondern das Ergebnis des Projizierens.
     config.llm.choice = projection.choice;
+    // Wählt das Projekt-Profil mit `name` ein mitgeliefertes Profil, und
+    // trägt dieses (oder die eigene Kopie, die es verdeckt) die Wahl des
+    // Servers, ist die Wahl die des Projekts: Sonst brächte ein Repository
+    // einen Server, den der Mensch einem Profil zugeordnet hat, ohne die
+    // Bestätigung für diesen Ordner (HUM-405, Review). Das gilt auch, wenn
+    // der Mensch dasselbe Profil zugleich selbst nennt; dann fragt der Start
+    // einmal mehr, nie einmal weniger.
+    project_owns_profile_choice(&mut config.llm.choice, &profiles);
 
     Ok(Resolved {
         config,
@@ -707,6 +715,34 @@ fn ignored_project_choice(project: &Profile, layers: &[ProfileSource]) -> Option
             )))
             .build(),
     )
+}
+
+/// Macht die Wahl eines Servers, die aus einem Profil kommt, das das
+/// Projekt-Profil mit `name` gewählt hat, zur Wahl des Projekts (HUM-405).
+fn project_owns_profile_choice(
+    choice: &mut Option<crate::servers::ServerChoice>,
+    profiles: &[Profile],
+) {
+    use crate::servers::ServerSource;
+
+    let Some(choice) = choice.as_mut() else {
+        return;
+    };
+    let ServerSource::Profile(name) = &choice.source else {
+        return;
+    };
+    if name == DEFAULT_PROFILE {
+        return;
+    }
+    let Some((path, wish)) = profiles.iter().find_map(|profile| match &profile.source {
+        ProfileSource::Project(path) => Some((path.clone(), profile.declared_name.clone())),
+        _ => None,
+    }) else {
+        return;
+    };
+    if wish.as_deref() == Some(name.as_str()) {
+        choice.source = ServerSource::Project(path);
+    }
 }
 
 /// Der Befund für ein Projekt-Profil, das einem anderen Konto gehört.

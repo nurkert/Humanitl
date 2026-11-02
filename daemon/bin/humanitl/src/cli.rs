@@ -331,6 +331,72 @@ pub enum ServerCmd {
         #[arg(long = "keep-key")]
         keep_key: bool,
     },
+
+    /// Change the address or the models of a saved server without making it
+    /// the default. Its key stays and goes only to its own address.
+    Edit {
+        /// The saved server.
+        #[arg(value_name = "NAME")]
+        name: String,
+
+        /// The new address, as it would stand in `llm.endpoint`.
+        #[arg(long, value_name = "URL")]
+        url: Option<String>,
+
+        /// The models, repeatable; the first is the default. Replaces the
+        /// list; without it the models stay.
+        #[arg(long, value_name = "MODEL", conflicts_with = "no_models")]
+        model: Vec<String>,
+
+        /// Remove every model of the server.
+        #[arg(long = "no-models")]
+        no_models: bool,
+    },
+
+    /// Let a session profile or a project use a saved server. A project's
+    /// choice made here counts as confirmed for that folder.
+    Assign {
+        /// The saved server.
+        #[arg(value_name = "NAME")]
+        name: String,
+
+        /// What uses it: a session profile or a project folder.
+        #[command(flatten)]
+        target: AssignTarget,
+    },
+
+    /// Remove the server a session profile or a project uses; it then uses
+    /// the default.
+    Unassign {
+        /// What uses a server now.
+        #[command(flatten)]
+        target: AssignTarget,
+    },
+
+    /// Confirm the saved server the project in a folder chooses, so that a
+    /// session there starts with it.
+    Confirm {
+        /// The saved server the project chooses.
+        #[arg(value_name = "NAME")]
+        name: String,
+
+        /// The project folder; the current directory without it.
+        #[arg(long, value_name = "DIR")]
+        project: Option<std::path::PathBuf>,
+    },
+}
+
+/// Wem `llm server assign` und `unassign` einen Server zuordnen (HUM-405).
+#[derive(Debug, clap::Args)]
+#[group(required = true, multiple = false)]
+pub struct AssignTarget {
+    /// A session profile (`profiles/<name>.toml`).
+    #[arg(long, value_name = "PROFILE")]
+    pub profile: Option<String>,
+
+    /// A project folder; the current directory when given without a value.
+    #[arg(long, value_name = "DIR", num_args = 0..=1, default_missing_value = ".")]
+    pub project: Option<std::path::PathBuf>,
 }
 
 /// Die Unterkommandos von `humanitl llm key` (HUM-140).

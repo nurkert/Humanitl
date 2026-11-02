@@ -511,6 +511,129 @@ pub fn activate(table: &toml::Table, name: &str) -> Result<Vec<Edit>, Diagnostic
     Ok(state.edits(table))
 }
 
+/// Was [`edit`] tut, neben den Änderungen an der Datei.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Edited {
+    /// Die Änderungen für [`crate::edit::edit_with`].
+    pub edits: Vec<Edit>,
+    /// Wahr, wenn der Endpunkt eine andere Herkunft (Schema, Host, Port)
+    /// bekommt; dann gehört der Verweis auf den Schlüssel nicht mehr dazu.
+    pub origin_changed: bool,
+    /// Der Verweis, der dabei abgelöst wurde, wenn kein anderer Eintrag ihn
+    /// trägt; nur dann darf der Schlüssel dahinter gelöscht werden.
+    pub orphaned_key: Option<KeyRef>,
+}
+
+/// Ob zwei Endpunkte dieselbe Herkunft haben: Schema, Host und Port, mit
+/// den Vorgabeports von `http` und `https`. Ein Text, der keine Adresse ist,
+/// hat mit nichts dieselbe Herkunft.
+#[must_use]
+pub fn same_origin(left: &str, right: &str) -> bool {
+    match (url::Url::parse(left), url::Url::parse(right)) {
+        (Ok(left), Ok(right)) => {
+            let origin = left.origin();
+            origin.is_tuple() && origin == right.origin()
+        }
+        _ => false,
+    }
+}
+
+/// Ändert Endpunkt und Modelle eines Eintrags, ohne ihn aktiv zu machen
+/// (HUM-405).
+///
+/// `None` lässt den Wert, wie er ist; leere Modelle nehmen `models` heraus.
+/// Bleibt die Herkunft des Endpunkts dieselbe, bleibt der Verweis auf den
+/// Schlüssel. Bekommt der Endpunkt eine andere Herkunft, fällt der Verweis
+/// weg: Der Schlüssel wurde für die alte Adresse hinterlegt und geht nie
+/// ungefragt an eine neue, auch nicht an die eines anderen gespeicherten
+/// Servers; er muss für die neue Adresse neu eingetragen werden. Ist der
+/// Eintrag aktiv, folgt seine Ansicht unter `llm` in demselben Zug, wie beim
+/// Aktivieren.
+///
+/// # Errors
+///
+/// `CONFIG_021` für einen unbekannten Namen und einen leeren Endpunkt;
+/// `CONFIG_003` für einen Endpunkt, den [`crate::llm_endpoint::check_text`]
+/// ablehnt oder der keine Adresse mit `http` oder `https` ist.
+pub fn edit(
+    table: &toml::Table,
+    name: &str,
+    endpoint: Option<&str>,
+    models: Option<&[String]>,
+) -> Result<Edited, Diagnostic> {
+    let mut state = State::read(table);
+    if !state.servers.contains_key(name) {
+        return Err(unknown(name, &state));
+    }
+    if let Some(endpoint) = endpoint {
+        check_endpoint(name, endpoint)?;
+    }
+    let is_active = state.active.as_deref() == Some(name);
+    let Some(entry) = state.servers.get_mut(name) else {
+        return Err(unknown(name, &state));
+    };
+    let old_endpoint = entry
+        .get("endpoint")
+        .and_then(TomlValue::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let origin_changed = endpoint.is_some_and(|new| !same_origin(&old_endpoint, new));
+    let detached = if origin_changed {
+        entry
+            .remove("api_key_ref")
+            .as_ref()
+            .and_then(TomlValue::as_str)
+            .and_then(KeyRef::parse)
+    } else {
+        None
+    };
+    if let Some(endpoint) = endpoint {
+        put(
+            entry,
+            "endpoint",
+            Some(TomlValue::String(endpoint.to_owned())),
+        );
+    }
+    if let Some(models) = models {
+        let models: Vec<TomlValue> = models
+            .iter()
+            .map(|model| model.trim())
+            .filter(|model| !model.is_empty())
+            .map(|model| TomlValue::String(model.to_owned()))
+            .collect();
+        put(
+            entry,
+            "models",
+            (!models.is_empty()).then_some(TomlValue::Array(models)),
+        );
+    }
+    if is_active {
+        state.activate(name);
+    }
+    let orphaned_key = detached.filter(|key_ref| !state.uses_key(key_ref));
+    Ok(Edited {
+        edits: state.edits(table),
+        origin_changed,
+        orphaned_key,
+    })
+}
+
+/// Prüft, dass unter `name` ein Server gespeichert ist (HUM-405).
+///
+/// # Errors
+///
+/// `CONFIG_021` für einen Namen, der keiner ist, oder unter dem nichts
+/// gespeichert ist; der Befund nennt die gespeicherten.
+pub fn require_saved(table: &toml::Table, name: &str) -> Result<(), Diagnostic> {
+    check_name(name)?;
+    let state = State::read(table);
+    if state.servers.contains_key(name) {
+        Ok(())
+    } else {
+        Err(unknown(name, &state))
+    }
+}
+
 /// Der Name, unter dem der Schlüssel eines Eintrags im Speicher liegt.
 ///
 /// Trägt der Eintrag schon einen Verweis, bleibt dessen Name: Ein neues
@@ -1520,6 +1643,120 @@ api_key_ref = "secret-service:humanitl/llm"
             get(&new, "llm.servers.default.api_key_ref").and_then(TomlValue::as_str),
             Some("secret-service:humanitl/llm")
         );
+    }
+
+    /// Ein Server, der nicht der Standard ist, ändert Endpunkt und Modelle,
+    /// ohne dass sich der Standard oder die flache Ansicht bewegt; beim
+    /// aktiven folgt die Ansicht, und der Verweis auf den Schlüssel bleibt
+    /// bei beiden (HUM-405).
+    #[test]
+    fn an_edit_changes_one_server_and_never_the_default() {
+        let old = table(FLAT);
+        let new = apply(
+            &old,
+            &add(&old, "cloud", "https://api.example.com/v1", &[], false).unwrap(),
+        );
+        let edited = apply(
+            &new,
+            &edit(
+                &new,
+                "cloud",
+                Some("https://api.example.org/v2"),
+                Some(&["big".to_owned(), " ".to_owned(), "small".to_owned()]),
+            )
+            .unwrap()
+            .edits,
+        );
+        assert_eq!(
+            get(&edited, "llm.active").and_then(TomlValue::as_str),
+            Some("default")
+        );
+        assert_eq!(
+            get(&edited, "llm.endpoint").and_then(TomlValue::as_str),
+            Some("http://192.168.1.20:11434"),
+            "the view of the default moved"
+        );
+        assert_eq!(
+            get(&edited, "llm.servers.cloud.endpoint").and_then(TomlValue::as_str),
+            Some("https://api.example.org/v2")
+        );
+        assert_eq!(
+            get(&edited, "llm.servers.cloud.models"),
+            Some(&TomlValue::Array(vec![
+                TomlValue::String("big".to_owned()),
+                TomlValue::String("small".to_owned())
+            ]))
+        );
+
+        // Derselbe Ursprung, ein anderer Pfad: Der Schlüssel bleibt.
+        let same = edit(
+            &edited,
+            "default",
+            Some("http://192.168.1.20:11434/v1"),
+            None,
+        )
+        .unwrap();
+        assert!(!same.origin_changed);
+        assert_eq!(same.orphaned_key, None);
+        let active = apply(&edited, &same.edits);
+        assert_eq!(
+            get(&active, "llm.endpoint").and_then(TomlValue::as_str),
+            Some("http://192.168.1.20:11434/v1")
+        );
+        assert_eq!(
+            get(&active, "llm.api_key_ref").and_then(TomlValue::as_str),
+            Some("secret-service:humanitl/llm")
+        );
+        assert_eq!(
+            get(&active, "llm.models"),
+            get(&edited, "llm.servers.default.models")
+        );
+
+        let cleared = apply(
+            &active,
+            &edit(&active, "cloud", None, Some(&[])).unwrap().edits,
+        );
+        assert!(get(&cleared, "llm.servers.cloud.models").is_none());
+        assert_eq!(
+            edit(&active, "gone", None, None).unwrap_err().code,
+            CONFIG_021
+        );
+        assert_eq!(
+            edit(&active, "cloud", Some("ftp://x"), None)
+                .unwrap_err()
+                .code,
+            CONFIG_003
+        );
+    }
+
+    /// Ein Endpunkt mit anderer Herkunft löst den Verweis auf den Schlüssel:
+    /// Der hinterlegte Schlüssel geht nie ungefragt an eine neue Adresse,
+    /// auch beim aktiven Eintrag nicht (HUM-405, Review).
+    #[test]
+    fn a_new_origin_detaches_the_key() {
+        let old = table(FLAT);
+        let new = apply(
+            &old,
+            &add(&old, "cloud", "https://api.example.com/v1", &[], false).unwrap(),
+        );
+        let moved = edit(&new, "default", Some("https://api.example.com/v1"), None).unwrap();
+        assert!(moved.origin_changed);
+        assert_eq!(
+            moved.orphaned_key.map(|key_ref| key_ref.to_string()),
+            Some("secret-service:humanitl/llm".to_owned())
+        );
+        let after = apply(&new, &moved.edits);
+        assert!(get(&after, "llm.servers.default.api_key_ref").is_none());
+        assert!(
+            get(&after, "llm.api_key_ref").is_none(),
+            "the view of the active entry kept the key"
+        );
+        assert!(same_origin(
+            "https://a.example/v1",
+            "https://A.example:443/v2"
+        ));
+        assert!(!same_origin("https://a.example/v1", "http://a.example/v1"));
+        assert!(!same_origin("not a url", "not a url"));
     }
 
     /// Der aktive Eintrag geht nicht ohne Nachfolger, solange es andere gibt;

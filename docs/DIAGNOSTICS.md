@@ -380,6 +380,14 @@ Modellserver nicht geändert
 
 **Fix.** `CopyCommand`: `humanitl llm server ls` zeigt die Namen; beim Entfernen des aktiven Servers `--use NAME` mit dem Nachfolger; bei einem nicht gespeicherten `llm.server` `humanitl llm server add NAME URL`, oder den Schlüssel an der genannten Stelle entfernen.
 
+#### CONFIG_022
+
+Server des Projekts nicht bestätigt
+
+**Auslöser.** `.humanitl/profile.toml` im Projektordner nennt mit `llm.server` einen gespeicherten Server, der nicht der Standard ist, und für diesen Ordner und diesen Server liegt keine Bestätigung vor. Die Sitzung startet nicht; kein Endpunkt bekommt einen Schlüssel.
+
+**Fix.** `CopyCommand` mit `humanitl llm server confirm NAME --project ORDNER`; die App fragt beim Start einmal nach. Wer den Server nicht will, entfernt `llm.server` aus `.humanitl/profile.toml`.
+
 ### Bereich sandbox
 
 #### SANDBOX_001

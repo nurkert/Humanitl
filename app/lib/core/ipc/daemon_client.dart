@@ -316,6 +316,29 @@ abstract class DaemonClient {
   /// session on; a running session keeps its server.
   Future<SavedServers> activateLlmServer(String name);
 
+  /// `LlmServers(edit)`: changes the endpoint and, when [models] is given,
+  /// the models of a saved server without making it the default (HUM-405).
+  /// Its key stays and goes only to its own origin.
+  Future<SavedServers> editLlmServer(
+    String name, {
+    String? endpoint,
+    List<String>? models,
+  });
+
+  /// `LlmServers(assign)`: lets the session profile [profile] or the project
+  /// folder [projectDir] use the saved server [server]; an empty [server]
+  /// removes the assignment (HUM-405). Exactly one of the two is given. An
+  /// assignment of a project counts as confirmed for that folder.
+  Future<SavedServers> assignLlmServer({
+    required String server,
+    String? profile,
+    String? projectDir,
+  });
+
+  /// `LlmServers(confirm_project)`: confirms the saved server [server] that
+  /// the project in [projectDir] chooses, for that folder (HUM-405).
+  Future<SavedServers> confirmProjectServer(String projectDir, String server);
+
   /// `Terminal`: the output of the running session, and the keys on their way
   /// back (HUM-042).
   ///

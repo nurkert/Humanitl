@@ -1203,7 +1203,11 @@ class FakeDaemonClient with FakeUpdates, FakeIntercept implements DaemonClient {
       }
     }
     final Diagnostic? refusal =
-        sandboxStartFailure ?? _disposableRefusal(sandboxMode);
+        sandboxStartFailure ??
+        _disposableRefusal(sandboxMode) ??
+        // Wie der Daemon (HUM-405): Ein unbestätigter Server des Projekts
+        // lässt nichts starten.
+        sandbox.llmServer?.unconfirmed;
     if (refusal != null) {
       sandbox = sandbox.copyWith(
         state: SandboxState.failed,
@@ -2593,6 +2597,7 @@ class FakeDaemonClient with FakeUpdates, FakeIntercept implements DaemonClient {
       );
     }
     setKeyLengths.add(key.length);
+    setKeyServers.add(server ?? '');
     final String? named = server == null || server.isEmpty ? null : server;
     final LlmKeyStatus stored = LlmKeyStatus(
       set: true,
@@ -2871,6 +2876,8 @@ class FakeDaemonClient with FakeUpdates, FakeIntercept implements DaemonClient {
         ),
     ]),
     active: activeServer,
+    profiles: List<ProfileUse>.unmodifiable(profileUses),
+    project: projectUse,
   );
 
   /// Makes [name] active: its key becomes the one `LlmKey` reports without a
@@ -3451,6 +3458,158 @@ class FakeDaemonClient with FakeUpdates, FakeIntercept implements DaemonClient {
         ],
       ),
     );
+  }
+
+  // --- Wer welchen Server nutzt (HUM-405) --------------------------------
+  //
+  // Bearbeiten, Zuordnen und Bestätigen wie der Daemon: Namen ohne Server
+  // sind `CONFIG_021`, `default` lässt sich keinem Server zuordnen, eine
+  // Zuordnung des Projekts gilt als bestätigt. Der Fake schreibt keine
+  // Datei; er hält Profile und Projekt im Speicher.
+
+  /// The server each `LlmKey(set)` named, empty for none, in call order.
+  final List<String> setKeyServers = <String>[];
+
+  /// The session profiles `LlmServers` lists, as the test sets them.
+  List<ProfileUse> profileUses = <ProfileUse>[];
+
+  /// The project folder with its server, as the test sets it.
+  ProjectUse? projectUse;
+
+  /// Every confirmation received, as `dir server`, in call order.
+  final List<String> confirmedProjects = <String>[];
+
+  @override
+  Future<SavedServers> editLlmServer(
+    String name, {
+    String? endpoint,
+    List<String>? models,
+  }) async {
+    _serverCheck();
+    final SavedServer old = _server(name) ?? _unknownServer(name);
+    if (endpoint != null && !_isUsableEndpoint(endpoint)) {
+      throw DaemonException(
+        Diagnostic(
+          code: 'CONFIG_003',
+          severity: Severity.error,
+          why:
+              'the endpoint of the server $name is not a URL with the scheme '
+              'http or https and a host',
+        ),
+      );
+    }
+    serverRequests.add('edit $name');
+    // Wie der Daemon (HUM-405, Review): Eine neue Herkunft nimmt den
+    // Schlüssel der alten Adresse mit.
+    final bool moved = endpoint != null && !_sameOrigin(endpoint, old.endpoint);
+    if (moved) {
+      if (name == activeServer) {
+        llmKey = LlmKeyStatus.unset;
+      } else {
+        serverKeys.remove(name);
+      }
+    }
+    savedServers = <SavedServer>[
+      for (final SavedServer server in savedServers)
+        if (server.name == name)
+          SavedServer(
+            name: name,
+            endpoint: endpoint ?? old.endpoint,
+            models: models == null
+                ? old.models
+                : <String>[
+                    for (final String model in models)
+                      if (model.trim().isNotEmpty) model.trim(),
+                  ],
+            keyRef: moved ? '' : old.keyRef,
+            profiles: old.profiles,
+          )
+        else
+          server,
+    ];
+    if (name == activeServer) {
+      final SavedServer now = _server(name)!;
+      _setFormValue(FormKeys.llmEndpoint, now.endpoint);
+      _setFormValue(
+        FormKeys.llmModels,
+        now.models.isEmpty ? '-' : jsonEncode(now.models),
+      );
+    }
+    return _serverList();
+  }
+
+  @override
+  Future<SavedServers> assignLlmServer({
+    required String server,
+    String? profile,
+    String? projectDir,
+  }) async {
+    _serverCheck();
+    if (server.isNotEmpty) {
+      _checkServerName(server);
+      _server(server) ?? _unknownServer(server);
+    }
+    if (profile == 'default') {
+      _refuseServers('the profile default applies to every session');
+    }
+    if (profile != null) {
+      serverRequests.add('assign $server profile $profile');
+      profileUses = <ProfileUse>[
+        for (final ProfileUse use in profileUses)
+          if (use.name == profile)
+            ProfileUse(
+              name: use.name,
+              server: server,
+              description: use.description,
+            )
+          else
+            use,
+      ];
+    } else if (projectDir != null) {
+      serverRequests.add('assign $server project $projectDir');
+      projectUse = ProjectUse(
+        dir: projectDir,
+        server: server,
+        confirmed: server.isNotEmpty,
+      );
+    } else {
+      _refuseServers(
+        'the assignment names neither a session profile nor a project folder',
+      );
+    }
+    return _serverList();
+  }
+
+  @override
+  Future<SavedServers> confirmProjectServer(
+    String projectDir,
+    String server,
+  ) async {
+    _serverCheck();
+    _server(server) ?? _unknownServer(server);
+    confirmedProjects.add('$projectDir $server');
+    if (projectUse case final ProjectUse use
+        when use.dir == projectDir && use.server == server) {
+      projectUse = ProjectUse(
+        dir: use.dir,
+        server: use.server,
+        confirmed: true,
+      );
+    }
+    if (sandbox.llmServer case final LlmServerChoice choice
+        when choice.confirmPath == projectDir && choice.name == server) {
+      sandbox = sandbox.copyWith(
+        llmServer: LlmServerChoice(
+          name: choice.name,
+          source: choice.source,
+          detail: choice.detail,
+          refusal: choice.refusal,
+          projectDir: choice.projectDir,
+          projectPath: choice.projectPath,
+        ),
+      );
+    }
+    return _serverList();
   }
 }
 

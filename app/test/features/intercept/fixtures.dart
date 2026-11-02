@@ -440,6 +440,26 @@ class TestDaemonClient implements DaemonClient {
       SavedServers.none;
 
   @override
+  Future<SavedServers> editLlmServer(
+    String name, {
+    String? endpoint,
+    List<String>? models,
+  }) async => SavedServers.none;
+
+  @override
+  Future<SavedServers> assignLlmServer({
+    required String server,
+    String? profile,
+    String? projectDir,
+  }) async => SavedServers.none;
+
+  @override
+  Future<SavedServers> confirmProjectServer(
+    String projectDir,
+    String server,
+  ) async => SavedServers.none;
+
+  @override
   Stream<LlmServer> discoverLlm({
     String? subnet,
     List<int> ports = const <int>[],

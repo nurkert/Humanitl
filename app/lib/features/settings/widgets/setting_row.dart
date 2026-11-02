@@ -49,6 +49,7 @@ class SettingRow extends StatefulWidget {
     required this.child,
     this.fill = false,
     this.leading,
+    this.title,
     this.help,
     this.details,
     this.status = const <Widget>[],
@@ -71,6 +72,11 @@ class SettingRow extends StatefulWidget {
   /// switch of the update check. A jump to the setting lands on the control,
   /// not on it.
   final Widget? leading;
+
+  /// The name in place of the register's, for a row of a form that is no
+  /// entry of its own, such as the name of a new server (HUM-405). Such a row
+  /// may carry an id the register does not know.
+  final String? title;
 
   /// Help in place of the register's, for a sentence that names a value
   /// known only at runtime.
@@ -101,10 +107,12 @@ class _SettingRowState extends State<SettingRow> {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final SettingsController? scope = SettingsScope.maybeOf(context);
-    final SettingEntry entry = settingEntry(widget.settingId);
-    final String title = entry.title(l10n);
-    final String? help = widget.help ?? entry.help?.call(l10n);
-    final String? details = widget.details ?? entry.details?.call(l10n);
+    final SettingEntry? entry = widget.title == null
+        ? settingEntry(widget.settingId)
+        : settingEntryOrNull(widget.settingId);
+    final String title = widget.title ?? entry?.title(l10n) ?? '';
+    final String? help = widget.help ?? entry?.help?.call(l10n);
+    final String? details = widget.details ?? entry?.details?.call(l10n);
     final Diagnostic? refused =
         widget.refusal ?? scope?.refusal(widget.settingId);
     final bool saved = scope?.saved(widget.settingId) ?? false;
@@ -142,7 +150,7 @@ class _SettingRowState extends State<SettingRow> {
         ),
         if (help != null)
           Text(help, style: tokens.typography.ui12.tinted(tokens.colors.fg1)),
-        if (entry.nextSession)
+        if (entry?.nextSession ?? false)
           Padding(
             padding: EdgeInsets.only(top: tokens.spacing.x1),
             child: Text(

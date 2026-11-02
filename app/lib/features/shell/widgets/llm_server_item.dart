@@ -1,5 +1,5 @@
-/// The LLM item of the status bar: the active saved model server, and a
-/// quick switch between the saved ones (HUM-289).
+/// The LLM item of the status bar: the default saved model server, and a
+/// quick switch between the saved ones (HUM-289); "Default" since HUM-405.
 ///
 /// It draws nothing while there is nothing to switch between (fewer than two
 /// saved servers): the settings show the one server there is, and a status
@@ -65,12 +65,12 @@ class _LlmServerItemState extends ConsumerState<LlmServerItem> {
       padding: EdgeInsets.only(right: tokens.spacing.x3),
       child: HContextMenu(
         controller: _menu,
-        semanticsLabel: l10n.shellStatusLlmServerSwitch,
+        semanticsLabel: l10n.shellStatusLlmServerSwitchDefault,
         itemsBuilder: () => <HMenuItem>[
           for (final SavedServer server in list.servers)
             HMenuItem(
               label: server.active
-                  ? l10n.shellStatusLlmServerActive(server.name)
+                  ? l10n.shellStatusLlmServerDefault(server.name)
                   : server.name,
               enabled: !server.active,
               onSelected: () => unawaited(_activate(server.name)),
@@ -82,7 +82,7 @@ class _LlmServerItemState extends ConsumerState<LlmServerItem> {
               ? l10n.shellStatusLlmServer('-')
               : l10n.shellStatusLlmServer(active),
           color: tokens.state.passthroughLlm,
-          semanticsLabel: l10n.shellStatusLlmServerSwitch,
+          semanticsLabel: l10n.shellStatusLlmServerSwitchDefault,
           onTap: _open,
         ),
       ),

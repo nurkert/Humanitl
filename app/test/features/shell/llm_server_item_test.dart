@@ -36,7 +36,7 @@ void main() {
 
     await tester.tap(item);
     await tester.pumpAndSettle();
-    expect(find.text('home (active)'), findsOneWidget);
+    expect(find.text('home (default)'), findsOneWidget);
 
     await tester.tap(find.text('cloud'));
     await tester.pumpAndSettle();

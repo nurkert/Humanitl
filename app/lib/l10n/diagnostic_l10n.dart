@@ -176,6 +176,7 @@ abstract final class DiagnosticL10n {
   'CONFIG_019' => (l10n.diagCONFIG019Title, l10n.diagCONFIG019Why),
   'CONFIG_020' => (l10n.diagCONFIG020Title, l10n.diagCONFIG020Why),
   'CONFIG_021' => (l10n.diagCONFIG021Title, l10n.diagCONFIG021Why),
+  'CONFIG_022' => (l10n.diagCONFIG022Title, l10n.diagCONFIG022Why),
   'DAEMON_001' => (l10n.diagDAEMON001Title, l10n.diagDAEMON001Why),
   'DAEMON_002' => (l10n.diagDAEMON002Title, l10n.diagDAEMON002Why),
   'DAEMON_003' => (l10n.diagDAEMON003Title, l10n.diagDAEMON003Why),

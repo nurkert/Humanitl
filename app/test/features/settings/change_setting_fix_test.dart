@@ -136,8 +136,18 @@ void main() {
   testWidgets('the same fix inside the sheet lands on the key field again', (
     WidgetTester tester,
   ) async {
-    await pumpApp(tester, client: needsKey());
+    final FakeDaemonClient client = needsKey()
+      ..savedServers = const <SavedServer>[
+        SavedServer(name: 'home', endpoint: 'http://192.168.1.20:11434/'),
+      ]
+      ..activeServer = 'home';
+    await pumpApp(tester, client: client);
     await pressCtrl(tester, LogicalKeyboardKey.comma);
+    await tester.pumpAndSettle();
+    // Die Prüfung steht in der Detailansicht des Servers (HUM-405).
+    await tester.tap(
+      find.byKey(const ValueKey<String>('settings-server-home')),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('settings-check')));

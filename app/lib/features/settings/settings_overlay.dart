@@ -29,7 +29,8 @@
 ///
 /// A switch or a choice is written at once through `SetConfig`, and the row
 /// says "Saved" for a moment; a refusal of the daemon stands at the row
-/// instead. Endpoint, model and key keep their own form (`ModelSection`).
+/// instead. Endpoint, model and key stand in the detail view of a server
+/// (`ServerDetail`, HUM-405).
 /// The overlay decides nothing about what a value means (ADR-018).
 library;
 
@@ -179,6 +180,7 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
       if (widget.closing) {
         // Auf dem Weg hinaus nimmt kein Sprungziel mehr die Tastatur.
         _pending = null;
+        _settings.want(null);
         unawaited(_motion.reverse());
       } else {
         unawaited(_motion.forward());
@@ -222,6 +224,7 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
     // Wer sucht, ist weiter als ein Sprungziel, das noch wartet.
     if (_query.text.isNotEmpty) {
       _pending = null;
+      _settings.want(null);
     }
   });
 
@@ -235,6 +238,7 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
     _query.clear();
     _category = entry.category;
     _pending = entry.id;
+    _settings.want(entry.id);
     _queueTry();
     return true;
   }
@@ -266,7 +270,9 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
       _pending = null;
       return;
     }
-    if (_settings.reveal(id)) {
+    // Eine Seite, die die Zeile erst nach einem eigenen Schritt zeichnet,
+    // hat den Sprung schon selbst ausgeführt (HUM-405).
+    if (_settings.wanted != id || _settings.reveal(id)) {
       _pending = null;
     }
   }
@@ -292,6 +298,7 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
       _query.clear();
       _category = category;
       _pending = null;
+      _settings.want(null);
     });
     if (_scroll.hasClients) {
       _scroll.jumpTo(0);

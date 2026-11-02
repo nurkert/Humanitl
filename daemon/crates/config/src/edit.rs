@@ -181,55 +181,127 @@ pub fn edit_with(
     plan: impl FnOnce(&toml::Table) -> Result<Vec<Edit>, Diagnostic>,
     check: impl FnOnce(&Path) -> Result<(), Diagnostic>,
 ) -> Result<Written, Diagnostic> {
+    edit_inner(path, "", plan, check)
+}
+
+/// Wie [`edit_with`], und eine Datei, die es noch nicht gibt, beginnt mit
+/// dem Text `base` statt leer (HUM-405).
+///
+/// Für die Kopie eines mitgelieferten Profils: Wer dem Profil `llm-only`
+/// einen Server zuordnet, bekommt eine eigene Datei mit dessen Text und dem
+/// einen Wert dazu, nicht eine leere, die das Profil verdeckte.
+///
+/// # Errors
+///
+/// Wie [`edit_with`].
+pub fn edit_or_create(
+    path: &Path,
+    base: &str,
+    plan: impl FnOnce(&toml::Table) -> Result<Vec<Edit>, Diagnostic>,
+    check: impl FnOnce(&Path) -> Result<(), Diagnostic>,
+) -> Result<Written, Diagnostic> {
+    edit_inner(path, base, plan, check)
+}
+
+fn edit_inner(
+    path: &Path,
+    base: &str,
+    plan: impl FnOnce(&toml::Table) -> Result<Vec<Edit>, Diagnostic>,
+    check: impl FnOnce(&Path) -> Result<(), Diagnostic>,
+) -> Result<Written, Diagnostic> {
     let _order = WRITE_ORDER.lock().unwrap_or_else(PoisonError::into_inner);
     let target = follow_link(path)?;
     let _lock = DirLock::acquire(&target)?;
-    let before = read_or_empty(&target)?;
+    let before = read_or(&target, base)?;
+    let old = parse_text(&target, &before)?;
+    let edits = plan(&old)?;
+    match render_edits(&target, &before, &edits)? {
+        Rendered::Unchanged => {
+            // Ein Wert, der schon so dasteht, wird trotzdem geprüft, und zwar
+            // an der Datei selbst: Stand er falsch da, bekommt der Mensch den
+            // Befund und kein „geschrieben". Ein Entfernen, das nichts
+            // entfernt, bringt keinen Wert mit und bleibt ungeprüft.
+            if edits.iter().any(|edit| edit.value.is_some()) {
+                check(&target)?;
+            }
+            Ok(Written::Unchanged)
+        }
+        Rendered::Changed(after) => {
+            write_atomic(&target, after.as_bytes(), check)?;
+            Ok(Written::Changed)
+        }
+    }
+}
+
+/// Was [`render_edits`] aus einem Text gemacht hat.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Rendered {
+    /// Die Änderungen ändern nichts; der Text bleibt, wie er ist.
+    Unchanged,
+    /// Der neue Text der Datei, mit Markierung der Byte-Reihenfolge und den
+    /// Zeilenenden des alten.
+    Changed(String),
+}
+
+/// Der Text einer TOML-Datei als Tabelle; eine Markierung der
+/// Byte-Reihenfolge am Anfang zählt nicht.
+///
+/// # Errors
+///
+/// `CONFIG_001`, wenn der Text kein TOML ist; `target` steht im Befund.
+pub fn parse_text(target: &Path, text: &str) -> Result<toml::Table, Diagnostic> {
+    text.strip_prefix(BOM)
+        .unwrap_or(text)
+        .parse()
+        .map_err(|err: toml::de::Error| unreadable(target, &format!("is not valid TOML: {err}")))
+}
+
+/// Wendet `edits` auf den Text `before` einer TOML-Datei an, ohne Datei
+/// (HUM-405): mit denselben Zusagen wie [`edit_with`], nur ohne Sperre und
+/// ohne Schreiben. Für einen Schreiber, der die Datei selbst öffnen muss,
+/// etwa im Projektordner ohne einem Verweis zu folgen.
+///
+/// # Errors
+///
+/// `CONFIG_001`, wenn `before` kein TOML ist; `CONFIG_015`, wenn ein Schritt
+/// eines Pfades keine Tabelle ist oder das Ergebnis mehr als die Änderungen
+/// änderte. `target` steht nur im Befund.
+pub fn render_edits(target: &Path, before: &str, edits: &[Edit]) -> Result<Rendered, Diagnostic> {
     // Eine Markierung der Byte-Reihenfolge am Anfang und Zeilenenden mit
     // `\r\n` gehören zur Schreibweise des Menschen, und `toml_edit` gibt beides
     // nicht zurück. Sie werden abgenommen und beim Schreiben wieder angelegt.
     let (bom, body) = before
         .strip_prefix(BOM)
-        .map_or(("", before.as_str()), |rest| (BOM, rest));
+        .map_or(("", before), |rest| (BOM, rest));
     let crlf = body.contains("\r\n");
-    let old: toml::Table = body.parse().map_err(|err: toml::de::Error| {
-        unreadable(&target, &format!("is not valid TOML: {err}"))
-    })?;
-    let edits = plan(&old)?;
+    let old = parse_text(target, body)?;
     let Some(first) = edits.first() else {
-        return Ok(Written::Unchanged);
+        return Ok(Rendered::Unchanged);
     };
     let (first_segments, first_value) = (first.segments.clone(), first.value.clone());
 
     let not_a_table = "a step of the path there is not a table";
     let mut expected = old.clone();
-    for edit in &edits {
+    for edit in edits {
         expected = match &edit.value {
             Some(value) => with_value(expected, &edit.segments, value),
             None => without_value(expected, &edit.segments),
         }
-        .ok_or_else(|| not_edited(&target, &edit.segments, edit.value.as_ref(), not_a_table))?;
+        .ok_or_else(|| not_edited(target, &edit.segments, edit.value.as_ref(), not_a_table))?;
     }
     if expected == old {
-        // Ein Wert, der schon so dasteht, wird trotzdem geprüft, und zwar an
-        // der Datei selbst: Stand er falsch da, bekommt der Mensch den Befund
-        // und kein „geschrieben". Ein Entfernen, das nichts entfernt, bringt
-        // keinen Wert mit und bleibt ungeprüft.
-        if edits.iter().any(|edit| edit.value.is_some()) {
-            check(&target)?;
-        }
-        return Ok(Written::Unchanged);
+        return Ok(Rendered::Unchanged);
     }
 
     let mut document: DocumentMut = body.parse().map_err(|err: toml_edit::TomlError| {
-        unreadable(&target, &format!("is not valid TOML: {err}"))
+        unreadable(target, &format!("is not valid TOML: {err}"))
     })?;
-    for edit in &edits {
+    for edit in edits {
         match &edit.value {
             Some(value) => insert(&mut document, &edit.segments, value),
             None => remove(&mut document, &edit.segments),
         }
-        .ok_or_else(|| not_edited(&target, &edit.segments, edit.value.as_ref(), not_a_table))?;
+        .ok_or_else(|| not_edited(target, &edit.segments, edit.value.as_ref(), not_a_table))?;
     }
     let mut after = document.to_string();
     if crlf {
@@ -243,14 +315,13 @@ pub fn edit_with(
     // merkt.
     if after.parse::<toml::Table>().ok().as_ref() != Some(&expected) {
         return Err(not_edited(
-            &target,
+            target,
             &first_segments,
             first_value.as_ref(),
             "the file read back after the edit did not equal the old file plus this one change",
         ));
     }
-    write_atomic(&target, format!("{bom}{after}").as_bytes(), check)?;
-    Ok(Written::Changed)
+    Ok(Rendered::Changed(format!("{bom}{after}")))
 }
 
 /// Die Markierung der Byte-Reihenfolge, wie ein Editor sie an den Anfang einer
@@ -463,11 +534,11 @@ fn follow_link(path: &Path) -> Result<PathBuf, Diagnostic> {
     }
 }
 
-/// Der Text der Datei, oder nichts, wenn es sie nicht gibt.
-fn read_or_empty(path: &Path) -> Result<String, Diagnostic> {
+/// Der Text der Datei, oder `base`, wenn es sie nicht gibt.
+fn read_or(path: &Path, base: &str) -> Result<String, Diagnostic> {
     match fs::read_to_string(path) {
         Ok(text) => Ok(text),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(base.to_owned()),
         Err(err) => Err(unreadable(path, &format!("cannot be read: {err}"))),
     }
 }

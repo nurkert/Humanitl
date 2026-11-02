@@ -265,6 +265,9 @@ mod tests {
             source: source.into(),
             detail: detail.to_owned(),
             refusal: None,
+            unconfirmed: None,
+            project_dir: String::new(),
+            project_path: String::new(),
         }
     }
 

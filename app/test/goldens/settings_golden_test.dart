@@ -50,7 +50,18 @@ FakeDaemonClient configured() => FakeDaemonClient.empty()
     models: <String>['gpt-oss:20b', 'phi-4', 'qwen2.5-coder:14b'],
     flavor: LlmFlavor.openAiCompatible,
     endpointIsPrivate: true,
-  );
+  )
+  // Der Endpunkt als der eine gespeicherte Server, wie der Daemon eine
+  // Konfiguration ohne Einträge listet (HUM-289, HUM-405).
+  ..savedServers = const <SavedServer>[
+    SavedServer(
+      name: 'default',
+      endpoint: 'http://192.168.1.20:11434/',
+      models: <String>['qwen2.5-coder:14b'],
+      keyRef: 'secret-service:humanitl/llm',
+    ),
+  ]
+  ..activeServer = 'default';
 
 /// Das Overlay über [client], über dem ganzen Bild wie in der Shell.
 Widget sheet(GoldenVariant variant, FakeDaemonClient client) => goldenFrame(
@@ -68,9 +79,14 @@ Future<void> settleSheet(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-/// Dasselbe, danach ein Druck auf „Prüfen".
+/// Dasselbe, danach die Detailansicht des Standards und ein Druck auf
+/// „Prüfen" (HUM-405).
 Future<void> probe(WidgetTester tester) async {
   await settleSheet(tester);
+  await tester.tap(
+    find.byKey(const ValueKey<String>('settings-server-default')),
+  );
+  await tester.pumpAndSettle();
   await tester.tap(find.byKey(const Key('settings-check')));
   await tester.pumpAndSettle();
 }

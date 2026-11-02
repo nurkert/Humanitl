@@ -1,7 +1,11 @@
 //! `LlmServers`: die gespeicherten Modellserver (HUM-289).
 //!
-//! Fünf Operationen über `[llm.servers.<name>]` in `config.toml`: auflisten,
-//! anlegen, umbenennen, entfernen, aktivieren. Was sich an der Datei ändert,
+//! Sechs Operationen über `[llm.servers.<name>]` in `config.toml`: auflisten,
+//! anlegen, umbenennen, entfernen, aktivieren und, seit HUM-405, Endpunkt
+//! und Modelle eines Servers ändern, ohne ihn zum Standard zu machen. Dazu
+//! zwei, die `config.toml` nicht berühren: einem Profil der Sitzung oder
+//! einem Projekt einen Server zuordnen, und die Wahl eines Projekts für
+//! seinen Ordner bestätigen ([`humanitl_config::assign`]). Was sich an der Datei ändert,
 //! rechnet [`humanitl_config::servers`] aus; geschrieben wird in einem Zug
 //! über [`humanitl_config::edit::edit_with`], mit derselben Gegenprobe wie
 //! bei `SetConfig` (die Nebendatei muss laden, wie der nächste Start lädt).
@@ -32,10 +36,14 @@ use crate::{convert, v1};
 pub struct Planned {
     /// Die Änderungen für [`humanitl_config::edit::edit_with`].
     pub edits: Vec<Edit>,
-    /// Der Schlüssel, der nach dem Schreiben gelöscht werden soll: Nur beim
-    /// Entfernen mit `delete_key`, und nur, wenn kein anderer Server ihn
-    /// trägt.
+    /// Der Schlüssel, der nach dem Schreiben gelöscht werden soll: beim
+    /// Entfernen mit `delete_key` und beim Bearbeiten, das die Herkunft des
+    /// Endpunkts ändert, und nur, wenn kein anderer Server ihn trägt.
     pub delete_key: Option<KeyRef>,
+    /// Die Servernamen, deren Bestätigungen in Projekten nach dem Schreiben
+    /// wegfallen (HUM-405): Ein Name, der danach einen anderen Server meint,
+    /// erbt keine Bestätigung.
+    pub forget: Vec<String>,
 }
 
 /// Rechnet aus, was ein Auftrag an der Tabelle `table` ändert.
@@ -54,6 +62,7 @@ pub fn plan(table: &toml::Table, request: &v1::LlmServersRequest) -> Result<Plan
     let plain = |edits| Planned {
         edits,
         delete_key: None,
+        forget: Vec::new(),
     };
     match &request.op {
         Some(Op::List(_)) => Ok(plain(Vec::new())),
@@ -64,9 +73,20 @@ pub fn plan(table: &toml::Table, request: &v1::LlmServersRequest) -> Result<Plan
             &add.models,
             add.activate,
         )
-        .map(plain),
+        .map(|edits| Planned {
+            forget: vec![add.name.trim().to_owned()],
+            ..plain(edits)
+        }),
         Some(Op::Rename(rename)) => {
-            servers::rename(table, rename.name.trim(), rename.new_name.trim()).map(plain)
+            servers::rename(table, rename.name.trim(), rename.new_name.trim()).map(|edits| {
+                Planned {
+                    forget: vec![
+                        rename.name.trim().to_owned(),
+                        rename.new_name.trim().to_owned(),
+                    ],
+                    ..plain(edits)
+                }
+            })
         }
         Some(Op::Remove(remove)) => {
             let replacement = remove.replacement.trim();
@@ -78,15 +98,84 @@ pub fn plan(table: &toml::Table, request: &v1::LlmServersRequest) -> Result<Plan
             Ok(Planned {
                 edits: removal.edits,
                 delete_key: removal.orphaned_key.filter(|_| remove.delete_key),
+                forget: vec![remove.name.trim().to_owned()],
             })
         }
         Some(Op::Activate(activate)) => servers::activate(table, activate.name.trim()).map(plain),
+        Some(Op::Edit(edit)) => {
+            let edited = servers::edit(
+                table,
+                edit.name.trim(),
+                edit.endpoint.as_deref(),
+                edit.models.as_ref().map(|models| models.names.as_slice()),
+            )?;
+            // Eine neue Herkunft: Der Schlüssel der alten Adresse geht mit
+            // (HUM-405, Review), und eine Bestätigung galt der alten.
+            Ok(Planned {
+                edits: edited.edits,
+                delete_key: edited.orphaned_key,
+                forget: if edited.origin_changed {
+                    vec![edit.name.trim().to_owned()]
+                } else {
+                    Vec::new()
+                },
+            })
+        }
+        // Zuordnung und Bestätigung ändern `config.toml` nicht; sie prüfen
+        // nur den Namen gegen die gespeicherten Server (HUM-405).
+        Some(Op::Assign(assign)) => {
+            let server = assign.server.trim();
+            if !server.is_empty() {
+                servers::require_saved(table, server)?;
+            }
+            target(assign)?;
+            Ok(plain(Vec::new()))
+        }
+        Some(Op::ConfirmProject(confirm)) => {
+            servers::require_saved(table, confirm.server.trim())?;
+            Ok(plain(Vec::new()))
+        }
         None => Err(Diagnostic::builder(CONFIG_021, Severity::Error)
             .why(
                 "LlmServers changed nothing: the request names no operation (list, add, rename, \
-                 remove or activate)"
+                 remove, activate, edit, assign or confirm_project)"
                     .to_owned(),
             )
+            .build()),
+    }
+}
+
+/// Wem eine Zuordnung gilt (HUM-405).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target<'a> {
+    /// Einem Profil der Sitzung, mit seinem Namen.
+    Profile(&'a str),
+    /// Einem Projektordner.
+    Project(&'a std::path::Path),
+}
+
+/// Das Ziel einer Zuordnung.
+///
+/// # Errors
+///
+/// `CONFIG_021`, wenn die Zuordnung weder ein Profil noch einen
+/// Projektordner nennt.
+pub fn target(assign: &v1::llm_servers_request::Assign) -> Result<Target<'_>, Diagnostic> {
+    use v1::llm_servers_request::assign::Target as Wire;
+    match &assign.target {
+        Some(Wire::Profile(name)) if !name.trim().is_empty() => Ok(Target::Profile(name.trim())),
+        Some(Wire::ProjectDir(dir)) if !dir.trim().is_empty() => {
+            Ok(Target::Project(std::path::Path::new(dir.trim())))
+        }
+        _ => Err(Diagnostic::builder(CONFIG_021, Severity::Error)
+            .why(
+                "the assignment names neither a session profile nor a project folder; nothing \
+                 was assigned"
+                    .to_owned(),
+            )
+            .fix(FixAction::CopyCommand(
+                "humanitl llm server assign NAME --profile PROFILE".to_owned(),
+            ))
             .build()),
     }
 }
@@ -177,6 +266,13 @@ pub fn answer(
             "a session is starting with the active server; switch once it runs, the switch then \
              applies to the next session",
         ),
+        Some(Op::Edit(_)) => (
+            Some(gates.no_start),
+            "a session is starting and resolves its server now; change the server once it runs, \
+             the change then applies to the next session",
+        ),
+        Some(Op::Assign(assign)) => return assign_and_list(paths, assign),
+        Some(Op::ConfirmProject(confirm)) => return confirm_and_list(paths, confirm),
         _ => (None, ""),
     };
     let Some(gate) = gate else {
@@ -201,6 +297,15 @@ fn change(
     request: &v1::LlmServersRequest,
 ) -> Result<v1::LlmServerList, Diagnostic> {
     let file = paths.config_path();
+    // Bestätigungen fallen vor dem Schreiben weg, nicht danach: Scheitert
+    // das, ändert sich nichts; scheitert danach das Schreiben, fragt der
+    // nächste Start nur einmal mehr. Umgekehrt erbte ein umbenannter Server
+    // eine Bestätigung, wenn das Löschen nach dem Schreiben scheiterte
+    // (HUM-405, Review).
+    let forget = plan(&read_table(paths)?, request)?.forget;
+    if !forget.is_empty() {
+        humanitl_config::assign::forget(paths, &forget)?;
+    }
     let mut delete_key = None;
     humanitl_config::edit::edit_with(
         &file,
@@ -228,8 +333,82 @@ fn change(
     Ok(listing(
         &servers::list(&table),
         &humanitl_config::profile_servers(paths),
+        &uses_of(paths),
         notes,
     ))
+}
+
+/// Schreibt eine Zuordnung in die Profildatei oder das Projekt-Profil und
+/// antwortet mit der Liste danach (HUM-405); unter [`servers::lock`].
+///
+/// Die Zuordnung eines Projekts zu einem Server über den Daemon ist die Wahl
+/// des Menschen und gilt für diesen Ordner zugleich als bestätigt
+/// ([`humanitl_config::assign::confirm`]).
+fn assign_and_list(
+    paths: &Paths,
+    assign: &v1::llm_servers_request::Assign,
+) -> Result<v1::LlmServerList, Diagnostic> {
+    let table = read_table(paths)?;
+    plan(
+        &table,
+        &v1::LlmServersRequest {
+            op: Some(v1::llm_servers_request::Op::Assign(assign.clone())),
+        },
+    )?;
+    let server = Some(assign.server.trim()).filter(|server| !server.is_empty());
+    match target(assign)? {
+        Target::Profile(name) => humanitl_config::assign::assign_profile(paths, name, server)?,
+        Target::Project(dir) => {
+            let dir = humanitl_config::assign::assign_project(dir, server)?;
+            if let Some(server) = server {
+                humanitl_config::assign::confirm(paths, &dir, server)?;
+            }
+        }
+    }
+    Ok(listing(
+        &servers::list(&table),
+        &humanitl_config::profile_servers(paths),
+        &uses_of(paths),
+        Vec::new(),
+    ))
+}
+
+/// Merkt die Bestätigung der Wahl eines Projekts und antwortet mit der
+/// Liste (HUM-405); unter [`servers::lock`].
+fn confirm_and_list(
+    paths: &Paths,
+    confirm: &v1::llm_servers_request::ConfirmProject,
+) -> Result<v1::LlmServerList, Diagnostic> {
+    let table = read_table(paths)?;
+    servers::require_saved(&table, confirm.server.trim())?;
+    humanitl_config::assign::confirm(
+        paths,
+        std::path::Path::new(confirm.project_dir.trim()),
+        confirm.server.trim(),
+    )?;
+    Ok(listing(
+        &servers::list(&table),
+        &humanitl_config::profile_servers(paths),
+        &uses_of(paths),
+        Vec::new(),
+    ))
+}
+
+/// Wer welchen Server nutzt, für die Antwort (HUM-405).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Users {
+    /// Jedes Profil der Sitzung außer `default`.
+    pub profiles: Vec<humanitl_config::assign::ProfileUse>,
+    /// Der Projektordner der Konfiguration, wenn es einen gibt.
+    pub project: Option<humanitl_config::assign::ProjectUse>,
+}
+
+/// Wer welchen Server nutzt, von der Platte gelesen.
+fn uses_of(paths: &Paths) -> Users {
+    Users {
+        profiles: humanitl_config::assign::profile_uses(paths),
+        project: humanitl_config::assign::project_use(paths),
+    }
 }
 
 /// Die Antwort aus einer Liste.
@@ -240,6 +419,7 @@ fn change(
 pub fn listing(
     list: &ServerList,
     uses: &std::collections::BTreeMap<String, Vec<String>>,
+    who: &Users,
     diagnostics: Vec<v1::Diagnostic>,
 ) -> v1::LlmServerList {
     v1::LlmServerList {
@@ -258,6 +438,23 @@ pub fn listing(
         active: list.active.clone().unwrap_or_default(),
         implicit: list.implicit,
         diagnostics,
+        project: who.project.as_ref().map(|project| v1::LlmProjectUse {
+            dir: project.dir.display().to_string(),
+            server: project.server.clone().unwrap_or_default(),
+            confirmed: project.confirmed,
+            effective_server: project.effective.clone().unwrap_or_default(),
+            via_profile: project.via_profile.clone().unwrap_or_default(),
+        }),
+        profiles: who
+            .profiles
+            .iter()
+            .map(|profile| v1::LlmProfileUse {
+                name: profile.name.clone(),
+                server: profile.server.clone().unwrap_or_default(),
+                builtin: profile.builtin,
+                description: profile.description.clone().unwrap_or_default(),
+            })
+            .collect(),
     }
 }
 
@@ -472,6 +669,127 @@ mod tests {
         assert!(
             !keys.file_path("llm").exists(),
             "the key of the removed server stayed"
+        );
+    }
+
+    /// Endpunkt und Modelle eines Servers ändern sich, ohne dass er Standard
+    /// wird; eine Zuordnung oder Bestätigung mit einem Namen ohne Server
+    /// ändert nichts und ist `CONFIG_021` (HUM-405).
+    #[test]
+    fn an_edit_keeps_the_default_and_unknown_names_are_refused() {
+        use v1::llm_servers_request::{Assign, ConfirmProject, Edit, Op, assign, edit};
+
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let keys = KeyStore::for_paths(&paths).with_secret_tool(None);
+        write_config(&paths, "[llm]\nendpoint = \"http://home.lan:11434/\"\n");
+        answer(
+            &paths,
+            &keys,
+            &OPEN,
+            &add("cloud", "https://api.example.com/v1"),
+        )
+        .unwrap();
+
+        let edited = answer(
+            &paths,
+            &keys,
+            &OPEN,
+            &op(Op::Edit(Edit {
+                name: "cloud".to_owned(),
+                endpoint: Some("https://api.example.org/v2".to_owned()),
+                models: Some(edit::Models {
+                    names: vec!["big".to_owned()],
+                }),
+            })),
+        )
+        .unwrap();
+        assert_eq!(edited.active, "default");
+        let cloud = edited
+            .servers
+            .iter()
+            .find(|server| server.name == "cloud")
+            .unwrap();
+        assert_eq!(cloud.endpoint, "https://api.example.org/v2");
+        assert_eq!(cloud.models, vec!["big".to_owned()]);
+        assert!(!cloud.active);
+
+        let before = std::fs::read_to_string(paths.config_path()).unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        for request in [
+            Op::Assign(Assign {
+                server: "gone".to_owned(),
+                target: Some(assign::Target::ProjectDir(project.display().to_string())),
+            }),
+            Op::Assign(Assign {
+                server: "cloud".to_owned(),
+                target: None,
+            }),
+            Op::ConfirmProject(ConfirmProject {
+                project_dir: project.display().to_string(),
+                server: "gone".to_owned(),
+            }),
+        ] {
+            let refused = answer(&paths, &keys, &OPEN, &op(request)).unwrap_err();
+            assert_eq!(refused.code, CONFIG_021);
+        }
+        assert_eq!(
+            std::fs::read_to_string(paths.config_path()).unwrap(),
+            before
+        );
+        assert!(!project.join(".humanitl").exists());
+        assert!(!paths.project_servers_path().exists());
+    }
+
+    /// Bekommt ein Server eine Adresse mit anderer Herkunft, verliert er
+    /// seinen Verweis, und sein Schlüssel wird gelöscht; derselbe Ursprung
+    /// behält beides (HUM-405, Review).
+    #[test]
+    fn an_edit_to_another_origin_takes_the_key_away() {
+        use v1::llm_servers_request::{Edit, Op};
+
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let keys = KeyStore::for_paths(&paths).with_secret_tool(None);
+        let key = humanitl_config::secret::ApiKey::new("sk-0123456789abcdef").unwrap();
+        keys.store_named("llm", &key).unwrap();
+        write_config(
+            &paths,
+            "[llm]\nendpoint = \"http://home.lan:11434/\"\napi_key_ref = \"file:llm\"\n",
+        );
+        answer(
+            &paths,
+            &keys,
+            &OPEN,
+            &add("cloud", "https://api.example.com/v1"),
+        )
+        .unwrap();
+        let edit = |endpoint: &str| {
+            op(Op::Edit(Edit {
+                name: "default".to_owned(),
+                endpoint: Some(endpoint.to_owned()),
+                models: None,
+            }))
+        };
+        let same = answer(&paths, &keys, &OPEN, &edit("http://home.lan:11434/v1")).unwrap();
+        let home = same.servers.iter().find(|s| s.name == "default").unwrap();
+        assert_eq!(home.key_ref, "file:llm");
+        assert!(keys.file_path("llm").exists());
+
+        let moved = answer(&paths, &keys, &OPEN, &edit("https://api.example.com/v1")).unwrap();
+        let home = moved.servers.iter().find(|s| s.name == "default").unwrap();
+        assert!(home.key_ref.is_empty(), "the key reference went along");
+        assert!(
+            !keys.file_path("llm").exists(),
+            "the key of the old address was left behind"
+        );
+        let table = read_table(&paths).unwrap();
+        assert!(
+            servers::list(&table)
+                .servers
+                .iter()
+                .all(|entry| entry.api_key_ref.is_none())
         );
     }
 

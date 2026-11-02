@@ -105,6 +105,9 @@ enum HGlyph {
 
   /// Lucide `check`: eine Einstellung ist gespeichert (HUM-404).
   check,
+
+  /// Lucide `star`, gefüllt: der Standard unter den Modellservern (HUM-405).
+  star,
 }
 
 /// The eight state colours of one theme.

@@ -29,8 +29,18 @@ export 'setting_entry.dart';
 /// Every entry, by category in the order of [SettingsCategory] and within
 /// one in the order of its page.
 final List<SettingEntry> settingsRegistry = <SettingEntry>[
-  // Modelle: Die drei Zeilen des aktiven Servers zeichnet `ModelSection` in
-  // einem Stück, weil Schlüssel und Endpunkt zusammengehören (HUM-140).
+  // Modelle (HUM-405): Die Karten der Server, die Detailansicht eines
+  // Servers und die Tabelle „Wer nutzt welchen Server" zeichnet
+  // `ModelsCategory` in einem Stück. Endpunkt, Modell und Schlüssel sind
+  // Zeilen der Detailansicht; ein Sprung dorthin öffnet die des Standards.
+  SettingEntry(
+    id: SettingIds.llmServers,
+    category: SettingsCategory.models,
+    title: (AppLocalizations l10n) => l10n.settingsServersLabel,
+    help: (AppLocalizations l10n) => l10n.settingsServersIntro,
+    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsServers,
+    build: buildModelsCategory,
+  ),
   SettingEntry(
     id: FormKeys.llmEndpoint,
     category: SettingsCategory.models,
@@ -38,7 +48,6 @@ final List<SettingEntry> settingsRegistry = <SettingEntry>[
     help: (AppLocalizations l10n) => l10n.settingsEndpointHelp,
     keywords: (AppLocalizations l10n) => l10n.settingsKeywordsEndpoint,
     nextSession: true,
-    build: buildModelsCategory,
   ),
   SettingEntry(
     id: FormKeys.llmModels,
@@ -55,6 +64,13 @@ final List<SettingEntry> settingsRegistry = <SettingEntry>[
     details: (AppLocalizations l10n) => l10n.settingsKeyHelp,
     keywords: (AppLocalizations l10n) => l10n.settingsKeywordsKey,
     nextSession: true,
+  ),
+  SettingEntry(
+    id: SettingIds.llmServerUsage,
+    category: SettingsCategory.models,
+    title: (AppLocalizations l10n) => l10n.settingsServerUsageTitle,
+    help: (AppLocalizations l10n) => l10n.settingsServerUsageHelp,
+    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsServerUsage,
   ),
   SettingEntry(
     id: FormKeys.agentAdapter,

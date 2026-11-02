@@ -29,6 +29,7 @@ class SandboxHeader extends ConsumerWidget {
   const SandboxHeader({
     required this.status,
     required this.onAskStop,
+    this.onAskServer,
     super.key,
   });
 
@@ -37,6 +38,10 @@ class SandboxHeader extends ConsumerWidget {
 
   /// Asks the screen to put the stop confirmation up.
   final VoidCallback onAskStop;
+
+  /// Asks the screen for the one question about the project's server
+  /// before a start (HUM-405).
+  final VoidCallback? onAskServer;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -117,14 +122,22 @@ class SandboxHeader extends ConsumerWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
                       DisposableSwitch(status: status),
-                      SandboxStartStop(status: status, onAskStop: onAskStop),
+                      SandboxStartStop(
+                        status: status,
+                        onAskStop: onAskStop,
+                        onAskServer: onAskServer,
+                      ),
                     ],
                   ),
                 ),
               )
             else ...<Widget>[
               DisposableSwitch(status: status),
-              SandboxStartStop(status: status, onAskStop: onAskStop),
+              SandboxStartStop(
+                status: status,
+                onAskStop: onAskStop,
+                onAskServer: onAskServer,
+              ),
             ],
           ],
         ),
@@ -270,8 +283,13 @@ class SandboxStartStop extends ConsumerWidget {
   const SandboxStartStop({
     required this.status,
     required this.onAskStop,
+    this.onAskServer,
     super.key,
   });
+
+  /// Asks the screen for the question about the project's server; a start
+  /// whose project picks an unconfirmed server goes there first (HUM-405).
+  final VoidCallback? onAskServer;
 
   /// What the daemon last said.
   final SandboxStatus status;
@@ -308,7 +326,19 @@ class SandboxStartStop extends ConsumerWidget {
       key: const Key('sandbox-start'),
       onPressed: status.isBusy || blocking != null || refused
           ? null
-          : () => unawaited(ref.read(sandboxStatusProvider.notifier).start()),
+          : () {
+              // Wählt das Projekt einen anderen Server als den Standard und
+              // ist das für diesen Ordner noch nicht bestätigt, fragt die
+              // App einmal, statt den Start am `CONFIG_022` scheitern zu
+              // lassen (HUM-405). Der Daemon prüft es trotzdem selbst.
+              final VoidCallback? ask = onAskServer;
+              if (ask != null &&
+                  (status.llmServer?.needsConfirmation ?? false)) {
+                ask();
+                return;
+              }
+              unawaited(ref.read(sandboxStatusProvider.notifier).start());
+            },
       child: Text(l10n.sandboxStart),
     );
     if (waiting && blocking == null) {

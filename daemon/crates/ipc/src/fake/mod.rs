@@ -690,10 +690,12 @@ impl DaemonApi for FakeDaemon {
         // Dienst sie in `config.toml` schreibt.
         self.follow_active(&after);
         // Der Fake hat kein Profilverzeichnis; kein Profil wählt einen
-        // seiner Server (HUM-400).
+        // seiner Server (HUM-400), und eine Zuordnung oder Bestätigung
+        // (HUM-405) prüft nur den Namen und schreibt nichts.
         Ok(crate::llm_servers::listing(
             &humanitl_config::servers::list(&after),
             &std::collections::BTreeMap::new(),
+            &crate::llm_servers::Users::default(),
             Vec::new(),
         ))
     }
@@ -1424,6 +1426,9 @@ impl FakeDaemon {
                             source: v1::llm_server_choice::Source::Default.into(),
                             detail: String::new(),
                             refusal: None,
+                            unconfirmed: None,
+                            project_dir: String::new(),
+                            project_path: String::new(),
                         }),
                 },
             )),
