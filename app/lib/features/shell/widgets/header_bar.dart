@@ -38,6 +38,7 @@ class HeaderBar extends ConsumerWidget {
     required this.onPalette,
     required this.onSettings,
     this.onAskPause,
+    this.settingsFocus,
     super.key,
   });
 
@@ -47,12 +48,16 @@ class HeaderBar extends ConsumerWidget {
   /// Opens the command palette.
   final VoidCallback onPalette;
 
-  /// Opens the settings sheet, the same as `Ctrl+,` (HUM-275).
+  /// Opens the settings overlay, the same as `Ctrl+,` (HUM-275).
   final VoidCallback onSettings;
 
   /// Opens the question before intercepting is paused (HUM-407); without it
   /// the intercept pill only shows.
   final VoidCallback? onAskPause;
+
+  /// The node of the gear, so the overlay can give the keyboard back to it
+  /// when it closes (HUM-404).
+  final FocusNode? settingsFocus;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -119,7 +124,7 @@ class HeaderBar extends ConsumerWidget {
                   child: Text(l10n.shellPaletteHint),
                 ),
                 SizedBox(width: tokens.spacing.x2),
-                SettingsButton(onPressed: onSettings),
+                SettingsButton(onPressed: onSettings, focusNode: settingsFocus),
                 SizedBox(width: tokens.spacing.x3),
                 const WindowButtons(),
               ],
@@ -139,10 +144,13 @@ class HeaderBar extends ConsumerWidget {
 /// tooltip names the shortcut, so the click also teaches it.
 class SettingsButton extends StatelessWidget {
   /// Creates the button; [onPressed] opens the sheet.
-  const SettingsButton({required this.onPressed, super.key});
+  const SettingsButton({required this.onPressed, this.focusNode, super.key});
 
-  /// Opens the settings sheet.
+  /// Opens the settings overlay.
   final VoidCallback onPressed;
+
+  /// A node held from outside, or null.
+  final FocusNode? focusNode;
 
   @override
   Widget build(BuildContext context) {
@@ -159,6 +167,7 @@ class SettingsButton extends StatelessWidget {
         key: const Key('header-settings-button'),
         semanticsLabel: label,
         onPressed: onPressed,
+        focusNode: focusNode,
         icon: (Color color) =>
             ShellGlyphIcon(ShellGlyph.settings, size: 16, color: color),
       ),

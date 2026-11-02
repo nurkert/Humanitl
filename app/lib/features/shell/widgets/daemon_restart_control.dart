@@ -30,11 +30,24 @@ import '../daemon_restart.dart';
 class DaemonRestartControl extends ConsumerStatefulWidget {
   /// Creates the control for a daemon that speaks contract minor
   /// [daemonMinor].
-  const DaemonRestartControl({required this.daemonMinor, super.key});
+  const DaemonRestartControl({
+    required this.daemonMinor,
+    this.size = HButtonSize.bar,
+    this.label,
+    super.key,
+  });
 
   /// `Info.proto_minor` of the daemon; from [daemonRetireMinor] on it knows
   /// `retire_if_idle`.
   final int daemonMinor;
+
+  /// The size of the buttons: [HButtonSize.bar] in the status bar,
+  /// [HButtonSize.sm] in a row of the settings (HUM-404).
+  final HButtonSize size;
+
+  /// The label of the button; "Update daemon" of the status bar when null.
+  /// The settings say "Restart daemon": there it is not about a version.
+  final String? label;
 
   @override
   ConsumerState<DaemonRestartControl> createState() =>
@@ -253,7 +266,7 @@ class _DaemonRestartControlState extends ConsumerState<DaemonRestartControl> {
               key: const Key('status-daemon-restart-cancel'),
               focusNode: _cancelFocus,
               variant: HButtonVariant.ghost,
-              size: HButtonSize.bar,
+              size: widget.size,
               onPressed: _cancel,
               child: Text(l10n.sandboxStopCancel),
             ),
@@ -262,7 +275,7 @@ class _DaemonRestartControlState extends ConsumerState<DaemonRestartControl> {
               child: HButton(
                 key: const Key('status-daemon-restart-confirm'),
                 variant: HButtonVariant.ghost,
-                size: HButtonSize.bar,
+                size: widget.size,
                 onPressed: _stopAndRestart,
                 child: Text(
                   l10n.shellStatusRestartStopAndRestart,
@@ -283,13 +296,13 @@ class _DaemonRestartControlState extends ConsumerState<DaemonRestartControl> {
           // Mit Rahmen: Die Leiste ist sonst Text, und das ist der eine Griff
           // in ihr (HUM-381).
           variant: HButtonVariant.secondary,
-          size: HButtonSize.bar,
+          size: widget.size,
           onPressed: holds || _busy
               ? null
               : stoppable
               ? () => _ask(status.value?.sandboxId)
               : _restart,
-          child: Text(l10n.shellStatusRestartDaemon),
+          child: Text(widget.label ?? l10n.shellStatusRestartDaemon),
         ),
         if (holds) ...<Widget>[
           SizedBox(width: tokens.spacing.x2),

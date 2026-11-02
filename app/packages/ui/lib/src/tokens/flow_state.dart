@@ -96,6 +96,15 @@ enum HGlyph {
 
   /// Lucide `folder`: einen Ordner wählen (HUM-282).
   folder,
+
+  /// Lucide `info`: die längere Erklärung einer Einstellung (HUM-404).
+  info,
+
+  /// Lucide `search`: das Suchfeld der Einstellungen (HUM-404).
+  search,
+
+  /// Lucide `check`: eine Einstellung ist gespeichert (HUM-404).
+  check,
 }
 
 /// The eight state colours of one theme.

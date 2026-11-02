@@ -8,8 +8,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui.dart';
+import 'package:humanitl/features/settings/registry/setting_entry.dart';
 
 import '../../harness/app_harness.dart';
+import '../../harness/settings_harness.dart';
 
 const Diagnostic fellBack = Diagnostic(
   code: 'SANDBOX_033',
@@ -49,6 +51,7 @@ Future<void> openSettings(WidgetTester tester, FakeDaemonClient client) async {
   await pumpApp(tester, client: client);
   await pressCtrl(tester, LogicalKeyboardKey.comma);
   await tester.pumpAndSettle();
+  await showSettingsCategory(tester, SettingsCategory.sandbox);
 }
 
 Finder get row => find.byKey(const Key('settings-sandbox-mode'));

@@ -111,7 +111,7 @@ void main() {
   testWidgets('change_setting_fix: LLM_002 opens the sheet with the key '
       'field focused', (WidgetTester tester) async {
     await showLlm002InSetup(tester, needsKey());
-    expect(find.byKey(const Key('settings-sheet')), findsNothing);
+    expect(find.byKey(const Key('settings-overlay')), findsNothing);
 
     final Finder button = find.byKey(const Key('fix-open-settings'));
     expect(button, findsOneWidget);
@@ -119,7 +119,7 @@ void main() {
     await tester.tap(button);
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('settings-sheet')), findsOneWidget);
+    expect(find.byKey(const Key('settings-overlay')), findsOneWidget);
     expect(
       focusIsWithin(const Key('settings-key-input')),
       isTrue,
@@ -152,7 +152,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('settings-sheet')), findsOneWidget);
+    expect(find.byKey(const Key('settings-overlay')), findsOneWidget);
     expect(focusIsWithin(const Key('settings-key-input')), isTrue);
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 

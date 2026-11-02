@@ -17,7 +17,7 @@ import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/intercept/providers/agent_asks.dart';
 import 'package:humanitl/features/intercept/widgets/agent_ask_card.dart';
 import 'package:humanitl/features/intercept/widgets/queue_pane.dart';
-import 'package:humanitl/features/settings/settings_sheet.dart';
+import 'package:humanitl/features/settings/settings_overlay.dart';
 import 'package:humanitl/features/shell/providers/rail.dart';
 import 'package:humanitl/features/shell/widgets/header_bar.dart';
 import 'package:humanitl/features/shell/widgets/icon_rail.dart';
@@ -377,14 +377,17 @@ void main() {
     await tester.tap(find.byKey(const Key('header-settings-button')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
-    expect(find.byType(SettingsSheet), findsOneWidget);
+    expect(find.byType(SettingsOverlay), findsOneWidget);
     expect(find.byType(AttentionNoticeBanner), findsNothing);
 
     // Zu: Der Hinweis ist wieder da, er war nur verdeckt, nicht geschlossen.
+    // Das Overlay fährt erst aus und geht im Bild danach (HUM-404).
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
-    expect(find.byType(SettingsSheet), findsNothing);
+    await tester.pump();
+    await tester.pump();
+    expect(find.byType(SettingsOverlay), findsNothing);
     expect(find.byType(AttentionNoticeBanner), findsOneWidget);
   });
 

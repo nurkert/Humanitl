@@ -27,7 +27,7 @@ import 'package:humanitl/features/intercept/widgets/queue_row.dart';
 import 'package:humanitl/features/sandbox/providers/sandbox_status_provider.dart';
 import 'package:humanitl/features/sandbox/widgets/sandbox_terminal.dart'
     show lastFloatingSessionProvider;
-import 'package:humanitl/features/settings/settings_sheet.dart';
+import 'package:humanitl/features/settings/settings_overlay.dart';
 import 'package:humanitl/features/shell/shell_screen.dart';
 import 'package:humanitl/features/shell/widgets/floating_terminal.dart'
     show FloatingTerminalLayer, terminalFloatLinger;
@@ -537,22 +537,32 @@ void main() {
     expect(tester.getSize(floating), terminalFloatMinSize);
   }, variant: linux);
 
-  testWidgets('a_sheet_pushes_the_window_aside', (WidgetTester tester) async {
+  // Die Einstellungen liegen seit HUM-404 als Overlay über dem ganzen
+  // Fenster, wie die Palette: Das schwebende Fenster bleibt, wo es ist, unter
+  // der abgedunkelten Fläche, und nimmt keinen Klick an, solange sie offen
+  // ist. Es weicht nicht aus und wird nicht neu aufgebaut.
+  testWidgets('the_settings_overlay_leaves_the_window_where_it_is', (
+    WidgetTester tester,
+  ) async {
     await pumpApp(tester, client: runningClient(), size: window);
     await pressCtrl(tester, LogicalKeyboardKey.digit2);
     await pressFloat(tester);
     expect(floating, findsOneWidget);
+    final Rect before = tester.getRect(floating);
 
     await pressCtrl(tester, LogicalKeyboardKey.comma);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
     await settle(tester);
-    expect(find.byType(SettingsSheet), findsOneWidget);
-    await settle(tester);
-    expect(floating, findsOneWidget, reason: 'there is room on the left');
+    expect(find.byType(SettingsOverlay), findsOneWidget);
+    expect(floating, findsOneWidget, reason: 'it stays');
+    expect(tester.getRect(floating), before, reason: 'where it was');
     expect(
-      tester
-          .getRect(floating)
-          .overlaps(tester.getRect(find.byType(SettingsSheet))),
-      isFalse,
+      find
+          .descendant(of: floating, matching: find.byType(TerminalView))
+          .hitTestable(),
+      findsNothing,
+      reason: 'under the overlay',
     );
   }, variant: linux);
 

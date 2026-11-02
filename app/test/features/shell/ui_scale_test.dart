@@ -29,12 +29,14 @@ import 'package:humanitl/features/intercept/providers/coach_mark.dart';
 import 'package:humanitl/features/intercept/providers/flows.dart';
 import 'package:humanitl/features/intercept/providers/now.dart';
 import 'package:humanitl/features/sandbox/providers/terminal_provider.dart';
+import 'package:humanitl/features/settings/registry/setting_entry.dart';
 import 'package:humanitl/features/shell/section.dart';
 import 'package:humanitl/features/shell/widgets/header_bar.dart';
 import 'package:humanitl/features/shell/widgets/window_frame.dart';
 import 'package:xterm2/ui.dart';
 
 import '../../harness/app_harness.dart';
+import '../../harness/settings_harness.dart';
 import '../intercept/fixtures.dart' hide settle;
 import '../sandbox/harness.dart';
 import 'terminal_full_window_test.dart' show settle;
@@ -424,6 +426,7 @@ void main() {
     await tester.pumpAndSettle();
     await pressCtrl(tester, LogicalKeyboardKey.comma);
     await tester.pumpAndSettle();
+    await showSettingsCategory(tester, SettingsCategory.interface);
     final Finder chips = find.byKey(const Key('settings-scale'));
     await tester.ensureVisible(chips);
     await tester.pumpAndSettle();

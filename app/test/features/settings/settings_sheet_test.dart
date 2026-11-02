@@ -1,6 +1,7 @@
 // Das Einstellungsformular (HUM-069) mit Modell und Zugangsschlüssel
 // (HUM-140): geöffnet über `Ctrl+,`, geschrieben über `SetConfig` und
-// `LlmKey`, der Schlüssel nie zurückgelesen.
+// `LlmKey`, der Schlüssel nie zurückgelesen. Seit HUM-404 ein Overlay mit
+// Kategorien; die Kategorie Modelle steht beim Öffnen vorn.
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -11,10 +12,13 @@ import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/ui.dart';
 import 'package:humanitl/features/settings/providers/file_opener.dart';
+import 'package:humanitl/features/settings/registry/setting_entry.dart';
+import 'package:humanitl/features/settings/widgets/setting_controls.dart';
 import 'package:humanitl/features/shell/providers/theme.dart';
 import 'package:humanitl/features/tray/providers/attention.dart';
 
 import '../../harness/app_harness.dart';
+import '../../harness/settings_harness.dart';
 
 /// Ein Schlüssel, den kein Text des Bildschirms je zeigen darf.
 const String secret = 'sk-test-0123456789abcdef';
@@ -93,7 +97,7 @@ void main() {
       );
     await openSettings(tester, client);
 
-    expect(find.byKey(const Key('settings-sheet')), findsOneWidget);
+    expect(find.byKey(const Key('settings-overlay')), findsOneWidget);
     expect(find.text('Set, in the system keyring'), findsOneWidget);
 
     // Ein neuer Schlüssel geht hinein, und danach steht er nirgends: nicht
@@ -260,10 +264,11 @@ void main() {
       final FakeDaemonClient client = configured();
       await openSettings(tester, client);
       final ProviderContainer container = ProviderScope.containerOf(
-        tester.element(find.byKey(const Key('settings-sheet'))),
+        tester.element(find.byKey(const Key('settings-overlay'))),
       );
       expect(container.read(themeModeProvider), HThemeMode.dark);
 
+      await showSettingsCategory(tester, SettingsCategory.interface);
       await tester.ensureVisible(find.text('Light'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Light'));
@@ -271,12 +276,7 @@ void main() {
       expect(client.configWrites.last, ('ui.theme', 'light'));
       expect(container.read(themeModeProvider), HThemeMode.light);
 
-      await tester.ensureVisible(
-        find.byKey(const Key('settings-notifications')),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('settings-notifications')));
-      await tester.pumpAndSettle();
+      await tapSegment(tester, const Key('settings-notifications'), 'Off');
       expect(client.configWrites.last, ('ui.notifications', 'false'));
       expect(container.read(notificationsEnabledProvider), isFalse);
     },
@@ -288,6 +288,7 @@ void main() {
   ) async {
     final FakeDaemonClient client = configured();
     await openSettings(tester, client);
+    await showSettingsCategory(tester, SettingsCategory.requests);
     await tester.enterText(find.byKey(const Key('settings-timeout')), '0');
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pumpAndSettle();
@@ -306,29 +307,36 @@ void main() {
     );
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
-  testWidgets(
-    'the form says when a change takes effect and opens config.toml',
-    (WidgetTester tester) async {
-      final List<String> opened = <String>[];
-      await openSettings(tester, configured(), opened: opened);
-      expect(find.byKey(const Key('settings-restart-note')), findsOneWidget);
-      expect(find.text('/home/u/.config/humanitl/config.toml'), findsOneWidget);
-      await tester.ensureVisible(find.byKey(const Key('settings-open-file')));
-      await tester.tap(find.byKey(const Key('settings-open-file')));
-      await tester.pumpAndSettle();
-      expect(opened, <String>['/home/u/.config/humanitl/config.toml']);
-    },
-    variant: TargetPlatformVariant.only(TargetPlatform.linux),
-  );
+  testWidgets('the daemon page shows config.toml and opens it', (
+    WidgetTester tester,
+  ) async {
+    final List<String> opened = <String>[];
+    await openSettings(tester, configured(), opened: opened);
+    await showSettingsCategory(tester, SettingsCategory.daemon);
+    // Der Pfad steht ganz da, auch wo die Zeile ihn in der Mitte kürzt.
+    expect(
+      find.byWidgetPredicate(
+        (Widget widget) =>
+            widget is HMiddleEllipsis &&
+            widget.text == '/home/u/.config/humanitl/config.toml',
+      ),
+      findsOneWidget,
+    );
+    await tester.ensureVisible(find.byKey(const Key('settings-open-file')));
+    await tester.tap(find.byKey(const Key('settings-open-file')));
+    await tester.pumpAndSettle();
+    expect(opened, <String>['/home/u/.config/humanitl/config.toml']);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
   testWidgets(
     'the system certificate switch is on when tls.trust_system_store is unset',
     (WidgetTester tester) async {
       // HUM-257: Ohne Wert gilt die Vorgabe des Schemas, und die ist an.
       await openSettings(tester, configured());
+      await showSettingsCategory(tester, SettingsCategory.network);
       expect(
         tester
-            .widget<HCheckbox>(
+            .widget<OnOffControl>(
               find.byKey(const Key('settings-trust-system-store')),
             )
             .value,
@@ -356,14 +364,12 @@ void main() {
         configPath: client.configValues.configPath,
       );
       await openSettings(tester, client);
-      expect(tester.widget<HCheckbox>(toggle).value, isFalse);
+      await showSettingsCategory(tester, SettingsCategory.network);
+      expect(tester.widget<OnOffControl>(toggle).value, isFalse);
 
-      await tester.ensureVisible(toggle);
-      await tester.pumpAndSettle();
-      await tester.tap(toggle);
-      await tester.pumpAndSettle();
+      await tapSegment(tester, const Key('settings-trust-system-store'), 'On');
       expect(client.configWrites.last, ('tls.trust_system_store', 'true'));
-      expect(tester.widget<HCheckbox>(toggle).value, isTrue);
+      expect(tester.widget<OnOffControl>(toggle).value, isTrue);
     },
     variant: TargetPlatformVariant.only(TargetPlatform.linux),
   );
@@ -424,6 +430,7 @@ void main() {
       configPath: client.configValues.configPath,
     );
     await openSettings(tester, client);
+    await showSettingsCategory(tester, SettingsCategory.agent);
     final Finder control = find.byKey(const Key('settings-agent'));
     expect(tester.widget<HSegmented<String>>(control).selected, 'pi');
 
@@ -443,6 +450,7 @@ void main() {
     WidgetTester tester,
   ) async {
     await openSettings(tester, configured());
+    await showSettingsCategory(tester, SettingsCategory.agent);
     expect(
       tester
           .widget<HSegmented<String>>(find.byKey(const Key('settings-agent')))

@@ -473,7 +473,7 @@ void main() {
       await tester.pump();
       await client.activateLlmServer('cloud');
       ProviderScope.containerOf(
-        tester.element(find.byKey(const Key('settings-sheet'))),
+        tester.element(find.byKey(const Key('settings-overlay'))),
       ).invalidate(llmServersProvider);
       await tester.pumpAndSettle();
       final String cloudRef = client.llmKey.keyRef;

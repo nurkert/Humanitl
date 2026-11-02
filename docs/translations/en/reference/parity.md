@@ -31,7 +31,7 @@ An RPC without a CLI row and without an exemption breaks the CI job
 | `Humanitl.Doctor` | `humanitl doctor` | `features/setup/widgets/doctor_list` |
 | `Humanitl.Exec` | `humanitl sandbox exec` | `features/sandbox/widgets/terminal_tabs` |
 | `Humanitl.GetBody` | `humanitl flows show --body` | `features/history/history_detail` |
-| `Humanitl.GetConfig` | Exemption | `features/settings/settings_sheet` |
+| `Humanitl.GetConfig` | Exemption | `features/settings/settings_overlay` |
 | `Humanitl.GetFlow` | `humanitl flows show` | `features/history/history_detail` |
 | `Humanitl.GetInfo` | `humanitl daemon status` | `features/shell/connection_gate` |
 | `Humanitl.GetSessionSummary` | `humanitl sessions summary` | missing |

@@ -9,12 +9,14 @@
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:humanitl/features/settings/registry/setting_entry.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/ui/work_dir_picker.dart';
 import 'package:humanitl_ui/humanitl_ui.dart';
 
 import '../../harness/app_harness.dart';
+import '../../harness/settings_harness.dart';
 
 /// Der Ordner, der vorher gespeichert ist.
 const String before = '/home/u/projects/old';
@@ -68,6 +70,7 @@ Future<void> openSettingsOver(
 /// Wählt den Ordner in den Einstellungen und lässt `SetConfig`, das neue
 /// Lesen der Konfiguration und den Plan durchlaufen.
 Future<void> chooseInSettings(WidgetTester tester) async {
+  await showSettingsCategory(tester, SettingsCategory.sandbox);
   final Finder choose = find.byKey(const Key('settings-workdir-choose'));
   await tester.ensureVisible(choose);
   await tester.pumpAndSettle();
@@ -100,10 +103,7 @@ void main() {
 
     await chooseInSettings(tester);
 
-    expect(
-      tester.widget<Text>(find.byKey(const Key('settings-workdir'))).data,
-      after,
-    );
+    expect(pathText(tester, 'settings-workdir'), after);
     expect(pathText(tester, 'sandbox-workdir-path'), after);
     expect(client.plans, 1, reason: 'exactly one new plan');
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
@@ -138,10 +138,7 @@ void main() {
 
     await chooseInSettings(tester);
 
-    expect(
-      tester.widget<Text>(find.byKey(const Key('settings-workdir'))).data,
-      after,
-    );
+    expect(pathText(tester, 'settings-workdir'), after);
     expect(client.plans, 0);
     expect(pathText(tester, 'sandbox-workdir-path'), before);
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));

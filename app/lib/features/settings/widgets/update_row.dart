@@ -11,35 +11,21 @@ import '../../../core/ipc/daemon_client.dart';
 import '../../../core/ipc/update_status.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
+import 'setting_controls.dart';
 import 'setting_row.dart';
 
 /// The row of `update.check` with the button that asks right away.
 ///
-/// The checkbox writes `update.check` through the form like every other
-/// key; "Check now" asks the daemon with `force`, and the line under it says
-/// what it answered. The status bar follows the same answer through
+/// The switch writes `update.check` through the overlay like every other
+/// key; "Check now" asks the daemon with `force`, and the line under the help
+/// says what it answered. The status bar follows the same answer through
 /// [updateStatusProvider].
 class UpdateRow extends ConsumerStatefulWidget {
-  /// Creates the row.
-  const UpdateRow({
-    required this.config,
-    required this.onToggle,
-    this.refusal,
-    this.anchor,
-    super.key,
-  });
+  /// Creates the row for [config].
+  const UpdateRow({required this.config, super.key});
 
-  /// The configuration the form shows.
+  /// The configuration the overlay shows.
   final ConfigValues config;
-
-  /// Writes `update.check`.
-  final ValueChanged<bool> onToggle;
-
-  /// The daemon's refusal of the last write of `update.check`.
-  final Diagnostic? refusal;
-
-  /// The anchor of the row (HUM-275).
-  final FocusNode? anchor;
 
   @override
   ConsumerState<UpdateRow> createState() => _UpdateRowState();
@@ -90,47 +76,36 @@ class _UpdateRowState extends ConsumerState<UpdateRow> {
     final AppLocalizations l10n = context.l10n;
     final String? result = _result;
     return SettingRow(
-      label: l10n.settingsUpdateCheckLabel,
-      help: l10n.settingsUpdateCheckHelp,
-      refusal: widget.refusal,
+      settingId: FormKeys.updateCheck,
       refusalKey: const Key('settings-update-check-refusal'),
-      anchor: widget.anchor,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          HCheckbox(
-            key: const Key('settings-update-check'),
-            label: l10n.settingsUpdateCheckHint,
-            value: widget.config.updateCheck,
-            onChanged: widget.onToggle,
+      status: <Widget>[
+        if (_checking)
+          Text(
+            l10n.settingsUpdateChecking,
+            style: tokens.typography.ui12.tinted(tokens.colors.fg1),
           ),
-          SizedBox(height: tokens.spacing.x2),
-          Wrap(
-            spacing: tokens.spacing.x2,
-            runSpacing: tokens.spacing.x2,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: <Widget>[
-              HButton(
-                key: const Key('settings-update-check-now'),
-                onPressed: _checking ? null : () => unawaited(_checkNow()),
-                child: Text(l10n.settingsUpdateCheckNow),
-              ),
-              if (_checking)
-                Text(
-                  l10n.settingsUpdateChecking,
-                  style: tokens.typography.ui12.tinted(tokens.colors.fg1),
-                ),
-            ],
-          ),
-          if (result != null)
-            Text(
-              result,
-              key: const Key('settings-update-result'),
-              style: tokens.typography.ui12.tinted(
-                _failed ? tokens.stateText.error : tokens.colors.fg1,
-              ),
+        if (result != null)
+          Text(
+            result,
+            key: const Key('settings-update-result'),
+            style: tokens.typography.ui12.tinted(
+              _failed ? tokens.stateText.error : tokens.colors.fg1,
             ),
-        ],
+          ),
+      ],
+      // „Jetzt prüfen" vor dem Schalter, beide in einer Reihe an der rechten
+      // Kante: Die Frage von Hand gehört zur Zeile, nicht unter sie.
+      leading: HButton(
+        key: const Key('settings-update-check-now'),
+        variant: HButtonVariant.ghost,
+        onPressed: _checking ? null : () => unawaited(_checkNow()),
+        child: Text(l10n.settingsUpdateCheckNow),
+      ),
+      child: OnOffControl(
+        key: const Key('settings-update-check'),
+        value: widget.config.updateCheck,
+        onChanged: (bool on) =>
+            writeSetting(context, FormKeys.updateCheck, '$on'),
       ),
     );
   }

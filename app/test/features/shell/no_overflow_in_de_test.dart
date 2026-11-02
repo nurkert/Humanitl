@@ -20,6 +20,7 @@ import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/core/shortcuts/intents.dart';
 import 'package:humanitl/features/intercept/widgets/queue_row.dart';
+import 'package:humanitl/features/settings/registry/setting_entry.dart';
 import 'package:humanitl/features/shell/providers/language.dart';
 import 'package:humanitl/features/shell/section.dart';
 import 'package:humanitl/l10n/l10n.dart';
@@ -93,8 +94,21 @@ void main() {
     await pressCtrl(tester, LogicalKeyboardKey.comma);
     await tester.pump(const Duration(milliseconds: 600));
     await tester.pump();
-    expect(find.byKey(const Key('settings-sheet')), findsOne);
-    expect(tester.takeException(), isNull, reason: 'settings sheet');
+    expect(find.byKey(const Key('settings-overlay')), findsOne);
+    expect(tester.takeException(), isNull, reason: 'settings overlay');
+    // Jede Kategorie des Overlays (HUM-404), jede mit ihren deutschen Zeilen.
+    for (final SettingsCategory category in SettingsCategory.values) {
+      await tester.tap(
+        find.byKey(ValueKey<String>('settings-nav-${category.name}')),
+      );
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump();
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'settings ${category.name}',
+      );
+    }
 
     // Die Uhr des Szenarios hinterlässt Fristen; sie laufen hier ab, statt
     // als offene Timer am Ende des Tests zu stehen.

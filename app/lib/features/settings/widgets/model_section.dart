@@ -47,26 +47,19 @@ import 'secret_field.dart';
 import 'server_switcher.dart';
 import 'setting_row.dart';
 
-/// The model group of the settings form.
+/// The category Models of the settings overlay (HUM-404).
+///
+/// A `ChangeSetting` fix on the endpoint, the model or the access key lands
+/// on the anchors of their rows (`SettingRow`, HUM-275).
 class ModelSection extends ConsumerStatefulWidget {
   /// Creates the group for [config] and the key [status].
-  const ModelSection({
-    required this.config,
-    required this.status,
-    this.anchors = const <String, FocusNode>{},
-    super.key,
-  });
+  const ModelSection({required this.config, required this.status, super.key});
 
   /// The configuration the form was opened with, or last read.
   final ConfigValues config;
 
   /// What the daemon says about the access key.
   final LlmKeyStatus status;
-
-  /// The anchors of the form, by key, that a `ChangeSetting` fix lands on
-  /// (HUM-275); this group places those of the endpoint, the model and the
-  /// access key.
-  final Map<String, FocusNode> anchors;
 
   @override
   ConsumerState<ModelSection> createState() => _ModelSectionState();
@@ -393,13 +386,11 @@ class _ModelSectionState extends ConsumerState<ModelSection> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        SettingGroupTitle(l10n.settingsSectionModel),
         SettingRow(
-          label: l10n.settingsEndpointLabel,
-          help: l10n.settingsEndpointHelp,
+          settingId: FormKeys.llmEndpoint,
           refusal: _endpointRefusal,
           refusalKey: const Key('settings-endpoint-refusal'),
-          anchor: widget.anchors[FormKeys.llmEndpoint],
+          fill: true,
           child: Row(
             children: <Widget>[
               Expanded(
@@ -433,17 +424,22 @@ class _ModelSectionState extends ConsumerState<ModelSection> {
             ],
           ),
         ),
+        // Was „Prüfen" fand, unter der Zeile des Endpunkts und auf der Kante
+        // ihres Textes.
         if (_probeFailure case final Diagnostic failure)
-          _ProbeFinding(
-            diagnostic: failure,
-            findingKey: 'settings-probe-failure',
+          _Inset(
+            child: _ProbeFinding(
+              diagnostic: failure,
+              findingKey: 'settings-probe-failure',
+            ),
           ),
-        if (probe != null) ..._probeResult(context, probe),
+        if (probe != null) _Inset(child: _probeResult(context, probe)),
+        const HHairline(),
         SettingRow(
-          label: l10n.settingsModelLabel,
+          settingId: FormKeys.llmModels,
           refusal: _modelRefusal,
           refusalKey: const Key('settings-model-refusal'),
-          anchor: widget.anchors[FormKeys.llmModels],
+          fill: true,
           child: Focus(
             onFocusChange: (bool focused) {
               if (!focused && _model.text.trim().isNotEmpty) {
@@ -460,12 +456,12 @@ class _ModelSectionState extends ConsumerState<ModelSection> {
             ),
           ),
         ),
+        const HHairline(),
         SettingRow(
-          label: l10n.settingsKeyLabel,
-          help: l10n.settingsKeyHelp,
+          settingId: FormKeys.llmApiKeyRef,
           refusal: _keyRefusal ?? _firstKeyFinding(widget.status),
           refusalKey: const Key('settings-key-refusal'),
-          anchor: widget.anchors[FormKeys.llmApiKeyRef],
+          fill: true,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
@@ -520,8 +516,10 @@ class _ModelSectionState extends ConsumerState<ModelSection> {
           ),
         ),
         // Die gespeicherten Server unter den Feldern des aktiven (HUM-289):
-        // Wer nur einen Endpunkt hat, liest das Formular wie vorher.
-        const ServerSwitcher(),
+        // Wer nur einen Endpunkt hat, liest das Formular wie vorher. Ihre
+        // Formulare ordnet HUM-405 neu; hier stehen sie nur auf der Kante.
+        const HHairline(),
+        const _Inset(child: ServerSwitcher()),
       ],
     );
   }
@@ -529,59 +527,62 @@ class _ModelSectionState extends ConsumerState<ModelSection> {
   /// What a probe answered: the models to pick from, the latency, whether a
   /// key went along, and every finding -- `LLM_006` beside the endpoint, not
   /// in a log (HUM-140).
-  List<Widget> _probeResult(BuildContext context, LlmProbe probe) {
+  Widget _probeResult(BuildContext context, LlmProbe probe) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
-    return <Widget>[
-      Padding(
-        padding: EdgeInsets.only(bottom: tokens.spacing.x2),
-        child: Column(
-          key: const Key('settings-probe-result'),
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Text(
-              probe.models.isNotEmpty
-                  ? l10n.settingsModelsFound(probe.models.length)
-                  // Was zurückkam, wenn keine Modellliste kam (HUM-283).
-                  : probe.answer.isNotEmpty
-                  ? l10n.settingsModelNoList(probe.answer)
-                  : l10n.settingsModelNone,
-              style: tokens.typography.ui12.tinted(tokens.colors.fg1),
-            ),
-            if (probe.keySent)
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Padding(
+          padding: EdgeInsets.only(bottom: tokens.spacing.x2),
+          child: Column(
+            key: const Key('settings-probe-result'),
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
               Text(
-                l10n.settingsKeySent,
-                key: const Key('settings-probe-key-sent'),
+                probe.models.isNotEmpty
+                    ? l10n.settingsModelsFound(probe.models.length)
+                    // Was zurückkam, wenn keine Modellliste kam (HUM-283).
+                    : probe.answer.isNotEmpty
+                    ? l10n.settingsModelNoList(probe.answer)
+                    : l10n.settingsModelNone,
                 style: tokens.typography.ui12.tinted(tokens.colors.fg1),
               ),
-            SizedBox(height: tokens.spacing.x1),
-            Wrap(
-              spacing: tokens.spacing.x1,
-              runSpacing: tokens.spacing.x1,
-              children: <Widget>[
-                for (final String name in probe.shownModels)
-                  HButton(
-                    key: ValueKey<String>('settings-model-$name'),
-                    variant: HButtonVariant.ghost,
-                    onPressed: () => unawaited(_saveModel(name)),
-                    child: Text(name),
-                  ),
-              ],
-            ),
-            if (probe.hiddenModels > 0)
-              Text(
-                l10n.settingsModelsHidden(probe.hiddenModels),
-                style: tokens.typography.ui12.tinted(tokens.colors.fg2),
+              if (probe.keySent)
+                Text(
+                  l10n.settingsKeySent,
+                  key: const Key('settings-probe-key-sent'),
+                  style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+                ),
+              SizedBox(height: tokens.spacing.x1),
+              Wrap(
+                spacing: tokens.spacing.x1,
+                runSpacing: tokens.spacing.x1,
+                children: <Widget>[
+                  for (final String name in probe.shownModels)
+                    HButton(
+                      key: ValueKey<String>('settings-model-$name'),
+                      variant: HButtonVariant.ghost,
+                      onPressed: () => unawaited(_saveModel(name)),
+                      child: Text(name),
+                    ),
+                ],
               ),
-          ],
+              if (probe.hiddenModels > 0)
+                Text(
+                  l10n.settingsModelsHidden(probe.hiddenModels),
+                  style: tokens.typography.ui12.tinted(tokens.colors.fg2),
+                ),
+            ],
+          ),
         ),
-      ),
-      for (final Diagnostic finding in probe.diagnostics)
-        _ProbeFinding(
-          diagnostic: finding,
-          findingKey: 'settings-probe-${finding.code}',
-        ),
-    ];
+        for (final Diagnostic finding in probe.diagnostics)
+          _ProbeFinding(
+            diagnostic: finding,
+            findingKey: 'settings-probe-${finding.code}',
+          ),
+      ],
+    );
   }
 }
 
@@ -601,6 +602,19 @@ String _keyState(AppLocalizations l10n, LlmKeyStatus status) {
 /// fallback to the file, or a reference without its key (`LLM_009`).
 Diagnostic? _firstKeyFinding(LlmKeyStatus status) =>
     status.diagnostics.isEmpty ? null : status.diagnostics.first;
+
+/// [child] on the left edge of the text of the rows.
+class _Inset extends StatelessWidget {
+  const _Inset({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: SettingRowGrid.inset),
+    child: child,
+  );
+}
 
 /// One finding of the probe, as a card under the endpoint.
 class _ProbeFinding extends StatelessWidget {

@@ -439,8 +439,9 @@ and again below 5 percent the glyph breathes three times, never below
 
 ### HGlyphIcon
 
-Draws one `HGlyph` (17 shapes after the Lucide icons) at a size and colour. The
-glyphs are painted, not loaded from an icon font.
+Draws one `HGlyph` (20 shapes after the Lucide icons) at a size and colour. The
+glyphs are painted, not loaded from an icon font. `info`, `search` and `check`
+came with the settings overlay (HUM-404).
 
 ### HBadge and HMethodBadge
 
@@ -477,7 +478,9 @@ focused, disabled (everything in `fg2`, no accent).
 of independent toggles. The chosen option gets the highest surface and primary
 text, never the accent fill: the accent belongs to the one action of a screen.
 Each segment is its own focus stop, at least 28 px tall. `HSegment` and
-`HSegmentOption` are their building blocks.
+`HSegmentOption` are their building blocks. `HChoiceChips` takes a
+`WrapAlignment`, so chips that wrap at the right edge of a row keep that edge
+(HUM-404).
 
 ### HPanel
 
@@ -498,6 +501,52 @@ A centred card (420 px default) over a scrim. Reserved for destructive
 confirmations: blocking more than five flows at once, deleting a forever rule,
 stopping a running sandbox. Traps focus, returns it on close, Escape dismisses
 when the modal is dismissible. Title 16/600, actions right-aligned.
+
+### Settings overlay
+
+Not a widget of `packages/ui` but a pattern of the app (`app/lib/features/settings/`,
+HUM-404), built from the parts above. The settings come up from below:
+
+- **Shape.** A panel over 75 % of the window height, the full width minus
+  16 px (`x4`) on each side, flush with the bottom edge, `bg1` with a
+  `lineStrong` hairline and the `card` radius on the two top corners. The
+  application behind it is dimmed with `bg0` at 72 %, the scrim of `HModal`.
+  It lies above everything, the floating terminal included, which stays
+  where it is under the scrim; only the command palette lies above it.
+- **Head.** One row of `paneHeaderHeight`, but outside the shell grid: the
+  title (16/600) over the column of categories, the search field starting on
+  the left text edge of the rows (glyph `search`, at most 360 px wide), and
+  the close `HIconButton` at the right.
+- **Categories.** A column on the left, 200 px wide (160 px when the panel is
+  narrower than 760 px): Models, Agent, Sandbox, Requests, Interface,
+  Network, Daemon. Each entry looks like a rail entry: hover `bg2`, chosen
+  `bg3` with the 2 px accent mark (`selectionRail`) on the left edge.
+- **Rows.** Name (13/500) and one short help sentence (12, `fg1`) on the
+  left, the control on the right, every control of a page on the same right
+  edge. A text field takes 320 px; a segmented control keeps its own width.
+  When a control would leave the text less than 200 px, or the row is under
+  560 px, the control moves under the text, on the left edge, instead of
+  squeezing it. A hairline separates two rows; a row is inset 12 px, so the
+  1.2 s highlight after a jump (accent at 12 %) has a margin of its own.
+  Longer explanations stand behind an `info` button beside the name and open
+  in place. "Applies from the next session" (12, `fg2`) stands only under
+  rows a running session does not pick up. All controls are 28 px high
+  (`hitMin`); on/off is two segments, On and Off, not a checkbox with a
+  label that repeats the name. The restart on the Daemon page is the
+  control of the status bar at row size (`HButtonSize.sm`), handed in by
+  the shell. "Saved" takes no width while hidden, so a long name wraps
+  only where it must.
+- **Writing.** A choice writes at once; "Saved" with the `check` glyph fades
+  in beside the name (`arrive`) and out after 2 s (`copyFeedback`). A refusal
+  of the daemon stands under the row in `stateText.error`.
+- **Motion.** In from below over `arrive` on `enter`, out on `exit`; under
+  reduced motion it only fades.
+- **Search.** Hits replace the page, grouped by category under a 12/600
+  heading, each a list entry with its help as a second line. No hits: one
+  sentence and a "Clear search" button.
+
+The keys are in [Interaction](#shortcuts) and in
+[docs/UX.md, section 4.12](UX.md#412-settings).
 
 ### HPopover
 
@@ -631,7 +680,9 @@ underline in `warning`) and `replaced`, the [Diff-Glow](#diff-glow).
 
 The shell is a 40 px header bar, a left icon rail, the active section and a
 24 px status bar. Panes are persistent and resizable; sheets come in from the
-right; modals are only for destructive confirmations.
+right; the settings come up from below as an overlay (see
+[Settings overlay](#settings-overlay)); modals are only for destructive
+confirmations.
 
 ![Intercept screen with three held requests](img/design-intercept-layout.png)
 
@@ -735,6 +786,10 @@ The table lists each binding as the app has it in 0.1, checked against
 | `Ctrl+1` to `Ctrl+6` | Go to Intercept, History, Rules, Sandbox, Audit, Setup | `NavIntent` | Everywhere |
 | `Ctrl+K` | Command palette | `PaletteIntent` | Everywhere |
 | `Ctrl+,` | Settings | `SettingsIntent` | Everywhere |
+| `Ctrl+F`, or typing outside a text field | Search the settings | none, local to the overlay | Settings overlay |
+| `Up` / `Down`, `Home` / `End` | Previous / next category, first / last; the choice follows | none, local to the column | Settings overlay, categories |
+| `Enter` | Open the first hit | none | Settings overlay, search field |
+| `Esc` | Empty the search; with an empty search, close | `DismissIntent` | Settings overlay |
 | `Ctrl+Shift+0` | Expand or collapse the icon rail (`Ctrl+0` until HUM-356) | `ToggleRailIntent` | Everywhere |
 | `Ctrl` + `+` (also `Ctrl+=`, numpad `+`) / `Ctrl` + `-` (also numpad `-`) / `Ctrl+0` (also numpad `0`); `Cmd` on macOS | Scale the whole application one step of 10 % larger / smaller / back to 100 %, between 50 and 300 %, kept across restarts (HUM-356) | `UiScaleIntent` | Everywhere, also inside the terminal |
 | `Ctrl+Shift+Enter` (also numpad `Enter`) | Show the terminal over the whole window, and back (HUM-298) | `ToggleTerminalFullWindowIntent` | Everywhere, also inside the terminal |

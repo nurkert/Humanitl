@@ -21,7 +21,7 @@ const parity = <String, String>{
   // "+ Shell" über dem Terminal der Sandbox (HUM-314).
   'Humanitl.Exec': 'features/sandbox/widgets/terminal_tabs',
   'Humanitl.GetBody': 'features/history/history_detail',
-  'Humanitl.GetConfig': 'features/settings/settings_sheet',
+  'Humanitl.GetConfig': 'features/settings/settings_overlay',
   'Humanitl.GetFlow': 'features/history/history_detail',
   'Humanitl.GetInfo': 'features/shell/connection_gate',
   // The header pill and the question before a pause (HUM-407).
