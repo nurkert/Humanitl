@@ -102,6 +102,7 @@ Voraussetzung: Demo-Skripte M1 bis M4 (HUM-021, HUM-036, HUM-046, HUM-055) sind 
 | HUM-408 | All traffic out of the proxy can go through an upstream proxy (HTTP CONNECT or SOCKS5) | L | HUM-404 |
 | HUM-409 | Files and folders dragged onto the sandbox are copied in or mounted, after one clear choice | L | HUM-406, HUM-351 |
 | HUM-410 | A lone Shift, Ctrl, Alt or Super no longer types a stray glyph in the terminal | S | HUM-042, HUM-313 |
+| HUM-411 | The disposable box in the sandbox header stands on the middle of the buttons beside it | S | HUM-406 |
 
 ---
 
@@ -11827,3 +11828,25 @@ Bytes, Shift mit `A` schickt `A`; im Modus `CSI > 9 u` kommt Shift weiter als
 übrigen Tests des Terminals (Kopieren, Einfügen, `Ctrl+C`, Zoom, Reiter)
 bleiben grün.
 
+---
+
+## HUM-411 · The disposable box in the sandbox header stands on the middle of the buttons beside it
+
+**Anlass.** Owner am 2026-11-02: Das Kästchen „Wegwerf" zwischen „lesen und
+schreiben" und „Starten" im Kopf der Sandbox steht auch nach HUM-406 nicht
+sauber auf einer Linie.
+
+**Ursache.** Die Spalte der Beschriftung in `HCheckbox` nahm die volle Höhe,
+die ihr angeboten wurde. Im Kopf der Sandbox (48 px) zog sie das ganze
+Kästchen auf 47 px, und Kästchen und Text standen oben: Die Mitte der
+Beschriftung lag 7,5 px über der Mitte des Knopfs „Starten". In Formularen
+fiel das nicht auf, weil dort niemand mehr Höhe anbietet als `hitMin`.
+
+**Umsetzung.** Die Spalte nimmt nur ihre eigene Höhe (`MainAxisSize.min`);
+das Kästchen ist damit so hoch wie sein Inhalt und steht in der Leiste auf
+der Mitte. Ein Kästchen mit zweizeiliger Beschriftung behält das Häkchen auf
+der ersten Zeile. Die Goldens bleiben unverändert.
+
+**Akzeptanz.** Ein Test misst die senkrechte Mitte der Beschriftung gegen
+die des Knopfs „Starten" (Abweichung unter 0,75 px). Mutationsbeweis: ohne
+`MainAxisSize.min` 7,5 px, der Test fällt.

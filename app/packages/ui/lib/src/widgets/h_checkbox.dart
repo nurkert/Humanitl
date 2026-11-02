@@ -138,7 +138,13 @@ class HCheckbox extends StatelessWidget {
                   ),
                   SizedBox(width: tokens.spacing.x2),
                   Expanded(
+                    // `min`: Mit der vollen Höhe zog die Spalte das ganze
+                    // Kästchen auf die Höhe einer Leiste, die mehr Platz
+                    // anbietet als sie braucht, und die Beschriftung stand
+                    // dann oben statt auf der Mitte der Knöpfe daneben
+                    // (Kopf der Sandbox, 7,5 px zu hoch).
                     child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
                         Padding(
