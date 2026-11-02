@@ -622,8 +622,8 @@ impl Writer {
             flow_id,
             "UPDATE flows SET state = 'decided', decision = ?2, block_reason = ?3, \
              rule_id = COALESCE(?4, rule_id), held_ms = COALESCE(?5, held_ms), edited = ?6, \
-             passthrough = MAX(passthrough, ?7), decision_note = ?8, unresolved_findings = ?9 \
-             WHERE id = ?1",
+             passthrough = MAX(passthrough, ?7), decision_note = ?8, unresolved_findings = ?9, \
+             paused = MAX(paused, ?10) WHERE id = ?1",
             rusqlite::params![
                 flow_id.to_string(),
                 decision.as_str(),
@@ -634,6 +634,7 @@ impl Writer {
                 i64::from(source == DecisionSource::Passthrough),
                 decision_note(decision, source),
                 findings.unresolved.map(i64::from),
+                i64::from(source == DecisionSource::Paused),
             ],
         )?;
         for index in &findings.acknowledged {
@@ -722,11 +723,15 @@ impl Writer {
             // eigenen Weg dorthin (`Recorder::store_diagnostic`, HUM-256),
             // und die Bitte des
             // Agenten aus `humanitl.internal/ask` ist gar kein Flow
-            // (HUM-073).
+            // (HUM-073). Ein Wechsel der Pause des Abfangens gehört
+            // keinem Flow; was sie bewirkt, steht an jedem Flow, den sie
+            // durchließ (`paused`), und ihr Beginn und Ende im Audit-Log
+            // (HUM-407).
             FlowEvent::ResponseChunk { .. }
             | FlowEvent::Lagged { .. }
             | FlowEvent::Diagnostic { .. }
-            | FlowEvent::AgentAsk { .. } => Ok(()),
+            | FlowEvent::AgentAsk { .. }
+            | FlowEvent::Intercept { .. } => Ok(()),
         }
     }
 

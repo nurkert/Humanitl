@@ -202,6 +202,14 @@ Fähigkeit in diesem Daemon nicht verfügbar
 
 **Fix.** Kein Fix: Es ist eine Aussage über diesen Daemon, nicht über die Anfrage. Endet er gerade, hilft ein neuer Start, sobald er wieder läuft.
 
+#### IPC_007
+
+Intercept-Anfrage ohne Operation
+
+**Auslöser.** Eine `Intercept`-Anfrage nennt weder `status` noch `pause` noch `resume`; meist ein Client, der älter oder neuer ist als der Daemon.
+
+**Fix.** `CopyCommand` mit `humanitl intercept status`, das den Stand liest; sonst ohne Fix.
+
 ### Bereich config
 
 #### CONFIG_001

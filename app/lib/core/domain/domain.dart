@@ -14,6 +14,7 @@ export 'flow_event.dart';
 export 'flow_state.dart';
 export 'http.dart';
 export 'ids.dart';
+export 'intercept.dart';
 export 'llm.dart';
 export 'llm_servers.dart';
 export 'rule.dart';

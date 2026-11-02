@@ -43,7 +43,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use http_body_util::{BodyExt as _, Full};
 use humanitl_config::{HoldConfig, Limits, RecorderConfig, ResolverConfig};
-use humanitl_core::{Authority, Decision, Diagnostic, FlowEvent, HttpRequest, SessionId};
+use humanitl_core::{
+    Authority, Decision, Diagnostic, FlowEvent, HttpRequest, InterceptPause, SessionId,
+};
 use humanitl_proxy::ca::{CaStore, LeafCache};
 use humanitl_proxy::hold::next_event;
 use humanitl_proxy::rules_store::RulesStore;
@@ -458,8 +460,25 @@ impl ProxyBuilder {
             ))),
             None => queue,
         });
+        // Wie im Daemon: eine Pause des Abfangens, die ihre Wechsel in den
+        // Strom schreibt und die Halte-Pipeline und Handler teilen (HUM-407).
+        let pause = {
+            let queue = Arc::clone(&queue);
+            Arc::new(InterceptPause::announcing(move |event| {
+                queue.publish(event);
+            }))
+        };
         let inner: Arc<dyn FlowPipeline> = match self.pipe {
-            Pipe::Ask(timeout) => Arc::new(AskPipeline::new(Arc::clone(&queue), timeout)),
+            Pipe::Ask(timeout) => Arc::new(AskPipeline::with_settings(
+                Arc::clone(&queue),
+                Arc::new(
+                    SessionSettings::new(SessionState {
+                        hold_timeout: timeout,
+                        ..SessionState::for_config(humanitl_config::AskMode::Ui, 30, None)
+                    })
+                    .with_pause(Arc::clone(&pause)),
+                ),
+            )),
             Pipe::Passthrough => Arc::new(PassthroughPipeline::new(Arc::clone(&queue))),
             Pipe::Custom(make) => make(Arc::clone(&queue)),
         };
@@ -572,13 +591,16 @@ impl ProxyBuilder {
                 scanner,
                 recorder: recorder.clone(),
                 meta,
-                settings: Some(Arc::new(SessionSettings::new(
-                    SessionState::for_config(humanitl_config::AskMode::Ui, 30, None)
-                        .with_llm_alias(&humanitl_config::LlmConfig {
-                            endpoint: self.llm_endpoint.clone(),
-                            ..humanitl_config::LlmConfig::default()
-                        }),
-                ))),
+                settings: Some(Arc::new(
+                    SessionSettings::new(
+                        SessionState::for_config(humanitl_config::AskMode::Ui, 30, None)
+                            .with_llm_alias(&humanitl_config::LlmConfig {
+                                endpoint: self.llm_endpoint.clone(),
+                                ..humanitl_config::LlmConfig::default()
+                            }),
+                    )
+                    .with_pause(Arc::clone(&pause)),
+                )),
             },
         );
 
@@ -601,6 +623,7 @@ impl ProxyBuilder {
             core,
             recorder,
             rules_store: store,
+            pause,
             data_dir,
             tmp,
         }
@@ -623,6 +646,9 @@ pub struct Proxy {
     pub recorder: Option<Recorder>,
     /// Der Regelspeicher, falls `ProxyBuilder::rules_store` gesetzt war.
     pub rules_store: Option<Arc<RulesStore>>,
+    /// Die Pause des Abfangens dieser Sitzung (HUM-407). Im Daemon setzt sie
+    /// nur der gRPC-Dienst; der Test steht an seiner Stelle.
+    pub pause: Arc<InterceptPause>,
     data_dir: PathBuf,
     tmp: TempDir,
 }

@@ -96,8 +96,12 @@ abstract final class ProtoVersion {
   /// Raised to 30 with updates from inside the app: the status bar notice
   /// reads `Update(check)` and installs with `Update(apply)`, and the
   /// settings row "Check now" asks with `force` (HUM-382).
+  /// Raised to 31 with the pause of intercepting: the header pill reads and
+  /// sets `Intercept` behind `intercept.pause` and follows
+  /// `FlowEvent.intercept`, and the history names `DECISION_SOURCE_PAUSED`
+  /// (HUM-407).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 30;
+  static const int minor = 31;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

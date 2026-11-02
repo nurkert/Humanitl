@@ -1666,6 +1666,11 @@ registry! {
     UPDATE_005 => "update", "Update could not be installed", "#update_005",
         "Unpacking the zip or moving the new app into place failed after all checks passed, for example on a full disk or a folder that changed meanwhile. The previous app was restored under its old name; if even that failed, the sentence names where it lies.",
         "No automatic fix; the sentence names the step and the path. Try again, or `OpenUrl` on the releases page for the manual download.";
+    /// Eine `Intercept`-Anfrage nennt keine Operation (HUM-407). Sie ändert
+    /// nichts; die Pause bleibt, wie sie war.
+    IPC_007 => "ipc", "Intercept-Anfrage ohne Operation", "#ipc_007",
+        "Eine `Intercept`-Anfrage nennt weder `status` noch `pause` noch `resume`; meist ein Client, der älter oder neuer ist als der Daemon.",
+        "`CopyCommand` mit `humanitl intercept status`, das den Stand liest; sonst ohne Fix.";
 }
 
 /// Sucht einen Code im Register.

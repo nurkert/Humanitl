@@ -570,11 +570,12 @@ class HistoryPageNotifier extends Notifier<HistoryPageState> {
         // recorded during the gap is missing while the footer counts as if
         // it were not (`backlog/CONVENTIONS.md` 4.13).
         unawaited(reload(keepSelection: true));
-      // A session diagnostic, a rule revision and an agent question change
-      // no recorded row.
+      // A session diagnostic, a rule revision, an agent question and the
+      // pause of intercepting (HUM-407) change no recorded row.
       case FlowEventDiagnostic() ||
           FlowEventRulesChanged() ||
-          FlowEventAgentAsk():
+          FlowEventAgentAsk() ||
+          FlowEventInterceptChanged():
         break;
     }
   }

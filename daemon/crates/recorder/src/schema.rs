@@ -101,6 +101,11 @@ pub static MIGRATIONS: &[Migration] = &[
         name: "flow_diagnostics",
         sql: include_str!("../migrations/V10__flow_diagnostics.sql"),
     },
+    Migration {
+        version: 11,
+        name: "paused_flow",
+        sql: include_str!("../migrations/V11__paused_flow.sql"),
+    },
 ];
 
 /// Der Stand, den eine frisch migrierte Datenbank hat.

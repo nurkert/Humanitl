@@ -53,6 +53,7 @@ extension InfoToDomain on pb.Info {
     protoMinor: protoMinor,
     capabilities: List<String>.unmodifiable(capabilities),
     sessionId: sessionId,
+    intercept: hasIntercept() ? intercept.toDomain() : null,
   );
 }
 
@@ -403,9 +404,24 @@ extension FlowEventToDomain on pb.FlowEvent {
             UpstreamError.connect,
         resolvedIp: failed.resolvedIp,
       ),
+      pb.FlowEvent_Event.intercept => FlowEvent.interceptChanged(
+        at: when,
+        status: intercept.status.toDomain(),
+      ),
       pb.FlowEvent_Event.notSet => null,
     };
   }
+}
+
+/// `InterceptStatus` to [InterceptStatus] (HUM-407).
+extension InterceptStatusToDomain on pb.InterceptStatus {
+  /// The domain form; a start time only travels with a pause.
+  InterceptStatus toDomain() => InterceptStatus(
+    paused: paused,
+    pausedSince: paused && hasPausedSince() ? _dateTime(pausedSince) : null,
+    revision: revision.toInt(),
+    instance: instance,
+  );
 }
 
 /// `RuleMatcher` to [RuleMatcher].

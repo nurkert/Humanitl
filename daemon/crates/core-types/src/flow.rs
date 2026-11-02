@@ -330,6 +330,10 @@ pub enum DecisionSource {
     Passthrough,
     /// Der Daemon selbst, etwa wegen eines erschöpften Budgets.
     System,
+    /// Die Pause des Abfangens (HUM-407): Ein Mensch hat über den Socket des
+    /// Daemons beschlossen, dass bis zum Einschalten nichts gehalten wird, und
+    /// diese Anfrage hätte sonst gewartet. Sie lässt nur durch, nie ab.
+    Paused,
 }
 
 impl DecisionSource {
@@ -342,6 +346,7 @@ impl DecisionSource {
             Self::Timeout => "timeout",
             Self::Passthrough => "passthrough",
             Self::System => "system",
+            Self::Paused => "paused",
         }
     }
 }
@@ -605,6 +610,10 @@ fn unseen(decision: &Decision, findings: &[Finding]) -> DecidedFindings {
 /// aber niemals durchlassen: ein erschöpftes Halte-Budget oder ein
 /// aufgegebener Client beendet den Flow, ohne dass jemand die Anfrage
 /// stillschweigend erlaubt.
+///
+/// Die Pause (`Paused`, HUM-407) entscheidet nur nach `Analyzed` und nur mit
+/// einem unveränderten `Allow`: Sie ersetzt das Halten, nicht eine Antwort
+/// auf einen gehaltenen Flow, und sie sperrt nie selbst.
 fn may_decide(from_held: bool, source: DecisionSource, decision: &Decision) -> bool {
     match source {
         DecisionSource::Rule(_) => true,
@@ -612,6 +621,7 @@ fn may_decide(from_held: bool, source: DecisionSource, decision: &Decision) -> b
         DecisionSource::User => from_held,
         DecisionSource::Timeout => false,
         DecisionSource::System => decision.is_refusal(),
+        DecisionSource::Paused => !from_held && matches!(decision, Decision::Allow),
     }
 }
 

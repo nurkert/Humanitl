@@ -1627,6 +1627,33 @@ fn rules_list_hides_the_bundled_rules_until_all() {
     );
 }
 
+/// `humanitl intercept` ist ein dünner Client der RPC `Intercept` (HUM-407):
+/// Pausieren, Lesen und Einschalten gehen über den Daemon, und die Antwort ist
+/// der Stand, den er danach hat.
+#[test]
+fn intercept_pause_status_and_resume_go_through_the_rpc() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let before = harness.run(["--json", "intercept", "status"]);
+    assert_eq!(code(&before), 0, "{}", stderr(&before));
+    assert_eq!(json_of(&before)["paused"], false);
+
+    let paused = harness.run(["intercept", "pause"]);
+    assert_eq!(code(&paused), 0, "{}", stderr(&paused));
+    assert!(stdout(&paused).contains("PAUSED"), "{}", stdout(&paused));
+
+    let status = harness.run(["--json", "intercept", "status"]);
+    let value = json_of(&status);
+    assert_eq!(value["paused"], true, "{value}");
+    assert!(value["paused_since"].is_string(), "{value}");
+
+    let resumed = harness.run(["--json", "intercept", "resume"]);
+    assert_eq!(json_of(&resumed)["paused"], false);
+    let after = harness.run(["--json", "intercept", "status"]);
+    assert_eq!(json_of(&after)["paused"], false);
+}
+
 #[test]
 fn a_rule_is_added_changed_moved_and_removed_over_the_rpc() {
     let harness = Harness::new();

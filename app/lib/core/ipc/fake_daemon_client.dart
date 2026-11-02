@@ -88,7 +88,7 @@ class RecordedDecision {
 }
 
 /// [DaemonClient] without a daemon.
-class FakeDaemonClient with FakeUpdates implements DaemonClient {
+class FakeDaemonClient with FakeUpdates, FakeIntercept implements DaemonClient {
   /// Creates a fake that answers `GetInfo` with [info] (or [defaultInfo]),
   /// or throws [infoFailure] when given, and replays [script] (or
   /// [defaultScript]) on `subscribe`.
@@ -283,6 +283,7 @@ class FakeDaemonClient with FakeUpdates implements DaemonClient {
   );
 
   /// The answer to `GetInfo`.
+  @override
   final DaemonInfo info;
 
   /// What `GetInfo` throws instead of answering, when set.
@@ -429,7 +430,10 @@ class FakeDaemonClient with FakeUpdates implements DaemonClient {
     if (failure != null) {
       throw DaemonException(failure);
     }
-    return info;
+    // Wie der Daemon: der Stand der Pause in jedem `GetInfo` (HUM-407).
+    return info.offersInterceptPause
+        ? info.copyWith(intercept: interceptStatus)
+        : info;
   }
 
   @override
@@ -2022,6 +2026,7 @@ class FakeDaemonClient with FakeUpdates implements DaemonClient {
     }
   }
 
+  @override
   void _emit(FlowEvent event) {
     _apply(event);
     _live.add(event);
@@ -2134,7 +2139,8 @@ class FakeDaemonClient with FakeUpdates implements DaemonClient {
           FlowEventLagged() ||
           FlowEventDiagnostic() ||
           FlowEventRulesChanged() ||
-          FlowEventAgentAsk():
+          FlowEventAgentAsk() ||
+          FlowEventInterceptChanged():
         break;
     }
   }
@@ -5384,5 +5390,89 @@ mixin FakeUpdates {
     if (applyFailure case final Diagnostic failure) {
       throw DaemonException(failure);
     }
+  }
+}
+
+// --- Pause des Abfangens (HUM-407) ----------------------------------------
+//
+// Ein Mixin am Ende der Datei, damit dieser Abschnitt die Klasse oben nur in
+// ihrer Kopfzeile berührt. Wie der Daemon meldet der Fake jeden Wechsel im
+// Ereignisstrom; was die Pause im Proxy bewirkt, spielt er nicht.
+
+/// The scriptable intercept half of [FakeDaemonClient].
+mixin FakeIntercept {
+  /// What the fake daemon says about intercepting right now; an empty
+  /// instance stands for this fake's own session.
+  InterceptStatus _intercept = InterceptStatus.on;
+
+  /// What the fake daemon says about intercepting right now.
+  InterceptStatus get interceptStatus => _intercept.instance.isEmpty
+      ? InterceptStatus(
+          paused: _intercept.paused,
+          pausedSince: _intercept.pausedSince,
+          revision: _intercept.revision,
+          instance: info.sessionId,
+        )
+      : _intercept;
+
+  set interceptStatus(InterceptStatus status) => _intercept = status;
+
+  /// Every `Intercept` operation, in call order.
+  final List<InterceptOp> interceptCalls = <InterceptOp>[];
+
+  /// When set, `Intercept` throws it instead of answering.
+  Diagnostic? interceptFailure;
+
+  /// `GetInfo` of a daemon that can pause intercepting.
+  static final DaemonInfo interceptInfo = FakeDaemonClient.defaultInfo.copyWith(
+    protoMinor: 31,
+    capabilities: <String>[
+      ...FakeDaemonClient.defaultInfo.capabilities,
+      DaemonInfo.interceptPauseCapability,
+    ],
+  );
+
+  /// Puts [event] on the fake's stream, like every other event.
+  void _emit(FlowEvent event);
+
+  /// What `GetInfo` answers; its session id names this fake daemon.
+  DaemonInfo get info;
+
+  /// Puts a change of the pause on the stream as if the daemon made it, with
+  /// whatever revision and instance [status] carries; for tests that play a
+  /// restarted daemon.
+  void announceIntercept(InterceptStatus status) {
+    interceptStatus = status;
+    _emit(FlowEvent.interceptChanged(at: DateTime.now(), status: status));
+  }
+
+  /// `Intercept`.
+  Future<InterceptStatus> intercept(InterceptOp op) async {
+    interceptCalls.add(op);
+    if (interceptFailure case final Diagnostic failure) {
+      throw DaemonException(failure);
+    }
+    final int bumped = interceptStatus.revision + 1;
+    final InterceptStatus next = switch (op) {
+      InterceptOp.status => interceptStatus,
+      InterceptOp.pause =>
+        interceptStatus.paused
+            ? interceptStatus
+            : InterceptStatus(
+                paused: true,
+                pausedSince: DateTime.now(),
+                revision: bumped,
+                instance: info.sessionId,
+              ),
+      InterceptOp.resume =>
+        interceptStatus.paused
+            ? InterceptStatus(revision: bumped, instance: info.sessionId)
+            : interceptStatus,
+    };
+    if (next != interceptStatus) {
+      interceptStatus = next;
+      _emit(FlowEvent.interceptChanged(at: DateTime.now(), status: next));
+    }
+    return interceptStatus;
   }
 }

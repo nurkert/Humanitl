@@ -2118,3 +2118,121 @@ async fn a_timeout_set_in_the_form_blocks_after_the_restart_at_fifteen_seconds()
 
     daemon.terminate();
 }
+
+// ---------------------------------------------------------------------------
+// Die Pause des Abfangens (HUM-407)
+// ---------------------------------------------------------------------------
+
+/// Pausieren über gRPC, eine Anfrage ohne Regel geht ohne Halten durch, und
+/// ein Neustart des Daemons beendet die Pause. Beginn und Ende stehen im
+/// Audit-Log, das Ende mit dem Grund `daemon_stopping`.
+///
+/// Das Ziel ist `127.0.0.1:9`: Ein Name verließe den Rechner, sobald die
+/// Pause ihn durchlässt; eine private Adresse scheitert nach der
+/// Entscheidung am Proxy (`PrivateAddress`), ohne dass etwas hinausgeht.
+#[tokio::test]
+async fn a_pause_set_over_grpc_lets_requests_pass_and_ends_with_a_restart() {
+    let mut daemon = Daemon::start(120);
+    daemon.ready().await;
+    let token = auth::read_token(&daemon.token_path()).unwrap();
+    let mut grpc = client::connect_at(&daemon.socket(), &token).await.unwrap();
+
+    let info = grpc.get_info(()).await.unwrap().into_inner();
+    assert!(
+        info.capabilities
+            .iter()
+            .any(|name| name == "intercept.pause"),
+        "{:?}",
+        info.capabilities
+    );
+    let mut events = grpc
+        .subscribe(v1::SubscribeRequest::default())
+        .await
+        .unwrap()
+        .into_inner();
+
+    let paused = grpc
+        .intercept(v1::InterceptRequest {
+            op: Some(v1::intercept_request::Op::Pause(
+                v1::intercept_request::Pause {},
+            )),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(paused.paused && paused.paused_since.is_some());
+    // Jede Antwort und jedes Ereignis nennt den Daemon, von dem es stammt.
+    assert_eq!(paused.instance, info.session_id);
+    // Und `GetInfo`, also der Herzschlag der Oberfläche, trägt den Stand.
+    let heartbeat = grpc.get_info(()).await.unwrap().into_inner();
+    let carried = heartbeat.intercept.expect("Info carries the pause");
+    assert!(carried.paused);
+    assert_eq!(carried.revision, paused.revision);
+    assert_eq!(carried.instance, heartbeat.session_id);
+
+    let mut agent = UnixStream::connect(daemon.proxy_socket()).await.unwrap();
+    agent
+        .write_all(b"GET /x HTTP/1.1\r\nHost: 127.0.0.1:9\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut raw = Vec::new();
+    tokio::time::timeout(Duration::from_secs(10), agent.read_to_end(&mut raw))
+        .await
+        .expect("a paused intercept holds nothing")
+        .unwrap();
+
+    let (mut changed, mut source, mut held) = (false, None, false);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while source.is_none() {
+            let event = events.next().await.unwrap().unwrap();
+            match event.event {
+                Some(v1::flow_event::Event::Intercept(change)) => {
+                    changed = change
+                        .status
+                        .is_some_and(|status| status.paused && status.instance == info.session_id);
+                }
+                Some(v1::flow_event::Event::Held(_)) => held = true,
+                Some(v1::flow_event::Event::Decided(decided)) => source = Some(decided.source),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("the flow is decided");
+    assert!(changed, "every subscriber sees the pause begin");
+    assert!(!held, "nothing was held");
+    assert_eq!(source, Some(v1::DecisionSource::Paused as i32));
+
+    drop(events);
+    drop(grpc);
+    daemon.restart(120).await;
+    let token = auth::read_token(&daemon.token_path()).unwrap();
+    let mut grpc = client::connect_at(&daemon.socket(), &token).await.unwrap();
+    let status = grpc
+        .intercept(v1::InterceptRequest {
+            op: Some(v1::intercept_request::Op::Status(
+                v1::intercept_request::Status {},
+            )),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!status.paused, "a restart ends the pause");
+    drop(grpc);
+    daemon.terminate();
+
+    let trail = AuditTrail::of(daemon.dir.path());
+    let paused_at = trail.text.find("\"intercept.paused\"");
+    let resumed_at = trail.text.find("\"intercept.resumed\"");
+    assert!(
+        paused_at.is_some() && resumed_at > paused_at,
+        "{}",
+        trail.text
+    );
+    assert!(trail.text.contains("daemon_stopping"), "{}", trail.text);
+    assert!(
+        trail.text.contains("\"decided_by\":\"paused\""),
+        "{}",
+        trail.text
+    );
+}

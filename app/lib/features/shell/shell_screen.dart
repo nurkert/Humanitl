@@ -37,6 +37,7 @@ import '../settings/settings_sheet.dart';
 import '../setup/providers/setup_provider.dart';
 import 'agent_session_feed.dart';
 import 'providers/connection.dart';
+import 'providers/intercept_pause.dart';
 import 'providers/language.dart';
 import 'providers/navigation.dart';
 import 'providers/rail.dart';
@@ -49,6 +50,7 @@ import 'widgets/frozen_banner.dart';
 import 'widgets/frozen_sections.dart';
 import 'widgets/header_bar.dart';
 import 'widgets/icon_rail.dart';
+import 'widgets/intercept_pill.dart';
 import 'widgets/setup_host.dart';
 import 'widgets/shell_notices.dart';
 import 'widgets/status_bar.dart';
@@ -73,6 +75,9 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   /// the rail stays the five places of the work plus setup, and the settings
   /// lie over whichever of them is showing (`BACKLOG.md` 5, "Sheet").
   bool _settingsOpen = false;
+
+  /// Whether the question before a pause of intercepting is open (HUM-407).
+  bool _pauseAsk = false;
 
   /// The key whose field the open sheet scrolls to and focuses, and how often
   /// that was asked for (HUM-275).
@@ -230,6 +235,18 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
   }
 
   void _togglePalette() => _paletteOpen ? _closePalette() : _openPalette();
+
+  /// Opens the question before intercepting is paused (HUM-407).
+  void _askPause() {
+    HLayerScope.claimKeyboard();
+    setState(() => _pauseAsk = true);
+  }
+
+  /// Closes it again, after a pause as after a cancel.
+  void _closePauseAsk() {
+    setState(() => _pauseAsk = false);
+    _keysBackAfterLayer();
+  }
 
   void _openSettings() {
     HLayerScope.claimKeyboard();
@@ -894,7 +911,15 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                         section: section,
                         onPalette: _togglePalette,
                         onSettings: _openSettings,
+                        onAskPause: _askPause,
                       ),
+                      // Solange das Abfangen pausiert ist, läuft das
+                      // Absperrband über die ganze Breite, in jeder Sektion
+                      // und über dem schwebenden Terminal (HUM-407,
+                      // `docs/UX.md` 3.6). Ohne Verbindung weiß niemand, ob
+                      // pausiert ist; mit dem Daemon endet die Pause ohnehin.
+                      if (live && ref.watch(interceptPauseProvider).paused)
+                        const HCautionTape(key: Key('shell-intercept-tape')),
                       if (link case ConnectionFrozen(
                         :final Diagnostic diagnostic,
                         :final bool settling,
@@ -986,6 +1011,7 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                     ],
                   ),
                 ),
+                if (_pauseAsk) InterceptPauseDialog(onClose: _closePauseAsk),
                 if (_paletteOpen)
                   CommandPalette(
                     commands: _commands(context, live: live),

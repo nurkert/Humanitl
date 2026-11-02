@@ -521,7 +521,8 @@ fn order_key(row: &FlowSummary) -> (bool, Option<Instant>, SystemTime, FlowId) {
 /// `None` für die Ereignisse, die kein Übergang sind: [`FlowEvent::Received`]
 /// (der Flow beginnt damit), [`FlowEvent::ResponseChunk`],
 /// [`FlowEvent::Diagnostic`], [`FlowEvent::Lagged`] und
-/// [`FlowEvent::AgentAsk`], das zu gar keinem Flow gehört (HUM-073).
+/// [`FlowEvent::AgentAsk`], das zu gar keinem Flow gehört (HUM-073), ebenso
+/// wenig wie [`FlowEvent::Intercept`] (HUM-407).
 fn transition_input(event: &FlowEvent) -> Option<TransitionInput> {
     match event {
         FlowEvent::Analyzed { findings, .. } => Some(TransitionInput::Analyze {
@@ -554,7 +555,8 @@ fn transition_input(event: &FlowEvent) -> Option<TransitionInput> {
         | FlowEvent::ResponseChunk { .. }
         | FlowEvent::Diagnostic { .. }
         | FlowEvent::Lagged { .. }
-        | FlowEvent::AgentAsk { .. } => None,
+        | FlowEvent::AgentAsk { .. }
+        | FlowEvent::Intercept { .. } => None,
     }
 }
 

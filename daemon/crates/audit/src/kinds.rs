@@ -22,12 +22,17 @@
 //! die dokumentierte Löschung eines Aufräumlaufs der Aufzeichnung.
 //! `audit.pruned` kommt aus HUM-157 dazu: die dokumentierte Löschung am Anfang
 //! der Kette selbst; die Struktur steht in [`crate::retention`].
+//! `intercept.paused` und `intercept.resumed` kommen aus HUM-407 dazu: Beginn
+//! und Ende einer Pause des Abfangens, die ein Mensch über den Socket des
+//! Daemons beschlossen hat.
 
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use humanitl_core::rule::{Expiry, Rule};
-use humanitl_core::{DecidedFindings, Decision, DecisionSource, Finding, FlowId, HttpRequest};
+use humanitl_core::{
+    DecidedFindings, Decision, DecisionSource, Finding, FlowId, HttpRequest, ResumeReason,
+};
 use serde_json::{Value, json};
 
 use crate::record::{format_ts, sha256_hex};
@@ -111,6 +116,29 @@ pub struct SessionEnded {
     pub auto_rule: u64,
     /// Durch die Durchreiche zum Sprachmodell.
     pub passthrough: u64,
+    /// Während einer Pause des Abfangens ohne Halten durchgelassen (HUM-407).
+    pub paused: u64,
+}
+
+impl SessionEnded {
+    /// `data` dieses Records.
+    ///
+    /// Eine eigene Methode wie [`RetentionApplied::data`]: Der Match in
+    /// [`RecordKind::data`] stößt sonst an `clippy::too_many_lines`.
+    #[must_use]
+    pub fn data(&self) -> Value {
+        json!({
+            "flows_total": self.flows_total,
+            "held": self.held,
+            "allowed": self.allowed,
+            "allowed_edited": self.allowed_edited,
+            "blocked": self.blocked,
+            "timed_out": self.timed_out,
+            "auto_rule": self.auto_rule,
+            "passthrough": self.passthrough,
+            "paused": self.paused,
+        })
+    }
 }
 
 /// Eine Zeile von `isolation.check`.
@@ -215,6 +243,9 @@ pub enum DecisionKind {
     AutoBlock,
     /// Die Durchreiche zum Sprachmodell.
     Passthrough,
+    /// Während einer Pause des Abfangens durchgelassen, statt zu warten
+    /// (HUM-407).
+    Paused,
 }
 
 impl DecisionKind {
@@ -223,6 +254,7 @@ impl DecisionKind {
     pub const fn of(decision: &Decision, source: DecisionSource) -> Self {
         match (decision, source) {
             (_, DecisionSource::Passthrough) => Self::Passthrough,
+            (_, DecisionSource::Paused) => Self::Paused,
             (Decision::TimedOut, _) | (_, DecisionSource::Timeout) => Self::TimedOut,
             (Decision::Allow | Decision::AllowEdited { .. }, DecisionSource::Rule(_)) => {
                 Self::AutoAllow
@@ -245,6 +277,7 @@ impl DecisionKind {
             Self::AutoAllow => "auto_allow",
             Self::AutoBlock => "auto_block",
             Self::Passthrough => "passthrough",
+            Self::Paused => "paused",
         }
     }
 }
@@ -275,7 +308,8 @@ pub struct FlowDecided {
     /// Werte, die mit dieser Entscheidung auf die Ausnahmeliste kamen. `None`,
     /// bis es diesen Weg gibt.
     pub allowlisted_added: Option<u64>,
-    /// Wer entschieden hat: `user`, `rule`, `timeout` oder `system`.
+    /// Wer entschieden hat: `user`, `rule`, `timeout`, `system` oder `paused`
+    /// (HUM-407: die Pause des Abfangens, kein Mensch und keine Regel).
     pub decided_by: &'static str,
 }
 
@@ -297,6 +331,7 @@ impl FlowDecided {
             DecisionSource::Rule(_) | DecisionSource::Passthrough => "rule",
             DecisionSource::Timeout => "timeout",
             DecisionSource::System => "system",
+            DecisionSource::Paused => "paused",
         };
         Self {
             flow: flow.to_string(),
@@ -590,6 +625,25 @@ impl RetentionApplied {
     }
 }
 
+/// `intercept.resumed`: Eine Pause des Abfangens ist zu Ende (HUM-407).
+///
+/// Ihr Beginn steht als `intercept.paused` davor; zwischen beiden steht jede
+/// Anfrage, die sie durchließ, als `flow.decided` mit `decision: paused`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InterceptResumed {
+    /// Warum: `requested` (ein Mensch über den Socket), `session_started`
+    /// (ein neuer Lauf) oder `daemon_stopping`.
+    pub reason: ResumeReason,
+}
+
+impl InterceptResumed {
+    /// `data` dieses Records.
+    #[must_use]
+    pub fn data(&self) -> Value {
+        json!({ "reason": self.reason.as_str() })
+    }
+}
+
 /// Eine Art von Record samt ihren Daten.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordKind {
@@ -639,6 +693,12 @@ pub enum RecordKind {
     /// Ein Lauf von `audit.retention_days` oder `audit.max_bytes` hat den
     /// Anfang der Kette gelöscht.
     AuditPruned(AuditPruned),
+    /// Ein Mensch hat das Abfangen über den Socket des Daemons pausiert
+    /// (HUM-407). Ohne Daten: Wer am Socket war, weiß der Daemon nicht
+    /// genauer als „der Nutzer dieses Kontos".
+    InterceptPaused,
+    /// Die Pause des Abfangens ist zu Ende (HUM-407).
+    InterceptResumed(InterceptResumed),
 }
 
 impl RecordKind {
@@ -668,11 +728,13 @@ impl RecordKind {
             Self::AuditResumed(_) => "audit.resumed",
             Self::RetentionApplied(_) => "recorder.retention_applied",
             Self::AuditPruned(_) => PRUNED_KIND,
+            Self::InterceptPaused => "intercept.paused",
+            Self::InterceptResumed(_) => "intercept.resumed",
         }
     }
 
     /// Alle Namen, in der Reihenfolge der Tabelle.
-    pub const NAMES: [&'static str; 22] = [
+    pub const NAMES: [&'static str; 24] = [
         "daemon.started",
         "daemon.stopped",
         "session.started",
@@ -695,6 +757,8 @@ impl RecordKind {
         "audit.resumed",
         "recorder.retention_applied",
         PRUNED_KIND,
+        "intercept.paused",
+        "intercept.resumed",
     ];
 
     /// `data` dieser Art.
@@ -716,16 +780,7 @@ impl RecordKind {
                 "sandbox_backend": d.sandbox_backend,
                 "argv_hash": d.argv_hash,
             }),
-            Self::SessionEnded(d) => json!({
-                "flows_total": d.flows_total,
-                "held": d.held,
-                "allowed": d.allowed,
-                "allowed_edited": d.allowed_edited,
-                "blocked": d.blocked,
-                "timed_out": d.timed_out,
-                "auto_rule": d.auto_rule,
-                "passthrough": d.passthrough,
-            }),
+            Self::SessionEnded(d) => d.data(),
             Self::IsolationCheck(d) => json!({
                 "results": d
                     .results
@@ -801,6 +856,8 @@ impl RecordKind {
             Self::AuditResumed(d) => json!({ "log_seq": d.log_seq, "anchor_seq": d.anchor_seq }),
             Self::RetentionApplied(d) => d.data(),
             Self::AuditPruned(d) => d.data(),
+            Self::InterceptPaused => json!({}),
+            Self::InterceptResumed(d) => d.data(),
         }
     }
 }
@@ -836,7 +893,7 @@ mod tests {
 
     #[test]
     fn every_kind_has_the_name_of_the_table_and_canonical_data() {
-        assert_eq!(RecordKind::NAMES.len(), 22);
+        assert_eq!(RecordKind::NAMES.len(), 24);
         for name in RecordKind::NAMES {
             let (area, verb) = name.split_once('.').unwrap();
             assert!(!area.is_empty() && !verb.is_empty(), "{name}");
@@ -901,6 +958,7 @@ mod tests {
                 "passthrough",
                 "rule",
             ),
+            (Decision::Allow, DecisionSource::Paused, "paused", "paused"),
         ];
         for (decision, source, word, by) in cases {
             let decided = FlowDecided::new(FlowId::new(), &decision, source);

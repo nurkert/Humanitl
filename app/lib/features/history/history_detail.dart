@@ -454,6 +454,7 @@ class _Head extends StatelessWidget {
         HistoryDecider.pending => l10n.historyDeciderPending,
         HistoryDecider.meta => l10n.historyDeciderMeta,
         HistoryDecider.client => l10n.historyDeciderClient,
+        HistoryDecider.paused => l10n.historyDeciderPaused,
       };
 }
 

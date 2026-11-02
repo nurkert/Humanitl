@@ -1560,6 +1560,18 @@ the swap fails (`UPDATE_005`). Afterwards the daemon still runs the old program;
 `humanitl daemon retire-if-idle` and `humanitl daemon restart` (macOS) or
 `systemctl --user restart humanitld.service` (Linux), which never ends a running session.
 
+## `humanitl intercept`
+
+`humanitl intercept pause` pauses intercepting (HUM-407): until you run `humanitl intercept resume`,
+a new session starts or the daemon stops, a request that would wait for your decision goes out at
+once and is recorded with the reason `paused`; with `ask_mode = none` (or a hold deadline of zero)
+nothing waits, and the pause changes nothing. Block rules, the hard block on verified secrets, the sandbox
+and the recording stay, and the agent is not told. `humanitl intercept status` says whether a pause
+holds and since when. Every subcommand is one call of the RPC `Intercept` and prints the state
+after it; `--json` prints `{"paused": …, "paused_since": …}` with the start as RFC 3339 or `null`.
+The app shows the same pause, whoever set it: the header pill turns to "Intercept PAUSED" and a
+caution tape runs across the window. A daemon without a proxy session answers `IPC_006`.
+
 ## The global switches
 
 Five switches apply to every subcommand, because `clap` carries them as

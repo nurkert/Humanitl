@@ -5,14 +5,15 @@
 //! später Plugins sind Zuhörer, niemand fragt den Proxy nach seinem Zustand
 //! (siehe `docs/ARCHITECTURE.md` 1).
 //!
-//! Vier Varianten entstehen nicht im Automaten: [`FlowEvent::ResponseChunk`]
+//! Fünf Varianten entstehen nicht im Automaten: [`FlowEvent::ResponseChunk`]
 //! schreibt der Proxy beim Durchreichen der Antwort, [`FlowEvent::Lagged`]
 //! meldet die IPC-Schicht, wenn ein Zuhörer zu langsam war,
 //! [`FlowEvent::Diagnostic`] trägt einen Befund in denselben Strom, damit die
 //! Oberfläche ihn an derselben Stelle sieht wie den Flow, um den es geht
 //! (`backlog/CONVENTIONS.md` 4.3), und [`FlowEvent::AgentAsk`] trägt die Bitte
 //! des Agenten aus dem Meta-Endpunkt hinein, die zu gar keinem Flow gehört
-//! (HUM-073).
+//! (HUM-073). [`FlowEvent::Intercept`] meldet Beginn und Ende der Pause des
+//! Abfangens (HUM-407).
 
 use std::time::{Instant, SystemTime};
 
@@ -21,6 +22,7 @@ use crate::finding::Finding;
 use crate::flow::{Decision, DecisionSource, UpstreamError};
 use crate::http::HttpRequest;
 use crate::ids::{AskId, FlowId};
+use crate::intercept::InterceptChange;
 
 /// So viele Befunde behält ein Fluss höchstens, in der Registry wie in der
 /// Aufzeichnung (HUM-057, HUM-256).
@@ -211,6 +213,21 @@ pub enum FlowEvent {
         /// einem Host.
         suggested_path: Option<String>,
     },
+    /// Das Abfangen wurde pausiert oder wieder eingeschaltet (HUM-407); kein
+    /// Flow und kein Zustandswechsel eines Flows.
+    ///
+    /// Es reist im selben Strom wie die Flows, damit Oberfläche und Audit den
+    /// Wechsel an derselben Stelle sehen wie die Anfragen, die er betrifft.
+    /// Nichts davon erreicht die Sandbox.
+    Intercept {
+        /// Wann.
+        at: SystemTime,
+        /// Was sich geändert hat.
+        change: InterceptChange,
+        /// Die Revision der Pause nach diesem Wechsel
+        /// ([`InterceptStatus::revision`](crate::InterceptStatus::revision)).
+        revision: u64,
+    },
 }
 
 impl FlowEvent {
@@ -231,12 +248,14 @@ impl FlowEvent {
             Self::Lagged { .. } => "lagged",
             Self::Diagnostic { .. } => "diagnostic",
             Self::AgentAsk { .. } => "agent_ask",
+            Self::Intercept { .. } => "intercept",
         }
     }
 
     /// Der Flow, zu dem das Ereignis gehört.
     ///
-    /// `None` bei [`FlowEvent::Lagged`], bei [`FlowEvent::AgentAsk`] und bei
+    /// `None` bei [`FlowEvent::Lagged`], bei [`FlowEvent::AgentAsk`], bei
+    /// [`FlowEvent::Intercept`] und bei
     /// einem [`FlowEvent::Diagnostic`], der die ganze Sitzung betrifft.
     #[must_use]
     pub const fn flow_id(&self) -> Option<FlowId> {
@@ -252,7 +271,7 @@ impl FlowEvent {
             | Self::TimedOut { flow_id, .. }
             | Self::Recorded { flow_id, .. } => Some(*flow_id),
             Self::Diagnostic { flow_id, .. } => *flow_id,
-            Self::Lagged { .. } | Self::AgentAsk { .. } => None,
+            Self::Lagged { .. } | Self::AgentAsk { .. } | Self::Intercept { .. } => None,
         }
     }
 
@@ -271,7 +290,8 @@ impl FlowEvent {
             | Self::TimedOut { at, .. }
             | Self::Recorded { at, .. }
             | Self::Diagnostic { at, .. }
-            | Self::AgentAsk { at, .. } => Some(*at),
+            | Self::AgentAsk { at, .. }
+            | Self::Intercept { at, .. } => Some(*at),
             Self::Lagged { .. } => None,
         }
     }

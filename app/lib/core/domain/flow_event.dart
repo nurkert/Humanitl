@@ -9,6 +9,7 @@ import 'flow.dart';
 import 'flow_state.dart';
 import 'http.dart';
 import 'ids.dart';
+import 'intercept.dart';
 
 part 'flow_event.freezed.dart';
 
@@ -133,6 +134,13 @@ sealed class FlowEvent with _$FlowEvent {
     @Default('') String resolvedIp,
   }) = FlowEventFailed;
 
+  /// Intercepting was paused or resumed (HUM-407); [status] is the state
+  /// after the change. Belongs to no flow.
+  const factory FlowEvent.interceptChanged({
+    required DateTime at,
+    required InterceptStatus status,
+  }) = FlowEventInterceptChanged;
+
   const FlowEvent._();
 
   /// The flow this event is about, or null for session-wide events.
@@ -154,7 +162,10 @@ sealed class FlowEvent with _$FlowEvent {
     // der Zweig steht hier, weil der Schalter erschöpfend sein muss, und er
     // liefert denselben Wert wie das Feld.
     FlowEventDiagnostic(:final FlowId? flowId) => flowId,
-    FlowEventLagged() || FlowEventRulesChanged() || FlowEventAgentAsk() => null,
+    FlowEventLagged() ||
+    FlowEventRulesChanged() ||
+    FlowEventAgentAsk() ||
+    FlowEventInterceptChanged() => null,
   };
 }
 

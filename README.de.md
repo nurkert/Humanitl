@@ -31,7 +31,11 @@ Der Agent läuft ohne Netzwerk-Interface (unter macOS gibt es Interfaces, aber j
 außer der Tür wird verweigert). Sein einziger Weg nach draußen ist ein moderierender Proxy auf dem
 Host: Eine Anfrage, die keine Regel entscheidet, wird angehalten, mit Kopfzeilen, Parametern und
 Body gezeigt und erst nach deiner Freigabe weitergeleitet. Ohne Halt gehen nur Anfragen, die eine
-`allow`-Regel trifft, und die erklärte LLM-Durchleitung zum Sprachmodell. Alles wird aufgezeichnet, außer
+`allow`-Regel trifft, und die erklärte LLM-Durchleitung zum Sprachmodell. Du kannst das Anhalten auch
+bewusst pausieren, in der Kopfleiste oder mit `humanitl intercept pause`: Bis du wieder einschaltest,
+eine neue Sitzung startest oder den Daemon neu startest, gehen Anfragen, die sonst auf dich warten
+würden, sofort hinaus, jede als `paused` aufgezeichnet, unter einem laufenden Absperrband; Block-Regeln
+und die Sandbox bleiben, und nichts in der Sandbox kann die Pause setzen. Alles wird aufgezeichnet, außer
 während eines Ausfalls der Aufzeichnung (Platte voll, Datenbank gesperrt); dann läuft der Verkehr
 weiter, und die App sagt es an jeder Karte.
 

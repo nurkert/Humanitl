@@ -162,6 +162,10 @@ pub struct IpcServer {
     /// der Speicher der Pfade dieses Dienstes ([`KeyStore::for_paths`]);
     /// Tests setzen eine Attrappe ein.
     keys: Option<KeyStore>,
+    /// Die Pause des Abfangens dieser Sitzung (HUM-407). Nur dieser Dienst
+    /// setzt sie, also nur ein Client am Socket des Daemons; `None` in einem
+    /// Daemon ohne Proxy-Sitzung, und `Intercept` antwortet dann `IPC_006`.
+    intercept: Option<Arc<humanitl_core::InterceptPause>>,
 }
 
 /// Woraus der Update-RPC liest (HUM-382).
@@ -294,6 +298,9 @@ impl IpcServer {
                     .chain(self_update.is_some().then(|| "update".to_owned()))
                     .collect(),
                 session_id: session.map(|id| id.to_string()).unwrap_or_default(),
+                // Erst `get_info` trägt den Stand der Pause ein, so wie er
+                // in diesem Augenblick gilt.
+                intercept: None,
             },
             body_cap_bytes: config.limits.hold_body_cap_bytes,
             decode_cap_bytes: usize::try_from(config.limits.preview_cap_bytes)
@@ -327,6 +334,7 @@ impl IpcServer {
             },
             bodies: BodyIndex::new(),
             keys: None,
+            intercept: None,
         }
     }
 
@@ -592,6 +600,19 @@ impl IpcServer {
         self
     }
 
+    /// Derselbe Dienst mit der Pause des Abfangens dieser Sitzung (HUM-407).
+    ///
+    /// Es ist dieselbe Pause, die die Halte-Pipeline liest
+    /// (`SessionSettings::with_pause` im Proxy); erst mit ihr nennt
+    /// `Info` die Fähigkeit `intercept.pause`, und erst dann macht die
+    /// Oberfläche die Pille der Kopfleiste zu einem Knopf.
+    #[must_use]
+    pub fn with_intercept(mut self, pause: Arc<humanitl_core::InterceptPause>) -> Self {
+        self.info.capabilities.push("intercept.pause".to_owned());
+        self.intercept = Some(pause);
+        self
+    }
+
     /// Derselbe Dienst mit dem Audit-Log (HUM-050).
     ///
     /// Dorthin gehen die Änderungen des Regel-RPC (`rule.*`) und jede Suche
@@ -767,6 +788,9 @@ impl IpcServer {
         let domains = self.domains.clone();
         let include_passthrough = request.include_passthrough;
         let recorder = self.recorder.clone();
+        // Jeder Wechsel der Pause nennt den Daemon, von dem er stammt
+        // (HUM-407): dieselbe Kennung wie `Info.session_id`.
+        let instance = self.info.session_id.clone();
         let live = BroadcastStream::new(self.registry.subscribe()).map(move |item| {
             let event = match item {
                 Ok(event) => event,
@@ -815,10 +839,9 @@ impl IpcServer {
             if hidden {
                 return Vec::new();
             }
-            vec![Ok(convert::flow_event_to_proto(
-                &event,
-                &registry,
-                domains.as_deref(),
+            vec![Ok(crate::intercept::stamp_event(
+                convert::flow_event_to_proto(&event, &registry, domains.as_deref()),
+                &instance,
             ))]
         });
         // Erst zusammenführen, dann auflösen: `Lagged` und die nachgelieferte
@@ -1580,7 +1603,16 @@ impl v1::humanitl_server::Humanitl for IpcServer {
     type UpdateStream = BoxStream<Result<v1::UpdateEvent, Status>>;
 
     async fn get_info(&self, _request: Request<()>) -> Result<Response<v1::Info>, Status> {
-        Ok(Response::new(self.info.clone()))
+        let mut info = self.info.clone();
+        // Der Stand der Pause reist mit jedem `GetInfo`, also mit jedem
+        // Herzschlag der Oberfläche (HUM-407).
+        info.intercept = self.intercept.as_deref().map(|pause| {
+            crate::intercept::stamped(
+                crate::convert::intercept_status_to_proto(pause.status()),
+                &info.session_id,
+            )
+        });
+        Ok(Response::new(info))
     }
 
     async fn subscribe(
@@ -2129,6 +2161,22 @@ impl v1::humanitl_server::Humanitl for IpcServer {
             .map_err(|error| diagnostic_to_status(&unfinished("LlmKey", &error)))?
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
         Ok(Response::new(status))
+    }
+
+    /// Die Pause des Abfangens (HUM-407, [`crate::intercept`]): lesen,
+    /// pausieren, wieder einschalten. Jeder Wechsel geht zusätzlich als
+    /// `FlowEvent.intercept` an alle Abonnenten und ins Audit-Log.
+    async fn intercept(
+        &self,
+        request: Request<v1::InterceptRequest>,
+    ) -> Result<Response<v1::InterceptStatus>, Status> {
+        crate::intercept::answer(
+            self.intercept.as_deref(),
+            &request.into_inner(),
+            &self.info.session_id,
+        )
+        .map(Response::new)
+        .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
     }
 
     /// Die gespeicherten Modellserver (HUM-289, [`llm_servers`]). Ein
@@ -2853,6 +2901,31 @@ mod tests {
         )
         .unwrap();
         flow
+    }
+
+    #[tokio::test]
+    async fn get_info_carries_the_intercept_status_of_this_daemon() {
+        let queue = queue();
+        let pause = Arc::new(humanitl_core::InterceptPause::new());
+        let server = server(&queue).with_intercept(Arc::clone(&pause));
+        let info = server
+            .get_info(Request::new(()))
+            .await
+            .unwrap()
+            .into_inner();
+        let status = info.intercept.expect("the daemon can pause");
+        assert!(!status.paused);
+        assert_eq!(status.instance, info.session_id);
+        pause.pause();
+        let info = server
+            .get_info(Request::new(()))
+            .await
+            .unwrap()
+            .into_inner();
+        let status = info.intercept.unwrap();
+        assert!(status.paused && status.paused_since.is_some());
+        assert_eq!(status.revision, 1);
+        assert_eq!(status.instance, info.session_id);
     }
 
     #[tokio::test]

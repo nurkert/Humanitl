@@ -177,6 +177,7 @@ fn event_name(event: &v1::FlowEvent) -> &'static str {
         Some(Event::RulesChanged(_)) => "rules_changed",
         Some(Event::AgentAsk(_)) => "agent_ask",
         Some(Event::Failed(_)) => "failed",
+        Some(Event::Intercept(_)) => "intercept",
         None => "none",
     }
 }

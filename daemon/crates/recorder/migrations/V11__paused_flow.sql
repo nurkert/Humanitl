@@ -1,0 +1,12 @@
+-- Anfragen, die während einer Pause des Abfangens durchgingen (HUM-407).
+--
+-- Ein Mensch kann über den Socket des Daemons beschließen, dass bis zum
+-- Einschalten nichts gehalten wird. Was dann ohne passende Regel durchgeht,
+-- hätte sonst gewartet; die Historie muss das auch nach einem Neustart des
+-- Daemons noch sagen, denn `decision = 'allow'` allein hieße sonst „ein
+-- Mensch hat erlaubt", und das hat niemand.
+--
+-- Wie `passthrough` eine Spalte neben `decision`: Die Entscheidung ist ein
+-- `allow`, ihre Herkunft ist die Pause. Ohne Index; gefiltert wird danach
+-- bisher nicht, und die `1` ist selten.
+ALTER TABLE flows ADD COLUMN paused INTEGER NOT NULL DEFAULT 0;

@@ -25,7 +25,11 @@ your rule set (your own rules, or the bundled ones you left switched on). Approv
 proxy forwards upstream. Requests an `allow` rule matches and calls to the declared LLM host go
 without a hold. "Both are recorded" holds while the recorder works: during a recording outage
 (HUM-250) traffic continues unrecorded, and every client is told so
-([section 5.6](#56-other-known-limits), item 12). The claim rests on
+([section 5.6](#56-other-known-limits), item 12). The one deliberate exception to "you, at the
+moment the request was held" is the pause of intercepting (HUM-407,
+[section 6](#pausing-intercept)): for as long as you keep it on, a request that would wait for you
+goes out at once. You switch it on over the daemon socket only, it is visible and logged,
+and it ends by itself. The claim rests on
 three guarantees. They stand word for word in the isolation panel of the application (ARB keys
 `isolationCheck1` to `isolationCheck3`) and in `BACKLOG.md` 4.1:
 
@@ -1194,6 +1198,53 @@ The suggestion `LIMIT_001` offers at a block is an `ask` rule with `stream: true
 With the hard block on, `stream: true` never applies and `LIMIT_001` suggests raising the cap
 instead.
 
+### Pausing intercept
+
+Since HUM-407 a person can pause intercepting: from the header pill of the app, after a question
+whose preselected answer is Cancel, or with `humanitl intercept pause`. While the pause lasts, the
+statement "every new request waits for a human" is suspended, and only that one:
+
+- **What changes.** A request that would wait for a person is not held: one no rule decides, one an
+  `ask` rule matches, and, until the pseudonymiser of HUM-079 exists, one a `redact` rule matches,
+  which then goes out **un-pseudonymised**. The proxy forwards it at once with the decision source
+  `paused` (`DecisionSource::Paused`). The pause sits at exactly the place where the request would
+  otherwise be held (`AskPipeline`), so everything before it still applies. Where nothing would be
+  held, nothing changes: with `ask_mode = none` or `hold.timeout_secs = 0` a request still runs into
+  its deadline and is refused (`504`), pause or not.
+- **What stays.** `block` rules block. The hard block on checksum-confirmed secrets (HUM-049,
+  HUM-159) blocks as the system. Authority consistency, private-address refusal, body caps, DNS
+  after the decision and the three sandbox guarantees are untouched. Every request is recorded as
+  before, each passed one with its own reason `paused` (history column, `flows.paused`, audit
+  `flow.decided` with `decision: paused`, `decided_by: paused`).
+- **Who can set it.** Only a client of the daemon socket (`0600`, with the session token), through
+  the RPC `Intercept`. The proxy and the meta endpoint `humanitl.internal` hold no handle to the
+  pause: nothing that arrives through the one door of the sandbox can set, extend or read it.
+  `daemon/crates/proxy/tests/intercept_pause.rs` sends every plausible path and header from the
+  sandbox side and finds the pause unchanged.
+- **How long it lasts.** It lives only in the daemon's memory and ends when the person resumes,
+  when a new session starts (`SessionSettings::set`) and when the daemon stops or restarts. No
+  setting, file or profile makes it permanent. An orderly stop writes `intercept.resumed` with
+  `daemon_stopping`; after `SIGKILL` or a crash the audit log holds `intercept.paused` without an end
+  record, and the next `daemon.started` is the end, because the pause did not survive the process.
+  A request that read the pause just before it was resumed may be recorded `paused` after
+  `intercept.resumed`: at most the requests in flight at that moment.
+- **How it shows.** The header pill reads "Intercept PAUSED" in the warning colour, and a running
+  caution tape spans the window in every section (`docs/UX.md` 3.6). The app shows a pause at the
+  latest one heartbeat (two seconds) after it began, the caution tape included; the daemon's audit
+  log records it immediately. Start and end are audit
+  records (`intercept.paused`, `intercept.resumed` with the reason `requested`,
+  `session_started` or `daemon_stopping`), and every client sees the change on the event stream.
+- **What the agent reads.** No answer text of the proxy or of `humanitl.internal` names the pause
+  (HUM-364; that no answer names a person either is HUM-401): a passed request gets the answer of its destination without an added
+  header, and `/why` gives a passed request the reason `user`, the same line a request a person
+  allowed gets: the pause stands in for exactly that approval (HUM-401 later makes `user` neutral
+  for every flow). The pause itself is not hidden by that: an agent can infer from the
+  missing wait, and from requests that now succeed, that requests are not being held.
+
+The pause is a decision of the person, made in advance for every request until it ends, like an
+`allow` rule for `**` that cannot be saved. Whoever pauses accepts that what the agent sends in
+that time leaves unseen; the recording shows afterwards what it was.
+
 ### Updates from inside the app
 
 Since HUM-382 the daemon asks GitHub at most once a day whether a newer release exists, and
@@ -1528,6 +1579,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | pi loads the globally installed extension `pi-web-access` (`agent.pi.web_access`, default `auto`, closed to project profiles); its requests go through the proxy like every other (HUM-309). |
 | 0.1.x | macOS: the disposable sandbox on an APFS clone, masks removed from the clone and denied in it, the real project sealed, the clone renamed before it is read, and a failed clone that is never silent: `auto` warns with `SANDBOX_033`, an explicit `disposable` refuses with `SANDBOX_030` (HUM-374, K-24). |
 | 0.1.x | Updates from inside the app: a daily check of GitHub (`update.check`, default on), manifests signed with Ed25519 and checked against a built-in key, size and SHA-256 checked while downloading, code signature and version checked before an atomic swap with restore; APT and dnf packages through `pkexec` and their package manager (HUM-382, [Updates](#updates-from-inside-the-app), K-25). |
+| 0.1.x | Pausing intercept: requests that would wait for a person pass with the reason `paused` while a person keeps the pause on (no change without a hold deadline); block rules, the hard block, the sandbox and the recording stay; settable only over the daemon socket, never from the sandbox; ends on resume, with the next session and with the daemon; start and end in the audit log (HUM-407, [Pausing intercept](#pausing-intercept), K-26). |
 | 0.1.x | macOS: Seatbelt as the sandbox backend, a generated SBPL profile per session, the three guarantees restated and measured by the shim; the daemon as a launchd agent; socket and token under `~/Library/Application Support/Humanitl/run` (HUM-323, HUM-327, [section 12](#12-macos-seatbelt-instead-of-bubblewrap)). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap

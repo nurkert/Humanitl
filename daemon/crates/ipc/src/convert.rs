@@ -644,6 +644,62 @@ pub const fn source_to_proto(source: DecisionSource) -> v1::DecisionSource {
         DecisionSource::Timeout => v1::DecisionSource::Timeout,
         DecisionSource::Passthrough => v1::DecisionSource::Passthrough,
         DecisionSource::System => v1::DecisionSource::System,
+        DecisionSource::Paused => v1::DecisionSource::Paused,
+    }
+}
+
+/// Der Stand des Abfangens in seiner Wire-Form (HUM-407).
+#[must_use]
+pub fn intercept_status_to_proto(status: humanitl_core::InterceptStatus) -> v1::InterceptStatus {
+    v1::InterceptStatus {
+        paused: status.is_paused(),
+        paused_since: status.paused_since.map(timestamp),
+        revision: status.revision,
+        // Den Daemon trägt erst der Dienst ein, der ihn kennt
+        // (`crate::intercept::stamped`).
+        instance: String::new(),
+    }
+}
+
+/// Der Grund, aus dem eine Pause des Abfangens endete, in seiner Wire-Form.
+#[must_use]
+pub const fn resume_reason_to_proto(
+    reason: humanitl_core::ResumeReason,
+) -> v1::InterceptResumeReason {
+    match reason {
+        humanitl_core::ResumeReason::Requested => v1::InterceptResumeReason::Requested,
+        humanitl_core::ResumeReason::SessionStarted => v1::InterceptResumeReason::SessionStarted,
+        humanitl_core::ResumeReason::DaemonStopping => v1::InterceptResumeReason::DaemonStopping,
+    }
+}
+
+/// Ein Wechsel des Abfangens als Arm des Ereignisstroms (HUM-407).
+///
+/// Der Stand darin ist der nach dem Wechsel: Mit Beginn der Pause trägt er
+/// ihren Zeitpunkt als `paused_since`, mit ihrem Ende keinen.
+#[must_use]
+pub fn intercept_changed_to_proto(
+    at: SystemTime,
+    change: humanitl_core::InterceptChange,
+    revision: u64,
+) -> v1::flow_event::InterceptChanged {
+    match change {
+        humanitl_core::InterceptChange::Paused => v1::flow_event::InterceptChanged {
+            status: Some(v1::InterceptStatus {
+                paused: true,
+                paused_since: Some(timestamp(at)),
+                revision,
+                instance: String::new(),
+            }),
+            resumed: v1::InterceptResumeReason::Unspecified as i32,
+        },
+        humanitl_core::InterceptChange::Resumed(reason) => v1::flow_event::InterceptChanged {
+            status: Some(v1::InterceptStatus {
+                revision,
+                ..v1::InterceptStatus::default()
+            }),
+            resumed: resume_reason_to_proto(reason) as i32,
+        },
     }
 }
 
@@ -1548,6 +1604,12 @@ pub fn flow_event_to_proto(
         // Die Bitte des Agenten gehört zu keinem Flow: Sie hat ihre eigene
         // Kennung, und `flow_id` bleibt leer (HUM-073).
         FlowEvent::AgentAsk { .. } => Event::AgentAsk(agent_ask_to_proto(event)),
+        // Die Pause des Abfangens gehört zu keinem Flow (HUM-407).
+        FlowEvent::Intercept {
+            at,
+            change,
+            revision,
+        } => Event::Intercept(intercept_changed_to_proto(*at, *change, *revision)),
     };
     v1::FlowEvent {
         at: Some(timestamp(event.at().unwrap_or_else(SystemTime::now))),
@@ -1882,7 +1944,8 @@ pub fn stored_rule_to_proto(stored: &StoredRule) -> v1::Rule {
 /// Was die Aufzeichnung nicht führt, bleibt leer statt geraten: `deadline`
 /// gehört zur laufenden Warteschlange, `origin_tool` kommt mit HUM-030,
 /// `decision_source` steht nicht in der Tabelle `flows` (nur `rule_id` verrät
-/// eine Regel, und `timed_out` seinen Ablauf).
+/// eine Regel, `timed_out` seinen Ablauf und `paused` die Pause des
+/// Abfangens, HUM-407).
 #[must_use]
 pub fn recorded_summary_to_proto(row: &RecordedSummary) -> v1::FlowSummary {
     let method = Method::from_bytes(row.method.as_bytes()).unwrap_or(Method::GET);
@@ -1906,6 +1969,9 @@ pub fn recorded_summary_to_proto(row: &RecordedSummary) -> v1::FlowSummary {
         state: state_from_name(&row.state) as i32,
         decision: decision_kind_from_name(decision) as i32,
         decision_source: match decision {
+            // Die Pause steht in ihrer eigenen Spalte (HUM-407); ohne sie
+            // sähe die Zeile aus wie die Freigabe eines Menschen.
+            _ if row.paused => v1::DecisionSource::Paused as i32,
             "timed_out" => v1::DecisionSource::Timeout as i32,
             _ if row.rule_id.is_some() => v1::DecisionSource::Rule as i32,
             _ => v1::DecisionSource::Unspecified as i32,
@@ -2647,7 +2713,28 @@ mod tests {
             meta: false,
             decision_note: None,
             unresolved_findings: None,
+            paused: false,
         }
+    }
+
+    /// Eine Anfrage, die die Pause durchließ, bleibt nach dem Neuladen eine
+    /// solche: Die Spalte `paused` wird zur Herkunft `PAUSED`, nicht zu einem
+    /// Menschen, der erlaubt hätte (HUM-407).
+    #[test]
+    fn a_paused_row_keeps_its_source() {
+        let row = RecordedSummary {
+            paused: true,
+            held_ms: None,
+            ..recorded_row()
+        };
+        let proto = recorded_summary_to_proto(&row);
+        assert_eq!(proto.decision_source, v1::DecisionSource::Paused as i32);
+        assert_eq!(proto.decision, v1::DecisionKind::Allow as i32);
+        let plain = recorded_summary_to_proto(&recorded_row());
+        assert_eq!(
+            plain.decision_source,
+            v1::DecisionSource::Unspecified as i32
+        );
     }
 
     /// Ein abgebrochener Tunnel bleibt nach dem Neuladen, was er war: Grund

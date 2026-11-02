@@ -2010,6 +2010,7 @@ mod tests {
             proto_minor: PROTO_MINOR,
             capabilities: vec!["hold".to_owned()],
             session_id: String::new(),
+            intercept: None,
         }
     }
 

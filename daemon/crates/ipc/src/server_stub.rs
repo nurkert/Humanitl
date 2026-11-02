@@ -225,6 +225,22 @@ pub trait DaemonApi: Send + Sync + 'static {
         &self,
         request: v1::LlmServersRequest,
     ) -> Result<v1::LlmServerList, Diagnostic>;
+
+    /// Die Pause des Abfangens: lesen, pausieren, wieder einschalten
+    /// (HUM-407).
+    ///
+    /// Die Vorgabe antwortet `IPC_006`: Ein Daemon ohne Proxy-Sitzung hat
+    /// nichts, was er pausieren könnte.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `IPC_007` ohne Operation, sonst `IPC_006`.
+    async fn intercept(
+        &self,
+        request: v1::InterceptRequest,
+    ) -> Result<v1::InterceptStatus, Diagnostic> {
+        crate::intercept::answer(None, &request, "")
+    }
 }
 
 /// Der tonic-Dienst über einem beliebigen [`DaemonApi`].
@@ -276,7 +292,9 @@ impl<T> DaemonService<T> {
 pub fn grpc_code(code: DiagnosticCode) -> Code {
     match code.as_str() {
         "IPC_001" => Code::Unauthenticated,
-        "IPC_002" | "IPC_004" | "IPC_005" | "CONFIG_002" | "CONFIG_003" => Code::InvalidArgument,
+        "IPC_002" | "IPC_004" | "IPC_005" | "IPC_007" | "CONFIG_002" | "CONFIG_003" => {
+            Code::InvalidArgument
+        }
         // Eine Regel, die der Client so geschickt hat, wie die Engine sie
         // nicht annimmt, oder eine Einstellung, die `SetConfig` nicht schreibt
         // (HUM-151): dasselbe Urteil wie bei einer unlesbaren Anfrage.
@@ -634,6 +652,18 @@ impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
         self.check_token(&request)?;
         self.api
             .llm_servers(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+    }
+
+    async fn intercept(
+        &self,
+        request: Request<v1::InterceptRequest>,
+    ) -> Result<Response<v1::InterceptStatus>, Status> {
+        self.check_token(&request)?;
+        self.api
+            .intercept(request.into_inner())
             .await
             .map(Response::new)
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))

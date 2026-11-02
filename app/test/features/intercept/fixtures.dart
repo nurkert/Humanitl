@@ -364,6 +364,11 @@ class TestDaemonClient implements DaemonClient {
   Stream<UpdateEvent> applyUpdate(String version, {String appimage = ''}) =>
       const Stream<UpdateEvent>.empty();
 
+  // Die Pause des Abfangens gehört der Kopfleiste (HUM-407); dieser Client
+  // fängt immer ab.
+  @override
+  Future<InterceptStatus> intercept(InterceptOp op) async => InterceptStatus.on;
+
   // Der Doctor und die Endpunkt-Probe (HUM-075, HUM-044) gehören dem
   // Setup-Bildschirm. Der leere Bericht ist hier die ehrliche Antwort: nicht
   // elf grüne Zeilen, sondern gar keine, denn dieser Client hat nichts

@@ -836,6 +836,13 @@ const FLOW_EVENT_FIELDS: &FieldTable = &[
         ".humanitl.v1.FlowEvent.FlowDiagnostic",
         Some("event"),
     ),
+    // HUM-407: Beginn und Ende der Pause des Abfangens; kein Flow.
+    (
+        "intercept",
+        17,
+        ".humanitl.v1.FlowEvent.InterceptChanged",
+        Some("event"),
+    ),
 ];
 
 /// `DecideRequest` vollstaendig, vor allem die drei Entscheidungen in
@@ -1365,6 +1372,15 @@ const EXPECTED_RPCS: &[(&str, &str, &str, bool, bool)] = &[
         ".humanitl.v1.UpdateEvent",
         false,
         true,
+    ),
+    // HUM-407: die Pause des Abfangens lesen, setzen, beenden. Unär; jeder
+    // Wechsel kommt zusätzlich als `FlowEvent.intercept`.
+    (
+        "Intercept",
+        ".humanitl.v1.InterceptRequest",
+        ".humanitl.v1.InterceptStatus",
+        false,
+        false,
     ),
 ];
 

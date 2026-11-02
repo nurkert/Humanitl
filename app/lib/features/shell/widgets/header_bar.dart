@@ -1,4 +1,5 @@
-/// The 40 px header: wordmark, section title, intercept pill, hold count,
+/// The 40 px header: wordmark, section title, intercept pill (a button since
+/// HUM-407), hold count,
 /// isolation ring, the palette button, the settings gear and the window
 /// buttons. It is the title bar of the window as well (HUM-255).
 library;
@@ -21,6 +22,7 @@ import '../../intercept/providers/flows.dart';
 import '../../sandbox/providers/sandbox_status_provider.dart';
 import '../../sandbox/sandbox_text.dart';
 import '../section.dart';
+import 'intercept_pill.dart';
 import 'window_frame.dart';
 
 /// The header.
@@ -35,6 +37,7 @@ class HeaderBar extends ConsumerWidget {
     required this.section,
     required this.onPalette,
     required this.onSettings,
+    this.onAskPause,
     super.key,
   });
 
@@ -47,12 +50,15 @@ class HeaderBar extends ConsumerWidget {
   /// Opens the settings sheet, the same as `Ctrl+,` (HUM-275).
   final VoidCallback onSettings;
 
+  /// Opens the question before intercepting is paused (HUM-407); without it
+  /// the intercept pill only shows.
+  final VoidCallback? onAskPause;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     final int heldCount = ref.watch(heldFlowsProvider).length;
-    final bool live = ref.watch(linkLiveProvider);
     return SizedBox(
       height: tokens.sizes.headerBar,
       child: DecoratedBox(
@@ -88,20 +94,10 @@ class HeaderBar extends ConsumerWidget {
                     ),
                   ),
                 ),
-                // Ohne Daemon faengt niemand etwas ab, und eine gruene Pille,
-                // die „Intercept ON" sagt, behauptet dann das Gegenteil. Sie
-                // wird grau und sagt, warum -- dieselbe Behandlung wie der Ring
-                // daneben und der Punkt in der Statuszeile (`docs/UX.md` 3.3:
-                // jede Zustandsfarbe traegt ein Klartext-Label).
-                IgnorePointer(
-                  child: HBadge(
-                    key: const Key('header-intercept-badge'),
-                    text: live
-                        ? l10n.shellInterceptOn
-                        : l10n.shellInterceptUnknown,
-                    color: live ? tokens.state.allowed : tokens.colors.fg1,
-                  ),
-                ),
+                // Die Pille ist ein Knopf, sobald der Daemon pausieren kann
+                // (HUM-407); ohne Verbindung zeigt sie grau, warum niemand
+                // abfaengt.
+                InterceptPill(onAskPause: onAskPause),
                 SizedBox(width: tokens.spacing.x2),
                 IgnorePointer(
                   child: HBadge(

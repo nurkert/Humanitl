@@ -70,6 +70,15 @@ service Humanitl {
   // `UpdateEvent.status`, `Apply` mit Fortschritt und am Ende genau einem
   // `UpdateEvent.installed`. Jede Weigerung kommt als Status mit Diagnostic.
   rpc Update(UpdateRequest) returns (stream UpdateEvent);
+  // Die Pause des Abfangens (HUM-407): lesen, pausieren, wieder einschalten.
+  // Waehrend der Pause wird nichts gehalten; was keine Regel entscheidet,
+  // geht mit `DECISION_SOURCE_PAUSED` durch. Block-Regeln, die harte Sperre
+  // gepruefter Geheimnisse, die Grenzen der Sandbox und die Aufzeichnung
+  // bleiben. Die Pause lebt nur im Speicher des Daemons und endet beim
+  // Einschalten, beim Start eines neuen Laufs und mit dem Daemon. Jede
+  // Antwort ist der Stand danach; jeder Wechsel kommt zusaetzlich als
+  // `FlowEvent.intercept` in `Subscribe`. Nichts davon erreicht die Sandbox.
+  rpc Intercept(InterceptRequest) returns (InterceptStatus);
 }
 
 // ---------- Info ----------
@@ -87,6 +96,12 @@ message Info {
   repeated string capabilities = 4;
   // Aktuelle Session, leer wenn keine laeuft.
   string session_id = 5;
+  // Der Stand der Pause des Abfangens (HUM-407), mit `instance` gleich
+  // `session_id`; fehlt bei einem Daemon ohne Proxy-Sitzung. Der Herzschlag
+  // der Oberflaeche liest ihn mit jedem `GetInfo`, zusammen mit
+  // `capabilities` und `session_id`, und haelt so die Anzeige auch dann
+  // richtig, wenn ein Ereignis verloren ging.
+  InterceptStatus intercept = 6;
 }
 
 // ---------- Kern ----------
@@ -145,6 +160,9 @@ enum DecisionSource {
   DECISION_SOURCE_TIMEOUT = 3;
   DECISION_SOURCE_PASSTHROUGH = 4;
   DECISION_SOURCE_SYSTEM = 5;
+  // Waehrend einer Pause des Abfangens ohne Halten durchgelassen (HUM-407):
+  // weder ein Mensch noch eine Regel, und immer ein `allow`.
+  DECISION_SOURCE_PAUSED = 6;
 }
 
 // Grund, warum eine erlaubte Anfrage den Upstream nicht erreicht hat
@@ -537,6 +555,10 @@ message FlowEvent {
     // gibt also keinen impliziten Kontext; ohne `flow_id` koennte kein Client
     // die Meldung ihrem Flow zuordnen (HUM-039).
     FlowDiagnostic flow_diagnostic = 16;
+    // Die Pause des Abfangens hat begonnen oder ist zu Ende (HUM-407). Kein
+    // Flow; wer den Strom nach `Lagged` neu aufbaut, liest den Stand ueber
+    // `Intercept{status}`.
+    InterceptChanged intercept = 17;
   }
 
   // Ein neuer Flow ist eingetroffen.
@@ -644,6 +666,14 @@ message FlowEvent {
   message FlowDiagnostic {
     string flow_id = 1;
     Diagnostic diagnostic = 2;
+  }
+
+  // Ein Wechsel der Pause des Abfangens (HUM-407).
+  message InterceptChanged {
+    // Der Stand nach dem Wechsel.
+    InterceptStatus status = 1;
+    // Warum die Pause endete; UNSPECIFIED, wenn sie gerade begonnen hat.
+    InterceptResumeReason resumed = 2;
   }
 }
 
@@ -2193,4 +2223,51 @@ message UpdateEvent {
     UpdateProgress progress = 2;
     UpdateInstalled installed = 3;
   }
+}
+
+// ---------- Pause des Abfangens (HUM-407) ----------
+
+// Was `Intercept` tun soll.
+message InterceptRequest {
+  // Nur den Stand lesen.
+  message Status {}
+  // Das Abfangen pausieren. Eine laufende Pause behaelt ihren Beginn.
+  message Pause {}
+  // Das Abfangen wieder einschalten. Ohne Pause aendert sich nichts.
+  message Resume {}
+  oneof op {
+    Status status = 1;
+    Pause pause = 2;
+    Resume resume = 3;
+  }
+}
+
+// Der Stand des Abfangens.
+message InterceptStatus {
+  // Wahr, solange pausiert ist.
+  bool paused = 1;
+  // Seit wann pausiert ist; fehlt, solange abgefangen wird.
+  google.protobuf.Timestamp paused_since = 2;
+  // Wie viele Wechsel dieser Daemon schon gesehen hat: steigt mit jedem
+  // Wechsel um eins, auch im Ereignis. Ein Client wendet einen Stand nur an,
+  // wenn seine Revision nicht kleiner ist als die groesste, die er von diesem
+  // Daemon kennt. Ein neuer Daemon (eine neue `Info.session_id`) beginnt bei
+  // null.
+  uint64 revision = 3;
+  // Der Daemon, von dem dieser Stand stammt: derselbe Wert wie seine
+  // `Info.session_id`, einmal beim Start vergeben. Eine Revision gilt nur
+  // zusammen mit ihm; ein Stand eines anderen Daemons wird nie mit ihr
+  // verglichen.
+  string instance = 4;
+}
+
+// Warum eine Pause des Abfangens endete.
+enum InterceptResumeReason {
+  INTERCEPT_RESUME_REASON_UNSPECIFIED = 0;
+  // Ein Mensch hat ueber den Socket wieder eingeschaltet.
+  INTERCEPT_RESUME_REASON_REQUESTED = 1;
+  // Ein neuer Lauf hat begonnen.
+  INTERCEPT_RESUME_REASON_SESSION_STARTED = 2;
+  // Der Daemon endet.
+  INTERCEPT_RESUME_REASON_DAEMON_STOPPING = 3;
 }

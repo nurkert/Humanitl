@@ -276,10 +276,11 @@ The group header is a row and keeps the row rule: in the 28 px action slot it sh
 
 Humanitl is the barrier at which the traffic stops. Its sign is a yellow-and-black caution tape: diagonal stripes in brand yellow (`HColors.accent`) and `HColors.onAccent` that run evenly sideways (`HCautionTape`, HUM-260). It is the only element of the program that runs endlessly, and may therefore only stand where it means something.
 
-**Where it stands.** In exactly two places:
+**Where it stands.** In exactly three places:
 
 1. **Above the queue, as long as at least one request is held.** Four pixels high (`HSize.cautionTape`) below the header of the queue pane. It comes with the first held request and goes with the last. The barrier stands as long as someone is waiting at it.
 2. **As the indeterminate progress indicator of the network search in setup** ("search running"), as long as the search is running. There it replaces the hairline that used to run back and forth, and says the same thing: it is working, without claiming a progress level.
+3. **Across the full width of the window, directly under the header, while intercepting is paused** (HUM-407, 4.11). In every section and above the floating terminal, as long as the pause lasts. Here the barrier is open, and the tape says so: something is not as it should be, and the work goes on. The pill in the header says the same in words ("Intercept PAUSED"), so the tape is never the only channel. Without a connection it is gone, because nobody knows then whether a pause holds.
 
 **Where it never stands.**
 
@@ -483,6 +484,22 @@ Setup is a short onboarding and not a list of cards (HUM-287). The owner picked 
 **Checked by** `app/test/features/setup/setup_onboarding_test.dart` and the goldens `setup_firstrun`, `setup_partial` and `setup_ready_*`.
 
 ---
+
+### 4.11 Pausing intercept
+
+The owner asked on 2026-11-01 for a way to stop intercepting for a while without leaving the app (HUM-407). The pause is a capability of the daemon (`Intercept`, ADR-018); the app shows and asks.
+
+**The pill is a button.** With a daemon that names `intercept.pause`, the pill "Intercept ON" in the header takes focus, answers Enter and Space, and carries a hover label ("Pause intercepting …"). Without the capability, and without a connection, it stays a label as before.
+
+**Pausing asks first.** A click opens a modal: one sentence on what happens (requests that would wait for you go out at once, each recorded as "paused"), one on what stays (block rules, the hard block on verified secrets, the sandbox; the pause ends with the next session or a daemon restart). Cancel holds the focus, Escape and the scrim cancel, and only a deliberate press on "Pause intercept" pauses (5.4). A refusal of the daemon stands as a notice.
+
+**While paused.** The pill reads "Intercept PAUSED" in the warning colour, and the caution tape runs across the window in every section (3.6, place 3); under reduced motion it stands still. A pause set elsewhere, for example with `humanitl intercept pause`, shows the same, because the change arrives on the event stream. In the history the rule column says "paused" for every request the pause let through, and the audit screen shows `intercept.paused` and `intercept.resumed`.
+
+**The heartbeat keeps it right.** The app asks the daemon `GetInfo` every two seconds; each answer carries the daemon's instance, its capabilities and the pause status together, and the app takes them as one piece. Replies and events between two heartbeats move the display forward only when they come from the daemon the last heartbeat named and are not older; anything else is ignored. Whatever goes wrong in between heals at the next heartbeat: the pill and the tape show a pause at the latest two seconds after it began.
+
+**Resuming never asks.** A click on the paused pill intercepts again at once: going back to the safe side needs no question. The pause also ends by itself with the next session and with the daemon; the tape goes with it.
+
+**What the agent reads.** No text in the sandbox names the pause or a person (HUM-364, HUM-401). That requests stop waiting is observable all the same, by their timing.
 
 ## 5. Keyboard and mouse
 

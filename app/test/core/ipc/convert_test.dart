@@ -689,4 +689,46 @@ void main() {
     ).toDomain();
     expect(listed.servers.single.profiles, <String>['team', 'work']);
   });
+
+  test(
+    'a change of the intercept pause arrives as its own event (HUM-407)',
+    () {
+      final DateTime since = DateTime.utc(2026, 11, 1, 9);
+      final FlowEvent? paused = pb.FlowEvent(
+        at: Timestamp.fromDateTime(since),
+        intercept: pb.FlowEvent_InterceptChanged(
+          status: pb.InterceptStatus(
+            paused: true,
+            pausedSince: Timestamp.fromDateTime(since),
+          ),
+        ),
+      ).toDomain();
+      expect(paused, isA<FlowEventInterceptChanged>());
+      final InterceptStatus status =
+          (paused! as FlowEventInterceptChanged).status;
+      expect(status.paused, isTrue);
+      expect(status.pausedSince!.toUtc(), since);
+      expect(paused.flowId, isNull);
+
+      final FlowEvent? resumed = pb.FlowEvent(
+        intercept: pb.FlowEvent_InterceptChanged(
+          status: pb.InterceptStatus(),
+          resumed: pb.InterceptResumeReason.INTERCEPT_RESUME_REASON_REQUESTED,
+        ),
+      ).toDomain();
+      expect(
+        (resumed! as FlowEventInterceptChanged).status,
+        InterceptStatus.on,
+      );
+    },
+  );
+
+  test('a request the pause let through keeps its source (HUM-407)', () {
+    final Flow flow = pb.FlowSummary(
+      flowId: '018f0004-0000-7000-8000-000000000407',
+      decision: pb.DecisionKind.DECISION_KIND_ALLOW,
+      decisionSource: pb.DecisionSource.DECISION_SOURCE_PAUSED,
+    ).toDomain();
+    expect(flow.decisionSource, DecisionSource.paused);
+  });
 }

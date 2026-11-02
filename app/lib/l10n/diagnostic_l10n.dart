@@ -217,6 +217,7 @@ abstract final class DiagnosticL10n {
   'IPC_004' => (l10n.diagIPC004Title, l10n.diagIPC004Why),
   'IPC_005' => (l10n.diagIPC005Title, l10n.diagIPC005Why),
   'IPC_006' => (l10n.diagIPC006Title, l10n.diagIPC006Why),
+  'IPC_007' => (l10n.diagIPC007Title, l10n.diagIPC007Why),
   'LIMIT_001' => (l10n.diagLIMIT001Title, l10n.diagLIMIT001Why),
   'LIMIT_002' => (l10n.diagLIMIT002Title, l10n.diagLIMIT002Why),
   'LIMIT_003' => (l10n.diagLIMIT003Title, l10n.diagLIMIT003Why),

@@ -11663,6 +11663,25 @@ Sandbox.
 - Absperrband sichtbar, solange pausiert, in jeder Sektion; Goldens und
   Screenshots mit echter Schrift.
 
+**Umsetzung (Entscheidungen).** Owner bestätigte die Bedeutung von „aus“ am
+2026-11-01. Die Pause sitzt genau an der Stelle, an der sonst gehalten würde
+(`AskPipeline`): Sie lässt damit auch durch, was eine `ask`-Regel (und bis
+HUM-079 `redact`) halten würde, denn auch das wartet sonst auf einen Menschen;
+eine `allow`- oder `block`-Regel entscheidet vorher wie immer. Ohne Frist
+(`ask_mode = none`, `hold.timeout_secs = 0`) wartet nichts, und die Pause
+ändert nichts (Review). `/why` nennt eine durchgelassene Anfrage `user`, wie
+eine von einem Menschen freigegebene (Review: `unknown` gibt es für lebende
+Flüsse sonst nie). Schon gehaltene
+Anfragen bleiben in der Warteschlange, bis jemand entscheidet: Die Pause gilt
+für neue Anfragen, sie gibt nichts frei, was der Mensch schon vor sich hat.
+Die Pause lebt als `humanitl_core::InterceptPause` im Kern, damit gRPC-Dienst
+und Daemon nicht weiter vom Proxy-Crate abhängen (`tools/check_coupling.py`).
+Herkunft `DecisionSource::Paused` (Wire `DECISION_SOURCE_PAUSED`), Spalte
+`flows.paused` (V11), Audit `flow.decided` mit `decision`/`decided_by`
+`paused`, `intercept.paused`, `intercept.resumed` mit Grund; RPC `Intercept`,
+Ereignis `FlowEvent.intercept`, Fähigkeit `intercept.pause`, PROTO 1.31,
+Befund `IPC_007` für eine Anfrage ohne Operation.
+
 ---
 
 ## HUM-408 · All traffic out of the proxy can go through an upstream proxy (HTTP CONNECT or SOCKS5)

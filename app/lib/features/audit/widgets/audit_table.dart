@@ -61,6 +61,8 @@ const List<String> auditKindPrefixes = <String>[
   'config.changed',
   'session.',
   'audit.',
+  // Beginn und Ende der Pause des Abfangens (HUM-407).
+  'intercept.',
 ];
 
 /// Die Filterleiste über der Tabelle.
@@ -814,6 +816,10 @@ String auditSummary(AuditRecordRow row) {
       return value.isEmpty ? key : '$key = $value';
     case 'session.started':
       return _join(<String?>[text('agent'), text('profile')]);
+    // Warum die Pause endete: `requested`, `session_started` oder
+    // `daemon_stopping` (HUM-407). Ihr Beginn trägt keine Daten.
+    case 'intercept.resumed':
+      return text('reason') ?? '';
     default:
       return '';
   }

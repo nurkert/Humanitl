@@ -24,6 +24,8 @@ const parity = <String, String>{
   'Humanitl.GetConfig': 'features/settings/settings_sheet',
   'Humanitl.GetFlow': 'features/history/history_detail',
   'Humanitl.GetInfo': 'features/shell/connection_gate',
+  // The header pill and the question before a pause (HUM-407).
+  'Humanitl.Intercept': 'features/shell/widgets/intercept_pill',
   'Humanitl.ListFlows': 'features/history/history_screen',
   'Humanitl.LlmKey': 'features/settings/widgets/model_section',
   'Humanitl.LlmServers': 'features/settings/widgets/server_switcher',

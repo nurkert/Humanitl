@@ -536,6 +536,23 @@ their package manager through `pkexec`, with the repository's signatures. *Resid
 release key ships malware to every installation that clicks; the check tells GitHub that this
 address runs Humanitl and which version. Turned off with `update.check = false`.
 
+### K-26 Pausing intercept
+
+A person can pause intercepting (HUM-407). While the pause lasts, requests that would wait for a
+person leave without a hold, with the decision source `paused` (a `redact` match un-pseudonymised
+until HUM-079; without a hold deadline nothing changes); `block` rules, the hard block on verified
+secrets, the sandbox guarantees and the recording stay. An agent (attackers a to c) that learned of
+a pause could time its exfiltration into it, and one that could set the pause would have removed
+the human from the loop. The binding: only the RPC `Intercept` on the daemon socket sets it; the
+proxy and `humanitl.internal` hold no handle to it, and no answer text the agent reads names it
+(HUM-364, HUM-401). The agent cannot set it; it can infer it from the missing wait. The
+pause lives in memory only and ends on resume, with every new session and with the daemon; start
+and end are audit records, and the app shows a running caution tape in every section while it
+lasts. *Residual risk:* what the agent sends during a pause leaves unseen by a person; the
+recording and the audit log show it afterwards, each request marked `paused`. An agent can infer
+from the missing wait, and from requests that now succeed, that holds stopped, and time what it
+sends accordingly.
+
 ## Assumptions
 
 | ID | Assumption | How to check it | If it breaks |
@@ -581,6 +598,9 @@ These attackers are not defended against, and Humanitl does not claim to:
   pushes or mails leaves without Humanitl.
 - **The release key** (K-25). Whoever holds the private key that signs the update manifests can
   ship code that installations accept on a click.
+- **A pause of intercepting** (K-26). For as long as a person keeps it on, requests that would wait
+  leave without being seen first; they are recorded and marked `paused`. The agent can notice the
+  missing wait.
 - **The human as classifier.** A base64 body to `api.github.com` looks legitimate. Humanitl puts
   findings first, groups by host, removes noise with rules, asks back before approving whole
   groups and lets a timeout end in `block`. It cannot read the human's attention.
@@ -615,6 +635,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-30 | K-24: overwriting a conflict is confirmed per change (`overwrite_ids`); a confirmation for one file never covers another | HUM-351 |
 | 2026-10-31 | K-02: the boundary is the saved server the session resolved to; `llm.server` from run, project or profile chooses among the user's saved servers, never defines one; an unknown name refuses the start | HUM-400 |
 | 2026-10-30 | K-24: the disposable sandbox becomes the default where the system allows it (`sandbox.mode = "auto"`); without the overlay the default runs direct with `SANDBOX_033`, an explicit `disposable` still refuses | HUM-357 |
+| 2026-11-01 | K-26: pausing intercept, set only over the daemon socket, never from the sandbox; held nothing while on, block rules and the hard block stay; ends on resume, with the next session and with the daemon; logged and shown as a caution tape | HUM-407 |
 | 2026-11-01 | K-25: updates from inside the app, bound to an Ed25519 release key built into the daemon; daily check of GitHub on by default, `update.check` turns it off; packages through `pkexec` and their package manager | HUM-382 |
 | 2026-10-31 | K-24: the disposable sandbox on macOS, an APFS clone with the masks removed, the real project sealed and the clone renamed before it is read; a held write descriptor and the missing size cap stay as residual risks | HUM-374 |
 | 2026-11-01 | The reserved name `llm.humanitl.internal` for a model on the loopback: mapped by the proxy only to the configured endpoint, scheme and port, before the rules, never resolved; every other use refused with `PROXY_003`. No new door, the sandbox profile is unchanged | HUM-387 |

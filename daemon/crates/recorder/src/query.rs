@@ -38,7 +38,7 @@ const POOL_SIZE: usize = 8;
 const FLOW_COLUMNS: &str = "id, session_id, seq, ts, method, scheme, host, host_display, port, \
      path, upgrade, state, decision, block_reason, rule_id, passthrough, status, duration_ms, \
      held_ms, edited, findings_count, request_size, response_size, apex, catalog_id, error, meta, \
-     decision_note, unresolved_findings";
+     decision_note, unresolved_findings, paused";
 
 /// Ein kleiner Vorrat an Nur-Lese-Verbindungen.
 ///
@@ -538,6 +538,9 @@ fn row_to_summary(row: &Row<'_>) -> rusqlite::Result<FlowSummary> {
         unresolved_findings: row
             .get::<_, Option<i64>>(28)?
             .map(|value| u32::try_from(value).unwrap_or(u32::MAX)),
+        // `0` auch für jede Zeile aus der Zeit vor `V11__paused_flow.sql`:
+        // Damals gab es keine Pause (HUM-407).
+        paused: row.get::<_, i64>(29)? != 0,
     })
 }
 

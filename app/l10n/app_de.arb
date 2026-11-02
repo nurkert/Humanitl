@@ -1566,5 +1566,16 @@
   "shellUpdateRestartFailed": "Humanitl {version} ist installiert, aber der Daemon ließ sich nicht neu starten: {why}",
   "setupHeadSandboxPlanRefused": "Mit dieser Einrichtung startet die Sandbox nicht",
   "setupDaemonReconnecting": "Hat eben noch geantwortet · verbinde neu",
-  "shellReconnectingTitle": "Verbinde neu mit dem Hintergrunddienst"
+  "shellReconnectingTitle": "Verbinde neu mit dem Hintergrunddienst",
+  "shellInterceptPaused": "Anhalten PAUSIERT",
+  "shellInterceptPauseHint": "Abfangen pausieren …",
+  "shellInterceptResumeHint": "Pausiert: Anfragen, die sonst auf dich warten würden, gehen sofort hinaus. Klicken, um wieder abzufangen.",
+  "shellInterceptPauseTitle": "Abfangen pausieren?",
+  "shellInterceptPauseBody": "Bis du wieder einschaltest, gehen Anfragen, die sonst auf dich warten würden, sofort hinaus, jede mit dem Grund „pausiert“ aufgezeichnet.",
+  "shellInterceptPauseStays": "Block-Regeln, die harte Sperre geprüfter Geheimnisse und die Sandbox bleiben; die Pause endet mit der nächsten Sitzung oder einem Neustart des Daemons.",
+  "shellInterceptPauseCancel": "Abbrechen",
+  "shellInterceptPauseConfirm": "Abfangen pausieren",
+  "historyDeciderPaused": "pausiert",
+  "diagIPC007Title": "Intercept-Anfrage ohne Operation",
+  "diagIPC007Why": "Die Anfrage nannte weder Status noch Pause noch Einschalten; meist ein Client, der älter oder neuer ist als der Daemon. Nichts wurde geändert."
 }

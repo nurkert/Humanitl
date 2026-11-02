@@ -13,6 +13,7 @@
 //! | `Received`, dann `Analyzed` | `flow.received`, sobald die Funde feststehen, spätestens mit der Entscheidung |
 //! | `Decided`, `TimedOut` | `flow.decided` mit `unresolved_findings` und `acknowledged` (HUM-160); bei einem Block des Daemons zusätzlich `flow.blocked_reason` |
 //! | `Forwarded`, `ResponseHeaders`, `ResponseChunk`, `Recorded` | `flow.responded` |
+//! | `Intercept` | `intercept.paused` oder `intercept.resumed` mit dem Grund (HUM-407) |
 //! | Ende des Sinks | `session.ended` mit den Zahlen der Sitzung |
 //!
 //! `daemon.started` und `daemon.stopped` schreibt `main`, `rule.*` und
@@ -33,11 +34,13 @@ use std::time::SystemTime;
 
 use humanitl_audit::RecordKind;
 use humanitl_audit::kinds::{
-    DecisionKind, FlowBlockedReason, FlowDecided, FlowReceived, FlowResponded, SessionEnded,
-    SessionStarted,
+    DecisionKind, FlowBlockedReason, FlowDecided, FlowReceived, FlowResponded, InterceptResumed,
+    SessionEnded, SessionStarted,
 };
 use humanitl_audit_log::AuditHandle;
-use humanitl_core::{DecidedFindings, Decision, DecisionSource, FlowEvent, FlowId, SessionId};
+use humanitl_core::{
+    DecidedFindings, Decision, DecisionSource, FlowEvent, FlowId, InterceptChange, SessionId,
+};
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::{broadcast, oneshot};
 
@@ -209,6 +212,13 @@ impl Tally {
                 pending.response_bytes = pending.response_bytes.saturating_add(*len);
             }
             FlowEvent::Recorded { flow_id, at } => self.recorded(*flow_id, *at),
+            // Beginn und Ende der Pause des Abfangens (HUM-407).
+            FlowEvent::Intercept { change, .. } => self.record(match change {
+                InterceptChange::Paused => RecordKind::InterceptPaused,
+                InterceptChange::Resumed(reason) => {
+                    RecordKind::InterceptResumed(InterceptResumed { reason: *reason })
+                }
+            }),
             FlowEvent::Failed { .. }
             | FlowEvent::Lagged { .. }
             | FlowEvent::Diagnostic { .. }
@@ -299,6 +309,7 @@ fn counter(counts: &mut SessionEnded, kind: DecisionKind) -> &mut u64 {
         DecisionKind::TimedOut => &mut counts.timed_out,
         DecisionKind::AutoAllow | DecisionKind::AutoBlock => &mut counts.auto_rule,
         DecisionKind::Passthrough => &mut counts.passthrough,
+        DecisionKind::Paused => &mut counts.paused,
     }
 }
 
@@ -313,6 +324,7 @@ fn is_retraction(before: DecisionKind, decision: &Decision, source: DecisionSour
             | DecisionKind::AllowEdited
             | DecisionKind::AutoAllow
             | DecisionKind::Passthrough
+            | DecisionKind::Paused
     );
     let_out && matches!(decision, Decision::Block { .. }) && source == DecisionSource::System
 }
@@ -440,6 +452,60 @@ mod tests {
                 "{secret} leaked into the log: {text}"
             );
         }
+    }
+
+    /// Beginn und Ende der Pause stehen im Log, dazwischen jede Anfrage, die
+    /// sie durchließ, mit `decision: paused` und `decided_by: paused`
+    /// (HUM-407).
+    #[test]
+    fn a_pause_is_audited_with_its_start_its_end_and_what_it_let_through() {
+        let (_dir, writer) = log();
+        let mut tally = Tally::new(writer.handle(), SessionId::new());
+        let flow = FlowId::new();
+        tally.apply(&FlowEvent::Intercept {
+            at: SystemTime::now(),
+            change: humanitl_core::InterceptChange::Paused,
+            revision: 1,
+        });
+        tally.apply(&received(flow, "/x", b""));
+        tally.apply(&FlowEvent::Analyzed {
+            flow_id: flow,
+            at: SystemTime::now(),
+            findings: Vec::new(),
+        });
+        tally.apply(&FlowEvent::Decided {
+            flow_id: flow,
+            at: SystemTime::now(),
+            decision: Decision::Allow,
+            source: DecisionSource::Paused,
+            findings: humanitl_core::DecidedFindings::unresolved(0),
+        });
+        tally.apply(&FlowEvent::Intercept {
+            at: SystemTime::now(),
+            change: humanitl_core::InterceptChange::Resumed(
+                humanitl_core::ResumeReason::SessionStarted,
+            ),
+            revision: 2,
+        });
+        let counts = tally.finish();
+        assert_eq!((counts.paused, counts.allowed), (1, 0));
+
+        let (_, records) = records(writer);
+        let kinds: Vec<&str> = records.iter().map(|r| r.body.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "intercept.paused",
+                "flow.received",
+                "flow.decided",
+                "intercept.resumed",
+                "session.ended"
+            ]
+        );
+        assert_eq!(records[2].body.data["decision"], "paused");
+        assert_eq!(records[2].body.data["decided_by"], "paused");
+        assert_eq!(records[3].body.data["reason"], "session_started");
+        assert_eq!(records[4].body.data["paused"], 1);
     }
 
     #[test]

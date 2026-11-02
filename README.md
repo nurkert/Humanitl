@@ -33,7 +33,10 @@ way out except the door is refused, see [macOS](docs/SECURITY.md#12-macos-seatbe
 Its only way out is a moderating proxy on the host. A request that no rule decides is held, shown to
 you with headers, parameters and body, and the proxy forwards it upstream only after you allow it.
 Two kinds of traffic go without a hold: requests an `allow` rule matches, and the declared
-passthrough to your language model. Everything is recorded, except during a recording outage (disk
+passthrough to your language model. You can also pause intercepting on purpose, from the header or
+with `humanitl intercept pause`: until you resume, start a new session or restart the daemon,
+requests that would wait for you go out at once, each recorded as `paused`, under a running caution
+tape; block rules and the sandbox stay, and nothing inside the sandbox can set the pause. Everything is recorded, except during a recording outage (disk
 full, database locked): then traffic continues unrecorded and the app says so on every card.
 
 ### In three steps
