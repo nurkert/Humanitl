@@ -62,6 +62,7 @@ fn name(event: &v1::FlowEvent) -> &'static str {
         Some(Event::FlowDiagnostic(_)) => "flow_diagnostic",
         Some(Event::RulesChanged(_)) => "rules_changed",
         Some(Event::AgentAsk(_)) => "agent_ask",
+        Some(Event::Intercept(_)) => "intercept",
         None => "empty",
     }
 }

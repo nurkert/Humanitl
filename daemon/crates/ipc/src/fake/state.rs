@@ -281,6 +281,12 @@ struct Inner {
     sandbox_state: v1::SandboxState,
     hold_bytes: u64,
     hold_count: u32,
+    /// Seit wann der Fake das Abfangen pausiert hat (HUM-407); `None`, solange
+    /// er abfängt. Der Fake hält ohnehin nur, was sein Skript vorgibt; die
+    /// Pause ist hier nur der Stand, den `Intercept` liest und setzt.
+    intercept_paused_since: Option<SystemTime>,
+    /// Die Revision der Pause, wie im echten Dienst.
+    intercept_revision: u64,
 }
 
 impl FakeState {
@@ -297,6 +303,8 @@ impl FakeState {
                 flows: BTreeMap::new(),
                 rules: Vec::new(),
                 rules_revision: 0,
+                intercept_paused_since: None,
+                intercept_revision: 0,
                 blobs: BTreeMap::new(),
                 scripted: BTreeMap::new(),
                 config: BTreeMap::new(),
@@ -504,6 +512,49 @@ impl FakeState {
                 diagnostic,
             ))),
         });
+    }
+
+    /// Der Stand des Abfangens (HUM-407).
+    pub fn intercept_status(&self) -> humanitl_core::InterceptStatus {
+        let inner = self.lock();
+        humanitl_core::InterceptStatus {
+            paused_since: inner.intercept_paused_since,
+            revision: inner.intercept_revision,
+        }
+    }
+
+    /// Setzt die Pause des Abfangens und meldet einen Wechsel im Strom, wie
+    /// der echte Dienst (HUM-407); ohne Wechsel bleibt der Strom still.
+    pub fn set_intercept(
+        &self,
+        change: humanitl_core::InterceptChange,
+    ) -> humanitl_core::InterceptStatus {
+        let now = SystemTime::now();
+        let changed = {
+            let mut inner = self.lock();
+            let before = inner.intercept_paused_since;
+            inner.intercept_paused_since = match change {
+                humanitl_core::InterceptChange::Paused => before.or(Some(now)),
+                humanitl_core::InterceptChange::Resumed(_) => None,
+            };
+            let changed = before.is_some() != inner.intercept_paused_since.is_some();
+            if changed {
+                inner.intercept_revision += 1;
+            }
+            changed.then_some(inner.intercept_revision)
+        };
+        if let Some(revision) = changed {
+            self.emit(crate::intercept::stamp_event(
+                v1::FlowEvent {
+                    at: Some(timestamp(now)),
+                    event: Some(v1::flow_event::Event::Intercept(
+                        crate::convert::intercept_changed_to_proto(now, change, revision),
+                    )),
+                },
+                &self.session().id.to_string(),
+            ));
+        }
+        self.intercept_status()
     }
 
     /// Meldet, dass sich der Regelsatz geändert hat.
@@ -909,6 +960,15 @@ pub fn event_to_proto(event: &FlowEvent, flow: &FakeFlow) -> v1::FlowEvent {
             suggested_host: suggested_host.clone().unwrap_or_default(),
             suggested_path: suggested_path.clone().unwrap_or_default(),
         }),
+        // Ein Wechsel der Pause gehört zu keinem Flow; der Arm steht hier,
+        // damit die Übersetzung vollständig bleibt (HUM-407).
+        FlowEvent::Intercept {
+            at,
+            change,
+            revision,
+        } => Event::Intercept(crate::convert::intercept_changed_to_proto(
+            *at, *change, *revision,
+        )),
     };
     v1::FlowEvent {
         at: Some(timestamp(event.at().unwrap_or(flow.last_at))),

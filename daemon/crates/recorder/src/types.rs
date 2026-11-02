@@ -302,6 +302,12 @@ impl FlowPage {
 }
 
 /// Eine Zeile der Flow-Liste: alle Spalten von `flows`, kein Body.
+///
+/// Vier Wahrheitswerte, weil die Tabelle vier unabhängige Spalten führt
+/// (`passthrough`, `edited`, `meta`, `paused`); die Zeile bildet sie ab, wie
+/// sie gespeichert sind, statt sie in einen Zustand zu pressen, den die
+/// Datenbank nicht kennt.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlowSummary {
     /// Id des Flows.
@@ -395,6 +401,13 @@ pub struct FlowSummary {
     /// gezählt hat, und für jede Zeile aus der Zeit vor
     /// `V9__unresolved_findings.sql`. Nie eine geratene Null.
     pub unresolved_findings: Option<u32>,
+    /// Wahr für eine Anfrage, die während einer Pause des Abfangens ohne
+    /// passende Regel durchging, statt zu warten (HUM-407).
+    ///
+    /// Steht wie [`FlowSummary::passthrough`] neben `decision`: Die
+    /// Entscheidung ist `allow`, und ohne diese Spalte hieße sie nach einem
+    /// Neustart „ein Mensch hat erlaubt".
+    pub paused: bool,
 }
 
 /// Eine aufgezeichnete Nachricht: Kopfzeilen plus Verweis auf den Body.

@@ -394,8 +394,15 @@ impl DaemonApi for FakeDaemon {
                 "findings.regex".to_owned(),
                 "sandbox.run".to_owned(),
                 "sandbox.bwrap".to_owned(),
+                "intercept.pause".to_owned(),
             ],
             session_id: self.state.session().id.to_string(),
+            // Wie der echte Dienst: der Stand der Pause in jedem `GetInfo`
+            // (HUM-407).
+            intercept: Some(crate::intercept::stamped(
+                crate::convert::intercept_status_to_proto(self.state.intercept_status()),
+                &self.state.session().id.to_string(),
+            )),
         }
     }
 
@@ -688,6 +695,23 @@ impl DaemonApi for FakeDaemon {
             &humanitl_config::servers::list(&after),
             &std::collections::BTreeMap::new(),
             Vec::new(),
+        ))
+    }
+
+    /// Die Pause des Abfangens über dem Stand des Fakes (HUM-407); jeder
+    /// Wechsel geht wie im echten Dienst als `FlowEvent.intercept` in den
+    /// Strom.
+    async fn intercept(
+        &self,
+        request: v1::InterceptRequest,
+    ) -> Result<v1::InterceptStatus, Diagnostic> {
+        let status = match crate::intercept::operation(&request)? {
+            crate::intercept::Operation::Status => self.state.intercept_status(),
+            crate::intercept::Operation::Change(change) => self.state.set_intercept(change),
+        };
+        Ok(crate::intercept::stamped(
+            crate::convert::intercept_status_to_proto(status),
+            &self.state.session().id.to_string(),
         ))
     }
 
@@ -1519,7 +1543,11 @@ fn event_flow_id(event: &v1::FlowEvent) -> Option<FlowId> {
             reference.flow_id.as_str()
         }
         Event::FlowDiagnostic(diagnostic) => diagnostic.flow_id.as_str(),
-        Event::Lagged(_) | Event::Diagnostic(_) | Event::RulesChanged(_) | Event::AgentAsk(_) => {
+        Event::Lagged(_)
+        | Event::Diagnostic(_)
+        | Event::RulesChanged(_)
+        | Event::AgentAsk(_)
+        | Event::Intercept(_) => {
             return None;
         }
     };

@@ -568,6 +568,12 @@ impl DaemonApi for SilentExport {
     ) -> Result<v1::LlmServerList, Diagnostic> {
         self.inner.llm_servers(request).await
     }
+    async fn intercept(
+        &self,
+        request: v1::InterceptRequest,
+    ) -> Result<v1::InterceptStatus, Diagnostic> {
+        self.inner.intercept(request).await
+    }
 }
 
 /// Die aufgezeichnete Sitzung aus `fixtures/sessions/`.

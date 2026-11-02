@@ -115,6 +115,10 @@ enum DecisionSource {
 
   /// The daemon itself, always a refusal (caps, budgets).
   system,
+
+  /// The pause of intercepting let the request pass instead of holding it:
+  /// no person and no rule decided (HUM-407).
+  paused,
 }
 
 /// Why an allowed request never reached its target (CONVENTIONS 4.10).

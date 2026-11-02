@@ -123,9 +123,13 @@ enum HistoryDecider {
   /// there was a request to decide (HUM-316). Not [manual]: no person was
   /// asked, and the word would name one who never decided.
   client,
+
+  /// Nobody did: intercepting was paused, and the request passed instead of
+  /// being held (HUM-407). Not [manual]: no person allowed it.
+  paused,
 }
 
-/// Which of the seven words the rule column shows for [flow].
+/// Which of the eight words the rule column shows for [flow].
 HistoryDecider historyDecider(Flow flow) {
   if (flow.meta) {
     return HistoryDecider.meta;
@@ -135,6 +139,9 @@ HistoryDecider historyDecider(Flow flow) {
   }
   if (flow.passthrough) {
     return HistoryDecider.passthrough;
+  }
+  if (flow.decisionSource == DecisionSource.paused) {
+    return HistoryDecider.paused;
   }
   if (flow.decision == DecisionKind.timedOut ||
       flow.decisionSource == DecisionSource.timeout) {

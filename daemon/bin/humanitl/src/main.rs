@@ -210,6 +210,7 @@ async fn run(ctx: &Context, command: Cmd) -> Result<u8, Failure> {
         Cmd::Run(args) => cmd::run::run(ctx, &args).await,
         Cmd::Audit { cmd } => cmd::audit::run(ctx, &cmd).await,
         Cmd::Update { cmd } => cmd::update::run(ctx, &cmd).await,
+        Cmd::Intercept { cmd } => cmd::intercept::run(ctx, &cmd).await,
     }
 }
 

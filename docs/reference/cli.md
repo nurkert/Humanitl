@@ -73,6 +73,10 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl llm server use`](#humanitl-llm-server-use) Make a server the active one, from the next session on
 - [`humanitl llm server rename`](#humanitl-llm-server-rename) Rename a server. Its key stays where it is
 - [`humanitl llm server rm`](#humanitl-llm-server-rm) Remove a server and, unless --keep-key, its key from the keyring
+- [`humanitl intercept`](#humanitl-intercept) Pause intercepting, resume it, or show whether it is paused
+- [`humanitl intercept status`](#humanitl-intercept-status) Show whether intercepting is on or paused, and since when
+- [`humanitl intercept pause`](#humanitl-intercept-pause) Pause intercepting until you resume it, the next session starts or the daemon stops
+- [`humanitl intercept resume`](#humanitl-intercept-resume) Resume intercepting: every request no rule decides waits again
 
 ## Configuration flags
 
@@ -145,18 +149,19 @@ Human-in-the-loop network moderation for AI agents
 Usage: humanitl [OPTIONS] <COMMAND>
 
 Commands:
-  run       Start a session in the current directory, or show the session a profile resolves to
-  sandbox   Start, plan and check the sandbox
-  rules     List, add, change, reorder, dry-run and reload rules
-  flows     The flows of this and earlier sessions
-  sessions  What the agent left in the project during a sandbox run
-  audit     Verify and export the audit chain
-  config    The resolved configuration and its schema
-  daemon    The background service
-  doctor    Check this machine: one line per precondition, with a fix
-  update    Check for a newer Humanitl and install it
-  llm       Find LLM servers in the local network
-  help      Print this message or the help of the given subcommand(s)
+  run        Start a session in the current directory, or show the session a profile resolves to
+  sandbox    Start, plan and check the sandbox
+  rules      List, add, change, reorder, dry-run and reload rules
+  flows      The flows of this and earlier sessions
+  sessions   What the agent left in the project during a sandbox run
+  audit      Verify and export the audit chain
+  config     The resolved configuration and its schema
+  daemon     The background service
+  doctor     Check this machine: one line per precondition, with a fix
+  update     Check for a newer Humanitl and install it
+  llm        Find LLM servers in the local network
+  intercept  Pause intercepting, resume it, or show whether it is paused
+  help       Print this message or the help of the given subcommand(s)
 
 Options:
       --json
@@ -2349,6 +2354,122 @@ Options:
 
       --keep-key
           Leave the key of the server in the keyring
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl intercept
+
+```text
+Pause intercepting, resume it, or show whether it is paused
+
+Usage: humanitl intercept [OPTIONS] <COMMAND>
+
+Commands:
+  status  Show whether intercepting is on or paused, and since when
+  pause   Pause intercepting until you resume it, the next session starts or the daemon stops
+  resume  Resume intercepting: every request no rule decides waits again
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl intercept status
+
+```text
+Show whether intercepting is on or paused, and since when
+
+Usage: humanitl intercept status [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl intercept pause
+
+```text
+Pause intercepting until you resume it, the next session starts or the daemon stops.
+
+While paused, a request that would wait for your decision goes out at once instead of being held, and is recorded with the reason "paused". Without a hold deadline (--ask none) nothing waits, and the pause changes nothing. Block rules, the hard block on verified secrets, the sandbox and the recording stay. The agent in the sandbox is not told. No setting makes the pause permanent.
+
+Usage: humanitl intercept pause [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## humanitl intercept resume
+
+```text
+Resume intercepting: every request no rule decides waits again
+
+Usage: humanitl intercept resume [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
 
   -v, --verbose...
           Explain what is happening; repeat for more

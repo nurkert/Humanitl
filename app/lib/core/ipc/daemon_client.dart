@@ -418,6 +418,13 @@ abstract class DaemonClient {
   /// in [checkUpdate].
   Stream<UpdateEvent> applyUpdate(String version, {String appimage = ''});
 
+  /// `Intercept`: reads, pauses or resumes intercepting (HUM-407).
+  ///
+  /// Answers with the status after the call. Every change also arrives on
+  /// [subscribe] as [FlowEventInterceptChanged], for every client. Throws a
+  /// [DaemonException] with `IPC_006` when the daemon has no proxy session.
+  Future<InterceptStatus> intercept(InterceptOp op);
+
   /// Releases the transport. The client is unusable afterwards.
   Future<void> close();
 }

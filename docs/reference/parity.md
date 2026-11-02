@@ -30,6 +30,7 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 | `Humanitl.GetFlow` | `humanitl flows show` | `features/history/history_detail` |
 | `Humanitl.GetInfo` | `humanitl daemon status` | `features/shell/connection_gate` |
 | `Humanitl.GetSessionSummary` | `humanitl sessions summary` | fehlt |
+| `Humanitl.Intercept` | `humanitl intercept pause`<br>`humanitl intercept resume`<br>`humanitl intercept status` | `features/shell/widgets/intercept_pill` |
 | `Humanitl.ListFlows` | `humanitl flows list` | `features/history/history_screen` |
 | `Humanitl.LlmKey` | `humanitl llm key remove`<br>`humanitl llm key set`<br>`humanitl llm key status` | `features/settings/widgets/model_section` |
 | `Humanitl.LlmServers` | `humanitl llm server add`<br>`humanitl llm server ls`<br>`humanitl llm server rename`<br>`humanitl llm server rm`<br>`humanitl llm server use` | `features/settings/widgets/server_switcher` |

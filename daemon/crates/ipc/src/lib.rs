@@ -51,7 +51,12 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `30` seit den Updates aus der App (HUM-382): die RPC `Update` mit
+/// `31` seit der Pause des Abfangens (HUM-407): die RPC `Intercept` mit
+/// `InterceptRequest` (`Status`, `Pause`, `Resume`) und `InterceptStatus`,
+/// der Arm `FlowEvent.intercept` mit `InterceptChanged` und
+/// `InterceptResumeReason`, die Herkunft `DECISION_SOURCE_PAUSED`, und
+/// `Info.capabilities` nennt `intercept.pause`.
+/// `30` war das Update aus der App (HUM-382): die RPC `Update` mit
 /// `UpdateRequest` (`Check`, `Apply`) und dem Strom aus `UpdateEvent`
 /// (`UpdateStatus` mit `UpdateMethod`, `UpdateProgress`, `UpdateInstalled`),
 /// und `Info.capabilities` nennt `update`.
@@ -169,7 +174,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 30;
+pub const PROTO_MINOR: u32 = 31;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -202,6 +207,7 @@ pub mod disposable;
 pub mod domains;
 pub mod exec;
 pub mod fake;
+pub mod intercept;
 pub mod llm_key;
 pub mod llm_reach;
 pub mod llm_servers;

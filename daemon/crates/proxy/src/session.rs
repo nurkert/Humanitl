@@ -24,6 +24,7 @@ use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use humanitl_config::{AskMode, LlmConfig};
+use humanitl_core::{InterceptPause, ResumeReason};
 
 use crate::llm_alias::LlmAliasTarget;
 use crate::llm_warnings::LlmWarningMemory;
@@ -93,6 +94,10 @@ impl SessionState {
 pub struct SessionSettings {
     state: RwLock<SessionState>,
     llm_warnings: Arc<LlmWarningMemory>,
+    /// Die Pause des Abfangens (HUM-407). Sie hängt hier, weil
+    /// [`SessionSettings::set`] die eine Stelle ist, die vom Start eines Laufs
+    /// erfährt, und die Pause nie über einen Lauf hinaus gilt.
+    pause: Arc<InterceptPause>,
 }
 
 impl SessionSettings {
@@ -102,7 +107,25 @@ impl SessionSettings {
         Self {
             state: RwLock::new(state),
             llm_warnings: Arc::new(LlmWarningMemory::new()),
+            pause: Arc::new(InterceptPause::new()),
         }
+    }
+
+    /// Dieselben Einstellungen mit dieser Pause des Abfangens (HUM-407).
+    ///
+    /// Der Daemon reicht hier die Pause herein, die ihre Wechsel in den
+    /// Ereignisstrom schreibt und die auch der gRPC-Dienst hält; ohne diesen
+    /// Aufruf gilt eine eigene ohne Strom.
+    #[must_use]
+    pub fn with_pause(mut self, pause: Arc<InterceptPause>) -> Self {
+        self.pause = pause;
+        self
+    }
+
+    /// Die Pause des Abfangens, die für diese Sitzung gilt.
+    #[must_use]
+    pub const fn pause(&self) -> &Arc<InterceptPause> {
+        &self.pause
     }
 
     /// Der Stand, der gerade gilt.
@@ -132,11 +155,16 @@ impl SessionSettings {
     /// ist ein neues Gespräch mit dem Modell, deshalb vergisst `LLM_005` hier,
     /// wovor es schon gewarnt hat: Eine Warnung, die im letzten Lauf niemand
     /// gesehen hat, darf im nächsten nicht schweigen.
+    ///
+    /// Aus demselben Grund endet hier eine Pause des Abfangens (HUM-407): Sie
+    /// galt dem Lauf, für den ein Mensch sie beschlossen hat, und niemand soll
+    /// sie in den nächsten mitnehmen, ohne es zu merken.
     pub fn set(&self, state: SessionState) {
         let mut slot = self.state.write().unwrap_or_else(PoisonError::into_inner);
         *slot = state;
         drop(slot);
         self.llm_warnings.reset();
+        self.pause.resume(ResumeReason::SessionStarted);
     }
 
     /// Das Gedächtnis der Warnung `LLM_005`, das mit jedem Lauf neu beginnt.
@@ -198,6 +226,17 @@ mod tests {
         assert_eq!(state.ask_mode, AskMode::None);
         assert_eq!(state.hold_timeout, Duration::ZERO);
         assert_eq!(state.llm.as_deref(), Some("model.lan:11434"));
+    }
+
+    /// Rot, sobald `set` die Pause nicht mehr beendet: Dann ginge eine Pause
+    /// unbemerkt in den nächsten Lauf über (HUM-407).
+    #[test]
+    fn a_new_session_ends_the_pause() {
+        let settings = SessionSettings::default();
+        settings.pause().pause();
+        assert!(settings.pause().is_paused());
+        settings.set(SessionState::for_config(AskMode::Ui, 300, None));
+        assert!(!settings.pause().is_paused());
     }
 
     #[test]

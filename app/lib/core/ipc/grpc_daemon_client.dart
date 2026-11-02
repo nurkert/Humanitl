@@ -576,6 +576,23 @@ class GrpcDaemonClient implements DaemonClient {
     return list.toDomain();
   }
 
+  @override
+  Future<InterceptStatus> intercept(InterceptOp op) async {
+    final pb.InterceptRequest request = pb.InterceptRequest();
+    switch (op) {
+      case InterceptOp.status:
+        request.status = pb.InterceptRequest_Status();
+      case InterceptOp.pause:
+        request.pause = pb.InterceptRequest_Pause();
+      case InterceptOp.resume:
+        request.resume = pb.InterceptRequest_Resume();
+    }
+    final pb.InterceptStatus status = await _unary(
+      (CallOptions options) => _stub.intercept(request, options: options),
+    );
+    return status.toDomain();
+  }
+
   Future<LlmKeyStatus> _llmKey(pb.LlmKeyRequest request) async {
     final pb.LlmKeyStatus status = await _unary(
       (CallOptions options) => _stub.llmKey(request, options: options),

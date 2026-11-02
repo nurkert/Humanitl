@@ -226,11 +226,13 @@ class Flows extends _$Flows {
         refuseSend(id, diagnostic);
       // A chunk counter, any other diagnostic, a rule revision and an agent
       // question change no flow. The first is deliberate (v1 shows no
-      // progress bar), the other three belong to other screens.
+      // progress bar), the other three belong to other screens. So does the
+      // pause of intercepting (HUM-407): the header shows it.
       case FlowEventResponseChunk() ||
           FlowEventDiagnostic() ||
           FlowEventRulesChanged() ||
-          FlowEventAgentAsk():
+          FlowEventAgentAsk() ||
+          FlowEventInterceptChanged():
         break;
     }
   }

@@ -15,7 +15,9 @@
 //!   ohne passende Regel — reicht sie an die innere Strategie weiter. Sie ist
 //!   der Normalfall im Daemon.
 //! - [`AskPipeline`] hält jeden Flow über die [`HoldQueue`], bis jemand
-//!   entscheidet oder die Frist abläuft.
+//!   entscheidet oder die Frist abläuft. Während einer Pause des Abfangens
+//!   (HUM-407, [`humanitl_core::InterceptPause`]) hält sie nicht, sondern lässt mit
+//!   [`DecisionSource::Paused`] durch; die harte Sperre bleibt.
 //! - [`PassthroughPipeline`] lässt jeden Flow sofort durch
 //!   ([`DecisionSource::Passthrough`]). Sie ist der Test-Hook, mit dem sich der
 //!   Weiterleitungs-Pfad ohne Oberfläche prüfen lässt. Die echte Durchreiche
@@ -173,6 +175,17 @@ impl AskPipeline {
         }
     }
 
+    /// Ob die Pause des Abfangens gilt (HUM-407).
+    ///
+    /// Nur mit den Einstellungen einer Sitzung: Eine feste Frist hat keine
+    /// Pause, die jemand setzen könnte.
+    fn paused(&self) -> bool {
+        match &self.deadline {
+            Deadline::Fixed(_) => false,
+            Deadline::Session(settings) => settings.pause().is_paused(),
+        }
+    }
+
     /// Die Frist, die für den nächsten Fluss gilt.
     fn timeout(&self) -> Duration {
         match &self.deadline {
@@ -195,6 +208,26 @@ impl FlowPipeline for AskPipeline {
     /// steht.
     async fn decide(&self, flow: &mut Flow, _meta: &ConnMeta) -> Decision {
         let timeout = self.timeout();
+        // Die Pause des Abfangens (HUM-407) lässt nur durch, was sonst auf
+        // einen Menschen gewartet hätte. Ohne Frist (`ask_mode = none`,
+        // `hold.timeout_secs = 0`) wartet nichts, die Anfrage liefe sofort ab;
+        // dann bleibt es genau dabei, und aus der Vorgabe „ablehnen" wird
+        // keine Vorgabe „durchlassen". Ein Geheimnis unter der harten Sperre
+        // bleibt gesperrt wie ohne Pause; was eine Regel entschieden hat, ist
+        // vorher schon entschieden.
+        //
+        // Gelesen wird die Pause einmal, hier. Eine Anfrage, die sie kurz vor
+        // dem Einschalten las, steht deshalb womöglich nach
+        // `intercept.resumed` mit `paused` im Audit: höchstens die Anfragen,
+        // die in diesem Augenblick unterwegs waren, und so gewollt.
+        if !timeout.is_zero() && self.paused() {
+            let (decision, source) = if flow.send_refusal.is_some() {
+                (hard_block_decision(), DecisionSource::System)
+            } else {
+                (Decision::Allow, DecisionSource::Paused)
+            };
+            return decide_now(&self.queue, flow, decision, source);
+        }
         // Ohne Frist (`ask_mode = none`, `hold.timeout_secs = 0`) fragt
         // niemand, und ein Flow unter der harten Sperre endete sonst als
         // Ablauf: Der Agent bekäme keinen Satz, der sagt, warum, und im Audit

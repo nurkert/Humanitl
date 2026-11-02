@@ -56,7 +56,10 @@ use humanitl_config::private_dir::{ensure_private_dir, with_own_runtime_dir_fix}
 use humanitl_config::{Config, Paths as XdgPaths, ResolverConfig, WorkMode};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::shell::shell_path;
-use humanitl_core::{Diagnostic, FixAction, FlowEvent, SecretMasks, SessionId, Severity};
+use humanitl_core::{
+    Diagnostic, FixAction, FlowEvent, InterceptPause, ResumeReason, SecretMasks, SessionId,
+    Severity,
+};
 use humanitl_ipc::fake::{FakeDaemon, FakeOptions, Gates, Session};
 use humanitl_ipc::sandbox::SandboxPorts;
 use humanitl_ipc::session::{SessionResolver, bundled_rules};
@@ -356,18 +359,15 @@ async fn run_daemon(cli: &Cli, passed: Option<systemd::Passed>) -> Result<(), Di
 
     let proxy = ProxyCore::new();
     let rules = load_rules(&xdg, &base, session);
-    // Frage-Modus, Frist und Endpunkt stehen ab hier an einer Stelle, die eine
-    // Sitzung beschreiben darf. Ohne sie wären `humanitl run --ask none` und
-    // `--llm` Dekoration: Der Proxy läuft schon, wenn die Sitzung startet
-    // (HUM-067).
-    let settings = Arc::new(SessionSettings::new(
-        SessionState::for_config(
-            config.hold.ask_mode,
-            config.hold.timeout_secs,
-            llm_authority(&config),
-        )
-        .with_llm_alias(&config.llm),
-    ));
+    // Die Pause des Abfangens (HUM-407): eine für den ganzen Daemon, nur im
+    // Speicher, ein Neustart beginnt ohne sie.
+    let pause = {
+        let queue = Arc::clone(&queue);
+        Arc::new(InterceptPause::announcing(move |event| {
+            queue.publish(event);
+        }))
+    };
+    let settings = session_settings(&config, &pause);
     // Ein Port fuer den ganzen Lauf: Der Zaehler, den `daemon status` zeigt,
     // und der Zwischenspeicher gehoeren derselben Instanz (HUM-024).
     let resolver = Arc::new(ResolverPort::from_config(&config.resolver)?);
@@ -434,7 +434,10 @@ async fn run_daemon(cli: &Cli, passed: Option<systemd::Passed>) -> Result<(), Di
         // eingefrorenen Konfiguration: Jeder Start löst für seine Sitzung neu
         // auf und schreibt Regeln und Frist dorthin, wo Proxy und
         // Meta-Endpunkt sie lesen (HUM-067).
-        .with_sandbox(sandbox.clone());
+        .with_sandbox(sandbox.clone())
+        // Nur hier lässt sich die Pause setzen: am Socket des Daemons
+        // (HUM-407).
+        .with_intercept(Arc::clone(&pause));
     // Dieselben Wurzeln für die Endpunkt-Probe wie für den Proxy: Zwei
     // verschiedene Vertrauensentscheidungen in einem Prozess wären die
     // Überraschung, die dieses Repository vermeidet, und die Probe spricht mit
@@ -448,6 +451,9 @@ async fn run_daemon(cli: &Cli, passed: Option<systemd::Passed>) -> Result<(), Di
     let (signal, farewell) = signal_that_ends_the_sandbox(signal, sandbox.clone());
     let result = systemd::serve(socket, &paths.socket, &paths.token, server, signal).await;
     join_farewell(farewell, sandbox).await;
+    // Mit dem Daemon endet die Pause; ihr Ende steht im Audit-Log, bevor der
+    // Sink unten `session.ended` schreibt (HUM-407).
+    pause.resume(ResumeReason::DaemonStopping);
 
     // Erst die Sitzungen, dann zurückkehren: der Accept-Loop endet, und mit
     // ihm verschwindet der Socket, den die Sandbox eingehängt hätte.
@@ -1858,6 +1864,26 @@ fn probe_with_roots(
         Duration::from_secs(config.limits.header_timeout_secs),
     );
     Ok(Some(LlmProbe::new(upstream)))
+}
+
+/// Frage-Modus, Frist und Endpunkt an der einen Stelle, die eine Sitzung
+/// beschreiben darf. Ohne sie wären `humanitl run --ask none` und `--llm`
+/// Dekoration: Der Proxy läuft schon, wenn die Sitzung startet (HUM-067).
+///
+/// Dazu die Pause des Abfangens (HUM-407), die Halte-Pipeline und gRPC-Dienst
+/// teilen; jeder Wechsel geht in den Ereignisstrom und damit ins Audit-Log.
+fn session_settings(config: &Config, pause: &Arc<InterceptPause>) -> Arc<SessionSettings> {
+    Arc::new(
+        SessionSettings::new(
+            SessionState::for_config(
+                config.hold.ask_mode,
+                config.hold.timeout_secs,
+                llm_authority(config),
+            )
+            .with_llm_alias(&config.llm),
+        )
+        .with_pause(Arc::clone(pause)),
+    )
 }
 
 /// Der Sprachmodell-Endpunkt als `host:port` für die Statusausgabe des

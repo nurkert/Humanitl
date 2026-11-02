@@ -236,6 +236,23 @@ void main() {
       expect(historyVisualState(blocked), HFlowState.blocked);
     });
 
+    test('a request the pause let through was decided by nobody (HUM-407)', () {
+      // So kommt die Zeile aus der Aufzeichnung: `allow` mit der Herkunft
+      // `PAUSED` aus der Spalte `paused`. Ohne den eigenen Zweig stünde in
+      // der Regelspalte „manuell", als hätte ein Mensch erlaubt.
+      final Flow paused = pb.FlowSummary(
+        flowId: '018f0004-0000-7000-8000-000000000407',
+        sessionId: testSession.value,
+        path: '/x',
+        authority: pb.Authority(host: 'example.com', port: 443),
+        state: pb.FlowState.FLOW_STATE_RECORDED,
+        decision: pb.DecisionKind.DECISION_KIND_ALLOW,
+        decisionSource: pb.DecisionSource.DECISION_SOURCE_PAUSED,
+      ).toDomain();
+      expect(paused.decisionSource, DecisionSource.paused);
+      expect(historyDecider(paused), HistoryDecider.paused);
+    });
+
     test('a rule id is shortened to its first eight characters', () {
       expect(historyRuleShort(testRule), '018f0005');
       expect(historyRuleShort(const RuleId('abc')), 'abc');

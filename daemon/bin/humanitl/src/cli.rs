@@ -175,6 +175,33 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: LlmCmd,
     },
+
+    /// Pause intercepting, resume it, or show whether it is paused.
+    Intercept {
+        /// Was mit dem Abfangen geschehen soll.
+        #[command(subcommand)]
+        cmd: InterceptCmd,
+    },
+}
+
+/// Die Unterkommandos von `humanitl intercept` (HUM-407).
+#[derive(Debug, Subcommand)]
+pub enum InterceptCmd {
+    /// Show whether intercepting is on or paused, and since when.
+    Status,
+    /// Pause intercepting until you resume it, the next session starts or
+    /// the daemon stops.
+    ///
+    /// While paused, a request that would wait for your decision goes out
+    /// at once instead of being held, and is recorded with the reason
+    /// "paused". Without a hold deadline (--ask none) nothing waits, and the
+    /// pause changes nothing.
+    /// Block rules, the hard block on verified secrets, the sandbox and the
+    /// recording stay. The agent in the sandbox is not told. No setting
+    /// makes the pause permanent.
+    Pause,
+    /// Resume intercepting: every request no rule decides waits again.
+    Resume,
 }
 
 /// Die Unterkommandos von `humanitl llm`.

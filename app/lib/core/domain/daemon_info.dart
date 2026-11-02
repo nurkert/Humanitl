@@ -3,6 +3,8 @@ library;
 
 import 'package:freezed_annotation/freezed_annotation.dart';
 
+import 'intercept.dart';
+
 part 'daemon_info.freezed.dart';
 part 'daemon_info.g.dart';
 
@@ -16,6 +18,13 @@ abstract class DaemonInfo with _$DaemonInfo {
     required int protoMinor,
     @Default(<String>[]) List<String> capabilities,
     @Default('') String sessionId,
+
+    /// The pause of intercepting as this daemon reports it with every
+    /// `GetInfo`, so with every heartbeat (HUM-407); null from a daemon that
+    /// cannot pause. Not part of the JSON form: it is a reading, not a
+    /// setting.
+    @JsonKey(includeFromJson: false, includeToJson: false)
+    InterceptStatus? intercept,
   }) = _DaemonInfo;
 
   const DaemonInfo._();
@@ -46,6 +55,15 @@ abstract class DaemonInfo with _$DaemonInfo {
   /// True when the daemon runs disposable sandboxes; the app offers the
   /// switch, the setting and the changes panel only then (HUM-351).
   bool get offersDisposable => capabilities.contains(disposableCapability);
+
+  /// The capability of a daemon whose intercepting can be paused over
+  /// `Intercept` (HUM-407).
+  static const String interceptPauseCapability = 'intercept.pause';
+
+  /// True when the daemon can pause intercepting; only then is the intercept
+  /// pill of the header a button.
+  bool get offersInterceptPause =>
+      capabilities.contains(interceptPauseCapability);
 
   /// True when a session is running.
   bool get hasSession => sessionId.isNotEmpty;

@@ -591,10 +591,7 @@ fn why_body(flow: FlowId, request: &MetaRequest<'_>, registry: &FlowRegistry) ->
             }
             Some(decision @ (Decision::Allow | Decision::AllowEdited { .. })) => (
                 decision.as_str().to_owned(),
-                record
-                    .decision_source
-                    .map_or("unknown", humanitl_core::DecisionSource::as_str)
-                    .to_owned(),
+                agent_visible_source(record.decision_source).to_owned(),
                 String::new(),
             ),
         };
@@ -610,6 +607,25 @@ fn why_body(flow: FlowId, request: &MetaRequest<'_>, registry: &FlowRegistry) ->
     MetaOutcome {
         reply: text(404, "no such flow\n"),
         event: None,
+    }
+}
+
+/// Die Herkunft einer Freigabe, wie `/why` sie dem Agenten nennt.
+///
+/// Die Pause des Abfangens (HUM-407) heißt hier `user`: Eine Anfrage, die
+/// sie durchlässt, hätte sonst auf die Freigabe eines Menschen gewartet, und
+/// genau diese Freigabe ersetzt sie. Für den Agenten muss sie deshalb
+/// aussehen wie eine solche Freigabe eines lebenden Flusses. `unknown` wäre
+/// verräterisch: Ein lebender Fluss trägt sonst immer `user`, `rule` oder
+/// `passthrough`, `unknown` kommt nur aus der Aufzeichnung (Review HUM-407).
+/// App, History und Audit führen weiter die wahre Herkunft `paused`; HUM-401
+/// macht später `user` selbst für jeden Fluss neutral, und beide bleiben
+/// dabei ununterscheidbar.
+fn agent_visible_source(source: Option<humanitl_core::DecisionSource>) -> &'static str {
+    match source {
+        None => "unknown",
+        Some(humanitl_core::DecisionSource::Paused) => humanitl_core::DecisionSource::User.as_str(),
+        Some(other) => other.as_str(),
     }
 }
 
