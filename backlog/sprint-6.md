@@ -64,6 +64,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-388 | Website: neue Bilder im neutralen Grau mit einer echten Beispielsitzung | S | HUM-333, HUM-355 |
 | HUM-389 | Website: Glas, Video im vorderen Fenster, gerades Karussell mit Autoplay | M | HUM-333, HUM-375, HUM-388 |
 | HUM-412 | Website: the morph follows the scroll without jumps, the front window is never empty, the carousel stays calm under touch and trackpad | M | HUM-389 |
+| HUM-415 | Website: the front window on a phone never turns plain grey | S | HUM-412 |
 | HUM-384 | Setup: Ein Befund des Plans steht dort, worüber er etwas sagt | S | HUM-287, HUM-262 |
 | HUM-385 | Verbindung: Eine kurze Lücke nach einem Neustart zeigt erst „verbinde neu" | S | HUM-044, HUM-058 |
 
@@ -987,3 +988,28 @@ Akzeptanzkriterien:
   (Beginn bei 2,2 s, wo die erste gehaltene Anfrage steht).
 - Tests für Feder und Gesten mit Mutationsbeweis; kein waagrechter Überlauf
   ab 320 px; reduzierte Bewegung und die Fassung ohne Skript unverändert.
+
+## HUM-415 · Website: the front window on a phone never turns plain grey
+
+Rückmeldung des Inhabers vom 2026-11-02 nach HUM-412: Auf dem Telefon zeigt
+das vordere Fenster der Landing kurz das Video und wird dann dauerhaft
+flach grau, nicht einmal das Standbild bleibt.
+
+Ursache (nachgestellt in headless Firefox, auf dem Gerät nicht beobachtet):
+HUM-412 hielt das Standbild nur sichtbar, indem es das Video auf
+Deckkraft 0 setzte, und erkannte einen Stillstand nur über Ereignisse oder
+eine stehende Uhr. Malt der Browser eine leere oder graue Videofläche ohne
+Ereignis, oder befolgt die hardware-gemalte Ebene des Videos die Deckkraft
+nicht (eine bekannte Klasse von Fehlern in 3D-Kontexten auf iOS), bleibt
+das Fenster grau.
+
+Akzeptanzkriterien:
+- Das Standbild liegt über dem Video und wird nur durchsichtig, solange
+  nachweislich Bilder laufen; das Video bleibt immer deckend.
+- Eine Wache blendet das Standbild nach etwa 500 ms ohne neues Bild ein,
+  unabhängig von Ereignissen; eine Stichprobe erkennt ein einheitlich
+  graues, schwarzes oder durchsichtiges Bild, auch vor dem Öffnen.
+- Wiederholte Ausfälle halten das Video an, bis eine Geste kommt; nach
+  zwei solchen Pausen bleibt für den Besuch das Standbild.
+- Tests der reinen Logik mit Mutationsbeweis; reduzierte Bewegung zeigt nur
+  das Standbild.
