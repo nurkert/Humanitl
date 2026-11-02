@@ -1,7 +1,8 @@
 // Goldens der gespeicherten Modellserver (HUM-289, frisch gedacht in
-// HUM-405): die Karten mit „Wer nutzt welchen Server", die Detailansicht
-// eines Servers mit ungespeicherter Änderung, ein neuer Server, die
-// Rückfrage vor dem Entfernen des Standards, der Schnellwechsel der
+// HUM-405, Liste und Detailansicht seit HUM-414): die Liste mit dem Standard
+// daneben und „Wer nutzt welchen Server", die Detailansicht eines Servers
+// mit ungespeicherter Änderung, ein neuer Server, die Rückfrage vor dem
+// Entfernen eines Servers, der Schnellwechsel der
 // Statusleiste mit offenem Menü und die eine Rückfrage vor dem Start, wenn
 // das Projekt einen unbestätigten Server wählt. Je in den vier Varianten aus
 // `support/golden_variants.dart`.
@@ -15,7 +16,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/client_providers.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
-import 'package:humanitl/l10n/l10n.dart';
 import 'package:humanitl/features/sandbox/widgets/server_confirm_dialog.dart';
 import 'package:humanitl/features/shell/widgets/llm_server_item.dart';
 
@@ -55,7 +55,7 @@ FakeDaemonClient twoServers() => configured()
   ]
   ..projectUse = const ProjectUse(dir: '/home/u/src/acme', server: 'work');
 
-/// Das Overlay mit den Karten.
+/// Das Overlay mit der Liste und dem Standard daneben.
 Future<void> showServers(WidgetTester tester) async {
   await settleSheet(tester);
 }
@@ -87,23 +87,15 @@ Future<void> addServer(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-/// Die Detailansicht des Standards, danach „Mehr" und „Entfernen".
+/// Die Detailansicht von `cloud` und die Rückfrage vor dem Entfernen.
 Future<void> askRemove(WidgetTester tester) async {
-  await openServer(tester, 'home');
-  await tester.tap(find.byKey(const Key('settings-server-more')));
+  await openServer(tester, 'cloud');
+  final Finder remove = find.byKey(const Key('settings-server-remove'));
+  await tester.ensureVisible(remove);
   await tester.pumpAndSettle();
-  final Finder remove = find.text(
-    lookupAppLocalizationsFor(tester).settingsServerRemove,
-  );
-  await tester.tap(remove.last);
+  await tester.tap(remove);
   await tester.pumpAndSettle();
 }
-
-/// Die Übersetzungen der Variante unter dem Overlay.
-AppLocalizations lookupAppLocalizationsFor(WidgetTester tester) =>
-    AppLocalizations.of(
-      tester.element(find.byKey(const Key('settings-server-more'))),
-    );
 
 /// Der Eintrag der Statusleiste, das Menü offen.
 Future<void> openSwitch(WidgetTester tester) async {

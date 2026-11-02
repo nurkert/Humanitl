@@ -112,6 +112,12 @@ class _ServerUsageState extends ConsumerState<ServerUsage> {
           warning: project.chosen.isNotEmpty && !project.confirmed
               ? l10n.settingsServerUsageUnconfirmed
               : null,
+          chip: project.chosen.isEmpty
+              ? null
+              : project.confirmed
+              ? l10n.settingsServerUsageConfirmed
+              : l10n.settingsServerUsageNeedsConfirmation,
+          chipWarns: project.chosen.isNotEmpty && !project.confirmed,
           picker: ServerPicker(
             key: const Key('settings-usage-pick-project'),
             value: project.server,
@@ -132,7 +138,17 @@ class _ServerUsageState extends ConsumerState<ServerUsage> {
         _UsageRow(
           rowKey: 'profile-${profile.name}',
           label: l10n.settingsServerUsageProfile(profile.name),
-          note: profile.description.isEmpty ? null : profile.description,
+          // Ein Satz mit dem Server, den das Profil wirklich bekommt, damit
+          // niemand im Auswahlfeld lesen muss, ob es dem Standard folgt.
+          note: profile.server.isEmpty
+              ? l10n.settingsServerUsageFollows(
+                  fallback.isEmpty ? '-' : fallback,
+                )
+              : l10n.settingsServerUsageUses(profile.server),
+          detail: profile.description.isEmpty ? null : profile.description,
+          chip: profile.server.isEmpty
+              ? null
+              : l10n.settingsServerUsageOwnChoice,
           picker: ServerPicker(
             key: ValueKey<String>(
               'settings-usage-pick-profile-${profile.name}',
@@ -156,9 +172,12 @@ class _ServerUsageState extends ConsumerState<ServerUsage> {
       key: const Key('settings-server-usage'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        Text(
-          l10n.settingsServerUsageTitle,
-          style: tokens.typography.ui13.medium.tinted(tokens.colors.fg0),
+        Semantics(
+          header: true,
+          child: Text(
+            l10n.settingsServerUsageTitle,
+            style: tokens.typography.ui13.medium.tinted(tokens.colors.fg0),
+          ),
         ),
         SizedBox(height: tokens.spacing.x1),
         Text(
@@ -210,20 +229,37 @@ class _UsageRow extends StatelessWidget {
     required this.label,
     required this.picker,
     this.note,
+    this.detail,
     this.warning,
+    this.chip,
+    this.chipWarns = false,
   });
 
   final String rowKey;
   final String label;
+
+  /// What the row means, as a sentence.
   final String? note;
+
+  /// A quieter line under it, such as what a profile is for.
+  final String? detail;
   final String? warning;
+
+  /// A short mark beside the label: an own choice, or the state of the
+  /// project's confirmation.
+  final String? chip;
+
+  /// Whether [chip] is a warning rather than a plain mark.
+  final bool chipWarns;
   final Widget picker;
 
   @override
   Widget build(BuildContext context) {
     final HTokens tokens = HTheme.of(context);
     final String? note = this.note;
+    final String? detail = this.detail;
     final String? warning = this.warning;
+    final String? chip = this.chip;
     return Padding(
       key: ValueKey<String>('settings-usage-$rowKey'),
       padding: EdgeInsets.symmetric(
@@ -236,16 +272,42 @@ class _UsageRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: tokens.typography.ui13.tinted(tokens.colors.fg0),
+                Row(
+                  children: <Widget>[
+                    Flexible(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: tokens.typography.ui13.tinted(tokens.colors.fg0),
+                      ),
+                    ),
+                    if (chip != null) ...<Widget>[
+                      SizedBox(width: tokens.spacing.x2),
+                      HBadge(
+                        key: ValueKey<String>('settings-usage-chip-$rowKey'),
+                        text: chip,
+                        color: chipWarns
+                            ? tokens.colors.warning
+                            : tokens.colors.fg2,
+                        textColor: chipWarns
+                            ? tokens.colors.warningText
+                            : tokens.colors.fg1,
+                      ),
+                    ],
+                  ],
                 ),
                 if (note != null)
                   Text(
                     note,
                     maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: tokens.typography.ui12.tinted(tokens.colors.fg1),
+                  ),
+                if (detail != null)
+                  Text(
+                    detail,
+                    maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: tokens.typography.ui12.tinted(tokens.colors.fg2),
                   ),

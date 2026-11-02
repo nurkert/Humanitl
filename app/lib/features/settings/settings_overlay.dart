@@ -290,8 +290,18 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
     });
   }
 
+  /// Closes the overlay; a form that holds a change asks first (HUM-414).
+  void _close() => _settings.leave(widget.onClose);
+
   void _choose(SettingsCategory category) {
     if (_query.text.isEmpty && category == _category) {
+      return;
+    }
+    _settings.leave(() => _show(category));
+  }
+
+  void _show(SettingsCategory category) {
+    if (!mounted) {
       return;
     }
     setState(() {
@@ -306,7 +316,8 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
   }
 
   /// A hit of the search: its category, then the row.
-  void _chooseHit(String id) => setState(() => _jumpTo(id));
+  void _chooseHit(String id) =>
+      _settings.leave(() => mounted ? setState(() => _jumpTo(id)) : null);
 
   void _clearSearch() {
     _query.clear();
@@ -318,7 +329,7 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
     if (_query.text.isNotEmpty) {
       _clearSearch();
     } else {
-      widget.onClose();
+      _close();
     }
   }
 
@@ -424,7 +435,7 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
                         child: GestureDetector(
                           key: const Key('settings-dim'),
                           behavior: HitTestBehavior.opaque,
-                          onTap: widget.onClose,
+                          onTap: _close,
                           child: ColoredBox(
                             color: HColorDerivation.fade(
                               tokens.colors.bg0,
@@ -558,7 +569,7 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
                   searchController: _query,
                   searchFocus: _searchNode,
                   onSubmitSearch: () => _submitSearch(l10n),
-                  onClose: widget.onClose,
+                  onClose: _close,
                 ),
                 const HHairline(),
                 Expanded(

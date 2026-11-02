@@ -17,6 +17,7 @@ export 'ids.dart';
 export 'intercept.dart';
 export 'llm.dart';
 export 'llm_servers.dart';
+export 'server_address.dart';
 export 'rule.dart';
 export 'sandbox.dart';
 export 'settings.dart';
