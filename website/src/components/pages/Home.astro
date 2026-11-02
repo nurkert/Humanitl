@@ -1017,10 +1017,22 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   }
   .win__frame :global(picture) {
     position: relative;
-    z-index: 1;
+    z-index: 2;
     display: block;
     width: 100%;
     height: 100%;
+  }
+  /* Im vorderen Fenster liegt die Aufnahme ÜBER dem Video und wird nur durchsichtig, solange das
+     Video nachweislich läuft (data-video-on, stage/video.ts). Stockt es, malt es grau oder gibt
+     der Browser den Decoder frei, steht sofort wieder die Aufnahme, auch wenn der Browser die
+     Deckkraft des Videos in dessen eigener Ebene nicht befolgt (HUM-415). */
+  .win__frame > :global(picture) {
+    /* Zurück kommt die Aufnahme schnell, gehen lässt sie das Video langsam. */
+    transition: opacity 0.16s var(--ease-out);
+  }
+  .win__frame[data-video-on] > :global(picture) {
+    opacity: 0;
+    transition-duration: 0.32s;
   }
   .win__shot,
   .win__frame :global(img) {
@@ -1032,10 +1044,10 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     background: #111111;
     box-shadow: 0 0 0 1px rgb(0 0 0 / 0.6);
   }
-  /* Der Ablauf im vorderen Fenster liegt genau über der Aufnahme: absolut, mit ihrem Maß und
-     Radius, so verschiebt das Laden des Videos nichts. Es bleibt unsichtbar, bis das Skript ein
-     gemaltes Bild des Videos sieht (data-on), und wird es wieder, sobald es anhält, hängt oder
-     ausfällt; darunter steht immer die Aufnahme (stage/video.ts). */
+  /* Der Ablauf im vorderen Fenster liegt genau unter der Aufnahme: absolut, mit ihrem Maß und
+     Radius, so verschiebt das Laden des Videos nichts. Es selbst bleibt deckend; sichtbar wird
+     es, wenn das Skript zwei fortschreitende Bilder sieht und die Aufnahme darüber durchsichtig
+     macht, verdeckt wieder, sobald es anhält, hängt, leer malt oder ausfällt (stage/video.ts). */
   .win__video {
     position: absolute;
     z-index: 1;
@@ -1046,15 +1058,10 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     object-position: top center;
     border-radius: var(--r-shot);
     background: transparent;
-    opacity: 0;
-    transition: opacity 0.32s var(--ease-out);
     pointer-events: none;
   }
-  .win__video[data-on] {
-    opacity: 1;
-  }
   @media (prefers-reduced-motion: reduce) {
-    .win__video {
+    .win__frame > :global(picture) {
       transition: none;
     }
   }

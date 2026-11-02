@@ -1,8 +1,8 @@
-// Der Ablauf im vorderen Fenster der Bühne (HUM-389, HUM-412).
+// Der Ablauf im vorderen Fenster der Bühne (HUM-389, HUM-412, HUM-415).
 //
-// Unter dem Video liegt immer die Aufnahme als Bild. Das Video ist durchsichtig, bis es
-// nachweislich läuft (zwei Bilder mit fortschreitender Medienzeit), und wird wieder
-// durchsichtig, sobald es das nicht mehr sicher tut: beim Anhalten, beim Warten auf Daten,
+// Über dem Video liegt immer die Aufnahme als Bild. Das Bild wird erst durchsichtig, wenn das
+// Video nachweislich läuft (zwei Bilder mit fortschreitender Medienzeit), und deckt es wieder,
+// sobald es das nicht mehr sicher tut: beim Anhalten, beim Warten auf Daten,
 // beim Hängen, bei einem Rücksprung der Zeit, den das Skript nicht selbst ausgelöst hat, wenn
 // der Browser den Decoder freigibt oder das Abspielen verweigert. So kann das Fenster nie leer
 // sein; schlimmstenfalls steht das Bild.
@@ -18,6 +18,25 @@
 // beim Nachladen hängt, blieb sichtbar stehen: auf seinem ersten Bild, der fast leeren
 // Warteschlange, oder schwarz, wenn der Browser Puffer und Decoder zurückgeholt hatte. Dazu
 // kehrte die Schleife alle 16,5 s auf eben dieses erste Bild zurück.
+//
+// HUM-415: Trotzdem stand das Fenster auf einem Telefon nach kurzem Video grau. Zwei Lücken:
+// Die Deckkraft des Videos war die einzige Sperre, und ein Browser, der das Video in einer
+// eigenen Ebene malt, muss sie dort nicht befolgen; und ohne Ereignis des Browsers merkte das
+// Skript einen Stillstand erst nach STALL_MS. Jetzt liegt das Bild ÜBER dem Video und wird nur
+// durchsichtig, solange das Video läuft (data-video-on am Rahmen). Eine Wache (Zeitgeber alle
+// 250 ms und je Bild der Seite) nimmt das Video ohne neues gemaltes Bild zurück, mit
+// Frame-Callback nach FRAME_FREEZE_MS, sonst nach FREEZE_MS. Stichproben alle 500 ms prüfen, ob
+// das gelieferte Bild leer ist, auch vor dem Öffnen; eine nicht mögliche Stichprobe zählt wie
+// ein leeres Bild. Wiederholte Ausfälle lassen das Bild stehen (stage/watch.mjs).
+
+import {
+  SAMPLE_MS,
+  WATCH_TICK_MS,
+  createFlapGuard,
+  createSampleJudge,
+  isBlankFrame,
+  judgeFreeze,
+} from "./watch.mjs";
 
 /** Ohne Fortschritt im Abspielen gilt das Video nach dieser Zeit als hängend. */
 const STALL_MS = 2500;
@@ -29,8 +48,18 @@ const STALL_MS = 2500;
  */
 export const LOOP_START = 2.2;
 
-/** Ab diesem Rücksprung der Medienzeit in s zeigt das Fenster wieder das Bild. */
-const ROLLBACK_S = 0.25;
+/**
+ * Ab diesem Rücksprung der Medienzeit in s zeigt das Fenster wieder das Bild. Firefox meldet im
+ * Frame-Callback gelegentlich 0,27 s zurück, ohne dass etwas geschieht (HUM-415); ein echtes
+ * Zurückfallen (Neuladen, Anfang) springt Sekunden.
+ */
+const ROLLBACK_S = 0.5;
+
+/** Seitenlänge der Stichprobe in Pixeln; feine Schrift überlebt 32x18 mit Glättung. */
+const SAMPLE_W = 32;
+const SAMPLE_H = 18;
+
+type Sample = "ok" | "blank" | "unverified";
 
 export interface FrontVideo {
   /** Sein Fenster ist nah am Fokus und sichtbar. */
@@ -90,12 +119,138 @@ export function frontVideo(
   let selfLoad = false;
   // Hält der Browser das Video immer wieder an, wartet es auf eine Geste statt zu kämpfen.
   let pausesByBrowser: number[] = [];
+  // Ausfälle der Wache (Stillstand ohne Ereignis, leere Bilder) gegen Flackern.
+  const flaps = createFlapGuard();
+  const samples = createSampleJudge();
+  let guardFrame = 0;
+  let guardTimer = 0;
+  let lastCheck = 0;
+  // Die vorige Prüfung kam nach einer Lücke und urteilte nicht; die nächste muss urteilen.
+  let afterGap = false;
+  let lastSample = 0;
+  let lastPreSample = -Infinity;
+  let sampler: CanvasRenderingContext2D | null = null;
+  // Der Rahmen trägt das Bild; ist das Video an, wird nur das Bild durchsichtig.
+  const frame = video.parentElement;
 
   const want = () =>
     !failed && !blocked && !reduced && !document.hidden && seen && shown;
 
   function setOn(on: boolean) {
     video.toggleAttribute("data-on", on);
+    frame?.toggleAttribute("data-video-on", on);
+    if (on && !guardTimer) {
+      lastSample = lastCheck = performance.now();
+      afterGap = false;
+      samples.reset();
+      // Der Zeitgeber hängt nicht an requestAnimationFrame: Drosselt der Browser die Bilder der
+      // Seite (Stromsparen) oder hält er sie an, prüft die Wache trotzdem.
+      guardTimer = window.setInterval(check, WATCH_TICK_MS);
+      guardFrame = requestAnimationFrame(frameTick);
+    } else if (!on && guardTimer) {
+      clearInterval(guardTimer);
+      cancelAnimationFrame(guardFrame);
+      guardTimer = guardFrame = 0;
+    }
+  }
+
+  function frameTick() {
+    guardFrame = requestAnimationFrame(frameTick);
+    check();
+  }
+
+  /**
+   * Die Wache, solange das Video das Bild deckt: Ohne neues gemaltes Bild (FRAME_FREEZE_MS, ohne
+   * Frame-Callback die Uhr nach FREEZE_MS) oder mit zwei leeren beziehungsweise nicht prüfbaren
+   * Stichproben in Folge steht wieder das Bild, gleich ob der Browser ein Ereignis gemeldet hat.
+   * Nach einer Lücke zwischen zwei Prüfungen (die Seite hing) urteilt erst die nächste.
+   */
+  function check() {
+    if (!guardTimer) return;
+    const now = performance.now();
+    // Ohne Frame-Callback die Medienzeit selbst ablesen; timeupdate kommt nur alle 250 ms.
+    if (!frames && !video.paused) progress(video.currentTime);
+    if (!guardTimer) return;
+    const verdict = judgeFreeze({
+      now,
+      lastCheck,
+      lastProgress,
+      visible: !document.hidden,
+      frames,
+      plannedSeek,
+      afterGap,
+    });
+    afterGap = verdict === "skip" && !document.hidden;
+    lastCheck = now;
+    if (verdict === "frozen") {
+      fail(now);
+      return;
+    }
+    if (verdict === "ok" && now - lastSample >= SAMPLE_MS) {
+      lastSample = now;
+      if (samples.whileOn(sample()) === "fail") fail(now);
+    }
+  }
+
+  /** Ein verkleinertes Bild des Videos: echt, leer, oder nicht prüfbar. */
+  function sample(): Sample {
+    if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return "unverified";
+    try {
+      if (!sampler) {
+        const canvas = document.createElement("canvas");
+        canvas.width = SAMPLE_W;
+        canvas.height = SAMPLE_H;
+        sampler = canvas.getContext("2d", { willReadFrequently: true });
+        if (!sampler) return "unverified";
+        sampler.imageSmoothingEnabled = true;
+        sampler.imageSmoothingQuality = "high";
+      }
+      sampler.drawImage(video, 0, 0, SAMPLE_W, SAMPLE_H);
+      return isBlankFrame(sampler.getImageData(0, 0, SAMPLE_W, SAMPLE_H).data)
+        ? "blank"
+        : "ok";
+    } catch {
+      return "unverified";
+    }
+  }
+
+  /**
+   * Darf das Gate öffnen? Höchstens eine Stichprobe je SAMPLE_MS; ohne echtes Bild bleibt die
+   * Aufnahme deckend, und nach mehreren leeren oder nicht prüfbaren Stichproben in Folge hält
+   * das Video an, statt unsichtbar weiter zu dekodieren.
+   */
+  function mayOpen(): boolean {
+    const now = performance.now();
+    if (now - lastPreSample < SAMPLE_MS) return false;
+    lastPreSample = now;
+    const verdict = samples.preOpen(sample());
+    if (verdict === "open") return true;
+    if (verdict === "park") park(flaps.park());
+    return false;
+  }
+
+  /** Die Wache hat einen Ausfall gesehen: Bild zeigen, beim Wiederholen dabei bleiben. */
+  function fail(now: number) {
+    gate();
+    const verdict = flaps.note(now);
+    if (verdict !== "retry") park(verdict);
+  }
+
+  /** Bis zur nächsten Geste ("park") oder für den Besuch ("stop") nur das Bild. */
+  function park(verdict: "park" | "stop") {
+    if (verdict === "stop") {
+      drop();
+      return;
+    }
+    blocked = true;
+    playToken++;
+    gate();
+    stopWatch();
+    if (!video.paused) {
+      selfPause = true;
+      video.pause();
+    }
+    armGesture();
   }
 
   /** Bild zeigen und auf frischen Fortschritt warten. */
@@ -109,7 +264,14 @@ export function frontVideo(
     failed = true;
     gate();
     stopWatch();
+    // Ein ausgefallenes Video dekodiert nicht unsichtbar weiter.
+    if (!video.paused) {
+      selfPause = true;
+      video.pause();
+    }
     video.hidden = true;
+    // Ausgefallen ist endgültig: keine Geste startet es neu.
+    disarmGesture();
   }
 
   function stopWatch() {
@@ -142,7 +304,9 @@ export function frontVideo(
         advances >= 2 &&
         video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA &&
         want() &&
-        !video.paused
+        !video.paused &&
+        // Ein leeres oder nicht prüfbares Bild deckt die Aufnahme gar nicht erst auf.
+        mayOpen()
       ) {
         gated = false;
         setOn(true);
@@ -155,6 +319,7 @@ export function frontVideo(
       if (plannedSeek && Math.abs(t - LOOP_START) < 0.5) {
         plannedSeek = false;
         lastTime = t;
+        lastProgress = performance.now();
         return;
       }
       // Jeder andere Rücksprung (Neuladen, Rückfall auf den Anfang): neu prüfen.
@@ -240,20 +405,31 @@ export function frontVideo(
   }
 
   let gestureArmed = false;
+  /** Hört nicht mehr auf die nächste Geste. */
+  function disarmGesture() {
+    if (!gestureArmed) return;
+    gestureArmed = false;
+    for (const type of GESTURES)
+      document.removeEventListener(type, retryOnGesture, true);
+  }
+
+  function retryOnGesture() {
+    disarmGesture();
+    blocked = false;
+    // Eine echte Geste gibt dem Browser einen frischen Rahmen für eigene Pausen.
+    pausesByBrowser = [];
+    flaps.gesture();
+    sync();
+  }
+
   function armGesture() {
     if (gestureArmed) return;
     gestureArmed = true;
-    const retry = () => {
-      gestureArmed = false;
-      for (const type of GESTURES)
-        document.removeEventListener(type, retry, true);
-      blocked = false;
-      // Eine echte Geste gibt dem Browser einen frischen Rahmen für eigene Pausen.
-      pausesByBrowser = [];
-      sync();
-    };
     for (const type of GESTURES)
-      document.addEventListener(type, retry, { capture: true, passive: true });
+      document.addEventListener(type, retryOnGesture, {
+        capture: true,
+        passive: true,
+      });
   }
 
   function sync() {
@@ -279,7 +455,8 @@ export function frontVideo(
       if (!video.paused) progress(video.currentTime);
     });
   video.addEventListener("playing", () => {
-    lastProgress = performance.now();
+    // Nur für den Anlauf; deckt das Video schon, zählen allein gemalte Bilder (HUM-415).
+    if (gated) lastProgress = performance.now();
     watchFrames();
   });
   // Warten auf Daten: das letzte Bild steht oder wird schwarz, je nach Browser. Bild zeigen,
