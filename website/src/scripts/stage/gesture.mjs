@@ -1,4 +1,5 @@
-// Gesten des Karussells: Achse einer Rad-Geste und Richtung beim Ziehen, beide mit Hysterese.
+// Gesten des Karussells: Achse einer Rad-Geste, mit Hysterese. Die Zugrichtung mit Hysterese
+// (HUM-412) entfiel mit HUM-413: der Vortritt hängt an der Lage eines Fensters (geometry.mjs).
 // Als .mjs mit JSDoc, damit die Tests es ohne Übersetzer laden (wie follow.mjs).
 //
 // Warum: Das Karussell entschied je einzelnem Rad-Ereignis, ob es waagrecht ist
@@ -55,42 +56,5 @@ export function createWheelAxis({ idleMs = WHEEL_IDLE_MS, decidePx = 8, ratio = 
     if (Math.max(sx, sy) < decidePx) return null;
     axis = sx > ratio * sy ? "x" : "y";
     return axis;
-  };
-}
-
-/**
- * Richtung einer Bewegung mit Hysterese: Sie kippt erst, wenn die Gegenbewegung seit dem
- * letzten Schritt in Richtung mindestens threshold beträgt (in Fenstern).
- * @param {number} [threshold]
- */
-export function createDirectionLatch(threshold = 0.06) {
-  let dir = 1;
-  let back = 0;
-  return {
-    /**
-     * @param {number} delta Bewegung seit dem letzten Aufruf
-     * @returns {number} 1 oder -1
-     */
-    push(delta) {
-      if (delta === 0) return dir;
-      if (Math.sign(delta) === dir) {
-        back = 0;
-        return dir;
-      }
-      back += Math.abs(delta);
-      if (back >= threshold) {
-        dir = -dir;
-        back = 0;
-      }
-      return dir;
-    },
-    /** @param {number} d */
-    reset(d) {
-      dir = d >= 0 ? 1 : -1;
-      back = 0;
-    },
-    get dir() {
-      return dir;
-    },
   };
 }

@@ -65,6 +65,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-389 | Website: Glas, Video im vorderen Fenster, gerades Karussell mit Autoplay | M | HUM-333, HUM-375, HUM-388 |
 | HUM-412 | Website: the morph follows the scroll without jumps, the front window is never empty, the carousel stays calm under touch and trackpad | M | HUM-389 |
 | HUM-415 | Website: the front window on a phone never turns plain grey | S | HUM-412 |
+| HUM-413 | Website: a large landing stack whose video window leaves to the left, and a calm carousel of all seven modules | L | HUM-412, HUM-415 |
 | HUM-384 | Setup: Ein Befund des Plans steht dort, worüber er etwas sagt | S | HUM-287, HUM-262 |
 | HUM-385 | Verbindung: Eine kurze Lücke nach einem Neustart zeigt erst „verbinde neu" | S | HUM-044, HUM-058 |
 
@@ -1013,3 +1014,32 @@ Akzeptanzkriterien:
   zwei solchen Pausen bleibt für den Besuch das Standbild.
 - Tests der reinen Logik mit Mutationsbeweis; reduzierte Bewegung zeigt nur
   das Standbild.
+
+## HUM-413 · Website: a large landing stack whose video window leaves to the left, and a calm carousel of all seven modules
+
+Wünsche des Inhabers vom 2026-11-02 zu den beiden oberen Abschnitten der
+Startseite.
+
+Akzeptanzkriterien:
+- Landing: Der Stapel ist größer, das vordere Fenster mit der Aufnahme
+  (`public/media/workflow.*`) deutlich größer, die Fenster dahinter klar
+  gestuft; nichts liegt unter der Textspalte. Auf größeren Bildschirmen
+  steht der Text links, der Stapel rechts.
+- Das Video-Fenster ist ein eigenes Fenster neben den sieben Modulen. Beim
+  Scrollen fährt es nach links aus dem Bild, beim Zurückscrollen kommt es
+  von links wieder; oben steht immer derselbe Stapel, auch nach Drehen im
+  Karussell.
+- Ein Knopf „Weiter scrollen“ unter den Schaltflächen scrollt weich zum
+  Karussell (unter reduzierter Bewegung springt er), ohne Skript ein Anker.
+- Karussell: kein Video, alle sieben Module statisch, Start bei 01 / 07;
+  das Fenster im Fokus größer, die Bahn steiler, die Gruppe senkrecht
+  ausgewogen; die Steuerung als ruhige Leiste mittig unter dem Fokus, am
+  Telefon in Daumenreichweite.
+- Fenster, die nach links gehen, wechseln nie die Ebene und gleiten nie
+  durch ihren Nachfolger; der Umlauf springt nicht.
+- Kein sichtbares Fenster kommt der Beschriftung näher als
+  max(24 px, 1,8 % der Breite), gemessen von 320x640 bis 2560x1440; die
+  Beschriftung wird nicht mitten in der Zeile abgeschnitten.
+- `stage.ts` ist ein dünner Zusammenbau, die Teile liegen als Module unter
+  `website/src/scripts/stage/`, keines über etwa 450 Zeilen; Tests der
+  reinen Logik mit Mutationsbeweis.

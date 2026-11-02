@@ -1,12 +1,12 @@
 // Tests der Gesten des Karussells (src/scripts/stage/gesture.mjs): Senkrechtes Scrollen mit
-// rauschendem deltaX dreht nie, eine waagrechte Geste bleibt waagrecht, und Zittern kippt die
-// Zugrichtung nicht.
+// rauschendem deltaX dreht nie, eine waagrechte Geste bleibt waagrecht, nach einer Pause
+// entscheidet die nächste Geste neu.
 //
 //   node --test scripts/
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { createDirectionLatch, createWheelAxis, wheelPixels } from '../src/scripts/stage/gesture.mjs';
+import { createWheelAxis, wheelPixels } from '../src/scripts/stage/gesture.mjs';
 
 /** Senkrechter Trackpad-Wurf mit Nachlauf; deltaX rauscht um ±3 px. */
 function verticalFling() {
@@ -40,18 +40,6 @@ test('nach einer Pause entscheidet die nächste Geste neu', () => {
   const axis = createWheelAxis();
   for (let i = 0; i < 5; i++) axis(14, 0, i * 16);
   assert.equal(axis(0, 20, 1000), 'y');
-});
-
-test('Zittern beim Ziehen kippt die Richtung nicht, eine echte Umkehr schon', () => {
-  const latch = createDirectionLatch();
-  latch.reset(1);
-  const dirs = [];
-  // Vorwärts mit Zittern von ±0,02 Fenstern je Ereignis.
-  for (let i = 0; i < 30; i++) dirs.push(latch.push(i % 2 ? -0.02 : 0.05));
-  assert.ok(dirs.every((d) => d === 1), dirs.join(','));
-  // Umkehr: drei Schritte zurück reichen.
-  for (let i = 0; i < 3; i++) latch.push(-0.03);
-  assert.equal(latch.dir, -1);
 });
 
 test('eine Zeilen-Maus (deltaMode 1) dreht schon mit der ersten Raste', () => {
