@@ -8,6 +8,33 @@ import { clamp } from "./math.mjs";
 /** @typedef {import("./geometry.mjs").Params} Params */
 /** @typedef {import("./math.mjs").Profile} Profile */
 
+// Die Grenzen der Klassen (HUM-418): Seitenverhältnisse als ganzzahlige Brüche. Die Klasse muss
+// schon beim ersten Bild feststehen, bevor die Bühne rechnet. Das blockierende Skript
+// /stage-class.js im Kopf der Startseite (src/pages/stage-class.js.ts, aus head-class.mjs) trägt
+// classify mit genau diesen Werten und setzt data-cls und die Höhenmarken an <html>; das CSS der
+// Startseite hängt daran. Es misst einmal beim Laden: Media Queries folgen dagegen dem Layout-
+// Viewport, der sich am Telefon mit der Adressleiste ändert, während die Bühne mit 100svh rechnet.
+export const BOUNDS = {
+  /** ab hier A: sehr breit */
+  wide: [2, 1],
+  /** über hier B (bis wide), darunter höchstens C */
+  side: [8, 5],
+  /** ab hier C */
+  c: [29, 20],
+  /** ab hier D, darunter Hochformat (E oder F) */
+  d: [23, 20],
+  /** schmaler als das ist ein Telefon hoch (F) */
+  phoneW: 700,
+  /** niedriger als das ist ein Telefon quer (G), wenn breiter als side */
+  lowH: 500,
+};
+
+/** Höhenmarken: data-h<N> an <html> heißt, die Bühne ist höchstens N px hoch. */
+export const H_BOUNDS = [420, 700, 719, 800];
+
+export const ratio = ([p, q]) => p / q;
+const frac = ([p, q]) => `${p}/${q}`;
+
 /**
  * Klasse des Bildausschnitts aus Breite und Höhe.
  * @param {number} vw @param {number} vh
@@ -15,15 +42,48 @@ import { clamp } from "./math.mjs";
  */
 export function classify(vw, vh) {
   const a = vw / vh;
-  if (vh < 500 && a > 1.6) return "G";
-  if (vw < 700 && a < 0.75) return "F";
-  if (a >= 2) return "A";
-  if (a > 1.6) return "B";
-  if (a >= 1.45) return "C";
-  if (a >= 1.15) return "D";
-  if (vw >= 700) return "E";
+  if (vh < BOUNDS.lowH && a > ratio(BOUNDS.side)) return "G";
+  if (a >= ratio(BOUNDS.wide)) return "A";
+  if (a > ratio(BOUNDS.side)) return "B";
+  if (a >= ratio(BOUNDS.c)) return "C";
+  if (a >= ratio(BOUNDS.d)) return "D";
+  if (vw >= BOUNDS.phoneW) return "E";
   return "F";
 }
+
+/** Die Höhenmarken, die für die Höhe vh gelten. @param {number} vh @returns {number[]} */
+export const heightMarks = (vh) => H_BOUNDS.filter((b) => vh <= b);
+
+/** Ist v eine Klasse? @param {string} v @returns {v is Cls} */
+export const isCls = (v) => v.length === 1 && "ABCDEFG".includes(v);
+
+/**
+ * Die Klasse für das Maß vw x vh, wenn zuletzt prev bei der Breite prevW galt (HUM-418): Bei
+ * gleicher Breite bleibt sie, auch wenn die Höhe wechselt (Adressleiste); bei anderer Breite,
+ * auch durch Drehen zwischen Kopfskript und Bühne, wird neu eingeteilt.
+ * @param {string} prev @param {number} prevW @param {number} vw @param {number} vh
+ * @returns {Cls}
+ */
+export const nextClass = (prev, prevW, vw, vh) =>
+  isCls(prev) && prevW === vw ? prev : classify(vw, vh);
+
+/**
+ * Media Queries der Fassung ohne Skript (noscript in Home.astro), in der alten Form mit min-
+ * und max-, die auch Browser ohne Bereichssyntax lesen. Sie bilden nur die seitlichen Klassen
+ * nach. low nimmt genau 8/5 mit, wo G erst darüber beginnt; exact setzt dort C zurück.
+ */
+export const NOJS_MEDIA = {
+  /** A, B, C und G */
+  side: `(min-aspect-ratio: ${frac(BOUNDS.c)})`,
+  /** A */
+  wide: `(min-aspect-ratio: ${frac(BOUNDS.wide)}) and (min-height: ${BOUNDS.lowH}px)`,
+  /** G */
+  low: `(min-aspect-ratio: ${frac(BOUNDS.side)}) and (max-height: ${BOUNDS.lowH - 1}px)`,
+  /** genau 8/5: noch C */
+  exact: `(aspect-ratio: ${frac(BOUNDS.side)})`,
+  /** schmal: Telefon */
+  phone: `(max-width: ${BOUNDS.phoneW - 1}px)`,
+};
 
 // Der Fächer: die Front tritt vor, jede Scheibe dahinter liegt deutlich tiefer, damit der
 // Stapel als klare Staffel liest und nicht als gedrängter Schwanz (Inhaber, 2026-11-02).
