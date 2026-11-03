@@ -4008,5 +4008,11 @@
   "settingsServerSaveAsNew": "Save as new server",
   "@settingsServerSaveAsNew": {"description": "Settings, server detail: saves the draft of a server removed elsewhere as a new server under the name in the field (HUM-414)."},
   "sandboxServerAllowOtherwise": "Your default server is {fallback}. Don’t allow starts no session.",
-  "@sandboxServerAllowOtherwise": {"description": "Sandbox: the consequence line of the question before a start whose project picks an unconfirmed server; fallback is the default server (HUM-414).", "placeholders": {"fallback": {"type": "String"}}}
+  "@sandboxServerAllowOtherwise": {"description": "Sandbox: the consequence line of the question before a start whose project picks an unconfirmed server; fallback is the default server (HUM-414).", "placeholders": {"fallback": {"type": "String"}}},
+  "sandboxChangesWaitingWhy": "A previous disposable run still has changes waiting for you. Review them and apply or discard them, then start again.",
+  "@sandboxChangesWaitingWhy": {"description": "Sandbox: the cause on the SANDBOX_030 card when a start was refused because the changes of an earlier disposable run still wait; replaces the daemon's technical sentence (HUM-419)."},
+  "sandboxChangesWaitingReview": "Review changes",
+  "@sandboxChangesWaitingReview": {"description": "Sandbox: primary button on the SANDBOX_030 card for waiting changes; opens the changes panel (HUM-419)."},
+  "sandboxChangesWaitingTitle": "Changes are waiting for you",
+  "@sandboxChangesWaitingTitle": {"description": "Sandbox: the title of the SANDBOX_030 card when a start was refused because the changes of an earlier disposable run still wait; replaces the generic title (HUM-419)."}
 }

@@ -1697,5 +1697,8 @@
   "settingsServerChangedElsewhere": "Anderswo geändert auf {endpoint}. Dein Entwurf bleibt; Speichern schreibt ihn.",
   "settingsServerRemovedElsewhere": "Dieser Server wurde anderswo entfernt. Deine Änderungen sind noch da: Verwirf sie oder speichere sie als neuen Server.",
   "settingsServerSaveAsNew": "Als neuen Server speichern",
-  "sandboxServerAllowOtherwise": "Dein Standardserver ist {fallback}. „Nicht erlauben“ startet keine Sitzung."
+  "sandboxServerAllowOtherwise": "Dein Standardserver ist {fallback}. „Nicht erlauben“ startet keine Sitzung.",
+  "sandboxChangesWaitingWhy": "Ein früherer Wegwerf-Lauf hat noch Änderungen, die auf dich warten. Sieh sie dir an, übernimm oder verwirf sie und starte dann neu.",
+  "sandboxChangesWaitingReview": "Änderungen prüfen",
+  "sandboxChangesWaitingTitle": "Änderungen warten auf dich"
 }

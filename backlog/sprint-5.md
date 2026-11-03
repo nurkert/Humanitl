@@ -11906,3 +11906,23 @@ echter Schrift; keine Datei über etwa 550 Zeilen.
 **Kandidaten (brauchen den Daemon).** Bestätigung eines Projektservers
 widerrufen; „nur dieses Mal“; Bindung an die Herkunft statt an den Namen;
 Änderungsprotokoll je Server.
+
+---
+
+## HUM-419 · A start blocked by waiting disposable changes offers to review them
+
+**Anlass.** Owner am 2026-11-03: Beim Start mit opencode stand die Meldung
+`SANDBOX_030` „Disposable sandbox not possible …“ mit nur einer Abhilfe,
+dem Kopieren von `humanitl sandbox changes`. In der App gehört dorthin ein
+Knopf, der die wartenden Änderungen öffnet.
+
+**Umsetzung.** Die App erkennt den Fall an Code `SANDBOX_030` mit genau der
+Abhilfe `humanitl sandbox changes` (die übrigen Ursachen von `SANDBOX_030`
+tragen eine andere). Dann trägt die Karte den Titel „Änderungen warten auf
+dich“, einen Satz in klarer Sprache und den Knopf „Änderungen prüfen“, der
+die Liste lädt und das Panel öffnet; das Kopieren des Befehls bleibt
+darunter. Kein neuer RPC, der Daemon bleibt unverändert.
+
+**Akzeptanz.** Widget-Tests für Knopf, Titel, Text, Öffnen bei geschlossenem
+Panel und bei noch nicht geladener Liste, und dass eine andere Ursache von
+`SANDBOX_030` keinen Knopf bekommt; Mutationsbeweis.
