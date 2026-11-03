@@ -152,4 +152,11 @@ abstract final class DiagnosticCodes {
   /// broken XDG desktop portal. Raised by the client, because only the client
   /// asks for the dialog; a cancelled dialog is no finding (HUM-282).
   static const String folderDialogFailed = 'UI_003';
+
+  /// A disposable sandbox cannot start: the system cannot keep the changes
+  /// apart, or the changes of an earlier disposable run still wait for apply
+  /// or discard. Raised by the daemon (the disposable runs and the sandbox
+  /// backends); only the waiting changes carry the fix
+  /// `humanitl sandbox changes` (HUM-357, HUM-419).
+  static const String disposableRefused = 'SANDBOX_030';
 }

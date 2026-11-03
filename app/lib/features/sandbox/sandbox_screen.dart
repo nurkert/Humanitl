@@ -546,27 +546,40 @@ class _Diagnostics extends ConsumerWidget {
                   code: diagnostic.code,
                   severityLabel: severityLabel(l10n, diagnostic.severity),
                   color: severityColor(tokens, diagnostic.severity),
-                  title: text.title,
+                  title: waitingChangesRefusal(diagnostic)
+                      ? l10n.sandboxChangesWaitingTitle
+                      : text.title,
                   // The daemon's own sentence. The application writes the
                   // title, never the reason (`docs/UX.md` 4.4). A folder
                   // dialog that failed is built by this client: its reason
                   // is the translated sentence with the way around, and the
                   // platform's raw text stands under it, as on the setup card
                   // (HUM-282).
+                  // Wartende Änderungen eines Wegwerf-Laufs: Der Satz des
+                  // Daemons spricht von Erreichbarkeit und `--direct`, der
+                  // Mensch braucht nur, was jetzt zu tun ist (HUM-419).
                   why: identical(diagnostic, dialogFailure)
                       ? text.why
+                      : waitingChangesRefusal(diagnostic)
+                      ? l10n.sandboxChangesWaitingWhy
                       : text.cause,
                   detail: identical(diagnostic, dialogFailure)
                       ? diagnostic.why
                       : null,
                   docsUrl: diagnostic.docsUrl,
-                  fix: FixControl(
-                    fix: diagnostic.fix,
-                    onChooseFolder: chooseFolder,
-                    chooseFolderLocked: locked
-                        ? l10n.sandboxWorkDirLocked
+                  fix: _withReview(
+                    context,
+                    review: waitingChangesRefusal(diagnostic)
+                        ? () => _reviewChanges(ref)
                         : null,
-                    diagnosticCode: diagnostic.code,
+                    fix: FixControl(
+                      fix: diagnostic.fix,
+                      onChooseFolder: chooseFolder,
+                      chooseFolderLocked: locked
+                          ? l10n.sandboxWorkDirLocked
+                          : null,
+                      diagnosticCode: diagnostic.code,
+                    ),
                   ),
                   width: double.infinity,
                   dense: true,
@@ -582,7 +595,69 @@ class _Diagnostics extends ConsumerWidget {
       ],
     );
   }
+
+  /// Opens the changes panel and asks the daemon what waits.
+  ///
+  /// Der Befund kann vor der Liste ankommen, etwa wenn der Lauf mit den
+  /// Änderungen von der Kommandozeile kam: `show` allein öffnete dann ein
+  /// Panel ohne Inhalt, das nicht erscheint. `fetch` holt die Liste, und das
+  /// Panel steht offen, sobald sie da ist.
+  static void _reviewChanges(WidgetRef ref) {
+    final DisposableReviewNotifier review = ref.read(
+      disposableReviewProvider.notifier,
+    );
+    review.show();
+    unawaited(review.fetch());
+  }
+
+  /// [fix] alone, or with [review] as the primary button above it.
+  ///
+  /// Der Kopierbefehl bleibt darunter stehen, als zweiter Weg für den, der
+  /// an der Kommandozeile arbeitet (HUM-419).
+  static Widget _withReview(
+    BuildContext context, {
+    required Widget fix,
+    VoidCallback? review,
+  }) {
+    if (review == null) {
+      return fix;
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        HButton(
+          key: const Key('sandbox-diagnostic-review-changes'),
+          variant: HButtonVariant.primary,
+          onPressed: review,
+          child: Text(context.l10n.sandboxChangesWaitingReview),
+        ),
+        SizedBox(height: HTheme.of(context).spacing.x2),
+        fix,
+      ],
+    );
+  }
 }
+
+/// True for the `SANDBOX_030` that refuses a start because the changes of an
+/// earlier disposable run still wait (HUM-419).
+///
+/// `SANDBOX_030` has more causes: an old bubblewrap, a runtime directory not
+/// in memory, a volume that cannot clone. Only the waiting changes carry the
+/// fix `humanitl sandbox changes` (`disposable.rs`, `pending_blocks_start`),
+/// and only for them is the changes panel the remedy. Die App erkennt den
+/// Fall deshalb am Code und an dieser Abhilfe: Eine `FixAction`, die in der
+/// App etwas öffnet, kennt das Protokoll nicht (nur `ChangeSetting` für die
+/// Einstellungen), und für eine reine Darstellungsfrage braucht es keine neue
+/// Variante im Daemon (ADR-018).
+bool waitingChangesRefusal(Diagnostic diagnostic) =>
+    diagnostic.code == DiagnosticCodes.disposableRefused &&
+    diagnostic.fix == waitingChangesFix;
+
+/// The fix the daemon puts on the waiting changes (`disposable.rs`).
+const FixAction waitingChangesFix = FixAction.copyCommand(
+  command: 'humanitl sandbox changes',
+);
 
 /// The status bar of the section: session, uptime, and the way to the proof.
 class SandboxStatusBar extends StatelessWidget {
