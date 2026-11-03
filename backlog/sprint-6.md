@@ -66,6 +66,7 @@ Leitlinie: Linux bleibt, wie es ist. Jede Änderung an gemeinsamem Code ist entw
 | HUM-412 | Website: the morph follows the scroll without jumps, the front window is never empty, the carousel stays calm under touch and trackpad | M | HUM-389 |
 | HUM-415 | Website: the front window on a phone never turns plain grey | S | HUM-412 |
 | HUM-413 | Website: a large landing stack whose video window leaves to the left, and a calm carousel of all seven modules | L | HUM-412, HUM-415 |
+| HUM-418 | Website: the hero stands in its final place from the first paint | S | HUM-413 |
 | HUM-384 | Setup: Ein Befund des Plans steht dort, worüber er etwas sagt | S | HUM-287, HUM-262 |
 | HUM-385 | Verbindung: Eine kurze Lücke nach einem Neustart zeigt erst „verbinde neu" | S | HUM-044, HUM-058 |
 
@@ -1043,3 +1044,30 @@ Akzeptanzkriterien:
 - `stage.ts` ist ein dünner Zusammenbau, die Teile liegen als Module unter
   `website/src/scripts/stage/`, keines über etwa 450 Zeilen; Tests der
   reinen Logik mit Mutationsbeweis.
+
+## HUM-418 · Website: the hero stands in its final place from the first paint
+
+Rückmeldung des Inhabers vom 2026-11-03: Beim Laden steht „Du entscheidest,
+was rausgeht.“ erst mittig und springt dann nach links, sobald die Fenster
+laden.
+
+Ursachen (gemessen in headless Firefox, kaltes Profil, verzögerte Dateien):
+die Klasse des Layouts kam nur aus dem Skript (`data-cls`), die Beschriftung
+des Download-Knopfs brach vor dem Skript um, die Ersatzschrift ist breiter
+als Geist (`font-display: swap`), und die Beschriftung des ersten Moduls
+blitzte vor dem Skript kurz auf.
+
+Akzeptanzkriterien:
+- Die Klasse des Layouts setzt ein kleines, blockierendes Skript im Kopf
+  der Seite vor dem ersten Bild an `<html>`, aus der Breite und der
+  anfänglichen Höhe; es ändert sie nur bei einer neuen Breite, nie beim Ein-
+  und Ausfahren der Adressleiste. Skript, `classify` und die Media-Queries
+  der Fassung ohne Skript kommen aus derselben Quelle (`classes.mjs`); Tests
+  halten sie gleich.
+- Die Überschrift bewegt sich vom ersten sichtbaren Bild an um 0 px, bei
+  1920x1080, 1440x900, 1280x800, 1024x768, 390x844 und 320x640, hell und
+  dunkel; die Beschriftung blitzt nicht auf.
+- Geist lädt mit `font-display: optional` und vorab geladen; die Seite
+  wechselt die Schrift nicht mehr sichtbar.
+- Die Fassung ohne Skript zeigt dasselbe Layout; der Endzustand bleibt der
+  aus HUM-413.

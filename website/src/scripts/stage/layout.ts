@@ -10,8 +10,10 @@ import {
   FLAT,
   SIDE,
   SPEC,
-  classify,
+  H_BOUNDS,
   ctlGapOf,
+  heightMarks,
+  nextClass,
 } from "./classes.mjs";
 import type { Cls, Ctx, Layout } from "./context";
 import {
@@ -270,6 +272,25 @@ export const stableHeight = (sticky: HTMLElement) =>
   sticky.clientHeight || window.innerHeight;
 
 /**
+ * Die Klasse des Bildausschnitts (HUM-418). /stage-class.js hat sie vor dem ersten Bild an
+ * <html> gesetzt (data-cls, die Breite dazu in data-cls-w, dazu die Höhenmarken data-h<N>), und
+ * das CSS legt danach Text und Stapel fest. Die Bühne übernimmt sie und teilt nur neu ein, wenn
+ * sich die Breite seitdem geändert hat, auch beim Drehen (nextClass). Eine Änderung nur der Höhe
+ * ist am Telefon die Adressleiste; neu eingeteilt sprängen Text und Stapel in eine andere Klasse.
+ */
+export function classOf(vw: number, vh: number): Cls {
+  const root = document.documentElement;
+  const prev = root.dataset.cls ?? "";
+  const cls = nextClass(prev, Number(root.dataset.clsW), vw, vh);
+  if (cls !== prev || root.dataset.clsW !== String(vw)) {
+    root.dataset.cls = cls;
+    root.dataset.clsW = String(vw);
+    for (const b of H_BOUNDS) root.toggleAttribute(`data-h${b}`, heightMarks(vh).includes(b));
+  }
+  return cls;
+}
+
+/**
  * Misst den Bildausschnitt neu und schreibt die Maße, die das CSS braucht. reserve hält vorher
  * die Höhe der längsten Beschriftung frei, weil die Bühne um sie herum rechnet.
  */
@@ -278,8 +299,7 @@ export function measure(ctx: Ctx, reserve: () => void) {
   const { scene } = refs;
   s.vw = window.innerWidth;
   s.vh = stableHeight(refs.sticky);
-  const cls = classify(s.vw, s.vh);
-  scene.dataset.cls = cls;
+  const cls = classOf(s.vw, s.vh);
   reserve();
   const lay = computeLayout(ctx, cls);
   s.lay = lay;

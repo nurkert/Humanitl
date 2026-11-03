@@ -176,8 +176,10 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
             transform: translate(-50%, -50%) translate3d(calc(var(--w) * 0.13 * var(--d)), calc(var(--w) * -0.016 * var(--d)), calc(var(--w) * -0.24 * var(--d))) rotateY(-28deg) !important;
           }
         }
-        /* Breit und niedrig: Text links, der Fächer rechts daneben. */
-        @media (max-height: 700px) and (min-aspect-ratio: 16/10) {
+        /* Breitbild und Telefon quer, wie mit Skript: Text links, der Fächer rechts daneben.
+           Die Bedingungen sind NOJS_MEDIA aus classes.mjs, ohne Bereichssyntax, damit auch
+           ältere Browser sie lesen; mit Skript setzt /stage-class.js die Klasse. */
+        @media (min-aspect-ratio: 29/20) {
           .scene {
             --w: min(34vw, 66vh) !important;
           }
@@ -194,11 +196,37 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
             margin-top: 0;
           }
           .hero {
-            padding: 76px 0 1rem 6vw;
+            width: 34vw !important;
+            margin-left: 6vw;
+            padding: 76px 0 1rem;
             align-content: center !important;
             justify-items: start !important;
-            gap: 0.9rem !important;
             text-align: left !important;
+          }
+          .hero__title {
+            font-size: clamp(2.4rem, min(5.8vh, 3.7vw), 5.4rem) !important;
+          }
+          .hero__actions {
+            justify-content: flex-start !important;
+          }
+          .ring {
+            display: none;
+          }
+        }
+        @media (min-aspect-ratio: 2/1) and (min-height: 500px) {
+          .hero {
+            width: 30vw !important;
+            margin-left: 8vw;
+          }
+          .hero__title {
+            font-size: clamp(3rem, 6.2vh, 5.4rem) !important;
+          }
+        }
+        @media (min-aspect-ratio: 8/5) and (max-height: 499px) {
+          .hero {
+            --hero-gap: 0.9rem !important;
+            --hero-pill-h: 2.5rem !important;
+            width: 44vw !important;
           }
           .hero__title {
             font-size: clamp(1.6rem, 9vh, 2.4rem) !important;
@@ -207,11 +235,20 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
             font-size: 0.88rem !important;
             line-height: 1.45 !important;
           }
-          .hero__actions {
-            justify-content: flex-start !important;
+        }
+        /* Genau 8:5 ist noch C, nicht G: die Maße der seitlichen Klassen zurück. */
+        @media (aspect-ratio: 8/5) {
+          .hero {
+            --hero-gap: clamp(1.1rem, 2.8vh, 1.9rem) !important;
+            --hero-pill-h: 3rem !important;
+            width: 34vw !important;
           }
-          .ring {
-            display: none;
+          .hero__title {
+            font-size: clamp(2.4rem, min(5.8vh, 3.7vw), 5.4rem) !important;
+          }
+          .hero__lede {
+            font-size: clamp(1.02rem, 0.95rem + 0.35vw, 1.2rem) !important;
+            line-height: inherit !important;
           }
         }
       </style>
@@ -244,28 +281,30 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
             </h1>
             <p class="hero__lede lede">{t.hero.lede}</p>
           </header>
-          <div class="hero__actions" data-hero-actions>
-            <a
-              class="pill pill--light"
-              href={path('download', lang)}
-              data-smart-download
-              data-mac-href={macHref}
-              data-label-macos={t.hero.ctaForMac}
-              data-label-linux={t.hero.ctaForLinux}
-            >
-              <Icon name="download" />
-              {t.hero.cta}
-              <span class="hero__for" data-smart-label>{t.hero.ctaFor}</span>
-            </a>
-            <a class="hero__source" href={repoUrl}>
-              <Icon name="github" />
-              {t.hero.source}
+          <div class="hero__tail">
+            <div class="hero__actions" data-hero-actions>
+              <a
+                class="pill pill--light"
+                href={path('download', lang)}
+                data-smart-download
+                data-mac-href={macHref}
+                data-label-macos={t.hero.ctaForMac}
+                data-label-linux={t.hero.ctaForLinux}
+              >
+                <Icon name="download" />
+                {t.hero.cta}
+                <span class="hero__for" data-smart-label>{t.hero.ctaFor}</span>
+              </a>
+              <a class="hero__source" href={repoUrl}>
+                <Icon name="github" />
+                {t.hero.source}
+              </a>
+            </div>
+            <a class="hero__hint" href="#module-cap" data-scroll-hint>
+              {t.hero.scroll}
+              <Icon name="chevronDown" />
             </a>
           </div>
-          <a class="hero__hint" href="#module-cap" data-scroll-hint>
-            {t.hero.scroll}
-            <Icon name="chevronDown" />
-          </a>
         </div>
 
         <div class="world" data-world>
@@ -664,14 +703,34 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     top: max(88px, 11vh);
     left: var(--gutter);
     right: var(--gutter);
+    /* Abstand der Teile, Höhe des Knopfs und Rand über dem Hinweis als Tokens: die seitlichen
+       Klassen rechnen mit ihnen die Höhe von .hero__tail vorab (HUM-418). */
+    --hero-gap: clamp(1.1rem, 2.8vh, 1.9rem);
+    --hero-pill-h: 3rem;
+    --hint-mt: clamp(-0.4rem, -0.6vh, 0rem);
     display: grid;
     justify-items: center;
-    gap: clamp(1.1rem, 2.8vh, 1.9rem);
+    gap: var(--hero-gap);
     text-align: center;
     pointer-events: none;
   }
-  .hero > * {
+  .hero > :not(.hero__tail),
+  .hero__tail > * {
     pointer-events: auto;
+  }
+  /* Knöpfe und Hinweis unter dem Text. Ihre Höhe hängt nie an der Beschriftung des Knopfs:
+     Ohne Skript und vor ihm trägt er die lange Fassung „für macOS und Linux“, danach oft die
+     kurze. Bräche die Zeile mal um und mal nicht, rückte die senkrecht mittige Spalte samt
+     Überschrift und Hinweis (HUM-418). Darum entscheidet die Breite der Spalte, nicht der
+     Inhalt: Ist sie breit genug für die lange Fassung, stehen Knopf und Quelltext in einer
+     Zeile, die nicht umbricht; sonst immer untereinander, in fester Höhe. */
+  .hero__tail {
+    container: hero-tail / inline-size;
+    display: grid;
+    justify-self: stretch;
+    align-self: stretch;
+    justify-items: inherit;
+    gap: var(--hero-gap);
   }
   .scene[data-live] .hero,
   .scene[data-live] .hero * {
@@ -707,14 +766,27 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   }
   .hero__actions {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
     justify-content: center;
     gap: 0.75rem 1.5rem;
+    height: var(--hero-pill-h);
     will-change: transform, opacity;
+  }
+  /* Die lange Fassung misst in Geist gut 31,5rem, in einer breiteren Ersatzschrift gut 32rem. */
+  @container hero-tail (max-width: 33rem) {
+    .hero__actions {
+      display: grid;
+      grid-template-rows: var(--hero-pill-h) 1.5rem;
+      justify-items: inherit;
+      height: auto;
+    }
   }
   .hero__actions > * {
     animation: rise-cta 0.7s var(--ease-out) 1.25s both;
+  }
+  .hero__actions :global(.pill) {
+    --pill-h: var(--hero-pill-h);
   }
   .hero__for {
     color: var(--cta-dim);
@@ -742,7 +814,7 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     gap: 0.45rem;
     /* Fingerfläche mindestens 44 px hoch, auch wenn der Knopf klein aussieht. */
     min-height: 2.75rem;
-    margin-top: clamp(-0.4rem, -0.6vh, 0rem);
+    margin-top: var(--hint-mt);
     padding: 0 0.85rem 0 1rem;
     border: 1px solid rgb(var(--ink) / 0.14);
     border-radius: 999px;
@@ -795,71 +867,60 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     }
   }
 
-  .scene[data-cls='E'] .hero {
+  /* Die Klasse des Bildausschnitts steht vor dem ersten Bild an <html> (data-cls, dazu die
+     Höhenmarken data-h<N>), gesetzt von /stage-class.js aus classes.mjs (HUM-418). Keine Media
+     Query: die folgte am Telefon der Adressleiste, die Bühne rechnet aber mit 100svh. :where
+     hält die Spezifität so, wie sie an der Szene war. */
+  :global(:where(html[data-cls='E'])) .scene[data-scene] .hero {
     top: 12vh;
   }
-  /* Breitbild bis 16:10: Text links, der Stapel rechts daneben (HUM-413). Die Front des
-     Stapels darf so die rechte Hälfte füllen. */
-  .scene:is([data-cls='B'], [data-cls='C']) .hero {
+  /* Seitliche Klassen (A, B, C, G): Text links, der Stapel rechts daneben (HUM-413), die Spalte
+     senkrecht mittig. */
+  :global(:where(html[data-cls='A'], html[data-cls='B'], html[data-cls='C'], html[data-cls='G'])) .scene[data-scene] .hero {
     top: 0;
     bottom: 0;
-    left: 6vw;
     right: auto;
-    width: 34vw;
     align-content: center;
     justify-items: start;
     text-align: left;
   }
-  .scene:is([data-cls='B'], [data-cls='C']) .hero__title {
+  :global(:where(html[data-cls='A'], html[data-cls='B'], html[data-cls='C'], html[data-cls='G'])) .scene[data-scene] .hero__actions {
+    justify-content: flex-start;
+  }
+  /* Breitbild bis 16:10: die Front des Stapels darf so die rechte Hälfte füllen. */
+  :global(:where(html[data-cls='B'], html[data-cls='C'])) .scene[data-scene] .hero {
+    left: 6vw;
+    width: 34vw;
+  }
+  :global(:where(html[data-cls='B'], html[data-cls='C'])) .scene[data-scene] .hero__title {
     font-size: clamp(2.4rem, min(5.8vh, 3.7vw), 5.4rem);
   }
-  .scene:is([data-cls='B'], [data-cls='C']) .hero__actions {
-    justify-content: flex-start;
-  }
-  .scene[data-cls='A'] .hero {
-    top: 0;
-    bottom: 0;
+  :global(:where(html[data-cls='A'])) .scene[data-scene] .hero {
     left: 8vw;
-    right: auto;
     width: 30vw;
-    align-content: center;
-    justify-items: start;
-    text-align: left;
   }
-  .scene[data-cls='A'] .hero__title {
+  :global(:where(html[data-cls='A'])) .scene[data-scene] .hero__title {
     font-size: clamp(3rem, 6.2vh, 5.4rem);
   }
-  .scene[data-cls='A'] .hero__actions,
-  .scene[data-cls='G'] .hero__actions {
-    justify-content: flex-start;
-  }
   /* Telefon quer: dieselbe Teilung, kompakt. */
-  .scene[data-cls='G'] .hero {
-    top: 0;
-    bottom: 0;
+  :global(:where(html[data-cls='G'])) .scene[data-scene] .hero {
+    --hero-gap: 0.9rem;
+    --hero-pill-h: 2.5rem;
     left: 6vw;
-    right: auto;
     width: 44vw;
-    align-content: center;
-    justify-items: start;
-    gap: 0.9rem;
-    text-align: left;
   }
-  .scene[data-cls='G'] .hero__text {
+  :global(:where(html[data-cls='G'])) .scene[data-scene] .hero__text {
     gap: 0.6rem;
   }
-  .scene[data-cls='G'] .hero__title {
+  :global(:where(html[data-cls='G'])) .scene[data-scene] .hero__title {
     font-size: clamp(1.6rem, 9vh, 2.4rem);
   }
-  .scene[data-cls='G'] .hero__lede {
+  :global(:where(html[data-cls='G'])) .scene[data-scene] .hero__lede {
     font-size: 0.88rem;
     line-height: 1.45;
   }
-  .scene[data-cls='G'] .hero__actions :global(.pill) {
-    --pill-h: 2.5rem;
-  }
   /* Telefon hoch: Text oben, Knöpfe unten, der Kartenstapel dazwischen. */
-  .scene[data-cls='F'] .hero {
+  :global(:where(html[data-cls='F'])) .scene[data-scene] .hero {
     top: 13vh;
     bottom: 5vh;
     left: 6vw;
@@ -868,41 +929,33 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     flex-direction: column;
     align-items: center;
   }
-  .scene[data-cls='F'] .hero__title {
+  :global(:where(html[data-cls='F'])) .scene[data-scene] .hero__title {
     font-size: clamp(1.7rem, 8.4vw, 2.6rem);
   }
-  .scene[data-cls='F'] .hero__lede {
+  :global(:where(html[data-cls='F'])) .scene[data-scene] .hero__lede {
     font-size: 0.98rem;
   }
-  .scene[data-cls='F'] .hero__actions {
+  :global(:where(html[data-cls='F'])) .scene[data-scene] .hero__tail {
     margin-top: auto;
   }
-  .scene:is([data-cls='F'], [data-cls='G']) .hero__hint {
+  :global(:where(html[data-cls='F'], html[data-cls='G'])) .scene[data-scene] .hero__hint {
     padding: 0 0.75rem 0 0.85rem;
     font-size: 0.66rem;
   }
   /* Kurze Telefone: der Hinweis bleibt, Text und Abstände rücken zusammen, damit der Stapel
      zwischen Lede und Knöpfen groß bleibt. */
-  @media (max-height: 700px) {
-    .scene[data-cls='F'] .hero {
-      top: 11.5vh;
-      bottom: 1.5vh;
-    }
-    .scene[data-cls='F'] .hero__lede {
-      font-size: 0.9rem;
-      line-height: 1.45;
-    }
-    .scene[data-cls='F'] .hero__hint {
-      margin-top: 0.1rem;
-    }
+  :global(:where(html[data-cls='F'][data-h700])) .scene[data-scene] .hero {
+    --hint-mt: 0.1rem;
+    top: 11.5vh;
+    bottom: 1.5vh;
   }
-  @media (max-height: 420px) {
-    .scene[data-cls='G'] .hero {
-      gap: 0.55rem;
-    }
-    .scene[data-cls='G'] .hero__hint {
-      margin-top: -0.2rem;
-    }
+  :global(:where(html[data-cls='F'][data-h700])) .scene[data-scene] .hero__lede {
+    font-size: 0.9rem;
+    line-height: 1.45;
+  }
+  :global(:where(html[data-cls='G'][data-h420])) .scene[data-scene] .hero {
+    --hero-gap: 0.55rem;
+    --hint-mt: -0.2rem;
   }
 
   /* ---- Welt, Rig und Ring --------------------------------------------- */
@@ -1413,6 +1466,12 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     visibility: visible;
     transition-delay: 0s;
   }
+  /* Bis das Skript die Bühne übernimmt (data-active), läuft kein Ausgang: Wurde der Stil vor dem
+     Eintreffen des Stylesheets schon einmal berechnet, galt die Beschriftung als sichtbar, und
+     die Verzögerung oben ließ sie beim Laden kurz über der Bühne stehen (HUM-418). */
+  .scene:not([data-active]) .cap {
+    transition: none;
+  }
   /* Der Ring beginnt zurückzudrehen: die Beschriftung ist sofort weg, ohne Ausgang. */
   .scene[data-cap-cut] .cap,
   .scene[data-cap-cut] .cap__head {
@@ -1440,7 +1499,7 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     }
   }
   /* In diesen Bildausschnitten steht das Zählwerk über dunklem Glas; Hell-Schrift hielte dort nicht. */
-  .scene:is([data-cls='A'], [data-cls='B'], [data-cls='C'], [data-cls='G']) .cap__head {
+  :global(:where(html[data-cls='A'], html[data-cls='B'], html[data-cls='C'], html[data-cls='G'])) .scene[data-scene] .cap__head {
     justify-self: start;
     padding: var(--light, 0.3rem 0.8rem 0.3rem 0.5rem) var(--dark, 0);
     border-radius: 14px;
@@ -1638,8 +1697,8 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     stroke-width: 1.4;
   }
 
-  /* Bildausschnitte der Beschriftung, je Klasse aus dem Skript (data-cls). */
-  .scene[data-cls='A'] {
+  /* Bildausschnitte der Beschriftung, je Klasse an html[data-cls] aus /stage-class.js (HUM-418). */
+  :global(:where(html[data-cls='A'])) .scene[data-scene] {
     --cap-r: 5vw;
     --cap-b: 7vh;
     --cap-w: 27vw;
@@ -1647,24 +1706,24 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   }
   /* Breitbild bis 16:10 und Telefon quer: Augenbraue und „/ 07“ stehen rechts neben den
      großen Ziffern, das spart eine Zeile. */
-  .scene:is([data-cls='A'], [data-cls='B'], [data-cls='C'], [data-cls='G']) .cap__head {
+  :global(:where(html[data-cls='A'], html[data-cls='B'], html[data-cls='C'], html[data-cls='G'])) .scene[data-scene] .cap__head {
     grid-template-columns: auto 1fr;
     column-gap: 0.9rem;
     row-gap: 0.3rem;
   }
-  .scene:is([data-cls='A'], [data-cls='B'], [data-cls='C'], [data-cls='G']) .cap__index {
+  :global(:where(html[data-cls='A'], html[data-cls='B'], html[data-cls='C'], html[data-cls='G'])) .scene[data-scene] .cap__index {
     display: contents;
   }
-  .scene:is([data-cls='A'], [data-cls='B'], [data-cls='C'], [data-cls='G']) .odo {
+  :global(:where(html[data-cls='A'], html[data-cls='B'], html[data-cls='C'], html[data-cls='G'])) .scene[data-scene] .odo {
     grid-column: 1;
     grid-row: 1 / span 2;
   }
-  .scene:is([data-cls='A'], [data-cls='B'], [data-cls='C'], [data-cls='G']) .deck__title {
+  :global(:where(html[data-cls='A'], html[data-cls='B'], html[data-cls='C'], html[data-cls='G'])) .scene[data-scene] .deck__title {
     grid-column: 2;
     grid-row: 1;
     align-self: end;
   }
-  .scene:is([data-cls='A'], [data-cls='B'], [data-cls='C'], [data-cls='G']) .cap__of {
+  :global(:where(html[data-cls='A'], html[data-cls='B'], html[data-cls='C'], html[data-cls='G'])) .scene[data-scene] .cap__of {
     grid-column: 2;
     grid-row: 2;
     align-self: start;
@@ -1672,7 +1731,7 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   }
   /* Die Beschriftung bleibt kompakt: je weniger sie in die Höhe baut, desto größer darf das
      Fenster im Fokus werden, ohne dass ein Nachbar sie berührt (HUM-413). */
-  .scene[data-cls='B'] {
+  :global(:where(html[data-cls='B'])) .scene[data-scene] {
     --cap-r: 4vw;
     --cap-b: 6vh;
     --cap-w: 29vw;
@@ -1683,17 +1742,15 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   }
   /* Niedrige Fenster (bis 800 px): die Beschriftung wird kompakter, damit die Bühne groß
      bleiben kann. */
-  @media (max-height: 800px) {
-    .scene:is([data-cls='B'], [data-cls='C']) {
-      --cap-b: 4.5vh;
-      --cap-w: 32vw;
-      --idx: min(8rem, 8.5vh);
-      --head: clamp(1.8rem, 1rem + 2.2vw, min(4.2rem, 5.4vh));
-      --text: 0.95rem;
-      --cap-gap: 0.55rem;
-    }
+  :global(:where(html[data-cls='B'][data-h800], html[data-cls='C'][data-h800])) .scene[data-scene] {
+    --cap-b: 4.5vh;
+    --cap-w: 32vw;
+    --idx: min(8rem, 8.5vh);
+    --head: clamp(1.8rem, 1rem + 2.2vw, min(4.2rem, 5.4vh));
+    --text: 0.95rem;
+    --cap-gap: 0.55rem;
   }
-  .scene[data-cls='C'] {
+  :global(:where(html[data-cls='C'])) .scene[data-scene] {
     --cap-r: 4vw;
     --cap-b: 5.5vh;
     --cap-w: 30vw;
@@ -1702,7 +1759,7 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     --cap-gap: clamp(0.5rem, 1.1vh, 0.9rem);
     --text: 0.98rem;
   }
-  .scene[data-cls='D'] {
+  :global(:where(html[data-cls='D'])) .scene[data-scene] {
     --cap-r: 4vw;
     --cap-b: 3.5vh;
     --cap-w: 47vw;
@@ -1711,43 +1768,43 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     --text: 1rem;
   }
   /* 4:3: der Index steht links neben dem Text. */
-  .scene[data-cls='D'] .cap {
+  :global(:where(html[data-cls='D'])) .scene[data-scene] .cap {
     display: grid;
     grid-template-columns: auto 1fr;
     column-gap: 1.6rem;
     align-items: end;
   }
-  .scene[data-cls='D'] .cap__head {
+  :global(:where(html[data-cls='D'])) .scene[data-scene] .cap__head {
     grid-row: 1 / span 2;
     align-self: start;
   }
-  .scene[data-cls='D'] .cap__layers {
+  :global(:where(html[data-cls='D'])) .scene[data-scene] .cap__layers {
     grid-column: 2;
   }
-  .scene[data-cls='E'] {
+  :global(:where(html[data-cls='E'])) .scene[data-scene] {
     --idx: 7rem;
     --head: 3rem;
     --text: 1.08rem;
     --text-w: 46ch;
   }
-  .scene[data-cls='E'] .cap {
+  :global(:where(html[data-cls='E'])) .scene[data-scene] .cap {
     top: var(--cap-t, 60vh);
     bottom: auto;
     left: 7vw;
     right: 7vw;
     width: auto;
   }
-  .scene[data-cls='E'] .cap__index {
+  :global(:where(html[data-cls='E'])) .scene[data-scene] .cap__index {
     position: absolute;
     top: -0.2rem;
     right: 0;
   }
-  .scene:is([data-cls='E'], [data-cls='F']) .deck__controls {
+  :global(:where(html[data-cls='E'], html[data-cls='F'])) .scene[data-scene] .deck__controls {
     top: auto;
     bottom: max(3svh, calc(env(safe-area-inset-bottom, 0px) + 12px));
     width: min(24rem, calc(100vw - 2 * max(5vw, env(safe-area-inset-left, 0px) + 12px)));
   }
-  .scene[data-cls='F'] {
+  :global(:where(html[data-cls='F'])) .scene[data-scene] {
     --idx: 1.1rem;
     --head: 1.9rem;
     --text: 0.95rem;
@@ -1758,7 +1815,7 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
      Die Steuerung liegt in .deck, nicht in .cap; ihre Kanten folgen denen der Beschriftung. */
   /* Telefon hoch: die Beschriftung beginnt unter der Front (--cap-t aus der Rechnung), die
      Steuerung steht darunter am Boden. */
-  .scene[data-cls='F'] .cap {
+  :global(:where(html[data-cls='F'])) .scene[data-scene] .cap {
     top: var(--cap-t, 52svh);
     bottom: auto;
     left: max(6vw, calc(env(safe-area-inset-left, 0px) + 14px));
@@ -1766,11 +1823,11 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     width: auto;
   }
   /* Der Kopf hat im Hochformat keine eigene Zeile; seine Kinder liegen absolut. */
-  .scene[data-cls='F'] .cap__head {
+  :global(:where(html[data-cls='F'])) .scene[data-scene] .cap__head {
     margin-bottom: calc(-1 * var(--cap-gap));
   }
   /* Der Titel der Bühne stünde im Hochformat über der Front; Screenreader lesen ihn weiter. */
-  .scene[data-cls='F'] .deck__title {
+  :global(:where(html[data-cls='F'])) .scene[data-scene] .deck__title {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -1780,43 +1837,41 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   }
   /* Telefon: das Zählwerk steht klein rechts in der Zeile der Augenbraue, die Überschrift
      bleibt frei. */
-  .scene[data-cls='F'] .cap__index {
+  :global(:where(html[data-cls='F'])) .scene[data-scene] .cap__index {
     position: absolute;
     top: 0;
     right: 0;
     align-items: center;
     gap: 0.4rem;
   }
-  .scene[data-cls='F'] .odo {
+  :global(:where(html[data-cls='F'])) .scene[data-scene] .odo {
     letter-spacing: -0.02em;
     -webkit-text-stroke: 0;
     color: var(--fg-1);
   }
-  .scene[data-cls='F'] .cap__of {
+  :global(:where(html[data-cls='F'])) .scene[data-scene] .cap__of {
     padding-bottom: 0;
   }
-  .scene[data-cls='F'] .cap__name {
+  :global(:where(html[data-cls='F'])) .scene[data-scene] .cap__name {
     padding-right: 5.5rem;
   }
-  .scene[data-cls='F'] .cap__layer {
+  :global(:where(html[data-cls='F'])) .scene[data-scene] .cap__layer {
     gap: 0.55rem;
   }
   /* Kurze Telefone: Schrift und Abstände werden kleiner, die Pfeile bleiben unberührt. */
-  @media (max-height: 719px) {
-    .scene[data-cls='F'] {
-      --head: 1.5rem;
-      --text: 0.85rem;
-      --cap-gap: 0.4rem;
-    }
+  :global(:where(html[data-cls='F'][data-h719])) .scene[data-scene] {
+    --head: 1.5rem;
+    --text: 0.85rem;
+    --cap-gap: 0.4rem;
   }
-  .scene[data-cls='G'] {
+  :global(:where(html[data-cls='G'])) .scene[data-scene] {
     --idx: 3rem;
     --head: 1.5rem;
     --text: 0.85rem;
     --text-w: none;
     --cap-gap: 0.45rem;
   }
-  .scene[data-cls='G'] .cap {
+  :global(:where(html[data-cls='G'])) .scene[data-scene] .cap {
     top: 16vh;
     bottom: 5vh;
     left: 57vw;
@@ -1824,23 +1879,23 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     width: auto;
     justify-content: center;
   }
-  .scene[data-cls='G'] .cap__layer {
+  :global(:where(html[data-cls='G'])) .scene[data-scene] .cap__layer {
     gap: 0.4rem;
   }
-  .scene[data-cls='G'] .cap__text {
+  :global(:where(html[data-cls='G'])) .scene[data-scene] .cap__text {
     line-height: 1.4;
   }
-  .scene[data-cls='G'] .cap {
+  :global(:where(html[data-cls='G'])) .scene[data-scene] .cap {
     padding-bottom: 3.2rem;
   }
   /* Telefon quer: die Leiste steht am Boden der Beschriftung, rechts in Reichweite des Daumens. */
-  .scene[data-cls='G'] .deck__controls {
+  :global(:where(html[data-cls='G'])) .scene[data-scene] .deck__controls {
     left: calc(57vw + (39vw - max(0px, env(safe-area-inset-right, 0px) - 4vw)) / 2);
     top: auto;
     bottom: max(4vh, calc(env(safe-area-inset-bottom, 0px) + 8px));
     width: min(20rem, 39vw);
   }
-  .scene[data-cls='G'] .deck__arrow {
+  :global(:where(html[data-cls='G'])) .scene[data-scene] .deck__arrow {
     width: 2.25rem;
     height: 2.25rem;
   }
