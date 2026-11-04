@@ -3,7 +3,7 @@
 # openSUSE Tumbleweed (HUM-339), aus denselben Programmen und demselben
 # Flutter-Bundle wie das .deb und mit derselben Ablage.
 #
-# Aufruf: packaging/rpm/build-rpm.sh <0.0.N> <bin-dir> <flutter-bundle> <out-dir>
+# Aufruf: packaging/rpm/build-rpm.sh <0.Y.Z> <bin-dir> <flutter-bundle> <out-dir>
 #
 # Gebaut wird auf dem Ubuntu-Laeufer der Release-Pipeline mit `rpmbuild` aus
 # dem Ubuntu-Paket `rpm`. Das geht, weil nichts kompiliert wird: Dieses
@@ -51,7 +51,7 @@
 # Baeue desselben Stands ergeben dieselbe Datei.
 set -euo pipefail
 
-[[ $# -eq 4 ]] || { echo "usage: $0 <0.0.N> <bin-dir> <flutter-bundle> <out-dir>" >&2; exit 2; }
+[[ $# -eq 4 ]] || { echo "usage: $0 <0.Y.Z> <bin-dir> <flutter-bundle> <out-dir>" >&2; exit 2; }
 version="$1"
 bin="$(cd "$2" && pwd)"
 bundle="$(cd "$3" && pwd)"
@@ -63,7 +63,7 @@ root="$(cd "$here/../.." && pwd)"
 deb="$root/packaging/deb"
 # shellcheck source=packaging/release/version.sh
 source "$root/packaging/release/version.sh"
-require_prerelease_version "$version"
+require_release_version "$version"
 
 command -v rpmbuild >/dev/null || { echo "error: rpmbuild is required (apt-get install rpm)" >&2; exit 1; }
 for f in humanitld humanitl humanitl-shim; do
@@ -160,7 +160,7 @@ bwrap_min="$(sed -n 's/^pub const MIN_BWRAP_VERSION: Version = Version(\([0-9]*\
 
 "$here/scriptlets.sh" "$work/scriptlets"
 
-# Das Changelog: ein Eintrag je Vorabversion, mit dem Datum des Commits.
+# Das Changelog: ein Eintrag je Version, mit dem Datum des Commits.
 epoch="${SOURCE_DATE_EPOCH:-$(git -C "$root" log -1 --format=%ct 2>/dev/null || date +%s)}"
 [[ "$epoch" =~ ^[0123456789]+$ ]] || { echo "error: SOURCE_DATE_EPOCH '$epoch' is not a number" >&2; exit 1; }
 commit="$(git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"

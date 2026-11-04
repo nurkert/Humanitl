@@ -570,7 +570,7 @@ sends accordingly.
 | A-2 | the kernel is 5.4 or newer (the minimum `humanitl doctor` checks, tested from 5.10) with seccomp-BPF | `uname -r`; `grep Seccomp /proc/self/status` | the shim child cannot install the filter and stops before `exec` (`SANDBOX_016`, or `SANDBOX_013` without a report) |
 | A-3 | the human reads what they approve | not technically checkable; the window makes reading cheap: findings first, full body, destination as identity | Humanitl is a recorder, not a protection; the history still shows what was approved |
 | A-4 | the LLM host is under the user's control | `humanitl config get llm.endpoint`; line 4 of the isolation panel | the model channel is full access to everything the agent sends the model |
-| A-5 | the host is not compromised | package signature, `systemctl --user status humanitld` | every statement here is void |
+| A-5 | the host is not compromised | the download against `SHA256SUMS` of its release ([verify-download](guides/verify-download.md); releases are signed from 1.0.0 on), `systemctl --user status humanitld` | every statement here is void |
 | A-6 | the sandbox profiles are the shipped ones or deliberately changed ones | `humanitl sandbox argv` | an extra socket fails the isolation check; an extra file mount is visible only in the bwrap line |
 
 ## Out of scope
@@ -586,8 +586,10 @@ These attackers are not defended against, and Humanitl does not claim to:
   (d), who changes records; whoever configures the daemon is trusted.
 - **Physical access**, an unlocked session, cold-boot attacks, memory dumps.
 - **A malicious user.** Whoever approves a request approves it. Humanitl informs the decision, it
-  does not make or overrule it. Manipulated Humanitl binaries belong here too; their
-  countermeasure is the package signature (HUM-060).
+  does not make or overrule it. Manipulated Humanitl binaries belong here too. Releases before
+  1.0.0 are not signed: `SHA256SUMS` detects a damaged download, not a tampered release, and
+  signed releases come with 1.0.0 (HUM-060). Updates from inside the app check a signed manifest
+  (K-25).
 - **Microarchitectural and timing side channels**, electromagnetic emanation.
 - **Denial of service** against the agent or the daemon.
 
@@ -649,6 +651,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-01 | K-25: updates from inside the app, bound to an Ed25519 release key built into the daemon; daily check of GitHub on by default, `update.check` turns it off; packages through `pkexec` and their package manager | HUM-382 |
 | 2026-10-31 | K-24: the disposable sandbox on macOS, an APFS clone with the masks removed, the real project sealed and the clone renamed before it is read; a held write descriptor and the missing size cap stay as residual risks | HUM-374 |
 | 2026-11-01 | The reserved name `llm.humanitl.internal` for a model on the loopback: mapped by the proxy only to the configured endpoint, scheme and port, before the rules, never resolved; every other use refused with `PROXY_003`. No new door, the sandbox profile is unchanged | HUM-387 |
+| 2026-11-04 | A-5 and manipulated binaries: releases before 1.0.0 carry `SHA256SUMS` only, no package signature; signed releases come with 1.0.0. The earlier text named a package signature that never shipped | HUM-060 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

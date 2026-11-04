@@ -4,7 +4,7 @@
 # `dpkg-deb`). Die einzigen Maintainer-Skripte, `postinst` und `postrm`,
 # setzt `maintscripts.sh` zusammen (HUM-284).
 #
-# Aufruf: packaging/deb/build-deb.sh <0.0.N> <bin-dir> <flutter-bundle> <out-dir>
+# Aufruf: packaging/deb/build-deb.sh <0.Y.Z> <bin-dir> <flutter-bundle> <out-dir>
 #
 # Das ist die deb-Haelfte von HUM-053 (`backlog/sprint-4.md`), soweit sie heute
 # gebaut werden kann. Die Pfade folgen der Spezifikation dort:
@@ -42,7 +42,7 @@
 # dasselbe SVG ergibt nicht auf jedem Rechner dieselben Bytes.
 set -euo pipefail
 
-[[ $# -eq 4 ]] || { echo "usage: $0 <0.0.N> <bin-dir> <flutter-bundle> <out-dir>" >&2; exit 2; }
+[[ $# -eq 4 ]] || { echo "usage: $0 <0.Y.Z> <bin-dir> <flutter-bundle> <out-dir>" >&2; exit 2; }
 version="$1"
 bin="$(cd "$2" && pwd)"
 bundle="$(cd "$3" && pwd)"
@@ -53,7 +53,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 # shellcheck source=packaging/release/version.sh
 source "$root/packaging/release/version.sh"
-require_prerelease_version "$version"
+require_release_version "$version"
 
 for f in humanitld humanitl humanitl-shim; do
   [[ -x "$bin/$f" ]] || { echo "error: $bin/$f is missing or not executable" >&2; exit 1; }
@@ -124,7 +124,7 @@ install -m 0644 "$here/copyright" "$pkg/usr/share/doc/humanitl/copyright"
 install -d -m 0755 "$pkg/usr/share/lintian/overrides"
 install -m 0644 "$here/lintian-overrides" "$pkg/usr/share/lintian/overrides/humanitl"
 
-# Das Changelog: ein Eintrag je Vorabversion. Das Datum ist das des Commits,
+# Das Changelog: ein Eintrag je Version. Das Datum ist das des Commits,
 # damit zwei Baeue desselben Stands dieselbe Datei ergeben. Der Dateiname ist
 # `changelog.gz` und nicht `changelog.Debian.gz`: Die Version traegt keine
 # Debian-Revision (0.0.3, nicht 0.0.3-1), das Paket ist also ein natives, und
@@ -138,7 +138,7 @@ commit="$(git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
 changelog_text="$(
   echo "humanitl ($version) unstable; urgency=medium"
   echo
-  echo "  * Early release $version from commit $commit, not for production use."
+  echo "  * Release $version from commit $commit."
   echo
   echo " -- Niko Burkert <humanitl@nurkert.de>  $(LC_ALL=C date -u -R -d "@$epoch")"
 )"

@@ -71,8 +71,11 @@ setup() {
   mkdir -p "$dir"
   git init -q --bare -b main "$dir/origin.git"
   git clone -q "$dir/origin.git" "$dir/clone" 2> /dev/null
-  mkdir -p "$dir/clone/tools"
+  mkdir -p "$dir/clone/tools" "$dir/clone/packaging/release"
   cp "$script" "$dir/clone/tools/release.sh"
+  # Ab 0.1.0 prueft das Skript den Changelog-Abschnitt mit diesen beiden.
+  cp "$here/../../packaging/release/changelog-section.sh" "$here/../../packaging/release/version.sh" \
+    "$dir/clone/packaging/release/"
   for i in 1 2 3; do
     echo "$i" > "$dir/clone/file.txt"
     git -C "$dir/clone" add -A
@@ -281,14 +284,68 @@ check mainrewritten_refused same "$rc" 1
 check mainrewritten_no_tag not on_origin "$d" refs/tags/v0.0.3
 check mainrewritten_says_so grep -q "no longer on origin/main" "$d/out"
 
-# 8. Keine Version der Form 0.0.N.
+# 8. Keine Version der Form 0.Y.Z; 1.0.0 braucht Signaturen (HUM-060).
 d="$(setup badversion)"
-for v in 0.1.0 0.0.03 v0.0.3 "0.0.3;x"; do
+for v in 1.0.0 0.0.03 0.01.0 v0.0.3 "0.0.3;x" 0.1; do
   rc=0
   rel "$d" "$v" > "$d/out" 2>&1 || rc=$?
   check "badversion_${v//[^a-z0-9]/_}_usage" same "$rc" 2
 done
 check badversion_no_gate same "$(calls "$d")" 0
+
+# 9. 0.1.0 (HUM-060): folgt auf v0.0.2, wenn CHANGELOG.md im Commit einen
+#    datierten Abschnitt hat. changelog <dir> <kopfzeile>: legt die Datei auf
+#    einen neuen Commit an der Spitze von main.
+changelog() {
+  printf '# Changelog\n\n## [Unreleased]\n\n%s\n\n- first\n' "$2" > "$1/clone/CHANGELOG.md"
+  git -C "$1/clone" add CHANGELOG.md
+  git -C "$1/clone" commit -q -m "changelog"
+  git -C "$1/clone" push -q origin main
+}
+d="$(setup minor)"
+changelog "$d" "## [0.1.0] - 2026-11-20"
+tip="$(git -C "$d/origin.git" rev-parse main)"
+rc=0
+rel "$d" 0.1.0 > "$d/out" 2>&1 || rc=$?
+check minor_exits_0 same "$rc" 0
+check minor_three_gates same "$(calls "$d")" 3
+check minor_dry_branch grep -q "branch=release-dry/0.1.0 every=1 skip=release sha=$tip" <(call_line "$d" dry)
+check minor_tag_on_tip same "$(git -C "$d/origin.git" rev-parse 'v0.1.0^{commit}')" "$tip"
+check minor_tag_message same "$(git -C "$d/origin.git" for-each-ref --format='%(contents:subject)' refs/tags/v0.1.0)" "Humanitl 0.1.0"
+
+# 9b. Entwurf ohne Datum und gar kein Changelog: nichts gepusht, kein Tor.
+d="$(setup draft)"
+changelog "$d" "## [0.1.0] - unreleased"
+rc=0
+rel "$d" 0.1.0 > "$d/out" 2>&1 || rc=$?
+check draft_refused same "$rc" 1
+check draft_no_gate same "$(calls "$d")" 0
+check draft_nothing_pushed not on_origin "$d" refs/heads/release-dry/0.1.0
+check draft_says_so grep -q "no dated section for 0.1.0" "$d/out"
+d="$(setup nochangelog)"
+rc=0
+rel "$d" 0.1.0 > "$d/out" 2>&1 || rc=$?
+check nochangelog_refused same "$rc" 1
+check nochangelog_no_gate same "$(calls "$d")" 0
+
+# 9c. Luecken: 0.2.0 und 0.1.1 nach v0.0.2.
+for v in 0.2.0 0.1.1; do
+  d="$(setup "gap${v//./_}")"
+  rc=0
+  rel "$d" "$v" > "$d/out" 2>&1 || rc=$?
+  check "gap${v//./_}_refused" same "$rc" 1
+  check "gap${v//./_}_no_gate" same "$(calls "$d")" 0
+  check "gap${v//./_}_says_next" grep -q "the next version is 0.0.3 or 0.1.0" "$d/out"
+done
+
+# 9d. Nach v0.1.0 ist 0.0.3 nicht mehr neu, und die naechste ist 0.1.1 oder 0.2.0.
+d="$(setup afterminor)"
+git -C "$d/origin.git" tag v0.1.0 main
+rc=0
+rel "$d" 0.0.3 > "$d/out" 2>&1 || rc=$?
+check afterminor_old_refused same "$rc" 1
+check afterminor_says_not_new grep -q "already has v0.1.0; the next version is 0.1.1 or 0.2.0" "$d/out"
+check afterminor_no_gate same "$(calls "$d")" 0
 
 if [[ "$fails" -ne 0 ]]; then
   echo "release_test: $fails Pruefung(en) rot" >&2

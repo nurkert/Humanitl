@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Schreibt `SHA256SUMS` fuer alle Artefakte in <dist-dir> und prueft die
-# Datei gleich gegen die Artefakte. Der Name ist der, den HUM-060 fuer 0.1.0
-# vorsieht; dort kommt die minisign-Signatur der Datei hinzu.
+# Datei gleich gegen die Artefakte. Releases vor 1.0.0 tragen nur diese
+# Pruefsummen, keine Signatur (HUM-060); wie Nutzer pruefen, steht in
+# docs/guides/verify-download.md.
 #
 # Aufruf: packaging/release/checksums.sh <dist-dir>
 set -euo pipefail

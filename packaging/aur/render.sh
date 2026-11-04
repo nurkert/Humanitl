@@ -5,7 +5,7 @@
 # copyright). Das Ausgabeverzeichnis ist danach genau der Inhalt des
 # AUR-Git-Repositorys; hochladen tut der Maintainer von Hand (README.md).
 #
-# Aufruf: packaging/aur/render.sh <0.0.N> <archiv-oder-sha256> [<out-dir>]
+# Aufruf: packaging/aur/render.sh <0.Y.Z> <archiv-oder-sha256> [<out-dir>]
 #
 #   <archiv-oder-sha256>  entweder die Datei humanitl-<version>-linux-x86_64.tar.gz,
 #                         deren SHA-256 hier gerechnet wird, oder die 64
@@ -23,7 +23,7 @@
 set -euo pipefail
 
 [[ $# -eq 2 || $# -eq 3 ]] \
-  || { echo "usage: $0 <0.0.N> <tarball-or-sha256> [<out-dir>]" >&2; exit 2; }
+  || { echo "usage: $0 <0.Y.Z> <tarball-or-sha256> [<out-dir>]" >&2; exit 2; }
 version="$1"
 archive="$2"
 out="${3:-./aur-humanitl-bin-$version}"
@@ -32,7 +32,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 # shellcheck source=packaging/release/version.sh
 source "$root/packaging/release/version.sh"
-require_prerelease_version "$version"
+require_release_version "$version"
 
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then

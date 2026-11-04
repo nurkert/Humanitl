@@ -3,7 +3,7 @@
 # entfernt es wieder (HUM-339). Nie auf einem echten Rechner ausfuehren: Das
 # Skript installiert als root und entfernt danach.
 #
-# Aufruf (als root, im Container): check-install.sh <rpm> <0.0.N>
+# Aufruf (als root, im Container): check-install.sh <rpm> <0.Y.Z>
 #
 # Das Gegenstueck zu `packaging/deb/check-install.sh`, mit denselben
 # Pruefungen in derselben Reihenfolge. Geprueft wird, was ein Mensch mit
@@ -31,7 +31,7 @@
 # eigenes Skript anbietet.
 set -euo pipefail
 
-[[ $# -eq 2 ]] || { echo "usage: $0 <rpm> <0.0.N>" >&2; exit 2; }
+[[ $# -eq 2 ]] || { echo "usage: $0 <rpm> <0.Y.Z>" >&2; exit 2; }
 rpm_file="$(readlink -f "$1")"
 version="$2"
 [[ "$(id -u)" -eq 0 ]] || { echo "error: run as root inside a throwaway container" >&2; exit 1; }

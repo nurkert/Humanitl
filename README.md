@@ -204,8 +204,9 @@ Every release is on the [releases page](https://github.com/nurkert/Humanitl/rele
 
 ### Linux
 
-Debian 13 or Ubuntu 24.04 and newer on x86_64, kernel 5.4 or newer, unprivileged user namespaces,
-`bubblewrap` 0.8 or newer and a systemd user session. After installing, `humanitl doctor` prints
+Debian 13 or Ubuntu 24.04 and newer on x86_64 (glibc 2.39; Debian 12 and Ubuntu 22.04 are too
+old), kernel 5.4 or newer, unprivileged user namespaces, `bubblewrap` 0.8 or newer and a systemd
+user session. After installing, `humanitl doctor` prints
 one line per precondition, with the fix for every line that is not ok.
 
 #### APT repository (recommended)
@@ -262,7 +263,8 @@ shasum -a 256 -c SHA256SUMS --ignore-missing           # macOS
 ```
 
 Releases before 1.0.0 are **not signed**: `SHA256SUMS` protects against a damaged download, not
-against a tampered release. Signed packages come with 1.0.0.
+against a tampered release. Signed packages come with 1.0.0. What the check proves and what to do
+when it fails: [`docs/guides/verify-download.md`](docs/guides/verify-download.md).
 
 ### Updates from inside the app
 
@@ -500,6 +502,7 @@ listed in [`BACKLOG.md` section 9](BACKLOG.md#9-nach-dem-mvp-priorisiert).
   tests, the escape tests on Linux and macOS, and end-to-end runs against a real daemon.
 - Nightly fuzzing of the parsers and decoders ([`fuzz-nightly.yml`](.github/workflows/fuzz-nightly.yml)).
 - Every release carries `SHA256SUMS`; see the [releases page](https://github.com/nurkert/Humanitl/releases).
+  From 0.1.0 on, its notes start with its section of [`CHANGELOG.md`](CHANGELOG.md).
 - Generated reference pages (CLI, configuration, diagnostics, parity) are checked for staleness in
   CI.
 

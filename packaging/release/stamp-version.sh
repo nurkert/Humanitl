@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Setzt die Versionsnummer einer 0.0.x-Vorabversion in den Rust-Workspace.
+# Setzt die Versionsnummer eines Release-Laufs in den Rust-Workspace und die App.
 #
-# Aufruf: packaging/release/stamp-version.sh 0.0.3
+# Aufruf: packaging/release/stamp-version.sh 0.0.3  (oder 0.1.0)
 #
 # Das Skript schreibt in `daemon/Cargo.toml` (Abschnitt `[workspace.package]`),
 # in `daemon/Cargo.lock` (die Pakete des Workspace, also die ohne
 # `source`-Zeile) und in `app/pubspec.yaml`. Alles nur im Auscheckstand eines Release-Laufs: Im
-# Repository bleibt `0.0.0` stehen, bis HUM-060 mit `VERSION` die eine Quelle
-# aller Versionsstellen einfuehrt. Deshalb verweigert das Skript die Arbeit
+# Repository bleibt `0.0.0` stehen; die einzige Quelle der Version ist der Tag
+# (HUM-060, Stand 2026-11-04: keine VERSION-Datei). Dieses Skript schreibt sie
+# in alle Versionsstellen, `check-version.sh` prueft danach die gebauten
+# Programme und die App. Deshalb verweigert das Skript die Arbeit
 # ausserhalb von CI, es sei denn, der Aufruf sagt mit `--allow-local`
 # ausdruecklich, dass er in einer Wegwerfkopie laeuft.
 #
@@ -19,7 +21,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 [--allow-local] <0.0.N>" >&2
+  echo "usage: $0 [--allow-local] <0.Y.Z>" >&2
   exit 2
 }
 
@@ -33,7 +35,7 @@ version="$1"
 
 # shellcheck source=packaging/release/version.sh
 source "$(dirname "$0")/version.sh"
-require_prerelease_version "$version"
+require_release_version "$version"
 
 if [[ "${CI:-}" != "true" && "$allow_local" -ne 1 ]]; then
   echo "error: refusing to edit daemon/Cargo.toml outside CI; pass --allow-local in a throwaway copy" >&2

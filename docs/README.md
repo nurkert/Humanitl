@@ -12,6 +12,7 @@ fails when they are stale.
 | [`guides/install.md`](guides/install.md) | prerequisites, `.deb`, AppImage, the user service, checks, removal |
 | [`guides/first-session.md`](guides/first-session.md) | from the setup screen to the first held request, a rule and the audit check |
 | [`guides/agent-profiles.md`](guides/agent-profiles.md) | session profiles, the OpenCode adapter, writing an adapter, phone-home hosts |
+| [`guides/verify-download.md`](guides/verify-download.md) | checking a download against `SHA256SUMS`, and what that proves |
 
 ## Reference
 
@@ -42,4 +43,5 @@ fails when they are stale.
 | [`DESIGN.md`](DESIGN.md) | the "Airlock" design system: tokens, components, motion |
 | [`UX.md`](UX.md) | screens and flows |
 | [`INSTALL.md`](INSTALL.md) | maintainer notes: APT repository, unit hardening, packaging, test matrix |
+| [`guides/release-process.md`](guides/release-process.md) | cutting a release with `tools/release.sh`, the changelog, what to do on red |
 | [`adr/README.md`](adr/README.md) | architecture decision records |

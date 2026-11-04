@@ -1196,11 +1196,39 @@ Sprint: 5 · Größe: S · Abhängigkeiten: HUM-053, HUM-059, HUM-056, HUM-057, 
 
 > Nachtrag 2026-10-30 (HUM-335): Das AppImage liegt schon den 0.0.x-Releases bei, gebaut im Job `build` von `release.yml` auf ubuntu-24.04 und geprüft im Job `check-appimage`. Dieses Issue übernimmt es von dort; offen bleibt die glibc-Frage unten (ältester Runner), dazu VERSION-Datei, Changelog und minisign.
 
+> **Stand 2026-11-04.** Diese Spezifikation ist in Teilen überholt; was unten steht, gilt nur, soweit diese Notiz nichts anderes sagt.
+>
+> **Entscheidungen des Inhabers (2026-10-22, bindend):** Keine Signaturen vor 1.0.0. 0.1.0 erscheint mit `SHA256SUMS` allein, ohne minisign, ohne `minisign.pub`, ohne Fingerprint im README und ohne signierten Git-Tag. Meldeweg für Sicherheitslücken ist GitHub Private Vulnerability Reporting (`SECURITY.md`, vom Inhaber aktiviert). Releases entstehen nur über `tools/release.sh` nach grünem Probelauf, nie mit einem Tag von Hand; damit entfällt Schritt 6 der Checkliste unten (`git tag -s`).
+>
+> **Erledigt (dieses Issue):**
+> - Kanal 0.Y.Z statt nur 0.0.N: `packaging/release/version.sh` (`require_release_version`, lehnt 1.0.0 und höher ab, solange es keine Signatur gibt), `tools/release.sh` (nach `v0.Y.Z` nur `0.Y.(Z+1)` oder `0.(Y+1).0`; ab 0.1.0 Prüfung des Changelog-Abschnitts im Commit, bevor etwas gepusht wird), `release.yml` (Trigger `v0.*` und `release-dry/0.*`, `guard` mit demselben Muster und der Changelog-Prüfung, Job `release` für `refs/tags/v0.`). Tests in `tools/tests/release_test.sh` (Abschnitte 8, 9 bis 9d) mit Mutationsbeweis.
+> - `CHANGELOG.md` nach Keep a Changelog 1.1.0 mit `## [Unreleased]` und dem Entwurf `## [0.1.0] - unreleased`. `packaging/release/changelog-section.sh` liefert den Abschnitt ohne Kopfzeile, verlangt ein gültiges Datum und mindestens einen Eintrag; Test `packaging/release/changelog-section-test.sh` (in `make deps-lint`). `release-notes.sh` setzt ab 0.1.0 den Abschnitt unter „What's new" an den Anfang der Notes; 0.0.N bleibt Wort für Wort wie bisher (`release-notes-test.sh`, ergänzt um 0.1.0, Entwurf, fehlenden Abschnitt und 1.0.0).
+> - `docs/guides/verify-download.md` (Prüfsumme unter Linux und macOS, Fehlerbilder, was die Prüfsumme beweist und was nicht) und `docs/guides/release-process.md` (Ablauf, Probelauf, CI-Tor, Vorgehen bei Rot, Prüfung des Meldewegs, keine Tags von Hand).
+> - Signatur-Aussagen berichtigt: `docs/THREAT-MODEL.md` A-5 und „Manipulated Humanitl binaries" (samt deutscher Übersetzung), Paketbeschreibungen (`control.in`, `humanitl.spec.in`, `PKGBUILD.in`), `INSTALL.txt`, `checksums.sh`, `CONTRIBUTING.md`, `BACKLOG.md`.
+>
+> **Durch HUM-363 und HUM-273 überholt:** `release.yml` existiert und baut .deb, .rpm, AppImage, Archiv, macOS-Abbild und `SHA256SUMS` (`packaging/release/checksums.sh`); `guard` mit Repository-Bedingung, Tag-Prüfung und grünem `ci.yml`; das Release entsteht als Entwurf und wird erst nach erneuter Tag-Prüfung veröffentlicht. Der Probelauf `release-dry/0.Y.Z` ersetzt den Probelauf mit `v0.1.0-rc.1`. `extract-changelog.sh` heißt `changelog-section.sh`.
+>
+> **Bewusst nicht gebaut, mit Grund:**
+> - `VERSION` und `cargo xtask version check|set`: Die einzige Quelle der Version ist der Tag. `stamp-version.sh` schreibt sie im Release-Lauf in `daemon/Cargo.toml`, `daemon/Cargo.lock` und `app/pubspec.yaml`, die Paketskripte bekommen sie als Argument, und `check-version.sh` lässt den Lauf scheitern, wenn `humanitl --version`, `humanitld --version` oder die App eine andere Nummer tragen. Im Repository steht `0.0.0`. Eine Datei `VERSION` wäre eine zweite Quelle neben dem Tag, die gepflegt werden müsste, ohne etwas zu prüfen, was der Lauf nicht schon prüft.
+> - `verify.sh`: Ohne Signatur ist die Prüfung ein Befehl (`sha256sum -c SHA256SUMS --ignore-missing`, unter macOS `shasum -a 256 -c ...`), dokumentiert und gegen die echten Dateinamen geprüft. Ein Skript aus demselben Release fügte kein Vertrauen hinzu. Mit den Signaturen in 1.0.0 kommt es zurück.
+> - CI-Check `changelog-touched`: Es gibt keine PRs, jedes Issue landet über `tools/commit-issue.sh`, und die meisten Issues sind intern. Der Changelog wird vor dem Release aus den Merge-Zeilen gepflegt; der Release-Lauf erzwingt den datierten Abschnitt. Entschieden 2026-11-04 (Empfehlung des Koordinators, umkehrbar): kein solcher Check.
+>
+> **Entschieden 2026-11-04 (Empfehlung des Koordinators, umkehrbar):**
+> - glibc des AppImage und der Pakete: gebaut auf ubuntu-24.04 (glibc 2.39), läuft also nicht auf Debian 12 (2.36) oder Ubuntu 22.04. Für 0.1.0 gilt diese Untergrenze (Debian 13, Ubuntu 24.04, Fedora 40); sie steht in `README.md`, `INSTALL.txt` und `docs/guides/verify-download.md`. Ein Bau auf älterer Basis wäre ein eigenes Issue.
+> - Der Hinweis „not meant for production use" entfällt ab 0.1.0 in Paketbeschreibungen, `INSTALL.txt` und Paket-Changelogs.
+> - Ein von Hand gepushter Tag erreicht den Job `release` nicht: `guard` verlangt für Tag-Läufe einen grünen Probelauf auf `release-dry/<version>` für denselben Commit, jeder Job grün außer `release` (`tools/ci-gate.sh`; Aufruf in `release-notes-test.sh` geprüft, das Tor selbst in `tools/tests/ci_gate_test.sh`).
+>
+> **Offen:**
+> - Datum im Kopf `## [0.1.0]` und Feinschliff der Einträge im Release-Commit (`chore(release): 0.1.0`), dann `tools/release.sh 0.1.0`.
+> - Abnahmeprotokoll `docs/releases/0.1.0-acceptance.md` (manuelle MVP-Abnahme) ist nicht angelegt.
+>
+> Die Akzeptanzkriterien unten zu `VERSION`, minisign, `minisign.pub`, `verify.sh`, `rc.1` und signiertem Tag sind damit gegenstandslos.
+
 ### Kontext
 HUM-053 hat das Packaging (deb, AppImage, systemd-Unit) gebaut. Es fehlt der reproduzierbare Weg vom Tag zum veröffentlichten, signierten Artefakt mit Changelog, sowie die Regeln, nach denen Versionen vergeben werden. Ohne das kann niemand nachprüfen, ob das heruntergeladene Binary dem Quellcode entspricht, und Sicherheits-Patches (HUM-056 Triage Schritt 6) hätten keinen Kanal.
 
 ### Ziel
-`git tag v0.1.0 && git push --tags` löst einen CI-Job aus, der beide Artefakte baut, Prüfsummen und minisign-Signaturen erzeugt, ein GitHub-Release mit dem Changelog-Abschnitt anlegt und die Artefakte anhängt. Ein Nutzer kann Signatur und Prüfsumme mit zwei dokumentierten Befehlen prüfen. Alle Versionsstellen im Repo stammen aus einer Quelle.
+`tools/release.sh 0.1.0` (Stand 2026-11-04; ursprünglich `git tag v0.1.0 && git push --tags`) löst einen CI-Job aus, der die Artefakte baut, Prüfsummen erzeugt (Signaturen erst ab 1.0.0, siehe Stand oben), ein GitHub-Release mit dem Changelog-Abschnitt anlegt und die Artefakte anhängt. Ein Nutzer kann die Prüfsumme mit einem dokumentierten Befehl prüfen. Alle Versionsstellen im Repo stammen aus einer Quelle.
 
 ### Nicht-Ziel
 Automatisches Versions-Bumping. Veröffentlichung auf Flathub, Snap, AUR, crates.io (nach MVP). Reproducible Builds im strengen Sinn (bitgenaue Reproduktion; Ziel für 0.2, jetzt nur Prüfsumme und Signatur). Auto-Update im Tool (das Tool telefoniert nicht nach Hause; Update-Hinweis kommt frühestens 0.2 und nur opt-in).

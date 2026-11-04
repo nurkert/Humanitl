@@ -46,8 +46,8 @@
 #                         (`head_branch` des Laufs; bei einem Tag-Push ist das
 #                         der Tag-Name). Noetig, wo derselbe Commit mehrere
 #                         Laeufe desselben Workflows hat, etwa der Probelauf
-#                         auf `release-dry/0.0.N` und danach der Lauf des Tags
-#                         `v0.0.N` (HUM-363). Ohne den Filter saehe das Tor
+#                         auf `release-dry/0.Y.Z` und danach der Lauf des Tags
+#                         `v0.Y.Z` (HUM-363). Ohne den Filter saehe das Tor
 #                         nach dem Tag-Push den schon gruenen Probelauf und
 #                         meldete gruen, bevor der Tag-Lauf ueberhaupt begann.
 #   HUMANITL_CI_EVERY_JOB  1: Ein Lauf mit `success` gilt nur, wenn auch jeder

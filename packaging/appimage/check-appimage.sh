@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prueft ein gebautes AppImage, ohne etwas zu installieren (HUM-053).
 #
-# Aufruf: packaging/appimage/check-appimage.sh <AppImage> <0.0.N>
+# Aufruf: packaging/appimage/check-appimage.sh <AppImage> <0.Y.Z>
 #
 # Geprueft wird:
 #   1. `--cli --version` erreicht die Kommandozeile im Bild und nennt die
@@ -18,13 +18,13 @@
 # ist ein Wegwerf-Verzeichnis.
 set -euo pipefail
 
-[[ $# -eq 2 ]] || { echo "usage: $0 <AppImage> <0.0.N>" >&2; exit 2; }
+[[ $# -eq 2 ]] || { echo "usage: $0 <AppImage> <0.Y.Z>" >&2; exit 2; }
 image="$(readlink -f "$1")"
 version="$2"
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=packaging/release/version.sh
 source "$here/../release/version.sh"
-require_prerelease_version "$version"
+require_release_version "$version"
 [[ -x "$image" ]] || { echo "error: $image is not an executable file" >&2; exit 1; }
 
 home="$(mktemp -d)"

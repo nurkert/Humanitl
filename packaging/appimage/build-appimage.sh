@@ -2,7 +2,7 @@
 # Baut `Humanitl-<version>-x86_64.AppImage` aus fertigen Programmen und dem
 # Flutter-Bundle (HUM-053).
 #
-# Aufruf: packaging/appimage/build-appimage.sh <0.0.N> <bin-dir> <flutter-bundle> <out-dir>
+# Aufruf: packaging/appimage/build-appimage.sh <0.Y.Z> <bin-dir> <flutter-bundle> <out-dir>
 #
 # Werkzeug: `appimagetool` und die Laufzeit des AppImage, beide auf eine
 # Fassung und eine Pruefsumme festgelegt (unten). Liegen sie nicht unter
@@ -30,7 +30,7 @@
 # `libwayland` oder `libEGL`, bricht es ab.
 set -euo pipefail
 
-[[ $# -eq 4 ]] || { echo "usage: $0 <0.0.N> <bin-dir> <flutter-bundle> <out-dir>" >&2; exit 2; }
+[[ $# -eq 4 ]] || { echo "usage: $0 <0.Y.Z> <bin-dir> <flutter-bundle> <out-dir>" >&2; exit 2; }
 version="$1"
 bin="$(cd "$2" && pwd)"
 bundle="$(cd "$3" && pwd)"
@@ -41,7 +41,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 # shellcheck source=packaging/release/version.sh
 source "$root/packaging/release/version.sh"
-require_prerelease_version "$version"
+require_release_version "$version"
 
 # Die Fassungen des Werkzeugs, mit Pruefsumme. Wer sie anhebt, hebt beide
 # Zeilen zusammen an.

@@ -270,40 +270,46 @@ Kern-Crates tragen kein IO, kein async und kein Protobuf. Jede Fähigkeit ist
 zuerst eine RPC: Desktop-Anwendung und Kommandozeile sind dünne Clients
 desselben Dienstes. Einzelheiten in `docs/ARCHITECTURE.md`.
 
-## Vorabversionen 0.0.x
+## Vorabversionen 0.0.x und Releases ab 0.1.0
 
-Bis zum ersten richtigen Release 0.1.0 gibt es Vorabversionen mit der Nummer
-0.0.N. Sie entstehen aus einem Tag und dem Workflow
-`.github/workflows/release.yml`. Das Release enthält die Pakete
+Bis zum ersten richtigen Release 0.1.0 gab es Vorabversionen mit der Nummer
+0.0.N; ab 0.1.0 folgen die Releases 0.Y.Z bis vor 1.0.0 (HUM-060). Beide
+entstehen auf demselben Weg aus einem Tag und dem Workflow
+`.github/workflows/release.yml`. Die Anleitung für Maintainer auf Englisch,
+mit Checkliste vor und nach dem Release, steht in
+[`docs/guides/release-process.md`](docs/guides/release-process.md). Das
+Release enthält (hier am Beispiel 0.0.N) die Pakete
 `humanitl_0.0.N_amd64.deb` und `humanitl-0.0.N-1.x86_64.rpm`, das AppImage
 `Humanitl-0.0.N-x86_64.AppImage`, das Archiv
 `humanitl-0.0.N-linux-x86_64.tar.gz`, für macOS `Humanitl-0.0.N-macos.dmg`
 und `Humanitl-0.0.N-macos.zip` sowie `SHA256SUMS`. Das AUR-Paket
 `humanitl-bin` ist kein Asset; es wird aus dem Archiv gerendert und vom
 Maintainer selbst hochgeladen (`packaging/aur/README.md`). Seit HUM-273 erscheint es auf GitHub als reguläres Release
-(„Latest“), nicht mehr als Pre-Release; es ist weiterhin nicht signiert und
-nicht für den produktiven Einsatz gedacht. Signaturen kommen mit 1.0.0.
+(„Latest“), nicht mehr als Pre-Release. Releases vor 1.0.0 sind nicht
+signiert und tragen nur `SHA256SUMS`; Signaturen kommen mit 1.0.0, und bis
+dahin lehnen Skripte und Workflow die Nummer 1.0.0 ab.
 
-So wird eine Vorabversion geschnitten, und nur so (HUM-363):
+So wird ein Release geschnitten, und nur so (HUM-363, HUM-060):
 
 ```sh
-tools/release.sh 0.0.N
+tools/release.sh 0.0.N    # oder 0.1.0, 0.1.1, ...
 ```
 
 Das Skript setzt den Tag erst, wenn derselbe Commit den ganzen Release-Bau
 schon bestanden hat:
 
-1. `0.0.N` ist genau die nächste Nummer, eins mehr als der höchste
-   `v0.0.*`-Tag auf `origin`; eine Lücke oder eine schon vergebene Nummer
-   lehnt es ab.
+1. Die Version ist genau eine nächste: Nach dem höchsten Tag `v0.Y.Z` auf
+   `origin` kommt nur `0.Y.(Z+1)` oder `0.(Y+1).0`; eine Lücke oder eine
+   schon vergebene Nummer lehnt es ab. Ab 0.1.0 muss `CHANGELOG.md` im
+   Commit einen datierten Abschnitt der Version haben, sonst pusht es nichts.
 2. Ziel ist die Spitze von `origin/main` (ein zweites Argument darf nur genau
    diese Spitze nennen), und ihr `ci.yml`-Lauf auf `main` ist grün
    (`tools/ci-gate.sh`).
-3. Es pusht den Commit als Branch `release-dry/0.0.N`. Das startet den
+3. Es pusht den Commit als Branch `release-dry/0.Y.Z`. Das startet den
    Probelauf von `release.yml` mit genau dieser Version: alle Bau- und
    Prüfjobs, `guard` so streng wie beim Tag, ohne den Job `release`. Das
    Skript wartet, bis jeder Job grün ist.
-4. Erst dann setzt es den annotierten Tag `v0.0.N` („Humanitl 0.0.N") auf
+4. Erst dann setzt es den annotierten Tag `v0.Y.Z` („Humanitl 0.Y.Z") auf
    denselben Commit, pusht ihn und löscht den Probelauf-Branch. Ist `main`
    während des Probelaufs weitergezogen, sitzt der Tag trotzdem auf dem
    geprüften Commit und nicht auf der neuen Spitze; das Skript sagt es. Genau
@@ -320,10 +326,10 @@ wertet den neuen Versuch aus. Scheitert der Lauf des Tags trotz grünem
 Probelauf, sagt das Skript es und verweist auf genau diesen Lauf: dort „Re-run
 failed jobs". Der Tag bleibt, wo er ist.
 
-Einen Tag von Hand zu setzen (`git tag` und `git push origin v0.0.N`) ist
+Einen Tag von Hand zu setzen (`git tag` und `git push origin v0.Y.Z`) ist
 nicht mehr vorgesehen: So entstand v0.0.14, dessen Lauf nach dem Tag in
 `check-rpm` scheiterte und das deshalb kein Release hat. Der Job `guard` prüft
-beim Tag weiterhin selbst, dass der Tag die Form `v0.0.N` hat, der Commit auf
+beim Tag weiterhin selbst, dass der Tag die Form `v0.Y.Z` hat, der Commit auf
 `main` liegt und sein CI-Lauf mit `success` endete (läuft CI noch, wartet er
 bis zu 45 Minuten).
 
@@ -331,9 +337,10 @@ Ein Tag wird nie verschoben oder neu gesetzt. Ist ein Tag-Lauf trotz allem
 endgültig gescheitert, wird der Fehler auf `main` behoben und die nächste
 Nummer geschnitten; seine Nummer wird nicht wieder vergeben.
 
-Die Versionsnummer steht im Repository weiter als `0.0.0`. Der Workflow setzt
-sie nur in seinem eigenen Auscheckstand in `daemon/Cargo.toml` und
-`daemon/Cargo.lock` (`packaging/release/stamp-version.sh`) und übergibt sie
+Die Versionsnummer steht im Repository weiter als `0.0.0`; ihre einzige
+Quelle ist der Tag, eine Datei `VERSION` gibt es nicht (HUM-060). Der Workflow
+setzt sie nur in seinem eigenen Auscheckstand in `daemon/Cargo.toml`,
+`daemon/Cargo.lock` und `app/pubspec.yaml` (`packaging/release/stamp-version.sh`) und übergibt sie
 der App mit `flutter build linux --build-name`. Dass `humanitl --version`,
 `humanitld --version` und die App dieselbe Nummer tragen, prüft der Lauf und
 scheitert sonst.
@@ -341,18 +348,20 @@ scheitert sonst.
 **Probelauf.** Er baut alles, prüft die Pakete in Containern und lädt die
 Dateien als Workflow-Artefakt `humanitl-dry-run-<commit>` hoch (ein Tag-Lauf
 nennt sein Artefakt `humanitl-release`), legt aber kein Release an. Ausgelöst
-wird er durch einen Push auf `release-dry/0.0.N` (`tools/release.sh`), auf
+wird er durch einen Push auf `release-dry/0.Y.Z` (`tools/release.sh`), auf
 `release-dry/hum-NNN` (`tools/commit-issue.sh`, Version `0.0.NNN`, siehe oben)
 oder unter „Actions", Workflow „release", „Run workflow" mit einer Version.
-Außer bei `release-dry/0.0.N` darf er auch einen Commit bauen, der nicht auf
+Außer bei `release-dry/0.Y.Z` darf er auch einen Commit bauen, der nicht auf
 `main` liegt; dass der Commit nicht auf `main` liegt oder CI nicht grün ist,
 steht dann als Warnung im Lauf statt als Fehler. Die Schritte lassen sich lokal einzeln nachfahren, die Skripte liegen
 unter `packaging/release/` und `packaging/deb/`. Das Paket wird dabei nie auf
 dem eigenen Rechner installiert, sondern nur in einem Wegwerf-Container, so wie
 es `packaging/deb/check-install.sh` verlangt.
 
-**0.1.0 ist etwas anderes.** Der erste richtige Release folgt HUM-060 in
-`backlog/sprint-5.md`: eine `VERSION`-Datei als einzige Quelle aller
-Versionsstellen, `CHANGELOG.md`, minisign-Signaturen, AppImage und die
-Abnahme-Checkliste. Dieser Workflow reagiert nur auf `v0.0.*`; ein Tag
-`v0.1.0` löst hier nichts aus, bis HUM-060 den Workflow erweitert.
+**Ab 0.1.0 kommt der Changelog dazu.** Nutzersichtbare Änderungen stehen in
+`CHANGELOG.md` (Keep a Changelog 1.1.0, auf Englisch) unter
+`## [Unreleased]`. Vor dem Release wandern sie in den Abschnitt der Version,
+der Kopf bekommt das Datum (`## [0.1.0] - 2026-11-20`), und dieser Commit
+landet wie jedes Issue auf `main`. Die Release-Notes beginnen mit genau
+diesem Abschnitt (`packaging/release/changelog-section.sh`); ein Entwurf ohne
+Datum hält `tools/release.sh` und den Job `guard` an.

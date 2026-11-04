@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Schreibt die Release-Notes einer 0.0.x-Vorabversion nach stdout.
+# Schreibt die Release-Notes eines Releases 0.Y.Z nach stdout.
 #
-# Aufruf: packaging/release/release-notes.sh <0.0.N> <git-ref>
+# Aufruf: packaging/release/release-notes.sh <0.Y.Z> <git-ref>
 #
 # Die Ausgabe ist Englisch (HUM-225): Die Releases lesen Menschen, die kein
 # Deutsch sprechen. Nur diese Kommentare bleiben deutsch.
@@ -10,27 +10,53 @@
 # README.md, nicht aus diesem Skript: Die Zustaende ("delivered", "in
 # progress", "planned") stehen hier so, wie sie dort stehen, und eine
 # Aenderung der Tabelle aendert die naechsten Notes mit. Die Commit-Liste ist
-# die erste-Eltern-Linie von `main` seit dem vorigen v0.0.*-Tag, also je Issue
+# die erste-Eltern-Linie von `main` seit dem vorigen v0.*-Tag, also je Issue
 # die eine Merge-Zeile.
+#
+# Ab 0.1.0 (HUM-060) beginnen die Notes mit dem Abschnitt der Version aus
+# `CHANGELOG.md` (`changelog-section.sh`); fehlt er oder hat er kein Datum,
+# bricht das Skript ab, und der Probelauf ist rot. Die Vorabversionen 0.0.N
+# behalten ihren Hinweis "Early release" und haben keinen Abschnitt.
+# HUMANITL_CHANGELOG nennt fuer den Test eine andere Datei.
 #
 # Braucht die ganze Historie samt Tags (`fetch-depth: 0`).
 set -euo pipefail
 
-[[ $# -eq 2 ]] || { echo "usage: $0 <0.0.N> <git-ref>" >&2; exit 2; }
+[[ $# -eq 2 ]] || { echo "usage: $0 <0.Y.Z> <git-ref>" >&2; exit 2; }
 version="$1"
 ref="$2"
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 # shellcheck source=packaging/release/version.sh
 source "$here/version.sh"
-require_prerelease_version "$version"
+require_release_version "$version"
 
 commit="$(git -C "$root" rev-parse --verify "$ref^{commit}")"
 short="$(git -C "$root" rev-parse --short=12 "$commit")"
 
 # Der vorige Tag dieses Kanals, vom Elternteil aus gesucht, damit ein Tag, der
 # genau auf diesem Commit sitzt, nicht sich selbst findet.
-previous="$(git -C "$root" describe --tags --abbrev=0 --match 'v0.0.*' "$commit^" 2>/dev/null || true)"
+previous="$(git -C "$root" describe --tags --abbrev=0 --match 'v0.*' "$commit^" 2>/dev/null || true)"
+
+if is_prerelease_version "$version"; then
+  intro="> **Early release on the way to 0.1.0.**
+> Humanitl $version is an interim state before release 0.1.0. The artefacts
+> are **not signed**; \`SHA256SUMS\` protects against a damaged download,
+> not against a tampered release. A changelog comes with 0.1.0 (HUM-060);
+> signed packages come with 1.0.0."
+  changes=""
+else
+  intro="> The artefacts of Humanitl $version are **not signed**; \`SHA256SUMS\`
+> protects against a damaged download, not against a tampered release.
+> Signed packages come with 1.0.0. How to check a download:
+> https://github.com/nurkert/Humanitl/blob/main/docs/guides/verify-download.md"
+  section="$("$here/changelog-section.sh" "$version" "${HUMANITL_CHANGELOG:-$root/CHANGELOG.md}")"
+  changes="## What's new
+
+$section
+
+"
+fi
 
 milestones="$(python3 - "$root/README.md" <<'PY'
 import re
@@ -56,15 +82,11 @@ PY
 )"
 
 cat <<EOF
-> **Early release on the way to 0.1.0.**
-> Humanitl $version is an interim state before release 0.1.0. The artefacts
-> are **not signed**; \`SHA256SUMS\` protects against a damaged download,
-> not against a tampered release. A changelog comes with 0.1.0 (HUM-060);
-> signed packages come with 1.0.0.
+$intro
 
 Built from commit \`$short\` on \`main\`, after its CI run was green.
 
-## Install (amd64)
+${changes}## Install (amd64)
 
 Built and checked in a container on Ubuntu 24.04. Newer systems with the same
 libraries (Debian 13, for example) should install it as well; that is not
