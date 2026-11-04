@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Baut `humanitl-<version>-linux-x86_64.tar.gz`, das Archiv neben dem .deb.
 #
-# Aufruf: packaging/release/build-tarball.sh <0.0.N> <bin-dir> <flutter-bundle> <out-dir>
+# Aufruf: packaging/release/build-tarball.sh <0.Y.Z> <bin-dir> <flutter-bundle> <out-dir>
 #
 # Das Archiv hat ein Wurzelverzeichnis `humanitl-<version>-linux-x86_64/`.
 # Neben bin/ und app/ liegen dort share/humanitl/catalog und
@@ -13,7 +13,7 @@
 # dasselbe Archiv ergibt.
 set -euo pipefail
 
-[[ $# -eq 4 ]] || { echo "usage: $0 <0.0.N> <bin-dir> <flutter-bundle> <out-dir>" >&2; exit 2; }
+[[ $# -eq 4 ]] || { echo "usage: $0 <0.Y.Z> <bin-dir> <flutter-bundle> <out-dir>" >&2; exit 2; }
 version="$1"
 bin="$(cd "$2" && pwd)"
 bundle="$(cd "$3" && pwd)"
@@ -24,7 +24,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 # shellcheck source=packaging/release/version.sh
 source "$here/version.sh"
-require_prerelease_version "$version"
+require_release_version "$version"
 
 name="humanitl-$version-linux-x86_64"
 work="$(mktemp -d)"

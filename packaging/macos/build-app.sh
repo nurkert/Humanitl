@@ -3,7 +3,7 @@
 # signiert alles ad-hoc und packt Humanitl-<version>-macos.dmg und .zip
 # (HUM-326).
 #
-# Aufruf: packaging/macos/build-app.sh <0.0.N> <bin-dir> <Humanitl.app> <out-dir>
+# Aufruf: packaging/macos/build-app.sh <0.Y.Z> <bin-dir> <Humanitl.app> <out-dir>
 #
 # Aufbau im Bündel, gleich dem Archiv unter Linux, damit Daemon und App ihre
 # bestehende Suche nutzen (Katalog unter `<exe>/../../share`, Profil in einem
@@ -29,7 +29,7 @@
 # Release-Notes nennen den Schritt dafür.
 set -euo pipefail
 
-[[ $# -eq 4 ]] || { echo "usage: $0 <0.0.N> <bin-dir> <Humanitl.app> <out-dir>" >&2; exit 2; }
+[[ $# -eq 4 ]] || { echo "usage: $0 <0.Y.Z> <bin-dir> <Humanitl.app> <out-dir>" >&2; exit 2; }
 version="$1"
 bin="$(cd "$2" && pwd)"
 app_src="$(cd "$3" && pwd)"
@@ -38,7 +38,7 @@ out="$(cd "$4" && pwd)"
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 source "$root/packaging/release/version.sh"
-require_prerelease_version "$version"
+require_release_version "$version"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT

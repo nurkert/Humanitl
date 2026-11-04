@@ -173,6 +173,8 @@ Einrichtungsbildschirm installiert den Daemon als launchd-Agent.
 **Prüfsummen:** `sha256sum -c SHA256SUMS --ignore-missing` (macOS:
 `shasum -a 256 -c SHA256SUMS --ignore-missing`). Releases vor 1.0.0 sind **nicht signiert**;
 `SHA256SUMS` schützt vor einem beschädigten Download, nicht vor einem manipulierten Release.
+Signaturen kommen mit 1.0.0; Einzelheiten in
+[`docs/guides/verify-download.md`](docs/guides/verify-download.md).
 
 Alles Weitere in [`docs/guides/install.md`](docs/guides/install.md).
 

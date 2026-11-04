@@ -15,7 +15,7 @@
 pkgname=humanitl-bin
 pkgver=@VERSION@
 pkgrel=1
-pkgdesc='Human-in-the-loop network moderation for AI coding agents (early 0.0.x release)'
+pkgdesc='Human-in-the-loop network moderation for AI coding agents'
 arch=('x86_64')
 url='https://github.com/nurkert/Humanitl'
 license=('GPL-3.0-only' 'CC-BY-4.0' 'CC-BY-3.0' 'BSD-3-Clause' 'MIT')

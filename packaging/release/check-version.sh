@@ -2,7 +2,7 @@
 # Prueft, dass die gebauten Programme die Version tragen, unter der sie
 # veroeffentlicht werden.
 #
-# Aufruf: packaging/release/check-version.sh <0.0.N> <bin-dir> [<flutter-bundle>]
+# Aufruf: packaging/release/check-version.sh <0.Y.Z> <bin-dir> [<flutter-bundle>]
 #
 # `humanitl --version` und `humanitld --version` muessen genau
 # "<name> <version>" ausgeben. Ist ein Flutter-Bundle angegeben, muss
@@ -12,14 +12,14 @@
 # die Art Widerspruch, den spaeter niemand mehr aufklaert.
 set -euo pipefail
 
-[[ $# -eq 2 || $# -eq 3 ]] || { echo "usage: $0 <0.0.N> <bin-dir> [<flutter-bundle>]" >&2; exit 2; }
+[[ $# -eq 2 || $# -eq 3 ]] || { echo "usage: $0 <0.Y.Z> <bin-dir> [<flutter-bundle>]" >&2; exit 2; }
 version="$1"
 bin="$2"
 bundle="${3:-}"
 
 # shellcheck source=packaging/release/version.sh
 source "$(dirname "$0")/version.sh"
-require_prerelease_version "$version"
+require_release_version "$version"
 
 status=0
 for name in humanitl humanitld; do

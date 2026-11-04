@@ -229,7 +229,7 @@ if [[ "$normalized" != "$expected" ]]; then
 fi
 
 # Die Ueberschrift der Commit-Liste: der vorige Tag ist das Einzige, was wechselt.
-heading_re='^## Commits since (v0\.0\.[0-9]+|the start of the project)$'
+heading_re='^## Commits since (v0\.[0-9]+\.[0-9]+|the start of the project)$'
 if ! [[ "$heading" =~ $heading_re ]]; then
   fail "the commits heading is not '## Commits since <tag>': $heading"
 fi
@@ -242,11 +242,11 @@ fi
 previous="${heading#\#\# Commits since }"
 if [[ "$previous" == "the start of the project" ]]; then
   range="HEAD"
-  git -C "$root" describe --tags --abbrev=0 --match 'v0.0.*' 'HEAD^' >/dev/null 2>&1 &&
+  git -C "$root" describe --tags --abbrev=0 --match 'v0.*' 'HEAD^' >/dev/null 2>&1 &&
     fail "the heading says no tag precedes HEAD, but one does"
 else
   range="$previous..HEAD"
-  [[ "$(git -C "$root" describe --tags --abbrev=0 --match 'v0.0.*' 'HEAD^' 2>/dev/null || true)" == "$previous" ]] ||
+  [[ "$(git -C "$root" describe --tags --abbrev=0 --match 'v0.*' 'HEAD^' 2>/dev/null || true)" == "$previous" ]] ||
     fail "the heading names '$previous', which is not the tag before HEAD"
 fi
 expected_commits="$(git -C "$root" log --first-parent --no-decorate --format='- `%h` %s' -n 300 "$range")"
@@ -273,13 +273,94 @@ if grep -v '^[[:space:]]*#' "$workflow" | grep -qE -- '--prerelease([^=]|=true|$
 fi
 grep -v '^[[:space:]]*#' "$workflow" | grep -qE -- 'gh release edit .*--draft=false --prerelease=false --latest( |$)' ||
   fail "release.yml does not publish the release as latest"
+# Ein Tag ohne gruenen Probelauf desselben Commits erreicht den Job release
+# nicht (HUM-060): guard fragt tools/ci-gate.sh nach dem Probelauf, verlangt
+# jeden Job gruen ausser release, und release haengt an guard. Das Tor selbst
+# testet tools/tests/ci_gate_test.sh; hier steht nur, dass guard es so ruft.
+dry_step="$(awk '/- name: A tag needs a green dry run of the same commit/ { on = 1 } on && /^  [a-z]/ { exit } on' "$workflow")"
+for want in "if: steps.version.outputs.publish == 'true'" 'HUMANITL_CI_WORKFLOW: release.yml' \
+  'HUMANITL_CI_EVERY_JOB: "1"' 'HUMANITL_CI_MAY_SKIP: release' \
+  'HUMANITL_CI_BRANCH="release-dry/$VERSION" tools/ci-gate.sh "$SHA"'; do
+  grep -qF -- "$want" <<<"$dry_step" || fail "guard does not check the dry run of a tag: missing '$want'"
+done
+grep -qE '^    needs: \[guard, ' "$workflow" || fail "the job release does not depend on guard"
 if grep -q -- '--title .*Vorabversion' "$workflow"; then
   fail "the release title in release.yml is German"
 fi
 
-# Eine Version ausserhalb des Kanals bricht weiterhin ab.
-if "$notes_script" 0.1.0 HEAD >/dev/null 2>&1; then
-  fail "0.1.0 is accepted by the 0.0.x channel"
+# Ab 0.1.0 (HUM-060): Die Notes beginnen mit dem Hinweis ohne "Early
+# release", dann kommt der Abschnitt der Version aus dem Changelog im
+# Wortlaut, dann der Rest wie bei 0.0.N. Der Changelog ist eine Vorlage in
+# einem Wegwerfverzeichnis, damit der Test nicht vom Stand der echten Datei
+# abhaengt.
+fixture="$(mktemp -d "${TMPDIR:-/tmp}/release-notes-test.XXXXXX")"
+trap 'rm -rf "$fixture"' EXIT
+cat >"$fixture/dated.md" <<'EOF'
+# Changelog
+
+## [Unreleased]
+
+- not this line
+
+## [0.1.0] - 2026-11-20
+
+### Added
+
+- the first release line
+
+### Security
+
+- the second release line
+
+## [0.0.20] - 2026-11-01
+
+- not this line either
+EOF
+sed 's/^## \[0\.1\.0\] - 2026-11-20$/## [0.1.0] - unreleased/' "$fixture/dated.md" >"$fixture/draft.md"
+
+release_notes="$(HUMANITL_CHANGELOG="$fixture/dated.md" "$notes_script" 0.1.0 HEAD 2>&1)" ||
+  fail "0.1.0 with a dated changelog section is refused: $release_notes"
+expected_head="$(
+  cat <<'EOF'
+> The artefacts of Humanitl 0.1.0 are **not signed**; `SHA256SUMS`
+> protects against a damaged download, not against a tampered release.
+> Signed packages come with 1.0.0. How to check a download:
+> https://github.com/nurkert/Humanitl/blob/main/docs/guides/verify-download.md
+
+Built from commit `@SHA@` on `main`, after its CI run was green.
+
+## What's new
+
+### Added
+
+- the first release line
+
+### Security
+
+- the second release line
+
+## Install (amd64)
+EOF
+)"
+actual_head="$(sed -E 's/`[0-9a-f]{12}`/`@SHA@`/' <<<"$release_notes" | sed '/^## Install (amd64)$/q')"
+if [[ "$actual_head" != "$expected_head" ]]; then
+  fail "the 0.1.0 notes do not start with the notice and the changelog section (diff: expected, actual)"
+  diff <(echo "$expected_head") <(echo "$actual_head") >&2 || true
+fi
+grep -q 'Early release' <<<"$release_notes" && fail "the 0.1.0 notes call it an early release"
+grep -q 'not this line' <<<"$release_notes" && fail "the 0.1.0 notes carry lines of another changelog section"
+grep -qx '## Install on macOS (Apple Silicon and Intel)' <<<"$release_notes" ||
+  fail "the 0.1.0 notes lost the install sections"
+
+# Ohne Datum (Entwurf) und ohne Abschnitt kein Release; 1.0.0 nie ohne Signatur.
+if HUMANITL_CHANGELOG="$fixture/draft.md" "$notes_script" 0.1.0 HEAD >/dev/null 2>&1; then
+  fail "0.1.0 with an undated changelog section is accepted"
+fi
+if HUMANITL_CHANGELOG="$fixture/dated.md" "$notes_script" 0.2.0 HEAD >/dev/null 2>&1; then
+  fail "0.2.0 without a changelog section is accepted"
+fi
+if HUMANITL_CHANGELOG="$fixture/dated.md" "$notes_script" 1.0.0 HEAD >/dev/null 2>&1; then
+  fail "1.0.0 is accepted although releases from 1.0.0 on need signatures"
 fi
 
 if [[ "$failures" -gt 0 ]]; then

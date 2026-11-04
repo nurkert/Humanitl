@@ -1,6 +1,8 @@
-# Releases 0.0.x: from a tag on a green `main` commit to a GitHub release
-# with .deb, .rpm, AppImage, archive and checksums. Since HUM-273 they are published as
-# regular releases (marked latest), no longer as pre-releases.
+# Releases 0.Y.Z (the pre-releases 0.0.N and, since HUM-060, 0.1.0 and later
+# before 1.0.0): from a tag on a green `main` commit to a GitHub release with
+# .deb, .rpm, AppImage, archive and checksums. Since HUM-273 they are published
+# as regular releases (marked latest), no longer as pre-releases. Releases
+# before 1.0.0 are not signed; SHA256SUMS is all they carry.
 #
 #   guard -> build -> check-deb ------------+-> release
 #                  -> check-rpm ------------+
@@ -8,9 +10,11 @@
 #                  -> check-appimage -------+
 #         -> build-macos -> check-macos ----+
 #
-# guard      Tag hat die Form v0.0.N, der Commit liegt auf `main`, und der
+# guard      Tag hat die Form v0.Y.Z, der Commit liegt auf `main`, und der
 #            ci.yml-Lauf dieses Commits ist mit `success` beendet. Im
 #            Probelauf nimmt guard die Version aus dem Zweignamen (unten).
+#            Ab 0.1.0 muss CHANGELOG.md einen datierten Abschnitt der Version
+#            haben (packaging/release/changelog-section.sh, HUM-060).
 # build      Version in den Auscheckstand stempeln, Release-Bau von humanitld,
 #            humanitl, humanitl-shim und der Flutter-App, `--version` pruefen,
 #            .deb, .rpm, AppImage und tar.gz bauen, SHA256SUMS, Release-Notes,
@@ -38,9 +42,9 @@
 # Artefakte als Workflow-Artefakt hoch und legt kein Release an; der Job
 # `release` wird uebersprungen. Ausgeloest wird er auf drei Wegen:
 #
-#   release-dry/0.0.N   Push dieses Zweigs durch tools/release.sh auf die
-#                       Spitze von main, bevor der Tag v0.0.N entsteht. Die
-#                       Version ist N, und guard ist so streng wie beim Tag:
+#   release-dry/0.Y.Z   Push dieses Zweigs durch tools/release.sh auf die
+#                       Spitze von main, bevor der Tag v0.Y.Z entsteht. Die
+#                       Version ist 0.Y.Z, und guard ist so streng wie beim Tag:
 #                       Liegt der Commit nicht auf main oder ist sein
 #                       ci.yml-Lauf nicht gruen, ist der Probelauf rot.
 #   release-dry/hum-NNN Push durch tools/commit-issue.sh, wenn ein Issue-Commit
@@ -54,18 +58,20 @@
 #
 # Ein Tag wird nur gesetzt, wenn der Probelauf seines Commits gruen ist: Ein
 # roter Tag-Lauf hinterliesse eine Nummer ohne Release, denn Tags werden nie
-# verschoben (v0.0.14). Wie man eine Vorabversion schneidet, steht in
-# CONTRIBUTING.md: nur mit tools/release.sh.
+# verschoben (v0.0.14). Wie man ein Release schneidet, steht in
+# docs/guides/release-process.md: nur mit tools/release.sh.
 #
 # Vorher stand hier das Geruest aus HUM-002 fuer alle `v*`-Tags (guard, make
 # check, leerer package-Schritt, Draft-Release ohne Dateien). Der Trigger ist
-# jetzt auf v0.0.* verengt: Ein Tag v0.1.0 loest hier nichts aus. 0.1.0 ist
-# HUM-060 (backlog/sprint-5.md) mit VERSION-Datei, Changelog und minisign;
-# das Issue erweitert diese Datei, statt eine zweite anzulegen. Das AppImage
-# liegt seit HUM-335 schon den 0.0.x-Releases bei, das RPM seit HUM-339.
+# auf v0.* verengt: Ein Tag v1.0.0 loest hier nichts aus, und guard lehnt ihn
+# ab, denn ab 1.0.0 sind Releases signiert (Entscheidung des Inhabers vom
+# 2026-10-22). HUM-060 hat 0.1.0 hier aufgenommen, statt eine zweite Datei
+# anzulegen: ohne VERSION-Datei und ohne minisign, die Version kommt aus dem
+# Tag, die Notes ab 0.1.0 aus CHANGELOG.md. Das AppImage liegt seit HUM-335
+# den Releases bei, das RPM seit HUM-339.
 #
 # Sicherheit: Tag-Name, Zweigname und Eingabe gelangen nur ueber `env:` in
-# Skripte und werden dort gegen ^0\.0\.N$ beziehungsweise ^hum-NNN$ geprueft,
+# Skripte und werden dort gegen ^0\.Y\.Z$ beziehungsweise ^hum-NNN$ geprueft,
 # bevor sie irgendwo anders stehen. Nur der Job `release` darf schreiben
 # (contents: write), und er laeuft nur fuer einen Tag-Push: Ein Probelauf
 # erreicht ihn weder ueber guard (publish ist dort false) noch ueber seine
@@ -78,17 +84,17 @@ name: release
 on:
   push:
     tags:
-      - "v0.0.*"
+      - "v0.*"
     # Probelaeufe (HUM-363): tools/release.sh und tools/commit-issue.sh pushen
     # diese Zweige, weil das Werkzeug nur git-Zugriff hat und kein Token, das
     # workflow_dispatch ausloesen koennte.
     branches:
-      - "release-dry/0.0.*"
+      - "release-dry/0.*"
       - "release-dry/hum-*"
   workflow_dispatch:
     inputs:
       version:
-        description: "Version for the dry run, 0.0.N. Builds and checks everything, creates no release."
+        description: "Version for the dry run, 0.Y.Z. Builds and checks everything, creates no release."
         required: true
         type: string
 
@@ -114,7 +120,7 @@ jobs:
     name: guard
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    # Ein Fork oder Spiegel, der einen v0.0.*-Tag schiebt, soll kein Release in
+    # Ein Fork oder Spiegel, der einen v0.*-Tag schiebt, soll kein Release in
     # seinem Namen anlegen und nie den Job mit contents: write erreichen. Der
     # Test ist der Repository-Name, nicht `github.event.repository.fork`: Ein
     # Spiegel ist kein Fork, und ein uebersprungener guard nimmt jeden Job mit,
@@ -187,8 +193,10 @@ jobs:
           fi
           # Das enge Muster ist die eigentliche Sperre gegen einen praeparierten
           # Tag-Namen: Nach dieser Zeile ist die Version nur noch Ziffern und Punkte.
-          if [[ ! "$candidate" =~ ^0\.0\.(0|[123456789][0123456789]{0,5})$ ]]; then
-            echo "::error::'$candidate' is not a 0.0.N version. This workflow publishes 0.0.x releases only; 0.1.0 is HUM-060."
+          # Dasselbe Muster wie packaging/release/version.sh: 0.Y.Z, nie 1.0.0
+          # oder hoeher, denn ab 1.0.0 sind Releases signiert.
+          if [[ ! "$candidate" =~ ^0\.(0|[123456789][0123456789]{0,5})\.(0|[123456789][0123456789]{0,5})$ ]]; then
+            echo "::error::'$candidate' is not a 0.Y.Z version. This workflow publishes unsigned releases before 1.0.0 only."
             exit 1
           fi
           if [[ ! "$SHA" =~ ^[0123456789abcdef]{40}$ ]]; then
@@ -214,6 +222,21 @@ jobs:
           # merge-base braucht die Historie von main.
           fetch-depth: 0
 
+      - name: From 0.1.0 on, CHANGELOG.md has a dated section for the version
+        # Die Notes ab 0.1.0 beginnen mit diesem Abschnitt (HUM-060). Hier
+        # faellt ein Entwurf ohne Datum nach Sekunden auf statt erst am Ende
+        # des Baus; die Vorabversionen 0.0.N haben keinen Abschnitt.
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          source packaging/release/version.sh
+          if is_prerelease_version "$VERSION"; then
+            echo "$VERSION is a pre-release; no changelog section needed"
+          else
+            packaging/release/changelog-section.sh "$VERSION"
+          fi
+
       - name: The commit is on main and its CI run is green
         env:
           GH_TOKEN: ${{ github.token }}
@@ -223,7 +246,7 @@ jobs:
           set -euo pipefail
           # Im Probelauf eines Issue-Zweigs oder von Hand ist ein Verstoss eine
           # Warnung: Er soll auch einen Zweig bauen koennen. Fuer einen Tag und
-          # fuer den Probelauf release-dry/0.0.N ist er ein Fehler.
+          # fuer den Probelauf release-dry/0.Y.Z ist er ein Fehler.
           complain() {
             if [[ "$STRICT_GUARD" == "true" ]]; then
               echo "::error::$1"
@@ -261,6 +284,35 @@ jobs:
             echo "ci.yml run for $SHA: success ($url)"
           fi
 
+      - name: A tag needs a green dry run of the same commit
+        # Ein Tag, der von Hand gepusht wurde statt mit tools/release.sh, kaeme
+        # sonst ohne Probelauf bis zum Job release (Review HUM-060). Verlangt
+        # wird der juengste Lauf dieses Workflows auf release-dry/<version>
+        # fuer genau diesen Commit, beendet, jeder Job gruen ausser dem
+        # uebersprungenen release. tools/ci-gate.sh ist dasselbe Tor, das
+        # tools/release.sh benutzt, und gegen eine nachgestellte API getestet
+        # (tools/tests/ci_gate_test.sh). Nur fuer Tags; ein Probelauf prueft
+        # sich nicht selbst.
+        if: steps.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ github.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          HUMANITL_CI_REPO: ${{ github.repository }}
+          HUMANITL_CI_WORKFLOW: release.yml
+          HUMANITL_CI_EVERY_JOB: "1"
+          HUMANITL_CI_MAY_SKIP: release
+          HUMANITL_CI_FIRST_WAIT: "0"
+          HUMANITL_CI_POLL: "10"
+        run: |
+          set -euo pipefail
+          rc=0
+          HUMANITL_CI_BRANCH="release-dry/$VERSION" tools/ci-gate.sh "$SHA" 900 || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::no green dry run on release-dry/$VERSION for $SHA (ci-gate exit $rc). Tags come only from tools/release.sh after a green dry run; nothing is published. Never move this tag: fix it on main and release the next patch version with tools/release.sh."
+            exit 1
+          fi
+
   build:
     name: build
     needs: guard
@@ -271,7 +323,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          # Die Release-Notes listen die Commits seit dem vorigen v0.0.*-Tag,
+          # Die Release-Notes listen die Commits seit dem vorigen v0.*-Tag,
           # und die Build-Nummer der App ist die Zahl der Commits.
           fetch-depth: 0
       - uses: ./.github/actions/setup-rust
@@ -300,7 +352,7 @@ jobs:
 
       - name: Stamp the version into this checkout
         # Nur in diesem Auscheckstand; committet wird nichts. Im Repository
-        # bleibt 0.0.0 stehen, bis HUM-060 die VERSION-Datei einfuehrt.
+        # bleibt 0.0.0 stehen; die Quelle der Version ist der Tag (HUM-060).
         run: |
           set -euo pipefail
           ./packaging/release/stamp-version.sh "$VERSION"
@@ -710,7 +762,7 @@ jobs:
       needs.guard.outputs.publish == 'true' &&
       github.event_name == 'push' &&
       github.ref_type == 'tag' &&
-      startsWith(github.ref, 'refs/tags/v0.0.')
+      startsWith(github.ref, 'refs/tags/v0.')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

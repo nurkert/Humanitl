@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Schreibt das Update-Manifest zu einer Release-Datei und signiert es (HUM-382).
 #
-# Aufruf: packaging/release/sign-update.sh <0.0.N> <datei> <manifest-name> <min-os> <out-dir>
+# Aufruf: packaging/release/sign-update.sh <0.Y.Z> <datei> <manifest-name> <min-os> <out-dir>
 #
 # Das Manifest ist JSON mit version, url, sha256, size und min_os; die URL
 # zeigt auf die Datei unter den Assets genau dieses Releases. Signiert werden
@@ -20,7 +20,7 @@
 # gilt: Ein falsches Geheimnis ergäbe sonst Releases, die keine App annimmt.
 set -euo pipefail
 
-[[ $# -eq 5 ]] || { echo "usage: $0 <0.0.N> <file> <manifest-name> <min-os> <out-dir>" >&2; exit 2; }
+[[ $# -eq 5 ]] || { echo "usage: $0 <0.Y.Z> <file> <manifest-name> <min-os> <out-dir>" >&2; exit 2; }
 version="$1"
 file="$2"
 manifest_name="$3"
@@ -30,7 +30,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 # shellcheck source=packaging/release/version.sh
 source "$here/version.sh"
-require_prerelease_version "$version"
+require_release_version "$version"
 [[ "$manifest_name" =~ ^update-[a-z0-9_-]+\.json$ ]] || { echo "error: bad manifest name '$manifest_name'" >&2; exit 2; }
 [[ "$min_os" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] || { echo "error: bad min-os '$min_os'" >&2; exit 2; }
 [[ -f "$file" ]] || { echo "error: $file does not exist" >&2; exit 2; }

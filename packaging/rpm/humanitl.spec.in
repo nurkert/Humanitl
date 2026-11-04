@@ -57,8 +57,7 @@ Suggests:       libayatana-appindicator3.so.1()(64bit)
 Runs an AI coding agent in a sandbox without a network interface and
 holds every outbound request for human review.
 
-This is a 0.0.x early release ahead of the 0.1.0 MVP. It is unsigned and
-not meant for production use.
+Releases before 1.0.0 are unsigned; each release carries SHA256SUMS.
 
 %prep
 
@@ -94,4 +93,4 @@ cp -a '@TREE@/.' '%{buildroot}/'
 
 %changelog
 * @CHANGELOG_DATE@ Niko Burkert <humanitl@nurkert.de> - @VERSION@-1
-- Early release @VERSION@ from commit @COMMIT@, not for production use.
+- Release @VERSION@ from commit @COMMIT@.

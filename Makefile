@@ -83,6 +83,7 @@ deps-lint: ## Enforce the dependency direction (HUM-074) and the coupling ratche
 	python3 tools/check_coupling.py
 	python3 tools/tests/check_coupling_test.py
 	./packaging/release/release-notes-test.sh
+	./packaging/release/changelog-section-test.sh
 	./packaging/deb/maintscripts-test.sh
 	./packaging/rpm/scriptlets-test.sh
 
@@ -227,18 +228,18 @@ flutter-test-integration: flutter-codegen ## The app on a screen, against a real
 proto: ## Regenerate protobuf code for Rust and Dart (HUM-003)
 	@export PATH="$(TOOLS_PATH)"; ./scripts/gen-proto.sh
 
-# Pakete aus einem Release-Bau (HUM-053): `make package PACKAGE_VERSION=0.0.N`
+# Pakete aus einem Release-Bau (HUM-053): `make package PACKAGE_VERSION=0.Y.Z`
 # legt `dist/humanitl_<ver>_amd64.deb` und `dist/Humanitl-<ver>-x86_64.AppImage`
 # ab. Die Reihenfolge ist die der Spezifikation: erst die drei Programme nach
 # app/linux/bundle-extra/, dann das Flutter-Bundle (CMakeLists.txt legt sie nach
 # bin/), dann die Pakete. Die Version kommt aus dem Aufruf und wird in den
-# Skripten gegen ^0\.0\.N$ geprueft; in die Quelltexte stempelt sie nur der
+# Skripten gegen ^0\.Y\.Z$ geprueft; in die Quelltexte stempelt sie nur der
 # Release-Lauf (packaging/release/stamp-version.sh), hier steht, was im
 # Auscheckstand steht.
 PACKAGE_VERSION ?= 0.0.0
 PACKAGE_BUNDLE := app/build/linux/x64/release/bundle
 
-package: flutter-codegen ## .deb and AppImage from a release build (HUM-053), PACKAGE_VERSION=0.0.N
+package: flutter-codegen ## .deb and AppImage from a release build (HUM-053), PACKAGE_VERSION=0.Y.Z
 	@export PATH="$(TOOLS_PATH)"; set -euo pipefail; \
 	./packaging/release/build-binaries.sh app/linux/bundle-extra; \
 	(cd app && flutter build linux --release --build-name "$(PACKAGE_VERSION)"); \

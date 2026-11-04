@@ -1,11 +1,11 @@
 Humanitl @VERSION@ - archive for Linux x86_64
 =============================================
 
-This is an early release on the way to the first full release 0.1.0. It is
-not meant for productive use, it is not signed, and it carries only a
-SHA-256 checksum; signatures come with 1.0.0. The preferred way is the
-package humanitl_@VERSION@_amd64.deb from the same release; this archive is
-meant for systems without dpkg or for trying Humanitl without installing it.
+Releases before 1.0.0 are not signed; the release carries only SHA-256
+checksums in SHA256SUMS, and signatures come with 1.0.0. The preferred way is
+the package humanitl_@VERSION@_amd64.deb from the same release; this archive
+is meant for systems without dpkg or for trying Humanitl without installing
+it.
 
 
 For comparison: the package (.deb)
@@ -31,7 +31,8 @@ two removal commands unregisters socket and service again; after
 Requirements for this archive
 -----------------------------
 
-- Linux x86_64 with glibc and GTK 3 (for example Debian 13 or Ubuntu 24.04).
+- Linux x86_64 with glibc 2.39 or newer and GTK 3: Debian 13, Ubuntu 24.04,
+  Fedora 40 or newer. Debian 12 and Ubuntu 22.04 are too old.
 - bubblewrap 0.8 or newer (package `bubblewrap`): without `bwrap` no
   sandbox starts.
 - Unprivileged user namespaces. A fresh Ubuntu 24.04 blocks them through
@@ -45,6 +46,10 @@ Checksum
 --------
 
     sha256sum -c SHA256SUMS --ignore-missing
+
+What this proves and what it does not: docs/guides/verify-download.md in the
+repository
+(https://github.com/nurkert/Humanitl/blob/main/docs/guides/verify-download.md).
 
 
 Starting

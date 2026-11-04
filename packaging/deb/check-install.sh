@@ -3,7 +3,7 @@
 # wieder. Nie auf einem echten Rechner ausfuehren: Das Skript installiert als
 # root und entfernt danach mit `--purge`.
 #
-# Aufruf (als root, im Container): check-install.sh <deb> <0.0.N>
+# Aufruf (als root, im Container): check-install.sh <deb> <0.Y.Z>
 #
 # Geprueft wird, was ein Mensch mit `sudo apt install ./humanitl_…deb` erlebt:
 #   1. apt loest die Abhaengigkeiten aus dem Archiv auf (sonst stimmt Depends nicht);
@@ -23,7 +23,7 @@
 #      nirgends im Dateisystem steht noch etwas mit "humanitl" im Namen.
 set -euo pipefail
 
-[[ $# -eq 2 ]] || { echo "usage: $0 <deb> <0.0.N>" >&2; exit 2; }
+[[ $# -eq 2 ]] || { echo "usage: $0 <deb> <0.Y.Z>" >&2; exit 2; }
 deb="$(readlink -f "$1")"
 version="$2"
 [[ "$(id -u)" -eq 0 ]] || { echo "error: run as root inside a throwaway container" >&2; exit 1; }

@@ -548,7 +548,7 @@ ausstehende Schicht; ihre Änderungen gehen dann verloren, und die Aufzeichnung 
 | A-2 | der Kernel ist 5.4 oder neuer (das Minimum, das `humanitl doctor` prüft, getestet ab 5.10) mit seccomp-BPF | `uname -r`; `grep Seccomp /proc/self/status` | das Kind des Shims kann den Filter nicht installieren und hält vor dem `exec` an (`SANDBOX_016`, oder `SANDBOX_013` ohne Bericht) |
 | A-3 | der Mensch liest, was er freigibt | technisch nicht prüfbar; das Fenster macht das Lesen billig: Funde zuerst, vollständiger Body, Ziel als Identität | Humanitl ist dann ein Recorder, kein Schutz; der Verlauf zeigt trotzdem, was freigegeben wurde |
 | A-4 | der LLM-Host steht unter der Kontrolle des Nutzers | `humanitl config get llm.endpoint`; Zeile 4 des Isolationsbereichs | der Modellkanal ist voller Zugriff auf alles, was der Agent dem Modell schickt |
-| A-5 | der Rechner ist nicht kompromittiert | Paketsignatur, `systemctl --user status humanitld` | jede Aussage hier ist hinfällig |
+| A-5 | der Rechner ist nicht kompromittiert | der Download gegen `SHA256SUMS` seines Releases ([verify-download](guides/verify-download.md); signiert wird ab 1.0.0), `systemctl --user status humanitld` | jede Aussage hier ist hinfällig |
 | A-6 | die Sandbox-Profile sind die mitgelieferten oder absichtlich geänderte | `humanitl sandbox argv` | ein zusätzlicher Socket lässt die Isolationsprüfung scheitern; ein zusätzlicher Datei-Mount ist nur in der bwrap-Zeile sichtbar |
 
 ## Außerhalb des Umfangs
@@ -567,7 +567,9 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 - **Physischer Zugriff**, eine nicht gesperrte Sitzung, Cold-Boot-Angriffe, Speicherabbilder.
 - **Ein böswilliger Nutzer.** Wer eine Anfrage freigibt, gibt sie frei. Humanitl liefert die
   Grundlage für die Entscheidung; es trifft sie nicht und setzt sich nicht über sie hinweg. Manipulierte
-  Humanitl-Binaries gehören ebenfalls hierher; ihre Gegenmaßnahme ist die Paketsignatur (HUM-060).
+  Humanitl-Binaries gehören ebenfalls hierher. Releases vor 1.0.0 sind nicht signiert: `SHA256SUMS`
+  erkennt einen beschädigten Download, kein manipuliertes Release; signierte Releases kommen mit
+  1.0.0 (HUM-060). Updates aus der App prüfen ein signiertes Manifest (K-25).
 - **Mikroarchitektur- und Zeit-Seitenkanäle**, elektromagnetische Abstrahlung.
 - **Denial of Service** gegen den Agenten oder den Daemon.
 

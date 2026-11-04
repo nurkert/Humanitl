@@ -4,7 +4,7 @@
 # echten Rechner ausfuehren: Das Skript installiert als root und legt Nutzer an.
 #
 # Aufruf (als root, im Container archlinux:base-devel):
-#   check-aur.sh <render-dir> <tarball> <0.0.N> [<reference-deb>]
+#   check-aur.sh <render-dir> <tarball> <0.Y.Z> [<reference-deb>]
 #
 #   <render-dir>     Ausgabe von packaging/aur/render.sh fuer diese Version
 #   <tarball>        das Release-Archiv humanitl-<version>-linux-x86_64.tar.gz,
@@ -31,7 +31,7 @@
 #      Dateisystem steht noch etwas mit "humanitl" im Namen.
 set -euo pipefail
 
-[[ $# -eq 3 || $# -eq 4 ]] || { echo "usage: $0 <render-dir> <tarball> <0.0.N> [<reference-deb>]" >&2; exit 2; }
+[[ $# -eq 3 || $# -eq 4 ]] || { echo "usage: $0 <render-dir> <tarball> <0.Y.Z> [<reference-deb>]" >&2; exit 2; }
 render="$(readlink -f "$1")"
 tarball="$(readlink -f "$2")"
 version="$3"

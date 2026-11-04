@@ -1,24 +1,27 @@
 #!/usr/bin/env bash
-# Schneidet eine Vorabversion 0.0.N so, dass ihr Tag nie scheitert (HUM-363).
+# Schneidet ein Release 0.Y.Z so, dass sein Tag nie scheitert (HUM-363,
+# HUM-060): die Vorabversionen 0.0.N und ab 0.1.0 die Releases vor 1.0.0.
 #
-# Aufruf: tools/release.sh 0.0.N [commit]
+# Aufruf: tools/release.sh 0.Y.Z [commit]
 #
-# Ein Tag v0.0.N wird nie verschoben (CONTRIBUTING.md). Scheitert der Lauf von
+# Ein Tag v0.Y.Z wird nie verschoben (CONTRIBUTING.md). Scheitert der Lauf von
 # `.github/workflows/release.yml` nach dem Tag, bleibt die Nummer ohne Release,
 # und die Liste der Releases auf GitHub hat eine Luecke; so ging es v0.0.14.
 # Deshalb setzt dieses Skript den Tag erst, wenn derselbe Commit den ganzen
 # Release-Bau schon einmal bestanden hat:
 #
-#   1. N ist genau die naechste Nummer: eins mehr als der hoechste
-#      v0.0.*-Tag auf origin, keine Luecke, keine Wiederholung.
+#   1. Die Version ist genau eine naechste: Nach dem hoechsten Tag v0.Y.Z
+#      auf origin kommt nur 0.Y.(Z+1) oder 0.(Y+1).0, keine Luecke, keine
+#      Wiederholung. 1.0.0 lehnt das Skript ab: Ab 1.0.0 sind Releases
+#      signiert, und die Signatur gibt es noch nicht.
 #   2. Der Commit ist die Spitze von origin/main (wer einen Commit nennt,
 #      muss genau diese Spitze nennen), und sein ci.yml-Lauf auf main ist
 #      gruen (tools/ci-gate.sh).
-#   3. Der Commit wird als Zweig `release-dry/0.0.N` gepusht. Das loest den
+#   3. Der Commit wird als Zweig `release-dry/0.Y.Z` gepusht. Das loest den
 #      Probelauf von release.yml aus: alle Bau- und Pruefjobs mit genau
 #      dieser Version, ohne den Job `release`. Das Tor wartet, bis jeder Job
 #      gruen ist (`release` darf und muss uebersprungen sein).
-#   4. Erst dann entsteht der annotierte Tag `v0.0.N` ("Humanitl 0.0.N") auf
+#   4. Erst dann entsteht der annotierte Tag `v0.Y.Z` ("Humanitl 0.Y.Z") auf
 #      demselben Commit und wird gepusht; der Probelauf-Zweig wird geloescht.
 #   5. Das Skript wartet auf den Lauf des Tags und nennt die Adresse des
 #      Releases.
@@ -67,15 +70,16 @@ undecided() {
   exit 3
 }
 
-[[ $# -ge 1 && $# -le 2 ]] || { echo "usage: tools/release.sh 0.0.N [commit]" >&2; exit 2; }
+[[ $# -ge 1 && $# -le 2 ]] || { echo "usage: tools/release.sh 0.Y.Z [commit]" >&2; exit 2; }
 version="$1"
 # Dasselbe enge Muster wie in release.yml und packaging/release/version.sh;
 # die Ziffern stehen einzeln, damit keine Ziffer einer anderen Schrift passt.
-if [[ ! "$version" =~ ^0\.0\.(0|[123456789][0123456789]{0,5})$ ]]; then
-  echo "release: '$version' is not a 0.0.N version (0.1.0 is HUM-060)" >&2
+if [[ ! "$version" =~ ^0\.(0|[123456789][0123456789]{0,5})\.(0|[123456789][0123456789]{0,5})$ ]]; then
+  echo "release: '$version' is not a 0.Y.Z version (1.0.0 and later need signed releases)" >&2
   exit 2
 fi
-n="${BASH_REMATCH[1]}"
+minor="${BASH_REMATCH[1]}"
+patch="${BASH_REMATCH[2]}"
 tag="v$version"
 dry="release-dry/$version"
 
@@ -86,35 +90,43 @@ if [[ -z "$repo" ]]; then
   repo="${repo%.git}"
 fi
 
-# Der hoechste v0.0.*-Tag auf dem Server, als Zahl; -1, wenn es keinen gibt.
-# Gefragt wird origin, nicht die lokalen Tags: Ein lokal fehlender oder lokal
-# zusaetzlicher Tag soll die Nummer nicht verschieben.
-latest_remote_n() {
+# Der hoechste Tag v0.Y.Z auf dem Server als "Y Z"; leer, wenn es keinen
+# gibt. Gefragt wird origin, nicht die lokalen Tags: Ein lokal fehlender oder
+# lokal zusaetzlicher Tag soll die Nummer nicht verschieben.
+latest_remote() {
   local refs
-  refs="$(git ls-remote --tags --refs "$remote" 'refs/tags/v0.0.*')" || die "cannot list the tags of $remote"
+  refs="$(git ls-remote --tags --refs "$remote" 'refs/tags/v0.*')" || die "cannot list the tags of $remote"
   python3 -I -c '
 import re, sys
-best = -1
+best = None
 for line in sys.stdin.read().splitlines():
-    m = re.fullmatch(r"[0-9a-f]+\trefs/tags/v0\.0\.(0|[1-9][0-9]{0,5})", line)
+    m = re.fullmatch(r"[0-9a-f]+\trefs/tags/v0\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", line)
     if m:
-        best = max(best, int(m.group(1)))
-print(best)
+        v = (int(m.group(1)), int(m.group(2)))
+        best = v if best is None else max(best, v)
+if best is not None:
+    print(best[0], best[1])
 ' <<< "$refs"
 }
 
-# Die Nummer muss genau die naechste sein.
+# Die Version muss genau eine naechste sein: nach v0.Y.Z nur 0.Y.(Z+1) oder
+# 0.(Y+1).0. So bleibt 0.0.N wie bisher eins mehr als die hoechste Nummer,
+# und 0.1.0 folgt auf jede 0.0.N.
 check_next() {
-  local latest
-  latest="$(latest_remote_n)"
-  if ((n <= latest)); then
-    die "$tag is not new: $remote already has v0.0.$latest; the next version is 0.0.$((latest + 1))"
+  local latest lmin lpat bump_patch bump_minor
+  latest="$(latest_remote)"
+  if [[ -z "$latest" ]]; then
+    [[ "$version" == 0.0.0 ]] || die "$remote has no v0.* tag yet; the first version is 0.0.0, not $version"
+    return 0
   fi
-  if ((n != latest + 1)); then
-    if ((latest < 0)); then
-      die "$remote has no v0.0.* tag yet; the first version is 0.0.0, not $version"
-    fi
-    die "$version leaves a gap after v0.0.$latest; the next version is 0.0.$((latest + 1))"
+  read -r lmin lpat <<< "$latest"
+  bump_patch="0.$lmin.$((lpat + 1))"
+  bump_minor="0.$((lmin + 1)).0"
+  if ((minor < lmin || (minor == lmin && patch <= lpat))); then
+    die "$tag is not new: $remote already has v0.$lmin.$lpat; the next version is $bump_patch or $bump_minor"
+  fi
+  if [[ "$version" != "$bump_patch" && "$version" != "$bump_minor" ]]; then
+    die "$version leaves a gap after v0.$lmin.$lpat; the next version is $bump_patch or $bump_minor"
   fi
 }
 
@@ -130,13 +142,24 @@ if [[ $# -eq 2 ]]; then
 fi
 # Ein lokaler Tag desselben Namens wird nur hingenommen, wenn er genau der
 # ist, den dieses Skript setzen wuerde (ein abgebrochener frueherer Aufruf):
-# annotiert, "Humanitl 0.0.N", auf diesem Commit. Auf origin gibt es ihn nach
+# annotiert, "Humanitl 0.Y.Z", auf diesem Commit. Auf origin gibt es ihn nach
 # check_next nicht.
 if git rev-parse --verify --quiet "refs/tags/$tag" > /dev/null; then
   if [[ "$(git for-each-ref --format='%(objecttype) %(contents:subject)' "refs/tags/$tag")" != "tag Humanitl $version" ]] \
     || [[ "$(git rev-parse "refs/tags/$tag^{commit}")" != "$sha" ]]; then
     die "a local tag $tag exists that this script did not set on ${sha:0:12}; delete it with \`git tag -d $tag\` (it is not on $remote)"
   fi
+fi
+# Ab 0.1.0 beginnen die Notes mit dem Abschnitt der Version aus CHANGELOG.md
+# (HUM-060). Ein fehlender Abschnitt oder ein Entwurf ohne Datum im Commit
+# liesse erst den Probelauf scheitern; hier faellt er auf, bevor etwas
+# gepusht wird. Geprueft wird die Datei im Commit, nicht im Arbeitsbaum.
+if [[ "$version" != 0.0.* ]]; then
+  changelog_tmp="$(mktemp)"
+  trap 'rm -f "$changelog_tmp"' EXIT
+  git show "$sha:CHANGELOG.md" > "$changelog_tmp" 2> /dev/null || die "${sha:0:12} has no CHANGELOG.md; $version needs a section in it"
+  packaging/release/changelog-section.sh "$version" "$changelog_tmp" > /dev/null \
+    || die "CHANGELOG.md in ${sha:0:12} has no dated section for $version (see above); commit '## [$version] - YYYY-MM-DD' to main first, nothing was pushed"
 fi
 echo "release: $version on ${sha:0:12}, the tip of $remote/main"
 
