@@ -23,6 +23,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/domain/domain.dart';
 import '../../core/ipc/connection.dart';
 import '../../core/recorder/recorder_health.dart';
+import '../../core/shortcuts/shortcut_catalog.dart';
 import '../../core/ui/h_resizable_panes.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
@@ -54,16 +55,22 @@ import 'widgets/selection_card.dart';
 /// `Ctrl+Enter` block. A chord that stayed outside the lock would allow one
 /// request, let the selection move on and allow the next one as soon as it
 /// armed -- from one finger that never came up (`docs/UX.md` 5.4).
+///
+/// Read from the catalogue (HUM-420): the triggers of every entry that
+/// decides. `S` sends from the findings pause (HUM-049) and from the recorder
+/// pause (HUM-250).
 final Set<LogicalKeyboardKey> decisionKeys = <LogicalKeyboardKey>{
-  LogicalKeyboardKey.enter,
-  LogicalKeyboardKey.numpadEnter,
-  LogicalKeyboardKey.keyA,
-  LogicalKeyboardKey.keyB,
-  LogicalKeyboardKey.keyF,
-  LogicalKeyboardKey.keyL,
-  // `S` sends from the findings pause (HUM-049) and from the recorder pause
-  // (HUM-250).
-  LogicalKeyboardKey.keyS,
+  for (final AppShortcut shortcut in const <AppShortcut>[
+    AppShortcut.allow,
+    AppShortcut.allowAnywhere,
+    AppShortcut.block,
+    AppShortcut.blockAnywhere,
+    AppShortcut.allowGroup,
+    AppShortcut.blockGroup,
+    AppShortcut.sendAnyway,
+  ])
+    for (final ShortcutActivator activator in shortcut.activators)
+      (activator as SingleActivator).trigger,
 };
 
 /// True while the shell actually paints this section.

@@ -11954,3 +11954,47 @@ darunter. Kein neuer RPC, der Daemon bleibt unverändert.
 **Akzeptanz.** Widget-Tests für Knopf, Titel, Text, Öffnen bei geschlossenem
 Panel und bei noch nicht geladener Liste, und dass eine andere Ursache von
 `SANDBOX_030` keinen Knopf bekommt; Mutationsbeweis.
+
+---
+
+## HUM-420 · A read-only "Keyboard shortcuts" category, from one catalogue of the bound shortcuts
+
+**Anlass.** Owner am 2026-11-04: Alle Tastenkürzel sollen in den
+Einstellungen einen eigenen Bereich bekommen. Konfigurierbar kommt nach
+0.1.0 (HUM-421); für 0.1.0 eine Übersicht, die nur liest.
+
+**Umsetzung.** Ein Katalog in `app/lib/core/shortcuts/shortcut_catalog.dart`
+(`AppShortcut`: Bereich, Aktivatoren, Beschriftung) ist die einzige Quelle
+der über einen Aktivator gebundenen Kürzel; alle Bindungen der App lesen
+ihre Tasten von dort, ohne dass sich eine Taste, ein Bereich oder eine
+Wiederholregel ändert. Die Kategorie „Tastenkürzel“ im Overlay (HUM-404)
+zeigt sie nach Bereich gruppiert als Tastenkappen, auf macOS ⌘ nur, wo die
+Bindung wirklich auf ⌘ hört, und die Suche findet sie nach Namen und Taste.
+Allgemeines Verhalten der Bausteine in `humanitl_ui` (Esc schließt einen
+Dialog, Pfeile in einem Steuerelement) steht als begründete Ausnahme im
+Test.
+
+**Akzeptanz.** Ein Test findet jede Taste, die am Katalog vorbei gebunden
+wird (Aktivatoren, Tastennamen, Handler, auch in `packages/ui`), und jede
+Ausnahme muss noch nötig sein; je Bereich beantwortet das gebundene Widget
+die Taste aus dem Katalog; keine doppelte Taste in einem Bereich; Suche in
+Deutsch und Englisch; Goldens und Screenshots mit echter Schrift;
+Mutationsbeweise.
+
+---
+
+## HUM-421 · Shortcuts can be changed in the settings
+
+**Anlass.** Owner am 2026-11-04, nach 0.1.0. Baut auf dem Katalog aus
+HUM-420 auf.
+
+**Vorhaben (Spezifikation vor dem Bau ausarbeiten).** Ein Resolver
+`activatorsOf(AppShortcut)` mit Vorgaben aus dem Katalog und Überschreibungen
+aus `ui.shortcuts` in `config.toml` (über `SetConfig`, ADR-018); in der
+Kategorie aus HUM-420 je Zeile „Taste drücken zum Aufnehmen“, Zurücksetzen
+je Zeile und für alle. Konflikte werden abgelehnt: dieselbe Taste zweimal
+in einem Bereich, Tasten, die das Terminal dem Agenten wegnehmen würden,
+und die Schutzregeln der Warteschlange (`docs/UX.md`: Enter, Space und
+Einzelbuchstaben dürfen keine Entscheidung aus Versehen auslösen). Palette,
+Hover-Hinweise und Beschriftungen zeigen die eigene Belegung; macOS bildet
+Strg auf ⌘ ab, wo die Vorgabe es tut.

@@ -3,9 +3,9 @@
 /// overlay layer and owns its open state.
 library;
 
-import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../../../core/shortcuts/shortcut_catalog.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 
@@ -130,13 +130,12 @@ class _CommandPaletteState extends State<CommandPalette> {
       // es muss ihr nicht ausweichen (HUM-300).
       keepClear: false,
       child: CallbackShortcuts(
-        bindings: <ShortcutActivator, VoidCallback>{
-          const SingleActivator(LogicalKeyboardKey.arrowDown): () => _move(1),
-          const SingleActivator(LogicalKeyboardKey.arrowUp): () => _move(-1),
-          const SingleActivator(LogicalKeyboardKey.enter): _run,
-          const SingleActivator(LogicalKeyboardKey.numpadEnter): _run,
-          const SingleActivator(LogicalKeyboardKey.escape): widget.onClose,
-        },
+        bindings: AppShortcut.bind<VoidCallback>(<AppShortcut, VoidCallback>{
+          AppShortcut.paletteNext: () => _move(1),
+          AppShortcut.palettePrevious: () => _move(-1),
+          AppShortcut.paletteRun: _run,
+          AppShortcut.paletteClose: widget.onClose,
+        }),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,

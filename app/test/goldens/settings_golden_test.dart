@@ -161,6 +161,14 @@ void main() {
     builder: (GoldenVariant variant) => sheet(variant, configured()),
   );
 
+  // Die Tastenkürzel (HUM-420): Gruppen, Namen links, Kappen rechts.
+  goldenVariants(
+    'settings_shortcuts',
+    constraints: window,
+    pumpBeforeTest: category(SettingsCategory.shortcuts),
+    builder: (GoldenVariant variant) => sheet(variant, configured()),
+  );
+
   // „e" trifft in beiden Sprachen Zeilen mehrerer Kategorien.
   goldenVariants(
     'settings_search_results',

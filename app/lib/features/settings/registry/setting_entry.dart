@@ -5,6 +5,7 @@ library;
 import 'package:flutter/widgets.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/shortcuts/shortcut_catalog.dart';
 import '../../../l10n/l10n.dart';
 
 /// The categories of the overlay, in the order of the left column.
@@ -25,6 +26,9 @@ enum SettingsCategory {
   /// Language, appearance, scale and notifications of this window.
   interface,
 
+  /// Every keyboard shortcut of the application, read only (HUM-420).
+  shortcuts,
+
   /// The certificates the daemon trusts.
   network,
 
@@ -38,6 +42,7 @@ enum SettingsCategory {
     SettingsCategory.sandbox => l10n.settingsCategorySandbox,
     SettingsCategory.requests => l10n.settingsCategoryRequests,
     SettingsCategory.interface => l10n.settingsCategoryInterface,
+    SettingsCategory.shortcuts => l10n.settingsCategoryShortcuts,
     SettingsCategory.network => l10n.settingsCategoryNetwork,
     SettingsCategory.daemon => l10n.settingsCategoryDaemon,
   };
@@ -69,6 +74,14 @@ abstract final class SettingIds {
   /// "Who uses which server": `llm.server` of the project and of each
   /// session profile, and the default (HUM-405).
   static const String llmServerUsage = 'llm.server';
+
+  /// The group of the keyboard shortcuts of [scope] (HUM-420).
+  static String shortcutGroup(ShortcutScope scope) => 'shortcuts.${scope.name}';
+
+  /// One keyboard shortcut of the catalogue (HUM-420). The id of the
+  /// catalogue is the stable part, so a shortcut keeps its row when its keys
+  /// change (HUM-421).
+  static String shortcut(AppShortcut shortcut) => 'shortcut.${shortcut.name}';
 }
 
 /// What a row builder gets from the page: the configuration as the daemon

@@ -12,9 +12,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../shortcuts/shortcut_catalog.dart';
 import 'ui.dart';
 
 /// Widths for [ratios] of [total], each at least its entry of [minWidths]
@@ -448,21 +448,13 @@ class _SplitterState extends State<_Splitter> {
         // Nur die Pfeile der eigenen Achse. Sie kommen ohnehin nur an,
         // solange der Splitter selbst den Fokus hat; ein Terminal mit Fokus
         // behält jeden Pfeil (HUM-305).
+        // Der Katalog führt erst die senkrechte, dann die waagerechte Achse
+        // (HUM-420).
         shortcuts: <ShortcutActivator, Intent>{
-          SingleActivator(
-            vertical
-                ? LogicalKeyboardKey.arrowUp
-                : LogicalKeyboardKey.arrowLeft,
-          ): const _NudgeIntent(
-            -1,
-          ),
-          SingleActivator(
-            vertical
-                ? LogicalKeyboardKey.arrowDown
-                : LogicalKeyboardKey.arrowRight,
-          ): const _NudgeIntent(
-            1,
-          ),
+          AppShortcut.dividerBack.activators[vertical ? 0 : 1]:
+              const _NudgeIntent(-1),
+          AppShortcut.dividerForward.activators[vertical ? 0 : 1]:
+              const _NudgeIntent(1),
         },
         actions: <Type, Action<Intent>>{
           _NudgeIntent: CallbackAction<_NudgeIntent>(

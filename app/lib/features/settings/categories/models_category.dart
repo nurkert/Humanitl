@@ -26,6 +26,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/domain/domain.dart';
 import '../../../core/ipc/config_providers.dart';
 import '../../../core/shortcuts/intents.dart';
+import '../../../core/shortcuts/shortcut_catalog.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../registry/setting_entry.dart';
@@ -77,6 +78,15 @@ class _AddServerIntent extends Intent {
 }
 
 class _ModelsCategoryState extends ConsumerState<ModelsCategory> {
+  // Ein Feld, kein Ausdruck in `build`: Eine Map, die jeder Build neu baut,
+  // ist für jeden Nachfahren, der von ihr abhängt, ein neues Objekt
+  // (`docs/UX.md` 7).
+  late final Map<ShortcutActivator, Intent> _shortcuts = withCommandOnMac(
+    AppShortcut.bind<Intent>(const <AppShortcut, Intent>{
+      AppShortcut.serverAdd: _AddServerIntent(),
+    }),
+  );
+
   /// The chosen row: a name, [serverAddRow], or null for the default.
   String? _selected;
 
@@ -325,10 +335,7 @@ class _ModelsCategoryState extends ConsumerState<ModelsCategory> {
       _snapshot = list.named(shown);
     }
     return Shortcuts(
-      shortcuts: withCommandOnMac(const <ShortcutActivator, Intent>{
-        SingleActivator(LogicalKeyboardKey.keyN, control: true):
-            _AddServerIntent(),
-      }),
+      shortcuts: _shortcuts,
       child: Actions(
         actions: <Type, Action<Intent>>{
           _AddServerIntent: CallbackAction<_AddServerIntent>(
@@ -430,8 +437,8 @@ class _ModelsCategoryState extends ConsumerState<ModelsCategory> {
         canRequestFocus: false,
         skipTraversal: true,
         onKeyEvent: (FocusNode _, KeyEvent event) {
-          if (event is! KeyDownEvent ||
-              event.logicalKey != LogicalKeyboardKey.escape) {
+          // Die Taste steht im Katalog (HUM-420).
+          if (event is! KeyDownEvent || !AppShortcut.listBack.matches(event)) {
             return KeyEventResult.ignored;
           }
           if (sideBySide) {

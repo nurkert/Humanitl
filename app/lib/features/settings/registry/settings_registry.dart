@@ -20,6 +20,7 @@ import '../categories/models_category.dart';
 import '../categories/network_category.dart';
 import '../categories/requests_category.dart';
 import '../categories/sandbox_category.dart';
+import '../categories/shortcuts_category.dart';
 import '../widgets/sandbox_mode_row.dart';
 import '../widgets/update_row.dart';
 import 'setting_entry.dart';
@@ -154,6 +155,9 @@ final List<SettingEntry> settingsRegistry = <SettingEntry>[
     keywords: (AppLocalizations l10n) => l10n.settingsKeywordsNotifications,
     build: (SettingsPageData data) => NotificationsRow(config: data.config),
   ),
+  // Tastenkürzel (HUM-420): eine Gruppe je Bereich, darin jedes Kürzel des
+  // Katalogs, nur zum Lesen.
+  ...shortcutEntries(),
   SettingEntry(
     id: FormKeys.tlsTrustSystemStore,
     category: SettingsCategory.network,

@@ -20,6 +20,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/domain/domain.dart';
+import '../../../../core/shortcuts/shortcut_catalog.dart';
 import '../../../../core/ui/ui.dart';
 import '../../../../l10n/l10n.dart';
 import '../../providers/server_checks.dart';
@@ -134,11 +135,18 @@ class ServerListState extends State<ServerList> {
     }
     final List<String> order = _order;
     final int at = order.indexOf(_current).clamp(0, order.length - 1);
-    final int? next = switch (event.logicalKey) {
-      LogicalKeyboardKey.arrowDown => (at + 1).clamp(0, order.length - 1),
-      LogicalKeyboardKey.arrowUp => (at - 1).clamp(0, order.length - 1),
-      LogicalKeyboardKey.home => 0,
-      LogicalKeyboardKey.end => order.length - 1,
+    // Die Tasten stehen im Katalog (HUM-420).
+    final int? next = switch (event) {
+      _ when AppShortcut.listNext.matches(event) => (at + 1).clamp(
+        0,
+        order.length - 1,
+      ),
+      _ when AppShortcut.listPrevious.matches(event) => (at - 1).clamp(
+        0,
+        order.length - 1,
+      ),
+      _ when AppShortcut.listFirst.matches(event) => 0,
+      _ when AppShortcut.listLast.matches(event) => order.length - 1,
       _ => null,
     };
     if (next == null) {
@@ -243,6 +251,15 @@ class _RowSurface extends StatefulWidget {
 }
 
 class _RowSurfaceState extends State<_RowSurface> {
+  // Ein Feld, kein Ausdruck in `build`: Eine Map, die jeder Build neu baut,
+  // ist für jeden Nachfahren, der von ihr abhängt, ein neues Objekt
+  // (`docs/UX.md` 7).
+  late final Map<ShortcutActivator, Intent> _shortcuts =
+      AppShortcut.bind<Intent>(const <AppShortcut, Intent>{
+        AppShortcut.serverOpen: ActivateIntent(),
+        AppShortcut.serverChoose: ButtonActivateIntent(),
+      });
+
   bool _hovered = false;
   bool _focused = false;
 
@@ -265,11 +282,7 @@ class _RowSurfaceState extends State<_RowSurface> {
         mouseCursor: SystemMouseCursors.click,
         onShowHoverHighlight: (bool on) => setState(() => _hovered = on),
         onShowFocusHighlight: (bool on) => setState(() => _focused = on),
-        shortcuts: const <ShortcutActivator, Intent>{
-          SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
-          SingleActivator(LogicalKeyboardKey.numpadEnter): ActivateIntent(),
-          SingleActivator(LogicalKeyboardKey.space): ButtonActivateIntent(),
-        },
+        shortcuts: _shortcuts,
         actions: <Type, Action<Intent>>{
           ActivateIntent: CallbackAction<ActivateIntent>(
             onInvoke: (ActivateIntent _) {

@@ -14,7 +14,6 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -22,6 +21,7 @@ import '../../../../core/domain/domain.dart';
 import '../../../../core/ipc/client_providers.dart';
 import '../../../../core/ipc/config_providers.dart';
 import '../../../../core/shortcuts/intents.dart';
+import '../../../../core/shortcuts/shortcut_catalog.dart';
 import '../../../../core/ui/ui.dart';
 import '../../../../l10n/l10n.dart';
 import '../../providers/server_checks.dart';
@@ -111,6 +111,15 @@ class _SaveIntent extends Intent {
 }
 
 class _ServerDetailState extends ConsumerState<ServerDetail> {
+  // Ein Feld, kein Ausdruck in `build`: Eine Map, die jeder Build neu baut,
+  // ist für jeden Nachfahren, der von ihr abhängt, ein neues Objekt
+  // (`docs/UX.md` 7).
+  late final Map<ShortcutActivator, Intent> _shortcuts = withCommandOnMac(
+    AppShortcut.bind<Intent>(const <AppShortcut, Intent>{
+      AppShortcut.serverSave: _SaveIntent(),
+    }),
+  );
+
   late final ServerForm _form = ServerForm(
     server: widget.server,
     list: widget.list,
@@ -239,9 +248,7 @@ class _ServerDetailState extends ConsumerState<ServerDetail> {
     final bool removed = widget.removedElsewhere;
     final String? nameProblem = _form.nameProblem(l10n, removed: removed);
     return Shortcuts(
-      shortcuts: withCommandOnMac(const <ShortcutActivator, Intent>{
-        SingleActivator(LogicalKeyboardKey.keyS, control: true): _SaveIntent(),
-      }),
+      shortcuts: _shortcuts,
       child: Actions(
         actions: <Type, Action<Intent>>{
           _SaveIntent: CallbackAction<_SaveIntent>(

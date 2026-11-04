@@ -11,6 +11,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import 'shortcut_catalog.dart';
+
 /// Show section [index] (0 = Intercept ... 5 = Setup). `Ctrl+1..6`.
 class NavIntent extends Intent {
   /// Creates the intent for section [index].
@@ -529,40 +531,38 @@ const SingleActivator railToggleActivator = SingleActivator(
 /// terminal (HUM-300), `Ctrl+Shift+T` for a further shell and
 /// `Ctrl+PageUp`/`Ctrl+PageDown` for its tabs (HUM-314), and `Ctrl` with
 /// `+`, `-` and `0` for the scaling of the whole application (HUM-356).
-Map<ShortcutActivator, Intent> shellShortcuts() =>
-    withCommandOnMac(<ShortcutActivator, Intent>{
-      for (int i = 0; i < navigationKeys.length; i++)
-        SingleActivator(navigationKeys[i], control: true): NavIntent(i),
-      const SingleActivator(LogicalKeyboardKey.keyK, control: true):
-          const PaletteIntent(),
-      const SingleActivator(LogicalKeyboardKey.comma, control: true):
-          const SettingsIntent(),
-      railToggleActivator: const ToggleRailIntent(),
-      terminalFullWindowActivator: const ToggleTerminalFullWindowIntent(),
-      terminalFullWindowNumpadActivator: const ToggleTerminalFullWindowIntent(),
-      terminalFloatActivator: const ToggleTerminalFloatIntent(),
-      const TerminalFocusActivator(): const FocusTerminalIntent(),
-      for (final TerminalZoom zoom in TerminalZoom.values)
-        TerminalZoomActivator(zoom): TerminalZoomIntent(zoom),
-      openShellActivator: const OpenShellIntent(),
-      previousTerminalTabActivator: const SwitchTerminalTabIntent(-1),
-      nextTerminalTabActivator: const SwitchTerminalTabIntent(1),
-      for (final UiScaleStep step in UiScaleStep.values)
-        UiScaleActivator(step): UiScaleIntent(step),
-    });
+Map<ShortcutActivator, Intent>
+shellShortcuts() => withCommandOnMac(<ShortcutActivator, Intent>{
+  for (int i = 0; i < AppShortcut.navigate.activators.length; i++)
+    AppShortcut.navigate.activators[i]: NavIntent(i),
+  ...AppShortcut.bind<Intent>(<AppShortcut, Intent>{
+    AppShortcut.palette: const PaletteIntent(),
+    AppShortcut.settings: const SettingsIntent(),
+    AppShortcut.toggleRail: const ToggleRailIntent(),
+    AppShortcut.terminalFullWindow: const ToggleTerminalFullWindowIntent(),
+    AppShortcut.terminalFloat: const ToggleTerminalFloatIntent(),
+    AppShortcut.terminalFocus: const FocusTerminalIntent(),
+    AppShortcut.terminalZoomIn: const TerminalZoomIntent(TerminalZoom.zoomIn),
+    AppShortcut.terminalZoomOut: const TerminalZoomIntent(TerminalZoom.zoomOut),
+    AppShortcut.terminalZoomReset: const TerminalZoomIntent(TerminalZoom.reset),
+    AppShortcut.terminalNewShell: const OpenShellIntent(),
+    AppShortcut.terminalPreviousTab: const SwitchTerminalTabIntent(-1),
+    AppShortcut.terminalNextTab: const SwitchTerminalTabIntent(1),
+    AppShortcut.scaleIn: const UiScaleIntent(UiScaleStep.zoomIn),
+    AppShortcut.scaleOut: const UiScaleIntent(UiScaleStep.zoomOut),
+    AppShortcut.scaleReset: const UiScaleIntent(UiScaleStep.reset),
+  }),
+});
 
 /// The digit keys of the navigation shortcuts, in section order.
 ///
 /// One key per entry of `Section`; the list grows at the end when a section
 /// does, so every digit somebody has learned keeps its meaning (HUM-044). It
-/// ends at nine at the latest: the zero is [railToggleKey].
-const List<LogicalKeyboardKey> navigationKeys = <LogicalKeyboardKey>[
-  LogicalKeyboardKey.digit1,
-  LogicalKeyboardKey.digit2,
-  LogicalKeyboardKey.digit3,
-  LogicalKeyboardKey.digit4,
-  LogicalKeyboardKey.digit5,
-  LogicalKeyboardKey.digit6,
+/// ends at nine at the latest: the zero is [railToggleKey]. Read from the
+/// catalogue ([AppShortcut.navigate], HUM-420).
+final List<LogicalKeyboardKey> navigationKeys = <LogicalKeyboardKey>[
+  for (final ShortcutActivator activator in AppShortcut.navigate.activators)
+    (activator as SingleActivator).trigger,
 ];
 
 /// The index of the Sandbox section in [navigationKeys] (`Ctrl+4`).
