@@ -34,6 +34,7 @@ import 'package:xterm2/ui.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/shortcuts/intents.dart';
+import '../../../core/shortcuts/shortcut_catalog.dart';
 import '../../../core/ui/h_notice_layer.dart';
 import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/shell_glyph.dart';
@@ -415,20 +416,15 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
   /// Nicht auf Apple-Plattformen: Dort kopiert `Cmd+C`
   /// ([TerminalClipboardActivator]), und `Ctrl+C` ist wie in jedem Terminal
   /// von macOS immer die Unterbrechung.
-  static bool _isSelectionCopyChord(KeyEvent event) {
-    if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.keyC) {
-      return false;
-    }
-    if (defaultTargetPlatform == TargetPlatform.macOS ||
-        defaultTargetPlatform == TargetPlatform.iOS) {
-      return false;
-    }
-    final HardwareKeyboard keyboard = HardwareKeyboard.instance;
-    return keyboard.isControlPressed &&
-        !keyboard.isShiftPressed &&
-        !keyboard.isAltPressed &&
-        !keyboard.isMetaPressed;
-  }
+  ///
+  /// Die Taste steht im Katalog ([AppShortcut.terminalCopySelection],
+  /// HUM-420): genau `Ctrl`, ohne Wiederholung.
+  static bool _isSelectionCopyChord(KeyEvent event) =>
+      AppShortcut.terminalCopySelection.appliesOn() &&
+      AppShortcut.terminalCopySelection.single.accepts(
+        event,
+        HardwareKeyboard.instance,
+      );
 
   /// Ob im Puffer, den das Terminal gerade zeigt, eine Auswahl **sichtbar**
   /// ist (HUM-353); der Puffer ist derselbe wie in [_copy].
@@ -488,16 +484,15 @@ class _TerminalPaneState extends ConsumerState<TerminalPane> {
     // oder während die Ansicht nur liest --, denn sonst meldete der Emulator
     // einem Agenten mit dem Tastaturprotokoll von kitty die Taste als eigene
     // Folge (`CSI 99;6 u`), mitten in einem Griff, der nicht ihm galt.
-    for (final TerminalClipboard action in TerminalClipboard.values) {
-      if (TerminalClipboardActivator(action)
-          .accepts(event, HardwareKeyboard.instance)) {
+    // Die Griffe stehen im Katalog (HUM-420).
+    for (final (AppShortcut shortcut, VoidCallback act)
+        in <(AppShortcut, VoidCallback)>[
+          (AppShortcut.terminalCopy, _copy),
+          (AppShortcut.terminalPaste, _paste),
+        ]) {
+      if (shortcut.single.accepts(event, HardwareKeyboard.instance)) {
         _heldChordKeys.add(event.physicalKey);
-        switch (action) {
-          case TerminalClipboard.copy:
-            _copy();
-          case TerminalClipboard.paste:
-            _paste();
-        }
+        act();
         return KeyEventResult.handled;
       }
     }

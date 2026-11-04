@@ -11,12 +11,12 @@
 /// history and this list cannot drift apart.
 library;
 
-import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/ipc/flow_handoff.dart';
+import '../../../core/shortcuts/shortcut_catalog.dart';
 import '../../../core/text/rule_sentence.dart';
 import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/ui.dart';
@@ -61,12 +61,10 @@ class MoveRuleIntent extends Intent {
 /// The shortcuts of the rule list. `Alt` because the arrow keys alone move
 /// the focus, and moving a rule is not moving the focus.
 Map<ShortcutActivator, Intent> ruleListShortcuts() =>
-    <ShortcutActivator, Intent>{
-      const SingleActivator(LogicalKeyboardKey.arrowUp, alt: true):
-          const MoveRuleIntent(-1),
-      const SingleActivator(LogicalKeyboardKey.arrowDown, alt: true):
-          const MoveRuleIntent(1),
-    };
+    AppShortcut.bind<Intent>(<AppShortcut, Intent>{
+      AppShortcut.ruleUp: const MoveRuleIntent(-1),
+      AppShortcut.ruleDown: const MoveRuleIntent(1),
+    });
 
 /// One row of the rule list.
 class RuleRow extends ConsumerStatefulWidget {

@@ -1,13 +1,13 @@
 /// "Update daemon" next to the version notice of the status bar (HUM-284).
 library;
 
-import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
 import '../../../core/ipc/client_providers.dart';
 import '../../../core/ipc/daemon_client.dart';
+import '../../../core/shortcuts/shortcut_catalog.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../../sandbox/providers/sandbox_status_provider.dart';
@@ -253,9 +253,9 @@ class _DaemonRestartControlState extends ConsumerState<DaemonRestartControl> {
     // The bar is narrow, so the answer that names what is lost stands alone.
     if (asking) {
       return CallbackShortcuts(
-        bindings: <ShortcutActivator, VoidCallback>{
-          const SingleActivator(LogicalKeyboardKey.escape): _cancel,
-        },
+        bindings: AppShortcut.bind<VoidCallback>(<AppShortcut, VoidCallback>{
+          AppShortcut.closeLayer: _cancel,
+        }),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[

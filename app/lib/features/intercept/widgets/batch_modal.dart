@@ -12,11 +12,11 @@ import 'dart:async';
 
 // `Flow` is a domain type here, not the Flutter layout widget of the same
 // name; the widget is never used in this feature.
-import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/domain.dart';
+import '../../../core/shortcuts/shortcut_catalog.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../providers/decision.dart';
@@ -105,9 +105,9 @@ class _BatchModalState extends ConsumerState<BatchModal>
   }
 
   late final Map<ShortcutActivator, VoidCallback> _bindings =
-      <ShortcutActivator, VoidCallback>{
-        const SingleActivator(LogicalKeyboardKey.escape): _cancel,
-      };
+      AppShortcut.bind<VoidCallback>(<AppShortcut, VoidCallback>{
+        AppShortcut.closeLayer: _cancel,
+      });
 
   @override
   void dispose() {

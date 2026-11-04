@@ -14,12 +14,15 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Flow;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:humanitl/core/shortcuts/intents.dart' show shellShortcuts;
+import 'package:humanitl/core/shortcuts/shortcut_catalog.dart';
 import 'package:humanitl/features/sandbox/providers/terminal_provider.dart';
 import 'package:humanitl/features/sandbox/widgets/terminal_pane.dart';
 import 'package:humanitl_ui/humanitl_ui.dart';
 import 'package:xterm2/core.dart';
 import 'package:xterm2/ui.dart';
 
+import '../../harness/shortcut_press.dart';
 import 'harness.dart';
 
 final TargetPlatformVariant _linux = TargetPlatformVariant.only(
@@ -172,10 +175,69 @@ HMenuItem _item(WidgetTester tester, String label) => tester
     .itemsBuilder()
     .firstWhere((HMenuItem item) => item.label == label);
 
+/// Wählt eine Zeile, drückt [activator] und erwartet sie in der
+/// Zwischenablage, ohne dass der Agent etwas bekommt (HUM-420).
+Future<void> _copies(WidgetTester tester, ShortcutActivator activator) async {
+  final _Clipboard clipboard = _mockClipboard(tester);
+  final SandboxTestClient client = await _pumpFocused(tester);
+  await _selectLine(tester, client, 'zq-420');
+  expect(await pressActivator(tester, activator), isTrue);
+  await _settle(tester);
+  expect(clipboard.text, 'zq-420');
+  expect(client.typed, isNot(contains(0x03)));
+}
+
 const LogicalKeyboardKey _ctrlKey = LogicalKeyboardKey.controlLeft;
 const LogicalKeyboardKey _shiftKey = LogicalKeyboardKey.shiftLeft;
 
 void main() {
+  // HUM-420: Die Griffe, die `TerminalPane` selbst fragt, stehen nicht in
+  // der Map der Shell. Für jeden davon wird die Taste aus dem Katalog
+  // gedrückt, und das Terminal muss tun, was der Eintrag sagt; ein neuer
+  // Eintrag des Terminals ohne Bindung in der Shell braucht hier eine Zeile.
+  group('the terminal answers the chords of the catalogue it asks itself', () {
+    final Set<ShortcutActivator> inTheShell = shellShortcuts().keys.toSet();
+    final Map<
+      AppShortcut,
+      Future<void> Function(WidgetTester, ShortcutActivator)
+    >
+    cases =
+        <AppShortcut, Future<void> Function(WidgetTester, ShortcutActivator)>{
+          AppShortcut.terminalCopy: _copies,
+          AppShortcut.terminalCopySelection: _copies,
+          AppShortcut.terminalPaste:
+              (WidgetTester tester, ShortcutActivator a) async {
+                _mockClipboard(tester, initial: 'echo zq-420');
+                final SandboxTestClient client = await _pumpFocused(tester);
+                expect(await pressActivator(tester, a), isTrue);
+                await _settle(tester);
+                expect(client.typed, _bytes('echo zq-420'));
+              },
+        };
+
+    test('every terminal entry outside the shell map has a case', () {
+      expect(cases.keys.toSet(), <AppShortcut>{
+        for (final AppShortcut shortcut in AppShortcut.of(
+          ShortcutScope.terminal,
+        ))
+          if (!shortcut.activators.any(inTheShell.contains)) shortcut,
+      });
+    });
+
+    for (final MapEntry<
+          AppShortcut,
+          Future<void> Function(WidgetTester, ShortcutActivator)
+        >
+        entry
+        in cases.entries) {
+      testWidgets('terminal_answers_catalogue_key: ${entry.key.name}', (
+        WidgetTester tester,
+      ) async {
+        await entry.value(tester, entry.key.single);
+      }, variant: _linux);
+    }
+  });
+
   testWidgets(
     'ctrl_shift_c_copies_the_selection_and_sends_nothing_to_the_agent',
     (WidgetTester tester) async {

@@ -178,6 +178,10 @@ abstract final class HSize {
   /// Thickness of a hairline.
   static const double hairline = 1;
 
+  /// Mindestbreite einer Tastenkappe (`HKeyCaps`, HUM-420): Eine Kappe mit
+  /// einem Zeichen wird so annähernd quadratisch und nicht zum Strich.
+  static const double keyCapMinWidth = 22;
+
   /// Breite des Griffs eines Splitters.
   ///
   /// Ungerade und damit ausdrücklich nicht auf dem Vierer-Raster: das Raster

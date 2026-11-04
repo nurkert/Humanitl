@@ -4,6 +4,7 @@ library;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../../../core/shortcuts/shortcut_catalog.dart';
 import '../../../l10n/l10n.dart';
 import '../registry/setting_entry.dart';
 import 'settings_list_item.dart';
@@ -65,11 +66,18 @@ class _SettingsNavState extends State<SettingsNav> {
     }
     const List<SettingsCategory> all = SettingsCategory.values;
     final int at = _current.index;
-    final int? next = switch (event.logicalKey) {
-      LogicalKeyboardKey.arrowDown => (at + 1).clamp(0, all.length - 1),
-      LogicalKeyboardKey.arrowUp => (at - 1).clamp(0, all.length - 1),
-      LogicalKeyboardKey.home => 0,
-      LogicalKeyboardKey.end => all.length - 1,
+    // Die Tasten stehen im Katalog (HUM-420).
+    final int? next = switch (event) {
+      _ when AppShortcut.listNext.matches(event) => (at + 1).clamp(
+        0,
+        all.length - 1,
+      ),
+      _ when AppShortcut.listPrevious.matches(event) => (at - 1).clamp(
+        0,
+        all.length - 1,
+      ),
+      _ when AppShortcut.listFirst.matches(event) => 0,
+      _ when AppShortcut.listLast.matches(event) => all.length - 1,
       _ => null,
     };
     if (next == null) {

@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import '../theme/h_theme.dart';
+import '../tokens/spacing.dart';
 import '../tokens/tokens.dart';
 import '../tokens/typography.dart';
 
@@ -50,6 +51,87 @@ class HKeyHint extends StatelessWidget {
           maxLines: 1,
           style: tokens.typography.mono11.tinted(color ?? tokens.colors.fg1),
         ),
+      ),
+    );
+  }
+}
+
+/// Die Tasten eines Griffs als Kappen, etwa `Ctrl` `Shift` `0` in der
+/// Übersicht der Tastenkürzel (HUM-420).
+///
+/// Jede Taste steht in einer eigenen Kappe: `mono11` auf `bg2`, mit einer
+/// Haarlinie und dem Radius eines Badges. Mehrere Griffe für dieselbe
+/// Handlung trennt [separator] (`/`) in `fg2`. Die Kappen tragen keine
+/// Semantik; die Zeile darum nennt die Tasten als Text.
+class HKeyCaps extends StatelessWidget {
+  /// Creates the caps for [chords], one list of key names per chord.
+  const HKeyCaps(this.chords, {this.separator = '/', super.key});
+
+  /// Die Griffe, je Griff die Namen seiner Tasten, Modifikatoren zuerst.
+  final List<List<String>> chords;
+
+  /// Das Zeichen zwischen zwei Griffen.
+  final String separator;
+
+  @override
+  Widget build(BuildContext context) {
+    final HTokens tokens = HTheme.of(context);
+    final double gap = tokens.spacing.x1;
+    return ExcludeSemantics(
+      child: Wrap(
+        alignment: WrapAlignment.end,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: gap,
+        runSpacing: gap,
+        children: <Widget>[
+          for (int c = 0; c < chords.length; c++) ...<Widget>[
+            if (c > 0)
+              Text(
+                separator,
+                style: tokens.typography.mono11.tinted(tokens.colors.fg2),
+              ),
+            // Die Tasten eines Griffs stehen enger beieinander als zwei
+            // Griffe.
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                for (int k = 0; k < chords[c].length; k++) ...<Widget>[
+                  if (k > 0) SizedBox(width: gap / 2),
+                  _HKeyCap(chords[c][k]),
+                ],
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _HKeyCap extends StatelessWidget {
+  const _HKeyCap(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final HTokens tokens = HTheme.of(context);
+    return Container(
+      constraints: const BoxConstraints(minWidth: HSize.keyCapMinWidth),
+      padding: EdgeInsets.symmetric(
+        horizontal: tokens.spacing.x1 + HSize.hairline,
+        vertical: HSize.hairline * 2,
+      ),
+      decoration: BoxDecoration(
+        color: tokens.colors.bg2,
+        border: Border.all(color: tokens.colors.line, width: HSize.hairline),
+        borderRadius: HRadius.badgeRadius,
+      ),
+      child: Text(
+        text,
+        maxLines: 1,
+        textAlign: TextAlign.center,
+        style: tokens.typography.mono11.tinted(tokens.colors.fg1),
       ),
     );
   }

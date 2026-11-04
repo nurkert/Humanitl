@@ -43,6 +43,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/domain/domain.dart';
 import '../../core/ipc/config_providers.dart';
 import '../../core/ipc/connection.dart';
+import '../../core/shortcuts/shortcut_catalog.dart';
 import '../../core/ui/ui.dart';
 import '../../l10n/l10n.dart';
 import 'registry/settings_registry.dart';
@@ -125,6 +126,15 @@ class SettingsOverlay extends ConsumerStatefulWidget {
 
 class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
     with SingleTickerProviderStateMixin {
+  // Ein Feld, kein Ausdruck in `build`: Eine Map, die jeder Build neu baut,
+  // ist für jeden Nachfahren, der von ihr abhängt, ein neues Objekt
+  // (`docs/UX.md` 7).
+  late final Map<ShortcutActivator, Intent> _shortcuts =
+      AppShortcut.bind<Intent>(const <AppShortcut, Intent>{
+        AppShortcut.settingsClose: DismissIntent(),
+        AppShortcut.settingsSearch: _FocusSearchIntent(),
+      });
+
   late final AnimationController _motion = AnimationController(
     vsync: this,
     duration: HMotion.arrive,
@@ -391,11 +401,7 @@ class _SettingsOverlayState extends ConsumerState<SettingsOverlay>
       _queueTry();
     }
     return Shortcuts(
-      shortcuts: const <ShortcutActivator, Intent>{
-        SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
-        SingleActivator(LogicalKeyboardKey.keyF, control: true):
-            _FocusSearchIntent(),
-      },
+      shortcuts: _shortcuts,
       child: Actions(
         actions: <Type, Action<Intent>>{
           DismissIntent: CallbackAction<DismissIntent>(

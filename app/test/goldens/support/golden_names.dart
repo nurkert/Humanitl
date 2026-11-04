@@ -71,6 +71,7 @@ const List<String> goldenNames = <String>[
   'settings_category',
   'settings_search_results',
   'settings_search_empty',
+  'settings_shortcuts',
   // setup_golden_test.dart
   'setup_checklist',
   'setup_firstrun',

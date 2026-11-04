@@ -25,6 +25,7 @@ import '../../core/shortcuts/intents.dart'
         NextFlowIntent,
         NoteIntent,
         PrevFlowIntent;
+import '../../core/shortcuts/shortcut_catalog.dart';
 
 export '../../core/shortcuts/intents.dart'
     show
@@ -143,24 +144,21 @@ class CloseFindingsPauseIntent extends Intent {
 /// (`docs/UX.md` 5.2). `B` needs no binding here: the block key of the screen
 /// already blocks the request the pause stands over.
 Map<ShortcutActivator, Intent> findingsPauseShortcuts() =>
-    <ShortcutActivator, Intent>{
-      const SingleActivator(LogicalKeyboardKey.keyS, includeRepeats: false):
-          const SendAnywayIntent(),
-      // Keine Wiederholungen: Ein festgehaltenes `P` oder `Esc` öffnet den
-      // Editor nicht mehrmals und schließt nach der Pause nicht auch noch den
-      // Hinweis darunter.
-      const SingleActivator(LogicalKeyboardKey.keyP, includeRepeats: false):
-          const PseudonymizeIntent(),
-      const SingleActivator(LogicalKeyboardKey.escape, includeRepeats: false):
-          const CloseFindingsPauseIntent(),
-    };
+    // Keine Wiederholungen: Ein festgehaltenes `P` oder `Esc` öffnet den
+    // Editor nicht mehrmals und schließt nach der Pause nicht auch noch den
+    // Hinweis darunter. Das steht an den Aktivatoren des Katalogs.
+    AppShortcut.bind<Intent>(<AppShortcut, Intent>{
+      AppShortcut.sendAnyway: const SendAnywayIntent(),
+      AppShortcut.pseudonymize: const PseudonymizeIntent(),
+      AppShortcut.closeFindingsPause: const CloseFindingsPauseIntent(),
+    });
 
-/// The digits of the two segmented controls, in segment order.
-const List<LogicalKeyboardKey> rememberKeys = <LogicalKeyboardKey>[
-  LogicalKeyboardKey.digit1,
-  LogicalKeyboardKey.digit2,
-  LogicalKeyboardKey.digit3,
-  LogicalKeyboardKey.digit4,
+/// The digits of the two segmented controls, in segment order. Read from
+/// the catalogue ([AppShortcut.rememberDuration], HUM-420).
+final List<LogicalKeyboardKey> rememberKeys = <LogicalKeyboardKey>[
+  for (final ShortcutActivator activator
+      in AppShortcut.rememberDuration.activators)
+    (activator as SingleActivator).trigger,
 ];
 
 /// The bindings of the Intercept section.
@@ -169,78 +167,34 @@ const List<LogicalKeyboardKey> rememberKeys = <LogicalKeyboardKey>[
 /// keyboard telling us that a finger has not moved, and a finger that has not
 /// moved has not read the next URL (`docs/UX.md` 5.4). The screen refuses a
 /// repeat a second time, because a test harness -- and some platforms -- can
-/// deliver a plain down event for what a person meant as one press.
-Map<ShortcutActivator, Intent> interceptShortcuts() => withCommandOnMac(
-  <ShortcutActivator, Intent>{
-    const SingleActivator(LogicalKeyboardKey.enter, includeRepeats: false):
-        const AllowIntent(),
-    const SingleActivator(
-      LogicalKeyboardKey.numpadEnter,
-      includeRepeats: false,
-    ): const AllowIntent(),
-    const SingleActivator(LogicalKeyboardKey.keyA, includeRepeats: false):
-        const AllowIntent(),
-    const SingleActivator(
-      LogicalKeyboardKey.keyF,
-      control: true,
-      includeRepeats: false,
-    ): const AllowIntent(
-      chord: true,
-    ),
-    const SingleActivator(LogicalKeyboardKey.keyB, includeRepeats: false):
-        const BlockIntent(),
-    // `Ctrl+Enter` blocks with the note, from inside the field: a chord works
-    // where a single letter must not (HUM-072).
-    const SingleActivator(
-      LogicalKeyboardKey.enter,
-      control: true,
-      includeRepeats: false,
-    ): const BlockIntent(
-      chord: true,
-    ),
-    const SingleActivator(
-      LogicalKeyboardKey.keyL,
-      control: true,
-      includeRepeats: false,
-    ): const BlockIntent(
-      chord: true,
-    ),
-    const SingleActivator(LogicalKeyboardKey.keyJ): const NextFlowIntent(),
-    const SingleActivator(LogicalKeyboardKey.arrowDown): const NextFlowIntent(),
-    const SingleActivator(LogicalKeyboardKey.keyK): const PrevFlowIntent(),
-    const SingleActivator(LogicalKeyboardKey.arrowUp): const PrevFlowIntent(),
-    const SingleActivator(LogicalKeyboardKey.enter, shift: true):
-        const OpenRememberIntent(),
-    const SingleActivator(LogicalKeyboardKey.keyN): const NoteIntent(),
-    const SingleActivator(LogicalKeyboardKey.keyE): const EditIntent(),
-    // Keine Wiederholungen: Ein festgehaltenes `Esc`, das die Pause mit offenen
-    // Funden schließt, darf mit seiner Wiederholung nicht auch noch den Hinweis
-    // schließen (HUM-049).
-    const SingleActivator(LogicalKeyboardKey.escape, includeRepeats: false):
-        const CloseCoachMarkIntent(),
-    const SingleActivator(
-      LogicalKeyboardKey.keyF,
-      control: true,
-      shift: true,
-      includeRepeats: false,
-    ): const AllowGroupIntent(),
-    const SingleActivator(
-      LogicalKeyboardKey.keyL,
-      control: true,
-      shift: true,
-      includeRepeats: false,
-    ): const BlockGroupIntent(),
-    const SingleActivator(LogicalKeyboardKey.keyA, control: true):
-        const SelectGroupIntent(),
-    const SingleActivator(LogicalKeyboardKey.keyJ, shift: true):
-        const MergeArrivalsIntent(),
-    const SingleActivator(LogicalKeyboardKey.arrowRight):
-        const ToggleGroupIntent(open: true),
-    const SingleActivator(LogicalKeyboardKey.arrowLeft):
-        const ToggleGroupIntent(open: false),
-    for (int i = 0; i < rememberKeys.length; i++)
-      SingleActivator(rememberKeys[i]): RememberDurationIntent(i),
-    for (int i = 0; i < rememberKeys.length; i++)
-      SingleActivator(rememberKeys[i], shift: true): RememberTargetIntent(i),
-  },
-);
+/// deliver a plain down event for what a person meant as one press. The
+/// activators, and with them `includeRepeats`, come from the catalogue
+/// (HUM-420); `Ctrl+Enter` blocks with the note from inside the field: a
+/// chord works where a single letter must not (HUM-072). `Esc` carries no
+/// repeats either: a held `Esc` that closes the pause with open findings must
+/// not close the hint with its repeat as well (HUM-049).
+Map<ShortcutActivator, Intent> interceptShortcuts() =>
+    withCommandOnMac(<ShortcutActivator, Intent>{
+      ...AppShortcut.bind<Intent>(<AppShortcut, Intent>{
+        AppShortcut.allow: const AllowIntent(),
+        AppShortcut.allowAnywhere: const AllowIntent(chord: true),
+        AppShortcut.block: const BlockIntent(),
+        AppShortcut.blockAnywhere: const BlockIntent(chord: true),
+        AppShortcut.nextRequest: const NextFlowIntent(),
+        AppShortcut.previousRequest: const PrevFlowIntent(),
+        AppShortcut.openRemember: const OpenRememberIntent(),
+        AppShortcut.note: const NoteIntent(),
+        AppShortcut.edit: const EditIntent(),
+        AppShortcut.closeHint: const CloseCoachMarkIntent(),
+        AppShortcut.allowGroup: const AllowGroupIntent(),
+        AppShortcut.blockGroup: const BlockGroupIntent(),
+        AppShortcut.selectGroup: const SelectGroupIntent(),
+        AppShortcut.mergeArrivals: const MergeArrivalsIntent(),
+        AppShortcut.openGroup: const ToggleGroupIntent(open: true),
+        AppShortcut.foldGroup: const ToggleGroupIntent(open: false),
+      }),
+      for (int i = 0; i < AppShortcut.rememberDuration.activators.length; i++)
+        AppShortcut.rememberDuration.activators[i]: RememberDurationIntent(i),
+      for (int i = 0; i < AppShortcut.rememberTarget.activators.length; i++)
+        AppShortcut.rememberTarget.activators[i]: RememberTargetIntent(i),
+    });

@@ -15,12 +15,12 @@ library;
 
 import 'dart:async';
 
-import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/daemon_client.dart';
+import '../../../core/shortcuts/shortcut_catalog.dart';
 import '../../../core/ui/hover_label.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
@@ -164,9 +164,9 @@ class _InterceptPauseDialogState extends ConsumerState<InterceptPauseDialog>
     final HTokens tokens = HTheme.of(context);
     final AppLocalizations l10n = context.l10n;
     return CallbackShortcuts(
-      bindings: <ShortcutActivator, VoidCallback>{
-        const SingleActivator(LogicalKeyboardKey.escape): widget.onClose,
-      },
+      bindings: AppShortcut.bind<VoidCallback>(<AppShortcut, VoidCallback>{
+        AppShortcut.closeLayer: widget.onClose,
+      }),
       child: FocusScope(
         node: _scope,
         child: FadeTransition(

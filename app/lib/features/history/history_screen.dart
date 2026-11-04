@@ -15,7 +15,6 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
-import 'package:flutter/services.dart';
 // `Flow` is a domain type here, not the Flutter layout widget of the same
 // name; the widget is never used in this feature.
 import 'package:flutter/widgets.dart' hide Flow;
@@ -28,6 +27,7 @@ import '../../core/ipc/flow_events.dart';
 import '../../core/ipc/flow_handoff.dart';
 import '../../core/ipc/flow_reveal.dart';
 import '../../core/shortcuts/intents.dart';
+import '../../core/shortcuts/shortcut_catalog.dart';
 import '../../core/ui/fix_control.dart';
 import '../../core/ui/h_diagnostic_card.dart';
 import '../../core/ui/ui.dart';
@@ -54,16 +54,13 @@ int debugHistoryFocusClaims = 0;
 /// Every activator here has an action in [HistoryScreen]; a widget test
 /// compares the two sets, because a bound key that does nothing is worse than
 /// an unbound one (`docs/UX.md` 5.3).
-Map<ShortcutActivator, Intent>
-historyShortcuts() => <ShortcutActivator, Intent>{
-  const SingleActivator(LogicalKeyboardKey.enter): const OpenFlowIntent(),
-  const SingleActivator(LogicalKeyboardKey.numpadEnter): const OpenFlowIntent(),
-  const SingleActivator(LogicalKeyboardKey.slash): const FilterIntent(),
-  const SingleActivator(LogicalKeyboardKey.keyJ): const NextFlowIntent(),
-  const SingleActivator(LogicalKeyboardKey.arrowDown): const NextFlowIntent(),
-  const SingleActivator(LogicalKeyboardKey.keyK): const PrevFlowIntent(),
-  const SingleActivator(LogicalKeyboardKey.arrowUp): const PrevFlowIntent(),
-};
+Map<ShortcutActivator, Intent> historyShortcuts() =>
+    AppShortcut.bind<Intent>(<AppShortcut, Intent>{
+      AppShortcut.historyOpen: const OpenFlowIntent(),
+      AppShortcut.historyFilter: const FilterIntent(),
+      AppShortcut.historyNext: const NextFlowIntent(),
+      AppShortcut.historyPrevious: const PrevFlowIntent(),
+    });
 
 /// Opens the selected row: a held request in the queue, anything else in the
 /// sheet. The keyboard equivalent of the double click (`docs/UX.md` 5.1).
@@ -808,12 +805,10 @@ class _SplitterState extends State<_Splitter> {
       child: FocusableActionDetector(
         mouseCursor: SystemMouseCursors.resizeRow,
         onFocusChange: (bool value) => setState(() => _focused = value),
+        // Die senkrechte Achse: der erste Aktivator der Trennlinie (HUM-420).
         shortcuts: <ShortcutActivator, Intent>{
-          const SingleActivator(LogicalKeyboardKey.arrowUp): const _NudgeIntent(
-            -1,
-          ),
-          const SingleActivator(LogicalKeyboardKey.arrowDown):
-              const _NudgeIntent(1),
+          AppShortcut.dividerBack.activators.first: const _NudgeIntent(-1),
+          AppShortcut.dividerForward.activators.first: const _NudgeIntent(1),
         },
         actions: <Type, Action<Intent>>{
           _NudgeIntent: CallbackAction<_NudgeIntent>(

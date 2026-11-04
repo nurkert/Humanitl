@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/shortcuts/shortcut_catalog.dart';
 import '../../../core/ui/focus_ring.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
@@ -35,9 +36,9 @@ class _NoteFieldState extends ConsumerState<NoteField> {
   // Fields, not expressions in `build`: a map rebuilt every frame is a new
   // object for every descendant that depends on it (`docs/UX.md` 7).
   late final Map<ShortcutActivator, VoidCallback> _bindings =
-      <ShortcutActivator, VoidCallback>{
-        const SingleActivator(LogicalKeyboardKey.escape): _close,
-      };
+      AppShortcut.bind<VoidCallback>(<AppShortcut, VoidCallback>{
+        AppShortcut.closeLayer: _close,
+      });
 
   @override
   void initState() {
