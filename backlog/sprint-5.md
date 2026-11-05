@@ -11998,3 +11998,29 @@ und die Schutzregeln der Warteschlange (`docs/UX.md`: Enter, Space und
 Einzelbuchstaben dürfen keine Entscheidung aus Versehen auslösen). Palette,
 Hover-Hinweise und Beschriftungen zeigen die eigene Belegung; macOS bildet
 Strg auf ⌘ ab, wo die Vorgabe es tut.
+
+---
+
+## HUM-422 · e2e-m4 says why it failed, and its timeout check no longer rides on truncated seconds
+
+**Anlass.** Der CI-Job `e2e-m4` fiel am 2026-11-02 zweimal bei reinen
+Website-Änderungen (Läufe 41418727352, 41459787966) und lief beim
+Wiederholen grün; die Logs brauchen Admin-Rechte.
+
+**Befund.** 39 lokale Läufe, auch unter Last, blieben grün; die Ursache ist
+nicht bewiesen. Messbar knapp war Schritt 12: Er maß den Verfall der
+Anfrage (10 s) an `received_at` in abgeschnittenen ganzen Sekunden gegen
+eine Grenze von 12 s; das Abschneiden fraß bis zu einer Sekunde des
+Spielraums.
+
+**Umsetzung.** Schritt 12 wartet auf den Verfall und prüft die Dauer, die
+der Daemon selbst festhält (`duration_ms`, 10 000 bis 30 000 ms; 30 s
+trennen die eingestellten 10 s noch klar von der Vorgabe 120 s), und mit
+eigener Uhr, dass der Verfall binnen 30 s sichtbar wird. Jeder Abbruch
+einer E2E-Demo (auch ein fehlgeschlagener Einzelbefehl unter `set -e`)
+schreibt in der CI eine `::error`-Anmerkung, die über die öffentliche API
+lesbar ist; Schritt 7 nimmt die Fehlzeilen des Treibers mit.
+
+**Akzeptanz.** Gegenproben: Verfall nach 8 s und nach 31 s fallen rot; eine
+Nachricht von 100 KB verliert die Anmerkung nicht; `e2e_die` annotiert
+genau einmal.

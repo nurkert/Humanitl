@@ -89,8 +89,53 @@ e2e_step() {
 # e2e_die TEXT... — abbrechen, mit dem Schritt im Protokoll.
 e2e_die() {
     printf 'e2e: FAILED: %s\n' "$*" >&2
+    e2e_annotate "$*"
     exit 1
 }
+
+# e2e_annotate TEXT — in GitHub Actions zusätzlich eine Annotation `::error`.
+#
+# Das Log eines Jobs liest nur, wer Admin-Rechte am Repository hat; die
+# Annotationen eines Laufs gibt die öffentliche API ohne Anmeldung heraus
+# (`check-runs/<job>/annotations`). So ist auch ohne Log zu sehen, welche
+# Behauptung fiel (HUM-422). Die Workflow-Befehle verlangen `%`, CR und LF
+# kodiert; der Text wird auf 4000 Zeichen gekürzt (in der C-Locale Bytes). Die Zeile geht wie die
+# Meldung nach stderr, den der Läufer ebenso liest: Auf stdout landete sie in
+# einer Befehlsersetzung, aus der heraus `e2e_die` gerufen wurde.
+e2e_annotate() {
+    [ "${GITHUB_ACTIONS:-}" = true ] || return 0
+    #
+    # Gekürzt wird mit der Genauigkeit von `printf` und nicht mit `head -c`:
+    # `head` schlösse die Leitung nach 4000 Bytes, `printf` stürbe an SIGPIPE,
+    # und unter `pipefail` ginge dann die ganze Annotation verloren. `sed` und
+    # `awk` lesen ihre Eingabe vollständig.
+    e2e_annotation=$(printf '%.4000s' "$1" |
+        sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk 'NR > 1 { printf "%%0A" } { printf "%s", $0 }') ||
+        e2e_annotation="the failure text could not be encoded; see the job log"
+    printf '::error title=e2e %s::%s\n' "$(basename "${E2E_SCRIPT:-$0}")" "$e2e_annotation" >&2
+}
+
+# e2e_on_err STATUS LINE COMMAND — die Annotation für einen nackten Befehl,
+# an dem `set -e` den Lauf beendet, ohne dass `e2e_die` gerufen wurde (etwa
+# ein `cp`, dem die Quelle fehlt).
+#
+# Nur unter bash (`trap … ERR` kennt POSIX-sh nicht) und nur, wenn `set -e`
+# beim Einlesen schon gilt: Ohne `set -e` liefe die Falle auch bei Befehlen,
+# deren Fehlschlag gewollt ist. Ohne `set -E` erben Funktionen,
+# Befehlsersetzungen und Unterschalen die Falle nicht; sie greift also nur für
+# Befehle auf der obersten Ebene des Skripts. Ein nackter Fehlschlag in einer
+# Funktion beendet den Lauf unter `set -e` ohne Annotation; dort hilft nur
+# `|| e2e_die`. `e2e_die` endet mit `exit` und löst die Falle nicht aus; ruft
+# es eine Befehlsersetzung auf der obersten Ebene, kommt zu seiner Annotation
+# eine zweite für die Zuweisung hinzu (Rauschen, kein Verlust).
+e2e_on_err() {
+    e2e_annotate "command failed with exit $1 at line $2: $3"
+}
+if [ -n "${BASH_VERSION:-}" ]; then
+    case $- in
+    *e*) trap 'e2e_on_err "$?" "$LINENO" "$BASH_COMMAND"' ERR ;;
+    esac
+fi
 
 # --- Aufräumen ---------------------------------------------------------------
 
