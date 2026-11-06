@@ -15,12 +15,27 @@
 #
 # Exit-Codes:
 #   0  der Lauf endete mit success
-#   1  der Lauf endete rot (failure, timed_out, action_required, ...)
+#   1  der Lauf endete rot (failure, timed_out, action_required, ...), oder
+#      er ist gruen, aber ein Job wurde uebersprungen, ohne dass die
+#      Pfadregel es erlaubt (HUM-424, siehe unten)
 #   2  Aufruf falsch, Commit unbekannt oder die API nicht lesbar
 #   3  kein Urteil: kein Lauf binnen der Frist, oder der Lauf wurde abgebrochen
 #      (ein neuerer Push auf denselben Branch ersetzt ihn, siehe `concurrency`;
 #      das gilt nur auf Branches, auf main hat jeder Commit seinen eigenen
 #      Lauf, HUM-238)
+#   4  nur unter HUMANITL_CI_EVERY_JOB=1: der Lauf ist gruen, aber die
+#      Pfadregel hat Jobs uebersprungen; ein voller Lauf steht aus (HUM-424)
+#
+# Pfadregel (HUM-424): In ci.yml entscheidet der Job `changes`
+# (tools/ci-changes.sh), welche Jobs ein Push braucht; die uebrigen enden mit
+# `skipped`, und der Lauf ist trotzdem `success`. Das Tor nimmt einen
+# uebersprungenen Job deshalb nur hin, wenn `changes` mit success endete und
+# dort der Schritt `skip <job>` lief. Die Ausgaben eines Jobs stehen nicht in
+# der oeffentlichen API, die Ergebnisse seiner Schritte schon. Jeder andere
+# uebersprungene Job macht einen gruenen Lauf rot: ein gescheitertes
+# `changes`, ein Job, dessen Bereich sich geaendert hat, ein Job mit einer
+# eigenen Bedingung. Ohne lesbare Jobliste gibt es fuer einen gruenen Lauf
+# deshalb kein Urteil (Exit 3).
 #
 # Umgebung, vor allem fuer den Test (`tools/tests/ci_gate_test.sh`):
 #   HUMANITL_CI_REPO      owner/name; sonst aus `git remote get-url origin`
@@ -42,6 +57,9 @@
 #                         Authorization-Kopf mit (5000 statt 60 Anfragen je
 #                         Stunde). Noetig ist es nicht.
 #   HUMANITL_CI_WORKFLOW  Dateiname des Workflows, Vorgabe ci.yml
+#   HUMANITL_CI_EVENT     Ereignis der Laeufe, die zaehlen, Vorgabe push;
+#                         tools/release.sh fragt auch nach workflow_dispatch,
+#                         dem vollen Lauf von Hand (HUM-424)
 #   HUMANITL_CI_BRANCH    optional: nur Laeufe dieses Zweigs oder Tags zaehlen
 #                         (`head_branch` des Laufs; bei einem Tag-Push ist das
 #                         der Tag-Name). Noetig, wo derselbe Commit mehrere
@@ -51,11 +69,12 @@
 #                         nach dem Tag-Push den schon gruenen Probelauf und
 #                         meldete gruen, bevor der Tag-Lauf ueberhaupt begann.
 #   HUMANITL_CI_EVERY_JOB  1: Ein Lauf mit `success` gilt nur, wenn auch jeder
-#                         einzelne Job mit `success` endete. Ein
-#                         uebersprungener Job ist sonst Teil eines gruenen
-#                         Laufs; im Probelauf von release.yml hiesse das, ein
-#                         uebersprungener guard nimmt alle Pruefungen mit, und
-#                         der Lauf waere trotzdem gruen (HUM-363).
+#                         einzelne Job mit `success` endete. Im Probelauf von
+#                         release.yml hiesse alles andere, ein uebersprungener
+#                         guard nimmt alle Pruefungen mit, und der Lauf waere
+#                         trotzdem gruen (HUM-363). Auch ein nach der
+#                         Pfadregel uebersprungener Job zaehlt dann nicht
+#                         (Exit 4): Ein Release verlangt den vollen Lauf.
 #   HUMANITL_CI_MAY_SKIP  Jobnamen, durch Leerzeichen getrennt, die unter
 #                         HUMANITL_CI_EVERY_JOB=1 uebersprungen sein duerfen,
 #                         etwa `release` im Probelauf.
@@ -76,6 +95,8 @@ poll="${HUMANITL_CI_POLL:-60}"
 workflow="${HUMANITL_CI_WORKFLOW:-ci.yml}"
 branch="${HUMANITL_CI_BRANCH:-}"
 every_job="${HUMANITL_CI_EVERY_JOB:-0}"
+event="${HUMANITL_CI_EVENT:-push}"
+[[ "$event" =~ ^[a-z_]+$ ]] || { echo "ci-gate: HUMANITL_CI_EVENT ist kein Ereignis: $event" >&2; exit 2; }
 may_skip="${HUMANITL_CI_MAY_SKIP:-}"
 api="${HUMANITL_CI_API:-https://api.github.com}"
 
@@ -207,36 +228,55 @@ for j in sorted(jobs, key=lambda j: j.get("name", "")):
 '
 }
 
-# Unter HUMANITL_CI_EVERY_JOB=1: jeder Job, der nicht mit success endete und
-# nicht in HUMANITL_CI_MAY_SKIP als uebersprungen erlaubt ist, als eine Zeile.
-# Exit 1, wenn es einen gibt, Exit 4, wenn die Liste leer ist.
-unfinished_jobs() {
-  CI_GATE_MAY_SKIP="$may_skip" python3 -I -c '
+# Das Urteil ueber die Jobs eines gruenen Laufs. Je Zeile `bad <text>` fuer
+# einen Job, der den Lauf rot macht, oder `path <job>` fuer einen, den die
+# Pfadregel uebersprang (siehe oben). Ein uebersprungener Job zaehlt nur als
+# `path`, wenn der Job `changes` mit success endete und sein Schritt
+# `skip <job>` mit success lief. HUMANITL_CI_MAY_SKIP gilt nur unter
+# HUMANITL_CI_EVERY_JOB=1. Exit 4, wenn die Liste leer ist.
+judge_jobs() {
+  CI_GATE_MAY_SKIP="$may_skip" CI_GATE_EVERY="$every_job" python3 -I -c '
 import json, os, sys
 jobs = json.load(sys.stdin).get("jobs") or []
 if not jobs:
     sys.exit(4)
-may_skip = set(os.environ.get("CI_GATE_MAY_SKIP", "").split())
-bad = 0
+every = os.environ.get("CI_GATE_EVERY") == "1"
+may_skip = set(os.environ.get("CI_GATE_MAY_SKIP", "").split()) if every else set()
+changes = [j for j in jobs if j.get("name") == "changes"]
+plan = set()
+if len(changes) == 1 and changes[0].get("conclusion") == "success":
+    for s in changes[0].get("steps") or []:
+        name = s.get("name") or ""
+        if name.startswith("skip ") and s.get("conclusion") == "success":
+            plan.add(name[len("skip "):])
+fine = ("success",) if every else ("success", "neutral")
 for j in sorted(jobs, key=lambda j: j.get("name", "")):
+    name = j.get("name", "?")
     conclusion = j.get("conclusion") or j.get("status") or "-"
-    if conclusion == "success" or (conclusion == "skipped" and j.get("name") in may_skip):
+    if conclusion in fine:
         continue
-    print("  %s: %s" % (j.get("name", "?"), conclusion))
-    bad = 1
-sys.exit(bad)
+    if conclusion == "skipped" and name in may_skip:
+        continue
+    if conclusion == "skipped" and name in plan:
+        print("path %s" % name)
+        continue
+    if conclusion == "skipped":
+        print("bad %s: skipped, nicht nach der Pfadregel (changes ohne Schritt \"skip %s\")" % (name, name))
+    else:
+        print("bad %s: %s" % (name, conclusion))
 '
 }
 
-# Nur Push-Laeufe: Ein Lauf fuer einen Pull Request derselben SHA prueft einen
-# anderen Stand (den Merge mit dem Ziel) und darf das Tor nicht oeffnen.
-runs_url="$api/repos/$repo/actions/workflows/$workflow/runs?head_sha=$sha&event=push&per_page=20"
+# Nur Push-Laeufe (oder das Ereignis aus HUMANITL_CI_EVENT): Ein Lauf fuer
+# einen Pull Request derselben SHA prueft einen anderen Stand (den Merge mit
+# dem Ziel) und darf das Tor nicht oeffnen.
+runs_url="$api/repos/$repo/actions/workflows/$workflow/runs?head_sha=$sha&event=$event&per_page=20"
 if [[ -n "$branch" ]]; then
   # Ein Zweigname wie release-dry/0.0.7 traegt einen Schraegstrich.
   runs_url+="&branch=$(python3 -I -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$branch")"
 fi
 short="${sha:0:12}"
-echo "ci-gate: warte auf $workflow fuer $short${branch:+ auf $branch} in $repo (Frist ${limit}s)"
+echo "ci-gate: warte auf $workflow fuer $short${branch:+ auf $branch}${event:+ ($event)} in $repo (Frist ${limit}s)"
 start=$(date +%s)
 last=""
 first=1
@@ -306,16 +346,16 @@ while :; do
 done
 
 echo "ci-gate: Lauf $run_id: $conclusion ($html)"
-# Die Jobliste ist nur Auskunft; das Urteil steht schon im Lauf. Scheitert
-# ihre Abfrage, entscheidet das Skript trotzdem und sagt, was fehlt.
+# Fuer einen roten Lauf ist die Jobliste nur Auskunft; scheitert ihre
+# Abfrage, bleibt er rot. Fuer einen gruenen entscheidet sie mit (Pfadregel,
+# HUMANITL_CI_EVERY_JOB); eine erreichte Ratengrenze (Exit 75) ist dann wie in
+# der Schleife oben kein Fehler, sondern ein Grund zu warten, solange die
+# Frist reicht.
 jobs_ok=0
-# Unter HUMANITL_CI_EVERY_JOB=1 entscheidet die Jobliste mit; eine erreichte
-# Ratengrenze (Exit 75) ist dann wie in der Schleife oben kein Fehler, sondern
-# ein Grund zu warten, solange die Frist reicht.
 while :; do
   frc=0
   jobs_body="$(fetch "$api/repos/$repo/actions/runs/$run_id/jobs?per_page=100")" || frc=$?
-  if ((frc == 75)) && [[ "$every_job" == 1 ]] && (($(date +%s) - start < limit)); then
+  if ((frc == 75)) && [[ "$conclusion" == success ]] && (($(date +%s) - start < limit)); then
     [[ "$jobs_body" =~ ^[0-9]+$ ]] || jobs_body=60
     echo "ci-gate: Ratengrenze der API erreicht, warte ${jobs_body}s auf die Jobliste" >&2
     nap "$jobs_body"
@@ -333,23 +373,37 @@ else
   echo "ci-gate: Jobs des Laufs $run_id nicht lesbar; Einzelheiten auf $html" >&2
 fi
 
-# Unter HUMANITL_CI_EVERY_JOB=1 entscheidet auch die Jobliste. Ohne sie gibt
-# es kein Urteil: Ein gruener Lauf, dessen Jobs niemand gesehen hat, koennte
+# Fuer einen gruenen Lauf entscheidet auch die Jobliste. Ohne sie gibt es
+# kein Urteil: Ein gruener Lauf, dessen Jobs niemand gesehen hat, koennte
 # lauter uebersprungene sein.
-if [[ "$every_job" == 1 && "$conclusion" == success ]]; then
+if [[ "$conclusion" == success ]]; then
   if ((!jobs_ok)); then
-    echo "ci-gate: kein Urteil; die Jobliste des Laufs $run_id fehlt, jeder Job muss gruen sein ($html)" >&2
+    echo "ci-gate: kein Urteil; die Jobliste des Laufs $run_id fehlt, und ohne sie ist kein uebersprungener Job zu pruefen ($html)" >&2
     exit 3
   fi
   jrc=0
-  bad="$(unfinished_jobs <<< "$jobs_body")" || jrc=$?
+  verdict="$(judge_jobs <<< "$jobs_body")" || jrc=$?
   if ((jrc == 4)); then
     echo "ci-gate: rot; der Lauf $run_id hat keine Jobs, nicht mergen ($html)" >&2
     exit 1
   elif ((jrc != 0)); then
+    echo "ci-gate: Jobliste nicht auswertbar ($html)" >&2
+    exit 2
+  fi
+  bad="$(sed -n 's/^bad /  /p' <<< "$verdict")"
+  skipped="$(sed -n 's/^path //p' <<< "$verdict" | tr '\n' ' ')"
+  skipped="${skipped% }"
+  if [[ -n "$bad" ]]; then
     echo "ci-gate: rot; der Lauf ist gruen, aber nicht jeder Job:" >&2
     echo "$bad" >&2
     exit 1
+  fi
+  if [[ -n "$skipped" ]]; then
+    echo "ci-gate: nach der Pfadregel uebersprungen: $skipped"
+    if [[ "$every_job" == 1 ]]; then
+      echo "ci-gate: kein voller Lauf; jeder Job muss gelaufen sein ($html)" >&2
+      exit 4
+    fi
   fi
 fi
 

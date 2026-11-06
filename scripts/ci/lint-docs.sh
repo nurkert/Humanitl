@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Documentation gate for the security documents (HUM-007).
-# Hooked into `make check` locally and into the CI job `rust-check`.
+# Hooked into `make check` locally and into the CI job `lint` (until HUM-424 `rust-check`).
 #
 # It enforces three things:
 #   1. docs/SECURITY.md and docs/THREAT-MODEL.md exist and are not empty.

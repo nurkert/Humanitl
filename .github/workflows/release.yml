@@ -238,10 +238,24 @@ jobs:
           fi
 
       - name: The commit is on main and its CI run is green
+        # Seit HUM-424 laesst ci.yml Jobs aus, die ein Push nicht beruehrt.
+        # Ein Release verlangt deshalb einen Lauf, in dem jeder Job lief:
+        # tools/ci-gate.sh mit HUMANITL_CI_EVERY_JOB=1, dasselbe Tor wie
+        # tools/release.sh. Liess der Push-Lauf Jobs nach der Pfadregel aus
+        # (Exit 4), zaehlt der volle Lauf von Hand (workflow_dispatch,
+        # full=true) auf demselben Commit. tools/tests/release_guard_test.py
+        # fuehrt diesen Schritt gegen ein nachgestelltes Tor aus.
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           SHA: ${{ github.sha }}
           STRICT_GUARD: ${{ steps.version.outputs.strict }}
+          HUMANITL_CI_REPO: ${{ github.repository }}
+          HUMANITL_CI_WORKFLOW: ci.yml
+          HUMANITL_CI_BRANCH: main
+          HUMANITL_CI_EVERY_JOB: "1"
+          HUMANITL_CI_MAY_SKIP: ""
+          HUMANITL_CI_FIRST_WAIT: "0"
+          HUMANITL_CI_POLL: "60"
         run: |
           set -euo pipefail
           # Im Probelauf eines Issue-Zweigs oder von Hand ist ein Verstoss eine
@@ -258,31 +272,32 @@ jobs:
           git fetch --no-tags origin main
           if ! git merge-base --is-ancestor "$SHA" origin/main; then
             complain "commit $SHA is not on main. Tag a commit of main that CI has passed."
+            # Ein Commit ausserhalb von main hat keinen Lauf auf main.
+            exit 0
           fi
 
-          # Der juengste push-Lauf von ci.yml fuer genau diesen Commit auf
-          # main. Laeuft er noch, wird bis zu 45 Minuten gewartet: Ein Tag
-          # direkt nach dem Merge soll nicht an der Reihenfolge scheitern.
-          for attempt in $(seq 1 45); do
-            run="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&branch=main&event=push&per_page=20" \
-              --jq '.workflow_runs | sort_by(.run_number) | last | if . == null then "none" else "\(.status) \(.conclusion) \(.html_url)" end')"
-            read -r status conclusion url <<<"$run"
-            if [[ "$status" != "none" && "$status" != "completed" ]]; then
-              echo "ci.yml run for $SHA is $status ($url), waiting ($attempt/45)"
-              sleep 60
-              continue
+          # Laeuft der Push-Lauf noch, wartet das Tor bis zu 45 Minuten: Ein
+          # Tag direkt nach dem Merge soll nicht an der Reihenfolge scheitern.
+          # Ohne strict genuegt eine Minute, der Lauf ist dort nur Auskunft.
+          limit=60
+          [[ "$STRICT_GUARD" == "true" ]] && limit=2700
+          rc=0
+          HUMANITL_CI_EVENT=push tools/ci-gate.sh "$SHA" "$limit" || rc=$?
+          if ((rc == 4)); then
+            echo "the push run of ci.yml for $SHA skipped jobs by the path rules; looking for a full run started by hand"
+            rc=0
+            HUMANITL_CI_EVENT=workflow_dispatch tools/ci-gate.sh "$SHA" 300 || rc=$?
+            if ((rc == 4)); then
+              complain "the run of ci.yml started by hand for $SHA skipped jobs as well. Start it on main with full=true."
+              exit 0
             fi
-            break
-          done
-          if [[ "$status" == "none" ]]; then
-            complain "no ci.yml run on main for commit $SHA. Push the commit to main first and let CI finish."
-          elif [[ "$status" != "completed" ]]; then
-            complain "the ci.yml run for $SHA did not finish within 45 minutes ($url). Re-run this workflow once it is green."
-          elif [[ "$conclusion" != "success" ]]; then
-            complain "the ci.yml run for $SHA concluded '$conclusion' ($url). Only a green main commit is released."
-          else
-            echo "ci.yml run for $SHA: success ($url)"
           fi
+          case "$rc" in
+            0) echo "ci.yml for $SHA: every job green" ;;
+            1) complain "ci.yml for $SHA is red. Only a green main commit is released." ;;
+            3) complain "no finished ci.yml run of $SHA on main in which every job ran. Let CI finish; if its push run skipped jobs, run ci.yml on main with full=true, then re-run this workflow." ;;
+            *) complain "tools/ci-gate.sh failed with $rc for $SHA (API or network?). Re-run this workflow." ;;
+          esac
 
       - name: A tag needs a green dry run of the same commit
         # Ein Tag, der von Hand gepusht wurde statt mit tools/release.sh, kaeme

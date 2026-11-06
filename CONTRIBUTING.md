@@ -111,8 +111,10 @@ Volllauf. `.github/workflows/ci.yml` läuft auch für Pushes auf `hum-*`, und
    Push-Lauf genau dieses Commits (ohne `gh`; ein Token in
    `HUMANITL_CI_TOKEN` oder `GITHUB_TOKEN` hebt nur die Ratengrenze) und nennt
    je Job das Ergebnis und bei Rot den Schritt, der fiel. Exit 0 grün, 1 rot,
-   2 Aufruf oder API kaputt, 3 kein Urteil (Frist abgelaufen oder Lauf
-   abgebrochen).
+   2 Aufruf oder API kaputt, 3 kein Urteil (Frist abgelaufen, Lauf
+   abgebrochen oder Jobliste eines grünen Laufs nicht lesbar). Ein Job, den
+   die Pfadregel ausließ, zählt als grün; jeder andere übersprungene Job
+   macht den Lauf rot (siehe unten).
 4. Nur bei Grün: Merge mit `--no-ff` nach `main`, Push, Branch auf `origin`
    löschen.
 
@@ -159,6 +161,64 @@ dieselben Prüfungen lokal, etwa wenn die CI nicht erreichbar ist. Sein
 Zielverzeichnis (`~/.cache/humanitl/verify-target`) baut wie die CI nicht
 inkrementell und räumt alte `incremental`-Verzeichnisse bei jedem Lauf weg
 (HUM-147).
+
+### Pfadregel der CI (HUM-424)
+
+macOS-Minuten zählen bei GitHub zehnfach. Am 2026-11-05 hat GitHub die
+Actions des Kontos wegen der Brutto-Nutzung gesperrt, obwohl ein öffentliches
+Repository nichts kostet; fast alles davon war der Job `macos`. Seitdem
+startet `ci.yml` nur die Jobs, deren Eingaben ein Push berührt:
+
+- Der erste Job `changes` ruft `tools/ci-changes.sh` auf. Verglichen wird auf
+  `hum-*` und `macos-*` mit der gemeinsamen Basis mit `origin/main`, auf
+  `main` mit dem vorigen Stand (`github.event.before`). Ist der unbekannt oder
+  kein Vorfahre (erster Push, Push mit Gewalt), läuft alles.
+- `website/**` allein startet keinen schweren Job. `backlog/**` und
+  `BACKLOG.md` starten nur `rust-test`, denn
+  `daemon/crates/config/tests/config_readers.rs` liest die Sprint-Dateien
+  und `BACKLOG.md`. `docs/**`, `images/**` und die Markdown-Dateien im
+  Wurzelverzeichnis starten nur die Linux-Jobs, die sie lesen (`rust-test`,
+  `flutter-analyze-test`, `deps-lint`, `parity-check`): Tests von Daemon und
+  App lesen `docs/CONFIG.md`, `docs/INSTALL.md` und weitere.
+- `app/**` startet die App-Jobs, `daemon/**` und `tests/**` die Rust-Jobs,
+  `proto/**`, `catalog/**`, `rules/**`, `profiles/**`, `agents/**`,
+  `fixtures/**` und `packaging/**` beide. Welcher Job zu welchem Bereich
+  gehört, steht in der Liste `jobs` in `tools/ci-changes.sh`.
+- `tools/**`, `scripts/**`, `.github/**`, das `Makefile`, `CHANGELOG.md`
+  und jeder Pfad, den keine Regel kennt, starten alles. `CHANGELOG.md`, weil
+  der Commit eines Releases oft nur ihn ändert; so hat er ohne Handgriff
+  einen vollen Lauf.
+- `macos` läuft auf einem Branch nur für macOS-nahe Änderungen: Pfade mit
+  macos, darwin, seatbelt oder launchd, die Manifeste und Lockfiles von Cargo
+  und Flutter, `app/.fvmrc`, und Code, dessen alter oder neuer Inhalt macOS,
+  `target_os` und Verwandtes nennt. Auf `main` läuft es für jede Änderung am
+  Code; was die Schätzung auf dem Branch verfehlt, fällt dort auf. Vor jedem
+  Tag baut und prüft der Probelauf von `release.yml` macOS ohnehin.
+- `lint` (Sicherheitsdokumente, Links, Katalog, typisierte Fehler),
+  `changes` und `ci-ok` laufen bei jedem Push.
+
+Ehrlich bleibt das Tor so: Ein übersprungener Job zählt in
+`tools/ci-gate.sh` nur, wenn `changes` grün endete und dort der Schritt
+`skip <job>` lief. Ein gescheitertes `changes`, ein Job, dessen Bereich sich
+geändert hat, oder ein Job, der aus einem anderen Grund übersprungen wurde,
+färbt den Lauf rot. `tools/tests/ci_plan_test.py` prüft, dass Jobs, Ausgaben
+und Schritte von `changes` in `ci.yml` zu `tools/ci-changes.sh` passen; wer
+einen Job hinzufügt, ergänzt alle drei Stellen. Den vollen Lauf erzwingt
+`workflow_dispatch` mit `full=true` (Actions, Workflow `ci`, „Run workflow“),
+und `tools/release.sh` verlangt ihn, wenn der Push-Lauf des Release-Commits
+Jobs ausließ. Der Job `guard` in `release.yml` prüft dasselbe mit
+`tools/ci-gate.sh`, auch für einen von Hand gepushten Tag oder Probelauf-Branch.
+
+Die Branch Protection von `main` soll nur den Check `ci-ok` verlangen (der
+Eigentümer stellt ihn ein). GitHub zählt einen übersprungenen Check als
+bestanden; scheitert `changes`, sind alle schweren Jobs übersprungen, und
+einzeln verlangte Checks ließen das in der Oberfläche durch. `ci-ok` hängt von
+jedem anderen Job ab, läuft immer und ist nur grün, wenn `changes` und `lint`
+grün sind und jeder andere Job grün ist oder nach der Ausgabe von `changes`
+übersprungen wurde, dieselbe Regel wie im Tor.
+
+Läufe auf demselben Branch ersetzen einander (`concurrency`), auf `main`
+nicht: Dort braucht jeder Merge ein eigenes Urteil (HUM-238).
 
 ### Gemeinsamer Build-Cache (sccache)
 
@@ -304,7 +364,10 @@ schon bestanden hat:
    Commit einen datierten Abschnitt der Version haben, sonst pusht es nichts.
 2. Ziel ist die Spitze von `origin/main` (ein zweites Argument darf nur genau
    diese Spitze nennen), und ihr `ci.yml`-Lauf auf `main` ist grün
-   (`tools/ci-gate.sh`).
+   (`tools/ci-gate.sh`), mit jedem Job. Hat die Pfadregel (HUM-424) im
+   Push-Lauf Jobs ausgelassen, etwa weil der Commit nur `docs/` änderte,
+   verlangt das Skript einen vollen Lauf von Hand
+   (`workflow_dispatch` mit `full=true` auf `main`) und wartet auf ihn.
 3. Es pusht den Commit als Branch `release-dry/0.Y.Z`. Das startet den
    Probelauf von `release.yml` mit genau dieser Version: alle Bau- und
    Prüfjobs, `guard` so streng wie beim Tag, ohne den Job `release`. Das

@@ -12024,3 +12024,40 @@ lesbar ist; Schritt 7 nimmt die Fehlzeilen des Treibers mit.
 **Akzeptanz.** Gegenproben: Verfall nach 8 s und nach 31 s fallen rot; eine
 Nachricht von 100 KB verliert die Anmerkung nicht; `e2e_die` annotiert
 genau einmal.
+
+## HUM-424 · CI runs only the jobs a change can affect, and still proves everything before a merge or a release
+
+**Anlass.** Am 2026-11-05 sperrte GitHub Actions wegen der Abrechnung;
+jeder Push fuhr bis dahin alle 16 Jobs, auch für eine reine
+Website-Änderung, darunter den teuren macOS-Job. Der Inhaber wünschte eine
+günstigere CI.
+
+**Umsetzung.**
+- `tools/ci-changes.sh` ordnet die geänderten Pfade Bereichen zu (rust,
+  app, docs, backlog, macos) und gibt je Job `true` oder `false` aus. Ein
+  unbekannter Pfad, `tools/`, `scripts/`, `.github/`, `Makefile` und
+  `CHANGELOG.md` lösen den vollen Lauf aus; `website/` startet keinen
+  schweren Job. `backlog/` und `BACKLOG.md` starten `rust-test`, weil
+  `config_readers.rs` diese Dateien liest. Der macOS-Job läuft nur, wenn
+  ein geänderter Rust-Pfad macOS-Code berührt (vorher oder nachher).
+- Scheitert irgendein git-Aufruf dabei (unbekannte Basis, fehlender
+  Baum oder Blob im partiellen Klon), läuft alles; das Skript schlägt nie
+  still in Richtung „überspringen" durch.
+- Ein neuer Job `changes` plant, ein neuer Job `lint` fährt die billigen
+  Prüfungen, der letzte Job `ci-ok` (`if: always()`, braucht alle anderen)
+  ist nur grün, wenn `changes` und `lint` erfolgreich waren und jeder
+  andere Job erfolgreich war oder laut Plan übersprungen wurde. Die Branch
+  Protection verlangt nur `ci-ok`, weil GitHub übersprungene Pflicht-Checks
+  als bestanden zählt.
+- `tools/ci-gate.sh` kennt mit `HUMANITL_CI_EVERY_JOB=1` eine strenge
+  Form, die jeden übersprungenen Job als rot wertet. `tools/release.sh` und
+  der Guard in `release.yml` verlangen sie für den Release-Commit und
+  nehmen bei einem teilweisen Push-Lauf einen vollen `workflow_dispatch`-Lauf
+  desselben Commits an.
+
+**Akzeptanz.** `make tools-test` grün mit `ci_changes_test.sh`,
+`ci_plan_test.py`, `ci_gate_test.sh`, `release_test.sh` und
+`release_guard_test.py`; `ci_plan_test.py` führt den Schritt von `ci-ok`
+gegen nachgestellte `needs`-Kontexte aus (übersprungen trotz Plan,
+abgebrochen, `changes` oder `lint` gescheitert: rot). Mutationsbeweise für
+ci-changes, ci-gate, ci_plan und den Release-Guard.

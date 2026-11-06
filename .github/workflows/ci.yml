@@ -10,9 +10,37 @@
 # placeholder that quietly reports success would be a green lie, and the sprint
 # rule in BACKLOG.md 8 rests on the pipeline telling the truth.
 #
-# Branch protection (configured manually on the repository): `main` requires
-# rust-check, rust-test, proto-lint-and-gen, flutter-analyze-test, goldens,
-# escape-tests, e2e, e2e-xvfb, e2e-agent, deps-lint and parity-check to pass.
+# Branch protection (configured manually on the repository): `main` should
+# require the single check `ci-ok` (HUM-424). Branch protection counts a
+# skipped check as passed, and with the path rules below a failing `changes`
+# job skips every heavy job; requiring the heavy jobs one by one would let
+# such a run through in the UI. `ci-ok` runs always and fails unless changes
+# and lint succeeded and every other job succeeded or was skipped by the path
+# plan, the same rule tools/ci-gate.sh applies.
+#
+# Path rules (HUM-424). macOS minutes count tenfold, and on 2026-11-05 GitHub
+# locked Actions for the account over the gross usage. The first job,
+# `changes`, runs tools/ci-changes.sh and says which jobs this push needs:
+#   - hum-* and macos-* branches compare with their merge base with
+#     origin/main, main with the previous commit (github.event.before); an
+#     unknown or rewritten previous commit means everything.
+#   - website/** alone starts no heavy job. backlog/** and BACKLOG.md start
+#     only rust-test (config_readers.rs reads them). docs/** and the Markdown
+#     files at the root start only the Linux jobs that read them (rust-test,
+#     flutter-analyze-test, deps-lint, parity-check).
+#   - tools/**, scripts/**, .github/**, the Makefile, CHANGELOG.md (the
+#     release commit often touches nothing else) and any unknown path start
+#     everything.
+#   - macos runs on a branch only for macOS-relevant changes (paths and
+#     manifests named in tools/ci-changes.sh, or code that mentions macOS),
+#     on main for every change to code. Before every tag the release dry run
+#     of release.yml builds and checks macOS anyway.
+#   - lint, changes and ci-ok run on every push.
+# tools/ci-gate.sh accepts a skipped job only if `changes` succeeded and its
+# step `skip <job>` ran; every other skip is red. The last job, `ci-ok`, says
+# the same for branch protection. tools/release.sh wants a run
+# on the release commit in which every job ran: when the push run of main
+# skipped some, start this workflow by hand on main with full=true.
 #
 # Every action is pinned to a commit SHA; the release tag in the trailing
 # comment is documentation. Bump both together, here and in .github/actions.
@@ -30,6 +58,15 @@ on:
     # collects one commit per issue before it is merged (HUM-312).
     branches: [main, "hum-*", "macos-*"]
   pull_request:
+  # A full run by hand, for tools/release.sh when the push run of the release
+  # commit skipped jobs by the path rules (HUM-424). full=false applies the
+  # path rules as a push would.
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "Run every job, ignoring the path rules"
+        type: boolean
+        default: true
 
 # One run per ref. On an issue branch a new push supersedes the one in flight;
 # that is the amended commit after a red run.
@@ -41,8 +78,11 @@ on:
 # one pending run and cancels the older pending one, so a third merge would
 # still cost the second its run. On main the group therefore is the commit
 # itself, and every merge gets its own run.
+#
+# The event is part of the group, so a full run started by hand (HUM-424) and
+# the push run of the same main commit never cancel each other.
 concurrency:
-  group: ci-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 # Least privilege: nothing here writes to the repository. Jobs that need more
@@ -61,8 +101,132 @@ env:
   STRICT: "1"
 
 jobs:
+  changes:
+    name: changes
+    # Which jobs this push needs (HUM-424). tools/ci-changes.sh holds the path
+    # rules; every heavy job below has `needs: changes` and runs only when its
+    # output is 'true'. A failing changes job skips them all and turns the run
+    # red, never green.
+    #
+    # The steps `skip <job>` are the record tools/ci-gate.sh reads: a job may
+    # conclude `skipped` only when this job succeeded and its step `skip <job>`
+    # ran. Step outputs are not in the public API, step conclusions are.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      rust-check: ${{ steps.areas.outputs.rust-check }}
+      rust-test: ${{ steps.areas.outputs.rust-test }}
+      macos: ${{ steps.areas.outputs.macos }}
+      deps-lint: ${{ steps.areas.outputs.deps-lint }}
+      proto-lint-and-gen: ${{ steps.areas.outputs.proto-lint-and-gen }}
+      flutter-analyze-test: ${{ steps.areas.outputs.flutter-analyze-test }}
+      goldens: ${{ steps.areas.outputs.goldens }}
+      escape-tests: ${{ steps.areas.outputs.escape-tests }}
+      e2e: ${{ steps.areas.outputs.e2e }}
+      e2e-xvfb: ${{ steps.areas.outputs.e2e-xvfb }}
+      e2e-agent: ${{ steps.areas.outputs.e2e-agent }}
+      e2e-m4: ${{ steps.areas.outputs.e2e-m4 }}
+      e2e-m4-package: ${{ steps.areas.outputs.e2e-m4-package }}
+      parity-check: ${{ steps.areas.outputs.parity-check }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The merge base with origin/main needs the history; the file list
+          # needs trees only, blobs come on demand for the macOS check.
+          fetch-depth: 0
+          filter: blob:none
+      - name: Areas this push touches
+        id: areas
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          FULL: ${{ github.event_name == 'workflow_dispatch' && inputs.full }}
+        run: |
+          set -euo pipefail
+          on_main=()
+          [[ "$REF" == refs/heads/main ]] && on_main=(--main)
+          case "$EVENT" in
+            push)
+              # main: what this push added to main; an unknown or rewritten
+              # previous commit means everything. Branches: everything since
+              # they left main.
+              if [[ "$REF" == refs/heads/main ]]; then
+                args=(--base "$BEFORE")
+              else
+                args=(--merge-base-with origin/main)
+              fi
+              ;;
+            pull_request) args=(--merge-base-with "$PR_BASE") ;;
+            workflow_dispatch)
+              if [[ "$FULL" == true ]]; then
+                args=(--full)
+              elif [[ "$REF" == refs/heads/main ]]; then
+                args=(--base HEAD^1)
+              else
+                args=(--merge-base-with origin/main)
+              fi
+              ;;
+            *) args=(--full) ;;
+          esac
+          tools/ci-changes.sh "${on_main[@]}" "${args[@]}" HEAD > "$RUNNER_TEMP/areas" 2> "$RUNNER_TEMP/why"
+          cat "$RUNNER_TEMP/why" "$RUNNER_TEMP/areas"
+          cat "$RUNNER_TEMP/areas" >> "$GITHUB_OUTPUT"
+          {
+            echo "### changes"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/why"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: skip rust-check
+        if: steps.areas.outputs.rust-check != 'true'
+        run: echo "rust-check is skipped, the path rules found nothing it reads"
+      - name: skip rust-test
+        if: steps.areas.outputs.rust-test != 'true'
+        run: echo "rust-test is skipped, the path rules found nothing it reads"
+      - name: skip macos
+        if: steps.areas.outputs.macos != 'true'
+        run: echo "macos is skipped, the path rules found nothing it reads"
+      - name: skip deps-lint
+        if: steps.areas.outputs.deps-lint != 'true'
+        run: echo "deps-lint is skipped, the path rules found nothing it reads"
+      - name: skip proto-lint-and-gen
+        if: steps.areas.outputs.proto-lint-and-gen != 'true'
+        run: echo "proto-lint-and-gen is skipped, the path rules found nothing it reads"
+      - name: skip flutter-analyze-test
+        if: steps.areas.outputs.flutter-analyze-test != 'true'
+        run: echo "flutter-analyze-test is skipped, the path rules found nothing it reads"
+      - name: skip goldens
+        if: steps.areas.outputs.goldens != 'true'
+        run: echo "goldens is skipped, the path rules found nothing it reads"
+      - name: skip escape-tests
+        if: steps.areas.outputs.escape-tests != 'true'
+        run: echo "escape-tests is skipped, the path rules found nothing it reads"
+      - name: skip e2e
+        if: steps.areas.outputs.e2e != 'true'
+        run: echo "e2e is skipped, the path rules found nothing it reads"
+      - name: skip e2e-xvfb
+        if: steps.areas.outputs.e2e-xvfb != 'true'
+        run: echo "e2e-xvfb is skipped, the path rules found nothing it reads"
+      - name: skip e2e-agent
+        if: steps.areas.outputs.e2e-agent != 'true'
+        run: echo "e2e-agent is skipped, the path rules found nothing it reads"
+      - name: skip e2e-m4
+        if: steps.areas.outputs.e2e-m4 != 'true'
+        run: echo "e2e-m4 is skipped, the path rules found nothing it reads"
+      - name: skip e2e-m4-package
+        if: steps.areas.outputs.e2e-m4-package != 'true'
+        run: echo "e2e-m4-package is skipped, the path rules found nothing it reads"
+      - name: skip parity-check
+        if: steps.areas.outputs.parity-check != 'true'
+        run: echo "parity-check is skipped, the path rules found nothing it reads"
+
   rust-check:
     name: rust-check
+    needs: changes
+    if: needs.changes.outputs.rust-check == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -74,6 +238,16 @@ jobs:
         run: make rust-fmt rust-clippy
       - name: Licenses, advisories, duplicate crates
         run: make rust-deny
+
+  lint:
+    name: lint
+    # The cheap checks that need no toolchain. They ran in rust-check until
+    # HUM-424; here they run on every push, also when the path rules skip
+    # rust-check, because a page under docs/ or a catalog edit alone can break
+    # them. No `needs: changes`: this job is never skipped.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install check-jsonschema
         # scripts/ci/lint-docs.sh validates catalog/domains.yaml against its
         # schema when the tool is there and reports a loud skip when it is not.
@@ -81,12 +255,11 @@ jobs:
         run: pipx install check-jsonschema
       - name: Security documents (HUM-007)
         # Both documents complete, no TODO/TBD line, every referenced ESC-N is a
-        # real escape test. Needs no toolchain, rides along in this job.
+        # real escape test, every relative link under docs/ resolves.
         run: make docs-lint
       - name: Bundled catalog matches its source (HUM-094)
         # Part of `make check` and of the old local verify, but no CI job ran
-        # it until HUM-237 made CI the only full gate. A byte comparison, so it
-        # rides along here.
+        # it until HUM-237 made CI the only full gate. A byte comparison.
         run: make catalog-lint
       - name: Typed errors in public signatures (HUM-063)
         # Public functions of the library crates return Diagnostic or a
@@ -99,6 +272,8 @@ jobs:
 
   rust-test:
     name: rust-test
+    needs: changes
+    if: needs.changes.outputs.rust-test == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -230,6 +405,8 @@ jobs:
 
   macos:
     name: macos
+    needs: changes
+    if: needs.changes.outputs.macos == 'true'
     # Daemon, CLI and their tests on macOS (HUM-312, backlog/sprint-6.md).
     # macos-15 is Apple Silicon; the Intel half of the release is cross-built
     # in release.yml and only checked there. Linux stays the reference: what
@@ -353,6 +530,8 @@ jobs:
 
   deps-lint:
     name: deps-lint
+    needs: changes
+    if: needs.changes.outputs.deps-lint == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -368,13 +547,22 @@ jobs:
         # tools/check-deps.sh reads `cargo metadata`, hence the Rust setup.
         run: make deps-lint
       - name: Tests of the pipeline tools (HUM-237)
-        # tools/ci-gate.sh against a faked Actions API and
-        # tools/commit-issue.sh --ci against a throwaway origin: the tools that
-        # decide whether a branch reaches main.
-        run: make tools-test
+        # tools/ci-gate.sh against a faked Actions API,
+        # tools/commit-issue.sh --ci against a throwaway origin, and the path
+        # rules of tools/ci-changes.sh against this file (HUM-424): the tools
+        # that decide whether a branch reaches main. The plan test reads YAML.
+        run: |
+          set -euo pipefail
+          python3 -c 'import yaml' 2> /dev/null || {
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends python3-yaml
+          }
+          make tools-test
 
   proto-lint-and-gen:
     name: proto-lint-and-gen
+    needs: changes
+    if: needs.changes.outputs.proto-lint-and-gen == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -448,6 +636,8 @@ jobs:
 
   flutter-analyze-test:
     name: flutter-analyze-test
+    needs: changes
+    if: needs.changes.outputs.flutter-analyze-test == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -537,6 +727,8 @@ jobs:
 
   goldens:
     name: goldens
+    needs: changes
+    if: needs.changes.outputs.goldens == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -583,6 +775,8 @@ jobs:
 
   escape-tests:
     name: escape-tests
+    needs: changes
+    if: needs.changes.outputs.escape-tests == 'true'
     runs-on: ubuntu-24.04
     # Since HUM-021 every probe of Sprint 1 is green, so nothing is tolerated
     # any more: run.sh exits 1 for a red probe and 2 for a sandbox that would
@@ -684,6 +878,8 @@ jobs:
 
   e2e:
     name: e2e
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-24.04
     # The demo is under fifteen seconds of running once the binaries are there;
     # the rest of the budget is the build. A job that hangs instead of failing
@@ -734,6 +930,8 @@ jobs:
 
   e2e-xvfb:
     name: e2e-xvfb
+    needs: changes
+    if: needs.changes.outputs.e2e-xvfb == 'true'
     runs-on: ubuntu-24.04
     # The M2 demo itself is under a minute with a warm tree (measured 47 s on a
     # six-core desktop, 2026-09-12); the rest of the budget is the Rust build,
@@ -844,6 +1042,8 @@ jobs:
 
   e2e-agent:
     name: e2e-agent
+    needs: changes
+    if: needs.changes.outputs.e2e-agent == 'true'
     runs-on: ubuntu-24.04
     # The M3 demo itself is around forty seconds; the rest of the budget is the
     # Rust build. A job that hangs instead of failing would hide exactly the
@@ -914,6 +1114,8 @@ jobs:
 
   e2e-m4:
     name: e2e-m4
+    needs: changes
+    if: needs.changes.outputs.e2e-m4 == 'true'
     runs-on: ubuntu-24.04
     # The target of HUM-055 is under ten minutes on a warm cache: the M4 demo
     # itself is around two minutes, the rest is the Rust and Flutter debug
@@ -993,6 +1195,8 @@ jobs:
 
   e2e-m4-package:
     name: e2e-m4-package
+    needs: changes
+    if: needs.changes.outputs.e2e-m4-package == 'true'
     runs-on: ubuntu-24.04
     # Step 13 of the M4 demo: a release build of the three binaries and the
     # app, the .deb, lintian without E:, and no test hook in the release
@@ -1054,6 +1258,8 @@ jobs:
 
   parity-check:
     name: parity-check
+    needs: changes
+    if: needs.changes.outputs.parity-check == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -1068,3 +1274,59 @@ jobs:
         # every generated reference page (docs/CONFIG.md, docs/DIAGNOSTICS.md,
         # docs/reference/cli.md): this job is the `docs-check` of the spec.
         run: ./scripts/ci/parity-check.sh
+
+  ci-ok:
+    name: ci-ok
+    # The one check branch protection should require (HUM-424). A skipped
+    # check counts as passed there, so the heavy jobs cannot be required one
+    # by one: a failing `changes` would skip them all. This job always runs
+    # and is green only when changes and lint succeeded and every other job
+    # succeeded or was skipped because its output of changes is not 'true',
+    # the rule tools/ci-gate.sh applies to the step `skip <job>`.
+    if: always()
+    needs:
+      - changes
+      - lint
+      - rust-check
+      - rust-test
+      - macos
+      - deps-lint
+      - proto-lint-and-gen
+      - flutter-analyze-test
+      - goldens
+      - escape-tests
+      - e2e
+      - e2e-xvfb
+      - e2e-agent
+      - e2e-m4
+      - e2e-m4-package
+      - parity-check
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Every job succeeded or was skipped by the path plan
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 -I -c '
+          import json, os, sys
+          needs = json.loads(os.environ["NEEDS"])
+          plan = (needs.get("changes") or {}).get("outputs") or {}
+          bad = []
+          for job in ("changes", "lint"):
+              result = (needs.get(job) or {}).get("result")
+              if result != "success":
+                  bad.append("%s: %s" % (job, result))
+          for job, info in sorted(needs.items()):
+              if job in ("changes", "lint"):
+                  continue
+              result = info.get("result")
+              if result == "success":
+                  continue
+              if result == "skipped" and needs["changes"]["result"] == "success" and plan.get(job) == "false":
+                  print("%s: skipped by the path plan" % job)
+                  continue
+              bad.append("%s: %s" % (job, result))
+          for line in bad:
+              print("::error title=ci-ok::%s" % line)
+          sys.exit(1 if bad else 0)
+          '

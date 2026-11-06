@@ -16,7 +16,10 @@
 #      signiert, und die Signatur gibt es noch nicht.
 #   2. Der Commit ist die Spitze von origin/main (wer einen Commit nennt,
 #      muss genau diese Spitze nennen), und sein ci.yml-Lauf auf main ist
-#      gruen (tools/ci-gate.sh).
+#      gruen (tools/ci-gate.sh), und zwar mit jedem Job: Hat die Pfadregel
+#      von ci.yml (HUM-424) im Push-Lauf Jobs ausgelassen, verlangt das
+#      Skript einen vollen Lauf von Hand (workflow_dispatch, full=true) auf
+#      demselben Commit und wartet auf ihn.
 #   3. Der Commit wird als Zweig `release-dry/0.Y.Z` gepusht. Das loest den
 #      Probelauf von release.yml aus: alle Bau- und Pruefjobs mit genau
 #      dieser Version, ohne den Job `release`. Das Tor wartet, bis jeder Job
@@ -45,8 +48,9 @@
 #   HUMANITL_REMOTE          Vorgabe origin
 #   HUMANITL_CI_GATE         Befehl wie tools/ci-gate.sh (<sha> <frist>); er
 #                            bekommt HUMANITL_CI_WORKFLOW, HUMANITL_CI_BRANCH,
-#                            HUMANITL_CI_EVERY_JOB und HUMANITL_CI_MAY_SKIP
-#                            in der Umgebung
+#                            HUMANITL_CI_EVERY_JOB, HUMANITL_CI_MAY_SKIP und
+#                            fuer ci.yml HUMANITL_CI_EVENT in der Umgebung;
+#                            Exit 4 heisst gruen, aber nicht jeder Job lief
 #   HUMANITL_CI_TIMEOUT      Frist fuer ci.yml, Vorgabe 3600 s
 #   HUMANITL_RELEASE_TIMEOUT Frist je Lauf von release.yml, Vorgabe 7200 s
 #   HUMANITL_CI_REPO         owner/name fuer die Adresse des Releases; sonst
@@ -173,7 +177,23 @@ run_gate() {
   env "$@" $gate "$sha" "$frist" || gate_rc=$?
 }
 
-run_gate "$ci_timeout" HUMANITL_CI_WORKFLOW=ci.yml HUMANITL_CI_BRANCH=main HUMANITL_CI_EVERY_JOB=0 HUMANITL_CI_MAY_SKIP=
+# Jeder Job von ci.yml muss gelaufen sein (HUM-424). Hat die Pfadregel im
+# Push-Lauf Jobs ausgelassen (etwa nach einem Merge nur unter website/),
+# meldet das Tor Exit 4, und es zaehlt der volle Lauf von Hand
+# (workflow_dispatch mit full=true) auf demselben Commit.
+run_gate "$ci_timeout" HUMANITL_CI_WORKFLOW=ci.yml HUMANITL_CI_BRANCH=main HUMANITL_CI_EVENT=push \
+  HUMANITL_CI_EVERY_JOB=1 HUMANITL_CI_MAY_SKIP=
+if ((gate_rc == 4)); then
+  echo "release: the push run of ci.yml for ${sha:0:12} skipped jobs by the path rules; a release needs a run in which every job ran." >&2
+  echo "release: start one: Actions, workflow ci, \"Run workflow\" on main with full=true (or: gh workflow run ci.yml --ref main -f full=true)." >&2
+  echo "release: waiting for that run of ${sha:0:12}; nothing was pushed yet." >&2
+  run_gate "$ci_timeout" HUMANITL_CI_WORKFLOW=ci.yml HUMANITL_CI_BRANCH=main HUMANITL_CI_EVENT=workflow_dispatch \
+    HUMANITL_CI_EVERY_JOB=1 HUMANITL_CI_MAY_SKIP=
+  case "$gate_rc" in
+    4) die "the run of ci.yml started by hand for ${sha:0:12} skipped jobs too; start it with full=true, then run tools/release.sh $version again" ;;
+    3) undecided "no full run of ci.yml for ${sha:0:12} finished yet; start it with full=true and run tools/release.sh $version again" ;;
+  esac
+fi
 case "$gate_rc" in
   0) ;;
   1) die "ci.yml is red for ${sha:0:12} on main; fix main first, nothing was pushed" ;;

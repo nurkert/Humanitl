@@ -59,9 +59,14 @@ The script, in order:
 1. checks that the version is the next one after the highest `v0.*` tag on `origin`;
 2. takes the tip of `origin/main` (a second argument may only name exactly that commit) and, from
    0.1.0 on, checks that `CHANGELOG.md` in that commit has a dated section for the version;
-3. waits for the `ci.yml` run of that commit on `main` to be green (`tools/ci-gate.sh`, at most one
-   hour, `HUMANITL_CI_TIMEOUT`). If that run gives no verdict in time, the script exits with 3 and
-   has pushed nothing; run the same command again once the run finished;
+3. waits for the `ci.yml` run of that commit on `main` to be green with every job run
+   (`tools/ci-gate.sh`, at most one hour, `HUMANITL_CI_TIMEOUT`). If that run gives no verdict in
+   time, the script exits with 3 and has pushed nothing; run the same command again once the run
+   finished. The path rules of `ci.yml` skip jobs a push does not touch (HUM-424), so the push run
+   of a commit that changed only `docs/` is green without the Rust, e2e and macOS jobs (a change to
+   `CHANGELOG.md` always runs everything). The script then asks for a full run: in the Actions tab, workflow `ci`, "Run workflow" on
+   `main` with `full` checked (or `gh workflow run ci.yml --ref main -f full=true`). It waits for
+   that run of the same commit and goes on when every job in it is green;
 4. pushes the commit as branch `release-dry/0.1.0`, which starts the dry run of
    `.github/workflows/release.yml`: every build and check job with exactly this version, without
    the job `release`. It waits until every job is green;
