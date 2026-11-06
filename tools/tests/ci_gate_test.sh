@@ -90,7 +90,7 @@ case_() {
   local out rc=0
   out="$(CI_GATE_FAKE="$dir" HUMANITL_CI_FETCH="$work/fetch" HUMANITL_CI_REPO=owner/name \
     HUMANITL_CI_POLL=0 HUMANITL_CI_FIRST_WAIT="${FIRST_WAIT:-0}" HUMANITL_CI_BRANCH="${BRANCH:-}" \
-    HUMANITL_CI_EVERY_JOB="${EVERY:-0}" HUMANITL_CI_MAY_SKIP="${SKIP:-}" \
+    HUMANITL_CI_EVERY_JOB="${EVERY:-0}" HUMANITL_CI_MAY_SKIP="${SKIP:-}" HUMANITL_CI_EVENT="${EVENT:-}" \
     "$gate" "${REF:-$sha}" "$limit" 2>&1)" || rc=$?
   if [[ "$rc" -ne "$want" ]]; then
     echo "FAIL $name: exit $rc, erwartet $want"
@@ -156,8 +156,12 @@ REF=no-such-ref-hum237 case_ unknown_ref 2 'kein Commit' 60 -- \
 case_ rate_limit_waits 0 'Ratengrenze' 60 -- \
   RATE0 "$(runs "$(run_json 7 completed '"success"')")"
 
-# Die Jobliste scheitert nach dem Ende des Laufs: Das Urteil gilt trotzdem.
-JOBS_FAIL=1 case_ jobs_fetch_fails_green 0 'Jobs des Laufs 7 nicht lesbar' 60 -- \
+# Die Jobliste scheitert nach dem Ende des Laufs: Ein roter Lauf bleibt rot,
+# ein gruener hat kein Urteil, weil niemand sieht, ob seine uebersprungenen
+# Jobs nach der Pfadregel uebersprungen wurden (HUM-424).
+JOBS_FAIL=1 case_ jobs_fetch_fails_green_no_verdict 3 'Jobliste des Laufs 7 fehlt' 60 -- \
+  "$(runs "$(run_json 7 completed '"success"')")"
+JOBS_RATE=1 case_ jobs_rate_limit_waits_without_every_job 0 'warte 0s auf die Jobliste' 60 -- \
   "$(runs "$(run_json 7 completed '"success"')")"
 JOBS_FAIL=1 case_ jobs_fetch_fails_red 1 'rot' 60 -- \
   "$(runs "$(run_json 7 completed '"failure"')")"
@@ -213,7 +217,9 @@ green_run="$(runs "$(run_json 7 completed '"success"')")"
 EVERY=1 SKIP=release JOBS="$jobs_dry" case_ every_job_allows_named_skip 0 'gruen' 60 -- "$green_run"
 EVERY=1 JOBS="$jobs_dry" case_ every_job_refuses_unnamed_skip 1 'release: skipped' 60 -- "$green_run"
 EVERY=1 SKIP=release JOBS="$jobs_guard_skipped" case_ every_job_skipped_guard_is_red 1 'guard: skipped' 60 -- "$green_run"
-JOBS="$jobs_guard_skipped" case_ without_every_job_skips_pass 0 'gruen' 60 -- "$green_run"
+# Seit HUM-424 auch ohne HUMANITL_CI_EVERY_JOB: Ein uebersprungener Job, den
+# keine Pfadregel deckt, macht einen gruenen Lauf rot.
+JOBS="$jobs_guard_skipped" case_ without_every_job_unexplained_skip_is_red 1 'guard: skipped, nicht nach der Pfadregel' 60 -- "$green_run"
 EVERY=1 JOBS='{"jobs": []}' case_ every_job_no_jobs_is_red 1 'keine Jobs' 60 -- "$green_run"
 EVERY=1 JOBS_FAIL=1 case_ every_job_without_job_list_no_verdict 3 'Jobliste' 60 -- "$green_run"
 # Die Jobliste trifft einmal die Ratengrenze: warten und erneut fragen, statt
@@ -221,6 +227,71 @@ EVERY=1 JOBS_FAIL=1 case_ every_job_without_job_list_no_verdict 3 'Jobliste' 60 
 EVERY=1 SKIP=release JOBS="$jobs_dry" JOBS_RATE=1 case_ every_job_jobs_rate_limit_waits 0 'warte 0s auf die Jobliste' 60 -- "$green_run"
 EVERY=1 JOBS="$jobs_red" case_ every_job_red_run_stays_red 1 'rot \(failure\)' 60 -- \
   "$(runs "$(run_json 7 completed '"failure"')")"
+
+# HUM-424: Pfadregel. Der Job changes zeichnet mit einem gelaufenen Schritt
+# `skip <job>` auf, welche Jobs er auslaesst; nur diese duerfen `skipped` sein.
+# path_jobs <ergebnis von changes> <ergebnis des Schritts skip rust-test>
+#   <ergebnis von rust-test>
+# Die Schritte `skip macos` und `skip e2e` enden wie changes selbst (success,
+# sonst skipped); macos und e2e sind immer uebersprungen.
+path_jobs() {
+  local other=skipped
+  [[ "$1" == success ]] && other=success
+  printf '{"jobs": [
+  {"name": "changes", "conclusion": "%s", "steps": [
+    {"number": 1, "name": "Set up job", "conclusion": "success"},
+    {"number": 3, "name": "Areas this push touches", "conclusion": "%s"},
+    {"number": 4, "name": "skip rust-test", "conclusion": "%s"},
+    {"number": 5, "name": "skip macos", "conclusion": "%s"},
+    {"number": 6, "name": "skip e2e", "conclusion": "%s"}]},
+  {"name": "lint", "conclusion": "success", "steps": []},
+  {"name": "rust-test", "conclusion": "%s", "steps": []},
+  {"name": "macos", "conclusion": "skipped", "steps": []},
+  {"name": "e2e", "conclusion": "skipped", "steps": []}]}' \
+    "$1" "$1" "$2" "$other" "$other" "$3"
+}
+red_run="$(runs "$(run_json 7 completed '"failure"')")"
+# Ein Push nur unter website/: changes laesst alle schweren Jobs aus, gruen.
+JOBS="$(path_jobs success success skipped)" case_ path_website_only_is_green 0 \
+  'nach der Pfadregel uebersprungen: e2e macos rust-test' 60 -- "$green_run"
+JOBS="$(path_jobs success success skipped)" case_ path_website_only_says_green 0 'gruen' 60 -- "$green_run"
+# changes scheitert: Die schweren Jobs sind uebersprungen, der Lauf ist rot.
+JOBS="$(path_jobs failure skipped skipped)" case_ path_changes_failed_is_red 1 'changes: failure' 60 -- "$red_run"
+# Selbst wenn der Lauf gruen hiesse: ohne erfolgreiches changes keine Pfadregel.
+JOBS="$(path_jobs failure skipped skipped)" case_ path_changes_failed_green_run_is_red 1 \
+  'rust-test: skipped, nicht nach der Pfadregel' 60 -- "$green_run"
+# Auch wenn der Schritt `skip rust-test` noch lief und changes erst danach
+# scheiterte: Ein gescheitertes changes erlaubt nichts.
+JOBS="$(path_jobs failure success skipped)" case_ path_changes_failed_after_plan_is_red 1 \
+  'rust-test: skipped, nicht nach der Pfadregel' 60 -- "$green_run"
+# rust-test ist uebersprungen, obwohl sein Bereich sich geaendert hat (der
+# Schritt `skip rust-test` lief nicht): rot.
+JOBS="$(path_jobs success skipped skipped)" case_ path_skip_despite_change_is_red 1 \
+  'rust-test: skipped, nicht nach der Pfadregel' 60 -- "$green_run"
+# Lief der Job trotz Schritt `skip`, schadet das nicht.
+JOBS="$(path_jobs success success success)" case_ path_job_ran_anyway_is_green 0 'gruen' 60 -- "$green_run"
+# Unter HUMANITL_CI_EVERY_JOB=1 (tools/release.sh) ist ein Lauf mit
+# Pfadregel-Spruengen kein voller Lauf: Exit 4, weder 0 noch 1.
+EVERY=1 JOBS="$(path_jobs success success skipped)" case_ every_job_path_skip_is_partial 4 'kein voller Lauf' 60 -- "$green_run"
+EVERY=1 JOBS="$(path_jobs success skipped skipped)" case_ every_job_unexplained_skip_stays_red 1 'rust-test: skipped' 60 -- "$green_run"
+# Der Sammeljob ci-ok ist ein gewoehnlicher Job: uebersprungen oder rot, rot.
+jobs_ci_ok_skipped='{"jobs": [{"name": "lint", "conclusion": "success", "steps": []},
+  {"name": "ci-ok", "conclusion": "skipped", "steps": []}]}'
+JOBS="$jobs_ci_ok_skipped" case_ ci_ok_skipped_is_red 1 'ci-ok: skipped' 60 -- "$green_run"
+# Ein neutraler Job zaehlt nur ohne HUMANITL_CI_EVERY_JOB als gruen.
+jobs_neutral='{"jobs": [{"name": "lint", "conclusion": "neutral", "steps": []}]}'
+JOBS="$jobs_neutral" case_ neutral_is_green 0 'gruen' 60 -- "$green_run"
+EVERY=1 JOBS="$jobs_neutral" case_ every_job_neutral_is_red 1 'lint: neutral' 60 -- "$green_run"
+# Der volle Lauf von Hand: HUMANITL_CI_EVENT waehlt die Laeufe.
+EVENT=workflow_dispatch case_ event_dispatch 0 'gruen' 60 -- "$green_run"
+if grep -q "runs?head_sha=$sha&event=workflow_dispatch&" "$work/event_dispatch/urls"; then
+  echo "ok   event_in_url"
+else
+  echo "FAIL event_in_url"
+  sed 's/^/    /' "$work/event_dispatch/urls"
+  fails=$((fails + 1))
+fi
+EVENT='push&x=1' case_ event_refuses_garbage 2 'kein Ereignis' 60 -- "$green_run"
 
 # Der Weg ueber curl, mit einem nachgestellten curl im PATH: Er schreibt die
 # Koepfe und den Koerper aus Dateien in die Ziele von -D und -o und gibt den

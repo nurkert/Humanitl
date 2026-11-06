@@ -4,7 +4,8 @@
 # Ein nacktes Repository spielt `origin` mit den Tags v0.0.1 und v0.0.2, ein
 # nachgestelltes Tor (HUMANITL_CI_GATE) gibt je Lauf einen Exit-Code aus einer
 # Datei zurueck: rc-ci fuer ci.yml auf main, rc-dry fuer den Probelauf auf
-# release-dry/0.0.N, rc-tag fuer den Lauf des Tags. Jeder Aufruf schreibt
+# release-dry/0.0.N, rc-tag fuer den Lauf des Tags, rc-full fuer den vollen
+# Lauf von ci.yml von Hand (HUM-424, workflow_dispatch). Jeder Aufruf schreibt
 # seine Umgebung und den Stand von origin in diesem Augenblick mit (ob der
 # Probelauf-Zweig und der Tag dort stehen). Geprueft wird vor allem, was nie
 # geschehen darf: ein Tag nach rotem Probelauf, eine Luecke in den Nummern,
@@ -37,13 +38,13 @@ cat > "$work/gate" << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 case "${HUMANITL_CI_BRANCH:-}" in
-  main) kind=ci ;;
+  main) kind=ci; [[ "${HUMANITL_CI_EVENT:-}" == workflow_dispatch ]] && kind=full ;;
   release-dry/*) kind=dry ;;
   v*) kind=tag ;;
   *) kind=other ;;
 esac
 refs="$(git -C "$GATE_DIR/origin.git" for-each-ref --format='%(refname)' | tr '\n' ' ')"
-echo "$kind workflow=${HUMANITL_CI_WORKFLOW:-} branch=${HUMANITL_CI_BRANCH:-} every=${HUMANITL_CI_EVERY_JOB:-} skip=${HUMANITL_CI_MAY_SKIP:-} sha=$1 refs=$refs" >> "$GATE_DIR/calls"
+echo "$kind event=${HUMANITL_CI_EVENT:-} workflow=${HUMANITL_CI_WORKFLOW:-} branch=${HUMANITL_CI_BRANCH:-} every=${HUMANITL_CI_EVERY_JOB:-} skip=${HUMANITL_CI_MAY_SKIP:-} sha=$1 refs=$refs" >> "$GATE_DIR/calls"
 if [[ "$kind" == dry && -f "$GATE_DIR/race-tag" ]]; then
   t="$(cat "$GATE_DIR/race-tag")"
   git -C "$GATE_DIR/origin.git" tag "$t" main
@@ -120,7 +121,9 @@ rel "$d" 0.0.3 > "$d/out" 2>&1 || rc=$?
 check green_exits_0 same "$rc" 0
 check green_three_gates same "$(calls "$d")" 3
 check green_order same "$(cut -d' ' -f1 "$d/calls" | tr '\n' ' ')" "ci dry tag "
-check green_ci_is_main grep -q "workflow=ci.yml branch=main every=0 skip= sha=$tip" <(call_line "$d" ci)
+# Seit HUM-424 muss jeder Job von ci.yml gelaufen sein: every=1, Push-Lauf.
+check green_ci_is_main grep -q "event=push workflow=ci.yml branch=main every=1 skip= sha=$tip" <(call_line "$d" ci)
+check green_no_full_run_needed same "$(call_line "$d" full)" ""
 check green_dry_every_job grep -q "workflow=release.yml branch=release-dry/0.0.3 every=1 skip=release sha=$tip" <(call_line "$d" dry)
 check green_dry_branch_there_during_dry grep -q "refs/heads/release-dry/0.0.3" <(call_line "$d" dry)
 check green_no_tag_during_dry not grep -q "refs/tags/v0.0.3" <(call_line "$d" dry)
@@ -152,6 +155,56 @@ rc=0
 rel "$d" 0.0.3 > "$d/out" 2>&1 || rc=$?
 check undecided_exits_3 same "$rc" 3
 check undecided_no_tag not on_origin "$d" refs/tags/v0.0.3
+
+# 2c. HUM-424: Der Push-Lauf von ci.yml liess Jobs nach der Pfadregel aus
+#     (Tor-Exit 4). Dann zaehlt nur ein voller Lauf von Hand auf demselben
+#     Commit; ohne ihn wird nichts gepusht.
+d="$(setup partial)"
+tip="$(git -C "$d/origin.git" rev-parse main)"
+echo 4 > "$d/rc-ci"
+rc=0
+rel "$d" 0.0.3 > "$d/out" 2>&1 || rc=$?
+check partial_full_green_exits_0 same "$rc" 0
+check partial_order same "$(cut -d' ' -f1 "$d/calls" | tr '\n' ' ')" "ci full dry tag "
+check partial_full_is_dispatch_every_job grep -q "event=workflow_dispatch workflow=ci.yml branch=main every=1 skip= sha=$tip" <(call_line "$d" full)
+check partial_full_before_dry not grep -q "refs/heads/release-dry/0.0.3" <(call_line "$d" full)
+check partial_says_full_true grep -q "full=true" "$d/out"
+
+d="$(setup partialnone)"
+echo 4 > "$d/rc-ci"
+echo 3 > "$d/rc-full"
+rc=0
+rel "$d" 0.0.3 > "$d/out" 2>&1 || rc=$?
+check partial_no_full_run_exits_3 same "$rc" 3
+check partial_no_full_run_no_dry not on_origin "$d" refs/heads/release-dry/0.0.3
+check partial_no_full_run_no_tag not on_origin "$d" refs/tags/v0.0.3
+check partial_no_full_run_says_so grep -q "no full run of ci.yml" "$d/out"
+
+d="$(setup partialtwice)"
+echo 4 > "$d/rc-ci"
+echo 4 > "$d/rc-full"
+rc=0
+rel "$d" 0.0.3 > "$d/out" 2>&1 || rc=$?
+check partial_full_partial_refused same "$rc" 1
+check partial_full_partial_no_dry not on_origin "$d" refs/heads/release-dry/0.0.3
+
+d="$(setup partialred)"
+echo 4 > "$d/rc-ci"
+echo 1 > "$d/rc-full"
+rc=0
+rel "$d" 0.0.3 > "$d/out" 2>&1 || rc=$?
+check partial_full_red_refused same "$rc" 1
+check partial_full_red_says_red grep -q "ci.yml is red" "$d/out"
+check partial_full_red_no_dry not on_origin "$d" refs/heads/release-dry/0.0.3
+
+# Ein roter Push-Lauf fragt nie nach dem vollen Lauf.
+d="$(setup cired)"
+echo 1 > "$d/rc-ci"
+rc=0
+rel "$d" 0.0.3 > "$d/out" 2>&1 || rc=$?
+check cired_refused same "$rc" 1
+check cired_no_full_run same "$(call_line "$d" full)" ""
+check cired_no_dry not on_origin "$d" refs/heads/release-dry/0.0.3
 
 # 3. Luecke: 0.0.4 nach v0.0.2 wird verweigert, bevor irgendetwas laeuft.
 d="$(setup gap)"
