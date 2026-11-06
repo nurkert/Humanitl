@@ -229,10 +229,10 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
             width: 44vw !important;
           }
           .hero__title {
-            font-size: clamp(1.6rem, 9vh, 2.4rem) !important;
+            font-size: clamp(1.6rem, 8.2vh, 2.3rem) !important;
           }
           .hero__lede {
-            font-size: 0.88rem !important;
+            font-size: 1rem !important;
             line-height: 1.45 !important;
           }
         }
@@ -762,6 +762,8 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   }
   .hero__lede {
     max-width: 36rem;
+    /* Kein einzelnes Wort in der letzten Zeile, am Telefon fiel sonst „du.“ allein ab. */
+    text-wrap: balance;
     animation: rise 1s cubic-bezier(0.22, 1, 0.36, 1) 0.2s both;
   }
   .hero__actions {
@@ -793,6 +795,7 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     font-weight: 500;
   }
   .hero__source {
+    position: relative;
     display: inline-flex;
     align-items: center;
     gap: 0.45rem;
@@ -800,8 +803,18 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     font-size: 0.92rem;
     text-decoration: none;
   }
+  /* Die Trefferfläche wächst auf 44 px Höhe, ohne das Layout zu verschieben. */
+  .hero__source::after {
+    content: '';
+    position: absolute;
+    inset: calc((100% - 2.75rem) / 2) -0.5rem;
+  }
   .hero__source:hover {
     color: var(--fg);
+  }
+  .hero__source:active {
+    color: var(--fg);
+    opacity: 0.7;
   }
   .hero__source :global(svg) {
     width: 1.1rem;
@@ -834,6 +847,16 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     color: var(--fg);
     border-color: rgb(var(--ink) / 0.3);
     background: rgb(var(--ink) / 0.06);
+  }
+  .hero__hint:active {
+    background: rgb(var(--ink) / 0.09);
+  }
+  /* Am Telefon blitzt sonst beim Tippen ein grauer Kasten des Browsers über Knöpfen, Hinweis und
+     der ganzen Trefferebene der Bühne; jeder dieser Knöpfe hat einen eigenen gedrückten Zustand. */
+  .hero a,
+  .stage-hit,
+  .deck__arrow {
+    -webkit-tap-highlight-color: transparent;
   }
   .hero__hint:focus-visible {
     outline: 2px solid var(--strong);
@@ -906,51 +929,57 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   :global(:where(html[data-cls='G'])) .scene[data-scene] .hero {
     --hero-gap: 0.9rem;
     --hero-pill-h: 2.5rem;
-    left: 6vw;
+    /* Die Spalte steht mittig zwischen Navigation und Boden, nicht über die ganze Höhe: sonst
+       stieß die Überschrift an die Leiste (HUM-423). Links bleibt sie vor der Kamerainsel. */
+    top: 4.5rem;
+    bottom: env(safe-area-inset-bottom, 0px);
+    left: max(6vw, calc(env(safe-area-inset-left, 0px) + 12px));
     width: 44vw;
   }
   :global(:where(html[data-cls='G'])) .scene[data-scene] .hero__text {
     gap: 0.6rem;
   }
+  /* Lesegröße bleibt 16 px; Platz kommt aus der Überschrift (HUM-423). */
   :global(:where(html[data-cls='G'])) .scene[data-scene] .hero__title {
-    font-size: clamp(1.6rem, 9vh, 2.4rem);
+    font-size: clamp(1.6rem, 8.2vh, 2.3rem);
   }
   :global(:where(html[data-cls='G'])) .scene[data-scene] .hero__lede {
-    font-size: 0.88rem;
+    font-size: 1rem;
     line-height: 1.45;
   }
   /* Telefon hoch: Text oben, Knöpfe unten, der Kartenstapel dazwischen. */
   :global(:where(html[data-cls='F'])) .scene[data-scene] .hero {
     top: 13vh;
-    bottom: 5vh;
+    bottom: max(5vh, calc(env(safe-area-inset-bottom, 0px) + 10px));
     left: 6vw;
     right: 6vw;
     display: flex;
     flex-direction: column;
     align-items: center;
   }
+  /* Die Überschrift trägt die Seite: so breit, wie die längste Zeile es erlaubt (HUM-423). */
   :global(:where(html[data-cls='F'])) .scene[data-scene] .hero__title {
-    font-size: clamp(1.7rem, 8.4vw, 2.6rem);
+    font-size: clamp(1.7rem, 9.2vw, 2.9rem);
   }
   :global(:where(html[data-cls='F'])) .scene[data-scene] .hero__lede {
-    font-size: 0.98rem;
+    font-size: 1rem;
   }
   :global(:where(html[data-cls='F'])) .scene[data-scene] .hero__tail {
     margin-top: auto;
   }
   :global(:where(html[data-cls='F'], html[data-cls='G'])) .scene[data-scene] .hero__hint {
-    padding: 0 0.75rem 0 0.85rem;
-    font-size: 0.66rem;
+    padding: 0 0.8rem 0 0.95rem;
+    font-size: 0.7rem;
+    color: var(--fg-1);
   }
   /* Kurze Telefone: der Hinweis bleibt, Text und Abstände rücken zusammen, damit der Stapel
      zwischen Lede und Knöpfen groß bleibt. */
   :global(:where(html[data-cls='F'][data-h700])) .scene[data-scene] .hero {
     --hint-mt: 0.1rem;
     top: 11.5vh;
-    bottom: 1.5vh;
+    bottom: max(1.5vh, calc(env(safe-area-inset-bottom, 0px) + 6px));
   }
   :global(:where(html[data-cls='F'][data-h700])) .scene[data-scene] .hero__lede {
-    font-size: 0.9rem;
     line-height: 1.45;
   }
   :global(:where(html[data-cls='G'][data-h420])) .scene[data-scene] .hero {
@@ -1804,12 +1833,14 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     bottom: max(3svh, calc(env(safe-area-inset-bottom, 0px) + 12px));
     width: min(24rem, calc(100vw - 2 * max(5vw, env(safe-area-inset-left, 0px) + 12px)));
   }
+  /* Telefon hoch: Lesegröße 16 px; die Überschrift wächst mit der Breite in den Raum, den die
+     breitenbegrenzte Front unter sich frei lässt (HUM-423). */
   :global(:where(html[data-cls='F'])) .scene[data-scene] {
     --idx: 1.1rem;
-    --head: 1.9rem;
-    --text: 0.95rem;
+    --head: clamp(1.75rem, 7.8vw, 2.3rem);
+    --text: 1rem;
     --text-w: none;
-    --cap-gap: 0.7rem;
+    --cap-gap: 0.75rem;
   }
   /* Die Pfeile stehen fest am Boden der Beschriftung, darüber liegt der freigehaltene Text.
      Die Steuerung liegt in .deck, nicht in .cap; ihre Kanten folgen denen der Beschriftung. */
@@ -1861,23 +1892,25 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
   /* Kurze Telefone: Schrift und Abstände werden kleiner, die Pfeile bleiben unberührt. */
   :global(:where(html[data-cls='F'][data-h719])) .scene[data-scene] {
     --head: 1.5rem;
-    --text: 0.85rem;
+    --text: 1rem;
     --cap-gap: 0.4rem;
   }
   :global(:where(html[data-cls='G'])) .scene[data-scene] {
-    --idx: 3rem;
-    --head: 1.5rem;
-    --text: 0.85rem;
+    --idx: 2.3rem;
+    --head: 1.35rem;
+    --text: 1rem;
     --text-w: none;
     --cap-gap: 0.45rem;
   }
   :global(:where(html[data-cls='G'])) .scene[data-scene] .cap {
-    top: 16vh;
+    /* Unter der Navigation; ist die Beschriftung höher als der Platz, wächst sie nach unten
+       statt unter die Leiste (safe). */
+    top: max(16vh, 4.5rem);
     bottom: 5vh;
-    left: 57vw;
-    right: 4vw;
+    left: 55vw;
+    right: max(4vw, calc(env(safe-area-inset-right, 0px) + 12px));
     width: auto;
-    justify-content: center;
+    justify-content: safe center;
   }
   :global(:where(html[data-cls='G'])) .scene[data-scene] .cap__layer {
     gap: 0.4rem;
@@ -1886,18 +1919,14 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
     line-height: 1.4;
   }
   :global(:where(html[data-cls='G'])) .scene[data-scene] .cap {
-    padding-bottom: 3.2rem;
+    padding-bottom: 3.8rem;
   }
   /* Telefon quer: die Leiste steht am Boden der Beschriftung, rechts in Reichweite des Daumens. */
   :global(:where(html[data-cls='G'])) .scene[data-scene] .deck__controls {
-    left: calc(57vw + (39vw - max(0px, env(safe-area-inset-right, 0px) - 4vw)) / 2);
+    left: calc(55vw + (41vw - max(0px, env(safe-area-inset-right, 0px) - 4vw)) / 2);
     top: auto;
     bottom: max(4vh, calc(env(safe-area-inset-bottom, 0px) + 8px));
-    width: min(20rem, 39vw);
-  }
-  :global(:where(html[data-cls='G'])) .scene[data-scene] .deck__arrow {
-    width: 2.25rem;
-    height: 2.25rem;
+    width: min(20rem, 41vw);
   }
 
   @media (prefers-reduced-motion: reduce) {

@@ -1071,3 +1071,33 @@ Akzeptanzkriterien:
   wechselt die Schrift nicht mehr sichtbar.
 - Die Fassung ohne Skript zeigt dasselbe Layout; der Endzustand bleibt der
   aus HUM-413.
+
+## HUM-423 · Website: the landing stack and the carousel read well on phones
+
+**Anlass.** Der Inhaber wünschte am 2026-11-02 einen eigenen Durchgang für
+Telefone über die beiden oberen Abschnitte der Startseite (HUM-412, 413,
+415, 418).
+
+**Befund.** Gemessen in Firefox mit Android-Kennung, DPR 3 und Touch bei
+320x640, 360x740, 390x844, 430x932, 844x390 und 932x430, hell und dunkel:
+Im Querformat stieß die Überschrift an die Navigationsleiste, Hero und
+Beschriftung ignorierten die Ränder der Notch, die Pfeile waren 36 px groß,
+Fließtext lag unter 16 px, Android blitzte einen grauen Kasten über Knöpfe
+und die Trefferebene, die Einleitung endete bei 390 px mit einem Waisenwort.
+
+**Umsetzung.** Nur CSS in `Home.astro`: Einleitung und Bildtexte überall
+1rem, Einleitung mit `text-wrap: balance`, größere Hero-Überschrift im
+Hochformat, im Querformat Hero und Beschriftung unter der Leiste und
+innerhalb der sicheren Ränder, Pfeile 44 px, kein Tap-Highlight auf Hero,
+Trefferebene und Pfeilen, `:active` für den Scroll-Hinweis und den
+Quellcode-Link. Skripte, Solver und Noscript-Block bleiben unverändert;
+alle Zusagen aus HUM-412, 413, 415 und 418 gelten weiter.
+
+**Akzeptanz.** Bei allen zwölf Läufen keine Überlappung von Beschriftung,
+Steuerung und Hinweis, kein waagrechter Überlauf (`scrollWidth ==
+innerWidth`), Fließtext 16 px, Pfeile mindestens 44 px, kein Sprung beim
+ersten Bild über den Stand vor dem Issue hinaus. `npm run build`,
+`npm test` und `check-links` grün.
+
+**Offen.** Die Bildüberschrift bricht im Querformat teils ungleich um, weil
+`text-wrap: balance` über die Wort-Spans nicht greift; nur Optik.
