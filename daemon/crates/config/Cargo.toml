@@ -13,8 +13,8 @@ workspace = true
 humanitl-core.workspace = true
 # `edit::set_value` sperrt das Verzeichnis von `config.toml` mit `flock`,
 # damit der Daemon (`SetConfig`) und `humanitl config set` einander keinen
-# Wert verlieren (HUM-070). `std::fs::File::lock` käme erst mit Rust 1.89,
-# und die Untergrenze des Workspace ist 1.88.
+# Wert verlieren (HUM-070). `std::fs::File::lock` steht seit HUM-427 (Untergrenze
+# 1.89) auch zur Verfügung; der Wechsel dorthin ist ein eigener Umbau.
 rustix.workspace = true
 schemars.workspace = true
 serde = { workspace = true }

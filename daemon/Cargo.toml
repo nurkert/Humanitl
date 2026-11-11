@@ -23,7 +23,7 @@ version = "0.0.0"
 edition = "2024"
 license = "GPL-3.0-only"
 repository = "https://github.com/nurkert/Humanitl"
-rust-version = "1.88"
+rust-version = "1.89"
 
 [workspace.dependencies]
 humanitl-core = { path = "crates/core-types" }
@@ -92,7 +92,7 @@ flate2 = "1"
 brotli = "8"
 # Aufzeichnung (HUM-026): SQLite eingebettet gebaut, damit kein System-SQLite
 # mit anderer Version die Migrationen ueberrascht.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 tokio-stream = { version = "0.1", features = ["sync", "net"] }
 shlex = "2"
 # Der Adapter hinter `resolver.nameserver` (HUM-115): fragt genau diesen

@@ -150,7 +150,7 @@ schickte. Die vollständige Liste ist die Spalte „Projekt" in
 nie einen Endpunkt, ein Modell oder einen Schlüssel festlegen (Abschnitt 5.1).
 
 Toolchain für reproduzierbare Builds: Rust 1.95.0 (festgelegt in `daemon/rust-toolchain.toml`,
-mindestens 1.88), Flutter 3.47.2 (festgelegt in `app/.fvmrc`), `bubblewrap` 0.8 oder neuer.
+mindestens 1.89), Flutter 3.47.2 (festgelegt in `app/.fvmrc`), `bubblewrap` 0.8 oder neuer.
 `socat` wird **nicht** gebraucht: Die Bridge lebt im Shim, damit kein weiteres Programm in der
 Sandbox läuft.
 

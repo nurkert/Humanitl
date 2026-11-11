@@ -102,4 +102,5 @@ last, 0.0.20:
   the sandbox.
 - The `/tmp` fallback for the runtime directory is checked for owner and mode.
 - Dependency updates for security advisories in pulldown-cmark, tokio, rustls,
-  rustls-webpki, webpki-roots and ctutils.
+  rustls-webpki, webpki-roots, ctutils, rusqlite (bundled SQLite 3.54.1) and
+  rustix.
