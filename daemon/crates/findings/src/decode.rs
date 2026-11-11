@@ -471,6 +471,19 @@ pub fn inflate(
                 }
             }
         }
+        // Large-Window-Brotli gibt es in RFC 7932 nicht, und `Content-Encoding:
+        // br` meint RFC 7932. Der Entpacker nähme es trotzdem an und legte
+        // vor dem ersten Byte Ausgabe einen Ringpuffer der Fenstergröße an,
+        // bis 1 GiB, aus fünf Bytes Eingabe. Das Budget begrenzt nur
+        // die Ausgabe, nicht diesen Puffer; deshalb wird so ein Strom gar
+        // nicht erst entpackt (HUM-425).
+        ContentEncoding::Brotli if is_large_window_brotli(raw) => Err(broken(
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Large-Window-Brotli steht nicht in RFC 7932 und wird nicht entpackt",
+            ),
+            Vec::new(),
+        )),
         ContentEncoding::Brotli => {
             read_limited(brotli::Decompressor::new(raw, DECOMPRESS_CHUNK), budget)
         }
@@ -737,6 +750,18 @@ fn wants_preset_dictionary(raw: &[u8]) -> bool {
         && !reserved_block
 }
 
+/// Wahr, wenn `raw` mit der Kennung von Large-Window-Brotli beginnt (HUM-425).
+///
+/// Die Fenstergröße `WBITS` steht in den ersten Bits des Stroms, vom
+/// niedrigsten Bit an gelesen (RFC 7932 §9.1). Bit 0 gesetzt, die Bits 1 bis 3
+/// null und die Bits 4 bis 6 mit dem Wert 1, zusammen die unteren sieben Bits
+/// `0x11`: Diese Folge ist dort ungültig; die Erweiterung
+/// Large-Window-Brotli nutzt genau sie als Kennung und liest danach sechs Bits
+/// mit `WBITS` bis 30. `brotli::Decompressor` hat diese Erweiterung immer an.
+fn is_large_window_brotli(raw: &[u8]) -> bool {
+    raw.first().is_some_and(|first| first & 0x7f == 0x11)
+}
+
 /// Der Abbruch eines Stroms samt dem, was bis dahin entstanden ist.
 fn broken(source: std::io::Error, partial: Vec<u8>) -> InflateError {
     InflateError::BrokenStream { source, partial }
@@ -965,7 +990,7 @@ mod tests {
     use super::{
         Ambiguity, Budget, ContentEncoding, DECOMPRESS_CHUNK, DecodedBody, DeflateDecoder,
         InflateError, MIN_PRINTABLE_RUN, StreamEnd as _, ZlibDecoder, decode_body, inflate,
-        percent_decode, printable_only, raw_reading_differs, read_limited,
+        is_large_window_brotli, percent_decode, printable_only, raw_reading_differs, read_limited,
     };
 
     fn gzip(bytes: &[u8]) -> Vec<u8> {
@@ -1369,6 +1394,38 @@ mod tests {
             assert!(decoded.truncated);
             assert_eq!(code(&decoded), Some("FINDINGS_002"));
             assert_eq!(decoded.bytes, plain);
+        }
+    }
+
+    #[test]
+    fn a_large_window_brotli_stream_is_a_gap_and_not_unpacked() {
+        // Die Eingabe des Fuzzers aus HUM-425 ohne das Auswahl-Byte: Kennung
+        // `0x11`, dann `WBITS` 29. Der Entpacker hätte dafür 512 MiB angelegt.
+        let body = [0x11, 0x1d, 0xfc, 0x2b, 0x2c];
+        assert!(is_large_window_brotli(&body));
+        let decoded = decode_body(&body, &ContentEncoding::Brotli, 4096, 100);
+        assert!(decoded.truncated);
+        assert!(decoded.bytes.is_empty());
+        assert_eq!(code(&decoded), Some("FINDINGS_002"));
+        let why = &decoded.diagnostic.as_ref().unwrap().why;
+        assert!(why.contains("Large-Window-Brotli"), "{why}");
+        // Das gesetzte achte Bit ändert nichts an der Kennung.
+        assert!(is_large_window_brotli(&[0x91]));
+    }
+
+    #[test]
+    fn every_rfc_7932_window_is_still_unpacked() {
+        let plain = b"Kontakt: vorname.nachname@kunde.de, bitte antworten";
+        for lgwin in 10..=24 {
+            let mut packed = Vec::new();
+            {
+                let mut encoder = brotli::CompressorWriter::new(&mut packed, 4096, 5, lgwin);
+                encoder.write_all(plain).unwrap();
+            }
+            assert!(!is_large_window_brotli(&packed), "lgwin {lgwin}");
+            let decoded = decode_body(&packed, &ContentEncoding::Brotli, 4096, 100);
+            assert!(!decoded.truncated, "lgwin {lgwin}");
+            assert_eq!(decoded.bytes, plain, "lgwin {lgwin}");
         }
     }
 

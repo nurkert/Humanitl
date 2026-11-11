@@ -823,17 +823,19 @@ reads them all) under one shared budget of `limits.preview_cap_bytes` and
 `limits.max_decompress_ratio`. Bytes after the end of a `deflate` or `br` stream, or after the
 last complete gzip member, that cannot be read as another member make the scan search the decoded
 part before them and report the rest as a gap (`FINDINGS_002`) instead of calling the body fully
-searched (HUM-247). A `deflate` body is read with the zlib frame of RFC 1950 first and as a raw
-RFC 1951 stream only when the frame is broken; when the frame reads completely, the raw reading
-is compared against it under the same limits. A body whose raw reading differs from the zlib
-reading is reported as a gap (`FINDINGS_002`) with the zlib reading searched, since a receiver
-that only knows the raw stream would get content the scan never saw; this holds when the raw
-stream ends cleanly, has bytes behind its end, or stops short in the middle after it has already
-diverged, because a streaming receiver has delivered that content by then. A valid zlib header
-that asks for a preset dictionary (`FDICT`) is a gap as well: the scan has no dictionary, searches
-the raw reading and says that the zlib reading was not searched (HUM-266). A key
-written differently from literal or URL-encoded (a JSON escape, `+` as
-a space in a form) is no hit.
+searched (HUM-247). A `br` body that announces large-window brotli, an extension outside RFC 7932,
+is not decoded and is reported as a gap (`FINDINGS_002`): its decoder would reserve a window of
+up to 1 GiB before the budget applies (HUM-425). A `deflate` body is read with the zlib frame of
+RFC 1950 first and as a raw RFC 1951 stream only when the frame is broken; when the frame reads
+completely, the raw reading is compared against it under the same limits. A body whose raw reading
+differs from the zlib reading is reported as a gap (`FINDINGS_002`) with the zlib reading
+searched, since a receiver that only knows the raw stream would get content the scan never saw;
+this holds when the raw stream ends cleanly, has bytes behind its end, or stops short in the
+middle after it has already diverged, because a streaming receiver has delivered that content by
+then. A valid zlib header that asks for a preset dictionary (`FDICT`) is a gap as well: the scan
+has no dictionary, searches the raw reading and says that the zlib reading was not searched
+(HUM-266). A key written differently from literal or URL-encoded (a JSON escape, `+` as a space in
+a form) is no hit.
 
 *What stays open.* The agent can read the key; it needs it. A subverted agent can therefore put it
 into a request to another destination. There it is a finding, except in the path before `?` and
@@ -1609,6 +1611,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.0 | Several saved model servers with one keyring item each; only the active origin gets a key and the passthrough (HUM-289). |
 | 0.1.0 | The session's first process takes the daemon's pseudo-terminal as controlling terminal; `--new-session` stays. A caller's command gets the adapter's contribution and the configured agent on `PATH`, never a bind of its own (HUM-280). |
 | 0.1.0 | OpenCode no longer asks before `webfetch` and `bash`; the proxy is the one place that asks. Its `bash` waits as long as a held request (HUM-308). |
+| 0.1.0 | A `br` body with the large-window marker (outside RFC 7932) is not decoded but reported as a gap; five bytes of it made the decoder reserve 512 MiB, up to 1 GiB, outside the decompression budget (HUM-425). |
 | 0.1.x | Further shells next to the agent: the daemon asks PID 1 over an unnamed `SOCK_SEQPACKET` pair only it and PID 1 hold; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX`; at most four, ending with their process or the sandbox (HUM-299). |
 | 0.1.x | pi loads the globally installed extension `pi-web-access` (`agent.pi.web_access`, default `auto`, closed to project profiles); its requests go through the proxy like every other (HUM-309). |
 | 0.1.x | macOS: the disposable sandbox on an APFS clone, masks removed from the clone and denied in it, the real project sealed, the clone renamed before it is read, and a failed clone that is never silent: `auto` warns with `SANDBOX_033`, an explicit `disposable` refuses with `SANDBOX_030` (HUM-374, K-24). |
