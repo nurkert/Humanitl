@@ -17,10 +17,10 @@ section here and list their commits instead.
 
 ## [Unreleased]
 
-## [0.1.0] - unreleased
+## [0.1.0] - 2026-11-11
 
 The first release. Compared with the 0.0.x pre-releases, from the first public one, 0.0.1, to the
-last, 0.0.20:
+last, 0.0.21:
 
 ### Added
 
@@ -33,8 +33,9 @@ last, 0.0.20:
 - pi as a second agent next to OpenCode, with web search and fetch through the
   proxy; both agents learn that a held request is slow on purpose and do not
   give up while it waits.
-- Several saved model servers: one default plus assignments per project or
-  session profile, `humanitl run --llm NAME`, and a one-time confirmation for a
+- Several saved model servers, shown as a list with the chosen server's
+  settings beside it: one default plus assignments per project or session
+  profile, `humanitl run --llm NAME`, and a one-time confirmation for a
   project that picks a server other than the default.
 - One project folder, chosen once, shared by the app and the CLI.
 - Updates from inside the app on Linux and macOS, from a daily check of the
@@ -53,8 +54,9 @@ last, 0.0.20:
   paste, zoom, full window, and a floating or docked terminal.
 - The daemon can trust the system certificate store towards destinations.
 - Resource limits and backpressure in the proxy.
-- Settings as a searchable overlay; German and English; the whole app scales
-  with Ctrl+Plus, Ctrl+Minus and Ctrl+0.
+- Settings as a searchable overlay, with a "Keyboard shortcuts" category that
+  lists every shortcut; German and English; the whole app scales with
+  Ctrl+Plus, Ctrl+Minus and Ctrl+0.
 - `humanitl config`, `humanitl audit` and `humanitl daemon` commands;
   `humanitl daemon install` sets up, refreshes and removes the service in one
   step.
