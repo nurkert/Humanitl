@@ -12061,3 +12061,35 @@ günstigere CI.
 gegen nachgestellte `needs`-Kontexte aus (übersprungen trotz Plan,
 abgebrochen, `changes` oder `lint` gescheitert: rot). Mutationsbeweise für
 ci-changes, ci-gate, ci_plan und den Release-Guard.
+
+---
+
+## HUM-427 · rusqlite 0.41 and rustix 1.1.6 close RUSTSEC-2026-0459 and RUSTSEC-2026-0486
+
+**Anlass.** Seit Ende Oktober 2026 melden zwei neue Advisories Befunde, und
+`cargo deny` lässt jeden CI-Lauf im Schritt „Licenses, advisories, duplicate
+crates“ scheitern, wie schon bei HUM-416.
+
+**Befund.**
+- RUSTSEC-2026-0459: Das mit `bundled` eingebaute SQLite vor 3.54.0 kann
+  bei einer Datenbank mit fremder `-wal`-Datei anderer Seitengröße
+  uninitialisierten Speicher zurückgeben. Wir hatten libsqlite3-sys 0.30.1
+  (SQLite 3.46) über rusqlite 0.32; behoben ab libsqlite3-sys 0.39, das erst
+  rusqlite 0.41 mitbringt.
+- RUSTSEC-2026-0486: rustix 1.1.4 markiert bei den xattr-Funktionen mit
+  leerem Puffer ungeschriebene Bytes als initialisiert; behoben in 1.1.6.
+
+**Umsetzung.** `daemon/Cargo.toml` hebt rusqlite auf 0.41 (gesperrt 0.41.1
+mit libsqlite3-sys 0.39.1, SQLite 3.54.1), `cargo update -p rustix` hebt
+rustix auf 1.1.6. Recorder und Audit-Log übersetzen ohne Codeänderung; das
+Schema, die Migrationen und die Hash-Kette bleiben unverändert.
+`daemon/fuzz/Cargo.lock` zieht dieselben Versionen nach und holt dabei
+Einträge nach, die dort seit Längerem fehlten (rustls-native-certs 0.8.5,
+openssl-probe, schannel, security-framework und core-foundation 0.10.1). rusqlite 0.41
+verlangt Rust 1.89, die festgelegte Toolchain ist 1.95.0; die erklärte
+Untergrenze `rust-version` steigt deshalb von 1.88 auf 1.89, mit
+`CONTRIBUTING.md` und `docs/SECURITY.md` (auch der deutschen Übersetzung).
+
+**Akzeptanz.** `cargo deny --all-features check` grün; `cargo test` für
+`humanitl-recorder` und `humanitl-audit-log` grün; `cargo check --workspace
+--all-targets` und `cargo clippy -D warnings` der beiden Crates ohne Befund.

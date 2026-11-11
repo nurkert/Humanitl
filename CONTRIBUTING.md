@@ -4,7 +4,7 @@
 
 | Werkzeug | Version | Hinweis |
 |---|---|---|
-| Rust | 1.88+ (festgelegt auf 1.95.0 in `daemon/rust-toolchain.toml`) | braucht `rustfmt` und `clippy` |
+| Rust | 1.89+ (festgelegt auf 1.95.0 in `daemon/rust-toolchain.toml`) | braucht `rustfmt` und `clippy` |
 | Flutter | 3.47.2 (festgelegt in `app/.fvmrc`) | Dart 3.13+ |
 | bubblewrap | 0.8+ | Laufzeitabhängigkeit der Sandbox |
 | socat | nicht nötig | der Shim bringt seine eigene Brücke mit |

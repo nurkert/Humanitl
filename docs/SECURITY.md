@@ -138,7 +138,7 @@ while an approval sent the whole body. The full list is the column "Projekt" in
 a model or a key (section 5.1).
 
 Toolchain for reproducible builds: Rust 1.95.0 (pinned in `daemon/rust-toolchain.toml`,
-minimum 1.88), Flutter 3.47.2 (pinned in `app/.fvmrc`), `bubblewrap` 0.8 or newer. `socat` is
+minimum 1.89), Flutter 3.47.2 (pinned in `app/.fvmrc`), `bubblewrap` 0.8 or newer. `socat` is
 **not** needed: the bridge lives in the shim, so that no further program runs in the sandbox.
 
 ## 2. Guarantee 1: No network interface
