@@ -84,6 +84,8 @@ last, 0.0.20:
   unit of its own that would hide the package's unit.
 - The app shows "reconnecting" during a short daemon restart instead of an
   error, and a flow held before the first resync still reaches the queue.
+- A few bytes of non-standard large-window brotli in a body no longer make the
+  proxy reserve up to 1 GiB of memory; such a body is reported as not searched.
 
 ### Security
 

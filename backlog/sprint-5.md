@@ -12093,3 +12093,49 @@ Untergrenze `rust-version` steigt deshalb von 1.88 auf 1.89, mit
 **Akzeptanz.** `cargo deny --all-features check` grün; `cargo test` für
 `humanitl-recorder` und `humanitl-audit-log` grün; `cargo check --workspace
 --all-targets` und `cargo clippy -D warnings` der beiden Crates ohne Befund.
+
+---
+
+## HUM-425 · A large-window brotli body is a gap and no longer makes the decoder reserve up to 1 GiB
+
+**Anlass.** Der nächtliche Job `fuzz (body_decoder)` war seit dem
+2026-11-05 in fünf von sieben Nächten rot; der Schritt „Fuzz body_decoder
+for ten minutes" brach mit Exit 1 ab, das Artefakt
+`fuzz-artifacts-body_decoder` war 214 Bytes groß. Herunterladen lässt es
+sich ohne Anmeldung nicht.
+
+**Befund.** Lokal mit denselben Optionen (`-timeout=10 -rss_limit_mb=512`)
+nach gut einer Minute reproduziert: `out-of-memory (malloc(536870978))`,
+minimiert auf sechs Bytes (`03 11 1d fc 2b 2c`; das Auswahl-Byte 3 wählt
+`br`). Das erste Body-Byte `0x11` ist die Kennung von Large-Window-Brotli,
+einer Erweiterung außerhalb von RFC 7932; danach stehen sechs Bits mit
+`WBITS` bis 30. `brotli::Decompressor` (brotli-decompressor 5.0.3) hat
+diese Erweiterung in jedem öffentlichen Konstruktor an und legt beim
+ersten Meta-Block einen Ringpuffer von `2^WBITS` Bytes an, bevor ein Byte
+Ausgabe entsteht. Das Budget aus `limits.preview_cap_bytes` und
+`limits.max_decompress_ratio` begrenzt nur die Ausgabe, nicht diesen
+Puffer. Fünf Bytes Body im Proxy forderten so 512 MiB an, möglich sind
+1 GiB. Der Puffer wird nullinitialisiert angefordert, der residente
+Speicher des Daemons wächst deshalb kaum; wo eine Anforderung dieser Größe
+abgelehnt wird (Speichergrenze, strenges Overcommit), bricht der Daemon ab.
+Dass der Fund nur in manchen Nächten kam, liegt an der Zufallssuche des
+Fuzzers, nicht an einer Code-Änderung.
+
+**Umsetzung.** `decode::inflate` entpackt einen `br`-Body, dessen erstes
+Byte in den unteren sieben Bits `0x11` trägt, nicht, sondern meldet einen
+beschädigten Strom (`InflateError::BrokenStream`; im Scan `FINDINGS_002`,
+nicht durchsucht). Diese Bitfolge ist in RFC 7932 ungültig; kein
+regelkonformer `br`-Body ist betroffen, und das größte Fenster der RFC
+(`WBITS` 24, 16 MiB Ringpuffer) bleibt erlaubt. `GetBody` liefert für so
+einen Body die aufgezeichneten Bytes mit `encoding_left = "br"`.
+
+**Akzeptanz.** Die minimierte Eingabe liegt als
+`daemon/crates/findings/tests/regressions/body_decoder-brotli-large-window.bin`
+und im Corpus. `tests/decoder_allocations.rs` misst über einen zählenden
+Allokator die größte einzelne Anforderung: für die Eingabe höchstens
+32 MiB, als Gegenprobe ebenso für einen Strom mit `lgwin` 24 und 8 MiB
+Ausgabe. Die Unit-Tests in `decode.rs` prüfen `FINDINGS_002` für die
+Eingabe und dass `lgwin` 10 bis 24 weiter entpackt werden. Mutationsbeweis:
+ohne die Prüfung fällt der Allokationstest mit einer Anforderung von
+536 870 978 Bytes rot. Zehn Minuten Fuzzing mit den Optionen der Nacht
+laufen grün.
