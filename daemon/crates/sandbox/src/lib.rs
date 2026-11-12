@@ -142,9 +142,9 @@ pub use crate::bwrap::{
     USERNS_SYSCTL_COMMAND, Version, is_userns_failure,
 };
 pub use crate::bwrap_args::{
-    DEFAULT_HOME, DEFAULT_USER, GROUP_DST, HOSTS_DST, IdentityFds, IdentityFiles, LaunchInputs,
-    MaskFds, PASSWD_DST, PREVIEW_AGENT_FD_FIRST, PREVIEW_MASK_FD_FIRST, SANDBOX_SHELL, SourceFd,
-    shell_line, shell_quote,
+    BwrapLine, DEFAULT_HOME, DEFAULT_USER, GROUP_DST, HOSTS_DST, IdentityFds, IdentityFiles,
+    LaunchInputs, MaskFds, PASSWD_DST, PREVIEW_AGENT_FD_FIRST, PREVIEW_MASK_FD_FIRST,
+    SANDBOX_SHELL, SourceFd, shell_line, shell_quote,
 };
 pub use crate::disposable::{ApplyOptions, ApplyReport, ChangeSet, Layer, LayerChange, SizeGuard};
 pub use crate::disposable::{
@@ -157,12 +157,13 @@ pub use crate::handle::{
     SandboxHandle, StatusSnapshot, Termination,
 };
 pub use crate::launcher::{
-    CheckResult, DisposableLayer, IsolationCheck, IsolationLevel, LaunchOptions, LaunchPlan,
-    PlanRequest, REPORT_TIMEOUT, SandboxBackend, StdioMode,
+    CheckResult, DisposableLayer, Door, IsolationCheck, IsolationLevel, LaunchOptions, LaunchPlan,
+    PlanPreview, PlanRequest, PolicyMode, PolicyOrigin, PolicyRow, REPORT_TIMEOUT, ResourceLimits,
+    SandboxBackend, StdioMode,
 };
 pub use crate::seatbelt::{
-    PREVIEW_AGENT_PORT, PREVIEW_REPORT_FD, PREVIEW_SESSION_PORT, PREVIEW_STATUS_FD, PolicyAccess,
-    PolicyRow, PolicySource, SeatbeltBackend, SeatbeltPreview, clone_masks,
+    PREVIEW_AGENT_PORT, PREVIEW_REPORT_FD, PREVIEW_SESSION_PORT, PREVIEW_STATUS_FD,
+    SeatbeltBackend, SeatbeltPreview, clone_masks,
 };
 
 /// Der Name des Backends dieses Systems: Seatbelt unter macOS, sonst bwrap

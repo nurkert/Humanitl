@@ -1414,6 +1414,14 @@ message SandboxEvent {
     // der Start festlegt, steht als `SESSION_PORT` und `AGENT_PORT` darin
     // (HUM-376).
     string policy_text = 19;
+    // Die eine Tuer in die Sandbox, wie das Backend sie plant (HUM-429): die
+    // Art in `snake_case` und die Adresse, unter der die Sandbox sie
+    // erreicht, durch ein Leerzeichen getrennt, zum Beispiel
+    // `socket_file /run/humanitl/proxy.sock` unter Linux oder
+    // `loopback_port 127.0.0.1:SESSION_PORT` unter Seatbelt, wo erst der
+    // Start den Port vergibt. Leer im Schnappschuss eines Befunds und bei
+    // einem Daemon vor Minor 33.
+    string door = 20;
   }
 
   // Eine Zeile aus dem Log der Sandbox.

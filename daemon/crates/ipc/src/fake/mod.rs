@@ -1394,6 +1394,7 @@ impl FakeDaemon {
                     session_id: session.id.to_string(),
                     backend: "bwrap".to_owned(),
                     policy_text: String::new(),
+                    door: "socket_file /run/humanitl/proxy.sock".to_owned(),
                     llm_endpoint: session.llm_endpoint,
                     started_at: running.then(|| timestamp(SystemTime::now())),
                     profile: FAKE_PROFILE.to_owned(),

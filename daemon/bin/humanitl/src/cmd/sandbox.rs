@@ -45,8 +45,6 @@ use humanitl_config::{Config, Env, Paths, Resolved};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
-#[cfg(not(target_os = "macos"))]
-use humanitl_sandbox::LaunchInputs;
 use humanitl_sandbox::{
     AdapterRegistry, AgentContext, Backend, CheckResult, INTERRUPT_GRACE, LaunchOptions,
     MountPolicy, PlanRequest, Refusal, RefusalReason, RefusalReporting, Refusals, SANDBOX_SHELL,
@@ -215,70 +213,58 @@ fn argv(ctx: &Context, command: &[OsString]) -> Result<u8, Failure> {
     let setup = prepare(ctx, &resolved, Wiring::Preview, command)?;
     // Die Vorschau, nicht der Plan: feste Deskriptornummern, alles unter
     // `/work` als vorhanden. Der Plan legt Deskriptoren an und verlangt
-    // Socket, CA und Shim; nichts davon braucht, wer nur nachsehen will.
-    #[cfg(target_os = "macos")]
-    let preview = setup.backend.seatbelt_preview(&setup.request(), false);
-    #[cfg(target_os = "macos")]
-    let args = preview.argv.clone();
-    #[cfg(not(target_os = "macos"))]
-    let args = {
-        let mut args = vec![setup.backend.program().as_os_str().to_owned()];
-        args.extend(setup.profile.to_bwrap_args(
-            &setup.session,
-            &LaunchInputs::preview_with_agent_files(
-                setup.session.files.iter().map(|file| file.dst.clone()),
-            ),
-        ));
-        args
-    };
-    let line = shell_line(&args);
+    // Socket, CA und Shim; nichts davon braucht, wer nur nachsehen will
+    // (HUM-429: die Vorschau des Backends, für jedes Backend dieselbe Frage).
+    let preview = setup.backend.preview(&setup.request());
+    let line = shell_line(&preview.argv);
 
     if ctx.render.is_json() {
-        #[allow(unused_mut)] // Nur unter macOS kommt etwas dazu.
         let mut value = json!({
             "profile": setup.profile.name,
             "program": setup.backend.program().display().to_string(),
-            "argv": args
+            "argv": preview
+                .argv
                 .iter()
                 .map(|arg| arg.to_string_lossy().into_owned())
                 .collect::<Vec<String>>(),
             "argv_line": line,
         });
-        #[cfg(target_os = "macos")]
-        {
+        // Ein Backend mit Regelwerk (Seatbelt) begrenzt nicht über die Zeile,
+        // sondern über das Profil (HUM-376); dann stehen Profil und Tabelle
+        // dabei.
+        if let Some(policy) = &preview.policy_text {
             value["backend"] = json!(setup.backend.name());
-            value["policy"] = json!(preview.policy_text);
-            value["rules"] = preview_rules_json(&preview);
+            value["policy"] = json!(policy);
+            value["rules"] = preview_rules_json(&preview.policy);
         }
         ctx.render.value(&value);
     } else {
         ctx.render.line(&line);
-        // Unter macOS begrenzt nicht die Zeile die Sandbox, sondern das Profil
-        // (HUM-376).
-        #[cfg(target_os = "macos")]
-        {
+        if let Some(policy) = &preview.policy_text {
             ctx.render.line("");
-            ctx.render.line(&preview.policy_text);
+            ctx.render.line(policy);
         }
     }
     Ok(EXIT_OK)
 }
 
-/// Die Tabelle der Vorschau für `sandbox argv --json`: echter Pfad, Recht und
-/// die Namen aus der Profildatei.
-#[cfg(target_os = "macos")]
-fn preview_rules_json(preview: &humanitl_sandbox::SeatbeltPreview) -> serde_json::Value {
-    use humanitl_sandbox::PolicyAccess;
-    preview
-        .rows
-        .iter()
+/// Die Tabelle der Vorschau für `sandbox argv --json`, wenn das Backend ein
+/// Regelwerk hat: echter Pfad, Recht und die Namen aus der Profildatei.
+fn preview_rules_json(rows: &[humanitl_sandbox::PolicyRow]) -> serde_json::Value {
+    use humanitl_sandbox::PolicyMode;
+    rows.iter()
         .map(|rule| {
             json!({
-                "path": rule.path.display().to_string(),
-                "access": match rule.access {
-                    PolicyAccess::ReadOnly => "read",
-                    PolicyAccess::ReadWrite => "write",
-                    PolicyAccess::Denied => "denied",
+                "path": rule.target.display().to_string(),
+                "access": match rule.mode {
+                    PolicyMode::ReadOnly => "read",
+                    PolicyMode::ReadWrite => "write",
+                    PolicyMode::Denied => "denied",
+                    PolicyMode::Masked => "masked",
+                    PolicyMode::Tmpfs => "tmpfs",
+                    PolicyMode::Symlink => "symlink",
+                    PolicyMode::Proc => "proc",
+                    PolicyMode::Dev => "dev",
                 },
                 "profile_paths": rule.names,
             })

@@ -51,7 +51,12 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `32` seit den Modellservern, frisch gedacht (HUM-405):
+/// `33` seit der Tür im Schnappschuss (HUM-429): `SandboxEvent.Status.door`
+/// nennt die eine Tür in die Sandbox als Text, Art und Adresse aus der
+/// Vorschau des Backends (`socket_file /run/humanitl/proxy.sock` unter
+/// Linux, `loopback_port 127.0.0.1:SESSION_PORT` unter Seatbelt); leer im
+/// Schnappschuss eines Befunds.
+/// `32` war die Fassung der Modellserver, frisch gedacht (HUM-405):
 /// `LlmServersRequest.Edit` ändert Endpunkt und Modelle eines Servers, ohne
 /// ihn zum Standard zu machen, `.Assign` ordnet einem Profil der Sitzung
 /// oder einem Projekt einen Server zu oder nimmt die Zuordnung weg,
@@ -184,7 +189,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 32;
+pub const PROTO_MINOR: u32 = 33;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

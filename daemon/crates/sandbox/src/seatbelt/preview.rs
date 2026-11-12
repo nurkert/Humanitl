@@ -21,7 +21,10 @@ use super::{
     PRIVATE_TREES, SeatbeltBackend, SeatbeltPolicy, SessionLayout, git_applies, prepend_to_path,
     session_env,
 };
-use crate::launcher::{DisposableLayer, PlanRequest};
+use crate::launcher::{
+    DisposableLayer, Door, PlanPreview, PlanRequest, PolicyMode, PolicyOrigin, PolicyRow,
+    ResourceLimits,
+};
 use crate::profile::{SandboxProfile, SessionContext};
 
 /// Steht in der Vorschau für den Loopback-Port der Sitzung.
@@ -40,41 +43,6 @@ pub const PREVIEW_REPORT_FD: &str = "REPORT_FD";
 /// [`super::session_port`] nimmt nur freie Ports vom System.
 const RENDER_PORTS: (u16, u16) = (0, 1);
 
-/// Was das Profil mit einem Pfad erlaubt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PolicyAccess {
-    /// Lesen.
-    ReadOnly,
-    /// Lesen und schreiben.
-    ReadWrite,
-    /// Weder lesen noch schreiben.
-    Denied,
-}
-
-/// Woher eine Zeile der Tabelle stammt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PolicySource {
-    /// Aus dem Profil oder den festen Regeln des Backends.
-    Profile,
-    /// Aus der Sitzung: Projekt, Sitzungsverzeichnis, Proxy-Socket, Shim.
-    Session,
-    /// Aus `mounts.extra_ro` und `mounts.extra_rw`.
-    User,
-}
-
-/// Eine Zeile der Tabelle: ein echter Pfad und was mit ihm erlaubt ist.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PolicyRow {
-    /// Der Pfad, wie der Agent ihn sieht; unter Seatbelt der Host-Pfad.
-    pub path: PathBuf,
-    /// Was das Profil erlaubt.
-    pub access: PolicyAccess,
-    /// Woher die Zeile stammt.
-    pub source: PolicySource,
-    /// Die Namen, unter denen die Profildatei diesen Pfad führt (`/work`).
-    pub names: Vec<String>,
-}
-
 /// Kommandozeile, Profil und Tabelle einer Sitzung, die nicht gestartet wird.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeatbeltPreview {
@@ -84,7 +52,8 @@ pub struct SeatbeltPreview {
     pub policy: SeatbeltPolicy,
     /// Der Text von `sandbox.sb`.
     pub policy_text: String,
-    /// Die Tabelle aus [`SeatbeltPreview::policy`].
+    /// Die Tabelle aus [`SeatbeltPreview::policy`]: Ziel und Quelle jeder
+    /// Zeile sind derselbe echte Pfad (HUM-429).
     pub rows: Vec<PolicyRow>,
     /// Die Umgebung des Agenten, sortiert, auf echte Pfade abgebildet.
     pub env: Vec<(String, String)>,
@@ -101,8 +70,11 @@ impl SeatbeltBackend {
     /// braucht nichts davon. Fehlende Pfade behalten ihren Namen, ihr schon
     /// vorhandener Teil wird aufgelöst. Eine Wegwerf-Schicht, die kein Klon
     /// ist, zeigt sie nicht; der Plan lehnt sie ab.
+    ///
+    /// Die ausführliche Form von [`crate::SandboxBackend::preview`], mit der
+    /// Beschreibung, aus der Profiltext und Tabelle stammen.
     #[must_use]
-    pub fn preview(
+    pub fn seatbelt_preview(
         &self,
         request: &PlanRequest<'_>,
         controlling_terminal: bool,
@@ -192,6 +164,27 @@ impl SeatbeltBackend {
     }
 }
 
+impl SeatbeltPreview {
+    /// Die Vorschau in der Form des Ports (HUM-429). Die Umgebung steht
+    /// nicht in der Zeile, es gibt dort also keinen Wert zurückzuhalten; die
+    /// Tür ist der Port der Sitzung, den erst der Start vergibt.
+    pub(crate) fn into_plan_preview(self, proxy_socket: &Path) -> PlanPreview {
+        PlanPreview {
+            argv: self.argv,
+            policy: self.rows,
+            env: self.env,
+            backend_env: self.backend_env,
+            argv_env: Vec::new(),
+            policy_text: Some(self.policy_text),
+            door: Door::LoopbackPort {
+                host: resolved(proxy_socket),
+                port: RENDER_PORTS.0,
+            },
+            limits: ResourceLimits::default(),
+        }
+    }
+}
+
 /// Die Umgebung der Vorschau und die Schlüssel, die allein das Backend setzt.
 fn preview_env(
     profile: &SandboxProfile,
@@ -262,67 +255,66 @@ fn placeholders_in_rules(text: &str) -> String {
 /// Eintrag selbst, und „nur lesbar" behauptete mehr, als sie schützen. Sie
 /// stehen im Profiltext.
 fn rows_of(policy: &SeatbeltPolicy, map: &[(String, PathBuf)]) -> Vec<PolicyRow> {
-    let row = |path: &Path, access, source| PolicyRow {
-        path: path.to_path_buf(),
-        access,
-        source,
-        names: Vec::new(),
+    // Ohne eigenen Mount-Namensraum ist der Pfad in der Sandbox der auf dem
+    // Rechner: Ziel und Quelle sind derselbe.
+    let row = |path: &Path, mode, origin| {
+        PolicyRow::new(mode, Some(path.to_path_buf()), path.to_path_buf(), origin)
     };
     let work_access = if policy.work_writable {
-        PolicyAccess::ReadWrite
+        PolicyMode::ReadWrite
     } else {
-        PolicyAccess::ReadOnly
+        PolicyMode::ReadOnly
     };
     let mut rows = vec![row(
         Path::new("/"),
-        PolicyAccess::ReadOnly,
-        PolicySource::Profile,
+        PolicyMode::ReadOnly,
+        PolicyOrigin::Profile,
     )];
     rows.extend(
         PRIVATE_TREES
             .iter()
-            .map(|tree| row(Path::new(tree), PolicyAccess::Denied, PolicySource::Profile)),
+            .map(|tree| row(Path::new(tree), PolicyMode::Denied, PolicyOrigin::Profile)),
     );
-    rows.push(row(&policy.work, work_access, PolicySource::Session));
+    rows.push(row(&policy.work, work_access, PolicyOrigin::Session));
     rows.push(row(
         &policy.session,
-        PolicyAccess::ReadOnly,
-        PolicySource::Session,
+        PolicyMode::ReadOnly,
+        PolicyOrigin::Session,
     ));
     rows.extend(
         policy
             .session_writable
             .iter()
-            .map(|dir| row(dir, PolicyAccess::ReadWrite, PolicySource::Session)),
+            .map(|dir| row(dir, PolicyMode::ReadWrite, PolicyOrigin::Session)),
     );
     rows.extend(
         policy
             .read_only
             .iter()
-            .map(|dir| row(dir, PolicyAccess::ReadOnly, PolicySource::User)),
+            .map(|dir| row(dir, PolicyMode::ReadOnly, PolicyOrigin::User)),
     );
     rows.extend(
         policy
             .writable
             .iter()
-            .map(|dir| row(dir, PolicyAccess::ReadWrite, PolicySource::User)),
+            .map(|dir| row(dir, PolicyMode::ReadWrite, PolicyOrigin::User)),
     );
     rows.extend(
         policy
             .files
             .iter()
             .chain(std::iter::once(&policy.door))
-            .map(|file| row(file, PolicyAccess::ReadOnly, PolicySource::Session)),
+            .map(|file| row(file, PolicyMode::ReadOnly, PolicyOrigin::Session)),
     );
     rows.extend(
         policy
             .masked
             .iter()
-            .map(|path| row(path, PolicyAccess::Denied, PolicySource::Profile)),
+            .map(|path| row(path, PolicyMode::Denied, PolicyOrigin::Profile)),
     );
     let mut merged: Vec<PolicyRow> = Vec::with_capacity(rows.len());
     for entry in rows {
-        match merged.iter_mut().find(|known| known.path == entry.path) {
+        match merged.iter_mut().find(|known| known.target == entry.target) {
             Some(known) => merge_row(known, entry),
             None => merged.push(entry),
         }
@@ -330,10 +322,10 @@ fn rows_of(policy: &SeatbeltPolicy, map: &[(String, PathBuf)]) -> Vec<PolicyRow>
     let mut rows = merged;
 
     for (name, path) in map {
-        if let Some(entry) = rows.iter_mut().find(|entry| entry.path == *path) {
+        if let Some(entry) = rows.iter_mut().find(|entry| entry.target == *path) {
             entry.names.push(name.clone());
         } else {
-            let mut entry = row(path, PolicyAccess::ReadOnly, PolicySource::Session);
+            let mut entry = row(path, PolicyMode::ReadOnly, PolicyOrigin::Session);
             entry.names.push(name.clone());
             rows.push(entry);
         }
@@ -351,13 +343,15 @@ fn rows_of(policy: &SeatbeltPolicy, map: &[(String, PathBuf)]) -> Vec<PolicyRow>
 /// nimmt mit `allow file-read*` kein `allow file-write*` zurück, und ein
 /// Leserecht öffnet wieder, was ein privater Baum davor gesperrt hatte.
 fn merge_row(known: &mut PolicyRow, entry: PolicyRow) {
-    let wins = match entry.access {
-        PolicyAccess::Denied | PolicyAccess::ReadWrite => true,
-        PolicyAccess::ReadOnly => known.access == PolicyAccess::Denied,
+    // Die Tabelle unter Seatbelt kennt nur diese drei; was anderes käme,
+    // gewinnt wie eine Sperre, damit sie nie mehr behauptet als das Profil.
+    let wins = match entry.mode {
+        PolicyMode::ReadOnly => known.mode == PolicyMode::Denied,
+        _ => true,
     };
     if wins {
-        known.access = entry.access;
-        known.source = entry.source;
+        known.mode = entry.mode;
+        known.origin = entry.origin;
     }
     known.names.extend(entry.names);
 }
@@ -461,7 +455,7 @@ mod tests {
     #[test]
     fn the_preview_is_the_plan_but_for_the_ports() {
         let fx = fixture();
-        let preview = fx.backend.preview(&fx.request(), false);
+        let preview = fx.backend.seatbelt_preview(&fx.request(), false);
         let sessions = fx.backend.sessions_dir();
         assert!(!sessions.exists(), "the preview left {sessions:?} behind");
 
@@ -529,33 +523,36 @@ mod tests {
         fx.profile.mounts.extra_ro.push(both.clone());
         fx.profile.mounts.extra_rw.push(both.clone());
 
-        let preview = fx.backend.preview(&fx.request(), false);
-        let rows: Vec<&PolicyRow> = preview.rows.iter().filter(|r| r.path == both).collect();
+        let preview = fx.backend.seatbelt_preview(&fx.request(), false);
+        let rows: Vec<&PolicyRow> = preview.rows.iter().filter(|r| r.target == both).collect();
         assert_eq!(rows.len(), 1, "one line per path");
-        assert_eq!(rows[0].access, PolicyAccess::ReadWrite);
-        assert_eq!(rows[0].source, PolicySource::User);
+        assert_eq!(rows[0].mode, PolicyMode::ReadWrite);
+        assert_eq!(rows[0].origin, PolicyOrigin::User);
     }
 
     /// Die Maske sperrt im Profil zuletzt, und der Name der Profildatei bleibt.
     #[test]
     fn merging_keeps_the_mask_and_the_profile_names() {
         let path = PathBuf::from("/x");
-        let line = |access, names: &[&str]| PolicyRow {
-            path: path.clone(),
-            access,
-            source: PolicySource::Session,
+        let line = |mode, names: &[&str]| PolicyRow {
             names: names.iter().map(|name| (*name).to_owned()).collect(),
+            ..PolicyRow::new(
+                mode,
+                Some(path.clone()),
+                path.clone(),
+                PolicyOrigin::Session,
+            )
         };
-        let mut known = line(PolicyAccess::ReadWrite, &["/work"]);
-        merge_row(&mut known, line(PolicyAccess::ReadOnly, &["/a"]));
-        assert_eq!(known.access, PolicyAccess::ReadWrite);
-        merge_row(&mut known, line(PolicyAccess::Denied, &[]));
-        assert_eq!(known.access, PolicyAccess::Denied);
+        let mut known = line(PolicyMode::ReadWrite, &["/work"]);
+        merge_row(&mut known, line(PolicyMode::ReadOnly, &["/a"]));
+        assert_eq!(known.mode, PolicyMode::ReadWrite);
+        merge_row(&mut known, line(PolicyMode::Denied, &[]));
+        assert_eq!(known.mode, PolicyMode::Denied);
         assert_eq!(known.names, vec!["/work".to_owned(), "/a".to_owned()]);
 
-        let mut private = line(PolicyAccess::Denied, &[]);
-        merge_row(&mut private, line(PolicyAccess::ReadOnly, &[]));
-        assert_eq!(private.access, PolicyAccess::ReadOnly);
+        let mut private = line(PolicyMode::Denied, &[]);
+        merge_row(&mut private, line(PolicyMode::ReadOnly, &[]));
+        assert_eq!(private.mode, PolicyMode::ReadOnly);
     }
 
     #[test]
@@ -563,32 +560,33 @@ mod tests {
         let mut fx = fixture();
         fx.session.work_mode = WorkMode::Ro;
         std::fs::write(fx.session.work_src.join(".envrc"), "x").expect("a mask");
-        let preview = fx.backend.preview(&fx.request(), true);
+        let preview = fx.backend.seatbelt_preview(&fx.request(), true);
         let row = |path: &Path| {
             preview
                 .rows
                 .iter()
-                .find(|row| row.path == path)
+                .find(|row| row.target == path)
                 .unwrap_or_else(|| panic!("no row for {path:?}"))
         };
 
         let work = row(&fx.session.work_src);
-        assert_eq!(work.access, PolicyAccess::ReadOnly);
+        assert_eq!(work.mode, PolicyMode::ReadOnly);
         assert_eq!(work.names, vec![WORK_NAME.to_owned()]);
-        assert_eq!(row(Path::new("/")).access, PolicyAccess::ReadOnly);
-        assert_eq!(row(Path::new("/Users")).access, PolicyAccess::Denied);
+        assert_eq!(work.source.as_deref(), Some(work.target.as_path()));
+        assert_eq!(row(Path::new("/")).mode, PolicyMode::ReadOnly);
+        assert_eq!(row(Path::new("/Users")).mode, PolicyMode::Denied);
         assert_eq!(
-            row(&fx.session.work_src.join(".envrc")).access,
-            PolicyAccess::Denied
+            row(&fx.session.work_src.join(".envrc")).mode,
+            PolicyMode::Denied
         );
         let tmp = preview
             .rows
             .iter()
             .find(|row| row.names.iter().any(|name| name == "/tmp"))
             .expect("the session has a /tmp");
-        assert_eq!(tmp.access, PolicyAccess::ReadWrite);
+        assert_eq!(tmp.mode, PolicyMode::ReadWrite);
         assert_eq!(tmp.names, vec!["/tmp".to_owned(), "/var/tmp".to_owned()]);
-        assert!(tmp.path.starts_with(&preview.policy.session));
+        assert!(tmp.target.starts_with(&preview.policy.session));
 
         assert!(
             preview
@@ -611,15 +609,72 @@ mod tests {
         session.shim_src = PathBuf::from("/nowhere/shim");
         let preview = fx
             .backend
-            .preview(&PlanRequest::new(&fx.profile, &session, &fx.options), false);
+            .seatbelt_preview(&PlanRequest::new(&fx.profile, &session, &fx.options), false);
         assert!(
             preview
                 .rows
                 .iter()
-                .any(|row| row.path.as_path() == Path::new("/nowhere/proj"))
+                .any(|row| row.target.as_path() == Path::new("/nowhere/proj"))
         );
         assert!(preview.env.iter().any(|(key, _)| key == "TMPDIR"));
         assert!(preview.backend_env.iter().any(|key| key == "TMPDIR"));
+    }
+
+    /// Jede Zeile der Tabelle steht im Profil, und jeder Baum, den das Profil
+    /// öffnet oder sperrt, hat seine Zeile (HUM-429). Unter Seatbelt ist das
+    /// Profil, was die Zeile unter bwrap ist: Die Tabelle kommt aus derselben
+    /// Beschreibung ([`SeatbeltPolicy`]) und nicht aus dem Text, und dieser
+    /// Vergleich in beide Richtungen hält beide zusammen. Die Ordner über
+    /// einem Pfad (`file-read-metadata`) und die Sperren einzelner Ordner
+    /// (`locked`) haben mit Absicht keine Zeile; siehe [`rows_of`].
+    #[test]
+    fn every_row_is_in_the_profile_and_every_tree_of_the_profile_a_row() {
+        let mut fx = fixture();
+        std::fs::write(fx.session.work_src.join(".envrc"), "x").expect("a mask");
+        let extra = fx.session.work_src.parent().expect("a parent").join("data");
+        std::fs::create_dir_all(&extra).expect("the folder");
+        fx.profile.mounts.extra_rw.push(extra);
+        fx.options.stdio = crate::StdioMode::Pty { cols: 80, rows: 24 };
+        let preview = crate::SandboxBackend::preview(&fx.backend, &fx.request());
+        let text = preview.policy_text.expect("Seatbelt has a profile");
+        assert!(text.contains("(allow file-read*)\n"), "{text}");
+        let trees: Vec<PathBuf> = text
+            .split("(subpath \"")
+            .skip(1)
+            .map(|part| PathBuf::from(part.split('"').next().expect("a closing quote")))
+            .collect();
+        // Eine Zeile steht selbst im Profil, oder sie liegt in einem Baum, den
+        // das Profil nennt: die Dateien der Sitzung im Sitzungsverzeichnis.
+        for row in &preview.policy {
+            if row.target == Path::new("/") {
+                continue;
+            }
+            let quoted = format!("\"{}\"", row.target.display());
+            assert!(
+                text.contains(&quoted) || trees.iter().any(|tree| row.target.starts_with(tree)),
+                "{row:?} is not in the profile"
+            );
+            assert_eq!(row.source.as_ref(), Some(&row.target), "{row:?}");
+        }
+        for tree in &trees {
+            assert!(
+                preview.policy.iter().any(|row| row.target == *tree),
+                "the profile names {tree:?}, the table does not"
+            );
+        }
+        assert!(trees.len() > PRIVATE_TREES.len(), "{text}");
+        assert!(
+            preview
+                .argv
+                .iter()
+                .any(|arg| arg == "--controlling-terminal"),
+            "a start at the own terminal shows its line"
+        );
+        assert_eq!(
+            preview.door.describe(),
+            format!("loopback_port 127.0.0.1:{PREVIEW_SESSION_PORT}")
+        );
+        assert!(preview.argv_env.is_empty() && preview.limits.is_empty());
     }
 
     const WORK_NAME: &str = "/work";

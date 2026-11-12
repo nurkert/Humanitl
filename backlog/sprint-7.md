@@ -56,6 +56,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-446 | Kernel-Stufe: Projektordner und Wegwerf-Schicht über virtiofs | L | HUM-445 |
 | HUM-449 | Kernel-Stufe zulassen: `krun` wird wählbar | S | HUM-445, HUM-446 |
 | HUM-447 | Doku der Kernel-Stufe, Oberfläche schaltet `krun` frei | S | HUM-449 |
+| HUM-450 | `humanitl sandbox argv` hält zurückgehaltene Werte auch in der CLI zurück | S | HUM-429 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -602,3 +603,30 @@ Abschluss der Kernel-Stufe, nach der Zulassung (HUM-449).
 
 ### Fallstricke
 - Das Tor aus dem Kopf dieses Sprints gilt: `krun` erscheint in der Oberfläche nicht vor HUM-449.
+
+---
+
+## HUM-450 · `humanitl sandbox argv` withholds hidden values in the CLI too
+
+### Kontext
+Beim Review von HUM-429 (2026-11-12) fiel auf: Die Vorschau im Daemon hält
+Werte zurück, die der Nutzer verbirgt (`PlanPreview::withhold`), die CLI
+`humanitl sandbox argv` druckt unter Linux dagegen die rohen `--setenv`-Werte
+in Text und JSON, etwa `sandbox.env.HTTP_PROXY = "http://user:secret@host"`.
+Das war schon vor HUM-429 so; die Ausgabe geht nur an den Nutzer selbst,
+landet aber in Terminal-Verläufen und geteilten Fehlerberichten.
+
+### Spezifikation
+1. `humanitl sandbox argv` wendet dieselbe Entscheidung an wie die Vorschau
+   im Daemon (eine Stelle, kein zweiter Filter), in Text und JSON.
+2. Ein Schalter `--show-values` zeigt die Werte auf ausdrücklichen Wunsch.
+
+### Tests
+- CLI: ein verborgener Wert erscheint in Text und JSON als Platzhalter, mit
+  `--show-values` im Klartext. Mutationsbeweis: ohne `withhold` rot.
+
+### Akzeptanzkriterien
+1. Kein verborgener Wert erscheint ohne `--show-values` in der Ausgabe.
+
+### Fallstricke
+- Der Platzhalter ist derselbe wie im Daemon (`WITHHELD_PLACEHOLDER`).

@@ -7,10 +7,12 @@
 //! [`crate::Backend`], ein Enum über die Backends dieses Builds, gewählt zur
 //! Laufzeit (HUM-428); was ein Start außer Profil und Sitzung braucht, steht
 //! in den [`LaunchOptions`] und nicht mehr in Methoden eines konkreten Typs.
-//! Die Mounttabelle der Oberfläche entsteht unter Linux noch aus den Flags
-//! der Zeile des Sandbox-Backends (HUM-429 zieht sie in den Plan). Dass die
-//! Kopplung an bwrap nicht weiter wächst, prüft `tools/check_coupling.py`
-//! (HUM-145).
+//! Was eine Sitzung täte, ohne etwas anzulegen, sagt
+//! [`SandboxBackend::preview`] als [`PlanPreview`]: Zeile, Umgebung, Tabelle
+//! der Pfade ([`PolicyRow`]) und die eine Tür ([`Door`]). Das Backend baut
+//! die Tabelle aus denselben Daten wie seine Zeile; kein Aufrufer liest dafür
+//! die Flags eines Backends (HUM-429). Dass die Kopplung an bwrap nicht
+//! weiter wächst, prüft `tools/check_coupling.py` (HUM-145).
 //!
 //! Der Plan ist vollständig: `argv[0]` ist das Programm, alles danach kommt
 //! vom Backend, und die Oberfläche zeigt die Liste wörtlich
@@ -54,6 +56,16 @@ pub trait SandboxBackend: Send + Sync {
     ///
     /// `SANDBOX_030` mit dem ersten fehlenden Teil und seinem Fix.
     fn disposable_support(&self, request: &PlanRequest<'_>) -> Result<(), Diagnostic>;
+
+    /// Was eine Sitzung mit dieser Anfrage täte, ohne Seiteneffekt (HUM-429):
+    /// kein Deskriptor, kein Verzeichnis, kein Port. Was erst der Start
+    /// festlegt, steht als Platzhalter da. Anders als
+    /// [`SandboxBackend::plan`] scheitert die Vorschau nicht; wer nachsehen
+    /// will, braucht weder Proxy noch Shim noch Projektordner.
+    ///
+    /// Ob die Sitzung ein Terminal bekommt, sagt [`LaunchOptions::stdio`]
+    /// wie beim Start.
+    fn preview(&self, request: &PlanRequest<'_>) -> PlanPreview;
 
     /// Baut aus der Anfrage die vollständige Kommandozeile samt allem, was
     /// der Start braucht, und prüft dabei jede Vorbedingung, die sich ohne
@@ -226,6 +238,205 @@ impl<'a> PlanRequest<'a> {
             profile,
             session,
             options,
+        }
+    }
+}
+
+/// Was eine Zeile der Tabelle mit ihrem Pfad tut (HUM-429).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyMode {
+    /// Lesbar, von der Quelle auf dem Host.
+    ReadOnly,
+    /// Les- und schreibbar, von der Quelle auf dem Host.
+    ReadWrite,
+    /// Weder les- noch schreibbar (Seatbelt: eine Sperre im Profil).
+    Denied,
+    /// Eine Datei aus dem Speicher des Launchers über dem Pfad: eine Maske,
+    /// eine Identitätsdatei, eine Datei des Adapters.
+    Masked,
+    /// Ein leeres Dateisystem im Speicher.
+    Tmpfs,
+    /// Ein Verweis, sein Ziel in [`PolicyRow::link`].
+    Symlink,
+    /// Das `/proc` der Sandbox.
+    Proc,
+    /// Das minimale `/dev` der Sandbox.
+    Dev,
+}
+
+/// Woher eine Zeile der Tabelle stammt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyOrigin {
+    /// Aus dem Profil oder den festen Regeln des Backends.
+    Profile,
+    /// Aus der Sitzung: Projekt, Proxy-Socket, CA, Shim.
+    Session,
+    /// Aus `mounts.extra_ro` und `mounts.extra_rw`.
+    User,
+    /// Aus dem Agent-Adapter.
+    Adapter,
+}
+
+/// Eine Zeile der Tabelle: ein Pfad in der Sandbox und was mit ihm gilt.
+///
+/// Ein Backend erzeugt die Zeilen beim Übersetzen des Profils aus denselben
+/// Daten wie seine Zeile, nicht aus ihr (HUM-429). Unter Seatbelt, ohne
+/// eigenen Mount-Namensraum, sind Ziel und Quelle derselbe echte Pfad, und
+/// die Namen aus der Profildatei stehen daneben.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyRow {
+    /// Was mit dem Pfad gilt.
+    pub mode: PolicyMode,
+    /// Die Quelle auf dem Host, wenn es eine gibt; `None` für Masken,
+    /// tmpfs, Verweise, `/proc` und `/dev`.
+    pub source: Option<PathBuf>,
+    /// Der Pfad, wie der Agent ihn sieht.
+    pub target: PathBuf,
+    /// Das Ziel eines Verweises, ein Pfad in der Sandbox.
+    pub link: Option<PathBuf>,
+    /// Woher die Zeile stammt.
+    pub origin: PolicyOrigin,
+    /// Die Namen, unter denen die Profildatei diesen Pfad führt (`/work`),
+    /// wo sie nicht das Ziel sind (Seatbelt).
+    pub names: Vec<String>,
+}
+
+impl PolicyRow {
+    /// Eine Zeile ohne Verweis und ohne weitere Namen.
+    #[must_use]
+    pub const fn new(
+        mode: PolicyMode,
+        source: Option<PathBuf>,
+        target: PathBuf,
+        origin: PolicyOrigin,
+    ) -> Self {
+        Self {
+            mode,
+            source,
+            target,
+            link: None,
+            origin,
+            names: Vec::new(),
+        }
+    }
+}
+
+/// Die eine Tür in die Sandbox, je Backend (HUM-429).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Door {
+    /// Der Proxy-Socket als eine Datei in der Sandbox (bwrap).
+    SocketFile {
+        /// Der Socket auf dem Host.
+        host: PathBuf,
+        /// Sein Pfad in der Sandbox.
+        sandbox: PathBuf,
+    },
+    /// Ein Port auf `127.0.0.1`, den der Daemon an den Socket weiterreicht
+    /// (Seatbelt).
+    LoopbackPort {
+        /// Der Socket auf dem Host, an den der Port führt.
+        host: PathBuf,
+        /// Der Port; `0` in der Vorschau, dort vergibt ihn erst der Start.
+        port: u16,
+    },
+    /// Ein vsock-Port des Gastes, auf dem Host ein Unix-Socket (geplant:
+    /// Kernel-Stufe, HUM-444).
+    VsockPort {
+        /// Der Socket auf dem Host.
+        host: PathBuf,
+        /// Der Port im Gast.
+        port: u32,
+    },
+}
+
+impl Door {
+    /// Die Art der Tür in `snake_case`, wie das Protokoll sie führt.
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::SocketFile { .. } => "socket_file",
+            Self::LoopbackPort { .. } => "loopback_port",
+            Self::VsockPort { .. } => "vsock_port",
+        }
+    }
+
+    /// Die Tür als Text für `Status.door`: die Art und die Adresse, unter der
+    /// die Sandbox sie erreicht. Der Port, den erst der Start vergibt, steht
+    /// als [`crate::PREVIEW_SESSION_PORT`] da.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let at = match self {
+            Self::SocketFile { sandbox, .. } => sandbox.display().to_string(),
+            Self::LoopbackPort { port: 0, .. } => {
+                format!("127.0.0.1:{}", crate::PREVIEW_SESSION_PORT)
+            }
+            Self::LoopbackPort { port, .. } => format!("127.0.0.1:{port}"),
+            Self::VsockPort { port, .. } => format!("vsock:{port}"),
+        };
+        format!("{} {at}", self.kind())
+    }
+}
+
+/// Grenzen der Mittel einer Sandbox (geplant: Podman, HUM-433). Leer heißt:
+/// Das Backend setzt keine; so bei bwrap und Seatbelt.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResourceLimits {
+    /// Höchster Speicher in Bytes.
+    pub memory_bytes: Option<u64>,
+    /// Rechenzeit in Tausendsteln einer CPU.
+    pub cpu_millis: Option<u32>,
+    /// Höchstzahl der Prozesse.
+    pub pids: Option<u32>,
+}
+
+impl ResourceLimits {
+    /// Ob keine Grenze gesetzt ist.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.memory_bytes.is_none() && self.cpu_millis.is_none() && self.pids.is_none()
+    }
+}
+
+/// Was eine Sitzung täte, ohne Seiteneffekt; was CLI und Oberfläche zeigen
+/// (HUM-429).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanPreview {
+    /// Die Kommandozeile, `argv[0]` ist das Programm.
+    pub argv: Vec<OsString>,
+    /// Die Tabelle der Pfade, in der Reihenfolge des Backends.
+    pub policy: Vec<PolicyRow>,
+    /// Die Umgebung des Befehls in der Sandbox, alphabetisch.
+    pub env: Vec<(String, String)>,
+    /// Die Schlüssel aus [`PlanPreview::env`], die allein das Backend setzt
+    /// und die keine Quelle des Profils kennt (Seatbelt: `TMPDIR`).
+    pub backend_env: Vec<String>,
+    /// Wo in [`PlanPreview::argv`] ein Wert aus [`PlanPreview::env`] steht,
+    /// als `(Schlüssel, Index)`; leer, wenn das Backend die Umgebung nicht in
+    /// der Zeile trägt. Damit hält [`PlanPreview::withhold`] Werte zurück,
+    /// ohne dass der Aufrufer die Flags des Backends liest.
+    pub argv_env: Vec<(String, usize)>,
+    /// Das Regelwerk, das die Sandbox begrenzt, wenn das Backend eines hat:
+    /// unter Seatbelt der Text von `sandbox.sb`.
+    pub policy_text: Option<String>,
+    /// Die eine Tür in die Sandbox.
+    pub door: Door,
+    /// Die Grenzen der Mittel; bei bwrap und Seatbelt leer.
+    pub limits: ResourceLimits,
+}
+
+impl PlanPreview {
+    /// Ersetzt in [`PlanPreview::argv`] jeden Wert einer Variablen, deren
+    /// Wert `shows` nicht zeigen darf, durch `placeholder`.
+    ///
+    /// Die Entscheidung trifft der Aufrufer an einer Stelle, für Zeile und
+    /// Tabelle zugleich; hier steht nur, wo die Werte liegen.
+    pub fn withhold(&mut self, shows: impl Fn(&str) -> bool, placeholder: &str) {
+        for (key, index) in &self.argv_env {
+            if !shows(key)
+                && let Some(value) = self.argv.get_mut(*index)
+            {
+                *value = OsString::from(placeholder);
+            }
         }
     }
 }

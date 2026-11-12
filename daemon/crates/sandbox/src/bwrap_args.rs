@@ -78,6 +78,7 @@ use std::path::{Path, PathBuf};
 use humanitl_config::WorkMode;
 
 use crate::bridge_env::shim_env;
+use crate::launcher::{PolicyMode, PolicyOrigin, PolicyRow};
 use crate::profile::{CA_BUNDLE_DST, Namespace, SandboxProfile, SessionContext};
 
 /// Die Nutzerdatenbank der Sandbox: eine Zeile, der Nutzer der Sitzung.
@@ -356,6 +357,24 @@ impl LaunchInputs {
     }
 }
 
+/// Die Argumente für `bwrap` samt der Tabelle, die dieselben Aufrufe
+/// erzeugen (HUM-429).
+///
+/// Jede Einhängung schreibt ihre Flags und ihre [`PolicyRow`] an derselben
+/// Stelle aus denselben Daten; die Tabelle wird nicht aus den Argumenten
+/// zurückgelesen. Ob beide übereinstimmen, prüft ein Vergleich in beide
+/// Richtungen (`every_bind_flag_has_a_row_and_every_row_a_bind_flag`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BwrapLine {
+    /// Was [`SandboxProfile::to_bwrap_args`] liefert.
+    pub args: Vec<OsString>,
+    /// Eine Zeile je Einhängung, in der Reihenfolge der Argumente.
+    pub policy: Vec<PolicyRow>,
+    /// Wo in [`BwrapLine::args`] der Wert jedes `--setenv` steht, als
+    /// `(Schlüssel, Index)`.
+    pub env_values: Vec<(String, usize)>,
+}
+
 impl SandboxProfile {
     /// Die vollständige Argumentliste für `bwrap`, ohne `bwrap` selbst.
     ///
@@ -363,7 +382,14 @@ impl SandboxProfile {
     /// weiteren `--` und dem Befehl aus dem [`SessionContext`].
     #[must_use]
     pub fn to_bwrap_args(&self, ctx: &SessionContext, inputs: &LaunchInputs) -> Vec<OsString> {
-        let mut args = Args::default();
+        self.to_bwrap_line(ctx, inputs).args
+    }
+
+    /// Dieselbe Liste wie [`SandboxProfile::to_bwrap_args`] mit der Tabelle
+    /// der Einhängungen und den Stellen der Umgebungswerte (HUM-429).
+    #[must_use]
+    pub fn to_bwrap_line(&self, ctx: &SessionContext, inputs: &LaunchInputs) -> BwrapLine {
+        let mut args = Args::new(Origins::of(self, ctx));
 
         // Die feste Reihenfolge, nicht die des Profils: `parse` verlangt, dass
         // alle sechs genannt sind, also ist die Liste hier vollständig.
@@ -395,16 +421,16 @@ impl SandboxProfile {
         }
 
         for path in &self.mounts.ro {
-            args.bind("--ro-bind", path, path);
+            args.ro_bind(path, path);
         }
         for link in &self.mounts.symlinks {
-            args.bind("--symlink", Path::new(&link.target), &link.link);
+            args.symlink(Path::new(&link.target), &link.link);
         }
         if let Some(proc) = self.mounts.proc.as_deref() {
-            args.path("--proc", proc);
+            args.mount_point("--proc", PolicyMode::Proc, proc);
         }
         if let Some(dev) = self.mounts.dev.as_deref() {
-            args.path("--dev", dev);
+            args.mount_point("--dev", PolicyMode::Dev, dev);
         }
 
         let work_dst = self.mounts.work.dst.as_path();
@@ -414,7 +440,7 @@ impl SandboxProfile {
             .iter()
             .partition(|path| path.starts_with(work_dst) && path.as_path() != work_dst);
         for path in elsewhere {
-            args.path("--tmpfs", path);
+            args.mount_point("--tmpfs", PolicyMode::Tmpfs, path);
         }
 
         // Die Erweiterungen des Nutzers kommen vor dem, was die Sitzung
@@ -447,7 +473,7 @@ impl SandboxProfile {
         self.mount_work(&mut args, ctx, inputs, work_dst);
         for path in under_work {
             if inputs.renders(path) {
-                args.path("--tmpfs", path);
+                args.mount_point("--tmpfs", PolicyMode::Tmpfs, path);
             }
         }
 
@@ -457,12 +483,8 @@ impl SandboxProfile {
         // nicht (mit `--bind` könnte der Agent sie auf 0666 stellen; gemessen
         // mit bubblewrap 0.11). Die Datei, nie ihr Verzeichnis: neben dem
         // Proxy-Socket läge sonst, was der Daemon noch so hat (HUM-013).
-        args.bind(
-            "--ro-bind",
-            &ctx.proxy_socket_src,
-            &self.network.proxy_socket_dst,
-        );
-        args.bind("--ro-bind", &ctx.ca_cert_src, &self.network.ca_cert_dst);
+        args.ro_bind(&ctx.proxy_socket_src, &self.network.proxy_socket_dst);
+        args.ro_bind(&ctx.ca_cert_src, &self.network.ca_cert_dst);
         // Die Überdeckung des System-Bundles: dieselben Wurzeln, die der Host
         // hat, plus die eigene CA (HUM-014). Sie steht hier und nicht bei
         // `mounts.ro`, weil `bwrap` die Argumente der Reihe nach abarbeitet
@@ -470,8 +492,8 @@ impl SandboxProfile {
         // Ohne sie lehnt jeder TLS-Client in der Sandbox das Leaf des Proxys
         // ab, und `SSL_CERT_FILE` allein erreicht nicht jedes Werkzeug
         // ([`CA_BUNDLE_DST`]).
-        args.bind("--ro-bind", &ctx.ca_bundle_src, Path::new(CA_BUNDLE_DST));
-        args.bind("--ro-bind", &ctx.shim_src, &self.network.shim_dst);
+        args.ro_bind(&ctx.ca_bundle_src, Path::new(CA_BUNDLE_DST));
+        args.ro_bind(&ctx.shim_src, &self.network.shim_dst);
         // The agent program from outside the mounts, one file and read-only
         // (HUM-278). It stands after the profile's mounts, so no profile entry
         // can cover it, and under `/run/humanitl`, which never comes from the
@@ -529,7 +551,7 @@ impl SandboxProfile {
             args.push(part);
         }
 
-        args.0
+        args.into_line()
     }
 
     /// Der Projektordner an `/work`: als Bind, oder bei einer
@@ -561,6 +583,14 @@ impl SandboxProfile {
         args.push(&overlay.upper);
         args.push(&overlay.work);
         args.push(work_dst);
+        // Auf diesem Rechner ist das Projekt nur lesbar eingehängt; was der
+        // Agent schreibt, landet in der oberen Schicht.
+        args.row(PolicyRow::new(
+            PolicyMode::ReadOnly,
+            Some(lower),
+            work_dst.to_path_buf(),
+            PolicyOrigin::Session,
+        ));
     }
 
     /// Dieselbe Liste als eine Zeile, wie eine Shell sie lesen würde.
@@ -730,13 +760,99 @@ pub fn shell_quote(arg: &str) -> String {
     out
 }
 
-/// Sammelt die Argumente und hält die Schreibweise an einer Stelle.
+/// Woher eine Einhängung stammt, nach ihrem Ziel in der Sandbox.
+///
+/// Dieselbe Rangfolge, mit der die Tabelle bis HUM-429 die Zeile las: eine
+/// Datei des Adapters vor dem, was die Sitzung einhängt, das vor den
+/// Erweiterungen des Nutzers, alles andere aus dem Profil.
 #[derive(Debug, Default)]
-struct Args(Vec<OsString>);
+struct Origins {
+    adapter: BTreeSet<PathBuf>,
+    session: BTreeSet<PathBuf>,
+    user: BTreeSet<PathBuf>,
+}
+
+impl Origins {
+    fn of(profile: &SandboxProfile, ctx: &SessionContext) -> Self {
+        Self {
+            adapter: ctx.files.iter().map(|file| file.dst.clone()).collect(),
+            session: [
+                profile.mounts.work.dst.clone(),
+                profile.network.proxy_socket_dst.clone(),
+                profile.network.ca_cert_dst.clone(),
+                profile.network.shim_dst.clone(),
+                PathBuf::from(CA_BUNDLE_DST),
+            ]
+            .into_iter()
+            .collect(),
+            user: profile
+                .mounts
+                .extra_ro
+                .iter()
+                .chain(&profile.mounts.extra_rw)
+                .cloned()
+                .collect(),
+        }
+    }
+
+    fn of_target(&self, target: &Path) -> PolicyOrigin {
+        if self.adapter.contains(target) {
+            PolicyOrigin::Adapter
+        } else if self.session.contains(target) {
+            PolicyOrigin::Session
+        } else if self.user.contains(target) {
+            PolicyOrigin::User
+        } else {
+            PolicyOrigin::Profile
+        }
+    }
+}
+
+/// Sammelt die Argumente und die Tabelle und hält die Schreibweise an einer
+/// Stelle: Jede Methode, die einhängt, schreibt auch ihre Zeile.
+#[derive(Debug)]
+struct Args {
+    words: Vec<OsString>,
+    rows: Vec<PolicyRow>,
+    env_values: Vec<(String, usize)>,
+    origins: Origins,
+}
 
 impl Args {
+    const fn new(origins: Origins) -> Self {
+        Self {
+            words: Vec::new(),
+            rows: Vec::new(),
+            env_values: Vec::new(),
+            origins,
+        }
+    }
+
+    fn into_line(self) -> BwrapLine {
+        BwrapLine {
+            args: self.words,
+            policy: self.rows,
+            env_values: self.env_values,
+        }
+    }
+
     fn push(&mut self, value: impl AsRef<OsStr>) {
-        self.0.push(value.as_ref().to_os_string());
+        self.words.push(value.as_ref().to_os_string());
+    }
+
+    fn row(&mut self, row: PolicyRow) {
+        self.rows.push(row);
+    }
+
+    /// Eine Zeile mit der Herkunft nach ihrem Ziel.
+    fn row_at(&mut self, mode: PolicyMode, source: Option<&Path>, target: &Path) {
+        let origin = self.origins.of_target(target);
+        self.row(PolicyRow::new(
+            mode,
+            source.map(Path::to_path_buf),
+            target.to_path_buf(),
+            origin,
+        ));
     }
 
     fn flag(&mut self, flag: &str) {
@@ -759,14 +875,39 @@ impl Args {
         self.push(dst);
     }
 
+    /// `--ro-bind SRC DST` mit seiner Zeile.
+    fn ro_bind(&mut self, src: &Path, dst: &Path) {
+        self.bind("--ro-bind", src, dst);
+        self.row_at(PolicyMode::ReadOnly, Some(src), dst);
+    }
+
+    /// `--symlink TARGET LINK` mit seiner Zeile: Das Ziel liegt in der
+    /// Sandbox und ist keine Quelle auf dem Host.
+    fn symlink(&mut self, target: &Path, link: &Path) {
+        self.bind("--symlink", target, link);
+        let origin = self.origins.of_target(link);
+        let mut row = PolicyRow::new(PolicyMode::Symlink, None, link.to_path_buf(), origin);
+        row.link = Some(target.to_path_buf());
+        self.row(row);
+    }
+
+    /// Ein Flag mit einem Ziel und ohne Quelle (`--proc`, `--dev`,
+    /// `--tmpfs`) mit seiner Zeile.
+    fn mount_point(&mut self, flag: &str, mode: PolicyMode, path: &Path) {
+        self.path(flag, path);
+        self.row_at(mode, None, path);
+    }
+
     /// Ein Bind einer Host-Quelle: per Deskriptor, wenn der Launcher sie
-    /// geöffnet hat, sonst per Pfad (die Vorschau).
+    /// geöffnet hat, sonst per Pfad (die Vorschau). Die Zeile nennt die
+    /// Quelle beim Pfad, nicht beim Deskriptor.
     fn bind_source(&mut self, writable: bool, src: &Path, opened: Option<SourceFd>, dst: &Path) {
-        let (path_flag, fd_flag) = if writable {
-            ("--bind", "--bind-fd")
+        let (path_flag, fd_flag, mode) = if writable {
+            ("--bind", "--bind-fd", PolicyMode::ReadWrite)
         } else {
-            ("--ro-bind", "--ro-bind-fd")
+            ("--ro-bind", "--ro-bind-fd", PolicyMode::ReadOnly)
         };
+        self.row_at(mode, Some(src), dst);
         match opened {
             None => self.bind(path_flag, src, dst),
             Some(SourceFd::BindFd(fd)) => {
@@ -780,16 +921,19 @@ impl Args {
         }
     }
 
-    /// `--ro-bind-data FD DST`: eine Datei aus einem Deskriptor des Launchers.
+    /// `--ro-bind-data FD DST`: eine Datei aus einem Deskriptor des
+    /// Launchers, mit ihrer Zeile. Der Deskriptor ist kein Pfad auf dem Host.
     fn data(&mut self, fd: RawFd, dst: &Path) {
         self.push("--ro-bind-data");
         self.push(fd.to_string());
         self.push(dst);
+        self.row_at(PolicyMode::Masked, None, dst);
     }
 
     fn setenv(&mut self, key: &str, value: &str) {
         self.push("--setenv");
         self.push(key);
+        self.env_values.push((key.to_owned(), self.words.len()));
         self.push(value);
     }
 }
@@ -1241,5 +1385,188 @@ mod tests {
             &LaunchInputs::preview().with_overlay(Some(overlay)),
         );
         assert!(window_at(&preview, &["--overlay-src", "/home/u/proj"]).is_some());
+    }
+
+    /// Die Einhängungen der Zeile als `(Art, Ziel)`, gelesen aus den Flags bis
+    /// zum ersten `--`. Nur dieser Test liest die Flags; die Tabelle selbst
+    /// entsteht beim Übersetzen (HUM-429).
+    fn bind_flags(args: &[std::ffi::OsString]) -> Vec<(super::PolicyMode, PathBuf)> {
+        use super::PolicyMode;
+        let args: Vec<String> = args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let mut found = Vec::new();
+        let mut index = 0;
+        while index < args.len() && args[index] != "--" {
+            let (mode, dst_at, width) = match args[index].as_str() {
+                "--ro-bind" | "--ro-bind-fd" => (PolicyMode::ReadOnly, 2, 3),
+                "--bind" | "--bind-fd" => (PolicyMode::ReadWrite, 2, 3),
+                "--ro-bind-data" => (PolicyMode::Masked, 2, 3),
+                "--symlink" => (PolicyMode::Symlink, 2, 3),
+                "--tmpfs" => (PolicyMode::Tmpfs, 1, 2),
+                "--proc" => (PolicyMode::Proc, 1, 2),
+                "--dev" => (PolicyMode::Dev, 1, 2),
+                // `--overlay UPPER WORK DST`: das Projekt, nur lesbar vom
+                // Rechner aus.
+                "--overlay" => (PolicyMode::ReadOnly, 3, 4),
+                _ => {
+                    index += 1;
+                    continue;
+                }
+            };
+            found.push((mode, PathBuf::from(&args[index + dst_at])));
+            index += width;
+        }
+        found
+    }
+
+    /// Die Fälle, in denen jede Art von Einhängung vorkommt: Vorschau mit
+    /// Dateien des Adapters, gebundenem Programm und Erweiterungen, ein
+    /// Start mit Deskriptoren und fehlenden Pfaden unter `/work`, eine
+    /// Wegwerf-Sandbox, ein nur lesbares Projekt.
+    fn every_kind_of_line() -> Vec<(SessionContext, LaunchInputs)> {
+        let mut ctx = context();
+        ctx.files = vec![crate::agent::SandboxFile {
+            dst: PathBuf::from("/etc/humanitl/opencode/models.json"),
+            content: Vec::new(),
+            mode: 0o444,
+            secret: false,
+        }];
+        ctx.agent_program = Some(crate::agent::AgentProgram::new(
+            PathBuf::from("/home/u/.local/bin/opencode"),
+            std::ffi::OsStr::new("opencode"),
+        ));
+        let preview =
+            LaunchInputs::preview_with_agent_files(ctx.files.iter().map(|file| file.dst.clone()));
+        let started = LaunchInputs {
+            masks: MaskFds::Each(vec![30, 31]),
+            present_under_work: Some(BTreeSet::from([PathBuf::from("/work/.envrc")])),
+            work_dir: Some(SourceFd::BindFd(50)),
+            extra_ro: vec![SourceFd::ProcSelf(51)],
+            extra_rw: vec![SourceFd::BindFd(52)],
+            session_ro: vec![(SourceFd::BindFd(53), PathBuf::from("/tests/escape"))],
+            agent_program: Some(SourceFd::BindFd(54)),
+            ..preview.clone()
+        };
+        let overlay = crate::disposable::OverlayDirs {
+            upper: PathBuf::from("/run/user/1000/humanitl/disposable/l/upper"),
+            work: PathBuf::from("/run/user/1000/humanitl/disposable/l/work"),
+        };
+        let mut read_only = ctx.clone();
+        read_only.work_mode = WorkMode::Ro;
+        vec![
+            (ctx.clone(), preview.clone()),
+            (ctx.clone(), started.clone()),
+            (ctx.clone(), started.with_overlay(Some(overlay.clone()))),
+            (ctx, preview.clone().with_overlay(Some(overlay))),
+            (read_only, preview),
+        ]
+    }
+
+    fn profiles() -> Vec<SandboxProfile> {
+        let mut default = SandboxProfile::parse(
+            include_str!("../../../../profiles/sandbox/default.toml"),
+            Path::new("default.toml"),
+        )
+        .expect("the bundled profile parses");
+        default.mounts.extra_ro.push(PathBuf::from("/opt/tools"));
+        default.mounts.extra_rw.push(PathBuf::from("/srv/data"));
+        let test = SandboxProfile::parse(
+            include_str!("../../../../profiles/sandbox/test.toml"),
+            Path::new("test.toml"),
+        )
+        .expect("the test profile parses");
+        vec![default, test]
+    }
+
+    /// Jede Zeile der Tabelle hat ihr Bind-Flag in der Zeile, mit Ziel und
+    /// Art, und jedes Bind-Flag hat seine Zeile, in derselben Reihenfolge
+    /// (HUM-429). Das ersetzt den Parser, mit dem der Daemon die Tabelle bis
+    /// dahin aus der Zeile las, durch einen Vergleich in beide Richtungen:
+    /// Eine Einhängung, die ihre Zeile vergisst, oder eine Zeile ohne
+    /// Einhängung färbt ihn rot.
+    #[test]
+    fn every_bind_flag_has_a_row_and_every_row_a_bind_flag() {
+        for profile in profiles() {
+            for (ctx, inputs) in every_kind_of_line() {
+                let line = profile.to_bwrap_line(&ctx, &inputs);
+                assert_eq!(line.args, profile.to_bwrap_args(&ctx, &inputs));
+                let rows: Vec<(super::PolicyMode, PathBuf)> = line
+                    .policy
+                    .iter()
+                    .map(|row| (row.mode, row.target.clone()))
+                    .collect();
+                assert_eq!(
+                    rows,
+                    bind_flags(&line.args),
+                    "profile {}, inputs {inputs:?}",
+                    profile.name
+                );
+            }
+        }
+    }
+
+    /// Die Quelle einer Zeile ist ein Pfad auf dem Rechner, nie ein
+    /// Deskriptor; Masken, tmpfs und Verweise haben keine, und das Ziel eines
+    /// Verweises steht im eigenen Feld.
+    #[test]
+    fn a_row_names_the_host_path_and_never_a_descriptor() {
+        use super::{PolicyMode, PolicyOrigin};
+        let profile = profiles().remove(0);
+        let (ctx, inputs) = every_kind_of_line().remove(1);
+        let line = profile.to_bwrap_line(&ctx, &inputs);
+        let row = |target: &str| {
+            line.policy
+                .iter()
+                .find(|row| row.target == Path::new(target))
+                .unwrap_or_else(|| panic!("no row for {target}"))
+        };
+        assert_eq!(
+            row("/work").source.as_deref(),
+            Some(Path::new("/home/u/proj"))
+        );
+        assert_eq!(row("/work").origin, PolicyOrigin::Session);
+        assert_eq!(
+            row("/opt/tools").source.as_deref(),
+            Some(Path::new("/opt/tools"))
+        );
+        assert_eq!(row("/opt/tools").origin, PolicyOrigin::User);
+        assert_eq!(
+            row("/etc/humanitl/opencode/models.json").origin,
+            PolicyOrigin::Adapter
+        );
+        assert_eq!(row("/work/.envrc").mode, PolicyMode::Masked);
+        assert_eq!(row("/work/.envrc").source, None);
+        let bin = row("/bin");
+        assert_eq!(bin.mode, PolicyMode::Symlink);
+        assert_eq!(bin.source, None);
+        assert_eq!(bin.link.as_deref(), Some(Path::new("usr/bin")));
+        for row in &line.policy {
+            let source = row.source.as_deref().map(Path::to_string_lossy);
+            assert!(
+                source
+                    .as_deref()
+                    .is_none_or(|text| !text.contains("/proc/self/fd")),
+                "{row:?}"
+            );
+        }
+    }
+
+    /// Die Stellen der Umgebungswerte zeigen auf den Wert hinter
+    /// `--setenv KEY`, für jede Variable der Zeile.
+    #[test]
+    fn the_env_positions_point_at_the_values() {
+        let profile = profiles().remove(0);
+        let ctx = context();
+        let line = profile.to_bwrap_line(&ctx, &LaunchInputs::preview());
+        let env = profile.effective_env(&ctx, Some(10));
+        assert_eq!(line.env_values.len(), env.len());
+        for ((key, index), (env_key, value)) in line.env_values.iter().zip(&env) {
+            assert_eq!(key, env_key);
+            assert_eq!(line.args[index - 2], "--setenv");
+            assert_eq!(line.args[index - 1].to_string_lossy(), key.as_str());
+            assert_eq!(line.args[*index].to_string_lossy(), value.as_str());
+        }
     }
 }

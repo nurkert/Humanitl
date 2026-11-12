@@ -71,8 +71,8 @@ use crate::bwrap_args::{IdentityFds, LaunchInputs, MaskFds, SourceFd};
 use crate::handle::{ReportSnapshot, SandboxHandle, Shared};
 use crate::inherit::{HOOK_ERRNO, above_stdio, inherit_in_child};
 use crate::launcher::{
-    CheckResult, DisposableLayer, EnvDelivery, IsolationCheck, IsolationLevel, LaunchOnce,
-    LaunchPlan, PlanRequest, SandboxBackend, StdioMode, Teardown,
+    CheckResult, DisposableLayer, Door, EnvDelivery, IsolationCheck, IsolationLevel, LaunchOnce,
+    LaunchPlan, PlanPreview, PlanRequest, ResourceLimits, SandboxBackend, StdioMode, Teardown,
 };
 use crate::os_release::install_command;
 use crate::pinned::{PinnedSource, SourceKind};
@@ -825,6 +825,47 @@ impl SandboxBackend for BwrapBackend {
         {
             let _ = request;
             Err(crate::disposable::unsupported())
+        }
+    }
+
+    /// Die Zeile mit den festen Nummern der Vorschau
+    /// ([`LaunchInputs::preview_with_agent_files`]), alles unter `/work` als
+    /// vorhanden angenommen, die Quellen per Pfad. Die Tabelle entsteht beim
+    /// Übersetzen mit ([`SandboxProfile::to_bwrap_line`]); die Umgebung ist
+    /// die der `--setenv` in der Zeile.
+    fn preview(&self, request: &PlanRequest<'_>) -> PlanPreview {
+        let PlanRequest {
+            profile,
+            session,
+            options,
+        } = *request;
+        let inputs = LaunchInputs::preview_with_agent_files(
+            session.files.iter().map(|file| file.dst.clone()),
+        )
+        // Wie im Plan: Ein Terminal bekommt nur ein Start am eigenen
+        // Pseudoterminal (HUM-280).
+        .with_controlling_terminal(options.stdio.pty_size().is_some())
+        .with_overlay(options.overlay().cloned());
+        let line = profile.to_bwrap_line(session, &inputs);
+        let mut argv = vec![self.program.clone().into_os_string()];
+        argv.extend(line.args);
+        PlanPreview {
+            argv,
+            policy: line.policy,
+            env: profile.effective_env(session, inputs.report_fd),
+            backend_env: Vec::new(),
+            // Eins weiter: `argv[0]` ist das Programm.
+            argv_env: line
+                .env_values
+                .into_iter()
+                .map(|(key, index)| (key, index + 1))
+                .collect(),
+            policy_text: None,
+            door: Door::SocketFile {
+                host: session.proxy_socket_src.clone(),
+                sandbox: profile.network.proxy_socket_dst.clone(),
+            },
+            limits: ResourceLimits::default(),
         }
     }
 
