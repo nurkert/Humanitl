@@ -130,7 +130,10 @@ pub use crate::agent::{
     Reach, SandboxFile, SandboxLookup, SandboxView, files_inside_work, find_in_path,
 };
 pub use crate::agent_exit::{FirstOutput, did_not_start};
-pub use crate::backend::{BWRAP_BACKEND, Backend, SEATBELT_BACKEND};
+pub use crate::backend::{
+    ADMITTED_BACKENDS, BWRAP_BACKEND, Backend, BackendChoice, PODMAN_BACKEND, SEATBELT_BACKEND,
+    backend_name, choose_backend,
+};
 pub use crate::bridge_env::{
     CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NAMES, CHECK_NO_INTERFACES, CHECK_PREFIX,
     CHECK_SECCOMP_APPLIED, CHECK_SINGLE_SOCKET, ENV_BRIDGES, ENV_REPORT_FD, ENV_SECCOMP_DENY,
@@ -181,6 +184,15 @@ pub const PLATFORM_BACKEND_NAME: &str = if cfg!(target_os = "macos") {
 /// Der Wert von `sandbox.backend`, der das Backend dem System überlässt
 /// (HUM-376).
 pub const AUTO_BACKEND: &str = "auto";
+
+/// Ob diese Crate mit dem Feature `unadmitted-backends` gebaut ist, also mit
+/// `Backend::detect_unadmitted` (HUM-431).
+///
+/// `humanitld` und `humanitl` prüfen den Wert zur Übersetzungszeit und brechen
+/// ihren Bau ab, wenn er wahr ist: Cargo vereinigt Features über alle Ziele
+/// eines Aufrufs, und ein Dev- oder Test-Ziel, das die Umgehung einschaltet,
+/// schaltete sie sonst still auch im ausgelieferten Programm ein.
+pub const UNADMITTED_BACKENDS_BUILT: bool = cfg!(feature = "unadmitted-backends");
 pub use crate::os_release::{
     OS_RELEASE_FALLBACK_PATH, OS_RELEASE_PATH, PackageManager, install_command,
 };

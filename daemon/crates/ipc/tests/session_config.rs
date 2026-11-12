@@ -952,3 +952,116 @@ async fn a_confirmation_does_not_pass_to_another_server_of_the_same_name() {
     }));
     assert!(!confirmed(), "a server renamed to work inherits nothing");
 }
+
+/// Ein Start mit diesem einen Wunsch über `cli_overrides`.
+fn with_override(path: &str, value: &str) -> v1::sandbox_request::Start {
+    v1::sandbox_request::Start {
+        cli_overrides: vec![v1::sandbox_request::CliOverride {
+            path: path.to_owned(),
+            value: value.to_owned(),
+        }],
+        ..v1::sandbox_request::Start::default()
+    }
+}
+
+/// Ob der Strom mit einem gescheiterten Start endet.
+fn failed(events: &[v1::SandboxEvent]) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            &event.event,
+            Some(v1::sandbox_event::Event::Status(status))
+                if status.state == v1::SandboxState::Failed as i32
+        )
+    })
+}
+
+/// `sandbox.backend = "podman"` scheitert vor HUM-448 an jedem Weg, auf dem
+/// ein Mensch oder ein Client ihn setzt: `config.toml` und ein Wunsch über
+/// den Start (`cli_overrides`, HUM-431). Nie startet stattdessen das Backend des Systems, und
+/// die Vorschau sagt dasselbe, bevor jemand startet.
+#[tokio::test(flavor = "multi_thread")]
+async fn podman_is_refused_from_the_config_and_from_the_start_until_it_is_admitted() {
+    let fixture = Fixture::live();
+    let seen = fixture
+        .run(with_override("sandbox.backend", "podman"))
+        .await;
+    assert!(
+        codes(&seen).contains(&"SANDBOX_048".to_owned()),
+        "{:?}",
+        codes(&seen)
+    );
+    assert!(failed(&seen), "{seen:?}");
+
+    let fixture = Fixture::live();
+    fixture.user_config("[sandbox]\nbackend = \"podman\"\n");
+    let seen = fixture.run(v1::sandbox_request::Start::default()).await;
+    assert!(
+        codes(&seen).contains(&"SANDBOX_048".to_owned()),
+        "{:?}",
+        codes(&seen)
+    );
+    assert!(failed(&seen), "{seen:?}");
+    let planned = fixture.plan("").await;
+    assert_eq!(
+        planned.state,
+        v1::SandboxState::Failed as i32,
+        "{planned:?}"
+    );
+}
+
+/// Ein Projekt hebt die Untergrenze auf `kernel`, und weder der Wunsch über
+/// den Start noch die Wahl `auto` umgeht sie: Der Start lehnt mit
+/// `SANDBOX_035` ab, statt ein anderes Backend zu nehmen (HUM-431). Die
+/// Untergrenze selbst lässt sich über den Start nicht setzen.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_floor_raised_by_the_project_refuses_the_start_and_cannot_be_lowered_by_the_client() {
+    let fixture = Fixture::live();
+    fixture.project_profile("[config.sandbox]\nmin_isolation = \"kernel\"\n");
+    let seen = fixture.run(v1::sandbox_request::Start::default()).await;
+    assert!(
+        codes(&seen).contains(&"SANDBOX_035".to_owned()),
+        "{:?}",
+        codes(&seen)
+    );
+    assert!(failed(&seen), "{seen:?}");
+
+    let seen = fixture
+        .run(with_override(
+            "sandbox.backend",
+            humanitl_sandbox::PLATFORM_BACKEND_NAME,
+        ))
+        .await;
+    assert!(
+        codes(&seen).contains(&"SANDBOX_035".to_owned()),
+        "{:?}",
+        codes(&seen)
+    );
+
+    let seen = fixture
+        .run(with_override("sandbox.min_isolation", "policy"))
+        .await;
+    assert!(
+        codes(&seen).contains(&"CONFIG_003".to_owned()),
+        "the floor is no key of the allow list: {:?}",
+        codes(&seen)
+    );
+    assert!(failed(&seen), "{seen:?}");
+}
+
+/// Ein Projekt wählt das Backend nicht: `sandbox.backend` im Projekt-Profil
+/// ist `CONFIG_003`, auch wenn es ein zugelassenes nennt (HUM-431).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_cannot_choose_the_backend() {
+    let fixture = Fixture::live();
+    fixture.project_profile(&format!(
+        "[config.sandbox]\nbackend = \"{}\"\n",
+        humanitl_sandbox::PLATFORM_BACKEND_NAME
+    ));
+    let seen = fixture.run(v1::sandbox_request::Start::default()).await;
+    assert!(
+        codes(&seen).contains(&"CONFIG_003".to_owned()),
+        "{:?}",
+        codes(&seen)
+    );
+    assert!(failed(&seen), "{seen:?}");
+}

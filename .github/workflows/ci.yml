@@ -353,6 +353,12 @@ jobs:
           name: rust-test-log
           path: ${{ runner.temp }}/rust-test.log
           if-no-files-found: ignore
+      - name: The escape starter with the admission bypass (HUM-431)
+        # `escape-launch` braucht das Feature `unadmitted-backends`
+        # (`required-features`), und kein Manifest schaltet es ein, damit es
+        # sich nie mit dem Daemon vereinigt. Gebaut und getestet wird es
+        # deshalb hier, allein mit der Sandbox-Crate.
+        run: cd daemon && cargo test -p humanitl-sandbox --features unadmitted-backends --bin escape-launch
       - name: Backpressure load test with measurements (HUM-057)
         # 1000 flows in 10 s against a deliberately slow subscriber. The test
         # is #[ignore] locally because it takes over ten seconds and measures

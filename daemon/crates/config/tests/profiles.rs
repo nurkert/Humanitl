@@ -790,6 +790,52 @@ fn a_profile_cannot_declare_its_own_rule_bundled() {
     assert_eq!(rules.evaluate(&key, now, session).action(), Action::Block);
 }
 
+/// Ein Projekt wählt das Backend auch nicht über ein Profil, das es nennt
+/// (HUM-431): Die eigene Datei `llm-only.toml` verdeckt das mitgelieferte
+/// Profil, und setzt sie `sandbox.backend` oder einen Schlüssel unter
+/// `sandbox.podman`, lehnt das Laden ab, sobald das Projekt diesen Namen
+/// nennt. Ohne den Namen im Projekt gilt die Datei wie bisher, und die
+/// Untergrenze darf sie ohnehin nur heben.
+#[test]
+fn a_project_cannot_choose_the_backend_through_a_shadowing_profile() {
+    for body in [
+        "[config.sandbox]\nbackend = \"podman\"\n",
+        "[config.sandbox.podman]\nruntime = \"krun\"\n",
+    ] {
+        let home = Home::new();
+        home.write_profile("llm-only", body);
+        home.write_project_profile("name = \"llm-only\"\n");
+        let diagnostic = home.resolve_err(&ProfileSelection::any(), &[]);
+        assert_eq!(diagnostic.code.as_str(), "CONFIG_003", "{}", diagnostic.why);
+        assert!(
+            diagnostic
+                .why
+                .contains("does not choose the sandbox backend"),
+            "{}",
+            diagnostic.why
+        );
+        // Dieselbe Datei, vom Menschen gewählt und ohne Wunsch des Projekts.
+        let home = Home::new();
+        home.write_profile("llm-only", body);
+        home.resolve(&ProfileSelection::named("llm-only"), &[]);
+    }
+
+    // Eine verdeckende Datei, die die Untergrenze senken will, senkt sie nicht.
+    let home = Home::new();
+    home.write_profile("llm-only", "[config.sandbox]\nmin_isolation = \"policy\"\n");
+    home.write_project_profile("name = \"llm-only\"\n");
+    std::fs::write(
+        home.dir.path().join("cfg/humanitl/config.toml"),
+        "[sandbox]\nmin_isolation = \"namespaces\"\n",
+    )
+    .expect("config.toml");
+    let resolved = home.resolve(&ProfileSelection::any(), &[]);
+    assert_eq!(
+        resolved.config.sandbox.min_isolation,
+        humanitl_config::MinIsolation::Namespaces
+    );
+}
+
 /// Die Durchreichregel, wie der OpenCode-Adapter sie für `http://ollama.lan:11434` baut.
 const PASSTHROUGH_YAML: &str = "\
 version: 1

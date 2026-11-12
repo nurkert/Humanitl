@@ -1,4 +1,5 @@
-//! Das Backend, das Daemon und Kommandozeile halten (HUM-428).
+//! Das Backend, das Daemon und Kommandozeile halten (HUM-428), und wie es
+//! gewählt wird (HUM-431).
 //!
 //! [`Backend`] ist ein Enum über die Backends dieses Builds und reicht jede
 //! Methode des Ports [`SandboxBackend`] an das gewählte weiter. Gewählt wird
@@ -10,12 +11,30 @@
 //! tragen einen [`crate::OutputSink`], der Daemon hält das Backend der
 //! laufenden Sandbox als Kopie, und ein neues Backend ist eine neue Variante
 //! mit ihrem Zweig in jeder Weiterleitung, die der Compiler einfordert.
+//!
+//! # Die Wahl (HUM-431)
+//!
+//! [`choose_backend`] entscheidet vor jedem Start und jeder Vorschau, ohne das
+//! System zu fragen, in dieser Reihenfolge:
+//!
+//! 1. `auto` wird das Backend des Systems ([`crate::PLATFORM_BACKEND_NAME`]).
+//! 2. Nennt das Sandbox-Profil ein anderes Backend: `SANDBOX_036`. Das Profil
+//!    ist eine Anforderung, keine zweite Wahl (ADR-0011).
+//! 3. Liegt die Stufe unter `sandbox.min_isolation`: `SANDBOX_035`.
+//! 4. Steht die Stufe nicht in [`ADMITTED_BACKENDS`]: `SANDBOX_048`.
+//!
+//! Erst danach fragt [`Backend::detect`] das System; ein Backend, das dieser
+//! Build nicht hat, ist `SANDBOX_034`. Keiner der Schritte fällt auf ein
+//! anderes Backend zurück.
 
+use std::borrow::Cow;
 use std::path::Path;
 
-use humanitl_config::Paths;
-use humanitl_core::diagnostics::codes::CONFIG_003;
-use humanitl_core::{Diagnostic, Severity};
+use humanitl_config::{Paths, PodmanRuntime, SandboxBackendName, SandboxRef};
+use humanitl_core::diagnostics::codes::{
+    CONFIG_003, SANDBOX_034, SANDBOX_035, SANDBOX_036, SANDBOX_048,
+};
+use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::bwrap::BwrapBackend;
 use crate::handle::SandboxHandle;
@@ -30,6 +49,21 @@ pub const BWRAP_BACKEND: &str = "bwrap";
 
 /// Der Name von Seatbelt in `sandbox.backend`, nur unter macOS ein Backend.
 pub const SEATBELT_BACKEND: &str = "seatbelt";
+
+/// Der Name von Podman in `sandbox.backend` (HUM-431). Ein Name des Schemas,
+/// aber noch kein Backend dieses Builds (HUM-433) und noch nicht zugelassen
+/// (HUM-448).
+pub const PODMAN_BACKEND: &str = "podman";
+
+/// Die Stufen, die ein Mensch wählen kann (HUM-431).
+///
+/// Eine Stufe ist ein Backend, unter Podman mit seiner Laufzeit
+/// (`podman/crun`, `podman/krun`). Sie kommt erst auf diese Liste, wenn ihre
+/// Einhänge-Prüfung gelandet und die Escape-Suite gegen sie in der CI grün ist
+/// (Tor in `backlog/sprint-7.md`); `podman/crun` bringt HUM-448, `podman/krun`
+/// HUM-449. Bis dahin lehnt jeder Start sie mit `SANDBOX_048` ab, und `auto`
+/// löst nie auf sie auf.
+pub const ADMITTED_BACKENDS: &[&str] = &[BWRAP_BACKEND, SEATBELT_BACKEND];
 
 /// Ruft `$call` auf dem gewählten Backend auf, ein Zweig je Variante.
 macro_rules! dispatch {
@@ -52,38 +86,116 @@ pub enum Backend {
     Seatbelt(SeatbeltBackend),
 }
 
+/// Was [`choose_backend`] entschieden hat: das Backend, seine Stufe und die
+/// Isolation, die es bietet. Noch nichts davon ist auf dem System geprüft.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackendChoice {
+    /// Der Name des Backends, `auto` schon aufgelöst.
+    pub name: &'static str,
+    /// Die Laufzeit, falls das Backend eine hat (Podman).
+    pub runtime: Option<PodmanRuntime>,
+    /// Die Isolation, die diese Stufe bietet.
+    pub isolation: IsolationLevel,
+}
+
+impl BackendChoice {
+    /// Der Name der Stufe, wie ihn [`ADMITTED_BACKENDS`] führt: das Backend,
+    /// unter Podman mit Laufzeit (`podman/crun`).
+    #[must_use]
+    pub fn stage(&self) -> Cow<'static, str> {
+        stage(self.name, self.runtime)
+    }
+}
+
+/// Wählt das Backend einer Sitzung aus der Konfiguration und dem
+/// Sandbox-Profil (HUM-431), ohne das System zu fragen.
+///
+/// `sandbox` ist die aufgelöste Gruppe `sandbox` (Backend, Untergrenze,
+/// Laufzeit unter Podman), `profile_backend` das Feld `[sandbox] backend` des
+/// Sandbox-Profils. Die Reihenfolge der Prüfungen steht in der
+/// Modulbeschreibung.
+///
+/// # Errors
+///
+/// `SANDBOX_036`, wenn das Profil ein anderes Backend verlangt,
+/// `SANDBOX_035`, wenn die Stufe unter `sandbox.min_isolation` liegt,
+/// `SANDBOX_048`, wenn sie nicht zugelassen ist, `CONFIG_003` für einen Namen
+/// im Profil, den dieser Build nicht kennt.
+pub fn choose_backend(
+    sandbox: &SandboxRef,
+    profile_backend: &str,
+) -> Result<BackendChoice, Diagnostic> {
+    let name = resolve(backend_name(sandbox.backend))?;
+    let runtime = (name == PODMAN_BACKEND).then_some(sandbox.podman.runtime);
+    let choice = BackendChoice {
+        name,
+        runtime,
+        isolation: isolation_of(name, runtime),
+    };
+    if let Some(required) = required_by_profile(profile_backend)?
+        && required != name
+    {
+        return Err(profile_requires_another(required, name));
+    }
+    let floor = IsolationLevel::from(sandbox.min_isolation);
+    if choice.isolation < floor {
+        return Err(below_floor(&choice, floor));
+    }
+    admitted(name, runtime)?;
+    Ok(choice)
+}
+
 impl Backend {
     /// Sucht das Backend mit diesem Namen und prüft, ob es auf dieser
     /// Maschine läuft. [`crate::AUTO_BACKEND`] ist das Backend des Systems
-    /// ([`crate::PLATFORM_BACKEND_NAME`]).
+    /// ([`crate::PLATFORM_BACKEND_NAME`]). Ein Backend, das nicht in
+    /// [`ADMITTED_BACKENDS`] steht, startet hier nie.
     ///
     /// # Errors
     ///
-    /// Die Befunde des Backends (`SANDBOX_001` bis `SANDBOX_003`), oder
-    /// `CONFIG_003` für einen Namen, den dieser Build nicht kennt.
+    /// `SANDBOX_048` für eine Stufe, die nicht zugelassen ist, `SANDBOX_034`
+    /// für ein Backend, das dieser Build nicht hat, die Befunde des Backends
+    /// (`SANDBOX_001` bis `SANDBOX_003`), oder `CONFIG_003` für einen Namen,
+    /// den das Schema nicht kennt.
     pub fn detect(name: &str, paths: Paths) -> Result<Self, Diagnostic> {
-        match resolve(name)? {
-            BWRAP_BACKEND => BwrapBackend::detect(paths).map(Self::Bwrap),
-            #[cfg(target_os = "macos")]
-            SEATBELT_BACKEND => SeatbeltBackend::detect(paths).map(Self::Seatbelt),
-            other => Err(unknown(other)),
-        }
+        let name = resolve(name)?;
+        admitted(name, default_runtime(name))?;
+        detect_in_build(name, paths)
     }
 
-    /// Das Backend mit diesem Namen ohne jede Prüfung: der Rückfall, wenn
-    /// [`Backend::detect`] scheitert und trotzdem ein Plan gezeigt werden
-    /// soll. Ob das Programm da ist und läuft, sagt dann erst der Start, mit
-    /// dem Befund des Backends.
+    /// Wie [`Backend::detect`], aber ohne die Zulassung: nur für die
+    /// Escape-Suite (`escape-launch`) und die Tests, die eine Stufe prüfen
+    /// müssen, bevor sie zugelassen ist (HUM-431).
+    ///
+    /// Steht hinter dem Feature `unadmitted-backends` dieser Crate, das nur
+    /// `escape-launch` (über `required-features`) und die Tests einschalten.
+    /// `humanitld` und `humanitl` schalten es nie ein; im ausgelieferten Code
+    /// gibt es diese Funktion deshalb gar nicht, nicht nur keinen Aufruf.
     ///
     /// # Errors
     ///
-    /// `CONFIG_003` für einen Namen, den dieser Build nicht kennt.
+    /// Wie [`Backend::detect`], ohne `SANDBOX_048`.
+    #[cfg(any(test, feature = "unadmitted-backends"))]
+    pub fn detect_unadmitted(name: &str, paths: Paths) -> Result<Self, Diagnostic> {
+        detect_in_build(resolve(name)?, paths)
+    }
+
+    /// Das Backend mit diesem Namen ohne Prüfung des Systems: der Rückfall,
+    /// wenn [`Backend::detect`] scheitert und trotzdem ein Plan gezeigt
+    /// werden soll. Ob das Programm da ist und läuft, sagt dann erst der
+    /// Start, mit dem Befund des Backends. Die Zulassung gilt auch hier.
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_048`, `SANDBOX_034` oder `CONFIG_003` wie [`Backend::detect`].
     pub fn fallback(name: &str, paths: Paths) -> Result<Self, Diagnostic> {
-        match resolve(name)? {
+        let name = resolve(name)?;
+        admitted(name, default_runtime(name))?;
+        match name {
             BWRAP_BACKEND => Ok(Self::Bwrap(BwrapBackend::fallback(paths))),
             #[cfg(target_os = "macos")]
             SEATBELT_BACKEND => Ok(Self::Seatbelt(SeatbeltBackend::fallback(paths))),
-            other => Err(unknown(other)),
+            other => Err(not_in_build(other)),
         }
     }
 
@@ -147,26 +259,166 @@ impl SandboxBackend for Backend {
     }
 }
 
-/// Der Name des Backends, mit [`crate::AUTO_BACKEND`] aufgelöst.
-fn resolve(name: &str) -> Result<&str, Diagnostic> {
+/// Der Name eines Werts von `sandbox.backend`, wie ihn `config.toml`, das
+/// Sandbox-Profil und die Leitung schreiben (HUM-431). Er steht hier und nicht
+/// in der Konfigurations-Crate, damit der Name eines Adapters außerhalb des
+/// Sandbox-Adapters nur im Schema vorkommt (HUM-145).
+#[must_use]
+pub const fn backend_name(name: SandboxBackendName) -> &'static str {
+    match name {
+        SandboxBackendName::Auto => crate::AUTO_BACKEND,
+        SandboxBackendName::Bubblewrap => BWRAP_BACKEND,
+        SandboxBackendName::Podman => PODMAN_BACKEND,
+        SandboxBackendName::Seatbelt => SEATBELT_BACKEND,
+    }
+}
+
+/// Der Name des Backends, mit [`crate::AUTO_BACKEND`] aufgelöst. Jeder Name
+/// des Schemas ist bekannt, auch einer, den dieser Build nicht starten kann;
+/// das sagt erst [`detect_in_build`] mit `SANDBOX_034`.
+fn resolve(name: &str) -> Result<&'static str, Diagnostic> {
     match name {
         crate::AUTO_BACKEND => Ok(crate::PLATFORM_BACKEND_NAME),
         BWRAP_BACKEND => Ok(BWRAP_BACKEND),
-        SEATBELT_BACKEND if cfg!(target_os = "macos") => Ok(SEATBELT_BACKEND),
+        SEATBELT_BACKEND => Ok(SEATBELT_BACKEND),
+        PODMAN_BACKEND => Ok(PODMAN_BACKEND),
         other => Err(unknown(other)),
     }
 }
 
-/// `CONFIG_003`: ein Name, den dieser Build nicht kennt. Nie ein stiller
+/// Sucht ein aufgelöstes Backend auf diesem System, ohne Zulassung.
+fn detect_in_build(name: &'static str, paths: Paths) -> Result<Backend, Diagnostic> {
+    match name {
+        BWRAP_BACKEND => BwrapBackend::detect(paths).map(Backend::Bwrap),
+        #[cfg(target_os = "macos")]
+        SEATBELT_BACKEND => SeatbeltBackend::detect(paths).map(Backend::Seatbelt),
+        other => Err(not_in_build(other)),
+    }
+}
+
+/// Die Laufzeit, die ein Backend ohne Angabe hat: unter Podman `crun`.
+fn default_runtime(name: &str) -> Option<PodmanRuntime> {
+    (name == PODMAN_BACKEND).then_some(PodmanRuntime::Crun)
+}
+
+/// Der Name der Stufe aus Backend und Laufzeit.
+fn stage(name: &'static str, runtime: Option<PodmanRuntime>) -> Cow<'static, str> {
+    match runtime {
+        Some(runtime) => Cow::Owned(format!("{name}/{}", runtime.as_str())),
+        None => Cow::Borrowed(name),
+    }
+}
+
+/// Die Isolation einer Stufe, ohne sie zu bauen. Muss mit
+/// [`SandboxBackend::isolation`] des gebauten Backends übereinstimmen; der
+/// Test `the_isolation_of_a_name_is_that_of_its_backend` hält beides gleich.
+fn isolation_of(name: &str, runtime: Option<PodmanRuntime>) -> IsolationLevel {
+    match (name, runtime) {
+        (SEATBELT_BACKEND, _) => IsolationLevel::Policy,
+        (PODMAN_BACKEND, Some(PodmanRuntime::Krun)) => IsolationLevel::Kernel,
+        _ => IsolationLevel::Namespaces,
+    }
+}
+
+/// Das Backend, das ein Sandbox-Profil verlangt, oder keins.
+///
+/// `auto` verlangt keins. `bwrap` ist dort, wo das System ein anderes
+/// Backend hat (macOS), der Wert älterer Profile von vor HUM-376 und bleibt
+/// gültig, ohne etwas zu verlangen; dort, wo es bwrap gibt, ist es eine
+/// Anforderung wie jede andere.
+fn required_by_profile(profile_backend: &str) -> Result<Option<&'static str>, Diagnostic> {
+    if profile_backend == crate::AUTO_BACKEND {
+        return Ok(None);
+    }
+    let required = resolve(profile_backend)?;
+    if required == BWRAP_BACKEND && crate::PLATFORM_BACKEND_NAME != BWRAP_BACKEND {
+        return Ok(None);
+    }
+    Ok(Some(required))
+}
+
+/// `SANDBOX_048`, wenn die Stufe nicht in [`ADMITTED_BACKENDS`] steht.
+fn admitted(name: &'static str, runtime: Option<PodmanRuntime>) -> Result<(), Diagnostic> {
+    let stage = stage(name, runtime);
+    if ADMITTED_BACKENDS.contains(&stage.as_ref()) {
+        return Ok(());
+    }
+    Err(Diagnostic::builder(SANDBOX_048, Severity::Blocking)
+        .why(format!(
+            "sandbox.backend = {name:?} ({stage}) is not admitted yet: a backend becomes \
+             selectable only after its mount check and the escape suite against it are green in \
+             CI. Admitted are: {}",
+            ADMITTED_BACKENDS.join(", ")
+        ))
+        .fix(FixAction::ChangeSetting {
+            key: "sandbox.backend".to_owned(),
+            value: crate::AUTO_BACKEND.to_owned(),
+        })
+        .build())
+}
+
+/// `SANDBOX_034`: ein Name des Schemas, den dieser Build oder dieses System
+/// nicht starten kann. Nie ein stiller Rückfall auf ein anderes Backend.
+fn not_in_build(name: &str) -> Diagnostic {
+    Diagnostic::builder(SANDBOX_034, Severity::Blocking)
+        .why(format!(
+            "sandbox.backend = {name:?} is not available in this build on this system; the \
+             backend of this system is \"{}\", and the start does not switch to it on its own",
+            crate::PLATFORM_BACKEND_NAME
+        ))
+        .fix(FixAction::ChangeSetting {
+            key: "sandbox.backend".to_owned(),
+            value: crate::AUTO_BACKEND.to_owned(),
+        })
+        .build()
+}
+
+/// `SANDBOX_035`: Die Stufe liegt unter der Untergrenze. Ohne Knopf: Die
+/// Untergrenze zu senken entscheidet der Mensch in der Ebene, die sie gesetzt
+/// hat, und die Antwort darf ihm diese Entscheidung nicht abnehmen.
+fn below_floor(choice: &BackendChoice, floor: IsolationLevel) -> Diagnostic {
+    Diagnostic::builder(SANDBOX_035, Severity::Blocking)
+        .why(format!(
+            "sandbox.backend chose {} with the isolation level {}, and sandbox.min_isolation \
+             asks for at least {}; the floor is the strictest value of all layers, and the start \
+             does not pick another backend on its own",
+            choice.stage(),
+            choice.isolation.as_str(),
+            floor.as_str()
+        ))
+        .fix(FixAction::CopyCommand(
+            "humanitl config get --origin sandbox.min_isolation".to_owned(),
+        ))
+        .build()
+}
+
+/// `SANDBOX_036`: Das Sandbox-Profil verlangt ein anderes Backend.
+fn profile_requires_another(required: &'static str, chosen: &'static str) -> Diagnostic {
+    let builder = Diagnostic::builder(SANDBOX_036, Severity::Blocking).why(format!(
+        "the sandbox profile requires the backend {required:?}, and sandbox.backend chose \
+         {chosen:?}; the profile states a requirement, not a second choice, so neither \
+         overrides the other"
+    ));
+    // Ein Knopf nur zu einem Backend, das zugelassen ist: Sonst führte er
+    // geradewegs in `SANDBOX_048`.
+    let builder = if admitted(required, default_runtime(required)).is_ok() {
+        builder.fix(FixAction::ChangeSetting {
+            key: "sandbox.backend".to_owned(),
+            value: required.to_owned(),
+        })
+    } else {
+        builder
+    };
+    builder.build()
+}
+
+/// `CONFIG_003`: ein Name, den das Schema nicht kennt. Nie ein stiller
 /// Rückfall auf ein anderes Backend.
 fn unknown(name: &str) -> Diagnostic {
-    let platform = match crate::PLATFORM_BACKEND_NAME {
-        BWRAP_BACKEND => String::new(),
-        other => format!(", \"{other}\""),
-    };
     Diagnostic::builder(CONFIG_003, Severity::Blocking)
         .why(format!(
-            "sandbox.backend = {name:?}, this build knows \"{}\", \"{BWRAP_BACKEND}\"{platform}",
+            "sandbox.backend = {name:?}, the known names are \"{}\", \"{BWRAP_BACKEND}\", \
+             \"{PODMAN_BACKEND}\" and \"{SEATBELT_BACKEND}\"",
             crate::AUTO_BACKEND
         ))
         .build()
@@ -342,5 +594,166 @@ mod tests {
         assert_eq!(bwrap.name(), BWRAP_BACKEND);
         assert_eq!(bwrap.isolation(), IsolationLevel::Namespaces);
         assert_eq!(bwrap.program(), Path::new("bwrap"));
+    }
+
+    /// Die Gruppe `sandbox` mit Backend, Untergrenze und Laufzeit.
+    fn sandbox(
+        backend: humanitl_config::SandboxBackendName,
+        floor: humanitl_config::MinIsolation,
+        runtime: PodmanRuntime,
+    ) -> SandboxRef {
+        let mut sandbox = SandboxRef {
+            backend,
+            min_isolation: floor,
+            ..SandboxRef::default()
+        };
+        sandbox.podman.runtime = runtime;
+        sandbox
+    }
+
+    fn code_of(result: Result<BackendChoice, Diagnostic>) -> String {
+        match result {
+            Ok(choice) => panic!("{} was expected to be refused", choice.stage()),
+            Err(diagnostic) => diagnostic.code.as_str().to_owned(),
+        }
+    }
+
+    /// Die Zulassung in diesem Commit: genau bwrap und Seatbelt (HUM-431).
+    /// HUM-448 dreht diesen Test um und trägt `podman/crun` ein; `krun`
+    /// bleibt bis HUM-449 draußen.
+    #[test]
+    fn only_bwrap_and_seatbelt_are_admitted() {
+        use humanitl_config::MinIsolation::Policy;
+        use humanitl_config::SandboxBackendName::Podman;
+        assert_eq!(ADMITTED_BACKENDS, [BWRAP_BACKEND, SEATBELT_BACKEND]);
+        for stage in ["podman", "podman/crun", "podman/krun"] {
+            assert!(!ADMITTED_BACKENDS.contains(&stage), "{stage}");
+        }
+        for runtime in [PodmanRuntime::Crun, PodmanRuntime::Krun] {
+            let refused = choose_backend(&sandbox(Podman, Policy, runtime), "auto");
+            assert_eq!(code_of(refused), "SANDBOX_048", "{runtime:?}");
+        }
+    }
+
+    /// `sandbox.backend = "podman"` scheitert vor HUM-448 an jedem Weg in
+    /// den Start: die Wahl aus der Konfiguration, das Suchen nach Namen und
+    /// der Rückfall für die Vorschau. Nur die Umgehung kommt an der Zulassung
+    /// vorbei, und dann fehlt der Adapter (HUM-433).
+    #[test]
+    fn podman_is_refused_on_every_path_until_it_is_admitted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = without_bwrap(dir.path());
+        let err = Backend::detect(PODMAN_BACKEND, paths.clone()).expect_err("not admitted");
+        assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
+        assert_eq!(
+            err.fix,
+            Some(FixAction::ChangeSetting {
+                key: "sandbox.backend".to_owned(),
+                value: "auto".to_owned(),
+            })
+        );
+        let err = Backend::fallback(PODMAN_BACKEND, paths.clone()).expect_err("not admitted");
+        assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
+        let err = Backend::detect_unadmitted(PODMAN_BACKEND, paths).expect_err("no adapter yet");
+        assert_eq!(err.code.as_str(), "SANDBOX_034", "{}", err.why);
+    }
+
+    /// `auto` löst auf das Backend des Systems auf und nie auf ein anderes:
+    /// Liegt es unter der Untergrenze, lehnt die Wahl ab, statt zu Podman
+    /// oder zur Kernel-Stufe zu greifen.
+    #[test]
+    fn a_floor_above_the_backend_refuses_instead_of_choosing_another() {
+        use humanitl_config::MinIsolation::{Kernel, Namespaces, Policy};
+        use humanitl_config::SandboxBackendName::{Auto, Bubblewrap as Bwrap, Podman};
+        let crun = PodmanRuntime::Crun;
+        assert_eq!(
+            code_of(choose_backend(&sandbox(Bwrap, Kernel, crun), "auto")),
+            "SANDBOX_035"
+        );
+        assert_eq!(
+            code_of(choose_backend(&sandbox(Auto, Kernel, crun), "auto")),
+            "SANDBOX_035"
+        );
+        // Podman mit `crun` teilt den Kern: unter `kernel` ist das 035, noch
+        // bevor die Zulassung gefragt wird (HUM-432 baut darauf).
+        let err = choose_backend(&sandbox(Podman, Kernel, crun), "auto").expect_err("below");
+        assert_eq!(err.code.as_str(), "SANDBOX_035", "{}", err.why);
+        assert!(err.why.contains("podman/crun"), "{}", err.why);
+        assert!(err.why.contains("kernel"), "{}", err.why);
+        // Die Untergrenze selbst und alles darunter geht.
+        let platform = choose_backend(&sandbox(Auto, Policy, crun), "auto").expect("default");
+        assert_eq!(platform.name, crate::PLATFORM_BACKEND_NAME);
+        if cfg!(not(target_os = "macos")) {
+            let bwrap = choose_backend(&sandbox(Bwrap, Namespaces, crun), "auto").expect("met");
+            assert_eq!(bwrap.isolation, IsolationLevel::Namespaces);
+            assert_eq!(bwrap.stage(), "bwrap");
+        }
+    }
+
+    /// Das Sandbox-Profil verlangt, die Konfiguration wählt; widersprechen
+    /// sie sich, startet nichts (`SANDBOX_036`).
+    #[test]
+    fn a_profile_that_requires_another_backend_refuses_the_start() {
+        use humanitl_config::MinIsolation::Policy;
+        use humanitl_config::SandboxBackendName::{Auto, Podman};
+        let crun = PodmanRuntime::Crun;
+        // Ein Profil, das Podman verlangt, bei der Vorgabe `auto`; ohne Knopf,
+        // denn Podman ist nicht zugelassen.
+        let err = choose_backend(&sandbox(Auto, Policy, crun), "podman").expect_err("requires");
+        assert_eq!(err.code.as_str(), "SANDBOX_036", "{}", err.why);
+        assert_eq!(err.fix, None);
+        // Ein Profil, das bwrap verlangt, bei der Wahl `podman`.
+        if cfg!(not(target_os = "macos")) {
+            let err =
+                choose_backend(&sandbox(Podman, Policy, crun), "bwrap").expect_err("requires");
+            assert_eq!(err.code.as_str(), "SANDBOX_036", "{}", err.why);
+            assert_eq!(
+                err.fix,
+                Some(FixAction::ChangeSetting {
+                    key: "sandbox.backend".to_owned(),
+                    value: "bwrap".to_owned(),
+                })
+            );
+            choose_backend(&sandbox(Auto, Policy, crun), "bwrap").expect("bwrap is auto here");
+        }
+        let err = choose_backend(&sandbox(Auto, Policy, crun), "docker").expect_err("unknown");
+        assert_eq!(err.code.as_str(), "CONFIG_003", "{}", err.why);
+    }
+
+    /// Ein Name des Schemas, den dieser Build nicht hat, ist `SANDBOX_034`
+    /// und nie das Backend des Systems.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn seatbelt_outside_macos_is_not_available_and_does_not_fall_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for refused in [
+            Backend::detect(SEATBELT_BACKEND, without_bwrap(dir.path())),
+            Backend::fallback(SEATBELT_BACKEND, without_bwrap(dir.path())),
+        ] {
+            let err = refused.expect_err("no seatbelt here");
+            assert_eq!(err.code.as_str(), "SANDBOX_034", "{}", err.why);
+            assert!(err.fix.is_some());
+        }
+    }
+
+    /// Die Stufe eines Namens ist die des gebauten Backends, und die
+    /// Untergrenze der Konfiguration hat dieselben drei Namen.
+    #[test]
+    fn the_isolation_of_a_name_is_that_of_its_backend() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let built =
+            Backend::fallback(crate::AUTO_BACKEND, without_bwrap(dir.path())).expect("auto");
+        assert_eq!(isolation_of(built.name(), None), built.isolation());
+        assert_eq!(
+            isolation_of(PODMAN_BACKEND, Some(PodmanRuntime::Crun)),
+            IsolationLevel::Namespaces
+        );
+        assert_eq!(
+            isolation_of(PODMAN_BACKEND, Some(PodmanRuntime::Krun)),
+            IsolationLevel::Kernel
+        );
+        for floor in humanitl_config::MinIsolation::ALL {
+            assert_eq!(IsolationLevel::from(floor).as_str(), floor.as_str());
+        }
     }
 }

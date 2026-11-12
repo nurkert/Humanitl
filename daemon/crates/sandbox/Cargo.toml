@@ -9,6 +9,24 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Die Umgehung der Zulassung, `Backend::detect_unadmitted` (HUM-431): Die
+# Escape-Suite muss eine Stufe pruefen koennen, bevor sie zugelassen ist. Nur
+# `escape-launch` (unten, `required-features`) braucht es, gebaut mit
+# `cargo test -p humanitl-sandbox --features unadmitted-backends`; die
+# Unit-Tests dieser Crate erreichen die Umgehung ueber `cfg(test)`. Kein
+# Manifest schaltet es ein, auch kein Selbstverweis: Der vereinigte sich in
+# jedem Bau mit `--all-targets` mit dem Daemon. `humanitld` und `humanitl`
+# brechen ihren Bau ab, wenn die Crate damit gebaut ist
+# (`humanitl_sandbox::UNADMITTED_BACKENDS_BUILT`); `tools/check-deps.sh` und
+# `tests/feature_gate.rs` halten das fest.
+unadmitted-backends = []
+
+[[bin]]
+name = "escape-launch"
+path = "src/bin/escape-launch.rs"
+required-features = ["unadmitted-backends"]
+
 [dependencies]
 humanitl-core.workspace = true
 humanitl-config.workspace = true

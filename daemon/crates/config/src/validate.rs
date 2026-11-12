@@ -21,8 +21,8 @@ use humanitl_core::shell::shell_path;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::model::{
-    AgentRef, AuditConfig, Config, DetachKeys, FindingsConfig, Limits, LlmConfig, RecorderConfig,
-    ResolverConfig, SandboxRef, TerminalConfig,
+    AgentRef, AuditConfig, Config, DetachKeys, FindingsConfig, Limits, LlmConfig, PodmanRootfs,
+    RecorderConfig, ResolverConfig, SandboxRef, TerminalConfig,
 };
 use crate::schema;
 
@@ -448,6 +448,152 @@ fn terminal_is_well_formed(terminal: &TerminalConfig) -> Result<(), Diagnostic> 
     Ok(())
 }
 
+/// Was der Host an Arbeitsspeicher und CPUs hat, für die Obergrenzen unter
+/// `sandbox.podman` (HUM-431).
+///
+/// `None` heißt: nicht lesbar. Dann gibt es keine Obergrenze aus dem Host,
+/// und der Adapter lehnt beim Start ab, was Podman nicht durchsetzen kann.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HostResources {
+    /// `MemTotal` aus `/proc/meminfo`, in MiB.
+    pub(crate) memory_mib: Option<u64>,
+    /// Die CPUs, die dieser Prozess nutzen darf.
+    pub(crate) cpus: Option<u32>,
+}
+
+impl HostResources {
+    /// Liest beides vom laufenden System.
+    fn probe() -> Self {
+        let memory_mib = std::fs::read_to_string("/proc/meminfo")
+            .ok()
+            .and_then(|text| mem_total_mib(&text));
+        let cpus = std::thread::available_parallelism()
+            .ok()
+            .and_then(|count| u32::try_from(count.get()).ok());
+        Self { memory_mib, cpus }
+    }
+}
+
+/// `MemTotal` aus dem Text von `/proc/meminfo`, von KiB in MiB.
+fn mem_total_mib(meminfo: &str) -> Option<u64> {
+    let line = meminfo
+        .lines()
+        .find_map(|line| line.strip_prefix("MemTotal:"))?;
+    let kib: u64 = line.trim().strip_suffix("kB")?.trim().parse().ok()?;
+    Some(kib / 1024)
+}
+
+/// Die Länge eines SHA-256-Digests in Hex-Ziffern.
+const SHA256_HEX: usize = 64;
+
+/// Die Gruppe `sandbox.podman` (HUM-431).
+///
+/// Jeder gesetzte Wert wird beim Laden gegen seine Grenzen geprüft, auch die
+/// aus dem Host, gleich welches Backend gewählt ist. Arbeitsspeicher und CPUs
+/// sind deshalb ohne Vorgabe: Leer leitet der Start sie vom Host ab, und eine
+/// feste Vorgabe könnte auf einem kleinen Rechner über dem Host liegen. Lässt
+/// sich der Host nicht lesen (kein `/proc/meminfo`), gibt es aus ihm keine
+/// Obergrenze; Podman gibt es dort ohnehin nicht.
+fn podman_is_well_formed(sandbox: &SandboxRef, host: HostResources) -> Result<(), Diagnostic> {
+    let podman = &sandbox.podman;
+    if let Some(program) = &podman.program
+        && !program.is_absolute()
+    {
+        return Err(out_of_range(
+            "sandbox.podman.program",
+            &program.display().to_string(),
+            "an absolute path, or no value for the search in PATH",
+        ));
+    }
+    if let Some(memory_mib) = podman.memory_mib {
+        at_least("sandbox.podman.memory_mib", memory_mib, 256)?;
+        if let Some(max) = host.memory_mib {
+            within_host(
+                "sandbox.podman.memory_mib",
+                memory_mib,
+                256,
+                max,
+                "the memory of this host",
+            )?;
+        }
+    }
+    if let Some(cpus) = podman.cpus {
+        at_least("sandbox.podman.cpus", u64::from(cpus), 1)?;
+        if let Some(max) = host.cpus {
+            within_host(
+                "sandbox.podman.cpus",
+                u64::from(cpus),
+                1,
+                u64::from(max),
+                "the CPUs this daemon may use",
+            )?;
+        }
+    }
+    at_least("sandbox.podman.pids_limit", podman.pids_limit, 64)?;
+    between(
+        "sandbox.podman.start_timeout_secs",
+        podman.start_timeout_secs,
+        1,
+        600,
+    )?;
+    if let Some(image) = &podman.image
+        && !pinned_by_digest(image)
+    {
+        return Err(out_of_range(
+            "sandbox.podman.image",
+            &format!("{image:?}"),
+            "a reference pinned by digest, NAME@sha256: and 64 hex digits",
+        ));
+    }
+    if podman.rootfs == PodmanRootfs::Image && podman.image.is_none() {
+        return Err(Diagnostic::builder(CONFIG_003, Severity::Error)
+            .why(
+                "sandbox.podman.rootfs = \"image\" needs sandbox.podman.image, a local image \
+                 pinned by digest (NAME@sha256:...); without it there is no root to start from"
+                    .to_owned(),
+            )
+            .fix(FixAction::ChangeSetting {
+                key: "sandbox.podman.rootfs".to_owned(),
+                value: "\"host\"".to_owned(),
+            })
+            .build());
+    }
+    Ok(())
+}
+
+/// Eine Obergrenze, die der Host setzt: Der Vorschlag ist der größte Wert,
+/// den dieser Host annimmt, nicht die Vorgabe, die darüber liegen kann.
+fn within_host(key: &str, value: u64, min: u64, max: u64, what: &str) -> Result<(), Diagnostic> {
+    if value <= max {
+        return Ok(());
+    }
+    Err(Diagnostic::builder(CONFIG_003, Severity::Error)
+        .why(format!(
+            "{key} = {value} is out of range; allowed is {min} to {max}, {what}"
+        ))
+        .fix(FixAction::ChangeSetting {
+            key: key.to_owned(),
+            value: max.to_string(),
+        })
+        .build())
+}
+
+/// Ob ein Verweis auf ein Abbild einen Digest trägt: ein Name, `@sha256:` und
+/// genau 64 Hex-Ziffern in Kleinbuchstaben. Ein Name ohne Digest könnte unter
+/// demselben Namen morgen ein anderes Abbild sein.
+fn pinned_by_digest(image: &str) -> bool {
+    let Some((name, digest)) = image.rsplit_once("@sha256:") else {
+        return false;
+    };
+    !name.is_empty()
+        && !name.contains('@')
+        && !name.chars().any(char::is_whitespace)
+        && digest.len() == SHA256_HEX
+        && digest
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+}
+
 impl Config {
     /// Prüft alle Wertebereiche und Beziehungen zwischen Feldern.
     ///
@@ -460,6 +606,12 @@ impl Config {
     /// [`Diagnostic`] mit `CONFIG_003`, sobald ein Wert außerhalb seines
     /// Bereichs liegt oder zwei Werte einander widersprechen.
     pub fn validate(&self) -> Result<(), Diagnostic> {
+        self.validate_on(HostResources::probe())
+    }
+
+    /// [`Config::validate`] gegen einen gegebenen Host, damit die Obergrenzen
+    /// unter `sandbox.podman` ohne den Rechner des Tests prüfbar sind.
+    pub(crate) fn validate_on(&self, host: HostResources) -> Result<(), Diagnostic> {
         between("hold.timeout_secs", self.hold.timeout_secs, 1, DAY)?;
         limits_are_well_formed(&self.limits)?;
         recorder_is_well_formed(&self.recorder, &self.limits)?;
@@ -473,6 +625,7 @@ impl Config {
         llm_is_well_formed(&self.llm)?;
         findings_are_well_formed(&self.findings)?;
         sandbox_is_well_formed(&self.sandbox)?;
+        podman_is_well_formed(&self.sandbox, host)?;
         terminal_is_well_formed(&self.terminal)?;
         agent_is_well_formed(&self.agent)
     }
@@ -764,5 +917,135 @@ mod tests {
                 r"mkdir -p $'/nonexistent-hum215/a\x20\x20b'".to_owned()
             ))
         );
+    }
+
+    /// Ein Host mit 4 GiB und zwei CPUs, damit die Obergrenzen unter
+    /// `sandbox.podman` nicht vom Rechner des Tests abhängen (HUM-431).
+    const SMALL_HOST: super::HostResources = super::HostResources {
+        memory_mib: Some(4096),
+        cpus: Some(2),
+    };
+
+    fn podman_why(config: &Config) -> String {
+        let err = config
+            .validate_on(SMALL_HOST)
+            .expect_err("the podman setting is out of range");
+        assert_eq!(err.code.as_str(), "CONFIG_003", "{}", err.why);
+        err.why
+    }
+
+    #[test]
+    fn the_podman_defaults_are_valid_on_a_small_host() {
+        // Ohne Vorgabe für Arbeitsspeicher und CPUs gilt die Vorgabe auch auf
+        // einem Rechner mit 256 MiB und einer CPU.
+        let tiny = super::HostResources {
+            memory_mib: Some(256),
+            cpus: Some(1),
+        };
+        let mut config = Config::default();
+        config.validate_on(tiny).expect("defaults");
+        config.sandbox.backend = crate::SandboxBackendName::Podman;
+        config.validate_on(tiny).expect("defaults fit any host");
+    }
+
+    #[test]
+    fn podman_lower_bounds_hold_whatever_the_backend() {
+        type Case = (&'static str, fn(&mut Config));
+        let cases: [Case; 5] = [
+            ("sandbox.podman.memory_mib", |c| {
+                c.sandbox.podman.memory_mib = Some(255);
+            }),
+            ("sandbox.podman.cpus", |c| c.sandbox.podman.cpus = Some(0)),
+            ("sandbox.podman.pids_limit", |c| {
+                c.sandbox.podman.pids_limit = 63;
+            }),
+            ("sandbox.podman.start_timeout_secs", |c| {
+                c.sandbox.podman.start_timeout_secs = 0;
+            }),
+            ("sandbox.podman.program", |c| {
+                c.sandbox.podman.program = Some(PathBuf::from("bin/podman"));
+            }),
+        ];
+        for (key, set) in cases {
+            let mut config = Config::default();
+            set(&mut config);
+            assert!(podman_why(&config).contains(key), "{key}");
+        }
+        // Die Grenzen selbst sind erlaubt.
+        let mut config = Config::default();
+        config.sandbox.podman.memory_mib = Some(256);
+        config.sandbox.podman.cpus = Some(1);
+        config.sandbox.podman.pids_limit = 64;
+        config.sandbox.podman.start_timeout_secs = 600;
+        config
+            .validate_on(SMALL_HOST)
+            .expect("the bounds are inside");
+    }
+
+    /// Die Obergrenzen aus dem Host gelten für jeden gesetzten Wert, gleich
+    /// welches Backend gewählt ist, und der Vorschlag ist der größte Wert,
+    /// den dieser Host annimmt.
+    #[test]
+    fn podman_upper_bounds_come_from_the_host_whatever_the_backend() {
+        for backend in [
+            crate::SandboxBackendName::Auto,
+            crate::SandboxBackendName::Podman,
+        ] {
+            let mut config = Config::default();
+            config.sandbox.backend = backend;
+            config.sandbox.podman.memory_mib = Some(4097);
+            config.sandbox.podman.cpus = Some(3);
+            let err = config.validate_on(SMALL_HOST).expect_err("over the host");
+            assert!(err.why.contains("sandbox.podman.memory_mib"), "{}", err.why);
+            assert_eq!(
+                err.fix,
+                Some(FixAction::ChangeSetting {
+                    key: "sandbox.podman.memory_mib".to_owned(),
+                    value: "4096".to_owned(),
+                })
+            );
+            config.sandbox.podman.memory_mib = Some(4096);
+            assert!(podman_why(&config).contains("sandbox.podman.cpus"));
+            config.sandbox.podman.cpus = Some(2);
+            config.validate_on(SMALL_HOST).expect("exactly the host");
+        }
+        // Ein Host, der sich nicht lesen lässt, setzt keine Obergrenze.
+        let mut config = Config::default();
+        config.sandbox.podman.memory_mib = Some(1 << 30);
+        config.sandbox.podman.cpus = Some(4096);
+        config
+            .validate_on(super::HostResources {
+                memory_mib: None,
+                cpus: None,
+            })
+            .expect("no bound without a readable host");
+    }
+
+    #[test]
+    fn an_image_must_be_pinned_by_digest_and_is_required_for_rootfs_image() {
+        let digest = "a".repeat(64);
+        let mut config = Config::default();
+        config.sandbox.podman.rootfs = crate::PodmanRootfs::Image;
+        assert!(podman_why(&config).contains("sandbox.podman.image"));
+        for bad in [
+            "docker.io/library/alpine:3.20".to_owned(),
+            format!("alpine@sha256:{}", "a".repeat(63)),
+            format!("alpine@sha256:{}", "A".repeat(64)),
+            format!("@sha256:{digest}"),
+            format!("alpine@sha512:{digest}"),
+            format!("a@b@sha256:{digest}"),
+        ] {
+            config.sandbox.podman.image = Some(bad.clone());
+            assert!(podman_why(&config).contains("sha256"), "{bad}");
+        }
+        config.sandbox.podman.image = Some(format!("docker.io/library/alpine@sha256:{digest}"));
+        config.validate_on(SMALL_HOST).expect("pinned");
+    }
+
+    #[test]
+    fn mem_total_is_read_in_mib() {
+        let text = "MemTotal:       16318224 kB\nMemFree:  1 kB\n";
+        assert_eq!(super::mem_total_mib(text), Some(15935));
+        assert_eq!(super::mem_total_mib("MemFree: 1 kB\n"), None);
     }
 }

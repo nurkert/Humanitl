@@ -1794,5 +1794,13 @@
   "shortcutListLast": "Letzter Eintrag der Liste",
   "shortcutListBack": "Von den Details eines Servers zurück zur Liste",
   "shortcutKeyHome": "Pos1",
-  "shortcutKeyEnd": "Ende"
+  "shortcutKeyEnd": "Ende",
+  "diagSANDBOX034Title": "Gewähltes Sandbox-Backend nicht verfügbar",
+  "diagSANDBOX034Why": "Das gewählte Sandbox-Backend gibt es auf diesem System nicht. Die Sitzung startet nicht und wechselt auch nicht von sich aus auf ein anderes Backend; stelle das Backend auf auto, um das Backend dieses Systems zu nutzen.",
+  "diagSANDBOX035Title": "Sandbox-Backend unter der Isolationsuntergrenze",
+  "diagSANDBOX035Why": "Das gewählte Sandbox-Backend isoliert schwächer, als die Mindeststufe der Isolation verlangt. Es gilt die strengste Stufe aller Einstellungen, und ein Projekt darf sie anheben. Mit einem schwächeren Backend startet die Sitzung nicht.",
+  "diagSANDBOX036Title": "Sandbox-Profil verlangt ein anderes Backend",
+  "diagSANDBOX036Why": "Das Sandbox-Profil verlangt ein anderes Backend als das in den Einstellungen gewählte. Keins von beiden übergeht das andere, deshalb startet die Sitzung nicht.",
+  "diagSANDBOX048Title": "Sandbox-Backend noch nicht zugelassen",
+  "diagSANDBOX048Why": "Das gewählte Sandbox-Backend ist noch nicht zugelassen. Wählbar wird ein Backend erst, wenn die Ausbruchstests gegen es bestehen; bis dahin startet keine Sitzung damit. Stelle das Backend auf auto, um das Backend dieses Systems zu nutzen."
 }

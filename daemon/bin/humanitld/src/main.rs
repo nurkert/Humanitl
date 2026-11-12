@@ -32,6 +32,15 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
+// Der Daemon baut nie mit der Umgehung der Zulassung (HUM-431): Hat Cargo das
+// Feature `unadmitted-backends` in die Sandbox-Crate vereinigt, bricht der Bau
+// hier ab, statt ein Programm zu liefern, das eine nicht zugelassene Stufe
+// starten könnte.
+const _: () = assert!(
+    !humanitl_sandbox::UNADMITTED_BACKENDS_BUILT,
+    "humanitld must not be built with the admission bypass of humanitl-sandbox (HUM-431)"
+);
+
 mod audit_retention;
 mod audit_sink;
 mod replaced;

@@ -267,10 +267,14 @@ pub struct SandboxProfile {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SandboxSection {
-    /// Der Name des Backends: `auto` nimmt das des Systems (HUM-376). Wer das
-    /// eigene Backend ausdrücklich nennt, bekommt es, und `bwrap` bleibt für
-    /// bestehende Profile überall gültig. Was wirklich läuft, sagt immer
-    /// [`crate::SandboxBackend::name`], nie dieses Feld.
+    /// Das Backend, das dieses Profil verlangt: `auto` verlangt keins und
+    /// nimmt, was `sandbox.backend` der Konfiguration wählt (HUM-376,
+    /// HUM-431). Jeder andere Name ist eine Anforderung, keine zweite Wahl:
+    /// Wählt die Konfiguration ein anderes Backend, lehnt der Start mit
+    /// `SANDBOX_036` ab ([`crate::choose_backend`]). `bwrap` bleibt für
+    /// bestehende Profile überall gültig und verlangt unter macOS nichts,
+    /// `podman` ist ein Name, `seatbelt` gilt nur unter macOS. Was wirklich
+    /// läuft, sagt immer [`crate::SandboxBackend::name`], nie dieses Feld.
     pub backend: String,
     /// Der Hostname in der Sandbox. Muss [`HOSTNAME`] sein.
     pub hostname: String,
@@ -1661,15 +1665,25 @@ impl SandboxProfile {
             return Err(range(format!("{where_}: name is empty")));
         }
         let backend = self.sandbox.backend.as_str();
-        if ![crate::AUTO_BACKEND, "bwrap", crate::PLATFORM_BACKEND_NAME].contains(&backend) {
+        // `podman` ist ein Name, den jedes Profil verlangen darf (HUM-431);
+        // ob er startet, sagt die Wahl beim Start, nicht das Profil.
+        let known = [
+            crate::AUTO_BACKEND,
+            crate::BWRAP_BACKEND,
+            crate::PODMAN_BACKEND,
+            crate::PLATFORM_BACKEND_NAME,
+        ];
+        if !known.contains(&backend) {
             let platform = match crate::PLATFORM_BACKEND_NAME {
-                "bwrap" => String::new(),
-                other => format!(" and \"{other}\""),
+                crate::BWRAP_BACKEND => String::new(),
+                other => format!(", \"{other}\""),
             };
             return Err(range(format!(
-                "{where_}: sandbox.backend = {:?}, this build knows \"{}\", \"bwrap\"{platform}",
+                "{where_}: sandbox.backend = {:?}, this build knows \"{}\", \"{}\", \"{}\"{platform}",
                 self.sandbox.backend,
                 crate::AUTO_BACKEND,
+                crate::BWRAP_BACKEND,
+                crate::PODMAN_BACKEND,
             )));
         }
         if self.sandbox.hostname != HOSTNAME {
@@ -2024,19 +2038,26 @@ name = "minimal"
         assert_eq!(err.code.as_str(), "CONFIG_003");
         // Der Text nennt jeden Wert, den dieser Build annimmt.
         let shown = format!("{err:?}");
-        for known in [crate::AUTO_BACKEND, "bwrap", crate::PLATFORM_BACKEND_NAME] {
+        for known in [
+            crate::AUTO_BACKEND,
+            "bwrap",
+            "podman",
+            crate::PLATFORM_BACKEND_NAME,
+        ] {
             assert!(shown.contains(known), "{known} is missing: {shown}");
         }
     }
 
     /// Bestehende Profile nennen `bwrap` und laufen weiter; `seatbelt` gilt
-    /// nur, wo es Seatbelt gibt (HUM-376).
+    /// nur, wo es Seatbelt gibt (HUM-376); `podman` kennt jedes Profil
+    /// (HUM-431), ob es startet, entscheidet die Wahl beim Start.
     #[test]
     fn the_named_backends_are_the_ones_of_this_build() {
         let with =
             |name: &str| format!("version = 1\nname = \"x\"\n[sandbox]\nbackend = \"{name}\"\n");
         parse(&with("auto")).expect("auto is the default");
         parse(&with("bwrap")).expect("existing profiles keep working");
+        parse(&with("podman")).expect("a profile may require podman");
         assert_eq!(
             parse(&with("seatbelt")).is_ok(),
             cfg!(target_os = "macos"),

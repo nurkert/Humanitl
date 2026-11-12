@@ -142,10 +142,27 @@ const REGISTER: &[(&str, &str)] = &[
     ("resolver.overrides", "effective"),
     ("resolver.prefer", "effective"),
     ("resolver.test_ca", "effective"),
+    // Gelesen bei jedem Start und jeder Vorschau über
+    // `humanitl_sandbox::choose_backend` (`SandboxService`, `humanitl
+    // sandbox run`), HUM-431.
+    ("sandbox.backend", "effective"),
     ("sandbox.env", "effective"),
+    // Gelesen an derselben Stelle wie `sandbox.backend`: Liegt das Backend
+    // darunter, lehnt der Start mit `SANDBOX_035` ab (HUM-431).
+    ("sandbox.min_isolation", "effective"),
     // Gelesen in `SandboxService::start`, wenn der Start keinen Modus nennt
     // (HUM-350), und in `humanitl run` für die Anfrage.
     ("sandbox.mode", "effective"),
+    // Die Gruppe `sandbox.podman` legt HUM-431 an und prüft nur ihre Werte;
+    // gelesen wird sie erst vom Podman-Adapter (HUM-433).
+    ("sandbox.podman.cpus", "pending(HUM-433)"),
+    ("sandbox.podman.image", "pending(HUM-433)"),
+    ("sandbox.podman.memory_mib", "pending(HUM-433)"),
+    ("sandbox.podman.pids_limit", "pending(HUM-433)"),
+    ("sandbox.podman.program", "pending(HUM-433)"),
+    ("sandbox.podman.rootfs", "pending(HUM-433)"),
+    ("sandbox.podman.runtime", "pending(HUM-433)"),
+    ("sandbox.podman.start_timeout_secs", "pending(HUM-433)"),
     ("sandbox.profile", "effective"),
     ("sandbox.work_dir", "effective"),
     ("sandbox.work_mode", "effective"),
@@ -272,9 +289,19 @@ fn the_register_is_sorted_like_the_schema() {
     assert_eq!(listed, sorted, "the register is out of order");
 }
 
-/// Der Abschnitt eines Issues aus den Sprint-Dateien, also alles zwischen
-/// seiner Überschrift und der nächsten.
-fn issue_section(issue: &str) -> Option<String> {
+/// Ob eine Zeile der Issue-Tabelle einer Sprint-Datei mit `row` beginnt,
+/// zum Beispiel `| HUM-433 |`.
+fn sprint_tables_list(row: &str) -> bool {
+    sprint_files().iter().any(|file| {
+        std::fs::read_to_string(file)
+            .expect("read a sprint file")
+            .lines()
+            .any(|line| line.starts_with(row))
+    })
+}
+
+/// Die Sprint-Dateien unter `backlog/`, sortiert.
+fn sprint_files() -> Vec<PathBuf> {
     let backlog = repo_root().join("backlog");
     let mut files: Vec<PathBuf> = std::fs::read_dir(&backlog)
         .expect("read backlog/")
@@ -289,8 +316,14 @@ fn issue_section(issue: &str) -> Option<String> {
         })
         .collect();
     files.sort();
+    files
+}
+
+/// Der Abschnitt eines Issues aus den Sprint-Dateien, also alles zwischen
+/// seiner Überschrift und der nächsten.
+fn issue_section(issue: &str) -> Option<String> {
     let heading = format!("## {issue} ");
-    for file in files {
+    for file in sprint_files() {
         let text = std::fs::read_to_string(&file).expect("read a sprint file");
         let Some(start) = text.find(&heading) else {
             continue;
@@ -315,6 +348,10 @@ fn every_pending_entry_points_at_an_issue_that_names_the_key() {
     // damit gültig aus, und der Schlüssel wartete auf etwas, das nie mehr
     // kommt. Geprüft wird deshalb die Spezifikation: Sie muss den Schlüssel
     // wörtlich nennen — dort steht, was mit ihm geschehen soll.
+    //
+    // Die Sprints ab 5 stehen nur noch in ihrer eigenen Tabelle in
+    // `backlog/sprint-N.md`, nicht mehr in `BACKLOG.md` (HUM-431 ist das erste
+    // Issue, das auf eines davon zeigt); eine Zeile dort zählt genauso.
     let plan = std::fs::read_to_string(repo_root().join("BACKLOG.md")).expect("read BACKLOG.md");
     for (path, text) in REGISTER {
         let Some(readiness) = Readiness::parse(text) else {
@@ -323,9 +360,11 @@ fn every_pending_entry_points_at_an_issue_that_names_the_key() {
         let Some(issue) = readiness.issue() else {
             continue;
         };
+        let row = format!("| {issue} |");
         assert!(
-            plan.contains(&format!("| {issue} |")),
-            "{path} points at {issue}, which BACKLOG.md does not list as an issue"
+            plan.contains(&row) || sprint_tables_list(&row),
+            "{path} points at {issue}, which neither BACKLOG.md nor a sprint table under \
+             backlog/ lists as an issue"
         );
         let Some(section) = issue_section(issue) else {
             panic!(
@@ -386,6 +425,15 @@ fn the_keys_without_a_reader_are_the_known_ones() {
         vec![
             "pseudonyms.max_response_bytes",
             "pseudonyms.translate_responses",
+            // HUM-431 legt die Gruppe an, HUM-433 verdrahtet sie.
+            "sandbox.podman.cpus",
+            "sandbox.podman.image",
+            "sandbox.podman.memory_mib",
+            "sandbox.podman.pids_limit",
+            "sandbox.podman.program",
+            "sandbox.podman.rootfs",
+            "sandbox.podman.runtime",
+            "sandbox.podman.start_timeout_secs",
         ]
     );
 }

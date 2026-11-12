@@ -17,7 +17,7 @@ Entfernen eines Codes.
 | daemon | `DAEMON` | 001 | 019 | 001-004 Start, Erreichbarkeit, Version des Daemons, 005-008 die Nutzer-Unit von `daemon install` (HUM-044), 009 Abschied (HUM-142), 010 Nutzersitzung, 011 Binaries aus dem `AppImage`, 012 `journalctl` (HUM-070), 013 der von systemd übergebene Socket (HUM-053), 014 `daemon uninstall` (HUM-077) |
 | ipc | `IPC` | 001 | 009 | gRPC-Schnittstelle, Token, Aufrufe gegen den Zustand |
 | config | `CONFIG` | 001 | 029 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel (HUM-070), 019-020 der Zugangsschlüssel des Modells (HUM-140, Bereich dafür bis 029 erweitert), 021 die gespeicherten Modellserver (HUM-289) |
-| sandbox | `SANDBOX` | 001 | 033 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043), 030-032 Wegwerf-Sandbox (HUM-350), 033 Vorgabe fällt auf direkt zurück (HUM-357) |
+| sandbox | `SANDBOX` | 001 | 059 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043), 030-032 Wegwerf-Sandbox (HUM-350), 033 Vorgabe fällt auf direkt zurück (HUM-357), 034-036 und 048 Wahl des Backends, Untergrenze der Isolation und Zulassung (HUM-431, Bereich dafür bis 059 erweitert), 037-047 und 049 Podman (Sprint 7) |
 | proxy | `PROXY` | 001 | 019 | Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120) |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
 | llm | `LLM` | 001 | 009 | LLM-Endpunkt und seine Antworten, 009 der Zugangsschlüssel (HUM-140) |
@@ -621,6 +621,38 @@ Disposable sandbox not available, running direct
 **Auslöser.** The default `sandbox.mode = "auto"` asks for a disposable sandbox where the system allows one, and this system does not: bubblewrap is older than 0.11, the runtime directory is not on tmpfs, the project folder is mounted read-only, or on macOS the project cannot be cloned. This run writes to the project folder directly.
 
 **Fix.** The fix of the cause (install command for a newer bubblewrap, `SetEnv` for `XDG_RUNTIME_DIR`, `ChangeSetting` on `sandbox.work_mode` = `rw`), or `sandbox.mode = "direct"` to choose direct mode and silence this notice.
+
+#### SANDBOX_034
+
+Selected sandbox backend not available
+
+**Auslöser.** `sandbox.backend` (from `config.toml`, a profile, the environment or the start of a session) names a backend this build or this system cannot run, for example `seatbelt` on Linux. The start stops; it never takes another backend instead.
+
+**Fix.** `ChangeSetting` on `sandbox.backend` = `auto`, the backend of this system.
+
+#### SANDBOX_035
+
+Sandbox backend below the isolation floor
+
+**Auslöser.** The backend chosen by `sandbox.backend` isolates at a lower level than `sandbox.min_isolation` demands. The floor is the strictest value of all layers; a project profile may raise it but never lower it.
+
+**Fix.** `CopyCommand` with `humanitl config get --origin sandbox.min_isolation`, which names the layer that set the floor. Lowering it there, or choosing a backend that reaches it, is the person's decision; there is no button for it.
+
+#### SANDBOX_036
+
+Sandbox profile requires another backend
+
+**Auslöser.** The sandbox profile requires the backend it names under `[sandbox] backend`, and the configuration chose a different one. The start stops; the profile does not override the choice, and the choice does not override the profile.
+
+**Fix.** `ChangeSetting` on `sandbox.backend` with the backend of the profile when that one is admitted; otherwise choose a sandbox profile without a fixed backend (`sandbox.profile`).
+
+#### SANDBOX_048
+
+Sandbox backend not admitted yet
+
+**Auslöser.** `sandbox.backend` names an isolation level that is not admitted yet. A backend becomes selectable only after its mount check and the escape suite against it are green in CI; until then every start refuses it, whether it comes from `config.toml`, the environment, a profile or the start of a session.
+
+**Fix.** `ChangeSetting` on `sandbox.backend` = `auto`, the admitted backend of this system.
 
 ### Bereich proxy
 

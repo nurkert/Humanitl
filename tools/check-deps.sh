@@ -21,6 +21,32 @@ host=$(rustc -vV | sed -n 's/^host: //p')
 python3 tools/check_offline.py daemon/target/deps-meta-resolved.json tools/offline-crates.toml
 
 fail=0
+
+# Die Umgehung der Zulassung eines Sandbox-Backends (HUM-431) steckt im
+# Feature `unadmitted-backends` von `humanitl-sandbox`. Nur `escape-launch` und
+# die Tests schalten es ein; Daemon und Kommandozeile bauen ohne. Geprueft
+# werden zwei Graphen: der ganze Arbeitsbereich mit allen Zielen, also auch
+# Dev-Abhaengigkeiten (Cargo vereinigt Features ueber einen Aufruf; ein
+# Test-Ziel, das das Feature einschaltet, schaltete es auch im Daemon ein),
+# und der Bau des Pakets genau so, wie ihn `packaging/release/build-binaries.sh`
+# und `packaging/macos/build-binaries.sh` aufrufen (`-p humanitld -p humanitl
+# [-p humanitl-shim]`, ohne Dev-Abhaengigkeiten).
+check_feature_graph() {
+  local what=$1
+  shift
+  local tree
+  if ! tree=$(cd daemon && cargo tree --locked "$@"); then
+    echo "cargo tree for $what failed" >&2
+    fail=1
+  elif grep -q 'unadmitted-backends' <<<"$tree"; then
+    echo "$what enables the feature unadmitted-backends (HUM-431)" >&2
+    fail=1
+  fi
+}
+check_feature_graph "the workspace with all targets" --workspace -e features,normal,build,dev
+check_feature_graph "the release build" -e features,normal,build \
+  -p humanitld -p humanitl -p humanitl-shim
+
 for lib in daemon/crates/*/src/lib.rs; do
   if ! grep -q '#!\[deny(missing_docs)\]' "$lib"; then
     echo "missing #![deny(missing_docs)]: $lib" >&2

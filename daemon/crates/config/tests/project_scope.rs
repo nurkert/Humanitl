@@ -38,6 +38,10 @@ const DENIED_BY_CONVENTION: &[&str] = &[
     "sandbox.mode",
     "sandbox.profile",
     "sandbox.env",
+    // HUM-431: Das Backend wählt der Mensch; `sandbox.min_isolation` bleibt
+    // erlaubt, weil dort der strengste Wert aller Ebenen gilt.
+    "sandbox.backend",
+    "sandbox.podman.*",
     "agent.adapter",
     "agent.command",
     "agent.pi.web_access",
@@ -543,4 +547,223 @@ fn the_rest_of_limits_stays_open_to_a_project_profile() {
     })
     .expect("a global profile may set the recorder cap");
     assert_eq!(resolved.config.limits.recorder_max_body_bytes, 1_048_576);
+}
+
+/// Ein geklontes Projekt wählt das Backend nicht und stellt Podman nicht ein
+/// (HUM-431); beides gehört dem Menschen.
+#[test]
+fn a_cloned_project_cannot_choose_the_backend_or_tune_podman() {
+    let mut lines = vec!["sandbox.backend = \"podman\"".to_owned()];
+    let podman: Vec<&str> = schema::leaf_paths()
+        .into_iter()
+        .filter(|path| path.starts_with("sandbox.podman."))
+        .collect();
+    assert_eq!(podman.len(), 8, "{podman:?}");
+    for path in podman {
+        let field = schema::field(path).expect("a leaf");
+        lines.push(format!("{path} = {}", sample_literal(field)));
+    }
+    for line in lines {
+        let scratch = Scratch::new();
+        let profile = scratch.project_profile(&line);
+        let diagnostic = expect_err(&Sources {
+            profile_project: Some(profile.clone()),
+            ..Sources::empty()
+        });
+        let key = line.split(' ').next().expect("a key");
+        assert_denied(&diagnostic, key, &profile);
+    }
+}
+
+/// `sandbox.min_isolation`: Über alle Ebenen gilt der strengste Wert, und die
+/// Herkunft nennt die Ebene, die ihn verlangt (HUM-431). Ein Projekt hebt die
+/// Untergrenze, senkt sie aber nie; Umgebung und Kommandozeile ebenso wenig.
+#[test]
+fn the_isolation_floor_takes_the_strictest_layer_and_a_project_never_lowers_it() {
+    struct Case {
+        user: &'static str,
+        project: Option<&'static str>,
+        env: Option<&'static str>,
+        cli: Option<&'static str>,
+        expected: &'static str,
+        from: &'static str,
+    }
+    let cases = [
+        Case {
+            user: "namespaces",
+            project: Some("kernel"),
+            env: None,
+            cli: None,
+            expected: "kernel",
+            from: "project",
+        },
+        Case {
+            user: "kernel",
+            project: Some("policy"),
+            env: None,
+            cli: None,
+            expected: "kernel",
+            from: "global",
+        },
+        Case {
+            user: "kernel",
+            project: None,
+            env: None,
+            cli: Some("policy"),
+            expected: "kernel",
+            from: "global",
+        },
+        Case {
+            user: "kernel",
+            project: None,
+            env: Some("namespaces"),
+            cli: None,
+            expected: "kernel",
+            from: "global",
+        },
+        Case {
+            user: "policy",
+            project: Some("namespaces"),
+            env: None,
+            cli: Some("kernel"),
+            expected: "kernel",
+            from: "cli",
+        },
+        // Gleichstand: Die Herkunft bleibt bei der Ebene, die den Wert zuerst
+        // verlangt hat.
+        Case {
+            user: "namespaces",
+            project: Some("namespaces"),
+            env: None,
+            cli: None,
+            expected: "namespaces",
+            from: "global",
+        },
+    ];
+    for case in cases {
+        let scratch = Scratch::new();
+        let global = scratch.write(
+            "config.toml",
+            &format!("[sandbox]\nmin_isolation = \"{}\"\n", case.user),
+        );
+        let project = case
+            .project
+            .map(|level| scratch.project_profile(&format!("sandbox.min_isolation = \"{level}\"")));
+        let env = case.env.map_or_else(Env::default, |level| {
+            Env::from_pairs([("HUMANITL_SANDBOX__MIN_ISOLATION", level)])
+        });
+        let cli: Vec<(&str, &str)> = case
+            .cli
+            .map(|level| vec![("sandbox.min_isolation", level)])
+            .unwrap_or_default();
+        let resolved = load(&Sources {
+            global_toml: Some(global),
+            profile_project: project.clone(),
+            ..Sources::empty().with_env(env).with_cli(cli)
+        })
+        .expect("every layer may name a floor");
+        let label = format!(
+            "user {}, project {:?}, env {:?}, cli {:?}",
+            case.user, case.project, case.env, case.cli
+        );
+        assert_eq!(
+            resolved.config.sandbox.min_isolation.as_str(),
+            case.expected,
+            "{label}"
+        );
+        let origin = resolved.origin("sandbox.min_isolation").cloned();
+        let expected_origin = match case.from {
+            "global" => Origin::Global,
+            "project" => Origin::ProfileProject(project.clone().expect("a project")),
+            "cli" => Origin::Cli,
+            other => panic!("unknown origin {other}"),
+        };
+        assert_eq!(origin, Some(expected_origin), "{label}");
+    }
+}
+
+/// Ohne andere Ebene gilt der Wert des Projekts, auch wenn er nur die
+/// Vorgabe wiederholt, und die Herkunft nennt das Projekt.
+#[test]
+fn a_project_alone_may_raise_the_floor_over_the_default() {
+    let scratch = Scratch::new();
+    let profile = scratch.project_profile("sandbox.min_isolation = \"kernel\"");
+    let resolved = load(&Sources {
+        profile_project: Some(profile.clone()),
+        ..Sources::empty()
+    })
+    .expect("a project may raise the floor");
+    assert_eq!(
+        resolved.config.sandbox.min_isolation,
+        humanitl_config::MinIsolation::Kernel
+    );
+    assert_eq!(
+        resolved.origin("sandbox.min_isolation"),
+        Some(&Origin::ProfileProject(profile))
+    );
+    let err = expect_err(&Sources::empty().with_cli([("sandbox.min_isolation", "none")]));
+    assert_eq!(err.code.as_str(), "CONFIG_003", "{}", err.why);
+}
+
+/// Ein ungültiger Wert für das Backend, die Untergrenze oder Podman bricht
+/// das Laden aus jeder Ebene ab, auch aus der Umgebung, wo andere Schlüssel
+/// nur eine Warnung bekommen (HUM-431). Übergangen liefe der Start mit dem
+/// Wert der Ebene darunter, also mit einem anderen Backend als gewählt.
+#[test]
+fn an_invalid_backend_or_floor_refuses_the_load_from_every_layer() {
+    for (path, env_key, bad) in [
+        ("sandbox.backend", "HUMANITL_SANDBOX__BACKEND", "bogus"),
+        (
+            "sandbox.min_isolation",
+            "HUMANITL_SANDBOX__MIN_ISOLATION",
+            "none",
+        ),
+        (
+            "sandbox.podman.cpus",
+            "HUMANITL_SANDBOX__PODMAN__CPUS",
+            "many",
+        ),
+    ] {
+        let (group, key) = path.rsplit_once('.').expect("a dotted path");
+        let scratch = Scratch::new();
+        let global = scratch.write("config.toml", &format!("[{group}]\n{key} = \"{bad}\"\n"));
+        let from_file = expect_err(&Sources {
+            global_toml: Some(global),
+            ..Sources::empty()
+        });
+        let from_env = expect_err(&Sources::empty().with_env(Env::from_pairs([(env_key, bad)])));
+        let from_cli = expect_err(&Sources::empty().with_cli([(path, bad)]));
+        let profile = scratch.global_profile(&format!("{path} = \"{bad}\""));
+        let from_profile = expect_err(&Sources {
+            profiles: vec![ProfileSource::File(profile)],
+            ..Sources::empty()
+        });
+        for (layer, err) in [
+            ("file", from_file),
+            ("env", from_env),
+            ("cli", from_cli),
+            ("profile", from_profile),
+        ] {
+            assert_eq!(
+                err.code.as_str(),
+                "CONFIG_003",
+                "{path} from {layer}: {}",
+                err.why
+            );
+            assert!(err.why.contains(path), "{path} from {layer}: {}", err.why);
+        }
+    }
+    // Ein anderer Schlüssel bleibt aus der Umgebung eine Warnung.
+    let resolved = load(
+        &Sources::empty().with_env(Env::from_pairs([("HUMANITL_HOLD__TIMEOUT_SECS", "soon")])),
+    )
+    .expect("another key from the environment is a warning");
+    assert!(
+        resolved
+            .diagnostics
+            .iter()
+            .any(|found| found.code.as_str() == "CONFIG_003"),
+        "{:?}",
+        resolved.diagnostics
+    );
 }

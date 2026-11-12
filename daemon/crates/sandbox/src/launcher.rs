@@ -125,6 +125,19 @@ impl IsolationLevel {
     }
 }
 
+/// Die Untergrenze aus `sandbox.min_isolation` als Stufe (HUM-431). Beide
+/// Enums führen dieselben drei Namen in derselben Ordnung; der Test
+/// `the_isolation_of_a_name_is_that_of_its_backend` in `backend.rs` hält das fest.
+impl From<humanitl_config::MinIsolation> for IsolationLevel {
+    fn from(floor: humanitl_config::MinIsolation) -> Self {
+        match floor {
+            humanitl_config::MinIsolation::Policy => Self::Policy,
+            humanitl_config::MinIsolation::Namespaces => Self::Namespaces,
+            humanitl_config::MinIsolation::Kernel => Self::Kernel,
+        }
+    }
+}
+
 /// Die Schicht einer Wegwerf-Sandbox, in der Form, die das Backend nimmt
 /// (HUM-350, HUM-374).
 #[derive(Debug, Clone, PartialEq, Eq)]
