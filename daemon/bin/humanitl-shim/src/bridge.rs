@@ -13,8 +13,9 @@
 //! `[network].bridges`. Only direction `in` (sandbox TCP -> host Unix socket)
 //! exists; `out` (host -> sandbox TCP, later the browser's CDP channel) is a
 //! variant of [`Direction`] that [`bind`] refuses, which the launcher
-//! reports as `SANDBOX_007`. The parser below reads exactly that shape and
-//! nothing more: the shim has no serde, and the launcher is the only writer.
+//! reports as `SANDBOX_007`. [`parse`] reads exactly that shape (with the
+//! reader of `json.rs`) and nothing more: the shim has no serde, and the
+//! launcher is the only writer.
 
 use std::fmt;
 use std::io::{self, Read, Write};
@@ -25,6 +26,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
+
+use crate::json::{self, Parser};
 
 /// Where the proxy socket sits inside the sandbox when the launcher sets no
 /// `HUMANITL_BRIDGES` (CONVENTIONS.md 3.4).
@@ -152,6 +155,15 @@ pub enum Error {
     TooManyBridges(usize),
 }
 
+impl From<json::Error> for Error {
+    fn from(err: json::Error) -> Self {
+        Self::Json {
+            offset: err.offset,
+            what: err.what,
+        }
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -261,29 +273,26 @@ impl Bridge {
 /// is an error: the launcher wrote the text, so a surprise means a bug, and a
 /// bug in the bridge list is not something to guess around.
 pub fn parse(text: &str) -> Result<Vec<Bridge>, Error> {
-    let mut parser = Parser { text, pos: 0 };
+    let mut parser = Parser::new(text);
     parser.skip_ws();
     parser.expect('[', "expected '['")?;
     let mut bridges = Vec::new();
     parser.skip_ws();
     if parser.peek() == Some(']') {
-        parser.pos += 1;
+        parser.next();
     } else {
         loop {
             parser.skip_ws();
-            bridges.push(parser.object()?);
+            bridges.push(object(&mut parser)?);
             parser.skip_ws();
             match parser.next() {
                 Some(',') => {}
                 Some(']') => break,
-                _ => return Err(parser.error("expected ',' or ']'")),
+                _ => return Err(parser.error("expected ',' or ']'").into()),
             }
         }
     }
-    parser.skip_ws();
-    if parser.pos != parser.text.len() {
-        return Err(parser.error("trailing data"));
-    }
+    parser.end()?;
     Ok(bridges)
 }
 
@@ -506,141 +515,47 @@ impl HalfClose for UnixStream {
     }
 }
 
-/// A recursive-descent reader for the one JSON shape the launcher writes.
-struct Parser<'a> {
-    text: &'a str,
-    pos: usize,
-}
-
-impl Parser<'_> {
-    fn error(&self, what: &'static str) -> Error {
-        Error::Json {
-            offset: self.pos,
-            what,
+/// One bridge object of the list, its four fields exactly once each.
+fn object(parser: &mut Parser<'_>) -> Result<Bridge, Error> {
+    parser.expect('{', "expected '{'")?;
+    let mut name = None;
+    let mut dir = None;
+    let mut listen = None;
+    let mut socket = None;
+    parser.skip_ws();
+    if parser.peek() == Some('}') {
+        return Err(Error::MissingField("name"));
+    }
+    loop {
+        parser.skip_ws();
+        let key = parser.string()?;
+        parser.skip_ws();
+        parser.expect(':', "expected ':'")?;
+        parser.skip_ws();
+        let value = parser.string()?;
+        let (field, slot): (&'static str, &mut Option<String>) = match key.as_str() {
+            "name" => ("name", &mut name),
+            "dir" => ("dir", &mut dir),
+            "listen" => ("listen", &mut listen),
+            "socket" => ("socket", &mut socket),
+            other => return Err(Error::UnknownField(other.to_owned())),
+        };
+        if slot.is_some() {
+            return Err(Error::DuplicateField(field));
+        }
+        *slot = Some(value);
+        parser.skip_ws();
+        match parser.next() {
+            Some(',') => {}
+            Some('}') => break,
+            _ => return Err(parser.error("expected ',' or '}'").into()),
         }
     }
-
-    fn peek(&self) -> Option<char> {
-        self.text[self.pos..].chars().next()
-    }
-
-    fn next(&mut self) -> Option<char> {
-        let c = self.peek()?;
-        self.pos += c.len_utf8();
-        Some(c)
-    }
-
-    fn skip_ws(&mut self) {
-        while matches!(self.peek(), Some(' ' | '\t' | '\n' | '\r')) {
-            self.pos += 1;
-        }
-    }
-
-    fn expect(&mut self, want: char, what: &'static str) -> Result<(), Error> {
-        if self.peek() == Some(want) {
-            self.pos += want.len_utf8();
-            Ok(())
-        } else {
-            Err(self.error(what))
-        }
-    }
-
-    fn object(&mut self) -> Result<Bridge, Error> {
-        self.expect('{', "expected '{'")?;
-        let mut name = None;
-        let mut dir = None;
-        let mut listen = None;
-        let mut socket = None;
-        self.skip_ws();
-        if self.peek() == Some('}') {
-            return Err(Error::MissingField("name"));
-        }
-        loop {
-            self.skip_ws();
-            let key = self.string()?;
-            self.skip_ws();
-            self.expect(':', "expected ':'")?;
-            self.skip_ws();
-            let value = self.string()?;
-            let (field, slot): (&'static str, &mut Option<String>) = match key.as_str() {
-                "name" => ("name", &mut name),
-                "dir" => ("dir", &mut dir),
-                "listen" => ("listen", &mut listen),
-                "socket" => ("socket", &mut socket),
-                other => return Err(Error::UnknownField(other.to_owned())),
-            };
-            if slot.is_some() {
-                return Err(Error::DuplicateField(field));
-            }
-            *slot = Some(value);
-            self.skip_ws();
-            match self.next() {
-                Some(',') => {}
-                Some('}') => break,
-                _ => return Err(self.error("expected ',' or '}'")),
-            }
-        }
-        let name = name.ok_or(Error::MissingField("name"))?;
-        let dir = dir.ok_or(Error::MissingField("dir"))?;
-        let listen = listen.ok_or(Error::MissingField("listen"))?;
-        let socket = socket.ok_or(Error::MissingField("socket"))?;
-        Bridge::new(name, &dir, &listen, &socket)
-    }
-
-    fn string(&mut self) -> Result<String, Error> {
-        self.expect('"', "expected a string")?;
-        let mut out = String::new();
-        loop {
-            match self.next() {
-                None => return Err(self.error("unterminated string")),
-                Some('"') => return Ok(out),
-                Some('\\') => out.push(self.escape()?),
-                Some(c) if c.is_control() => return Err(self.error("control character in string")),
-                Some(c) => out.push(c),
-            }
-        }
-    }
-
-    fn escape(&mut self) -> Result<char, Error> {
-        Ok(match self.next() {
-            Some('"') => '"',
-            Some('\\') => '\\',
-            Some('/') => '/',
-            Some('b') => '\u{8}',
-            Some('f') => '\u{c}',
-            Some('n') => '\n',
-            Some('r') => '\r',
-            Some('t') => '\t',
-            Some('u') => {
-                let unit = self.hex4()?;
-                if (0xD800..0xDC00).contains(&unit) {
-                    self.expect('\\', "expected the low surrogate")?;
-                    self.expect('u', "expected the low surrogate")?;
-                    let low = self.hex4()?;
-                    if !(0xDC00..0xE000).contains(&low) {
-                        return Err(self.error("bad low surrogate"));
-                    }
-                    let code = 0x1_0000 + ((unit - 0xD800) << 10) + (low - 0xDC00);
-                    char::from_u32(code).ok_or_else(|| self.error("bad surrogate pair"))?
-                } else {
-                    char::from_u32(unit).ok_or_else(|| self.error("lone surrogate"))?
-                }
-            }
-            _ => return Err(self.error("bad escape")),
-        })
-    }
-
-    fn hex4(&mut self) -> Result<u32, Error> {
-        let mut value = 0u32;
-        for _ in 0..4 {
-            let digit = self
-                .next()
-                .and_then(|c| c.to_digit(16))
-                .ok_or_else(|| self.error("expected four hex digits"))?;
-            value = (value << 4) | digit;
-        }
-        Ok(value)
-    }
+    let name = name.ok_or(Error::MissingField("name"))?;
+    let dir = dir.ok_or(Error::MissingField("dir"))?;
+    let listen = listen.ok_or(Error::MissingField("listen"))?;
+    let socket = socket.ok_or(Error::MissingField("socket"))?;
+    Bridge::new(name, &dir, &listen, &socket)
 }
 
 #[cfg(test)]

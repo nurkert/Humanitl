@@ -15,12 +15,15 @@
 //! short files: this one (process model), `seccomp.rs` (the filter as data),
 //! `bridge.rs` (the bytes), `report.rs` (the evidence), `refusals.rs` (what
 //! the filter refused, counted), `channel.rs` (how its listener reaches
-//! the parent) and `exec.rs` (further shells the daemon asks for, HUM-299).
+//! the parent), `exec.rs` (further shells the daemon asks for, HUM-299),
+//! `supervise.rs` (PID 1's one loop: children, lifeline, door, HUM-430) and
+//! `envfd.rs` (the agent's environment through a descriptor, HUM-430).
 //!
 //! # Launcher <-> shim contract (binding for HUM-011, HUM-012, HUM-013)
 //!
 //! **Command line.** `humanitl-shim --proxy-port <port> [--controlling-terminal]
-//! [--control-fd <n>] -- <command> [args...]`, the tail of the bwrap argument vector from
+//! [--control-fd <n>] [--lifeline-fd <n>] [--env-fd <n>] -- <command> [args...]`,
+//! the tail of the bwrap argument vector from
 //! `humanitl_sandbox::SandboxProfile::to_bwrap_args`, where the shim itself
 //! is `/usr/local/bin/humanitl-shim` inside the sandbox. `--proxy-port` is
 //! the port the agent's `HTTP_PROXY` names; the shim refuses to start when
@@ -33,7 +36,15 @@
 //! over it the daemon asks for further shells next to the agent
 //! (`exec.rs`). Only PID 1 keeps it: the agent's child closes it before its
 //! filter, and a missing or unusable descriptor means no further shells,
-//! never a failed start. `humanitl-shim --rules` prints the seccomp
+//! never a failed start. `--lifeline-fd` (HUM-430) names the inherited read
+//! end of a pipe whose only write end the daemon holds; when it reports
+//! `POLLHUP`, PID 1 ends the sandbox as on `SIGTERM` (`supervise.rs`). A
+//! number that names no pipe refuses the start. `--env-fd` (HUM-430) names a
+//! sealed memfd with the agent's environment as one JSON object; it replaces
+//! the environment the shim was started with, except the five variables
+//! below, and a broken one refuses the start (`envfd.rs`). Both descriptors
+//! are closed before the agent's `exec`, like the report's: the agent never
+//! holds either. `humanitl-shim --rules` prints the seccomp
 //! rule table the same environment would produce, one row per line, and
 //! starts nothing.
 //!
@@ -67,7 +78,12 @@
 //!
 //! **Behaviour, in order.**
 //!
-//! 1. Parse the command line, then open the report.
+//! 1. Parse the command line, then open the report. With `--env-fd`, read
+//!    the agent's environment next, before anything else, and make it the
+//!    process environment; a refused one is `CHECK seccomp_applied fail
+//!    environment_setup_failed:_--env-fd...` and exit 126. With
+//!    `--lifeline-fd`, take the descriptor; one that is no pipe is `CHECK
+//!    seccomp_applied fail lifeline_setup_failed:...` and exit 126.
 //! 2. Read the environment. For every `in` bridge, bind the TCP listener in the parent and
 //!    connect to it once (`bridge_listening`); read the interface list
 //!    (`no_interfaces`); walk the filesystem for Unix sockets that are not a
@@ -93,8 +109,11 @@
 //!    (`refusals.rs`), serves the bridges, opens the gate, forwards `SIGTERM`
 //!    and `SIGHUP` to the child (`SIGINT` reaches the agent through its
 //!    process group or, with a controlling terminal, through the terminal's
-//!    foreground group, and is ignored here), reaps every orphan while it
-//!    waits for its own child (`waitpid(-1)`), and writes the last tally.
+//!    foreground group, and is ignored here), and then waits in one `poll`
+//!    loop (`supervise.rs`): it reaps every orphan while it waits for its own
+//!    child (`waitpid(-1)` on `SIGCHLD`), serves the door for further shells,
+//!    and ends the sandbox when the lifeline ends. Last it writes the last
+//!    tally.
 //! 4. Exit status: 125 usage, 126 seccomp or bridge setup failed (the message
 //!    names which), 127 `exec` failed (and the child writes `EXEC fail
 //!    errno=<n>` to the report first, see `report.rs`), otherwise the
@@ -110,9 +129,11 @@
 //! socket is never mounted.
 
 mod channel;
+mod envfd;
 mod exec;
 mod refusals;
 mod seccomp;
+mod supervise;
 
 use std::env;
 use std::ffi::{CString, OsString, c_char, c_int, c_uint};
@@ -141,7 +162,8 @@ const EXIT_SETUP: i32 = 126;
 /// Exit status when `execvp` returned.
 const EXIT_EXEC: i32 = 127;
 
-const USAGE: &str = "usage: humanitl-shim --proxy-port <port> [--controlling-terminal] [--control-fd <n>] -- <command> [args...]\n\
+const USAGE: &str = "usage: humanitl-shim --proxy-port <port> [--controlling-terminal] [--control-fd <n>]\n\
+                     \x20      [--lifeline-fd <n>] [--env-fd <n>] -- <command> [args...]\n\
                      \x20      humanitl-shim --rules    print the seccomp rule table for this environment\n\
                      environment: HUMANITL_BRIDGES, HUMANITL_SECCOMP_FAMILIES, HUMANITL_SECCOMP_TYPES,\n\
                      HUMANITL_SECCOMP_DENY, HUMANITL_REPORT_FD (see the crate documentation)\n";
@@ -191,19 +213,57 @@ fn run() -> i32 {
         }
     };
 
+    // The agent's environment from the daemon (HUM-430), before anything
+    // else reads the environment: the policy, the bridges and the shells all
+    // see the result. Only the report comes earlier, so that a refused
+    // environment is a failed check line.
+    if let Some(fd) = cli.env_fd
+        && let Err(err) = environment_from_fd(fd)
+    {
+        return refuse_setup(&report, &err);
+    }
+    // The daemon's lifeline (HUM-430). Unlike the door below, a lifeline that
+    // cannot be watched refuses the start: the sandbox would outlive the
+    // daemon, and nobody would see it.
+    let lifeline = match cli.lifeline_fd.map(supervise::take_lifeline).transpose() {
+        Ok(lifeline) => lifeline,
+        Err(why) => return refuse_setup(&report, &SetupError::lifeline(&why)),
+    };
+
     // The daemon's door for further shells (HUM-299). Taken before the
     // descriptors are closed in `launch`, and never a reason to refuse the
     // start: without it there are simply no further shells.
     let control = cli.control_fd.and_then(take_control);
 
     match prepare(&cli, &report) {
-        Ok(prepared) => launch(prepared, report, &cli, control),
-        Err(err) => {
-            report.check(err.check(), false, &err.to_string());
-            say(&format!("humanitl-shim: {err}\n"));
-            EXIT_SETUP
-        }
+        Ok(prepared) => launch(prepared, report, &cli, Inherited { control, lifeline }),
+        Err(err) => refuse_setup(&report, &err),
     }
+}
+
+/// A setup failure before the fork: the failed check line, the message, 126.
+fn refuse_setup(report: &Report, err: &SetupError) -> i32 {
+    report.check(err.check(), false, &err.to_string());
+    say(&format!("humanitl-shim: {err}\n"));
+    EXIT_SETUP
+}
+
+/// `--env-fd`: reads, checks and closes the descriptor, then makes its pairs
+/// the process environment, the shim's own five variables kept.
+fn environment_from_fd(fd: RawFd) -> Result<(), SetupError> {
+    let pairs = envfd::read(fd, &SHIM_VARS).map_err(SetupError::environment)?;
+    // SAFETY: still single-threaded: no bridge, refusal or shell thread
+    // exists before `launch`.
+    unsafe { envfd::apply(&pairs, &SHIM_VARS) };
+    Ok(())
+}
+
+/// The daemon's descriptors that only PID 1 keeps; the agent holds neither.
+struct Inherited {
+    /// `--control-fd` (HUM-299).
+    control: Option<OwnedFd>,
+    /// `--lifeline-fd` (HUM-430).
+    lifeline: Option<OwnedFd>,
 }
 
 /// `--rules`: the effective rule table for this environment, one row per
@@ -370,7 +430,8 @@ fn take_control(fd: RawFd) -> Option<OwnedFd> {
 }
 
 /// Step 3 and 4: fork, and each side's life.
-fn launch(prepared: Prepared, report: Report, cli: &Cli, control: Option<OwnedFd>) -> i32 {
+fn launch(prepared: Prepared, report: Report, cli: &Cli, inherited: Inherited) -> i32 {
+    let Inherited { control, lifeline } = inherited;
     // SAFETY: getpid has no preconditions.
     let parent_pid = unsafe { libc::getpid() };
     // The gate the child waits at before `exec` (HUM-137): it opens when the
@@ -400,6 +461,7 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, control: Option<OwnedFd
         gate_read.as_raw_fd(),
         gate_write.as_raw_fd(),
         control.as_ref().map_or(-1, AsRawFd::as_raw_fd),
+        lifeline.as_ref().map_or(-1, AsRawFd::as_raw_fd),
     ]);
     close_inherited(&keep);
     // The pair over which the child hands its listener to the parent
@@ -428,13 +490,15 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, control: Option<OwnedFd
     if pid == 0 {
         // Explicitly, not only through `close_inherited`: should that fail
         // to close it, the child would hold a write end of its own gate and
-        // wait there for ever, and the parent with it in `reap`.
+        // wait there for ever, and the parent with it in `supervise::wait`.
         drop(gate_write);
         drop(parent_end);
-        // The daemon's door for further shells stays with PID 1 (HUM-299):
-        // closed here explicitly, and `close_inherited` in `child` does not
-        // keep it either. The agent never holds it.
+        // The daemon's door for further shells stays with PID 1 (HUM-299),
+        // and so does its lifeline (HUM-430): both closed here explicitly,
+        // and `close_inherited` in `child` does not keep them either. The
+        // agent never holds them.
         drop(control);
+        drop(lifeline);
         child(
             parent_pid,
             &AgentFilter {
@@ -450,13 +514,8 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, control: Option<OwnedFd
     }
     drop(gate_read);
     drop(child_end);
-    let shells = control.map(|control| {
-        Arc::new(exec::Shells::new(
-            control,
-            prepared.agent_fallback,
-            &SHIM_VARS,
-        ))
-    });
+    let shells =
+        control.map(|control| exec::Shells::new(control, prepared.agent_fallback, &SHIM_VARS));
     let tally = Tally::new(
         prepared
             .policy
@@ -475,8 +534,16 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, control: Option<OwnedFd
             control: parent_end,
             tally: Arc::new(tally),
         },
-        shells,
+        Waited { shells, lifeline },
     )
+}
+
+/// What PID 1's loop serves besides its child (`supervise.rs`).
+struct Waited {
+    /// The further shells, when the daemon gave a door.
+    shells: Option<exec::Shells>,
+    /// The daemon's lifeline, when it gave one.
+    lifeline: Option<OwnedFd>,
 }
 
 /// The agent's two filters and the child's end of the channel to the parent.
@@ -960,8 +1027,9 @@ fn parent(
     report: Report,
     gate: OwnedFd,
     refusals: &Refusals,
-    shells: Option<Arc<exec::Shells>>,
+    waited: Waited,
 ) -> i32 {
+    let Waited { shells, lifeline } = waited;
     // The parent holds the listener and the report descriptor while the agent
     // runs. Neither may be reachable from the agent through
     // `/proc/<pid>/fd` or `pidfd_getfd(2)`: with the listener it could answer
@@ -983,7 +1051,7 @@ fn parent(
 
     // The parent keeps its copy of the report descriptor while the agent runs:
     // the refusals of the agent are written on it, the last tally after
-    // `reap` (HUM-138). The child waits at the gate until this process is
+    // `supervise::wait` (HUM-138). The child waits at the gate until this process is
     // non-dumpable (above) and wears its own filter (below). Non-dumpable
     // replaces HUM-137's "no report writer exists when the agent runs": a
     // writer still exists, but the agent can no longer reach it through
@@ -1028,24 +1096,11 @@ fn parent(
     if let Err(err) = check_undumpable() {
         return refuse_to_open(child, report, &format!("get:{err}"));
     }
-    // The door for further shells opens last, under the same premises as
-    // the gate: this process wears its filter and is not dumpable, and every
-    // shell forked from here inherits both (HUM-299). A thread that cannot
-    // start costs the shells, not the session.
-    let shells = shells.filter(|shells| {
-        let serving = Arc::clone(shells);
-        let started = thread::Builder::new()
-            .name("shells".to_owned())
-            .spawn(move || serving.serve());
-        if let Err(err) = &started {
-            say(&format!(
-                "humanitl-shim: warning: no further shells: cannot start their thread: {err}\n"
-            ));
-        }
-        started.is_ok()
-    });
+    // The door for further shells is served from the loop below, under the
+    // same premises as the gate: this process wears its filter and is not
+    // dumpable, and every shell forked from here inherits both (HUM-299).
     drop(gate);
-    let code = reap(child, shells.as_deref());
+    let code = supervise::wait(child, shells.as_ref(), lifeline);
     if let Some(shells) = &shells {
         // The namespace ends with this process anyway; the shells go first
         // and on purpose, not as a side effect.
@@ -1189,48 +1244,7 @@ fn kill_and_reap(child: libc::pid_t) {
     unsafe {
         libc::kill(child, libc::SIGKILL);
     }
-    reap(child, None);
-}
-
-/// Waits for the child and turns its status into ours: the exit code, or
-/// 128 + signal.
-///
-/// Der Shim ist PID 1 der Sandbox (`--as-pid-1`, HUM-203), und jede Waise im
-/// Namensraum wird sein Kind. Deshalb `waitpid(-1)` und nicht
-/// `waitpid(child)`: Eine Waise, die niemand erntet, bleibt als Zombie
-/// liegen, und ein Agent, der viele Prozesse abkoppelt, füllt so die
-/// Prozesstabelle. Der Status einer Waise wird verworfen; nur der eigene
-/// Kindprozess entscheidet über den Exit-Code. `ECHILD`, ohne dass das Kind
-/// geerntet wurde, kann nicht vorkommen und endet mit 126. Eine weitere Shell
-/// (HUM-299) ist auch ein Kind dieses Prozesses; ihr Ende geht an `shells`,
-/// das es dem Daemon meldet.
-fn reap(child: libc::pid_t, shells: Option<&exec::Shells>) -> i32 {
-    loop {
-        let mut status: c_int = 0;
-        // SAFETY: waitpid on any child of this process with a valid status
-        // pointer.
-        let waited = unsafe { libc::waitpid(-1, &raw mut status, 0) };
-        if waited == child {
-            if libc::WIFEXITED(status) {
-                return libc::WEXITSTATUS(status);
-            }
-            if libc::WIFSIGNALED(status) {
-                return 128 + libc::WTERMSIG(status);
-            }
-            continue;
-        }
-        if waited > 0 {
-            // Eine weitere Shell meldet ihr Ende; eine Waise des Agenten wird
-            // geerntet und vergessen.
-            if let Some(shells) = shells {
-                shells.reaped(waited, status);
-            }
-            continue;
-        }
-        if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
-            return EXIT_SETUP;
-        }
-    }
+    supervise::reap_blocking(child);
 }
 
 // ---- command line and small helpers -----------------------------------------
@@ -1241,6 +1255,10 @@ struct Cli {
     controlling_terminal: bool,
     /// `--control-fd` (HUM-299).
     control_fd: Option<RawFd>,
+    /// `--lifeline-fd` (HUM-430).
+    lifeline_fd: Option<RawFd>,
+    /// `--env-fd` (HUM-430).
+    env_fd: Option<RawFd>,
     command: Vec<OsString>,
 }
 
@@ -1250,7 +1268,8 @@ enum CliError {
     Rules,
     MissingProxyPort,
     BadProxyPort(String),
-    BadControlFd(String),
+    /// A descriptor flag whose value is no number above 2.
+    BadFd(&'static str, String),
     MissingValue(&'static str),
     UnknownOption(String),
     Positional(String),
@@ -1264,8 +1283,8 @@ impl fmt::Display for CliError {
             Self::Rules => write!(f, "rules"),
             Self::MissingProxyPort => write!(f, "--proxy-port is required"),
             Self::BadProxyPort(value) => write!(f, "--proxy-port {value:?} is not a port"),
-            Self::BadControlFd(value) => {
-                write!(f, "--control-fd {value:?} is not a descriptor above 2")
+            Self::BadFd(flag, value) => {
+                write!(f, "{flag} {value:?} is not a descriptor above 2")
             }
             Self::MissingValue(flag) => write!(f, "{flag} needs a value"),
             Self::UnknownOption(arg) => write!(f, "unknown option {arg:?}"),
@@ -1279,6 +1298,8 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
     let mut proxy_port = None;
     let mut controlling_terminal = false;
     let mut control_fd = None;
+    let mut lifeline_fd = None;
+    let mut env_fd = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--") => {
@@ -1291,21 +1312,17 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
                     proxy_port,
                     controlling_terminal,
                     control_fd,
+                    lifeline_fd,
+                    env_fd,
                     command,
                 });
             }
             Some("--help" | "-h") => return Err(CliError::Help),
             Some("--rules") => return Err(CliError::Rules),
             Some("--controlling-terminal") => controlling_terminal = true,
-            Some("--control-fd") => {
-                let value = args.next().ok_or(CliError::MissingValue("--control-fd"))?;
-                let fd = value
-                    .to_str()
-                    .and_then(|text| text.parse::<RawFd>().ok())
-                    .filter(|fd| *fd > 2)
-                    .ok_or_else(|| CliError::BadControlFd(value.to_string_lossy().into_owned()))?;
-                control_fd = Some(fd);
-            }
+            Some("--control-fd") => control_fd = Some(fd_value(&mut args, "--control-fd")?),
+            Some("--lifeline-fd") => lifeline_fd = Some(fd_value(&mut args, "--lifeline-fd")?),
+            Some("--env-fd") => env_fd = Some(fd_value(&mut args, "--env-fd")?),
             Some("--proxy-port") => {
                 let value = args.next().ok_or(CliError::MissingValue("--proxy-port"))?;
                 let port = value
@@ -1321,6 +1338,19 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
         }
     }
     Err(CliError::MissingCommand)
+}
+
+/// The value of a descriptor flag: a number above 2.
+fn fd_value(
+    args: &mut impl Iterator<Item = OsString>,
+    flag: &'static str,
+) -> Result<RawFd, CliError> {
+    let value = args.next().ok_or(CliError::MissingValue(flag))?;
+    value
+        .to_str()
+        .and_then(|text| text.parse::<RawFd>().ok())
+        .filter(|fd| *fd > 2)
+        .ok_or_else(|| CliError::BadFd(flag, value.to_string_lossy().into_owned()))
 }
 
 /// A setup failure: which area, and why. Always exit 126.
@@ -1341,6 +1371,26 @@ impl SetupError {
             area: "seccomp",
             check: Check::SeccompApplied,
             why: err.to_string(),
+        }
+    }
+
+    /// The environment behind `--env-fd` was refused (HUM-430). Reported as
+    /// `seccomp_applied`, like every failure of the shim's own process
+    /// model: without its environment the shim cannot say what it starts.
+    fn environment(err: impl fmt::Display) -> Self {
+        Self {
+            area: "environment",
+            check: Check::SeccompApplied,
+            why: err.to_string(),
+        }
+    }
+
+    /// The descriptor of `--lifeline-fd` is no pipe (HUM-430).
+    fn lifeline(why: &str) -> Self {
+        Self {
+            area: "lifeline",
+            check: Check::SeccompApplied,
+            why: why.to_owned(),
         }
     }
 
@@ -1389,7 +1439,7 @@ fn env_utf8(name: &'static str) -> Result<Option<String>, NotUtf8> {
 }
 
 /// One message on stderr. Never panics, whatever stderr is.
-fn say(text: &str) {
+pub(crate) fn say(text: &str) {
     let _ = io::stderr().lock().write_all(text.as_bytes());
 }
 
@@ -1433,6 +1483,19 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(cli.control_fd, Some(9));
+        assert_eq!((cli.lifeline_fd, cli.env_fd), (None, None));
+        let cli = parse_cli(args(&[
+            "--proxy-port",
+            "3128",
+            "--lifeline-fd",
+            "7",
+            "--env-fd",
+            "8",
+            "--",
+            "sh",
+        ]))
+        .unwrap();
+        assert_eq!((cli.lifeline_fd, cli.env_fd), (Some(7), Some(8)));
         // Arguments after -- are the agent's, whatever they look like.
         let cli = parse_cli(args(&["--proxy-port", "0", "--", "--help"])).unwrap();
         assert_eq!(cli.command, [OsString::from("--help")]);
@@ -1465,6 +1528,15 @@ mod tests {
                 &["--proxy-port", "1", "--control-fd"],
                 "--control-fd needs a value",
             ),
+            (
+                &["--proxy-port", "1", "--lifeline-fd", "1", "--", "sh"],
+                "--lifeline-fd \"1\" is not a descriptor above 2",
+            ),
+            (
+                &["--proxy-port", "1", "--env-fd", "-4", "--", "sh"],
+                "--env-fd \"-4\" is not a descriptor above 2",
+            ),
+            (&["--proxy-port", "1", "--env-fd"], "--env-fd needs a value"),
         ];
         for (list, needle) in cases {
             let err = match parse_cli(args(list)) {

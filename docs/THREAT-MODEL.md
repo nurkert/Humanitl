@@ -238,8 +238,13 @@ inherited descriptors never asks for a controlling terminal, and a terminal that
 session's controlling terminal cannot be taken without `CAP_SYS_ADMIN` in the initial user
 namespace. PID 1 is the shim
 (HUM-203), which reaps orphans and relays `SIGTERM` and `SIGHUP`; it is not dumpable, so
-`/proc/1/environ` and `/proc/1/mem` are unreadable for the agent. *Residual risk:* none known, as
-long as bwrap implements the options as documented.
+`/proc/1/environ` and `/proc/1/mem` are unreadable for the agent. Where a backend starts the
+sandbox detached from the daemon and `--die-with-parent` has no counterpart (Podman, whose
+container runs on under `conmon` when the client is killed), the shim's lifeline takes its place
+(HUM-430): the read end of a pipe whose only write end the daemon holds with `CLOEXEC`; when the
+daemon ends, also through `SIGKILL`, PID 1 sees `POLLHUP` and ends the sandbox as on `SIGTERM`,
+with `SIGKILL` to every process of the namespace after `KILL_GRACE`. The agent never holds the
+lifeline. *Residual risk:* none known, as long as bwrap implements the options as documented.
 
 ### K-07 `/proc` and `/sys`
 
@@ -652,6 +657,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-10-31 | K-24: the disposable sandbox on macOS, an APFS clone with the masks removed, the real project sealed and the clone renamed before it is read; a held write descriptor and the missing size cap stay as residual risks | HUM-374 |
 | 2026-11-01 | The reserved name `llm.humanitl.internal` for a model on the loopback: mapped by the proxy only to the configured endpoint, scheme and port, before the rules, never resolved; every other use refused with `PROXY_003`. No new door, the sandbox profile is unchanged | HUM-387 |
 | 2026-11-04 | A-5 and manipulated binaries: releases before 1.0.0 carry `SHA256SUMS` only, no package signature; signed releases come with 1.0.0. The earlier text named a package signature that never shipped | HUM-060 |
+| 2026-11-12 | K-06: the shim's lifeline (`--lifeline-fd`) as the counterpart of `--die-with-parent` for a backend that detaches the sandbox from the daemon; the agent's environment through a sealed memfd (`--env-fd`) instead of `argv`; the agent inherits neither; K-15 unchanged | HUM-430 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

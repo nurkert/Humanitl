@@ -120,6 +120,7 @@ pub mod profile;
 pub mod refusals;
 pub mod seatbelt;
 pub mod shell;
+pub mod shim_fds;
 pub mod summary;
 pub mod work_dir;
 pub mod worktree;
@@ -134,8 +135,8 @@ pub use crate::bridge_env::{
     CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NAMES, CHECK_NO_INTERFACES, CHECK_PREFIX,
     CHECK_SECCOMP_APPLIED, CHECK_SINGLE_SOCKET, ENV_BRIDGES, ENV_REPORT_FD, ENV_SECCOMP_DENY,
     ENV_SECCOMP_FAMILIES, ENV_SECCOMP_TYPES, EXEC_PREFIX, EXIT_EXEC, EXIT_SETUP, EXIT_USAGE,
-    ExecFailure, RESERVED_ENV, SHIM_CONTROL_FD, SHIM_CONTROLLING_TERMINAL, ShimCheck, bridges_json,
-    parse_check_line, parse_exec_line, shim_env,
+    ExecFailure, RESERVED_ENV, SHIM_CONTROL_FD, SHIM_CONTROLLING_TERMINAL, SHIM_ENV_FD,
+    SHIM_LIFELINE_FD, ShimCheck, bridges_json, parse_check_line, parse_exec_line, shim_env,
 };
 pub use crate::bwrap::{
     BIND_FD_VERSION, BwrapBackend, EARLY_EXIT_WINDOW, MIN_BWRAP_VERSION, USERNS_DOCS_URL,
@@ -165,6 +166,7 @@ pub use crate::seatbelt::{
     PREVIEW_AGENT_PORT, PREVIEW_REPORT_FD, PREVIEW_SESSION_PORT, PREVIEW_STATUS_FD,
     SeatbeltBackend, SeatbeltPreview, clone_masks,
 };
+pub use crate::shim_fds::{Lifeline, env_memfd, split_env};
 
 /// Der Name des Backends dieses Systems: Seatbelt unter macOS, sonst bwrap
 /// (HUM-323, HUM-376). Er ist das, wofür [`AUTO_BACKEND`] steht

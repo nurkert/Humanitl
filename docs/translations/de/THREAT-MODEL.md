@@ -246,7 +246,13 @@ mit geerbten Deskriptoren fragt nie nach einem steuernden Terminal, und ein Term
 das steuernde Terminal einer Session ist, lässt sich ohne `CAP_SYS_ADMIN` im ursprünglichen
 User-Namespace nicht übernehmen. PID 1 ist der Shim
 (HUM-203), der verwaiste Prozesse einsammelt und `SIGTERM` und `SIGHUP` weiterreicht; er ist nicht
-dumpbar, also sind `/proc/1/environ` und `/proc/1/mem` für den Agenten nicht lesbar.
+dumpbar, also sind `/proc/1/environ` und `/proc/1/mem` für den Agenten nicht lesbar. Wo ein
+Backend die Sandbox vom Daemon abgekoppelt startet und `--die-with-parent` kein Gegenstück hat
+(Podman, dessen Container unter `conmon` weiterläuft, wenn der Client getötet wird), tritt die
+Lebensleine des Shims an seine Stelle (HUM-430): das Leseende einer Pipe, deren einziges
+Schreibende der Daemon mit `CLOEXEC` hält; endet der Daemon, auch durch `SIGKILL`, sieht PID 1
+`POLLHUP` und beendet die Sandbox wie bei `SIGTERM`, nach `KILL_GRACE` mit `SIGKILL` an jeden
+Prozess des Namespace. Der Agent hält die Lebensleine nie.
 *Restrisiko:* keines bekannt, solange bwrap die Optionen wie dokumentiert umsetzt.
 
 ### K-07 `/proc` und `/sys`
@@ -623,6 +629,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-10-30 | K-02: unter macOS liegt der Zugangsschlüssel des Anbieters im Anmelde-Schlüsselbund über `/usr/bin/security`, über `stdin` und zurückgelesen; dieselbe Klasse wie der Secret Service: lesbar für jeden Prozess des Kontos außerhalb der Sandbox, außer Reichweite des Agenten | HUM-349 |
 | 2026-10-30 | K-24: das Überschreiben eines Konflikts wird je Änderung bestätigt (`overwrite_ids`); eine Bestätigung für eine Datei deckt nie eine andere ab | HUM-351 |
 | 2026-10-31 | K-02: die Grenze ist der gespeicherte Server, den die Session aufgelöst hat; `llm.server` aus Lauf, Projekt oder Profil wählt unter den gespeicherten Servern des Nutzers, legt nie einen an; ein unbekannter Name lehnt den Start ab | HUM-400 |
+| 2026-11-12 | K-06: die Lebensleine des Shims (`--lifeline-fd`) als Gegenstück zu `--die-with-parent` für ein Backend, das die Sandbox vom Daemon abkoppelt; die Umgebung des Agenten über einen versiegelten memfd (`--env-fd`) statt `argv`; der Agent erbt keinen von beiden; K-15 unverändert | HUM-430 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

@@ -331,7 +331,8 @@ Die Reihenfolge, wie `daemon/bin/humanitl-shim/src/main.rs` sie ausführt:
    `CLOEXEC`, sodass der Agent ihn nicht erbt. Dann liest er die Interface-Liste
    (`no_interfaces`) und durchläuft das Dateisystem nach Sockets (`single_socket`).
 2. **Schließen und forken.** Er schließt jeden geerbten Deskriptor außer 0, 1, 2, dem Bericht,
-   dem Exec-Tor und den Listenern der Bridge, legt das `socketpair` an, über das der Listener des
+   dem Exec-Tor, den Listenern der Bridge und, wenn der Daemon sie mitgab, seiner Tür für weitere
+   Shells und seiner Lebensleine (HUM-430), legt das `socketpair` an, über das der Listener des
    Filters reisen wird (HUM-138), und forkt. Der erste Schritt des Elternprozesses nach dem Fork
    ist `prctl(PR_SET_DUMPABLE, 0)`, mit `PR_GET_DUMPABLE` gegengeprüft, bevor das Tor aufgeht;
    danach installiert er seinen eigenen Filter, die Richtlinie des Agenten plus `AF_UNIX`.
@@ -404,9 +405,9 @@ Weg in die Sandbox, also gehören seine Grenzen zur Aussage:
 - Höchstens vier weitere Shells leben gleichzeitig; der Shim zählt, und der Daemon zählt noch
   einmal (`TERM_002` für die fünfte).
 - Eine Shell endet, wenn ihr Prozess endet, und mit der Sandbox: PID 1 beendet jede Shell, wenn
-  der Agent endet, die Shells sterben mit dem Thread, der sie geforkt hat (`PR_SET_PDEATHSIG`),
-  und mit dem PID-Namespace, und der Daemon beendet ihre Terminals, wenn sein Ende des Paars
-  sich schließt.
+  der Agent endet oder der Daemon sein Ende des Paars schließt, die Shells sterben mit PID 1,
+  dessen Hauptschleife sie geforkt hat (`PR_SET_PDEATHSIG`, HUM-430), und mit dem PID-Namespace,
+  und der Daemon beendet ihre Terminals, wenn sein Ende des Paars sich schließt.
 - Eine ohne das Pseudo-Terminal des Daemons gestartete Sandbox (`humanitl sandbox run`, die
   Escape-Suiten) hat keine Tür.
 
@@ -426,6 +427,48 @@ Die Vorgabe-Shell startet ohne Startdateien (`bash --norc --noprofile -i`, oder 
 nicht gesetztem `ENV`), sodass ein `~/.bashrc` oder `~/.profile`, das der Agent im Home der
 Sandbox abgelegt hat, beim Öffnen nicht läuft; ein Befehl, den der Aufrufer nach `--` nennt,
 entscheidet das selbst.
+
+### Die Lebensleine und die Umgebung über Deskriptoren (HUM-430)
+
+Zwei Dinge, die bwrap mit Flags erledigt, brauchen einen Deskriptor, sobald ein Backend die
+Sandbox vom Daemon abgekoppelt startet und jeden Wert seiner Kommandozeile auf die Platte schreibt
+(Podman, HUM-292, Messungen P7 und P11). Der Shim übernimmt beide, unter jedem Backend gleich;
+bwrap selbst behält seine Flags.
+
+- **Die Lebensleine** (`--lifeline-fd`). Das Leseende einer Pipe, deren einziges Schreibende der
+  Daemon hält, mit `CLOEXEC`, sodass kein Kind des Daemons es erbt. Der Shim, PID 1, wartet
+  darauf in derselben `poll`-Schleife wie auf seine Kinder und die Tür für weitere Shells. Endet
+  der Daemon, auch durch `SIGKILL`, schließt der Kernel das Schreibende, das Leseende meldet
+  `POLLHUP`, und der Shim beendet die Sandbox wie bei `SIGTERM`: `SIGTERM` an den Agenten, nach
+  `KILL_GRACE` (5 s) `SIGKILL` an den Agenten, jede weitere Shell und jeden Prozess des
+  PID-Namespace. Sie tritt an die Stelle von `--die-with-parent`. Das Leseende darf auch in
+  anderen Prozessen offen sein (der `podman run`-Client erbt es); entscheidend ist allein, dass
+  das Schreibende nur im Daemon liegt. Eine Nummer, die keine Pipe nennt, lehnt den Start ab.
+- **Die Umgebung** (`--env-fd`). Die Umgebung des Agenten als ein JSON-Objekt, `String` zu
+  `String`, in einem memfd, versiegelt gegen Schreiben, Wachsen und Schrumpfen. Der Shim liest
+  ihn vor allem anderen des Starts, macht ihn zur ganzen Umgebung des Agenten (was die Engine von
+  sich aus hineinlegte, kommt nicht durch) und schließt ihn. Kein Wert steht in einem
+  Argumentvektor, in der Prozessliste oder in der gespeicherten Konfiguration der Engine. Es
+  gelten die Regeln von `--setenv`: Die fünf Variablen des Launcher-Vertrags und die
+  Lader-Variablen `LD_PRELOAD`, `LD_AUDIT` und `LD_LIBRARY_PATH` werden abgelehnt, ebenso ein
+  Deskriptor, der nicht vollständig versiegelt ist; eine Ablehnung ist eine rote
+  `seccomp_applied`-Zeile und Exit 126, bevor es den Agenten gibt. Der memfd muss gegen
+  Schreiben, Schrumpfen und Wachsen versiegelt sein; einer, der nur gegen Schreiben versiegelt
+  ist, ließe sich noch mit `ftruncate(2)` leeren. Die fünf Variablen des Launcher-Vertrags
+  (`HUMANITL_BRIDGES`, `HUMANITL_REPORT_FD`, `HUMANITL_SECCOMP_FAMILIES`,
+  `HUMANITL_SECCOMP_TYPES`, `HUMANITL_SECCOMP_DENY`) erreichen den Shim weiter über seine eigene
+  Prozessumgebung, unter einer Container-Engine über deren Kommandozeile. Das ist unbedenklich:
+  Sie enthalten einen Socket-Pfad in der Sandbox, eine Deskriptornummer und die Namen von
+  Socket-Familien, -Typen und Syscalls, die dieses Dokument ohnehin offenlegt, und kein
+  Geheimnis; und der Shim braucht den Berichts-Deskriptor, bevor er den memfd liest, damit ein
+  kaputter memfd eine rote Prüfzeile wird.
+
+**Der Agent erbt keinen von beiden.** Der Shim liest und schließt den memfd der Umgebung, bevor er
+forkt. Die Lebensleine bleibt allein bei PID 1, wie die Tür: Das Schließen des Elternprozesses vor
+dem Fork behält sie mit `CLOEXEC`, das Kind des Agenten schließt sie ausdrücklich und behält sie in
+seinem eigenen Schließen nicht, und jede weitere Shell schließt alle Deskriptoren über 2. PID 1 ist
+nicht dumpbar, also erreicht auch `/proc/1/fd` sie nicht. Der Agent hält nichts von der
+Lebensleine und kann den memfd nicht erneut lesen.
 
 ### Was der Filter erlaubt und verweigert
 
@@ -1481,6 +1524,7 @@ der Durchleitung oder an der Audit-Kette bekommt hier eine Zeile und in der Änd
 | 0.1.0 | OpenCode fragt nicht mehr vor `webfetch` und `bash`; der Proxy ist die eine Stelle, die fragt. Sein `bash` wartet so lange wie eine angehaltene Anfrage (HUM-308). |
 | 0.1.x | Weitere Shells neben dem Agenten: Der Daemon bittet PID 1 über ein unbenanntes `SOCK_SEQPACKET`-Paar, das nur er und PID 1 halten; der Shim forkt die Shell von innen mit dem Filter des Agenten darüber, bewiesen durch ein verweigertes `AF_UNIX`; höchstens vier, sie enden mit ihrem Prozess oder der Sandbox (HUM-299). |
 | 0.1.x | pi lädt die global installierte Erweiterung `pi-web-access` (`agent.pi.web_access`, Vorgabe `auto`, für Projekt-Profile gesperrt); ihre Anfragen gehen wie jede andere durch den Proxy (HUM-309). |
+| 0.1.x | Der Shim nimmt eine Lebensleine (`--lifeline-fd`, das Leseende einer Pipe, die nur der Daemon beschreibt; `POLLHUP` beendet die Sandbox wie bei `SIGTERM`) und die Umgebung des Agenten als versiegelten memfd (`--env-fd`, nie in `argv`); der Agent erbt keinen von beiden (HUM-430, [Abschnitt 4](#the-lifeline-and-the-environment-through-descriptors-hum-430)). |
 | 0.1.x | macOS: Seatbelt als Sandbox-Backend, ein erzeugtes SBPL-Profil pro Session, die drei Garantien neu formuliert und vom Shim gemessen; der Daemon als launchd-Agent; Socket und Token unter `~/Library/Application Support/Humanitl/run` (HUM-323, HUM-327, [Abschnitt 12](#12-macos-seatbelt-instead-of-bubblewrap)). |
 
 ## 12. macOS: Seatbelt statt bubblewrap

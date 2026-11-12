@@ -39,18 +39,20 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use humanitl_sandbox::{
     Bridge, CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NAMES, CHECK_PREFIX,
-    DEFAULT_DENY_SYSCALLS, ENV_BRIDGES, ENV_REPORT_FD, ENV_SECCOMP_DENY, EXIT_USAGE, PROXY_BRIDGE,
-    PROXY_SOCKET_DST, REFUSALS_PREFIX, REQUIRED_SOCKET_FAMILIES, REQUIRED_SOCKET_TYPES,
-    RESERVED_ENV, SandboxProfile, ShimCheck, bridges_json, parse_check_line, parse_refusal_line,
-    shim_env,
+    DEFAULT_DENY_SYSCALLS, ENV_BRIDGES, ENV_REPORT_FD, ENV_SECCOMP_DENY, EXIT_USAGE, KILL_GRACE,
+    Lifeline, PROXY_BRIDGE, PROXY_SOCKET_DST, REFUSALS_PREFIX, REQUIRED_SOCKET_FAMILIES,
+    REQUIRED_SOCKET_TYPES, RESERVED_ENV, SHIM_ENV_FD, SHIM_LIFELINE_FD, SandboxProfile, ShimCheck,
+    bridges_json, env_memfd, parse_check_line, parse_refusal_line, shim_env,
 };
 
 /// Der Deskriptor, über den der Shim in diesen Tests seinen Bericht schreibt.
@@ -637,5 +639,145 @@ fn the_shim_falls_back_to_the_launchers_socket_path() {
         bridge.evidence.starts_with(&format!("{PROXY_BRIDGE}=")),
         "the fallback bridge is not named {PROXY_BRIDGE}: {}",
         bridge.evidence
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Lebensleine und Umgebung über geerbte Deskriptoren (HUM-430)
+// ---------------------------------------------------------------------------
+
+/// Ein Deskriptor dieses Testprozesses als Pfad unter `/proc`.
+///
+/// Die Shell vor dem Shim öffnet ihn neu (`exec 4<pfad`), denn dieser Test
+/// kommt ohne `unsafe` aus und kann `CLOEXEC` nicht im Kind wegnehmen. Für
+/// eine Pipe ergibt das ein weiteres Leseende derselben Pipe, für einen
+/// memfd eine weitere Öffnung derselben versiegelten Datei.
+fn proc_fd(fd: &OwnedFd) -> String {
+    format!("/proc/{}/fd/{}", std::process::id(), fd.as_raw_fd())
+}
+
+/// Der Shim, gestartet von einer Shell, die `path` als Deskriptor 4 öffnet.
+fn shim_with_fd4(path: &str, socket: &Path, options: &[&str], agent: &[&str]) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg(r#"exec 4<"$1"; shift; exec "$@""#)
+        .arg("sh")
+        .arg(path)
+        .arg(shim_binary())
+        .args(["--proxy-port", "0"])
+        .args(options)
+        .arg("--")
+        .args(agent)
+        .stdin(Stdio::null());
+    for name in RESERVED_ENV {
+        command.env_remove(name);
+    }
+    let bridge = Bridge {
+        socket: socket.to_path_buf(),
+        ..Bridge::proxy_on(0)
+    };
+    command.env(ENV_BRIDGES, bridges_json(std::slice::from_ref(&bridge)));
+    command
+}
+
+/// Die Hilfe des Shims nennt die beiden Flags, die der Launcher für die
+/// Deskriptoren rendert.
+#[test]
+fn the_usage_text_names_the_lifeline_and_environment_flags() {
+    let mut command = shim();
+    command.arg("--help");
+    let output = run(command);
+    assert_eq!(output.status.code(), Some(0));
+    let text = stdout_of(&output);
+    for flag in [SHIM_LIFELINE_FD, SHIM_ENV_FD] {
+        assert!(
+            text.contains(flag),
+            "the shim's help does not mention {flag}: {text}"
+        );
+    }
+}
+
+/// Der memfd des Launchers ist der, den der Shim liest: Der Agent sieht den
+/// Wert Byte für Byte, mit Leerzeichen, Zeilenumbruch, DEL und einem
+/// C1-Steuerzeichen, die `serde_json` roh schreibt, und der Wert steht in
+/// keinem Argument.
+#[test]
+fn the_shim_reads_the_launchers_environment_memfd() {
+    let socket = tmp_path("env.sock");
+    accepting_socket(&socket);
+    let memfd = env_memfd(&[
+        ("HL_PROBE".to_owned(), "a b\nc\u{7f}\u{85}".to_owned()),
+        ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
+    ])
+    .unwrap_or_else(|diagnostic| panic!("{}", diagnostic.why));
+    let command = shim_with_fd4(
+        &proc_fd(&memfd),
+        &socket,
+        &[SHIM_ENV_FD, "4"],
+        &["/bin/sh", "-c", r#"printf '%s' "$HL_PROBE""#],
+    );
+    assert!(
+        !command
+            .get_args()
+            .any(|arg| arg.to_string_lossy().contains("a b")),
+        "a value of the environment stands in argv"
+    );
+    let output = run(command);
+    drop(memfd);
+    let _ = fs::remove_file(&socket);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert_eq!(output.stdout, "a b\nc\u{7f}\u{85}".as_bytes());
+}
+
+/// Die Gnadenfrist des Shims nach dem Ende der Lebensleine ist die des
+/// Launchers, [`KILL_GRACE`]: Ein Agent, der `SIGTERM` überhört, lebt nach
+/// dem Fallen der [`Lifeline`] noch so lange und nicht länger als eine
+/// Sekunde darüber.
+#[test]
+fn the_lifeline_grace_is_the_launchers() {
+    let socket = tmp_path("lifeline.sock");
+    accepting_socket(&socket);
+    let (lifeline, read) = Lifeline::new().unwrap_or_else(|err| panic!("no lifeline: {err}"));
+    let mut command = shim_with_fd4(
+        &proc_fd(&read),
+        &socket,
+        &[SHIM_LIFELINE_FD, "4"],
+        &[
+            "/bin/sh",
+            "-c",
+            "trap '' TERM; echo up; while :; do sleep 0.1; done",
+        ],
+    );
+    command.stdout(Stdio::piped()).stderr(Stdio::null());
+    let mut child = command
+        .spawn()
+        .unwrap_or_else(|err| panic!("the shim must be runnable: {err}"));
+    let mut up = String::new();
+    BufReader::new(child.stdout.take().unwrap_or_else(|| panic!("no stdout")))
+        .read_line(&mut up)
+        .unwrap_or_else(|err| panic!("{err}"));
+    assert_eq!(up, "up\n", "the agent did not start");
+    drop(read);
+
+    let started = Instant::now();
+    drop(lifeline);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap_or_else(|err| panic!("{err}")) {
+            break status;
+        }
+        if started.elapsed() > KILL_GRACE + Duration::from_secs(1) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the shim outlived its lifeline by {:?}", started.elapsed());
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    let elapsed = started.elapsed();
+    let _ = fs::remove_file(&socket);
+    assert_eq!(status.code(), Some(128 + 9), "{elapsed:?}");
+    assert!(
+        elapsed + Duration::from_millis(500) >= KILL_GRACE,
+        "the agent did not get the launcher's grace: {elapsed:?}"
     );
 }
