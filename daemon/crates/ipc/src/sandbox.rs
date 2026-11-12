@@ -79,7 +79,7 @@
 //! 5 s + 5 s + 5 s = bis zu 15 s. Keiner der drei Wege ist fail-closed in dem
 //! Sinn, dass der Befehl nicht liefe.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
@@ -93,15 +93,13 @@ use humanitl_core::{Diagnostic, FixAction, FlowEvent, Severity};
 use humanitl_proxy::rules_store::RulesStore;
 use humanitl_proxy::session::{SessionSettings, SessionState};
 use humanitl_recorder::Recorder;
-#[cfg(not(target_os = "macos"))]
-use humanitl_sandbox::LaunchInputs;
 use humanitl_sandbox::agent::{opencode, pi};
 use humanitl_sandbox::summary::SessionSummary;
 use humanitl_sandbox::{
-    AdapterRegistry, AgentContext, AgentKey, Backend, CheckResult, IsolationCheck, KILL_GRACE,
-    LaunchOptions, MountPolicy, PlanRequest, SANDBOX_SHELL, SandboxBackend, SandboxFile,
-    SandboxHandle, SandboxProfile, SessionContext, StdioMode, Termination, WorkDirSource,
-    check_project_dir, shell_line,
+    AdapterRegistry, AgentContext, AgentKey, Backend, CheckResult, DisposableLayer, IsolationCheck,
+    KILL_GRACE, LaunchOptions, MountPolicy, PlanPreview, PlanRequest, PolicyMode, PolicyOrigin,
+    PolicyRow, SANDBOX_SHELL, SandboxBackend, SandboxFile, SandboxHandle, SandboxProfile,
+    SessionContext, StdioMode, Termination, WorkDirSource, check_project_dir, shell_line,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -2953,6 +2951,7 @@ impl Inner {
             env: shown.env,
             argv_preview: shell_line(&shown.argv),
             policy_text: shown.policy_text,
+            door: shown.door,
             agent_running,
             refusals: self.running_refusals(),
             llm: self
@@ -3032,6 +3031,7 @@ impl Inner {
             env: Vec::new(),
             argv_preview: String::new(),
             policy_text: String::new(),
+            door: String::new(),
             agent_running,
             refusals: self.running_refusals(),
             llm: self
@@ -3439,7 +3439,6 @@ impl Inner {
 
         Ok(self.with_plan_mode(Prepared {
             env_origin,
-            adapter_files: session.files.iter().map(|file| file.dst.clone()).collect(),
             warnings,
             profile,
             session,
@@ -3949,10 +3948,6 @@ struct Prepared {
     /// zusammenführt; der letzte Schreiber gewinnt. Ein Schlüssel, der hier
     /// fehlt, gilt als von Hand geschrieben und wird zurückgehalten.
     env_origin: BTreeMap<String, v1::ValueOrigin>,
-    /// Die Ziele der Dateien des Adapters; für die Herkunftsspalte der
-    /// Tabelle unter Linux. Die Tabelle unter Seatbelt hat diese Spalte nicht.
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
-    adapter_files: BTreeSet<PathBuf>,
     /// Befunde der Vorbereitung, die den Start nicht aufhalten (HUM-280).
     warnings: Vec<Diagnostic>,
     /// Die Schicht, die die Zeile zeigt, wenn der Plan eine Wegwerf-Sandbox
@@ -3974,6 +3969,7 @@ struct Shown {
     mounts: Vec<v1::Mount>,
     env: Vec<v1::EnvVar>,
     policy_text: String,
+    door: String,
 }
 
 impl Prepared {
@@ -4014,158 +4010,107 @@ impl Prepared {
         shows_env_value(key, self.origin_of(key))
     }
 
-    /// Die vollständige Kommandozeile, `argv[0]` ist das Programm, mit
-    /// [`WITHHELD_PLACEHOLDER`] anstelle jedes Werts, den auch die
-    /// Umgebungstabelle zurückhält.
+    /// Was eine Sitzung mit diesem Plan täte, vom Backend und ohne
+    /// Seiteneffekt (HUM-429), mit [`WITHHELD_PLACEHOLDER`] anstelle jedes
+    /// Werts in der Zeile, den auch die Umgebungstabelle zurückhält.
     ///
-    /// **Nur zur Anzeige.** Gestartet wird die Liste, die
-    /// [`SandboxProfile::to_bwrap_args`] beim Start selbst baut; diese hier
-    /// geht an die Oberfläche und über sie in die Zwischenablage.
-    #[cfg(not(target_os = "macos"))]
-    fn argv(&self) -> Vec<OsString> {
-        let mut args = vec![self.backend.program().as_os_str().to_owned()];
-        // The daemon starts every session at its own pseudo-terminal, so the
-        // shim gets the controlling terminal there (HUM-280), and the line
-        // says so.
-        args.extend(
-            self.profile.to_bwrap_args(
-                &self.session,
-                &LaunchInputs::preview_with_agent_files(
-                    self.session.files.iter().map(|file| file.dst.clone()),
-                )
-                .with_controlling_terminal(true)
-                .with_overlay(self.overlay_preview.clone()),
-            ),
-        );
-        self.redact_hidden_values(&mut args);
-        args
-    }
-
-    /// Die Kommandozeile von `sandbox-exec` (HUM-376). Die Umgebung steht dort
-    /// nicht in der Zeile, es gibt also keinen Wert zurückzuhalten.
-    #[cfg(target_os = "macos")]
-    fn argv(&self) -> Vec<OsString> {
-        self.seatbelt().argv
-    }
-
-    /// Die Vorschau des Seatbelt-Backends für diesen Plan.
-    #[cfg(target_os = "macos")]
-    fn seatbelt(&self) -> humanitl_sandbox::SeatbeltPreview {
-        self.backend.seatbelt_preview(&self.request(), true)
-    }
-
-    /// Was der Schnappschuss von diesem Plan zeigt.
-    #[cfg(not(target_os = "macos"))]
-    fn shown(&self) -> Shown {
-        let argv = self.argv();
-        Shown {
-            mounts: mounts_of(&argv, self),
-            env: env_of(self),
-            policy_text: String::new(),
-            argv,
+    /// Der Daemon startet jede Sitzung an seinem eigenen Pseudoterminal; die
+    /// Vorschau fragt deshalb mit einem, damit die Zeile die ist, die
+    /// startet (HUM-280). Eine Wegwerf-Sandbox zeigt ihre Schicht
+    /// ([`Prepared::overlay_preview`]).
+    ///
+    /// **Nur zur Anzeige.** Gestartet wird der Plan, den das Backend beim
+    /// Start selbst baut; diese Zeile geht an die Oberfläche und über sie in
+    /// die Zwischenablage.
+    fn preview(&self) -> PlanPreview {
+        let mut options = self.options.clone();
+        options.stdio = StdioMode::Pty {
+            cols: PREVIEW_COLS,
+            rows: PREVIEW_ROWS,
+        };
+        if let Some(overlay) = &self.overlay_preview {
+            options.disposable = Some(DisposableLayer::Overlay(overlay.clone()));
         }
+        let mut preview =
+            self.backend
+                .preview(&PlanRequest::new(&self.profile, &self.session, &options));
+        // Dieselbe Entscheidung wie in der Umgebungstabelle
+        // ([`Prepared::shows`]) und keine zweite daneben: Wo die Tabelle
+        // Punkte zeigt und die Zeile den Wert, wäre die Zusage gebrochen.
+        preview.withhold(|key| self.shows(key), WITHHELD_PLACEHOLDER);
+        preview
+    }
+
+    /// Die vollständige Kommandozeile der Vorschau, `argv[0]` ist das
+    /// Programm ([`Prepared::preview`]).
+    fn argv(&self) -> Vec<OsString> {
+        self.preview().argv
     }
 
     /// Was der Schnappschuss von diesem Plan zeigt: alles aus derselben
-    /// Beschreibung, aus der auch das Profil entsteht (HUM-376).
-    #[cfg(target_os = "macos")]
+    /// Vorschau des Backends, für jedes Backend gleich (HUM-429).
     fn shown(&self) -> Shown {
-        let preview = self.seatbelt();
+        let preview = self.preview();
         Shown {
-            mounts: preview.rows.iter().map(mount_of_rule).collect(),
-            env: seatbelt_env_of(self, &preview),
+            mounts: preview.policy.iter().map(mount_of_row).collect(),
+            env: env_of(self, &preview),
+            door: preview.door.describe(),
+            policy_text: preview.policy_text.unwrap_or_default(),
             argv: preview.argv,
-            policy_text: preview.policy_text,
         }
-    }
-
-    /// Ersetzt in `--setenv <KEY> <VALUE>` jeden Wert, den auch die
-    /// Umgebungstabelle zurückhält, durch [`WITHHELD_PLACEHOLDER`].
-    ///
-    /// Dieselbe Entscheidung wie dort ([`Prepared::shows`]) und keine zweite
-    /// daneben: Wo die Tabelle Punkte zeigt und die Zeile den Wert, wäre die
-    /// Zusage gebrochen.
-    ///
-    /// Die Einhängungen bleiben unberührt: `--setenv` steht hinter
-    /// `--clearenv` und damit hinter allem, was die Tabelle liest.
-    #[cfg(not(target_os = "macos"))]
-    fn redact_hidden_values(&self, args: &mut [OsString]) {
-        let setenv = OsString::from("--setenv");
-        let mut index = 0;
-        while index + 2 < args.len() {
-            if args[index] == setenv && !self.shows(&args[index + 1].to_string_lossy()) {
-                args[index + 2] = OsString::from(WITHHELD_PLACEHOLDER);
-            }
-            index += 1;
-        }
-    }
-
-    /// Die Ziele, die aus der Sitzung stammen und nicht aus dem Profil.
-    #[cfg(any(not(target_os = "macos"), test))]
-    fn session_dsts(&self) -> BTreeSet<PathBuf> {
-        let mut dsts = BTreeSet::new();
-        dsts.insert(self.profile.mounts.work.dst.clone());
-        dsts.insert(self.profile.network.proxy_socket_dst.clone());
-        dsts.insert(self.profile.network.ca_cert_dst.clone());
-        dsts.insert(self.profile.network.shim_dst.clone());
-        dsts.insert(PathBuf::from(humanitl_sandbox::CA_BUNDLE_DST));
-        dsts
-    }
-
-    /// Die Ziele, die der Nutzer selbst ins Profil geschrieben hat.
-    ///
-    /// Sie stehen getrennt, weil der Satz im Einhänge-Reiter sie namentlich
-    /// nennen muss: Er behauptet, der Agent sehe nur das Projekt, und jede
-    /// dieser Erweiterungen ist eine Ausnahme davon.
-    #[cfg(any(not(target_os = "macos"), test))]
-    fn user_dsts(&self) -> BTreeSet<PathBuf> {
-        self.profile
-            .mounts
-            .extra_ro
-            .iter()
-            .chain(&self.profile.mounts.extra_rw)
-            .cloned()
-            .collect()
     }
 }
 
-/// Eine Regel des Seatbelt-Profils als Zeile der Tabelle (HUM-376).
+/// Die Geometrie, mit der die Vorschau nach einem Pseudoterminal fragt. Sie
+/// steht nirgends in der Zeile; es zählt nur, dass es eines gibt.
+const PREVIEW_COLS: u16 = 80;
+/// Siehe [`PREVIEW_COLS`].
+const PREVIEW_ROWS: u16 = 24;
+
+/// Eine Zeile der Tabelle des Backends als Zeile des Protokolls.
 ///
-/// Ohne Mount-Namensraum sind Pfad in der Sandbox und Pfad auf dem Rechner
-/// derselbe; der Name aus der Profildatei steht in einem eigenen Feld.
-#[cfg(target_os = "macos")]
-fn mount_of_rule(rule: &humanitl_sandbox::PolicyRow) -> v1::Mount {
-    use humanitl_sandbox::{PolicyAccess, PolicySource};
-    let path = rule.path.display().to_string();
-    let mode = match rule.access {
-        PolicyAccess::ReadOnly => v1::MountMode::Ro,
-        PolicyAccess::ReadWrite => v1::MountMode::Rw,
-        PolicyAccess::Denied => v1::MountMode::Denied,
+/// Was vor dem Ziel steht, ist je nach Art etwas anderes, und nur in einem
+/// Fall ein Pfad auf dem Rechner: Eine Datei aus dem Speicher hat keine
+/// Quelle, und das Ziel eines Verweises liegt in der Sandbox und bekommt ein
+/// eigenes Feld (Review Codex, Befund 5). Die Namen aus der Profildatei
+/// stehen getrennt (HUM-376).
+fn mount_of_row(row: &PolicyRow) -> v1::Mount {
+    let mode = match row.mode {
+        PolicyMode::ReadOnly => v1::MountMode::Ro,
+        PolicyMode::ReadWrite => v1::MountMode::Rw,
+        PolicyMode::Denied => v1::MountMode::Denied,
+        PolicyMode::Masked => v1::MountMode::Masked,
+        PolicyMode::Tmpfs => v1::MountMode::Tmpfs,
+        PolicyMode::Symlink => v1::MountMode::Symlink,
+        PolicyMode::Proc => v1::MountMode::Proc,
+        PolicyMode::Dev => v1::MountMode::Dev,
     };
-    let origin = match rule.source {
-        PolicySource::Profile => v1::ValueOrigin::Profile,
-        PolicySource::Session => v1::ValueOrigin::Session,
-        PolicySource::User => v1::ValueOrigin::User,
+    let origin = match row.origin {
+        PolicyOrigin::Profile => v1::ValueOrigin::Profile,
+        PolicyOrigin::Session => v1::ValueOrigin::Session,
+        PolicyOrigin::User => v1::ValueOrigin::User,
+        PolicyOrigin::Adapter => v1::ValueOrigin::Adapter,
+    };
+    let text = |path: Option<&PathBuf>| {
+        path.map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default()
     };
     v1::Mount {
-        dst: path.clone(),
-        src: path,
+        dst: row.target.to_string_lossy().into_owned(),
+        src: text(row.source.as_ref()),
         mode: mode.into(),
         origin: origin.into(),
-        link_target: String::new(),
-        profile_path: rule.names.join(", "),
+        link_target: text(row.link.as_ref()),
+        profile_path: row.names.join(", "),
     }
 }
 
-/// Die Umgebung, die der Agent unter Seatbelt wirklich bekommt (HUM-376).
+/// Die Umgebung, die der Agent wirklich bekommt, alphabetisch,
+/// zurückgehaltene ohne Wert.
 ///
-/// Dieselbe Regel wie [`env_of`]: Was niemand zugeordnet hat, gilt als von
-/// Hand geschrieben. Nur was allein das Backend setzt, zählt zur Sitzung.
-#[cfg(target_os = "macos")]
-fn seatbelt_env_of(
-    prepared: &Prepared,
-    preview: &humanitl_sandbox::SeatbeltPreview,
-) -> Vec<v1::EnvVar> {
+/// Was niemand zugeordnet hat, gilt als von Hand geschrieben. Nur was allein
+/// das Backend setzt ([`PlanPreview::backend_env`]), zählt zur Sitzung.
+fn env_of(prepared: &Prepared, preview: &PlanPreview) -> Vec<v1::EnvVar> {
     preview
         .env
         .iter()
@@ -4190,107 +4135,7 @@ fn seatbelt_env_of(
         .collect()
 }
 
-/// Die Einhängungen, wie sie in der Kommandozeile stehen.
-///
-/// Gelesen wird der Argumentvektor selbst und nur bis zum ersten `--`; was
-/// danach kommt, ist der Shim mit dem Befehl des Agenten und hängt nichts ein.
-/// Damit kann die Tabelle keinen Mount verlieren, den die Zeile hat.
-#[cfg(any(not(target_os = "macos"), test))]
-fn mounts_of(argv: &[OsString], prepared: &Prepared) -> Vec<v1::Mount> {
-    let session_dsts = prepared.session_dsts();
-    let user_dsts = prepared.user_dsts();
-    let mut mounts = Vec::new();
-    let mut index = 0;
-    // `--overlay-src LOWER` gehört zum nächsten `--overlay` (HUM-350).
-    let mut lower = String::new();
-    while index < argv.len() {
-        let flag = argv[index].to_string_lossy().into_owned();
-        if flag == "--" {
-            break;
-        }
-        if flag == "--overlay-src" && index + 1 < argv.len() {
-            lower = argv[index + 1].to_string_lossy().into_owned();
-            index += 2;
-            continue;
-        }
-        // Das Projekt einer Wegwerf-Sandbox: Auf diesem Rechner ist es nur
-        // lesbar eingehängt; was der Agent schreibt, landet in der oberen
-        // Schicht. Die Zeile nennt deshalb den Ordner des Projekts mit `ro`.
-        if flag == "--overlay" && index + 3 < argv.len() {
-            let dst = argv[index + 3].to_string_lossy().into_owned();
-            mounts.push(v1::Mount {
-                origin: v1::ValueOrigin::Session.into(),
-                dst,
-                src: std::mem::take(&mut lower),
-                mode: v1::MountMode::Ro.into(),
-                link_target: String::new(),
-                profile_path: String::new(),
-            });
-            index += 4;
-            continue;
-        }
-        let (mode, arity) = match flag.as_str() {
-            "--ro-bind" | "--ro-bind-try" => (v1::MountMode::Ro, 2),
-            "--bind" | "--bind-try" | "--dev-bind" | "--dev-bind-try" => (v1::MountMode::Rw, 2),
-            "--ro-bind-data" | "--bind-data" | "--file" => (v1::MountMode::Masked, 2),
-            "--symlink" => (v1::MountMode::Symlink, 2),
-            "--tmpfs" => (v1::MountMode::Tmpfs, 1),
-            "--proc" => (v1::MountMode::Proc, 1),
-            "--dev" => (v1::MountMode::Dev, 1),
-            _ => {
-                index += 1;
-                continue;
-            }
-        };
-        if index + arity >= argv.len() {
-            break;
-        }
-        let (first, dst) = if arity == 2 {
-            (
-                argv[index + 1].to_string_lossy().into_owned(),
-                argv[index + 2].to_string_lossy().into_owned(),
-            )
-        } else {
-            (
-                String::new(),
-                argv[index + 1].to_string_lossy().into_owned(),
-            )
-        };
-        // Was vor dem Ziel steht, ist je nach Flagge etwas anderes, und nur in
-        // einem Fall ein Wirtspfad. Der Deskriptor einer Datei aus dem Speicher
-        // ist keiner — eine Nummer in der Spalte „auf diesem Rechner" hielte
-        // jemand für einen Pfad —, und das Ziel eines Verweises liegt in der
-        // Sandbox und bekommt deshalb ein eigenes Feld (Review Codex,
-        // Befund 5).
-        let (src, link_target) = match mode {
-            v1::MountMode::Masked => (String::new(), String::new()),
-            v1::MountMode::Symlink => (String::new(), first),
-            _ => (first, String::new()),
-        };
-        let dst_path = PathBuf::from(&dst);
-        let origin = if prepared.adapter_files.contains(&dst_path) {
-            v1::ValueOrigin::Adapter
-        } else if session_dsts.contains(&dst_path) {
-            v1::ValueOrigin::Session
-        } else if user_dsts.contains(&dst_path) {
-            v1::ValueOrigin::User
-        } else {
-            v1::ValueOrigin::Profile
-        };
-        mounts.push(v1::Mount {
-            dst,
-            src,
-            mode: mode.into(),
-            origin: origin.into(),
-            link_target,
-            profile_path: String::new(),
-        });
-        index += arity + 1;
-    }
-    mounts
-}
-
-/// Die Umgebung, die `--setenv` setzt, alphabetisch, zurückgehaltene ohne Wert.
+/// Der `PATH` der Sandbox/// Die Umgebung, die `--setenv` setzt, alphabetisch, zurückgehaltene ohne Wert.
 /// Der `PATH` der Sandbox, so wie der Bildschirm ihn zeigen darf.
 ///
 /// Dieselbe Quelle wie die Umgebungstabelle ([`env_of`]) und dieselbe Regel:
@@ -4314,26 +4159,7 @@ fn sandbox_path_of(prepared: &Prepared) -> String {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn env_of(prepared: &Prepared) -> Vec<v1::EnvVar> {
-    prepared
-        .profile
-        .effective_env(&prepared.session, Some(0))
-        .into_iter()
-        .map(|(key, value)| {
-            let origin = prepared.origin_of(&key);
-            let withheld = !prepared.shows(&key);
-            v1::EnvVar {
-                key,
-                value: if withheld { String::new() } else { value },
-                origin: origin.into(),
-                withheld,
-            }
-        })
-        .collect()
-}
-
-/// Ein Profilname ist ein Name, kein Pfad.
+/// Ein Profilname ist ein Name, kein Pfad./// Ein Profilname ist ein Name, kein Pfad.
 ///
 /// Ohne diese Prüfung machte `format!("{name}.toml")` aus `/tmp/evil` den Pfad
 /// `/tmp/evil.toml` — `Path::join` ersetzt die Basis, sobald das Angehängte
@@ -4938,67 +4764,44 @@ mod tests {
         }
     }
 
+    /// Die Tabelle ist die Tabelle des Backends, Zeile für Zeile, und kein
+    /// Flag der Zeile wird dafür gelesen (HUM-429). Eine Datei aus dem
+    /// Speicher hat keine Quelle auf dem Rechner, und das Ziel eines
+    /// Verweises steht in seinem eigenen Feld.
     #[test]
-    fn the_mount_table_reads_the_command_line_and_stops_at_the_double_dash() {
-        let argv: Vec<OsString> = [
-            "bwrap",
-            "--unshare-all",
-            "--ro-bind",
-            "/usr",
-            "/usr",
-            "--tmpfs",
-            "/tmp",
-            "--proc",
-            "/proc",
-            "--dev",
-            "/dev",
-            "--symlink",
-            "usr/bin",
-            "/bin",
-            "--bind",
-            "/home/u/proj",
-            "/work",
-            "--ro-bind-data",
-            "15",
-            "/work/.envrc",
-            "--clearenv",
-            "--setenv",
-            "HOME",
-            "/home/agent",
-            "--",
-            "/run/humanitl/humanitl-shim",
-            "--proxy-port",
-            "3128",
-            "--",
-            "--ro-bind",
-            "/etc/shadow",
-            "/etc/shadow",
-        ]
-        .into_iter()
-        .map(as_os)
-        .collect();
-        let mounts = mounts_of(&argv, &preview_prepared());
-        let seen: Vec<(&str, i32)> = mounts
-            .iter()
-            .map(|mount| (mount.dst.as_str(), mount.mode))
+    fn the_mount_table_is_the_policy_of_the_backend_preview() {
+        let prepared = default_prepared(false);
+        let preview = prepared.preview();
+        let mounts = prepared.shown().mounts;
+        assert_eq!(mounts.len(), preview.policy.len());
+        for (mount, row) in mounts.iter().zip(&preview.policy) {
+            assert_eq!(mount.dst, row.target.to_string_lossy(), "{row:?}");
+        }
+        for mount in &mounts {
+            match v1::MountMode::try_from(mount.mode) {
+                Ok(v1::MountMode::Masked | v1::MountMode::Tmpfs) => {
+                    assert_eq!(mount.src, "", "{}", mount.dst);
+                }
+                Ok(v1::MountMode::Symlink) => {
+                    assert_eq!(mount.src, "", "{}", mount.dst);
+                    assert!(!mount.link_target.is_empty(), "{}", mount.dst);
+                }
+                _ => assert!(mount.link_target.is_empty(), "{}", mount.dst),
+            }
+        }
+        // Nichts aus dem Befehl hinter dem `--` der Zeile wird eine Zeile.
+        let mut prepared = default_prepared(false);
+        prepared.session.command = ["--ro-bind", "/etc/shadow", "/etc/shadow"]
+            .into_iter()
+            .map(as_os)
             .collect();
-        assert_eq!(
-            seen,
-            vec![
-                ("/usr", v1::MountMode::Ro as i32),
-                ("/tmp", v1::MountMode::Tmpfs as i32),
-                ("/proc", v1::MountMode::Proc as i32),
-                ("/dev", v1::MountMode::Dev as i32),
-                ("/bin", v1::MountMode::Symlink as i32),
-                ("/work", v1::MountMode::Rw as i32),
-                ("/work/.envrc", v1::MountMode::Masked as i32),
-            ]
+        assert!(
+            prepared
+                .shown()
+                .mounts
+                .iter()
+                .all(|mount| mount.dst != "/etc/shadow")
         );
-        // Der Deskriptor einer maskierten Datei ist kein Host-Pfad.
-        let masked = mounts.last().expect("the mask is the last entry");
-        assert_eq!(masked.src, "");
-        // Und nichts hinter dem ersten `--` zählt.
-        assert!(mounts.iter().all(|mount| mount.dst != "/etc/shadow"));
     }
 
     /// Ein Dienst über einem Wegwerf-XDG mit dem mitgelieferten Profil.
@@ -5865,6 +5668,116 @@ mod tests {
         }
     }
 
+    /// Das mitgelieferte Profil `default` mit einer Sitzung, die alles
+    /// trägt, was die Tabelle kennt: eine Datei des Adapters, ein gebundenes
+    /// Programm des Agenten, eine Erweiterung des Nutzers je Art und, auf
+    /// Wunsch, die Schicht einer Wegwerf-Sandbox (HUM-429).
+    fn default_prepared(disposable: bool) -> Prepared {
+        let text = include_str!("../../../../profiles/sandbox/default.toml");
+        let mut profile = SandboxProfile::parse(text, Path::new("default.toml"))
+            .expect("the bundled profile parses");
+        profile.mounts.extra_ro.push(PathBuf::from("/opt/tools"));
+        profile.mounts.extra_rw.push(PathBuf::from("/srv/data"));
+        let mut prepared = preview_prepared();
+        prepared.profile = profile;
+        prepared.session.files = vec![humanitl_sandbox::SandboxFile {
+            dst: PathBuf::from("/etc/humanitl/opencode/models.json"),
+            content: b"{}".to_vec(),
+            mode: 0o444,
+            secret: false,
+        }];
+        prepared.session.agent_program = Some(humanitl_sandbox::agent::AgentProgram::new(
+            PathBuf::from("/home/u/.local/bin/opencode"),
+            std::ffi::OsStr::new("opencode"),
+        ));
+        if disposable {
+            prepared.overlay_preview = Some(humanitl_sandbox::OverlayDirs {
+                upper: PathBuf::from("/run/user/1000/humanitl/disposable/LAYER/upper"),
+                work: PathBuf::from("/run/user/1000/humanitl/disposable/LAYER/work"),
+            });
+        }
+        prepared
+    }
+
+    /// Ein Wert, den die Umgebungstabelle zurückhält, steht auch in der Zeile
+    /// nicht, bei jedem Backend, das Werte in der Zeile trägt; ein Wert, den
+    /// sie zeigt, bleibt stehen (HUM-429: die Stellen nennt die Vorschau,
+    /// entschieden wird nur in [`Prepared::shows`]).
+    #[test]
+    fn a_withheld_value_is_withheld_in_the_line_too() {
+        let mut prepared = default_prepared(false);
+        prepared.profile.env.insert(
+            "HTTP_PROXY".to_owned(),
+            "http://user:secret@host:1".to_owned(),
+        );
+        prepared
+            .env_origin
+            .insert("HTTP_PROXY".to_owned(), v1::ValueOrigin::User);
+        prepared
+            .env_origin
+            .insert("HOME".to_owned(), v1::ValueOrigin::Profile);
+        let shown = prepared.shown();
+        let line = shell_line(&shown.argv);
+        assert!(!line.contains("secret"), "{line}");
+        let entry = shown
+            .env
+            .iter()
+            .find(|entry| entry.key == "HTTP_PROXY")
+            .expect("the variable is in the table");
+        assert!(entry.withheld && entry.value.is_empty());
+        if cfg!(target_os = "linux") {
+            assert!(
+                line.contains(&format!("--setenv HTTP_PROXY '{WITHHELD_PLACEHOLDER}'")),
+                "{line}"
+            );
+            assert!(line.contains("--setenv HOME /home/agent"), "{line}");
+            assert_eq!(
+                prepared.shown().door,
+                "socket_file /run/humanitl/proxy.sock"
+            );
+        }
+    }
+
+    /// Die Tabelle als Text, eine Zeile je Einhängung, alle Felder.
+    #[cfg(target_os = "linux")]
+    fn mount_lines(mounts: &[v1::Mount]) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        for mount in mounts {
+            let _ = writeln!(
+                out,
+                "{} {} {} src={} link={} profile={}",
+                v1::MountMode::try_from(mount.mode).map_or("?", |mode| mode.as_str_name()),
+                v1::ValueOrigin::try_from(mount.origin).map_or("?", |origin| origin.as_str_name()),
+                mount.dst,
+                mount.src,
+                mount.link_target,
+                mount.profile_path
+            );
+        }
+        out
+    }
+
+    /// Die Mounttabelle des Profils `default` ist dieselbe wie vor HUM-429,
+    /// als die Tabelle noch aus den Flags der bwrap-Zeile gelesen wurde: Die
+    /// Erwartung ist der Stand vor dem Umbau, festgehalten in
+    /// `tests/snapshots/`. Eine Zeile mehr oder weniger, ein anderes Feld,
+    /// eine andere Reihenfolge färbt den Test rot.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_mount_table_of_the_default_profile_is_the_one_before_hum_429() {
+        for (disposable, expected) in [
+            (false, include_str!("../tests/snapshots/default.mounts.txt")),
+            (
+                true,
+                include_str!("../tests/snapshots/default-disposable.mounts.txt"),
+            ),
+        ] {
+            let shown = mount_lines(&default_prepared(disposable).shown().mounts);
+            assert_eq!(shown, expected, "disposable: {disposable}");
+        }
+    }
+
     /// Ein Profil ohne Datei, nur für die Tabellenfunktionen.
     fn preview_prepared() -> Prepared {
         let profile = SandboxProfile::parse("version = 1\nname = \"test\"\n", Path::new("<test>"))
@@ -5891,7 +5804,6 @@ mod tests {
                 .expect("this build knows auto"),
             options: LaunchOptions::default(),
             env_origin: BTreeMap::new(),
-            adapter_files: BTreeSet::new(),
             warnings: Vec::new(),
             overlay_preview: None,
             wanted_mode: SandboxMode::Direct,
@@ -5932,25 +5844,12 @@ mod tests {
         assert!(!withheld.contains("/opt/agent/bin"), "{withheld}");
     }
 
+    /// Unter bwrap sind Projekt und Proxy-Socket Einhängungen der Sitzung;
+    /// unter Seatbelt prüft das `the_snapshot_shows_seatbelt_and_never_a_linux_line`.
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_work_mount_and_the_proxy_socket_come_from_the_session() {
-        let prepared = preview_prepared();
-        let argv: Vec<OsString> = [
-            "bwrap",
-            "--ro-bind",
-            "/usr",
-            "/usr",
-            "--bind",
-            "/home/u/proj",
-            "/work",
-            "--ro-bind",
-            "/run/user/1000/humanitl/proxy/proxy.sock",
-            "/run/humanitl/proxy.sock",
-        ]
-        .into_iter()
-        .map(as_os)
-        .collect();
-        let mounts = mounts_of(&argv, &prepared);
+        let mounts = default_prepared(false).shown().mounts;
         let origin = |dst: &str| {
             mounts
                 .iter()

@@ -19,9 +19,11 @@ use humanitl_core::{Diagnostic, Severity};
 
 use crate::bwrap::BwrapBackend;
 use crate::handle::SandboxHandle;
-use crate::launcher::{CheckResult, IsolationLevel, LaunchPlan, PlanRequest, SandboxBackend};
+use crate::launcher::{
+    CheckResult, IsolationLevel, LaunchPlan, PlanPreview, PlanRequest, SandboxBackend,
+};
 #[cfg(target_os = "macos")]
-use crate::seatbelt::{SeatbeltBackend, SeatbeltPreview};
+use crate::seatbelt::SeatbeltBackend;
 
 /// Der Name von bwrap in `sandbox.backend`.
 pub const BWRAP_BACKEND: &str = "bwrap";
@@ -102,30 +104,6 @@ impl Backend {
     }
 }
 
-#[cfg(target_os = "macos")]
-impl Backend {
-    /// Was eine Sitzung unter Seatbelt täte, ohne Seiteneffekt (HUM-376).
-    ///
-    /// Übergang bis HUM-429, das die Vorschau in den Port zieht: Unter macOS
-    /// zeigen Daemon und Kommandozeile die Vorschau von Seatbelt, dem Backend
-    /// des Systems. Hält dieser Wert ein anderes Backend, zeigt sie die
-    /// Vorschau von Seatbelt mit dessen Pfaden; [`Backend::detect`] und
-    /// [`Backend::fallback`] mit [`crate::AUTO_BACKEND`] liefern unter macOS
-    /// immer Seatbelt.
-    #[must_use]
-    pub fn seatbelt_preview(
-        &self,
-        request: &PlanRequest<'_>,
-        controlling_terminal: bool,
-    ) -> SeatbeltPreview {
-        match self {
-            Self::Seatbelt(backend) => backend.preview(request, controlling_terminal),
-            Self::Bwrap(_) => SeatbeltBackend::fallback(self.paths().clone())
-                .preview(request, controlling_terminal),
-        }
-    }
-}
-
 impl From<BwrapBackend> for Backend {
     fn from(backend: BwrapBackend) -> Self {
         Self::Bwrap(backend)
@@ -150,6 +128,10 @@ impl SandboxBackend for Backend {
 
     fn disposable_support(&self, request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
         dispatch!(self, backend => backend.disposable_support(request))
+    }
+
+    fn preview(&self, request: &PlanRequest<'_>) -> PlanPreview {
+        dispatch!(self, backend => backend.preview(request))
     }
 
     fn plan(&self, request: &PlanRequest<'_>) -> Result<LaunchPlan, Diagnostic> {
@@ -225,6 +207,129 @@ mod tests {
             let err = Backend::fallback(name, without_bwrap(dir.path())).expect_err("unknown");
             assert_eq!(err.code.as_str(), "CONFIG_003", "{name:?}: {}", err.why);
         }
+    }
+
+    /// Die Vorschau von bwrap ist die Zeile der festen Vorschau-Nummern mit
+    /// Programm, die Tabelle aus derselben Übersetzung, die Umgebung die der
+    /// `--setenv`, und die Tür der Proxy-Socket als Datei (HUM-429). Ein
+    /// Terminal und die Schicht einer Wegwerf-Sandbox kommen aus den
+    /// Optionen, wie beim Start.
+    #[test]
+    fn the_bwrap_preview_is_the_translated_line_with_its_table() {
+        use crate::bwrap_args::LaunchInputs;
+        use crate::launcher::{DisposableLayer, Door, LaunchOptions, StdioMode};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let backend = Backend::fallback(BWRAP_BACKEND, without_bwrap(dir.path())).expect("bwrap");
+        let profile = crate::SandboxProfile::parse(
+            include_str!("../../../../profiles/sandbox/default.toml"),
+            Path::new("default.toml"),
+        )
+        .expect("the bundled profile");
+        let session = crate::SessionContext {
+            session: humanitl_core::ids::SessionId::nil(),
+            work_src: "/home/u/proj".into(),
+            work_mode: humanitl_config::WorkMode::Rw,
+            proxy_socket_src: "/run/user/1000/humanitl/proxy/proxy.sock".into(),
+            ca_cert_src: "/home/u/.local/share/humanitl/ca/ca.crt".into(),
+            ca_bundle_src: "/home/u/.local/share/humanitl/ca/ca-bundle.crt".into(),
+            shim_src: "/usr/lib/humanitl/humanitl-shim".into(),
+            session_env: Vec::new(),
+            command: vec!["true".into()],
+            files: Vec::new(),
+            agent_program: None,
+        };
+        let overlay = crate::OverlayDirs {
+            upper: "/run/user/1000/humanitl/disposable/LAYER/upper".into(),
+            work: "/run/user/1000/humanitl/disposable/LAYER/work".into(),
+        };
+        for (stdio, disposable) in [
+            (StdioMode::Inherit, None),
+            (
+                StdioMode::Pty { cols: 80, rows: 24 },
+                Some(DisposableLayer::Overlay(overlay.clone())),
+            ),
+        ] {
+            let terminal = stdio.pty_size().is_some();
+            let options = LaunchOptions {
+                stdio,
+                disposable: disposable.clone(),
+                ..LaunchOptions::default()
+            };
+            let preview = backend.preview(&PlanRequest::new(&profile, &session, &options));
+            let inputs = LaunchInputs::preview_with_agent_files(
+                session.files.iter().map(|file| file.dst.clone()),
+            )
+            .with_controlling_terminal(terminal)
+            .with_overlay(disposable.map(|_| overlay.clone()));
+            let line = profile.to_bwrap_line(&session, &inputs);
+            assert_eq!(preview.argv[0], backend.program().as_os_str());
+            assert_eq!(preview.argv[1..], line.args[..]);
+            assert_eq!(preview.policy, line.policy);
+            assert_eq!(preview.env, profile.effective_env(&session, Some(10)));
+            assert!(preview.backend_env.is_empty() && preview.policy_text.is_none());
+            for (key, index) in &preview.argv_env {
+                assert_eq!(preview.argv[index - 1].to_string_lossy(), key.as_str());
+            }
+            assert_eq!(
+                preview.door,
+                Door::SocketFile {
+                    host: session.proxy_socket_src.clone(),
+                    sandbox: profile.network.proxy_socket_dst.clone(),
+                }
+            );
+            assert_eq!(
+                preview.door.describe(),
+                "socket_file /run/humanitl/proxy.sock"
+            );
+            assert!(preview.limits.is_empty());
+        }
+    }
+
+    /// Zurückgehalten wird nur, wo das Backend einen Wert in der Zeile
+    /// nennt, und nur, was der Aufrufer nicht zeigen darf.
+    #[test]
+    fn withholding_replaces_exactly_the_values_the_caller_hides() {
+        use crate::launcher::{Door, PlanPreview, ResourceLimits};
+        let mut preview = PlanPreview {
+            argv: [
+                "bwrap", "--setenv", "A", "1", "--setenv", "B", "2", "--", "B",
+            ]
+            .into_iter()
+            .map(std::ffi::OsString::from)
+            .collect(),
+            policy: Vec::new(),
+            env: vec![("A".into(), "1".into()), ("B".into(), "2".into())],
+            backend_env: Vec::new(),
+            argv_env: vec![("A".into(), 3), ("B".into(), 6)],
+            policy_text: None,
+            door: Door::VsockPort {
+                host: "/run/x.sock".into(),
+                port: 1024,
+            },
+            limits: ResourceLimits::default(),
+        };
+        preview.withhold(|key| key == "A", "<withheld>");
+        let argv: Vec<String> = preview
+            .argv
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            argv,
+            [
+                "bwrap",
+                "--setenv",
+                "A",
+                "1",
+                "--setenv",
+                "B",
+                "<withheld>",
+                "--",
+                "B"
+            ]
+        );
+        assert_eq!(preview.door.describe(), "vsock_port vsock:1024");
+        assert_eq!(preview.door.kind(), "vsock_port");
     }
 
     #[test]

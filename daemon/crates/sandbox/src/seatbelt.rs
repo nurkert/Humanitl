@@ -59,7 +59,7 @@ use crate::bwrap::BwrapBackend;
 use crate::handle::SandboxHandle;
 use crate::launcher::{
     CheckResult, DisposableLayer, EnvDelivery, IsolationLevel, LaunchOnce, LaunchOptions,
-    LaunchPlan, PlanRequest, SandboxBackend, StdioMode, Teardown,
+    LaunchPlan, PlanPreview, PlanRequest, SandboxBackend, StdioMode, Teardown,
 };
 use crate::profile::{
     Bridge, BridgeDirection, CA_BUNDLE_DST, CA_CERT_DST, MountPolicy, PROXY_SOCKET_DST, SHIM_DST,
@@ -139,8 +139,7 @@ pub const MACH_SERVICES: &[&str] = &[
 mod preview;
 
 pub use preview::{
-    PREVIEW_AGENT_PORT, PREVIEW_REPORT_FD, PREVIEW_SESSION_PORT, PREVIEW_STATUS_FD, PolicyAccess,
-    PolicyRow, PolicySource, SeatbeltPreview,
+    PREVIEW_AGENT_PORT, PREVIEW_REPORT_FD, PREVIEW_SESSION_PORT, PREVIEW_STATUS_FD, SeatbeltPreview,
 };
 
 /// Die Abbildung der Sandbox-Pfade des Profils auf echte Pfade.
@@ -1296,6 +1295,15 @@ impl SandboxBackend for SeatbeltBackend {
                 request.session,
             ))
         }
+    }
+
+    /// [`SeatbeltBackend::seatbelt_preview`] in der Form des Ports: das
+    /// Profil als Regelwerk, die Tür ein Port auf `127.0.0.1`. Ein Terminal
+    /// bekommt die Sitzung wie beim Start nur am eigenen Pseudoterminal.
+    fn preview(&self, request: &PlanRequest<'_>) -> PlanPreview {
+        let controlling_terminal = request.options.stdio.pty_size().is_some();
+        self.seatbelt_preview(request, controlling_terminal)
+            .into_plan_preview(&request.session.proxy_socket_src)
     }
 
     fn plan(&self, request: &PlanRequest<'_>) -> Result<LaunchPlan, Diagnostic> {
