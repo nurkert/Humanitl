@@ -59,6 +59,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-451 | Integrationstest: ein Daemon, der die Shell-Tür nicht mehr liest, hält weder Lebensleine noch Agent auf | S | HUM-430 |
 | HUM-452 | Podman: ein Container, dessen Client ungeplant endet, wird sofort entfernt, nicht erst beim nächsten Stopp | S | HUM-433 |
 | HUM-453 | Podman: `/sys` des Rechners ist im Container verdeckt wie unter bwrap | S | HUM-433 |
+| HUM-454 | Podman: die `mounts.conf` des Nutzers erreicht keinen Container | S | HUM-433 |
 | HUM-450 | `humanitl sandbox argv` hält zurückgehaltene Werte auch in der CLI zurück | S | HUM-429 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
@@ -718,3 +719,41 @@ Rechner als unter bwrap; Podman darf in keiner Hinsicht schwächer isolieren.
 
 ### Akzeptanzkriterien
 1. `esc-2/no_host_sys` ist unter Podman grün.
+
+## HUM-454 · Podman: the user's `mounts.conf` reaches no container
+
+### Kontext
+Der erste CI-Lauf von `escape-tests-podman` (HUM-435, 2026-11-12, Podman
+4.9.3) war rot in `esc-2/no_engine_secrets` und im Live-Test
+`the_users_configuration_does_not_reach_the_container`: Eine
+`~/.config/containers/mounts.conf`, die ein Prozess desselben Nutzers anlegt
+(THREAT-MODEL K-27), hängt ihre Quellen in jede Sandbox ein. Der Eintrag
+`default_mounts_file` in der `containers.conf` des Adapters hält sie nicht
+fern, weder unter 4.9.3 noch unter 5.8.6 (Diagnose auf dem Zweig
+`hum-435-diag` und lokal): Podman liest die Datei des Nutzers zusätzlich.
+Allein das globale Flag `--default-mounts-file` ersetzt die Liste. Eine
+`mounts.conf` kann jedes Ziel nennen, ein tmpfs über `/run/secrets` genügt
+deshalb nicht. Lokal blieb die Suite grün, weil dort keine solche Datei lag;
+der Live-Test prüfte nur den Weg über `CONTAINERS_CONF_OVERRIDE`, den der
+Adapter ohnehin entfernt.
+
+### Spezifikation
+1. Jede Startzeile des Adapters (`podman run`, der einzige Aufruf, der einen
+   Container anlegt) trägt `--default-mounts-file=<leere Datei des Adapters>`
+   als globales Flag vor `run`; der Eintrag in der `containers.conf` bleibt
+   als zweite Linie.
+2. `docs/SECURITY.md` Abschnitt 13 (en, de) nennt das Flag und warum der
+   Eintrag in der Konfiguration nicht genügt.
+
+### Tests
+- Unit: jeder Befehl des Adapters trägt das Flag vor dem Unterbefehl.
+  Mutationsbeweis: ohne das Flag rot.
+- Live: `the_users_configuration_does_not_reach_the_container` im CI-Job
+  `escape-tests-podman`, nach der gepflanzten `~/.config/containers/mounts.conf`
+  des Runners (HUM-435); ein eigenes `HOME` im Test gäbe Podman einen zweiten
+  Speicher neben dem `runroot` des Nutzers. Mutationsbeweis: ohne das Flag rot
+  (der Lauf vor diesem Issue, 2026-11-12).
+
+### Akzeptanzkriterien
+1. `esc-2/no_engine_secrets` und der Live-Test sind unter Podman 4.9 (CI) und
+   5.x (lokal) grün.
