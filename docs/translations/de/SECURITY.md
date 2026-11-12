@@ -1703,6 +1703,11 @@ samt Zugangsdaten in den Container), `--memory`, `--cpus` und `--pids-limit` aus
 Kein `-e`, kein `-t`, kein `--privileged`, kein anderes Netz, keine zusätzliche Capability, kein
 Gerät, kein Umetikettieren.
 
+Podman hängt `/sys` des Rechners in jeden Container nur lesbar ein, darunter ein eigenes
+`/sys/fs/cgroup`; bwrap gibt keines. Der Adapter legt über beide ein leeres, nur lesbares tmpfs
+(die Grenzen der cgroup gelten weiter, sie hängen nicht an der Einhängung), damit der Agent nicht
+mehr vom Rechner sieht als unter bwrap (`esc-2/no_host_sys`, HUM-453).
+
 ### Was der Daemon nicht schreibt, erreicht Podman nicht
 
 Podman liest viel mehr als seine Zeile: `containers.conf` in jeder Ebene, `mounts.conf` (das in

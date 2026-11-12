@@ -218,6 +218,9 @@ pub(crate) enum MountKind {
     },
     /// Ein leeres tmpfs.
     Tmpfs,
+    /// Ein leeres, nur lesbares tmpfs über einem Pfad, den die Engine selbst
+    /// einhängt und den das Profil nicht vorsieht (HUM-453: `/sys`).
+    Hidden,
 }
 
 /// Eine Einhängung.
@@ -248,6 +251,10 @@ impl Mount {
             }
             MountKind::Tmpfs => format!(
                 "type=tmpfs,destination={},tmpfs-mode={TMPFS_MODE},notmpcopyup",
+                self.dst.display()
+            ),
+            MountKind::Hidden => format!(
+                "type=tmpfs,destination={},ro,tmpfs-mode=0555,notmpcopyup",
                 self.dst.display()
             ),
         }
@@ -331,6 +338,22 @@ impl Collector<'_> {
         });
     }
 
+    /// Verdeckt einen Pfad, den die Engine von sich aus einhängt, mit einem
+    /// leeren, nur lesbaren tmpfs.
+    fn hide(&mut self, dst: &Path) {
+        let origin = self.origin(dst);
+        self.rows.push(PolicyRow::new(
+            PolicyMode::Masked,
+            None,
+            dst.to_path_buf(),
+            origin,
+        ));
+        self.mounts.push(Mount {
+            kind: MountKind::Hidden,
+            dst: dst.to_path_buf(),
+        });
+    }
+
     fn tmpfs(&mut self, dst: &Path) {
         let origin = self.origin(dst);
         self.rows.push(PolicyRow::new(
@@ -393,6 +416,14 @@ pub(crate) fn mounts(
     if let Some(dev) = profile.mounts.dev.as_deref() {
         out.row(PolicyMode::Dev, dev);
     }
+    // Podman hängt `/sys` des Rechners nur lesbar ein; unter bwrap gibt es
+    // es gar nicht. Ein leeres tmpfs darüber hält die Sandbox so blind wie
+    // unter bwrap (`esc-2/no_host_sys`, gemessen 2026-11-12).
+    out.hide(Path::new("/sys"));
+    // Podman hängt darunter `/sys/fs/cgroup` eigens ein (Eltern vor Kindern
+    // sortiert); ein tmpfs über `/sys` allein verdeckt es nicht. Die Grenzen
+    // der cgroup gelten trotzdem, sie hängen nicht an der Einhängung.
+    out.hide(Path::new("/sys/fs/cgroup"));
     let work_dst = profile.mounts.work.dst.as_path();
     let (under_work, elsewhere): (Vec<&PathBuf>, Vec<&PathBuf>) = profile
         .mounts
@@ -511,7 +542,7 @@ pub(crate) fn skeleton(profile: &SandboxProfile, mounts: &[Mount]) -> BTreeSet<E
         };
         add_parents(&mut entries, rel);
         let dir = match &mount.kind {
-            MountKind::Tmpfs => true,
+            MountKind::Tmpfs | MountKind::Hidden => true,
             MountKind::Bind { dir, .. } => *dir,
         };
         entries.insert(if dir {
@@ -881,6 +912,36 @@ mod tests {
             .filter(|mount| matches!(mount.kind, MountKind::Bind { writable: true, .. }))
             .collect();
         assert_eq!(writable.len(), 1, "only /work: {writable:?}");
+    }
+
+    /// Podman hängt `/sys` des Rechners und darunter `/sys/fs/cgroup` ein,
+    /// bwrap nichts davon: Jede Zeile verdeckt beide mit einem leeren, nur
+    /// lesbaren tmpfs, das Kind nach dem Eltern, und die Vorschau nennt
+    /// beide maskiert (HUM-453).
+    #[test]
+    fn every_line_hides_the_hosts_sys() {
+        for argv in all_lines() {
+            let engine = engine_part(&argv);
+            let at = |dst: &str| {
+                let want =
+                    format!("--mount=type=tmpfs,destination={dst},ro,tmpfs-mode=0555,notmpcopyup");
+                engine.iter().position(|arg| *arg == want)
+            };
+            let sys = at("/sys").unwrap_or_else(|| panic!("/sys: {argv:?}"));
+            let cgroup = at("/sys/fs/cgroup").unwrap_or_else(|| panic!("cgroup: {argv:?}"));
+            assert!(sys < cgroup, "the parent first: {argv:?}");
+        }
+        let profile = profile();
+        let session = session();
+        let sources = sources(&profile, &session);
+        let (_, rows) = mounts(&profile, &session, &sources, None, &|_| true, false);
+        for dst in ["/sys", "/sys/fs/cgroup"] {
+            assert!(
+                rows.iter()
+                    .any(|row| row.mode == PolicyMode::Masked && row.target == Path::new(dst)),
+                "{dst} masked in the preview: {rows:?}"
+            );
+        }
     }
 
     /// Masken und tmpfs unter `/work` nur auf vorhandenen Pfaden; was fehlt,

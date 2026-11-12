@@ -1891,6 +1891,10 @@ namespaces, `--userns=keep-id`, `--read-only` without the engine's tmpfs on `/ru
 `--http-proxy=false` (without it Podman copies the daemon's proxy variables, credentials included,
 into the container), `--memory`, `--cpus` and `--pids-limit` from `sandbox.podman`. No `-e`, no
 `-t`, no `--privileged`, no other network, no added capability, no device, no relabelling.
+Podman mounts the host's `/sys` read-only into every container, with its own `/sys/fs/cgroup`
+beneath; bwrap gives none. The adapter lays an empty read-only tmpfs over both (the cgroup limits
+still hold, they do not depend on the mount), so the agent sees no more of the host than under bwrap
+(`esc-2/no_host_sys`, HUM-453).
 
 ### Configuration the daemon does not write is cut off
 
