@@ -196,11 +196,14 @@ abstract class DaemonClient {
   /// (HUM-075).
   ///
   /// The eleven checks live in `humanitl_sandbox::doctor` and nowhere else;
-  /// this call fetches their verdict. It contacts nothing on the network:
-  /// `rpc Doctor(Empty)` has no field in which a client could ask for a
-  /// connection, so opening a screen never opens one either. The `llm` line
-  /// therefore always arrives as "not contacted" and is measured with
-  /// [probeLlm] when a person asks.
+  /// this call fetches their verdict, and since HUM-436 one group of lines
+  /// per sandbox backend. It contacts nothing on the network: `DoctorRequest`
+  /// has no field in which a client could ask for a connection, so opening a
+  /// screen never opens one either. The `llm` line therefore always arrives
+  /// as "not contacted" and is measured with [probeLlm] when a person asks.
+  /// The app never sets `DoctorRequest.probe`: opening a screen starts no
+  /// sandbox; a probe start remembered from `humanitl doctor --probe` still
+  /// shows in its group.
   Future<DoctorReport> doctor();
 
   /// `ProbeLlm`: asks exactly the endpoint the caller names (HUM-039).

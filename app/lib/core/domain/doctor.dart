@@ -91,12 +91,46 @@ abstract class DoctorCheck with _$DoctorCheck {
   bool get isFailure => status == DoctorStatus.fail;
 }
 
+/// The lines of one sandbox backend, mirror of `DoctorBackend` (HUM-436).
+///
+/// Whether the backend is admitted, whether it passes the search before
+/// every start, what it lacks, and the probe start when one ran. The lines of
+/// a backend `sandbox.backend` does not choose are at most `warn` -- the
+/// daemon decides that, not this file.
+@freezed
+abstract class DoctorBackendGroup with _$DoctorBackendGroup {
+  /// Creates a group.
+  const factory DoctorBackendGroup({
+    required String name,
+    @Default('') String stage,
+    @Default(false) bool selected,
+    @Default(<DoctorCheck>[]) List<DoctorCheck> checks,
+  }) = _DoctorBackendGroup;
+
+  const DoctorBackendGroup._();
+
+  /// The worst status of the group; [DoctorStatus.ok] for an empty one.
+  DoctorStatus get worst {
+    DoctorStatus worst = DoctorStatus.ok;
+    for (final DoctorCheck check in checks) {
+      if (check.status.index > worst.index) {
+        worst = check.status;
+      }
+    }
+    return worst;
+  }
+}
+
 /// The whole report, in display order, mirror of `DoctorReport`.
 @freezed
 abstract class DoctorReport with _$DoctorReport {
   /// Creates a report.
   const factory DoctorReport({
     @Default(<DoctorCheck>[]) List<DoctorCheck> checks,
+
+    /// One group per sandbox backend (HUM-436); empty from a daemon before
+    /// proto minor 35.
+    @Default(<DoctorBackendGroup>[]) List<DoctorBackendGroup> backends,
   }) = _DoctorReport;
 
   const DoctorReport._();
@@ -141,6 +175,29 @@ abstract class DoctorReport with _$DoctorReport {
     }
     return null;
   }
+}
+
+/// The identifiers of the lines in a backend group (HUM-436,
+/// `humanitl_sandbox::doctor::BackendCheckId`). A line this build does not
+/// know keeps its identifier as its heading.
+abstract final class DoctorBackendCheckId {
+  /// Is the level admitted (`SANDBOX_048` while it is not)?
+  static const String admitted = 'admitted';
+
+  /// Does the backend pass the search before every start?
+  static const String available = 'available';
+
+  /// Is the program there? Only for a level not admitted yet.
+  static const String program = 'program';
+
+  /// Has the account subordinate IDs? Only for a level not admitted yet.
+  static const String subordinateIds = 'subordinate_ids';
+
+  /// Does SELinux enforce labels? Only for a level not admitted yet.
+  static const String selinux = 'selinux';
+
+  /// Did the probe start pass?
+  static const String probe = 'probe';
 }
 
 /// The identifiers of the eleven checks, in the order the daemon reports them

@@ -132,6 +132,29 @@ String doctorCheckTitle(
   _ => id,
 };
 
+/// The word of one line in a backend group, in the person's language
+/// (HUM-436, `humanitl_sandbox::doctor::BackendCheckId`). A line this build
+/// does not know keeps its identifier as its heading.
+String doctorBackendCheckTitle(AppLocalizations l10n, String id) =>
+    switch (id) {
+      DoctorBackendCheckId.admitted => l10n.doctorBackendCheckAdmitted,
+      DoctorBackendCheckId.available => l10n.doctorBackendCheckAvailable,
+      DoctorBackendCheckId.program => l10n.doctorBackendCheckProgram,
+      DoctorBackendCheckId.subordinateIds =>
+        l10n.doctorBackendCheckSubordinateIds,
+      DoctorBackendCheckId.selinux => l10n.doctorBackendCheckSelinux,
+      DoctorBackendCheckId.probe => l10n.doctorBackendCheckProbe,
+      _ => id,
+    };
+
+/// The heading of a backend group: its level, marked when
+/// `sandbox.backend` chooses it. The level is a technical name and stays
+/// untranslated.
+String doctorBackendHeading(AppLocalizations l10n, DoctorBackendGroup group) {
+  final String stage = group.stage.isEmpty ? group.name : group.stage;
+  return group.selected ? l10n.setupBackendChosen(stage) : stage;
+}
+
 bool _macOS(TargetPlatform? platform) =>
     (platform ?? defaultTargetPlatform) == TargetPlatform.macOS;
 
@@ -152,6 +175,25 @@ List<DoctorCheck> shownDoctorChecks(
         (check.id != DoctorCheckId.userns && check.id != DoctorCheckId.seccomp))
       check,
 ];
+
+/// The state a backend group stands in, ranked like the machine row: a
+/// failing line first, then a line without a measurement, then a warning
+/// (HUM-436). A group without lines was not measured.
+SetupCheckState doctorGroupState(DoctorBackendGroup group) {
+  final List<SetupCheckState> states = <SetupCheckState>[
+    for (final DoctorCheck line in group.checks) doctorLineState(line),
+  ];
+  for (final SetupCheckState state in <SetupCheckState>[
+    SetupCheckState.failed,
+    SetupCheckState.unmeasured,
+    SetupCheckState.warn,
+  ]) {
+    if (states.contains(state)) {
+      return state;
+    }
+  }
+  return states.isEmpty ? SetupCheckState.unmeasured : SetupCheckState.ok;
+}
 
 /// The state one doctor line stands in, in the vocabulary of the four rows.
 ///

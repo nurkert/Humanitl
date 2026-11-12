@@ -312,5 +312,6 @@ abstract final class DiagnosticL10n {
   'SANDBOX_040' => (l10n.diagSANDBOX040Title, l10n.diagSANDBOX040Why),
   'SANDBOX_041' => (l10n.diagSANDBOX041Title, l10n.diagSANDBOX041Why),
   'SANDBOX_044' => (l10n.diagSANDBOX044Title, l10n.diagSANDBOX044Why),
+  'DOCTOR_014' => (l10n.diagDOCTOR014Title, l10n.diagDOCTOR014Why),
   _ => null,
 };

@@ -419,14 +419,16 @@ pub enum KeyCmd {
 
 /// Die Argumente von `humanitl doctor`.
 ///
-/// `--json` steht schon global bereit; hier bleibt der eine Schalter, der eine
-/// Verbindung ins Netz auslöst.
+/// `--json` steht schon global bereit; hier bleiben der Schalter, der eine
+/// Verbindung ins Netz auslöst, und der, der je Backend eine Sandbox startet
+/// (HUM-436).
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
-    // Der Schalter heißt nicht `--probe` und nicht `--llm`: `--llm` ist nach
-    // [`SHORT_FLAGS`] der Zweitname von `--llm-endpoint` und **setzt** die
-    // Adresse, statt sie zu prüfen. Der Text des Doc-Kommentars ist der
-    // Hilfetext von `clap` und deshalb englisch (CONVENTIONS.md 3.9).
+    // Der Schalter heißt nicht `--llm`: `--llm` ist nach [`SHORT_FLAGS`] der
+    // Zweitname von `--llm-endpoint` und **setzt** die Adresse, statt sie zu
+    // prüfen. `--probe` gehört seit HUM-436 dem Probestart der Backends. Der
+    // Text des Doc-Kommentars ist der Hilfetext von `clap` und deshalb
+    // englisch (CONVENTIONS.md 3.9).
     /// Contact llm.endpoint as part of the report; without this, doctor opens
     /// no connection at all.
     ///
@@ -436,6 +438,15 @@ pub struct DoctorArgs {
     /// prefix), no credentials, no redirects.
     #[arg(long)]
     pub probe_llm: bool,
+    /// Start an empty sandbox with the shim and `true` under every admitted,
+    /// available sandbox backend and check its five CHECK lines; without
+    /// this, doctor starts nothing.
+    ///
+    /// A passed probe is remembered until the version of the backend's
+    /// program or of Humanitl changes. A backend that is not admitted yet is
+    /// never started; its probe line says `SANDBOX_048`.
+    #[arg(long)]
+    pub probe: bool,
 }
 
 /// Die Argumente von `humanitl run`.

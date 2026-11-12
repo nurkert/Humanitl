@@ -743,6 +743,8 @@ impl DaemonApi for FakeDaemon {
                     ))
                 })
                 .collect(),
+            // Der Fake hat keine Backends, die er fragen könnte (HUM-436).
+            backends: Vec::new(),
         }
     }
 

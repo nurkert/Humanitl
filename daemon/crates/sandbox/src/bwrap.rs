@@ -223,6 +223,13 @@ impl BwrapBackend {
         self.version
     }
 
+    /// Die Fassung als Text, für den Zwischenspeicher des Probestarts
+    /// (HUM-436).
+    #[must_use]
+    pub fn tool_version(&self) -> String {
+        self.version.to_string()
+    }
+
     /// Die Pfade, gegen die geplant wird.
     #[must_use]
     pub const fn paths(&self) -> &Paths {

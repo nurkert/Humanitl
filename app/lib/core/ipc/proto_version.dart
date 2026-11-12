@@ -105,8 +105,12 @@ abstract final class ProtoVersion {
   /// with `assign` and reads `LlmServerList.profiles` and `.project`, and the
   /// start asks once with `confirm_project` while
   /// `LlmServerChoice.unconfirmed` is set (HUM-405).
+  /// Raised to 35 with the doctor per sandbox backend: the machine row
+  /// reads `DoctorReport.backends` and shows the lines grouped by backend
+  /// (HUM-436). The number covers 33 and 34 as well, which were not raised
+  /// here on their own.
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 32;
+  static const int minor = 35;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

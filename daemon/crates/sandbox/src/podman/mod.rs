@@ -77,6 +77,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::backend::PODMAN_BACKEND;
 use crate::bwrap::{BwrapBackend, PinnedMounts, Version, isolation_from_report, launch_plan};
+use crate::doctor::BackendCheckId;
 use crate::handle::SandboxHandle;
 use crate::launcher::{
     CheckResult, ContainerStop, Door, EnvDelivery, IsolationLevel, LaunchOnce, LaunchPlan,
@@ -249,6 +250,13 @@ impl PodmanBackend {
     #[must_use]
     pub fn program(&self) -> &Path {
         &self.program
+    }
+
+    /// Die Fassung als Text, für den Zwischenspeicher des Probestarts
+    /// (HUM-436).
+    #[must_use]
+    pub fn tool_version(&self) -> String {
+        self.version.to_string()
     }
 
     /// Die gefundene Fassung.
@@ -466,6 +474,49 @@ fn refuse_kernel_level(runtime: PodmanRuntime) -> Result<(), Diagnostic> {
             value: detect::CRUN.to_owned(),
         })
         .build())
+}
+
+/// Die Voraussetzungen aus [`PodmanBackend::detect`], die sich prüfen lassen,
+/// ohne Podman zu starten, als Zeilen des Doctors (HUM-436): das Programm
+/// (`SANDBOX_034` mit dem Installationsbefehl samt `uidmap`), die
+/// untergeordneten IDs samt `newuidmap` und `newgidmap` (`SANDBOX_039`) und
+/// `SELinux` (`SANDBOX_044`). Fassung, rootless, Laufzeit und Controller sagt
+/// nur Podman selbst; die fragt erst [`PodmanBackend::detect`], also erst nach
+/// der Zulassung. Für ein anderes Backend als dieses: keine Zeile.
+///
+/// Je Zeile die Kennung und bei Erfolg der Beleg, sonst der Befund.
+pub(crate) fn static_lines(
+    name: &str,
+    paths: &Paths,
+    sandbox: &humanitl_config::SandboxRef,
+) -> Vec<(BackendCheckId, Result<String, Diagnostic>)> {
+    if name != PODMAN_BACKEND {
+        return Vec::new();
+    }
+    let read = |path: &str| std::fs::read_to_string(path).unwrap_or_default();
+    vec![
+        (
+            BackendCheckId::Program,
+            detect::find_program(&sandbox.podman, paths.env())
+                .map(|program| program.display().to_string()),
+        ),
+        (
+            BackendCheckId::SubordinateIds,
+            detect::check_subordinate_ids(
+                &detect::Account::of_this_process(),
+                &read("/etc/subuid"),
+                &read("/etc/subgid"),
+                &detect::missing_id_tools(paths.env()),
+                crate::os_release::PackageManager::detect(),
+            )
+            .map(|()| "65536 subordinate IDs, newuidmap and newgidmap".to_owned()),
+        ),
+        (
+            BackendCheckId::Selinux,
+            detect::check_selinux(detect::selinux_enforce().as_deref())
+                .map(|()| "SELinux does not enforce labels".to_owned()),
+        ),
+    ]
 }
 
 /// `SANDBOX_030`: Die Wegwerf-Sandbox unter Podman kommt mit HUM-438.
@@ -1132,3 +1183,6 @@ pub(crate) fn find_leftovers(paths: &Paths, config: &PodmanConfig) -> Leftovers 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, target_os = "linux"))]
+mod doctor_tests;

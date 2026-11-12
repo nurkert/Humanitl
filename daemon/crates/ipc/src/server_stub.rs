@@ -609,7 +609,10 @@ impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
     }
 
-    async fn doctor(&self, request: Request<()>) -> Result<Response<v1::DoctorReport>, Status> {
+    async fn doctor(
+        &self,
+        request: Request<v1::DoctorRequest>,
+    ) -> Result<Response<v1::DoctorReport>, Status> {
         self.check_token(&request)?;
         Ok(Response::new(self.api.doctor().await))
     }

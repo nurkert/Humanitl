@@ -40,7 +40,7 @@ use humanitl_recorder::{
     DiagnosticRecord, Dir, FindingRecord, FlowDetail as RecordedDetail,
     FlowSummary as RecordedSummary, MessageRecord,
 };
-use humanitl_sandbox::doctor::{CheckOutcome, CheckStatus, DoctorReport};
+use humanitl_sandbox::doctor::{BackendGroup, CheckOutcome, CheckStatus, DoctorReport};
 use humanitl_sandbox::summary::{
     ChangeKind, FileChangeRecord, ScanSkip, SessionSummary, SummaryFinding, SymlinkEscape,
 };
@@ -430,14 +430,32 @@ pub fn found_to_proto(found: &Found) -> v1::DiscoverResult {
 pub fn doctor_report_to_proto(report: &DoctorReport) -> v1::DoctorReport {
     v1::DoctorReport {
         checks: report.checks.iter().map(doctor_check_to_proto).collect(),
+        backends: Vec::new(),
     }
 }
 
-/// Übersetzt eine Zeile des Doctors in ihre Wire-Form.
+/// Übersetzt die Gruppen je Sandbox-Backend in ihre Wire-Form (HUM-436).
 #[must_use]
-pub fn doctor_check_to_proto(outcome: &CheckOutcome) -> v1::DoctorCheck {
+pub fn doctor_backends_to_proto(groups: &[BackendGroup]) -> Vec<v1::DoctorBackend> {
+    groups
+        .iter()
+        .map(|group| v1::DoctorBackend {
+            name: group.name.to_owned(),
+            stage: group.stage.clone(),
+            selected: group.selected,
+            checks: group.checks.iter().map(doctor_check_to_proto).collect(),
+        })
+        .collect()
+}
+
+/// Übersetzt eine Zeile des Doctors in ihre Wire-Form, ob sie zur Maschine
+/// gehört oder zu einem Backend.
+#[must_use]
+pub fn doctor_check_to_proto<I: Copy + std::fmt::Display>(
+    outcome: &CheckOutcome<I>,
+) -> v1::DoctorCheck {
     v1::DoctorCheck {
-        id: outcome.id().as_str().to_owned(),
+        id: outcome.id().to_string(),
         status: check_status_to_proto(outcome.status()) as i32,
         evidence: sanitize_note(outcome.evidence()),
         diagnostic: outcome.diagnostic().map(diagnostic_to_proto),

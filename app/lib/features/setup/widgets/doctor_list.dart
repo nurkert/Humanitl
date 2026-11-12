@@ -25,13 +25,27 @@ import '../providers/setup_provider.dart';
 import '../setup_text.dart';
 import 'setup_check_row.dart';
 
+/// The heading of a line, by its identifier.
+typedef DoctorTitle = String Function(AppLocalizations l10n, String id);
+
 /// The list of doctor lines.
 class DoctorList extends StatelessWidget {
   /// Creates the list for [checks].
-  const DoctorList({required this.checks, super.key});
+  const DoctorList({
+    required this.checks,
+    this.titleOf = _machineTitle,
+    super.key,
+  });
 
   /// The lines, in the order the daemon sent them.
   final List<DoctorCheck> checks;
+
+  /// The heading of each line: the machine's words by default, the words of
+  /// a backend group for its lines (HUM-436).
+  final DoctorTitle titleOf;
+
+  static String _machineTitle(AppLocalizations l10n, String id) =>
+      doctorCheckTitle(l10n, id);
 
   @override
   Widget build(BuildContext context) {
@@ -47,7 +61,8 @@ class DoctorList extends StatelessWidget {
       key: const Key('setup-doctor-list'),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        for (final DoctorCheck check in checks) _DoctorRow(check: check),
+        for (final DoctorCheck check in checks)
+          _DoctorRow(check: check, titleOf: titleOf),
       ],
     );
   }
@@ -55,9 +70,11 @@ class DoctorList extends StatelessWidget {
 
 /// One line: mark, heading, evidence, and the finding when there is one.
 class _DoctorRow extends StatelessWidget {
-  const _DoctorRow({required this.check});
+  const _DoctorRow({required this.check, required this.titleOf});
 
   final DoctorCheck check;
+
+  final DoctorTitle titleOf;
 
   @override
   Widget build(BuildContext context) {
@@ -78,7 +95,7 @@ class _DoctorRow extends StatelessWidget {
               SizedBox(
                 width: headingWidth,
                 child: Text(
-                  doctorCheckTitle(l10n, check.id),
+                  titleOf(l10n, check.id),
                   key: Key('doctor-title-${check.id}'),
                   style: tokens.typography.ui12.tinted(tokens.colors.fg0),
                   maxLines: 2,

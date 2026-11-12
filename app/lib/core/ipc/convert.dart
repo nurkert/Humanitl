@@ -939,6 +939,22 @@ extension DoctorReportToDomain on pb.DoctorReport {
     checks: List<DoctorCheck>.unmodifiable(
       checks.map((pb.DoctorCheck check) => check.toDomain()),
     ),
+    backends: List<DoctorBackendGroup>.unmodifiable(
+      backends.map((pb.DoctorBackend group) => group.toDomain()),
+    ),
+  );
+}
+
+/// `DoctorBackend` to [DoctorBackendGroup] (HUM-436).
+extension DoctorBackendToDomain on pb.DoctorBackend {
+  /// The domain form, its lines in the order the daemon sent them.
+  DoctorBackendGroup toDomain() => DoctorBackendGroup(
+    name: name,
+    stage: stage,
+    selected: selected,
+    checks: List<DoctorCheck>.unmodifiable(
+      checks.map((pb.DoctorCheck check) => check.toDomain()),
+    ),
   );
 }
 
