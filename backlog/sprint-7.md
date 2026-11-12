@@ -58,6 +58,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-447 | Doku der Kernel-Stufe, Oberfläche schaltet `krun` frei | S | HUM-449 |
 | HUM-451 | Integrationstest: ein Daemon, der die Shell-Tür nicht mehr liest, hält weder Lebensleine noch Agent auf | S | HUM-430 |
 | HUM-452 | Podman: ein Container, dessen Client ungeplant endet, wird sofort entfernt, nicht erst beim nächsten Stopp | S | HUM-433 |
+| HUM-453 | Podman: `/sys` des Rechners ist im Container verdeckt wie unter bwrap | S | HUM-433 |
 | HUM-450 | `humanitl sandbox argv` hält zurückgehaltene Werte auch in der CLI zurück | S | HUM-429 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
@@ -692,3 +693,28 @@ Bestandsaufnahme beim nächsten Start des Daemons; der normale Endpfad in
 
 ### Fallstricke
 - Nicht doppelt entfernen, wenn gleichzeitig ein Stopp läuft.
+
+---
+
+## HUM-453 · Podman: the host's `/sys` is hidden in the container, as under bwrap
+
+### Kontext
+Der erste Lauf der Escape-Suite gegen Podman (HUM-435, 2026-11-12) war rot
+in `esc-2/no_host_sys`: Podman hängt `/sys` des Rechners in jeden Container
+nur lesbar ein, bwrap gibt keines. Der Agent sähe unter Podman mehr vom
+Rechner als unter bwrap; Podman darf in keiner Hinsicht schwächer isolieren.
+
+### Spezifikation
+1. Jede Startzeile des Podman-Adapters legt je ein leeres, nur lesbares tmpfs
+   über `/sys` und über Podmans eigenes `/sys/fs/cgroup` darunter; die
+   Vorschau zeigt beide als maskiert. Die Grenzen der cgroup gelten weiter.
+2. `docs/SECURITY.md` Abschnitt 13 (en, de) nennt es.
+
+### Tests
+- Unit: jede Zeile trägt das tmpfs über `/sys`. Mutationsbeweis: ohne den
+  Aufruf rot.
+- Live: die Podman-Tests bleiben grün; `esc-2/no_host_sys` wird unter
+  Podman grün (Lauf in HUM-435).
+
+### Akzeptanzkriterien
+1. `esc-2/no_host_sys` ist unter Podman grün.
