@@ -1054,7 +1054,18 @@ fn an_unknown_flag_is_exit_one_not_the_two_of_clap() {
 #[test]
 fn sandbox_argv_is_the_translation_of_the_profile() {
     let harness = Harness::new();
-    let output = harness.run(["sandbox", "argv", "--", "sh", "-c", "echo hello world"]);
+    // Die Profile dieser Umgebung liegen im Verzeichnis des Nutzers und gelten
+    // als von Hand geschrieben; ihre Werte stehen nur mit `--show-values` in
+    // der Zeile (HUM-450). Verglichen wird hier die ganze Übersetzung.
+    let output = harness.run([
+        "sandbox",
+        "argv",
+        "--show-values",
+        "--",
+        "sh",
+        "-c",
+        "echo hello world",
+    ]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 
     let printed = stdout(&output);
@@ -1936,6 +1947,46 @@ fn sandbox_check_shows_the_three_guarantees() {
     assert_eq!(text.matches('✓').count(), 3, "{text}");
 }
 
+/// `sandbox check -v` zeigt die Zeile des echten Plans und hält darin
+/// dieselben Werte zurück wie `sandbox argv` (HUM-450). Ohne
+/// `withheld_plan_line` steht das Passwort aus `sandbox.env` auf stderr, und
+/// der Test wird rot.
+// Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
+#[cfg(target_os = "linux")]
+#[test]
+fn sandbox_check_verbose_withholds_a_hidden_value() {
+    use humanitl_ipc::sandbox::WITHHELD_PLACEHOLDER;
+
+    let Some(_shim) = sandbox_required() else {
+        return;
+    };
+    let harness = Harness::new();
+    let config_dir = harness.path("config").join("humanitl");
+    std::fs::create_dir_all(&config_dir).expect("the config directory");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        "[sandbox.env]\nHTTP_PROXY = \"http://user:s3cret@proxy.example:3128\"\n",
+    )
+    .expect("the config file");
+
+    let output = harness.run(["-v", "sandbox", "check"]);
+    let (out, err) = (stdout(&output), stderr(&output));
+    assert!(
+        !out.contains("s3cret") && !err.contains("s3cret"),
+        "{out}\n{err}"
+    );
+    let line = err
+        .lines()
+        .find_map(|line| line.strip_prefix("argv: "))
+        .unwrap_or_else(|| panic!("-v prints the line of the plan: {err}"));
+    let parts = shlex::split(line).expect("the line is one shell command");
+    let value = parts
+        .windows(3)
+        .find(|window| window[0] == "--setenv" && window[1] == "HTTP_PROXY")
+        .map(|window| window[2].as_str());
+    assert_eq!(value, Some(WITHHELD_PLACEHOLDER), "{line}");
+}
+
 // Braucht das Linux-Sandbox-Backend; unter CI wäre sein Fehlen ein Fehler (HUM-312).
 #[cfg(target_os = "linux")]
 #[test]
@@ -2203,7 +2254,9 @@ fn sandbox_env_from_the_config_reaches_the_argv() {
     )
     .expect("the config file");
 
-    let output = harness.run(["--json", "sandbox", "argv"]);
+    // Ein Wert aus `sandbox.env` ist von Hand geschrieben und steht nur auf
+    // ausdrücklichen Wunsch in der Zeile (HUM-450).
+    let output = harness.run(["--json", "sandbox", "argv", "--show-values"]);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     let value: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("JSON");
     let line = value["argv_line"].as_str().expect("an argv line");
@@ -2215,6 +2268,88 @@ fn sandbox_env_from_the_config_reaches_the_argv() {
         !line.contains("--setenv CURL_CA_BUNDLE /etc/humanitl/ca.crt"),
         "the value of the profile must not survive next to it: {line}"
     );
+}
+
+/// Der Wert hinter `--setenv NAME` in einer Kommandozeile der Vorschau.
+#[cfg(not(target_os = "macos"))]
+fn setenv_value<'a>(argv: &'a [String], name: &str) -> Option<&'a str> {
+    argv.windows(3)
+        .find(|window| window[0] == "--setenv" && window[1] == name)
+        .map(|window| window[2].as_str())
+}
+
+/// `sandbox argv` hält zurück, was die Vorschau im Daemon zurückhält, in
+/// Text und JSON, mit demselben Platzhalter; `--show-values` zeigt den Wert
+/// (HUM-450). Ohne `withhold_hidden` in `sandbox argv` steht das Passwort in
+/// beiden Ausgaben, und der Test wird rot.
+// Unter macOS steht die Umgebung nicht in der Zeile von `sandbox-exec`.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn sandbox_argv_withholds_a_hidden_value_unless_asked() {
+    use humanitl_ipc::sandbox::WITHHELD_PLACEHOLDER;
+
+    const SECRET: &str = "http://user:s3cret@proxy.example:3128";
+    let harness = Harness::new();
+    let config_dir = harness.path("config").join("humanitl");
+    std::fs::create_dir_all(&config_dir).expect("the config directory");
+    std::fs::write(
+        config_dir.join("config.toml"),
+        format!("[sandbox.env]\nHTTP_PROXY = \"{SECRET}\"\n"),
+    )
+    .expect("the config file");
+
+    // Text: der Platzhalter an der Stelle des Werts, das Passwort nirgends.
+    let output = harness.run(["sandbox", "argv"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let printed = stdout(&output);
+    assert!(!printed.contains("s3cret"), "{printed}");
+    let parts = shlex::split(printed.trim()).expect("the line is one shell command");
+    assert_eq!(
+        setenv_value(&parts, "HTTP_PROXY"),
+        Some(WITHHELD_PLACEHOLDER),
+        "{printed}"
+    );
+    // Ein Wert, den die Vorschau zeigt, bleibt stehen.
+    assert!(
+        setenv_value(&parts, "HUMANITL_SESSION").is_some_and(|id| SessionId::parse(id).is_ok()),
+        "{printed}"
+    );
+
+    // JSON: Liste und Zeile tragen beide den Platzhalter.
+    let output = harness.run(["--json", "sandbox", "argv"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let printed = stdout(&output);
+    assert!(!printed.contains("s3cret"), "{printed}");
+    let value: serde_json::Value = serde_json::from_str(&printed).expect("JSON");
+    let argv: Vec<String> = serde_json::from_value(value["argv"].clone()).expect("an argv list");
+    assert_eq!(
+        setenv_value(&argv, "HTTP_PROXY"),
+        Some(WITHHELD_PLACEHOLDER)
+    );
+    let line = value["argv_line"].as_str().expect("an argv line");
+    let parts = shlex::split(line).expect("the line is one shell command");
+    assert_eq!(
+        setenv_value(&parts, "HTTP_PROXY"),
+        Some(WITHHELD_PLACEHOLDER)
+    );
+
+    // `--show-values`: der Wert im Klartext, in Text und JSON.
+    let output = harness.run(["sandbox", "argv", "--show-values"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let printed = stdout(&output);
+    let parts = shlex::split(printed.trim()).expect("the line is one shell command");
+    assert_eq!(
+        setenv_value(&parts, "HTTP_PROXY"),
+        Some(SECRET),
+        "{printed}"
+    );
+    assert!(!printed.contains(WITHHELD_PLACEHOLDER), "{printed}");
+
+    let output = harness.run(["--json", "sandbox", "argv", "--show-values"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let value: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+    let argv: Vec<String> = serde_json::from_value(value["argv"].clone()).expect("an argv list");
+    assert_eq!(setenv_value(&argv, "HTTP_PROXY"), Some(SECRET));
 }
 
 /// `sandbox attach` ist ein dünner Client der `Terminal`-RPC (HUM-042).

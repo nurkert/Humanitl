@@ -34,6 +34,7 @@
 //!   prüft der Daemon vor dem Start des Agenten, und der Agent läuft dann gar
 //!   nicht erst an.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::net::UnixListener;
@@ -45,6 +46,7 @@ use humanitl_config::{Config, Env, Paths, Resolved};
 use humanitl_core::diagnostics::codes;
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
+use humanitl_ipc::v1;
 use humanitl_sandbox::{
     AdapterRegistry, AgentContext, Backend, CheckResult, INTERRUPT_GRACE, LaunchOptions,
     MountPolicy, PlanRequest, Refusal, RefusalReason, RefusalReporting, Refusals, SANDBOX_SHELL,
@@ -107,7 +109,7 @@ const EXIT_INTERRUPTED: u8 = 130;
 /// nicht gilt, und `DAEMON_001`, wenn `run` keinen Daemon findet.
 pub async fn run(ctx: &Context, cmd: &SandboxCmd) -> Result<u8, Failure> {
     match cmd {
-        SandboxCmd::Argv { cmd } => argv(ctx, cmd),
+        SandboxCmd::Argv { cmd, show_values } => argv(ctx, cmd, *show_values),
         SandboxCmd::Run {
             cmd,
             tests_dir,
@@ -186,6 +188,10 @@ struct Setup {
     backend: Backend,
     /// Was der Start außer Profil und Sitzung braucht (HUM-428).
     options: LaunchOptions,
+    /// Wer den Wert jeder Umgebungsvariablen zuletzt geschrieben hat
+    /// ([`humanitl_ipc::sandbox::env_origins`]); danach hält `sandbox argv`
+    /// Werte zurück (HUM-450).
+    env_origin: BTreeMap<String, v1::ValueOrigin>,
     /// Hält die Platzhalter am Leben, solange die Sandbox läuft.
     _wiring: Wiring,
 }
@@ -198,7 +204,13 @@ impl Setup {
 }
 
 /// `sandbox argv`: die Kommandozeile, ohne zu starten.
-fn argv(ctx: &Context, command: &[OsString]) -> Result<u8, Failure> {
+///
+/// Ohne `show_values` steht in Text und JSON anstelle jedes Werts, den die
+/// Vorschau des Daemons zurückhält, derselbe Platzhalter
+/// ([`humanitl_ipc::sandbox::withhold_hidden`], HUM-450). Die Zeile landet in
+/// Terminal-Verläufen und geteilten Fehlerberichten; ein Wert aus
+/// `sandbox.env` wie `http://nutzer:passwort@host` gehört nicht dorthin.
+fn argv(ctx: &Context, command: &[OsString], show_values: bool) -> Result<u8, Failure> {
     let resolved = ctx.config()?;
     // Ein Name ohne gespeicherten Server: dieselbe Ablehnung wie beim Start
     // (HUM-400), statt einer Zeile ohne Modell.
@@ -216,7 +228,12 @@ fn argv(ctx: &Context, command: &[OsString]) -> Result<u8, Failure> {
     // `/work` als vorhanden. Der Plan legt Deskriptoren an und verlangt
     // Socket, CA und Shim; nichts davon braucht, wer nur nachsehen will
     // (HUM-429: die Vorschau des Backends, für jedes Backend dieselbe Frage).
-    let preview = setup.backend.preview(&setup.request());
+    let mut preview = setup.backend.preview(&setup.request());
+    // Dieselbe Entscheidung wie die Vorschau im Daemon, an derselben Stelle,
+    // und kein zweiter Filter daneben (HUM-450).
+    if !show_values {
+        humanitl_ipc::sandbox::withhold_hidden(&mut preview, &setup.env_origin);
+    }
     let line = shell_line(&preview.argv);
 
     if ctx.render.is_json() {
@@ -324,7 +341,12 @@ async fn start(
         None
     };
     let plan = setup.backend.plan(&setup.request()).map_err(Failure::new)?;
-    ctx.render.detail(&format!("argv: {}", plan.argv_line()));
+    // Dieselbe Entscheidung wie `sandbox argv` und die Vorschau im Daemon:
+    // `-v` zeigt keinen Wert, den der Mensch verbirgt (HUM-450).
+    ctx.render.detail(&format!(
+        "argv: {}",
+        humanitl_ipc::sandbox::withheld_plan_line(&plan, &setup.env_origin)
+    ));
 
     // Die Quelle für `SIGINT` steht, bevor die Sandbox läuft. Erst das Anmelden
     // eines Handlers hebt ein geerbtes `SIG_IGN` auf, und zwischen dem Start der
@@ -770,7 +792,10 @@ fn check(ctx: &Context) -> Result<u8, Failure> {
     setup.options.stdio = StdioMode::Capture;
     let backend = &setup.backend;
     let plan = backend.plan(&setup.request()).map_err(Failure::new)?;
-    ctx.render.detail(&format!("argv: {}", plan.argv_line()));
+    ctx.render.detail(&format!(
+        "argv: {}",
+        humanitl_ipc::sandbox::withheld_plan_line(&plan, &setup.env_origin)
+    ));
 
     let handle = backend.launch(&plan).map_err(Failure::new)?;
     let results = backend.isolation_check(&handle);
@@ -1035,6 +1060,7 @@ fn prepare(
     let policy = MountPolicy::from_paths(&paths);
     let profile_path = profile_path(ctx, &config.sandbox.profile)?;
     let profile = SandboxProfile::load_validated(&profile_path, &policy).map_err(Failure::new)?;
+    let profile_origin = profile_origin(ctx, &profile_path);
     ctx.render
         .detail(&format!("profile {}", profile_path.display()));
 
@@ -1086,6 +1112,14 @@ fn prepare(
         } else {
             AgentContribution::default()
         };
+    // Dieselbe Herkunftstabelle wie im Daemon (HUM-450), bevor der Beitrag
+    // des Adapters in `session_env` aufgeht.
+    let env_origin = humanitl_ipc::sandbox::env_origins(
+        &profile,
+        profile_origin,
+        agent.env.iter().map(|(key, _)| key.as_str()),
+        config.sandbox.env.keys().map(String::as_str),
+    );
     let mut session_env = vec![("HUMANITL_SESSION".to_owned(), id.to_string())];
     session_env.extend(agent.env);
     // `sandbox.env` zuletzt: Was der Mensch in seiner Konfiguration setzt,
@@ -1155,6 +1189,7 @@ fn prepare(
             approved_work_dir: approved,
             ..LaunchOptions::default()
         },
+        env_origin,
         _wiring: wiring,
     })
 }
@@ -1474,6 +1509,19 @@ pub(crate) fn profile_path(ctx: &Context, name: &str) -> Result<PathBuf, Failure
         .find(|path| path.is_file())
         .cloned()
         .ok_or_else(|| missing_profile(name, &candidates))
+}
+
+/// Wer das Profil unter `path` geschrieben hat: ein eigenes Profil des
+/// Nutzers liegt unmittelbar in `$XDG_CONFIG_HOME/humanitl/profiles/sandbox`
+/// und ist von Hand geschrieben, jedes andere ist mitgeliefert. Dieselbe
+/// Unterscheidung trifft der Daemon beim Suchen des Profils: nur der erste
+/// Kandidat zählt als eigenes, nicht alles, was darunter liegt.
+fn profile_origin(ctx: &Context, path: &Path) -> v1::ValueOrigin {
+    if path.parent() == Some(ctx.paths.profiles_dir().join("sandbox").as_path()) {
+        v1::ValueOrigin::User
+    } else {
+        v1::ValueOrigin::Profile
+    }
 }
 
 /// Die Kandidaten für `profiles/sandbox` im Baum über dem Binary.

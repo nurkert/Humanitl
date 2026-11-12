@@ -333,7 +333,9 @@ Options:
 ## humanitl sandbox argv
 
 ```text
-Print the bwrap command line for the current profile without starting it
+Print the bwrap command line for the current profile without starting it.
+
+Environment values the sandbox screen withholds (anything written by hand in sandbox.env or a profile of your own, and any name not on the list of visible variables) are printed as `<withheld>`.
 
 Usage: humanitl sandbox argv [OPTIONS] [-- <CMD>...]
 
@@ -344,6 +346,9 @@ Arguments:
 Options:
       --json
           Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --show-values
+          Print withheld environment values in clear text. The line may then carry credentials; do not paste it into a ticket
 
       --config <PATH>
           Read this config file instead of the one in the user's config directory
@@ -358,7 +363,7 @@ Options:
           Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 ```
 
 ## humanitl sandbox check

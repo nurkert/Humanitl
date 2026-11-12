@@ -538,7 +538,15 @@ pub enum SandboxCmd {
     },
 
     /// Print the bwrap command line for the current profile without starting it.
+    ///
+    /// Environment values the sandbox screen withholds (anything written by
+    /// hand in sandbox.env or a profile of your own, and any name not on the
+    /// list of visible variables) are printed as `<withheld>`.
     Argv {
+        /// Print withheld environment values in clear text. The line may then
+        /// carry credentials; do not paste it into a ticket.
+        #[arg(long)]
+        show_values: bool,
         /// The command the line ends with; without it the agent from the
         /// configuration, otherwise `/bin/sh`.
         #[arg(last = true, value_name = "CMD")]

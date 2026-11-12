@@ -929,8 +929,9 @@ impl SandboxBackend for BwrapBackend {
             overlay: options.overlay().cloned(),
         };
         let env = profile.effective_env(session, inputs.report_fd);
+        let line = profile.to_bwrap_line(session, &inputs);
         let mut argv = vec![self.program.clone().into_os_string()];
-        argv.extend(profile.to_bwrap_args(session, &inputs));
+        argv.extend(line.args);
 
         let mut inherit = vec![report_writer, status_writer, passwd, group, hosts];
         inherit.extend(masks);
@@ -944,6 +945,12 @@ impl SandboxBackend for BwrapBackend {
         Ok(LaunchPlan {
             session_dir: None,
             argv,
+            // Eins weiter: `argv[0]` ist das Programm.
+            argv_env: line
+                .env_values
+                .into_iter()
+                .map(|(key, index)| (key, index + 1))
+                .collect(),
             env,
             fds,
             files: session.files.clone(),

@@ -739,8 +739,9 @@ pub struct SandboxHandle {
     /// Die PID des Prozesses, den Humanitl gestartet hat, auf dem Host
     /// (unter Linux `bwrap`, unter macOS `sandbox-exec`).
     pub pid: u32,
-    /// Die Kommandozeile, nach POSIX zitiert, mit Programm; für die
-    /// Oberfläche und `humanitl sandbox argv`.
+    /// Die Kommandozeile, nach POSIX zitiert, mit Programm, **roh**: Sie
+    /// trägt verborgene Umgebungswerte im Klartext und wird nie ausgegeben.
+    /// Wer die Zeile zeigt, nimmt `LaunchPlan::withheld_argv_line` (HUM-450).
     pub argv_display: String,
     /// Die Startzeit des Prozesses, wie `/proc/<pid>/stat` sie beim Start
     /// gemeldet hat (Feld 22, in Ticks seit dem Systemstart).

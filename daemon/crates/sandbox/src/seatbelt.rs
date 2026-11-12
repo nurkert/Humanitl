@@ -1386,6 +1386,8 @@ impl SandboxBackend for SeatbeltBackend {
         Ok(LaunchPlan {
             session_dir: Some(layout.root.clone()),
             argv,
+            // Die Umgebung ist die des Programms, nicht Teil der Zeile.
+            argv_env: Vec::new(),
             env,
             fds,
             files: session.files.clone(),
