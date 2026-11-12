@@ -57,6 +57,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-449 | Kernel-Stufe zulassen: `krun` wird wählbar | S | HUM-445, HUM-446 |
 | HUM-447 | Doku der Kernel-Stufe, Oberfläche schaltet `krun` frei | S | HUM-449 |
 | HUM-451 | Integrationstest: ein Daemon, der die Shell-Tür nicht mehr liest, hält weder Lebensleine noch Agent auf | S | HUM-430 |
+| HUM-452 | Podman: ein Container, dessen Client ungeplant endet, wird sofort entfernt, nicht erst beim nächsten Stopp | S | HUM-433 |
 | HUM-450 | `humanitl sandbox argv` hält zurückgehaltene Werte auch in der CLI zurück | S | HUM-429 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
@@ -663,3 +664,31 @@ mit einem echten Shell-Start fehlt, weil er in der Agent-Sandbox nicht lief
 ### Fallstricke
 - Der Socket-Puffer muss wirklich voll sein; die Größe hängt am Kernel, also
   so lange öffnen, bis `EAGAIN` beobachtet ist, statt eine Zahl anzunehmen.
+
+---
+
+## HUM-452 · Podman: a container whose client ends unplanned is removed at once
+
+### Kontext
+HUM-433 schließt die Lebensleine, sobald `podman run` endet, und der Shim
+beendet den Container binnen `KILL_GRACE`. Entfernt wird der beendete
+Container aber erst durch ein späteres `kill` der Sitzung oder durch die
+Bestandsaufnahme beim nächsten Start des Daemons; der normale Endpfad in
+`ipc` ruft kein `terminate` (Bericht des Agenten zu HUM-433, 2026-11-12).
+`--rm` gehörte dem beendeten Client und greift nicht mehr.
+
+### Spezifikation
+1. Endet der Client einer Podman-Sitzung, ohne dass ein Stopp angefordert
+   war, entfernt der Daemon den Container über die Engine, sobald er
+   beendet ist, und meldet ein Scheitern als `SANDBOX_041`.
+
+### Tests
+- Live (Probe `podman_here`): Client per `SIGKILL` beenden, ohne `kill`
+  der Sitzung; nach `KILL_GRACE` plus Frist ist der Container auch in
+  `ps --all` weg. Mutationsbeweis: ohne den neuen Aufruf rot.
+
+### Akzeptanzkriterien
+1. Nach einem ungeplanten Ende bleibt kein beendeter Container liegen.
+
+### Fallstricke
+- Nicht doppelt entfernen, wenn gleichzeitig ein Stopp läuft.

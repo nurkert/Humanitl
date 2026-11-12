@@ -1661,6 +1661,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | Pausing intercept: requests that would wait for a person pass with the reason `paused` while a person keeps the pause on (no change without a hold deadline); block rules, the hard block, the sandbox and the recording stay; settable only over the daemon socket, never from the sandbox; ends on resume, with the next session and with the daemon; start and end in the audit log (HUM-407, [Pausing intercept](#pausing-intercept), K-26). |
 | 0.1.x | The shim takes a lifeline (`--lifeline-fd`, the read end of a pipe only the daemon writes; `POLLHUP` ends the sandbox as on `SIGTERM`) and the agent's environment as a sealed memfd (`--env-fd`, never in `argv`); the agent inherits neither (HUM-430, [section 4](#the-lifeline-and-the-environment-through-descriptors-hum-430)). |
 | 0.1.x | macOS: Seatbelt as the sandbox backend, a generated SBPL profile per session, the three guarantees restated and measured by the shim; the daemon as a launchd agent; socket and token under `~/Library/Application Support/Humanitl/run` (HUM-323, HUM-327, [section 12](#12-macos-seatbelt-instead-of-bubblewrap)). |
+| 0.1.x | Linux: Podman as a second sandbox backend, plain level (rootless, runtime `crun`), not admitted: every start refuses it with `SANDBOX_048` until HUM-448; only the escape suite and the tests start it. Every configuration source the daemon does not write is cut off, the environment goes only through the sealed memfd, the container ends through the engine and the lifeline (HUM-433, [section 13](#13-linux-podman), K-27). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap
 
@@ -1863,3 +1864,78 @@ the binaries inside the disk image.
 | 0.1.0 | A project that chooses a saved server other than the default starts only after the human confirmed that server for that project folder once (`CONFIG_022`); the confirmation lives in the daemon's data directory, never in the project; the daemon writes the project file without following a link (HUM-405, K-02). |
 | 0.1.0 | The disposable sandbox is the default where the system allows it: `sandbox.mode = "auto"` resolves to disposable with bubblewrap 0.11 or newer, a runtime directory on tmpfs and a writable project, and otherwise runs direct, as before, with the warning `SANDBOX_033`; an explicit `disposable` still refuses with `SANDBOX_030` and never falls back (HUM-357, K-24). |
 | 0.1.x | OpenCode reaches a model on the loopback through the proxy: the adapter writes the reserved name `llm.humanitl.internal` into the `baseURL`, and the proxy maps that name only to the configured loopback endpoint with its scheme and port, before the rules; any other use of the name is refused with `PROXY_003` and never resolved ([section 5.1](#the-reserved-name-llmhumanitlinternal-hum-387), HUM-387). |
+
+## 13. Linux: Podman
+
+**Not admitted yet.** Podman is a second sandbox backend on Linux (ADR-0020), first as the plain
+level: rootless Podman with the OCI runtime `crun`, namespaces over the shared host kernel, the
+same isolation level as bubblewrap. Until HUM-448 admits it, every start with
+`sandbox.backend = "podman"` refuses with `SANDBOX_048`, from `config.toml`, a profile, the
+environment, `--backend` and the interface alike; only the escape suite and the tests start it,
+through code compiled into neither the daemon nor the CLI. This section states what the adapter
+(`daemon/crates/sandbox/src/podman/`, HUM-433) does, so that the admission can be checked against
+it.
+
+### The three guarantees under Podman
+
+| # | Guarantee | How it holds under Podman | Checked by the shim as |
+|---|---|---|---|
+| 1 | No network interface | `--network=none`: a network namespace with only `lo`, no `pasta` or `slirp4netns` | `no_interfaces`, unchanged |
+| 2 | Exactly one door | the proxy socket bound as one file to `/run/humanitl/proxy.sock`, read-only; `conmon`'s attach socket and exit file stay on the host side | `single_socket` and `bridge_listening`, unchanged |
+| 3 | No new doors | the same shim is PID 1 and installs the same filter before the agent's `exec`; Podman's own seccomp profile (the daemon's copy of the default profile of `containers-common`) stays as an outer layer, with `--cap-drop=all` and `no-new-privileges` | `seccomp_applied` and `families`, unchanged |
+
+Fixed in every line, with no key to change it: `--rm`, private network, IPC, UTS, PID and cgroup
+namespaces, `--userns=keep-id`, `--read-only` without the engine's tmpfs on `/run`, `/tmp` and
+`/var/tmp`, `--log-driver=none` (the agent's output never reaches a log), `--pull=never`,
+`--no-hosts` and `--passwd=false` (the profile's identity files instead), `--env-host=false` and
+`--http-proxy=false` (without it Podman copies the daemon's proxy variables, credentials included,
+into the container), `--memory`, `--cpus` and `--pids-limit` from `sandbox.podman`. No `-e`, no
+`-t`, no `--privileged`, no other network, no added capability, no device, no relabelling.
+
+### Configuration the daemon does not write is cut off
+
+Podman reads much more than its command line: `containers.conf` in every layer, `mounts.conf`
+(which mounts into every container, for example host secrets under `/run/secrets`), OCI hooks,
+`storage.conf`, `registries.conf`, and remote connections. The adapter starts Podman with an empty
+environment except `HOME`, the user's own `XDG_RUNTIME_DIR` (never Humanitl's), `PATH`, the user's session bus if there is one, and three files it writes itself under the
+runtime directory (`CONTAINERS_CONF` with an empty `default_mounts_file`, an empty `hooks_dir` and
+its own `seccomp_profile`; `CONTAINERS_STORAGE_CONF`; `CONTAINERS_REGISTRIES_CONF`), plus
+`--hooks-dir` on an empty directory. `CONTAINERS_CONF_OVERRIDE`, `CONTAINER_HOST` and
+`CONTAINER_CONNECTION` never reach it. A Podman that runs as root, or that is only the client of a
+remote service such as a Podman machine, is refused with `SANDBOX_038`.
+
+### What is different from bubblewrap
+
+- **Mounts by path.** Podman takes no descriptor as a mount source (measurement P13 in HUM-292).
+  The plan still opens and checks every source once, as under bubblewrap, and mounts the place
+  the opened object lies at. A swap of that path between the plan and the mount is not prevented
+  here; the shim's check of device and inode after the mount (HUM-437) detects it, and Podman stays
+  unadmitted until that check is in. A path with a comma, a quote or a line break is refused
+  (`SANDBOX_006`): mount options are separated by commas.
+- **Masks and files on disk.** Masks, the identity files and the adapter's files are files in the
+  session directory under the runtime directory, not memfds. The adapter's files are mode `0400`
+  and may carry the model's access key; the plan refuses to write them when the runtime directory
+  is not on tmpfs, and the directory goes with the sandbox. Masks and tmpfs under `/work` are
+  mounted only on paths that exist, as under bubblewrap: a missing mount point would be created in
+  the project.
+- **The environment through a descriptor only.** Podman stores every `-e` value in the container's
+  configuration on disk (P11). The agent's environment therefore travels only in the sealed memfd
+  of HUM-430 (`--env-fd`). The five variables of the shim's own contract (bridges, seccomp lists,
+  the report's descriptor number) carry no secret and stand in the session's `containers.conf`,
+  and with it in the stored container configuration.
+- **Ending the sandbox.** The container runs detached from the `podman run` the daemon starts
+  (P7), and PID 1 ignores a signal without a handler (P5, P6). The daemon ends it through the
+  engine by name: `podman kill --signal TERM`, after the grace `--signal KILL` and
+  `podman rm --force`. When the daemon dies, the lifeline of HUM-430 ends PID 1. A container a
+  crash still leaves behind carries the label of the daemon's instance and is removed at the next
+  daemon start, with a warning `SANDBOX_041`.
+- **The trusted computing base grows** by Podman, `conmon`, `crun`, the user's container storage
+  and the daemon's `containers.conf` (K-27 in [`THREAT-MODEL.md`](THREAT-MODEL.md)).
+
+### Prerequisites
+
+Podman 4.9 or newer with `crun` (`SANDBOX_037`), rootless and local (`SANDBOX_038`), subordinate
+IDs for `--userns=keep-id` (`SANDBOX_039`), the cgroup controllers `memory`, `pids` and `cpu`
+delegated (`SANDBOX_040`), no enforcing SELinux (`SANDBOX_044`, a mount would need relabelling the
+project). A missing prerequisite refuses the start with its code; the start never falls back to
+bubblewrap.

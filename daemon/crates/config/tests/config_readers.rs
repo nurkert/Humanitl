@@ -153,16 +153,20 @@ const REGISTER: &[(&str, &str)] = &[
     // Gelesen in `SandboxService::start`, wenn der Start keinen Modus nennt
     // (HUM-350), und in `humanitl run` für die Anfrage.
     ("sandbox.mode", "effective"),
-    // Die Gruppe `sandbox.podman` legt HUM-431 an und prüft nur ihre Werte;
-    // gelesen wird sie erst vom Podman-Adapter (HUM-433).
-    ("sandbox.podman.cpus", "pending(HUM-433)"),
-    ("sandbox.podman.image", "pending(HUM-433)"),
-    ("sandbox.podman.memory_mib", "pending(HUM-433)"),
-    ("sandbox.podman.pids_limit", "pending(HUM-433)"),
-    ("sandbox.podman.program", "pending(HUM-433)"),
-    ("sandbox.podman.rootfs", "pending(HUM-433)"),
-    ("sandbox.podman.runtime", "pending(HUM-433)"),
-    ("sandbox.podman.start_timeout_secs", "pending(HUM-433)"),
+    // Die Gruppe `sandbox.podman` legt HUM-431 an; der Podman-Adapter liest
+    // sie (HUM-433): `program` bei der Suche, `runtime` (nur `crun`, `krun`
+    // ist `SANDBOX_048`) und `rootfs` (`image` lehnt der Start bis HUM-439
+    // ab) vor dem Plan, `memory_mib`, `cpus` und `pids_limit` als Grenzen der
+    // Zeile, `start_timeout_secs` als Frist bis zum Bericht. `image` liest
+    // derselbe Plan, um `rootfs = "image"` abzulehnen.
+    ("sandbox.podman.cpus", "effective"),
+    ("sandbox.podman.image", "effective"),
+    ("sandbox.podman.memory_mib", "effective"),
+    ("sandbox.podman.pids_limit", "effective"),
+    ("sandbox.podman.program", "effective"),
+    ("sandbox.podman.rootfs", "effective"),
+    ("sandbox.podman.runtime", "effective"),
+    ("sandbox.podman.start_timeout_secs", "effective"),
     ("sandbox.profile", "effective"),
     ("sandbox.work_dir", "effective"),
     ("sandbox.work_mode", "effective"),
@@ -415,6 +419,7 @@ fn the_keys_without_a_reader_are_the_known_ones() {
     // `ui.theme`, die seit HUM-069 die Oberfläche liest. Sie steht hier, damit
     // ein weiterer Fall nicht unbemerkt dazukommt: Wer einen Schlüssel
     // verdrahtet oder streicht, zieht ihn hier und im Register zugleich nach.
+    // Die acht Schlüssel unter `sandbox.podman` (HUM-431) verdrahtet HUM-433.
     let pending: Vec<&str> = register()
         .iter()
         .filter(|(_, readiness)| readiness.is_pending())
@@ -425,15 +430,6 @@ fn the_keys_without_a_reader_are_the_known_ones() {
         vec![
             "pseudonyms.max_response_bytes",
             "pseudonyms.translate_responses",
-            // HUM-431 legt die Gruppe an, HUM-433 verdrahtet sie.
-            "sandbox.podman.cpus",
-            "sandbox.podman.image",
-            "sandbox.podman.memory_mib",
-            "sandbox.podman.pids_limit",
-            "sandbox.podman.program",
-            "sandbox.podman.rootfs",
-            "sandbox.podman.runtime",
-            "sandbox.podman.start_timeout_secs",
         ]
     );
 }

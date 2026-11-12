@@ -124,6 +124,7 @@ Five further channels complete the model:
 | K-16 | recording outage | a, b, c | medium | outage reported to every client once per cause, cards marked "not recorded", first approval paused | declared | `daemon/crates/recorder` health tests, golden `states_recorder_failure` |
 | K-18 | the door for further shells (`humanitl sandbox exec`) | b | high | unnamed socket pair held only by the daemon and PID 1; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX`; at most four; dies with the sandbox | mitigated | `daemon/crates/ipc/tests/terminal.rs` (HUM-299) |
 | K-24 | the disposable sandbox: the upper layer and the way back into the project (`humanitl sandbox apply`) | b | high | project folder read-only as the lower layer of an overlay, upper layer in RAM under the daemon's runtime directory with a size cap, `mounts.extra_rw` read-only; applied only on a human's choice, checked before the first write, never through or as a symlink out of the project, no device, FIFO, socket or setuid bit, no overwrite of a file the human changed since the start unless that change is confirmed one by one (`ApplyChanges.overwrite_ids` from the app, HUM-351) or every selected change is (`--overwrite`) | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350) |
+| K-27 | the container engine under Podman (Podman, `conmon`, `crun`, the user's container storage, `containers.conf`) | b, d | high | not admitted (`SANDBOX_048`) until the escape suite against it is green (HUM-448); every configuration source the daemon does not write cut off; fixed flags without keys; the environment only through the sealed memfd; ended through the engine and the lifeline; leftovers removed at daemon start (`SANDBOX_041`) | open | `daemon/crates/sandbox/src/podman/` (HUM-433) |
 
 K-13 is the obvious channel and the only one considered closed outright. K-14 is here so that
 attacker (d) appears in a row. K-15 came with HUM-041: the check that proves the guarantees runs
@@ -567,6 +568,25 @@ recording and the audit log show it afterwards, each request marked `paused`. An
 from the missing wait, and from requests that now succeed, that holds stopped, and time what it
 sends accordingly.
 
+### K-27 The container engine
+
+Under the Podman backend (HUM-433, [SECURITY.md section 13](SECURITY.md#13-linux-podman)) the
+sandbox is a rootless container, and the engine that builds it joins the trusted computing base:
+Podman, `conmon`, which stays as the container's parent, the OCI runtime `crun`, the user's
+container storage under `~/.local/share/containers` and the configuration Podman reads. An agent
+(attacker b) that found a weakness in any of them would leave the sandbox as it would through a
+weakness of bubblewrap; a process of the same user (attacker d) could change the user's own
+`containers.conf`, `mounts.conf` or hooks to add a mount, a device, a network or a hook to every
+container. The binding: the daemon starts Podman with its own `containers.conf`,
+`storage.conf` and `registries.conf` and an empty hook directory, and with an empty environment
+except `HOME`, the user's `XDG_RUNTIME_DIR`, `PATH`, the user's session bus and those three paths; the line carries every flag that
+the three guarantees rest on, with no key to change it; the agent's environment goes only through
+the sealed memfd and never into the stored container configuration; the container ends through the
+engine by name and, when the daemon dies, through the lifeline. *Residual risk:* the plain level
+shares the host kernel as bubblewrap does; mounts go by path, so a swapped path is detected only
+by the shim's check after the mount (HUM-437); Podman reads `/etc/containers/policy.json` and the
+storage it shares with the user. Until HUM-448 admits the level, no person can start it.
+
 ## Assumptions
 
 | ID | Assumption | How to check it | If it breaks |
@@ -658,6 +678,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-01 | The reserved name `llm.humanitl.internal` for a model on the loopback: mapped by the proxy only to the configured endpoint, scheme and port, before the rules, never resolved; every other use refused with `PROXY_003`. No new door, the sandbox profile is unchanged | HUM-387 |
 | 2026-11-04 | A-5 and manipulated binaries: releases before 1.0.0 carry `SHA256SUMS` only, no package signature; signed releases come with 1.0.0. The earlier text named a package signature that never shipped | HUM-060 |
 | 2026-11-12 | K-06: the shim's lifeline (`--lifeline-fd`) as the counterpart of `--die-with-parent` for a backend that detaches the sandbox from the daemon; the agent's environment through a sealed memfd (`--env-fd`) instead of `argv`; the agent inherits neither; K-15 unchanged | HUM-430 |
+| 2026-11-12 | K-27 added: the container engine under the Podman backend, plain level, not admitted until HUM-448 | HUM-433 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

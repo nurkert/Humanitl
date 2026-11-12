@@ -1496,8 +1496,10 @@ impl Inner {
         else {
             return Vec::new();
         };
-        match Backend::detect(choice.name, self.paths.clone()) {
-            Err(diagnostic) if Backend::fallback(choice.name, self.paths.clone()).is_ok() => {
+        match Backend::detect(choice.name, self.paths.clone(), &config.sandbox) {
+            Err(diagnostic)
+                if Backend::fallback(choice.name, self.paths.clone(), &config.sandbox).is_ok() =>
+            {
                 vec![diagnostic]
             }
             Ok(_) | Err(_) => Vec::new(),
@@ -2206,7 +2208,10 @@ impl Inner {
         // laufenden Vorgangs am Zustand mit.
         let _ = tx.send(diagnostic_event(diagnostic)).await;
         match closed {
-            Ok((stopped, status)) => {
+            Ok((stopped, status, teardown)) => {
+                for warning in &teardown {
+                    let _ = tx.send(diagnostic_event(warning)).await;
+                }
                 if let Some(line) = stopped {
                     let _ = tx.send(log_event(line)).await;
                 }
@@ -2232,7 +2237,8 @@ impl Inner {
         &self,
         plan: &v1::sandbox_request::Plan,
         diagnostic: &Diagnostic,
-    ) -> (Option<String>, v1::sandbox_event::Status) {
+    ) -> (Option<String>, v1::sandbox_event::Status, Vec<Diagnostic>) {
+        let mut teardown = Vec::new();
         if let Some(handle) = self.running_handle() {
             // Ohne Gnadenfrist. `kill()` schickt `SIGTERM` und wartet
             // [`KILL_GRACE`] auf ein geordnetes Ende — fünf Sekunden, in denen
@@ -2246,13 +2252,14 @@ impl Inner {
             // die obere Schranke des Fensters und nähme dem Client bei einem
             // Prozess im D-Zustand auch noch den Befund.
             handle.terminate(Duration::ZERO);
+            teardown = teardown_findings(&handle);
         }
         let stopped = self.stopped_line();
         self.clear_running();
         let status = self
             .snapshot_with(plan, Some(v1::SandboxState::Failed))
             .unwrap_or_else(|_| self.failed_status(plan, diagnostic));
-        (stopped, status)
+        (stopped, status, teardown)
     }
 
     /// `Op::IsolationCheck`: die drei Garantien der laufenden Sandbox.
@@ -2325,8 +2332,10 @@ impl Inner {
         let stopped = self.stopped_line();
         self.clear_running();
         match &ended {
-            Ok(Some(diagnostic)) => {
-                let _ = tx.send(diagnostic_event(diagnostic)).await;
+            Ok(farewell) => {
+                for event in farewell.events() {
+                    let _ = tx.send(event).await;
+                }
             }
             // Ein Faden, der nicht zurückkam, ist derselbe Befund wie überall
             // sonst in dieser Datei; verschwiegen wäre er ein Stopp, der ohne
@@ -2334,7 +2343,6 @@ impl Inner {
             Err(error) => {
                 let _ = tx.send(diagnostic_event(&joined_failed(error))).await;
             }
-            Ok(None) => {}
         }
         if let Some(line) = stopped {
             let _ = tx.send(log_event(line)).await;
@@ -2358,10 +2366,12 @@ impl Inner {
         // zweite Griff kostet nichts und deckt jeden anderen Aufrufer.
         self.leaving
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        // Die Warnungen der Engine stehen schon im Protokoll
+        // ([`teardown_findings`]); einen Strom gibt es hier nicht.
         let ended = self.running_handle().and_then(|handle| {
             let ended = farewell(&handle);
             self.clear_running();
-            ended
+            ended.finding
         });
         // Die obere Schicht liegt im Arbeitsspeicher und gehört zu diesem
         // Daemon; mit ihm geht sie (HUM-350). Die Aufzeichnung sagt es.
@@ -2651,6 +2661,7 @@ impl Inner {
             Ok(guard) => guard,
             Err(diagnostic) => {
                 let _ = handle.kill();
+                let _ = teardown_findings(&handle);
                 self.clear_running();
                 if let Err((layer, failed)) = layer.discard() {
                     tracing::warn!(
@@ -3531,8 +3542,8 @@ impl Inner {
         // Vorschau und Start ab; zurückgefallen wird nur von der Prüfung des
         // Systems auf dasselbe Backend ohne Prüfung, nie auf ein anderes.
         let choice = humanitl_sandbox::choose_backend(&config.sandbox, &profile.sandbox.backend)?;
-        let backend = Backend::detect(choice.name, self.paths.clone())
-            .or_else(|_| Backend::fallback(choice.name, self.paths.clone()))?;
+        let backend = Backend::detect(choice.name, self.paths.clone(), &config.sandbox)
+            .or_else(|_| Backend::fallback(choice.name, self.paths.clone(), &config.sandbox))?;
         let options = LaunchOptions {
             approved_work_dir: approved,
             ..LaunchOptions::default()
@@ -4354,7 +4365,7 @@ fn llm_authority(config: &Config) -> Option<String> {
 ///
 /// Blockierend: `terminate` wartet auf das Einsammeln durch den Faden, der die
 /// Sandbox gestartet hat.
-fn farewell(handle: &SandboxHandle) -> Option<Diagnostic> {
+fn farewell(handle: &SandboxHandle) -> Farewell {
     let started = Instant::now();
     let ended = handle.terminate(KILL_GRACE);
     // `u64` und nicht `u128`: `tracing` kennt keinen `u128` und schriebe die
@@ -4363,7 +4374,48 @@ fn farewell(handle: &SandboxHandle) -> Option<Diagnostic> {
     let took = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let alive = (!ended.ended()).then(|| handle.process_alive()).flatten();
     log_farewell(handle.id, handle.pid, ended, took, alive);
-    farewell_finding(handle.id, handle.pid, ended, took, alive)
+    Farewell {
+        finding: farewell_finding(handle.id, handle.pid, ended, took, alive),
+        teardown: teardown_findings(handle),
+    }
+}
+
+/// Was ein Abschied zu sagen hat: der Befund zum Beenden selbst
+/// (`SANDBOX_029`) und die Warnungen der Engine zu einem Container, der
+/// womöglich geblieben ist (`SANDBOX_041`, HUM-433).
+#[derive(Debug, Default)]
+struct Farewell {
+    finding: Option<Diagnostic>,
+    teardown: Vec<Diagnostic>,
+}
+
+impl Farewell {
+    /// Die Ereignisse für den Strom: erst der Befund zum Beenden, dann die
+    /// Warnungen der Engine.
+    fn events(&self) -> Vec<v1::SandboxEvent> {
+        self.finding
+            .iter()
+            .chain(&self.teardown)
+            .map(diagnostic_event)
+            .collect()
+    }
+}
+
+/// Nimmt die Warnungen, die das Beenden über eine Container-Engine
+/// hinterließ (HUM-433), und schreibt jede ins Protokoll des Daemons: Auch
+/// ohne Zuhörer am Ereignisstrom bleibt so eine Spur, dass ein Container
+/// seine Sitzung überlebt haben könnte.
+fn teardown_findings(handle: &SandboxHandle) -> Vec<Diagnostic> {
+    let warnings = handle.take_teardown_warnings();
+    for warning in &warnings {
+        tracing::warn!(
+            sandbox = %handle.id,
+            code = %warning.code,
+            why = %warning.why,
+            "the container of a sandbox may have outlived its session"
+        );
+    }
+    warnings
 }
 
 /// Die eine Zeile, die jeder Abschied im Protokoll hinterlässt.
@@ -5898,8 +5950,12 @@ mod tests {
         Prepared {
             profile,
             session,
-            backend: Backend::fallback(humanitl_sandbox::AUTO_BACKEND, paths)
-                .expect("this build knows auto"),
+            backend: Backend::fallback(
+                humanitl_sandbox::AUTO_BACKEND,
+                paths,
+                &humanitl_config::SandboxRef::default(),
+            )
+            .expect("this build knows auto"),
             options: LaunchOptions::default(),
             env_origin: BTreeMap::new(),
             warnings: Vec::new(),
@@ -6132,6 +6188,36 @@ mod tests {
     /// kein Befund; ein `SIGKILL`, das wirkte, ist eine Warnung; und ein
     /// ausbleibender Exit-Status ist nur dann blockierend, wenn der Prozess
     /// wirklich noch da ist.
+    /// HUM-433: Die Warnung der Engine zu einem Container, der seine
+    /// Sitzung überlebt haben könnte, erreicht den Ereignisstrom, nach dem
+    /// Befund zum Beenden selbst.
+    #[test]
+    fn a_teardown_warning_of_the_engine_reaches_the_event_stream() {
+        use humanitl_core::Severity;
+        use humanitl_core::diagnostics::codes::{SANDBOX_029, SANDBOX_041};
+
+        let finding = Diagnostic::builder(SANDBOX_029, Severity::Warning)
+            .why("SIGKILL was needed")
+            .build();
+        let warning = Diagnostic::builder(SANDBOX_041, Severity::Warning)
+            .why("the container humanitl-x may still be there")
+            .build();
+        let farewell = Farewell {
+            finding: Some(finding),
+            teardown: vec![warning],
+        };
+        let codes: Vec<String> = farewell
+            .events()
+            .into_iter()
+            .map(|event| match event.event {
+                Some(v1::sandbox_event::Event::Diagnostic(diagnostic)) => diagnostic.code,
+                other => panic!("not a diagnostic: {other:?}"),
+            })
+            .collect();
+        assert_eq!(codes, ["SANDBOX_029", "SANDBOX_041"]);
+        assert!(Farewell::default().events().is_empty());
+    }
+
     #[test]
     fn every_way_out_of_a_farewell_has_its_own_finding() {
         let sandbox = SandboxId::nil();

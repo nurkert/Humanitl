@@ -10,10 +10,14 @@ freezes it. A count may fall, never rise, and no new file may start using one
 of the names. When a count falls, the baseline has to follow
 (`--update`), otherwise the slack could be spent again unnoticed.
 
-Four rules:
+Five rules:
 
 * `bwrap` -- the string, in any case, outside the sandbox crate and the shim,
   inside identifiers (`BwrapBackend`) and comments included.
+* `podman` -- `podman`, `crun`, `krun`, `libkrun` and `conmon`, in any case,
+  outside the Podman adapter `daemon/crates/sandbox/src/podman/` (HUM-433),
+  counted like `bwrap`: identifiers and comments included. The rest of the
+  sandbox crate is not exempt; the port speaks of a container engine.
 * `proxy_engine` -- a path into hyper, rustls, rcgen or their helpers outside
   the proxy crate. Zero today; it stays zero.
 * `proxy_crate` -- every item of `humanitl_proxy` referenced outside the proxy
@@ -61,6 +65,13 @@ RULES: dict[str, Rule] = {
         re.compile(r"bwrap", re.IGNORECASE),
         ("daemon/crates/sandbox/", "daemon/bin/humanitl-shim/"),
         "bubblewrap is one SandboxBackend; outside it, name the neutral concept",
+    ),
+    # The second sandbox backend (HUM-433). Alternation order matters for
+    # `findall`: `libkrun` is one mention, not one `libkrun` plus one `krun`.
+    "podman": Rule(
+        re.compile(r"podman|conmon|libkrun|krun|crun", re.IGNORECASE),
+        ("daemon/crates/sandbox/src/podman/",),
+        "Podman is one SandboxBackend; outside its adapter, name the neutral concept",
     ),
     "proxy_engine": Rule(
         re.compile(
@@ -263,7 +274,7 @@ def measure(root: Path) -> dict[str, dict[str, int]]:
         for rule_name, rule in RULES.items():
             if name.startswith(rule.allowed):
                 continue
-            if rule_name == "bwrap":
+            if rule_name in ("bwrap", "podman"):
                 found = len(rule.pattern.findall(text))
             elif rule_name == "proxy_crate":
                 found = proxy_items(code)

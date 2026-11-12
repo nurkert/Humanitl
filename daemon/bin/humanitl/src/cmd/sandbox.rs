@@ -1171,11 +1171,11 @@ fn prepare(
         resolved.origin("sandbox.podman.runtime"),
     )
     .map_err(Failure::new)?;
-    let backend = match Backend::detect(choice.name, paths.clone()) {
+    let backend = match Backend::detect(choice.name, paths.clone(), &config.sandbox) {
         Ok(backend) => backend,
         // Die Vorschau braucht kein Sandbox-Backend; der Start schon.
         Err(_) if matches!(wiring, Wiring::Preview) => {
-            Backend::fallback(choice.name, paths).map_err(Failure::new)?
+            Backend::fallback(choice.name, paths, &config.sandbox).map_err(Failure::new)?
         }
         Err(diagnostic) => return Err(Failure::new(diagnostic)),
     };

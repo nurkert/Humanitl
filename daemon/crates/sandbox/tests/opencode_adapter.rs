@@ -2118,8 +2118,12 @@ impl Fixture {
 
     /// Das echte `bwrap`, oder der Grund, warum es hier keines gibt.
     fn backend(&self) -> Result<humanitl_sandbox::Backend, String> {
-        humanitl_sandbox::Backend::detect(humanitl_sandbox::BWRAP_BACKEND, self.paths.clone())
-            .map_err(|err| format!("no usable bwrap: {err}"))
+        humanitl_sandbox::Backend::detect(
+            humanitl_sandbox::BWRAP_BACKEND,
+            self.paths.clone(),
+            &humanitl_config::SandboxRef::default(),
+        )
+        .map_err(|err| format!("no usable bwrap: {err}"))
     }
 }
 

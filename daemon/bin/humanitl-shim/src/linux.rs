@@ -22,7 +22,8 @@
 //! # Launcher <-> shim contract (binding for HUM-011, HUM-012, HUM-013)
 //!
 //! **Command line.** `humanitl-shim --proxy-port <port> [--controlling-terminal]
-//! [--control-fd <n>] [--lifeline-fd <n>] [--env-fd <n>] -- <command> [args...]`,
+//! [--control-fd <n>] [--lifeline-fd <n>] [--env-fd <n>] [--stdio-fd <n>] --
+//! <command> [args...]`,
 //! the tail of the bwrap argument vector from
 //! `humanitl_sandbox::SandboxProfile::to_bwrap_args`, where the shim itself
 //! is `/usr/local/bin/humanitl-shim` inside the sandbox. `--proxy-port` is
@@ -44,7 +45,11 @@
 //! the environment the shim was started with, except the five variables
 //! below, and a broken one refuses the start (`envfd.rs`). Both descriptors
 //! are closed before the agent's `exec`, like the report's: the agent never
-//! holds either. `humanitl-shim --rules` prints the seccomp
+//! holds either. `--stdio-fd` (HUM-433) names an inherited descriptor that
+//! becomes 0, 1 and 2 before anything else of the start; a container engine
+//! does not hand its own standard streams to the container, so the daemon's
+//! pseudo-terminal travels as an inherited descriptor instead. A number that
+//! names no open descriptor refuses the start. `humanitl-shim --rules` prints the seccomp
 //! rule table the same environment would produce, one row per line, and
 //! starts nothing.
 //!
@@ -163,7 +168,7 @@ const EXIT_SETUP: i32 = 126;
 const EXIT_EXEC: i32 = 127;
 
 const USAGE: &str = "usage: humanitl-shim --proxy-port <port> [--controlling-terminal] [--control-fd <n>]\n\
-                     \x20      [--lifeline-fd <n>] [--env-fd <n>] -- <command> [args...]\n\
+                     \x20      [--lifeline-fd <n>] [--env-fd <n>] [--stdio-fd <n>] -- <command> [args...]\n\
                      \x20      humanitl-shim --rules    print the seccomp rule table for this environment\n\
                      environment: HUMANITL_BRIDGES, HUMANITL_SECCOMP_FAMILIES, HUMANITL_SECCOMP_TYPES,\n\
                      HUMANITL_SECCOMP_DENY, HUMANITL_REPORT_FD (see the crate documentation)\n";
@@ -213,6 +218,15 @@ fn run() -> i32 {
         }
     };
 
+    // The terminal of the session as the standard streams (HUM-433), before
+    // anything writes to them: a message of the shim from here on goes to the
+    // daemon's pseudo-terminal, not to the engine's empty streams.
+    if let Some(fd) = cli.stdio_fd
+        && let Err(why) = take_stdio(fd)
+    {
+        return refuse_setup(&report, &SetupError::stdio(&why));
+    }
+
     // The agent's environment from the daemon (HUM-430), before anything
     // else reads the environment: the policy, the bridges and the shells all
     // see the result. Only the report comes earlier, so that a refused
@@ -246,6 +260,32 @@ fn refuse_setup(report: &Report, err: &SetupError) -> i32 {
     report.check(err.check(), false, &err.to_string());
     say(&format!("humanitl-shim: {err}\n"));
     EXIT_SETUP
+}
+
+/// `--stdio-fd`: the descriptor becomes 0, 1 and 2 and is closed under its
+/// own number. Still single-threaded, so no other thread writes to a standard
+/// stream in between.
+fn take_stdio(fd: RawFd) -> Result<(), String> {
+    // SAFETY: fcntl(F_GETFD) only asks whether the number is open.
+    if fd < 3 || unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
+        return Err(format!("not-open:{fd}"));
+    }
+    for target in 0..3 {
+        // SAFETY: dup2 between two descriptor numbers; the target is a
+        // standard stream this process owns.
+        if unsafe { libc::dup2(fd, target) } < 0 {
+            return Err(format!(
+                "dup2:{fd}->{target}:{}",
+                io::Error::last_os_error()
+            ));
+        }
+    }
+    // SAFETY: the launcher handed this number to the shim alone; its three
+    // copies stay.
+    unsafe {
+        libc::close(fd);
+    }
+    Ok(())
 }
 
 /// `--env-fd`: reads, checks and closes the descriptor, then makes its pairs
@@ -1259,6 +1299,8 @@ struct Cli {
     lifeline_fd: Option<RawFd>,
     /// `--env-fd` (HUM-430).
     env_fd: Option<RawFd>,
+    /// `--stdio-fd` (HUM-433).
+    stdio_fd: Option<RawFd>,
     command: Vec<OsString>,
 }
 
@@ -1300,6 +1342,7 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
     let mut control_fd = None;
     let mut lifeline_fd = None;
     let mut env_fd = None;
+    let mut stdio_fd = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--") => {
@@ -1314,6 +1357,7 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
                     control_fd,
                     lifeline_fd,
                     env_fd,
+                    stdio_fd,
                     command,
                 });
             }
@@ -1323,6 +1367,7 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
             Some("--control-fd") => control_fd = Some(fd_value(&mut args, "--control-fd")?),
             Some("--lifeline-fd") => lifeline_fd = Some(fd_value(&mut args, "--lifeline-fd")?),
             Some("--env-fd") => env_fd = Some(fd_value(&mut args, "--env-fd")?),
+            Some("--stdio-fd") => stdio_fd = Some(fd_value(&mut args, "--stdio-fd")?),
             Some("--proxy-port") => {
                 let value = args.next().ok_or(CliError::MissingValue("--proxy-port"))?;
                 let port = value
@@ -1382,6 +1427,16 @@ impl SetupError {
             area: "environment",
             check: Check::SeccompApplied,
             why: err.to_string(),
+        }
+    }
+
+    /// The descriptor of `--stdio-fd` is not open (HUM-433). Reported as
+    /// `seccomp_applied`, like every failure of the shim's own process model.
+    fn stdio(why: &str) -> Self {
+        Self {
+            area: "stdio",
+            check: Check::SeccompApplied,
+            why: why.to_owned(),
         }
     }
 
@@ -1496,6 +1551,28 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!((cli.lifeline_fd, cli.env_fd), (Some(7), Some(8)));
+        assert_eq!(cli.stdio_fd, None);
+        let cli = parse_cli(args(&[
+            "--proxy-port",
+            "3128",
+            "--stdio-fd",
+            "9",
+            "--",
+            "sh",
+        ]))
+        .unwrap();
+        assert_eq!(cli.stdio_fd, Some(9));
+        assert!(matches!(
+            parse_cli(args(&[
+                "--proxy-port",
+                "3128",
+                "--stdio-fd",
+                "1",
+                "--",
+                "sh"
+            ])),
+            Err(CliError::BadFd("--stdio-fd", _))
+        ));
         // Arguments after -- are the agent's, whatever they look like.
         let cli = parse_cli(args(&["--proxy-port", "0", "--", "--help"])).unwrap();
         assert_eq!(cli.command, [OsString::from("--help")]);

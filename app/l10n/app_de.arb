@@ -1802,5 +1802,17 @@
   "diagSANDBOX036Title": "Sandbox-Profil verlangt ein anderes Backend",
   "diagSANDBOX036Why": "Das Sandbox-Profil verlangt ein anderes Backend als das in den Einstellungen gewählte. Keins von beiden übergeht das andere, deshalb startet die Sitzung nicht.",
   "diagSANDBOX048Title": "Sandbox-Backend noch nicht zugelassen",
-  "diagSANDBOX048Why": "Das gewählte Sandbox-Backend ist noch nicht zugelassen. Wählbar wird ein Backend erst, wenn die Ausbruchstests gegen es bestehen; bis dahin startet keine Sitzung damit. Stelle das Backend auf auto, um das Backend dieses Systems zu nutzen."
+  "diagSANDBOX048Why": "Das gewählte Sandbox-Backend ist noch nicht zugelassen. Wählbar wird ein Backend erst, wenn die Ausbruchstests gegen es bestehen; bis dahin startet keine Sitzung damit. Stelle das Backend auf auto, um das Backend dieses Systems zu nutzen.",
+  "diagSANDBOX037Title": "Podman zu alt oder ohne crun",
+  "diagSANDBOX037Why": "Das Podman-Backend braucht Podman 4.9 oder neuer mit der OCI-Laufzeit crun. Das installierte Podman ist älter, nutzt eine andere Laufzeit oder hat nicht geantwortet, deshalb startet die Sitzung nicht.",
+  "diagSANDBOX038Title": "Podman nicht rootless oder nicht lokal",
+  "diagSANDBOX038Why": "Die Sandbox braucht rootless Podman auf diesem Rechner, gestartet von Humanitl selbst. Das gefundene Podman läuft als root oder spricht mit einem entfernten Dienst wie einer Podman-Maschine.",
+  "diagSANDBOX039Title": "Keine untergeordneten IDs für den Container",
+  "diagSANDBOX039Why": "Rootless Podman braucht für deinen Nutzer mindestens 65536 untergeordnete Nutzer- und Gruppen-IDs in /etc/subuid und /etc/subgid und die Werkzeuge newuidmap und newgidmap. Eines davon fehlt.",
+  "diagSANDBOX040Title": "Grenzen des Containers nicht durchsetzbar",
+  "diagSANDBOX040Why": "Eine Podman-Sandbox läuft mit einer Grenze für Arbeitsspeicher, CPU und Prozesse, und die cgroup-Controller dafür sind deinem Nutzer nicht übertragen. Ohne ihre Grenzen startet die Sandbox nicht.",
+  "diagSANDBOX041Title": "Container einer früheren Sitzung gefunden",
+  "diagSANDBOX041Why": "Ein Container einer früheren Sitzung dieses Daemons war noch da, etwa nach einem Absturz. Der Daemon hat ihn beim Start entfernt oder sagt, dass es nicht ging.",
+  "diagSANDBOX044Title": "SELinux würde das Projekt umetikettieren",
+  "diagSANDBOX044Why": "SELinux erzwingt auf diesem Rechner Etiketten. Ein Container könnte das Projekt erst lesen, nachdem es umetikettiert ist, und das ändert deine Dateien; deshalb startet das Podman-Backend hier nicht."
 }

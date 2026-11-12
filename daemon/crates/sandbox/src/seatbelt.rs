@@ -1396,9 +1396,11 @@ impl SandboxBackend for SeatbeltBackend {
             warnings,
             unprotected,
             env_delivery: EnvDelivery::Program,
+            program_env: Vec::new(),
             stdio: options.stdio,
             report_timeout: options.effective_report_timeout(),
             teardown: Teardown::Process,
+            renumbered: false,
             program: self.program.clone(),
             once: Mutex::new(Some(LaunchOnce {
                 inherit,
@@ -1406,6 +1408,7 @@ impl SandboxBackend for SeatbeltBackend {
                 status: Some(status_reader),
                 output_sink: options.output_sink.clone(),
                 shells,
+                lifeline: None,
             })),
         })
     }

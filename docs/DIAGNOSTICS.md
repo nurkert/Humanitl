@@ -654,6 +654,54 @@ Sandbox backend not admitted yet
 
 **Fix.** `ChangeSetting` on `sandbox.backend` = `auto`, the admitted backend of this system.
 
+#### SANDBOX_037
+
+Podman too old or without a needed capability
+
+**Auslöser.** `sandbox.backend = "podman"` needs Podman 4.9 or newer with the OCI runtime `crun`; the installed one is older, runs another runtime, or did not answer `podman info`. The start stops and never takes another backend.
+
+**Fix.** `CopyCommand` with the install command for Podman and `crun` of this distribution.
+
+#### SANDBOX_038
+
+Podman not rootless or not local
+
+**Auslöser.** The sandbox needs rootless Podman that runs on this machine, started by the daemon itself. The found Podman runs as root, or it talks to a remote service such as a Podman machine; neither sees the descriptors and files the daemon hands over.
+
+**Fix.** `ChangeSetting` on `sandbox.backend` = `auto`, the way back to the backend of this system; installing does not help here. Run the daemon as the user, without a remote connection, to use Podman.
+
+#### SANDBOX_039
+
+No subordinate IDs for the container
+
+**Auslöser.** `/etc/subuid` or `/etc/subgid` gives this user fewer than 65536 subordinate IDs, or `newuidmap` and `newgidmap` are missing. Rootless Podman cannot map the user into the container without them.
+
+**Fix.** `CopyCommand` with what is missing: the package with `newuidmap` and `newgidmap` (`uidmap` on Debian), `sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 <user>` for the ranges, or both joined with `&&`. The range may overlap one of another account; choose a free one then.
+
+#### SANDBOX_040
+
+Container limits cannot be enforced
+
+**Auslöser.** The sandbox under Podman runs with a memory, CPU and process limit, and the cgroup v2 controllers for them are not delegated to this user. A sandbox without its limits does not start.
+
+**Fix.** `CopyCommand` with the systemd drop-in that delegates `cpu`, `memory` and `pids` to user sessions, then a new login.
+
+#### SANDBOX_041
+
+Container of an earlier session found
+
+**Auslöser.** A container that carries the label of this daemon outlived its session, for example after a crash of the daemon. The daemon removes such containers when it starts; the sentence says whether that worked.
+
+**Fix.** None when it was removed; otherwise `CopyCommand` with the command that removes it by hand.
+
+#### SANDBOX_044
+
+SELinux would relabel the project
+
+**Auslöser.** SELinux enforces labels on this machine. A container could read the project only after it was relabelled (`:z`), and that changes the labels of the user's own files. Until there is a design for it, the Podman backend does not start on such a machine.
+
+**Fix.** `ChangeSetting` on `sandbox.backend` = `auto`.
+
 ### Bereich proxy
 
 #### PROXY_001

@@ -117,6 +117,7 @@ pub mod launcher;
 pub mod os_release;
 mod pinned;
 mod platform;
+mod podman;
 pub mod profile;
 pub mod refusals;
 pub mod seatbelt;
@@ -132,8 +133,8 @@ pub use crate::agent::{
 };
 pub use crate::agent_exit::{FirstOutput, did_not_start};
 pub use crate::backend::{
-    ADMITTED_BACKENDS, BWRAP_BACKEND, Backend, BackendChoice, PODMAN_BACKEND, SEATBELT_BACKEND,
-    backend_name, choose_backend, runtime_fits_backend,
+    ADMITTED_BACKENDS, BWRAP_BACKEND, Backend, BackendChoice, LeftSandboxes, PODMAN_BACKEND,
+    SEATBELT_BACKEND, backend_name, choose_backend, runtime_fits_backend,
 };
 pub use crate::backend_list::{
     BackendEntry, LISTED_BACKENDS, RuntimeEntry, list_backends, list_backends_with,
@@ -143,7 +144,8 @@ pub use crate::bridge_env::{
     CHECK_SECCOMP_APPLIED, CHECK_SINGLE_SOCKET, ENV_BRIDGES, ENV_REPORT_FD, ENV_SECCOMP_DENY,
     ENV_SECCOMP_FAMILIES, ENV_SECCOMP_TYPES, EXEC_PREFIX, EXIT_EXEC, EXIT_SETUP, EXIT_USAGE,
     ExecFailure, RESERVED_ENV, SHIM_CONTROL_FD, SHIM_CONTROLLING_TERMINAL, SHIM_ENV_FD,
-    SHIM_LIFELINE_FD, ShimCheck, bridges_json, parse_check_line, parse_exec_line, shim_env,
+    SHIM_LIFELINE_FD, SHIM_STDIO_FD, ShimCheck, bridges_json, parse_check_line, parse_exec_line,
+    shim_env,
 };
 pub use crate::bwrap::{
     BIND_FD_VERSION, BwrapBackend, EARLY_EXIT_WINDOW, MIN_BWRAP_VERSION, USERNS_DOCS_URL,

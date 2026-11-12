@@ -26,7 +26,7 @@
 
 #![allow(unsafe_code)]
 
-use std::os::fd::{AsRawFd as _, BorrowedFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd as _, BorrowedFd, FromRawFd as _, IntoRawFd as _, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt as _;
 use std::process::Command;
 
@@ -105,6 +105,94 @@ pub(crate) fn inherit_in_child(
     Ok(())
 }
 
+/// Wie [`inherit_in_child`], aber das Kind bekommt die Deskriptoren
+/// fortlaufend ab 3, in der Reihenfolge von `fds` (HUM-433).
+///
+/// Eine Container-Engine reicht nur einen Block ab 3 an den Container weiter
+/// (`--preserve-fds N`: 3 bis 3 + N - 1); die Nummern des Daemons sind
+/// beliebig. Im Kind, zwischen `fork` und `exec`, kopiert der Hook zuerst
+/// jede Quelle, die im Zielbereich liegt, hinter ihn (mit `FD_CLOEXEC`, die
+/// Kopie verfällt beim `exec`), und legt dann jede Quelle mit `dup2` auf ihr
+/// Ziel; `dup2` setzt `FD_CLOEXEC` am Ziel nicht. So überschreibt kein Schritt
+/// eine Quelle, die noch gebraucht wird.
+///
+/// Die Standardbibliothek legt für `spawn` selbst eine Pipe an, über die das
+/// Kind einen Fehler vor dem `exec` meldet; läge sie im Zielbereich, legte der
+/// Hook einen Deskriptor über sie. Zurück kommen deshalb Platzhalter auf den
+/// Nummern des Zielbereichs, die im Elternprozess frei waren: Der Aufrufer
+/// hält sie, bis `spawn` zurückkehrt, damit die Pipe dort keinen Platz findet.
+///
+/// # Errors
+///
+/// `InvalidInput`, wenn einer auf 0, 1 oder 2 liegt oder es zu viele sind;
+/// der Fehler von `open(2)` für die Platzhalter.
+pub(crate) fn inherit_renumbered(
+    command: &mut Command,
+    fds: &[BorrowedFd<'_>],
+) -> std::io::Result<Vec<OwnedFd>> {
+    let mut numbers: Vec<RawFd> = fds.iter().map(std::os::fd::AsRawFd::as_raw_fd).collect();
+    if let Some(low) = numbers.iter().find(|&&fd| fd < FIRST_INHERITED_FD) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "descriptor {low} sits on a standard stream; the child's stdio would replace it \
+                 before it is handed over"
+            ),
+        ));
+    }
+    let end = RawFd::try_from(numbers.len())
+        .ok()
+        .and_then(|count| FIRST_INHERITED_FD.checked_add(count))
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "too many descriptors")
+        })?;
+    let null = std::fs::File::open("/dev/null")?;
+    let mut reserved = Vec::new();
+    for slot in FIRST_INHERITED_FD..end {
+        // `F_DUPFD` nimmt die kleinste freie Nummer ab `slot`; ist es `slot`
+        // selbst, war sie frei und bleibt jetzt belegt. Sonst gehört sie
+        // schon einem anderen, und die Kopie geht wieder zu.
+        let copy = fcntl_dupfd_cloexec(&null, slot).map_err(std::io::Error::from)?;
+        if copy.as_raw_fd() == slot {
+            reserved.push(copy);
+        }
+    }
+    let hook = move || -> std::io::Result<()> {
+        let failed = |_| std::io::Error::from_raw_os_error(HOOK_ERRNO);
+        for fd in &mut numbers {
+            if *fd < end {
+                // SAFETY: Im Kind zwischen `fork` und `exec`; die Nummer war
+                // beim Aufruf als `BorrowedFd` offen, und der Aufrufer hält
+                // sie bis nach dem `spawn` offen. `fcntl(2)` ist
+                // async-signal-sicher, und es wird nichts alloziert.
+                let source = unsafe { BorrowedFd::borrow_raw(*fd) };
+                *fd = fcntl_dupfd_cloexec(source, end)
+                    .map_err(failed)?
+                    .into_raw_fd();
+            }
+        }
+        for (target, &fd) in (FIRST_INHERITED_FD..).zip(&numbers) {
+            // SAFETY: wie oben; `fd` liegt jetzt hinter dem Zielbereich. Die
+            // Zielnummer gehört im Kind niemandem, der sie nach dem `exec`
+            // noch braucht: Was dort lag, trug `FD_CLOEXEC` (die Platzhalter
+            // des Elternprozesses), und `dup2(2)` schließt es zuerst.
+            let source = unsafe { BorrowedFd::borrow_raw(fd) };
+            let mut slot = unsafe { OwnedFd::from_raw_fd(target) };
+            let moved = rustix::io::dup2(source, &mut slot);
+            // Die Nummer gehört ab hier dem Programm, das gleich startet.
+            let _ = slot.into_raw_fd();
+            moved.map_err(failed)?;
+        }
+        Ok(())
+    };
+    // SAFETY: Der Hook hält sich an die Regeln für `pre_exec`: kein Lock,
+    // keine Allokation, nur `fcntl(2)` und `dup2(2)` (siehe oben).
+    unsafe {
+        command.pre_exec(hook);
+    }
+    Ok(reserved)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -159,6 +247,37 @@ mod tests {
         let mut text = String::new();
         reader.read_to_string(&mut text).unwrap();
         assert_eq!(text, "inherited\n");
+    }
+
+    /// HUM-433: Das Kind findet die Deskriptoren fortlaufend ab 3, in der
+    /// Reihenfolge der Liste, gleich welche Nummern der Elternprozess
+    /// vergab; dort bleibt `FD_CLOEXEC` stehen.
+    #[test]
+    fn renumbered_descriptors_arrive_from_three_in_order() {
+        use super::inherit_renumbered;
+
+        let (mut first_reader, first) = std::io::pipe().unwrap();
+        let (mut second_reader, second) = std::io::pipe().unwrap();
+        let first = OwnedFd::from(first);
+        // Die zweite Quelle liegt hoch, weit hinter dem Zielbereich.
+        let second = rustix::io::fcntl_dupfd_cloexec(OwnedFd::from(second), 40).unwrap();
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "echo one >&3; echo two >&4; exec 3>&- 4>&-"]);
+        let reserved = inherit_renumbered(&mut command, &[first.as_fd(), second.as_fd()])
+            .expect("above the standard streams");
+        let status = command.status().expect("sh runs");
+        drop(reserved);
+        assert!(status.success(), "{status}");
+        for fd in [&first, &second] {
+            assert!(fcntl_getfd(fd.as_fd()).unwrap().contains(FdFlags::CLOEXEC));
+        }
+        drop((first, second));
+        let mut text = String::new();
+        first_reader.read_to_string(&mut text).unwrap();
+        assert_eq!(text, "one\n");
+        text.clear();
+        second_reader.read_to_string(&mut text).unwrap();
+        assert_eq!(text, "two\n");
     }
 
     /// Ohne den Hook erbt das Kind nichts: Das zeigt, dass der Test oben die
