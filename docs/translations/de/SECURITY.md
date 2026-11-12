@@ -1715,10 +1715,14 @@ jeden Container einhängt, etwa Geheimnisse des Hosts unter `/run/secrets`), OCI
 `storage.conf`, `registries.conf` und entfernte Verbindungen. Der Adapter startet Podman mit leerer
 Umgebung außer `HOME`, dem `XDG_RUNTIME_DIR` des Nutzers (nie dem von Humanitl), `PATH`, dem Sitzungsbus des Nutzers, wenn es einen gibt, und drei Dateien, die er selbst unter dem
 Laufzeitverzeichnis schreibt (`CONTAINERS_CONF` mit leerer `default_mounts_file`, leerem
-`hooks_dir` und eigenem `seccomp_profile`; `CONTAINERS_STORAGE_CONF`; `CONTAINERS_REGISTRIES_CONF`),
-dazu `--hooks-dir` auf ein leeres Verzeichnis. `CONTAINERS_CONF_OVERRIDE`, `CONTAINER_HOST` und
-`CONTAINER_CONNECTION` erreichen es nie. Ein Podman, das als root läuft oder nur Client eines
-entfernten Dienstes wie einer Podman-Maschine ist, wird mit `SANDBOX_038` abgelehnt.
+`hooks_dir` und eigenem `seccomp_profile`; `CONTAINERS_STORAGE_CONF`; `CONTAINERS_REGISTRIES_CONF`).
+Die Zeile, die einen Container startet (`podman run`), trägt dazu `--hooks-dir` auf ein leeres
+Verzeichnis und `--default-mounts-file` auf eine leere Datei. Erst dieses globale Flag hält die
+`~/.config/containers/mounts.conf` des Nutzers fern: Podman liest diese Datei zusätzlich zur
+`default_mounts_file` der Konfiguration, die nur eine zweite Linie ist (gemessen unter Podman 4.9.3
+und 5.8.6, HUM-454). `CONTAINERS_CONF_OVERRIDE`, `CONTAINER_HOST` und `CONTAINER_CONNECTION`
+erreichen es nie. Ein Podman, das als root läuft oder nur Client eines entfernten Dienstes wie einer
+Podman-Maschine ist, wird mit `SANDBOX_038` abgelehnt.
 
 ### Was anders ist als unter bubblewrap
 

@@ -589,6 +589,11 @@ pub(crate) struct LineSpec<'a> {
     pub(crate) runtime: &'a str,
     /// Das leere Verzeichnis für `--hooks-dir`.
     pub(crate) hooks_dir: &'a Path,
+    /// Die leere Datei für `--default-mounts-file`: Nur dieses globale Flag
+    /// ersetzt die Liste der `mounts.conf`; der Eintrag in der
+    /// `containers.conf` hält die Datei des Nutzers nicht fern (gemessen
+    /// 2026-11-12 unter Podman 4.9.3 und 5.8.6, HUM-454).
+    pub(crate) mounts_file: &'a Path,
     /// Die eigene Kopie des seccomp-Profils von Podman.
     pub(crate) seccomp: &'a Path,
     /// Die Datei für `--conmon-pidfile`.
@@ -626,6 +631,10 @@ pub(crate) fn line(
     // Globale Flags vor `run`.
     push(format!("--runtime={}", spec.runtime));
     push(format!("--hooks-dir={}", spec.hooks_dir.display()));
+    push(format!(
+        "--default-mounts-file={}",
+        spec.mounts_file.display()
+    ));
     push("run".to_owned());
     for flag in FIXED_RUN_FLAGS {
         push((*flag).to_owned());
@@ -725,6 +734,7 @@ mod tests {
             program: Path::new("/usr/bin/podman"),
             runtime: "crun",
             hooks_dir: Path::new("/run/e/hooks.d"),
+            mounts_file: Path::new("/run/e/mounts.conf"),
             seccomp: Path::new("/run/e/seccomp.json"),
             conmon_pidfile: Path::new("/run/s/conmon.pid"),
             rootfs: Path::new("/run/s/rootfs"),
@@ -852,6 +862,12 @@ mod tests {
                 assert!(engine.iter().any(|arg| arg == flag), "{flag} missing");
             }
             assert!(engine.iter().any(|arg| arg.starts_with("--hooks-dir=")));
+            assert!(
+                argv.iter()
+                    .take_while(|arg| *arg != "run")
+                    .any(|arg| arg == "--default-mounts-file=/run/e/mounts.conf"),
+                "the global flag --default-mounts-file must precede run (HUM-454)"
+            );
             assert!(engine.iter().any(|arg| arg == "--rootfs"));
         }
     }

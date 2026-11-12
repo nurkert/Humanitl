@@ -87,12 +87,17 @@ inherited through `--preserve-fds`:
   host's proxy variables, credentials included, into the container);
 - every configuration source of Podman that the daemon does not write is cut
   off: `CONTAINERS_CONF` names a `containers.conf` the daemon writes (with
-  `default_mounts_file` pointing at an empty file, so no `mounts.conf` adds
-  mounts such as `/run/secrets`, an empty `hooks_dir`, and our own
-  `seccomp_profile`), `CONTAINERS_STORAGE_CONF` and
+  `default_mounts_file` pointing at an empty file as a second line of
+  defense, an empty `hooks_dir`, and our own `seccomp_profile`),
+  `CONTAINERS_STORAGE_CONF` and
   `CONTAINERS_REGISTRIES_CONF` name files the daemon writes,
   `CONTAINERS_CONF_OVERRIDE`, `CONTAINER_HOST` and `CONTAINER_CONNECTION` are
-  removed from the environment, and `--hooks-dir` names an empty directory;
+  removed from the environment, and the `podman run` line names an empty
+  directory with `--hooks-dir` and the empty file with
+  `--default-mounts-file`, which alone keeps out mounts such as
+  `/run/secrets`, because Podman reads the
+  user's `~/.config/containers/mounts.conf` in addition to the configured
+  `default_mounts_file` (HUM-454);
 - the shim compares the mount table inside the container
   (`/proc/self/mountinfo`) with the plan as a multiset of entries (mount point,
   type, source, options, count), including the engine's own entries, before it

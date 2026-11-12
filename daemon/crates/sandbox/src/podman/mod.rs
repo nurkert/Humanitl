@@ -37,7 +37,9 @@
 //! `hooks_dir` und der eigenen Kopie des seccomp-Profils),
 //! `CONTAINERS_STORAGE_CONF` und `CONTAINERS_REGISTRIES_CONF`.
 //! `CONTAINERS_CONF_OVERRIDE`, `CONTAINER_HOST` und `CONTAINER_CONNECTION`
-//! erreichen Podman damit nie.
+//! erreichen Podman damit nie. Die `mounts.conf` unter `HOME` liest Podman
+//! trotz `default_mounts_file` zusätzlich; erst das globale Flag
+//! `--default-mounts-file` auf der Startzeile ersetzt die Liste (HUM-454).
 //!
 //! **Die eigene Kopie des seccomp-Profils** (`seccomp.json`) ist das
 //! Standardprofil aus `containers-common` 0.67.1 (Debian-Paket
@@ -275,6 +277,7 @@ impl PodmanBackend {
             program: &self.program,
             runtime: detect::CRUN,
             hooks_dir: &engine.hooks_dir,
+            mounts_file: &engine.mounts_conf,
             seccomp: &engine.seccomp,
             conmon_pidfile: &session_dir.conmon_pidfile,
             rootfs: &session_dir.rootfs,
@@ -713,7 +716,9 @@ impl EngineDir {
     }
 
     /// `containers.conf` mit den Variablen des Shims als Umgebung jedes
-    /// Containers: keine Einhängung aus `mounts.conf`, keine Hooks, das eigene
+    /// Containers: keine Einhängung aus `mounts.conf` (nur eine zweite Linie;
+    /// die `mounts.conf` des Nutzers hält erst das globale Flag
+    /// `--default-mounts-file` fern, HUM-454), keine Hooks, das eigene
     /// seccomp-Profil, kein Proxy des Hosts, keine Volumes, Geräte oder
     /// Capabilities, kein Netz.
     pub(crate) fn conf_text(&self, shim_env: &[(String, String)]) -> String {

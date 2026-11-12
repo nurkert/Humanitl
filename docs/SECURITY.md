@@ -1903,10 +1903,14 @@ Podman reads much more than its command line: `containers.conf` in every layer, 
 `storage.conf`, `registries.conf`, and remote connections. The adapter starts Podman with an empty
 environment except `HOME`, the user's own `XDG_RUNTIME_DIR` (never Humanitl's), `PATH`, the user's session bus if there is one, and three files it writes itself under the
 runtime directory (`CONTAINERS_CONF` with an empty `default_mounts_file`, an empty `hooks_dir` and
-its own `seccomp_profile`; `CONTAINERS_STORAGE_CONF`; `CONTAINERS_REGISTRIES_CONF`), plus
-`--hooks-dir` on an empty directory. `CONTAINERS_CONF_OVERRIDE`, `CONTAINER_HOST` and
-`CONTAINER_CONNECTION` never reach it. A Podman that runs as root, or that is only the client of a
-remote service such as a Podman machine, is refused with `SANDBOX_038`.
+its own `seccomp_profile`; `CONTAINERS_STORAGE_CONF`; `CONTAINERS_REGISTRIES_CONF`). The line
+that starts a container (`podman run`) also carries `--hooks-dir` on an empty directory and
+`--default-mounts-file` on an empty file. Only that global flag keeps the user's
+`~/.config/containers/mounts.conf` out: Podman reads that file in addition to the
+`default_mounts_file` of the configuration, which is defense in depth only (measured on Podman 4.9.3
+and 5.8.6, HUM-454). `CONTAINERS_CONF_OVERRIDE`, `CONTAINER_HOST` and `CONTAINER_CONNECTION` never
+reach it. A Podman that runs as root, or that is only the client of a remote service such as a
+Podman machine, is refused with `SANDBOX_038`.
 
 ### What is different from bubblewrap
 
