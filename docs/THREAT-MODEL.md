@@ -123,7 +123,7 @@ Five further channels complete the model:
 | K-15 | the window between `exec` and `SIGKILL` | b | high | report read at once, `SIGKILL` without grace | open | - |
 | K-16 | recording outage | a, b, c | medium | outage reported to every client once per cause, cards marked "not recorded", first approval paused | declared | `daemon/crates/recorder` health tests, golden `states_recorder_failure` |
 | K-18 | the door for further shells (`humanitl sandbox exec`) | b | high | unnamed socket pair held only by the daemon and PID 1; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX`; at most four; dies with the sandbox | mitigated | `daemon/crates/ipc/tests/terminal.rs` (HUM-299) |
-| K-24 | the disposable sandbox: the upper layer and the way back into the project (`humanitl sandbox apply`) | b | high | project folder read-only as the lower layer of an overlay, upper layer in RAM under the daemon's runtime directory with a size cap, `mounts.extra_rw` read-only; applied only on a human's choice, checked before the first write, never through or as a symlink out of the project, no device, FIFO, socket or setuid bit, no overwrite of a file the human changed since the start unless that change is confirmed one by one (`ApplyChanges.overwrite_ids` from the app, HUM-351) or every selected change is (`--overwrite`) | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350) |
+| K-24 | the disposable sandbox: the upper layer and the way back into the project (`humanitl sandbox apply`) | b | high | project folder read-only as the lower layer of an overlay, upper layer in RAM under the daemon's runtime directory with a size cap, `mounts.extra_rw` read-only; applied only on a human's choice, checked before the first write, never through or as a symlink out of the project, no device, FIFO, socket or setuid bit, no overwrite of a file the human changed since the start unless that change is confirmed one by one (`ApplyChanges.overwrite_ids` from the app, HUM-351) or every selected change is (`--overwrite`); a container-engine backend refuses `disposable` (`SANDBOX_030`) because its lower layer cannot be bound to the checked folder, and `auto` runs direct there (HUM-438) | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350); `daemon/crates/sandbox/src/podman/tests.rs`, `daemon/crates/sandbox/tests/escape_worktree.rs` (HUM-438) |
 | K-27 | the container engine under Podman (Podman, `conmon`, `crun`, the user's container storage, `containers.conf`) | b, d | high | not admitted (`SANDBOX_048`) until the escape suite against it is green (HUM-448); every configuration source the daemon does not write cut off; fixed flags without keys; the environment only through the sealed memfd; ended through the engine and the lifeline; leftovers removed at daemon start (`SANDBOX_041`) | open | ESC-1, ESC-2 (`escape-tests-podman`, HUM-435); `daemon/crates/sandbox/src/podman/` (HUM-433) |
 
 K-13 is the obvious channel and the only one considered closed outright. K-14 is here so that
@@ -545,6 +545,16 @@ layer. The conflict check compares type, size, `mtime` and mode, not content: a 
 keeps all four is not noticed. A daemon that ends discards a pending layer; its changes are lost
 then, and the recording says so.
 
+*Podman (HUM-438).* The engine's overlay volume with its own upper layer is a second form of the
+upper layer, measured and not used. It takes the project as a path the engine resolves later; a
+descriptor is no mount source (HUM-292 P13, and P10 with `/proc/self/fd/N` as the lower layer),
+and inside the container the overlay cannot be tied to the checked folder by device and inode.
+An attacker of kind (b), a process of the same user, or anything else that can rename the
+folder could swap it between the check and the mount
+and make an unchecked folder the lower layer. Under Podman `disposable` therefore refuses with
+`SANDBOX_030` and `auto` runs direct with `SANDBOX_033`; such a run has none of the protections of
+this section. ESC-5 checks the refusal under Podman.
+
 ### K-25 Updates from inside the app
 
 The daemon fetches the latest release from GitHub once a day and installs it on a click (HUM-382).
@@ -700,6 +710,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-12 | K-06: the shim's lifeline (`--lifeline-fd`) as the counterpart of `--die-with-parent` for a backend that detaches the sandbox from the daemon; the agent's environment through a sealed memfd (`--env-fd`) instead of `argv`; the agent inherits neither; K-15 unchanged | HUM-430 |
 | 2026-11-12 | K-27 added: the container engine under the Podman backend, plain level, not admitted until HUM-448 | HUM-433 |
 | 2026-11-12 | K-27: ESC-1 and ESC-2 run against Podman in the CI job `escape-tests-podman`, with a planted hostile engine configuration of the user (`mounts.conf`, volume, hook) that must not reach the sandbox | HUM-435 |
+| 2026-11-12 | K-24: no disposable sandbox under Podman; the engine's overlay volume was measured (P10) and is not used, because its lower layer cannot be bound to the checked folder; `disposable` refuses with `SANDBOX_030`, `auto` runs direct with `SANDBOX_033` | HUM-438 |
 | 2026-11-12 | K-01, K-05, K-27: the shim compares the mount table with the plan and the device and inode of every checked folder before the agent starts, under every backend (`SANDBOX_049`, `SANDBOX_042`); under Podman a swapped folder is detected and refused instead of prevented; K-27 names the configuration sources of Podman | HUM-437 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets

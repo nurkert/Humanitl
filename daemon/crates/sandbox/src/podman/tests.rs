@@ -205,6 +205,67 @@ fn the_instance_label_differs_per_runtime_directory() {
     assert_eq!(a, instance_of(Path::new("/run/user/1000/humanitl")));
 }
 
+/// HUM-438: Unter Podman gibt es keine Wegwerf-Sandbox, und der Grund steht
+/// im Befund. `disposable` endet mit `SANDBOX_030` und fällt nie zurück;
+/// `auto` läuft direkt mit `SANDBOX_033`, das denselben Grund nennt.
+///
+/// Mutationsbeweis: `disposable_support` gibt `Ok(())` zurück, und dieser
+/// Test ist rot.
+#[test]
+fn a_disposable_sandbox_is_refused_with_its_reason_and_auto_runs_direct() {
+    use humanitl_config::{SandboxMode, WorkMode};
+
+    let paths = Paths::new(humanitl_config::Env::from_pairs([
+        ("HOME", "/home/u"),
+        ("XDG_RUNTIME_DIR", "/run/user/1000"),
+    ]));
+    let backend = PodmanBackend::fallback(paths, &PodmanConfig::default());
+    let profile = SandboxProfile::parse(
+        include_str!("../../../../../profiles/sandbox/default.toml"),
+        Path::new("default.toml"),
+    )
+    .expect("the bundled profile");
+    let session = SessionContext {
+        session: SessionId::nil(),
+        work_src: "/home/u/proj".into(),
+        work_mode: WorkMode::Rw,
+        proxy_socket_src: "/run/user/1000/humanitl/proxy/proxy.sock".into(),
+        ca_cert_src: "/home/u/ca.crt".into(),
+        ca_bundle_src: "/home/u/ca-bundle.crt".into(),
+        shim_src: "/usr/lib/humanitl/humanitl-shim".into(),
+        session_env: Vec::new(),
+        command: vec!["true".into()],
+        files: Vec::new(),
+        agent_program: None,
+    };
+    let options = crate::launcher::LaunchOptions {
+        disposable: Some(crate::launcher::DisposableLayer::Overlay(
+            crate::disposable::OverlayDirs {
+                upper: "/run/user/1000/humanitl/disposable/l/upper".into(),
+                work: "/run/user/1000/humanitl/disposable/l/work".into(),
+            },
+        )),
+        ..crate::launcher::LaunchOptions::default()
+    };
+    let request = PlanRequest::new(&profile, &session, &options);
+    let support = || backend.disposable_support(&request);
+    let err = crate::disposable::resolve_mode(SandboxMode::Disposable, support)
+        .expect_err("disposable never falls back");
+    assert_eq!(err.code.as_str(), "SANDBOX_030", "{}", err.why);
+    assert!(err.why.contains("no disposable sandbox"), "{}", err.why);
+    assert!(err.fix.is_some(), "a refusal names a way out");
+    let auto = crate::disposable::resolve_mode(SandboxMode::Auto, support).expect("auto");
+    assert_eq!(auto.mode, SandboxMode::Direct);
+    let notice = auto.notice.expect("SANDBOX_033");
+    assert_eq!(notice.code.as_str(), "SANDBOX_033");
+    assert!(
+        notice.why.contains("no disposable sandbox"),
+        "{}",
+        notice.why
+    );
+    assert!(notice.fix.is_some());
+}
+
 #[test]
 fn krun_is_refused_with_sandbox_048_and_crun_passes() {
     let err = refuse_kernel_level(PodmanRuntime::Krun).expect_err("krun");

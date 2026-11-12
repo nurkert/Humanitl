@@ -52,7 +52,7 @@
 #
 # The disposable case (HUM-350) has one version per backend. Under bwrap it
 # measures the overlay (daemon/crates/sandbox/tests/launcher.rs). A backend
-# without a disposable sandbox (Podman until HUM-438) keeps the promise by
+# without a disposable sandbox (Podman, see HUM-438) keeps the promise by
 # refusing the plan instead of starting directly on the project; the case of
 # the same name in escape_worktree.rs checks that refusal and turns red once
 # the backend offers a disposable sandbox and needs the real measurement.

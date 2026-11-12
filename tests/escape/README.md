@@ -98,8 +98,8 @@ Laufs: `run.sh` reicht das Backend als `ESC_BACKEND` an
 genau diesem Backend (`SandboxPorts::with_backend`, `sandbox.backend` nennt
 dasselbe). Fehlt das verlangte Backend, ist der Fall rot, immer: nie ein
 `skip`, und still gegen bwrap läuft er nie. Der Fall zur Wegwerf-Sandbox hat zwei Fassungen: unter bwrap die Messung am
-Overlay (`tests/launcher.rs`), unter einem Backend ohne Wegwerf-Sandbox (Podman
-bis HUM-438) die Prüfung, dass es den Plan verweigert, statt direkt in das
+Overlay (`tests/launcher.rs`), unter einem Backend ohne Wegwerf-Sandbox (Podman,
+siehe HUM-438) die Prüfung, dass es den Plan verweigert, statt direkt in das
 Projekt zu starten (`escape_worktree.rs`, rot, sobald das Backend eine
 Wegwerf-Sandbox kann). Nur die zwei Audit-Fälle hängen nicht vom Backend ab: Sie
 starten einen Daemon, schicken einen Fluss durch seinen Proxy und starten dabei

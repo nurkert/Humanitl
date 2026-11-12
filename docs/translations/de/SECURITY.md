@@ -1044,6 +1044,20 @@ gehören zur Aussage:
   Start entfernt. Die Aufzeichnung bewahrt die Entscheidung (übernommen oder verworfen, und welche
   Dateien) in der Zusammenfassung des Laufs auf.
 
+**Nicht unter Podman (HUM-438).** Das Podman-Backend hat keine Wegwerf-Sandbox: `disposable`
+lehnt mit `SANDBOX_030` ab, und `auto` läuft direkt mit `SANDBOX_033`, beide mit dem Grund. Das
+Overlay-Volume von Podman mit eigener oberer Schicht (`-v <projekt>:/work:O,upperdir=,workdir=`)
+funktioniert, nimmt das Projekt aber als Pfad, den die Engine später auflöst, und ein Deskriptor
+ist dort keine Quelle (gemessen in HUM-292, P13 für einen Bind und P10 für die untere Schicht des
+Overlays: `crun: ... Invalid argument`). Anders als ein Bind lässt sich das Overlay auch im
+Container nicht mit dem geprüften Ordner verbinden: Es hat ein eigenes Gerät, und der `lowerdir`
+in seinen Optionen ist nur Text. Ein Ordner, der zwischen Prüfung und Einhängen getauscht wird,
+könnte die untere Schicht werden, und die Zusage oben (der geprüfte Ordner ist die untere
+Schicht, HUM-263) hielte nicht. Das ist der entscheidende Grund. Ein zweites, davon getrenntes
+Hindernis zeigte dieselbe Messung: Die Engine legt Whiteouts und das Arbeitsverzeichnis des
+Overlays als ihre erste untergeordnete Kennung an, und der Daemon könnte sie beim Verwerfen der
+Schicht nicht entfernen.
+
 Was er nicht ändert: Anfragen, die der Agent durch den Proxy geschickt hat, sind draußen, was
 auch immer mit der Schicht geschieht. Ein Wegwerf-Lauf sagt nichts über den Netzwerkverkehr des
 Agenten, und er ist keine zweite Verteidigungslinie für die Masken oben; er nimmt für die Dauer
@@ -1798,6 +1812,9 @@ Podman-Maschine ist, wird mit `SANDBOX_038` abgelehnt.
   seiner Instanz und entfernt ihn, mit der Warnung `SANDBOX_041`.
 - **Die vertrauenswürdige Basis wächst** um Podman, `conmon`, `crun`, den Container-Speicher des
   Nutzers und die `containers.conf` des Daemons (K-27 in [`THREAT-MODEL.md`](THREAT-MODEL.md)).
+- **Keine Wegwerf-Sandbox.** Ihre untere Schicht lässt sich nicht an den geprüften Projektordner
+  binden; `disposable` lehnt mit `SANDBOX_030` ab, `auto` läuft direkt mit `SANDBOX_033`
+  (Abschnitt 5.2, HUM-438).
 
 ### Voraussetzungen
 

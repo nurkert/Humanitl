@@ -131,7 +131,7 @@ Fünf weitere Kanäle vervollständigen das Modell:
 | K-15 | das Zeitfenster zwischen `exec` und `SIGKILL` | b | hoch | Bericht sofort gelesen, `SIGKILL` ohne Schonfrist | open | - |
 | K-16 | Ausfall der Aufzeichnung | a, b, c | mittel | Ausfall an jeden Client einmal je Ursache gemeldet, Karten als „Wird nicht aufgezeichnet" markiert, erste Freigabe pausiert | declared | Health-Tests in `daemon/crates/recorder`, Golden-Test `states_recorder_failure` |
 | K-18 | die Tür für weitere Shells (`humanitl sandbox exec`) | b | hoch | unbenanntes Socket-Paar, das nur der Daemon und PID 1 halten; der Shim forkt die Shell von innen mit dem Filter des Agenten obendrauf, belegt durch ein verweigertes `AF_UNIX`; höchstens vier; stirbt mit der Sandbox | mitigated | `daemon/crates/ipc/tests/terminal.rs` (HUM-299) |
-| K-24 | die Wegwerf-Sandbox: die obere Schicht und der Weg zurück ins Projekt (`humanitl sandbox apply`) | b | hoch | Projektordner nur lesbar als untere Schicht eines Overlays, obere Schicht im RAM unter dem Laufzeitverzeichnis des Daemons mit Größengrenze, `mounts.extra_rw` nur lesbar; übernommen nur auf Wahl eines Menschen, geprüft vor dem ersten Schreiben, nie durch einen oder als einen Symlink aus dem Projekt hinaus, kein Gerät, kein FIFO, kein Socket, kein setuid-Bit, kein Überschreiben einer Datei, die der Mensch seit dem Start geändert hat, außer diese Änderung ist einzeln bestätigt (`ApplyChanges.overwrite_ids` aus der App, HUM-351) oder jede ausgewählte Änderung ist es (`--overwrite`) | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350) |
+| K-24 | die Wegwerf-Sandbox: die obere Schicht und der Weg zurück ins Projekt (`humanitl sandbox apply`) | b | hoch | Projektordner nur lesbar als untere Schicht eines Overlays, obere Schicht im RAM unter dem Laufzeitverzeichnis des Daemons mit Größengrenze, `mounts.extra_rw` nur lesbar; übernommen nur auf Wahl eines Menschen, geprüft vor dem ersten Schreiben, nie durch einen oder als einen Symlink aus dem Projekt hinaus, kein Gerät, kein FIFO, kein Socket, kein setuid-Bit, kein Überschreiben einer Datei, die der Mensch seit dem Start geändert hat, außer diese Änderung ist einzeln bestätigt (`ApplyChanges.overwrite_ids` aus der App, HUM-351) oder jede ausgewählte Änderung ist es (`--overwrite`); ein Backend mit Container-Engine lehnt `disposable` ab (`SANDBOX_030`), weil sich seine untere Schicht nicht an den geprüften Ordner binden lässt, und `auto` läuft dort direkt (HUM-438) | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350); `daemon/crates/sandbox/src/podman/tests.rs`, `daemon/crates/sandbox/tests/escape_worktree.rs` (HUM-438) |
 | K-27 | die Container-Engine unter Podman (Podman, `conmon`, `crun`, der Container-Speicher des Nutzers, `containers.conf`) | b, d | hoch | nicht zugelassen (`SANDBOX_048`), bis die Escape-Suite gegen sie grün ist (HUM-448); jede Konfigurationsquelle, die der Daemon nicht schreibt, abgeschnitten; feste Flags ohne Schlüssel; die Umgebung nur über den versiegelten memfd; beendet über die Engine und die Lebensleine; Reste beim Start des Daemons entfernt (`SANDBOX_041`) | open | ESC-1, ESC-2 (`escape-tests-podman`, HUM-435); `daemon/crates/sandbox/src/podman/` (HUM-433) |
 
 K-13 ist der offensichtliche Kanal und der einzige, der rundweg als geschlossen gilt. K-14 steht
@@ -556,6 +556,17 @@ Konfliktprüfung vergleicht Typ, Größe, `mtime` und Modus, nicht den Inhalt: E
 den Menschen, die alle vier beibehält, fällt nicht auf. Ein Daemon, der endet, verwirft eine
 ausstehende Schicht; ihre Änderungen gehen dann verloren, und die Aufzeichnung sagt das.
 
+*Podman (HUM-438).* Das Overlay-Volume der Engine mit eigener oberer Schicht ist eine zweite Form
+der oberen Schicht, gemessen und nicht verwendet. Es nimmt das Projekt als Pfad, den die Engine
+später auflöst; ein Deskriptor ist keine Quelle (HUM-292 P13, und P10 mit `/proc/self/fd/N` als
+untere Schicht), und im Container lässt sich das Overlay nicht über Gerät und Inode mit dem
+geprüften Ordner verbinden. Ein Angreifer der Art (b), ein Prozess desselben Nutzers, oder alles andere, was den Ordner
+umbenennen kann, könnte ihn
+zwischen Prüfung und Einhängen tauschen und einen ungeprüften Ordner zur unteren Schicht machen.
+Unter Podman lehnt `disposable` deshalb mit `SANDBOX_030` ab, und `auto` läuft direkt mit
+`SANDBOX_033`; ein solcher Lauf hat keine der Schutzmaßnahmen dieses Abschnitts. ESC-5 prüft die
+Ablehnung unter Podman.
+
 ### K-27 Die Container-Engine
 
 Unter dem Podman-Backend (HUM-433, [SECURITY.md Abschnitt 13](SECURITY.md#13-linux-podman)) ist
@@ -676,6 +687,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-12 | K-06: die Lebensleine des Shims (`--lifeline-fd`) als Gegenstück zu `--die-with-parent` für ein Backend, das die Sandbox vom Daemon abkoppelt; die Umgebung des Agenten über einen versiegelten memfd (`--env-fd`) statt `argv`; der Agent erbt keinen von beiden; K-15 unverändert | HUM-430 |
 | 2026-11-12 | K-27 neu: die Container-Engine unter dem Podman-Backend, gemeinsame Stufe, nicht zugelassen bis HUM-448 | HUM-433 |
 | 2026-11-12 | K-27: ESC-1 und ESC-2 laufen gegen Podman im CI-Job `escape-tests-podman`, mit einer gepflanzten feindlichen Engine-Konfiguration des Nutzers (`mounts.conf`, Volume, Hook), die die Sandbox nicht erreichen darf | HUM-435 |
+| 2026-11-12 | K-24: keine Wegwerf-Sandbox unter Podman; das Overlay-Volume der Engine wurde gemessen (P10) und wird nicht verwendet, weil sich seine untere Schicht nicht an den geprüften Ordner binden lässt; `disposable` lehnt mit `SANDBOX_030` ab, `auto` läuft direkt mit `SANDBOX_033` | HUM-438 |
 | 2026-11-12 | K-01, K-05, K-27: Der Shim vergleicht unter jedem Backend die Mounttabelle mit dem Plan und Gerät und Inode jedes geprüften Ordners, bevor der Agent startet (`SANDBOX_049`, `SANDBOX_042`); unter Podman wird ein getauschter Ordner erkannt und abgelehnt statt verhindert; K-27 nennt die Konfigurationsquellen von Podman | HUM-437 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
