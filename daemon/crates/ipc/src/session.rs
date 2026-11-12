@@ -25,7 +25,7 @@
 //! Client; sie stehen in `config.toml` oder in einem globalen Profil, wo ein
 //! Mensch sie geschrieben hat, und der Daemon liest sie dort.
 //!
-//! Übrig bleiben die drei Schlüssel in [`SESSION_OVERRIDE_KEYS`]; die ersten
+//! Übrig bleiben die vier Schlüssel in [`SESSION_OVERRIDE_KEYS`]; die ersten
 //! zwei sind Flags aus `backlog/CONVENTIONS.md` 3.8:
 //!
 //! - `hold.timeout_secs` sagt, wie lange eine gehaltene Anfrage wartet. Er
@@ -51,6 +51,21 @@
 //!   (`SANDBOX_048`) ablehnt; jedes zugelassene Backend hält die drei
 //!   Garantien. Die Untergrenze ist kein Schlüssel der Liste, und über alle
 //!   Ebenen gilt dort ohnehin der strengste Wert.
+//! - `sandbox.podman.runtime` (HUM-432, `--podman-runtime`) wählt die
+//!   Laufzeit unter Podman und damit die Stufe (`podman/crun`,
+//!   `podman/krun`). [`humanitl_sandbox::choose_backend`] misst genau diese
+//!   Stufe an der Untergrenze und an der Zulassung, und jede zugelassene
+//!   Stufe hält die drei Garantien. Die Stufe schützen Untergrenze und
+//!   Zulassung, nicht die Richtung des Wunsches: Ohne Untergrenze kann der
+//!   Wunsch die Laufzeit aus `config.toml` auch senken, wie `sandbox.backend`
+//!   das Backend wechseln kann. Eine gewünschte Laufzeit ohne Podman lehnt
+//!   [`SessionResolver::resolve`] mit `SANDBOX_034` ab
+//!   ([`humanitl_sandbox::runtime_fits_backend`]). `humanitl run` schickt
+//!   auch die Wahl aus der Umgebung des Aufrufs (`HUMANITL_SANDBOX__BACKEND`,
+//!   `HUMANITL_SANDBOX__PODMAN__RUNTIME`) über diese Liste; hier ist sie ein
+//!   Wert der Kommandozeile wie ein Flag. Die übrigen Schlüssel von
+//!   `sandbox.podman` bestimmen Programm, Wurzel und Grenzen und bleiben
+//!   gesperrt.
 //!
 //! [`SandboxService`]: crate::SandboxService
 //!
@@ -83,8 +98,12 @@ use humanitl_sandbox::AdapterRegistry;
 /// Die Begründung steht in der Modulbeschreibung. Wer diese Liste erweitert,
 /// erweitert, was ein Prozess auf dem Socket über die Sandbox bestimmen darf,
 /// und schreibt dazu, warum der neue Schlüssel nichts vergrößert.
-pub const SESSION_OVERRIDE_KEYS: &[&str] =
-    &["llm.endpoint", "hold.timeout_secs", "sandbox.backend"];
+pub const SESSION_OVERRIDE_KEYS: &[&str] = &[
+    "llm.endpoint",
+    "hold.timeout_secs",
+    "sandbox.backend",
+    "sandbox.podman.runtime",
+];
 
 /// Der mitgelieferte Regelsatz.
 ///
@@ -247,9 +266,15 @@ impl SessionResolver {
     /// `CONFIG_003` für einen Pfad außerhalb von [`SESSION_OVERRIDE_KEYS`]
     /// und für einen Wert außerhalb seines Bereichs, `CONFIG_001` für ein
     /// Profil, das es nicht gibt, `CONFIG_002` für einen unbekannten
-    /// Schlüssel.
+    /// Schlüssel, `SANDBOX_034` für eine gewünschte Laufzeit ohne Podman.
     pub fn resolve(&self, request: &SessionRequest) -> Result<Resolved, Diagnostic> {
         let resolved = self.resolve_unchecked(request)?;
+        // Eine Laufzeit, die dieser Lauf wünscht, bei einem Backend ohne
+        // Laufzeiten: kein stiller Start mit einer anderen Stufe (HUM-432).
+        humanitl_sandbox::runtime_fits_backend(
+            &resolved.config.sandbox,
+            resolved.origin("sandbox.podman.runtime"),
+        )?;
         // Ein Projekt, ein Profil oder der Lauf nennt einen Server, den es
         // nicht gibt: Die Sitzung startet nicht, statt still `llm.active` zu
         // nehmen (HUM-400).
@@ -714,22 +739,25 @@ mod tests {
         // vergrößert.
         assert_eq!(
             SESSION_OVERRIDE_KEYS.len(),
-            3,
-            "a client sets llm.endpoint, hold.timeout_secs and sandbox.backend, and nothing \
-             else: {SESSION_OVERRIDE_KEYS:?}"
+            4,
+            "a client sets llm.endpoint, hold.timeout_secs, sandbox.backend and \
+             sandbox.podman.runtime, and nothing else: {SESSION_OVERRIDE_KEYS:?}"
         );
         for key in SESSION_OVERRIDE_KEYS {
             assert!(check_override_key(key).is_ok(), "{key} should be allowed");
         }
         // Genau die Schlüssel, mit denen ein Client die Sandbox aufmachen
         // würde. Jeder einzelne ist ein eigener Weg hinaus. Die Untergrenze
-        // der Isolation und die Einstellungen von Podman gehören dazu
-        // (HUM-431): Ein Wunsch über den Start senkte sonst, was der Mensch
-        // verlangt hat, oder stellte Podman ein.
+        // der Isolation und die Einstellungen von Podman außer der Laufzeit
+        // gehören dazu (HUM-431, HUM-432): Ein Wunsch über den Start senkte
+        // sonst, was der Mensch verlangt hat, oder bestimmte Programm, Wurzel
+        // und Grenzen von Podman.
         for key in [
             "sandbox.min_isolation",
-            "sandbox.podman.runtime",
             "sandbox.podman.program",
+            "sandbox.podman.rootfs",
+            "sandbox.podman.image",
+            "sandbox.podman.memory_mib",
             "sandbox.profile",
             "sandbox.work_dir",
             "sandbox.env",

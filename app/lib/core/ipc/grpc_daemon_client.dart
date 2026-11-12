@@ -635,6 +635,14 @@ class GrpcDaemonClient implements DaemonClient {
     return status.toDomain();
   }
 
+  @override
+  Future<SandboxBackendList> sandboxBackends() async {
+    final pb.SandboxBackendList list = await _unary(
+      (CallOptions options) => _stub.sandboxBackends(Empty(), options: options),
+    );
+    return list.toDomain();
+  }
+
   Future<LlmKeyStatus> _llmKey(pb.LlmKeyRequest request) async {
     final pb.LlmKeyStatus status = await _unary(
       (CallOptions options) => _stub.llmKey(request, options: options),

@@ -37,6 +37,7 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 | `Humanitl.ProbeLlm` | `humanitl llm test` | `features/setup/widgets/llm_check` |
 | `Humanitl.Rules` | `humanitl rules add`<br>`humanitl rules disable`<br>`humanitl rules dry-run`<br>`humanitl rules enable`<br>`humanitl rules list`<br>`humanitl rules reload`<br>`humanitl rules remove`<br>`humanitl rules reorder`<br>`humanitl rules test`<br>`humanitl rules update` | `features/rules/rules_screen` |
 | `Humanitl.Sandbox` | `humanitl run`<br>`humanitl run --direct`<br>`humanitl run --disposable`<br>`humanitl sandbox apply`<br>`humanitl sandbox changes`<br>`humanitl sandbox discard`<br>`humanitl sandbox plan` | `features/sandbox/sandbox_screen` |
+| `Humanitl.SandboxBackends` | `humanitl sandbox backends` | fehlt |
 | `Humanitl.SetConfig` | Ausnahme | `core/ui/fix_control` |
 | `Humanitl.Subscribe` | `humanitl run --ask terminal` | `features/intercept/widgets/queue_pane` |
 | `Humanitl.Terminal` | `humanitl sandbox attach`<br>`humanitl sandbox attach --shell` | `features/sandbox/widgets/terminal_pane` |
@@ -45,6 +46,7 @@ Eine RPC ohne CLI-Zeile und ohne Ausnahme bricht den CI-Job
 ## UI-Lücken
 
 - `Humanitl.GetSessionSummary`
+- `Humanitl.SandboxBackends`
 
 ## Ausnahmen
 

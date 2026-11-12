@@ -79,6 +79,15 @@ service Humanitl {
   // Antwort ist der Stand danach; jeder Wechsel kommt zusaetzlich als
   // `FlowEvent.intercept` in `Subscribe`. Nichts davon erreicht die Sandbox.
   rpc Intercept(InterceptRequest) returns (InterceptStatus);
+  // Die Sandbox-Backends dieses Systems (HUM-432): je Backend die
+  // Isolationsstufe, ob ein Start damit ginge, ob die Konfiguration es waehlt,
+  // und was fehlt, als `Diagnostic`; unter Podman dazu die Laufzeiten `crun`
+  // und `krun` mit eigener Verfuegbarkeit. Die Antwort fragt das System wie
+  // die Suche vor einem Start und startet nichts; den Probestart macht
+  // `Doctor` (HUM-436). Oberflaeche und Kommandozeile pruefen nichts selbst
+  // (ADR-018). Ein Daemon vor Minor 34 kennt den Aufruf nicht
+  // (`UNIMPLEMENTED`).
+  rpc SandboxBackends(google.protobuf.Empty) returns (SandboxBackendList);
 }
 
 // ---------- Info ----------
@@ -1422,6 +1431,12 @@ message SandboxEvent {
     // Start den Port vergibt. Leer im Schnappschuss eines Befunds und bei
     // einem Daemon vor Minor 33.
     string door = 20;
+    // Die Isolationsstufe des Backends in `backend` (HUM-432), dieselbe wie
+    // `SandboxBackend.isolation_level` in `SandboxBackends`. Waehrend eine
+    // Sandbox laeuft die ihre, sonst die des Backends, das ein Start mit
+    // diesem Plan bekaeme. `UNSPECIFIED` im Schnappschuss eines Befunds, in
+    // dem keine Wahl zustande kam, und bei einem Daemon vor Minor 34.
+    IsolationLevel isolation_level = 21;
   }
 
   // Eine Zeile aus dem Log der Sandbox.
@@ -1429,6 +1444,77 @@ message SandboxEvent {
     google.protobuf.Timestamp at = 1;
     string line = 2;
   }
+}
+
+// ---------- Sandbox-Backends (HUM-432) ----------
+
+// Wie stark ein Backend die Sandbox vom Host trennt, von schwach nach stark.
+// Dieselben drei Namen wie `sandbox.min_isolation`.
+enum IsolationLevel {
+  ISOLATION_LEVEL_UNSPECIFIED = 0;
+  // Eine Richtlinie des Kerns ueber einem Prozess, der die echten Pfade
+  // sieht (Seatbelt unter macOS).
+  ISOLATION_LEVEL_POLICY = 1;
+  // Eigene Namensraeume ueber dem geteilten Kern des Hosts (das Backend des
+  // Systems unter Linux, Podman mit `crun`).
+  ISOLATION_LEVEL_NAMESPACES = 2;
+  // Ein eigener Gastkern (Podman mit `krun`).
+  ISOLATION_LEVEL_KERNEL = 3;
+}
+
+// Die Antwort von `SandboxBackends`.
+message SandboxBackendList {
+  // Die Backends, die es auf dieser Art System geben kann, in fester
+  // Reihenfolge: unter Linux das Backend des Systems und `podman`, unter
+  // macOS nur das Backend des Systems.
+  repeated SandboxBackend backends = 1;
+  // Die Untergrenze `sandbox.min_isolation` der Konfiguration ohne Projekt,
+  // der strengste Wert aller Ebenen. Ein Projekt-Profil kann sie fuer seinen
+  // Ordner heben; das sagt erst der Plan dieses Ordners (`SANDBOX_035`).
+  IsolationLevel min_isolation = 2;
+}
+
+// Ein Sandbox-Backend und was ihm auf diesem System fehlt.
+message SandboxBackend {
+  // Der Name, wie ihn `sandbox.backend` schreibt, ohne `auto`.
+  string name = 1;
+  // Die Stufe, die das Backend bietet; unter Podman die der gewaehlten
+  // Laufzeit (`sandbox.podman.runtime`).
+  IsolationLevel isolation_level = 2;
+  // Ob ein Start mit diesem Backend die Wahl bestuende, gemessen an der
+  // Konfiguration ohne Projekt-Profil: Es ist zugelassen, auf dem System
+  // vorhanden, liegt nicht unter `min_isolation`, und das Sandbox-Profil aus
+  // `sandbox.profile` verlangt kein anderes. Ein Projekt-Profil kann die
+  // Untergrenze fuer seinen Ordner noch heben; das sagt erst der Plan dieses
+  // Ordners. Sonst steht der Grund in `diagnostics`. Falsch heisst nie, dass
+  // ein anderes Backend einspringt.
+  bool available = 3;
+  // Ob `sandbox.backend` der Konfiguration ohne Projekt dieses Backend
+  // waehlt; `auto` ist das Backend des Systems. Hoechstens eines.
+  bool selected = 4;
+  // Was einem Start im Weg steht, mit `why` und, wo es einen gibt, `fix`:
+  // `SANDBOX_034` (nicht vorhanden), `SANDBOX_036` (das Sandbox-Profil
+  // verlangt ein anderes), `SANDBOX_035` (unter der Untergrenze),
+  // `SANDBOX_048` (noch nicht zugelassen) oder der Befund der Suche des
+  // Backends (`SANDBOX_001` bis `SANDBOX_003`). Leer, wenn `available`.
+  repeated Diagnostic diagnostics = 5;
+  // Die Laufzeiten des Backends, wo es mehrere hat: unter Podman `crun` und
+  // `krun`. Leer bei einem Backend mit nur einer Art zu starten.
+  repeated SandboxRuntime runtimes = 6;
+}
+
+// Eine Laufzeit eines Backends (`sandbox.podman.runtime`).
+message SandboxRuntime {
+  // `crun` oder `krun`.
+  string name = 1;
+  // Die Stufe mit dieser Laufzeit.
+  IsolationLevel isolation_level = 2;
+  // Wie `SandboxBackend.available`, fuer genau diese Laufzeit.
+  bool available = 3;
+  // Ob `sandbox.podman.runtime` diese Laufzeit waehlt.
+  bool selected = 4;
+  // Wie `SandboxBackend.diagnostics`, fuer genau diese Laufzeit.
+  repeated Diagnostic diagnostics = 5;
 }
 
 // ---------- Zusammenfassung eines Sandbox-Laufs ----------

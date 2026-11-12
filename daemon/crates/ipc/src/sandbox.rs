@@ -737,6 +737,19 @@ impl SandboxService {
         self.inner.terminal(sandbox_id)
     }
 
+    /// Das Backend, das das Sandbox-Profil mit diesem Namen verlangt
+    /// (`[sandbox] backend`, `auto` für keines), gesucht wie beim Start
+    /// (HUM-432, für `SandboxBackends`). Blockierend: liest eine Datei.
+    ///
+    /// # Errors
+    ///
+    /// `CONFIG_001` oder `CONFIG_003`, wenn es das Profil nicht gibt oder
+    /// sich nicht lesen lässt.
+    pub fn profile_backend(&self, name: &str) -> Result<String, Diagnostic> {
+        let (path, _) = self.inner.profile_path(name)?;
+        Ok(SandboxProfile::load(&path)?.sandbox.backend)
+    }
+
     /// Das Terminal, das ein `Open` meint: mit `shell_id` das einer weiteren
     /// Shell (HUM-299), sonst das des Agenten.
     ///
@@ -2950,6 +2963,10 @@ impl Inner {
             sandbox_id: id.unwrap_or_default(),
             session_id: self.session.to_string(),
             backend: prepared.backend.name().to_owned(),
+            // Die Stufe des Backends, das diese Momentaufnahme gebaut hat;
+            // dasselbe, das startet oder läuft (HUM-432).
+            isolation_level: crate::convert::isolation_level_to_proto(prepared.backend.isolation())
+                .into(),
             llm_endpoint: config
                 .llm
                 .endpoint
@@ -3030,6 +3047,10 @@ impl Inner {
             sandbox_id: id.unwrap_or_default(),
             session_id: self.session.to_string(),
             backend: humanitl_sandbox::PLATFORM_BACKEND_NAME.to_owned(),
+            // Ein Befund ohne gebautes Backend nennt keine Stufe (HUM-432):
+            // Die Stufe des Systems wäre eine Behauptung über ein Backend,
+            // das womöglich gar nicht gewählt war.
+            isolation_level: v1::IsolationLevel::Unspecified.into(),
             llm_endpoint: config
                 .llm
                 .endpoint

@@ -55,6 +55,10 @@ pub const SHORT_FLAGS: &[(&str, &str)] = &[
     ("sandbox.work_mode", "work-mode"),
     ("hold.ask_mode", "ask"),
     ("llm.endpoint", "llm"),
+    // Das Backend und die Laufzeit unter Podman für diesen Lauf (HUM-432);
+    // `humanitl run` schickt beide als `cli_overrides`.
+    ("sandbox.backend", "backend"),
+    ("sandbox.podman.runtime", "podman-runtime"),
 ];
 
 /// Die Überschrift, unter der `--help` die Konfigurations-Flags sammelt.
@@ -543,6 +547,17 @@ pub enum SandboxCmd {
 
     /// Start a short-lived sandbox and show the three isolation guarantees.
     Check,
+
+    /// List the sandbox backends of this system: the isolation level each
+    /// offers, whether a start with it would pass, which one sandbox.backend
+    /// chooses, and what is missing.
+    ///
+    /// Asks the daemon (`SandboxBackends`) and starts nothing; `humanitl
+    /// doctor` makes the probe start. A backend that is not available is never
+    /// replaced by another one: choose it with `--backend NAME` on `humanitl
+    /// run` or `humanitl sandbox run`, and the start fails with the reason
+    /// shown here.
+    Backends,
 
     /// Show what a start in this project would get, without starting:
     /// profile, project folder, mode, and the saved model server with the
@@ -1442,6 +1457,8 @@ mod tests {
             ("sandbox.work_mode", "ro"),
             ("hold.ask_mode", "none"),
             ("llm.endpoint", "http://127.0.0.1:1234"),
+            ("sandbox.backend", "podman"),
+            ("sandbox.podman.runtime", "krun"),
         ];
         assert_eq!(values.len(), SHORT_FLAGS.len());
 

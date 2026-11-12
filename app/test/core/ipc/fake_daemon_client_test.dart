@@ -414,4 +414,42 @@ void main() {
       const SandboxRefusals(reporting: SandboxRefusalReporting.on),
     );
   });
+
+  // HUM-432: Der Fake spielt dieselbe Liste wie der Rust-Fake: das Backend des
+  // Systems gewählt
+  // und verfügbar, Podman mit beiden Laufzeiten noch nicht zugelassen.
+  test(
+    'sandboxBackends lists the system backend and a podman not admitted',
+    () async {
+      final FakeDaemonClient client = FakeDaemonClient();
+      final SandboxBackendList list = await client.sandboxBackends();
+      expect(client.sandboxBackendsCalls, 1);
+      expect(list.minIsolation, IsolationLevel.policy);
+      expect(list.backends.map((b) => b.name), <String>[
+        DoctorCheckId.sandboxTool,
+        'podman',
+      ]);
+      expect(
+        list.backends.where((b) => b.selected).single.name,
+        DoctorCheckId.sandboxTool,
+      );
+      final SandboxBackendInfo podman = list.backends.last;
+      expect(podman.available, isFalse);
+      expect(podman.diagnostics.single.code, 'SANDBOX_048');
+      expect(podman.runtimes.map((r) => r.isolation), <IsolationLevel>[
+        IsolationLevel.namespaces,
+        IsolationLevel.kernel,
+      ]);
+      expect(podman.runtimes.every((r) => !r.available), isTrue);
+
+      client.sandboxBackendsFailure = const Diagnostic(
+        code: 'IPC_006',
+        severity: Severity.error,
+      );
+      await expectLater(
+        client.sandboxBackends(),
+        throwsA(isA<DaemonException>()),
+      );
+    },
+  );
 }

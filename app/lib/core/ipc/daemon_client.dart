@@ -448,6 +448,13 @@ abstract class DaemonClient {
   /// [DaemonException] with `IPC_006` when the daemon has no proxy session.
   Future<InterceptStatus> intercept(InterceptOp op);
 
+  /// `SandboxBackends`: the sandbox backends of this system with their
+  /// isolation level, whether a start would pass, which one the
+  /// configuration chooses and what is missing (HUM-432). Starts nothing.
+  /// Throws a [DaemonException] with `IPC_006` when the daemon runs no
+  /// sandbox, and `UNIMPLEMENTED` from a daemon before minor 34.
+  Future<SandboxBackendList> sandboxBackends();
+
   /// Releases the transport. The client is unusable afterwards.
   Future<void> close();
 }

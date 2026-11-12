@@ -464,6 +464,9 @@ fn all_contract_messages_exist() {
         "DoctorReport",
         "DiscoverRequest",
         "DiscoverResult",
+        "SandboxBackendList",
+        "SandboxBackend",
+        "SandboxRuntime",
     ];
 
     let present: Vec<String> = messages().into_iter().map(|(name, _)| name).collect();
@@ -498,6 +501,7 @@ fn all_contract_enums_exist() {
         "ScanSkip",
         "RefusalReporting",
         "RefusalReason",
+        "IsolationLevel",
     ];
 
     let present: Vec<String> = enums().into_iter().map(|(name, _)| name).collect();
@@ -1379,6 +1383,15 @@ const EXPECTED_RPCS: &[(&str, &str, &str, bool, bool)] = &[
         "Intercept",
         ".humanitl.v1.InterceptRequest",
         ".humanitl.v1.InterceptStatus",
+        false,
+        false,
+    ),
+    // HUM-432: die Sandbox-Backends dieses Systems mit Stufe, Verfügbarkeit
+    // und dem, was fehlt. Unär; startet nichts.
+    (
+        "SandboxBackends",
+        ".google.protobuf.Empty",
+        ".humanitl.v1.SandboxBackendList",
         false,
         false,
     ),

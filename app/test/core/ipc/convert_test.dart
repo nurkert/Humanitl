@@ -79,6 +79,44 @@ void main() {
     checkParity(pb.SandboxState.values, SandboxState.values, 'SANDBOX_STATE_');
     checkParity(pb.MountMode.values, MountMode.values, 'MOUNT_MODE_');
     checkParity(pb.ValueOrigin.values, ValueOrigin.values, 'VALUE_ORIGIN_');
+    checkParity(
+      pb.IsolationLevel.values,
+      IsolationLevel.values,
+      'ISOLATION_LEVEL_',
+    );
+  });
+
+  test('SandboxBackendList keeps levels, availability and findings', () {
+    final SandboxBackendList list =
+        (pb.SandboxBackendList()
+              ..minIsolation = pb.IsolationLevel.ISOLATION_LEVEL_KERNEL
+              ..backends.add(
+                pb.SandboxBackend()
+                  ..name = 'podman'
+                  ..isolationLevel =
+                      pb.IsolationLevel.ISOLATION_LEVEL_NAMESPACES
+                  ..diagnostics.add(
+                    pb.Diagnostic()
+                      ..code = 'SANDBOX_048'
+                      ..severity = pb.Severity.SEVERITY_BLOCKING,
+                  )
+                  ..runtimes.add(
+                    pb.SandboxRuntime()
+                      ..name = 'krun'
+                      ..isolationLevel =
+                          pb.IsolationLevel.ISOLATION_LEVEL_KERNEL
+                      ..selected = true,
+                  ),
+              ))
+            .toDomain();
+    expect(list.minIsolation, IsolationLevel.kernel);
+    final SandboxBackendInfo podman = list.backends.single;
+    expect(podman.name, 'podman');
+    expect(podman.isolation, IsolationLevel.namespaces);
+    expect(podman.available, isFalse);
+    expect(podman.diagnostics.single.code, 'SANDBOX_048');
+    expect(podman.runtimes.single.isolation, IsolationLevel.kernel);
+    expect(podman.runtimes.single.selected, isTrue);
   });
 
   test('Info becomes DaemonInfo', () {

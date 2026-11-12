@@ -115,6 +115,7 @@ pub async fn run(ctx: &Context, cmd: &SandboxCmd) -> Result<u8, Failure> {
             direct,
         } => start(ctx, cmd, tests_dir.as_deref(), *disposable, *direct).await,
         SandboxCmd::Check => check(ctx),
+        SandboxCmd::Backends => crate::cmd::backends::run(ctx).await,
         SandboxCmd::Plan => crate::cmd::plan::run(ctx).await,
         SandboxCmd::Attach {
             read_only,
@@ -1129,6 +1130,13 @@ fn prepare(
     // anderes als das gewählte.
     let choice = humanitl_sandbox::choose_backend(&config.sandbox, &profile.sandbox.backend)
         .map_err(Failure::new)?;
+    // `--podman-runtime` ohne Podman: kein stiller Start mit einer anderen
+    // Stufe (HUM-432).
+    humanitl_sandbox::runtime_fits_backend(
+        &config.sandbox,
+        resolved.origin("sandbox.podman.runtime"),
+    )
+    .map_err(Failure::new)?;
     let backend = match Backend::detect(choice.name, paths.clone()) {
         Ok(backend) => backend,
         // Die Vorschau braucht kein Sandbox-Backend; der Start schon.

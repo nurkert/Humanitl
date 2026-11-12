@@ -686,6 +686,54 @@ pub fn intercept_status_to_proto(status: humanitl_core::InterceptStatus) -> v1::
     }
 }
 
+/// Eine Isolationsstufe in ihrer Wire-Form (HUM-432).
+#[must_use]
+pub const fn isolation_level_to_proto(
+    level: humanitl_sandbox::IsolationLevel,
+) -> v1::IsolationLevel {
+    match level {
+        humanitl_sandbox::IsolationLevel::Policy => v1::IsolationLevel::Policy,
+        humanitl_sandbox::IsolationLevel::Namespaces => v1::IsolationLevel::Namespaces,
+        humanitl_sandbox::IsolationLevel::Kernel => v1::IsolationLevel::Kernel,
+    }
+}
+
+/// Die Liste der Backends in ihrer Wire-Form (HUM-432, `SandboxBackends`).
+#[must_use]
+pub fn backend_list_to_proto(
+    entries: &[humanitl_sandbox::BackendEntry],
+    floor: humanitl_sandbox::IsolationLevel,
+) -> v1::SandboxBackendList {
+    v1::SandboxBackendList {
+        backends: entries
+            .iter()
+            .map(|entry| v1::SandboxBackend {
+                name: entry.name.to_owned(),
+                isolation_level: isolation_level_to_proto(entry.isolation).into(),
+                available: entry.available(),
+                selected: entry.selected,
+                diagnostics: entry.diagnostics.iter().map(diagnostic_to_proto).collect(),
+                runtimes: entry
+                    .runtimes
+                    .iter()
+                    .map(|runtime| v1::SandboxRuntime {
+                        name: runtime.runtime.as_str().to_owned(),
+                        isolation_level: isolation_level_to_proto(runtime.isolation).into(),
+                        available: runtime.available(),
+                        selected: runtime.selected,
+                        diagnostics: runtime
+                            .diagnostics
+                            .iter()
+                            .map(diagnostic_to_proto)
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        min_isolation: isolation_level_to_proto(floor).into(),
+    }
+}
+
 /// Der Grund, aus dem eine Pause des Abfangens endete, in seiner Wire-Form.
 #[must_use]
 pub const fn resume_reason_to_proto(

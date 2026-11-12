@@ -56,7 +56,7 @@
 
 use std::ffi::OsString;
 
-use humanitl_config::{AskMode, Config};
+use humanitl_config::{AskMode, Config, Resolved};
 use humanitl_core::block::sanitize_note;
 use humanitl_core::diagnostics::codes;
 use humanitl_core::{Diagnostic, FixAction, Severity};
@@ -147,7 +147,7 @@ pub async fn run(ctx: &Context, args: &RunArgs) -> Result<u8, Failure> {
             .collect(),
         session_profile: ctx.profile_flag().unwrap_or_default().to_owned(),
         ask_mode: ask_mode_name(config.hold.ask_mode).to_owned(),
-        cli_overrides: session_overrides(ctx),
+        cli_overrides: session_overrides(ctx, &resolved),
         work_dir_source: Some(humanitl_ipc::work_dir::source_to_proto(&work_dir_source)),
         sandbox_mode: start_mode(args, config.sandbox.mode, info.proto_minor),
         // `--llm NAME`: der gespeicherte Server für genau diesen Lauf
@@ -987,12 +987,57 @@ fn refuse_terminal_ask(config: &Config, args: &RunArgs, on_terminal: bool) -> Re
 /// aber ihn gar nicht erst zu schicken erspart dem Nutzer einen Befund über
 /// etwas, das für diese Sitzung ohnehin schon gilt: `--work`, `--work-mode`
 /// und `--ask` reisen in ihren eigenen Feldern.
-fn session_overrides(ctx: &Context) -> Vec<v1::sandbox_request::CliOverride> {
-    ctx.cli_pairs()
+///
+/// Dazu die Wahl des Sandbox-Backends aus der Umgebung dieses Aufrufs
+/// ([`environment_backend_choice`]); ein Flag gewinnt über sie.
+fn session_overrides(ctx: &Context, resolved: &Resolved) -> Vec<v1::sandbox_request::CliOverride> {
+    merge_overrides(ctx.cli_pairs(), resolved)
+}
+
+/// [`session_overrides`] ohne den Kontext: die Paare der Kommandozeile und
+/// die Wahl aus der Umgebung, ein Flag vor der Umgebung.
+fn merge_overrides(
+    cli_pairs: Vec<(String, String)>,
+    resolved: &Resolved,
+) -> Vec<v1::sandbox_request::CliOverride> {
+    let mut pairs: Vec<(String, String)> = cli_pairs
         .into_iter()
         .filter(|(path, _)| SESSION_OVERRIDE_KEYS.contains(&path.as_str()))
+        .collect();
+    for (path, value) in environment_backend_choice(resolved) {
+        if !pairs.iter().any(|(given, _)| *given == path) {
+            pairs.push((path, value));
+        }
+    }
+    pairs
+        .into_iter()
         .map(|(path, value)| v1::sandbox_request::CliOverride { path, value })
         .collect()
+}
+
+/// `sandbox.backend` und `sandbox.podman.runtime`, wo sie in der Auflösung
+/// dieses Aufrufs aus der Umgebung kommen (`HUMANITL_SANDBOX__BACKEND`,
+/// `HUMANITL_SANDBOX__PODMAN__RUNTIME`, HUM-432).
+///
+/// Der Daemon läuft mit seiner eigenen Umgebung, meist als Nutzer-Unit ohne
+/// diese Variablen. Bliebe die Wahl hier, startete er still sein Backend
+/// statt des gewünschten, und ein `SANDBOX_034` oder `SANDBOX_048` fiele
+/// unter den Tisch. Über `cli_overrides` kommt sie als Wert der
+/// Kommandozeile an, und der Daemon prüft sie wie ein Flag:
+/// Untergrenze, Zulassung und `runtime_fits_backend`.
+fn environment_backend_choice(resolved: &Resolved) -> Vec<(String, String)> {
+    let sandbox = &resolved.config.sandbox;
+    [
+        (
+            "sandbox.backend",
+            humanitl_sandbox::backend_name(sandbox.backend),
+        ),
+        ("sandbox.podman.runtime", sandbox.podman.runtime.as_str()),
+    ]
+    .into_iter()
+    .filter(|(path, _)| matches!(resolved.origin(path), Some(humanitl_config::Origin::Env(_))))
+    .map(|(path, value)| (path.to_owned(), value.to_owned()))
+    .collect()
 }
 
 /// Der Server aus `--llm NAME` für `Start.llm_server` (HUM-400).
@@ -1489,5 +1534,80 @@ mod tests {
             "direct"
         );
         assert_eq!(SandboxMode::default(), SandboxMode::Auto);
+    }
+
+    /// Die Wahl des Backends aus der Umgebung des Clients reist mit dem
+    /// Start, als Wert der Kommandozeile, und ein Flag gewinnt über sie
+    /// (HUM-432). Ein Daemon, der ohne diese Variablen läuft, lehnt dann ab,
+    /// was der Client verlangt hat, statt still sein Backend zu starten:
+    /// `SANDBOX_034` für eine Laufzeit ohne Podman, `SANDBOX_048` für Podman.
+    #[test]
+    fn the_backend_choice_of_the_client_environment_reaches_the_daemon() {
+        use humanitl_ipc::session::{SessionRequest, SessionResolver};
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let base = [
+            ("HOME", home.path().display().to_string()),
+            (
+                "XDG_CONFIG_HOME",
+                home.path().join("cfg").display().to_string(),
+            ),
+        ];
+        let client = |extra: &[(&str, &str)]| {
+            let mut pairs: Vec<(String, String)> = base
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect();
+            pairs.extend(
+                extra
+                    .iter()
+                    .map(|(k, v)| ((*k).to_owned(), (*v).to_owned())),
+            );
+            resolve(&ProfileSelection::any(), None, &Env::from_pairs(pairs), &[])
+                .expect("the client resolves")
+        };
+        // Der Daemon: dieselben Pfade, keine der Variablen.
+        let daemon_env = Env::from_pairs(base.clone());
+        let daemon = SessionResolver::new(
+            humanitl_config::Paths::new(daemon_env.clone()),
+            resolve(&ProfileSelection::any(), None, &daemon_env, &[]).expect("the daemon resolves"),
+        );
+        let start = |overrides: Vec<humanitl_ipc::v1::sandbox_request::CliOverride>| {
+            daemon.resolve(&SessionRequest {
+                overrides: overrides.into_iter().map(|o| (o.path, o.value)).collect(),
+                ..SessionRequest::default()
+            })
+        };
+
+        let runtime = client(&[("HUMANITL_SANDBOX__PODMAN__RUNTIME", "krun")]);
+        let sent = super::merge_overrides(Vec::new(), &runtime);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(
+            (sent[0].path.as_str(), sent[0].value.as_str()),
+            ("sandbox.podman.runtime", "krun")
+        );
+        let refused = start(sent).expect_err("a runtime without podman");
+        assert_eq!(refused.code.as_str(), "SANDBOX_034", "{}", refused.why);
+
+        let backend = client(&[("HUMANITL_SANDBOX__BACKEND", "podman")]);
+        let sent = super::merge_overrides(Vec::new(), &backend);
+        let resolved = start(sent).expect("the wish resolves");
+        let refused = humanitl_sandbox::choose_backend(
+            &resolved.config.sandbox,
+            humanitl_sandbox::AUTO_BACKEND,
+        )
+        .expect_err("podman is not admitted");
+        assert_eq!(refused.code.as_str(), "SANDBOX_048", "{}", refused.why);
+
+        // Ein Flag gewinnt über die Umgebung, und nichts kommt doppelt.
+        let sent = super::merge_overrides(
+            vec![("sandbox.backend".to_owned(), "auto".to_owned())],
+            &backend,
+        );
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0].value, "auto");
+        // Ohne Variable reist nichts mit, was der Daemon nicht ohnehin hat.
+        assert!(super::merge_overrides(Vec::new(), &client(&[])).is_empty());
+        assert!(SESSION_OVERRIDE_KEYS.contains(&"sandbox.podman.runtime"));
     }
 }

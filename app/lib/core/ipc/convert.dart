@@ -424,6 +424,47 @@ extension InterceptStatusToDomain on pb.InterceptStatus {
   );
 }
 
+/// `SandboxRuntime` to [SandboxRuntimeInfo] (HUM-432).
+extension SandboxRuntimeToDomain on pb.SandboxRuntime {
+  /// The domain form.
+  SandboxRuntimeInfo toDomain() => SandboxRuntimeInfo(
+    name: name,
+    isolation: enumFromWire(IsolationLevel.values, isolationLevel.value),
+    available: available,
+    selected: selected,
+    diagnostics: List<Diagnostic>.unmodifiable(
+      diagnostics.map((d) => d.toDomain()),
+    ),
+  );
+}
+
+/// `SandboxBackendList` to [SandboxBackendList] (HUM-432).
+extension SandboxBackendListToDomain on pb.SandboxBackendList {
+  /// The domain form.
+  SandboxBackendList toDomain() => SandboxBackendList(
+    minIsolation: enumFromWire(IsolationLevel.values, minIsolation.value),
+    backends: List<SandboxBackendInfo>.unmodifiable(
+      backends.map(
+        (pb.SandboxBackend b) => SandboxBackendInfo(
+          name: b.name,
+          isolation: enumFromWire(
+            IsolationLevel.values,
+            b.isolationLevel.value,
+          ),
+          available: b.available,
+          selected: b.selected,
+          diagnostics: List<Diagnostic>.unmodifiable(
+            b.diagnostics.map((d) => d.toDomain()),
+          ),
+          runtimes: List<SandboxRuntimeInfo>.unmodifiable(
+            b.runtimes.map((r) => r.toDomain()),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 /// `RuleMatcher` to [RuleMatcher].
 extension RuleMatcherToDomain on pb.RuleMatcher {
   /// The domain form. Unknown methods are dropped from the list.

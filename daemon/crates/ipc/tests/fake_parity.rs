@@ -726,6 +726,14 @@ fn table() -> Vec<Case> {
                 }
             ),
         },
+        // HUM-432: Die Liste der Backends antwortet auf beiden Seiten, auch
+        // ohne laufende Sandbox; ihr Inhalt ist eine Tatsache des Systems
+        // und wird hier nicht verglichen.
+        Case {
+            what: "sandbox_backends without a running sandbox",
+            expected: Seen::ok(),
+            call: both!(sandbox_backends, ()),
+        },
     ]
 }
 

@@ -222,6 +222,11 @@ impl Fixture {
                 break;
             }
         }
+        // Der Strom wird bis zu seinem Ende gelesen: Ein gescheiterter
+        // Start räumt seine Sitzung erst vor dem letzten Ereignis auf, und
+        // wer früher aufhört, trifft beim nächsten Start auf `CLI_005`
+        // (auf einem langsamen CI-Läufer am 2026-11-12 gesehen).
+        while stream.next().await.is_some() {}
         seen
     }
 
@@ -1064,4 +1069,134 @@ async fn a_project_cannot_choose_the_backend() {
         codes(&seen)
     );
     assert!(failed(&seen), "{seen:?}");
+}
+
+/// Ein Start mit diesen Wünschen über `cli_overrides`.
+fn with_overrides(pairs: &[(&str, &str)]) -> v1::sandbox_request::Start {
+    v1::sandbox_request::Start {
+        cli_overrides: pairs
+            .iter()
+            .map(|(path, value)| v1::sandbox_request::CliOverride {
+                path: (*path).to_owned(),
+                value: (*value).to_owned(),
+            })
+            .collect(),
+        ..v1::sandbox_request::Start::default()
+    }
+}
+
+/// Die Erlaubnisliste des Start-RPC trägt für das Backend genau
+/// `sandbox.backend` und `sandbox.podman.runtime` (HUM-432). Ein Wunsch nach
+/// Podman unter der Untergrenze `kernel` ist `SANDBOX_035`, bevor die
+/// Zulassung gefragt wird; mit `krun` liegt die Stufe nicht darunter und
+/// scheitert erst an der Zulassung (`SANDBOX_048`), was zeigt, dass die
+/// Laufzeit ankommt. Jeder andere Schlüssel von `sandbox.podman` bleibt
+/// `CONFIG_003`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_start_takes_backend_and_runtime_and_measures_them_against_the_floor() {
+    let fixture = Fixture::live();
+    fixture.user_config("[sandbox]\nmin_isolation = \"kernel\"\n");
+    let seen = fixture
+        .run(with_overrides(&[("sandbox.backend", "podman")]))
+        .await;
+    assert!(
+        codes(&seen).contains(&"SANDBOX_035".to_owned()),
+        "{:?}",
+        codes(&seen)
+    );
+    assert!(
+        !codes(&seen).contains(&"SANDBOX_048".to_owned()),
+        "the floor is checked first: {:?}",
+        codes(&seen)
+    );
+    assert!(failed(&seen), "{seen:?}");
+
+    let seen = fixture
+        .run(with_overrides(&[
+            ("sandbox.backend", "podman"),
+            ("sandbox.podman.runtime", "krun"),
+        ]))
+        .await;
+    assert!(
+        codes(&seen).contains(&"SANDBOX_048".to_owned()),
+        "{:?}",
+        codes(&seen)
+    );
+    assert!(
+        !codes(&seen).contains(&"SANDBOX_035".to_owned()),
+        "{:?}",
+        codes(&seen)
+    );
+    assert!(failed(&seen), "{seen:?}");
+
+    for path in [
+        "sandbox.podman.program",
+        "sandbox.podman.rootfs",
+        "sandbox.min_isolation",
+    ] {
+        let seen = fixture.run(with_override(path, "x")).await;
+        assert!(
+            codes(&seen).contains(&"CONFIG_003".to_owned()),
+            "{path}: {:?}",
+            codes(&seen)
+        );
+        assert!(failed(&seen), "{path}: {seen:?}");
+    }
+}
+
+/// Kein still gewähltes Ersatz-Backend (HUM-432): Ein gewähltes Backend, das
+/// es auf diesem System nicht gibt, lässt den Start mit `SANDBOX_034`
+/// scheitern, statt das Backend des Systems zu nehmen.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_chosen_backend_that_is_not_there_fails_the_start_with_sandbox_034() {
+    let fixture = Fixture::live();
+    let seen = fixture
+        .run(with_override("sandbox.backend", "seatbelt"))
+        .await;
+    assert!(
+        codes(&seen).contains(&"SANDBOX_034".to_owned()),
+        "{:?}",
+        codes(&seen)
+    );
+    assert!(failed(&seen), "{seen:?}");
+}
+
+/// Eine Laufzeit über den Start-RPC, ohne dass das Backend Podman ist: Der
+/// Start lehnt mit `SANDBOX_034` ab, statt still das Backend des Systems mit
+/// geteiltem Kern zu starten (HUM-432). `humanitl run --podman-runtime`
+/// schickt genau diesen Wunsch.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_podman_runtime_wished_without_podman_refuses_the_start() {
+    for runtime in ["krun", "crun"] {
+        let fixture = Fixture::live();
+        let seen = fixture
+            .run(with_override("sandbox.podman.runtime", runtime))
+            .await;
+        assert!(
+            codes(&seen).contains(&"SANDBOX_034".to_owned()),
+            "{runtime}: {:?}",
+            codes(&seen)
+        );
+        assert!(failed(&seen), "{runtime}: {seen:?}");
+    }
+    // Mit Podman gewählt kommt die Laufzeit an und scheitert erst an der
+    // Zulassung.
+    let fixture = Fixture::live();
+    let seen = fixture
+        .run(with_overrides(&[
+            ("sandbox.backend", "podman"),
+            ("sandbox.podman.runtime", "crun"),
+        ]))
+        .await;
+    assert!(
+        codes(&seen).contains(&"SANDBOX_048".to_owned()),
+        "{:?}",
+        codes(&seen)
+    );
+    assert!(
+        !codes(&seen).contains(&"SANDBOX_034".to_owned()),
+        "{:?}",
+        codes(&seen)
+    );
 }

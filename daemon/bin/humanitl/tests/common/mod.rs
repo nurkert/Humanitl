@@ -574,6 +574,10 @@ impl DaemonApi for SilentExport {
     ) -> Result<v1::InterceptStatus, Diagnostic> {
         self.inner.intercept(request).await
     }
+
+    async fn sandbox_backends(&self) -> Result<v1::SandboxBackendList, Diagnostic> {
+        self.inner.sandbox_backends().await
+    }
 }
 
 /// Die aufgezeichnete Sitzung aus `fixtures/sessions/`.

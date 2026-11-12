@@ -105,6 +105,7 @@ pub(crate) mod test_support;
 pub mod agent;
 pub mod agent_exit;
 pub mod backend;
+pub mod backend_list;
 pub mod bridge_env;
 pub mod bwrap;
 pub mod bwrap_args;
@@ -132,7 +133,10 @@ pub use crate::agent::{
 pub use crate::agent_exit::{FirstOutput, did_not_start};
 pub use crate::backend::{
     ADMITTED_BACKENDS, BWRAP_BACKEND, Backend, BackendChoice, PODMAN_BACKEND, SEATBELT_BACKEND,
-    backend_name, choose_backend,
+    backend_name, choose_backend, runtime_fits_backend,
+};
+pub use crate::backend_list::{
+    BackendEntry, LISTED_BACKENDS, RuntimeEntry, list_backends, list_backends_with,
 };
 pub use crate::bridge_env::{
     CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NAMES, CHECK_NO_INTERFACES, CHECK_PREFIX,
