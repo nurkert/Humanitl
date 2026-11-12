@@ -47,9 +47,13 @@ if [ "$1" = "--proxy-port" ]; then shift 2; fi
 if [ "$1" = "--controlling-terminal" ]; then shift; fi
 # HUM-299: and names the door for further shells.
 if [ "$1" = "--control-fd" ]; then shift 2; fi
+# HUM-437: and hands over the expected mount table.
+if [ "$1" = "--pins-fd" ]; then shift 2; fi
 if [ "$1" = "--" ]; then shift; fi
 if [ -n "${HUMANITL_REPORT_FD:-}" ]; then
   fd="$HUMANITL_REPORT_FD"
+  echo "CHECK mounts_match ok fake" >&"$fd"
+  echo "CHECK mounts_pinned ok fake" >&"$fd"
   echo "CHECK bridge_listening ok fake listener" >&"$fd"
   echo "CHECK single_socket ok sockets=/run/humanitl/proxy.sock;unexpected=none;entries=7;limit=none" >&"$fd"
   echo "CHECK seccomp_applied ok fake" >&"$fd"
@@ -303,14 +307,31 @@ fn a_failing_start_still_explains_itself_at_a_pty() {
     let Some((backend, options)) = fx.at_a_pty() else {
         return;
     };
-    let broken = SandboxProfile::parse(
-        "version = 1\nname = \"probe\"\n[mounts]\nro = [\"/nonexistent-humanitl-source\"]\n",
-        Path::new("<probe>"),
-    )
-    .expect("the probe profile parses");
-    let plan = backend
-        .plan(&PlanRequest::new(&broken, &fx.context(&["true"]), &options))
-        .expect("the policy has nothing against a missing directory");
+    let profile = SandboxProfile::parse("version = 1\nname = \"probe\"\n", Path::new("<probe>"))
+        .expect("the probe profile parses");
+    let mut plan = backend
+        .plan(&PlanRequest::new(
+            &profile,
+            &fx.context(&["true"]),
+            &options,
+        ))
+        .expect("the plan builds");
+    // Eine fehlende Quelle lehnt schon der Plan ab (HUM-437); in der fertigen
+    // Zeile endet `bwrap`, bevor es den Befehl startet.
+    let at = plan
+        .argv
+        .iter()
+        .position(|arg| arg == "--clearenv")
+        .expect("--clearenv");
+    plan.argv.splice(
+        at..at,
+        [
+            "--ro-bind",
+            "/nonexistent-humanitl-source",
+            "/nonexistent-humanitl-source",
+        ]
+        .map(OsString::from),
+    );
     // Innerhalb des Fensters meldet `launch` den Befund, auf einer langsamen
     // Maschine erst `wait`; beide sagen dasselbe.
     let err = match backend.launch(&plan) {

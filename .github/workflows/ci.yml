@@ -925,6 +925,11 @@ jobs:
           # for everyone who can see the run.
           sed -n 's/^test \(.*\) \.\.\. FAILED$/::error title=podman live test::\1/p' \
             "$RUNNER_TEMP/podman-live.txt"
+          # A mount table that differs from the plan (HUM-437): the shim's
+          # missing and extra entries, whole, once each.
+          grep -oE '(missing|extra): [^\\]*' "$RUNNER_TEMP/podman-live.txt" \
+            | sort -u | head -n 20 | cut -c1-2000 \
+            | sed 's/%/%25/g; s/^/::error title=podman mount table::/' || true
           ((live == 0))
           # A filter that matches nothing would pass with zero tests.
           grep -Eq '^test result: ok\. [1-9][0-9]* passed' "$RUNNER_TEMP/podman-live.txt"

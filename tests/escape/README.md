@@ -66,6 +66,8 @@ Proben läuft auch unter bwrap, wo sie hält, weil es nichts davon gibt:
 | `esc-2/pid1_shim_seccomp_2` | PID 1 ist der Shim, mit `Seccomp: 2`, im selben Prozess; kein Init der Engine davor |
 | `esc-2/no_engine_secrets`, `esc-2/no_engine_volume` | ein Eintrag in der `mounts.conf` des Nutzers (`/run/secrets`) und ein Volume aus seiner `containers.conf` erreichen die Sandbox nicht |
 | `esc-2/engine_hook_not_run` | ein OCI-Hook aus der Konfiguration des Nutzers läuft für keine Sandbox des Laufs (auf dem Host, `engine-config-proof.sh`) |
+| `esc-2/swapped_folder` | ein Projektordner, zwischen Plan und Start getauscht, erreicht den Befehl nie: der Start endet mit `SANDBOX_042`, oder die Sandbox sieht den geprüften Ordner (auf dem Host, `mount-proof.sh`, HUM-437) |
+| `esc-2/unplanned_mount` | eine Einhängung in der Zeile, die der Plan nicht erwartet, beendet den Start mit `SANDBOX_049`, bevor der Befehl läuft (auf dem Host, `mount-proof.sh`, HUM-437) |
 
 Die beiden letzten Zeilen brauchen eine Konfiguration, die jemand gepflanzt
 hat. Das tut `plant-engine-config.sh` im CI-Job `escape-tests-podman`, und nur
@@ -143,6 +145,7 @@ erscheint im XML als `<error>`, eine durchgekommene Probe als `<failure>`.
 | `dns-stub.py` | der aufzeichnende Nameserver des Laufs (HUM-115): UDP auf einem freien Port von `127.0.0.1`, eine Zeile `<epoch-ms> <qname> <qtype>` je Frage nach `target/escape/dns.log`, Antwort immer `NXDOMAIN` |
 | `dns-proof.sh` | von `run.sh` eingelesen: startet den Stub, lässt neben ESC-3 einen Beobachter auf dem Host laufen und entscheidet die drei Fälle `esc-3/dns_not_before_decision`, `esc-3/dns_after_allow_once`, `esc-3/meta_no_dns_lookup` am Protokoll des Stubs |
 | `refusals-proof.sh` | von `run.sh` eingelesen: startet nach den Suiten eine weitere Sandbox, lässt sie genau dreimal `socket(AF_UNIX)` und zweimal `socket(AF_INET, SOCK_DGRAM)` versuchen und entscheidet `esc-1/refusals_reported` an dem, was `humanitl sandbox run` danach über die verweigerten Versuche sagt (HUM-138) |
+| `mount-proof.sh` | von `run.sh` eingelesen: zwei weitere Starts über `escape-launch` mit dem Backend des Laufs, einer mit getauschtem Projektordner (`--test-swap-work`), einer mit einer Einhängung außerhalb des Plans (`--test-unplanned-mount`); entscheidet `esc-2/swapped_folder` und `esc-2/unplanned_mount` (HUM-437) |
 | `esc-4-rules.sh` | ESC-4: die Regel-Tabelle, gegen die Regel-Engine aus HUM-022, für den Body-Cap gegen den laufenden Proxy und seit HUM-114 fünfzehnmal über `humanitl rules test` gegen den Daemon des Laufs; dazu `llm_cli_unreachable`, die einzige Probe der Sammlung für `humanitl llm test` |
 | `body_cap.py` | die zwei Anfragen von `rule_body_over_cap`: eine über dem Cap, eine genau auf dem Cap, über den Proxy-Socket |
 | `esc-5-filesystem.sh` | ESC-5: acht Fälle gegen die gleichnamigen Integrationstests — fünf zu Dateisystem und Terminal (HUM-042, HUM-043), zwei zur Audit-Kette eines echten Daemons (HUM-050), einer zur Wegwerf-Sandbox: ein Wegwerf-Lauf schreibt nie in das Projekt (HUM-350) |

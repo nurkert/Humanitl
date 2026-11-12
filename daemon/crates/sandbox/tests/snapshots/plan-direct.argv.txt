@@ -191,6 +191,8 @@ no_proxy
 /run/humanitl/humanitl-shim
 --proxy-port
 3128
+--pins-fd
+$FD8
 --
 sh
 -c

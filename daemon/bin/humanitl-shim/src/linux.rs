@@ -22,8 +22,8 @@
 //! # Launcher <-> shim contract (binding for HUM-011, HUM-012, HUM-013)
 //!
 //! **Command line.** `humanitl-shim --proxy-port <port> [--controlling-terminal]
-//! [--control-fd <n>] [--lifeline-fd <n>] [--env-fd <n>] [--stdio-fd <n>] --
-//! <command> [args...]`,
+//! [--control-fd <n>] [--lifeline-fd <n>] [--env-fd <n>] [--stdio-fd <n>]
+//! [--pins-fd <n>] -- <command> [args...]`,
 //! the tail of the bwrap argument vector from
 //! `humanitl_sandbox::SandboxProfile::to_bwrap_args`, where the shim itself
 //! is `/usr/local/bin/humanitl-shim` inside the sandbox. `--proxy-port` is
@@ -49,7 +49,12 @@
 //! becomes 0, 1 and 2 before anything else of the start; a container engine
 //! does not hand its own standard streams to the container, so the daemon's
 //! pseudo-terminal travels as an inherited descriptor instead. A number that
-//! names no open descriptor refuses the start. `humanitl-shim --rules` prints the seccomp
+//! names no open descriptor refuses the start. `--pins-fd` (HUM-437) names a
+//! sealed memfd with the expected mount table and the device and inode of
+//! every checked folder; the shim compares both before anything else and
+//! refuses the start on any difference (`mounts.rs`). Every Linux backend
+//! passes it; without it the launcher sees no `mounts_match` line and holds
+//! the second guarantee as unproven. `humanitl-shim --rules` prints the seccomp
 //! rule table the same environment would produce, one row per line, and
 //! starts nothing.
 //!
@@ -88,7 +93,9 @@
 //!    process environment; a refused one is `CHECK seccomp_applied fail
 //!    environment_setup_failed:_--env-fd...` and exit 126. With
 //!    `--lifeline-fd`, take the descriptor; one that is no pipe is `CHECK
-//!    seccomp_applied fail lifeline_setup_failed:...` and exit 126.
+//!    seccomp_applied fail lifeline_setup_failed:...` and exit 126. With
+//!    `--pins-fd`, write `CHECK mounts_match` and `CHECK mounts_pinned`;
+//!    either `fail` is exit 126 before any other line (HUM-437).
 //! 2. Read the environment. For every `in` bridge, bind the TCP listener in the parent and
 //!    connect to it once (`bridge_listening`); read the interface list
 //!    (`no_interfaces`); walk the filesystem for Unix sockets that are not a
@@ -136,6 +143,7 @@
 mod channel;
 mod envfd;
 mod exec;
+mod mounts;
 mod refusals;
 mod seccomp;
 mod supervise;
@@ -168,7 +176,8 @@ const EXIT_SETUP: i32 = 126;
 const EXIT_EXEC: i32 = 127;
 
 const USAGE: &str = "usage: humanitl-shim --proxy-port <port> [--controlling-terminal] [--control-fd <n>]\n\
-                     \x20      [--lifeline-fd <n>] [--env-fd <n>] [--stdio-fd <n>] -- <command> [args...]\n\
+                     \x20      [--lifeline-fd <n>] [--env-fd <n>] [--stdio-fd <n>] [--pins-fd <n>]\n\
+                     \x20      -- <command> [args...]\n\
                      \x20      humanitl-shim --rules    print the seccomp rule table for this environment\n\
                      environment: HUMANITL_BRIDGES, HUMANITL_SECCOMP_FAMILIES, HUMANITL_SECCOMP_TYPES,\n\
                      HUMANITL_SECCOMP_DENY, HUMANITL_REPORT_FD (see the crate documentation)\n";
@@ -243,6 +252,16 @@ fn run() -> i32 {
         Ok(lifeline) => lifeline,
         Err(why) => return refuse_setup(&report, &SetupError::lifeline(&why)),
     };
+
+    // The mount table and the checked folders (HUM-437), after the
+    // environment and before anything else: the bridges, the socket walk
+    // and the agent all stand on these mounts. Its lines come first in the
+    // report, so a launcher that has read the five checks has read these.
+    if let Some(fd) = cli.pins_fd
+        && !mounts::verify(fd, &report)
+    {
+        return EXIT_SETUP;
+    }
 
     // The daemon's door for further shells (HUM-299). Taken before the
     // descriptors are closed in `launch`, and never a reason to refuse the
@@ -1301,6 +1320,8 @@ struct Cli {
     env_fd: Option<RawFd>,
     /// `--stdio-fd` (HUM-433).
     stdio_fd: Option<RawFd>,
+    /// `--pins-fd` (HUM-437).
+    pins_fd: Option<RawFd>,
     command: Vec<OsString>,
 }
 
@@ -1343,6 +1364,7 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
     let mut lifeline_fd = None;
     let mut env_fd = None;
     let mut stdio_fd = None;
+    let mut pins_fd = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--") => {
@@ -1358,6 +1380,7 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
                     lifeline_fd,
                     env_fd,
                     stdio_fd,
+                    pins_fd,
                     command,
                 });
             }
@@ -1368,6 +1391,7 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
             Some("--lifeline-fd") => lifeline_fd = Some(fd_value(&mut args, "--lifeline-fd")?),
             Some("--env-fd") => env_fd = Some(fd_value(&mut args, "--env-fd")?),
             Some("--stdio-fd") => stdio_fd = Some(fd_value(&mut args, "--stdio-fd")?),
+            Some("--pins-fd") => pins_fd = Some(fd_value(&mut args, "--pins-fd")?),
             Some("--proxy-port") => {
                 let value = args.next().ok_or(CliError::MissingValue("--proxy-port"))?;
                 let port = value
@@ -1562,6 +1586,17 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(cli.stdio_fd, Some(9));
+        assert_eq!(cli.pins_fd, None);
+        let cli = parse_cli(args(&[
+            "--proxy-port",
+            "3128",
+            "--pins-fd",
+            "6",
+            "--",
+            "sh",
+        ]))
+        .unwrap();
+        assert_eq!(cli.pins_fd, Some(6));
         assert!(matches!(
             parse_cli(args(&[
                 "--proxy-port",

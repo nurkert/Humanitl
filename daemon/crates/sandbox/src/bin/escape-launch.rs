@@ -129,8 +129,8 @@ use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_sandbox::{
     BIND_FD_VERSION, BWRAP_BACKEND, Backend, BwrapBackend, EXIT_USAGE as SHIM_EXIT_USAGE,
-    LaunchOptions, MIN_BWRAP_VERSION, MountPolicy, PlanRequest, SandboxBackend, SandboxHandle,
-    SandboxProfile, SessionContext, StdioMode, Version,
+    LaunchOptions, LaunchPlan, MIN_BWRAP_VERSION, MountPolicy, PlanRequest, SHIM_PINS_FD,
+    SandboxBackend, SandboxHandle, SandboxProfile, SessionContext, StdioMode, Version,
 };
 
 /// Exit-Code, wenn die Kommandozeile des Starters selbst unbrauchbar ist.
@@ -174,6 +174,12 @@ options:
   --shim FILE           the humanitl-shim binary (default: next to this binary);
                         without a usable one the shim is removed from the
                         argument list and every seccomp probe stays red
+  --test-swap-work      after the plan, rename the work directory and put another
+                        one in its place before the start; the start must refuse
+                        (SANDBOX_042) or show the checked folder (HUM-437)
+  --test-unplanned-mount
+                        add a tmpfs on /etc to the plan's line but not to the
+                        expected mount table; the start must refuse (SANDBOX_049)
   --print-argv          print the launch plan, one argument per line, and exit
   -h, --help            this text
 ";
@@ -386,15 +392,134 @@ fn run() -> Result<ExitCode, LaunchError> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let handle = backend.launch(&plan)?;
+    if args.test_unplanned_mount {
+        add_unplanned_mount(&backend, &mut plan)?;
+    }
+    let swapped = if args.test_swap_work {
+        Some(SwappedWork::swap(&context.work_src)?)
+    } else {
+        None
+    };
+    let result = launch_and_wait(&backend, &plan, &shim);
+    if let Some(swapped) = swapped {
+        swapped.restore()?;
+    }
+    result
+}
+
+/// Startet, prüft die Garantien und wartet.
+fn launch_and_wait(
+    backend: &Backend,
+    plan: &LaunchPlan,
+    shim: &Shim,
+) -> Result<ExitCode, LaunchError> {
+    let handle = backend.launch(plan)?;
     if matches!(shim, Shim::Real(_)) {
-        enforce_isolation(&backend, &handle)?;
+        enforce_isolation(backend, &handle)?;
     }
     let status = handle.wait()?;
     if matches!(shim, Shim::Real(_)) {
         report_refusals(&handle);
     }
     Ok(exit_code_of(status))
+}
+
+/// Die Datei im untergeschobenen Ordner von `--test-swap-work`; sieht der
+/// Befehl sie, hat die Sandbox den falschen Ordner.
+const SWAP_MARKER: &str = "HUMANITL_SWAPPED_FOLDER";
+
+/// `--test-swap-work` (HUM-437): Der geprüfte Projektordner liegt nach dem
+/// Plan unter einem anderen Namen, und an seinem Ort steht ein anderer mit
+/// der Datei [`SWAP_MARKER`]. Danach kommt alles zurück.
+struct SwappedWork {
+    work: PathBuf,
+    moved: PathBuf,
+}
+
+impl SwappedWork {
+    fn swap(work: &Path) -> Result<Self, LaunchError> {
+        let moved = work.with_extension("humanitl-checked");
+        std::fs::rename(work, &moved).map_err(|err| placeholder_failed(&moved, &err))?;
+        let swapped = Self {
+            work: work.to_path_buf(),
+            moved,
+        };
+        make_dir(work)?;
+        mirror(&swapped.moved, work, 3)?;
+        make_file(&work.join(SWAP_MARKER), b"swapped\n")?;
+        Ok(swapped)
+    }
+
+    fn restore(self) -> Result<(), LaunchError> {
+        std::fs::remove_dir_all(&self.work).map_err(|err| placeholder_failed(&self.work, &err))?;
+        std::fs::rename(&self.moved, &self.work).map_err(|err| placeholder_failed(&self.work, &err))
+    }
+}
+
+/// Wohin `--test-unplanned-mount` unter einer Engine ein tmpfs legt: ein
+/// Verzeichnis, das die leere Wurzel einer Engine schon hat (dort legte sonst
+/// die Engine einen Mountpunkt an, der der Sitzung nicht gehört) und das kein
+/// Backend selbst einhängt. Ein zweites Ziel auf einem geplanten Punkt lehnt
+/// eine Engine schon selbst als doppelt ab.
+const UNPLANNED_MOUNT_DST: &str = "/etc";
+
+/// Dasselbe unter bwrap: Dort käme das tmpfs nach allen geplanten
+/// Einhängungen und verdeckte unter `/etc` die geprüften Dateien, und der Shim
+/// meldete zuerst deren fehlende Pins (`SANDBOX_042`). Ein eigener Punkt in
+/// der leeren Wurzel verdeckt nichts; bwrap legt ihn selbst an.
+const UNPLANNED_MOUNT_DST_BWRAP: &str = "/humanitl-unplanned";
+
+/// Legt unter `to` dieselben Verzeichnisse und leere Dateien an wie unter
+/// `from`, bis `depth` Ebenen tief: Jede Maske des Plans findet ihr Ziel auch
+/// im untergeschobenen Ordner, und keine Engine legt dort einen Mountpunkt an.
+fn mirror(from: &Path, to: &Path, depth: u32) -> Result<(), LaunchError> {
+    let Ok(entries) = std::fs::read_dir(from) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
+        let target = to.join(entry.file_name());
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
+            make_dir(&target)?;
+            if depth > 1 {
+                mirror(&entry.path(), &target, depth - 1)?;
+            }
+        } else if kind.is_file() {
+            make_file(&target, b"")?;
+        }
+    }
+    Ok(())
+}
+
+/// `--test-unplanned-mount` (HUM-437): ein tmpfs auf `dst` in der Zeile, das
+/// die erwartete Tabelle nicht kennt, wie es eine Konfigurationsquelle der
+/// Engine hinzufügen könnte.
+fn add_unplanned_mount(backend: &Backend, plan: &mut LaunchPlan) -> Result<(), LaunchError> {
+    let (anchor, inserted): (&str, Vec<OsString>) = if backend.name() == BWRAP_BACKEND {
+        (
+            "--clearenv",
+            vec![
+                OsString::from("--tmpfs"),
+                OsString::from(UNPLANNED_MOUNT_DST_BWRAP),
+            ],
+        )
+    } else {
+        (
+            "--rootfs",
+            vec![OsString::from(format!(
+                "--mount=type=tmpfs,destination={UNPLANNED_MOUNT_DST}"
+            ))],
+        )
+    };
+    let at = plan
+        .argv
+        .iter()
+        .position(|arg| arg == anchor)
+        .ok_or_else(|| shape_changed(anchor))?;
+    plan.argv.splice(at..at, inserted);
+    Ok(())
 }
 
 /// Das Backend aus `--backend`, ohne die Zulassung (HUM-435), und unter bwrap
@@ -690,15 +815,23 @@ fn strip_shim(
     proxy_port: u16,
 ) -> Result<(), LaunchError> {
     let port = proxy_port.to_string();
-    let tail = [
+    let head = [
         OsStr::new("--"),
         shim_dst.as_os_str(),
         OsStr::new("--proxy-port"),
         OsStr::new(port.as_str()),
-        OsStr::new("--"),
     ];
-    let at = find_window(args, &tail).ok_or_else(|| shape_changed("the shim prefix"))?;
-    args.drain(at + 1..at + tail.len());
+    let at = find_window(args, &head).ok_or_else(|| shape_changed("the shim prefix"))?;
+    // Die Tabelle der Einhängungen (HUM-437) steht zwischen dem Port und dem
+    // zweiten `--`; ohne Shim liest sie niemand, und sie geht mit.
+    let mut end = at + head.len();
+    if args.get(end).is_some_and(|arg| arg == SHIM_PINS_FD) {
+        end += 2;
+    }
+    if args.get(end).is_none_or(|arg| arg != "--") {
+        return Err(shape_changed("the shim prefix"));
+    }
+    args.drain(at + 1..=end);
 
     let bind = [
         OsStr::new("--ro-bind"),
@@ -753,6 +886,11 @@ struct Args {
     shim: Option<PathBuf>,
     /// Nur die Kommandozeile ausgeben, nichts starten.
     print_argv: bool,
+    /// Den Projektordner nach dem Plan tauschen (HUM-437, ESC-2).
+    test_swap_work: bool,
+    /// Eine Einhängung in die Zeile setzen, die nicht im Plan steht
+    /// (HUM-437, ESC-2).
+    test_unplanned_mount: bool,
     /// Der Befehl hinter `--`.
     command: Vec<OsString>,
 }
@@ -770,6 +908,8 @@ impl Args {
         let mut ca_bundle = None;
         let mut shim = None;
         let mut print_argv = false;
+        let mut test_swap_work = false;
+        let mut test_unplanned_mount = false;
         let mut command = Vec::new();
 
         let mut rest = input.into_iter();
@@ -777,6 +917,8 @@ impl Args {
             match argument.to_str() {
                 Some("-h" | "--help") => return Ok(None),
                 Some("--print-argv") => print_argv = true,
+                Some("--test-swap-work") => test_swap_work = true,
+                Some("--test-unplanned-mount") => test_unplanned_mount = true,
                 Some("--") => {
                     command.extend(rest);
                     break;
@@ -827,6 +969,8 @@ impl Args {
             ca_bundle,
             shim,
             print_argv,
+            test_swap_work,
+            test_unplanned_mount,
             command,
         }))
     }
@@ -947,6 +1091,36 @@ mod tests {
             argv.iter().filter(|arg| *arg == "--").count(),
             1,
             "one separator is left, not two: {argv:?}"
+        );
+    }
+
+    /// The table of the mounts (HUM-437) sits between the port and the
+    /// second separator; without a shim it goes with the prefix.
+    #[test]
+    fn without_a_shim_the_pins_descriptor_goes_with_the_prefix() {
+        let profile = test_profile();
+        let context = context();
+        let mut argv = argv();
+        let port = argv
+            .iter()
+            .position(|arg| arg == "--proxy-port")
+            .expect("the port");
+        argv.splice(
+            port + 2..port + 2,
+            [OsString::from(SHIM_PINS_FD), OsString::from("9")],
+        );
+        strip_shim(
+            &mut argv,
+            &context.shim_src,
+            &profile.network.shim_dst,
+            profile.network.proxy_port,
+        )
+        .expect("the prefix with the pins descriptor");
+        let argv = strings(&argv);
+        assert!(!argv.iter().any(|arg| arg == SHIM_PINS_FD), "{argv:?}");
+        assert_eq!(
+            &argv[argv.len() - 3..],
+            ["--", "/bin/sh", "/tests/escape/esc-1-sockets.sh"],
         );
     }
 

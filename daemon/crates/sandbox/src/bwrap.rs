@@ -51,7 +51,8 @@ use std::time::Duration;
 use humanitl_config::{Env, Paths, WorkMode};
 use humanitl_core::diagnostics::codes::{
     SANDBOX_001, SANDBOX_002, SANDBOX_003, SANDBOX_005, SANDBOX_006, SANDBOX_011, SANDBOX_012,
-    SANDBOX_013, SANDBOX_014, SANDBOX_015, SANDBOX_016, SANDBOX_030, TERM_002,
+    SANDBOX_013, SANDBOX_014, SANDBOX_015, SANDBOX_016, SANDBOX_030, SANDBOX_042, SANDBOX_049,
+    TERM_002,
 };
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{Diagnostic, DiagnosticCode, FixAction, Severity};
@@ -60,8 +61,9 @@ use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 use rustix::termios::{Winsize, tcsetwinsize};
 
 use crate::bridge_env::{
-    CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NO_INTERFACES, CHECK_SECCOMP_APPLIED,
-    CHECK_SINGLE_SOCKET, parse_check_line, parse_exec_line,
+    CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_MOUNTS_MATCH, CHECK_MOUNTS_PINNED,
+    CHECK_NO_INTERFACES, CHECK_SECCOMP_APPLIED, CHECK_SINGLE_SOCKET, parse_check_line,
+    parse_exec_line,
 };
 use crate::bwrap_args::{IdentityFds, LaunchInputs, MaskFds, SourceFd};
 use crate::handle::{ReportSnapshot, SandboxHandle, Shared};
@@ -944,9 +946,10 @@ impl SandboxBackend for BwrapBackend {
             controlling_terminal: options.stdio.pty_size().is_some(),
             control_fd: shim_door.as_ref().map(AsRawFd::as_raw_fd),
             overlay: options.overlay().cloned(),
+            pins_fd: None,
         };
         let env = profile.effective_env(session, inputs.report_fd);
-        let line = profile.to_bwrap_line(session, &inputs);
+        let (line, pins) = crate::bwrap_mounts::line_with_pins(profile, session, &pinned, inputs)?;
         let mut argv = vec![self.program.clone().into_os_string()];
         argv.extend(line.args);
 
@@ -954,7 +957,7 @@ impl SandboxBackend for BwrapBackend {
         inherit.extend(masks);
         inherit.extend(agent_fds);
         inherit.extend(pinned.into_fds());
-        inherit.extend(shim_door);
+        inherit.extend(shim_door.into_iter().chain([pins]));
         let fds = inherit
             .iter()
             .map(|fd| (fd.as_raw_fd(), fd.as_raw_fd()))
@@ -1015,7 +1018,10 @@ impl SandboxBackend for BwrapBackend {
     /// zeigt, dass diese eine Tür offen ist und antwortet. Beide Zeilen
     /// stehen im Befund, und eine davon rot macht die Garantie rot; bis zum
     /// Review vom 2026-09-03 trug `bridge_listening` die Garantie allein und
-    /// behauptete damit mehr, als sie belegte. `seccomp_applied` und
+    /// behauptete damit mehr, als sie belegte. Unter Linux gehören
+    /// `mounts_match` und `mounts_pinned` dazu (HUM-437): Nichts ist
+    /// außerhalb des Plans eingehängt, und jeder geprüfte Ordner ist der
+    /// geprüfte. `seccomp_applied` und
     /// `families` zusammen sind Garantie 3. Ohne jede Zeile tragen alle drei
     /// `SANDBOX_013`.
     fn isolation_check(&self, handle: &SandboxHandle) -> Vec<CheckResult> {
@@ -1053,26 +1059,39 @@ pub(crate) fn isolation_from_report(handle: &SandboxHandle, timeout: Duration) -
             })
             .collect();
     }
-    vec![
-        check_from(
-            &report,
-            IsolationCheck::NoNetworkInterface,
-            &[CHECK_NO_INTERFACES],
-            SANDBOX_014,
-        ),
-        check_from(
-            &report,
-            IsolationCheck::SingleSocket,
-            &[CHECK_SINGLE_SOCKET, CHECK_BRIDGE_LISTENING],
-            SANDBOX_015,
-        ),
-        check_from(
-            &report,
-            IsolationCheck::SeccompActive,
-            &[CHECK_SECCOMP_APPLIED, CHECK_FAMILIES],
-            SANDBOX_016,
-        ),
-    ]
+    let door = door_check(&report);
+    let mut interfaces = check_from(
+        &report,
+        IsolationCheck::NoNetworkInterface,
+        &[CHECK_NO_INTERFACES],
+        SANDBOX_014,
+    );
+    let mut seccomp = check_from(
+        &report,
+        IsolationCheck::SeccompActive,
+        &[CHECK_SECCOMP_APPLIED, CHECK_FAMILIES],
+        SANDBOX_016,
+    );
+    // Lehnt der Shim an der Mounttabelle ab (HUM-437), kommt er zu den
+    // übrigen Prüfungen nicht mehr. Ihre fehlenden Zeilen haben dann dieselbe
+    // Ursache, und jede Garantie nennt sie, statt einen zweiten Grund zu
+    // erfinden.
+    if let Some(cause) = door
+        .diagnostic
+        .as_ref()
+        .filter(|diagnostic| diagnostic.code == SANDBOX_042 || diagnostic.code == SANDBOX_049)
+    {
+        for result in [&mut interfaces, &mut seccomp] {
+            if !result.passed {
+                result.evidence = format!(
+                    "not reached, the shim stopped at the mount check; {}",
+                    result.evidence
+                );
+                result.diagnostic = Some(cause.clone());
+            }
+        }
+    }
+    vec![interfaces, door, seccomp]
 }
 
 /// Starts a plan: the supervisor thread, the readers of report and status,
@@ -1199,6 +1218,66 @@ pub(crate) fn launch_plan(plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic
     Ok(handle)
 }
 
+/// Die Zeilen der zweiten Garantie. Unter Linux gehören die Mounttabelle und
+/// die geprüften Ordner dazu (HUM-437): genau eine Tür heißt auch, dass
+/// nichts außerhalb des Plans eingehängt ist. Ein Shim ohne `--pins-fd`
+/// schreibt sie nicht, und die Garantie bleibt dann unbelegt. Unter macOS
+/// gibt es keine Mounttabelle.
+#[cfg(target_os = "linux")]
+const DOOR_CHECKS: &[&str] = &[
+    CHECK_SINGLE_SOCKET,
+    CHECK_BRIDGE_LISTENING,
+    CHECK_MOUNTS_MATCH,
+    CHECK_MOUNTS_PINNED,
+];
+#[cfg(not(target_os = "linux"))]
+const DOOR_CHECKS: &[&str] = &[CHECK_SINGLE_SOCKET, CHECK_BRIDGE_LISTENING];
+
+/// Die zweite Garantie aus [`DOOR_CHECKS`], mit dem Code der Ursache: ein
+/// Ordner, der nicht der geprüfte ist, `SANDBOX_042`; eine Mounttabelle, die
+/// vom Plan abweicht, `SANDBOX_049`; sonst `SANDBOX_015`.
+fn door_check(report: &ReportSnapshot) -> CheckResult {
+    let mut result = check_from(
+        report,
+        IsolationCheck::SingleSocket,
+        DOOR_CHECKS,
+        SANDBOX_015,
+    );
+    let failed = |name: &str| report.get(name).is_some_and(|line| !line.ok);
+    let cause = if failed(CHECK_MOUNTS_PINNED) {
+        Some(SANDBOX_042)
+    } else if failed(CHECK_MOUNTS_MATCH) {
+        Some(SANDBOX_049)
+    } else {
+        None
+    };
+    if let (Some(code), Some(diagnostic)) = (cause, result.diagnostic.as_mut()) {
+        let mut builder = Diagnostic::builder(code, Severity::Blocking).why(diagnostic.why.clone());
+        if let Some(fix) = mount_check_fix(code) {
+            builder = builder.fix(fix);
+        }
+        *diagnostic = builder.build();
+    }
+    result
+}
+
+/// Die Behebung aus dem Register zu `SANDBOX_042` und `SANDBOX_049`: beim
+/// getauschten Ordner die Ordnerauswahl (den Ordner neu wählen, sobald er
+/// wieder der gewählte ist); bei einer Einhängung außerhalb des Plans der Weg
+/// zurück zum Backend des Systems.
+fn mount_check_fix(code: DiagnosticCode) -> Option<FixAction> {
+    if code == SANDBOX_042 {
+        Some(crate::work_dir::choose_folder_fix())
+    } else if code == SANDBOX_049 {
+        Some(FixAction::ChangeSetting {
+            key: "sandbox.backend".to_owned(),
+            value: crate::AUTO_BACKEND.to_owned(),
+        })
+    } else {
+        None
+    }
+}
+
 /// Ein Ergebnis aus den Zeilen zu `names`: alle müssen da und `ok` sein.
 fn check_from(
     report: &ReportSnapshot,
@@ -1246,6 +1325,11 @@ pub(crate) struct PinnedMounts {
     pub(crate) session: Vec<(PinnedSource, PathBuf)>,
     /// The agent program, opened and checked once (HUM-278).
     pub(crate) agent: Option<PinnedSource>,
+    /// Die Einträge aus `mounts.ro`, geöffnet und am Ort ihres Deskriptors
+    /// geprüft (HUM-437). Eingehängt werden sie weiter über den Pfad; Gerät
+    /// und Inode der Mounttabelle kommen aus diesen Deskriptoren, so dass ein
+    /// Tausch danach `SANDBOX_042` ist. Vererbt werden sie nicht.
+    pub(crate) profile_ro: Vec<PinnedSource>,
 }
 
 impl PinnedMounts {
@@ -1349,6 +1433,7 @@ impl PinnedMounts {
             read_only: Self::open_list(policy, &profile.mounts.extra_ro, "mounts.extra_ro")?,
             writable: Self::open_list(policy, &profile.mounts.extra_rw, "mounts.extra_rw")?,
             session: session_binds,
+            profile_ro: Self::open_list(policy, &profile.mounts.ro, "mounts.ro")?,
         })
     }
 

@@ -270,6 +270,27 @@ together with everything else it inherited without `CLOEXEC`; the escape harness
 loses it, between `fork` and `exec`. The preview (`humanitl sandbox argv`) has no descriptors
 and keeps showing paths.
 
+**The mount table equals the plan (HUM-437).** The socket walk sees a second door, not a second
+mount: a directory of secrets a configuration source adds to the sandbox holds no socket. Every
+backend therefore hands the shim, as a sealed memfd behind `--pins-fd`, the mount table the plan
+expects and the device and inode of every checked target. Before anything else of the start the
+shim compares `/proc/self/mountinfo` with that table as a multiset: entry by entry with mount
+point, file system type, source, read-only or writable, `nosuid`, `nodev` and `noexec`. The source
+of a bind is the device and inode of what was checked, read with `lstat` on the mount point and
+counted only for the topmost mount there; the source of every other mount is its type. The table
+holds every bind, tmpfs and mask of the plan and the backend's own entries (bwrap's root, `/proc`
+and `/dev`; Podman's, see [section 13](#13-linux-podman)). An extra entry, a missing one, a
+different one, or a second mount stacked onto a planned point is `CHECK mounts_match fail`, and the
+start ends with `SANDBOX_049` before the agent exists. Then `lstat` of `/work`, every entry of
+`mounts.ro`, `mounts.extra_ro`, `mounts.extra_rw` and the agent program must give the device and
+inode the launcher saw when it opened the source; a different pair is `CHECK mounts_pinned fail`
+and `SANDBOX_042` with the path, the expected and the found pair. Both lines belong to the second
+guarantee: exactly one door also means that nothing is mounted outside the plan. A shim on Linux
+that writes neither line leaves the guarantee unproven. A host source with mounts of its own
+beneath it fails this check too: bwrap and Podman bind recursively, and what comes along is not in
+the plan. Masks and tmpfs under `/work` are planned, and mounted, only on paths that exist in the
+project.
+
 **Check (inside the sandbox).**
 
 ```sh
@@ -286,6 +307,11 @@ filesystem for Unix sockets and reports every one it finds (`CHECK single_socket
 budget (without `/proc`, `/sys` and `/dev` except `/dev/shm`, no symlinks followed, depth 3,
 2000 entries; if a limit hit, the evidence says so). ESC-2 runs the unbounded `find` command
 above (`esc_find_sockets` in `tests/escape/lib.sh`). `-xtype s`, not `-type s`: bwrap binds the proxy socket over an empty regular file, and `find` trusts the directory entry for a bare `-type`; and no `-xdev`, because `/work`, `/tmp`, `/dev/shm` and `/home/agent` are separate mounts where a planted socket must show up.
+Two cases of ESC-2 run on the host against each backend (`tests/escape/mount-proof.sh`,
+HUM-437): the project folder swapped between the plan and the start (`esc-2/swapped_folder`: the
+start is refused with `SANDBOX_042`, or, under bwrap, the sandbox still sees the checked folder),
+and a mount in the line that the plan does not expect (`esc-2/unplanned_mount`: refused with
+`SANDBOX_049`).
 
 **What an attacker would try.** Look for the D-Bus or Docker socket: not there. Reach another
 mount namespace through `/proc/<pid>/root`: the own PID namespace shows only sandbox
@@ -1887,7 +1913,7 @@ it.
 | # | Guarantee | How it holds under Podman | Checked by the shim as |
 |---|---|---|---|
 | 1 | No network interface | `--network=none`: a network namespace with only `lo`, no `pasta` or `slirp4netns` | `no_interfaces`, unchanged |
-| 2 | Exactly one door | the proxy socket bound as one file to `/run/humanitl/proxy.sock`, read-only; `conmon`'s attach socket and exit file stay on the host side | `single_socket` and `bridge_listening`, unchanged |
+| 2 | Exactly one door | the proxy socket bound as one file to `/run/humanitl/proxy.sock`, read-only; `conmon`'s attach socket and exit file stay on the host side; the mount table equals the plan | `single_socket` and `bridge_listening`, unchanged, and `mounts_match` and `mounts_pinned` as under bubblewrap |
 | 3 | No new doors | the same shim is PID 1 and installs the same filter before the agent's `exec`; Podman's own seccomp profile (the daemon's copy of the default profile of `containers-common`) stays as an outer layer, with `--cap-drop=all` and `no-new-privileges` | `seccomp_applied` and `families`, unchanged |
 
 Fixed in every line, with no key to change it: `--rm`, private network, IPC, UTS, PID and cgroup
@@ -1920,12 +1946,23 @@ Podman machine, is refused with `SANDBOX_038`.
 
 ### What is different from bubblewrap
 
-- **Mounts by path.** Podman takes no descriptor as a mount source (measurement P13 in HUM-292).
-  The plan still opens and checks every source once, as under bubblewrap, and mounts the place
-  the opened object lies at. A swap of that path between the plan and the mount is not prevented
-  here; the shim's check of device and inode after the mount (HUM-437) detects it, and Podman stays
-  unadmitted until that check is in. A path with a comma, a quote or a line break is refused
-  (`SANDBOX_006`): mount options are separated by commas.
+- **Mounts by path: a swap is detected and refused, not prevented.** Podman takes no descriptor
+  as a mount source (measurement P13 in HUM-292: `crun: mount /proc/self/fd/3 to work: Invalid
+  argument`; measured again with the adapter's own line in HUM-437: no container starts, the shim
+  reports nothing, the agent never runs). The plan still opens and checks every source once, as under bubblewrap, and mounts
+  the place the opened object lies at. A swap of that path between the plan and the mount does
+  reach the container; the shim's check of device and inode after the mount
+  ([section 3](#3-guarantee-2-exactly-one-door), HUM-437) detects it before the agent exists and
+  refuses the start with `SANDBOX_042`. At that moment only the shim runs in the container. Bind
+  mounts keep the device number of their source (P14). A path with a comma, a quote or a line
+  break is refused (`SANDBOX_006`): mount options are separated by commas.
+- **The engine's own mounts are part of the expected table.** With the fixed flags above Podman
+  adds `/proc` with its read-only self-binds and masked paths, `/dev` with `pts`, `mqueue` and the
+  host's device nodes, `/run/.containerenv` and `/etc/hostname`, and no `/etc/resolv.conf`
+  (measurement P17; the list in `podman/mounts.rs` is the measured one). Everything else a
+  configuration source adds, from `mounts.conf`, `containers.conf` or a newer Podman, is an extra
+  entry and refuses the start with `SANDBOX_049`, whether it carries a socket or not. The cut-off
+  configuration below keeps such entries out; the table check is the barrier when it does not.
 - **Masks and files on disk.** Masks, the identity files and the adapter's files are files in the
   session directory under the runtime directory, not memfds. The adapter's files are mode `0400`
   and may carry the model's access key; the plan refuses to write them when the runtime directory

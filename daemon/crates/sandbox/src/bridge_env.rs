@@ -173,6 +173,14 @@ pub const SHIM_ENV_FD: &str = "--env-fd";
 /// daemon's own pseudo-terminal.
 pub const SHIM_STDIO_FD: &str = "--stdio-fd";
 
+/// Der Schalter des Shims für die erwartete Mounttabelle und die geprüften
+/// Ordner (HUM-437): ein geerbter, versiegelter memfd mit JSON
+/// (Modul `mount_table`). Der Shim vergleicht `/proc/self/mountinfo` und
+/// Gerät und Inode jedes geprüften Ziels damit, bevor er irgendetwas anderes
+/// tut, und schreibt [`CHECK_MOUNTS_MATCH`] und [`CHECK_MOUNTS_PINNED`].
+/// Jedes Linux-Backend gibt ihn mit.
+pub const SHIM_PINS_FD: &str = "--pins-fd";
+
 /// Die Namen, die der Launcher setzt und die kein Profil belegen kann.
 pub const RESERVED_ENV: &[&str] = &[
     ENV_BRIDGES,
@@ -215,6 +223,19 @@ pub const CHECK_FAMILIES: &str = "families";
 
 /// Außer `lo` gibt es kein Interface.
 pub const CHECK_NO_INTERFACES: &str = "no_interfaces";
+
+/// Die Mounttabelle in der Sandbox ist als Multimenge gleich der erwarteten
+/// (HUM-437): kein Eintrag fehlt, keiner ist zu viel, keiner weicht in Typ,
+/// Quelle oder Optionen ab. Teil der zweiten Garantie; eine rote Zeile ist
+/// `SANDBOX_049`. Der Shim schreibt sie unter Linux vor den fünf Zeilen aus
+/// [`CHECK_NAMES`].
+pub const CHECK_MOUNTS_MATCH: &str = "mounts_match";
+
+/// Jedes geprüfte Ziel (`/work`, `mounts.ro`, `extra_ro`, `extra_rw`, das
+/// Agentenprogramm) hat in der Sandbox das Gerät und den Inode, die der
+/// Launcher beim Öffnen sah (HUM-437). Teil der zweiten Garantie; eine rote
+/// Zeile ist `SANDBOX_042`.
+pub const CHECK_MOUNTS_PINNED: &str = "mounts_pinned";
 
 /// Das Präfix jeder Berichtszeile.
 pub const CHECK_PREFIX: &str = "CHECK";

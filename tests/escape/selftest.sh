@@ -235,6 +235,8 @@ launch_failures=$(
     . "$HERE/launch.sh"
     # shellcheck source=tests/escape/engine-config-proof.sh
     . "$HERE/engine-config-proof.sh"
+    # shellcheck source=tests/escape/mount-proof.sh
+    . "$HERE/mount-proof.sh"
     CLI="$ST_LAUNCH/bin/humanitl"
     LAUNCHER="$ST_LAUNCH/bin/escape-launch"
     PROFILE_NAME=test
@@ -301,6 +303,29 @@ launch_failures=$(
     grep -qxF -- "-v sandbox run --profile test --work $WORK --tests-dir $HERE -- /bin/sh /tests/escape/esc-9.sh" \
         "$STANDIN_LOG.cli" 2>/dev/null || bad "bwrap did not go through humanitl sandbox run"
     [ ! -e "$STANDIN_LOG.launcher" ] || bad "bwrap went through escape-launch"
+
+    # The host half of ESC-2 for the mount table (HUM-437): the verdicts read
+    # the launcher's log, and only a refusal with the right code or the checked
+    # folder is green.
+    mp_log="$ST_LAUNCH/mount.log"
+    mp_verdict() {
+        printf '%s\n' "$2" > "$mp_log"
+        "$1" "$mp_log" "$3" | cut -d' ' -f1
+    }
+    [ "$(mp_verdict mount_proof_swap_verdict 'escape-launch: SANDBOX_042: Mounted folder' 3)" = pass ] ||
+        bad "swapped_folder refused with SANDBOX_042 is not green"
+    [ "$(mp_verdict mount_proof_swap_verdict 'MOUNT-PROOF-AGENT-RAN' 0)" = pass ] ||
+        bad "swapped_folder in the checked folder is not green"
+    [ "$(mp_verdict mount_proof_swap_verdict 'MOUNT-PROOF-SWAPPED-SEEN
+MOUNT-PROOF-AGENT-RAN' 0)" = fail ] || bad "swapped_folder that saw the swapped folder is not red"
+    [ "$(mp_verdict mount_proof_swap_verdict 'escape-launch: SANDBOX_015: single socket' 3)" = fail ] ||
+        bad "swapped_folder refused for another reason is not red"
+    [ "$(mp_verdict mount_proof_unplanned_verdict 'escape-launch: SANDBOX_049: Mount table' 3)" = pass ] ||
+        bad "unplanned_mount refused with SANDBOX_049 is not green"
+    [ "$(mp_verdict mount_proof_unplanned_verdict 'MOUNT-PROOF-AGENT-RAN' 0)" = fail ] ||
+        bad "unplanned_mount that let the command run is not red"
+    [ "$(mp_verdict mount_proof_unplanned_verdict 'escape-launch: SANDBOX_012: bwrap' 3)" = fail ] ||
+        bad "unplanned_mount refused for another reason is not red"
 
     # engine_hook_not_run: nothing for bwrap without a planted configuration, a
     # skip for an engine, red without the proof of planting or with the marker.

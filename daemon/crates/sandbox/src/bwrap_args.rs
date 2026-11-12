@@ -278,6 +278,11 @@ pub struct LaunchInputs {
     /// read-only, so nothing writable from the host reaches the sandbox.
     /// `None` mounts the project as before.
     pub overlay: Option<crate::disposable::OverlayDirs>,
+    /// The sealed memfd with the expected mount table and the checked
+    /// folders (HUM-437), rendered as [`crate::bridge_env::SHIM_PINS_FD`]
+    /// with its number after `--proxy-port`. `None` renders nothing; that is
+    /// the preview, whose table the start computes from this very line.
+    pub pins_fd: Option<RawFd>,
 }
 
 impl LaunchInputs {
@@ -305,6 +310,7 @@ impl LaunchInputs {
             controlling_terminal: false,
             control_fd: None,
             overlay: None,
+            pins_fd: None,
         }
     }
 
@@ -545,6 +551,9 @@ impl SandboxProfile {
         }
         if let Some(fd) = inputs.control_fd {
             args.pair(crate::bridge_env::SHIM_CONTROL_FD, fd.to_string());
+        }
+        if let Some(fd) = inputs.pins_fd {
+            args.pair(crate::bridge_env::SHIM_PINS_FD, fd.to_string());
         }
         args.flag("--");
         for part in &ctx.command {
@@ -1091,6 +1100,7 @@ mod tests {
                 controlling_terminal: false,
                 control_fd: None,
                 overlay: None,
+                pins_fd: None,
             },
         );
         assert!(with.windows(2).any(|w| w == ["--json-status-fd", "11"]));
@@ -1190,6 +1200,7 @@ mod tests {
                 controlling_terminal: false,
                 control_fd: None,
                 overlay: None,
+                pins_fd: None,
             },
         );
         assert!(window_at(&args, &["--ro-bind-data", "40", "/work/.envrc"]).is_some());

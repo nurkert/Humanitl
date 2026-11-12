@@ -191,8 +191,9 @@ if [ "${ESCAPE_SKIP_BUILD:-0}" != 1 ]; then
     # unifies features over every package of one call, and humanitl and
     # humanitld refuse to build against a sandbox crate with
     # unadmitted-backends (humanitl_sandbox::UNADMITTED_BACKENDS_BUILT).
-    if [ "$ESCAPE_BACKEND" != bwrap ] &&
-        ! (cd "$ROOT/daemon" && CARGO_TARGET_DIR="$TARGET_DIR" cargo build \
+    # Under bwrap as well: the host half of ESC-2 (mount-proof.sh, HUM-437)
+    # needs its test flags under every backend.
+    if ! (cd "$ROOT/daemon" && CARGO_TARGET_DIR="$TARGET_DIR" cargo build \
             -p humanitl-sandbox --features unadmitted-backends --bin escape-launch); then
         record_error harness launcher_build "cargo build of escape-launch failed"
         sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
@@ -320,6 +321,11 @@ stop_escape_daemon() {
 # shellcheck source=tests/escape/engine-config-proof.sh
 . "$HERE/engine-config-proof.sh"
 
+# The mount table and the checked folder (HUM-437): two more starts, each with
+# something changed between the plan and the start.
+# shellcheck source=tests/escape/mount-proof.sh
+. "$HERE/mount-proof.sh"
+
 # The order matters: the watcher asks the daemon, and the daemon may still ask
 # the stub until it has stopped.
 stop_escape_services() {
@@ -423,6 +429,10 @@ refusals_case
 
 # ESC-2, host half (HUM-435): the user's engine configuration stayed out.
 engine_config_case
+
+# ESC-2, host half (HUM-437): a swapped folder and an unplanned mount refused.
+echo "== esc-2 mount table (two more starts) =="
+mount_proof_cases
 
 # ESC-4 and ESC-5 run on the host, and before the daemon is stopped. ESC-4 asks
 # the rule engine (HUM-022), which decides before anything leaves the machine

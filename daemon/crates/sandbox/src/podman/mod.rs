@@ -54,6 +54,7 @@
 //! deshalb nur in der Crate sichtbar.
 
 mod detect;
+mod mounts;
 mod plan;
 mod teardown;
 
@@ -1036,13 +1037,15 @@ impl SandboxBackend for PodmanBackend {
             return Err(diagnostic);
         }
         // Die Deskriptoren in der Reihenfolge von `Fds`: Bericht,
-        // Lebensleine, Umgebung, am eigenen Pseudoterminal die Tür; die
+        // Lebensleine, Umgebung, Tabelle, am eigenen Pseudoterminal die Tür; die
         // Untertanenseite legt der Start als letzte dazu.
         let (report_reader, report_writer) = BwrapBackend::inherited_pipe("report")?;
         let (lifeline, lifeline_read) = new_lifeline()?;
         let env_fd = env_memfd(&agent_env)?;
+        // Was der Shim nach dem Einhängen prüft (HUM-437, P13).
+        let pins_fd = mounts::pins(profile, session, &pinned, &mounts, &dir.rootfs)?.memfd()?;
         let (shell_door, shim_door) = BwrapBackend::shell_door(options.stdio)?;
-        let mut inherit: Vec<OwnedFd> = vec![report_writer, lifeline_read, env_fd];
+        let mut inherit: Vec<OwnedFd> = vec![report_writer, lifeline_read, env_fd, pins_fd];
         inherit.extend(shim_door);
         debug_assert_eq!(inherit.len(), fds.planned());
         let fd_pairs = inherit
