@@ -2,7 +2,7 @@
 
 Applies to: Humanitl 0.1
 
-Status: Accepted | Superseded by ADR-XXXX | Deprecated
+Status: Proposed | Accepted | Superseded by ADR-XXXX | Deprecated
 Date: YYYY-MM-DD
 
 ## Context

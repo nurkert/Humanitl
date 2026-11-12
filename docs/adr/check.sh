@@ -117,8 +117,8 @@ check_dir() {
       head -n1 "$path" | grep -q "ADR-$num" \
         || err "$f: title number does not match the file name"
       grep -q 'HUM-[0-9]\{3\}' "$path" || err "$f: names no HUM- issue"
-      grep -qE '^Status: (Accepted|Superseded by ADR-[0-9]{4}|Deprecated)$' "$path" \
-        || err "$f: Status must be Accepted, 'Superseded by ADR-NNNN' or Deprecated"
+      grep -qE '^Status: (Proposed|Accepted|Superseded by ADR-[0-9]{4}|Deprecated)$' "$path" \
+        || err "$f: Status must be Proposed, Accepted, 'Superseded by ADR-NNNN' or Deprecated"
     fi
   done
 
@@ -145,6 +145,8 @@ mut_duplicate()        { cp 0001-*.md 0001-duplicate.md; }
 mut_ghost_link()       { printf '| [0098](0098-ghost.md) | Ghost | Accepted | x |\n' >> README.md; }
 mut_missing_heading()  { sed -i '/^## Consequences$/d' 0001-*.md; }
 mut_lowercase_status() { sed -i 's/^Status: Accepted$/Status: accepted/' 0001-*.md; }
+mut_proposed_status()  { sed -i 's/^Status: Accepted$/Status: Proposed/' 0001-*.md; }
+mut_bogus_status()     { sed -i 's/^Status: Accepted$/Status: Maybe/' 0001-*.md; }
 mut_title_mismatch()   { sed -i '1s/ADR-0001/ADR-0002/' 0001-*.md; }
 mut_no_issue()         { sed -i 's/HUM-[0-9]\{3\}/HUM-x/g' 0001-*.md; }
 
@@ -208,11 +210,13 @@ self_test() {
   run_case ghost-link       'links a missing file: 0098-ghost.md' mut_ghost_link
   run_case missing-heading  "missing heading '## Consequences'"   mut_missing_heading
   run_case lowercase-status 'Status must be'                      mut_lowercase_status
+  run_case proposed-status  ''                                    mut_proposed_status
+  run_case bogus-status     'Status must be'                      mut_bogus_status
   run_case title-mismatch   'title number does not match'         mut_title_mismatch
   run_case no-issue         'names no HUM- issue'                 mut_no_issue
 
   if [[ "$failures" -eq 0 ]]; then
-    echo "check-adr: self-test ok (13 cases)"
+    echo "check-adr: self-test ok (15 cases)"
   fi
   return "$failures"
 }

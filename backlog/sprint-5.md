@@ -6391,7 +6391,584 @@ and what does the neutral `LaunchPlan` need for that.
    as open with the reason.
 2. The owner decides from it which level comes next, with the estimate.
 
-## HUM-293 · One project folder, chosen once, for app and CLI alike (before HUM-060)
+### Result (desk part, 2026-11-11)
+
+Scope of this pass: reading the sandbox crate, the daemon and CLI call sites,
+the shim and the user unit, and deciding the design. `podman` and `crun` are
+not installed on the reference machine yet, `/dev/kvm` exists, libkrun is not
+packaged in Debian. Every answer that needs a running Podman is marked
+**open, needs measurement** and has an id (P1 to P14 for the plain level, K1
+to K8 for the kernel level) and the exact command in the table at the end.
+The decision record is [ADR-0020](../docs/adr/0020-podman-sandbox-backend.md)
+(status proposed), the implementation issues are HUM-428 to HUM-449 in
+[`sprint-7.md`](sprint-7.md).
+
+**Verdict per level.**
+
+| Level | Verdict | Condition |
+|---|---|---|
+| Podman, runtime `crun` (plain) | **go** | P1 to P9 confirm the design below; P8 (the hardened user unit) is the one measurement that can change the plan, not the verdict |
+| Podman, runtime `krun` (kernel) | **conditional go, after the plain level** | K1 and K2: crun must start the guest without transparent socket forwarding and with exactly one vsock port mapped to a Unix socket. If not, the fallback is libkrun used directly from the adapter inside the existing bwrap jail, a new decision in ADR-0020 |
+| Kata Containers | **no-go** | needs containerd as root and uses `vhost-vsock` on the host, through which a guest reaches every vsock listener of the host; that is a second door |
+
+#### 1. What is bwrap-specific today
+
+`tools/coupling-baseline.toml` counts 33 files outside the adapter that name
+bwrap; the largest are `daemon/crates/ipc/src/sandbox.rs` (13),
+`daemon/crates/core-types/src/diagnostics/codes.rs` (10),
+`daemon/bin/humanitl/tests/cli.rs` (9), `daemon/crates/ipc/tests/sandbox_start.rs`
+(9) and `app/lib/core/ipc/fake_daemon_client.dart` (8). The names are mostly
+in text and tests; the structural coupling is in the following places.
+
+*The port and its vocabulary* (`daemon/crates/sandbox/src/launcher.rs`):
+
+| Place | What is bwrap-shaped |
+|---|---|
+| `launcher.rs:33-64` `SandboxBackend` | `plan(profile, session)` takes no options; every option a caller needs is an inherent builder method of the concrete type (below), so callers must know the type |
+| `launcher.rs:161-174` `LaunchOnce` | `status` is "the status pipe of bwrap" (`--json-status-fd`), mandatory; `shells: DoorSeed` assumes a descriptor pair the backend can hand in |
+| `launcher.rs:181-191` `LaunchPlan::argv`, `fds` | neutral in form (program plus inherited descriptors), and Podman fits it: `podman run --preserve-fds N` is also one program with inherited descriptors |
+| `launcher.rs:192-196` `LaunchPlan::files` | documented as `--ro-bind-data` entries |
+| `launcher.rs:218-221` `env_on_program` | a boolean that already distinguishes two backends (bwrap `--setenv` versus `sandbox-exec`); a third way (environment through a descriptor) does not fit a boolean |
+| `launcher.rs:71` `IsolationCheck::SingleSocket` | "exactly one Unix socket"; at the kernel level the door is a vsock port. The wire name `single_socket` can stay, the meaning becomes "exactly one door" |
+| `handle.rs:738` `SandboxHandle::pid` | "the PID of the bwrap process"; `kill` (`handle.rs:817`) relies on `--die-with-parent` so that killing that process ends the namespace. Under Podman the started process is the `podman run` client; the container lives under `conmon` and survives a `SIGKILL` to the client |
+| `handle.rs:1015` `child_pid` | comes from bwrap's JSON status (`--json-status-fd`); `interrupt` sends `SIGINT` to its process group from the host. Under krun the host PID is the VMM, and a host signal reaches no guest process |
+
+*The concrete types behind the port:*
+
+| Place | Coupling |
+|---|---|
+| `lib.rs:160-177` | `PlatformBackend` is a compile-time alias (Seatbelt on macOS, bwrap otherwise), `PLATFORM_BACKEND_NAME` its name; there is no value that can hold "the backend the user chose" |
+| `bwrap.rs:157-176`, `bwrap.rs:244-330` | the per-start options live as builder methods on `BwrapBackend`: `with_stdio`, `with_output_sink`, `with_overlay`, `with_expected_work_inode`, `with_read_only_bind`, `with_approved_work_dir`, `with_report_timeout`; Seatbelt repeats most of them and adds `with_clone` (`seatbelt.rs:586-621`) |
+| `bwrap.rs:490` `disposable_support`, `seatbelt.rs:621` and `seatbelt.rs:639` `clone_masks` | inherent methods outside the port |
+| `profile.rs:266-290` `SandboxSection` | `min_bwrap_version`, `unshare` (namespace list), `die_with_parent`, `new_session`: policy statements written in bwrap terms; they stay valid as statements, the Podman adapter must honour each (table in section 3) |
+| `profile.rs:1663-1676` `check_header` | the backend list `auto`, `bwrap`, platform name is hard-coded |
+| `bwrap_args.rs:365` `to_bwrap_args` | the only translation of a profile; the daemon calls it directly for the preview |
+
+*Call sites in the daemon* (`daemon/crates/ipc/src/sandbox.rs`):
+
+| Line | What |
+|---|---|
+| 102, 325, 3278, 3961 | `Running.backend` and `Prepared.backend` hold `PlatformBackend` |
+| 1403, 3454-3457, 5734-5737, 5898 | `PlatformBackend::detect`, `fallback`, `unchecked` |
+| 2451-2452 | `prepared.backend.disposable_support(..)` |
+| 2488-2496 | `#[cfg(target_os = "macos")] SeatbeltBackend::clone_masks` next to the Linux overlay |
+| 2615-2650 | the builder chain `with_stdio`, `with_approved_work_dir`, `with_overlay`, `with_expected_work_inode`, `with_output_sink`, then `plan` |
+| 2962, 3041 | `Status.backend` from `backend.name()` or `PLATFORM_BACKEND_NAME` |
+| 4017-4036 | the preview line is `profile.to_bwrap_args(..)` with preview inputs |
+| 4192 | `mounts_of(argv, ..)` builds the mount table by **parsing the bwrap flags** of that line (`--bind-fd`, `--overlay-src`, ...) |
+| 4039-4084, 4130, 4157 | the Seatbelt variants of `argv`, `shown`, `mount_of_rule`, all behind `cfg(target_os = "macos")` |
+
+*Call sites in the CLI and in tests:* `daemon/bin/humanitl/src/cmd/sandbox.rs:50,
+186, 545, 860, 1136-1139` (same pattern as the daemon),
+`daemon/crates/sandbox/src/bin/escape-launch.rs:308, 410` (the escape suite
+launches through `BwrapBackend` directly), `daemon/crates/sandbox/src/doctor/probe.rs:52, 233`
+(the probe finds `bwrap` by name), `daemon/crates/ipc/tests/sandbox_start.rs:196`
+and `daemon/crates/ipc/tests/terminal.rs:201`.
+
+*How Seatbelt plugged in*, and why that path does not repeat: Seatbelt
+(HUM-323, HUM-376) implements the same trait, reuses `launch_plan`
+(`bwrap.rs:1156`) and `isolation_from_report` (`bwrap.rs:1099`), which are
+already backend-neutral, and adds `LaunchPlan::session_dir` and
+`env_on_program`. Everything else is a `cfg(target_os = "macos")` branch in the
+daemon and the CLI, plus its own preview type (`SeatbeltPreview`, `PolicyRow`,
+`seatbelt/preview.rs`). That works because exactly one backend exists per
+build. A user who switches between bwrap and Podman per session needs a run
+time choice, so the options move into the request and the preview into the
+port.
+
+#### 2. Proposed neutral shape
+
+One port, one enum for dispatch (no `dyn`, no new trait), the options as a
+value instead of builder methods, the preview as part of the port:
+
+```rust
+/// Ordered: a floor compares with `>=`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum IsolationLevel { Policy, Namespaces, Kernel }
+
+/// What a start needs besides profile and session; today builder methods.
+#[derive(Debug, Clone, Default)]
+pub struct LaunchOptions {
+    pub stdio: StdioMode,
+    pub output_sink: Option<OutputSink>,
+    pub report_timeout: Option<Duration>,
+    pub approved_work_dir: Option<PathBuf>,
+    pub expected_work_inode: Option<(u64, u64)>,
+    /// Overlay directories (bwrap, Podman) or a clone (Seatbelt); the
+    /// backend says in `disposable_support` which form it takes.
+    pub disposable: Option<DisposableLayer>,
+    /// `(source, target)` read-only binds the caller adds (escape tests).
+    pub session_ro: Vec<(PathBuf, PathBuf)>,
+}
+
+pub struct PlanRequest<'a> {
+    pub profile: &'a SandboxProfile,
+    pub session: &'a SessionContext,
+    pub options: &'a LaunchOptions,
+}
+
+/// The one door into the sandbox, per backend.
+pub enum Door {
+    SocketFile { host: PathBuf, sandbox: PathBuf },
+    LoopbackPort { host: PathBuf, port: u16 },
+    VsockPort { host: PathBuf, port: u32 },
+}
+
+/// Side-effect free; what CLI and interface show.
+pub struct PlanPreview {
+    pub argv: Vec<OsString>,
+    pub policy: Vec<PolicyRow>,         // generalised from seatbelt::PolicyRow
+    pub env: Vec<(String, String)>,
+    pub policy_text: Option<String>,    // sandbox.sb under Seatbelt
+    pub door: Door,
+    pub limits: ResourceLimits,
+}
+
+pub trait SandboxBackend: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn isolation(&self) -> IsolationLevel;
+    fn disposable_support(&self, request: &PlanRequest<'_>) -> Result<(), Diagnostic>;
+    fn preview(&self, request: &PlanRequest<'_>) -> PlanPreview;
+    fn plan(&self, request: &PlanRequest<'_>) -> Result<LaunchPlan, Diagnostic>;
+    fn launch(&self, plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic>;
+    fn isolation_check(&self, handle: &SandboxHandle) -> Vec<CheckResult>;
+}
+
+/// Replaces the alias `PlatformBackend`; daemon and CLI hold this.
+#[derive(Debug, Clone)]
+pub enum Backend {
+    Bwrap(BwrapBackend),
+    Podman(PodmanBackend),
+    #[cfg(target_os = "macos")]
+    Seatbelt(SeatbeltBackend),
+}
+
+// LaunchPlan: `env_on_program: bool` becomes
+pub(crate) enum EnvDelivery { Argv, Program, InheritedFd(RawFd) }
+// LaunchOnce: `status: Option<PipeReader>`; new private `teardown: Teardown`
+pub(crate) enum Teardown {
+    /// SIGTERM, then SIGKILL to the started process (bwrap, sandbox-exec).
+    Process,
+    /// `podman kill` and `podman rm -f` by container name, then the client.
+    Container { program: PathBuf, name: String },
+}
+```
+
+`SandboxHandle::pid` stays the process Humanitl started; a new
+`sandbox_pid: Option<u32>` is the host PID of the sandbox's PID 1 when the host
+can see it (bwrap's JSON status, Podman's `--conmon-pidfile` plus
+`podman inspect`), `None` under krun. `interrupt` then goes through the shim's
+control channel where there is no such PID. `PolicyRow` gets the mount
+mode, source, target and origin that `v1::Mount` already carries, so the
+mount table of every backend comes from the plan and `mounts_of` (the flag
+parser) goes.
+
+#### 3. The three guarantees under plain Podman
+
+| Guarantee | How it holds | Check from inside (shim) | Open |
+|---|---|---|---|
+| 1. No network interface | `--network none`: Podman creates a network namespace with only `lo` and starts no `pasta`/`slirp4netns`. Abstract Unix sockets are bound to the network namespace, so the host's are out of reach, as under bwrap | `no_interfaces` unchanged | P1 (only `lo`, empty routes), P9 (no configuration source of the user can add a network) |
+| 2. Exactly one door | the proxy socket bound as one file (`--mount type=bind,src=<proxy.sock>,dst=/run/humanitl/proxy.sock`), no other socket file in the mounts; `conmon`'s attach socket and the exit file live on the host side, not in the container | `single_socket` and `bridge_listening` unchanged | P2 (`find / -type s` sees exactly one), P9 (no `mounts.conf` or `containers.conf` entry slips in), and the mount table check below |
+| 3. No new doors | the same shim binary installs the same filter before `exec` of the agent (`SocketFloor::Strict`); Podman's default seccomp profile stays as an outer layer, plus `--cap-drop all`, `--security-opt no-new-privileges` | `seccomp_applied`, `families` unchanged | P3 (the shim's `seccomp()` is allowed under Podman's default profile) |
+
+Profile statements in bwrap terms and their Podman form:
+
+| Profile | bwrap | Podman |
+|---|---|---|
+| `sandbox.unshare = [all]` | `--unshare-all` | Podman's defaults plus `--network none`, `--ipc private`, `--uts private`, `--pid private`, `--cgroupns private`, `--userns keep-id`; the plan writes each flag, it does not rely on defaults the user's configuration could change |
+| `die_with_parent = true` | `--die-with-parent` | a lifeline pipe: the read end goes to the shim, the write end stays only in the daemon (`CLOEXEC`); on `EOF` the shim (PID 1) exits and the container ends. Plus `--rm` and a sweep of containers labelled `humanitl.daemon=<instance>` at daemon start |
+| `new_session = true` | `--new-session` | the shim calls `setsid` itself (it already does for the agent); the container has no controlling terminal from Podman because no `-t` is given |
+| `--cap-drop ALL` | fixed | `--cap-drop all`, fixed |
+| `--as-pid-1` (HUM-203) | shim is PID 1 | no `--init`, the shim is the container's entry point and PID 1; `PR_SET_DUMPABLE` stays as today |
+| `--clearenv`, `--setenv` | in argv | `--env-host=false`, no `-e`; the environment as JSON in a sealed memfd inherited through `--preserve-fds`, read by the shim before anything else (Podman writes every `-e` value into the stored container configuration, P11) |
+| masks (`.git/hooks`, `.envrc`, ...) | tmpfs and empty files from memfds | `--mount type=tmpfs` and binds of an empty sealed file; only on paths that exist, as today (`unprotected`), because a missing mount point would be created **in the project** |
+| `mounts.ro`, `extra_ro`, `extra_rw` | `--ro-bind-fd`, `--bind-fd` | binds by path, verified after mount (section 5) |
+| `proc`, `dev` | `--proc`, `--dev` | Podman's own `/proc` (with its masked paths) and minimal `/dev` |
+| limits | none today | `--memory`, `--cpus`, `--pids-limit` (P12: cgroup v2 delegation) |
+
+Further fixed flags: `--read-only` (the root is never writable; `/tmp` and
+`/home/agent` are tmpfs from the profile), `--log-driver none` (the agent's
+output must not land in the journal or a log file), `--pull never` (no network
+access by Podman at session start), `--hostname sandbox`, `--no-hosts` with
+the profile's `/etc/hosts` memfd bound instead, `--env-host=false` and
+`--http-proxy=false` (without the latter Podman copies `HTTP_PROXY`,
+`HTTPS_PROXY`, `FTP_PROXY`, `NO_PROXY` of the calling process, credentials
+included, into the container), `--security-opt label=disable` is **not** used
+(section 8).
+
+**Configuration sources the daemon does not write are cut off.** Podman reads
+much more than its command line, and each source can add something to every
+container: `containers.conf` (volumes, devices, environment, capabilities,
+network, seccomp profile, hook directories), `mounts.conf` in
+`/usr/share/containers/`, `/etc/containers/` and `~/.config/containers/`
+(mounted into every container, for example host secrets under
+`/run/secrets`), `storage.conf` (driver, mount program), `registries.conf` and
+`policy.json` (only relevant for pulls), OCI hooks in
+`/usr/share/containers/oci/hooks.d` and `/etc/containers/oci/hooks.d`. The
+adapter therefore starts Podman with:
+
+| Source | How it is cut off |
+|---|---|
+| `containers.conf` (all layers) | `CONTAINERS_CONF=<session dir>/containers.conf`, written by the daemon; `CONTAINERS_CONF_OVERRIDE` removed from the environment |
+| `mounts.conf` | `default_mounts_file` in that `containers.conf` names an empty file the daemon writes (P9 proves that no `/run/secrets` appears) |
+| OCI hooks | `hooks_dir = [<empty dir>]` in that file and `--hooks-dir <empty dir>` on the command line |
+| seccomp default | `seccomp_profile` in that file and `--security-opt seccomp=<file>`, the daemon's own copy of Podman's default profile |
+| `storage.conf` | `CONTAINERS_STORAGE_CONF=<file>` written by the daemon, same graph root as the user's default so images stay shared, driver `overlay`, no mount program |
+| `registries.conf`, `policy.json` | `CONTAINERS_REGISTRIES_CONF=<file>`; `--signature-policy <file>` for the explicit pull of HUM-439; never used at session start (`--pull never`) |
+| remote connections | `CONTAINER_HOST`, `CONTAINER_CONNECTION` removed; `--remote` never passed (`SANDBOX_038`) |
+
+**The mount table inside equals the plan.** Configuration can change with a
+Podman update, so a cut-off source is not the last word. Before it starts the
+agent, the shim reads `/proc/self/mountinfo` and compares it with the plan as
+a **multiset of entries**, not as a set of destinations. Each expected entry
+is (mount point, file system type, source, read-only or writable, `nosuid`,
+`nodev`, `noexec`), where the source is device and inode for a bind, the type
+for `tmpfs`, `proc`, `sysfs`, `devpts`, `mqueue`, `cgroup2`. Every entry
+appears exactly as often as the plan says, usually once; a second mount
+stacked on an expected destination (a `tmpfs` over `/work`, a bind over the
+door) is an extra entry and refuses the start like an unknown destination.
+The plan carries the profile's binds, tmpfs and masks and the engine's own
+entries.
+
+The flag set includes `--read-only-tmpfs=false`: without it, `--read-only`
+makes Podman mount writable tmpfs on `/run`, `/tmp` and `/var/tmp` that are not
+in the profile. `/tmp` and `/home/agent` come from the profile as before;
+`/run/humanitl` is a directory in the empty root the plan creates. The
+engine's own entries the plan then expects (verify in P17, the list is the
+measured one, not this one):
+
+| Mount point | Type | Note |
+|---|---|---|
+| `/proc` | `proc` | plus Podman's masked paths (`/proc/acpi`, `/proc/kcore`, `/proc/keys`, `/proc/latency_stats`, `/proc/timer_list`, `/proc/timer_stats`, `/proc/sched_debug`, `/proc/scsi`) as `/dev/null` binds or read-only `tmpfs`, and the read-only self-binds (`/proc/asound`, `/proc/bus`, `/proc/fs`, `/proc/irq`, `/proc/sys`, `/proc/sysrq-trigger`), each stacked once on its own path |
+| `/dev` | `tmpfs` | with `/dev/pts` (`devpts`), `/dev/mqueue` (`mqueue`), `/dev/shm` (`tmpfs`) and the device nodes Podman binds in rootless mode (`/dev/null`, `/dev/zero`, `/dev/full`, `/dev/tty`, `/dev/random`, `/dev/urandom`) |
+| `/sys` | `sysfs` | read-only; `/sys/fs/cgroup` (`cgroup2`), masked `/sys/firmware`, `/sys/devices/virtual/powercap` |
+| `/run/.containerenv` | bind | Podman's marker file |
+| `/etc/hostname` | bind | `sandbox` |
+| `/etc/resolv.conf` | bind | present even with `--network none` until P17 says otherwise |
+
+An extra or missing entry refuses the start with a `CHECK` line and
+`SANDBOX_049`. The same check runs under bwrap with bwrap's own entries. It
+complements the socket walk of guarantee 2: a mounted directory of secrets
+holds no socket, so the walk alone would not see it.
+
+#### 4. PTY, attach, detach, resize, exec, exit
+
+Podman's own terminal path (`-t`, `conmon`'s console socket, `podman attach`,
+`podman exec`) is not used. The daemon keeps doing what it does under bwrap:
+
+| Need | bwrap today | Podman plain | Podman krun |
+|---|---|---|---|
+| PTY | daemon opens it, slave as stdio of bwrap, shim takes the controlling terminal (HUM-280) | slave inherited through `--preserve-fds`, shim `dup2`s it onto 0, 1, 2 and takes it as controlling terminal; Podman's stdio is `/dev/null` | the shim allocates the PTY **in the guest**; bytes go over a second vsock port (control channel) |
+| resize | `TIOCSWINSZ` on the master | unchanged | a resize message on the control channel |
+| attach, detach (HUM-279), read-only attach | the daemon's `TerminalHub` | unchanged | unchanged (the hub reads the control channel instead of the master) |
+| further shells (HUM-299) | `SOCK_SEQPACKET` pair, shim forks, PTY slave by `SCM_RIGHTS` | unchanged: the shim's end through `--preserve-fds` (P4) | `SCM_RIGHTS` cannot cross a VM; the same requests over the control channel, PTYs in the guest (HUM-443) |
+| exit status | bwrap's exit status (128 + signal) | `podman run`'s exit status, which is the container's; `conmon` writes it before `--rm` removes the container (P5) | same |
+| interrupt | `SIGINT` to the process group of `child_pid` | same, with the container's PID from `--conmon-pidfile` and `podman inspect` (P6) | an interrupt message on the control channel |
+| kill, retire | `SIGTERM`, `SIGKILL` to bwrap | `Teardown::Container`: `podman kill --signal TERM`, grace, `podman rm -f`; the lifeline covers a dead daemon (P7) | same, and the VMM ends with the container |
+
+`podman exec` is never used: it would enter the container from outside with a
+process that carries neither the shim's filter nor its checks, and under krun
+it does not exist.
+
+#### 5. Project folder pinning (HUM-263, HUM-278)
+
+bwrap binds the descriptor (`--bind-fd`), so a path swapped after the check
+does not reach the sandbox. Podman takes a path, and resolves it in a
+different process later. Two ways, measured in P13:
+
+1. **A descriptor path as the source.** The daemon passes the opened folder
+   as fd 3 with `--preserve-fds` and names `/proc/self/fd/3` as the mount
+   source. If Podman and crun resolve that magic link in a process that holds
+   the same descriptor, the mount is the pinned directory. If Podman resolves
+   the link to text first (`EvalSymlinks`), it is not.
+2. **Verify after mount, before `exec`.** The plan carries the expected device
+   and inode of `/work` and of every bind from `mounts.ro`, `extra_ro`,
+   `extra_rw` and the agent program (HUM-278); the shim compares `stat` of
+   each target with the expected pair before it starts the agent and refuses
+   with exit code `EXIT_SETUP` and a `CHECK` line otherwise. The daemon then
+   reports `SANDBOX_042`. At that moment only the shim runs in the container,
+   so the comparison is trustworthy at the plain level. Bind mounts keep the
+   device number of the source file system (P14).
+
+The design uses 2 always and 1 additionally if P13 shows it holds. With 2 a
+swap is detected and the session refused (fail closed) instead of prevented;
+the guarantee "the agent sees only the checked folder" holds either way.
+
+Under krun, `/work` reaches the guest through virtiofs: device numbers differ,
+and whether inode numbers pass through is K5. Until K5 answers, the kernel
+level verifies on the host side (the VMM's open descriptors, K3) and refuses
+`direct` sessions on a project the host cannot verify.
+
+#### 6. The disposable sandbox (HUM-350)
+
+bwrap mounts an overlay with the project as the read-only lower layer and an
+upper directory on tmpfs in the runtime directory; `disposable/scan.rs` reads
+that upper layer after the end and `apply.rs` writes into the pinned project.
+Podman's overlay volumes take the same shape:
+`-v <project>:/work:O,upperdir=<upper>,workdir=<work>`. The scan and apply
+code stays the same, on two conditions measured in P10:
+
+- Podman must use the kernel overlay (rootless native overlay, kernel 5.13 or
+  newer), not `fuse-overlayfs`; whiteouts are then the same `0:0` character
+  devices the scan reads today. With `fuse-overlayfs`, `disposable` is refused
+  with `SANDBOX_030` and `auto` falls back with `SANDBOX_033`, never silently.
+- The upper directory lives where it lives under bwrap (runtime directory,
+  tmpfs, size guard `SANDBOX_032`), so `Layer::create` and `SizeGuard` are
+  reused.
+
+The pinned-folder check of section 5 applies to the lower layer as well: the
+shim cannot `stat` the lower layer through the overlay, so the plan checks it
+through the overlay's own view (device of the overlay, inode of the root
+directory as reported by the lower file system). Whether the overlay reports
+the lower inode for an unchanged root is part of P10; if not, `disposable`
+under Podman relies on the descriptor path (way 1) and is refused where P13
+fails.
+
+#### 7. Root file system: host bind or image
+
+| | `rootfs = "host"` (default) | `rootfs = "image"` |
+|---|---|---|
+| What | an empty read-only root (`--rootfs <empty dir>`) with the host's `/usr`, `/etc` subset and symlinks bound read-only, exactly the profile's `mounts.ro` | an OCI image by `name@sha256:digest`, present locally |
+| Agents and toolchains | the host's, as under bwrap; the agent program by descriptor (HUM-278) | what the image brings; a host agent bound in may miss its libraries |
+| Start | no pull, no layer unpacking; P15 measures | first start unpacks layers once; warm start P15 |
+| Disk | none | the image layers, shared between sessions |
+| Policy parity | same mount table as bwrap | the image is part of the trusted computing base and of the preview (digest shown) |
+| Kernel level | the host directories reach the guest through virtiofs (K6) | the natural form for libkrun |
+
+`host` first because it makes the plain level a pure second expression of the
+existing profile, and the escape suite compares like with like. `image` is
+HUM-439, with the digest checked before every start (`SANDBOX_043`) and no
+pull at start: building or pulling an image is an explicit user action that
+uses the network directly, and interface and CLI say so before it runs.
+
+#### 8. Prerequisites and diagnostics
+
+| Prerequisite | Check | Diagnostic |
+|---|---|---|
+| `podman` present, version 4.9 or newer (Ubuntu 24.04 ships 4.9.3, Debian 13 5.4) | `podman version --format '{{.Client.Version}}'` | `SANDBOX_034` (missing, fix: install command from `os_release.rs`), `SANDBOX_037` (too old) |
+| rootless, local, not a machine | `podman info --format '{{.Host.Security.Rootless}}'`, `CONTAINER_HOST` and `--remote` refused | `SANDBOX_038` |
+| subordinate IDs for `--userns keep-id` | `/etc/subuid` and `/etc/subgid` entries, `newuidmap` present | `SANDBOX_039` |
+| OCI runtime `crun` (runc lacks some rootless features we rely on) | `podman info --format '{{.Host.OCIRuntime.Name}}'` | `SANDBOX_037` |
+| cgroup v2 with `memory`, `pids`, `cpu` delegated | `podman info --format '{{.Host.CgroupControllers}}'` | `SANDBOX_040` (fix: the systemd delegation drop-in) |
+| no SELinux enforcing (a bind would need relabelling the project with `:z`, which changes the user's files) | `/sys/fs/selinux/enforce` | `SANDBOX_044` until a design exists |
+| kernel overlay for `disposable` | `podman info --format '{{.Store.GraphDriverName}}'` and the native-overlay status | `SANDBOX_030` / `SANDBOX_033` (existing) |
+| image present with the expected digest (`rootfs = "image"`) | `podman image inspect --format '{{.Digest}}'` | `SANDBOX_043` |
+| krun: runtime and `/dev/kvm` | `krun` on the runtime path or crun's version string with `+LIBKRUN`; `/dev/kvm` readable and writable | `SANDBOX_045` |
+| krun: the door is expressible | forwarding off and one vsock port (K1, K2) | `SANDBOX_046` |
+| krun: host-side check of the VMM | network namespace with only `lo`, no unexplained descriptor | `SANDBOX_047` |
+| backend chosen but unavailable | any row above | `SANDBOX_034` names the missing piece and the way back (`--backend bwrap`); never a silent fallback |
+| backend below the floor | `IsolationLevel` against `sandbox.min_isolation` | `SANDBOX_035` |
+| sandbox profile names another backend | profile `sandbox.backend` against the choice | `SANDBOX_036` |
+| a container left behind by a crashed daemon | label sweep at daemon start | `SANDBOX_041` (warning, after removal) |
+| `/work` is not the checked folder | section 5 | `SANDBOX_042` |
+| a mount point that is not in the plan, or a planned one missing | section 3 | `SANDBOX_049` |
+| level not yet admitted (before HUM-448 for Podman, before HUM-449 for krun) | fixed per build | `SANDBOX_048` |
+| `doctor` probe start | one empty container per backend, cached until the tool versions change | `DOCTOR_014` (Podman), `DOCTOR_015` (krun) |
+
+These codes are planned only; HUM-431, HUM-433, HUM-436, HUM-437, HUM-439 and
+HUM-444 register them in `codes.rs` and `docs/DIAGNOSTICS.md`, and HUM-431
+widens the reserved `SANDBOX` range from `001-033` to `001-059`. A value that
+would weaken a guarantee is not a code of its own: such values have no key
+(no network mode, no extra arguments, no capabilities, no forwarding switch),
+and a value out of range is `CONFIG_003` as today. Admission: Podman is
+refused everywhere (configuration, CLI, interface, `auto`) with `SANDBOX_048`
+until HUM-448 flips it after HUM-435 and HUM-437 are green, the kernel level
+until HUM-449 after HUM-445 and HUM-446; only the escape suite and the tests
+start an unadmitted level, through an argument in code.
+
+**The hardened user unit.** `packaging/systemd/humanitld.service` sets
+`PrivateUsers=yes`, `ProtectSystem=strict` with `ReadWritePaths` only for
+Humanitl's own directories, `ProtectControlGroups=yes`,
+`NoNewPrivileges=yes`, `CapabilityBoundingSet=CAP_SYS_ADMIN`,
+`ProtectProc=invisible`, `RestrictFileSystems=~@privileged-api`,
+`PrivateIPC`, `PrivateMounts`, `KeyringMode=private` and a system call filter.
+Rootless Podman needs to write its storage (`~/.local/share/containers`,
+`$XDG_RUNTIME_DIR/containers`), `newuidmap` and `newgidmap` for the
+subordinate IDs (set-ID or file-capability binaries that need `CAP_SETUID`
+and `CAP_SETGID`, which both `NoNewPrivileges` and the bounding set take away)
+and a cgroup it can create or get from systemd. P8 runs Podman under every
+property of the real unit, generated from the file, and then drops one
+property at a time; `NoNewPrivileges`, `CapabilityBoundingSet`,
+`PrivateUsers`, `ProtectSystem` and `ProtectControlGroups` are the expected
+breakers. Expected outcome: the storage
+paths go into `ReadWritePaths`, `PrivateUsers` cannot stay for the Podman
+path, and the decision between "a second unit variant" and "start Podman
+through the user's systemd manager" falls on the measured result. HUM-434
+holds this, with `docs/SECURITY.md` "Service hardening" in the same commit.
+
+#### 9. CI
+
+The GitHub `ubuntu-24.04` runner image ships `podman`, `buildah`, `skopeo` and
+`crun` (Podman 4.9.3); the job checks `podman --version` and fails loudly if
+that changes (P16). A job `escape-tests-podman` next to `escape-tests` runs the
+same `tests/escape/run.sh` with `HUMANITL_ESCAPE_BACKEND=podman`, under the
+path rules of HUM-424 (sandbox crate, shim, `tests/escape/`, the workflow).
+
+KVM: the standard Linux runners expose `/dev/kvm`, made accessible to the
+runner user with a udev rule (K7). libkrun and libkrunfw are not in Ubuntu;
+the krun job builds them from pinned tags and caches the result, or runs in a
+Fedora container that packages `crun-krun` (K8 decides which). Until that job
+is green, the kernel level stays experimental and is not offered in the
+interface (no interface issue for the kernel level before the suite is green
+against it in CI).
+
+#### 10. Measurements still open
+
+Run on the reference machine after `sudo apt install podman crun uidmap`
+(Debian) and, for the image rows, one explicit
+`podman pull docker.io/library/debian:trixie-slim`. `$IMG` stands for that
+image, `$T` for `mktemp -d`.
+
+| Id | Question | Command | Expect |
+|---|---|---|---|
+| P0 | setup facts | `podman version; podman info --format '{{.Host.Security.Rootless}} {{.Host.OCIRuntime.Name}} {{.Host.CgroupsVersion}} {{.Host.CgroupControllers}} {{.Store.GraphDriverName}}'; grep "^$USER:" /etc/subuid /etc/subgid` | `true crun v2 [cpu memory pids ...] overlay`, one line each |
+| P1 | only `lo`, no route | `podman run --rm --network none --cap-drop all --security-opt no-new-privileges $IMG sh -c 'ls /sys/class/net; cat /proc/net/route; cat /proc/net/if_inet6'` | `lo` only, route table header only |
+| P2 | exactly one socket | `S=$T/door.sock; python3 -c "import socket,sys,time;s=socket.socket(socket.AF_UNIX);s.bind(sys.argv[1]);s.listen();time.sleep(600)" $S & podman run --rm --network none --userns keep-id --mount type=bind,src=$S,dst=/run/humanitl/proxy.sock $IMG sh -c 'find / -path /proc -prune -o -path /sys -prune -o -type s -print'` | exactly `/run/humanitl/proxy.sock` |
+| P3 | `seccomp()` allowed under Podman's profile | after HUM-433: `humanitl sandbox run --backend podman -- true` and the five `CHECK` lines; before: `podman run --rm $IMG grep Seccomp /proc/self/status` | `Seccomp: 2`, the shim's filter loads (`seccomp_applied ok`) |
+| P4 | inherited descriptors reach PID 1 | `podman run --rm --preserve-fds 2 $IMG sh -c 'ls -l /proc/self/fd; cat <&3; echo pid=$$' 3</etc/hostname 4</dev/null` | fd 3 and 4 present, host name printed, `pid=1` |
+| P5 | exit status passes through | `podman run --rm $IMG sh -c 'exit 7'; echo $?; podman run --rm $IMG sh -c 'kill -TERM $$'; echo $?` | `7`, then `143` |
+| P6 | host PID of PID 1 | `podman run -d --name hl-p6 --conmon-pidfile $T/conmon.pid $IMG sleep 60; podman inspect -f '{{.State.Pid}}' hl-p6; kill -INT -$(podman inspect -f '{{.State.Pid}}' hl-p6); podman rm -f hl-p6` | a host PID; the signal is permitted |
+| P7 | container survives a killed client; lifeline ends it | `podman run --name hl-p7 --rm $IMG sleep 600 & sleep 2; kill -9 $!; podman ps --filter name=hl-p7` (expect: still running), then `exec 3< <(sleep 3); podman run --rm --preserve-fds 1 $IMG sh -c 'cat <&3 >/dev/null; echo lifeline-closed'` | first: listed; second: `lifeline-closed` after about 3 s |
+| P8 | Podman under the user unit's hardening | the script below the table, generated from `packaging/systemd/humanitld.service` | which properties break it (expected: `NoNewPrivileges`, `CapabilityBoundingSet`, `PrivateUsers`, `ProtectSystem`, `ProtectControlGroups`); the result decides HUM-434 |
+| P9 | the user's configuration cannot add mounts, devices, networks, hooks | the script below the table: a user `containers.conf` volume, a user `mounts.conf` entry, a hook, each first without and then with the daemon's own `CONTAINERS_CONF` (empty `default_mounts_file`, empty `hooks_dir`) | without: `/hostetc` listed, `/run/secrets/probe` present, hook ran; with: none of the three |
+| P10 | overlay volume with own upper layer, whiteout form | `mkdir -p $T/p $T/u $T/w; echo a > $T/p/old; podman run --rm --userns keep-id -v $T/p:/work:O,upperdir=$T/u,workdir=$T/w $IMG sh -c 'echo x > /work/new; rm /work/old; stat -c "%d %i" /work'; stat -c '%F %t:%T' $T/u/old; ls -la $T/u; cat $T/p/old` | `new` in `u`, `old` a `character special file 0:0`, the project unchanged |
+| P11 | `-e` values on disk | `podman run -d --name hl-p11 -e HL_PROBE=s3cr3t $IMG sleep 30; grep -rl s3cr3t ~/.local/share/containers/storage/overlay-containers/*/userdata/ 2>/dev/null; podman rm -f hl-p11` | a hit, which is why the environment goes through a descriptor |
+| P12 | limits are enforced | `podman run --rm --memory 256m --pids-limit 64 --cpus 1 $IMG sh -c 'cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/pids.max /sys/fs/cgroup/cpu.max'` | `268435456`, `64`, `100000 100000` |
+| P13 | a descriptor as mount source pins the folder | `mkdir $T/a; touch $T/a/pinned; exec 3<$T/a; mv $T/a $T/b; mkdir $T/a; touch $T/a/swapped; podman run --rm --preserve-fds 1 -v /proc/self/fd/3:/work:ro $IMG ls /work` | `pinned` means fd-pinned, `swapped` means Podman resolved the path again |
+| P14 | device and inode survive the bind | `stat -c '%d %i' $T/b; podman run --rm -v $T/b:/work:ro $IMG stat -c '%d %i' /work` | equal pairs |
+| P15 | start time | `for i in 1 2 3 4 5; do /usr/bin/time -f %e podman run --rm --network none $IMG true; done`, and the same with `--rootfs` on an empty directory plus read-only binds of `/usr` and `/etc` | warm start under 1 s on the reference machine (bwrap: milliseconds) |
+| P17 | the engine's own mount entries under the final flag set | `podman run --rm --network none --userns keep-id --read-only --read-only-tmpfs=false --no-hosts --cap-drop all $IMG cat /proc/self/mountinfo`, the same with `--rootfs` on an empty directory | the list for the expected table in section 3; no `/run`, `/tmp`, `/var/tmp` tmpfs |
+| P16 | Podman on the CI runner | a throwaway workflow step: `podman --version; podman info --format '{{.Host.OCIRuntime.Name}} {{.Host.CgroupControllers}}'` | 4.9.x, `crun`, delegated controllers |
+| K1 | krun without forwarding | `podman run --rm --runtime krun --network none $IMG sh -c 'ls /sys/class/net; timeout 5 bash -c "exec 3<>/dev/tcp/1.1.1.1/80" && echo LEAK \|\| echo blocked'` | `lo` only and `blocked`; any other interface or `LEAK` means forwarding is on |
+| K2 | which libkrun options crun passes | `strings "$(command -v crun)" \| grep -iE 'krun\.\|vsock\|tsi'` and crun's `krun.md` for the installed version | an annotation for "no implicit vsock / no forwarding" and one for a vsock-to-Unix-socket port; absence triggers the fallback |
+| K3 | the VMM's descriptors and network | `podman run -d --name hl-k3 --runtime krun --network none $IMG sleep 120; p=$(podman inspect -f '{{.State.Pid}}' hl-k3); ls -l /proc/$p/fd; podman unshare nsenter -t $p -n ip link; ss -xp \| grep "pid=$p"` | only declared descriptors; `lo` only |
+| K4 | start time with a VM | `for i in 1 2 3; do /usr/bin/time -f %e podman run --rm --runtime krun --network none $IMG true; done` | the number that sets the warm-start target |
+| K5 | inode numbers over virtiofs | `stat -c '%d %i' $T/b; podman run --rm --runtime krun -v $T/b:/work:ro $IMG stat -c '%d %i' /work` | equal inode means the shim can verify as at the plain level |
+| K6 | extra host directories in the guest | `podman run --rm --runtime krun -v /usr:/hostusr:ro $IMG ls /hostusr/bin \| head` | listing; decides whether `rootfs = "host"` exists at the kernel level |
+| K7 | KVM on the GitHub runner | workflow step: `ls -l /dev/kvm; echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \| sudo tee /etc/udev/rules.d/99-kvm.rules; sudo udevadm control --reload-rules; sudo udevadm trigger --name-match=kvm; test -r /dev/kvm -a -w /dev/kvm && echo kvm-ok` | `kvm-ok` |
+| K8 | libkrun in CI | time and cache size of building libkrunfw, libkrun and crun from pinned tags on the runner, against a Fedora container with `crun-krun` and `/dev/kvm` passed in | the cheaper path that stays reproducible |
+
+P8, generated from the unit file (properties that only make sense for a
+service, and the ones that start it, are left out; `%h` and `%t` are
+expanded). There can be several independent blockers, so the script does not
+stop at the first: it removes the first property whose absence changes the
+result (success, or a different error), records it with both outputs, and
+starts again with the smaller set, until a run succeeds or no single removal
+changes anything; then the remaining set needs combinations, and the script
+says so. Every output stays in `$T/p8-*.log`.
+
+```sh
+unit=packaging/systemd/humanitld.service
+mapfile -t props < <(sed -n '/^\[Service\]/,/^\[/p' "$unit" \
+  | grep -E '^[A-Za-z]+=' \
+  | grep -vE '^(Type|ExecStart|Restart|RestartSec)=' \
+  | sed "s|%h|$HOME|g; s|%t|$XDG_RUNTIME_DIR|g")
+n=0
+probe() {  # $@: properties; prints the log file, returns the exit status
+  local args=() p log
+  n=$((n + 1)); log=$T/p8-$n.log
+  for p in "$@"; do args+=(-p "$p"); done
+  printf '%s\n' "$@" > "$log.props"
+  systemd-run --user --wait --pipe --quiet "${args[@]}" \
+    podman run --rm --network none --userns keep-id "$IMG" true >"$log" 2>&1
+  local rc=$?; echo "$log"; return $rc
+}
+cur=("${props[@]}")
+log=$(probe "${cur[@]}") && { echo "all properties: ok"; exit 0; }
+while :; do
+  found=
+  for i in "${!cur[@]}"; do
+    rest=("${cur[@]:0:i}" "${cur[@]:i+1}")
+    if trial=$(probe "${rest[@]}"); then
+      echo "blocker ${cur[i]%%=*}: $log -> ok ($trial)"; exit 0
+    fi
+    if ! cmp -s <(tail -n 5 "$log") <(tail -n 5 "$trial"); then
+      echo "blocker ${cur[i]%%=*}: $log -> other error $trial"
+      cur=("${rest[@]}"); log=$trial; found=1; break
+    fi
+  done
+  [[ -n $found ]] || { echo "no single property changes $log; test combinations of: ${cur[*]%%=*}"; exit 1; }
+done
+```
+
+P9, three sources, without and with the daemon's own configuration:
+
+```sh
+mkdir -p ~/.config/containers $T/hooks $T/empty $T/secret
+echo s3cr3t > $T/secret/probe
+printf '[containers]\nvolumes=["/etc:/hostetc:ro"]\n' > $T/user.conf
+echo "$T/secret:/run/secrets" >> ~/.config/containers/mounts.conf
+printf '{"version":"1.0.0","hook":{"path":"/usr/bin/touch","args":["touch","%s/hook-ran"]},"when":{"always":true},"stages":["prestart"]}\n' \
+  "$T" > $T/hooks/probe.json
+touch $T/empty-mounts.conf
+printf '[containers]\ndefault_mounts_file="%s"\n[engine]\nhooks_dir=["%s"]\n' \
+  "$T/empty-mounts.conf" "$T/empty" > $T/ours.conf
+check='ls /hostetc >/dev/null 2>&1 && echo volume; test -e /run/secrets/probe && echo secret; true'
+CONTAINERS_CONF_OVERRIDE=$T/user.conf podman --hooks-dir $T/hooks run --rm --network none $IMG sh -c "$check"
+ls $T/hook-ran && rm $T/hook-ran
+CONTAINERS_CONF=$T/ours.conf podman --hooks-dir $T/empty run --rm --network none $IMG sh -c "$check"
+ls $T/hook-ran
+# Remove the probe line from ~/.config/containers/mounts.conf afterwards.
+```
+
+The first run prints `volume` and `secret` and the hook ran; the second prints
+nothing and leaves no `hook-ran`. If `default_mounts_file` does not take
+effect, the result says so, and the mount table check is then the only
+barrier against `mounts.conf` (it stays in place either way).
+
+`tests/escape/` against a prototype is not part of this pass: it needs the
+adapter (HUM-433) to exist, because the suite launches through the backend.
+HUM-435 runs it, and its acceptance is the go/no-go evidence the plain level
+still owes.
+
+#### 11. Effort
+
+In working days for one person, review rounds included.
+
+| Part | Issue | Days |
+|---|---|---|
+| neutral port, `Backend` enum, options as value | HUM-428 | 4-6 |
+| preview and mount table from the plan | HUM-429 | 2-3 |
+| shim: lifeline, environment through a descriptor | HUM-430 | 2-3 |
+| configuration: `sandbox.backend`, floor, `sandbox.podman` | HUM-431 | 2-3 |
+| RPC and CLI: list backends, `--backend`, level in status | HUM-432 | 2-3 |
+| Podman adapter, plain level | HUM-433 | 5-8 |
+| Podman under the user unit | HUM-434 | 1-3 |
+| escape suite per backend, CI job | HUM-435 | 2-4 |
+| `doctor` per backend, probe start | HUM-436 | 2 |
+| pinning and masks under Podman | HUM-437 | 2-3 |
+| disposable under Podman | HUM-438 | 2-4 |
+| image as root file system | HUM-439 | 3-4 |
+| interface: backend choice with level | HUM-440 | 2-3 |
+| admit the plain level | HUM-448 | 0.5-1 |
+| documents and ADR amendments | HUM-441 | 1-2 |
+| **plain level in total** | | **33-52** |
+| krun spike with prototype | HUM-442 | 2-3 |
+| shim: control channel as a stream, PTY in the guest | HUM-443 | 5-7 |
+| krun runtime, vsock door, host check of the VMM | HUM-444 | 4-6 |
+| escape suite with guest root, KVM job | HUM-445 | 3-4 |
+| virtiofs pinning and disposable at the kernel level | HUM-446 | 4-6 |
+| admit the kernel level | HUM-449 | 0.5-1 |
+| kernel level documents and interface | HUM-447 | 1-2 |
+| **kernel level on top** | | **20-29** |
+
+The plain level is larger than the 9 to 14 days BACKLOG.md 9.12 gave the
+neutral port alone, because the preview, the CLI, the interface and the
+security documents move with it. The kernel level's range is dominated by
+K1 and K2: with the fallback (libkrun without Podman) HUM-444 grows by about
+five days.
+
+#### 12. Questions for the owner
+
+1. Podman as `Recommends` of the `.deb` (ADR-0010 amendment) is assumed. Is
+   that acceptable, or should the package not mention Podman at all?
+2. If P8 shows that rootless Podman cannot run under `PrivateUsers=yes`: a
+   second unit variant with documented weaker hardening, or Podman started
+   through the user's systemd manager (then descriptors cannot be inherited,
+   and the shim would get its descriptors over the door socket)?
+3. SELinux hosts (Fedora) are refused with `SANDBOX_044` in this plan. Is a
+   Fedora user a target before the kernel level?
+ One project folder, chosen once, for app and CLI alike (before HUM-060)
 
 ### Context
 The owner (2026-10-24) chose `~/Documents/Masterthesis` in Setup; the app
