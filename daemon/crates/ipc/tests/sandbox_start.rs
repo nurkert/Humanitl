@@ -193,7 +193,10 @@ impl Fixture {
 /// `daemon/bin/humanitl/tests/cli.rs` und
 /// `daemon/crates/sandbox/tests/shim_contract.rs`.
 fn usable(fixture: &Fixture) -> bool {
-    if let Err(diagnostic) = humanitl_sandbox::BwrapBackend::detect(fixture.paths.clone()) {
+    // Das Backend des Systems, wie der Daemon es sucht.
+    if let Err(diagnostic) =
+        humanitl_sandbox::Backend::detect(humanitl_sandbox::AUTO_BACKEND, fixture.paths.clone())
+    {
         return refuse_under_ci(
             &format!("bwrap is not usable here: {}", diagnostic.why),
             HOW_TO_GET_BWRAP,
@@ -1196,7 +1199,8 @@ async fn a_start_without_a_mode_is_disposable_where_the_system_allows_it() {
         return;
     }
     std::fs::write(fixture.work.join("readme.txt"), "before\n").expect("readme");
-    let supported = humanitl_sandbox::PlatformBackend::detect(fixture.paths.clone())
+    // Die Fassung gibt es nur am konkreten Backend.
+    let supported = humanitl_sandbox::BwrapBackend::detect(fixture.paths.clone())
         .is_ok_and(|backend| backend.version() >= humanitl_sandbox::MIN_OVERLAY_VERSION)
         && humanitl_sandbox::disposable::require_tmpfs(&fixture.paths.runtime_dir().path).is_ok();
     let service = fixture.service();

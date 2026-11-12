@@ -33,11 +33,11 @@
 //! ist dieselbe ([`crate::bwrap`]). Was sie unter macOS bedeuten, steht in
 //! `bin/humanitl-shim/src/macos.rs` und in `docs/SECURITY.md`.
 //!
-//! **Die Wegwerf-Sandbox (HUM-374).** Mit [`SeatbeltBackend::with_clone`] ist
-//! `/work` ein Klon des Projekts statt des Projekts selbst; die Masken gelten
-//! im Klon, das echte Projekt steht als `sealed` ganz am Ende des Profils,
-//! und `mounts.extra_rw` ist wie unter Linux nur lesbar, damit kein Schreiben
-//! an der Durchsicht vorbeigeht.
+//! **Die Wegwerf-Sandbox (HUM-374).** Mit [`crate::DisposableLayer::Clone`] in
+//! den Optionen des Starts ist `/work` ein Klon des Projekts statt des
+//! Projekts selbst; die Masken gelten im Klon, das echte Projekt steht als
+//! `sealed` ganz am Ende des Profils, und `mounts.extra_rw` ist wie unter
+//! Linux nur lesbar, damit kein Schreiben an der Durchsicht vorbeigeht.
 
 use humanitl_core::shell::shell_path;
 use std::ffi::OsString;
@@ -51,13 +51,16 @@ use std::time::{Duration, SystemTime};
 
 use humanitl_config::Paths;
 use humanitl_config::WorkMode;
-use humanitl_core::diagnostics::codes::{SANDBOX_001, SANDBOX_011};
+use humanitl_core::diagnostics::codes::{SANDBOX_001, SANDBOX_011, SANDBOX_030};
 use humanitl_core::{Diagnostic, Severity};
 
 use crate::bridge_env::bridges_json;
-use crate::bwrap::{BwrapBackend, REPORT_TIMEOUT};
-use crate::handle::{OutputSink, SandboxHandle};
-use crate::launcher::{CheckResult, LaunchOnce, LaunchPlan, SandboxBackend, StdioMode};
+use crate::bwrap::BwrapBackend;
+use crate::handle::SandboxHandle;
+use crate::launcher::{
+    CheckResult, DisposableLayer, EnvDelivery, IsolationLevel, LaunchOnce, LaunchOptions,
+    LaunchPlan, PlanRequest, SandboxBackend, StdioMode, Teardown,
+};
 use crate::profile::{
     Bridge, BridgeDirection, CA_BUNDLE_DST, CA_CERT_DST, MountPolicy, PROXY_SOCKET_DST, SHIM_DST,
     SandboxProfile, SessionContext, WORK_DST,
@@ -526,12 +529,6 @@ fn quote_path(path: &Path) -> String {
 pub struct SeatbeltBackend {
     program: PathBuf,
     paths: Paths,
-    stdio: StdioMode,
-    report_timeout: Duration,
-    output_sink: Option<OutputSink>,
-    read_only_binds: Vec<(PathBuf, PathBuf)>,
-    approved_work_dir: Option<PathBuf>,
-    clone: Option<PathBuf>,
 }
 
 impl SeatbeltBackend {
@@ -558,12 +555,6 @@ impl SeatbeltBackend {
         Self {
             program: program.into(),
             paths,
-            stdio: StdioMode::default(),
-            report_timeout: REPORT_TIMEOUT,
-            output_sink: None,
-            read_only_binds: Vec::new(),
-            approved_work_dir: None,
-            clone: None,
         }
     }
 
@@ -574,107 +565,40 @@ impl SeatbeltBackend {
         Self::unchecked(SANDBOX_EXEC, paths)
     }
 
-    /// Wohin Ein- und Ausgabe gehen.
-    #[must_use]
-    pub const fn with_stdio(mut self, stdio: StdioMode) -> Self {
-        self.stdio = stdio;
-        self
-    }
-
-    /// Wer die Ausgabe mitliest.
-    #[must_use]
-    pub fn with_output_sink(mut self, sink: OutputSink) -> Self {
-        self.output_sink = Some(sink);
-        self
-    }
-
-    /// Ein weiterer nur lesbarer Ort. Unter macOS liegt er unter seinem
-    /// eigenen Pfad; das Ziel wird darauf abgebildet (`bind_entries`).
-    #[must_use]
-    pub fn with_read_only_bind(mut self, src: impl Into<PathBuf>, dst: impl Into<PathBuf>) -> Self {
-        self.read_only_binds.push((src.into(), dst.into()));
-        self
-    }
-
-    /// Der Projektordner, wie die Prüfung ihn aufgelöst hat.
-    #[must_use]
-    pub fn with_approved_work_dir(mut self, dir: impl Into<PathBuf>) -> Self {
-        self.approved_work_dir = Some(dir.into());
-        self
-    }
-
-    /// Eine Wegwerf-Sandbox: `clone` ist das Projekt des Agenten, das echte
-    /// bekommt er nicht zu sehen (HUM-374).
-    #[must_use]
-    pub fn with_clone(mut self, clone: impl Into<PathBuf>) -> Self {
-        self.clone = Some(clone.into());
-        self
-    }
-
-    /// Was dieses Backend für eine Wegwerf-Sandbox braucht, soweit es sich
-    /// ohne Klon sagen lässt: ein schreibbares Projekt. Ob der Klon gelingt,
-    /// zeigt erst der Start (HUM-374).
-    ///
-    /// # Errors
-    ///
-    /// `SANDBOX_030`, wenn das Projekt nur lesbar ist.
-    pub fn disposable_support(
-        &self,
-        profile: &SandboxProfile,
-        session: &SessionContext,
-        _runtime_dir: &Path,
-    ) -> Result<(), Diagnostic> {
-        if profile.effective_work_mode(session.work_mode) == WorkMode::Rw {
-            Ok(())
-        } else {
-            Err(crate::bwrap::read_only_work(profile, session))
-        }
-    }
-
-    /// Alle eingestellten Masken unter dem Projekt, relativ zu ihm, ob es sie
-    /// beim Start gibt oder nicht, dazu die Ziele vorhandener Symlink-Masken
-    /// im Projekt (HUM-374). Was es davon gibt, kommt nicht mit in den Klon;
-    /// was es nicht gibt, darf der Agent dort nicht anlegen.
-    #[must_use]
-    pub fn clone_masks(profile: &SandboxProfile, project: &Path) -> Vec<PathBuf> {
-        let present = present_masks(profile, project);
-        let mut masks: Vec<PathBuf> = profile
-            .mounts
-            .tmpfs
-            .iter()
-            .cloned()
-            .chain(profile.effective_masked_files())
-            .filter_map(|path| under_work(&path))
-            .filter(|rest| !rest.as_os_str().is_empty())
-            .chain(
-                resolved_masks(project, &present)
-                    .iter()
-                    .filter_map(|path| path.strip_prefix(project).ok())
-                    .map(Path::to_path_buf),
-            )
-            .collect();
-        masks.sort();
-        masks.dedup();
-        masks
-    }
-
-    /// Der geprüfte Projektordner.
-    #[must_use]
-    pub fn approved_work_dir(&self) -> Option<&Path> {
-        self.approved_work_dir.as_deref()
-    }
-
-    /// Wie lange [`SandboxBackend::isolation_check`] auf den Bericht wartet.
-    #[must_use]
-    pub const fn with_report_timeout(mut self, timeout: Duration) -> Self {
-        self.report_timeout = timeout;
-        self
-    }
-
     /// `sandbox-exec`.
     #[must_use]
     pub fn program(&self) -> &Path {
         &self.program
+    }
+
+    /// Die Pfade, gegen die geplant wird.
+    #[must_use]
+    pub const fn paths(&self) -> &Paths {
+        &self.paths
+    }
+
+    /// Das Projekt der Sandbox: der Klon einer Wegwerf-Sandbox oder das
+    /// geprüfte Projekt selbst.
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_030`, wenn die Optionen ein Overlay nennen; unter Seatbelt
+    /// ist die Wegwerf-Schicht ein Klon (HUM-374). `SANDBOX_006`, wenn der
+    /// Klon sich nicht auflösen lässt.
+    fn work_of(options: &LaunchOptions, project: &Path) -> Result<PathBuf, Diagnostic> {
+        match &options.disposable {
+            None => Ok(project.to_path_buf()),
+            Some(DisposableLayer::Clone(clone)) => canonical(clone),
+            Some(DisposableLayer::Overlay(dirs)) => {
+                Err(Diagnostic::builder(SANDBOX_030, Severity::Blocking)
+                    .why(format!(
+                        "a disposable sandbox under Seatbelt is a clone of the project, not \
+                         the overlay {}; the caller chose the layer of another backend",
+                        dirs.upper.display()
+                    ))
+                    .build())
+            }
+        }
     }
 
     /// Wo die Sitzungsverzeichnisse liegen.
@@ -687,12 +611,13 @@ impl SeatbeltBackend {
     /// die Bridge der Sitzung bekommen sie nicht.
     fn shell_seed(
         &self,
+        stdio: StdioMode,
         layout: &SessionLayout,
         shim: &Path,
         work: &Path,
         env: &[(String, String)],
     ) -> Option<crate::shell::DoorSeed> {
-        self.stdio.pty_size().map(|_| {
+        stdio.pty_size().map(|_| {
             crate::shell::DoorSeed::Spawn(crate::shell::SpawnSpec {
                 program: self.program.clone(),
                 args: vec![
@@ -718,7 +643,7 @@ impl SeatbeltBackend {
 
     /// Die Abbildung der Sitzung samt den nur lesbaren Orten.
     fn session_map(
-        &self,
+        options: &LaunchOptions,
         layout: &SessionLayout,
         work: &Path,
         door: &Path,
@@ -726,14 +651,15 @@ impl SeatbeltBackend {
     ) -> PathMap {
         layout
             .path_map(work, door, shim)
-            .with_entries(self.bind_entries())
+            .with_entries(Self::bind_entries(options))
     }
 
     /// Die nur lesbaren Orte als Einträge der Abbildung, ihr Ziel auf den
     /// aufgelösten Pfad: `--tests-dir` nennt `/tests/escape`, und das Kommando
     /// muss dort ankommen, wo das Profil das Lesen erlaubt.
-    fn bind_entries(&self) -> Vec<(String, PathBuf)> {
-        self.read_only_binds
+    fn bind_entries(options: &LaunchOptions) -> Vec<(String, PathBuf)> {
+        options
+            .session_ro
             .iter()
             .filter_map(|(src, dst)| Some((dst.to_str()?.to_owned(), src.canonicalize().ok()?)))
             .collect()
@@ -777,11 +703,12 @@ impl SeatbeltBackend {
     }
 
     /// Was sich vor dem Start prüfen lässt; der aufgelöste Projektordner.
-    fn check(
-        &self,
-        profile: &SandboxProfile,
-        session: &SessionContext,
-    ) -> Result<PathBuf, Diagnostic> {
+    fn check(&self, request: &PlanRequest<'_>) -> Result<PathBuf, Diagnostic> {
+        let PlanRequest {
+            profile,
+            session,
+            options,
+        } = *request;
         let policy = MountPolicy::from_paths(&self.paths);
         profile.validate_with(&policy)?;
         BwrapBackend::check_work_dir(profile, session)?;
@@ -798,7 +725,7 @@ impl SeatbeltBackend {
             .build()
         })?;
         policy.check_work_dir(&work)?;
-        if let Some(approved) = &self.approved_work_dir
+        if let Some(approved) = &options.approved_work_dir
             && work != *approved
         {
             return Err(Diagnostic::builder(
@@ -825,9 +752,7 @@ impl SeatbeltBackend {
     /// Das Profil der Sitzung.
     #[allow(clippy::too_many_arguments)]
     fn policy(
-        &self,
-        profile: &SandboxProfile,
-        session: &SessionContext,
+        request: &PlanRequest<'_>,
         project: &Path,
         work: &Path,
         layout: &SessionLayout,
@@ -840,11 +765,16 @@ impl SeatbeltBackend {
         // eingestellte Maske, denn was der Agent dort anlegt, käme sonst mit
         // der Übernahme ins Projekt. Gefragt wird das echte Projekt: Im Klon
         // fehlen sie schon.
+        let PlanRequest {
+            profile,
+            session,
+            options,
+        } = *request;
         let disposable = work != project;
         let present = present_masks(profile, project);
         let resolved = resolved_masks(project, &present);
         let relative = if disposable {
-            Self::clone_masks(profile, project)
+            clone_masks(profile, project)
         } else {
             present
         };
@@ -865,7 +795,8 @@ impl SeatbeltBackend {
             .filter_map(|path| path.canonicalize().ok())
             .collect();
         read_only.extend(
-            self.read_only_binds
+            options
+                .session_ro
                 .iter()
                 .filter_map(|(src, _)| src.canonicalize().ok()),
         );
@@ -923,6 +854,33 @@ impl SeatbeltBackend {
             agent_port: ports.1,
         }
     }
+}
+
+/// Alle eingestellten Masken unter dem Projekt, relativ zu ihm, ob es sie
+/// beim Start gibt oder nicht, dazu die Ziele vorhandener Symlink-Masken
+/// im Projekt (HUM-374). Was es davon gibt, kommt nicht mit in den Klon;
+/// was es nicht gibt, darf der Agent dort nicht anlegen.
+#[must_use]
+pub fn clone_masks(profile: &SandboxProfile, project: &Path) -> Vec<PathBuf> {
+    let present = present_masks(profile, project);
+    let mut masks: Vec<PathBuf> = profile
+        .mounts
+        .tmpfs
+        .iter()
+        .cloned()
+        .chain(profile.effective_masked_files())
+        .filter_map(|path| under_work(&path))
+        .filter(|rest| !rest.as_os_str().is_empty())
+        .chain(
+            resolved_masks(project, &present)
+                .iter()
+                .filter_map(|path| path.strip_prefix(project).ok())
+                .map(Path::to_path_buf),
+        )
+        .collect();
+    masks.sort();
+    masks.dedup();
+    masks
 }
 
 /// Ob der Prozess, den dieses Sitzungsverzeichnis nennt, noch lebt.
@@ -1318,22 +1276,42 @@ impl SandboxBackend for SeatbeltBackend {
         "seatbelt"
     }
 
-    fn plan(
-        &self,
-        profile: &SandboxProfile,
-        session: &SessionContext,
-    ) -> Result<LaunchPlan, Diagnostic> {
-        let project = self.check(profile, session)?;
-        let work = match &self.clone {
-            Some(clone) => canonical(clone)?,
-            None => project.clone(),
-        };
+    fn isolation(&self) -> IsolationLevel {
+        IsolationLevel::Policy
+    }
+
+    /// Was dieses Backend für eine Wegwerf-Sandbox braucht, soweit es sich
+    /// ohne Klon sagen lässt: ein schreibbares Projekt. Ob der Klon gelingt,
+    /// zeigt erst der Start (HUM-374).
+    fn disposable_support(&self, request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
+        if request
+            .profile
+            .effective_work_mode(request.session.work_mode)
+            == WorkMode::Rw
+        {
+            Ok(())
+        } else {
+            Err(crate::bwrap::read_only_work(
+                request.profile,
+                request.session,
+            ))
+        }
+    }
+
+    fn plan(&self, request: &PlanRequest<'_>) -> Result<LaunchPlan, Diagnostic> {
+        let PlanRequest {
+            profile,
+            session,
+            options,
+        } = *request;
+        let project = self.check(request)?;
+        let work = Self::work_of(options, &project)?;
         let layout = self.create_layout(session)?;
         // Kanonisch: Seatbelt vergleicht aufgelöste Pfade, und unter macOS
         // liegt das Laufzeitverzeichnis hinter dem Verweis `/var`.
         let door = canonical(&session.proxy_socket_src)?;
         let shim = canonical(&session.shim_src)?;
-        let map = self.session_map(&layout, &work, &door, &shim);
+        let map = Self::session_map(options, &layout, &work, &door, &shim);
         let mut warnings = profile.unmask_diagnostics();
         let protected = place_files(session, &map, &layout.home(), &mut warnings)?;
         let files = place_agent(session, &map, &shim)?;
@@ -1343,9 +1321,8 @@ impl SandboxBackend for SeatbeltBackend {
             profile,
             &BwrapBackend::present_under_work(profile, &project),
         );
-        let mut policy = self.policy(
-            profile,
-            session,
+        let mut policy = Self::policy(
+            request,
             &project,
             &work,
             &layout,
@@ -1368,7 +1345,7 @@ impl SandboxBackend for SeatbeltBackend {
         if let Some(bin) = git_bin {
             prepend_to_path(&mut env, &bin);
         }
-        let shells = self.shell_seed(&layout, &shim, &work, &env);
+        let shells = self.shell_seed(options.stdio, &layout, &shim, &work, &env);
 
         let mut argv: Vec<OsString> = vec![
             self.program.clone().into_os_string(),
@@ -1382,7 +1359,7 @@ impl SandboxBackend for SeatbeltBackend {
             "--chdir".into(),
             work.as_os_str().to_owned(),
         ];
-        if self.stdio.pty_size().is_some() {
+        if options.stdio.pty_size().is_some() {
             argv.push("--controlling-terminal".into());
         }
         argv.push("--".into());
@@ -1408,20 +1385,23 @@ impl SandboxBackend for SeatbeltBackend {
             profile: profile.name.clone(),
             warnings,
             unprotected,
-            env_on_program: true,
+            env_delivery: EnvDelivery::Program,
+            stdio: options.stdio,
+            report_timeout: options.effective_report_timeout(),
+            teardown: Teardown::Process,
             program: self.program.clone(),
             once: Mutex::new(Some(LaunchOnce {
                 inherit,
                 report: report_reader,
-                status: status_reader,
+                status: Some(status_reader),
+                output_sink: options.output_sink.clone(),
                 shells,
             })),
         })
     }
 
     fn launch(&self, plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic> {
-        let handle =
-            crate::bwrap::launch_plan(&self.program, plan, self.stdio, self.output_sink.clone())?;
+        let handle = crate::bwrap::launch_plan(plan)?;
         if let Some(dir) = &plan.session_dir {
             handle.remove_at_exit(dir.clone());
         }
@@ -1438,7 +1418,7 @@ impl SandboxBackend for SeatbeltBackend {
     }
 
     fn isolation_check(&self, handle: &SandboxHandle) -> Vec<CheckResult> {
-        crate::bwrap::isolation_from_report(handle, self.report_timeout)
+        crate::bwrap::isolation_from_report(handle, handle.report_timeout())
     }
 }
 
@@ -1928,10 +1908,11 @@ mod tests {
     #[test]
     fn a_read_only_bind_is_mapped_for_the_command() {
         let tests = tempfile::tempdir().unwrap();
-        let paths = Paths::new(humanitl_config::Env::from_process());
-        let backend = SeatbeltBackend::unchecked(SANDBOX_EXEC, paths)
-            .with_read_only_bind(tests.path(), "/tests/escape");
-        let map = map().with_entries(backend.bind_entries());
+        let options = LaunchOptions {
+            session_ro: vec![(tests.path().to_path_buf(), PathBuf::from("/tests/escape"))],
+            ..LaunchOptions::default()
+        };
+        let map = map().with_entries(SeatbeltBackend::bind_entries(&options));
         let real = tests.path().canonicalize().unwrap();
         assert_eq!(
             map.map_text("/bin/sh /tests/escape/esc-1-sockets.sh"),

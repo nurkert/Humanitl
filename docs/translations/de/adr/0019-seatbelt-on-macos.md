@@ -36,6 +36,8 @@ zweites Backend. Auf macOS standen drei Wege offen:
 Auf macOS ist das Sandbox-Backend Seatbelt (`SeatbeltBackend` in
 `daemon/crates/sandbox/src/seatbelt.rs`), zur Übersetzungszeit über den Typalias
 `PlatformBackend` gewählt. Daemon und Kommandozeile nennen nur diesen Alias.
+Seit HUM-428 ersetzt das Laufzeit-Enum `Backend` den Alias (ADR-0020);
+`PLATFORM_BACKEND_NAME` nennt nur noch das Backend des Systems für `auto`.
 
 - Der Plan schreibt je Session ein SBPL-Profil in ein privates Session-Verzeichnis und startet
   `/usr/bin/sandbox-exec -f <profile> <shim> …`. Das Profil verbietet standardmäßig alles;

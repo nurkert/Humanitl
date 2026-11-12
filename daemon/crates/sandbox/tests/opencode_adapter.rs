@@ -1778,7 +1778,11 @@ fn the_adapter_files_arrive_in_a_real_sandbox_and_the_guarantees_hold() {
     session.session_env.extend(adapter.env(&ctx));
 
     let plan = backend
-        .plan(&fx.profile, &session)
+        .plan(&humanitl_sandbox::PlanRequest::new(
+            &fx.profile,
+            &session,
+            &captured(),
+        ))
         .expect("the plan builds");
     let handle = backend.launch(&plan).expect("bwrap starts");
 
@@ -1874,7 +1878,11 @@ fn the_adapter_files_are_read_only_and_work_stays_clean() {
     session.files = adapter.files(&ctx).expect("the adapter renders its files");
 
     let plan = backend
-        .plan(&fx.profile, &session)
+        .plan(&humanitl_sandbox::PlanRequest::new(
+            &fx.profile,
+            &session,
+            &captured(),
+        ))
         .expect("the plan builds");
     let handle = backend.launch(&plan).expect("bwrap starts");
     let _ = handle
@@ -1939,7 +1947,11 @@ fn the_briefing_leaves_the_project_directory_byte_identical() {
     session.files = adapter.files(&ctx).expect("the adapter renders its files");
 
     let plan = backend
-        .plan(&fx.profile, &session)
+        .plan(&humanitl_sandbox::PlanRequest::new(
+            &fx.profile,
+            &session,
+            &captured(),
+        ))
         .expect("the plan builds");
     let handle = backend.launch(&plan).expect("bwrap starts");
     let status = handle
@@ -2003,7 +2015,7 @@ fn tree_snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 /// (`.github/workflows/ci.yml`, Job `rust-check` installiert `bubblewrap`).
 /// Dasselbe Muster wie `sandbox_required` in `bin/humanitl/tests/cli.rs`
 /// (Codex-Befund vom 2026-09-04).
-fn sandbox_or_skip(test: &str) -> Option<(Fixture, humanitl_sandbox::BwrapBackend)> {
+fn sandbox_or_skip(test: &str) -> Option<(Fixture, humanitl_sandbox::Backend)> {
     let fixture = match Fixture::new() {
         Ok(fixture) => fixture,
         Err(why) => return skip(test, &why),
@@ -2105,9 +2117,8 @@ impl Fixture {
     }
 
     /// Das echte `bwrap`, oder der Grund, warum es hier keines gibt.
-    fn backend(&self) -> Result<humanitl_sandbox::BwrapBackend, String> {
-        humanitl_sandbox::BwrapBackend::detect(self.paths.clone())
-            .map(|backend| backend.with_stdio(humanitl_sandbox::StdioMode::Capture))
+    fn backend(&self) -> Result<humanitl_sandbox::Backend, String> {
+        humanitl_sandbox::Backend::detect(humanitl_sandbox::BWRAP_BACKEND, self.paths.clone())
             .map_err(|err| format!("no usable bwrap: {err}"))
     }
 }
@@ -2220,4 +2231,13 @@ fn a_command_from_the_caller_is_not_blamed_on_a_setting() {
         finding.fix.is_none(),
         "changing a setting nobody set would not help"
     );
+}
+
+/// Die Optionen eines Starts, dessen Ausgabe der Test liest.
+#[cfg(target_os = "linux")]
+fn captured() -> humanitl_sandbox::LaunchOptions {
+    humanitl_sandbox::LaunchOptions {
+        stdio: humanitl_sandbox::StdioMode::Capture,
+        ..humanitl_sandbox::LaunchOptions::default()
+    }
 }

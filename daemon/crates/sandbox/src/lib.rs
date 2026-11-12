@@ -23,8 +23,11 @@
 //! - [`bwrap_args`] die Übersetzung in die Argumentliste
 //! - [`bridge_env`] der Vertrag zwischen Launcher und Shim: Umgebung,
 //!   Bericht, Exit-Codes (HUM-011, HUM-012, HUM-013)
-//! - [`launcher`] der Port [`SandboxBackend`] mit [`LaunchPlan`],
-//!   [`CheckResult`] und [`IsolationCheck`]
+//! - [`launcher`] der Port [`SandboxBackend`] mit [`PlanRequest`],
+//!   [`LaunchOptions`], [`LaunchPlan`], [`CheckResult`], [`IsolationCheck`]
+//!   und [`IsolationLevel`]
+//! - [`backend`] das Enum [`Backend`] über die Backends dieses Builds, das
+//!   Daemon und Kommandozeile halten (HUM-428)
 //! - [`bwrap`] das Backend [`BwrapBackend`]: findet `bwrap`, prüft, plant,
 //!   startet mit leerer Umgebung
 //! - [`handle`] die laufende Sandbox: [`SandboxHandle`] mit `wait`, `kill`
@@ -50,7 +53,7 @@
 //! `$XDG_RUNTIME_DIR`, `$XDG_CONFIG_HOME/humanitl` und
 //! `$XDG_DATA_HOME/humanitl` auch außerhalb von `/run` und `$HOME`
 //! geschützt. Dieselben `Paths` bekommt das Backend
-//! ([`BwrapBackend::detect`]); [`SandboxBackend::plan`] prüft damit auch das
+//! ([`Backend::detect`]); [`SandboxBackend::plan`] prüft damit auch das
 //! Projektverzeichnis und den Proxy-Socket.
 //!
 //! ```
@@ -101,6 +104,7 @@ pub(crate) mod test_support;
 
 pub mod agent;
 pub mod agent_exit;
+pub mod backend;
 pub mod bridge_env;
 pub mod bwrap;
 pub mod bwrap_args;
@@ -125,6 +129,7 @@ pub use crate::agent::{
     Reach, SandboxFile, SandboxLookup, SandboxView, files_inside_work, find_in_path,
 };
 pub use crate::agent_exit::{FirstOutput, did_not_start};
+pub use crate::backend::{BWRAP_BACKEND, Backend, SEATBELT_BACKEND};
 pub use crate::bridge_env::{
     CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NAMES, CHECK_NO_INTERFACES, CHECK_PREFIX,
     CHECK_SECCOMP_APPLIED, CHECK_SINGLE_SOCKET, ENV_BRIDGES, ENV_REPORT_FD, ENV_SECCOMP_DENY,
@@ -133,8 +138,8 @@ pub use crate::bridge_env::{
     parse_check_line, parse_exec_line, shim_env,
 };
 pub use crate::bwrap::{
-    BIND_FD_VERSION, BwrapBackend, EARLY_EXIT_WINDOW, MIN_BWRAP_VERSION, REPORT_TIMEOUT,
-    USERNS_DOCS_URL, USERNS_SYSCTL_COMMAND, Version, is_userns_failure,
+    BIND_FD_VERSION, BwrapBackend, EARLY_EXIT_WINDOW, MIN_BWRAP_VERSION, USERNS_DOCS_URL,
+    USERNS_SYSCTL_COMMAND, Version, is_userns_failure,
 };
 pub use crate::bwrap_args::{
     DEFAULT_HOME, DEFAULT_USER, GROUP_DST, HOSTS_DST, IdentityFds, IdentityFiles, LaunchInputs,
@@ -151,25 +156,19 @@ pub use crate::handle::{
     OutputStream, PTY_MIRROR_BYTES, ReportSnapshot, STATUS_DRAIN, STDERR_EXCERPT_BYTES,
     SandboxHandle, StatusSnapshot, Termination,
 };
-pub use crate::launcher::{CheckResult, IsolationCheck, LaunchPlan, SandboxBackend, StdioMode};
+pub use crate::launcher::{
+    CheckResult, DisposableLayer, IsolationCheck, IsolationLevel, LaunchOptions, LaunchPlan,
+    PlanRequest, REPORT_TIMEOUT, SandboxBackend, StdioMode,
+};
 pub use crate::seatbelt::{
     PREVIEW_AGENT_PORT, PREVIEW_REPORT_FD, PREVIEW_SESSION_PORT, PREVIEW_STATUS_FD, PolicyAccess,
-    PolicyRow, PolicySource, SeatbeltBackend, SeatbeltPreview,
+    PolicyRow, PolicySource, SeatbeltBackend, SeatbeltPreview, clone_masks,
 };
 
-/// Das Sandbox-Backend dieses Systems: Seatbelt unter macOS, sonst bwrap
-/// (HUM-323). Daemon und Kommandozeile sprechen nur diesen Typ an.
-#[cfg(target_os = "macos")]
-pub type PlatformBackend = SeatbeltBackend;
-
-/// Das Sandbox-Backend dieses Systems: Seatbelt unter macOS, sonst bwrap
-/// (HUM-323). Daemon und Kommandozeile sprechen nur diesen Typ an.
-#[cfg(not(target_os = "macos"))]
-pub type PlatformBackend = BwrapBackend;
-
-/// Der Name des Backends dieses Systems, auch dort, wo gar keins gebaut wurde
-/// (der Schnappschuss eines Befunds): derselbe wie
-/// [`SandboxBackend::name`] von [`PlatformBackend`] (HUM-376).
+/// Der Name des Backends dieses Systems: Seatbelt unter macOS, sonst bwrap
+/// (HUM-323, HUM-376). Er ist das, wofür [`AUTO_BACKEND`] steht
+/// ([`Backend::detect`]), und der Name im Schnappschuss eines Befunds, wo gar
+/// kein Backend gebaut wurde (HUM-428).
 pub const PLATFORM_BACKEND_NAME: &str = if cfg!(target_os = "macos") {
     "seatbelt"
 } else {

@@ -4,8 +4,9 @@
 //! das und nicht mehr: es liest ein Sandbox-Profil mit
 //! [`SandboxProfile::load_validated`] gegen die [`MountPolicy`] aus
 //! `humanitl_config::Paths`, plant und startet mit dem echten
-//! [`BwrapBackend`] (derselbe Weg, den später der Daemon nimmt) und endet mit
-//! dem Status der Sandbox. Es gibt hier keine zweite Übersetzung des Profils:
+//! [`BwrapBackend`] über den Port [`SandboxBackend`] als [`Backend`] mit
+//! [`LaunchOptions`] (derselbe Weg, den der Daemon nimmt) und endet mit dem
+//! Status der Sandbox. Es gibt hier keine zweite Übersetzung des Profils:
 //! was die Oberfläche unter „Sandbox" anzeigt, ist Argument für Argument das,
 //! was hier startet.
 //!
@@ -43,7 +44,7 @@
 //!    der Plan jede Quelle aus `mounts.extra_ro` und lehnt einen Platzhalter
 //!    ab, den es auf dem Host nicht gibt; deshalb kommt der Platzhalter vor dem
 //!    Planen aus dem Profil, und das Verzeichnis geht als nur lesbarer Bind der
-//!    Sitzung an das Backend (`BwrapBackend::with_read_only_bind`): geöffnet,
+//!    Sitzung an das Backend (`LaunchOptions::session_ro`): geöffnet,
 //!    gegen die `MountPolicy` geprüft und per Deskriptor gebunden, an
 //!    derselben Stelle der Zeile, vor dem Bind des Projektordners. Ohne
 //!    brauchbaren Shim und mit `bwrap` vor 0.10 startet der Starter nicht,
@@ -104,8 +105,9 @@ use humanitl_core::diagnostics::codes::{SANDBOX_010, SANDBOX_011, SANDBOX_012, S
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_sandbox::{
-    BIND_FD_VERSION, BwrapBackend, EXIT_USAGE as SHIM_EXIT_USAGE, MIN_BWRAP_VERSION, MountPolicy,
-    SandboxBackend, SandboxHandle, SandboxProfile, SessionContext, StdioMode, Version,
+    BIND_FD_VERSION, Backend, BwrapBackend, EXIT_USAGE as SHIM_EXIT_USAGE, LaunchOptions,
+    MIN_BWRAP_VERSION, MountPolicy, PlanRequest, SandboxBackend, SandboxHandle, SandboxProfile,
+    SessionContext, StdioMode, Version,
 };
 
 /// Exit-Code, wenn die Kommandozeile des Starters selbst unbrauchbar ist.
@@ -305,33 +307,38 @@ fn run() -> Result<ExitCode, LaunchError> {
         agent_program: None,
     };
 
-    let backend = match BwrapBackend::detect(paths) {
+    // Die Escape-Suite prüft bwrap; die Fassung braucht der Starter selbst
+    // (`refuse_unclosed_descriptors`), geplant und gestartet wird über den
+    // Port (HUM-428).
+    let bwrap = match BwrapBackend::detect(paths) {
         Ok(backend) => backend,
         // Die Vorschau braucht kein `bwrap`; der Start schon.
         Err(_) if args.print_argv => {
             BwrapBackend::unchecked("bwrap", MIN_BWRAP_VERSION, Paths::new(Env::from_process()))
         }
         Err(diagnostic) => return Err(diagnostic.into()),
-    }
-    .with_stdio(StdioMode::Inherit);
-
-    let backend = match args.tests_dir.as_deref().map(absolute) {
-        None => backend,
-        Some(tests_dir) => {
-            if !take_tests_placeholder(&mut profile) {
-                return Err(unexpected_argv(format!(
-                    "{}: mounts.extra_ro does not name {TESTS_DIR_DST}, so --tests-dir has nothing to point at",
-                    args.profile.display()
-                )));
-            }
-            backend.with_read_only_bind(tests_dir, TESTS_DIR_DST)
-        }
     };
-    if !args.print_argv {
-        refuse_unclosed_descriptors(matches!(shim, Shim::Placeholder(_)), backend.version())?;
+    let mut options = LaunchOptions {
+        stdio: StdioMode::Inherit,
+        ..LaunchOptions::default()
+    };
+    if let Some(tests_dir) = args.tests_dir.as_deref().map(absolute) {
+        if !take_tests_placeholder(&mut profile) {
+            return Err(unexpected_argv(format!(
+                "{}: mounts.extra_ro does not name {TESTS_DIR_DST}, so --tests-dir has nothing to point at",
+                args.profile.display()
+            )));
+        }
+        options
+            .session_ro
+            .push((tests_dir, PathBuf::from(TESTS_DIR_DST)));
     }
+    if !args.print_argv {
+        refuse_unclosed_descriptors(matches!(shim, Shim::Placeholder(_)), bwrap.version())?;
+    }
+    let backend = Backend::from(bwrap);
 
-    let mut plan = backend.plan(&profile, &context)?;
+    let mut plan = backend.plan(&PlanRequest::new(&profile, &context, &options))?;
 
     if let Shim::Placeholder(path) = &shim {
         eprintln!(
@@ -407,7 +414,7 @@ fn ca_sources(args: &Args, state: &Path) -> Result<(PathBuf, PathBuf), LaunchErr
 /// ihn unmittelbar nach seiner letzten Prüfzeile; geprüft wird danach. Das
 /// Fenster dazwischen ist in `docs/THREAT-MODEL.md` K-15 beschrieben und gilt
 /// hier wie im Daemon.
-fn enforce_isolation(backend: &BwrapBackend, handle: &SandboxHandle) -> Result<(), LaunchError> {
+fn enforce_isolation(backend: &Backend, handle: &SandboxHandle) -> Result<(), LaunchError> {
     let results = backend.isolation_check(handle);
     for result in &results {
         eprintln!(
@@ -936,11 +943,16 @@ mod tests {
         };
         let tests_dir = state.join("tests-escape");
         make_dir(&tests_dir).expect("tests dir");
-        let backend = BwrapBackend::unchecked("/usr/bin/bwrap", Version(0, 11, 0), paths)
-            .with_read_only_bind(&tests_dir, TESTS_DIR_DST);
+        let backend = BwrapBackend::unchecked("/usr/bin/bwrap", Version(0, 11, 0), paths);
+        let options = LaunchOptions {
+            session_ro: vec![(tests_dir.clone(), PathBuf::from(TESTS_DIR_DST))],
+            ..LaunchOptions::default()
+        };
         let mut profile = profile;
         assert!(take_tests_placeholder(&mut profile));
-        let mut plan = backend.plan(&profile, &context).expect("plan");
+        let mut plan = backend
+            .plan(&PlanRequest::new(&profile, &context, &options))
+            .expect("plan");
         assert_eq!(argv_of(&plan)[0], "/usr/bin/bwrap");
 
         // Das Testverzeichnis kommt wie die Erweiterungen als Deskriptor,

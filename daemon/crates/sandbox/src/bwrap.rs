@@ -68,10 +68,11 @@ use crate::bridge_env::{
     CHECK_SINGLE_SOCKET, parse_check_line, parse_exec_line,
 };
 use crate::bwrap_args::{IdentityFds, LaunchInputs, MaskFds, SourceFd};
-use crate::handle::{OutputSink, ReportSnapshot, SandboxHandle, Shared};
+use crate::handle::{ReportSnapshot, SandboxHandle, Shared};
 use crate::inherit::{HOOK_ERRNO, above_stdio, inherit_in_child};
 use crate::launcher::{
-    CheckResult, IsolationCheck, LaunchOnce, LaunchPlan, SandboxBackend, StdioMode,
+    CheckResult, DisposableLayer, EnvDelivery, IsolationCheck, IsolationLevel, LaunchOnce,
+    LaunchPlan, PlanRequest, SandboxBackend, StdioMode, Teardown,
 };
 use crate::os_release::install_command;
 use crate::pinned::{PinnedSource, SourceKind};
@@ -98,9 +99,6 @@ pub const BIND_FD_VERSION: Version = Version(0, 10, 0);
 /// Die erste Zeile des Shim-Berichts beendet das Warten früher: sie kommt
 /// erst, wenn der Befehl läuft.
 pub const EARLY_EXIT_WINDOW: Duration = Duration::from_millis(500);
-
-/// Wie lange [`SandboxBackend::isolation_check`] auf den Bericht des Shims wartet.
-pub const REPORT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Der Befehl, der die AppArmor-Sperre für Nutzer-Namensräume aufhebt (Ubuntu ≥ 24.04).
 pub const USERNS_SYSCTL_COMMAND: &str =
@@ -153,26 +151,15 @@ impl std::fmt::Display for Version {
 }
 
 /// Das `bwrap`-Backend.
+///
+/// Es trägt nur, was zur Maschine gehört: das Programm, seine Fassung und die
+/// Pfade, gegen die geplant wird. Was ein einzelner Start braucht, kommt mit
+/// der Anfrage ([`crate::LaunchOptions`], HUM-428).
 #[derive(Debug, Clone)]
 pub struct BwrapBackend {
     program: PathBuf,
     version: Version,
     paths: Paths,
-    stdio: StdioMode,
-    report_timeout: Duration,
-    /// Wohin die gesammelte Ausgabe zusätzlich geht, während sie läuft.
-    output_sink: Option<OutputSink>,
-    /// Nur lesbare Binds, die der Aufrufer zur Sitzung beiträgt, als
-    /// `(Quelle, Ziel)`; siehe [`BwrapBackend::with_read_only_bind`].
-    read_only_binds: Vec<(PathBuf, PathBuf)>,
-    /// Der aufgelöste Ort, an dem der Aufrufer den Projektordner geprüft hat;
-    /// siehe [`BwrapBackend::with_approved_work_dir`].
-    approved_work_dir: Option<PathBuf>,
-    /// Die Schicht einer Wegwerf-Sandbox; siehe [`BwrapBackend::with_overlay`].
-    overlay: Option<crate::disposable::OverlayDirs>,
-    /// Gerät und Inode des Projektordners, den der Aufrufer schon geöffnet
-    /// hält; siehe [`BwrapBackend::with_expected_work_inode`].
-    expected_work_inode: Option<(u64, u64)>,
 }
 
 impl BwrapBackend {
@@ -217,13 +204,6 @@ impl BwrapBackend {
             program: program.into(),
             version,
             paths,
-            stdio: StdioMode::default(),
-            report_timeout: REPORT_TIMEOUT,
-            output_sink: None,
-            read_only_binds: Vec::new(),
-            approved_work_dir: None,
-            overlay: None,
-            expected_work_inode: None,
         }
     }
 
@@ -233,100 +213,6 @@ impl BwrapBackend {
     #[must_use]
     pub fn fallback(paths: Paths) -> Self {
         Self::unchecked("bwrap", MIN_BWRAP_VERSION, paths)
-    }
-
-    /// Startet die Sandbox als Wegwerf-Sandbox (HUM-350): das
-    /// Projektverzeichnis nur lesbar als untere Schicht, `dirs` als obere
-    /// Schicht und Arbeitsverzeichnis des Overlays, `mounts.extra_rw` nur
-    /// lesbar. Die Verzeichnisse legt der Aufrufer an
-    /// (`crate::disposable::Layer::create`).
-    #[must_use]
-    pub fn with_overlay(mut self, dirs: crate::disposable::OverlayDirs) -> Self {
-        self.overlay = Some(dirs);
-        self
-    }
-
-    /// Bindet den Projektordner nur, wenn der hier geöffnete Ordner Gerät und
-    /// Inode `(dev, ino)` trägt (HUM-350): Der Aufrufer hält den Ordner schon
-    /// offen und schreibt später durch diesen Deskriptor; ein Umbenennen und
-    /// ein neuer Ordner unter demselben Pfad dazwischen hängte sonst einen
-    /// anderen Ordner ein als den, in den übernommen wird.
-    #[must_use]
-    pub const fn with_expected_work_inode(mut self, dev: u64, ino: u64) -> Self {
-        self.expected_work_inode = Some((dev, ino));
-        self
-    }
-
-    /// Die Schicht, wenn dies eine Wegwerf-Sandbox ist.
-    #[must_use]
-    pub const fn overlay(&self) -> Option<&crate::disposable::OverlayDirs> {
-        self.overlay.as_ref()
-    }
-
-    /// Wohin Ein- und Ausgabe der Sandbox gehen; Standard [`StdioMode::Inherit`].
-    #[must_use]
-    pub const fn with_stdio(mut self, stdio: StdioMode) -> Self {
-        self.stdio = stdio;
-        self
-    }
-
-    /// Wohin jedes gelesene Stück Ausgabe zusätzlich geht, während die Sandbox
-    /// läuft.
-    ///
-    /// Wirkt nur mit [`StdioMode::Capture`]; ohne Pipes gibt es nichts zu
-    /// lesen. Der Sender wird vor dem Start gesetzt und nicht danach, damit
-    /// kein Byte zwischen Start und Anmeldung verlorengeht.
-    #[must_use]
-    pub fn with_output_sink(mut self, sink: OutputSink) -> Self {
-        self.output_sink = Some(sink);
-        self
-    }
-
-    /// Ein nur lesbarer Bind von `src` nach `dst`, den der Aufrufer zur
-    /// Sitzung beiträgt, nicht das Profil: das Testverzeichnis der
-    /// Escape-Tests (`--tests-dir`).
-    ///
-    /// Er geht denselben Weg wie die Einträge aus `mounts.extra_ro` (HUM-263):
-    /// [`SandboxBackend::plan`] öffnet die Quelle einmal, prüft den Ort ihres
-    /// Deskriptors mit [`MountPolicy::check_session_dir`] und bindet den
-    /// Deskriptor, hinter den Erweiterungen des Profils und vor dem
-    /// Projektordner. Geprüft wird wie beim Projektordner, denn auch diese
-    /// Quelle kommt aus dem Aufruf und darf unter dem Heimatverzeichnis
-    /// liegen; das Heimatverzeichnis selbst und die geschützten Bäume nicht.
-    #[must_use]
-    pub fn with_read_only_bind(mut self, src: impl Into<PathBuf>, dst: impl Into<PathBuf>) -> Self {
-        self.read_only_binds.push((src.into(), dst.into()));
-        self
-    }
-
-    /// Der aufgelöste Ort, an dem der Aufrufer den Projektordner geprüft und
-    /// freigegeben hat (HUM-294).
-    ///
-    /// [`SandboxBackend::plan`] öffnet den Projektordner einmal (HUM-263) und
-    /// bindet ihn nur, wenn der Ort des Deskriptors genau dieser ist. Der
-    /// Aufrufer prüft mehr als die Politik hier, etwa ob der Ordner unter dem
-    /// Heimatverzeichnis liegt oder erklärt ist; ersetzt ein Verweis zwischen
-    /// seiner Prüfung und dem Öffnen einen Teil des Pfades, führte derselbe
-    /// Text sonst an einen Ort, den nur die Denylist gesehen hat. Ohne Angabe
-    /// gilt allein die Politik, wie bisher.
-    #[must_use]
-    pub fn with_approved_work_dir(mut self, dir: impl Into<PathBuf>) -> Self {
-        self.approved_work_dir = Some(dir.into());
-        self
-    }
-
-    /// Der freigegebene Ort des Projektordners, falls der Aufrufer einen
-    /// genannt hat ([`BwrapBackend::with_approved_work_dir`]).
-    #[must_use]
-    pub fn approved_work_dir(&self) -> Option<&Path> {
-        self.approved_work_dir.as_deref()
-    }
-
-    /// Wie lange [`SandboxBackend::isolation_check`] auf den Bericht wartet.
-    #[must_use]
-    pub const fn with_report_timeout(mut self, timeout: Duration) -> Self {
-        self.report_timeout = timeout;
-        self
     }
 
     /// Das Programm, das startet.
@@ -345,12 +231,6 @@ impl BwrapBackend {
     #[must_use]
     pub const fn paths(&self) -> &Paths {
         &self.paths
-    }
-
-    /// Der Modus für Ein- und Ausgabe.
-    #[must_use]
-    pub const fn stdio(&self) -> StdioMode {
-        self.stdio
     }
 
     /// Sucht `bwrap` in `PATH` der übergebenen Umgebung, nie in der des
@@ -459,6 +339,28 @@ impl BwrapBackend {
         command
     }
 
+    /// `sandbox.min_bwrap_version` des Profils gegen die gefundene Fassung.
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_002`, wenn `bwrap` älter ist.
+    fn check_profile_version(&self, profile: &SandboxProfile) -> Result<(), Diagnostic> {
+        let required = Version::parse(&profile.sandbox.min_bwrap_version);
+        if self.version < required {
+            return Err(Diagnostic::builder(SANDBOX_002, Severity::Blocking)
+                .why(format!(
+                    "{} is bubblewrap {}; profile {:?} needs at least {}",
+                    self.program.display(),
+                    self.version,
+                    profile.name,
+                    profile.sandbox.min_bwrap_version
+                ))
+                .fix(FixAction::CopyCommand(install_command().to_owned()))
+                .build());
+        }
+        Ok(())
+    }
+
     /// Die Bedingungen einer Wegwerf-Sandbox (HUM-350): `bwrap` kennt
     /// `--overlay`, und die Sandbox sieht das Projekt schreibbar, sonst gäbe
     /// es nichts zu verwerfen.
@@ -466,49 +368,26 @@ impl BwrapBackend {
     /// # Errors
     ///
     /// `SANDBOX_030`, wenn eine fehlt.
-    fn check_overlay(
-        &self,
-        profile: &SandboxProfile,
-        session: &SessionContext,
-    ) -> Result<(), Diagnostic> {
-        if self.overlay.is_none() {
-            return Ok(());
-        }
-        self.overlay_support(profile, session)
-    }
-
-    /// Ob diese Sitzung eine Wegwerf-Sandbox bekommen kann (HUM-357):
-    /// `bwrap` kennt `--overlay`, die Sandbox sieht das Projekt schreibbar,
-    /// und `runtime_dir`, unter dem die obere Schicht entstünde, liegt auf
-    /// tmpfs. Dieselben Bedingungen, die der Start einer Wegwerf-Sandbox
-    /// prüft, ohne etwas anzulegen; die Auflösung von `sandbox.mode = "auto"`
-    /// fragt sie vor dem Start ([`crate::resolve_mode`]).
-    ///
-    /// # Errors
-    ///
-    /// `SANDBOX_030` mit dem ersten fehlenden Teil und seinem Fix.
-    pub fn disposable_support(
-        &self,
-        profile: &SandboxProfile,
-        session: &SessionContext,
-        runtime_dir: &Path,
-    ) -> Result<(), Diagnostic> {
-        #[cfg(target_os = "linux")]
-        {
-            self.overlay_support(profile, session)?;
-            self.overlay_host_support()?;
-            crate::disposable::probe_layer_dir(&runtime_dir.join(crate::disposable::DISPOSABLE_DIR))
-        }
-        // Das Overlay gibt es nur unter Linux (HUM-350).
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = (profile, session, runtime_dir);
-            Err(crate::disposable::unsupported())
+    fn check_overlay(&self, request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
+        match &request.options.disposable {
+            None => Ok(()),
+            Some(DisposableLayer::Overlay(_)) => {
+                self.overlay_support(request.profile, request.session)
+            }
+            Some(DisposableLayer::Clone(clone)) => {
+                Err(Diagnostic::builder(SANDBOX_030, Severity::Blocking)
+                    .why(format!(
+                        "a disposable sandbox under bubblewrap is an overlay over the project, \
+                         not the clone {}; the caller chose the layer of another backend",
+                        clone.display()
+                    ))
+                    .build())
+            }
         }
     }
 
     /// Fassung von `bwrap` und Schreibbarkeit des Projekts; siehe
-    /// [`BwrapBackend::disposable_support`].
+    /// [`SandboxBackend::disposable_support`].
     fn overlay_support(
         &self,
         profile: &SandboxProfile,
@@ -902,8 +781,8 @@ impl BwrapBackend {
     /// pseudo-terminal: a sandbox that runs without the daemon has nobody to
     /// ask for a shell. The shim's end lies above the standard streams
     /// (`inherit.rs`).
-    fn shell_door(&self) -> Result<(Option<OwnedFd>, Option<OwnedFd>), Diagnostic> {
-        if self.stdio.pty_size().is_none() {
+    fn shell_door(stdio: StdioMode) -> Result<(Option<OwnedFd>, Option<OwnedFd>), Diagnostic> {
+        if stdio.pty_size().is_none() {
             return Ok((None, None));
         }
         let (daemon_end, shim_end) = crate::shell::pair().map_err(|err| {
@@ -921,6 +800,34 @@ impl SandboxBackend for BwrapBackend {
         "bwrap"
     }
 
+    fn isolation(&self) -> IsolationLevel {
+        IsolationLevel::Namespaces
+    }
+
+    /// `bwrap` kennt `--overlay`, die Sandbox sieht das Projekt schreibbar,
+    /// und das Laufzeitverzeichnis aus den Pfaden des Backends, unter dem die
+    /// obere Schicht entstünde, liegt auf tmpfs.
+    fn disposable_support(&self, request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
+        #[cfg(target_os = "linux")]
+        {
+            self.overlay_support(request.profile, request.session)?;
+            self.overlay_host_support()?;
+            crate::disposable::probe_layer_dir(
+                &self
+                    .paths
+                    .runtime_dir()
+                    .path
+                    .join(crate::disposable::DISPOSABLE_DIR),
+            )
+        }
+        // Das Overlay gibt es nur unter Linux (HUM-350).
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = request;
+            Err(crate::disposable::unsupported())
+        }
+    }
+
     /// Prüft und plant.
     ///
     /// # Errors
@@ -935,29 +842,16 @@ impl SandboxBackend for BwrapBackend {
     ///   `rw` nicht beschreibbar,
     /// - `SANDBOX_011`: Proxy-Socket, CA-Zertifikat, CA-Bundle oder Shim
     ///   fehlen, oder memfds und Pipes ließen sich nicht anlegen.
-    fn plan(
-        &self,
-        profile: &SandboxProfile,
-        session: &SessionContext,
-    ) -> Result<LaunchPlan, Diagnostic> {
+    fn plan(&self, request: &PlanRequest<'_>) -> Result<LaunchPlan, Diagnostic> {
+        let PlanRequest {
+            profile,
+            session,
+            options,
+        } = *request;
         let policy = MountPolicy::from_paths(&self.paths);
         profile.validate_with(&policy)?;
-
-        let required = Version::parse(&profile.sandbox.min_bwrap_version);
-        if self.version < required {
-            return Err(Diagnostic::builder(SANDBOX_002, Severity::Blocking)
-                .why(format!(
-                    "{} is bubblewrap {}; profile {:?} needs at least {}",
-                    self.program.display(),
-                    self.version,
-                    profile.name,
-                    profile.sandbox.min_bwrap_version
-                ))
-                .fix(FixAction::CopyCommand(install_command().to_owned()))
-                .build());
-        }
-
-        self.check_overlay(profile, session)?;
+        self.check_profile_version(profile)?;
+        self.check_overlay(request)?;
         Self::check_work_dir(profile, session)?;
         policy.check_work_dir(&session.work_src)?;
         // Ab hier zählt der Deskriptor, nicht mehr der Pfad (HUM-263): Die
@@ -965,7 +859,7 @@ impl SandboxBackend for BwrapBackend {
         // bindet genau diesen Deskriptor. Ein Tausch des Pfades zwischen hier
         // und dem Einhängen erreicht die Sandbox nicht mehr. Die Prüfung oben
         // bleibt für den geschriebenen Pfad und für die genaueren Befunde.
-        let pinned = PinnedMounts::open(self, &policy, profile, session)?;
+        let pinned = PinnedMounts::open(&policy, request)?;
         self.check_proxy_socket(session)?;
         Self::check_regular_file(&session.ca_cert_src, "CA certificate")?;
         Self::check_regular_file(&session.ca_bundle_src, "CA bundle")?;
@@ -1000,7 +894,7 @@ impl SandboxBackend for BwrapBackend {
 
         let (agent_fds, agent_files) = Self::agent_file_fds(session)?;
         let (work_dir, read_only, writable) = pinned.sources(self);
-        let (shell_door, shim_door) = self.shell_door()?;
+        let (shell_door, shim_door) = Self::shell_door(options.stdio)?;
 
         let inputs = LaunchInputs {
             masks: MaskFds::Each(masks.iter().map(AsRawFd::as_raw_fd).collect()),
@@ -1021,9 +915,9 @@ impl SandboxBackend for BwrapBackend {
             // Only at the daemon's own pseudo-terminal (HUM-280). Inherited
             // descriptors may be the user's terminal, and that one must never
             // become a controlling terminal inside the sandbox (`TIOCSTI`).
-            controlling_terminal: self.stdio.pty_size().is_some(),
+            controlling_terminal: options.stdio.pty_size().is_some(),
             control_fd: shim_door.as_ref().map(AsRawFd::as_raw_fd),
-            overlay: self.overlay.clone(),
+            overlay: options.overlay().cloned(),
         };
         let env = profile.effective_env(session, inputs.report_fd);
         let mut argv = vec![self.program.clone().into_os_string()];
@@ -1048,12 +942,16 @@ impl SandboxBackend for BwrapBackend {
             profile: profile.name.clone(),
             warnings,
             unprotected,
-            env_on_program: false,
+            env_delivery: EnvDelivery::Argv,
+            stdio: options.stdio,
+            report_timeout: options.effective_report_timeout(),
+            teardown: Teardown::Process,
             program: self.program.clone(),
             once: Mutex::new(Some(LaunchOnce {
                 inherit,
                 report: report_reader,
-                status: status_reader,
+                status: Some(status_reader),
+                output_sink: options.output_sink.clone(),
                 shells: shell_door.map(crate::shell::DoorSeed::Socket),
             })),
         })
@@ -1073,7 +971,7 @@ impl SandboxBackend for BwrapBackend {
     ///   Deskriptoren ließen sich nicht übergeben (HUM-263), oder der Plan
     ///   war schon gestartet.
     fn launch(&self, plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic> {
-        launch_plan(&self.program, plan, self.stdio, self.output_sink.clone())
+        launch_plan(plan)
     }
 
     /// Ordnet den Bericht des Shims ([`crate::bridge_env`]) den drei Garantien zu.
@@ -1089,7 +987,7 @@ impl SandboxBackend for BwrapBackend {
     /// `families` zusammen sind Garantie 3. Ohne jede Zeile tragen alle drei
     /// `SANDBOX_013`.
     fn isolation_check(&self, handle: &SandboxHandle) -> Vec<CheckResult> {
-        isolation_from_report(handle, self.report_timeout)
+        isolation_from_report(handle, handle.report_timeout())
     }
 }
 
@@ -1148,17 +1046,14 @@ pub(crate) fn isolation_from_report(handle: &SandboxHandle, timeout: Duration) -
 /// Starts a plan: the supervisor thread, the readers of report and status,
 /// and the wait for the first line or an early end. The same for every
 /// backend that starts one program with inherited descriptors (bwrap,
-/// `sandbox-exec`, HUM-323).
+/// `sandbox-exec`, HUM-323); stdio, output sink, report timeout and teardown
+/// come from the plan, which took them from the options of the start
+/// (HUM-428).
 ///
 /// # Errors
 ///
 /// As [`SandboxBackend::launch`].
-pub(crate) fn launch_plan(
-    program: &Path,
-    plan: &LaunchPlan,
-    stdio: StdioMode,
-    output_sink: Option<OutputSink>,
-) -> Result<SandboxHandle, Diagnostic> {
+pub(crate) fn launch_plan(plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic> {
     let once = plan
         .take_once()
         .ok_or_else(|| BwrapBackend::already_launched(plan))?;
@@ -1166,22 +1061,23 @@ pub(crate) fn launch_plan(
         inherit,
         report,
         status,
+        output_sink,
         shells,
     } = once;
+    let stdio = plan.stdio;
     let id = SandboxId::new();
     let shared = Arc::new(Shared::default());
     if let Some(sink) = output_sink {
         shared.set_sink(sink);
     }
-    let program = program.to_path_buf();
+    let program = plan.program.clone();
     let args: Vec<OsString> = plan.argv.iter().skip(1).cloned().collect();
     // bwrap carries the environment in `--setenv` and starts with an
     // empty one; `sandbox-exec` hands its own environment to the command
     // (HUM-323).
-    let env = if plan.env_on_program {
-        plan.env.clone()
-    } else {
-        Vec::new()
+    let env = match plan.env_delivery {
+        EnvDelivery::Program => plan.env.clone(),
+        EnvDelivery::Argv => Vec::new(),
     };
 
     let (tx, rx) = mpsc::channel();
@@ -1209,7 +1105,8 @@ pub(crate) fn launch_plan(
             .why("the supervisor thread ended without starting bwrap")
             .build()
     })??;
-    let handle = SandboxHandle::new(id, pid, plan.argv_line(), Arc::clone(&shared));
+    let handle = SandboxHandle::new(id, pid, plan.argv_line(), Arc::clone(&shared))
+        .with_launch(plan.teardown, plan.report_timeout);
     // The door opens after `bwrap` holds its end, and a door that cannot
     // open costs the further shells, never the session (HUM-299).
     // `SandboxHandle::open_shell` then says that there is no door.
@@ -1222,7 +1119,16 @@ pub(crate) fn launch_plan(
     // Ohne die Leser gäbe es weder Bericht noch Befund; dann lieber gar
     // keine Sandbox als eine, über die niemand etwas sagen kann.
     let readers = spawn_reader("sandbox-report", Arc::clone(&shared), report, read_report)
-        .and_then(|()| spawn_reader("sandbox-status", Arc::clone(&shared), status, read_status));
+        .and_then(|()| {
+            if let Some(status) = status {
+                spawn_reader("sandbox-status", Arc::clone(&shared), status, read_status)
+            } else {
+                // Ohne Status-Pipe gibt es nichts zu lesen; der Status ist
+                // dann von Anfang an zu Ende.
+                shared.close_status();
+                Ok(())
+            }
+        });
     if let Err(err) = readers {
         handle.kill();
         return Err(Diagnostic::builder(SANDBOX_012, Severity::Blocking)
@@ -1281,7 +1187,7 @@ struct PinnedMounts {
     work: PinnedSource,
     read_only: Vec<PinnedSource>,
     writable: Vec<PinnedSource>,
-    /// Die Binds aus [`BwrapBackend::with_read_only_bind`], mit ihrem Ziel.
+    /// Die Binds aus [`crate::LaunchOptions::session_ro`], mit ihrem Ziel.
     session: Vec<(PinnedSource, PathBuf)>,
     /// The agent program, opened and checked once (HUM-278).
     agent: Option<PinnedSource>,
@@ -1294,19 +1200,19 @@ impl PinnedMounts {
     ///
     /// `SANDBOX_006` aus [`BwrapBackend::pin`], aus
     /// [`MountPolicy::check_work_dir`] oder aus [`MountPolicy::check`].
-    fn open(
-        backend: &BwrapBackend,
-        policy: &MountPolicy,
-        profile: &SandboxProfile,
-        session: &SessionContext,
-    ) -> Result<Self, Diagnostic> {
+    fn open(policy: &MountPolicy, request: &PlanRequest<'_>) -> Result<Self, Diagnostic> {
+        let PlanRequest {
+            profile,
+            session,
+            options,
+        } = *request;
         let work = BwrapBackend::pin(
             &session.work_src,
             SourceKind::Directory,
             "the project directory",
         )?;
         policy.check_work_dir(work.resolved())?;
-        if let Some(approved) = &backend.approved_work_dir
+        if let Some(approved) = &options.approved_work_dir
             && work.resolved() != approved.as_path()
         {
             return Err(Diagnostic::builder(SANDBOX_006, Severity::Blocking)
@@ -1320,7 +1226,7 @@ impl PinnedMounts {
                 .fix(crate::work_dir::choose_folder_fix())
                 .build());
         }
-        if let Some((dev, ino)) = backend.expected_work_inode {
+        if let Some((dev, ino)) = options.expected_work_inode {
             let stat = rustix::fs::fstat(work.fd()).map_err(|err| {
                 Diagnostic::builder(SANDBOX_006, Severity::Blocking)
                     .why(format!(
@@ -1346,8 +1252,8 @@ impl PinnedMounts {
                     .build());
             }
         }
-        let session_binds = backend
-            .read_only_binds
+        let session_binds = options
+            .session_ro
             .iter()
             .map(|(src, dst)| {
                 let whence = format!("the read-only bind onto {}", dst.display());
@@ -1883,6 +1789,40 @@ mod tests {
 
     use super::{BwrapBackend, MIN_BWRAP_VERSION, Version, is_userns_failure};
 
+    /// Die Frist des Berichts kommt aus den Optionen des Starts und reist mit
+    /// dem Handle (HUM-428): Die Prüfung wartet so lange, wie der Start sagte,
+    /// nicht so lange, wie die Vorgabe sagt, auch wenn eine andere Instanz des
+    /// Backends prüft.
+    #[test]
+    fn the_check_waits_as_long_as_the_start_said() {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use crate::handle::{SandboxHandle, Shared};
+        use crate::launcher::{SandboxBackend as _, Teardown};
+
+        let shared = Arc::new(Shared::default());
+        // Ohne eine Zeile und mit geschlossener Pipe endet das Warten sofort;
+        // der Befund nennt trotzdem die Frist, mit der gewartet wurde.
+        shared.close_report();
+        let handle = SandboxHandle::new(
+            humanitl_core::ids::SandboxId::nil(),
+            0,
+            String::new(),
+            shared,
+        )
+        .with_launch(Teardown::Process, Duration::from_millis(300));
+        let backend = BwrapBackend::fallback(humanitl_config::Paths::new(Env::from_pairs([(
+            "HOME", "/home/u",
+        )])));
+        let results = backend.isolation_check(&handle);
+        assert_eq!(results.len(), 3);
+        for result in &results {
+            assert!(!result.passed);
+            assert!(result.evidence.contains("within 300ms"), "{result:?}");
+        }
+    }
+
     #[test]
     fn versions_compare_by_number_not_by_text() {
         assert_eq!(Version::parse("0.11.2"), Version(0, 11, 2));
@@ -2030,36 +1970,50 @@ mod tests {
     fn the_probe_refuses_what_the_start_would_refuse() {
         use std::os::unix::fs::PermissionsExt as _;
 
+        use crate::launcher::SandboxBackend as _;
+
         let Some(runtime) = tmpfs_dir() else {
             eprintln!("no tmpfs under /dev/shm; skipped");
             return;
         };
-        let env = Env::from_pairs([("HOME", "/home/u")]);
+        // Die obere Schicht entstünde unter dem Laufzeitverzeichnis der Pfade
+        // des Backends (HUM-428).
+        let env = Env::from_pairs([
+            ("HOME", "/home/u".to_owned()),
+            (
+                "XDG_RUNTIME_DIR",
+                runtime.path().to_string_lossy().into_owned(),
+            ),
+        ]);
         let paths = humanitl_config::Paths::new(env);
+        let runtime_dir = paths.runtime_dir().path;
+        std::fs::create_dir_all(&runtime_dir).unwrap();
         let (profile, ctx) = work_setup("rw", humanitl_config::WorkMode::Rw);
+        let options = crate::LaunchOptions::default();
+        let request = crate::PlanRequest::new(&profile, &ctx, &options);
         let plain = runtime.path().join("bwrap");
         std::fs::write(&plain, "#!/bin/sh\n").unwrap();
         std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o755)).unwrap();
         let backend = BwrapBackend::unchecked(&plain, Version(0, 11, 0), paths.clone());
         backend
-            .disposable_support(&profile, &ctx, runtime.path())
+            .disposable_support(&request)
             .expect("everything is there");
         assert!(
-            !runtime.path().join("disposable").exists(),
+            !runtime_dir.join("disposable").exists(),
             "the probe creates nothing"
         );
 
-        let layers = runtime.path().join("disposable");
+        let layers = runtime_dir.join("disposable");
         std::fs::create_dir(&layers).unwrap();
         std::fs::set_permissions(&layers, std::fs::Permissions::from_mode(0o755)).unwrap();
         let err = backend
-            .disposable_support(&profile, &ctx, runtime.path())
+            .disposable_support(&request)
             .expect_err("a layer directory others can read");
         assert_eq!(err.code.as_str(), "SANDBOX_030");
         assert!(err.why.contains("private directory"), "{}", err.why);
         std::fs::set_permissions(&layers, std::fs::Permissions::from_mode(0o700)).unwrap();
         backend
-            .disposable_support(&profile, &ctx, runtime.path())
+            .disposable_support(&request)
             .expect("a private layer directory");
 
         std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o4755)).unwrap();
@@ -2068,7 +2022,7 @@ mod tests {
             return;
         }
         let err = backend
-            .disposable_support(&profile, &ctx, runtime.path())
+            .disposable_support(&request)
             .expect_err("setuid bubblewrap refuses --overlay");
         assert_eq!(err.code.as_str(), "SANDBOX_030");
         assert!(err.why.contains("setuid"), "{}", err.why);

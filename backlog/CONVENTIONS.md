@@ -154,15 +154,24 @@ Glob-Semantik auf Labels: `*` genau ein Label, `**` ein oder mehr Labels, `**.ex
 
 ```rust
 pub trait SandboxBackend: Send + Sync {
-    fn name(&self) -> &'static str;                                   // "bwrap", später "docker"
-    fn plan(&self, profile: &SandboxProfile, session: &SessionContext) -> Result<LaunchPlan, Diagnostic>;
+    fn name(&self) -> &'static str;                                   // "bwrap", "seatbelt"
+    fn isolation(&self) -> IsolationLevel;
+    fn disposable_support(&self, request: &PlanRequest<'_>) -> Result<(), Diagnostic>;
+    fn plan(&self, request: &PlanRequest<'_>) -> Result<LaunchPlan, Diagnostic>;
     fn launch(&self, plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic>;
     fn isolation_check(&self, handle: &SandboxHandle) -> Vec<CheckResult>;
 }
+pub enum Backend { Bwrap(BwrapBackend), #[cfg(target_os = "macos")] Seatbelt(SeatbeltBackend) }  // was Daemon und CLI halten; Backend::detect(name, paths), Backend::fallback(name, paths)
+pub enum IsolationLevel { Policy, Namespaces, Kernel }                // geordnet, as_str: "policy", "namespaces", "kernel"
+pub struct PlanRequest<'a> { pub profile: &'a SandboxProfile, pub session: &'a SessionContext, pub options: &'a LaunchOptions }
+pub struct LaunchOptions { pub stdio: StdioMode, pub output_sink: Option<OutputSink>, pub report_timeout: Option<Duration>, pub approved_work_dir: Option<PathBuf>, pub expected_work_inode: Option<(u64, u64)>, pub disposable: Option<DisposableLayer>, pub session_ro: Vec<(PathBuf, PathBuf)> }
+pub enum DisposableLayer { Overlay(OverlayDirs), Clone(PathBuf) }    // bwrap nimmt das Overlay, Seatbelt den Klon
 pub struct LaunchPlan { pub argv: Vec<OsString>, pub env: Vec<(String, String)>, pub fds: Vec<(RawFd, RawFd)> }  // argv ist vollständig, wird im UI angezeigt
 pub struct CheckResult { pub check: IsolationCheck, pub passed: bool, pub evidence: String, pub diagnostic: Option<Diagnostic> }
 pub enum IsolationCheck { NoNetworkInterface, SingleSocket, SeccompActive }
 ```
+
+Seit HUM-428 kennt außerhalb von `daemon/crates/sandbox` kein Aufrufer die konkreten Typen `BwrapBackend` oder `SeatbeltBackend`, außer Tests, die genau ein Backend prüfen. Was ein Start außer Profil und Sitzung braucht, steht in `LaunchOptions` und nicht in Builder-Methoden eines Backends. Die Frist des Berichts (`report_timeout`) reist mit dem Plan in das `SandboxHandle`, damit `isolation_check` unter den Bedingungen des Starts prüft. `PLATFORM_BACKEND_NAME` ist nur noch der Name, für den `sandbox.backend = "auto"` steht.
 
 Profil `profiles/sandbox/default.toml`:
 
@@ -2595,9 +2604,11 @@ geprüfte Projektverzeichnis zurück, statt dass der Aufrufer es später ein
 zweites Mal aus `pending` liest: Dazwischen könnte ein anderer Aufruf ein
 anderes hineingelegt haben.
 
-**Der Zuhörer der Ausgabe hängt am Backend, das startet, nicht an dem, das
-gehalten wird.** `BwrapBackend::with_output_sink` setzt ihn vor dem Start;
-`Running.backend` trägt ihn nicht. Ein gehaltener Sender schlösse seinen Kanal
+**Der Zuhörer der Ausgabe hängt am Start, nicht an dem, was gehalten
+wird.** Er steht in den `LaunchOptions` genau dieses Starts
+(`LaunchOptions::output_sink`, seit HUM-428; davor
+`BwrapBackend::with_output_sink`); `Running.backend` und `Prepared.options`
+tragen ihn nicht. Ein gehaltener Sender schlösse seinen Kanal
 nie, und wer auf dessen Ende wartet — der Weiterleiter der Ausgabe — wartete
 für immer. Losgelassen wird er in `supervise`, nachdem die Leser eingesammelt
 sind: Die Ausgabe ist zu Ende, wenn die Pipes zu sind, und nicht, wenn jemand

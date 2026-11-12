@@ -98,9 +98,10 @@ use humanitl_sandbox::LaunchInputs;
 use humanitl_sandbox::agent::{opencode, pi};
 use humanitl_sandbox::summary::SessionSummary;
 use humanitl_sandbox::{
-    AdapterRegistry, AgentContext, AgentKey, CheckResult, IsolationCheck, KILL_GRACE, MountPolicy,
-    PlatformBackend, SANDBOX_SHELL, SandboxBackend, SandboxFile, SandboxHandle, SandboxProfile,
-    SessionContext, StdioMode, Termination, WorkDirSource, check_project_dir, shell_line,
+    AdapterRegistry, AgentContext, AgentKey, Backend, CheckResult, IsolationCheck, KILL_GRACE,
+    LaunchOptions, MountPolicy, PlanRequest, SANDBOX_SHELL, SandboxBackend, SandboxFile,
+    SandboxHandle, SandboxProfile, SessionContext, StdioMode, Termination, WorkDirSource,
+    check_project_dir, shell_line,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -316,13 +317,13 @@ struct Running {
     handle: Arc<SandboxHandle>,
     /// Das Backend, das diese Sandbox gestartet hat.
     ///
-    /// Es wird gehalten und nicht neu gesucht, weil die Isolationsprüfung an
-    /// derselben Instanz hängt, die auch gestartet hat: In ihr steht die
-    /// Frist, innerhalb deren der Bericht des Shims eintreffen muss
-    /// (`BwrapBackend::with_report_timeout`). Ein zweites, frisch gefundenes
-    /// Backend hätte eine andere Frist und prüfte damit unter anderen
-    /// Bedingungen als es gestartet hat.
-    backend: PlatformBackend,
+    /// Es wird gehalten und nicht neu gesucht: Geprüft wird mit dem Backend,
+    /// das gestartet hat. Die Frist, innerhalb deren der Bericht des Shims
+    /// eintreffen muss, kommt aus den [`LaunchOptions`] des Starts
+    /// (`LaunchOptions::report_timeout`) und reist mit dem Plan im `handle`
+    /// (HUM-428); die Prüfung misst so unter denselben Bedingungen, unter
+    /// denen gestartet wurde.
+    backend: Backend,
     started_at: SystemTime,
     profile: String,
     work_dir: PathBuf,
@@ -1393,14 +1394,14 @@ impl Inner {
 
     /// Was einem Start im Weg steht, bevor jemand ihn versucht.
     ///
-    /// Heute genau eine Frage: Gibt es `bwrap`, und ist es neu genug
-    /// (`PlatformBackend::detect`, `SANDBOX_001` bis `SANDBOX_003`)? Der
+    /// Heute genau eine Frage: Gibt es das Sandbox-Backend des Systems, und
+    /// ist es neu genug (`Backend::detect`, `SANDBOX_001` bis `SANDBOX_003`)? Der
     /// Schnappschuss selbst kommt auch ohne `bwrap` zustande — er zeigt, was
     /// starten *würde* —, aber die Schaltfläche gehört dann aus, und der Grund
     /// dazu (`docs/UX.md` 5.3). Die drei Garantien prüft HUM-041, und sie
     /// lassen sich ohnehin erst an einer laufenden Sandbox prüfen.
     fn preflight(&self) -> Vec<Diagnostic> {
-        match PlatformBackend::detect(self.paths.clone()) {
+        match Backend::detect(humanitl_sandbox::AUTO_BACKEND, self.paths.clone()) {
             Ok(_) => Vec::new(),
             Err(diagnostic) => vec![diagnostic],
         }
@@ -2160,7 +2161,7 @@ impl Inner {
     /// `Op::IsolationCheck`: die drei Garantien der laufenden Sandbox.
     ///
     /// Gemessen wird in der Sandbox, die läuft, und nicht auf dem Wirt: Die
-    /// Prüfzeilen schreibt der Shim von innen, `BwrapBackend::isolation_check`
+    /// Prüfzeilen schreibt der Shim von innen, `SandboxBackend::isolation_check`
     /// faltet sie zu den drei Garantien.
     ///
     /// Läuft keine Sandbox, sendet dieser Zweig **kein** Ergebnis, sondern den
@@ -2400,7 +2401,7 @@ impl Inner {
         // `disposable`, das nicht geht, endet hier mit `SANDBOX_030`; die
         // Vorgabe `auto` fällt auf `direct` zurück und sagt es mit
         // `SANDBOX_033`.
-        let mut choice = self.mode_choice(wanted, &prepared)?;
+        let mut choice = prepared.mode_choice(wanted)?;
         if choice.is_disposable() {
             match self.launch_disposable(&prepared, plan, output.clone()) {
                 Ok(launched) => return Ok(launched),
@@ -2434,28 +2435,6 @@ impl Inner {
         crate::disposable::pending_guard(wanted, pending)
     }
 
-    /// Löst `wanted` für diesen Plan auf (HUM-357); siehe
-    /// [`humanitl_sandbox::resolve_mode`].
-    fn mode_choice(
-        &self,
-        wanted: SandboxMode,
-        prepared: &Prepared,
-    ) -> Result<humanitl_sandbox::ModeChoice, Diagnostic> {
-        humanitl_sandbox::resolve_mode(wanted, || self.disposable_support(prepared))
-    }
-
-    /// Ob dieser Plan eine Wegwerf-Sandbox bekommen kann: unter Linux ein
-    /// Sandbox-Backend mit Overlay, das Projekt schreibbar, das
-    /// Laufzeitverzeichnis auf tmpfs (HUM-357); unter macOS ein schreibbares
-    /// Projekt (HUM-374).
-    fn disposable_support(&self, prepared: &Prepared) -> Result<(), Diagnostic> {
-        prepared.backend.disposable_support(
-            &prepared.profile,
-            &prepared.session,
-            &self.paths.runtime_dir().path,
-        )
-    }
-
     /// Der Start einer Wegwerf-Sandbox: die obere Schicht vor dem Plan, damit
     /// der Plan sie nennt, und jeder Weg hinaus vor dem Handle räumt sie
     /// wieder weg (HUM-350).
@@ -2477,7 +2456,7 @@ impl Inner {
         let lower =
             humanitl_sandbox::worktree::open_root(&prepared.session.work_src).map_err(Before)?;
         let resolved = pinned_path(&lower).map_err(Before)?;
-        if let Some(approved) = prepared.backend.approved_work_dir()
+        if let Some(approved) = prepared.options.approved_work_dir.as_deref()
             && approved != resolved.as_path()
         {
             return Err(Before(moved_work_dir(approved, &resolved)));
@@ -2490,7 +2469,7 @@ impl Inner {
             &self.paths.runtime_dir().path,
             std::os::fd::AsFd::as_fd(&lower),
             &resolved,
-            humanitl_sandbox::SeatbeltBackend::clone_masks(&prepared.profile, &resolved),
+            humanitl_sandbox::clone_masks(&prepared.profile, &resolved),
         )
         .map_err(Before)?;
         #[cfg(not(target_os = "macos"))]
@@ -2612,42 +2591,43 @@ impl Inner {
         pinned: Option<PinnedWork<'_>>,
         output: Option<humanitl_sandbox::OutputSink>,
     ) -> Result<(Launched, Arc<SandboxHandle>), Diagnostic> {
-        let backend = prepared.backend.clone().with_stdio(StdioMode::Pty {
+        let mut options = prepared.options.clone();
+        options.stdio = StdioMode::Pty {
             cols: DEFAULT_TERMINAL_SIZE.0,
             rows: DEFAULT_TERMINAL_SIZE.1,
-        });
-        let backend = match &pinned {
-            Some(pin) => backend.with_approved_work_dir(pin.path),
-            None => backend,
         };
+        if let Some(pin) = &pinned {
+            options.approved_work_dir = Some(pin.path.to_path_buf());
+        }
         let disposable = overlay.is_some();
         // Das Backend hängt nur den Ordner ein, den der Daemon schon offen
         // hält (Review Runde 2): gleicher Ort und gleicher Inode.
         #[cfg(target_os = "linux")]
-        let backend = match (overlay, &pinned) {
-            (Some(dirs), Some(pin)) => backend
-                .with_overlay(dirs)
-                .with_expected_work_inode(pin.dev, pin.ino),
-            (Some(dirs), None) => backend.with_overlay(dirs),
-            (None, _) => backend,
-        };
+        if let Some(dirs) = overlay {
+            options.disposable = Some(humanitl_sandbox::DisposableLayer::Overlay(dirs));
+            if let Some(pin) = &pinned {
+                options.expected_work_inode = Some((pin.dev, pin.ino));
+            }
+        }
         // Unter macOS ist die obere Schicht der Klon: Er wird das Projekt der
         // Sandbox (HUM-374).
         #[cfg(target_os = "macos")]
-        let backend = match overlay {
-            Some(dirs) => backend.with_clone(dirs.upper),
-            None => backend,
-        };
-        // Der Zuhörer hängt nur an dem Backend, das startet, und nicht an dem,
-        // das gehalten wird: Ein gehaltener Sender schlösse seinen Kanal nie,
-        // und wer auf dessen Ende wartet, wartete für immer. Beide tragen
-        // dieselbe Frist für den Bericht des Shims, gemessen wird also unter
-        // denselben Bedingungen wie gestartet.
-        let mut launcher = backend.clone();
-        if let Some(sink) = output {
-            launcher = launcher.with_output_sink(sink);
+        if let Some(dirs) = overlay {
+            options.disposable = Some(humanitl_sandbox::DisposableLayer::Clone(dirs.upper));
         }
-        let launch = launcher.plan(&prepared.profile, &prepared.session)?;
+        // Der Zuhörer steht nur in den Optionen dieses Starts und nicht in
+        // etwas, das gehalten wird: Ein gehaltener Sender schlösse seinen
+        // Kanal nie, und wer auf dessen Ende wartet, wartete für immer. Die
+        // Frist für den Bericht des Shims reist mit dem Plan im Handle; die
+        // Prüfung misst also unter denselben Bedingungen wie gestartet.
+        options.output_sink = output;
+        let backend = prepared.backend.clone();
+        let launch = backend.plan(&PlanRequest::new(
+            &prepared.profile,
+            &prepared.session,
+            &options,
+        ))?;
+        drop(options);
         let mut warnings = prepared.warnings.clone();
         warnings.extend(launch.warnings.iter().cloned());
         // **Der Schnappschuss steht zwischen Planen und Starten.** Vorher gibt
@@ -2695,8 +2675,7 @@ impl Inner {
         // Die Quelle, solange `running` noch leer ist: danach nennte
         // [`Inner::work_dir_source`] die der laufenden Sitzung.
         let work_dir_source = self.work_dir_source(&self.config(), &self.pending_choice(), plan);
-        let handle = launcher.launch(&launch)?;
-        drop(launcher);
+        let handle = backend.launch(&launch)?;
         let sandbox = handle.id;
         let handle = Arc::new(handle);
         let started = Arc::clone(&handle);
@@ -3275,7 +3254,7 @@ impl Inner {
     }
 
     /// Das Backend, das gestartet hat, und sein Handle; beides oder nichts.
-    fn running_parts(&self) -> Option<(PlatformBackend, Arc<SandboxHandle>)> {
+    fn running_parts(&self) -> Option<(Backend, Arc<SandboxHandle>)> {
         lock(&self.running)
             .as_ref()
             .map(|running| (running.backend.clone(), Arc::clone(&running.handle)))
@@ -3451,11 +3430,11 @@ impl Inner {
         // Ein Schnappschuss ist eine Anzeige, kein Start: Ohne `bwrap` steht
         // die Zeile trotzdem da, und der Start scheitert später mit dem
         // Befund, der dazu gehört (`SANDBOX_001`).
-        let backend = PlatformBackend::detect(self.paths.clone())
-            .unwrap_or_else(|_| PlatformBackend::fallback(self.paths.clone()));
-        let backend = match approved {
-            Some(dir) => backend.with_approved_work_dir(dir),
-            None => backend,
+        let backend = Backend::detect(humanitl_sandbox::AUTO_BACKEND, self.paths.clone())
+            .or_else(|_| Backend::fallback(humanitl_sandbox::AUTO_BACKEND, self.paths.clone()))?;
+        let options = LaunchOptions {
+            approved_work_dir: approved,
+            ..LaunchOptions::default()
         };
 
         Ok(self.with_plan_mode(Prepared {
@@ -3465,6 +3444,7 @@ impl Inner {
             profile,
             session,
             backend,
+            options,
             overlay_preview: None,
             wanted_mode: config.sandbox.mode,
             plan_mode: humanitl_sandbox::ModeChoice {
@@ -3479,8 +3459,8 @@ impl Inner {
     /// das hier nicht geht, zeigt die Zeile weiter mit Overlay und nennt den
     /// Befund, mit dem der Start ablehnen wird.
     fn with_plan_mode(&self, mut prepared: Prepared) -> Prepared {
-        prepared.plan_mode = self
-            .mode_choice(prepared.wanted_mode, &prepared)
+        prepared.plan_mode = prepared
+            .mode_choice(prepared.wanted_mode)
             .unwrap_or_else(|refusal| humanitl_sandbox::ModeChoice {
                 mode: SandboxMode::Disposable,
                 notice: Some(refusal),
@@ -3958,7 +3938,11 @@ fn started_without_key(mut found: Diagnostic) -> Diagnostic {
 struct Prepared {
     profile: SandboxProfile,
     session: SessionContext,
-    backend: PlatformBackend,
+    backend: Backend,
+    /// Die Optionen, mit denen jeder Start aus diesem Plan beginnt: der
+    /// geprüfte Projektordner (HUM-294). Was nur ein Start weiß
+    /// (Pseudoterminal, Schicht, Zuhörer), kommt dort dazu.
+    options: LaunchOptions,
     /// Wer den Wert jeder Umgebungsvariablen zuletzt geschrieben hat.
     ///
     /// Dieselbe Reihenfolge, in der [`SandboxProfile::effective_env`]
@@ -3993,6 +3977,29 @@ struct Shown {
 }
 
 impl Prepared {
+    /// Profil, Sitzung und Optionen dieses Plans als Anfrage an das Backend.
+    fn request(&self) -> PlanRequest<'_> {
+        PlanRequest::new(&self.profile, &self.session, &self.options)
+    }
+
+    /// Löst `wanted` für diesen Plan auf (HUM-357); siehe
+    /// [`humanitl_sandbox::resolve_mode`].
+    fn mode_choice(&self, wanted: SandboxMode) -> Result<humanitl_sandbox::ModeChoice, Diagnostic> {
+        humanitl_sandbox::resolve_mode(wanted, || self.disposable_support())
+    }
+
+    /// Ob dieser Plan eine Wegwerf-Sandbox bekommen kann: unter Linux ein
+    /// Sandbox-Backend mit Overlay, das Projekt schreibbar, das
+    /// Laufzeitverzeichnis auf tmpfs (HUM-357); unter macOS ein schreibbares
+    /// Projekt (HUM-374).
+    ///
+    /// Das Laufzeitverzeichnis, unter dem die Schicht entstünde, kommt aus
+    /// den Pfaden des Backends; der Dienst gibt ihm seine eigenen
+    /// (`Backend::detect`).
+    fn disposable_support(&self) -> Result<(), Diagnostic> {
+        self.backend.disposable_support(&self.request())
+    }
+
     /// Wer den Wert dieser Variablen geschrieben hat; unbekannt zählt als
     /// von Hand geschrieben, damit die Vorgabe zurückhält.
     fn origin_of(&self, key: &str) -> v1::ValueOrigin {
@@ -4044,7 +4051,7 @@ impl Prepared {
     /// Die Vorschau des Seatbelt-Backends für diesen Plan.
     #[cfg(target_os = "macos")]
     fn seatbelt(&self) -> humanitl_sandbox::SeatbeltPreview {
-        self.backend.preview(&self.profile, &self.session, true)
+        self.backend.seatbelt_preview(&self.request(), true)
     }
 
     /// Was der Schnappschuss von diesem Plan zeigt.
@@ -5731,14 +5738,12 @@ mod tests {
             .inner
             .prepare_with_command(&v1::sandbox_request::Plan::default(), &[])
             .expect("the plan");
-        let program = humanitl_sandbox::PlatformBackend::fallback(service.inner.paths.clone())
-            .program()
-            .to_owned();
-        prepared.backend = humanitl_sandbox::PlatformBackend::unchecked(
-            program,
+        // Eine bestimmte Fassung gibt es nur am konkreten Backend.
+        prepared.backend = Backend::from(humanitl_sandbox::BwrapBackend::unchecked(
+            "bwrap",
             version,
             service.inner.paths.clone(),
-        );
+        ));
         (service, prepared)
     }
 
@@ -5759,12 +5764,9 @@ mod tests {
         use humanitl_sandbox::Version;
 
         let home = tempfile::TempDir::new().unwrap();
-        let (service, prepared) = plan_with(&home, Version(0, 11, 0), |_| {});
+        let (_service, prepared) = plan_with(&home, Version(0, 11, 0), |_| {});
         assert_eq!(prepared.wanted_mode, SandboxMode::Auto);
-        let choice = service
-            .inner
-            .mode_choice(SandboxMode::Auto, &prepared)
-            .unwrap();
+        let choice = prepared.mode_choice(SandboxMode::Auto).unwrap();
         if runtime_on_tmpfs(&home) {
             assert_eq!(choice.mode, SandboxMode::Disposable, "{choice:?}");
             assert!(choice.notice.is_none());
@@ -5775,24 +5777,18 @@ mod tests {
             assert!(notice.why.contains("not on tmpfs"), "{}", notice.why);
         }
 
-        let (service, prepared) = plan_with(&home, Version(0, 9, 0), |_| {});
-        let choice = service
-            .inner
-            .mode_choice(SandboxMode::Auto, &prepared)
-            .unwrap();
+        let (_service, prepared) = plan_with(&home, Version(0, 9, 0), |_| {});
+        let choice = prepared.mode_choice(SandboxMode::Auto).unwrap();
         assert_eq!(choice.mode, SandboxMode::Direct);
         let notice = choice.notice.expect("old bubblewrap");
         assert_eq!(notice.code.as_str(), "SANDBOX_033");
         assert_eq!(notice.severity, Severity::Warning);
         assert!(notice.why.contains("bubblewrap 0.9.0"), "{}", notice.why);
 
-        let (service, prepared) = plan_with(&home, Version(0, 11, 0), |config| {
+        let (_service, prepared) = plan_with(&home, Version(0, 11, 0), |config| {
             config.sandbox.work_mode = WorkMode::Ro;
         });
-        let choice = service
-            .inner
-            .mode_choice(SandboxMode::Auto, &prepared)
-            .unwrap();
+        let choice = prepared.mode_choice(SandboxMode::Auto).unwrap();
         assert_eq!(choice.mode, SandboxMode::Direct);
         let notice = choice.notice.expect("read-only project");
         assert_eq!(notice.code.as_str(), "SANDBOX_033");
@@ -5807,18 +5803,14 @@ mod tests {
         use humanitl_sandbox::Version;
 
         let home = tempfile::TempDir::new().unwrap();
-        let (service, prepared) = plan_with(&home, Version(0, 9, 0), |config| {
+        let (_service, prepared) = plan_with(&home, Version(0, 9, 0), |config| {
             config.sandbox.mode = SandboxMode::Disposable;
         });
-        let refused = service
-            .inner
-            .mode_choice(prepared.wanted_mode, &prepared)
+        let refused = prepared
+            .mode_choice(prepared.wanted_mode)
             .expect_err("explicit disposable on bubblewrap 0.9");
         assert_eq!(refused.code.as_str(), "SANDBOX_030");
-        let direct = service
-            .inner
-            .mode_choice(SandboxMode::Direct, &prepared)
-            .unwrap();
+        let direct = prepared.mode_choice(SandboxMode::Direct).unwrap();
         assert_eq!(direct.mode, SandboxMode::Direct);
         assert!(direct.notice.is_none());
     }
@@ -5895,7 +5887,9 @@ mod tests {
         Prepared {
             profile,
             session,
-            backend: PlatformBackend::fallback(paths),
+            backend: Backend::fallback(humanitl_sandbox::AUTO_BACKEND, paths)
+                .expect("this build knows auto"),
+            options: LaunchOptions::default(),
             env_origin: BTreeMap::new(),
             adapter_files: BTreeSet::new(),
             warnings: Vec::new(),
@@ -7652,7 +7646,7 @@ mod tests {
             .prepare_keyed(&v1::sandbox_request::Plan::default(), &[], KeyNeed::Start)
             .expect("the chosen folder starts");
         assert_eq!(
-            prepared.backend.approved_work_dir(),
+            prepared.options.approved_work_dir.as_deref(),
             Some(parent.join("x").canonicalize().unwrap().as_path()),
             "the backend mounts only the folder checked here"
         );

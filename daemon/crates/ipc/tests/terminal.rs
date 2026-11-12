@@ -198,7 +198,10 @@ const SKIP_MARKER: &str = "ESC5-SKIP";
 /// nicht; dieselbe Regel wie in `daemon/bin/humanitl/tests/cli.rs` und
 /// `daemon/crates/sandbox/tests/shim_contract.rs`.
 fn usable(fixture: &Fixture) -> bool {
-    if let Err(diagnostic) = humanitl_sandbox::BwrapBackend::detect(fixture.paths.clone()) {
+    // Das Backend des Systems, wie der Daemon es sucht.
+    if let Err(diagnostic) =
+        humanitl_sandbox::Backend::detect(humanitl_sandbox::AUTO_BACKEND, fixture.paths.clone())
+    {
         return refuse_under_ci(
             &format!("bwrap is not usable here: {}", diagnostic.why),
             "install it (apt-get install -y bubblewrap) and allow unprivileged user namespaces \
