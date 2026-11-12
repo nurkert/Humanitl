@@ -450,6 +450,34 @@ pub(crate) enum EnvDelivery {
     /// Sie ist die Umgebung des Programms, das sie an den Befehl weiterreicht
     /// (`sandbox-exec`, HUM-323).
     Program,
+    /// Sie liegt als JSON-Objekt in einem versiegelten memfd, den der Shim
+    /// unter dieser Nummer erbt (`--env-fd`, HUM-430,
+    /// [`crate::shim_fds::env_memfd`]); das Programm startet mit leerer
+    /// Umgebung, und kein Wert steht in `argv`. Für ein Backend, das jeden
+    /// Wert in `argv` auf die Platte schriebe (eine Container-Engine, HUM-292 P11). Der
+    /// Deskriptor steht unter den geerbten des Plans; die Vorschau zeigt die
+    /// Umgebung weiter in ihrer Tabelle ([`PlanPreview::env`]).
+    // Der erste Nutzer ist der Adapter der gemeinsamen Stufe (HUM-433); bis dahin baut nur
+    // ein Test die Variante.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "first used by the adapter of HUM-433")
+    )]
+    InheritedFd(RawFd),
+}
+
+impl EnvDelivery {
+    /// Die Umgebung, mit der das gestartete Programm selbst läuft: bei
+    /// [`EnvDelivery::Program`] die des Plans, sonst keine. Unter
+    /// [`EnvDelivery::InheritedFd`] steht damit kein Wert der Umgebung in
+    /// `argv` und keiner in der Umgebung des Programms; er liegt allein im
+    /// memfd (HUM-430).
+    pub(crate) fn program_env(self, env: &[(String, String)]) -> Vec<(String, String)> {
+        match self {
+            Self::Program => env.to_vec(),
+            Self::Argv | Self::InheritedFd(_) => Vec::new(),
+        }
+    }
 }
 
 /// Wie eine gestartete Sandbox beendet wird.
@@ -671,6 +699,18 @@ impl LaunchPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Acceptance criterion 2 of HUM-430 on the launcher's side: with an
+    /// inherited descriptor the program starts with no environment of its
+    /// own, so no value of the plan's environment reaches it except through
+    /// the memfd; `sandbox-exec` keeps passing its own.
+    #[test]
+    fn only_the_program_delivery_hands_the_environment_to_the_program() {
+        let env = vec![("HL_SECRET".to_owned(), "s3cr3t".to_owned())];
+        assert_eq!(EnvDelivery::Program.program_env(&env), env);
+        assert!(EnvDelivery::Argv.program_env(&env).is_empty());
+        assert!(EnvDelivery::InheritedFd(7).program_env(&env).is_empty());
+    }
 
     #[test]
     fn isolation_levels_are_ordered_from_policy_to_kernel() {

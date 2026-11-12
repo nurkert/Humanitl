@@ -38,8 +38,6 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufRead, BufReader, PipeReader, Read};
-#[cfg(target_os = "linux")]
-use std::io::{Seek, SeekFrom, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStringExt as _;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
@@ -58,8 +56,6 @@ use humanitl_core::diagnostics::codes::{
 use humanitl_core::ids::SandboxId;
 use humanitl_core::{Diagnostic, DiagnosticCode, FixAction, Severity};
 use rustix::fs::{Access, access};
-#[cfg(target_os = "linux")]
-use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 use rustix::termios::{Winsize, tcsetwinsize};
 
@@ -719,38 +715,10 @@ impl BwrapBackend {
         Ok((fds, targets))
     }
 
-    /// Ein versiegeltes memfd mit diesem Inhalt, Leseposition am Anfang.
-    ///
-    /// Versiegelt gegen Wachsen, Schrumpfen und Schreiben: wer den Deskriptor
-    /// erbt, kann den Inhalt nicht mehr ändern, und `bwrap` liest genau das,
-    /// was der Launcher hineingelegt hat.
-    #[cfg(target_os = "linux")]
+    /// Ein versiegeltes memfd mit diesem Inhalt, Leseposition am Anfang
+    /// ([`crate::platform::sealed_memfd`]); ein Fehler ist `SANDBOX_011`.
     fn sealed_memfd(name: &str, content: &[u8]) -> Result<OwnedFd, Diagnostic> {
-        let fd = memfd_create(name, MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING)
-            .map_err(|err| placeholder_diagnostic(format!("cannot create memfd {name}: {err}")))?;
-        let mut file = File::from(fd);
-        file.write_all(content)
-            .and_then(|()| file.seek(SeekFrom::Start(0)))
-            .map_err(|err| placeholder_diagnostic(format!("cannot fill memfd {name}: {err}")))?;
-        // Nie auf 0, 1 oder 2: Dort ersetzte die stdio des Kindes ihn, bevor
-        // er vererbt wird (`inherit.rs`).
-        let fd = above_stdio(OwnedFd::from(file))
-            .map_err(|err| placeholder_diagnostic(format!("cannot place memfd {name}: {err}")))?;
-        fcntl_add_seals(
-            &fd,
-            SealFlags::SHRINK | SealFlags::GROW | SealFlags::WRITE | SealFlags::SEAL,
-        )
-        .map_err(|err| placeholder_diagnostic(format!("cannot seal memfd {name}: {err}")))?;
-        Ok(fd)
-    }
-
-    /// Ohne `memfd_create(2)` gibt es keine versiegelte Datei; bwrap läuft
-    /// ohnehin nur unter Linux (HUM-312).
-    #[cfg(not(target_os = "linux"))]
-    fn sealed_memfd(name: &str, _content: &[u8]) -> Result<OwnedFd, Diagnostic> {
-        Err(placeholder_diagnostic(format!(
-            "cannot create memfd {name}: this system has no memfd_create"
-        )))
+        crate::platform::sealed_memfd(name, content).map_err(placeholder_diagnostic)
     }
 
     fn already_launched(plan: &LaunchPlan) -> Diagnostic {
@@ -1115,11 +1083,9 @@ pub(crate) fn launch_plan(plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic
     let args: Vec<OsString> = plan.argv.iter().skip(1).cloned().collect();
     // bwrap carries the environment in `--setenv` and starts with an
     // empty one; `sandbox-exec` hands its own environment to the command
-    // (HUM-323).
-    let env = match plan.env_delivery {
-        EnvDelivery::Program => plan.env.clone(),
-        EnvDelivery::Argv => Vec::new(),
-    };
+    // (HUM-323); with an inherited descriptor the shim reads it from there
+    // and the program starts with an empty one as well (HUM-430).
+    let env = plan.env_delivery.program_env(&plan.env);
 
     let (tx, rx) = mpsc::channel();
     let supervisor_shared = Arc::clone(&shared);

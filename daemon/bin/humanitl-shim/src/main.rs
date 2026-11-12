@@ -16,6 +16,9 @@
 mod bridge;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg_attr(target_os = "macos", allow(dead_code))]
+mod json;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 mod report;
 
 #[cfg(target_os = "linux")]

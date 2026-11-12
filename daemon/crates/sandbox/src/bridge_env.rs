@@ -141,6 +141,28 @@ pub const SHIM_CONTROLLING_TERMINAL: &str = "--controlling-terminal";
 /// like [`SHIM_CONTROLLING_TERMINAL`]; in the shim only PID 1 keeps it.
 pub const SHIM_CONTROL_FD: &str = "--control-fd";
 
+/// The shim flag that names the daemon's lifeline (HUM-430), followed by a
+/// descriptor number.
+///
+/// The descriptor is the read end of a pipe whose only write end the daemon
+/// holds, with `CLOEXEC` ([`crate::shim_fds::Lifeline`]). When the daemon
+/// ends, also through `SIGKILL`, the read end reports `POLLHUP`, and the
+/// shim, PID 1 of the sandbox, ends it as on `SIGTERM`: `SIGTERM` to the
+/// agent, after [`crate::KILL_GRACE`] `SIGKILL` to everything. For a backend
+/// that starts the sandbox detached from the daemon, where bwrap's
+/// `--die-with-parent` has no counterpart (a container engine, HUM-292 P7).
+pub const SHIM_LIFELINE_FD: &str = "--lifeline-fd";
+
+/// The shim flag that names the agent's environment as a sealed memfd
+/// (HUM-430), followed by a descriptor number.
+///
+/// The memfd holds one JSON object, `String` to `String`
+/// ([`crate::shim_fds::env_memfd`]); the shim reads it before anything else,
+/// makes it the agent's environment and closes it. The names of
+/// [`RESERVED_ENV`] and the loader variables are refused there, as in
+/// `--setenv`.
+pub const SHIM_ENV_FD: &str = "--env-fd";
+
 /// Die Namen, die der Launcher setzt und die kein Profil belegen kann.
 pub const RESERVED_ENV: &[&str] = &[
     ENV_BRIDGES,

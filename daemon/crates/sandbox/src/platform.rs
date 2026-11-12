@@ -141,3 +141,45 @@ pub(crate) fn set_cloexec(fd: impl AsFd) -> io::Result<()> {
     rustix::io::fcntl_setfd(fd, rustix::io::FdFlags::CLOEXEC)?;
     Ok(())
 }
+
+/// Ein versiegeltes memfd mit diesem Inhalt, Leseposition am Anfang.
+///
+/// Versiegelt gegen Wachsen, Schrumpfen und Schreiben: wer den Deskriptor
+/// erbt, kann den Inhalt nicht mehr ändern, und der Empfänger (`bwrap`, der
+/// Shim mit `--env-fd`) liest genau das, was der Launcher hineingelegt hat.
+/// Der Deskriptor trägt `CLOEXEC` und liegt nie auf 0, 1 oder 2: Dort
+/// ersetzte die stdio des Kindes ihn, bevor er vererbt wird (`inherit.rs`).
+///
+/// # Errors
+///
+/// Der Satz für den Befund: welcher Schritt scheiterte, und woran.
+#[cfg(target_os = "linux")]
+pub(crate) fn sealed_memfd(name: &str, content: &[u8]) -> Result<OwnedFd, String> {
+    use std::io::{Seek as _, SeekFrom, Write as _};
+
+    use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, memfd_create};
+
+    let fd = memfd_create(name, MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING)
+        .map_err(|err| format!("cannot create memfd {name}: {err}"))?;
+    let mut file = std::fs::File::from(fd);
+    file.write_all(content)
+        .and_then(|()| file.seek(SeekFrom::Start(0)))
+        .map_err(|err| format!("cannot fill memfd {name}: {err}"))?;
+    let fd = crate::inherit::above_stdio(OwnedFd::from(file))
+        .map_err(|err| format!("cannot place memfd {name}: {err}"))?;
+    fcntl_add_seals(
+        &fd,
+        SealFlags::SHRINK | SealFlags::GROW | SealFlags::WRITE | SealFlags::SEAL,
+    )
+    .map_err(|err| format!("cannot seal memfd {name}: {err}"))?;
+    Ok(fd)
+}
+
+/// Ohne `memfd_create(2)` gibt es keine versiegelte Datei; bwrap und der
+/// Shim mit `--env-fd` laufen ohnehin nur unter Linux (HUM-312).
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn sealed_memfd(name: &str, _content: &[u8]) -> Result<OwnedFd, String> {
+    Err(format!(
+        "cannot create memfd {name}: this system has no memfd_create"
+    ))
+}

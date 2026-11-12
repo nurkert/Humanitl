@@ -1068,6 +1068,11 @@ fn a_port_that_is_taken_is_a_bridge_setup_failure() {
 /// bridge binds as it does above. `None`, with the reason on stderr, where
 /// `bwrap` or unprivileged user namespaces are missing.
 fn shim_as_pid_1(tag: &str, command: &[&str]) -> Option<Command> {
+    shim_as_pid_1_with(tag, &[], command)
+}
+
+/// [`shim_as_pid_1`] with further shim options before `--`.
+fn shim_as_pid_1_with(tag: &str, options: &[&str], command: &[&str]) -> Option<Command> {
     let usable = Command::new("bwrap")
         .args([
             "--unshare-user",
@@ -1117,8 +1122,9 @@ fn shim_as_pid_1(tag: &str, command: &[&str]) -> Option<Command> {
         SHIM,
         "--proxy-port",
         "0",
-        "--",
     ])
+    .args(options)
+    .arg("--")
     .args(command);
     Some(cmd)
 }
@@ -1215,5 +1221,325 @@ fn sigterm_to_pid_1_reaches_the_agent() {
         started.elapsed() < Duration::from_secs(4),
         "{:?}",
         started.elapsed()
+    );
+}
+
+// ---- lifeline and environment through a descriptor (HUM-430) -------------------
+
+/// The shim's grace after the lifeline ends; `humanitl_sandbox::KILL_GRACE`.
+const KILL_GRACE: Duration = Duration::from_secs(5);
+
+/// Lets `fd` survive into the child of `command` under its number.
+fn inherit(command: &mut Command, fd: &OwnedFd) {
+    use std::os::fd::AsRawFd as _;
+    let fd = fd.as_raw_fd();
+    // SAFETY: runs in the forked child before exec and only clears CLOEXEC
+    // on this one descriptor.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::fcntl(fd, libc::F_SETFD, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+/// The number of `fd`, as an argument.
+fn number(fd: &OwnedFd) -> String {
+    use std::os::fd::AsRawFd as _;
+    fd.as_raw_fd().to_string()
+}
+
+/// A memfd with `content` and these seals; [`SEALED`] is what the launcher
+/// sets for the agent's environment.
+fn env_memfd(content: &str, seals: libc::c_int) -> OwnedFd {
+    use std::os::fd::AsRawFd as _;
+    // SAFETY: the name is a NUL-terminated literal.
+    let raw = unsafe {
+        libc::memfd_create(
+            c"humanitl-env-test".as_ptr(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        )
+    };
+    assert!(raw >= 0, "{}", std::io::Error::last_os_error());
+    // SAFETY: memfd_create just created it, and nothing else owns it.
+    let mut file = fs::File::from(unsafe { OwnedFd::from_raw_fd(raw) });
+    file.write_all(content.as_bytes()).unwrap();
+    let fd = OwnedFd::from(file);
+    if seals != 0 {
+        // SAFETY: F_ADD_SEALS on a memfd this test owns.
+        assert_eq!(
+            unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_ADD_SEALS, seals) },
+            0
+        );
+    }
+    fd
+}
+
+/// The seals of the launcher's environment memfd.
+const SEALED: libc::c_int =
+    libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+
+/// `(read, write)` of a pipe, both with `CLOEXEC`.
+fn pipe() -> (OwnedFd, OwnedFd) {
+    let mut fds = [0 as libc::c_int; 2];
+    // SAFETY: `fds` is a valid two-element array for pipe2.
+    assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+    // SAFETY: pipe2 just created both, and nothing else owns them.
+    unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) }
+}
+
+/// `humanitl-shim --proxy-port 0 <options> -- <command...>` with a bridge on
+/// an ephemeral port, like [`shim_with_bridge`].
+fn shim_with_options(tag: &str, options: &[&str], command: &[&str]) -> Command {
+    let socket = socket_path(tag);
+    let mut cmd = shim();
+    cmd.env(
+        "HUMANITL_BRIDGES",
+        format!(
+            r#"[{{"name":"proxy","dir":"in","listen":"127.0.0.1:0","socket":"{}"}}]"#,
+            socket.display()
+        ),
+    );
+    cmd.args(["--proxy-port", "0"])
+        .args(options)
+        .arg("--")
+        .args(command);
+    cmd
+}
+
+/// A broken environment refuses the start like every other setup failure:
+/// exit 126 and a failed check line that names the descriptor. A key of the
+/// launcher contract, a loader key and a descriptor that is not sealed
+/// against writing, shrinking and growing are refused the same way, before
+/// the agent exists.
+#[test]
+fn a_refused_environment_descriptor_is_a_failed_check_line() {
+    for (content, seals, needle) in [
+        (
+            r#"{"PATH":"/usr/bin""#,
+            SEALED,
+            "environment_setup_failed:_--env-fd:_expected",
+        ),
+        (
+            r#"{"HUMANITL_BRIDGES":"[]"}"#,
+            SEALED,
+            "HUMANITL_BRIDGES_belongs_to_the_launcher_contract",
+        ),
+        (
+            r#"{"LD_PRELOAD":"/tmp/x.so"}"#,
+            SEALED,
+            "LD_PRELOAD_would_load_code",
+        ),
+        (
+            r#"{"PATH":"/usr/bin"}"#,
+            0,
+            "not_a_memfd_sealed_against_writing",
+        ),
+        (
+            r#"{"PATH":"/usr/bin"}"#,
+            libc::F_SEAL_WRITE | libc::F_SEAL_GROW,
+            "not_a_memfd_sealed_against_writing,_shrinking_and_growing",
+        ),
+        (
+            r#"{"PATH":"/usr/bin"}"#,
+            libc::F_SEAL_WRITE | libc::F_SEAL_SHRINK,
+            "not_a_memfd_sealed_against_writing,_shrinking_and_growing",
+        ),
+    ] {
+        let memfd = env_memfd(content, seals);
+        let mut command = shim_with_options(
+            "envbad",
+            &["--env-fd", &number(&memfd)],
+            &["sh", "-c", "echo agent-ran >&2"],
+        );
+        inherit(&mut command, &memfd);
+        let (status, lines, stderr) = failed_setup(command);
+        drop(memfd);
+        assert_eq!(status, 126, "{content}: {stderr}");
+        assert!(
+            lines.iter().any(
+                |line| line.starts_with("CHECK seccomp_applied fail ") && line.contains(needle)
+            ),
+            "{content}: {lines:?}"
+        );
+        assert!(!stderr.contains("agent-ran"), "{stderr}");
+    }
+}
+
+/// The descriptor's pairs are the agent's whole environment: what the shim
+/// was started with does not pass, the shim's own variables do not pass, and
+/// a value with spaces, quotes and a newline arrives intact.
+#[test]
+fn the_environment_descriptor_is_the_agents_environment() {
+    let memfd = env_memfd(
+        r#"{"PATH":"/usr/bin:/bin","HL_SECRET":"a b \"c\"\nd"}"#,
+        SEALED,
+    );
+    let mut command = shim_with_options(
+        "envok",
+        &["--env-fd", &number(&memfd)],
+        &["sh", "-c", "env; printf '%s' \"$HL_SECRET\" >&2"],
+    );
+    inherit(&mut command, &memfd);
+    command.env("HUMANITL_TEST", "1");
+    let output = command.output().unwrap();
+    drop(memfd);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(code(output.status), 0, "{stderr}");
+    assert!(stderr.ends_with("a b \"c\"\nd"), "{stderr}");
+    assert!(stdout.contains("PATH=/usr/bin:/bin\n"), "{stdout}");
+    assert!(
+        !stdout.contains("HUMANITL_TEST="),
+        "the start environment passed: {stdout}"
+    );
+    for var in SHIM_VARS {
+        assert!(
+            !stdout.contains(&format!("{var}=")),
+            "{var} reached the agent: {stdout}"
+        );
+    }
+}
+
+/// Neither the lifeline nor the environment's memfd reaches the agent: its
+/// descriptor table is the three standard streams and the one `ls` opens.
+#[test]
+fn the_agent_holds_neither_the_lifeline_nor_the_environment() {
+    let memfd = env_memfd(r#"{"PATH":"/usr/bin:/bin"}"#, SEALED);
+    let (line_read, line_write) = pipe();
+    let mut command = shim_with_options(
+        "envfds",
+        &[
+            "--env-fd",
+            &number(&memfd),
+            "--lifeline-fd",
+            &number(&line_read),
+        ],
+        &["sh", "-c", "ls /proc/self/fd; echo --; ls -l /proc/self/fd"],
+    );
+    inherit(&mut command, &memfd);
+    inherit(&mut command, &line_read);
+    let output = command.output().unwrap();
+    drop((memfd, line_read, line_write));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        code(output.status),
+        0,
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let fds: Vec<&str> = stdout.lines().take_while(|line| *line != "--").collect();
+    assert_eq!(fds, ["0", "1", "2", "3"], "{stdout}");
+    assert!(!stdout.contains("memfd:"), "{stdout}");
+}
+
+/// The lifeline ends while the agent runs: the shim relays `SIGTERM`, and an
+/// agent that hears it ends at once with 128 + 15.
+#[test]
+fn an_ended_lifeline_terminates_the_agent() {
+    let (line_read, line_write) = pipe();
+    let mut command = shim_with_options(
+        "lifeline",
+        &["--lifeline-fd", &number(&line_read)],
+        &["sleep", "30"],
+    );
+    inherit(&mut command, &line_read);
+    let mut child = command.spawn().unwrap();
+    drop(line_read);
+    thread::sleep(Duration::from_millis(500));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "the shim ended while the lifeline was held"
+    );
+    let started = Instant::now();
+    drop(line_write);
+    let status = wait_with_timeout(&mut child);
+    assert_eq!(code(status), 128 + libc::SIGTERM);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// A lifeline that is no pipe refuses the start: the sandbox would outlive
+/// the daemon unseen.
+#[test]
+fn a_lifeline_that_is_no_pipe_refuses_the_start() {
+    let file = OwnedFd::from(fs::File::open("/dev/null").unwrap());
+    let mut command = shim_with_options(
+        "lifeline-file",
+        &["--lifeline-fd", &number(&file)],
+        &["true"],
+    );
+    inherit(&mut command, &file);
+    let (status, lines, stderr) = failed_setup(command);
+    assert_eq!(status, 126, "{stderr}");
+    assert!(
+        lines.iter().any(|line| line
+            .starts_with("CHECK seccomp_applied fail lifeline_setup_failed:_not-a-pipe:")),
+        "{lines:?}"
+    );
+}
+
+/// Acceptance criterion 1 of HUM-430, under bwrap with the shim as PID 1: the
+/// process that holds the write end dies by `SIGKILL`, and the sandbox ends
+/// within `KILL_GRACE` plus a second, although its agent ignores `SIGTERM`
+/// and leaves a child behind. Not before the grace either: the agent gets its
+/// five seconds.
+#[test]
+fn the_sandbox_ends_when_the_lifeline_holder_is_killed() {
+    let (line_read, line_write) = pipe();
+    let script = "trap '' TERM; sleep 600 & echo up; while :; do sleep 0.1; done";
+    let Some(mut command) = shim_as_pid_1_with(
+        "lifeline-pid1",
+        &["--lifeline-fd", &number(&line_read)],
+        &["sh", "-c", script],
+    ) else {
+        return;
+    };
+    // The holder: the only process with the write end once this test drops
+    // its own copy.
+    let mut holder = Command::new("sleep");
+    holder.arg("600").stdin(Stdio::null());
+    inherit(&mut holder, &line_write);
+    let mut holder = holder.spawn().unwrap();
+    drop(line_write);
+
+    command.stdout(Stdio::piped());
+    inherit(&mut command, &line_read);
+    let mut sandbox = command.spawn().unwrap();
+    drop(line_read);
+    let mut up = String::new();
+    BufReader::new(sandbox.stdout.take().unwrap())
+        .read_line(&mut up)
+        .unwrap();
+    assert_eq!(up, "up\n", "the agent did not start");
+
+    holder.kill().unwrap();
+    let started = Instant::now();
+    let _ = holder.wait();
+    let deadline = started + KILL_GRACE + Duration::from_secs(1);
+    let status = loop {
+        if let Some(status) = sandbox.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() > deadline {
+            let _ = sandbox.kill();
+            let _ = sandbox.wait();
+            panic!(
+                "the sandbox outlived its lifeline by {:?}",
+                started.elapsed()
+            );
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    let elapsed = started.elapsed();
+    assert_eq!(code(status), 128 + libc::SIGKILL, "{elapsed:?}");
+    assert!(
+        elapsed + Duration::from_millis(500) >= KILL_GRACE,
+        "the agent did not get its grace: {elapsed:?}"
     );
 }

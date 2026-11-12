@@ -55,6 +55,7 @@ use std::mem::zeroed;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use seccompiler::BpfProgram;
@@ -164,7 +165,8 @@ enum Incoming {
     Closed,
 }
 
-/// The further shells of this sandbox, served from a thread of PID 1.
+/// The further shells of this sandbox, served from the loop of PID 1
+/// (`supervise.rs`).
 pub struct Shells {
     control: OwnedFd,
     /// The agent's filter, answering `EPERM` itself.
@@ -177,6 +179,10 @@ pub struct Shells {
     /// that the reaper finds a shell that ended at once, and so that its `E`
     /// never overtakes the `R`.
     live: Mutex<Vec<(u32, libc::pid_t)>>,
+    /// Replies the socket did not take yet (HUM-430).
+    outbox: Mutex<Outbox>,
+    /// A reply could not be delivered; the loop ends every shell.
+    broken: AtomicBool,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -205,25 +211,38 @@ impl Shells {
             // SAFETY: getpid has no preconditions.
             parent: unsafe { libc::getpid() },
             live: Mutex::new(Vec::new()),
+            outbox: Mutex::new(Outbox::default()),
+            broken: AtomicBool::new(false),
         }
     }
 
-    /// Serves requests until the daemon closes its end.
+    /// The shim's end of the door, for PID 1's `poll` loop
+    /// (`supervise.rs`, HUM-430).
+    pub fn control_fd(&self) -> RawFd {
+        self.control.as_raw_fd()
+    }
+
+    /// Serves the one request that is waiting; `false` once the daemon has
+    /// closed its end.
     ///
-    /// Every shell started here dies with this thread (`PR_SET_PDEATHSIG`
-    /// belongs to the thread that forked): when the daemon lets go of the
-    /// socket, nobody is left to show the shell, and it ends.
-    pub fn serve(&self) {
-        loop {
-            match self.receive() {
-                Incoming::Closed => return,
-                Incoming::Malformed(malformed) => {
-                    write_raw(2, b"humanitl-shim: warning: shell request refused: ");
-                    write_raw(2, malformed.why.as_bytes());
-                    write_raw(2, b"\n");
-                    self.reply(MARK_REFUSED, malformed.id, REFUSED_MALFORMED);
-                }
-                Incoming::Spawn(request) => self.spawn(request),
+    /// Called from PID 1's loop when the door is readable, so the receive
+    /// never blocks. Every shell started here dies with PID 1's main thread
+    /// (`PR_SET_PDEATHSIG` belongs to the thread that forked); when the
+    /// daemon lets go of the socket, the loop kills every shell that still
+    /// runs ([`Shells::kill_all`]), because nobody is left to show it.
+    pub fn serve_one(&self) -> bool {
+        match self.receive() {
+            Incoming::Closed => false,
+            Incoming::Malformed(malformed) => {
+                write_raw(2, b"humanitl-shim: warning: shell request refused: ");
+                write_raw(2, malformed.why.as_bytes());
+                write_raw(2, b"\n");
+                self.reply(MARK_REFUSED, malformed.id, REFUSED_MALFORMED);
+                true
+            }
+            Incoming::Spawn(request) => {
+                self.spawn(request);
+                true
             }
         }
     }
@@ -359,15 +378,149 @@ impl Shells {
         let message = [
             mark, id[0], id[1], id[2], id[3], value[0], value[1], value[2], value[3],
         ];
-        // SAFETY: the pointer and length describe `message`.
-        unsafe {
-            libc::send(
-                self.control.as_raw_fd(),
-                message.as_ptr().cast(),
-                message.len(),
-                libc::MSG_NOSIGNAL,
+        let fd = self.control.as_raw_fd();
+        if lock(&self.outbox)
+            .push(message, |reply| send_reply(fd, reply))
+            .is_err()
+        {
+            self.give_up();
+        }
+    }
+
+    /// Whether replies wait for the socket to become writable; PID 1's loop
+    /// then asks for `POLLOUT` on [`Shells::control_fd`].
+    pub fn pending(&self) -> bool {
+        lock(&self.outbox).pending()
+    }
+
+    /// Sends what waits, in order, as far as the socket takes it; for PID
+    /// 1's loop when the door is writable.
+    pub fn flush(&self) {
+        let fd = self.control.as_raw_fd();
+        if lock(&self.outbox)
+            .flush(|reply| send_reply(fd, reply))
+            .is_err()
+        {
+            self.give_up();
+        }
+    }
+
+    /// Whether a reply could not be delivered. PID 1's loop then kills every
+    /// shell and closes the door: the daemon would wait for a reply that
+    /// never comes (an `R` it times out on, an `E` its pump waits for).
+    pub fn broken(&self) -> bool {
+        self.broken.load(Ordering::SeqCst)
+    }
+
+    /// Marks the door broken, once with a message. Never kills here: this
+    /// runs with `live` held during a spawn; the loop kills afterwards, and
+    /// a shell just started is already in `live`.
+    fn give_up(&self) {
+        if !self.broken.swap(true, Ordering::SeqCst) {
+            write_raw(
+                2,
+                b"humanitl-shim: warning: shell replies cannot reach the daemon; ending every further shell\n",
             );
         }
+    }
+}
+
+/// One reply on the door: mark, id, value.
+type Reply = [u8; 9];
+
+/// What one non-blocking send did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sent {
+    /// The whole reply went (a `SOCK_SEQPACKET` message is all or nothing).
+    Done,
+    /// The socket buffer is full (`EAGAIN`); try again when writable.
+    WouldBlock,
+    /// The daemon's end is gone, or another error: the reply never arrives.
+    Gone,
+}
+
+/// Sends one reply without blocking: PID 1's loop also watches the
+/// lifeline (HUM-430) and must never wait on a daemon that stops reading.
+fn send_reply(fd: RawFd, reply: &Reply) -> Sent {
+    loop {
+        // SAFETY: the pointer and length describe `reply`.
+        let sent = unsafe {
+            libc::send(
+                fd,
+                reply.as_ptr().cast(),
+                reply.len(),
+                libc::MSG_NOSIGNAL | libc::MSG_DONTWAIT,
+            )
+        };
+        if sent >= 0 {
+            return Sent::Done;
+        }
+        match io::Error::last_os_error().kind() {
+            io::ErrorKind::Interrupted => {}
+            io::ErrorKind::WouldBlock => return Sent::WouldBlock,
+            _ => return Sent::Gone,
+        }
+    }
+}
+
+/// The most replies that may wait: a start and an end for each of
+/// [`MAX_SHELLS`] shells. More means the daemon has stopped reading.
+pub const MAX_PENDING: usize = MAX_SHELLS * 2;
+
+/// A reply could not be delivered: the queue is full or the daemon's end is
+/// gone.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Undeliverable;
+
+/// The replies that wait for the socket, oldest first.
+///
+/// A reply is sent at once when nothing waits; otherwise it queues behind
+/// the others, so the order the shells produced them in (`R` before `E` for
+/// each shell) is the order the daemon reads them in.
+#[derive(Debug, Default)]
+pub struct Outbox {
+    queue: std::collections::VecDeque<Reply>,
+}
+
+impl Outbox {
+    /// Sends `reply`, or queues it behind what waits.
+    ///
+    /// # Errors
+    ///
+    /// [`Undeliverable`] when the queue already holds [`MAX_PENDING`]
+    /// replies or the send says the daemon is gone.
+    fn push(
+        &mut self,
+        reply: Reply,
+        send: impl FnMut(&Reply) -> Sent,
+    ) -> Result<(), Undeliverable> {
+        if self.queue.len() >= MAX_PENDING {
+            return Err(Undeliverable);
+        }
+        self.queue.push_back(reply);
+        self.flush(send)
+    }
+
+    /// Sends what waits, oldest first, until the socket takes no more.
+    ///
+    /// # Errors
+    ///
+    /// [`Undeliverable`] when the send says the daemon is gone.
+    fn flush(&mut self, mut send: impl FnMut(&Reply) -> Sent) -> Result<(), Undeliverable> {
+        while let Some(reply) = self.queue.front() {
+            match send(reply) {
+                Sent::Done => {
+                    self.queue.pop_front();
+                }
+                Sent::WouldBlock => return Ok(()),
+                Sent::Gone => return Err(Undeliverable),
+            }
+        }
+        Ok(())
+    }
+
+    fn pending(&self) -> bool {
+        !self.queue.is_empty()
     }
 }
 
@@ -524,6 +677,73 @@ fn close_above_stderr() {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    fn reply(mark: u8, id: u8) -> Reply {
+        [mark, id, 0, 0, 0, 0, 0, 0, 0]
+    }
+
+    /// A socket that takes `room` replies, then answers `EAGAIN`.
+    fn socket(room: usize, taken: &mut Vec<Reply>) -> impl FnMut(&Reply) -> Sent + '_ {
+        move |message: &Reply| {
+            if taken.len() < room {
+                taken.push(*message);
+                Sent::Done
+            } else {
+                Sent::WouldBlock
+            }
+        }
+    }
+
+    #[test]
+    fn a_full_socket_queues_replies_and_a_flush_sends_them_in_order() {
+        let mut outbox = Outbox::default();
+        let mut taken = Vec::new();
+        outbox.push(reply(b'R', 1), socket(1, &mut taken)).unwrap();
+        // The socket is full: both wait, the `E` behind the second `R`.
+        outbox.push(reply(b'R', 2), socket(1, &mut taken)).unwrap();
+        outbox.push(reply(b'E', 1), socket(1, &mut taken)).unwrap();
+        assert!(outbox.pending());
+        assert_eq!(taken, [reply(b'R', 1)]);
+        // Writable again: the queue empties oldest first.
+        outbox.flush(socket(usize::MAX, &mut taken)).unwrap();
+        assert!(!outbox.pending());
+        assert_eq!(taken, [reply(b'R', 1), reply(b'R', 2), reply(b'E', 1)]);
+    }
+
+    #[test]
+    fn a_new_reply_never_overtakes_a_queued_one() {
+        let mut outbox = Outbox::default();
+        let mut taken = Vec::new();
+        outbox.push(reply(b'R', 1), socket(0, &mut taken)).unwrap();
+        // The socket has room now, but `R 1` still goes first.
+        outbox
+            .push(reply(b'E', 1), socket(usize::MAX, &mut taken))
+            .unwrap();
+        assert_eq!(taken, [reply(b'R', 1), reply(b'E', 1)]);
+    }
+
+    #[test]
+    fn an_overflow_or_a_gone_daemon_is_undeliverable() {
+        let mut outbox = Outbox::default();
+        let mut taken = Vec::new();
+        for id in 0..MAX_PENDING {
+            outbox
+                .push(
+                    reply(b'R', u8::try_from(id).unwrap()),
+                    socket(0, &mut taken),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            outbox.push(reply(b'E', 0), socket(0, &mut taken)),
+            Err(Undeliverable)
+        );
+        let mut gone = Outbox::default();
+        assert_eq!(
+            gone.push(reply(b'R', 1), |_: &Reply| Sent::Gone),
+            Err(Undeliverable)
+        );
+    }
 
     use super::*;
 

@@ -312,7 +312,8 @@ The order, as `daemon/bin/humanitl-shim/src/main.rs` runs it:
    `CLOEXEC`, so the agent does not inherit it. Then it reads the interface list
    (`no_interfaces`) and walks the filesystem for sockets (`single_socket`).
 2. **Close and fork.** It closes every inherited descriptor except 0, 1, 2, the report, the exec
-   gate and the bridge listeners, creates the `socketpair` over which the filter's listener will
+   gate, the bridge listeners and, when the daemon gave them, its door for further shells and its
+   lifeline (HUM-430), creates the `socketpair` over which the filter's listener will
    travel (HUM-138), and forks. The parent's first step after the fork is
    `prctl(PR_SET_DUMPABLE, 0)`, checked back with `PR_GET_DUMPABLE` before the gate opens; it
    then installs its own filter, the agent's policy plus `AF_UNIX`.
@@ -381,8 +382,9 @@ way into the sandbox, so its limits are part of the claim:
 - At most four further shells live at a time; the shim counts, and the daemon counts again
   (`TERM_002` for the fifth).
 - A shell ends when its process exits, and with the sandbox: PID 1 kills every shell when the
-  agent ends, the shells die with the thread that forked them (`PR_SET_PDEATHSIG`) and with the
-  PID namespace, and the daemon ends their terminals when its end of the pair closes.
+  agent ends or the daemon closes its end of the pair, the shells die with PID 1, whose main
+  loop forked them (`PR_SET_PDEATHSIG`, HUM-430), and with the PID namespace, and the daemon
+  ends their terminals when its end of the pair closes.
 - A sandbox started without the daemon's pseudo-terminal (`humanitl sandbox run`, the escape
   suites) has no door.
 
@@ -401,6 +403,46 @@ input against the agent: never type a secret into it. The default shell starts w
 files (`bash --norc --noprofile -i`, or `sh -i` with `ENV` unset), so a `~/.bashrc` or
 `~/.profile` the agent planted in the sandbox's home does not run when it opens; a command the
 caller names after `--` decides that for itself.
+
+### The lifeline and the environment through descriptors (HUM-430)
+
+Two things bwrap does with flags need a descriptor once a backend starts the sandbox detached from
+the daemon and stores every value of its command line on disk (Podman, HUM-292 measurements P7
+and P11). The shim takes both, the same way under every backend; bwrap itself keeps its flags.
+
+- **The lifeline** (`--lifeline-fd`). The read end of a pipe whose only write end the daemon
+  holds, with `CLOEXEC`, so no child of the daemon inherits it. The shim, PID 1, waits on it in
+  the same `poll` loop as on its children and the door for further shells. When the daemon ends,
+  also through `SIGKILL`, the kernel closes the write end, the read end reports `POLLHUP`, and
+  the shim ends the sandbox as on `SIGTERM`: `SIGTERM` to the agent, after `KILL_GRACE` (5 s)
+  `SIGKILL` to the agent, every further shell and every process of the PID namespace. It takes
+  the place of `--die-with-parent`. The read end may be open in other processes too (the
+  `podman run` client inherits it); what counts is only that the write end lies in the daemon
+  alone. A number that names no pipe refuses the start.
+- **The environment** (`--env-fd`). The agent's environment as one JSON object, `String` to
+  `String`, in a memfd sealed against writing, growing and shrinking. The shim reads it before
+  anything else of the start, makes it the agent's whole environment (what the engine put there
+  on its own does not pass) and closes it. No value stands in an argument vector, in the process
+  list or in the engine's stored configuration. The rules of `--setenv` hold: the five variables
+  of the launcher contract and the loader variables `LD_PRELOAD`, `LD_AUDIT` and
+  `LD_LIBRARY_PATH` are refused, as is a descriptor that is not fully sealed; a
+  refusal is a failed `seccomp_applied` line and exit 126, before the agent exists. The
+  memfd must be sealed against writing, shrinking and growing; one sealed against writing alone
+  could still be emptied with `ftruncate(2)`. The five variables of the launcher contract
+  (`HUMANITL_BRIDGES`, `HUMANITL_REPORT_FD`, `HUMANITL_SECCOMP_FAMILIES`,
+  `HUMANITL_SECCOMP_TYPES`, `HUMANITL_SECCOMP_DENY`) still reach the shim through its own
+  process environment, under a container engine through its command line. That is fine: they
+  hold a socket path inside the sandbox, a descriptor number and the names of socket families,
+  types and syscalls, all of which this document states openly, and no secret; and the shim
+  needs the report descriptor before it reads the memfd, so that a broken memfd becomes a
+  failed check line.
+
+**The agent inherits neither.** The shim reads and closes the environment's memfd before it
+forks. The lifeline stays with PID 1 alone, like the door: the parent's close before the fork
+keeps it with `CLOEXEC`, the agent's child closes it explicitly and does not keep it in its own
+close, and every further shell closes all descriptors above 2. PID 1 is not dumpable, so
+`/proc/1/fd` does not reach it either. The agent holds nothing of the lifeline and cannot read
+the memfd again.
 
 ### What the filter allows and refuses
 
@@ -1617,6 +1659,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | macOS: the disposable sandbox on an APFS clone, masks removed from the clone and denied in it, the real project sealed, the clone renamed before it is read, and a failed clone that is never silent: `auto` warns with `SANDBOX_033`, an explicit `disposable` refuses with `SANDBOX_030` (HUM-374, K-24). |
 | 0.1.x | Updates from inside the app: a daily check of GitHub (`update.check`, default on), manifests signed with Ed25519 and checked against a built-in key, size and SHA-256 checked while downloading, code signature and version checked before an atomic swap with restore; APT and dnf packages through `pkexec` and their package manager (HUM-382, [Updates](#updates-from-inside-the-app), K-25). |
 | 0.1.x | Pausing intercept: requests that would wait for a person pass with the reason `paused` while a person keeps the pause on (no change without a hold deadline); block rules, the hard block, the sandbox and the recording stay; settable only over the daemon socket, never from the sandbox; ends on resume, with the next session and with the daemon; start and end in the audit log (HUM-407, [Pausing intercept](#pausing-intercept), K-26). |
+| 0.1.x | The shim takes a lifeline (`--lifeline-fd`, the read end of a pipe only the daemon writes; `POLLHUP` ends the sandbox as on `SIGTERM`) and the agent's environment as a sealed memfd (`--env-fd`, never in `argv`); the agent inherits neither (HUM-430, [section 4](#the-lifeline-and-the-environment-through-descriptors-hum-430)). |
 | 0.1.x | macOS: Seatbelt as the sandbox backend, a generated SBPL profile per session, the three guarantees restated and measured by the shim; the daemon as a launchd agent; socket and token under `~/Library/Application Support/Humanitl/run` (HUM-323, HUM-327, [section 12](#12-macos-seatbelt-instead-of-bubblewrap)). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap

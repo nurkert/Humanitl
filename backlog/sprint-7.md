@@ -56,6 +56,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-446 | Kernel-Stufe: Projektordner und Wegwerf-Schicht über virtiofs | L | HUM-445 |
 | HUM-449 | Kernel-Stufe zulassen: `krun` wird wählbar | S | HUM-445, HUM-446 |
 | HUM-447 | Doku der Kernel-Stufe, Oberfläche schaltet `krun` frei | S | HUM-449 |
+| HUM-451 | Integrationstest: ein Daemon, der die Shell-Tür nicht mehr liest, hält weder Lebensleine noch Agent auf | S | HUM-430 |
 | HUM-450 | `humanitl sandbox argv` hält zurückgehaltene Werte auch in der CLI zurück | S | HUM-429 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
@@ -630,3 +631,33 @@ landet aber in Terminal-Verläufen und geteilten Fehlerberichten.
 
 ### Fallstricke
 - Der Platzhalter ist derselbe wie im Daemon (`WITHHELD_PLACEHOLDER`).
+
+---
+
+## HUM-451 · A daemon that stops reading the shell door delays neither the lifeline nor the agent
+
+### Kontext
+HUM-430 legt die Antworten des Shims an den Daemon (`R`, `E` je weiterer
+Shell) in eine begrenzte Warteschlange, die die PID-1-Schleife bei `POLLOUT`
+leert; läuft sie über oder ist der Daemon weg, beendet der Shim die
+betroffenen Shells. Unit-Tests decken die Schlange ab, ein Integrationstest
+mit einem echten Shell-Start fehlt, weil er in der Agent-Sandbox nicht lief
+(Review HUM-430, 2026-11-12).
+
+### Spezifikation
+1. Ein Integrationstest startet die Sandbox, öffnet über die Tür weitere
+   Shells und liest auf der Daemon-Seite nie, bis die Schlange überläuft.
+2. Ein zweiter Fall schließt danach die Lebensleine.
+
+### Tests
+- Fall 1: die weiteren Shells sind beendet, der Agent läuft weiter.
+- Fall 2: der Agent endet binnen `KILL_GRACE` plus 1 s.
+- Mutationsbeweis: blockierendes `send` statt Warteschlange lässt Fall 2 rot
+  werden.
+
+### Akzeptanzkriterien
+1. Beide Fälle laufen in der CI grün.
+
+### Fallstricke
+- Der Socket-Puffer muss wirklich voll sein; die Größe hängt am Kernel, also
+  so lange öffnen, bis `EAGAIN` beobachtet ist, statt eine Zahl anzunehmen.
