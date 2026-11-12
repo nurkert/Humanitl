@@ -1068,6 +1068,19 @@ claim:
   daemon left behind is removed at the next start. The recording keeps the decision (applied or
   discarded, and which files) in the run's summary.
 
+**Not under Podman (HUM-438).** The Podman backend has no disposable sandbox: `disposable`
+refuses with `SANDBOX_030`, and `auto` runs direct with `SANDBOX_033`, both naming the reason.
+Podman's overlay volume with its own upper layer (`-v <project>:/work:O,upperdir=,workdir=`)
+works, but it takes the project as a path that the engine resolves later, and a descriptor is no
+mount source there (measured in HUM-292, P13 for a bind and P10 for the overlay's lower layer:
+`crun: ... Invalid argument`). Unlike a bind, the overlay cannot be tied to the checked folder
+from inside the container either: it has a device of its own, and the `lowerdir` in its mount
+options is only text. A folder swapped between the check and the mount could become the lower
+layer, and the promise above (the folder that was checked is the lower layer, HUM-263) would not
+hold. That is the deciding reason. A second, separate obstacle came out of the same measurement:
+the engine writes the whiteouts and the overlay's work directory as its first subordinate ID, and
+the daemon could not remove them when discarding the layer.
+
 What it does not change: requests the agent sent through the proxy are out, whatever happens to
 the layer. A disposable run says nothing about the agent's network traffic, and it is not a
 second line of defence for the masks above; it removes the write path to the project for the
@@ -1982,6 +1995,9 @@ Podman machine, is refused with `SANDBOX_038`.
   daemon start, with a warning `SANDBOX_041`.
 - **The trusted computing base grows** by Podman, `conmon`, `crun`, the user's container storage
   and the daemon's `containers.conf` (K-27 in [`THREAT-MODEL.md`](THREAT-MODEL.md)).
+- **No disposable sandbox.** Its lower layer cannot be bound to the checked project folder;
+  `disposable` refuses with `SANDBOX_030`, `auto` runs direct with `SANDBOX_033`
+  ([section 5.2](#the-disposable-sandbox-hum-350), HUM-438).
 
 ### Prerequisites
 

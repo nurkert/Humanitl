@@ -444,11 +444,14 @@ fn hooks_write_stays_in_sandbox() {
 ///
 /// Unter dem Backend der Plattform misst `tests/launcher.rs` den Fall
 /// gleichen Namens am Overlay; dorthin ruft `esc-5-filesystem.sh` für dieses
-/// Backend. Ein Backend ohne Wegwerf-Sandbox (bis HUM-438 die
-/// Container-Engine) hält die Zusage, indem es den Plan verweigert, statt
-/// still direkt in das Projekt zu starten. Genau das prüft dieser Fall. Kann
-/// das Backend eine Wegwerf-Sandbox, ist der Fall rot: Dann braucht ESC-5 die
-/// echte Messung, nicht diese Verweigerung.
+/// Backend. Ein Backend ohne Wegwerf-Sandbox hält die Zusage, indem es den
+/// Plan verweigert, statt still direkt in das Projekt zu starten. Genau das
+/// prüft dieser Fall. Die Container-Engine bleibt ohne Wegwerf-Sandbox: Ihr
+/// Overlay-Volume nimmt die untere Schicht als Pfad, und der lässt sich im
+/// Container nicht an den geprüften Ordner binden (HUM-438, gemessen in
+/// HUM-292 P10 und P13). Kann das Backend eines Tages eine Wegwerf-Sandbox,
+/// ist der Fall rot: Dann braucht ESC-5 die echte Messung, nicht diese
+/// Verweigerung.
 #[test]
 fn a_disposable_sandbox_never_writes_to_the_project() {
     if requested_backend().is_none() {
@@ -477,14 +480,18 @@ fn a_disposable_sandbox_never_writes_to_the_project() {
     };
     let profile = profile();
     let request = PlanRequest::new(&profile, &session, &options);
-    assert!(
-        backend.disposable_support(&request).is_err(),
+    let support = backend.disposable_support(&request);
+    assert_eq!(
+        support.as_ref().err().map(|err| err.code.as_str()),
+        Some("SANDBOX_030"),
         "{} offers a disposable sandbox now; ESC-5 needs the real measurement for it \
-         instead of this refusal (HUM-438)",
+         instead of this refusal",
         backend.name()
     );
-    assert!(
-        backend.plan(&request).is_err(),
+    let plan = backend.plan(&request);
+    assert_eq!(
+        plan.as_ref().err().map(|err| err.code.as_str()),
+        Some("SANDBOX_030"),
         "the plan of a disposable sandbox must be refused, never started directly on the project"
     );
     assert_eq!(

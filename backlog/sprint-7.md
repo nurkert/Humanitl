@@ -365,6 +365,18 @@ HUM-350 und HUM-357: Unter bwrap liegt das Projekt nur lesbar unter einem Overla
 - Podman legt eigene Dateien in `workdir` an; der Scan liest nur `upperdir`.
 - Mit `fuse-overlayfs` sehen Whiteouts anders aus; nicht unterstützen, ablehnen.
 
+### Umsetzung (2026-11-12)
+Punkt 4 entschieden: keins von beiden belegt. P10 nachgemessen (Podman 5.8.6, Kernel 7.3.3,
+Kernel-Overlay trotz installiertem `fuse-overlayfs`): Mit dem Projektpfad als untere Schicht
+funktioniert das Volume (`mountinfo`: `overlay ... lowerdir=<pfad>,upperdir=..,workdir=..,
+redirect_dir=nofollow,uuid=on,userxattr`, Schreiben landet in `upperdir`, Projekt unverändert),
+aber Whiteouts und `workdir/work` (Modus `000`) gehören der untergeordneten Kennung 100000, und
+das Verwerfen scheitert mit `SANDBOX_031`. Mit `/proc/self/fd/N` als untere Schicht scheitert
+`crun` mit `Invalid argument`, wie P13. Ein `lowerdir` als Text in `mountinfo` lässt sich im
+Container nicht an den geprüften Ordner binden. Darum lehnt `disposable` unter Podman mit
+`SANDBOX_030` samt Grund ab, `auto` läuft direkt mit `SANDBOX_033`; ESC-5 prüft die Ablehnung.
+Die Akzeptanzkriterien 1 und 3 gelten in dieser Form, 2 entfällt mangels Schicht.
+
 ## HUM-439 · Podman: Abbild als Wurzeldateisystem, mit Digest, ohne Pull beim Start
 
 ### Kontext

@@ -47,6 +47,19 @@
 //! liegt außen um den Filter des Shims, der die dritte Garantie trägt; dass
 //! es `seccomp(2)` erlaubt, zeigt P3.
 //!
+//! **Keine Wegwerf-Sandbox (HUM-438).** Das Overlay-Volume von Podman mit
+//! eigener oberer Schicht (`-v <projekt>:/work:O,upperdir=,workdir=`) nimmt
+//! seine untere Schicht als Pfad, den die Engine später selbst auflöst; ein
+//! Deskriptor ist dort keine Quelle (P13, und P10 mit
+//! `/proc/self/fd/N` als untere Schicht: `crun: ... Invalid argument`).
+//! Anders als ein Bind lässt sich das Overlay im Container nicht über Gerät
+//! und Inode mit dem geprüften Ordner verbinden: Es trägt sein eigenes
+//! Gerät, und der `lowerdir` in `mountinfo` ist nur Text. Eine
+//! Wegwerf-Sandbox, deren untere Schicht ein getauschter Ordner sein kann,
+//! hielte die Zusage von HUM-263 nicht. `disposable` lehnt deshalb mit
+//! `SANDBOX_030` ab und nennt den Grund, `auto` läuft direkt mit
+//! `SANDBOX_033` (gemessen 2026-11-12, Podman 5.8.6, Kernel 7.3).
+//!
 //! **Zulassung.** Bis HUM-448 steht Podman nicht in
 //! [`crate::ADMITTED_BACKENDS`]: [`crate::Backend::detect`] lehnt es mit
 //! `SANDBOX_048` ab, und nur die Escape-Suite und die Tests kommen über
@@ -301,9 +314,9 @@ impl PodmanBackend {
         }
     }
 
-    /// Lehnt ab, was diese Stufe noch nicht kann: die Laufzeit `krun`
+    /// Lehnt ab, was diese Stufe nicht kann: die Laufzeit `krun`
     /// (HUM-444), ein Abbild als Wurzel (HUM-439) und die Wegwerf-Sandbox
-    /// (HUM-438). Nie still etwas anderes.
+    /// (HUM-438, [`disposable_unsupported`]). Nie still etwas anderes.
     fn refuse_unsupported(&self, request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
         refuse_kernel_level(self.settings.runtime)?;
         if self.settings.rootfs == PodmanRootfs::Image {
@@ -520,16 +533,20 @@ pub(crate) fn static_lines(
     ]
 }
 
-/// `SANDBOX_030`: Die Wegwerf-Sandbox unter Podman kommt mit HUM-438.
+/// `SANDBOX_030`: Unter Podman gibt es keine Wegwerf-Sandbox, weil sich ihre
+/// untere Schicht nicht an den geprüften Ordner binden lässt (HUM-438,
+/// Modulbeschreibung).
 fn disposable_unsupported() -> Diagnostic {
     Diagnostic::builder(SANDBOX_030, Severity::Blocking)
+        // Gemessen in HUM-292 P10 und P13 (2026-11-12); siehe Modulbeschreibung.
         .why(
-            "a disposable sandbox under Podman is not available yet (HUM-438); an explicit \
-             sandbox.mode = \"disposable\" does not fall back to direct mode",
+            "this backend has no disposable sandbox: the container engine resolves the project \
+             path itself, so its lower layer cannot be tied to the checked folder. Use the \
+             bubblewrap backend for a disposable sandbox, or set sandbox.mode = \"direct\"",
         )
         .fix(FixAction::ChangeSetting {
-            key: "sandbox.mode".to_owned(),
-            value: "direct".to_owned(),
+            key: "sandbox.backend".to_owned(),
+            value: crate::backend::BWRAP_BACKEND.to_owned(),
         })
         .build()
 }
@@ -921,7 +938,8 @@ impl SandboxBackend for PodmanBackend {
         crate::backend::isolation_of(PODMAN_BACKEND, Some(self.settings.runtime))
     }
 
-    /// Bis HUM-438 nie: `SANDBOX_030`.
+    /// Nie: `SANDBOX_030` mit dem Grund (HUM-438, Modulbeschreibung). `auto`
+    /// läuft damit direkt mit `SANDBOX_033`.
     fn disposable_support(&self, _request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
         Err(disposable_unsupported())
     }

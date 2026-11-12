@@ -594,9 +594,9 @@ Verweigerte Verbindungsversuche werden nicht gemeldet
 
 Disposable sandbox not possible
 
-**Auslöser.** The start asked for a disposable sandbox, and one of its conditions is missing: bubblewrap 0.11 or newer, a runtime directory on tmpfs, a writable view of the project folder, or no changes of an earlier disposable run still pending. On macOS the project must be clonable: an APFS volume shared with the runtime directory and every file readable.
+**Auslöser.** The start asked for a disposable sandbox, and one of its conditions is missing: bubblewrap 0.11 or newer, a runtime directory on tmpfs, a writable view of the project folder, or no changes of an earlier disposable run still pending. On macOS the project must be clonable: an APFS volume shared with the runtime directory and every file readable. A container-engine backend has no disposable sandbox at all: the engine resolves the project path itself, so its lower layer cannot be tied to the checked folder.
 
-**Fix.** `CopyCommand` with the install command for a newer bubblewrap, `ChangeSetting` on `sandbox.work_mode` = `rw`, `SetEnv` for `XDG_RUNTIME_DIR` = `/run/user/<uid>`, `CopyCommand` with `humanitl sandbox changes` for pending changes, or on macOS `ChangeSetting` on `sandbox.mode` = `direct`.
+**Fix.** `CopyCommand` with the install command for a newer bubblewrap, `ChangeSetting` on `sandbox.work_mode` = `rw`, `SetEnv` for `XDG_RUNTIME_DIR` = `/run/user/<uid>`, `CopyCommand` with `humanitl sandbox changes` for pending changes, on macOS `ChangeSetting` on `sandbox.mode` = `direct`, or under a container-engine backend `ChangeSetting` on `sandbox.backend` to a backend that has one.
 
 #### SANDBOX_031
 
@@ -618,9 +618,9 @@ Disposable layer full
 
 Disposable sandbox not available, running direct
 
-**Auslöser.** The default `sandbox.mode = "auto"` asks for a disposable sandbox where the system allows one, and this system does not: bubblewrap is older than 0.11, the runtime directory is not on tmpfs, the project folder is mounted read-only, or on macOS the project cannot be cloned. This run writes to the project folder directly.
+**Auslöser.** The default `sandbox.mode = "auto"` asks for a disposable sandbox where the system allows one, and this system does not: bubblewrap is older than 0.11, the runtime directory is not on tmpfs, the project folder is mounted read-only, on macOS the project cannot be cloned, or the backend is a container engine, which has no disposable sandbox. This run writes to the project folder directly.
 
-**Fix.** The fix of the cause (install command for a newer bubblewrap, `SetEnv` for `XDG_RUNTIME_DIR`, `ChangeSetting` on `sandbox.work_mode` = `rw`), or `sandbox.mode = "direct"` to choose direct mode and silence this notice.
+**Fix.** The fix of the cause (install command for a newer bubblewrap, `SetEnv` for `XDG_RUNTIME_DIR`, `ChangeSetting` on `sandbox.work_mode` = `rw`, `ChangeSetting` on `sandbox.backend` to a backend with a disposable sandbox under a container-engine backend), or `sandbox.mode = "direct"` to choose direct mode and silence this notice.
 
 #### SANDBOX_034
 
