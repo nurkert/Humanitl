@@ -702,6 +702,22 @@ SELinux would relabel the project
 
 **Fix.** `ChangeSetting` on `sandbox.backend` = `auto`.
 
+#### SANDBOX_042
+
+Mounted folder is not the checked one
+
+**Auslöser.** Inside the sandbox, the project folder, an entry of `mounts.ro`, `mounts.extra_ro`, `mounts.extra_rw` or the agent program has another device and inode than the one the launcher opened and checked. The folder was swapped between the check and the mount, for example renamed and replaced. The agent did not start; the sentence names the path, the expected and the found pair.
+
+**Fix.** `ChangeSetting` on `sandbox.work_dir`, the folder choice: check who replaced the named path since the plan, and start the session again once the folder is the one you chose. A folder that keeps changing (a mount point that is mounted while the session starts) cannot be a mount source.
+
+#### SANDBOX_049
+
+Mount table differs from the plan
+
+**Auslöser.** The shim compared the mounts inside the sandbox with the table the launcher planned, entry by entry with type, source, read-only and the flags `nosuid`, `nodev` and `noexec`, and found a difference: an extra mount (for example one that a configuration file of the container engine adds), a missing one, or a second mount stacked onto a planned one. The agent did not start; the sentence names the missing and the extra entries.
+
+**Fix.** When the extra entry comes from a configuration of the container engine (`mounts.conf`, `containers.conf`), remove it there; otherwise `ChangeSetting` on `sandbox.backend` = `auto` and report the sentence.
+
 ### Bereich proxy
 
 #### PROXY_001

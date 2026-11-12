@@ -53,6 +53,7 @@ const WAIT: Duration = Duration::from_secs(60);
 /// nicht den seccomp-Filter (das tun ESC-1 bis ESC-3 in der Sandbox).
 const PASSTHROUGH_SHIM: &str = "#!/bin/sh\n\
                                 if [ \"$1\" = \"--proxy-port\" ]; then shift 2; fi\n\
+                                if [ \"$1\" = \"--pins-fd\" ]; then shift 2; fi\n\
                                 if [ \"$1\" = \"--\" ]; then shift; fi\n\
                                 exec \"$@\"\n";
 

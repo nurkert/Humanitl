@@ -45,9 +45,16 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 
-/// The five checks the shim reports, in the order they are written.
+/// The checks the shim reports, in the order they are written: the two of
+/// the mount table first (HUM-437, Linux only), then the five of HUM-041.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Check {
+    /// `/proc/self/mountinfo` equals the expected table as a multiset
+    /// (before anything else, `mounts.rs`).
+    MountsMatch,
+    /// Every checked target has the device and inode the launcher saw
+    /// (before anything else, `mounts.rs`).
+    MountsPinned,
     /// The `in` bridges accept connections (parent, before the fork).
     BridgeListening,
     /// No network interface but `lo` exists (parent, before the fork).
@@ -68,6 +75,8 @@ impl Check {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
+            Self::MountsMatch => "mounts_match",
+            Self::MountsPinned => "mounts_pinned",
             Self::BridgeListening => "bridge_listening",
             Self::NoInterfaces => "no_interfaces",
             Self::SingleSocket => "single_socket",

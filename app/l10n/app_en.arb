@@ -4262,5 +4262,13 @@
   "diagDOCTOR014Title": "Probe start failed",
   "@diagDOCTOR014Title": {"description": "Title of the diagnostic DOCTOR_014 (docs/DIAGNOSTICS.md): the probe start of humanitl doctor --probe failed (HUM-436)."},
   "diagDOCTOR014Why": "humanitl doctor --probe started an empty sandbox under this backend, and either it did not start or one of its guarantees did not hold. A real session would be refused the same way.",
-  "@diagDOCTOR014Why": {"description": "Generic cause of DOCTOR_014. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
+  "@diagDOCTOR014Why": {"description": "Generic cause of DOCTOR_014. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "diagSANDBOX042Title": "Mounted folder is not the checked one",
+  "@diagSANDBOX042Title": {"description": "Title of the diagnostic SANDBOX_042 (docs/DIAGNOSTICS.md): inside the sandbox a mounted folder has another device and inode than the one the launcher checked (HUM-437)."},
+  "diagSANDBOX042Why": "A folder of the session was swapped between the check and the start, so the sandbox would have seen another folder than the one that was checked. The agent did not start.",
+  "@diagSANDBOX042Why": {"description": "Generic cause of SANDBOX_042. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "diagSANDBOX049Title": "Mount table differs from the plan",
+  "@diagSANDBOX049Title": {"description": "Title of the diagnostic SANDBOX_049 (docs/DIAGNOSTICS.md): the mounts inside the sandbox differ from the planned table, for example one added by a configuration of the container engine (HUM-437)."},
+  "diagSANDBOX049Why": "Something is mounted in the sandbox that the plan does not hold, or a planned mount is missing or different, for example a folder a configuration of the container engine adds. The agent did not start.",
+  "@diagSANDBOX049Why": {"description": "Generic cause of SANDBOX_049. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
 }

@@ -42,9 +42,12 @@ const FAKE_SHIM: &str = r#"#!/bin/bash
 # fake humanitl-shim for the launcher tests: report, then exec. No filter.
 if [ "$#" -eq 0 ]; then exit 125; fi
 if [ "$1" = "--proxy-port" ]; then shift 2; fi
+if [ "$1" = "--pins-fd" ]; then shift 2; fi
 if [ "$1" = "--" ]; then shift; fi
 if [ -n "${HUMANITL_REPORT_FD:-}" ]; then
   fd="$HUMANITL_REPORT_FD"
+  echo "CHECK mounts_match ok fake" >&"$fd"
+  echo "CHECK mounts_pinned ok fake" >&"$fd"
   echo "CHECK bridge_listening ok fake listener on ${HUMANITL_BRIDGES:-?}" >&"$fd"
   echo "CHECK single_socket ok sockets=/run/humanitl/proxy.sock;unexpected=none;entries=7;limit=none" >&"$fd"
   echo "CHECK seccomp_applied fail fake shim installs no filter" >&"$fd"
@@ -61,9 +64,12 @@ const SECOND_SOCKET_SHIM: &str = r#"#!/bin/bash
 # fake humanitl-shim: the bridge answers, but the walk found another socket.
 if [ "$#" -eq 0 ]; then exit 125; fi
 if [ "$1" = "--proxy-port" ]; then shift 2; fi
+if [ "$1" = "--pins-fd" ]; then shift 2; fi
 if [ "$1" = "--" ]; then shift; fi
 if [ -n "${HUMANITL_REPORT_FD:-}" ]; then
   fd="$HUMANITL_REPORT_FD"
+  echo "CHECK mounts_match ok fake" >&"$fd"
+  echo "CHECK mounts_pinned ok fake" >&"$fd"
   echo "CHECK bridge_listening ok fake listener" >&"$fd"
   echo "CHECK single_socket fail sockets=/run/humanitl/proxy.sock,/work/second.sock;unexpected=/work/second.sock;entries=7;limit=none" >&"$fd"
   echo "CHECK seccomp_applied ok Seccomp:2;NoNewPrivs:1" >&"$fd"
@@ -75,7 +81,7 @@ exec "$@"
 "#;
 
 /// Ein Shim-Ersatz, der nichts meldet.
-const SILENT_SHIM: &str = "#!/bin/sh\nif [ \"$1\" = \"--proxy-port\" ]; then shift 2; fi\nif [ \"$1\" = \"--\" ]; then shift; fi\nexec \"$@\"\n";
+const SILENT_SHIM: &str = "#!/bin/sh\nif [ \"$1\" = \"--proxy-port\" ]; then shift 2; fi\nif [ \"$1\" = \"--pins-fd\" ]; then shift 2; fi\nif [ \"$1\" = \"--\" ]; then shift; fi\nexec \"$@\"\n";
 
 struct Fixture {
     _dir: tempfile::TempDir,
@@ -416,13 +422,18 @@ fn plan_renders_the_shim_and_the_three_binds() {
         window_at(&args, &["--ro-bind", src, dst])
             .unwrap_or_else(|| panic!("--ro-bind {src} {dst} is missing: {args:?}"));
     }
+    // Die Tabelle der Einhängungen (HUM-437) als letzter Schalter des Shims;
+    // ihre Nummer ist der letzte geerbte Deskriptor.
+    let pins = plan.fds.last().expect("the pins descriptor").0.to_string();
     assert_eq!(
-        &args[args.len() - 8..],
+        &args[args.len() - 10..],
         [
             "--",
             "/run/humanitl/humanitl-shim",
             "--proxy-port",
             "3128",
+            "--pins-fd",
+            pins.as_str(),
             "--",
             "sh",
             "-c",
@@ -472,15 +483,17 @@ fn plan_renders_the_shim_and_the_three_binds() {
     assert_eq!(plan.program(), Path::new("/usr/bin/bwrap"));
 }
 
-/// Die Deskriptoren des Plans: Bericht, Status, die drei Identitätsdateien und
-/// ein memfd je Maske, die es im Projekt gibt (`.envrc` und `.git/config`).
+/// Die Deskriptoren des Plans: Bericht, Status, die drei Identitätsdateien,
+/// ein memfd je Maske, die es im Projekt gibt (`.envrc` und `.git/config`),
+/// der Projektordner und der memfd der Pins (HUM-437).
 ///
 /// Jede Nummer in der Argumentliste ist eine aus `fds`, jede aus `fds` steht
 /// in der Liste, und keine kommt doppelt vor: `--ro-bind-data` schließt seinen
 /// Deskriptor nach dem Lesen.
 fn assert_descriptors(plan: &LaunchPlan, args: &[String]) {
-    // Zwei Pipes, drei Identitätsdateien, zwei Masken, der Projektordner.
-    assert_eq!(plan.fds.len(), 2 + 3 + 2 + 1, "{:?}", plan.fds);
+    // Zwei Pipes, drei Identitätsdateien, zwei Masken, der Projektordner und
+    // der memfd mit Pins und Mounttabelle für den Shim (HUM-437).
+    assert_eq!(plan.fds.len(), 2 + 3 + 2 + 1 + 1, "{:?}", plan.fds);
     for (host, target) in &plan.fds {
         assert_eq!(host, target, "inherited under its own number");
     }
@@ -943,14 +956,52 @@ fn launch_no_interface_no_resolv_hostname() {
     );
 }
 
+/// Eine Quelle aus `mounts.ro`, die es nicht gibt, lehnt schon der Plan ab
+/// (`SANDBOX_006`): Ohne sie gäbe es weder Gerät noch Inode für die
+/// Mounttabelle (HUM-437).
+#[test]
+fn plan_refuses_a_missing_read_only_source() {
+    let fx = fixture();
+    let broken = probe("[mounts]\nro = [\"/nonexistent-humanitl-source\"]\n");
+    let err = fx
+        .unchecked()
+        .plan(&broken, &fx.context(&["true"]))
+        .expect_err("a missing source");
+    assert_eq!(err.code.as_str(), "SANDBOX_006", "{err}");
+    assert!(
+        err.why.contains("nonexistent-humanitl-source"),
+        "{}",
+        err.why
+    );
+}
+
+/// Setzt einen Bind einer Quelle, die es nicht gibt, in die fertige Zeile:
+/// `bwrap` endet dann, bevor es den Befehl startet. Der Plan selbst lehnt
+/// eine fehlende Quelle schon ab (`plan_refuses_a_missing_read_only_source`).
+fn with_missing_source(plan: &mut LaunchPlan) {
+    let at = plan
+        .argv
+        .iter()
+        .position(|arg| arg == "--clearenv")
+        .expect("--clearenv");
+    plan.argv.splice(
+        at..at,
+        [
+            OsString::from("--ro-bind"),
+            OsString::from("/nonexistent-humanitl-source"),
+            OsString::from("/nonexistent-humanitl-source"),
+        ],
+    );
+}
+
 #[test]
 fn launch_early_exit_is_a_diagnostic() {
     let fx = fixture();
     let Some(backend) = fx.real() else { return };
-    let broken = probe("[mounts]\nro = [\"/nonexistent-humanitl-source\"]\n");
-    let plan = backend
-        .plan(&broken, &fx.context(&["true"]))
-        .expect("the policy has nothing against a missing directory");
+    let mut plan = backend
+        .plan(&profile("default"), &fx.context(&["true"]))
+        .expect("the plan builds");
+    with_missing_source(&mut plan);
     // Innerhalb des Fensters meldet `launch` den Befund, auf einer langsamen
     // Maschine erst `wait`; beide sagen dasselbe.
     let err = match backend.launch(&plan) {
@@ -1066,7 +1117,8 @@ fn isolation_check_reads_the_report() {
 
     let report = handle.report();
     assert!(report.is_complete());
-    assert_eq!(report.checks.len(), 5);
+    // Die fünf Zeilen und die zwei der Mounttabelle (HUM-437).
+    assert_eq!(report.checks.len(), 7);
 
     let listing = text(&output.stdout);
     let fds: Vec<&str> = listing.lines().collect();

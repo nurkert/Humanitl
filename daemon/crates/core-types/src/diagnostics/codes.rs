@@ -1753,6 +1753,19 @@ registry! {
     DOCTOR_014 => "doctor", "Probe start of the sandbox backend failed", "#doctor_014",
         "`humanitl doctor --probe` started an empty sandbox with the shim and `true` under an admitted backend, and either the start failed or one of the three guarantees from the shim's five `CHECK` lines did not hold. A real session under this backend would be refused the same way.",
         "The fix of the inner finding when it has one (an install command, a setting); otherwise `OpenUrl` on this page.";
+    // HUM-437: the mount table and the checked folders, under every backend.
+    /// A mounted folder is not the one the launcher checked: inside the
+    /// sandbox its device and inode differ from the pair the launcher saw
+    /// when it opened the source (HUM-437). The shim refuses the start.
+    SANDBOX_042 => "sandbox", "Mounted folder is not the checked one", "#sandbox_042",
+        "Inside the sandbox, the project folder, an entry of `mounts.ro`, `mounts.extra_ro`, `mounts.extra_rw` or the agent program has another device and inode than the one the launcher opened and checked. The folder was swapped between the check and the mount, for example renamed and replaced. The agent did not start; the sentence names the path, the expected and the found pair.",
+        "`ChangeSetting` on `sandbox.work_dir`, the folder choice: check who replaced the named path since the plan, and start the session again once the folder is the one you chose. A folder that keeps changing (a mount point that is mounted while the session starts) cannot be a mount source.";
+    /// The mount table inside the sandbox differs from the plan: a mount is
+    /// missing, extra, stacked onto a planned one, or of another type,
+    /// source or option (HUM-437). The shim refuses the start.
+    SANDBOX_049 => "sandbox", "Mount table differs from the plan", "#sandbox_049",
+        "The shim compared the mounts inside the sandbox with the table the launcher planned, entry by entry with type, source, read-only and the flags `nosuid`, `nodev` and `noexec`, and found a difference: an extra mount (for example one that a configuration file of the container engine adds), a missing one, or a second mount stacked onto a planned one. The agent did not start; the sentence names the missing and the extra entries.",
+        "When the extra entry comes from a configuration of the container engine (`mounts.conf`, `containers.conf`), remove it there; otherwise `ChangeSetting` on `sandbox.backend` = `auto` and report the sentence.";
 }
 
 /// Sucht einen Code im Register.

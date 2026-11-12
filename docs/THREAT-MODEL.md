@@ -101,11 +101,11 @@ without a mechanism yet).
 
 | ID | Channel | Attackers | Severity | Mitigation in 0.1 | Status | Test |
 |---|---|---|---|---|---|---|
-| K-01 | project directory `/work` | a, b, c | high | only a subpath; hooks, CI and editor directories and secret files masked; session summary with touched files, outward symlinks and a secret scan | declared | ESC-5 |
+| K-01 | project directory `/work` | a, b, c | high | only a subpath; hooks, CI and editor directories and secret files masked; session summary with touched files, outward symlinks and a secret scan; the mounted folder is the checked one (bound by descriptor under bubblewrap, device and inode checked by the shim under every backend, `SANDBOX_042`) | declared | ESC-5, ESC-2 (`swapped_folder`) |
 | K-02 | LLM passthrough | a, b, c | high | exact rule on host, port, scheme, methods and exact inference endpoints; full recording; findings warn | declared | - |
 | K-03 | socket directory of the proxy | b | medium | the socket **file** is bound, never its directory | mitigated | ESC-2 |
 | K-04 | TCP sockets allowed by seccomp | b | low | empty network namespace and routing table; parent filtered and not dumpable | mitigated | ESC-1 |
-| K-05 | host Unix sockets (X11, Wayland, D-Bus, Docker) | b | critical | mount allowlist, denylist in the argument builder (`SANDBOX_006`), `AF_UNIX` refused | mitigated | ESC-2 |
+| K-05 | host Unix sockets (X11, Wayland, D-Bus, Docker) | b | critical | mount allowlist, denylist in the argument builder (`SANDBOX_006`), the mount table inside equals the plan (`SANDBOX_049`), `AF_UNIX` refused | mitigated | ESC-2 |
 | K-06 | PID and IPC namespace | b | high | own PID, IPC and UTS namespaces, own `/proc`, `--new-session`, shim as non-dumpable PID 1 | mitigated | ESC-1, ESC-2 |
 | K-07 | `/proc` and `/sys` | b | low | the namespace's own `procfs`, `/sys` not bound | mitigated | ESC-2 |
 | K-08 | symlinks out of `/work` | b | medium | resolved inside the mount namespace; marked in the session summary (`SANDBOX_022`) | mitigated | ESC-5 |
@@ -143,7 +143,12 @@ repository the next time the human pushes. Only a subpath is bound, never `$HOME
 next commit. The project directory and `mounts.extra_ro`/`mounts.extra_rw` are opened once as
 descriptors, checked at the location `/proc/self/fd/N` names and bound by descriptor (HUM-263), so
 swapping a directory for a symlink between check and mount no longer works; the descriptor never
-reaches the agent. *Residual risk:* the agent can rearrange, disguise or plant data in the project
+reaches the agent. Under Podman, which takes no descriptor as a mount source, such a swap does
+reach the container: before the agent exists the shim compares device and inode of `/work`, of
+every entry of `mounts.ro`, `mounts.extra_ro` and `mounts.extra_rw` and of the agent program with
+the pair the launcher saw when it opened the source, under every backend, and refuses the start
+with `SANDBOX_042` (HUM-437). Under Podman the swap is therefore detected and refused, under
+bubblewrap it is prevented. *Residual risk:* the agent can rearrange, disguise or plant data in the project
 that a human later carries out; Humanitl sees that only if the human reads the diff.
 
 ### K-02 The LLM passthrough
@@ -220,9 +225,12 @@ the same, D-Bus starts host processes, `/var/run/docker.sock` is root on the hos
 allowlist; the full command line of the sandbox (bwrap on Linux, `sandbox-exec` with its Seatbelt
 profile on macOS) is visible in `humanitl sandbox argv`; the argument builder refuses
 `$XDG_RUNTIME_DIR`, `/tmp`, `/run`, `/home`, `~/.ssh`, `~/.gitconfig`, `~/.netrc` and these sockets
-(`SANDBOX_006`); the isolation check looks for unexpected sockets in the running sandbox; and after
-the filter `AF_UNIX` is refused anyway. *Residual risk:* a user writing their own profile that adds
-a file mount (not a socket) such as `~/.ssh` read-only; the check does not see file mounts.
+(`SANDBOX_006`); the isolation check looks for unexpected sockets in the running sandbox; before
+the agent starts the shim compares the mount table inside with the one the plan expects, entry by
+entry, so a mount the plan does not hold (with or without a socket in it) refuses the start with
+`SANDBOX_049` (HUM-437); and after the filter `AF_UNIX` is refused anyway. *Residual risk:* a user
+writing their own profile that adds a file mount (not a socket) such as `~/.ssh` read-only; that
+mount is in the plan, and neither check refuses it.
 
 ### K-06 PID and IPC namespace
 
@@ -577,15 +585,24 @@ container storage under `~/.local/share/containers` and the configuration Podman
 (attacker b) that found a weakness in any of them would leave the sandbox as it would through a
 weakness of bubblewrap; a process of the same user (attacker d) could change the user's own
 `containers.conf`, `mounts.conf` or hooks to add a mount, a device, a network or a hook to every
-container. The binding: the daemon starts Podman with its own `containers.conf`,
+container. The configuration sources of Podman are `containers.conf` in every layer
+(`/usr/share/containers`, `/etc/containers`, `~/.config/containers`, `CONTAINERS_CONF_OVERRIDE`),
+`mounts.conf` in the same three places and through `--default-mounts-file`, the OCI hook
+directories, `storage.conf`, `registries.conf`, `policy.json` and the remote connections
+(`CONTAINER_HOST`, `CONTAINER_CONNECTION`). The binding: the daemon starts Podman with its own `containers.conf`,
 `storage.conf` and `registries.conf` and an empty hook directory, and with an empty environment
 except `HOME`, the user's `XDG_RUNTIME_DIR`, `PATH`, the user's session bus and those three paths; the line carries every flag that
 the three guarantees rest on, with no key to change it; the agent's environment goes only through
 the sealed memfd and never into the stored container configuration; the container ends through the
-engine by name and, when the daemon dies, through the lifeline. *Residual risk:* the plain level
-shares the host kernel as bubblewrap does; mounts go by path, so a swapped path is detected only
-by the shim's check after the mount (HUM-437); Podman reads `/etc/containers/policy.json` and the
-storage it shares with the user. Until HUM-448 admits the level, no person can start it. Checked by ESC-1 and ESC-2 in the CI job `escape-tests-podman` (HUM-435): the
+engine by name and, when the daemon dies, through the lifeline; whatever a configuration source
+still adds, the shim finds in the mount table before the agent starts and refuses with
+`SANDBOX_049`, whether it carries a socket or not (HUM-437). *Residual risk:* the plain level
+shares the host kernel as bubblewrap does; mounts go by path, so a swapped path is detected and
+refused by the shim's check of device and inode after the mount (`SANDBOX_042`, HUM-437), not
+prevented; the engine's own files `/run/.containerenv` and `/etc/hostname` are matched by mount
+point, type, mode and flags, not by their backing file (the masks under `/proc` and the device
+nodes are pinned to the host's `/dev/null` and devices by device and inode); Podman
+reads `/etc/containers/policy.json` and the storage it shares with the user. Until HUM-448 admits the level, no person can start it. Checked by ESC-1 and ESC-2 in the CI job `escape-tests-podman` (HUM-435): the
 same probes as under bubblewrap, plus an empty `/run/.containerenv`, no socket of `conmon` or the
 engine, the shim as PID 1 with the filter, and a `mounts.conf` entry, a volume and a hook planted
 in the runner's own engine configuration that reach a plain container and not the sandbox.
@@ -683,6 +700,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-12 | K-06: the shim's lifeline (`--lifeline-fd`) as the counterpart of `--die-with-parent` for a backend that detaches the sandbox from the daemon; the agent's environment through a sealed memfd (`--env-fd`) instead of `argv`; the agent inherits neither; K-15 unchanged | HUM-430 |
 | 2026-11-12 | K-27 added: the container engine under the Podman backend, plain level, not admitted until HUM-448 | HUM-433 |
 | 2026-11-12 | K-27: ESC-1 and ESC-2 run against Podman in the CI job `escape-tests-podman`, with a planted hostile engine configuration of the user (`mounts.conf`, volume, hook) that must not reach the sandbox | HUM-435 |
+| 2026-11-12 | K-01, K-05, K-27: the shim compares the mount table with the plan and the device and inode of every checked folder before the agent starts, under every backend (`SANDBOX_049`, `SANDBOX_042`); under Podman a swapped folder is detected and refused instead of prevented; K-27 names the configuration sources of Podman | HUM-437 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

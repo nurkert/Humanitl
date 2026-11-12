@@ -104,6 +104,20 @@ impl fmt::Display for Error {
 ///
 /// Every variant of [`Error`].
 pub fn read(fd: RawFd, reserved: &[&str]) -> Result<Vec<(String, String)>, Error> {
+    let bytes = read_sealed(fd)?;
+    let text = String::from_utf8(bytes).map_err(|_| Error::NotUtf8)?;
+    parse(&text, reserved)
+}
+
+/// Takes the descriptor, reads the sealed memfd behind it from offset 0 and
+/// closes it, on every path. Shared with `--pins-fd` (HUM-437), which hands
+/// over its own JSON the same way.
+///
+/// # Errors
+///
+/// [`Error::NotOpen`], [`Error::NotSealed`], [`Error::TooLarge`],
+/// [`Error::Read`].
+pub fn read_sealed(fd: RawFd) -> Result<Vec<u8>, Error> {
     // SAFETY: F_GETFD only asks whether the number is an open descriptor.
     if fd < 3 || unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
         return Err(Error::NotOpen(fd));
@@ -111,10 +125,7 @@ pub fn read(fd: RawFd, reserved: &[&str]) -> Result<Vec<(String, String)>, Error
     // SAFETY: the launcher handed this descriptor to the shim alone, it is
     // open (above), and nothing else in this process owns it.
     let file = File::from(unsafe { OwnedFd::from_raw_fd(fd) });
-    let bytes = sealed_content(&file)?;
-    drop(file);
-    let text = String::from_utf8(bytes).map_err(|_| Error::NotUtf8)?;
-    parse(&text, reserved)
+    sealed_content(&file)
 }
 
 /// The content of a memfd sealed against writing, shrinking and growing, at most [`MAX_BYTES`].

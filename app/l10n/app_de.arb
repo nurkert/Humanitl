@@ -1824,5 +1824,9 @@
   "doctorBackendCheckSelinux": "SELinux",
   "doctorBackendCheckProbe": "Probestart",
   "diagDOCTOR014Title": "Probestart gescheitert",
-  "diagDOCTOR014Why": "humanitl doctor --probe hat unter diesem Backend eine leere Sandbox gestartet, und entweder startete sie nicht oder eine ihrer Garantien galt nicht. Eine echte Sitzung käme unter diesem Backend genauso wenig zustande."
+  "diagDOCTOR014Why": "humanitl doctor --probe hat unter diesem Backend eine leere Sandbox gestartet, und entweder startete sie nicht oder eine ihrer Garantien galt nicht. Eine echte Sitzung käme unter diesem Backend genauso wenig zustande.",
+  "diagSANDBOX042Title": "Eingehängter Ordner ist nicht der geprüfte",
+  "diagSANDBOX042Why": "Ein Ordner der Sitzung wurde zwischen Prüfung und Start getauscht; die Sandbox hätte einen anderen Ordner gesehen als den geprüften. Der Agent ist nicht gestartet.",
+  "diagSANDBOX049Title": "Mounttabelle weicht vom Plan ab",
+  "diagSANDBOX049Why": "In der Sandbox ist etwas eingehängt, das nicht im Plan steht, oder eine geplante Einhängung fehlt oder weicht ab, etwa ein Ordner, den eine Konfiguration der Container-Engine hinzufügt. Der Agent ist nicht gestartet."
 }

@@ -24,7 +24,8 @@
 //! # Einhängen über Pfade
 //!
 //! Podman nimmt keinen Deskriptor als Quelle (HUM-292 P13: `crun: mount
-//! /proc/self/fd/3 to work: Invalid argument`). Der Plan öffnet und prüft
+//! /proc/self/fd/3 to work: Invalid argument`; mit der Zeile des Adapters
+//! nachgemessen in HUM-437: kein Container, kein Bericht des Shims). Der Plan öffnet und prüft
 //! jede Quelle trotzdem einmal (HUM-263) und hängt den Ort ein, an dem das
 //! Geöffnete liegt; dass danach dort noch derselbe Ordner liegt, prüft der
 //! Shim nach dem Einhängen über Gerät und Inode (HUM-437). Masken,
@@ -114,6 +115,9 @@ pub(crate) struct Fds {
     pub(crate) lifeline: RawFd,
     /// Der memfd mit der Umgebung des Agenten.
     pub(crate) env: RawFd,
+    /// Der memfd mit der erwarteten Mounttabelle und den geprüften Ordnern
+    /// (HUM-437).
+    pub(crate) pins: RawFd,
     /// Die Seite des Shims an der Tür zu weiteren Shells, nur am eigenen
     /// Pseudoterminal.
     pub(crate) control: Option<RawFd>,
@@ -130,14 +134,16 @@ impl Fds {
                 report: 3,
                 lifeline: 4,
                 env: 5,
-                control: Some(6),
-                stdio: Some(7),
+                pins: 6,
+                control: Some(7),
+                stdio: Some(8),
             }
         } else {
             Self {
                 report: 3,
                 lifeline: 4,
                 env: 5,
+                pins: 6,
                 control: None,
                 stdio: None,
             }
@@ -152,7 +158,7 @@ impl Fds {
     /// Wie viele davon der Plan selbst trägt; die Untertanenseite legt erst
     /// der Start dazu.
     pub(crate) fn planned(&self) -> usize {
-        3 + usize::from(self.control.is_some())
+        4 + usize::from(self.control.is_some())
     }
 }
 
@@ -673,6 +679,8 @@ pub(crate) fn line(
     push(spec.fds.lifeline.to_string());
     push(crate::bridge_env::SHIM_ENV_FD.to_owned());
     push(spec.fds.env.to_string());
+    push(crate::bridge_env::SHIM_PINS_FD.to_owned());
+    push(spec.fds.pins.to_string());
     if let Some(stdio) = spec.fds.stdio {
         push(crate::bridge_env::SHIM_STDIO_FD.to_owned());
         push(stdio.to_string());
@@ -1009,12 +1017,12 @@ mod tests {
     }
 
     /// Die Zeile nennt die Deskriptoren, die der Start fortlaufend ab 3
-    /// vergibt: am eigenen Pseudoterminal fünf, sonst drei.
+    /// vergibt: am eigenen Pseudoterminal sechs, sonst vier.
     #[test]
     fn the_descriptors_are_named_in_the_order_they_are_handed_over() {
         for (stdio, count) in [
-            (StdioMode::Capture, 3),
-            (StdioMode::Pty { cols: 80, rows: 24 }, 5),
+            (StdioMode::Capture, 4),
+            (StdioMode::Pty { cols: 80, rows: 24 }, 6),
         ] {
             let profile = profile();
             let session = session();
@@ -1036,10 +1044,13 @@ mod tests {
                 .position(|arg| arg == "/run/humanitl/humanitl-shim")
                 .expect("the shim");
             let tail = argv[shim..].join(" ");
-            assert!(tail.contains("--lifeline-fd 4 --env-fd 5"), "{tail}");
+            assert!(
+                tail.contains("--lifeline-fd 4 --env-fd 5 --pins-fd 6"),
+                "{tail}"
+            );
             assert_eq!(
-                tail.contains("--stdio-fd 7 --controlling-terminal --control-fd 6"),
-                count == 5,
+                tail.contains("--stdio-fd 8 --controlling-terminal --control-fd 7"),
+                count == 6,
                 "{tail}"
             );
             assert!(tail.ends_with("-- true"), "{tail}");

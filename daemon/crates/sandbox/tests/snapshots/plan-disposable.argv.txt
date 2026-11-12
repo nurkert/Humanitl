@@ -197,6 +197,8 @@ no_proxy
 --controlling-terminal
 --control-fd
 $FD8
+--pins-fd
+$FD9
 --
 sh
 -c

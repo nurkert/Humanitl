@@ -324,9 +324,10 @@ mod planned {
             .collect()
     }
 
-    /// Der Plan nennt die Deskriptoren fortlaufend ab 3, trägt keinen Wert
-    /// der Umgebung in der Zeile, gibt Podman nur die Pfade seiner
-    /// Konfiguration mit und beendet über die Engine.
+    /// Der Plan nennt die Deskriptoren fortlaufend ab 3 (Bericht,
+    /// Lebensleine, Umgebung, Mounttabelle), trägt keinen Wert der Umgebung
+    /// in der Zeile, gibt Podman nur die Pfade seiner Konfiguration mit und
+    /// beendet über die Engine.
     #[test]
     fn the_plan_hands_over_three_descriptors_and_no_environment_value() {
         let fx = Fixture::new(None);
@@ -355,7 +356,7 @@ mod planned {
                 .iter()
                 .map(|(_, target)| *target)
                 .collect::<Vec<_>>(),
-            [3, 4, 5]
+            [3, 4, 5, 6]
         );
         assert!(plan.renumbered);
         assert_eq!(plan.env_delivery, EnvDelivery::InheritedFd(5));
@@ -388,6 +389,7 @@ mod planned {
             .find(|(_, target)| *target == 3)
             .map(|(host, _)| *host)
             .expect("target 3");
+        assert_pins_at_six(&fx.work, &plan);
         let once = plan.take_once().expect("fresh plan");
         let inode = |path: String| {
             use std::os::unix::fs::MetadataExt as _;
@@ -439,6 +441,43 @@ mod planned {
         );
     }
 
+    /// Unter 6 die Mounttabelle (HUM-437): `/work` mit Gerät und Inode des
+    /// geprüften Ordners, die Wurzel der Sitzung, die eigenen Einträge von
+    /// Podman.
+    fn assert_pins_at_six(work: &Path, plan: &LaunchPlan) {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let pins_host = plan
+            .fds
+            .iter()
+            .find(|(_, target)| *target == 6)
+            .map(|(host, _)| *host)
+            .expect("target 6");
+        let pins: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(format!("/proc/self/fd/{pins_host}")).expect("pins"),
+        )
+        .expect("pins JSON");
+        let meta = std::fs::metadata(work).unwrap();
+        let (dev, ino) = (meta.dev().to_string(), meta.ino().to_string());
+        assert!(
+            pins["pins"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|pin| pin["path"] == "/work" && pin["dev"] == dev && pin["ino"] == ino),
+            "{pins}"
+        );
+        let points: Vec<&str> = pins["mounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry["point"].as_str())
+            .collect();
+        for point in ["/", "/work", "/proc", "/run/.containerenv", "/sys"] {
+            assert!(points.contains(&point), "{point} missing: {points:?}");
+        }
+    }
+
     /// Die Vorschau ist die Zeile des Plans bis auf die Lage der Quellen
     /// (geschrieben statt aufgelöst) und die Masken auf fehlenden Pfaden.
     #[test]
@@ -485,7 +524,7 @@ mod planned {
             .collect();
         assert_eq!(shown, planned);
         assert!(
-            planned.contains(&"--preserve-fds=5".to_owned()),
+            planned.contains(&"--preserve-fds=6".to_owned()),
             "{planned:?}"
         );
     }
@@ -552,7 +591,7 @@ mod live {
     use super::planned::{Fixture, profile};
     use super::*;
     use crate::handle::{KILL_GRACE, OutputChunk};
-    use crate::launcher::{LaunchOptions, StdioMode};
+    use crate::launcher::{CheckResult, LaunchOptions, LaunchPlan, StdioMode};
 
     /// Setzt der Test, der den Daemon spielt, für sein Kind.
     const STAND_IN_ENV: &str = "HUMANITL_TEST_HUM433_STAND_IN";
@@ -1048,6 +1087,289 @@ mod live {
                     return String::from_utf8_lossy(seen).contains(needle);
                 }
             }
+        }
+    }
+
+    // --- HUM-437: Mounttabelle und geprüfte Ordner --------------------------
+
+    /// Plant, ändert die Zeile mit `edit`, startet und prüft; liefert die
+    /// Ergebnisse, die Fehlerausgabe (dort druckt der Shim bei einer
+    /// Abweichung beide Tabellen) und ob der Agent lief.
+    fn launch_edited(
+        fx: &Fixture,
+        backend: &PodmanBackend,
+        edit: impl FnOnce(&mut LaunchPlan),
+    ) -> (Vec<CheckResult>, String, bool) {
+        let profile = profile();
+        let options = LaunchOptions {
+            stdio: StdioMode::Capture,
+            ..LaunchOptions::default()
+        };
+        let session = fx.context(&["sh", "-c", "echo AGENT-RAN"]);
+        let mut plan = backend
+            .plan(&PlanRequest::new(&profile, &session, &options))
+            .unwrap_or_else(|d| panic!("{}: {}", d.code, d.why));
+        edit(&mut plan);
+        let handle = match backend.launch(&plan) {
+            Ok(handle) => handle,
+            Err(d) => return (Vec::new(), format!("{}: {}", d.code, d.why), false),
+        };
+        let checks = backend.isolation_check(&handle);
+        let _ = handle.wait_timeout(Duration::from_secs(30));
+        let _ = handle.kill();
+        let output = handle.output().unwrap_or_default();
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        (checks, stderr, stdout.contains("AGENT-RAN"))
+    }
+
+    /// Der Code der zweiten Garantie, wenn sie rot ist.
+    fn door_code(checks: &[CheckResult]) -> Option<String> {
+        checks
+            .iter()
+            .find(|check| check.check == crate::launcher::IsolationCheck::SingleSocket)
+            .and_then(|check| check.diagnostic.as_ref())
+            .map(|diagnostic| diagnostic.code.as_str().to_owned())
+    }
+
+    /// Fügt `--mount` vor `--rootfs` ein: eine Einhängung in der Zeile, die
+    /// die erwartete Tabelle nicht kennt.
+    fn add_mount(plan: &mut LaunchPlan, mount: &str) {
+        let at = plan
+            .argv
+            .iter()
+            .position(|arg| arg == "--rootfs")
+            .expect("--rootfs");
+        plan.argv.insert(at, format!("--mount={mount}").into());
+    }
+
+    /// Ohne Eingriff stimmt die Tabelle und jeder geprüfte Ordner (P17).
+    /// Weicht die gemessene Liste in `mounts.rs` von dem ab, was Podman
+    /// tatsächlich einhängt, druckt dieser Test `/proc/self/mountinfo` aus
+    /// dem Container und die erwartete Multimenge; daraus lässt sich
+    /// [`super::mounts`] in einem Lauf richtigstellen.
+    #[test]
+    fn the_mount_table_of_a_plain_session_matches_the_plan() {
+        if !podman_here("the_mount_table_of_a_plain_session_matches_the_plan") {
+            return;
+        }
+        let fx = Fixture::new(Some(real_shim()));
+        let backend = real(&fx.paths);
+        let (checks, stderr, ran) = launch_edited(&fx, &backend, |_| {});
+        assert!(
+            checks.iter().all(|check| check.passed),
+            "{checks:#?}\n--- shim stderr (mountinfo and expected table) ---\n{stderr}"
+        );
+        assert!(ran, "{stderr}");
+    }
+
+    /// Der Ordner wird nach `plan` und vor `launch` umbenannt und durch einen
+    /// anderen mit denselben Masken ersetzt: Podman hängt den Pfad ein, also
+    /// den falschen Ordner, und der Shim lehnt mit `SANDBOX_042` ab. Der Agent
+    /// läuft nicht (Akzeptanzkriterium 1).
+    #[test]
+    fn a_swapped_project_folder_is_refused_with_sandbox_042() {
+        if !podman_here("a_swapped_project_folder_is_refused_with_sandbox_042") {
+            return;
+        }
+        let fx = Fixture::new(Some(real_shim()));
+        let backend = real(&fx.paths);
+        let moved = fx.work.with_extension("checked");
+        let (checks, stderr, ran) = launch_edited(&fx, &backend, |_| {
+            std::fs::rename(&fx.work, &moved).expect("rename");
+            // Dieselben Pfade wie im geprüften Ordner, damit keine Maske
+            // einen Mountpunkt im untergeschobenen anlegen muss.
+            std::fs::create_dir_all(fx.work.join(".git/hooks")).expect("hooks");
+            std::fs::write(fx.work.join(".envrc"), "swapped\n").expect("envrc");
+        });
+        assert!(!ran, "the agent started in the swapped folder: {stderr}");
+        assert_eq!(
+            door_code(&checks).as_deref(),
+            Some("SANDBOX_042"),
+            "{checks:#?}\n{stderr}"
+        );
+        let door = checks
+            .iter()
+            .find(|check| check.check == crate::launcher::IsolationCheck::SingleSocket)
+            .expect("door");
+        assert!(door.evidence.contains("path=/work"), "{door:?}");
+    }
+
+    /// Eine Einhängung, die nicht im Plan steht, wird mit `SANDBOX_049`
+    /// abgelehnt: ein tmpfs auf einem neuen Punkt (`/etc`, den die leere
+    /// Wurzel schon hat). Gestapelte Ziele (ein zweiter Bind auf die CA, ein
+    /// tmpfs über `/work`, ein Bind über die Tür) lehnt Podman schon selbst
+    /// als doppeltes Ziel ab; dann startet der Agent ebenso nicht, und
+    /// meldet der Shim, dann mit `SANDBOX_049`.
+    #[test]
+    fn an_unplanned_mount_is_refused_with_sandbox_049() {
+        if !podman_here("an_unplanned_mount_is_refused_with_sandbox_049") {
+            return;
+        }
+        let fx = Fixture::new(Some(real_shim()));
+        let backend = real(&fx.paths);
+        let (checks, stderr, ran) = launch_edited(&fx, &backend, |plan| {
+            add_mount(plan, "type=tmpfs,destination=/etc");
+        });
+        assert!(!ran, "{stderr}");
+        assert_eq!(
+            door_code(&checks).as_deref(),
+            Some("SANDBOX_049"),
+            "{checks:#?}\n{stderr}"
+        );
+        let ca = fx.dir.path().join("ca.crt");
+        for stacked in [
+            format!(
+                "type=bind,source={},destination=/etc/humanitl/ca.crt,readonly=true",
+                ca.display()
+            ),
+            "type=tmpfs,destination=/work".to_owned(),
+            format!(
+                "type=bind,source={},destination={},readonly=true",
+                ca.display(),
+                crate::PROXY_SOCKET_DST
+            ),
+        ] {
+            let (checks, stderr, ran) =
+                launch_edited(&fx, &backend, |plan| add_mount(plan, &stacked));
+            assert!(!ran, "{stacked}: {stderr}");
+            // Podman 5.8.6 lehnt ein doppeltes Ziel selbst ab ("duplicate
+            // mount destination", gemessen 2026-11-12), bevor der Shim
+            // startet; dann meldet er nichts (`SANDBOX_013`). Kommt der Shim
+            // doch zum Zug, lehnt er mit `SANDBOX_049` ab.
+            let by_engine = stderr.contains("duplicate mount destination");
+            let code = door_code(&checks);
+            assert!(
+                by_engine || code.as_deref() == Some("SANDBOX_049"),
+                "{stacked}: neither refused by the engine nor by the shim: {checks:#?}\n{stderr}"
+            );
+            eprintln!(
+                "HUM-437 stacked {stacked}: {}",
+                if by_engine {
+                    "refused by the engine as a duplicate destination"
+                } else {
+                    "refused by the shim with SANDBOX_049"
+                }
+            );
+        }
+    }
+
+    /// Ohne `--read-only-tmpfs=false` legt Podman tmpfs auf `/run`, `/tmp`
+    /// und `/var/tmp`; die Tabelle kennt sie nicht, `SANDBOX_049`.
+    #[test]
+    fn without_read_only_tmpfs_false_the_extra_tmpfs_are_refused() {
+        if !podman_here("without_read_only_tmpfs_false_the_extra_tmpfs_are_refused") {
+            return;
+        }
+        let fx = Fixture::new(Some(real_shim()));
+        let backend = real(&fx.paths);
+        let (checks, stderr, ran) = launch_edited(&fx, &backend, |plan| {
+            plan.argv.retain(|arg| arg != "--read-only-tmpfs=false");
+        });
+        assert!(!ran, "{stderr}");
+        assert_eq!(
+            door_code(&checks).as_deref(),
+            Some("SANDBOX_049"),
+            "{checks:#?}\n{stderr}"
+        );
+    }
+
+    /// Eine `mounts.conf` des Nutzers, an der leeren Datei des Daemons
+    /// vorbei erzwungen (`--default-mounts-file` zeigt auf sie): Ihr Eintrag
+    /// erscheint im Container und wird mit `SANDBOX_049` abgelehnt, auch
+    /// wenn er keinen Socket trägt.
+    #[test]
+    fn a_users_mounts_conf_forced_past_the_daemons_file_is_refused() {
+        if !podman_here("a_users_mounts_conf_forced_past_the_daemons_file_is_refused") {
+            return;
+        }
+        let fx = Fixture::new(Some(real_shim()));
+        let backend = real(&fx.paths);
+        let secret = fx.dir.path().join("secret");
+        std::fs::create_dir_all(&secret).unwrap();
+        std::fs::write(secret.join("probe"), "s3cr3t").unwrap();
+        let mounts_conf = fx.dir.path().join("users-mounts.conf");
+        std::fs::write(&mounts_conf, format!("{}:/run/secrets\n", secret.display())).unwrap();
+        let (checks, stderr, ran) = launch_edited(&fx, &backend, |plan| {
+            let flag = plan
+                .argv
+                .iter_mut()
+                .find(|arg| arg.to_string_lossy().starts_with("--default-mounts-file="))
+                .expect("--default-mounts-file");
+            *flag = format!("--default-mounts-file={}", mounts_conf.display()).into();
+        });
+        assert!(!ran, "{stderr}");
+        assert_eq!(
+            door_code(&checks).as_deref(),
+            Some("SANDBOX_049"),
+            "{checks:#?}\n{stderr}"
+        );
+        assert!(stderr.contains("/run/secrets"), "{stderr}");
+    }
+
+    /// Messung P13 (HUM-292): Hängt Podman `/proc/self/fd/N` als den
+    /// geöffneten Ordner ein? Der Plan gibt den geöffneten Projektordner
+    /// zusätzlich als Deskriptor mit und nennt ihn als Quelle von `/work`;
+    /// danach wird der Ordner getauscht. Gemessen 2026-11-12 unter 5.8.6:
+    /// `crun: mount /proc/self/fd/3 to work: Invalid argument`, und mit
+    /// diesem Test (HUM-437) `P13: started=true door=Some("SANDBOX_013")
+    /// agent_ran=false`: Der Container entsteht nicht, der Shim meldet
+    /// nichts, der Agent läuft nie. Kein brauchbarer Weg; es bleibt der
+    /// Vergleich. Der Test
+    /// druckt das Ergebnis (`P13: ...`) und verlangt nur, dass der Agent nie
+    /// im getauschten Ordner läuft. Von Hand:
+    ///
+    /// ```text
+    /// cargo test -p humanitl-sandbox --lib p13_ -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "a measurement (HUM-292 P13), run by hand"]
+    fn p13_a_descriptor_as_the_mount_source() {
+        if !podman_here("p13_a_descriptor_as_the_mount_source") {
+            return;
+        }
+        let fx = Fixture::new(Some(real_shim()));
+        let backend = real(&fx.paths);
+        let moved = fx.work.with_extension("checked");
+        let (checks, stderr, ran) = launch_edited(&fx, &backend, |plan| {
+            let opened = std::fs::File::open(&fx.work).expect("open the folder");
+            let next = 3 + i32::try_from(plan.fds.len()).expect("few descriptors");
+            let work = fx.work.canonicalize().expect("resolved");
+            for arg in &mut plan.argv {
+                let text = arg.to_string_lossy().into_owned();
+                if text.ends_with(",destination=/work") || text.contains(",destination=/work,") {
+                    *arg = text
+                        .replace(
+                            &format!("source={},", work.display()),
+                            &format!("source=/proc/self/fd/{next},"),
+                        )
+                        .into();
+                }
+                if text.starts_with("--preserve-fds=") {
+                    *arg = format!("--preserve-fds={}", plan.fds.len() + 1).into();
+                }
+            }
+            let fd = std::os::fd::OwnedFd::from(opened);
+            plan.fds.push((std::os::fd::AsRawFd::as_raw_fd(&fd), next));
+            if let Some(once) = plan.once.lock().expect("once").as_mut() {
+                // Vor der Untertanenseite, die der Start als letzte anhängt;
+                // ohne Pseudoterminal gibt es keine.
+                once.inherit.push(fd);
+            }
+            std::fs::rename(&fx.work, &moved).expect("rename");
+            std::fs::create_dir_all(fx.work.join(".git/hooks")).expect("hooks");
+            std::fs::write(fx.work.join(".envrc"), "swapped\n").expect("envrc");
+        });
+        eprintln!(
+            "P13: started={} door={:?} agent_ran={ran}\n{stderr}",
+            !checks.is_empty(),
+            door_code(&checks)
+        );
+        if ran {
+            assert!(
+                checks.iter().all(|check| check.passed),
+                "the agent ran although a check failed: {checks:#?}"
+            );
         }
     }
 }

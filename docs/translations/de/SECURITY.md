@@ -288,6 +288,29 @@ wenn bwrap älter als 0.10 ist. Im Daemon trägt der Deskriptor die ganze Zeit `
 der bwrap-Kindprozess verliert es, zwischen `fork` und `exec`. Die Vorschau
 (`humanitl sandbox argv`) hat keine Deskriptoren und zeigt weiter Pfade.
 
+**Die Mounttabelle gleicht dem Plan (HUM-437).** Die Suche nach Sockets sieht eine zweite Tür,
+keine zweite Einhängung: Ein Ordner mit Geheimnissen, den eine Konfigurationsquelle der Sandbox
+hinzufügt, trägt keinen Socket. Jedes Backend gibt dem Shim deshalb als versiegelten memfd hinter
+`--pins-fd` die Mounttabelle, die der Plan erwartet, und Gerät und Inode jedes geprüften Ziels mit.
+Vor allem anderen des Starts vergleicht der Shim `/proc/self/mountinfo` mit dieser Tabelle als
+Multimenge: Eintrag für Eintrag mit Einhängepunkt, Dateisystemtyp, Quelle, nur lesbar oder
+schreibbar, `nosuid`, `nodev` und `noexec`. Die Quelle eines Binds ist Gerät und Inode des
+Geprüften, gelesen mit `lstat` auf dem Einhängepunkt und gezählt nur für die oberste Einhängung
+dort; die Quelle jeder anderen Einhängung ist ihr Typ. Die Tabelle enthält jeden Bind, jedes tmpfs
+und jede Maske des Plans und die eigenen Einträge des Backends (Wurzel, `/proc` und `/dev` von
+bwrap; die von Podman siehe [Abschnitt 13](#13-linux-podman)). Ein zusätzlicher, ein fehlender, ein
+abweichender Eintrag oder eine zweite, auf einen geplanten Punkt gestapelte Einhängung ist
+`CHECK mounts_match fail`, und der Start endet mit `SANDBOX_049`, bevor es den Agenten gibt.
+Danach muss `lstat` von `/work`, jedem Eintrag aus `mounts.ro`, `mounts.extra_ro`,
+`mounts.extra_rw` und dem Agentenprogramm Gerät und Inode ergeben, die der Starter beim Öffnen der
+Quelle sah; ein anderes Paar ist `CHECK mounts_pinned fail` und `SANDBOX_042` mit Pfad, erwartetem
+und gefundenem Paar. Beide Zeilen gehören zur zweiten Garantie: Genau eine Tür heißt auch, dass
+nichts außerhalb des Plans eingehängt ist. Ein Shim unter Linux, der keine der beiden Zeilen
+schreibt, lässt die Garantie unbelegt. Eine Quelle des Hosts, unter der selbst etwas eingehängt
+ist, besteht die Prüfung ebenfalls nicht: bwrap und Podman binden rekursiv, und was mitkommt,
+steht nicht im Plan. Masken und tmpfs unter `/work` werden nur auf Pfaden geplant und eingehängt,
+die es im Projekt gibt.
+
 **Prüfung (in der Sandbox).**
 
 ```sh
@@ -304,6 +327,11 @@ Sandbox nach Unix-Sockets und meldet jeden, den er findet (`CHECK single_socket`
 ein Budget (ohne `/proc`, `/sys` und `/dev` außer `/dev/shm`, keinen Symlinks folgend, Tiefe 3,
 2000 Einträge; wird eine Grenze erreicht, sagt der Beleg das). ESC-2 führt den unbegrenzten
 `find`-Befehl oben aus (`esc_find_sockets` in `tests/escape/lib.sh`). `-xtype s`, nicht `-type s`: bwrap bindet den Proxy-Socket über eine leere reguläre Datei, und `find` vertraut bei einem bloßen `-type` dem Verzeichniseintrag; und kein `-xdev`, weil `/work`, `/tmp`, `/dev/shm` und `/home/agent` eigene Mounts sind, in denen ein eingeschleuster Socket auftauchen muss.
+Zwei Fälle von ESC-2 laufen auf dem Host gegen jedes Backend (`tests/escape/mount-proof.sh`,
+HUM-437): der Projektordner, zwischen Plan und Start getauscht (`esc-2/swapped_folder`: Der Start
+wird mit `SANDBOX_042` abgelehnt, oder die Sandbox sieht unter bwrap weiter den geprüften Ordner),
+und eine Einhängung in der Zeile, die der Plan nicht erwartet (`esc-2/unplanned_mount`: abgelehnt
+mit `SANDBOX_049`).
 
 **Was ein Angreifer versuchen würde.** Den D-Bus- oder Docker-Socket suchen: nicht da. Über
 `/proc/<pid>/root` einen anderen Mount-Namespace erreichen: Der eigene PID-Namespace zeigt nur
@@ -1697,7 +1725,7 @@ geprüft werden kann.
 | # | Garantie | Wie sie unter Podman gilt | Vom Shim geprüft als |
 |---|---|---|---|
 | 1 | Kein Netzwerk-Interface | `--network=none`: ein Netz-Namensraum nur mit `lo`, kein `pasta`, kein `slirp4netns` | `no_interfaces`, unverändert |
-| 2 | Genau eine Tür | der Proxy-Socket als eine Datei nach `/run/humanitl/proxy.sock`, nur lesbar; Attach-Socket und Exit-Datei von `conmon` bleiben auf der Seite des Hosts | `single_socket` und `bridge_listening`, unverändert |
+| 2 | Genau eine Tür | der Proxy-Socket als eine Datei nach `/run/humanitl/proxy.sock`, nur lesbar; Attach-Socket und Exit-Datei von `conmon` bleiben auf der Seite des Hosts; die Mounttabelle gleicht dem Plan | `single_socket` und `bridge_listening`, unverändert, dazu `mounts_match` und `mounts_pinned` wie unter bubblewrap |
 | 3 | Keine neuen Türen | derselbe Shim ist PID 1 und setzt vor dem `exec` des Agenten denselben Filter; das seccomp-Profil von Podman (die Kopie des Daemons vom Standardprofil aus `containers-common`) bleibt als äußere Schicht, dazu `--cap-drop=all` und `no-new-privileges` | `seccomp_applied` und `families`, unverändert |
 
 Fest in jeder Zeile, ohne Schlüssel: `--rm`, eigene Namensräume für Netz, IPC, UTS, PID und
@@ -1732,13 +1760,25 @@ Podman-Maschine ist, wird mit `SANDBOX_038` abgelehnt.
 
 ### Was anders ist als unter bubblewrap
 
-- **Einhängen über Pfade.** Podman nimmt keinen Deskriptor als Quelle (Messung P13 in HUM-292).
-  Der Plan öffnet und prüft trotzdem jede Quelle einmal, wie unter bubblewrap, und hängt den Ort
-  ein, an dem das Geöffnete liegt. Ein Tausch dieses Pfades zwischen Plan und Einhängen wird hier
-  nicht verhindert; die Prüfung von Gerät und Inode durch den Shim nach dem Einhängen (HUM-437)
-  erkennt ihn, und bis sie da ist, bleibt Podman nicht zugelassen. Ein Pfad mit Komma,
+- **Einhängen über Pfade: Ein Tausch wird erkannt und abgelehnt, nicht verhindert.** Podman
+  nimmt keinen Deskriptor als Quelle (Messung P13 in HUM-292: `crun: mount /proc/self/fd/3 to
+  work: Invalid argument`; mit der Zeile des Adapters in HUM-437 nachgemessen: Kein Container
+  startet, der Shim meldet nichts, der Agent läuft nie). Der Plan öffnet und prüft trotzdem jede Quelle einmal, wie unter
+  bubblewrap, und hängt den Ort ein, an dem das Geöffnete liegt. Ein Tausch dieses Pfades zwischen
+  Plan und Einhängen erreicht den Container; die Prüfung von Gerät und Inode durch den Shim nach
+  dem Einhängen ([Abschnitt 3](#3-garantie-2-genau-eine-tür), HUM-437) erkennt ihn, bevor es den
+  Agenten gibt, und lehnt den Start mit `SANDBOX_042` ab. In diesem Moment läuft im Container nur
+  der Shim. Ein Bind behält die Gerätenummer seiner Quelle (P14). Ein Pfad mit Komma,
   Anführungszeichen oder Zeilenumbruch wird abgelehnt (`SANDBOX_006`): Optionen eines Einhängens
   trennt ein Komma.
+- **Die eigenen Einhängungen der Engine gehören zur erwarteten Tabelle.** Mit den festen Flags
+  oben fügt Podman `/proc` mit seinen nur lesbaren Selbst-Binds und maskierten Pfaden hinzu, `/dev`
+  mit `pts`, `mqueue` und den Gerätedateien des Hosts, `/run/.containerenv` und `/etc/hostname`,
+  und kein `/etc/resolv.conf` (Messung P17; die Liste in `podman/mounts.rs` ist die gemessene).
+  Alles andere, was eine Konfigurationsquelle hinzufügt, aus `mounts.conf`, `containers.conf` oder
+  einem neueren Podman, ist ein Eintrag zu viel und lehnt den Start mit `SANDBOX_049` ab, ob er
+  einen Socket trägt oder nicht. Die abgeschnittene Konfiguration unten hält solche Einträge fern;
+  die Prüfung der Tabelle ist die Sperre, wenn sie es nicht tut.
 - **Masken und Dateien auf der Platte.** Masken, Identitätsdateien und die Dateien des Adapters
   sind Dateien im Verzeichnis der Session unter dem Laufzeitverzeichnis, keine memfds. Die Dateien
   des Adapters haben `0400` und können den Zugangsschlüssel des Modells tragen; der Plan schreibt
