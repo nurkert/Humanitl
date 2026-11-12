@@ -1975,16 +1975,27 @@ impl v1::humanitl_server::Humanitl for IpcServer {
     /// - Die Zeile `daemon` ist nicht gemessen. Wer diese Antwort liest, hat
     ///   den Daemon erreicht; ein Daemon kann aber nicht sagen, ob ein anderer
     ///   Client ihn erreicht. Der Beleg sagt genau das.
-    /// - Die Zeile `llm` ist nicht gemessen. `Doctor` nimmt keinen Auftrag
-    ///   entgegen (`rpc Doctor(Empty)`), also kann niemand darin um eine
-    ///   Verbindung bitten — und eine Verbindung, um die niemand gebeten hat,
-    ///   baut dieser Daemon nicht auf. Gemessen wird sie über `ProbeLlm`
-    ///   (HUM-039).
+    /// - Die Zeile `llm` ist nicht gemessen. Der Auftrag (`DoctorRequest`)
+    ///   hat kein Feld, in dem jemand um eine Verbindung bitten könnte — und
+    ///   eine Verbindung, um die niemand gebeten hat, baut dieser Daemon nicht
+    ///   auf. Gemessen wird sie über `ProbeLlm` (HUM-039).
+    ///
+    /// Dazu je Sandbox-Backend eine Gruppe (HUM-436,
+    /// [`humanitl_sandbox::doctor::backend_groups`]), gemessen an der
+    /// Konfiguration ohne Projekt, wie sie jetzt auf der Platte steht. Mit
+    /// `DoctorRequest.probe` startet der Daemon je zugelassenem, verfügbarem
+    /// Backend eine leere Sandbox mit seinem Shim; ohne startet er nichts.
+    /// Lässt sich die Konfiguration nicht lesen, fehlen die Gruppen, und der
+    /// Rest des Berichts steht trotzdem da.
     ///
     /// Die Prüfungen lesen Dateien und starten kurze Programme; das läuft in
     /// [`tokio::task::spawn_blocking`], damit eine hängende Probe die Laufzeit
     /// nicht anhält.
-    async fn doctor(&self, _request: Request<()>) -> Result<Response<v1::DoctorReport>, Status> {
+    async fn doctor(
+        &self,
+        request: Request<v1::DoctorRequest>,
+    ) -> Result<Response<v1::DoctorReport>, Status> {
+        let probe = request.into_inner().probe;
         let setup = self.doctor.clone();
         let socket = setup.paths.daemon_socket();
         let daemon = humanitl_sandbox::doctor::DaemonFacts::NotTried {
@@ -1996,13 +2007,36 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         let report = tokio::task::spawn_blocking(move || {
             let setup = setup.refreshed();
             let llm = setup.llm_facts();
-            let probe = DoctorProbe::new(setup.paths.env())
+            let machine = DoctorProbe::new(setup.paths.env())
                 .with_agent(setup.adapter.clone(), setup.agent_command.clone());
-            humanitl_sandbox::doctor::run(&probe.collect(daemon, llm))
+            let mut report = convert::doctor_report_to_proto(&humanitl_sandbox::doctor::run(
+                &machine.collect(daemon, llm),
+            ));
+            if let Ok(resolved) = humanitl_config::resolve(
+                &humanitl_config::ProfileSelection::default(),
+                None,
+                setup.paths.env(),
+                &[],
+            ) {
+                let mode = if probe {
+                    humanitl_sandbox::doctor::ProbeMode::Start {
+                        shim: humanitl_sandbox::doctor::locate_shim(),
+                    }
+                } else {
+                    humanitl_sandbox::doctor::ProbeMode::Cached
+                };
+                report.backends =
+                    convert::doctor_backends_to_proto(&humanitl_sandbox::doctor::backend_groups(
+                        &resolved.config.sandbox,
+                        &setup.paths,
+                        &mode,
+                    ));
+            }
+            report
         })
         .await
         .map_err(|error| Status::internal(format!("the doctor did not finish: {error}")))?;
-        Ok(Response::new(convert::doctor_report_to_proto(&report)))
+        Ok(Response::new(report))
     }
 
     /// Sucht LLM-Server im eigenen Netz (HUM-076).
@@ -3014,7 +3048,7 @@ mod tests {
             ]),
         ));
         let report = server
-            .doctor(Request::new(()))
+            .doctor(Request::new(v1::DoctorRequest::default()))
             .await
             .expect("Doctor answers")
             .into_inner();
@@ -3122,7 +3156,11 @@ mod tests {
                 .expect("the llm line")
                 .clone()
         };
-        let before = server.doctor(Request::new(())).await.unwrap().into_inner();
+        let before = server
+            .doctor(Request::new(v1::DoctorRequest::default()))
+            .await
+            .unwrap()
+            .into_inner();
         assert!(
             !llm_line(&before).evidence.contains("llm.example.net"),
             "{:?}",
@@ -3137,7 +3175,11 @@ mod tests {
             }))
             .await
             .expect("SetConfig writes");
-        let after = server.doctor(Request::new(())).await.unwrap().into_inner();
+        let after = server
+            .doctor(Request::new(v1::DoctorRequest::default()))
+            .await
+            .unwrap()
+            .into_inner();
         let line = llm_line(&after);
         let said = format!(
             "{} {}",

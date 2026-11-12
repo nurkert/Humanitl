@@ -1316,6 +1316,14 @@ Sprachmodell nicht angesprochen
 
 **Fix.** `CopyCommand` mit `humanitl doctor --probe-llm`.
 
+#### DOCTOR_014
+
+Probe start of the sandbox backend failed
+
+**Auslöser.** `humanitl doctor --probe` started an empty sandbox with the shim and `true` under an admitted backend, and either the start failed or one of the three guarantees from the shim's five `CHECK` lines did not hold. A real session under this backend would be refused the same way.
+
+**Fix.** The fix of the inner finding when it has one (an install command, a setting); otherwise `OpenUrl` on this page.
+
 ### Bereich cli
 
 #### CLI_001

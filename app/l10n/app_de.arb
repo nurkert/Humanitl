@@ -1814,5 +1814,15 @@
   "diagSANDBOX041Title": "Container einer früheren Sitzung gefunden",
   "diagSANDBOX041Why": "Ein Container einer früheren Sitzung dieses Daemons war noch da, etwa nach einem Absturz. Der Daemon hat ihn beim Start entfernt oder sagt, dass es nicht ging.",
   "diagSANDBOX044Title": "SELinux würde das Projekt umetikettieren",
-  "diagSANDBOX044Why": "SELinux erzwingt auf diesem Rechner Etiketten. Ein Container könnte das Projekt erst lesen, nachdem es umetikettiert ist, und das ändert deine Dateien; deshalb startet das Podman-Backend hier nicht."
+  "diagSANDBOX044Why": "SELinux erzwingt auf diesem Rechner Etiketten. Ein Container könnte das Projekt erst lesen, nachdem es umetikettiert ist, und das ändert deine Dateien; deshalb startet das Podman-Backend hier nicht.",
+  "setupBackendsTitle": "Sandbox-Backends",
+  "setupBackendChosen": "{stage} (gewählt)",
+  "doctorBackendCheckAdmitted": "Zugelassen",
+  "doctorBackendCheckAvailable": "Verfügbar",
+  "doctorBackendCheckProgram": "Programm",
+  "doctorBackendCheckSubordinateIds": "Untergeordnete IDs",
+  "doctorBackendCheckSelinux": "SELinux",
+  "doctorBackendCheckProbe": "Probestart",
+  "diagDOCTOR014Title": "Probestart gescheitert",
+  "diagDOCTOR014Why": "humanitl doctor --probe hat unter diesem Backend eine leere Sandbox gestartet, und entweder startete sie nicht oder eine ihrer Garantien galt nicht. Eine echte Sitzung käme unter diesem Backend genauso wenig zustande."
 }

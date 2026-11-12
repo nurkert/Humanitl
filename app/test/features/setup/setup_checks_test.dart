@@ -438,4 +438,66 @@ void main() {
     expect(state.worst, SetupCheckState.checking);
     expect(state.canStart, isFalse);
   });
+
+  // HUM-436: Die Zeilen des gewählten Backends zählen für die Zeile der
+  // Maschine mit; die eines anderen Backends kommen höchstens gelb und
+  // halten keinen Start auf.
+  DoctorReport withBackends(List<DoctorBackendGroup> backends) => DoctorReport(
+    checks: <DoctorCheck>[
+      for (final String id in <String>['userns', 'seccomp', 'llm'])
+        line(id, DoctorStatus.ok),
+    ],
+    backends: backends,
+  );
+
+  test('a failing line of the chosen backend makes the row red', () {
+    final SetupState state = checksOver(
+      withBackends(<DoctorBackendGroup>[
+        DoctorBackendGroup(
+          name: 'chosen',
+          stage: 'chosen',
+          selected: true,
+          checks: <DoctorCheck>[
+            line(DoctorBackendCheckId.admitted, DoctorStatus.ok),
+            line(
+              DoctorBackendCheckId.probe,
+              DoctorStatus.fail,
+              code: 'DOCTOR_014',
+            ),
+          ],
+        ),
+      ]),
+    );
+    expect(state[SetupCheckKind.sandbox].state, SetupCheckState.failed);
+    expect(state[SetupCheckKind.sandbox].diagnostic?.code, 'DOCTOR_014');
+    expect(state.canStart, isFalse);
+  });
+
+  test('a backend that is not chosen does not hold the start', () {
+    final SetupState state = checksOver(
+      withBackends(<DoctorBackendGroup>[
+        DoctorBackendGroup(
+          name: 'chosen',
+          selected: true,
+          checks: <DoctorCheck>[
+            line(DoctorBackendCheckId.admitted, DoctorStatus.ok),
+            line(DoctorBackendCheckId.available, DoctorStatus.ok),
+          ],
+        ),
+        DoctorBackendGroup(
+          name: 'other',
+          checks: <DoctorCheck>[
+            line(
+              DoctorBackendCheckId.admitted,
+              DoctorStatus.warn,
+              code: 'SANDBOX_048',
+            ),
+          ],
+        ),
+      ]),
+    );
+    expect(state[SetupCheckKind.sandbox].state, SetupCheckState.ok);
+    expect(state.canStart, isTrue);
+    expect(state.unmeasuredLines, 0);
+  });
 }

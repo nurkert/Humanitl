@@ -119,6 +119,57 @@ void main() {
     expect(podman.runtimes.single.selected, isTrue);
   });
 
+  test('DoctorReport keeps its backend groups in order (HUM-436)', () {
+    final DoctorReport report =
+        (pb.DoctorReport()
+              ..checks.add(
+                pb.DoctorCheck()
+                  ..id = 'seccomp'
+                  ..status = pb.CheckStatus.CHECK_STATUS_OK,
+              )
+              ..backends.add(
+                pb.DoctorBackend()
+                  ..name = 'chosen'
+                  ..stage = 'chosen'
+                  ..selected = true
+                  ..checks.add(
+                    pb.DoctorCheck()
+                      ..id = 'probe'
+                      ..status = pb.CheckStatus.CHECK_STATUS_FAIL
+                      ..evidence = 'not started: SANDBOX_011'
+                      ..diagnostic = (pb.Diagnostic()
+                        ..code = 'DOCTOR_014'
+                        ..severity = pb.Severity.SEVERITY_BLOCKING),
+                  ),
+              )
+              ..backends.add(
+                pb.DoctorBackend()
+                  ..name = 'other'
+                  ..stage = 'other/plain'
+                  ..checks.add(
+                    pb.DoctorCheck()
+                      ..id = 'admitted'
+                      ..status = pb.CheckStatus.CHECK_STATUS_WARN,
+                  ),
+              ))
+            .toDomain();
+    expect(report.checks.single.id, 'seccomp');
+    expect(
+      report.backends.map((DoctorBackendGroup group) => group.name),
+      <String>['chosen', 'other'],
+    );
+    final DoctorBackendGroup chosen = report.backends.first;
+    expect(chosen.selected, isTrue);
+    expect(chosen.worst, DoctorStatus.fail);
+    expect(chosen.checks.single.diagnostic?.code, 'DOCTOR_014');
+    final DoctorBackendGroup other = report.backends.last;
+    expect(other.selected, isFalse);
+    expect(other.stage, 'other/plain');
+    expect(other.worst, DoctorStatus.warn);
+    // Ein Daemon vor Minor 35 schickt keine Gruppe.
+    expect(pb.DoctorReport().toDomain().backends, isEmpty);
+  });
+
   test('Info becomes DaemonInfo', () {
     final DaemonInfo info =
         (pb.Info()

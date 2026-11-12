@@ -548,6 +548,24 @@ impl SeatbeltBackend {
         Ok(Self::unchecked(program, paths))
     }
 
+    /// Die Fassung als Text, für den Zwischenspeicher des Probestarts
+    /// (HUM-436): die Build-Nummer von macOS (`kern.osversion`).
+    /// `sandbox-exec` hat keine eigene Fassung; es kommt mit dem System, und
+    /// ein Update des Systems kann es ändern. Leer, wenn sie nicht lesbar ist.
+    #[must_use]
+    pub fn tool_version(&self) -> String {
+        std::process::Command::new("/usr/sbin/sysctl")
+            .args(["-n", "kern.osversion"])
+            .env_clear()
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            .unwrap_or_default()
+    }
+
     /// Ohne Prüfung, für Tests und den Rückfall, wenn `detect` scheitert.
     #[must_use]
     pub fn unchecked(program: impl Into<PathBuf>, paths: Paths) -> Self {

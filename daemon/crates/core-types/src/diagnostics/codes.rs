@@ -1744,6 +1744,15 @@ registry! {
     SANDBOX_044 => "sandbox", "SELinux would relabel the project", "#sandbox_044",
         "SELinux enforces labels on this machine. A container could read the project only after it was relabelled (`:z`), and that changes the labels of the user's own files. Until there is a design for it, the Podman backend does not start on such a machine.",
         "`ChangeSetting` on `sandbox.backend` = `auto`.";
+    // HUM-436: the probe start of `humanitl doctor --probe`.
+    /// The probe start of a sandbox backend failed: `humanitl doctor --probe`
+    /// started an empty sandbox with the shim and `true` as its command, and
+    /// the start did not succeed or one of the guarantees from the five
+    /// `CHECK` lines did not hold. The `why` carries the code and the sentence
+    /// of the inner finding (HUM-436).
+    DOCTOR_014 => "doctor", "Probe start of the sandbox backend failed", "#doctor_014",
+        "`humanitl doctor --probe` started an empty sandbox with the shim and `true` under an admitted backend, and either the start failed or one of the three guarantees from the shim's five `CHECK` lines did not hold. A real session under this backend would be refused the same way.",
+        "The fix of the inner finding when it has one (an install command, a setting); otherwise `OpenUrl` on this page.";
 }
 
 /// Sucht einen Code im Register.

@@ -41,7 +41,7 @@ use crate::handle::SandboxHandle;
 use crate::launcher::{
     CheckResult, IsolationLevel, LaunchPlan, PlanPreview, PlanRequest, SandboxBackend,
 };
-use crate::podman::PodmanBackend;
+use crate::podman::{PodmanBackend, static_lines as engine_static_lines};
 #[cfg(target_os = "macos")]
 use crate::seatbelt::SeatbeltBackend;
 
@@ -263,6 +263,13 @@ impl Backend {
         dispatch!(self, backend => backend.program())
     }
 
+    /// Die Fassung des Programms als Text, leer, wo das Backend keine eigene
+    /// hat; der Schlüssel des Zwischenspeichers im Doctor (HUM-436).
+    #[must_use]
+    pub fn tool_version(&self) -> String {
+        dispatch!(self, backend => backend.tool_version())
+    }
+
     /// Die Pfade, gegen die das Backend plant.
     #[must_use]
     pub const fn paths(&self) -> &Paths {
@@ -367,7 +374,7 @@ fn default_runtime(name: &str) -> Option<PodmanRuntime> {
 
 /// Die Laufzeit, die die Konfiguration einem Backend gibt: der Container-Engine
 /// ihre eingestellte, sonst keine.
-fn runtime_of(name: &str, sandbox: &SandboxRef) -> Option<PodmanRuntime> {
+pub(crate) fn runtime_of(name: &str, sandbox: &SandboxRef) -> Option<PodmanRuntime> {
     (name == PODMAN_BACKEND).then_some(sandbox.podman.runtime)
 }
 
@@ -409,11 +416,23 @@ impl LeftSandboxes {
 }
 
 /// Der Name der Stufe aus Backend und Laufzeit.
-fn stage(name: &'static str, runtime: Option<PodmanRuntime>) -> Cow<'static, str> {
+pub(crate) fn stage(name: &'static str, runtime: Option<PodmanRuntime>) -> Cow<'static, str> {
     match runtime {
         Some(runtime) => Cow::Owned(format!("{name}/{}", runtime.as_str())),
         None => Cow::Borrowed(name),
     }
+}
+
+/// Die Voraussetzungen eines Backends, die sich ohne einen Start seines
+/// Programms prüfen lassen, als Zeilen des Doctors (HUM-436); leer für ein
+/// Backend, dessen Suche nichts davon kennt. Je Zeile die Kennung und bei
+/// Erfolg der Beleg, sonst der Befund.
+pub(crate) fn static_checks(
+    name: &str,
+    paths: &Paths,
+    sandbox: &SandboxRef,
+) -> Vec<(crate::doctor::BackendCheckId, Result<String, Diagnostic>)> {
+    engine_static_lines(name, paths, sandbox)
 }
 
 /// Die Isolation einer Stufe, ohne sie zu bauen. Muss mit

@@ -191,20 +191,26 @@ type TerminalInputs = Arc<std::sync::Mutex<Vec<&'static str>>>;
 impl FakeServer {
     /// Startet den Dienst und wartet, bis Socket und Token da sind.
     pub fn start(harness: &Harness) -> Self {
-        Self::start_with(harness, false, None, false, false)
+        Self::start_with(harness, false, None, false, false, None)
     }
 
     /// Wie [`FakeServer::start`], aber `GetInfo` nennt `version` als Fassung
     /// des Daemons (HUM-210): ein älterer Daemon, der nach einem Update noch
     /// antwortet.
     pub fn start_with_version(harness: &Harness, version: &str) -> Self {
-        Self::start_with(harness, false, Some(version.to_owned()), false, false)
+        Self::start_with(harness, false, Some(version.to_owned()), false, false, None)
+    }
+
+    /// Wie [`FakeServer::start`], aber `GetInfo` nennt diese Minor des
+    /// Vertrags: ein älterer Daemon (HUM-436).
+    pub fn start_with_proto_minor(harness: &Harness, minor: u32) -> Self {
+        Self::start_with(harness, false, None, false, false, Some(minor))
     }
 
     /// Wie [`FakeServer::start`], aber ohne Sitzung: `retire_if_idle` sagt
     /// `retired` (HUM-382). Der Standard-Fake spielt eine laufende Sitzung.
     pub fn start_idle(harness: &Harness) -> Self {
-        Self::start_with(harness, false, None, false, true)
+        Self::start_with(harness, false, None, false, true, None)
     }
 
     /// Wie [`FakeServer::start`], aber `Audit(Export)` meldet Erfolg und
@@ -212,7 +218,7 @@ impl FakeServer {
     /// schreibt, die der Aufrufer nicht hat, etwa ein eigenes `/tmp` unter
     /// `PrivateTmp`.
     pub fn start_with_silent_export(harness: &Harness) -> Self {
-        Self::start_with(harness, true, None, false, false)
+        Self::start_with(harness, true, None, false, false, None)
     }
 
     /// Wie [`FakeServer::start`], aber `Terminal` liest nach dem `Open` keine
@@ -220,7 +226,7 @@ impl FakeServer {
     /// Strom bleibt offen, bis der Client geht, und alles, was er schickt,
     /// staut sich im Transport.
     pub fn start_with_stalled_terminal(harness: &Harness) -> Self {
-        Self::start_with(harness, false, None, true, false)
+        Self::start_with(harness, false, None, true, false, None)
     }
 
     fn start_with(
@@ -229,6 +235,7 @@ impl FakeServer {
         version: Option<String>,
         stall_terminal: bool,
         idle: bool,
+        proto_minor: Option<u32>,
     ) -> Self {
         let paths = harness.paths();
         let socket = paths.daemon_socket();
@@ -267,6 +274,7 @@ impl FakeServer {
                             terminal_inputs: recorded,
                             stall_terminal,
                             idle,
+                            proto_minor,
                         }),
                         token,
                     ));
@@ -413,6 +421,8 @@ struct SilentExport {
     /// Sitzung (HUM-382). Der Fake läuft danach weiter, wie ein Daemon, den
     /// systemd sofort wieder startet.
     idle: bool,
+    /// Die Minor, die `GetInfo` statt der eigenen nennt (HUM-436).
+    proto_minor: Option<u32>,
 }
 
 #[tonic::async_trait]
@@ -421,6 +431,9 @@ impl DaemonApi for SilentExport {
         let mut info = self.inner.info().await;
         if let Some(version) = &self.version {
             info.daemon_version.clone_from(version);
+        }
+        if let Some(minor) = self.proto_minor {
+            info.proto_minor = minor;
         }
         info
     }

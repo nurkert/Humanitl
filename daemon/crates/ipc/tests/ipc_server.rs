@@ -614,7 +614,7 @@ async fn doctor_reports_every_check_and_measures_no_network() {
     let mut client = daemon.client().await;
 
     let report = client
-        .doctor(())
+        .doctor(v1::DoctorRequest::default())
         .await
         .expect("Doctor answers since HUM-075")
         .into_inner();
@@ -684,8 +684,72 @@ async fn doctor_reports_every_check_and_measures_no_network() {
         line.evidence
     );
 
+    assert_backend_groups(&report);
+
     drop(client);
     daemon.shutdown().await;
+}
+
+/// Je Backend eine Gruppe (HUM-436): dieselbe Zusage für jede Zeile, nur das
+/// gewählte Backend kann rot sein, und ohne `probe` startet nichts, also steht
+/// unter einer Stufe, die noch nicht zugelassen ist, keine Zeile `probe`.
+fn assert_backend_groups(report: &v1::DoctorReport) {
+    let names: Vec<&str> = report
+        .backends
+        .iter()
+        .map(|group| group.name.as_str())
+        .collect();
+    assert_eq!(names, humanitl_sandbox::LISTED_BACKENDS, "one group each");
+    assert_eq!(
+        report
+            .backends
+            .iter()
+            .filter(|group| group.selected)
+            .count(),
+        1,
+        "{:?}",
+        report.backends
+    );
+    for group in &report.backends {
+        assert!(!group.checks.is_empty(), "{} has no line", group.name);
+        for check in &group.checks {
+            if check.status == v1::CheckStatus::Ok as i32 {
+                assert!(check.diagnostic.is_none(), "{}/{}", group.name, check.id);
+                continue;
+            }
+            let diagnostic = check
+                .diagnostic
+                .as_ref()
+                .unwrap_or_else(|| panic!("{}/{} carries no finding", group.name, check.id));
+            assert!(!diagnostic.why.is_empty(), "{}/{}", group.name, check.id);
+            assert!(diagnostic.fix.is_some(), "{}/{}", group.name, check.id);
+            assert!(
+                group.selected || check.status != v1::CheckStatus::Fail as i32,
+                "{}/{} fails although the backend is not chosen",
+                group.name,
+                check.id
+            );
+        }
+    }
+    for group in &report.backends {
+        let admitted = group
+            .checks
+            .iter()
+            .find(|check| check.id == "admitted")
+            .expect("the admission line");
+        if admitted.status == v1::CheckStatus::Ok as i32 {
+            continue;
+        }
+        assert_eq!(admitted.status, v1::CheckStatus::Warn as i32);
+        assert_eq!(
+            admitted.diagnostic.as_ref().map(|d| d.code.as_str()),
+            Some("SANDBOX_048")
+        );
+        assert!(
+            group.checks.iter().all(|check| check.id != "probe"),
+            "nothing was asked to start: {group:?}"
+        );
+    }
 }
 
 #[tokio::test]

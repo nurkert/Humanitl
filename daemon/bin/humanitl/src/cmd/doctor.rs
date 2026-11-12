@@ -41,6 +41,13 @@
 //! Geurteilt wird über beide trotzdem in der Crate
 //! ([`humanitl_sandbox::doctor::daemon_line`],
 //! [`humanitl_sandbox::doctor::llm_line`]); hier stehen nur die Tatsachen.
+//!
+//! # Je Backend eine Gruppe (HUM-436)
+//!
+//! Unter den elf Zeilen steht je Sandbox-Backend eine Gruppe aus
+//! [`humanitl_sandbox::doctor::backend_groups`], vom Daemon oder, ohne ihn,
+//! aus diesem Prozess. `--probe` bittet um einen Probestart je zugelassenem
+//! Backend; ohne den Schalter startet der Befehl nichts.
 
 use std::time::Duration;
 
@@ -50,6 +57,7 @@ use humanitl_ipc::client::{self, Client};
 use humanitl_ipc::{PROTO_MAJOR, PROTO_MINOR, convert, v1};
 use humanitl_sandbox::doctor::{
     self, CheckId, CheckOutcome, CheckStatus, DaemonFacts, LlmFacts, PROBE_LLM_COMMAND, Probe,
+    ProbeMode,
 };
 use serde_json::json;
 use tokio::time::timeout;
@@ -84,6 +92,13 @@ pub const WAKE_CONNECT_TIMEOUT: Duration = CONNECT_TIMEOUT.saturating_add(client
 /// ([`humanitl_sandbox::doctor::DEFAULT_TIMEOUT`]); zehn Sekunden lassen ihm
 /// Luft und begrenzen ihn trotzdem.
 pub const REPORT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Wie lange dieser Befehl mit `--probe` auf `Doctor()` wartet (HUM-436).
+///
+/// Je Backend ein Start samt der Frist des Shim-Berichts und dem Ende von
+/// `true`; unter einer Container-Engine dazu ihr erster Start. Zwei Minuten
+/// begrenzen das, ohne einen langsamen ersten Start abzuschneiden.
+pub const PROBE_REPORT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Wie lange dieser Befehl auf `ProbeLlm` wartet.
 ///
@@ -154,27 +169,55 @@ pub async fn run(ctx: &Context, args: &DoctorArgs) -> Result<u8, Failure> {
     };
     let daemon = daemon_facts(&socket, client.as_mut(), refused).await;
 
+    let wait = if args.probe {
+        PROBE_REPORT_TIMEOUT
+    } else {
+        REPORT_TIMEOUT
+    };
+    let request = v1::DoctorRequest { probe: args.probe };
     let (mut report, source) = match client.as_mut() {
-        Some(client) => match timeout(REPORT_TIMEOUT, client.doctor(())).await {
+        Some(client) => match timeout(wait, client.doctor(request)).await {
             Ok(Ok(response)) => (response.into_inner(), Source::Daemon),
             Ok(Err(status)) => {
                 ctx.render.note(&format!(
                     "the daemon refused Doctor ({}); running the checks in this process instead",
                     status.code().description()
                 ));
-                (local(ctx, &config, &load_diagnostics).await, Source::Local)
+                (
+                    local(ctx, &config, &load_diagnostics, args.probe).await,
+                    Source::Local,
+                )
             }
             Err(_elapsed) => {
                 ctx.render.note(&format!(
                     "the daemon did not answer Doctor within {} ms; running the checks in this \
                      process instead",
-                    REPORT_TIMEOUT.as_millis()
+                    wait.as_millis()
                 ));
-                (local(ctx, &config, &load_diagnostics).await, Source::Local)
+                (
+                    local(ctx, &config, &load_diagnostics, args.probe).await,
+                    Source::Local,
+                )
             }
         },
-        None => (local(ctx, &config, &load_diagnostics).await, Source::Local),
+        None => (
+            local(ctx, &config, &load_diagnostics, args.probe).await,
+            Source::Local,
+        ),
     };
+
+    // Ein Daemon vor Minor 35 kennt weder `DoctorRequest.probe` noch
+    // `DoctorReport.backends` (HUM-436): Er ließe `--probe` still fallen.
+    // Die Gruppen kommen dann aus diesem Prozess, und eine Zeile sagt das.
+    if source == Source::Daemon
+        && let Some(minor) = older_than_backends(&daemon)
+    {
+        ctx.render.note(&format!(
+            "the daemon speaks contract {PROTO_MAJOR}.{minor}, which has no backend lines \
+             (1.{BACKENDS_MINOR}); the backend lines come from this process"
+        ));
+        report.backends = local_backends(ctx, &config, args.probe).await;
+    }
 
     replace(&mut report, &doctor::daemon_line(&daemon));
     if args.probe_llm {
@@ -249,11 +292,14 @@ async fn daemon_facts(
     }
 }
 
-/// Die Prüfungen in diesem Prozess, weil kein Daemon antwortet.
+/// Die Prüfungen in diesem Prozess, weil kein Daemon antwortet; mit `probe`
+/// samt Probestart je zugelassenem Backend, mit dem Shim neben diesem
+/// Programm oder aus der Installation.
 async fn local(
     ctx: &Context,
     config: &humanitl_config::Config,
     load_diagnostics: &[Diagnostic],
+    probe: bool,
 ) -> v1::DoctorReport {
     let env = ctx.env.clone();
     let adapter = config.agent.adapter.clone();
@@ -280,17 +326,55 @@ async fn local(
     // Kommando in der Sandbox erreichbar ist (HUM-139). Fehlt das Profil, ist
     // die Antwort dieselbe wie vorher: eine Aussage über den Host.
     let (view, sandbox_path) = sandbox_view(ctx, config);
-    let facts = tokio::task::spawn_blocking(move || {
-        Probe::new(&env)
+    let report = tokio::task::spawn_blocking(move || {
+        let facts = Probe::new(&env)
             .with_agent(adapter, command)
             .with_sandbox(view, sandbox_path)
-            .collect(untried(), llm)
+            .collect(untried(), llm);
+        convert::doctor_report_to_proto(&doctor::run(&facts))
     })
     .await;
-    let Ok(facts) = facts else {
-        return v1::DoctorReport::default();
+    let mut report = report.unwrap_or_default();
+    report.backends = local_backends(ctx, config, probe).await;
+    report
+}
+
+/// Die Minor, ab der `Doctor` je Backend eine Gruppe schickt (HUM-436).
+const BACKENDS_MINOR: u32 = 35;
+
+/// Die Minor des erreichten Daemons, wenn sie älter ist als
+/// [`BACKENDS_MINOR`]; sonst `None`.
+const fn older_than_backends(daemon: &DaemonFacts) -> Option<u32> {
+    match daemon {
+        DaemonFacts::Reachable {
+            proto: (major, minor),
+            ..
+        } if *major == PROTO_MAJOR && *minor < BACKENDS_MINOR => Some(*minor),
+        _ => None,
+    }
+}
+
+/// Die Gruppen je Backend aus diesem Prozess; mit `probe` samt Probestart,
+/// mit dem Shim neben diesem Programm oder aus der Installation.
+async fn local_backends(
+    ctx: &Context,
+    config: &humanitl_config::Config,
+    probe: bool,
+) -> Vec<v1::DoctorBackend> {
+    let sandbox = config.sandbox.clone();
+    let paths = ctx.paths.clone();
+    let mode = if probe {
+        ProbeMode::Start {
+            shim: doctor::locate_shim(),
+        }
+    } else {
+        ProbeMode::Cached
     };
-    convert::doctor_report_to_proto(&doctor::run(&facts))
+    tokio::task::spawn_blocking(move || {
+        convert::doctor_backends_to_proto(&doctor::backend_groups(&sandbox, &paths, &mode))
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Die Sicht der Sandbox auf den Dateibaum und ihr Suchpfad, aus dem Profil.
@@ -504,12 +588,35 @@ fn replace(report: &mut v1::DoctorReport, outcome: &CheckOutcome) {
     }
 }
 
-/// Wahr, wenn eine Zeile `fail` trägt.
-fn has_failure(report: &v1::DoctorReport) -> bool {
+/// Die Zeilen, die über den Bericht entscheiden: die der Maschine und die
+/// des Backends, das `sandbox.backend` wählt (HUM-436).
+///
+/// Die Gruppen der anderen Backends stehen in Tabelle und JSON, zählen aber
+/// weder für Status und Exit-Code noch bekommen sie einen Befundblock: Auf
+/// einem gesunden Rechner hieße sonst jede Stufe, die noch nicht zugelassen
+/// ist, „warn“, obwohl kein Start an ihr hängt.
+fn counted_checks(report: &v1::DoctorReport) -> impl Iterator<Item = &v1::DoctorCheck> {
+    report.checks.iter().chain(
+        report
+            .backends
+            .iter()
+            .filter(|group| group.selected)
+            .flat_map(|group| group.checks.iter()),
+    )
+}
+
+/// Jede Zeile, die die Ausgabe zeigt: die der Maschine und die jedes
+/// Backends.
+fn shown_checks(report: &v1::DoctorReport) -> impl Iterator<Item = &v1::DoctorCheck> {
     report
         .checks
         .iter()
-        .any(|check| check.status == v1::CheckStatus::Fail as i32)
+        .chain(report.backends.iter().flat_map(|group| group.checks.iter()))
+}
+
+/// Wahr, wenn eine Zeile `fail` trägt, die zählt ([`counted_checks`]).
+fn has_failure(report: &v1::DoctorReport) -> bool {
+    counted_checks(report).any(|check| check.status == v1::CheckStatus::Fail as i32)
 }
 
 /// Der Kurzname eines Status aus der Wire-Form.
@@ -542,45 +649,44 @@ fn print(ctx: &Context, report: &v1::DoctorReport, source: Source) {
         ctx.render.value(&json!({
             "source": source.as_str(),
             "status": worst(report),
-            "checks": report
-                .checks
+            "checks": report.checks.iter().map(check_json).collect::<Vec<_>>(),
+            "backends": report
+                .backends
                 .iter()
-                .map(|check| {
-                    let mut value = json!({
-                        "id": check.id,
-                        "status": status_name(check.status),
-                        "evidence": check.evidence,
-                    });
-                    if let (Some(object), Some(diagnostic)) =
-                        (value.as_object_mut(), rebuilt(check))
-                    {
-                        object.insert("diagnostic".to_owned(), diagnostic_json(&diagnostic));
-                    }
-                    value
+                .map(|group| {
+                    json!({
+                        "name": group.name,
+                        "stage": group.stage,
+                        "selected": group.selected,
+                        "checks": group.checks.iter().map(check_json).collect::<Vec<_>>(),
+                    })
                 })
-                .collect::<Vec<serde_json::Value>>(),
+                .collect::<Vec<_>>(),
         }));
         return;
     }
 
-    let rows: Vec<Vec<String>> = report
-        .checks
-        .iter()
-        .map(|check| {
-            vec![
-                mark(check.status),
-                check.id.clone(),
-                crate::render::one_line(&check.evidence),
-            ]
-        })
-        .collect();
-    print!("{}", table(&["", "CHECK", "EVIDENCE"], &rows));
+    print!(
+        "{}",
+        table(&["", "CHECK", "EVIDENCE"], &rows(&report.checks))
+    );
+    for group in &report.backends {
+        println!();
+        println!("{}", group_heading(group));
+        print!(
+            "{}",
+            table(&["", "CHECK", "EVIDENCE"], &rows(&group.checks))
+        );
+    }
 
     // Jede nicht-grüne Zeile bekommt ihren Block, nicht nur die erste: Der
     // Doctor ist die Liste dessen, was zu tun ist, und eine Liste, die nach
     // dem ersten Eintrag abbricht, schickt einen Menschen elfmal hierher
-    // zurück.
-    for check in &report.checks {
+    // zurück. Auch die Zeilen eines nicht gewählten Backends bekommen ihren
+    // Block: Sie zählen nicht für Status und Exit-Code, aber wer dieses
+    // Backend wählen will, muss lesen können, was ihm fehlt (HUM-436,
+    // Akzeptanzkriterium 1).
+    for check in shown_checks(report) {
         if check.status == v1::CheckStatus::Ok as i32 {
             continue;
         }
@@ -591,10 +697,49 @@ fn print(ctx: &Context, report: &v1::DoctorReport, source: Source) {
     }
 }
 
+/// Eine Zeile als JSON-Wert, mit ihrem Befund, wenn sie einen trägt.
+fn check_json(check: &v1::DoctorCheck) -> serde_json::Value {
+    let mut value = json!({
+        "id": check.id,
+        "status": status_name(check.status),
+        "evidence": check.evidence,
+    });
+    if let (Some(object), Some(diagnostic)) = (value.as_object_mut(), rebuilt(check)) {
+        object.insert("diagnostic".to_owned(), diagnostic_json(&diagnostic));
+    }
+    value
+}
+
+/// Die Zeilen einer Tabelle: Marke, Kennung, Beleg.
+fn rows(checks: &[v1::DoctorCheck]) -> Vec<Vec<String>> {
+    checks
+        .iter()
+        .map(|check| {
+            vec![
+                mark(check.status),
+                check.id.clone(),
+                crate::render::one_line(&check.evidence),
+            ]
+        })
+        .collect()
+}
+
+/// Die Überschrift über der Tabelle eines Backends, etwa
+/// `backend engine (engine/plain)` oder `backend engine (engine/plain, selected)`.
+fn group_heading(group: &v1::DoctorBackend) -> String {
+    let stage = crate::render::one_line(&group.stage);
+    let name = crate::render::one_line(&group.name);
+    if group.selected {
+        format!("backend {name} ({stage}, selected)")
+    } else {
+        format!("backend {name} ({stage})")
+    }
+}
+
 /// Der schlimmste Status im Bericht, als Kurzname.
 fn worst(report: &v1::DoctorReport) -> &'static str {
     let mut worst = CheckStatus::Ok;
-    for check in &report.checks {
+    for check in counted_checks(report) {
         let status = match status_name(check.status) {
             "warn" => CheckStatus::Warn,
             "fail" => CheckStatus::Fail,
@@ -618,8 +763,8 @@ mod tests {
     use humanitl_sandbox::doctor::{CheckId, CheckOutcome, DaemonFacts};
 
     use super::{
-        Diagnostic, LLM_002, Source, answered_status, doctor, failure_facts, has_failure, mark,
-        replace, status_name, timed_out, worst,
+        Diagnostic, LLM_002, Source, answered_status, doctor, failure_facts, group_heading,
+        has_failure, mark, replace, status_name, timed_out, worst,
     };
 
     /// Ein Weg zum Daemon, der in seine Frist läuft, schlägt denselben
@@ -653,7 +798,107 @@ mod tests {
                     ))
                 })
                 .collect(),
+            backends: Vec::new(),
         }
+    }
+
+    /// Eine Gruppe mit einer Zeile dieses Status.
+    fn group(name: &str, selected: bool, status: v1::CheckStatus) -> v1::DoctorBackend {
+        v1::DoctorBackend {
+            name: name.to_owned(),
+            stage: name.to_owned(),
+            selected,
+            checks: vec![v1::DoctorCheck {
+                id: "available".to_owned(),
+                status: status as i32,
+                evidence: "x".to_owned(),
+                diagnostic: None,
+            }],
+        }
+    }
+
+    /// Eine rote Zeile in der Gruppe eines Backends färbt den Bericht rot und
+    /// setzt den Exit-Code, eine gelbe nicht (HUM-436).
+    #[test]
+    fn a_failing_backend_line_fails_the_report_and_a_warning_does_not() {
+        let mut warned = v1::DoctorReport::default();
+        warned
+            .backends
+            .push(group("chosen", true, v1::CheckStatus::Warn));
+        assert!(!has_failure(&warned));
+        assert_eq!(worst(&warned), "warn");
+
+        let mut failed = v1::DoctorReport::default();
+        failed
+            .backends
+            .push(group("chosen", true, v1::CheckStatus::Fail));
+        assert!(has_failure(&failed));
+        assert_eq!(worst(&failed), "fail");
+    }
+
+    /// Ein gesunder Rechner mit einer Stufe, die noch nicht zugelassen ist:
+    /// Ihre Gruppe steht da, gelb mit `SANDBOX_048`, und der Bericht bleibt
+    /// `ok` mit Exit 0.
+    #[test]
+    fn a_healthy_machine_with_an_unadmitted_backend_is_ok() {
+        let mut report = v1::DoctorReport {
+            checks: CheckId::ALL
+                .into_iter()
+                .map(|id| convert::doctor_check_to_proto(&CheckOutcome::ok(id, "fine")))
+                .collect(),
+            backends: Vec::new(),
+        };
+        report
+            .backends
+            .push(group("chosen", true, v1::CheckStatus::Ok));
+        let mut other = group("other", false, v1::CheckStatus::Warn);
+        other.checks[0].id = "admitted".to_owned();
+        other.checks[0].diagnostic = Some(v1::Diagnostic {
+            code: "SANDBOX_048".to_owned(),
+            why: "not admitted yet".to_owned(),
+            ..v1::Diagnostic::default()
+        });
+        report.backends.push(other);
+        assert_eq!(worst(&report), "ok");
+        assert!(!has_failure(&report));
+        assert_eq!(
+            super::counted_checks(&report).count(),
+            CheckId::ALL.len() + 1
+        );
+        // Gezählt wird sie nicht, gezeigt schon: Ihr Befund bekommt einen
+        // Block, damit lesbar ist, was diesem Backend fehlt.
+        assert!(super::shown_checks(&report).any(|check| {
+            check
+                .diagnostic
+                .as_ref()
+                .is_some_and(|diagnostic| diagnostic.code == "SANDBOX_048")
+        }));
+    }
+
+    #[test]
+    fn only_a_daemon_before_minor_35_is_too_old_for_backend_lines() {
+        let reachable = |minor| DaemonFacts::Reachable {
+            socket: std::path::PathBuf::from("/run/user/1000/humanitl/daemon.sock"),
+            version: "0.0.0".to_owned(),
+            expected_version: "0.0.0".to_owned(),
+            proto: (humanitl_ipc::PROTO_MAJOR, minor),
+            expected_proto: (humanitl_ipc::PROTO_MAJOR, humanitl_ipc::PROTO_MINOR),
+        };
+        assert_eq!(super::older_than_backends(&reachable(34)), Some(34));
+        assert_eq!(super::older_than_backends(&reachable(35)), None);
+        assert_eq!(super::older_than_backends(&reachable(36)), None);
+    }
+
+    #[test]
+    fn the_heading_of_a_group_names_stage_and_choice() {
+        let mut chosen = group("engine", true, v1::CheckStatus::Ok);
+        chosen.stage = "engine/plain".to_owned();
+        assert_eq!(
+            group_heading(&chosen),
+            "backend engine (engine/plain, selected)"
+        );
+        chosen.selected = false;
+        assert_eq!(group_heading(&chosen), "backend engine (engine/plain)");
     }
 
     #[test]

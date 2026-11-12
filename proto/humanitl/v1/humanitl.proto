@@ -36,8 +36,12 @@ service Humanitl {
   rpc Audit(AuditRequest) returns (AuditResponse);
   rpc GetConfig(GetConfigRequest) returns (ConfigSnapshot);
   rpc SetConfig(SetConfigRequest) returns (ConfigSnapshot);
-  // Maschinenpruefung wie `flutter doctor` (HUM-075).
-  rpc Doctor(google.protobuf.Empty) returns (DoctorReport);
+  // Maschinenpruefung wie `flutter doctor` (HUM-075), seit HUM-436 dazu je
+  // Sandbox-Backend eine Gruppe von Zeilen (`DoctorReport.backends`). Bis
+  // Minor 34 nahm der Aufruf `google.protobuf.Empty`; `DoctorRequest` ohne
+  // gesetztes Feld ist auf der Leitung dieselbe leere Nachricht, und ein
+  // aelterer Client bekommt denselben Bericht wie zuvor.
+  rpc Doctor(DoctorRequest) returns (DoctorReport);
   // LAN-Suche nach LLM-Servern, nur auf ausdruecklichen Wunsch (HUM-076).
   rpc DiscoverLlm(DiscoverRequest) returns (stream DiscoverResult);
   // Prueft genau einen Endpunkt, host-seitig, nur lesend (HUM-039).
@@ -1993,6 +1997,41 @@ message DoctorCheck {
 // Die vollstaendige Doctor-Ausgabe, in Anzeigereihenfolge.
 message DoctorReport {
   repeated DoctorCheck checks = 1;
+  // Je Sandbox-Backend dieser Art System eine Gruppe (HUM-436), in fester
+  // Reihenfolge wie in `SandboxBackendList.backends`. Leer bei einem Daemon
+  // vor Minor 35.
+  repeated DoctorBackend backends = 2;
+}
+
+// Der Auftrag an `Doctor` (HUM-436).
+message DoctorRequest {
+  // Je zugelassenem, verfuegbarem Backend einen Probestart: eine leere
+  // Sandbox mit dem Shim und `true`, deren fuenf `CHECK`-Zeilen gelesen
+  // werden. Das Ergebnis haelt der Daemon fest, bis sich die Fassung des
+  // Programms oder von Humanitl aendert. Ohne das Feld startet `Doctor`
+  // nichts und zeigt nur einen gespeicherten Probestart. Eine Stufe, die
+  // noch nicht zugelassen ist, startet nie; ihre Zeile `probe` traegt
+  // `SANDBOX_048`.
+  bool probe = 1;
+}
+
+// Die Zeilen des Doctors zu einem Sandbox-Backend (HUM-436).
+message DoctorBackend {
+  // Der Name, wie ihn `sandbox.backend` schreibt, ohne `auto`.
+  string name = 1;
+  // Die Stufe: der Name, mit der Laufzeit des Backends, falls es eine hat
+  // (`<name>/<laufzeit>`).
+  string stage = 2;
+  // Ob `sandbox.backend` dieses Backend waehlt; `auto` ist das Backend des
+  // Systems. Nur die Zeilen des gewaehlten Backends koennen `FAIL` sein; die
+  // eines anderen sind hoechstens `WARN`, weil sie keinen Start aufhalten.
+  bool selected = 3;
+  // Die Zeilen in Anzeigereihenfolge. `id` ist `admitted` (`SANDBOX_048`,
+  // solange die Stufe nicht zugelassen ist), `available` (die Suche vor jedem
+  // Start), fuer eine nicht zugelassene Stufe ihre Voraussetzungen ohne
+  // Start des Programms (`program`, `subordinate_ids`, `selinux`), und
+  // `probe` nach einem Probestart (`DOCTOR_014`, wenn er scheiterte).
+  repeated DoctorCheck checks = 4;
 }
 
 // ---------- LLM-Suche ----------

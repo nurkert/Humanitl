@@ -42,9 +42,11 @@
 //!   still eine Verbindung nach draußen erzeugt (HUM-076 hält dieselbe Regel).
 //! - **Er repariert nichts.** Jeder Befund trägt einen Vorschlag; ausgeführt
 //!   wird er von einem Menschen.
-//! - **Er startet keine Sandbox.** Die drei Garantien misst
+//! - **Er startet keine Sandbox, außer auf Wunsch.** Die drei Garantien misst
 //!   [`SandboxBackend::isolation_check`](crate::SandboxBackend::isolation_check)
 //!   an einer laufenden Sandbox; der Doctor prüft die Vorbedingungen dafür.
+//!   Nur `humanitl doctor --probe` startet je zugelassenem Backend eine leere
+//!   Sandbox mit `true` ([`backend_groups`], [`ProbeMode::Start`], HUM-436).
 //!
 //! # Fremde Rechner
 //!
@@ -54,8 +56,11 @@
 //! benennt (`/proc/self/status`, `/etc/ld.so.conf.d`), liegt unter der Wurzel
 //! von [`Probe`] und ist damit im Test ein Verzeichnis wie jedes andere.
 
+pub(crate) mod backends;
 mod checks;
 mod probe;
+mod probe_cache;
+mod probe_start;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -65,7 +70,10 @@ use humanitl_core::{Diagnostic, FixAction, Severity, sanitize_note};
 
 use crate::bwrap::Version;
 
+pub use self::backends::{BackendCheckId, BackendGroup, ProbeMode, backend_groups};
 pub use self::probe::{DEFAULT_TIMEOUT, MIN_FREE_BYTES, Probe};
+pub use self::probe_cache::{ProbeCache, ProbeKey, machine_identity};
+pub use self::probe_start::locate_shim;
 
 /// Der feste Anfang jedes Belegs einer Prüfung, die nicht laufen konnte.
 ///
@@ -286,10 +294,14 @@ impl std::fmt::Display for CheckStatus {
 /// Gebaut wird sie nur über die vier Konstruktoren; das hält die Zusage, dass
 /// jede nicht-grüne Zeile einen Befund trägt, an einer Stelle fest, statt sie
 /// in elf Prüfungen zu wiederholen.
+///
+/// Der Typparameter ist die Art der Kennung: [`CheckId`] für die elf Zeilen
+/// der Maschine, [`BackendCheckId`] für die Zeilen je Sandbox-Backend
+/// (HUM-436). Beide Arten tragen dieselbe Zusage.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CheckOutcome {
+pub struct CheckOutcome<I = CheckId> {
     /// Welche Prüfung.
-    id: CheckId,
+    id: I,
     /// Wie sie ausging.
     status: CheckStatus,
     /// Was gemessen wurde, in einer Zeile, zum Beispiel `bubblewrap 0.11.0`.
@@ -298,10 +310,10 @@ pub struct CheckOutcome {
     diagnostic: Option<Diagnostic>,
 }
 
-impl CheckOutcome {
+impl<I: Copy + std::fmt::Display> CheckOutcome<I> {
     /// Gemessen und in Ordnung.
     #[must_use]
-    pub fn ok(id: CheckId, evidence: impl Into<String>) -> Self {
+    pub fn ok(id: I, evidence: impl Into<String>) -> Self {
         Self {
             id,
             status: CheckStatus::Ok,
@@ -312,7 +324,7 @@ impl CheckOutcome {
 
     /// Gemessen, und das Ergebnis taugt nicht ganz.
     #[must_use]
-    pub fn warn(id: CheckId, evidence: impl Into<String>, diagnostic: Diagnostic) -> Self {
+    pub fn warn(id: I, evidence: impl Into<String>, diagnostic: Diagnostic) -> Self {
         Self {
             id,
             status: CheckStatus::Warn,
@@ -323,7 +335,7 @@ impl CheckOutcome {
 
     /// Gemessen, und ohne eine Änderung startet nichts.
     #[must_use]
-    pub fn fail(id: CheckId, evidence: impl Into<String>, diagnostic: Diagnostic) -> Self {
+    pub fn fail(id: I, evidence: impl Into<String>, diagnostic: Diagnostic) -> Self {
         Self {
             id,
             status: CheckStatus::Fail,
@@ -345,7 +357,7 @@ impl CheckOutcome {
     ///
     /// Der Status ist [`CheckStatus::Warn`] und nie [`CheckStatus::Ok`].
     #[must_use]
-    pub fn unmeasured(id: CheckId, why: impl AsRef<str>, words: &[&str]) -> Self {
+    pub fn unmeasured(id: I, why: impl AsRef<str>, words: &[&str]) -> Self {
         let why = why.as_ref();
         Self::warn(
             id,
@@ -359,7 +371,7 @@ impl CheckOutcome {
 
     /// Welche Prüfung.
     #[must_use]
-    pub const fn id(&self) -> CheckId {
+    pub const fn id(&self) -> I {
         self.id
     }
 
@@ -385,6 +397,19 @@ impl CheckOutcome {
     #[must_use]
     pub fn is_unmeasured(&self) -> bool {
         self.evidence.starts_with(NOT_MEASURED)
+    }
+
+    /// Dieselbe Zeile, aus `fail` wird `warn`; Befund und Beleg bleiben.
+    ///
+    /// Für die Zeilen eines Backends, das `sandbox.backend` nicht wählt
+    /// (HUM-436): Was ihm fehlt, hält keinen Start auf, und der Doctor nennt
+    /// es, ohne die Maschine rot zu färben.
+    #[must_use]
+    pub(crate) fn at_most_warn(mut self) -> Self {
+        if self.status == CheckStatus::Fail {
+            self.status = CheckStatus::Warn;
+        }
+        self
     }
 }
 

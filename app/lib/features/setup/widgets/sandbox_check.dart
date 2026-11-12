@@ -20,6 +20,44 @@ import '../setup_text.dart';
 import 'doctor_list.dart';
 import 'setup_check_row.dart';
 
+/// The lines of one sandbox backend under its heading (HUM-436).
+class _BackendGroup extends StatelessWidget {
+  const _BackendGroup({required this.group});
+
+  final DoctorBackendGroup group;
+
+  @override
+  Widget build(BuildContext context) {
+    final HTokens tokens = HTheme.of(context);
+    return Padding(
+      key: Key('setup-backend-${group.name}'),
+      padding: EdgeInsets.only(top: tokens.spacing.x2),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              SetupMark(
+                key: Key('setup-backend-mark-${group.name}'),
+                state: doctorGroupState(group),
+              ),
+              SizedBox(width: tokens.spacing.x2),
+              Flexible(
+                child: Text(
+                  doctorBackendHeading(context.l10n, group),
+                  key: Key('setup-backend-heading-${group.name}'),
+                  style: tokens.typography.ui12.tinted(tokens.colors.fg0),
+                ),
+              ),
+            ],
+          ),
+          DoctorList(checks: group.checks, titleOf: doctorBackendCheckTitle),
+        ],
+      ),
+    );
+  }
+}
+
 /// The machine row.
 class SandboxCheck extends StatelessWidget {
   /// Creates the row for [check] over [report].
@@ -85,6 +123,26 @@ class SandboxCheck extends StatelessWidget {
               // Wichtige dieses Bildschirms (`docs/UX.md` 3.1).
               initiallyOpen: check.state != SetupCheckState.ok,
               child: DoctorList(checks: shown),
+            ),
+          // Je Backend eine Gruppe (HUM-436). Ihre Zeilen stehen unter der
+          // Liste der Maschine, nicht in ihr: Die Zahl im Kopf zählt die
+          // Zeilen über diesen Rechner, und eine Gruppe gehört einem
+          // Backend.
+          if (report.backends.isNotEmpty)
+            HCollapsible(
+              key: const Key('setup-doctor-backends'),
+              title: l10n.setupBackendsTitle,
+              initiallyOpen: report.backends.any(
+                (DoctorBackendGroup group) =>
+                    group.selected && group.worst != DoctorStatus.ok,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  for (final DoctorBackendGroup group in report.backends)
+                    _BackendGroup(group: group),
+                ],
+              ),
             ),
         ],
       ),

@@ -916,9 +916,14 @@ SetupCheck _sandboxCheck(AsyncValue<DoctorReport> doctor) {
       diagnostic: diagnostic,
     );
   }
-  final List<DoctorCheck> lines = machineLines(
-    doctor.value ?? DoctorReport.empty,
-  );
+  final DoctorReport report = doctor.value ?? DoctorReport.empty;
+  // Die Zeilen der Maschine und die des gewählten Backends (HUM-436): Was
+  // einem anderen Backend fehlt, hält keinen Start auf, und der Daemon
+  // schickt es höchstens gelb.
+  final List<DoctorCheck> lines = <DoctorCheck>[
+    ...machineLines(report),
+    ...chosenBackendLines(report),
+  ];
   if (lines.isEmpty) {
     return const SetupCheck(
       kind: SetupCheckKind.sandbox,
@@ -983,6 +988,16 @@ SetupCheck _sandboxCheck(AsyncValue<DoctorReport> doctor) {
 List<DoctorCheck> machineLines(DoctorReport report) => <DoctorCheck>[
   for (final DoctorCheck line in report.checks)
     if (!DoctorCheckId.ownRow.contains(line.id)) line,
+];
+
+/// The lines of the backend `sandbox.backend` chooses (HUM-436); empty from
+/// a daemon before proto minor 35.
+///
+/// They rank in the machine row beside the machine's own lines, but are not
+/// counted in its heading: the heading names the lines about this machine.
+List<DoctorCheck> chosenBackendLines(DoctorReport report) => <DoctorCheck>[
+  for (final DoctorBackendGroup group in report.backends)
+    if (group.selected) ...group.checks,
 ];
 
 /// True when [line] carries no measurement, for either of the three reasons.

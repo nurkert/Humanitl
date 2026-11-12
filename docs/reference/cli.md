@@ -1870,6 +1870,11 @@ Options:
       --config <PATH>
           Read this config file instead of the one in the user's config directory
 
+      --probe
+          Start an empty sandbox with the shim and `true` under every admitted, available sandbox backend and check its five CHECK lines; without this, doctor starts nothing.
+
+          A passed probe is remembered until the version of the backend's program or of Humanitl changes. A backend that is not admitted yet is never started; its probe line says `SANDBOX_048`.
+
   -v, --verbose...
           Explain what is happening; repeat for more
 

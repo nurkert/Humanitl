@@ -462,6 +462,8 @@ fn all_contract_messages_exist() {
         "SetConfigRequest",
         "DoctorCheck",
         "DoctorReport",
+        "DoctorRequest",
+        "DoctorBackend",
         "DiscoverRequest",
         "DiscoverResult",
         "SandboxBackendList",
@@ -1309,7 +1311,7 @@ const EXPECTED_RPCS: &[(&str, &str, &str, bool, bool)] = &[
     ),
     (
         "Doctor",
-        ".google.protobuf.Empty",
+        ".humanitl.v1.DoctorRequest",
         ".humanitl.v1.DoctorReport",
         false,
         false,

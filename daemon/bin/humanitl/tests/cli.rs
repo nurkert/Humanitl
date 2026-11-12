@@ -269,7 +269,11 @@ fn json_shape_stable() {
         .keys()
         .map(String::as_str)
         .collect();
-    assert_eq!(top, vec!["checks", "source", "status"], "{report}");
+    assert_eq!(
+        top,
+        vec!["backends", "checks", "source", "status"],
+        "{report}"
+    );
     assert!(
         ["ok", "warn", "fail"].contains(&report["status"].as_str().unwrap_or_default()),
         "{report}"
@@ -321,6 +325,36 @@ fn json_shape_stable() {
             "{id} carries {}, and the doctor keeps one code per line",
             diagnostic["code"]
         );
+    }
+
+    // Je Backend eine Gruppe (HUM-436): Name, Stufe, Wahl und Zeilen mit
+    // derselben Form; jede nicht-grüne Zeile trägt einen Befund mit `why`
+    // und `fix`, und ohne `--probe` gibt es nur einen gespeicherten
+    // Probestart, hier also keinen.
+    let groups = report["backends"].as_array().expect("backends is an array");
+    assert!(!groups.is_empty(), "{report}");
+    for group in groups {
+        assert!(group["name"].as_str().is_some_and(|name| !name.is_empty()));
+        assert!(
+            group["stage"]
+                .as_str()
+                .is_some_and(|stage| !stage.is_empty())
+        );
+        assert!(group["selected"].is_boolean(), "{group}");
+        for check in group["checks"].as_array().expect("checks of a group") {
+            assert_ne!(check["id"], "probe", "nothing was asked to start: {group}");
+            if check["status"] == "ok" {
+                continue;
+            }
+            let diagnostic = check.get("diagnostic").unwrap_or_else(|| panic!("{check}"));
+            assert!(
+                diagnostic["why"]
+                    .as_str()
+                    .is_some_and(|why| !why.is_empty()),
+                "{check}"
+            );
+            assert!(!diagnostic["fix"].is_null(), "{check}");
+        }
     }
 }
 
@@ -443,6 +477,28 @@ fn doctor_takes_the_report_from_the_daemon_and_answers_the_daemon_line_itself() 
         .expect("the daemon line");
     assert_eq!(daemon["status"], "ok", "{daemon}");
     assert!(daemon.get("diagnostic").is_none(), "{daemon}");
+}
+
+/// Ein Daemon vor Minor 35 schickt keine Gruppen je Backend (HUM-436). Die
+/// Kommandozeile fragt die Backends dann selbst und sagt es, statt still
+/// einen Bericht ohne sie auszugeben.
+#[test]
+fn doctor_against_an_older_daemon_runs_the_backend_lines_here() {
+    let harness = Harness::new();
+    let _server = FakeServer::start_with_proto_minor(&harness, 34);
+    let output = harness.run(["doctor"]);
+    let text = stdout(&output);
+    assert!(text.contains("backend "), "no backend group:\n{text}");
+    assert!(
+        stderr(&output).contains("the backend lines come from this process"),
+        "{}",
+        stderr(&output)
+    );
+
+    let (report, _) = doctor_json(&harness, &[]);
+    assert_eq!(report["source"], "daemon", "{report}");
+    let groups = report["backends"].as_array().expect("backends");
+    assert!(!groups.is_empty(), "{report}");
 }
 
 #[test]

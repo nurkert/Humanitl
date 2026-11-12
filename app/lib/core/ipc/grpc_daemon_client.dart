@@ -456,7 +456,10 @@ class GrpcDaemonClient implements DaemonClient {
   @override
   Future<DoctorReport> doctor() async {
     final pb.DoctorReport report = await _unary(
-      (CallOptions options) => _stub.doctor(Empty(), options: options),
+      // Ohne `probe`: Der Bildschirm startet nichts (HUM-436); ein
+      // gespeicherter Probestart steht trotzdem in den Gruppen.
+      (CallOptions options) =>
+          _stub.doctor(pb.DoctorRequest(), options: options),
     );
     return report.toDomain();
   }

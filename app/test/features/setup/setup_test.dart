@@ -17,6 +17,7 @@ import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/features/setup/providers/setup_provider.dart';
 import 'package:humanitl/features/setup/setup_screen.dart';
 import 'package:humanitl/features/setup/widgets/doctor_list.dart';
+import 'package:humanitl/features/setup/widgets/setup_check_row.dart';
 import 'package:humanitl/features/intercept/intercept_screen.dart';
 import 'package:humanitl/features/shell/providers/navigation.dart';
 import 'package:humanitl/features/shell/section.dart';
@@ -502,6 +503,80 @@ void main() {
     // Und die Überschrift verspricht genau die neun, die darunter stehen.
     expect(find.text('9 lines about this machine'), findsOneWidget);
     expect(find.text('11 lines about this machine'), findsNothing);
+  });
+
+  testWidgets('the lines of each sandbox backend stand under its heading', (
+    WidgetTester tester,
+  ) async {
+    // HUM-436: je Backend eine Gruppe, das gewählte markiert. Rot im
+    // gewählten Backend öffnet die Gruppen von selbst.
+    final DoctorReport report = fakeDoctorOk().copyWith(
+      backends: const <DoctorBackendGroup>[
+        DoctorBackendGroup(
+          name: 'alpha',
+          stage: 'alpha',
+          selected: true,
+          checks: <DoctorCheck>[
+            DoctorCheck(
+              id: DoctorBackendCheckId.admitted,
+              status: DoctorStatus.ok,
+              evidence: 'alpha is admitted',
+            ),
+            DoctorCheck(
+              id: DoctorBackendCheckId.probe,
+              status: DoctorStatus.fail,
+              evidence: 'not started: SANDBOX_011',
+              diagnostic: Diagnostic(
+                code: 'DOCTOR_014',
+                severity: Severity.blocking,
+                why: 'the probe start did not start',
+              ),
+            ),
+          ],
+        ),
+        DoctorBackendGroup(
+          name: 'beta',
+          stage: 'beta/plain',
+          checks: <DoctorCheck>[
+            DoctorCheck(
+              id: DoctorBackendCheckId.admitted,
+              status: DoctorStatus.warn,
+              evidence: 'beta/plain is not admitted yet',
+              diagnostic: Diagnostic(
+                code: 'SANDBOX_048',
+                severity: Severity.blocking,
+                why: 'not admitted yet',
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+    await pumpApp(tester, client: FakeDaemonClient()..doctorReport = report);
+    await pressCtrl(tester, LogicalKeyboardKey.digit6);
+    await tester.pump();
+    await openSetupStep(tester, 'sandbox');
+
+    expect(find.byKey(const Key('setup-doctor-backends')), findsOneWidget);
+    expect(find.text('alpha (chosen)'), findsOneWidget);
+    expect(find.text('beta/plain'), findsOneWidget);
+    expect(find.text('Probe start'), findsOneWidget);
+    expect(find.text('Admitted'), findsNWidgets(2));
+    // Die Überschrift der Maschine zählt die Zeilen der Backends nicht mit.
+    expect(find.text('9 lines about this machine'), findsOneWidget);
+    // Jede Gruppe trägt die Marke ihrer schlimmsten Zeile.
+    expect(
+      tester
+          .widget<SetupMark>(find.byKey(const Key('setup-backend-mark-alpha')))
+          .state,
+      SetupCheckState.failed,
+    );
+    expect(
+      tester
+          .widget<SetupMark>(find.byKey(const Key('setup-backend-mark-beta')))
+          .state,
+      SetupCheckState.warn,
+    );
   });
 
   /// Akzeptanzkriterium 5, mit wirklich gehaltenen Anfragen und einem
