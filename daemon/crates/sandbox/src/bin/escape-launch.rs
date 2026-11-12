@@ -89,6 +89,29 @@
 //!
 //! `run.sh` unterscheidet daran „die Sandbox lief gar nicht" von „die Sandbox
 //! lief und eine Probe ist durchgekommen".
+//!
+//! # Je Backend (HUM-435)
+//!
+//! Eine Stufe ist erst zulässig, wenn `tests/escape/` gegen sie grün ist
+//! (BACKLOG.md 9.1). Vor ihrer Zulassung lehnt `humanitl sandbox run` sie mit
+//! `SANDBOX_048` ab; die Suite startet sie deshalb hier, mit
+//! `--backend <name>` über `Backend::detect_unadmitted`. Dieses Binary gibt es
+//! nur mit dem Feature `unadmitted-backends` (`required-features` in
+//! `Cargo.toml`), und weder `humanitld` noch `humanitl` bauen mit ihm; die
+//! Umgehung ist also ein Argument im Code der Suite, nie ein Schlüssel.
+//! `tests/escape/run.sh` wählt den Weg über `HUMANITL_ESCAPE_BACKEND`:
+//! `bwrap` (die Vorgabe) über `humanitl sandbox run`, jede andere Stufe über
+//! diesen Starter, mit dem Proxy-Socket, der CA und dem Bundle des Daemons
+//! des Laufs.
+//!
+//! Für eine andere Stufe als bwrap gilt zweierlei anders: Ohne brauchbaren
+//! Shim startet nichts (nur die Argumentliste von bwrap kennt das Harness
+//! gut genug, um den Shim herauszunehmen, und ohne ihn ist keine Garantie
+//! belegt), und jede Sitzung bekommt eine eigene Kennung, weil der Name des
+//! Containers sie trägt. Nach dem Ende druckt der Starter wie
+//! `humanitl sandbox run` die verweigerten Sockets
+//! ([`humanitl_sandbox::Refusal::summary_line`]), damit
+//! `tests/escape/refusals-proof.sh` unter jedem Backend dieselbe Zeile liest.
 
 #![forbid(unsafe_code)]
 
@@ -100,14 +123,14 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-use humanitl_config::{DIR_MODE, Env, FILE_MODE, Paths, WorkMode};
+use humanitl_config::{DIR_MODE, Env, FILE_MODE, Paths, SandboxRef, WorkMode};
 use humanitl_core::diagnostics::codes::{SANDBOX_010, SANDBOX_011, SANDBOX_012, SANDBOX_013};
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_sandbox::{
-    BIND_FD_VERSION, Backend, BwrapBackend, EXIT_USAGE as SHIM_EXIT_USAGE, LaunchOptions,
-    MIN_BWRAP_VERSION, MountPolicy, PlanRequest, SandboxBackend, SandboxHandle, SandboxProfile,
-    SessionContext, StdioMode, Version,
+    BIND_FD_VERSION, BWRAP_BACKEND, Backend, BwrapBackend, EXIT_USAGE as SHIM_EXIT_USAGE,
+    LaunchOptions, MIN_BWRAP_VERSION, MountPolicy, PlanRequest, SandboxBackend, SandboxHandle,
+    SandboxProfile, SessionContext, StdioMode, Version,
 };
 
 /// Exit-Code, wenn die Kommandozeile des Starters selbst unbrauchbar ist.
@@ -124,6 +147,10 @@ const SHIM_BINARY: &str = "humanitl-shim";
 /// Das Bundle des Hosts, das ohne `--ca-bundle` in die Sandbox kommt.
 const HOST_CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
 
+/// Wie lange nach dem Ende auf die letzten Zeilen über verweigerte Versuche
+/// gewartet wird; derselbe Wert wie in `humanitl sandbox run`.
+const REFUSALS_DRAIN: std::time::Duration = std::time::Duration::from_secs(2);
+
 const USAGE: &str = "\
 escape-launch — start the escape-test sandbox (HUM-006, HUM-011)
 
@@ -132,6 +159,8 @@ usage:
 
 options:
   --profile FILE        sandbox profile, normally profiles/sandbox/test.toml
+  --backend NAME        the sandbox backend (default: bwrap); a level that is not
+                        admitted yet starts here and only here (HUM-435)
   --tests-dir DIR       host directory bound read-only to /tests/escape
   --work DIR            host directory bound to /work (default: STATE/work)
   --state DIR           where placeholders are created (default: TMPDIR/humanitl-escape);
@@ -291,8 +320,16 @@ fn run() -> Result<ExitCode, LaunchError> {
         Shim::Placeholder(placeholder)
     };
 
+    // Unter bwrap bleibt die Kennung fest, damit `--print-argv` stabil ist;
+    // eine Container-Engine benennt den Container nach ihr, und zwei Läufe
+    // hintereinander dürfen sich dort nicht begegnen.
+    let session = if args.backend == BWRAP_BACKEND {
+        SessionId::nil()
+    } else {
+        SessionId::new()
+    };
     let context = SessionContext {
-        session: SessionId::nil(),
+        session,
         work_src: work,
         work_mode: WorkMode::Rw,
         proxy_socket_src: proxy_socket,
@@ -307,17 +344,8 @@ fn run() -> Result<ExitCode, LaunchError> {
         agent_program: None,
     };
 
-    // Die Escape-Suite prüft bwrap; die Fassung braucht der Starter selbst
-    // (`refuse_unclosed_descriptors`), geplant und gestartet wird über den
-    // Port (HUM-428).
-    let bwrap = match BwrapBackend::detect(paths) {
-        Ok(backend) => backend,
-        // Die Vorschau braucht kein `bwrap`; der Start schon.
-        Err(_) if args.print_argv => {
-            BwrapBackend::unchecked("bwrap", MIN_BWRAP_VERSION, Paths::new(Env::from_process()))
-        }
-        Err(diagnostic) => return Err(diagnostic.into()),
-    };
+    let (backend, bwrap_version) = chosen_backend(&args, paths)?;
+    refuse_placeholder_off_bwrap(&shim, bwrap_version.is_some())?;
     let mut options = LaunchOptions {
         stdio: StdioMode::Inherit,
         ..LaunchOptions::default()
@@ -333,10 +361,9 @@ fn run() -> Result<ExitCode, LaunchError> {
             .session_ro
             .push((tests_dir, PathBuf::from(TESTS_DIR_DST)));
     }
-    if !args.print_argv {
-        refuse_unclosed_descriptors(matches!(shim, Shim::Placeholder(_)), bwrap.version())?;
+    if let (false, Some(version)) = (args.print_argv, bwrap_version) {
+        refuse_unclosed_descriptors(matches!(shim, Shim::Placeholder(_)), version)?;
     }
-    let backend = Backend::from(bwrap);
 
     let mut plan = backend.plan(&PlanRequest::new(&profile, &context, &options))?;
 
@@ -364,7 +391,58 @@ fn run() -> Result<ExitCode, LaunchError> {
         enforce_isolation(&backend, &handle)?;
     }
     let status = handle.wait()?;
+    if matches!(shim, Shim::Real(_)) {
+        report_refusals(&handle);
+    }
     Ok(exit_code_of(status))
+}
+
+/// Das Backend aus `--backend`, ohne die Zulassung (HUM-435), und unter bwrap
+/// dessen Fassung, die der Starter selbst braucht
+/// (`refuse_unclosed_descriptors`). Geplant und gestartet wird danach über
+/// den Port (HUM-428).
+///
+/// # Errors
+///
+/// Der Befund der Suche; nur die Vorschau unter bwrap kommt ohne `bwrap` aus.
+fn chosen_backend(args: &Args, paths: Paths) -> Result<(Backend, Option<Version>), LaunchError> {
+    let backend = match Backend::detect_unadmitted(&args.backend, paths, &SandboxRef::default()) {
+        Ok(backend) => backend,
+        // Die Vorschau braucht kein `bwrap`; der Start schon.
+        Err(_) if args.print_argv && args.backend == BWRAP_BACKEND => Backend::from(
+            BwrapBackend::unchecked("bwrap", MIN_BWRAP_VERSION, Paths::new(Env::from_process())),
+        ),
+        Err(diagnostic) => return Err(diagnostic.into()),
+    };
+    let version = if let Backend::Bwrap(bwrap) = &backend {
+        Some(bwrap.version())
+    } else {
+        None
+    };
+    Ok((backend, version))
+}
+
+/// Sagt nach dem Lauf, was die Sandbox dem Befehl an Sockets verweigert hat
+/// (HUM-138), in denselben Zeilen wie `humanitl sandbox run`.
+///
+/// Meldet die Sandbox nicht, steht dort `SANDBOX_019`; hat sie nichts
+/// verweigert, steht nichts dort.
+fn report_refusals(handle: &SandboxHandle) {
+    let (refusals, _) = handle.wait_refusals(u64::MAX, REFUSALS_DRAIN);
+    if let Some(diagnostic) = refusals.unreported() {
+        eprintln!("escape-launch: {diagnostic}");
+        return;
+    }
+    if refusals.entries.is_empty() {
+        return;
+    }
+    eprintln!(
+        "escape-launch: the sandbox refused {} attempt(s) to open a socket outside the proxy:",
+        refusals.total()
+    );
+    for entry in &refusals.entries {
+        eprintln!("{}", entry.summary_line());
+    }
 }
 
 /// Die CA und das Bundle der Sitzung, beide als Host-Pfad.
@@ -557,6 +635,27 @@ fn take_tests_placeholder(profile: &mut SandboxProfile) -> bool {
     profile.mounts.extra_ro.len() != before
 }
 
+/// Ohne brauchbaren Shim startet nur bwrap (HUM-435).
+///
+/// Den Shim aus der Argumentliste nehmen kann der Starter nur bei der Form,
+/// die HUM-010 für bwrap festlegt ([`strip_shim`]). Unter einem anderen
+/// Backend bliebe sonst ein Platzhalter als PID 1 stehen, und keine der drei
+/// Garantien wäre belegt.
+///
+/// # Errors
+///
+/// [`LaunchError::Harness`] mit `SANDBOX_010`.
+fn refuse_placeholder_off_bwrap(shim: &Shim, bwrap: bool) -> Result<(), LaunchError> {
+    if matches!(shim, Shim::Placeholder(_)) && !bwrap {
+        return Err(unexpected_argv(format!(
+            "no usable {SHIM_BINARY}, and only the bwrap argument list has a shape the harness can \
+             take the shim out of; build {SHIM_BINARY} (or pass --shim FILE) to test another \
+             backend"
+        )));
+    }
+    Ok(())
+}
+
 /// Ohne Shim und mit `bwrap` vor [`BIND_FD_VERSION`] startet der Starter
 /// nicht (HUM-263).
 ///
@@ -636,6 +735,8 @@ fn find_window(args: &[OsString], needle: &[&OsStr]) -> Option<usize> {
 struct Args {
     /// Das Sandbox-Profil, normalerweise `profiles/sandbox/test.toml`.
     profile: PathBuf,
+    /// Das Backend, Vorgabe [`BWRAP_BACKEND`] (HUM-435).
+    backend: String,
     /// Host-Verzeichnis, das nur lesbar nach `/tests/escape` kommt.
     tests_dir: Option<PathBuf>,
     /// Host-Verzeichnis, das nach `/work` kommt.
@@ -660,6 +761,7 @@ impl Args {
     /// Liest die Argumente. `Ok(None)` heißt: `--help`, nichts zu tun.
     fn parse(input: impl IntoIterator<Item = OsString>) -> Result<Option<Self>, LaunchError> {
         let mut profile: Option<PathBuf> = None;
+        let mut backend = BWRAP_BACKEND.to_owned();
         let mut tests_dir = None;
         let mut work = None;
         let mut state = None;
@@ -680,6 +782,13 @@ impl Args {
                     break;
                 }
                 Some("--profile") => profile = Some(value(&mut rest, "--profile")?),
+                Some("--backend") => {
+                    let name = value(&mut rest, "--backend")?;
+                    name.to_str()
+                        .filter(|name| !name.is_empty())
+                        .ok_or_else(|| usage("--backend needs a backend name"))?
+                        .clone_into(&mut backend);
+                }
                 Some("--tests-dir") => tests_dir = Some(value(&mut rest, "--tests-dir")?),
                 Some("--work") => work = Some(value(&mut rest, "--work")?),
                 Some("--state") => state = Some(value(&mut rest, "--state")?),
@@ -709,6 +818,7 @@ impl Args {
 
         Ok(Some(Self {
             profile,
+            backend,
             tests_dir,
             work,
             state: state.unwrap_or_else(|| std::env::temp_dir().join("humanitl-escape")),
@@ -1101,6 +1211,55 @@ mod tests {
             parsed.command,
             words(&["/bin/sh", "-c", "echo --profile is not a flag here"])
         );
+    }
+
+    /// Ohne `--backend` prüft die Suite bwrap, wie bisher; mit ihm die
+    /// genannte Stufe, deren Name erst die Suche prüft (HUM-435).
+    #[test]
+    fn the_backend_is_bwrap_unless_one_is_named() {
+        let parsed = Args::parse(words(&["--profile", "p.toml", "--", "true"]))
+            .expect("the line parses")
+            .expect("it is not --help");
+        assert_eq!(parsed.backend, BWRAP_BACKEND);
+
+        let parsed = Args::parse(words(&[
+            "--profile",
+            "p.toml",
+            "--backend",
+            "engine",
+            "--",
+            "true",
+        ]))
+        .expect("the line parses")
+        .expect("it is not --help");
+        assert_eq!(parsed.backend, "engine");
+
+        let missing = ["--profile", "p.toml", "--backend"];
+        let empty = ["--profile", "p.toml", "--backend", "", "--", "true"];
+        for line in [&missing[..], &empty[..]] {
+            let err = Args::parse(words(line)).expect_err("a backend needs a name");
+            assert!(
+                matches!(&err, LaunchError::Usage(d) if d.code == SANDBOX_012),
+                "{err}"
+            );
+        }
+    }
+
+    /// Ohne Shim startet nur bwrap: Unter einem anderen Backend bliebe ein
+    /// Platzhalter als PID 1, und keine Garantie wäre belegt (HUM-435).
+    #[test]
+    fn a_placeholder_shim_starts_nothing_but_bwrap() {
+        let placeholder = Shim::Placeholder(PathBuf::from("/tmp/escape/humanitl-shim.placeholder"));
+        let real = Shim::Real(PathBuf::from("/usr/lib/humanitl/humanitl-shim"));
+        let err = refuse_placeholder_off_bwrap(&placeholder, false)
+            .expect_err("another backend without the shim");
+        assert!(
+            matches!(&err, LaunchError::Harness(d) if d.code == SANDBOX_010),
+            "{err}"
+        );
+        refuse_placeholder_off_bwrap(&placeholder, true).expect("bwrap strips the shim");
+        refuse_placeholder_off_bwrap(&real, false).expect("a real shim starts anywhere");
+        refuse_placeholder_off_bwrap(&real, true).expect("a real shim starts anywhere");
     }
 
     #[test]

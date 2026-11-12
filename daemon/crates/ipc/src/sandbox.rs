@@ -682,6 +682,9 @@ struct Inner {
     /// auf den Menschen warten (HUM-350). Höchstens eine; ein neuer Start
     /// mit wartenden Änderungen wird abgelehnt.
     disposable: Mutex<Option<crate::disposable::Waiting>>,
+    /// Das Backend, das Plan und Start nehmen, statt es auf dem System zu
+    /// suchen ([`SandboxPorts::backend`]).
+    backend: Option<Backend>,
 }
 
 /// Woran der Dienst hängt, wenn eine Sitzung startet.
@@ -714,6 +717,19 @@ pub struct SandboxPorts {
     /// Wo der Zugangsschlüssel des Modells liegt (HUM-140). Ohne Angabe der
     /// Speicher der Pfade des Resolvers; Tests setzen eine Attrappe ein.
     pub keys: Option<KeyStore>,
+    /// Das Backend, mit dem Plan und Start laufen, statt es auf dem System
+    /// zu suchen (HUM-435). Ohne Angabe sucht der Dienst es wie immer.
+    ///
+    /// Gesetzt wird es nur von der Escape-Suite, damit ESC-5 das Terminal
+    /// einer Stufe prüfen kann, die noch nicht zugelassen ist; der Daemon
+    /// setzt es nie. Die Wahl aus `sandbox.backend` gilt trotzdem: Ein Start
+    /// mit einem anderen Backend als dem gewählten scheitert, und Untergrenze
+    /// und Sandbox-Profil prüft [`humanitl_sandbox::choose_backend`] wie
+    /// sonst. Übergangen wird allein `SANDBOX_048`, und nur für genau das
+    /// Backend, das die Konfiguration nennt. Ein nicht zugelassenes Backend
+    /// lässt sich außerhalb der Suite gar nicht bauen
+    /// (`humanitl_sandbox::UNADMITTED_BACKENDS_BUILT`).
+    pub backend: Option<Backend>,
 }
 
 impl SandboxPorts {
@@ -759,6 +775,14 @@ impl SandboxPorts {
         self.keys = Some(keys);
         self
     }
+
+    /// Dieselben Anschlüsse mit diesem Backend (HUM-435, nur die
+    /// Escape-Suite; siehe [`SandboxPorts::backend`]).
+    #[must_use]
+    pub fn with_backend(mut self, backend: Backend) -> Self {
+        self.backend = Some(backend);
+        self
+    }
 }
 
 impl SandboxService {
@@ -791,6 +815,7 @@ impl SandboxService {
                 retired: tokio::sync::watch::Sender::new(false),
                 llm_reach: LlmReach::default(),
                 disposable: Mutex::new(None),
+                backend: ports.backend,
             }),
         }
     }
@@ -3541,9 +3566,15 @@ impl Inner {
         // und dem Sandbox-Profil (HUM-431). Was die Wahl ablehnt, lehnt
         // Vorschau und Start ab; zurückgefallen wird nur von der Prüfung des
         // Systems auf dasselbe Backend ohne Prüfung, nie auf ein anderes.
-        let choice = humanitl_sandbox::choose_backend(&config.sandbox, &profile.sandbox.backend)?;
-        let backend = Backend::detect(choice.name, self.paths.clone(), &config.sandbox)
-            .or_else(|_| Backend::fallback(choice.name, self.paths.clone(), &config.sandbox))?;
+        let backend = if let Some(given) = &self.backend {
+            given_backend(given, &config.sandbox, &profile.sandbox.backend)?;
+            given.clone()
+        } else {
+            let choice =
+                humanitl_sandbox::choose_backend(&config.sandbox, &profile.sandbox.backend)?;
+            Backend::detect(choice.name, self.paths.clone(), &config.sandbox)
+                .or_else(|_| Backend::fallback(choice.name, self.paths.clone(), &config.sandbox))?
+        };
         let options = LaunchOptions {
             approved_work_dir: approved,
             ..LaunchOptions::default()
@@ -4035,6 +4066,45 @@ struct AgentContribution {
 }
 
 /// `LLM_009` as a warning: the caller's command starts without the key.
+/// Prüft ein gesetztes Backend gegen die Wahl aus `sandbox.backend`
+/// (HUM-435, [`SandboxPorts::backend`]).
+///
+/// Die Wahl läuft wie ohne gesetztes Backend durch
+/// [`humanitl_sandbox::choose_backend`], mit Sandbox-Profil und Untergrenze.
+/// Nennt sie ein anderes Backend, scheitert der Start mit `SANDBOX_034`,
+/// statt still eines zu nehmen, das niemand gewählt hat. `SANDBOX_048` gilt
+/// als erfüllt, wenn die Konfiguration genau dieses Backend nennt: Die Wahl
+/// prüft die Zulassung zuletzt, alles davor hat dann schon gehalten.
+fn given_backend(
+    given: &Backend,
+    sandbox: &humanitl_config::SandboxRef,
+    profile_backend: &str,
+) -> Result<(), Diagnostic> {
+    let chosen = match humanitl_sandbox::choose_backend(sandbox, profile_backend) {
+        Ok(choice) => choice.name,
+        Err(refused)
+            if refused.code == codes::SANDBOX_048
+                && humanitl_sandbox::backend_name(sandbox.backend) == given.name() =>
+        {
+            given.name()
+        }
+        Err(refused) => return Err(refused),
+    };
+    if chosen == given.name() {
+        return Ok(());
+    }
+    Err(Diagnostic::builder(codes::SANDBOX_034, Severity::Blocking)
+        .why(format!(
+            "this service starts with the backend {:?}, and sandbox.backend chose {chosen:?}",
+            given.name()
+        ))
+        .fix(FixAction::ChangeSetting {
+            key: "sandbox.backend".to_owned(),
+            value: given.name().to_owned(),
+        })
+        .build())
+}
+
 fn started_without_key(mut found: Diagnostic) -> Diagnostic {
     found.severity = Severity::Warning;
     found.why = format!(
@@ -7854,5 +7924,73 @@ mod tests {
                 .expect("declared in the daemon's file"),
             Some(canonical)
         );
+    }
+}
+
+/// Ein gesetztes Backend gegen die Wahl aus `sandbox.backend` (HUM-435).
+#[cfg(all(test, target_os = "linux"))]
+mod given_backend_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use humanitl_config::{Env, Paths, SandboxBackendName, SandboxRef};
+    use humanitl_sandbox::{AUTO_BACKEND, Backend, SEATBELT_BACKEND};
+
+    use super::{codes, given_backend};
+
+    /// Das Backend des Systems, ohne es auf dem System zu prüfen.
+    fn system_backend() -> Backend {
+        Backend::fallback(
+            AUTO_BACKEND,
+            Paths::new(Env::from_pairs([("HOME", "/nonexistent")])),
+            &SandboxRef::default(),
+        )
+        .unwrap()
+    }
+
+    fn sandbox(backend: SandboxBackendName) -> SandboxRef {
+        SandboxRef {
+            backend,
+            ..SandboxRef::default()
+        }
+    }
+
+    /// Die Wahl nennt dasselbe Backend: Der Start nimmt das gesetzte.
+    #[test]
+    fn the_chosen_backend_is_accepted() {
+        given_backend(
+            &system_backend(),
+            &sandbox(SandboxBackendName::Auto),
+            AUTO_BACKEND,
+        )
+        .unwrap();
+    }
+
+    /// Die Wahl nennt ein anderes Backend: Der Start scheitert, statt eines
+    /// zu nehmen, das niemand gewählt hat.
+    ///
+    /// Mutationsbeweis: Ohne den Vergleich `chosen == given.name()` in
+    /// `given_backend` startete hier das Backend des Systems.
+    #[test]
+    fn another_chosen_backend_is_refused() {
+        let refused = given_backend(
+            &system_backend(),
+            &sandbox(SandboxBackendName::Seatbelt),
+            AUTO_BACKEND,
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, codes::SANDBOX_034);
+    }
+
+    /// Das Sandbox-Profil verlangt ein anderes Backend: dieselbe Ablehnung
+    /// wie ohne gesetztes Backend.
+    #[test]
+    fn the_profile_requirement_still_holds() {
+        let refused = given_backend(
+            &system_backend(),
+            &sandbox(SandboxBackendName::Auto),
+            SEATBELT_BACKEND,
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, codes::SANDBOX_036);
     }
 }

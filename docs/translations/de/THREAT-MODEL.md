@@ -132,7 +132,7 @@ Fünf weitere Kanäle vervollständigen das Modell:
 | K-16 | Ausfall der Aufzeichnung | a, b, c | mittel | Ausfall an jeden Client einmal je Ursache gemeldet, Karten als „Wird nicht aufgezeichnet" markiert, erste Freigabe pausiert | declared | Health-Tests in `daemon/crates/recorder`, Golden-Test `states_recorder_failure` |
 | K-18 | die Tür für weitere Shells (`humanitl sandbox exec`) | b | hoch | unbenanntes Socket-Paar, das nur der Daemon und PID 1 halten; der Shim forkt die Shell von innen mit dem Filter des Agenten obendrauf, belegt durch ein verweigertes `AF_UNIX`; höchstens vier; stirbt mit der Sandbox | mitigated | `daemon/crates/ipc/tests/terminal.rs` (HUM-299) |
 | K-24 | die Wegwerf-Sandbox: die obere Schicht und der Weg zurück ins Projekt (`humanitl sandbox apply`) | b | hoch | Projektordner nur lesbar als untere Schicht eines Overlays, obere Schicht im RAM unter dem Laufzeitverzeichnis des Daemons mit Größengrenze, `mounts.extra_rw` nur lesbar; übernommen nur auf Wahl eines Menschen, geprüft vor dem ersten Schreiben, nie durch einen oder als einen Symlink aus dem Projekt hinaus, kein Gerät, kein FIFO, kein Socket, kein setuid-Bit, kein Überschreiben einer Datei, die der Mensch seit dem Start geändert hat, außer diese Änderung ist einzeln bestätigt (`ApplyChanges.overwrite_ids` aus der App, HUM-351) oder jede ausgewählte Änderung ist es (`--overwrite`) | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350) |
-| K-27 | die Container-Engine unter Podman (Podman, `conmon`, `crun`, der Container-Speicher des Nutzers, `containers.conf`) | b, d | hoch | nicht zugelassen (`SANDBOX_048`), bis die Escape-Suite gegen sie grün ist (HUM-448); jede Konfigurationsquelle, die der Daemon nicht schreibt, abgeschnitten; feste Flags ohne Schlüssel; die Umgebung nur über den versiegelten memfd; beendet über die Engine und die Lebensleine; Reste beim Start des Daemons entfernt (`SANDBOX_041`) | open | `daemon/crates/sandbox/src/podman/` (HUM-433) |
+| K-27 | die Container-Engine unter Podman (Podman, `conmon`, `crun`, der Container-Speicher des Nutzers, `containers.conf`) | b, d | hoch | nicht zugelassen (`SANDBOX_048`), bis die Escape-Suite gegen sie grün ist (HUM-448); jede Konfigurationsquelle, die der Daemon nicht schreibt, abgeschnitten; feste Flags ohne Schlüssel; die Umgebung nur über den versiegelten memfd; beendet über die Engine und die Lebensleine; Reste beim Start des Daemons entfernt (`SANDBOX_041`) | open | ESC-1, ESC-2 (`escape-tests-podman`, HUM-435); `daemon/crates/sandbox/src/podman/` (HUM-433) |
 
 K-13 ist der offensichtliche Kanal und der einzige, der rundweg als geschlossen gilt. K-14 steht
 hier, damit Angreifer (d) in einer Zeile vorkommt. K-15 kam mit HUM-041: Die Prüfung, die die
@@ -565,7 +565,11 @@ Containers; der Container endet über die Engine beim Namen und, wenn der Daemon
 Lebensleine. *Restrisiko:* Die gemeinsame Stufe teilt den Kern des Hosts wie bubblewrap;
 eingehängt wird über Pfade, ein getauschter Pfad fällt erst der Prüfung des Shims nach dem
 Einhängen auf (HUM-437); Podman liest `/etc/containers/policy.json` und den Speicher, den es mit
-dem Nutzer teilt. Bis HUM-448 die Stufe zulässt, kann kein Mensch sie starten.
+dem Nutzer teilt. Bis HUM-448 die Stufe zulässt, kann kein Mensch sie starten. Geprüft von ESC-1 und ESC-2 im CI-Job
+`escape-tests-podman` (HUM-435): dieselben Proben wie unter bubblewrap, dazu ein leeres
+`/run/.containerenv`, kein Socket von `conmon` oder der Engine, der Shim als PID 1 mit dem Filter,
+und ein Eintrag in `mounts.conf`, ein Volume und ein Hook in der eigenen Engine-Konfiguration des
+Runners, die einen gewöhnlichen Container erreichen und die Sandbox nicht.
 
 ## Annahmen
 
@@ -652,6 +656,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-10-31 | K-02: die Grenze ist der gespeicherte Server, den die Session aufgelöst hat; `llm.server` aus Lauf, Projekt oder Profil wählt unter den gespeicherten Servern des Nutzers, legt nie einen an; ein unbekannter Name lehnt den Start ab | HUM-400 |
 | 2026-11-12 | K-06: die Lebensleine des Shims (`--lifeline-fd`) als Gegenstück zu `--die-with-parent` für ein Backend, das die Sandbox vom Daemon abkoppelt; die Umgebung des Agenten über einen versiegelten memfd (`--env-fd`) statt `argv`; der Agent erbt keinen von beiden; K-15 unverändert | HUM-430 |
 | 2026-11-12 | K-27 neu: die Container-Engine unter dem Podman-Backend, gemeinsame Stufe, nicht zugelassen bis HUM-448 | HUM-433 |
+| 2026-11-12 | K-27: ESC-1 und ESC-2 laufen gegen Podman im CI-Job `escape-tests-podman`, mit einer gepflanzten feindlichen Engine-Konfiguration des Nutzers (`mounts.conf`, Volume, Hook), die die Sandbox nicht erreichen darf | HUM-435 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

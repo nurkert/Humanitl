@@ -1610,12 +1610,17 @@ the sandbox, and read the `Seccomp:` line from a child that carries the filter. 
 and its state is `failed`; there is no "start anyway".
 
 **3. The escape tests** ([`tests/escape/`](../tests/escape/)). They run in the CI job
-`escape-tests` on every issue branch and on `main`, and locally with `make escape`:
+`escape-tests` on every issue branch and on `main`, and locally with `make escape`. The same
+suites run against Podman in the CI job `escape-tests-podman` (HUM-435,
+`HUMANITL_ESCAPE_BACKEND=podman`), on a runner where a hostile engine configuration of the user
+was planted first and proven to reach a plain container; a backend is admissible only when every
+probe is green against it, and a run that cannot start the backend is an error, never a pass or a
+skip:
 
 | ID | File | What it shows |
 |---|---|---|
 | ESC-1 | [`esc-1-sockets.sh`](../tests/escape/esc-1-sockets.sh) | socket families and types, `io_uring`, x32, interfaces, routing, capabilities, `Seccomp: 2` for every process, PID 1, refusals reported |
-| ESC-2 | [`esc-2-mounts.sh`](../tests/escape/esc-2-mounts.sh) | mount surface, exactly one socket, no host `/proc`, hostname |
+| ESC-2 | [`esc-2-mounts.sh`](../tests/escape/esc-2-mounts.sh) | mount surface, exactly one socket, no host `/proc`, hostname; under a container engine also an empty `/run/.containerenv`, no socket of `conmon` or the engine, the shim as PID 1 with `Seccomp: 2`, and no mount, volume or hook from the user's engine configuration |
 | ESC-3 | [`esc-3-egress.sh`](../tests/escape/esc-3-egress.sh) | no egress without the proxy; through the proxy every request no rule decides lands in the queue (`allow` rules and the LLM passthrough skip it); no DNS before the decision, proven on the host at the log of a recording name server |
 | ESC-4 | [`esc-4-rules.sh`](../tests/escape/esc-4-rules.sh) | the rule table including homograph, IP literal, WebSocket and body cap |
 | ESC-5 | [`esc-5-filesystem.sh`](../tests/escape/esc-5-filesystem.sh) | symlink marking, masked paths, OSC 52, audit tampering, a disposable run never writing to the project (HUM-350) |
@@ -1662,6 +1667,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | The shim takes a lifeline (`--lifeline-fd`, the read end of a pipe only the daemon writes; `POLLHUP` ends the sandbox as on `SIGTERM`) and the agent's environment as a sealed memfd (`--env-fd`, never in `argv`); the agent inherits neither (HUM-430, [section 4](#the-lifeline-and-the-environment-through-descriptors-hum-430)). |
 | 0.1.x | macOS: Seatbelt as the sandbox backend, a generated SBPL profile per session, the three guarantees restated and measured by the shim; the daemon as a launchd agent; socket and token under `~/Library/Application Support/Humanitl/run` (HUM-323, HUM-327, [section 12](#12-macos-seatbelt-instead-of-bubblewrap)). |
 | 0.1.x | Linux: Podman as a second sandbox backend, plain level (rootless, runtime `crun`), not admitted: every start refuses it with `SANDBOX_048` until HUM-448; only the escape suite and the tests start it. Every configuration source the daemon does not write is cut off, the environment goes only through the sealed memfd, the container ends through the engine and the lifeline (HUM-433, [section 13](#13-linux-podman), K-27). |
+| 0.1.x | The escape suite runs against every backend; the CI job `escape-tests-podman` runs it against Podman through `escape-launch --backend podman`, with a hostile engine configuration planted on the runner (HUM-435, [section 9](#9-what-we-verify-in-ci), K-27). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap
 

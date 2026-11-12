@@ -15,6 +15,94 @@ ESCAPE_ALLOW_FAIL=1 make escape   # berichten, aber den Build nicht rot färben
 Ergebnisse: `target/escape/escape.xml` (JUnit), `target/escape/results.txt` (roh,
 eine Zeile je Probe), `target/escape/esc-N.log` (Ausgabe des jeweiligen Laufs).
 
+## Je Backend (HUM-435)
+
+Ein Backend ist erst zulässig, wenn diese Suite gegen es grün ist (BACKLOG.md
+9.1). Dieselben Skripte laufen deshalb gegen jedes Backend;
+`HUMANITL_ESCAPE_BACKEND` wählt es, Vorgabe `bwrap`:
+
+```
+./tests/escape/run.sh                                  # bwrap
+HUMANITL_ESCAPE_BACKEND=podman ./tests/escape/run.sh   # Podman, gemeinsame Stufe
+```
+
+Der Weg in die Sandbox steht in `launch.sh` (`escape_sandbox_run`):
+
+| Backend | Starter | Warum |
+|---|---|---|
+| `bwrap` | `humanitl sandbox run --profile test` | der Weg, den der Nutzer nimmt (CONVENTIONS 3.11) |
+| jedes andere | `escape-launch --backend <name>` | eine Stufe vor ihrer Zulassung lehnt `humanitl sandbox run` mit `SANDBOX_048` ab; nur die Suite und die Tests starten sie, über ein Argument im Code |
+
+`escape-launch` gibt es nur mit dem Cargo-Feature `unadmitted-backends`
+(`required-features`), das weder `humanitld` noch `humanitl` je einschalten
+(`humanitl_sandbox::UNADMITTED_BACKENDS_BUILT`, `tests/feature_gate.rs`). `run.sh`
+baut es in einem eigenen Cargo-Aufruf, weil Cargo Features über alle Pakete
+eines Aufrufs vereinigt. Der Starter bekommt Proxy-Socket, CA und Bundle des
+Daemons dieses Laufs, ESC-3 misst also denselben Proxy, und druckt nach dem Lauf
+die verweigerten Sockets in denselben Zeilen wie die Kommandozeile
+(`Refusal::summary_line`), damit `refusals-proof.sh` unter jedem Backend dieselbe
+Zeile liest. Er behält `HOME` und `XDG_RUNTIME_DIR` des Nutzers: Die
+Container-Engine hat ihren Speicher unter `HOME`, und ein zweiter Speicher
+neben dem des Nutzers beschädigte dessen Zustand. Mit HUM-448 wird Podman
+zugelassen; dann kann `run.sh` es über `humanitl sandbox run --backend podman`
+starten, und `escape-launch` bleibt für die Kernel-Stufe bis HUM-449.
+
+Ein Backend, das sich nicht starten lässt (nicht installiert, zu alt, nicht
+rootless), hinterlässt keine Ergebnisdatei und ist `error`
+(`sandbox_not_started`, Exit 2), nie `pass` oder `skip`. `selftest.sh` prüft
+das gegen Attrappen beider Starter, bevor `run.sh` sie aufruft: Mit
+`HUMANITL_ESCAPE_BACKEND=podman` geht die Suite über `escape-launch` mit diesem
+Backend und dem Socket des Daemons, nie über die Kommandozeile, und ein
+Starter, der mit 3 endet, steht als Fehler im Bericht.
+
+Keine Probe entfällt für ein Backend. Was eine Container-Engine zusätzlich
+mitbringt, prüft ESC-2 im Abschnitt „the container engine", und jede dieser
+Proben läuft auch unter bwrap, wo sie hält, weil es nichts davon gibt:
+
+| Fall | Behauptung |
+|---|---|
+| `esc-2/containerenv_empty` | `/run/.containerenv` ist leer oder fehlt; ohne `--privileged` schreibt Podman nichts hinein, außer `graphRootMounted=1`, wenn sein Speicher eingehängt ist |
+| `esc-2/no_engine_socket` | kein Socket von `conmon` (Attach, Steuerung) und keiner der Engine, weder als Datei noch in `/proc/net/unix` des Netz-Namensraums |
+| `esc-2/pid1_shim_seccomp_2` | PID 1 ist der Shim, mit `Seccomp: 2`, im selben Prozess; kein Init der Engine davor |
+| `esc-2/no_engine_secrets`, `esc-2/no_engine_volume` | ein Eintrag in der `mounts.conf` des Nutzers (`/run/secrets`) und ein Volume aus seiner `containers.conf` erreichen die Sandbox nicht |
+| `esc-2/engine_hook_not_run` | ein OCI-Hook aus der Konfiguration des Nutzers läuft für keine Sandbox des Laufs (auf dem Host, `engine-config-proof.sh`) |
+
+Die beiden letzten Zeilen brauchen eine Konfiguration, die jemand gepflanzt
+hat. Das tut `plant-engine-config.sh` im CI-Job `escape-tests-podman`, und nur
+dort: Es schreibt nach `~/.config/containers`, verweigert den Lauf außerhalb
+eines CI-Runners und überschreibt nie eine vorhandene Datei. Vor dem Lauf zeigt
+es mit einem gewöhnlichen Container aus einem lokal importierten Abbild, dass
+die Engine Eintrag, Volume und Hook wirklich anwendet; sonst wären die Proben
+grün für eine Konfiguration, die niemand gelesen hat. Ohne gepflanzte
+Konfiguration sind `no_engine_secrets` und `no_engine_volume` trivial grün, und
+`engine_hook_not_run` ist für ein anderes Backend als bwrap ein `skip`, der es
+sagt.
+
+Der CI-Job `escape-tests-podman` (`ubuntu-24.04`) hat dieselben Schritte und
+dasselbe Urteil (`scripts/ci/escape-verdict.sh`) wie `escape-tests`, dazu
+`podman --version` und `podman info` als Beleg (P16), die gepflanzte
+Konfiguration und die Live-Tests des Adapters
+(`cargo test -p humanitl-sandbox --lib podman -- --test-threads=1` mit
+`HUMANITL_REQUIRE_PODMAN=1`, das ein fehlendes Podman zum Fehlschlag macht).
+ESC-4 und ESC-5 laufen auf dem Host. ESC-4 hängt nicht vom Backend ab und läuft
+mit, damit der Job dieselbe Bilanz hat wie `escape-tests`. ESC-5 dagegen startet
+in seinen Dateisystem- und Terminal-Fällen selbst eine Sandbox, und zwar die des
+Laufs: `run.sh` reicht das Backend als `ESC_BACKEND` an
+`esc-5-filesystem.sh`, das es den Integrationstests als
+`HUMANITL_ESCAPE_BACKEND` gibt und sie für ein anderes Backend als bwrap mit
+`--features unadmitted-backends` baut, in einem eigenen Cargo-Aufruf je Paket.
+`escape_worktree.rs` holt sich das Backend dann über
+`Backend::detect_unadmitted`, `terminal.rs` startet den Dienst des Daemons mit
+genau diesem Backend (`SandboxPorts::with_backend`, `sandbox.backend` nennt
+dasselbe). Fehlt das verlangte Backend, ist der Fall rot, immer: nie ein
+`skip`, und still gegen bwrap läuft er nie. Der Fall zur Wegwerf-Sandbox hat zwei Fassungen: unter bwrap die Messung am
+Overlay (`tests/launcher.rs`), unter einem Backend ohne Wegwerf-Sandbox (Podman
+bis HUM-438) die Prüfung, dass es den Plan verweigert, statt direkt in das
+Projekt zu starten (`escape_worktree.rs`, rot, sobald das Backend eine
+Wegwerf-Sandbox kann). Nur die zwei Audit-Fälle hängen nicht vom Backend ab: Sie
+starten einen Daemon, schicken einen Fluss durch seinen Proxy und starten dabei
+keine Sandbox.
+
 ## Rot ist in Sprint 0 der richtige Zustand
 
 Das Harness ist vor der Sache geschrieben, die es bewacht (BACKLOG.md 4.5,
@@ -95,8 +183,9 @@ also nicht. Die Host-Suiten laufen seit HUM-022 vor `stop_escape_daemon`, und
 `ESC_BODY_CAP` weiter (`limits.hold_body_cap_bytes` steht für den Lauf auf
 1024 Bytes, damit die Probe schnell bleibt).
 
-Seit HUM-064 startet jede Suite über `humanitl sandbox run --profile test`, nicht
-mehr über das Ad-hoc-Binary `escape-launch`. Darunter liegt derselbe
+Seit HUM-064 startet jede Suite unter bwrap über `humanitl sandbox run --profile test`, nicht
+mehr über das Ad-hoc-Binary `escape-launch` (seit HUM-435 wieder für eine Stufe
+vor ihrer Zulassung, siehe „Je Backend"). Darunter liegt derselbe
 `BwrapBackend`; der Unterschied ist, dass die Escape-Tests damit genau den
 Codepfad prüfen, den später auch der Nutzer nimmt. Das Profil wird beim Namen
 genannt und dafür vor dem Lauf nach

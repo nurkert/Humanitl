@@ -9,6 +9,16 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Die Umgehung der Zulassung für die Escape-Suite (HUM-435): ESC-5 prüft das
+# Terminal einer Stufe, die noch nicht zugelassen ist, mit
+# `cargo test -p humanitl-ipc --features unadmitted-backends --test terminal`
+# (`tests/escape/esc-5-filesystem.sh`). Nur dieser Testaufruf schaltet es ein,
+# kein Manifest; `humanitld` und `humanitl` bauen nie damit, und
+# `daemon/crates/sandbox/tests/feature_gate.rs` erlaubt in dieser Datei genau
+# die eine Zeile.
+unadmitted-backends = ["humanitl-sandbox/unadmitted-backends"]
+
 [dependencies]
 # Regel-RPC und Netzsuche schreiben ins Audit-Log (HUM-050);
 # `tools/deps-allow.toml` erlaubt die Kante seit Sprint 0.

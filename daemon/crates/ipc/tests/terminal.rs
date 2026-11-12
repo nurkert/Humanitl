@@ -210,6 +210,12 @@ fn usable(fixture: &Fixture) -> bool {
              (sysctl -w kernel.apparmor_restrict_unprivileged_userns=0)",
         );
     }
+    shim_usable()
+}
+
+/// Ob der gebaute Shim neben dem Testbinary liegt; sonst die Begründung auf
+/// stderr, und unter `CI` ein Fehlschlag.
+fn shim_usable() -> bool {
     let found = std::env::current_exe().ok().is_some_and(|exe| {
         exe.parent().is_some_and(|dir| {
             dir.join("humanitl-shim").is_file()
@@ -576,6 +582,13 @@ where
                 return Start::Running;
             }
             if status.state == v1::SandboxState::Failed as i32 {
+                // Ein ausdrücklich verlangtes Backend, das nicht startet, ist
+                // ein Fehlschlag, nie ein übersprungener Fall (HUM-435,
+                // Akzeptanzkriterium 2).
+                assert!(
+                    explicit_backend().is_none(),
+                    "{ESCAPE_BACKEND_ENV} names a backend, and its sandbox did not start"
+                );
                 eprintln!("{SKIP_MARKER} the sandbox did not start here");
                 return Start::Skipped;
             }
@@ -1180,10 +1193,7 @@ async fn osc8_and_title_are_inert() {
 /// an; `None`, wenn diese Maschine den Test nicht tragen kann.
 async fn attacking_session(script: &str) -> Option<(Fixture, SandboxService, Client, String)> {
     let fixture = Fixture::new();
-    if !usable(&fixture) {
-        return None;
-    }
-    let service = fixture.service();
+    let service = escape_service(&fixture)?;
     let mut start = fixture.start();
     if let Some(v1::sandbox_request::Op::Start(inner)) = start.op.as_mut() {
         inner.command = vec!["/bin/sh".to_owned(), "-c".to_owned(), script.to_owned()];
@@ -1193,6 +1203,78 @@ async fn attacking_session(script: &str) -> Option<(Fixture, SandboxService, Cli
     // Das Fixture reist mit: Sein Verzeichnis verschwindet erst, wenn der Test
     // es fallen lässt, und darin liegen Profil, Socket und Projekt.
     Some((fixture, service, client, String::new()))
+}
+
+/// Die Variable, mit der `tests/escape/esc-5-filesystem.sh` das Backend der
+/// Escape-Suite nennt (HUM-435). Leer oder der Name des Backends dieser
+/// Plattform heißt: das Backend des Systems, wie der Daemon es sucht.
+const ESCAPE_BACKEND_ENV: &str = "HUMANITL_ESCAPE_BACKEND";
+
+/// Der Dienst, an dem ESC-5 das Terminal prüft; `None`, wenn diese Maschine
+/// den Test nicht tragen kann.
+///
+/// Ohne [`ESCAPE_BACKEND_ENV`] das Backend des Systems wie bisher. Nennt die
+/// Variable ein anderes, läuft der Dienst mit genau diesem Backend
+/// ([`SandboxPorts::with_backend`]), damit OSC 52, OSC 8 und der Titel
+/// unter jeder Stufe denselben Weg nehmen, den sie im Produkt nähmen.
+fn escape_service(fixture: &Fixture) -> Option<SandboxService> {
+    match explicit_backend() {
+        Some(name) => escape_service_with(fixture, &name),
+        None => usable(fixture).then(|| fixture.service()),
+    }
+}
+
+/// Das Backend, das [`ESCAPE_BACKEND_ENV`] ausdrücklich verlangt, wenn es
+/// nicht das dieser Plattform ist.
+fn explicit_backend() -> Option<String> {
+    std::env::var(ESCAPE_BACKEND_ENV)
+        .ok()
+        .filter(|name| !name.is_empty() && name != humanitl_sandbox::PLATFORM_BACKEND_NAME)
+}
+
+/// Der Dienst mit dem Backend `name`, über die Umgehung der Zulassung, die
+/// nur die Escape-Suite einschaltet (`--features unadmitted-backends`).
+///
+/// Ein verlangtes Backend, das hier nicht läuft, ist immer ein Fehlschlag und
+/// nie ein übersprungener Fall: Wer es ausdrücklich nennt, will genau dieses
+/// geprüft haben, und ein Lauf, der es nicht starten kann, ist ein Fehler,
+/// kein Ergebnis (HUM-435, Akzeptanzkriterium 2).
+#[cfg(feature = "unadmitted-backends")]
+fn escape_service_with(fixture: &Fixture, name: &str) -> Option<SandboxService> {
+    let backend = humanitl_sandbox::Backend::detect_unadmitted(
+        name,
+        fixture.paths.clone(),
+        &humanitl_config::SandboxRef::default(),
+    )
+    .unwrap_or_else(|diagnostic| {
+        panic!(
+            "{ESCAPE_BACKEND_ENV}={name} asks for this backend, and it is not usable here: {}",
+            diagnostic.why
+        )
+    });
+    if !shim_usable() {
+        return None;
+    }
+    // Die Wahl aus `sandbox.backend` muss dasselbe Backend nennen, sonst
+    // verweigert der Dienst den Start (`SandboxPorts::backend`).
+    fixture.write_config(&format!("[sandbox]\nbackend = \"{name}\"\n"));
+    Some(SandboxService::new(
+        SessionResolver::for_config(fixture.paths.clone(), Config::default()),
+        SessionId::new(),
+        SandboxPorts::none().with_backend(backend),
+    ))
+}
+
+/// Ohne das Feature gibt es die Umgehung nicht. Ein verlangtes Backend, das
+/// dieser Bau nicht starten kann, ist ein Fehler der Verdrahtung und nie ein
+/// übersprungener Fall: Sonst liefe ESC-5 still gegen ein anderes Backend.
+#[cfg(not(feature = "unadmitted-backends"))]
+fn escape_service_with(_fixture: &Fixture, name: &str) -> Option<SandboxService> {
+    panic!(
+        "{ESCAPE_BACKEND_ENV}={name} needs this test built with --features unadmitted-backends \
+         (tests/escape/esc-5-filesystem.sh passes it); without it the case would run against \
+         another backend"
+    );
 }
 
 /// Eine beendete Sitzung lässt nichts stehen — keine Aufgabe, keinen

@@ -97,6 +97,26 @@ pub struct Refusal {
 }
 
 impl Refusal {
+    /// Die Zeile, die ein Mensch nach dem Lauf liest:
+    /// `  3x socket(AF_UNIX, SOCK_STREAM)  family not allowed`.
+    ///
+    /// Steht hier und nicht in der Kommandozeile, weil zwei Wege in die
+    /// Sandbox sie drucken, `humanitl sandbox run` und der Starter der
+    /// Escape-Suite für eine noch nicht zugelassene Stufe (HUM-435), und
+    /// `tests/escape/refusals-proof.sh` liest genau diese Zeile von beiden.
+    #[must_use]
+    pub fn summary_line(&self) -> String {
+        let why = match self.reason {
+            RefusalReason::Family => "family not allowed",
+            RefusalReason::Type => "type not allowed",
+            RefusalReason::Overflow => "further pairs, counted together",
+        };
+        format!(
+            "  {}x {}({}, {})  {why}",
+            self.count, self.syscall, self.family, self.socket_type
+        )
+    }
+
     /// Ob `other` dasselbe Paar meint.
     fn same_pair(&self, other: &Self) -> bool {
         self.syscall == other.syscall
@@ -303,6 +323,27 @@ mod tests {
             Some(RefusalLine::Refused(refusal)) => refusal,
             other => panic!("{line:?} parsed as {other:?}"),
         }
+    }
+
+    /// Die Zeile nach dem Lauf, Zeichen für Zeichen: `refusals-proof.sh`
+    /// sucht sie mit `grep -x`, unter jedem Backend (HUM-435).
+    #[test]
+    fn the_summary_line_is_the_one_the_escape_suite_reads() {
+        let family = refused("REFUSED socket AF_UNIX SOCK_STREAM family 3 1 2");
+        assert_eq!(
+            family.summary_line(),
+            "  3x socket(AF_UNIX, SOCK_STREAM)  family not allowed"
+        );
+        let kind = refused("REFUSED socket AF_INET SOCK_DGRAM type 2 1 2");
+        assert_eq!(
+            kind.summary_line(),
+            "  2x socket(AF_INET, SOCK_DGRAM)  type not allowed"
+        );
+        let rest = refused("REFUSED socket * * overflow 9 1 2");
+        assert_eq!(
+            rest.summary_line(),
+            "  9x socket(*, *)  further pairs, counted together"
+        );
     }
 
     #[test]

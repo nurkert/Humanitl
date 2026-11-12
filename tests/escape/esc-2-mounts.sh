@@ -12,6 +12,13 @@
 # exactly one Unix socket exists in the sandbox and it is the proxy; no host
 # session channel (X11, Wayland, D-Bus, docker), no host home, no host runtime
 # directory, no host /proc and no host /sys.
+#
+# The same file runs against every backend (HUM-435, HUMANITL_ESCAPE_BACKEND in
+# run.sh). The section "the container engine" at the end holds what a
+# container engine adds (THREAT-MODEL K-27): its own files in the sandbox, its
+# own sockets, the user's engine configuration. Every probe there also runs
+# under bwrap, where it holds because nothing of the kind exists; under an
+# engine it holds only if the adapter keeps it out.
 
 set -u
 ESC_LIB="${ESC_LIB:-$(dirname "$0")/lib.sh}"
@@ -32,6 +39,9 @@ probe no_docker  sh -c 'test -e /var/run/docker.sock -o -e /run/docker.sock'
 probe no_host_home   sh -c 'ls /home 2>/dev/null | grep -vx agent | grep -q .'
 probe no_runtime_dir test -d /run/user
 probe no_host_sys    test -d /sys/kernel
+# Not a single file under /sys, only empty directories at most: Podman mounts
+# the host's sysfs and its own cgroup beneath; the adapter hides both (HUM-453).
+probe no_sys_content sh -c 'find /sys -mindepth 1 ! -type d 2>/dev/null | grep -q .'
 probe no_etc_shadow  test -e /etc/shadow
 probe no_machine_id  sh -c 'test -s /etc/machine-id'
 
@@ -85,5 +95,51 @@ probe masked_gitconfig_hides_content sh -c 'grep -a HUMANITL_MASK_CANARY /work/.
 probe git_hooks_hide_content         sh -c 'grep -ra HUMANITL_MASK_CANARY /work/.git/hooks 2>/dev/null'
 probe editor_dirs_hide_content       sh -c 'grep -ra HUMANITL_MASK_CANARY /work/.vscode /work/.idea 2>/dev/null'
 expect_output git_hooks_is_tmpfs 'tmpfs' sh -c 'grep " /work/.git/hooks " /proc/self/mountinfo'
+
+# --- the container engine (HUM-435) -------------------------------------------
+#
+# Podman puts /run/.containerenv into every container. Without --privileged it
+# is empty, with one exception: `graphRootMounted=1` when the engine's own
+# storage is mounted into the container. Anything in it (the name, the id, the
+# image, the storage) is knowledge of the host the agent has no business with.
+# Under bwrap the file does not exist, which is empty as well.
+expect_empty containerenv_empty sh -c 'cat /run/.containerenv 2>/dev/null'
+
+# The engine's own channels: conmon's attach and control sockets and the
+# engine's API socket stay on the host. exactly_one_socket above counts them
+# already; this case names them, so that a regression reads as what it is.
+# /proc/net/unix lists every Unix socket of the network namespace, bound to a
+# path or not, so a socket of the engine that shared the namespace would show
+# up there even without a file in the sandbox. Exit 1 when nothing matches,
+# which is the pass of `probe`.
+esc_engine_sockets() {
+    esc_es_found=$({
+        esc_find_sockets / | grep -E 'attach|conmon|podman|/ctl$|notify'
+        grep -E 'attach|conmon|podman|/ctl$|notify' /proc/net/unix 2>/dev/null
+    })
+    [ -n "$esc_es_found" ] || return 1
+    printf '%s\n' "$esc_es_found"
+}
+probe no_engine_socket esc_engine_sockets
+
+# PID 1 is the shim, with the filter on, under every backend: an engine that
+# put its own init (catatonit) in front of it would leave a process without
+# the filter in the sandbox. esc-1 measures the name (pid1_is_shim) and the
+# status line (seccomp_parent_mode_2) one by one; this case ties them to the
+# same process.
+esc_pid1_seccomp() {
+    printf '%s %s\n' "$(cat /proc/1/comm 2>/dev/null)" \
+        "$(sed -n 's/^Seccomp:[[:space:]]*/Seccomp: /p' /proc/1/status 2>/dev/null)"
+}
+expect_output pid1_shim_seccomp_2 '^humanitl-shim Seccomp: 2$' esc_pid1_seccomp
+
+# The user's engine configuration adds nothing. tests/escape/plant-engine-config.sh
+# plants a mounts.conf entry onto /run/secrets and a volume onto
+# /humanitl-engine-volume in the CI job escape-tests-podman, after proving
+# that a plain container gets both; here neither may exist. Where nothing was
+# planted they hold trivially, and the host half (engine_hook_not_run in
+# engine-config-proof.sh) says so.
+probe no_engine_secrets sh -c 'ls -A /run/secrets 2>/dev/null | grep -q .'
+probe no_engine_volume  test -e /humanitl-engine-volume
 
 esc_end
