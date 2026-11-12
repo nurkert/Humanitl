@@ -62,6 +62,7 @@ Rules:
 | [0017](0017-egress-port.md) | One egress port for direct connection, upstream proxy and Tor | Accepted | Exactly one place where an outbound connection is made; CI forbids `TcpStream::connect` anywhere else. |
 | [0018](0018-rpc-parity.md) | Parity: every capability is an RPC first, UI and CLI are thin clients | Accepted | Generated parity table; an RPC without a CLI row breaks the build, a UI gap is only a warning. |
 | [0019](0019-seatbelt-on-macos.md) | Seatbelt is the sandbox on macOS, a Linux VM comes later | Accepted | `sandbox-exec` with a generated SBPL profile per session; the three guarantees restated for macOS and measured by the same shim. |
+| [0020](0020-podman-sandbox-backend.md) | Podman as a selectable second sandbox backend on Linux | Proposed | One `SandboxBackend` made neutral, Podman behind it with a shared-kernel level (`crun`) and a kernel level (`krun`); `sandbox.backend` per user, a raise-only `sandbox.min_isolation` per project. |
 
 ## Cross-references
 
@@ -78,6 +79,7 @@ Where one decision refines or corrects another:
 | ADR-0016 | ADR-0002 | Corrects the statement "`AF_UNIX` always forbidden": in the profile `browser` it is allowed, and there the network namespace carries the guarantee. |
 | ADR-0018 | ADR-0003, ADR-0013 | Makes the equality of UI and CLI from ADR-0013 machine-checkable. |
 | ADR-0019 | ADR-0002, ADR-0015 | The second adapter of `SandboxBackend` that ADR-0015 announced; on macOS it takes the place of bwrap from ADR-0002. |
+| ADR-0020 | ADR-0002, ADR-0010, ADR-0015 | Podman instead of Docker as the second Linux backend; needs amendments to all three once its issues land. |
 | ADR-0011 | ADR-0007 | Governs the two storage locations for rules (saved and session). |
 | ADR-0012 | ADR-0010 | `FixAction::InstallService` is the mechanism behind the one-click installation. |
 
@@ -111,6 +113,7 @@ The script checks that every Markdown file except the index follows the
 pattern `NNNN-kebab-title.md`, that the numbers are contiguous and unique, that
 every file is in the index and every index entry has a file, that status and
 date are present, that every file carries the seven headings and that every
-one names at least one `HUM-` issue. `--self-test` creates thirteen copies
-with exactly one defect each (wrong file name, gap, duplicate, missing
-heading, lowercase status, …) and expects the matching message for each.
+one names at least one `HUM-` issue. `--self-test` creates fifteen copies:
+two that must pass (unchanged, and `Status: Proposed`) and thirteen with
+exactly one defect each (wrong file name, gap, duplicate, missing heading,
+lowercase or unknown status, …), and expects the matching message for each.
