@@ -137,6 +137,7 @@ async fn the_snapshot_lists_the_project_the_socket_and_the_certificate() {
     let backend = humanitl_sandbox::Backend::fallback(
         &status.backend,
         Paths::new(Env::from_pairs([("HOME", "/nonexistent")])),
+        &humanitl_config::SandboxRef::default(),
     )
     .expect("the snapshot names a backend of this build");
     assert_eq!(

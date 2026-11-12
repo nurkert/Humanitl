@@ -499,7 +499,7 @@ pub struct SandboxRef {
     /// Die schwächste Isolationsstufe, mit der eine Sitzung starten darf: `policy` (eine Richtlinie des Kerns, Seatbelt), `namespaces` (eigene Namensräume über dem Kern des Hosts, bubblewrap und Podman mit `crun`) oder `kernel` (ein eigener Gastkern, Podman mit `krun`). Liegt das gewählte Backend darunter, lehnt der Start mit `SANDBOX_035` ab, statt ein anderes zu nehmen. Über alle Ebenen gilt der strengste Wert, nicht der oberste: Ein Projekt-Profil darf die Untergrenze heben, und weder ein Projekt noch die Umgebung noch die Kommandozeile senkt sie unter das, was eine andere Ebene verlangt.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub min_isolation: MinIsolation,
-    /// Einstellungen des Backends `podman`. Sie wirken mit dem Adapter (HUM-433); bis dahin prüft das Laden nur ihre Werte.
+    /// Einstellungen der Container-Engine als Backend (HUM-433). Sie wirken, sobald die Engine gewählt werden kann; bis dahin lehnt jeder Start damit mit `SANDBOX_048` ab.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub podman: PodmanConfig,
 }
@@ -599,60 +599,28 @@ impl MinIsolation {
 #[serde(default, deny_unknown_fields)]
 pub struct PodmanConfig {
     /// Das Programm `podman`, als absoluter Pfad. Leer heißt: die Suche im `PATH` des Daemons.
-    #[schemars(extend(
-        "x-tier" = "expert",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-433"
-    ))]
+    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub program: Option<PathBuf>,
     /// Die OCI-Laufzeit: `crun` teilt den Kern des Hosts (Stufe `namespaces`), `krun` startet einen eigenen Gastkern (Stufe `kernel`, braucht `/dev/kvm`).
-    #[schemars(extend(
-        "x-tier" = "advanced",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-433"
-    ))]
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub runtime: PodmanRuntime,
     /// Die Wurzel der Sandbox: `host` ist ein leeres, nur lesbares Verzeichnis mit den Einhängungen des Sandbox-Profils, `image` ein lokales OCI-Abbild aus `sandbox.podman.image`, das ein Start nie zieht.
-    #[schemars(extend(
-        "x-tier" = "advanced",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-433"
-    ))]
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub rootfs: PodmanRootfs,
     /// Das Abbild für `rootfs = "image"`, immer mit Digest (`name@sha256:` und 64 Hex-Ziffern); bei `rootfs = "image"` Pflicht.
-    #[schemars(extend(
-        "x-tier" = "advanced",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-433"
-    ))]
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub image: Option<String>,
     /// Arbeitsspeicher der Sandbox in MiB, mindestens 256 und höchstens der Arbeitsspeicher des Hosts. Leer heißt: der Start leitet ihn vom Host ab (die Hälfte seines Arbeitsspeichers, höchstens 4096), damit die Vorgabe auf jedem Rechner gilt.
-    #[schemars(extend(
-        "x-tier" = "advanced",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-433"
-    ))]
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub memory_mib: Option<u64>,
     /// Zahl der CPUs der Sandbox, mindestens 1 und höchstens die Zahl der CPUs, die der Daemon nutzen darf. Leer heißt: der Start leitet sie vom Host ab (die Hälfte seiner CPUs, mindestens 1, höchstens 4).
-    #[schemars(extend(
-        "x-tier" = "advanced",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-433"
-    ))]
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub cpus: Option<u32>,
     /// Größte Zahl von Prozessen und Threads in der Sandbox, mindestens 64.
-    #[schemars(extend(
-        "x-tier" = "expert",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-433"
-    ))]
+    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub pids_limit: u64,
     /// Sekunden, die ein Start auf die laufende Sandbox wartet, bevor er abbricht, 1 bis 600.
-    #[schemars(extend(
-        "x-tier" = "expert",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-433"
-    ))]
+    #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub start_timeout_secs: u64,
 }
 

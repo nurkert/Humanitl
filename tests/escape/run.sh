@@ -339,13 +339,20 @@ XDG_RUNTIME_DIR="$STATE/runtime" \
     "$@" > "$OUT/daemon.log" 2>&1 &
 daemon_pid=$!
 daemon_waited=0
-while [ ! -S "$DAEMON_PROXY_SOCK" ] && [ "$daemon_waited" -lt 400 ]; do
+# The proxy socket comes first; the control socket and its token follow only
+# after the daemon's start-up work (since HUM-433 a bounded inventory of
+# containers a crash left behind), and a client that starts in between finds
+# no daemon. Wait for all three.
+daemon_up() {
+    [ -S "$DAEMON_PROXY_SOCK" ] && [ -S "$DAEMON_RUNTIME/daemon.sock" ] && [ -f "$DAEMON_RUNTIME/token" ]
+}
+while ! daemon_up && [ "$daemon_waited" -lt 600 ]; do
     sleep 0.05
     daemon_waited=$((daemon_waited + 1))
 done
-if [ ! -S "$DAEMON_PROXY_SOCK" ]; then
+if ! daemon_up; then
     record_error harness daemon_start \
-        "no proxy socket at $DAEMON_PROXY_SOCK within twenty seconds; see target/escape/daemon.log"
+        "no proxy socket, control socket and token under $DAEMON_RUNTIME within thirty seconds; see target/escape/daemon.log"
     sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
     exit 2
 fi

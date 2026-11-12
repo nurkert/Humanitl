@@ -729,8 +729,12 @@ impl Fixture {
     }
 
     fn backend(&self) -> Result<humanitl_sandbox::Backend, String> {
-        humanitl_sandbox::Backend::detect(humanitl_sandbox::BWRAP_BACKEND, self.paths.clone())
-            .map_err(|err| format!("no usable bwrap: {err}"))
+        humanitl_sandbox::Backend::detect(
+            humanitl_sandbox::BWRAP_BACKEND,
+            self.paths.clone(),
+            &humanitl_config::SandboxRef::default(),
+        )
+        .map_err(|err| format!("no usable bwrap: {err}"))
     }
 }
 

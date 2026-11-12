@@ -157,7 +157,7 @@ fn system_missing(name: &'static str, sandbox: &SandboxRef, paths: &Paths) -> Op
     if name == PODMAN_BACKEND {
         podman_missing(sandbox, paths)
     } else {
-        detect_in_build(name, paths.clone()).err()
+        detect_in_build(name, paths.clone(), sandbox).err()
     }
 }
 

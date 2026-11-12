@@ -1711,6 +1711,39 @@ registry! {
     SANDBOX_048 => "sandbox", "Sandbox backend not admitted yet", "#sandbox_048",
         "`sandbox.backend` names an isolation level that is not admitted yet. A backend becomes selectable only after its mount check and the escape suite against it are green in CI; until then every start refuses it, whether it comes from `config.toml`, the environment, a profile or the start of a session.",
         "`ChangeSetting` on `sandbox.backend` = `auto`, the admitted backend of this system.";
+    // HUM-433: the container engine adapter, plain level.
+    /// The container engine is older than the adapter needs, or it lacks a
+    /// capability the sandbox relies on: the OCI runtime is not the one of the
+    /// plain level, or it says nothing readable about its runtime (HUM-433).
+    SANDBOX_037 => "sandbox", "Podman too old or without a needed capability", "#sandbox_037",
+        "`sandbox.backend = \"podman\"` needs Podman 4.9 or newer with the OCI runtime `crun`; the installed one is older, runs another runtime, or did not answer `podman info`. The start stops and never takes another backend.",
+        "`CopyCommand` with the install command for Podman and `crun` of this distribution.";
+    /// The container engine is not rootless, or it is only the client of a
+    /// remote service (a machine of the engine, a remote client), so the daemon could
+    /// not hand it its descriptors and files (HUM-433).
+    SANDBOX_038 => "sandbox", "Podman not rootless or not local", "#sandbox_038",
+        "The sandbox needs rootless Podman that runs on this machine, started by the daemon itself. The found Podman runs as root, or it talks to a remote service such as a Podman machine; neither sees the descriptors and files the daemon hands over.",
+        "`ChangeSetting` on `sandbox.backend` = `auto`, the way back to the backend of this system; installing does not help here. Run the daemon as the user, without a remote connection, to use Podman.";
+    /// `--userns keep-id` needs subordinate user and group IDs for this user
+    /// and the helpers `newuidmap` and `newgidmap` (HUM-433).
+    SANDBOX_039 => "sandbox", "No subordinate IDs for the container", "#sandbox_039",
+        "`/etc/subuid` or `/etc/subgid` gives this user fewer than 65536 subordinate IDs, or `newuidmap` and `newgidmap` are missing. Rootless Podman cannot map the user into the container without them.",
+        "`CopyCommand` with what is missing: the package with `newuidmap` and `newgidmap` (`uidmap` on Debian), `sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 <user>` for the ranges, or both joined with `&&`. The range may overlap one of another account; choose a free one then.";
+    /// The cgroup controllers `memory`, `pids` and `cpu` are not delegated to
+    /// this user, so the limits of the sandbox would not hold (HUM-433).
+    SANDBOX_040 => "sandbox", "Container limits cannot be enforced", "#sandbox_040",
+        "The sandbox under Podman runs with a memory, CPU and process limit, and the cgroup v2 controllers for them are not delegated to this user. A sandbox without its limits does not start.",
+        "`CopyCommand` with the systemd drop-in that delegates `cpu`, `memory` and `pids` to user sessions, then a new login.";
+    /// At daemon start a container of an earlier session of this daemon was
+    /// still there: removed, or not removable. A warning (HUM-433).
+    SANDBOX_041 => "sandbox", "Container of an earlier session found", "#sandbox_041",
+        "A container that carries the label of this daemon outlived its session, for example after a crash of the daemon. The daemon removes such containers when it starts; the sentence says whether that worked.",
+        "None when it was removed; otherwise `CopyCommand` with the command that removes it by hand.";
+    /// `SELinux` enforces labels; binding the project into a container would
+    /// need relabelling it, which changes the user's files (HUM-433).
+    SANDBOX_044 => "sandbox", "SELinux would relabel the project", "#sandbox_044",
+        "SELinux enforces labels on this machine. A container could read the project only after it was relabelled (`:z`), and that changes the labels of the user's own files. Until there is a design for it, the Podman backend does not start on such a machine.",
+        "`ChangeSetting` on `sandbox.backend` = `auto`.";
 }
 
 /// Sucht einen Code im Register.

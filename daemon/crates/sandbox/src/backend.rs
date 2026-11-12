@@ -41,6 +41,7 @@ use crate::handle::SandboxHandle;
 use crate::launcher::{
     CheckResult, IsolationLevel, LaunchPlan, PlanPreview, PlanRequest, SandboxBackend,
 };
+use crate::podman::PodmanBackend;
 #[cfg(target_os = "macos")]
 use crate::seatbelt::SeatbeltBackend;
 
@@ -50,9 +51,8 @@ pub const BWRAP_BACKEND: &str = "bwrap";
 /// Der Name von Seatbelt in `sandbox.backend`, nur unter macOS ein Backend.
 pub const SEATBELT_BACKEND: &str = "seatbelt";
 
-/// Der Name von Podman in `sandbox.backend` (HUM-431). Ein Name des Schemas,
-/// aber noch kein Backend dieses Builds (HUM-433) und noch nicht zugelassen
-/// (HUM-448).
+/// Der Name der Container-Engine in `sandbox.backend` (HUM-431). Das Backend gibt es
+/// seit HUM-433; zugelassen ist es erst mit HUM-448.
 pub const PODMAN_BACKEND: &str = "podman";
 
 /// Die Stufen, die ein Mensch wählen kann (HUM-431).
@@ -70,6 +70,7 @@ macro_rules! dispatch {
     ($self:ident, $backend:ident => $call:expr) => {
         match $self {
             Backend::Bwrap($backend) => $call,
+            Backend::Podman($backend) => $call,
             #[cfg(target_os = "macos")]
             Backend::Seatbelt($backend) => $call,
         }
@@ -81,6 +82,10 @@ macro_rules! dispatch {
 pub enum Backend {
     /// bubblewrap, unter Linux.
     Bwrap(BwrapBackend),
+    /// Die Container-Engine, gemeinsame Stufe (HUM-433). Bauen lässt sie sich nur über
+    /// [`Backend::detect`] und [`Backend::fallback`], die die Zulassung
+    /// prüfen, und über die Umgehung der Escape-Suite.
+    Podman(PodmanBackend),
     /// Seatbelt mit `sandbox-exec`, unter macOS (HUM-323).
     #[cfg(target_os = "macos")]
     Seatbelt(SeatbeltBackend),
@@ -192,16 +197,20 @@ impl Backend {
     /// ([`crate::PLATFORM_BACKEND_NAME`]). Ein Backend, das nicht in
     /// [`ADMITTED_BACKENDS`] steht, startet hier nie.
     ///
+    /// `sandbox` ist die aufgelöste Gruppe `sandbox`; das Backend liest
+    /// daraus, was es betrifft (die Container-Engine ihre eigene Gruppe, HUM-433).
+    ///
     /// # Errors
     ///
     /// `SANDBOX_048` für eine Stufe, die nicht zugelassen ist, `SANDBOX_034`
-    /// für ein Backend, das dieser Build nicht hat, die Befunde des Backends
-    /// (`SANDBOX_001` bis `SANDBOX_003`), oder `CONFIG_003` für einen Namen,
-    /// den das Schema nicht kennt.
-    pub fn detect(name: &str, paths: Paths) -> Result<Self, Diagnostic> {
+    /// für ein Backend, das dieser Build oder dieses System nicht hat, die
+    /// Befunde des Backends (`SANDBOX_001` bis `SANDBOX_003`, bei der Container-Engine
+    /// `SANDBOX_037` bis `SANDBOX_040` und `SANDBOX_044`), oder `CONFIG_003`
+    /// für einen Namen, den das Schema nicht kennt.
+    pub fn detect(name: &str, paths: Paths, sandbox: &SandboxRef) -> Result<Self, Diagnostic> {
         let name = resolve(name)?;
-        admitted(name, default_runtime(name))?;
-        detect_in_build(name, paths)
+        admitted(name, runtime_of(name, sandbox))?;
+        detect_in_build(name, paths, sandbox)
     }
 
     /// Wie [`Backend::detect`], aber ohne die Zulassung: nur für die
@@ -217,8 +226,12 @@ impl Backend {
     ///
     /// Wie [`Backend::detect`], ohne `SANDBOX_048`.
     #[cfg(any(test, feature = "unadmitted-backends"))]
-    pub fn detect_unadmitted(name: &str, paths: Paths) -> Result<Self, Diagnostic> {
-        detect_in_build(resolve(name)?, paths)
+    pub fn detect_unadmitted(
+        name: &str,
+        paths: Paths,
+        sandbox: &SandboxRef,
+    ) -> Result<Self, Diagnostic> {
+        detect_in_build(resolve(name)?, paths, sandbox)
     }
 
     /// Das Backend mit diesem Namen ohne Prüfung des Systems: der Rückfall,
@@ -229,18 +242,22 @@ impl Backend {
     /// # Errors
     ///
     /// `SANDBOX_048`, `SANDBOX_034` oder `CONFIG_003` wie [`Backend::detect`].
-    pub fn fallback(name: &str, paths: Paths) -> Result<Self, Diagnostic> {
+    pub fn fallback(name: &str, paths: Paths, sandbox: &SandboxRef) -> Result<Self, Diagnostic> {
         let name = resolve(name)?;
-        admitted(name, default_runtime(name))?;
+        admitted(name, runtime_of(name, sandbox))?;
         match name {
             BWRAP_BACKEND => Ok(Self::Bwrap(BwrapBackend::fallback(paths))),
+            PODMAN_BACKEND => Ok(Self::Podman(PodmanBackend::fallback(
+                paths,
+                &sandbox.podman,
+            ))),
             #[cfg(target_os = "macos")]
             SEATBELT_BACKEND => Ok(Self::Seatbelt(SeatbeltBackend::fallback(paths))),
             other => Err(not_in_build(other)),
         }
     }
 
-    /// Das Programm, das startet: `bwrap` oder `sandbox-exec`.
+    /// Das Programm, das startet: `bwrap`, `sandbox-exec` oder die Engine.
     #[must_use]
     pub fn program(&self) -> &Path {
         dispatch!(self, backend => backend.program())
@@ -251,6 +268,7 @@ impl Backend {
     pub const fn paths(&self) -> &Paths {
         match self {
             Self::Bwrap(backend) => backend.paths(),
+            Self::Podman(backend) => backend.paths(),
             #[cfg(target_os = "macos")]
             Self::Seatbelt(backend) => backend.paths(),
         }
@@ -328,9 +346,14 @@ pub(crate) fn resolve(name: &str) -> Result<&'static str, Diagnostic> {
 }
 
 /// Sucht ein aufgelöstes Backend auf diesem System, ohne Zulassung.
-pub(crate) fn detect_in_build(name: &'static str, paths: Paths) -> Result<Backend, Diagnostic> {
+pub(crate) fn detect_in_build(
+    name: &'static str,
+    paths: Paths,
+    sandbox: &SandboxRef,
+) -> Result<Backend, Diagnostic> {
     match name {
         BWRAP_BACKEND => BwrapBackend::detect(paths).map(Backend::Bwrap),
+        PODMAN_BACKEND => PodmanBackend::detect(paths, &sandbox.podman).map(Backend::Podman),
         #[cfg(target_os = "macos")]
         SEATBELT_BACKEND => SeatbeltBackend::detect(paths).map(Backend::Seatbelt),
         other => Err(not_in_build(other)),
@@ -340,6 +363,49 @@ pub(crate) fn detect_in_build(name: &'static str, paths: Paths) -> Result<Backen
 /// Die Laufzeit, die ein Backend ohne Angabe hat: unter Podman `crun`.
 fn default_runtime(name: &str) -> Option<PodmanRuntime> {
     (name == PODMAN_BACKEND).then_some(PodmanRuntime::Crun)
+}
+
+/// Die Laufzeit, die die Konfiguration einem Backend gibt: der Container-Engine
+/// ihre eingestellte, sonst keine.
+fn runtime_of(name: &str, sandbox: &SandboxRef) -> Option<PodmanRuntime> {
+    (name == PODMAN_BACKEND).then_some(sandbox.podman.runtime)
+}
+
+/// Was eine frühere Sitzung dieses Daemons außerhalb seiner Prozesse liegen
+/// ließ (HUM-433): unter Linux die Container der Engine mit den Labels
+/// dieser Instanz und einer Sitzung.
+///
+/// Zwei Schritte, damit nichts weggeräumt wird, was nach dem Start des
+/// Daemons entstand: [`LeftSandboxes::find`] nimmt die Bestandsaufnahme
+/// synchron und begrenzt, bevor der Daemon einen Start annimmt;
+/// [`LeftSandboxes::remove`] entfernt danach genau diese, gern nebenher.
+#[derive(Debug, Default)]
+pub struct LeftSandboxes {
+    found: crate::podman::Leftovers,
+}
+
+impl LeftSandboxes {
+    /// Die Bestandsaufnahme. Ohne Engine auf dem System, und unter macOS,
+    /// ist sie leer. Blockiert, solange die Engine antwortet, höchstens
+    /// zehn Sekunden.
+    #[must_use]
+    pub fn find(paths: &Paths, sandbox: &SandboxRef) -> Self {
+        if cfg!(target_os = "linux") {
+            Self {
+                found: crate::podman::find_leftovers(paths, &sandbox.podman),
+            }
+        } else {
+            Self::default()
+        }
+    }
+
+    /// Entfernt, was [`LeftSandboxes::find`] fand. Je Fund ein `SANDBOX_041`
+    /// als Warnung, entfernt oder nicht entfernbar, und eines, wenn die
+    /// Bestandsaufnahme selbst scheiterte.
+    #[must_use]
+    pub fn remove(self) -> Vec<Diagnostic> {
+        self.found.remove()
+    }
 }
 
 /// Der Name der Stufe aus Backend und Laufzeit.
@@ -491,8 +557,12 @@ mod tests {
     fn bwrap_by_name_on_a_system_without_bwrap_is_sandbox_001() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(dir.path().join("empty-bin")).expect("empty bin");
-        let err = Backend::detect(BWRAP_BACKEND, without_bwrap(dir.path()))
-            .expect_err("no bwrap in PATH");
+        let err = Backend::detect(
+            BWRAP_BACKEND,
+            without_bwrap(dir.path()),
+            &SandboxRef::default(),
+        )
+        .expect_err("no bwrap in PATH");
         assert_eq!(err.code.as_str(), "SANDBOX_001", "{}", err.why);
     }
 
@@ -500,9 +570,11 @@ mod tests {
     fn an_unknown_name_is_refused_and_never_falls_back() {
         let dir = tempfile::tempdir().expect("tempdir");
         for name in ["docker", "", "BWRAP"] {
-            let err = Backend::detect(name, without_bwrap(dir.path())).expect_err("unknown");
+            let err = Backend::detect(name, without_bwrap(dir.path()), &SandboxRef::default())
+                .expect_err("unknown");
             assert_eq!(err.code.as_str(), "CONFIG_003", "{name:?}: {}", err.why);
-            let err = Backend::fallback(name, without_bwrap(dir.path())).expect_err("unknown");
+            let err = Backend::fallback(name, without_bwrap(dir.path()), &SandboxRef::default())
+                .expect_err("unknown");
             assert_eq!(err.code.as_str(), "CONFIG_003", "{name:?}: {}", err.why);
         }
     }
@@ -517,7 +589,12 @@ mod tests {
         use crate::bwrap_args::LaunchInputs;
         use crate::launcher::{DisposableLayer, Door, LaunchOptions, StdioMode};
         let dir = tempfile::tempdir().expect("tempdir");
-        let backend = Backend::fallback(BWRAP_BACKEND, without_bwrap(dir.path())).expect("bwrap");
+        let backend = Backend::fallback(
+            BWRAP_BACKEND,
+            without_bwrap(dir.path()),
+            &SandboxRef::default(),
+        )
+        .expect("bwrap");
         let profile = crate::SandboxProfile::parse(
             include_str!("../../../../profiles/sandbox/default.toml"),
             Path::new("default.toml"),
@@ -633,10 +710,19 @@ mod tests {
     #[test]
     fn auto_is_the_backend_of_this_system() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let auto = Backend::fallback(crate::AUTO_BACKEND, without_bwrap(dir.path()))
-            .expect("auto is known");
+        let auto = Backend::fallback(
+            crate::AUTO_BACKEND,
+            without_bwrap(dir.path()),
+            &SandboxRef::default(),
+        )
+        .expect("auto is known");
         assert_eq!(auto.name(), crate::PLATFORM_BACKEND_NAME);
-        let bwrap = Backend::fallback(BWRAP_BACKEND, without_bwrap(dir.path())).expect("bwrap");
+        let bwrap = Backend::fallback(
+            BWRAP_BACKEND,
+            without_bwrap(dir.path()),
+            &SandboxRef::default(),
+        )
+        .expect("bwrap");
         assert_eq!(bwrap.name(), BWRAP_BACKEND);
         assert_eq!(bwrap.isolation(), IsolationLevel::Namespaces);
         assert_eq!(bwrap.program(), Path::new("bwrap"));
@@ -680,6 +766,13 @@ mod tests {
         sandbox
     }
 
+    /// Die Vorgabe mit dieser Laufzeit.
+    fn sandbox_with_runtime(runtime: PodmanRuntime) -> SandboxRef {
+        let mut sandbox = SandboxRef::default();
+        sandbox.podman.runtime = runtime;
+        sandbox
+    }
+
     fn code_of(result: Result<BackendChoice, Diagnostic>) -> String {
         match result {
             Ok(choice) => panic!("{} was expected to be refused", choice.stage()),
@@ -707,12 +800,14 @@ mod tests {
     /// `sandbox.backend = "podman"` scheitert vor HUM-448 an jedem Weg in
     /// den Start: die Wahl aus der Konfiguration, das Suchen nach Namen und
     /// der Rückfall für die Vorschau. Nur die Umgehung kommt an der Zulassung
-    /// vorbei, und dann fehlt der Adapter (HUM-433).
+    /// vorbei, zum Adapter (HUM-433).
     #[test]
     fn podman_is_refused_on_every_path_until_it_is_admitted() {
         let dir = tempfile::tempdir().expect("tempdir");
         let paths = without_bwrap(dir.path());
-        let err = Backend::detect(PODMAN_BACKEND, paths.clone()).expect_err("not admitted");
+        let sandbox = SandboxRef::default();
+        let err =
+            Backend::detect(PODMAN_BACKEND, paths.clone(), &sandbox).expect_err("not admitted");
         assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
         assert_eq!(
             err.fix,
@@ -721,10 +816,20 @@ mod tests {
                 value: "auto".to_owned(),
             })
         );
-        let err = Backend::fallback(PODMAN_BACKEND, paths.clone()).expect_err("not admitted");
+        let err =
+            Backend::fallback(PODMAN_BACKEND, paths.clone(), &sandbox).expect_err("not admitted");
         assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
-        let err = Backend::detect_unadmitted(PODMAN_BACKEND, paths).expect_err("no adapter yet");
+        // Die Umgehung kommt an der Zulassung vorbei; auf diesem `PATH` gibt
+        // keine Engine, und das sagt der Adapter selbst (HUM-433).
+        let err = Backend::detect_unadmitted(PODMAN_BACKEND, paths, &sandbox)
+            .expect_err("no engine in PATH");
         assert_eq!(err.code.as_str(), "SANDBOX_034", "{}", err.why);
+        assert!(err.why.contains("no executable podman"), "{}", err.why);
+        // Auch mit der Umgehung bleibt die Kernel-Stufe gesperrt (HUM-444).
+        let kernel = sandbox_with_runtime(PodmanRuntime::Krun);
+        let err = Backend::detect_unadmitted(PODMAN_BACKEND, without_bwrap(dir.path()), &kernel)
+            .expect_err("kernel level");
+        assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
     }
 
     /// `auto` löst auf das Backend des Systems auf und nie auf ein anderes:
@@ -796,8 +901,16 @@ mod tests {
     fn seatbelt_outside_macos_is_not_available_and_does_not_fall_back() {
         let dir = tempfile::tempdir().expect("tempdir");
         for refused in [
-            Backend::detect(SEATBELT_BACKEND, without_bwrap(dir.path())),
-            Backend::fallback(SEATBELT_BACKEND, without_bwrap(dir.path())),
+            Backend::detect(
+                SEATBELT_BACKEND,
+                without_bwrap(dir.path()),
+                &SandboxRef::default(),
+            ),
+            Backend::fallback(
+                SEATBELT_BACKEND,
+                without_bwrap(dir.path()),
+                &SandboxRef::default(),
+            ),
         ] {
             let err = refused.expect_err("no seatbelt here");
             assert_eq!(err.code.as_str(), "SANDBOX_034", "{}", err.why);
@@ -810,8 +923,12 @@ mod tests {
     #[test]
     fn the_isolation_of_a_name_is_that_of_its_backend() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let built =
-            Backend::fallback(crate::AUTO_BACKEND, without_bwrap(dir.path())).expect("auto");
+        let built = Backend::fallback(
+            crate::AUTO_BACKEND,
+            without_bwrap(dir.path()),
+            &SandboxRef::default(),
+        )
+        .expect("auto");
         assert_eq!(isolation_of(built.name(), None), built.isolation());
         assert_eq!(
             isolation_of(PODMAN_BACKEND, Some(PodmanRuntime::Crun)),

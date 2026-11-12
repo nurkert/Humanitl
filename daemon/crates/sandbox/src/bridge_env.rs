@@ -163,6 +163,16 @@ pub const SHIM_LIFELINE_FD: &str = "--lifeline-fd";
 /// `--setenv`.
 pub const SHIM_ENV_FD: &str = "--env-fd";
 
+/// The shim flag that names the standard streams of the agent (HUM-433),
+/// followed by a descriptor number.
+///
+/// A container engine does not hand its own standard streams to the
+/// container; the daemon's pseudo-terminal then travels as an inherited
+/// descriptor, and the shim makes it 0, 1 and 2 before anything else of the
+/// start. Rendered only together with [`SHIM_CONTROLLING_TERMINAL`], at the
+/// daemon's own pseudo-terminal.
+pub const SHIM_STDIO_FD: &str = "--stdio-fd";
+
 /// Die Namen, die der Launcher setzt und die kein Profil belegen kann.
 pub const RESERVED_ENV: &[&str] = &[
     ENV_BRIDGES,

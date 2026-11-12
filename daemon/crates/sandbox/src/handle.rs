@@ -250,6 +250,17 @@ pub(crate) struct Shared {
     /// Die Tür zu weiteren Shells (HUM-299), nur am eigenen
     /// Pseudoterminal des Daemons.
     shells: OnceLock<Arc<crate::shell::ShellDoor>>,
+    /// Das Schreibende der Lebensleine (HUM-430), solange die Sandbox läuft.
+    /// Es wird nie beschrieben; es zu halten ist sein ganzer Zweck.
+    lifeline: Mutex<Option<crate::shim_fds::Lifeline>>,
+    /// Was beim Beenden über die Engine schiefging (HUM-433): ein Container,
+    /// den es danach womöglich noch gibt.
+    teardown_warnings: Mutex<Vec<Diagnostic>>,
+    /// Ob der Bericht des Shims beweist, dass der Befehl startete, weil das
+    /// Programm keine Status-Pipe hat (HUM-433): Eine Engine meldet kein
+    /// `{"exit-code": N}`. Eine `CHECK`-Zeile kommt erst aus dem Shim in der
+    /// Sandbox; ohne sie hat die Engine den Container nie gestartet.
+    start_by_report: Mutex<bool>,
 }
 
 /// Das Feld `starttime` aus `/proc/<pid>/stat`, Feld 22 (Ticks seit dem
@@ -414,6 +425,11 @@ impl Shared {
     }
 
     pub(crate) fn set_exit(&self, status: ExitStatus) {
+        // Der gestartete Prozess ist zu Ende. Unter einer Container-Engine ist
+        // das nur der Client; der Container kann ihn überleben (HUM-292 P7).
+        // Die Lebensleine geht deshalb jetzt zu, und der Shim beendet den
+        // Container binnen `KILL_GRACE`, auch wenn niemand mehr `kill` ruft.
+        self.close_lifeline();
         // Vor dem Status: Wer auf ihn wartet, beendet womöglich gleich den Prozess.
         if let Some(dir) = lock(&self.session_dir).take() {
             self.remove_session_dir(dir);
@@ -489,6 +505,28 @@ impl Shared {
     pub(crate) fn close_report(&self) {
         lock(&self.report).closed = true;
         self.report_changed.notify_all();
+    }
+
+    /// Hält das Schreibende der Lebensleine, bis die Sandbox endet.
+    pub(crate) fn hold_lifeline(&self, lifeline: crate::shim_fds::Lifeline) {
+        *lock(&self.lifeline) = Some(lifeline);
+    }
+
+    /// Schließt das Schreibende der Lebensleine, wenn es eines gibt: Der
+    /// gestartete Prozess ist zu Ende, und der Shim soll den Container nicht
+    /// überleben lassen (HUM-433). Der wartende Faden ruft es gleich nach
+    /// dem Ende des Prozesses, noch vor dem Einsammeln der Leser: Der Client
+    /// einer Engine kann enden, während der Container lebt (HUM-292 P7), und
+    /// der Shim hält dann noch Terminal oder Pipes, auf die die Leser warten.
+    /// Unter bwrap und `sandbox-exec` gibt es keine Lebensleine.
+    pub(crate) fn close_lifeline(&self) {
+        drop(lock(&self.lifeline).take());
+    }
+
+    /// Ohne Status-Pipe beweist der Bericht des Shims den Start
+    /// ([`Shared::start_by_report`]).
+    pub(crate) fn prove_start_by_report(&self) {
+        *lock(&self.start_by_report) = true;
     }
 
     pub(crate) fn set_child_pid(&self, pid: u32) {
@@ -698,13 +736,23 @@ impl Shared {
         if reported.exit_code.is_some() {
             return Ok(status);
         }
+        let by_report = *lock(&self.start_by_report);
+        if by_report && !lock(&self.report).checks.is_empty() {
+            return Ok(status);
+        }
         self.join_readers();
         let stderr = self.stderr_excerpt();
         if is_userns_failure(&stderr) {
             return Err(userns_diagnostic(&stderr));
         }
-        let mut why =
-            format!("bwrap exited with code {code} before starting the command in the sandbox");
+        let mut why = if by_report {
+            format!(
+                "the container engine exited with code {code} before the shim in the sandbox \
+                 reported a single check, so the command never started"
+            )
+        } else {
+            format!("bwrap exited with code {code} before starting the command in the sandbox")
+        };
         if stderr.is_empty() {
             if !*lock(&self.capturing) {
                 why.push_str("; its message went to the inherited stderr");
@@ -783,11 +831,7 @@ impl SandboxHandle {
     }
 
     /// Setzt, was der Plan über das Beenden und die Frist des Berichts sagt.
-    pub(crate) const fn with_launch(
-        mut self,
-        teardown: Teardown,
-        report_timeout: Duration,
-    ) -> Self {
+    pub(crate) fn with_launch(mut self, teardown: Teardown, report_timeout: Duration) -> Self {
         self.teardown = teardown;
         self.report_timeout = report_timeout;
         self
@@ -924,6 +968,29 @@ impl SandboxHandle {
     /// er ist die Messung für den, der sie nennen muss.
     #[allow(clippy::must_use_candidate)]
     pub fn terminate(&self, grace: Duration) -> Termination {
+        let termination = self.terminate_process(grace);
+        // Das Ende des Clients sagt nichts über den Container (HUM-292 P7):
+        // Er wird über die Engine beendet und entfernt, gleich wie der Client
+        // endete. Einen, den es nicht mehr gibt, nimmt die Engine stumm hin.
+        if let Teardown::Container(stop) = &self.teardown
+            && let Some(warning) = stop.send(Signal::KILL)
+        {
+            lock(&self.shared.teardown_warnings).push(warning);
+        }
+        termination
+    }
+
+    /// Was beim Beenden über die Engine schiefging (HUM-433): je Fall ein
+    /// `SANDBOX_041` als Warnung, wenn der Container danach womöglich noch
+    /// da ist. Leer unter bwrap und Seatbelt. Jede Warnung kommt genau einmal
+    /// heraus; wer sie nimmt, meldet sie.
+    #[must_use]
+    pub fn take_teardown_warnings(&self) -> Vec<Diagnostic> {
+        std::mem::take(&mut *lock(&self.shared.teardown_warnings))
+    }
+
+    /// [`SandboxHandle::terminate`] für den gestarteten Prozess.
+    fn terminate_process(&self, grace: Duration) -> Termination {
         if self.try_wait().is_some() {
             return Termination::AlreadyEnded;
         }
@@ -941,10 +1008,31 @@ impl SandboxHandle {
     }
 
     /// Ein Schritt des Beendens, nach [`Teardown`].
+    ///
+    /// Ein Container lebt abgekoppelt vom gestarteten Client der Engine
+    /// (HUM-292 P7): Das Signal geht deshalb über die Engine an den
+    /// Container, und mit `SIGKILL` wird er außerdem entfernt und der Client
+    /// selbst beendet, damit der wartende Faden seinen Status bekommt. Dass
+    /// der Container auch ohne den Daemon endet, trägt die Lebensleine.
     fn tear_down(&self, signal: Signal) {
-        match self.teardown {
+        match &self.teardown {
             Teardown::Process => self.signal(signal),
+            Teardown::Container(stop) => {
+                // Ein gescheitertes Entfernen meldet `terminate`, das danach
+                // ohnehin noch einmal fragt.
+                let _ = stop.send(signal);
+                if signal == Signal::KILL {
+                    self.signal(signal);
+                }
+            }
         }
+    }
+
+    /// Setzt die PID des Init-Prozesses der Sandbox auf dem Host, wenn das
+    /// Backend sie nicht über eine Status-Pipe meldet, sondern nach dem
+    /// Start erfragt (HUM-433).
+    pub(crate) fn set_sandbox_pid(&self, pid: u32) {
+        self.shared.set_child_pid(pid);
     }
 
     fn signal(&self, signal: Signal) {
@@ -1726,5 +1814,78 @@ mod tests {
 
         // Ein zweites Mal ist nichts mehr zu tun, und das ist kein Signal.
         assert_eq!(handle.terminate(grace), Termination::AlreadyEnded);
+    }
+
+    /// HUM-433: Endet der Client der Engine, während der Container weiterläuft
+    /// (P7), geht die Lebensleine zu, und ein späteres Beenden fragt die
+    /// Engine trotzdem nach dem Container: `kill` und `rm`, nicht nur
+    /// `AlreadyEnded`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_container_is_torn_down_even_when_its_client_already_ended() {
+        use crate::launcher::{ContainerStop, Teardown};
+
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("calls");
+        let engine = dir.path().join("engine");
+        crate::test_support::write_program(
+            &engine,
+            &format!(
+                "#!/bin/sh\necho \"$*\" >> {}\n\
+                 if [ \"$1\" = container ]; then test -e {}; exit $?; fi\n",
+                log.display(),
+                dir.path().join("still-there").display()
+            ),
+        );
+        let shared = Arc::new(Shared::default());
+        let (lifeline, read) = crate::shim_fds::Lifeline::new().unwrap();
+        shared.hold_lifeline(lifeline);
+        let stop = ContainerStop {
+            program: engine,
+            name: "humanitl-probe".to_owned(),
+            env: Vec::new(),
+        };
+        let handle = SandboxHandle::new(
+            SandboxId::new(),
+            u32::MAX,
+            String::new(),
+            Arc::clone(&shared),
+        )
+        .with_launch(Teardown::Container(stop), Duration::from_secs(1));
+
+        // Der Client endet von selbst; der Container ist nicht gefragt worden.
+        shared.set_exit(ExitStatus::from_raw(9));
+        // Nicht blockierend: Ein offenes Schreibende hieße `EAGAIN`, ein
+        // geschlossenes `EOF`.
+        rustix::fs::fcntl_setfl(&read, rustix::fs::OFlags::NONBLOCK).unwrap();
+        let mut buffer = [0u8; 8];
+        assert_eq!(
+            rustix::io::read(&read, &mut buffer[..]),
+            Ok(0),
+            "the lifeline is closed once the client ends"
+        );
+
+        assert_eq!(handle.kill(), Termination::AlreadyEnded);
+        let calls = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(
+            calls.contains("kill --signal KILL humanitl-probe"),
+            "{calls}"
+        );
+        assert!(
+            calls.contains("rm --force --time 0 --ignore humanitl-probe"),
+            "{calls}"
+        );
+        assert!(
+            handle.take_teardown_warnings().is_empty(),
+            "the container is gone"
+        );
+
+        // Bleibt er, sagt das eine Warnung mit dem Befehl von Hand.
+        std::fs::write(dir.path().join("still-there"), b"").unwrap();
+        assert_eq!(handle.kill(), Termination::AlreadyEnded);
+        let warnings = handle.take_teardown_warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].code.as_str(), "SANDBOX_041");
+        assert!(warnings[0].fix.is_some());
     }
 }

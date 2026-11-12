@@ -404,7 +404,7 @@ async fn run_daemon(cli: &Cli, passed: Option<systemd::Passed>) -> Result<(), Di
         "proxy session started"
     );
 
-    sweep_disposable_layers(&xdg);
+    sweep_disposable_layers(&xdg, &config.sandbox);
 
     // Der Dienst bleibt hier greifbar: Der Abschied unten braucht ihn, um die
     // Sandbox zu beenden, bevor der Daemon selbst geht (HUM-142). Er ist
@@ -2477,7 +2477,11 @@ fn shutdown_signal() -> impl Future<Output = &'static str> + Send + 'static {
 /// Schichten einer Wegwerf-Sandbox, die ein früherer Daemon liegen ließ
 /// (Absturz, `SIGKILL`), belegen Arbeitsspeicher; ohne die Grundlage vom
 /// Start ist ihre Übernahme nicht sicher, sie werden verworfen (HUM-350).
-fn sweep_disposable_layers(paths: &XdgPaths) {
+///
+/// Davor die Sandboxen einer früheren Sitzung, die außerhalb der Prozesse des
+/// Daemons lebten ([`sweep_left_sandboxes`]).
+fn sweep_disposable_layers(paths: &XdgPaths, sandbox: &humanitl_config::SandboxRef) {
+    sweep_left_sandboxes(paths, sandbox);
     let swept = humanitl_sandbox::disposable::sweep(&paths.runtime_dir().path);
     if swept.removed > 0 {
         tracing::warn!(
@@ -2487,6 +2491,31 @@ fn sweep_disposable_layers(paths: &XdgPaths) {
     }
     for failed in &swept.failed {
         tracing::error!(why = %failed.why, "a disposable layer of an earlier daemon stays on disk");
+    }
+}
+
+/// Sandboxen, die ein früherer Daemon außerhalb seiner Prozesse liegen ließ
+/// (HUM-433): Container mit den Labels dieser Instanz und einer Sitzung.
+/// Die Bestandsaufnahme läuft hier, begrenzt, bevor der Daemon einen Start
+/// annimmt; das Entfernen genau dieser läuft in einem eigenen Faden, und
+/// jeder Fund ist eine Warnung mit `SANDBOX_041`.
+fn sweep_left_sandboxes(paths: &XdgPaths, sandbox: &humanitl_config::SandboxRef) {
+    // Die Bestandsaufnahme jetzt, bevor der Daemon einen Start annimmt; das
+    // Entfernen nimmt nur, was sie fand, und darf deshalb nebenher laufen.
+    let left = humanitl_sandbox::LeftSandboxes::find(paths, sandbox);
+    let spawned = std::thread::Builder::new()
+        .name("sandbox-sweep".to_owned())
+        .spawn(move || {
+            for diagnostic in left.remove() {
+                tracing::warn!(
+                    code = %diagnostic.code,
+                    why = %diagnostic.why,
+                    "a sandbox of an earlier session of this daemon was left behind"
+                );
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "cannot look for sandboxes an earlier daemon left behind");
     }
 }
 

@@ -62,6 +62,20 @@ def test_bwrap_counts_outside_the_adapter_only() -> None:
            f"{counts['bwrap']}")
 
 
+def test_podman_names_count_outside_their_adapter_only() -> None:
+    root = tree({
+        "daemon/crates/sandbox/src/podman/mod.rs": "// podman crun conmon\n",
+        "daemon/crates/sandbox/src/backend.rs": "// Podman(PodmanBackend), libkrun, krun\n",
+        "daemon/crates/ipc/src/sandbox.rs": "let runtime = PodmanRuntime::Crun; // conmon\n",
+    })
+    counts = check_coupling.measure(root)
+    expect(counts["podman"] == {
+        "daemon/crates/sandbox/src/backend.rs": 4,
+        "daemon/crates/ipc/src/sandbox.rs": 3,
+    }, f"podman, crun, krun, libkrun and conmon count outside src/podman/ only, the sandbox "
+       f"crate included, libkrun once: {counts['podman']}")
+
+
 def test_a_proxy_use_list_counts_every_name_across_lines() -> None:
     root = tree({
         "daemon/crates/ipc/src/x.rs": (

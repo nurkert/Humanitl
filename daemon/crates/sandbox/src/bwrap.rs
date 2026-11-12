@@ -65,7 +65,7 @@ use crate::bridge_env::{
 };
 use crate::bwrap_args::{IdentityFds, LaunchInputs, MaskFds, SourceFd};
 use crate::handle::{ReportSnapshot, SandboxHandle, Shared};
-use crate::inherit::{HOOK_ERRNO, above_stdio, inherit_in_child};
+use crate::inherit::{HOOK_ERRNO, above_stdio, inherit_in_child, inherit_renumbered};
 use crate::launcher::{
     CheckResult, DisposableLayer, Door, EnvDelivery, IsolationCheck, IsolationLevel, LaunchOnce,
     LaunchPlan, PlanPreview, PlanRequest, ResourceLimits, SandboxBackend, StdioMode, Teardown,
@@ -682,6 +682,28 @@ impl BwrapBackend {
     /// Identitätsdateien, `/proc`, `/sys`, `/dev`, `/run/humanitl`).
     /// `SANDBOX_011`, wenn ein memfd nicht anzulegen ist.
     fn agent_file_fds(session: &SessionContext) -> Result<AgentFileFds, Diagnostic> {
+        Self::check_agent_files(session)?;
+        let fds = session
+            .files
+            .iter()
+            .map(|file| Self::sealed_memfd(AGENT_FILE_MEMFD_NAME, &file.content))
+            .collect::<Result<Vec<OwnedFd>, Diagnostic>>()?;
+        let targets = fds
+            .iter()
+            .zip(&session.files)
+            .map(|(fd, file)| (fd.as_raw_fd(), file.dst.clone()))
+            .collect();
+        Ok((fds, targets))
+    }
+
+    /// Wohin die Dateien des Agent-Adapters wollen, für jedes Backend gleich
+    /// (HUM-433): nie unter `/work` und nie auf ein Ziel, das die Sandbox
+    /// selbst setzt.
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_006` wie [`Self::agent_file_fds`].
+    pub(crate) fn check_agent_files(session: &SessionContext) -> Result<(), Diagnostic> {
         let inside = crate::agent::files_inside_work(&session.files, Path::new(WORK_DST));
         if let Some(first) = inside.first() {
             return Err(Diagnostic::builder(SANDBOX_006, Severity::Blocking)
@@ -702,17 +724,7 @@ impl BwrapBackend {
                 ))
                 .build());
         }
-        let fds = session
-            .files
-            .iter()
-            .map(|file| Self::sealed_memfd(AGENT_FILE_MEMFD_NAME, &file.content))
-            .collect::<Result<Vec<OwnedFd>, Diagnostic>>()?;
-        let targets = fds
-            .iter()
-            .zip(&session.files)
-            .map(|(fd, file)| (fd.as_raw_fd(), file.dst.clone()))
-            .collect();
-        Ok((fds, targets))
+        Ok(())
     }
 
     /// Ein versiegeltes memfd mit diesem Inhalt, Leseposition am Anfang
@@ -749,7 +761,9 @@ impl BwrapBackend {
     /// pseudo-terminal: a sandbox that runs without the daemon has nobody to
     /// ask for a shell. The shim's end lies above the standard streams
     /// (`inherit.rs`).
-    fn shell_door(stdio: StdioMode) -> Result<(Option<OwnedFd>, Option<OwnedFd>), Diagnostic> {
+    pub(crate) fn shell_door(
+        stdio: StdioMode,
+    ) -> Result<(Option<OwnedFd>, Option<OwnedFd>), Diagnostic> {
         if stdio.pty_size().is_none() {
             return Ok((None, None));
         }
@@ -823,11 +837,7 @@ impl SandboxBackend for BwrapBackend {
             env: profile.effective_env(session, inputs.report_fd),
             backend_env: Vec::new(),
             // Eins weiter: `argv[0]` ist das Programm.
-            argv_env: line
-                .env_values
-                .into_iter()
-                .map(|(key, index)| (key, index + 1))
-                .collect(),
+            argv_env: after_program(line.env_values),
             policy_text: None,
             door: Door::SocketFile {
                 host: session.proxy_socket_src.clone(),
@@ -946,11 +956,7 @@ impl SandboxBackend for BwrapBackend {
             session_dir: None,
             argv,
             // Eins weiter: `argv[0]` ist das Programm.
-            argv_env: line
-                .env_values
-                .into_iter()
-                .map(|(key, index)| (key, index + 1))
-                .collect(),
+            argv_env: after_program(line.env_values),
             env,
             fds,
             files: session.files.clone(),
@@ -959,9 +965,11 @@ impl SandboxBackend for BwrapBackend {
             warnings,
             unprotected,
             env_delivery: EnvDelivery::Argv,
+            program_env: Vec::new(),
             stdio: options.stdio,
             report_timeout: options.effective_report_timeout(),
             teardown: Teardown::Process,
+            renumbered: false,
             program: self.program.clone(),
             once: Mutex::new(Some(LaunchOnce {
                 inherit,
@@ -969,6 +977,7 @@ impl SandboxBackend for BwrapBackend {
                 status: Some(status_reader),
                 output_sink: options.output_sink.clone(),
                 shells: shell_door.map(crate::shell::DoorSeed::Socket),
+                lifeline: None,
             })),
         })
     }
@@ -1079,12 +1088,19 @@ pub(crate) fn launch_plan(plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic
         status,
         output_sink,
         shells,
+        lifeline,
     } = once;
     let stdio = plan.stdio;
+    let renumbered = plan.renumbered;
     let id = SandboxId::new();
     let shared = Arc::new(Shared::default());
     if let Some(sink) = output_sink {
         shared.set_sink(sink);
+    }
+    // Das Schreibende der Lebensleine lebt mit dem Zustand der Sandbox: bis
+    // zu ihrem Ende, oder bis der Daemon stirbt (HUM-430).
+    if let Some(lifeline) = lifeline {
+        shared.hold_lifeline(lifeline);
     }
     let program = plan.program.clone();
     let args: Vec<OsString> = plan.argv.iter().skip(1).cloned().collect();
@@ -1092,7 +1108,20 @@ pub(crate) fn launch_plan(plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic
     // empty one; `sandbox-exec` hands its own environment to the command
     // (HUM-323); with an inherited descriptor the shim reads it from there
     // and the program starts with an empty one as well (HUM-430).
-    let env = plan.env_delivery.program_env(&plan.env);
+    let mut env = plan.env_delivery.program_env(&plan.env);
+    env.extend(plan.program_env.iter().cloned());
+    // Der memfd der Umgebung muss unter der Nummer ankommen, die der Shim
+    // liest; sonst liefe der Agent ohne seine Umgebung (HUM-430).
+    if let Some(fd) = plan.env_delivery.inherited_fd()
+        && !plan.fds.iter().any(|&(_, target)| target == fd)
+    {
+        return Err(Diagnostic::builder(SANDBOX_012, Severity::Blocking)
+            .why(format!(
+                "the plan names descriptor {fd} for the agent's environment, and no inherited \
+                 descriptor arrives there"
+            ))
+            .build());
+    }
 
     let (tx, rx) = mpsc::channel();
     let supervisor_shared = Arc::clone(&shared);
@@ -1103,7 +1132,10 @@ pub(crate) fn launch_plan(plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic
                 &program,
                 &args,
                 &env,
-                inherit,
+                Handover {
+                    inherit,
+                    renumbered,
+                },
                 stdio,
                 &supervisor_shared,
                 &tx,
@@ -1120,7 +1152,7 @@ pub(crate) fn launch_plan(plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic
             .build()
     })??;
     let handle = SandboxHandle::new(id, pid, plan.argv_line(), Arc::clone(&shared))
-        .with_launch(plan.teardown, plan.report_timeout);
+        .with_launch(plan.teardown.clone(), plan.report_timeout);
     // The door opens after `bwrap` holds its end, and a door that cannot
     // open costs the further shells, never the session (HUM-299).
     // `SandboxHandle::open_shell` then says that there is no door.
@@ -1138,8 +1170,10 @@ pub(crate) fn launch_plan(plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic
                 spawn_reader("sandbox-status", Arc::clone(&shared), status, read_status)
             } else {
                 // Ohne Status-Pipe gibt es nichts zu lesen; der Status ist
-                // dann von Anfang an zu Ende.
+                // dann von Anfang an zu Ende. Ob der Befehl startete, sagt
+                // dann der Bericht des Shims (HUM-433).
                 shared.close_status();
+                shared.prove_start_by_report();
                 Ok(())
             }
         });
@@ -1197,14 +1231,14 @@ fn check_from(
 /// Die Quellen eines Plans, die als Deskriptor gebunden werden (HUM-263):
 /// der Projektordner und die Einträge aus `mounts.extra_ro` und
 /// `mounts.extra_rw`, jede geöffnet und am Ort ihres Deskriptors geprüft.
-struct PinnedMounts {
-    work: PinnedSource,
-    read_only: Vec<PinnedSource>,
-    writable: Vec<PinnedSource>,
+pub(crate) struct PinnedMounts {
+    pub(crate) work: PinnedSource,
+    pub(crate) read_only: Vec<PinnedSource>,
+    pub(crate) writable: Vec<PinnedSource>,
     /// Die Binds aus [`crate::LaunchOptions::session_ro`], mit ihrem Ziel.
-    session: Vec<(PinnedSource, PathBuf)>,
+    pub(crate) session: Vec<(PinnedSource, PathBuf)>,
     /// The agent program, opened and checked once (HUM-278).
-    agent: Option<PinnedSource>,
+    pub(crate) agent: Option<PinnedSource>,
 }
 
 impl PinnedMounts {
@@ -1214,7 +1248,10 @@ impl PinnedMounts {
     ///
     /// `SANDBOX_006` aus [`BwrapBackend::pin`], aus
     /// [`MountPolicy::check_work_dir`] oder aus [`MountPolicy::check`].
-    fn open(policy: &MountPolicy, request: &PlanRequest<'_>) -> Result<Self, Diagnostic> {
+    pub(crate) fn open(
+        policy: &MountPolicy,
+        request: &PlanRequest<'_>,
+    ) -> Result<Self, Diagnostic> {
         let PlanRequest {
             profile,
             session,
@@ -1353,12 +1390,62 @@ impl PinnedMounts {
     }
 }
 
+/// Die Stellen der Umgebungswerte, eins weiter: `argv[0]` ist das Programm.
+fn after_program(env_values: Vec<(String, usize)>) -> Vec<(String, usize)> {
+    env_values
+        .into_iter()
+        .map(|(key, index)| (key, index + 1))
+        .collect()
+}
+
+/// Die Deskriptoren, die das Programm erbt, und wie.
+struct Handover {
+    /// In der Reihenfolge des Plans.
+    inherit: Vec<OwnedFd>,
+    /// Fortlaufend ab 3 statt unter eigener Nummer
+    /// ([`LaunchPlan::renumbered`]).
+    renumbered: bool,
+}
+
+impl Handover {
+    /// Eine Engine gibt dem Container ihre eigenen Standardströme nicht
+    /// weiter; die Untertanenseite reist dann als letzter geerbter Deskriptor
+    /// mit, und der Shim legt sie auf 0, 1 und 2 (HUM-433, `--stdio-fd`).
+    fn add_terminal(&mut self, pty: Option<&Pty>) -> Result<(), Diagnostic> {
+        if let Some(pty) = pty
+            && self.renumbered
+        {
+            let slave = pty.slave.try_clone().map_err(|err| {
+                pty_failed(&format!("cannot hand the terminal to the sandbox: {err}"))
+            })?;
+            self.inherit.push(OwnedFd::from(slave));
+        }
+        Ok(())
+    }
+
+    /// Setzt den Hook, der die Deskriptoren im Kind übergibt. `FD_CLOEXEC`
+    /// fällt nur im Kind, zwischen `fork` und `exec`; im eigenen Prozess
+    /// bleibt es stehen, damit kein anderer Start im selben Augenblick die
+    /// Deskriptoren miterbt (HUM-263). Zurück kommen die Platzhalter auf den
+    /// Zielnummern, die der Aufrufer bis nach `spawn` hält
+    /// ([`inherit_renumbered`]).
+    fn install(&self, command: &mut Command) -> Result<Vec<OwnedFd>, Diagnostic> {
+        let borrowed: Vec<BorrowedFd<'_>> = self.inherit.iter().map(AsFd::as_fd).collect();
+        let handed = if self.renumbered {
+            inherit_renumbered(command, &borrowed)
+        } else {
+            inherit_in_child(command, &borrowed).map(|()| Vec::new())
+        };
+        handed.map_err(|err| handover_failed(&err))
+    }
+}
+
 /// Der Thread, der `bwrap` startet und auf es wartet; siehe Modulbeschreibung.
 fn supervise(
     program: &Path,
     args: &[OsString],
     env: &[(String, String)],
-    inherit: Vec<OwnedFd>,
+    mut handover: Handover,
     stdio: StdioMode,
     shared: &Arc<Shared>,
     tx: &Sender<Result<u32, Diagnostic>>,
@@ -1406,18 +1493,21 @@ fn supervise(
                 }
             }
         }
-        // `FD_CLOEXEC` fällt nur im Kind, zwischen `fork` und `exec`; im
-        // eigenen Prozess bleibt es stehen, damit kein anderer Start im
-        // selben Augenblick die Deskriptoren miterbt (HUM-263).
-        let borrowed: Vec<BorrowedFd<'_>> = inherit.iter().map(AsFd::as_fd).collect();
-        if let Err(err) = inherit_in_child(&mut command, &borrowed) {
-            let _ = tx.send(Err(handover_failed(&err)));
-            return;
-        }
+        let installed = handover
+            .add_terminal(pty.as_ref())
+            .and_then(|()| handover.install(&mut command));
+        let reserved = match installed {
+            Ok(reserved) => reserved,
+            Err(diagnostic) => {
+                let _ = tx.send(Err(diagnostic));
+                return;
+            }
+        };
         let spawned = command.spawn();
+        drop(reserved);
         // Die Kopien des Kindes bleiben; die eigenen gehen zu, damit die
         // Pipes enden, wenn die Sandbox endet.
-        drop(inherit);
+        drop(handover);
         spawned
     };
     let mut child = match spawned {
@@ -1436,18 +1526,7 @@ fn supervise(
             return;
         }
     };
-    if let Some(stdout) = child.stdout.take() {
-        let target = Arc::clone(shared);
-        shared.add_reader(thread::spawn(move || {
-            drain(stdout, |chunk| target.append_stdout(chunk));
-        }));
-    }
-    if let Some(stderr) = child.stderr.take() {
-        let target = Arc::clone(shared);
-        shared.add_reader(thread::spawn(move || {
-            drain(stderr, |chunk| target.append_stderr(chunk));
-        }));
-    }
+    read_captured(&mut child, shared);
     if let Some(pty) = pty {
         // Die eigene Kopie der Untertanenseite geht jetzt zu; das Kind hat
         // seine. Solange sie offen bliebe, sähe die Herrscherseite nie das
@@ -1483,8 +1562,9 @@ fn supervise(
             Err(_) => break ExitStatus::default(),
         }
     };
-    // Weitere Shells einer Start-Tür enden mit der Sandbox (HUM-323); unter
-    // Linux erledigt das der PID-Namensraum.
+    // Vor dem Einsammeln: Der Shim im Container hält sonst die Leser auf
+    // (HUM-433, [`Shared::close_lifeline`]); weitere Shells enden mit.
+    shared.close_lifeline();
     shared.close_shells();
     // Erst die Leser einsammeln, dann den Zuhörer der Ausgabe loslassen, dann
     // den Status setzen. Ein Zuhörer, der bliebe, hielte seinen Kanal offen,
@@ -1494,6 +1574,23 @@ fn supervise(
     shared.join_readers();
     shared.clear_sink();
     shared.set_exit(status);
+}
+
+/// Liest gesammelte Ausgabe und Fehlerausgabe des Kindes in den Zustand der
+/// Sandbox, je auf einem eigenen Faden ([`StdioMode::Capture`]).
+fn read_captured(child: &mut std::process::Child, shared: &Arc<Shared>) {
+    if let Some(stdout) = child.stdout.take() {
+        let target = Arc::clone(shared);
+        shared.add_reader(thread::spawn(move || {
+            drain(stdout, |chunk| target.append_stdout(chunk));
+        }));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        let target = Arc::clone(shared);
+        shared.add_reader(thread::spawn(move || {
+            drain(stderr, |chunk| target.append_stderr(chunk));
+        }));
+    }
 }
 
 /// Ein Pseudoterminal: die Herrscherseite bleibt beim Daemon, die
@@ -1802,6 +1899,72 @@ mod tests {
     use humanitl_config::Env;
 
     use super::{BwrapBackend, MIN_BWRAP_VERSION, Version, is_userns_failure};
+
+    /// HUM-433: Die Lebensleine geht zu, sobald der gestartete Prozess endet,
+    /// auch wenn ein anderer Prozess die Ausgabe noch offen hält und die Leser
+    /// deshalb noch warten. Unter einer Engine ist das der Shim im Container,
+    /// der den Client überlebt; hier hält ein `sleep` im Hintergrund die
+    /// Pipes drei Sekunden lang.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_lifeline_closes_when_the_program_ends_not_when_its_output_does() {
+        use std::ffi::OsString;
+        use std::path::PathBuf;
+        use std::sync::Mutex;
+        use std::time::{Duration, Instant};
+
+        use humanitl_core::ids::SessionId;
+
+        use crate::launcher::{EnvDelivery, LaunchOnce, LaunchPlan, StdioMode, Teardown};
+
+        let (report, report_writer) = BwrapBackend::inherited_pipe("report").unwrap();
+        let (lifeline, read) = crate::shim_fds::Lifeline::new().unwrap();
+        let plan = LaunchPlan {
+            session_dir: None,
+            argv: ["/bin/sh", "-c", "sleep 3 & exit 0"]
+                .into_iter()
+                .map(OsString::from)
+                .collect(),
+            argv_env: Vec::new(),
+            env: Vec::new(),
+            fds: Vec::new(),
+            files: Vec::new(),
+            session: SessionId::new(),
+            profile: "probe".into(),
+            warnings: Vec::new(),
+            unprotected: Vec::new(),
+            env_delivery: EnvDelivery::Argv,
+            program_env: Vec::new(),
+            stdio: StdioMode::Capture,
+            report_timeout: Duration::from_secs(1),
+            teardown: Teardown::Process,
+            renumbered: false,
+            program: PathBuf::from("/bin/sh"),
+            once: Mutex::new(Some(LaunchOnce {
+                inherit: vec![report_writer],
+                report,
+                status: None,
+                output_sink: None,
+                shells: None,
+                lifeline: Some(lifeline),
+            })),
+        };
+        let started = Instant::now();
+        let _ = super::launch_plan(&plan);
+        rustix::fs::fcntl_setfl(&read, rustix::fs::OFlags::NONBLOCK).unwrap();
+        let mut buffer = [0u8; 8];
+        let closed = loop {
+            match rustix::io::read(&read, &mut buffer[..]) {
+                Ok(0) => break true,
+                _ if started.elapsed() > Duration::from_millis(2500) => break false,
+                _ => std::thread::sleep(Duration::from_millis(20)),
+            }
+        };
+        assert!(
+            closed,
+            "the lifeline stayed open while a background process held the output"
+        );
+    }
 
     /// Die Frist des Berichts kommt aus den Optionen des Starts und reist mit
     /// dem Handle (HUM-428): Die Prüfung wartet so lange, wie der Start sagte,

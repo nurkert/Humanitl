@@ -194,9 +194,11 @@ impl Fixture {
 /// `daemon/crates/sandbox/tests/shim_contract.rs`.
 fn usable(fixture: &Fixture) -> bool {
     // Das Backend des Systems, wie der Daemon es sucht.
-    if let Err(diagnostic) =
-        humanitl_sandbox::Backend::detect(humanitl_sandbox::AUTO_BACKEND, fixture.paths.clone())
-    {
+    if let Err(diagnostic) = humanitl_sandbox::Backend::detect(
+        humanitl_sandbox::AUTO_BACKEND,
+        fixture.paths.clone(),
+        &humanitl_config::SandboxRef::default(),
+    ) {
         return refuse_under_ci(
             &format!("bwrap is not usable here: {}", diagnostic.why),
             HOW_TO_GET_BWRAP,

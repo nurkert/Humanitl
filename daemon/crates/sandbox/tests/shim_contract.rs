@@ -51,8 +51,9 @@ use humanitl_sandbox::{
     Bridge, CHECK_BRIDGE_LISTENING, CHECK_FAMILIES, CHECK_NAMES, CHECK_PREFIX,
     DEFAULT_DENY_SYSCALLS, ENV_BRIDGES, ENV_REPORT_FD, ENV_SECCOMP_DENY, EXIT_USAGE, KILL_GRACE,
     Lifeline, PROXY_BRIDGE, PROXY_SOCKET_DST, REFUSALS_PREFIX, REQUIRED_SOCKET_FAMILIES,
-    REQUIRED_SOCKET_TYPES, RESERVED_ENV, SHIM_ENV_FD, SHIM_LIFELINE_FD, SandboxProfile, ShimCheck,
-    bridges_json, env_memfd, parse_check_line, parse_refusal_line, shim_env,
+    REQUIRED_SOCKET_TYPES, RESERVED_ENV, SHIM_ENV_FD, SHIM_LIFELINE_FD, SHIM_STDIO_FD,
+    SandboxProfile, ShimCheck, bridges_json, env_memfd, parse_check_line, parse_refusal_line,
+    shim_env,
 };
 
 /// Der Deskriptor, über den der Shim in diesen Tests seinen Bericht schreibt.
@@ -690,7 +691,7 @@ fn the_usage_text_names_the_lifeline_and_environment_flags() {
     let output = run(command);
     assert_eq!(output.status.code(), Some(0));
     let text = stdout_of(&output);
-    for flag in [SHIM_LIFELINE_FD, SHIM_ENV_FD] {
+    for flag in [SHIM_LIFELINE_FD, SHIM_ENV_FD, SHIM_STDIO_FD] {
         assert!(
             text.contains(flag),
             "the shim's help does not mention {flag}: {text}"
@@ -779,5 +780,67 @@ fn the_lifeline_grace_is_the_launchers() {
     assert!(
         elapsed + Duration::from_millis(500) >= KILL_GRACE,
         "the agent did not get the launcher's grace: {elapsed:?}"
+    );
+}
+
+/// HUM-433: Mit `--stdio-fd` schreibt der Agent in den geerbten Deskriptor
+/// und nicht in die Standardströme, mit denen der Shim startete; eine Engine
+/// gibt ihre eigenen nicht an den Container weiter, das Terminal der Sitzung
+/// reist so mit.
+#[test]
+fn the_stdio_descriptor_becomes_the_agents_standard_streams() {
+    let socket = tmp_path("stdio.sock");
+    accepting_socket(&socket);
+    let file = tmp_path("stdio.out");
+    fs::write(&file, b"").unwrap_or_else(|err| panic!("{err}"));
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg(r#"exec 4>"$1"; shift; exec "$@""#)
+        .arg("sh")
+        .arg(&file)
+        .arg(shim_binary())
+        .args(["--proxy-port", "0", SHIM_STDIO_FD, "4", "--"])
+        .args([
+            "/bin/sh",
+            "-c",
+            "echo through-the-terminal; echo to-stderr >&2",
+        ])
+        .stdin(Stdio::null());
+    for name in RESERVED_ENV {
+        command.env_remove(name);
+    }
+    let bridge = Bridge {
+        socket: socket.clone(),
+        ..Bridge::proxy_on(0)
+    };
+    command.env(ENV_BRIDGES, bridges_json(std::slice::from_ref(&bridge)));
+    let output = run(command);
+    let written = fs::read_to_string(&file).unwrap_or_else(|err| panic!("{err}"));
+    let _ = fs::remove_file(&socket);
+    let _ = fs::remove_file(&file);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(
+        written.contains("through-the-terminal\n") && written.contains("to-stderr\n"),
+        "{written:?}"
+    );
+    assert!(
+        !stdout_of(&output).contains("through-the-terminal"),
+        "the agent wrote to the shim's own stdout"
+    );
+}
+
+/// Eine Nummer, die keinen offenen Deskriptor nennt, verweigert den Start
+/// mit einer Prüfzeile, statt den Agenten ohne Terminal zu starten.
+#[test]
+fn a_stdio_descriptor_that_is_not_open_refuses_the_start() {
+    let mut command = shim();
+    command.args(["--proxy-port", "0", SHIM_STDIO_FD, "57", "--", "/bin/true"]);
+    let output = run(command);
+    assert_eq!(output.status.code(), Some(126), "{}", stderr_of(&output));
+    assert!(
+        stderr_of(&output).contains("stdio setup failed"),
+        "{}",
+        stderr_of(&output)
     );
 }

@@ -485,12 +485,6 @@ pub(crate) enum EnvDelivery {
     /// Wert in `argv` auf die Platte schriebe (eine Container-Engine, HUM-292 P11). Der
     /// Deskriptor steht unter den geerbten des Plans; die Vorschau zeigt die
     /// Umgebung weiter in ihrer Tabelle ([`PlanPreview::env`]).
-    // Der erste Nutzer ist der Adapter der gemeinsamen Stufe (HUM-433); bis dahin baut nur
-    // ein Test die Variante.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "first used by the adapter of HUM-433")
-    )]
     InheritedFd(RawFd),
 }
 
@@ -506,16 +500,46 @@ impl EnvDelivery {
             Self::Argv | Self::InheritedFd(_) => Vec::new(),
         }
     }
+
+    /// Die Nummer des memfd mit der Umgebung, unter der der Shim ihn erbt,
+    /// wenn die Umgebung über einen Deskriptor kommt.
+    pub(crate) const fn inherited_fd(self) -> Option<RawFd> {
+        match self {
+            Self::InheritedFd(fd) => Some(fd),
+            Self::Argv | Self::Program => None,
+        }
+    }
 }
 
 /// Wie eine gestartete Sandbox beendet wird.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Teardown {
     /// `SIGTERM`, nach der Frist `SIGKILL` an den gestarteten Prozess. Mit
     /// ihm endet die ganze Sandbox: bwrap nimmt mit `--die-with-parent` den
     /// PID-Namensraum mit, und unter `sandbox-exec` ist der Prozess selbst
     /// die Sandbox.
     Process,
+    /// Die Sandbox ist ein Container, der vom gestarteten Prozess, dem Client
+    /// der Engine, abgekoppelt läuft (HUM-292 P7): Ein Signal an den Client
+    /// erreicht ihn nicht. Beendet wird er über die Engine selbst, beim
+    /// Namen ([`ContainerStop`]), und der Client endet mit ihm.
+    Container(ContainerStop),
+}
+
+/// Wie die Engine einen Container beim Namen beendet (HUM-433).
+///
+/// Die Befehle selbst baut der Adapter der Engine; hier steht nur, was er
+/// dafür braucht: das Programm, den Namen des Containers und die Umgebung,
+/// mit der das Programm gestartet wird. Die Umgebung trägt nur Pfade und
+/// keinen Wert des Agenten.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ContainerStop {
+    /// Das Programm der Engine, aufgelöst.
+    pub(crate) program: PathBuf,
+    /// Der Name des Containers.
+    pub(crate) name: String,
+    /// Die ganze Umgebung des Programms; es startet mit keiner anderen.
+    pub(crate) env: Vec<(String, String)>,
 }
 
 /// Die drei Garantien (BACKLOG.md 4.1, `docs/SECURITY.md` Abschnitt 1).
@@ -630,6 +654,10 @@ pub(crate) struct LaunchOnce {
     /// Die Seite des Daemons an der Tür zu weiteren Shells (HUM-299), nur
     /// für einen Start am eigenen Pseudoterminal.
     pub(crate) shells: Option<crate::shell::DoorSeed>,
+    /// Das Schreibende der Lebensleine (HUM-430), wenn der Shim ihr Leseende
+    /// erbt. Es geht mit dem Start in den Zustand der Sandbox und lebt, bis
+    /// sie endet oder der Daemon stirbt.
+    pub(crate) lifeline: Option<crate::shim_fds::Lifeline>,
 }
 
 /// Die vollständige Kommandozeile samt allem, was der Start braucht.
@@ -682,6 +710,11 @@ pub struct LaunchPlan {
     pub unprotected: Vec<PathBuf>,
     /// Wie [`LaunchPlan::env`] in die Sandbox kommt.
     pub(crate) env_delivery: EnvDelivery,
+    /// Die Umgebung des Programms selbst, über das hinaus, was
+    /// [`EnvDelivery::program_env`] ihm gibt: unter einer Container-Engine
+    /// die Pfade ihrer Konfiguration, `HOME`, `XDG_RUNTIME_DIR` und `PATH`
+    /// (HUM-433), sonst leer. Kein Wert des Agenten steht darin.
+    pub(crate) program_env: Vec<(String, String)>,
     /// Wohin Ein- und Ausgabe gehen ([`LaunchOptions::stdio`]).
     pub(crate) stdio: StdioMode,
     /// Die Frist für den Bericht des Shims
@@ -689,6 +722,14 @@ pub struct LaunchPlan {
     pub(crate) report_timeout: Duration,
     /// Wie die gestartete Sandbox beendet wird.
     pub(crate) teardown: Teardown,
+    /// Ob das Programm die geerbten Deskriptoren fortlaufend ab 3 bekommt,
+    /// in der Reihenfolge von [`LaunchOnce::inherit`], statt unter ihrer
+    /// eigenen Nummer (HUM-433): Eine Engine reicht nur einen Block ab 3 an
+    /// den Container weiter (`--preserve-fds`). Die Ziele stehen in
+    /// [`LaunchPlan::fds`]. Am eigenen Pseudoterminal
+    /// ([`StdioMode::Pty`]) folgt dann als letzter Deskriptor eine Kopie der
+    /// Untertanenseite, die der Shim auf 0, 1 und 2 legt.
+    pub(crate) renumbered: bool,
     /// Das Programm, `argv[0]`, aufgelöst.
     pub(crate) program: PathBuf,
     /// Was der Start einmal entnimmt; danach `None`.
@@ -756,6 +797,8 @@ mod tests {
         assert_eq!(EnvDelivery::Program.program_env(&env), env);
         assert!(EnvDelivery::Argv.program_env(&env).is_empty());
         assert!(EnvDelivery::InheritedFd(7).program_env(&env).is_empty());
+        assert_eq!(EnvDelivery::InheritedFd(7).inherited_fd(), Some(7));
+        assert_eq!(EnvDelivery::Argv.inherited_fd(), None);
     }
 
     /// HUM-450: Die angezeigte Zeile eines Plans hält genau die Werte zurück,
@@ -779,9 +822,11 @@ mod tests {
             warnings: Vec::new(),
             unprotected: Vec::new(),
             env_delivery: EnvDelivery::Argv,
+            program_env: Vec::new(),
             stdio: StdioMode::Capture,
             report_timeout: Duration::from_secs(1),
             teardown: Teardown::Process,
+            renumbered: false,
             program: PathBuf::from("bwrap"),
             once: Mutex::new(None),
         };
