@@ -652,14 +652,54 @@
     "sandbox": {
       "additionalProperties": false,
       "default": {
+        "backend": "auto",
         "env": {},
+        "min_isolation": "policy",
         "mode": "auto",
+        "podman": {
+          "cpus": null,
+          "image": null,
+          "memory_mib": null,
+          "pids_limit": 4096,
+          "program": null,
+          "rootfs": "host",
+          "runtime": "crun",
+          "start_timeout_secs": 30
+        },
         "profile": "default",
         "work_dir": null,
         "work_mode": "rw"
       },
       "description": "Welches Sandbox-Profil mit welchem Arbeitsverzeichnis startet.",
       "properties": {
+        "backend": {
+          "default": "auto",
+          "description": "Welches Sandbox-Backend startet. `auto`, die Vorgabe, ist bubblewrap unter Linux und Seatbelt unter macOS. Ein gewähltes Backend fällt nie auf ein anderes zurück: Gibt es es auf diesem System nicht, lehnt der Start mit `SANDBOX_034` ab; liegt es unter `sandbox.min_isolation`, mit `SANDBOX_035`; verlangt das Sandbox-Profil ein anderes, mit `SANDBOX_036`. `podman` ist noch nicht zugelassen: Jeder Start damit endet mit `SANDBOX_048`, bis die Escape-Suite gegen Podman grün ist. Im Projekt-Profil gesperrt; ein Client darf den Schlüssel für eine Sitzung setzen (`cli_overrides`), die Untergrenze gilt auch dann.",
+          "oneOf": [
+            {
+              "const": "auto",
+              "description": "Das Backend des Systems: bubblewrap unter Linux, Seatbelt unter macOS.",
+              "type": "string"
+            },
+            {
+              "const": "bwrap",
+              "description": "bubblewrap, unter Linux.",
+              "type": "string"
+            },
+            {
+              "const": "podman",
+              "description": "Rootless Podman, unter Linux (noch nicht zugelassen).",
+              "type": "string"
+            },
+            {
+              "const": "seatbelt",
+              "description": "Seatbelt mit `sandbox-exec`, unter macOS.",
+              "type": "string"
+            }
+          ],
+          "x-project-scope": "denied",
+          "x-tier": "basic"
+        },
         "env": {
           "additionalProperties": {
             "type": "string"
@@ -668,6 +708,29 @@
           "description": "Zusätzliche Umgebungsvariablen für die Sandbox; sie überschreiben gleichnamige Einträge aus dem `[env]` des Profils. Der Schlüssel lässt sich aus der Umgebung des Prozesses setzen und ist damit nur so vertrauenswürdig wie die Shell, aus der Humanitl startet; die Variablen des dynamischen Linkers (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) werden deshalb abgelehnt, sie liefen vor dem seccomp-Filter des Shims.",
           "type": "object",
           "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "min_isolation": {
+          "default": "policy",
+          "description": "Die schwächste Isolationsstufe, mit der eine Sitzung starten darf: `policy` (eine Richtlinie des Kerns, Seatbelt), `namespaces` (eigene Namensräume über dem Kern des Hosts, bubblewrap und Podman mit `crun`) oder `kernel` (ein eigener Gastkern, Podman mit `krun`). Liegt das gewählte Backend darunter, lehnt der Start mit `SANDBOX_035` ab, statt ein anderes zu nehmen. Über alle Ebenen gilt der strengste Wert, nicht der oberste: Ein Projekt-Profil darf die Untergrenze heben, und weder ein Projekt noch die Umgebung noch die Kommandozeile senkt sie unter das, was eine andere Ebene verlangt.",
+          "oneOf": [
+            {
+              "const": "policy",
+              "description": "Eine Richtlinie des Kerns über einem Prozess, der die echten Pfade sieht.",
+              "type": "string"
+            },
+            {
+              "const": "namespaces",
+              "description": "Eigene Namensräume über dem geteilten Kern des Hosts.",
+              "type": "string"
+            },
+            {
+              "const": "kernel",
+              "description": "Ein eigener Gastkern in einer Micro-VM.",
+              "type": "string"
+            }
+          ],
+          "x-project-scope": "allowed",
           "x-tier": "advanced"
         },
         "mode": {
@@ -692,6 +755,131 @@
           ],
           "x-project-scope": "denied",
           "x-tier": "basic"
+        },
+        "podman": {
+          "additionalProperties": false,
+          "default": {
+            "cpus": null,
+            "image": null,
+            "memory_mib": null,
+            "pids_limit": 4096,
+            "program": null,
+            "rootfs": "host",
+            "runtime": "crun",
+            "start_timeout_secs": 30
+          },
+          "description": "Einstellungen des Backends `podman`. Sie wirken mit dem Adapter (HUM-433); bis dahin prüft das Laden nur ihre Werte.",
+          "properties": {
+            "cpus": {
+              "default": null,
+              "description": "Zahl der CPUs der Sandbox, mindestens 1 und höchstens die Zahl der CPUs, die der Daemon nutzen darf. Leer heißt: der Start leitet sie vom Host ab (die Hälfte seiner CPUs, mindestens 1, höchstens 4).",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-pending-issue": "HUM-433",
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
+            },
+            "image": {
+              "default": null,
+              "description": "Das Abbild für `rootfs = \"image\"`, immer mit Digest (`name@sha256:` und 64 Hex-Ziffern); bei `rootfs = \"image\"` Pflicht.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-pending-issue": "HUM-433",
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
+            },
+            "memory_mib": {
+              "default": null,
+              "description": "Arbeitsspeicher der Sandbox in MiB, mindestens 256 und höchstens der Arbeitsspeicher des Hosts. Leer heißt: der Start leitet ihn vom Host ab (die Hälfte seines Arbeitsspeichers, höchstens 4096), damit die Vorgabe auf jedem Rechner gilt.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-pending-issue": "HUM-433",
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
+            },
+            "pids_limit": {
+              "default": 4096,
+              "description": "Größte Zahl von Prozessen und Threads in der Sandbox, mindestens 64.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-pending-issue": "HUM-433",
+              "x-project-scope": "denied",
+              "x-tier": "expert"
+            },
+            "program": {
+              "default": null,
+              "description": "Das Programm `podman`, als absoluter Pfad. Leer heißt: die Suche im `PATH` des Daemons.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-pending-issue": "HUM-433",
+              "x-project-scope": "denied",
+              "x-tier": "expert"
+            },
+            "rootfs": {
+              "default": "host",
+              "description": "Die Wurzel der Sandbox: `host` ist ein leeres, nur lesbares Verzeichnis mit den Einhängungen des Sandbox-Profils, `image` ein lokales OCI-Abbild aus `sandbox.podman.image`, das ein Start nie zieht.",
+              "oneOf": [
+                {
+                  "const": "host",
+                  "description": "Ein leeres, nur lesbares Verzeichnis mit den Einhängungen des Profils.",
+                  "type": "string"
+                },
+                {
+                  "const": "image",
+                  "description": "Ein lokales OCI-Abbild mit Digest.",
+                  "type": "string"
+                }
+              ],
+              "x-pending-issue": "HUM-433",
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
+            },
+            "runtime": {
+              "default": "crun",
+              "description": "Die OCI-Laufzeit: `crun` teilt den Kern des Hosts (Stufe `namespaces`), `krun` startet einen eigenen Gastkern (Stufe `kernel`, braucht `/dev/kvm`).",
+              "oneOf": [
+                {
+                  "const": "crun",
+                  "description": "Namensräume über dem geteilten Kern des Hosts.",
+                  "type": "string"
+                },
+                {
+                  "const": "krun",
+                  "description": "Ein eigener Gastkern in einer Micro-VM.",
+                  "type": "string"
+                }
+              ],
+              "x-pending-issue": "HUM-433",
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
+            },
+            "start_timeout_secs": {
+              "default": 30,
+              "description": "Sekunden, die ein Start auf die laufende Sandbox wartet, bevor er abbricht, 1 bis 600.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-pending-issue": "HUM-433",
+              "x-project-scope": "denied",
+              "x-tier": "expert"
+            }
+          },
+          "type": "object",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
         },
         "profile": {
           "default": "default",
@@ -730,7 +918,7 @@
         }
       },
       "type": "object",
-      "x-project-scope": "denied",
+      "x-project-scope": "allowed",
       "x-tier": "basic"
     },
     "terminal": {

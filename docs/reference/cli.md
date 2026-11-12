@@ -133,7 +133,17 @@ below lists the flag names and their short aliases.
 | `--resolver-nameserver` | - | `STRING,_OPTIONAL` | `resolver.nameserver` |
 | `--resolver-prefer` | - | `ipv4`, `ipv6` | `resolver.prefer` |
 | `--resolver-test-ca` | - | `STRING,_OPTIONAL` | `resolver.test_ca` |
+| `--sandbox-backend` | - | `auto`, `bwrap`, `podman`, `seatbelt` | `sandbox.backend` |
+| `--sandbox-min-isolation` | - | `policy`, `namespaces`, `kernel` | `sandbox.min_isolation` |
 | `--sandbox-mode` | - | `auto`, `direct`, `disposable` | `sandbox.mode` |
+| `--sandbox-podman-cpus` | - | `INTEGER,_OPTIONAL` | `sandbox.podman.cpus` |
+| `--sandbox-podman-image` | - | `STRING,_OPTIONAL` | `sandbox.podman.image` |
+| `--sandbox-podman-memory-mib` | - | `INTEGER,_OPTIONAL` | `sandbox.podman.memory_mib` |
+| `--sandbox-podman-pids-limit` | - | `INTEGER` | `sandbox.podman.pids_limit` |
+| `--sandbox-podman-program` | - | `STRING,_OPTIONAL` | `sandbox.podman.program` |
+| `--sandbox-podman-rootfs` | - | `host`, `image` | `sandbox.podman.rootfs` |
+| `--sandbox-podman-runtime` | - | `crun`, `krun` | `sandbox.podman.runtime` |
+| `--sandbox-podman-start-timeout-secs` | - | `INTEGER` | `sandbox.podman.start_timeout_secs` |
 | `--sandbox-profile` | - | `STRING` | `sandbox.profile` |
 | `--sandbox-work-dir` | `--work` | `STRING,_OPTIONAL` | `sandbox.work_dir` |
 | `--sandbox-work-mode` | `--work-mode` | `ro`, `rw` | `sandbox.work_mode` |

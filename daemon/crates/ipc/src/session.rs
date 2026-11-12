@@ -25,8 +25,8 @@
 //! Client; sie stehen in `config.toml` oder in einem globalen Profil, wo ein
 //! Mensch sie geschrieben hat, und der Daemon liest sie dort.
 //!
-//! Übrig bleiben die zwei Schlüssel in [`SESSION_OVERRIDE_KEYS`], und beide
-//! sind Flags aus `backlog/CONVENTIONS.md` 3.8:
+//! Übrig bleiben die drei Schlüssel in [`SESSION_OVERRIDE_KEYS`]; die ersten
+//! zwei sind Flags aus `backlog/CONVENTIONS.md` 3.8:
 //!
 //! - `hold.timeout_secs` sagt, wie lange eine gehaltene Anfrage wartet. Er
 //!   vergrößert nichts: Eine kürzere Frist blockt früher, eine längere lässt
@@ -43,6 +43,14 @@
 //!   und in jeder Aufzeichnung. Dazu meldet [`SandboxService`] beim Start
 //!   `LLM_006`, wenn der Endpunkt nach seinem Namen nicht im eigenen Netz
 //!   liegt ([`humanitl_proxy::not_private_by_name`]).
+//! - `sandbox.backend` (HUM-431) wählt das Sandbox-Backend dieser Sitzung.
+//!   Er vergrößert nichts: Jede Wahl geht durch
+//!   [`humanitl_sandbox::choose_backend`], die eine Stufe unter
+//!   `sandbox.min_isolation` (`SANDBOX_035`), eine, die das Sandbox-Profil
+//!   nicht verlangt (`SANDBOX_036`), und eine nicht zugelassene
+//!   (`SANDBOX_048`) ablehnt; jedes zugelassene Backend hält die drei
+//!   Garantien. Die Untergrenze ist kein Schlüssel der Liste, und über alle
+//!   Ebenen gilt dort ohnehin der strengste Wert.
 //!
 //! [`SandboxService`]: crate::SandboxService
 //!
@@ -75,7 +83,8 @@ use humanitl_sandbox::AdapterRegistry;
 /// Die Begründung steht in der Modulbeschreibung. Wer diese Liste erweitert,
 /// erweitert, was ein Prozess auf dem Socket über die Sandbox bestimmen darf,
 /// und schreibt dazu, warum der neue Schlüssel nichts vergrößert.
-pub const SESSION_OVERRIDE_KEYS: &[&str] = &["llm.endpoint", "hold.timeout_secs"];
+pub const SESSION_OVERRIDE_KEYS: &[&str] =
+    &["llm.endpoint", "hold.timeout_secs", "sandbox.backend"];
 
 /// Der mitgelieferte Regelsatz.
 ///
@@ -696,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn the_two_allowed_keys_pass_and_everything_else_does_not() {
+    fn the_allowed_keys_pass_and_everything_else_does_not() {
         // Die Zahl steht im Test, weil die Aufzählung darunter sonst nichts
         // hielte: Ein dritter Schlüssel in der Liste bliebe grün, solange er
         // nur nicht zufällig einer der neun genannten ist. Wer die Liste
@@ -705,15 +714,22 @@ mod tests {
         // vergrößert.
         assert_eq!(
             SESSION_OVERRIDE_KEYS.len(),
-            2,
-            "a client sets llm.endpoint and hold.timeout_secs, and nothing else: {SESSION_OVERRIDE_KEYS:?}"
+            3,
+            "a client sets llm.endpoint, hold.timeout_secs and sandbox.backend, and nothing \
+             else: {SESSION_OVERRIDE_KEYS:?}"
         );
         for key in SESSION_OVERRIDE_KEYS {
             assert!(check_override_key(key).is_ok(), "{key} should be allowed");
         }
         // Genau die Schlüssel, mit denen ein Client die Sandbox aufmachen
-        // würde. Jeder einzelne ist ein eigener Weg hinaus.
+        // würde. Jeder einzelne ist ein eigener Weg hinaus. Die Untergrenze
+        // der Isolation und die Einstellungen von Podman gehören dazu
+        // (HUM-431): Ein Wunsch über den Start senkte sonst, was der Mensch
+        // verlangt hat, oder stellte Podman ein.
         for key in [
+            "sandbox.min_isolation",
+            "sandbox.podman.runtime",
+            "sandbox.podman.program",
             "sandbox.profile",
             "sandbox.work_dir",
             "sandbox.env",

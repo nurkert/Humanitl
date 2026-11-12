@@ -90,11 +90,13 @@ pub static AREAS: &[AreaInfo] = &[
         area: "sandbox",
         prefix: "SANDBOX",
         first: 1,
-        last: 33,
+        last: 59,
         note: "001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, \
                019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043), \
                030-032 Wegwerf-Sandbox (HUM-350), 033 Vorgabe fällt auf direkt zurück \
-               (HUM-357)",
+               (HUM-357), 034-036 und 048 Wahl des Backends, Untergrenze der Isolation und \
+               Zulassung (HUM-431, Bereich dafür bis 059 erweitert), 037-047 und 049 Podman \
+               (Sprint 7)",
     },
     AreaInfo {
         area: "proxy",
@@ -1681,6 +1683,34 @@ registry! {
     CONFIG_022 => "config", "Server des Projekts nicht bestätigt", "#config_022",
         "`.humanitl/profile.toml` im Projektordner nennt mit `llm.server` einen gespeicherten Server, der nicht der Standard ist, und für diesen Ordner und diesen Server liegt keine Bestätigung vor. Die Sitzung startet nicht; kein Endpunkt bekommt einen Schlüssel.",
         "`CopyCommand` mit `humanitl llm server confirm NAME --project ORDNER`; die App fragt beim Start einmal nach. Wer den Server nicht will, entfernt `llm.server` aus `.humanitl/profile.toml`.";
+    // HUM-431: the choice of the sandbox backend and its isolation floor.
+    /// `sandbox.backend` names a backend that this build or this system does
+    /// not have: `seatbelt` outside macOS, or `podman` before its adapter
+    /// exists. Blocking, and never a silent fallback to another backend
+    /// (HUM-431).
+    SANDBOX_034 => "sandbox", "Selected sandbox backend not available", "#sandbox_034",
+        "`sandbox.backend` (from `config.toml`, a profile, the environment or the start of a session) names a backend this build or this system cannot run, for example `seatbelt` on Linux. The start stops; it never takes another backend instead.",
+        "`ChangeSetting` on `sandbox.backend` = `auto`, the backend of this system.";
+    /// The chosen backend isolates less than `sandbox.min_isolation` asks
+    /// for (`policy` < `namespaces` < `kernel`). The floor is the strictest
+    /// value of all layers, so a project profile may have raised it; the
+    /// start refuses instead of picking another backend (HUM-431).
+    SANDBOX_035 => "sandbox", "Sandbox backend below the isolation floor", "#sandbox_035",
+        "The backend chosen by `sandbox.backend` isolates at a lower level than `sandbox.min_isolation` demands. The floor is the strictest value of all layers; a project profile may raise it but never lower it.",
+        "`CopyCommand` with `humanitl config get --origin sandbox.min_isolation`, which names the layer that set the floor. Lowering it there, or choosing a backend that reaches it, is the person's decision; there is no button for it.";
+    /// The sandbox profile names a backend other than `auto` in its
+    /// `[sandbox]` table, and `sandbox.backend` chose another one. The
+    /// profile states a requirement, not a second choice (HUM-431).
+    SANDBOX_036 => "sandbox", "Sandbox profile requires another backend", "#sandbox_036",
+        "The sandbox profile requires the backend it names under `[sandbox] backend`, and the configuration chose a different one. The start stops; the profile does not override the choice, and the choice does not override the profile.",
+        "`ChangeSetting` on `sandbox.backend` with the backend of the profile when that one is admitted; otherwise choose a sandbox profile without a fixed backend (`sandbox.profile`).";
+    /// `sandbox.backend` names a level that is not admitted yet: `podman`
+    /// until its escape suite and mount check are green in CI (HUM-448),
+    /// `podman` with `krun` until HUM-449. Every start path refuses it; only
+    /// the escape suite and tests start it, through code (HUM-431).
+    SANDBOX_048 => "sandbox", "Sandbox backend not admitted yet", "#sandbox_048",
+        "`sandbox.backend` names an isolation level that is not admitted yet. A backend becomes selectable only after its mount check and the escape suite against it are green in CI; until then every start refuses it, whether it comes from `config.toml`, the environment, a profile or the start of a session.",
+        "`ChangeSetting` on `sandbox.backend` = `auto`, the admitted backend of this system.";
 }
 
 /// Sucht einen Code im Register.

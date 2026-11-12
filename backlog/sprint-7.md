@@ -212,6 +212,7 @@ Kern des Sprints. Entwurf im HUM-292-Ergebnis, Abschnitte 3, 4 und 8. Voraussetz
 7. Beim Start des Daemons: alle Container mit dem Label der Instanz entfernen, `SANDBOX_041` als Warnung je Rest.
 8. `tools/coupling-baseline.toml` bekommt `[podman]`, `tools/check_coupling.py` zählt `podman`, `crun`, `krun`, `libkrun`, `conmon` außerhalb von `src/podman/`.
 9. `docs/SECURITY.md` bekommt den Abschnitt „Linux: Podman" mit den drei Garantien in der gemeinsamen Stufe; `docs/THREAT-MODEL.md` einen K-Eintrag für die Container-Engine (Podman, `conmon`, Speicher des Nutzers, `containers.conf`).
+10. Der Adapter liest die Gruppe, die HUM-431 angelegt hat, und `config_readers.rs` stuft jeden ihrer Schlüssel als `effective` ein: `sandbox.podman.program`, `sandbox.podman.runtime` (nur `crun`; `krun` lehnt bis HUM-444 mit `SANDBOX_048` ab), `sandbox.podman.memory_mib` (`--memory`; leer: die Hälfte des Arbeitsspeichers des Hosts, höchstens 4096 MiB), `sandbox.podman.cpus` (`--cpus`; leer: die Hälfte der CPUs, die der Daemon nutzen darf, mindestens 1, höchstens 4), `sandbox.podman.pids_limit` (`--pids-limit`), `sandbox.podman.start_timeout_secs` (Frist bis zum Bericht), `sandbox.podman.rootfs` und `sandbox.podman.image` (bis HUM-439 lehnt `rootfs = "image"` den Start mit `Diagnostic` ab, statt still `host` zu nehmen).
 
 ### Tests
 - Unit `plan.rs`: die Zeile enthält jedes feste Flag genau einmal und kein `-e`, kein `-t`, kein `--privileged`, kein `--network` außer `none`, kein `--cap-add`, kein `--device`, kein `:z`/`:Z`; eine Tabelle prüft das gegen eine Verbotsliste.
@@ -395,6 +396,7 @@ Bis hier lehnt jeder Start mit `podman` als `SANDBOX_048` ab (HUM-431); Escape-S
 2. `ADMITTED_BACKENDS` bekommt `podman` mit der Laufzeit `crun`; `krun` bleibt gesperrt.
 3. `SandboxBackends` meldet `podman` als verfügbar, wenn `detect` es ist; `auto` bleibt bwrap.
 4. `docs/SECURITY.md` Abschnitt „Linux: Podman" verliert den Hinweis „noch nicht zugelassen"; `docs/THREAT-MODEL.md` setzt den K-Eintrag der Container-Engine auf `mitigated` mit ESC-1, ESC-2, ESC-5.
+5. Nach einem Wunsch über den Start (`cli_overrides` mit `sandbox.backend`, HUM-432) werden die Obergrenzen aus dem Host auf der zusammengeführten Konfiguration erneut geprüft, nicht nur beim Laden des Daemons.
 
 ### Tests
 - Unit: `sandbox.backend = "podman"` startet (mit Attrappe), `podman` mit `runtime = "krun"` scheitert weiter mit `SANDBOX_048`.

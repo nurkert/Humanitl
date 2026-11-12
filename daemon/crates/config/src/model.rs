@@ -15,8 +15,9 @@
 //! `daemon/crates/config/tests/config_readers.rs` nagelt beide Fälle fest.
 //!
 //! `x-project-scope = "denied"` steht an jedem Schlüssel, den das Projekt-Profil
-//! nicht setzen darf (`backlog/CONVENTIONS.md` 4.11): `llm.*`, `sandbox.*`,
-//! `agent.adapter`, `agent.command`, `hold.ask_mode`,
+//! nicht setzen darf (`backlog/CONVENTIONS.md` 4.11): `llm.*` außer
+//! `llm.server`, `sandbox.*` außer `sandbox.min_isolation` (die ein Projekt
+//! nur heben kann, siehe [`mod@crate::load`]), `agent.adapter`, `agent.command`, `hold.ask_mode`,
 //! `hold.hard_block_checksum_secrets`, `findings.enabled`,
 //! `findings.ignored_hashes`, `findings.email_allow_domains`, `pseudonyms.*`,
 //! `limits.recorder_max_body_bytes`, `resolver.*`, `tls.*`, `experimental.*`,
@@ -69,7 +70,10 @@ pub struct Config {
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub pseudonyms: PseudonymConfig,
     /// Welches Sandbox-Profil mit welchem Arbeitsverzeichnis startet.
-    #[schemars(extend("x-tier" = "basic", "x-project-scope" = "denied"))]
+    // Die Gruppe ist im Projekt-Profil erlaubt, weil `sandbox.min_isolation`
+    // es ist (HUM-431): Ein Projekt darf die Untergrenze nur heben, nie
+    // senken. Jeder andere Schlüssel unter `sandbox` bleibt gesperrt.
+    #[schemars(extend("x-tier" = "basic", "x-project-scope" = "allowed"))]
     pub sandbox: SandboxRef,
     /// Welcher Agent in der Sandbox läuft.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
@@ -489,6 +493,15 @@ pub struct SandboxRef {
     /// Zusätzliche Umgebungsvariablen für die Sandbox; sie überschreiben gleichnamige Einträge aus dem `[env]` des Profils. Der Schlüssel lässt sich aus der Umgebung des Prozesses setzen und ist damit nur so vertrauenswürdig wie die Shell, aus der Humanitl startet; die Variablen des dynamischen Linkers (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) werden deshalb abgelehnt, sie liefen vor dem seccomp-Filter des Shims.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub env: BTreeMap<String, String>,
+    /// Welches Sandbox-Backend startet. `auto`, die Vorgabe, ist bubblewrap unter Linux und Seatbelt unter macOS. Ein gewähltes Backend fällt nie auf ein anderes zurück: Gibt es es auf diesem System nicht, lehnt der Start mit `SANDBOX_034` ab; liegt es unter `sandbox.min_isolation`, mit `SANDBOX_035`; verlangt das Sandbox-Profil ein anderes, mit `SANDBOX_036`. `podman` ist noch nicht zugelassen: Jeder Start damit endet mit `SANDBOX_048`, bis die Escape-Suite gegen Podman grün ist. Im Projekt-Profil gesperrt; ein Client darf den Schlüssel für eine Sitzung setzen (`cli_overrides`), die Untergrenze gilt auch dann.
+    #[schemars(extend("x-tier" = "basic", "x-project-scope" = "denied"))]
+    pub backend: SandboxBackendName,
+    /// Die schwächste Isolationsstufe, mit der eine Sitzung starten darf: `policy` (eine Richtlinie des Kerns, Seatbelt), `namespaces` (eigene Namensräume über dem Kern des Hosts, bubblewrap und Podman mit `crun`) oder `kernel` (ein eigener Gastkern, Podman mit `krun`). Liegt das gewählte Backend darunter, lehnt der Start mit `SANDBOX_035` ab, statt ein anderes zu nehmen. Über alle Ebenen gilt der strengste Wert, nicht der oberste: Ein Projekt-Profil darf die Untergrenze heben, und weder ein Projekt noch die Umgebung noch die Kommandozeile senkt sie unter das, was eine andere Ebene verlangt.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
+    pub min_isolation: MinIsolation,
+    /// Einstellungen des Backends `podman`. Sie wirken mit dem Adapter (HUM-433); bis dahin prüft das Laden nur ihre Werte.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub podman: PodmanConfig,
 }
 
 impl Default for SandboxRef {
@@ -499,8 +512,196 @@ impl Default for SandboxRef {
             work_mode: WorkMode::Rw,
             mode: SandboxMode::Auto,
             env: BTreeMap::new(),
+            backend: SandboxBackendName::Auto,
+            min_isolation: MinIsolation::Policy,
+            podman: PodmanConfig::default(),
         }
     }
+}
+
+/// Der Name eines Sandbox-Backends in `sandbox.backend` (HUM-431).
+///
+/// Welche dieser Namen ein Build starten kann und welche zugelassen sind,
+/// entscheidet die Sandbox-Crate (`humanitl_sandbox::ADMITTED_BACKENDS`); das
+/// Schema nennt alle, damit eine Datei auf jedem System gültig bleibt und
+/// erst der Start sagt, was hier fehlt.
+///
+/// Den Text je Name kennt nur die Sandbox-Crate
+/// (`humanitl_sandbox::backend_name`): Der Name eines Adapters steht außerhalb
+/// seines Adapters genau einmal, im Wert des Schemas (HUM-145).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxBackendName {
+    /// Das Backend des Systems: bubblewrap unter Linux, Seatbelt unter macOS.
+    #[default]
+    Auto,
+    /// bubblewrap, unter Linux.
+    #[serde(rename = "bwrap")]
+    Bubblewrap,
+    /// Rootless Podman, unter Linux (noch nicht zugelassen).
+    Podman,
+    /// Seatbelt mit `sandbox-exec`, unter macOS.
+    Seatbelt,
+}
+
+impl SandboxBackendName {
+    /// Alle Namen, in der Reihenfolge des Schemas.
+    pub const ALL: [Self; 4] = [Self::Auto, Self::Bubblewrap, Self::Podman, Self::Seatbelt];
+}
+
+/// Die Untergrenze der Isolation in `sandbox.min_isolation` (HUM-431),
+/// geordnet von schwach nach stark: Eine Untergrenze vergleicht mit `>=`, und
+/// beim Mischen der Ebenen gewinnt das Maximum (`crate::load`).
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum MinIsolation {
+    /// Eine Richtlinie des Kerns über einem Prozess, der die echten Pfade sieht.
+    #[default]
+    Policy,
+    /// Eigene Namensräume über dem geteilten Kern des Hosts.
+    Namespaces,
+    /// Ein eigener Gastkern in einer Micro-VM.
+    Kernel,
+}
+
+impl MinIsolation {
+    /// Die drei, von schwach nach stark.
+    pub const ALL: [Self; 3] = [Self::Policy, Self::Namespaces, Self::Kernel];
+
+    /// Der Name, wie er in `config.toml` steht.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Policy => "policy",
+            Self::Namespaces => "namespaces",
+            Self::Kernel => "kernel",
+        }
+    }
+
+    /// Liest `policy`, `namespaces` oder `kernel`, genau so geschrieben;
+    /// alles andere ist `None`.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|level| level.as_str() == text)
+    }
+}
+
+/// Die Einstellungen des Backends `podman` (HUM-431).
+///
+/// Keiner der Werte schwächt eine der drei Garantien: Netz, Einhängungen,
+/// Fähigkeiten und Filter legt der Adapter fest, nicht die Konfiguration.
+/// Hier stehen nur Programm, Laufzeit, Wurzel und die Grenzen der Ressourcen;
+/// was eine Garantie lockern würde (`--network`, `--privileged`, ein
+/// zusätzlicher Bind), hat keinen Schlüssel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct PodmanConfig {
+    /// Das Programm `podman`, als absoluter Pfad. Leer heißt: die Suche im `PATH` des Daemons.
+    #[schemars(extend(
+        "x-tier" = "expert",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-433"
+    ))]
+    pub program: Option<PathBuf>,
+    /// Die OCI-Laufzeit: `crun` teilt den Kern des Hosts (Stufe `namespaces`), `krun` startet einen eigenen Gastkern (Stufe `kernel`, braucht `/dev/kvm`).
+    #[schemars(extend(
+        "x-tier" = "advanced",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-433"
+    ))]
+    pub runtime: PodmanRuntime,
+    /// Die Wurzel der Sandbox: `host` ist ein leeres, nur lesbares Verzeichnis mit den Einhängungen des Sandbox-Profils, `image` ein lokales OCI-Abbild aus `sandbox.podman.image`, das ein Start nie zieht.
+    #[schemars(extend(
+        "x-tier" = "advanced",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-433"
+    ))]
+    pub rootfs: PodmanRootfs,
+    /// Das Abbild für `rootfs = "image"`, immer mit Digest (`name@sha256:` und 64 Hex-Ziffern); bei `rootfs = "image"` Pflicht.
+    #[schemars(extend(
+        "x-tier" = "advanced",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-433"
+    ))]
+    pub image: Option<String>,
+    /// Arbeitsspeicher der Sandbox in MiB, mindestens 256 und höchstens der Arbeitsspeicher des Hosts. Leer heißt: der Start leitet ihn vom Host ab (die Hälfte seines Arbeitsspeichers, höchstens 4096), damit die Vorgabe auf jedem Rechner gilt.
+    #[schemars(extend(
+        "x-tier" = "advanced",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-433"
+    ))]
+    pub memory_mib: Option<u64>,
+    /// Zahl der CPUs der Sandbox, mindestens 1 und höchstens die Zahl der CPUs, die der Daemon nutzen darf. Leer heißt: der Start leitet sie vom Host ab (die Hälfte seiner CPUs, mindestens 1, höchstens 4).
+    #[schemars(extend(
+        "x-tier" = "advanced",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-433"
+    ))]
+    pub cpus: Option<u32>,
+    /// Größte Zahl von Prozessen und Threads in der Sandbox, mindestens 64.
+    #[schemars(extend(
+        "x-tier" = "expert",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-433"
+    ))]
+    pub pids_limit: u64,
+    /// Sekunden, die ein Start auf die laufende Sandbox wartet, bevor er abbricht, 1 bis 600.
+    #[schemars(extend(
+        "x-tier" = "expert",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-433"
+    ))]
+    pub start_timeout_secs: u64,
+}
+
+impl Default for PodmanConfig {
+    fn default() -> Self {
+        Self {
+            program: None,
+            runtime: PodmanRuntime::Crun,
+            rootfs: PodmanRootfs::Host,
+            image: None,
+            memory_mib: None,
+            cpus: None,
+            pids_limit: 4096,
+            start_timeout_secs: 30,
+        }
+    }
+}
+
+/// Die OCI-Laufzeit unter Podman (HUM-431).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PodmanRuntime {
+    /// Namensräume über dem geteilten Kern des Hosts.
+    #[default]
+    Crun,
+    /// Ein eigener Gastkern in einer Micro-VM.
+    Krun,
+}
+
+impl PodmanRuntime {
+    /// Der Name, wie er in `config.toml` steht.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Crun => "crun",
+            Self::Krun => "krun",
+        }
+    }
+}
+
+/// Die Wurzel einer Podman-Sandbox (HUM-431).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PodmanRootfs {
+    /// Ein leeres, nur lesbares Verzeichnis mit den Einhängungen des Profils.
+    #[default]
+    Host,
+    /// Ein lokales OCI-Abbild mit Digest.
+    Image,
 }
 
 /// Wohin die Änderungen des Agenten am Projektverzeichnis gehen (HUM-350).

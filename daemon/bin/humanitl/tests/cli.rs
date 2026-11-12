@@ -6087,3 +6087,73 @@ fn flows_list_passthrough_shows_the_model_traffic_and_show_takes_the_printed_end
     assert_eq!(code(&shown), 0, "{}", stderr(&shown));
     assert!(stdout(&shown).contains(&id), "{}", stdout(&shown));
 }
+
+/// `sandbox.backend = "podman"` aus der Umgebung (Ebene 6, Nutzerwille)
+/// scheitert vor HUM-448 an der Zulassung, auch in der Vorschau, und keine
+/// Zeile eines anderen Backends steht stattdessen da (HUM-431).
+#[test]
+fn sandbox_argv_refuses_a_backend_that_is_not_admitted() {
+    let harness = Harness::new();
+    let output = harness
+        .command()
+        .env("HUMANITL_SANDBOX__BACKEND", "podman")
+        .args(["sandbox", "argv"])
+        .output()
+        .expect("the binary runs");
+    assert_ne!(code(&output), 0, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("SANDBOX_048"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(stdout(&output).trim().is_empty(), "{}", stdout(&output));
+
+    // Dasselbe vom Flag der Kommandozeile (Ebene 7) und aus `config.toml`.
+    let output = harness.run(["--sandbox-backend", "podman", "sandbox", "argv"]);
+    assert_ne!(code(&output), 0, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("SANDBOX_048"),
+        "{}",
+        stderr(&output)
+    );
+    let config = harness.path("config").join("humanitl");
+    std::fs::create_dir_all(&config).expect("the config directory");
+    std::fs::write(
+        config.join("config.toml"),
+        "[sandbox]\nbackend = \"podman\"\n",
+    )
+    .expect("config.toml");
+    let output = harness.run(["sandbox", "argv"]);
+    assert_ne!(code(&output), 0, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("SANDBOX_048"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// Eine Untergrenze über dem Backend des Systems lehnt die Vorschau ab,
+/// statt ein anderes Backend zu nehmen, und das Flag der Kommandozeile senkt
+/// eine Untergrenze aus der Umgebung nicht (HUM-431).
+#[test]
+fn sandbox_argv_refuses_a_backend_below_the_floor() {
+    let harness = Harness::new();
+    for args in [
+        vec!["sandbox", "argv"],
+        vec!["--sandbox-min-isolation", "policy", "sandbox", "argv"],
+    ] {
+        let output = harness
+            .command()
+            .env("HUMANITL_SANDBOX__MIN_ISOLATION", "kernel")
+            .args(&args)
+            .output()
+            .expect("the binary runs");
+        assert_ne!(code(&output), 0, "{args:?}: {}", stdout(&output));
+        assert!(
+            stderr(&output).contains("SANDBOX_035"),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(stdout(&output).trim().is_empty(), "{}", stdout(&output));
+    }
+}

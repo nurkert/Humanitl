@@ -56,7 +56,7 @@ use toml::Value as TomlValue;
 
 use crate::alias;
 use crate::env::Env;
-use crate::model::Config;
+use crate::model::{Config, MinIsolation};
 use crate::origin::{Origin, Resolved};
 use crate::profile::{ConfigOverlay, DEFAULT_PROFILE, Profile, ProfileSource, builtin_text};
 use crate::schema::{self, Field};
@@ -207,6 +207,7 @@ pub fn load(sources: &Sources) -> Result<Resolved, Diagnostic> {
         }
         profiles.push(project);
     }
+    project_cannot_choose_the_backend_through_a_profile(&profiles)?;
     for profile in &profiles {
         layers.push((
             entries_from_overlay(&profile.overlay, &profile.source.origin()),
@@ -628,10 +629,26 @@ impl Merge {
             }
 
             if let Err(diagnostic) = check_value(field, &entry) {
-                if hard {
+                // Die Wahl des Backends und die Untergrenze brechen das Laden
+                // aus jeder Ebene ab, auch aus der Umgebung (HUM-431): Ein
+                // übergangener Wert ließe den Start mit dem der Ebene darunter
+                // laufen, also mit einem anderen Backend oder einer
+                // niedrigeren Untergrenze, als der Mensch verlangt hat.
+                if hard || never_skipped(&entry.path) {
                     return Err(diagnostic);
                 }
                 self.diagnostics.push(diagnostic);
+                continue;
+            }
+
+            // Die Untergrenze der Isolation steigt nur (HUM-431): Ein Wert
+            // aus einer höheren Ebene, der schwächer ist als der bisherige,
+            // bleibt draußen, und die Herkunft nennt weiter die Ebene des
+            // strengsten. Sonst senkte ein Projekt-Profil, eine Variable aus
+            // der Umgebung oder ein Wunsch über den Start, was der Mensch in
+            // `config.toml` verlangt hat.
+            if entry.path == MIN_ISOLATION && !raises_the_floor(self.flat.get(&entry.path), &entry)
+            {
                 continue;
             }
 
@@ -656,6 +673,91 @@ impl Merge {
             self.flat.insert(entry.path, entry.value);
         }
         Ok(())
+    }
+}
+
+/// Der Schlüssel, für den beim Mischen der strengste Wert gewinnt statt des
+/// obersten (HUM-431).
+const MIN_ISOLATION: &str = "sandbox.min_isolation";
+
+/// Der Schlüssel, der das Sandbox-Backend wählt (HUM-431).
+const BACKEND: &str = "sandbox.backend";
+
+/// Die Gruppe des Backends `podman` (HUM-431).
+const PODMAN_PREFIX: &str = "sandbox.podman.";
+
+/// Ein Projekt wählt das Backend auch nicht über ein Profil (HUM-431).
+///
+/// Das Projekt-Profil darf mit `name` ein mitgeliefertes Profil als Basis
+/// nennen (`crate::resolve`), und gibt es eine eigene Datei dieses Namens, gilt
+/// die Datei des Nutzers. Setzt diese `sandbox.backend` oder einen Schlüssel
+/// unter `sandbox.podman`, hätte das Projekt das Backend über den Umweg
+/// gewählt, den ihm die Projekt-Ebene verwehrt. Ein Profil, das das
+/// Projekt-Profil nennt, darf diese Schlüssel deshalb nicht setzen; das gilt
+/// auch, wenn der Mensch dasselbe Profil zugleich selbst nennt, wie bei der
+/// Wahl des Servers ([`project_owns_profile_choice`]): lieber einmal zu streng
+/// als einmal zu nachgiebig. Die Untergrenze braucht diese Prüfung nicht: Über
+/// alle Ebenen gilt dort ohnehin der strengste Wert.
+fn project_cannot_choose_the_backend_through_a_profile(
+    profiles: &[Profile],
+) -> Result<(), Diagnostic> {
+    let Some((project, wish)) = profiles.iter().find_map(|profile| match &profile.source {
+        ProfileSource::Project(path) => profile
+            .declared_name
+            .as_deref()
+            .map(|wish| (path.clone(), wish.to_owned())),
+        _ => None,
+    }) else {
+        return Ok(());
+    };
+    if wish == DEFAULT_PROFILE {
+        return Ok(());
+    }
+    for profile in profiles {
+        if matches!(profile.source, ProfileSource::Project(_)) || profile.source.name() != wish {
+            continue;
+        }
+        for (written_as, _) in profile.overlay.iter() {
+            let path = alias::canonical(written_as).unwrap_or(written_as);
+            if path == BACKEND || path.starts_with(PODMAN_PREFIX) {
+                return Err(Diagnostic::builder(CONFIG_003, Severity::Error)
+                    .why(format!(
+                        "the project profile {} names the profile {wish}, and that profile \
+                         ({}) sets {path}; a project does not choose the sandbox backend, \
+                         neither itself nor through a profile it names. Remove {path} from \
+                         the profile, or remove the name from the project profile.",
+                        project.display(),
+                        profile.source.origin()
+                    ))
+                    .build());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Schlüssel, deren ungültiger Wert das Laden aus jeder Ebene abbricht, statt
+/// als Warnung übergangen zu werden (HUM-431): Ein übergangener Wert fiele auf
+/// die Ebene darunter zurück, und ein gewähltes Backend oder eine Untergrenze
+/// fällt nie still zurück.
+fn never_skipped(path: &str) -> bool {
+    path == BACKEND || path == MIN_ISOLATION || path.starts_with(PODMAN_PREFIX)
+}
+
+/// Ob `entry` die Untergrenze der Isolation hebt oder als erster Wert setzt.
+///
+/// Der erste Wert gilt immer, auch `policy`: Er ist so streng wie die
+/// Vorgabe, und die Herkunft soll die Ebene nennen, die ihn geschrieben hat.
+/// Danach gilt ein Wert nur, wenn er strenger ist als der bisherige; bei
+/// Gleichstand bleibt die Herkunft der tieferen Ebene, die ihn zuerst
+/// verlangt hat. Ein Wert, den [`MinIsolation::parse`] nicht kennt, kommt hier
+/// nicht an: [`check_value`] hat ihn vorher abgelehnt.
+fn raises_the_floor(current: Option<&TomlValue>, entry: &Entry) -> bool {
+    let level = |value: &TomlValue| value.as_str().and_then(MinIsolation::parse);
+    match (current.and_then(level), level(&entry.value)) {
+        (None, _) => true,
+        (Some(now), Some(wanted)) => wanted > now,
+        (Some(_), None) => false,
     }
 }
 

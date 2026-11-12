@@ -15,6 +15,13 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+// Die Kommandozeile baut nie mit der Umgehung der Zulassung (HUM-431); siehe
+// `humanitl_sandbox::UNADMITTED_BACKENDS_BUILT`.
+const _: () = assert!(
+    !humanitl_sandbox::UNADMITTED_BACKENDS_BUILT,
+    "humanitl must not be built with the admission bypass of humanitl-sandbox (HUM-431)"
+);
+
 mod ask_terminal;
 mod cli;
 // Nur der Generator für `docs/reference/cli.md` und seine Prüfung (HUM-059);

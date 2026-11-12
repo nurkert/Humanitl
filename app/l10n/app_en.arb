@@ -4202,5 +4202,21 @@
   "shortcutKeyHome": "Home",
   "@shortcutKeyHome": {"description": "Keycap of the Home key, as printed on the keyboard of the language (HUM-420)."},
   "shortcutKeyEnd": "End",
-  "@shortcutKeyEnd": {"description": "Keycap of the End key, as printed on the keyboard of the language (HUM-420)."}
+  "@shortcutKeyEnd": {"description": "Keycap of the End key, as printed on the keyboard of the language (HUM-420)."},
+  "diagSANDBOX034Title": "Selected sandbox backend not available",
+  "@diagSANDBOX034Title": {"description": "Title of the diagnostic SANDBOX_034 (docs/DIAGNOSTICS.md): sandbox.backend names a backend this system cannot run; the start never switches to another one (HUM-431)."},
+  "diagSANDBOX034Why": "The chosen sandbox backend is not available on this system. The session does not start, and it does not switch to another backend on its own; set the backend to auto to use the backend of this system.",
+  "@diagSANDBOX034Why": {"description": "Generic cause of SANDBOX_034. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "diagSANDBOX035Title": "Sandbox backend below the isolation floor",
+  "@diagSANDBOX035Title": {"description": "Title of the diagnostic SANDBOX_035 (docs/DIAGNOSTICS.md): the chosen backend isolates less than sandbox.min_isolation demands (HUM-431)."},
+  "diagSANDBOX035Why": "The chosen sandbox backend isolates less than the minimum isolation level asks for. The strictest level of all settings applies, and a project may raise it. The session does not start with a weaker backend.",
+  "@diagSANDBOX035Why": {"description": "Generic cause of SANDBOX_035. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "diagSANDBOX036Title": "Sandbox profile requires another backend",
+  "@diagSANDBOX036Title": {"description": "Title of the diagnostic SANDBOX_036 (docs/DIAGNOSTICS.md): the sandbox profile names a backend, and the settings chose another (HUM-431)."},
+  "diagSANDBOX036Why": "The sandbox profile requires a different backend than the one chosen in the settings. Neither overrides the other, so the session does not start.",
+  "@diagSANDBOX036Why": {"description": "Generic cause of SANDBOX_036. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."},
+  "diagSANDBOX048Title": "Sandbox backend not admitted yet",
+  "@diagSANDBOX048Title": {"description": "Title of the diagnostic SANDBOX_048 (docs/DIAGNOSTICS.md): the chosen isolation level is not admitted until its escape suite is green in CI (HUM-431)."},
+  "diagSANDBOX048Why": "The chosen sandbox backend is not admitted yet. A backend becomes selectable only after the escape tests against it pass; until then no session starts with it. Set the backend to auto to use the backend of this system.",
+  "@diagSANDBOX048Why": {"description": "Generic cause of SANDBOX_048. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
 }

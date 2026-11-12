@@ -1353,7 +1353,7 @@ impl Inner {
         // Erst die Befunde, dann der Zustand: Der Client trägt die Befunde des
         // laufenden Vorgangs am Zustand mit, und einer, der nach dem Zustand
         // käme, stünde ohne ihn da.
-        events.extend(self.preflight().iter().map(diagnostic_event));
+        events.extend(self.preflight(config).iter().map(diagnostic_event));
         match self.snapshot_with_config(config, &staged, plan, None) {
             Ok(status) => events.push(status_event(status)),
             Err(diagnostic) => {
@@ -1398,10 +1398,23 @@ impl Inner {
     /// starten *würde* —, aber die Schaltfläche gehört dann aus, und der Grund
     /// dazu (`docs/UX.md` 5.3). Die drei Garantien prüft HUM-041, und sie
     /// lassen sich ohnehin erst an einer laufenden Sandbox prüfen.
-    fn preflight(&self) -> Vec<Diagnostic> {
-        match Backend::detect(humanitl_sandbox::AUTO_BACKEND, self.paths.clone()) {
-            Ok(_) => Vec::new(),
-            Err(diagnostic) => vec![diagnostic],
+    ///
+    /// Gefragt wird das Backend, das `sandbox.backend` wählt (HUM-431). Was
+    /// die Wahl selbst ablehnt (`SANDBOX_034` bis `SANDBOX_036`,
+    /// `SANDBOX_048`), meldet der Schnappschuss, der daran scheitert; hier
+    /// steht nur, was einem gebauten Backend auf diesem System fehlt, damit
+    /// kein Befund zweimal kommt.
+    fn preflight(&self, config: &Config) -> Vec<Diagnostic> {
+        let Ok(choice) =
+            humanitl_sandbox::choose_backend(&config.sandbox, humanitl_sandbox::AUTO_BACKEND)
+        else {
+            return Vec::new();
+        };
+        match Backend::detect(choice.name, self.paths.clone()) {
+            Err(diagnostic) if Backend::fallback(choice.name, self.paths.clone()).is_ok() => {
+                vec![diagnostic]
+            }
+            Ok(_) | Err(_) => Vec::new(),
         }
     }
 
@@ -3430,8 +3443,14 @@ impl Inner {
         // Ein Schnappschuss ist eine Anzeige, kein Start: Ohne `bwrap` steht
         // die Zeile trotzdem da, und der Start scheitert später mit dem
         // Befund, der dazu gehört (`SANDBOX_001`).
-        let backend = Backend::detect(humanitl_sandbox::AUTO_BACKEND, self.paths.clone())
-            .or_else(|_| Backend::fallback(humanitl_sandbox::AUTO_BACKEND, self.paths.clone()))?;
+        //
+        // Welches Backend, entscheidet `sandbox.backend` mit der Untergrenze
+        // und dem Sandbox-Profil (HUM-431). Was die Wahl ablehnt, lehnt
+        // Vorschau und Start ab; zurückgefallen wird nur von der Prüfung des
+        // Systems auf dasselbe Backend ohne Prüfung, nie auf ein anderes.
+        let choice = humanitl_sandbox::choose_backend(&config.sandbox, &profile.sandbox.backend)?;
+        let backend = Backend::detect(choice.name, self.paths.clone())
+            .or_else(|_| Backend::fallback(choice.name, self.paths.clone()))?;
         let options = LaunchOptions {
             approved_work_dir: approved,
             ..LaunchOptions::default()

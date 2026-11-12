@@ -1124,11 +1124,16 @@ fn prepare(
         agent_program: agent.program,
     };
 
-    let backend = match Backend::detect(humanitl_sandbox::AUTO_BACKEND, paths.clone()) {
+    // Welches Backend, entscheidet `sandbox.backend` mit der Untergrenze und
+    // dem Sandbox-Profil (HUM-431), für Vorschau und Start gleich; nie ein
+    // anderes als das gewählte.
+    let choice = humanitl_sandbox::choose_backend(&config.sandbox, &profile.sandbox.backend)
+        .map_err(Failure::new)?;
+    let backend = match Backend::detect(choice.name, paths.clone()) {
         Ok(backend) => backend,
         // Die Vorschau braucht kein Sandbox-Backend; der Start schon.
         Err(_) if matches!(wiring, Wiring::Preview) => {
-            Backend::fallback(humanitl_sandbox::AUTO_BACKEND, paths).map_err(Failure::new)?
+            Backend::fallback(choice.name, paths).map_err(Failure::new)?
         }
         Err(diagnostic) => return Err(Failure::new(diagnostic)),
     };

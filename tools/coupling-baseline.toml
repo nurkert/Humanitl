@@ -22,6 +22,7 @@
 "daemon/bin/humanitl/src/render.rs" = 7
 "daemon/bin/humanitl/tests/cli.rs" = 9
 "daemon/bin/humanitl/tests/common/mod.rs" = 8
+"daemon/crates/config/src/model.rs" = 1
 "daemon/crates/config/src/resolve.rs" = 1
 "daemon/crates/config/src/validate.rs" = 1
 "daemon/crates/core-types/src/diagnostics/codes.rs" = 10
