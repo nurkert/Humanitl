@@ -309,6 +309,79 @@ pub fn shows_env_value(key: &str, origin: v1::ValueOrigin) -> bool {
     ) && is_visible_env_name(key)
 }
 
+/// Wer den Wert jeder Umgebungsvariablen einer Sitzung zuletzt geschrieben
+/// hat, als Grundlage für [`shows_env_value`].
+///
+/// Die Reihenfolge ist die, in der [`SandboxProfile::effective_env`]
+/// zusammenführt: Profil, dann die Sitzung (Kennung, Adapter, `sandbox.env`),
+/// dann der Shim. Der letzte Schreiber gewinnt, hier wie dort. `sandbox.env`
+/// (`user_keys`) steht in `config.toml` und ist von Hand geschrieben; es
+/// überschreibt Profil und Adapter, also auch deren Herkunft. Genau dort
+/// landet später die Zugangsdaten-Injektion.
+///
+/// Daemon und Kommandozeile (`humanitl sandbox argv`, HUM-450) bauen die
+/// Tabelle mit dieser einen Funktion, damit beide dieselbe Entscheidung
+/// treffen und keine zweite Liste daneben entsteht.
+#[must_use]
+pub fn env_origins<'a>(
+    profile: &SandboxProfile,
+    profile_origin: v1::ValueOrigin,
+    adapter_keys: impl IntoIterator<Item = &'a str>,
+    user_keys: impl IntoIterator<Item = &'a str>,
+) -> BTreeMap<String, v1::ValueOrigin> {
+    let mut origins: BTreeMap<String, v1::ValueOrigin> = BTreeMap::new();
+    for key in profile.env.keys() {
+        origins.insert(key.clone(), profile_origin);
+    }
+    origins.insert(ENV_SESSION.to_owned(), v1::ValueOrigin::Session);
+    for key in adapter_keys {
+        origins.insert(key.to_owned(), v1::ValueOrigin::Adapter);
+    }
+    for key in user_keys {
+        origins.insert(key.to_owned(), v1::ValueOrigin::User);
+    }
+    for key in humanitl_sandbox::RESERVED_ENV {
+        origins.insert((*key).to_owned(), v1::ValueOrigin::Session);
+    }
+    origins
+}
+
+/// Wer den Wert dieser Variablen geschrieben hat, nach `origins`
+/// ([`env_origins`]); ein Schlüssel, der dort fehlt, zählt als von Hand
+/// geschrieben, damit die Vorgabe zurückhält.
+#[must_use]
+pub fn origin_in(origins: &BTreeMap<String, v1::ValueOrigin>, key: &str) -> v1::ValueOrigin {
+    origins.get(key).copied().unwrap_or(v1::ValueOrigin::User)
+}
+
+/// Ersetzt in der Zeile der Vorschau jeden Wert, den [`shows_env_value`] mit
+/// der Herkunft aus `origins` zurückhält, durch [`WITHHELD_PLACEHOLDER`].
+///
+/// Die eine Stelle für Daemon und Kommandozeile (HUM-429, HUM-450): Die
+/// Vorschau des Daemons und `humanitl sandbox argv` halten so dieselben Werte
+/// mit demselben Platzhalter zurück.
+pub fn withhold_hidden(preview: &mut PlanPreview, origins: &BTreeMap<String, v1::ValueOrigin>) {
+    preview.withhold(
+        |key| shows_env_value(key, origin_in(origins, key)),
+        WITHHELD_PLACEHOLDER,
+    );
+}
+
+/// Die Zeile eines echten Plans zur Anzeige, mit derselben Entscheidung wie
+/// [`withhold_hidden`] (HUM-450): `humanitl sandbox run -v` und
+/// `humanitl sandbox check -v` zeigen so keinen Wert, den die Vorschau
+/// zurückhält. Gestartet wird weiter `plan.argv` unverändert.
+#[must_use]
+pub fn withheld_plan_line(
+    plan: &humanitl_sandbox::LaunchPlan,
+    origins: &BTreeMap<String, v1::ValueOrigin>,
+) -> String {
+    plan.withheld_argv_line(
+        |key| shows_env_value(key, origin_in(origins, key)),
+        WITHHELD_PLACEHOLDER,
+    )
+}
+
 /// Die laufende Sandbox dieser Sitzung.
 #[derive(Debug)]
 struct Running {
@@ -3414,29 +3487,17 @@ impl Inner {
                 .map(|(key, value)| (key.clone(), value.clone())),
         );
 
-        // Wer welchen Wert geschrieben hat, in der Reihenfolge, in der
-        // `effective_env` zusammenführt: Profil, dann die Sitzung (Kennung,
-        // Adapter, `sandbox.env`), dann der Shim. Der letzte gewinnt, hier wie
-        // dort. Zwei Läufe über dieselbe Reihenfolge sind der Preis dafür, dass
-        // die Werte weiter aus genau einer Quelle kommen
+        // Wer welchen Wert geschrieben hat ([`env_origins`]): dieselbe
+        // Funktion, mit der `humanitl sandbox argv` zurückhält (HUM-450). Zwei
+        // Läufe über dieselbe Reihenfolge sind der Preis dafür, dass die Werte
+        // weiter aus genau einer Quelle kommen
         // (`SandboxProfile::effective_env`) statt aus einer zweiten Kopie.
-        let mut env_origin: BTreeMap<String, v1::ValueOrigin> = BTreeMap::new();
-        for key in profile.env.keys() {
-            env_origin.insert(key.clone(), profile_origin);
-        }
-        env_origin.insert(ENV_SESSION.to_owned(), v1::ValueOrigin::Session);
-        for (key, _) in &agent.env {
-            env_origin.insert(key.clone(), v1::ValueOrigin::Adapter);
-        }
-        // `sandbox.env` steht in `config.toml` und ist von Hand geschrieben;
-        // es überschreibt Profil und Adapter, also überschreibt es auch deren
-        // Herkunft. Genau hier landet später die Zugangsdaten-Injektion.
-        for key in config.sandbox.env.keys() {
-            env_origin.insert(key.clone(), v1::ValueOrigin::User);
-        }
-        for key in humanitl_sandbox::RESERVED_ENV {
-            env_origin.insert((*key).to_owned(), v1::ValueOrigin::Session);
-        }
+        let env_origin = env_origins(
+            &profile,
+            profile_origin,
+            agent.env.iter().map(|(key, _)| key.as_str()),
+            config.sandbox.env.keys().map(String::as_str),
+        );
 
         let session = SessionContext {
             session: self.session,
@@ -4039,10 +4100,7 @@ impl Prepared {
     /// Wer den Wert dieser Variablen geschrieben hat; unbekannt zählt als
     /// von Hand geschrieben, damit die Vorgabe zurückhält.
     fn origin_of(&self, key: &str) -> v1::ValueOrigin {
-        self.env_origin
-            .get(key)
-            .copied()
-            .unwrap_or(v1::ValueOrigin::User)
+        origin_in(&self.env_origin, key)
     }
 
     /// Ob der Wert dieser Variablen angezeigt werden darf.
@@ -4077,7 +4135,7 @@ impl Prepared {
         // Dieselbe Entscheidung wie in der Umgebungstabelle
         // ([`Prepared::shows`]) und keine zweite daneben: Wo die Tabelle
         // Punkte zeigt und die Zeile den Wert, wäre die Zusage gebrochen.
-        preview.withhold(|key| self.shows(key), WITHHELD_PLACEHOLDER);
+        withhold_hidden(&mut preview, &self.env_origin);
         preview
     }
 

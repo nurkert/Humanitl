@@ -444,12 +444,27 @@ impl PlanPreview {
     /// Die Entscheidung trifft der Aufrufer an einer Stelle, für Zeile und
     /// Tabelle zugleich; hier steht nur, wo die Werte liegen.
     pub fn withhold(&mut self, shows: impl Fn(&str) -> bool, placeholder: &str) {
-        for (key, index) in &self.argv_env {
-            if !shows(key)
-                && let Some(value) = self.argv.get_mut(*index)
-            {
-                *value = OsString::from(placeholder);
-            }
+        withhold_env(&mut self.argv, &self.argv_env, shows, placeholder);
+    }
+}
+
+/// Ersetzt in `argv` den Wert an jeder Stelle aus `argv_env`, deren
+/// Schlüssel `shows` nicht zeigen darf, durch `placeholder`.
+///
+/// Gemeinsam für [`PlanPreview::withhold`] und
+/// [`LaunchPlan::withheld_argv_line`]: Wo die Werte liegen, weiß das Backend;
+/// was gezeigt wird, entscheidet der Aufrufer.
+fn withhold_env(
+    argv: &mut [OsString],
+    argv_env: &[(String, usize)],
+    shows: impl Fn(&str) -> bool,
+    placeholder: &str,
+) {
+    for (key, index) in argv_env {
+        if !shows(key)
+            && let Some(value) = argv.get_mut(*index)
+        {
+            *value = OsString::from(placeholder);
         }
     }
 }
@@ -624,6 +639,12 @@ pub struct LaunchPlan {
     pub session_dir: Option<std::path::PathBuf>,
     /// Die ganze Liste, `argv[0]` ist das Programm. Wird wörtlich angezeigt.
     pub argv: Vec<OsString>,
+    /// Wo in [`LaunchPlan::argv`] ein Wert aus [`LaunchPlan::env`] steht, als
+    /// `(Schlüssel, Index)`; leer, wenn das Backend die Umgebung nicht in der
+    /// Zeile trägt. Wie [`PlanPreview::argv_env`], damit die angezeigte Zeile
+    /// eines echten Plans dieselben Werte zurückhalten kann
+    /// ([`LaunchPlan::withheld_argv_line`], HUM-450).
+    pub argv_env: Vec<(String, usize)>,
     /// Die Umgebung des Befehls in der Sandbox, alphabetisch: dieselben Paare,
     /// die `--setenv` in `argv` trägt. Das Programm selbst startet mit leerer
     /// Umgebung.
@@ -691,6 +712,18 @@ impl LaunchPlan {
         shell_line(&self.argv)
     }
 
+    /// Wie [`LaunchPlan::argv_line`], aber mit `placeholder` anstelle jedes
+    /// Werts einer Variablen, deren Wert `shows` nicht zeigen darf (HUM-450).
+    ///
+    /// Für die Anzeige eines Plans, der wirklich startet (`humanitl sandbox
+    /// run -v`); gestartet wird weiter [`LaunchPlan::argv`] unverändert.
+    #[must_use]
+    pub fn withheld_argv_line(&self, shows: impl Fn(&str) -> bool, placeholder: &str) -> String {
+        let mut argv = self.argv.clone();
+        withhold_env(&mut argv, &self.argv_env, shows, placeholder);
+        shell_line(&argv)
+    }
+
     /// Ob der Plan noch nicht gestartet wurde.
     #[must_use]
     pub fn is_fresh(&self) -> bool {
@@ -723,6 +756,40 @@ mod tests {
         assert_eq!(EnvDelivery::Program.program_env(&env), env);
         assert!(EnvDelivery::Argv.program_env(&env).is_empty());
         assert!(EnvDelivery::InheritedFd(7).program_env(&env).is_empty());
+    }
+
+    /// HUM-450: Die angezeigte Zeile eines Plans hält genau die Werte zurück,
+    /// die der Aufrufer verbirgt; der Plan selbst bleibt, wie er startet.
+    #[test]
+    fn the_shown_plan_line_withholds_exactly_the_hidden_values() {
+        let plan = LaunchPlan {
+            session_dir: None,
+            argv: [
+                "bwrap", "--setenv", "A", "a1", "--setenv", "B", "b:s3cret", "--", "sh",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect(),
+            argv_env: vec![("A".into(), 3), ("B".into(), 6)],
+            env: vec![("A".into(), "a1".into()), ("B".into(), "b:s3cret".into())],
+            fds: Vec::new(),
+            files: Vec::new(),
+            session: SessionId::new(),
+            profile: "test".into(),
+            warnings: Vec::new(),
+            unprotected: Vec::new(),
+            env_delivery: EnvDelivery::Argv,
+            stdio: StdioMode::Capture,
+            report_timeout: Duration::from_secs(1),
+            teardown: Teardown::Process,
+            program: PathBuf::from("bwrap"),
+            once: Mutex::new(None),
+        };
+        assert_eq!(
+            plan.withheld_argv_line(|key| key == "A", "<withheld>"),
+            "bwrap --setenv A a1 --setenv B '<withheld>' -- sh"
+        );
+        assert!(plan.argv_line().contains("b:s3cret"));
     }
 
     #[test]

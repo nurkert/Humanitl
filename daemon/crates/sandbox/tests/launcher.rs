@@ -454,6 +454,19 @@ fn plan_renders_the_shim_and_the_three_binds() {
     let line = plan.argv_line();
     assert!(line.starts_with("/usr/bin/bwrap --unshare-user"), "{line}");
     assert_eq!(shlex::split(&line).expect("parsable"), args);
+
+    // Die angezeigte Zeile hält genau die Werte zurück, die der Aufrufer
+    // verbirgt, an ihrer Stelle in der Liste (HUM-450, `sandbox run -v`).
+    let mut expected = args.clone();
+    for at in 0..expected.len().saturating_sub(2) {
+        if expected[at] == "--setenv" && expected[at + 1] == "HTTP_PROXY" {
+            expected[at + 2] = "<withheld>".to_owned();
+        }
+    }
+    assert_ne!(expected, args, "the profile sets HTTP_PROXY");
+    let withheld = plan.withheld_argv_line(|key| key != "HTTP_PROXY", "<withheld>");
+    assert_eq!(shlex::split(&withheld).expect("parsable"), expected);
+    assert_eq!(plan.argv_line(), line, "the plan itself stays unchanged");
     assert!(plan.is_fresh());
     assert_eq!(plan.profile, "default");
     assert_eq!(plan.program(), Path::new("/usr/bin/bwrap"));
