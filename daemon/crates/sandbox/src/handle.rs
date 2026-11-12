@@ -36,6 +36,7 @@ use rustix::termios::{Winsize, tcsetwinsize};
 
 use crate::bridge_env::{CHECK_NAMES, ExecFailure, ShimCheck};
 use crate::bwrap::{is_userns_failure, userns_diagnostic};
+use crate::launcher::{REPORT_TIMEOUT, Teardown};
 use crate::refusals::{RefusalLine, Refusals};
 
 /// Wie lange [`SandboxHandle::kill`] nach `SIGTERM` wartet, bevor `SIGKILL` folgt.
@@ -155,7 +156,7 @@ pub struct OutputChunk {
 
 /// Wohin die Ausgabe zusätzlich zum Puffer geschickt wird.
 ///
-/// Ein Sender, den [`crate::BwrapBackend::with_output_sink`] setzt, bekommt
+/// Ein Sender aus [`crate::LaunchOptions::output_sink`] bekommt
 /// jedes Stück, sobald es gelesen wurde. Bricht der Empfänger weg, wird das
 /// Ergebnis verworfen: Die Sandbox darf nicht daran hängen, dass jemand
 /// zuhört.
@@ -735,7 +736,8 @@ fn append_capped(buffer: &mut Vec<u8>, chunk: &[u8]) {
 pub struct SandboxHandle {
     /// Die Id dieser Sandbox.
     pub id: SandboxId,
-    /// Die PID des `bwrap`-Prozesses auf dem Host.
+    /// Die PID des Prozesses, den Humanitl gestartet hat, auf dem Host
+    /// (unter Linux `bwrap`, unter macOS `sandbox-exec`).
     pub pid: u32,
     /// Die Kommandozeile, nach POSIX zitiert, mit Programm; für die
     /// Oberfläche und `humanitl sandbox argv`.
@@ -748,6 +750,13 @@ pub struct SandboxHandle {
     /// einer anderen Startzeit. `None`, wenn sie sich nicht lesen ließ; dann
     /// gilt die Auskunft ohne diesen Ausweis.
     started_at_ticks: Option<u64>,
+    /// Wie diese Sandbox beendet wird; aus dem Plan.
+    teardown: Teardown,
+    /// Wie lange die Isolationsprüfung auf den Bericht des Shims wartet; aus
+    /// den Optionen des Starts (HUM-428). Sie hängt am Handle und nicht am
+    /// Backend, damit jede Prüfung dieser Sandbox unter den Bedingungen ihres
+    /// Starts läuft.
+    report_timeout: Duration,
     shared: Arc<Shared>,
 }
 
@@ -766,8 +775,29 @@ impl SandboxHandle {
             // Jetzt gelesen und nicht später: Der Prozess läuft gerade, und
             // später ist die Nummer vielleicht nicht mehr seine.
             started_at_ticks: read_start_ticks(pid),
+            teardown: Teardown::Process,
+            report_timeout: REPORT_TIMEOUT,
             shared,
         }
+    }
+
+    /// Setzt, was der Plan über das Beenden und die Frist des Berichts sagt.
+    pub(crate) const fn with_launch(
+        mut self,
+        teardown: Teardown,
+        report_timeout: Duration,
+    ) -> Self {
+        self.teardown = teardown;
+        self.report_timeout = report_timeout;
+        self
+    }
+
+    /// Wie lange [`crate::SandboxBackend::isolation_check`] für diese Sandbox
+    /// auf den Bericht des Shims wartet
+    /// ([`crate::LaunchOptions::report_timeout`]).
+    #[must_use]
+    pub const fn report_timeout(&self) -> Duration {
+        self.report_timeout
     }
 
     /// Wartet auf das Ende der Sandbox und liefert den Status von `bwrap`,
@@ -896,16 +926,23 @@ impl SandboxHandle {
         if self.try_wait().is_some() {
             return Termination::AlreadyEnded;
         }
-        self.signal(Signal::TERM);
+        self.tear_down(Signal::TERM);
         if self.shared.wait_exit(Some(grace)).is_some() {
             return Termination::Term;
         }
-        self.signal(Signal::KILL);
+        self.tear_down(Signal::KILL);
         // Nach SIGKILL bleibt nur das Einsammeln durch den wartenden Thread.
         if self.shared.wait_exit(Some(KILL_GRACE)).is_some() {
             Termination::Kill
         } else {
             Termination::Stuck
+        }
+    }
+
+    /// Ein Schritt des Beendens, nach [`Teardown`].
+    fn tear_down(&self, signal: Signal) {
+        match self.teardown {
+            Teardown::Process => self.signal(signal),
         }
     }
 

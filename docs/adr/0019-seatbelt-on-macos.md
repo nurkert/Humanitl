@@ -32,6 +32,8 @@ candidate second backends. On macOS three ways were open:
 On macOS the sandbox backend is Seatbelt (`SeatbeltBackend` in
 `daemon/crates/sandbox/src/seatbelt.rs`), chosen at compile time through the
 type alias `PlatformBackend`. Daemon and command line name only that alias.
+Since HUM-428 the alias is replaced by the runtime enum `Backend`
+(ADR-0020); `PLATFORM_BACKEND_NAME` only names the system backend for `auto`.
 
 - The plan writes one SBPL profile per session into a private session
   directory and starts `/usr/bin/sandbox-exec -f <profile> <shim> …`. The

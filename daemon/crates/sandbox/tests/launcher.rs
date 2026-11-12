@@ -25,10 +25,12 @@ use std::process::ExitStatus;
 use std::time::{Duration, Instant};
 
 use humanitl_config::{Env, Paths, WorkMode};
+use humanitl_core::Diagnostic;
 use humanitl_core::ids::SessionId;
 use humanitl_sandbox::{
-    BIND_FD_VERSION, BwrapBackend, ENV_REPORT_FD, IsolationCheck, LaunchPlan, MIN_BWRAP_VERSION,
-    SandboxBackend, SandboxFile, SandboxHandle, SandboxProfile, SessionContext, StdioMode, Version,
+    BIND_FD_VERSION, BwrapBackend, CheckResult, DisposableLayer, ENV_REPORT_FD, IsolationCheck,
+    LaunchOptions, LaunchPlan, MIN_BWRAP_VERSION, OverlayDirs, PlanRequest, SandboxBackend,
+    SandboxFile, SandboxHandle, SandboxProfile, SessionContext, StdioMode, Version,
 };
 
 /// Kein Test wartet länger: eine Sandbox, die nach einer Minute noch läuft,
@@ -176,19 +178,127 @@ impl Fixture {
     }
 
     /// Ein Backend ohne Prüfung, für die Plan-Tests.
-    fn unchecked(&self) -> BwrapBackend {
-        BwrapBackend::unchecked("/usr/bin/bwrap", Version(0, 11, 0), self.paths.clone())
+    fn unchecked(&self) -> Launcher {
+        Launcher::from(BwrapBackend::unchecked(
+            "/usr/bin/bwrap",
+            Version(0, 11, 0),
+            self.paths.clone(),
+        ))
     }
 
     /// Das echte `bwrap`, oder `None` mit Begründung auf stderr.
-    fn real(&self) -> Option<BwrapBackend> {
+    fn real(&self) -> Option<Launcher> {
         match BwrapBackend::detect(self.paths.clone()) {
-            Ok(backend) => Some(backend.with_stdio(StdioMode::Capture)),
+            Ok(backend) => Some(Launcher::from(backend).with_stdio(StdioMode::Capture)),
             Err(err) => {
                 eprintln!("skipping: bwrap is not usable on this machine: {err}");
                 None
             }
         }
+    }
+}
+
+/// Das bwrap-Backend mit den Optionen eines Starts (HUM-428).
+///
+/// Die Tests dieser Datei prüfen das konkrete Backend; die Optionen gehen
+/// über den Port als [`LaunchOptions`] hinein, wie im Daemon.
+#[derive(Debug, Clone)]
+struct Launcher {
+    backend: BwrapBackend,
+    options: LaunchOptions,
+}
+
+impl From<BwrapBackend> for Launcher {
+    fn from(backend: BwrapBackend) -> Self {
+        Self {
+            backend,
+            options: LaunchOptions::default(),
+        }
+    }
+}
+
+impl Launcher {
+    fn with_stdio(mut self, stdio: StdioMode) -> Self {
+        self.options.stdio = stdio;
+        self
+    }
+
+    fn with_report_timeout(mut self, timeout: Duration) -> Self {
+        self.options.report_timeout = Some(timeout);
+        self
+    }
+
+    fn with_read_only_bind(mut self, src: impl Into<PathBuf>, dst: impl Into<PathBuf>) -> Self {
+        self.options.session_ro.push((src.into(), dst.into()));
+        self
+    }
+
+    fn with_approved_work_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.options.approved_work_dir = Some(dir.into());
+        self
+    }
+
+    fn with_overlay(mut self, dirs: OverlayDirs) -> Self {
+        self.options.disposable = Some(DisposableLayer::Overlay(dirs));
+        self
+    }
+
+    const fn with_expected_work_inode(mut self, dev: u64, ino: u64) -> Self {
+        self.options.expected_work_inode = Some((dev, ino));
+        self
+    }
+
+    /// Dasselbe Backend mit einem anderen Laufzeitverzeichnis: Dort entstünde
+    /// die obere Schicht einer Wegwerf-Sandbox.
+    fn with_runtime_dir(self, dir: &Path) -> Self {
+        let env = self
+            .backend
+            .paths()
+            .env()
+            .clone()
+            .with("XDG_RUNTIME_DIR", dir.to_string_lossy());
+        Self {
+            backend: BwrapBackend::unchecked(
+                self.backend.program(),
+                self.backend.version(),
+                Paths::new(env),
+            ),
+            options: self.options,
+        }
+    }
+
+    fn version(&self) -> Version {
+        self.backend.version()
+    }
+
+    fn program(&self) -> &Path {
+        self.backend.program()
+    }
+
+    fn plan(
+        &self,
+        profile: &SandboxProfile,
+        session: &SessionContext,
+    ) -> Result<LaunchPlan, Diagnostic> {
+        self.backend
+            .plan(&PlanRequest::new(profile, session, &self.options))
+    }
+
+    fn disposable_support(
+        &self,
+        profile: &SandboxProfile,
+        session: &SessionContext,
+    ) -> Result<(), Diagnostic> {
+        self.backend
+            .disposable_support(&PlanRequest::new(profile, session, &self.options))
+    }
+
+    fn launch(&self, plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic> {
+        self.backend.launch(plan)
+    }
+
+    fn isolation_check(&self, handle: &SandboxHandle) -> Vec<CheckResult> {
+        self.backend.isolation_check(handle)
     }
 }
 
@@ -642,7 +752,11 @@ fn plan_rejects_a_missing_ca_or_shim() {
 #[test]
 fn plan_rejects_an_old_bwrap() {
     let fx = fixture();
-    let backend = BwrapBackend::unchecked("/usr/bin/bwrap", Version(0, 7, 9), fx.paths.clone());
+    let backend = Launcher::from(BwrapBackend::unchecked(
+        "/usr/bin/bwrap",
+        Version(0, 7, 9),
+        fx.paths.clone(),
+    ));
     let err = backend
         .plan(&profile("default"), &fx.context(&["true"]))
         .expect_err("0.7.9 is below min_bwrap_version");
@@ -1050,7 +1164,7 @@ fn swap_fixture() -> (Fixture, PathBuf) {
 /// Plant, tauscht den Projektordner gegen einen Symlink auf das geschützte
 /// Verzeichnis und startet dann; liefert, was `/work/marker` in der Sandbox
 /// sagt.
-fn swap_between_plan_and_launch(fx: &Fixture, protected: &Path, backend: &BwrapBackend) -> String {
+fn swap_between_plan_and_launch(fx: &Fixture, protected: &Path, backend: &Launcher) -> String {
     let plan = backend
         .plan(
             &profile("default"),
@@ -1089,8 +1203,12 @@ fn a_folder_swapped_after_the_check_stays_the_checked_folder() {
 fn a_folder_swapped_after_the_check_stays_the_checked_folder_without_bind_fd() {
     let (fx, protected) = swap_fixture();
     let Some(real) = fx.real() else { return };
-    let backend = BwrapBackend::unchecked(real.program(), MIN_BWRAP_VERSION, fx.paths.clone())
-        .with_stdio(StdioMode::Capture);
+    let backend = Launcher::from(BwrapBackend::unchecked(
+        real.program(),
+        MIN_BWRAP_VERSION,
+        fx.paths.clone(),
+    ))
+    .with_stdio(StdioMode::Capture);
     let plan_args = strings(
         &backend
             .plan(&profile("default"), &fx.context(&["true"]))
@@ -1348,8 +1466,12 @@ fn plan_of_a_disposable_sandbox_mounts_only_the_folder_the_caller_holds() {
 fn plan_of_a_disposable_sandbox_needs_overlay_support_and_a_writable_view() {
     let fx = fixture();
     let layer = layer(&fx);
-    let old = BwrapBackend::unchecked("/usr/bin/bwrap", Version(0, 10, 0), fx.paths.clone())
-        .with_overlay(layer.dirs());
+    let old = Launcher::from(BwrapBackend::unchecked(
+        "/usr/bin/bwrap",
+        Version(0, 10, 0),
+        fx.paths.clone(),
+    ))
+    .with_overlay(layer.dirs());
     let err = old
         .plan(&profile("default"), &fx.context(&["true"]))
         .expect_err("0.10 has no --overlay");
@@ -1380,15 +1502,21 @@ fn the_disposable_probe_names_each_missing_condition() {
         .is_ok_and(|stat| u64::try_from(stat.f_type).ok() == Some(0x0102_1994));
     if on_tmpfs {
         fx.unchecked()
-            .disposable_support(&profile("default"), &ctx, shm)
+            .with_runtime_dir(shm)
+            .disposable_support(&profile("default"), &ctx)
             .expect("bubblewrap 0.11, rw and a tmpfs runtime directory");
     } else {
         eprintln!("/dev/shm is not tmpfs here; the positive case is skipped");
     }
 
-    let old = BwrapBackend::unchecked("/usr/bin/bwrap", Version(0, 9, 0), fx.paths.clone());
+    let old = Launcher::from(BwrapBackend::unchecked(
+        "/usr/bin/bwrap",
+        Version(0, 9, 0),
+        fx.paths.clone(),
+    ))
+    .with_runtime_dir(shm);
     let err = old
-        .disposable_support(&profile("default"), &ctx, shm)
+        .disposable_support(&profile("default"), &ctx)
         .expect_err("0.9 has no --overlay");
     assert_eq!(err.code.as_str(), "SANDBOX_030");
     assert!(err.why.contains("bubblewrap 0.9.0"), "{}", err.why);
@@ -1397,7 +1525,8 @@ fn the_disposable_probe_names_each_missing_condition() {
     ro.work_mode = WorkMode::Ro;
     let err = fx
         .unchecked()
-        .disposable_support(&profile("default"), &ro, shm)
+        .with_runtime_dir(shm)
+        .disposable_support(&profile("default"), &ro)
         .expect_err("read-only project");
     assert_eq!(err.code.as_str(), "SANDBOX_030");
     assert!(err.why.contains("read-only"), "{}", err.why);
@@ -1414,7 +1543,8 @@ fn the_disposable_probe_names_each_missing_condition() {
     }
     let err = fx
         .unchecked()
-        .disposable_support(&profile("default"), &ctx, &disk)
+        .with_runtime_dir(&disk)
+        .disposable_support(&profile("default"), &ctx)
         .expect_err("a runtime directory on disk");
     assert_eq!(err.code.as_str(), "SANDBOX_030");
     assert!(err.why.contains("not on tmpfs"), "{}", err.why);
@@ -1540,4 +1670,139 @@ fn a_disposable_sandbox_never_writes_to_the_project() {
     let dir = layer.dir().to_path_buf();
     layer.discard().map_err(|(_, err)| err).expect("discard");
     assert!(!dir.exists(), "the upper layer is gone");
+}
+
+// --- die Kommandozeile vor und nach HUM-428 ------------------------------------
+
+/// Die Kommandozeile eines Plans, ein Argument je Zeile, ohne das, was jeder
+/// Lauf anders hat: Der Ordner des Fixtures wird `$STATE`, der einer
+/// Wegwerf-Schicht `$LAYER`, und jeder geerbte Deskriptor `$FD<n>`, nach
+/// seinem Platz in [`LaunchPlan::fds`].
+fn normalized_argv(
+    fx: &Fixture,
+    plan: &LaunchPlan,
+    layer: Option<&humanitl_sandbox::Layer>,
+) -> String {
+    let fds: Vec<String> = plan.fds.iter().map(|(fd, _)| fd.to_string()).collect();
+    let state = fx.state.to_string_lossy().into_owned();
+    let layer_dir = layer.map(|layer| layer.dir().to_string_lossy().into_owned());
+    let mut lines = String::new();
+    for arg in &plan.argv {
+        let mut word = arg.to_string_lossy().into_owned();
+        if let Some(dir) = &layer_dir {
+            word = word.replace(dir.as_str(), "$LAYER");
+        }
+        word = word.replace(state.as_str(), "$STATE");
+        if let Some(index) = fds.iter().position(|fd| *fd == word) {
+            word = format!("$FD{index}");
+        } else if let Some(index) = word
+            .strip_prefix("/proc/self/fd/")
+            .and_then(|rest| fds.iter().position(|fd| fd == rest))
+        {
+            word = format!("/proc/self/fd/$FD{index}");
+        }
+        lines.push_str(&word);
+        lines.push('\n');
+    }
+    lines
+}
+
+/// Vergleicht mit `tests/snapshots/<name>`; mit `UPDATE_PLAN_SNAPSHOT=1`
+/// schreibt es die Datei neu.
+fn assert_plan_snapshot(name: &str, actual: &str) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/snapshots")
+        .join(name);
+    if std::env::var_os("UPDATE_PLAN_SNAPSHOT").is_some() {
+        std::fs::write(&path, actual).expect("write the snapshot");
+        return;
+    }
+    let expected = std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("{} is missing: {err}", path.display()));
+    assert!(
+        expected == actual,
+        "{name} changed; the command line of this kind of session is no longer the old one\n\
+         --- expected\n{expected}\n--- actual\n{actual}"
+    );
+}
+
+/// HUM-428 hat die Optionen eines Starts aus den Builder-Methoden von
+/// `BwrapBackend` in [`LaunchOptions`] gezogen, ohne dass sich eine Zeile
+/// ändert: Die Dateien `plan-direct.argv.txt`, `plan-pty.argv.txt` und
+/// `plan-disposable.argv.txt` stammen aus dem Stand vor dem Umbau, erzeugt mit
+/// `BwrapBackend::unchecked(..)` ohne Builder, mit `with_stdio` und mit
+/// `with_approved_work_dir`, `with_overlay` und `with_expected_work_inode`.
+/// Jede Sitzungsart muss sie Byte für Byte treffen: direkt, gesammelt (dieselbe
+/// Zeile wie direkt), am Pseudoterminal und als Wegwerf-Sandbox.
+///
+/// Wer die Zeile mit Absicht ändert, schreibt die Dateien neu:
+///
+/// ```text
+/// UPDATE_PLAN_SNAPSHOT=1 cargo test -p humanitl-sandbox --test launcher the_command_line_of_every_kind_of_session_is_the_old_one
+/// ```
+#[test]
+fn the_command_line_of_every_kind_of_session_is_the_old_one() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let fx = fixture();
+    let ctx = fx.context(&["sh", "-c", "echo hi"]);
+    let backend = BwrapBackend::unchecked("/usr/bin/bwrap", Version(0, 11, 0), fx.paths.clone());
+    let pty = StdioMode::Pty { cols: 80, rows: 24 };
+    let plan_with = |options: &LaunchOptions| {
+        backend
+            .plan(&PlanRequest::new(&profile("default"), &ctx, options))
+            .expect("the plan builds")
+    };
+
+    let direct = plan_with(&LaunchOptions::default());
+    assert_plan_snapshot("plan-direct.argv.txt", &normalized_argv(&fx, &direct, None));
+
+    let capture = plan_with(&LaunchOptions {
+        stdio: StdioMode::Capture,
+        ..LaunchOptions::default()
+    });
+    assert_plan_snapshot(
+        "plan-direct.argv.txt",
+        &normalized_argv(&fx, &capture, None),
+    );
+
+    let terminal = plan_with(&LaunchOptions {
+        stdio: pty,
+        ..LaunchOptions::default()
+    });
+    assert_plan_snapshot("plan-pty.argv.txt", &normalized_argv(&fx, &terminal, None));
+
+    let layer = layer(&fx);
+    let meta = std::fs::metadata(&fx.work).expect("the project");
+    let disposable = plan_with(&LaunchOptions {
+        stdio: pty,
+        approved_work_dir: Some(fx.work.canonicalize().expect("resolved")),
+        expected_work_inode: Some((meta.dev(), meta.ino())),
+        disposable: Some(DisposableLayer::Overlay(layer.dirs())),
+        ..LaunchOptions::default()
+    });
+    assert_plan_snapshot(
+        "plan-disposable.argv.txt",
+        &normalized_argv(&fx, &disposable, Some(&layer)),
+    );
+}
+
+/// Eine Wegwerf-Schicht in der Form eines anderen Backends wird abgelehnt und
+/// nie still übergangen: bwrap nimmt ein Overlay, keinen Klon.
+#[test]
+fn a_clone_is_no_disposable_layer_for_bwrap() {
+    let fx = fixture();
+    let options = LaunchOptions {
+        disposable: Some(DisposableLayer::Clone(fx.state.join("clone"))),
+        ..LaunchOptions::default()
+    };
+    let err = BwrapBackend::unchecked("/usr/bin/bwrap", Version(0, 11, 0), fx.paths.clone())
+        .plan(&PlanRequest::new(
+            &profile("default"),
+            &fx.context(&["true"]),
+            &options,
+        ))
+        .expect_err("a clone under bwrap");
+    assert_eq!(err.code.as_str(), "SANDBOX_030");
+    assert!(err.why.contains("not the clone"), "{}", err.why);
 }

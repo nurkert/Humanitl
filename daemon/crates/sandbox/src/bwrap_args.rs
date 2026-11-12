@@ -245,7 +245,7 @@ pub struct LaunchInputs {
     /// Dasselbe für `mounts.extra_rw`.
     pub extra_rw: Vec<SourceFd>,
     /// Nur lesbare Binds, die der Aufrufer zur Sitzung beiträgt
-    /// (`crate::BwrapBackend::with_read_only_bind`), je Deskriptor und Ziel.
+    /// (`crate::LaunchOptions::session_ro`), je Deskriptor und Ziel.
     /// Gerendert hinter den Erweiterungen des Profils und vor dem
     /// Projektordner; leer heißt: kein Argument.
     pub session_ro: Vec<(SourceFd, PathBuf)>,

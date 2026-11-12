@@ -31,7 +31,8 @@ use humanitl_core::ids::{SandboxId, SessionId};
 use humanitl_sandbox::summary::SessionSummary;
 use humanitl_sandbox::worktree::{SnapshotLimits, snapshot};
 use humanitl_sandbox::{
-    BwrapBackend, SandboxBackend, SandboxHandle, SandboxProfile, SessionContext, StdioMode,
+    BwrapBackend, LaunchOptions, PlanRequest, SandboxBackend, SandboxHandle, SandboxProfile,
+    SessionContext, StdioMode,
 };
 
 /// Die Zeile, an der `esc-5-filesystem.sh` einen übersprungenen Fall erkennt.
@@ -131,7 +132,7 @@ impl Fixture {
     /// `daemon/bin/humanitl/tests/cli.rs`).
     fn backend(&self) -> Option<BwrapBackend> {
         match BwrapBackend::detect(self.paths.clone()) {
-            Ok(backend) => Some(backend.with_stdio(StdioMode::Capture)),
+            Ok(backend) => Some(backend),
             Err(err) => {
                 assert!(
                     std::env::var_os("CI").is_none(),
@@ -160,8 +161,12 @@ fn profile() -> SandboxProfile {
 /// denen in diesem Lauf kein `tmpfs` lag.
 fn run(fx: &Fixture, backend: &BwrapBackend, command: &[&str]) -> (String, Vec<PathBuf>) {
     let session = fx.context(command);
+    let options = LaunchOptions {
+        stdio: StdioMode::Capture,
+        ..LaunchOptions::default()
+    };
     let plan = backend
-        .plan(&profile(), &session)
+        .plan(&PlanRequest::new(&profile(), &session, &options))
         .unwrap_or_else(|err| panic!("the plan fails: {}", err.why));
     let unprotected = plan.unprotected.clone();
     let handle: SandboxHandle = backend

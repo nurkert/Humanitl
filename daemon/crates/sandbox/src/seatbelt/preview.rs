@@ -21,6 +21,7 @@ use super::{
     PRIVATE_TREES, SeatbeltBackend, SeatbeltPolicy, SessionLayout, git_applies, prepend_to_path,
     session_env,
 };
+use crate::launcher::{DisposableLayer, PlanRequest};
 use crate::profile::{SandboxProfile, SessionContext};
 
 /// Steht in der Vorschau für den Loopback-Port der Sitzung.
@@ -98,25 +99,30 @@ impl SeatbeltBackend {
     /// Anders als der Plan scheitert die Vorschau nicht: Sie läuft auch, wenn
     /// Proxy-Socket, Shim oder Projektordner fehlen, denn wer nachsehen will,
     /// braucht nichts davon. Fehlende Pfade behalten ihren Namen, ihr schon
-    /// vorhandener Teil wird aufgelöst.
+    /// vorhandener Teil wird aufgelöst. Eine Wegwerf-Schicht, die kein Klon
+    /// ist, zeigt sie nicht; der Plan lehnt sie ab.
     #[must_use]
     pub fn preview(
         &self,
-        profile: &SandboxProfile,
-        session: &SessionContext,
+        request: &PlanRequest<'_>,
         controlling_terminal: bool,
     ) -> SeatbeltPreview {
+        let PlanRequest {
+            profile,
+            session,
+            options,
+        } = *request;
         let project = resolved(&session.work_src);
-        let work = self
-            .clone
-            .as_deref()
-            .map_or_else(|| project.clone(), resolved);
+        let work = match &options.disposable {
+            Some(DisposableLayer::Clone(clone)) => resolved(clone),
+            Some(DisposableLayer::Overlay(_)) | None => project.clone(),
+        };
         let layout = SessionLayout {
             root: resolved(&self.sessions_dir()).join(session.session.to_string()),
         };
         let door = resolved(&session.proxy_socket_src);
         let shim = resolved(&session.shim_src);
-        let map = self.session_map(&layout, &work, &door, &shim);
+        let map = Self::session_map(options, &layout, &work, &door, &shim);
 
         let mut files = vec![shim.clone()];
         files.extend(
@@ -125,9 +131,8 @@ impl SeatbeltBackend {
                 .iter()
                 .map(|agent| resolved(&agent.host)),
         );
-        let mut policy = self.policy(
-            profile,
-            session,
+        let mut policy = Self::policy(
+            request,
             &project,
             &work,
             &layout,
@@ -385,7 +390,7 @@ mod tests {
     use humanitl_core::ids::SessionId;
 
     use super::*;
-    use crate::{SandboxBackend as _, SandboxProfile};
+    use crate::{LaunchOptions, SandboxBackend as _, SandboxProfile};
 
     /// Alles, was ein echter Plan verlangt, in einem eigenen Verzeichnis.
     struct Fixture {
@@ -394,6 +399,14 @@ mod tests {
         backend: SeatbeltBackend,
         session: SessionContext,
         profile: SandboxProfile,
+        options: LaunchOptions,
+    }
+
+    impl Fixture {
+        /// Profil und Sitzung des Fixtures mit den Vorgaben eines Starts.
+        fn request(&self) -> PlanRequest<'_> {
+            PlanRequest::new(&self.profile, &self.session, &self.options)
+        }
     }
 
     fn fixture() -> Fixture {
@@ -438,6 +451,7 @@ mod tests {
             backend: SeatbeltBackend::unchecked("/usr/bin/sandbox-exec", paths),
             session,
             profile,
+            options: LaunchOptions::default(),
         }
     }
 
@@ -447,11 +461,11 @@ mod tests {
     #[test]
     fn the_preview_is_the_plan_but_for_the_ports() {
         let fx = fixture();
-        let preview = fx.backend.preview(&fx.profile, &fx.session, false);
+        let preview = fx.backend.preview(&fx.request(), false);
         let sessions = fx.backend.sessions_dir();
         assert!(!sessions.exists(), "the preview left {sessions:?} behind");
 
-        let plan = fx.backend.plan(&fx.profile, &fx.session).expect("the plan");
+        let plan = fx.backend.plan(&fx.request()).expect("the plan");
         let port = plan.env_value("HTTPS_PROXY");
         let port = port.rsplit(':').next().expect("a port").to_owned();
         let agent_port = plan.env_value(crate::agent::ENV_AGENT_PORT);
@@ -515,7 +529,7 @@ mod tests {
         fx.profile.mounts.extra_ro.push(both.clone());
         fx.profile.mounts.extra_rw.push(both.clone());
 
-        let preview = fx.backend.preview(&fx.profile, &fx.session, false);
+        let preview = fx.backend.preview(&fx.request(), false);
         let rows: Vec<&PolicyRow> = preview.rows.iter().filter(|r| r.path == both).collect();
         assert_eq!(rows.len(), 1, "one line per path");
         assert_eq!(rows[0].access, PolicyAccess::ReadWrite);
@@ -549,7 +563,7 @@ mod tests {
         let mut fx = fixture();
         fx.session.work_mode = WorkMode::Ro;
         std::fs::write(fx.session.work_src.join(".envrc"), "x").expect("a mask");
-        let preview = fx.backend.preview(&fx.profile, &fx.session, true);
+        let preview = fx.backend.preview(&fx.request(), true);
         let row = |path: &Path| {
             preview
                 .rows
@@ -595,7 +609,9 @@ mod tests {
         session.work_src = PathBuf::from("/nowhere/proj");
         session.proxy_socket_src = PathBuf::from("/nowhere/proxy.sock");
         session.shim_src = PathBuf::from("/nowhere/shim");
-        let preview = fx.backend.preview(&fx.profile, &session, false);
+        let preview = fx
+            .backend
+            .preview(&PlanRequest::new(&fx.profile, &session, &fx.options), false);
         assert!(
             preview
                 .rows

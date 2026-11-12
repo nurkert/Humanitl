@@ -11,8 +11,9 @@
 //! was die Sandbox tun wird.
 //!
 //! Deshalb ruft dieses Modul `humanitl-sandbox` unmittelbar auf, im Prozess
-//! der Kommandozeile: dasselbe [`SandboxProfile`], derselbe
-//! [`PlatformBackend`], derselbe [`LaunchPlan`](humanitl_sandbox::LaunchPlan) wie später im Daemon. Es gibt
+//! der Kommandozeile: dasselbe [`SandboxProfile`], dasselbe [`Backend`] mit
+//! denselben [`LaunchOptions`], derselbe
+//! [`LaunchPlan`](humanitl_sandbox::LaunchPlan) wie später im Daemon. Es gibt
 //! keine zweite Übersetzung des Profils und keine Fachlogik, die es nur hier
 //! gäbe; was hier passiert, ist Verdrahtung, die mit der `Sandbox`-RPC
 //! umzieht. Die Naht ist [`Wiring`]: sie sagt, woher Proxy-Socket und CA
@@ -47,10 +48,10 @@ use humanitl_core::{Diagnostic, FixAction, Severity};
 #[cfg(not(target_os = "macos"))]
 use humanitl_sandbox::LaunchInputs;
 use humanitl_sandbox::{
-    AdapterRegistry, AgentContext, CheckResult, INTERRUPT_GRACE, MountPolicy, PlatformBackend,
-    Refusal, RefusalReason, RefusalReporting, Refusals, SANDBOX_SHELL, SandboxBackend, SandboxFile,
-    SandboxHandle, SandboxProfile, SandboxView, SessionContext, StdioMode, WorkDirSource,
-    shell_line,
+    AdapterRegistry, AgentContext, Backend, CheckResult, INTERRUPT_GRACE, LaunchOptions,
+    MountPolicy, PlanRequest, Refusal, RefusalReason, RefusalReporting, Refusals, SANDBOX_SHELL,
+    SandboxBackend, SandboxFile, SandboxHandle, SandboxProfile, SandboxView, SessionContext,
+    StdioMode, WorkDirSource, shell_line,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -176,16 +177,25 @@ struct Placeholder {
     paths: Paths,
 }
 
-/// Alles, was ein Start braucht: Profil, Sitzung, Backend.
+/// Alles, was ein Start braucht: Profil, Sitzung, Backend und Optionen.
 struct Setup {
     /// Das gelesene und geprüfte Profil.
     profile: SandboxProfile,
     /// Die Sitzung, für die geplant wird.
     session: SessionContext,
     /// Das Backend, mit dem geplant und gestartet wird.
-    backend: PlatformBackend,
+    backend: Backend,
+    /// Was der Start außer Profil und Sitzung braucht (HUM-428).
+    options: LaunchOptions,
     /// Hält die Platzhalter am Leben, solange die Sandbox läuft.
     _wiring: Wiring,
+}
+
+impl Setup {
+    /// Profil, Sitzung und Optionen als Anfrage an das Backend.
+    fn request(&self) -> PlanRequest<'_> {
+        PlanRequest::new(&self.profile, &self.session, &self.options)
+    }
 }
 
 /// `sandbox argv`: die Kommandozeile, ohne zu starten.
@@ -207,7 +217,7 @@ fn argv(ctx: &Context, command: &[OsString]) -> Result<u8, Failure> {
     // `/work` als vorhanden. Der Plan legt Deskriptoren an und verlangt
     // Socket, CA und Shim; nichts davon braucht, wer nur nachsehen will.
     #[cfg(target_os = "macos")]
-    let preview = setup.backend.preview(&setup.profile, &setup.session, false);
+    let preview = setup.backend.seatbelt_preview(&setup.request(), false);
     #[cfg(target_os = "macos")]
     let args = preview.argv.clone();
     #[cfg(not(target_os = "macos"))]
@@ -313,7 +323,10 @@ async fn start(
         let src = take_tests_placeholder(ctx, &mut setup.profile, dir)?;
         ctx.render
             .detail(&format!("tests dir {} -> {TESTS_DIR_DST}", src.display()));
-        setup.backend = setup.backend.with_read_only_bind(src, TESTS_DIR_DST);
+        setup
+            .options
+            .session_ro
+            .push((src, PathBuf::from(TESTS_DIR_DST)));
     }
     // The disposable sandbox (HUM-350): this command keeps no layer after it
     // ends, so the changes are listed and dropped; `humanitl run --disposable`
@@ -323,10 +336,7 @@ async fn start(
     } else {
         None
     };
-    let plan = setup
-        .backend
-        .plan(&setup.profile, &setup.session)
-        .map_err(Failure::new)?;
+    let plan = setup.backend.plan(&setup.request()).map_err(Failure::new)?;
     ctx.render.detail(&format!("argv: {}", plan.argv_line()));
 
     // Die Quelle für `SIGINT` steht, bevor die Sandbox läuft. Erst das Anmelden
@@ -542,14 +552,12 @@ impl Throwaway {
             &ctx.paths.runtime_dir().path,
             lower.as_fd(),
             &resolved,
-            humanitl_sandbox::SeatbeltBackend::clone_masks(&setup.profile, &resolved),
+            humanitl_sandbox::clone_masks(&setup.profile, &resolved),
         )
         .map_err(Failure::new)?;
-        setup.backend = setup
-            .backend
-            .clone()
-            .with_approved_work_dir(resolved)
-            .with_clone(layer.dirs().upper);
+        setup.options.approved_work_dir = Some(resolved);
+        setup.options.disposable =
+            Some(humanitl_sandbox::DisposableLayer::Clone(layer.dirs().upper));
         Ok(layer)
     }
 
@@ -583,12 +591,9 @@ impl Throwaway {
         })?;
         let layer =
             humanitl_sandbox::Layer::create(&ctx.paths.runtime_dir().path).map_err(Failure::new)?;
-        setup.backend = setup
-            .backend
-            .clone()
-            .with_approved_work_dir(resolved)
-            .with_expected_work_inode(stat.st_dev, stat.st_ino)
-            .with_overlay(layer.dirs());
+        setup.options.approved_work_dir = Some(resolved);
+        setup.options.expected_work_inode = Some((stat.st_dev, stat.st_ino));
+        setup.options.disposable = Some(humanitl_sandbox::DisposableLayer::Overlay(layer.dirs()));
         Ok(layer)
     }
 
@@ -774,10 +779,10 @@ fn check(ctx: &Context) -> Result<u8, Failure> {
 
     // Gesammelt statt durchgereicht: was der Prüfbefehl sagt, gehört nicht in
     // die Tabelle.
-    let backend = setup.backend.with_stdio(StdioMode::Capture);
-    let plan = backend
-        .plan(&setup.profile, &setup.session)
-        .map_err(Failure::new)?;
+    let mut setup = setup;
+    setup.options.stdio = StdioMode::Capture;
+    let backend = &setup.backend;
+    let plan = backend.plan(&setup.request()).map_err(Failure::new)?;
     ctx.render.detail(&format!("argv: {}", plan.argv_line()));
 
     let handle = backend.launch(&plan).map_err(Failure::new)?;
@@ -857,7 +862,7 @@ fn check_failure(results: &[CheckResult]) -> Failure {
 /// `backlog/CONVENTIONS.md` 4.12).
 fn enforce_isolation(
     ctx: &Context,
-    backend: &PlatformBackend,
+    backend: &Backend,
     handle: &SandboxHandle,
 ) -> Result<(), Failure> {
     let results = backend.isolation_check(handle);
@@ -897,7 +902,7 @@ fn enforce_isolation(
 // sie per Deskriptor; einen Platzhalter, den es auf dem Host nicht gibt, lehnt
 // er ab. Deshalb nimmt `--tests-dir` den Platzhalter vor dem Planen aus dem
 // Profil und gibt das Verzeichnis dem Backend als nur lesbaren Bind der
-// Sitzung (`with_read_only_bind` des Backends): geöffnet, gegen die
+// Sitzung (`LaunchOptions::session_ro`): geöffnet, gegen die
 // `MountPolicy` geprüft und per Deskriptor gebunden wie die Erweiterungen,
 // an derselben Stelle der Zeile.
 
@@ -1133,21 +1138,24 @@ fn prepare(
         agent_program: agent.program,
     };
 
-    let backend = match PlatformBackend::detect(paths.clone()) {
+    let backend = match Backend::detect(humanitl_sandbox::AUTO_BACKEND, paths.clone()) {
         Ok(backend) => backend,
-        // Die Vorschau braucht kein `bwrap`; der Start schon.
-        Err(_) if matches!(wiring, Wiring::Preview) => PlatformBackend::fallback(paths),
+        // Die Vorschau braucht kein Sandbox-Backend; der Start schon.
+        Err(_) if matches!(wiring, Wiring::Preview) => {
+            Backend::fallback(humanitl_sandbox::AUTO_BACKEND, paths).map_err(Failure::new)?
+        }
         Err(diagnostic) => return Err(Failure::new(diagnostic)),
-    };
-    let backend = match approved {
-        Some(dir) => backend.with_approved_work_dir(dir),
-        None => backend,
     };
 
     Ok(Setup {
         profile,
         session,
-        backend: backend.with_stdio(StdioMode::Inherit),
+        backend,
+        options: LaunchOptions {
+            stdio: StdioMode::Inherit,
+            approved_work_dir: approved,
+            ..LaunchOptions::default()
+        },
         _wiring: wiring,
     })
 }

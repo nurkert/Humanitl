@@ -25,8 +25,8 @@ mod common;
 use humanitl_config::{Env, Paths, WorkMode};
 use humanitl_core::ids::SessionId;
 use humanitl_sandbox::{
-    BwrapBackend, OutputChunk, OutputStream, SandboxBackend, SandboxProfile, SessionContext,
-    StdioMode,
+    BwrapBackend, LaunchOptions, OutputChunk, OutputStream, PlanRequest, SandboxBackend,
+    SandboxProfile, SessionContext, StdioMode,
 };
 
 /// Kein Test wartet länger.
@@ -141,13 +141,20 @@ impl Fixture {
         }
     }
 
-    /// Das echte `bwrap` an einem Pseudoterminal, oder `None` mit Begründung.
-    fn at_a_pty(&self) -> Option<BwrapBackend> {
+    /// Das echte `bwrap` mit den Optionen eines Starts an einem
+    /// Pseudoterminal, oder `None` mit Begründung.
+    fn at_a_pty(&self) -> Option<(BwrapBackend, LaunchOptions)> {
         match BwrapBackend::detect(self.paths.clone()) {
-            Ok(backend) => Some(backend.with_stdio(StdioMode::Pty {
-                cols: START_SIZE.0,
-                rows: START_SIZE.1,
-            })),
+            Ok(backend) => Some((
+                backend,
+                LaunchOptions {
+                    stdio: StdioMode::Pty {
+                        cols: START_SIZE.0,
+                        rows: START_SIZE.1,
+                    },
+                    ..LaunchOptions::default()
+                },
+            )),
             Err(err) => {
                 eprintln!("skipping: bwrap is not usable on this machine: {err}");
                 None
@@ -215,11 +222,17 @@ fn a_resize_reaches_the_agent() {
         eprintln!("skipping: no stty on this machine, so the agent cannot report its size");
         return;
     }
-    let Some(backend) = fx.at_a_pty() else { return };
+    let Some((backend, mut options)) = fx.at_a_pty() else {
+        return;
+    };
     let (tx, rx) = mpsc::channel();
-    let backend = backend.with_output_sink(tx);
+    options.output_sink = Some(tx);
     let plan = backend
-        .plan(&profile("default"), &fx.context(&["/bin/sh", "-c", AGENT]))
+        .plan(&PlanRequest::new(
+            &profile("default"),
+            &fx.context(&["/bin/sh", "-c", AGENT]),
+            &options,
+        ))
         .expect("the plan builds");
     let handle = backend.launch(&plan).expect("bwrap starts");
 
@@ -253,13 +266,16 @@ fn a_resize_reaches_the_agent() {
 #[test]
 fn a_sandbox_without_a_terminal_says_so() {
     let fx = fixture();
-    let Some(backend) = fx.at_a_pty() else { return };
-    let backend = backend.with_stdio(StdioMode::Capture);
+    let Some((backend, mut options)) = fx.at_a_pty() else {
+        return;
+    };
+    options.stdio = StdioMode::Capture;
     let plan = backend
-        .plan(
+        .plan(&PlanRequest::new(
             &profile("default"),
             &fx.context(&["/bin/sh", "-c", "exit 0"]),
-        )
+            &options,
+        ))
         .expect("the plan builds");
     let handle = backend.launch(&plan).expect("bwrap starts");
     assert!(handle.pty_master().is_none());
@@ -284,14 +300,16 @@ fn a_sandbox_without_a_terminal_says_so() {
 #[test]
 fn a_failing_start_still_explains_itself_at_a_pty() {
     let fx = fixture();
-    let Some(backend) = fx.at_a_pty() else { return };
+    let Some((backend, options)) = fx.at_a_pty() else {
+        return;
+    };
     let broken = SandboxProfile::parse(
         "version = 1\nname = \"probe\"\n[mounts]\nro = [\"/nonexistent-humanitl-source\"]\n",
         Path::new("<probe>"),
     )
     .expect("the probe profile parses");
     let plan = backend
-        .plan(&broken, &fx.context(&["true"]))
+        .plan(&PlanRequest::new(&broken, &fx.context(&["true"]), &options))
         .expect("the policy has nothing against a missing directory");
     // Innerhalb des Fensters meldet `launch` den Befund, auf einer langsamen
     // Maschine erst `wait`; beide sagen dasselbe.

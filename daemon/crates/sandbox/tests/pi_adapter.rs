@@ -585,7 +585,11 @@ fn a_fake_pi_finds_its_configuration_and_key_in_a_real_sandbox() {
     session.session_env.extend(adapter.env(&ctx));
 
     let plan = backend
-        .plan(&fx.profile, &session)
+        .plan(&humanitl_sandbox::PlanRequest::new(
+            &fx.profile,
+            &session,
+            &captured(),
+        ))
         .expect("the plan builds");
     let handle = backend.launch(&plan).expect("bwrap starts");
     let checks = backend.isolation_check(&handle);
@@ -632,7 +636,7 @@ fn a_fake_pi_finds_its_configuration_and_key_in_a_real_sandbox() {
 
 /// Skips without a usable `bwrap` or shim, and refuses to skip under CI;
 /// the same pattern as in `opencode_adapter.rs`.
-fn sandbox_or_skip(test: &str) -> Option<(Fixture, humanitl_sandbox::BwrapBackend)> {
+fn sandbox_or_skip(test: &str) -> Option<(Fixture, humanitl_sandbox::Backend)> {
     let fixture = match Fixture::new() {
         Ok(fixture) => fixture,
         Err(why) => return skip(test, &why),
@@ -724,9 +728,8 @@ impl Fixture {
         }
     }
 
-    fn backend(&self) -> Result<humanitl_sandbox::BwrapBackend, String> {
-        humanitl_sandbox::BwrapBackend::detect(self.paths.clone())
-            .map(|backend| backend.with_stdio(humanitl_sandbox::StdioMode::Capture))
+    fn backend(&self) -> Result<humanitl_sandbox::Backend, String> {
+        humanitl_sandbox::Backend::detect(humanitl_sandbox::BWRAP_BACKEND, self.paths.clone())
             .map_err(|err| format!("no usable bwrap: {err}"))
     }
 }
@@ -1085,4 +1088,13 @@ fn a_fifo_as_package_json_does_not_hang_the_lookup() {
         .expect("the lookup ends instead of blocking on the FIFO");
     assert_eq!(lookup, WebAccessLookup::Missing);
     assert!(finding, "on with no real package is AGENT_007");
+}
+
+/// Die Optionen eines Starts, dessen Ausgabe der Test liest.
+#[cfg(target_os = "linux")]
+fn captured() -> humanitl_sandbox::LaunchOptions {
+    humanitl_sandbox::LaunchOptions {
+        stdio: humanitl_sandbox::StdioMode::Capture,
+        ..humanitl_sandbox::LaunchOptions::default()
+    }
 }
