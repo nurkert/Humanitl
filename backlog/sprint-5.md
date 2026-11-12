@@ -6921,6 +6921,36 @@ adapter (HUM-433) to exist, because the suite launches through the backend.
 HUM-435 runs it, and its acceptance is the go/no-go evidence the plain level
 still owes.
 
+#### 10a. Measured on the reference machine (2026-11-12)
+
+Debian testing, kernel 7.3, Podman 5.8.6, crun 1.28, rootless, cgroup v2 with
+`cpu memory pids` delegated, storage driver `overlay`, network backend
+`netavark`, `/etc/subuid` and `/etc/subgid` with 65536 IDs, image
+`debian:trixie-slim` (`sha256:7378260c...bd392`).
+
+| Id | Result | Consequence |
+|---|---|---|
+| P0 | `true crun v2 [cpu memory pids] overlay netavark` | prerequisites met |
+| P1 | only `lo`; the route table has only its header | guarantee 1 holds under `--network none` |
+| P2 | the bound socket appears at `/run/humanitl/proxy.sock`, owner kept by `--userns keep-id`; no other socket listed | guarantee 2 as designed |
+| P3 | `Seccomp: 2`, one filter (Podman's) | the shim's own filter on top needs HUM-433 to prove `seccomp_applied ok` |
+| P4 | fd 3 and 4 reach PID 1 (`pid=1`) | `--preserve-fds` carries report, lifeline, control and env descriptors |
+| P5 | `exit 7` gives 7; `kill -TERM $$` from PID 1 gives 0, not 143 | PID 1 ignores signals without a handler; the shim as PID 1 must install its own handlers (it does) and the adapter must not expect 128 + n from a signal the shim does not handle |
+| P6 | host PID and the conmon PID readable; `SIGINT` to PID 1 is permitted but ignored without a handler; `podman rm -f` falls back to `SIGKILL` after 10 s | interrupt goes to the agent's process group through the shim, teardown uses `podman kill` plus the lifeline, not the stop timeout |
+| P7 | the container keeps running after `kill -9` of `podman run`; the lifeline ends PID 1 after 3 s | the lifeline (HUM-430) is required, as designed |
+| P9 | a `CONTAINERS_CONF_OVERRIDE` volume and a hook directory took effect without our configuration and did not with it; the user `mounts.conf` case was not measured (writing `~/.config/containers/mounts.conf` was refused on this machine) | `CONTAINERS_CONF` with an empty `default_mounts_file` and an empty `hooks_dir` stays the design; the mount-table check (HUM-437) remains the barrier against `mounts.conf` until that case is measured |
+| P10 | the overlay volume with own `upperdir` works; a deletion is a character device `0:0` in the upper layer, owned by the first subordinate ID (100000), the project file unchanged | the existing diff code reads the whiteout form; removing the upper layer needs `podman unshare` or the subordinate ID |
+| P11 | an `-e` value is stored in the container's `config.json` | the environment goes through the memfd (HUM-430), as designed |
+| P12 | `memory.max 268435456`, `pids.max 64`, `cpu.max 100000 100000` | limits are enforced |
+| P13 | `-v /proc/self/fd/3:/work` fails: `crun: mount /proc/self/fd/3 to work: Invalid argument` | a descriptor cannot be the mount source; pinning under Podman relies on way 2 only (device and inode checked by the shim after the mount, HUM-437) |
+| P14 | device and inode equal on both sides of the bind | way 2 works |
+| P15 | warm start with the image 0.29 to 0.31 s; with `--rootfs` and read-only binds of `/usr` and `/etc` 0.25 to 0.34 s | well under the 1 s target |
+| P17 | under `--read-only --read-only-tmpfs=false --no-hosts --network none` the engine adds: `/run/.containerenv`, `/etc/hostname`, `/etc/passwd`, `/etc/group` (generated for `--userns keep-id`), `/dev/shm`, `/dev` tmpfs with `pts`, `mqueue` and the six device nodes, `/proc` with read-only `asound bus fs irq sys sysrq-trigger` and masked `acpi kcore keys timer_list interrupts`, `/sys` read-only with `fs/cgroup` and masked `firmware`, `devices/virtual/powercap` and one `thermal_throttle` per CPU; no `/run`, `/tmp`, `/var/tmp` tmpfs and no `/etc/resolv.conf` | the expected-mount table of HUM-437 takes this list; the per-CPU `thermal_throttle` masks vary with the host and must be matched as a pattern; `/etc/passwd` and `/etc/group` shadow a host bind of `/etc` |
+
+Not yet measured: P8 (needs a decision on running probes under transient
+user units on the owner's machine), P16 (CI runner), K1 to K8 (no `krun` on
+this machine).
+
 #### 11. Effort
 
 In working days for one person, review rounds included.
