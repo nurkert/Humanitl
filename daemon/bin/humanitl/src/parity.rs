@@ -72,6 +72,7 @@ pub static PARITY: &[(&str, &str)] = &[
     ("Humanitl.Sandbox", "sandbox changes"),
     ("Humanitl.Sandbox", "sandbox discard"),
     ("Humanitl.Sandbox", "sandbox plan"),
+    ("Humanitl.SandboxBackends", "sandbox backends"),
     // Bis es `flows watch` gibt, liest nur die Moderation im Terminal den
     // Ereignisstrom mit.
     ("Humanitl.Subscribe", "run --ask terminal"),

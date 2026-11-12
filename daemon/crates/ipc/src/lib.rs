@@ -51,7 +51,11 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `33` seit der Tür im Schnappschuss (HUM-429): `SandboxEvent.Status.door`
+/// `34` seit der Liste der Backends (HUM-432): die RPC `SandboxBackends` mit
+/// `SandboxBackendList`, `SandboxBackend` und `SandboxRuntime`, das Enum
+/// `IsolationLevel`, und `SandboxEvent.Status.isolation_level` nennt die
+/// Stufe des Backends in `backend`.
+/// `33` war die Tür im Schnappschuss (HUM-429): `SandboxEvent.Status.door`
 /// nennt die eine Tür in die Sandbox als Text, Art und Adresse aus der
 /// Vorschau des Backends (`socket_file /run/humanitl/proxy.sock` unter
 /// Linux, `loopback_port 127.0.0.1:SESSION_PORT` unter Seatbelt); leer im
@@ -189,7 +193,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 33;
+pub const PROTO_MINOR: u32 = 34;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

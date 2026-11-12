@@ -241,6 +241,24 @@ pub trait DaemonApi: Send + Sync + 'static {
     ) -> Result<v1::InterceptStatus, Diagnostic> {
         crate::intercept::answer(None, &request, "")
     }
+
+    /// Die Sandbox-Backends dieses Systems mit Stufe, Verfügbarkeit und dem,
+    /// was fehlt (HUM-432). Startet nichts.
+    ///
+    /// Die Vorgabe antwortet `IPC_006`: Ein Daemon ohne Sandbox hat keine
+    /// Backends, die er nennen könnte.
+    ///
+    /// # Errors
+    ///
+    /// [`Diagnostic`] mit `IPC_006` oder dem Befund der Konfiguration.
+    async fn sandbox_backends(&self) -> Result<v1::SandboxBackendList, Diagnostic> {
+        Err(Diagnostic::builder(
+            humanitl_core::diagnostics::codes::IPC_006,
+            humanitl_core::Severity::Error,
+        )
+        .why("this daemon runs no sandbox, so it lists no sandbox backends".to_owned())
+        .build())
+    }
 }
 
 /// Der tonic-Dienst über einem beliebigen [`DaemonApi`].
@@ -664,6 +682,18 @@ impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
         self.check_token(&request)?;
         self.api
             .intercept(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
+    }
+
+    async fn sandbox_backends(
+        &self,
+        request: Request<()>,
+    ) -> Result<Response<v1::SandboxBackendList>, Status> {
+        self.check_token(&request)?;
+        self.api
+            .sandbox_backends()
             .await
             .map(Response::new)
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))

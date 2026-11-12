@@ -240,10 +240,11 @@ Config-Schlüssel (Auszug, verbindlich): `llm.endpoint` (URL), `llm.passthrough_
 ### 3.8 CLI (`humanitl`)
 
 ```
-humanitl run [--profile NAME] [--work DIR] [--ask ui|terminal|none] [--llm URL] [-- CMD...]
-humanitl sandbox run [--profile NAME] -- CMD...
+humanitl run [--profile NAME] [--work DIR] [--ask ui|terminal|none] [--llm URL] [--backend NAME] [--podman-runtime crun|krun] [-- CMD...]
+humanitl sandbox run [--profile NAME] [--backend NAME] [--podman-runtime crun|krun] -- CMD...
 humanitl sandbox argv [--profile NAME]
 humanitl sandbox check
+humanitl sandbox backends [--json]
 humanitl sandbox attach [--read-only]
 humanitl rules list|add|remove|test URL [--json]
 humanitl flows list [FILTER] | show ID [--json]
@@ -2514,6 +2515,27 @@ Sandbox-Profil nicht verlangt (`SANDBOX_036`), und eine, die nicht in
 Backend hält die drei Garantien, sonst stünde es nicht auf der Liste. Die
 Untergrenze selbst ist kein Schlüssel der Liste: Über alle Ebenen gilt dort der
 strengste Wert, und ein Wunsch über den Start könnte sie ohnehin nur heben.
+
+Seit HUM-432 steht `sandbox.podman.runtime` als vierter Schlüssel darauf
+(`humanitl run --podman-runtime crun|krun`). Die Laufzeit macht aus Podman
+eine Stufe (`podman/crun`, `podman/krun`), und `choose_backend` misst genau
+diese Stufe an der Untergrenze und an `ADMITTED_BACKENDS`; jede zugelassene
+Stufe hält die drei Garantien. Was die Stufe schützt, sind Untergrenze und
+Zulassung, nicht die Richtung des Wunsches: Ohne Untergrenze kann ein Wunsch
+über den Start die Laufzeit, die der Mensch in `config.toml` gewählt hat,
+auch senken (`crun` statt `krun`), genau wie der Wunsch `sandbox.backend`
+das Backend wechseln kann. Wer die Kernel-Stufe verlangt, setzt
+`sandbox.min_isolation = "kernel"`; dann ist `crun` `SANDBOX_035`. Eine
+Laufzeit, die ein Lauf wünscht (Kommandozeile, Umgebung, `cli_overrides`),
+obwohl das Backend nicht Podman ist, lehnt der Start mit `SANDBOX_034` ab
+(`humanitl_sandbox::runtime_fits_backend`), statt still eine andere Stufe zu
+starten. Weil der Daemon mit seiner eigenen Umgebung läuft, schickt
+`humanitl run` die Wahl aus der Umgebung des Aufrufs
+(`HUMANITL_SANDBOX__BACKEND`, `HUMANITL_SANDBOX__PODMAN__RUNTIME`) als
+`cli_overrides` mit; ein Flag gewinnt über sie. Am Socket ist sie damit ein
+Wert der Kommandozeile und wird geprüft wie ein Flag. Die übrigen Schlüssel von `sandbox.podman` (Programm, Wurzel,
+Abbild, Grenzen) bleiben gesperrt: Sie bestimmen, welches Programm startet
+und was es sieht.
 
 **Eine Profilregel kann sich den Rang der Durchreiche nicht selbst ausstellen.**
 `set_bundled` stempelt auf jede Regel der mitgelieferten Gruppe `bundled`, und

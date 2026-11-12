@@ -88,7 +88,9 @@ class RecordedDecision {
 }
 
 /// [DaemonClient] without a daemon.
-class FakeDaemonClient with FakeUpdates, FakeIntercept implements DaemonClient {
+class FakeDaemonClient
+    with FakeUpdates, FakeIntercept, FakeSandboxBackends
+    implements DaemonClient {
   /// Creates a fake that answers `GetInfo` with [info] (or [defaultInfo]),
   /// or throws [infoFailure] when given, and replays [script] (or
   /// [defaultScript]) on `subscribe`.
@@ -5633,5 +5635,73 @@ mixin FakeIntercept {
       _emit(FlowEvent.interceptChanged(at: DateTime.now(), status: next));
     }
     return interceptStatus;
+  }
+}
+
+/// The fake's half of `SandboxBackends` (HUM-432).
+///
+/// Plays a Linux system where everything is installed: the backend of the
+/// system chosen and available, Podman installed but, as in the real daemon
+/// before HUM-448, not admitted yet (`SANDBOX_048`) with both runtimes. The
+/// same list as the Rust fake on Linux.
+mixin FakeSandboxBackends {
+  /// Calls of `SandboxBackends`, for tests.
+  int sandboxBackendsCalls = 0;
+
+  /// Thrown as a [DaemonException] by `SandboxBackends` when set.
+  Diagnostic? sandboxBackendsFailure;
+
+  /// What `SandboxBackends` answers.
+  SandboxBackendList sandboxBackendList = defaultSandboxBackends;
+
+  /// The list the fake answers with unless a test sets another.
+  static const SandboxBackendList defaultSandboxBackends = SandboxBackendList(
+    minIsolation: IsolationLevel.policy,
+    backends: <SandboxBackendInfo>[
+      SandboxBackendInfo(
+        // The backend of the system has the name of its doctor line.
+        name: DoctorCheckId.sandboxTool,
+        isolation: IsolationLevel.namespaces,
+        available: true,
+        selected: true,
+      ),
+      SandboxBackendInfo(
+        name: 'podman',
+        isolation: IsolationLevel.namespaces,
+        diagnostics: <Diagnostic>[_notAdmitted],
+        runtimes: <SandboxRuntimeInfo>[
+          SandboxRuntimeInfo(
+            name: 'crun',
+            isolation: IsolationLevel.namespaces,
+            selected: true,
+            diagnostics: <Diagnostic>[_notAdmitted],
+          ),
+          SandboxRuntimeInfo(
+            name: 'krun',
+            isolation: IsolationLevel.kernel,
+            diagnostics: <Diagnostic>[_notAdmitted],
+          ),
+        ],
+      ),
+    ],
+  );
+
+  static const Diagnostic _notAdmitted = Diagnostic(
+    code: 'SANDBOX_048',
+    severity: Severity.blocking,
+    why:
+        'sandbox.backend = "podman" is not admitted yet: a backend becomes '
+        'selectable only after its mount check and the escape suite against '
+        'it are green in CI.',
+    fix: FixAction.changeSetting(key: 'sandbox.backend', value: 'auto'),
+  );
+
+  /// `SandboxBackends`.
+  Future<SandboxBackendList> sandboxBackends() async {
+    sandboxBackendsCalls += 1;
+    if (sandboxBackendsFailure case final Diagnostic failure) {
+      throw DaemonException(failure);
+    }
+    return sandboxBackendList;
   }
 }

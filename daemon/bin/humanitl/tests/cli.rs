@@ -6157,3 +6157,104 @@ fn sandbox_argv_refuses_a_backend_below_the_floor() {
         assert!(stdout(&output).trim().is_empty(), "{}", stdout(&output));
     }
 }
+
+/// `humanitl sandbox backends` ist ein dünner Client der RPC
+/// `SandboxBackends` (HUM-432): Die Liste kommt aus dem Fake, mit Stufe,
+/// Verfügbarkeit, Wahl und, unter Linux, dem Befund, der Podman vor HUM-448
+/// sperrt.
+#[test]
+fn sandbox_backends_prints_the_list_of_the_daemon() {
+    let harness = Harness::new();
+    let _server = FakeServer::start(&harness);
+
+    let listed = harness.run(["--json", "sandbox", "backends"]);
+    assert_eq!(code(&listed), 0, "{}", stderr(&listed));
+    let value = json_of(&listed);
+    assert_eq!(value["min_isolation"], "policy", "{value}");
+    let backends = value["backends"].as_array().expect("a list");
+    let names: Vec<&str> = backends
+        .iter()
+        .filter_map(|backend| backend["name"].as_str())
+        .collect();
+    assert_eq!(names, humanitl_sandbox::LISTED_BACKENDS, "{value}");
+    assert_eq!(
+        backends[0]["name"],
+        humanitl_sandbox::PLATFORM_BACKEND_NAME,
+        "{value}"
+    );
+    assert_eq!(backends[0]["available"], true, "{value}");
+    assert_eq!(backends[0]["selected"], true, "{value}");
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    assert_eq!(backends[0]["isolation_level"], "namespaces", "{value}");
+    assert_eq!(backends[1]["available"], false, "{value}");
+    assert_eq!(
+        backends[1]["diagnostics"][0]["code"], "SANDBOX_048",
+        "{value}"
+    );
+    assert_eq!(backends[1]["runtimes"][1]["name"], "krun", "{value}");
+    assert_eq!(
+        backends[1]["runtimes"][1]["isolation_level"], "kernel",
+        "{value}"
+    );
+
+    let table = harness.run(["sandbox", "backends"]);
+    assert_eq!(code(&table), 0, "{}", stderr(&table));
+    assert!(stdout(&table).contains("podman"), "{}", stdout(&table));
+    // Warum ein Backend fehlt, ist Ergebnis und bleibt auch mit `-q`.
+    for quiet in [false, true] {
+        let args: &[&str] = if quiet {
+            &["-q", "sandbox", "backends"]
+        } else {
+            &["sandbox", "backends"]
+        };
+        let shown = harness.run(args.iter().copied());
+        assert_eq!(code(&shown), 0, "{}", stderr(&shown));
+        assert!(stdout(&shown).contains("SANDBOX_048"), "{}", stdout(&shown));
+        assert!(stdout(&shown).contains("why:"), "{}", stdout(&shown));
+    }
+}
+
+/// `--podman-runtime krun` ohne Podman: Die Vorschau lehnt mit
+/// `SANDBOX_034` ab, statt still eine Zeile des Backends des Systems mit
+/// geteiltem Kern zu zeigen; dasselbe aus der Umgebung. Eine Laufzeit in
+/// `config.toml` ist eine Vorgabe für später und hält nichts auf (HUM-432).
+#[test]
+fn a_podman_runtime_without_podman_refuses_instead_of_starting_another_level() {
+    let harness = Harness::new();
+    let output = harness.run(["--podman-runtime", "krun", "sandbox", "argv"]);
+    assert_ne!(code(&output), 0, "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("SANDBOX_034"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(stdout(&output).trim().is_empty(), "{}", stdout(&output));
+
+    let output = harness
+        .command()
+        .env("HUMANITL_SANDBOX__PODMAN__RUNTIME", "crun")
+        .args(["sandbox", "argv"])
+        .output()
+        .expect("the binary runs");
+    assert!(
+        stderr(&output).contains("SANDBOX_034"),
+        "{}",
+        stderr(&output)
+    );
+
+    let config = harness.path("config").join("humanitl");
+    std::fs::create_dir_all(&config).expect("the config directory");
+    std::fs::write(
+        config.join("config.toml"),
+        "[sandbox.podman]\nruntime = \"krun\"\n",
+    )
+    .expect("config.toml");
+    let output = harness.run(["sandbox", "argv"]);
+    assert!(
+        !stderr(&output).contains("SANDBOX_034"),
+        "{}",
+        stderr(&output)
+    );
+}

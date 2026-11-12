@@ -18,6 +18,7 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl sandbox run`](#humanitl-sandbox-run) Start a sandbox with CMD as the agent and exit with its exit code
 - [`humanitl sandbox argv`](#humanitl-sandbox-argv) Print the bwrap command line for the current profile without starting it
 - [`humanitl sandbox check`](#humanitl-sandbox-check) Start a short-lived sandbox and show the three isolation guarantees
+- [`humanitl sandbox backends`](#humanitl-sandbox-backends) List the sandbox backends of this system: the isolation level each offers, whether a start with it would pass, which one sandbox.backend chooses, and what is missing
 - [`humanitl sandbox plan`](#humanitl-sandbox-plan) Show what a start in this project would get, without starting: profile, project folder, mode, and the saved model server with the place its choice comes from (this run, the project, a profile or llm.active)
 - [`humanitl sandbox attach`](#humanitl-sandbox-attach) Attach this terminal to the running session
 - [`humanitl sandbox exec`](#humanitl-sandbox-exec) Open a further shell in the running sandbox, next to the agent
@@ -133,7 +134,7 @@ below lists the flag names and their short aliases.
 | `--resolver-nameserver` | - | `STRING,_OPTIONAL` | `resolver.nameserver` |
 | `--resolver-prefer` | - | `ipv4`, `ipv6` | `resolver.prefer` |
 | `--resolver-test-ca` | - | `STRING,_OPTIONAL` | `resolver.test_ca` |
-| `--sandbox-backend` | - | `auto`, `bwrap`, `podman`, `seatbelt` | `sandbox.backend` |
+| `--sandbox-backend` | `--backend` | `auto`, `bwrap`, `podman`, `seatbelt` | `sandbox.backend` |
 | `--sandbox-min-isolation` | - | `policy`, `namespaces`, `kernel` | `sandbox.min_isolation` |
 | `--sandbox-mode` | - | `auto`, `direct`, `disposable` | `sandbox.mode` |
 | `--sandbox-podman-cpus` | - | `INTEGER,_OPTIONAL` | `sandbox.podman.cpus` |
@@ -142,7 +143,7 @@ below lists the flag names and their short aliases.
 | `--sandbox-podman-pids-limit` | - | `INTEGER` | `sandbox.podman.pids_limit` |
 | `--sandbox-podman-program` | - | `STRING,_OPTIONAL` | `sandbox.podman.program` |
 | `--sandbox-podman-rootfs` | - | `host`, `image` | `sandbox.podman.rootfs` |
-| `--sandbox-podman-runtime` | - | `crun`, `krun` | `sandbox.podman.runtime` |
+| `--sandbox-podman-runtime` | `--podman-runtime` | `crun`, `krun` | `sandbox.podman.runtime` |
 | `--sandbox-podman-start-timeout-secs` | - | `INTEGER` | `sandbox.podman.start_timeout_secs` |
 | `--sandbox-profile` | - | `STRING` | `sandbox.profile` |
 | `--sandbox-work-dir` | `--work` | `STRING,_OPTIONAL` | `sandbox.work_dir` |
@@ -257,16 +258,17 @@ Start, plan and check the sandbox
 Usage: humanitl sandbox [OPTIONS] <COMMAND>
 
 Commands:
-  run      Start a sandbox with CMD as the agent and exit with its exit code
-  argv     Print the bwrap command line for the current profile without starting it
-  check    Start a short-lived sandbox and show the three isolation guarantees
-  plan     Show what a start in this project would get, without starting: profile, project folder, mode, and the saved model server with the place its choice comes from (this run, the project, a profile or llm.active)
-  attach   Attach this terminal to the running session
-  exec     Open a further shell in the running sandbox, next to the agent
-  changes  Show what a disposable run changed: files changed, created and deleted, with a diff for text files and size and hash for others
-  apply    Write the changes of a disposable run to the project folder and discard the rest
-  discard  Drop all changes of a disposable run. Asks first
-  help     Print this message or the help of the given subcommand(s)
+  run       Start a sandbox with CMD as the agent and exit with its exit code
+  argv      Print the bwrap command line for the current profile without starting it
+  check     Start a short-lived sandbox and show the three isolation guarantees
+  backends  List the sandbox backends of this system: the isolation level each offers, whether a start with it would pass, which one sandbox.backend chooses, and what is missing
+  plan      Show what a start in this project would get, without starting: profile, project folder, mode, and the saved model server with the place its choice comes from (this run, the project, a profile or llm.active)
+  attach    Attach this terminal to the running session
+  exec      Open a further shell in the running sandbox, next to the agent
+  changes   Show what a disposable run changed: files changed, created and deleted, with a diff for text files and size and hash for others
+  apply     Write the changes of a disposable run to the project folder and discard the rest
+  discard   Drop all changes of a disposable run. Asks first
+  help      Print this message or the help of the given subcommand(s)
 
 Options:
       --json
@@ -384,6 +386,35 @@ Options:
 
   -h, --help
           Print help
+```
+
+## humanitl sandbox backends
+
+```text
+List the sandbox backends of this system: the isolation level each offers, whether a start with it would pass, which one sandbox.backend chooses, and what is missing.
+
+Asks the daemon (`SandboxBackends`) and starts nothing; `humanitl doctor` makes the probe start. A backend that is not available is never replaced by another one: choose it with `--backend NAME` on `humanitl run` or `humanitl sandbox run`, and the start fails with the reason shown here.
+
+Usage: humanitl sandbox backends [OPTIONS]
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ## humanitl sandbox plan

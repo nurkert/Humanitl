@@ -339,7 +339,7 @@ fn warnings(ctx: &Context, response: &v1::RulesResponse) {
 }
 
 /// Ein Befund der Leitung als Block.
-fn wire_block(wire: &v1::Diagnostic) -> String {
+pub(crate) fn wire_block(wire: &v1::Diagnostic) -> String {
     from_proto(wire).map_or_else(
         || {
             format!(
@@ -373,7 +373,7 @@ fn emit(ctx: &Context, response: &v1::RulesResponse, extra: Vec<(&str, Value)>) 
 }
 
 /// Ein Befund der Leitung als JSON.
-fn wire_json(wire: &v1::Diagnostic) -> Value {
+pub(crate) fn wire_json(wire: &v1::Diagnostic) -> Value {
     from_proto(wire).map_or_else(
         || {
             json!({

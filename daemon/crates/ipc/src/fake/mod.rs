@@ -838,6 +838,25 @@ impl DaemonApi for FakeDaemon {
         }
         Ok(self.fake_summary())
     }
+
+    /// Die Backends dieses Systems (HUM-432), ohne das System zu fragen: Der
+    /// Fake spielt ein System, auf dem alles installiert ist. Das Backend
+    /// des Systems ist gewählt und verfügbar; Podman ist, wie im echten
+    /// Daemon vor HUM-448, nicht zugelassen. Untergrenze, Zulassung und
+    /// Laufzeiten kommen aus derselben Liste wie im echten Daemon
+    /// ([`humanitl_sandbox::list_backends_with`]), damit der Fake keine
+    /// Codes erfindet.
+    async fn sandbox_backends(&self) -> Result<v1::SandboxBackendList, Diagnostic> {
+        let sandbox = humanitl_config::SandboxRef::default();
+        let entries =
+            humanitl_sandbox::list_backends_with(&sandbox, humanitl_sandbox::AUTO_BACKEND, |_| {
+                None
+            });
+        Ok(crate::convert::backend_list_to_proto(
+            &entries,
+            humanitl_sandbox::IsolationLevel::from(sandbox.min_isolation),
+        ))
+    }
 }
 
 impl FakeDaemon {
@@ -1393,6 +1412,8 @@ impl FakeDaemon {
                     sandbox_id: sandbox_id.to_string(),
                     session_id: session.id.to_string(),
                     backend: "bwrap".to_owned(),
+                    // Die Stufe dieses Backends, wie im echten Daemon (HUM-432).
+                    isolation_level: v1::IsolationLevel::Namespaces.into(),
                     policy_text: String::new(),
                     door: "socket_file /run/humanitl/proxy.sock".to_owned(),
                     llm_endpoint: session.llm_endpoint,

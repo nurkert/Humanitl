@@ -16,6 +16,7 @@ use humanitl_ipc::sandbox::SandboxPorts;
 use humanitl_ipc::session::SessionResolver;
 use humanitl_ipc::v1;
 use humanitl_ipc::{SandboxService, v1::sandbox_event::Event};
+use humanitl_sandbox::SandboxBackend as _;
 use tempfile::TempDir;
 use tokio_stream::StreamExt as _;
 
@@ -132,6 +133,21 @@ async fn the_snapshot_lists_the_project_the_socket_and_the_certificate() {
 
     assert_eq!(status.profile, "test");
     assert_eq!(status.work_mode, "rw");
+    // Die Stufe ist die des Backends, das die Momentaufnahme nennt (HUM-432).
+    let backend = humanitl_sandbox::Backend::fallback(
+        &status.backend,
+        Paths::new(Env::from_pairs([("HOME", "/nonexistent")])),
+    )
+    .expect("the snapshot names a backend of this build");
+    assert_eq!(
+        status.isolation_level,
+        humanitl_ipc::convert::isolation_level_to_proto(backend.isolation()) as i32,
+        "{status:?}"
+    );
+    assert_ne!(
+        status.isolation_level,
+        v1::IsolationLevel::Unspecified as i32
+    );
 
     // Unter Seatbelt gibt es kein `/work`: Die Tabelle nennt die echten Pfade,
     // und was gesperrt ist, steht als eigene Zeile darin (HUM-376).

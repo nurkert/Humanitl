@@ -145,6 +145,47 @@ pub fn choose_backend(
     Ok(choice)
 }
 
+/// Lehnt eine Laufzeit ab, die ein Mensch für diesen Lauf gewünscht hat,
+/// wenn das Backend gar nicht Podman ist (HUM-432).
+///
+/// `humanitl run --podman-runtime krun` bei `sandbox.backend = "auto"` hieße
+/// sonst: Der Mensch verlangt einen eigenen Gastkern und bekommt still bwrap
+/// mit geteiltem Kern. Als Wunsch gilt eine Laufzeit aus der Umgebung
+/// (`HUMANITL_SANDBOX__PODMAN__RUNTIME`) oder von der Kommandozeile, wozu
+/// auch `cli_overrides` des Start-RPC gehören; `runtime_origin` ist ihre
+/// Herkunft aus der Auflösung. Eine Laufzeit aus `config.toml` oder einem
+/// Profil ist eine Vorgabe für später und hält keinen Start auf.
+///
+/// # Errors
+///
+/// `SANDBOX_034`: Die gewünschte Laufzeit gibt es mit dem gewählten Backend
+/// nicht, und der Start nimmt nicht still eine andere Stufe.
+pub fn runtime_fits_backend(
+    sandbox: &SandboxRef,
+    runtime_origin: Option<&humanitl_config::Origin>,
+) -> Result<(), Diagnostic> {
+    use humanitl_config::Origin;
+    if !matches!(runtime_origin, Some(Origin::Env(_) | Origin::Cli)) {
+        return Ok(());
+    }
+    let name = resolve(backend_name(sandbox.backend))?;
+    if name == PODMAN_BACKEND {
+        return Ok(());
+    }
+    Err(Diagnostic::builder(SANDBOX_034, Severity::Blocking)
+        .why(format!(
+            "sandbox.podman.runtime = {:?} was asked for this run, and sandbox.backend chose \
+             {name:?}, which has no such runtime; the start does not run another isolation \
+             level than the one asked for. Start with --backend {PODMAN_BACKEND} for that \
+             runtime, or without --podman-runtime",
+            sandbox.podman.runtime.as_str()
+        ))
+        .fix(FixAction::CopyCommand(
+            "humanitl sandbox backends".to_owned(),
+        ))
+        .build())
+}
+
 impl Backend {
     /// Sucht das Backend mit diesem Namen und prüft, ob es auf dieser
     /// Maschine läuft. [`crate::AUTO_BACKEND`] ist das Backend des Systems
@@ -276,7 +317,7 @@ pub const fn backend_name(name: SandboxBackendName) -> &'static str {
 /// Der Name des Backends, mit [`crate::AUTO_BACKEND`] aufgelöst. Jeder Name
 /// des Schemas ist bekannt, auch einer, den dieser Build nicht starten kann;
 /// das sagt erst [`detect_in_build`] mit `SANDBOX_034`.
-fn resolve(name: &str) -> Result<&'static str, Diagnostic> {
+pub(crate) fn resolve(name: &str) -> Result<&'static str, Diagnostic> {
     match name {
         crate::AUTO_BACKEND => Ok(crate::PLATFORM_BACKEND_NAME),
         BWRAP_BACKEND => Ok(BWRAP_BACKEND),
@@ -287,7 +328,7 @@ fn resolve(name: &str) -> Result<&'static str, Diagnostic> {
 }
 
 /// Sucht ein aufgelöstes Backend auf diesem System, ohne Zulassung.
-fn detect_in_build(name: &'static str, paths: Paths) -> Result<Backend, Diagnostic> {
+pub(crate) fn detect_in_build(name: &'static str, paths: Paths) -> Result<Backend, Diagnostic> {
     match name {
         BWRAP_BACKEND => BwrapBackend::detect(paths).map(Backend::Bwrap),
         #[cfg(target_os = "macos")]
@@ -312,7 +353,7 @@ fn stage(name: &'static str, runtime: Option<PodmanRuntime>) -> Cow<'static, str
 /// Die Isolation einer Stufe, ohne sie zu bauen. Muss mit
 /// [`SandboxBackend::isolation`] des gebauten Backends übereinstimmen; der
 /// Test `the_isolation_of_a_name_is_that_of_its_backend` hält beides gleich.
-fn isolation_of(name: &str, runtime: Option<PodmanRuntime>) -> IsolationLevel {
+pub(crate) fn isolation_of(name: &str, runtime: Option<PodmanRuntime>) -> IsolationLevel {
     match (name, runtime) {
         (SEATBELT_BACKEND, _) => IsolationLevel::Policy,
         (PODMAN_BACKEND, Some(PodmanRuntime::Krun)) => IsolationLevel::Kernel,
@@ -326,7 +367,9 @@ fn isolation_of(name: &str, runtime: Option<PodmanRuntime>) -> IsolationLevel {
 /// Backend hat (macOS), der Wert älterer Profile von vor HUM-376 und bleibt
 /// gültig, ohne etwas zu verlangen; dort, wo es bwrap gibt, ist es eine
 /// Anforderung wie jede andere.
-fn required_by_profile(profile_backend: &str) -> Result<Option<&'static str>, Diagnostic> {
+pub(crate) fn required_by_profile(
+    profile_backend: &str,
+) -> Result<Option<&'static str>, Diagnostic> {
     if profile_backend == crate::AUTO_BACKEND {
         return Ok(None);
     }
@@ -338,7 +381,10 @@ fn required_by_profile(profile_backend: &str) -> Result<Option<&'static str>, Di
 }
 
 /// `SANDBOX_048`, wenn die Stufe nicht in [`ADMITTED_BACKENDS`] steht.
-fn admitted(name: &'static str, runtime: Option<PodmanRuntime>) -> Result<(), Diagnostic> {
+pub(crate) fn admitted(
+    name: &'static str,
+    runtime: Option<PodmanRuntime>,
+) -> Result<(), Diagnostic> {
     let stage = stage(name, runtime);
     if ADMITTED_BACKENDS.contains(&stage.as_ref()) {
         return Ok(());
@@ -376,7 +422,7 @@ fn not_in_build(name: &str) -> Diagnostic {
 /// `SANDBOX_035`: Die Stufe liegt unter der Untergrenze. Ohne Knopf: Die
 /// Untergrenze zu senken entscheidet der Mensch in der Ebene, die sie gesetzt
 /// hat, und die Antwort darf ihm diese Entscheidung nicht abnehmen.
-fn below_floor(choice: &BackendChoice, floor: IsolationLevel) -> Diagnostic {
+pub(crate) fn below_floor(choice: &BackendChoice, floor: IsolationLevel) -> Diagnostic {
     Diagnostic::builder(SANDBOX_035, Severity::Blocking)
         .why(format!(
             "sandbox.backend chose {} with the isolation level {}, and sandbox.min_isolation \
@@ -393,7 +439,7 @@ fn below_floor(choice: &BackendChoice, floor: IsolationLevel) -> Diagnostic {
 }
 
 /// `SANDBOX_036`: Das Sandbox-Profil verlangt ein anderes Backend.
-fn profile_requires_another(required: &'static str, chosen: &'static str) -> Diagnostic {
+pub(crate) fn profile_requires_another(required: &'static str, chosen: &'static str) -> Diagnostic {
     let builder = Diagnostic::builder(SANDBOX_036, Severity::Blocking).why(format!(
         "the sandbox profile requires the backend {required:?}, and sandbox.backend chose \
          {chosen:?}; the profile states a requirement, not a second choice, so neither \
@@ -594,6 +640,29 @@ mod tests {
         assert_eq!(bwrap.name(), BWRAP_BACKEND);
         assert_eq!(bwrap.isolation(), IsolationLevel::Namespaces);
         assert_eq!(bwrap.program(), Path::new("bwrap"));
+    }
+
+    /// Eine Laufzeit, die der Lauf wünscht, passt nur zu Podman; aus
+    /// `config.toml` hält sie keinen Start auf (HUM-432).
+    #[test]
+    fn a_runtime_wished_for_another_backend_refuses_the_start() {
+        use humanitl_config::MinIsolation::Policy;
+        use humanitl_config::Origin;
+        use humanitl_config::SandboxBackendName::{Auto, Podman};
+        let krun = sandbox(Auto, Policy, PodmanRuntime::Krun);
+        for wish in [
+            Origin::Cli,
+            Origin::Env("HUMANITL_SANDBOX__PODMAN__RUNTIME".into()),
+        ] {
+            let err = runtime_fits_backend(&krun, Some(&wish)).expect_err("no podman");
+            assert_eq!(err.code.as_str(), "SANDBOX_034", "{}", err.why);
+            assert!(err.why.contains("krun"), "{}", err.why);
+        }
+        for preset in [None, Some(Origin::Default), Some(Origin::Global)] {
+            runtime_fits_backend(&krun, preset.as_ref()).expect("a preset is no wish");
+        }
+        let podman = sandbox(Podman, Policy, PodmanRuntime::Krun);
+        runtime_fits_backend(&podman, Some(&Origin::Cli)).expect("podman has runtimes");
     }
 
     /// Die Gruppe `sandbox` mit Backend, Untergrenze und Laufzeit.

@@ -20,6 +20,7 @@ export 'llm_servers.dart';
 export 'server_address.dart';
 export 'rule.dart';
 export 'sandbox.dart';
+export 'sandbox_backends.dart';
 export 'settings.dart';
 export 'terminal.dart';
 export 'update.dart';

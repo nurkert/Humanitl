@@ -2179,6 +2179,50 @@ impl v1::humanitl_server::Humanitl for IpcServer {
         .map_err(|diagnostic| diagnostic_to_status(&diagnostic))
     }
 
+    /// Die Sandbox-Backends dieses Systems (HUM-432,
+    /// [`humanitl_sandbox::list_backends`]).
+    ///
+    /// Gemessen an der Konfiguration, wie sie jetzt auf der Platte steht und
+    /// ohne Projekt: Ihr `sandbox.backend` ist das gewählte, ihre Untergrenze
+    /// die, an der jeder Eintrag gemessen wird, und ihr Sandbox-Profil das,
+    /// dessen Anforderung an das Backend gilt. Die Antwort fragt das System
+    /// wie die Suche vor einem Start und startet nichts; das läuft in
+    /// [`tokio::task::spawn_blocking`], weil die Suche kurze Programme
+    /// startet. Die Antwort braucht keine laufende Sandbox: Welche Backends
+    /// es gibt, ist eine Tatsache des Systems.
+    async fn sandbox_backends(
+        &self,
+        _request: Request<()>,
+    ) -> Result<Response<v1::SandboxBackendList>, Status> {
+        let paths = self.doctor.paths.clone();
+        let service = self.sandbox.clone();
+        let list = tokio::task::spawn_blocking(move || {
+            let resolved = humanitl_config::resolve(
+                &humanitl_config::ProfileSelection::default(),
+                None,
+                paths.env(),
+                &[],
+            )?;
+            let sandbox = &resolved.config.sandbox;
+            // Was das Sandbox-Profil verlangt, wie beim Start (`SANDBOX_036`).
+            // Ohne Sandbox-Dienst und bei einem Profil, das sich nicht lesen
+            // lässt, verlangt es nichts: Den Befund dazu nennt der Plan, und
+            // der Start scheitert an ihm, welches Backend auch gewählt ist.
+            let profile_backend = service
+                .as_ref()
+                .and_then(|service| service.profile_backend(&sandbox.profile).ok())
+                .unwrap_or_else(|| humanitl_sandbox::AUTO_BACKEND.to_owned());
+            Ok::<_, Diagnostic>(convert::backend_list_to_proto(
+                &humanitl_sandbox::list_backends(sandbox, &profile_backend, &paths),
+                humanitl_sandbox::IsolationLevel::from(sandbox.min_isolation),
+            ))
+        })
+        .await
+        .map_err(|error| Status::internal(format!("the backend list did not finish: {error}")))?
+        .map_err(|diagnostic| diagnostic_to_status(&diagnostic))?;
+        Ok(Response::new(list))
+    }
+
     /// Die gespeicherten Modellserver (HUM-289, [`llm_servers`]). Ein
     /// Wechsel gilt ab der nächsten Sitzung; keine Antwort trägt einen
     /// Schlüssel.
@@ -3184,6 +3228,158 @@ mod tests {
         let diagnostic =
             crate::diagnostic_from_status(&status).expect("the refusal carries a diagnostic");
         assert_eq!(diagnostic.code, codes::IPC_006.to_string());
+    }
+
+    /// `SandboxBackends` über den Pfaden eines Wegwerf-Verzeichnisses, mit
+    /// genau diesem Ordner als `PATH` (HUM-432).
+    #[cfg(target_os = "linux")]
+    async fn backends_with_path(
+        home: &std::path::Path,
+        bin: &std::path::Path,
+    ) -> v1::SandboxBackendList {
+        let env = humanitl_config::Env::from_pairs([
+            ("HOME", home.display().to_string()),
+            ("XDG_CONFIG_HOME", home.join("config").display().to_string()),
+            ("PATH", bin.display().to_string()),
+        ]);
+        let queue = queue();
+        let server = server(&queue).with_paths(humanitl_config::Paths::new(env));
+        server
+            .sandbox_backends(Request::new(()))
+            .await
+            .expect("the list answers without a sandbox")
+            .into_inner()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn backend<'a>(list: &'a v1::SandboxBackendList, name: &str) -> &'a v1::SandboxBackend {
+        list.backends
+            .iter()
+            .find(|backend| backend.name == name)
+            .unwrap_or_else(|| panic!("{name} is not listed: {list:?}"))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn codes_of(diagnostics: &[v1::Diagnostic]) -> Vec<&str> {
+        diagnostics.iter().map(|d| d.code.as_str()).collect()
+    }
+
+    /// Vor HUM-448 ist Podman nicht verfügbar, auch wenn es installiert ist
+    /// (`SANDBOX_048`); ohne `podman` im `PATH` steht zusätzlich
+    /// `SANDBOX_034` mit `fix`. Das Backend des Systems bleibt, was die Suche vor jedem Start
+    /// sagt, und ist unter `auto` gewählt.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn sandbox_backends_lists_podman_as_not_admitted_and_names_what_is_missing() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let home = tempfile::tempdir().expect("tempdir");
+        let bin = home.path().join("bin");
+        std::fs::create_dir_all(&bin).expect("bin");
+        std::fs::write(bin.join("podman"), "#!/bin/sh\nexit 99\n").expect("podman");
+        std::fs::set_permissions(bin.join("podman"), std::fs::Permissions::from_mode(0o755))
+            .expect("mode");
+        let list = backends_with_path(home.path(), &bin).await;
+        assert_eq!(
+            list.backends
+                .iter()
+                .map(|b| b.name.as_str())
+                .collect::<Vec<_>>(),
+            [humanitl_sandbox::PLATFORM_BACKEND_NAME, "podman"]
+        );
+        assert_eq!(list.min_isolation, v1::IsolationLevel::Policy as i32);
+        let podman = backend(&list, "podman");
+        assert!(!podman.available && !podman.selected, "{podman:?}");
+        assert_eq!(codes_of(&podman.diagnostics), ["SANDBOX_048"]);
+        assert_eq!(
+            podman.isolation_level,
+            v1::IsolationLevel::Namespaces as i32
+        );
+        let runtimes: Vec<(&str, i32, bool)> = podman
+            .runtimes
+            .iter()
+            .map(|r| (r.name.as_str(), r.isolation_level, r.available))
+            .collect();
+        assert_eq!(
+            runtimes,
+            [
+                ("crun", v1::IsolationLevel::Namespaces as i32, false),
+                ("krun", v1::IsolationLevel::Kernel as i32, false),
+            ]
+        );
+        // Das Backend des Systems fehlt in diesem `PATH`: der Befund seiner Suche; gewählt
+        // bleibt es, und nichts springt ein.
+        let system = backend(&list, humanitl_sandbox::PLATFORM_BACKEND_NAME);
+        assert!(system.selected && !system.available, "{system:?}");
+        assert_eq!(codes_of(&system.diagnostics), ["SANDBOX_001"]);
+        assert_eq!(
+            system.isolation_level,
+            v1::IsolationLevel::Namespaces as i32
+        );
+
+        let empty = home.path().join("empty-bin");
+        std::fs::create_dir_all(&empty).expect("empty bin");
+        let list = backends_with_path(home.path(), &empty).await;
+        let podman = backend(&list, "podman");
+        assert_eq!(
+            codes_of(&podman.diagnostics),
+            ["SANDBOX_034", "SANDBOX_048"]
+        );
+        assert!(podman.diagnostics[0].fix.is_some(), "{podman:?}");
+    }
+
+    /// Ein Sandbox-Profil, das Podman verlangt, macht das gewählte Backend
+    /// des Systems in der Liste unverfügbar (`SANDBOX_036`), wie der Start
+    /// es ablehnte; ohne diesen Befund sagte die Liste `available` voraus,
+    /// wo der Start scheitert (HUM-432).
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn sandbox_backends_names_the_requirement_of_the_sandbox_profile() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let config_home = home.path().join("config");
+        let profiles = config_home.join("humanitl/profiles/sandbox");
+        std::fs::create_dir_all(&profiles).expect("profiles");
+        let bundled = include_str!("../../../../profiles/sandbox/default.toml");
+        assert!(bundled.contains("backend = \"auto\""));
+        std::fs::write(
+            profiles.join("wants-podman.toml"),
+            bundled.replacen("backend = \"auto\"", "backend = \"podman\"", 1),
+        )
+        .expect("profile");
+        let env = humanitl_config::Env::from_pairs([
+            ("HOME", home.path().display().to_string()),
+            ("XDG_CONFIG_HOME", config_home.display().to_string()),
+            ("PATH", home.path().join("bin").display().to_string()),
+        ]);
+        std::fs::write(
+            config_home.join("humanitl/config.toml"),
+            "[sandbox]\nprofile = \"wants-podman\"\n",
+        )
+        .expect("config.toml");
+        let paths = humanitl_config::Paths::new(env);
+        let service = crate::SandboxService::new(
+            crate::session::SessionResolver::for_config(paths.clone(), Config::default()),
+            humanitl_core::SessionId::new(),
+            crate::sandbox::SandboxPorts::none(),
+        );
+        let queue = queue();
+        let list = server(&queue)
+            .with_paths(paths)
+            .with_sandbox(service)
+            .sandbox_backends(Request::new(()))
+            .await
+            .expect("the list answers")
+            .into_inner();
+        let system = backend(&list, humanitl_sandbox::PLATFORM_BACKEND_NAME);
+        assert!(system.selected && !system.available, "{system:?}");
+        assert!(
+            codes_of(&system.diagnostics).contains(&"SANDBOX_036"),
+            "{system:?}"
+        );
+        let podman = backend(&list, "podman");
+        assert!(
+            !codes_of(&podman.diagnostics).contains(&"SANDBOX_036"),
+            "{podman:?}"
+        );
     }
 
     /// Ein Endpunkt, der keine URL ist, wird gelesen, bevor der Dienst nach
