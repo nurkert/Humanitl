@@ -11,7 +11,9 @@
 //! Erlaubt sind: die Definition in `src/backend.rs` hinter ihrem `cfg`, das
 //! Manifest dieser Crate, `escape-launch`, jede Datei unter einem
 //! Verzeichnis `tests/` und Code nach dem ersten `#[cfg(test)]` einer Datei
-//! (die Testmodule stehen hier am Ende). Was `cargo tree` dazu sagt, prüft
+//! (die Testmodule stehen hier am Ende). Dazu im Manifest von `humanitl-ipc`
+//! genau die Zeile [`IPC_FORWARD`] und Kommentare: Mit ihr prüft ESC-5 das
+//! Terminal jeder Stufe (HUM-435). Was `cargo tree` dazu sagt, prüft
 //! `tools/check-deps.sh`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -20,6 +22,12 @@ use std::path::{Path, PathBuf};
 
 /// Die beiden Namen, die außerhalb der erlaubten Stellen nicht vorkommen.
 const NEEDLES: [&str; 2] = ["detect_unadmitted", "unadmitted-backends"];
+
+/// Die eine Zeile im Manifest von `humanitl-ipc`, die das Feature an diese
+/// Crate weiterreicht, damit `tests/terminal.rs` unter der Escape-Suite jede
+/// Stufe starten kann (HUM-435). Eingeschaltet wird es dort wie hier nur von
+/// einem Testaufruf.
+const IPC_FORWARD: &str = "unadmitted-backends = [\"humanitl-sandbox/unadmitted-backends\"]";
 
 fn daemon_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -68,7 +76,10 @@ fn offending(relative: &str, text: &str) -> Vec<String> {
             && trimmed.starts_with("#[cfg(any(test, feature = \"unadmitted-backends\"))]");
         // Ein Doku-Kommentar nennt die Namen, ohne sie zu benutzen.
         let comment = trimmed.starts_with("//");
-        if in_tests || definition || comment {
+        // Im Manifest von `humanitl-ipc`: Kommentare und die Weiterleitung.
+        let forward = relative == "crates/ipc/Cargo.toml"
+            && (trimmed.starts_with('#') || trimmed == IPC_FORWARD);
+        if in_tests || definition || comment || forward {
             continue;
         }
         if NEEDLES.iter().any(|needle| line.contains(needle)) {
@@ -141,4 +152,17 @@ fn the_check_names_a_daemon_that_switches_the_bypass_on() {
                        Backend::detect_unadmitted(\"podman\", p); }\n}\n";
     assert!(offending("crates/ipc/src/sandbox.rs", test_module).is_empty());
     assert!(offending("crates/ipc/tests/podman.rs", code).is_empty());
+    // Die Weiterleitung in `humanitl-ipc` ist erlaubt, ein Einschalten dort
+    // nicht, und dieselbe Zeile in einem anderen Manifest auch nicht.
+    let forward = format!("[features]\n# unadmitted-backends\n{IPC_FORWARD}\n");
+    assert!(offending("crates/ipc/Cargo.toml", &forward).is_empty());
+    let default_on = "[features]\ndefault = [\"unadmitted-backends\"]\n";
+    assert_eq!(
+        offending("crates/ipc/Cargo.toml", default_on),
+        ["crates/ipc/Cargo.toml:2"]
+    );
+    assert_eq!(
+        offending("bin/humanitld/Cargo.toml", &forward),
+        ["bin/humanitld/Cargo.toml:2", "bin/humanitld/Cargo.toml:3"]
+    );
 }

@@ -210,6 +210,7 @@ jobs=(
   "flutter-analyze-test=$(b "$((code || docs))")"
   "goldens=$(b "$app")"
   "escape-tests=$(b "$rust")"
+  "escape-tests-podman=$(b "$rust")"
   "e2e=$(b "$rust")"
   "e2e-xvfb=$(b "$code")"
   "e2e-agent=$(b "$rust")"

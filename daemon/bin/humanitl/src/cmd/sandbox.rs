@@ -49,9 +49,9 @@ use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_ipc::v1;
 use humanitl_sandbox::{
     AdapterRegistry, AgentContext, Backend, CheckResult, INTERRUPT_GRACE, LaunchOptions,
-    MountPolicy, PlanRequest, Refusal, RefusalReason, RefusalReporting, Refusals, SANDBOX_SHELL,
-    SandboxBackend, SandboxFile, SandboxHandle, SandboxProfile, SandboxView, SessionContext,
-    StdioMode, WorkDirSource, shell_line,
+    MountPolicy, PlanRequest, Refusal, RefusalReporting, Refusals, SANDBOX_SHELL, SandboxBackend,
+    SandboxFile, SandboxHandle, SandboxProfile, SandboxView, SessionContext, StdioMode,
+    WorkDirSource, shell_line,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -762,21 +762,8 @@ fn refusal_notes(refusals: &Refusals) -> RefusalNotes {
         "the sandbox refused {} attempt(s) to open a socket outside the proxy:",
         refusals.total()
     )];
-    lines.extend(refusals.entries.iter().map(refusal_line));
+    lines.extend(refusals.entries.iter().map(Refusal::summary_line));
     RefusalNotes::Loud(lines)
-}
-
-/// Eine Zeile je Paar: `  3x socket(AF_UNIX, SOCK_STREAM)  family not allowed`.
-fn refusal_line(entry: &Refusal) -> String {
-    let why = match entry.reason {
-        RefusalReason::Family => "family not allowed",
-        RefusalReason::Type => "type not allowed",
-        RefusalReason::Overflow => "further pairs, counted together",
-    };
-    format!(
-        "  {}x {}({}, {})  {why}",
-        entry.count, entry.syscall, entry.family, entry.socket_type
-    )
 }
 
 /// `sandbox check`: eine kurzlebige Sandbox und die drei Garantien.

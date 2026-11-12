@@ -33,6 +33,29 @@
 # real launcher against a real sandbox backend, the last one the real daemon;
 # there is no command that could ask these questions from outside without
 # starting half the daemon (`humanitl audit verify` arrives with HUM-070).
+#
+# Every backend (HUM-435). ESC_BACKEND, set by run.sh from
+# HUMANITL_ESCAPE_BACKEND, names the backend of the run; empty or bwrap is the
+# backend of the system, as before. For any other backend the filesystem and
+# terminal cases start exactly that one: the integration tests read
+# HUMANITL_ESCAPE_BACKEND and reach a level that is not admitted yet through
+# Backend::detect_unadmitted, so cargo builds them with the feature
+# unadmitted-backends, and only for such a run. That build is a cargo call of
+# its own per package and never touches humanitl or humanitld, which refuse to
+# build against it. A requested backend that is not usable fails the case,
+# always: it is never a skip and never falls back to bwrap (acceptance
+# criterion 2 of HUM-435).
+#
+# The two audit cases do not depend on the backend: they start a real daemon,
+# send one flow through its proxy and read the chain it wrote, and no sandbox
+# is started on the way. They run the same way under every backend.
+#
+# The disposable case (HUM-350) has one version per backend. Under bwrap it
+# measures the overlay (daemon/crates/sandbox/tests/launcher.rs). A backend
+# without a disposable sandbox (Podman until HUM-438) keeps the promise by
+# refusing the plan instead of starting directly on the project; the case of
+# the same name in escape_worktree.rs checks that refusal and turns red once
+# the backend offers a disposable sandbox and needs the real measurement.
 
 set -u
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -41,6 +64,13 @@ ESC_LIB="${ESC_LIB:-$HERE/lib.sh}"
 . "$ESC_LIB"
 
 DAEMON_DIR=${ESC_DAEMON_DIR:-$HERE/../../daemon}
+ESC_BACKEND=${ESC_BACKEND:-${HUMANITL_ESCAPE_BACKEND:-bwrap}}
+# The cargo flags of a backend that is not admitted (see above); none for bwrap.
+if [ "$ESC_BACKEND" = bwrap ]; then
+    ESC_BACKEND_FEATURES=""
+else
+    ESC_BACKEND_FEATURES="--features unadmitted-backends"
+fi
 # The marker the integration test prints when bwrap is missing.
 ESC_SKIP_MARKER="ESC5-SKIP"
 
@@ -59,25 +89,40 @@ esc_begin esc-5
 #                        single assertion.
 #   anything else        fail, with the output as evidence.
 worktree_case() {
-    cargo_case "$1" humanitl-sandbox escape_worktree
+    backend_case "$1" humanitl-sandbox escape_worktree
 }
 
 # terminal_case NAME — the same for the terminal of the sandbox (HUM-042).
 terminal_case() {
-    cargo_case "$1" humanitl-ipc terminal
+    backend_case "$1" humanitl-ipc terminal
 }
 
 # audit_case NAME — the same for the audit chain of a real daemon (HUM-050).
+# No backend: see the head of this file.
 audit_case() {
     cargo_case "$1" humanitld daemon_end_to_end
 }
 
-# cargo_case NAME PACKAGE TEST — run one integration test and judge it.
+# backend_case NAME PACKAGE TEST — a case that starts a sandbox, against the
+# backend of this run.
+backend_case() {
+    # Word splitting of the flags is intended: empty, or two words.
+    # shellcheck disable=SC2086
+    cargo_case "$1" "$2" "$3" $ESC_BACKEND_FEATURES
+}
+
+# cargo_case NAME PACKAGE TEST [CARGO FLAGS...] — run one integration test and
+# judge it.
 cargo_case() {
     esc_wt_name="$1"
+    esc_wt_pkg="$2"
+    esc_wt_test="$3"
+    shift 3
     esc_wt_out=$(
         cd "$DAEMON_DIR" 2>/dev/null || exit 127
-        cargo test -p "$2" --test "$3" \
+        # The tests read the backend from here; the audit cases ignore it.
+        HUMANITL_ESCAPE_BACKEND="$ESC_BACKEND" \
+            cargo test -p "$esc_wt_pkg" "$@" --test "$esc_wt_test" \
             -- --exact "$esc_wt_name" --nocapture 2>&1
     )
     esc_wt_code=$?
@@ -114,6 +159,10 @@ audit_case audit_truncate_is_detected
 # writes, deletes and plants a symlink out of /work in a disposable run, and
 # the project folder on the host stays byte for byte as it was; only the apply
 # afterwards writes, and never the symlink or a setuid bit.
-cargo_case a_disposable_sandbox_never_writes_to_the_project humanitl-sandbox launcher
+if [ "$ESC_BACKEND" = bwrap ]; then
+    cargo_case a_disposable_sandbox_never_writes_to_the_project humanitl-sandbox launcher
+else
+    worktree_case a_disposable_sandbox_never_writes_to_the_project
+fi
 
 esc_end

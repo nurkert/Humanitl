@@ -89,7 +89,7 @@ expect() {
 }
 
 heavy=(rust-check rust-test macos deps-lint proto-lint-and-gen flutter-analyze-test goldens
-  escape-tests e2e e2e-xvfb e2e-agent e2e-m4 e2e-m4-package parity-check)
+  escape-tests escape-tests-podman e2e e2e-xvfb e2e-agent e2e-m4 e2e-m4-package parity-check)
 all_false=("${heavy[@]/%/=false}")
 all_true=("${heavy[@]/%/=true}")
 
@@ -101,8 +101,8 @@ expect website_main --main --base "$base" website -- full=false "${all_false[@]}
 change backlog backlog/sprint-1.md '# Sprint 1, done' website/index.md '# x'
 expect backlog_main --main --base "$base" backlog -- full=false area-backlog=true rust-test=true \
   rust-check=false macos=false deps-lint=false proto-lint-and-gen=false flutter-analyze-test=false \
-  goldens=false escape-tests=false e2e=false e2e-xvfb=false e2e-agent=false e2e-m4=false \
-  e2e-m4-package=false parity-check=false
+  goldens=false escape-tests=false escape-tests-podman=false e2e=false e2e-xvfb=false \
+  e2e-agent=false e2e-m4=false e2e-m4-package=false parity-check=false
 change backlog_root BACKLOG.md '# Plan'
 expect backlog_root_file --base "$base" backlog_root -- area-backlog=true rust-test=true goldens=false
 # CHANGELOG.md allein ist der Commit eines Releases: alles (HUM-424).
@@ -114,13 +114,14 @@ change docs docs/CONFIG.md '# Config, new' README.md '# Humanitl, new'
 expect docs_main --main --base "$base" docs -- full=false area-docs=true \
   rust-test=true flutter-analyze-test=true deps-lint=true parity-check=true \
   rust-check=false macos=false goldens=false proto-lint-and-gen=false escape-tests=false \
-  e2e=false e2e-xvfb=false e2e-agent=false e2e-m4=false e2e-m4-package=false
+  escape-tests-podman=false e2e=false e2e-xvfb=false e2e-agent=false e2e-m4=false e2e-m4-package=false
 
 # App ohne macOS-Bezug: auf dem Zweig kein macOS, auf main schon. Ein ARB-Text,
 # der macOS nennt, ist kein macOS-Code.
 change app app/lib/main.dart 'void main() { run(); }' app/l10n/app_en.arb '{"hint": "Open it on macOS now"}'
 expect app_branch --base "$base" app -- area-app=true area-rust=false macos=false goldens=true \
-  flutter-analyze-test=true e2e-xvfb=true e2e-m4=true rust-check=false e2e=false escape-tests=false
+  flutter-analyze-test=true e2e-xvfb=true e2e-m4=true rust-check=false e2e=false escape-tests=false \
+  escape-tests-podman=false
 expect app_main --main --base "$base" app -- macos=true goldens=true rust-check=false
 
 # macOS-naher Code: Pfad, Inhalt (alt oder neu), Manifest.
@@ -130,7 +131,7 @@ change app_runner app/macos/Runner/MainFlutterWindow.swift 'class W {}'
 expect app_mac_path --base "$base" app_runner -- macos=true
 change rust_plain daemon/crates/proxy/src/lib.rs 'pub fn plain() { }'
 expect rust_plain_branch --base "$base" rust_plain -- area-rust=true macos=false rust-check=true \
-  rust-test=true escape-tests=true e2e=true e2e-agent=true goldens=false
+  rust-test=true escape-tests=true escape-tests-podman=true e2e=true e2e-agent=true goldens=false
 expect rust_plain_main --main --base "$base" rust_plain -- macos=true
 change rust_mac daemon/crates/sandbox/src/lib.rs 'mod seat;'
 expect rust_mac_old_content --base "$base" rust_mac -- macos=true

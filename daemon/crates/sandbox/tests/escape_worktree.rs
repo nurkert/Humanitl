@@ -12,6 +12,14 @@
 //! und endet grün — und `esc-5-filesystem.sh` macht daraus ein `skip`, kein
 //! `pass`. Ohne diesen Umweg läse „kein bwrap auf dieser Maschine" sich in der
 //! Auswertung wie „die Maske hat gehalten".
+//!
+//! **Jedes Backend (HUM-435).** Nennt `HUMANITL_ESCAPE_BACKEND` ein anderes
+//! Backend als das der Plattform, starten die Fälle genau dieses, über die
+//! Umgehung der Zulassung (`Backend::detect_unadmitted`);
+//! `esc-5-filesystem.sh` baut den Test dafür mit
+//! `--features unadmitted-backends`. Fehlt das verlangte Backend, ist das
+//! immer ein Fehlschlag, nie ein `skip`, und nie läuft der Fall still gegen
+//! ein anderes Backend.
 
 // Startet Sandboxen mit dem Linux-Backend (HUM-312).
 #![cfg(target_os = "linux")]
@@ -31,8 +39,8 @@ use humanitl_core::ids::{SandboxId, SessionId};
 use humanitl_sandbox::summary::SessionSummary;
 use humanitl_sandbox::worktree::{SnapshotLimits, snapshot};
 use humanitl_sandbox::{
-    BwrapBackend, LaunchOptions, PlanRequest, SandboxBackend, SandboxHandle, SandboxProfile,
-    SessionContext, StdioMode,
+    Backend, BwrapBackend, LaunchOptions, PLATFORM_BACKEND_NAME, PlanRequest, SandboxBackend,
+    SandboxHandle, SandboxProfile, SessionContext, StdioMode,
 };
 
 /// Die Zeile, an der `esc-5-filesystem.sh` einen übersprungenen Fall erkennt.
@@ -47,6 +55,36 @@ const PASSTHROUGH_SHIM: &str = "#!/bin/sh\n\
                                 if [ \"$1\" = \"--proxy-port\" ]; then shift 2; fi\n\
                                 if [ \"$1\" = \"--\" ]; then shift; fi\n\
                                 exec \"$@\"\n";
+
+/// Der echte Shim neben dem Testprogramm, für jedes andere Backend: Dessen
+/// Start wartet auf den Bericht des Shims aus der Sandbox, und ein Ersatz,
+/// der nur den Befehl startet, schickt keinen. `tests/escape/run.sh` legt den
+/// ausgelieferten Shim dorthin.
+fn real_shim() -> PathBuf {
+    let mut dir = std::env::current_exe().expect("test binary");
+    dir.pop();
+    if dir.ends_with("deps") {
+        dir.pop();
+    }
+    let shim = dir.join("humanitl-shim");
+    assert!(
+        shim.is_file(),
+        "{} is missing; tests/escape/run.sh puts the shim there",
+        shim.display()
+    );
+    shim
+}
+
+/// Die Variable, mit der die Escape-Suite das Backend nennt (HUM-435).
+const ESCAPE_BACKEND_ENV: &str = "HUMANITL_ESCAPE_BACKEND";
+
+/// Das Backend, das die Escape-Suite verlangt, wenn es nicht das der
+/// Plattform ist.
+fn requested_backend() -> Option<String> {
+    std::env::var(ESCAPE_BACKEND_ENV)
+        .ok()
+        .filter(|name| !name.is_empty() && name != PLATFORM_BACKEND_NAME)
+}
 
 struct Fixture {
     _dir: tempfile::TempDir,
@@ -85,10 +123,19 @@ impl Fixture {
         let ca_bundle = state.join("ca-bundle.crt");
         fs::write(&ca_bundle, b"-----BEGIN CERTIFICATE-----\n").expect("ca bundle");
         let shim = state.join("humanitl-shim");
-        // Über `common::write_program`: Die Datei wird gleich ausgeführt, und
-        // ein geerbter Schreib-Deskriptor eines anderen Fadens gäbe `ETXTBSY`
-        // (HUM-134).
-        common::write_program(&shim, PASSTHROUGH_SHIM);
+        // Über einen eigenen `cp`-Prozess wie in `common::write_program`: Die
+        // Datei wird gleich ausgeführt, und ein geerbter Schreib-Deskriptor
+        // eines anderen Fadens gäbe `ETXTBSY` (HUM-134).
+        if requested_backend().is_some() {
+            let status = std::process::Command::new("cp")
+                .arg(real_shim())
+                .arg(&shim)
+                .status()
+                .expect("cp runs");
+            assert!(status.success(), "copying the shim failed: {status}");
+        } else {
+            common::write_program(&shim, PASSTHROUGH_SHIM);
+        }
 
         Self {
             _dir: dir,
@@ -119,7 +166,8 @@ impl Fixture {
     }
 
     /// Das echte `bwrap`, oder `None` samt der Zeile, die ESC-5 als `skip`
-    /// liest.
+    /// liest. Verlangt die Escape-Suite ein anderes Backend, dieses
+    /// ([`requested`]).
     ///
     /// **Unter `CI` ist ein fehlendes `bwrap` ein Fehler.** Wer hier `None`
     /// bekommt, kehrt zurück, und ein zurückkehrender Test gilt dem Testläufer
@@ -130,9 +178,12 @@ impl Fixture {
     /// einer Entwicklermaschine darf `bwrap` fehlen, auf dem Runner nicht
     /// (dieselbe Regel wie `shim_contract.rs` und
     /// `daemon/bin/humanitl/tests/cli.rs`).
-    fn backend(&self) -> Option<BwrapBackend> {
+    fn backend(&self) -> Option<Backend> {
+        if let Some(name) = requested_backend() {
+            return Some(requested(&name, &self.paths));
+        }
         match BwrapBackend::detect(self.paths.clone()) {
-            Ok(backend) => Some(backend),
+            Ok(backend) => Some(Backend::from(backend)),
             Err(err) => {
                 assert!(
                     std::env::var_os("CI").is_none(),
@@ -151,6 +202,33 @@ impl Fixture {
     }
 }
 
+/// Das verlangte Backend über die Umgehung der Zulassung. Läuft es hier
+/// nicht, ist das ein Fehlschlag und kein `skip`: Wer es ausdrücklich nennt,
+/// will genau dieses geprüft haben (HUM-435, Akzeptanzkriterium 2).
+#[cfg(feature = "unadmitted-backends")]
+fn requested(name: &str, paths: &Paths) -> Backend {
+    Backend::detect_unadmitted(name, paths.clone(), &humanitl_config::SandboxRef::default())
+        .unwrap_or_else(|err| {
+            panic!(
+                "{ESCAPE_BACKEND_ENV}={name} asks for this backend, and it is not usable \
+                     here: {}",
+                err.why
+            )
+        })
+}
+
+/// Ohne das Feature gibt es die Umgehung nicht, und ein verlangtes Backend
+/// ist ein Fehler der Verdrahtung, kein `skip`: Sonst liefe der Fall still
+/// gegen ein anderes Backend.
+#[cfg(not(feature = "unadmitted-backends"))]
+fn requested(name: &str, _paths: &Paths) -> Backend {
+    panic!(
+        "{ESCAPE_BACKEND_ENV}={name} needs this test built with --features unadmitted-backends \
+         (tests/escape/esc-5-filesystem.sh passes it); without it the case would run against \
+         another backend"
+    );
+}
+
 fn profile() -> SandboxProfile {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../profiles/sandbox/default.toml");
     SandboxProfile::load(&path)
@@ -159,7 +237,7 @@ fn profile() -> SandboxProfile {
 
 /// Startet den Befehl in der Sandbox und liefert Ausgabe und die Pfade, über
 /// denen in diesem Lauf kein `tmpfs` lag.
-fn run(fx: &Fixture, backend: &BwrapBackend, command: &[&str]) -> (String, Vec<PathBuf>) {
+fn run(fx: &Fixture, backend: &Backend, command: &[&str]) -> (String, Vec<PathBuf>) {
     let session = fx.context(command);
     let options = LaunchOptions {
         stdio: StdioMode::Capture,
@@ -171,11 +249,17 @@ fn run(fx: &Fixture, backend: &BwrapBackend, command: &[&str]) -> (String, Vec<P
     let unprotected = plan.unprotected.clone();
     let handle: SandboxHandle = backend
         .launch(&plan)
-        .unwrap_or_else(|err| panic!("bwrap does not start: {}", err.why));
+        .unwrap_or_else(|err| panic!("{} does not start: {}", backend.name(), err.why));
     handle
         .wait_timeout(WAIT)
         .expect("the sandbox ends within the timeout")
-        .unwrap_or_else(|err| panic!("bwrap failed before the command ran: {}", err.why));
+        .unwrap_or_else(|err| {
+            panic!(
+                "{} failed before the command ran: {}",
+                backend.name(),
+                err.why
+            )
+        });
     let output = handle.output().expect("stdio was captured");
     (
         format!(
@@ -351,5 +435,60 @@ fn hooks_write_stays_in_sandbox() {
     assert!(
         bare.work.join(".git/hooks/pre-commit").exists(),
         "this is the declared gap: without a mount point the write reaches the host"
+    );
+}
+
+/// ESC-5 unter einem anderen Backend als dem der Plattform (HUM-435): Eine
+/// Wegwerf-Sandbox schreibt nie in das Projekt.
+///
+/// Unter dem Backend der Plattform misst `tests/launcher.rs` den Fall
+/// gleichen Namens am Overlay; dorthin ruft `esc-5-filesystem.sh` für dieses
+/// Backend. Ein Backend ohne Wegwerf-Sandbox (bis HUM-438 die
+/// Container-Engine) hält die Zusage, indem es den Plan verweigert, statt
+/// still direkt in das Projekt zu starten. Genau das prüft dieser Fall. Kann
+/// das Backend eine Wegwerf-Sandbox, ist der Fall rot: Dann braucht ESC-5 die
+/// echte Messung, nicht diese Verweigerung.
+#[test]
+fn a_disposable_sandbox_never_writes_to_the_project() {
+    if requested_backend().is_none() {
+        println!(
+            "{SKIP_MARKER} under the platform backend this case is tests/launcher.rs, measured \
+             at the overlay"
+        );
+        return;
+    }
+    let fx = Fixture::new();
+    fs::write(fx.work.join("keep.txt"), b"content\n").expect("write");
+    let Some(backend) = fx.backend() else {
+        return;
+    };
+    let layer = fx.work.parent().expect("parent").join("layer");
+    let session = fx.context(&["sh", "-c", "echo pwned > /work/keep.txt"]);
+    let options = LaunchOptions {
+        stdio: StdioMode::Capture,
+        disposable: Some(humanitl_sandbox::DisposableLayer::Overlay(
+            humanitl_sandbox::OverlayDirs {
+                upper: layer.join("upper"),
+                work: layer.join("work"),
+            },
+        )),
+        ..LaunchOptions::default()
+    };
+    let profile = profile();
+    let request = PlanRequest::new(&profile, &session, &options);
+    assert!(
+        backend.disposable_support(&request).is_err(),
+        "{} offers a disposable sandbox now; ESC-5 needs the real measurement for it \
+         instead of this refusal (HUM-438)",
+        backend.name()
+    );
+    assert!(
+        backend.plan(&request).is_err(),
+        "the plan of a disposable sandbox must be refused, never started directly on the project"
+    );
+    assert_eq!(
+        fs::read_to_string(fx.work.join("keep.txt")).expect("host file"),
+        "content\n",
+        "the project changed"
     );
 }

@@ -4,6 +4,8 @@
 #   ./tests/escape/run.sh                 run everything, fail on a red probe
 #   ESCAPE_ALLOW_FAIL=1 ./tests/escape/run.sh   report, but do not fail the build
 #   ESCAPE_SKIP_BUILD=1 ./tests/escape/run.sh   use the binaries as they are
+#   HUMANITL_ESCAPE_BACKEND=podman ./tests/escape/run.sh   the same suites against
+#                                         another sandbox backend (default bwrap)
 #
 # The command line, the daemon and the shim are built with cargo and read back
 # from the same target directory: CARGO_TARGET_DIR when it is set (a relative
@@ -31,6 +33,14 @@
 # ESCAPE_ALLOW_FAIL: a red probe fails the build. The switch stays for local
 # runs that want the report without the verdict.
 #
+# Since HUM-435 the suites run against every backend (tests/escape/launch.sh):
+# HUMANITL_ESCAPE_BACKEND names it, bwrap when it is unset. bwrap starts
+# through `humanitl sandbox run` as above; a level that is not admitted yet
+# (SANDBOX_048 for every user) starts through `escape-launch --backend`, the
+# one binary built with the cargo feature unadmitted-backends. The scripts in
+# the sandbox are the same; a backend is admissible only when every probe is
+# green against it.
+#
 # Since HUM-115 the daemon of the run resolves through a recording name server
 # (tests/escape/dns-stub.py, set through HUMANITL_RESOLVER__NAMESERVER), and
 # three cases after the suites in the sandbox read its log: ESC-3 proves from
@@ -54,6 +64,9 @@ case "${CARGO_TARGET_DIR:-}" in
 *)  TARGET_DIR="$ROOT/daemon/$CARGO_TARGET_DIR" ;;
 esac
 CLI="$TARGET_DIR/debug/humanitl"
+# The launcher for a backend that is not admitted yet (HUM-435).
+LAUNCHER="$TARGET_DIR/debug/escape-launch"
+ESCAPE_BACKEND="${HUMANITL_ESCAPE_BACKEND:-bwrap}"
 # The profile is named, not pointed at: `humanitl` refuses a path in
 # sandbox.profile so that a cloned repository cannot bring the policy of the
 # sandbox with it. The first place it looks is
@@ -89,29 +102,18 @@ rm -rf "$OUT"
 mkdir -p "$OUT" "$WORK" "$STATE"
 : > "$RESULTS"
 
-# One case, written straight into the summary, for things the suites themselves
-# cannot report because they never ran.
+# record_error, record_case and the way into the sandbox of each backend.
 harness_error=0
-record_error() {
-    printf 'RESULT %s %s error %s\n' "$1" "$2" "$3" >> "$RESULTS"
-    printf '  %-5s %-28s %s\n' error "$1/$2" "$3"
-    harness_error=1
-}
+# shellcheck source=tests/escape/launch.sh
+. "$HERE/launch.sh"
 
-# record_case SUITE NAME STATUS DETAIL — a case the host decides, in the same
-# fixed format the suites inside the sandbox write. Used for the two
-# properties of the shipped shim that can only be measured outside: that it is
-# statically linked and that it stays under 2 MB.
-#
-# The detail is squeezed onto one line and cut, exactly as esc_record in
-# lib.sh does it: `ldd` answers a dynamic binary with one line per library,
-# and a result line that grew a second line would be read as a case that never
-# ran.
-record_case() {
-    case_detail=$(printf '%s' "$4" | tr '\n\r\t' '   ' | cut -c 1-400)
-    printf 'RESULT %s %s %s %s\n' "$1" "$2" "$3" "$case_detail" >> "$RESULTS"
-    printf '  %-5s %-28s %s\n' "$3" "$1/$2" "$case_detail"
-}
+if ! escape_backend_valid "$ESCAPE_BACKEND"; then
+    record_error harness backend \
+        "HUMANITL_ESCAPE_BACKEND='$ESCAPE_BACKEND' is not a backend name (lower case letters, digits, dashes)"
+    sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
+    exit 2
+fi
+echo "escape: backend $ESCAPE_BACKEND, through $(escape_launcher_name)"
 
 # Ubuntu 24.04 ships an AppArmor restriction that makes an unprivileged bwrap
 # fail with "Permission denied" (HUM-002). On a CI runner sudo is passwordless;
@@ -185,9 +187,25 @@ if [ "${ESCAPE_SKIP_BUILD:-0}" != 1 ]; then
         sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
         exit 2
     fi
+    # The launcher of an unadmitted level, in a cargo call of its own: cargo
+    # unifies features over every package of one call, and humanitl and
+    # humanitld refuse to build against a sandbox crate with
+    # unadmitted-backends (humanitl_sandbox::UNADMITTED_BACKENDS_BUILT).
+    if [ "$ESCAPE_BACKEND" != bwrap ] &&
+        ! (cd "$ROOT/daemon" && CARGO_TARGET_DIR="$TARGET_DIR" cargo build \
+            -p humanitl-sandbox --features unadmitted-backends --bin escape-launch); then
+        record_error harness launcher_build "cargo build of escape-launch failed"
+        sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
+        exit 2
+    fi
 fi
 if [ ! -x "$CLI" ]; then
     record_error harness command_line "no humanitl binary at $CLI"
+    sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
+    exit 2
+fi
+if [ "$ESCAPE_BACKEND" != bwrap ] && [ ! -x "$LAUNCHER" ]; then
+    record_error harness launcher "no escape-launch binary at $LAUNCHER"
     sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
     exit 2
 fi
@@ -226,8 +244,9 @@ fi
 # suites measure the binary that ships and not a debug one.
 # Remove before copying: cargo hardlinks debug/humanitl-shim to its own copy
 # under debug/deps, and a `cp` over it would write through both.
-rm -f "$TARGET_DIR/debug/humanitl-shim"
-if ! cp "$SHIM" "$TARGET_DIR/debug/humanitl-shim"; then
+SHIM_INSTALLED="$TARGET_DIR/debug/humanitl-shim"
+rm -f "$SHIM_INSTALLED"
+if ! cp "$SHIM" "$SHIM_INSTALLED"; then
     record_error harness shim_install "cannot put the shim next to $CLI"
     sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
     exit 2
@@ -257,6 +276,12 @@ DAEMON="$TARGET_DIR/debug/humanitld"
 DAEMON_XDG="$OUT/daemon"
 DAEMON_RUNTIME="$STATE/runtime/humanitl"
 DAEMON_PROXY_SOCK="$DAEMON_RUNTIME/proxy/proxy.sock"
+# The daemon's CA and the bundle it writes, where humanitl_config::Paths puts
+# them; escape-launch gets them by name, the command line finds them itself.
+DAEMON_CA_DIR="$DAEMON_XDG/data/humanitl/ca"
+# The copy of the test profile in the daemon's own tree, the same file
+# `--profile test` resolves to.
+PROFILE_FILE="$DAEMON_XDG/config/humanitl/profiles/sandbox/$PROFILE_NAME.toml"
 mkdir -p "$STATE/runtime" "$DAEMON_XDG/data" "$DAEMON_XDG/config" "$DAEMON_XDG/home" \
     "$DAEMON_XDG/config/humanitl/profiles/sandbox"
 
@@ -289,6 +314,11 @@ stop_escape_daemon() {
 # The report of refused sockets (HUM-138): one more sandbox after the suites.
 # shellcheck source=tests/escape/refusals-proof.sh
 . "$HERE/refusals-proof.sh"
+
+# The configuration of the user's container engine (HUM-435): a hook it adds
+# must not run for a sandbox.
+# shellcheck source=tests/escape/engine-config-proof.sh
+. "$HERE/engine-config-proof.sh"
 
 # The order matters: the watcher asks the daemon, and the daemon may still ask
 # the stub until it has stopped.
@@ -357,8 +387,9 @@ if ! daemon_up; then
     exit 2
 fi
 echo "escape: daemon up (pid $daemon_pid), proxy socket $DAEMON_PROXY_SOCK"
+record_case harness backend pass "$ESCAPE_BACKEND, through $(escape_launcher_name)"
 
-# ESC-1 to ESC-3 run inside the sandbox, one bwrap per suite so that a suite
+# ESC-1 to ESC-3 run inside the sandbox, one sandbox per suite so that a suite
 # that kills its shell cannot take the others with it.
 for n in 1 2 3; do
     suite="esc-$n"
@@ -372,33 +403,14 @@ for n in 1 2 3; do
     # Redirection, not `| tee`: a pipeline hands back the exit code of its last
     # element, and the one that matters here is the launcher's.
     set +e
-    XDG_RUNTIME_DIR="$STATE/runtime" \
-        XDG_DATA_HOME="$DAEMON_XDG/data" \
-        XDG_CONFIG_HOME="$DAEMON_XDG/config" \
-        HOME="$DAEMON_XDG/home" \
-        "$CLI" -v sandbox run \
-        --profile "$PROFILE_NAME" \
-        --work "$WORK" \
-        --tests-dir "$HERE" \
-        -- /bin/sh "/tests/escape/$script" > "$OUT/$suite.log" 2>&1
+    escape_sandbox_run "$OUT/$suite.log" /bin/sh "/tests/escape/$script"
     launch_code=$?
     set -e
     if [ "$n" = 3 ]; then
         dns_watch_stop
     fi
     cat "$OUT/$suite.log"
-
-    file="$WORK/results/$suite.txt"
-    if [ ! -f "$file" ]; then
-        record_error "$suite" sandbox_not_started \
-            "humanitl sandbox run exited $launch_code and left no result file; see target/escape/$suite.log"
-        continue
-    fi
-    if ! grep -q "^SUITE-DONE $suite " "$file"; then
-        record_error "$suite" sandbox_died \
-            "the suite stopped before its last case; see target/escape/$suite.log"
-    fi
-    grep '^RESULT ' "$file" >> "$RESULTS" || true
+    escape_collect "$suite" "$launch_code"
 done
 
 # The host half of ESC-3 (HUM-115): the log of the recording name server,
@@ -409,6 +421,9 @@ dns_host_cases
 echo "== esc-1 refusals (one more sandbox) =="
 refusals_case
 
+# ESC-2, host half (HUM-435): the user's engine configuration stayed out.
+engine_config_case
+
 # ESC-4 and ESC-5 run on the host, and before the daemon is stopped. ESC-4 asks
 # the rule engine (HUM-022), which decides before anything leaves the machine
 # and needs no isolation to be measured, and it asks the running proxy what it
@@ -416,13 +431,16 @@ refusals_case
 # sandbox carries, with the same bytes curl would send. ESC-5 runs integration
 # tests of the daemon crates: the work tree and the terminal of the sandbox,
 # and the audit chain of a real daemon (HUM-050). Neither depends on this
-# launcher run, so neither disappears behind a sandbox failure.
+# launcher run, so neither disappears behind a sandbox failure. ESC-5 gets the
+# backend of this run (ESC_BACKEND): its work tree and terminal cases start
+# that backend themselves, built with unadmitted-backends when it is not bwrap.
 for n in 4 5; do
     suite="esc-$n"
     script=$(ls "$HERE/$suite-"*.sh)
     echo "== $suite (on the host) =="
     set +e
     ESC_OUT_DIR="$WORK/results" ESC_RESULTS= \
+        ESC_BACKEND="$ESCAPE_BACKEND" \
         ESC_PROXY_SOCK="$DAEMON_PROXY_SOCK" \
         ESC_BODY_CAP="$ESCAPE_BODY_CAP" \
         ESC_CLI="$CLI" \
@@ -458,6 +476,7 @@ errored=$(count_status error)
 
 echo
 echo "== escape summary =="
+echo "  backend $ESCAPE_BACKEND"
 echo "  cases   $total"
 echo "  passed  $passed"
 echo "  failed  $failed"

@@ -197,6 +197,137 @@ else
     fi
 fi
 
+# --- the way into the sandbox, per backend (HUM-435) ---------------------------
+#
+# run.sh starts every suite through escape_sandbox_run in launch.sh and reads
+# the result back with escape_collect. Both run here against stand-ins for the
+# command line and for escape-launch, which write down their arguments: with
+# HUMANITL_ESCAPE_BACKEND=podman the suite must go through escape-launch with
+# that backend and the daemon's socket, never through the command line, and a
+# launcher that cannot start the backend must leave an error, never a pass or
+# a skip. The host half of the engine probes (engine-config-proof.sh) is
+# checked the same way.
+
+ST_LAUNCH="$TMP/launch"
+mkdir -p "$ST_LAUNCH/bin" "$ST_LAUNCH/work/results" "$ST_LAUNCH/engine"
+cat > "$ST_LAUNCH/bin/humanitl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$STANDIN_LOG.cli"
+exit 0
+EOF
+cat > "$ST_LAUNCH/bin/escape-launch" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$STANDIN_LOG.launcher"
+if [ "$STANDIN_MODE" = results ]; then
+    printf 'RESULT esc-9 standin pass ok\nSUITE-DONE esc-9 1\n' > "$STANDIN_WORK/results/esc-9.txt"
+    exit 0
+fi
+echo "escape-launch: SANDBOX_034: the backend is not available on this machine" >&2
+exit 3
+EOF
+chmod +x "$ST_LAUNCH/bin/humanitl" "$ST_LAUNCH/bin/escape-launch"
+
+launch_failures=$(
+    RESULTS="$ST_LAUNCH/results.txt"
+    : > "$RESULTS"
+    harness_error=0
+    # shellcheck source=tests/escape/launch.sh
+    . "$HERE/launch.sh"
+    # shellcheck source=tests/escape/engine-config-proof.sh
+    . "$HERE/engine-config-proof.sh"
+    CLI="$ST_LAUNCH/bin/humanitl"
+    LAUNCHER="$ST_LAUNCH/bin/escape-launch"
+    PROFILE_NAME=test
+    PROFILE_FILE="$ST_LAUNCH/profiles/test.toml"
+    WORK="$ST_LAUNCH/work"
+    STATE="$ST_LAUNCH/state"
+    DAEMON_XDG="$ST_LAUNCH/daemon"
+    DAEMON_PROXY_SOCK="$ST_LAUNCH/state/runtime/humanitl/proxy/proxy.sock"
+    DAEMON_CA_DIR="$ST_LAUNCH/daemon/data/humanitl/ca"
+    SHIM_INSTALLED="$ST_LAUNCH/bin/humanitl-shim"
+    STANDIN_LOG="$ST_LAUNCH/argv"
+    STANDIN_WORK="$WORK"
+    export STANDIN_LOG STANDIN_WORK STANDIN_MODE
+    n=0
+    bad() {
+        echo "selftest: $*" >&2
+        n=$((n + 1))
+    }
+
+    for name in bwrap podman podman-krun; do
+        escape_backend_valid "$name" || bad "escape_backend_valid refuses '$name'"
+    done
+    for name in "" Podman "-x" "a b" "a;b" "../x"; do
+        ! escape_backend_valid "$name" || bad "escape_backend_valid accepts '$name'"
+    done
+
+    # Another backend: escape-launch with that backend, a suite that reports.
+    ESCAPE_BACKEND=podman
+    STANDIN_MODE=results
+    escape_sandbox_run "$ST_LAUNCH/esc-9.log" /bin/sh /tests/escape/esc-9.sh
+    code=$?
+    escape_collect esc-9 "$code" > /dev/null
+    [ "$code" = 0 ] || bad "the stand-in launcher exited $code"
+    [ ! -e "$STANDIN_LOG.cli" ] || bad "HUMANITL_ESCAPE_BACKEND=podman went through the command line"
+    for want in "--backend podman " "--proxy-socket $DAEMON_PROXY_SOCK " "--shim $SHIM_INSTALLED " \
+        "--state $STATE " "--tests-dir $HERE " "-- /bin/sh /tests/escape/esc-9.sh"; do
+        grep -qF -- "$want" "$STANDIN_LOG.launcher" 2>/dev/null ||
+            bad "escape-launch was not called with '$want': $(cat "$STANDIN_LOG.launcher" 2>/dev/null)"
+    done
+    grep -qx 'RESULT esc-9 standin pass ok' "$RESULTS" || bad "escape_collect lost the result of esc-9"
+    [ "$harness_error" = 0 ] || bad "a suite that reported set harness_error"
+
+    # The backend cannot start: an error, never a pass or a skip.
+    rm -f "$WORK/results/esc-9.txt"
+    : > "$RESULTS"
+    STANDIN_MODE=unavailable
+    escape_sandbox_run "$ST_LAUNCH/esc-9.log" /bin/sh /tests/escape/esc-9.sh
+    code=$?
+    escape_collect esc-9 "$code" > /dev/null
+    [ "$code" = 3 ] || bad "the unavailable stand-in exited $code, expected 3"
+    awk '$1 == "RESULT" && $2 == "esc-9" && $3 == "sandbox_not_started" && $4 == "error" { found = 1 }
+        END { exit !found }' "$RESULTS" ||
+        bad "a backend that does not start is not an error: $(cat "$RESULTS")"
+    grep -q 'escape-launch --backend podman exited 3' "$RESULTS" ||
+        bad "the error does not name the launcher: $(cat "$RESULTS")"
+    [ "$(awk '$4 == "pass" || $4 == "skip"' "$RESULTS")" = "" ] ||
+        bad "a backend that does not start left a pass or a skip: $(cat "$RESULTS")"
+    [ "$harness_error" = 1 ] || bad "a backend that does not start did not set harness_error"
+
+    # bwrap: the command line, the user's path, and never escape-launch.
+    rm -f "$STANDIN_LOG.launcher"
+    ESCAPE_BACKEND=bwrap
+    escape_sandbox_run "$ST_LAUNCH/esc-9.log" /bin/sh /tests/escape/esc-9.sh
+    grep -qxF -- "-v sandbox run --profile test --work $WORK --tests-dir $HERE -- /bin/sh /tests/escape/esc-9.sh" \
+        "$STANDIN_LOG.cli" 2>/dev/null || bad "bwrap did not go through humanitl sandbox run"
+    [ ! -e "$STANDIN_LOG.launcher" ] || bad "bwrap went through escape-launch"
+
+    # engine_hook_not_run: nothing for bwrap without a planted configuration, a
+    # skip for an engine, red without the proof of planting or with the marker.
+    engine_verdict() {
+        : > "$RESULTS"
+        engine_config_case > /dev/null
+        awk '$3 == "engine_hook_not_run" { print $4 }' "$RESULTS"
+    }
+    unset HUMANITL_ESCAPE_ENGINE_CANARY_DIR
+    ESCAPE_BACKEND=bwrap
+    [ "$(engine_verdict)" = "" ] || bad "engine_hook_not_run recorded for bwrap without a planted configuration"
+    ESCAPE_BACKEND=podman
+    [ "$(engine_verdict)" = skip ] || bad "engine_hook_not_run without a planted configuration is not a skip"
+    HUMANITL_ESCAPE_ENGINE_CANARY_DIR="$ST_LAUNCH/engine"
+    [ "$(engine_verdict)" = fail ] || bad "engine_hook_not_run without the proof of planting is not red"
+    : > "$ST_LAUNCH/engine/planted"
+    [ "$(engine_verdict)" = pass ] || bad "engine_hook_not_run with a planted configuration and no marker is not green"
+    : > "$ST_LAUNCH/engine/hook-ran"
+    [ "$(engine_verdict)" = fail ] || bad "engine_hook_not_run with the marker of the hook is not red"
+
+    echo "$n"
+)
+if [ "${launch_failures:-1}" != 0 ]; then
+    echo "selftest: the way into the sandbox per backend has ${launch_failures:-an unknown number of} problem(s)" >&2
+    selftest_failures=$((selftest_failures + 1))
+fi
+
 # --- assert that junit.sh turns them into well-formed XML ---------------------
 
 if ! sh "$HERE/junit.sh" "$ESC_RESULTS" > "$TMP/escape.xml"; then
@@ -238,4 +369,4 @@ if [ "$selftest_failures" -ne 0 ]; then
     exit 1
 fi
 
-echo "selftest: ok (28 cases, junit.sh well-formed, $socket_probe_note)"
+echo "selftest: ok (28 cases, junit.sh well-formed, $socket_probe_note, the launcher of each backend checked)"
