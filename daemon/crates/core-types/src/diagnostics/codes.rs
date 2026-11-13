@@ -84,7 +84,8 @@ pub static AREAS: &[AreaInfo] = &[
                der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel \
                (HUM-070), 019-020 der Zugangsschlüssel des Modells (HUM-140, \
                Bereich dafür bis 029 erweitert), 021 die gespeicherten \
-               Modellserver (HUM-289)",
+               Modellserver (HUM-289), 022 der Server des Projekts (HUM-405), \
+               023 ein entfallener Wert einer Einstellung (HUM-464)",
     },
     AreaInfo {
         area: "sandbox",
@@ -95,8 +96,9 @@ pub static AREAS: &[AreaInfo] = &[
                019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043), \
                030-032 Wegwerf-Sandbox (HUM-350), 033 Vorgabe fällt auf direkt zurück \
                (HUM-357), 034-036 und 048 Wahl des Backends, Untergrenze der Isolation und \
-               Zulassung (HUM-431, Bereich dafür bis 059 erweitert), 037-047 und 049 Podman \
-               (Sprint 7), 050 Dienstverwalter des Nutzers (HUM-434)",
+               Zulassung (HUM-431, Bereich dafür bis 059 erweitert), 037-044 und 049 Podman \
+               (Sprint 7), 045-047 die Kernel-Stufe (HUM-464), 050 Dienstverwalter des \
+               Nutzers (HUM-434)",
     },
     AreaInfo {
         area: "proxy",
@@ -1705,9 +1707,9 @@ registry! {
         "The sandbox profile requires the backend it names under `[sandbox] backend`, and the configuration chose a different one. The start stops; the profile does not override the choice, and the choice does not override the profile.",
         "`ChangeSetting` on `sandbox.backend` with the backend of the profile when that one is admitted; otherwise choose a sandbox profile without a fixed backend (`sandbox.profile`).";
     /// `sandbox.backend` names a level that is not admitted yet: since HUM-448
-    /// only `podman` with `krun`, until its escape suite is green in CI
-    /// (HUM-449). Every start path refuses it; only the escape suite and
-    /// tests start it, through code (HUM-431).
+    /// only the VM backend of the kernel level, until its escape suite is
+    /// green in CI (HUM-449). Every start path refuses it; only the escape
+    /// suite and tests start it, through code (HUM-431).
     SANDBOX_048 => "sandbox", "Sandbox backend not admitted yet", "#sandbox_048",
         "`sandbox.backend` names an isolation level that is not admitted yet. A backend becomes selectable only after its mount check and the escape suite against it are green in CI; until then every start refuses it, whether it comes from `config.toml`, the environment, a profile or the start of a session.",
         "`ChangeSetting` on `sandbox.backend` = `auto`, the admitted backend of this system.";
@@ -1782,6 +1784,34 @@ registry! {
     SANDBOX_050 => "sandbox", "User service manager unreachable", "#sandbox_050",
         "The daemon runs under its hardened user unit, where a rootless container engine cannot map its user namespace. It therefore starts the engine as a transient unit of the user's service manager instead of loosening its own hardening, and that manager did not answer, is older than systemd 254, or `systemd-run` or `systemctl` is missing. The start stops and never takes another backend.",
         "`CopyCommand` with `systemctl --user status`, which shows whether the user's service manager runs and answers.";
+    // HUM-464: the kernel level as its own VM backend (ADR-0021).
+    /// A setting holds a value that an earlier version accepted and that is
+    /// gone: the OCI runtime of the kernel level under the container engine,
+    /// replaced by the VM backend of its own (ADR-0021). Refused at load
+    /// from every layer, never silently replaced by another value (HUM-464).
+    CONFIG_023 => "config", "Setting value retired", "#config_023",
+        "`sandbox.podman.runtime` (from `config.toml`, a profile, the environment or the start of a session) names the runtime of the kernel level that the container engine no longer offers. The kernel level is a backend of its own now; the configuration does not load until the value is gone.",
+        "`ChangeSetting` on `sandbox.backend` = `qemu`, the backend of the kernel level, and remove `sandbox.podman.runtime`.";
+    /// A prerequisite of the kernel level is missing on this host: `/dev/kvm`
+    /// not readable and writable, a program of the VM backend or one of its
+    /// capabilities (read from the program's help, not from a version
+    /// number), bubblewrap without `--bind-fd`, an unreadable kernel image or
+    /// a missing module directory (HUM-464).
+    SANDBOX_045 => "sandbox", "Kernel level prerequisite missing", "#sandbox_045",
+        "The kernel level starts a micro VM with a guest kernel of its own and needs on this host: `/dev/kvm` readable and writable for this user, the machine emulator with the machine type and vsock device it uses, the file system daemon with `--readonly` and `--fd`, the vsock device with `--uds-path` and `--groups`, bubblewrap with `--bind-fd`, a readable kernel image and the module directory of that kernel. The sentence names the first one that is missing; nothing starts, and no other backend takes over.",
+        "`CopyCommand` with the package that brings the missing piece (for `/dev/kvm` the command that adds this user to the group `kvm`), or `ChangeSetting` on the setting under `sandbox.qemu` that names the path.";
+    /// The door of the kernel level could not be set up: the vsock device of
+    /// the session or the one listener the daemon opens behind it is missing
+    /// (HUM-464, built by HUM-444).
+    SANDBOX_046 => "sandbox", "Kernel level door not set up", "#sandbox_046",
+        "The only way out of the micro VM is one vsock port that the daemon forwards to the proxy socket of the session. The vsock device process of the session did not come up, or the daemon could not open its one listener behind it. The session does not start.",
+        "No automatic fix; the sentence names the step that failed. `humanitl doctor` checks the prerequisites of the kernel level.";
+    /// The host-side check of the virtual machine monitor failed: a process
+    /// of the session sees more than `lo`, the monitor holds a descriptor or
+    /// a socket that the plan does not explain (HUM-464, built by HUM-444).
+    SANDBOX_047 => "sandbox", "Host check of the VM monitor failed", "#sandbox_047",
+        "After the start the daemon checks the processes of the session from the host: each sees only `lo`, the monitor holds only the descriptors of the plan, and the runtime directory of the session holds only the declared sockets. One of these did not hold; the session was stopped.",
+        "No automatic fix; the sentence names what was found. `ChangeSetting` on `sandbox.backend` = `auto` and report the sentence.";
 }
 
 /// Sucht einen Code im Register.

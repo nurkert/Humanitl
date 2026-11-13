@@ -997,11 +997,14 @@ fn engine_absent(fixture: &Fixture, lines: &str) {
 /// Seit HUM-448 kommt die gemeinsame Stufe über einen Wunsch beim Start
 /// (`cli_overrides`, HUM-431) an der Zulassung vorbei: Der Start plant mit
 /// der Engine aus `config.toml`, einer Attrappe, die es nicht gibt, und
-/// scheitert erst an der Tür, die dieser Test nicht bindet. Die Kernel-Stufe scheitert
-/// weiter mit `SANDBOX_048`, aus `config.toml` beim Start, in der Vorschau
-/// und beim Ziehen eines Abbilds; den Wunsch über den Start prüft
+/// scheitert erst an der Tür, die dieser Test nicht bindet. Das VM-Backend
+/// der Kernel-Stufe scheitert mit `SANDBOX_048`, aus `config.toml` beim
+/// Start, in der Vorschau und beim Ziehen eines Abbilds; den Wunsch über den
+/// Start prüft
 /// `the_start_takes_backend_and_runtime_and_measures_them_against_the_floor`.
-/// Nie startet stattdessen das Backend des Systems.
+/// Die frühere Laufzeit der Kernel-Stufe unter der Engine lädt seit HUM-464 gar
+/// nicht mehr (`CONFIG_023`). Nie startet stattdessen das Backend des
+/// Systems.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_shared_stage_is_admitted_and_the_kernel_stage_is_refused_on_every_path() {
     let fixture = Fixture::live();
@@ -1040,6 +1043,19 @@ async fn the_shared_stage_is_admitted_and_the_kernel_stage_is_refused_on_every_p
 
     let fixture = Fixture::live();
     fixture.user_config("[sandbox]\nbackend = \"podman\"\n[sandbox.podman]\nruntime = \"krun\"\n");
+    let seen = fixture.run(v1::sandbox_request::Start::default()).await;
+    assert!(
+        codes(&seen).contains(&"CONFIG_023".to_owned()),
+        "{:?}",
+        codes(&seen)
+    );
+    assert!(failed(&seen), "{seen:?}");
+
+    let fixture = Fixture::live();
+    fixture.user_config(&format!(
+        "[sandbox]\nbackend = \"{}\"\n",
+        humanitl_sandbox::VM_BACKEND
+    ));
     let seen = fixture.run(v1::sandbox_request::Start::default()).await;
     assert!(
         codes(&seen).contains(&"SANDBOX_048".to_owned()),
@@ -1193,10 +1209,11 @@ fn with_overrides(pairs: &[(&str, &str)]) -> v1::sandbox_request::Start {
 /// Die Erlaubnisliste des Start-RPC trägt für das Backend genau
 /// `sandbox.backend` und `sandbox.podman.runtime` (HUM-432). Ein Wunsch nach
 /// Podman unter der Untergrenze `kernel` ist `SANDBOX_035`, bevor die
-/// Zulassung gefragt wird; mit `krun` liegt die Stufe nicht darunter und
-/// scheitert erst an der Zulassung (`SANDBOX_048`), was zeigt, dass die
-/// Laufzeit ankommt. Jeder andere Schlüssel von `sandbox.podman` bleibt
-/// `CONFIG_003`.
+/// Zulassung gefragt wird; das VM-Backend der Kernel-Stufe liegt nicht
+/// darunter und scheitert erst an der Zulassung (`SANDBOX_048`). Die frühere
+/// Laufzeit der Kernel-Stufe kommt als Wunsch an und lädt nicht
+/// (`CONFIG_023`, HUM-464). Jeder andere Schlüssel von `sandbox.podman`
+/// bleibt `CONFIG_003`.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_start_takes_backend_and_runtime_and_measures_them_against_the_floor() {
     let fixture = Fixture::live();
@@ -1217,10 +1234,10 @@ async fn the_start_takes_backend_and_runtime_and_measures_them_against_the_floor
     assert!(failed(&seen), "{seen:?}");
 
     let seen = fixture
-        .run(with_overrides(&[
-            ("sandbox.backend", "podman"),
-            ("sandbox.podman.runtime", "krun"),
-        ]))
+        .run(with_overrides(&[(
+            "sandbox.backend",
+            humanitl_sandbox::VM_BACKEND,
+        )]))
         .await;
     assert!(
         codes(&seen).contains(&"SANDBOX_048".to_owned()),
@@ -1229,6 +1246,19 @@ async fn the_start_takes_backend_and_runtime_and_measures_them_against_the_floor
     );
     assert!(
         !codes(&seen).contains(&"SANDBOX_035".to_owned()),
+        "{:?}",
+        codes(&seen)
+    );
+    assert!(failed(&seen), "{seen:?}");
+
+    let seen = fixture
+        .run(with_overrides(&[
+            ("sandbox.backend", ENGINE),
+            ("sandbox.podman.runtime", "krun"),
+        ]))
+        .await;
+    assert!(
+        codes(&seen).contains(&"CONFIG_023".to_owned()),
         "{:?}",
         codes(&seen)
     );
@@ -1273,36 +1303,35 @@ async fn a_chosen_backend_that_is_not_there_fails_the_start_with_sandbox_034() {
 /// schickt genau diesen Wunsch.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_podman_runtime_wished_without_podman_refuses_the_start() {
-    for runtime in ["krun", "crun"] {
-        let fixture = Fixture::live();
-        let seen = fixture
-            .run(with_override("sandbox.podman.runtime", runtime))
-            .await;
-        assert!(
-            codes(&seen).contains(&"SANDBOX_034".to_owned()),
-            "{runtime}: {:?}",
-            codes(&seen)
-        );
-        assert!(failed(&seen), "{runtime}: {seen:?}");
-    }
-    // Mit der Engine gewählt kommt die Laufzeit an und scheitert erst an der
-    // Zulassung der Kernel-Stufe; die gemeinsame Stufe ist seit HUM-448
-    // zugelassen und hier deshalb nicht gefragt.
     let fixture = Fixture::live();
     let seen = fixture
-        .run(with_overrides(&[
-            ("sandbox.backend", "podman"),
-            ("sandbox.podman.runtime", "krun"),
-        ]))
+        .run(with_override("sandbox.podman.runtime", "crun"))
         .await;
     assert!(
-        codes(&seen).contains(&"SANDBOX_048".to_owned()),
+        codes(&seen).contains(&"SANDBOX_034".to_owned()),
         "{:?}",
         codes(&seen)
     );
-    assert!(
-        !codes(&seen).contains(&"SANDBOX_034".to_owned()),
-        "{:?}",
-        codes(&seen)
-    );
+    assert!(failed(&seen), "{seen:?}");
+    // Die frühere Laufzeit der Kernel-Stufe lädt gar nicht, mit oder ohne
+    // die Engine (HUM-464): `CONFIG_023` mit dem Weg zum VM-Backend, kein
+    // `SANDBOX_034` und kein `SANDBOX_048`.
+    for overrides in [
+        &[("sandbox.podman.runtime", "krun")][..],
+        &[
+            ("sandbox.backend", ENGINE),
+            ("sandbox.podman.runtime", "krun"),
+        ][..],
+    ] {
+        let fixture = Fixture::live();
+        let seen = fixture.run(with_overrides(overrides)).await;
+        let found = codes(&seen);
+        assert!(found.contains(&"CONFIG_023".to_owned()), "{found:?}");
+        assert!(
+            !found.contains(&"SANDBOX_034".to_owned())
+                && !found.contains(&"SANDBOX_048".to_owned()),
+            "{found:?}"
+        );
+        assert!(failed(&seen), "{seen:?}");
+    }
 }

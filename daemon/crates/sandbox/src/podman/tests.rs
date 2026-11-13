@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use humanitl_config::{PodmanConfig, PodmanRuntime};
+use humanitl_config::PodmanConfig;
 
 use super::*;
 
@@ -302,13 +302,6 @@ fn a_disposable_sandbox_is_refused_with_its_reason_and_auto_runs_direct() {
         notice.why
     );
     assert!(notice.fix.is_some());
-}
-
-#[test]
-fn krun_is_refused_with_sandbox_048_and_crun_passes() {
-    let err = refuse_kernel_level(PodmanRuntime::Krun).expect_err("krun");
-    assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
-    refuse_kernel_level(PodmanRuntime::Crun).expect("crun");
 }
 
 /// Plan und Vorschau ohne Podman: Die Zeile entsteht ohne die Engine, und
@@ -790,7 +783,7 @@ mod planned {
     }
 
     #[test]
-    fn disposable_an_unnamed_image_and_krun_are_refused_and_never_replaced() {
+    fn disposable_and_an_unnamed_image_are_refused_and_never_replaced() {
         let fx = Fixture::new(None);
         let profile = profile();
         let session = fx.context(&["true"]);
@@ -826,18 +819,6 @@ mod planned {
             .plan(&PlanRequest::new(&profile, &session, &options))
             .expect_err("image");
         assert_eq!(err.code.as_str(), "CONFIG_003", "{}", err.why);
-        let krun = PodmanBackend::fallback(
-            fx.paths.clone(),
-            &PodmanConfig {
-                runtime: PodmanRuntime::Krun,
-                ..PodmanConfig::default()
-            },
-        );
-        let err = krun
-            .plan(&PlanRequest::new(&profile, &session, &options))
-            .expect_err("krun");
-        assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
-        assert_eq!(krun.isolation(), IsolationLevel::Kernel);
         assert_eq!(backend.isolation(), IsolationLevel::Namespaces);
     }
 }

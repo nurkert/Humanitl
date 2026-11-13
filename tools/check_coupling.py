@@ -10,7 +10,7 @@ freezes it. A count may fall, never rise, and no new file may start using one
 of the names. When a count falls, the baseline has to follow
 (`--update`), otherwise the slack could be spent again unnoticed.
 
-Five rules:
+Six rules:
 
 * `bwrap` -- the string, in any case, outside the sandbox crate and the shim,
   inside identifiers (`BwrapBackend`) and comments included.
@@ -18,6 +18,10 @@ Five rules:
   outside the Podman adapter `daemon/crates/sandbox/src/podman/` (HUM-433),
   counted like `bwrap`: identifiers and comments included. The rest of the
   sandbox crate is not exempt; the port speaks of a container engine.
+* `qemu` -- `qemu`, `virtiofsd`, `vhost-device-vsock` (also with
+  underscores) and `microvm`, in any case, outside the adapter of the kernel
+  level `daemon/crates/sandbox/src/qemu/` (HUM-464, ADR-0021), counted like
+  `podman`. Elsewhere the code speaks of the kernel level or the VM backend.
 * `proxy_engine` -- a path into hyper, rustls, rcgen or their helpers outside
   the proxy crate. Zero today; it stays zero.
 * `proxy_crate` -- every item of `humanitl_proxy` referenced outside the proxy
@@ -72,6 +76,13 @@ RULES: dict[str, Rule] = {
         re.compile(r"podman|conmon|libkrun|krun|crun", re.IGNORECASE),
         ("daemon/crates/sandbox/src/podman/",),
         "Podman is one SandboxBackend; outside its adapter, name the neutral concept",
+    ),
+    # The VM backend of the kernel level (HUM-464). `vhost.device.vsock` takes
+    # the hyphen of the program and the underscore of its setting alike.
+    "qemu": Rule(
+        re.compile(r"qemu|virtiofsd|vhost.device.vsock|microvm", re.IGNORECASE),
+        ("daemon/crates/sandbox/src/qemu/",),
+        "QEMU is one SandboxBackend; outside its adapter, name the kernel level or the VM backend",
     ),
     "proxy_engine": Rule(
         re.compile(
@@ -274,7 +285,7 @@ def measure(root: Path) -> dict[str, dict[str, int]]:
         for rule_name, rule in RULES.items():
             if name.startswith(rule.allowed):
                 continue
-            if rule_name in ("bwrap", "podman"):
+            if rule_name in ("bwrap", "podman", "qemu"):
                 found = len(rule.pattern.findall(text))
             elif rule_name == "proxy_crate":
                 found = proxy_items(code)

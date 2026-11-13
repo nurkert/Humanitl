@@ -800,7 +800,8 @@ fn a_profile_cannot_declare_its_own_rule_bundled() {
 fn a_project_cannot_choose_the_backend_through_a_shadowing_profile() {
     for body in [
         "[config.sandbox]\nbackend = \"podman\"\n",
-        "[config.sandbox.podman]\nruntime = \"krun\"\n",
+        "[config.sandbox.podman]\nruntime = \"crun\"\n",
+        "[config.sandbox.qemu]\ncpus = 1\n",
     ] {
         let home = Home::new();
         home.write_profile("llm-only", body);

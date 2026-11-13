@@ -102,9 +102,9 @@ void main() {
                   )
                   ..runtimes.add(
                     pb.SandboxRuntime()
-                      ..name = 'krun'
+                      ..name = 'crun'
                       ..isolationLevel =
-                          pb.IsolationLevel.ISOLATION_LEVEL_KERNEL
+                          pb.IsolationLevel.ISOLATION_LEVEL_NAMESPACES
                       ..selected = true,
                   ),
               ))
@@ -115,7 +115,7 @@ void main() {
     expect(podman.isolation, IsolationLevel.namespaces);
     expect(podman.available, isFalse);
     expect(podman.diagnostics.single.code, 'SANDBOX_048');
-    expect(podman.runtimes.single.isolation, IsolationLevel.kernel);
+    expect(podman.runtimes.single.isolation, IsolationLevel.namespaces);
     expect(podman.runtimes.single.selected, isTrue);
   });
 

@@ -493,15 +493,18 @@ pub struct SandboxRef {
     /// Zusätzliche Umgebungsvariablen für die Sandbox; sie überschreiben gleichnamige Einträge aus dem `[env]` des Profils. Der Schlüssel lässt sich aus der Umgebung des Prozesses setzen und ist damit nur so vertrauenswürdig wie die Shell, aus der Humanitl startet; die Variablen des dynamischen Linkers (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) werden deshalb abgelehnt, sie liefen vor dem seccomp-Filter des Shims.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub env: BTreeMap<String, String>,
-    /// Welches Sandbox-Backend startet. `auto`, die Vorgabe, ist bubblewrap unter Linux und Seatbelt unter macOS. Ein gewähltes Backend fällt nie auf ein anderes zurück: Gibt es es auf diesem System nicht, lehnt der Start mit `SANDBOX_034` ab; liegt es unter `sandbox.min_isolation`, mit `SANDBOX_035`; verlangt das Sandbox-Profil ein anderes, mit `SANDBOX_036`. `podman` mit der Laufzeit `krun` ist noch nicht zugelassen: Jeder Start damit endet mit `SANDBOX_048`, bis die Escape-Suite gegen diese Stufe grün ist. Im Projekt-Profil gesperrt; ein Client darf den Schlüssel für eine Sitzung setzen (`cli_overrides`), die Untergrenze gilt auch dann.
+    /// Welches Sandbox-Backend startet. `auto`, die Vorgabe, ist bubblewrap unter Linux und Seatbelt unter macOS. Ein gewähltes Backend fällt nie auf ein anderes zurück: Gibt es es auf diesem System nicht, lehnt der Start mit `SANDBOX_034` ab; liegt es unter `sandbox.min_isolation`, mit `SANDBOX_035`; verlangt das Sandbox-Profil ein anderes, mit `SANDBOX_036`. `qemu`, die Kernel-Stufe unter Linux auf x86-64, ist noch nicht zugelassen: Jeder Start damit endet mit `SANDBOX_048`, bis die Escape-Suite gegen diese Stufe grün ist; unter macOS gibt es sie nicht. Im Projekt-Profil gesperrt; ein Client darf den Schlüssel für eine Sitzung setzen (`cli_overrides`), die Untergrenze gilt auch dann.
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "denied"))]
     pub backend: SandboxBackendName,
-    /// Die schwächste Isolationsstufe, mit der eine Sitzung starten darf: `policy` (eine Richtlinie des Kerns, Seatbelt), `namespaces` (eigene Namensräume über dem Kern des Hosts, bubblewrap und Podman mit `crun`) oder `kernel` (ein eigener Gastkern, Podman mit `krun`). Liegt das gewählte Backend darunter, lehnt der Start mit `SANDBOX_035` ab, statt ein anderes zu nehmen. Über alle Ebenen gilt der strengste Wert, nicht der oberste: Ein Projekt-Profil darf die Untergrenze heben, und weder ein Projekt noch die Umgebung noch die Kommandozeile senkt sie unter das, was eine andere Ebene verlangt.
+    /// Die schwächste Isolationsstufe, mit der eine Sitzung starten darf: `policy` (eine Richtlinie des Kerns, Seatbelt), `namespaces` (eigene Namensräume über dem Kern des Hosts, bubblewrap und Podman) oder `kernel` (ein eigener Gastkern in einer Micro-VM, das Backend `qemu`). Liegt das gewählte Backend darunter, lehnt der Start mit `SANDBOX_035` ab, statt ein anderes zu nehmen. Über alle Ebenen gilt der strengste Wert, nicht der oberste: Ein Projekt-Profil darf die Untergrenze heben, und weder ein Projekt noch die Umgebung noch die Kommandozeile senkt sie unter das, was eine andere Ebene verlangt.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub min_isolation: MinIsolation,
-    /// Einstellungen der Container-Engine als Backend (HUM-433). Sie wirken, wenn `sandbox.backend` die Engine wählt. Die Laufzeit der Stufe `namespaces` ist zugelassen; die der Stufe `kernel` lehnt jeder Start mit `SANDBOX_048` ab, bis die Escape-Suite gegen diese Stufe grün ist.
+    /// Einstellungen der Container-Engine als Backend (HUM-433). Sie wirken, wenn `sandbox.backend` die Engine wählt; ihre Stufe ist `namespaces` und zugelassen. Die Stufe `kernel` ist ein eigenes Backend mit der Gruppe `sandbox.qemu`.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub podman: PodmanConfig,
+    /// Einstellungen der Kernel-Stufe, einer Micro-VM mit eigenem Gastkern (HUM-464, ADR-0021). Sie wirken, wenn `sandbox.backend` sie wählt; bis zur Zulassung lehnt jeder Start sie mit `SANDBOX_048` ab, und die Liste der Backends prüft nur, ob ihre Voraussetzungen da sind.
+    #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
+    pub qemu: QemuConfig,
 }
 
 impl Default for SandboxRef {
@@ -515,6 +518,7 @@ impl Default for SandboxRef {
             backend: SandboxBackendName::Auto,
             min_isolation: MinIsolation::Policy,
             podman: PodmanConfig::default(),
+            qemu: QemuConfig::default(),
         }
     }
 }
@@ -542,11 +546,20 @@ pub enum SandboxBackendName {
     Podman,
     /// Seatbelt mit `sandbox-exec`, unter macOS.
     Seatbelt,
+    /// Die Kernel-Stufe: eine Micro-VM mit eigenem Gastkern, unter Linux auf
+    /// x86-64 (HUM-464, ADR-0021).
+    Qemu,
 }
 
 impl SandboxBackendName {
     /// Alle Namen, in der Reihenfolge des Schemas.
-    pub const ALL: [Self; 4] = [Self::Auto, Self::Bubblewrap, Self::Podman, Self::Seatbelt];
+    pub const ALL: [Self; 5] = [
+        Self::Auto,
+        Self::Bubblewrap,
+        Self::Podman,
+        Self::Seatbelt,
+        Self::Qemu,
+    ];
 }
 
 /// Die Untergrenze der Isolation in `sandbox.min_isolation` (HUM-431),
@@ -601,7 +614,7 @@ pub struct PodmanConfig {
     /// Das Programm `podman`, als absoluter Pfad. Leer heißt: die Suche im `PATH` des Daemons.
     #[schemars(extend("x-tier" = "expert", "x-project-scope" = "denied"))]
     pub program: Option<PathBuf>,
-    /// Die OCI-Laufzeit: `crun` teilt den Kern des Hosts (Stufe `namespaces`), `krun` startet einen eigenen Gastkern (Stufe `kernel`, braucht `/dev/kvm`).
+    /// Die OCI-Laufzeit: `crun`, die den Kern des Hosts teilt (Stufe `namespaces`). Einen eigenen Gastkern startet nicht Podman, sondern das Backend `qemu`; die frühere Laufzeit dafür lehnt das Laden mit `CONFIG_023` ab.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub runtime: PodmanRuntime,
     /// Die Wurzel der Sandbox: `host` ist ein leeres, nur lesbares Verzeichnis mit den Einhängungen des Sandbox-Profils, `image` ein lokales OCI-Abbild aus `sandbox.podman.image`, das ein Start nie zieht.
@@ -640,14 +653,16 @@ impl Default for PodmanConfig {
 }
 
 /// Die OCI-Laufzeit unter Podman (HUM-431).
+///
+/// Seit HUM-464 nur noch die des geteilten Kerns: Die Kernel-Stufe ist ein
+/// eigenes Backend (`sandbox.backend = "qemu"`, ADR-0021). Den früheren Wert
+/// lehnt das Laden mit `CONFIG_023` ab.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PodmanRuntime {
     /// Namensräume über dem geteilten Kern des Hosts.
     #[default]
     Crun,
-    /// Ein eigener Gastkern in einer Micro-VM.
-    Krun,
 }
 
 impl PodmanRuntime {
@@ -656,7 +671,95 @@ impl PodmanRuntime {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Crun => "crun",
-            Self::Krun => "krun",
+        }
+    }
+}
+
+/// Der Wert von `sandbox.podman.runtime`, den es bis HUM-464 gab: die
+/// Laufzeit der Kernel-Stufe unter Podman. Das Laden lehnt ihn aus jeder
+/// Ebene mit `CONFIG_023` ab und nennt den Weg zum Backend der Kernel-Stufe,
+/// statt ihn als unbekannten Wert (`CONFIG_003`) abzutun.
+pub(crate) const RETIRED_KERNEL_RUNTIME: &str = "krun";
+
+/// Die Einstellungen der Kernel-Stufe, Backend `qemu` (HUM-464, ADR-0021).
+///
+/// Wie unter [`PodmanConfig`] schwächt keiner der Werte eine der drei
+/// Garantien: Netz, Geräte, Gefängnisse der Hilfsprozesse und die eine Tür
+/// legt der Adapter fest (HUM-444), nicht die Konfiguration. Hier stehen nur
+/// die Grenzen der Ressourcen, der Kernel des Gasts und wo die Programme
+/// liegen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct QemuConfig {
+    /// Zahl der virtuellen CPUs der Micro-VM, mindestens 1 und höchstens die Zahl der CPUs, die der Daemon nutzen darf. Leer heißt: der Start leitet sie vom Host ab (die Hälfte seiner CPUs, mindestens 1, höchstens 4).
+    #[schemars(extend(
+        "x-tier" = "advanced",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-444"
+    ))]
+    pub cpus: Option<u32>,
+    /// Arbeitsspeicher der Micro-VM in MiB, mindestens 256 und höchstens der Arbeitsspeicher des Hosts. Leer heißt: der Start leitet ihn vom Host ab (die Hälfte seines Arbeitsspeichers, höchstens 4096).
+    #[schemars(extend(
+        "x-tier" = "advanced",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-444"
+    ))]
+    pub memory_mib: Option<u64>,
+    /// Das Kernel-Abbild des Gasts, als absoluter Pfad einer lesbaren Datei. Leer heißt: der Kernel des Hosts, `/boot/vmlinuz-` mit der Fassung aus `uname -r`.
+    #[schemars(extend(
+        "x-tier" = "expert",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-444"
+    ))]
+    pub kernel: Option<PathBuf>,
+    /// Das Verzeichnis der Module dieses Kernels, als absoluter Pfad; der Gast lädt daraus die Module für vsock und sperrt danach das Laden weiterer. Leer heißt: `/usr/lib/modules/` mit der Fassung des Kernels.
+    #[schemars(extend(
+        "x-tier" = "expert",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-444"
+    ))]
+    pub modules: Option<PathBuf>,
+    /// Sekunden, die ein Start auf den Gast wartet, bevor er abbricht, 1 bis 600.
+    #[schemars(extend(
+        "x-tier" = "expert",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-444"
+    ))]
+    pub start_timeout_secs: u64,
+    /// Der Emulator der Maschine (`qemu-system-x86_64`), als absoluter Pfad. Leer heißt: die Suche im `PATH` des Daemons.
+    #[schemars(extend(
+        "x-tier" = "expert",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-444"
+    ))]
+    pub qemu: Option<PathBuf>,
+    /// Der Dienst für die Dateisysteme des Gasts (`virtiofsd`), als absoluter Pfad. Leer heißt: die Suche im `PATH` des Daemons, danach `/usr/libexec/virtiofsd`.
+    #[schemars(extend(
+        "x-tier" = "expert",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-444"
+    ))]
+    pub virtiofsd: Option<PathBuf>,
+    /// Das vsock-Gerät der Tür (`vhost-device-vsock`), als absoluter Pfad. Leer heißt: die Suche im `PATH` des Daemons.
+    #[schemars(extend(
+        "x-tier" = "expert",
+        "x-project-scope" = "denied",
+        "x-pending-issue" = "HUM-444"
+    ))]
+    pub vhost_device_vsock: Option<PathBuf>,
+}
+
+impl Default for QemuConfig {
+    fn default() -> Self {
+        Self {
+            cpus: None,
+            memory_mib: None,
+            kernel: None,
+            modules: None,
+            start_timeout_secs: 30,
+            qemu: None,
+            virtiofsd: None,
+            vhost_device_vsock: None,
         }
     }
 }

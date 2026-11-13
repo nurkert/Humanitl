@@ -51,7 +51,12 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `38` seit der Wahl des Backends je Sitzung (HUM-440): `SandboxBackends`
+/// `39` seit dem VM-Backend der Kernel-Stufe (HUM-464): `SandboxBackendList`
+/// nennt unter Linux auf x86-64 ein drittes Backend mit der Stufe `kernel`,
+/// bis zu seiner Zulassung nicht verfügbar (`SANDBOX_048`, dazu `SANDBOX_045`
+/// mit der ersten fehlenden Voraussetzung), und die Container-Engine hat nur
+/// noch eine Laufzeit; die zweite, nie zugelassene, ist entfallen.
+/// `38` war die Wahl des Backends je Sitzung (HUM-440): `SandboxBackends`
 /// nimmt `SandboxBackendsRequest` statt `Empty` (auf der Leitung ohne
 /// gesetztes Feld dieselbe leere Nachricht); mit `plan` misst die Liste an
 /// der Konfiguration eines Starts mit diesem Plan samt Projekt-Profil,
@@ -214,7 +219,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 38;
+pub const PROTO_MINOR: u32 = 39;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

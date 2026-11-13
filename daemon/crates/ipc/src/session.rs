@@ -52,13 +52,15 @@
 //!   Garantien. Die Untergrenze ist kein Schlüssel der Liste, und über alle
 //!   Ebenen gilt dort ohnehin der strengste Wert.
 //! - `sandbox.podman.runtime` (HUM-432, `--podman-runtime`) wählt die
-//!   Laufzeit unter Podman und damit die Stufe (`podman/crun`,
-//!   `podman/krun`). [`humanitl_sandbox::choose_backend`] misst genau diese
-//!   Stufe an der Untergrenze und an der Zulassung, und jede zugelassene
-//!   Stufe hält die drei Garantien. Die Stufe schützen Untergrenze und
-//!   Zulassung, nicht die Richtung des Wunsches: Ohne Untergrenze kann der
-//!   Wunsch die Laufzeit aus `config.toml` auch senken, wie `sandbox.backend`
-//!   das Backend wechseln kann. Eine gewünschte Laufzeit ohne Podman lehnt
+//!   Laufzeit unter Podman und damit die Stufe; seit HUM-464 gibt es nur
+//!   noch `podman/crun`, die Kernel-Stufe ist ein eigenes Backend, und den
+//!   früheren Wert lehnt schon das Laden mit `CONFIG_023` ab.
+//!   [`humanitl_sandbox::choose_backend`] misst die Stufe an der Untergrenze
+//!   und an der Zulassung, und jede zugelassene Stufe hält die drei
+//!   Garantien. Die Stufe schützen Untergrenze und Zulassung, nicht die
+//!   Richtung des Wunsches: Ohne Untergrenze kann der Wunsch das Backend aus
+//!   `config.toml` auch gegen eines mit schwächerer Stufe tauschen. Eine
+//!   gewünschte Laufzeit ohne Podman lehnt
 //!   [`SessionResolver::resolve`] mit `SANDBOX_034` ab
 //!   ([`humanitl_sandbox::runtime_fits_backend`]). `humanitl run` schickt
 //!   auch die Wahl aus der Umgebung des Aufrufs (`HUMANITL_SANDBOX__BACKEND`,

@@ -256,7 +256,7 @@ launch_failures=$(
         n=$((n + 1))
     }
 
-    for name in bwrap podman podman-krun; do
+    for name in bwrap podman qemu; do
         escape_backend_valid "$name" || bad "escape_backend_valid refuses '$name'"
     done
     for name in "" Podman "-x" "a b" "a;b" "../x"; do

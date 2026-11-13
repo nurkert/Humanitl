@@ -320,7 +320,62 @@ fn probe_key(stage: &str, backend: &Backend) -> ProbeKey {
 
 #[cfg(test)]
 mod tests {
-    use super::BackendCheckId;
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use humanitl_config::{Env, Paths, SandboxBackendName, SandboxRef};
+
+    use super::{BackendCheckId, ProbeMode, group};
+    use crate::doctor::{CheckStatus, ProbeCache};
+
+    /// Für eine Stufe vor ihrer Zulassung liefert `doctor --probe`
+    /// `SANDBOX_048` und startet keinen Prozess: Jedes Programm im `PATH`
+    /// zählt seinen Aufruf in eine Datei, und die Datei entsteht nie. Seit
+    /// HUM-464 ist das das VM-Backend der Kernel-Stufe.
+    #[test]
+    fn before_admission_the_probe_is_refused_and_starts_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let calls = dir.path().join("calls");
+        for name in ["bwrap", "humanitl-shim"] {
+            crate::test_support::write_program(
+                &bin.join(name),
+                &format!("#!/bin/sh\necho \"$@\" >> '{}'\nexit 0\n", calls.display()),
+            );
+        }
+        let paths = Paths::new(Env::from_pairs([
+            ("HOME", dir.path().to_string_lossy().into_owned()),
+            ("PATH", bin.to_string_lossy().into_owned()),
+        ]));
+        let sandbox = SandboxRef {
+            backend: SandboxBackendName::Qemu,
+            ..SandboxRef::default()
+        };
+        let cache = ProbeCache::at(dir.path().join("doctor-probe.json"));
+        let mode = ProbeMode::Start {
+            shim: bin.join("humanitl-shim"),
+        };
+
+        let group = group(crate::VM_BACKEND, &sandbox, &paths, &mode, &cache);
+
+        assert!(group.selected);
+        assert_eq!(group.stage, crate::VM_BACKEND);
+        for id in [BackendCheckId::Admitted, BackendCheckId::Probe] {
+            let line = group.get(id).expect("the line is there");
+            assert_eq!(line.status(), CheckStatus::Warn, "{line:?}");
+            assert_eq!(
+                line.diagnostic().map(|d| d.code.as_str()),
+                Some("SANDBOX_048")
+            );
+        }
+        assert!(group.get(BackendCheckId::Available).is_none());
+        assert!(
+            !calls.exists(),
+            "a process was started: {:?}",
+            std::fs::read_to_string(&calls)
+        );
+        assert!(!cache.path().exists(), "nothing was probed, nothing cached");
+    }
 
     #[test]
     fn every_backend_check_id_is_snake_case_and_its_own() {

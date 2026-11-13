@@ -42,6 +42,8 @@ const DENIED_BY_CONVENTION: &[&str] = &[
     // erlaubt, weil dort der strengste Wert aller Ebenen gilt.
     "sandbox.backend",
     "sandbox.podman.*",
+    // HUM-464: die Gruppe der Kernel-Stufe aus demselben Grund.
+    "sandbox.qemu.*",
     "agent.adapter",
     "agent.command",
     "agent.pi.web_access",
@@ -554,12 +556,18 @@ fn the_rest_of_limits_stays_open_to_a_project_profile() {
 #[test]
 fn a_cloned_project_cannot_choose_the_backend_or_tune_podman() {
     let mut lines = vec!["sandbox.backend = \"podman\"".to_owned()];
-    let podman: Vec<&str> = schema::leaf_paths()
+    let engine: Vec<&str> = schema::leaf_paths()
         .into_iter()
         .filter(|path| path.starts_with("sandbox.podman."))
         .collect();
-    assert_eq!(podman.len(), 8, "{podman:?}");
-    for path in podman {
+    assert_eq!(engine.len(), 8, "{engine:?}");
+    // Die Gruppe der Kernel-Stufe ebenso (HUM-464).
+    let kernel_level: Vec<&str> = schema::leaf_paths()
+        .into_iter()
+        .filter(|path| path.starts_with("sandbox.qemu."))
+        .collect();
+    assert_eq!(kernel_level.len(), 8, "{kernel_level:?}");
+    for path in engine.into_iter().chain(kernel_level) {
         let field = schema::field(path).expect("a leaf");
         lines.push(format!("{path} = {}", sample_literal(field)));
     }
@@ -766,4 +774,92 @@ fn an_invalid_backend_or_floor_refuses_the_load_from_every_layer() {
         "{:?}",
         resolved.diagnostics
     );
+}
+
+/// Die frühere Laufzeit der Kernel-Stufe unter der Engine ist aus jeder Ebene
+/// `CONFIG_023`, mit dem Backend der Kernel-Stufe als Weg (HUM-464), und
+/// weder `CONFIG_003` noch eine Warnung, die den Wert der Ebene darunter
+/// gelten ließe.
+#[test]
+fn the_retired_runtime_is_refused_from_every_layer_with_the_way_to_the_kernel_level() {
+    let path = "sandbox.podman.runtime";
+    let retired = "krun";
+    let (group, key) = path.rsplit_once('.').expect("a dotted path");
+    let env_key = format!("HUMANITL_{}", path.to_uppercase().replace('.', "__"));
+    let scratch = Scratch::new();
+    let global = scratch.write(
+        "config.toml",
+        &format!("[{group}]\n{key} = \"{retired}\"\n"),
+    );
+    let profile = scratch.global_profile(&format!("{path} = \"{retired}\""));
+    let cases = [
+        (
+            "file",
+            Sources {
+                global_toml: Some(global),
+                ..Sources::empty()
+            },
+        ),
+        (
+            "env",
+            Sources::empty().with_env(Env::from_pairs([(env_key.as_str(), retired)])),
+        ),
+        ("cli", Sources::empty().with_cli([(path, retired)])),
+        (
+            "profile",
+            Sources {
+                profiles: vec![ProfileSource::File(profile)],
+                ..Sources::empty()
+            },
+        ),
+    ];
+    for (layer, sources) in cases {
+        let err = expect_err(&sources);
+        assert_eq!(err.code.as_str(), "CONFIG_023", "{layer}: {}", err.why);
+        assert!(err.why.contains(path), "{layer}: {}", err.why);
+        assert!(
+            err.why.contains("sandbox.backend = \"qemu\""),
+            "{}",
+            err.why
+        );
+        assert_eq!(
+            err.fix,
+            Some(humanitl_core::FixAction::ChangeSetting {
+                key: "sandbox.backend".to_owned(),
+                value: "qemu".to_owned(),
+            }),
+            "{layer}"
+        );
+    }
+    // Die Vorgabe bleibt der eine Wert und lädt.
+    let kept = schema::field(path).expect("a leaf").default_literal();
+    load(&Sources::empty().with_cli([(path, kept.trim_matches('"'))]))
+        .expect("the remaining runtime loads");
+}
+
+/// Die Kernel-Stufe erfüllt die Untergrenze `kernel`: Die Konfiguration
+/// lädt; dass ein Start sie bis zur Zulassung mit `SANDBOX_048` ablehnt,
+/// sagt die Wahl des Backends, nicht das Laden (HUM-464).
+#[test]
+fn the_kernel_level_with_the_kernel_floor_loads() {
+    let scratch = Scratch::new();
+    let global = scratch.write(
+        "config.toml",
+        "[sandbox]\nbackend = \"qemu\"\nmin_isolation = \"kernel\"\n\
+         [sandbox.qemu]\ncpus = 1\nmemory_mib = 256\nkernel = \"/boot/vmlinuz\"\n",
+    );
+    let resolved = load(&Sources {
+        global_toml: Some(global),
+        ..Sources::empty()
+    })
+    .expect("the kernel level meets the kernel floor");
+    assert_eq!(
+        resolved.config.sandbox.backend,
+        humanitl_config::SandboxBackendName::Qemu
+    );
+    assert_eq!(
+        resolved.config.sandbox.min_isolation,
+        humanitl_config::MinIsolation::Kernel
+    );
+    assert_eq!(resolved.config.sandbox.qemu.cpus, Some(1));
 }

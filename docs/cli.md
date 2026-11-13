@@ -53,7 +53,7 @@ agent runs inside it, and `humanitl run` ends with the agent's exit code.
 | `--llm URL` | `llm.endpoint` | The language model of this session. From it comes the declared passthrough: a rule in rank 1 that is not held and overtakes your own block rules, for the inference paths of this one host. It stands as a rule of its own in the list, under `http://humanitl.internal/` and in the recording. If the address is not in your own network according to its name, the start reports `LLM_006`; the session starts anyway. Nothing is resolved for this. |
 | `--llm NAME` | `llm.server` | One of the saved model servers for this run (HUM-400): a value without `://` is a name, not an address, and is the same as `--llm-server NAME`. It beats the server the project profile, a session profile or `llm.active` chooses, and only this server is the passthrough and gets its stored key. A name that is not saved refuses the start with `CONFIG_021`; there is no fallback to the active server. A daemon before contract 1.28 cannot take the choice and gets `CLI_004` instead of a start with another server. At the start `humanitl run` prints the server of the session and where the choice comes from (`[humanitl] llm server: work (chosen by the project profile …)`). |
 | `--backend auto\|bwrap\|podman\|seatbelt` | `sandbox.backend` | The sandbox backend of this run (HUM-432), the short name of `--sandbox-backend`. `auto` is bubblewrap on Linux and Seatbelt on macOS. A chosen backend never falls back to another one. See "Choosing the sandbox backend". |
-| `--podman-runtime crun\|krun` | `sandbox.podman.runtime` | The OCI runtime under Podman for this run, the short name of `--sandbox-podman-runtime`. It needs Podman as the backend; with any other backend the start ends with `SANDBOX_034` instead of running at another isolation level than the one asked for. `krun` is not admitted yet (`SANDBOX_048`). |
+| `--podman-runtime crun` | `sandbox.podman.runtime` | The OCI runtime under Podman for this run, the short name of `--sandbox-podman-runtime`. It needs Podman as the backend; with any other backend the start ends with `SANDBOX_034` instead of running at another isolation level than the one asked for. The kernel level is no runtime of Podman any more but the backend `qemu`; the earlier value `krun` is refused when the configuration loads (`CONFIG_023`). |
 | `-- CMD...` | `agent.command` | The command in the sandbox, instead of the agent from the configuration. `-- bash` is the way to look at the sandbox from the inside, and to start the agent by hand there (see "A shell for the agent"). |
 
 **Where the project directory comes from (HUM-293).** `humanitl run`,
@@ -335,7 +335,7 @@ BACKEND  ISOLATION   AVAILABLE  SELECTED
 bwrap    namespaces  yes        *
 podman   namespaces  yes
   crun   namespaces  yes        *
-  krun   kernel      no
+qemu     kernel      no
 ```
 
 `humanitl sandbox backends` asks the daemon (`SandboxBackends`) and starts
@@ -346,8 +346,8 @@ Under Podman the indented rows are its runtimes, with `*` at the one
 `sandbox.podman.runtime` chooses. Below the table stands, for every backend
 and runtime that is not available, the finding that stops it with its fix:
 a missing or too old program (`SANDBOX_034`, `SANDBOX_037`), missing
-subordinate IDs (`SANDBOX_039`), a level that is not admitted
-(`SANDBOX_048`). The floor `sandbox.min_isolation` goes to `stderr` as a
+subordinate IDs (`SANDBOX_039`), a missing prerequisite of the kernel level
+(`SANDBOX_045`), a level that is not admitted (`SANDBOX_048`). The floor `sandbox.min_isolation` goes to `stderr` as a
 note. With `--json` the list is one value with the same fields.
 
 The isolation levels:
@@ -358,11 +358,11 @@ The isolation levels:
   ([`SECURITY.md` section 13](SECURITY.md#13-linux-podman)).
 - `policy`: Seatbelt on macOS, where the kernel holds the process to a
   profile ([`SECURITY.md` section 12](SECURITY.md#12-macos-seatbelt-instead-of-bubblewrap)).
-- `kernel`: Podman with the runtime `krun`, a guest kernel of its own in a
-  micro-VM. This level is not admitted yet: every start with it, and every
-  pull under it, ends with `SANDBOX_048` until its escape suite is green in
-  CI (HUM-449). The list shows it so that the choice is visible, not because
-  it can run.
+- `kernel`: the backend `qemu`, a guest kernel of its own in a micro-VM,
+  on Linux on x86-64 (ADR-0021). This level is not admitted yet: every start
+  with it ends with `SANDBOX_048` until its escape suite is green in CI
+  (HUM-449). The list shows it so that the choice is visible, not because it
+  can run, and names the first missing prerequisite (`SANDBOX_045`).
 
 A chosen backend is never replaced by another one. If it is missing on this
 system, the start ends with `SANDBOX_034`; if its level lies below

@@ -118,8 +118,8 @@ On Linux you can choose rootless Podman with the runtime `crun` as a second sand
 (`--backend podman` or `sandbox.backend = "podman"`; `auto` stays bubblewrap): the same shim checks
 the same three guarantees, at the same isolation level as bubblewrap, `namespaces` over the shared
 host kernel ([`docs/SECURITY.md` section 13](docs/SECURITY.md#13-linux-podman)). A kernel of its
-own, Podman with `krun` in a micro-VM, is not available yet and every start with it is refused
-(`SANDBOX_048`); `humanitl sandbox backends` lists each backend with its level and what it lacks.
+own, the backend `qemu` with a micro-VM (ADR-0021), is not available yet and every start with it is
+refused (`SANDBOX_048`); `humanitl sandbox backends` lists each backend with its level and what it lacks.
 
 ### Check it yourself
 
@@ -502,7 +502,7 @@ export and a hash-chained audit log; pseudonymisation in the editor; settings, G
 a `.deb` and a tarball. Since then: macOS with a Seatbelt sandbox, a launchd agent and a disk image
 in every release (M12), and on Linux rootless Podman with `crun` as a backend to choose. Not in
 it: holding responses or WebSocket frames, HTTP/2 to the destination, a Docker backend, the micro-VM
-stage (`krun`, not admitted yet), a browser for the agent. What comes after the MVP is
+stage (backend `qemu`, not admitted yet), a browser for the agent. What comes after the MVP is
 listed in [`BACKLOG.md` section 9](BACKLOG.md#9-nach-dem-mvp-priorisiert).
 
 ### Project health

@@ -667,6 +667,16 @@
           "start_timeout_secs": 30
         },
         "profile": "default",
+        "qemu": {
+          "cpus": null,
+          "kernel": null,
+          "memory_mib": null,
+          "modules": null,
+          "qemu": null,
+          "start_timeout_secs": 30,
+          "vhost_device_vsock": null,
+          "virtiofsd": null
+        },
         "work_dir": null,
         "work_mode": "rw"
       },
@@ -674,7 +684,7 @@
       "properties": {
         "backend": {
           "default": "auto",
-          "description": "Welches Sandbox-Backend startet. `auto`, die Vorgabe, ist bubblewrap unter Linux und Seatbelt unter macOS. Ein gewähltes Backend fällt nie auf ein anderes zurück: Gibt es es auf diesem System nicht, lehnt der Start mit `SANDBOX_034` ab; liegt es unter `sandbox.min_isolation`, mit `SANDBOX_035`; verlangt das Sandbox-Profil ein anderes, mit `SANDBOX_036`. `podman` mit der Laufzeit `krun` ist noch nicht zugelassen: Jeder Start damit endet mit `SANDBOX_048`, bis die Escape-Suite gegen diese Stufe grün ist. Im Projekt-Profil gesperrt; ein Client darf den Schlüssel für eine Sitzung setzen (`cli_overrides`), die Untergrenze gilt auch dann.",
+          "description": "Welches Sandbox-Backend startet. `auto`, die Vorgabe, ist bubblewrap unter Linux und Seatbelt unter macOS. Ein gewähltes Backend fällt nie auf ein anderes zurück: Gibt es es auf diesem System nicht, lehnt der Start mit `SANDBOX_034` ab; liegt es unter `sandbox.min_isolation`, mit `SANDBOX_035`; verlangt das Sandbox-Profil ein anderes, mit `SANDBOX_036`. `qemu`, die Kernel-Stufe unter Linux auf x86-64, ist noch nicht zugelassen: Jeder Start damit endet mit `SANDBOX_048`, bis die Escape-Suite gegen diese Stufe grün ist; unter macOS gibt es sie nicht. Im Projekt-Profil gesperrt; ein Client darf den Schlüssel für eine Sitzung setzen (`cli_overrides`), die Untergrenze gilt auch dann.",
           "oneOf": [
             {
               "const": "auto",
@@ -695,6 +705,11 @@
               "const": "seatbelt",
               "description": "Seatbelt mit `sandbox-exec`, unter macOS.",
               "type": "string"
+            },
+            {
+              "const": "qemu",
+              "description": "Die Kernel-Stufe: eine Micro-VM mit eigenem Gastkern, unter Linux auf\nx86-64 (HUM-464, ADR-0021).",
+              "type": "string"
             }
           ],
           "x-project-scope": "denied",
@@ -712,7 +727,7 @@
         },
         "min_isolation": {
           "default": "policy",
-          "description": "Die schwächste Isolationsstufe, mit der eine Sitzung starten darf: `policy` (eine Richtlinie des Kerns, Seatbelt), `namespaces` (eigene Namensräume über dem Kern des Hosts, bubblewrap und Podman mit `crun`) oder `kernel` (ein eigener Gastkern, Podman mit `krun`). Liegt das gewählte Backend darunter, lehnt der Start mit `SANDBOX_035` ab, statt ein anderes zu nehmen. Über alle Ebenen gilt der strengste Wert, nicht der oberste: Ein Projekt-Profil darf die Untergrenze heben, und weder ein Projekt noch die Umgebung noch die Kommandozeile senkt sie unter das, was eine andere Ebene verlangt.",
+          "description": "Die schwächste Isolationsstufe, mit der eine Sitzung starten darf: `policy` (eine Richtlinie des Kerns, Seatbelt), `namespaces` (eigene Namensräume über dem Kern des Hosts, bubblewrap und Podman) oder `kernel` (ein eigener Gastkern in einer Micro-VM, das Backend `qemu`). Liegt das gewählte Backend darunter, lehnt der Start mit `SANDBOX_035` ab, statt ein anderes zu nehmen. Über alle Ebenen gilt der strengste Wert, nicht der oberste: Ein Projekt-Profil darf die Untergrenze heben, und weder ein Projekt noch die Umgebung noch die Kommandozeile senkt sie unter das, was eine andere Ebene verlangt.",
           "oneOf": [
             {
               "const": "policy",
@@ -768,7 +783,7 @@
             "runtime": "crun",
             "start_timeout_secs": 30
           },
-          "description": "Einstellungen der Container-Engine als Backend (HUM-433). Sie wirken, wenn `sandbox.backend` die Engine wählt. Die Laufzeit der Stufe `namespaces` ist zugelassen; die der Stufe `kernel` lehnt jeder Start mit `SANDBOX_048` ab, bis die Escape-Suite gegen diese Stufe grün ist.",
+          "description": "Einstellungen der Container-Engine als Backend (HUM-433). Sie wirken, wenn `sandbox.backend` die Engine wählt; ihre Stufe ist `namespaces` und zugelassen. Die Stufe `kernel` ist ein eigenes Backend mit der Gruppe `sandbox.qemu`.",
           "properties": {
             "cpus": {
               "default": null,
@@ -843,16 +858,11 @@
             },
             "runtime": {
               "default": "crun",
-              "description": "Die OCI-Laufzeit: `crun` teilt den Kern des Hosts (Stufe `namespaces`), `krun` startet einen eigenen Gastkern (Stufe `kernel`, braucht `/dev/kvm`).",
+              "description": "Die OCI-Laufzeit: `crun`, die den Kern des Hosts teilt (Stufe `namespaces`). Einen eigenen Gastkern startet nicht Podman, sondern das Backend `qemu`; die frühere Laufzeit dafür lehnt das Laden mit `CONFIG_023` ab.",
               "oneOf": [
                 {
                   "const": "crun",
                   "description": "Namensräume über dem geteilten Kern des Hosts.",
-                  "type": "string"
-                },
-                {
-                  "const": "krun",
-                  "description": "Ein eigener Gastkern in einer Micro-VM.",
                   "type": "string"
                 }
               ],
@@ -877,6 +887,116 @@
           "default": "default",
           "description": "Name des Profils unter `profiles/sandbox/`, ohne Endung.",
           "type": "string",
+          "x-project-scope": "denied",
+          "x-tier": "advanced"
+        },
+        "qemu": {
+          "additionalProperties": false,
+          "default": {
+            "cpus": null,
+            "kernel": null,
+            "memory_mib": null,
+            "modules": null,
+            "qemu": null,
+            "start_timeout_secs": 30,
+            "vhost_device_vsock": null,
+            "virtiofsd": null
+          },
+          "description": "Einstellungen der Kernel-Stufe, einer Micro-VM mit eigenem Gastkern (HUM-464, ADR-0021). Sie wirken, wenn `sandbox.backend` sie wählt; bis zur Zulassung lehnt jeder Start sie mit `SANDBOX_048` ab, und die Liste der Backends prüft nur, ob ihre Voraussetzungen da sind.",
+          "properties": {
+            "cpus": {
+              "default": null,
+              "description": "Zahl der virtuellen CPUs der Micro-VM, mindestens 1 und höchstens die Zahl der CPUs, die der Daemon nutzen darf. Leer heißt: der Start leitet sie vom Host ab (die Hälfte seiner CPUs, mindestens 1, höchstens 4).",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-pending-issue": "HUM-444",
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
+            },
+            "kernel": {
+              "default": null,
+              "description": "Das Kernel-Abbild des Gasts, als absoluter Pfad einer lesbaren Datei. Leer heißt: der Kernel des Hosts, `/boot/vmlinuz-` mit der Fassung aus `uname -r`.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-pending-issue": "HUM-444",
+              "x-project-scope": "denied",
+              "x-tier": "expert"
+            },
+            "memory_mib": {
+              "default": null,
+              "description": "Arbeitsspeicher der Micro-VM in MiB, mindestens 256 und höchstens der Arbeitsspeicher des Hosts. Leer heißt: der Start leitet ihn vom Host ab (die Hälfte seines Arbeitsspeichers, höchstens 4096).",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ],
+              "x-pending-issue": "HUM-444",
+              "x-project-scope": "denied",
+              "x-tier": "advanced"
+            },
+            "modules": {
+              "default": null,
+              "description": "Das Verzeichnis der Module dieses Kernels, als absoluter Pfad; der Gast lädt daraus die Module für vsock und sperrt danach das Laden weiterer. Leer heißt: `/usr/lib/modules/` mit der Fassung des Kernels.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-pending-issue": "HUM-444",
+              "x-project-scope": "denied",
+              "x-tier": "expert"
+            },
+            "qemu": {
+              "default": null,
+              "description": "Der Emulator der Maschine (`qemu-system-x86_64`), als absoluter Pfad. Leer heißt: die Suche im `PATH` des Daemons.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-pending-issue": "HUM-444",
+              "x-project-scope": "denied",
+              "x-tier": "expert"
+            },
+            "start_timeout_secs": {
+              "default": 30,
+              "description": "Sekunden, die ein Start auf den Gast wartet, bevor er abbricht, 1 bis 600.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer",
+              "x-pending-issue": "HUM-444",
+              "x-project-scope": "denied",
+              "x-tier": "expert"
+            },
+            "vhost_device_vsock": {
+              "default": null,
+              "description": "Das vsock-Gerät der Tür (`vhost-device-vsock`), als absoluter Pfad. Leer heißt: die Suche im `PATH` des Daemons.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-pending-issue": "HUM-444",
+              "x-project-scope": "denied",
+              "x-tier": "expert"
+            },
+            "virtiofsd": {
+              "default": null,
+              "description": "Der Dienst für die Dateisysteme des Gasts (`virtiofsd`), als absoluter Pfad. Leer heißt: die Suche im `PATH` des Daemons, danach `/usr/libexec/virtiofsd`.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-pending-issue": "HUM-444",
+              "x-project-scope": "denied",
+              "x-tier": "expert"
+            }
+          },
+          "type": "object",
           "x-project-scope": "denied",
           "x-tier": "advanced"
         },

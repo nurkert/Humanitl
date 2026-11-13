@@ -6283,12 +6283,16 @@ fn flows_list_passthrough_shows_the_model_traffic_and_show_takes_the_printed_end
 /// Backend aus der Umgebung (Ebene 6, Nutzerwille), vom Flag der
 /// Kommandozeile (Ebene 7) oder aus `config.toml` kommt, auch in der
 /// Vorschau, und keine Zeile eines anderen Backends steht stattdessen da
-/// (HUM-431). Die gemeinsame Stufe ist seit HUM-448 zugelassen: Die Vorschau
-/// zeigt ihre Zeile, auch wenn es ihr Programm nicht gibt. Das Programm zeigt
-/// in jedem Fall ins Leere, damit kein Test die Engine des Rechners fragt.
+/// (HUM-431). Nicht zugelassen ist seit HUM-464 das VM-Backend der
+/// Kernel-Stufe; die frühere Laufzeit der Kernel-Stufe unter der Engine lädt
+/// gar nicht (`CONFIG_023`). Die gemeinsame Stufe ist seit HUM-448
+/// zugelassen: Die Vorschau zeigt ihre Zeile, auch wenn es ihr Programm nicht
+/// gibt. Das Programm zeigt in jedem Fall ins Leere, damit kein Test die
+/// Engine des Rechners fragt.
 #[test]
 fn sandbox_argv_refuses_a_backend_that_is_not_admitted() {
     const ENGINE: &str = "podman";
+    const KERNEL_LEVEL: &str = humanitl_sandbox::VM_BACKEND;
     let harness = Harness::new();
     let config = harness.path("config").join("humanitl");
     std::fs::create_dir_all(&config).expect("the config directory");
@@ -6297,25 +6301,37 @@ fn sandbox_argv_refuses_a_backend_that_is_not_admitted() {
         "[sandbox.{ENGINE}]\nprogram = {:?}\n",
         absent.display().to_string()
     );
-    let kernel = format!("{engine}runtime = \"krun\"\n");
     let write = |text: &str| std::fs::write(config.join("config.toml"), text).expect("config");
-    let refused = |output: &std::process::Output| {
+    let refused = |output: &std::process::Output, expected: &str| {
         assert_ne!(code(output), 0, "{}", stdout(output));
-        assert!(stderr(output).contains("SANDBOX_048"), "{}", stderr(output));
+        assert!(stderr(output).contains(expected), "{}", stderr(output));
         assert!(stdout(output).trim().is_empty(), "{}", stdout(output));
     };
 
-    write(&kernel);
+    write(&engine);
     let output = harness
         .command()
-        .env("HUMANITL_SANDBOX__BACKEND", ENGINE)
+        .env("HUMANITL_SANDBOX__BACKEND", KERNEL_LEVEL)
         .args(["sandbox", "argv"])
         .output()
         .expect("the binary runs");
-    refused(&output);
-    refused(&harness.run(["--sandbox-backend", ENGINE, "sandbox", "argv"]));
-    write(&format!("[sandbox]\nbackend = {ENGINE:?}\n{kernel}"));
-    refused(&harness.run(["sandbox", "argv"]));
+    refused(&output, "SANDBOX_048");
+    refused(
+        &harness.run(["--sandbox-backend", KERNEL_LEVEL, "sandbox", "argv"]),
+        "SANDBOX_048",
+    );
+    write(&format!("[sandbox]\nbackend = {KERNEL_LEVEL:?}\n{engine}"));
+    refused(&harness.run(["sandbox", "argv"]), "SANDBOX_048");
+    write(&format!(
+        "[sandbox]\nbackend = {ENGINE:?}\n{engine}runtime = \"krun\"\n"
+    ));
+    let output = harness.run(["sandbox", "argv"]);
+    refused(&output, "CONFIG_023");
+    assert!(
+        stderr(&output).contains(&format!("sandbox.backend = {KERNEL_LEVEL:?}")),
+        "{}",
+        stderr(&output)
+    );
 
     // Die gemeinsame Stufe: die Zeile der Engine, deren Programm es nicht
     // gibt, und kein `SANDBOX_048`.
@@ -6362,9 +6378,9 @@ fn sandbox_argv_refuses_a_backend_below_the_floor() {
 
 /// `humanitl sandbox backends` ist ein dünner Client der RPC
 /// `SandboxBackends` (HUM-432): Die Liste kommt aus dem Fake, mit Stufe,
-/// Verfügbarkeit, Wahl und, unter Linux, dem Befund, der die Kernel-Stufe
-/// der Container-Engine bis HUM-449 sperrt; ihre gemeinsame Stufe ist seit
-/// HUM-448 verfügbar.
+/// Verfügbarkeit, Wahl und, unter Linux auf x86-64, dem Befund, der das
+/// VM-Backend der Kernel-Stufe bis HUM-449 sperrt (HUM-464); die gemeinsame
+/// Stufe der Container-Engine ist seit HUM-448 verfügbar.
 #[test]
 fn sandbox_backends_prints_the_list_of_the_daemon() {
     let harness = Harness::new();
@@ -6393,20 +6409,28 @@ fn sandbox_backends_prints_the_list_of_the_daemon() {
     assert_eq!(backends[0]["isolation_level"], "namespaces", "{value}");
     assert_eq!(backends[1]["available"], true, "{value}");
     assert_eq!(backends[1]["runtimes"][0]["available"], true, "{value}");
-    assert_eq!(backends[1]["runtimes"][1]["available"], false, "{value}");
+    assert_eq!(backends[1]["runtimes"][0]["name"], "crun", "{value}");
     assert_eq!(
-        backends[1]["runtimes"][1]["diagnostics"][0]["code"], "SANDBOX_048",
+        backends[1]["runtimes"].as_array().map(Vec::len),
+        Some(1),
         "{value}"
     );
-    assert_eq!(backends[1]["runtimes"][1]["name"], "krun", "{value}");
-    assert_eq!(
-        backends[1]["runtimes"][1]["isolation_level"], "kernel",
-        "{value}"
-    );
+    if cfg!(not(target_arch = "x86_64")) {
+        return;
+    }
+    let kernel = &backends[2];
+    assert_eq!(kernel["name"], humanitl_sandbox::VM_BACKEND, "{value}");
+    assert_eq!(kernel["isolation_level"], "kernel", "{value}");
+    assert_eq!(kernel["available"], false, "{value}");
+    assert_eq!(kernel["diagnostics"][0]["code"], "SANDBOX_048", "{value}");
 
     let table = harness.run(["sandbox", "backends"]);
     assert_eq!(code(&table), 0, "{}", stderr(&table));
-    assert!(stdout(&table).contains("podman"), "{}", stdout(&table));
+    assert!(
+        stdout(&table).contains(humanitl_sandbox::VM_BACKEND),
+        "{}",
+        stdout(&table)
+    );
     // Warum ein Backend fehlt, ist Ergebnis und bleibt auch mit `-q`.
     for quiet in [false, true] {
         let args: &[&str] = if quiet {
@@ -6421,14 +6445,37 @@ fn sandbox_backends_prints_the_list_of_the_daemon() {
     }
 }
 
-/// `--podman-runtime krun` ohne Podman: Die Vorschau lehnt mit
-/// `SANDBOX_034` ab, statt still eine Zeile des Backends des Systems mit
-/// geteiltem Kern zu zeigen; dasselbe aus der Umgebung. Eine Laufzeit in
-/// `config.toml` ist eine Vorgabe für später und hält nichts auf (HUM-432).
+/// Die Laufzeit der Engine ohne die Engine: Die Vorschau lehnt mit
+/// `SANDBOX_034` ab, statt still eine Zeile des Backends des Systems zu
+/// zeigen; dasselbe aus der Umgebung. Eine Laufzeit in `config.toml` ist eine
+/// Vorgabe für später und hält nichts auf (HUM-432). Die frühere Laufzeit der
+/// Kernel-Stufe endet als Flag und mit `config set` im selben Befund wie beim
+/// Laden, `CONFIG_023` mit dem Weg zum VM-Backend (HUM-464); `config set`
+/// schreibt dann nichts.
 #[test]
 fn a_podman_runtime_without_podman_refuses_instead_of_starting_another_level() {
+    const SHARED: &str = "crun";
+    const RETIRED: &str = "krun";
+    let engine = humanitl_sandbox::PODMAN_BACKEND;
+    let flag = format!("--{engine}-runtime");
+    let key = format!("sandbox.{engine}.runtime");
     let harness = Harness::new();
-    let output = harness.run(["--podman-runtime", "krun", "sandbox", "argv"]);
+    let file = harness.path("config/humanitl/config.toml");
+    let retired = |output: &std::process::Output| {
+        let shown = stderr(output);
+        assert_eq!(code(output), 1, "{shown}");
+        assert!(shown.starts_with("error[CONFIG_023]: "), "{shown}");
+        assert!(
+            shown.contains(&format!("sandbox.backend {}", humanitl_sandbox::VM_BACKEND)),
+            "{shown}"
+        );
+        assert!(stdout(output).trim().is_empty(), "{}", stdout(output));
+    };
+    retired(&harness.run([flag.as_str(), RETIRED, "sandbox", "argv"]));
+    retired(&harness.run(["config", "set", key.as_str(), RETIRED]));
+    assert!(!file.exists(), "nothing is written for a retired value");
+
+    let output = harness.run([flag.as_str(), SHARED, "sandbox", "argv"]);
     assert_ne!(code(&output), 0, "{}", stdout(&output));
     assert!(
         stderr(&output).contains("SANDBOX_034"),
@@ -6439,7 +6486,10 @@ fn a_podman_runtime_without_podman_refuses_instead_of_starting_another_level() {
 
     let output = harness
         .command()
-        .env("HUMANITL_SANDBOX__PODMAN__RUNTIME", "crun")
+        .env(
+            format!("HUMANITL_SANDBOX__{}__RUNTIME", engine.to_uppercase()),
+            SHARED,
+        )
         .args(["sandbox", "argv"])
         .output()
         .expect("the binary runs");
@@ -6449,13 +6499,9 @@ fn a_podman_runtime_without_podman_refuses_instead_of_starting_another_level() {
         stderr(&output)
     );
 
-    let config = harness.path("config").join("humanitl");
-    std::fs::create_dir_all(&config).expect("the config directory");
-    std::fs::write(
-        config.join("config.toml"),
-        "[sandbox.podman]\nruntime = \"krun\"\n",
-    )
-    .expect("config.toml");
+    let set = harness.run(["config", "set", key.as_str(), SHARED]);
+    assert_eq!(code(&set), 0, "{}", stderr(&set));
+    assert!(file.exists(), "the remaining runtime is written");
     let output = harness.run(["sandbox", "argv"]);
     assert!(
         !stderr(&output).contains("SANDBOX_034"),

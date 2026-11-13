@@ -12,7 +12,9 @@
 //! `bwrap --version` und den Nutzer-Namensraum, unter der Container-Engine
 //! seit ihrer Zulassung (HUM-448) Programm, Fassung, `info`, untergeordnete
 //! IDs und `SELinux`, je mit der Frist der Suche; vor der Zulassung einer
-//! Stufe nur, ob das Programm da ist. Den Probestart macht `doctor` (HUM-436).
+//! Stufe nur, ob das Programm da ist. Unter dem VM-Backend der Kernel-Stufe
+//! nur seine Voraussetzungen (HUM-464): Gerät, Programme und ihre Hilfe,
+//! Kernel und Module. Den Probestart macht `doctor` (HUM-436).
 //!
 //! `available` heißt nie, dass ein anderes Backend einspringt: Ein nicht
 //! verfügbares gewähltes Backend lässt den Start scheitern.
@@ -22,24 +24,28 @@ use humanitl_core::diagnostics::codes::SANDBOX_034;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use crate::backend::{
-    BWRAP_BACKEND, BackendChoice, PODMAN_BACKEND, SEATBELT_BACKEND, admitted, backend_name,
-    below_floor, detect_in_build, isolation_of, profile_requires_another, required_by_profile,
-    resolve,
+    BWRAP_BACKEND, BackendChoice, PODMAN_BACKEND, SEATBELT_BACKEND, VM_BACKEND, admitted,
+    backend_name, below_floor, detect_in_build, isolation_of, kernel_level_missing,
+    profile_requires_another, required_by_profile, resolve,
 };
 use crate::launcher::IsolationLevel;
 
 /// Die Backends, die es auf dieser Art System geben kann, in der Reihenfolge
-/// der Liste: unter macOS Seatbelt, sonst bwrap und Podman. Podman unter macOS
+/// der Liste: unter macOS Seatbelt, sonst bwrap und Podman, unter Linux auf
+/// x86-64 dazu das VM-Backend der Kernel-Stufe (HUM-464). Podman unter macOS
 /// liefe in einer Podman-Maschine, die `SANDBOX_038` ablehnt (HUM-433); es
 /// steht dort deshalb gar nicht erst zur Wahl.
 pub const LISTED_BACKENDS: &[&str] = if cfg!(target_os = "macos") {
     &[SEATBELT_BACKEND]
+} else if cfg!(target_arch = "x86_64") {
+    &[BWRAP_BACKEND, PODMAN_BACKEND, VM_BACKEND]
 } else {
     &[BWRAP_BACKEND, PODMAN_BACKEND]
 };
 
-/// Die Laufzeiten unter Podman, in der Reihenfolge der Liste.
-const PODMAN_RUNTIMES: [PodmanRuntime; 2] = [PodmanRuntime::Crun, PodmanRuntime::Krun];
+/// Die Laufzeiten unter Podman, in der Reihenfolge der Liste. Seit HUM-464
+/// nur noch die des geteilten Kerns; die Kernel-Stufe ist ein eigenes Backend.
+const PODMAN_RUNTIMES: [PodmanRuntime; 1] = [PodmanRuntime::Crun];
 
 /// Der Suchpfad, wenn die Umgebung keinen hat; derselbe wie bei bwrap.
 const DEFAULT_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
@@ -55,7 +61,7 @@ pub struct BackendEntry {
     pub selected: bool,
     /// Was einem Start im Weg steht; leer, wenn er ginge.
     pub diagnostics: Vec<Diagnostic>,
-    /// Die Laufzeiten, unter Podman `crun` und `krun`; sonst leer.
+    /// Die Laufzeiten, unter Podman `crun`; sonst leer.
     pub runtimes: Vec<RuntimeEntry>,
 }
 
@@ -70,7 +76,7 @@ impl BackendEntry {
 /// Eine Laufzeit unter Podman und was ihr fehlt.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeEntry {
-    /// `crun` oder `krun`.
+    /// `crun`.
     pub runtime: PodmanRuntime,
     /// Die Stufe mit dieser Laufzeit.
     pub isolation: IsolationLevel,
@@ -157,6 +163,10 @@ pub fn list_backends_with(
 /// Was dem System für dieses Backend fehlt: der Befund der Suche, die jeder
 /// Start macht ([`detect_in_build`]).
 ///
+/// Unter dem VM-Backend der Kernel-Stufe nur die Prüfung seiner
+/// Voraussetzungen (`SANDBOX_045`): Einen Adapter gibt es bis HUM-444 nicht,
+/// und dass die Stufe nicht zugelassen ist, sagt `SANDBOX_048` daneben.
+///
 /// Unter der Container-Engine zuerst, ob es das Programm gibt, mit dem Weg
 /// zurück im Text. Danach, wenn ihre gemeinsame Stufe zugelassen ist, die
 /// Suche mit dieser Stufe (HUM-448): Die Liste nennt ein Backend nie
@@ -165,6 +175,9 @@ pub fn list_backends_with(
 /// der Engine schuldig bleibt, fehlt jeder Laufzeit; was einer Stufe fehlt,
 /// sagen Untergrenze und Zulassung je Laufzeit.
 fn system_missing(name: &'static str, sandbox: &SandboxRef, paths: &Paths) -> Option<Diagnostic> {
+    if name == VM_BACKEND {
+        return kernel_level_missing(paths, sandbox);
+    }
     if name != PODMAN_BACKEND {
         return detect_in_build(name, paths.clone(), sandbox).err();
     }
@@ -350,8 +363,8 @@ mod tests {
 
     /// Seit HUM-448 fragt die Liste die Engine wie die Suche jedes Starts:
     /// Eine Attrappe, die da ist und auf jede Frage scheitert, ist nicht
-    /// verfügbar, mit dem Befund der Suche samt `why` und `fix`. Die
-    /// Kernel-Stufe trägt dazu `SANDBOX_048`.
+    /// verfügbar, mit dem Befund der Suche samt `why` und `fix`; ihre eine
+    /// Laufzeit ebenso.
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn an_engine_whose_search_fails_is_listed_with_the_finding_of_the_search() {
@@ -371,11 +384,8 @@ mod tests {
         );
         assert_ne!(searched.code.as_str(), "SANDBOX_048");
         let shared = searched.code.as_str();
+        assert_eq!(engine.runtimes.len(), 1, "{engine:?}");
         assert_eq!(codes(&engine.runtimes[0].diagnostics), [shared]);
-        assert_eq!(
-            codes(&engine.runtimes[1].diagnostics),
-            [shared, "SANDBOX_048"]
-        );
     }
 
     /// Verfügbar heißt: Die Suche eines Starts besteht. Eine Attrappe, die
@@ -403,11 +413,6 @@ mod tests {
         assert_eq!(engine.diagnostics, Vec::from_iter(searched.clone()));
         assert_eq!(engine.available(), searched.is_none(), "{engine:?}");
         assert_eq!(engine.runtimes[0].available(), searched.is_none());
-        assert!(!engine.runtimes[1].available());
-        assert_eq!(
-            codes(&engine.runtimes[1].diagnostics).last(),
-            Some(&"SANDBOX_048")
-        );
     }
 
     /// Ohne `podman` im `PATH` steht zusätzlich `SANDBOX_034` mit `fix`, und
@@ -429,10 +434,6 @@ mod tests {
         assert!(missing.fix.is_some(), "{missing:?}");
         assert!(missing.why.contains("--backend bwrap"), "{}", missing.why);
         assert_eq!(codes(&podman.runtimes[0].diagnostics), ["SANDBOX_034"]);
-        assert_eq!(
-            codes(&podman.runtimes[1].diagnostics),
-            ["SANDBOX_034", "SANDBOX_048"]
-        );
         // Ein ausdrücklich genanntes Programm, das es nicht gibt, ebenso.
         let mut sandbox = SandboxRef::default();
         sandbox.podman.program = Some(dir.path().join("nope").join("podman"));
@@ -460,8 +461,9 @@ mod tests {
         );
         assert_eq!(
             list.iter().map(|e| e.name).collect::<Vec<_>>(),
-            ["bwrap", "podman"]
+            LISTED_BACKENDS
         );
+        assert_eq!(LISTED_BACKENDS[..2], ["bwrap", "podman"]);
         let bwrap = entry(&list, "bwrap");
         assert!(bwrap.selected);
         assert_eq!(bwrap.isolation, IsolationLevel::Namespaces);
@@ -470,9 +472,9 @@ mod tests {
         assert_eq!(list.iter().filter(|e| e.selected).count(), 1);
     }
 
-    /// Die Untergrenze `kernel` macht bwrap und Podman mit `crun`
-    /// unverfügbar (`SANDBOX_035`); `krun` liegt nicht darunter und scheitert
-    /// nur an der Zulassung.
+    /// Die Untergrenze `kernel` macht bwrap und Podman unverfügbar
+    /// (`SANDBOX_035`); das VM-Backend liegt nicht darunter und scheitert nur
+    /// an der Zulassung.
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn a_floor_above_a_backend_is_named_in_its_entry() {
@@ -491,11 +493,47 @@ mod tests {
         let podman = entry(&list, "podman");
         assert!(podman.selected);
         assert_eq!(codes(&podman.diagnostics), ["SANDBOX_035"]);
+        if cfg!(target_arch = "x86_64") {
+            let kernel = entry(&list, VM_BACKEND);
+            assert_eq!(
+                codes(&kernel.diagnostics),
+                ["SANDBOX_048"],
+                "the VM backend is not below kernel"
+            );
+        }
+    }
+
+    /// Das VM-Backend der Kernel-Stufe steht in der Liste (HUM-464): Stufe
+    /// `kernel`, nicht verfügbar, mit `SANDBOX_048` bis HUM-449, ohne
+    /// Laufzeiten. Fehlt dem Rechner etwas, steht `SANDBOX_045` mit dem
+    /// ersten Fehlenden davor; hier fehlt jedes Programm im leeren `PATH`.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn the_kernel_level_is_listed_unavailable_until_its_admission() {
+        let sandbox = SandboxRef {
+            backend: SandboxBackendName::Qemu,
+            ..SandboxRef::default()
+        };
+        let installed = list_backends_with(&sandbox, "auto", |_| None);
+        let kernel = entry(&installed, VM_BACKEND);
+        assert!(kernel.selected && !kernel.available(), "{kernel:?}");
+        assert_eq!(kernel.isolation, IsolationLevel::Kernel);
+        assert_eq!(codes(&kernel.diagnostics), ["SANDBOX_048"]);
+        assert!(kernel.runtimes.is_empty());
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = dir.path().join("empty-bin");
+        std::fs::create_dir_all(&bin).expect("bin");
+        let list = list_backends(&sandbox, "auto", &paths_with(dir.path(), &bin));
+        let kernel = entry(&list, VM_BACKEND);
         assert_eq!(
-            codes(&podman.runtimes[1].diagnostics),
-            ["SANDBOX_048"],
-            "krun is not below kernel"
+            codes(&kernel.diagnostics),
+            ["SANDBOX_045", "SANDBOX_048"],
+            "{kernel:?}"
         );
+        let missing = &kernel.diagnostics[0];
+        assert!(missing.fix.is_some(), "{missing:?}");
+        assert!(missing.why.contains("--backend bwrap"), "{}", missing.why);
     }
 
     /// Ein Sandbox-Profil, das Podman verlangt, macht das gewählte Backend

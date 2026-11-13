@@ -226,8 +226,13 @@ fn split_suffix<'a>(text: &'a str, units: &[(&'static str, i64)]) -> Option<(&'a
 ///
 /// # Errors
 ///
-/// `CONFIG_003` mit dem Bereich und dem Vorgabewert als Vorschlag.
+/// `CONFIG_003` mit dem Bereich und dem Vorgabewert als Vorschlag;
+/// `CONFIG_023` für einen Wert, den es früher gab, mit dem Weg zu dem, was
+/// ihn ersetzt (HUM-464), wie beim Laden.
 pub fn check_value(field: &schema::Field, value: &Value) -> Result<(), Diagnostic> {
+    if let Some(retired) = crate::load::retired_value(&field.path, value.as_str(), &field.path) {
+        return Err(retired);
+    }
     // Eine Adresse mit Anführungszeichen oder Leerraum nähme der Parser hin
     // und machte daraus einen anderen Pfad (HUM-283); geprüft wird der Text.
     if field.path == crate::llm_endpoint::SETTING
@@ -297,4 +302,39 @@ fn not_a(field: &schema::Field, text: &str, expected: &str) -> Diagnostic {
         ))
         .fix(fix)
         .build()
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    /// Das Setzen einer Einstellung (`humanitl config set`, `SetConfig`)
+    /// lehnt die frühere Laufzeit der Kernel-Stufe wie das Laden mit
+    /// `CONFIG_023` und dem Weg zum VM-Backend ab, nicht als unbekannten
+    /// Wert mit einem Vorschlag für die Laufzeit des geteilten Kerns
+    /// (HUM-464).
+    #[test]
+    fn setting_the_retired_runtime_is_config_023_with_the_way_to_the_kernel_level() {
+        let path = crate::load::ENGINE_RUNTIME;
+        let field = schema::field(path).expect("a leaf");
+        let [retired] = crate::load::retired_values(path) else {
+            panic!("one retired value");
+        };
+        let value = parse_value(field, retired).expect("a text parses");
+        let err = check_value(field, &value).expect_err("retired");
+        assert_eq!(err.code.as_str(), "CONFIG_023", "{}", err.why);
+        assert!(err.why.contains(path), "{}", err.why);
+        assert_eq!(
+            err.fix,
+            Some(FixAction::ChangeSetting {
+                key: "sandbox.backend".to_owned(),
+                value: crate::load::KERNEL_LEVEL_BACKEND.to_owned(),
+            })
+        );
+        let kept = field.allowed.as_ref().and_then(|values| values.first());
+        let kept = parse_value(field, kept.expect("one allowed value")).expect("parses");
+        check_value(field, &kept).expect("the remaining runtime is a value");
+    }
 }

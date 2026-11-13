@@ -20,7 +20,8 @@ enum IsolationLevel {
   /// system on Linux, Podman with `crun`).
   namespaces,
 
-  /// An own guest kernel (Podman with `krun`).
+  /// An own guest kernel in a micro VM (the VM backend of the kernel level,
+  /// HUM-464).
   kernel,
 }
 
@@ -36,7 +37,7 @@ final class SandboxRuntimeInfo {
     this.diagnostics = const <Diagnostic>[],
   });
 
-  /// `crun` or `krun`.
+  /// `crun`.
   final String name;
 
   /// The level with this runtime; null for a value this app does not know.
@@ -82,7 +83,7 @@ final class SandboxBackendInfo {
   /// one a `fix`; empty when [available].
   final List<Diagnostic> diagnostics;
 
-  /// The runtimes of the backend where it has several (Podman).
+  /// The runtimes of the backend where it chooses one (Podman).
   final List<SandboxRuntimeInfo> runtimes;
 
   /// Whether the daemon admits this backend at all (HUM-440).

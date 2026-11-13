@@ -38,39 +38,55 @@
 "proto/humanitl/v1/humanitl.proto" = 2
 
 [podman]
-"app/lib/core/domain/sandbox_backends.dart" = 10
+"app/lib/core/domain/sandbox_backends.dart" = 7
 "app/lib/core/ipc/client_diagnostics.dart" = 4
 "app/lib/core/ipc/daemon_paths.dart" = 2
-"app/lib/core/ipc/fake_daemon_client.dart" = 11
+"app/lib/core/ipc/fake_daemon_client.dart" = 4
 "app/lib/features/setup/setup_text.dart" = 1
 "app/test/core/ipc/convert_test.dart" = 10
 "app/test/core/ipc/disposable_grpc_test.dart" = 2
-"app/test/core/ipc/fake_daemon_client_test.dart" = 22
+"app/test/core/ipc/fake_daemon_client_test.dart" = 17
 "app/test/goldens/sandbox_backend_golden_test.dart" = 5
 "app/test/l10n/macos_text_test.dart" = 3
 "daemon/bin/humanitl/src/cli.rs" = 6
-"daemon/bin/humanitl/src/cmd/backends.rs" = 9
+"daemon/bin/humanitl/src/cmd/backends.rs" = 6
 "daemon/bin/humanitl/src/cmd/run.rs" = 14
 "daemon/bin/humanitl/src/cmd/sandbox.rs" = 3
-"daemon/bin/humanitl/tests/cli.rs" = 15
+"daemon/bin/humanitl/tests/cli.rs" = 8
 "daemon/crates/config/src/lib.rs" = 3
 "daemon/crates/config/src/load.rs" = 6
-"daemon/crates/config/src/model.rs" = 36
-"daemon/crates/config/src/validate.rs" = 71
-"daemon/crates/config/tests/config_readers.rs" = 13
+"daemon/crates/config/src/model.rs" = 32
+"daemon/crates/config/src/validate.rs" = 69
+"daemon/crates/config/tests/config_readers.rs" = 12
 "daemon/crates/config/tests/profiles.rs" = 4
-"daemon/crates/config/tests/project_scope.rs" = 12
+"daemon/crates/config/tests/project_scope.rs" = 10
 "daemon/crates/core-types/src/diagnostics/codes.rs" = 19
-"daemon/crates/ipc/src/server.rs" = 28
-"daemon/crates/ipc/src/session.rs" = 20
-"daemon/crates/ipc/tests/session_config.rs" = 25
-"daemon/crates/sandbox/src/backend.rs" = 139
-"daemon/crates/sandbox/src/backend_list.rs" = 86
-"daemon/crates/sandbox/src/launcher.rs" = 3
+"daemon/crates/ipc/src/server.rs" = 27
+"daemon/crates/ipc/src/session.rs" = 18
+"daemon/crates/ipc/tests/session_config.rs" = 23
+"daemon/crates/sandbox/src/backend.rs" = 92
+"daemon/crates/sandbox/src/backend_list.rs" = 78
+"daemon/crates/sandbox/src/launcher.rs" = 1
 "daemon/crates/sandbox/src/lib.rs" = 2
 "daemon/crates/sandbox/src/profile.rs" = 8
 "daemon/crates/sandbox/tests/feature_gate.rs" = 3
-"proto/humanitl/v1/humanitl.proto" = 17
+"proto/humanitl/v1/humanitl.proto" = 13
+
+[qemu]
+"app/lib/core/ipc/fake_daemon_client.dart" = 2
+"app/test/core/ipc/fake_daemon_client_test.dart" = 1
+"daemon/crates/config/src/lib.rs" = 1
+"daemon/crates/config/src/load.rs" = 3
+"daemon/crates/config/src/model.rs" = 24
+"daemon/crates/config/src/validate.rs" = 13
+"daemon/crates/config/tests/config_readers.rs" = 23
+"daemon/crates/config/tests/profiles.rs" = 1
+"daemon/crates/config/tests/project_scope.rs" = 8
+"daemon/crates/core-types/src/diagnostics/codes.rs" = 2
+"daemon/crates/sandbox/src/backend.rs" = 11
+"daemon/crates/sandbox/src/backend_list.rs" = 1
+"daemon/crates/sandbox/src/doctor/backends.rs" = 1
+"daemon/crates/sandbox/src/lib.rs" = 1
 
 [proxy_engine]
 
