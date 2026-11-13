@@ -51,7 +51,14 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `37` seit dem Abbruch eines Ziehens (HUM-457): `ImagePull.pull_id` ist
+/// `38` seit der Wahl des Backends je Sitzung (HUM-440): `SandboxBackends`
+/// nimmt `SandboxBackendsRequest` statt `Empty` (auf der Leitung ohne
+/// gesetztes Feld dieselbe leere Nachricht); mit `plan` misst die Liste an
+/// der Konfiguration eines Starts mit diesem Plan samt Projekt-Profil,
+/// `SandboxBackendList.auto_backend` nennt das Backend, das `auto` meint, und
+/// `SandboxRequest.Plan.backend` gibt dem Schnappschuss das Backend eines
+/// Starts mit `sandbox.backend` in `cli_overrides`.
+/// `37` war der Abbruch eines Ziehens (HUM-457): `ImagePull.pull_id` ist
 /// die Kennung, die der Client wählt, `SandboxRequest.cancel_image_pull`
 /// bricht das Ziehen mit dieser Kennung ab und antwortet mit
 /// `SandboxEvent.image_pull_cancelled`.
@@ -207,7 +214,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 37;
+pub const PROTO_MINOR: u32 = 38;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

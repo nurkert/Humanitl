@@ -98,10 +98,18 @@ class SandboxTestClient extends FakeDaemonClient {
   }
 
   @override
-  Stream<SandboxUpdate> planSandbox({String? profile, WorkMode? workMode}) {
+  Stream<SandboxUpdate> planSandbox({
+    String? profile,
+    WorkMode? workMode,
+    String? backend,
+  }) {
     plans.add((_storedSincePlan, workMode));
     _storedSincePlan = null;
-    return super.planSandbox(profile: profile, workMode: workMode);
+    return super.planSandbox(
+      profile: profile,
+      workMode: workMode,
+      backend: backend,
+    );
   }
 
   @override
@@ -109,12 +117,14 @@ class SandboxTestClient extends FakeDaemonClient {
     String? profile,
     WorkMode? workMode,
     SandboxMode? sandboxMode,
+    String? backend,
   }) {
     starts++;
     return super.startSandbox(
       profile: profile,
       workMode: workMode,
       sandboxMode: sandboxMode,
+      backend: backend,
     );
   }
 

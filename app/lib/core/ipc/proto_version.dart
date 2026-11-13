@@ -116,8 +116,13 @@ abstract final class ProtoVersion {
   /// Raised to 37 with the cancel of a pull: the SANDBOX_043 card sends
   /// `ImagePull.pull_id` and cancels with `Sandbox(CancelImagePull)`
   /// (HUM-457).
+  /// Raised to 38 with the backend per session: the sandbox screen sends the
+  /// chosen backend as `Plan.backend` with every snapshot, asks
+  /// `SandboxBackends` with the same plan, and reads
+  /// `SandboxBackendList.auto_backend` for the segment "Automatic"
+  /// (HUM-440).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 37;
+  static const int minor = 38;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

@@ -232,6 +232,8 @@ void main() {
           FormKeys.agentAdapter,
           FormKeys.sandboxWorkDir,
           FormKeys.sandboxMode,
+          // HUM-440: Eine laufende Sitzung behält ihr Backend.
+          FormKeys.sandboxBackend,
         });
       },
     );

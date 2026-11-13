@@ -21,6 +21,7 @@ import '../categories/network_category.dart';
 import '../categories/requests_category.dart';
 import '../categories/sandbox_category.dart';
 import '../categories/shortcuts_category.dart';
+import '../widgets/sandbox_backend_row.dart';
 import '../widgets/sandbox_mode_row.dart';
 import '../widgets/update_row.dart';
 import 'setting_entry.dart';
@@ -106,6 +107,18 @@ final List<SettingEntry> settingsRegistry = <SettingEntry>[
     // noch Treffer.
     shownWhen: (DaemonInfo? info) => info?.offersDisposable ?? false,
     build: (SettingsPageData data) => SandboxModeRow(config: data.config),
+  ),
+  // Das Backend der nächsten Sitzung (HUM-440). Welche es gibt und welche
+  // wählbar sind, sagt `SandboxBackends`; unter macOS steht nur Seatbelt
+  // da, und die Zeile nennt es ohne Wahl.
+  SettingEntry(
+    id: FormKeys.sandboxBackend,
+    category: SettingsCategory.sandbox,
+    title: (AppLocalizations l10n) => l10n.settingsSandboxBackendLabel,
+    help: (AppLocalizations l10n) => l10n.settingsSandboxBackendHelp,
+    keywords: (AppLocalizations l10n) => l10n.settingsKeywordsSandboxBackend,
+    nextSession: true,
+    build: (SettingsPageData data) => SandboxBackendRow(config: data.config),
   ),
   SettingEntry(
     id: FormKeys.holdTimeoutSecs,

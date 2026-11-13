@@ -415,11 +415,11 @@ void main() {
     );
   });
 
-  // HUM-432: Der Fake spielt dieselbe Liste wie der Rust-Fake: das Backend des
-  // Systems gewählt
-  // und verfügbar, Podman mit beiden Laufzeiten noch nicht zugelassen.
+  // HUM-432, HUM-440: Der Fake spielt den Stand nach HUM-448: das Backend des
+  // Systems gewählt und verfügbar, Podman zugelassen und verfügbar mit `crun`,
+  // die Laufzeit `krun` noch nicht zugelassen.
   test(
-    'sandboxBackends lists the system backend and a podman not admitted',
+    'sandboxBackends lists the system backend and an admitted podman',
     () async {
       final FakeDaemonClient client = FakeDaemonClient();
       final SandboxBackendList list = await client.sandboxBackends();
@@ -433,14 +433,23 @@ void main() {
         list.backends.where((b) => b.selected).single.name,
         DoctorCheckId.sandboxTool,
       );
+      expect(list.offered.map((b) => b.name), <String>[
+        DoctorCheckId.sandboxTool,
+        'podman',
+      ]);
       final SandboxBackendInfo podman = list.backends.last;
-      expect(podman.available, isFalse);
-      expect(podman.diagnostics.single.code, 'SANDBOX_048');
+      expect(podman.available, isTrue);
+      expect(podman.admitted, isTrue);
+      expect(podman.diagnostics, isEmpty);
       expect(podman.runtimes.map((r) => r.isolation), <IsolationLevel>[
         IsolationLevel.namespaces,
         IsolationLevel.kernel,
       ]);
-      expect(podman.runtimes.every((r) => !r.available), isTrue);
+      final SandboxRuntimeInfo crun = podman.runtimes.first;
+      final SandboxRuntimeInfo krun = podman.runtimes.last;
+      expect(crun.available && crun.selected, isTrue);
+      expect(krun.available, isFalse);
+      expect(krun.diagnostics.single.code, DiagnosticCodes.backendNotAdmitted);
 
       client.sandboxBackendsFailure = const Diagnostic(
         code: 'IPC_006',
@@ -452,4 +461,27 @@ void main() {
       );
     },
   );
+
+  // HUM-440: Der Start nimmt das Backend dieser Sitzung mit, und die laufende
+  // Momentaufnahme nennt es mit seiner Stufe.
+  test('a start records its backend and runs on it', () async {
+    final FakeDaemonClient client = FakeDaemonClient();
+    SandboxStatus? last;
+    await for (final SandboxUpdate update in client.startSandbox(
+      backend: 'podman',
+    )) {
+      if (update is SandboxUpdateStatus) {
+        last = update.status;
+      }
+    }
+    expect(client.startBackends, <String?>['podman']);
+    expect(last?.state, SandboxState.running);
+    expect(last?.backend, 'podman');
+    expect(last?.isolationLevel, IsolationLevel.namespaces);
+
+    final FakeDaemonClient plain = FakeDaemonClient();
+    await plain.startSandbox().drain<void>();
+    expect(plain.startBackends, <String?>[null]);
+    expect(plain.sandbox.backend, DoctorCheckId.sandboxTool);
+  });
 }

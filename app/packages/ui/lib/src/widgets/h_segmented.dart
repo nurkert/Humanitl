@@ -17,6 +17,7 @@ class HSegmentOption<T> {
     required this.label,
     this.leading,
     this.semanticsLabel,
+    this.enabled = true,
   });
 
   /// Was die Wahl bedeutet.
@@ -31,6 +32,11 @@ class HSegmentOption<T> {
   /// Was ein Screenreader statt [label] sagt, wenn die Beschriftung ein
   /// Zeichen ist.
   final String? semanticsLabel;
+
+  /// Falsch für eine einzelne Wahl, die gerade nicht geht, während die
+  /// übrigen der Reihe wählbar bleiben. Warum sie nicht geht, sagt der
+  /// Aufrufer daneben; das Segment selbst trägt keinen Text dafür.
+  final bool enabled;
 }
 
 /// Eine Reihe sich ausschließender Wahlmöglichkeiten.
@@ -79,7 +85,7 @@ class HSegmented<T> extends StatelessWidget {
               HSegment<T>(
                 option: options[i],
                 selected: options[i].value == selected,
-                enabled: enabled,
+                enabled: enabled && options[i].enabled,
                 onSelect: onSelect,
               ),
             ],
@@ -134,7 +140,7 @@ class HChoiceChips<T> extends StatelessWidget {
               child: HSegment<T>(
                 option: option,
                 selected: selected.contains(option.value),
-                enabled: enabled,
+                enabled: enabled && option.enabled,
                 onSelect: onToggle,
               ),
             ),

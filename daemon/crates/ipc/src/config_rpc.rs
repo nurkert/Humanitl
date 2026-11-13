@@ -69,6 +69,10 @@ pub const FORM_KEYS: &[&str] = &[
     // Whether the daemon asks GitHub once a day for a newer release
     // (HUM-382). Closed to project profiles; here only the human writes.
     "update.check",
+    // The sandbox backend of the next sessions (HUM-440): `auto` or one of
+    // the names `SandboxBackends` lists. Closed to project profiles; here
+    // only the human writes.
+    "sandbox.backend",
 ];
 
 /// The key of the agent choice in the form (HUM-274).
@@ -553,6 +557,7 @@ mod tests {
             ("tls.trust_system_store", "false"),
             ("agent.adapter", "pi"),
             ("sandbox.mode", "disposable"),
+            ("sandbox.backend", humanitl_sandbox::PLATFORM_BACKEND_NAME),
         ] {
             set(&paths, key, value).unwrap_or_else(|d| panic!("{key}: {}", d.why));
         }
@@ -603,6 +608,8 @@ mod tests {
             ("agent.adapter", "Pi"),
             // Only the three modes of the schema (HUM-357).
             ("sandbox.mode", "throwaway"),
+            // Only the backends of the schema (HUM-440).
+            ("sandbox.backend", "docker"),
         ] {
             let refused = set(&paths, key, value).expect_err(key);
             assert_eq!(

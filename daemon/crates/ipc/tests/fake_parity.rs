@@ -732,7 +732,7 @@ fn table() -> Vec<Case> {
         Case {
             what: "sandbox_backends without a running sandbox",
             expected: Seen::ok(),
-            call: both!(sandbox_backends, ()),
+            call: both!(sandbox_backends, v1::SandboxBackendsRequest::default()),
         },
     ]
 }

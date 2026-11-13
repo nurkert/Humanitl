@@ -42,9 +42,17 @@ class FolderClient extends FakeDaemonClient {
   int plans = 0;
 
   @override
-  Stream<SandboxUpdate> planSandbox({String? profile, WorkMode? workMode}) {
+  Stream<SandboxUpdate> planSandbox({
+    String? profile,
+    WorkMode? workMode,
+    String? backend,
+  }) {
     plans++;
-    return super.planSandbox(profile: profile, workMode: workMode);
+    return super.planSandbox(
+      profile: profile,
+      workMode: workMode,
+      backend: backend,
+    );
   }
 }
 

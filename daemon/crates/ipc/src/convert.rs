@@ -717,6 +717,10 @@ pub const fn isolation_level_to_proto(
 }
 
 /// Die Liste der Backends in ihrer Wire-Form (HUM-432, `SandboxBackends`).
+///
+/// `auto_backend` ist das Backend, das `auto` auf diesem System meint
+/// (HUM-440): dasselbe, auf das [`humanitl_sandbox::choose_backend`] `auto`
+/// auflöst.
 #[must_use]
 pub fn backend_list_to_proto(
     entries: &[humanitl_sandbox::BackendEntry],
@@ -749,6 +753,7 @@ pub fn backend_list_to_proto(
             })
             .collect(),
         min_isolation: isolation_level_to_proto(floor).into(),
+        auto_backend: humanitl_sandbox::PLATFORM_BACKEND_NAME.to_owned(),
     }
 }
 

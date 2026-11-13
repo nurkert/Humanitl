@@ -1164,8 +1164,16 @@ class FakeDaemonClient
   Stream<SandboxUpdate> planSandbox({
     String? profile,
     WorkMode? workMode,
+    String? backend,
   }) async* {
     _check();
+    // Das Backend der Sitzung (HUM-440): wie der Daemon die Befunde eines
+    // Starts mit diesem Backend, aus [planBackendFindings].
+    planBackends.add(backend);
+    for (final Diagnostic diagnostic
+        in planBackendFindings[backend] ?? const <Diagnostic>[]) {
+      yield SandboxUpdate.diagnostic(diagnostic);
+    }
     // Der Ordner kommt, wie beim Daemon, aus `sandbox.work_dir`: `setConfig`
     // hat ihn in [sandbox] gelegt (HUM-293).
     sandbox = sandbox.copyWith(
@@ -1191,9 +1199,11 @@ class FakeDaemonClient
     String? profile,
     WorkMode? workMode,
     SandboxMode? sandboxMode,
+    String? backend,
   }) async* {
     _check();
     startModes.add(sandboxMode);
+    startBackends.add(backend);
     await for (final SandboxUpdate update in planSandbox(
       profile: profile,
       workMode: workMode,
@@ -1246,6 +1256,11 @@ class FakeDaemonClient
       // Like the fake daemon (HUM-138): the played agent tries nothing past
       // the proxy, and the sandbox says it counts.
       refusals: const SandboxRefusals(reporting: SandboxRefusalReporting.on),
+      // Das Backend der Sitzung und seine Stufe (HUM-440), aus der Liste,
+      // die `SandboxBackends` hier spielt.
+      backend: startedBackend(backend)?.name ?? sandbox.backend,
+      isolationLevel:
+          startedBackend(backend)?.isolation ?? sandbox.isolationLevel,
     );
     yield SandboxUpdate.log(
       SandboxLogLine(at: _clock(), text: 'sandbox started, pid 4711 (fake)'),
@@ -5638,13 +5653,44 @@ mixin FakeIntercept {
   }
 }
 
-/// The fake's half of `SandboxBackends` (HUM-432).
+/// The fake's half of `SandboxBackends` (HUM-432, HUM-440).
 ///
-/// Plays a Linux system where everything is installed: the backend of the
-/// system chosen and available, Podman installed but, as in the real daemon
-/// before HUM-448, not admitted yet (`SANDBOX_048`) with both runtimes. The
-/// same list as the Rust fake on Linux.
+/// Plays a Linux system where everything is installed, as the real daemon
+/// sees it since HUM-448: the backend of the system chosen and available,
+/// Podman admitted and available with the runtime `crun`, and the runtime
+/// `krun` not admitted yet (`SANDBOX_048`, until HUM-447).
 mixin FakeSandboxBackends {
+  /// The backend each start asked for in `Start.cli_overrides`, oldest
+  /// first; null for a start without the entry (HUM-440).
+  final List<String?> startBackends = <String?>[];
+
+  /// `Plan.backend` of each `Sandbox(Plan)`, oldest first; null for a plan
+  /// without it (HUM-440).
+  final List<String?> planBackends = <String?>[];
+
+  /// The findings a `Sandbox(Plan)` with this `Plan.backend` answers with
+  /// before its snapshot, as the daemon's preflight and choice would
+  /// (HUM-440). Empty by default: the fake's system has every backend.
+  final Map<String?, List<Diagnostic>> planBackendFindings =
+      <String?, List<Diagnostic>>{};
+
+  /// `Plan.backend` of each `SandboxBackends`, oldest first (HUM-440).
+  final List<String?> sandboxBackendsAsked = <String?>[];
+
+  /// The entry a start with [asked] runs on: the named one, or for null and
+  /// `auto` the one the configuration selects. Null when the list has none.
+  SandboxBackendInfo? startedBackend(String? asked) {
+    for (final SandboxBackendInfo entry in sandboxBackendList.backends) {
+      final bool wanted = asked == null || asked == FormKeys.sandboxBackendAuto
+          ? entry.selected
+          : entry.name == asked;
+      if (wanted) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
   /// Calls of `SandboxBackends`, for tests.
   int sandboxBackendsCalls = 0;
 
@@ -5657,6 +5703,7 @@ mixin FakeSandboxBackends {
   /// The list the fake answers with unless a test sets another.
   static const SandboxBackendList defaultSandboxBackends = SandboxBackendList(
     minIsolation: IsolationLevel.policy,
+    autoBackend: DoctorCheckId.sandboxTool,
     backends: <SandboxBackendInfo>[
       SandboxBackendInfo(
         // The backend of the system has the name of its doctor line.
@@ -5668,37 +5715,41 @@ mixin FakeSandboxBackends {
       SandboxBackendInfo(
         name: 'podman',
         isolation: IsolationLevel.namespaces,
-        diagnostics: <Diagnostic>[_notAdmitted],
+        available: true,
         runtimes: <SandboxRuntimeInfo>[
           SandboxRuntimeInfo(
             name: 'crun',
             isolation: IsolationLevel.namespaces,
+            available: true,
             selected: true,
-            diagnostics: <Diagnostic>[_notAdmitted],
           ),
           SandboxRuntimeInfo(
             name: 'krun',
             isolation: IsolationLevel.kernel,
-            diagnostics: <Diagnostic>[_notAdmitted],
+            diagnostics: <Diagnostic>[notAdmitted],
           ),
         ],
       ),
     ],
   );
 
-  static const Diagnostic _notAdmitted = Diagnostic(
-    code: 'SANDBOX_048',
+  /// The daemon's `SANDBOX_048` for the runtime `krun`, which stays closed
+  /// until HUM-447; for tests that play a backend that is not admitted.
+  static const Diagnostic notAdmitted = Diagnostic(
+    code: DiagnosticCodes.backendNotAdmitted,
     severity: Severity.blocking,
     why:
-        'sandbox.backend = "podman" is not admitted yet: a backend becomes '
-        'selectable only after its mount check and the escape suite against '
-        'it are green in CI.',
-    fix: FixAction.changeSetting(key: 'sandbox.backend', value: 'auto'),
+        'sandbox.podman.runtime = "krun" is not admitted yet: a backend '
+        'becomes selectable only after its mount check and the escape suite '
+        'against it are green in CI.',
+    fix: FixAction.changeSetting(key: 'sandbox.podman.runtime', value: 'crun'),
   );
 
-  /// `SandboxBackends`.
-  Future<SandboxBackendList> sandboxBackends() async {
+  /// `SandboxBackends`. The plan changes nothing here: the fake has no
+  /// project profiles, and [sandboxBackendList] is what a test plays.
+  Future<SandboxBackendList> sandboxBackends({String? backend}) async {
     sandboxBackendsCalls += 1;
+    sandboxBackendsAsked.add(backend);
     if (sandboxBackendsFailure case final Diagnostic failure) {
       throw DaemonException(failure);
     }

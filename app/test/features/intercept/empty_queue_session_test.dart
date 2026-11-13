@@ -110,11 +110,13 @@ class SessionClient extends FakeDaemonClient {
     String? profile,
     WorkMode? workMode,
     SandboxMode? sandboxMode,
+    String? backend,
   }) async* {
     yield* super.startSandbox(
       profile: profile,
       workMode: workMode,
       sandboxMode: sandboxMode,
+      backend: backend,
     );
     final Completer<void>? end = agentEnd;
     if (end != null) {

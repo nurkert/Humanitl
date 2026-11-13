@@ -76,6 +76,19 @@ class RecordingDaemon extends pbgrpc.HumanitlServiceBase {
     }
   }
 
+  /// Jede Anfrage an `SandboxBackends`, älteste zuerst (HUM-440).
+  final List<pb.SandboxBackendsRequest> backendsRequests =
+      <pb.SandboxBackendsRequest>[];
+
+  @override
+  Future<pb.SandboxBackendList> sandboxBackends(
+    ServiceCall call,
+    pb.SandboxBackendsRequest request,
+  ) async {
+    backendsRequests.add(request);
+    return pb.SandboxBackendList(autoBackend: 'system-backend');
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnimplementedError('${invocation.memberName}');
@@ -131,6 +144,44 @@ void main() {
       addTearDown(server.shutdown);
       client = GrpcDaemonClient(socketPath: socketPath, tokenPath: token.path);
       addTearDown(client.close);
+    });
+
+    // HUM-440: Das Backend dieser Sitzung geht als genau ein Eintrag
+    // `sandbox.backend` in `cli_overrides`; ohne Wahl steht dort nichts.
+    test('the start sends the chosen backend as its one override', () async {
+      await client
+          .startSandbox(backend: 'podman')
+          .toList()
+          .timeout(const Duration(seconds: 20));
+      await client.startSandbox().toList().timeout(const Duration(seconds: 20));
+
+      final List<pb.SandboxRequest_CliOverride> chosen =
+          daemon.requests[0].start.cliOverrides;
+      expect(chosen, hasLength(1));
+      expect(chosen.single.path, FormKeys.sandboxBackend);
+      expect(chosen.single.value, 'podman');
+      expect(daemon.requests[1].start.cliOverrides, isEmpty);
+    });
+
+    // HUM-440: Schnappschuss und Liste tragen dasselbe Backend der Sitzung
+    // als `Plan.backend`; die Liste fragt immer mit Plan, auch ohne Wahl.
+    test('plan and backend list carry the backend of the session', () async {
+      await client
+          .planSandbox(backend: 'chosen-backend')
+          .toList()
+          .timeout(const Duration(seconds: 20));
+      expect(daemon.requests.single.plan.backend, 'chosen-backend');
+
+      final SandboxBackendList list = await client.sandboxBackends(
+        backend: 'chosen-backend',
+      );
+      await client.sandboxBackends();
+      expect(list.autoBackend, 'system-backend');
+      expect(daemon.backendsRequests, hasLength(2));
+      expect(daemon.backendsRequests[0].hasPlan(), isTrue);
+      expect(daemon.backendsRequests[0].plan.backend, 'chosen-backend');
+      expect(daemon.backendsRequests[1].hasPlan(), isTrue);
+      expect(daemon.backendsRequests[1].plan.backend, isEmpty);
     });
 
     test(

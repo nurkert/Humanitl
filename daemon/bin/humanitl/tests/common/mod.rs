@@ -588,8 +588,11 @@ impl DaemonApi for SilentExport {
         self.inner.intercept(request).await
     }
 
-    async fn sandbox_backends(&self) -> Result<v1::SandboxBackendList, Diagnostic> {
-        self.inner.sandbox_backends().await
+    async fn sandbox_backends(
+        &self,
+        request: v1::SandboxBackendsRequest,
+    ) -> Result<v1::SandboxBackendList, Diagnostic> {
+        self.inner.sandbox_backends(request).await
     }
 }
 

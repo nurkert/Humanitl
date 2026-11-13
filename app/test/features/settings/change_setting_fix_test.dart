@@ -105,6 +105,9 @@ const Map<String, Key> fieldOf = <String, Key>{
   FormKeys.llmApiKeyRef: Key('settings-key-input'),
   FormKeys.sandboxMode: Key('settings-sandbox-mode'),
   FormKeys.updateCheck: Key('settings-update-check'),
+  // HUM-440: die ganze Zeile, denn ihr Control kommt erst mit der Antwort
+  // von `SandboxBackends`.
+  FormKeys.sandboxBackend: Key('settings-sandbox-backend'),
 };
 
 void main() {

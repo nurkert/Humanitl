@@ -66,11 +66,19 @@ class PlanRefusingClient extends FakeDaemonClient {
       refusing ? _refused() : super.sandboxStatus();
 
   @override
-  Stream<SandboxUpdate> planSandbox({String? profile, WorkMode? workMode}) {
+  Stream<SandboxUpdate> planSandbox({
+    String? profile,
+    WorkMode? workMode,
+    String? backend,
+  }) {
     plans += 1;
     return refusing
         ? _refused()
-        : super.planSandbox(profile: profile, workMode: workMode);
+        : super.planSandbox(
+            profile: profile,
+            workMode: workMode,
+            backend: backend,
+          );
   }
 }
 

@@ -166,4 +166,10 @@ abstract final class DiagnosticCodes {
   /// `humanitl sandbox image pull <reference>` is the step that does
   /// (HUM-439).
   static const String sandboxImage = 'SANDBOX_043';
+
+  /// A sandbox backend or runtime is valid in the schema but not admitted
+  /// yet: a start with it fails, and no surface offers it as a choice.
+  /// Raised by the daemon (`SandboxBackends`, every start; HUM-431,
+  /// HUM-440).
+  static const String backendNotAdmitted = 'SANDBOX_048';
 }

@@ -85,6 +85,8 @@ fn plan_request(
         work_dir_source: Some(humanitl_ipc::work_dir::source_to_proto(work_dir_source)),
         llm_server,
         session_profile,
+        // Das Backend der Konfiguration (HUM-440).
+        backend: String::new(),
     }
 }
 

@@ -7,6 +7,7 @@
 library;
 
 import 'diagnostic.dart';
+import 'diagnostic_codes.dart';
 
 /// How strongly a backend separates the sandbox from the host, from weak to
 /// strong; mirror of `IsolationLevel`. The same three names as
@@ -83,6 +84,33 @@ final class SandboxBackendInfo {
 
   /// The runtimes of the backend where it has several (Podman).
   final List<SandboxRuntimeInfo> runtimes;
+
+  /// Whether the daemon admits this backend at all (HUM-440).
+  ///
+  /// False only when the daemon itself says so with
+  /// [DiagnosticCodes.backendNotAdmitted]: such a backend is never offered as
+  /// a choice, not even as a disabled one (`SANDBOX_048`). Everything else
+  /// that stands in the way of a start keeps the backend in the list, and
+  /// the reason stands beside it.
+  bool get admitted => !diagnostics.any(
+    (Diagnostic d) => d.code == DiagnosticCodes.backendNotAdmitted,
+  );
+
+  /// What stands in the way of a start first, or null when [available]:
+  /// the first diagnostic of blocking severity, otherwise the first one.
+  /// Also null for an unavailable backend without any diagnostic; the
+  /// surfaces say "not available" then without a reason.
+  Diagnostic? get reason {
+    if (available || diagnostics.isEmpty) {
+      return null;
+    }
+    for (final Diagnostic diagnostic in diagnostics) {
+      if (diagnostic.severity == Severity.blocking) {
+        return diagnostic;
+      }
+    }
+    return diagnostics.first;
+  }
 }
 
 /// The answer of `SandboxBackends`.
@@ -91,11 +119,40 @@ final class SandboxBackendList {
   const SandboxBackendList({
     this.backends = const <SandboxBackendInfo>[],
     this.minIsolation,
+    this.autoBackend,
   });
 
   /// The backends this kind of system can have, in a fixed order.
   final List<SandboxBackendInfo> backends;
 
-  /// `sandbox.min_isolation` of the configuration without a project.
+  /// `sandbox.min_isolation` of the configuration the list was measured
+  /// against, with the project profile of the plan's folder.
   final IsolationLevel? minIsolation;
+
+  /// The name of the backend `auto` means on this system (HUM-440); null
+  /// from a daemon before contract 1.38.
+  final String? autoBackend;
+
+  /// The entry of the backend `auto` means, or null when the daemon did not
+  /// name one that is listed (HUM-440).
+  SandboxBackendInfo? get autoEntry {
+    for (final SandboxBackendInfo backend in backends) {
+      if (backend.name == autoBackend) {
+        return backend;
+      }
+    }
+    return null;
+  }
+
+  /// Whether a start with `auto` would pass, as the entry of the backend
+  /// behind `auto` says. True when the daemon named none: an older daemon
+  /// says nothing about `auto`, and the start reports its own finding.
+  bool get autoAvailable => autoEntry?.available ?? true;
+
+  /// The backends a person may choose from, in the daemon's order: every one
+  /// the daemon admits, available or not (HUM-440).
+  List<SandboxBackendInfo> get offered => <SandboxBackendInfo>[
+    for (final SandboxBackendInfo backend in backends)
+      if (backend.admitted) backend,
+  ];
 }

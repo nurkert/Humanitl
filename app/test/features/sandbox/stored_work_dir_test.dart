@@ -65,6 +65,7 @@ class GatedClient extends FakeDaemonClient {
   Stream<SandboxUpdate> planSandbox({
     String? profile,
     WorkMode? workMode,
+    String? backend,
   }) async* {
     plans++;
     if (planGate case final Completer<void> gate) {
@@ -75,7 +76,11 @@ class GatedClient extends FakeDaemonClient {
       yield SandboxUpdate.status(at);
       return;
     }
-    yield* super.planSandbox(profile: profile, workMode: workMode);
+    yield* super.planSandbox(
+      profile: profile,
+      workMode: workMode,
+      backend: backend,
+    );
   }
 
   @override

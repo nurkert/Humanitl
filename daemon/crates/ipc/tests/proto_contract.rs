@@ -467,6 +467,7 @@ fn all_contract_messages_exist() {
         "DiscoverRequest",
         "DiscoverResult",
         "SandboxBackendList",
+        "SandboxBackendsRequest",
         "SandboxBackend",
         "SandboxRuntime",
     ];
@@ -1473,10 +1474,11 @@ const EXPECTED_RPCS: &[(&str, &str, &str, bool, bool)] = &[
         false,
     ),
     // HUM-432: die Sandbox-Backends dieses Systems mit Stufe, Verfügbarkeit
-    // und dem, was fehlt. Unär; startet nichts.
+    // und dem, was fehlt, seit HUM-440 gemessen am Plan eines Starts. Unär;
+    // startet nichts.
     (
         "SandboxBackends",
-        ".google.protobuf.Empty",
+        ".humanitl.v1.SandboxBackendsRequest",
         ".humanitl.v1.SandboxBackendList",
         false,
         false,

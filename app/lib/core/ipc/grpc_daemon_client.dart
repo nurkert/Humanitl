@@ -305,14 +305,20 @@ class GrpcDaemonClient implements DaemonClient {
       _sandbox(pb.SandboxRequest()..status = Empty());
 
   @override
-  Stream<SandboxUpdate> planSandbox({String? profile, WorkMode? workMode}) =>
-      _sandbox(pb.SandboxRequest()..plan = _plan(profile, workMode));
+  Stream<SandboxUpdate> planSandbox({
+    String? profile,
+    WorkMode? workMode,
+    String? backend,
+  }) => _sandbox(
+    pb.SandboxRequest()..plan = _plan(profile, workMode, backend: backend),
+  );
 
   @override
   Stream<SandboxUpdate> startSandbox({
     String? profile,
     WorkMode? workMode,
     SandboxMode? sandboxMode,
+    String? backend,
   }) {
     final pb.SandboxRequest_Plan plan = _plan(profile, workMode);
     return _sandbox(
@@ -321,7 +327,15 @@ class GrpcDaemonClient implements DaemonClient {
           ..profile = plan.profile
           ..workMode = plan.workMode
           // Leer heißt: `sandbox.mode` aus der Konfiguration (HUM-350).
-          ..sandboxMode = sandboxMode?.wire ?? ''),
+          ..sandboxMode = sandboxMode?.wire ?? ''
+          // Das Backend nur dieser Sitzung (HUM-440); ohne Wahl kein
+          // Eintrag, und der Daemon nimmt `sandbox.backend`.
+          ..cliOverrides.addAll(<pb.SandboxRequest_CliOverride>[
+            if (backend != null)
+              pb.SandboxRequest_CliOverride()
+                ..path = FormKeys.sandboxBackend
+                ..value = backend,
+          ])),
     );
   }
 
@@ -360,11 +374,17 @@ class GrpcDaemonClient implements DaemonClient {
 
   /// The wish of the caller; an argument left out stays empty, and the daemon
   /// reads empty as "keep what you have". `work_dir` stays empty for good:
-  /// the daemon takes the stored `sandbox.work_dir` (HUM-293).
-  pb.SandboxRequest_Plan _plan(String? profile, WorkMode? workMode) =>
-      pb.SandboxRequest_Plan()
-        ..profile = profile ?? ''
-        ..workMode = workMode?.wire ?? '';
+  /// the daemon takes the stored `sandbox.work_dir` (HUM-293). [backend] is
+  /// the backend of the session (`Plan.backend`, HUM-440); null leaves it
+  /// empty, and the daemon takes `sandbox.backend`.
+  pb.SandboxRequest_Plan _plan(
+    String? profile,
+    WorkMode? workMode, {
+    String? backend,
+  }) => pb.SandboxRequest_Plan()
+    ..profile = profile ?? ''
+    ..workMode = workMode?.wire ?? ''
+    ..backend = backend ?? '';
 
   /// One `Sandbox` call, translated event by event.
   ///
@@ -647,9 +667,15 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
-  Future<SandboxBackendList> sandboxBackends() async {
+  Future<SandboxBackendList> sandboxBackends({String? backend}) async {
+    // Immer mit Plan, demselben wie für den Schnappschuss (HUM-440): Der
+    // Daemon misst dann an der Konfiguration eines Starts dieser App, samt
+    // dem Projekt-Profil des gespeicherten Ordners und dem Backend der
+    // Sitzung.
+    final pb.SandboxBackendsRequest request = pb.SandboxBackendsRequest()
+      ..plan = _plan(null, null, backend: backend);
     final pb.SandboxBackendList list = await _unary(
-      (CallOptions options) => _stub.sandboxBackends(Empty(), options: options),
+      (CallOptions options) => _stub.sandboxBackends(request, options: options),
     );
     return list.toDomain();
   }
