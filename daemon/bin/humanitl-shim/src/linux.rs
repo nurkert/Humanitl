@@ -141,6 +141,7 @@
 //! socket is never mounted.
 
 mod channel;
+mod contract;
 mod envfd;
 mod exec;
 mod mounts;

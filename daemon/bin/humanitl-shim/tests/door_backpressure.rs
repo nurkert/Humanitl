@@ -42,17 +42,16 @@ const SHIM_VARS: [&str; 5] = [
     "HUMANITL_REPORT_FD",
 ];
 
-/// Die Gnadenfrist des Shims nach dem Ende der Lebensleine;
-/// `supervise::KILL_GRACE` im Binary, hier ausgeschrieben, weil ein
-/// Integrationstest das Binary nicht als Bibliothek sieht.
-const KILL_GRACE: Duration = Duration::from_secs(5);
+// Gnadenfrist, Höchstzahl weiterer Shells und die Warnung beim Aufgeben der
+// Tür kommen aus derselben Datei wie im Binary, nicht aus einer Kopie
+// (HUM-459).
+#[path = "../src/contract.rs"]
+mod contract;
+use contract::{KILL_GRACE, MAX_SHELLS};
 
-/// So viele weitere Shells laufen höchstens gleichzeitig;
-/// `exec::MAX_SHELLS` im Binary.
-const MAX_SHELLS: u32 = 4;
-
-/// Die Warnung, mit der der Shim die Tür aufgibt (`Shells::give_up`).
-const GIVEN_UP: &str = "shell replies cannot reach the daemon";
+/// Die Warnung, mit der der Shim die Tür aufgibt (`Shells::give_up`), ohne
+/// den Zeilenumbruch, damit sie im gesammelten stderr gefunden wird.
+const GIVEN_UP: &str = contract::SHELL_REPLIES_LOST.trim_ascii_end();
 
 /// So lange muss die eigene Seite der Tür nach `EAGAIN` unbeschreibbar
 /// bleiben, bis sie als dauerhaft voll gilt. Ein Shim, der noch liest, nimmt
