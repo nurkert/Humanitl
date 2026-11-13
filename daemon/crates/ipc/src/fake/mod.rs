@@ -843,8 +843,9 @@ impl DaemonApi for FakeDaemon {
 
     /// Die Backends dieses Systems (HUM-432), ohne das System zu fragen: Der
     /// Fake spielt ein System, auf dem alles installiert ist. Das Backend
-    /// des Systems ist gewählt und verfügbar; Podman ist, wie im echten
-    /// Daemon vor HUM-448, nicht zugelassen. Untergrenze, Zulassung und
+    /// des Systems ist gewählt und verfügbar; die Container-Engine ist, wie
+    /// im echten Daemon seit HUM-448, in ihrer gemeinsamen Stufe verfügbar
+    /// und in der Kernel-Stufe nicht zugelassen. Untergrenze, Zulassung und
     /// Laufzeiten kommen aus derselben Liste wie im echten Daemon
     /// ([`humanitl_sandbox::list_backends_with`]), damit der Fake keine
     /// Codes erfindet.

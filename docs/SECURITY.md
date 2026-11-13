@@ -1739,6 +1739,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | Linux: Podman as a second sandbox backend, plain level (rootless, runtime `crun`), not admitted: every start refuses it with `SANDBOX_048` until HUM-448; only the escape suite and the tests start it. Every configuration source the daemon does not write is cut off, the environment goes only through the sealed memfd, the container ends through the engine and the lifeline (HUM-433, [section 13](#13-linux-podman), K-27). |
 | 0.1.x | The escape suite runs against every backend; the CI job `escape-tests-podman` runs it against Podman through `escape-launch --backend podman`, with a hostile engine configuration planted on the runner (HUM-435, [section 9](#9-what-we-verify-in-ci), K-27). |
 | 0.1.x | Linux, Podman: an image as the root of the sandbox, pinned by digest and checked before every start (`SANDBOX_043`), never pulled by a start; `humanitl sandbox image pull` pulls on request, directly and not through the proxy, and says so first; project, door, CA, shim and session files come from the host, and ESC-2 checks the CA by device and inode (HUM-439, [section 13](#an-image-as-the-root-hum-439), K-28). |
+| 0.1.x | Linux: Podman admitted at the plain level (`podman/crun`) after `escape-tests-podman` was green on `main`; a person chooses it with `sandbox.backend = "podman"` or `--backend podman`, `auto` stays bubblewrap, and the kernel level (`krun`) stays refused with `SANDBOX_048` until HUM-449 (HUM-448, [section 13](#13-linux-podman), K-27). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap
 
@@ -1944,14 +1945,17 @@ the binaries inside the disk image.
 
 ## 13. Linux: Podman
 
-**Not admitted yet.** Podman is a second sandbox backend on Linux (ADR-0020), first as the plain
-level: rootless Podman with the OCI runtime `crun`, namespaces over the shared host kernel, the
-same isolation level as bubblewrap. Until HUM-448 admits it, every start with
-`sandbox.backend = "podman"` refuses with `SANDBOX_048`, from `config.toml`, a profile, the
-environment, `--backend` and the interface alike; only the escape suite and the tests start it,
-through code compiled into neither the daemon nor the CLI. This section states what the adapter
-(`daemon/crates/sandbox/src/podman/`, HUM-433) does, so that the admission can be checked against
-it.
+**Admitted since HUM-448.** Podman is a second sandbox backend on Linux (ADR-0020), first as the
+plain level: rootless Podman with the OCI runtime `crun`, namespaces over the shared host kernel,
+the same isolation level as bubblewrap. It was admitted only after the escape suite against it
+(the CI job `escape-tests-podman`, ESC-1, ESC-2 and ESC-5) was green on `main` together with the
+mount check (HUM-437) and the user's service manager (HUM-434). A start with
+`sandbox.backend = "podman"` runs a session, whether the choice comes from `config.toml`, a
+profile, the environment, `--backend` or the start of a session; a project profile cannot choose
+the backend. `auto` stays bubblewrap: Podman runs only when a person chooses it. The kernel level,
+Podman with `krun`, is not admitted yet and every start with it refuses with `SANDBOX_048` until
+HUM-449. This section states what the adapter (`daemon/crates/sandbox/src/podman/`, HUM-433)
+does.
 
 ### The three guarantees under Podman
 
@@ -2052,8 +2056,8 @@ configuration is refused with `CONFIG_003`).
   so before it runs. The registry is the one in the name: a short name without a registry is
   refused, and the daemon's own `registries.conf` has no search list and no mirror. The signature
   policy is the daemon's own file (`--signature-policy`) and accepts any image: the trust anchor is
-  the digest the person named, not a signature. Until HUM-448 the pull is refused with
-  `SANDBOX_048`, like every start.
+  the digest the person named, not a signature. Under the kernel level, which is not admitted
+  yet, the pull is refused with `SANDBOX_048`, like every start.
 - **The image is part of the trusted computing base.** Whatever it holds runs as the agent, under
   the agent's filter. The shim runs from the host's file, statically linked in a release, so no
   library of the image runs before the filter is in place. Project folder, door, CA certificate and

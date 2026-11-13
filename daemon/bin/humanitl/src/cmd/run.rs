@@ -1596,12 +1596,12 @@ mod tests {
         let backend = client(&[("HUMANITL_SANDBOX__BACKEND", "podman")]);
         let sent = super::merge_overrides(Vec::new(), &backend);
         let resolved = start(sent).expect("the wish resolves");
-        let refused = humanitl_sandbox::choose_backend(
+        let chosen = humanitl_sandbox::choose_backend(
             &resolved.config.sandbox,
             humanitl_sandbox::AUTO_BACKEND,
         )
-        .expect_err("podman is not admitted");
-        assert_eq!(refused.code.as_str(), "SANDBOX_048", "{}", refused.why);
+        .expect("the shared stage is admitted (HUM-448)");
+        assert_eq!(chosen.name, humanitl_sandbox::PODMAN_BACKEND);
 
         // Ein Flag gewinnt über die Umgebung, und nichts kommt doppelt.
         let sent = super::merge_overrides(

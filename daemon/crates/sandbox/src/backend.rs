@@ -43,7 +43,7 @@ use crate::launcher::{
     SandboxBackend,
 };
 pub use crate::podman::with_image_root;
-use crate::podman::{PodmanBackend, static_lines as engine_static_lines};
+use crate::podman::{PodmanBackend, SHARED_KERNEL_STAGE, static_lines as engine_static_lines};
 #[cfg(target_os = "macos")]
 use crate::seatbelt::SeatbeltBackend;
 
@@ -54,18 +54,18 @@ pub const BWRAP_BACKEND: &str = "bwrap";
 pub const SEATBELT_BACKEND: &str = "seatbelt";
 
 /// Der Name der Container-Engine in `sandbox.backend` (HUM-431). Das Backend gibt es
-/// seit HUM-433; zugelassen ist es erst mit HUM-448.
+/// seit HUM-433; zugelassen ist seine gemeinsame Stufe seit HUM-448.
 pub const PODMAN_BACKEND: &str = "podman";
 
 /// Die Stufen, die ein Mensch wählen kann (HUM-431).
 ///
-/// Eine Stufe ist ein Backend, unter Podman mit seiner Laufzeit
-/// (`podman/crun`, `podman/krun`). Sie kommt erst auf diese Liste, wenn ihre
-/// Einhänge-Prüfung gelandet und die Escape-Suite gegen sie in der CI grün ist
-/// (Tor in `backlog/sprint-7.md`); `podman/crun` bringt HUM-448, `podman/krun`
-/// HUM-449. Bis dahin lehnt jeder Start sie mit `SANDBOX_048` ab, und `auto`
-/// löst nie auf sie auf.
-pub const ADMITTED_BACKENDS: &[&str] = &[BWRAP_BACKEND, SEATBELT_BACKEND];
+/// Eine Stufe ist ein Backend, unter der Container-Engine mit ihrer Laufzeit.
+/// Sie kommt erst auf diese Liste, wenn ihre Einhänge-Prüfung gelandet und die
+/// Escape-Suite gegen sie in der CI grün ist (Tor in `backlog/sprint-7.md`):
+/// die gemeinsame Stufe mit HUM-448, die Kernel-Stufe mit HUM-449. Bis dahin
+/// lehnt jeder Start eine Stufe mit `SANDBOX_048` ab, und `auto` löst nie auf
+/// die Container-Engine auf, auch nicht auf eine zugelassene Stufe.
+pub const ADMITTED_BACKENDS: &[&str] = &[BWRAP_BACKEND, SHARED_KERNEL_STAGE, SEATBELT_BACKEND];
 
 /// Ruft `$call` auf dem gewählten Backend auf, ein Zweig je Variante.
 macro_rules! dispatch {
@@ -805,56 +805,53 @@ mod tests {
         }
     }
 
-    /// Die Zulassung in diesem Commit: genau bwrap und Seatbelt (HUM-431).
-    /// HUM-448 dreht diesen Test um und trägt `podman/crun` ein; `krun`
-    /// bleibt bis HUM-449 draußen.
+    /// Die Zulassung seit HUM-448: bwrap, Seatbelt und die gemeinsame Stufe
+    /// der Container-Engine; die Kernel-Stufe bleibt bis HUM-449 draußen.
     #[test]
-    fn only_bwrap_and_seatbelt_are_admitted() {
+    fn the_shared_stage_is_admitted_and_the_kernel_stage_is_not() {
         use humanitl_config::MinIsolation::Policy;
         use humanitl_config::SandboxBackendName::Podman;
-        assert_eq!(ADMITTED_BACKENDS, [BWRAP_BACKEND, SEATBELT_BACKEND]);
-        for stage in ["podman", "podman/crun", "podman/krun"] {
-            assert!(!ADMITTED_BACKENDS.contains(&stage), "{stage}");
+        let crun = PodmanRuntime::Crun;
+        assert_eq!(
+            ADMITTED_BACKENDS,
+            [BWRAP_BACKEND, "podman/crun", SEATBELT_BACKEND]
+        );
+        assert_eq!(stage(PODMAN_BACKEND, Some(crun)), SHARED_KERNEL_STAGE);
+        for refused in [PODMAN_BACKEND, "podman/krun"] {
+            assert!(!ADMITTED_BACKENDS.contains(&refused), "{refused}");
         }
-        for runtime in [PodmanRuntime::Crun, PodmanRuntime::Krun] {
-            let refused = choose_backend(&sandbox(Podman, Policy, runtime), "auto");
-            assert_eq!(code_of(refused), "SANDBOX_048", "{runtime:?}");
-        }
+        let chosen = choose_backend(&sandbox(Podman, Policy, crun), "auto").expect("admitted");
+        assert_eq!(chosen.stage(), SHARED_KERNEL_STAGE);
+        assert_eq!(chosen.isolation, IsolationLevel::Namespaces);
+        let kernel = choose_backend(&sandbox(Podman, Policy, PodmanRuntime::Krun), "auto");
+        assert_eq!(code_of(kernel), "SANDBOX_048");
     }
 
-    /// `sandbox.backend = "podman"` scheitert vor HUM-448 an jedem Weg in
-    /// den Start: die Wahl aus der Konfiguration, das Suchen nach Namen und
-    /// der Rückfall für die Vorschau. Nur die Umgehung kommt an der Zulassung
-    /// vorbei, zum Adapter (HUM-433).
+    /// `sandbox.backend = "podman"` kommt seit HUM-448 auf jedem Weg in den
+    /// Start an der Zulassung vorbei bis zum Adapter, der auf diesem `PATH`
+    /// keine Engine findet. Mit `krun` scheitert jeder Weg weiter an der
+    /// Zulassung, auch die Umgehung (HUM-444).
     #[test]
-    fn podman_is_refused_on_every_path_until_it_is_admitted() {
+    fn the_engine_passes_admission_on_every_path_and_its_kernel_stage_not() {
         let dir = tempfile::tempdir().expect("tempdir");
         let paths = without_bwrap(dir.path());
-        let sandbox = SandboxRef::default();
-        let err =
-            Backend::detect(PODMAN_BACKEND, paths.clone(), &sandbox).expect_err("not admitted");
-        assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
-        assert_eq!(
-            err.fix,
-            Some(FixAction::ChangeSetting {
-                key: "sandbox.backend".to_owned(),
-                value: "auto".to_owned(),
-            })
-        );
-        let err =
-            Backend::fallback(PODMAN_BACKEND, paths.clone(), &sandbox).expect_err("not admitted");
-        assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
-        // Die Umgehung kommt an der Zulassung vorbei; auf diesem `PATH` gibt
-        // keine Engine, und das sagt der Adapter selbst (HUM-433).
-        let err = Backend::detect_unadmitted(PODMAN_BACKEND, paths, &sandbox)
-            .expect_err("no engine in PATH");
+        let shared = SandboxRef::default();
+        let err = Backend::detect(PODMAN_BACKEND, paths.clone(), &shared).expect_err("no engine");
         assert_eq!(err.code.as_str(), "SANDBOX_034", "{}", err.why);
         assert!(err.why.contains("no executable podman"), "{}", err.why);
-        // Auch mit der Umgehung bleibt die Kernel-Stufe gesperrt (HUM-444).
+        let preview = Backend::fallback(PODMAN_BACKEND, paths.clone(), &shared).expect("admitted");
+        assert_eq!(preview.name(), PODMAN_BACKEND);
+        assert_eq!(preview.isolation(), IsolationLevel::Namespaces);
+
         let kernel = sandbox_with_runtime(PodmanRuntime::Krun);
-        let err = Backend::detect_unadmitted(PODMAN_BACKEND, without_bwrap(dir.path()), &kernel)
-            .expect_err("kernel level");
-        assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
+        for refused in [
+            Backend::detect(PODMAN_BACKEND, paths.clone(), &kernel).map(drop),
+            Backend::fallback(PODMAN_BACKEND, paths.clone(), &kernel).map(drop),
+            Backend::detect_unadmitted(PODMAN_BACKEND, paths, &kernel).map(drop),
+        ] {
+            let err = refused.expect_err("kernel level");
+            assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
+        }
     }
 
     /// `auto` löst auf das Backend des Systems auf und nie auf ein anderes:
@@ -896,11 +893,17 @@ mod tests {
         use humanitl_config::MinIsolation::Policy;
         use humanitl_config::SandboxBackendName::{Auto, Podman};
         let crun = PodmanRuntime::Crun;
-        // Ein Profil, das Podman verlangt, bei der Vorgabe `auto`; ohne Knopf,
-        // denn Podman ist nicht zugelassen.
+        // Ein Profil, das Podman verlangt, bei der Vorgabe `auto`; mit Knopf
+        // zu Podman, denn seine gemeinsame Stufe ist zugelassen (HUM-448).
         let err = choose_backend(&sandbox(Auto, Policy, crun), "podman").expect_err("requires");
         assert_eq!(err.code.as_str(), "SANDBOX_036", "{}", err.why);
-        assert_eq!(err.fix, None);
+        assert_eq!(
+            err.fix,
+            Some(FixAction::ChangeSetting {
+                key: "sandbox.backend".to_owned(),
+                value: PODMAN_BACKEND.to_owned(),
+            })
+        );
         // Ein Profil, das bwrap verlangt, bei der Wahl `podman`.
         if cfg!(not(target_os = "macos")) {
             let err =

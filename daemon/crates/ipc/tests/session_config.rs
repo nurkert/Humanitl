@@ -980,25 +980,66 @@ fn failed(events: &[v1::SandboxEvent]) -> bool {
     })
 }
 
-/// `sandbox.backend = "podman"` scheitert vor HUM-448 an jedem Weg, auf dem
-/// ein Mensch oder ein Client ihn setzt: `config.toml` und ein Wunsch über
-/// den Start (`cli_overrides`, HUM-431). Nie startet stattdessen das Backend des Systems, und
-/// die Vorschau sagt dasselbe, bevor jemand startet.
+/// Der Name der Container-Engine in `sandbox.backend`.
+const ENGINE: &str = humanitl_sandbox::PODMAN_BACKEND;
+
+/// Die `config.toml` des Nutzers, deren Container-Engine diese Zeilen und
+/// ein Programm hat, das es nicht gibt: Kein Test startet so die Engine des
+/// Rechners, auf dem er läuft.
+fn engine_absent(fixture: &Fixture, lines: &str) {
+    let absent = fixture.config_home.join("absent").join("engine");
+    fixture.user_config(&format!(
+        "[sandbox.podman]\n{lines}program = {:?}\n",
+        absent.display().to_string()
+    ));
+}
+
+/// Seit HUM-448 kommt die gemeinsame Stufe über einen Wunsch beim Start
+/// (`cli_overrides`, HUM-431) an der Zulassung vorbei: Der Start plant mit
+/// der Engine aus `config.toml`, einer Attrappe, die es nicht gibt, und
+/// scheitert erst an der Tür, die dieser Test nicht bindet. Die Kernel-Stufe scheitert
+/// weiter mit `SANDBOX_048`, aus `config.toml` beim Start, in der Vorschau
+/// und beim Ziehen eines Abbilds; den Wunsch über den Start prüft
+/// `the_start_takes_backend_and_runtime_and_measures_them_against_the_floor`.
+/// Nie startet stattdessen das Backend des Systems.
 #[tokio::test(flavor = "multi_thread")]
-async fn podman_is_refused_from_the_config_and_from_the_start_until_it_is_admitted() {
+async fn the_shared_stage_is_admitted_and_the_kernel_stage_is_refused_on_every_path() {
     let fixture = Fixture::live();
-    let seen = fixture
-        .run(with_override("sandbox.backend", "podman"))
-        .await;
+    engine_absent(&fixture, "");
+    let seen = fixture.run(with_override("sandbox.backend", ENGINE)).await;
+    let found = codes(&seen);
+    assert!(!found.contains(&"SANDBOX_048".to_owned()), "{found:?}");
+    // Der Start plant mit der Engine: ihre Zeile mit dem Programm aus
+    // `config.toml` und die gemeinsame Stufe, bevor er an der fehlenden Tür
+    // dieses Tests scheitert.
+    let absent = fixture.config_home.join("absent").join("engine");
+    let starting = seen
+        .iter()
+        .find_map(|event| match &event.event {
+            Some(v1::sandbox_event::Event::Status(status))
+                if status.state == v1::SandboxState::Starting as i32 =>
+            {
+                Some(status)
+            }
+            _ => None,
+        })
+        .expect("the start gets as far as its plan");
+    assert_eq!(starting.backend, ENGINE, "{starting:?}");
+    assert_eq!(
+        starting.isolation_level,
+        v1::IsolationLevel::Namespaces as i32
+    );
     assert!(
-        codes(&seen).contains(&"SANDBOX_048".to_owned()),
-        "{:?}",
-        codes(&seen)
+        starting
+            .argv_preview
+            .starts_with(&absent.display().to_string()),
+        "{}",
+        starting.argv_preview
     );
     assert!(failed(&seen), "{seen:?}");
 
     let fixture = Fixture::live();
-    fixture.user_config("[sandbox]\nbackend = \"podman\"\n");
+    fixture.user_config("[sandbox]\nbackend = \"podman\"\n[sandbox.podman]\nruntime = \"krun\"\n");
     let seen = fixture.run(v1::sandbox_request::Start::default()).await;
     assert!(
         codes(&seen).contains(&"SANDBOX_048".to_owned()),
@@ -1033,6 +1074,48 @@ async fn podman_is_refused_from_the_config_and_from_the_start_until_it_is_admitt
         }
         assert_eq!(codes(&pulled), ["SANDBOX_048"], "{pulled:?}");
         assert_eq!(pulled.len(), 1, "{pulled:?}");
+    }
+}
+
+/// Die Obergrenzen aus dem Host für die Container-Engine gelten auch für die
+/// Konfiguration, die ein Wunsch über den Start mit `config.toml`
+/// zusammenführt, nicht nur für die, die der Daemon beim Laden las
+/// (HUM-448). Der Dienst hat ohne `config.toml` geladen; sie entsteht erst
+/// danach, mit Werten über jedem Host, und der Start mit dem Wunsch
+/// `sandbox.backend` lehnt sie mit `CONFIG_003` ab, bevor er etwas
+/// plant. Ohne die Prüfung käme er bis zu seinem Plan mit der Engine.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wished_backend_meets_the_host_limits_of_the_merged_configuration() {
+    for (key, line) in [
+        ("memory_mib", "memory_mib = 1099511627776\n"),
+        ("cpus", "cpus = 4294967295\n"),
+    ] {
+        let fixture = Fixture::live();
+        engine_absent(&fixture, line);
+        let seen = fixture.run(with_override("sandbox.backend", ENGINE)).await;
+        let refused: Vec<&v1::Diagnostic> = seen
+            .iter()
+            .filter_map(|event| match &event.event {
+                Some(v1::sandbox_event::Event::Diagnostic(diagnostic)) => Some(diagnostic),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            refused
+                .iter()
+                .any(|d| d.code == "CONFIG_003" && d.why.contains(key)),
+            "{key}: {refused:?}"
+        );
+        assert!(
+            !seen.iter().any(|event| matches!(
+                &event.event,
+                Some(v1::sandbox_event::Event::Status(status))
+                    if status.state == v1::SandboxState::Starting as i32
+            )),
+            "{key}: the start never got as far as its plan: {seen:?}"
+        );
+        assert!(failed(&seen), "{seen:?}");
     }
 }
 
@@ -1202,13 +1285,14 @@ async fn a_podman_runtime_wished_without_podman_refuses_the_start() {
         );
         assert!(failed(&seen), "{runtime}: {seen:?}");
     }
-    // Mit Podman gewählt kommt die Laufzeit an und scheitert erst an der
-    // Zulassung.
+    // Mit der Engine gewählt kommt die Laufzeit an und scheitert erst an der
+    // Zulassung der Kernel-Stufe; die gemeinsame Stufe ist seit HUM-448
+    // zugelassen und hier deshalb nicht gefragt.
     let fixture = Fixture::live();
     let seen = fixture
         .run(with_overrides(&[
             ("sandbox.backend", "podman"),
-            ("sandbox.podman.runtime", "crun"),
+            ("sandbox.podman.runtime", "krun"),
         ]))
         .await;
     assert!(

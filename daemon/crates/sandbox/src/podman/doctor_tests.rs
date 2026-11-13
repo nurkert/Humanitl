@@ -1,4 +1,5 @@
-//! Der Doctor je Backend für Podman, vor der Zulassung (HUM-436).
+//! Der Doctor je Backend für Podman (HUM-436): die Stufe, die noch nicht
+//! zugelassen ist, und das falsche Programm.
 //!
 //! Die Tests stehen im Adapter, weil sie Podman beim Namen nennen müssen;
 //! außerhalb des Adapters spricht der Code nur vom Backend
@@ -23,9 +24,10 @@ fn podman_with(program: std::path::PathBuf) -> SandboxRef {
     }
 }
 
-/// Vor HUM-448 liefert `doctor --probe` für Podman `SANDBOX_048` und
-/// startet keinen Prozess: Die Attrappe für `podman` zählt jeden Aufruf
-/// in eine Datei, und die Datei entsteht nie.
+/// Für eine Stufe vor ihrer Zulassung liefert `doctor --probe` `SANDBOX_048`
+/// und startet keinen Prozess: Die Attrappe für `podman` zählt jeden Aufruf
+/// in eine Datei, und die Datei entsteht nie. Seit HUM-448 ist das die
+/// Kernel-Stufe mit `krun`; die gemeinsame Stufe ist zugelassen.
 #[test]
 fn before_admission_the_probe_of_podman_is_refused_and_starts_nothing() {
     let dir = tempfile::tempdir().unwrap();
@@ -52,7 +54,8 @@ fn before_admission_the_probe_of_podman_is_refused_and_starts_nothing() {
         ("PATH", bin.to_string_lossy().into_owned()),
         ("XDG_RUNTIME_DIR", runtime.to_string_lossy().into_owned()),
     ]));
-    let sandbox = podman_with(podman.clone());
+    let mut sandbox = podman_with(podman.clone());
+    sandbox.podman.runtime = humanitl_config::PodmanRuntime::Krun;
     let cache = ProbeCache::at(dir.path().join("doctor-probe.json"));
 
     let group = group(
@@ -64,7 +67,7 @@ fn before_admission_the_probe_of_podman_is_refused_and_starts_nothing() {
     );
 
     assert!(group.selected);
-    assert_eq!(group.stage, "podman/crun");
+    assert_eq!(group.stage, "podman/krun");
     let admitted = group.get(BackendCheckId::Admitted).expect("admitted");
     assert_eq!(admitted.status(), CheckStatus::Warn);
     assert_eq!(
@@ -98,7 +101,9 @@ fn before_admission_the_probe_of_podman_is_refused_and_starts_nothing() {
 
 /// Ein falsches `sandbox.podman.program` ist in der Gruppe des gewählten
 /// Backends `fail` mit `SANDBOX_034` und dem Installationsbefehl; ist
-/// Podman nicht gewählt, bleibt dieselbe Zeile `warn`.
+/// Podman nicht gewählt, bleibt dieselbe Zeile `warn`. Seit HUM-448 ist die
+/// gemeinsame Stufe zugelassen, und die Zeile ist die der Suche vor jedem
+/// Start (`available`).
 #[test]
 fn a_wrong_podman_program_fails_only_where_podman_is_chosen() {
     let dir = tempfile::tempdir().unwrap();
@@ -113,7 +118,7 @@ fn a_wrong_podman_program_fails_only_where_podman_is_chosen() {
     let cache = ProbeCache::at(dir.path().join("doctor-probe.json"));
 
     let chosen = group("podman", &sandbox, &paths, &ProbeMode::Cached, &cache);
-    let program = chosen.get(BackendCheckId::Program).expect("program");
+    let program = chosen.get(BackendCheckId::Available).expect("program");
     assert_eq!(program.status(), CheckStatus::Fail);
     let finding = program.diagnostic().expect("finding");
     assert_eq!(finding.code.as_str(), "SANDBOX_034");
@@ -126,7 +131,7 @@ fn a_wrong_podman_program_fails_only_where_podman_is_chosen() {
     sandbox.backend = SandboxBackendName::Auto;
     let other = group("podman", &sandbox, &paths, &ProbeMode::Cached, &cache);
     assert!(!other.selected);
-    let program = other.get(BackendCheckId::Program).expect("program");
+    let program = other.get(BackendCheckId::Available).expect("program");
     assert_eq!(program.status(), CheckStatus::Warn);
     assert!(
         other.checks.iter().all(|c| c.status() != CheckStatus::Fail),

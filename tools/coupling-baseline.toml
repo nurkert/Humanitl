@@ -50,7 +50,7 @@
 "daemon/bin/humanitl/src/cmd/backends.rs" = 9
 "daemon/bin/humanitl/src/cmd/run.rs" = 14
 "daemon/bin/humanitl/src/cmd/sandbox.rs" = 3
-"daemon/bin/humanitl/tests/cli.rs" = 18
+"daemon/bin/humanitl/tests/cli.rs" = 15
 "daemon/crates/config/src/lib.rs" = 3
 "daemon/crates/config/src/load.rs" = 6
 "daemon/crates/config/src/model.rs" = 36
@@ -58,13 +58,12 @@
 "daemon/crates/config/tests/config_readers.rs" = 13
 "daemon/crates/config/tests/profiles.rs" = 4
 "daemon/crates/config/tests/project_scope.rs" = 12
-"daemon/crates/core-types/src/diagnostics/codes.rs" = 20
-"daemon/crates/ipc/src/fake/mod.rs" = 1
-"daemon/crates/ipc/src/server.rs" = 30
+"daemon/crates/core-types/src/diagnostics/codes.rs" = 19
+"daemon/crates/ipc/src/server.rs" = 28
 "daemon/crates/ipc/src/session.rs" = 20
 "daemon/crates/ipc/tests/session_config.rs" = 25
-"daemon/crates/sandbox/src/backend.rs" = 143
-"daemon/crates/sandbox/src/backend_list.rs" = 98
+"daemon/crates/sandbox/src/backend.rs" = 139
+"daemon/crates/sandbox/src/backend_list.rs" = 86
 "daemon/crates/sandbox/src/launcher.rs" = 3
 "daemon/crates/sandbox/src/lib.rs" = 2
 "daemon/crates/sandbox/src/profile.rs" = 8

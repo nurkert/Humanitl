@@ -15,6 +15,37 @@ use humanitl_config::{PodmanConfig, PodmanRuntime};
 
 use super::*;
 
+/// Gleichzeitige Vorbereitungen schreiben dieselbe Datei, ohne einander den
+/// Zwischennamen wegzubenennen (HUM-448: die Liste der Backends erkennt die
+/// Engine, während ein Start dasselbe tut).
+#[cfg(target_os = "linux")]
+#[test]
+fn concurrent_writes_of_one_file_all_succeed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("containers.conf");
+    let workers: Vec<_> = (0..8)
+        .map(|worker| {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                for round in 0..50 {
+                    write_file(&path, format!("{worker}-{round}").as_bytes(), 0o600)
+                        .unwrap_or_else(|d| panic!("{worker}/{round}: {}", d.why));
+                }
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().unwrap();
+    }
+    assert!(path.exists());
+    let left: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name())
+        .collect();
+    assert_eq!(left.len(), 1, "staged files left behind: {left:?}");
+}
+
 #[test]
 fn empty_limits_are_derived_from_the_host_within_their_bounds() {
     let config = PodmanConfig::default();
