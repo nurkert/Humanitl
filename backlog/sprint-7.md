@@ -66,6 +66,10 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-457 | Ein laufendes Ziehen eines Abbilds lässt sich abbrechen | S | HUM-439 |
 | HUM-458 | PID-1-Integrationstests: ohne nutzbare Sandbox in der CI rot statt übersprungen | S | HUM-451 |
 | HUM-459 | Konstanten, die Tests vom Shim abschreiben, bleiben mit ihm im Gleichschritt | S | HUM-451 |
+| HUM-460 | Konfiguration: die Beschreibung von `sandbox.podman` nennt die Zulassung von Podman | S | HUM-448 |
+| HUM-461 | RPM und AUR empfehlen Podman wie das .deb | S | HUM-441 |
+| HUM-462 | Website: Podman als wählbares Backend auf der Sicherheitsseite | S | HUM-441 |
+| HUM-463 | Deutsche Übersetzung von ADR-0020 und der deutsche ADR-Index | S | HUM-441 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -879,3 +883,90 @@ wird der Test still strenger oder lockerer (Review HUM-451).
 
 ### Akzeptanzkriterien
 1. Kein Test hält eine eigene Kopie dieser Werte, die unbemerkt abweicht.
+
+---
+
+## HUM-460 · Config: the description of `sandbox.podman` names the admission of Podman
+
+### Kontext
+Der Doc-Kommentar der Gruppe `sandbox.podman` in
+`daemon/crates/config/src/model.rs` sagt noch, jeder Start mit Podman lehne mit
+`SANDBOX_048` ab. Seit HUM-448 ist die gemeinsame Stufe (`crun`) zugelassen;
+abgelehnt wird nur noch `krun` bis HUM-449. Der Text steht auch im Schema und
+damit in jedem Editor, der es liest (Review HUM-441, 2026-11-13).
+
+### Spezifikation
+1. Der Doc-Kommentar beschreibt den Stand: `crun` wählbar, `krun` lehnt jeder
+   Start bis zur Zulassung der Kernel-Stufe mit `SANDBOX_048` ab.
+2. Schema-Fixture und `docs/CONFIG.md` folgen aus der Quelle, nicht von Hand.
+
+### Tests
+- Der vorhandene Abgleich von Schema und Fixture bleibt grün.
+
+### Akzeptanzkriterien
+1. Kein Text in Konfiguration, Schema oder `docs/CONFIG.md` behauptet, Podman
+   sei als Ganzes nicht wählbar.
+
+---
+
+## HUM-461 · RPM and AUR recommend Podman like the .deb
+
+### Kontext
+Das .deb nennt seit HUM-441 `podman` und `uidmap` unter `Recommends`. Das RPM
+und das AUR-Paket nennen Podman nicht; wer dort das Backend wählt, bekommt nur
+die Diagnose von `doctor`.
+
+### Spezifikation
+1. RPM: `Recommends: podman` und die Werkzeuge der Unter-IDs als Datei
+   (`/usr/bin/newuidmap`), weil sie auf Fedora und openSUSE in verschiedenen
+   Paketen stehen. Nie `Requires`: bubblewrap bleibt das einzige Pflicht-Backend.
+2. AUR: `podman` unter `optdepends` mit einer Zeile, wofür.
+
+### Tests
+- `packaging/rpm` und `packaging/aur` bestehen ihre vorhandenen Prüfungen
+  (rpmlint, `check-aur.sh`).
+
+### Akzeptanzkriterien
+1. Keines der drei Pakete verlangt Podman; alle drei schlagen es vor.
+
+---
+
+## HUM-462 · Website: Podman as a selectable backend on the security page
+
+### Kontext
+Die Sicherheitsseite der Website beschreibt unter Linux nur bubblewrap. Die
+Dokumente unter `docs/` erscheinen dort schon mit Podman, die eigenen Texte der
+Seite nicht.
+
+### Spezifikation
+1. Der erste Schritt von „The journey of one request" (`en.ts`, `de.ts`) nennt
+   Podman mit `crun` als wählbares Backend derselben Stufe, mit Verweis auf
+   SECURITY.md Abschnitt 13.
+2. Die Liste der vertrauten Basis (`Security.astro`, `tcb`) nennt Podman, `crun`
+   und `conmon`, wenn das Backend gewählt ist, wie SECURITY.md.
+
+### Tests
+- `npm run build` der Website und die vorhandenen Link-Prüfungen grün.
+
+### Akzeptanzkriterien
+1. Kein Satz der Seite sagt, Linux kenne nur bubblewrap.
+
+---
+
+## HUM-463 · German translation of ADR-0020 and the German ADR index
+
+### Kontext
+ADR-0020 (Podman als Backend) ist seit HUM-441 angenommen, hat aber keine
+deutsche Fassung unter `docs/translations/de/adr/`, und der deutsche Index
+führt sie nicht.
+
+### Spezifikation
+1. `docs/translations/de/adr/0020-podman-sandbox-backend.md` mit dem Kopf, den
+   die übrigen Übersetzungen tragen (Quelle und deren Prüfsumme).
+2. Der deutsche ADR-Index führt ADR-0020.
+
+### Tests
+- `make lint-docs`, die Linkprüfung und die Prüfung der Übersetzungsköpfe grün.
+
+### Akzeptanzkriterien
+1. Die deutsche Fassung sagt dasselbe wie das Original, Stand HUM-441.
