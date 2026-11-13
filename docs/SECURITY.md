@@ -1485,6 +1485,36 @@ runs as the same user anyway. `ProtectSystem=strict` makes everything outside `$
 runtime directory read-only: a project outside `$HOME` is read-only in the sandbox until the human
 adds an own `ReadWritePaths` line ([`INSTALL.md`](INSTALL.md)).
 
+**Podman under the unit (HUM-434).** No property of the unit is loosened for Podman, and none for
+bubblewrap. Measurement P8 (2026-11-13, Podman 5.8.6) showed that every property with a mount
+namespace of its own (`PrivateTmp`, `ProtectSystem`, `PrivateMounts`, `ProtectClock`,
+`ProtectControlGroups`, `ProtectKernelModules`, `PrivateIPC`, `PrivateUsers`; in a user unit each
+implies a private user namespace) breaks `newuidmap` ("write to uid_map failed"), so rootless
+Podman cannot start as a child of the daemon; loosening them all would have undone most of the
+hardening. Instead, when the daemon runs outside the first user namespace (that is, under this
+unit), it starts every Podman call as a transient unit of the user's service manager:
+`systemd-run --user --pipe --wait --collect --service-type=exec --expand-environment=no` with
+`KillMode=mixed`, `Delegate=yes` (so that the engine gets the cgroup controllers the user has) and `TimeoutStopSec` equal to the kill grace, named `humanitl-<session>` for a
+session and `humanitl-q-<id>` with `RuntimeMaxSec` for a query. Podman runs there behind
+`/usr/bin/env -i` with exactly the environment the daemon gives it, never the service manager's.
+Stopping a session stops its unit as well; no unit lingers after logout, and the daemon never
+enables linger. A user service manager that does not answer, is older than systemd 254 or lacks
+`systemd-run` stops the start with `SANDBOX_050`. What this costs: a compromised daemon can start
+a transient unit of the user, outside its own hardening ([`THREAT-MODEL.md`](THREAT-MODEL.md)).
+Because the engine's client is then no child of the daemon, it inherits nothing: the shim's
+descriptors travel through a socket of the session, `0600` in a `0700` directory of its own, that
+accepts exactly one connection, of the daemon's uid (`SO_PEERCRED`) naming a one-time token of 128
+bits, and closes before anything is checked. Only that directory is bound read-only into the
+sandbox, at `/run/humanitl-handover`, and the daemon removes the socket file before it sends any
+descriptor: when the shim has them, the sandbox holds no socket but the proxy's, and
+`single_socket` needs no exception. When the engine runs as a unit, it sees the mount flags of
+the sources from another mount namespace than the daemon (the unit's `ProtectSystem` and
+relatives remount the host's file systems `nosuid`); the mount table then leaves the inherited
+flags of bind mounts open and keeps point, type, read-only or writable, count, and device and inode
+strict. The same path serves a Podman started
+from a terminal, so one way is tested everywhere. Writable access to `~/.local/share/containers`
+belongs to the transient unit, not to the daemon's unit, which keeps its `ReadWritePaths`.
+
 **Socket activation.** The package ships `humanitld.socket`: systemd binds
 `$XDG_RUNTIME_DIR/humanitl/daemon.sock` with mode `0600` in a `0700` directory and hands the
 descriptor to the daemon. The daemon takes it only when `LISTEN_PID` names itself, exactly one

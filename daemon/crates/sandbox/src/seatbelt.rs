@@ -1426,7 +1426,7 @@ impl SandboxBackend for SeatbeltBackend {
                 status: Some(status_reader),
                 output_sink: options.output_sink.clone(),
                 shells,
-                lifeline: None,
+                detached: None,
             })),
         })
     }

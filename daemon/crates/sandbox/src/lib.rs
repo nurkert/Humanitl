@@ -112,6 +112,7 @@ pub mod bwrap_args;
 mod bwrap_mounts;
 pub mod disposable;
 pub mod doctor;
+mod fd_handover;
 pub mod handle;
 mod inherit;
 pub mod launcher;
@@ -126,6 +127,7 @@ pub mod seatbelt;
 pub mod shell;
 pub mod shim_fds;
 pub mod summary;
+mod user_unit;
 pub mod work_dir;
 pub mod worktree;
 

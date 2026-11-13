@@ -23,7 +23,8 @@
 //!
 //! **Command line.** `humanitl-shim --proxy-port <port> [--controlling-terminal]
 //! [--control-fd <n>] [--lifeline-fd <n>] [--env-fd <n>] [--stdio-fd <n>]
-//! [--pins-fd <n>] -- <command> [args...]`,
+//! [--pins-fd <n>] [--handover <path> --handover-token <hex>] -- <command>
+//! [args...]`,
 //! the tail of the bwrap argument vector from
 //! `humanitl_sandbox::SandboxProfile::to_bwrap_args`, where the shim itself
 //! is `/usr/local/bin/humanitl-shim` inside the sandbox. `--proxy-port` is
@@ -54,7 +55,17 @@
 //! every checked folder; the shim compares both before anything else and
 //! refuses the start on any difference (`mounts.rs`). Every Linux backend
 //! passes it; without it the launcher sees no `mounts_match` line and holds
-//! the second guarantee as unproven. `humanitl-shim --rules` prints the seccomp
+//! the second guarantee as unproven. `--handover` and `--handover-token`
+//! (HUM-434) come together: before anything else, even before the report,
+//! the shim connects to that socket, names the token, and lays the
+//! descriptors it gets on 3, 4, 5, ... (`handover.rs`); every number the
+//! other flags name refers to that layout. A start whose handover fails
+//! never runs the command (exit 126, message on stderr, no report, because
+//! the report descriptor is one of those that did not arrive). The daemon
+//! removes the handover socket before it sends the descriptors and binds
+//! only its directory, so no second socket is left for `single_socket` to
+//! find; there is no exemption.
+//! `humanitl-shim --rules` prints the seccomp
 //! rule table the same environment would produce, one row per line, and
 //! starts nothing.
 //!
@@ -144,6 +155,7 @@ mod channel;
 mod contract;
 mod envfd;
 mod exec;
+mod handover;
 mod mounts;
 mod refusals;
 mod seccomp;
@@ -156,6 +168,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
+use std::path::PathBuf;
 use std::ptr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -178,6 +191,7 @@ const EXIT_EXEC: i32 = 127;
 
 const USAGE: &str = "usage: humanitl-shim --proxy-port <port> [--controlling-terminal] [--control-fd <n>]\n\
                      \x20      [--lifeline-fd <n>] [--env-fd <n>] [--stdio-fd <n>] [--pins-fd <n>]\n\
+                     \x20      [--handover <path> --handover-token <hex>]\n\
                      \x20      -- <command> [args...]\n\
                      \x20      humanitl-shim --rules    print the seccomp rule table for this environment\n\
                      environment: HUMANITL_BRIDGES, HUMANITL_SECCOMP_FAMILIES, HUMANITL_SECCOMP_TYPES,\n\
@@ -213,6 +227,21 @@ fn run() -> i32 {
             return EXIT_USAGE;
         }
     };
+
+    // The descriptors from the daemon's handover socket (HUM-434), before
+    // anything else: the report, the environment, the lifeline and the mount
+    // table are among them. Without them nothing may start; the message goes
+    // to stderr, the only stream there is.
+    if let (Some(path), Some(token)) = (cli.handover.as_deref(), cli.handover_token.as_deref()) {
+        let taken = handover::receive(path, token).and_then(handover::place);
+        if let Err(why) = taken {
+            say(&format!(
+                "humanitl-shim: the descriptors did not arrive through {}: {why}\n",
+                path.display()
+            ));
+            return EXIT_SETUP;
+        }
+    }
 
     // The report comes before everything that can fail, so that every setup
     // failure is a `CHECK <name> fail <evidence>` line and not just a message
@@ -430,6 +459,10 @@ fn prepare(cli: &Cli, report: &Report) -> Result<Prepared, SetupError> {
 /// enforced, the same way `no_interfaces` is. The launcher turns the failed
 /// line into `SANDBOX_015` and refuses to let the run continue (HUM-011); the
 /// shim's job is the evidence, the decision belongs to the host.
+///
+/// The handover socket (HUM-434) gets no exemption: the daemon removes it
+/// before it sends the descriptors, and its directory is bound, not the
+/// socket, so after the handover it is simply gone.
 fn check_single_socket(bound: &[Bound], report: &Report) {
     let walk = report::sockets();
     let expected: Vec<String> = bound
@@ -1323,6 +1356,10 @@ struct Cli {
     stdio_fd: Option<RawFd>,
     /// `--pins-fd` (HUM-437).
     pins_fd: Option<RawFd>,
+    /// `--handover` (HUM-434).
+    handover: Option<PathBuf>,
+    /// `--handover-token` (HUM-434).
+    handover_token: Option<String>,
     command: Vec<OsString>,
 }
 
@@ -1366,6 +1403,8 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
     let mut env_fd = None;
     let mut stdio_fd = None;
     let mut pins_fd = None;
+    let mut handover = None;
+    let mut handover_token = None;
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--") => {
@@ -1374,6 +1413,13 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
                     return Err(CliError::MissingCommand);
                 }
                 let proxy_port = proxy_port.ok_or(CliError::MissingProxyPort)?;
+                // Path and token only together: one without the other is a
+                // launcher bug, never a start without the handover.
+                match (&handover, &handover_token) {
+                    (Some(_), None) => return Err(CliError::MissingValue("--handover-token")),
+                    (None, Some(_)) => return Err(CliError::MissingValue("--handover")),
+                    _ => {}
+                }
                 return Ok(Cli {
                     proxy_port,
                     controlling_terminal,
@@ -1382,6 +1428,8 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
                     env_fd,
                     stdio_fd,
                     pins_fd,
+                    handover,
+                    handover_token,
                     command,
                 });
             }
@@ -1393,6 +1441,16 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
             Some("--env-fd") => env_fd = Some(fd_value(&mut args, "--env-fd")?),
             Some("--stdio-fd") => stdio_fd = Some(fd_value(&mut args, "--stdio-fd")?),
             Some("--pins-fd") => pins_fd = Some(fd_value(&mut args, "--pins-fd")?),
+            Some("--handover") => {
+                let value = args.next().ok_or(CliError::MissingValue("--handover"))?;
+                handover = Some(PathBuf::from(value));
+            }
+            Some("--handover-token") => {
+                let value = args
+                    .next()
+                    .ok_or(CliError::MissingValue("--handover-token"))?;
+                handover_token = Some(value.to_string_lossy().into_owned());
+            }
             Some("--proxy-port") => {
                 let value = args.next().ok_or(CliError::MissingValue("--proxy-port"))?;
                 let port = value
@@ -1527,6 +1585,8 @@ pub(crate) fn say(text: &str) {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+    use std::path::Path;
+
     use super::*;
 
     fn args(list: &[&str]) -> impl Iterator<Item = OsString> {
@@ -1612,6 +1672,45 @@ mod tests {
         // Arguments after -- are the agent's, whatever they look like.
         let cli = parse_cli(args(&["--proxy-port", "0", "--", "--help"])).unwrap();
         assert_eq!(cli.command, [OsString::from("--help")]);
+        assert_eq!(cli.handover, None);
+    }
+
+    /// The handover (HUM-434): path and token, only together.
+    #[test]
+    fn the_handover_takes_a_path_and_a_token_only_together() {
+        let cli = parse_cli(args(&[
+            "--proxy-port",
+            "3128",
+            "--handover",
+            "/run/humanitl-handover/fds",
+            "--handover-token",
+            "0123456789abcdef0123456789abcdef",
+            "--lifeline-fd",
+            "4",
+            "--",
+            "sh",
+        ]))
+        .unwrap();
+        assert_eq!(
+            cli.handover.as_deref(),
+            Some(Path::new("/run/humanitl-handover/fds"))
+        );
+        assert_eq!(
+            cli.handover_token.as_deref(),
+            Some("0123456789abcdef0123456789abcdef")
+        );
+        for half in [
+            &["--handover", "/run/humanitl-handover/fds"][..],
+            &["--handover-token", "0123456789abcdef0123456789abcdef"][..],
+        ] {
+            let mut line = vec!["--proxy-port", "3128"];
+            line.extend_from_slice(half);
+            line.extend_from_slice(&["--", "sh"]);
+            assert!(
+                matches!(parse_cli(args(&line)), Err(CliError::MissingValue(_))),
+                "{line:?}"
+            );
+        }
     }
 
     #[test]

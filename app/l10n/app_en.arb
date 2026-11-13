@@ -4296,5 +4296,9 @@
   "sandboxImagePullCancelled": "Pull cancelled. Nothing of it runs any more, and the image is not there yet.",
   "@sandboxImagePullCancelled": {"description": "Sandbox: the note after a pull was cancelled; the card offers the pull button again (HUM-457)."},
   "sandboxImagePullCancelledRemaining": "{count, plural, =1{Pull cancelled, but one of its processes still ran after it was ended. The image is not there yet.} other{Pull cancelled, but {count} of its processes still ran after it was ended. The image is not there yet.}}",
-  "@sandboxImagePullCancelledRemaining": {"description": "Sandbox: the note after a pull was cancelled while processes of it survived the kill, as the daemon counted them (HUM-457).", "placeholders": {"count": {"type": "int"}}}
+  "@sandboxImagePullCancelledRemaining": {"description": "Sandbox: the note after a pull was cancelled while processes of it survived the kill, as the daemon counted them (HUM-457).", "placeholders": {"count": {"type": "int"}}},
+  "diagSANDBOX050Title": "User service manager unreachable",
+  "@diagSANDBOX050Title": {"description": "Title of the diagnostic SANDBOX_050 (docs/DIAGNOSTICS.md): under its hardened unit the daemon starts Podman through the user's service manager, and that manager does not answer or is too old (HUM-434)."},
+  "diagSANDBOX050Why": "Under its hardened service the daemon starts the container engine through the service manager of your user instead of loosening its own protection, and that manager did not answer, is too old, or its tool for starting a service is missing. The session did not start.",
+  "@diagSANDBOX050Why": {"description": "Generic cause of SANDBOX_050. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
 }

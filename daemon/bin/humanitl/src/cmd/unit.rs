@@ -893,6 +893,89 @@ mod tests {
         }
     }
 
+    /// Jede Eigenschaft der Härtung steht wörtlich in der Unit (HUM-434):
+    /// Für die Container-Engine wird keine gelockert, sie startet über den
+    /// Dienstverwalter des Nutzers. Fehlt eine Zeile, wird dieser Test rot,
+    /// nicht nur die Unit schwächer. Kein `ReadWritePaths` gibt dem Daemon den
+    /// Container-Speicher des Nutzers.
+    #[test]
+    fn the_unit_keeps_every_hardening_property() {
+        let lines: Vec<&str> = directives(TEMPLATE).collect();
+        for property in [
+            "NoNewPrivileges=yes",
+            "PrivateTmp=yes",
+            "ProtectSystem=strict",
+            "ReadWritePaths=-%h/.local/share/humanitl -%h/.config/humanitl -%t/humanitl",
+            "PrivateIPC=yes",
+            "PrivateMounts=yes",
+            "PrivateUsers=yes",
+            "ProtectClock=yes",
+            "ProtectControlGroups=yes",
+            "ProtectKernelModules=yes",
+            "ProtectProc=invisible",
+            "KeyringMode=private",
+            "LockPersonality=yes",
+            "RestrictRealtime=yes",
+            "RestrictFileSystems=~@privileged-api",
+            "CapabilityBoundingSet=CAP_SYS_ADMIN",
+            "SystemCallFilter=@system-service @mount @sandbox sethostname",
+            "SystemCallErrorNumber=EPERM",
+            "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK",
+        ] {
+            assert_eq!(
+                lines.iter().filter(|line| **line == property).count(),
+                1,
+                "{property} must stand exactly once in the unit"
+            );
+        }
+        assert!(
+            !lines.iter().any(|line| line.contains("containers")),
+            "the daemon's unit gives nothing to the container engine; it starts through \
+             the user's service manager (HUM-434)"
+        );
+    }
+
+    /// `docs/SECURITY.md`, Abschnitt „Service hardening", sagt, dass für
+    /// die Container-Engine keine Eigenschaft gelockert wurde, nennt jede,
+    /// die sie als Kind des Daemons bräche (Messung P8), und wie sie
+    /// stattdessen startet (HUM-434).
+    #[test]
+    fn the_security_document_names_what_the_engine_would_need_loosened_and_why_not() {
+        let security = include_str!("../../../../../docs/SECURITY.md");
+        let start = security
+            .find("### Service hardening")
+            .expect("the section Service hardening");
+        let end = security[start + 1..]
+            .find("\n## ")
+            .map_or(security.len(), |at| start + 1 + at);
+        let section = &security[start..end];
+        assert!(
+            section.contains("No property of the unit is loosened"),
+            "{section}"
+        );
+        for property in [
+            "PrivateTmp",
+            "ProtectSystem",
+            "PrivateMounts",
+            "ProtectClock",
+            "ProtectControlGroups",
+            "ProtectKernelModules",
+            "PrivateIPC",
+            "PrivateUsers",
+        ] {
+            assert!(
+                section.contains(&format!("`{property}`")),
+                "{property} breaks newuidmap (P8) and must be named in Service hardening"
+            );
+        }
+        for word in ["systemd-run --user", "SANDBOX_050", "THREAT-MODEL.md"] {
+            assert!(
+                section.contains(word),
+                "{word} is missing in Service hardening"
+            );
+        }
+    }
+
     /// Der Wert der Zeile `SystemCallFilter=` der Vorlage, in seine Wörter
     /// zerlegt.
     ///

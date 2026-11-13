@@ -91,6 +91,20 @@ this host" and makes that choice visible (K-02).
   or a human may carry out.
 - **The window and the CLI** sit on the host side. They cannot weaken the sandbox, but they show
   the human what they decide about.
+- **The daemon and the user's service manager (HUM-434).** Under its hardened user unit the daemon
+  runs in a user namespace of its own, where rootless Podman cannot map its IDs. Instead of
+  loosening that hardening, the daemon starts every Podman call as a transient unit `humanitl-*`
+  of the user's service manager (`systemd-run --user`), outside its own unit. A compromised daemon
+  therefore gains **"start a transient user unit"**: any program as the same user, without the
+  restrictions of `humanitld.service`. The user account could do that before; the hardened daemon
+  could not. The code builds only unit names with the prefix `humanitl-` and one fixed line
+  (`--pipe --wait --collect`, `KillMode=mixed`, the program behind `env -i`), which guards against
+  mistakes, not against a daemon that is taken over. Under bubblewrap nothing of this is used.
+  The sandbox's descriptors reach the shim through a socket of the session that takes exactly one
+  connection of the same uid with a one-time token, then refuses every other; only its directory
+  is bound, and the daemon removes the socket before sending, so the agent finds nothing there. The token stands in the unit's command line (`systemctl --user show`, D-Bus),
+  so a process of the same uid can read it and race the shim; that ends in a failed session, never
+  in the descriptors reaching another uid.
 
 ## Attack surface
 
@@ -604,7 +618,12 @@ directories, `storage.conf`, `registries.conf`, `policy.json` and the remote con
 `storage.conf` and `registries.conf` and an empty hook directory, and with an empty environment
 except `HOME`, the user's `XDG_RUNTIME_DIR`, `PATH`, the user's session bus and those three paths; the line carries every flag that
 the three guarantees rest on, with no key to change it; the agent's environment goes only through
-the sealed memfd and never into the stored container configuration; the container ends through the
+the sealed memfd and never into the stored container configuration; the shim's descriptors (report,
+lifeline, environment, mount table, shell door, terminal) reach it through a socket of the session
+that accepts exactly one connection of the daemon's uid naming a one-time token and is closed
+before the agent starts, so the engine's client never holds them (HUM-434); under the daemon's
+hardened unit every Podman call runs as a transient unit `humanitl-*` of the user's service
+manager, and stopping a session also stops its unit; the container ends through the
 engine by name and, when the daemon dies, through the lifeline; whatever a configuration source
 still adds, the shim finds in the mount table before the agent starts and refuses with
 `SANDBOX_049`, whether it carries a socket or not (HUM-437). *Residual risk:* the plain level
@@ -749,6 +768,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-12 | K-24: no disposable sandbox under Podman; the engine's overlay volume was measured (P10) and is not used, because its lower layer cannot be bound to the checked folder; `disposable` refuses with `SANDBOX_030`, `auto` runs direct with `SANDBOX_033` | HUM-438 |
 | 2026-11-12 | K-01, K-05, K-27: the shim compares the mount table with the plan and the device and inode of every checked folder before the agent starts, under every backend (`SANDBOX_049`, `SANDBOX_042`); under Podman a swapped folder is detected and refused instead of prevented; K-27 names the configuration sources of Podman | HUM-437 |
 | 2026-11-13 | K-28 added: an image as the root of the sandbox under Podman, pinned by digest and checked before every start (`SANDBOX_043`), pulled only on request and directly, not through the proxy; ESC-2 checks the CA by device and inode | HUM-439 |
+| 2026-11-13 | Trust boundaries: under its hardened unit the daemon starts Podman as transient units `humanitl-*` of the user's service manager instead of loosening its hardening; a compromised daemon gains "start a transient user unit". K-27: the shim's descriptors through a one-connection handover socket instead of `--preserve-fds` | HUM-434 |
 | 2026-11-13 | K-28: registry credentials for a pull only from the adapter's own file, as a private copy under `--authfile`; credential helpers in that file or in a registry drop-in refused (`SANDBOX_043`) | HUM-456 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets

@@ -181,6 +181,22 @@ pub const SHIM_STDIO_FD: &str = "--stdio-fd";
 /// Jedes Linux-Backend gibt ihn mit.
 pub const SHIM_PINS_FD: &str = "--pins-fd";
 
+/// Der Schalter des Shims für den Socket der Übergabe (HUM-434), gefolgt
+/// vom Pfad in der Sandbox.
+///
+/// Ein Backend, dessen Client nicht Kind des Daemons ist, kann dem Shim
+/// nichts vererben. Der Shim verbindet sich dann als Erstes mit diesem
+/// Socket, nennt das Zeichen aus [`SHIM_HANDOVER_TOKEN`] und legt die
+/// Deskriptoren, die er in einer Nachricht bekommt, der Reihe nach auf 3,
+/// 4, 5, ...; erst danach liest er Bericht, Umgebung, Lebensleine und
+/// Mounttabelle wie geerbt (Modul `fd_handover`). Ohne Antwort startet
+/// er nichts.
+pub const SHIM_HANDOVER: &str = "--handover";
+
+/// Der Schalter des Shims für das Einmal-Zeichen der Übergabe (HUM-434),
+/// gefolgt von 32 Hex-Ziffern.
+pub const SHIM_HANDOVER_TOKEN: &str = "--handover-token";
+
 /// Die Namen, die der Launcher setzt und die kein Profil belegen kann.
 pub const RESERVED_ENV: &[&str] = &[
     ENV_BRIDGES,

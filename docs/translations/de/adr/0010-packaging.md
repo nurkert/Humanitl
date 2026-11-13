@@ -122,3 +122,64 @@ Installationsschritt für den Daemon und kommt deshalb zuletzt.
 Wayland-Test), `HUM-077` (Installation und Deinstallation mit einem Klick), `HUM-075`
 (`humanitl doctor` bestätigt die Installation), `HUM-060` (Release 0.1 mit Changelog und
 Prüfsummen).
+
+## Nachtrag 2026-11-13: Podman unter der gehärteten Nutzer-Unit (HUM-434)
+
+Der übrige Nachtrag zum Podman-Backend folgt mit HUM-441; dieser Teil betrifft die Unit.
+
+**Gemessen.** Unter `humanitld.service` startet rootless Podman nicht als Kind des Daemons.
+Messung P8 (HUM-292, 2026-11-13, Podman 5.8.6, vorübergehende Nutzer-Units aus der Unit-Datei,
+je eine Eigenschaft weggelassen): Jede Eigenschaft mit eigenem Mount-Namensraum bricht
+`newuidmap` („write to uid_map failed"): `PrivateTmp`, `ProtectSystem`, `PrivateMounts`,
+`ProtectClock`, `ProtectControlGroups`, `ProtectKernelModules`, `PrivateIPC` und `PrivateUsers`
+(in einer Nutzer-Unit zieht jede einen eigenen Nutzer-Namensraum nach sich).
+`CapabilityBoundingSet=CAP_SYS_ADMIN` scheitert beim Start (218). Allein bestehen:
+`NoNewPrivileges` (nur mit schon vorhandenem Pausenprozess), `ProtectProc`, `KeyringMode`,
+`LockPersonality`, `RestrictRealtime`, `RestrictFileSystems`, `SystemCallFilter`,
+`SystemCallErrorNumber`, `RestrictAddressFamilies`. Eine vorübergehende Unit ohne die
+Eigenschaften mit Mount-Namensraum startet `podman run --rootfs`.
+
+**Entscheidung (Inhaber, 2026-11-13): Weg (b).** Die Unit zu lockern (Weg a) hätte acht
+Eigenschaften gekostet, den Großteil der Härtung, für jedes Backend. Stattdessen bleibt die Unit
+genau, wie sie ist, und Podman startet über den Dienstverwalter des Nutzers:
+
+- Läuft der Daemon außerhalb des ersten Nutzer-Namensraums (`/proc/self/uid_map` ist nicht
+  `0 0 4294967295`, so unter der Unit), läuft jeder Aufruf von Podman, die Sitzung wie jede
+  Frage, als vorübergehende Unit über `systemd-run --user --quiet --collect --pipe --wait
+  --service-type=exec --expand-environment=no`, `KillMode=mixed`, `Delegate=yes`, `TimeoutStopSec` gleich der
+  Frist zum Beenden (5 s), mit dem Namen `humanitl-<sitzung>`; eine Frage heißt
+  `humanitl-q-<id>` und hat `RuntimeMaxSec` knapp über ihrer Frist. Das Programm läuft hinter
+  `/usr/bin/env -i` mit genau der Umgebung, die der Daemon ihm gibt. Gebaut werden nur Namen mit
+  dem Präfix `humanitl-`, jedes Argument muss UTF-8 sein, und das Programm ein absoluter Pfad
+  ohne `=`. Aus einem Terminal, in der CI und in den Tests startet Podman weiter als Kind.
+- `systemd-run` und nicht `StartTransientUnit` über D-Bus: Im Workspace gibt es keine
+  D-Bus-Crate, und `systemd-run` kann schon, was gebraucht wird (Standardströme über `--pipe`,
+  den Exit-Status über `--wait`, das Wegräumen über `--collect`). Für `--expand-environment=no`
+  braucht es systemd 254 oder neuer; ein älterer oder nicht erreichbarer Dienstverwalter ist
+  `SANDBOX_050`.
+- Die Deskriptoren des Shims reisen nicht mehr über `--preserve-fds`, das nur für ein Kind geht:
+  Der Daemon bindet je Sitzung einen `SOCK_SEQPACKET`-Socket (`0600`, im Verzeichnis der Sitzung
+  in einem eigenen Verzeichnis mit `0700`), bindet nur dieses Verzeichnis nur lesbar in die
+  Sandbox ein (`/run/humanitl-handover`) und nennt Socket und ein Einmal-Zeichen von 128 Bit in
+  der Zeile des Shims. Er nimmt genau eine Verbindung an, schließt den lauschenden Socket und
+  entfernt die Socket-Datei gleich nach dem `accept`, sodass kein zweiter Socket in der Sandbox
+  bleibt (ESC-2), prüft `SO_PEERCRED` gegen die eigene Kennung und das Zeichen
+  und schickt dann alle Deskriptoren in einer Nachricht. Der Shim legt sie wie bisher auf 3, 4,
+  5, ..., sodass memfd der Umgebung, Mounttabelle und Lebensleine unverändert gelesen werden.
+  Stirbt der Daemon vor der Übergabe, findet der Shim niemanden und startet den Agenten nie;
+  danach beendet die Lebensleine die Sandbox wie bisher. Derselbe Weg dient auch einem Podman,
+  das als Kind startet, damit überall ein Weg geprüft wird.
+- Das Beenden einer Sitzung stoppt ihre Unit (`systemctl --user stop --no-block`), nachdem der
+  Container beendet und entfernt ist; das Ende eines Clients ohne Stopp (HUM-452) ist das Ende
+  von `systemd-run --wait`, also das Ende des Hauptprozesses der Unit. Ein abgebrochenes Ziehen
+  wartet, bis seine Unit gestoppt ist, bevor es sagt, dass nichts mehr davon läuft.
+- Unter der Unit sieht die Engine die Mount-Flags der Quellen aus dem Namensraum des
+  Dienstverwalters, der Daemon aus seinem eigenen, in dem die Unit den Rechner mit `nosuid` neu
+  einhängt. Die erwartete Mounttabelle lässt deshalb auf diesem Weg die geerbten Flags der Binds
+  offen und bleibt bei Punkt, Typ, Modus, Anzahl sowie Gerät und Inode streng; der direkte Weg
+  bleibt ganz streng.
+- bubblewrap und Seatbelt bleiben unberührt: Sie erben ihre Deskriptoren wie bisher.
+
+**Preis.** Ein übernommener Daemon kann eine vorübergehende Unit des Nutzers starten, außerhalb
+seiner Härtung (`docs/THREAT-MODEL.md`, Vertrauensgrenzen). Das Konto konnte das vorher schon,
+der gehärtete Daemon nicht. Die Unit des Daemons selbst gewinnt kein Recht und keinen Pfad.

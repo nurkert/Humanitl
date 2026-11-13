@@ -101,12 +101,23 @@ pub(crate) const FORBIDDEN: &[&str] = &[
     "--hooks-dir=/etc",
 ];
 
+/// Wo das Verzeichnis der Übergabe in der Sandbox liegt (HUM-434): eigens,
+/// nicht unter `/run/humanitl`, wo nur Proxy-Socket und Shim stehen.
+pub(crate) const HANDOVER_DIR_DST: &str = "/run/humanitl-handover";
+
+/// Wo der Shim den Socket der Übergabe findet (HUM-434). Der Daemon
+/// entfernt ihn, bevor er die Deskriptoren schickt.
+pub(crate) const HANDOVER_DST: &str = "/run/humanitl-handover/fds";
+
 /// Die Rechte jedes tmpfs: wie `/tmp`, damit der Agent mit der Kennung des
 /// Nutzers hineinschreiben kann.
 const TMPFS_MODE: &str = "1777";
 
-/// Die Nummern, unter denen der Container die Deskriptoren des Plans
-/// findet: fortlaufend ab 3, in dieser Reihenfolge (`--preserve-fds`).
+/// Die Nummern, unter denen der Shim die Deskriptoren des Plans ablegt:
+/// fortlaufend ab 3, in dieser Reihenfolge. Sie kommen über den Socket der
+/// Übergabe ([`crate::fd_handover`], HUM-434), nicht mehr über
+/// `--preserve-fds`: Der Client der Engine ist womöglich kein Kind des
+/// Daemons und hat sie nicht.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Fds {
     /// Die Schreibseite des Berichts.
@@ -148,11 +159,6 @@ impl Fds {
                 stdio: None,
             }
         }
-    }
-
-    /// Wie viele Deskriptoren der Container erbt (`--preserve-fds`).
-    pub(crate) fn count(&self) -> usize {
-        self.planned() + usize::from(self.stdio.is_some())
     }
 
     /// Wie viele davon der Plan selbst trägt; die Untertanenseite legt erst
@@ -208,6 +214,9 @@ pub(crate) struct Sources {
     pub(crate) agent_program: Option<PathBuf>,
     /// Die Dateien der Sitzung.
     pub(crate) files: SessionFiles,
+    /// Das Verzeichnis der Übergabe in dem der Sitzung (HUM-434), mit nichts
+    /// darin als dem Socket bis zur Übergabe.
+    pub(crate) handover: PathBuf,
 }
 
 /// Wie ein Pfad in der Sandbox entsteht.
@@ -463,6 +472,10 @@ pub(crate) fn mounts(
         false,
         false,
     );
+    // Das Verzeichnis mit dem Socket, über den der Shim seine Deskriptoren
+    // holt (HUM-434). Gebunden wird das Verzeichnis, nicht der Socket: Nach
+    // der Übergabe ist es leer, und die Sandbox sieht keinen zweiten Socket.
+    out.bind(&sources.handover, Path::new(HANDOVER_DIR_DST), false, true);
     out.bind(&session.ca_cert_src, &network.ca_cert_dst, false, false);
     out.bind(
         &session.ca_bundle_src,
@@ -640,6 +653,8 @@ pub(crate) struct LineSpec<'a> {
     pub(crate) pids: u64,
     /// Die Lage der Deskriptoren.
     pub(crate) fds: Fds,
+    /// Das Einmal-Zeichen der Übergabe (HUM-434).
+    pub(crate) handover_token: &'a str,
     /// Wohin Ein- und Ausgabe gehen.
     pub(crate) stdio: StdioMode,
 }
@@ -676,7 +691,6 @@ pub(crate) fn line(
         "--conmon-pidfile={}",
         spec.conmon_pidfile.display()
     ));
-    push(format!("--preserve-fds={}", spec.fds.count()));
     push(format!("--workdir={}", profile.mounts.work.dst.display()));
     if spec.stdio == StdioMode::Inherit {
         // Die Eingabe des Aufrufers reicht die Engine sonst nicht weiter;
@@ -716,6 +730,10 @@ pub(crate) fn line(
     let mut push = |arg: String| argv.push(OsString::from(arg));
     push("--proxy-port".to_owned());
     push(profile.network.proxy_port.to_string());
+    push(crate::bridge_env::SHIM_HANDOVER.to_owned());
+    push(HANDOVER_DST.to_owned());
+    push(crate::bridge_env::SHIM_HANDOVER_TOKEN.to_owned());
+    push(spec.handover_token.to_owned());
     push(crate::bridge_env::SHIM_LIFELINE_FD.to_owned());
     push(spec.fds.lifeline.to_string());
     push(crate::bridge_env::SHIM_ENV_FD.to_owned());
@@ -775,6 +793,7 @@ mod tests {
             session_ro: Vec::new(),
             agent_program: session.agent_program.as_ref().map(|p| p.host.clone()),
             files: SessionFiles::under(Path::new("/run/s/files"), session.files.len()),
+            handover: "/run/s/handover".into(),
         }
     }
 
@@ -801,6 +820,7 @@ mod tests {
             cpus: 2,
             pids: 4096,
             fds: Fds::layout(stdio.pty_size().is_some()),
+            handover_token: "0123456789abcdef0123456789abcdef",
             stdio,
         }
     }
@@ -893,7 +913,6 @@ mod tests {
                 "--cpus=",
                 "--pids-limit=",
                 "--conmon-pidfile=",
-                "--preserve-fds=",
                 "--security-opt=seccomp=",
                 "--hostname=",
             ] {
@@ -1081,8 +1100,10 @@ mod tests {
         }
     }
 
-    /// Die Zeile nennt die Deskriptoren, die der Start fortlaufend ab 3
-    /// vergibt: am eigenen Pseudoterminal sechs, sonst vier.
+    /// Die Zeile nennt die Deskriptoren, die der Shim aus der Übergabe
+    /// fortlaufend ab 3 ablegt: am eigenen Pseudoterminal sechs, sonst vier.
+    /// Kein `--preserve-fds` mehr (HUM-434): Die Übergabe nennt Socket und
+    /// Zeichen, und den Socket bindet der Plan nur lesbar ein.
     #[test]
     fn the_descriptors_are_named_in_the_order_they_are_handed_over() {
         for (stdio, count) in [
@@ -1101,7 +1122,14 @@ mod tests {
             );
             let argv = strings(&line(&spec(stdio), &profile, &session, &mounts));
             assert!(
-                argv.contains(&format!("--preserve-fds={count}")),
+                !argv.iter().any(|arg| arg.starts_with("--preserve-fds")),
+                "{argv:?}"
+            );
+            assert!(
+                argv.contains(
+                    &"--mount=type=bind,source=/run/s/handover,destination=/run/humanitl-handover,readonly=true"
+                        .to_owned()
+                ),
                 "{argv:?}"
             );
             let shim = argv
@@ -1110,7 +1138,10 @@ mod tests {
                 .expect("the shim");
             let tail = argv[shim..].join(" ");
             assert!(
-                tail.contains("--lifeline-fd 4 --env-fd 5 --pins-fd 6"),
+                tail.contains(
+                    "--handover /run/humanitl-handover/fds --handover-token \
+                     0123456789abcdef0123456789abcdef --lifeline-fd 4 --env-fd 5 --pins-fd 6"
+                ),
                 "{tail}"
             );
             assert_eq!(

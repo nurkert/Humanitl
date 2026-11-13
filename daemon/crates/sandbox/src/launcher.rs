@@ -659,6 +659,12 @@ pub(crate) struct ContainerStop {
     pub(crate) name: String,
     /// Die ganze Umgebung des Programms; es startet mit keiner anderen.
     pub(crate) env: Vec<(String, String)>,
+    /// Wie das Programm startet: als Kind, oder als vorübergehende Unit des
+    /// Dienstverwalters des Nutzers (HUM-434).
+    pub(crate) start: crate::user_unit::ClientStart,
+    /// Die Unit, in der der Client der Sitzung läuft, wenn er über den
+    /// Dienstverwalter startete; das Beenden stößt auch ihren Stopp an.
+    pub(crate) unit: Option<crate::user_unit::UnitName>,
 }
 
 /// Die drei Garantien (BACKLOG.md 4.1, `docs/SECURITY.md` Abschnitt 1).
@@ -773,10 +779,25 @@ pub(crate) struct LaunchOnce {
     /// Die Seite des Daemons an der Tür zu weiteren Shells (HUM-299), nur
     /// für einen Start am eigenen Pseudoterminal.
     pub(crate) shells: Option<crate::shell::DoorSeed>,
-    /// Das Schreibende der Lebensleine (HUM-430), wenn der Shim ihr Leseende
-    /// erbt. Es geht mit dem Start in den Zustand der Sandbox und lebt, bis
-    /// sie endet oder der Daemon stirbt.
-    pub(crate) lifeline: Option<crate::shim_fds::Lifeline>,
+    /// Was ein Start braucht, dessen Sandbox vom Daemon abgekoppelt läuft
+    /// (eine Container-Engine): Lebensleine und Übergabe. `None` unter bwrap
+    /// und Seatbelt.
+    pub(crate) detached: Option<Detached>,
+}
+
+/// Lebensleine und Übergabe eines Starts, dessen Sandbox vom Daemon
+/// abgekoppelt läuft.
+#[derive(Debug)]
+pub(crate) struct Detached {
+    /// Das Schreibende der Lebensleine (HUM-430), deren Leseende der Shim
+    /// bekommt. Es geht mit dem Start in den Zustand der Sandbox und lebt,
+    /// bis sie endet oder der Daemon stirbt.
+    pub(crate) lifeline: crate::shim_fds::Lifeline,
+    /// Der Socket, über den der Shim [`LaunchOnce::inherit`] (und am eigenen
+    /// Pseudoterminal die Untertanenseite) bekommt, statt sie zu erben
+    /// (HUM-434, [`crate::fd_handover`]). Mit ihm erbt das Programm keinen
+    /// Deskriptor; ohne ihn gilt die Vererbung.
+    pub(crate) handover: Option<crate::fd_handover::HandoverListener>,
 }
 
 /// Die vollständige Kommandozeile samt allem, was der Start braucht.

@@ -122,3 +122,59 @@ daemon and therefore comes last.
 Wayland test), `HUM-077` (one-click installation and uninstallation),
 `HUM-075` (`humanitl doctor` confirms the installation), `HUM-060`
 (release 0.1 with changelog and checksums).
+
+## Addendum 2026-11-13: Podman under the hardened user unit (HUM-434)
+
+The rest of the addendum for the Podman backend follows with HUM-441; this part covers the unit.
+
+**Measured.** Under `humanitld.service` rootless Podman does not start as a child of the daemon.
+Measurement P8 (HUM-292, 2026-11-13, Podman 5.8.6, transient user units built from the unit file,
+one property left out at a time): every property with a mount namespace of its own breaks
+`newuidmap` ("write to uid_map failed"): `PrivateTmp`, `ProtectSystem`, `PrivateMounts`,
+`ProtectClock`, `ProtectControlGroups`, `ProtectKernelModules`, `PrivateIPC` and `PrivateUsers`
+(in a user unit each implies a private user namespace). `CapabilityBoundingSet=CAP_SYS_ADMIN`
+fails at exec (218). Alone they pass: `NoNewPrivileges` (only with an existing pause process),
+`ProtectProc`, `KeyringMode`, `LockPersonality`, `RestrictRealtime`, `RestrictFileSystems`,
+`SystemCallFilter`, `SystemCallErrorNumber`, `RestrictAddressFamilies`. A transient unit without
+the mount-namespace properties runs `podman run --rootfs`.
+
+**Decision (owner, 2026-11-13): option (b).** Loosening the unit (option a) would have removed
+eight properties, most of the hardening, for every backend. Instead the unit stays exactly as it
+is, and Podman starts through the user's service manager:
+
+- When the daemon runs outside the first user namespace (`/proc/self/uid_map` is not
+  `0 0 4294967295`, which is the case under the unit), every Podman call, the session as well as
+  each query, runs as a transient unit via `systemd-run --user --quiet --collect --pipe --wait
+  --service-type=exec --expand-environment=no`, `KillMode=mixed`, `Delegate=yes`, `TimeoutStopSec` equal to the
+  kill grace (5 s), named `humanitl-<session>`; a query is `humanitl-q-<id>` with `RuntimeMaxSec`
+  just above its deadline. The program runs behind `/usr/bin/env -i` with exactly the
+  environment the daemon gives it. Only names with the prefix `humanitl-` are ever built, every
+  argument must be UTF-8, and the program must be an absolute path without `=`. From a terminal,
+  in CI and in tests Podman keeps starting as a child.
+- `systemd-run` and not `StartTransientUnit` over D-Bus: no D-Bus crate is in the workspace, and
+  `systemd-run` already does what is needed (stdio through `--pipe`, the exit status through
+  `--wait`, collection through `--collect`). systemd 254 or newer is required for
+  `--expand-environment=no`; an older or unreachable user manager is `SANDBOX_050`.
+- The descriptors of the shim no longer travel through `--preserve-fds`, which only works for a
+  child: the daemon binds a `SOCK_SEQPACKET` socket per session (`0600`, in the session's `0700`
+  directory of its own), mounts only that directory read-only into the sandbox
+  (`/run/humanitl-handover`) and names the socket and a one-time token of 128 bits on the shim's
+  line. It accepts exactly one connection, closes the listening socket and removes the socket file
+  right after `accept`, so no second socket is left in the sandbox (ESC-2), checks `SO_PEERCRED` against its own uid and the token, then sends every descriptor
+  in one message. The shim lays them on 3, 4, 5, ... as before, so the environment memfd, the
+  mount table and the lifeline are read unchanged. When the daemon dies before the handover, the
+  shim finds nobody and never starts the agent; after it, the lifeline ends the sandbox as
+  before. The same path also serves Podman started as a child, so one way is tested everywhere.
+- Stopping a session stops its unit (`systemctl --user stop --no-block`) after the container is
+  killed and removed; the end of an unplanned client (HUM-452) is the end of `systemd-run
+  --wait`, which is the end of the unit's main process. A cancelled pull waits for its unit to
+  stop before it says that nothing of it runs any more.
+- Under the unit the engine sees the mount flags of the sources from the user manager's mount
+  namespace, the daemon from its own, where the unit remounts the host `nosuid`. The expected
+  mount table therefore leaves the inherited flags of bind mounts open on that path and keeps
+  point, type, mode, count and device and inode strict; the direct path stays fully strict.
+- bubblewrap and Seatbelt are untouched: they inherit their descriptors as before.
+
+**Cost.** A compromised daemon can start a transient unit of the user, outside its hardening
+(`docs/THREAT-MODEL.md`, trust boundaries). The user account could already do that; the hardened
+daemon could not. The daemon's unit itself gains no right and no path.
