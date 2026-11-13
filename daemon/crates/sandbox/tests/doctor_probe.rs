@@ -3,9 +3,10 @@
 //! Der Probestart unter bwrap braucht ein nutzbares bwrap und den gebauten
 //! Shim; fehlt eines, sagt der Test das auf stderr und prüft nichts.
 //! `cargo test --workspace` baut den Shim vorher, `cargo test -p
-//! humanitl-sandbox` allein nicht. Die Container-Engine ist bis HUM-448 nicht
-//! zugelassen und startet nie; ihre Tests vor der Zulassung stehen in ihrem
-//! Adapter, weil sie die Engine beim Namen nennen.
+//! humanitl-sandbox` allein nicht. Die Container-Engine ist seit HUM-448
+//! zugelassen; damit der Probestart unter bwrap keinen Container startet,
+//! sieht er einen `PATH`, in dem nur bwrap liegt. Ihre eigenen Tests stehen
+//! in ihrem Adapter, weil sie die Engine beim Namen nennen.
 
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -48,6 +49,26 @@ fn the_probe_start_under_bwrap_is_green_and_remembered() {
         );
         return;
     }
+    // Ein `PATH` mit bwrap allein: Die anderen zugelassenen Backends finden
+    // kein Programm und starten nichts (HUM-448).
+    let Some(bwrap) = std::env::var_os("PATH")
+        .iter()
+        .flat_map(std::env::split_paths)
+        .map(|dir| dir.join("bwrap"))
+        .find(|candidate| candidate.is_file())
+    else {
+        eprintln!("skipping: no bwrap in PATH");
+        return;
+    };
+    let only_bwrap = dir.path().join("only-bwrap");
+    std::fs::create_dir_all(&only_bwrap).unwrap();
+    std::os::unix::fs::symlink(&bwrap, only_bwrap.join("bwrap")).unwrap();
+    let paths = Paths::new(
+        paths
+            .env()
+            .clone()
+            .with("PATH", only_bwrap.to_string_lossy()),
+    );
     let sandbox = SandboxRef {
         backend: SandboxBackendName::Bubblewrap,
         ..SandboxRef::default()

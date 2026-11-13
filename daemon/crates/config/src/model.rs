@@ -493,7 +493,7 @@ pub struct SandboxRef {
     /// Zusätzliche Umgebungsvariablen für die Sandbox; sie überschreiben gleichnamige Einträge aus dem `[env]` des Profils. Der Schlüssel lässt sich aus der Umgebung des Prozesses setzen und ist damit nur so vertrauenswürdig wie die Shell, aus der Humanitl startet; die Variablen des dynamischen Linkers (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`) werden deshalb abgelehnt, sie liefen vor dem seccomp-Filter des Shims.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub env: BTreeMap<String, String>,
-    /// Welches Sandbox-Backend startet. `auto`, die Vorgabe, ist bubblewrap unter Linux und Seatbelt unter macOS. Ein gewähltes Backend fällt nie auf ein anderes zurück: Gibt es es auf diesem System nicht, lehnt der Start mit `SANDBOX_034` ab; liegt es unter `sandbox.min_isolation`, mit `SANDBOX_035`; verlangt das Sandbox-Profil ein anderes, mit `SANDBOX_036`. `podman` ist noch nicht zugelassen: Jeder Start damit endet mit `SANDBOX_048`, bis die Escape-Suite gegen Podman grün ist. Im Projekt-Profil gesperrt; ein Client darf den Schlüssel für eine Sitzung setzen (`cli_overrides`), die Untergrenze gilt auch dann.
+    /// Welches Sandbox-Backend startet. `auto`, die Vorgabe, ist bubblewrap unter Linux und Seatbelt unter macOS. Ein gewähltes Backend fällt nie auf ein anderes zurück: Gibt es es auf diesem System nicht, lehnt der Start mit `SANDBOX_034` ab; liegt es unter `sandbox.min_isolation`, mit `SANDBOX_035`; verlangt das Sandbox-Profil ein anderes, mit `SANDBOX_036`. `podman` mit der Laufzeit `krun` ist noch nicht zugelassen: Jeder Start damit endet mit `SANDBOX_048`, bis die Escape-Suite gegen diese Stufe grün ist. Im Projekt-Profil gesperrt; ein Client darf den Schlüssel für eine Sitzung setzen (`cli_overrides`), die Untergrenze gilt auch dann.
     #[schemars(extend("x-tier" = "basic", "x-project-scope" = "denied"))]
     pub backend: SandboxBackendName,
     /// Die schwächste Isolationsstufe, mit der eine Sitzung starten darf: `policy` (eine Richtlinie des Kerns, Seatbelt), `namespaces` (eigene Namensräume über dem Kern des Hosts, bubblewrap und Podman mit `crun`) oder `kernel` (ein eigener Gastkern, Podman mit `krun`). Liegt das gewählte Backend darunter, lehnt der Start mit `SANDBOX_035` ab, statt ein anderes zu nehmen. Über alle Ebenen gilt der strengste Wert, nicht der oberste: Ein Projekt-Profil darf die Untergrenze heben, und weder ein Projekt noch die Umgebung noch die Kommandozeile senkt sie unter das, was eine andere Ebene verlangt.
@@ -538,7 +538,7 @@ pub enum SandboxBackendName {
     /// bubblewrap, unter Linux.
     #[serde(rename = "bwrap")]
     Bubblewrap,
-    /// Rootless Podman, unter Linux (noch nicht zugelassen).
+    /// Rootless Podman, unter Linux.
     Podman,
     /// Seatbelt mit `sandbox-exec`, unter macOS.
     Seatbelt,

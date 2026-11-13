@@ -322,9 +322,9 @@ und wird nicht beendet. Ein Name ohne Registry wird abgelehnt
 Backend aus der Konfigurationsdatei (`sandbox.backend`); das `--backend`
 eines einzelnen Starts gilt dafür nicht. Projektordner, Tür, CA, Shim und die Dateien der Sitzung
 kommen weiter vom Host, nie aus dem Abbild; die Einhängungen des
-Sandbox-Profils unter `mounts.ro` gelten in einem Abbild nicht. Bis das
-Backend zugelassen ist (HUM-448), lehnt das Ziehen wie jeder Start mit
-`SANDBOX_048` ab.
+Sandbox-Profils unter `mounts.ro` gelten in einem Abbild nicht. Unter einer
+Stufe, die noch nicht zugelassen ist, bis HUM-449 die Kernel-Stufe, lehnt das
+Ziehen wie jeder Start mit `SANDBOX_048` ab.
 
 Zugangsdaten zur Registry kommen beim Ziehen aus genau einer Datei,
 `~/.config/humanitl/podman/auth.json` (unter `$XDG_CONFIG_HOME`, wenn es

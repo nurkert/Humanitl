@@ -6279,47 +6279,58 @@ fn flows_list_passthrough_shows_the_model_traffic_and_show_takes_the_printed_end
     assert!(stdout(&shown).contains(&id), "{}", stdout(&shown));
 }
 
-/// `sandbox.backend = "podman"` aus der Umgebung (Ebene 6, Nutzerwille)
-/// scheitert vor HUM-448 an der Zulassung, auch in der Vorschau, und keine
-/// Zeile eines anderen Backends steht stattdessen da (HUM-431).
+/// Die Kernel-Stufe der Container-Engine scheitert an der Zulassung, ob das
+/// Backend aus der Umgebung (Ebene 6, Nutzerwille), vom Flag der
+/// Kommandozeile (Ebene 7) oder aus `config.toml` kommt, auch in der
+/// Vorschau, und keine Zeile eines anderen Backends steht stattdessen da
+/// (HUM-431). Die gemeinsame Stufe ist seit HUM-448 zugelassen: Die Vorschau
+/// zeigt ihre Zeile, auch wenn es ihr Programm nicht gibt. Das Programm zeigt
+/// in jedem Fall ins Leere, damit kein Test die Engine des Rechners fragt.
 #[test]
 fn sandbox_argv_refuses_a_backend_that_is_not_admitted() {
+    const ENGINE: &str = "podman";
     let harness = Harness::new();
+    let config = harness.path("config").join("humanitl");
+    std::fs::create_dir_all(&config).expect("the config directory");
+    let absent = harness.path("absent").join("engine");
+    let engine = format!(
+        "[sandbox.{ENGINE}]\nprogram = {:?}\n",
+        absent.display().to_string()
+    );
+    let kernel = format!("{engine}runtime = \"krun\"\n");
+    let write = |text: &str| std::fs::write(config.join("config.toml"), text).expect("config");
+    let refused = |output: &std::process::Output| {
+        assert_ne!(code(output), 0, "{}", stdout(output));
+        assert!(stderr(output).contains("SANDBOX_048"), "{}", stderr(output));
+        assert!(stdout(output).trim().is_empty(), "{}", stdout(output));
+    };
+
+    write(&kernel);
     let output = harness
         .command()
-        .env("HUMANITL_SANDBOX__BACKEND", "podman")
+        .env("HUMANITL_SANDBOX__BACKEND", ENGINE)
         .args(["sandbox", "argv"])
         .output()
         .expect("the binary runs");
-    assert_ne!(code(&output), 0, "{}", stdout(&output));
-    assert!(
-        stderr(&output).contains("SANDBOX_048"),
-        "{}",
-        stderr(&output)
-    );
-    assert!(stdout(&output).trim().is_empty(), "{}", stdout(&output));
+    refused(&output);
+    refused(&harness.run(["--sandbox-backend", ENGINE, "sandbox", "argv"]));
+    write(&format!("[sandbox]\nbackend = {ENGINE:?}\n{kernel}"));
+    refused(&harness.run(["sandbox", "argv"]));
 
-    // Dasselbe vom Flag der Kommandozeile (Ebene 7) und aus `config.toml`.
-    let output = harness.run(["--sandbox-backend", "podman", "sandbox", "argv"]);
-    assert_ne!(code(&output), 0, "{}", stdout(&output));
+    // Die gemeinsame Stufe: die Zeile der Engine, deren Programm es nicht
+    // gibt, und kein `SANDBOX_048`.
+    write(&format!("[sandbox]\nbackend = {ENGINE:?}\n{engine}"));
+    let output = harness.run(["sandbox", "argv"]);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(
-        stderr(&output).contains("SANDBOX_048"),
+        !stderr(&output).contains("SANDBOX_048"),
         "{}",
         stderr(&output)
     );
-    let config = harness.path("config").join("humanitl");
-    std::fs::create_dir_all(&config).expect("the config directory");
-    std::fs::write(
-        config.join("config.toml"),
-        "[sandbox]\nbackend = \"podman\"\n",
-    )
-    .expect("config.toml");
-    let output = harness.run(["sandbox", "argv"]);
-    assert_ne!(code(&output), 0, "{}", stdout(&output));
     assert!(
-        stderr(&output).contains("SANDBOX_048"),
+        stdout(&output).starts_with(&absent.display().to_string()),
         "{}",
-        stderr(&output)
+        stdout(&output)
     );
 }
 
@@ -6351,8 +6362,9 @@ fn sandbox_argv_refuses_a_backend_below_the_floor() {
 
 /// `humanitl sandbox backends` ist ein dünner Client der RPC
 /// `SandboxBackends` (HUM-432): Die Liste kommt aus dem Fake, mit Stufe,
-/// Verfügbarkeit, Wahl und, unter Linux, dem Befund, der Podman vor HUM-448
-/// sperrt.
+/// Verfügbarkeit, Wahl und, unter Linux, dem Befund, der die Kernel-Stufe
+/// der Container-Engine bis HUM-449 sperrt; ihre gemeinsame Stufe ist seit
+/// HUM-448 verfügbar.
 #[test]
 fn sandbox_backends_prints_the_list_of_the_daemon() {
     let harness = Harness::new();
@@ -6379,9 +6391,11 @@ fn sandbox_backends_prints_the_list_of_the_daemon() {
         return;
     }
     assert_eq!(backends[0]["isolation_level"], "namespaces", "{value}");
-    assert_eq!(backends[1]["available"], false, "{value}");
+    assert_eq!(backends[1]["available"], true, "{value}");
+    assert_eq!(backends[1]["runtimes"][0]["available"], true, "{value}");
+    assert_eq!(backends[1]["runtimes"][1]["available"], false, "{value}");
     assert_eq!(
-        backends[1]["diagnostics"][0]["code"], "SANDBOX_048",
+        backends[1]["runtimes"][1]["diagnostics"][0]["code"], "SANDBOX_048",
         "{value}"
     );
     assert_eq!(backends[1]["runtimes"][1]["name"], "krun", "{value}");

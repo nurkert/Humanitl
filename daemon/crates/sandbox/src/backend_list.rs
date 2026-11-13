@@ -7,9 +7,12 @@
 //! [`crate::Backend::detect`] durch, nur ohne beim ersten Befund aufzuhören:
 //! Die Liste nennt alles, was einem Start im Weg steht.
 //!
-//! Die Liste startet nichts. Unter bwrap fragt sie das Programm wie die Suche
-//! vor jedem Start (`bwrap --version`, Nutzer-Namensraum); unter Podman nur,
-//! ob das Programm da ist. Den Probestart macht `doctor` (HUM-436).
+//! Die Liste startet keine Sandbox. Sie fragt jedes Backend wie die Suche vor
+//! jedem Start ([`crate::Backend::detect`], ohne die Zulassung): unter bwrap
+//! `bwrap --version` und den Nutzer-Namensraum, unter der Container-Engine
+//! seit ihrer Zulassung (HUM-448) Programm, Fassung, `info`, untergeordnete
+//! IDs und `SELinux`, je mit der Frist der Suche; vor der Zulassung einer
+//! Stufe nur, ob das Programm da ist. Den Probestart macht `doctor` (HUM-436).
 //!
 //! `available` heißt nie, dass ein anderes Backend einspringt: Ein nicht
 //! verfügbares gewähltes Backend lässt den Start scheitern.
@@ -151,14 +154,30 @@ pub fn list_backends_with(
         .collect()
 }
 
-/// Was dem System für dieses Backend fehlt: unter Podman das Programm,
-/// sonst der Befund der Suche des Backends ([`detect_in_build`]).
+/// Was dem System für dieses Backend fehlt: der Befund der Suche, die jeder
+/// Start macht ([`detect_in_build`]).
+///
+/// Unter der Container-Engine zuerst, ob es das Programm gibt, mit dem Weg
+/// zurück im Text. Danach, wenn ihre gemeinsame Stufe zugelassen ist, die
+/// Suche mit dieser Stufe (HUM-448): Die Liste nennt ein Backend nie
+/// verfügbar, dessen Start schon an der Suche scheiterte. Gefragt wird die
+/// gemeinsame Stufe, gleich welche Laufzeit eingestellt ist: Was das System
+/// der Engine schuldig bleibt, fehlt jeder Laufzeit; was einer Stufe fehlt,
+/// sagen Untergrenze und Zulassung je Laufzeit.
 fn system_missing(name: &'static str, sandbox: &SandboxRef, paths: &Paths) -> Option<Diagnostic> {
-    if name == PODMAN_BACKEND {
-        podman_missing(sandbox, paths)
-    } else {
-        detect_in_build(name, paths.clone(), sandbox).err()
+    if name != PODMAN_BACKEND {
+        return detect_in_build(name, paths.clone(), sandbox).err();
     }
+    if let Some(missing) = podman_missing(sandbox, paths) {
+        return Some(missing);
+    }
+    let shared = PodmanRuntime::Crun;
+    if admitted(name, Some(shared)).is_err() {
+        return None;
+    }
+    let mut searched = sandbox.clone();
+    searched.podman.runtime = shared;
+    detect_in_build(name, paths.clone(), &searched).err()
 }
 
 /// `SANDBOX_036`, wenn das Sandbox-Profil ein anderes Backend verlangt, oder
@@ -284,22 +303,39 @@ mod tests {
 
     use super::*;
 
-    /// Pfade mit `PATH` auf genau diesen Ordner.
+    /// Pfade mit `PATH` auf genau diesen Ordner und dem Laufzeitverzeichnis
+    /// in `dir`: Die Suche der Engine legt dort ihre Dateien an, nie im
+    /// Laufzeitverzeichnis des Menschen am Rechner.
     fn paths_with(dir: &Path, bin: &Path) -> Paths {
         Paths::new(Env::from_pairs([
             ("HOME", dir.to_string_lossy().into_owned()),
             ("PATH", bin.to_string_lossy().into_owned()),
+            (
+                "XDG_RUNTIME_DIR",
+                dir.join("run").to_string_lossy().into_owned(),
+            ),
         ]))
     }
 
-    /// Ein ausführbares `podman` in `bin`, das nie läuft: Die Liste fragt nur,
-    /// ob es da ist.
+    /// Eine Attrappe der Engine in `bin`, die jede Frage mit Exit 99
+    /// beantwortet: Sie ist da, und ihre Suche scheitert.
     fn fake_podman(bin: &Path) {
-        use std::os::unix::fs::PermissionsExt;
+        fake_engine(bin, "exit 99\n");
+    }
+
+    /// Eine Attrappe der Engine in `bin` mit diesem Rumpf eines Skripts.
+    fn fake_engine(bin: &Path, body: &str) {
         std::fs::create_dir_all(bin).expect("bin");
-        let program = bin.join("podman");
-        std::fs::write(&program, "#!/bin/sh\nexit 99\n").expect("podman");
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        crate::test_support::write_program(
+            &bin.join(PODMAN_BACKEND),
+            &format!("#!/bin/sh\n{body}"),
+        );
+    }
+
+    /// Der Befund, mit dem die Suche eines Starts die gemeinsame Stufe auf
+    /// diesen Pfaden ablehnt, oder keiner.
+    fn search_of_a_start(paths: &Paths) -> Option<Diagnostic> {
+        crate::Backend::detect(PODMAN_BACKEND, paths.clone(), &SandboxRef::default()).err()
     }
 
     fn codes(diagnostics: &[Diagnostic]) -> Vec<&str> {
@@ -312,39 +348,66 @@ mod tests {
             .unwrap_or_else(|| panic!("{name} is not listed: {list:?}"))
     }
 
-    /// Vor HUM-448 ist Podman nicht verfügbar, auch wenn es installiert ist:
-    /// `SANDBOX_048`, und kein `SANDBOX_034`. Beide Laufzeiten ebenso.
+    /// Seit HUM-448 fragt die Liste die Engine wie die Suche jedes Starts:
+    /// Eine Attrappe, die da ist und auf jede Frage scheitert, ist nicht
+    /// verfügbar, mit dem Befund der Suche samt `why` und `fix`. Die
+    /// Kernel-Stufe trägt dazu `SANDBOX_048`.
     #[cfg(not(target_os = "macos"))]
     #[test]
-    fn an_installed_podman_is_listed_but_not_available_until_it_is_admitted() {
+    fn an_engine_whose_search_fails_is_listed_with_the_finding_of_the_search() {
         let dir = tempfile::tempdir().expect("tempdir");
         let bin = dir.path().join("bin");
         fake_podman(&bin);
-        let list = list_backends(
-            &SandboxRef::default(),
-            "auto",
-            &paths_with(dir.path(), &bin),
+        let paths = paths_with(dir.path(), &bin);
+        let searched = search_of_a_start(&paths).expect("the fake fails every question");
+        let list = list_backends(&SandboxRef::default(), "auto", &paths);
+        let engine = entry(&list, PODMAN_BACKEND);
+        assert!(!engine.available() && !engine.selected, "{engine:?}");
+        assert_eq!(engine.isolation, IsolationLevel::Namespaces);
+        assert_eq!(engine.diagnostics, std::slice::from_ref(&searched));
+        assert!(
+            !searched.why.is_empty() && searched.fix.is_some(),
+            "{searched:?}"
         );
-        let podman = entry(&list, "podman");
-        assert!(!podman.available(), "{podman:?}");
-        assert!(!podman.selected);
-        assert_eq!(codes(&podman.diagnostics), ["SANDBOX_048"]);
-        assert_eq!(podman.isolation, IsolationLevel::Namespaces);
-        let runtimes: Vec<_> = podman
-            .runtimes
-            .iter()
-            .map(|r| (r.runtime, r.isolation, r.selected, r.available()))
-            .collect();
+        assert_ne!(searched.code.as_str(), "SANDBOX_048");
+        let shared = searched.code.as_str();
+        assert_eq!(codes(&engine.runtimes[0].diagnostics), [shared]);
         assert_eq!(
-            runtimes,
-            [
-                (PodmanRuntime::Crun, IsolationLevel::Namespaces, true, false),
-                (PodmanRuntime::Krun, IsolationLevel::Kernel, false, false),
-            ]
+            codes(&engine.runtimes[1].diagnostics),
+            [shared, "SANDBOX_048"]
         );
-        for runtime in &podman.runtimes {
-            assert_eq!(codes(&runtime.diagnostics), ["SANDBOX_048"], "{runtime:?}");
-        }
+    }
+
+    /// Verfügbar heißt: Die Suche eines Starts besteht. Eine Attrappe, die
+    /// Fassung und `info` richtig beantwortet, ist genau dann verfügbar, wenn
+    /// die Suche auf diesem Rechner mit ihr besteht (untergeordnete IDs und
+    /// `SELinux` sind die des Rechners), und sonst steht derselbe Befund da.
+    /// Gestartet wird dabei nichts: Die Attrappe kennt nur diese zwei Fragen.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn the_list_says_available_exactly_when_the_search_of_a_start_does() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = dir.path().join("bin");
+        fake_engine(
+            &bin,
+            "case \" $* \" in\n\
+             *' version '*) echo 5.4.0 ;;\n\
+             *' info '*) echo 'true|false|crun|v2|[cpu memory pids]' ;;\n\
+             *) exit 99 ;;\n\
+             esac\n",
+        );
+        let paths = paths_with(dir.path(), &bin);
+        let searched = search_of_a_start(&paths);
+        let list = list_backends(&SandboxRef::default(), "auto", &paths);
+        let engine = entry(&list, PODMAN_BACKEND);
+        assert_eq!(engine.diagnostics, Vec::from_iter(searched.clone()));
+        assert_eq!(engine.available(), searched.is_none(), "{engine:?}");
+        assert_eq!(engine.runtimes[0].available(), searched.is_none());
+        assert!(!engine.runtimes[1].available());
+        assert_eq!(
+            codes(&engine.runtimes[1].diagnostics).last(),
+            Some(&"SANDBOX_048")
+        );
     }
 
     /// Ohne `podman` im `PATH` steht zusätzlich `SANDBOX_034` mit `fix`, und
@@ -361,17 +424,15 @@ mod tests {
             &paths_with(dir.path(), &bin),
         );
         let podman = entry(&list, "podman");
-        assert_eq!(codes(&podman.diagnostics), ["SANDBOX_034", "SANDBOX_048"]);
+        assert_eq!(codes(&podman.diagnostics), ["SANDBOX_034"]);
         let missing = &podman.diagnostics[0];
         assert!(missing.fix.is_some(), "{missing:?}");
         assert!(missing.why.contains("--backend bwrap"), "{}", missing.why);
-        for runtime in &podman.runtimes {
-            assert_eq!(
-                codes(&runtime.diagnostics),
-                ["SANDBOX_034", "SANDBOX_048"],
-                "{runtime:?}"
-            );
-        }
+        assert_eq!(codes(&podman.runtimes[0].diagnostics), ["SANDBOX_034"]);
+        assert_eq!(
+            codes(&podman.runtimes[1].diagnostics),
+            ["SANDBOX_034", "SANDBOX_048"]
+        );
         // Ein ausdrücklich genanntes Programm, das es nicht gibt, ebenso.
         let mut sandbox = SandboxRef::default();
         sandbox.podman.program = Some(dir.path().join("nope").join("podman"));
@@ -381,10 +442,7 @@ mod tests {
             "auto",
             &paths_with(dir.path(), &dir.path().join("bin")),
         );
-        assert_eq!(
-            codes(&entry(&list, "podman").diagnostics),
-            ["SANDBOX_034", "SANDBOX_048"]
-        );
+        assert_eq!(codes(&entry(&list, "podman").diagnostics), ["SANDBOX_034"]);
     }
 
     /// bwrap steht da wie vor HUM-432: gewählt unter `auto`, mit dem Befund
@@ -418,15 +476,12 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn a_floor_above_a_backend_is_named_in_its_entry() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let bin = dir.path().join("bin");
-        fake_podman(&bin);
         let sandbox = SandboxRef {
             backend: SandboxBackendName::Podman,
             min_isolation: MinIsolation::Kernel,
             ..SandboxRef::default()
         };
-        let list = list_backends(&sandbox, "auto", &paths_with(dir.path(), &bin));
+        let list = list_backends_with(&sandbox, "auto", |_| None);
         let bwrap = entry(&list, "bwrap");
         assert!(!bwrap.selected);
         assert!(
@@ -435,7 +490,7 @@ mod tests {
         );
         let podman = entry(&list, "podman");
         assert!(podman.selected);
-        assert_eq!(codes(&podman.diagnostics), ["SANDBOX_035", "SANDBOX_048"]);
+        assert_eq!(codes(&podman.diagnostics), ["SANDBOX_035"]);
         assert_eq!(
             codes(&podman.runtimes[1].diagnostics),
             ["SANDBOX_048"],

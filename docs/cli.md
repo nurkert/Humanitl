@@ -346,9 +346,9 @@ part of the pull and is not ended. A name without a registry is refused
 backend of the configuration file (`sandbox.backend`); the `--backend` of a
 single start does not apply to it. The project folder, the door, the CA, the shim and the files
 of the session still come from the host, never from the image; the mounts of
-the sandbox profile under `mounts.ro` do not apply in an image. Until the
-backend is admitted (HUM-448) the pull is refused with `SANDBOX_048`, like
-every start.
+the sandbox profile under `mounts.ro` do not apply in an image. Under a
+level that is not admitted yet, the kernel level until HUM-449, the pull is
+refused with `SANDBOX_048`, like every start.
 
 Registry credentials for a pull come from one file only,
 `~/.config/humanitl/podman/auth.json` (under `$XDG_CONFIG_HOME` when it is

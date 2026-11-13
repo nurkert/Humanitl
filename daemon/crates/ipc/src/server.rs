@@ -3283,6 +3283,7 @@ mod tests {
             ("HOME", home.display().to_string()),
             ("XDG_CONFIG_HOME", home.join("config").display().to_string()),
             ("PATH", bin.display().to_string()),
+            ("XDG_RUNTIME_DIR", home.join("run").display().to_string()),
         ]);
         let queue = queue();
         let server = server(&queue).with_paths(humanitl_config::Paths::new(env));
@@ -3306,13 +3307,15 @@ mod tests {
         diagnostics.iter().map(|d| d.code.as_str()).collect()
     }
 
-    /// Vor HUM-448 ist Podman nicht verfügbar, auch wenn es installiert ist
-    /// (`SANDBOX_048`); ohne `podman` im `PATH` steht zusätzlich
-    /// `SANDBOX_034` mit `fix`. Das Backend des Systems bleibt, was die Suche vor jedem Start
-    /// sagt, und ist unter `auto` gewählt.
+    /// Seit HUM-448 fragt die Liste die Container-Engine wie die Suche jedes
+    /// Starts: Eine installierte Engine, die auf jede Frage scheitert, ist
+    /// nicht verfügbar, mit dem Befund dieser Suche samt `fix`, und die
+    /// Kernel-Stufe trägt dazu `SANDBOX_048`; ohne Programm im `PATH` steht
+    /// `SANDBOX_034` mit `fix`. Das Backend des Systems bleibt, was die Suche
+    /// vor jedem Start sagt, und ist unter `auto` gewählt.
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn sandbox_backends_lists_podman_as_not_admitted_and_names_what_is_missing() {
+    async fn sandbox_backends_lists_the_engine_with_the_finding_of_its_search() {
         use std::os::unix::fs::PermissionsExt as _;
         let home = tempfile::tempdir().expect("tempdir");
         let bin = home.path().join("bin");
@@ -3331,7 +3334,11 @@ mod tests {
         assert_eq!(list.min_isolation, v1::IsolationLevel::Policy as i32);
         let podman = backend(&list, "podman");
         assert!(!podman.available && !podman.selected, "{podman:?}");
-        assert_eq!(codes_of(&podman.diagnostics), ["SANDBOX_048"]);
+        let [searched] = podman.diagnostics.as_slice() else {
+            panic!("exactly one finding of the search");
+        };
+        assert_ne!(searched.code, "SANDBOX_048");
+        assert!(searched.fix.is_some() && !searched.why.is_empty());
         assert_eq!(
             podman.isolation_level,
             v1::IsolationLevel::Namespaces as i32
@@ -3348,6 +3355,10 @@ mod tests {
                 ("krun", v1::IsolationLevel::Kernel as i32, false),
             ]
         );
+        assert_eq!(
+            codes_of(&podman.runtimes[1].diagnostics),
+            [searched.code.as_str(), "SANDBOX_048"]
+        );
         // Das Backend des Systems fehlt in diesem `PATH`: der Befund seiner Suche; gewählt
         // bleibt es, und nichts springt ein.
         let system = backend(&list, humanitl_sandbox::PLATFORM_BACKEND_NAME);
@@ -3362,10 +3373,7 @@ mod tests {
         std::fs::create_dir_all(&empty).expect("empty bin");
         let list = backends_with_path(home.path(), &empty).await;
         let podman = backend(&list, "podman");
-        assert_eq!(
-            codes_of(&podman.diagnostics),
-            ["SANDBOX_034", "SANDBOX_048"]
-        );
+        assert_eq!(codes_of(&podman.diagnostics), ["SANDBOX_034"]);
         assert!(podman.diagnostics[0].fix.is_some(), "{podman:?}");
     }
 

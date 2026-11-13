@@ -1608,6 +1608,7 @@ der Durchleitung oder an der Audit-Kette bekommt hier eine Zeile und in der Änd
 | 0.1.x | Linux: Podman als zweites Sandbox-Backend, gemeinsame Stufe (rootless, Laufzeit `crun`), nicht zugelassen: Jeder Start lehnt es bis HUM-448 mit `SANDBOX_048` ab; nur die Escape-Suite und die Tests starten es. Jede Konfigurationsquelle, die der Daemon nicht schreibt, ist abgeschnitten, die Umgebung geht nur durch den versiegelten memfd, der Container endet über die Engine und die Lebensleine (HUM-433, [Abschnitt 13](#13-linux-podman), K-27). |
 | 0.1.x | Die Escape-Suite läuft gegen jedes Backend; der CI-Job `escape-tests-podman` führt sie über `escape-launch --backend podman` gegen Podman aus, mit einer feindlichen Engine-Konfiguration, die auf dem Runner gepflanzt ist (HUM-435, [Abschnitt 9](#9-what-we-verify-in-ci), K-27). |
 | 0.1.x | Linux, Podman: ein Abbild als Wurzel der Sandbox, mit Digest festgelegt und vor jedem Start geprüft (`SANDBOX_043`), von keinem Start gezogen; `humanitl sandbox image pull` zieht auf Wunsch, direkt und nicht durch den Proxy, und sagt das vorher; Projekt, Tür, CA, Shim und Dateien der Sitzung kommen vom Host, und ESC-2 prüft die CA nach Gerät und Inode (HUM-439, [Abschnitt 13](#ein-abbild-als-wurzel-hum-439), K-28). |
+| 0.1.x | Linux: Podman in der gemeinsamen Stufe (`podman/crun`) zugelassen, nachdem `escape-tests-podman` auf `main` grün war; ein Mensch wählt es mit `sandbox.backend = "podman"` oder `--backend podman`, `auto` bleibt bubblewrap, und die Kernel-Stufe (`krun`) lehnt jeder Start bis HUM-449 mit `SANDBOX_048` ab (HUM-448, [Abschnitt 13](#13-linux-podman), K-27). |
 
 ## 12. macOS: Seatbelt statt bubblewrap
 
@@ -1758,14 +1759,17 @@ die Binaries im Disk-Image.
 
 ## 13. Linux: Podman
 
-**Noch nicht zugelassen.** Podman ist ein zweites Sandbox-Backend unter Linux (ADR-0020), zuerst
+**Zugelassen seit HUM-448.** Podman ist ein zweites Sandbox-Backend unter Linux (ADR-0020), zuerst
 in der gemeinsamen Stufe: rootless Podman mit der OCI-Laufzeit `crun`, Namensräume über dem
-geteilten Kern des Hosts, dieselbe Isolationsstufe wie bubblewrap. Bis HUM-448 es zulässt, lehnt
-jeder Start mit `sandbox.backend = "podman"` mit `SANDBOX_048` ab, aus `config.toml`, einem Profil,
-der Umgebung, `--backend` und der Oberfläche gleichermaßen; nur die Escape-Suite und die Tests
-starten es, über Code, der weder im Daemon noch in der Kommandozeile steckt. Dieser Abschnitt sagt,
-was der Adapter (`daemon/crates/sandbox/src/podman/`, HUM-433) tut, damit die Zulassung daran
-geprüft werden kann.
+geteilten Kern des Hosts, dieselbe Isolationsstufe wie bubblewrap. Zugelassen wurde es erst, als
+die Escape-Suite gegen es (der CI-Job `escape-tests-podman`, ESC-1, ESC-2 und ESC-5) auf `main`
+grün war, zusammen mit der Einhänge-Prüfung (HUM-437) und dem Dienstverwalter des Nutzers
+(HUM-434). Ein Start mit `sandbox.backend = "podman"` startet eine Sitzung, ob die Wahl aus
+`config.toml`, einem Profil, der Umgebung, `--backend` oder dem Start einer Sitzung kommt; ein
+Projekt-Profil kann das Backend nicht wählen. `auto` bleibt bubblewrap: Podman läuft nur, wenn ein
+Mensch es wählt. Die Kernel-Stufe, Podman mit `krun`, ist noch nicht zugelassen, und jeder Start
+damit lehnt bis HUM-449 mit `SANDBOX_048` ab. Dieser Abschnitt sagt, was der Adapter
+(`daemon/crates/sandbox/src/podman/`, HUM-433) tut.
 
 ### Die drei Garantien unter Podman
 
@@ -1870,8 +1874,9 @@ Laden der Konfiguration mit `CONFIG_003` ab).
   bevor es läuft. Die Registry ist die im Namen: Ein kurzer Name ohne Registry wird abgelehnt, und
   die eigene `registries.conf` des Daemons hat keine Suchliste und keinen Spiegel. Die
   Signaturregel ist eine eigene Datei des Daemons (`--signature-policy`) und nimmt jedes Abbild an:
-  Der Vertrauensanker ist der Digest, den der Mensch genannt hat, keine Signatur. Bis HUM-448 lehnt
-  das Ziehen wie jeder Start mit `SANDBOX_048` ab.
+  Der Vertrauensanker ist der Digest, den der Mensch genannt hat, keine Signatur. Unter der
+  Kernel-Stufe, die noch nicht zugelassen ist, lehnt das Ziehen wie jeder Start mit `SANDBOX_048`
+  ab.
 - **Das Abbild gehört zur vertrauenswürdigen Basis.** Was darin liegt, läuft als der Agent unter
   dessen Filter. Der Shim läuft aus der Datei des Hosts, in einem Release statisch gebunden, also
   läuft keine Bibliothek des Abbilds, bevor der Filter steht. Projektordner, Tür, CA-Zertifikat und

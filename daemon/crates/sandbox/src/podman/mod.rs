@@ -82,11 +82,13 @@
 //! `PolicyMode::Image` mit dem Verweis samt Digest. Gezogen wird nur auf
 //! Wunsch, über [`SandboxBackend::pull_image`].
 //!
-//! **Zulassung.** Bis HUM-448 steht Podman nicht in
-//! [`crate::ADMITTED_BACKENDS`]: [`crate::Backend::detect`] lehnt es mit
-//! `SANDBOX_048` ab, und nur die Escape-Suite und die Tests kommen über
-//! `Backend::detect_unadmitted` an diesen Adapter. Seine Konstruktoren sind
-//! deshalb nur in der Crate sichtbar.
+//! **Zulassung.** Seit HUM-448 steht Podman mit `crun` in
+//! [`crate::ADMITTED_BACKENDS`] ([`SHARED_KERNEL_STAGE`]); mit `krun` lehnt
+//! [`crate::Backend::detect`] es weiter mit `SANDBOX_048` ab, und nur die
+//! Escape-Suite und die Tests kommen über `Backend::detect_unadmitted` an
+//! diese Stufe. Die Konstruktoren des Adapters sind nur in der Crate
+//! sichtbar; von außen führt jeder Weg über [`crate::Backend`] und dessen
+//! Zulassung.
 
 mod detect;
 mod image;
@@ -134,6 +136,12 @@ use plan::{Entry, Fds, LineSpec, Root, SessionFiles, Sources};
 
 /// Der Name des Programms, wie ihn die Suche im `PATH` findet.
 pub(crate) const PROGRAM: &str = "podman";
+
+/// Die gemeinsame Stufe, Podman mit `crun`, wie `crate::ADMITTED_BACKENDS` sie
+/// führt (HUM-448). Sie muss gleich `crate::backend::stage` mit
+/// [`PodmanRuntime::Crun`] sein; der Test
+/// `the_shared_stage_is_admitted_and_the_kernel_stage_is_not` hält beides gleich.
+pub(crate) const SHARED_KERNEL_STAGE: &str = "podman/crun";
 
 /// Der Schlüssel des Labels, an dem der Daemon seine Container erkennt.
 pub(crate) const LABEL_KEY: &str = "humanitl.daemon";
@@ -1352,7 +1360,16 @@ fn private_dir(path: &Path) -> Result<(), Diagnostic> {
 /// Schreibt eine Datei ganz: erst unter einem Namen daneben, dann an ihren
 /// Ort, damit ein Podman, das gleichzeitig liest, nie eine halbe sieht.
 fn write_file(path: &Path, content: &[u8], mode: u32) -> Result<(), Diagnostic> {
-    let staged = path.with_extension(format!("tmp{}", std::process::id()));
+    // Ein eigener Name je Schreibvorgang, nicht nur je Prozess: Die Liste
+    // der Backends und ein Start bereiten das Verzeichnis gleichzeitig vor
+    // (HUM-448), und ein gemeinsamer Zwischenname würde dem einen die Datei
+    // unter dem anderen wegbenennen.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let staged = path.with_extension(format!(
+        "tmp{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     let written = OpenOptions::new()
         .write(true)
         .create(true)

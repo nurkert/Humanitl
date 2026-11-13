@@ -674,7 +674,7 @@
       "properties": {
         "backend": {
           "default": "auto",
-          "description": "Welches Sandbox-Backend startet. `auto`, die Vorgabe, ist bubblewrap unter Linux und Seatbelt unter macOS. Ein gewähltes Backend fällt nie auf ein anderes zurück: Gibt es es auf diesem System nicht, lehnt der Start mit `SANDBOX_034` ab; liegt es unter `sandbox.min_isolation`, mit `SANDBOX_035`; verlangt das Sandbox-Profil ein anderes, mit `SANDBOX_036`. `podman` ist noch nicht zugelassen: Jeder Start damit endet mit `SANDBOX_048`, bis die Escape-Suite gegen Podman grün ist. Im Projekt-Profil gesperrt; ein Client darf den Schlüssel für eine Sitzung setzen (`cli_overrides`), die Untergrenze gilt auch dann.",
+          "description": "Welches Sandbox-Backend startet. `auto`, die Vorgabe, ist bubblewrap unter Linux und Seatbelt unter macOS. Ein gewähltes Backend fällt nie auf ein anderes zurück: Gibt es es auf diesem System nicht, lehnt der Start mit `SANDBOX_034` ab; liegt es unter `sandbox.min_isolation`, mit `SANDBOX_035`; verlangt das Sandbox-Profil ein anderes, mit `SANDBOX_036`. `podman` mit der Laufzeit `krun` ist noch nicht zugelassen: Jeder Start damit endet mit `SANDBOX_048`, bis die Escape-Suite gegen diese Stufe grün ist. Im Projekt-Profil gesperrt; ein Client darf den Schlüssel für eine Sitzung setzen (`cli_overrides`), die Untergrenze gilt auch dann.",
           "oneOf": [
             {
               "const": "auto",
@@ -688,7 +688,7 @@
             },
             {
               "const": "podman",
-              "description": "Rootless Podman, unter Linux (noch nicht zugelassen).",
+              "description": "Rootless Podman, unter Linux.",
               "type": "string"
             },
             {

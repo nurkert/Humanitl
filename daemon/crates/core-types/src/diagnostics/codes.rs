@@ -1704,10 +1704,10 @@ registry! {
     SANDBOX_036 => "sandbox", "Sandbox profile requires another backend", "#sandbox_036",
         "The sandbox profile requires the backend it names under `[sandbox] backend`, and the configuration chose a different one. The start stops; the profile does not override the choice, and the choice does not override the profile.",
         "`ChangeSetting` on `sandbox.backend` with the backend of the profile when that one is admitted; otherwise choose a sandbox profile without a fixed backend (`sandbox.profile`).";
-    /// `sandbox.backend` names a level that is not admitted yet: `podman`
-    /// until its escape suite and mount check are green in CI (HUM-448),
-    /// `podman` with `krun` until HUM-449. Every start path refuses it; only
-    /// the escape suite and tests start it, through code (HUM-431).
+    /// `sandbox.backend` names a level that is not admitted yet: since HUM-448
+    /// only `podman` with `krun`, until its escape suite is green in CI
+    /// (HUM-449). Every start path refuses it; only the escape suite and
+    /// tests start it, through code (HUM-431).
     SANDBOX_048 => "sandbox", "Sandbox backend not admitted yet", "#sandbox_048",
         "`sandbox.backend` names an isolation level that is not admitted yet. A backend becomes selectable only after its mount check and the escape suite against it are green in CI; until then every start refuses it, whether it comes from `config.toml`, the environment, a profile or the start of a session.",
         "`ChangeSetting` on `sandbox.backend` = `auto`, the admitted backend of this system.";
