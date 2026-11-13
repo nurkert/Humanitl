@@ -1,13 +1,13 @@
 # Sprint 7 · Podman als zweites Sandbox-Backend unter Linux
 
-Ziel des Sprints: Unter Linux wählt der Nutzer neben bwrap ein zweites Backend, Podman, je Konfiguration, Konfigurationsprofil, Sitzung (`--backend`) und Oberfläche. Zuerst die gemeinsame Stufe (rootless Podman mit der OCI-Laufzeit `crun`, geteilter Kernel), danach die Kernel-Stufe (Laufzeit `krun`, crun mit libkrun, eigener Gastkernel). Vorgabe bleibt bwrap. Entscheidungen des Inhabers vom 2026-11-11; Entwurf der Entscheidung in [ADR-0020](../docs/adr/0020-podman-sandbox-backend.md), Analyse, offene Messungen (P0 bis P16, K1 bis K8) und Aufwand im Abschnitt „Result (desk part, 2026-11-11)" von HUM-292 in [`sprint-5.md`](sprint-5.md).
+Ziel des Sprints: Unter Linux wählt der Nutzer neben bwrap ein zweites Backend, Podman, je Konfiguration, Konfigurationsprofil, Sitzung (`--backend`) und Oberfläche. Zuerst die gemeinsame Stufe (rootless Podman mit der OCI-Laufzeit `crun`, geteilter Kernel), danach die Kernel-Stufe (eigener Gastkernel; seit HUM-442 als QEMU-micro-VM aus Debian-Paketen, Backend `qemu`, [ADR-0021](../docs/adr/0021-qemu-microvm-kernel-level.md), statt der Laufzeit `krun`). Vorgabe bleibt bwrap. Entscheidungen des Inhabers vom 2026-11-11; Entwurf der Entscheidung in [ADR-0020](../docs/adr/0020-podman-sandbox-backend.md), Analyse, offene Messungen (P0 bis P16, K1 bis K8; für die Kernel-Stufe ersetzt durch Q1 bis Q11 von HUM-442) und Aufwand im Abschnitt „Result (desk part, 2026-11-11)" von HUM-292 in [`sprint-5.md`](sprint-5.md).
 
 Zwei Grenzen gelten für jedes Issue dieses Sprints und sind Akzeptanzkriterium, auch wo das Issue sie nicht eigens nennt:
 
 1. Keine Einstellung schwächt die drei Garantien (`README.md`, `docs/SECURITY.md`, `tests/escape/`), und ein Projekt senkt die Isolationsstufe nie (CONVENTIONS 4.11). Werte, die eine Garantie schwächen würden, haben keinen Schlüssel.
 2. Eine unsichere oder nicht erfüllbare Einstellung wird mit `Diagnostic` abgelehnt, beim Laden und beim Start, nie still angewendet; ein gewähltes Backend fällt nie still auf ein anderes zurück.
 
-Leitlinie: Die Namen `podman`, `crun`, `krun`, `libkrun` und `conmon` stehen nur unter `daemon/crates/sandbox/src/podman/` (HUM-145, neuer Abschnitt `[podman]` in `tools/coupling-baseline.toml`). Kein neuer Port, keine Abstraktion über Podman. Jeder Commit, der eine Aussage aus `docs/SECURITY.md` berührt, ändert `docs/SECURITY.md` und `docs/THREAT-MODEL.md` im selben Commit. Vor HUM-433 sind die Messungen P0 bis P15 auf der Referenzmaschine aufgeschrieben, vor HUM-437 auch P17 (Ergebnis in den Abschnitt von HUM-292), vor HUM-443 die Messungen K1 bis K8. Tor: Keine Stufe ist wählbar, weder in der Konfiguration noch über die CLI, die Oberfläche oder `auto`, bevor ihre Einhänge-Prüfung gelandet (HUM-437, HUM-446) und die Escape-Suite gegen sie in der CI grün ist (HUM-435, HUM-445). Bis zur Zulassung (HUM-448 für Podman, HUM-449 für `krun`) lehnt jeder Start sie mit `SANDBOX_048` ab; nur die Escape-Suite und die Tests starten eine nicht zugelassene Stufe, über ein Argument im Code, nie über einen Schlüssel.
+Leitlinie: Die Namen `podman`, `crun`, `krun`, `libkrun` und `conmon` stehen nur unter `daemon/crates/sandbox/src/podman/` (HUM-145, neuer Abschnitt `[podman]` in `tools/coupling-baseline.toml`), die Namen `qemu`, `virtiofsd`, `vhost-device-vsock` und `microvm` nur unter `daemon/crates/sandbox/src/qemu/` (Abschnitt `[qemu]`, HUM-464). Kein neuer Port, keine Abstraktion über Podman oder QEMU. Jeder Commit, der eine Aussage aus `docs/SECURITY.md` berührt, ändert `docs/SECURITY.md` und `docs/THREAT-MODEL.md` im selben Commit. Vor HUM-433 sind die Messungen P0 bis P15 auf der Referenzmaschine aufgeschrieben, vor HUM-437 auch P17 (Ergebnis in den Abschnitt von HUM-292), vor HUM-443 die Messungen der Kernel-Stufe (HUM-442, Q1 bis Q11). Tor: Keine Stufe ist wählbar, weder in der Konfiguration noch über die CLI, die Oberfläche oder `auto`, bevor ihre Einhänge-Prüfung gelandet (HUM-437, HUM-446) und die Escape-Suite gegen sie in der CI grün ist (HUM-435, HUM-445). Bis zur Zulassung (HUM-448 für Podman, HUM-449 für `qemu`) lehnt jeder Start sie mit `SANDBOX_048` ab; nur die Escape-Suite und die Tests starten eine nicht zugelassene Stufe, über ein Argument im Code, nie über einen Schlüssel.
 
 Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` und `docs/DIAGNOSTICS.md`, Bereich `SANDBOX` wächst in HUM-431 von 001-033 auf 001-059):
 
@@ -20,14 +20,14 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | `SANDBOX_038` | Podman nicht rootless, entfernt (`CONTAINER_HOST`, `--remote`) oder eine Podman-Maschine | HUM-433 |
 | `SANDBOX_039` | Keine untergeordneten IDs für `--userns keep-id` (`/etc/subuid`, `/etc/subgid`, `newuidmap`) | HUM-433 |
 | `SANDBOX_040` | cgroup-Controller `memory`, `pids`, `cpu` nicht delegiert; Grenzen nicht durchsetzbar | HUM-433 |
-| `SANDBOX_041` | Container einer früheren Sitzung gefunden und entfernt, oder nicht entfernbar (Warnung) | HUM-433 |
+| `SANDBOX_041` | Container oder VM-Unit einer früheren Sitzung gefunden und entfernt, oder nicht entfernbar (Warnung) | HUM-433, HUM-444 |
 | `SANDBOX_042` | Ein eingehängter Ordner ist nicht der geprüfte (Gerät und Inode) | HUM-437 |
 | `SANDBOX_043` | Abbild fehlt lokal oder trägt nicht den erwarteten Digest | HUM-439 |
 | `SANDBOX_044` | SELinux erzwingt Etiketten; ein Einhängen verlangte Umetikettieren des Projekts | HUM-433 |
-| `SANDBOX_045` | Laufzeit `krun` fehlt oder `/dev/kvm` ist nicht les- und schreibbar | HUM-444 |
-| `SANDBOX_046` | Tür der Kernel-Stufe nicht ausdrückbar: Weiterleitung an oder vsock-Abbildung fehlt | HUM-444 |
-| `SANDBOX_047` | Host-Prüfung des VMM gescheitert (mehr als `lo`, unerklärter Deskriptor) | HUM-444 |
-| `SANDBOX_048` | Stufe noch nicht zugelassen; wird von HUM-448 (Podman) und HUM-449 (`krun`) freigegeben | HUM-431 |
+| `SANDBOX_045` | Voraussetzung der Kernel-Stufe fehlt: `/dev/kvm`, ein Programm (`qemu-system-x86`, `virtiofsd`, `vhost-device-vsock`), Kernel-Abbild nicht lesbar, Modulverzeichnis, bwrap ohne `--bind-fd` | HUM-464 |
+| `SANDBOX_046` | Tür der Kernel-Stufe nicht aufgebaut: vsock-Gerät oder Lauscher der Sitzung fehlt | HUM-464 |
+| `SANDBOX_047` | Host-Prüfung des VMM gescheitert (mehr als `lo`, unerklärter Deskriptor oder Socket) | HUM-464 |
+| `SANDBOX_048` | Stufe noch nicht zugelassen; wird von HUM-448 (Podman) und HUM-449 (`qemu`) freigegeben | HUM-431 |
 | `SANDBOX_049` | Die Mounttabelle in der Sandbox weicht vom Plan ab (zusätzlicher oder fehlender Einhängepunkt) | HUM-437 |
 | `DOCTOR_014` | Probestart des Podman-Backends gescheitert | HUM-436 |
 | `DOCTOR_015` | Probestart der Kernel-Stufe gescheitert | HUM-444 |
@@ -50,12 +50,14 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-440 | Oberfläche: Backend-Wahl mit Isolationsstufe in Einstellungen und Start | M | HUM-432, HUM-437, HUM-448 |
 | HUM-441 | Doku: Podman in README, CONFIG, cli; Nachträge ADR-0002, ADR-0010, ADR-0015; ADR-0020 angenommen | S | HUM-448, HUM-439, HUM-440 |
 | HUM-442 | Spike Kernel-Stufe: Weiterleitung, vsock-Tür, Kanäle des VMM, Startzeit, KVM in der CI | M | HUM-433 |
-| HUM-443 | Shim: Steuerkanal als Strom, Terminal und weitere Shells im Gast | L | HUM-442 |
-| HUM-444 | Podman-Adapter, Kernel-Stufe: `krun`, vsock-Tür, Host-Prüfung des VMM | L | HUM-443 |
-| HUM-445 | Escape-Suite der Kernel-Stufe: Proben mit Gast-Root, CI-Job mit KVM | M | HUM-444 |
-| HUM-446 | Kernel-Stufe: Projektordner und Wegwerf-Schicht über virtiofs | L | HUM-445 |
-| HUM-449 | Kernel-Stufe zulassen: `krun` wird wählbar | S | HUM-445, HUM-446 |
-| HUM-447 | Doku der Kernel-Stufe, Oberfläche schaltet `krun` frei | S | HUM-449 |
+| HUM-464 | Konfiguration und Port: Backend `qemu`, Gruppe `sandbox.qemu`, `krun` entfernt | M | HUM-442 |
+| HUM-465 | Shim im Gast: Module laden und sperren, Tür über vsock | M | HUM-442, HUM-437 |
+| HUM-443 | Shim: Steuerkanal als Strom, Terminal und weitere Shells im Gast | L | HUM-465 |
+| HUM-444 | QEMU-Adapter: Plan, Start in Gefängnissen, Ende, Host-Prüfung, doctor | L | HUM-443, HUM-464, HUM-434 |
+| HUM-445 | Escape-Suite der Kernel-Stufe: Proben mit Gast-Root, CI-Job mit KVM | M | HUM-444, HUM-435, HUM-437 |
+| HUM-446 | Kernel-Stufe: Projektordner und Wegwerf-Schicht über virtiofs | L | HUM-445, HUM-438 |
+| HUM-449 | Kernel-Stufe zulassen: `qemu` wird wählbar | S | HUM-445, HUM-446 |
+| HUM-447 | Doku der Kernel-Stufe, Oberfläche schaltet `qemu` frei | S | HUM-449 |
 | HUM-451 | Integrationstest: ein Daemon, der die Shell-Tür nicht mehr liest, hält weder Lebensleine noch Agent auf | S | HUM-430 |
 | HUM-452 | Podman: ein Container, dessen Client ungeplant endet, wird sofort entfernt, nicht erst beim nächsten Stopp | S | HUM-433 |
 | HUM-453 | Podman: `/sys` des Rechners ist im Container verdeckt wie unter bwrap | S | HUM-433 |
@@ -442,7 +444,7 @@ Der Inhaber will die Wahl auch in der Oberfläche. ADR-0018: UI ist dünner Clie
 1. Einstellungen: Auswahl `sandbox.backend` mit je einem Satz zur Stufe („gemeinsamer Kernel, Namensräume" oder „eigener Kernel in einer Micro-VM") und, bei nicht verfügbaren Backends, dem `why` und `fix` aus dem RPC; Schreiben über `SetConfig`.
 2. Start einer Sitzung: Backend für diese Sitzung wählbar (`cli_overrides`), Vorgabe der Einstellung; die Untergrenze des Projekts wird angezeigt und schränkt die Liste ein.
 3. Sandbox-Bildschirm zeigt Backend und Stufe der laufenden Sitzung.
-4. Was nicht zugelassen ist (`SANDBOX_048`), zeigt die Oberfläche nicht als Wahl; `podman` erscheint nach HUM-448, `krun` erst mit HUM-447.
+4. Was nicht zugelassen ist (`SANDBOX_048`), zeigt die Oberfläche nicht als Wahl; `podman` erscheint nach HUM-448, die Kernel-Stufe (seit HUM-442 `qemu`) erst mit HUM-447.
 5. Texte über ARB (`en` Quelle, `de` Übersetzung), nur eigener Abschnitt, angehängt.
 
 ### Tests
@@ -483,22 +485,154 @@ Die Sicherheitsdokumente wachsen mit dem Code (HUM-430, HUM-433, HUM-434, HUM-43
 ## HUM-442 · Spike Kernel-Stufe: Weiterleitung, vsock-Tür, Kanäle des VMM, Startzeit, KVM in der CI
 
 ### Kontext
-Die Kernel-Stufe hängt daran, ob crun mit libkrun die Tür so ausdrücken kann, wie die Garantien es verlangen: kein Netzgerät, keine transparente Socket-Weiterleitung, genau ein vsock-Port auf den Unix-Socket der Sitzung, kein `vhost-vsock`. Messungen K1 bis K8 aus dem HUM-292-Ergebnis. Zeitrahmen zwei Tage; Prototyp außerhalb von `main`.
+Die Kernel-Stufe sollte Podman mit der Laufzeit `krun` sein. libkrun ist in Debian nicht paketiert; der Inhaber hat am 2026-11-13 entschieden, dass die Stufe nur aus Paketen der Distribution entsteht: QEMU `-M microvm` mit virtiofsd und vhost-device-vsock, Podman nur noch für OCI-Abbilder. Der Spike prüft, ob dieser Weg die drei Garantien trägt. Kippt er eine davon, stoppt die Kernel-Stufe und geht zurück an den Inhaber.
 
 ### Spezifikation
-1. K1 bis K8 messen und mit Befehl und Ausgabe in den Abschnitt von HUM-292 eintragen.
-2. Antwort auf: Lässt sich Weiterleitung ganz abschalten und genau ein Port abbilden (K1, K2)? Welche Deskriptoren und Kanäle hat der VMM (K3)? Reichen Inode-Nummern über virtiofs durch (K5)? Gehen zusätzliche Host-Ordner in den Gast (K6)? Wie kommt libkrun in die CI (K7, K8)?
-3. Entscheidung im Nachtrag von ADR-0020: crun-Weg oder Rückfall „libkrun direkt aus dem Adapter, im bwrap-Gefängnis"; bei Rückfall werden HUM-444 und HUM-446 vor dem Start neu geschnitten.
+1. Messen, mit Root im Gast und ohne Filter: Netzgeräte im Gast, Tür über genau einen vsock-Port, fremde CIDs und Ports abgewiesen, Kanäle des VMM, Pinning des Projektordners über virtiofs, Inodes, Modulsperre, Startzeit, alles unter einer gehärteten transienten Unit des Nutzers.
+2. Entscheidung als ADR-0021, Nachtrag in ADR-0020, beide auch auf Deutsch; die Issues HUM-443 bis HUM-449 neu geschnitten.
 
 ### Tests
-- Keine im Repository; Belege sind die Ausgaben.
+- Keine im Repository; Belege sind die Ausgaben unten. Der Prototyp liegt außerhalb von `main`.
 
 ### Akzeptanzkriterien
-1. Jede Frage aus Punkt 2 hat einen Beleg oder ist mit Grund offen.
-2. Der Inhaber entscheidet daraus über den Weg der Kernel-Stufe.
+1. Jede Frage aus Punkt 1 hat einen Beleg oder ist mit Grund offen.
+2. ADR-0021 nennt den Weg, die verworfenen Alternativen und die Folgen.
+
+### Ergebnis (2026-11-13)
+
+Referenzmaschine: Debian forky/sid, Kernel 7.3.4+deb14-amd64, i7-8550U mit VT-x, Nutzer in der Gruppe `kvm`. Pakete: `qemu-system-x86` 11.1.3, `virtiofsd` 1.14.0, `vhost-device-vsock` 0.3.0, `bubblewrap` 0.13.1. Gast: der laufende Kernel des Hosts, `init` ein statisches Testprogramm als Root ohne seccomp, die Wurzel ein von bwrap zusammengesetztes, nur lesbares `/usr` über virtiofs, `/work` ein Testordner über einen zweiten virtiofsd.
+
+Startzeile von QEMU in den Messläufen Q1 bis Q7 (gekürzt auf das, was zählt; dort mit `-nographic -serial stdio` und `console=ttyS0`, damit die Ausgabe des Gasts lesbar ist, also mit der Konsole als Kanal zum Host; die Endform ohne Konsole steht unter Q8):
+
+```
+qemu-system-x86_64 -M microvm,pcie=on,acpi=on -accel kvm -cpu host -smp 1 -m 512 \
+  -no-reboot -nodefaults -no-user-config -nographic -nic none \
+  -sandbox on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny \
+  -object memory-backend-memfd,id=mem,size=512M,share=on -machine memory-backend=mem \
+  -kernel /boot/vmlinuz-$(uname -r) -append "rootfstype=virtiofs root=rootfs ro init=/init" \
+  -chardev socket,id=fs0,path=$R/root.sock -device vhost-user-fs-pci,chardev=fs0,tag=rootfs \
+  -chardev socket,id=fs1,path=$R/work.sock -device vhost-user-fs-pci,chardev=fs1,tag=work \
+  -chardev socket,id=vs,path=$R/vsock.sock -device vhost-user-vsock-pci,chardev=vs
+```
+
+QEMU, beide virtiofsd und vhost-device-vsock liefen je in einem bwrap-Gefängnis mit `--unshare-all --cap-drop ALL`, QEMU mit `--dev-bind /dev/kvm /dev/kvm` und `/boot` nur lesbar; vhost-device-vsock mit `--guest-cid 3 --uds-path $R/door --groups s442`, auf dem Host ein Lauscher nur an `$R/door_5000`.
+
+| # | Frage | Beleg |
+|---|---|---|
+| Q1 | Netzgerät im Gast? | `/sys/class/net`: nur `lo`. `connect` nach `1.1.1.1:443`: `errno=101 Network is unreachable` |
+| Q2 | Genau ein vsock-Port? | CID 2 Port 5000: `connect ok`, Antwort `door-reply:hello-door` vom Host-Socket. CID 2 Port 5001, CID 2 Port 22, CID 1 Port 5000, CID 4 Port 5000: je `errno=110 Connection timed out`, keine Verbindung |
+| Q3 | Kanäle des VMM? | `/proc/<qemu>/fd` im Messlauf mit Konsole: `/dev/kvm`, `kvm-vm`, `kvm-vcpu:0`, `kvm-vcpu-stats:0`, 23 eventfd, 2 io_uring, 1 signalfd, 4 Unix-Sockets (vhost-user), `/dev/null`, ein gelöschtes memfd, dazu die Standardausgabe als Konsole (`-serial stdio`). Kein `/dev/vhost-vsock`, kein `/dev/net/tun`, kein tap. Die Endform (Q8) hat keine Konsole |
+| Q4 | Erreicht ein nach der Prüfung vertauschter Projektordner den Gast? | Nein. Ordner geöffnet (`exec 7<project`), dann umbenannt und durch einen neuen ersetzt; virtiofsd in bwrap mit `--bind-fd 7 /share` und `--shared-dir /share --sandbox none`: der Gast sieht `pin` mit Inode 377185, dem geöffneten Ordner; der neue trägt 377774. Ohne bwrap scheitert `--shared-dir /proc/self/fd/7 --sandbox namespace` mit `OpenNewRoot ... No such file or directory` |
+| Q5 | Inodes über virtiofs? | Gleich, für einen Eintrag (`pin`: 377185) wie für die Wurzel des Einhängens (`/work`: 376298 auf Host und Gast); Gerätenummer verschieden (43 Host, 28 oder 30 Gast, je nach Zahl der virtiofs-Einhängungen). Die Prüfung im Gast vergleicht also den Inode der Wurzel und den Typ `virtiofs` mit dem Tag, nicht die Gerätenummer des Hosts |
+| Q6 | Kann Root im Gast nach dem Start Module laden? | Nein. `finit_module` mit `MODULE_INIT_COMPRESSED_FILE` lädt `vsock`, `vmw_vsock_virtio_transport_common`, `vmw_vsock_virtio_transport` als `.ko.xz` aus dem `/usr/lib/modules` des Hosts (`CONFIG_MODULE_DECOMPRESS=y`); danach `kernel.modules_disabled = 1`, ein weiteres `finit_module`: `Operation not permitted` |
+| Q7 | Gehärtete transiente Unit? | Endform (Befehl unten): `systemd-run --user` mit `PrivateNetwork=yes`, `PrivateUsers=yes`, `NoNewPrivileges=yes`, `CapabilityBoundingSet=`, `ProtectSystem=strict`, `ProtectHome=read-only`, `RestrictAddressFamilies=AF_UNIX AF_NETLINK`, `LockPersonality`, `RestrictRealtime`, `SystemCallArchitectures=native`: alle Belege Q1 bis Q6 unverändert, `Finished with result: success`. bwrap läuft im Namensraum der Unit weiter. Alle vier Prozesse je in einem bwrap-Gefängnis; QEMU sieht aus `/boot` nur die Kernel-Datei |
+| Q8 | Startzeit? | Endform ohne Konsole, drei Läufe: vom Aufruf von `systemd-run` bis zur ersten Verbindung des Gasts an der Tür 2,20 s, 2,24 s, 2,16 s; davon ab dem Start von QEMU 2,04 s, 2,03 s, 2,03 s (Debian-Generic-Kernel, SeaBIOS; Module laden, sperren und `/work` einhängen eingeschlossen). Zum Vergleich eine Unit derselben Art mit einem bwrap-Gefängnis, das `true` startet: 43 ms, 39 ms, 41 ms |
+| Q9 | Erreicht ein Gast einen anderen Gast? | Zwei Gäste (CID 3 wählt, CID 4 lauscht auf Port 6000). Ein vhost-device-vsock-Prozess für beide, Gruppe `g1`: Verbindung kommt zustande (Positivkontrolle, `ACCEPTED a sibling connection`). Je Gast ein eigener Prozess, beide mit dem Gruppennamen `g1`: `errno=110 Connection timed out`, der Lauscher sieht nichts. Beide Fälle unter der Unit aus Q7 (`run-sib.sh`). Gruppen wirken nur innerhalb eines Prozesses; die Trennung trägt der eigene Prozess je Sitzung |
+| Q10 | Steuerkanal vom Host in den Gast? | Endform: der Gast lauscht auf vsock-Port 6000; der Host verbindet sich mit `<uds>` und schreibt `CONNECT 6000`; Antwort `OK 6000`, danach Daten in beide Richtungen (`host-control` beim Gast, `guest-ack` beim Host). Der Gast selbst öffnet diesen Kanal nicht |
+| Q11 | KVM und Pakete in der CI? | Offen, belegt mit dem Job `kvm-tests` (HUM-465). GitHub-Runner `ubuntu-24.04` geben `/dev/kvm` nach einer udev-Regel frei; vhost-device-vsock ist in Ubuntu 24.04 nicht paketiert, der Job läuft deshalb in einem Container `debian:sid` mit `--device /dev/kvm` |
+
+Endform (Q7, Q8): ein Lauf mit allen Proben, als Root ohne Filter und ohne Konsole, unter der Unit aus Q7. `J` ist `bwrap --unshare-all --die-with-parent --new-session --cap-drop ALL --ro-bind /usr /usr --symlink usr/lib /lib --symlink usr/lib64 /lib64 --symlink usr/bin /bin --proc /proc --dev /dev`:
+
+```
+# Wurzel: der Socket kommt als Deskriptor 3, das Laufzeitverzeichnis ist im Gefängnis nicht sichtbar
+J --tmpfs /tmp --dir /work --dir /sys --dir /run --ro-bind init /init \
+  virtiofsd --shared-dir / --fd 3 --sandbox none --readonly
+# /work: Ordner öffnen, dann den Pfad vertauschen, dann virtiofsd auf den Deskriptor
+exec 7<project; mv project project-orig; mv project-new project
+J --bind $R $R --bind-fd 7 /share virtiofsd --shared-dir /share --socket-path $R/work.sock --sandbox none
+J --bind $R $R vhost-device-vsock --guest-cid 3 --socket $R/vsock.sock --uds-path $R/door --groups s<pid>
+# Steuerkanal: der Host schreibt CONNECT 6000 an $R/door
+J --bind $R $R --dev-bind /dev/kvm /dev/kvm --ro-bind /boot/vmlinuz-$(uname -r) /kernel \
+  qemu-system-x86_64 ... -display none -serial none -monitor none -nic none -kernel /kernel ...
+# alles in:
+systemd-run --user --wait --pipe -p PrivateNetwork=yes -p PrivateUsers=yes -p NoNewPrivileges=yes \
+  -p CapabilityBoundingSet= -p ProtectSystem=strict -p ProtectHome=read-only \
+  -p RestrictAddressFamilies="AF_UNIX AF_NETLINK" -p LockPersonality=yes -p RestrictRealtime=yes \
+  -p SystemCallArchitectures=native run-final.sh
+```
+
+Ausgabe (gekürzt um die Kopfzeilen von `systemd-run`):
+
+```
+HOST unit netns links: lo
+HOST opened project: root ino=376298 pin ino=377185
+HOST after swap, path now: root ino=384931 pin ino=384932
+HOST qemu fds: 33×anon_inode:[eventfd] 2×anon_inode:[io_uring] 1×anon_inode:kvm-vcpu 1×anon_inode:kvm-vcpu-stats
+  1×anon_inode:kvm-vm 1×anon_inode:[signalfd] 1×(deleted) 1×/dev/kvm 1×/dev/null 2×pipe: 5×socket:
+GUEST modules load: 0 0 0
+GUEST modules_disabled=1, later finit_module: Operation not permitted
+GUEST netdevs: lo
+GUEST inet 1.1.1.1:443: Network is unreachable
+GUEST vsock 2:5001: Connection timed out
+GUEST vsock 2:22: Connection timed out
+GUEST vsock 1:5000: Connection timed out
+GUEST vsock 4:5000: Connection timed out
+GUEST vsock 3:5000: No such device
+GUEST work mount=0 root ino=376298 pin ino=377185 pin content=pin
+HOST control: OK 6000 / guest-ack
+GUEST control from host: host-control
+          Finished with result: success
+```
+
+Die zwei Pipes sind Standardausgabe und Standardfehler der Unit (`--pipe`), die fünf Sockets die vhost-user-Verbindungen der drei Geräte. Startzeit (Q8) aus drei Läufen derselben Endform ohne die Proben mit Timeout (`FAST=1`): erste Verbindung des Gasts an der Tür 2,20 s, 2,24 s, 2,16 s nach dem Aufruf von `systemd-run`, 2,04 s, 2,03 s, 2,03 s nach dem Start von QEMU.
+
+Weitere Befunde:
+- Das Laufzeitverzeichnis der Sitzung darf in der Wurzel des Gasts nicht stehen; der Socket des virtiofsd für die Wurzel kommt deshalb als Deskriptor (`--fd`), nicht als Pfad in dessen Gefängnis.
+- Unix-Socket-Pfade sind auf 108 Byte begrenzt; das Laufzeitverzeichnis der Sitzung muss kurz sein (unter `$XDG_RUNTIME_DIR`, nicht unter einem Projekt- oder Temp-Pfad beliebiger Länge).
+- Ein dynamisch gelinktes Programm aus einem OCI-Abbild läuft nur mit dessen glibc; die Wurzel aus dem Plan (Host-`/usr`) braucht kein initrd und keinen statischen Shim.
+- Ubuntu installiert `/boot/vmlinuz-*` mit `0600`; dort fehlt die Stufe, bis der Nutzer `sandbox.qemu.kernel` setzt (HUM-464).
+- Der Gast antwortet auf nicht vorhandene vsock-Ziele mit Timeout statt Ablehnung; das kostet nur Zeit, keine Garantie.
+
+Entscheidung: [ADR-0021](../docs/adr/0021-qemu-microvm-kernel-level.md). Keine der drei Garantien kippt, unter der Bedingung aus Q9: je Sitzung ein eigener vhost-device-vsock-Prozess; die Kernel-Stufe geht weiter, neu geschnitten in HUM-464, HUM-465 und HUM-443 bis HUM-449.
+
+## HUM-464 · Konfiguration und Port: Backend `qemu`, Gruppe `sandbox.qemu`, `krun` entfernt
+
+### Kontext
+ADR-0021 ersetzt die Laufzeit `krun` durch ein eigenes Backend. Zuerst kommen Schlüssel, Port und Diagnosen, ohne dass ein Start möglich ist.
+
+### Spezifikation
+1. `sandbox.backend` bekommt `qemu` (Stufe `kernel`), nur unter Linux auf x86-64; unter macOS lehnt es wie `bwrap` ab.
+2. Neue Gruppe `sandbox.qemu` (`x-project-scope = "denied"`): `cpus` und `memory_mib` (Vorgaben wie `sandbox.podman`), `kernel` (Pfad eines Kernel-Abbilds, leer: `/boot/vmlinuz-$(uname -r)`), `modules` (Verzeichnis der Module dieses Kernels, leer: `/usr/lib/modules/<release>`), `start_timeout_secs`, und je Programm ein absoluter Pfad (`qemu`, `virtiofsd`, `vhost_device_vsock`; leer: Suche im `PATH`, `virtiofsd` zusätzlich `/usr/libexec/virtiofsd`).
+3. `sandbox.podman.runtime` verliert `krun`; der Wert wird beim Laden mit einem `CONFIG`-Diagnostic abgelehnt, dessen `fix` `sandbox.backend = "qemu"` nennt. Proto, CLI (`--podman-runtime`) und App folgen.
+4. Diagnosen: `SANDBOX_045` Voraussetzung der Kernel-Stufe fehlt (`/dev/kvm`, ein Programm oder eine Fähigkeit davon, geprüft an der Hilfe des Programms statt an einer Versionsnummer: virtiofsd `--readonly` und `--fd`, vhost-device-vsock `--uds-path` und `--groups`, QEMU `microvm` und `vhost-user-vsock-pci`, bwrap `--bind-fd`; Kernel-Abbild nicht lesbar, Modulverzeichnis fehlt), mit der fehlenden Voraussetzung in `why` und dem Paket in `fix`; `SANDBOX_046` Tür der Kernel-Stufe nicht aufgebaut; `SANDBOX_047` Host-Prüfung des VMM gescheitert. Registriert in `codes.rs` und `docs/DIAGNOSTICS.md`.
+5. `qemu` steht in der Liste der Backends (`humanitl sandbox backends`, RPC) mit Stufe `kernel`, `available = false` und `SANDBOX_048` bis HUM-449, zusätzlich `SANDBOX_045` mit dem ersten Fehlenden.
+6. `tools/coupling-baseline.toml` bekommt den Abschnitt `[qemu]` für `qemu`, `virtiofsd`, `vhost-device-vsock` und `microvm` außerhalb von `daemon/crates/sandbox/src/qemu/`; der Abschnitt `[podman]` sinkt um die `krun`-Stellen.
+
+### Tests
+- Unit Konfiguration: `qemu` mit `min_isolation = "kernel"` lädt; `podman` mit `min_isolation = "kernel"` scheitert mit `SANDBOX_035`; `runtime = "krun"` scheitert beim Laden mit dem neuen Code und dessen `fix`.
+- Unit Backend-Liste: `qemu` ist `kernel`, nicht verfügbar, mit `SANDBOX_048`.
+- Mutationsbeweis: `qemu` in `ADMITTED_BACKENDS` färbt den Test der Zulassung rot.
+
+### Akzeptanzkriterien
+1. Kein Weg startet `qemu` vor HUM-449, außer über `detect_unadmitted`.
+2. Kein Schlüssel nennt `krun` mehr; ein alter Wert führt zu einem `Diagnostic` mit Weg.
 
 ### Fallstricke
-- libkrun ist in Debian nicht paketiert; der Bau steht im Spike-Bericht mit festen Versionen, damit er wiederholbar ist.
+- `sandbox.min_isolation = "kernel"` war bisher nur mit `podman` und `krun` erfüllbar; Tests und Texte, die das sagen, ziehen mit, auch die Tests aus HUM-448, die `runtime = "krun"` mit `SANDBOX_048` erwarten: sie erwarten danach das `CONFIG`-Diagnostic.
+
+## HUM-465 · Shim im Gast: Module laden und sperren, Tür über vsock
+
+### Kontext
+Unter ADR-0021 ist der Shim PID 1 eines Gastkernels. Bevor er die Garantien prüft, muss er die vsock-Module laden, das Laden weiterer Module sperren und die Tür vom Gast-Loopback auf vsock abbilden.
+
+### Spezifikation
+1. Gast-Modus des Shims, gewählt über ein Argument im Plan, nie über die Umgebung des Agenten: `proc`, `sys`, `dev` einhängen; `vsock`, `vmw_vsock_virtio_transport_common`, `vmw_vsock_virtio_transport` aus dem Modulverzeichnis des Plans per `finit_module` mit `MODULE_INIT_COMPRESSED_FILE` laden (unkomprimierte Dateien ebenso); `kernel.modules_disabled = 1`; schlägt eins davon fehl, endet der Shim mit einer `CHECK`-Zeile und der Gast geht aus.
+2. Der Shim lauscht auf `127.0.0.1:3128` und reicht jede Verbindung an CID 2, Tür-Port aus dem Plan weiter; Ende einer Seite schließt beide.
+3. `/work` per virtiofs einhängen; die Mounttabelle mit dem Plan vergleichen wie HUM-437, mit dem Gast-Gerät des virtiofs-Einhängens statt der Gerätenummer des Hosts (Q5).
+4. Filter: Der Shim selbst braucht nach dem Einsetzen seines Filters für jede Anfrage einen neuen `AF_VSOCK`-Socket. Im Gast-Modus erlaubt der Filter des Shims (heute die Brücke mit `AF_UNIX`) statt `AF_UNIX` die Familie `AF_VSOCK`; der Filter des Agenten verweigert `AF_VSOCK` und `AF_UNIX` außerhalb der Brücke weiter. Danach unverändert: `CHECK`-Zeilen, `exec` des Agenten.
+5. Für Tests ohne den Adapter aus HUM-444 bekommt `daemon/crates/sandbox/src/qemu/` einen Startweg nur für Tests (Gast mit Shim als `init`, Wurzel aus einem festen Plan), und die CI einen Job `kvm-tests` auf einem gehosteten Linux-Runner mit `/dev/kvm`, im Container `debian:sid` mit den Paketen aus ADR-0021. HUM-444 baut daraus den Adapter, HUM-445 die Escape-Suite im selben Job.
+
+### Tests
+- Unit: Aufbau der Modulpfade, Reihenfolge Laden vor Sperren, Abbruch bei Fehler.
+- Integration unter KVM im Job `kvm-tests` (übersprungen ohne KVM, rot unter `STRICT=1` nur in diesem Job): Shim als `init`, Tür antwortet auf eine Anfrage, die nach dem Einsetzen des Filters gestellt wird, Modulsperre gesetzt, Agent ohne `AF_VSOCK`.
+- Mutationsbeweis: Sperre entfernt färbt die Probe „Modul nach dem Start laden" rot; `AF_VSOCK` im Filter des Shims verboten färbt die Anfrage nach dem Filter rot.
+
+### Akzeptanzkriterien
+1. Nach dem Start des Agenten lädt kein Prozess im Gast ein Modul, auch nicht als Root.
+2. Der Agent erreicht den Proxy nur über `127.0.0.1:3128` und den einen vsock-Port.
+
+### Fallstricke
+- Der Shim läuft als PID 1; endet er, gibt es eine Kernel-Panik und mit `-no-reboot` und `panic=-1` das Ende der VM. Das ist die Lebensleine im Gast, kein Fehler.
 
 ## HUM-443 · Shim: Steuerkanal als Strom, Terminal und weitere Shells im Gast
 
@@ -506,7 +640,7 @@ Die Kernel-Stufe hängt daran, ob crun mit libkrun die Tür so ausdrücken kann,
 In einer VM überquert kein Deskriptor die Grenze: Das PTY kann nicht vom Daemon kommen, `SCM_RIGHTS` für weitere Shells (HUM-299) geht nicht, ein Host-Signal erreicht keinen Gastprozess. Der Shim braucht einen zweiten, erklärten Kanal, der als Strom läuft.
 
 ### Spezifikation
-1. Ein gerahmtes Protokoll auf einem Strom-Socket (im Gast `AF_VSOCK`, in Tests ein Unix-Socket-Paar): Nachrichten für Terminal-Bytes je Kanal, Größe, Shell öffnen und schließen, Exit, Interrupt, Lebenszeichen; feste Höchstlängen, unbekannte Kennungen verworfen, wie die Tür heute.
+1. Ein gerahmtes Protokoll auf einem Strom-Socket (im Gast `AF_VSOCK`: der Daemon verbindet sich über das `CONNECT` von vhost-device-vsock mit dem Port, an dem der Shim lauscht, ADR-0021; in Tests ein Unix-Socket-Paar): Nachrichten für Terminal-Bytes je Kanal, Größe, Shell öffnen und schließen, Exit, Interrupt, Lebenszeichen; feste Höchstlängen, unbekannte Kennungen verworfen, wie die Tür heute.
 2. Der Shim öffnet PTYs im Gast; die Seite des Daemons (`shell.rs`, `TerminalHub`) bekommt eine zweite Quelle neben dem Master-Deskriptor.
 3. `EOF` auf dem Steuerkanal ist die Lebensleine der Kernel-Stufe.
 4. Der seccomp-Filter des Agenten verweigert `AF_VSOCK` weiter; der Shim öffnet den Kanal vor dem Filter.
@@ -524,31 +658,33 @@ In einer VM überquert kein Deskriptor die Grenze: Das PTY kann nicht vom Daemon
 ### Fallstricke
 - Der Shim läuft ohne tokio; PTYs, Steuerkanal und Lebenszeichen gehören in eine `poll`-Schleife statt in einen Faden je PTY, damit das Lesen der Rahmen an einer Stelle steht und geprüft werden kann.
 
-## HUM-444 · Podman-Adapter, Kernel-Stufe: `krun`, vsock-Tür, Host-Prüfung des VMM
+## HUM-444 · QEMU-Adapter: Plan, Start in Gefängnissen, Ende, Host-Prüfung, doctor
 
 ### Kontext
-Nach HUM-442 ist bekannt, wie die Tür ausgedrückt wird. Die Garantien müssen auch mit Root im Gast halten; die Prüfungen im Gast sind dann nur Tiefenverteidigung.
+ADR-0021: je Sitzung eine transiente Unit des Nutzers mit vier Prozessen in je einem bwrap-Gefängnis. Die Garantien müssen mit Root im Gast halten; die Prüfungen im Gast sind dann Tiefenverteidigung.
 
 ### Spezifikation
-1. `sandbox.podman.runtime = "krun"`: `isolation()` ist `Kernel`; `detect` prüft Laufzeit und `/dev/kvm` (`SANDBOX_045`).
-2. Plan wie HUM-433 plus: Weiterleitung aus, genau ein vsock-Port auf den Proxy-Socket der Sitzung, ein zweiter Port für den Steuerkanal (HUM-443), kein `vhost-vsock`, vCPU und Arbeitsspeicher aus `sandbox.podman`; lässt sich eins davon nicht ausdrücken: `SANDBOX_046`, kein Start.
-3. Im Gast lauscht der Shim auf `127.0.0.1:3128` und reicht an den vsock-Port weiter; für den Agenten ändert sich nichts.
-4. `isolation_check` liest die `CHECK`-Zeilen aus dem Gast **und** prüft auf dem Host den VMM-Prozess: Netz-Namensraum nur `lo`, offene Sockets nur die erklärten (Proxy, Steuerkanal), keine `vhost-vsock`-Deskriptoren. Scheitert die Host-Prüfung: `SANDBOX_047`, Sitzung gestoppt. Probestart in `doctor`: `DOCTOR_015`.
-5. `docs/SECURITY.md` Abschnitt „Linux: Podman mit eigenem Kernel" formuliert die drei Garantien für die Kernel-Stufe; `docs/THREAT-MODEL.md` K-Einträge für VMM, vsock-Tür und Gastkernel.
+1. Adapter `daemon/crates/sandbox/src/qemu/` hinter `SandboxBackend`, `isolation()` ist `Kernel`. `detect` prüft jede Voraussetzung aus HUM-464 (`SANDBOX_045`).
+2. Plan: die Wurzel des Gasts aus demselben Plan wie unter bwrap (Profil-Einhängungen, Shim, CA), gebaut als bwrap-Gefängnis, in dem virtiofsd `/` nur lesbar ausliefert; `/work` über einen zweiten virtiofsd mit dem geprüften Ordner per `--bind-fd`; vhost-device-vsock als eigener Prozess je Sitzung, nie für zwei Sitzungen geteilt (HUM-442, Q9), mit eigener Gruppe und `--uds-path` im Laufzeitverzeichnis der Sitzung, nie `--forward-cid`; der virtiofsd der Wurzel bekommt seinen Socket als Deskriptor (`--fd`), damit das Laufzeitverzeichnis nicht in der Wurzel des Gasts steht; QEMU sieht aus `/boot` nur die Kernel-Datei; QEMU mit der Startzeile aus HUM-442 ohne Konsole, Monitor und Anzeige, `-sandbox` voll, `/dev/kvm` als einziges Gerät, vCPU und Speicher aus `sandbox.qemu`. Der Daemon legt genau einen Lauscher `<uds>_<Tür-Port>` an, der an den Proxy-Socket der Sitzung reicht.
+3. Start über den Dienstmanager des Nutzers (HUM-434) mit den Eigenschaften aus Q7; Ende: Unit stoppen, Laufzeitverzeichnis entfernen; ein Rest einer früheren Sitzung wird beim Start des Daemons entfernt (`SANDBOX_041`). Endet der Daemon, endet die Unit, ohne dass der Gast mitwirken muss: `BindsTo` auf die Unit des Daemons, außerhalb einer Unit eine Lebensleine auf dem Host (eine Pipe, deren Schreibende nur der Daemon hält; bei EOF stoppt der erste Prozess der Unit sie). Root im Gast kann das Ende des Steuerkanals übergehen; die Lebensleine im Gast ist nur Tiefenverteidigung.
+4. `isolation_check` liest die `CHECK`-Zeilen aus dem Gast über den Steuerkanal (HUM-443) **und** prüft auf dem Host: Netz-Namensraum jedes Prozesses der Unit nur `lo`, Deskriptoren von QEMU nur die aus Q3 ohne Konsole, kein `/dev/vhost-vsock`, kein `tun`, im Laufzeitverzeichnis nur die erklärten Sockets, genau ein vhost-device-vsock-Prozess mit genau einem Gerät. Scheitert die Host-Prüfung: `SANDBOX_047`, Sitzung gestoppt.
+5. `humanitl doctor` je Voraussetzung eine Zeile, Probestart der Stufe mit `DOCTOR_015` bei Fehlschlag.
+6. `docs/SECURITY.md` neuer Abschnitt „Linux: QEMU micro-VM (kernel level)" mit den drei Garantien für die Stufe; `docs/THREAT-MODEL.md` K-Einträge für VMM, vsock-Tür, Gastkernel und die vier Hilfsprozesse.
 
 ### Tests
-- Unit: die Annotationen bzw. Optionen enthalten genau einen Tür-Port und keine Weiterleitung; eine Verbotsliste prüft das.
-- Integration (übersprungen ohne KVM und krun): Sitzung startet, Terminal funktioniert, Host-Prüfung grün.
-- Mutationsbeweis: Weiterleitung eingeschaltet färbt die Host-Prüfung oder `no_interfaces` rot; ein zusätzlicher vsock-Port färbt `single_socket` rot.
+- Unit: Startzeilen der vier Prozesse enthalten die festen Optionen; eine Verbotsliste prüft, dass keine Netzoption, kein `-netdev`, kein `-serial` außer `none`, kein `--forward-cid`, kein zweites `--vm` und kein zweiter Lauscher vorkommt.
+- Integration: der Daemon wird mit `SIGKILL` beendet; die Unit der Sitzung ist binnen 5 s weg.
+- Integration unter KVM im Job `kvm-tests` aus HUM-465: Sitzung startet über `detect_unadmitted`, Terminal funktioniert, Host-Prüfung grün.
+- Mutationsbeweis: ein zusätzlicher Lauscher `<uds>_22` färbt die Host-Prüfung rot; ein `-nic user` färbt `no_interfaces` oder die Host-Prüfung rot.
 
 ### Akzeptanzkriterien
 1. Die drei Garantien gelten mit Root im Gast (belegt in HUM-445).
-2. Fehlt KVM oder krun, startet nichts, und der Code nennt den Grund; kein Rückfall auf `crun`.
-3. Für Nutzer bleibt `krun` mit `SANDBOX_048` gesperrt, bis HUM-449 landet; gestartet wird nur über `detect_unadmitted`.
+2. Fehlt eine Voraussetzung, startet nichts, und das `Diagnostic` nennt sie; kein Rückfall auf ein anderes Backend.
+3. Für Nutzer bleibt `qemu` mit `SANDBOX_048` gesperrt, bis HUM-449 landet.
 
 ### Fallstricke
-- `podman exec` gibt es unter krun nicht; nichts im Adapter darf es brauchen.
-- Die PID aus `podman inspect` ist der VMM; ein Signal dorthin beendet die VM, es unterbricht nicht den Agenten (Interrupt über HUM-443).
+- Socket-Pfade höchstens 108 Byte (HUM-442): das Laufzeitverzeichnis liegt unter `$XDG_RUNTIME_DIR` und hat einen kurzen Namen.
+- Ein Signal an QEMU beendet die VM, es unterbricht nicht den Agenten (Interrupt über HUM-443).
 
 ## HUM-445 · Escape-Suite der Kernel-Stufe: Proben mit Gast-Root, CI-Job mit KVM
 
@@ -556,33 +692,33 @@ Nach HUM-442 ist bekannt, wie die Tür ausgedrückt wird. Die Garantien müssen 
 Die Kernel-Stufe ist erst zulässig, wenn die ganze Suite gegen sie grün ist und Proben belegen, dass Root im Gast nichts außer der Tür erreicht.
 
 ### Spezifikation
-1. `HUMANITL_ESCAPE_BACKEND=podman-krun` über `detect_unadmitted`; alle Proben laufen, auch die Mounttabellen-Probe aus HUM-437.
-2. Neue Proben: aus dem Gast als Root und ohne seccomp (nur im Testprofil, nie wählbar außerhalb der Suite) andere vsock-Ports und CIDs nicht erreichbar; `ip link` zeigt nur `lo`; ein `connect` nach außen scheitert; der Netz-Namensraum des VMM hat nur `lo` (Probe auf dem Host).
-3. CI-Job `escape-tests-krun` auf `ubuntu-24.04` mit KVM-Freigabe (K7) und libkrun nach dem Weg aus K8; Pfadregeln nach HUM-424.
+1. `HUMANITL_ESCAPE_BACKEND=qemu` über `detect_unadmitted`; alle Proben laufen, auch die Mounttabellen-Probe aus HUM-437.
+2. Neue Proben aus dem Gast als Root und ohne seccomp (nur im Testprofil, nie wählbar außerhalb der Suite): andere vsock-Ports und CIDs nicht erreichbar, auch nicht ein zweiter, lauschender Gast einer anderen Sitzung (Q9), nur `lo`, `connect` nach außen scheitert, `finit_module` scheitert; auf dem Host: Netz-Namensraum der Prozesse der Unit nur `lo`.
+3. CI-Job `escape-tests-qemu`, aufgebaut auf `kvm-tests` aus HUM-465; Pfadregeln nach HUM-424.
 
 ### Tests
-- Die Suite; Mutationsbeweise je neuer Probe (zusätzliches Netzgerät, zweiter vsock-Port, Weiterleitung an), im Commit-Body mit Lauf-ID.
+- Die Suite; Mutationsbeweise je neuer Probe (zusätzliches Netzgerät, zweiter Lauscher, Modulsperre aus), im Commit-Body mit Lauf-ID.
 
 ### Akzeptanzkriterien
-1. `escape-tests-krun` grün in der CI, keine Probe übersprungen, die bwrap grün hat.
+1. `escape-tests-qemu` grün in der CI, keine Probe übersprungen, die bwrap grün hat. Bietet kein gehosteter Runner `/dev/kvm`, stoppt das Issue und geht mit Vorschlägen für einen Ersatz an den Inhaber; die Stufe bleibt bis dahin nicht zugelassen.
 2. Das Testprofil ohne seccomp ist nur von der Suite ladbar (`SocketFloor`-Muster: Argument im Code, kein Schlüssel).
 
 ### Fallstricke
-- Der Bau von libkrunfw dauert; der Cache-Schlüssel enthält die festen Versionen, sonst baut jeder Lauf neu.
+- Proben auf nicht vorhandene vsock-Ziele warten bis zum Timeout (HUM-442); die Probe setzt ein kurzes `SO_VM_SOCKETS_CONNECT_TIMEOUT`, damit der Job nicht wartet.
 
 ## HUM-446 · Kernel-Stufe: Projektordner und Wegwerf-Schicht über virtiofs
 
 ### Kontext
-Unter krun kommt `/work` über virtiofs in den Gast. Gerätenummern unterscheiden sich, Inodes nach K5. Die Wegwerf-Schicht braucht dieselbe Semantik wie HUM-350, mit dem Inhalt der Schicht als Daten des Angreifers.
+`/work` kommt über virtiofs in den Gast. Inodes reichen durch, Gerätenummern nicht (HUM-442, Q5). Die Wegwerf-Schicht braucht dieselbe Semantik wie HUM-350, mit dem Inhalt der Schicht als Daten des Angreifers.
 
 ### Spezifikation
-1. Pinning nach K5: gleiche Inodes, dann Vergleich wie HUM-437 im Gast plus Host-Prüfung der vom VMM geöffneten Verzeichnisse; sonst nur Host-Prüfung, und `docs/SECURITY.md` sagt das.
-2. Wegwerf: obere Schicht als Host-Verzeichnis über virtiofs oder nach K6 eine andere Form; der Daemon liest sie erst nach dem Ende der VM, mit dem vorhandenen Scan; die Masken gelten wie überall.
+1. Pinning: virtiofsd für `/work` bekommt den geprüften Ordner per `--bind-fd` (Q4); im Gast vergleicht der Shim den Inode des Einhängens mit dem Plan; auf dem Host prüft der Daemon, dass der virtiofsd-Prozess das geöffnete Verzeichnis hält.
+2. Wegwerf: eine obere Schicht als eigenes Verzeichnis der Sitzung über einen dritten virtiofsd, im Gast ein overlay aus dem nur lesbaren `/work` und dieser Schicht (`overlay` vom Shim vor der Modulsperre geladen); der Daemon liest die Schicht erst nach dem Ende der VM, mit dem vorhandenen Scan; die Masken gelten wie überall.
 3. `sandbox.mode`-Regeln aus HUM-357 unverändert (`SANDBOX_030`, `SANDBOX_033`).
 
 ### Tests
-- Integration (übersprungen ohne KVM): Tauschtest aus HUM-437 gegen krun; ESC-5 Wegwerf-Lauf gegen krun.
-- Mutationsbeweis: Host-Prüfung der Ordner entfernt färbt den Tauschtest rot.
+- Integration unter KVM: Tauschtest aus HUM-437 gegen `qemu`; ESC-5 Wegwerf-Lauf gegen `qemu`.
+- Mutationsbeweis: Pfad statt `--bind-fd` färbt den Tauschtest rot.
 
 ### Akzeptanzkriterien
 1. Kein Agent startet in einem nicht geprüften Ordner; ein Wegwerf-Lauf schreibt nie ins Projekt.
@@ -591,45 +727,45 @@ Unter krun kommt `/work` über virtiofs in den Gast. Gerätenummern unterscheide
 ### Fallstricke
 - Mit Root im Gast ist jede Datei der Schicht vom Angreifer geschrieben, auch Whiteouts und Rechte; der Scan bleibt so streng wie unter bwrap.
 
-## HUM-449 · Kernel-Stufe zulassen: `krun` wird wählbar
+## HUM-449 · Kernel-Stufe zulassen: `qemu` wird wählbar
 
 ### Kontext
 Gegenstück zu HUM-448 für die Kernel-Stufe.
 
 ### Spezifikation
-1. Voraussetzung, im Commit-Body mit Lauf-ID belegt: `escape-tests-krun` grün auf `main` mit HUM-446 (Ordner und Wegwerf über virtiofs) und den Proben mit Gast-Root aus HUM-445.
-2. `ADMITTED_BACKENDS` bekommt `podman` mit der Laufzeit `krun`.
-3. `docs/SECURITY.md` Abschnitt „Linux: Podman mit eigenem Kernel" verliert den Hinweis „noch nicht zugelassen"; `docs/THREAT-MODEL.md` setzt die K-Einträge für VMM, vsock-Tür, Steuerkanal und virtiofs auf `mitigated` mit ihren Proben.
+1. Voraussetzung, im Commit-Body mit Lauf-ID belegt: `escape-tests-qemu` grün auf `main` mit HUM-446 und den Proben mit Gast-Root aus HUM-445.
+2. `ADMITTED_BACKENDS` bekommt `qemu`.
+3. `docs/SECURITY.md` Abschnitt der Kernel-Stufe verliert den Hinweis „noch nicht zugelassen"; `docs/THREAT-MODEL.md` setzt die K-Einträge für VMM, vsock-Tür, Steuerkanal, Gastkernel und virtiofs auf `mitigated` mit ihren Proben.
 
 ### Tests
-- Der Zulassungstest erwartet `krun` in der Liste; `sandbox.min_isolation = "kernel"` mit `runtime = "krun"` startet (mit Attrappe).
+- Der Zulassungstest erwartet `qemu` in der Liste; `sandbox.min_isolation = "kernel"` mit `backend = "qemu"` startet (mit Attrappe).
 
 ### Akzeptanzkriterien
-1. `humanitl run --backend podman --podman-runtime krun` startet eine Sitzung mit eigenem Kernel.
+1. `humanitl run --backend qemu` startet eine Sitzung mit eigenem Kernel.
 2. Der Commit ändert keine Zeile außerhalb der Zulassungsliste, ihrer Tests und der zwei Sicherheitsdokumente.
 
 ### Fallstricke
-- Ohne libkrun auf dem Rechner bleibt `krun` mit `SANDBOX_045` nicht verfügbar; das ist kein Fehler der Zulassung.
+- Ohne die Pakete auf dem Rechner bleibt `qemu` mit `SANDBOX_045` nicht verfügbar; das ist kein Fehler der Zulassung.
 
-## HUM-447 · Doku der Kernel-Stufe, Oberfläche schaltet `krun` frei
+## HUM-447 · Doku der Kernel-Stufe, Oberfläche schaltet `qemu` frei
 
 ### Kontext
 Abschluss der Kernel-Stufe, nach der Zulassung (HUM-449).
 
 ### Spezifikation
-1. `README.md` nennt die Kernel-Stufe; `docs/CONFIG.md`, `docs/cli.md` nachgezogen; ADR-0020 Nachtrag „Kernel-Stufe zugelassen" mit Lauf-ID.
-2. Oberfläche (HUM-440) zeigt `krun` als Laufzeit, mit Satz zur Stufe und Voraussetzungen aus dem RPC.
-3. `.deb`: Laufzeit `krun` nur als `Suggests`, solange Debian libkrun nicht paketiert.
+1. `README.md` (en, de) nennt die Kernel-Stufe; `docs/CONFIG.md`, `docs/cli.md` (en, de), Installationsanleitung mit den Paketen; ADR-0021 Nachtrag „zugelassen" mit Lauf-ID, deutsch und englisch.
+2. Oberfläche (HUM-440) zeigt `qemu` mit Stufe `kernel` und den Voraussetzungen aus dem RPC.
+3. `.deb`: `qemu-system-x86`, `virtiofsd` und `vhost-device-vsock` nur unter `Suggests`; RPM und AUR entsprechend, soweit paketiert.
 
 ### Tests
-- Widget: `krun` wählbar nur mit `available = true`; Golden aktualisiert.
+- Widget: `qemu` wählbar nur mit `available = true`; Golden aktualisiert.
 - `lint-docs.sh`, `check-doc-links.py`.
 
 ### Akzeptanzkriterien
-1. Jede Aussage zur Kernel-Stufe ist durch `escape-tests-krun` und `docs/SECURITY.md` gedeckt.
+1. Jede Aussage zur Kernel-Stufe ist durch `escape-tests-qemu` und `docs/SECURITY.md` gedeckt.
 
 ### Fallstricke
-- Das Tor aus dem Kopf dieses Sprints gilt: `krun` erscheint in der Oberfläche nicht vor HUM-449.
+- Das Tor aus dem Kopf dieses Sprints gilt: `qemu` erscheint in der Oberfläche nicht vor HUM-449.
 
 ---
 
@@ -896,6 +1032,8 @@ abgelehnt wird nur noch `krun` bis HUM-449. Der Text steht auch im Schema und
 damit in jedem Editor, der es liest (Review HUM-441, 2026-11-13).
 
 ### Spezifikation
+(Seit HUM-442 fällt `krun` mit HUM-464 ganz weg; dann zieht HUM-464 den Text nach.)
+
 1. Der Doc-Kommentar beschreibt den Stand: `crun` wählbar, `krun` lehnt jeder
    Start bis zur Zulassung der Kernel-Stufe mit `SANDBOX_048` ab.
 2. Schema-Fixture und `docs/CONFIG.md` folgen aus der Quelle, nicht von Hand.

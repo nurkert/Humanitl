@@ -1,6 +1,6 @@
 ---
 source: adr/README.md
-source-sha256: 31a2771e1d171e4c18ab34b3561665c5d24e987b9a538bf4dbe0d8529aa5c26b
+source-sha256: 46d56587a147c0ce679430c609d3efb567abac5e6e7d744cc78e0e1f80b97f87
 lang: de
 ---
 # Architekturentscheidungen (ADRs)
@@ -65,7 +65,8 @@ Regeln:
 | [0017](0017-egress-port.md) | Ein Egress-Port für direkte Verbindung, Upstream-Proxy und Tor | Angenommen | Genau eine Stelle, an der eine ausgehende Verbindung entsteht; die CI verbietet `TcpStream::connect` überall sonst. |
 | [0018](0018-rpc-parity.md) | Parität: Jede Fähigkeit ist zuerst ein RPC, Oberfläche und Kommandozeile sind dünne Clients | Angenommen | Erzeugte Paritäts-Tabelle; ein RPC ohne Zeile für die Kommandozeile bricht den Build, eine Lücke in der Oberfläche ist nur eine Warnung. |
 | [0019](0019-seatbelt-on-macos.md) | Seatbelt ist die Sandbox auf macOS, eine Linux-VM kommt später | Angenommen | `sandbox-exec` mit einem erzeugten SBPL-Profil je Session; die drei Garantien für macOS neu gefasst und mit demselben Shim gemessen. |
-| [0020](0020-podman-sandbox-backend.md) | Podman als wählbares zweites Sandbox-Backend unter Linux | Angenommen | Ein neutral gemachtes `SandboxBackend`, dahinter Podman mit einer Stufe auf dem gemeinsamen Kernel (`crun`) und einer Kernel-Stufe (`krun`); `sandbox.backend` je Nutzer, je Projekt nur ein `sandbox.min_isolation`, das sich ausschließlich anheben lässt. |
+| [0020](0020-podman-sandbox-backend.md) | Podman als wählbares zweites Sandbox-Backend unter Linux | Angenommen | Ein neutral gemachtes `SandboxBackend`, dahinter Podman mit einer Stufe auf dem gemeinsamen Kernel (`crun`), die Kernel-Stufe ist nach ADR-0021 umgezogen; `sandbox.backend` je Nutzer, je Projekt nur ein `sandbox.min_isolation`, das sich ausschließlich anheben lässt. |
+| [0021](0021-qemu-microvm-kernel-level.md) | Die Kernel-Stufe läuft als QEMU-Micro-VM aus Debian-Paketen | Angenommen | Backend `qemu` statt der Laufzeit `krun`: QEMU `-M microvm`, virtiofsd und vhost-device-vsock, jedes in einem bwrap-Gefängnis innerhalb einer gehärteten Nutzer-Unit; genau ein vsock-Port erreicht den Proxy. |
 
 ## Querverweise
 
@@ -83,6 +84,7 @@ Wo eine Entscheidung eine andere verfeinert oder korrigiert:
 | ADR-0018 | ADR-0003, ADR-0013 | Macht die Gleichwertigkeit von Oberfläche und Kommandozeile aus ADR-0013 maschinell prüfbar. |
 | ADR-0019 | ADR-0002, ADR-0015 | Der zweite Adapter von `SandboxBackend`, den ADR-0015 angekündigt hat; auf macOS tritt er an die Stelle von bwrap aus ADR-0002. |
 | ADR-0020 | ADR-0002, ADR-0010, ADR-0015 | Podman statt Docker als zweites Linux-Backend; ergänzt alle drei (Nachträge aus HUM-434 und HUM-441). |
+| ADR-0021 | ADR-0020 | Ersetzt die Kernel-Stufe aus ADR-0020 (Podman mit `krun`) durch einen eigenen Adapter; die gemeinsame Stufe bleibt, wie sie ist. |
 | ADR-0011 | ADR-0007 | Regelt die beiden Speicherorte für Regeln (gespeichert und Session). |
 | ADR-0012 | ADR-0010 | `FixAction::InstallService` ist der Mechanismus hinter der Installation mit einem Klick. |
 

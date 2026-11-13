@@ -62,7 +62,8 @@ Rules:
 | [0017](0017-egress-port.md) | One egress port for direct connection, upstream proxy and Tor | Accepted | Exactly one place where an outbound connection is made; CI forbids `TcpStream::connect` anywhere else. |
 | [0018](0018-rpc-parity.md) | Parity: every capability is an RPC first, UI and CLI are thin clients | Accepted | Generated parity table; an RPC without a CLI row breaks the build, a UI gap is only a warning. |
 | [0019](0019-seatbelt-on-macos.md) | Seatbelt is the sandbox on macOS, a Linux VM comes later | Accepted | `sandbox-exec` with a generated SBPL profile per session; the three guarantees restated for macOS and measured by the same shim. |
-| [0020](0020-podman-sandbox-backend.md) | Podman as a selectable second sandbox backend on Linux | Accepted | One `SandboxBackend` made neutral, Podman behind it with a shared-kernel level (`crun`) and a kernel level (`krun`); `sandbox.backend` per user, a raise-only `sandbox.min_isolation` per project. |
+| [0020](0020-podman-sandbox-backend.md) | Podman as a selectable second sandbox backend on Linux | Accepted | One `SandboxBackend` made neutral, Podman behind it with a shared-kernel level (`crun`), the kernel level moved to ADR-0021; `sandbox.backend` per user, a raise-only `sandbox.min_isolation` per project. |
+| [0021](0021-qemu-microvm-kernel-level.md) | The kernel level runs as a QEMU micro-VM from Debian packages | Accepted | Backend `qemu` instead of the runtime `krun`: QEMU `-M microvm`, virtiofsd and vhost-device-vsock, each in a bwrap jail inside a hardened user unit; exactly one vsock port reaches the proxy. |
 
 ## Cross-references
 
@@ -80,6 +81,7 @@ Where one decision refines or corrects another:
 | ADR-0018 | ADR-0003, ADR-0013 | Makes the equality of UI and CLI from ADR-0013 machine-checkable. |
 | ADR-0019 | ADR-0002, ADR-0015 | The second adapter of `SandboxBackend` that ADR-0015 announced; on macOS it takes the place of bwrap from ADR-0002. |
 | ADR-0020 | ADR-0002, ADR-0010, ADR-0015 | Podman instead of Docker as the second Linux backend; amends all three (addenda of HUM-434 and HUM-441). |
+| ADR-0021 | ADR-0020 | Replaces the kernel level of ADR-0020 (Podman with `krun`) by an adapter of its own; the plain level stays as it is. |
 | ADR-0011 | ADR-0007 | Governs the two storage locations for rules (saved and session). |
 | ADR-0012 | ADR-0010 | `FixAction::InstallService` is the mechanism behind the one-click installation. |
 

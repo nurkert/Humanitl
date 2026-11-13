@@ -283,10 +283,23 @@ in ADR-0010 with HUM-434, the rest with HUM-441:
   adapters of `SandboxBackend`; `docker` and `microvm` as later adapters are
   replaced by `podman` (with the runtimes `crun` and `krun`).
 
+## Addendum 2026-11-13: The kernel level moves to ADR-0021 (HUM-442)
+
+The kernel level of this decision, Podman with the runtime `krun`, is
+replaced. libkrun is not packaged in Debian, and the owner decided that the
+level is built only from packages of the distribution. ADR-0021 decides the
+replacement: an adapter `qemu` of its own, a QEMU micro-VM with virtiofsd and
+vhost-device-vsock, with the measurements of the spike HUM-442. Everything
+this decision says about the plain level (`crun`), the selection, the levels,
+`sandbox.min_isolation` and the admission stays in force. Where it names
+`krun`, `libkrun` or the kernel level of Podman, ADR-0021 applies instead;
+the runtime `krun` leaves `sandbox.podman.runtime` with HUM-464.
+
 ## Affected issues
 
 `HUM-292` (the spike and its result, `backlog/sprint-5.md`), `HUM-428` to
 `HUM-449` (`backlog/sprint-7.md`), `HUM-145` (the coupling ratchet),
 `HUM-263` (the pinned project folder), `HUM-350` (the disposable sandbox),
 `HUM-448` (the plain level admitted, status Accepted), `HUM-441` (the
-amendments to ADR-0002, ADR-0010 and ADR-0015).
+amendments to ADR-0002, ADR-0010 and ADR-0015), `HUM-442` (the kernel level
+moves to ADR-0021, addendum).
