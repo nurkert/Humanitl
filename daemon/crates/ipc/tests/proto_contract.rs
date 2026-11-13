@@ -949,6 +949,13 @@ const SANDBOX_EVENT_FIELDS: &FieldTable = &[
         ".humanitl.v1.SandboxEvent.ImagePulled",
         Some("event"),
     ),
+    // HUM-457: der vierzehnte Arm, die Antwort auf `cancel_image_pull`.
+    (
+        "image_pull_cancelled",
+        14,
+        ".humanitl.v1.SandboxEvent.ImagePullCancelled",
+        Some("event"),
+    ),
 ];
 
 /// `DisposableChange` vollständig (HUM-350): Die Kennung ist der Hash des
@@ -1056,7 +1063,10 @@ fn an_image_pull_keeps_its_shape() {
         check_fields(
             "SandboxRequest.ImagePull",
             &message("SandboxRequest.ImagePull"),
-            &[("reference", 1, "string", None)]
+            &[
+                ("reference", 1, "string", None),
+                ("pull_id", 2, "string", None),
+            ]
         ),
         Ok(())
     );
@@ -1076,6 +1086,38 @@ fn an_image_pull_keeps_its_shape() {
         humanitl_ipc::v1::MountMode::Image as i32,
         9,
         "MOUNT_MODE_IMAGE keeps its number"
+    );
+}
+
+/// Der Abbruch eines Ziehens (HUM-457): eine eigene Operation mit der
+/// Kennung, die der Client beim Ziehen wählte, und eine eigene Antwort, die
+/// sagt, ob ein laufendes Ziehen getroffen wurde.
+#[test]
+fn an_image_pull_cancel_keeps_its_shape() {
+    let field = named_field("SandboxRequest", "cancel_image_pull");
+    assert_eq!(field.number(), 12);
+    assert_eq!(
+        field.type_name(),
+        ".humanitl.v1.SandboxRequest.CancelImagePull"
+    );
+    assert_eq!(
+        check_fields(
+            "SandboxRequest.CancelImagePull",
+            &message("SandboxRequest.CancelImagePull"),
+            &[("pull_id", 1, "string", None)]
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        check_fields(
+            "SandboxEvent.ImagePullCancelled",
+            &message("SandboxEvent.ImagePullCancelled"),
+            &[
+                ("cancelled", 1, "bool", None),
+                ("still_running", 2, "uint32", None),
+            ]
+        ),
+        Ok(())
     );
 }
 

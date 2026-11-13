@@ -1009,6 +1009,17 @@ message SandboxRequest {
     // Abbilder. Ein Daemon vor Minor 36 antwortet mit einer Momentaufnahme
     // wie auf `status`.
     ImagePull image_pull = 11;
+    // Bricht ein laufendes Ziehen ab (HUM-457): das mit dieser
+    // `ImagePull.pull_id`. Der Daemon beendet die Prozessgruppe des Ziehens
+    // mit `SIGKILL` und antwortet, wenn das Ziehen zurueckgekehrt ist, mit
+    // genau einem `SandboxEvent.image_pull_cancelled`. Das abgebrochene
+    // Ziehen selbst endet auf seinem eigenen Strom mit `SANDBOX_043`.
+    // Laeuft kein Ziehen mit dieser Kennung, oder endete es von selbst, ohne
+    // dass die Engine unterbrochen wurde, ist die Antwort
+    // `cancelled = false` und kein Fehler; dann gilt das Ergebnis des
+    // Ziehens. Eine leere oder unlesbare Kennung ist `IPC_005`. Ein Daemon
+    // vor Minor 37 antwortet mit einer Momentaufnahme wie auf `status`.
+    CancelImagePull cancel_image_pull = 12;
   }
 
   // Welches Abbild gezogen wird (HUM-439).
@@ -1016,6 +1027,18 @@ message SandboxRequest {
     // `name@sha256:<64 hex>`, mit der Registry im Namen. Leer heisst: das
     // eingestellte Abbild der Sandbox.
     string reference = 1;
+    // Die Kennung dieses Ziehens, eine UUID, die der Client waehlt
+    // (HUM-457). Er kennt sie so, bevor der Daemon antwortet, und kann
+    // abbrechen, sobald er geschickt hat. Leer heisst: nicht abbrechbar,
+    // wie vor Minor 37. Eine unlesbare Kennung, oder eine, unter der gerade
+    // ein anderes Ziehen laeuft, ist `IPC_005`, und nichts wird gezogen.
+    string pull_id = 2;
+  }
+
+  // Welches Ziehen abgebrochen wird (HUM-457).
+  message CancelImagePull {
+    // Die `ImagePull.pull_id` des Ziehens.
+    string pull_id = 1;
   }
 
   // Welche Aenderungen einer Wegwerf-Sandbox uebernommen werden (HUM-350).
@@ -1330,6 +1353,21 @@ message SandboxEvent {
     DisposableOutcome changes_outcome = 12;
     // Die Antwort auf `SandboxRequest.image_pull` (HUM-439).
     ImagePulled image_pulled = 13;
+    // Die Antwort auf `SandboxRequest.cancel_image_pull` (HUM-457).
+    ImagePullCancelled image_pull_cancelled = 14;
+  }
+
+  // Ob ein Abbruch ein laufendes Ziehen traf (HUM-457).
+  message ImagePullCancelled {
+    // Wahr: Der Daemon hat die Engine unterbrochen, und das Ziehen ist
+    // beendet. Falsch: Unterbrochen wurde nichts; es lief kein Ziehen unter
+    // der Kennung, oder es endete von selbst.
+    bool cancelled = 1;
+    // Nur mit `cancelled`: wie viele Prozesse der Prozessgruppe des Ziehens
+    // nach dem `SIGKILL` noch liefen (ein Zombie zaehlt nicht). Null heisst:
+    // Von diesem Ziehen laeuft nichts mehr. Ein Prozess, der sich mit
+    // `setsid` aus der Gruppe loeste, wird weder beendet noch gezaehlt.
+    uint32 still_running = 2;
   }
 
   // Ein Abbild, das gezogen und danach mit genau seinem Digest im lokalen

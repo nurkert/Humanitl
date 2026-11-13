@@ -378,14 +378,21 @@ class TestDaemonClient implements DaemonClient {
   // Das Ziehen eines Abbilds gehört dem Sandbox-Bildschirm (HUM-439); dieser
   // Client zieht nichts und sagt das.
   @override
-  Future<PulledImage> pullImage({String reference = ''}) async =>
-      throw const DaemonException(
-        Diagnostic(
-          code: 'SANDBOX_034',
-          severity: Severity.blocking,
-          why: 'the test client has no images',
-        ),
-      );
+  Future<PulledImage> pullImage({
+    String reference = '',
+    String pullId = '',
+  }) async => throw const DaemonException(
+    Diagnostic(
+      code: 'SANDBOX_034',
+      severity: Severity.blocking,
+      why: 'the test client has no images',
+    ),
+  );
+
+  // Ohne Ziehen läuft nie eines, das ein Abbruch treffen könnte (HUM-457).
+  @override
+  Future<ImagePullCancelAnswer> cancelImagePull(String pullId) async =>
+      ImagePullCancelAnswer.notRunning;
 
   // Der Doctor und die Endpunkt-Probe (HUM-075, HUM-044) gehören dem
   // Setup-Bildschirm. Der leere Bericht ist hier die ehrliche Antwort: nicht

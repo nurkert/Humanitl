@@ -1005,13 +1005,87 @@ mod image_root {
         .unwrap();
         let err = engine
             .backend(&fx.paths)
-            .pull_image("")
+            .pull_image("", &PullCancel::new())
             .expect_err("a failing pull");
         assert_eq!(err.code.as_str(), "SANDBOX_043", "{}", err.why);
         assert_eq!(std::fs::read_to_string(&seen).unwrap(), "{\"auths\":{}}");
         assert!(
             pull_auth_copies(&EngineDir::of(&fx.paths)).is_empty(),
             "the copy outlives a failed pull"
+        );
+    }
+
+    /// Ein Ziehen, dessen Engine nie antwortet, endet mit dem Abbruch binnen
+    /// einer Sekunde mit `SANDBOX_043`; danach lebt kein Prozess des
+    /// Ziehens mehr, und die Kopie der Zugangsdaten ist weg (HUM-457).
+    #[test]
+    fn a_cancelled_pull_ends_every_process_of_it_and_removes_the_credentials_copy() {
+        use std::sync::{Arc, mpsc};
+        use std::time::Instant;
+
+        use crate::test_support::{never_answering_engine, pid_written_to, process_alive};
+
+        let config = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let fx = Fixture::with_env(
+            None,
+            &[
+                ("XDG_CONFIG_HOME", &config.path().to_string_lossy()),
+                ("HOME", &home.path().to_string_lossy()),
+            ],
+        );
+        let user = config.path().join("humanitl/podman/auth.json");
+        std::fs::create_dir_all(user.parent().unwrap()).unwrap();
+        std::fs::write(&user, "{\"auths\":{}}").unwrap();
+        std::fs::set_permissions(&user, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let engine = FakeEngine::new(dir.path(), None, "");
+        let (leader, child) = (dir.path().join("leader"), dir.path().join("child"));
+        crate::test_support::write_program(
+            &engine.program,
+            &never_answering_engine(&leader, &child),
+        );
+        let backend = engine.backend(&fx.paths);
+        let cancel = Arc::new(PullCancel::new());
+        let watched = Arc::clone(&cancel);
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(backend.pull_image("", &watched));
+        });
+        let pids = [pid_written_to(&leader), pid_written_to(&child)];
+        assert_eq!(
+            pull_auth_copies(&EngineDir::of(&fx.paths)).len(),
+            1,
+            "the engine has its copy while it pulls"
+        );
+
+        let asked = Instant::now();
+        cancel.cancel();
+        let ended = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("the pull ends within a second of the cancel");
+        assert!(
+            asked.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            asked.elapsed()
+        );
+        let err = ended.expect_err("a cancelled pull pulls nothing");
+        assert_eq!(err.code.as_str(), "SANDBOX_043", "{}", err.why);
+        assert!(err.why.contains("cancelled"), "{}", err.why);
+        assert!(err.why.contains("no process of it runs"), "{}", err.why);
+        assert_eq!(
+            cancel.interrupted(),
+            Some(0),
+            "the adapter says it interrupted"
+        );
+        let alive: Vec<u32> = pids.into_iter().filter(|pid| process_alive(*pid)).collect();
+        assert!(
+            alive.is_empty(),
+            "still running after the cancel: {alive:?}"
+        );
+        assert!(
+            pull_auth_copies(&EngineDir::of(&fx.paths)).is_empty(),
+            "the copy outlives a cancelled pull"
         );
     }
 
@@ -1034,16 +1108,17 @@ mod image_root {
         let dir = tempfile::tempdir().unwrap();
         let engine = FakeEngine::new(dir.path(), None, &answer(PINNED));
         let backend = engine.backend(&fx.paths);
+        let pull = |reference: &str| backend.pull_image(reference, &PullCancel::new());
         for bad in [
             format!("humanitl-hum439@sha256:{PINNED}"),
             "localhost/humanitl-hum439:latest".to_owned(),
         ] {
-            let err = backend.pull_image(&bad).expect_err("refused");
+            let err = pull(&bad).expect_err("refused");
             assert_eq!(err.code.as_str(), "CONFIG_003", "{}", err.why);
         }
         assert!(engine.calls().is_empty(), "{:?}", engine.calls());
 
-        let pulled = backend.pull_image("").expect("the configured image");
+        let pulled = pull("").expect("the configured image");
         assert_eq!(pulled.reference, reference());
         assert_eq!(pulled.digest, format!("sha256:{PINNED}"));
         assert_eq!(pulled.id, "f00d");
@@ -1091,7 +1166,7 @@ mod image_root {
             .root
             .join("pull-auth-0190a1b2c3d4e5f6a7b8c9d0e1f2a3b4-0.json");
         std::fs::write(&stale, content).unwrap();
-        backend.pull_image("").expect("with credentials");
+        pull("").expect("with credentials");
         assert!(!stale.exists(), "a stale copy of another process stays");
         let copy = &own_copy_in(&engine.calls(), &engine_dir.root, &anonymous);
         assert!(engine.calls().contains(&line(copy)), "{:?}", engine.calls());
@@ -1109,7 +1184,7 @@ mod image_root {
         // Für andere lesbar: abgelehnt, bevor die Engine gefragt wird.
         std::fs::set_permissions(&user, std::fs::Permissions::from_mode(0o644)).unwrap();
         let before = engine.calls().len();
-        let err = backend.pull_image("").expect_err("readable credentials");
+        let err = pull("").expect_err("readable credentials");
         assert_eq!(err.code.as_str(), "SANDBOX_043", "{}", err.why);
         assert_eq!(engine.calls().len(), before, "{:?}", engine.calls());
         std::fs::set_permissions(&user, std::fs::Permissions::from_mode(0o600)).unwrap();
@@ -1121,7 +1196,7 @@ mod image_root {
         let helper = dropins.join("keyring.conf");
         std::fs::write(&helper, "credential-helpers = [\"secretservice\"]\n").unwrap();
         let before = engine.calls().len();
-        let err = backend.pull_image("").expect_err("a credential helper");
+        let err = pull("").expect_err("a credential helper");
         assert_eq!(err.code.as_str(), "SANDBOX_043", "{}", err.why);
         assert!(err.why.contains("keyring.conf"), "{}", err.why);
         assert_eq!(engine.calls().len(), before, "{:?}", engine.calls());
@@ -1130,9 +1205,7 @@ mod image_root {
         // Liegt danach ein anderer Digest vor, ist das Ziehen gescheitert.
         std::fs::remove_file(&engine.json).unwrap();
         std::fs::write(&engine.staged, answer(OTHER)).unwrap();
-        let err = backend
-            .pull_image(&reference())
-            .expect_err("another digest");
+        let err = pull(&reference()).expect_err("another digest");
         assert_eq!(err.code.as_str(), "SANDBOX_043", "{}", err.why);
     }
 }

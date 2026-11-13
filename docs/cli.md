@@ -332,7 +332,16 @@ pulled docker.io/library/debian@sha256:7378…
 ```
 
 Without a reference the configured image is pulled. The note goes to
-`stderr` every time, also with `--yes`. A name without a registry is refused
+`stderr` every time, also with `--yes`. `Ctrl+C` during the pull cancels it
+(HUM-457): the command asks the daemon to cancel exactly its own pull, the
+daemon kills the process group of the pull (the container engine and every
+process it started for the pull), and the command exits with 130. If
+processes of the pull still ran after the kill, a warning says how many.
+Nothing is started, and the image is not there yet. If the pull had just
+finished on its own, its result stands and is shown. The boundary is the
+process group: a process that leaves it with `setsid`, such as the pause
+process the engine shares between all its commands without root, is not
+part of the pull and is not ended. A name without a registry is refused
 (`CONFIG_003`), in the command and in the configuration. The pull uses the
 backend of the configuration file (`sandbox.backend`); the `--backend` of a
 single start does not apply to it. The project folder, the door, the CA, the shim and the files

@@ -51,3 +51,55 @@ pub(crate) fn write_program(path: &std::path::Path, body: &str) {
         .expect("the program is executable");
     std::fs::remove_file(&source).expect("the source is gone");
 }
+
+/// Ob der Prozess `pid` noch lebt (HUM-457): Er steht in `/proc` und ist
+/// kein Zombie. Ein Zombie läuft nicht mehr; er wartet nur darauf, dass sein
+/// Elternprozess ihn einsammelt.
+#[cfg(target_os = "linux")]
+pub(crate) fn process_alive(pid: u32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    // Der Zustand steht nach der Klammer um den Namen, und der Name darf
+    // selbst Klammern enthalten: also nach der letzten.
+    let state = stat
+        .rsplit_once(')')
+        .and_then(|(_, rest)| rest.split_whitespace().next());
+    !matches!(state, Some("Z" | "X") | None)
+}
+
+#[allow(clippy::panic)]
+/// Liest eine PID, die eine Attrappe der Engine in `path` schrieb, und
+/// wartet darauf höchstens fünf Sekunden (HUM-457).
+#[cfg(target_os = "linux")]
+pub(crate) fn pid_written_to(path: &std::path::Path) -> u32 {
+    let since = std::time::Instant::now();
+    loop {
+        if let Some(pid) = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+        {
+            return pid;
+        }
+        assert!(
+            since.elapsed() < std::time::Duration::from_secs(5),
+            "no pid in {}",
+            path.display()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Der Körper einer Attrappe der Engine, die nie antwortet (HUM-457): Sie
+/// startet ein Kind, das ebenso schläft, schreibt ihre eigene PID nach
+/// `leader` und die des Kindes nach `child` und wartet dann auf das Kind.
+/// Beendet ein Abbruch nur sie und nicht ihre Gruppe, lebt das Kind weiter.
+#[cfg(target_os = "linux")]
+pub(crate) fn never_answering_engine(leader: &std::path::Path, child: &std::path::Path) -> String {
+    format!(
+        "#!/bin/sh\nsleep 1000 &\necho $! > '{child}.tmp' && mv '{child}.tmp' '{child}'\n\
+         echo $$ > '{leader}.tmp' && mv '{leader}.tmp' '{leader}'\nwait\n",
+        child = child.display(),
+        leader = leader.display()
+    )
+}

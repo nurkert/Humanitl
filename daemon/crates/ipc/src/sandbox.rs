@@ -685,6 +685,9 @@ struct Inner {
     /// Das Backend, das Plan und Start nehmen, statt es auf dem System zu
     /// suchen ([`SandboxPorts::backend`]).
     backend: Option<Backend>,
+    /// Die Ziehen eines Abbilds, die gerade laufen, nach ihrer Kennung
+    /// (HUM-457); `cancel_image_pull` bricht über sie ab.
+    image_pulls: crate::image_pulls::ImagePulls,
 }
 
 /// Woran der Dienst hängt, wenn eine Sitzung startet.
@@ -816,6 +819,7 @@ impl SandboxService {
                 llm_reach: LlmReach::default(),
                 disposable: Mutex::new(None),
                 backend: ports.backend,
+                image_pulls: crate::image_pulls::ImagePulls::default(),
             }),
         }
     }
@@ -1050,8 +1054,32 @@ impl SandboxService {
             }
             // Ziehen heisst: ein Programm starten und bis zu einer halben
             // Stunde warten (HUM-439).
+            //
+            // Angemeldet wird das Ziehen hier, bevor die Antwort auf den Aufruf
+            // hinausgeht (HUM-457): Ein Client, der erst nach dieser Antwort
+            // abbricht, wie die Kommandozeile, findet es dann sicher unter
+            // seiner Kennung.
             Some(Op::ImagePull(request)) => {
-                tokio::task::spawn_blocking(move || inner.image_pull(&request, &tx));
+                match crate::validate::pull_id(&request.pull_id)
+                    .and_then(|id| inner.image_pulls.register(id))
+                {
+                    Ok(slot) => {
+                        tokio::task::spawn_blocking(move || {
+                            inner.image_pull(&request, slot, &tx);
+                        });
+                    }
+                    Err(diagnostic) => {
+                        let _ = tx.try_send(diagnostic_event(&diagnostic));
+                    }
+                }
+            }
+            // Der Abbruch wartet auf das Ende des Ziehens, nicht auf einen
+            // Faden: Das Ziehen läuft auf seinem eigenen (HUM-457).
+            Some(Op::CancelImagePull(request)) => {
+                tokio::spawn(async move {
+                    let event = inner.cancel_image_pull(&request).await;
+                    let _ = tx.send(event).await;
+                });
             }
             _ => {
                 tokio::task::spawn_blocking(move || {
@@ -2893,9 +2921,14 @@ impl Inner {
     /// mit `SANDBOX_048` ab, und es wird nichts gezogen. Ein Start zieht nie;
     /// nur diese Operation tut es, und das Netz nutzt dabei die Engine
     /// selbst, nicht der Proxy.
+    ///
+    /// Mit `pull_id` ist das Ziehen abbrechbar (HUM-457): Es steht unter
+    /// seiner Kennung in [`crate::image_pulls::ImagePulls`], von der Anmeldung
+    /// in [`SandboxService::stream`] an, bis es zurückkehrt (`slot`).
     fn image_pull(
         &self,
         request: &v1::sandbox_request::ImagePull,
+        slot: crate::image_pulls::PullSlot,
         tx: &mpsc::Sender<v1::SandboxEvent>,
     ) {
         // Wie eine Vorschau: die Konfiguration, wie sie jetzt auf der Platte
@@ -2910,7 +2943,12 @@ impl Inner {
                     })
             }
         };
-        let event = match backend.and_then(|backend| backend.pull_image(&request.reference)) {
+        let pulled =
+            backend.and_then(|backend| backend.pull_image(&request.reference, slot.cancel()));
+        // Erst jetzt ist das Ziehen zu Ende; ein wartender Abbruch erfährt es
+        // hier und antwortet.
+        drop(slot);
+        let event = match pulled {
             Ok(pulled) => {
                 tracing::info!(
                     reference = %pulled.reference,
@@ -2930,6 +2968,42 @@ impl Inner {
             Err(diagnostic) => diagnostic_event(&diagnostic),
         };
         let _ = tx.blocking_send(event);
+    }
+
+    /// `Op::CancelImagePull`: bricht das Ziehen mit dieser Kennung ab und
+    /// antwortet, wenn es zu Ende ist (HUM-457). `cancelled = true` nur, wenn
+    /// der Adapter die Engine wirklich unterbrochen hat; läuft unter der
+    /// Kennung keines, oder endete es von selbst, ist die Antwort
+    /// `cancelled = false`, kein Befund ([`crate::image_pulls`]).
+    async fn cancel_image_pull(
+        &self,
+        request: &v1::sandbox_request::CancelImagePull,
+    ) -> v1::SandboxEvent {
+        let id = match crate::validate::cancel_pull_id(&request.pull_id) {
+            Ok(id) => id,
+            Err(diagnostic) => return diagnostic_event(&diagnostic),
+        };
+        match self
+            .image_pulls
+            .cancel(id, crate::image_pulls::CANCEL_WAIT)
+            .await
+        {
+            Ok(interrupted) => {
+                match interrupted {
+                    Some(0) => {
+                        tracing::info!(pull_id = %id, "an image pull was cancelled on request");
+                    }
+                    Some(alive) => tracing::warn!(
+                        pull_id = %id,
+                        alive,
+                        "an image pull was cancelled, but processes of it still ran"
+                    ),
+                    None => {}
+                }
+                image_pull_cancelled_event(interrupted)
+            }
+            Err(diagnostic) => diagnostic_event(&diagnostic),
+        }
     }
 
     /// `Op::Changes`: die wartenden Änderungen einer Wegwerf-Sandbox
@@ -4853,6 +4927,21 @@ fn log_event(line: String) -> v1::SandboxEvent {
             at: Some(crate::convert::timestamp(SystemTime::now())),
             line,
         })),
+    }
+}
+
+/// Die Antwort auf `cancel_image_pull` (HUM-457): `None`, wenn der Adapter
+/// nichts unterbrochen hat, sonst die Zahl der Prozesse, die danach noch
+/// liefen.
+fn image_pull_cancelled_event(interrupted: Option<usize>) -> v1::SandboxEvent {
+    v1::SandboxEvent {
+        event: Some(v1::sandbox_event::Event::ImagePullCancelled(
+            v1::sandbox_event::ImagePullCancelled {
+                cancelled: interrupted.is_some(),
+                still_running: interrupted
+                    .map_or(0, |alive| u32::try_from(alive).unwrap_or(u32::MAX)),
+            },
+        )),
     }
 }
 
@@ -8058,5 +8147,120 @@ mod given_backend_tests {
         )
         .unwrap_err();
         assert_eq!(refused.code, codes::SANDBOX_036);
+    }
+}
+
+/// Der Abbruch eines Ziehens über die Operation des Dienstes (HUM-457).
+#[cfg(test)]
+mod image_pull_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use tokio_stream::StreamExt as _;
+
+    use super::*;
+
+    fn service() -> SandboxService {
+        let paths =
+            humanitl_config::Paths::new(humanitl_config::Env::from_pairs([("HOME", "/home/u")]));
+        SandboxService::new(
+            crate::session::SessionResolver::for_config(paths, Config::default()),
+            SessionId::nil(),
+            SandboxPorts::none(),
+        )
+    }
+
+    async fn answer(
+        service: &SandboxService,
+        op: v1::sandbox_request::Op,
+    ) -> Vec<v1::SandboxEvent> {
+        service
+            .stream(v1::SandboxRequest { op: Some(op) })
+            .collect()
+            .await
+    }
+
+    fn cancel(pull_id: &str) -> v1::sandbox_request::Op {
+        v1::sandbox_request::Op::CancelImagePull(v1::sandbox_request::CancelImagePull {
+            pull_id: pull_id.to_owned(),
+        })
+    }
+
+    fn codes_of(events: &[v1::SandboxEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match &event.event {
+                Some(v1::sandbox_event::Event::Diagnostic(diagnostic)) => {
+                    Some(diagnostic.code.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn cancelled(events: &[v1::SandboxEvent]) -> Option<bool> {
+        match events {
+            [
+                v1::SandboxEvent {
+                    event: Some(v1::sandbox_event::Event::ImagePullCancelled(answer)),
+                },
+            ] => Some(answer.cancelled),
+            _ => None,
+        }
+    }
+
+    /// Ein Abbruch über den Strom trifft das laufende Ziehen mit seiner
+    /// Kennung, antwortet erst nach dessen Ende und dann mit `true`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_cancel_reaches_the_running_pull_and_answers_after_its_end() {
+        let service = service();
+        let id = uuid::Uuid::now_v7();
+        let inner = Arc::clone(&service.inner);
+        let (registered, ready) = std::sync::mpsc::channel();
+        let (ended, ended_seen) = std::sync::mpsc::channel();
+        // Das Ziehen auf seinem Faden: Es endet erst, wenn das Zeichen kam.
+        let pulling = std::thread::spawn(move || {
+            let slot = inner.image_pulls.register(Some(id)).expect("registered");
+            registered.send(()).unwrap();
+            while !slot.cancel().is_cancelled() {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            slot.cancel().mark_interrupted(0);
+            ended.send(()).unwrap();
+        });
+        ready.recv().unwrap();
+        let events = answer(&service, cancel(&id.to_string())).await;
+        assert_eq!(cancelled(&events), Some(true), "{events:?}");
+        assert!(
+            ended_seen.try_recv().is_ok(),
+            "the answer came before the pull ended"
+        );
+        pulling.join().unwrap();
+        // Danach läuft unter der Kennung nichts: kein Fehler, nur `false`.
+        let events = answer(&service, cancel(&id.to_string())).await;
+        assert_eq!(cancelled(&events), Some(false), "{events:?}");
+    }
+
+    /// Eine fehlende oder unlesbare Kennung ist `IPC_005`, beim Abbruch wie
+    /// beim Ziehen; unter einer laufenden Kennung beginnt kein zweites.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unreadable_or_taken_ids_are_ipc_005() {
+        let service = service();
+        for bad in ["", "not-a-uuid"] {
+            let events = answer(&service, cancel(bad)).await;
+            assert_eq!(codes_of(&events), ["IPC_005"], "{bad:?}: {events:?}");
+        }
+        let pull = |pull_id: String| {
+            v1::sandbox_request::Op::ImagePull(v1::sandbox_request::ImagePull {
+                reference: String::new(),
+                pull_id,
+            })
+        };
+        let events = answer(&service, pull("not-a-uuid".to_owned())).await;
+        assert_eq!(codes_of(&events), ["IPC_005"], "{events:?}");
+        let id = uuid::Uuid::now_v7();
+        let _running = service.inner.image_pulls.register(Some(id)).unwrap();
+        let events = answer(&service, pull(id.to_string())).await;
+        assert_eq!(codes_of(&events), ["IPC_005"], "{events:?}");
     }
 }

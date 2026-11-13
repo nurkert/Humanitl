@@ -811,6 +811,56 @@ async fn the_isolation_check_reports_only_what_was_measured() {
     );
 }
 
+/// Der Abbruch eines Ziehens (HUM-457): Beide Dienste antworten gleich, wenn
+/// unter der Kennung nichts läuft (`cancelled = false`, kein Befund), und
+/// beide lehnen eine fehlende oder unlesbare Kennung mit `IPC_005` ab, beim
+/// Abbruch wie beim Ziehen.
+#[tokio::test]
+async fn a_cancel_of_an_image_pull_answers_the_same_on_both_sides() {
+    let (real, _dir) = real_with_sandbox();
+    let fake = fake();
+    let cancel = |pull_id: &str| v1::SandboxRequest {
+        op: Some(v1::sandbox_request::Op::CancelImagePull(
+            v1::sandbox_request::CancelImagePull {
+                pull_id: pull_id.to_owned(),
+            },
+        )),
+    };
+    let unknown = cancel("0190a1b2-c3d4-7e5f-8a7b-8c9d0e1f2a3b");
+    let expected = vec![v1::SandboxEvent {
+        event: Some(v1::sandbox_event::Event::ImagePullCancelled(
+            v1::sandbox_event::ImagePullCancelled::default(),
+        )),
+    }];
+    assert_eq!(sandbox_events(&real, unknown.clone()).await, expected);
+    assert_eq!(sandbox_events(&fake, unknown).await, expected);
+
+    let pull = v1::SandboxRequest {
+        op: Some(v1::sandbox_request::Op::ImagePull(
+            v1::sandbox_request::ImagePull {
+                reference: String::new(),
+                pull_id: "not-a-uuid".to_owned(),
+            },
+        )),
+    };
+    for request in [cancel(""), cancel("not-a-uuid"), pull] {
+        for events in [
+            sandbox_events(&real, request.clone()).await,
+            sandbox_events(&fake, request.clone()).await,
+        ] {
+            let codes: Vec<&str> = events
+                .iter()
+                .filter_map(|event| match &event.event {
+                    Some(v1::sandbox_event::Event::Diagnostic(found)) => Some(found.code.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(codes, ["IPC_005"], "{request:?}: {events:?}");
+            assert_eq!(events.len(), 1, "{events:?}");
+        }
+    }
+}
+
 /// Die Anfrage, die die drei Garantien holt.
 fn isolation_check() -> v1::SandboxRequest {
     v1::SandboxRequest {

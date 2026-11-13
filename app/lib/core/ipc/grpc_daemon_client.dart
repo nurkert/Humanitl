@@ -446,6 +446,10 @@ class GrpcDaemonClient implements DaemonClient {
             // The answer to `image_pull` (HUM-439); [pullImage] reads it
             // itself and never through this stream.
             break;
+          case pb.SandboxEvent_Event.imagePullCancelled:
+            // The answer to `cancel_image_pull` (HUM-457); only
+            // [cancelImagePull] reads it.
+            break;
           case pb.SandboxEvent_Event.notSet:
             break;
         }
@@ -947,14 +951,20 @@ class GrpcDaemonClient implements DaemonClient {
   }
 
   @override
-  Future<PulledImage> pullImage({String reference = ''}) async {
+  Future<PulledImage> pullImage({
+    String reference = '',
+    String pullId = '',
+  }) async {
     // Kein Zeitlimit: Ein Ziehen dauert so lange, wie das Netz braucht; der
-    // Daemon bricht es selbst nach einer halben Stunde ab (HUM-439).
+    // Daemon bricht es selbst nach einer halben Stunde ab (HUM-439), und der
+    // Mensch kann es über [cancelImagePull] abbrechen (HUM-457).
     final CallOptions options = await _options(timeout: null);
     try {
       await for (final pb.SandboxEvent event in _stub.sandbox(
         pb.SandboxRequest()
-          ..imagePull = (pb.SandboxRequest_ImagePull()..reference = reference),
+          ..imagePull = (pb.SandboxRequest_ImagePull()
+            ..reference = reference
+            ..pullId = pullId),
         options: options,
       )) {
         switch (event.whichEvent()) {
@@ -975,6 +985,46 @@ class GrpcDaemonClient implements DaemonClient {
     }
     throw DaemonException(
       _unreachable('the daemon ended Sandbox(ImagePull) without an image'),
+    );
+  }
+
+  @override
+  Future<ImagePullCancelAnswer> cancelImagePull(String pullId) async {
+    // Kein Zeitlimit des Clients: Der Daemon antwortet erst, wenn kein
+    // Prozess des Ziehens mehr läuft, und begrenzt das Warten selbst
+    // (HUM-457).
+    final CallOptions options = await _options(timeout: null);
+    try {
+      await for (final pb.SandboxEvent event in _stub.sandbox(
+        pb.SandboxRequest()
+          ..cancelImagePull = (pb.SandboxRequest_CancelImagePull()
+            ..pullId = pullId),
+        options: options,
+      )) {
+        switch (event.whichEvent()) {
+          case pb.SandboxEvent_Event.imagePullCancelled:
+            return ImagePullCancelAnswer(
+              cancelled: event.imagePullCancelled.cancelled,
+              stillRunning: event.imagePullCancelled.stillRunning,
+            );
+          case pb.SandboxEvent_Event.diagnostic:
+            throw DaemonException(event.diagnostic.toDomain());
+          default:
+            // Ein Daemon vor Minor 37 kennt die Operation nicht und
+            // antwortet mit einer Momentaufnahme; die zählt nicht.
+            break;
+        }
+      }
+    } on GrpcError catch (error) {
+      throw DaemonException(_translate(error));
+    } on IOException catch (error) {
+      throw DaemonException(_unreachable('$error'));
+    }
+    throw DaemonException(
+      _unreachable(
+        'the daemon ended Sandbox(CancelImagePull) without saying whether '
+        'the pull ended',
+      ),
     );
   }
 

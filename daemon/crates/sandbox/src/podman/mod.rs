@@ -108,8 +108,8 @@ use crate::doctor::BackendCheckId;
 use crate::handle::SandboxHandle;
 use crate::launcher::{
     CheckResult, ContainerStop, Door, EnvDelivery, IsolationLevel, LaunchOnce, LaunchPlan,
-    PlanPreview, PlanRequest, PolicyMode, PolicyOrigin, PolicyRow, PulledImage, ResourceLimits,
-    SandboxBackend, Teardown,
+    PlanPreview, PlanRequest, PolicyMode, PolicyOrigin, PolicyRow, PullCancel, PulledImage,
+    ResourceLimits, SandboxBackend, Teardown,
 };
 use crate::profile::{MountPolicy, SandboxProfile, SessionContext};
 use crate::shim_fds::{Lifeline, env_memfd, split_env};
@@ -465,8 +465,9 @@ impl PodmanBackend {
     /// Ziehen scheitert oder danach nicht genau dieser Digest vorliegt, wenn
     /// die Datei der Zugangsdaten nicht taugt oder eine Ergänzung zur
     /// `registries.conf` einen Credential-Helfer nennt (HUM-456);
-    /// `SANDBOX_011` und `SANDBOX_037` aus dem Verzeichnis des Adapters.
-    fn pull(&self, requested: &str) -> Result<PulledImage, Diagnostic> {
+    /// `SANDBOX_011` und `SANDBOX_037` aus dem Verzeichnis des Adapters;
+    /// `SANDBOX_043` auch nach einem Abbruch über `cancel` (HUM-457).
+    fn pull(&self, requested: &str, cancel: &PullCancel) -> Result<PulledImage, Diagnostic> {
         let reference = if requested.trim().is_empty() {
             self.settings.image.clone().ok_or_else(no_image_named)?
         } else {
@@ -498,7 +499,10 @@ impl PodmanBackend {
             &engine.signature_policy,
             &auth_file,
         ));
-        let answer = teardown::run_bounded(pull, image::PULL_TIMEOUT);
+        // Abbrechbar, und in einer eigenen Prozessgruppe (HUM-457): Ein
+        // Abbruch beendet die Engine samt den Prozessen, die sie für das
+        // Ziehen startete, und kommt erst zurück, wenn keiner mehr lebt.
+        let answer = teardown::run_cancellable(pull, image::PULL_TIMEOUT, cancel);
         // Die Kopie der Zugangsdaten lebt nur so lange wie das Ziehen, auch
         // wenn es scheiterte; zwischen ihrem Schreiben und hier gibt es
         // keinen anderen Ausgang. Jedes Ziehen hat seine eigene Kopie, ein
@@ -506,6 +510,22 @@ impl PodmanBackend {
         // Daemon vorher ab, entfernt das nächste Ziehen eines neuen Prozesses
         // sie vor allem anderen.
         let _ = std::fs::remove_file(&copy);
+        // Nur ein Ziehen, das der Abbruch wirklich beendet hat, zählt als
+        // abgebrochen, und nur dann trägt das Zeichen das ein; kam er erst
+        // nach dem Ende, gilt dessen Ergebnis. Die Frist beendet die Gruppe
+        // ebenso, und was danach noch lief, steht im Befund.
+        let answer = match answer {
+            Ok(teardown::Ended::Exited(output)) => Ok(output),
+            Ok(teardown::Ended::Cancelled { alive }) => {
+                cancel.mark_interrupted(alive);
+                return Err(image::pull_cancelled(&reference, alive));
+            }
+            Ok(teardown::Ended::DeadlineKilled { alive }) => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                image::deadline_detail(alive),
+            )),
+            Err(err) => Err(err),
+        };
         if !matches!(&answer, Ok(output) if output.status.success()) {
             return Err(image::pull_failed(&reference, &answer, &credentials));
         }
@@ -1429,8 +1449,8 @@ impl SandboxBackend for PodmanBackend {
     }
 
     /// Zieht über [`image`], nur auf ausdrücklichen Wunsch (HUM-439).
-    fn pull_image(&self, reference: &str) -> Result<PulledImage, Diagnostic> {
-        self.pull(reference)
+    fn pull_image(&self, reference: &str, cancel: &PullCancel) -> Result<PulledImage, Diagnostic> {
+        self.pull(reference, cancel)
     }
 }
 

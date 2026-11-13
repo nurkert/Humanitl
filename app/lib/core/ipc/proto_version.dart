@@ -113,8 +113,11 @@ abstract final class ProtoVersion {
   /// names `MOUNT_MODE_IMAGE` "image", and the SANDBOX_043 card pulls with
   /// `Sandbox(ImagePull)` after saying that the network is used directly
   /// (HUM-439).
+  /// Raised to 37 with the cancel of a pull: the SANDBOX_043 card sends
+  /// `ImagePull.pull_id` and cancels with `Sandbox(CancelImagePull)`
+  /// (HUM-457).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 36;
+  static const int minor = 37;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

@@ -308,7 +308,16 @@ pulled docker.io/library/debian@sha256:7378…
 ```
 
 Ohne Verweis zieht der Befehl das eingestellte Abbild. Der Hinweis geht jedes
-Mal nach `stderr`, auch mit `--yes`. Ein Name ohne Registry wird abgelehnt
+Mal nach `stderr`, auch mit `--yes`. `Ctrl+C` während des Ziehens bricht es ab
+(HUM-457): Der Befehl bittet den Daemon, genau sein eigenes Ziehen abzubrechen,
+der Daemon beendet die Prozessgruppe des Ziehens (die Container-Engine und
+jeden Prozess, den sie dafür startete), und der Befehl endet mit 130. Liefen
+danach noch Prozesse des Ziehens, sagt eine Warnung, wie viele. Gestartet wird
+nichts, und das Abbild ist noch nicht da. War das Ziehen gerade von selbst
+fertig, gilt und erscheint sein Ergebnis. Die Grenze ist die Prozessgruppe:
+Ein Prozess, der sich mit `setsid` aus ihr löst, etwa der Pausen-Prozess, den
+die Engine ohne Root mit allen ihren Befehlen teilt, gehört nicht zum Ziehen
+und wird nicht beendet. Ein Name ohne Registry wird abgelehnt
 (`CONFIG_003`), im Befehl wie in der Konfiguration. Das Ziehen nimmt das
 Backend aus der Konfigurationsdatei (`sandbox.backend`); das `--backend`
 eines einzelnen Starts gilt dafür nicht. Projektordner, Tür, CA, Shim und die Dateien der Sitzung

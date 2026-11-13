@@ -5711,6 +5711,13 @@ mixin FakeSandboxBackends {
 /// Pulls nothing: a reference pinned by digest comes back as pulled with that
 /// digest and an id that says `fake` (CONVENTIONS 4.7), anything else is the
 /// daemon's `CONFIG_003`. The same answers as the Rust fake.
+///
+/// A pull answers at once, so a cancel finds nothing running and answers
+/// "not cancelled", as the Rust fake does (HUM-457). With [imagePullHold]
+/// set, a pull waits for it, and a cancel with its id ends it with
+/// `SANDBOX_043` and answers "cancelled": the way a test sees the pulling
+/// stage and its cancel. [imagePullCancelMisses] lets the first cancels miss,
+/// as when a cancel overtakes the registration of its pull.
 mixin FakeImagePull {
   /// The references `Sandbox(ImagePull)` was asked for, in order, for tests.
   final List<String> imagePulls = <String>[];
@@ -5718,9 +5725,65 @@ mixin FakeImagePull {
   /// Thrown as a [DaemonException] by `Sandbox(ImagePull)` when set.
   Diagnostic? imagePullFailure;
 
+  /// When set, every pull waits for it before it answers (HUM-457).
+  Completer<void>? imagePullHold;
+
+  /// The `pull_id` of every `Sandbox(ImagePull)`, in order, for tests.
+  final List<String> imagePullIds = <String>[];
+
+  /// The ids `Sandbox(CancelImagePull)` was asked for, in order, for tests.
+  final List<String> imagePullCancels = <String>[];
+
+  /// How many cancels answer "not running" before one finds its pull.
+  int imagePullCancelMisses = 0;
+
+  /// What a cancel that finds its pull reports as still running.
+  int imagePullCancelStillRunning = 0;
+
+  /// Thrown by a cancel that found its pull, after ending it: the daemon's
+  /// warning that the pull had not ended in time leaves the outcome open.
+  Diagnostic? imagePullCancelFailure;
+
+  /// When set, a cancel fails with it before it reaches the pull, which
+  /// goes on: a call lost on its way to the daemon (HUM-457).
+  Diagnostic? imagePullCancelLost;
+
+  /// The pulls waiting on [imagePullHold], by their id.
+  final Map<String, Completer<void>> _heldPulls = <String, Completer<void>>{};
+
   /// `Sandbox(ImagePull)`.
-  Future<PulledImage> pullImage({String reference = ''}) async {
+  Future<PulledImage> pullImage({
+    String reference = '',
+    String pullId = '',
+  }) async {
     imagePulls.add(reference);
+    imagePullIds.add(pullId);
+    if (pullId.isNotEmpty) {
+      _checkPullId(pullId);
+    }
+    if (imagePullHold case final Completer<void> hold) {
+      final Completer<void> cancelled = Completer<void>();
+      if (pullId.isNotEmpty) {
+        _heldPulls[pullId] = cancelled;
+      }
+      try {
+        await Future.any(<Future<void>>[hold.future, cancelled.future]);
+      } finally {
+        _heldPulls.remove(pullId);
+      }
+      if (cancelled.isCompleted) {
+        throw DaemonException(
+          Diagnostic(
+            code: 'SANDBOX_043',
+            severity: Severity.error,
+            why:
+                'the pull of $reference was cancelled on request and the '
+                'container engine was ended; nothing was started, and the '
+                'image is not there yet',
+          ),
+        );
+      }
+    }
     if (imagePullFailure case final Diagnostic failure) {
       throw DaemonException(failure);
     }
@@ -5743,5 +5806,47 @@ mixin FakeImagePull {
       digest: 'sha256:${pinned.group(1)}',
       imageId: 'fake-image',
     );
+  }
+
+  /// `Sandbox(CancelImagePull)` (HUM-457).
+  Future<ImagePullCancelAnswer> cancelImagePull(String pullId) async {
+    imagePullCancels.add(pullId);
+    _checkPullId(pullId);
+    if (imagePullCancelMisses > 0) {
+      imagePullCancelMisses -= 1;
+      return ImagePullCancelAnswer.notRunning;
+    }
+    if (imagePullCancelLost case final Diagnostic lost) {
+      throw DaemonException(lost);
+    }
+    final Completer<void>? held = _heldPulls.remove(pullId);
+    if (held == null) {
+      return ImagePullCancelAnswer.notRunning;
+    }
+    held.complete();
+    if (imagePullCancelFailure case final Diagnostic failure) {
+      throw DaemonException(failure);
+    }
+    return ImagePullCancelAnswer(
+      cancelled: true,
+      stillRunning: imagePullCancelStillRunning,
+    );
+  }
+
+  /// The daemon's `IPC_005` for an id that is not a UUID.
+  static void _checkPullId(String pullId) {
+    final bool uuid = RegExp(
+      r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+      r'[0-9a-fA-F]{12}$',
+    ).hasMatch(pullId);
+    if (!uuid) {
+      throw DaemonException(
+        Diagnostic(
+          code: 'IPC_005',
+          severity: Severity.error,
+          why: '"$pullId" is not the id of an image pull',
+        ),
+      );
+    }
   }
 }

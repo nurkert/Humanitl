@@ -469,7 +469,22 @@ abstract class DaemonClient {
   /// `CONFIG_003` for a reference without digest or registry, `SANDBOX_043`
   /// when the pull fails, `SANDBOX_048` while the backend with images is not
   /// admitted, `SANDBOX_034` for a backend without images.
-  Future<PulledImage> pullImage({String reference = ''});
+  ///
+  /// [pullId] makes the pull cancellable (HUM-457): a UUID the caller
+  /// chooses, so it can call [cancelImagePull] before the daemon answered.
+  /// Empty means not cancellable. A cancelled pull throws `SANDBOX_043`.
+  Future<PulledImage> pullImage({String reference = '', String pullId = ''});
+
+  /// `Sandbox(CancelImagePull)`: cancels the pull started with [pullId]
+  /// (HUM-457). The daemon kills the process group of the pull and answers
+  /// once the pull has returned.
+  ///
+  /// [ImagePullCancelAnswer.cancelled] only when the daemon really
+  /// interrupted the engine; false when no pull runs under the id (yet, or
+  /// any more) or it finished on its own, which is no error. Throws a
+  /// [DaemonException] with `IPC_005` for an id that is not a UUID, and with
+  /// a `SANDBOX_043` warning when the pull did not end in time.
+  Future<ImagePullCancelAnswer> cancelImagePull(String pullId);
 
   /// Releases the transport. The client is unusable afterwards.
   Future<void> close();
@@ -477,6 +492,26 @@ abstract class DaemonClient {
 
 /// How many audit records one page asks for. The wire default of `Query`.
 const int auditPageSize = 200;
+
+/// The daemon's answer to `Sandbox(CancelImagePull)`, mirror of
+/// `SandboxEvent.ImagePullCancelled` (HUM-457).
+final class ImagePullCancelAnswer {
+  /// Creates the answer.
+  const ImagePullCancelAnswer({required this.cancelled, this.stillRunning = 0});
+
+  /// Nothing was interrupted: no pull runs under the id, or it ended on its
+  /// own.
+  static const ImagePullCancelAnswer notRunning = ImagePullCancelAnswer(
+    cancelled: false,
+  );
+
+  /// True when the daemon interrupted the container engine.
+  final bool cancelled;
+
+  /// With [cancelled]: how many processes of the pull still ran after the
+  /// kill; zero means nothing of it runs any more.
+  final int stillRunning;
+}
 
 /// Which of the two documents an audit export writes.
 enum AuditExportFormat {

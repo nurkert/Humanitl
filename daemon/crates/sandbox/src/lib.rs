@@ -170,8 +170,8 @@ pub use crate::handle::{
 };
 pub use crate::launcher::{
     CheckResult, DisposableLayer, Door, IsolationCheck, IsolationLevel, LaunchOptions, LaunchPlan,
-    PlanPreview, PlanRequest, PolicyMode, PolicyOrigin, PolicyRow, PulledImage, REPORT_TIMEOUT,
-    ResourceLimits, SandboxBackend, StdioMode,
+    PlanPreview, PlanRequest, PolicyMode, PolicyOrigin, PolicyRow, PullCancel, PulledImage,
+    REPORT_TIMEOUT, ResourceLimits, SandboxBackend, StdioMode,
 };
 pub use crate::seatbelt::{
     PREVIEW_AGENT_PORT, PREVIEW_REPORT_FD, PREVIEW_SESSION_PORT, PREVIEW_STATUS_FD,

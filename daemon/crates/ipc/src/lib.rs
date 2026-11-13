@@ -51,7 +51,11 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `36` seit dem Abbild als Wurzel (HUM-439): `SandboxRequest.image_pull`
+/// `37` seit dem Abbruch eines Ziehens (HUM-457): `ImagePull.pull_id` ist
+/// die Kennung, die der Client wählt, `SandboxRequest.cancel_image_pull`
+/// bricht das Ziehen mit dieser Kennung ab und antwortet mit
+/// `SandboxEvent.image_pull_cancelled`.
+/// `36` war das Abbild als Wurzel (HUM-439): `SandboxRequest.image_pull`
 /// zieht ein Abbild auf ausdrücklichen Wunsch und antwortet mit
 /// `SandboxEvent.image_pulled`; `MountMode.MOUNT_MODE_IMAGE` nennt in der
 /// Tabelle die Wurzel, wenn sie ein Abbild ist, mit dem Verweis samt Digest in
@@ -203,7 +207,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 36;
+pub const PROTO_MINOR: u32 = 37;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).
@@ -236,6 +240,7 @@ pub mod disposable;
 pub mod domains;
 pub mod exec;
 pub mod fake;
+mod image_pulls;
 pub mod intercept;
 pub mod llm_key;
 pub mod llm_reach;

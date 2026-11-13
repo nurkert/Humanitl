@@ -1282,7 +1282,22 @@ impl FakeDaemon {
             // Ein Verweis mit Digest und Registry kommt als erfundenes
             // Ergebnis zurück, unübersehbar erfunden (CONVENTIONS 4.7), jeder
             // andere mit demselben Befund wie beim echten Dienst.
-            Some(Op::ImagePull(pull)) => vec![fake_image_pull(&pull.reference)],
+            Some(Op::ImagePull(pull)) => vec![fake_image_pull(&pull.reference, &pull.pull_id)],
+            // Ein Ziehen des Fakes ist zu Ende, sobald es geantwortet hat; ein
+            // Abbruch findet also nie ein laufendes und antwortet wie der
+            // echte Dienst nach dem Ende: `cancelled = false` (HUM-457). Eine
+            // fehlende oder unlesbare Kennung ist auf beiden Seiten `IPC_005`.
+            Some(Op::CancelImagePull(cancel)) => {
+                let event = match crate::validate::cancel_pull_id(&cancel.pull_id) {
+                    Ok(_) => v1::sandbox_event::Event::ImagePullCancelled(
+                        v1::sandbox_event::ImagePullCancelled::default(),
+                    ),
+                    Err(diagnostic) => {
+                        v1::sandbox_event::Event::Diagnostic(diagnostic_to_proto(&diagnostic))
+                    }
+                };
+                vec![v1::SandboxEvent { event: Some(event) }]
+            }
             Some(Op::Argv(())) => argv_lines(&self.state.session().work_dir),
             Some(Op::Plan(plan)) => vec![self.sandbox_status_for(
                 self.state.sandbox().1,
@@ -1808,8 +1823,16 @@ fn fake_argv_line(work_dir: &str, work_mode: &str) -> String {
 }
 
 /// Die erfundene Antwort auf `image_pull` (HUM-439): Der Digest ist der des
-/// Verweises, die Kennung sagt `fake`.
-fn fake_image_pull(reference: &str) -> v1::SandboxEvent {
+/// Verweises, die Kennung sagt `fake`. Eine unlesbare `pull_id` ist wie
+/// beim echten Dienst `IPC_005` (HUM-457).
+fn fake_image_pull(reference: &str, pull_id: &str) -> v1::SandboxEvent {
+    if let Err(diagnostic) = crate::validate::pull_id(pull_id) {
+        return v1::SandboxEvent {
+            event: Some(v1::sandbox_event::Event::Diagnostic(diagnostic_to_proto(
+                &diagnostic,
+            ))),
+        };
+    }
     let pinned = humanitl_config::image_pinned_by_digest(reference);
     let digest = reference
         .rsplit_once("@sha256:")

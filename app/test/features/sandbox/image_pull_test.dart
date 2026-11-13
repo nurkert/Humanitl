@@ -5,9 +5,12 @@
 // gezogen wird, sagt sie, dass das Netz dabei direkt genutzt wird und nicht
 // durch den Proxy läuft, und die Antwort, die zieht, ist nie die vorgewählte.
 
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
+import 'package:humanitl/core/ipc/fake_daemon_client.dart';
 import 'package:humanitl/features/sandbox/widgets/image_pull.dart';
 import 'package:humanitl_ui/humanitl_ui.dart';
 
@@ -32,9 +35,12 @@ final Finder network = find.byKey(const Key('sandbox-image-pull-network'));
 final Finder confirm = find.byKey(const Key('sandbox-image-pull-confirm'));
 final Finder cancel = find.byKey(const Key('sandbox-image-pull-cancel'));
 
-/// Ein Client, dessen letzter Start an [diagnostic] scheiterte.
-SandboxTestClient refused(Diagnostic diagnostic) {
-  final SandboxTestClient client = SandboxTestClient();
+/// Ein Client, dessen letzter Start an [diagnostic] scheiterte; sein Daemon
+/// spricht den Vertrag in Minor [minor].
+SandboxTestClient refused(Diagnostic diagnostic, {int minor = 0}) {
+  final SandboxTestClient client = SandboxTestClient(
+    info: FakeDaemonClient.defaultInfo.copyWith(protoMinor: minor),
+  );
   client.sandbox = client.sandbox.copyWith(
     state: SandboxState.failed,
     diagnostics: <Diagnostic>[diagnostic],
@@ -144,5 +150,201 @@ void main() {
       findsOneWidget,
     );
     expect(pull, findsOneWidget);
+  });
+
+  // HUM-457: Ein laufendes Ziehen lässt sich abbrechen, über die Kennung,
+  // die die Karte für genau dieses Ziehen gewählt hat.
+  final Finder cancelRunning = find.byKey(
+    const Key('sandbox-image-pull-cancel-running'),
+  );
+
+  /// Ein Client, dessen Daemon den Abbruch kennt und dessen Ziehen wartet,
+  /// bis [hold] fertig ist oder abgebrochen wird.
+  SandboxTestClient holding(Completer<void> hold, {int minor = 37}) {
+    final SandboxTestClient client = refused(missingImage(), minor: minor);
+    client.imagePullHold = hold;
+    return client;
+  }
+
+  Future<void> startPull(WidgetTester tester) async {
+    await tester.ensureVisible(pull);
+    await tester.tap(pull);
+    await tester.pump();
+    await tester.ensureVisible(confirm);
+    await tester.tap(confirm);
+    await tester.pump();
+  }
+
+  testWidgets('a running pull is cancelled by its own id and the card says so', (
+    WidgetTester tester,
+  ) async {
+    final Completer<void> hold = Completer<void>();
+    final SandboxTestClient client = holding(hold);
+    await pumpSandbox(tester, client: client);
+    await startPull(tester);
+
+    expect(find.byKey(const Key('sandbox-image-pulling')), findsOneWidget);
+    expect(cancelRunning, findsOneWidget);
+    expect(
+      tester.widget<HButton>(cancelRunning).variant,
+      HButtonVariant.secondary,
+    );
+    expect(client.imagePullIds, hasLength(1));
+    final String id = client.imagePullIds.single;
+    expect(
+      id,
+      matches(
+        RegExp(
+          r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+        ),
+      ),
+      reason: 'the card chooses a UUID for its pull',
+    );
+
+    await tester.ensureVisible(cancelRunning);
+    await tester.tap(cancelRunning);
+    await tester.pump();
+    await tester.pump();
+
+    expect(client.imagePullCancels, <String>[id]);
+    expect(
+      find.byKey(const Key('sandbox-image-pull-cancelled')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('sandbox-image-pull-failed')), findsNothing);
+    expect(cancelRunning, findsNothing);
+    expect(pull, findsOneWidget, reason: 'the card offers the pull again');
+
+    // Ein neues Ziehen bekommt eine neue Kennung und lässt den Hinweis fallen.
+    await startPull(tester);
+    expect(client.imagePullIds, hasLength(2));
+    expect(client.imagePullIds.last, isNot(id));
+    expect(find.byKey(const Key('sandbox-image-pull-cancelled')), findsNothing);
+    hold.complete();
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('sandbox-image-pulled')), findsOneWidget);
+  });
+
+  testWidgets('a daemon that cannot cancel gets no cancel button', (
+    WidgetTester tester,
+  ) async {
+    final Completer<void> hold = Completer<void>();
+    final SandboxTestClient client = holding(hold, minor: 36);
+    await pumpSandbox(tester, client: client);
+    await startPull(tester);
+
+    expect(find.byKey(const Key('sandbox-image-pulling')), findsOneWidget);
+    expect(cancelRunning, findsNothing);
+    expect(client.imagePullIds, <String>['']);
+    hold.complete();
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('sandbox-image-pulled')), findsOneWidget);
+  });
+
+  Future<void> tapCancel(WidgetTester tester) async {
+    await tester.ensureVisible(cancelRunning);
+    await tester.tap(cancelRunning);
+    await tester.pump();
+    await tester.pump();
+  }
+
+  // Der Abbruch kann die Anmeldung seines Ziehens im Daemon überholen; dann
+  // antwortet der Daemon „läuft nicht", und das Ziehen geht weiter. Die Karte
+  // fragt nach kurzer Pause noch einmal.
+  testWidgets(
+    'a cancel that overtook its pull is sent again and then finds it',
+    (WidgetTester tester) async {
+      final Completer<void> hold = Completer<void>();
+      final SandboxTestClient client = holding(hold)..imagePullCancelMisses = 1;
+      await pumpSandbox(tester, client: client);
+      await startPull(tester);
+      final String id = client.imagePullIds.single;
+
+      await tapCancel(tester);
+      expect(client.imagePullCancels, <String>[id]);
+      expect(find.byKey(const Key('sandbox-image-pulling')), findsOneWidget);
+      expect(
+        tester.widget<HButton>(cancelRunning).onPressed,
+        isNull,
+        reason: 'one cancel at a time',
+      );
+
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+      expect(client.imagePullCancels, <String>[id, id]);
+      expect(
+        find.byKey(const Key('sandbox-image-pull-cancelled')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('sandbox-image-pull-failed')), findsNothing);
+    },
+  );
+
+  testWidgets('processes that survived the cancel are named in the note', (
+    WidgetTester tester,
+  ) async {
+    final SandboxTestClient client = holding(Completer<void>())
+      ..imagePullCancelStillRunning = 2;
+    await pumpSandbox(tester, client: client);
+    await startPull(tester);
+    await tapCancel(tester);
+
+    final Finder note = find.byKey(const Key('sandbox-image-pull-cancelled'));
+    expect(note, findsOneWidget);
+    expect(tester.widget<Text>(note).data, contains('2'));
+  });
+
+  // Die Antwort auf den Abbruch blieb aus (etwa die Warnung, dass das Ziehen
+  // nicht rechtzeitig endete); der SANDBOX_043 des Ziehens ist dann der
+  // Abbruch und kein Fehlschlag.
+  // Ist der Ausgang des Abbruchs unbekannt, entscheidet der Satz des Daemons
+  // zum Ziehen; ein SANDBOX_043 allein ist kein Abbruch, er kann auch ein
+  // Fehler der Registry sein.
+  testWidgets('an unknown cancel outcome shows the pull\'s own sentence', (
+    WidgetTester tester,
+  ) async {
+    final SandboxTestClient client = holding(Completer<void>())
+      ..imagePullCancelFailure = const Diagnostic(
+        code: 'SANDBOX_043',
+        severity: Severity.warning,
+        why: 'the image pull was asked to stop but had not ended after 10s',
+      );
+    await pumpSandbox(tester, client: client);
+    await startPull(tester);
+    await tapCancel(tester);
+
+    expect(find.byKey(const Key('sandbox-image-pull-cancelled')), findsNothing);
+    expect(find.byKey(const Key('sandbox-image-pull-failed')), findsOneWidget);
+    expect(find.textContaining('cancelled on request'), findsOneWidget);
+  });
+
+  // Geht der Abbruch auf dem Weg zum Daemon verloren, läuft das Ziehen
+  // weiter, und der Knopf ist wieder nutzbar.
+  testWidgets('a lost cancel leaves the button usable while the pull runs', (
+    WidgetTester tester,
+  ) async {
+    final Completer<void> hold = Completer<void>();
+    final SandboxTestClient client = holding(hold)
+      ..imagePullCancelLost = const Diagnostic(
+        code: 'IPC_001',
+        severity: Severity.error,
+        why: 'the daemon could not be reached',
+      );
+    await pumpSandbox(tester, client: client);
+    await startPull(tester);
+    await tapCancel(tester);
+
+    expect(client.imagePullCancels, hasLength(1));
+    expect(tester.widget<HButton>(cancelRunning).onPressed, isNotNull);
+
+    client.imagePullCancelLost = null;
+    await tapCancel(tester);
+    expect(client.imagePullCancels, hasLength(2));
+    expect(
+      find.byKey(const Key('sandbox-image-pull-cancelled')),
+      findsOneWidget,
+    );
   });
 }
