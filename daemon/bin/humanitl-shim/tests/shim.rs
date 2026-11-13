@@ -21,6 +21,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod support;
+
 const SHIM: &str = env!("CARGO_BIN_EXE_humanitl-shim");
 
 /// How many syscalls the floor of `seccomp::FLOOR` refuses. The binary is a
@@ -1073,26 +1075,7 @@ fn shim_as_pid_1(tag: &str, command: &[&str]) -> Option<Command> {
 
 /// [`shim_as_pid_1`] with further shim options before `--`.
 fn shim_as_pid_1_with(tag: &str, options: &[&str], command: &[&str]) -> Option<Command> {
-    let usable = Command::new("bwrap")
-        .args([
-            "--unshare-user",
-            "--unshare-pid",
-            "--as-pid-1",
-            "--dev-bind",
-            "/",
-            "/",
-            "--proc",
-            "/proc",
-            "--",
-            "true",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
-    if !usable {
-        eprintln!("skipping: bwrap --as-pid-1 is not usable on this machine");
+    if !support::bwrap_as_pid_1_usable() {
         return None;
     }
     let socket = socket_path(tag);

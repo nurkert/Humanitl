@@ -29,6 +29,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod support;
+
 const SHIM: &str = env!("CARGO_BIN_EXE_humanitl-shim");
 
 /// Die fünf Variablen des Vertrags; jeder Start beginnt ohne sie.
@@ -110,35 +112,6 @@ fn code(status: ExitStatus) -> i32 {
         .unwrap_or_else(|| 128 + status.signal().unwrap())
 }
 
-/// Ob `bwrap` mit eigenem Benutzer- und PID-Namensraum startet; sonst
-/// überspringt der Test mit Grund auf stderr, wie die PID-1-Tests in
-/// `tests/shim.rs`. Die CI (`rust-test`) installiert bwrap und gibt
-/// Benutzer-Namensräume frei.
-fn bwrap_usable() -> bool {
-    let usable = Command::new("bwrap")
-        .args([
-            "--unshare-user",
-            "--unshare-pid",
-            "--as-pid-1",
-            "--dev-bind",
-            "/",
-            "/",
-            "--proc",
-            "/proc",
-            "--",
-            "true",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
-    if !usable {
-        eprintln!("skipping: bwrap --as-pid-1 is not usable on this machine");
-    }
-    usable
-}
-
 /// `(read, write)` einer Pipe, beide mit `CLOEXEC`.
 fn pipe() -> (OwnedFd, OwnedFd) {
     let mut fds = [0 as libc::c_int; 2];
@@ -203,7 +176,7 @@ fn inherit(command: &mut Command, fds: [RawFd; 2]) {
 /// Startet den Shim als PID 1 unter bwrap, mit Tür und Lebensleine, und
 /// wartet, bis der Agent sich meldet. `None`, wo bwrap nicht nutzbar ist.
 fn start(tag: &str) -> Option<Sandbox> {
-    if !bwrap_usable() {
+    if !support::bwrap_as_pid_1_usable() {
         return None;
     }
     let (door, shim_door) = door_pair();
