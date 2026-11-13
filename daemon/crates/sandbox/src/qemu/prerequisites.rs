@@ -193,38 +193,66 @@ const BUBBLEWRAP: Program = Program {
 /// `paths` liefert den `PATH` des Daemons, `config` die Gruppe
 /// `sandbox.qemu` mit den Pfaden, die die Suche ersetzen.
 pub(crate) fn missing_prerequisite(paths: &Paths, config: &QemuConfig) -> Option<Diagnostic> {
-    missing_on(
-        &Host::system(),
-        paths.env(),
-        config,
-        PackageManager::detect(),
-    )
-    .err()
+    resolve(paths.env(), config).err()
 }
 
-/// [`missing_prerequisite`] auf diesen Orten, in dieser Reihenfolge:
-/// `/dev/kvm`, die Programme samt Fähigkeiten, das Kernel-Abbild, die Module.
+/// Was die Prüfung gefunden hat: je Voraussetzung der Pfad, den ein Start
+/// benutzt. Bis HUM-444 liest das nur der Startweg der Tests
+/// (`test_vm.rs`).
+#[derive(Debug, Clone)]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "read by the test launch until HUM-444")
+)]
+pub(crate) struct Resolved {
+    /// Der Emulator.
+    pub(crate) emulator: PathBuf,
+    /// Der Dienst der Dateisysteme.
+    pub(crate) file_daemon: PathBuf,
+    /// Das vsock-Gerät.
+    pub(crate) vsock_device: PathBuf,
+    /// bubblewrap.
+    pub(crate) bubblewrap: PathBuf,
+    /// Das Kernel-Abbild.
+    pub(crate) kernel: PathBuf,
+    /// Das Verzeichnis seiner Module.
+    pub(crate) modules: PathBuf,
+}
+
+/// Jede Voraussetzung mit ihrem Pfad, oder die erste fehlende als
+/// `SANDBOX_045`; `env` liefert den `PATH`.
+pub(crate) fn resolve(env: &Env, config: &QemuConfig) -> Result<Resolved, Diagnostic> {
+    missing_on(&Host::system(), env, config, PackageManager::detect())
+}
+
+/// [`resolve`] auf diesen Orten, in dieser Reihenfolge: `/dev/kvm`, die
+/// Programme samt Fähigkeiten, das Kernel-Abbild, die Module.
 fn missing_on(
     host: &Host,
     env: &Env,
     config: &QemuConfig,
     manager: PackageManager,
-) -> Result<(), Diagnostic> {
+) -> Result<Resolved, Diagnostic> {
     kvm_usable(host)?;
-    let programs = [
-        (&EMULATOR, config.qemu.as_deref()),
-        (&FILE_DAEMON, config.virtiofsd.as_deref()),
-        (&VSOCK_DEVICE, config.vhost_device_vsock.as_deref()),
-        (&BUBBLEWRAP, None),
-    ];
-    for (program, configured) in programs {
+    let usable = |program: &Program, configured: Option<&Path>| {
         let found = find(program, configured, env, host, manager)?;
         for question in program.questions {
             ask(program, &found, question, manager)?;
         }
-    }
-    kernel_readable(host, config, manager)?;
-    modules_present(host, config, manager)
+        Ok::<_, Diagnostic>(found)
+    };
+    let emulator = usable(&EMULATOR, config.qemu.as_deref())?;
+    let file_daemon = usable(&FILE_DAEMON, config.virtiofsd.as_deref())?;
+    let vsock_device = usable(&VSOCK_DEVICE, config.vhost_device_vsock.as_deref())?;
+    let bubblewrap = usable(&BUBBLEWRAP, None)?;
+    Ok(Resolved {
+        emulator,
+        file_daemon,
+        vsock_device,
+        bubblewrap,
+        kernel: kernel_readable(host, config, manager)?,
+        modules: modules_present(host, config, manager)?,
+    })
 }
 
 /// `SANDBOX_045` mit dem, was fehlt, und dem Weg dorthin.
@@ -442,14 +470,14 @@ fn kernel_readable(
     host: &Host,
     config: &QemuConfig,
     manager: PackageManager,
-) -> Result<(), Diagnostic> {
+) -> Result<PathBuf, Diagnostic> {
     let image = match (&config.kernel, &host.release) {
         (Some(image), _) => image.clone(),
         (None, Some(release)) => host.boot.join(format!("vmlinuz-{release}")),
         (None, None) => return Err(release_unknown("sandbox.qemu.kernel")),
     };
     if image.is_file() && std::fs::File::open(&image).is_ok() {
-        return Ok(());
+        return Ok(image);
     }
     let shown = image.display();
     if image.is_file() {
@@ -476,14 +504,14 @@ fn modules_present(
     host: &Host,
     config: &QemuConfig,
     manager: PackageManager,
-) -> Result<(), Diagnostic> {
+) -> Result<PathBuf, Diagnostic> {
     let dir = match (&config.modules, &host.release) {
         (Some(dir), _) => dir.clone(),
         (None, Some(release)) => host.modules_root.join(release),
         (None, None) => return Err(release_unknown("sandbox.qemu.modules")),
     };
     if dir.is_dir() {
-        return Ok(());
+        return Ok(dir);
     }
     Err(missing(
         &format!(
@@ -577,7 +605,7 @@ mod tests {
         }
 
         fn check(&self, config: &QemuConfig) -> Result<(), Diagnostic> {
-            missing_on(&self.host, &self.env, config, PackageManager::Apt)
+            missing_on(&self.host, &self.env, config, PackageManager::Apt).map(drop)
         }
 
         fn finding(&self, config: &QemuConfig) -> Diagnostic {

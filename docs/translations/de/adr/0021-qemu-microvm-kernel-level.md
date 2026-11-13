@@ -1,6 +1,6 @@
 ---
 source: adr/0021-qemu-microvm-kernel-level.md
-source-sha256: 853a6a5421dc4667ba7e9054c2f2c732620c84205e36c07d218c0d90bd75fdce
+source-sha256: 62b074b178092c5045f39874a5df52e4ccd46acb003cfa73a538cfc986393da7
 lang: de
 ---
 # ADR-0021 · Die Kernel-Stufe läuft als QEMU-Micro-VM aus Debian-Paketen
@@ -108,8 +108,11 @@ Agenten. Für den Agenten ändert sich nichts.
 **Der Kernel.** Der Gast bootet den laufenden Kernel des Hosts (`/boot/vmlinuz-$(uname -r)`) mit
 dessen Modulen aus `/usr/lib/modules`, also kommen Sicherheitsupdates des Kernels über die
 Distribution. Wo das Image für den Nutzer nicht lesbar ist (Ubuntu installiert es mit Modus
-`0600`), ist die Stufe nicht verfügbar, und `humanitl doctor` nennt den Grund; ein Schlüssel
-`sandbox.qemu.kernel` nimmt ein anderes Image samt dessen Modulverzeichnis.
+`0600`) oder wo der Kernel virtiofs als Modul baut (`CONFIG_VIRTIO_FS=m`, wie Ubuntus
+`linux-azure`, der deshalb ohne initramfs keine virtiofs-Wurzel booten kann), ist die Stufe
+nicht verfügbar, und `humanitl doctor` nennt den Grund; ein Schlüssel `sandbox.qemu.kernel`
+nimmt ein anderes Image samt dessen Modulverzeichnis. Der CI-Job aus HUM-465 bootet deshalb
+Debians Cloud-Kernel.
 
 **Zulassung.** Wie in ADR-0020: Die Stufe wird mit `SANDBOX_048` abgelehnt, bis ihre
 Einhänge-Prüfungen und die Escape-Suite gegen sie in der CI grün sind (HUM-445, HUM-446); HUM-449

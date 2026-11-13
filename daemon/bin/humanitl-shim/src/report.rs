@@ -153,6 +153,15 @@ impl Report {
         Ok(Self { fd: Some(owned) })
     }
 
+    /// The report on a descriptor the shim opened itself: in a guest kernel,
+    /// the one vsock connection the host made to the shim (HUM-465,
+    /// `guest.rs`).
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub const fn from_fd(fd: OwnedFd) -> Self {
+        Self { fd: Some(fd) }
+    }
+
     /// The descriptor, when there is a report.
     #[must_use]
     pub fn fd(&self) -> Option<RawFd> {

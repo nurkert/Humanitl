@@ -38,7 +38,11 @@
 //! launcher sets, and the bridge's ([`Policy::for_bridge`]), which is the
 //! agent's plus `AF_UNIX`, because `connect(2)` to the proxy socket needs
 //! `socket(AF_UNIX, SOCK_STREAM)`. The bridge is the only process in the
-//! sandbox that may open a Unix socket, and it knows exactly one target.
+//! sandbox that may open a Unix socket, and it knows exactly one target. In a
+//! guest kernel (HUM-465) the door is a vsock port of the host instead, and
+//! the bridge's policy is the agent's plus `AF_VSOCK`, without `AF_UNIX`
+//! ([`Policy::for_bridge_over_vsock`]). [`FAMILIES`] has no `AF_VSOCK`, so no
+//! profile can ever allow it to the agent.
 //!
 //! Two gates leave this file as well ([`Gate`], HUM-138). The bridge's filter
 //! answers a refused `socket(2)` with `EPERM` at once ([`Gate::Silent`]). The
@@ -123,6 +127,13 @@ pub const FAMILIES: &[Family] = &[
         number: libc::AF_INET6.unsigned_abs(),
     },
 ];
+
+/// The family of the door in a guest kernel; only
+/// [`Policy::for_bridge_over_vsock`] adds it, never a profile.
+pub const VSOCK: Family = Family {
+    name: "AF_VSOCK",
+    number: libc::AF_VSOCK.unsigned_abs(),
+};
 
 /// Socket types the launcher may name in `HUMANITL_SECCOMP_TYPES`.
 ///
@@ -474,6 +485,43 @@ impl Policy {
             push_unique(&mut bridge.families, unix);
         }
         bridge
+    }
+
+    /// The bridge's policy in a guest kernel (HUM-465): this one plus
+    /// `AF_VSOCK`, and not `AF_UNIX`.
+    ///
+    /// The parent shim opens a new vsock stream to the host for every
+    /// connection of the agent, after this filter is in place, so the family
+    /// must stay allowed; a Unix socket has nowhere to go in a guest. The
+    /// agent's policy is unchanged and refuses both.
+    ///
+    /// The bridge's filter is also the filter of PID 1 of the guest, which
+    /// must be able to power the guest off when it is done (`guest.rs`); a
+    /// profile that denies `reboot` keeps denying it to the agent, never to
+    /// PID 1.
+    #[must_use]
+    pub fn for_bridge_over_vsock(&self) -> Self {
+        let mut bridge = self.clone();
+        bridge
+            .families
+            .retain(|family| family.number != libc::AF_UNIX.unsigned_abs());
+        push_unique(&mut bridge.families, VSOCK);
+        bridge.deny.retain(|syscall| syscall.name != "reboot");
+        bridge
+    }
+
+    /// The agent's policy in a guest kernel (HUM-465): this one without
+    /// `AF_UNIX`, whatever the profile says. In a guest there is no Unix
+    /// socket of the host to reach, and the door is the bridge's alone. The
+    /// guest plan refuses such a profile before anything starts
+    /// (`guest.rs`); this is the second lock behind that one.
+    #[must_use]
+    pub fn for_guest_agent(&self) -> Self {
+        let mut agent = self.clone();
+        agent
+            .families
+            .retain(|family| family.number != libc::AF_UNIX.unsigned_abs());
+        agent
     }
 
     /// The families `socket(2)` may use.
@@ -1184,6 +1232,62 @@ mod tests {
         // Idempotent when the profile already allows AF_UNIX.
         let browser = Policy::from_env(Some("AF_UNIX,AF_INET"), None, None).unwrap();
         assert_eq!(browser.for_bridge().families().len(), 2);
+    }
+
+    /// HUM-465: in a guest the bridge reaches the door over vsock; its policy
+    /// gains `AF_VSOCK` and never `AF_UNIX`, even when the profile allows the
+    /// agent `AF_UNIX`. No profile can name `AF_VSOCK`.
+    #[test]
+    fn bridge_policy_over_vsock_adds_vsock_instead_of_unix() {
+        let agent = default_policy();
+        let bridge = agent.for_bridge_over_vsock();
+        assert_eq!(
+            bridge.families().iter().map(|f| f.name).collect::<Vec<_>>(),
+            ["AF_INET", "AF_INET6", "AF_VSOCK"]
+        );
+        assert_eq!(bridge.types(), agent.types());
+        assert_eq!(bridge.deny, agent.deny);
+        let browser = Policy::from_env(Some("AF_UNIX,AF_INET"), None, None).unwrap();
+        assert_eq!(
+            browser
+                .for_bridge_over_vsock()
+                .families()
+                .iter()
+                .map(|f| f.name)
+                .collect::<Vec<_>>(),
+            ["AF_INET", "AF_VSOCK"]
+        );
+        assert!(Policy::from_env(Some("AF_VSOCK"), None, None).is_err());
+        assert!(!agent.families().contains(&VSOCK));
+    }
+
+    /// HUM-465: PID 1 of a guest must power it off; a profile's `reboot`
+    /// stays denied to the agent and to the bwrap bridge, never to the guest
+    /// bridge.
+    #[test]
+    fn the_guest_bridge_never_denies_reboot() {
+        let agent = Policy::from_env(None, None, Some("reboot,mount")).unwrap();
+        let names = |policy: &Policy| policy.deny.iter().map(|s| s.name).collect::<Vec<_>>();
+        assert!(names(&agent).contains(&"reboot"));
+        assert!(names(&agent.for_bridge()).contains(&"reboot"));
+        let guest = agent.for_bridge_over_vsock();
+        assert!(!names(&guest).contains(&"reboot"));
+        assert!(names(&guest).contains(&"mount"));
+        assert_eq!(guest.deny.len(), agent.deny.len() - 1);
+    }
+
+    /// HUM-465: the agent in a guest never gets `AF_UNIX`, even from a
+    /// profile that allows it.
+    #[test]
+    fn the_guest_agent_loses_unix() {
+        let browser = Policy::from_env(Some("AF_UNIX,AF_INET"), None, None).unwrap();
+        let guest = browser.for_guest_agent();
+        assert_eq!(
+            guest.families().iter().map(|f| f.name).collect::<Vec<_>>(),
+            ["AF_INET"]
+        );
+        assert_eq!(guest.deny, browser.deny);
+        assert_eq!(default_policy().for_guest_agent(), default_policy());
     }
 
     // ---- the program, evaluated by an interpreter -------------------------

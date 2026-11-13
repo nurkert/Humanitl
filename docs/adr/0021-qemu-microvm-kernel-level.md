@@ -114,9 +114,12 @@ other backends and starts the agent. For the agent nothing changes.
 **The kernel.** The guest boots the running host kernel
 (`/boot/vmlinuz-$(uname -r)`) with its modules from `/usr/lib/modules`, so
 security updates of the kernel arrive through the distribution. Where the
-image is not readable by the user (Ubuntu installs it with mode `0600`), the
-level is unavailable and `humanitl doctor` names the reason; a key
-`sandbox.qemu.kernel` takes another image, with its modules directory.
+image is not readable by the user (Ubuntu installs it with mode `0600`), or
+where the kernel builds virtiofs as a module (`CONFIG_VIRTIO_FS=m`, as Ubuntu's
+`linux-azure` does, so it cannot boot a virtiofs root without an initramfs),
+the level is unavailable and `humanitl doctor` names the reason; a key
+`sandbox.qemu.kernel` takes another image, with its modules directory. The CI
+job of HUM-465 boots Debian's cloud kernel for this reason.
 
 **Admission.** As in ADR-0020: the level is refused with `SANDBOX_048` until
 its mount checks and the escape suite against it are green in CI (HUM-445,
