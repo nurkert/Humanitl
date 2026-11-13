@@ -46,6 +46,15 @@
 //! `*`; `flags` is a comma list of `nosuid`, `nodev`, `noexec` (empty for
 //! none) or `*`; `count` is `n` or `min-max`. A descriptor that is missing,
 //! not sealed or not of this shape refuses the start like a mismatch.
+//!
+//! **In a guest kernel** (HUM-465, `guest.rs`) the same table comes inside
+//! the guest plan instead of a descriptor, and two forms exist only there,
+//! because a file system shared from the host keeps the inode of every
+//! object but not its device number (HUM-442, Q5): the source
+//! `tag:<tag>:<ino>` is a mount whose source field is `<tag>` and whose root
+//! has inode `<ino>`, on any device, and a pin with `"dev":"*"` compares the
+//! inode alone. [`parse_pins`] refuses both; only [`parse_guest_pins`]
+//! reads them.
 
 use std::fmt::{self, Write as _};
 use std::os::fd::RawFd;
@@ -56,7 +65,7 @@ use crate::linux::envfd;
 use crate::report::{Check, Report};
 
 /// Where the source of an expected mount is known from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
     /// A bind: device and inode of the bound object.
     Inode(u64, u64),
@@ -64,6 +73,10 @@ pub enum Source {
     Type,
     /// A backend's own entry whose backing object the launcher cannot know.
     Any,
+    /// A file system shared from the host into a guest kernel: the mount's
+    /// source field (the tag) and the inode of its root, any device
+    /// (`tag:<tag>:<ino>`, guest plans only).
+    Tag(String, u64),
 }
 
 /// Read-only, writable, or either.
@@ -143,8 +156,9 @@ pub struct Expected {
 
 impl fmt::Display for Expected {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let source = match self.source {
+        let source = match &self.source {
             Source::Inode(dev, ino) => format!("inode={dev}:{ino}"),
+            Source::Tag(tag, ino) => format!("tag={tag}:{ino}"),
             Source::Type => "type".to_owned(),
             Source::Any => "any".to_owned(),
         };
@@ -174,8 +188,8 @@ impl fmt::Display for Expected {
 pub struct Pin {
     /// The path in the sandbox.
     pub path: String,
-    /// `st_dev`.
-    pub dev: u64,
+    /// `st_dev`; `None` (`"*"`, guest plans only) compares the inode alone.
+    pub dev: Option<u64>,
     /// `st_ino`.
     pub ino: u64,
 }
@@ -200,6 +214,8 @@ pub struct Actual {
     pub point: String,
     /// The file system type.
     pub fstype: String,
+    /// The mount source, the field after the type (a device, a tag).
+    pub source: String,
     /// Mounted read-only.
     pub read_only: bool,
     /// The three flags of the mount.
@@ -246,8 +262,8 @@ impl Mismatch {
 /// Reads and checks the descriptor, compares, writes both `CHECK` lines and
 /// on failure the two tables on stderr. `true` when the agent may start.
 pub fn verify(fd: RawFd, report: &Report) -> bool {
-    let pins = match read(fd) {
-        Ok(pins) => pins,
+    match read(fd) {
+        Ok(pins) => verify_pins(&pins, report),
         Err(why) => {
             let evidence = format!("pins-unreadable:{why}");
             report.check(Check::MountsMatch, false, &evidence);
@@ -255,9 +271,14 @@ pub fn verify(fd: RawFd, report: &Report) -> bool {
             crate::linux::say(&format!(
                 "humanitl-shim: mount check failed: --pins-fd: {why}\n"
             ));
-            return false;
+            false
         }
-    };
+    }
+}
+
+/// [`verify`] for a table already read: from the descriptor, or from the
+/// guest plan (`guest.rs`).
+pub fn verify_pins(pins: &Pins, report: &Report) -> bool {
     let stat = |path: &str| {
         std::fs::symlink_metadata(path)
             .ok()
@@ -389,6 +410,20 @@ impl From<json::Error> for PinsError {
 ///
 /// [`PinsError`] for anything but the shape of the module documentation.
 pub fn parse_pins(text: &str) -> Result<Pins, PinsError> {
+    parse_with(text, false)
+}
+
+/// Parses the table of a guest plan: [`parse_pins`] plus the two forms only a
+/// guest kernel needs, `tag:<tag>:<ino>` and a pin with `"dev":"*"`.
+///
+/// # Errors
+///
+/// [`PinsError`] for anything but the shape of the module documentation.
+pub fn parse_guest_pins(text: &str) -> Result<Pins, PinsError> {
+    parse_with(text, true)
+}
+
+fn parse_with(text: &str, guest: bool) -> Result<Pins, PinsError> {
     let mut parser = Parser::new(text);
     let mut pins = Pins::default();
     let (mut seen_pins, mut seen_mounts) = (false, false);
@@ -404,9 +439,14 @@ pub fn parse_pins(text: &str) -> Result<Pins, PinsError> {
             "pins" if !seen_pins => {
                 seen_pins = true;
                 for object in &objects {
+                    let dev = if guest && field(object, "dev")? == "*" {
+                        None
+                    } else {
+                        Some(number(object, "dev")?)
+                    };
                     pins.pins.push(Pin {
                         path: absolute(field(object, "path")?)?,
-                        dev: number(object, "dev")?,
+                        dev,
                         ino: number(object, "ino")?,
                     });
                 }
@@ -414,7 +454,7 @@ pub fn parse_pins(text: &str) -> Result<Pins, PinsError> {
             "mounts" if !seen_mounts => {
                 seen_mounts = true;
                 for object in &objects {
-                    pins.mounts.push(expected(object)?);
+                    pins.mounts.push(expected(object, guest)?);
                 }
             }
             _ => return Err(PinsError::Field("key", key)),
@@ -495,7 +535,7 @@ fn absolute(path: &str) -> Result<String, PinsError> {
     }
 }
 
-fn expected(object: &[(String, String)]) -> Result<Expected, PinsError> {
+fn expected(object: &[(String, String)], guest: bool) -> Result<Expected, PinsError> {
     for (key, _) in object {
         if !["point", "type", "source", "mode", "flags", "count"].contains(&key.as_str()) {
             return Err(PinsError::Field("key", key.clone()));
@@ -511,6 +551,14 @@ fn expected(object: &[(String, String)]) -> Result<Expected, PinsError> {
     let source = match source_text {
         "type" => Source::Type,
         "any" => Source::Any,
+        other if guest && other.starts_with("tag:") => {
+            let bad = || PinsError::Field("source", other.to_owned());
+            let (tag, ino) = other["tag:".len()..].rsplit_once(':').ok_or_else(bad)?;
+            if tag.is_empty() {
+                return Err(bad());
+            }
+            Source::Tag(tag.to_owned(), ino.parse().map_err(|_| bad())?)
+        }
         other => {
             let bad = || PinsError::Field("source", other.to_owned());
             let rest = other.strip_prefix("inode:").ok_or_else(bad)?;
@@ -589,6 +637,9 @@ pub fn parse_mountinfo(text: &str) -> Vec<Actual> {
                 fstype: after_dash
                     .and_then(|at| fields.get(at + 1))
                     .map_or_else(|| "?".to_owned(), |f| unescape(f)),
+                source: after_dash
+                    .and_then(|at| fields.get(at + 2))
+                    .map_or_else(|| "?".to_owned(), |f| unescape(f)),
                 read_only: options.split(',').any(|option| option == "ro"),
                 flags: Flags::of_options(options),
                 top: true,
@@ -646,7 +697,7 @@ pub fn compare(
     stat: &dyn Fn(&str) -> Option<(u64, u64)>,
 ) -> Mismatch {
     let rank = |entry: &Expected| match entry.source {
-        Source::Inode(..) => 0,
+        Source::Inode(..) | Source::Tag(..) => 0,
         Source::Type => 1,
         Source::Any => 2,
     };
@@ -699,10 +750,17 @@ fn fits(entry: &Expected, mount: &Actual, stat: &dyn Fn(&str) -> Option<(u64, u6
     if !mode_fits || entry.flags.is_some_and(|flags| flags != mount.flags) {
         return false;
     }
-    match entry.source {
+    match &entry.source {
         // Only the topmost mount on a point is what `lstat` sees; one below
         // another can never be the expected bind.
-        Source::Inode(dev, ino) => mount.top && stat(&mount.point) == Some((dev, ino)),
+        Source::Inode(dev, ino) => mount.top && stat(&mount.point) == Some((*dev, *ino)),
+        // The same for a shared file system in a guest, whose device number
+        // is the guest's own (HUM-442, Q5): the tag and the inode decide.
+        Source::Tag(tag, ino) => {
+            mount.top
+                && mount.source == *tag
+                && stat(&mount.point).is_some_and(|(_, found)| found == *ino)
+        }
         Source::Type | Source::Any => true,
     }
 }
@@ -714,11 +772,14 @@ pub fn check_pins(pins: &[Pin], stat: &dyn Fn(&str) -> Option<(u64, u64)>) -> Ve
     pins.iter()
         .filter_map(|pin| {
             let found = stat(&pin.path);
-            (found != Some((pin.dev, pin.ino))).then(|| {
+            let fits = found
+                .is_some_and(|(dev, ino)| ino == pin.ino && pin.dev.is_none_or(|want| want == dev));
+            (!fits).then(|| {
                 format!(
                     "path={};expected={}:{};found={}",
                     pin.path,
-                    pin.dev,
+                    pin.dev
+                        .map_or_else(|| "*".to_owned(), |dev| dev.to_string()),
                     pin.ino,
                     found.map_or_else(|| "missing".to_owned(), |(dev, ino)| format!("{dev}:{ino}"))
                 )
@@ -1010,7 +1071,7 @@ mod tests {
     fn a_pin_differing_in_inode_device_or_both_fails() {
         let pin = |dev, ino| Pin {
             path: "/work".to_owned(),
-            dev,
+            dev: Some(dev),
             ino,
         };
         assert!(check_pins(&[pin(2050, 131)], &stat).is_empty());
@@ -1024,7 +1085,7 @@ mod tests {
         let gone = check_pins(
             &[Pin {
                 path: "/nothing".to_owned(),
-                dev: 1,
+                dev: Some(1),
                 ino: 2,
             }],
             &stat,
@@ -1045,7 +1106,7 @@ mod tests {
             pins.pins,
             [Pin {
                 path: "/work".to_owned(),
-                dev: 2050,
+                dev: Some(2050),
                 ino: 131
             }]
         );
@@ -1078,6 +1139,72 @@ mod tests {
             r#"{"pins":[],"mounts":[{"point":"/","type":"tmpfs","source":"type","mode":"rw","flags":"*","count":"1","extra":"x"}]}"#,
         ] {
             assert!(parse_pins(text).is_err(), "{text:?} parsed");
+        }
+    }
+
+    /// HUM-465: in a guest kernel the shared `/work` has the host's inode
+    /// on the guest's own device (HUM-442, Q5). The tag and the inode decide;
+    /// a different tag, a different inode, a covered mount or a different
+    /// type fail.
+    #[test]
+    fn a_guest_mount_is_matched_by_tag_and_inode_on_any_device() {
+        let table = |source: &str| {
+            parse_guest_pins(&format!(
+                r#"{{"pins":[{{"path":"/work","dev":"*","ino":"131"}}],
+                    "mounts":[{{"point":"/work","type":"virtiofs","source":"{source}","mode":"rw","flags":"nosuid,nodev","count":"1"}}]}}"#
+            ))
+            .unwrap()
+        };
+        let line = "40 1 0:28 / /work rw,nosuid,nodev,relatime - virtiofs work rw\n";
+        let actual = parse_mountinfo(line);
+        assert_eq!(actual[0].source, "work");
+        // `stat` says 2050:131 for /work; the guest device is irrelevant.
+        let pins = table("tag:work:131");
+        assert_eq!(pins.mounts[0].source, Source::Tag("work".to_owned(), 131));
+        assert_eq!(pins.pins[0].dev, None);
+        assert!(compare(&pins.mounts, &actual, &stat).is_empty());
+        assert!(check_pins(&pins.pins, &stat).is_empty());
+        for source in ["tag:other:131", "tag:work:132"] {
+            let mismatch = compare(&table(source).mounts, &actual, &stat);
+            assert_eq!(mismatch.missing.len(), 1, "{source}: {mismatch:?}");
+            assert_eq!(mismatch.extra.len(), 1, "{source}: {mismatch:?}");
+        }
+        let wrong_type = parse_mountinfo("40 1 0:28 / /work rw,nosuid,nodev - tmpfs work rw\n");
+        assert!(!compare(&pins.mounts, &wrong_type, &stat).is_empty());
+        let covered = parse_mountinfo(&format!(
+            "{line}41 40 0:29 / /work rw,nosuid,nodev - virtiofs work rw\n"
+        ));
+        // Both mounts carry the tag; only the top one may count, the other
+        // is extra.
+        assert_eq!(compare(&pins.mounts, &covered, &stat).extra.len(), 1);
+        let other_inode = Pin {
+            path: "/work".to_owned(),
+            dev: None,
+            ino: 9,
+        };
+        assert_eq!(
+            check_pins(&[other_inode], &stat),
+            ["path=/work;expected=*:9;found=2050:131"]
+        );
+    }
+
+    /// The two guest forms are refused behind `--pins-fd`: bwrap and
+    /// a container engine always know the device.
+    #[test]
+    fn the_guest_forms_are_refused_outside_a_guest_plan() {
+        for text in [
+            r#"{"pins":[{"path":"/work","dev":"*","ino":"2"}],"mounts":[]}"#,
+            r#"{"pins":[],"mounts":[{"point":"/work","type":"virtiofs","source":"tag:work:2","mode":"rw","flags":"*","count":"1"}]}"#,
+        ] {
+            assert!(parse_pins(text).is_err(), "{text:?} parsed");
+            assert!(parse_guest_pins(text).is_ok(), "{text:?} refused");
+        }
+        for text in [
+            r#"{"pins":[],"mounts":[{"point":"/work","type":"virtiofs","source":"tag::2","mode":"rw","flags":"*","count":"1"}]}"#,
+            r#"{"pins":[],"mounts":[{"point":"/work","type":"virtiofs","source":"tag:work","mode":"rw","flags":"*","count":"1"}]}"#,
+            r#"{"pins":[],"mounts":[{"point":"/work","type":"virtiofs","source":"tag:work:x","mode":"rw","flags":"*","count":"1"}]}"#,
+        ] {
+            assert!(parse_guest_pins(text).is_err(), "{text:?} parsed");
         }
     }
 }

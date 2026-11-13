@@ -16,12 +16,17 @@
 //! reports as `SANDBOX_007`. [`parse`] reads exactly that shape (with the
 //! reader of `json.rs`) and nothing more: the shim has no serde, and the
 //! launcher is the only writer.
+//!
+//! In a guest kernel (HUM-465) there is no socket file from the host; the
+//! same listener forwards to a vsock port of the host instead
+//! (`Upstream::Vsock`, `Bound::over_vsock`, both Linux only), and the bridge's filter
+//! allows `AF_VSOCK` instead of `AF_UNIX`.
 
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -75,11 +80,37 @@ pub struct Bridge {
     pub socket: PathBuf,
 }
 
+/// Where a bridge forwards each connection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Upstream {
+    /// The Unix socket the launcher put into the sandbox.
+    Unix(PathBuf),
+    /// A port of the host over vsock, in a guest kernel (HUM-465).
+    #[cfg(target_os = "linux")]
+    Vsock {
+        /// The host's CID, always 2.
+        cid: u32,
+        /// The door's port from the guest plan.
+        port: u32,
+    },
+}
+
+impl fmt::Display for Upstream {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unix(path) => write!(f, "{}", path.display()),
+            #[cfg(target_os = "linux")]
+            Self::Vsock { cid, port } => write!(f, "vsock:{cid}:{port}"),
+        }
+    }
+}
+
 /// A bridge whose listener exists; created before the fork so the agent never
 /// sees `ECONNREFUSED`.
 #[derive(Debug)]
 pub struct Bound {
     bridge: Bridge,
+    upstream: Upstream,
     listener: TcpListener,
     limit: usize,
     counters: Arc<Counters>,
@@ -339,6 +370,7 @@ pub fn bind(bridge: Bridge) -> Result<Bound, Error> {
     let listener = TcpListener::bind(bridge.listen)
         .map_err(|err| Error::Bind(bridge.name.clone(), bridge.listen, err))?;
     Ok(Bound {
+        upstream: Upstream::Unix(bridge.socket.clone()),
         bridge,
         listener,
         limit: MAX_CONNECTIONS,
@@ -351,6 +383,24 @@ impl Bound {
     #[must_use]
     pub fn bridge(&self) -> &Bridge {
         &self.bridge
+    }
+
+    /// Where each connection goes.
+    #[must_use]
+    pub fn upstream(&self) -> &Upstream {
+        &self.upstream
+    }
+
+    /// The same bridge, forwarding to `port` of the host over vsock instead of
+    /// the Unix socket (HUM-465).
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn over_vsock(mut self, port: u32) -> Self {
+        self.upstream = Upstream::Vsock {
+            cid: crate::linux::vsock::HOST_CID,
+            port,
+        };
+        self
     }
 
     /// The listener's descriptor, which the shim keeps open when it closes
@@ -412,7 +462,7 @@ impl Bound {
     /// sandbox cannot buy more threads and stacks in the shim than the bound
     /// allows, however many connections it opens.
     pub fn serve(self) {
-        let socket = self.bridge.socket;
+        let upstream = self.upstream;
         let name = self.bridge.name;
         for connection in self.listener.incoming() {
             match connection {
@@ -422,13 +472,13 @@ impl Bound {
                         refuse(&name, &self.counters, self.limit, tcp);
                         continue;
                     }
-                    let socket = socket.clone();
+                    let upstream = upstream.clone();
                     let counters = Arc::clone(&self.counters);
                     let spawned =
                         thread::Builder::new()
                             .name("bridge-conn".to_owned())
                             .spawn(move || {
-                                forward(tcp, &socket);
+                                forward(tcp, &upstream);
                                 counters.live.fetch_sub(1, Ordering::AcqRel);
                             });
                     if spawned.is_err() {
@@ -469,29 +519,64 @@ fn refuse(name: &str, counters: &Counters, limit: usize, tcp: TcpStream) {
 }
 
 /// Copies bytes between one accepted TCP connection and a fresh connection
-/// on the Unix socket, in both directions, until both sides are done.
+/// to the upstream, in both directions, until both sides are done.
 ///
 /// Each direction runs in its own thread and, when its source reaches EOF
 /// (or fails), half-closes its destination with `shutdown(Write)`, so an
 /// HTTP client's "request done" reaches the proxy and the proxy's "response
 /// done" reaches the client. Both descriptors close when the last of the two
 /// threads returns.
-fn forward(tcp: TcpStream, socket: &Path) {
-    let Ok(unix) = UnixStream::connect(socket) else {
-        return;
-    };
+fn forward(tcp: TcpStream, upstream: &Upstream) {
+    match upstream {
+        Upstream::Unix(socket) => {
+            if let Ok(unix) = UnixStream::connect(socket)
+                && let Ok(reader) = unix.try_clone()
+            {
+                relay(tcp, unix, reader);
+            }
+        }
+        #[cfg(target_os = "linux")]
+        Upstream::Vsock { cid, port } => {
+            if let Ok(stream) = crate::linux::vsock::connect(*cid, *port)
+                && let Ok(reader) = stream.try_clone()
+            {
+                relay(tcp, stream, reader);
+            }
+        }
+    }
+}
+
+/// Both directions between `tcp` and one upstream connection, given as a
+/// writer and a reader on it.
+///
+/// When the upstream is done (EOF), so is the connection: the proxy will
+/// read nothing more. The reading side of `tcp` is shut down, which wakes the
+/// other thread from a read on a client that keeps its writing side open,
+/// and the writing side of the upstream connection is shut down, which
+/// wakes the other thread from a write the upstream no longer reads. Then
+/// that thread is joined, so that no thread and no descriptor outlives the
+/// connection (HUM-465 review). A client's half-close still crosses first:
+/// the other thread ends on the client's EOF on its own.
+fn relay<U, R>(tcp: TcpStream, upstream: U, mut upstream_reader: R)
+where
+    U: Write + HalfClose + Send + 'static,
+    R: Read + HalfClose,
+{
     // The proxy answers in small pieces; Nagle would hold them back.
     let _ = tcp.set_nodelay(true);
-    let (Ok(tcp_reader), Ok(unix_reader)) = (tcp.try_clone(), unix.try_clone()) else {
+    let (Ok(tcp_reader), Ok(tcp_control)) = (tcp.try_clone(), tcp.try_clone()) else {
         return;
     };
     let inbound = thread::Builder::new()
         .name("bridge-in".to_owned())
-        .spawn(move || pump(tcp_reader, unix));
-    if inbound.is_err() {
+        .spawn(move || pump(tcp_reader, upstream));
+    let Ok(inbound) = inbound else {
         return;
-    }
-    pump(unix_reader, tcp);
+    };
+    pump(&mut upstream_reader, tcp);
+    let _ = tcp_control.shutdown(Shutdown::Read);
+    upstream_reader.half_close();
+    let _ = inbound.join();
 }
 
 fn pump<R: Read, W: Write + HalfClose>(mut from: R, mut to: W) {
@@ -512,6 +597,13 @@ impl HalfClose for TcpStream {
 impl HalfClose for UnixStream {
     fn half_close(&self) {
         let _ = self.shutdown(Shutdown::Write);
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl HalfClose for crate::linux::vsock::Stream {
+    fn half_close(&self) {
+        self.shutdown_write();
     }
 }
 
@@ -565,6 +657,8 @@ mod tests {
     use std::io::{BufRead, BufReader, ErrorKind};
     use std::os::unix::net::UnixListener;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use std::path::Path;
 
     use super::*;
 
@@ -818,6 +912,143 @@ mod tests {
         let mut got = Vec::new();
         client.read_to_end(&mut got).unwrap();
         assert_eq!(got, b"ping<eof seen>");
+        let _ = std::fs::remove_file(&socket);
+    }
+
+    /// The inode of the bridge's side of the TCP connection from
+    /// `client_port` to `bridge_port`, from `/proc/net/tcp`; `Some(0)` once
+    /// no descriptor of this process holds it any more (an orphaned socket in
+    /// its last TCP states).
+    #[cfg(target_os = "linux")]
+    fn bridge_side_inode(bridge_port: u16, client_port: u16) -> Option<u64> {
+        let table = std::fs::read_to_string("/proc/net/tcp").ok()?;
+        let local = format!("0100007F:{bridge_port:04X}");
+        let remote = format!("0100007F:{client_port:04X}");
+        table.lines().skip(1).find_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            (fields.get(1) == Some(&local.as_str()) && fields.get(2) == Some(&remote.as_str()))
+                .then(|| fields.get(9).and_then(|inode| inode.parse().ok()))
+                .flatten()
+        })
+    }
+
+    /// HUM-465 review: the upstream ends while the client keeps its writing
+    /// side open and sends nothing. The bridge must still let go of the
+    /// connection: both threads end and no descriptor of it stays open.
+    /// Before, the thread copying the client's bytes stayed blocked in its
+    /// read, held a descriptor of the connection and piled up with every
+    /// such connection.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn upstream_eof_releases_a_client_that_keeps_writing() {
+        let socket = socket_path("upstream-eof");
+        let _ = std::fs::remove_file(&socket);
+        let server = UnixListener::bind(&socket).unwrap();
+        thread::spawn(move || {
+            for stream in server.incoming() {
+                let Ok(mut stream) = stream else { break };
+                // Answer at once and close, without reading the request.
+                let _ = stream.write_all(b"done");
+            }
+        });
+        let (addr, counters) = bridge_to_limited(&socket, MAX_CONNECTIONS);
+        for round in 0..20 {
+            // The client sends nothing: a byte to the closed upstream would
+            // end the copying thread through EPIPE and hide the leak.
+            let mut client = TcpStream::connect(addr).unwrap();
+            let mut got = [0u8; 4];
+            client.read_exact(&mut got).unwrap();
+            assert_eq!(&got, b"done");
+            let mut rest = Vec::new();
+            client.read_to_end(&mut rest).unwrap();
+            // The client never writes again and never closes; the bridge's
+            // side must be held by no descriptor within a moment.
+            let client_port = client.local_addr().unwrap().port();
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let released = loop {
+                let inode = bridge_side_inode(addr.port(), client_port);
+                if inode.is_none_or(|inode| inode == 0) {
+                    break true;
+                }
+                if std::time::Instant::now() > deadline {
+                    break false;
+                }
+                thread::sleep(Duration::from_millis(10));
+            };
+            assert!(
+                released,
+                "round {round}: a descriptor of the bridge still holds the connection"
+            );
+            drop(client);
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while counters.live() > 0 && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(counters.live(), 0);
+        let _ = std::fs::remove_file(&socket);
+    }
+
+    /// The upstream ends its answer and stops reading while the client keeps
+    /// streaming a body: the thread that writes the body to the upstream
+    /// blocks in a write. Shutting down the upstream's writing side wakes it,
+    /// so the connection's slot is free again (HUM-465 review).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn upstream_eof_releases_a_thread_stuck_writing_to_the_upstream() {
+        let socket = socket_path("upstream-stall");
+        let _ = std::fs::remove_file(&socket);
+        let server = UnixListener::bind(&socket).unwrap();
+        let (end_answer, answer_ends) = std::sync::mpsc::channel::<()>();
+        thread::spawn(move || {
+            let Ok((stream, _)) = server.accept() else {
+                return;
+            };
+            // Never read; end the answer only when told, and keep the
+            // connection open afterwards.
+            let _ = answer_ends.recv();
+            let _ = stream.shutdown(Shutdown::Write);
+            thread::sleep(Duration::from_secs(30));
+        });
+        let (addr, counters) = bridge_to_limited(&socket, MAX_CONNECTIONS);
+        let client = TcpStream::connect(addr).unwrap();
+        let mut writer = client.try_clone().unwrap();
+        let written = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = std::sync::Arc::clone(&written);
+        thread::spawn(move || {
+            let chunk = vec![0u8; 16 * 1024];
+            while writer.write_all(&chunk).is_ok() {
+                count.fetch_add(chunk.len(), std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+        // The body fills every buffer until the client's writes stall: then a
+        // thread of the bridge sits in a write to the upstream.
+        let mut last = usize::MAX;
+        let filled = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            thread::sleep(Duration::from_millis(300));
+            let now = written.load(std::sync::atomic::Ordering::Relaxed);
+            if (now == last && now > 0) || std::time::Instant::now() > filled {
+                break;
+            }
+            last = now;
+        }
+        assert_eq!(
+            counters.live(),
+            1,
+            "the connection is live while the body stalls"
+        );
+        end_answer.send(()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while counters.live() > 0 && std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            counters.live(),
+            0,
+            "the bridge still holds a connection whose upstream stopped reading"
+        );
+        drop(client);
         let _ = std::fs::remove_file(&socket);
     }
 

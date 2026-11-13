@@ -4,9 +4,11 @@
 //! with this small recursive-descent reader: strings with the usual escapes,
 //! whitespace, and the punctuation of arrays and objects. It knows no numbers,
 //! no `true`, `false` or `null`, and no nesting beyond what its callers walk
-//! themselves. Two callers use it: the bridge list (`HUMANITL_BRIDGES`,
-//! `bridge.rs`) and the environment of the agent behind `--env-fd`
-//! ([`string_map`], HUM-430). Every deviation is an error: the launcher wrote
+//! themselves. Its callers: the bridge list (`HUMANITL_BRIDGES`,
+//! `bridge.rs`), the environment of the agent behind `--env-fd`
+//! ([`string_map`], HUM-430), the mount table behind `--pins-fd`
+//! (`mounts.rs`, HUM-437) and the plan of the guest mode (`guest.rs`,
+//! HUM-465). Every deviation is an error: the launcher wrote
 //! the text, so a surprise means a bug, and a bug is not something to guess
 //! around.
 
@@ -171,32 +173,124 @@ impl<'a> Parser<'a> {
 /// [`Error`] for anything that is not exactly `{ "k": "v", ... }`.
 pub fn string_map(text: &str) -> Result<Vec<(String, String)>, Error> {
     let mut parser = Parser::new(text);
-    parser.skip_ws();
-    parser.expect('{', "expected '{'")?;
-    let mut pairs = Vec::new();
-    parser.skip_ws();
-    if parser.peek() == Some('}') {
-        parser.next();
-    } else {
-        loop {
-            parser.skip_ws();
-            let key = parser.string()?;
-            parser.skip_ws();
-            parser.expect(':', "expected ':'")?;
-            parser.skip_ws();
-            let value = parser.string()?;
-            pairs.push((key, value));
-            parser.skip_ws();
-            match parser.next() {
-                Some(',') => {}
-                Some('}') => break,
-                _ => return Err(parser.error("expected ',' or '}'")),
-            }
-        }
-    }
+    let pairs = parser.string_object()?;
     parser.end()?;
     Ok(pairs)
 }
+
+impl<'a> Parser<'a> {
+    /// One flat object whose values are strings, as `(key, value)` pairs in
+    /// the order of the text; leading whitespace is skipped.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] for anything that is not exactly `{ "k": "v", ... }`.
+    pub fn string_object(&mut self) -> Result<Vec<(String, String)>, Error> {
+        self.skip_ws();
+        self.expect('{', "expected '{'")?;
+        let mut pairs = Vec::new();
+        self.skip_ws();
+        if self.peek() == Some('}') {
+            self.next();
+            return Ok(pairs);
+        }
+        loop {
+            self.skip_ws();
+            let key = self.string()?;
+            self.skip_ws();
+            self.expect(':', "expected ':'")?;
+            self.skip_ws();
+            let value = self.string()?;
+            pairs.push((key, value));
+            self.skip_ws();
+            match self.next() {
+                Some(',') => {}
+                Some('}') => return Ok(pairs),
+                _ => return Err(self.error("expected ',' or '}'")),
+            }
+        }
+    }
+
+    /// One array of strings; leading whitespace is skipped.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] for anything that is not exactly `[ "a", ... ]`.
+    pub fn string_array(&mut self) -> Result<Vec<String>, Error> {
+        self.skip_ws();
+        self.expect('[', "expected '['")?;
+        let mut items = Vec::new();
+        self.skip_ws();
+        if self.peek() == Some(']') {
+            self.next();
+            return Ok(items);
+        }
+        loop {
+            self.skip_ws();
+            items.push(self.string()?);
+            self.skip_ws();
+            match self.next() {
+                Some(',') => {}
+                Some(']') => return Ok(items),
+                _ => return Err(self.error("expected ',' or ']'")),
+            }
+        }
+    }
+
+    /// Takes one value made of strings, arrays and objects, at most
+    /// [`MAX_DEPTH`] deep, and returns its text unparsed, so that a caller
+    /// can hand a nested part to the reader that knows its shape.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] for a number, `true`, `false`, `null`, a broken string or a
+    /// value nested deeper than [`MAX_DEPTH`].
+    pub fn raw_value(&mut self) -> Result<&'a str, Error> {
+        self.skip_ws();
+        let start = self.pos;
+        self.skip_value(0)?;
+        Ok(&self.text[start..self.pos])
+    }
+
+    fn skip_value(&mut self, depth: usize) -> Result<(), Error> {
+        if depth > MAX_DEPTH {
+            return Err(self.error("nested too deep"));
+        }
+        self.skip_ws();
+        let (close, what) = match self.peek() {
+            Some('"') => return self.string().map(drop),
+            Some('[') => (']', "expected ',' or ']'"),
+            Some('{') => ('}', "expected ',' or '}'"),
+            _ => return Err(self.error("expected a string, an array or an object")),
+        };
+        self.next();
+        self.skip_ws();
+        if self.peek() == Some(close) {
+            self.next();
+            return Ok(());
+        }
+        loop {
+            self.skip_ws();
+            if close == '}' {
+                self.string()?;
+                self.skip_ws();
+                self.expect(':', "expected ':'")?;
+            }
+            self.skip_value(depth + 1)?;
+            self.skip_ws();
+            match self.next() {
+                Some(',') => {}
+                Some(c) if c == close => return Ok(()),
+                _ => return Err(self.error(what)),
+            }
+        }
+    }
+}
+
+/// How deep [`Parser::raw_value`] follows arrays and objects; the deepest
+/// shape a launcher writes (the mount table inside the guest plan) has three
+/// levels.
+pub const MAX_DEPTH: usize = 8;
 
 #[cfg(test)]
 mod tests {
@@ -242,5 +336,26 @@ mod tests {
         ] {
             assert!(string_map(text).is_err(), "{text:?} parsed");
         }
+    }
+
+    #[test]
+    fn arrays_objects_and_raw_values_read_in_their_shapes() {
+        let mut parser = Parser::new(r#" ["a", "b\"c"] "#);
+        assert_eq!(parser.string_array().unwrap(), ["a", "b\"c"]);
+        parser.end().unwrap();
+        let mut parser = Parser::new("[]");
+        assert!(parser.string_array().unwrap().is_empty());
+        let text = r#"{"x": {"y": [{"z": "}"}, "]"]}, "w": "v"}"#;
+        let mut parser = Parser::new(text);
+        parser.expect('{', "").unwrap();
+        assert_eq!(parser.string().unwrap(), "x");
+        parser.expect(':', "").unwrap();
+        assert_eq!(parser.raw_value().unwrap(), r#"{"y": [{"z": "}"}, "]"]}"#);
+        for bad in ["[1]", r#"{"a": true}"#, r#"["a" "b"]"#, "[", r#"{"a"}"#] {
+            assert!(Parser::new(bad).raw_value().is_err(), "{bad}");
+        }
+        let deep = format!("{}{}", "[".repeat(MAX_DEPTH + 2), "]".repeat(MAX_DEPTH + 2));
+        assert!(Parser::new(&deep).raw_value().is_err());
+        assert!(Parser::new(r#"["a", 1]"#).string_array().is_err());
     }
 }

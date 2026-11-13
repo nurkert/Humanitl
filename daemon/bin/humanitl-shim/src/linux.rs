@@ -16,8 +16,10 @@
 //! `bridge.rs` (the bytes), `report.rs` (the evidence), `refusals.rs` (what
 //! the filter refused, counted), `channel.rs` (how its listener reaches
 //! the parent), `exec.rs` (further shells the daemon asks for, HUM-299),
-//! `supervise.rs` (PID 1's one loop: children, lifeline, door, HUM-430) and
-//! `envfd.rs` (the agent's environment through a descriptor, HUM-430).
+//! `supervise.rs` (PID 1's one loop: children, lifeline, door, HUM-430),
+//! `envfd.rs` (the agent's environment through a descriptor, HUM-430) and,
+//! for the shim as PID 1 of a guest kernel, `guest.rs`, `modules.rs` and
+//! `vsock.rs` (HUM-465).
 //!
 //! # Launcher <-> shim contract (binding for HUM-011, HUM-012, HUM-013)
 //!
@@ -67,7 +69,10 @@
 //! find; there is no exemption.
 //! `humanitl-shim --rules` prints the seccomp
 //! rule table the same environment would produce, one row per line, and
-//! starts nothing.
+//! starts nothing. `humanitl-shim --guest <path>`, exactly these two
+//! arguments, is the guest mode (HUM-465): the shim is PID 1 of a guest
+//! kernel and takes everything else from the guest plan at `<path>`
+//! (`guest.rs`); as any other process it refuses with exit 125.
 //!
 //! **Environment** (set by the launcher with `--setenv` after `--clearenv`;
 //! none of it reaches the agent, the child removes the five variables before
@@ -155,11 +160,14 @@ mod channel;
 mod contract;
 mod envfd;
 mod exec;
+mod guest;
 mod handover;
+mod modules;
 mod mounts;
 mod refusals;
 mod seccomp;
 mod supervise;
+pub(crate) mod vsock;
 
 use std::env;
 use std::ffi::{CString, OsString, c_char, c_int, c_uint};
@@ -168,7 +176,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -176,7 +184,7 @@ use std::thread;
 
 use seccompiler::BpfProgram;
 
-use crate::bridge::{self, Bound, Bridge};
+use crate::bridge::{self, Bound, Bridge, Upstream};
 use crate::linux::channel::Received;
 use crate::linux::refusals::Tally;
 use crate::linux::seccomp::{Gate, Policy};
@@ -194,6 +202,7 @@ const USAGE: &str = "usage: humanitl-shim --proxy-port <port> [--controlling-ter
                      \x20      [--handover <path> --handover-token <hex>]\n\
                      \x20      -- <command> [args...]\n\
                      \x20      humanitl-shim --rules    print the seccomp rule table for this environment\n\
+                     \x20      humanitl-shim --guest <plan>    PID 1 of a guest kernel (HUM-465)\n\
                      environment: HUMANITL_BRIDGES, HUMANITL_SECCOMP_FAMILIES, HUMANITL_SECCOMP_TYPES,\n\
                      HUMANITL_SECCOMP_DENY, HUMANITL_REPORT_FD (see the crate documentation)\n";
 
@@ -211,11 +220,64 @@ static CHILD: AtomicI32 = AtomicI32::new(0);
 
 /// The entry point on Linux, called from `main.rs`.
 pub(crate) fn main() {
-    std::process::exit(run());
+    let args: Vec<OsString> = env::args_os().skip(1).collect();
+    if let [flag, path] = args.as_slice()
+        && flag == "--guest"
+    {
+        // SAFETY: getpid has no preconditions.
+        if unsafe { libc::getpid() } != 1 {
+            say("humanitl-shim: --guest is for PID 1 of a guest kernel only\n");
+            std::process::exit(EXIT_USAGE);
+        }
+        let code = run_guest(Path::new(path));
+        // PID 1 of a kernel must not return; see `guest.rs`.
+        guest::power_off();
+        std::process::exit(code);
+    }
+    std::process::exit(run(args));
 }
 
-fn run() -> i32 {
-    let cli = match parse_cli(env::args_os().skip(1)) {
+/// The guest mode (HUM-465): the steps of `guest.rs`, the mount table, then
+/// the same launch as under bwrap, with the door over vsock.
+fn run_guest(path: &Path) -> i32 {
+    let Some(guest::Booted { report, plan }) = guest::boot(path) else {
+        return EXIT_SETUP;
+    };
+    if !mounts::verify_pins(&plan.pins, &report) {
+        guest::linger(&report);
+        return EXIT_SETUP;
+    }
+    let cli = Cli {
+        proxy_port: plan.proxy_port,
+        command: plan.command,
+        vsock_door: Some(plan.door_port),
+        ..Cli::default()
+    };
+    // A second descriptor on the report's connection: PID 1 drops the report
+    // when the agent is gone, and the last lines must still reach the host
+    // before the guest powers off.
+    let linger = guest::keep(&report);
+    let code = match prepare(&cli, &report) {
+        Ok(prepared) => launch(
+            prepared,
+            report,
+            &cli,
+            Inherited {
+                control: None,
+                lifeline: None,
+                linger: linger.as_ref().map(AsRawFd::as_raw_fd),
+            },
+        ),
+        Err(err) => refuse_setup(&report, &err),
+    };
+    if let Some(fd) = linger.as_ref() {
+        guest::linger_fd(fd.as_raw_fd());
+    }
+    code
+}
+
+fn run(args: Vec<OsString>) -> i32 {
+    let cli = match parse_cli(args.into_iter()) {
         Ok(cli) => cli,
         Err(CliError::Help) => {
             let _ = io::stdout().lock().write_all(USAGE.as_bytes());
@@ -299,7 +361,16 @@ fn run() -> i32 {
     let control = cli.control_fd.and_then(take_control);
 
     match prepare(&cli, &report) {
-        Ok(prepared) => launch(prepared, report, &cli, Inherited { control, lifeline }),
+        Ok(prepared) => launch(
+            prepared,
+            report,
+            &cli,
+            Inherited {
+                control,
+                lifeline,
+                linger: None,
+            },
+        ),
         Err(err) => refuse_setup(&report, &err),
     }
 }
@@ -353,6 +424,9 @@ struct Inherited {
     control: Option<OwnedFd>,
     /// `--lifeline-fd` (HUM-430).
     lifeline: Option<OwnedFd>,
+    /// In the guest mode, a copy of the report's descriptor that PID 1 keeps
+    /// open past the report (HUM-465); never the agent's.
+    linger: Option<RawFd>,
 }
 
 /// `--rules`: the effective rule table for this environment, one row per
@@ -393,12 +467,25 @@ struct Prepared {
 /// report is already open when this starts.
 fn prepare(cli: &Cli, report: &Report) -> Result<Prepared, SetupError> {
     let policy = policy_from_env()?;
+    // In a guest kernel the agent never gets `AF_UNIX` (HUM-465); the guest
+    // plan refused a profile that asks for it already.
+    let policy = if cli.vsock_door.is_some() {
+        policy.for_guest_agent()
+    } else {
+        policy
+    };
     let agent_program = policy
         .program(Gate::Reported)
         .map_err(SetupError::seccomp)?;
     let agent_fallback = policy.program(Gate::Silent).map_err(SetupError::seccomp)?;
-    let bridge_program = policy
-        .for_bridge()
+    // In a guest kernel the bridge reaches the door over vsock, and its
+    // filter allows that family instead of `AF_UNIX` (HUM-465).
+    let bridge_policy = if cli.vsock_door.is_some() {
+        policy.for_bridge_over_vsock()
+    } else {
+        policy.for_bridge()
+    };
+    let bridge_program = bridge_policy
         .program(Gate::Silent)
         .map_err(SetupError::seccomp)?;
 
@@ -410,7 +497,11 @@ fn prepare(cli: &Cli, report: &Report) -> Result<Prepared, SetupError> {
 
     let mut bound = Vec::with_capacity(bridges.len());
     for bridge in bridges {
-        bound.push(bridge::bind(bridge).map_err(SetupError::bridge)?);
+        let listener = bridge::bind(bridge).map_err(SetupError::bridge)?;
+        bound.push(match cli.vsock_door {
+            Some(port) => listener.over_vsock(port),
+            None => listener,
+        });
     }
     let mut evidence = Vec::with_capacity(bound.len());
     for listener in &bound {
@@ -419,7 +510,7 @@ fn prepare(cli: &Cli, report: &Report) -> Result<Prepared, SetupError> {
             "{}={}->{}",
             listener.bridge().name,
             listener.local_addr(),
-            listener.bridge().socket.display()
+            listener.upstream()
         ));
     }
     report.check(Check::BridgeListening, true, &evidence.join(";"));
@@ -467,7 +558,10 @@ fn check_single_socket(bound: &[Bound], report: &Report) {
     let walk = report::sockets();
     let expected: Vec<String> = bound
         .iter()
-        .map(|listener| listener.bridge().socket.to_string_lossy().into_owned())
+        .filter_map(|listener| match listener.upstream() {
+            Upstream::Unix(path) => Some(path.to_string_lossy().into_owned()),
+            Upstream::Vsock { .. } => None,
+        })
         .collect();
     let unexpected: Vec<&str> = walk
         .sockets
@@ -524,7 +618,11 @@ fn take_control(fd: RawFd) -> Option<OwnedFd> {
 
 /// Step 3 and 4: fork, and each side's life.
 fn launch(prepared: Prepared, report: Report, cli: &Cli, inherited: Inherited) -> i32 {
-    let Inherited { control, lifeline } = inherited;
+    let Inherited {
+        control,
+        lifeline,
+        linger,
+    } = inherited;
     // SAFETY: getpid has no preconditions.
     let parent_pid = unsafe { libc::getpid() };
     // The gate the child waits at before `exec` (HUM-137): it opens when the
@@ -555,6 +653,7 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, inherited: Inherited) -
         gate_write.as_raw_fd(),
         control.as_ref().map_or(-1, AsRawFd::as_raw_fd),
         lifeline.as_ref().map_or(-1, AsRawFd::as_raw_fd),
+        linger.unwrap_or(-1),
     ]);
     close_inherited(&keep);
     // The pair over which the child hands its listener to the parent
@@ -785,7 +884,7 @@ fn child(
         exit_now(EXIT_SETUP);
     }
 
-    match probe_families(policy) {
+    match probe_families(policy, cli.vsock_door.is_some()) {
         Ok(evidence) => report.check(Check::Families, true, &evidence),
         Err(Probe { evidence, fatal }) => {
             report.check(Check::Families, false, &evidence);
@@ -889,14 +988,16 @@ struct Probe {
 
 /// Proves the filter from inside: one family the policy refuses, one type it
 /// refuses, the x32 number of `socket`, `io_uring_setup` from the floor, and
-/// the first allowed family and type as the positive control.
+/// the first allowed family and type as the positive control. In a guest
+/// kernel (`guest`, HUM-465) also `AF_VSOCK`, the family of the door, which
+/// PID 1 may use and the agent never.
 ///
 /// A refusal that does not come back as `EPERM` is fatal: the kernel said the
 /// filter is installed, and the filter is ours, so this cannot happen, and if
 /// it does the agent must not run. A positive control that fails (a kernel
 /// without the family) is reported, not fatal: the agent would only be more
 /// locked in, not less.
-fn probe_families(policy: &Policy) -> Result<String, Probe> {
+fn probe_families(policy: &Policy, guest: bool) -> Result<String, Probe> {
     const DENIED_FAMILIES: [(&str, u32); 4] = [
         ("AF_UNIX", libc::AF_UNIX.unsigned_abs()),
         ("AF_NETLINK", libc::AF_NETLINK.unsigned_abs()),
@@ -943,6 +1044,15 @@ fn probe_families(policy: &Policy) -> Result<String, Probe> {
         expect_eperm(
             format!("socket({},{name})", family.name),
             seccomp::probe_socket(u64::from(family.number), u64::from(*number)),
+        );
+    }
+    if guest {
+        expect_eperm(
+            format!("socket(AF_VSOCK,{})", sock_type.name),
+            seccomp::probe_socket(
+                u64::from(seccomp::VSOCK.number),
+                u64::from(sock_type.number),
+            ),
         );
     }
     expect_eperm(
@@ -1342,6 +1452,7 @@ fn kill_and_reap(child: libc::pid_t) {
 
 // ---- command line and small helpers -----------------------------------------
 
+#[derive(Default)]
 struct Cli {
     proxy_port: u16,
     /// `--controlling-terminal` (HUM-280).
@@ -1361,6 +1472,9 @@ struct Cli {
     /// `--handover-token` (HUM-434).
     handover_token: Option<String>,
     command: Vec<OsString>,
+    /// The guest mode's door (HUM-465): the bridge forwards to this vsock
+    /// port of the host. Never set from the command line.
+    vsock_door: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -1431,6 +1545,7 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
                     handover,
                     handover_token,
                     command,
+                    vsock_door: None,
                 });
             }
             Some("--help" | "-h") => return Err(CliError::Help),

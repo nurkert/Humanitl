@@ -211,6 +211,7 @@ jobs=(
   "goldens=$(b "$app")"
   "escape-tests=$(b "$rust")"
   "escape-tests-podman=$(b "$rust")"
+  "kvm-tests=$(b "$rust")"
   "e2e=$(b "$rust")"
   "e2e-xvfb=$(b "$code")"
   "e2e-agent=$(b "$rust")"
