@@ -228,7 +228,7 @@ const K = {
   key: 'keys/audit.key · 0600',
   auditCmds: ['humanitl audit verify', 'humanitl audit verify --file', 'humanitl audit export'],
   auditTests: ['audit_delete_is_detected', 'audit_truncate_is_detected', 'truncate_above_last_anchor_not_detected_documented'],
-  tcb: 'kernel · bubblewrap · seccomp filter · shim · humanitld · hyper/rustls/rcgen · system cert store · LLM host · audit key · keyring',
+  tcb: 'kernel · bubblewrap or Podman/crun/conmon with its storage and containers.conf · seccomp filter · shim · humanitld · hyper/rustls/rcgen · system cert store · LLM host · audit key · keyring',
   closingCmd: 'humanitl sandbox check',
 };
 

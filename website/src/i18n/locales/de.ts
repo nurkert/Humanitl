@@ -490,9 +490,12 @@ const de = {
       steps: [
         {
           title: 'Im Kasten',
-          text: 'Der Agent schickt eine Anfrage. Unter Linux läuft er in bubblewrap mit `--unshare-all`: eigene Namespaces für user, pid, net, ipc, uts und cgroup. `HTTP_PROXY`, `HTTPS_PROXY` und `ALL_PROXY` zeigen auf `127.0.0.1:3128`, `NO_PROXY` ist leer.',
+          text: 'Der Agent schickt eine Anfrage. Unter Linux läuft er von Haus aus in bubblewrap mit `--unshare-all`: eigene Namespaces für user, pid, net, ipc, uts und cgroup. Wer stattdessen Podman wählt, bekommt rootless Podman mit `crun`: dieselben Namespaces, dieselbe Isolationsstufe, dieselben drei Garantien. `HTTP_PROXY`, `HTTPS_PROXY` und `ALL_PROXY` zeigen auf `127.0.0.1:3128`, `NO_PROXY` ist leer.',
           mono: 'POST https://api.github.com/…',
-          src: [{ label: 'SECURITY.md §3', href: '/docs/security/#3-guarantee-2-exactly-one-door' }],
+          src: [
+            { label: 'SECURITY.md §3', href: '/docs/security/#3-guarantee-2-exactly-one-door' },
+            { label: 'SECURITY.md §13', href: '/docs/security/#13-linux-podman' },
+          ],
         },
         {
           title: 'Die Wände',
@@ -573,7 +576,7 @@ const de = {
         {
           title: 'Keine Netzwerkschnittstelle. Der Verkehr hat kein Ziel.',
           mechanism:
-            'Ein leerer Netz-Namespace mit nur `lo`. `--cap-drop ALL` und `--disable-userns`: kein `CAP_NET_ADMIN`, kein neues Gerät. Auch abstrakte Unix-Sockets bleiben im leeren Namespace.',
+            'Ein leerer Netz-Namespace mit nur `lo`. Unter bubblewrap `--cap-drop ALL` und `--disable-userns`, unter Podman `--network=none`, `--cap-drop=all` und `no-new-privileges`: kein `CAP_NET_ADMIN`, kein neues Gerät. Auch abstrakte Unix-Sockets bleiben im leeren Namespace.',
           manual: ['nur lo', 'leer', 'nur Kopfzeile', '`Current: =`'],
           note: '',
           mac: 'Hier heißt der Satz „kein Weg nach draußen“. Die Interfaces existieren, aber das Profil lässt `connect`, `bind` und `sendto` außer zur Tür mit `EPERM` enden, und es gibt keine Namensauflösung. Gemessen: TCP zu einer öffentlichen IPv4- und IPv6-Adresse und ein UDP-Datagramm, alle verweigert.',
@@ -586,7 +589,7 @@ const de = {
         {
           title: 'Genau eine Tür: ein Socket, der zu Humanitl führt.',
           mechanism:
-            'Eingebunden wird die Socket-Datei, nie ihr Verzeichnis. Alles andere ist eine Positivliste; eine Sperrliste weist `$XDG_RUNTIME_DIR`, `/run`, `/home`, `~/.ssh`, X11, Wayland, D-Bus und Docker mit `SANDBOX_006` ab. Es gibt kein `/etc/resolv.conf`, und Projektordner und Zusatz-Mounts sind per Deskriptor festgenagelt.',
+            'Eingebunden wird die Socket-Datei, nie ihr Verzeichnis. Alles andere ist eine Positivliste; eine Sperrliste weist `$XDG_RUNTIME_DIR`, `/run`, `/home`, `~/.ssh`, X11, Wayland, D-Bus und Docker mit `SANDBOX_006` ab. Es gibt kein `/etc/resolv.conf`, und unter bubblewrap sind Projektordner und Zusatz-Mounts per Deskriptor festgenagelt. Podman bindet über den Pfad ein; der Shim vergleicht nach dem Einhängen Gerät und Inode, und ein vertauschter Ordner lässt den Start mit `SANDBOX_042` scheitern, bevor es den Agenten gibt.',
           manual: ['genau eine Zeile: `/run/humanitl/proxy.sock`', '`sandbox`'],
           note: '`-xtype s`, weil bwrap den Socket über eine leere Datei bindet; kein `-xdev`, weil `/work`, `/tmp`, `/dev/shm` und `/home/agent` eigene Mounts sind.',
           mac: 'Erlaubt sind der Proxy-Socket des Daemons, der Loopback-Port der Sitzung und ein zweiter, zufälliger Port für den eigenen Server des Agenten. Gemessen: Die Tür antwortet, `/var/run/syslog` und ein fremder Loopback-Port nicht.',

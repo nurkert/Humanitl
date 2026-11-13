@@ -491,9 +491,12 @@ const en: Copy = {
       steps: [
         {
           title: 'Inside the box',
-          text: 'The agent sends a request. On Linux it runs in bubblewrap with `--unshare-all`: its own namespaces for user, pid, net, ipc, uts and cgroup. `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` point to `127.0.0.1:3128`, `NO_PROXY` is empty.',
+          text: 'The agent sends a request. On Linux it runs by default in bubblewrap with `--unshare-all`: its own namespaces for user, pid, net, ipc, uts and cgroup. Whoever chooses Podman instead gets rootless Podman with `crun`: the same namespaces, the same isolation level, the same three guarantees. `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` point to `127.0.0.1:3128`, `NO_PROXY` is empty.',
           mono: 'POST https://api.github.com/…',
-          src: [{ label: 'SECURITY.md §3', href: '/en/docs/security/#3-guarantee-2-exactly-one-door' }],
+          src: [
+            { label: 'SECURITY.md §3', href: '/en/docs/security/#3-guarantee-2-exactly-one-door' },
+            { label: 'SECURITY.md §13', href: '/en/docs/security/#13-linux-podman' },
+          ],
         },
         {
           title: 'The walls',
@@ -574,7 +577,7 @@ const en: Copy = {
         {
           title: 'No network interface. There is nowhere for traffic to go.',
           mechanism:
-            'An empty network namespace with only `lo`. `--cap-drop ALL` and `--disable-userns`: no `CAP_NET_ADMIN`, no new device. Abstract Unix sockets stay inside the empty namespace too.',
+            'An empty network namespace with only `lo`. Under bubblewrap `--cap-drop ALL` and `--disable-userns`, under Podman `--network=none`, `--cap-drop=all` and `no-new-privileges`: no `CAP_NET_ADMIN`, no new device. Abstract Unix sockets stay inside the empty namespace too.',
           manual: ['only lo', 'empty', 'header only', '`Current: =`'],
           note: '',
           mac: 'Here the sentence reads “no way out”. The interfaces exist, but the profile makes `connect`, `bind` and `sendto` end in `EPERM` except to the door, and there is no name resolution. Measured: TCP to a public IPv4 and IPv6 address and a UDP datagram, all refused.',
@@ -587,7 +590,7 @@ const en: Copy = {
         {
           title: 'Exactly one door: a socket that leads to Humanitl.',
           mechanism:
-            'The socket file is bound, never its directory. Everything else is an allowlist; a denylist refuses `$XDG_RUNTIME_DIR`, `/run`, `/home`, `~/.ssh`, X11, Wayland, D-Bus and Docker with `SANDBOX_006`. There is no `/etc/resolv.conf`, and the project folder and extra mounts are pinned by descriptor.',
+            'The socket file is bound, never its directory. Everything else is an allowlist; a denylist refuses `$XDG_RUNTIME_DIR`, `/run`, `/home`, `~/.ssh`, X11, Wayland, D-Bus and Docker with `SANDBOX_006`. There is no `/etc/resolv.conf`, and under bubblewrap the project folder and extra mounts are pinned by descriptor. Podman mounts by path; the shim compares device and inode after the mount, and a swapped folder refuses the start with `SANDBOX_042` before the agent exists.',
           manual: ['exactly one line: `/run/humanitl/proxy.sock`', '`sandbox`'],
           note: '`-xtype s` because bwrap binds the socket over an empty file; no `-xdev` because `/work`, `/tmp`, `/dev/shm` and `/home/agent` are separate mounts.',
           mac: 'Allowed are the daemon’s proxy socket, the session’s loopback port and a second random port for the agent’s own server. Measured: the door answers, `/var/run/syslog` and a foreign loopback port do not.',
