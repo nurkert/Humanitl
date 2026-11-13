@@ -1992,8 +1992,11 @@ Podman machine, is refused with `SANDBOX_038`.
 - **Ending the sandbox.** The container runs detached from the `podman run` the daemon starts
   (P7), and PID 1 ignores a signal without a handler (P5, P6). The daemon ends it through the
   engine by name: `podman kill --signal TERM`, after the grace `--signal KILL` and
-  `podman rm --force`. When the daemon dies, the lifeline of HUM-430 ends PID 1. A container a
-  crash still leaves behind carries the label of the daemon's instance and is removed at the next
+  `podman rm --force`. When the daemon dies, the lifeline of HUM-430 ends PID 1. When
+  `podman run` ends without a requested stop, its `--rm` no longer applies: the lifeline ends PID 1
+  within `KILL_GRACE`, and the daemon removes the ended container through the engine right away,
+  with a warning `SANDBOX_041` if that fails; a concurrent stop and this removal never both remove
+  (HUM-452). A container a crash still leaves behind carries the label of the daemon's instance and is removed at the next
   daemon start, with a warning `SANDBOX_041`.
 - **The trusted computing base grows** by Podman, `conmon`, `crun`, the user's container storage
   and the daemon's `containers.conf` (K-27 in [`THREAT-MODEL.md`](THREAT-MODEL.md)).

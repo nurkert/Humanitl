@@ -36,7 +36,7 @@ use rustix::termios::{Winsize, tcsetwinsize};
 
 use crate::bridge_env::{CHECK_NAMES, ExecFailure, ShimCheck};
 use crate::bwrap::{is_userns_failure, userns_diagnostic};
-use crate::launcher::{REPORT_TIMEOUT, Teardown};
+use crate::launcher::{ContainerStop, REPORT_TIMEOUT, Teardown};
 use crate::refusals::{RefusalLine, Refusals};
 
 /// Wie lange [`SandboxHandle::kill`] nach `SIGTERM` wartet, bevor `SIGKILL` folgt.
@@ -45,6 +45,38 @@ pub const KILL_GRACE: Duration = Duration::from_secs(5);
 /// Wie lange [`SandboxHandle::interrupt`] nach `SIGINT` auf das Ende der
 /// Sandbox wartet, bevor der Aufrufer eskaliert.
 pub const INTERRUPT_GRACE: Duration = Duration::from_secs(5);
+
+/// Wie lange ein Stopp oder das Ende der Sitzung höchstens darauf wartet, dass
+/// das Entfernen eines Containers nach dem Ende seines Clients fertig ist
+/// (HUM-452). Länger als die Befehle der Engine dafür zusammen; der Adapter
+/// prüft das beim Übersetzen.
+pub(crate) const REMOVAL_BOUND: Duration = Duration::from_secs(40);
+
+/// Wer einen Container entfernt, wenn sein Client endet (HUM-452).
+///
+/// Genau einer tut es: ein Stopp ([`SandboxHandle::terminate`]) oder, wenn
+/// keiner angefordert war, das Ende des Clients. Wer zuerst kommt, nimmt den
+/// Zustand unter einem Schloss, und der andere entfernt nichts mehr.
+#[derive(Debug, Default)]
+enum Removal {
+    /// Kein Container (Prozess-Backends), oder noch keiner bekannt.
+    #[default]
+    None,
+    /// Der Container ist bekannt, und noch hat niemand das Entfernen
+    /// übernommen.
+    Armed(ContainerStop),
+    /// Ein Stopp hat es übernommen; das Ende des Clients entfernt nichts.
+    ByStop,
+    /// Der Client endete ohne Stopp, und ein eigener Faden entfernt den
+    /// Container über die Engine.
+    AfterExit,
+    /// Das Entfernen nach dem Ende ist gelungen.
+    Done,
+    /// Das Entfernen nach dem Ende scheiterte (`SANDBOX_041`); ein späterer
+    /// Stopp darf es noch einmal versuchen, weil niemand mehr gleichzeitig
+    /// entfernt.
+    Failed,
+}
 
 /// Wie lange nach dem Ende von `bwrap` auf die letzte Zeile der Status-Pipe
 /// gewartet wird, bevor der Befund gefällt wird. Die Pipe schließt mit
@@ -256,6 +288,9 @@ pub(crate) struct Shared {
     /// Was beim Beenden über die Engine schiefging (HUM-433): ein Container,
     /// den es danach womöglich noch gibt.
     teardown_warnings: Mutex<Vec<Diagnostic>>,
+    /// Wer den Container nach dem Ende seines Clients entfernt (HUM-452).
+    removal: Mutex<Removal>,
+    removal_changed: Condvar,
     /// Ob der Bericht des Shims beweist, dass der Befehl startete, weil das
     /// Programm keine Status-Pipe hat (HUM-433): Eine Engine meldet kein
     /// `{"exit-code": N}`. Eine `CHECK`-Zeile kommt erst aus dem Shim in der
@@ -424,7 +459,7 @@ impl Shared {
         }
     }
 
-    pub(crate) fn set_exit(&self, status: ExitStatus) {
+    pub(crate) fn set_exit(self: &Arc<Self>, status: ExitStatus) {
         // Der gestartete Prozess ist zu Ende. Unter einer Container-Engine ist
         // das nur der Client; der Container kann ihn überleben (HUM-292 P7).
         // Die Lebensleine geht deshalb jetzt zu, und der Shim beendet den
@@ -436,6 +471,119 @@ impl Shared {
         }
         *lock(&self.exit) = Some(status);
         self.exited.notify_all();
+        // Ohne angeforderten Stopp gehört der beendete Container niemandem
+        // mehr: `--rm` lag beim Client. Er wird jetzt entfernt (HUM-452).
+        self.remove_after_exit();
+    }
+
+    /// Merkt den Container vor, der nach dem Ende seines Clients entfernt
+    /// wird, wenn bis dahin kein Stopp das übernommen hat (HUM-452).
+    pub(crate) fn arm_removal(self: &Arc<Self>, stop: ContainerStop) {
+        {
+            let mut removal = lock(&self.removal);
+            if !matches!(*removal, Removal::None) {
+                return;
+            }
+            *removal = Removal::Armed(stop);
+        }
+        // Der Client kann schon vor diesem Aufruf geendet haben.
+        if lock(&self.exit).is_some() {
+            self.remove_after_exit();
+        }
+    }
+
+    /// Entfernt den vorgemerkten Container auf einem eigenen Faden, wenn
+    /// noch niemand das Entfernen übernommen hat; sonst nichts.
+    fn remove_after_exit(self: &Arc<Self>) {
+        let stop = {
+            let mut removal = lock(&self.removal);
+            match std::mem::take(&mut *removal) {
+                Removal::Armed(stop) => {
+                    *removal = Removal::AfterExit;
+                    stop
+                }
+                other => {
+                    *removal = other;
+                    return;
+                }
+            }
+        };
+        self.removal_changed.notify_all();
+        let shared = Arc::clone(self);
+        let fallback = stop.clone();
+        let spawned = std::thread::Builder::new()
+            .name("container-removal".to_owned())
+            .spawn(move || shared.finish_removal(stop.remove_after_exit()));
+        // Ohne Faden wird hier entfernt: lieber ein später gesetzter Status
+        // als ein Container, der liegen bleibt.
+        if spawned.is_err() {
+            self.finish_removal(fallback.remove_after_exit());
+        }
+    }
+
+    fn finish_removal(&self, warning: Option<Diagnostic>) {
+        let state = if warning.is_some() {
+            Removal::Failed
+        } else {
+            Removal::Done
+        };
+        if let Some(warning) = warning {
+            lock(&self.teardown_warnings).push(warning);
+        }
+        *lock(&self.removal) = state;
+        self.removal_changed.notify_all();
+    }
+
+    /// Übernimmt das Entfernen für einen Stopp. `true`: Der Stopp beendet und
+    /// entfernt selbst. `false`: Das Ende des Clients hat es schon
+    /// übernommen; dann ist hier nichts mehr zu tun, und gewartet wird
+    /// höchstens [`REMOVAL_BOUND`], bis es fertig ist.
+    fn claim_removal_for_stop(&self) -> bool {
+        {
+            let mut removal = lock(&self.removal);
+            match &*removal {
+                Removal::None | Removal::ByStop => return true,
+                Removal::Armed(_) | Removal::Failed => {
+                    *removal = Removal::ByStop;
+                    drop(removal);
+                    self.removal_changed.notify_all();
+                    return true;
+                }
+                Removal::AfterExit | Removal::Done => {}
+            }
+        }
+        let _ = self.wait_removal(REMOVAL_BOUND);
+        false
+    }
+
+    /// Wartet höchstens `timeout`, bis kein Entfernen nach dem Ende mehr
+    /// läuft; `false`, wenn es danach noch läuft.
+    fn wait_removal(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut removal = lock(&self.removal);
+        loop {
+            // Vorgemerkt bei schon gesetztem Status heißt: `set_exit` hat den
+            // Status gesetzt und die Wartenden geweckt, aber das Entfernen
+            // noch nicht übernommen. Es kommt gleich und wird abgewartet,
+            // damit sein Befund nicht am Ereignis `Exit` vorbeigeht.
+            let pending = match &*removal {
+                Removal::AfterExit => true,
+                Removal::Armed(_) => lock(&self.exit).is_some(),
+                _ => false,
+            };
+            if !pending {
+                return true;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            removal = self
+                .removal_changed
+                .wait_timeout(removal, deadline - now)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
     }
 
     pub(crate) fn push_check(&self, check: ShimCheck) {
@@ -832,6 +980,9 @@ impl SandboxHandle {
 
     /// Setzt, was der Plan über das Beenden und die Frist des Berichts sagt.
     pub(crate) fn with_launch(mut self, teardown: Teardown, report_timeout: Duration) -> Self {
+        if let Teardown::Container(stop) = &teardown {
+            self.shared.arm_removal(stop.clone());
+        }
         self.teardown = teardown;
         self.report_timeout = report_timeout;
         self
@@ -968,6 +1119,13 @@ impl SandboxHandle {
     /// er ist die Messung für den, der sie nennen muss.
     #[allow(clippy::must_use_candidate)]
     pub fn terminate(&self, grace: Duration) -> Termination {
+        // Zuerst der Anspruch, dann die Signale (HUM-452): Endet der Client
+        // durch diesen Stopp, entfernt sein Ende den Container nicht noch
+        // einmal. Hat ein ungeplantes Ende ihn schon übernommen, ist der
+        // Client weg, und hier bleibt nichts zu tun.
+        if !self.shared.claim_removal_for_stop() {
+            return self.terminate_process(grace);
+        }
         let termination = self.terminate_process(grace);
         // Das Ende des Clients sagt nichts über den Container (HUM-292 P7):
         // Er wird über die Engine beendet und entfernt, gleich wie der Client
@@ -978,6 +1136,16 @@ impl SandboxHandle {
             lock(&self.shared.teardown_warnings).push(warning);
         }
         termination
+    }
+
+    /// Wartet, bis ein Container, dessen Client ohne Stopp endete, über die
+    /// Engine entfernt ist (HUM-452), höchstens 40 Sekunden; `false`, wenn
+    /// das Entfernen danach noch läuft. Ein Scheitern steht danach in
+    /// [`SandboxHandle::take_teardown_warnings`]. Ohne Container kehrt es
+    /// sofort zurück.
+    #[allow(clippy::must_use_candidate)]
+    pub fn wait_teardown(&self) -> bool {
+        self.shared.wait_removal(REMOVAL_BOUND)
     }
 
     /// Was beim Beenden über die Engine schiefging (HUM-433): je Fall ein
@@ -1816,76 +1984,204 @@ mod tests {
         assert_eq!(handle.terminate(grace), Termination::AlreadyEnded);
     }
 
-    /// HUM-433: Endet der Client der Engine, während der Container weiterläuft
-    /// (P7), geht die Lebensleine zu, und ein späteres Beenden fragt die
-    /// Engine trotzdem nach dem Container: `kill` und `rm`, nicht nur
-    /// `AlreadyEnded`.
+    /// Eine Attrappe der Engine: Sie schreibt jeden Aufruf nach `calls`, und
+    /// `container exists` sagt „da", solange `still-there` liegt. Mit
+    /// `client` beendet `kill` diesen Prozess, wie die echte Engine mit dem
+    /// Container auch seinen Client beendet.
     #[cfg(target_os = "linux")]
-    #[test]
-    fn a_container_is_torn_down_even_when_its_client_already_ended() {
-        use crate::launcher::{ContainerStop, Teardown};
-
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("calls");
-        let engine = dir.path().join("engine");
+    fn fake_engine(dir: &std::path::Path, client: Option<u32>) -> crate::launcher::ContainerStop {
+        let program = dir.join("engine");
+        let on_kill = client.map_or_else(String::new, |pid| {
+            format!("if [ \"$1\" = kill ]; then kill -9 {pid}; fi\n")
+        });
         crate::test_support::write_program(
-            &engine,
+            &program,
             &format!(
-                "#!/bin/sh\necho \"$*\" >> {}\n\
+                "#!/bin/sh\necho \"$*\" >> {}\n{on_kill}\
                  if [ \"$1\" = container ]; then test -e {}; exit $?; fi\n",
-                log.display(),
-                dir.path().join("still-there").display()
+                dir.join("calls").display(),
+                dir.join("still-there").display()
             ),
         );
+        crate::launcher::ContainerStop {
+            program,
+            name: "humanitl-probe".to_owned(),
+            env: Vec::new(),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn calls(dir: &std::path::Path) -> String {
+        std::fs::read_to_string(dir.join("calls")).unwrap_or_default()
+    }
+
+    /// HUM-452: Endet der Client der Engine, ohne dass ein Stopp angefordert
+    /// war, geht die Lebensleine zu, und der Daemon entfernt den beendeten
+    /// Container selbst: `wait`, dann `rm`, genau einmal. Ein späteres `kill`
+    /// entfernt nichts zum zweiten Mal.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_client_ending_without_a_stop_removes_its_container_once() {
+        use crate::launcher::Teardown;
+
+        let dir = tempfile::tempdir().unwrap();
         let shared = Arc::new(Shared::default());
         let (lifeline, read) = crate::shim_fds::Lifeline::new().unwrap();
         shared.hold_lifeline(lifeline);
-        let stop = ContainerStop {
-            program: engine,
-            name: "humanitl-probe".to_owned(),
-            env: Vec::new(),
-        };
         let handle = SandboxHandle::new(
             SandboxId::new(),
             u32::MAX,
             String::new(),
             Arc::clone(&shared),
         )
-        .with_launch(Teardown::Container(stop), Duration::from_secs(1));
+        .with_launch(
+            Teardown::Container(fake_engine(dir.path(), None)),
+            Duration::from_secs(1),
+        );
+        assert!(calls(dir.path()).is_empty(), "nothing before the end");
 
-        // Der Client endet von selbst; der Container ist nicht gefragt worden.
+        // Der Client endet von selbst; niemand hat einen Stopp verlangt.
         shared.set_exit(ExitStatus::from_raw(9));
         // Nicht blockierend: Ein offenes Schreibende hieße `EAGAIN`, ein
-        // geschlossenes `EOF`.
+        // geschlossenes `EOF`. Kurz wiederholt: Ein Kind, das ein anderer
+        // Test gerade startet, hält das Schreibende zwischen `fork` und
+        // `exec` womöglich noch einen Augenblick (`CLOEXEC` greift erst dort).
         rustix::fs::fcntl_setfl(&read, rustix::fs::OFlags::NONBLOCK).unwrap();
         let mut buffer = [0u8; 8];
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let closed = loop {
+            let read = rustix::io::read(&read, &mut buffer[..]);
+            if read == Ok(0) || std::time::Instant::now() > deadline {
+                break read;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(closed, Ok(0), "the lifeline is closed once the client ends");
+        assert!(handle.wait_teardown(), "the removal finished");
+        let after_exit = calls(dir.path());
         assert_eq!(
-            rustix::io::read(&read, &mut buffer[..]),
-            Ok(0),
-            "the lifeline is closed once the client ends"
-        );
-
-        assert_eq!(handle.kill(), Termination::AlreadyEnded);
-        let calls = std::fs::read_to_string(&log).unwrap_or_default();
-        assert!(
-            calls.contains("kill --signal KILL humanitl-probe"),
-            "{calls}"
-        );
-        assert!(
-            calls.contains("rm --force --time 0 --ignore humanitl-probe"),
-            "{calls}"
+            after_exit.lines().collect::<Vec<_>>(),
+            [
+                "wait humanitl-probe",
+                "rm --force --time 0 --ignore humanitl-probe",
+                "container exists humanitl-probe",
+            ],
+            "{after_exit}"
         );
         assert!(
             handle.take_teardown_warnings().is_empty(),
             "the container is gone"
         );
 
-        // Bleibt er, sagt das eine Warnung mit dem Befehl von Hand.
-        std::fs::write(dir.path().join("still-there"), b"").unwrap();
+        // Ein Stopp danach findet nichts mehr zu tun und fragt die Engine
+        // nicht noch einmal.
         assert_eq!(handle.kill(), Termination::AlreadyEnded);
+        assert_eq!(calls(dir.path()), after_exit, "no second removal");
+    }
+
+    /// Bleibt der Container nach dem ungeplanten Ende liegen, sagt das genau
+    /// eine Warnung `SANDBOX_041` mit dem Befehl, der ihn von Hand entfernt.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_container_left_after_an_unplanned_end_is_sandbox_041() {
+        use crate::launcher::Teardown;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("still-there"), b"").unwrap();
+        let shared = Arc::new(Shared::default());
+        let handle = SandboxHandle::new(
+            SandboxId::new(),
+            u32::MAX,
+            String::new(),
+            Arc::clone(&shared),
+        )
+        .with_launch(
+            Teardown::Container(fake_engine(dir.path(), None)),
+            Duration::from_secs(1),
+        );
+        shared.set_exit(ExitStatus::from_raw(9));
+        assert!(handle.wait_teardown());
         let warnings = handle.take_teardown_warnings();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert_eq!(warnings[0].code.as_str(), "SANDBOX_041");
+        assert_eq!(warnings[0].severity, humanitl_core::Severity::Warning);
+        assert!(
+            warnings[0].why.contains("without a stop"),
+            "{}",
+            warnings[0].why
+        );
         assert!(warnings[0].fix.is_some());
+        // Nach dem gescheiterten Entfernen versucht ein ausdrücklicher Stopp
+        // es noch einmal über die Engine; gleichzeitig entfernt niemand mehr.
+        let before = calls(dir.path());
+        let _ = handle.kill();
+        let retried = calls(dir.path());
+        assert!(
+            retried.len() > before.len() && retried[before.len()..].contains("rm "),
+            "a kill after a failed removal retries it: {retried}"
+        );
+    }
+
+    /// Endete der Client schon, bevor das Handle den Container kannte, wird
+    /// er trotzdem entfernt.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_client_that_ended_before_the_handle_knew_its_container_is_removed() {
+        use crate::launcher::Teardown;
+
+        let dir = tempfile::tempdir().unwrap();
+        let shared = Arc::new(Shared::default());
+        shared.set_exit(ExitStatus::from_raw(9));
+        let handle = SandboxHandle::new(
+            SandboxId::new(),
+            u32::MAX,
+            String::new(),
+            Arc::clone(&shared),
+        )
+        .with_launch(
+            Teardown::Container(fake_engine(dir.path(), None)),
+            Duration::from_secs(1),
+        );
+        assert!(handle.wait_teardown());
+        let seen = calls(dir.path());
+        assert!(
+            seen.contains("rm --force --time 0 --ignore humanitl-probe"),
+            "{seen}"
+        );
+    }
+
+    /// Ein Stopp, der den Client beendet, entfernt den Container selbst; das
+    /// Ende des Clients, das er auslöst, entfernt nichts zum zweiten Mal
+    /// (HUM-452, Fallstrick).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_stop_and_the_end_it_causes_remove_only_once() {
+        use crate::launcher::Teardown;
+
+        let child = deaf_child("while :; do sleep 0.05; done");
+        settle();
+        let dir = tempfile::tempdir().unwrap();
+        let handle = SandboxHandle::new(
+            SandboxId::new(),
+            child.pid,
+            String::new(),
+            Arc::clone(&child.shared),
+        )
+        .with_launch(
+            Teardown::Container(fake_engine(dir.path(), Some(child.pid))),
+            Duration::from_secs(1),
+        );
+
+        assert_eq!(handle.terminate(Duration::from_secs(5)), Termination::Term);
+        // Läge das Entfernen nach dem Ende doch noch an, wäre es hier fertig.
+        assert!(handle.wait_teardown());
+        let seen = calls(dir.path());
+        assert!(
+            !seen.lines().any(|line| line.starts_with("wait ")),
+            "the end caused by the stop removes nothing: {seen}"
+        );
+        let removals = seen.lines().filter(|line| line.starts_with("rm ")).count();
+        assert_eq!(removals, 1, "{seen}");
+        assert!(handle.take_teardown_warnings().is_empty());
     }
 }

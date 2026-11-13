@@ -1128,7 +1128,8 @@ mod live {
 
     /// Stirbt der Client der Engine, während der Container weiterläuft
     /// (P7), geht die Lebensleine zu: Der Container endet binnen
-    /// `KILL_GRACE`, und ein späteres `kill` räumt über die Engine auf.
+    /// `KILL_GRACE`, und der Daemon entfernt ihn ohne `kill` der Sitzung
+    /// (HUM-452); er steht danach auch in `ps --all` nicht mehr.
     #[test]
     fn a_killed_client_does_not_leave_the_container_running() {
         killed_client_case(
@@ -1168,8 +1169,9 @@ mod live {
             handle.wait_timeout(Duration::from_secs(20)).is_some(),
             "the killed client is reaped"
         );
-        // Die Lebensleine beendet den Container; entfernt wird er erst von
-        // `kill` über die Engine, denn `--rm` gehörte dem getöteten Client.
+        // Die Lebensleine beendet den Container. `--rm` gehörte dem
+        // getöteten Client; entfernt wird er vom Daemon, sobald er beendet
+        // ist (HUM-452), und ausdrücklich ohne `kill` der Sitzung.
         let killed = Instant::now();
         while !running(&fx.paths, &backend).is_empty() {
             assert!(
@@ -1179,11 +1181,34 @@ mod live {
             );
             std::thread::sleep(Duration::from_millis(200));
         }
-        assert_eq!(handle.kill(), crate::handle::Termination::AlreadyEnded);
-        assert!(
-            containers(&fx.paths, &backend).is_empty(),
-            "kill removes the ended container through the engine"
+        eprintln!(
+            "{test}: the container stopped running {:?} after its client was killed",
+            killed.elapsed()
         );
+        loop {
+            let left = containers(&fx.paths, &backend);
+            if left.is_empty() {
+                break;
+            }
+            assert!(
+                killed.elapsed() < KILL_GRACE + Duration::from_secs(25),
+                "an ended container is left without a kill of the session after {:?}: {left:?}; \
+                 warnings so far: {:?}",
+                killed.elapsed(),
+                handle.take_teardown_warnings()
+            );
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        eprintln!(
+            "{test}: ps --all is empty {:?} after its client was killed",
+            killed.elapsed()
+        );
+        assert!(handle.wait_teardown(), "the removal finished");
+        let warnings = handle.take_teardown_warnings();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        // Ein Stopp danach hat nichts mehr zu tun.
+        assert_eq!(handle.kill(), crate::handle::Termination::AlreadyEnded);
+        assert!(containers(&fx.paths, &backend).is_empty());
     }
 
     /// Die Hälfte im Kind: spielt den Daemon, startet eine Sitzung, nennt

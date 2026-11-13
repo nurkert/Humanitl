@@ -2132,7 +2132,19 @@ impl Inner {
             return;
         };
         let report = Arc::clone(&handle);
+        let settle = Arc::clone(&handle);
         let waited = tokio::task::spawn_blocking(move || handle.wait()).await;
+        // Endete der Client ohne Stopp, entfernt das Backend einen Container
+        // danach selbst (HUM-452). Was dabei scheiterte, gehört vor den
+        // Exit-Code, damit ein Client, der beim Exit aufhört zu lesen, es hat.
+        let settled = tokio::task::spawn_blocking(move || {
+            let _ = settle.wait_teardown();
+            teardown_findings(&settle)
+        })
+        .await;
+        for finding in settled.iter().flatten() {
+            let _ = tx.send(diagnostic_event(finding)).await;
+        }
         let code = match waited {
             Ok(Ok(status)) => exit_code_of(status),
             Ok(Err(diagnostic)) => {
@@ -4525,7 +4537,8 @@ impl Farewell {
 }
 
 /// Nimmt die Warnungen, die das Beenden über eine Container-Engine
-/// hinterließ (HUM-433), und schreibt jede ins Protokoll des Daemons: Auch
+/// hinterließ (HUM-433), auch das Entfernen nach einem Ende ohne Stopp
+/// (HUM-452), und schreibt jede ins Protokoll des Daemons: Auch
 /// ohne Zuhörer am Ereignisstrom bleibt so eine Spur, dass ein Container
 /// seine Sitzung überlebt haben könnte.
 fn teardown_findings(handle: &SandboxHandle) -> Vec<Diagnostic> {
