@@ -1,6 +1,6 @@
 ---
 source: adr/0002-bwrap-first.md
-source-sha256: 39f6937ab42ae697e347d786f362d2b2fdcf5f6130113a659dcb852da709febc
+source-sha256: 9eafe66c06d09aa704c22f536ccad03abf3ef9d27f52cd70027f99bfaf79446a
 lang: de
 ---
 # ADR-0002 · Zuerst bubblewrap, Docker später als zweites Backend
@@ -156,10 +156,32 @@ weil der Kernel einem Namespace-init keine Signale ohne Handler zustellt. Endet 
 endet die Sandbox. `/proc/1/status` zeigt jetzt `Seccomp: 2`, und ESC-1 prüft PID 1 ohne
 Ausnahme.
 
+## Nachtrag 2026-11-13: Podman statt Docker als zweites Linux-Backend (HUM-441)
+
+Aus „Docker später als zweites Backend" wurde Podman (ADR-0020). Podman läuft
+ohne Root, ohne einen Dienst, der als root läuft, und ohne einen Socket, der
+jeden, der ihn erreicht, zu root auf dem Host macht; deshalb hat diese
+Entscheidung Docker verworfen. Der Adapter (HUM-433) ist eine zweite
+Implementierung von `SandboxBackend` in `daemon/crates/sandbox/src/podman/`,
+und wie versprochen hat er weder Kern noch Anwendung berührt. Seit HUM-448
+lässt er sich auf der Stufe `namespaces` wählen, mit der OCI-Laufzeit `crun`:
+derselbe Shim als PID 1, derselbe Filter und dieselben fünf `CHECK`-Zeilen, die
+Escape-Suite gegen ihn grün im CI-Job `escape-tests-podman`
+(`docs/SECURITY.md` Abschnitt 13). `auto` bleibt bubblewrap, also bleibt
+bubblewrap unter Linux die Vorgabe. Die Stufe mit eigenem Gastkern (`krun`) ist
+nicht zugelassen (HUM-449).
+
+Die Kommandozeile als lesbare Richtlinie bleibt: `humanitl sandbox argv` zeigt
+eine Vorschau der Kommandozeile des gewählten Backends (mit Platzhalter für
+den Übergabe-Token und verdeckten Werten). Die Tabelle, die die
+Oberfläche zeigt, entsteht nicht mehr aus den bwrap-Flags, sondern aus dem
+neutralen Plan, den jedes Backend liefert (`PlanPreview`, HUM-428, HUM-429).
+
 ## Betroffene Issues
 
 `HUM-010` (Format der Sandbox-Profile), `HUM-011` (bwrap-Launcher), `HUM-012`
 (humanitl-shim mit seccomp), `HUM-013` (Einbinden des Proxy-Sockets), `HUM-006`
 (Harness der Escape-Tests), `HUM-040` (Bildschirm „Sandbox“), `HUM-041`
 (Bereich der Isolationsprüfung), `HUM-043` (Härtung von `/work`), `HUM-075`
-(`humanitl doctor`), `HUM-203` (`--as-pid-1`, Nachtrag).
+(`humanitl doctor`), `HUM-203` (`--as-pid-1`, Nachtrag), `HUM-441` (Podman
+statt Docker, Nachtrag).

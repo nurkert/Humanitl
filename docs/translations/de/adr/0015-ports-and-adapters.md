@@ -1,6 +1,6 @@
 ---
 source: adr/0015-ports-and-adapters.md
-source-sha256: cfd4483aa0fac82b63d42219cfbf3efa04ca8b45e99c2ffba428cb2e17ef491c
+source-sha256: 9fcc32f1baaa340bf71aa3faf87ce3e4e9fe23d498cc5532b6e4cc35614c7fee
 lang: de
 ---
 # ADR-0015 · Ports und Adapter mit maschinell erzwungener Abhängigkeitsrichtung
@@ -49,7 +49,7 @@ Implementierung:
 
 | Port | Definiert in | MVP-Adapter | Spätere Adapter |
 |---|---|---|---|
-| `SandboxBackend` | sandbox | bwrap | docker, seatbelt, microvm |
+| `SandboxBackend` | sandbox | bwrap | seatbelt (macOS, ADR-0019), podman (Linux, Laufzeiten `crun` und `krun`, ADR-0020) |
 | `AgentAdapter` | core | opencode | aider, codex, claude-code |
 | `Detector` | findings | regex/checksum | presidio-grpc, wasm |
 | `FlowStore` | recorder | sqlite | postgres (Team) |
@@ -173,9 +173,25 @@ Fehler, der die Egress-Garantie still untergraben würde.
   Gewinn: Eine Änderung an der Regelauswertung erzwingt nie eine Änderung an der
   Protobuf-Definition.
 
+## Nachtrag 2026-11-13: Die Adapter von `SandboxBackend` (HUM-441)
+
+Die Port-Tabelle nennt `bwrap`, `seatbelt` und `podman` als die Adapter von
+`SandboxBackend`. Die späteren Adapter `docker` und `microvm` der ersten
+Fassung sind durch `podman` mit seinen zwei OCI-Laufzeiten ersetzt (ADR-0020):
+`crun` teilt den Kern des Hosts wie bwrap, `krun` startet einen Gastkern in
+einer Micro-VM. Seatbelt gibt es nur im Build für macOS; unter Linux fällt die Wahl
+zwischen bwrap und Podman. Daemon und Kommandozeile halten statt des früheren Alias
+zur Übersetzungszeit ein Enum `Backend` mit einer Variante je Adapter
+(HUM-428), gewählt zur Laufzeit über `sandbox.backend`. Die Namen des
+Podman-Adapters stehen nur in `daemon/crates/sandbox/src/podman/`, bewacht von
+`tools/coupling-baseline.toml` (HUM-145). Von den dreien sind bwrap und
+Seatbelt zugelassen und Podman mit `crun` seit HUM-448; Podman mit `krun` ist
+noch nicht zugelassen (HUM-449).
+
 ## Betroffene Issues
 
 `HUM-074` (Abhängigkeits-Lint `tools/check-deps.sh`), `HUM-001`
 (Monorepo-Aufbau mit der Aufteilung in Crates), `HUM-004` (core-types als Kern
 ohne IO), `HUM-002` (CI-Job `deps-lint`), `HUM-062` (Konfiguration im Kern,
-Vorrang als reine Funktion).
+Vorrang als reine Funktion), `HUM-441` (die Adapter von `SandboxBackend`,
+Nachtrag).

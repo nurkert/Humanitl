@@ -57,6 +57,8 @@ Agent läuft darin, und `humanitl run` endet mit dem Exit-Code des Agenten.
 | `--ask ui\|terminal\|none` | `hold.ask_mode` | Wo über eine angehaltene Anfrage entschieden wird. Siehe unten. |
 | `--llm URL` | `llm.endpoint` | Das Sprachmodell dieser Session. Daraus entsteht die erklärte Durchleitung: eine Regel auf Rang 1, die nicht angehalten wird und deine eigenen Blockierregeln überholt, für die Inferenzpfade dieses einen Hosts. Sie steht als eigene Regel in der Liste, unter `http://humanitl.internal/` und in der Aufzeichnung. Liegt die Adresse ihrem Namen nach nicht in deinem eigenen Netz, meldet der Start `LLM_006`; die Session startet trotzdem. Aufgelöst wird dafür nichts. |
 | `--llm NAME` | `llm.server` | Einer der gespeicherten Modellserver für diesen Lauf (HUM-400): Ein Wert ohne `://` ist ein Name, keine Adresse, und dasselbe wie `--llm-server NAME`. Er geht dem Server vor, den das Projekt-Profil, ein Profil der Session oder `llm.active` wählt, und nur dieser Server ist die Durchleitung und bekommt seinen gespeicherten Schlüssel. Ein Name, der nicht gespeichert ist, lehnt den Start mit `CONFIG_021` ab; einen Rückfall auf den aktiven Server gibt es nicht. Ein Daemon vor Vertrag 1.28 kann die Wahl nicht annehmen und bekommt `CLI_004` statt eines Starts mit einem anderen Server. Beim Start gibt `humanitl run` den Server der Session aus und woher die Wahl kommt (`[humanitl] llm server: work (chosen by the project profile …)`). |
+| `--backend auto\|bwrap\|podman\|seatbelt` | `sandbox.backend` | Das Sandbox-Backend dieses Laufs (HUM-432), der Kurzname von `--sandbox-backend`. `auto` ist bubblewrap unter Linux und Seatbelt unter macOS. Ein gewähltes Backend fällt nie auf ein anderes zurück. Siehe „Das Sandbox-Backend wählen". |
+| `--podman-runtime crun\|krun` | `sandbox.podman.runtime` | Die OCI-Laufzeit unter Podman für diesen Lauf, der Kurzname von `--sandbox-podman-runtime`. Sie braucht Podman als Backend; mit jedem anderen Backend endet der Start mit `SANDBOX_034`, statt auf einer anderen Isolationsstufe zu laufen als der verlangten. `krun` ist noch nicht zugelassen (`SANDBOX_048`). |
 | `-- CMD...` | `agent.command` | Der Befehl in der Sandbox, statt des Agenten aus der Konfiguration. `-- bash` ist der Weg, sich die Sandbox von innen anzusehen und den Agenten dort von Hand zu starten (siehe „Eine Shell für den Agenten"). |
 
 **Woher das Projektverzeichnis kommt (HUM-293).** `humanitl run`,
@@ -109,8 +111,10 @@ den Daemon und liest die Erklärung weiter aus der Datei, die es nennt.
 
 Jedes andere Konfigurations-Flag (`--hold-timeout-secs`, `--findings-enabled`
 und so weiter) gehört zur Konfiguration und nicht zu einer Session. Der Daemon
-nimmt vom Client nur zwei Pfade an, `llm.endpoint` und `hold.timeout_secs`, und
-beantwortet jeden anderen mit `CONFIG_003`. Der Grund steht in
+nimmt vom Client nur vier Pfade an, `llm.endpoint`, `hold.timeout_secs`,
+`sandbox.backend` und `sandbox.podman.runtime`, und beantwortet jeden anderen
+mit `CONFIG_003`; für die beiden Pfade des Backends gelten trotzdem
+`sandbox.min_isolation` und die Zulassung. Der Grund steht in
 `backlog/CONVENTIONS.md` 4.26: Ein Client, der jeden Schlüssel setzen könnte,
 würde damit über die Mount-Fläche der Sandbox und den Prozess darin entscheiden.
 Wer einen anderen Wert ändern will, schreibt ihn in `config.toml` oder in ein
@@ -286,6 +290,63 @@ wartet, bis die Änderungen des letzten angewendet oder verworfen sind
 (`SANDBOX_030`); ein Lauf, dessen Schicht über ihre Obergrenze im RAM wächst,
 wird gestoppt (`SANDBOX_032`). `humanitl sandbox run --disposable` behält nach
 dem Ende keine Schicht: Es listet die Änderungen auf und verwirft sie.
+
+### Das Sandbox-Backend wählen
+
+Unter Linux gibt es zwei Sandbox-Backends, bubblewrap (`bwrap`) und Podman
+ohne Root (`podman`); unter macOS gibt es Seatbelt (`seatbelt`). Welches
+startet, sagt `sandbox.backend`, als Vorgabe `auto`: bubblewrap unter Linux,
+Seatbelt unter macOS. Podman läuft nur, wenn du es wählst, in `config.toml`,
+in einem Profil, mit `HUMANITL_SANDBOX__BACKEND` oder für einen Start mit
+`--backend podman`; ein Projekt-Profil kann das Backend nicht wählen.
+`--backend` und `--podman-runtime` wirken auf `humanitl run`, das sie mit dem
+Start an den Daemon schickt, und auf `humanitl sandbox run`, `sandbox argv`
+und `sandbox check`, die im Prozess des Befehls planen. Eine Wahl aus der
+Umgebung des Befehls reist auf demselben Weg zum Daemon, damit ein Daemon, der
+als Nutzer-Unit ohne diese Variablen läuft, nicht stattdessen sein eigenes
+Backend startet.
+
+```text
+$ humanitl sandbox backends
+BACKEND  ISOLATION   AVAILABLE  SELECTED
+bwrap    namespaces  yes        *
+podman   namespaces  yes
+  crun   namespaces  yes        *
+  krun   kernel      no
+```
+
+`humanitl sandbox backends` fragt den Daemon (`SandboxBackends`) und startet
+nichts. Jede Zeile nennt ein Backend, die Isolationsstufe, die es bietet
+(`policy`, `namespaces` oder `kernel`, die Werte von `sandbox.min_isolation`),
+ob ein Start damit durchginge, und mit `*` das, welches `sandbox.backend`
+wählt. Unter Podman stehen eingerückt seine Laufzeiten, mit `*` an der, die
+`sandbox.podman.runtime` wählt. Unter der Tabelle steht für jedes Backend und
+jede Laufzeit, die nicht verfügbar ist, der Befund, der sie aufhält, mit seinem
+Fix: ein fehlendes oder zu altes Programm (`SANDBOX_034`, `SANDBOX_037`),
+fehlende untergeordnete IDs (`SANDBOX_039`), eine nicht zugelassene Stufe
+(`SANDBOX_048`). Die Untergrenze `sandbox.min_isolation` geht als Hinweis nach
+`stderr`. Mit `--json` ist die Liste ein Wert mit denselben Feldern.
+
+Die Isolationsstufen:
+
+- `namespaces`: bubblewrap und Podman mit der Laufzeit `crun`. Namensräume
+  von Linux und der seccomp-Filter des Shims über dem geteilten Kern des
+  Hosts; beide tragen dieselben drei Garantien, geprüft vom selben Shim
+  ([`SECURITY.md` Abschnitt 13](SECURITY.md#13-linux-podman)).
+- `policy`: Seatbelt unter macOS, wo der Kern den Prozess an einem Profil
+  festhält ([`SECURITY.md` Abschnitt 12](SECURITY.md#12-macos-seatbelt-instead-of-bubblewrap)).
+- `kernel`: Podman mit der Laufzeit `krun`, ein eigener Gastkern in einer
+  Micro-VM. Diese Stufe ist noch nicht zugelassen: Jeder Start damit und jedes
+  Ziehen unter ihr endet mit `SANDBOX_048`, bis ihre Escape-Suite in der CI
+  grün ist (HUM-449). Die Liste zeigt sie, damit die Wahl sichtbar ist, nicht
+  weil sie laufen kann.
+
+Ein gewähltes Backend wird nie durch ein anderes ersetzt. Fehlt es auf diesem
+System, endet der Start mit `SANDBOX_034`; liegt seine Stufe unter
+`sandbox.min_isolation`, mit `SANDBOX_035`; verlangt das Sandbox-Profil ein
+anderes Backend, mit `SANDBOX_036`; ist seine Stufe nicht zugelassen, mit
+`SANDBOX_048`. `humanitl doctor --probe` startet unter jedem zugelassenen,
+verfügbaren Backend eine leere Sandbox und prüft ihre fünf `CHECK`-Zeilen.
 
 ### Ein Abbild als Wurzel der Sandbox
 

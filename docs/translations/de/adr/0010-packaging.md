@@ -183,3 +183,27 @@ genau, wie sie ist, und Podman startet über den Dienstverwalter des Nutzers:
 **Preis.** Ein übernommener Daemon kann eine vorübergehende Unit des Nutzers starten, außerhalb
 seiner Härtung (`docs/THREAT-MODEL.md`, Vertrauensgrenzen). Das Konto konnte das vorher schon,
 der gehärtete Daemon nicht. Die Unit des Daemons selbst gewinnt kein Recht und keinen Pfad.
+
+## Nachtrag 2026-11-13: Podman ist empfohlen, nie verlangt (HUM-441)
+
+Das `.deb` führt `podman` und `uidmap` unter `Recommends`, neben
+`libsecret-tools` (`packaging/deb/control.in`), nie unter `Depends`. `uidmap`
+bringt `newuidmap` und `newgidmap`, die Podman ohne Root für die
+untergeordneten IDs des Kontos braucht; ohne sie endet ein Start unter Podman
+mit `SANDBOX_039`, dessen Fix `sudo apt install uidmap` nennt. bubblewrap
+bleibt das einzige Sandbox-Programm unter `Depends`, und
+`sandbox.backend = "auto"` bleibt bubblewrap, also installiert und läuft das
+Paket ohne Podman. `apt install` zieht empfohlene Pakete als Vorgabe mit, und
+`--no-install-recommends` lässt sie weg. `packaging/deb/check-install.sh`
+(Release-Workflow) und `check-upgrade.sh` (CI) installieren genau so, dort
+also ohne Podman, und `check-upgrade.sh` startet danach seinen Daemon. Fehlt Podman oder ist es zu alt (unter 4.9.0),
+ist das ein Befund von `humanitl sandbox backends` und eines Starts, der es
+gewählt hat (`SANDBOX_034`, `SANDBOX_037`), nie ein Grund, das Paket
+abzulehnen oder auf ein anderes Backend auszuweichen.
+
+Eine Laufzeit für die Kernel-Stufe steht nicht in der Liste: `krun` ist nicht
+zugelassen (HUM-449), und Debian paketiert libkrun nicht. Die Unit bleibt, wie
+der Nachtrag oben sie festlegt (HUM-434): Podman startet als vorübergehende
+Unit des Dienstverwalters des Nutzers, was systemd 254 oder neuer braucht, und
+die Unit des Daemons behält ihre volle Härtung. Das RPM und das AUR-Paket
+nennen Podman noch nicht.

@@ -2,7 +2,7 @@
 
 Applies to: Humanitl 0.1
 
-Status: Proposed
+Status: Accepted
 Date: 2026-11-11
 
 ## Context
@@ -115,14 +115,16 @@ that accepts exactly one connection, no longer through `--preserve-fds`:
   ends, the shim ends the container. Podman detaches the container from the
   process that starts it, so `--die-with-parent` has no direct counterpart.
 
-**Admission.** A level is selectable only when it is admitted. Until then
-`sandbox.backend = "podman"`, `--backend podman`, the interface and `auto`
-refuse it with a diagnostic "not yet admitted" (`SANDBOX_048`); only the escape
+**Admission.** A level is selectable only when it is admitted. Since HUM-448
+the plain level (`crun`) is admitted and `--backend podman` starts it; `auto`
+stays bubblewrap. A level not yet admitted (today `krun`):
+`sandbox.backend = "podman"` with that runtime, `--podman-runtime krun` and
+the interface refuse it with a diagnostic "not yet admitted" (`SANDBOX_048`); only the escape
 suite and the tests can start it, through an argument in code, not through a
 configuration key; that path is compiled only into the escape-suite launcher
-and the tests, never into the daemon or the CLI. The plain level is admitted
-by a small final issue after the mount checks (HUM-437) and the escape suite against Podman (HUM-435) are
-green; the kernel level likewise after HUM-445 and HUM-446.
+and the tests, never into the daemon or the CLI. The plain level was admitted
+by HUM-448 after the mount checks (HUM-437) and the escape suite against
+Podman (HUM-435) were green; the kernel level likewise after HUM-445 and HUM-446.
 
 **Podman, kernel level (`sandbox.podman.runtime = "krun"`).** The same
 adapter with the OCI runtime `krun` (crun built with libkrun). The guest gets
@@ -268,7 +270,8 @@ measurements P1 to P9 are recorded.
   package. Until it does, the level is experimental, and `humanitl doctor`
   says what is missing.
 
-**Amendments this decision needs** (written when the issues land, not now):
+**Amendments this decision needs**, written when the issues landed: the unit
+in ADR-0010 with HUM-434, the rest with HUM-441:
 
 - **ADR-0002.** "Docker later as a second backend" becomes "Podman as the
   second Linux backend (ADR-0020)"; the command line as the readable policy
@@ -284,4 +287,6 @@ measurements P1 to P9 are recorded.
 
 `HUM-292` (the spike and its result, `backlog/sprint-5.md`), `HUM-428` to
 `HUM-449` (`backlog/sprint-7.md`), `HUM-145` (the coupling ratchet),
-`HUM-263` (the pinned project folder), `HUM-350` (the disposable sandbox).
+`HUM-263` (the pinned project folder), `HUM-350` (the disposable sandbox),
+`HUM-448` (the plain level admitted, status Accepted), `HUM-441` (the
+amendments to ADR-0002, ADR-0010 and ADR-0015).

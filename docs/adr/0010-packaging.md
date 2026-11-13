@@ -178,3 +178,27 @@ is, and Podman starts through the user's service manager:
 **Cost.** A compromised daemon can start a transient unit of the user, outside its hardening
 (`docs/THREAT-MODEL.md`, trust boundaries). The user account could already do that; the hardened
 daemon could not. The daemon's unit itself gains no right and no path.
+
+## Addendum 2026-11-13: Podman is recommended, never required (HUM-441)
+
+The `.deb` lists `podman` and `uidmap` under `Recommends`, next to
+`libsecret-tools` (`packaging/deb/control.in`), never under `Depends`.
+`uidmap` brings `newuidmap` and `newgidmap`, which rootless Podman needs for
+the subordinate IDs of the account; without them a start under Podman ends
+with `SANDBOX_039`, whose fix names `sudo apt install uidmap`. bubblewrap stays
+the only sandbox program under `Depends`, and `sandbox.backend = "auto"`
+stays bubblewrap, so the package installs and runs without Podman.
+`apt install` pulls recommended packages by default, and
+`--no-install-recommends` leaves them out. `packaging/deb/check-install.sh`
+(release workflow) and `check-upgrade.sh` (CI) install exactly that way, so
+the package is installed without Podman there, and `check-upgrade.sh` then
+starts its daemon. Missing or too old Podman (below
+4.9.0) is a finding of `humanitl sandbox backends` and of a start that chose
+it (`SANDBOX_034`, `SANDBOX_037`), never a reason to refuse the package or to
+fall back to another backend.
+
+No runtime for the kernel level is listed: `krun` is not admitted (HUM-449),
+and Debian does not package libkrun. The unit stays as the addendum above
+sets it (HUM-434): Podman starts as a transient unit of the user's service
+manager, which needs systemd 254 or newer, and the daemon's unit keeps its
+full hardening. The RPM and the AUR package do not name Podman yet.
