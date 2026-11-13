@@ -157,10 +157,31 @@ load-bearing, because the kernel does not deliver signals without a handler to
 a namespace init. When the shim ends, the sandbox ends. `/proc/1/status` now
 shows `Seccomp: 2`, and ESC-1 checks PID 1 without exception.
 
+## Addendum 2026-11-13: Podman instead of Docker as the second Linux backend (HUM-441)
+
+"Docker later as a second backend" became Podman (ADR-0020). Podman runs
+rootless, without a service running as root and without a socket that makes
+whoever reaches it root on the host, which is why this decision rejected
+Docker. The adapter (HUM-433) is a second implementation of `SandboxBackend`
+in `daemon/crates/sandbox/src/podman/`, and as promised it touched neither
+core nor application. Since HUM-448 a person can choose it at the level
+`namespaces`, with the OCI runtime `crun`: the same shim as PID 1, the same
+filter and the same five `CHECK` lines, the escape suite green against it in
+the CI job `escape-tests-podman` (`docs/SECURITY.md` section 13). `auto`
+stays bubblewrap, so bubblewrap remains the default on Linux. The level with
+a guest kernel of its own (`krun`) is not admitted (HUM-449).
+
+The command line as the readable policy stays: `humanitl sandbox argv` shows
+a preview of the command line of whichever backend is chosen (with a
+placeholder for the handover token and hidden values). The table the interface
+shows no longer comes from parsing bwrap flags but from the neutral plan every
+backend returns (`PlanPreview`, HUM-428, HUM-429).
+
 ## Affected issues
 
 `HUM-010` (sandbox profile format), `HUM-011` (bwrap launcher), `HUM-012`
 (humanitl-shim with seccomp), `HUM-013` (proxy socket bind), `HUM-006`
 (escape test harness), `HUM-040` (sandbox screen), `HUM-041`
 (isolation check panel), `HUM-043` (`/work` hardening), `HUM-075`
-(`humanitl doctor`), `HUM-203` (`--as-pid-1`, addendum).
+(`humanitl doctor`), `HUM-203` (`--as-pid-1`, addendum), `HUM-441` (Podman
+instead of Docker, addendum).

@@ -112,6 +112,15 @@ report on both systems. What macOS gives less than Linux is listed under
 [Where macOS gives less than Linux](#where-macos-gives-less-than-linux) and in
 [`docs/SECURITY.md` section 12](docs/SECURITY.md#12-macos-seatbelt-instead-of-bubblewrap).
 
+### On Linux, by choice: Podman
+
+On Linux you can choose rootless Podman with the runtime `crun` as a second sandbox backend
+(`--backend podman` or `sandbox.backend = "podman"`; `auto` stays bubblewrap): the same shim checks
+the same three guarantees, at the same isolation level as bubblewrap, `namespaces` over the shared
+host kernel ([`docs/SECURITY.md` section 13](docs/SECURITY.md#13-linux-podman)). A kernel of its
+own, Podman with `krun` in a micro-VM, is not available yet and every start with it is refused
+(`SANDBOX_048`); `humanitl sandbox backends` lists each backend with its level and what it lacks.
+
 ### Check it yourself
 
 `humanitl sandbox check` runs all three in a short-lived sandbox, and the app shows them on the
@@ -491,8 +500,9 @@ guarantees and five escape tests in CI; the intercept queue with allow, block, e
 OpenCode and pi agents against a model in your network, with terminal and isolation check; history,
 export and a hash-chained audit log; pseudonymisation in the editor; settings, German and English;
 a `.deb` and a tarball. Since then: macOS with a Seatbelt sandbox, a launchd agent and a disk image
-in every release (M12). Not in it: holding responses or WebSocket frames, HTTP/2 to the
-destination, a Docker or micro-VM backend, a browser for the agent. What comes after the MVP is
+in every release (M12), and on Linux rootless Podman with `crun` as a backend to choose. Not in
+it: holding responses or WebSocket frames, HTTP/2 to the destination, a Docker backend, the micro-VM
+stage (`krun`, not admitted yet), a browser for the agent. What comes after the MVP is
 listed in [`BACKLOG.md` section 9](BACKLOG.md#9-nach-dem-mvp-priorisiert).
 
 ### Project health

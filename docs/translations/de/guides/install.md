@@ -45,12 +45,14 @@ in der App.
 | GTK 3, GLib, EGL und GLES 2 | die Desktop-App | das `.deb`, das `.rpm` und das AUR-Paket ziehen sie nach |
 | `libayatana-appindicator3-1` (optional) | das Tray-Symbol; ohne sie läuft die App, und der Fenstertitel trägt die Zahl der angehaltenen Anfragen | `humanitl doctor`, Zeile `tray` |
 | `libsecret-tools` (empfohlen) | bewahrt einen Zugangsschlüssel für den Modellserver im Schlüsselbund des Systems auf; ohne es liegt der Schlüssel in einer Datei mit Modus `0600` | `command -v secret-tool` |
+| `podman` 4.9.0 oder neuer und `uidmap` (empfohlen) | Podman als zweites Sandbox-Backend, nur wenn du es wählst (`sandbox.backend = "podman"` oder `--backend podman`); ohne Root braucht es dazu 65536 untergeordnete IDs für dein Konto in `/etc/subuid` und `/etc/subgid`. bubblewrap bleibt die Vorgabe und läuft ohne beide | `humanitl sandbox backends` |
 
 Das `.deb` gibt bubblewrap, EGL und GLES 2 als Abhängigkeiten an, also
 installiert apt sie; das `.rpm` und das AUR-Paket geben dasselbe an, für dnf,
 zypper und pacman. GTK 3 und GLib kommen über die Bibliotheken der App mit. Die
 Tray-Bibliothek und `libsecret-tools` sind optional; das Paket empfiehlt
-`libsecret-tools`.
+`libsecret-tools`, `podman` und `uidmap`, hängt nie von ihnen ab und installiert
+und läuft mit bubblewrap allein (`apt install --no-install-recommends` lässt sie weg).
 Unter macOS braucht es dafür nichts: Der Zugangsschlüssel liegt in deinem
 Anmelde-Schlüsselbund, über das Systemwerkzeug `/usr/bin/security`.
 

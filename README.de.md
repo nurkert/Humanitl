@@ -92,6 +92,16 @@ schreibt je Sitzung ein Profil, und der Kernel hält den Shim und jeden seiner P
 
 Einzelheiten in [`docs/SECURITY.md` Abschnitt 12](docs/SECURITY.md#12-macos-seatbelt-instead-of-bubblewrap).
 
+### Unter Linux wahlweise: Podman
+
+Unter Linux lässt sich Podman ohne Root mit der Laufzeit `crun` als zweites Sandbox-Backend wählen
+(`--backend podman` oder `sandbox.backend = "podman"`; `auto` bleibt bubblewrap): Derselbe Shim
+prüft dieselben drei Garantien, auf derselben Isolationsstufe wie bubblewrap, `namespaces` über dem
+geteilten Kern des Hosts ([`docs/SECURITY.md` Abschnitt 13](docs/SECURITY.md#13-linux-podman)).
+Ein eigener Kern, Podman mit `krun` in einer Micro-VM, ist noch nicht verfügbar, und jeder Start
+damit wird abgelehnt (`SANDBOX_048`); `humanitl sandbox backends` zeigt jedes Backend mit seiner
+Stufe und dem, was ihm fehlt.
+
 ### Selbst prüfen
 
 ```sh

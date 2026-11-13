@@ -44,7 +44,7 @@ implementation:
 
 | Port | Defined in | MVP adapter | Later adapters |
 |---|---|---|---|
-| `SandboxBackend` | sandbox | bwrap | docker, seatbelt, microvm |
+| `SandboxBackend` | sandbox | bwrap | seatbelt (macOS, ADR-0019), podman (Linux, runtimes `crun` and `krun`, ADR-0020) |
 | `AgentAdapter` | core | opencode | aider, codex, claude-code |
 | `Detector` | findings | regex/checksum | presidio-grpc, wasm |
 | `FlowStore` | recorder | sqlite | postgres (team) |
@@ -164,9 +164,23 @@ would silently undermine the egress guarantee.
   is that a change to rule evaluation never forces a change to the Protobuf
   definition.
 
+## Addendum 2026-11-13: The adapters of `SandboxBackend` (HUM-441)
+
+The port table names `bwrap`, `seatbelt` and `podman` as the adapters of
+`SandboxBackend`. The later adapters `docker` and `microvm` from the first
+version are replaced by `podman` with its two OCI runtimes (ADR-0020): `crun`
+shares the host kernel like bwrap, `krun` starts a guest kernel in a micro-VM.
+Seatbelt exists only in the macOS build; on Linux the choice is bwrap or
+Podman. The daemon and the CLI hold an enum `Backend` with one variant per
+adapter in place of the former compile-time alias (HUM-428), chosen at run time by
+`sandbox.backend`. The names of the Podman adapter stand only in
+`daemon/crates/sandbox/src/podman/`, guarded by `tools/coupling-baseline.toml`
+(HUM-145). Of the three, bwrap and Seatbelt are admitted and Podman with
+`crun` since HUM-448; Podman with `krun` is not admitted yet (HUM-449).
+
 ## Affected issues
 
 `HUM-074` (dependency lint `tools/check-deps.sh`), `HUM-001` (monorepo layout
 with the crate split), `HUM-004` (core-types as the IO-free core),
 `HUM-002` (CI job `deps-lint`), `HUM-062` (config in the core, precedence as a
-pure function).
+pure function), `HUM-441` (the adapters of `SandboxBackend`, addendum).
