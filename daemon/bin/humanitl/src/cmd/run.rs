@@ -1583,12 +1583,12 @@ mod tests {
             })
         };
 
-        let runtime = client(&[("HUMANITL_SANDBOX__PODMAN__RUNTIME", "krun")]);
+        let runtime = client(&[("HUMANITL_SANDBOX__PODMAN__RUNTIME", "crun")]);
         let sent = super::merge_overrides(Vec::new(), &runtime);
         assert_eq!(sent.len(), 1, "{sent:?}");
         assert_eq!(
             (sent[0].path.as_str(), sent[0].value.as_str()),
-            ("sandbox.podman.runtime", "krun")
+            ("sandbox.podman.runtime", "crun")
         );
         let refused = start(sent).expect_err("a runtime without podman");
         assert_eq!(refused.code.as_str(), "SANDBOX_034", "{}", refused.why);

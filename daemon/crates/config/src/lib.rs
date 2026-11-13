@@ -78,13 +78,15 @@ pub use crate::validate::{image_names_registry, image_pinned_by_digest, loader_v
 
 pub use crate::alias::{ALIASES, Alias, Retired, RetiredShape};
 pub use crate::env::{Env, LOADER_ENV_KEYS, is_loader_key};
-pub use crate::load::{DEFAULT_ENV_PREFIX, ENV_SEPARATOR, PROFILE_SECTION, Sources, load};
+pub use crate::load::{
+    DEFAULT_ENV_PREFIX, ENV_SEPARATOR, PROFILE_SECTION, Sources, load, retired_values,
+};
 pub use crate::model::{
     AgentBriefing, AgentRef, AskMode, AuditConfig, Config, DetachKeys, Experimental,
     FindingsConfig, HoldConfig, IpPreference, Language, Limits, LlmConfig, LlmServer, MinIsolation,
     PiAgentConfig, PiWebAccess, PodmanConfig, PodmanRootfs, PodmanRuntime, PseudonymConfig,
-    RecorderConfig, ResolverConfig, SandboxBackendName, SandboxMode, SandboxRef, TerminalConfig,
-    Theme, TlsConfig, UiConfig, UpdateConfig, WorkMode,
+    QemuConfig, RecorderConfig, ResolverConfig, SandboxBackendName, SandboxMode, SandboxRef,
+    TerminalConfig, Theme, TlsConfig, UiConfig, UpdateConfig, WorkMode,
 };
 pub use crate::origin::{Origin, Resolved};
 pub use crate::paths::{APP_DIR, DIR_MODE, FILE_MODE, MAC_APP_DIR, Paths, RuntimeDir};

@@ -173,7 +173,7 @@ mod tests {
                             ..v1::SandboxRuntime::default()
                         },
                         v1::SandboxRuntime {
-                            name: "krun".to_owned(),
+                            name: "other".to_owned(),
                             isolation_level: v1::IsolationLevel::Kernel as i32,
                             diagnostics: vec![diagnostic("SANDBOX_048")],
                             ..v1::SandboxRuntime::default()
@@ -194,7 +194,7 @@ mod tests {
                 ["native", "namespaces", "yes", "*"],
                 ["podman", "namespaces", "no", ""],
                 ["  crun", "namespaces", "no", "*"],
-                ["  krun", "kernel", "no", ""],
+                ["  other", "kernel", "no", ""],
             ]
         );
     }
@@ -209,7 +209,7 @@ mod tests {
             .filter(|(_, diagnostics)| !diagnostics.is_empty())
             .map(|(name, _)| name)
             .collect();
-        assert_eq!(names, ["podman", "podman/krun"]);
+        assert_eq!(names, ["podman", "podman/other"]);
     }
 
     #[test]

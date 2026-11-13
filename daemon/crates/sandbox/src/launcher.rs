@@ -132,7 +132,7 @@ pub enum IsolationLevel {
     Policy,
     /// Eigene Namensräume über dem geteilten Kern des Hosts (bwrap).
     Namespaces,
-    /// Ein eigener Gastkern (geplant: Podman mit `krun`, HUM-444).
+    /// Ein eigener Gastkern in einer Micro-VM (das VM-Backend, HUM-464).
     Kernel,
 }
 

@@ -1862,5 +1862,13 @@
   "sandboxBackendShortKernel": "Micro-VM",
   "sandboxBackendBadge": "{backend} · {level}",
   "sandboxBackendListFailed": "Der Daemon hat seine Backends nicht genannt: {reason}",
-  "sandboxBackendUnavailable": "Auf diesem System nicht verfügbar."
+  "sandboxBackendUnavailable": "Auf diesem System nicht verfügbar.",
+  "diagCONFIG023Title": "Wert einer Einstellung entfallen",
+  "diagCONFIG023Why": "Eine Einstellung nennt einen Wert, den eine frühere Fassung annahm und den es nicht mehr gibt: Die Kernel-Stufe ist keine Laufzeit der Container-Engine mehr, sondern ein eigenes Sandbox-Backend. Die Konfiguration lädt erst wieder, wenn der Wert entfernt ist.",
+  "diagSANDBOX045Title": "Voraussetzung der Kernel-Stufe fehlt",
+  "diagSANDBOX045Why": "Etwas, das die Kernel-Stufe auf diesem Rechner braucht, fehlt: die Hardware-Virtualisierung, ein Programm des VM-Backends oder eine seiner Optionen, das Kernel-Abbild oder seine Module. Nichts startet, und kein anderes Backend springt ein.",
+  "diagSANDBOX046Title": "Tür der Kernel-Stufe nicht aufgebaut",
+  "diagSANDBOX046Why": "Der einzige Weg aus der virtuellen Maschine, zum Proxy der Sitzung, ließ sich nicht aufbauen. Die Sitzung ist nicht gestartet.",
+  "diagSANDBOX047Title": "Prüfung der virtuellen Maschine von außen gescheitert",
+  "diagSANDBOX047Why": "Von außen geprüft hielt die virtuelle Maschine der Sitzung mehr, als ihr Plan erlaubt, etwa eine zweite Netzverbindung oder eine offene Datei, die niemand erklärt hat. Die Sitzung wurde beendet."
 }

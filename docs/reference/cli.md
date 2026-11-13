@@ -136,7 +136,7 @@ below lists the flag names and their short aliases.
 | `--resolver-nameserver` | - | `STRING,_OPTIONAL` | `resolver.nameserver` |
 | `--resolver-prefer` | - | `ipv4`, `ipv6` | `resolver.prefer` |
 | `--resolver-test-ca` | - | `STRING,_OPTIONAL` | `resolver.test_ca` |
-| `--sandbox-backend` | `--backend` | `auto`, `bwrap`, `podman`, `seatbelt` | `sandbox.backend` |
+| `--sandbox-backend` | `--backend` | `auto`, `bwrap`, `podman`, `seatbelt`, `qemu` | `sandbox.backend` |
 | `--sandbox-min-isolation` | - | `policy`, `namespaces`, `kernel` | `sandbox.min_isolation` |
 | `--sandbox-mode` | - | `auto`, `direct`, `disposable` | `sandbox.mode` |
 | `--sandbox-podman-cpus` | - | `INTEGER,_OPTIONAL` | `sandbox.podman.cpus` |
@@ -145,9 +145,17 @@ below lists the flag names and their short aliases.
 | `--sandbox-podman-pids-limit` | - | `INTEGER` | `sandbox.podman.pids_limit` |
 | `--sandbox-podman-program` | - | `STRING,_OPTIONAL` | `sandbox.podman.program` |
 | `--sandbox-podman-rootfs` | - | `host`, `image` | `sandbox.podman.rootfs` |
-| `--sandbox-podman-runtime` | `--podman-runtime` | `crun`, `krun` | `sandbox.podman.runtime` |
+| `--sandbox-podman-runtime` | `--podman-runtime` | `crun` | `sandbox.podman.runtime` |
 | `--sandbox-podman-start-timeout-secs` | - | `INTEGER` | `sandbox.podman.start_timeout_secs` |
 | `--sandbox-profile` | - | `STRING` | `sandbox.profile` |
+| `--sandbox-qemu-cpus` | - | `INTEGER,_OPTIONAL` | `sandbox.qemu.cpus` |
+| `--sandbox-qemu-kernel` | - | `STRING,_OPTIONAL` | `sandbox.qemu.kernel` |
+| `--sandbox-qemu-memory-mib` | - | `INTEGER,_OPTIONAL` | `sandbox.qemu.memory_mib` |
+| `--sandbox-qemu-modules` | - | `STRING,_OPTIONAL` | `sandbox.qemu.modules` |
+| `--sandbox-qemu-qemu` | - | `STRING,_OPTIONAL` | `sandbox.qemu.qemu` |
+| `--sandbox-qemu-start-timeout-secs` | - | `INTEGER` | `sandbox.qemu.start_timeout_secs` |
+| `--sandbox-qemu-vhost-device-vsock` | - | `STRING,_OPTIONAL` | `sandbox.qemu.vhost_device_vsock` |
+| `--sandbox-qemu-virtiofsd` | - | `STRING,_OPTIONAL` | `sandbox.qemu.virtiofsd` |
 | `--sandbox-work-dir` | `--work` | `STRING,_OPTIONAL` | `sandbox.work_dir` |
 | `--sandbox-work-mode` | `--work-mode` | `ro`, `rw` | `sandbox.work_mode` |
 | `--terminal-detach-prefix` | - | `STRING` | `terminal.detach_prefix` |

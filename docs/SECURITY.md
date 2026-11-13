@@ -1739,7 +1739,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | Linux: Podman as a second sandbox backend, plain level (rootless, runtime `crun`), not admitted: every start refuses it with `SANDBOX_048` until HUM-448; only the escape suite and the tests start it. Every configuration source the daemon does not write is cut off, the environment goes only through the sealed memfd, the container ends through the engine and the lifeline (HUM-433, [section 13](#13-linux-podman), K-27). |
 | 0.1.x | The escape suite runs against every backend; the CI job `escape-tests-podman` runs it against Podman through `escape-launch --backend podman`, with a hostile engine configuration planted on the runner (HUM-435, [section 9](#9-what-we-verify-in-ci), K-27). |
 | 0.1.x | Linux, Podman: an image as the root of the sandbox, pinned by digest and checked before every start (`SANDBOX_043`), never pulled by a start; `humanitl sandbox image pull` pulls on request, directly and not through the proxy, and says so first; project, door, CA, shim and session files come from the host, and ESC-2 checks the CA by device and inode (HUM-439, [section 13](#an-image-as-the-root-hum-439), K-28). |
-| 0.1.x | Linux: Podman admitted at the plain level (`podman/crun`) after `escape-tests-podman` was green on `main`; a person chooses it with `sandbox.backend = "podman"` or `--backend podman`, `auto` stays bubblewrap, and the kernel level (`krun`) stays refused with `SANDBOX_048` until HUM-449 (HUM-448, [section 13](#13-linux-podman), K-27). |
+| 0.1.x | Linux: Podman admitted at the plain level (`podman/crun`) after `escape-tests-podman` was green on `main`; a person chooses it with `sandbox.backend = "podman"` or `--backend podman`, `auto` stays bubblewrap, and the kernel level (backend `qemu`, ADR-0021) stays refused with `SANDBOX_048` until HUM-449 (HUM-448, [section 13](#13-linux-podman), K-27). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap
 
@@ -1953,7 +1953,7 @@ mount check (HUM-437) and the user's service manager (HUM-434). A start with
 `sandbox.backend = "podman"` runs a session, whether the choice comes from `config.toml`, a
 profile, the environment, `--backend` or the start of a session; a project profile cannot choose
 the backend. `auto` stays bubblewrap: Podman runs only when a person chooses it. The kernel level,
-Podman with `krun`, is not admitted yet and every start with it refuses with `SANDBOX_048` until
+the backend `qemu` (ADR-0021), is not admitted yet and every start with it refuses with `SANDBOX_048` until
 HUM-449. This section states what the adapter (`daemon/crates/sandbox/src/podman/`, HUM-433)
 does.
 

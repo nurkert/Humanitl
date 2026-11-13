@@ -58,7 +58,7 @@ Agent läuft darin, und `humanitl run` endet mit dem Exit-Code des Agenten.
 | `--llm URL` | `llm.endpoint` | Das Sprachmodell dieser Session. Daraus entsteht die erklärte Durchleitung: eine Regel auf Rang 1, die nicht angehalten wird und deine eigenen Blockierregeln überholt, für die Inferenzpfade dieses einen Hosts. Sie steht als eigene Regel in der Liste, unter `http://humanitl.internal/` und in der Aufzeichnung. Liegt die Adresse ihrem Namen nach nicht in deinem eigenen Netz, meldet der Start `LLM_006`; die Session startet trotzdem. Aufgelöst wird dafür nichts. |
 | `--llm NAME` | `llm.server` | Einer der gespeicherten Modellserver für diesen Lauf (HUM-400): Ein Wert ohne `://` ist ein Name, keine Adresse, und dasselbe wie `--llm-server NAME`. Er geht dem Server vor, den das Projekt-Profil, ein Profil der Session oder `llm.active` wählt, und nur dieser Server ist die Durchleitung und bekommt seinen gespeicherten Schlüssel. Ein Name, der nicht gespeichert ist, lehnt den Start mit `CONFIG_021` ab; einen Rückfall auf den aktiven Server gibt es nicht. Ein Daemon vor Vertrag 1.28 kann die Wahl nicht annehmen und bekommt `CLI_004` statt eines Starts mit einem anderen Server. Beim Start gibt `humanitl run` den Server der Session aus und woher die Wahl kommt (`[humanitl] llm server: work (chosen by the project profile …)`). |
 | `--backend auto\|bwrap\|podman\|seatbelt` | `sandbox.backend` | Das Sandbox-Backend dieses Laufs (HUM-432), der Kurzname von `--sandbox-backend`. `auto` ist bubblewrap unter Linux und Seatbelt unter macOS. Ein gewähltes Backend fällt nie auf ein anderes zurück. Siehe „Das Sandbox-Backend wählen". |
-| `--podman-runtime crun\|krun` | `sandbox.podman.runtime` | Die OCI-Laufzeit unter Podman für diesen Lauf, der Kurzname von `--sandbox-podman-runtime`. Sie braucht Podman als Backend; mit jedem anderen Backend endet der Start mit `SANDBOX_034`, statt auf einer anderen Isolationsstufe zu laufen als der verlangten. `krun` ist noch nicht zugelassen (`SANDBOX_048`). |
+| `--podman-runtime crun` | `sandbox.podman.runtime` | Die OCI-Laufzeit unter Podman für diesen Lauf, der Kurzname von `--sandbox-podman-runtime`. Sie braucht Podman als Backend; mit jedem anderen Backend endet der Start mit `SANDBOX_034`, statt auf einer anderen Isolationsstufe zu laufen als der verlangten. Die Kernel-Stufe ist keine Laufzeit von Podman mehr, sondern das Backend `qemu`; den früheren Wert `krun` lehnt das Laden der Konfiguration ab (`CONFIG_023`). |
 | `-- CMD...` | `agent.command` | Der Befehl in der Sandbox, statt des Agenten aus der Konfiguration. `-- bash` ist der Weg, sich die Sandbox von innen anzusehen und den Agenten dort von Hand zu starten (siehe „Eine Shell für den Agenten"). |
 
 **Woher das Projektverzeichnis kommt (HUM-293).** `humanitl run`,
@@ -312,7 +312,7 @@ BACKEND  ISOLATION   AVAILABLE  SELECTED
 bwrap    namespaces  yes        *
 podman   namespaces  yes
   crun   namespaces  yes        *
-  krun   kernel      no
+qemu     kernel      no
 ```
 
 `humanitl sandbox backends` fragt den Daemon (`SandboxBackends`) und startet
@@ -323,8 +323,8 @@ wählt. Unter Podman stehen eingerückt seine Laufzeiten, mit `*` an der, die
 `sandbox.podman.runtime` wählt. Unter der Tabelle steht für jedes Backend und
 jede Laufzeit, die nicht verfügbar ist, der Befund, der sie aufhält, mit seinem
 Fix: ein fehlendes oder zu altes Programm (`SANDBOX_034`, `SANDBOX_037`),
-fehlende untergeordnete IDs (`SANDBOX_039`), eine nicht zugelassene Stufe
-(`SANDBOX_048`). Die Untergrenze `sandbox.min_isolation` geht als Hinweis nach
+fehlende untergeordnete IDs (`SANDBOX_039`), eine fehlende Voraussetzung der
+Kernel-Stufe (`SANDBOX_045`), eine nicht zugelassene Stufe (`SANDBOX_048`). Die Untergrenze `sandbox.min_isolation` geht als Hinweis nach
 `stderr`. Mit `--json` ist die Liste ein Wert mit denselben Feldern.
 
 Die Isolationsstufen:
@@ -335,11 +335,12 @@ Die Isolationsstufen:
   ([`SECURITY.md` Abschnitt 13](SECURITY.md#13-linux-podman)).
 - `policy`: Seatbelt unter macOS, wo der Kern den Prozess an einem Profil
   festhält ([`SECURITY.md` Abschnitt 12](SECURITY.md#12-macos-seatbelt-instead-of-bubblewrap)).
-- `kernel`: Podman mit der Laufzeit `krun`, ein eigener Gastkern in einer
-  Micro-VM. Diese Stufe ist noch nicht zugelassen: Jeder Start damit und jedes
-  Ziehen unter ihr endet mit `SANDBOX_048`, bis ihre Escape-Suite in der CI
-  grün ist (HUM-449). Die Liste zeigt sie, damit die Wahl sichtbar ist, nicht
-  weil sie laufen kann.
+- `kernel`: das Backend `qemu`, ein eigener Gastkern in einer Micro-VM, unter
+  Linux auf x86-64 (ADR-0021). Diese Stufe ist noch nicht zugelassen: Jeder
+  Start damit endet mit `SANDBOX_048`, bis ihre Escape-Suite in der CI grün
+  ist (HUM-449). Die Liste zeigt sie, damit die Wahl sichtbar ist, nicht weil
+  sie laufen kann, und nennt die erste fehlende Voraussetzung
+  (`SANDBOX_045`).
 
 Ein gewähltes Backend wird nie durch ein anderes ersetzt. Fehlt es auf diesem
 System, endet der Start mit `SANDBOX_034`; liegt seine Stufe unter

@@ -76,6 +76,22 @@ def test_podman_names_count_outside_their_adapter_only() -> None:
        f"crate included, libkrun once: {counts['podman']}")
 
 
+def test_qemu_names_count_outside_their_adapter_only() -> None:
+    root = tree({
+        "daemon/crates/sandbox/src/qemu/mod.rs": "// qemu virtiofsd vhost-device-vsock microvm\n",
+        "daemon/crates/sandbox/src/backend.rs": "// Qemu(QemuBackend), -M microvm\n",
+        "daemon/crates/config/src/model.rs": (
+            "pub vhost_device_vsock: Option<PathBuf>, // vhost-device-vsock, virtiofsd\n"
+        ),
+    })
+    counts = check_coupling.measure(root)
+    expect(counts["qemu"] == {
+        "daemon/crates/sandbox/src/backend.rs": 3,
+        "daemon/crates/config/src/model.rs": 3,
+    }, f"qemu, virtiofsd, vhost-device-vsock with hyphens or underscores and microvm count "
+       f"outside src/qemu/ only, the sandbox crate included: {counts['qemu']}")
+
+
 def test_a_proxy_use_list_counts_every_name_across_lines() -> None:
     root = tree({
         "daemon/crates/ipc/src/x.rs": (

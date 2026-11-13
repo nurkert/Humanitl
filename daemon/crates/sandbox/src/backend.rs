@@ -57,14 +57,20 @@ pub const SEATBELT_BACKEND: &str = "seatbelt";
 /// seit HUM-433; zugelassen ist seine gemeinsame Stufe seit HUM-448.
 pub const PODMAN_BACKEND: &str = "podman";
 
+/// Der Name des VM-Backends der Kernel-Stufe in `sandbox.backend` (HUM-464,
+/// ADR-0021), nur unter Linux auf x86-64. Bis HUM-444 prüft dieser Build nur
+/// seine Voraussetzungen; zugelassen wird es mit HUM-449.
+pub const VM_BACKEND: &str = "qemu";
+
 /// Die Stufen, die ein Mensch wählen kann (HUM-431).
 ///
 /// Eine Stufe ist ein Backend, unter der Container-Engine mit ihrer Laufzeit.
 /// Sie kommt erst auf diese Liste, wenn ihre Einhänge-Prüfung gelandet und die
 /// Escape-Suite gegen sie in der CI grün ist (Tor in `backlog/sprint-7.md`):
-/// die gemeinsame Stufe mit HUM-448, die Kernel-Stufe mit HUM-449. Bis dahin
-/// lehnt jeder Start eine Stufe mit `SANDBOX_048` ab, und `auto` löst nie auf
-/// die Container-Engine auf, auch nicht auf eine zugelassene Stufe.
+/// die gemeinsame Stufe mit HUM-448, das VM-Backend der Kernel-Stufe
+/// ([`VM_BACKEND`]) mit HUM-449. Bis dahin lehnt jeder Start eine Stufe mit
+/// `SANDBOX_048` ab, und `auto` löst nie auf die Container-Engine oder das
+/// VM-Backend auf, auch nicht auf eine zugelassene Stufe.
 pub const ADMITTED_BACKENDS: &[&str] = &[BWRAP_BACKEND, SHARED_KERNEL_STAGE, SEATBELT_BACKEND];
 
 /// Ruft `$call` auf dem gewählten Backend auf, ein Zweig je Variante.
@@ -155,9 +161,8 @@ pub fn choose_backend(
 /// Lehnt eine Laufzeit ab, die ein Mensch für diesen Lauf gewünscht hat,
 /// wenn das Backend gar nicht Podman ist (HUM-432).
 ///
-/// `humanitl run --podman-runtime krun` bei `sandbox.backend = "auto"` hieße
-/// sonst: Der Mensch verlangt einen eigenen Gastkern und bekommt still bwrap
-/// mit geteiltem Kern. Als Wunsch gilt eine Laufzeit aus der Umgebung
+/// `humanitl run --podman-runtime crun` bei `sandbox.backend = "auto"` hieße
+/// sonst: Der Mensch verlangt die Container-Engine und bekommt still bwrap. Als Wunsch gilt eine Laufzeit aus der Umgebung
 /// (`HUMANITL_SANDBOX__PODMAN__RUNTIME`) oder von der Kommandozeile, wozu
 /// auch `cli_overrides` des Start-RPC gehören; `runtime_origin` ist ihre
 /// Herkunft aus der Auflösung. Eine Laufzeit aus `config.toml` oder einem
@@ -207,8 +212,9 @@ impl Backend {
     /// `SANDBOX_048` für eine Stufe, die nicht zugelassen ist, `SANDBOX_034`
     /// für ein Backend, das dieser Build oder dieses System nicht hat, die
     /// Befunde des Backends (`SANDBOX_001` bis `SANDBOX_003`, bei der Container-Engine
-    /// `SANDBOX_037` bis `SANDBOX_040` und `SANDBOX_044`), oder `CONFIG_003`
-    /// für einen Namen, den das Schema nicht kennt.
+    /// `SANDBOX_037` bis `SANDBOX_040` und `SANDBOX_044`, beim VM-Backend
+    /// `SANDBOX_045`), oder `CONFIG_003` für einen Namen, den das Schema nicht
+    /// kennt.
     pub fn detect(name: &str, paths: Paths, sandbox: &SandboxRef) -> Result<Self, Diagnostic> {
         let name = resolve(name)?;
         admitted(name, runtime_of(name, sandbox))?;
@@ -342,6 +348,7 @@ pub const fn backend_name(name: SandboxBackendName) -> &'static str {
         SandboxBackendName::Bubblewrap => BWRAP_BACKEND,
         SandboxBackendName::Podman => PODMAN_BACKEND,
         SandboxBackendName::Seatbelt => SEATBELT_BACKEND,
+        SandboxBackendName::Qemu => VM_BACKEND,
     }
 }
 
@@ -354,6 +361,7 @@ pub(crate) fn resolve(name: &str) -> Result<&'static str, Diagnostic> {
         BWRAP_BACKEND => Ok(BWRAP_BACKEND),
         SEATBELT_BACKEND => Ok(SEATBELT_BACKEND),
         PODMAN_BACKEND => Ok(PODMAN_BACKEND),
+        VM_BACKEND => Ok(VM_BACKEND),
         other => Err(unknown(other)),
     }
 }
@@ -367,10 +375,52 @@ pub(crate) fn detect_in_build(
     match name {
         BWRAP_BACKEND => BwrapBackend::detect(paths).map(Backend::Bwrap),
         PODMAN_BACKEND => PodmanBackend::detect(paths, &sandbox.podman).map(Backend::Podman),
+        // Bis HUM-444 gibt es keinen Adapter: zuerst, was dem Rechner fehlt,
+        // dann, dass der Adapter fehlt. Nie ein anderes Backend.
+        VM_BACKEND => Err(kernel_level_missing(&paths, sandbox).unwrap_or_else(vm_adapter_missing)),
         #[cfg(target_os = "macos")]
         SEATBELT_BACKEND => SeatbeltBackend::detect(paths).map(Backend::Seatbelt),
         other => Err(not_in_build(other)),
     }
+}
+
+/// Was dem Rechner für die Kernel-Stufe fehlt (HUM-464): die erste fehlende
+/// Voraussetzung als `SANDBOX_045`, oder keine. Ohne Linux auf x86-64 gibt es
+/// die Stufe nicht (`SANDBOX_034`).
+#[cfg_attr(
+    not(all(target_os = "linux", target_arch = "x86_64")),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "Ohne Linux auf x86-64 fehlt immer etwas; die Signatur ist die der Linux-Fassung"
+    )
+)]
+pub(crate) fn kernel_level_missing(paths: &Paths, sandbox: &SandboxRef) -> Option<Diagnostic> {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        crate::qemu::missing_prerequisite(paths, &sandbox.qemu)
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    {
+        let _ = (paths, sandbox);
+        Some(not_in_build(VM_BACKEND))
+    }
+}
+
+/// `SANDBOX_034`: Der Rechner hätte alles für die Kernel-Stufe, aber dieser
+/// Build hat ihren Adapter noch nicht (HUM-444). Nur die Escape-Suite und die
+/// Tests kommen bis hierher; jeder andere Weg scheitert vorher an der
+/// Zulassung.
+fn vm_adapter_missing() -> Diagnostic {
+    Diagnostic::builder(SANDBOX_034, Severity::Blocking)
+        .why(format!(
+            "sandbox.backend = {VM_BACKEND:?}: every prerequisite of the kernel level is present, \
+             and this build checks only those; it cannot start the level yet"
+        ))
+        .fix(FixAction::ChangeSetting {
+            key: "sandbox.backend".to_owned(),
+            value: crate::AUTO_BACKEND.to_owned(),
+        })
+        .build()
 }
 
 /// Die Laufzeit, die ein Backend ohne Angabe hat: unter Podman `crun`.
@@ -447,7 +497,7 @@ pub(crate) fn static_checks(
 pub(crate) fn isolation_of(name: &str, runtime: Option<PodmanRuntime>) -> IsolationLevel {
     match (name, runtime) {
         (SEATBELT_BACKEND, _) => IsolationLevel::Policy,
-        (PODMAN_BACKEND, Some(PodmanRuntime::Krun)) => IsolationLevel::Kernel,
+        (VM_BACKEND, _) => IsolationLevel::Kernel,
         _ => IsolationLevel::Namespaces,
     }
 }
@@ -480,11 +530,17 @@ pub(crate) fn admitted(
     if ADMITTED_BACKENDS.contains(&stage.as_ref()) {
         return Ok(());
     }
+    // Die Stufe nur, wo sie mehr sagt als der Name, etwa mit Laufzeit.
+    let named = if stage == name {
+        format!("{name:?}")
+    } else {
+        format!("{name:?} ({stage})")
+    };
     Err(Diagnostic::builder(SANDBOX_048, Severity::Blocking)
         .why(format!(
-            "sandbox.backend = {name:?} ({stage}) is not admitted yet: a backend becomes \
-             selectable only after its mount check and the escape suite against it are green in \
-             CI. Admitted are: {}",
+            "sandbox.backend = {named} is not admitted yet: a backend becomes selectable only \
+             after its mount check and the escape suite against it are green in CI. Admitted \
+             are: {}",
             ADMITTED_BACKENDS.join(", ")
         ))
         .fix(FixAction::ChangeSetting {
@@ -555,7 +611,7 @@ fn unknown(name: &str) -> Diagnostic {
     Diagnostic::builder(CONFIG_003, Severity::Blocking)
         .why(format!(
             "sandbox.backend = {name:?}, the known names are \"{}\", \"{BWRAP_BACKEND}\", \
-             \"{PODMAN_BACKEND}\" and \"{SEATBELT_BACKEND}\"",
+             \"{PODMAN_BACKEND}\", \"{SEATBELT_BACKEND}\" and \"{VM_BACKEND}\"",
             crate::AUTO_BACKEND
         ))
         .build()
@@ -759,43 +815,35 @@ mod tests {
     fn a_runtime_wished_for_another_backend_refuses_the_start() {
         use humanitl_config::MinIsolation::Policy;
         use humanitl_config::Origin;
-        use humanitl_config::SandboxBackendName::{Auto, Podman};
-        let krun = sandbox(Auto, Policy, PodmanRuntime::Krun);
-        for wish in [
-            Origin::Cli,
-            Origin::Env("HUMANITL_SANDBOX__PODMAN__RUNTIME".into()),
-        ] {
-            let err = runtime_fits_backend(&krun, Some(&wish)).expect_err("no podman");
-            assert_eq!(err.code.as_str(), "SANDBOX_034", "{}", err.why);
-            assert!(err.why.contains("krun"), "{}", err.why);
+        use humanitl_config::SandboxBackendName::{Auto, Podman, Qemu};
+        for backend in [Auto, Qemu] {
+            let other = sandbox(backend, Policy);
+            for wish in [
+                Origin::Cli,
+                Origin::Env("HUMANITL_SANDBOX__PODMAN__RUNTIME".into()),
+            ] {
+                let err = runtime_fits_backend(&other, Some(&wish)).expect_err("no podman");
+                assert_eq!(err.code.as_str(), "SANDBOX_034", "{}", err.why);
+                assert!(err.why.contains("crun"), "{}", err.why);
+            }
+            for preset in [None, Some(Origin::Default), Some(Origin::Global)] {
+                runtime_fits_backend(&other, preset.as_ref()).expect("a preset is no wish");
+            }
         }
-        for preset in [None, Some(Origin::Default), Some(Origin::Global)] {
-            runtime_fits_backend(&krun, preset.as_ref()).expect("a preset is no wish");
-        }
-        let podman = sandbox(Podman, Policy, PodmanRuntime::Krun);
+        let podman = sandbox(Podman, Policy);
         runtime_fits_backend(&podman, Some(&Origin::Cli)).expect("podman has runtimes");
     }
 
-    /// Die Gruppe `sandbox` mit Backend, Untergrenze und Laufzeit.
+    /// Die Gruppe `sandbox` mit Backend und Untergrenze.
     fn sandbox(
         backend: humanitl_config::SandboxBackendName,
         floor: humanitl_config::MinIsolation,
-        runtime: PodmanRuntime,
     ) -> SandboxRef {
-        let mut sandbox = SandboxRef {
+        SandboxRef {
             backend,
             min_isolation: floor,
             ..SandboxRef::default()
-        };
-        sandbox.podman.runtime = runtime;
-        sandbox
-    }
-
-    /// Die Vorgabe mit dieser Laufzeit.
-    fn sandbox_with_runtime(runtime: PodmanRuntime) -> SandboxRef {
-        let mut sandbox = SandboxRef::default();
-        sandbox.podman.runtime = runtime;
-        sandbox
+        }
     }
 
     fn code_of(result: Result<BackendChoice, Diagnostic>) -> String {
@@ -806,81 +854,118 @@ mod tests {
     }
 
     /// Die Zulassung seit HUM-448: bwrap, Seatbelt und die gemeinsame Stufe
-    /// der Container-Engine; die Kernel-Stufe bleibt bis HUM-449 draußen.
+    /// der Container-Engine; das VM-Backend der Kernel-Stufe bleibt bis
+    /// HUM-449 draußen, auch unter der Untergrenze `kernel`, die es erfüllt.
     #[test]
     fn the_shared_stage_is_admitted_and_the_kernel_stage_is_not() {
-        use humanitl_config::MinIsolation::Policy;
-        use humanitl_config::SandboxBackendName::Podman;
-        let crun = PodmanRuntime::Crun;
+        use humanitl_config::MinIsolation::{Kernel, Policy};
+        use humanitl_config::SandboxBackendName::{Podman, Qemu};
         assert_eq!(
             ADMITTED_BACKENDS,
             [BWRAP_BACKEND, "podman/crun", SEATBELT_BACKEND]
         );
-        assert_eq!(stage(PODMAN_BACKEND, Some(crun)), SHARED_KERNEL_STAGE);
-        for refused in [PODMAN_BACKEND, "podman/krun"] {
+        assert_eq!(
+            stage(PODMAN_BACKEND, Some(PodmanRuntime::Crun)),
+            SHARED_KERNEL_STAGE
+        );
+        for refused in [PODMAN_BACKEND, VM_BACKEND] {
             assert!(!ADMITTED_BACKENDS.contains(&refused), "{refused}");
         }
-        let chosen = choose_backend(&sandbox(Podman, Policy, crun), "auto").expect("admitted");
+        let chosen = choose_backend(&sandbox(Podman, Policy), "auto").expect("admitted");
         assert_eq!(chosen.stage(), SHARED_KERNEL_STAGE);
         assert_eq!(chosen.isolation, IsolationLevel::Namespaces);
-        let kernel = choose_backend(&sandbox(Podman, Policy, PodmanRuntime::Krun), "auto");
-        assert_eq!(code_of(kernel), "SANDBOX_048");
+        for floor in [Policy, Kernel] {
+            let err = choose_backend(&sandbox(Qemu, floor), "auto").expect_err("not admitted");
+            assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
+            assert!(
+                err.why.starts_with(&format!(
+                    "sandbox.backend = {VM_BACKEND:?} is not admitted yet"
+                )),
+                "{}",
+                err.why
+            );
+        }
+    }
+
+    /// Das VM-Backend der Kernel-Stufe scheitert vor HUM-449 auf jedem Weg in
+    /// den Start an der Zulassung. Nur die Umgehung kommt daran vorbei, und
+    /// sie endet bis HUM-444 an der Prüfung der Voraussetzungen oder daran,
+    /// dass der Adapter fehlt; gestartet wird nie etwas.
+    #[test]
+    fn the_kernel_level_starts_on_no_path_before_its_admission() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = without_bwrap(dir.path());
+        let kernel = SandboxRef {
+            backend: humanitl_config::SandboxBackendName::Qemu,
+            ..SandboxRef::default()
+        };
+        for refused in [
+            Backend::detect(VM_BACKEND, paths.clone(), &kernel).map(drop),
+            Backend::fallback(VM_BACKEND, paths.clone(), &kernel).map(drop),
+        ] {
+            let err = refused.expect_err("not admitted");
+            assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
+        }
+        let err = Backend::detect_unadmitted(VM_BACKEND, paths, &kernel)
+            .map(drop)
+            .expect_err("no adapter yet");
+        assert!(
+            ["SANDBOX_045", "SANDBOX_034"].contains(&err.code.as_str()),
+            "{}: {}",
+            err.code,
+            err.why
+        );
     }
 
     /// `sandbox.backend = "podman"` kommt seit HUM-448 auf jedem Weg in den
     /// Start an der Zulassung vorbei bis zum Adapter, der auf diesem `PATH`
-    /// keine Engine findet. Mit `krun` scheitert jeder Weg weiter an der
-    /// Zulassung, auch die Umgehung (HUM-444).
+    /// keine Engine findet.
     #[test]
-    fn the_engine_passes_admission_on_every_path_and_its_kernel_stage_not() {
+    fn the_engine_passes_admission_on_every_path() {
         let dir = tempfile::tempdir().expect("tempdir");
         let paths = without_bwrap(dir.path());
         let shared = SandboxRef::default();
         let err = Backend::detect(PODMAN_BACKEND, paths.clone(), &shared).expect_err("no engine");
         assert_eq!(err.code.as_str(), "SANDBOX_034", "{}", err.why);
         assert!(err.why.contains("no executable podman"), "{}", err.why);
-        let preview = Backend::fallback(PODMAN_BACKEND, paths.clone(), &shared).expect("admitted");
+        let preview = Backend::fallback(PODMAN_BACKEND, paths, &shared).expect("admitted");
         assert_eq!(preview.name(), PODMAN_BACKEND);
         assert_eq!(preview.isolation(), IsolationLevel::Namespaces);
-
-        let kernel = sandbox_with_runtime(PodmanRuntime::Krun);
-        for refused in [
-            Backend::detect(PODMAN_BACKEND, paths.clone(), &kernel).map(drop),
-            Backend::fallback(PODMAN_BACKEND, paths.clone(), &kernel).map(drop),
-            Backend::detect_unadmitted(PODMAN_BACKEND, paths, &kernel).map(drop),
-        ] {
-            let err = refused.expect_err("kernel level");
-            assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
-        }
     }
 
     /// `auto` löst auf das Backend des Systems auf und nie auf ein anderes:
     /// Liegt es unter der Untergrenze, lehnt die Wahl ab, statt zu Podman
-    /// oder zur Kernel-Stufe zu greifen.
+    /// oder zur Kernel-Stufe zu greifen. Die Untergrenze `kernel` erfüllt nur
+    /// das VM-Backend (HUM-464).
     #[test]
     fn a_floor_above_the_backend_refuses_instead_of_choosing_another() {
         use humanitl_config::MinIsolation::{Kernel, Namespaces, Policy};
-        use humanitl_config::SandboxBackendName::{Auto, Bubblewrap as Bwrap, Podman};
-        let crun = PodmanRuntime::Crun;
+        use humanitl_config::SandboxBackendName::{Auto, Bubblewrap as Bwrap, Podman, Qemu};
         assert_eq!(
-            code_of(choose_backend(&sandbox(Bwrap, Kernel, crun), "auto")),
+            code_of(choose_backend(&sandbox(Bwrap, Kernel), "auto")),
             "SANDBOX_035"
         );
         assert_eq!(
-            code_of(choose_backend(&sandbox(Auto, Kernel, crun), "auto")),
+            code_of(choose_backend(&sandbox(Auto, Kernel), "auto")),
             "SANDBOX_035"
         );
-        // Podman mit `crun` teilt den Kern: unter `kernel` ist das 035, noch
-        // bevor die Zulassung gefragt wird (HUM-432 baut darauf).
-        let err = choose_backend(&sandbox(Podman, Kernel, crun), "auto").expect_err("below");
+        // Podman teilt den Kern: unter `kernel` ist das 035, noch bevor die
+        // Zulassung gefragt wird (HUM-432 baut darauf).
+        let err = choose_backend(&sandbox(Podman, Kernel), "auto").expect_err("below");
         assert_eq!(err.code.as_str(), "SANDBOX_035", "{}", err.why);
         assert!(err.why.contains("podman/crun"), "{}", err.why);
         assert!(err.why.contains("kernel"), "{}", err.why);
+        // Das VM-Backend liegt nicht darunter; es scheitert nur an der
+        // Zulassung.
+        assert_eq!(
+            code_of(choose_backend(&sandbox(Qemu, Kernel), "auto")),
+            "SANDBOX_048"
+        );
         // Die Untergrenze selbst und alles darunter geht.
-        let platform = choose_backend(&sandbox(Auto, Policy, crun), "auto").expect("default");
+        let platform = choose_backend(&sandbox(Auto, Policy), "auto").expect("default");
         assert_eq!(platform.name, crate::PLATFORM_BACKEND_NAME);
         if cfg!(not(target_os = "macos")) {
-            let bwrap = choose_backend(&sandbox(Bwrap, Namespaces, crun), "auto").expect("met");
+            let bwrap = choose_backend(&sandbox(Bwrap, Namespaces), "auto").expect("met");
             assert_eq!(bwrap.isolation, IsolationLevel::Namespaces);
             assert_eq!(bwrap.stage(), "bwrap");
         }
@@ -892,10 +977,9 @@ mod tests {
     fn a_profile_that_requires_another_backend_refuses_the_start() {
         use humanitl_config::MinIsolation::Policy;
         use humanitl_config::SandboxBackendName::{Auto, Podman};
-        let crun = PodmanRuntime::Crun;
         // Ein Profil, das Podman verlangt, bei der Vorgabe `auto`; mit Knopf
         // zu Podman, denn seine gemeinsame Stufe ist zugelassen (HUM-448).
-        let err = choose_backend(&sandbox(Auto, Policy, crun), "podman").expect_err("requires");
+        let err = choose_backend(&sandbox(Auto, Policy), "podman").expect_err("requires");
         assert_eq!(err.code.as_str(), "SANDBOX_036", "{}", err.why);
         assert_eq!(
             err.fix,
@@ -906,8 +990,7 @@ mod tests {
         );
         // Ein Profil, das bwrap verlangt, bei der Wahl `podman`.
         if cfg!(not(target_os = "macos")) {
-            let err =
-                choose_backend(&sandbox(Podman, Policy, crun), "bwrap").expect_err("requires");
+            let err = choose_backend(&sandbox(Podman, Policy), "bwrap").expect_err("requires");
             assert_eq!(err.code.as_str(), "SANDBOX_036", "{}", err.why);
             assert_eq!(
                 err.fix,
@@ -916,9 +999,14 @@ mod tests {
                     value: "bwrap".to_owned(),
                 })
             );
-            choose_backend(&sandbox(Auto, Policy, crun), "bwrap").expect("bwrap is auto here");
+            choose_backend(&sandbox(Auto, Policy), "bwrap").expect("bwrap is auto here");
         }
-        let err = choose_backend(&sandbox(Auto, Policy, crun), "docker").expect_err("unknown");
+        // Ein Profil, das das VM-Backend verlangt: ohne Knopf, denn es ist
+        // nicht zugelassen, und der Knopf führte in `SANDBOX_048`.
+        let err = choose_backend(&sandbox(Auto, Policy), VM_BACKEND).expect_err("requires");
+        assert_eq!(err.code.as_str(), "SANDBOX_036", "{}", err.why);
+        assert_eq!(err.fix, None);
+        let err = choose_backend(&sandbox(Auto, Policy), "docker").expect_err("unknown");
         assert_eq!(err.code.as_str(), "CONFIG_003", "{}", err.why);
     }
 
@@ -962,10 +1050,7 @@ mod tests {
             isolation_of(PODMAN_BACKEND, Some(PodmanRuntime::Crun)),
             IsolationLevel::Namespaces
         );
-        assert_eq!(
-            isolation_of(PODMAN_BACKEND, Some(PodmanRuntime::Krun)),
-            IsolationLevel::Kernel
-        );
+        assert_eq!(isolation_of(VM_BACKEND, None), IsolationLevel::Kernel);
         for floor in humanitl_config::MinIsolation::ALL {
             assert_eq!(IsolationLevel::from(floor).as_str(), floor.as_str());
         }

@@ -3323,8 +3323,8 @@ mod tests {
 
     /// Seit HUM-448 fragt die Liste die Container-Engine wie die Suche jedes
     /// Starts: Eine installierte Engine, die auf jede Frage scheitert, ist
-    /// nicht verfügbar, mit dem Befund dieser Suche samt `fix`, und die
-    /// Kernel-Stufe trägt dazu `SANDBOX_048`; ohne Programm im `PATH` steht
+    /// nicht verfügbar, mit dem Befund dieser Suche samt `fix`, ihre eine
+    /// Laufzeit ebenso; ohne Programm im `PATH` steht
     /// `SANDBOX_034` mit `fix`. Das Backend des Systems bleibt, was die Suche
     /// vor jedem Start sagt, und ist unter `auto` gewählt.
     #[cfg(target_os = "linux")]
@@ -3343,6 +3343,10 @@ mod tests {
                 .iter()
                 .map(|b| b.name.as_str())
                 .collect::<Vec<_>>(),
+            humanitl_sandbox::LISTED_BACKENDS
+        );
+        assert_eq!(
+            humanitl_sandbox::LISTED_BACKENDS[..2],
             [humanitl_sandbox::PLATFORM_BACKEND_NAME, "podman"]
         );
         assert_eq!(list.min_isolation, v1::IsolationLevel::Policy as i32);
@@ -3364,14 +3368,11 @@ mod tests {
             .collect();
         assert_eq!(
             runtimes,
-            [
-                ("crun", v1::IsolationLevel::Namespaces as i32, false),
-                ("krun", v1::IsolationLevel::Kernel as i32, false),
-            ]
+            [("crun", v1::IsolationLevel::Namespaces as i32, false)]
         );
         assert_eq!(
-            codes_of(&podman.runtimes[1].diagnostics),
-            [searched.code.as_str(), "SANDBOX_048"]
+            codes_of(&podman.runtimes[0].diagnostics),
+            [searched.code.as_str()]
         );
         // Das Backend des Systems fehlt in diesem `PATH`: der Befund seiner Suche; gewählt
         // bleibt es, und nichts springt ein.
@@ -3490,8 +3491,10 @@ mod tests {
 
     /// Mit Plan misst die Liste an der Konfiguration eines Starts mit diesem
     /// Plan (HUM-440): Das Projekt-Profil des Ordners im Plan hebt die
-    /// Untergrenze auf `kernel`, und jedes Backend der Liste ist dann mit
-    /// der Stufe seiner gewählten Laufzeit unverfügbar mit `SANDBOX_035`.
+    /// Untergrenze auf `kernel`, und jedes Backend der Liste außer dem
+    /// VM-Backend der Kernel-Stufe ist dann mit der Stufe seiner gewählten
+    /// Laufzeit unverfügbar mit `SANDBOX_035`; das VM-Backend erfüllt sie und
+    /// scheitert nur an der Zulassung.
     /// Ohne Plan bleibt die
     /// Antwort die der Konfiguration ohne Wunsch, deren gespeicherter Ordner
     /// kein Projekt-Profil hat. `Plan.backend` wählt in der Liste,
@@ -3556,8 +3559,9 @@ mod tests {
         for name in humanitl_sandbox::LISTED_BACKENDS {
             let entry = backend(&with, name);
             assert!(!entry.available, "{entry:?}");
-            assert!(
+            assert_eq!(
                 codes_of(&entry.diagnostics).contains(&"SANDBOX_035"),
+                *name != humanitl_sandbox::VM_BACKEND,
                 "{entry:?}"
             );
         }

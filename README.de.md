@@ -98,8 +98,8 @@ Unter Linux lässt sich Podman ohne Root mit der Laufzeit `crun` als zweites San
 (`--backend podman` oder `sandbox.backend = "podman"`; `auto` bleibt bubblewrap): Derselbe Shim
 prüft dieselben drei Garantien, auf derselben Isolationsstufe wie bubblewrap, `namespaces` über dem
 geteilten Kern des Hosts ([`docs/SECURITY.md` Abschnitt 13](docs/SECURITY.md#13-linux-podman)).
-Ein eigener Kern, Podman mit `krun` in einer Micro-VM, ist noch nicht verfügbar, und jeder Start
-damit wird abgelehnt (`SANDBOX_048`); `humanitl sandbox backends` zeigt jedes Backend mit seiner
+Ein eigener Kern, das Backend `qemu` mit einer Micro-VM (ADR-0021), ist noch nicht verfügbar, und
+jeder Start damit wird abgelehnt (`SANDBOX_048`); `humanitl sandbox backends` zeigt jedes Backend mit seiner
 Stufe und dem, was ihm fehlt.
 
 ### Selbst prüfen

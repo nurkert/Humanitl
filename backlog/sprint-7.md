@@ -670,6 +670,7 @@ ADR-0021: je Sitzung eine transiente Unit des Nutzers mit vier Prozessen in je e
 4. `isolation_check` liest die `CHECK`-Zeilen aus dem Gast über den Steuerkanal (HUM-443) **und** prüft auf dem Host: Netz-Namensraum jedes Prozesses der Unit nur `lo`, Deskriptoren von QEMU nur die aus Q3 ohne Konsole, kein `/dev/vhost-vsock`, kein `tun`, im Laufzeitverzeichnis nur die erklärten Sockets, genau ein vhost-device-vsock-Prozess mit genau einem Gerät. Scheitert die Host-Prüfung: `SANDBOX_047`, Sitzung gestoppt.
 5. `humanitl doctor` je Voraussetzung eine Zeile, Probestart der Stufe mit `DOCTOR_015` bei Fehlschlag.
 6. `docs/SECURITY.md` neuer Abschnitt „Linux: QEMU micro-VM (kernel level)" mit den drei Garantien für die Stufe; `docs/THREAT-MODEL.md` K-Einträge für VMM, vsock-Tür, Gastkernel und die vier Hilfsprozesse.
+7. Liest `sandbox.qemu.cpus`, `sandbox.qemu.memory_mib`, `sandbox.qemu.kernel`, `sandbox.qemu.modules`, `sandbox.qemu.start_timeout_secs`, `sandbox.qemu.qemu`, `sandbox.qemu.virtiofsd`, `sandbox.qemu.vhost_device_vsock`; `config_readers.rs` stuft sie danach als `effective` ein.
 
 ### Tests
 - Unit: Startzeilen der vier Prozesse enthalten die festen Optionen; eine Verbotsliste prüft, dass keine Netzoption, kein `-netdev`, kein `-serial` außer `none`, kein `--forward-cid`, kein zweites `--vm` und kein zweiter Lauscher vorkommt.

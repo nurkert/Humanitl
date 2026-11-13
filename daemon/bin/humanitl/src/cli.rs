@@ -28,7 +28,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use clap::builder::PossibleValuesParser;
+use clap::builder::{PossibleValue, PossibleValuesParser};
 use clap::{
     Arg, ArgAction, ArgMatches, Args, Command, CommandFactory, FromArgMatches, Parser, Subcommand,
 };
@@ -1316,8 +1316,18 @@ pub fn config_args() -> Vec<Arg> {
                 arg = arg.visible_alias(short);
             }
             if let Some(allowed) = flag.allowed.as_ref() {
+                // Ein entfallener Wert kommt verborgen durch, damit das Laden
+                // ihn mit seinem eigenen Befund und dem Weg zu seinem Ersatz
+                // ablehnt (`CONFIG_023`, HUM-464), statt dass der Parser nur
+                // die übrigen Werte nennt.
+                let retired = humanitl_config::retired_values(flag.path)
+                    .iter()
+                    .map(|value| PossibleValue::new(*value).hide(true));
                 arg = arg.value_parser(PossibleValuesParser::new(
-                    allowed.iter().map(String::as_str),
+                    allowed
+                        .iter()
+                        .map(|value| PossibleValue::new(value.as_str()))
+                        .chain(retired),
                 ));
             } else if flag.boolean {
                 // Ein Schalter ohne Wert heißt `true`; `--x=false` schaltet ab.
@@ -1508,7 +1518,7 @@ mod tests {
             ("hold.ask_mode", "none"),
             ("llm.endpoint", "http://127.0.0.1:1234"),
             ("sandbox.backend", "podman"),
-            ("sandbox.podman.runtime", "krun"),
+            ("sandbox.podman.runtime", "crun"),
         ];
         assert_eq!(values.len(), SHORT_FLAGS.len());
 

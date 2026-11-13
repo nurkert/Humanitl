@@ -505,30 +505,7 @@ fn podman_is_well_formed(sandbox: &SandboxRef, host: HostResources) -> Result<()
             "an absolute path, or no value for the search in PATH",
         ));
     }
-    if let Some(memory_mib) = podman.memory_mib {
-        at_least("sandbox.podman.memory_mib", memory_mib, 256)?;
-        if let Some(max) = host.memory_mib {
-            within_host(
-                "sandbox.podman.memory_mib",
-                memory_mib,
-                256,
-                max,
-                "the memory of this host",
-            )?;
-        }
-    }
-    if let Some(cpus) = podman.cpus {
-        at_least("sandbox.podman.cpus", u64::from(cpus), 1)?;
-        if let Some(max) = host.cpus {
-            within_host(
-                "sandbox.podman.cpus",
-                u64::from(cpus),
-                1,
-                u64::from(max),
-                "the CPUs this daemon may use",
-            )?;
-        }
-    }
+    resources_are_well_formed("sandbox.podman", podman.memory_mib, podman.cpus, host)?;
     at_least("sandbox.podman.pids_limit", podman.pids_limit, 64)?;
     between(
         "sandbox.podman.start_timeout_secs",
@@ -567,6 +544,91 @@ fn podman_is_well_formed(sandbox: &SandboxRef, host: HostResources) -> Result<()
                 value: "\"host\"".to_owned(),
             })
             .build());
+    }
+    Ok(())
+}
+
+/// Arbeitsspeicher und CPUs einer Sandbox unter `group` (die Gruppe der
+/// Container-Engine oder der Kernel-Stufe): Untergrenze fest, Obergrenze vom
+/// Host, wo er sie nennt.
+fn resources_are_well_formed(
+    group: &str,
+    memory_mib: Option<u64>,
+    cpus: Option<u32>,
+    host: HostResources,
+) -> Result<(), Diagnostic> {
+    if let Some(memory_mib) = memory_mib {
+        let key = format!("{group}.memory_mib");
+        at_least(&key, memory_mib, 256)?;
+        if let Some(max) = host.memory_mib {
+            within_host(&key, memory_mib, 256, max, "the memory of this host")?;
+        }
+    }
+    if let Some(cpus) = cpus {
+        let key = format!("{group}.cpus");
+        at_least(&key, u64::from(cpus), 1)?;
+        if let Some(max) = host.cpus {
+            within_host(
+                &key,
+                u64::from(cpus),
+                1,
+                u64::from(max),
+                "the CPUs this daemon may use",
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Die Gruppe der Kernel-Stufe (HUM-464).
+const KERNEL_LEVEL: &str = "sandbox.qemu";
+
+/// Die Gruppe [`KERNEL_LEVEL`] der Kernel-Stufe (HUM-464).
+///
+/// Wie die Gruppe der Container-Engine: geprüft beim Laden, gleich welches
+/// Backend gewählt ist, Arbeitsspeicher und CPUs ohne feste Vorgabe. Jeder
+/// Pfad ist absolut oder leer; ein relativer hinge vom Arbeitsverzeichnis des
+/// Daemons ab. Ob es die Dateien gibt, sagt erst die Prüfung der
+/// Voraussetzungen (`SANDBOX_045`), denn eine Datei darf auf jedem Rechner
+/// gültig bleiben.
+fn kernel_level_is_well_formed(
+    sandbox: &SandboxRef,
+    host: HostResources,
+) -> Result<(), Diagnostic> {
+    let settings = &sandbox.qemu;
+    resources_are_well_formed(KERNEL_LEVEL, settings.memory_mib, settings.cpus, host)?;
+    between(
+        &format!("{KERNEL_LEVEL}.start_timeout_secs"),
+        settings.start_timeout_secs,
+        1,
+        600,
+    )?;
+    let program = "an absolute path, or no value for the search in PATH";
+    let paths = [
+        (
+            "kernel",
+            &settings.kernel,
+            "an absolute path, or no value for the kernel of this host",
+        ),
+        (
+            "modules",
+            &settings.modules,
+            "an absolute path, or no value for the modules of the kernel",
+        ),
+        ("qemu", &settings.qemu, program),
+        ("virtiofsd", &settings.virtiofsd, program),
+        ("vhost_device_vsock", &settings.vhost_device_vsock, program),
+    ];
+    for (field, path, allowed) in paths {
+        if let Some(path) = path
+            && !path.is_absolute()
+        {
+            return Err(out_of_range(
+                &format!("{KERNEL_LEVEL}.{field}"),
+                &path.display().to_string(),
+                allowed,
+            ));
+        }
     }
     Ok(())
 }
@@ -659,6 +721,7 @@ impl Config {
         findings_are_well_formed(&self.findings)?;
         sandbox_is_well_formed(&self.sandbox)?;
         podman_is_well_formed(&self.sandbox, host)?;
+        kernel_level_is_well_formed(&self.sandbox, host)?;
         terminal_is_well_formed(&self.terminal)?;
         agent_is_well_formed(&self.agent)
     }
@@ -1092,6 +1155,54 @@ mod tests {
                 None => config.validate_on(SMALL_HOST).expect(&image),
             }
         }
+    }
+
+    /// Die Gruppe der Kernel-Stufe hat dieselben Grenzen wie die der Engine,
+    /// gleich welches Backend gewählt ist, und nur absolute Pfade (HUM-464).
+    #[test]
+    fn kernel_level_bounds_and_paths_hold_whatever_the_backend() {
+        fn group(config: &mut Config) -> &mut crate::QemuConfig {
+            &mut config.sandbox.qemu
+        }
+        type Case = (&'static str, fn(&mut Config));
+        let cases: [Case; 8] = [
+            ("memory_mib", |c| group(c).memory_mib = Some(255)),
+            ("memory_mib", |c| group(c).memory_mib = Some(4097)),
+            ("cpus", |c| group(c).cpus = Some(0)),
+            ("cpus", |c| group(c).cpus = Some(3)),
+            ("start_timeout_secs", |c| group(c).start_timeout_secs = 601),
+            ("kernel", |c| {
+                group(c).kernel = Some(PathBuf::from("vmlinuz"));
+            }),
+            ("modules", |c| {
+                group(c).modules = Some(PathBuf::from("lib/mod"));
+            }),
+            ("vhost_device_vsock", |c| {
+                group(c).vhost_device_vsock = Some(PathBuf::from("bin/v"));
+            }),
+        ];
+        for backend in [
+            crate::SandboxBackendName::Auto,
+            crate::SandboxBackendName::Qemu,
+        ] {
+            for (field, set) in cases {
+                let mut config = Config::default();
+                config.sandbox.backend = backend;
+                set(&mut config);
+                let key = format!("{}.{field}", super::KERNEL_LEVEL);
+                assert!(podman_why(&config).contains(&key), "{key}");
+            }
+        }
+        let mut config = Config::default();
+        let settings = group(&mut config);
+        settings.memory_mib = Some(4096);
+        settings.cpus = Some(2);
+        settings.start_timeout_secs = 1;
+        settings.kernel = Some(PathBuf::from("/boot/vmlinuz"));
+        settings.modules = Some(PathBuf::from("/usr/lib/modules/7"));
+        config
+            .validate_on(SMALL_HOST)
+            .expect("the bounds are inside");
     }
 
     #[test]

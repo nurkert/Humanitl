@@ -415,9 +415,10 @@ void main() {
     );
   });
 
-  // HUM-432, HUM-440: Der Fake spielt den Stand nach HUM-448: das Backend des
-  // Systems gewählt und verfügbar, Podman zugelassen und verfügbar mit `crun`,
-  // die Laufzeit `krun` noch nicht zugelassen.
+  // HUM-432, HUM-440, HUM-464: Der Fake spielt den Stand nach HUM-464: das
+  // Backend des Systems gewählt und verfügbar, Podman zugelassen und
+  // verfügbar mit `crun`, das VM-Backend der Kernel-Stufe noch nicht
+  // zugelassen und deshalb keine Wahl.
   test(
     'sandboxBackends lists the system backend and an admitted podman',
     () async {
@@ -428,6 +429,7 @@ void main() {
       expect(list.backends.map((b) => b.name), <String>[
         DoctorCheckId.sandboxTool,
         'podman',
+        'qemu',
       ]);
       expect(
         list.backends.where((b) => b.selected).single.name,
@@ -437,19 +439,21 @@ void main() {
         DoctorCheckId.sandboxTool,
         'podman',
       ]);
-      final SandboxBackendInfo podman = list.backends.last;
+      final SandboxBackendInfo podman = list.backends[1];
       expect(podman.available, isTrue);
       expect(podman.admitted, isTrue);
       expect(podman.diagnostics, isEmpty);
-      expect(podman.runtimes.map((r) => r.isolation), <IsolationLevel>[
-        IsolationLevel.namespaces,
-        IsolationLevel.kernel,
-      ]);
-      final SandboxRuntimeInfo crun = podman.runtimes.first;
-      final SandboxRuntimeInfo krun = podman.runtimes.last;
+      final SandboxRuntimeInfo crun = podman.runtimes.single;
+      expect(crun.isolation, IsolationLevel.namespaces);
       expect(crun.available && crun.selected, isTrue);
-      expect(krun.available, isFalse);
-      expect(krun.diagnostics.single.code, DiagnosticCodes.backendNotAdmitted);
+      final SandboxBackendInfo kernel = list.backends.last;
+      expect(kernel.isolation, IsolationLevel.kernel);
+      expect(kernel.available || kernel.admitted, isFalse);
+      expect(
+        kernel.diagnostics.single.code,
+        DiagnosticCodes.backendNotAdmitted,
+      );
+      expect(kernel.runtimes, isEmpty);
 
       client.sandboxBackendsFailure = const Diagnostic(
         code: 'IPC_006',

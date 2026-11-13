@@ -83,12 +83,12 @@
 //! Wunsch, über [`SandboxBackend::pull_image`].
 //!
 //! **Zulassung.** Seit HUM-448 steht Podman mit `crun` in
-//! [`crate::ADMITTED_BACKENDS`] ([`SHARED_KERNEL_STAGE`]); mit `krun` lehnt
-//! [`crate::Backend::detect`] es weiter mit `SANDBOX_048` ab, und nur die
-//! Escape-Suite und die Tests kommen über `Backend::detect_unadmitted` an
-//! diese Stufe. Die Konstruktoren des Adapters sind nur in der Crate
-//! sichtbar; von außen führt jeder Weg über [`crate::Backend`] und dessen
-//! Zulassung.
+//! [`crate::ADMITTED_BACKENDS`] ([`SHARED_KERNEL_STAGE`]). Eine Laufzeit mit
+//! eigenem Gastkern hat der Adapter seit HUM-464 nicht mehr: Die Kernel-Stufe
+//! ist ein eigenes Backend (ADR-0021), und den früheren Wert lehnt schon das
+//! Laden der Konfiguration ab. Die Konstruktoren des Adapters sind nur in der
+//! Crate sichtbar; von außen führt jeder Weg über [`crate::Backend`] und
+//! dessen Zulassung.
 
 mod detect;
 mod image;
@@ -110,7 +110,7 @@ use std::time::Duration;
 
 use humanitl_config::{Paths, PodmanConfig, PodmanRootfs, PodmanRuntime};
 use humanitl_core::diagnostics::codes::{
-    CONFIG_003, SANDBOX_011, SANDBOX_012, SANDBOX_030, SANDBOX_037, SANDBOX_048,
+    CONFIG_003, SANDBOX_011, SANDBOX_012, SANDBOX_030, SANDBOX_037,
 };
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
@@ -173,7 +173,6 @@ const MAX_DERIVED_CPUS: u32 = 4;
 /// die der Host einsetzt, wo der Schlüssel leer ist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Settings {
-    runtime: PodmanRuntime,
     rootfs: PodmanRootfs,
     /// Das Abbild aus `sandbox.podman.image`, mit Digest; gilt nur mit
     /// `rootfs = "image"` als Wurzel, ist aber auch sonst das, was
@@ -195,7 +194,6 @@ impl Settings {
     /// nutzen darf, mindestens 1, höchstens 4.
     fn with_host(config: &PodmanConfig, memory: Option<u64>, cpus: Option<u32>) -> Self {
         Self {
-            runtime: config.runtime,
             rootfs: config.rootfs,
             image: config.image.clone(),
             memory_mib: config.memory_mib.unwrap_or_else(|| {
@@ -257,8 +255,7 @@ impl PodmanBackend {
     ///
     /// # Errors
     ///
-    /// `SANDBOX_048` für die Laufzeit `krun` (bis HUM-444), sonst die Codes
-    /// aus [`detect`]: `SANDBOX_034`, `SANDBOX_037` bis `SANDBOX_040`,
+    /// Die Codes aus [`detect`]: `SANDBOX_034`, `SANDBOX_037` bis `SANDBOX_040`,
     /// `SANDBOX_044`; `SANDBOX_011`, wenn das Verzeichnis des Adapters sich
     /// nicht anlegen lässt.
     pub(crate) fn detect(paths: Paths, config: &PodmanConfig) -> Result<Self, Diagnostic> {
@@ -272,7 +269,6 @@ impl PodmanBackend {
         config: &PodmanConfig,
         start: Option<ClientStart>,
     ) -> Result<Self, Diagnostic> {
-        refuse_kernel_level(config.runtime)?;
         let program = detect::find_program(config, paths.env())?;
         let engine = EngineDir::of(&paths);
         engine.prepare()?;
@@ -446,11 +442,10 @@ impl PodmanBackend {
         })
     }
 
-    /// Lehnt ab, was diese Stufe nicht kann: die Laufzeit `krun`
-    /// (HUM-444), ein Abbild als Wurzel ohne Verweis und die Wegwerf-Sandbox
-    /// (HUM-438, [`disposable_unsupported`]). Nie still etwas anderes.
+    /// Lehnt ab, was diese Stufe nicht kann: ein Abbild als Wurzel ohne
+    /// Verweis und die Wegwerf-Sandbox (HUM-438, [`disposable_unsupported`]).
+    /// Nie still etwas anderes.
     fn refuse_unsupported(&self, request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
-        refuse_kernel_level(self.settings.runtime)?;
         if self.settings.rootfs == PodmanRootfs::Image && self.settings.image.is_none() {
             // Das Laden lehnt das schon ab (`CONFIG_003`); ein Start nimmt
             // auch dann nicht still die Wurzel des Hosts.
@@ -819,24 +814,6 @@ fn new_lifeline() -> Result<(Lifeline, OwnedFd), Diagnostic> {
             .why(format!("cannot create the lifeline: {err}"))
             .build()
     })
-}
-
-/// `SANDBOX_048` für die Kernel-Stufe: `krun` kommt mit HUM-444.
-fn refuse_kernel_level(runtime: PodmanRuntime) -> Result<(), Diagnostic> {
-    if runtime == PodmanRuntime::Crun {
-        return Ok(());
-    }
-    Err(Diagnostic::builder(SANDBOX_048, Severity::Blocking)
-        .why(format!(
-            "sandbox.podman.runtime = {:?} is not admitted yet: the kernel level comes with its \
-             own adapter and escape suite (HUM-444, HUM-449)",
-            runtime.as_str()
-        ))
-        .fix(FixAction::ChangeSetting {
-            key: "sandbox.podman.runtime".to_owned(),
-            value: detect::CRUN.to_owned(),
-        })
-        .build())
 }
 
 /// Dieselbe Gruppe `sandbox`, aber mit dem Abbild `reference` als Wurzel der
@@ -1438,7 +1415,7 @@ impl SandboxBackend for PodmanBackend {
     }
 
     fn isolation(&self) -> IsolationLevel {
-        crate::backend::isolation_of(PODMAN_BACKEND, Some(self.settings.runtime))
+        crate::backend::isolation_of(PODMAN_BACKEND, Some(PodmanRuntime::Crun))
     }
 
     /// Nie: `SANDBOX_030` mit dem Grund (HUM-438, Modulbeschreibung). `auto`
@@ -1518,8 +1495,7 @@ impl SandboxBackend for PodmanBackend {
     /// Was [`BwrapBackend`] für dieselbe Anfrage ablehnte (`SANDBOX_005`,
     /// `SANDBOX_006`, `SANDBOX_011`), dazu `SANDBOX_030` für eine
     /// Wegwerf-Sandbox, `SANDBOX_043` für ein Abbild, das nicht mit genau
-    /// seinem Digest vorliegt, `SANDBOX_048` für `krun` und `SANDBOX_006` für
-    /// einen Pfad mit Komma.
+    /// seinem Digest vorliegt, und `SANDBOX_006` für einen Pfad mit Komma.
     fn plan(&self, request: &PlanRequest<'_>) -> Result<LaunchPlan, Diagnostic> {
         let PlanRequest {
             profile,

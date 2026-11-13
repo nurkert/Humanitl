@@ -154,8 +154,8 @@ const REGISTER: &[(&str, &str)] = &[
     // (HUM-350), und in `humanitl run` für die Anfrage.
     ("sandbox.mode", "effective"),
     // Die Gruppe `sandbox.podman` legt HUM-431 an; der Podman-Adapter liest
-    // sie (HUM-433): `program` bei der Suche, `runtime` (nur `crun`, `krun`
-    // ist `SANDBOX_048`) und `rootfs` vor dem Plan, `memory_mib`, `cpus` und
+    // sie (HUM-433): `program` bei der Suche, `runtime` (nur `crun`; den
+    // früheren Wert lehnt das Laden ab, HUM-464) und `rootfs` vor dem Plan, `memory_mib`, `cpus` und
     // `pids_limit` als Grenzen der Zeile, `start_timeout_secs` als Frist bis
     // zum Bericht. `image` ist mit `rootfs = "image"` die Wurzel, die der Plan
     // vor jedem Start über ihren Digest prüft, und ohne Verweis das, was
@@ -169,6 +169,19 @@ const REGISTER: &[(&str, &str)] = &[
     ("sandbox.podman.runtime", "effective"),
     ("sandbox.podman.start_timeout_secs", "effective"),
     ("sandbox.profile", "effective"),
+    // Die Gruppe der Kernel-Stufe legt HUM-464 an; der Adapter kommt mit
+    // HUM-444. Bis dahin liest nur die Prüfung der Voraussetzungen in der
+    // Liste der Backends die Pfade (`kernel`, `modules`, die Programme), und
+    // jeder Start lehnt die Stufe mit `SANDBOX_048` ab: Keiner der Werte
+    // wirkt auf eine Sitzung.
+    ("sandbox.qemu.cpus", "pending(HUM-444)"),
+    ("sandbox.qemu.kernel", "pending(HUM-444)"),
+    ("sandbox.qemu.memory_mib", "pending(HUM-444)"),
+    ("sandbox.qemu.modules", "pending(HUM-444)"),
+    ("sandbox.qemu.qemu", "pending(HUM-444)"),
+    ("sandbox.qemu.start_timeout_secs", "pending(HUM-444)"),
+    ("sandbox.qemu.vhost_device_vsock", "pending(HUM-444)"),
+    ("sandbox.qemu.virtiofsd", "pending(HUM-444)"),
     ("sandbox.work_dir", "effective"),
     ("sandbox.work_mode", "effective"),
     // Gelesen in `humanitl sandbox attach`, wenn `--detach-keys` fehlt
@@ -420,7 +433,8 @@ fn the_keys_without_a_reader_are_the_known_ones() {
     // `ui.theme`, die seit HUM-069 die Oberfläche liest. Sie steht hier, damit
     // ein weiterer Fall nicht unbemerkt dazukommt: Wer einen Schlüssel
     // verdrahtet oder streicht, zieht ihn hier und im Register zugleich nach.
-    // Die acht Schlüssel unter `sandbox.podman` (HUM-431) verdrahtet HUM-433.
+    // Die acht Schlüssel unter `sandbox.podman` (HUM-431) verdrahtet HUM-433,
+    // die acht unter `sandbox.qemu` (HUM-464) der Adapter aus HUM-444.
     let pending: Vec<&str> = register()
         .iter()
         .filter(|(_, readiness)| readiness.is_pending())
@@ -431,6 +445,14 @@ fn the_keys_without_a_reader_are_the_known_ones() {
         vec![
             "pseudonyms.max_response_bytes",
             "pseudonyms.translate_responses",
+            "sandbox.qemu.cpus",
+            "sandbox.qemu.kernel",
+            "sandbox.qemu.memory_mib",
+            "sandbox.qemu.modules",
+            "sandbox.qemu.qemu",
+            "sandbox.qemu.start_timeout_secs",
+            "sandbox.qemu.vhost_device_vsock",
+            "sandbox.qemu.virtiofsd",
         ]
     );
 }

@@ -5656,9 +5656,9 @@ mixin FakeIntercept {
 /// The fake's half of `SandboxBackends` (HUM-432, HUM-440).
 ///
 /// Plays a Linux system where everything is installed, as the real daemon
-/// sees it since HUM-448: the backend of the system chosen and available,
-/// Podman admitted and available with the runtime `crun`, and the runtime
-/// `krun` not admitted yet (`SANDBOX_048`, until HUM-447).
+/// sees it since HUM-464: the backend of the system chosen and available,
+/// Podman admitted and available with the runtime `crun`, and the VM backend
+/// of the kernel level not admitted yet (`SANDBOX_048`, until HUM-449).
 mixin FakeSandboxBackends {
   /// The backend each start asked for in `Start.cli_overrides`, oldest
   /// first; null for a start without the entry (HUM-440).
@@ -5723,26 +5723,27 @@ mixin FakeSandboxBackends {
             available: true,
             selected: true,
           ),
-          SandboxRuntimeInfo(
-            name: 'krun',
-            isolation: IsolationLevel.kernel,
-            diagnostics: <Diagnostic>[notAdmitted],
-          ),
         ],
+      ),
+      SandboxBackendInfo(
+        name: 'qemu',
+        isolation: IsolationLevel.kernel,
+        diagnostics: <Diagnostic>[notAdmitted],
       ),
     ],
   );
 
-  /// The daemon's `SANDBOX_048` for the runtime `krun`, which stays closed
-  /// until HUM-447; for tests that play a backend that is not admitted.
+  /// The daemon's `SANDBOX_048` for the VM backend of the kernel level,
+  /// which stays closed until HUM-449; for tests that play a backend that is
+  /// not admitted.
   static const Diagnostic notAdmitted = Diagnostic(
     code: DiagnosticCodes.backendNotAdmitted,
     severity: Severity.blocking,
     why:
-        'sandbox.podman.runtime = "krun" is not admitted yet: a backend '
-        'becomes selectable only after its mount check and the escape suite '
-        'against it are green in CI.',
-    fix: FixAction.changeSetting(key: 'sandbox.podman.runtime', value: 'crun'),
+        'sandbox.backend = "qemu" is not admitted yet: a backend becomes '
+        'selectable only after its mount check and the escape suite against it '
+        'are green in CI.',
+    fix: FixAction.changeSetting(key: 'sandbox.backend', value: 'auto'),
   );
 
   /// `SandboxBackends`. The plan changes nothing here: the fake has no

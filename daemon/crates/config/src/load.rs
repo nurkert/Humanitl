@@ -50,13 +50,14 @@ use std::path::{Path, PathBuf};
 
 use humanitl_core::diagnostics::codes::{
     CONFIG_001, CONFIG_002, CONFIG_003, CONFIG_005, CONFIG_006, CONFIG_007, CONFIG_008, CONFIG_009,
+    CONFIG_023,
 };
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use toml::Value as TomlValue;
 
 use crate::alias;
 use crate::env::Env;
-use crate::model::{Config, MinIsolation};
+use crate::model::{Config, MinIsolation, RETIRED_KERNEL_RUNTIME};
 use crate::origin::{Origin, Resolved};
 use crate::profile::{ConfigOverlay, DEFAULT_PROFILE, Profile, ProfileSource, builtin_text};
 use crate::schema::{self, Field};
@@ -628,6 +629,18 @@ impl Merge {
                 continue;
             }
 
+            // Ein Wert, den es früher gab, ist kein Tippfehler: Er bekommt
+            // seinen eigenen Code mit dem Weg zu dem, was ihn ersetzt
+            // (HUM-464), statt eines `CONFIG_003`, das nur die übrigen Werte
+            // nennt. Aus jeder Ebene ein Abbruch, wie jeder Wert dieser Gruppe.
+            if let Some(retired) = retired_value(
+                &entry.path,
+                entry.value.as_str(),
+                &format!("{} (from {})", entry.written_as, entry.origin),
+            ) {
+                return Err(retired);
+            }
+
             if let Err(diagnostic) = check_value(field, &entry) {
                 // Die Wahl des Backends und die Untergrenze brechen das Laden
                 // aus jeder Ebene ab, auch aus der Umgebung (HUM-431): Ein
@@ -686,15 +699,73 @@ const BACKEND: &str = "sandbox.backend";
 /// Die Gruppe des Backends `podman` (HUM-431).
 const PODMAN_PREFIX: &str = "sandbox.podman.";
 
+/// Die Gruppe der Kernel-Stufe (HUM-464).
+const KERNEL_LEVEL_PREFIX: &str = "sandbox.qemu.";
+
+/// Die Laufzeit der Container-Engine (HUM-431), seit HUM-464 nur noch die des
+/// geteilten Kerns.
+pub(crate) const ENGINE_RUNTIME: &str = "sandbox.podman.runtime";
+
+/// Der Wert von `sandbox.backend`, der die Kernel-Stufe wählt (HUM-464); der
+/// Weg, den `CONFIG_023` nennt.
+pub(crate) const KERNEL_LEVEL_BACKEND: &str = "qemu";
+
+/// Die Werte eines Schlüssels, die eine frühere Fassung annahm und die es
+/// nicht mehr gibt (HUM-464). Eine Kommandozeile, die nur die Werte des
+/// Schemas annimmt, lässt sie trotzdem durch, verborgen, damit das Laden sie
+/// mit `CONFIG_023` und dem Weg zu ihrem Ersatz ablehnt statt mit einem
+/// Fehler des Parsers, der nur die übrigen Werte nennt.
+#[must_use]
+pub fn retired_values(path: &str) -> &'static [&'static str] {
+    if path == ENGINE_RUNTIME {
+        &[RETIRED_KERNEL_RUNTIME]
+    } else {
+        &[]
+    }
+}
+
+/// `CONFIG_023` für einen Wert, den eine frühere Fassung annahm und den es
+/// nicht mehr gibt (HUM-464): die Laufzeit der Kernel-Stufe unter der
+/// Container-Engine.
+/// Die Kernel-Stufe ist seitdem ein eigenes Backend, und der Befund nennt es
+/// als Weg. Nie still ersetzt: Ein Start mit der übrigen Laufzeit hätte
+/// einen geteilten Kern, wo der Mensch einen eigenen verlangt hat.
+///
+/// Dieselbe Prüfung gilt beim Laden und beim Setzen einer Einstellung
+/// (`humanitl config set`, `SetConfig`, über [`crate::value::check_value`]):
+/// Sonst nennte das Setzen den Wert unbekannt und schlüge die Laufzeit des
+/// geteilten Kerns vor. `shown` ist, wie der Befund den Schlüssel nennt,
+/// beim Laden mit seiner Ebene.
+pub(crate) fn retired_value(path: &str, value: Option<&str>, shown: &str) -> Option<Diagnostic> {
+    if path != ENGINE_RUNTIME || value != Some(RETIRED_KERNEL_RUNTIME) {
+        return None;
+    }
+    Some(
+        Diagnostic::builder(CONFIG_023, Severity::Error)
+            .why(format!(
+                "{shown} = {RETIRED_KERNEL_RUNTIME:?} is gone: the kernel level is no runtime of \
+                 the container engine any more but a backend of its own, sandbox.backend = \
+                 \"qemu\" (ADR-0021). Remove {path}, and choose that backend where a guest \
+                 kernel of its own is wanted"
+            ))
+            .fix(FixAction::ChangeSetting {
+                key: BACKEND.to_owned(),
+                value: KERNEL_LEVEL_BACKEND.to_owned(),
+            })
+            .build(),
+    )
+}
+
 /// Ein Projekt wählt das Backend auch nicht über ein Profil (HUM-431).
 ///
 /// Das Projekt-Profil darf mit `name` ein mitgeliefertes Profil als Basis
 /// nennen (`crate::resolve`), und gibt es eine eigene Datei dieses Namens, gilt
 /// die Datei des Nutzers. Setzt diese `sandbox.backend` oder einen Schlüssel
-/// unter `sandbox.podman`, hätte das Projekt das Backend über den Umweg
-/// gewählt, den ihm die Projekt-Ebene verwehrt. Ein Profil, das das
-/// Projekt-Profil nennt, darf diese Schlüssel deshalb nicht setzen; das gilt
-/// auch, wenn der Mensch dasselbe Profil zugleich selbst nennt, wie bei der
+/// der Container-Engine, hätte das Projekt das Backend über den Umweg
+/// gewählt, den ihm die Projekt-Ebene verwehrt; ebenso einen der Kernel-Stufe.
+/// Ein Profil, das das Projekt-Profil nennt, darf diese Schlüssel deshalb
+/// nicht setzen; das gilt auch, wenn der Mensch dasselbe Profil zugleich
+/// selbst nennt, wie bei der
 /// Wahl des Servers ([`project_owns_profile_choice`]): lieber einmal zu streng
 /// als einmal zu nachgiebig. Die Untergrenze braucht diese Prüfung nicht: Über
 /// alle Ebenen gilt dort ohnehin der strengste Wert.
@@ -719,7 +790,10 @@ fn project_cannot_choose_the_backend_through_a_profile(
         }
         for (written_as, _) in profile.overlay.iter() {
             let path = alias::canonical(written_as).unwrap_or(written_as);
-            if path == BACKEND || path.starts_with(PODMAN_PREFIX) {
+            if path == BACKEND
+                || path.starts_with(PODMAN_PREFIX)
+                || path.starts_with(KERNEL_LEVEL_PREFIX)
+            {
                 return Err(Diagnostic::builder(CONFIG_003, Severity::Error)
                     .why(format!(
                         "the project profile {} names the profile {wish}, and that profile \
@@ -741,7 +815,10 @@ fn project_cannot_choose_the_backend_through_a_profile(
 /// die Ebene darunter zurück, und ein gewähltes Backend oder eine Untergrenze
 /// fällt nie still zurück.
 fn never_skipped(path: &str) -> bool {
-    path == BACKEND || path == MIN_ISOLATION || path.starts_with(PODMAN_PREFIX)
+    path == BACKEND
+        || path == MIN_ISOLATION
+        || path.starts_with(PODMAN_PREFIX)
+        || path.starts_with(KERNEL_LEVEL_PREFIX)
 }
 
 /// Ob `entry` die Untergrenze der Isolation hebt oder als erster Wert setzt.

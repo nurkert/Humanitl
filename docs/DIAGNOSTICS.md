@@ -16,8 +16,8 @@ Entfernen eines Codes.
 |---|---|---|---|---|
 | daemon | `DAEMON` | 001 | 019 | 001-004 Start, Erreichbarkeit, Version des Daemons, 005-008 die Nutzer-Unit von `daemon install` (HUM-044), 009 Abschied (HUM-142), 010 Nutzersitzung, 011 Binaries aus dem `AppImage`, 012 `journalctl` (HUM-070), 013 der von systemd übergebene Socket (HUM-053), 014 `daemon uninstall` (HUM-077) |
 | ipc | `IPC` | 001 | 009 | gRPC-Schnittstelle, Token, Aufrufe gegen den Zustand |
-| config | `CONFIG` | 001 | 029 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel (HUM-070), 019-020 der Zugangsschlüssel des Modells (HUM-140, Bereich dafür bis 029 erweitert), 021 die gespeicherten Modellserver (HUM-289) |
-| sandbox | `SANDBOX` | 001 | 059 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043), 030-032 Wegwerf-Sandbox (HUM-350), 033 Vorgabe fällt auf direkt zurück (HUM-357), 034-036 und 048 Wahl des Backends, Untergrenze der Isolation und Zulassung (HUM-431, Bereich dafür bis 059 erweitert), 037-047 und 049 Podman (Sprint 7), 050 Dienstverwalter des Nutzers (HUM-434) |
+| config | `CONFIG` | 001 | 029 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel (HUM-070), 019-020 der Zugangsschlüssel des Modells (HUM-140, Bereich dafür bis 029 erweitert), 021 die gespeicherten Modellserver (HUM-289), 022 der Server des Projekts (HUM-405), 023 ein entfallener Wert einer Einstellung (HUM-464) |
+| sandbox | `SANDBOX` | 001 | 059 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043), 030-032 Wegwerf-Sandbox (HUM-350), 033 Vorgabe fällt auf direkt zurück (HUM-357), 034-036 und 048 Wahl des Backends, Untergrenze der Isolation und Zulassung (HUM-431, Bereich dafür bis 059 erweitert), 037-044 und 049 Podman (Sprint 7), 045-047 die Kernel-Stufe (HUM-464), 050 Dienstverwalter des Nutzers (HUM-434) |
 | proxy | `PROXY` | 001 | 019 | Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120) |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
 | llm | `LLM` | 001 | 009 | LLM-Endpunkt und seine Antworten, 009 der Zugangsschlüssel (HUM-140) |
@@ -388,6 +388,14 @@ Server des Projekts nicht bestätigt
 
 **Fix.** `CopyCommand` mit `humanitl llm server confirm NAME --project ORDNER`; die App fragt beim Start einmal nach. Wer den Server nicht will, entfernt `llm.server` aus `.humanitl/profile.toml`.
 
+#### CONFIG_023
+
+Setting value retired
+
+**Auslöser.** `sandbox.podman.runtime` (from `config.toml`, a profile, the environment or the start of a session) names the runtime of the kernel level that the container engine no longer offers. The kernel level is a backend of its own now; the configuration does not load until the value is gone.
+
+**Fix.** `ChangeSetting` on `sandbox.backend` = `qemu`, the backend of the kernel level, and remove `sandbox.podman.runtime`.
+
 ### Bereich sandbox
 
 #### SANDBOX_001
@@ -733,6 +741,30 @@ User service manager unreachable
 **Auslöser.** The daemon runs under its hardened user unit, where a rootless container engine cannot map its user namespace. It therefore starts the engine as a transient unit of the user's service manager instead of loosening its own hardening, and that manager did not answer, is older than systemd 254, or `systemd-run` or `systemctl` is missing. The start stops and never takes another backend.
 
 **Fix.** `CopyCommand` with `systemctl --user status`, which shows whether the user's service manager runs and answers.
+
+#### SANDBOX_045
+
+Kernel level prerequisite missing
+
+**Auslöser.** The kernel level starts a micro VM with a guest kernel of its own and needs on this host: `/dev/kvm` readable and writable for this user, the machine emulator with the machine type and vsock device it uses, the file system daemon with `--readonly` and `--fd`, the vsock device with `--uds-path` and `--groups`, bubblewrap with `--bind-fd`, a readable kernel image and the module directory of that kernel. The sentence names the first one that is missing; nothing starts, and no other backend takes over.
+
+**Fix.** `CopyCommand` with the package that brings the missing piece (for `/dev/kvm` the command that adds this user to the group `kvm`), or `ChangeSetting` on the setting under `sandbox.qemu` that names the path.
+
+#### SANDBOX_046
+
+Kernel level door not set up
+
+**Auslöser.** The only way out of the micro VM is one vsock port that the daemon forwards to the proxy socket of the session. The vsock device process of the session did not come up, or the daemon could not open its one listener behind it. The session does not start.
+
+**Fix.** No automatic fix; the sentence names the step that failed. `humanitl doctor` checks the prerequisites of the kernel level.
+
+#### SANDBOX_047
+
+Host check of the VM monitor failed
+
+**Auslöser.** After the start the daemon checks the processes of the session from the host: each sees only `lo`, the monitor holds only the descriptors of the plan, and the runtime directory of the session holds only the declared sockets. One of these did not hold; the session was stopped.
+
+**Fix.** No automatic fix; the sentence names what was found. `ChangeSetting` on `sandbox.backend` = `auto` and report the sentence.
 
 ### Bereich proxy
 

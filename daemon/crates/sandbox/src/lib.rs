@@ -122,6 +122,9 @@ mod pinned;
 mod platform;
 mod podman;
 pub mod profile;
+// Die Kernel-Stufe gibt es nur unter Linux auf x86-64 (HUM-464, ADR-0021).
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod qemu;
 pub mod refusals;
 pub mod seatbelt;
 pub mod shell;
@@ -138,7 +141,8 @@ pub use crate::agent::{
 pub use crate::agent_exit::{FirstOutput, did_not_start};
 pub use crate::backend::{
     ADMITTED_BACKENDS, BWRAP_BACKEND, Backend, BackendChoice, LeftSandboxes, PODMAN_BACKEND,
-    SEATBELT_BACKEND, backend_name, choose_backend, runtime_fits_backend, with_image_root,
+    SEATBELT_BACKEND, VM_BACKEND, backend_name, choose_backend, runtime_fits_backend,
+    with_image_root,
 };
 pub use crate::backend_list::{
     BackendEntry, LISTED_BACKENDS, RuntimeEntry, list_backends, list_backends_with,
