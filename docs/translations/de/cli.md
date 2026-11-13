@@ -317,6 +317,36 @@ Sandbox-Profils unter `mounts.ro` gelten in einem Abbild nicht. Bis das
 Backend zugelassen ist (HUM-448), lehnt das Ziehen wie jeder Start mit
 `SANDBOX_048` ab.
 
+Zugangsdaten zur Registry kommen beim Ziehen aus genau einer Datei,
+`~/.config/humanitl/podman/auth.json` (unter `$XDG_CONFIG_HOME`, wenn es
+gesetzt ist), im Format, das `podman login` schreibt (HUM-456). Ohne diese
+Datei zieht der Befehl anonym. Die eigenen Dateien der Engine liest er nie:
+nicht `$XDG_RUNTIME_DIR/containers/auth.json`, nicht
+`~/.config/containers/auth.json`, nicht `~/.docker/config.json`, und weder
+`REGISTRY_AUTH_FILE` noch `DOCKER_CONFIG` lenken das Ziehen um. Der Daemon
+prüft die Datei und reicht der Engine für die Dauer des Ziehens eine private
+Kopie, nie die Datei selbst. Sie muss eine reguläre Datei sein, kein
+symbolischer Link, dir gehören und nur für dich lesbar und schreibbar sein
+(sonst `SANDBOX_043` mit der Abhilfe `chmod 600`). Sie muss ein JSON-Objekt
+ohne `credHelpers` und `credsStore` sein, denn mit einem davon fragte die
+Engine zuerst einen Helfer oder den Schlüsselbund; eine solche Datei lehnt
+das Ziehen mit `SANDBOX_043` ab und nennt den Schlüssel, nie einen Wert. Die
+Ergänzungen in `/etc/containers/registries.conf.d` und
+`~/.config/containers/registries.conf.d` liest die Engine trotzdem; setzt eine
+ihrer `*.conf`-Dateien `credential-helpers` oder lässt sie sich nicht lesen
+oder parsen, lehnt das Ziehen mit `SANDBOX_043` ab und nennt die Datei.
+Abhilfe: die Datei beiseitelegen oder den Schlüssel entfernen. Diese Prüfung
+läuft unmittelbar vor dem Ziehen: Sie schützt vor einem versehentlich
+eingerichteten Helfer, nicht vor einem Programm deines eigenen Kontos, das
+dazwischen eine Ergänzung anlegen könnte, aber ebenso gut deinen
+Schlüsselbund und deine Zugangsdateien direkt lesen kann. Einrichten für eine
+Registry:
+
+```sh
+mkdir -p -m 700 ~/.config/humanitl/podman
+podman login --authfile ~/.config/humanitl/podman/auth.json registry.example
+```
+
 ### Terminal, Eingabe und Signale
 
 Ohne „Eine Shell für den Agenten" bekommt der Agent **kein** PTY dieses Terminals. Seine Ausgabe kommt als Bytes über den

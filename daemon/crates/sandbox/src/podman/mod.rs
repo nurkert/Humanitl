@@ -131,6 +131,13 @@ const ENGINE_DIR: &str = "podman";
 /// Modulbeschreibung).
 const SECCOMP_PROFILE: &str = include_str!("seccomp.json");
 
+/// Die `registries.conf` des Adapters: keine Suchliste für kurze Namen, und
+/// Zugangsdaten nur aus der Datei von `--authfile` (`containers-auth.json`),
+/// nie aus einem Schlüsselbund oder einem `docker-credential-*`-Helfer
+/// (HUM-456, [`image`]).
+const REGISTRIES_CONF: &str =
+    "unqualified-search-registries = []\ncredential-helpers = [\"containers-auth.json\"]\n";
+
 /// Arbeitsspeicher, wenn der Host ihn nicht nennt, in MiB.
 const FALLBACK_MEMORY_MIB: u64 = 2048;
 
@@ -455,7 +462,9 @@ impl PodmanBackend {
     ///
     /// `CONFIG_003` für einen Verweis ohne Digest oder ohne Registry, oder
     /// ohne Verweis und ohne eingestelltes Abbild; `SANDBOX_043`, wenn das
-    /// Ziehen scheitert oder danach nicht genau dieser Digest vorliegt;
+    /// Ziehen scheitert oder danach nicht genau dieser Digest vorliegt, wenn
+    /// die Datei der Zugangsdaten nicht taugt oder eine Ergänzung zur
+    /// `registries.conf` einen Credential-Helfer nennt (HUM-456);
     /// `SANDBOX_011` und `SANDBOX_037` aus dem Verzeichnis des Adapters.
     fn pull(&self, requested: &str) -> Result<PulledImage, Diagnostic> {
         let reference = if requested.trim().is_empty() {
@@ -463,14 +472,42 @@ impl PodmanBackend {
         } else {
             requested.trim().to_owned()
         };
-        image::check_pull_reference(&reference)?;
         let engine = EngineDir::of(&self.paths);
+        // Kopien früherer Prozesse des Daemons (Absturz mitten im Ziehen)
+        // gehen zuerst, vor jeder Prüfung, die abbrechen könnte.
+        engine.remove_stale_pull_auth();
+        image::check_pull_reference(&reference)?;
         engine.prepare()?;
+        image::check_registry_dropins(&image::registry_dropin_dirs(
+            Path::new(image::SYSTEM_REGISTRIES_DROPINS),
+            &engine.home,
+        ))?;
+        let copy = engine.pull_auth_copy();
+        let credentials = image::credentials_path(&self.paths);
+        let auth_file = image::auth_file(
+            image::AuthFiles {
+                user: &credentials,
+                anonymous: &engine.anonymous_auth,
+                copy: &copy,
+            },
+            rustix::process::getuid().as_raw(),
+        )?;
         let mut pull = engine.command(&self.program, &engine.containers_conf());
-        pull.args(image::pull_args(&reference, &engine.signature_policy));
+        pull.args(image::pull_args(
+            &reference,
+            &engine.signature_policy,
+            &auth_file,
+        ));
         let answer = teardown::run_bounded(pull, image::PULL_TIMEOUT);
+        // Die Kopie der Zugangsdaten lebt nur so lange wie das Ziehen, auch
+        // wenn es scheiterte; zwischen ihrem Schreiben und hier gibt es
+        // keinen anderen Ausgang. Jedes Ziehen hat seine eigene Kopie, ein
+        // gleichzeitiges räumt also nie die eines anderen weg. Bricht der
+        // Daemon vorher ab, entfernt das nächste Ziehen eines neuen Prozesses
+        // sie vor allem anderen.
+        let _ = std::fs::remove_file(&copy);
         if !matches!(&answer, Ok(output) if output.status.success()) {
-            return Err(image::pull_failed(&reference, &answer));
+            return Err(image::pull_failed(&reference, &answer, &credentials));
         }
         let found = self.check_image(&engine, &reference)?;
         Ok(PulledImage {
@@ -816,6 +853,17 @@ pub(crate) fn no_runtime_dir(uid: u32) -> Diagnostic {
         .build()
 }
 
+/// Der Anfang des Namens jeder Kopie von Zugangsdaten im Verzeichnis des
+/// Adapters (HUM-456).
+const PULL_AUTH_PREFIX: &str = "pull-auth-";
+
+/// `pull-auth-<Instanz>-`: der Anfang der Kopien dieses Prozesses, mit einer
+/// Kennung, die einmal je Prozess entsteht.
+fn own_pull_auth_prefix() -> &'static str {
+    static OWN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    OWN.get_or_init(|| format!("{PULL_AUTH_PREFIX}{}-", uuid::Uuid::now_v7().simple()))
+}
+
 /// Die Dateien, die der Adapter Podman statt der Konfiguration des Nutzers
 /// gibt, und die Umgebung, mit der Podman startet.
 #[derive(Debug, Clone)]
@@ -828,6 +876,8 @@ pub(crate) struct EngineDir {
     registries_conf: PathBuf,
     /// Die Signaturregel für das ausdrückliche Ziehen (HUM-439).
     signature_policy: PathBuf,
+    /// Die leeren Zugangsdaten für ein anonymes Ziehen (HUM-456).
+    anonymous_auth: PathBuf,
     home: PathBuf,
     /// Das Laufzeitverzeichnis des Nutzers für Podman, nie das von
     /// Humanitl ([`user_runtime_dir`]); `None`, wenn es keines gibt.
@@ -862,6 +912,7 @@ impl EngineDir {
             storage_conf: root.join("storage.conf"),
             registries_conf: root.join("registries.conf"),
             signature_policy: root.join("policy.json"),
+            anonymous_auth: root.join("auth.json"),
             home,
             runtime_dir,
             bus,
@@ -919,6 +970,38 @@ impl EngineDir {
         env
     }
 
+    /// Ein eigener Pfad für die Kopie der Zugangsdaten eines Ziehens
+    /// (HUM-456): `pull-auth-<Instanz>-<Zähler>.json`, damit gleichzeitige
+    /// Ziehen einander nichts ersetzen oder wegräumen. Die Instanz ist eine
+    /// Kennung dieses Prozesses, nicht seine PID: Ein späterer Daemon mit
+    /// derselben PID hielte die Reste eines abgestürzten sonst für eigene.
+    pub(crate) fn pull_auth_copy(&self) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        self.root.join(format!(
+            "{}{}.json",
+            own_pull_auth_prefix(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    /// Entfernt Kopien der Zugangsdaten, die ein anderer, beendeter Prozess
+    /// des Daemons hinterließ. Kopien dieses Prozesses bleiben: Sie gehören
+    /// einem Ziehen, das gerade läuft.
+    pub(crate) fn remove_stale_pull_auth(&self) {
+        let own = own_pull_auth_prefix();
+        let Ok(entries) = std::fs::read_dir(&self.root) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(PULL_AUTH_PREFIX) && !name.starts_with(own) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
     /// `program` mit nichts als [`Self::env`].
     pub(crate) fn command(&self, program: &Path, containers_conf: &Path) -> Command {
         let mut command = Command::new(program);
@@ -944,14 +1027,15 @@ impl EngineDir {
         write_file(&self.seccomp, SECCOMP_PROFILE.as_bytes(), 0o600)?;
         write_file(&self.mounts_conf, b"", 0o600)?;
         write_file(&self.storage_conf, Self::storage_text().as_bytes(), 0o600)?;
-        write_file(
-            &self.registries_conf,
-            b"unqualified-search-registries = []\n",
-            0o600,
-        )?;
+        write_file(&self.registries_conf, REGISTRIES_CONF.as_bytes(), 0o600)?;
         write_file(
             &self.signature_policy,
             image::SIGNATURE_POLICY.as_bytes(),
+            0o600,
+        )?;
+        write_file(
+            &self.anonymous_auth,
+            image::ANONYMOUS_AUTH.as_bytes(),
             0o600,
         )?;
         write_file(
