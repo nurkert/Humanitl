@@ -63,7 +63,7 @@ use seccompiler::BpfProgram;
 use crate::linux::seccomp;
 
 /// How many further shells may live at the same time.
-pub const MAX_SHELLS: usize = 4;
+pub use super::contract::MAX_SHELLS;
 
 /// The longest request: mark, id and the command with its NUL bytes.
 pub const MAX_REQUEST: usize = 16 * 1024;
@@ -417,10 +417,7 @@ impl Shells {
     /// a shell just started is already in `live`.
     fn give_up(&self) {
         if !self.broken.swap(true, Ordering::SeqCst) {
-            write_raw(
-                2,
-                b"humanitl-shim: warning: shell replies cannot reach the daemon; ending every further shell\n",
-            );
+            write_raw(2, super::contract::SHELL_REPLIES_LOST.as_bytes());
         }
     }
 }

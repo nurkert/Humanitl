@@ -1209,8 +1209,12 @@ fn sigterm_to_pid_1_reaches_the_agent() {
 
 // ---- lifeline and environment through a descriptor (HUM-430) -------------------
 
-/// The shim's grace after the lifeline ends; `humanitl_sandbox::KILL_GRACE`.
-const KILL_GRACE: Duration = Duration::from_secs(5);
+// The shim's grace after the lifeline ends comes from the binary's own
+// source, not from a copy (HUM-459); only this value is used here.
+#[path = "../src/contract.rs"]
+#[allow(dead_code)]
+mod contract;
+use contract::KILL_GRACE;
 
 /// Lets `fd` survive into the child of `command` under its number.
 fn inherit(command: &mut Command, fd: &OwnedFd) {

@@ -28,16 +28,13 @@ use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::ptr;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::linux::exec::Shells;
 
 /// How long the agent has after the lifeline ends before everything is
-/// killed; the same five seconds as `humanitl_sandbox::KILL_GRACE`, written
-/// out because the shim knows no workspace crate. The contract test
-/// `the_lifeline_grace_is_the_launchers` in the sandbox crate holds both
-/// together.
-pub const KILL_GRACE: Duration = Duration::from_secs(5);
+/// killed ([`super::contract::KILL_GRACE`]).
+pub use super::contract::KILL_GRACE;
 
 /// Exit status when the wait itself failed (`ECHILD` without the child).
 const EXIT_SETUP: i32 = 126;
