@@ -1,6 +1,6 @@
 ---
 source: adr/README.md
-source-sha256: 9655ce1ab3513436d2e8cfa729aa16ec9bd52850886a2ce24117afe32a5c2736
+source-sha256: 31a2771e1d171e4c18ab34b3561665c5d24e987b9a538bf4dbe0d8529aa5c26b
 lang: de
 ---
 # Architekturentscheidungen (ADRs)
@@ -65,6 +65,7 @@ Regeln:
 | [0017](0017-egress-port.md) | Ein Egress-Port für direkte Verbindung, Upstream-Proxy und Tor | Angenommen | Genau eine Stelle, an der eine ausgehende Verbindung entsteht; die CI verbietet `TcpStream::connect` überall sonst. |
 | [0018](0018-rpc-parity.md) | Parität: Jede Fähigkeit ist zuerst ein RPC, Oberfläche und Kommandozeile sind dünne Clients | Angenommen | Erzeugte Paritäts-Tabelle; ein RPC ohne Zeile für die Kommandozeile bricht den Build, eine Lücke in der Oberfläche ist nur eine Warnung. |
 | [0019](0019-seatbelt-on-macos.md) | Seatbelt ist die Sandbox auf macOS, eine Linux-VM kommt später | Angenommen | `sandbox-exec` mit einem erzeugten SBPL-Profil je Session; die drei Garantien für macOS neu gefasst und mit demselben Shim gemessen. |
+| [0020](0020-podman-sandbox-backend.md) | Podman als wählbares zweites Sandbox-Backend unter Linux | Angenommen | Ein neutral gemachtes `SandboxBackend`, dahinter Podman mit einer Stufe auf dem gemeinsamen Kernel (`crun`) und einer Kernel-Stufe (`krun`); `sandbox.backend` je Nutzer, je Projekt nur ein `sandbox.min_isolation`, das sich ausschließlich anheben lässt. |
 
 ## Querverweise
 
@@ -81,6 +82,7 @@ Wo eine Entscheidung eine andere verfeinert oder korrigiert:
 | ADR-0016 | ADR-0002 | Korrigiert die Aussage „`AF_UNIX` immer verboten": Im Profil `browser` ist es erlaubt, und dort trägt der Netzwerk-Namespace die Garantie. |
 | ADR-0018 | ADR-0003, ADR-0013 | Macht die Gleichwertigkeit von Oberfläche und Kommandozeile aus ADR-0013 maschinell prüfbar. |
 | ADR-0019 | ADR-0002, ADR-0015 | Der zweite Adapter von `SandboxBackend`, den ADR-0015 angekündigt hat; auf macOS tritt er an die Stelle von bwrap aus ADR-0002. |
+| ADR-0020 | ADR-0002, ADR-0010, ADR-0015 | Podman statt Docker als zweites Linux-Backend; ergänzt alle drei (Nachträge aus HUM-434 und HUM-441). |
 | ADR-0011 | ADR-0007 | Regelt die beiden Speicherorte für Regeln (gespeichert und Session). |
 | ADR-0012 | ADR-0010 | `FixAction::InstallService` ist der Mechanismus hinter der Installation mit einem Klick. |
 
@@ -114,6 +116,7 @@ Das Skript prüft, dass jede Markdown-Datei außer dem Verzeichnis dem Muster
 `NNNN-kebab-title.md` folgt, dass die Nummern lückenlos und eindeutig sind, dass jede
 Datei im Verzeichnis steht und jeder Eintrag im Verzeichnis eine Datei hat, dass Status
 und Datum vorhanden sind, dass jede Datei die sieben Überschriften trägt und dass jede
-mindestens ein `HUM-`-Issue nennt. `--self-test` legt dreizehn Kopien mit genau einem
-Fehler je Kopie an (falscher Dateiname, Lücke, Dublette, fehlende Überschrift, Status in
-Kleinbuchstaben, …) und erwartet für jede die passende Meldung.
+mindestens ein `HUM-`-Issue nennt. `--self-test` legt fünfzehn Kopien an: zwei, die
+durchgehen müssen (unverändert und mit `Status: Proposed`), und dreizehn mit genau einem
+Fehler je Kopie (falscher Dateiname, Lücke, Dublette, fehlende Überschrift, Status in
+Kleinbuchstaben oder unbekannt, …), und erwartet für jede die passende Meldung.
