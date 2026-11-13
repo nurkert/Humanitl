@@ -341,6 +341,34 @@ the sandbox profile under `mounts.ro` do not apply in an image. Until the
 backend is admitted (HUM-448) the pull is refused with `SANDBOX_048`, like
 every start.
 
+Registry credentials for a pull come from one file only,
+`~/.config/humanitl/podman/auth.json` (under `$XDG_CONFIG_HOME` when it is
+set), in the format `podman login` writes (HUM-456). Without that file the
+pull is anonymous. The engine's own credential files are never read:
+not `$XDG_RUNTIME_DIR/containers/auth.json`, not
+`~/.config/containers/auth.json`, not `~/.docker/config.json`, and neither
+`REGISTRY_AUTH_FILE` nor `DOCKER_CONFIG` redirects the pull. The daemon
+checks the file and hands the engine a private copy of it for the length of
+the pull, never the file itself. The file must be a regular file, not a
+symbolic link, belong to you and be readable and writable by you alone
+(otherwise `SANDBOX_043` with the fix `chmod 600`). It must be a JSON object
+without `credHelpers` and `credsStore`, since with either the engine would
+ask a helper or the keyring first; such a file is refused with
+`SANDBOX_043`, naming the key, never a value. The engine still reads the
+registry drop-ins in `/etc/containers/registries.conf.d` and
+`~/.config/containers/registries.conf.d`; if one of their `*.conf` files sets
+`credential-helpers`, or cannot be read or parsed, the pull is refused with
+`SANDBOX_043`, naming the file. Move that file aside or remove the key. This
+check runs just before the pull: it guards against a helper set up by
+accident, not against a program of your own account, which could add a
+drop-in in between but could just as well read your keyring and credential
+files directly. To set it up for a registry:
+
+```sh
+mkdir -p -m 700 ~/.config/humanitl/podman
+podman login --authfile ~/.config/humanitl/podman/auth.json registry.example
+```
+
 ### Terminal, input and signals
 
 Without "A shell for the agent", the agent gets **no** PTY of this terminal. Its output arrives as bytes over the daemon's event

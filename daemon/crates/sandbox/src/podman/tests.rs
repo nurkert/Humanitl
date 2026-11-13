@@ -100,6 +100,10 @@ fn the_engine_starts_with_six_variables_and_nothing_of_the_daemon() {
         ("CONTAINERS_CONF_OVERRIDE", "/home/u/override.conf"),
         ("CONTAINER_HOST", "unix:///tmp/elsewhere.sock"),
         ("HTTPS_PROXY", "http://user:pw@proxy.invalid:3128"),
+        // Lenkten die Engine auf andere Zugangsdaten als die von
+        // `--authfile` (HUM-456).
+        ("REGISTRY_AUTH_FILE", "/home/u/registry-auth.json"),
+        ("DOCKER_CONFIG", "/home/u/docker-config"),
     ]));
     let engine = EngineDir::of(&paths);
     let command = engine.command(Path::new("/usr/bin/podman"), &engine.containers_conf());
@@ -126,7 +130,10 @@ fn the_engine_starts_with_six_variables_and_nothing_of_the_daemon() {
     );
     let debug = format!("{command:?}");
     assert!(
-        !debug.contains("user:pw") && !debug.contains("override.conf"),
+        !debug.contains("user:pw")
+            && !debug.contains("override.conf")
+            && !debug.contains("registry-auth")
+            && !debug.contains("docker-config"),
         "{debug}"
     );
 }
@@ -647,6 +654,45 @@ mod planned {
 /// jeden Aufruf mit; `pull` legt die Antwort erst an.
 #[cfg(target_os = "linux")]
 mod image_root {
+    /// Die Datei hinter `--authfile` im letzten Ziehen: eine Kopie dieses
+    /// Prozesses im Verzeichnis des Adapters, nicht die anonyme Datei.
+    fn own_copy_in(calls: &[String], root: &Path, anonymous: &Path) -> PathBuf {
+        let copy = calls
+            .iter()
+            .rev()
+            .find_map(|call| {
+                call.split(' ')
+                    .find_map(|arg| arg.strip_prefix("--authfile="))
+            })
+            .map(PathBuf::from)
+            .expect("an --authfile");
+        let own = super::own_pull_auth_prefix();
+        assert!(copy.starts_with(root), "{}", copy.display());
+        assert_ne!(copy, anonymous);
+        assert!(
+            copy.file_name().unwrap().to_string_lossy().starts_with(own),
+            "{}",
+            copy.display()
+        );
+        copy
+    }
+
+    /// Die Kopien der Zugangsdaten, die im Verzeichnis des Adapters liegen.
+    fn pull_auth_copies(engine: &EngineDir) -> Vec<PathBuf> {
+        std::fs::read_dir(&engine.root)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .filter(|path| {
+                        path.file_name()
+                            .is_some_and(|name| name.to_string_lossy().starts_with("pull-auth-"))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     use std::ffi::OsString;
 
     use super::planned::{Fixture, profile};
@@ -675,6 +721,8 @@ mod image_root {
         log: PathBuf,
         json: PathBuf,
         staged: PathBuf,
+        /// Was die Engine beim Ziehen unter `--authfile` las (HUM-456).
+        seen_auth: PathBuf,
     }
 
     impl FakeEngine {
@@ -685,6 +733,7 @@ mod image_root {
             let log = dir.join("engine.log");
             let json = dir.join("inspect.json");
             let staged_file = dir.join("staged.json");
+            let seen_auth = dir.join("seen-auth.json");
             if let Some(present) = present {
                 std::fs::write(&json, present).unwrap();
             }
@@ -692,6 +741,7 @@ mod image_root {
             let script = format!(
                 "#!/bin/sh\n\
                  printf '%s\\n' \"$*\" >> '{log}'\n\
+                 for arg in \"$@\"; do case \"$arg\" in --authfile=*) cp \"${{arg#--authfile=}}\" '{seen}' ;; esac; done\n\
                  case \" $* \" in\n\
                  *' pull '*) cp '{staged}' '{json}'; echo f00d; exit 0 ;;\n\
                  *' image inspect '*)\n\
@@ -702,6 +752,7 @@ mod image_root {
                 log = log.display(),
                 staged = staged_file.display(),
                 json = json.display(),
+                seen = seen_auth.display(),
             );
             crate::test_support::write_program(&program, &script);
             Self {
@@ -709,6 +760,7 @@ mod image_root {
                 log,
                 json,
                 staged: staged_file,
+                seen_auth,
             }
         }
 
@@ -920,12 +972,65 @@ mod image_root {
         );
     }
 
-    /// `pull_image` zieht genau den Verweis mit der Signaturregel des
-    /// Adapters und prüft danach den Digest; ein Verweis ohne Registry oder
-    /// ohne Digest erreicht die Engine nie.
+    /// Auch nach einem gescheiterten Ziehen ist die Kopie der Zugangsdaten
+    /// weg; die Engine hatte sie während des Ziehens (HUM-456).
+    #[test]
+    fn the_credentials_copy_is_gone_after_a_failed_pull() {
+        let config = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let fx = Fixture::with_env(
+            None,
+            &[
+                ("XDG_CONFIG_HOME", &config.path().to_string_lossy()),
+                ("HOME", &home.path().to_string_lossy()),
+            ],
+        );
+        let user = config.path().join("humanitl/podman/auth.json");
+        std::fs::create_dir_all(user.parent().unwrap()).unwrap();
+        std::fs::write(&user, "{\"auths\":{}}").unwrap();
+        std::fs::set_permissions(&user, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let engine = FakeEngine::new(dir.path(), None, "");
+        let seen = dir.path().join("seen-auth.json");
+        std::fs::write(
+            &engine.program,
+            format!(
+                "#!/bin/sh\n\
+                 for arg in \"$@\"; do case \"$arg\" in --authfile=*) cp \"${{arg#--authfile=}}\" \
+                 '{}' ;; esac; done\n\
+                 echo 'Error: unauthorized' >&2\nexit 125\n",
+                seen.display()
+            ),
+        )
+        .unwrap();
+        let err = engine
+            .backend(&fx.paths)
+            .pull_image("")
+            .expect_err("a failing pull");
+        assert_eq!(err.code.as_str(), "SANDBOX_043", "{}", err.why);
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "{\"auths\":{}}");
+        assert!(
+            pull_auth_copies(&EngineDir::of(&fx.paths)).is_empty(),
+            "the copy outlives a failed pull"
+        );
+    }
+
+    /// `pull_image` zieht genau den Verweis mit der Signaturregel und den
+    /// Zugangsdaten des Adapters und prüft danach den Digest; ein Verweis
+    /// ohne Registry oder ohne Digest erreicht die Engine nie.
     #[test]
     fn a_pull_takes_the_pinned_reference_and_checks_it_afterwards() {
-        let fx = Fixture::new(None);
+        // Ein eigenes Konfigurations- und Heimatverzeichnis: Der Test liest
+        // nie die Zugangsdaten oder Ergänzungen des Menschen, der ihn startet.
+        let config = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let fx = Fixture::with_env(
+            None,
+            &[
+                ("XDG_CONFIG_HOME", &config.path().to_string_lossy()),
+                ("HOME", &home.path().to_string_lossy()),
+            ],
+        );
         let dir = tempfile::tempdir().unwrap();
         let engine = FakeEngine::new(dir.path(), None, &answer(PINNED));
         let backend = engine.backend(&fx.paths);
@@ -943,18 +1048,84 @@ mod image_root {
         assert_eq!(pulled.digest, format!("sha256:{PINNED}"));
         assert_eq!(pulled.id, "f00d");
         let calls = engine.calls();
-        let policy = EngineDir::of(&fx.paths).signature_policy;
-        let expected = format!(
-            "--runtime=crun pull --quiet --signature-policy={} -- {}",
-            policy.display(),
-            reference()
-        );
-        assert!(calls.contains(&expected), "{calls:?}");
+        let engine_dir = EngineDir::of(&fx.paths);
+        let policy = engine_dir.signature_policy;
+        let anonymous = engine_dir.anonymous_auth;
+        let line = |auth: &Path| {
+            format!(
+                "--runtime=crun pull --quiet --signature-policy={} --authfile={} -- {}",
+                policy.display(),
+                auth.display(),
+                reference()
+            )
+        };
+        // Ohne eingerichtete Zugangsdaten: die leere Datei des Adapters.
+        assert!(calls.contains(&line(&anonymous)), "{calls:?}");
         assert!(
             std::fs::read_to_string(&policy)
                 .unwrap()
                 .contains("insecureAcceptAnything")
         );
+        assert_eq!(
+            std::fs::read_to_string(&anonymous).unwrap(),
+            image::ANONYMOUS_AUTH
+        );
+        let registries = std::fs::read_to_string(&engine_dir.registries_conf).unwrap();
+        let registries: toml::Table = registries.parse().expect("toml");
+        assert_eq!(
+            registries["credential-helpers"],
+            toml::Value::Array(vec!["containers-auth.json".into()])
+        );
+
+        // Mit eingerichteten Zugangsdaten: eine private Kopie ihres Inhalts
+        // im Verzeichnis des Adapters, nie der Pfad des Menschen; nach dem
+        // Ziehen ist die Kopie weg.
+        let user = config.path().join("humanitl/podman/auth.json");
+        std::fs::create_dir_all(user.parent().unwrap()).unwrap();
+        let content = "{\"auths\":{\"localhost\":{\"auth\":\"dTpw\"}}}";
+        std::fs::write(&user, content).unwrap();
+        std::fs::set_permissions(&user, std::fs::Permissions::from_mode(0o600)).unwrap();
+        // Eine Kopie, die ein früherer, abgestürzter Prozess hinterließ, geht
+        // beim nächsten Ziehen weg.
+        let stale = engine_dir
+            .root
+            .join("pull-auth-0190a1b2c3d4e5f6a7b8c9d0e1f2a3b4-0.json");
+        std::fs::write(&stale, content).unwrap();
+        backend.pull_image("").expect("with credentials");
+        assert!(!stale.exists(), "a stale copy of another process stays");
+        let copy = &own_copy_in(&engine.calls(), &engine_dir.root, &anonymous);
+        assert!(engine.calls().contains(&line(copy)), "{:?}", engine.calls());
+        assert!(
+            !engine
+                .calls()
+                .iter()
+                .any(|call| call.contains(&*user.to_string_lossy())),
+            "{:?}",
+            engine.calls()
+        );
+        assert_eq!(std::fs::read_to_string(&engine.seen_auth).unwrap(), content);
+        assert!(!copy.exists(), "the copy outlives the pull");
+
+        // Für andere lesbar: abgelehnt, bevor die Engine gefragt wird.
+        std::fs::set_permissions(&user, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let before = engine.calls().len();
+        let err = backend.pull_image("").expect_err("readable credentials");
+        assert_eq!(err.code.as_str(), "SANDBOX_043", "{}", err.why);
+        assert_eq!(engine.calls().len(), before, "{:?}", engine.calls());
+        std::fs::set_permissions(&user, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        // Eine Ergänzung unter dem HOME der Engine mit Credential-Helfer:
+        // abgelehnt, bevor die Engine gefragt wird.
+        let dropins = home.path().join(".config/containers/registries.conf.d");
+        std::fs::create_dir_all(&dropins).unwrap();
+        let helper = dropins.join("keyring.conf");
+        std::fs::write(&helper, "credential-helpers = [\"secretservice\"]\n").unwrap();
+        let before = engine.calls().len();
+        let err = backend.pull_image("").expect_err("a credential helper");
+        assert_eq!(err.code.as_str(), "SANDBOX_043", "{}", err.why);
+        assert!(err.why.contains("keyring.conf"), "{}", err.why);
+        assert_eq!(engine.calls().len(), before, "{:?}", engine.calls());
+        std::fs::remove_file(&helper).unwrap();
 
         // Liegt danach ein anderer Digest vor, ist das Ziehen gescheitert.
         std::fs::remove_file(&engine.json).unwrap();
