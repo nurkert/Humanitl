@@ -61,6 +61,11 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-453 | Podman: `/sys` des Rechners ist im Container verdeckt wie unter bwrap | S | HUM-433 |
 | HUM-454 | Podman: die `mounts.conf` des Nutzers erreicht keinen Container | S | HUM-433 |
 | HUM-450 | `humanitl sandbox argv` hält zurückgehaltene Werte auch in der CLI zurück | S | HUM-429 |
+| HUM-455 | CI: Escape-Suite unter Podman auch mit einem Abbild als Wurzel | M | HUM-439 |
+| HUM-456 | Podman: Zugangsdaten zum Ziehen aus einer eigenen Datei des Adapters | S | HUM-439 |
+| HUM-457 | Ein laufendes Ziehen eines Abbilds lässt sich abbrechen | S | HUM-439 |
+| HUM-458 | PID-1-Integrationstests: ohne nutzbare Sandbox in der CI rot statt übersprungen | S | HUM-451 |
+| HUM-459 | Konstanten, die Tests vom Shim abschreiben, bleiben mit ihm im Gleichschritt | S | HUM-451 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -769,3 +774,108 @@ Adapter ohnehin entfernt.
 ### Akzeptanzkriterien
 1. `esc-2/no_engine_secrets` und der Live-Test sind unter Podman 4.9 (CI) und
    5.x (lokal) grün.
+
+---
+
+## HUM-455 · CI: the Podman escape suite also runs with an image as the root
+
+### Kontext
+HUM-439 macht ein Abbild mit Digest zur möglichen Wurzel der Sandbox. Die
+Escape-Suite kann es über `HUMANITL_ESCAPE_IMAGE` nutzen, und lokal liefen
+die ESC-2-Fälle damit grün (CA und Bündel vom Host, `/etc/shadow` und
+`/etc/machine-id` nicht die des Hosts). Ein CI-Job dafür fehlt, und auf
+`debian:trixie-slim` fehlen `python3` und `curl`, so dass 59 Fälle
+übersprungen und 4 rot wurden (Review HUM-439, 2026-11-13).
+
+### Spezifikation
+1. Der Job `escape-tests-podman` baut aus einem festen Basisabbild ein
+   Testabbild mit den Helfern der Suite (`python3`, `curl`, `stat`), nennt es
+   per Digest und fährt die Suite ein zweites Mal mit
+   `HUMANITL_ESCAPE_IMAGE`.
+2. Ziehen und Bauen des Basisabbilds geschehen vor dem Start des Daemons und
+   außerhalb jeder Sandbox; der Lauf mit Abbild zieht nichts.
+
+### Tests
+- Der zweite Lauf hat keine Fälle, die wegen fehlender Helfer übersprungen
+  werden (`ESCAPE_NO_SKIP=1`).
+
+### Akzeptanzkriterien
+1. Beide Läufe sind in der CI grün.
+
+---
+
+## HUM-456 · Podman: credentials for a pull come from a file of the adapter
+
+### Kontext
+`humanitl sandbox image pull` (HUM-439) lässt die Engine ihre gewohnten
+Zugangsdaten lesen, etwa `$XDG_RUNTIME_DIR/containers/auth.json`. Welche
+Datei das ist, entscheidet die Engine, nicht Humanitl (Review HUM-439).
+
+### Spezifikation
+1. Das Ziehen trägt `--authfile` mit einer Datei, die der Adapter nennt;
+   ohne eingerichtete Zugangsdaten zieht es anonym.
+2. `docs/cli.md` (en, de) sagt, woher die Zugangsdaten kommen.
+
+### Tests
+- Unit: die Zeile des Ziehens trägt das Flag. Mutationsbeweis: ohne rot.
+
+### Akzeptanzkriterien
+1. Ein Ziehen liest keine Zugangsdaten außer der genannten Datei.
+
+---
+
+## HUM-457 · A running image pull can be cancelled
+
+### Kontext
+Das Ziehen eines Abbilds (HUM-439) läuft bis zu 30 Minuten und lässt sich
+weder in der CLI noch in der App abbrechen (Review HUM-439).
+
+### Spezifikation
+1. `Ctrl-C` in `humanitl sandbox image pull` und ein Knopf „Abbrechen" in der
+   Karte beenden das Ziehen über einen eigenen RPC; der Daemon beendet den
+   Prozess der Engine.
+
+### Tests
+- Unit mit einer Engine, die nicht antwortet: Abbruch binnen 1 s.
+
+### Akzeptanzkriterien
+1. Nach dem Abbruch läuft kein Prozess des Ziehens mehr.
+
+---
+
+## HUM-458 · PID-1 integration tests fail in CI instead of skipping without a usable sandbox
+
+### Kontext
+`tests/shim.rs` und `tests/door_backpressure.rs` überspringen still, wenn
+bwrap oder Nutzer-Namespaces fehlen. Sperrt ein Runner Namespaces (AppArmor),
+wären beide grün, ohne etwas geprüft zu haben (Review HUM-451, 2026-11-13).
+
+### Spezifikation
+1. Unter `STRICT=1` (wie in der CI) wird das Überspringen zu einem Fehler mit
+   dem Grund.
+
+### Tests
+- Mutationsbeweis: ein unbrauchbares `bwrap` auf dem `PATH` mit `STRICT=1`
+  macht den Lauf rot.
+
+### Akzeptanzkriterien
+1. Kein PID-1-Integrationstest ist in der CI ohne Sandbox grün.
+
+---
+
+## HUM-459 · Constants that tests copy from the shim stay in step with it
+
+### Kontext
+`tests/door_backpressure.rs` schreibt `KILL_GRACE`, die Höchstzahl weiterer
+Shells und den Wortlaut der Warnung aus dem Shim ab. Ändert sich einer davon,
+wird der Test still strenger oder lockerer (Review HUM-451).
+
+### Spezifikation
+1. Die Werte kommen aus einer gemeinsamen Quelle, die Shim und Tests lesen,
+   oder ein Test vergleicht sie mit dem Shim.
+
+### Tests
+- Mutationsbeweis: ein geänderter Wert im Shim macht den Abgleich rot.
+
+### Akzeptanzkriterien
+1. Kein Test hält eine eigene Kopie dieser Werte, die unbemerkt abweicht.
