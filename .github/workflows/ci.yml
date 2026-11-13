@@ -905,6 +905,24 @@ jobs:
           sudo sysctl -w kernel.yama.ptrace_scope=0
       - name: bwrap is usable
         run: bwrap --version
+      - name: Build the test image of the escape suite (HUM-455)
+        id: escape-image
+        # Das Abbild für den zweiten Lauf mit einem Abbild als Wurzel: Basis
+        # per Digest festgelegt, dazu die Helfer der Suiten
+        # (tests/escape/image/Containerfile). Gezogen und gebaut wird nur
+        # hier, vor jedem Daemon und außerhalb jeder Sandbox; der Verweis
+        # NAME@sha256 geht als Ausgabe allein an den zweiten Lauf, nicht über
+        # GITHUB_ENV, damit der erste Lauf ohne Abbild bleibt. Vor der
+        # gepflanzten Engine-Konfiguration: Deren Hook liefe sonst für die
+        # Container des Baus, und engine_hook_not_run meldete ein Leck, das
+        # keine Sandbox verursacht hat. continue-on-error, damit eine
+        # unerreichbare Registry den ersten Lauf nicht verhindert; rot wird
+        # der Job dann im Urteil des zweiten Laufs.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          reference=$(./tests/escape/build-image.sh)
+          echo "reference=$reference" >> "$GITHUB_OUTPUT"
       - name: Plant a hostile engine configuration
         # mounts.conf, a volume and a hook in ~/.config/containers of the
         # runner, proven to reach a plain container first. ESC-2 shows that
@@ -945,6 +963,50 @@ jobs:
         if: always()
         with:
           name: escape-podman-junit
+          path: |
+            target/escape/*.xml
+            target/escape/results.txt
+            target/escape/*.log
+          if-no-files-found: ignore
+      # Der zweite Lauf (HUM-455): dieselben Suiten, dieselbe Engine-
+      # Konfiguration, aber die Wurzel jeder Sandbox ist das Testabbild
+      # (HUMANITL_ESCAPE_IMAGE, HUM-439). run.sh leert target/escape zu
+      # Beginn; Urteil und Hochladen des ersten Laufs stehen deshalb davor.
+      # Er läuft auch nach einem roten ersten Lauf, damit beide Urteile im
+      # Lauf stehen. Der Start zieht nichts (--pull=never); fehlt das Abbild,
+      # ist das SANDBOX_043 und damit sandbox_not_started.
+      - name: Escape tests against Podman with an image as the root
+        id: escape-image-run
+        if: ${{ !cancelled() && steps.escape-image.outcome == 'success' }}
+        env:
+          HUMANITL_ESCAPE_IMAGE: ${{ steps.escape-image.outputs.reference }}
+        run: ./tests/escape/run.sh
+      - name: Escape verdict with an image as the root
+        if: ${{ !cancelled() }}
+        # Wie oben kein übersprungener Fall: Das Abbild bringt jeden Helfer
+        # mit, den die Suiten in der Sandbox aufrufen. Lief der zweite Lauf
+        # nicht, weil das Abbild nicht gebaut wurde, ist das rot; das Urteil
+        # läse sonst die Ergebnisse des ersten Laufs.
+        env:
+          ESCAPE_NO_SKIP: "1"
+          IMAGE_BUILD: ${{ steps.escape-image.outcome }}
+          IMAGE_RUN: ${{ steps.escape-image-run.outcome }}
+        run: |
+          set -euo pipefail
+          if [[ "$IMAGE_BUILD" != success ]]; then
+            echo "::error title=escape escape-tests-podman-image::the test image was not built ($IMAGE_BUILD); see the step 'Build the test image of the escape suite'"
+            echo "### escape-tests-podman-image: failed (no image)" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          if [[ "$IMAGE_RUN" == skipped ]]; then
+            echo "::error title=escape escape-tests-podman-image::the run with an image as the root did not start"
+            exit 1
+          fi
+          ./scripts/ci/escape-verdict.sh escape-tests-podman-image
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() && steps.escape-image-run.outcome != 'skipped' }}
+        with:
+          name: escape-podman-image-junit
           path: |
             target/escape/*.xml
             target/escape/results.txt
