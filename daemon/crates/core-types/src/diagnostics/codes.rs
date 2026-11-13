@@ -1772,7 +1772,7 @@ registry! {
     /// named, or carries something the sandbox cannot take (a variable of
     /// the shim in its environment). A start never pulls (HUM-439).
     SANDBOX_043 => "sandbox", "Sandbox image missing or not the pinned one", "#sandbox_043",
-        "The root of the sandbox is an image of the container engine, named with its digest. Before every start the daemon asks the engine for exactly that digest; the image is missing, the local image under that name has another digest, or its environment sets a variable the shim reads. A start never pulls an image; pulling is a separate step the person asks for, and it uses the network directly, not through the proxy.",
+        "The root of the sandbox is an image of the container engine, named with its digest. Before every start the daemon asks the engine for exactly that digest; the image is missing, the local image under that name has another digest, or its environment sets a variable the shim reads. A start never pulls an image; pulling is a separate step the person asks for, and it uses the network directly, not through the proxy. The same code ends a pull that failed, or that the person cancelled (HUM-457).",
         "`CopyCommand` with `humanitl sandbox image pull <reference>` when the image is missing or another digest is present; `ChangeSetting` back to the host root when the image itself cannot be used.";
 }
 

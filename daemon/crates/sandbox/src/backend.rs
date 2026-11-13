@@ -39,7 +39,8 @@ use humanitl_core::{Diagnostic, FixAction, Severity};
 use crate::bwrap::BwrapBackend;
 use crate::handle::SandboxHandle;
 use crate::launcher::{
-    CheckResult, IsolationLevel, LaunchPlan, PlanPreview, PlanRequest, PulledImage, SandboxBackend,
+    CheckResult, IsolationLevel, LaunchPlan, PlanPreview, PlanRequest, PullCancel, PulledImage,
+    SandboxBackend,
 };
 pub use crate::podman::with_image_root;
 use crate::podman::{PodmanBackend, static_lines as engine_static_lines};
@@ -325,8 +326,8 @@ impl SandboxBackend for Backend {
         dispatch!(self, backend => backend.isolation_check(handle))
     }
 
-    fn pull_image(&self, reference: &str) -> Result<PulledImage, Diagnostic> {
-        dispatch!(self, backend => backend.pull_image(reference))
+    fn pull_image(&self, reference: &str, cancel: &PullCancel) -> Result<PulledImage, Diagnostic> {
+        dispatch!(self, backend => backend.pull_image(reference, cancel))
     }
 }
 

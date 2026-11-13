@@ -4290,5 +4290,11 @@
   "sandboxImagePulled": "Pulled with the digest {digest}. Start the sandbox again.",
   "@sandboxImagePulled": {"description": "Sandbox: the image is in the local storage with exactly its digest (HUM-439).", "placeholders": {"digest": {"type": "String", "example": "sha256:7378…"}}},
   "sandboxImagePullFailed": "Not pulled: {reason}",
-  "@sandboxImagePullFailed": {"description": "Sandbox: pulling the image failed; the daemon's sentence follows (HUM-439).", "placeholders": {"reason": {"type": "String"}}}
+  "@sandboxImagePullFailed": {"description": "Sandbox: pulling the image failed; the daemon's sentence follows (HUM-439).", "placeholders": {"reason": {"type": "String"}}},
+  "sandboxImagePullCancelRunning": "Cancel",
+  "@sandboxImagePullCancelRunning": {"description": "Sandbox: secondary button while an image is pulled; cancels the pull, and the daemon ends the container engine (HUM-457)."},
+  "sandboxImagePullCancelled": "Pull cancelled. Nothing of it runs any more, and the image is not there yet.",
+  "@sandboxImagePullCancelled": {"description": "Sandbox: the note after a pull was cancelled; the card offers the pull button again (HUM-457)."},
+  "sandboxImagePullCancelledRemaining": "{count, plural, =1{Pull cancelled, but one of its processes still ran after it was ended. The image is not there yet.} other{Pull cancelled, but {count} of its processes still ran after it was ended. The image is not there yet.}}",
+  "@sandboxImagePullCancelledRemaining": {"description": "Sandbox: the note after a pull was cancelled while processes of it survived the kill, as the daemon counted them (HUM-457).", "placeholders": {"count": {"type": "int"}}}
 }

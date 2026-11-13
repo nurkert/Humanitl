@@ -104,12 +104,21 @@ pub trait SandboxBackend: Send + Sync {
     /// Vorgabe gilt für jedes Backend, das auf den Dateien des Rechners
     /// läuft und keine Abbilder kennt.
     ///
+    /// Abbrechen lässt sich das Ziehen über `cancel` (HUM-457): Wer zieht,
+    /// fragt das Zeichen regelmäßig ab, beendet bei gesetztem Zeichen den
+    /// Prozess der Engine samt allen Prozessen, die er gestartet hat, und
+    /// kehrt mit einem Befund zurück. Das Zeichen ist ein Wert des Aufrufers
+    /// und kein Verzeichnis im Backend: Welcher Abbruch zu welchem Ziehen
+    /// gehört, entscheidet der Aufrufer über seine Kennung, und ein Backend
+    /// ohne Abbilder braucht nichts davon.
+    ///
     /// # Errors
     ///
     /// Die Vorgabe: `SANDBOX_034`. Ein Backend mit Abbildern nennt seine
-    /// eigenen Befunde (`CONFIG_003`, `SANDBOX_043`).
-    fn pull_image(&self, reference: &str) -> Result<PulledImage, Diagnostic> {
-        let _ = reference;
+    /// eigenen Befunde (`CONFIG_003`, `SANDBOX_043`, auch für ein
+    /// abgebrochenes Ziehen).
+    fn pull_image(&self, reference: &str, cancel: &PullCancel) -> Result<PulledImage, Diagnostic> {
+        let _ = (reference, cancel);
         Err(without_images(self.name()))
     }
 }
@@ -285,6 +294,62 @@ pub struct PulledImage {
     pub digest: String,
     /// Die Kennung des Abbilds in der Engine.
     pub id: String,
+}
+
+/// Das Zeichen, mit dem ein laufendes Ziehen abgebrochen wird (HUM-457).
+///
+/// Gesetzt wird es einmal und nie zurück; wer zieht, liest es zwischen zwei
+/// Blicken auf den Prozess der Engine. Das Beenden selbst macht das Backend,
+/// das den Prozess kennt, und es trägt hier ein, ob es die Engine wirklich
+/// unterbrochen hat und wie viele Prozesse des Ziehens danach noch liefen
+/// ([`PullCancel::interrupted`]). Nur das sagt dem Aufrufer, ob sein Abbruch
+/// gewirkt hat: Ein Ziehen, das kurz vor dem Zeichen von selbst fertig
+/// wurde, hat niemand abgebrochen.
+#[derive(Debug, Default)]
+pub struct PullCancel {
+    requested: std::sync::atomic::AtomicBool,
+    interrupted: Mutex<Option<usize>>,
+}
+
+impl PullCancel {
+    /// Ein Zeichen, das noch nicht gesetzt ist.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Bittet um den Abbruch. Wirkt einmal; ein zweiter Aufruf ändert nichts.
+    pub fn cancel(&self) {
+        self.requested
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Ob um den Abbruch gebeten wurde.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.requested.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Trägt ein, dass der Abbruch die Engine unterbrochen hat; `still_running`
+    /// ist die Zahl der Prozesse des Ziehens, die danach noch liefen. Nur das
+    /// Backend ruft das, und nur, wenn es wirklich unterbrochen hat.
+    pub fn mark_interrupted(&self, still_running: usize) {
+        *self
+            .interrupted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(still_running);
+    }
+
+    /// `Some(n)`: Das Backend hat die Engine unterbrochen, und danach liefen
+    /// noch `n` Prozesse des Ziehens. `None`: Unterbrochen wurde nichts, das
+    /// Ziehen endete von selbst oder vor dem Start der Engine.
+    #[must_use]
+    pub fn interrupted(&self) -> Option<usize> {
+        *self
+            .interrupted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 /// `SANDBOX_034`: Dieses Backend läuft auf den Dateien des Rechners und kennt

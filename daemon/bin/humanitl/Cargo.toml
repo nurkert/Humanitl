@@ -55,6 +55,9 @@ tokio.workspace = true
 # `ReceiverStream` ist die Bruecke vom Kanal zum gRPC-Strom.
 tokio-stream.workspace = true
 tonic.workspace = true
+# `sandbox image pull` waehlt die Kennung seines Ziehens selbst, damit ein
+# `Ctrl+C` es abbrechen kann, bevor der Daemon antwortet (HUM-457).
+uuid.workspace = true
 
 [dev-dependencies]
 # Der Integrationstest startet einen echten gRPC-Dienst (den Fake-Daemon aus

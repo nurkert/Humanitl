@@ -1021,7 +1021,10 @@ async fn podman_is_refused_from_the_config_and_from_the_start_until_it_is_admitt
     ] {
         let mut stream = fixture.service.stream(v1::SandboxRequest {
             op: Some(v1::sandbox_request::Op::ImagePull(
-                v1::sandbox_request::ImagePull { reference },
+                v1::sandbox_request::ImagePull {
+                    reference,
+                    ..Default::default()
+                },
             )),
         });
         let mut pulled = Vec::new();

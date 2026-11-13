@@ -65,6 +65,16 @@
 //! `HUMANITL_` setzt, könnte sie ersetzen und wird abgelehnt. Nutzer,
 //! Einstiegspunkt, Volumes und Gesundheitsprüfung des Abbilds hebt die Zeile
 //! selbst auf ([`super::plan::line`]).
+//!
+//! **Abbrechen (HUM-457).** Das Ziehen läuft als eigene Prozessgruppe
+//! ([`super::teardown::run_cancellable`]); ein Abbruch und die Frist
+//! ([`PULL_TIMEOUT`]) beenden genau diese Gruppe mit `SIGKILL`, und der Befund
+//! sagt, wie viele ihrer Prozesse danach noch liefen ([`pull_cancelled`]).
+//! Das ist die Grenze: Ein Prozess, der sich mit `setsid` aus der Gruppe
+//! löst, bleibt. Die Pausen-Instanz, die Podman ohne Root für alle Befehle
+//! teilt, tut das und gehört bewusst nicht zum Ziehen; für einen Helfer des
+//! Ziehens selbst ist kein solcher Fall bekannt. Eine Verfolgung über
+//! Kontrollgruppen gibt es nicht.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -681,6 +691,41 @@ pub(super) fn pull_failed(
         .build()
 }
 
+/// `SANDBOX_043`: Das Ziehen wurde auf Wunsch abgebrochen (HUM-457). Der
+/// Prozess der Engine und seine Prozessgruppe sind beendet; `alive` sagt, wie
+/// viele Prozesse der Gruppe danach trotzdem noch liefen, und der Satz
+/// verschweigt sie nicht. Was die Engine bis dahin in den Speicher schrieb,
+/// ist kein vollständiges Abbild, und kein Start nimmt es, solange der
+/// Digest nicht vorliegt.
+pub(super) fn pull_cancelled(reference: &str, alive: usize) -> Diagnostic {
+    let ended = if alive == 0 {
+        "and no process of it runs any more".to_owned()
+    } else {
+        format!("but {alive} process(es) of it still ran after the container engine was killed")
+    };
+    Diagnostic::builder(SANDBOX_043, Severity::Error)
+        .why(format!(
+            "the pull of {reference} was cancelled on request {ended}; nothing was started, \
+             and the image is not there yet"
+        ))
+        .fix(FixAction::CopyCommand(pull_command_text(reference)))
+        .build()
+}
+
+/// Der Grund nach abgelaufener Frist ([`PULL_TIMEOUT`]): beendet, und wie
+/// viele Prozesse des Ziehens danach noch liefen (HUM-457).
+pub(super) fn deadline_detail(alive: usize) -> String {
+    let minutes = PULL_TIMEOUT.as_secs() / 60;
+    if alive == 0 {
+        format!("the pull did not end within {minutes} minutes and was killed")
+    } else {
+        format!(
+            "the pull did not end within {minutes} minutes and was killed; {alive} \
+             process(es) of it still ran afterwards"
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -1156,6 +1201,28 @@ mod tests {
     }
 
     /// Ein gescheitertes Ziehen sagt, woher Zugangsdaten kämen.
+    /// Der Befund eines Abbruchs verschweigt keine Prozesse, die das
+    /// `SIGKILL` überlebten, und die Frist nennt sie ebenso (HUM-457).
+    #[test]
+    fn a_cancel_says_whether_processes_of_the_pull_still_ran() {
+        let clean = pull_cancelled(&reference(), 0);
+        assert_eq!(clean.code.as_str(), "SANDBOX_043");
+        assert!(
+            clean.why.contains("no process of it runs any more"),
+            "{}",
+            clean.why
+        );
+        let left = pull_cancelled(&reference(), 2);
+        assert!(
+            left.why.contains("but 2 process(es) of it still ran"),
+            "{}",
+            left.why
+        );
+        assert!(!left.why.contains("no process of it runs"), "{}", left.why);
+        assert!(!deadline_detail(0).contains("still ran"));
+        assert!(deadline_detail(3).contains("3 process(es) of it still ran"));
+    }
+
     #[test]
     fn a_failed_pull_names_where_credentials_come_from() {
         let err = pull_failed(

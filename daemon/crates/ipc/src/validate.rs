@@ -176,6 +176,43 @@ pub fn sandbox_id(text: &str) -> Result<SandboxId, Diagnostic> {
     })
 }
 
+/// Liest die Kennung eines Ziehens aus `ImagePull.pull_id` (HUM-457): eine
+/// UUID, die der Client wählt. Leer heißt: Dieses Ziehen ist nicht
+/// abbrechbar, wie vor Minor 37.
+///
+/// # Errors
+///
+/// [`Diagnostic`] mit `IPC_005`, wenn der Text weder leer noch eine UUID
+/// ist: eine unlesbare Anfrage (`backlog/CONVENTIONS.md` 4.12).
+pub fn pull_id(text: &str) -> Result<Option<uuid::Uuid>, Diagnostic> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    uuid::Uuid::parse_str(text).map(Some).map_err(|error| {
+        Diagnostic::builder(codes::IPC_005, Severity::Error)
+            .why(format!("{text:?} is not the id of an image pull: {error}"))
+            .build()
+    })
+}
+
+/// Liest die Kennung aus `CancelImagePull.pull_id` (HUM-457). Anders als
+/// beim Ziehen ist sie hier Pflicht: Ein Abbruch ohne Kennung trifft keines.
+///
+/// # Errors
+///
+/// [`Diagnostic`] mit `IPC_005`, wenn sie fehlt oder keine UUID ist.
+pub fn cancel_pull_id(text: &str) -> Result<uuid::Uuid, Diagnostic> {
+    pull_id(text)?.ok_or_else(|| {
+        Diagnostic::builder(codes::IPC_005, Severity::Error)
+            .why(
+                "a cancel names the pull_id of the image pull it ends, and this one names \
+                 none",
+            )
+            .build()
+    })
+}
+
 /// Die Prüfsumme aus einem [`v1::BodyRef`].
 ///
 /// # Errors

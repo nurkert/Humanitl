@@ -1838,5 +1838,8 @@
   "sandboxImagePullCancel": "Abbrechen",
   "sandboxImagePulling": "Abbild wird gezogen …",
   "sandboxImagePulled": "Gezogen, mit dem Digest {digest}. Starte die Sandbox erneut.",
-  "sandboxImagePullFailed": "Nicht gezogen: {reason}"
+  "sandboxImagePullFailed": "Nicht gezogen: {reason}",
+  "sandboxImagePullCancelRunning": "Abbrechen",
+  "sandboxImagePullCancelled": "Ziehen abgebrochen. Davon läuft nichts mehr, und das Abbild ist noch nicht da.",
+  "sandboxImagePullCancelledRemaining": "{count, plural, =1{Ziehen abgebrochen, aber einer seiner Prozesse lief nach dem Beenden noch. Das Abbild ist noch nicht da.} other{Ziehen abgebrochen, aber {count} seiner Prozesse liefen nach dem Beenden noch. Das Abbild ist noch nicht da.}}"
 }
