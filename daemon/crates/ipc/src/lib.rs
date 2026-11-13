@@ -51,7 +51,12 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Minor-Version des Vertrags. Steigt bei jeder additiven Änderung
 /// (`Info.proto_minor`).
 ///
-/// `35` seit dem Doctor je Backend (HUM-436): `Doctor` nimmt
+/// `36` seit dem Abbild als Wurzel (HUM-439): `SandboxRequest.image_pull`
+/// zieht ein Abbild auf ausdrücklichen Wunsch und antwortet mit
+/// `SandboxEvent.image_pulled`; `MountMode.MOUNT_MODE_IMAGE` nennt in der
+/// Tabelle die Wurzel, wenn sie ein Abbild ist, mit dem Verweis samt Digest in
+/// `Mount.src`.
+/// `35` war der Doctor je Backend (HUM-436): `Doctor` nimmt
 /// `DoctorRequest` statt `Empty` (auf der Leitung ohne gesetztes Feld
 /// dieselbe leere Nachricht), `DoctorRequest.probe` bittet um einen
 /// Probestart je zugelassenem Backend, und `DoctorReport.backends` trägt je
@@ -198,7 +203,7 @@ pub const PROTO_MAJOR: u32 = 1;
 /// Spiegelung in `app/lib/core/ipc/proto_version.dart` darf nachziehen: eine
 /// abweichende Minor ist verabredetermaßen kein Grund, die Verbindung
 /// abzulehnen (`docs/PROTOCOL.md`).
-pub const PROTO_MINOR: u32 = 35;
+pub const PROTO_MINOR: u32 = 36;
 
 /// Metadata-Schlüssel für das Session-Token aus
 /// `$XDG_RUNTIME_DIR/humanitl/token` (CONVENTIONS.md 3.6).

@@ -120,6 +120,7 @@ deliberately small and consists of components that many other projects use as we
 | system certificate store | trust anchors for the daemon's own connections to destinations (HUM-257) | `/etc/ssl/certs`, written only by root; `webpki-roots` when it holds no usable root | the store `curl`, `apt` and the browser trust; whoever changes it is root and outside the model |
 | the LLM host | sees every prompt | must belong to the user | a declared side channel, not a technical safeguard ([section 5.1](#51-the-llm-passthrough)) |
 | audit key file | HMAC key of the audit chain | `$XDG_DATA_HOME/humanitl/keys/audit.key`, `0600` in `0700` | protects against other accounts, not against the same account |
+| the image of the sandbox (Podman with `rootfs = "image"`, HUM-439) | the root file system the agent and its tools run from | pinned by digest (`name@sha256:...`) and present in the local storage of the engine; checked before every start (`SANDBOX_043`), never pulled by a start | the person chose it by its digest; what it holds runs as the agent, under the agent's filter, and never holds the CA, a key or the session directory, which come from the host ([section 13](#an-image-as-the-root-hum-439)) |
 | system keyring (Secret Service, on macOS the login Keychain) | the LLM access key (HUM-140, HUM-349) | `secret-tool` from `libsecret-tools`, on macOS `/usr/bin/security`; without an answer `$XDG_DATA_HOME/humanitl/keys/llm.key`, `0600` in `0700` | protects against other accounts, not against the same account; the agent reads the key inside the sandbox because it needs it |
 
 **Not part of the isolation TCB: the Flutter application.** It is a gRPC client like the CLI
@@ -1707,6 +1708,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.x | macOS: Seatbelt as the sandbox backend, a generated SBPL profile per session, the three guarantees restated and measured by the shim; the daemon as a launchd agent; socket and token under `~/Library/Application Support/Humanitl/run` (HUM-323, HUM-327, [section 12](#12-macos-seatbelt-instead-of-bubblewrap)). |
 | 0.1.x | Linux: Podman as a second sandbox backend, plain level (rootless, runtime `crun`), not admitted: every start refuses it with `SANDBOX_048` until HUM-448; only the escape suite and the tests start it. Every configuration source the daemon does not write is cut off, the environment goes only through the sealed memfd, the container ends through the engine and the lifeline (HUM-433, [section 13](#13-linux-podman), K-27). |
 | 0.1.x | The escape suite runs against every backend; the CI job `escape-tests-podman` runs it against Podman through `escape-launch --backend podman`, with a hostile engine configuration planted on the runner (HUM-435, [section 9](#9-what-we-verify-in-ci), K-27). |
+| 0.1.x | Linux, Podman: an image as the root of the sandbox, pinned by digest and checked before every start (`SANDBOX_043`), never pulled by a start; `humanitl sandbox image pull` pulls on request, directly and not through the proxy, and says so first; project, door, CA, shim and session files come from the host, and ESC-2 checks the CA by device and inode (HUM-439, [section 13](#an-image-as-the-root-hum-439), K-28). |
 
 ## 12. macOS: Seatbelt instead of bubblewrap
 
@@ -1998,6 +2000,49 @@ Podman machine, is refused with `SANDBOX_038`.
 - **No disposable sandbox.** Its lower layer cannot be bound to the checked project folder;
   `disposable` refuses with `SANDBOX_030`, `auto` runs direct with `SANDBOX_033`
   ([section 5.2](#the-disposable-sandbox-hum-350), HUM-438).
+
+### An image as the root (HUM-439)
+
+With `sandbox.podman.rootfs = "image"` the root of the sandbox is the image named in
+`sandbox.podman.image`, always with its digest (`name@sha256:` and 64 hex digits; without it the
+configuration is refused with `CONFIG_003`).
+
+- **No start pulls.** The line keeps `--pull=never`, and before every start the plan asks the
+  engine for exactly that digest (`podman image inspect`). A missing image, or another digest under
+  the same name, refuses the start with `SANDBOX_043`, and its fix is the command that pulls. The
+  container starts from the reference with its digest, so the engine resolves it by content, not
+  by a name under which tomorrow another image could stand.
+- **Pulling only on request.** `humanitl sandbox image pull [REFERENCE]` (RPC
+  `SandboxRequest.image_pull`) is the only way the adapter pulls. The engine then uses the network
+  of the daemon directly: not through the Humanitl proxy, without its rules, its hold and its
+  recording, and without the proxy variables of the host. The command line and the interface say
+  so before it runs. The registry is the one in the name: a short name without a registry is
+  refused, and the daemon's own `registries.conf` has no search list and no mirror. The signature
+  policy is the daemon's own file (`--signature-policy`) and accepts any image: the trust anchor is
+  the digest the person named, not a signature. Until HUM-448 the pull is refused with
+  `SANDBOX_048`, like every start.
+- **The image is part of the trusted computing base.** Whatever it holds runs as the agent, under
+  the agent's filter. The shim runs from the host's file, statically linked in a release, so no
+  library of the image runs before the filter is in place. Project folder, door, CA certificate and
+  bundle, shim, the adapter's files and the session directory come from the host as without an
+  image, never from the image: a CA, a key or a session directory never stands in an image. ESC-2
+  checks that the CA in the sandbox is the daemon's file by device and inode
+  (`esc-2/ca_is_the_hosts`), under an image too (`HUMANITL_ESCAPE_IMAGE`).
+- **What the image does not decide.** The line sets the user (`--user` with the user's own IDs, as
+  `--userns=keep-id` does without an image), the shim as the entry point, `--image-volume=ignore`
+  (a `VOLUME` of the image would be a mount the plan does not know) and `--no-healthcheck`. The
+  engine lets the image's environment win over the daemon's `containers.conf`, where the shim's
+  variables stand; an image whose environment sets a name that starts with `HUMANITL_` is refused
+  with `SANDBOX_043`. The agent's environment comes from the memfd as always, and the shim clears
+  everything the engine put there.
+- **The profile's `mounts.ro` and symbolic links do not apply**: the image brings its own `/usr`
+  and `/etc`. The expected mount table holds the root as exactly one read-only `overlay`; its flags
+  stay open, because the overlay has no counterpart on the host to read them from. The preview
+  shows the reference with its digest, and the mount table names the root "image".
+- **Residual risk.** The digest check reads the engine's metadata; it does not hash the unpacked
+  layers again, so a process of the same account that writes into the user's container storage can
+  change the content under an unchanged digest (K-28). The image's annotations reach the engine.
+  An agent from the host bound into an image may miss its libraries (`AGENT_005`).
 
 ### Prerequisites
 

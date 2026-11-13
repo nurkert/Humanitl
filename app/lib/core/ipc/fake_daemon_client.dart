@@ -89,7 +89,7 @@ class RecordedDecision {
 
 /// [DaemonClient] without a daemon.
 class FakeDaemonClient
-    with FakeUpdates, FakeIntercept, FakeSandboxBackends
+    with FakeUpdates, FakeIntercept, FakeSandboxBackends, FakeImagePull
     implements DaemonClient {
   /// Creates a fake that answers `GetInfo` with [info] (or [defaultInfo]),
   /// or throws [infoFailure] when given, and replays [script] (or
@@ -5703,5 +5703,45 @@ mixin FakeSandboxBackends {
       throw DaemonException(failure);
     }
     return sandboxBackendList;
+  }
+}
+
+/// The fake's half of `Sandbox(ImagePull)` (HUM-439).
+///
+/// Pulls nothing: a reference pinned by digest comes back as pulled with that
+/// digest and an id that says `fake` (CONVENTIONS 4.7), anything else is the
+/// daemon's `CONFIG_003`. The same answers as the Rust fake.
+mixin FakeImagePull {
+  /// The references `Sandbox(ImagePull)` was asked for, in order, for tests.
+  final List<String> imagePulls = <String>[];
+
+  /// Thrown as a [DaemonException] by `Sandbox(ImagePull)` when set.
+  Diagnostic? imagePullFailure;
+
+  /// `Sandbox(ImagePull)`.
+  Future<PulledImage> pullImage({String reference = ''}) async {
+    imagePulls.add(reference);
+    if (imagePullFailure case final Diagnostic failure) {
+      throw DaemonException(failure);
+    }
+    final RegExpMatch? pinned = RegExp(r'^[^@\s]+@sha256:([0-9a-f]{64})$')
+        .firstMatch(reference);
+    if (pinned == null) {
+      throw DaemonException(
+        Diagnostic(
+          code: 'CONFIG_003',
+          severity: Severity.error,
+          why:
+              '"$reference" is not pinned by digest; the fake daemon pulls '
+              'nothing, and an image is only ever named as NAME@sha256: and '
+              '64 hex digits',
+        ),
+      );
+    }
+    return PulledImage(
+      reference: reference,
+      digest: 'sha256:${pinned.group(1)}',
+      imageId: 'fake-image',
+    );
   }
 }

@@ -142,6 +142,9 @@ pub async fn run(ctx: &Context, cmd: &SandboxCmd) -> Result<u8, Failure> {
             yes,
         } => crate::cmd::changes::apply(ctx, ids, *overwrite, *yes).await,
         SandboxCmd::Discard { yes } => crate::cmd::changes::discard(ctx, *yes).await,
+        SandboxCmd::Image {
+            cmd: crate::cli::ImageCmd::Pull { reference, yes },
+        } => crate::cmd::image::pull(ctx, reference.as_deref(), *yes).await,
     }
 }
 
@@ -283,6 +286,7 @@ fn preview_rules_json(rows: &[humanitl_sandbox::PolicyRow]) -> serde_json::Value
                     PolicyMode::Symlink => "symlink",
                     PolicyMode::Proc => "proc",
                     PolicyMode::Dev => "dev",
+                    PolicyMode::Image => "image",
                 },
                 "profile_paths": rule.names,
             })

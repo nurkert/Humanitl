@@ -1012,6 +1012,25 @@ async fn podman_is_refused_from_the_config_and_from_the_start_until_it_is_admitt
         v1::SandboxState::Failed as i32,
         "{planned:?}"
     );
+    // Ein Abbild zu ziehen fragt dasselbe Backend (HUM-439): genau ein
+    // Befund und kein Ergebnis, gezogen wird nichts, ob mit Verweis oder mit
+    // dem eingestellten.
+    for reference in [
+        String::new(),
+        format!("docker.io/library/alpine@sha256:{}", "b".repeat(64)),
+    ] {
+        let mut stream = fixture.service.stream(v1::SandboxRequest {
+            op: Some(v1::sandbox_request::Op::ImagePull(
+                v1::sandbox_request::ImagePull { reference },
+            )),
+        });
+        let mut pulled = Vec::new();
+        while let Some(event) = stream.next().await {
+            pulled.push(event);
+        }
+        assert_eq!(codes(&pulled), ["SANDBOX_048"], "{pulled:?}");
+        assert_eq!(pulled.len(), 1, "{pulled:?}");
+    }
 }
 
 /// Ein Projekt hebt die Untergrenze auf `kernel`, und weder der Wunsch über

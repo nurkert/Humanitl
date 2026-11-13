@@ -278,7 +278,6 @@ fn krun_is_refused_with_sandbox_048_and_crun_passes() {
 #[cfg(target_os = "linux")]
 mod planned {
     use std::ffi::OsString;
-    use std::os::unix::fs::PermissionsExt as _;
     use std::os::unix::net::UnixListener;
 
     use humanitl_config::{Env, WorkMode};
@@ -292,7 +291,7 @@ mod planned {
         pub(super) work: PathBuf,
         pub(super) socket: PathBuf,
         _listener: UnixListener,
-        ca: PathBuf,
+        pub(super) ca: PathBuf,
         shim: PathBuf,
     }
 
@@ -591,7 +590,7 @@ mod planned {
     }
 
     #[test]
-    fn disposable_image_and_krun_are_refused_and_never_replaced() {
+    fn disposable_an_unnamed_image_and_krun_are_refused_and_never_replaced() {
         let fx = Fixture::new(None);
         let profile = profile();
         let session = fx.context(&["true"]);
@@ -613,6 +612,8 @@ mod planned {
             .disposable_support(&PlanRequest::new(&profile, &session, &disposable))
             .expect_err("not yet");
         assert_eq!(err.code.as_str(), "SANDBOX_030", "{}", err.why);
+        // Ein Abbild als Wurzel ohne Verweis: nie still die Wurzel des Hosts
+        // (HUM-439).
         let image = PodmanBackend::fallback(
             fx.paths.clone(),
             &PodmanConfig {
@@ -624,7 +625,7 @@ mod planned {
         let err = image
             .plan(&PlanRequest::new(&profile, &session, &options))
             .expect_err("image");
-        assert_eq!(err.code.as_str(), "SANDBOX_034", "{}", err.why);
+        assert_eq!(err.code.as_str(), "CONFIG_003", "{}", err.why);
         let krun = PodmanBackend::fallback(
             fx.paths.clone(),
             &PodmanConfig {
@@ -638,6 +639,330 @@ mod planned {
         assert_eq!(err.code.as_str(), "SANDBOX_048", "{}", err.why);
         assert_eq!(krun.isolation(), IsolationLevel::Kernel);
         assert_eq!(backend.isolation(), IsolationLevel::Namespaces);
+    }
+}
+
+/// Ein Abbild als Wurzel (HUM-439) mit einer Attrappe der Engine: Sie
+/// antwortet auf `image inspect` mit einer gespeicherten Antwort und schreibt
+/// jeden Aufruf mit; `pull` legt die Antwort erst an.
+#[cfg(target_os = "linux")]
+mod image_root {
+    use std::ffi::OsString;
+
+    use super::planned::{Fixture, profile};
+    use super::*;
+    use crate::launcher::{LaunchOptions, StdioMode};
+
+    const PINNED: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+    const OTHER: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+
+    fn reference() -> String {
+        format!("localhost/humanitl-hum439@sha256:{PINNED}")
+    }
+
+    fn answer(digest: &str) -> String {
+        serde_json::json!([{
+            "Id": "f00d",
+            "Digest": format!("sha256:{digest}"),
+            "RepoDigests": [format!("localhost/humanitl-hum439@sha256:{digest}")],
+            "Config": { "Env": ["PATH=/usr/bin:/bin"] },
+        }])
+        .to_string()
+    }
+
+    struct FakeEngine {
+        program: PathBuf,
+        log: PathBuf,
+        json: PathBuf,
+        staged: PathBuf,
+    }
+
+    impl FakeEngine {
+        /// `present`: die Antwort, die schon im Speicher liegt; `None`: kein
+        /// Abbild, bis ein Ziehen die Antwort aus `staged` an ihren Ort legt.
+        fn new(dir: &Path, present: Option<&str>, staged: &str) -> Self {
+            let program = dir.join("fake-engine");
+            let log = dir.join("engine.log");
+            let json = dir.join("inspect.json");
+            let staged_file = dir.join("staged.json");
+            if let Some(present) = present {
+                std::fs::write(&json, present).unwrap();
+            }
+            std::fs::write(&staged_file, staged).unwrap();
+            let script = format!(
+                "#!/bin/sh\n\
+                 printf '%s\\n' \"$*\" >> '{log}'\n\
+                 case \" $* \" in\n\
+                 *' pull '*) cp '{staged}' '{json}'; echo f00d; exit 0 ;;\n\
+                 *' image inspect '*)\n\
+                   if [ -f '{json}' ]; then cat '{json}'; exit 0; fi\n\
+                   echo 'Error: humanitl-hum439: image not known' >&2; exit 125 ;;\n\
+                 esac\n\
+                 exit 1\n",
+                log = log.display(),
+                staged = staged_file.display(),
+                json = json.display(),
+            );
+            crate::test_support::write_program(&program, &script);
+            Self {
+                program,
+                log,
+                json,
+                staged: staged_file,
+            }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            std::fs::read_to_string(&self.log)
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        }
+
+        fn backend(&self, paths: &Paths) -> PodmanBackend {
+            PodmanBackend::fallback(
+                paths.clone(),
+                &PodmanConfig {
+                    program: Some(self.program.clone()),
+                    rootfs: humanitl_config::PodmanRootfs::Image,
+                    image: Some(reference()),
+                    ..PodmanConfig::default()
+                },
+            )
+        }
+    }
+
+    fn strings(argv: &[OsString]) -> Vec<String> {
+        argv.iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// Fehlt das Abbild oder liegt unter dem Namen ein anderer Digest, lehnt
+    /// der Plan mit `SANDBOX_043` ab, bevor er etwas schreibt, und nennt den
+    /// Befehl, der zieht; gezogen wird nichts (Akzeptanzkriterium 1). Ohne
+    /// die Prüfung des Digests würde dieser Test rot: Der Plan ginge durch.
+    #[test]
+    fn a_missing_or_other_image_is_refused_with_sandbox_043_and_nothing_is_pulled() {
+        let fx = Fixture::new(None);
+        let profile = profile();
+        let session = fx.context(&["true"]);
+        let options = LaunchOptions::default();
+        for present in [None, Some(answer(OTHER))] {
+            let dir = tempfile::tempdir().unwrap();
+            let engine = FakeEngine::new(dir.path(), present.as_deref(), &answer(PINNED));
+            let err = engine
+                .backend(&fx.paths)
+                .plan(&PlanRequest::new(&profile, &session, &options))
+                .expect_err("not the pinned image");
+            assert_eq!(err.code.as_str(), "SANDBOX_043", "{}", err.why);
+            assert_eq!(
+                err.fix,
+                Some(FixAction::CopyCommand(format!(
+                    "humanitl sandbox image pull {}",
+                    reference()
+                )))
+            );
+            if present.is_some() {
+                assert!(err.why.contains(OTHER), "{}", err.why);
+            }
+            let calls = engine.calls();
+            assert!(
+                calls
+                    .iter()
+                    .any(|call| call.contains(&format!("image inspect -- {}", reference()))),
+                "{calls:?}"
+            );
+            assert!(
+                !calls
+                    .iter()
+                    .any(|call| call.contains("pull") || call.contains(" run ")),
+                "a start pulled or ran: {calls:?}"
+            );
+            let sessions = EngineDir::of(&fx.paths).root.join("sessions");
+            assert!(
+                std::fs::read_dir(&sessions).map_or(true, |mut dir| dir.next().is_none()),
+                "the refused plan wrote a session"
+            );
+        }
+    }
+
+    /// Mit dem Abbild unter genau seinem Digest: Die Zeile startet das
+    /// Abbild samt Digest, `mounts.ro` und die Verweise des Profils fehlen,
+    /// Projekt, Tür, CA, Shim und Dateien der Sitzung kommen vom Host, die
+    /// erwartete Tabelle hat als Wurzel ein nur lesbares `overlay`, und die
+    /// Vorschau nennt die Wurzel ein Abbild mit Digest.
+    #[test]
+    fn the_pinned_image_is_the_root_and_only_the_session_comes_from_the_host() {
+        let fx = Fixture::new(None);
+        let dir = tempfile::tempdir().unwrap();
+        let engine = FakeEngine::new(dir.path(), Some(&answer(PINNED)), &answer(PINNED));
+        let backend = engine.backend(&fx.paths);
+        let profile = profile();
+        assert!(!profile.mounts.ro.is_empty() && !profile.mounts.symlinks.is_empty());
+        let session = fx.context(&["true"]);
+        let options = LaunchOptions {
+            stdio: StdioMode::Capture,
+            ..LaunchOptions::default()
+        };
+        let request = PlanRequest::new(&profile, &session, &options);
+        let plan = backend
+            .plan(&request)
+            .unwrap_or_else(|d| panic!("{}: {}", d.code, d.why));
+        let argv = strings(&plan.argv);
+        let at = argv
+            .iter()
+            .position(|arg| *arg == reference())
+            .expect("the image with its digest");
+        assert_eq!(argv[at + 1], "--proxy-port", "{argv:?}");
+        assert!(!argv.contains(&"--rootfs".to_owned()), "{argv:?}");
+        assert!(argv.contains(&"--pull=never".to_owned()));
+        for ro in &profile.mounts.ro {
+            let bind = format!("destination={},", ro.display());
+            assert!(
+                !argv.iter().any(|arg| arg.contains(&bind)),
+                "{} is bound under an image: {argv:?}",
+                ro.display()
+            );
+        }
+        for dst in [
+            "/work",
+            "/run/humanitl/proxy.sock",
+            "/etc/humanitl/ca.crt",
+            "/run/humanitl/humanitl-shim",
+            "/etc/passwd",
+        ] {
+            let bound = |arg: &String| {
+                arg.starts_with("--mount=type=bind,")
+                    && (arg.contains(&format!("destination={dst},"))
+                        || arg.ends_with(&format!("destination={dst}")))
+            };
+            assert!(argv.iter().any(bound), "{dst}: {argv:?}");
+        }
+        let session_dir = plan.session_dir.clone().expect("a session directory");
+        let rootfs = session_dir.join("rootfs");
+        assert!(
+            std::fs::read_dir(&rootfs).map_or(true, |mut dir| dir.next().is_none()),
+            "an image needs no skeleton on the host"
+        );
+        let pins_host = plan
+            .fds
+            .iter()
+            .find(|(_, target)| *target == 6)
+            .map(|(host, _)| *host)
+            .expect("target 6");
+        let pins: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(format!("/proc/self/fd/{pins_host}")).unwrap(),
+        )
+        .unwrap();
+        let mounts = pins["mounts"].as_array().unwrap();
+        let root: Vec<&serde_json::Value> = mounts
+            .iter()
+            .filter(|entry| entry["point"] == "/")
+            .collect();
+        assert_eq!(root.len(), 1, "{pins}");
+        assert_eq!(root[0]["type"], "overlay");
+        assert_eq!(root[0]["mode"], "ro");
+        assert_eq!(root[0]["count"], "1");
+        for ro in &profile.mounts.ro {
+            assert!(
+                !mounts
+                    .iter()
+                    .any(|entry| entry["point"] == ro.to_string_lossy().as_ref()),
+                "{} expected under an image: {pins}",
+                ro.display()
+            );
+        }
+        assert!(
+            mounts
+                .iter()
+                .any(|entry| entry["point"] == "/etc/humanitl/ca.crt"
+                    && entry["source"]
+                        .as_str()
+                        .is_some_and(|source| source.starts_with("inode:"))),
+            "the CA is pinned to the host file: {pins}"
+        );
+        let _ = std::fs::remove_dir_all(&session_dir);
+    }
+
+    /// Die Vorschau nennt die Wurzel ein Abbild mit Digest, zeigt den Verweis
+    /// in der Zeile, keine Verweise des Profils, und zieht nichts.
+    #[test]
+    fn the_preview_names_the_image_root_with_its_digest() {
+        let fx = Fixture::new(None);
+        let dir = tempfile::tempdir().unwrap();
+        let engine = FakeEngine::new(dir.path(), Some(&answer(PINNED)), &answer(PINNED));
+        let backend = engine.backend(&fx.paths);
+        let profile = profile();
+        let session = fx.context(&["true"]);
+        let options = LaunchOptions::default();
+        let request = PlanRequest::new(&profile, &session, &options);
+        let preview = backend.preview(&request);
+        let first = preview.policy.first().expect("a row");
+        assert_eq!(first.mode, PolicyMode::Image);
+        assert_eq!(first.target, Path::new("/"));
+        assert_eq!(first.source.as_deref(), Some(Path::new(&reference())));
+        assert!(
+            !preview
+                .policy
+                .iter()
+                .any(|row| row.mode == PolicyMode::Symlink)
+        );
+        assert!(
+            strings(&preview.argv).contains(&reference()),
+            "the preview shows the digest"
+        );
+        assert!(
+            !engine.calls().iter().any(|call| call.contains("pull")),
+            "{:?}",
+            engine.calls()
+        );
+    }
+
+    /// `pull_image` zieht genau den Verweis mit der Signaturregel des
+    /// Adapters und prüft danach den Digest; ein Verweis ohne Registry oder
+    /// ohne Digest erreicht die Engine nie.
+    #[test]
+    fn a_pull_takes_the_pinned_reference_and_checks_it_afterwards() {
+        let fx = Fixture::new(None);
+        let dir = tempfile::tempdir().unwrap();
+        let engine = FakeEngine::new(dir.path(), None, &answer(PINNED));
+        let backend = engine.backend(&fx.paths);
+        for bad in [
+            format!("humanitl-hum439@sha256:{PINNED}"),
+            "localhost/humanitl-hum439:latest".to_owned(),
+        ] {
+            let err = backend.pull_image(&bad).expect_err("refused");
+            assert_eq!(err.code.as_str(), "CONFIG_003", "{}", err.why);
+        }
+        assert!(engine.calls().is_empty(), "{:?}", engine.calls());
+
+        let pulled = backend.pull_image("").expect("the configured image");
+        assert_eq!(pulled.reference, reference());
+        assert_eq!(pulled.digest, format!("sha256:{PINNED}"));
+        assert_eq!(pulled.id, "f00d");
+        let calls = engine.calls();
+        let policy = EngineDir::of(&fx.paths).signature_policy;
+        let expected = format!(
+            "--runtime=crun pull --quiet --signature-policy={} -- {}",
+            policy.display(),
+            reference()
+        );
+        assert!(calls.contains(&expected), "{calls:?}");
+        assert!(
+            std::fs::read_to_string(&policy)
+                .unwrap()
+                .contains("insecureAcceptAnything")
+        );
+
+        // Liegt danach ein anderer Digest vor, ist das Ziehen gescheitert.
+        std::fs::remove_file(&engine.json).unwrap();
+        std::fs::write(&engine.staged, answer(OTHER)).unwrap();
+        let err = backend
+            .pull_image(&reference())
+            .expect_err("another digest");
+        assert_eq!(err.code.as_str(), "SANDBOX_043", "{}", err.why);
     }
 }
 
@@ -1432,5 +1757,245 @@ mod live {
                 "the agent ran although a check failed: {checks:#?}"
             );
         }
+    }
+
+    // --- HUM-439: ein Abbild als Wurzel --------------------------------------
+
+    /// Der Name des Abbilds, das die Tests aus einem Archiv bauen, ohne Netz.
+    const LOCAL_IMAGE: &str = "localhost/humanitl-hum439";
+
+    /// Ein Abbild, gegen das eine ganze Sitzung läuft: `name@sha256:...`, im
+    /// lokalen Speicher schon vorhanden, mit `/bin/sh` und `stat`. Ohne die
+    /// Variable überspringt der Test (er zieht nie selbst).
+    const SESSION_IMAGE_ENV: &str = "HUMANITL_TEST_IMAGE";
+
+    /// Ein Shim, der im Abbild läuft (statisch gebaut), statt dem neben dem
+    /// Testprogramm; der gebaute ist dynamisch und braucht die glibc des Hosts.
+    const SESSION_SHIM_ENV: &str = "HUMANITL_TEST_IMAGE_SHIM";
+
+    /// `podman <args>` mit der Umgebung und der Konfiguration des Adapters;
+    /// ein Fehlschlag druckt alles, was Podman sagte.
+    fn engine_run(paths: &Paths, backend: &PodmanBackend, args: &[&str]) -> std::process::Output {
+        let engine = EngineDir::of(paths);
+        let mut command = engine.command(backend.program(), &engine.containers_conf());
+        command.args(args);
+        let output = teardown::run_bounded(command, Duration::from_secs(120))
+            .unwrap_or_else(|err| panic!("podman {args:?}: {err}"));
+        assert!(
+            output.status.success(),
+            "podman {args:?} failed with {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+
+    /// Baut aus einem Archiv mit einer Datei ein Abbild unter
+    /// [`LOCAL_IMAGE`]`:<tag>`, ohne Netz, und liefert seinen Digest
+    /// (`sha256:<hex>`).
+    fn import_local_image(paths: &Paths, backend: &PodmanBackend, tag: &str) -> String {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("marker"), tag).expect("marker");
+        let tar = dir.path().join("image.tar");
+        let status = Command::new("tar")
+            .arg("-cf")
+            .arg(&tar)
+            .arg("-C")
+            .arg(dir.path())
+            .arg("marker")
+            .status()
+            .expect("tar runs");
+        assert!(status.success(), "tar: {status}");
+        let name = format!("{LOCAL_IMAGE}:{tag}");
+        engine_run(paths, backend, &["import", &tar.to_string_lossy(), &name]);
+        let output = engine_run(
+            paths,
+            backend,
+            &["image", "inspect", "--format", "{{.Digest}}", &name],
+        );
+        let digest = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        assert!(
+            digest.starts_with("sha256:") && digest.len() == 71,
+            "the imported image has no digest: {digest:?}"
+        );
+        digest
+    }
+
+    /// Die Digests aller Abbilder unter [`LOCAL_IMAGE`], sortiert.
+    fn local_digests(paths: &Paths, backend: &PodmanBackend) -> Vec<String> {
+        let output = engine_run(
+            paths,
+            backend,
+            &[
+                "images",
+                "--all",
+                "--filter",
+                &format!("reference={LOCAL_IMAGE}"),
+                "--format",
+                "{{.Digest}}",
+            ],
+        );
+        let mut digests: Vec<String> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        digests.sort();
+        digests
+    }
+
+    /// Das Backend mit einem Abbild als Wurzel.
+    fn real_with_image(paths: &Paths, reference: &str) -> PodmanBackend {
+        PodmanBackend::detect(
+            paths.clone(),
+            &PodmanConfig {
+                rootfs: humanitl_config::PodmanRootfs::Image,
+                image: Some(reference.to_owned()),
+                ..PodmanConfig::default()
+            },
+        )
+        .unwrap_or_else(|d| panic!("{}: {}", d.code, d.why))
+    }
+
+    /// Unter dem Namen liegt ein Abbild mit einem anderen Digest als dem
+    /// eingestellten: Der Start lehnt mit `SANDBOX_043` ab, nennt den Befehl,
+    /// der zieht, und zieht nichts; die Abbilder unter dem Namen sind danach
+    /// dieselben wie vorher. Mit dem richtigen Digest geht der Plan durch.
+    ///
+    /// Mutationsbeweis (HUM-439): Ohne die Prüfung in `plan` ginge der Plan
+    /// mit dem falschen Digest durch, und `expect_err` färbt diesen Test rot.
+    #[test]
+    fn an_image_with_another_digest_is_refused_and_nothing_is_pulled() {
+        if !podman_here("an_image_with_another_digest_is_refused_and_nothing_is_pulled") {
+            return;
+        }
+        let fx = Fixture::new(Some(real_shim()));
+        let host_root = real(&fx.paths);
+        let digest = import_local_image(&fx.paths, &host_root, "a");
+        // Derselbe Name, ein anderer Digest: die letzte Ziffer gedreht.
+        let mut other = digest.clone();
+        let last = other.pop().expect("a digit");
+        other.push(if last == '0' { '1' } else { '0' });
+        let before = local_digests(&fx.paths, &host_root);
+        assert!(before.contains(&digest), "{before:?}");
+
+        let wrong = format!("{LOCAL_IMAGE}@{other}");
+        let backend = real_with_image(&fx.paths, &wrong);
+        let profile = profile();
+        let session = fx.context(&["true"]);
+        let options = LaunchOptions {
+            stdio: StdioMode::Capture,
+            ..LaunchOptions::default()
+        };
+        let err = backend
+            .plan(&PlanRequest::new(&profile, &session, &options))
+            .expect_err("another digest under the same name must not start");
+        eprintln!("refused as expected: {}: {}", err.code, err.why);
+        assert_eq!(err.code.as_str(), "SANDBOX_043", "{}", err.why);
+        assert_eq!(
+            err.fix,
+            Some(FixAction::CopyCommand(format!(
+                "humanitl sandbox image pull {wrong}"
+            )))
+        );
+        assert_eq!(
+            local_digests(&fx.paths, &host_root),
+            before,
+            "the refused start changed the local images"
+        );
+        assert!(containers(&fx.paths, &backend).is_empty());
+
+        let right = format!("{LOCAL_IMAGE}@{digest}");
+        let backend = real_with_image(&fx.paths, &right);
+        let plan = backend
+            .plan(&PlanRequest::new(&profile, &session, &options))
+            .unwrap_or_else(|d| panic!("the pinned digest is present: {}: {}", d.code, d.why));
+        assert!(
+            plan.argv.iter().any(|arg| arg.to_string_lossy() == right),
+            "{:?}",
+            plan.argv
+        );
+        if let Some(dir) = &plan.session_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        let _ = engine_run(
+            &fx.paths,
+            &host_root,
+            &["rmi", "--force", &format!("{LOCAL_IMAGE}:a")],
+        );
+    }
+
+    /// Eine ganze Sitzung auf einem Abbild ([`SESSION_IMAGE_ENV`]): Alle
+    /// `CHECK`-Zeilen sind `ok`, die Mounttabelle stimmt (Wurzel ein nur
+    /// lesbares `overlay`), der Agent läuft, und die CA im Container ist die
+    /// Datei des Hosts, nach Gerät und Inode (Akzeptanzkriterium 2). Bei
+    /// einer Abweichung druckt der Test die Fehlerausgabe des Shims mit
+    /// `mountinfo` und der erwarteten Tabelle.
+    #[test]
+    fn a_session_on_an_image_checks_ok_and_its_ca_is_the_hosts() {
+        let test = "a_session_on_an_image_checks_ok_and_its_ca_is_the_hosts";
+        if !podman_here(test) {
+            return;
+        }
+        let Some(reference) = std::env::var(SESSION_IMAGE_ENV)
+            .ok()
+            .filter(|value| !value.is_empty())
+        else {
+            eprintln!(
+                "skipped: {test} needs {SESSION_IMAGE_ENV}=NAME@sha256:... of a local image \
+                 with /bin/sh and stat (it never pulls)"
+            );
+            return;
+        };
+        let shim = std::env::var_os(SESSION_SHIM_ENV).map_or_else(real_shim, PathBuf::from);
+        let fx = Fixture::new(Some(shim));
+        let backend = real_with_image(&fx.paths, &reference);
+        let profile = profile();
+        let options = LaunchOptions {
+            stdio: StdioMode::Capture,
+            ..LaunchOptions::default()
+        };
+        let session = fx.context(&[
+            "/bin/sh",
+            "-c",
+            "echo AGENT-RAN; stat -c 'CA=%d:%i' /etc/humanitl/ca.crt",
+        ]);
+        let plan = backend
+            .plan(&PlanRequest::new(&profile, &session, &options))
+            .unwrap_or_else(|d| panic!("{}: {}", d.code, d.why));
+        let argv = plan
+            .argv
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let handle = backend
+            .launch(&plan)
+            .unwrap_or_else(|d| panic!("{}: {}\n--- argv ---\n{argv}", d.code, d.why));
+        let checks = backend.isolation_check(&handle);
+        let _ = handle.wait_timeout(Duration::from_secs(60));
+        let _ = handle.kill();
+        let output = handle.output().unwrap_or_default();
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let report = format!(
+            "{checks:#?}\n--- argv ---\n{argv}\n--- stdout ---\n{stdout}\n--- shim stderr \
+             (mountinfo and expected table on a mismatch) ---\n{stderr}"
+        );
+        assert!(
+            !checks.is_empty() && checks.iter().all(|check| check.passed),
+            "{report}"
+        );
+        assert!(stdout.contains("AGENT-RAN"), "{report}");
+        let meta = std::fs::metadata(&fx.ca).expect("the host CA");
+        let host = format!(
+            "CA={}:{}",
+            std::os::unix::fs::MetadataExt::dev(&meta),
+            std::os::unix::fs::MetadataExt::ino(&meta)
+        );
+        assert!(
+            stdout.lines().any(|line| line.trim() == host),
+            "the CA in the container is not the host's file ({host})\n{report}"
+        );
     }
 }

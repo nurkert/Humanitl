@@ -1048,6 +1048,11 @@ impl SandboxService {
             Some(Op::DiscardChanges(request)) => {
                 tokio::task::spawn_blocking(move || inner.discard_changes(&request, &tx));
             }
+            // Ziehen heisst: ein Programm starten und bis zu einer halben
+            // Stunde warten (HUM-439).
+            Some(Op::ImagePull(request)) => {
+                tokio::task::spawn_blocking(move || inner.image_pull(&request, &tx));
+            }
             _ => {
                 tokio::task::spawn_blocking(move || {
                     inner.snapshot_or_diagnostic(&v1::sandbox_request::Plan::default(), &tx);
@@ -2868,6 +2873,53 @@ impl Inner {
         })
     }
 
+    /// `Op::ImagePull`: zieht ein Abbild auf ausdrücklichen Wunsch (HUM-439).
+    ///
+    /// Das Backend ist das gesetzte ([`SandboxPorts::backend`], nur die
+    /// Escape-Suite und Tests), sonst das, das `sandbox.backend` wählt, über
+    /// [`Backend::detect`]: Vor der Zulassung der Container-Engine lehnt das
+    /// mit `SANDBOX_048` ab, und es wird nichts gezogen. Ein Start zieht nie;
+    /// nur diese Operation tut es, und das Netz nutzt dabei die Engine
+    /// selbst, nicht der Proxy.
+    fn image_pull(
+        &self,
+        request: &v1::sandbox_request::ImagePull,
+        tx: &mpsc::Sender<v1::SandboxEvent>,
+    ) {
+        // Wie eine Vorschau: die Konfiguration, wie sie jetzt auf der Platte
+        // steht, damit ein eben gesetztes Abbild ohne Neustart gilt.
+        let (config, _) = self.plan_config(&v1::sandbox_request::Plan::default());
+        let backend = match &self.backend {
+            Some(given) => Ok(given.clone()),
+            None => {
+                humanitl_sandbox::choose_backend(&config.sandbox, humanitl_sandbox::AUTO_BACKEND)
+                    .and_then(|choice| {
+                        Backend::detect(choice.name, self.paths.clone(), &config.sandbox)
+                    })
+            }
+        };
+        let event = match backend.and_then(|backend| backend.pull_image(&request.reference)) {
+            Ok(pulled) => {
+                tracing::info!(
+                    reference = %pulled.reference,
+                    digest = %pulled.digest,
+                    "an image was pulled on request, directly and not through the proxy"
+                );
+                v1::SandboxEvent {
+                    event: Some(v1::sandbox_event::Event::ImagePulled(
+                        v1::sandbox_event::ImagePulled {
+                            reference: pulled.reference,
+                            digest: pulled.digest,
+                            image_id: pulled.id,
+                        },
+                    )),
+                }
+            }
+            Err(diagnostic) => diagnostic_event(&diagnostic),
+        };
+        let _ = tx.blocking_send(event);
+    }
+
     /// `Op::Changes`: die wartenden Änderungen einer Wegwerf-Sandbox
     /// (HUM-350).
     fn disposable_changes(&self, tx: &mpsc::Sender<v1::SandboxEvent>) {
@@ -4263,6 +4315,7 @@ fn mount_of_row(row: &PolicyRow) -> v1::Mount {
         PolicyMode::Symlink => v1::MountMode::Symlink,
         PolicyMode::Proc => v1::MountMode::Proc,
         PolicyMode::Dev => v1::MountMode::Dev,
+        PolicyMode::Image => v1::MountMode::Image,
     };
     let origin = match row.origin {
         PolicyOrigin::Profile => v1::ValueOrigin::Profile,

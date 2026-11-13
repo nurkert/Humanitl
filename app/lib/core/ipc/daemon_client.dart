@@ -458,6 +458,19 @@ abstract class DaemonClient {
   /// sandbox, and `UNIMPLEMENTED` from a daemon before minor 34.
   Future<SandboxBackendList> sandboxBackends();
 
+  /// `Sandbox(ImagePull)`: pulls the image a sandbox starts from, on the
+  /// explicit request of a person (HUM-439). [reference] is
+  /// `name@sha256:<hex>` with the registry in the name, empty for the
+  /// configured one.
+  ///
+  /// Pulling uses the network of the daemon directly, not through the proxy:
+  /// the caller says so before it calls (`sandboxImagePullNetwork`). No start
+  /// ever pulls. Throws a [DaemonException] with the daemon's diagnostic:
+  /// `CONFIG_003` for a reference without digest or registry, `SANDBOX_043`
+  /// when the pull fails, `SANDBOX_048` while the backend with images is not
+  /// admitted, `SANDBOX_034` for a backend without images.
+  Future<PulledImage> pullImage({String reference = ''});
+
   /// Releases the transport. The client is unusable afterwards.
   Future<void> close();
 }

@@ -814,7 +814,9 @@ fn handle(ctx: &Context, event: v1::SandboxEvent, minor: u32) -> Option<Failure>
         // `Retire` ist die Antwort auf `retire_if_idle` (HUM-284), das
         // Ergebnis einer Übernahme die auf `apply_changes` (HUM-350); auf dem
         // Strom eines Starts kommt beides nie.
-        Event::Exit(_) | Event::Retire(_) | Event::ChangesOutcome(_) => None,
+        Event::Exit(_) | Event::Retire(_) | Event::ChangesOutcome(_) | Event::ImagePulled(_) => {
+            None
+        }
     }
 }
 

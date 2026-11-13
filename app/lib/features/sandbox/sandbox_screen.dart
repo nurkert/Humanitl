@@ -36,6 +36,7 @@ import 'widgets/argv_sheet.dart';
 import 'widgets/arrive.dart';
 import 'widgets/changes_panel.dart';
 import 'widgets/env_tab.dart';
+import 'widgets/image_pull.dart';
 import 'widgets/isolation_panel.dart';
 import 'widgets/log_tab.dart';
 import 'widgets/mounts_tab.dart';
@@ -572,6 +573,7 @@ class _Diagnostics extends ConsumerWidget {
                     review: waitingChangesRefusal(diagnostic)
                         ? () => _reviewChanges(ref)
                         : null,
+                    pull: imagePullReference(diagnostic),
                     fix: FixControl(
                       fix: diagnostic.fix,
                       onChooseFolder: chooseFolder,
@@ -610,28 +612,35 @@ class _Diagnostics extends ConsumerWidget {
     unawaited(review.fetch());
   }
 
-  /// [fix] alone, or with [review] as the primary button above it.
+  /// [fix] alone, or with [review] or the pull of the image [pull] as the
+  /// primary action above it.
   ///
   /// Der Kopierbefehl bleibt darunter stehen, als zweiter Weg für den, der
-  /// an der Kommandozeile arbeitet (HUM-419).
+  /// an der Kommandozeile arbeitet (HUM-419, HUM-439).
   static Widget _withReview(
     BuildContext context, {
     required Widget fix,
     VoidCallback? review,
+    String? pull,
   }) {
-    if (review == null) {
+    final Widget? above = review != null
+        ? HButton(
+            key: const Key('sandbox-diagnostic-review-changes'),
+            variant: HButtonVariant.primary,
+            onPressed: review,
+            child: Text(context.l10n.sandboxChangesWaitingReview),
+          )
+        : pull != null
+        ? ImagePullAction(reference: pull)
+        : null;
+    if (above == null) {
       return fix;
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        HButton(
-          key: const Key('sandbox-diagnostic-review-changes'),
-          variant: HButtonVariant.primary,
-          onPressed: review,
-          child: Text(context.l10n.sandboxChangesWaitingReview),
-        ),
+        above,
         SizedBox(height: HTheme.of(context).spacing.x2),
         fix,
       ],

@@ -159,4 +159,11 @@ abstract final class DiagnosticCodes {
   /// backends); only the waiting changes carry the fix
   /// `humanitl sandbox changes` (HUM-357, HUM-419).
   static const String disposableRefused = 'SANDBOX_030';
+
+  /// The image the sandbox starts from is missing, holds another digest
+  /// than the one it was chosen by, or cannot be the root. Raised by the
+  /// daemon before a start, which never pulls; the fix
+  /// `humanitl sandbox image pull <reference>` is the step that does
+  /// (HUM-439).
+  static const String sandboxImage = 'SANDBOX_043';
 }

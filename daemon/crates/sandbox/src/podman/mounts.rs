@@ -4,7 +4,9 @@
 //! was Podman unter genau den festen Flags der Zeile von sich aus dazutut.
 //!
 //! **Der Plan.** Die Wurzel ist das Verzeichnis `rootfs` der Sitzung, nur
-//! lesbar gebunden (`--rootfs`, `--read-only`). Jeder Bind trägt Gerät und
+//! lesbar gebunden (`--rootfs`, `--read-only`), oder mit einem Abbild
+//! (HUM-439) genau ein nur lesbares `overlay` aus dessen Schichten
+//! ([`root_entry`]). Jeder Bind trägt Gerät und
 //! Inode seiner Quelle und die Flags ihrer Einhängung auf dem Host: Podman
 //! übernimmt `nosuid`, `nodev` und `noexec` der Quelle und setzt keine
 //! eigenen (`getDefaultMountOptions` in `pkg/util/mount_opts.go`), und in
@@ -46,7 +48,7 @@ use std::path::Path;
 
 use humanitl_core::Diagnostic;
 
-use super::plan::{Mount, MountKind};
+use super::plan::{Mount, MountKind, Root};
 use crate::bwrap::PinnedMounts;
 use crate::mount_table::{
     ExpectedMount, FileId, MountFlags, MountMode, MountPins, bind_of, by_target, host_mount,
@@ -232,10 +234,44 @@ pub(super) fn engine_entries(host: &HostView<'_>) -> Result<Vec<ExpectedMount>, 
     Ok(out)
 }
 
+/// Der Eintrag der Wurzel.
+///
+/// Ein Verzeichnis ist ein nur lesbarer Bind genau dieses Verzeichnisses
+/// (Gerät und Inode), mit den Flags seiner Einhängung auf dem Host. Ein
+/// Abbild ist genau ein `overlay` (der Speicher hat den Treiber `overlay` ohne
+/// Hilfsprogramm, `EngineDir::storage_text`), nur lesbar (`--read-only`).
+/// Seine Flags bleiben offen: Das Overlay entsteht in der Engine und hat kein
+/// Gegenstück auf dem Host, an dem sie sich ablesen ließen, und
+/// `no-new-privileges` nimmt einem Programm mit `setuid` darin ohnehin jede
+/// Wirkung. Ein zweites Dateisystem auf `/`, ein schreibbares oder eines
+/// anderen Typs ist weiter ein Eintrag zu viel. Gerät und Inode hat das Abbild
+/// nicht; dass es das gewählte ist, belegt der Digest vor dem Start.
+///
+/// # Errors
+///
+/// `SANDBOX_011`, wenn sich das Verzeichnis nicht lesen lässt.
+pub(super) fn root_entry(root: Root<'_>) -> Result<ExpectedMount, Diagnostic> {
+    Ok(match root {
+        Root::Dir(rootfs) => ExpectedMount::bind(
+            Path::new("/"),
+            id_of_path(rootfs)?,
+            MountMode::ReadOnly,
+            host_mount(rootfs)?.flags,
+        ),
+        Root::Image { .. } => ExpectedMount::typed(
+            Path::new("/"),
+            "overlay",
+            MountMode::ReadOnly,
+            MountFlags::default(),
+        )
+        .any_flags(),
+    })
+}
+
 /// Was der Shim eines Podman-Containers hinter `--pins-fd` bekommt.
 ///
 /// `mounts` sind die Einhängungen des Plans mit den geprüften Quellen,
-/// `rootfs` die Wurzel der Sitzung; beide existieren schon.
+/// `root` die Wurzel der Sitzung; ein Verzeichnis als Wurzel existiert schon.
 ///
 /// # Errors
 ///
@@ -245,7 +281,7 @@ pub(super) fn pins(
     session: &SessionContext,
     pinned: &PinnedMounts,
     mounts: &[Mount],
-    rootfs: &Path,
+    root: Root<'_>,
 ) -> Result<MountPins, Diagnostic> {
     let agent = session
         .agent_program
@@ -257,13 +293,7 @@ pub(super) fn pins(
         pins,
         mounts: Vec::new(),
     };
-    let root = host_mount(rootfs)?;
-    table.expect(ExpectedMount::bind(
-        Path::new("/"),
-        id_of_path(rootfs)?,
-        MountMode::ReadOnly,
-        root.flags,
-    ));
+    table.expect(root_entry(root)?);
     for mount in mounts {
         table.expect(match &mount.kind {
             MountKind::Bind {
@@ -377,5 +407,25 @@ mod tests {
         let null = at(&some, "/dev/null");
         assert_eq!(null[0].source, MountSource::Inode(NULL));
         assert_eq!(null[0].mode, MountMode::ReadWrite);
+    }
+
+    /// Unter einem Abbild ist die Wurzel genau ein nur lesbares `overlay`:
+    /// kein Bind, kein schreibbares und kein zweites (HUM-439).
+    #[test]
+    fn an_image_root_is_one_read_only_overlay() {
+        let entry = root_entry(Root::Image {
+            reference: "localhost/x@sha256:00",
+            user: (1, 1),
+        })
+        .unwrap();
+        assert_eq!(entry.point, Path::new("/"));
+        assert_eq!(entry.fstype.as_deref(), Some("overlay"));
+        assert_eq!(entry.source, MountSource::Type);
+        assert_eq!(entry.mode, MountMode::ReadOnly);
+        assert_eq!((entry.min, entry.max), (1, 1));
+        let dir = tempfile::tempdir().unwrap();
+        let entry = root_entry(Root::Dir(dir.path())).unwrap();
+        assert!(matches!(entry.source, MountSource::Inode(_)), "{entry:?}");
+        assert_eq!(entry.mode, MountMode::ReadOnly);
     }
 }

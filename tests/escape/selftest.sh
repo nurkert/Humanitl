@@ -304,6 +304,33 @@ launch_failures=$(
         "$STANDIN_LOG.cli" 2>/dev/null || bad "bwrap did not go through humanitl sandbox run"
     [ ! -e "$STANDIN_LOG.launcher" ] || bad "bwrap went through escape-launch"
 
+    # An image as the root (HUM-439): escape-launch gets it with --image, the
+    # command line never, and the host ids name the CA, the host's files and
+    # the image for ESC-2.
+    rm -f "$STANDIN_LOG.launcher" "$STANDIN_LOG.cli"
+    ESCAPE_BACKEND=podman
+    ESCAPE_IMAGE="localhost/humanitl-selftest@sha256:$(printf '%064d' 0)"
+    STANDIN_MODE=results
+    escape_sandbox_run "$ST_LAUNCH/esc-9.log" /bin/sh /tests/escape/esc-9.sh
+    grep -qF -- "--image $ESCAPE_IMAGE " "$STANDIN_LOG.launcher" 2>/dev/null ||
+        bad "escape-launch was not called with --image: $(cat "$STANDIN_LOG.launcher" 2>/dev/null)"
+    mkdir -p "$DAEMON_CA_DIR"
+    printf 'ca\n' > "$DAEMON_CA_DIR/ca.crt"
+    escape_host_ids "$ST_LAUNCH/host-ids"
+    hi_ca=$(stat -L -c '%d:%i' "$DAEMON_CA_DIR/ca.crt")
+    grep -qxF "ca $hi_ca" "$ST_LAUNCH/host-ids" ||
+        bad "escape_host_ids does not name the CA by device and inode: $(cat "$ST_LAUNCH/host-ids")"
+    grep -qxF "image $ESCAPE_IMAGE" "$ST_LAUNCH/host-ids" ||
+        bad "escape_host_ids does not name the image: $(cat "$ST_LAUNCH/host-ids")"
+    ESCAPE_IMAGE=""
+    escape_host_ids "$ST_LAUNCH/host-ids"
+    ! grep -q '^image ' "$ST_LAUNCH/host-ids" || bad "escape_host_ids names an image without one"
+    rm -f "$STANDIN_LOG.launcher" "$WORK/results/esc-9.txt"
+    escape_sandbox_run "$ST_LAUNCH/esc-9.log" /bin/sh /tests/escape/esc-9.sh
+    ! grep -qF -- "--image" "$STANDIN_LOG.launcher" 2>/dev/null ||
+        bad "escape-launch got --image without an image"
+    rm -f "$WORK/results/esc-9.txt"
+
     # The host half of ESC-2 for the mount table (HUM-437): the verdicts read
     # the launcher's log, and only a refusal with the right code or the checked
     # folder is green.

@@ -25,6 +25,8 @@ step, is described in [`docs/cli.md`](../cli.md); which RPC each subcommand serv
 - [`humanitl sandbox changes`](#humanitl-sandbox-changes) Show what a disposable run changed: files changed, created and deleted, with a diff for text files and size and hash for others
 - [`humanitl sandbox apply`](#humanitl-sandbox-apply) Write the changes of a disposable run to the project folder and discard the rest
 - [`humanitl sandbox discard`](#humanitl-sandbox-discard) Drop all changes of a disposable run. Asks first
+- [`humanitl sandbox image`](#humanitl-sandbox-image) The image a container sandbox starts from, when its root is an image
+- [`humanitl sandbox image pull`](#humanitl-sandbox-image-pull) Pull an image into the local storage of the container engine, pinned by its digest
 - [`humanitl rules`](#humanitl-rules) List, add, change, reorder, dry-run and reload rules
 - [`humanitl rules list`](#humanitl-rules-list) List the rules in the order in which they are evaluated
 - [`humanitl rules add`](#humanitl-rules-add) Add a rule. The daemon checks it and answers with the whole set
@@ -268,6 +270,7 @@ Commands:
   changes   Show what a disposable run changed: files changed, created and deleted, with a diff for text files and size and hash for others
   apply     Write the changes of a disposable run to the project folder and discard the rest
   discard   Drop all changes of a disposable run. Asks first
+  image     The image a container sandbox starts from, when its root is an image
   help      Print this message or the help of the given subcommand(s)
 
 Options:
@@ -624,6 +627,73 @@ Options:
 
   -h, --help
           Print help
+```
+
+## humanitl sandbox image
+
+```text
+The image a container sandbox starts from, when its root is an image
+
+Usage: humanitl sandbox image [OPTIONS] <COMMAND>
+
+Commands:
+  pull  Pull an image into the local storage of the container engine, pinned by its digest
+  help  Print this message or the help of the given subcommand(s)
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help
+```
+
+## humanitl sandbox image pull
+
+```text
+Pull an image into the local storage of the container engine, pinned by its digest.
+
+Pulling uses the network directly: the container engine downloads the image from the registry its name names, not through the Humanitl proxy, without its rules and without the proxy variables of this shell. No start ever pulls; a start whose image is missing or holds another digest stops with `SANDBOX_043` and names this command. Says so and asks first.
+
+Usage: humanitl sandbox image pull [OPTIONS] [REFERENCE]
+
+Arguments:
+  [REFERENCE]
+          NAME@sha256:<64 hex digits>, with the registry in the name (docker.io/library/debian@sha256:...). Without it the image from the configuration
+
+Options:
+      --json
+          Machine-readable output: one JSON value on stdout, diagnostics included
+
+      --yes
+          Do not ask; for scripts. The note on the network still goes to stderr
+
+      --config <PATH>
+          Read this config file instead of the one in the user's config directory
+
+  -v, --verbose...
+          Explain what is happening; repeat for more
+
+  -q, --quiet
+          Only the result, no notes
+
+      --profile <NAME>
+          Use this profile for the session; falls back to the sandbox profile of that name when no session profile exists
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ## humanitl rules

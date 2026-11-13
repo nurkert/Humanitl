@@ -93,6 +93,25 @@ pub trait SandboxBackend: Send + Sync {
     /// Prüfung unter den Bedingungen des Starts läuft, auch mit einer
     /// anderen Instanz des Backends.
     fn isolation_check(&self, handle: &SandboxHandle) -> Vec<CheckResult>;
+
+    /// Zieht ein Abbild als Wurzel der Sandbox, auf ausdrücklichen Wunsch
+    /// (HUM-439): `reference`, oder leer das eingestellte. Das Ziehen nutzt
+    /// das Netz direkt, nicht durch den Proxy; kein Start tut es je.
+    ///
+    /// Ein Backend, das hier ankommt, ist schon gebaut, also zugelassen oder
+    /// über die Umgehung der Escape-Suite gekommen; vor der Zulassung lehnt
+    /// `Backend::detect` mit `SANDBOX_048` ab, und dann zieht nichts. Die
+    /// Vorgabe gilt für jedes Backend, das auf den Dateien des Rechners
+    /// läuft und keine Abbilder kennt.
+    ///
+    /// # Errors
+    ///
+    /// Die Vorgabe: `SANDBOX_034`. Ein Backend mit Abbildern nennt seine
+    /// eigenen Befunde (`CONFIG_003`, `SANDBOX_043`).
+    fn pull_image(&self, reference: &str) -> Result<PulledImage, Diagnostic> {
+        let _ = reference;
+        Err(without_images(self.name()))
+    }
 }
 
 /// Wie stark ein Backend die Sandbox vom Host trennt, geordnet: Eine
@@ -255,6 +274,36 @@ impl<'a> PlanRequest<'a> {
     }
 }
 
+/// Ein Abbild, das [`SandboxBackend::pull_image`] in den lokalen Speicher
+/// der Container-Engine geholt und danach mit seinem Digest gefunden hat
+/// (HUM-439).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PulledImage {
+    /// Der Verweis, wie er gezogen wurde: `name@sha256:<hex>`.
+    pub reference: String,
+    /// Der Digest, `sha256:<hex>`.
+    pub digest: String,
+    /// Die Kennung des Abbilds in der Engine.
+    pub id: String,
+}
+
+/// `SANDBOX_034`: Dieses Backend läuft auf den Dateien des Rechners und kennt
+/// keine Abbilder (HUM-439).
+fn without_images(name: &str) -> Diagnostic {
+    use humanitl_core::diagnostics::codes::SANDBOX_034;
+    use humanitl_core::{FixAction, Severity};
+
+    Diagnostic::builder(SANDBOX_034, Severity::Blocking)
+        .why(format!(
+            "the backend {name:?} runs on the host's own files and has no images; only the \
+             container engine backend takes an image as the root of the sandbox"
+        ))
+        .fix(FixAction::CopyCommand(
+            "humanitl sandbox backends".to_owned(),
+        ))
+        .build()
+}
+
 /// Was eine Zeile der Tabelle mit ihrem Pfad tut (HUM-429).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyMode {
@@ -275,6 +324,11 @@ pub enum PolicyMode {
     Proc,
     /// Das minimale `/dev` der Sandbox.
     Dev,
+    /// Die Wurzel der Sandbox ist ein Abbild der Container-Engine, nicht
+    /// das Gerüst des Profils (HUM-439). [`PolicyRow::source`] trägt den
+    /// Verweis auf das Abbild samt Digest (`name@sha256:...`), keinen Pfad
+    /// auf dem Rechner.
+    Image,
 }
 
 /// Woher eine Zeile der Tabelle stammt.

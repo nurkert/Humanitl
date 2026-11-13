@@ -672,6 +672,37 @@ pub enum SandboxCmd {
         #[arg(long)]
         yes: bool,
     },
+
+    /// The image a container sandbox starts from, when its root is an image.
+    Image {
+        #[command(subcommand)]
+        cmd: ImageCmd,
+    },
+}
+
+/// Die Unterkommandos von `humanitl sandbox image` (HUM-439).
+#[derive(Debug, Subcommand)]
+pub enum ImageCmd {
+    /// Pull an image into the local storage of the container engine, pinned
+    /// by its digest.
+    ///
+    /// Pulling uses the network directly: the container engine downloads the
+    /// image from the registry its name names, not through the Humanitl
+    /// proxy, without its rules and without the proxy variables of this
+    /// shell. No start ever pulls; a start whose image is missing or holds
+    /// another digest stops with `SANDBOX_043` and names this command. Says so
+    /// and asks first.
+    Pull {
+        /// NAME@sha256:<64 hex digits>, with the registry in the name
+        /// (docker.io/library/debian@sha256:...). Without it the image from
+        /// the configuration.
+        #[arg(value_name = "REFERENCE")]
+        reference: Option<String>,
+        /// Do not ask; for scripts. The note on the network still goes to
+        /// stderr.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// Die Unterkommandos von `humanitl update` (HUM-382).

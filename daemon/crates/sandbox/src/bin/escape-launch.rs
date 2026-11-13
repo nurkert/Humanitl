@@ -131,6 +131,7 @@ use humanitl_sandbox::{
     BIND_FD_VERSION, BWRAP_BACKEND, Backend, BwrapBackend, EXIT_USAGE as SHIM_EXIT_USAGE,
     LaunchOptions, LaunchPlan, MIN_BWRAP_VERSION, MountPolicy, PlanRequest, SHIM_PINS_FD,
     SandboxBackend, SandboxHandle, SandboxProfile, SessionContext, StdioMode, Version,
+    with_image_root,
 };
 
 /// Exit-Code, wenn die Kommandozeile des Starters selbst unbrauchbar ist.
@@ -161,6 +162,9 @@ options:
   --profile FILE        sandbox profile, normally profiles/sandbox/test.toml
   --backend NAME        the sandbox backend (default: bwrap); a level that is not
                         admitted yet starts here and only here (HUM-435)
+  --image REF           the root of the sandbox is this local image, NAME@sha256:...,
+                        under the container engine backend (HUM-439); it is never
+                        pulled here, a missing one is SANDBOX_043
   --tests-dir DIR       host directory bound read-only to /tests/escape
   --work DIR            host directory bound to /work (default: STATE/work)
   --state DIR           where placeholders are created (default: TMPDIR/humanitl-escape);
@@ -506,8 +510,11 @@ fn add_unplanned_mount(backend: &Backend, plan: &mut LaunchPlan) -> Result<(), L
             ],
         )
     } else {
+        // Vor ein festes Flag von `run`, das in jeder Zeile steht, mit leerer
+        // Wurzel wie mit einem Abbild (HUM-439); `--rootfs` gibt es nur bei
+        // der leeren.
         (
-            "--rootfs",
+            "--pull=never",
             vec![OsString::from(format!(
                 "--mount=type=tmpfs,destination={UNPLANNED_MOUNT_DST}"
             ))],
@@ -531,7 +538,13 @@ fn add_unplanned_mount(backend: &Backend, plan: &mut LaunchPlan) -> Result<(), L
 ///
 /// Der Befund der Suche; nur die Vorschau unter bwrap kommt ohne `bwrap` aus.
 fn chosen_backend(args: &Args, paths: Paths) -> Result<(Backend, Option<Version>), LaunchError> {
-    let backend = match Backend::detect_unadmitted(&args.backend, paths, &SandboxRef::default()) {
+    let sandbox = args
+        .image
+        .as_deref()
+        .map_or_else(SandboxRef::default, |reference| {
+            with_image_root(&SandboxRef::default(), reference)
+        });
+    let backend = match Backend::detect_unadmitted(&args.backend, paths, &sandbox) {
         Ok(backend) => backend,
         // Die Vorschau braucht kein `bwrap`; der Start schon.
         Err(_) if args.print_argv && args.backend == BWRAP_BACKEND => Backend::from(
@@ -870,6 +883,8 @@ struct Args {
     profile: PathBuf,
     /// Das Backend, Vorgabe [`BWRAP_BACKEND`] (HUM-435).
     backend: String,
+    /// Ein Abbild als Wurzel, `name@sha256:...` (HUM-439).
+    image: Option<String>,
     /// Host-Verzeichnis, das nur lesbar nach `/tests/escape` kommt.
     tests_dir: Option<PathBuf>,
     /// Host-Verzeichnis, das nach `/work` kommt.
@@ -900,6 +915,7 @@ impl Args {
     fn parse(input: impl IntoIterator<Item = OsString>) -> Result<Option<Self>, LaunchError> {
         let mut profile: Option<PathBuf> = None;
         let mut backend = BWRAP_BACKEND.to_owned();
+        let mut image = None;
         let mut tests_dir = None;
         let mut work = None;
         let mut state = None;
@@ -931,6 +947,16 @@ impl Args {
                         .ok_or_else(|| usage("--backend needs a backend name"))?
                         .clone_into(&mut backend);
                 }
+                Some("--image") => {
+                    let reference = value(&mut rest, "--image")?;
+                    image = Some(
+                        reference
+                            .to_str()
+                            .filter(|reference| !reference.is_empty())
+                            .ok_or_else(|| usage("--image needs NAME@sha256:..."))?
+                            .to_owned(),
+                    );
+                }
                 Some("--tests-dir") => tests_dir = Some(value(&mut rest, "--tests-dir")?),
                 Some("--work") => work = Some(value(&mut rest, "--work")?),
                 Some("--state") => state = Some(value(&mut rest, "--state")?),
@@ -958,9 +984,16 @@ impl Args {
             ));
         }
 
+        if image.is_some() && backend == BWRAP_BACKEND {
+            return Err(usage(
+                "--image needs a backend with images (--backend), bwrap has none",
+            ));
+        }
+
         Ok(Some(Self {
             profile,
             backend,
+            image,
             tests_dir,
             work,
             state: state.unwrap_or_else(|| std::env::temp_dir().join("humanitl-escape")),
@@ -1263,6 +1296,39 @@ mod tests {
         let argv = argv_of(&plan);
         assert_eq!(&argv[argv.len() - 4..], ["--", "/bin/sh", "-c", "true"]);
         assert!(!argv.iter().any(|arg| arg.contains("humanitl-shim")));
+    }
+
+    /// `--image` gibt der Container-Engine ein Abbild als Wurzel (HUM-439);
+    /// bwrap kennt keine Abbilder und lehnt ab, statt es still zu übergehen.
+    #[test]
+    fn an_image_needs_a_backend_with_images() {
+        let image = "localhost/tools@sha256:00";
+        let args = Args::parse(words(&[
+            "--profile",
+            "p.toml",
+            "--backend",
+            "engine",
+            "--image",
+            image,
+            "--",
+            "true",
+        ]))
+        .expect("parsed")
+        .expect("not --help");
+        assert_eq!(args.image.as_deref(), Some(image));
+        let err = Args::parse(words(&[
+            "--profile",
+            "p.toml",
+            "--image",
+            image,
+            "--",
+            "true",
+        ]))
+        .expect_err("bwrap has no images");
+        assert!(
+            matches!(&err, LaunchError::Usage(d) if d.why.contains("--image")),
+            "{err}"
+        );
     }
 
     #[test]

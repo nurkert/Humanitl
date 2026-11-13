@@ -180,7 +180,9 @@ pub(crate) fn expected(
                 }
             }
             PolicyMode::Dev => dev(target, &mut out)?,
-            PolicyMode::Symlink | PolicyMode::Denied => {}
+            // Ein Abbild als Wurzel gibt es unter bwrap nicht (HUM-439); die
+            // Wurzel oben bleibt das tmpfs.
+            PolicyMode::Symlink | PolicyMode::Denied | PolicyMode::Image => {}
         }
     }
     Ok(out)

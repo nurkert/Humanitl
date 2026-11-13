@@ -820,4 +820,16 @@ void main() {
     ).toDomain();
     expect(flow.decisionSource, DecisionSource.paused);
   });
+
+  test('an image as the root and its pull keep their shape (HUM-439)', () {
+    expect(pb.MountMode.MOUNT_MODE_IMAGE.toDomain(), MountMode.image);
+    final PulledImage image = pb.SandboxEvent_ImagePulled(
+      reference: 'docker.io/library/debian@sha256:${'a' * 64}',
+      digest: 'sha256:${'a' * 64}',
+      imageId: 'f00d',
+    ).toDomain();
+    expect(image.reference, 'docker.io/library/debian@sha256:${'a' * 64}');
+    expect(image.digest, 'sha256:${'a' * 64}');
+    expect(image.imageId, 'f00d');
+  });
 }

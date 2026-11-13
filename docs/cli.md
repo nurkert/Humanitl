@@ -311,6 +311,36 @@ treats the default `auto` as direct and runs disposable only with
 overrides the latter); its callers, the escape suite and the demos, read
 their results from `/work`.
 
+### An image as the root of the sandbox
+
+Under the container engine backend the root of the sandbox can be an image
+instead of the host's `/usr` and `/etc` (`sandbox.podman.rootfs = "image"`,
+HUM-439), for an agent and its tools that come preinstalled. The image is
+always named with its digest in `sandbox.podman.image`
+(`registry/name@sha256:` and 64 hex digits). No start ever pulls it: before
+every start the daemon asks the engine for exactly that digest, and a missing
+image, or another digest under the same name, refuses the start with
+`SANDBOX_043`. Pulling is a step of its own:
+
+```text
+$ humanitl sandbox image pull docker.io/library/debian@sha256:7378…
+Pulling downloads the image from the registry its name names, directly over the network of the daemon: not through the Humanitl proxy, without its rules and its record, and without the proxy variables of this shell. Only the digest decides which image is accepted.
+Pull docker.io/library/debian@sha256:7378…? [y/N] y
+pulled docker.io/library/debian@sha256:7378…
+  digest  sha256:7378…
+  id      …
+```
+
+Without a reference the configured image is pulled. The note goes to
+`stderr` every time, also with `--yes`. A name without a registry is refused
+(`CONFIG_003`), in the command and in the configuration. The pull uses the
+backend of the configuration file (`sandbox.backend`); the `--backend` of a
+single start does not apply to it. The project folder, the door, the CA, the shim and the files
+of the session still come from the host, never from the image; the mounts of
+the sandbox profile under `mounts.ro` do not apply in an image. Until the
+backend is admitted (HUM-448) the pull is refused with `SANDBOX_048`, like
+every start.
+
 ### Terminal, input and signals
 
 Without "A shell for the agent", the agent gets **no** PTY of this terminal. Its output arrives as bytes over the daemon's event

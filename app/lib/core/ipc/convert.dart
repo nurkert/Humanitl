@@ -644,6 +644,13 @@ extension MountModeToDomain on pb.MountMode {
   MountMode toDomain() => enumFromWire(MountMode.values, value) ?? MountMode.ro;
 }
 
+/// `SandboxEvent.ImagePulled` to [PulledImage] (HUM-439).
+extension ImagePulledToDomain on pb.SandboxEvent_ImagePulled {
+  /// The domain form.
+  PulledImage toDomain() =>
+      PulledImage(reference: reference, digest: digest, imageId: imageId);
+}
+
 /// `ValueOrigin` to [ValueOrigin].
 extension ValueOriginToDomain on pb.ValueOrigin {
   /// The domain form; an unknown origin counts as [ValueOrigin.profile].

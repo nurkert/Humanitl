@@ -997,6 +997,25 @@ message SandboxRequest {
     // Verwirft alle wartenden Aenderungen (HUM-350). Die Antwort ist ein
     // `SandboxEvent.changes_outcome` mit `outcome = "discarded"`.
     DiscardChanges discard_changes = 10;
+    // Zieht ein Abbild als Wurzel der Sandbox in den lokalen Speicher der
+    // Container-Engine, auf ausdruecklichen Wunsch (HUM-439). Kein Start
+    // zieht je; nur diese Operation tut es. Das Ziehen nutzt das Netz des
+    // Daemons direkt, nicht durch den Proxy, und ein Client sagt das, bevor
+    // er sie schickt. Die Antwort ist genau ein `SandboxEvent.image_pulled`,
+    // oder ein `Diagnostic`: `CONFIG_003` fuer einen Verweis ohne Digest oder
+    // ohne Registry, `SANDBOX_043`, wenn das Ziehen scheitert oder danach
+    // nicht genau dieser Digest vorliegt, `SANDBOX_048`, solange das Backend
+    // mit Abbildern nicht zugelassen ist, `SANDBOX_034` fuer ein Backend ohne
+    // Abbilder. Ein Daemon vor Minor 36 antwortet mit einer Momentaufnahme
+    // wie auf `status`.
+    ImagePull image_pull = 11;
+  }
+
+  // Welches Abbild gezogen wird (HUM-439).
+  message ImagePull {
+    // `name@sha256:<64 hex>`, mit der Registry im Namen. Leer heisst: das
+    // eingestellte Abbild der Sandbox.
+    string reference = 1;
   }
 
   // Welche Aenderungen einer Wegwerf-Sandbox uebernommen werden (HUM-350).
@@ -1198,6 +1217,10 @@ enum MountMode {
   // Unter Seatbelt: Das Profil verbietet Lesen und Schreiben. Ein Pfad ohne
   // Einhaengung, nur eine Regel (HUM-376).
   MOUNT_MODE_DENIED = 8;
+  // Die Wurzel ist ein Abbild der Container-Engine (HUM-439). `Mount.src`
+  // traegt den Verweis samt Digest (`name@sha256:...`), keinen Pfad auf dem
+  // Rechner. Ein Client vor Minor 36 kennt den Wert nicht.
+  MOUNT_MODE_IMAGE = 9;
 }
 
 // Woher ein Mount oder eine Umgebungsvariable stammt.
@@ -1305,6 +1328,19 @@ message SandboxEvent {
     // Was mit den Aenderungen geschehen ist, als Antwort auf
     // `apply_changes` und `discard_changes` (HUM-350).
     DisposableOutcome changes_outcome = 12;
+    // Die Antwort auf `SandboxRequest.image_pull` (HUM-439).
+    ImagePulled image_pulled = 13;
+  }
+
+  // Ein Abbild, das gezogen und danach mit genau seinem Digest im lokalen
+  // Speicher gefunden wurde (HUM-439).
+  message ImagePulled {
+    // Der Verweis, wie er gezogen wurde: `name@sha256:<hex>`.
+    string reference = 1;
+    // Der Digest, `sha256:<hex>`.
+    string digest = 2;
+    // Die Kennung des Abbilds in der Container-Engine.
+    string image_id = 3;
   }
 
   // Ob der Daemon sich verabschiedet (HUM-284).

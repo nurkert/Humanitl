@@ -1278,6 +1278,11 @@ impl FakeDaemon {
                     ))),
                 }]
             }
+            // Der Fake hat keine Container-Engine und zieht nichts (HUM-439):
+            // Ein Verweis mit Digest und Registry kommt als erfundenes
+            // Ergebnis zurück, unübersehbar erfunden (CONVENTIONS 4.7), jeder
+            // andere mit demselben Befund wie beim echten Dienst.
+            Some(Op::ImagePull(pull)) => vec![fake_image_pull(&pull.reference)],
             Some(Op::Argv(())) => argv_lines(&self.state.session().work_dir),
             Some(Op::Plan(plan)) => vec![self.sandbox_status_for(
                 self.state.sandbox().1,
@@ -1800,6 +1805,33 @@ fn fake_argv_line(work_dir: &str, work_mode: &str) -> String {
          --setenv DATABASE_URL '<withheld>' --chdir /work \
          -- /run/humanitl/humanitl-shim --proxy-port 3128 -- opencode"
     )
+}
+
+/// Die erfundene Antwort auf `image_pull` (HUM-439): Der Digest ist der des
+/// Verweises, die Kennung sagt `fake`.
+fn fake_image_pull(reference: &str) -> v1::SandboxEvent {
+    let pinned = humanitl_config::image_pinned_by_digest(reference);
+    let digest = reference
+        .rsplit_once("@sha256:")
+        .map(|(_, hex)| format!("sha256:{hex}"));
+    let event = match digest {
+        Some(digest) if pinned => {
+            v1::sandbox_event::Event::ImagePulled(v1::sandbox_event::ImagePulled {
+                reference: reference.to_owned(),
+                digest,
+                image_id: "fake-image".to_owned(),
+            })
+        }
+        _ => v1::sandbox_event::Event::Diagnostic(diagnostic_to_proto(
+            &Diagnostic::builder(codes::CONFIG_003, Severity::Error)
+                .why(format!(
+                    "{reference:?} is not pinned by digest; the fake daemon pulls nothing, and an \
+                     image is only ever named as NAME@sha256: and 64 hex digits"
+                ))
+                .build(),
+        )),
+    };
+    v1::SandboxEvent { event: Some(event) }
 }
 
 /// Die Kommandozeile, die der echte Launcher bauen würde, Zeile für Zeile als

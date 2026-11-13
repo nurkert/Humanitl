@@ -60,6 +60,7 @@ String sandboxMountModeLabel(AppLocalizations l10n, MountMode mode) =>
       MountMode.dev => l10n.sandboxMountModeDev,
       MountMode.symlink => l10n.sandboxMountModeSymlink,
       MountMode.denied => l10n.sandboxMountModeDenied,
+      MountMode.image => l10n.sandboxMountModeImage,
     };
 
 /// The same label for [mount], naming where a link points.

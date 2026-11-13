@@ -66,6 +66,9 @@ escape_launcher_name() {
         printf 'humanitl sandbox run'
     else
         printf 'escape-launch --backend %s' "$ESCAPE_BACKEND"
+        if [ -n "${ESCAPE_IMAGE:-}" ]; then
+            printf ' --image %s' "$ESCAPE_IMAGE"
+        fi
     fi
 }
 
@@ -97,6 +100,7 @@ escape_sandbox_run() {
             XDG_CONFIG_HOME="$DAEMON_XDG/config" \
             "$LAUNCHER" \
             --backend "$ESCAPE_BACKEND" \
+            ${ESCAPE_IMAGE:+--image "$ESCAPE_IMAGE"} \
             --profile "$PROFILE_FILE" \
             --state "$STATE" \
             --work "$WORK" \
@@ -107,6 +111,29 @@ escape_sandbox_run() {
             --shim "$SHIM_INSTALLED" \
             -- "$@" > "$esr_log" 2>&1
     fi
+}
+
+# escape_host_ids FILE — device and inode of the host files that ESC-2
+# compares from inside the sandbox (HUM-439): the daemon's CA and the bundle
+# it writes, which must be the very files in the sandbox, and the host's /etc/shadow and
+# /etc/machine-id, which must not be. One line per file that exists,
+# `KEY DEV:INO`, and `image REF` when the root is an image (ESCAPE_IMAGE).
+# The sandbox reads it under /work/results/host-ids.
+#
+# Needs DAEMON_CA_DIR; ESCAPE_IMAGE may be empty.
+escape_host_ids() {
+    {
+        for ehi_pair in "ca $DAEMON_CA_DIR/ca.crt" "ca_bundle $DAEMON_CA_DIR/ca-bundle.crt" "shadow /etc/shadow" "machine_id /etc/machine-id"; do
+            ehi_key=${ehi_pair%% *}
+            ehi_path=${ehi_pair#* }
+            if ehi_id=$(stat -L -c '%d:%i' "$ehi_path" 2> /dev/null); then
+                printf '%s %s\n' "$ehi_key" "$ehi_id"
+            fi
+        done
+        if [ -n "${ESCAPE_IMAGE:-}" ]; then
+            printf 'image %s\n' "$ESCAPE_IMAGE"
+        fi
+    } > "$1"
 }
 
 # escape_collect SUITE CODE — the result file of a suite that ran in the
