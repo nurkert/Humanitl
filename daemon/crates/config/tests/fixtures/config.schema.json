@@ -768,7 +768,7 @@
             "runtime": "crun",
             "start_timeout_secs": 30
           },
-          "description": "Einstellungen der Container-Engine als Backend (HUM-433). Sie wirken, sobald die Engine gewählt werden kann; bis dahin lehnt jeder Start damit mit `SANDBOX_048` ab.",
+          "description": "Einstellungen der Container-Engine als Backend (HUM-433). Sie wirken, wenn `sandbox.backend` die Engine wählt. Die Laufzeit der Stufe `namespaces` ist zugelassen; die der Stufe `kernel` lehnt jeder Start mit `SANDBOX_048` ab, bis die Escape-Suite gegen diese Stufe grün ist.",
           "properties": {
             "cpus": {
               "default": null,

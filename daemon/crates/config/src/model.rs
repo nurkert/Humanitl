@@ -499,7 +499,7 @@ pub struct SandboxRef {
     /// Die schwächste Isolationsstufe, mit der eine Sitzung starten darf: `policy` (eine Richtlinie des Kerns, Seatbelt), `namespaces` (eigene Namensräume über dem Kern des Hosts, bubblewrap und Podman mit `crun`) oder `kernel` (ein eigener Gastkern, Podman mit `krun`). Liegt das gewählte Backend darunter, lehnt der Start mit `SANDBOX_035` ab, statt ein anderes zu nehmen. Über alle Ebenen gilt der strengste Wert, nicht der oberste: Ein Projekt-Profil darf die Untergrenze heben, und weder ein Projekt noch die Umgebung noch die Kommandozeile senkt sie unter das, was eine andere Ebene verlangt.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "allowed"))]
     pub min_isolation: MinIsolation,
-    /// Einstellungen der Container-Engine als Backend (HUM-433). Sie wirken, sobald die Engine gewählt werden kann; bis dahin lehnt jeder Start damit mit `SANDBOX_048` ab.
+    /// Einstellungen der Container-Engine als Backend (HUM-433). Sie wirken, wenn `sandbox.backend` die Engine wählt. Die Laufzeit der Stufe `namespaces` ist zugelassen; die der Stufe `kernel` lehnt jeder Start mit `SANDBOX_048` ab, bis die Escape-Suite gegen diese Stufe grün ist.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub podman: PodmanConfig,
 }
