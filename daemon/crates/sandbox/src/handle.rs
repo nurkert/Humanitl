@@ -296,6 +296,10 @@ pub(crate) struct Shared {
     /// `{"exit-code": N}`. Eine `CHECK`-Zeile kommt erst aus dem Shim in der
     /// Sandbox; ohne sie hat die Engine den Container nie gestartet.
     start_by_report: Mutex<bool>,
+    /// Warum der Shim seine Deskriptoren nicht über den Socket der Übergabe
+    /// bekam (HUM-434); ohne sie gibt es keinen Bericht, und der Befund
+    /// nennt diesen Grund statt eines leeren Berichts.
+    handover_failure: Mutex<Option<Diagnostic>>,
 }
 
 /// Das Feld `starttime` aus `/proc/<pid>/stat`, Feld 22 (Ticks seit dem
@@ -677,6 +681,16 @@ impl Shared {
         *lock(&self.start_by_report) = true;
     }
 
+    /// Merkt sich, warum die Übergabe der Deskriptoren scheiterte (HUM-434).
+    pub(crate) fn fail_handover(&self, diagnostic: Diagnostic) {
+        *lock(&self.handover_failure) = Some(diagnostic);
+    }
+
+    /// Warum die Übergabe scheiterte, wenn sie scheiterte.
+    pub(crate) fn handover_failure(&self) -> Option<Diagnostic> {
+        lock(&self.handover_failure).clone()
+    }
+
     pub(crate) fn set_child_pid(&self, pid: u32) {
         lock(&self.status).child_pid = Some(pid);
         self.status_changed.notify_all();
@@ -887,6 +901,11 @@ impl Shared {
         let by_report = *lock(&self.start_by_report);
         if by_report && !lock(&self.report).checks.is_empty() {
             return Ok(status);
+        }
+        // Ohne Deskriptoren schrieb der Shim keinen Bericht; der Grund steht
+        // dann hier, nicht in der Ausgabe der Engine (HUM-434).
+        if let Some(diagnostic) = self.handover_failure() {
+            return Err(diagnostic);
         }
         self.join_readers();
         let stderr = self.stderr_excerpt();
@@ -2007,6 +2026,8 @@ mod tests {
             program,
             name: "humanitl-probe".to_owned(),
             env: Vec::new(),
+            start: crate::user_unit::ClientStart::Direct,
+            unit: None,
         }
     }
 

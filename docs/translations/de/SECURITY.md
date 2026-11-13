@@ -1341,6 +1341,37 @@ von `$HOME` und dem Laufzeitverzeichnis schreibgeschützt: Ein Projekt außerhal
 der Sandbox schreibgeschützt, bis der Mensch eine eigene `ReadWritePaths`-Zeile hinzufügt
 ([`INSTALL.md`](INSTALL.md)).
 
+**Podman unter der Unit (HUM-434).** Keine Eigenschaft der Unit wird für Podman gelockert, keine
+für bubblewrap. Messung P8 (2026-11-13, Podman 5.8.6) hat gezeigt, dass jede Eigenschaft mit
+eigenem Mount-Namensraum (`PrivateTmp`, `ProtectSystem`, `PrivateMounts`, `ProtectClock`,
+`ProtectControlGroups`, `ProtectKernelModules`, `PrivateIPC`, `PrivateUsers`; in einer
+Nutzer-Unit zieht jede einen eigenen Nutzer-Namensraum nach sich) `newuidmap` bricht („write to
+uid_map failed"), sodass rootless Podman nicht als Kind des Daemons startet; alle zu lockern hätte
+den Großteil der Härtung aufgehoben. Stattdessen startet der Daemon, wenn er nicht im ersten
+Nutzer-Namensraum läuft (also unter dieser Unit), jeden Aufruf von Podman als vorübergehende Unit
+des Dienstverwalters des Nutzers: `systemd-run --user --pipe --wait --collect
+--service-type=exec --expand-environment=no` mit `KillMode=mixed`, `Delegate=yes` (damit die Engine die cgroup-Controller des Nutzers bekommt) und `TimeoutStopSec` gleich der
+Frist zum Beenden, mit dem Namen `humanitl-<sitzung>` für eine Sitzung und `humanitl-q-<id>` mit
+`RuntimeMaxSec` für eine Frage. Podman läuft dort hinter `/usr/bin/env -i` mit genau der
+Umgebung, die der Daemon ihm gibt, nie der des Dienstverwalters. Das Beenden einer Sitzung stoppt
+auch ihre Unit; keine Unit bleibt nach dem Abmelden, und der Daemon schaltet nie `linger` ein. Ein
+Dienstverwalter des Nutzers, der nicht antwortet, älter als systemd 254 ist oder ohne
+`systemd-run` dasteht, beendet den Start mit `SANDBOX_050`. Was das kostet: Ein übernommener
+Daemon kann eine vorübergehende Unit des Nutzers starten, außerhalb seiner eigenen Härtung
+([`THREAT-MODEL.md`](THREAT-MODEL.md)). Weil der Client der Engine dann kein Kind des Daemons ist,
+erbt er nichts: Die Deskriptoren des Shims reisen über einen Socket der Sitzung, `0600` in einem
+eigenen Verzeichnis mit `0700`, der genau eine Verbindung annimmt, mit der Kennung des Daemons
+(`SO_PEERCRED`) und einem Einmal-Zeichen von 128 Bit, und sich vor jeder Prüfung schließt. In die
+Sandbox gebunden wird nur dieses Verzeichnis, nur lesbar, unter `/run/humanitl-handover`, und der
+Daemon entfernt die Socket-Datei, bevor er einen Deskriptor schickt: Hat der Shim sie, liegt in
+der Sandbox kein Socket außer dem des Proxys, und `single_socket` braucht keine Ausnahme. Läuft
+die Engine als Unit, sieht sie die Mount-Flags der Quellen aus einem anderen Mount-Namensraum als
+der Daemon (`ProtectSystem` und Verwandte der Unit hängen die Dateisysteme des Rechners mit
+`nosuid` neu ein); die Mounttabelle lässt dann die geerbten Flags der Binds offen und bleibt bei
+Punkt, Typ, nur lesbar oder schreibbar, Anzahl sowie Gerät und Inode streng. Derselbe Weg dient einem Podman, das aus einem Terminal startet,
+damit überall ein Weg geprüft wird. Schreibzugriff auf `~/.local/share/containers` hat die
+vorübergehende Unit, nicht die Unit des Daemons, die ihre `ReadWritePaths` behält.
+
 **Socket-Aktivierung.** Das Paket liefert `humanitld.socket` mit: systemd bindet
 `$XDG_RUNTIME_DIR/humanitl/daemon.sock` mit Modus `0600` in einem Verzeichnis mit `0700` und
 übergibt den Deskriptor an den Daemon. Der Daemon nimmt ihn nur, wenn `LISTEN_PID` ihn selbst

@@ -987,7 +987,7 @@ impl SandboxBackend for BwrapBackend {
                 status: Some(status_reader),
                 output_sink: options.output_sink.clone(),
                 shells: shell_door.map(crate::shell::DoorSeed::Socket),
-                lifeline: None,
+                detached: None,
             })),
         })
     }
@@ -1114,10 +1114,14 @@ pub(crate) fn launch_plan(plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic
         status,
         output_sink,
         shells,
-        lifeline,
+        detached,
     } = once;
+    let (lifeline, handover) = detached.map_or((None, None), |detached| {
+        (Some(detached.lifeline), detached.handover)
+    });
     let stdio = plan.stdio;
     let renumbered = plan.renumbered;
+    let report_timeout = plan.report_timeout;
     let id = SandboxId::new();
     let shared = Arc::new(Shared::default());
     if let Some(sink) = output_sink {
@@ -1161,6 +1165,7 @@ pub(crate) fn launch_plan(plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic
                 Handover {
                     inherit,
                     renumbered,
+                    door: handover.map(|listener| (listener, report_timeout)),
                 },
                 stdio,
                 &supervisor_shared,
@@ -1497,6 +1502,10 @@ struct Handover {
     /// Fortlaufend ab 3 statt unter eigener Nummer
     /// ([`LaunchPlan::renumbered`]).
     renumbered: bool,
+    /// Der Socket, über den der Shim die Deskriptoren bekommt, und wie lange
+    /// er darauf wartet (HUM-434, [`crate::launcher::Detached::handover`]). Dann erbt das
+    /// Programm keinen von ihnen.
+    door: Option<(crate::fd_handover::HandoverListener, Duration)>,
 }
 
 impl Handover {
@@ -1522,6 +1531,11 @@ impl Handover {
     /// Zielnummern, die der Aufrufer bis nach `spawn` hält
     /// ([`inherit_renumbered`]).
     fn install(&self, command: &mut Command) -> Result<Vec<OwnedFd>, Diagnostic> {
+        // Über die Übergabe erbt das Programm nichts: Es läuft womöglich gar
+        // nicht als Kind des Daemons (HUM-434).
+        if self.door.is_some() {
+            return Ok(Vec::new());
+        }
         let borrowed: Vec<BorrowedFd<'_>> = self.inherit.iter().map(AsFd::as_fd).collect();
         let handed = if self.renumbered {
             inherit_renumbered(command, &borrowed)
@@ -1530,6 +1544,42 @@ impl Handover {
         };
         handed.map_err(|err| handover_failed(&err))
     }
+
+    /// Gibt die Deskriptoren auf einem eigenen Faden über den Socket an den
+    /// Shim, wenn es einen gibt (HUM-434). Die eigenen Kopien gehen danach
+    /// zu, wie sonst nach `spawn`; ein Fehlschlag steht im Zustand der
+    /// Sandbox und wird ihr Befund, wenn sie ohne Bericht endet.
+    fn hand_over(&mut self, shared: &Arc<Shared>) {
+        let Some((door, wait)) = self.door.take() else {
+            return;
+        };
+        let fds = std::mem::take(&mut self.inherit);
+        let target = Arc::clone(shared);
+        let served = thread::Builder::new()
+            .name("sandbox-handover".to_owned())
+            .spawn(move || {
+                let borrowed: Vec<BorrowedFd<'_>> = fds.iter().map(AsFd::as_fd).collect();
+                let uid = rustix::process::getuid().as_raw();
+                if let Err(why) = door.serve(&borrowed, wait, uid) {
+                    target.fail_handover(handover_refused(&why));
+                }
+            });
+        if let Err(err) = served {
+            shared.fail_handover(handover_refused(&format!(
+                "cannot start the handover thread: {err}"
+            )));
+        }
+    }
+}
+
+/// `SANDBOX_012`: Der Shim hat seine Deskriptoren nicht bekommen (HUM-434).
+fn handover_refused(why: &str) -> Diagnostic {
+    Diagnostic::builder(SANDBOX_012, Severity::Blocking)
+        .why(format!(
+            "the shim in the sandbox did not get its descriptors, so the command never \
+             started: {why}"
+        ))
+        .build()
 }
 
 /// Der Thread, der `bwrap` startet und auf es wartet; siehe Modulbeschreibung.
@@ -1597,6 +1647,9 @@ fn supervise(
         };
         let spawned = command.spawn();
         drop(reserved);
+        if spawned.is_ok() {
+            handover.hand_over(shared);
+        }
         // Die Kopien des Kindes bleiben; die eigenen gehen zu, damit die
         // Pipes enden, wenn die Sandbox endet.
         drop(handover);
@@ -2038,7 +2091,10 @@ mod tests {
                 status: None,
                 output_sink: None,
                 shells: None,
-                lifeline: Some(lifeline),
+                detached: Some(crate::launcher::Detached {
+                    lifeline,
+                    handover: None,
+                }),
             })),
         };
         let started = Instant::now();

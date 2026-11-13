@@ -51,8 +51,8 @@ use humanitl_core::Diagnostic;
 use super::plan::{Mount, MountKind, Root};
 use crate::bwrap::PinnedMounts;
 use crate::mount_table::{
-    ExpectedMount, FileId, MountFlags, MountMode, MountPins, bind_of, by_target, host_mount,
-    id_of_path, pins_of,
+    ExpectedMount, FileId, MountFlags, MountMode, MountPins, MountSource, bind_of, by_target,
+    host_mount, id_of_path, pins_of,
 };
 use crate::profile::{SandboxProfile, SessionContext};
 
@@ -268,10 +268,35 @@ pub(super) fn root_entry(root: Root<'_>) -> Result<ExpectedMount, Diagnostic> {
     })
 }
 
+/// Ein Eintrag, wie ihn eine Engine in einem anderen Mount-Namensraum
+/// sieht (HUM-434).
+///
+/// Startet die Engine als Unit des Dienstverwalters des Nutzers, liest der
+/// Daemon die Flags der Quellen in seinem eigenen, gehärteten Namensraum,
+/// wo `ProtectSystem` und Verwandte die Dateisysteme des Rechners mit
+/// `nosuid` (und mehr) neu einhängen; die Engine bindet sie aus dem
+/// Namensraum des Dienstverwalters, wo diese Flags fehlen. Die Flags, die
+/// ein Bind von seiner Quelle erbt, sind von hier aus also nicht zu wissen
+/// und bleiben offen (`*`). Streng bleiben Punkt, Typ, nur lesbar oder
+/// schreibbar, Anzahl und Gerät und Inode der Quelle; Einhängungen, deren
+/// Flags die Engine selbst setzt (tmpfs, `proc`), behalten ihre. Ein Bind
+/// mit offenen Flags gibt keine Rechte, die die Quelle auf dem Rechner
+/// nicht schon hat. Ohne Unit (`elsewhere` falsch) bleibt alles, wie es war.
+pub(super) fn as_seen_by_engine(entry: ExpectedMount, elsewhere: bool) -> ExpectedMount {
+    if elsewhere && matches!(entry.source, MountSource::Inode(_)) {
+        entry.any_flags()
+    } else {
+        entry
+    }
+}
+
 /// Was der Shim eines Podman-Containers hinter `--pins-fd` bekommt.
 ///
 /// `mounts` sind die Einhängungen des Plans mit den geprüften Quellen,
 /// `root` die Wurzel der Sitzung; ein Verzeichnis als Wurzel existiert schon.
+/// `flags_seen_elsewhere`: Die Engine startet als Unit des Dienstverwalters
+/// und sieht die Flags der Quellen anders als der Daemon
+/// ([`as_seen_by_engine`]).
 ///
 /// # Errors
 ///
@@ -282,7 +307,9 @@ pub(super) fn pins(
     pinned: &PinnedMounts,
     mounts: &[Mount],
     root: Root<'_>,
+    flags_seen_elsewhere: bool,
 ) -> Result<MountPins, Diagnostic> {
+    let seen = |entry| as_seen_by_engine(entry, flags_seen_elsewhere);
     let agent = session
         .agent_program
         .as_ref()
@@ -293,9 +320,9 @@ pub(super) fn pins(
         pins,
         mounts: Vec::new(),
     };
-    table.expect(root_entry(root)?);
+    table.expect(seen(root_entry(root)?));
     for mount in mounts {
-        table.expect(match &mount.kind {
+        table.expect(seen(match &mount.kind {
             MountKind::Bind {
                 source, writable, ..
             } => bind_of(&mount.dst, source, *writable, MountFlags::default(), &known)?,
@@ -311,10 +338,10 @@ pub(super) fn pins(
                 MountMode::ReadOnly,
                 MountFlags::NOSUID_NODEV,
             ),
-        });
+        }));
     }
     for entry in engine_entries_here()? {
-        table.expect(entry);
+        table.expect(seen(entry));
     }
     Ok(table)
 }
@@ -324,7 +351,6 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
-    use crate::mount_table::MountSource;
 
     const NULL: FileId = FileId { dev: 5, ino: 4 };
 
@@ -354,6 +380,52 @@ mod tests {
     /// Kein eigener Eintrag von Podman liegt dort, wo der Plan einhängt oder
     /// wo eine Konfigurationsquelle etwas hinzufügen würde, und keiner nimmt
     /// beliebige Flags an; unter `/proc` ist jeder nur lesbar.
+    /// Unter der Unit des Dienstverwalters (HUM-434) bleiben die Flags eines
+    /// Binds offen, alles andere streng; die Flags, die die Engine selbst
+    /// setzt, bleiben verlangt. Ohne Unit ändert sich nichts.
+    #[test]
+    fn under_the_user_unit_only_the_inherited_flags_of_binds_are_open() {
+        let id = FileId { dev: 8, ino: 42 };
+        let bind = ExpectedMount::bind(
+            Path::new("/usr"),
+            id,
+            MountMode::ReadOnly,
+            MountFlags {
+                nosuid: true,
+                nodev: false,
+                noexec: false,
+            },
+        );
+        let seen = as_seen_by_engine(bind.clone(), true);
+        assert_eq!(seen.flags, None);
+        assert_eq!(
+            (
+                &seen.point,
+                &seen.fstype,
+                seen.source,
+                seen.mode,
+                seen.min,
+                seen.max
+            ),
+            (
+                &bind.point,
+                &bind.fstype,
+                MountSource::Inode(id),
+                MountMode::ReadOnly,
+                1,
+                1
+            )
+        );
+        assert_eq!(as_seen_by_engine(bind.clone(), false), bind);
+        let tmpfs = ExpectedMount::typed(
+            Path::new("/tmp"),
+            "tmpfs",
+            MountMode::ReadWrite,
+            MountFlags::NOSUID_NODEV,
+        );
+        assert_eq!(as_seen_by_engine(tmpfs.clone(), true), tmpfs);
+    }
+
     #[test]
     fn the_engine_entries_never_cover_a_planned_or_a_foreign_point() {
         let all = entries(&["/proc/kcore", "/proc/acpi", "/proc/sys", "/proc/interrupts"]);

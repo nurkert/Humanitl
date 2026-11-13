@@ -18,6 +18,15 @@
 //! beendet ist, und entfernt ihn selbst ([`ContainerStop::remove_after_exit`],
 //! HUM-452). Läuft zugleich ein Stopp, entfernt nur einer von beiden; das
 //! entscheidet das Handle der Sitzung.
+//!
+//! Unter der gehärteten Unit des Daemons (HUM-434) läuft jeder Befehl hier
+//! als eigene Unit des Dienstverwalters ([`run_engine`]), und der Client der
+//! Sitzung in der Unit `humanitl-<sitzung>`. Der „Client" ist dann
+//! `systemd-run --wait`, das genau so lange lebt wie Podman in der Unit;
+//! sein Ende ist das Ende des Hauptprozesses der Unit. Nach dem Entfernen
+//! stoßen Stopp und ungeplantes Ende auch den Stopp der Unit an
+//! ([`ContainerStop::stop_unit`]), damit keine liegen bleibt, wenn Podman
+//! hängt.
 
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -27,6 +36,7 @@ use humanitl_core::{Diagnostic, FixAction, Severity};
 use rustix::process::Signal;
 
 use crate::launcher::ContainerStop;
+use crate::user_unit::{ClientStart, Lifetime};
 
 /// Wie lange ein Befehl zum Beenden höchstens dauern darf.
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -37,10 +47,21 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 /// `rm --force` ihn auch laufend.
 const EXIT_WAIT: Duration = crate::KILL_GRACE.saturating_add(Duration::from_secs(5));
 
+/// Wie lange der Anstoß zum Stopp einer Unit höchstens dauert; `--no-block`
+/// wartet nicht auf den Stopp selbst (HUM-434).
+const UNIT_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Wie lange ein Stopp, der auf sein Ende wartet, höchstens dauert: die Frist
+/// der Unit (`TimeoutStopSec`) und etwas Luft. Nur nach einem Abbruch des
+/// Ziehens (HUM-457), wo das Ende belegt sein muss.
+pub(crate) const UNIT_STOP_WAIT: Duration =
+    crate::KILL_GRACE.saturating_add(Duration::from_secs(10));
+
 // Ein Stopp wartet höchstens `REMOVAL_BOUND` auf das Entfernen nach dem
-// Ende; die drei Befehle dafür müssen hineinpassen.
+// Ende; die vier Befehle dafür müssen hineinpassen.
 const _: () = assert!(
-    EXIT_WAIT.as_secs() + 2 * STOP_TIMEOUT.as_secs() < crate::handle::REMOVAL_BOUND.as_secs()
+    EXIT_WAIT.as_secs() + 2 * STOP_TIMEOUT.as_secs() + UNIT_STOP_TIMEOUT.as_secs()
+        < crate::handle::REMOVAL_BOUND.as_secs()
 );
 
 impl ContainerStop {
@@ -63,6 +84,7 @@ impl ContainerStop {
             return None;
         }
         let removed = self.run(&["rm", "--force", "--time", "0", "--ignore", &self.name]);
+        self.stop_unit();
         if self.gone() {
             return None;
         }
@@ -94,6 +116,7 @@ impl ContainerStop {
     pub(crate) fn remove_after_exit(&self) -> Option<Diagnostic> {
         let waited = self.run_within(&["wait", &self.name], EXIT_WAIT);
         let removed = self.run(&["rm", "--force", "--time", "0", "--ignore", &self.name]);
+        self.stop_unit();
         if self.gone() {
             return None;
         }
@@ -132,7 +155,51 @@ impl ContainerStop {
             .env_clear()
             .envs(self.env.iter().map(|(key, value)| (key, value)))
             .args(args);
-        run_bounded(command, timeout)
+        run_engine(&self.start, command, timeout)
+    }
+
+    /// Stößt den Stopp der Unit der Sitzung an, wenn sie über den
+    /// Dienstverwalter startete (HUM-434), und wartet nicht darauf. Eine
+    /// Unit, die es nicht mehr gibt, ist gestoppt. Ohne Wirkung, wenn der
+    /// Client ein Kind des Daemons ist. Ein Fehlschlag bleibt still: Ist
+    /// der Container weg, endet Podman in der Unit und mit ihm die Unit;
+    /// ist er es nicht, sagt `SANDBOX_041` das schon.
+    pub(crate) fn stop_unit(&self) {
+        if let (ClientStart::UserUnit(units), Some(unit)) = (&self.start, &self.unit) {
+            let _ = run_bounded(units.stop_command(unit, false), UNIT_STOP_TIMEOUT);
+        }
+    }
+}
+
+/// Ob `systemctl stop` die Unit gestoppt hat: Exit 0, oder 5, wenn es sie
+/// schon nicht mehr gibt („not loaded").
+pub(crate) fn unit_stop_succeeded(output: &Output) -> bool {
+    matches!(output.status.code(), Some(0 | 5))
+}
+
+/// Ein Befehl an die Engine (HUM-434): als Kind, oder unter der gehärteten
+/// Unit des Daemons als eigene Unit mit `RuntimeMaxSec` knapp über der
+/// Frist, damit der Dienstverwalter sie auch dann beendet, wenn hier die
+/// Frist nur `systemd-run` beendet.
+///
+/// # Errors
+///
+/// Der Fehler von [`run_bounded`], oder `InvalidInput`, wenn der Befehl
+/// nicht in eine Unit passt.
+pub(crate) fn run_engine(
+    start: &ClientStart,
+    command: Command,
+    timeout: Duration,
+) -> std::io::Result<Output> {
+    match start {
+        ClientStart::Direct => run_bounded(command, timeout),
+        ClientStart::UserUnit(units) => {
+            let unit = units.query_unit();
+            run_bounded(
+                units.wrap(&command, &unit, Lifetime::Bounded(timeout))?,
+                timeout,
+            )
+        }
     }
 }
 
@@ -749,6 +816,8 @@ mod tests {
             program: fake,
             name: String::new(),
             env: Vec::new(),
+            start: ClientStart::Direct,
+            unit: None,
         };
         let found = snapshot(&engine, "humanitl.daemon=abc").expect("listed");
         assert_eq!(found.len(), 2);
@@ -796,6 +865,8 @@ mod tests {
             program: fake,
             name: String::new(),
             env: Vec::new(),
+            start: ClientStart::Direct,
+            unit: None,
         };
         let err = snapshot(&engine, "humanitl.daemon=abc").expect_err("broken");
         assert_eq!(err.code.as_str(), "SANDBOX_041", "{}", err.why);

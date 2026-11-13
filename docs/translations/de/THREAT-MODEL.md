@@ -98,6 +98,23 @@ hat entschieden, diesem Host zu vertrauen" und macht diese Entscheidung sichtbar
   Rechners später ausführen oder ein Mensch hinaustragen.
 - **Das Fenster und die Kommandozeile** sitzen auf der Seite des Rechners. Sie können die Sandbox
   nicht schwächen, aber sie zeigen dem Menschen, worüber er entscheidet.
+- **Der Daemon und der Dienstverwalter des Nutzers (HUM-434).** Unter seiner gehärteten
+  Nutzer-Unit läuft der Daemon in einem eigenen Nutzer-Namensraum, in dem rootless Podman seine
+  Kennungen nicht abbilden kann. Statt diese Härtung zu lockern, startet der Daemon jeden Aufruf
+  von Podman als vorübergehende Unit `humanitl-*` des Dienstverwalters des Nutzers
+  (`systemd-run --user`), außerhalb seiner eigenen Unit. Ein übernommener Daemon gewinnt damit
+  **„eine vorübergehende Unit des Nutzers starten"**: jedes Programm als derselbe Nutzer, ohne
+  die Einschränkungen von `humanitld.service`. Das Konto konnte das vorher schon, der gehärtete
+  Daemon nicht. Der Code baut nur Unit-Namen mit dem Präfix `humanitl-` und eine feste Zeile
+  (`--pipe --wait --collect`, `KillMode=mixed`, das Programm hinter `env -i`); das schützt vor
+  Fehlern, nicht vor einem übernommenen Daemon. Unter bubblewrap wird nichts davon benutzt. Die
+  Deskriptoren der Sandbox erreichen den Shim über einen Socket der Sitzung, der genau eine
+  Verbindung derselben Kennung mit einem Einmal-Zeichen annimmt und danach jede andere ablehnt;
+  gebunden wird nur sein Verzeichnis, und der Daemon entfernt den Socket vor dem Senden, sodass
+  der Agent dort nichts findet. Das Zeichen steht in der Befehlszeile der Unit
+  (`systemctl --user show`, D-Bus); ein Prozess derselben Kennung kann es lesen und dem Shim
+  zuvorkommen. Das endet in einer gescheiterten Sitzung, nie darin, dass die Deskriptoren eine
+  andere Kennung erreichen.
 
 ## Angriffsfläche
 
@@ -587,8 +604,13 @@ Bindung: Der Daemon startet Podman mit eigener
 leerer Umgebung außer `HOME`, dem `XDG_RUNTIME_DIR` des Nutzers, `PATH`, dem Sitzungsbus des Nutzers und diesen drei Pfaden; die Zeile trägt
 jedes Flag, auf dem die drei Garantien ruhen, ohne Schlüssel, der es ändert; die Umgebung des
 Agenten geht nur durch den versiegelten memfd und nie in die gespeicherte Konfiguration des
-Containers; der Container endet über die Engine beim Namen und, wenn der Daemon stirbt, über die
-Lebensleine; was eine Konfigurationsquelle trotzdem hinzufügt, findet der Shim in der
+Containers; die Deskriptoren des Shims (Bericht, Lebensleine, Umgebung, Mounttabelle, Tür zu
+weiteren Shells, Terminal) erreichen ihn über einen Socket der Sitzung, der genau eine Verbindung
+mit der Kennung des Daemons und einem Einmal-Zeichen annimmt und geschlossen ist, bevor der Agent
+startet, sodass der Client der Engine sie nie hält (HUM-434); unter der gehärteten Unit des
+Daemons läuft jeder Aufruf von Podman als vorübergehende Unit `humanitl-*` des Dienstverwalters
+des Nutzers, und das Beenden einer Sitzung stoppt auch ihre Unit; der Container endet über die
+Engine beim Namen und, wenn der Daemon stirbt, über die Lebensleine; was eine Konfigurationsquelle trotzdem hinzufügt, findet der Shim in der
 Mounttabelle, bevor der Agent startet, und lehnt es mit `SANDBOX_049` ab, ob es einen Socket trägt
 oder nicht (HUM-437). *Restrisiko:* Die gemeinsame Stufe teilt den Kern des Hosts wie bubblewrap;
 eingehängt wird über Pfade, ein getauschter Pfad wird von der Prüfung von Gerät und Inode durch den
@@ -729,6 +751,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-12 | K-24: keine Wegwerf-Sandbox unter Podman; das Overlay-Volume der Engine wurde gemessen (P10) und wird nicht verwendet, weil sich seine untere Schicht nicht an den geprüften Ordner binden lässt; `disposable` lehnt mit `SANDBOX_030` ab, `auto` läuft direkt mit `SANDBOX_033` | HUM-438 |
 | 2026-11-12 | K-01, K-05, K-27: Der Shim vergleicht unter jedem Backend die Mounttabelle mit dem Plan und Gerät und Inode jedes geprüften Ordners, bevor der Agent startet (`SANDBOX_049`, `SANDBOX_042`); unter Podman wird ein getauschter Ordner erkannt und abgelehnt statt verhindert; K-27 nennt die Konfigurationsquellen von Podman | HUM-437 |
 | 2026-11-13 | K-28 neu: ein Abbild als Wurzel der Sandbox unter Podman, mit Digest festgelegt und vor jedem Start geprüft (`SANDBOX_043`), gezogen nur auf Wunsch und direkt, nicht durch den Proxy; ESC-2 prüft die CA nach Gerät und Inode | HUM-439 |
+| 2026-11-13 | Vertrauensgrenzen: Unter seiner gehärteten Unit startet der Daemon Podman als vorübergehende Units `humanitl-*` des Dienstverwalters des Nutzers, statt seine Härtung zu lockern; ein übernommener Daemon gewinnt „eine vorübergehende Unit des Nutzers starten". K-27: die Deskriptoren des Shims über einen Socket der Übergabe mit genau einer Verbindung statt `--preserve-fds` | HUM-434 |
 | 2026-11-13 | K-28: Zugangsdaten zur Registry beim Ziehen nur aus der eigenen Datei des Adapters, als private Kopie unter `--authfile`; Credential-Helfer in dieser Datei oder in einer Ergänzung zur `registries.conf` abgelehnt (`SANDBOX_043`) | HUM-456 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der

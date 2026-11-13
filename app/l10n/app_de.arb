@@ -1841,5 +1841,7 @@
   "sandboxImagePullFailed": "Nicht gezogen: {reason}",
   "sandboxImagePullCancelRunning": "Abbrechen",
   "sandboxImagePullCancelled": "Ziehen abgebrochen. Davon läuft nichts mehr, und das Abbild ist noch nicht da.",
-  "sandboxImagePullCancelledRemaining": "{count, plural, =1{Ziehen abgebrochen, aber einer seiner Prozesse lief nach dem Beenden noch. Das Abbild ist noch nicht da.} other{Ziehen abgebrochen, aber {count} seiner Prozesse liefen nach dem Beenden noch. Das Abbild ist noch nicht da.}}"
+  "sandboxImagePullCancelledRemaining": "{count, plural, =1{Ziehen abgebrochen, aber einer seiner Prozesse lief nach dem Beenden noch. Das Abbild ist noch nicht da.} other{Ziehen abgebrochen, aber {count} seiner Prozesse liefen nach dem Beenden noch. Das Abbild ist noch nicht da.}}",
+  "diagSANDBOX050Title": "Dienstverwalter des Nutzers nicht erreichbar",
+  "diagSANDBOX050Why": "Unter seinem gehärteten Dienst startet der Daemon die Container-Engine über den Dienstverwalter deines Nutzers, statt seinen eigenen Schutz zu lockern, und dieser Verwalter hat nicht geantwortet, ist zu alt, oder sein Werkzeug zum Starten eines Dienstes fehlt. Die Sitzung ist nicht gestartet."
 }

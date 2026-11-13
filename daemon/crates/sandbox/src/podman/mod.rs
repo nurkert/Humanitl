@@ -1,13 +1,23 @@
 //! Das Podman-Backend, gemeinsame Stufe: rootless Podman mit der Laufzeit
 //! `crun`, geteilter Kern (HUM-433, ADR-0020).
 //!
-//! Eine Sitzung ist genau ein `podman run`, den der Daemon startet und dessen
-//! Deskriptoren der Container über `--preserve-fds` erbt (HUM-292 P4):
-//! Bericht, Lebensleine, Umgebung als versiegelter memfd und am eigenen
-//! Pseudoterminal die Tür zu weiteren Shells und das Terminal selbst. Der
-//! Shim ist PID 1 des Containers, mit demselben Filter, denselben fünf
-//! `CHECK`-Zeilen und derselben Tür wie unter bwrap; die Garantien liest
+//! Eine Sitzung ist genau ein `podman run`, den der Daemon startet. Seine
+//! Deskriptoren holt sich der Shim als Erstes über einen Socket der Sitzung
+//! ([`crate::fd_handover`], HUM-434): Bericht, Lebensleine, Umgebung als
+//! versiegelter memfd, Mounttabelle und am eigenen Pseudoterminal die Tür zu
+//! weiteren Shells und das Terminal selbst. Der Shim ist PID 1 des
+//! Containers, mit demselben Filter, denselben fünf `CHECK`-Zeilen und
+//! derselben Tür wie unter bwrap; die Garantien liest
 //! [`crate::bwrap::isolation_from_report`] aus seinem Bericht.
+//!
+//! **Unter der gehärteten Unit des Daemons (HUM-434).** Dort läuft der
+//! Daemon in einem eigenen Nutzer-Namensraum, und `newuidmap` scheitert
+//! (HUM-292 P8). Jeder Aufruf von Podman, der Start einer Sitzung wie jede
+//! Frage, läuft dann als vorübergehende Unit `humanitl-*` des
+//! Dienstverwalters des Nutzers ([`crate::user_unit`]); die Härtung des
+//! Daemons bleibt, wie sie ist. Weil der Client dann kein Kind des Daemons
+//! ist, erbt er nichts, und deshalb gehen die Deskriptoren über den Socket,
+//! auch dort, wo Podman als Kind startet: ein Weg, eine Prüfung.
 //!
 //! Vier Messungen der Referenzmaschine (Podman 5.8.6, HUM-292 Abschnitt
 //! 10a) legen den Aufbau fest:
@@ -25,8 +35,9 @@
 //!   `--env-host=false` und `--http-proxy=false`. Die fünf Variablen des
 //!   Shims (Bridges, seccomp-Listen, Nummer des Berichts) sind keine
 //!   Geheimnisse und stehen in der `containers.conf` der Sitzung.
-//! - **P4**: Die geerbten Deskriptoren erreichen PID 1 unter 3, 4, 5, ...;
-//!   der Start vergibt sie deshalb fortlaufend (`LaunchPlan::renumbered`).
+//! - **P4**: Die Deskriptoren liegen bei PID 1 unter 3, 4, 5, ...; der Shim
+//!   legt sie aus der Übergabe fortlaufend dorthin (`LaunchPlan::renumbered`),
+//!   wie früher `--preserve-fds`.
 //!
 //! **Keine Konfiguration, die der Daemon nicht schreibt.** Podman liest viel
 //! mehr als seine Zeile. Der Adapter startet es mit leerer Umgebung außer
@@ -85,6 +96,7 @@ mod teardown;
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::os::fd::{AsRawFd as _, OwnedFd, RawFd};
@@ -96,7 +108,7 @@ use std::time::Duration;
 
 use humanitl_config::{Paths, PodmanConfig, PodmanRootfs, PodmanRuntime};
 use humanitl_core::diagnostics::codes::{
-    CONFIG_003, SANDBOX_011, SANDBOX_030, SANDBOX_037, SANDBOX_048,
+    CONFIG_003, SANDBOX_011, SANDBOX_012, SANDBOX_030, SANDBOX_037, SANDBOX_048,
 };
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
@@ -105,14 +117,16 @@ use sha2::{Digest as _, Sha256};
 use crate::backend::PODMAN_BACKEND;
 use crate::bwrap::{BwrapBackend, PinnedMounts, Version, isolation_from_report, launch_plan};
 use crate::doctor::BackendCheckId;
+use crate::fd_handover::HandoverListener;
 use crate::handle::SandboxHandle;
 use crate::launcher::{
-    CheckResult, ContainerStop, Door, EnvDelivery, IsolationLevel, LaunchOnce, LaunchPlan,
-    PlanPreview, PlanRequest, PolicyMode, PolicyOrigin, PolicyRow, PullCancel, PulledImage,
-    ResourceLimits, SandboxBackend, Teardown,
+    CheckResult, ContainerStop, Detached, Door, EnvDelivery, IsolationLevel, LaunchOnce,
+    LaunchPlan, PlanPreview, PlanRequest, PolicyMode, PolicyOrigin, PolicyRow, PullCancel,
+    PulledImage, ResourceLimits, SandboxBackend, Teardown,
 };
 use crate::profile::{MountPolicy, SandboxProfile, SessionContext};
 use crate::shim_fds::{Lifeline, env_memfd, split_env};
+use crate::user_unit::{ClientStart, Lifetime, UnitName, UserUnits};
 
 pub use detect::MIN_PODMAN_VERSION;
 
@@ -225,6 +239,9 @@ pub struct PodmanBackend {
     version: Version,
     settings: Settings,
     paths: Paths,
+    /// Wie Podman startet: als Kind, oder unter der gehärteten Unit des
+    /// Daemons über den Dienstverwalter des Nutzers (HUM-434).
+    start: ClientStart,
 }
 
 impl PodmanBackend {
@@ -237,22 +254,36 @@ impl PodmanBackend {
     /// `SANDBOX_044`; `SANDBOX_011`, wenn das Verzeichnis des Adapters sich
     /// nicht anlegen lässt.
     pub(crate) fn detect(paths: Paths, config: &PodmanConfig) -> Result<Self, Diagnostic> {
+        Self::detect_via(paths, config, None)
+    }
+
+    /// Wie [`Self::detect`]; mit `start` startet Podman so statt nach der
+    /// Wahl von [`client_start`] (die Live-Tests der Units, HUM-434).
+    pub(crate) fn detect_via(
+        paths: Paths,
+        config: &PodmanConfig,
+        start: Option<ClientStart>,
+    ) -> Result<Self, Diagnostic> {
         refuse_kernel_level(config.runtime)?;
         let program = detect::find_program(config, paths.env())?;
         let engine = EngineDir::of(&paths);
         engine.prepare()?;
+        let start = match start {
+            Some(start) => start,
+            None => client_start(&engine)?,
+        };
         let conf = engine.containers_conf();
         let mut version = engine.command(&program, &conf);
         version.args(["version", "--format", "{{.Client.Version}}"]);
         let version = detect::check_version(
             &program,
-            &teardown::run_bounded(version, detect::QUERY_TIMEOUT),
+            &teardown::run_engine(&start, version, detect::QUERY_TIMEOUT),
         )?;
         let mut info = engine.command(&program, &conf);
         info.args(["info", "--format", detect::INFO_FORMAT]);
         detect::check_info(
             &program,
-            &teardown::run_bounded(info, detect::QUERY_TIMEOUT),
+            &teardown::run_engine(&start, info, detect::QUERY_TIMEOUT),
         )?;
         let read = |path: &str| std::fs::read_to_string(path).unwrap_or_default();
         detect::check_subordinate_ids(
@@ -268,6 +299,7 @@ impl PodmanBackend {
             version,
             settings: Settings::from_config(config),
             paths,
+            start,
         })
     }
 
@@ -283,6 +315,7 @@ impl PodmanBackend {
             version: MIN_PODMAN_VERSION,
             settings: Settings::from_config(config),
             paths,
+            start: ClientStart::Direct,
         }
     }
 
@@ -319,6 +352,7 @@ impl PodmanBackend {
         session_dir: &'a SessionDir,
         names: &'a Names,
         fds: Fds,
+        handover_token: &'a str,
         request: &PlanRequest<'_>,
     ) -> LineSpec<'a> {
         let root = self.root(session_dir);
@@ -337,8 +371,71 @@ impl PodmanBackend {
             cpus: self.settings.cpus,
             pids: self.settings.pids,
             fds,
+            handover_token,
             stdio: request.options.stdio,
         }
+    }
+
+    /// Die erwartete Mounttabelle als memfd (HUM-437). Startet Podman als
+    /// Unit des Dienstverwalters, sieht es die Flags der Quellen aus einem
+    /// anderen Namensraum als der Daemon (HUM-434,
+    /// [`mounts::as_seen_by_engine`]).
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_011`, wenn sich eine Quelle nicht lesen oder der memfd sich
+    /// nicht anlegen lässt.
+    fn pins_memfd(
+        &self,
+        profile: &SandboxProfile,
+        session: &SessionContext,
+        pinned: &PinnedMounts,
+        mounts: &[plan::Mount],
+        dir: &SessionDir,
+    ) -> Result<OwnedFd, Diagnostic> {
+        let elsewhere = matches!(self.start, ClientStart::UserUnit(_));
+        mounts::pins(profile, session, pinned, mounts, self.root(dir), elsewhere)?.memfd()
+    }
+
+    /// Wie der Client mit `argv` (`argv[0]` ist Podman) und genau `env`
+    /// startet: als Kind, oder als Unit der Sitzung über den Dienstverwalter
+    /// (HUM-434).
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_012`, wenn die Zeile nicht in eine Unit passt (ein Argument,
+    /// das kein UTF-8 ist).
+    fn client_line(
+        &self,
+        session: SessionId,
+        argv: Vec<OsString>,
+        env: Vec<(String, String)>,
+    ) -> Result<ClientLine, Diagnostic> {
+        let ClientStart::UserUnit(units) = &self.start else {
+            return Ok(ClientLine {
+                program: self.program.clone(),
+                argv,
+                env,
+                unit: None,
+            });
+        };
+        let refused = |why: String| {
+            Diagnostic::builder(SANDBOX_012, Severity::Blocking)
+                .why(format!(
+                    "the sandbox cannot start as a unit of the user's service manager: {why}"
+                ))
+                .build()
+        };
+        let unit = units.named(&session.to_string()).map_err(refused)?;
+        let wrapped = units
+            .argv(&unit, Lifetime::Session, &self.program, &argv[1..], &env)
+            .map_err(refused)?;
+        Ok(ClientLine {
+            program: units.run_program().to_path_buf(),
+            argv: wrapped,
+            env: units.own_env().to_vec(),
+            unit: Some(unit),
+        })
     }
 
     /// Lehnt ab, was diese Stufe nicht kann: die Laufzeit `krun`
@@ -436,14 +533,17 @@ impl PodmanBackend {
         let conf = engine.containers_conf();
         let mut inspect = engine.command(&self.program, &conf);
         inspect.args(["image", "inspect", "--", reference]);
-        let answer = teardown::run_bounded(inspect, detect::QUERY_TIMEOUT);
+        let answer = teardown::run_engine(&self.start, inspect, detect::QUERY_TIMEOUT);
         if !matches!(&answer, Ok(output) if output.status.success()) {
             // Was liegt unter dem Namen? Nur für den Satz des Befunds.
             let name = image::split(reference).map_or(reference, |(name, _)| name);
             let mut by_name = engine.command(&self.program, &conf);
             by_name.args(["image", "inspect", "--", name]);
-            let present =
-                image::present_digest(&teardown::run_bounded(by_name, detect::QUERY_TIMEOUT));
+            let present = image::present_digest(&teardown::run_engine(
+                &self.start,
+                by_name,
+                detect::QUERY_TIMEOUT,
+            ));
             let detail = match &answer {
                 Ok(output) => String::from_utf8_lossy(&output.stderr).into_owned(),
                 Err(err) => err.to_string(),
@@ -502,7 +602,7 @@ impl PodmanBackend {
         // Abbrechbar, und in einer eigenen Prozessgruppe (HUM-457): Ein
         // Abbruch beendet die Engine samt den Prozessen, die sie für das
         // Ziehen startete, und kommt erst zurück, wenn keiner mehr lebt.
-        let answer = teardown::run_cancellable(pull, image::PULL_TIMEOUT, cancel);
+        let answer = self.pull_cancellable(pull, cancel);
         // Die Kopie der Zugangsdaten lebt nur so lange wie das Ziehen, auch
         // wenn es scheiterte; zwischen ihrem Schreiben und hier gibt es
         // keinen anderen Ausgang. Jedes Ziehen hat seine eigene Kopie, ein
@@ -537,6 +637,39 @@ impl PodmanBackend {
         })
     }
 
+    /// Startet das Ziehen abbrechbar (HUM-457), unter der gehärteten Unit als
+    /// eigene Unit (HUM-434). Ein Abbruch oder die Frist beendet dort nur
+    /// `systemd-run`; die Unit selbst geht dann über ihren Stopp, und erst
+    /// dessen Ende belegt, dass vom Ziehen nichts mehr läuft. Scheitert der
+    /// Stopp, zählt die Unit als ein Prozess, der noch läuft.
+    fn pull_cancellable(
+        &self,
+        pull: Command,
+        cancel: &PullCancel,
+    ) -> std::io::Result<teardown::Ended> {
+        let ClientStart::UserUnit(units) = &self.start else {
+            return teardown::run_cancellable(pull, image::PULL_TIMEOUT, cancel);
+        };
+        let unit = units.query_unit();
+        let wrapped = units.wrap(&pull, &unit, Lifetime::Bounded(image::PULL_TIMEOUT))?;
+        let ended = teardown::run_cancellable(wrapped, image::PULL_TIMEOUT, cancel)?;
+        let unit_alive = |alive: usize| {
+            let stopped =
+                teardown::run_bounded(units.stop_command(&unit, true), teardown::UNIT_STOP_WAIT);
+            let gone = matches!(&stopped, Ok(output) if teardown::unit_stop_succeeded(output));
+            alive + usize::from(!gone)
+        };
+        Ok(match ended {
+            teardown::Ended::Exited(output) => teardown::Ended::Exited(output),
+            teardown::Ended::Cancelled { alive } => teardown::Ended::Cancelled {
+                alive: unit_alive(alive),
+            },
+            teardown::Ended::DeadlineKilled { alive } => teardown::Ended::DeadlineKilled {
+                alive: unit_alive(alive),
+            },
+        })
+    }
+
     /// Die PID von PID 1 des Containers auf dem Host, sobald der Shim
     /// berichtet hat: `podman inspect` nennt sie, und sie zählt nur, wenn ihr
     /// Elternprozess der `conmon` aus `--conmon-pidfile` ist.
@@ -561,7 +694,7 @@ impl PodmanBackend {
             .env_clear()
             .envs(stop.env.iter().map(|(key, value)| (key, value)))
             .args(["inspect", "--format", "{{.State.Pid}}", &stop.name]);
-        let output = teardown::run_bounded(inspect, detect::QUERY_TIMEOUT).ok()?;
+        let output = teardown::run_engine(&stop.start, inspect, detect::QUERY_TIMEOUT).ok()?;
         let pid: u32 = String::from_utf8_lossy(&output.stdout)
             .trim()
             .parse()
@@ -634,7 +767,7 @@ fn plan_warnings(profile: &SandboxProfile) -> Vec<Diagnostic> {
 
 /// Die Quellen aus den geöffneten und geprüften Orten (HUM-263): eingehängt
 /// wird der Ort, an dem das Geöffnete liegt (P13).
-fn sources_of(pinned: &PinnedMounts, files: SessionFiles) -> Sources {
+fn sources_of(pinned: &PinnedMounts, files: SessionFiles, handover: PathBuf) -> Sources {
     let resolved = |list: &[crate::pinned::PinnedSource]| {
         list.iter()
             .map(|pin| pin.resolved().to_path_buf())
@@ -654,6 +787,7 @@ fn sources_of(pinned: &PinnedMounts, files: SessionFiles) -> Sources {
             .as_ref()
             .map(|pin| pin.resolved().to_path_buf()),
         files,
+        handover,
     }
 }
 
@@ -953,7 +1087,10 @@ impl EngineDir {
     /// Das Verzeichnis einer Sitzung.
     fn session_dir(&self, session: SessionId) -> SessionDir {
         let root = self.root.join("sessions").join(session.to_string());
+        let handover_dir = root.join("handover");
         SessionDir {
+            handover: handover_dir.join(crate::fd_handover::SOCKET_NAME),
+            handover_dir,
             conmon_pidfile: root.join("conmon.pid"),
             rootfs: root.join("rootfs"),
             files: root.join("files"),
@@ -981,6 +1118,21 @@ impl EngineDir {
             ),
         ];
         // Ohne Verzeichnis lehnt `prepare` ab; vorher gibt es keinen Aufruf.
+        if let Some(dir) = &self.runtime_dir {
+            env.push(("XDG_RUNTIME_DIR".to_owned(), dir.display().to_string()));
+        }
+        if let Some(bus) = &self.bus {
+            env.push(("DBUS_SESSION_BUS_ADDRESS".to_owned(), bus.clone()));
+        }
+        env
+    }
+
+    /// Die Umgebung von `systemd-run` und `systemctl` (HUM-434): das
+    /// Laufzeitverzeichnis des Nutzers, sein Sitzungsbus, `PATH`. Damit
+    /// finden beide den Dienstverwalter des Nutzers; nichts davon erreicht
+    /// Podman, dessen Umgebung in der Zeile der Unit steht.
+    pub(crate) fn manager_env(&self) -> Vec<(String, String)> {
+        let mut env = vec![("PATH".to_owned(), self.path.clone())];
         if let Some(dir) = &self.runtime_dir {
             env.push(("XDG_RUNTIME_DIR".to_owned(), dir.display().to_string()));
         }
@@ -1125,6 +1277,12 @@ impl EngineDir {
 #[derive(Debug, Clone)]
 struct SessionDir {
     root: PathBuf,
+    /// Das Verzeichnis der Übergabe (HUM-434), `0700`, mit nichts darin als
+    /// dem Socket [`SessionDir::handover`] bis zur Übergabe; gebunden wird
+    /// dieses Verzeichnis.
+    handover_dir: PathBuf,
+    /// Der Socket der Übergabe darin.
+    handover: PathBuf,
     conmon_pidfile: PathBuf,
     rootfs: PathBuf,
     files: PathBuf,
@@ -1132,6 +1290,34 @@ struct SessionDir {
 }
 
 impl SessionDir {
+    /// Legt es an ([`Self::create`]), schreibt die Sitzung
+    /// ([`write_session`]) und bindet den Socket der Übergabe (HUM-434).
+    /// Scheitert das Schreiben oder Binden, ist das Verzeichnis danach weg.
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_011`, wenn etwas davon nicht geht.
+    fn write(
+        &self,
+        profile: &SandboxProfile,
+        session: &SessionContext,
+        files: &SessionFiles,
+        skeleton: &BTreeSet<Entry>,
+        shim_env: &[(String, String)],
+        engine: &EngineDir,
+    ) -> Result<HandoverListener, Diagnostic> {
+        self.create()?;
+        let written = write_session(self, profile, session, files, skeleton, shim_env, engine)
+            .and_then(|()| {
+                HandoverListener::bind(&self.handover)
+                    .map_err(|err| not_written(&self.handover, &err))
+            });
+        if written.is_err() {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+        written
+    }
+
     /// Legt es neu an; was von einem früheren Start derselben Sitzung
     /// liegt, geht vorher weg.
     fn create(&self) -> Result<(), Diagnostic> {
@@ -1139,6 +1325,7 @@ impl SessionDir {
             let _ = std::fs::remove_dir_all(&self.root);
         }
         private_dir(&self.root)?;
+        private_dir(&self.handover_dir)?;
         private_dir(&self.files)?;
         std::fs::create_dir_all(&self.rootfs)
             .and_then(|()| {
@@ -1150,7 +1337,14 @@ impl SessionDir {
 
 /// Legt ein Verzeichnis `0700` an, wenn es fehlt.
 fn private_dir(path: &Path) -> Result<(), Diagnostic> {
-    std::fs::create_dir_all(path)
+    use std::os::unix::fs::DirBuilderExt as _;
+
+    // Gleich mit `0700` angelegt, ohne Fenster; ein schon vorhandenes
+    // Verzeichnis bekommt die Rechte danach.
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)
         .and_then(|()| std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)))
         .map_err(|err| not_written(path, &err))
 }
@@ -1260,6 +1454,7 @@ impl SandboxBackend for PodmanBackend {
                 .as_ref()
                 .map(|program| program.host.clone()),
             files: SessionFiles::under(&dir.files, session.files.len()),
+            handover: dir.handover_dir.clone(),
         };
         let (mounts, mut policy) = plan::mounts(
             profile,
@@ -1272,9 +1467,19 @@ impl SandboxBackend for PodmanBackend {
         if let Some(row) = self.image_row() {
             policy.insert(0, row);
         }
-        let spec = self.spec(&engine, &dir, &names, fds, request);
+        let spec = self.spec(&engine, &dir, &names, fds, PREVIEW_TOKEN, request);
+        let line = plan::line(&spec, profile, session, &mounts);
+        // Eine Zeile, die nicht in eine Unit passt, zeigt die Vorschau so,
+        // wie Podman sie bekäme; der Plan lehnt sie dann ab.
+        let argv = self
+            .client_line(
+                session.session,
+                line.clone(),
+                engine.env(&dir.containers_conf),
+            )
+            .map_or(line, |client| client.argv);
         PlanPreview {
-            argv: plan::line(&spec, profile, session, &mounts),
+            argv,
             policy,
             env: profile.effective_env(session, Some(fds.report)),
             backend_env: Vec::new(),
@@ -1331,7 +1536,7 @@ impl SandboxBackend for PodmanBackend {
         let dir = engine.session_dir(session.session);
         let names = Names::of(session.session, &engine);
         let files = SessionFiles::under(&dir.files, session.files.len());
-        let sources = sources_of(&pinned, files.clone());
+        let sources = sources_of(&pinned, files.clone(), dir.handover_dir.clone());
         let fds = Fds::layout(options.stdio.pty_size().is_some());
         let (mounts, _) = plan::mounts(
             profile,
@@ -1347,14 +1552,9 @@ impl SandboxBackend for PodmanBackend {
 
         let env = profile.effective_env(session, Some(fds.report));
         let (agent_env, shim_env) = split_env(&env);
-        dir.create()?;
-        let written = write_session(
-            &dir, profile, session, &files, &skeleton, &shim_env, &engine,
-        );
-        if let Err(diagnostic) = written {
-            let _ = std::fs::remove_dir_all(&dir.root);
-            return Err(diagnostic);
-        }
+        // Der Socket der Übergabe entsteht dabei, bevor die Mounttabelle
+        // Gerät und Inode seiner Quelle liest (HUM-434).
+        let handover = dir.write(profile, session, &files, &skeleton, &shim_env, &engine)?;
         // Die Deskriptoren in der Reihenfolge von `Fds`: Bericht,
         // Lebensleine, Umgebung, Tabelle, am eigenen Pseudoterminal die Tür; die
         // Untertanenseite legt der Start als letzte dazu.
@@ -1362,7 +1562,7 @@ impl SandboxBackend for PodmanBackend {
         let (lifeline, lifeline_read) = new_lifeline()?;
         let env_fd = env_memfd(&agent_env)?;
         // Was der Shim nach dem Einhängen prüft (HUM-437, P13).
-        let pins_fd = mounts::pins(profile, session, &pinned, &mounts, self.root(&dir))?.memfd()?;
+        let pins_fd = self.pins_memfd(profile, session, &pinned, &mounts, &dir)?;
         let (shell_door, shim_door) = BwrapBackend::shell_door(options.stdio)?;
         let mut inherit: Vec<OwnedFd> = vec![report_writer, lifeline_read, env_fd, pins_fd];
         inherit.extend(shim_door);
@@ -1372,8 +1572,15 @@ impl SandboxBackend for PodmanBackend {
             .zip(3..)
             .map(|(fd, target): (&OwnedFd, RawFd)| (fd.as_raw_fd(), target))
             .collect();
-        let spec = self.spec(&engine, &dir, &names, fds, request);
-        let argv = plan::line(&spec, profile, session, &mounts);
+        let spec = self.spec(&engine, &dir, &names, fds, handover.token(), request);
+        // `podman run` liest die `containers.conf` der Sitzung: Nur sie trägt
+        // die Variablen des Shims (Nummer des Berichts, Bridges,
+        // seccomp-Listen).
+        let client = self.client_line(
+            session.session,
+            plan::line(&spec, profile, session, &mounts),
+            engine.env(&dir.containers_conf),
+        )?;
         // Beenden und Entfernen fragen Podman mit der Konfiguration des
         // Daemons, nicht mit der der Sitzung: deren Verzeichnis räumt das
         // Ende des Clients schon weg, und ein `rm` ohne `containers.conf`
@@ -1382,10 +1589,12 @@ impl SandboxBackend for PodmanBackend {
             program: self.program.clone(),
             name: names.container.clone(),
             env: engine.env(&engine.containers_conf()),
+            start: self.start.clone(),
+            unit: client.unit,
         };
         Ok(LaunchPlan {
             session_dir: Some(dir.root.clone()),
-            argv,
+            argv: client.argv,
             argv_env: Vec::new(),
             env,
             fds: fd_pairs,
@@ -1395,25 +1604,28 @@ impl SandboxBackend for PodmanBackend {
             warnings,
             unprotected,
             env_delivery: EnvDelivery::InheritedFd(fds.env),
-            // `podman run` liest die `containers.conf` der Sitzung: Nur sie
-            // trägt die Variablen des Shims (Nummer des Berichts, Bridges,
-            // seccomp-Listen). Das Beenden nimmt die des Daemons, denn das
-            // Verzeichnis der Sitzung ist dann womöglich schon weg.
-            program_env: engine.env(&dir.containers_conf),
+            // Das Beenden nimmt die `containers.conf` des Daemons, denn das
+            // Verzeichnis der Sitzung ist dann womöglich schon weg. Als Unit
+            // steht die Umgebung von Podman in der Zeile, und `systemd-run`
+            // bekommt nur, was es für den Dienstverwalter braucht.
+            program_env: client.env,
             stdio: options.stdio,
             report_timeout: options
                 .report_timeout
                 .unwrap_or(self.settings.start_timeout),
             teardown: Teardown::Container(stop),
             renumbered: true,
-            program: self.program.clone(),
+            program: client.program,
             once: Mutex::new(Some(LaunchOnce {
                 inherit,
                 report: report_reader,
                 status: None,
                 output_sink: options.output_sink.clone(),
                 shells: shell_door.map(crate::shell::DoorSeed::Socket),
-                lifeline: Some(lifeline),
+                detached: Some(Detached {
+                    lifeline,
+                    handover: Some(handover),
+                }),
             })),
         })
     }
@@ -1454,6 +1666,43 @@ impl SandboxBackend for PodmanBackend {
     }
 }
 
+/// Das Zeichen der Übergabe in der Vorschau: Das echte zieht erst der Plan.
+const PREVIEW_TOKEN: &str = "<handover-token>";
+
+/// Wie der Client einer Sitzung startet ([`PodmanBackend::client_line`]).
+struct ClientLine {
+    /// `podman`, oder `systemd-run`.
+    program: PathBuf,
+    /// Die ganze Zeile, `argv[0]` ist [`ClientLine::program`].
+    argv: Vec<OsString>,
+    /// Die Umgebung von [`ClientLine::program`].
+    env: Vec<(String, String)>,
+    /// Die Unit der Sitzung, wenn sie über den Dienstverwalter startet.
+    unit: Option<UnitName>,
+}
+
+/// Wie Podman auf diesem Rechner startet (HUM-434): als Kind, wenn der
+/// Daemon im ersten Nutzer-Namensraum läuft; sonst, unter seiner gehärteten
+/// Unit, über den Dienstverwalter des Nutzers, der dann antworten und
+/// mindestens systemd 254 sein muss.
+///
+/// # Errors
+///
+/// `SANDBOX_050`, wenn der Dienstverwalter gebraucht wird und fehlt, nicht
+/// antwortet oder zu alt ist.
+fn client_start(engine: &EngineDir) -> Result<ClientStart, Diagnostic> {
+    let uid_map = std::fs::read_to_string("/proc/self/uid_map").unwrap_or_default();
+    if !crate::user_unit::needs_user_manager(&uid_map) {
+        return Ok(ClientStart::Direct);
+    }
+    let units = UserUnits::find(&engine.path, engine.manager_env())?;
+    crate::user_unit::check_probe(&teardown::run_bounded(
+        units.probe_command(),
+        detect::QUERY_TIMEOUT,
+    ))?;
+    Ok(ClientStart::UserUnit(units))
+}
+
 /// Die Container, die ein früherer Lauf dieses Daemons liegen ließ
 /// (HUM-433): zuerst die Bestandsaufnahme ([`find_leftovers`]), synchron,
 /// bevor der Daemon einen Start annimmt; das Entfernen ([`Leftovers::remove`])
@@ -1484,16 +1733,22 @@ pub(crate) fn find_leftovers(paths: &Paths, config: &PodmanConfig) -> Leftovers 
         return Leftovers::default();
     };
     let engine = EngineDir::of(paths);
-    if let Err(diagnostic) = engine.prepare() {
-        return Leftovers {
-            diagnostics: vec![diagnostic],
-            ..Leftovers::default()
-        };
-    }
+    let start = engine.prepare().and_then(|()| client_start(&engine));
+    let start = match start {
+        Ok(start) => start,
+        Err(diagnostic) => {
+            return Leftovers {
+                diagnostics: vec![diagnostic],
+                ..Leftovers::default()
+            };
+        }
+    };
     let stop = ContainerStop {
         program,
         name: String::new(),
         env: engine.env(&engine.containers_conf()),
+        start,
+        unit: None,
     };
     match teardown::snapshot(&stop, &format!("{LABEL_KEY}={}", engine.instance)) {
         Ok(found) => Leftovers {

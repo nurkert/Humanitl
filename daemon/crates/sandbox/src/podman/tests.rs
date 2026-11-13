@@ -508,6 +508,155 @@ mod planned {
         );
     }
 
+    /// Die Deskriptoren gehen über den Socket der Sitzung (HUM-434): Er
+    /// liegt im Verzeichnis der Sitzung, nur für den Nutzer, ist nur lesbar
+    /// eingebunden, und die Zeile nennt genau sein Zeichen. Kein
+    /// `--preserve-fds` mehr; aus einem Terminal und in den Tests startet
+    /// Podman als Kind.
+    #[test]
+    fn the_plan_binds_a_private_handover_socket_and_names_its_token() {
+        let fx = Fixture::new(None);
+        let backend = unchecked(&fx.paths);
+        let profile = profile();
+        let session = fx.context(&["true"]);
+        let options = LaunchOptions {
+            stdio: StdioMode::Pty { cols: 80, rows: 24 },
+            ..LaunchOptions::default()
+        };
+        let plan = backend
+            .plan(&PlanRequest::new(&profile, &session, &options))
+            .unwrap_or_else(|d| panic!("{}: {}", d.code, d.why));
+        let argv = strings(&plan.argv);
+        let once = plan.take_once().expect("fresh plan");
+        let handover = once
+            .detached
+            .as_ref()
+            .and_then(|detached| detached.handover.as_ref())
+            .expect("a handover socket");
+        let handover_dir = plan.session_dir.clone().unwrap().join("handover");
+        let socket = handover_dir.join("fds");
+        assert_eq!(handover.path(), socket);
+        {
+            use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _};
+            let meta = std::fs::symlink_metadata(&socket).unwrap();
+            assert!(meta.file_type().is_socket());
+            assert_eq!(meta.mode() & 0o777, 0o600);
+            // Gebunden wird das Verzeichnis: `0700`, und nichts darin als
+            // der Socket, den der Daemon nach dem `accept` entfernt.
+            let dir = std::fs::symlink_metadata(&handover_dir).unwrap();
+            assert_eq!(dir.mode() & 0o777, 0o700);
+            let names: Vec<_> = std::fs::read_dir(&handover_dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(names, ["fds"]);
+        }
+        let token_at = argv
+            .iter()
+            .position(|arg| arg == crate::bridge_env::SHIM_HANDOVER_TOKEN)
+            .expect("--handover-token");
+        assert_eq!(argv[token_at + 1], handover.token());
+        assert!(argv.contains(&format!(
+            "--mount=type=bind,source={},destination=/run/humanitl-handover,readonly=true",
+            handover_dir.display()
+        )));
+        assert!(!argv.iter().any(|arg| arg.starts_with("--preserve-fds")));
+        // Die Untertanenseite legt der Start dazu; sie reist mit über den
+        // Socket, nicht über die Vererbung.
+        assert_eq!(once.inherit.len(), 5);
+        assert_eq!(plan.program, backend.program);
+    }
+
+    /// Unter der gehärteten Unit (HUM-434) startet die Sitzung als Unit
+    /// `humanitl-<sitzung>`: `systemd-run` ist das Programm und bekommt nur
+    /// die Umgebung für den Dienstverwalter; die von Podman steht hinter
+    /// `env -i` in der Zeile, kein Wert des Agenten darin. Das Beenden kennt
+    /// die Unit.
+    #[test]
+    fn under_the_user_manager_the_session_is_a_unit_with_podmans_env_in_the_line() {
+        let fx = Fixture::new(None);
+        let mut backend = unchecked(&fx.paths);
+        backend.program = PathBuf::from("/usr/bin/podman");
+        let units = crate::user_unit::UserUnits::fixed(
+            Path::new("/usr/bin/systemd-run"),
+            Path::new("/usr/bin/systemctl"),
+            vec![("XDG_RUNTIME_DIR".to_owned(), "/run/user/1000".to_owned())],
+        );
+        backend.start = ClientStart::UserUnit(units.clone());
+        let profile = profile();
+        let mut session = fx.context(&["sh", "-c", "true"]);
+        session
+            .session_env
+            .push(("HL_SECRET".to_owned(), "s3cr3t-value".to_owned()));
+        let options = LaunchOptions {
+            stdio: StdioMode::Capture,
+            ..LaunchOptions::default()
+        };
+        let plan = backend
+            .plan(&PlanRequest::new(&profile, &session, &options))
+            .unwrap_or_else(|d| panic!("{}: {}", d.code, d.why));
+        let argv = strings(&plan.argv);
+        assert_eq!(plan.program, Path::new("/usr/bin/systemd-run"));
+        assert_eq!(argv[0], "/usr/bin/systemd-run");
+        let unit = format!("humanitl-{}", session.session);
+        assert!(argv.contains(&format!("--unit={unit}.service")), "{argv:?}");
+        assert!(!argv.iter().any(|arg| arg.contains("RuntimeMaxSec")));
+        let env_at = argv.iter().position(|arg| arg == "/usr/bin/env").unwrap();
+        assert_eq!(argv[env_at + 1..env_at + 3], ["-i", "--"]);
+        let podman_at = argv
+            .iter()
+            .position(|arg| arg == "/usr/bin/podman")
+            .unwrap();
+        let session_conf = plan.session_dir.clone().unwrap().join("containers.conf");
+        assert!(
+            argv[env_at..podman_at]
+                .contains(&format!("CONTAINERS_CONF={}", session_conf.display())),
+            "{argv:?}"
+        );
+        assert_eq!(argv[podman_at + 1], "--runtime=crun");
+        assert!(
+            !argv.iter().any(|arg| arg.contains("s3cr3t-value")),
+            "a value of the agent stands in the line"
+        );
+        assert_eq!(plan.program_env, units.own_env());
+        let Teardown::Container(stop) = &plan.teardown else {
+            panic!("a container is torn down through the engine");
+        };
+        assert_eq!(
+            stop.unit.as_ref().map(UnitName::service),
+            Some(format!("{unit}.service"))
+        );
+        assert_eq!(stop.start, ClientStart::UserUnit(units));
+        // Die Engine sieht die Flags der Quellen aus einem anderen
+        // Namensraum: Binds tragen `*`, tmpfs des Plans ihre eigenen.
+        let pins_host = plan
+            .fds
+            .iter()
+            .find(|(_, target)| *target == 6)
+            .map(|(host, _)| *host)
+            .expect("target 6");
+        let pins: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(format!("/proc/self/fd/{pins_host}")).expect("pins"),
+        )
+        .expect("pins JSON");
+        let flags_at = |point: &str| -> Vec<String> {
+            pins["mounts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry["point"] == point)
+                .map(|entry| entry["flags"].as_str().unwrap_or_default().to_owned())
+                .collect()
+        };
+        assert_eq!(flags_at("/work"), ["*"]);
+        assert_eq!(flags_at("/run/humanitl-handover"), ["*"]);
+        assert!(
+            flags_at("/sys").iter().all(|flags| flags != "*"),
+            "{:?}",
+            flags_at("/sys")
+        );
+    }
+
     /// Unter 6 die Mounttabelle (HUM-437): `/work` mit Gerät und Inode des
     /// geprüften Ordners, die Wurzel der Sitzung, die eigenen Einträge von
     /// Podman.
@@ -585,13 +734,26 @@ mod planned {
             })
             .filter(|arg| !arg.contains("destination=/work/"))
             .collect();
-        let planned: Vec<String> = strings(&plan.argv)
+        // Das Zeichen der Übergabe zieht erst der Plan (HUM-434).
+        let token_at = |argv: &[String]| {
+            argv.iter()
+                .position(|arg| arg == crate::bridge_env::SHIM_HANDOVER_TOKEN)
+                .expect("--handover-token")
+                + 1
+        };
+        let mut planned: Vec<String> = strings(&plan.argv)
             .into_iter()
             .filter(|arg| !arg.contains("destination=/work/"))
             .collect();
+        let mut shown = shown;
+        let (at_plan, at_preview) = (token_at(&planned), token_at(&shown));
+        assert_eq!(shown[at_preview], PREVIEW_TOKEN);
+        assert_eq!(planned[at_plan].len(), crate::fd_handover::TOKEN_LEN);
+        planned[at_plan] = String::new();
+        shown[at_preview] = String::new();
         assert_eq!(shown, planned);
         assert!(
-            planned.contains(&"--preserve-fds=6".to_owned()),
+            !planned.iter().any(|arg| arg.starts_with("--preserve-fds")),
             "{planned:?}"
         );
     }
@@ -2000,9 +2162,6 @@ mod live {
                         )
                         .into();
                 }
-                if text.starts_with("--preserve-fds=") {
-                    *arg = format!("--preserve-fds={}", plan.fds.len() + 1).into();
-                }
             }
             let fd = std::os::fd::OwnedFd::from(opened);
             plan.fds.push((std::os::fd::AsRawFd::as_raw_fd(&fd), next));
@@ -2265,6 +2424,237 @@ mod live {
         assert!(
             stdout.lines().any(|line| line.trim() == host),
             "the CA in the container is not the host's file ({host})\n{report}"
+        );
+    }
+
+    // --- HUM-434: Podman als Unit des Dienstverwalters des Nutzers --------
+
+    /// Nur wer diese Variable auf `1` setzt, lässt die Tests vorübergehende
+    /// Units des Nutzers starten; sonst überspringen sie mit Grund. Gestartet
+    /// werden nur Units `humanitl-test-*`, nie die Unit des Daemons, und
+    /// nichts unter `~/.config/systemd`, `~/.config/humanitl` oder
+    /// `~/.local/state` wird berührt.
+    const REQUIRE_SYSTEMD_ENV: &str = "HUMANITL_REQUIRE_SYSTEMD_USER";
+
+    /// Der Anfang jeder Unit, die ein Test startet.
+    const TEST_UNIT_PREFIX: &str = "humanitl-test-";
+
+    /// Stoppt beim Verlassen jede Unit `humanitl-test-*`, die noch geladen
+    /// ist, auch nach einem Fehlschlag mitten im Test.
+    struct TestUnitsGone;
+
+    impl Drop for TestUnitsGone {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "stop", "--", &format!("{TEST_UNIT_PREFIX}*")])
+                .stdin(Stdio::null())
+                .output();
+        }
+    }
+
+    /// Die Units des Nutzers mit dem Präfix der Tests, wenn
+    /// `HUMANITL_REQUIRE_SYSTEMD_USER=1` und Podman da sind; sonst `None`
+    /// mit Grund auf stderr. Mit der Variable ist ein Dienstverwalter, der
+    /// nicht antwortet, ein Fehlschlag.
+    fn test_units(test: &str) -> Option<UserUnits> {
+        if std::env::var_os(REQUIRE_SYSTEMD_ENV).is_none_or(|value| value != "1") {
+            eprintln!(
+                "skipped: {test} starts transient units of the user's service manager; set \
+                 {REQUIRE_SYSTEMD_ENV}=1 to run it"
+            );
+            return None;
+        }
+        if !podman_here(test) {
+            return None;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = Paths::new(
+            humanitl_config::Env::from_process()
+                .with("XDG_RUNTIME_DIR", dir.path().to_string_lossy()),
+        );
+        let engine = EngineDir::of(&paths);
+        let units = UserUnits::find(&engine.path, engine.manager_env())
+            .unwrap_or_else(|d| panic!("{test}: {}: {}", d.code, d.why))
+            .with_prefix(TEST_UNIT_PREFIX);
+        let probe = teardown::run_bounded(units.probe_command(), Duration::from_secs(10));
+        match crate::user_unit::check_probe(&probe) {
+            Ok(version) => eprintln!("{test}: user service manager is systemd {version}"),
+            Err(d) => panic!("{test}: {}: {}", d.code, d.why),
+        }
+        Some(units)
+    }
+
+    /// `LoadState` und `ActiveState` einer Unit des Nutzers.
+    fn unit_state(unit: &str) -> String {
+        let output = std::process::Command::new("systemctl")
+            .args([
+                "--user",
+                "show",
+                "--property=LoadState,ActiveState",
+                "--",
+                &format!("{unit}.service"),
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .expect("systemctl --user show");
+        String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Ob die Unit weg ist: nicht geladen (eingesammelt) oder nicht aktiv.
+    fn unit_gone(unit: &str) -> bool {
+        let state = unit_state(unit);
+        state.contains("LoadState=not-found") || state.contains("ActiveState=inactive")
+    }
+
+    fn wait_until(what: &str, limit: Duration, done: impl Fn() -> bool) {
+        let started = Instant::now();
+        while !done() {
+            assert!(started.elapsed() < limit, "{what} after {limit:?}");
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+
+    /// Als Unit `humanitl-test-<sitzung>` gestartet: Jede `CHECK`-Zeile ist
+    /// `ok` (die Deskriptoren kamen über die Übergabe), der Exit-Status 7
+    /// kommt an, und danach sind Container und Unit weg; ein `kill` auf eine
+    /// laufende Sitzung lässt ebenso nichts zurück.
+    #[test]
+    fn a_session_as_a_user_unit_checks_ok_passes_exit_seven_and_leaves_nothing() {
+        let test = "a_session_as_a_user_unit_checks_ok_passes_exit_seven_and_leaves_nothing";
+        let Some(units) = test_units(test) else {
+            return;
+        };
+        let _gone = TestUnitsGone;
+        let fx = Fixture::new(Some(real_shim()));
+        let backend = PodmanBackend::detect_via(
+            fx.paths.clone(),
+            &PodmanConfig::default(),
+            Some(ClientStart::UserUnit(units)),
+        )
+        .unwrap_or_else(|d| panic!("{}: {}", d.code, d.why));
+        let options = LaunchOptions {
+            stdio: StdioMode::Capture,
+            ..LaunchOptions::default()
+        };
+        let session = fx.context(&["sh", "-c", "sleep 1; exit 7"]);
+        let unit = format!("{TEST_UNIT_PREFIX}{}", session.session);
+        let handle = launch(&backend, &session, &options);
+        eprintln!("{test}: {} -> {}", unit, unit_state(&unit));
+        let checks = backend.isolation_check(&handle);
+        for check in &checks {
+            assert!(
+                check.passed,
+                "{}: {} ({:?})",
+                check.check.as_str(),
+                check.evidence,
+                handle
+                    .output()
+                    .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+            );
+        }
+        let status = handle
+            .wait()
+            .unwrap_or_else(|d| panic!("{}: {}", d.code, d.why));
+        assert_eq!(status.code(), Some(7));
+        wait_until("the unit is still there", Duration::from_secs(20), || {
+            unit_gone(&unit)
+        });
+        assert!(containers(&fx.paths, &backend).is_empty());
+
+        let session = fx.context(&["sleep", "600"]);
+        let unit = format!("{TEST_UNIT_PREFIX}{}", session.session);
+        let handle = launch(&backend, &session, &options);
+        assert!(handle.child_pid().is_some(), "PID 1 is known on the host");
+        assert!(
+            !unit_gone(&unit),
+            "the session runs in {unit}: {}",
+            unit_state(&unit)
+        );
+        let _ = handle.kill();
+        wait_until(
+            "the container outlived kill",
+            Duration::from_secs(20),
+            || containers(&fx.paths, &backend).is_empty(),
+        );
+        wait_until("the unit outlived kill", Duration::from_secs(20), || {
+            unit_gone(&unit)
+        });
+    }
+
+    /// Stirbt `systemd-run`, der Client der Sitzung im Daemon, läuft die
+    /// Unit erst weiter; die Lebensleine geht zu, der Container endet, das
+    /// Ende ohne Stopp entfernt ihn (HUM-452), und die Unit ist danach weg.
+    #[test]
+    fn a_killed_unit_client_leaves_neither_container_nor_unit() {
+        let test = "a_killed_unit_client_leaves_neither_container_nor_unit";
+        let Some(units) = test_units(test) else {
+            return;
+        };
+        let _gone = TestUnitsGone;
+        let fx = Fixture::new(Some(real_shim()));
+        let backend = PodmanBackend::detect_via(
+            fx.paths.clone(),
+            &PodmanConfig::default(),
+            Some(ClientStart::UserUnit(units)),
+        )
+        .unwrap_or_else(|d| panic!("{}: {}", d.code, d.why));
+        let options = LaunchOptions {
+            stdio: StdioMode::Capture,
+            ..LaunchOptions::default()
+        };
+        let session = fx.context(&["sleep", "600"]);
+        let unit = format!("{TEST_UNIT_PREFIX}{}", session.session);
+        let handle = launch(&backend, &session, &options);
+        let checks = backend.isolation_check(&handle);
+        assert!(checks.iter().all(|check| check.passed), "{checks:?}");
+        let client = rustix::process::Pid::from_raw(i32::try_from(handle.pid).unwrap()).unwrap();
+        rustix::process::kill_process(client, rustix::process::Signal::KILL).unwrap();
+        assert!(handle.wait_timeout(Duration::from_secs(20)).is_some());
+        assert!(handle.wait_teardown(), "the removal after the client ended");
+        let warnings = handle.take_teardown_warnings();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        wait_until(
+            "the container outlived its client",
+            KILL_GRACE + Duration::from_secs(30),
+            || containers(&fx.paths, &backend).is_empty(),
+        );
+        wait_until(
+            "the unit outlived its client",
+            Duration::from_secs(20),
+            || unit_gone(&unit),
+        );
+    }
+
+    /// Ohne jemanden am Socket der Übergabe startet der Agent nie: Der Plan
+    /// wird gestartet, der Socket aber vorher geschlossen. Die Sitzung endet
+    /// mit dem Befund der Übergabe, nicht mit einem Agenten.
+    #[test]
+    fn without_the_handover_the_agent_never_starts() {
+        let test = "without_the_handover_the_agent_never_starts";
+        if !podman_here(test) {
+            return;
+        }
+        let fx = Fixture::new(Some(real_shim()));
+        let backend = real(&fx.paths);
+        let (checks, stderr, ran) = launch_edited(&fx, &backend, |plan| {
+            if let Some(detached) = plan
+                .once
+                .lock()
+                .expect("once")
+                .as_mut()
+                .and_then(|once| once.detached.as_mut())
+            {
+                drop(detached.handover.take());
+            }
+        });
+        eprintln!("{test}: checks={checks:?}\n{stderr}");
+        assert!(!ran, "the agent ran without its descriptors");
+        assert!(
+            checks.iter().all(|check| !check.passed),
+            "a guarantee held without a report: {checks:?}"
         );
     }
 }

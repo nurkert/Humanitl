@@ -96,7 +96,7 @@ pub static AREAS: &[AreaInfo] = &[
                030-032 Wegwerf-Sandbox (HUM-350), 033 Vorgabe fällt auf direkt zurück \
                (HUM-357), 034-036 und 048 Wahl des Backends, Untergrenze der Isolation und \
                Zulassung (HUM-431, Bereich dafür bis 059 erweitert), 037-047 und 049 Podman \
-               (Sprint 7)",
+               (Sprint 7), 050 Dienstverwalter des Nutzers (HUM-434)",
     },
     AreaInfo {
         area: "proxy",
@@ -1774,6 +1774,14 @@ registry! {
     SANDBOX_043 => "sandbox", "Sandbox image missing or not the pinned one", "#sandbox_043",
         "The root of the sandbox is an image of the container engine, named with its digest. Before every start the daemon asks the engine for exactly that digest; the image is missing, the local image under that name has another digest, or its environment sets a variable the shim reads. A start never pulls an image; pulling is a separate step the person asks for, and it uses the network directly, not through the proxy. The same code ends a pull that failed, or that the person cancelled (HUM-457).",
         "`CopyCommand` with `humanitl sandbox image pull <reference>` when the image is missing or another digest is present; `ChangeSetting` back to the host root when the image itself cannot be used.";
+    // HUM-434: the container engine under the hardened user unit of the daemon.
+    /// Under its hardened user unit the daemon starts the container engine
+    /// as a transient unit of the user's service manager (`systemd-run
+    /// --user`), and that manager does not answer, is older than systemd
+    /// 254, or `systemd-run` or `systemctl` is missing (HUM-434).
+    SANDBOX_050 => "sandbox", "User service manager unreachable", "#sandbox_050",
+        "The daemon runs under its hardened user unit, where a rootless container engine cannot map its user namespace. It therefore starts the engine as a transient unit of the user's service manager instead of loosening its own hardening, and that manager did not answer, is older than systemd 254, or `systemd-run` or `systemctl` is missing. The start stops and never takes another backend.",
+        "`CopyCommand` with `systemctl --user status`, which shows whether the user's service manager runs and answers.";
 }
 
 /// Sucht einen Code im Register.

@@ -74,8 +74,10 @@ alone the strictest value of all layers wins, so a project can raise the floor
 and never lower it. A start whose backend is below the floor is refused.
 
 **Podman, plain level (`sandbox.podman.runtime = "crun"`).** One `podman run`
-per session, rootless, started by the daemon with the descriptors of the plan
-inherited through `--preserve-fds`:
+per session, rootless, started by the daemon (under its hardened unit as a
+transient unit of the user's service manager, ADR-0010 addendum, HUM-434); the
+shim takes the descriptors of the plan from a handover socket of the session
+that accepts exactly one connection, no longer through `--preserve-fds`:
 
 - `--network none`, so the container has a network namespace with only `lo`;
 - the proxy socket bound as a single file to the same path as under bwrap;

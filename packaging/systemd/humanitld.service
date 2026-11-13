@@ -43,6 +43,15 @@
 # Wichtig für jede spätere Zeile: Filter und Einschränkungen einer Unit erbt
 # jedes Kind des Daemons, also auch bubblewrap und der Agent in der Sandbox.
 # Was hier steht, gilt für den Agenten mit.
+#
+# **Podman unter dieser Unit (HUM-434).** Für Podman wird hier nichts
+# gelockert. Jede Zeile mit eigenem Mount-Namensraum (`PrivateTmp`,
+# `ProtectSystem`, `PrivateMounts`, `ProtectClock`, `ProtectControlGroups`,
+# `ProtectKernelModules`, `PrivateIPC`, `PrivateUsers`) bricht `newuidmap`
+# (Messung P8, 2026-11-13). Der Daemon startet Podman deshalb als
+# vorübergehende Unit `humanitl-*` des Dienstverwalters des Nutzers
+# (`systemd-run --user`), außerhalb dieser Unit; `docs/SECURITY.md`,
+# Abschnitt „Service hardening", und ADR-0010 nennen den Preis.
 
 [Unit]
 Description=Humanitl moderation daemon
