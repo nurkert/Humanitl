@@ -1,6 +1,6 @@
 ---
 source: adr/0020-podman-sandbox-backend.md
-source-sha256: 07aa604ecde8a576aacf3dd09131e8ff243c6c033bf6edceca92080ef9f615d8
+source-sha256: 36b2a5e500e5e457ab6d50a8e282db6a91909bb66ffb5c029854c730638f30c7
 lang: de
 ---
 # ADR-0020 · Podman als wählbares zweites Sandbox-Backend unter Linux
@@ -279,9 +279,21 @@ in ADR-0010 mit HUM-434, der Rest mit HUM-441:
   `SandboxBackend`; `docker` und `microvm` als spätere Adapter werden durch `podman` ersetzt
   (mit den Laufzeiten `crun` und `krun`).
 
+## Nachtrag 2026-11-13: Die Kernel-Stufe wandert in ADR-0021 (HUM-442)
+
+Die Kernel-Stufe dieser Entscheidung, Podman mit der Laufzeit `krun`, wird ersetzt. libkrun ist
+in Debian nicht paketiert, und der Eigentümer hat entschieden, dass die Stufe nur aus Paketen
+der Distribution gebaut wird. ADR-0021 entscheidet über den Ersatz: einen eigenen Adapter
+`qemu`, eine QEMU-Micro-VM mit virtiofsd und vhost-device-vsock, mit den Messungen des Spikes
+HUM-442. Alles, was diese Entscheidung über die gemeinsame Stufe (`crun`), die Auswahl, die
+Stufen, `sandbox.min_isolation` und die Zulassung sagt, bleibt in Kraft. Wo sie `krun`,
+`libkrun` oder die Kernel-Stufe von Podman nennt, gilt stattdessen ADR-0021; die Laufzeit `krun`
+verschwindet mit HUM-464 aus `sandbox.podman.runtime`.
+
 ## Betroffene Issues
 
 `HUM-292` (der Spike und sein Ergebnis, `backlog/sprint-5.md`), `HUM-428` bis `HUM-449`
 (`backlog/sprint-7.md`), `HUM-145` (die Kopplungs-Sperrklinke), `HUM-263` (der festgehaltene
 Projektordner), `HUM-350` (die Wegwerf-Sandbox), `HUM-448` (die gemeinsame Stufe zugelassen,
-Status Accepted), `HUM-441` (die Nachträge zu ADR-0002, ADR-0010 und ADR-0015).
+Status Accepted), `HUM-441` (die Nachträge zu ADR-0002, ADR-0010 und ADR-0015), `HUM-442`
+(die Kernel-Stufe wandert in ADR-0021, Nachtrag).
