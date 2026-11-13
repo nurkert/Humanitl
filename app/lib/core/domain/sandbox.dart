@@ -13,6 +13,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 import 'diagnostic.dart';
 import 'disposable.dart';
 import 'ids.dart';
+import 'sandbox_backends.dart';
 
 part 'sandbox.freezed.dart';
 
@@ -275,6 +276,13 @@ abstract class SandboxStatus with _$SandboxStatus {
     /// The backend the daemon named, `bwrap` or `seatbelt`; empty until it
     /// has said (HUM-376).
     @Default('') String backend,
+
+    /// The isolation level of [backend], mirror of
+    /// `SandboxEvent.Status.isolation_level` (HUM-432): the running
+    /// session's while one runs, otherwise the one a start with this plan
+    /// would get. Null when the daemon did not say (a failed snapshot, or a
+    /// daemon before contract 1.34).
+    IsolationLevel? isolationLevel,
     @Default('') String llmEndpoint,
     String? workDirHost,
     @Default(WorkMode.rw) WorkMode workMode,

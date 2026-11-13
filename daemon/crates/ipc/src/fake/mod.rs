@@ -848,8 +848,12 @@ impl DaemonApi for FakeDaemon {
     /// und in der Kernel-Stufe nicht zugelassen. Untergrenze, Zulassung und
     /// Laufzeiten kommen aus derselben Liste wie im echten Daemon
     /// ([`humanitl_sandbox::list_backends_with`]), damit der Fake keine
-    /// Codes erfindet.
-    async fn sandbox_backends(&self) -> Result<v1::SandboxBackendList, Diagnostic> {
+    /// Codes erfindet. Ein Plan ändert hier nichts: Der Fake kennt keine
+    /// Projekt-Profile (HUM-440).
+    async fn sandbox_backends(
+        &self,
+        _request: v1::SandboxBackendsRequest,
+    ) -> Result<v1::SandboxBackendList, Diagnostic> {
         let sandbox = humanitl_config::SandboxRef::default();
         let entries =
             humanitl_sandbox::list_backends_with(&sandbox, humanitl_sandbox::AUTO_BACKEND, |_| {

@@ -496,6 +496,7 @@ class _SeatbeltClient extends SandboxTestClient {
   Stream<SandboxUpdate> planSandbox({
     String? profile,
     WorkMode? workMode,
+    String? backend,
   }) async* {
     yield SandboxUpdate.status(sandbox);
   }

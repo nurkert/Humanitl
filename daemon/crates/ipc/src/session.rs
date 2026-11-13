@@ -101,9 +101,13 @@ use humanitl_sandbox::AdapterRegistry;
 pub const SESSION_OVERRIDE_KEYS: &[&str] = &[
     "llm.endpoint",
     "hold.timeout_secs",
-    "sandbox.backend",
+    SANDBOX_BACKEND_KEY,
     "sandbox.podman.runtime",
 ];
+
+/// Der Schlüssel des Backends einer Sitzung, in `Start.cli_overrides` und als
+/// `Plan.backend` (HUM-440).
+const SANDBOX_BACKEND_KEY: &str = "sandbox.backend";
 
 /// Der mitgelieferte Regelsatz.
 ///
@@ -316,15 +320,21 @@ impl SessionResolver {
     /// Resolver aus [`SessionResolver::for_config`] liefert seinen festen
     /// Grundstand.
     ///
+    /// `backend` ist das Backend dieses Laufs (`Plan.backend`, HUM-440): ein
+    /// Paar `sandbox.backend` auf der Ebene der Kommandozeile, genau wie der
+    /// Eintrag in `Start.cli_overrides`, mit derselben Prüfung des Werts.
+    ///
     /// # Errors
     ///
-    /// `CONFIG_001`, wenn es das Profil nicht gibt, und die Befunde des
-    /// Ladens; nie `CONFIG_021`.
+    /// `CONFIG_001`, wenn es das Profil nicht gibt, `CONFIG_003` für ein
+    /// Backend, das das Schema nicht kennt, und die Befunde des Ladens; nie
+    /// `CONFIG_021`.
     pub fn resolve_plan(
         &self,
         profile: Option<String>,
         project: Option<&Path>,
         llm_server: Option<String>,
+        backend: Option<String>,
     ) -> Result<Resolved, Diagnostic> {
         if !self.live {
             return Ok(self.base.clone());
@@ -340,6 +350,9 @@ impl SessionResolver {
         }
         if let Some(server) = llm_server {
             pairs.push((humanitl_config::servers::SERVER.to_owned(), server));
+        }
+        if let Some(backend) = backend {
+            pairs.push((SANDBOX_BACKEND_KEY.to_owned(), backend));
         }
         let cwd = project.map(Path::to_path_buf).or_else(|| stored.clone());
         let mut resolved =

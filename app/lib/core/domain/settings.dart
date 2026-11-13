@@ -63,6 +63,7 @@ abstract final class FormKeys {
     agentAdapter,
     sandboxMode,
     updateCheck,
+    sandboxBackend,
   ];
 
   /// Whether the daemon asks GitHub once a day, at most, for a newer release
@@ -81,6 +82,14 @@ abstract final class FormKeys {
     'direct',
     'disposable',
   ];
+
+  /// The sandbox backend of the next session: `auto` (the default) or one
+  /// of the names `SandboxBackends` lists (HUM-440). Which names exist and
+  /// which of them may be chosen, only the daemon says.
+  static const String sandboxBackend = 'sandbox.backend';
+
+  /// The value of [sandboxBackend] that leaves the choice to the daemon.
+  static const String sandboxBackendAuto = 'auto';
 
   /// The reference to the access key, as the daemon names it in the
   /// `ChangeSetting` fix of `LLM_002` (HUM-275).
@@ -194,6 +203,10 @@ final class ConfigValues {
         'disposable' => SandboxMode.disposable,
         _ => null,
       };
+
+  /// `sandbox.backend` as written, default `auto` (HUM-440).
+  String get sandboxBackend =>
+      _text(FormKeys.sandboxBackend, FormKeys.sandboxBackendAuto);
 
   /// `sandbox.work_dir`, empty when unset.
   String get sandboxWorkDir => _text(FormKeys.sandboxWorkDir, '');

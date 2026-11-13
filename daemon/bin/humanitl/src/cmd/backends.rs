@@ -24,8 +24,10 @@ const HEADERS: [&str; 4] = ["BACKEND", "ISOLATION", "AVAILABLE", "SELECTED"];
 /// die Liste nicht bilden kann.
 pub async fn run(ctx: &Context) -> Result<u8, Failure> {
     let mut client = ctx.connect().await?;
+    // Ohne Plan: die Liste der Konfiguration ohne Wunsch, wie vor Minor 38
+    // (HUM-440).
     let list = client
-        .sandbox_backends(())
+        .sandbox_backends(v1::SandboxBackendsRequest::default())
         .await
         .map_err(|status| Failure::new(status_diagnostic(&status, "SandboxBackends")))?
         .into_inner();
@@ -149,6 +151,7 @@ mod tests {
     fn list() -> v1::SandboxBackendList {
         v1::SandboxBackendList {
             min_isolation: v1::IsolationLevel::Policy as i32,
+            auto_backend: "native".to_owned(),
             backends: vec![
                 v1::SandboxBackend {
                     name: "native".to_owned(),

@@ -31,6 +31,7 @@ import '../../../core/ui/diagnostic_severity.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
 import '../sandbox_text.dart';
+import 'backend_section.dart';
 import 'refusals_section.dart';
 
 /// Diameter of the dot in front of a guarantee.
@@ -82,6 +83,9 @@ class IsolationPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
+          // Welches Backend, und welche Stufe, vor dem, was darin gemessen
+          // wurde (HUM-440).
+          SandboxBackendSection(status: status),
           // The measure of a sentence, not the width of the pane: a line of
           // prose that runs the whole way across is a line nobody reads to
           // the end (CONVENTIONS 4.13, "Handwerk sichtbar machen"). The

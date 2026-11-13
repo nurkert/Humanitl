@@ -243,7 +243,8 @@ pub trait DaemonApi: Send + Sync + 'static {
     }
 
     /// Die Sandbox-Backends dieses Systems mit Stufe, Verfügbarkeit und dem,
-    /// was fehlt (HUM-432). Startet nichts.
+    /// was fehlt (HUM-432). Startet nichts. Mit `plan` gemessen an der
+    /// Konfiguration eines Starts mit diesem Plan (HUM-440).
     ///
     /// Die Vorgabe antwortet `IPC_006`: Ein Daemon ohne Sandbox hat keine
     /// Backends, die er nennen könnte.
@@ -251,7 +252,10 @@ pub trait DaemonApi: Send + Sync + 'static {
     /// # Errors
     ///
     /// [`Diagnostic`] mit `IPC_006` oder dem Befund der Konfiguration.
-    async fn sandbox_backends(&self) -> Result<v1::SandboxBackendList, Diagnostic> {
+    async fn sandbox_backends(
+        &self,
+        _request: v1::SandboxBackendsRequest,
+    ) -> Result<v1::SandboxBackendList, Diagnostic> {
         Err(Diagnostic::builder(
             humanitl_core::diagnostics::codes::IPC_006,
             humanitl_core::Severity::Error,
@@ -692,11 +696,11 @@ impl<T: DaemonApi> v1::humanitl_server::Humanitl for DaemonService<T> {
 
     async fn sandbox_backends(
         &self,
-        request: Request<()>,
+        request: Request<v1::SandboxBackendsRequest>,
     ) -> Result<Response<v1::SandboxBackendList>, Status> {
         self.check_token(&request)?;
         self.api
-            .sandbox_backends()
+            .sandbox_backends(request.into_inner())
             .await
             .map(Response::new)
             .map_err(|diagnostic| diagnostic_to_status(&diagnostic))

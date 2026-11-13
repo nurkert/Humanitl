@@ -104,13 +104,18 @@ class HomeRefusingClient extends FakeDaemonClient {
   Stream<SandboxUpdate> planSandbox({
     String? profile,
     WorkMode? workMode,
+    String? backend,
   }) async* {
     if (sandbox.workDirHost == home) {
       yield SandboxUpdate.diagnostic(refusal(home, storedSource));
       yield SandboxUpdate.status(sandbox.copyWith(state: SandboxState.failed));
       return;
     }
-    yield* super.planSandbox(profile: profile, workMode: workMode);
+    yield* super.planSandbox(
+      profile: profile,
+      workMode: workMode,
+      backend: backend,
+    );
   }
 }
 

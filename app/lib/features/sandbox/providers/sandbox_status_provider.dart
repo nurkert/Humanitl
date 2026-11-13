@@ -17,6 +17,7 @@ import '../../../core/ipc/config_providers.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/daemon_client.dart';
 
+import 'backend_choice.dart';
 import 'closed_failures.dart';
 import 'disposable_review.dart';
 
@@ -52,8 +53,19 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     listenSelf((AsyncValue<SandboxStatus>? _, AsyncValue<SandboxStatus> _) {
       _reconcileWorkDir();
     });
+    // Der Schnappschuss ist der eines Starts mit dem Backend der Sitzung
+    // (HUM-440): Ändert sich die Wahl, fragt er neu, und die Befunde unter
+    // dem Startknopf sind die dieses Backends.
+    ref.listen<String?>(sessionSandboxBackendProvider, (
+      String? before,
+      String? now,
+    ) {
+      if (before != now) {
+        unawaited(refresh());
+      }
+    });
     SandboxStatus status = await _drain(
-      client.sandboxStatus(),
+      _snapshot(client),
       call: SandboxCall.status,
     );
     // The ring in the header reads this provider and is on screen from the
@@ -70,6 +82,22 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     return status;
   }
 
+  /// The backend of the session for `Plan.backend` and the start, or null
+  /// for the setting (HUM-440, [sessionSandboxBackendProvider]).
+  String? get _backend => ref.read(sessionSandboxBackendProvider);
+
+  /// The question for a snapshot: `Sandbox(Status)`, or, while the session
+  /// has a backend of its own, `Sandbox(Plan)` with nothing but
+  /// `Plan.backend` (HUM-440). `Status` carries no plan; an empty plan with
+  /// the backend is the same question for a start on that backend, and it
+  /// changes nothing in the daemon.
+  Stream<SandboxUpdate> _snapshot(DaemonClient client) {
+    final String? backend = _backend;
+    return backend == null
+        ? client.sandboxStatus()
+        : client.planSandbox(backend: backend);
+  }
+
   /// Asks again. Used when the section becomes visible.
   ///
   /// A sandbox that was already up when this screen opened -- started from
@@ -79,11 +107,7 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
   /// asked (CONVENTIONS 4.13).
   Future<void> refresh() async {
     final int generation = ++_snapshots;
-    await _apply(
-      (DaemonClient client) => client.sandboxStatus(),
-      call: SandboxCall.status,
-      generation: generation,
-    );
+    await _apply(_snapshot, call: SandboxCall.status, generation: generation);
     if (generation == _snapshots && (state.value?.isUp ?? false)) {
       await _apply(
         (DaemonClient client) => client.checkIsolation(),
@@ -102,7 +126,8 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
   Future<void> plan({WorkMode? workMode}) {
     _plannedWorkDir = _storedWorkDir ?? _plannedWorkDir;
     return _apply(
-      (DaemonClient client) => client.planSandbox(workMode: workMode),
+      (DaemonClient client) =>
+          client.planSandbox(workMode: workMode, backend: _backend),
       call: SandboxCall.plan,
       generation: ++_snapshots,
     );
@@ -168,7 +193,7 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     _plannedWorkDir = stored;
     unawaited(
       _apply(
-        (DaemonClient client) => client.planSandbox(),
+        (DaemonClient client) => client.planSandbox(backend: _backend),
         call: SandboxCall.plan,
         generation: ++_snapshots,
       ),
@@ -248,7 +273,7 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     }
     _plannedWorkDir = workDir;
     await _apply(
-      (DaemonClient client) => client.planSandbox(),
+      (DaemonClient client) => client.planSandbox(backend: _backend),
       call: SandboxCall.plan,
       choice: mine,
       generation: ++_snapshots,
@@ -286,6 +311,10 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
   /// daemon takes `sandbox.mode` (HUM-351, HUM-357). A choice equal to the
   /// default would turn the default `auto`, which may fall back to direct,
   /// into an explicit mode the person never changed.
+  ///
+  /// The backend chosen on the screen goes along the same way
+  /// ([sandboxBackendOverride], HUM-440): only when it differs from
+  /// `sandbox.backend`, as `Start.cli_overrides`.
   Future<void> start() {
     final bool offered =
         ref.read(daemonInfoProvider).value?.offersDisposable ?? false;
@@ -297,8 +326,13 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
       state.value,
     );
     final SandboxMode? mode = choice == fallback ? null : choice;
+    // Das Backend dieser Sitzung (HUM-440): nur eine Wahl, die von
+    // `sandbox.backend` abweicht und wählbar ist, geht als `cli_overrides`
+    // mit, dieselbe, die der Schnappschuss als `Plan.backend` trägt.
+    final String? backend = _backend;
     return _apply(
-      (DaemonClient client) => client.startSandbox(sandboxMode: mode),
+      (DaemonClient client) =>
+          client.startSandbox(sandboxMode: mode, backend: backend),
       call: SandboxCall.start,
     );
   }
@@ -403,7 +437,7 @@ class SandboxStatusNotifier extends _$SandboxStatusNotifier {
     });
     final Future<void> asked =
         _apply(
-          (DaemonClient client) => client.sandboxStatus(),
+          _snapshot,
           call: SandboxCall.status,
           clearDiagnostics: false,
           generation: _snapshots,

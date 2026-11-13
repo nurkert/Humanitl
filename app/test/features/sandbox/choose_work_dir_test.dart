@@ -82,6 +82,7 @@ class ChooseClient extends FakeDaemonClient {
   Stream<SandboxUpdate> planSandbox({
     String? profile,
     WorkMode? workMode,
+    String? backend,
   }) async* {
     plans++;
     if (planGate case final Completer<void> gate) {
@@ -92,7 +93,11 @@ class ChooseClient extends FakeDaemonClient {
       yield SandboxUpdate.status(at);
       return;
     }
-    yield* super.planSandbox(profile: profile, workMode: workMode);
+    yield* super.planSandbox(
+      profile: profile,
+      workMode: workMode,
+      backend: backend,
+    );
   }
 
   /// Die Ordner, die `SetConfig` angenommen hat, in der Reihenfolge der

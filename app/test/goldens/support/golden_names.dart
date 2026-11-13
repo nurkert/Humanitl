@@ -107,4 +107,7 @@ const List<String> goldenNames = <String>[
   'settings_server_detail',
   'settings_server_new',
   'sandbox_server_confirm',
+  // sandbox_backend_golden_test.dart (HUM-440)
+  'settings_sandbox_backend',
+  'sandbox_backend_choice',
 ];

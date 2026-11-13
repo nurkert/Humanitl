@@ -89,9 +89,14 @@ service Humanitl {
   // und `krun` mit eigener Verfuegbarkeit. Die Antwort fragt das System wie
   // die Suche vor einem Start und startet nichts; den Probestart macht
   // `Doctor` (HUM-436). Oberflaeche und Kommandozeile pruefen nichts selbst
-  // (ADR-018). Ein Daemon vor Minor 34 kennt den Aufruf nicht
-  // (`UNIMPLEMENTED`).
-  rpc SandboxBackends(google.protobuf.Empty) returns (SandboxBackendList);
+  // (ADR-018). Mit `SandboxBackendsRequest.plan` misst die Antwort an der
+  // Konfiguration, die ein Start mit diesem Plan bekaeme, samt dem
+  // Projekt-Profil seines Ordners, dem Profil der Sitzung und `Plan.backend`
+  // (HUM-440); ohne Plan an der Konfiguration ohne Wunsch, wie sie auf der
+  // Platte steht, mit dem Projekt-Profil des gespeicherten Ordners. Ein
+  // Daemon vor Minor 34 kennt den Aufruf nicht (`UNIMPLEMENTED`), einer vor
+  // Minor 38 nimmt `Empty` und antwortet immer wie ohne Plan.
+  rpc SandboxBackends(SandboxBackendsRequest) returns (SandboxBackendList);
 }
 
 // ---------- Info ----------
@@ -1144,6 +1149,15 @@ message SandboxRequest {
     // den das Profil waehlt. Ein Profil, das es nicht gibt, ist `CONFIG_001`
     // wie beim Start. Leer heisst: das Profil ohne Wunsch.
     string session_profile = 6;
+    // Wie `sandbox.backend` in `Start.cli_overrides` (HUM-440): Der
+    // Schnappschuss ist der eines Starts mit diesem Backend, samt den
+    // Befunden, die einen solchen Start aufhielten (`SANDBOX_034` bis
+    // `SANDBOX_036`, `SANDBOX_048`, die Suche des Backends). Ein Name, den
+    // das Schema nicht kennt, ist `CONFIG_003` wie beim Start. Leer heisst:
+    // `sandbox.backend` der Konfiguration. Waehrend eine Sitzung laeuft, gilt
+    // ihr Backend. Ein Daemon vor Minor 38 kennt das Feld nicht und nimmt die
+    // Einstellung.
+    string backend = 7;
   }
 }
 
@@ -1540,16 +1554,32 @@ enum IsolationLevel {
   ISOLATION_LEVEL_KERNEL = 3;
 }
 
+// Die Anfrage von `SandboxBackends` (HUM-440). Ohne gesetztes Feld auf der
+// Leitung dieselbe leere Nachricht wie `Empty` vor Minor 38.
+message SandboxBackendsRequest {
+  // Der Plan, an dessen Konfiguration die Liste gemessen wird, wie
+  // `SandboxRequest.plan`: Projekt-Profil des Ordners (leeres `work_dir`
+  // heisst der gespeicherte Ordner), Profil der Sitzung und `backend`
+  // werden zusammengefuehrt wie bei einem Start mit diesem Plan. Ein
+  // Ordner, der keiner sein darf, ist `SANDBOX_006` wie im Plan. Ohne Plan
+  // gilt die Konfiguration ohne Wunsch, wie vor Minor 38.
+  SandboxRequest.Plan plan = 1;
+}
+
 // Die Antwort von `SandboxBackends`.
 message SandboxBackendList {
   // Die Backends, die es auf dieser Art System geben kann, in fester
   // Reihenfolge: unter Linux das Backend des Systems und `podman`, unter
   // macOS nur das Backend des Systems.
   repeated SandboxBackend backends = 1;
-  // Die Untergrenze `sandbox.min_isolation` der Konfiguration ohne Projekt,
-  // der strengste Wert aller Ebenen. Ein Projekt-Profil kann sie fuer seinen
-  // Ordner heben; das sagt erst der Plan dieses Ordners (`SANDBOX_035`).
+  // Die Untergrenze `sandbox.min_isolation`, der strengste Wert aller
+  // Ebenen der Konfiguration, an der die Liste misst, samt dem
+  // Projekt-Profil, das sie fuer seinen Ordner heben kann.
   IsolationLevel min_isolation = 2;
+  // Der Name des Backends, das `auto` auf diesem System meint, einer der
+  // Namen in `backends` (HUM-440). Ob ein Start mit `auto` ginge, sagt
+  // dessen Eintrag. Leer bei einem Daemon vor Minor 38.
+  string auto_backend = 3;
 }
 
 // Ein Sandbox-Backend und was ihm auf diesem System fehlt.
@@ -1560,15 +1590,14 @@ message SandboxBackend {
   // Laufzeit (`sandbox.podman.runtime`).
   IsolationLevel isolation_level = 2;
   // Ob ein Start mit diesem Backend die Wahl bestuende, gemessen an der
-  // Konfiguration ohne Projekt-Profil: Es ist zugelassen, auf dem System
-  // vorhanden, liegt nicht unter `min_isolation`, und das Sandbox-Profil aus
-  // `sandbox.profile` verlangt kein anderes. Ein Projekt-Profil kann die
-  // Untergrenze fuer seinen Ordner noch heben; das sagt erst der Plan dieses
-  // Ordners. Sonst steht der Grund in `diagnostics`. Falsch heisst nie, dass
-  // ein anderes Backend einspringt.
+  // Konfiguration der Anfrage (siehe `SandboxBackends`): Es ist zugelassen, auf dem System vorhanden, liegt nicht unter
+  // `min_isolation`, und das Sandbox-Profil verlangt kein anderes. Sonst
+  // steht der Grund in `diagnostics`. Falsch heisst nie, dass ein anderes
+  // Backend einspringt.
   bool available = 3;
-  // Ob `sandbox.backend` der Konfiguration ohne Projekt dieses Backend
-  // waehlt; `auto` ist das Backend des Systems. Hoechstens eines.
+  // Ob `sandbox.backend` dieser Konfiguration dieses Backend waehlt, mit
+  // Plan samt `Plan.backend`; `auto` ist `SandboxBackendList.auto_backend`.
+  // Hoechstens eines.
   bool selected = 4;
   // Was einem Start im Weg steht, mit `why` und, wo es einen gibt, `fix`:
   // `SANDBOX_034` (nicht vorhanden), `SANDBOX_036` (das Sandbox-Profil

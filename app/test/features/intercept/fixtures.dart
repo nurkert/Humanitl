@@ -301,14 +301,18 @@ class TestDaemonClient implements DaemonClient {
   );
 
   @override
-  Stream<SandboxUpdate> planSandbox({String? profile, WorkMode? workMode}) =>
-      const Stream<SandboxUpdate>.empty();
+  Stream<SandboxUpdate> planSandbox({
+    String? profile,
+    WorkMode? workMode,
+    String? backend,
+  }) => const Stream<SandboxUpdate>.empty();
 
   @override
   Stream<SandboxUpdate> startSandbox({
     String? profile,
     WorkMode? workMode,
     SandboxMode? sandboxMode,
+    String? backend,
   }) => const Stream<SandboxUpdate>.empty();
 
   // Die Wegwerf-Sandbox (HUM-351): Dieser Client nennt die Fähigkeit nicht,
@@ -372,7 +376,7 @@ class TestDaemonClient implements DaemonClient {
   // Die Liste der Backends gehört den Einstellungen (HUM-432, HUM-440); eine
   // leere Liste behauptet hier nichts.
   @override
-  Future<SandboxBackendList> sandboxBackends() async =>
+  Future<SandboxBackendList> sandboxBackends({String? backend}) async =>
       const SandboxBackendList();
 
   // Das Ziehen eines Abbilds gehört dem Sandbox-Bildschirm (HUM-439); dieser

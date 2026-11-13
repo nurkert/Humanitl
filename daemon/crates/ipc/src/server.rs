@@ -2216,38 +2216,52 @@ impl v1::humanitl_server::Humanitl for IpcServer {
     /// Die Sandbox-Backends dieses Systems (HUM-432,
     /// [`humanitl_sandbox::list_backends`]).
     ///
-    /// Gemessen an der Konfiguration, wie sie jetzt auf der Platte steht und
-    /// ohne Projekt: Ihr `sandbox.backend` ist das gewählte, ihre Untergrenze
-    /// die, an der jeder Eintrag gemessen wird, und ihr Sandbox-Profil das,
-    /// dessen Anforderung an das Backend gilt. Die Antwort fragt das System
-    /// wie die Suche vor einem Start und startet nichts; das läuft in
+    /// Ohne Plan gemessen an der Konfiguration ohne Wunsch, wie sie jetzt
+    /// auf der Platte steht, mit dem Projekt-Profil des gespeicherten
+    /// Ordners: Ihr `sandbox.backend` ist das gewählte, ihre
+    /// Untergrenze die, an der jeder Eintrag gemessen wird, und ihr
+    /// Sandbox-Profil das, dessen Anforderung an das Backend gilt. Mit Plan
+    /// (HUM-440) an der Konfiguration, die ein Start mit diesem Plan bekäme
+    /// ([`crate::SandboxService::plan_sandbox`]): Ein Projekt-Profil, das die
+    /// Untergrenze hebt, steht damit schon in der Liste und nicht erst im
+    /// Befund des Starts, auch für einen anderen Ordner, ein Profil der
+    /// Sitzung oder `Plan.backend`. Ein Daemon ohne Sandbox-Dienst kennt keinen Plan
+    /// und antwortet wie ohne. Die Antwort fragt das System wie die Suche vor
+    /// einem Start und startet nichts; das läuft in
     /// [`tokio::task::spawn_blocking`], weil die Suche kurze Programme
     /// startet. Die Antwort braucht keine laufende Sandbox: Welche Backends
     /// es gibt, ist eine Tatsache des Systems.
     async fn sandbox_backends(
         &self,
-        _request: Request<()>,
+        request: Request<v1::SandboxBackendsRequest>,
     ) -> Result<Response<v1::SandboxBackendList>, Status> {
         let paths = self.doctor.paths.clone();
         let service = self.sandbox.clone();
+        let plan = request.into_inner().plan;
         let list = tokio::task::spawn_blocking(move || {
-            let resolved = humanitl_config::resolve(
-                &humanitl_config::ProfileSelection::default(),
-                None,
-                paths.env(),
-                &[],
-            )?;
-            let sandbox = &resolved.config.sandbox;
-            // Was das Sandbox-Profil verlangt, wie beim Start (`SANDBOX_036`).
-            // Ohne Sandbox-Dienst und bei einem Profil, das sich nicht lesen
-            // lässt, verlangt es nichts: Den Befund dazu nennt der Plan, und
-            // der Start scheitert an ihm, welches Backend auch gewählt ist.
-            let profile_backend = service
-                .as_ref()
-                .and_then(|service| service.profile_backend(&sandbox.profile).ok())
-                .unwrap_or_else(|| humanitl_sandbox::AUTO_BACKEND.to_owned());
+            let (sandbox, profile_backend) = match (plan, service.as_ref()) {
+                (Some(plan), Some(service)) => service.plan_sandbox(&plan)?,
+                (_, service) => {
+                    let resolved = humanitl_config::resolve(
+                        &humanitl_config::ProfileSelection::default(),
+                        None,
+                        paths.env(),
+                        &[],
+                    )?;
+                    let sandbox = resolved.config.sandbox;
+                    // Was das Sandbox-Profil verlangt, wie beim Start
+                    // (`SANDBOX_036`). Ohne Sandbox-Dienst und bei einem
+                    // Profil, das sich nicht lesen lässt, verlangt es nichts:
+                    // Den Befund dazu nennt der Plan, und der Start scheitert
+                    // an ihm, welches Backend auch gewählt ist.
+                    let profile_backend = service
+                        .and_then(|service| service.profile_backend(&sandbox.profile).ok())
+                        .unwrap_or_else(|| humanitl_sandbox::AUTO_BACKEND.to_owned());
+                    (sandbox, profile_backend)
+                }
+            };
             Ok::<_, Diagnostic>(convert::backend_list_to_proto(
-                &humanitl_sandbox::list_backends(sandbox, &profile_backend, &paths),
+                &humanitl_sandbox::list_backends(&sandbox, &profile_backend, &paths),
                 humanitl_sandbox::IsolationLevel::from(sandbox.min_isolation),
             ))
         })
@@ -3288,7 +3302,7 @@ mod tests {
         let queue = queue();
         let server = server(&queue).with_paths(humanitl_config::Paths::new(env));
         server
-            .sandbox_backends(Request::new(()))
+            .sandbox_backends(Request::new(v1::SandboxBackendsRequest::default()))
             .await
             .expect("the list answers without a sandbox")
             .into_inner()
@@ -3415,7 +3429,7 @@ mod tests {
         let list = server(&queue)
             .with_paths(paths)
             .with_sandbox(service)
-            .sandbox_backends(Request::new(()))
+            .sandbox_backends(Request::new(v1::SandboxBackendsRequest::default()))
             .await
             .expect("the list answers")
             .into_inner();
@@ -3429,6 +3443,148 @@ mod tests {
         assert!(
             !codes_of(&podman.diagnostics).contains(&"SANDBOX_036"),
             "{podman:?}"
+        );
+    }
+
+    /// Das Backend der Liste neben dem des Systems (HUM-440).
+    #[cfg(target_os = "linux")]
+    fn other_backend() -> &'static str {
+        humanitl_sandbox::LISTED_BACKENDS
+            .iter()
+            .copied()
+            .find(|name| *name != humanitl_sandbox::PLATFORM_BACKEND_NAME)
+            .expect("Linux lists a second backend")
+    }
+
+    /// Ein Sandbox-Dienst über einem Resolver, der von der Platte liest, wie
+    /// im Daemon, mit einem leeren Ordner als `PATH` (HUM-440).
+    #[cfg(target_os = "linux")]
+    fn live_sandbox(
+        home: &std::path::Path,
+        config_home: &std::path::Path,
+    ) -> (humanitl_config::Paths, crate::SandboxService) {
+        let bin = home.join("bin");
+        std::fs::create_dir_all(&bin).expect("bin");
+        let env = humanitl_config::Env::from_pairs([
+            ("HOME", home.display().to_string()),
+            ("XDG_CONFIG_HOME", config_home.display().to_string()),
+            ("XDG_DATA_HOME", home.join("data").display().to_string()),
+            ("XDG_RUNTIME_DIR", home.join("run").display().to_string()),
+            ("PATH", bin.display().to_string()),
+        ]);
+        let paths = humanitl_config::Paths::new(env);
+        let at_start = humanitl_config::resolve(
+            &humanitl_config::ProfileSelection::default(),
+            None,
+            paths.env(),
+            &[],
+        )
+        .expect("the configuration resolves");
+        let service = crate::SandboxService::new(
+            crate::session::SessionResolver::new(paths.clone(), at_start),
+            humanitl_core::SessionId::new(),
+            crate::sandbox::SandboxPorts::none(),
+        );
+        (paths, service)
+    }
+
+    /// Mit Plan misst die Liste an der Konfiguration eines Starts mit diesem
+    /// Plan (HUM-440): Das Projekt-Profil des Ordners im Plan hebt die
+    /// Untergrenze auf `kernel`, und jedes Backend der Liste ist dann mit
+    /// der Stufe seiner gewählten Laufzeit unverfügbar mit `SANDBOX_035`.
+    /// Ohne Plan bleibt die
+    /// Antwort die der Konfiguration ohne Wunsch, deren gespeicherter Ordner
+    /// kein Projekt-Profil hat. `Plan.backend` wählt in der Liste,
+    /// `auto_backend` nennt das Backend hinter `auto`.
+    ///
+    /// Mutation proof: die Liste mit Plan aus der Konfiguration ohne Wunsch
+    /// (wie vor HUM-440) nennt hier die Untergrenze `policy` und kein
+    /// `SANDBOX_035`.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn sandbox_backends_with_a_plan_measures_against_the_project() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let config_home = home.path().join("config");
+        std::fs::create_dir_all(config_home.join("humanitl")).expect("config dir");
+        let project = home.path().join("project");
+        std::fs::create_dir_all(&project).expect("project");
+        let raised = home.path().join("raised");
+        std::fs::create_dir_all(raised.join(".humanitl")).expect("raised");
+        std::fs::write(
+            raised.join(".humanitl/profile.toml"),
+            "[config.sandbox]\nmin_isolation = \"kernel\"\n",
+        )
+        .expect("project profile");
+        std::fs::write(
+            config_home.join("humanitl/config.toml"),
+            format!(
+                "[sandbox]\nwork_dir = {:?}\n",
+                project.display().to_string()
+            ),
+        )
+        .expect("config.toml");
+        let (paths, service) = live_sandbox(home.path(), &config_home);
+        let queue = queue();
+        let server = server(&queue).with_paths(paths).with_sandbox(service);
+        let ask = |plan: Option<v1::sandbox_request::Plan>| {
+            server.sandbox_backends(Request::new(v1::SandboxBackendsRequest { plan }))
+        };
+
+        let without = ask(None).await.expect("the list answers").into_inner();
+        assert_eq!(without.min_isolation, v1::IsolationLevel::Policy as i32);
+        assert_eq!(
+            without.auto_backend,
+            humanitl_sandbox::PLATFORM_BACKEND_NAME
+        );
+        for entry in &without.backends {
+            assert!(
+                !codes_of(&entry.diagnostics).contains(&"SANDBOX_035"),
+                "{entry:?}"
+            );
+        }
+
+        let in_raised = v1::sandbox_request::Plan {
+            work_dir: raised.display().to_string(),
+            ..v1::sandbox_request::Plan::default()
+        };
+        let with = ask(Some(in_raised.clone()))
+            .await
+            .expect("the list answers")
+            .into_inner();
+        assert_eq!(with.min_isolation, v1::IsolationLevel::Kernel as i32);
+        assert_eq!(with.auto_backend, humanitl_sandbox::PLATFORM_BACKEND_NAME);
+        for name in humanitl_sandbox::LISTED_BACKENDS {
+            let entry = backend(&with, name);
+            assert!(!entry.available, "{entry:?}");
+            assert!(
+                codes_of(&entry.diagnostics).contains(&"SANDBOX_035"),
+                "{entry:?}"
+            );
+        }
+        // Die gewählte Laufzeit des anderen Backends liegt ebenso darunter.
+        let other = other_backend();
+        let runtime = backend(&with, other)
+            .runtimes
+            .iter()
+            .find(|runtime| runtime.selected)
+            .expect("the chosen runtime is listed");
+        assert!(
+            codes_of(&runtime.diagnostics).contains(&"SANDBOX_035"),
+            "{runtime:?}"
+        );
+        assert!(backend(&with, humanitl_sandbox::PLATFORM_BACKEND_NAME).selected);
+
+        let chosen = ask(Some(v1::sandbox_request::Plan {
+            backend: other.to_owned(),
+            ..in_raised
+        }))
+        .await
+        .expect("the list answers")
+        .into_inner();
+        assert!(backend(&chosen, other).selected, "{chosen:?}");
+        assert!(
+            !backend(&chosen, humanitl_sandbox::PLATFORM_BACKEND_NAME).selected,
+            "{chosen:?}"
         );
     }
 

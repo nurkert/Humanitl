@@ -852,6 +852,45 @@ impl SandboxService {
         Ok(SandboxProfile::load(&path)?.sandbox.backend)
     }
 
+    /// Die Gruppe `sandbox` und die Anforderung des Sandbox-Profils, die ein
+    /// Start mit diesem Plan bekäme (HUM-440, für `SandboxBackends` mit
+    /// Plan). Blockierend: liest Konfiguration und Profil.
+    ///
+    /// Dieselbe Auflösung wie der Schnappschuss eines `Plan`
+    /// (`Inner::plan_config`): Projekt-Profil des Ordners, Profil der
+    /// Sitzung und `Plan.backend`, und während eine Sitzung läuft deren
+    /// Konfiguration. Der Wunsch wird wie dort geprüft, aber nicht gemerkt.
+    /// Ein Sandbox-Profil, das sich nicht lesen lässt, verlangt kein Backend,
+    /// wie in der Liste ohne Plan: Den Befund dazu nennt der Plan.
+    ///
+    /// # Errors
+    ///
+    /// Die Befunde des Plans: `CONFIG_001` und `CONFIG_003` für Profil der
+    /// Sitzung und Backend, `CONFIG_003` für einen Profilnamen, der keiner
+    /// ist, `SANDBOX_006` für einen Ordner, der kein Projekt sein darf.
+    pub fn plan_sandbox(
+        &self,
+        plan: &v1::sandbox_request::Plan,
+    ) -> Result<(humanitl_config::SandboxRef, String), Diagnostic> {
+        self.inner.consistent(
+            plan,
+            |config, refused| {
+                if let Some(found) = refused {
+                    return Err(found.clone());
+                }
+                let wish = self.inner.plan_choice(config, plan)?;
+                let name = self
+                    .inner
+                    .profile_name(config, &self.inner.staged(&wish), plan);
+                let profile_backend = self
+                    .profile_backend(&name)
+                    .unwrap_or_else(|_| humanitl_sandbox::AUTO_BACKEND.to_owned());
+                Ok((config.sandbox.clone(), profile_backend))
+            },
+            drop,
+        )
+    }
+
     /// Das Terminal, das ein `Open` meint: mit `shell_id` das einer weiteren
     /// Shell (HUM-299), sonst das des Agenten.
     ///
@@ -1198,10 +1237,14 @@ impl Inner {
     /// would get: the session profile (`Plan.session_profile`), the project
     /// profile of the plan's folder (or the stored one) and the server of the
     /// run (`Plan.llm_server`), so preview, `opencode.json`, endpoint and
-    /// server all name the same saved server. A resolution that fails falls
-    /// back to the slot; the second value is its diagnostic when the plan
-    /// asked for a session profile (`CONFIG_001` for one that does not
-    /// exist), otherwise the start reports it itself.
+    /// server all name the same saved server. Since HUM-440 the backend of
+    /// the run (`Plan.backend`) joins them, as `sandbox.backend` in
+    /// `Start.cli_overrides` would: choice, preflight and snapshot are the
+    /// ones of a start on that backend. A resolution that fails falls back
+    /// to the slot; the second value is its diagnostic when the plan asked
+    /// for a session profile or a backend (`CONFIG_001` for a profile that
+    /// does not exist, `CONFIG_003` for a backend the schema does not know),
+    /// otherwise the start reports it itself.
     fn plan_config(&self, plan: &v1::sandbox_request::Plan) -> (Arc<Config>, Option<Diagnostic>) {
         if self.holds_session_config() {
             return (self.config(), None);
@@ -1213,11 +1256,17 @@ impl Inner {
                 .map(|(dir, _)| dir.clone())
         });
         let profile = non_empty(&plan.session_profile);
-        let asked = profile.is_some();
-        match self
-            .resolver
-            .resolve_plan(profile, project.as_deref(), non_empty(&plan.llm_server))
-        {
+        // Unverändert wie in `Start.cli_overrides`: Nur der leere Text heißt
+        // keine Wahl; ein Name mit Leerzeichen ist dort `CONFIG_003` und hier
+        // ebenso.
+        let backend = (!plan.backend.is_empty()).then(|| plan.backend.clone());
+        let asked = profile.is_some() || backend.is_some();
+        match self.resolver.resolve_plan(
+            profile,
+            project.as_deref(),
+            non_empty(&plan.llm_server),
+            backend,
+        ) {
             Ok(now) => (Arc::new(now.config), None),
             Err(diagnostic) => {
                 tracing::debug!(
@@ -4903,6 +4952,10 @@ fn plan_of(start: &v1::sandbox_request::Start) -> v1::sandbox_request::Plan {
         work_dir_source: start.work_dir_source.clone(),
         llm_server: start.llm_server.clone(),
         session_profile: start.session_profile.clone(),
+        // Das Backend eines Starts steht in `cli_overrides` und gilt über
+        // die Konfiguration der Sitzung, die `apply_session` auflöst
+        // (HUM-440); der Plan braucht es nicht ein zweites Mal.
+        backend: String::new(),
     }
 }
 
@@ -7019,6 +7072,16 @@ mod tests {
         home: &tempfile::TempDir,
         ports: SandboxPorts,
     ) -> (SandboxService, humanitl_config::Paths) {
+        live_service_with(home, ports, &[])
+    }
+
+    /// [`live_service`] with these variables added to its environment, such
+    /// as a `PATH` (HUM-440).
+    fn live_service_with(
+        home: &tempfile::TempDir,
+        ports: SandboxPorts,
+        extra: &[(&str, String)],
+    ) -> (SandboxService, humanitl_config::Paths) {
         let config_home = home.path().join("config");
         let profile_dir = config_home.join("humanitl/profiles/sandbox");
         std::fs::create_dir_all(&profile_dir).unwrap();
@@ -7026,18 +7089,22 @@ mod tests {
         std::fs::copy(shipped.join("default.toml"), profile_dir.join("test.toml")).unwrap();
         let project = home.path().join("project");
         std::fs::create_dir_all(&project).unwrap();
-        let env = humanitl_config::Env::from_pairs([
-            ("HOME", home.path().display().to_string()),
-            ("XDG_CONFIG_HOME", config_home.display().to_string()),
-            (
-                "XDG_DATA_HOME",
-                home.path().join("data").display().to_string(),
-            ),
-            (
-                "XDG_RUNTIME_DIR",
-                home.path().join("run").display().to_string(),
-            ),
-        ]);
+        let env = humanitl_config::Env::from_pairs(
+            [
+                ("HOME", home.path().display().to_string()),
+                ("XDG_CONFIG_HOME", config_home.display().to_string()),
+                (
+                    "XDG_DATA_HOME",
+                    home.path().join("data").display().to_string(),
+                ),
+                (
+                    "XDG_RUNTIME_DIR",
+                    home.path().join("run").display().to_string(),
+                ),
+            ]
+            .into_iter()
+            .chain(extra.iter().map(|(key, value)| (*key, value.clone()))),
+        );
         let paths = humanitl_config::Paths::new(env);
         std::fs::write(
             paths.config_path(),
@@ -7200,6 +7267,101 @@ mod tests {
                 Some(v1::sandbox_event::Event::Diagnostic(found)) if found.code == "CONFIG_001"
             )),
             "{events:?}"
+        );
+    }
+
+    /// The codes of the diagnostics among `events`.
+    #[cfg(target_os = "linux")]
+    fn codes_of(events: &[v1::SandboxEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match &event.event {
+                Some(v1::sandbox_event::Event::Diagnostic(found)) => Some(found.code.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A plan names the backend of the run, and snapshot and preflight are
+    /// the ones of a start on that backend, as with `sandbox.backend` in
+    /// `Start.cli_overrides` (HUM-440). A name the schema does not know is
+    /// `CONFIG_003`, as at the start.
+    ///
+    /// Mutation proof: dropping `Plan.backend` from the resolution in
+    /// `plan_config` answers the plan with the second backend exactly like
+    /// the plan without one.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_plan_takes_the_backend_of_the_run() {
+        let home = tempfile::TempDir::new().unwrap();
+        // Ein leerer Suchpfad: Jede Suche sagt, was ihrem Backend fehlt.
+        let bin = home.path().join("empty-bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let (service, _paths) = live_service_with(
+            &home,
+            SandboxPorts::none(),
+            &[("PATH", bin.display().to_string())],
+        );
+        let other = humanitl_sandbox::LISTED_BACKENDS
+            .iter()
+            .copied()
+            .find(|name| *name != humanitl_sandbox::PLATFORM_BACKEND_NAME)
+            .expect("Linux lists a second backend");
+
+        let setting = plan_events_of(&service, &v1::sandbox_request::Plan::default());
+        assert_eq!(
+            status_of(&setting).backend,
+            humanitl_sandbox::PLATFORM_BACKEND_NAME
+        );
+        let setting_codes = codes_of(&setting);
+        assert!(!setting_codes.is_empty(), "{setting:?}");
+
+        let chosen = plan_events_of(
+            &service,
+            &v1::sandbox_request::Plan {
+                backend: other.to_owned(),
+                ..v1::sandbox_request::Plan::default()
+            },
+        );
+        // Solange das zweite Backend nicht zugelassen ist, lehnt die Wahl
+        // selbst ab (`SANDBOX_048`) wie beim Start; danach nennt der
+        // Schnappschuss es, und seine Suche sagt, was ihm fehlt. Beides ist
+        // nicht der Befund des Backends der Einstellung.
+        let chosen_codes = codes_of(&chosen);
+        assert!(
+            status_of(&chosen).backend == other || chosen_codes.contains(&"SANDBOX_048".to_owned()),
+            "{chosen:?}"
+        );
+        assert!(
+            !setting_codes.contains(&"SANDBOX_048".to_owned()),
+            "{setting:?}"
+        );
+        assert!(!chosen_codes.is_empty(), "{chosen:?}");
+        assert_ne!(chosen_codes, setting_codes, "{chosen:?}");
+
+        let unknown = plan_events_of(
+            &service,
+            &v1::sandbox_request::Plan {
+                backend: "nonsense".to_owned(),
+                ..v1::sandbox_request::Plan::default()
+            },
+        );
+        assert!(
+            codes_of(&unknown).contains(&"CONFIG_003".to_owned()),
+            "{unknown:?}"
+        );
+
+        // Wie in `Start.cli_overrides`: kein Trimmen, ` name ` ist unbekannt.
+        let padded = plan_events_of(
+            &service,
+            &v1::sandbox_request::Plan {
+                backend: format!(" {} ", humanitl_sandbox::PLATFORM_BACKEND_NAME),
+                ..v1::sandbox_request::Plan::default()
+            },
+        );
+        assert!(
+            codes_of(&padded).contains(&"CONFIG_003".to_owned()),
+            "{padded:?}"
         );
     }
 

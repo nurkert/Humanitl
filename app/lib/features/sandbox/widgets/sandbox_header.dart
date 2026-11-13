@@ -14,6 +14,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/domain/domain.dart';
 import '../../../core/ipc/connection.dart';
 import '../../../core/ui/hover_label.dart';
+import '../../../core/ui/sandbox_backend_choice.dart';
 import '../../../core/ui/ui.dart';
 import '../../../core/ui/work_dir_picker.dart';
 import '../../../l10n/l10n.dart';
@@ -69,6 +70,7 @@ class SandboxHeader extends ConsumerWidget {
               color: tokens.colors.fg2,
               textColor: tokens.colors.fg1,
             ),
+            SandboxBackendBadge(status: status),
             SandboxServerBadge(status: status),
             // Abstand zum Pfad: Ein langer Pfad füllt den Rest bis an das
             // Abzeichen heran, und ohne Lücke las er sich als dessen Teil
@@ -206,6 +208,49 @@ class SandboxStateIndicator extends StatelessWidget {
               ),
             ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The backend of the running session and its isolation level, short
+/// (HUM-440).
+///
+/// Nur während eine Sitzung steht: Der Plan nennt das Backend, das ein Start
+/// ohne Wahl bekäme, und die Wahl im Reiter Isolation kann davon abweichen;
+/// ein Abzeichen, das vor dem Start das eine sagt und der Start dann das
+/// andere tut, wäre falsch. Name und Stufe kommen aus der Momentaufnahme
+/// des Daemons.
+class SandboxBackendBadge extends StatelessWidget {
+  /// Shows the backend of [status].
+  const SandboxBackendBadge({required this.status, super.key});
+
+  /// What the daemon last said.
+  final SandboxStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!(status.isUp || status.isBusy) || status.backend.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final HTokens tokens = HTheme.of(context);
+    final AppLocalizations l10n = context.l10n;
+    final String? level = isolationLevelShort(l10n, status.isolationLevel);
+    return Padding(
+      padding: EdgeInsets.only(left: tokens.spacing.x2),
+      child: HoverLabel(
+        label: l10n.sandboxBackendLine(
+          status.backend,
+          isolationLevelText(l10n, status.isolationLevel),
+        ),
+        child: HBadge(
+          key: const Key('sandbox-backend-badge'),
+          text: level == null
+              ? status.backend
+              : l10n.sandboxBackendBadge(status.backend, level),
+          color: tokens.colors.fg2,
+          textColor: tokens.colors.fg1,
         ),
       ),
     );

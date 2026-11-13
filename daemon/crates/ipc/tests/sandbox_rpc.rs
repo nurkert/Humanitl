@@ -408,6 +408,7 @@ async fn a_plan_answers_for_a_directory_that_does_not_apply_yet() {
                 work_dir_source: None,
                 llm_server: String::new(),
                 session_profile: String::new(),
+                backend: String::new(),
             })),
         },
     )
@@ -505,6 +506,7 @@ fn plan_profile(name: &str) -> v1::SandboxRequest {
             work_dir_source: None,
             llm_server: String::new(),
             session_profile: String::new(),
+            backend: String::new(),
         })),
     }
 }
@@ -519,6 +521,7 @@ fn plan_work_dir(dir: &str) -> v1::SandboxRequest {
             work_dir_source: None,
             llm_server: String::new(),
             session_profile: String::new(),
+            backend: String::new(),
         })),
     }
 }

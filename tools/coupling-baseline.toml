@@ -41,10 +41,12 @@
 "app/lib/core/domain/sandbox_backends.dart" = 10
 "app/lib/core/ipc/client_diagnostics.dart" = 4
 "app/lib/core/ipc/daemon_paths.dart" = 2
-"app/lib/core/ipc/fake_daemon_client.dart" = 5
+"app/lib/core/ipc/fake_daemon_client.dart" = 11
 "app/lib/features/setup/setup_text.dart" = 1
 "app/test/core/ipc/convert_test.dart" = 10
-"app/test/core/ipc/fake_daemon_client_test.dart" = 8
+"app/test/core/ipc/disposable_grpc_test.dart" = 2
+"app/test/core/ipc/fake_daemon_client_test.dart" = 22
+"app/test/goldens/sandbox_backend_golden_test.dart" = 5
 "app/test/l10n/macos_text_test.dart" = 3
 "daemon/bin/humanitl/src/cli.rs" = 6
 "daemon/bin/humanitl/src/cmd/backends.rs" = 9

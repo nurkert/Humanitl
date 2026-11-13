@@ -443,6 +443,8 @@ extension SandboxBackendListToDomain on pb.SandboxBackendList {
   /// The domain form.
   SandboxBackendList toDomain() => SandboxBackendList(
     minIsolation: enumFromWire(IsolationLevel.values, minIsolation.value),
+    // Leer bei einem Daemon vor 1.38 (HUM-440).
+    autoBackend: autoBackend.isEmpty ? null : autoBackend,
     backends: List<SandboxBackendInfo>.unmodifiable(
       backends.map(
         (pb.SandboxBackend b) => SandboxBackendInfo(
@@ -723,6 +725,7 @@ extension SandboxStatusToDomain on pb.SandboxEvent_Status {
     startedAt: hasStartedAt() ? _dateTime(startedAt) : null,
     profile: profile,
     backend: backend,
+    isolationLevel: enumFromWire(IsolationLevel.values, isolationLevel.value),
     llmEndpoint: llmEndpoint,
     workDirHost: workDir.isEmpty ? null : workDir,
     workMode: WorkMode.fromWire(workMode),

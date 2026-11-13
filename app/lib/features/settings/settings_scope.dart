@@ -156,6 +156,15 @@ class SettingsController extends ChangeNotifier {
     return true;
   }
 
+  /// Hands the focus to the control of [key] once more, if its row is the
+  /// one a jump just lit: for a row whose control appears only after an
+  /// answer of the daemon, later than the jump (HUM-440).
+  void refocus(String key) {
+    if (_highlighted == key) {
+      _anchors[key]?.traversalDescendants.firstOrNull?.requestFocus();
+    }
+  }
+
   @override
   void dispose() {
     _disposed = true;

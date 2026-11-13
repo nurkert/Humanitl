@@ -133,7 +133,16 @@ abstract class DaemonClient {
   /// there through [setConfig]. A folder that lived only in the daemon's
   /// memory made the app start in one folder and `humanitl sandbox run` in
   /// another.
-  Stream<SandboxUpdate> planSandbox({String? profile, WorkMode? workMode});
+  ///
+  /// [backend] is the backend of the session (`Plan.backend`, HUM-440), the
+  /// same value a start sends in `Start.cli_overrides`: the snapshot and its
+  /// findings are then the ones of a start on that backend. Null keeps
+  /// `sandbox.backend`. A daemon before 1.38 ignores it.
+  Stream<SandboxUpdate> planSandbox({
+    String? profile,
+    WorkMode? workMode,
+    String? backend,
+  });
 
   /// `Sandbox(Start)`: starts the sandbox and reports `starting`, then
   /// `running`, or a diagnostic and `failed`. The folder is the stored one,
@@ -143,10 +152,17 @@ abstract class DaemonClient {
   /// the field empty, and the daemon takes `sandbox.mode` from its
   /// configuration. A disposable run sends [SandboxUpdate.changes] on this
   /// stream after the agent ended.
+  ///
+  /// [backend] goes out as the one entry `sandbox.backend` of
+  /// `Start.cli_overrides` (HUM-440): the backend of this session only, one
+  /// of the names `SandboxBackends` lists or `auto`. Null sends no entry, and
+  /// the daemon takes `sandbox.backend` from its configuration. Whether the
+  /// backend may start, the daemon decides.
   Stream<SandboxUpdate> startSandbox({
     String? profile,
     WorkMode? workMode,
     SandboxMode? sandboxMode,
+    String? backend,
   });
 
   /// `Sandbox(Changes)`: the changes of a disposable run that wait for a
@@ -456,7 +472,13 @@ abstract class DaemonClient {
   /// configuration chooses and what is missing (HUM-432). Starts nothing.
   /// Throws a [DaemonException] with `IPC_006` when the daemon runs no
   /// sandbox, and `UNIMPLEMENTED` from a daemon before minor 34.
-  Future<SandboxBackendList> sandboxBackends();
+  ///
+  /// The request carries the plan of this app's snapshots (HUM-440): the
+  /// stored folder with its project profile, and [backend] as the backend of
+  /// the session. A project that raises `sandbox.min_isolation` is thus in
+  /// the list already. A daemon before 1.38 answers for the configuration
+  /// without a wish.
+  Future<SandboxBackendList> sandboxBackends({String? backend});
 
   /// `Sandbox(ImagePull)`: pulls the image a sandbox starts from, on the
   /// explicit request of a person (HUM-439). [reference] is
