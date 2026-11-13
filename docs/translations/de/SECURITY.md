@@ -1809,8 +1809,11 @@ Podman-Maschine ist, wird mit `SANDBOX_038` abgelehnt.
 - **Das Ende der Sandbox.** Der Container läuft abgekoppelt vom `podman run`, das der Daemon
   startet (P7), und PID 1 überhört ein Signal ohne Handler (P5, P6). Der Daemon beendet ihn über
   die Engine beim Namen: `podman kill --signal TERM`, nach der Frist `--signal KILL` und
-  `podman rm --force`. Stirbt der Daemon, beendet die Lebensleine aus HUM-430 PID 1. Einen
-  Container, den ein Absturz trotzdem liegen lässt, erkennt der nächste Start des Daemons am Label
+  `podman rm --force`. Stirbt der Daemon, beendet die Lebensleine aus HUM-430 PID 1. Endet
+  `podman run` ohne angeforderten Stopp, greift sein `--rm` nicht mehr: Die Lebensleine beendet
+  PID 1 binnen `KILL_GRACE`, und der Daemon entfernt den beendeten Container gleich danach über die
+  Engine, mit der Warnung `SANDBOX_041`, wenn das scheitert; ein gleichzeitiger Stopp und dieses
+  Entfernen entfernen nie beide (HUM-452). Einen Container, den ein Absturz trotzdem liegen lässt, erkennt der nächste Start des Daemons am Label
   seiner Instanz und entfernt ihn, mit der Warnung `SANDBOX_041`.
 - **Die vertrauenswürdige Basis wächst** um Podman, `conmon`, `crun`, den Container-Speicher des
   Nutzers und die `containers.conf` des Daemons (K-27 in [`THREAT-MODEL.md`](THREAT-MODEL.md)).

@@ -12,6 +12,12 @@
 //!
 //! `--rm` und ein eigenes `rm` laufen gegeneinander: „no such container"
 //! heißt Erfolg (`--ignore`).
+//!
+//! Endet der Client ohne angeforderten Stopp, etwa durch ein `SIGKILL`,
+//! greift sein `--rm` nicht mehr. Der Daemon wartet dann, bis der Container
+//! beendet ist, und entfernt ihn selbst ([`ContainerStop::remove_after_exit`],
+//! HUM-452). Läuft zugleich ein Stopp, entfernt nur einer von beiden; das
+//! entscheidet das Handle der Sitzung.
 
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -24,6 +30,18 @@ use crate::launcher::ContainerStop;
 
 /// Wie lange ein Befehl zum Beenden höchstens dauern darf.
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Wie lange das Entfernen nach einem ungeplanten Ende auf das Ende des
+/// Containers wartet (HUM-452): die Frist, in der der Shim ihn nach dem
+/// Schließen der Lebensleine beendet, und etwas Luft. Danach entfernt
+/// `rm --force` ihn auch laufend.
+const EXIT_WAIT: Duration = crate::KILL_GRACE.saturating_add(Duration::from_secs(5));
+
+// Ein Stopp wartet höchstens `REMOVAL_BOUND` auf das Entfernen nach dem
+// Ende; die drei Befehle dafür müssen hineinpassen.
+const _: () = assert!(
+    EXIT_WAIT.as_secs() + 2 * STOP_TIMEOUT.as_secs() < crate::handle::REMOVAL_BOUND.as_secs()
+);
 
 impl ContainerStop {
     /// Ein Schritt des Beendens: `SIGTERM` als Bitte an den Shim, `SIGKILL`
@@ -45,20 +63,9 @@ impl ContainerStop {
             return None;
         }
         let removed = self.run(&["rm", "--force", "--time", "0", "--ignore", &self.name]);
-        let gone = self
-            .run(&["container", "exists", &self.name])
-            .is_ok_and(|output| output.status.code() == Some(1));
-        if gone {
+        if self.gone() {
             return None;
         }
-        let said = |what: &str, result: &std::io::Result<Output>| match result {
-            Ok(output) => format!(
-                "{what} ended with {}: {}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-            Err(err) => format!("{what} did not run: {err}"),
-        };
         Some(
             Diagnostic::builder(SANDBOX_041, Severity::Warning)
                 .why(format!(
@@ -76,6 +83,45 @@ impl ContainerStop {
         )
     }
 
+    /// Entfernt den Container, nachdem sein Client ohne angeforderten Stopp
+    /// geendet hat (HUM-452): wartet höchstens [`EXIT_WAIT`], bis er beendet
+    /// ist, entfernt ihn dann und fragt, ob er weg ist.
+    ///
+    /// Ist er danach noch da, oder antwortet die Engine nicht, kommt
+    /// `SANDBOX_041` als Warnung zurück, mit dem Befehl, der ihn von Hand
+    /// entfernt. Einen Container, den `--rm` schon entfernt hat, nimmt die
+    /// Engine stumm hin.
+    pub(crate) fn remove_after_exit(&self) -> Option<Diagnostic> {
+        let waited = self.run_within(&["wait", &self.name], EXIT_WAIT);
+        let removed = self.run(&["rm", "--force", "--time", "0", "--ignore", &self.name]);
+        if self.gone() {
+            return None;
+        }
+        Some(
+            Diagnostic::builder(SANDBOX_041, Severity::Warning)
+                .why(format!(
+                    "the container {} may still be there after its client ended without a \
+                     stop ({}; {})",
+                    self.name,
+                    said("wait", &waited),
+                    said("rm", &removed)
+                ))
+                .fix(FixAction::CopyCommand(format!(
+                    "{} rm --force {}",
+                    super::PROGRAM,
+                    self.name
+                )))
+                .build(),
+        )
+    }
+
+    /// Ob die Engine sagt, dass es den Container nicht gibt. Nur Exit 1 von
+    /// `container exists` belegt das; jeder andere Ausgang lässt es offen.
+    fn gone(&self) -> bool {
+        self.run(&["container", "exists", &self.name])
+            .is_ok_and(|output| output.status.code() == Some(1))
+    }
+
     fn run(&self, args: &[&str]) -> std::io::Result<Output> {
         self.run_within(args, STOP_TIMEOUT)
     }
@@ -90,6 +136,18 @@ impl ContainerStop {
     }
 }
 
+/// Wie ein Befehl der Engine ausging, für den Text eines Befunds.
+fn said(what: &str, result: &std::io::Result<Output>) -> String {
+    match result {
+        Ok(output) => format!(
+            "{what} ended with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+        Err(err) => format!("{what} did not run: {err}"),
+    }
+}
+
 /// Startet `command` mit leerer Eingabe und wartet höchstens `timeout`;
 /// danach wird es beendet, und der Fehler heißt `TimedOut`.
 ///
@@ -97,30 +155,19 @@ impl ContainerStop {
 ///
 /// Der Fehler von `spawn`, oder `TimedOut`.
 pub(crate) fn run_bounded(mut command: Command, timeout: Duration) -> std::io::Result<Output> {
+    // Die Ausgabe geht in anonyme Dateien statt in Pipes: Hält ein Kind der
+    // Engine sie offen, nachdem der Befehl endete, wartet hier niemand auf
+    // ihr Ende, und es bleibt kein Leser-Faden zurück.
+    let stdout = std::fs::File::from(crate::platform::anonymous_file("engine-stdout")?);
+    let stderr = std::fs::File::from(crate::platform::anonymous_file("engine-stderr")?);
     let mut child = command
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(stdout.try_clone()?)
+        .stderr(stderr.try_clone()?)
         .spawn()?;
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let read = |pipe: Option<std::process::ChildStdout>| {
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            if let Some(mut pipe) = pipe {
-                let _ = std::io::Read::read_to_end(&mut pipe, &mut bytes);
-            }
-            bytes
-        })
-    };
-    let out = read(stdout);
-    let err = std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        if let Some(mut pipe) = stderr {
-            let _ = std::io::Read::read_to_end(&mut pipe, &mut bytes);
-        }
-        bytes
-    });
+    // Die Kopien des Kindes sind mit `spawn` im Kind; die des Elternteils
+    // gehen hier zu, damit nur `stdout` und `stderr` selbst offen bleiben.
+    drop(command);
     let started = Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait()? {
@@ -138,9 +185,26 @@ pub(crate) fn run_bounded(mut command: Command, timeout: Duration) -> std::io::R
     };
     Ok(Output {
         status,
-        stdout: out.join().unwrap_or_default(),
-        stderr: err.join().unwrap_or_default(),
+        stdout: written(stdout),
+        stderr: written(stderr),
     })
+}
+
+/// Wie viel Ausgabe eines Befehls der Engine höchstens gelesen wird. Groß
+/// genug für jede Liste von `ps --all` und jede Antwort von `image inspect`,
+/// die der Adapter liest; die Grenze schützt nur vor einem Kind, das ohne
+/// Ende weiterschreibt.
+const OUTPUT_CAP: u64 = 16 * 1024 * 1024;
+
+/// Was bis jetzt in die anonyme Datei geschrieben wurde, höchstens
+/// [`OUTPUT_CAP`].
+fn written(mut file: std::fs::File) -> Vec<u8> {
+    use std::io::{Read as _, Seek as _};
+    let mut bytes = Vec::new();
+    if file.rewind().is_ok() {
+        let _ = file.take(OUTPUT_CAP).read_to_end(&mut bytes);
+    }
+    bytes
 }
 
 /// Die Namen aus `podman ps --format {{.Names}}`, eine Zeile je Container;
@@ -296,6 +360,24 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use super::*;
+
+    /// Ein Kind, das die Ausgabe offenhält, nachdem der Befehl endete, hält
+    /// das Beenden nicht auf: Der Status zählt binnen der Frist.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_pipe_held_open_by_a_child_does_not_hold_the_command() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30 & echo said; exit 3"]);
+        let started = Instant::now();
+        let output = run_bounded(command, Duration::from_secs(2)).expect("the command ran");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "waited {:?} for a pipe a child held",
+            started.elapsed()
+        );
+        assert_eq!(output.status.code(), Some(3));
+        assert_eq!(output.stdout, b"said\n", "the output is kept");
+    }
 
     #[test]
     fn listed_names_skip_blank_lines() {
