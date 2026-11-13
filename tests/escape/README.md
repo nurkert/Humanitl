@@ -41,6 +41,25 @@ Hosts nach `/work/results/host-ids` (`escape_host_ids` in `launch.sh`):
 | `esc-2/ca_bundle_is_the_hosts` | das Bündel unter `/etc/ssl/certs/ca-certificates.crt` ist die Datei des Daemons, nach Gerät und Inode, unter jedem Backend und unter einem Abbild |
 | `esc-2/no_etc_shadow`, `esc-2/no_machine_id` | ohne Abbild gibt es beide nicht; unter einem Abbild bringt es sein eigenes `/etc` mit, und dann darf keine der beiden die Datei des Hosts sein (Gerät und Inode) |
 
+Das Abbild für diesen Lauf baut `tests/escape/build-image.sh` (HUM-455) aus
+`tests/escape/image/Containerfile`: eine per Digest festgelegte Debian-Basis
+und darüber jeder Helfer, den die Suiten in der Sandbox aufrufen (`python3`,
+`curl`, `stat`, `id`, `find`, `getent` und die übrigen; fehlt einer, scheitert
+schon der Bau). Das Skript prüft den Verweis so, wie der Adapter ihn vor dem
+Start prüft, und gibt ihn als letzte Zeile aus:
+
+```
+ref=$(./tests/escape/build-image.sh) &&
+    HUMANITL_ESCAPE_BACKEND=podman HUMANITL_ESCAPE_IMAGE="$ref" ./tests/escape/run.sh
+```
+
+Der CI-Job `escape-tests-podman` fährt die Suiten zweimal: erst mit leerer
+Wurzel, dann mit diesem Abbild, beide mit `ESCAPE_NO_SKIP=1`. Gebaut wird vor
+dem Start des Daemons und vor der gepflanzten Engine-Konfiguration, außerhalb
+jeder Sandbox; der Lauf mit dem Abbild zieht nichts. Die zwei Starts von
+`mount-proof.sh` (`swapped_folder`, `unplanned_mount`) nehmen das Abbild nicht:
+Sie prüfen den Abgleich von Plan und Start, nicht die Wurzel.
+
 Der Weg in die Sandbox steht in `launch.sh` (`escape_sandbox_run`):
 
 | Backend | Starter | Warum |

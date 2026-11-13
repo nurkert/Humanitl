@@ -1,0 +1,37 @@
+# Das Testabbild der Escape-Suite (HUM-455): die Wurzel jeder Sandbox im
+# zweiten Lauf des CI-Jobs escape-tests-podman (HUMANITL_ESCAPE_IMAGE, HUM-439).
+#
+# Gebaut wird es von tests/escape/build-image.sh, vor dem Start des Daemons und
+# außerhalb jeder Sandbox; der Lauf mit dem Abbild zieht nichts (die Zeile des
+# Adapters trägt --pull=never).
+#
+# Die Basis ist über ihren Digest festgelegt, nicht über einen Tag: debian
+# trixie-slim, Stand 2026-11. Wer sie anhebt, ersetzt den Digest und nichts
+# sonst. Die Pakete darüber kommen aus dem Debian-Archiv zum Zeitpunkt des
+# Baus; festgelegt ist, welche Programme da sind, nicht ihre Fassung.
+FROM docker.io/library/debian@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+
+# Was die Suiten in der Sandbox aufrufen und trixie-slim nicht mitbringt:
+# python3 (ESC-1 Sockets und Syscalls über ctypes, ESC-3 UDP, refusals-proof.sh
+# unter /usr/bin/python3) und curl (ESC-3 und die DNS-Fälle von dns-proof.sh).
+# Ohne sie meldeten 59 Fälle `skip` und vier `fail`. Die übrigen Helfer (bash,
+# coreutils mit stat und id, findutils, grep, sed, getent aus libc-bin) gehören
+# zur Basis und stehen hier trotzdem, damit eine schlankere Basis den Bau
+# scheitern lässt, statt Fälle zu überspringen. Das Zertifikatsbündel in der
+# Sandbox ist immer das des Daemons (ESC-2 ca_bundle_is_the_hosts), gleich was
+# das Abbild unter /etc/ssl mitbringt.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash coreutils curl findutils grep libc-bin python3 sed \
+    && rm -rf /var/lib/apt/lists/*
+
+# Jeder Helfer, den lib.sh, esc-1, esc-2 und esc-3 in der Sandbox aufrufen.
+# Fehlt einer, bricht der Bau ab: In der Sandbox würde der Fall mit Exit 127
+# zu `skip`, und ESCAPE_NO_SKIP=1 färbte den Lauf erst viel später rot.
+RUN set -e; \
+    for tool in sh bash python3 curl stat id find grep sed cut tr wc ls cat \
+        touch rm mkdir env uname tail getent dirname; do \
+        command -v "$tool" > /dev/null || { echo "missing helper: $tool" >&2; exit 1; }; \
+    done; \
+    test -x /usr/bin/python3; \
+    python3 -c 'import ctypes, errno, os, socket, sys'

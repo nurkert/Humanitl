@@ -34,6 +34,10 @@ MOUNT_PROOF_COMMAND='test -e /work/HUMANITL_SWAPPED_FOLDER && echo MOUNT-PROOF-S
 
 # One start through escape-launch with one test flag; the log gets stdout and
 # stderr, the exit code is the launcher's.
+#
+# Ohne --image, auch wenn der Lauf HUMANITL_ESCAPE_IMAGE hat (HUM-455): Beide
+# Fälle prüfen den Abgleich zwischen Plan und Start, nicht die Wurzel, und die
+# Wurzel unter einem Abbild prüfen esc-1 bis esc-3 im selben Lauf.
 mount_proof_run() {
     mpr_log="$1"
     mpr_flag="$2"
