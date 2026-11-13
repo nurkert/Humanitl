@@ -50,6 +50,12 @@ Requires:       libGLESv2.so.2()(64bit)
 # Zugangsdaten im Schluesselbund ueber `secret-tool`. Als Datei verlangt,
 # weil das Paket auf Fedora libsecret und auf openSUSE secret-tool heisst.
 Recommends:     /usr/bin/secret-tool
+# Das Gegenstueck zu `Recommends: podman, uidmap` des .deb (HUM-461): Podman
+# ist ein waehlbares Backend, nie Pflicht; bubblewrap bleibt das einzige.
+# Die Werkzeuge der Unter-IDs als Datei, weil sie auf Fedora in
+# shadow-utils und auf openSUSE in shadow-pw-mgmt stehen.
+Recommends:     podman
+Recommends:     /usr/bin/newuidmap
 # Das Symbol im Infobereich braucht libayatana-appindicator3.
 Suggests:       libayatana-appindicator3.so.1()(64bit)
 

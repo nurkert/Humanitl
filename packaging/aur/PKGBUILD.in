@@ -46,6 +46,7 @@ optdepends=(
   'libsecret: keep provider keys in the desktop keyring via secret-tool'
   'libayatana-appindicator: tray icon'
   'opencode: the coding agent that runs in the sandbox'
+  'podman: rootless Podman with crun as a selectable sandbox backend'
 )
 provides=("humanitl=$pkgver")
 conflicts=('humanitl')
