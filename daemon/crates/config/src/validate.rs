@@ -536,14 +536,24 @@ fn podman_is_well_formed(sandbox: &SandboxRef, host: HostResources) -> Result<()
         1,
         600,
     )?;
-    if let Some(image) = &podman.image
-        && !pinned_by_digest(image)
-    {
-        return Err(out_of_range(
-            "sandbox.podman.image",
-            &format!("{image:?}"),
-            "a reference pinned by digest, NAME@sha256: and 64 hex digits",
-        ));
+    if let Some(image) = &podman.image {
+        let allowed = if !image_pinned_by_digest(image) {
+            Some("a reference pinned by digest, NAME@sha256: and 64 hex digits")
+        } else if !image_names_registry(image) {
+            Some(
+                "a name that starts with its registry, for example \
+                 docker.io/library/debian@sha256:...",
+            )
+        } else {
+            None
+        };
+        if let Some(allowed) = allowed {
+            return Err(out_of_range(
+                "sandbox.podman.image",
+                &format!("{image:?}"),
+                allowed,
+            ));
+        }
     }
     if podman.rootfs == PodmanRootfs::Image && podman.image.is_none() {
         return Err(Diagnostic::builder(CONFIG_003, Severity::Error)
@@ -580,18 +590,41 @@ fn within_host(key: &str, value: u64, min: u64, max: u64, what: &str) -> Result<
 
 /// Ob ein Verweis auf ein Abbild einen Digest trägt: ein Name, `@sha256:` und
 /// genau 64 Hex-Ziffern in Kleinbuchstaben. Ein Name ohne Digest könnte unter
-/// demselben Namen morgen ein anderes Abbild sein.
-fn pinned_by_digest(image: &str) -> bool {
+/// demselben Namen morgen ein anderes Abbild sein. Der Name besteht nur aus
+/// den Zeichen eines OCI-Verweises (Buchstaben, Ziffern, `.`, `_`, `-`, `/`,
+/// `:`) und beginnt nicht mit `-`, damit er unverändert in einem Befehl zum
+/// Kopieren stehen kann, ohne dass eine Shell darin etwas ausführt, und
+/// keiner Kommandozeile als Option gilt.
+///
+/// Dieselbe Regel gilt für das Abbild der Sandbox beim Laden und für den
+/// Verweis, den `humanitl sandbox image pull` nennt (HUM-439).
+#[must_use]
+pub fn image_pinned_by_digest(image: &str) -> bool {
     let Some((name, digest)) = image.rsplit_once("@sha256:") else {
         return false;
     };
     !name.is_empty()
-        && !name.contains('@')
-        && !name.chars().any(char::is_whitespace)
+        && !name.starts_with('-')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/' | ':'))
         && digest.len() == SHA256_HEX
         && digest
             .chars()
             .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+}
+
+/// Ob der Name eines Verweises mit einer Registry beginnt: Der erste Teil vor
+/// dem ersten `/` enthält einen Punkt oder einen Port oder ist `localhost`.
+/// Einen Kurznamen wie `debian` löst Podman über eine Suchliste auf, die der
+/// Daemon nicht schreibt; er stünde also je nach Rechner für ein anderes
+/// Abbild (HUM-439).
+#[must_use]
+pub fn image_names_registry(image: &str) -> bool {
+    let name = image.rsplit_once('@').map_or(image, |(name, _)| name);
+    name.split_once('/').is_some_and(|(first, _)| {
+        first.contains('.') || first.contains(':') || first == "localhost"
+    })
 }
 
 impl Config {
@@ -1027,19 +1060,38 @@ mod tests {
         let mut config = Config::default();
         config.sandbox.podman.rootfs = crate::PodmanRootfs::Image;
         assert!(podman_why(&config).contains("sandbox.podman.image"));
-        for bad in [
-            "docker.io/library/alpine:3.20".to_owned(),
-            format!("alpine@sha256:{}", "a".repeat(63)),
-            format!("alpine@sha256:{}", "A".repeat(64)),
-            format!("@sha256:{digest}"),
-            format!("alpine@sha512:{digest}"),
-            format!("a@b@sha256:{digest}"),
+        for unsafe_name in [
+            format!("docker.io/$(id)/x@sha256:{digest}"),
+            format!("docker.io/x;id@sha256:{digest}"),
+            format!("docker.io/x`id`@sha256:{digest}"),
+            format!("docker.io/x y@sha256:{digest}"),
+            format!("--authfile=a.b/x@sha256:{digest}"),
         ] {
-            config.sandbox.podman.image = Some(bad.clone());
-            assert!(podman_why(&config).contains("sha256"), "{bad}");
+            assert!(
+                !super::image_pinned_by_digest(&unsafe_name),
+                "{unsafe_name}"
+            );
         }
-        config.sandbox.podman.image = Some(format!("docker.io/library/alpine@sha256:{digest}"));
-        config.validate_on(SMALL_HOST).expect("pinned");
+        // Ein Kurzname liefe über die Suchliste der Engine; eine
+        // eingestellte Wurzel nennt ihre Registry. `None` heißt angenommen.
+        for (image, refused_for) in [
+            ("docker.io/library/alpine:3.20".to_owned(), Some("sha256")),
+            (format!("alpine@sha256:{}", "a".repeat(63)), Some("sha256")),
+            (format!("alpine@sha256:{}", "A".repeat(64)), Some("sha256")),
+            (format!("@sha256:{digest}"), Some("sha256")),
+            (format!("alpine@sha512:{digest}"), Some("sha256")),
+            (format!("a@b@sha256:{digest}"), Some("sha256")),
+            (format!("alpine@sha256:{digest}"), Some("registry")),
+            (format!("library/alpine@sha256:{digest}"), Some("registry")),
+            (format!("docker.io/library/alpine@sha256:{digest}"), None),
+            (format!("localhost:5000/alpine@sha256:{digest}"), None),
+        ] {
+            config.sandbox.podman.image = Some(image.clone());
+            match refused_for {
+                Some(word) => assert!(podman_why(&config).contains(word), "{image}"),
+                None => config.validate_on(SMALL_HOST).expect(&image),
+            }
+        }
     }
 
     #[test]

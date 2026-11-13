@@ -60,6 +60,17 @@
 //! `SANDBOX_030` ab und nennt den Grund, `auto` läuft direkt mit
 //! `SANDBOX_033` (gemessen 2026-11-12, Podman 5.8.6, Kernel 7.3).
 //!
+//! **Ein Abbild als Wurzel (HUM-439).** Mit `rootfs = "image"` ist die
+//! Wurzel das Abbild aus `sandbox.podman.image`, immer mit Digest. Vor jedem
+//! Start prüft der Plan mit `podman image inspect`, dass genau dieser Digest
+//! im lokalen Speicher liegt (`SANDBOX_043`), und kein Start zieht
+//! ([`image`]). Die Binds aus `mounts.ro` und die Verweise des Profils gelten
+//! dann nicht, denn das Abbild bringt sein eigenes `/usr` und `/etc`;
+//! Projekt, Tür, CA, Shim, Dateien des Adapters und das Verzeichnis der
+//! Sitzung kommen wie ohne Abbild vom Host. Die Tabelle nennt die Wurzel
+//! `PolicyMode::Image` mit dem Verweis samt Digest. Gezogen wird nur auf
+//! Wunsch, über [`SandboxBackend::pull_image`].
+//!
 //! **Zulassung.** Bis HUM-448 steht Podman nicht in
 //! [`crate::ADMITTED_BACKENDS`]: [`crate::Backend::detect`] lehnt es mit
 //! `SANDBOX_048` ab, und nur die Escape-Suite und die Tests kommen über
@@ -67,10 +78,12 @@
 //! deshalb nur in der Crate sichtbar.
 
 mod detect;
+mod image;
 mod mounts;
 mod plan;
 mod teardown;
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fs::OpenOptions;
 use std::io::Write as _;
@@ -83,7 +96,7 @@ use std::time::Duration;
 
 use humanitl_config::{Paths, PodmanConfig, PodmanRootfs, PodmanRuntime};
 use humanitl_core::diagnostics::codes::{
-    SANDBOX_011, SANDBOX_030, SANDBOX_034, SANDBOX_037, SANDBOX_048,
+    CONFIG_003, SANDBOX_011, SANDBOX_030, SANDBOX_037, SANDBOX_048,
 };
 use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
@@ -95,14 +108,15 @@ use crate::doctor::BackendCheckId;
 use crate::handle::SandboxHandle;
 use crate::launcher::{
     CheckResult, ContainerStop, Door, EnvDelivery, IsolationLevel, LaunchOnce, LaunchPlan,
-    PlanPreview, PlanRequest, ResourceLimits, SandboxBackend, Teardown,
+    PlanPreview, PlanRequest, PolicyMode, PolicyOrigin, PolicyRow, PulledImage, ResourceLimits,
+    SandboxBackend, Teardown,
 };
 use crate::profile::{MountPolicy, SandboxProfile, SessionContext};
 use crate::shim_fds::{Lifeline, env_memfd, split_env};
 
 pub use detect::MIN_PODMAN_VERSION;
 
-use plan::{Entry, Fds, LineSpec, SessionFiles, Sources};
+use plan::{Entry, Fds, LineSpec, Root, SessionFiles, Sources};
 
 /// Der Name des Programms, wie ihn die Suche im `PATH` findet.
 pub(crate) const PROGRAM: &str = "podman";
@@ -132,6 +146,10 @@ const MAX_DERIVED_CPUS: u32 = 4;
 struct Settings {
     runtime: PodmanRuntime,
     rootfs: PodmanRootfs,
+    /// Das Abbild aus `sandbox.podman.image`, mit Digest; gilt nur mit
+    /// `rootfs = "image"` als Wurzel, ist aber auch sonst das, was
+    /// [`SandboxBackend::pull_image`] ohne eigenen Verweis zieht.
+    image: Option<String>,
     memory_mib: u64,
     cpus: u32,
     pids: u64,
@@ -150,6 +168,7 @@ impl Settings {
         Self {
             runtime: config.runtime,
             rootfs: config.rootfs,
+            image: config.image.clone(),
             memory_mib: config.memory_mib.unwrap_or_else(|| {
                 memory.map_or(FALLBACK_MEMORY_MIB, |total| {
                     (total / 2).clamp(256, MAX_DERIVED_MEMORY_MIB)
@@ -295,6 +314,7 @@ impl PodmanBackend {
         fds: Fds,
         request: &PlanRequest<'_>,
     ) -> LineSpec<'a> {
+        let root = self.root(session_dir);
         LineSpec {
             program: &self.program,
             runtime: detect::CRUN,
@@ -302,7 +322,7 @@ impl PodmanBackend {
             mounts_file: &engine.mounts_conf,
             seccomp: &engine.seccomp,
             conmon_pidfile: &session_dir.conmon_pidfile,
-            rootfs: &session_dir.rootfs,
+            root,
             name: &names.container,
             label: &names.label,
             session_label: &names.session_label,
@@ -315,27 +335,149 @@ impl PodmanBackend {
     }
 
     /// Lehnt ab, was diese Stufe nicht kann: die Laufzeit `krun`
-    /// (HUM-444), ein Abbild als Wurzel (HUM-439) und die Wegwerf-Sandbox
+    /// (HUM-444), ein Abbild als Wurzel ohne Verweis und die Wegwerf-Sandbox
     /// (HUM-438, [`disposable_unsupported`]). Nie still etwas anderes.
     fn refuse_unsupported(&self, request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
         refuse_kernel_level(self.settings.runtime)?;
-        if self.settings.rootfs == PodmanRootfs::Image {
-            return Err(Diagnostic::builder(SANDBOX_034, Severity::Blocking)
-                .why(
-                    "sandbox.podman.rootfs = \"image\" is not available yet: an image as the root \
-                     of the sandbox comes with its digest check (HUM-439), and the start does not \
-                     take the host root instead on its own",
-                )
-                .fix(FixAction::ChangeSetting {
-                    key: "sandbox.podman.rootfs".to_owned(),
-                    value: "host".to_owned(),
-                })
-                .build());
+        if self.settings.rootfs == PodmanRootfs::Image && self.settings.image.is_none() {
+            // Das Laden lehnt das schon ab (`CONFIG_003`); ein Start nimmt
+            // auch dann nicht still die Wurzel des Hosts.
+            return Err(no_image_named());
         }
         if request.options.disposable.is_some() {
             return Err(disposable_unsupported());
         }
         Ok(())
+    }
+
+    /// Die Wurzel einer Sitzung: das Abbild, mit der Kennung dieses
+    /// Prozesses als Nutzer, oder das leere Verzeichnis der Sitzung.
+    fn root<'a>(&'a self, session_dir: &'a SessionDir) -> Root<'a> {
+        match self.image_root() {
+            Some(reference) => Root::Image {
+                reference,
+                user: (
+                    rustix::process::getuid().as_raw(),
+                    rustix::process::getgid().as_raw(),
+                ),
+            },
+            None => Root::Dir(&session_dir.rootfs),
+        }
+    }
+
+    /// Was die Wurzel vor dem Start braucht. Unter einem Abbild die Prüfung
+    /// seines Digests ([`Self::check_image`], `SANDBOX_043`, nie ein Ziehen)
+    /// und kein Gerüst: Die Mountpunkte legt die Engine in der eigenen
+    /// Schicht des Abbilds an, nicht auf dem Host. Sonst das Gerüst der leeren
+    /// Wurzel ([`plan::skeleton`]).
+    fn root_skeleton(
+        &self,
+        engine: &EngineDir,
+        profile: &SandboxProfile,
+        mounts: &[plan::Mount],
+    ) -> Result<BTreeSet<Entry>, Diagnostic> {
+        match self.image_root() {
+            Some(reference) => {
+                self.check_image(engine, reference)?;
+                Ok(BTreeSet::new())
+            }
+            None => Ok(plan::skeleton(profile, mounts)),
+        }
+    }
+
+    /// Das Abbild, wenn es die Wurzel ist (`rootfs = "image"`).
+    fn image_root(&self) -> Option<&str> {
+        (self.settings.rootfs == PodmanRootfs::Image)
+            .then_some(self.settings.image.as_deref())
+            .flatten()
+    }
+
+    /// Das Profil, nach dem geplant wird: unter einem Abbild ohne
+    /// `mounts.ro` und ohne Verweise, denn `/usr`, `/etc` und die Verweise
+    /// darauf bringt das Abbild mit; alles andere bleibt (HUM-439).
+    fn root_profile<'p>(&self, profile: &'p SandboxProfile) -> Cow<'p, SandboxProfile> {
+        if self.image_root().is_none() {
+            return Cow::Borrowed(profile);
+        }
+        let mut own = profile.clone();
+        own.mounts.ro.clear();
+        own.mounts.symlinks.clear();
+        Cow::Owned(own)
+    }
+
+    /// Die Zeile der Tabelle für die Wurzel, wenn sie ein Abbild ist: der
+    /// Verweis samt Digest, damit die Vorschau zeigt, was startet.
+    fn image_row(&self) -> Option<PolicyRow> {
+        self.image_root().map(|reference| {
+            PolicyRow::new(
+                PolicyMode::Image,
+                Some(PathBuf::from(reference)),
+                PathBuf::from("/"),
+                PolicyOrigin::User,
+            )
+        })
+    }
+
+    /// Fragt Podman, ob genau dieses Abbild im lokalen Speicher liegt
+    /// ([`image::verdict`]); zieht nie.
+    ///
+    /// # Errors
+    ///
+    /// `SANDBOX_043`, wenn es fehlt, einen anderen Digest trägt oder nicht
+    /// als Wurzel taugt.
+    fn check_image(&self, engine: &EngineDir, reference: &str) -> Result<image::Found, Diagnostic> {
+        let conf = engine.containers_conf();
+        let mut inspect = engine.command(&self.program, &conf);
+        inspect.args(["image", "inspect", "--", reference]);
+        let answer = teardown::run_bounded(inspect, detect::QUERY_TIMEOUT);
+        if !matches!(&answer, Ok(output) if output.status.success()) {
+            // Was liegt unter dem Namen? Nur für den Satz des Befunds.
+            let name = image::split(reference).map_or(reference, |(name, _)| name);
+            let mut by_name = engine.command(&self.program, &conf);
+            by_name.args(["image", "inspect", "--", name]);
+            let present =
+                image::present_digest(&teardown::run_bounded(by_name, detect::QUERY_TIMEOUT));
+            let detail = match &answer {
+                Ok(output) => String::from_utf8_lossy(&output.stderr).into_owned(),
+                Err(err) => err.to_string(),
+            };
+            return Err(image::missing(reference, present.as_deref(), &detail));
+        }
+        image::verdict(reference, &answer)
+    }
+
+    /// Zieht ein Abbild, auf ausdrücklichen Wunsch (HUM-439): `requested`,
+    /// oder ohne Angabe das aus `sandbox.podman.image`. Podman holt es direkt
+    /// über das Netz, nicht durch den Proxy ([`image`]); danach prüft es
+    /// dieselbe Frage wie jeder Start.
+    ///
+    /// # Errors
+    ///
+    /// `CONFIG_003` für einen Verweis ohne Digest oder ohne Registry, oder
+    /// ohne Verweis und ohne eingestelltes Abbild; `SANDBOX_043`, wenn das
+    /// Ziehen scheitert oder danach nicht genau dieser Digest vorliegt;
+    /// `SANDBOX_011` und `SANDBOX_037` aus dem Verzeichnis des Adapters.
+    fn pull(&self, requested: &str) -> Result<PulledImage, Diagnostic> {
+        let reference = if requested.trim().is_empty() {
+            self.settings.image.clone().ok_or_else(no_image_named)?
+        } else {
+            requested.trim().to_owned()
+        };
+        image::check_pull_reference(&reference)?;
+        let engine = EngineDir::of(&self.paths);
+        engine.prepare()?;
+        let mut pull = engine.command(&self.program, &engine.containers_conf());
+        pull.args(image::pull_args(&reference, &engine.signature_policy));
+        let answer = teardown::run_bounded(pull, image::PULL_TIMEOUT);
+        if !matches!(&answer, Ok(output) if output.status.success()) {
+            return Err(image::pull_failed(&reference, &answer));
+        }
+        let found = self.check_image(&engine, &reference)?;
+        Ok(PulledImage {
+            reference,
+            digest: found.digest,
+            id: found.id,
+        })
     }
 
     /// Die PID von PID 1 des Containers auf dem Host, sobald der Shim
@@ -425,6 +567,14 @@ fn write_session(
     Ok(())
 }
 
+/// Die Warnungen eines Plans wie unter bwrap: aufgehobene Masken und ein
+/// Arbeitsbaum, der sich nicht auflösen ließ.
+fn plan_warnings(profile: &SandboxProfile) -> Vec<Diagnostic> {
+    let mut warnings = profile.unmask_diagnostics();
+    warnings.extend(crate::worktree::resolution_diagnostic());
+    warnings
+}
+
 /// Die Quellen aus den geöffneten und geprüften Orten (HUM-263): eingehängt
 /// wird der Ort, an dem das Geöffnete liegt (P13).
 fn sources_of(pinned: &PinnedMounts, files: SessionFiles) -> Sources {
@@ -488,6 +638,36 @@ fn refuse_kernel_level(runtime: PodmanRuntime) -> Result<(), Diagnostic> {
             value: detect::CRUN.to_owned(),
         })
         .build())
+}
+
+/// Dieselbe Gruppe `sandbox`, aber mit dem Abbild `reference` als Wurzel der
+/// Container-Engine (HUM-439). Für die Escape-Suite (`escape-launch --image`),
+/// die dieselben Fälle auch unter einem Abbild fährt; der Daemon und die
+/// Kommandozeile lesen das Abbild aus der Konfiguration.
+#[must_use]
+pub fn with_image_root(
+    sandbox: &humanitl_config::SandboxRef,
+    reference: &str,
+) -> humanitl_config::SandboxRef {
+    let mut out = sandbox.clone();
+    out.podman.rootfs = PodmanRootfs::Image;
+    out.podman.image = Some(reference.to_owned());
+    out
+}
+
+/// `CONFIG_003`: Ein Abbild ist verlangt, aber keines eingestellt.
+fn no_image_named() -> Diagnostic {
+    Diagnostic::builder(CONFIG_003, Severity::Error)
+        .why(
+            "no image is named: sandbox.podman.image is empty, and an image is only ever taken \
+             as NAME@sha256: with its digest; the start does not take the host root instead on \
+             its own",
+        )
+        .fix(FixAction::ChangeSetting {
+            key: "sandbox.podman.rootfs".to_owned(),
+            value: "host".to_owned(),
+        })
+        .build()
 }
 
 /// Die Voraussetzungen aus [`PodmanBackend::detect`], die sich prüfen lassen,
@@ -646,6 +826,8 @@ pub(crate) struct EngineDir {
     mounts_conf: PathBuf,
     storage_conf: PathBuf,
     registries_conf: PathBuf,
+    /// Die Signaturregel für das ausdrückliche Ziehen (HUM-439).
+    signature_policy: PathBuf,
     home: PathBuf,
     /// Das Laufzeitverzeichnis des Nutzers für Podman, nie das von
     /// Humanitl ([`user_runtime_dir`]); `None`, wenn es keines gibt.
@@ -679,6 +861,7 @@ impl EngineDir {
             mounts_conf: root.join("mounts.conf"),
             storage_conf: root.join("storage.conf"),
             registries_conf: root.join("registries.conf"),
+            signature_policy: root.join("policy.json"),
             home,
             runtime_dir,
             bus,
@@ -764,6 +947,11 @@ impl EngineDir {
         write_file(
             &self.registries_conf,
             b"unqualified-search-registries = []\n",
+            0o600,
+        )?;
+        write_file(
+            &self.signature_policy,
+            image::SIGNATURE_POLICY.as_bytes(),
             0o600,
         )?;
         write_file(
@@ -952,6 +1140,8 @@ impl SandboxBackend for PodmanBackend {
             session,
             options,
         } = *request;
+        let root_profile = self.root_profile(profile);
+        let profile = root_profile.as_ref();
         let engine = EngineDir::of(&self.paths);
         let dir = engine.session_dir(session.session);
         let names = Names::of(session.session, &engine);
@@ -967,7 +1157,7 @@ impl SandboxBackend for PodmanBackend {
                 .map(|program| program.host.clone()),
             files: SessionFiles::under(&dir.files, session.files.len()),
         };
-        let (mounts, policy) = plan::mounts(
+        let (mounts, mut policy) = plan::mounts(
             profile,
             session,
             &sources,
@@ -975,6 +1165,9 @@ impl SandboxBackend for PodmanBackend {
             &|_| true,
             options.disposable.is_some(),
         );
+        if let Some(row) = self.image_row() {
+            policy.insert(0, row);
+        }
         let spec = self.spec(&engine, &dir, &names, fds, request);
         PlanPreview {
             argv: plan::line(&spec, profile, session, &mounts),
@@ -998,8 +1191,9 @@ impl SandboxBackend for PodmanBackend {
     ///
     /// Was [`BwrapBackend`] für dieselbe Anfrage ablehnte (`SANDBOX_005`,
     /// `SANDBOX_006`, `SANDBOX_011`), dazu `SANDBOX_030` für eine
-    /// Wegwerf-Sandbox, `SANDBOX_034` für `rootfs = "image"`, `SANDBOX_048`
-    /// für `krun` und `SANDBOX_006` für einen Pfad mit Komma.
+    /// Wegwerf-Sandbox, `SANDBOX_043` für ein Abbild, das nicht mit genau
+    /// seinem Digest vorliegt, `SANDBOX_048` für `krun` und `SANDBOX_006` für
+    /// einen Pfad mit Komma.
     fn plan(&self, request: &PlanRequest<'_>) -> Result<LaunchPlan, Diagnostic> {
         let PlanRequest {
             profile,
@@ -1009,6 +1203,11 @@ impl SandboxBackend for PodmanBackend {
         self.refuse_unsupported(request)?;
         let policy = MountPolicy::from_paths(&self.paths);
         profile.validate_with(&policy)?;
+        // Unter einem Abbild ohne `mounts.ro`: Weder geöffnet noch gebunden
+        // noch erwartet wird, was das Abbild selbst mitbringt.
+        let root_profile = self.root_profile(profile);
+        let profile = root_profile.as_ref();
+        let request = &PlanRequest::new(profile, session, options);
         BwrapBackend::check_work_dir(profile, session)?;
         policy.check_work_dir(&session.work_src)?;
         // Geöffnet und am Ort des Deskriptors geprüft wie unter bwrap
@@ -1022,10 +1221,7 @@ impl SandboxBackend for PodmanBackend {
 
         let present = BwrapBackend::present_under_work(profile, pinned.work.resolved());
         let unprotected = BwrapBackend::unprotected_under_work(profile, &present);
-        let mut warnings = profile.unmask_diagnostics();
-        if let Some(diagnostic) = crate::worktree::resolution_diagnostic() {
-            warnings.push(diagnostic);
-        }
+        let warnings = plan_warnings(profile);
         let engine = EngineDir::of(&self.paths);
         engine.prepare()?;
         let dir = engine.session_dir(session.session);
@@ -1042,7 +1238,8 @@ impl SandboxBackend for PodmanBackend {
             false,
         );
         check_mounts_expressible(&[&dir.root, &engine.root], &mounts)?;
-        let skeleton = plan::skeleton(profile, &mounts);
+        // Vor jedem Schreiben: unter einem Abbild genau dessen Digest (HUM-439).
+        let skeleton = self.root_skeleton(&engine, profile, &mounts)?;
 
         let env = profile.effective_env(session, Some(fds.report));
         let (agent_env, shim_env) = split_env(&env);
@@ -1061,7 +1258,7 @@ impl SandboxBackend for PodmanBackend {
         let (lifeline, lifeline_read) = new_lifeline()?;
         let env_fd = env_memfd(&agent_env)?;
         // Was der Shim nach dem Einhängen prüft (HUM-437, P13).
-        let pins_fd = mounts::pins(profile, session, &pinned, &mounts, &dir.rootfs)?.memfd()?;
+        let pins_fd = mounts::pins(profile, session, &pinned, &mounts, self.root(&dir))?.memfd()?;
         let (shell_door, shim_door) = BwrapBackend::shell_door(options.stdio)?;
         let mut inherit: Vec<OwnedFd> = vec![report_writer, lifeline_read, env_fd, pins_fd];
         inherit.extend(shim_door);
@@ -1145,6 +1342,11 @@ impl SandboxBackend for PodmanBackend {
     /// Die fünf `CHECK`-Zeilen des Shims, wie unter bwrap.
     fn isolation_check(&self, handle: &SandboxHandle) -> Vec<CheckResult> {
         isolation_from_report(handle, handle.report_timeout())
+    }
+
+    /// Zieht über [`image`], nur auf ausdrücklichen Wunsch (HUM-439).
+    fn pull_image(&self, reference: &str) -> Result<PulledImage, Diagnostic> {
+        self.pull(reference)
     }
 }
 

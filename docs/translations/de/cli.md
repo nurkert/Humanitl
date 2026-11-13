@@ -287,6 +287,36 @@ wartet, bis die Änderungen des letzten angewendet oder verworfen sind
 wird gestoppt (`SANDBOX_032`). `humanitl sandbox run --disposable` behält nach
 dem Ende keine Schicht: Es listet die Änderungen auf und verwirft sie.
 
+### Ein Abbild als Wurzel der Sandbox
+
+Unter dem Backend der Container-Engine kann die Wurzel der Sandbox ein Abbild
+sein statt `/usr` und `/etc` des Hosts (`sandbox.podman.rootfs = "image"`,
+HUM-439), für einen Agenten mit vorinstallierten Werkzeugen. Das Abbild steht
+immer mit Digest in `sandbox.podman.image` (`registry/name@sha256:` und 64
+Hex-Ziffern). Kein Start zieht es: Vor jedem Start fragt der Daemon die Engine
+nach genau diesem Digest, und ein fehlendes Abbild oder ein anderer Digest
+unter demselben Namen lehnt den Start mit `SANDBOX_043` ab. Das Ziehen ist ein
+eigener Schritt:
+
+```text
+$ humanitl sandbox image pull docker.io/library/debian@sha256:7378…
+Pulling downloads the image from the registry its name names, directly over the network of the daemon: not through the Humanitl proxy, without its rules and its record, and without the proxy variables of this shell. Only the digest decides which image is accepted.
+Pull docker.io/library/debian@sha256:7378…? [y/N] y
+pulled docker.io/library/debian@sha256:7378…
+  digest  sha256:7378…
+  id      …
+```
+
+Ohne Verweis zieht der Befehl das eingestellte Abbild. Der Hinweis geht jedes
+Mal nach `stderr`, auch mit `--yes`. Ein Name ohne Registry wird abgelehnt
+(`CONFIG_003`), im Befehl wie in der Konfiguration. Das Ziehen nimmt das
+Backend aus der Konfigurationsdatei (`sandbox.backend`); das `--backend`
+eines einzelnen Starts gilt dafür nicht. Projektordner, Tür, CA, Shim und die Dateien der Sitzung
+kommen weiter vom Host, nie aus dem Abbild; die Einhängungen des
+Sandbox-Profils unter `mounts.ro` gelten in einem Abbild nicht. Bis das
+Backend zugelassen ist (HUM-448), lehnt das Ziehen wie jeder Start mit
+`SANDBOX_048` ab.
+
 ### Terminal, Eingabe und Signale
 
 Ohne „Eine Shell für den Agenten" bekommt der Agent **kein** PTY dieses Terminals. Seine Ausgabe kommt als Bytes über den

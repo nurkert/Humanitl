@@ -607,7 +607,7 @@ pub struct PodmanConfig {
     /// Die Wurzel der Sandbox: `host` ist ein leeres, nur lesbares Verzeichnis mit den Einhängungen des Sandbox-Profils, `image` ein lokales OCI-Abbild aus `sandbox.podman.image`, das ein Start nie zieht.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub rootfs: PodmanRootfs,
-    /// Das Abbild für `rootfs = "image"`, immer mit Digest (`name@sha256:` und 64 Hex-Ziffern); bei `rootfs = "image"` Pflicht.
+    /// Das Abbild für `rootfs = "image"`, immer mit Digest (`name@sha256:` und 64 Hex-Ziffern); bei `rootfs = "image"` Pflicht. Vor jedem Start prüft der Daemon, dass genau dieser Digest im lokalen Speicher liegt (sonst `SANDBOX_043`); ein Start zieht nie, das tut nur `humanitl sandbox image pull`, und das Ziehen nutzt das Netz direkt, nicht durch den Proxy.
     #[schemars(extend("x-tier" = "advanced", "x-project-scope" = "denied"))]
     pub image: Option<String>,
     /// Arbeitsspeicher der Sandbox in MiB, mindestens 256 und höchstens der Arbeitsspeicher des Hosts. Leer heißt: der Start leitet ihn vom Host ab (die Hälfte seines Arbeitsspeichers, höchstens 4096), damit die Vorgabe auf jedem Rechner gilt.

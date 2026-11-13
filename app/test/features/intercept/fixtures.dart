@@ -375,6 +375,18 @@ class TestDaemonClient implements DaemonClient {
   Future<SandboxBackendList> sandboxBackends() async =>
       const SandboxBackendList();
 
+  // Das Ziehen eines Abbilds gehört dem Sandbox-Bildschirm (HUM-439); dieser
+  // Client zieht nichts und sagt das.
+  @override
+  Future<PulledImage> pullImage({String reference = ''}) async =>
+      throw const DaemonException(
+        Diagnostic(
+          code: 'SANDBOX_034',
+          severity: Severity.blocking,
+          why: 'the test client has no images',
+        ),
+      );
+
   // Der Doctor und die Endpunkt-Probe (HUM-075, HUM-044) gehören dem
   // Setup-Bildschirm. Der leere Bericht ist hier die ehrliche Antwort: nicht
   // elf grüne Zeilen, sondern gar keine, denn dieser Client hat nichts

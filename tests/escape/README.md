@@ -24,7 +24,22 @@ Ein Backend ist erst zulässig, wenn diese Suite gegen es grün ist (BACKLOG.md
 ```
 ./tests/escape/run.sh                                  # bwrap
 HUMANITL_ESCAPE_BACKEND=podman ./tests/escape/run.sh   # Podman, gemeinsame Stufe
+HUMANITL_ESCAPE_BACKEND=podman HUMANITL_ESCAPE_IMAGE=docker.io/library/debian@sha256:... \
+    ./tests/escape/run.sh                              # Podman mit Abbild als Wurzel
 ```
+
+Mit `HUMANITL_ESCAPE_IMAGE` (HUM-439) ist die Wurzel jeder Sandbox des Laufs
+dieses lokale Abbild (`escape-launch --image`); gezogen wird es nie, ein
+fehlendes ist `SANDBOX_043` und damit `sandbox_not_started`. Unter bwrap ist
+die Variable ein Fehler des Laufs. Vor den Suiten schreibt `run.sh` Gerät und
+Inode der CA des Daemons, der `/etc/shadow` und der `/etc/machine-id` des
+Hosts nach `/work/results/host-ids` (`escape_host_ids` in `launch.sh`):
+
+| Fall | Behauptung |
+|---|---|
+| `esc-2/ca_is_the_hosts` | die CA unter `/etc/humanitl/ca.crt` ist die Datei des Daemons, nach Gerät und Inode, unter jedem Backend und unter einem Abbild |
+| `esc-2/ca_bundle_is_the_hosts` | das Bündel unter `/etc/ssl/certs/ca-certificates.crt` ist die Datei des Daemons, nach Gerät und Inode, unter jedem Backend und unter einem Abbild |
+| `esc-2/no_etc_shadow`, `esc-2/no_machine_id` | ohne Abbild gibt es beide nicht; unter einem Abbild bringt es sein eigenes `/etc` mit, und dann darf keine der beiden die Datei des Hosts sein (Gerät und Inode) |
 
 Der Weg in die Sandbox steht in `launch.sh` (`escape_sandbox_run`):
 

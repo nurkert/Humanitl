@@ -74,7 +74,7 @@ pub mod tier;
 mod validate;
 pub mod value;
 
-pub use crate::validate::loader_variable_refused;
+pub use crate::validate::{image_names_registry, image_pinned_by_digest, loader_variable_refused};
 
 pub use crate::alias::{ALIASES, Alias, Retired, RetiredShape};
 pub use crate::env::{Env, LOADER_ENV_KEYS, is_loader_key};

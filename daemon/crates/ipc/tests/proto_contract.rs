@@ -942,6 +942,13 @@ const SANDBOX_EVENT_FIELDS: &FieldTable = &[
         ".humanitl.v1.DisposableOutcome",
         Some("event"),
     ),
+    // HUM-439: der dreizehnte Arm, die Antwort auf `image_pull`.
+    (
+        "image_pulled",
+        13,
+        ".humanitl.v1.SandboxEvent.ImagePulled",
+        Some("event"),
+    ),
 ];
 
 /// `DisposableChange` vollständig (HUM-350): Die Kennung ist der Hash des
@@ -1034,6 +1041,41 @@ fn a_disposable_change_keeps_its_shape() {
             APPLY_CHANGES_FIELDS
         ),
         Ok(())
+    );
+}
+
+/// Das Ziehen eines Abbilds (HUM-439): eine eigene Operation mit dem
+/// Verweis, eine eigene Antwort mit Verweis, Digest und Kennung, und ein
+/// eigener Wert der Tabelle für die Wurzel aus einem Abbild.
+#[test]
+fn an_image_pull_keeps_its_shape() {
+    let field = named_field("SandboxRequest", "image_pull");
+    assert_eq!(field.number(), 11);
+    assert_eq!(field.type_name(), ".humanitl.v1.SandboxRequest.ImagePull");
+    assert_eq!(
+        check_fields(
+            "SandboxRequest.ImagePull",
+            &message("SandboxRequest.ImagePull"),
+            &[("reference", 1, "string", None)]
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        check_fields(
+            "SandboxEvent.ImagePulled",
+            &message("SandboxEvent.ImagePulled"),
+            &[
+                ("reference", 1, "string", None),
+                ("digest", 2, "string", None),
+                ("image_id", 3, "string", None),
+            ]
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        humanitl_ipc::v1::MountMode::Image as i32,
+        9,
+        "MOUNT_MODE_IMAGE keeps its number"
     );
 }
 

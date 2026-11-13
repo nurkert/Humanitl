@@ -784,7 +784,7 @@
             },
             "image": {
               "default": null,
-              "description": "Das Abbild für `rootfs = \"image\"`, immer mit Digest (`name@sha256:` und 64 Hex-Ziffern); bei `rootfs = \"image\"` Pflicht.",
+              "description": "Das Abbild für `rootfs = \"image\"`, immer mit Digest (`name@sha256:` und 64 Hex-Ziffern); bei `rootfs = \"image\"` Pflicht. Vor jedem Start prüft der Daemon, dass genau dieser Digest im lokalen Speicher liegt (sonst `SANDBOX_043`); ein Start zieht nie, das tut nur `humanitl sandbox image pull`, und das Ziehen nutzt das Netz direkt, nicht durch den Proxy.",
               "type": [
                 "string",
                 "null"

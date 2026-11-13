@@ -125,6 +125,7 @@ Five further channels complete the model:
 | K-18 | the door for further shells (`humanitl sandbox exec`) | b | high | unnamed socket pair held only by the daemon and PID 1; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX`; at most four; dies with the sandbox | mitigated | `daemon/crates/ipc/tests/terminal.rs` (HUM-299) |
 | K-24 | the disposable sandbox: the upper layer and the way back into the project (`humanitl sandbox apply`) | b | high | project folder read-only as the lower layer of an overlay, upper layer in RAM under the daemon's runtime directory with a size cap, `mounts.extra_rw` read-only; applied only on a human's choice, checked before the first write, never through or as a symlink out of the project, no device, FIFO, socket or setuid bit, no overwrite of a file the human changed since the start unless that change is confirmed one by one (`ApplyChanges.overwrite_ids` from the app, HUM-351) or every selected change is (`--overwrite`); a container-engine backend refuses `disposable` (`SANDBOX_030`) because its lower layer cannot be bound to the checked folder, and `auto` runs direct there (HUM-438) | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350); `daemon/crates/sandbox/src/podman/tests.rs`, `daemon/crates/sandbox/tests/escape_worktree.rs` (HUM-438) |
 | K-27 | the container engine under Podman (Podman, `conmon`, `crun`, the user's container storage, `containers.conf`) | b, d | high | not admitted (`SANDBOX_048`) until the escape suite against it is green (HUM-448); every configuration source the daemon does not write cut off; fixed flags without keys; the environment only through the sealed memfd; ended through the engine and the lifeline; leftovers removed at daemon start (`SANDBOX_041`) | open | ESC-1, ESC-2 (`escape-tests-podman`, HUM-435); `daemon/crates/sandbox/src/podman/` (HUM-433) |
+| K-28 | the image as the root of the sandbox under Podman, and pulling it (origin, digest, the network while pulling) | b, d | high | pinned by digest, checked before every start, never pulled by a start (`SANDBOX_043`); pulled only on request, by the engine directly and not through the proxy, from the registry the name names, said before it runs; project, door, CA, shim and session files from the host, never from the image; user, entry point, volumes and health check of the image overridden, an image setting `HUMANITL_*` refused | open | ESC-2 `ca_is_the_hosts` (`HUMANITL_ESCAPE_IMAGE`); `daemon/crates/sandbox/src/podman/image.rs` (HUM-439) |
 
 K-13 is the obvious channel and the only one considered closed outright. K-14 is here so that
 attacker (d) appears in a row. K-15 came with HUM-041: the check that proves the guarantees runs
@@ -617,6 +618,34 @@ same probes as under bubblewrap, plus an empty `/run/.containerenv`, no socket o
 engine, the shim as PID 1 with the filter, and a `mounts.conf` entry, a volume and a hook planted
 in the runner's own engine configuration that reach a plain container and not the sandbox.
 
+### K-28 The image as the root of the sandbox
+
+Under Podman with `rootfs = "image"` (HUM-439, [SECURITY.md section 13](SECURITY.md#an-image-as-the-root-hum-439))
+the root of the sandbox is an OCI image, and three things come with it. **Origin:** the image is
+code someone else built, like a dependency (attacker b), and it runs as the agent; whoever controls
+its registry or its name controls what a later pull brings. **Digest:** a name can point at another
+image tomorrow; a start that took the name would run something nobody chose. **The network while
+pulling:** the engine fetches the layers itself, over the daemon's network, outside the proxy, its
+rules and its recording. The binding: an image is only ever named with its digest
+(`name@sha256:...`, `CONFIG_003` otherwise); before every start the plan asks the engine for
+exactly that digest and refuses a missing image or another digest under the same name with
+`SANDBOX_043`; no start pulls (`--pull=never`); only `humanitl sandbox image pull`, on the request
+of a person, pulls, and the command line and the interface say before it runs that it uses the
+network directly; a name without a registry is refused, and the daemon's own `registries.conf`
+holds no search list and no mirror; project folder, door, CA certificate and bundle, shim, the
+adapter's files and the session directory come from the host, never from the image, so a CA, a key
+or a session directory never stands in an image; the line sets user, entry point,
+`--image-volume=ignore` and `--no-healthcheck` itself, and an image whose environment sets a
+`HUMANITL_` name, which would win over the shim's variables in the engine, is refused. *Residual
+risk:* the signature policy accepts any image, the digest is the only anchor; the digest check
+reads the engine's metadata and does not hash the unpacked layers again, so a process of the same
+account (attacker d) that writes into the user's container storage can change the content under an
+unchanged digest; the image's annotations reach the engine; the pull itself is not recorded by
+the proxy, only by the daemon's log. Checked by ESC-2 `ca_is_the_hosts` (the CA in the sandbox is
+the daemon's file by device and inode), which runs under every backend and, with
+`HUMANITL_ESCAPE_IMAGE`, under an image; by the unit and live tests in
+`daemon/crates/sandbox/src/podman/` (another digest under the same name refused, nothing pulled).
+
 ## Assumptions
 
 | ID | Assumption | How to check it | If it breaks |
@@ -712,6 +741,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-12 | K-27: ESC-1 and ESC-2 run against Podman in the CI job `escape-tests-podman`, with a planted hostile engine configuration of the user (`mounts.conf`, volume, hook) that must not reach the sandbox | HUM-435 |
 | 2026-11-12 | K-24: no disposable sandbox under Podman; the engine's overlay volume was measured (P10) and is not used, because its lower layer cannot be bound to the checked folder; `disposable` refuses with `SANDBOX_030`, `auto` runs direct with `SANDBOX_033` | HUM-438 |
 | 2026-11-12 | K-01, K-05, K-27: the shim compares the mount table with the plan and the device and inode of every checked folder before the agent starts, under every backend (`SANDBOX_049`, `SANDBOX_042`); under Podman a swapped folder is detected and refused instead of prevented; K-27 names the configuration sources of Podman | HUM-437 |
+| 2026-11-13 | K-28 added: an image as the root of the sandbox under Podman, pinned by digest and checked before every start (`SANDBOX_043`), pulled only on request and directly, not through the proxy; ESC-2 checks the CA by device and inode | HUM-439 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

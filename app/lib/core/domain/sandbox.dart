@@ -79,6 +79,30 @@ enum MountMode {
   /// A path the policy refuses, neither read nor written: not a mount, a rule
   /// of a backend that has no mounts (Seatbelt, HUM-376).
   denied,
+
+  /// The root of the sandbox is an image of the container engine (HUM-439);
+  /// [MountEntry.src] holds its reference with the digest, not a host path.
+  image,
+}
+
+/// An image the daemon pulled on request and then found with exactly its
+/// digest, mirror of `SandboxEvent.ImagePulled` (HUM-439).
+final class PulledImage {
+  /// Creates the answer.
+  const PulledImage({
+    required this.reference,
+    required this.digest,
+    this.imageId = '',
+  });
+
+  /// The reference as pulled, `name@sha256:<hex>`.
+  final String reference;
+
+  /// The digest, `sha256:<hex>`.
+  final String digest;
+
+  /// The id of the image in the container engine.
+  final String imageId;
 }
 
 /// Where a mount or an environment variable comes from, mirror of

@@ -155,10 +155,11 @@ const REGISTER: &[(&str, &str)] = &[
     ("sandbox.mode", "effective"),
     // Die Gruppe `sandbox.podman` legt HUM-431 an; der Podman-Adapter liest
     // sie (HUM-433): `program` bei der Suche, `runtime` (nur `crun`, `krun`
-    // ist `SANDBOX_048`) und `rootfs` (`image` lehnt der Start bis HUM-439
-    // ab) vor dem Plan, `memory_mib`, `cpus` und `pids_limit` als Grenzen der
-    // Zeile, `start_timeout_secs` als Frist bis zum Bericht. `image` liest
-    // derselbe Plan, um `rootfs = "image"` abzulehnen.
+    // ist `SANDBOX_048`) und `rootfs` vor dem Plan, `memory_mib`, `cpus` und
+    // `pids_limit` als Grenzen der Zeile, `start_timeout_secs` als Frist bis
+    // zum Bericht. `image` ist mit `rootfs = "image"` die Wurzel, die der Plan
+    // vor jedem Start über ihren Digest prüft, und ohne Verweis das, was
+    // `humanitl sandbox image pull` zieht (HUM-439).
     ("sandbox.podman.cpus", "effective"),
     ("sandbox.podman.image", "effective"),
     ("sandbox.podman.memory_mib", "effective"),

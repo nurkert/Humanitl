@@ -39,8 +39,9 @@ use humanitl_core::{Diagnostic, FixAction, Severity};
 use crate::bwrap::BwrapBackend;
 use crate::handle::SandboxHandle;
 use crate::launcher::{
-    CheckResult, IsolationLevel, LaunchPlan, PlanPreview, PlanRequest, SandboxBackend,
+    CheckResult, IsolationLevel, LaunchPlan, PlanPreview, PlanRequest, PulledImage, SandboxBackend,
 };
+pub use crate::podman::with_image_root;
 use crate::podman::{PodmanBackend, static_lines as engine_static_lines};
 #[cfg(target_os = "macos")]
 use crate::seatbelt::SeatbeltBackend;
@@ -97,7 +98,7 @@ pub enum Backend {
 pub struct BackendChoice {
     /// Der Name des Backends, `auto` schon aufgelöst.
     pub name: &'static str,
-    /// Die Laufzeit, falls das Backend eine hat (Podman).
+    /// Die Laufzeit, falls das Backend eine hat (die Container-Engine).
     pub runtime: Option<PodmanRuntime>,
     /// Die Isolation, die diese Stufe bietet.
     pub isolation: IsolationLevel,
@@ -322,6 +323,10 @@ impl SandboxBackend for Backend {
 
     fn isolation_check(&self, handle: &SandboxHandle) -> Vec<CheckResult> {
         dispatch!(self, backend => backend.isolation_check(handle))
+    }
+
+    fn pull_image(&self, reference: &str) -> Result<PulledImage, Diagnostic> {
+        dispatch!(self, backend => backend.pull_image(reference))
     }
 }
 

@@ -136,7 +136,7 @@ pub use crate::agent::{
 pub use crate::agent_exit::{FirstOutput, did_not_start};
 pub use crate::backend::{
     ADMITTED_BACKENDS, BWRAP_BACKEND, Backend, BackendChoice, LeftSandboxes, PODMAN_BACKEND,
-    SEATBELT_BACKEND, backend_name, choose_backend, runtime_fits_backend,
+    SEATBELT_BACKEND, backend_name, choose_backend, runtime_fits_backend, with_image_root,
 };
 pub use crate::backend_list::{
     BackendEntry, LISTED_BACKENDS, RuntimeEntry, list_backends, list_backends_with,
@@ -170,8 +170,8 @@ pub use crate::handle::{
 };
 pub use crate::launcher::{
     CheckResult, DisposableLayer, Door, IsolationCheck, IsolationLevel, LaunchOptions, LaunchPlan,
-    PlanPreview, PlanRequest, PolicyMode, PolicyOrigin, PolicyRow, REPORT_TIMEOUT, ResourceLimits,
-    SandboxBackend, StdioMode,
+    PlanPreview, PlanRequest, PolicyMode, PolicyOrigin, PolicyRow, PulledImage, REPORT_TIMEOUT,
+    ResourceLimits, SandboxBackend, StdioMode,
 };
 pub use crate::seatbelt::{
     PREVIEW_AGENT_PORT, PREVIEW_REPORT_FD, PREVIEW_SESSION_PORT, PREVIEW_STATUS_FD,

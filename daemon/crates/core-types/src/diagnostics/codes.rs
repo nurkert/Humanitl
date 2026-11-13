@@ -1766,6 +1766,14 @@ registry! {
     SANDBOX_049 => "sandbox", "Mount table differs from the plan", "#sandbox_049",
         "The shim compared the mounts inside the sandbox with the table the launcher planned, entry by entry with type, source, read-only and the flags `nosuid`, `nodev` and `noexec`, and found a difference: an extra mount (for example one that a configuration file of the container engine adds), a missing one, or a second mount stacked onto a planned one. The agent did not start; the sentence names the missing and the extra entries.",
         "When the extra entry comes from a configuration of the container engine (`mounts.conf`, `containers.conf`), remove it there; otherwise `ChangeSetting` on `sandbox.backend` = `auto` and report the sentence.";
+    // HUM-439: an image of the container engine as the root of the sandbox.
+    /// The image named as the root of the sandbox is not in the local
+    /// storage of the container engine, holds another digest than the one
+    /// named, or carries something the sandbox cannot take (a variable of
+    /// the shim in its environment). A start never pulls (HUM-439).
+    SANDBOX_043 => "sandbox", "Sandbox image missing or not the pinned one", "#sandbox_043",
+        "The root of the sandbox is an image of the container engine, named with its digest. Before every start the daemon asks the engine for exactly that digest; the image is missing, the local image under that name has another digest, or its environment sets a variable the shim reads. A start never pulls an image; pulling is a separate step the person asks for, and it uses the network directly, not through the proxy.",
+        "`CopyCommand` with `humanitl sandbox image pull <reference>` when the image is missing or another digest is present; `ChangeSetting` back to the host root when the image itself cannot be used.";
 }
 
 /// Sucht einen Code im Register.

@@ -586,6 +586,25 @@ fn add_parents(entries: &mut BTreeSet<Entry>, rel: &Path) {
     }
 }
 
+/// Die Wurzel der Sandbox (HUM-439).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Root<'a> {
+    /// Das leere Verzeichnis mit dem Gerüst (`--rootfs`), darin die Binds
+    /// aus `mounts.ro` des Profils.
+    Dir(&'a Path),
+    /// Ein lokales Abbild, mit Digest (`name@sha256:...`). Nutzer,
+    /// Einstiegspunkt, Volumes und Gesundheitsprüfung des Abbilds gelten
+    /// nicht: Die Zeile setzt die Kennung des Nutzers (`--user`), den Shim als
+    /// Einstiegspunkt, `--image-volume=ignore` und `--no-healthcheck`.
+    Image {
+        /// Der Verweis samt Digest.
+        reference: &'a str,
+        /// Kennung und Gruppe, mit denen der Shim startet; dieselben wie
+        /// unter `--userns=keep-id` ohne Abbild.
+        user: (u32, u32),
+    },
+}
+
 /// Was die Zeile außer Profil, Sitzung und Einhängungen braucht.
 #[derive(Debug, Clone)]
 pub(crate) struct LineSpec<'a> {
@@ -604,8 +623,8 @@ pub(crate) struct LineSpec<'a> {
     pub(crate) seccomp: &'a Path,
     /// Die Datei für `--conmon-pidfile`.
     pub(crate) conmon_pidfile: &'a Path,
-    /// Die leere Wurzel (`--rootfs`).
-    pub(crate) rootfs: &'a Path,
+    /// Die Wurzel: die leere des Gerüsts oder ein Abbild (HUM-439).
+    pub(crate) root: Root<'a>,
     /// `--name`.
     pub(crate) name: &'a str,
     /// `--label`, `schlüssel=wert`: die Instanz des Daemons.
@@ -664,14 +683,36 @@ pub(crate) fn line(
         // ein Terminal bekommt der Container damit nicht (kein `-t`).
         push("--interactive".to_owned());
     }
+    if let Root::Image { user, .. } = spec.root {
+        // Was ein Abbild sonst mitbestimmte (HUM-439): Unter `--userns=keep-id`
+        // nähme Podman die Kennung aus `USER` des Abbilds statt der des
+        // Nutzers, ein `ENTRYPOINT` stünde vor dem Shim, ein `VOLUME` würde
+        // eine Einhängung, die der Plan nicht kennt, und eine
+        // Gesundheitsprüfung startete Prozesse und Zeitgeber von außen.
+        push(format!("--user={}:{}", user.0, user.1));
+        push(format!(
+            "--entrypoint={}",
+            serde_json::json!([profile.network.shim_dst.to_string_lossy()])
+        ));
+        push("--image-volume=ignore".to_owned());
+        push("--no-healthcheck".to_owned());
+    }
     for mount in mounts {
         push(format!("--mount={}", mount.render()));
     }
-    // `--rootfs` ist ein Schalter: der Pfad steht danach an der Stelle des
-    // Abbilds, nicht als `--rootfs=<pfad>` (gemessen 2026-11-12, Podman 5.8.6).
-    push("--rootfs".to_owned());
-    argv.push(spec.rootfs.as_os_str().to_owned());
-    argv.push(profile.network.shim_dst.as_os_str().to_owned());
+    match spec.root {
+        Root::Dir(rootfs) => {
+            // `--rootfs` ist ein Schalter: der Pfad steht danach an der Stelle
+            // des Abbilds, nicht als `--rootfs=<pfad>` (gemessen 2026-11-12,
+            // Podman 5.8.6).
+            push("--rootfs".to_owned());
+            argv.push(rootfs.as_os_str().to_owned());
+            argv.push(profile.network.shim_dst.as_os_str().to_owned());
+        }
+        // Der Shim ist der Einstiegspunkt; nach dem Abbild folgen nur seine
+        // Argumente.
+        Root::Image { reference, .. } => push(reference.to_owned()),
+    }
     let mut push = |arg: String| argv.push(OsString::from(arg));
     push("--proxy-port".to_owned());
     push(profile.network.proxy_port.to_string());
@@ -737,7 +778,14 @@ mod tests {
         }
     }
 
+    const IMAGE: &str =
+        "localhost/tools@sha256:a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+
     fn spec(stdio: StdioMode) -> LineSpec<'static> {
+        spec_with(stdio, Root::Dir(Path::new("/run/s/rootfs")))
+    }
+
+    fn spec_with(stdio: StdioMode, root: Root<'static>) -> LineSpec<'static> {
         LineSpec {
             program: Path::new("/usr/bin/podman"),
             runtime: "crun",
@@ -745,7 +793,7 @@ mod tests {
             mounts_file: Path::new("/run/e/mounts.conf"),
             seccomp: Path::new("/run/e/seccomp.json"),
             conmon_pidfile: Path::new("/run/s/conmon.pid"),
-            rootfs: Path::new("/run/s/rootfs"),
+            root,
             name: "humanitl-0",
             label: "humanitl.daemon=abc",
             session_label: "humanitl.session=0",
@@ -763,14 +811,14 @@ mod tests {
             .collect()
     }
 
-    /// Die Zeile ohne den Teil nach dem Shim: dort stehen die Argumente des
-    /// Agenten, und die gehören nicht Podman.
+    /// Die Zeile ohne die Argumente des Shims: dort stehen die des Agenten,
+    /// und die gehören nicht Podman.
     fn engine_part(argv: &[String]) -> &[String] {
-        let rootfs = argv
+        let shim_args = argv
             .iter()
-            .position(|arg| arg == "--rootfs")
-            .expect("--rootfs");
-        &argv[..=rootfs + 1]
+            .position(|arg| arg == "--proxy-port")
+            .expect("--proxy-port");
+        &argv[..shim_args]
     }
 
     fn all_lines() -> Vec<Vec<String>> {
@@ -792,9 +840,23 @@ mod tests {
             StdioMode::Capture,
             StdioMode::Pty { cols: 80, rows: 24 },
         ] {
-            for disposable in [false, true] {
-                let (mounts, _) = mounts(&profile, &session, &sources, None, &|_| true, disposable);
-                lines.push(strings(&line(&spec(stdio), &profile, &session, &mounts)));
+            for root in [
+                Root::Dir(Path::new("/run/s/rootfs")),
+                Root::Image {
+                    reference: IMAGE,
+                    user: (1000, 1000),
+                },
+            ] {
+                for disposable in [false, true] {
+                    let (mounts, _) =
+                        mounts(&profile, &session, &sources, None, &|_| true, disposable);
+                    lines.push(strings(&line(
+                        &spec_with(stdio, root),
+                        &profile,
+                        &session,
+                        &mounts,
+                    )));
+                }
             }
         }
         lines
@@ -876,7 +938,10 @@ mod tests {
                     .any(|arg| arg == "--default-mounts-file=/run/e/mounts.conf"),
                 "the global flag --default-mounts-file must precede run (HUM-454)"
             );
-            assert!(engine.iter().any(|arg| arg == "--rootfs"));
+            assert!(
+                engine.iter().any(|arg| arg == "--rootfs") || engine.iter().any(|arg| arg == IMAGE),
+                "a root: {engine:?}"
+            );
         }
     }
 
@@ -1108,5 +1173,63 @@ mod tests {
             .filter(|entry| matches!(entry, Entry::Dir(p) | Entry::File(p) if nested(p)))
             .collect();
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// Mit einem Abbild steht der Verweis samt Digest an der Stelle der
+    /// Wurzel, der Shim ist der Einstiegspunkt, und was das Abbild sonst
+    /// bestimmte (Nutzer, Volumes, Gesundheitsprüfung), hebt die Zeile auf
+    /// (HUM-439). Ohne Abbild steht nichts davon in der Zeile.
+    #[test]
+    fn an_image_root_names_the_digest_and_overrides_the_images_defaults() {
+        let profile = profile();
+        let session = session();
+        let (mounts, _) = mounts(
+            &profile,
+            &session,
+            &sources(&profile, &session),
+            None,
+            &|_| true,
+            false,
+        );
+        let image = Root::Image {
+            reference: IMAGE,
+            user: (1000, 1001),
+        };
+        let argv = strings(&line(
+            &spec_with(StdioMode::Capture, image),
+            &profile,
+            &session,
+            &mounts,
+        ));
+        let at = argv.iter().position(|arg| arg == IMAGE).expect("the image");
+        assert_eq!(argv[at + 1], "--proxy-port", "{argv:?}");
+        assert!(!argv.contains(&"--rootfs".to_owned()), "{argv:?}");
+        for flag in [
+            "--user=1000:1001",
+            "--entrypoint=[\"/run/humanitl/humanitl-shim\"]",
+            "--image-volume=ignore",
+            "--no-healthcheck",
+            "--pull=never",
+        ] {
+            let count = argv[..at].iter().filter(|arg| *arg == flag).count();
+            assert_eq!(count, 1, "{flag} in {argv:?}");
+        }
+        let plain = strings(&line(
+            &spec(StdioMode::Capture),
+            &profile,
+            &session,
+            &mounts,
+        ));
+        for flag in [
+            "--user=",
+            "--entrypoint=",
+            "--image-volume=",
+            "--no-healthcheck",
+        ] {
+            assert!(
+                !plain.iter().any(|arg| arg.starts_with(flag)),
+                "{flag} without an image: {plain:?}"
+            );
+        }
     }
 }

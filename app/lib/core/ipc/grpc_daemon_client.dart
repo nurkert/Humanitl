@@ -442,6 +442,10 @@ class GrpcDaemonClient implements DaemonClient {
           case pb.SandboxEvent_Event.changesOutcome:
             // The answer to apply or discard (HUM-350).
             yield SandboxUpdate.changesOutcome(event.changesOutcome.toDomain());
+          case pb.SandboxEvent_Event.imagePulled:
+            // The answer to `image_pull` (HUM-439); [pullImage] reads it
+            // itself and never through this stream.
+            break;
           case pb.SandboxEvent_Event.notSet:
             break;
         }
@@ -940,6 +944,38 @@ class GrpcDaemonClient implements DaemonClient {
     } on IOException catch (error) {
       throw DaemonException(_unreachable('$error'));
     }
+  }
+
+  @override
+  Future<PulledImage> pullImage({String reference = ''}) async {
+    // Kein Zeitlimit: Ein Ziehen dauert so lange, wie das Netz braucht; der
+    // Daemon bricht es selbst nach einer halben Stunde ab (HUM-439).
+    final CallOptions options = await _options(timeout: null);
+    try {
+      await for (final pb.SandboxEvent event in _stub.sandbox(
+        pb.SandboxRequest()
+          ..imagePull = (pb.SandboxRequest_ImagePull()..reference = reference),
+        options: options,
+      )) {
+        switch (event.whichEvent()) {
+          case pb.SandboxEvent_Event.imagePulled:
+            return event.imagePulled.toDomain();
+          case pb.SandboxEvent_Event.diagnostic:
+            throw DaemonException(event.diagnostic.toDomain());
+          default:
+            // Ein Daemon vor Minor 36 kennt die Operation nicht und
+            // antwortet mit einer Momentaufnahme; die zählt nicht.
+            break;
+        }
+      }
+    } on GrpcError catch (error) {
+      throw DaemonException(_translate(error));
+    } on IOException catch (error) {
+      throw DaemonException(_unreachable('$error'));
+    }
+    throw DaemonException(
+      _unreachable('the daemon ended Sandbox(ImagePull) without an image'),
+    );
   }
 
   @override

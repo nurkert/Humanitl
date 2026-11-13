@@ -109,8 +109,12 @@ abstract final class ProtoVersion {
   /// reads `DoctorReport.backends` and shows the lines grouped by backend
   /// (HUM-436). The number covers 33 and 34 as well, which were not raised
   /// here on their own.
+  /// Raised to 36 with the image as the root of the sandbox: the mounts tab
+  /// names `MOUNT_MODE_IMAGE` "image", and the SANDBOX_043 card pulls with
+  /// `Sandbox(ImagePull)` after saying that the network is used directly
+  /// (HUM-439).
   /// Raising the number without a reader would claim otherwise.
-  static const int minor = 35;
+  static const int minor = 36;
 
   /// `major.minor` as text.
   static const String text = '$major.$minor';

@@ -6,6 +6,9 @@
 #   ESCAPE_SKIP_BUILD=1 ./tests/escape/run.sh   use the binaries as they are
 #   HUMANITL_ESCAPE_BACKEND=podman ./tests/escape/run.sh   the same suites against
 #                                         another sandbox backend (default bwrap)
+#   HUMANITL_ESCAPE_IMAGE=NAME@sha256:... with a backend that has images: the
+#                                         root of every sandbox is that local
+#                                         image (HUM-439); it is never pulled
 #
 # The command line, the daemon and the shim are built with cargo and read back
 # from the same target directory: CARGO_TARGET_DIR when it is set (a relative
@@ -67,6 +70,10 @@ CLI="$TARGET_DIR/debug/humanitl"
 # The launcher for a backend that is not admitted yet (HUM-435).
 LAUNCHER="$TARGET_DIR/debug/escape-launch"
 ESCAPE_BACKEND="${HUMANITL_ESCAPE_BACKEND:-bwrap}"
+# An image as the root of the sandbox (HUM-439), only with a backend that has
+# images; launch.sh passes it to escape-launch, and ESC-2 reads it from the
+# host ids.
+ESCAPE_IMAGE="${HUMANITL_ESCAPE_IMAGE:-}"
 # The profile is named, not pointed at: `humanitl` refuses a path in
 # sandbox.profile so that a cloned repository cannot bring the policy of the
 # sandbox with it. The first place it looks is
@@ -110,6 +117,12 @@ harness_error=0
 if ! escape_backend_valid "$ESCAPE_BACKEND"; then
     record_error harness backend \
         "HUMANITL_ESCAPE_BACKEND='$ESCAPE_BACKEND' is not a backend name (lower case letters, digits, dashes)"
+    sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
+    exit 2
+fi
+if [ -n "$ESCAPE_IMAGE" ] && [ "$ESCAPE_BACKEND" = bwrap ]; then
+    record_error harness image \
+        "HUMANITL_ESCAPE_IMAGE needs a backend with images; bwrap runs on the host's files"
     sh "$HERE/junit.sh" "$RESULTS" > "$OUT/escape.xml"
     exit 2
 fi
@@ -394,6 +407,9 @@ if ! daemon_up; then
 fi
 echo "escape: daemon up (pid $daemon_pid), proxy socket $DAEMON_PROXY_SOCK"
 record_case harness backend pass "$ESCAPE_BACKEND, through $(escape_launcher_name)"
+# What ESC-2 compares from inside (HUM-439): the CA must be the daemon's file,
+# the host's /etc/shadow and /etc/machine-id must not be there.
+escape_host_ids "$WORK/results/host-ids"
 
 # ESC-1 to ESC-3 run inside the sandbox, one sandbox per suite so that a suite
 # that kills its shell cannot take the others with it.

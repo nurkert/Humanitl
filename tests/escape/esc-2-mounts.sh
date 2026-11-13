@@ -42,8 +42,56 @@ probe no_host_sys    test -d /sys/kernel
 # Not a single file under /sys, only empty directories at most: Podman mounts
 # the host's sysfs and its own cgroup beneath; the adapter hides both (HUM-453).
 probe no_sys_content sh -c 'find /sys -mindepth 1 ! -type d 2>/dev/null | grep -q .'
-probe no_etc_shadow  test -e /etc/shadow
-probe no_machine_id  sh -c 'test -s /etc/machine-id'
+# run.sh writes device and inode of the host files ESC-2 compares into
+# /work/results/host-ids before the suites (escape_host_ids in launch.sh,
+# HUM-439), and the reference of the image when the root is one.
+esc_host_id() { sed -n "s/^$1 //p" /work/results/host-ids 2> /dev/null; }
+esc_image=$(esc_host_id image)
+
+# esc_host_file PATH KEY — exit 0, a leak for `probe`, when PATH in the
+# sandbox is the host's file KEY (same device and inode).
+esc_host_file() {
+    command -v stat > /dev/null 2>&1 || { echo "no stat on this image"; return 127; }
+    esc_hf_want=$(esc_host_id "$2")
+    [ -n "$esc_hf_want" ] || return 1
+    esc_hf_got=$(stat -L -c '%d:%i' "$1" 2> /dev/null) || return 1
+    [ "$esc_hf_got" = "$esc_hf_want" ] || return 1
+    echo "$1 is the host's file ($esc_hf_got)"
+}
+
+if [ -n "$esc_image" ]; then
+    # An image brings its own /etc (HUM-439); the host's files must not be in
+    # it, and only device and inode tell the two apart.
+    probe no_etc_shadow esc_host_file /etc/shadow shadow
+    probe no_machine_id esc_host_file /etc/machine-id machine_id
+else
+    probe no_etc_shadow test -e /etc/shadow
+    probe no_machine_id sh -c 'test -s /etc/machine-id'
+fi
+
+# The CA and the bundle in the sandbox are the daemon's files on the host, by
+# device and inode, under every backend and under an image too (HUM-439,
+# THREAT-MODEL K-28): an image that carried a CA or a bundle of its own at the
+# same path would be another file.
+#
+# esc_from_host PATH KEY — exit 0 when PATH in the sandbox is the host's file
+# KEY, 1 when it is another file, 2 when the comparison cannot be made.
+esc_from_host() {
+    command -v stat > /dev/null 2>&1 || { echo "no stat on this image"; return 127; }
+    esc_fh_want=$(esc_host_id "$2")
+    [ -n "$esc_fh_want" ] || { echo "run.sh wrote no host id for $2"; return 2; }
+    esc_fh_got=$(stat -L -c '%d:%i' "$1" 2>&1) || {
+        echo "stat $1 failed: $esc_fh_got"
+        return 2
+    }
+    [ "$esc_fh_got" = "$esc_fh_want" ] || {
+        echo "$1 in the sandbox is $esc_fh_got, the daemon's is $esc_fh_want"
+        return 1
+    }
+    echo "$1 is the daemon's file ($esc_fh_got)${esc_image:+, under the image $esc_image}"
+}
+expect_ok ca_is_the_hosts esc_from_host /etc/humanitl/ca.crt ca
+expect_ok ca_bundle_is_the_hosts esc_from_host /etc/ssl/certs/ca-certificates.crt ca_bundle
 
 # --- exactly one socket, and it is the proxy ----------------------------------
 #
