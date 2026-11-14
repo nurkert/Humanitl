@@ -752,15 +752,21 @@ er läuft eingesperrt und ohne Netz wie die anderen Hilfsprozesse.
 
 ### K-32 Der Gastkernel
 
-Im Gast darf der Agent Root werden, und Root beherrscht den Gastkernel. Keine der drei Garantien
-ruht auf ihm: Ein Netzgerät gibt es nicht, die Tür entscheidet der Host, und der Emulator kann nach
+Der Agent im Gast ist kein Root: Vor seinem Filter gibt er jede Fähigkeit ab, die Begrenzungsmenge
+eingeschlossen, und läuft als der Nutzer, den bwrap in seine Sandbox abbildet; er kann also nicht
+in PID 1 schreiben (`/proc/1/mem`) und kein Modul laden (HUM-445). Das `/sys` des Gasts ist ein
+leeres, nur lesbares tmpfs, wie unter bubblewrap, das kein sysfs einhängt. Ein Fehler im Kernel
+kann den Agenten trotzdem zu Root machen, und Root beherrscht den Gastkernel. Keine der drei
+Garantien ruht auf ihm: Ein Netzgerät gibt es nicht, die Tür entscheidet der Host, und der Emulator kann nach
 dem Start kein Gerät dazubekommen. Bevor der Agent läuft, leert der Shim als PID 1
 `kernel.modprobe` (kein Modul lädt auf Anforderung), lädt genau die vsock-Module des Plans und
 sperrt das Laden von Modulen (`kernel.modules_disabled`); die Wurzel des Gasts ist eine nur lesbare
 Freigabe, die weder das Laufzeitverzeichnis noch das `/proc` des Gefängnisses hält. Die
 `CHECK`-Zeilen des Shims aus dem Gast sind Tiefenverteidigung, und ein Gast, der ohne sie endet, ist
-eine gescheiterte Prüfung. *Restrisiko:* Root im Gast kann die Zeilen des Gasts fälschen; dann hält
-die Host-Prüfung.
+eine gescheiterte Prüfung. Die Escape-Suite misst den Gast als Root ohne seccomp-Filter
+(`tests/escape/guest-root.sh`, HUM-445): nur `lo`, kein Weg nach außen, die Tür des Hosts das
+einzige vsock-Ziel, kein zweiter Gast erreichbar, kein Modul. *Restrisiko:* Root im Gast kann die
+Zeilen des Gasts fälschen; dann hält die Host-Prüfung.
 
 ### K-33 Die Hilfsprozesse einer Sitzung
 

@@ -297,10 +297,12 @@ fn guest_plan(spec: &Spec, project_ino: u64) -> serde_json::Value {
     mounts.extend([
         mount("/", "virtiofs", "type", "ro", "*"),
         mount("/proc", "proc", "type", "*", "*"),
-        mount("/sys", "sysfs", "type", "*", "*"),
+        // Nach der Modulsperre ein leeres tmpfs statt des sysfs (HUM-445).
+        mount("/sys", "tmpfs", "type", "ro", "nosuid,nodev,noexec"),
         mount("/dev", "devtmpfs", "type", "*", "*"),
         // Die Terminals des Strom-Modus (HUM-443).
         mount("/dev/pts", "devpts", "type", "*", "*"),
+        mount("/dev/shm", "tmpfs", "type", "rw", "nosuid,nodev"),
         mount(
             "/work",
             "virtiofs",
@@ -310,6 +312,10 @@ fn guest_plan(spec: &Spec, project_ino: u64) -> serde_json::Value {
         ),
     ]);
     serde_json::json!({
+        // Der Agent ist kein Root (HUM-445).
+        "uid": rustix::process::getuid().as_raw().to_string(),
+        "gid": rustix::process::getgid().as_raw().to_string(),
+        "hostname": "sandbox",
         "proxy_port": "3128",
         "door_port": DOOR_PORT.to_string(),
         "report_port": REPORT_PORT.to_string(),

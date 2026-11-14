@@ -757,14 +757,19 @@ flaw in the vsock device process; it runs jailed and without network like the ot
 
 ### K-32 The guest kernel
 
-In the guest the agent may become root, and root controls the guest kernel. Nothing of the three
-guarantees rests on it: no network device exists, the door is decided on the host, and the
+The agent in the guest is no root: before its filter it gives up every capability, the bounding
+set included, and runs as the user that bwrap maps into its sandbox, so it cannot write into PID 1
+(`/proc/1/mem`) or load a module (HUM-445). The guest's `/sys` is an empty read-only tmpfs, as under
+bubblewrap, which mounts no sysfs. Still, a kernel bug can make the agent root, and root controls
+the guest kernel. Nothing of the three guarantees rests on it: no network device exists, the door is decided on the host, and the
 emulator cannot gain a device after the start. Before the agent runs the shim, as PID 1, empties
 `kernel.modprobe` (no module loads on demand), loads exactly the plan's vsock modules and locks
 module loading (`kernel.modules_disabled`); the guest root is a read-only share that holds neither
 the runtime directory nor the jail's `/proc`. The shim's `CHECK` lines from the guest are defense in
-depth, and a guest that ends without them is a failed check. *Residual risk:* root in the guest can
-forge the guest's lines; the host check is what holds then.
+depth, and a guest that ends without them is a failed check. The escape suite measures the guest
+as root without a seccomp filter (`tests/escape/guest-root.sh`, HUM-445): only `lo`, no route out,
+the host's door the only vsock target, no second guest reachable, no module. *Residual risk:* root
+in the guest can forge the guest's lines; the host check is what holds then.
 
 ### K-33 The helper processes of a session
 

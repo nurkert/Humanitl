@@ -139,6 +139,102 @@ Wegwerf-Sandbox kann). Nur die zwei Audit-Fälle hängen nicht vom Backend ab: S
 starten einen Daemon, schicken einen Fluss durch seinen Proxy und starten dabei
 keine Sandbox.
 
+## Die Kernel-Stufe (HUM-445)
+
+```
+HUMANITL_ESCAPE_BACKEND=qemu ./tests/escape/run.sh     # QEMU-micro-VM, Kernel-Stufe
+```
+
+Die Kernel-Stufe (Backend `qemu`, ADR-0021) ist bis HUM-449 nicht zugelassen;
+`run.sh` startet sie wie Podman vor HUM-448 über `escape-launch --backend qemu`
+und damit über `Backend::detect_unadmitted`. Alle Suiten laufen, auch die
+Mounttabelle aus HUM-437. Gebraucht werden `/dev/kvm`, ein Dienstverwalter des
+Nutzers und die Pakete aus `scripts/ci/install-kernel-level.sh`; den Gastkernel
+nehmen `escape-launch` und die Fälle von ESC-5 aus `HUMANITL_TEST_VM_KERNEL`
+und `HUMANITL_TEST_VM_MODULES`, wo sie gesetzt sind
+(`humanitl_sandbox::with_test_guest_kernel`, nur mit dem Feature der
+Umgehung), sonst aus `/boot`. Der Arbeitsbaum braucht einen kurzen Pfad: Der
+Socket des Daemons des Laufs liegt unter `target/escape/state/runtime` und
+trägt höchstens 107 Byte.
+
+Die Ausgabe des Befehls reist unter dieser Stufe nur als Strom (HUM-443);
+`escape-launch` startet sie deshalb mit Pseudoterminal und Strom und gibt die
+Ausgabe auf seine Standardausgabe, damit `mount-proof.sh` sie liest wie unter
+jedem anderen Backend. Nach dem Start schreibt es `escape-launch: session
+<uuid>`, damit `kernel-proof.sh` die Unit der Sitzung findet.
+
+### Wie unter bwrap, durch den Adapter
+
+Der Gast sieht von innen aus wie eine bubblewrap-Sandbox, und die Proben von
+ESC-1 und ESC-2 dazu gelten unverändert: Der Agent und jede weitere Shell
+geben vor dem Filter jede Fähigkeit ab und laufen als der Nutzer, den bwrap
+abbildet (`caps_effective_empty`, `caps_bounding_empty`, `pid1_not_dumpable`,
+`pid1_mem_rdwr` und die Fälle des Shim-Elternteils); `/sys` ist nach der
+Modulsperre ein leeres, nur lesbares tmpfs (`no_host_sys`, `no_sys_content`);
+`/dev/shm` ist ein tmpfs (`shm_is_tmpfs`); der Rechnername ist `sandbox`
+(`hostname_sandbox`). `esc-2/engine_hook_not_run` ist unter qemu wie unter
+bwrap kein Fall: Die Stufe liest keine Konfiguration einer Container-Engine.
+
+### Kernel-Varianten
+
+Wo die physische Tatsache im Gast eine andere ist, die Behauptung aber
+dieselbe, hat ESC-2 eine Kernel-Variante. `run.sh` schreibt dafür
+`level kernel` in `/work/results/host-ids`, dazu SHA-256 der CA und des
+Bündels und Gerät und Inode des `.git/hooks` des Projekts. Jede Variante prüft
+die Behauptung mindestens so streng wie der Fall unter bwrap:
+
+| bwrap | Kernel-Variante | warum gleichwertig |
+|---|---|---|
+| `ca_is_the_hosts`, `ca_bundle_is_the_hosts`: Gerät und Inode gleich der Datei des Daemons | `ca_is_the_hosts_kernel`, `ca_bundle_is_the_hosts_kernel`: Inode gleich, die Datei liegt auf der virtiofs-Freigabe, Inhalt nach SHA-256 gleich | virtiofs reicht den Inode durch, die Gerätenummer vergibt der Gast selbst (HUM-442 Q5); fs-Typ und Inhalt schließen eine andere Datei mit zufällig gleichem Inode aus |
+| `exactly_one_socket`, `socket_is_proxy`, `proxy_is_socket_file`: genau ein Unix-Socket, der Proxy | `socket_none_kernel`: kein einziger Unix-Socket an den Orten, an denen im Gast einer stehen kann (`/work`, `/dev` mit `/dev/shm`, `/tmp`, `/run`, `/home`), bei vollständigem Durchlauf, mit einem in `/dev/shm` gepflanzten Socket-Knoten als Positivkontrolle, den der Durchlauf finden muss; der Rest ist die nur lesbare Freigabe des Plans, in der `single_socket` und die Host-Prüfung keinen Socket zulassen (ein Durchlauf über das ganze `/usr` des Hosts erschöpft die Deskriptoren des Dateisystemdienstes); `door_is_loopback_kernel`: die Proxy-Variablen nennen nur `http://127.0.0.1:3128`; `door_reaches_proxy_kernel`: diese Tür antwortet als Proxy (Positivkontrolle) | die Tür ist im Gast keine Datei, sondern ein vsock-Port des Hosts hinter der Brücke des Shims; `AF_VSOCK` und `AF_UNIX` verweigert der Filter des Agenten (ESC-1), der einzige Weg ist also `127.0.0.1:3128`, und dahinter steht der Proxy |
+| `proxy_socket_dir_is_not_host`: in `/run/humanitl` nichts außer Proxy-Socket und Shim (grün auch, wenn `ls` scheitert) | `proxy_socket_dir_is_not_host_kernel`: `ls -A /run/humanitl` gelingt und nennt nur `humanitl-shim`, `guest-plan.json` und `modules` | im Gast liegen dort statt des Sockets der Gastplan und die Module des Gastkernels; die Behauptung ist, dass weder Socket noch Token des Daemons dort stehen (`no_daemon_socket` unverändert), und die Variante ist strenger, weil ein scheiterndes `ls` rot ist |
+| `git_hooks_is_tmpfs`: ein tmpfs über `.git/hooks` | `git_hooks_empty_kernel`: leer; `git_hooks_not_host_kernel`: anderer Inode als das Verzeichnis des Hosts; `git_hooks_write_kernel` und auf dem Host `git_hooks_write_stays_kernel`: ein dort geschriebener Hook fehlt nach dem Lauf im Projekt | das tmpfs liegt im Gefängnis des Dateisystemdienstes von `/work`, der Gast sieht die Freigabe; die Behauptung der Maske ist, dass nichts vom Host zu sehen ist und nichts zum Host gelangt, und das wird direkt gemessen |
+| `seccomp_every_process`: jeder Prozess `Seccomp: 2` | derselbe Fall unter jedem Backend, Kernel-Threads ausgenommen | ein Kernel-Thread führt keinen Code des Nutzerraums aus; erkannt allein an `PF_KTHREAD` in Feld 9 von `/proc/<pid>/stat`, das nur der Kernel setzt, nie am Elternprozess oder am Namen; `selftest.sh` prüft das an einem Baum mit beidem |
+
+### Root im Gast (`guest-root.sh`, `kernel-proof.sh`)
+
+Die Garantien der Stufe liegen auf dem Host und müssen auch dann halten, wenn
+der Filter fällt und der Agent Root in seinem Kernel wird. Dafür startet der
+Shim im Gast neben dem Agenten einen Befehl als Root ohne seccomp-Filter: den
+Schlüssel `root_probe` des Gastplans, den der Daemon nur schreibt, wenn
+`LaunchOptions::guest_root_probe` gesetzt ist. `GuestRootProbe::new` gibt es
+nur mit dem Feature `unadmitted-backends`, also nur in `escape-launch`
+(`--test-guest-root-probe`) und in Tests; wie `SocketFloor` ein Argument im
+Code, nie ein Schlüssel. Der Bericht trägt dann eine Zeile `ROOT-PROBE`.
+
+| Fall | Behauptung |
+|---|---|
+| `esc-guest/root_without_filter` | die Voraussetzung: uid 0, `Seccomp: 0`, `CAP_SYS_MODULE` und `CAP_NET_ADMIN` wirksam; ohne sie mäßen die Proben nur den Filter |
+| `esc-guest/only_lo` | im Gast gibt es nur `lo` |
+| `esc-guest/no_route_out_inet`, `_inet6`, `_slirp` | `connect` nach außen scheitert mit einem errno, auch zum Gateway eines Nutzernetzes von QEMU |
+| `esc-guest/vsock_door_reaches_host` | Positivkontrolle: CID 2, Port 5000, die Tür, nimmt die Verbindung an |
+| `esc-guest/vsock_other_ports` | jeder andere Port des Hosts weist ab, auch 5001 (Bericht und Steuerkanal, nur vom Host geöffnet) und 5002 bis 5010 neben der Tür |
+| `esc-guest/vsock_other_cids` | jede andere CID weist ab, auch die eigene und die des Hypervisors |
+| `esc-guest/vsock_sibling_guest` | ein zweiter Gast einer anderen Sitzung, der auf Port 6000 lauscht, ist unter keiner CID erreichbar (HUM-442 Q9) |
+| `esc-guest/sibling_listening`, `sibling_not_reached`, `sibling_outlived_the_probe` | der zweite Gast lauschte als Root ohne Filter, nahm keine Verbindung an und lauschte noch, als der erste fertig war |
+| `esc-guest/modules_locked`, `finit_module_locked`, `modules_lock_one_way` | `kernel.modules_disabled` ist 1, `finit_module` eines noch nicht geladenen Moduls (`dummy`) endet mit `EPERM`, und die Sperre lässt sich nicht zurücksetzen |
+| `esc-guest/host_unit_only_lo` | auf dem Host sieht jeder Prozess der Unit der Sitzung nur `lo`; der Beleg nennt die vier Hilfsprogramme, damit er die richtige Unit misst |
+
+Jeder Versuch über vsock setzt `SO_VM_SOCKETS_CONNECT_TIMEOUT` auf eine halbe
+Sekunde: Ein Ziel, das es nicht gibt, beantwortet der Gast mit einem Timeout
+statt einer Ablehnung (HUM-442). Geurteilt wird an den Zeilen, nie am
+Exit-Code: Jedes verlangte Ziel muss genau eine Zeile `<cid>:<port> E…`
+haben, und es darf keine weitere geben; ein Helfer, der bricht oder ein Ziel
+auslässt, ist rot.
+
+Der Fall zur Wegwerf-Sandbox in ESC-5 ist unter qemu die Prüfung der
+Verweigerung (`SANDBOX_030`), wie unter Podman vor HUM-438; er wird rot,
+sobald HUM-446 die Wegwerf-Schicht liefert, und braucht dann die echte
+Messung. Die Dateisystem-Fälle von ESC-5 starten unter dieser Stufe mit
+Strom und Pseudoterminal und lassen den Agenten durch die Prüfung des Hosts
+zu (`isolation_check`), wie der Daemon es tut.
+
+Der CI-Job `escape-tests-qemu` (`ubuntu-24.04`) baut auf `kvm-tests` auf:
+dieselbe udev-Regel für `/dev/kvm`, dieselbe Freigabe der
+Nutzer-Namensräume, `loginctl enable-linger` für den Dienstverwalter, dieselben
+festgelegten Debian-Pakete und der Gastkernel. Er fährt `run.sh` mit
+`ESCAPE_NO_SKIP=1` im Urteil; ein fehlendes `/dev/kvm` ist rot.
+
 ## Rot ist in Sprint 0 der richtige Zustand
 
 Das Harness ist vor der Sache geschrieben, die es bewacht (BACKLOG.md 4.5,

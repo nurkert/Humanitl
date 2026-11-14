@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The verdict of an escape run in the job summary (HUM-021, shared by the jobs
-# escape-tests and escape-tests-podman since HUM-435).
+# escape-tests and escape-tests-podman since HUM-435, and escape-tests-qemu
+# since HUM-445).
 #
 #   scripts/ci/escape-verdict.sh JOB
 #
@@ -11,7 +12,7 @@
 # detail behind the status is captured command output, and a passing probe
 # whose evidence says "fail" must not change the count. The summary never
 # softens the verdict: a failed run exits 1. With ESCAPE_NO_SKIP=1 a skipped
-# probe is red as well (the Podman job, HUM-435).
+# probe is red as well (the Podman job, HUM-435, and the kernel level, HUM-445).
 set -euo pipefail
 
 job="${1:?usage: scripts/ci/escape-verdict.sh JOB}"

@@ -555,15 +555,12 @@ expect_output no_new_privs         '^NoNewPrivs:[[:space:]]+1$' sh -c 'grep ^NoN
 # since HUM-203 the launcher starts bwrap with --as-pid-1, so PID 1 is the
 # shim's parent with the bridge filter, not bwrap's init, which carried none.
 # seccomp_parent_mode_2 names PID 1 on its own, so that a regression reads as
-# what it is. The name is printed as evidence only.
-ESC_SECCOMP_ALL='for p in /proc/[0-9]*; do
-  c=$(cat "$p/comm" 2>/dev/null) || continue
-  s=$(sed -n "s/^Seccomp:[[:space:]]*//p" "$p/status" 2>/dev/null) || continue
-  [ -n "$s" ] && echo "${p#/proc/}:$c=$s"
-done'
+# what it is. The name is printed as evidence only. Kernel threads are left
+# out by their PF_KTHREAD flag (esc_seccomp_all in lib.sh): a guest kernel
+# shows its own (HUM-445), and none of them runs code of user space.
 expect_output seccomp_mode_2 '^Seccomp:[[:space:]]+2$' sh -c 'grep ^Seccomp /proc/self/status'
 expect_output seccomp_parent_mode_2 '^Seccomp:[[:space:]]+2$' sh -c 'grep ^Seccomp /proc/1/status'
-expect_only   seccomp_every_process '=2$' sh -c "$ESC_SECCOMP_ALL"
+expect_only   seccomp_every_process '=2$' esc_seccomp_all /proc
 
 # --- PID 1 and the shim's parent are closed to the agent (HUM-203) -------------
 #

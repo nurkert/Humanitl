@@ -2192,6 +2192,15 @@ A failed host check is `SANDBOX_047`: the agent is not admitted and the session 
   can ignore the end of the control stream; that lifeline inside the guest is defense in depth
   only. A stop of a session stops the unit and removes its runtime directory; what a crash leaves
   behind is stopped and removed at the next daemon start (`SANDBOX_041`).
+- **Inside, the guest looks like a bubblewrap sandbox** (HUM-445). PID 1 is root in its own
+  kernel; the agent and every further shell are not. Before the filter each gives up every
+  capability, the bounding set and the ambient set included, sets `no_new_privs` and becomes the
+  user that bubblewrap maps into its sandbox (the user of the daemon, as the guest's
+  `/etc/passwd` says), and the shim proves the result from the kernel before it goes on. PID 1 is
+  not dumpable, so the agent can neither read nor write its memory. After the module lock `/sys`
+  is an empty read-only tmpfs instead of the guest kernel's sysfs, `/dev/shm` is a tmpfs as
+  under bubblewrap, and the host name is the profile's (`sandbox`). The expected mount table
+  holds all three.
 
 ### What is different from bubblewrap
 

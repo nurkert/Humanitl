@@ -158,6 +158,16 @@ fn set_size(master: RawFd, cols: u16, rows: u16) -> io::Result<()> {
     Ok(())
 }
 
+/// Hands a terminal's follower to `uid` and `gid` (HUM-445).
+fn give_terminal(fd: RawFd, uid: u32, gid: u32) -> io::Result<()> {
+    // SAFETY: fchown takes a descriptor this process owns and two integers.
+    if unsafe { libc::fchown(fd, uid, gid) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 /// Sets `O_NONBLOCK` and `FD_CLOEXEC` on a descriptor.
 pub fn nonblocking(fd: RawFd) -> io::Result<()> {
     // SAFETY: fcntl with F_GETFL/F_SETFL/F_SETFD changes flags of one
@@ -260,6 +270,10 @@ pub struct Session {
     /// Opens dropped unanswered because the outbox was full.
     dropped_opens: u64,
     next_heartbeat: Instant,
+    /// The user and group further shells run as in a guest kernel
+    /// (HUM-445); `None` under bwrap and the container engine, where the
+    /// sandbox itself holds no root.
+    identity: Option<(u32, u32)>,
 }
 
 impl Session {
@@ -301,6 +315,24 @@ impl Session {
             dropped_input: 0,
             dropped_opens: 0,
             next_heartbeat: Instant::now(),
+            identity: None,
+        }
+    }
+
+    /// The agent and further shells give up root and become `uid` and
+    /// `gid` before their filter (HUM-445, a guest kernel only). Their
+    /// terminals belong to that user, as a terminal opened by bwrap's user
+    /// does, so that a program can open `/dev/pts/N` again by name; the
+    /// agent's terminal now, every further one when it is opened.
+    ///
+    /// # Errors
+    ///
+    /// `fchown(2)` of the agent's terminal failed.
+    pub fn run_as(&mut self, uid: u32, gid: u32) -> io::Result<()> {
+        self.identity = Some((uid, gid));
+        match self.follower_fd() {
+            Some(fd) => give_terminal(fd, uid, gid),
+            None => Ok(()),
         }
     }
 
@@ -647,8 +679,12 @@ impl Session {
             .iter()
             .filter_map(|arg| CString::new(arg.as_slice()).ok())
             .collect();
+        let identity = self.identity;
         let pty = match open_pty(cols, rows).and_then(|pty| {
             nonblocking(pty.master.as_raw_fd())?;
+            if let Some((uid, gid)) = identity {
+                give_terminal(pty.follower.as_raw_fd(), uid, gid)?;
+            }
             Ok(pty)
         }) {
             Ok(pty) => pty,
@@ -677,6 +713,7 @@ impl Session {
                 &argv_ptrs,
                 &envp,
                 program,
+                self.identity,
             );
         }
         drop(pty.follower);

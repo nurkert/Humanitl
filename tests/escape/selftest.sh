@@ -197,6 +197,33 @@ else
     fi
 fi
 
+# --- the walk over every process skips kernel threads only (HUM-445) ----------
+#
+# ESC-1 seccomp_every_process leaves out kernel threads by PF_KTHREAD in field
+# 9 of /proc/<pid>/stat, and nothing else: a process of user space without a
+# filter must stay in the list whatever its name or its parent. A fixture tree
+# with one of each, the name of the kernel thread with a space and a ')'.
+mkdir -p "$TMP/proc/2" "$TMP/proc/7" "$TMP/proc/9"
+printf '2 (kworker/0:1) I 0 0 0 0 -1 2129984 0 0\n' > "$TMP/proc/2/stat"
+printf 'kworker/0:1\n' > "$TMP/proc/2/comm"
+printf 'Name:\tkworker\nSeccomp:\t0\n' > "$TMP/proc/2/status"
+printf '7 (a (b) c) S 1 7 7 0 -1 4194560 0 0\n' > "$TMP/proc/7/stat"
+printf 'a (b) c\n' > "$TMP/proc/7/comm"
+printf 'Name:\ta\nSeccomp:\t0\n' > "$TMP/proc/7/status"
+printf '9 (agent) S 2 9 9 0 -1 4194560 0 0\n' > "$TMP/proc/9/stat"
+printf 'agent\n' > "$TMP/proc/9/comm"
+printf 'Name:\tagent\nSeccomp:\t2\n' > "$TMP/proc/9/status"
+# A process whose status cannot be read stays in the list as unreadable.
+mkdir -p "$TMP/proc/11"
+printf '11 (ghost) S 1 11 11 0 -1 4194560 0 0\n' > "$TMP/proc/11/stat"
+printf 'ghost\n' > "$TMP/proc/11/comm"
+st_got=$(esc_seccomp_all "$TMP/proc" | sort)
+st_want=$(printf '11:ghost=unreadable\n7:a (b) c=0\n9:agent=2')
+if [ "$st_got" != "$st_want" ]; then
+    echo "selftest: esc_seccomp_all must drop the kernel thread, keep both processes and name the unreadable one; got: '$st_got'" >&2
+    selftest_failures=$((selftest_failures + 1))
+fi
+
 # --- the way into the sandbox, per backend (HUM-435) ---------------------------
 #
 # run.sh starts every suite through escape_sandbox_run in launch.sh and reads
@@ -295,6 +322,18 @@ launch_failures=$(
     [ "$(awk '$4 == "pass" || $4 == "skip"' "$RESULTS")" = "" ] ||
         bad "a backend that does not start left a pass or a skip: $(cat "$RESULTS")"
     [ "$harness_error" = 1 ] || bad "a backend that does not start did not set harness_error"
+
+    # A sentinel without results, or with another count, is no verdict
+    # (HUM-445).
+    for st_file in 'SUITE-DONE esc-9 0' 'RESULT esc-9 a pass ok\nSUITE-DONE esc-9 2'; do
+        printf "$st_file\n" > "$WORK/results/esc-9.txt"
+        : > "$RESULTS"
+        harness_error=0
+        escape_collect esc-9 0 > /dev/null
+        grep -q '^RESULT esc-9 result_count error ' "$RESULTS" ||
+            bad "escape_collect accepted '$st_file': $(cat "$RESULTS")"
+        [ "$harness_error" = 1 ] || bad "a wrong result count did not set harness_error"
+    done
 
     # bwrap: the command line, the user's path, and never escape-launch.
     rm -f "$STANDIN_LOG.launcher"

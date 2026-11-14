@@ -239,6 +239,40 @@ pub struct LaunchOptions {
     /// Wie das Terminal einer Sitzung am eigenen Pseudoterminal reist
     /// ([`StdioMode::Pty`]); ohne Pseudoterminal ohne Bedeutung (HUM-443).
     pub terminal: TerminalTransport,
+    /// Nur die Escape-Suite: eine Probe als Root ohne Filter im Gast der
+    /// Kernel-Stufe ([`GuestRootProbe`], HUM-445). Jedes andere Backend
+    /// liest das Feld nicht.
+    pub guest_root_probe: GuestRootProbe,
+}
+
+/// Eine Probe, die der Shim im Gast der Kernel-Stufe als Root ohne
+/// seccomp-Filter startet, neben dem Agenten (HUM-445): Sie misst, was Root
+/// im Gast erreicht, wenn der Filter des Agenten fällt.
+///
+/// Der Wert ist leer, und nur die Escape-Suite kann einen anderen bauen: Der
+/// Konstruktor `GuestRootProbe::new` gibt es nur mit dem Cargo-Feature der
+/// Umgehung, das weder `humanitld` noch `humanitl` je einschalten
+/// (`tests/feature_gate.rs`). Ein Argument im Code wie
+/// [`crate::SocketFloor`], nie ein Schlüssel der Konfiguration.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GuestRootProbe(Option<String>);
+
+impl GuestRootProbe {
+    /// Die Probe als Befehlszeile für `/bin/sh -c`.
+    #[cfg(any(test, feature = "unadmitted-backends"))]
+    #[must_use]
+    pub fn new(command: String) -> Self {
+        Self(Some(command))
+    }
+
+    /// Die Befehlszeile, wenn die Suite eine gesetzt hat.
+    #[cfg_attr(
+        not(all(target_os = "linux", target_arch = "x86_64")),
+        allow(dead_code, reason = "only the kernel level, Linux on x86-64, reads it")
+    )]
+    pub(crate) fn command(&self) -> Option<&str> {
+        self.0.as_deref()
+    }
 }
 
 /// Wie das Terminal des Agenten und jeder weiteren Shell zwischen Daemon und

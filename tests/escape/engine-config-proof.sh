@@ -19,17 +19,18 @@
 # no_engine_volume); here, on the host, the marker of the hook must still be
 # missing after every sandbox of the run.
 #
-# bwrap reads no engine configuration, so without a planted one there is no
-# case for it. For any other backend the case without a planted configuration
-# is a skip that says so, never a pass. A developer machine runs it that way:
-# the planting writes into ~/.config/containers and belongs on a runner.
+# bwrap and the kernel level (qemu, HUM-445) read no engine configuration, so
+# without a planted one there is no case for them. For the container engine
+# the case without a planted configuration is a skip that says so, never a
+# pass. A developer machine runs it that way: the planting writes into
+# ~/.config/containers and belongs on a runner.
 #
 # Needs from run.sh: ESCAPE_BACKEND and record_case.
 
 engine_config_case() {
     engine_dir="${HUMANITL_ESCAPE_ENGINE_CANARY_DIR:-}"
     if [ -z "$engine_dir" ]; then
-        if [ "$ESCAPE_BACKEND" != bwrap ]; then
+        if [ "$ESCAPE_BACKEND" != bwrap ] && [ "$ESCAPE_BACKEND" != qemu ]; then
             record_case esc-2 engine_hook_not_run skip \
                 "no planted engine configuration; tests/escape/plant-engine-config.sh plants one in the CI job escape-tests-podman"
         fi

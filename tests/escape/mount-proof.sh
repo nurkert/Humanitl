@@ -77,7 +77,8 @@ mount_proof_unplanned_verdict() {
     elif grep -q SANDBOX_049 "$1"; then
         echo "pass the mount outside the plan was found and the start refused with SANDBOX_049"
     else
-        echo "fail the start was not refused with SANDBOX_049 (exit $2); see target/escape/$(basename "$1")"
+        mpu_why=$(grep 'escape-launch:' "$1" | grep -v 'escape-launch: session ' | tail -n 2 | tr '\n' ' ' | cut -c1-600)
+        echo "fail the start was not refused with SANDBOX_049 (exit $2: ${mpu_why:-no line of escape-launch}); see target/escape/$(basename "$1")"
     fi
 }
 

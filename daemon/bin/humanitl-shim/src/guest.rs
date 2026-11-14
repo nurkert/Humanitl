@@ -32,7 +32,11 @@
 //!    (`MODULES vsock=loaded,...,modules_disabled=1`); a failure of step 3 is
 //!    written there as `CHECK seccomp_applied fail modules:...` instead.
 //!    Without a report nothing starts.
-//! 5. Mount `/work` from the plan's tag (`virtiofs`, `nosuid`, `nodev`).
+//! 5. Make the guest look like a bubblewrap sandbox (HUM-445): `/sys`
+//!    becomes an empty read-only tmpfs (bwrap mounts no sysfs, and the
+//!    module lock was the last step that read it), `/dev/shm` a tmpfs, and
+//!    the host name the plan's. Mount `/work` from the plan's tag
+//!    (`virtiofs`, `nosuid`, `nodev`).
 //! 6. Set the shim's own variables and then the agent's environment, both
 //!    from the plan, with the rules of `--env-fd` (`envfd.rs`).
 //!
@@ -42,10 +46,24 @@
 //! `DENY`; only `ADMIT` opens the exec gate. bwrap and the container engine
 //! have no such wait.
 //!
+//! Only for the escape suite, a plan may name a root probe (`root_probe`,
+//! HUM-445): right after the mount table is proven, before PID 1 installs
+//! any filter of its own, the shim starts that command once as a child,
+//! root without a seccomp filter, with every descriptor above 2 closed at
+//! its `exec`, and does not wait for it. It measures what root in the guest
+//! reaches when the agent's filter is gone (other vsock ports and CIDs, a
+//! second guest, an interface, a module). The daemon writes the key only
+//! for the escape suite's launcher (`LaunchOptions::guest_root_probe` exists
+//! only with the cargo feature of the bypass); the report says so in a
+//! `ROOT-PROBE` line, which no reader of the `CHECK` lines counts.
+//!
 //! Then the mount table is compared with the plan as under `--pins-fd`
 //! (`mounts.rs`, with the guest forms `tag:<tag>:<ino>` and a pin on any
 //! device, HUM-442 Q5), and the bwrap mode follows unchanged: bridges, checks,
-//! fork, filters, `exec` of the agent. Two differences: the bridge forwards
+//! fork, filters, `exec` of the agent. Before its filter the agent's child,
+//! and every further shell, gives up root and every capability and becomes
+//! the plan's `uid` and `gid` (`identity.rs`, HUM-445): PID 1 is root in its
+//! kernel, the agent is not. Two more differences: the bridge forwards
 //! to the door's vsock port of the host instead of a Unix socket, and the
 //! filter of PID 1 allows `AF_VSOCK` instead of `AF_UNIX`; the agent's filter
 //! refuses both.
@@ -179,10 +197,15 @@ const PLAN_SHIM_VARS: [&str; 4] = [
 ///  "env":{"PATH":"/usr/bin:/bin"},
 ///  "pins":{"pins":[...],"mounts":[...]},
 ///  "socket_walk":["/work","/dev/shm"],
+///  "uid":"1000", "gid":"1000", "hostname":"sandbox",
 ///  "command":["/bin/bash","-l"]}
 /// ```
 ///
-/// Every key is required but `modules`, `shim` and `socket_walk`; the ports
+/// The escape suite's plans may add `"root_probe":["/bin/sh","-c","..."]`
+/// (HUM-445, see the module documentation).
+///
+/// Every key is required but `modules`, `shim`, `socket_walk` and
+/// `root_probe`; the ports
 /// are decimal strings. `socket_walk` names the roots of the socket walk of
 /// `single_socket`, absolute paths; absent means the whole file system, as
 /// under bwrap (HUM-444, `report::sockets_under`). `env` follows the rules of `--env-fd`, `pins` the shape of
@@ -212,10 +235,20 @@ pub struct Plan {
     pub socket_walk: Vec<PathBuf>,
     /// The agent's command.
     pub command: Vec<OsString>,
+    /// The escape suite's probe as root without a filter (HUM-445); empty
+    /// in every plan but the suite's.
+    pub root_probe: Vec<OsString>,
+    /// The user and group the agent and every further shell run as, never
+    /// 0 (HUM-445, `identity.rs`).
+    pub uid: u32,
+    /// See [`Plan::uid`].
+    pub gid: u32,
+    /// The guest's host name, as bwrap's `--hostname` (HUM-445).
+    pub hostname: String,
 }
 
 /// The keys a guest plan may have.
-const KEYS: [&str; 11] = [
+const KEYS: [&str; 15] = [
     "proxy_port",
     "door_port",
     "report_port",
@@ -227,6 +260,10 @@ const KEYS: [&str; 11] = [
     "pins",
     "socket_walk",
     "command",
+    "root_probe",
+    "uid",
+    "gid",
+    "hostname",
 ];
 
 /// A reason without spaces: it becomes evidence on a report line.
@@ -332,21 +369,7 @@ pub fn parse(text: &str) -> Result<Plan, String> {
     }
     let env = envfd::parse(required("env")?, &SHIM_VARS).map_err(|e| fail("env", &e))?;
     let pins = mounts::parse_guest_pins(required("pins")?).map_err(|e| fail("pins", &e))?;
-    let socket_walk: Vec<PathBuf> = match raw("socket_walk") {
-        None => Vec::new(),
-        Some(text) => Parser::new(text)
-            .string_array()
-            .map_err(|e| fail("socket_walk", &e))?
-            .into_iter()
-            .map(PathBuf::from)
-            .collect(),
-    };
-    if socket_walk
-        .iter()
-        .any(|root| !root.is_absolute() || root.as_os_str().is_empty())
-    {
-        return Err("socket_walk:not-absolute".to_owned());
-    }
+    let socket_walk = parse_socket_walk(raw("socket_walk"))?;
     let command: Vec<OsString> = Parser::new(required("command")?)
         .string_array()
         .map_err(|e| fail("command", &e))?
@@ -356,6 +379,10 @@ pub fn parse(text: &str) -> Result<Plan, String> {
     if command.is_empty() {
         return Err("command:empty".to_owned());
     }
+    let root_probe = parse_root_probe(raw("root_probe"))?;
+    let uid = unprivileged_id("uid", &string("uid")?)?;
+    let gid = unprivileged_id("gid", &string("gid")?)?;
+    let hostname = checked_hostname(string("hostname")?)?;
     Ok(Plan {
         proxy_port,
         door_port,
@@ -368,7 +395,76 @@ pub fn parse(text: &str) -> Result<Plan, String> {
         pins,
         socket_walk,
         command,
+        root_probe,
+        uid,
+        gid,
+        hostname,
     })
+}
+
+/// The roots of the socket walk: absent, or absolute paths.
+fn parse_socket_walk(raw: Option<&str>) -> Result<Vec<PathBuf>, String> {
+    let Some(text) = raw else {
+        return Ok(Vec::new());
+    };
+    let walk: Vec<PathBuf> = Parser::new(text)
+        .string_array()
+        .map_err(|e| fail("socket_walk", &e))?
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    if walk
+        .iter()
+        .any(|root| !root.is_absolute() || root.as_os_str().is_empty())
+    {
+        return Err("socket_walk:not-absolute".to_owned());
+    }
+    Ok(walk)
+}
+
+/// The escape suite's root probe (HUM-445): absent, or an argument list with
+/// an absolute program.
+fn parse_root_probe(raw: Option<&str>) -> Result<Vec<OsString>, String> {
+    let Some(text) = raw else {
+        return Ok(Vec::new());
+    };
+    let probe: Vec<OsString> = Parser::new(text)
+        .string_array()
+        .map_err(|e| fail("root_probe", &e))?
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+    if probe
+        .first()
+        .is_some_and(|program| Path::new(program).is_absolute())
+    {
+        Ok(probe)
+    } else {
+        Err("root_probe:no-absolute-program".to_owned())
+    }
+}
+
+/// A user or group id the agent may run as: decimal, never 0 (root) and
+/// never the kernel's "no id".
+fn unprivileged_id(key: &str, text: &str) -> Result<u32, String> {
+    text.parse::<u32>()
+        .ok()
+        .filter(|id| *id != 0 && *id != u32::MAX)
+        .ok_or_else(|| format!("{key}:not-an-unprivileged-id:{text}"))
+}
+
+/// A host name as `sethostname(2)` and bwrap's `--hostname` take it: 1 to
+/// 64 letters, digits, dashes and dots.
+fn checked_hostname(name: String) -> Result<String, String> {
+    if name.is_empty()
+        || name.len() > 64
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+    {
+        return Err("hostname:bad".to_owned());
+    }
+    Ok(name)
 }
 
 /// Everything the guest mode prepared: the report, the plan and the
@@ -439,6 +535,12 @@ pub fn boot(path: &Path) -> Option<Booted> {
             return None;
         }
     }
+    if let Err(why) = like_bwrap(&plan) {
+        report.check(Check::MountsMatch, false, &why);
+        say(&format!("humanitl-shim: guest: {why}\n"));
+        linger(&report);
+        return None;
+    }
     if let Err(why) = guest_families(&plan.shim_env) {
         report.check(Check::SeccompApplied, false, &why);
         say(&format!("humanitl-shim: guest: {why}\n"));
@@ -470,6 +572,58 @@ pub fn boot(path: &Path) -> Option<Booted> {
         plan,
         control,
     })
+}
+
+/// Starts the plan's root probe (HUM-445), if it names one: a child of
+/// PID 1 that runs as root without a seccomp filter, because neither PID 1
+/// nor the agent's child has installed one yet. It gets the environment of
+/// the agent without the shim's own variables, no standard input, and none
+/// of PID 1's descriptors above 2: they are marked close-on-exec in the
+/// child before its `exec`. PID 1 does not wait for it; the reaper of
+/// `supervise.rs` collects it like any orphan. The report gets one
+/// `ROOT-PROBE` line, so the evidence of a run says that an unfiltered
+/// process ran next to the agent.
+pub fn start_root_probe(probe: &[OsString], report: &Report) {
+    use std::os::unix::process::CommandExt as _;
+    let Some((program, args)) = probe.split_first() else {
+        return;
+    };
+    let mut command = std::process::Command::new(program);
+    command.args(args).stdin(std::process::Stdio::null());
+    for name in SHIM_VARS {
+        command.env_remove(name);
+    }
+    // SAFETY: the closure runs in the child between fork and exec and calls
+    // only close_range(2), which is async-signal-safe and takes integers.
+    // Marking instead of closing keeps the standard library's own
+    // close-on-exec pipe for the exec error working.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::syscall(
+                libc::SYS_close_range,
+                3_u32,
+                u32::MAX,
+                libc::CLOSE_RANGE_CLOEXEC,
+            ) == 0
+            {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        });
+    }
+    match command.spawn() {
+        Ok(child) => report.line(&format!(
+            "ROOT-PROBE started pid={} root=yes filter=none",
+            child.id()
+        )),
+        Err(err) => {
+            report.line(&format!("ROOT-PROBE failed {}", fail("spawn", &err)));
+            say(&format!(
+                "humanitl-shim: guest: the root probe did not start: {err}\n"
+            ));
+        }
+    }
 }
 
 /// The families the agent may use in a guest kernel: those of the shared
@@ -557,6 +711,79 @@ fn mount_basics() -> Result<(), String> {
     )
     .map_err(|err| format!("mount /dev/pts: {err}"))?;
     loopback_up().map_err(|err| format!("lo up: {err}"))
+}
+
+/// What bwrap gives every sandbox and a fresh kernel does not (HUM-445),
+/// after the module lock, which was the last step that read `/sys`:
+///
+/// - `/sys` becomes an empty, read-only tmpfs. bwrap mounts no sysfs at
+///   all; the guest kernel's own one would show its devices, modules and
+///   parameters to the agent. The sysfs is detached first, so that the
+///   table holds one entry on `/sys`, not two stacked ones.
+/// - `/dev/shm` gets a tmpfs as under bwrap's `--tmpfs` (mode 0755, owned by
+///   the agent's user, `nosuid`, `nodev`, the kernel's default size).
+/// - The host name is the plan's, as bwrap's `--hostname`.
+fn like_bwrap(plan: &Plan) -> Result<(), String> {
+    let sys = CString::new("/sys").map_err(|err| fail("sys", &err))?;
+    // SAFETY: a NUL-terminated path that outlives the call.
+    if unsafe { libc::umount2(sys.as_ptr(), libc::MNT_DETACH) } != 0 {
+        return Err(fail("umount-/sys", &io::Error::last_os_error()));
+    }
+    mount_with(
+        "none",
+        "/sys",
+        "tmpfs",
+        libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC,
+        "size=4k,mode=0555",
+    )
+    .map_err(|err| fail("tmpfs-/sys", &err))?;
+    match fs::create_dir("/dev/shm") {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(err) => return Err(fail("mkdir-/dev/shm", &err)),
+    }
+    mount_with(
+        "tmpfs",
+        "/dev/shm",
+        "tmpfs",
+        libc::MS_NOSUID | libc::MS_NODEV,
+        &format!("mode=0755,uid={},gid={}", plan.uid, plan.gid),
+    )
+    .map_err(|err| fail("tmpfs-/dev/shm", &err))?;
+    // SAFETY: a pointer and length of the plan's name, checked in `parse`.
+    if unsafe { libc::sethostname(plan.hostname.as_ptr().cast(), plan.hostname.len()) } != 0 {
+        return Err(fail("hostname", &io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+/// `mount(2)` with data.
+fn mount_with(
+    source: &str,
+    target: &str,
+    fstype: &str,
+    flags: libc::c_ulong,
+    data: &str,
+) -> io::Result<()> {
+    let text = |value: &str| {
+        CString::new(value).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL byte"))
+    };
+    let (source, target, fstype, data) = (text(source)?, text(target)?, text(fstype)?, text(data)?);
+    // SAFETY: four NUL-terminated strings that outlive the call.
+    let rc = unsafe {
+        libc::mount(
+            source.as_ptr(),
+            target.as_ptr(),
+            fstype.as_ptr(),
+            flags,
+            data.as_ptr().cast(),
+        )
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 /// Where the kernel names the helper it starts to load a module on demand.
@@ -715,6 +942,7 @@ mod tests {
         "pins": {"pins": [{"path": "/work", "dev": "*", "ino": "131"}],
                  "mounts": [{"point": "/work", "type": "virtiofs", "source": "tag:work:131",
                              "mode": "rw", "flags": "nosuid,nodev", "count": "1"}]},
+        "uid": "1000", "gid": "1000", "hostname": "sandbox",
         "command": ["/bin/bash", "-c", "echo hi"]
     }"#;
 
@@ -875,6 +1103,22 @@ mod tests {
                 "given-twice",
             ),
             (r#""work_tag": "work","#, "", "work_tag:missing"),
+            (
+                r#""uid": "1000""#,
+                r#""uid": "0""#,
+                "uid:not-an-unprivileged-id",
+            ),
+            (
+                r#""gid": "1000""#,
+                r#""gid": "0""#,
+                "gid:not-an-unprivileged-id",
+            ),
+            (r#""uid": "1000", "#, "", "uid:missing"),
+            (
+                r#""hostname": "sandbox""#,
+                r#""hostname": "a;b""#,
+                "hostname:bad",
+            ),
         ];
         for (from, to, needle) in cases {
             assert!(PLAN.contains(from), "{from}");
@@ -885,5 +1129,32 @@ mod tests {
         }
         assert!(parse("").is_err());
         assert!(parse(&format!("{PLAN} x")).is_err());
+    }
+
+    /// HUM-445: the escape suite's root probe is optional, an argument list
+    /// with an absolute program; anything else is refused with its key.
+    #[test]
+    fn the_root_probe_is_optional_and_needs_an_absolute_program() {
+        assert!(parse(PLAN).unwrap().root_probe.is_empty());
+        let with = |value: &str| {
+            PLAN.replace(
+                r#""work_tag": "work","#,
+                &format!(r#""work_tag": "work", "root_probe": {value},"#),
+            )
+        };
+        assert_eq!(
+            parse(&with(r#"["/bin/sh", "-c", "probe"]"#))
+                .unwrap()
+                .root_probe,
+            ["/bin/sh", "-c", "probe"].map(OsString::from)
+        );
+        for (value, needle) in [
+            ("[]", "root_probe:no-absolute-program"),
+            (r#"["sh", "-c", "probe"]"#, "root_probe:no-absolute-program"),
+            (r#""/bin/sh""#, "root_probe:"),
+        ] {
+            let err = parse(&with(value)).unwrap_err();
+            assert!(err.contains(needle), "{value}: {err}");
+        }
     }
 }

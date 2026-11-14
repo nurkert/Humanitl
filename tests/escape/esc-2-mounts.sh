@@ -47,6 +47,12 @@ probe no_sys_content sh -c 'find /sys -mindepth 1 ! -type d 2>/dev/null | grep -
 # HUM-439), and the reference of the image when the root is one.
 esc_host_id() { sed -n "s/^$1 //p" /work/results/host-ids 2> /dev/null; }
 esc_image=$(esc_host_id image)
+# The kernel level (HUM-445): a guest kernel behind virtiofs, where a few
+# physical facts differ from a shared kernel while the claim is the same.
+# Those cases have a kernel variant below, named *_kernel, each checking the
+# claim at least as strictly; the table in tests/escape/README.md says why
+# each is equivalent. run.sh writes `level kernel` only for that backend.
+esc_level=$(esc_host_id level)
 
 # esc_host_file PATH KEY — exit 0, a leak for `probe`, when PATH in the
 # sandbox is the host's file KEY (same device and inode).
@@ -90,8 +96,43 @@ esc_from_host() {
     }
     echo "$1 is the daemon's file ($esc_fh_got)${esc_image:+, under the image $esc_image}"
 }
-expect_ok ca_is_the_hosts esc_from_host /etc/humanitl/ca.crt ca
-expect_ok ca_bundle_is_the_hosts esc_from_host /etc/ssl/certs/ca-certificates.crt ca_bundle
+# esc_from_host_kernel PATH KEY — the kernel variant. A file shared from the
+# host over virtiofs keeps its inode, not its device number: the guest numbers
+# its own devices (HUM-442 Q5), so the device is not compared. In its place
+# the file must lie on the virtiofs share and carry the content of the
+# daemon's file, byte for byte by SHA-256, so that no other file with the
+# same inode number on another file system could pass.
+esc_fs_type() {
+    esc_ft_point=$(stat -L -c '%m' "$1" 2> /dev/null) || return 1
+    awk -v p="$esc_ft_point" '{ for (i = 1; i <= NF; i++) if ($i == "-") { if ($5 == p) t = $(i + 1); break } } END { if (t == "") exit 1; print t }' /proc/self/mountinfo
+}
+esc_from_host_kernel() {
+    command -v stat > /dev/null 2>&1 || { echo "no stat on this image"; return 127; }
+    command -v sha256sum > /dev/null 2>&1 || { echo "no sha256sum on this image"; return 127; }
+    esc_fk_want=$(esc_host_id "$2")
+    esc_fk_sha=$(esc_host_id "${2}_sha256")
+    [ -n "$esc_fk_want" ] && [ -n "$esc_fk_sha" ] || { echo "run.sh wrote no host id or digest for $2"; return 2; }
+    esc_fk_ino=$(stat -L -c '%i' "$1" 2>&1) || { echo "stat $1 failed: $esc_fk_ino"; return 2; }
+    [ "$esc_fk_ino" = "${esc_fk_want#*:}" ] || {
+        echo "$1 in the guest has inode $esc_fk_ino, the daemon's file ${esc_fk_want#*:}"
+        return 1
+    }
+    esc_fk_type=$(esc_fs_type "$1") || { echo "no mount found for $1"; return 2; }
+    [ "$esc_fk_type" = virtiofs ] || { echo "$1 lies on $esc_fk_type, not on the virtiofs share"; return 1; }
+    esc_fk_got=$(sha256sum "$1" 2>&1 | cut -d' ' -f1)
+    [ "$esc_fk_got" = "$esc_fk_sha" ] || {
+        echo "$1 in the guest has SHA-256 $esc_fk_got, the daemon's file $esc_fk_sha"
+        return 1
+    }
+    echo "$1 is the daemon's file: inode $esc_fk_ino on virtiofs, SHA-256 $esc_fk_got"
+}
+if [ "$esc_level" = kernel ]; then
+    expect_ok ca_is_the_hosts_kernel esc_from_host_kernel /etc/humanitl/ca.crt ca
+    expect_ok ca_bundle_is_the_hosts_kernel esc_from_host_kernel /etc/ssl/certs/ca-certificates.crt ca_bundle
+else
+    expect_ok ca_is_the_hosts esc_from_host /etc/humanitl/ca.crt ca
+    expect_ok ca_bundle_is_the_hosts esc_from_host /etc/ssl/certs/ca-certificates.crt ca_bundle
+fi
 
 # --- exactly one socket, and it is the proxy ----------------------------------
 #
@@ -105,13 +146,81 @@ expect_ok ca_bundle_is_the_hosts esc_from_host /etc/ssl/certs/ca-certificates.cr
 #
 # Leading blanks in the pattern: some wc implementations pad the count.
 esc_socket_count() { esc_find_sockets / | wc -l; }
-expect_output exactly_one_socket '^[[:space:]]*1$' esc_socket_count
-expect_only   socket_is_proxy '^/run/humanitl/proxy\.sock$' esc_find_sockets /
-# HUM-013: the door is a socket FILE, and the daemon's control socket and
-# token, which live next to the proxy directory on the host, are not here.
-expect_ok     proxy_is_socket_file test -S /run/humanitl/proxy.sock
+# The kernel variant (HUM-445): the door is no file in a guest but a vsock
+# port of the host, reached only through the shim's bridge on 127.0.0.1:3128
+# (the agent's filter refuses AF_VSOCK and AF_UNIX, ESC-1). The claim
+# "exactly one way out, and it is the proxy" becomes: not a single Unix socket
+# anywhere in the guest, walked over the whole file system as above (wider
+# than the shim's own walk over the writable places), the agent's proxy
+# settings name only 127.0.0.1:3128, and that door answers as the proxy.
+esc_proxy_vars() { env | grep -iE '^(https?|all)_proxy=' | sed 's/^[^=]*=//' | sort -u; }
+esc_door_answer() {
+    python3 -c '
+import socket
+s = socket.create_connection(("127.0.0.1", 3128), timeout=10)
+s.sendall(b"GET http://humanitl.internal/ HTTP/1.0\r\nHost: humanitl.internal\r\n\r\n")
+data = b""
+while len(data) < 65536:
+    chunk = s.recv(4096)
+    if not chunk:
+        break
+    data += chunk
+print(data.decode("utf-8", "replace"))
+'
+}
+# esc_socket_walk_kernel — the positive control and the walk in one: a
+# socket node planted in /dev/shm (mknod, as the agent's filter refuses
+# socket(AF_UNIX)) must be listed, nothing else may be, and the walk must
+# complete (find exits 0 for every root). A walk that broke off or saw
+# nothing is red. The roots are the places a socket can be in the guest: the
+# writable ones and every mount point the plan leaves empty (/work, /dev with
+# /dev/shm, /tmp, /run, /home); the rest is the plan's read-only share of the
+# host's files, in which the shim's single_socket and the host check allow
+# no socket. The walk does not cover that share: a walk over the whole host
+# /usr through virtiofs runs out of the file system daemon's descriptors
+# (measured 2026-11-14, ENFILE after some 520000), and the agent cannot read
+# every directory there either.
+ESC_SOCKET_ROOTS_KERNEL="/work /dev /tmp /run /home"
+esc_socket_walk_kernel() {
+    esc_sw_plant=/dev/shm/humanitl-escape-control.sock
+    python3 -c 'import os, stat, sys; os.mknod(sys.argv[1], stat.S_IFSOCK | 0o600)' "$esc_sw_plant" || {
+        echo "cannot plant $esc_sw_plant"
+        return 2
+    }
+    esc_sw_out=""
+    esc_sw_code=0
+    for esc_sw_root in $ESC_SOCKET_ROOTS_KERNEL; do
+        esc_sw_found=$(esc_find_sockets "$esc_sw_root") || esc_sw_code=$?
+        esc_sw_out="$esc_sw_out$esc_sw_found"
+    done
+    rm -f "$esc_sw_plant"
+    [ "$esc_sw_code" -eq 0 ] || { echo "the walk did not complete (find exit $esc_sw_code): $esc_sw_out"; return 1; }
+    [ "$esc_sw_out" = "$esc_sw_plant" ] || { echo "expected only $esc_sw_plant, the walk listed: $esc_sw_out"; return 1; }
+    echo "the walk saw the planted socket and nothing else"
+}
+if [ "$esc_level" = kernel ]; then
+    expect_ok     socket_none_kernel esc_socket_walk_kernel
+    expect_only   door_is_loopback_kernel '^http://127\.0\.0\.1:3128$' esc_proxy_vars
+    expect_output door_reaches_proxy_kernel '^humanitl session=' esc_door_answer
+else
+    expect_output exactly_one_socket '^[[:space:]]*1$' esc_socket_count
+    expect_only   socket_is_proxy '^/run/humanitl/proxy\.sock$' esc_find_sockets /
+    # HUM-013: the door is a socket FILE, and the daemon's control socket and
+    # token, which live next to the proxy directory on the host, are not here.
+    expect_ok     proxy_is_socket_file test -S /run/humanitl/proxy.sock
+fi
 probe         no_daemon_socket sh -c 'test -e /run/humanitl/daemon.sock -o -e /run/humanitl/token'
-probe         proxy_socket_dir_is_not_host sh -c 'ls /run/humanitl | grep -vxE "proxy\.sock|humanitl-shim" | grep -q .'
+# Kernel variant (HUM-445): /run/humanitl holds the shim, the guest plan and
+# the guest kernel's modules, never the daemon's socket or token. The listing
+# must succeed and name nothing else; a listing that fails is red, not a pass.
+# (The case under bwrap passes on a failing ls; under the kernel level it did
+# so once only because a walk over the whole share had used up the
+# descriptors of the file system daemon.)
+if [ "$esc_level" = kernel ]; then
+    expect_only   proxy_socket_dir_is_not_host_kernel '^(humanitl-shim|guest-plan\.json|modules)$' ls -A /run/humanitl
+else
+    probe         proxy_socket_dir_is_not_host sh -c 'ls /run/humanitl | grep -vxE "proxy\.sock|humanitl-shim" | grep -q .'
+fi
 
 # --- the host environment did not come along ----------------------------------
 #
@@ -142,7 +251,26 @@ probe masked_envrc_hides_content     sh -c 'grep -a HUMANITL_MASK_CANARY /work/.
 probe masked_gitconfig_hides_content sh -c 'grep -a HUMANITL_MASK_CANARY /work/.git/config 2>/dev/null'
 probe git_hooks_hide_content         sh -c 'grep -ra HUMANITL_MASK_CANARY /work/.git/hooks 2>/dev/null'
 probe editor_dirs_hide_content       sh -c 'grep -ra HUMANITL_MASK_CANARY /work/.vscode /work/.idea 2>/dev/null'
-expect_output git_hooks_is_tmpfs 'tmpfs' sh -c 'grep " /work/.git/hooks " /proc/self/mountinfo'
+# The kernel variant (HUM-445): the profile's tmpfs over .git/hooks lies in
+# the jail of the file system daemon of /work, so the guest sees the share,
+# not a tmpfs mount. The claim of the mask holds when the directory is empty,
+# is not the host's directory (another inode than the one run.sh recorded),
+# and a hook written here never reaches the host: run.sh checks the host copy
+# after this suite (git_hooks_write_stays_kernel).
+esc_hooks_not_host() {
+    esc_hn_host=$(esc_host_id git_hooks)
+    [ -n "$esc_hn_host" ] || { echo "run.sh wrote no host id for git_hooks"; return 2; }
+    esc_hn_ino=$(stat -c '%i' /work/.git/hooks 2>&1) || { echo "stat failed: $esc_hn_ino"; return 2; }
+    [ "$esc_hn_ino" != "${esc_hn_host#*:}" ] || { echo "/work/.git/hooks is the host's directory, inode $esc_hn_ino"; return 1; }
+    echo "inode $esc_hn_ino, the host's ${esc_hn_host#*:}"
+}
+if [ "$esc_level" = kernel ]; then
+    expect_empty git_hooks_empty_kernel sh -c 'ls -A /work/.git/hooks'
+    expect_ok    git_hooks_not_host_kernel esc_hooks_not_host
+    expect_ok    git_hooks_write_kernel sh -c 'printf "#!/bin/sh\necho planted\n" > /work/.git/hooks/humanitl-escape-hook'
+else
+    expect_output git_hooks_is_tmpfs 'tmpfs' sh -c 'grep " /work/.git/hooks " /proc/self/mountinfo'
+fi
 
 # --- the container engine (HUM-435) -------------------------------------------
 #
@@ -160,9 +288,20 @@ expect_empty containerenv_empty sh -c 'cat /run/.containerenv 2>/dev/null'
 # path or not, so a socket of the engine that shared the namespace would show
 # up there even without a file in the sandbox. Exit 1 when nothing matches,
 # which is the pass of `probe`.
+# Under the kernel level the walk takes the roots of socket_none_kernel, for
+# the reason given there.
+esc_sockets_anywhere() {
+    if [ "$esc_level" = kernel ]; then
+        for esc_sa_root in $ESC_SOCKET_ROOTS_KERNEL; do
+            esc_find_sockets "$esc_sa_root"
+        done
+    else
+        esc_find_sockets /
+    fi
+}
 esc_engine_sockets() {
     esc_es_found=$({
-        esc_find_sockets / | grep -E 'attach|conmon|podman|/ctl$|notify'
+        esc_sockets_anywhere | grep -E 'attach|conmon|podman|/ctl$|notify'
         grep -E 'attach|conmon|podman|/ctl$|notify' /proc/net/unix 2>/dev/null
     })
     [ -n "$esc_es_found" ] || return 1

@@ -120,7 +120,8 @@ escape_sandbox_run() {
 # `KEY DEV:INO`, and `image REF` when the root is an image (ESCAPE_IMAGE).
 # The sandbox reads it under /work/results/host-ids.
 #
-# Needs DAEMON_CA_DIR; ESCAPE_IMAGE may be empty.
+# Needs DAEMON_CA_DIR, and WORK under the kernel level; ESCAPE_IMAGE and
+# ESCAPE_BACKEND may be empty.
 escape_host_ids() {
     {
         for ehi_pair in "ca $DAEMON_CA_DIR/ca.crt" "ca_bundle $DAEMON_CA_DIR/ca-bundle.crt" "shadow /etc/shadow" "machine_id /etc/machine-id"; do
@@ -132,6 +133,21 @@ escape_host_ids() {
         done
         if [ -n "${ESCAPE_IMAGE:-}" ]; then
             printf 'image %s\n' "$ESCAPE_IMAGE"
+        fi
+        # The kernel level (HUM-445): esc-2 runs its kernel variants and
+        # needs the content of the CA and the bundle and the host's
+        # .git/hooks for them.
+        if [ "${ESCAPE_BACKEND:-}" = qemu ]; then
+            printf 'level kernel\n'
+            for ehi_pair in "ca $DAEMON_CA_DIR/ca.crt" "ca_bundle $DAEMON_CA_DIR/ca-bundle.crt"; do
+                ehi_key=${ehi_pair%% *}
+                if ehi_sum=$(sha256sum "${ehi_pair#* }" 2> /dev/null); then
+                    printf '%s_sha256 %s\n' "$ehi_key" "${ehi_sum%% *}"
+                fi
+            done
+            if ehi_id=$(stat -c '%d:%i' "$WORK/.git/hooks" 2> /dev/null); then
+                printf 'git_hooks %s\n' "$ehi_id"
+            fi
         fi
     } > "$1"
 }
@@ -151,6 +167,21 @@ escape_collect() {
     if ! grep -q "^SUITE-DONE $ec_suite " "$ec_file"; then
         record_error "$ec_suite" sandbox_died \
             "the suite stopped before its last case; see target/escape/$ec_suite.log"
+    else
+        escape_count_matches "$ec_suite" "$ec_file"
     fi
     grep '^RESULT ' "$ec_file" >> "$RESULTS" || true
+}
+
+# escape_count_matches SUITE FILE — the sentinel names how many cases the
+# suite recorded; a file whose RESULT lines are none or another number is an
+# error (HUM-445): a suite that recorded nothing proves nothing, and a lost or
+# extra line means the file is not the suite's own.
+escape_count_matches() {
+    ecm_said=$(sed -n "s/^SUITE-DONE $1 \([0-9][0-9]*\)\$/\1/p" "$2" | tail -n 1)
+    ecm_got=$(grep -c "^RESULT $1 " "$2" || true)
+    if [ -z "$ecm_said" ] || [ "$ecm_said" -eq 0 ] || [ "$ecm_got" -ne "$ecm_said" ]; then
+        record_error "$1" result_count \
+            "the sentinel names ${ecm_said:-no} case(s), the file holds $ecm_got RESULT line(s); see target/escape/$1.log"
+    fi
 }

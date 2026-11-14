@@ -182,6 +182,7 @@ mod envfd;
 mod exec;
 mod guest;
 mod handover;
+pub(crate) mod identity;
 mod modules;
 mod mounts;
 mod refusals;
@@ -302,12 +303,20 @@ fn run_guest(path: &Path) -> i32 {
         guest::linger(&report);
         return EXIT_SETUP;
     }
+    // Only in the escape suite's plans (HUM-445): before any filter of
+    // PID 1, so that the probe runs as root without one.
+    guest::start_root_probe(&plan.root_probe, &report);
     // The terminals over the host's second connection (HUM-443): in a guest
     // the stream mode is the only one.
     let stream = match stream::nonblocking(control.as_raw_fd())
         .map_err(|err| format!("flags:{err}").replace(' ', "_"))
         .and_then(|()| stream_session(control))
-    {
+        .and_then(|mut session| {
+            session
+                .run_as(plan.uid, plan.gid)
+                .map_err(|err| format!("terminal-owner:{err}").replace(' ', "_"))?;
+            Ok(session)
+        }) {
         Ok(session) => session,
         Err(why) => {
             let code = refuse_setup(&report, &SetupError::control_stream(&why));
@@ -320,6 +329,7 @@ fn run_guest(path: &Path) -> i32 {
         command: plan.command,
         vsock_door: Some(plan.door_port),
         socket_walk: plan.socket_walk,
+        agent_identity: Some((plan.uid, plan.gid)),
         controlling_terminal: true,
         terminal_fd: stream.follower_fd(),
         ..Cli::default()
@@ -1057,6 +1067,19 @@ fn child(
     if cli.controlling_terminal {
         take_controlling_terminal();
     }
+    // In a guest kernel PID 1 is root; the agent is not (HUM-445). After
+    // the terminal, which needs no privilege any more, and before the
+    // filter, which then never has to allow the calls.
+    if let Some((uid, gid)) = cli.agent_identity
+        && let Err(why) =
+            identity::drop_to(uid, gid).and_then(|()| identity::keep_parent_death(parent_pid))
+    {
+        report.check(Check::SeccompApplied, false, why);
+        say(&format!(
+            "humanitl-shim: guest: the agent could not give up root: {why}\n"
+        ));
+        exit_now(EXIT_SETUP);
+    }
 
     if let Err(err) = filter.install() {
         report.check(Check::SeccompApplied, false, &err.to_string());
@@ -1700,6 +1723,10 @@ struct Cli {
     /// Where the socket walk starts in a guest (HUM-444); empty means `/`.
     /// Never set from the command line.
     socket_walk: Vec<PathBuf>,
+    /// The user and group the agent's child becomes in a guest kernel,
+    /// giving up root and every capability before its filter (HUM-445,
+    /// `identity.rs`). Never set from the command line.
+    agent_identity: Option<(u32, u32)>,
 }
 
 #[derive(Debug)]
@@ -1788,6 +1815,7 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
                     vsock_door: None,
                     terminal_fd: None,
                     socket_walk: Vec::new(),
+                    agent_identity: None,
                 });
             }
             Some("--help" | "-h") => return Err(CliError::Help),
