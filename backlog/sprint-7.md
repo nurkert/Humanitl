@@ -79,6 +79,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-470 | Kernel-Stufe: zwei Flakes auf der CI (kvm-Test ohne CHECK, unplanned_mount mit Exit 3) | S | HUM-445 |
 | HUM-471 | Kernel-Stufe: Gast ohne Verbindung des Hosts (kvm-Test ohne CHECK), Konsole im Adapterpfad | M | HUM-470 |
 | HUM-472 | Website: das Modell als Angreifer (Lazarus, Microsoft Research), mit Quellen | S | — |
+| HUM-475 | Website: die deutschen Texte der Start- und der Sicherheitsseite sprachlich überarbeiten | S | HUM-472 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -1351,3 +1352,34 @@ Risiko, das wir angehen.
 1. Beide Stellen in de und en, jede Aussage über das Paper mit Quelle.
 2. Keine Aussage, Humanitl erkenne Backdoors; keine Aussage, der Angriff sei
    schon im Einsatz beobachtet.
+
+## HUM-475 · Website: German copy of the home and security pages
+
+### Kontext
+Rückmeldung des Owners vom 2026-11-14: Die deutschen Texte auf der
+Startseite und der Sicherheitsseite sind teilweise sehr holprig, auch
+grammatikalisch. Viele Sätze lesen sich wie wörtlich aus dem Englischen
+übertragen.
+
+### Spezifikation
+1. Jeder deutsche Text der Startseite und der Sicherheitsseite
+   (`website/src/i18n/locales/de.ts`, Schlüssel `home` und `security`, dazu
+   gemeinsame Teile, die auf beiden Seiten stehen) wird geprüft und, wo
+   nötig, neu formuliert: korrekte Grammatik und Zeichensetzung, natürlicher
+   deutscher Satzbau statt Übersetzungsdeutsch, kurze Sätze statt
+   Bandwurmsätzen, durchgehend „du", ein Begriff für eine Sache.
+2. Der Inhalt bleibt: keine Aussage wird stärker oder schwächer, keine Zahl,
+   kein Code, kein Verweis ändert sich. Fachbegriffe, Bezeichner, Befehle
+   und Codes bleiben exakt.
+3. Die englischen Texte bleiben unverändert, außer ein Fehler dort zeigt
+   sich beim Abgleich.
+
+### Tests
+- `website` baut; Link- und Übersetzungsprüfung grün.
+- Vorher-Nachher-Liste der geänderten Sätze und Screenshots für den Owner
+  vor dem Commit.
+
+### Akzeptanzkriterien
+1. Kein grammatikalischer Fehler mehr in den deutschen Texten beider Seiten.
+2. Jede Sicherheitsaussage gleich stark wie vorher, geprüft gegen
+   `docs/SECURITY.md`.
