@@ -913,7 +913,6 @@
                 "integer",
                 "null"
               ],
-              "x-pending-issue": "HUM-444",
               "x-project-scope": "denied",
               "x-tier": "advanced"
             },
@@ -924,7 +923,6 @@
                 "string",
                 "null"
               ],
-              "x-pending-issue": "HUM-444",
               "x-project-scope": "denied",
               "x-tier": "expert"
             },
@@ -937,7 +935,6 @@
                 "integer",
                 "null"
               ],
-              "x-pending-issue": "HUM-444",
               "x-project-scope": "denied",
               "x-tier": "advanced"
             },
@@ -948,7 +945,6 @@
                 "string",
                 "null"
               ],
-              "x-pending-issue": "HUM-444",
               "x-project-scope": "denied",
               "x-tier": "expert"
             },
@@ -959,7 +955,6 @@
                 "string",
                 "null"
               ],
-              "x-pending-issue": "HUM-444",
               "x-project-scope": "denied",
               "x-tier": "expert"
             },
@@ -969,7 +964,6 @@
               "format": "uint64",
               "minimum": 0,
               "type": "integer",
-              "x-pending-issue": "HUM-444",
               "x-project-scope": "denied",
               "x-tier": "expert"
             },
@@ -980,7 +974,6 @@
                 "string",
                 "null"
               ],
-              "x-pending-issue": "HUM-444",
               "x-project-scope": "denied",
               "x-tier": "expert"
             },
@@ -991,7 +984,6 @@
                 "string",
                 "null"
               ],
-              "x-pending-issue": "HUM-444",
               "x-project-scope": "denied",
               "x-tier": "expert"
             }

@@ -164,8 +164,8 @@ pub fn list_backends_with(
 /// Start macht ([`detect_in_build`]).
 ///
 /// Unter dem VM-Backend der Kernel-Stufe nur die Prüfung seiner
-/// Voraussetzungen (`SANDBOX_045`): Einen Adapter gibt es bis HUM-444 nicht,
-/// und dass die Stufe nicht zugelassen ist, sagt `SANDBOX_048` daneben.
+/// Voraussetzungen (`SANDBOX_045`), ohne den Adapter (HUM-444) zu bauen: Dass
+/// die Stufe nicht zugelassen ist, sagt `SANDBOX_048` daneben.
 ///
 /// Unter der Container-Engine zuerst, ob es das Programm gibt, mit dem Weg
 /// zurück im Text. Danach, wenn ihre gemeinsame Stufe zugelassen ist, die

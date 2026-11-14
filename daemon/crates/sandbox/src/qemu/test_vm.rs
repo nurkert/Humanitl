@@ -59,10 +59,9 @@ const GUEST_CID: u32 = 3;
 /// So lange darf der Gast vom Start von QEMU bis zu seinem Ende brauchen.
 const RUN_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Die Zeile, die für einen Gast ohne Bericht steht: eine gescheiterte
-/// Prüfung mit Grund.
-pub(crate) const NO_REPORT: &str = "CHECK seccomp_applied fail no-report:the_guest_ended_\
-    without_a_report;_its_vsock_modules_or_the_report_channel_failed";
+/// Die Zeile, die für einen Gast ohne Bericht steht (der Adapter schreibt
+/// dieselbe).
+pub(crate) use super::session::NO_REPORT;
 
 /// Die längste Pfadangabe eines Unix-Sockets (`sun_path`).
 const SUN_PATH_MAX: usize = 108;
@@ -369,7 +368,10 @@ pub(crate) fn run_with(spec: &Spec, scenario: impl FnOnce(&Session)) -> Result<O
     let deadline = started + RUN_TIMEOUT;
     let mut session = None;
     let mut reader = None;
-    if let Some(report) = connect(&device, deadline, &mut || vm.emulator_ended()) {
+    if let Some(mut report) = connect(&device, deadline, &mut || vm.emulator_ended()) {
+        // Ohne Host-Prüfung, also gleich zugelassen (HUM-444): Der Shim
+        // startet den Agenten erst nach diesem Urteil.
+        let _ = report.write_all(b"ADMIT\n");
         reader = Some(thread::spawn(move || read_lines(report, deadline)));
         session = connect(&device, deadline, &mut || vm.emulator_ended()).and_then(open_session);
     }

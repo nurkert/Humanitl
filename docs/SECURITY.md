@@ -2118,3 +2118,97 @@ IDs for `--userns=keep-id` (`SANDBOX_039`), the cgroup controllers `memory`, `pi
 delegated (`SANDBOX_040`), no enforcing SELinux (`SANDBOX_044`, a mount would need relabelling the
 project). A missing prerequisite refuses the start with its code; the start never falls back to
 bubblewrap.
+
+## 14. Linux: QEMU micro-VM (kernel level)
+
+**Not admitted yet.** The kernel level, the backend `qemu` (ADR-0021), runs the agent in a micro-VM
+with a guest kernel of its own. It is not in the list of admitted levels: every start with
+`sandbox.backend = "qemu"` refuses with `SANDBOX_048` until HUM-449, after the escape suite against
+it with root in the guest (HUM-445) is green on `main`. `auto` never chooses it. Until then only
+the escape suite and the tests reach the adapter (`daemon/crates/sandbox/src/qemu/`, HUM-444),
+through a bypass that the shipped daemon and command line do not contain. This section states what
+the adapter does, so that the claim can be checked before the level is offered.
+
+### The three guarantees in the micro-VM
+
+The guarantees have to hold with root in the guest: the agent's kernel is not the host's, and
+whoever gets root in the guest controls that kernel. The checks inside the guest are therefore
+defense in depth; what carries each guarantee lies on the host.
+
+| # | Guarantee | How it holds on the host | Checked by |
+|---|---|---|---|
+| 1 | No network interface | the machine has no network device (`-nic none`, no `-netdev`); the session's unit runs with `PrivateNetwork=yes`, so every helper process sees only `lo`; no process of the unit holds `/dev/net/tun`, `/dev/vhost-net` or `/dev/vhost-vsock` | the shim's `no_interfaces` in the guest, and the host check: the network namespace of every process of the unit, the descriptors of every process, the running emulator's own command line |
+| 2 | Exactly one door | one vsock device process per session (never shared, HUM-442 Q9) with one device, `--uds-path` in the session's runtime directory and never `--forward-cid`; on the host exactly one listener `<uds>_5000`, which the daemon forwards to the session's proxy socket; every other port of the host finds no listener; the guest root is a read-only share in which no runtime directory and no host socket stands | the shim's `single_socket`, `bridge_listening`, `mounts_match` and `mounts_pinned` in the guest, and the host check: only the declared sockets in the runtime directory, exactly one vsock device process with exactly one device, the emulator's descriptors limited to those of the plan without a console |
+| 3 | No new doors | the guest kernel loads only the plan's modules and then locks module loading (`kernel.modules_disabled = 1`, automatic loading off before that); no device can be added to a running machine (no monitor, no QMP); the emulator runs under its full `-sandbox` and in a jail without capabilities | the shim's `seccomp_applied` and `families` in the guest; the agent's filter refuses `AF_VSOCK` and `AF_UNIX` |
+
+**The agent starts only when the host admits it.** In the guest, PID 1 writes every `CHECK` line
+and then holds the agent at its exec gate until the daemon answers on the report connection, which
+the host opened. The daemon reads the guest's lines, runs the host check and sends `ADMIT` only when
+both pass; otherwise it sends `DENY` and stops the unit. Without an answer within 120 seconds the
+shim refuses on its own. So no failed check, from the guest or from the host, ever leaves an agent
+running even for a moment. This gate exists only in the guest; under bubblewrap and Podman the
+agent starts as before and a red check stops the session afterwards (K-15).
+A guest that ends without the shim's report is a failed check with its own reason, never a pass.
+A failed host check is `SANDBOX_047`: the agent is not admitted and the session is stopped.
+
+### How a session is built
+
+- **One hardened unit per session.** The session starts as a transient unit of the user's service
+  manager (`systemd-run --user`, HUM-434) with the properties of HUM-442 Q7: `PrivateNetwork`,
+  `PrivateUsers`, `NoNewPrivileges`, an empty capability bounding set, `ProtectSystem=strict`,
+  `ProtectHome=read-only` with only the runtime directory of the session and the project folder
+  writable, `RestrictAddressFamilies=AF_UNIX AF_NETLINK`, `LockPersonality`, `RestrictRealtime`,
+  native system calls only.
+- **Four processes, four jails.** The file system daemon of the guest root, the file system daemon
+  of `/work`, the vsock device and the emulator each run in their own bubblewrap jail with every
+  namespace unshared and every capability dropped. No jail binds the session's runtime directory
+  itself: each socket lives in a subdirectory of its own (`root/`, `work/`, `vsock/`, `door/`),
+  and each jail binds only what it needs. The `/work` daemon binds `work/`, the vsock device
+  binds `vsock/` and `door/`, and the root daemon binds none, since it gets its socket as a
+  descriptor. The emulator binds `root/`, `work/` and `vsock/` read-only, enough to connect to the
+  three vhost-user sockets; it never sees the door, the handover socket or the guest's files. Beyond
+  those it holds only `/usr`, `/dev/kvm` and the one kernel file from `/boot`; it has no console,
+  monitor or display.
+- **The guest root comes from the same plan as under bubblewrap.** The profile's mounts, the shim,
+  the CA certificate and bundle, the identity files and the adapter's files are built into a
+  subdirectory of the root daemon's jail and shared read-only; the jail's own `/proc` is outside
+  that subdirectory. The root daemon gets its socket as an inherited descriptor, so the runtime
+  directory never stands in the guest root. Mount points inside the share are not announced to the
+  guest (`--no-announce-submounts` where the file system daemon knows it), and the shim's expected
+  mount table holds exactly one virtiofs mount at `/` and one at `/work`.
+- **The project folder is the checked one.** The daemon opens and checks the folder, hands the
+  descriptor to the unit and the `/work` daemon's jail binds exactly that descriptor
+  (`--bind-fd`); a swap of the path after the check does not reach the guest (HUM-442 Q4). The
+  profile's masks under `/work` lie over that share in the jail, so the guest sees them as under
+  bubblewrap. The shim in the guest compares the inode of `/work` with the plan.
+- **Nothing is inherited.** The unit is no child of the daemon. Its first process is the shim on
+  the host (`--fds-then-exec`): it takes three descriptors over a one-connection handover socket of
+  the session (the root daemon's socket, the project folder, the read end of the lifeline) and runs
+  the fixed script that starts the four jails.
+- **The end of the daemon ends the session without the guest.** The script waits on the
+  lifeline, whose write end only the daemon holds; when the daemon ends, also by `SIGKILL`, the
+  script ends and the service manager stops every process of the unit (`KillMode=control-group`).
+  When the daemon runs as a service, the unit is also bound to it (`BindsTo`). Root in the guest
+  can ignore the end of the control stream; that lifeline inside the guest is defense in depth
+  only. A stop of a session stops the unit and removes its runtime directory; what a crash leaves
+  behind is stopped and removed at the next daemon start (`SANDBOX_041`).
+
+### What is different from bubblewrap
+
+- **The trusted computing base grows** by the emulator, the guest kernel, the two file system
+  daemons, the vsock device and the user's service manager (K-30 to K-33 in
+  [`THREAT-MODEL.md`](THREAT-MODEL.md)).
+- **The guest root is read-only, extra writable mounts included.** `mounts.extra_rw` is mounted
+  read-only in the guest.
+- **No disposable sandbox yet.** `disposable` refuses with `SANDBOX_030` until HUM-446.
+- **The terminal travels as a stream** (K-29); a signal of the host reaches no process of the
+  guest, an interrupt is a frame.
+
+### Prerequisites
+
+`/dev/kvm` readable and writable, the emulator with `microvm` and `vhost-user-vsock-pci`, the file
+system daemon with `--readonly` and `--fd`, the vsock device with `--uds-path` and `--groups`,
+bubblewrap with `--bind-fd`, a readable kernel image with virtiofs built in
+(`CONFIG_VIRTIO_FS=y` in the configuration beside the image) and the module directory of that
+kernel. A missing prerequisite refuses the start with `SANDBOX_045`; the start never falls back to
+another backend. `humanitl doctor` shows one line per prerequisite.

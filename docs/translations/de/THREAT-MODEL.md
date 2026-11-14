@@ -152,6 +152,10 @@ Fünf weitere Kanäle vervollständigen das Modell:
 | K-27 | die Container-Engine unter Podman (Podman, `conmon`, `crun`, der Container-Speicher des Nutzers, `containers.conf`) | b, d | hoch | in der gemeinsamen Stufe (`crun`) erst zugelassen, als die Escape-Suite gegen sie auf `main` grün war (HUM-448), die Kernel-Stufe (Backend `qemu`, ADR-0021) bis HUM-449 mit `SANDBOX_048` abgelehnt, `auto` nie Podman; jede Konfigurationsquelle, die der Daemon nicht schreibt, abgeschnitten; feste Flags ohne Schlüssel; die Umgebung nur über den versiegelten memfd; beendet über die Engine und die Lebensleine; Reste beim Start des Daemons entfernt (`SANDBOX_041`) | mitigated | ESC-1, ESC-2, ESC-5 (`escape-tests-podman`, HUM-435); `daemon/crates/sandbox/src/podman/` (HUM-433) |
 | K-28 | das Abbild als Wurzel der Sandbox unter Podman und das Ziehen (Herkunft, Digest, das Netz beim Ziehen) | b, d | hoch | mit Digest festgelegt, vor jedem Start geprüft, von keinem Start gezogen (`SANDBOX_043`); gezogen nur auf Wunsch, von der Engine direkt und nicht durch den Proxy, bei der Registry, die der Name nennt, und vorher gesagt; Zugangsdaten zur Registry nur aus der eigenen Datei des Adapters, der Engine als private Kopie gereicht, ein Credential-Helfer darin oder in einer Ergänzung zur `registries.conf` abgelehnt (HUM-456); Projekt, Tür, CA, Shim und Dateien der Sitzung vom Host, nie aus dem Abbild; Nutzer, Einstiegspunkt, Volumes und Gesundheitsprüfung des Abbilds aufgehoben, ein Abbild mit `HUMANITL_*` abgelehnt | open | ESC-2 `ca_is_the_hosts` (`HUMANITL_ESCAPE_IMAGE`); `daemon/crates/sandbox/src/podman/image.rs` (HUM-439) |
 | K-29 | der Steuerkanal der Terminals (der Strom-Modus: die Kernel-Stufe immer, bwrap, wenn ein Aufrufer ihn verlangt) | b | hoch | ein Strom-Socket, den nur der Daemon und PID 1 halten, geöffnet vor dem Filter des Agenten, der `AF_VSOCK` und `AF_UNIX` verweigert; im Gast öffnet ihn der Host als zweite Verbindung am einen lauschenden Port des Shims, der Gast öffnet keine; nur Terminal-Bytes und Steuerung, nie ein Byte an den Proxy oder von ihm; Rahmen von höchstens 16 KiB, übergroße Rahmen, unbekannte Arten und unbekannte Kennungen verwerfen beide Seiten, ohne den Strom zu beenden; sein Ende ist eine Lebensleine | mitigated | ESC-1 `socket_af_vsock` in `daemon/crates/ipc/tests/terminal_stream.rs`, Fuzz-Target `control_stream_reader` mit `daemon/crates/sandbox/tests/regressions/`, `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (HUM-443) |
+| K-30 | der Monitor der virtuellen Maschine der Kernel-Stufe (QEMU `microvm`) | b | hoch | nicht zugelassen bis HUM-449 (`SANDBOX_048`); kein Netzgerät, keine Konsole, kein Monitor, keine Anzeige; volles `-sandbox`; in einem bubblewrap-Gefängnis ohne Fähigkeiten nur mit `/dev/kvm` und der Kernel-Datei; in einer gehärteten vorübergehenden Unit des Nutzers mit `PrivateNetwork`; der Host prüft nach dem Start seine Deskriptoren und seine eigene Startzeile (`SANDBOX_047`) | open | `daemon/crates/sandbox/src/qemu/host_check.rs`, `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (HUM-444); Escape-Suite mit Root im Gast (HUM-445) |
+| K-31 | die vsock-Tür der Kernel-Stufe | b | hoch | ein vsock-Geräteprozess je Sitzung mit einem Gerät und eigener Gruppe, nie `--forward-cid`; auf dem Host genau ein Lauscher `<uds>_5000`, weitergereicht an den Proxy-Socket der Sitzung; jeder andere Port findet keinen Lauscher; die Host-Prüfung lehnt jeden weiteren Socket im Laufzeitverzeichnis und ein zweites Gerät ab | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`an_extra_listener_beside_the_door_turns_the_host_check_red`, HUM-444) |
+| K-32 | der Gastkernel (Root im Gast) | b | hoch | die Garantien werden auf dem Host getragen und gelten deshalb mit Root im Gast; das automatische Laden von Modulen aus, dann die vsock-Module des Plans geladen und das Laden gesperrt, bevor der Agent startet; die Wurzel des Gasts eine nur lesbare Freigabe ohne Laufzeitverzeichnis und ohne das `/proc` des Gefängnisses | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (HUM-465, HUM-444); Escape-Suite mit Root im Gast (HUM-445) |
+| K-33 | die vier Hilfsprozesse einer Sitzung (zwei Dateisystemdienste, das vsock-Gerät, der Emulator) und der erste Prozess der Unit | b, d | hoch | jeder in einem eigenen bubblewrap-Gefängnis mit allen Namensräumen getrennt und ohne Fähigkeit, nur `/usr` des Hosts, was er ausliefert, und sein eigenes Socket-Verzeichnis; der Wurzeldienst nur lesbar mit dem Socket als Deskriptor, der Dienst für `/work` auf dem geprüften Deskriptor mit den Masken des Profils; vom Daemon nichts geerbt außer drei Deskriptoren über eine Übergabe mit einer Verbindung; die Unit endet mit dem Daemon über die Lebensleine, auch bei `SIGKILL`, und mit der Unit des Daemons über `BindsTo` | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`a_killed_daemon_ends_the_unit_within_five_seconds`, HUM-444) |
 
 K-13 ist der offensichtliche Kanal und der einzige, der rundweg als geschlossen gilt. K-14 steht
 hier, damit Angreifer (d) in einer Zeile vorkommt. K-15 kam mit HUM-041: Die Prüfung, die die
@@ -702,13 +706,80 @@ Ende des Stroms ist eine Lebensleine: PID 1 schickt dem Agenten `SIGTERM`, beend
 Shell und nach der Frist jeden Prozess. PID 1 schreibt nie selbst in ein Terminal und schickt das
 Signal vor jeder Meldung, also kann ein volles Terminal es nicht aufhalten; nach dem Ende liest es
 jedes Terminal leer und behält nichts. Im Gast ist das Tiefenverteidigung; der Host beendet die VM
-selbst (HUM-444). *Restrisiko:* Root im Gast kann den Strom beenden oder anhalten. Ein Gast, der
+selbst (K-33, HUM-444). *Restrisiko:* Root im Gast kann den Strom beenden oder anhalten. Ein Gast, der
 nicht mehr liest, lässt den nächsten Rahmen des Daemons seine Frist von zehn Sekunden verfehlen,
 und der Daemon schließt dann den Strom: Die Session endet, kein Faden des Daemons wartet länger.
 Ein Daemon, der nicht mehr liest, stoppt das Lesen der Terminals im Shim, nicht das der
 Steuerrahmen. Eingaben für ein Terminal, dessen Prozess nicht liest, werden verworfen, sobald seine
 Schlange 64 KiB hält, und Ausgaben einer weiteren Shell, deren Leser stockt, verwirft der Daemon
 über 256 Stücke hinaus; beides wird gezählt, keins hält einen anderen Kanal auf.
+
+### K-30 Der Monitor der virtuellen Maschine der Kernel-Stufe
+
+Die Kernel-Stufe (ADR-0021, HUM-444; nicht zugelassen bis HUM-449) setzt den Agenten in eine
+QEMU-micro-VM mit eigenem Kernel. Der Emulator ist der Code zwischen einem Gast, den Angreifer (b)
+ganz besitzen kann, und dem Host. Er bekommt kein Netzgerät (`-nic none`, kein `-netdev`), keine
+Konsole, keinen Monitor, keine Anzeige und kein QMP, also keinen Kanal, über den ein Gast sprechen
+könnte, außer den drei vhost-user-Sockets seiner Geräte. Er läuft unter seinem vollen `-sandbox`
+(keine veralteten Systemaufrufe, kein Rechtewechsel, kein `fork`/`exec`, keine Steuerung von
+Ressourcen), in einem bubblewrap-Gefängnis ohne Fähigkeiten, das nur `/usr`, `/dev/kvm`, die eine
+Kernel-Datei und, nur lesbar, die drei Verzeichnisse seiner vhost-user-Sockets hält (nie die Tür,
+den Übergabe-Socket oder die Dateien des Gasts), und in einer vorübergehenden Unit des Nutzers mit
+`PrivateNetwork`,
+`PrivateUsers`, `NoNewPrivileges`, ohne Fähigkeit und mit nur lesbarem Dateisystem. Nach dem Start
+prüft der Daemon ihn vom Host aus: Seine Deskriptoren dürfen nur KVM, Ereignis- und
+Signal-Deskriptoren, `io_uring`, sein Speicher, `/dev/null`, Pipes und Sockets sein; seine eigene
+Startzeile darf keine Netzoption und keine Konsole tragen; ein Fund ist `SANDBOX_047` und beendet
+die Sitzung. Der Agent im Gast wartet an seinem Tor vor dem `exec` auf das `ADMIT` des Daemons,
+das erst nach den Zeilen des Gasts und dieser Host-Prüfung geht; ein Fund beendet die Sitzung also,
+bevor der Agent je läuft. *Restrisiko:* ein Fehler in KVM oder im Gerätecode des Emulators, der einen Gast Code im
+Emulator ausführen lässt; Gefängnis und Unit begrenzen dann, was dieser Code erreicht, und Netz hat
+er weiterhin nicht.
+
+### K-31 Die vsock-Tür der Kernel-Stufe
+
+Der einzige Weg vom Gast zum Host ist vsock: ein Gerät je Sitzung, bedient von einem eigenen
+Prozess `vhost-device-vsock` mit eigener Gruppe (zwei Gäste in einem Prozess könnten einander
+erreichen, HUM-442 Q9). Eine Verbindung des Gasts an CID 2 und Port `P` wird eine Verbindung an den
+Unix-Socket `<uds>_P` im Laufzeitverzeichnis der Sitzung. Der Daemon bindet genau einen solchen
+Socket, `<uds>_5000`, und reicht jede Verbindung an den Proxy-Socket der Sitzung weiter; für jeden
+anderen Port gibt es keinen Lauscher, und die Verbindung des Gasts läuft in ein Timeout (Q2).
+`--forward-cid` ist nie gesetzt. Die Seite des Hosts öffnet selbst zwei Verbindungen in den Gast
+(`CONNECT` am Berichts-Port des Shims): den Bericht und den Steuerkanal (K-29). Die Host-Prüfung
+lehnt jeden Socket im Laufzeitverzeichnis außer den erklärten ab, und mehr als einen
+vsock-Geräteprozess oder ein zweites Gerät. *Restrisiko:* ein Fehler im Prozess des vsock-Geräts;
+er läuft eingesperrt und ohne Netz wie die anderen Hilfsprozesse.
+
+### K-32 Der Gastkernel
+
+Im Gast darf der Agent Root werden, und Root beherrscht den Gastkernel. Keine der drei Garantien
+ruht auf ihm: Ein Netzgerät gibt es nicht, die Tür entscheidet der Host, und der Emulator kann nach
+dem Start kein Gerät dazubekommen. Bevor der Agent läuft, leert der Shim als PID 1
+`kernel.modprobe` (kein Modul lädt auf Anforderung), lädt genau die vsock-Module des Plans und
+sperrt das Laden von Modulen (`kernel.modules_disabled`); die Wurzel des Gasts ist eine nur lesbare
+Freigabe, die weder das Laufzeitverzeichnis noch das `/proc` des Gefängnisses hält. Die
+`CHECK`-Zeilen des Shims aus dem Gast sind Tiefenverteidigung, und ein Gast, der ohne sie endet, ist
+eine gescheiterte Prüfung. *Restrisiko:* Root im Gast kann die Zeilen des Gasts fälschen; dann hält
+die Host-Prüfung.
+
+### K-33 Die Hilfsprozesse einer Sitzung
+
+Eine Sitzung der Kernel-Stufe ist eine vorübergehende Unit des Nutzers mit fünf eigenen
+Prozessen: dem ersten Prozess der Unit (der Shim mit `--fds-then-exec`, dann ein festes
+`sh`-Skript), dem Dateisystemdienst der Wurzel des Gasts, dem Dateisystemdienst für `/work`, dem
+vsock-Gerät und dem Emulator. Jeder Hilfsprozess läuft in einem eigenen bubblewrap-Gefängnis mit
+allen Namensräumen getrennt und ohne jede Fähigkeit, sieht nur `/usr` des Hosts, was er
+ausliefert, und sein eigenes Socket-Verzeichnis im Laufzeitverzeichnis (kein Gefängnis bindet das
+Laufzeitverzeichnis selbst), und die Unit selbst hat kein Netz, keine Fähigkeit und ein nur lesbares Dateisystem
+außer dem Laufzeitverzeichnis der Sitzung und dem Projektordner. Die Unit ist kein Kind des Daemons
+und erbt von ihm nichts außer drei Deskriptoren über einen Übergabe-Socket, der eine Verbindung mit
+einem Einmal-Zeichen annimmt: den lauschenden Socket des Wurzeldienstes, den geprüften
+Projektordner und das Leseende der Lebensleine. Endet der Daemon, auch durch `SIGKILL`, sieht das
+Skript das Ende der Lebensleine und endet, und der Dienstverwalter beendet binnen Sekunden jeden
+Prozess der Unit, ohne den Gast; ein Daemon, der als Dienst läuft, bindet die Unit zusätzlich an
+seine eigene (`BindsTo`). *Restrisiko:* Ein übernommener Daemon kann solche Units starten (wie unter
+Podman, siehe Vertrauensgrenzen); ein Fehler in einem Dateisystemdienst erreicht, was er ausliefert,
+die nur lesbare Wurzel des Gasts oder den Projektordner.
 
 ## Annahmen
 
@@ -803,6 +874,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-13 | K-28: Zugangsdaten zur Registry beim Ziehen nur aus der eigenen Datei des Adapters, als private Kopie unter `--authfile`; Credential-Helfer in dieser Datei oder in einer Ergänzung zur `registries.conf` abgelehnt (`SANDBOX_043`) | HUM-456 |
 | 2026-11-13 | K-27 `mitigated`: die gemeinsame Stufe von Podman (`podman/crun`) zugelassen, nachdem `escape-tests-podman` (ESC-1, ESC-2, ESC-5) mit HUM-434, HUM-436, HUM-437 und HUM-438 auf `main` grün war; gewählt nur von einem Menschen, nie von `auto`; die Kernel-Stufe lehnt jeder Start bis HUM-449 mit `SANDBOX_048` ab | HUM-448 |
 | 2026-11-14 | K-29 neu: der Steuerkanal der Terminals, der Strom-Modus der Kernel-Stufe und von bwrap auf Verlangen; K-18 im Strom-Modus; weitere Shells belegen zusätzlich ein verweigertes `AF_VSOCK` | HUM-443 |
+| 2026-11-14 | K-30 bis K-33 neu: Monitor, vsock-Tür, Gastkernel und Hilfsprozesse der Kernel-Stufe; eine gehärtete Unit je Sitzung, vier Gefängnisse, der geprüfte Projektordner als Deskriptor, eine Host-Prüfung des Monitors (`SANDBOX_047`), bevor der Agent zugelassen wird, jedes Gefängnis bindet nur sein eigenes Socket-Verzeichnis, das Ende des Daemons beendet die Unit; nicht zugelassen bis HUM-449 | HUM-444 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

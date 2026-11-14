@@ -694,57 +694,49 @@ pub struct QemuConfig {
     /// Zahl der virtuellen CPUs der Micro-VM, mindestens 1 und höchstens die Zahl der CPUs, die der Daemon nutzen darf. Leer heißt: der Start leitet sie vom Host ab (die Hälfte seiner CPUs, mindestens 1, höchstens 4).
     #[schemars(extend(
         "x-tier" = "advanced",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-444"
+        "x-project-scope" = "denied"
     ))]
     pub cpus: Option<u32>,
     /// Arbeitsspeicher der Micro-VM in MiB, mindestens 256 und höchstens der Arbeitsspeicher des Hosts. Leer heißt: der Start leitet ihn vom Host ab (die Hälfte seines Arbeitsspeichers, höchstens 4096).
     #[schemars(extend(
         "x-tier" = "advanced",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-444"
+        "x-project-scope" = "denied"
     ))]
     pub memory_mib: Option<u64>,
     /// Das Kernel-Abbild des Gasts, als absoluter Pfad einer lesbaren Datei. Leer heißt: der Kernel des Hosts, `/boot/vmlinuz-` mit der Fassung aus `uname -r`.
     #[schemars(extend(
         "x-tier" = "expert",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-444"
+        "x-project-scope" = "denied"
     ))]
     pub kernel: Option<PathBuf>,
     /// Das Verzeichnis der Module dieses Kernels, als absoluter Pfad; der Gast lädt daraus die Module für vsock und sperrt danach das Laden weiterer. Leer heißt: `/usr/lib/modules/` mit der Fassung des Kernels.
     #[schemars(extend(
         "x-tier" = "expert",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-444"
+        "x-project-scope" = "denied"
     ))]
     pub modules: Option<PathBuf>,
     /// Sekunden, die ein Start auf den Gast wartet, bevor er abbricht, 1 bis 600.
     #[schemars(extend(
         "x-tier" = "expert",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-444"
+        "x-project-scope" = "denied"
     ))]
     pub start_timeout_secs: u64,
     /// Der Emulator der Maschine (`qemu-system-x86_64`), als absoluter Pfad. Leer heißt: die Suche im `PATH` des Daemons.
     #[schemars(extend(
         "x-tier" = "expert",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-444"
+        "x-project-scope" = "denied"
     ))]
     pub qemu: Option<PathBuf>,
     /// Der Dienst für die Dateisysteme des Gasts (`virtiofsd`), als absoluter Pfad. Leer heißt: die Suche im `PATH` des Daemons, danach `/usr/libexec/virtiofsd`.
     #[schemars(extend(
         "x-tier" = "expert",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-444"
+        "x-project-scope" = "denied"
     ))]
     pub virtiofsd: Option<PathBuf>,
     /// Das vsock-Gerät der Tür (`vhost-device-vsock`), als absoluter Pfad. Leer heißt: die Suche im `PATH` des Daemons.
     #[schemars(extend(
         "x-tier" = "expert",
-        "x-project-scope" = "denied",
-        "x-pending-issue" = "HUM-444"
+        "x-project-scope" = "denied"
     ))]
     pub vhost_device_vsock: Option<PathBuf>,
 }

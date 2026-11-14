@@ -1870,5 +1870,15 @@
   "diagSANDBOX046Title": "Tür der Kernel-Stufe nicht aufgebaut",
   "diagSANDBOX046Why": "Der einzige Weg aus der virtuellen Maschine, zum Proxy der Sitzung, ließ sich nicht aufbauen. Die Sitzung ist nicht gestartet.",
   "diagSANDBOX047Title": "Prüfung der virtuellen Maschine von außen gescheitert",
-  "diagSANDBOX047Why": "Von außen geprüft hielt die virtuelle Maschine der Sitzung mehr, als ihr Plan erlaubt, etwa eine zweite Netzverbindung oder eine offene Datei, die niemand erklärt hat. Die Sitzung wurde beendet."
+  "diagSANDBOX047Why": "Von außen geprüft hielt die virtuelle Maschine der Sitzung mehr, als ihr Plan erlaubt, etwa eine zweite Netzverbindung oder eine offene Datei, die niemand erklärt hat. Die Sitzung wurde beendet.",
+  "diagDOCTOR015Title": "Probestart der Kernel-Stufe gescheitert",
+  "diagDOCTOR015Why": "humanitl doctor --probe hat eine leere Sitzung in einer micro-VM gestartet, und sie startete nicht, endete ohne Bericht, oder eine ihrer Garantien galt nicht. Eine echte Sitzung käme auf dieser Stufe genauso wenig zustande.",
+  "doctorBackendCheckKvm": "Hardware-Virtualisierung",
+  "doctorBackendCheckEmulator": "Emulator der Maschine",
+  "doctorBackendCheckFileDaemon": "Dienst der Dateisysteme",
+  "doctorBackendCheckVsockDevice": "vsock-Gerät",
+  "doctorBackendCheckBubblewrap": "bubblewrap",
+  "doctorBackendCheckKernel": "Gastkernel",
+  "doctorBackendCheckVirtioFs": "virtiofs im Kernel",
+  "doctorBackendCheckModules": "Kernel-Module"
 }

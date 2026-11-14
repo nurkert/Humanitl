@@ -1783,6 +1783,15 @@ fn supervise(
             Err(_) => break ExitStatus::default(),
         }
     };
+    // Im Strom-Modus meldet der Shim den Exit-Code des Agenten über den
+    // Strom (HUM-443). Unter der Kernel-Stufe ist das gestartete Programm
+    // `systemd-run`, dessen Status nur sagt, wie die Unit endete; der Code
+    // des Agenten kommt dann von dort (HUM-444). Unter bwrap sind beide
+    // gleich.
+    let status = shared.streamed_agent_exit().map_or(status, |code| {
+        use std::os::unix::process::ExitStatusExt as _;
+        ExitStatus::from_raw((code & 0xff) << 8)
+    });
     // Vor dem Einsammeln: Der Shim im Container hält sonst die Leser auf
     // (HUM-433, [`Shared::close_lifeline`]); weitere Shells enden mit.
     shared.close_lifeline();
@@ -2170,6 +2179,7 @@ mod tests {
                 detached: Some(crate::launcher::Detached {
                     lifeline,
                     handover: None,
+                    backend_state: None,
                 }),
             })),
         };

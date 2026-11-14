@@ -71,6 +71,9 @@ dpkg-deb -x "$work/$kernel_deb" "$work/kernel"
 cp "$work/kernel/boot/vmlinuz-$kernel_release" "$dir/vmlinuz"
 cp -a "$work/kernel/usr/lib/modules/$kernel_release" "$dir/modules"
 grep -qx 'CONFIG_VIRTIO_FS=y' "$work/kernel/boot/config-$kernel_release"
+# Next to the image, as the adapter looks for it (HUM-444): DIR/config for
+# DIR/vmlinuz, like /boot/config-R for /boot/vmlinuz-R.
+cp "$work/kernel/boot/config-$kernel_release" "$dir/config"
 rm -rf "$work"
 
 qemu-system-x86_64 --version | head -n 1

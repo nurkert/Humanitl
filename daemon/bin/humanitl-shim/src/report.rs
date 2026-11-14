@@ -345,12 +345,27 @@ pub struct SocketWalk {
 /// (`tests/escape/lib.sh`).
 #[must_use]
 pub fn sockets() -> SocketWalk {
+    let mut roots = vec![PathBuf::from("/")];
+    roots.extend(SOCKET_WALK_ALSO.iter().map(PathBuf::from));
+    sockets_under(&roots)
+}
+
+/// The same walk from chosen roots instead of `/` (HUM-444).
+///
+/// In a guest kernel the root file system is a read-only share of the host's
+/// `/usr` and the plan's files, far more than [`SOCKET_WALK_MAX_ENTRIES`]; a
+/// socket file there cannot lead anywhere either, because a Unix socket is
+/// only reachable in the kernel that bound it, and the guest's kernel bound
+/// none of the host's. The guest plan therefore names the writable places
+/// (`socket_walk` in `guest.rs`), and the walk starts there. Each root counts
+/// at the depth of its own path, so the bounds mean the same as from `/`.
+#[must_use]
+pub fn sockets_under(roots: &[PathBuf]) -> SocketWalk {
     let mut walk = SocketWalk::default();
     let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
-    queue.push_back((PathBuf::from("/"), 0));
-    for path in SOCKET_WALK_ALSO {
-        let depth = Path::new(path).components().count().saturating_sub(1);
-        queue.push_back((PathBuf::from(path), depth));
+    for root in roots {
+        let depth = root.components().count().saturating_sub(1);
+        queue.push_back((root.clone(), depth));
     }
 
     while let Some((dir, depth)) = queue.pop_front() {
@@ -467,6 +482,31 @@ mod tests {
         ));
         drop(writer);
         drop(reader);
+    }
+
+    /// HUM-444: from chosen roots the walk sees what lies beneath them and
+    /// nothing beside them.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_walk_from_chosen_roots_stays_beneath_them() {
+        let root = Path::new("/tmp").join(format!("humanitl-shim-under-{}", std::process::id()));
+        let beside =
+            Path::new("/tmp").join(format!("humanitl-shim-beside-{}.sock", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_file(&beside);
+        fs::create_dir(&root).unwrap();
+        let inside = root.join("in.sock");
+        let first = std::os::unix::net::UnixListener::bind(&inside).unwrap();
+        let second = std::os::unix::net::UnixListener::bind(&beside).unwrap();
+
+        let walk = sockets_under(std::slice::from_ref(&root));
+        assert_eq!(walk.sockets, [inside.to_string_lossy().into_owned()]);
+        assert_eq!(walk.entries, 1);
+        assert_eq!(walk.limit, None);
+
+        drop((first, second));
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_file(&beside);
     }
 
     /// The walk sees a socket in a place it reaches, keeps its bounds and
