@@ -56,7 +56,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-444 | QEMU-Adapter: Plan, Start in Gefängnissen, Ende, Host-Prüfung, doctor | L | HUM-443, HUM-464, HUM-434 |
 | HUM-445 | Escape-Suite der Kernel-Stufe: Proben mit Gast-Root, CI-Job mit KVM | M | HUM-444, HUM-435, HUM-437 |
 | HUM-446 | Kernel-Stufe: Projektordner und Wegwerf-Schicht über virtiofs | L | HUM-445, HUM-438 |
-| HUM-449 | Kernel-Stufe zulassen: `qemu` wird wählbar | S | HUM-445, HUM-446, HUM-466, HUM-469 |
+| HUM-449 | Kernel-Stufe zulassen: `qemu` wird wählbar | S | HUM-445, HUM-446, HUM-466, HUM-469, HUM-470, HUM-471 |
 | HUM-447 | Doku der Kernel-Stufe, Oberfläche schaltet `qemu` frei | S | HUM-449 |
 | HUM-451 | Integrationstest: ein Daemon, der die Shell-Tür nicht mehr liest, hält weder Lebensleine noch Agent auf | S | HUM-430 |
 | HUM-452 | Podman: ein Container, dessen Client ungeplant endet, wird sofort entfernt, nicht erst beim nächsten Stopp | S | HUM-433 |
@@ -77,6 +77,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-468 | Kernel-Stufe: Host-Prüfung kennt die Programme der Unit | S | HUM-444 |
 | HUM-469 | Kernel-Stufe: Grenze der Deskriptoren der virtiofsd-Prozesse | S | HUM-444 |
 | HUM-470 | Kernel-Stufe: zwei Flakes auf der CI (kvm-Test ohne CHECK, unplanned_mount mit Exit 3) | S | HUM-445 |
+| HUM-471 | Kernel-Stufe: Gast ohne Verbindung des Hosts (kvm-Test ohne CHECK), Konsole im Adapterpfad | M | HUM-470 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -1250,3 +1251,47 @@ echten Fehler genauso wie einer, der zufällig grün ist.
 ### Akzeptanzkriterien
 1. Ursache benannt und behoben, oder als Eigenschaft des Runners begründet und
    mit einer Diagnose versehen, die sie im Lauf eindeutig nennt.
+
+### Stand nach der Umsetzung (2026-11-14)
+`esc-2/unplanned_mount` ist behoben (die Diagnose des Gasts bleibt stehen,
+wenn die Unit vor der Host-Prüfung endet; KVM-Test erzwingt die Reihenfolge).
+Der kvm-Test ohne CHECK-Zeile ist nicht behoben: Die vermutete Ursache (eine
+nach 5 s aufgegebene vsock-Anfrage) ist gemessen widerlegt, der Fall lokal
+einmal reproduziert und jetzt richtig gemeldet („the sandbox ended after 32.1s
+of 60s … before its report"). Er geht als HUM-471 weiter, ebenso der Nachweis
+der zehn grünen Läufe.
+
+## HUM-471 · Kernel level: the guest that never gets the host's connections
+
+### Kontext
+Aus HUM-470. In der CI (Lauf 43580902135) und einmal lokal mit dem Gastkernel
+der CI fiel `qemu::kvm_tests::a_session_starts_through_the_adapter_with_a_green_host_check`:
+`no CHECK line from the shim; the sandbox ended after 32.1s of 60s (exit
+status: 0) before its report; host: the unit … has ended`. Der Gast wartete
+also `REPORT_WAIT` (30 s) auf die zwei Verbindungen des Hosts und schaltete
+sauber ab; der Host bekam in dieser Zeit kein `OK` von vhost-device-vsock.
+Beide Male lief der Test direkt nach
+`a_module_that_cannot_load_powers_the_guest_off_before_the_agent`. Gemessen ist:
+Das Gerät beantwortet jedes `CONNECT` binnen Millisekunden, eine Absage kommt
+sofort, solange der Gast nicht lauscht. Vermutlich ein Start-Wettlauf zwischen
+Gerät und QEMU oder die Probe des vsock-Treibers im Gast; ohne Konsole des
+Gasts ist das nicht lesbar. Verwandt: `no CHECK bridge_listening` im
+`test_vm`-Pfad (Lauf 43567140980).
+
+### Spezifikation
+1. Im Fehlerfall die Konsole des Gasts auch im Adapterpfad sichern (nur für
+   Tests und CI, nie im gegateten Lauf mit Konsole), und den Fall damit
+   bestimmen.
+2. Ursache beheben, nicht wiederholen: kein Retry im Test oder in der CI.
+3. Bericht und Steuerkanal per Hello-Zeile mit Rolle kennzeichnen statt per
+   Reihenfolge der Verbindungen, falls die Ursache darin liegt.
+
+### Tests
+- Die Jobs kvm-tests und escape-tests-qemu zehnmal hintereinander auf demselben
+  Commit grün.
+- Ein KVM-Test, der den gefundenen Wettlauf erzwingt; Mutationsbeweis.
+
+### Akzeptanzkriterien
+1. Ursache benannt und behoben, oder als Eigenschaft des Runners begründet und
+   mit einer Diagnose versehen, die sie im Lauf eindeutig nennt.
+2. Vor HUM-449 gelandet.
