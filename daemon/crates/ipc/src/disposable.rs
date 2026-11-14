@@ -227,10 +227,11 @@ impl Waiting {
                 self.layer.masks(),
             ));
         }
-        Ok(disposable::scan(
+        Ok(disposable::scan_masked(
             upper.as_fd(),
             self.lower.as_fd(),
             &self.baseline,
+            self.layer.masks(),
         ))
     }
 

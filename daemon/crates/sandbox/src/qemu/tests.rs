@@ -129,7 +129,7 @@ fn the_guest_plan_names_the_door_the_pin_and_the_walk() {
     let profile = profile();
     let session = session(work.path());
     let env = profile.effective_env(&session, None);
-    let text = guest_plan(&profile, &session, &env, 4242, None, &[]).unwrap();
+    let text = guest_plan(&profile, &session, &env, 4242, None, &[], false).unwrap();
     let plan: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(plan["door_port"], "5000");
     assert_eq!(plan["report_port"], "5001");
@@ -160,11 +160,53 @@ fn the_guest_plan_names_the_door_the_pin_and_the_walk() {
     assert_eq!(at("/sys")["mode"], "ro");
     assert_eq!(at("/dev/shm")["type"], "tmpfs");
     assert!(plan.get("root_probe").is_none());
-    let probed = guest_plan(&profile, &session, &env, 4242, Some("true"), &[]).unwrap();
+    let probed = guest_plan(&profile, &session, &env, 4242, Some("true"), &[], false).unwrap();
     let probed: serde_json::Value = serde_json::from_str(&probed).unwrap();
     assert_eq!(
         probed["root_probe"],
         serde_json::json!(["/bin/sh", "-c", "true"])
+    );
+}
+
+/// HUM-446: Der Gastplan einer Wegwerf-Sitzung lädt `overlay` vor der
+/// Modulsperre, nennt die Schicht und den Inode des Projekts für die untere
+/// Schicht, erwartet an `/work` ein Overlay und keinen Pin auf das Projekt,
+/// dessen Inode das Overlay nicht trägt. Die Unit darf dann nur die Schicht
+/// beschreiben, nie das Projekt.
+#[test]
+fn a_disposable_guest_plan_mounts_an_overlay_over_the_checked_folder() {
+    let work = tempfile::tempdir().unwrap();
+    let profile = profile();
+    let session = session(work.path());
+    let env = profile.effective_env(&session, None);
+    let text = guest_plan(&profile, &session, &env, 4242, None, &[], true).unwrap();
+    let plan: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(plan["modules"], serde_json::json!(["overlay"]));
+    assert_eq!(
+        plan["disposable"],
+        serde_json::json!({"layer_tag": "layer", "lower_ino": "4242"})
+    );
+    assert_eq!(plan["pins"]["pins"], serde_json::json!([]));
+    let mounts = plan["pins"]["mounts"].as_array().unwrap();
+    let work_entry = mounts.iter().find(|m| m["point"] == "/work").unwrap();
+    assert_eq!(work_entry["type"], "overlay");
+    assert_eq!(work_entry["mode"], "rw");
+    assert_eq!(work_entry["flags"], "nosuid,nodev");
+    assert_eq!(
+        mounts.iter().filter(|m| m["type"] == "virtiofs").count(),
+        1,
+        "only the root; the project and the layer are no mounts of their own"
+    );
+    let direct = guest_plan(&profile, &session, &env, 4242, None, &[], false).unwrap();
+    let direct: serde_json::Value = serde_json::from_str(&direct).unwrap();
+    assert!(direct.get("disposable").is_none() && direct.get("modules").is_none());
+
+    let properties = unit_properties("/run/user/1000/humanitl-vm-x/s", &["/run/user/1000/l"]);
+    assert!(
+        properties
+            .iter()
+            .any(|p| p == "ReadWritePaths=/run/user/1000/humanitl-vm-x/s /run/user/1000/l"),
+        "{properties:?}"
     );
 }
 
@@ -187,7 +229,7 @@ fn the_guest_plan_names_every_tmpfs_and_what_stays_on_top() {
         &[],
     );
     let env = profile.effective_env(&session, None);
-    let text = guest_plan(&profile, &session, &env, 4242, None, &root.entries).unwrap();
+    let text = guest_plan(&profile, &session, &env, 4242, None, &root.entries, false).unwrap();
     let plan: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(
         plan["tmpfs"],
@@ -284,7 +326,7 @@ fn the_session_binds_reach_the_guest_root() {
 /// mit Leerraum wird abgelehnt.
 #[test]
 fn the_unit_carries_the_hardening_of_the_spike() {
-    let properties = unit_properties("/run/user/1000/humanitl-vm-x/s", Some("/home/u/p"));
+    let properties = unit_properties("/run/user/1000/humanitl-vm-x/s", &["/home/u/p"]);
     for wanted in [
         "PrivateNetwork=yes",
         "PrivateUsers=yes",

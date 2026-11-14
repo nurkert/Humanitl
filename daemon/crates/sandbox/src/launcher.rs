@@ -835,6 +835,23 @@ pub(crate) struct UnitStop {
     pub(crate) runtime: PathBuf,
     /// Wohin das Urteil über den Agenten geht.
     pub(crate) admission: Admission,
+    /// Die geöffneten Ordner, die ein Dienst der Unit ausliefern muss
+    /// (HUM-446): Die Host-Prüfung sucht jeden bei dem Dienst, der ihn unter
+    /// [`SharedDir::jail_path`] teilt.
+    pub(crate) shares: Vec<SharedDir>,
+}
+
+/// Ein Ordner, den der Plan geöffnet und geprüft hat und den ein Dienst der
+/// Unit an den Gast ausliefert (HUM-446): der Projektordner, die Schicht
+/// einer Wegwerf-Sitzung.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SharedDir {
+    /// Wo der Ordner im Gefängnis des Dienstes liegt (`--shared-dir`).
+    pub(crate) jail_path: PathBuf,
+    /// Gerät des geöffneten Ordners.
+    pub(crate) dev: u64,
+    /// Inode des geöffneten Ordners.
+    pub(crate) ino: u64,
 }
 
 impl UnitStop {
@@ -848,6 +865,49 @@ impl UnitStop {
             let _ = crate::user_unit::run_bounded(self.units.stop_command(&self.unit, true), wait);
         } else {
             let _ = crate::user_unit::run_bounded(self.units.stop_command(&self.unit, false), wait);
+        }
+    }
+
+    /// Ob kein Prozess der Unit mehr lebt (HUM-446): Der Dienstverwalter nennt
+    /// keine cgroup mehr für sie (mit `--collect` vergisst er eine beendete
+    /// Unit sofort), oder ihre cgroup ist leer (`populated 0` in
+    /// `cgroup.events`) oder schon entfernt.
+    ///
+    /// # Errors
+    ///
+    /// Ein Satz, wenn sich das nicht feststellen lässt; das ist nie „beendet".
+    pub(crate) fn ended(&self) -> Result<bool, String> {
+        let output = crate::user_unit::run_bounded(
+            self.units.show_command(&self.unit, "ControlGroup"),
+            std::time::Duration::from_secs(10),
+        )
+        .map_err(|err| {
+            format!(
+                "systemctl did not answer for {}: {err}",
+                self.unit.service()
+            )
+        })?;
+        if !output.status.success() {
+            return Err(format!(
+                "systemctl could not show {} ({})",
+                self.unit.service(),
+                output.status
+            ));
+        }
+        let group = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if group.is_empty() {
+            return Ok(true);
+        }
+        if !group.starts_with('/') || group.contains("/../") {
+            return Err(format!("systemctl named the cgroup {group:?}"));
+        }
+        let events = std::path::Path::new("/sys/fs/cgroup")
+            .join(group.trim_start_matches('/'))
+            .join("cgroup.events");
+        match std::fs::read_to_string(&events) {
+            Ok(text) => Ok(text.lines().any(|line| line.trim() == "populated 0")),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(true),
+            Err(err) => Err(format!("{}: {err}", events.display())),
         }
     }
 }

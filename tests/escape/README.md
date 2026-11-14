@@ -224,10 +224,13 @@ Exit-Code: Jedes verlangte Ziel muss genau eine Zeile `<cid>:<port> E…`
 haben, und es darf keine weitere geben; ein Helfer, der bricht oder ein Ziel
 auslässt, ist rot.
 
-Der Fall zur Wegwerf-Sandbox in ESC-5 ist unter qemu die Prüfung der
-Verweigerung (`SANDBOX_030`), wie unter Podman vor HUM-438; er wird rot,
-sobald HUM-446 die Wegwerf-Schicht liefert, und braucht dann die echte
-Messung. Die Dateisystem-Fälle von ESC-5 starten unter dieser Stufe mit
+Der Fall zur Wegwerf-Sandbox in ESC-5 ist unter qemu seit HUM-446 ein
+echter Wegwerf-Lauf: Die Schicht kommt über einen eigenen virtiofsd in den
+Gast, der Shim hängt `/work` als Overlay ein, das Projekt bleibt Byte für
+Byte, wie es war, und erst nach dem Ende der Unit liest der Scan die
+Schicht; der Verweis nach draußen und die Maske über `.env` werden nie
+übernommen. Unter Podman bleibt es die Prüfung der Verweigerung
+(`SANDBOX_030`, HUM-438). Die Dateisystem-Fälle von ESC-5 starten unter dieser Stufe mit
 Strom und Pseudoterminal und lassen den Agenten durch die Prüfung des Hosts
 zu (`isolation_check`), wie der Daemon es tut.
 

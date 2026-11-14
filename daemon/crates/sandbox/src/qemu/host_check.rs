@@ -15,7 +15,14 @@
 //!   zweite Tür;
 //! - es gibt genau einen Prozess des vsock-Geräts, und er bedient genau ein
 //!   Gerät: ein `--socket`, kein `--vm`, keine `--config`, kein
-//!   `--forward-cid`.
+//!   `--forward-cid`;
+//! - jeder Ordner, den der Plan geöffnet und geprüft hat (der Projektordner,
+//!   in einer Wegwerf-Sitzung die Schicht), wird von genau einem virtiofsd
+//!   ausgeliefert, der ihn unter seinem `--shared-dir` teilt und das
+//!   geöffnete Verzeichnis selbst hält: Gerät und Inode eines seiner
+//!   Deskriptoren sind die des Plans (HUM-446). Ein Ordner, der nach der
+//!   Prüfung getauscht und über einen Pfad eingehängt worden wäre, fiele hier
+//!   auf, auch wenn Root im Gast die Prüfung des Shims fälschte.
 //!
 //! Jeder Fund nennt die Garantie, die er bricht; was sich nicht lesen lässt,
 //! ist ein Fund und nie ein Bestehen.
@@ -25,7 +32,7 @@ use std::path::{Path, PathBuf};
 use humanitl_core::diagnostics::codes::SANDBOX_047;
 use humanitl_core::{Diagnostic, Severity};
 
-use crate::launcher::{CheckResult, IsolationCheck, UnitStop};
+use crate::launcher::{CheckResult, IsolationCheck, SharedDir, UnitStop};
 
 use super::lines::Layout;
 use super::prerequisites::Resolved;
@@ -120,6 +127,9 @@ pub(crate) struct Process {
     pub(crate) interfaces: Option<Vec<String>>,
     /// Die Ziele seiner Deskriptoren, `None`, wenn unlesbar.
     pub(crate) fds: Option<Vec<String>>,
+    /// Je Deskriptor, soweit lesbar, sein Ziel, wie es im Namensraum des
+    /// Prozesses heißt, mit Gerät und Inode dessen, was er hält (HUM-446).
+    pub(crate) opened: Vec<(String, u64, u64)>,
 }
 
 /// Liest die Prozesse der Unit und das Laufzeitverzeichnis und prüft sie.
@@ -135,7 +145,12 @@ pub(crate) fn run(stop: &UnitStop, resolved: &Resolved, door_port: u32) -> Vec<F
         Err(why) => return vec![finding(IsolationCheck::NoNetworkInterface, why)],
     };
     let mut findings = judge(&processes, resolved);
-    findings.extend(runtime_sockets(&stop.runtime, door_port));
+    findings.extend(shares_held(&processes, resolved, &stop.shares));
+    let disposable = stop
+        .shares
+        .iter()
+        .any(|share| share.jail_path == Path::new(super::lines::LAYER_SHARE));
+    findings.extend(runtime_sockets(&stop.runtime, door_port, disposable));
     findings
 }
 
@@ -213,13 +228,98 @@ fn read_process(pid: u32) -> Option<Process> {
         .ok()
         .map(|text| interfaces_of(&text));
     let fds = read_fds(&proc.join("fd"));
+    let opened = read_opened(&proc.join("fd"));
     Some(Process {
         pid,
         program,
         args,
         interfaces,
         fds,
+        opened,
     })
+}
+
+/// Je Deskriptor sein Ziel und Gerät und Inode dessen, was er hält, über den
+/// magischen Verweis in `/proc/<pid>/fd`; was sich nicht lesen lässt, fehlt.
+/// Fehlt so ein geprüfter Ordner, ist das in [`shares_held`] ein Fund, nie
+/// ein Bestehen.
+fn read_opened(dir: &Path) -> Vec<(String, u64, u64)> {
+    use std::os::unix::fs::MetadataExt as _;
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| {
+                    let target = std::fs::read_link(entry.path()).ok()?;
+                    let meta = std::fs::metadata(entry.path()).ok()?;
+                    Some((
+                        target.to_string_lossy().into_owned(),
+                        meta.dev(),
+                        meta.ino(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Der Wert von `--shared-dir` in einer Zeile von virtiofsd, ob als eigenes
+/// Wort oder mit `=`.
+fn shared_dir_of(args: &[String]) -> Option<&str> {
+    args.iter().enumerate().find_map(|(index, arg)| {
+        if arg == "--shared-dir" {
+            args.get(index + 1).map(String::as_str)
+        } else {
+            arg.strip_prefix("--shared-dir=")
+        }
+    })
+}
+
+/// Jeder geprüfte Ordner hat genau einen virtiofsd, der ihn unter seinem
+/// `--shared-dir` teilt und ihn als Wurzel des Geteilten hält (HUM-446): ein
+/// Deskriptor, dessen Ziel in seinem Gefängnis der `--shared-dir` ist und
+/// der Gerät und Inode des Plans trägt. Ohne ihn teilt der Dienst etwas
+/// anderes, etwa einen Ordner, der nach der Prüfung an dessen Pfad trat;
+/// dass er den geprüften Ordner irgendwo darunter hält, genügt nicht.
+pub(crate) fn shares_held(
+    processes: &[Process],
+    resolved: &Resolved,
+    shares: &[SharedDir],
+) -> Vec<Finding> {
+    let program = std::fs::canonicalize(&resolved.file_daemon)
+        .unwrap_or_else(|_| resolved.file_daemon.clone())
+        .to_string_lossy()
+        .into_owned();
+    let mut findings = Vec::new();
+    for share in shares {
+        let jail = share.jail_path.to_string_lossy();
+        let serving: Vec<&Process> = processes
+            .iter()
+            .filter(|process| process.program.as_deref() == Some(program.as_str()))
+            .filter(|process| shared_dir_of(&process.args) == Some(jail.as_ref()))
+            .collect();
+        match serving.as_slice() {
+            [one]
+                if one.opened.iter().any(|(target, dev, ino)| {
+                    *target == jail && (*dev, *ino) == (share.dev, share.ino)
+                }) => {}
+            [one] => findings.push(finding(
+                IsolationCheck::SingleSocket,
+                format!(
+                    "the file service {} shares {jail} without holding the checked folder {}:{}",
+                    one.pid, share.dev, share.ino
+                ),
+            )),
+            other => findings.push(finding(
+                IsolationCheck::SingleSocket,
+                format!(
+                    "{} file services share {jail}, expected exactly one",
+                    other.len()
+                ),
+            )),
+        }
+    }
+    findings
 }
 
 /// Die Ziele aller Deskriptoren; `None`, wenn das Verzeichnis, ein Eintrag
@@ -433,11 +533,11 @@ pub(crate) fn emulator_args(pid: u32, args: &[String]) -> Vec<Finding> {
 /// Ein erklärter Socket darf fehlen: virtiofsd 1.13 entfernt seinen, sobald
 /// QEMU verbunden ist (gemessen in der CI, 2026-11-14); ein fehlender Socket
 /// öffnet keinen Weg.
-pub(crate) fn runtime_sockets(dir: &Path, door_port: u32) -> Vec<Finding> {
+pub(crate) fn runtime_sockets(dir: &Path, door_port: u32, disposable: bool) -> Vec<Finding> {
     use std::os::unix::fs::FileTypeExt as _;
     /// So tief liegen die Dateien der Sitzung höchstens.
     const MAX_DEPTH: usize = 3;
-    let declared = Layout::declared_sockets(door_port);
+    let declared = Layout::declared_sockets(door_port, disposable);
     let mut findings = Vec::new();
     let mut fail = |what: String| findings.push(finding(IsolationCheck::SingleSocket, what));
     let mut stack = vec![(dir.to_path_buf(), 0)];
@@ -522,6 +622,7 @@ mod tests {
             args: args.iter().map(|arg| (*arg).to_owned()).collect(),
             interfaces: Some(vec!["lo".to_owned()]),
             fds: Some(fds.iter().map(|fd| (*fd).to_owned()).collect()),
+            opened: Vec::new(),
         };
         vec![
             process(
@@ -710,6 +811,89 @@ mod tests {
         ]
     }
 
+    /// HUM-446: Jeder geprüfte Ordner hat genau einen virtiofsd, der ihn
+    /// unter seinem `--shared-dir` teilt und das geöffnete Verzeichnis hält.
+    /// Ein Dienst, der etwas anderes hält (ein Pfad statt des Deskriptors
+    /// nach einem Tausch), keiner oder zwei sind je ein Fund der Garantie 2.
+    #[test]
+    fn every_checked_folder_is_held_by_exactly_one_file_service() {
+        let service = |pid, dir: &str, opened: Vec<(&str, u64, u64)>| Process {
+            pid,
+            program: Some("/usr/libexec/virtiofsd".to_owned()),
+            args: vec![
+                "/usr/libexec/virtiofsd".to_owned(),
+                "--shared-dir".to_owned(),
+                dir.to_owned(),
+            ],
+            interfaces: Some(vec!["lo".to_owned()]),
+            fds: Some(Vec::new()),
+            opened: opened
+                .into_iter()
+                .map(|(target, dev, ino)| (target.to_owned(), dev, ino))
+                .collect(),
+        };
+        let shares = [
+            SharedDir {
+                jail_path: PathBuf::from("/share"),
+                dev: 40,
+                ino: 7,
+            },
+            SharedDir {
+                jail_path: PathBuf::from("/layer"),
+                dev: 41,
+                ino: 9,
+            },
+        ];
+        let mut processes = healthy();
+        processes.push(service(
+            30,
+            "/share",
+            vec![("/dev/null", 1, 2), ("/share", 40, 7)],
+        ));
+        processes.push(service(31, "/layer", vec![("/layer", 41, 9)]));
+        processes.push(service(32, "/guest", vec![("/guest/work", 40, 7)]));
+        assert_eq!(shares_held(&processes, &resolved(), &shares), Vec::new());
+
+        // Ein Pfad statt des Deskriptors: Der Dienst hält einen anderen Ordner.
+        let mut swapped = processes.clone();
+        swapped[4].opened = vec![("/share".to_owned(), 40, 8)];
+        let found = shares_held(&swapped, &resolved(), &shares);
+        assert!(
+            found.len() == 1
+                && found[0].check == IsolationCheck::SingleSocket
+                && found[0].what.contains("without holding the checked folder"),
+            "{found:?}"
+        );
+        // Der gleiche Inode auf einem anderen Gerät ist nicht der Ordner.
+        swapped[4].opened = vec![("/share".to_owned(), 39, 7)];
+        assert_eq!(shares_held(&swapped, &resolved(), &shares).len(), 1);
+        // Den geprüften Ordner nur unterhalb des Geteilten zu halten (ein
+        // getauschter Ordner, in den der geprüfte verschoben wurde), genügt
+        // nicht.
+        swapped[4].opened = vec![("/share".to_owned(), 40, 8), ("/share/x".to_owned(), 40, 7)];
+        assert_eq!(shares_held(&swapped, &resolved(), &shares).len(), 1);
+        // Kein Dienst für die Schicht, und zwei für das Projekt.
+        let mut missing = processes.clone();
+        missing.remove(5);
+        missing.push(service(33, "/share", vec![("/share", 40, 7)]));
+        let found = shares_held(&missing, &resolved(), &shares);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .any(|f| f.what.contains("2 file services share /share"))
+        );
+        assert!(
+            found
+                .iter()
+                .any(|f| f.what.contains("0 file services share /layer"))
+        );
+        // `--shared-dir=` zählt wie das getrennte Wort.
+        let mut joined = processes;
+        joined[4].args = vec!["virtiofsd".to_owned(), "--shared-dir=/share".to_owned()];
+        assert_eq!(shares_held(&joined, &resolved(), &shares), Vec::new());
+    }
+
     /// Ein Programm, das über einen Verweis eingestellt ist, erkennt die
     /// Prüfung an seinem Ziel, wie `/proc/<pid>/exe` es nennt.
     #[test]
@@ -744,14 +928,25 @@ mod tests {
             std::fs::create_dir(dir.path().join(sub)).unwrap();
         }
         let mut held = Vec::new();
-        for name in Layout::declared_sockets(5000) {
+        for name in Layout::declared_sockets(5000, false) {
             held.push(UnixListener::bind(dir.path().join(name)).unwrap());
         }
         std::fs::write(dir.path().join("files/guest-plan.json"), "{}").unwrap();
-        assert_eq!(runtime_sockets(dir.path(), 5000), Vec::new());
+        assert_eq!(runtime_sockets(dir.path(), 5000, false), Vec::new());
+
+        // Der Socket der Schicht gehört nur zu einer Wegwerf-Sitzung
+        // (HUM-446).
+        held.push(UnixListener::bind(dir.path().join("layer/layer.sock")).unwrap());
+        assert_eq!(runtime_sockets(dir.path(), 5000, true), Vec::new());
+        let found = runtime_sockets(dir.path(), 5000, false);
+        assert!(
+            found.len() == 1 && found[0].what.ends_with("layer.sock"),
+            "{found:?}"
+        );
+        std::fs::remove_file(dir.path().join("layer/layer.sock")).unwrap();
 
         held.push(UnixListener::bind(dir.path().join("door/door_22")).unwrap());
-        let found = runtime_sockets(dir.path(), 5000);
+        let found = runtime_sockets(dir.path(), 5000, false);
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].what.ends_with("door_22"), "{found:?}");
         assert_eq!(found[0].check, IsolationCheck::SingleSocket);
@@ -759,11 +954,11 @@ mod tests {
 
         // Derselbe Name an einem anderen Ort ist nicht erklärt.
         held.push(UnixListener::bind(dir.path().join("files/door")).unwrap());
-        assert_eq!(runtime_sockets(dir.path(), 5000).len(), 1);
+        assert_eq!(runtime_sockets(dir.path(), 5000, false).len(), 1);
         std::fs::remove_file(dir.path().join("files/door")).unwrap();
 
         std::os::unix::fs::symlink("/run", dir.path().join("files/link")).unwrap();
-        let found = runtime_sockets(dir.path(), 5000);
+        let found = runtime_sockets(dir.path(), 5000, false);
         assert!(found.iter().any(|f| f.what.contains("a link")), "{found:?}");
         std::fs::remove_file(dir.path().join("files/link")).unwrap();
 
@@ -771,9 +966,9 @@ mod tests {
         // entfernt seinen nach der Verbindung); eine Datei unter seinem
         // Namen ist ein Befund.
         std::fs::remove_file(dir.path().join("work/work.sock")).unwrap();
-        assert_eq!(runtime_sockets(dir.path(), 5000), Vec::new());
+        assert_eq!(runtime_sockets(dir.path(), 5000, false), Vec::new());
         std::fs::write(dir.path().join("work/work.sock"), "").unwrap();
-        let found = runtime_sockets(dir.path(), 5000);
+        let found = runtime_sockets(dir.path(), 5000, false);
         assert!(
             found.iter().any(|f| f.what.contains("is not a socket")),
             "{found:?}"

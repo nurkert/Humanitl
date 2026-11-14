@@ -2186,7 +2186,8 @@ listen).
   descriptor. The emulator binds `root/`, `work/` and `vsock/` read-only, enough to connect to the
   three vhost-user sockets; it never sees the door, the handover socket or the guest's files. Beyond
   those it holds only `/usr`, `/dev/kvm` and the one kernel file from `/boot`; it has no console,
-  monitor or display.
+  monitor or display. A disposable session has a fifth process, the file system daemon of the
+  layer, in a jail of the same kind with its own `layer/` (below).
 - **The guest root comes from the same plan as under bubblewrap.** The profile's mounts, the shim,
   the CA certificate and bundle, the identity files and the adapter's files are built into a
   subdirectory of the root daemon's jail and shared read-only; the jail's own `/proc` is outside
@@ -2236,11 +2237,34 @@ listen).
   descriptor to the unit and the `/work` daemon's jail binds exactly that descriptor
   (`--bind-fd`); a swap of the path after the check does not reach the guest (HUM-442 Q4). The
   profile's masks under `/work` lie over that share in the jail, so the guest sees them as under
-  bubblewrap. The shim in the guest compares the inode of `/work` with the plan.
+  bubblewrap. The shim in the guest compares the inode of `/work` with the plan, and the host
+  check (`SANDBOX_047`) finds the opened folder itself at the daemon that shares `/work`: one of
+  its descriptors names the share and carries the device and inode of the plan (HUM-446). That
+  check holds with root in the guest, which could forge the shim's line. Measured: with a path
+  instead of `--bind-fd`, a folder swapped after the plan is refused with `SANDBOX_042`.
 - **Nothing is inherited.** The unit is no child of the daemon. Its first process is the shim on
   the host (`--fds-then-exec`): it takes three descriptors over a one-connection handover socket of
-  the session (the root daemon's socket, the project folder, the read end of the lifeline) and runs
-  the fixed script that starts the four jails.
+  the session (the root daemon's socket, the project folder, the read end of the lifeline; in a
+  disposable session the layer as a fourth) and runs the fixed script that starts the jails.
+- **The disposable sandbox** (HUM-446, K-24, K-34). With `sandbox.mode = "disposable"` the daemon
+  creates the upper layer in RAM as under bubblewrap, a directory with `upper` and `work`. A
+  third file system daemon shares it as an opened descriptor (`--bind-fd`), writable, with
+  extended attributes on (`--xattr`) and `CAP_DAC_OVERRIDE` inside its own user namespace only,
+  because the overlay in the guest works as root (its work directory has mode 0000). The project
+  is read-only twice over: its daemon runs with `--readonly`, and its jail binds the checked
+  folder read-only (`--ro-bind-fd`), so a flaw in `--readonly` does not write the project either;
+  the unit also names only the layer, not the project, as a writable path. The shim loads the `overlay` module before the module
+  lock, mounts the project read-only, compares its inode with the plan, mounts the layer, builds
+  the overlay with the options of bubblewrap's unprivileged one (`userxattr`,
+  `redirect_dir=nofollow`, no `metacopy`, no index) and moves it alone onto `/work`; neither the
+  project nor the layer is reachable by a path afterwards. Root in the guest can still mount the
+  layer again and write anything into it, so the daemon treats every byte of it as written by
+  the attacker: it reads the layer only after every process of the unit has ended, with the scan
+  of bubblewrap's disposable sandbox (no device, FIFO, socket, setuid bit, foreign overlay
+  attribute or symbolic link out of the project is ever applied), and the scan refuses every
+  change on, under or above a mask of the profile, because under this level the masks lie in the
+  lower layer and a layer written past them must not carry a hook or a secret into the project.
+  The host check finds the opened layer at its daemon as it does the project.
 - **The end of the daemon ends the session without the guest.** The script waits on the
   lifeline, whose write end only the daemon holds; when the daemon ends, also by `SIGKILL`, the
   script ends and the service manager stops every process of the unit (`KillMode=control-group`).
@@ -2269,7 +2293,7 @@ listen).
 ### What is different from bubblewrap
 
 - **The trusted computing base grows** by the emulator, the guest kernel, the two file system
-  daemons, the vsock device and the user's service manager (K-30 to K-33 in
+  daemons (three in a disposable session), the vsock device and the user's service manager (K-30 to K-33 in
   [`THREAT-MODEL.md`](THREAT-MODEL.md)).
 - **The guest root is read-only; writable extensions are refused.** The project at `/work`, the
   tmpfs of the profile and `/run` are the only writable places in the guest. A profile with
@@ -2278,7 +2302,11 @@ listen).
   nothing reviews. The rest of the root, such as `/etc` beside its binds, stays read-only in the
   guest, where bubblewrap's own root tmpfs is writable; that is stricter, not a gap: nothing
   written there reaches the host or outlives the session under either backend.
-- **No disposable sandbox yet.** `disposable` refuses with `SANDBOX_030` until HUM-446.
+- **The disposable sandbox needs the overlay module of the guest kernel.** Without it under
+  `sandbox.qemu.modules`, `disposable` refuses with `SANDBOX_030`, and `auto` runs direct with
+  `SANDBOX_033`. In the guest the agent may write over a masked path of the project inside its
+  own layer (the mask lies in the lower layer, not on top as under bubblewrap); the scan never
+  applies such a change.
 - **The terminal travels as a stream** (K-29); a signal of the host reaches no process of the
   guest, an interrupt is a frame.
 

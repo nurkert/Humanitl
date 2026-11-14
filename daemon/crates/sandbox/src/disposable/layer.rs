@@ -47,7 +47,8 @@ pub struct Layer {
     /// Agent vor dem Anlaufen der Messung schreibt, ungezählt bleibt.
     start: Usage,
     /// Die Pfade relativ zum Projekt, die im Klon fehlen, weil sie maskiert
-    /// sind (macOS, HUM-374); unter Linux leer.
+    /// sind (macOS, HUM-374); unter Linux die Masken über dem Overlay, an
+    /// denen der Scan nichts schreibt (HUM-446).
     masks: Vec<PathBuf>,
     /// Ob [`Layer::seal`] den Klon schon aus der Reichweite der Sandbox
     /// genommen hat.
@@ -309,10 +310,20 @@ impl Layer {
         self.sealed
     }
 
-    /// Die Pfade, die im Klon fehlen, weil sie maskiert sind.
+    /// Die Pfade, die im Klon fehlen, weil sie maskiert sind; über einem
+    /// Overlay die Masken, an denen der Scan nichts schreibt
+    /// ([`super::scan_masked`], HUM-446).
     #[must_use]
     pub fn masks(&self) -> &[PathBuf] {
         &self.masks
+    }
+
+    /// Dieselbe Schicht mit den Masken des Profils, relativ zum Projekt
+    /// (HUM-446): Der Scan schreibt auf, unter und über ihnen nichts.
+    #[must_use]
+    pub fn with_masks(mut self, masks: Vec<PathBuf>) -> Self {
+        self.masks = masks;
+        self
     }
 
     /// Dieselbe Schicht mit einer anderen Grenze; für Tests.
@@ -431,7 +442,9 @@ pub struct Swept {
 /// was der Daemon sehen kann: `bwrap` ist eingesammelt, und der Init-Prozess
 /// der Sandbox ist in `/proc` nicht mehr als lebender Prozess zu finden.
 /// Unter macOS gibt es weder Namensraum noch `/proc`; dort zählt das
-/// Einsammeln, und [`Layer::seal`] hält überlebende Prozesse fern.
+/// Einsammeln, und [`Layer::seal`] hält überlebende Prozesse fern. Läuft die
+/// Sandbox als Unit des Dienstverwalters (Kernel-Stufe), muss dazu jeder
+/// Prozess der Unit fort sein (HUM-446).
 ///
 /// # Errors
 ///
@@ -450,6 +463,27 @@ pub fn ensure_ended(handle: &SandboxHandle, child_start: Option<u64>) -> Result<
             "process {pid}, the first process of sandbox {}, is still alive",
             handle.id
         )));
+    }
+    // Die Kernel-Stufe (HUM-446): Die Schicht beschreibt ein Dienst der
+    // Unit, nicht der Prozess, auf den das Handle wartet. Gelesen wird erst,
+    // wenn kein Prozess der Unit mehr lebt.
+    if let Some(stop) = handle.unit() {
+        match stop.ended() {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(still_running(&format!(
+                    "the unit {} of sandbox {} still has processes",
+                    stop.unit.service(),
+                    handle.id
+                )));
+            }
+            Err(why) => {
+                return Err(still_running(&format!(
+                    "whether the unit of sandbox {} has ended cannot be told: {why}",
+                    handle.id
+                )));
+            }
+        }
     }
     Ok(())
 }

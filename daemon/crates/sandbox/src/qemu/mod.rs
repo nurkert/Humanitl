@@ -48,6 +48,7 @@
 //! nur in diesem Verzeichnis (`[qemu]` in `tools/coupling-baseline.toml`).
 //! Außerhalb heißt die Stufe Kernel-Stufe oder VM-Backend.
 
+mod disposable;
 mod host_check;
 #[cfg(test)]
 mod kvm_tests;
@@ -71,8 +72,7 @@ use std::time::{Duration, Instant};
 
 use humanitl_config::{Paths, QemuConfig, SandboxRef, WorkMode};
 use humanitl_core::diagnostics::codes::{
-    SANDBOX_006, SANDBOX_011, SANDBOX_012, SANDBOX_013, SANDBOX_030, SANDBOX_041, SANDBOX_046,
-    SANDBOX_051,
+    SANDBOX_006, SANDBOX_011, SANDBOX_012, SANDBOX_013, SANDBOX_041, SANDBOX_046, SANDBOX_051,
 };
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
@@ -103,6 +103,11 @@ pub(crate) const GUEST_PLAN: &str = "/run/humanitl/guest-plan.json";
 pub(crate) const GUEST_MODULES: &str = "/run/humanitl/modules";
 /// Der Tag des Projektordners.
 const WORK_TAG: &str = "work";
+/// Der Tag des Verzeichnisses der Wegwerf-Schicht (HUM-446).
+const LAYER_TAG: &str = "layer";
+/// Das Modul, das der Shim in einer Wegwerf-Sitzung vor der Modulsperre lädt
+/// (HUM-446).
+const OVERLAY_MODULE: &str = "overlay";
 
 /// Die Beschreibung der Unit.
 const UNIT_DESCRIPTION: &str = "Humanitl kernel level session";
@@ -366,6 +371,13 @@ fn add_session_binds(root: &mut GuestRoot, session_ro: &[(PathBuf, PathBuf)]) {
 }
 
 /// Der Gastplan (`guest.rs` des Shims).
+///
+/// In einer Wegwerf-Sitzung (`disposable`, HUM-446) hängt der Shim `/work`
+/// als Overlay ein: unten der nur lesbare Projektordner (Tag `work`), dessen
+/// Inode er beim Einhängen mit `project_ino` vergleicht, oben die Schicht
+/// der Sitzung (Tag `layer`); das Modul `overlay` lädt er vor der
+/// Modulsperre. Die Mounttabelle erwartet dann an `/work` ein `overlay` und
+/// keinen Pin auf das Projekt, dessen Inode das Overlay nicht trägt.
 fn guest_plan(
     profile: &SandboxProfile,
     session: &SessionContext,
@@ -373,54 +385,12 @@ fn guest_plan(
     project_ino: u64,
     root_probe: Option<&str>,
     root: &[RootEntry],
+    disposable: bool,
 ) -> Result<String, Diagnostic> {
     let places = &tmpfs::guest_tmpfs(root)?;
     let (agent_env, shim_env) = crate::shim_fds::split_env(env);
-    let entry = |point: &str, fstype: &str, source: &str, mode: &str, flags: &str| {
-        serde_json::json!({
-            "point": point, "type": fstype, "source": source,
-            "mode": mode, "flags": flags, "count": "1",
-        })
-    };
-    // Ohne Ankündigung von Einhängepunkten (`lines`) sieht der Gast unter
-    // `/` und `/work` je genau eine virtiofs-Einhängung. Über `/sys` liegt
-    // nach der Modulsperre ein leeres, nur lesbares tmpfs statt des sysfs
-    // des Gastkerns, und `/dev/shm` ist ein tmpfs wie unter bwrap (HUM-445).
-    // Dazu jedes tmpfs des Profils und je Bind, der darüber obenauf bleibt,
-    // eine nur lesbare Kopie der Wurzel (HUM-466, [`tmpfs`]).
-    let mut mounts = vec![
-        entry("/", "virtiofs", "type", "ro", "*"),
-        entry("/proc", "proc", "type", "*", "*"),
-        entry("/sys", "tmpfs", "type", "ro", "nosuid,nodev,noexec"),
-        entry("/dev", "devtmpfs", "type", "*", "*"),
-        entry("/dev/pts", "devpts", "type", "*", "*"),
-        entry("/dev/shm", "tmpfs", "type", "rw", "nosuid,nodev"),
-        entry(
-            &profile.mounts.work.dst.display().to_string(),
-            "virtiofs",
-            &format!("tag:{WORK_TAG}:{project_ino}"),
-            "rw",
-            "nosuid,nodev",
-        ),
-    ];
-    for point in &places.points {
-        mounts.push(entry(
-            &point.display().to_string(),
-            "tmpfs",
-            "type",
-            "rw",
-            "nosuid,nodev",
-        ));
-    }
-    for bind in &places.binds {
-        mounts.push(entry(
-            &bind.display().to_string(),
-            "virtiofs",
-            "type",
-            "ro",
-            "*",
-        ));
-    }
+    let work = profile.mounts.work.dst.display().to_string();
+    let mounts = expected_mounts(&work, places, project_ino, disposable);
     let command: Vec<&str> = session
         .command
         .iter()
@@ -459,7 +429,11 @@ fn guest_plan(
         "shim": object(&shim),
         "env": object(&agent_env),
         "pins": {
-            "pins": [{"path": profile.mounts.work.dst.display().to_string(), "dev": "*", "ino": project_ino.to_string()}],
+            "pins": if disposable {
+                serde_json::json!([])
+            } else {
+                serde_json::json!([{"path": work, "dev": "*", "ino": project_ino.to_string()}])
+            },
             "mounts": mounts,
         },
         // Die beschreibbaren Orte des Gasts (HUM-444, HUM-466): In seiner
@@ -472,7 +446,76 @@ fn guest_plan(
     if let Some(probe) = root_probe {
         plan["root_probe"] = serde_json::json!(["/bin/sh", "-c", probe]);
     }
+    if disposable {
+        plan["modules"] = serde_json::json!([OVERLAY_MODULE]);
+        plan["disposable"] = serde_json::json!({
+            "layer_tag": LAYER_TAG,
+            "lower_ino": project_ino.to_string(),
+        });
+    }
     Ok(plan.to_string())
+}
+
+/// Die erwartete Mounttabelle des Gasts (HUM-437, HUM-465, HUM-466): an
+/// `/work` das Projekt über seinen Tag und Inode, in einer Wegwerf-Sitzung
+/// das Overlay (HUM-446).
+fn expected_mounts(
+    work: &str,
+    places: &tmpfs::GuestTmpfs,
+    project_ino: u64,
+    disposable: bool,
+) -> Vec<serde_json::Value> {
+    let entry = |point: &str, fstype: &str, source: &str, mode: &str, flags: &str| {
+        serde_json::json!({
+            "point": point, "type": fstype, "source": source,
+            "mode": mode, "flags": flags, "count": "1",
+        })
+    };
+    // Ohne Ankündigung von Einhängepunkten (`lines`) sieht der Gast unter
+    // `/` und `/work` je genau eine virtiofs-Einhängung. Über `/sys` liegt
+    // nach der Modulsperre ein leeres, nur lesbares tmpfs statt des sysfs
+    // des Gastkerns, und `/dev/shm` ist ein tmpfs wie unter bwrap (HUM-445).
+    // Dazu jedes tmpfs des Profils und je Bind, der darüber obenauf bleibt,
+    // eine nur lesbare Kopie der Wurzel (HUM-466, [`tmpfs`]).
+    let work_entry = if disposable {
+        entry(work, "overlay", "type", "rw", "nosuid,nodev")
+    } else {
+        entry(
+            work,
+            "virtiofs",
+            &format!("tag:{WORK_TAG}:{project_ino}"),
+            "rw",
+            "nosuid,nodev",
+        )
+    };
+    let mut mounts = vec![
+        entry("/", "virtiofs", "type", "ro", "*"),
+        entry("/proc", "proc", "type", "*", "*"),
+        entry("/sys", "tmpfs", "type", "ro", "nosuid,nodev,noexec"),
+        entry("/dev", "devtmpfs", "type", "*", "*"),
+        entry("/dev/pts", "devpts", "type", "*", "*"),
+        entry("/dev/shm", "tmpfs", "type", "rw", "nosuid,nodev"),
+        work_entry,
+    ];
+    for point in &places.points {
+        mounts.push(entry(
+            &point.display().to_string(),
+            "tmpfs",
+            "type",
+            "rw",
+            "nosuid,nodev",
+        ));
+    }
+    for bind in &places.binds {
+        mounts.push(entry(
+            &bind.display().to_string(),
+            "virtiofs",
+            "type",
+            "ro",
+            "*",
+        ));
+    }
+    mounts
 }
 
 /// `SANDBOX_051`, wenn das Profil beschreibbare Erweiterungen nennt
@@ -656,8 +699,11 @@ fn user_service_of(path: &str, uid: u32) -> Option<String> {
     valid.then_some(name)
 }
 
-/// Die Eigenschaften der Unit (HUM-442 Q7).
-fn unit_properties(runtime: &str, project: Option<&str>) -> Vec<String> {
+/// Die Eigenschaften der Unit (HUM-442 Q7). `writable` sind die Pfade, die
+/// die Unit außer dem Laufzeitverzeichnis beschreiben darf: der Projektordner
+/// in einer direkten Sitzung, das Verzeichnis der Schicht in einer
+/// Wegwerf-Sitzung (HUM-446), nie beide.
+fn unit_properties(runtime: &str, writable: &[&str]) -> Vec<String> {
     let mut properties: Vec<String> = [
         "PrivateNetwork=yes",
         "PrivateUsers=yes",
@@ -684,11 +730,12 @@ fn unit_properties(runtime: &str, project: Option<&str>) -> Vec<String> {
     properties.push(format!("LimitNOFILE={}", lines::FILE_DAEMON_NOFILE));
     // Unter `ProtectHome=read-only` bindet bwrap auch einen geerbten
     // Deskriptor nur lesbar; der Projektordner braucht seinen Pfad hier
-    // (gemessen 2026-11-14, systemd 262).
-    match project {
-        Some(project) => properties.push(format!("ReadWritePaths={runtime} {project}")),
-        None => properties.push(format!("ReadWritePaths={runtime}")),
-    }
+    // (gemessen 2026-11-14, systemd 262). Ein Projektordner, der hier fehlt,
+    // ist in der Unit nur lesbar, auch für einen virtiofsd, der ihn trotz
+    // `--readonly` beschreiben wollte.
+    let mut paths = vec![runtime];
+    paths.extend_from_slice(writable);
+    properties.push(format!("ReadWritePaths={}", paths.join(" ")));
     #[cfg(test)]
     properties.extend(test_machine::unit_property());
     if let Some(daemon) = daemon_unit() {
@@ -744,7 +791,7 @@ fn unit_line(
     layout: &Layout,
     lines: &Lines,
     token: &str,
-    project: Option<&str>,
+    writable: &[&str],
 ) -> Result<Vec<OsString>, Diagnostic> {
     let runtime = property_path(&layout.dir)?;
     let script = lines::script(lines, layout).map_err(setup_failed)?;
@@ -765,7 +812,7 @@ fn unit_line(
     units
         .session_argv(
             UNIT_DESCRIPTION,
-            &unit_properties(&runtime, project),
+            &unit_properties(&runtime, writable),
             unit,
             &session.shim_src,
             &args,
@@ -789,7 +836,9 @@ impl Pending {
     }
 }
 
-/// Die vier Zeilen einer Sitzung.
+/// Die Zeilen einer Sitzung: vier, in einer Wegwerf-Sitzung (`disposable`)
+/// fünf. Dort ist der Projektordner immer nur lesbar (HUM-446).
+#[allow(clippy::too_many_arguments)]
 fn session_lines(
     resolved: &Resolved,
     layout: &Layout,
@@ -797,14 +846,22 @@ fn session_lines(
     root: &GuestRoot,
     init: &Path,
     work_readonly: bool,
+    disposable: bool,
     group: &str,
 ) -> Lines {
     let mut work = lines::work_line(resolved, layout, &root.masks, &layout.files().join("empty"));
-    if work_readonly {
-        work.push(OsString::from("--readonly"));
+    if work_readonly || disposable {
+        lines::work_read_only(&mut work);
     }
     #[cfg_attr(not(test), allow(unused_mut))]
-    let mut machine = lines::machine_line(resolved, layout, machine, init, Path::new(GUEST_PLAN));
+    let mut machine = lines::machine_line(
+        resolved,
+        layout,
+        machine,
+        init,
+        Path::new(GUEST_PLAN),
+        disposable,
+    );
     #[cfg(test)]
     {
         machine.extend(
@@ -816,6 +873,7 @@ fn session_lines(
     Lines {
         root: lines::root_line(resolved, &root.entries),
         work,
+        layer: disposable.then(|| lines::layer_line(resolved, layout)),
         device: lines::device_line(resolved, layout, group),
         machine,
     }
@@ -837,18 +895,18 @@ impl SandboxBackend for VmBackend {
         crate::backend::isolation_of(crate::backend::VM_BACKEND, None)
     }
 
-    /// Noch keine: Die Wegwerf-Schicht über virtiofs baut HUM-446.
-    fn disposable_support(&self, _request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
-        Err(Diagnostic::builder(SANDBOX_030, Severity::Blocking)
-            .why(
-                "the kernel level has no disposable sandbox yet; set sandbox.mode = \"direct\", \
-                 or use the bubblewrap backend for a disposable sandbox",
-            )
-            .fix(FixAction::ChangeSetting {
-                key: "sandbox.mode".to_owned(),
-                value: "direct".to_owned(),
-            })
-            .build())
+    /// Die Wegwerf-Schicht über virtiofs (HUM-446): ein beschreibbares
+    /// Projekt, das Modul `overlay` für den Gastkernel und ein
+    /// Laufzeitverzeichnis, in dem die Schicht im Arbeitsspeicher liegt.
+    fn disposable_support(&self, request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
+        self.overlay_support(request)?;
+        crate::disposable::probe_layer_dir(
+            &self
+                .paths
+                .runtime_dir()
+                .path
+                .join(crate::disposable::DISPOSABLE_DIR),
+        )
     }
 
     fn preview(&self, request: &PlanRequest<'_>) -> PlanPreview {
@@ -872,6 +930,7 @@ impl SandboxBackend for VmBackend {
             &options.session_ro,
         );
         let readonly = profile.effective_work_mode(session.work_mode) == WorkMode::Ro;
+        let disposable = options.overlay().is_some();
         let lines = session_lines(
             &self.resolved,
             &layout,
@@ -879,11 +938,19 @@ impl SandboxBackend for VmBackend {
             &root,
             &profile.network.shim_dst,
             readonly,
+            disposable,
             "hum-preview",
         );
         let argv = user_units(&self.paths)
             .and_then(|units| {
                 let unit = unit_of(&units, session)?;
+                let writable: &[&str] = if disposable {
+                    &["<layer>"]
+                } else if readonly {
+                    &[]
+                } else {
+                    &["<project>"]
+                };
                 unit_line(
                     &units,
                     &unit,
@@ -891,7 +958,7 @@ impl SandboxBackend for VmBackend {
                     &layout,
                     &lines,
                     PREVIEW_TOKEN,
-                    (!readonly).then_some("<project>"),
+                    writable,
                 )
             })
             .unwrap_or_else(|_| {
@@ -926,21 +993,25 @@ impl SandboxBackend for VmBackend {
     /// # Errors
     ///
     /// Was bwrap für dieselbe Anfrage ablehnte (`SANDBOX_005`,
-    /// `SANDBOX_006`, `SANDBOX_011`), `SANDBOX_030` für eine
-    /// Wegwerf-Sandbox, `SANDBOX_050` ohne Dienstverwalter, `SANDBOX_046`,
-    /// wenn die Tür nicht entsteht.
+    /// `SANDBOX_006`, `SANDBOX_011`), `SANDBOX_030`, wenn eine
+    /// Wegwerf-Sandbox hier nicht geht, `SANDBOX_050` ohne Dienstverwalter,
+    /// `SANDBOX_046`, wenn die Tür nicht entsteht.
     fn plan(&self, request: &PlanRequest<'_>) -> Result<LaunchPlan, Diagnostic> {
         let PlanRequest {
             profile,
             session,
             options,
         } = *request;
-        if options.disposable.is_some() {
-            return Err(self
-                .disposable_support(request)
-                .err()
-                .unwrap_or_else(|| setup_failed("no disposable sandbox".to_owned())));
-        }
+        let layer = match &options.disposable {
+            None => None,
+            Some(crate::launcher::DisposableLayer::Overlay(dirs)) => {
+                self.overlay_support(request)?;
+                Some(disposable::PinnedLayer::open(dirs)?)
+            }
+            Some(crate::launcher::DisposableLayer::Clone(_)) => {
+                return Err(disposable::clone_refused());
+            }
+        };
         refuse_writable_extensions(profile)?;
         let policy = MountPolicy::from_paths(&self.paths);
         profile.validate_with(&policy)?;
@@ -979,16 +1050,21 @@ impl SandboxBackend for VmBackend {
             ..
         } = pinned;
         let present = BwrapBackend::present_under_work(profile, &work.proc_path());
-        let writable = profile.effective_work_mode(session.work_mode) == WorkMode::Rw;
+        // Eine Wegwerf-Sitzung schreibt nie ins Projekt: Die Unit bekommt
+        // es nur lesbar, beschreibbar ist dort nur die Schicht (HUM-446).
+        let writable =
+            profile.effective_work_mode(session.work_mode) == WorkMode::Rw && layer.is_none();
+        let meta = std::fs::metadata(work.proc_path())
+            .map_err(|err| setup_failed(format!("the project folder: {err}")))?;
         let project = Project {
-            ino: std::fs::metadata(work.proc_path())
-                .map_err(|err| setup_failed(format!("the project folder: {err}")))?
-                .ino(),
+            ino: meta.ino(),
+            dev: meta.dev(),
             writable: if writable {
                 Some(property_path(work.resolved())?)
             } else {
                 None
             },
+            layer,
             unprotected: BwrapBackend::unprotected_under_work(profile, &present),
             work,
             session_ro: session_ro
@@ -1121,15 +1197,46 @@ fn name_the_link(results: &mut [CheckResult], link: &str) {
 struct Project {
     /// Der geöffnete Ordner; sein Deskriptor geht an die Unit.
     work: crate::pinned::PinnedSource,
-    /// Sein Inode, für die Mounttabelle des Gasts.
+    /// Sein Inode, für die Mounttabelle des Gasts und die Host-Prüfung.
     ino: u64,
+    /// Sein Gerät, für die Host-Prüfung (HUM-446).
+    dev: u64,
     /// Sein Pfad als Eigenschaft der Unit, wenn er beschreibbar ist.
     writable: Option<String>,
+    /// Die geöffnete Wegwerf-Schicht, wenn dies eine Wegwerf-Sitzung ist
+    /// (HUM-446).
+    layer: Option<disposable::PinnedLayer>,
     /// Masken unter `/work`, die es im Projekt nicht gibt.
     unprotected: Vec<PathBuf>,
     /// Die nur lesbaren Binds der Sitzung, geöffnet und geprüft, als
     /// aufgelöster Pfad und Ziel; die Wurzel des Gasts bindet Pfade.
     session_ro: Vec<(PathBuf, PathBuf)>,
+}
+
+impl Project {
+    /// Was die Unit außer ihrem Laufzeitverzeichnis beschreiben darf: der
+    /// beschreibbare Projektordner, in einer Wegwerf-Sitzung nur die Schicht
+    /// (HUM-446).
+    fn writable_paths(&self) -> Vec<&str> {
+        self.writable
+            .iter()
+            .map(String::as_str)
+            .chain(self.layer.as_ref().map(disposable::PinnedLayer::property))
+            .collect()
+    }
+
+    /// Was die Host-Prüfung bei den Diensten der Dateien sucht: den
+    /// geöffneten Projektordner und, in einer Wegwerf-Sitzung, das geöffnete
+    /// Verzeichnis der Schicht (HUM-446).
+    fn shares(&self) -> Vec<crate::launcher::SharedDir> {
+        std::iter::once(crate::launcher::SharedDir {
+            jail_path: PathBuf::from(lines::WORK_SHARE),
+            dev: self.dev,
+            ino: self.ino,
+        })
+        .chain(self.layer.as_ref().map(disposable::PinnedLayer::shared_dir))
+        .collect()
+    }
 }
 
 /// Die Kanäle einer Sitzung auf der Seite des Daemons.
@@ -1190,8 +1297,8 @@ impl Channels {
 }
 
 /// Die Deskriptoren, die die Unit über die Übergabe bekommt, mit ihren
-/// Nummern ab [`lines::ROOT_SOCKET_FD`].
-fn numbered(fds: [&OwnedFd; 3]) -> Vec<(std::os::fd::RawFd, std::os::fd::RawFd)> {
+/// Nummern ab [`lines::ROOT_SOCKET_FD`]: drei, in einer Wegwerf-Sitzung vier.
+fn numbered(fds: &[&OwnedFd]) -> Vec<(std::os::fd::RawFd, std::os::fd::RawFd)> {
     fds.iter()
         .zip(lines::ROOT_SOCKET_FD..)
         .map(|(fd, target)| (fd.as_raw_fd(), target))
@@ -1222,15 +1329,34 @@ fn write_files(
 }
 
 impl VmBackend {
-    /// Der Plan im angelegten Laufzeitverzeichnis.
-    fn plan_in(
+    /// Was der Plan einer Wegwerf-Sitzung selbst prüft (HUM-446): ein
+    /// beschreibbares Projekt und das Modul `overlay` für den Gastkernel. Wo
+    /// die Schicht liegt, prüft wie unter bwrap, wer sie anlegt
+    /// ([`crate::Layer::create`]); [`SandboxBackend::disposable_support`]
+    /// fragt es vorher ohne Seiteneffekt.
+    fn overlay_support(&self, request: &PlanRequest<'_>) -> Result<(), Diagnostic> {
+        if request
+            .profile
+            .effective_work_mode(request.session.work_mode)
+            != WorkMode::Rw
+        {
+            return Err(crate::bwrap::read_only_work(
+                request.profile,
+                request.session,
+            ));
+        }
+        disposable::overlay_module(&self.resolved.modules)
+    }
+
+    /// Die Wurzel des Gasts und sein Plan, geschrieben ins
+    /// Laufzeitverzeichnis; dazu die Umgebung des Agenten.
+    fn write_guest(
         &self,
         layout: &Layout,
         request: &PlanRequest<'_>,
-        units: &UserUnits,
         unit: &UnitName,
-        project: Project,
-    ) -> Result<LaunchPlan, Diagnostic> {
+        project: &Project,
+    ) -> Result<(GuestRoot, Vec<(String, String)>), Diagnostic> {
         let PlanRequest {
             profile,
             session,
@@ -1246,9 +1372,35 @@ impl VmBackend {
             &project.session_ro,
         );
         let env = profile.effective_env(session, None);
-        let probe = options.guest_root_probe.command();
-        let plan_text = guest_plan(profile, session, &env, project.ino, probe, &root.entries)?;
+        let plan_text = guest_plan(
+            profile,
+            session,
+            &env,
+            project.ino,
+            options.guest_root_probe.command(),
+            &root.entries,
+            project.layer.is_some(),
+        )?;
         write_files(layout, &root, &plan_text, unit)?;
+        Ok((root, env))
+    }
+
+    /// Der Plan im angelegten Laufzeitverzeichnis.
+    fn plan_in(
+        &self,
+        layout: &Layout,
+        request: &PlanRequest<'_>,
+        units: &UserUnits,
+        unit: &UnitName,
+        project: Project,
+    ) -> Result<LaunchPlan, Diagnostic> {
+        let PlanRequest {
+            profile,
+            session,
+            options,
+        } = *request;
+        let (root, env) = self.write_guest(layout, request, unit, &project)?;
+        let disposable = project.layer.is_some();
         let channels = Channels::open(layout, options)?;
         let group = session_group(session);
         let lines = session_lines(
@@ -1258,6 +1410,7 @@ impl VmBackend {
             &root,
             &profile.network.shim_dst,
             project.writable.is_none(),
+            disposable,
             &group,
         );
         let argv = unit_line(
@@ -1267,10 +1420,15 @@ impl VmBackend {
             layout,
             &lines,
             channels.handover.token(),
-            project.writable.as_deref(),
+            &project.writable_paths(),
         )?;
+        let shares = project.shares();
         let project_fd = project.work.into_fd();
-        let fds = numbered([&channels.root_socket, &project_fd, &channels.lifeline_read]);
+        let layer_fd = project.layer.map(disposable::PinnedLayer::into_fd);
+        let mut handed: Vec<&OwnedFd> =
+            vec![&channels.root_socket, &project_fd, &channels.lifeline_read];
+        handed.extend(layer_fd.as_ref());
+        let fds = numbered(&handed);
         let timeout = options
             .report_timeout
             .unwrap_or_else(|| self.start_timeout());
@@ -1307,11 +1465,15 @@ impl VmBackend {
                 unit: unit.clone(),
                 runtime: layout.dir.clone(),
                 admission,
+                shares,
             }),
             renumbered: false,
             program: units.run_program().to_path_buf(),
             once: Mutex::new(Some(LaunchOnce {
-                inherit: vec![channels.root_socket, project_fd, channels.lifeline_read],
+                inherit: [channels.root_socket, project_fd, channels.lifeline_read]
+                    .into_iter()
+                    .chain(layer_fd)
+                    .collect(),
                 report: channels.report_reader,
                 status: None,
                 output_sink: options.output_sink.clone(),

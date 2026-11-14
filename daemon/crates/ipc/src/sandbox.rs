@@ -2714,9 +2714,14 @@ impl Inner {
             humanitl_sandbox::clone_masks(&prepared.profile, &resolved),
         )
         .map_err(Before)?;
+        // Die Masken des Profils: Der Scan schreibt auf, unter und über ihnen
+        // nichts. Liegen sie über dem Overlay, erreicht die obere Schicht sie
+        // nie; unter der Kernel-Stufe liegen sie in der unteren Schicht, und
+        // Root im Gast könnte an ihnen vorbei schreiben (HUM-446).
         #[cfg(not(target_os = "macos"))]
-        let layer =
-            humanitl_sandbox::Layer::create(&self.paths.runtime_dir().path).map_err(Before)?;
+        let layer = humanitl_sandbox::Layer::create(&self.paths.runtime_dir().path)
+            .map_err(Before)?
+            .with_masks(humanitl_sandbox::clone_masks(&prepared.profile, &resolved));
         let meta = lower
             .try_clone()
             .map(std::fs::File::from)

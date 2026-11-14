@@ -1611,3 +1611,113 @@ fn a_failed_read_of_a_foreign_attribute_refuses_and_makes_the_list_incomplete() 
         .expect("listed");
     assert!(new.refused.is_some(), "{new:?}");
 }
+
+/// HUM-446: Über einem Overlay, dessen Masken in der unteren Schicht liegen
+/// (Kernel-Stufe), schreibt der Scan nichts auf, unter oder über einer Maske:
+/// keine geänderte maskierte Datei, keinen Hook unter einem maskierten
+/// Verzeichnis, auch keinen, das es im Projekt noch nicht gab, kein Whiteout
+/// auf einer Maske, keinen Verweis an der Stelle eines Verzeichnisses über
+/// ihr und keine Löschung eines Verzeichnisses, das eine Maske enthält. Alles
+/// andere bleibt, wie es ist; ohne Masken ist es der Scan von bwrap.
+///
+/// Mutationsbeweis: `overlay_masks` in `is_mask` übergangen färbt die
+/// Zeile zu `.git/hooks` rot; `overlay_above_mask` in `whiteout` übergangen
+/// die Zeile zu `deep/a`.
+#[test]
+fn nothing_on_under_or_above_a_mask_of_the_overlay_is_ever_applied() {
+    let fx = fixture();
+    fs::write(fx.lower.join(".env"), "SECRET=yes\n").unwrap();
+    fs::create_dir_all(fx.lower.join("deep/a/b")).unwrap();
+    fs::write(fx.lower.join("deep/a/b/key"), "k\n").unwrap();
+    fs::create_dir_all(fx.lower.join("cfg")).unwrap();
+    fs::write(fx.lower.join("cfg/token"), "t\n").unwrap();
+    fs::create_dir_all(fx.lower.join("conf")).unwrap();
+    fs::set_permissions(fx.lower.join("conf"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(fx.lower.join("conf/secret"), "s\n").unwrap();
+    let base = fx.baseline();
+    let masks = vec![
+        PathBuf::from("conf/secret"),
+        PathBuf::from(".env"),
+        PathBuf::from(".git/hooks"),
+        PathBuf::from("deep/a/b/key"),
+        PathBuf::from("cfg/token"),
+    ];
+    // Die maskierte Datei überschrieben, ein Hook unter einer Maske, die es
+    // im Projekt nicht gibt, ein Verweis statt eines Verzeichnisses über
+    // einer Maske, ein Verzeichnis über einer Maske opak ersetzt.
+    fs::write(fx.upper.join(".env"), "SECRET=stolen\n").unwrap();
+    fs::create_dir_all(fx.upper.join(".git/hooks")).unwrap();
+    fs::write(fx.upper.join(".git/hooks/pre-commit"), "#!/bin/sh\n").unwrap();
+    symlink("elsewhere", fx.upper.join("cfg")).unwrap();
+    fs::create_dir_all(fx.upper.join("deep")).unwrap();
+    fs::write(fx.upper.join("new.txt"), "new\n").unwrap();
+    // Die Rechte eines Verzeichnisses über einer Maske geändert.
+    fs::create_dir_all(fx.upper.join("conf")).unwrap();
+    fs::set_permissions(fx.upper.join("conf"), fs::Permissions::from_mode(0o700)).unwrap();
+    if !opaque(&fx.upper.join("deep")) || !whiteout(&fx.upper.join("keep.txt")) {
+        return;
+    }
+    let (upper, lower) = fx.fds();
+    let set = scan_masked(upper.as_fd(), lower.as_fd(), &base, &masks);
+    for rel in [".env", ".git/hooks", "cfg", "deep/a", "conf"] {
+        let change = change_at(&set, rel);
+        assert!(
+            change
+                .refused
+                .as_deref()
+                .is_some_and(|why| why.contains("masked")),
+            "{rel}: {change:?}"
+        );
+    }
+    assert!(
+        set.changes
+            .iter()
+            .all(|change| !change.rel.starts_with(".git/hooks/pre-commit")),
+        "nothing below a masked directory is listed on its own: {:?}",
+        set.changes
+    );
+    assert!(change_at(&set, "new.txt").refused.is_none());
+    assert!(change_at(&set, "keep.txt").refused.is_none());
+    // Alles übernehmen, was nicht abgelehnt ist: Die Masken im Projekt
+    // bleiben, wie sie waren.
+    let ids: Vec<String> = set
+        .changes
+        .iter()
+        .filter(|change| change.refused.is_none())
+        .map(LayerChange::path_hash)
+        .collect();
+    let chosen = select(&set, &ids).unwrap();
+    let report = apply(
+        upper.as_fd(),
+        lower.as_fd(),
+        &base,
+        &chosen,
+        &ApplyOptions::default(),
+    )
+    .unwrap();
+    assert!(report.failed.is_none(), "{:?}", report.failed);
+    assert_eq!(
+        fs::read_to_string(fx.lower.join(".env")).unwrap(),
+        "SECRET=yes\n"
+    );
+    // Ein Verzeichnis über einer Maske darf entstehen, nie die Maske darin.
+    assert!(!fx.lower.join(".git/hooks").exists());
+    assert_eq!(
+        fs::read_to_string(fx.lower.join("deep/a/b/key")).unwrap(),
+        "k\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fx.lower.join("cfg/token")).unwrap(),
+        "t\n"
+    );
+    assert!(fs::symlink_metadata(fx.lower.join("cfg")).unwrap().is_dir());
+    assert_eq!(
+        fs::read_to_string(fx.lower.join("new.txt")).unwrap(),
+        "new\n"
+    );
+    assert!(!fx.lower.join("keep.txt").exists());
+    // Ohne Masken ist es der Scan von bwrap: dieselben Änderungen, keine
+    // davon wegen einer Maske abgelehnt.
+    let plain = scan_masked(upper.as_fd(), lower.as_fd(), &base, &[]);
+    assert_eq!(plain, scan(upper.as_fd(), lower.as_fd(), &base));
+}

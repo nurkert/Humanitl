@@ -228,7 +228,7 @@ fn mount_point_for(tree: &OwnedFd, path: &Path, uid: u32, gid: u32) -> io::Resul
 
 /// A detached copy of the mount at `path` (`open_tree(2)`, not recursive:
 /// the shared root is one mount in the guest).
-fn clone_tree(path: &Path) -> io::Result<OwnedFd> {
+pub(super) fn clone_tree(path: &Path) -> io::Result<OwnedFd> {
     let path = c_path(path)?;
     let flags: libc::c_uint = libc::OPEN_TREE_CLONE | libc::OPEN_TREE_CLOEXEC;
     // SAFETY: a NUL-terminated path that outlives the call, and integers.
@@ -242,7 +242,7 @@ fn clone_tree(path: &Path) -> io::Result<OwnedFd> {
 }
 
 /// Moves the detached copy `tree` onto `path` (`move_mount(2)`).
-fn move_tree(tree: &OwnedFd, path: &Path) -> io::Result<()> {
+pub(super) fn move_tree(tree: &OwnedFd, path: &Path) -> io::Result<()> {
     use std::os::fd::AsRawFd as _;
     let path = c_path(path)?;
     // SAFETY: two NUL-terminated strings that outlive the call, a descriptor

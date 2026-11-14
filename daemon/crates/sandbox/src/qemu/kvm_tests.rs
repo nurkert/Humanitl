@@ -585,6 +585,21 @@ impl Harness {
         crate::LaunchPlan,
         std::sync::mpsc::Receiver<crate::OutputChunk>,
     ) {
+        self.plan_options(command, files, probe, |_| {})
+    }
+
+    /// Wie [`Harness::plan_with`]; `edit` ändert die Optionen davor, etwa
+    /// um eine Wegwerf-Schicht zu nennen (HUM-446).
+    fn plan_options(
+        &self,
+        command: &str,
+        files: Vec<crate::agent::SandboxFile>,
+        probe: Option<&str>,
+        edit: impl FnOnce(&mut crate::LaunchOptions),
+    ) -> (
+        crate::LaunchPlan,
+        std::sync::mpsc::Receiver<crate::OutputChunk>,
+    ) {
         use crate::SandboxBackend as _;
         let profile = crate::SandboxProfile::parse(
             include_str!("../../../../../profiles/sandbox/default.toml"),
@@ -593,7 +608,7 @@ impl Harness {
         .unwrap();
         let session = self.session(command, files);
         let (sink, output) = std::sync::mpsc::channel();
-        let options = crate::LaunchOptions {
+        let mut options = crate::LaunchOptions {
             stdio: crate::StdioMode::Pty { cols: 80, rows: 24 },
             terminal: crate::TerminalTransport::Stream,
             output_sink: Some(sink),
@@ -603,6 +618,7 @@ impl Harness {
             }),
             ..crate::LaunchOptions::default()
         };
+        edit(&mut options);
         let plan = self
             .backend
             .plan(&crate::PlanRequest::new(&profile, &session, &options))
@@ -1643,4 +1659,206 @@ fn the_workloads_of_hum_469_measured() {
     );
     assert!(shown.contains("measured-476"), "{shown}");
     let _ = handle.wait_timeout(Duration::from_secs(30));
+}
+
+/// Prüft beide Seiten und verlangt, dass jede Garantie besteht und der Host
+/// geprüft hat.
+fn assert_admitted(harness: &Harness, handle: &crate::SandboxHandle) {
+    use crate::SandboxBackend as _;
+    let results = harness.backend.isolation_check(handle);
+    for result in &results {
+        assert!(
+            result.passed && result.evidence.contains("host: checked"),
+            "{}: {} {:?}\n{}",
+            result.check.as_str(),
+            result.evidence,
+            result.diagnostic,
+            harness.consoles()
+        );
+    }
+}
+
+/// HUM-446, der Tauschtest aus HUM-437 gegen die Kernel-Stufe: Nach dem
+/// Plan wird der Projektordner umbenannt und ein anderer an seinen Pfad
+/// gelegt. Der Gast sieht den geprüften Ordner, weil sein virtiofsd ihn als
+/// Deskriptor bekam (`--bind-fd`), der Shim vergleicht den Inode, und die
+/// Host-Prüfung findet den geöffneten Ordner beim Dienst.
+///
+/// Mutationsbeweis: `--bind <Pfad> /share` statt `--bind-fd 4 /share` in der
+/// Zeile des virtiofsd für `/work` färbt den Test rot (der Shim lehnt mit
+/// `mounts_pinned` ab, die Host-Prüfung findet den Ordner nicht).
+#[test]
+fn a_folder_swapped_after_the_plan_stays_the_checked_folder() {
+    use crate::SandboxBackend as _;
+    let test = "a_folder_swapped_after_the_plan_stays_the_checked_folder";
+    let Some(harness) = Harness::new(test) else {
+        return;
+    };
+    std::fs::write(harness.project.join("marker"), "checked\n").unwrap();
+    let (plan, output) = harness.plan_with(
+        "echo \"seen:$(cat /work/marker)\"; echo swap-done-$((6*7))",
+        Vec::new(),
+        None,
+    );
+    // Der Angriff: zwischen Prüfung und Einhängen tritt ein anderer Ordner
+    // an den Pfad des Projekts.
+    let checked = harness.dir.path().join("project.checked");
+    std::fs::rename(&harness.project, &checked).unwrap();
+    std::fs::create_dir(&harness.project).unwrap();
+    std::fs::write(harness.project.join("marker"), "swapped\n").unwrap();
+    let handle = harness
+        .backend
+        .launch(&plan)
+        .unwrap_or_else(|d| panic!("launch: {}: {}", d.code, d.why));
+    assert_admitted(&harness, &handle);
+    let mut seen = Vec::new();
+    let done = wait_output(&output, &mut seen, "swap-done-42", Duration::from_secs(60));
+    let shown = String::from_utf8_lossy(&seen).into_owned();
+    let _ = handle.wait_timeout(Duration::from_secs(30));
+    assert!(done, "{shown}\n{}", harness.consoles());
+    assert!(shown.contains("seen:checked"), "{shown}");
+    assert!(!shown.contains("seen:swapped"), "{shown}");
+}
+
+/// Der Agent des Wegwerf-Laufs: ändert, legt an, löscht, ersetzt ein
+/// Verzeichnis, legt einen Verweis nach draußen und ein setuid-Bit an,
+/// versucht die Maske über `.env` zu überschreiben und zeigt, was er sieht.
+const DISPOSABLE_AGENT: &str = r#"echo after > /work/edit.txt
+echo new > /work/new.txt
+rm /work/gone.txt
+rm -r /work/dir
+mkdir -p /work/dir
+echo again > /work/dir/x
+ln -s /etc/passwd /work/escape
+chmod 4755 /work/new.txt 2>/dev/null
+echo leaked > /work/.env 2>/dev/null
+echo "view:$(cat /work/edit.txt):$(cat /work/dir/x)"
+grep ' /work ' /proc/self/mountinfo | awk '{print "work-mount:" $9}'
+echo disposable-done-$((6*7))
+"#;
+
+/// Eine Wegwerf-Schicht neben dem Projekt, mit den Masken des Profils, wie
+/// der Daemon sie anlegt (HUM-446).
+fn masked_layer(harness: &Harness) -> crate::Layer {
+    let profile = crate::SandboxProfile::parse(
+        include_str!("../../../../../profiles/sandbox/default.toml"),
+        std::path::Path::new("default.toml"),
+    )
+    .unwrap();
+    crate::Layer::create_with(
+        &harness.dir.path().join("layers"),
+        crate::disposable::TmpfsCheck::Skip,
+    )
+    .unwrap()
+    .with_masks(crate::clone_masks(
+        &profile,
+        &std::fs::canonicalize(&harness.project).unwrap(),
+    ))
+}
+
+/// HUM-446: Eine Wegwerf-Sitzung startet mit grüner Prüfung (Gast und
+/// Host), der Agent sieht seine eigene Sicht auf einem Overlay, und das
+/// Projekt bleibt Byte für Byte, wie es war. Erst nach dem Ende der Unit
+/// liest der Scan die Schicht: Er zeigt jede Änderung und lehnt den Verweis
+/// nach draußen und die Maske ab. Die Übernahme danach prüft ESC-5
+/// (`tests/escape_worktree.rs`, `a_disposable_sandbox_never_writes_to_the_project`).
+///
+/// Mutationsbeweis: Der Gastplan ohne `disposable` hängt das Projekt selbst
+/// an `/work`, nur lesbar wie jede Freigabe einer Wegwerf-Sitzung; die
+/// Prüfung lässt den Agenten dann nicht zu, und der Test ist rot.
+#[test]
+fn a_disposable_session_never_writes_to_the_project() {
+    use std::os::fd::AsFd as _;
+
+    use crate::SandboxBackend as _;
+    let test = "a_disposable_session_never_writes_to_the_project";
+    let Some(harness) = Harness::new(test) else {
+        return;
+    };
+    let project = &harness.project;
+    std::fs::write(project.join("edit.txt"), "before\n").unwrap();
+    std::fs::write(project.join("gone.txt"), "gone\n").unwrap();
+    std::fs::create_dir_all(project.join("dir/sub")).unwrap();
+    std::fs::write(project.join("dir/sub/f"), "f\n").unwrap();
+    let before = crate::disposable::baseline(project).unwrap();
+    let layer = masked_layer(&harness);
+    let meta = std::fs::metadata(project).unwrap();
+    let (plan, output) = harness.plan_options(DISPOSABLE_AGENT, Vec::new(), None, |options| {
+        options.disposable = Some(crate::launcher::DisposableLayer::Overlay(layer.dirs()));
+        options.expected_work_inode = Some((
+            std::os::unix::fs::MetadataExt::dev(&meta),
+            std::os::unix::fs::MetadataExt::ino(&meta),
+        ));
+    });
+    let handle = harness
+        .backend
+        .launch(&plan)
+        .unwrap_or_else(|d| panic!("launch: {}: {}", d.code, d.why));
+    assert_admitted(&harness, &handle);
+    let mut seen = Vec::new();
+    let done = wait_output(
+        &output,
+        &mut seen,
+        "disposable-done-42",
+        Duration::from_secs(60),
+    );
+    let shown = String::from_utf8_lossy(&seen).into_owned();
+    assert!(done, "{shown}\n{}", harness.consoles());
+    assert!(shown.contains("view:after:again"), "{shown}");
+    assert!(shown.contains("work-mount:overlay"), "{shown}");
+    let status = handle
+        .wait_timeout(Duration::from_secs(30))
+        .expect("the session ends")
+        .expect("a status");
+    assert_eq!(status.code(), Some(0), "{shown}");
+
+    let now = crate::disposable::baseline(project).unwrap();
+    assert_eq!(now.entries(), before.entries(), "the project is untouched");
+    assert_eq!(
+        std::fs::read_to_string(project.join(".env")).unwrap(),
+        "SECRET=yes\n"
+    );
+    // Gelesen wird erst, wenn kein Prozess der Unit mehr lebt.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while crate::disposable::ensure_ended(&handle, None).is_err() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    crate::disposable::ensure_ended(&handle, None).expect("the unit has ended");
+
+    let upper = crate::worktree::open_root(&layer.upper()).unwrap();
+    let lower = crate::worktree::open_root(project).unwrap();
+    let set = crate::disposable::scan_masked(upper.as_fd(), lower.as_fd(), &before, layer.masks());
+    let listed: Vec<(String, crate::summary::ChangeKind, bool)> = set
+        .changes
+        .iter()
+        .map(|change| {
+            (
+                change.rel.to_string_lossy().into_owned(),
+                change.kind,
+                change.refused.is_some(),
+            )
+        })
+        .collect();
+    for expected in [
+        ("edit.txt", crate::summary::ChangeKind::Modified, false),
+        ("new.txt", crate::summary::ChangeKind::Added, false),
+        ("gone.txt", crate::summary::ChangeKind::Removed, false),
+        ("dir/sub", crate::summary::ChangeKind::Removed, false),
+        ("dir/x", crate::summary::ChangeKind::Added, false),
+        ("escape", crate::summary::ChangeKind::SymlinkAdded, true),
+    ] {
+        assert!(
+            listed.contains(&(expected.0.to_owned(), expected.1, expected.2)),
+            "{expected:?} is missing from {listed:?}"
+        );
+    }
+    assert!(
+        listed
+            .iter()
+            .all(|(rel, _, refused)| rel != ".env" || *refused),
+        "a write to the masked .env is never applied: {listed:?}"
+    );
+    let dir = layer.dir().to_path_buf();
+    layer.discard().map_err(|(_, err)| err).unwrap();
+    assert!(!dir.exists(), "the layer is gone");
 }

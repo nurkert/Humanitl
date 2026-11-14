@@ -137,7 +137,7 @@ Five further channels complete the model:
 | K-15 | the window between `exec` and `SIGKILL` | b | high | report read at once, `SIGKILL` without grace | open | - |
 | K-16 | recording outage | a, b, c | medium | outage reported to every client once per cause, cards marked "not recorded", first approval paused | declared | `daemon/crates/recorder` health tests, golden `states_recorder_failure` |
 | K-18 | the door for further shells (`humanitl sandbox exec`) | b | high | unnamed socket pair held only by the daemon and PID 1; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX` and a refused `AF_VSOCK`; at most four; dies with the sandbox; in the stream mode (K-29) the request is a frame on the control stream and the shim opens the shell's pseudo-terminal itself, under the same limits | mitigated | `daemon/crates/ipc/tests/terminal.rs` (HUM-299), `daemon/crates/ipc/tests/terminal_stream.rs` (HUM-443) |
-| K-24 | the disposable sandbox: the upper layer and the way back into the project (`humanitl sandbox apply`) | b | high | project folder read-only as the lower layer of an overlay, upper layer in RAM under the daemon's runtime directory with a size cap, `mounts.extra_rw` read-only; applied only on a human's choice, checked before the first write, never through or as a symlink out of the project, no device, FIFO, socket or setuid bit, no overwrite of a file the human changed since the start unless that change is confirmed one by one (`ApplyChanges.overwrite_ids` from the app, HUM-351) or every selected change is (`--overwrite`); a container-engine backend refuses `disposable` (`SANDBOX_030`) because its lower layer cannot be bound to the checked folder, and `auto` runs direct there (HUM-438) | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350); `daemon/crates/sandbox/src/podman/tests.rs`, `daemon/crates/sandbox/tests/escape_worktree.rs` (HUM-438) |
+| K-24 | the disposable sandbox: the upper layer and the way back into the project (`humanitl sandbox apply`) | b | high | project folder read-only as the lower layer of an overlay, upper layer in RAM under the daemon's runtime directory with a size cap, `mounts.extra_rw` read-only; applied only on a human's choice, checked before the first write, never through or as a symlink out of the project, no device, FIFO, socket or setuid bit, nothing on, under or above a mask of the profile (HUM-446), no overwrite of a file the human changed since the start unless that change is confirmed one by one (`ApplyChanges.overwrite_ids` from the app, HUM-351) or every selected change is (`--overwrite`); a container-engine backend refuses `disposable` (`SANDBOX_030`) because its lower layer cannot be bound to the checked folder, and `auto` runs direct there (HUM-438); the kernel level builds the overlay in the guest over the read-only project and a layer it gets as a descriptor, and the daemon reads that layer as written by the attacker (K-34, HUM-446) | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350); `daemon/crates/sandbox/src/podman/tests.rs`, `daemon/crates/sandbox/tests/escape_worktree.rs` (HUM-438) |
 | K-27 | the container engine under Podman (Podman, `conmon`, `crun`, the user's container storage, `containers.conf`) | b, d | high | admitted at the plain level (`crun`) only after the escape suite against it was green on `main` (HUM-448), the kernel level (backend `qemu`, ADR-0021) refused with `SANDBOX_048` until HUM-449, `auto` never Podman; every configuration source the daemon does not write cut off; fixed flags without keys; the environment only through the sealed memfd; ended through the engine and the lifeline; leftovers removed at daemon start (`SANDBOX_041`) | mitigated | ESC-1, ESC-2, ESC-5 (`escape-tests-podman`, HUM-435); `daemon/crates/sandbox/src/podman/` (HUM-433) |
 | K-28 | the image as the root of the sandbox under Podman, and pulling it (origin, digest, the network while pulling) | b, d | high | pinned by digest, checked before every start, never pulled by a start (`SANDBOX_043`); pulled only on request, by the engine directly and not through the proxy, from the registry the name names, said before it runs; registry credentials only from the adapter's own file, handed to the engine as a private copy, and a credential helper there or in a registry drop-in refused (HUM-456); project, door, CA, shim and session files from the host, never from the image; user, entry point, volumes and health check of the image overridden, an image setting `HUMANITL_*` refused | open | ESC-2 `ca_is_the_hosts` (`HUMANITL_ESCAPE_IMAGE`); `daemon/crates/sandbox/src/podman/image.rs` (HUM-439) |
 | K-29 | the control stream of the terminals (the stream mode: the kernel level always, bwrap when a caller asks for it) | b | high | one stream socket held only by the daemon and PID 1, opened before the agent's filter, which refuses `AF_VSOCK` and `AF_UNIX`; in a guest the host opens it as the second connection on the shim's one listening port, the guest never opens one; terminal bytes and control only, never a byte to or from the proxy; frames of at most 16 KiB, oversized frames, unknown kinds and unknown ids dropped by both ends without ending the stream; its end is a lifeline | mitigated | ESC-1 `socket_af_vsock` in `daemon/crates/ipc/tests/terminal_stream.rs`, fuzz target `control_stream_reader` with `daemon/crates/sandbox/tests/regressions/`, `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (HUM-443) |
@@ -145,6 +145,7 @@ Five further channels complete the model:
 | K-31 | the vsock door of the kernel level | b | high | one vsock device process per session with one device and its own group, never `--forward-cid`; on the host exactly one listener `<uds>_5000`, forwarded to the session's proxy socket; every other port finds no listener; the host check refuses any other socket in the runtime directory and a second device | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`an_extra_listener_beside_the_door_turns_the_host_check_red`, HUM-444) |
 | K-32 | the guest kernel (root in the guest) | b | high | the guarantees are carried on the host, so they hold with root in the guest; automatic module loading off, then the plan's vsock modules loaded and module loading locked before the agent; the guest root a read-only share without the runtime directory and without the jail's `/proc`; writable only `/work`, the profile's tmpfs and `/run`, which the shim mounts as tmpfs in the guest with `/run/humanitl` read-only on top (HUM-466), `mounts.extra_rw` refused (`SANDBOX_051`) | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (HUM-465, HUM-444); escape suite with root in the guest (HUM-445) |
 | K-33 | the four helper processes of a session (two file system daemons, the vsock device, the emulator) and the unit's first process | b, d | high | each in its own bubblewrap jail with every namespace unshared and no capability, only `/usr` of the host, what it serves and its own socket directory; the root daemon read-only with its socket as a descriptor, the `/work` daemon on the checked descriptor with the profile's masks; nothing inherited from the daemon but three descriptors over a one-connection handover; the unit ends with the daemon through the lifeline, also on `SIGKILL`, and with the daemon's unit through `BindsTo`; each file system daemon at most 65,536 descriptors (`LimitNOFILE` of the unit), so a guest cannot pin host memory without bound (HUM-469); the guest's file cache on (`--cache auto`) and trimmed by PID 1 in the guest whenever more than 32,768 entries are unused (checked every 100 ms), so a walk over the root no longer exhausts a daemon; what the guest holds, including directories kept by cached children, still counts against the limit (HUM-476) | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`a_killed_daemon_ends_the_unit_within_five_seconds`, HUM-444) |
+| K-34 | the shared file systems of the kernel level (virtiofs): the guest root, the project folder at `/work` and the layer of a disposable session | b | high | every shared folder is opened and checked by the daemon and reaches its file system daemon only as that descriptor (`--bind-fd`), never as a path; the shim compares the inode of `/work`, or of the overlay's lower layer, with the plan; the host check finds the opened folder itself at the one daemon that shares it, a descriptor that names the share and carries the plan's device and inode (`SANDBOX_047`), which root in the guest cannot forge; in a disposable session the project is read-only twice (its daemon with `--readonly`, its jail binding the checked folder with `--ro-bind-fd`), the layer comes through a third daemon, and the daemon reads it only after every process of the unit has ended, with the scan of bubblewrap's disposable sandbox plus a refusal of every change on, under or above a mask of the profile | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`a_folder_swapped_after_the_plan_stays_the_checked_folder`, `a_disposable_session_never_writes_to_the_project`), `daemon/crates/sandbox/src/qemu/host_check.rs`, `daemon/crates/sandbox/tests/escape_worktree.rs` (ESC-5 against `qemu`, HUM-446) |
 
 K-13 is the obvious channel and the only one considered closed outright. K-14 is here so that
 attacker (d) appears in a row. K-15 came with HUM-041: the check that proves the guarantees runs
@@ -783,6 +784,10 @@ in the guest can forge the guest's lines; the host check is what holds then.
 
 ### K-33 The helper processes of a session
 
+A disposable session has one helper more, the file system daemon of the layer (K-34), in a jail of
+the same kind; it alone gets `CAP_DAC_OVERRIDE`, inside its own user namespace, over the layer and
+a read-only `/usr`, because the overlay in the guest works as root.
+
 A session of the kernel level is one transient unit of the user with five processes of its own:
 the unit's first process (the shim with `--fds-then-exec`, then a fixed `sh` script), the file
 system daemon of the guest root, the file system daemon of `/work`, the vsock device and the
@@ -814,6 +819,40 @@ in the guest and counts the daemon's descriptors from the host. *Residual risk:*
 daemon can start such units (as under Podman, see the trust boundaries); a flaw in a file system
 daemon reaches what it serves, the read-only guest root or the project folder; root in the guest
 can exhaust a daemon's descriptors for its own session, never past the limit.
+
+### K-34 The shared file systems of the kernel level
+
+The guest reaches files of the host only through virtiofs: the read-only guest root, the project
+folder at `/work` and, in a disposable session, the session's layer. Each share is a folder the
+daemon opened and checked before the start; it reaches its file system daemon as that descriptor
+(`--bind-fd` in the daemon's jail), never as a path, so a folder swapped after the check does not
+reach the guest (HUM-442 Q4). Two checks follow, one on each side. The shim compares the inode of
+`/work` (virtiofs keeps the host's inodes, not its device numbers, Q5) with the plan, and in a
+disposable session the inode of the overlay's lower layer; a mismatch is `SANDBOX_042`. Root in the
+guest could forge that line, so the host check also looks at the daemon that shares `/work`, and at
+the one that shares the layer: exactly one of each, holding a descriptor that names its share and
+carries the device and inode of the opened folder; a daemon that holds the checked folder only
+somewhere below its share does not pass (`SANDBOX_047`). Measured (HUM-446): with a path instead of
+`--bind-fd`, a folder swapped after the plan is refused with `SANDBOX_042`, and a plan that expects
+another inode turns the host check red.
+
+*A disposable session.* The project's daemon runs with `--readonly`, its jail binds the checked
+folder read-only (`--ro-bind-fd`), and the unit gets only the layer as a writable path, so neither the guest nor a compromised daemon writes the
+project. The shim loads `overlay` before the module lock and builds `/work` as an overlay of the
+project and the layer with the options of bubblewrap's unprivileged overlay. Root in the guest can
+mount the layer again and write anything into it: whiteouts, extended attributes, modes, hard
+links, symbolic links; device nodes other than the whiteout `0:0` the layer's daemon cannot create
+without `CAP_MKNOD`. The daemon therefore reads the layer only after every process of the unit has
+ended (`ensure_ended` asks the service manager), with the scan of bubblewrap's disposable sandbox
+(K-24), which never applies a device, FIFO, socket, setuid bit, foreign overlay attribute or
+symbolic link out of the project. Under bubblewrap the profile's masks lie on top of the overlay;
+here they lie in the lower layer, and the agent may write over a masked path inside its own layer.
+The scan refuses every change on, under or above a mask, so neither a hook nor a secret reaches the
+project through the layer; the agent never sees what a mask hides, root in the guest included,
+because the mask lies in the jail of the project's daemon. *Residual risk:* a flaw in a file
+system daemon reaches what it serves, the layer with the rights of `CAP_DAC_OVERRIDE` in its own
+namespace included; a scan flaw would show attacker-written bytes to the human, who still decides
+each apply.
 
 ## Assumptions
 
@@ -921,6 +960,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-14 | K-33: each file system daemon of the kernel level holds at most 65,536 descriptors (`LimitNOFILE` of the unit) and runs with `--cache never --allow-mmap` (guest kernel 6.6 or newer, `SANDBOX_045` below); closes the finding of HUM-445, where a walk over the guest root drove the root daemon to about 520,000 descriptors | HUM-469 |
 | 2026-11-14 | K-31: the host opens the report and control connections only after the shim's ready line on the door; until then the door forwards nothing to the proxy | HUM-471 |
 | 2026-11-14 | K-33: the file system daemons run with `--cache auto`; PID 1 in the guest trims unused dentries and inodes above 32,768, checked every 100 ms (`vm.drop_caches=2`), so a walk over the whole root no longer ends with `ENFILE`; `LimitNOFILE=65536` stays the guarantee | HUM-476 |
+| 2026-11-14 | K-34 added: the shared file systems of the kernel level; the host check finds the opened project folder (and the layer) at the daemon that shares it; the disposable sandbox at the kernel level, an overlay in the guest over the read-only project and a layer from a third daemon, read only after the unit has ended, with every change on, under or above a mask refused; K-24 and K-33 follow | HUM-446 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

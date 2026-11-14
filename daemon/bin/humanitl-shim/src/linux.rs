@@ -182,6 +182,7 @@ mod envfd;
 mod exec;
 mod guest;
 mod guest_cache;
+mod guest_overlay;
 mod guest_tmpfs;
 mod handover;
 pub(crate) mod identity;

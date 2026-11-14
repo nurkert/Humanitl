@@ -43,6 +43,9 @@ pub const MAX_SCAN_ENTRIES: usize = 200_000;
 /// Das erweiterte Attribut eines opaken Verzeichnisses.
 const OPAQUE_XATTR: &str = "user.overlay.opaque";
 
+/// Warum eine Änderung auf oder über einer Maske nie geschrieben wird.
+const MASKED: &str = "it lies on a masked path, which the sandbox profile keeps from the agent";
+
 /// Attribute, die eine obere Schicht ohne Privilegien nie trägt; wer sie
 /// findet, schreibt nichts davon auf den Host.
 const FOREIGN_XATTRS: &[&str] = &["user.overlay.redirect", "user.overlay.metacopy"];
@@ -145,6 +148,39 @@ pub fn scan(upper: BorrowedFd<'_>, lower: BorrowedFd<'_>, baseline: &TreeSnapsho
     scan_with_budget(upper, lower, baseline, MAX_SCAN_ENTRIES)
 }
 
+/// Wie [`scan`], dazu die Masken des Profils, relativ zum Projekt (HUM-446).
+///
+/// Unter bwrap liegen die Masken über dem Overlay, und die obere Schicht
+/// erreicht sie nie. Unter der Kernel-Stufe liegen sie in der unteren
+/// Schicht, und Root im Gast kann die obere Schicht an ihnen vorbei
+/// beschreiben. Damit der Scan dort so streng bleibt wie unter bwrap, wird
+/// jede Änderung auf einer Maske, unter ihr, und jede, die über ihr etwas
+/// anderes als ein Verzeichnis hinterlässt oder ein Verzeichnis über ihr
+/// löscht, angezeigt und nie geschrieben. Verglichen wird genau, ohne die
+/// Schreibweise zu falten: Das Projekt liegt unter Linux auf einem
+/// Dateisystem, das sie unterscheidet.
+#[must_use]
+pub fn scan_masked(
+    upper: BorrowedFd<'_>,
+    lower: BorrowedFd<'_>,
+    baseline: &TreeSnapshot,
+    masks: &[PathBuf],
+) -> ChangeSet {
+    let mut scanner = Scanner {
+        lower,
+        baseline,
+        out: ChangeSet::default(),
+        seen: 0,
+        budget: MAX_SCAN_ENTRIES,
+        read_xattr: fgetxattr,
+        clone_masks: None,
+        overlay_masks: masks.to_vec(),
+    };
+    scanner.walk(upper, Path::new(""), &Walk::default());
+    scanner.out.changes.sort_by(|a, b| a.rel.cmp(&b.rel));
+    scanner.out
+}
+
 /// Liest einen Klon des Projekts (macOS, HUM-374) und vergleicht ihn mit dem
 /// Projekt.
 ///
@@ -184,6 +220,7 @@ pub(crate) fn scan_clone_with_budget(
         budget,
         read_xattr: fgetxattr,
         clone_masks: Some(masks.iter().map(|mask| folded(mask)).collect()),
+        overlay_masks: Vec::new(),
     };
     scanner.opaque_removals(clone, Path::new(""));
     scanner.walk(clone, Path::new(""), &Walk::default());
@@ -218,6 +255,7 @@ pub(crate) fn scan_with(
         budget,
         read_xattr,
         clone_masks: None,
+        overlay_masks: Vec::new(),
     };
     scanner.walk(upper, Path::new(""), &Walk::default());
     scanner.out.changes.sort_by(|a, b| a.rel.cmp(&b.rel));
@@ -465,6 +503,8 @@ struct Scanner<'a> {
     read_xattr: XattrReader,
     /// `Some` bei einem Klon ([`scan_clone`]), mit den entfernten Masken.
     clone_masks: Option<Vec<PathBuf>>,
+    /// Die Masken über einem Overlay ([`scan_masked`], HUM-446), ungefaltet.
+    overlay_masks: Vec<PathBuf>,
 }
 
 /// Wie [`rustix::fs::fgetxattr`]: Länge des Werts in `buf` oder der Fehler.
@@ -507,28 +547,34 @@ impl Scanner<'_> {
     /// ginge, sähe wie „nichts geändert" aus.
     /// Ob `rel` eine der aus dem Klon entfernten Masken ist.
     fn is_mask(&self, rel: &Path) -> bool {
-        self.clone_masks.as_ref().is_some_and(|masks| {
-            let rel = folded(rel);
-            masks.contains(&rel)
-        })
+        self.overlay_masks.iter().any(|mask| rel.starts_with(mask))
+            || self.clone_masks.as_ref().is_some_and(|masks| {
+                let rel = folded(rel);
+                masks.contains(&rel)
+            })
     }
 
     /// Ob `rel` auf dem Weg zu einer Maske liegt. Wer dort statt eines
     /// Verzeichnisses einen Symlink hinterlässt, lenkte die Maske im Projekt
     /// auf einen anderen Ort um.
     fn above_mask(&self, rel: &Path) -> bool {
-        self.clone_masks.as_ref().is_some_and(|masks| {
-            let rel = folded(rel);
-            masks.iter().any(|mask| mask.starts_with(&rel))
-        })
+        self.overlay_above_mask(rel)
+            || self.clone_masks.as_ref().is_some_and(|masks| {
+                let rel = folded(rel);
+                masks.iter().any(|mask| mask.starts_with(&rel))
+            })
+    }
+
+    /// Ob `rel` auf dem Weg zu einer Maske über einem Overlay liegt
+    /// (HUM-446): Wer dort löscht, löschte die Maske im Projekt mit.
+    fn overlay_above_mask(&self, rel: &Path) -> bool {
+        self.overlay_masks.iter().any(|mask| mask.starts_with(rel))
     }
 
     /// Eine Änderung auf oder über einer Maske; sie wird nie geschrieben.
     fn push_masked(&mut self, rel: &Path, stat: &rustix::fs::Stat) {
         let mut change = Self::base(rel, ChangeKind::Added, Kind::Other, stat);
-        change.refused = Some(
-            "it lies on a masked path, which the sandbox profile keeps from the agent".to_owned(),
-        );
+        change.refused = Some(MASKED.to_owned());
         self.push(change);
     }
 
@@ -644,7 +690,7 @@ impl Scanner<'_> {
     }
 
     fn whiteout(&mut self, rel: &Path, lower: &Lower) {
-        let (what, refused) = match lower {
+        let (what, mut refused) = match lower {
             Lower::Present(entry) => (entry.kind.clone(), None),
             // Nichts darunter: Der Agent hat etwas gelöscht, das es im
             // Projekt nicht gibt. Nichts zu tun.
@@ -652,6 +698,11 @@ impl Scanner<'_> {
             // Gelöscht würde über einen Symlink im Projekt; das geschieht nie.
             Lower::Unreachable(why) => (Kind::Other, Some(why.clone())),
         };
+        // Ein Verzeichnis über einer Maske des Overlays zu löschen, löschte
+        // sie im Projekt mit (HUM-446).
+        if refused.is_none() && self.overlay_above_mask(rel) {
+            refused = Some(MASKED.to_owned());
+        }
         self.push(LayerChange {
             rel: rel.to_path_buf(),
             kind: ChangeKind::Removed,
@@ -705,6 +756,11 @@ impl Scanner<'_> {
             if let Some(mut change) = change {
                 if let Some(attr) = foreign {
                     change.refused = Some(format!("it carries the overlay attribute {attr}"));
+                }
+                // Die Rechte eines Verzeichnisses über einer Maske zu ändern,
+                // änderte den Weg zur Maske im Projekt mit (HUM-446).
+                if change.refused.is_none() && self.overlay_above_mask(rel) {
+                    change.refused = Some(MASKED.to_owned());
                 }
                 self.push(change);
             } else if let Some(attr) = foreign {

@@ -744,6 +744,22 @@ Die Kernel-Stufe ist erst zulässig, wenn die ganze Suite gegen sie grün ist un
 - Mit Root im Gast ist jede Datei der Schicht vom Angreifer geschrieben, auch Whiteouts und Rechte; der Scan bleibt so streng wie unter bwrap.
 - Bis zu diesem Issue prüft der ESC-5-Test `a_disposable_sandbox_never_writes_to_the_project` unter der Kernel-Stufe nur die Verweigerung (`SANDBOX_030`, HUM-445); dieses Issue macht daraus einen echten Wegwerf-Lauf.
 
+### Stand nach der Umsetzung (2026-11-14)
+
+**Was schon da war.** Punkt 1 war zu zwei Dritteln gebaut: Der virtiofsd für `/work` bekam den geprüften Ordner schon per `--bind-fd 4 /share` (HUM-444), und der Shim verglich den Inode des Einhängens mit dem Plan (`tag:work:<ino>` und ein Pin mit `"dev":"*"`, HUM-465). Der Gastplan kannte schon `modules` für weitere Module vor der Sperre. Es fehlte die Prüfung auf dem Host.
+
+**Pinning auf dem Host.** Die Host-Prüfung (`qemu/host_check.rs`, `shares_held`) liest je Prozess der Unit Ziel, Gerät und Inode jedes Deskriptors und verlangt je geprüftem Ordner genau einen virtiofsd, der ihn unter seinem `--shared-dir` teilt und einen Deskriptor hält, dessen Ziel in seinem Gefängnis dieser `--shared-dir` ist und der Gerät und Inode des Plans trägt (`SANDBOX_047`, Garantie 2). Den geprüften Ordner nur irgendwo darunter zu halten genügt nicht. `UnitStop` trägt dafür die Liste `shares`.
+
+**Wegwerf-Schicht.** `disposable_support` verlangt ein beschreibbares Projekt, das Modul `overlay` im Modulverzeichnis des Gastkernels (Datei oder `modules.builtin`) und ein Laufzeitverzeichnis auf tmpfs. Der Plan öffnet das Verzeichnis der Schicht (`upper` und `work` darin, `qemu/disposable.rs`) und reicht es als Deskriptor 6 an einen dritten virtiofsd (`--bind-fd 6 /layer`, `--xattr`, dieselbe Unit, dasselbe Gefängnis, `LimitNOFILE`); die Maschine bekommt ein drittes Gerät mit dem Tag `layer`. Der virtiofsd für `/work` läuft mit `--readonly`, und `ReadWritePaths` nennt die Schicht statt des Projekts. Im Gast lädt der Shim `overlay` vor der Modulsperre und baut `/work` (`guest_overlay.rs`): ein kleines tmpfs als Bühne, darauf das Projekt nur lesbar mit Vergleich seines Inodes, die Schicht, das Overlay mit `userxattr,redirect_dir=nofollow,metacopy=off,index=off`, dann `open_tree` des Overlays, die Bühne mit `MNT_DETACH` weg und die Kopie mit `move_mount` auf `/work`. Die Mounttabelle erwartet an `/work` genau ein `overlay`. `ensure_ended` fragt bei einer Unit zusätzlich den Dienstverwalter, ob noch ein Prozess lebt (`cgroup.events`).
+
+**Gemessen.** Ohne Fähigkeit scheitert das Overlay im Gast mit `EACCES`: Es legt sein Arbeitsverzeichnis `work/work` mit den Rechten 0000 an und prüft darin `RENAME_WHITEOUT`, und der virtiofsd schreibt als einfacher Nutzer. Der virtiofsd der Schicht bekommt deshalb `--cap-add CAP_DAC_OVERRIDE`, nur in seinem eigenen Nutzer-Namensraum; danach laufen Whiteouts, opake Verzeichnisse (`user.overlay.opaque` über `--xattr`) und Kopien nach oben mit dem Gastkernel der CI (Debian 6.12) und dem lokalen (7.3.4). Der Gastkernel meldet `upper fs does not support tmpfile`; das kostet nichts. Debians virtiofsd 1.14 kennt `--bind-fd` nicht selbst, das Pinning trägt bwraps `--bind-fd` im Gefängnis wie in HUM-442 Q4.
+
+**Masken.** Unter bwrap liegen die Masken über dem Overlay; hier liegen sie in der unteren Schicht (im Gefängnis des Projekt-Dienstes), und Root im Gast kann die Schicht an ihnen vorbei beschreiben. Der Scan bleibt so streng wie unter bwrap, indem er jede Änderung auf, unter oder über einer Maske ablehnt (`scan_masked`, die Masken aus `clone_masks` in der Schicht). Das gilt für jede Wegwerf-Sitzung unter Linux, auch unter bwrap, wo es bisher nur für nicht vorhandene Masken einen Unterschied macht: ein Hook unter einem `.git/hooks`, das es beim Start nicht gab, wird nicht mehr übernommen.
+
+**Tests und Mutationsbeweise.** KVM: `a_folder_swapped_after_the_plan_stays_the_checked_folder` (Tauschtest aus HUM-437 gegen `qemu`) und `a_disposable_session_never_writes_to_the_project`; ESC-5 `a_disposable_sandbox_never_writes_to_the_project` läuft unter `qemu` als echter Wegwerf-Lauf mit Scan und Übernahme. Pfad statt `--bind-fd` färbt den Tauschtest rot (`SANDBOX_042`, `mounts_pinned`); ein Plan mit anderem Inode für die Freigabe färbt die Host-Prüfung im Tauschtest rot; der Gastplan ohne `disposable` färbt den Wegwerf-Lauf rot; `overlay_masks` in `is_mask` übergangen und `overlay_above_mask` in `whiteout` übergangen färben `nothing_on_under_or_above_a_mask_of_the_overlay_is_ever_applied` rot.
+
+**Offen.** Im Gast kann der Agent über einen maskierten Pfad in seiner eigenen Schicht schreiben, unter bwrap verweigert das die Maske selbst; übernommen wird es nie. Kandidat: die Masken zusätzlich im Gast über das Overlay legen, damit die Sicht des Agenten gleich ist. Kandidat: `--xattrmap`, damit der Dienst der Schicht nur `user.overlay.*` annimmt. Aus dem Review: Masken auf einem Projektordner mit Casefold (ext4 `+F`) falten oder ihn im Wegwerf-Modus verweigern; `Layer::open_upper` unter Linux mit Gerät und Inode der oberen Schicht absichern, damit ein vom Gast getauschtes `upper` als `SANDBOX_031` statt als Lesefehler erscheint. Hinweis für die App: Ein `git init` im Wegwerf-Lauf erzeugt abgelehnte Änderungen unter `.git`, und eine Auswahl mit einer abgelehnten Änderung schreibt nichts; „alles übernehmen" muss abgelehnte Einträge auslassen.
+
 ## HUM-449 · Kernel-Stufe zulassen: `qemu` wird wählbar
 
 ### Kontext
@@ -1332,6 +1348,14 @@ Sekunden an; Mutationsbeweis: ohne das Warten auf die Bereitschaft keine
 Verbindung, „vsock link: … the report connection has no answer yet".
 Offen: der Nachweis der zehn grünen Läufe von kvm-tests und
 escape-tests-qemu in der CI.
+
+Nachweis der zehn Läufe, Entscheidung des Owners vom 2026-11-14: Statt
+desselben Commits zählen die CI-Läufe der folgenden Issues, hintereinander.
+Ein Lauf zählt nur, wenn kvm-tests und escape-tests-qemu beide gelaufen
+(nicht nach der Pfadregel übersprungen) und grün sind; ein roter KVM-Job
+setzt die Zählung auf null. Die Lauf-IDs gehen in die Zulassung (HUM-449),
+die bis zum zehnten wartet. Bisher: 43624997550 (HUM-471), 43630993303
+(HUM-476).
 
 ## HUM-472 · Website: the model as the attacker, with sources
 
