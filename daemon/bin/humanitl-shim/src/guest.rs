@@ -34,8 +34,10 @@
 //!    Without a report nothing starts.
 //! 5. Make the guest look like a bubblewrap sandbox (HUM-445): `/sys`
 //!    becomes an empty read-only tmpfs (bwrap mounts no sysfs, and the
-//!    module lock was the last step that read it), `/dev/shm` a tmpfs, and
-//!    the host name the plan's. Mount `/work` from the plan's tag
+//!    module lock was the last step that read it), `/dev/shm` a tmpfs, every
+//!    other tmpfs of the plan a tmpfs with what lies on top of it put back
+//!    (`tmpfs`, `tmpfs_keep`, HUM-466, `guest_tmpfs.rs`), and the host name
+//!    the plan's. Mount `/work` from the plan's tag
 //!    (`virtiofs`, `nosuid`, `nodev`).
 //! 6. Set the shim's own variables and then the agent's environment, both
 //!    from the plan, with the rules of `--env-fd` (`envfd.rs`).
@@ -84,6 +86,7 @@ use std::time::Duration;
 
 use crate::json::Parser;
 use crate::linux::envfd;
+use crate::linux::guest_tmpfs::{self, Tmpfs};
 use crate::linux::modules::{self, Running};
 use crate::linux::mounts::{self, Pins};
 use crate::linux::vsock;
@@ -196,7 +199,9 @@ const PLAN_SHIM_VARS: [&str; 4] = [
 ///  "shim":{"HUMANITL_SECCOMP_DENY":"mount"},
 ///  "env":{"PATH":"/usr/bin:/bin"},
 ///  "pins":{"pins":[...],"mounts":[...]},
-///  "socket_walk":["/work","/dev/shm"],
+///  "socket_walk":["/work","/dev","/tmp","/home/agent"],
+///  "tmpfs":["/tmp","/home/agent"],
+///  "tmpfs_keep":["bind:/home/agent/.config/agent/config.json"],
 ///  "uid":"1000", "gid":"1000", "hostname":"sandbox",
 ///  "command":["/bin/bash","-l"]}
 /// ```
@@ -204,12 +209,13 @@ const PLAN_SHIM_VARS: [&str; 4] = [
 /// The escape suite's plans may add `"root_probe":["/bin/sh","-c","..."]`
 /// (HUM-445, see the module documentation).
 ///
-/// Every key is required but `modules`, `shim`, `socket_walk` and
-/// `root_probe`; the ports
+/// Every key is required but `modules`, `shim`, `socket_walk`, `tmpfs`,
+/// `tmpfs_keep` and `root_probe`; the ports
 /// are decimal strings. `socket_walk` names the roots of the socket walk of
 /// `single_socket`, absolute paths; absent means the whole file system, as
 /// under bwrap (HUM-444, `report::sockets_under`). `env` follows the rules of `--env-fd`, `pins` the shape of
-/// `--pins-fd` with the guest forms.
+/// `--pins-fd` with the guest forms. `tmpfs` and `tmpfs_keep` follow
+/// `guest_tmpfs.rs`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
     /// The port of the agent's `HTTP_PROXY`, on `127.0.0.1`.
@@ -233,6 +239,9 @@ pub struct Plan {
     pub pins: Pins,
     /// Where the socket walk starts; empty means `/` (HUM-444).
     pub socket_walk: Vec<PathBuf>,
+    /// The tmpfs of the plan besides `/dev/shm` and what stays on top of
+    /// them (HUM-466).
+    pub tmpfs: Tmpfs,
     /// The agent's command.
     pub command: Vec<OsString>,
     /// The escape suite's probe as root without a filter (HUM-445); empty
@@ -248,7 +257,7 @@ pub struct Plan {
 }
 
 /// The keys a guest plan may have.
-const KEYS: [&str; 15] = [
+const KEYS: [&str; 17] = [
     "proxy_port",
     "door_port",
     "report_port",
@@ -259,6 +268,8 @@ const KEYS: [&str; 15] = [
     "env",
     "pins",
     "socket_walk",
+    "tmpfs",
+    "tmpfs_keep",
     "command",
     "root_probe",
     "uid",
@@ -370,6 +381,7 @@ pub fn parse(text: &str) -> Result<Plan, String> {
     let env = envfd::parse(required("env")?, &SHIM_VARS).map_err(|e| fail("env", &e))?;
     let pins = mounts::parse_guest_pins(required("pins")?).map_err(|e| fail("pins", &e))?;
     let socket_walk = parse_socket_walk(raw("socket_walk"))?;
+    let tmpfs = guest_tmpfs::parse(raw("tmpfs"), raw("tmpfs_keep"))?;
     let command: Vec<OsString> = Parser::new(required("command")?)
         .string_array()
         .map_err(|e| fail("command", &e))?
@@ -394,6 +406,7 @@ pub fn parse(text: &str) -> Result<Plan, String> {
         env,
         pins,
         socket_walk,
+        tmpfs,
         command,
         root_probe,
         uid,
@@ -722,6 +735,9 @@ fn mount_basics() -> Result<(), String> {
 ///   table holds one entry on `/sys`, not two stacked ones.
 /// - `/dev/shm` gets a tmpfs as under bwrap's `--tmpfs` (mode 0755, owned by
 ///   the agent's user, `nosuid`, `nodev`, the kernel's default size).
+/// - So does every other tmpfs of the plan (`/run`, `/tmp`, `/var/tmp`, the
+///   agent's home), with what lies on top of it under bwrap put back on top
+///   (HUM-466, `guest_tmpfs.rs`).
 /// - The host name is the plan's, as bwrap's `--hostname`.
 fn like_bwrap(plan: &Plan) -> Result<(), String> {
     let sys = CString::new("/sys").map_err(|err| fail("sys", &err))?;
@@ -750,6 +766,7 @@ fn like_bwrap(plan: &Plan) -> Result<(), String> {
         &format!("mode=0755,uid={},gid={}", plan.uid, plan.gid),
     )
     .map_err(|err| fail("tmpfs-/dev/shm", &err))?;
+    guest_tmpfs::mount_all(&plan.tmpfs, plan.uid, plan.gid)?;
     // SAFETY: a pointer and length of the plan's name, checked in `parse`.
     if unsafe { libc::sethostname(plan.hostname.as_ptr().cast(), plan.hostname.len()) } != 0 {
         return Err(fail("hostname", &io::Error::last_os_error()));
@@ -758,7 +775,7 @@ fn like_bwrap(plan: &Plan) -> Result<(), String> {
 }
 
 /// `mount(2)` with data.
-fn mount_with(
+pub(super) fn mount_with(
     source: &str,
     target: &str,
     fstype: &str,
@@ -986,6 +1003,29 @@ mod tests {
             parse(&relative).unwrap_err(),
             "socket_walk:not-absolute".to_owned()
         );
+        // HUM-466: the tmpfs of the plan and what stays on top of them.
+        assert_eq!(parse(PLAN).unwrap().tmpfs, Tmpfs::default());
+        let tmpfs = PLAN.replace(
+            r#""work_tag": "work","#,
+            r#""work_tag": "work", "tmpfs": ["/tmp", "/home/agent"],
+               "tmpfs_keep": ["bind:/home/agent/.config/a.json"],"#,
+        );
+        let plan = parse(&tmpfs).unwrap();
+        assert_eq!(
+            plan.tmpfs.points,
+            [PathBuf::from("/tmp"), PathBuf::from("/home/agent")]
+        );
+        assert_eq!(
+            plan.tmpfs.keep,
+            [guest_tmpfs::Keep::Bind(PathBuf::from(
+                "/home/agent/.config/a.json"
+            ))]
+        );
+        let bad = PLAN.replace(
+            r#""work_tag": "work","#,
+            r#""work_tag": "work", "tmpfs": ["/tmp/../etc"],"#,
+        );
+        assert_eq!(parse(&bad).unwrap_err(), "tmpfs:not-a-plain-path");
     }
 
     /// HUM-444: only the host's exact `ADMIT` lets the agent start; a

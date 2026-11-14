@@ -17,7 +17,7 @@ Entfernen eines Codes.
 | daemon | `DAEMON` | 001 | 019 | 001-004 Start, Erreichbarkeit, Version des Daemons, 005-008 die Nutzer-Unit von `daemon install` (HUM-044), 009 Abschied (HUM-142), 010 Nutzersitzung, 011 Binaries aus dem `AppImage`, 012 `journalctl` (HUM-070), 013 der von systemd übergebene Socket (HUM-053), 014 `daemon uninstall` (HUM-077) |
 | ipc | `IPC` | 001 | 009 | gRPC-Schnittstelle, Token, Aufrufe gegen den Zustand |
 | config | `CONFIG` | 001 | 029 | 001-006 Datei, Schlüssel, Wertebereiche, 007-009 Profile (HUM-066), 010-012 Test-Wurzel und ihr Flag (HUM-087), 013 der Projektordner der Einrichtung (HUM-044), 017-018 Editor und Gruppenschlüssel (HUM-070), 019-020 der Zugangsschlüssel des Modells (HUM-140, Bereich dafür bis 029 erweitert), 021 die gespeicherten Modellserver (HUM-289), 022 der Server des Projekts (HUM-405), 023 ein entfallener Wert einer Einstellung (HUM-464) |
-| sandbox | `SANDBOX` | 001 | 059 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043), 030-032 Wegwerf-Sandbox (HUM-350), 033 Vorgabe fällt auf direkt zurück (HUM-357), 034-036 und 048 Wahl des Backends, Untergrenze der Isolation und Zulassung (HUM-431, Bereich dafür bis 059 erweitert), 037-044 und 049 Podman (Sprint 7), 045-047 die Kernel-Stufe (HUM-464), 050 Dienstverwalter des Nutzers (HUM-434) |
+| sandbox | `SANDBOX` | 001 | 059 | 001-006 Launcher und Profil, 007 Bridge-Richtung, 010-012 Start-Fehler, 019 verweigerte Versuche ungemeldet (HUM-138), 020-025 /work-Härtung (HUM-043), 030-032 Wegwerf-Sandbox (HUM-350), 033 Vorgabe fällt auf direkt zurück (HUM-357), 034-036 und 048 Wahl des Backends, Untergrenze der Isolation und Zulassung (HUM-431, Bereich dafür bis 059 erweitert), 037-044 und 049 Podman (Sprint 7), 045-047 die Kernel-Stufe (HUM-464), 050 Dienstverwalter des Nutzers (HUM-434), 051 beschreibbare Erweiterung unter der Kernel-Stufe (HUM-466) |
 | proxy | `PROXY` | 001 | 019 | Anfragen, Caps, Protokoll, 010-011 Grenzen der Verbindung (HUM-120) |
 | tls | `TLS` | 001 | 009 | CA, Zertifikate, Handschlag |
 | llm | `LLM` | 001 | 009 | LLM-Endpunkt und seine Antworten, 009 der Zugangsschlüssel (HUM-140) |
@@ -765,6 +765,14 @@ Host check of the VM monitor failed
 **Auslöser.** After the start the daemon checks the processes of the session from the host: each sees only `lo`, the monitor holds only the descriptors of the plan, and the runtime directory of the session holds only the declared sockets. One of these did not hold; the session was stopped.
 
 **Fix.** No automatic fix; the sentence names what was found. `ChangeSetting` on `sandbox.backend` = `auto` and report the sentence.
+
+#### SANDBOX_051
+
+Writable extension not possible at the kernel level
+
+**Auslöser.** The sandbox profile lists folders under `mounts.extra_rw`, and the backend is the kernel level. Its guest gets the folders of the host through a read-only share of the root and one writable share for the project at `/work`; a writable extension would be another writable way to the host that nothing reviews. The start stops instead of mounting the folder read-only without saying so.
+
+**Fix.** `ChangeSetting` on `sandbox.backend` = `auto` for a session that needs the folder writable; otherwise move the entry from `mounts.extra_rw` to `mounts.extra_ro` in the sandbox profile, or put the folder into the project.
 
 ### Bereich proxy
 

@@ -4374,5 +4374,9 @@
   "doctorBackendCheckVirtioFs": "virtiofs in the kernel",
   "@doctorBackendCheckVirtioFs": {"description": "Heading of the doctor line `virtio_fs` in the group of the kernel level: does the guest kernel have virtiofs built in (HUM-444)? virtiofs is a technical name."},
   "doctorBackendCheckModules": "Kernel modules",
-  "@doctorBackendCheckModules": {"description": "Heading of the doctor line `modules` in the group of the kernel level: is the module directory of the guest kernel there (HUM-444)?"}
+  "@doctorBackendCheckModules": {"description": "Heading of the doctor line `modules` in the group of the kernel level: is the module directory of the guest kernel there (HUM-444)?"},
+  "diagSANDBOX051Title": "Writable extension not possible at the kernel level",
+  "@diagSANDBOX051Title": {"description": "Title of the diagnostic SANDBOX_051 (docs/DIAGNOSTICS.md): the sandbox profile lists a writable extension (mounts.extra_rw), which the kernel level, the micro VM, cannot make writable (HUM-466)."},
+  "diagSANDBOX051Why": "The sandbox profile lists a folder that the agent may change, and at the kernel level only the project folder is writable inside the micro VM. The session did not start instead of showing the folder read-only without saying so.",
+  "@diagSANDBOX051Why": {"description": "Generic cause of SANDBOX_051. Stands in the cause slot only when the diagnostic carries no sentence of the daemon's own (HUM-052)."}
 }

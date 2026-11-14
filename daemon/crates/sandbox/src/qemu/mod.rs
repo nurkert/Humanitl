@@ -56,6 +56,7 @@ mod prerequisites;
 mod session;
 #[cfg(test)]
 mod test_vm;
+mod tmpfs;
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -68,7 +69,7 @@ use std::time::{Duration, Instant};
 
 use humanitl_config::{Paths, QemuConfig, SandboxRef, WorkMode};
 use humanitl_core::diagnostics::codes::{
-    SANDBOX_006, SANDBOX_011, SANDBOX_012, SANDBOX_030, SANDBOX_041, SANDBOX_046,
+    SANDBOX_006, SANDBOX_011, SANDBOX_012, SANDBOX_030, SANDBOX_041, SANDBOX_046, SANDBOX_051,
 };
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
@@ -287,8 +288,9 @@ fn guest_root(
                     continue;
                 }
                 root.entries.push(RootEntry::Bind { source, target });
-                // Die Wurzel des Gasts ist nur lesbar, auch für
-                // `mounts.extra_rw`.
+                // Die Wurzel des Gasts ist nur lesbar. `mounts.extra_rw`
+                // erscheint so nur in der Vorschau; der Plan lehnt es ab
+                // ([`refuse_writable_extensions`], HUM-466).
                 root.policy.push(PolicyRow {
                     mode: PolicyMode::ReadOnly,
                     ..row
@@ -367,7 +369,9 @@ fn guest_plan(
     env: &[(String, String)],
     project_ino: u64,
     root_probe: Option<&str>,
+    root: &[RootEntry],
 ) -> Result<String, Diagnostic> {
+    let places = &tmpfs::guest_tmpfs(root)?;
     let (agent_env, shim_env) = crate::shim_fds::split_env(env);
     let entry = |point: &str, fstype: &str, source: &str, mode: &str, flags: &str| {
         serde_json::json!({
@@ -379,7 +383,9 @@ fn guest_plan(
     // `/` und `/work` je genau eine virtiofs-Einhängung. Über `/sys` liegt
     // nach der Modulsperre ein leeres, nur lesbares tmpfs statt des sysfs
     // des Gastkerns, und `/dev/shm` ist ein tmpfs wie unter bwrap (HUM-445).
-    let mounts = vec![
+    // Dazu jedes tmpfs des Profils und je Bind, der darüber obenauf bleibt,
+    // eine nur lesbare Kopie der Wurzel (HUM-466, [`tmpfs`]).
+    let mut mounts = vec![
         entry("/", "virtiofs", "type", "ro", "*"),
         entry("/proc", "proc", "type", "*", "*"),
         entry("/sys", "tmpfs", "type", "ro", "nosuid,nodev,noexec"),
@@ -394,6 +400,24 @@ fn guest_plan(
             "nosuid,nodev",
         ),
     ];
+    for point in &places.points {
+        mounts.push(entry(
+            &point.display().to_string(),
+            "tmpfs",
+            "type",
+            "rw",
+            "nosuid,nodev",
+        ));
+    }
+    for bind in &places.binds {
+        mounts.push(entry(
+            &bind.display().to_string(),
+            "virtiofs",
+            "type",
+            "ro",
+            "*",
+        ));
+    }
     let command: Vec<&str> = session
         .command
         .iter()
@@ -435,15 +459,47 @@ fn guest_plan(
             "pins": [{"path": profile.mounts.work.dst.display().to_string(), "dev": "*", "ino": project_ino.to_string()}],
             "mounts": mounts,
         },
-        // Die beschreibbaren Orte des Gasts (HUM-444): In seiner nur
-        // lesbaren Wurzel führt kein Socket irgendwohin.
-        "socket_walk": [profile.mounts.work.dst.display().to_string(), "/dev"],
+        // Die beschreibbaren Orte des Gasts (HUM-444, HUM-466): In seiner
+        // nur lesbaren Wurzel führt kein Socket irgendwohin.
+        "socket_walk": tmpfs::socket_walk(&profile.mounts.work.dst, places),
+        "tmpfs": places.points,
+        "tmpfs_keep": places.keep,
         "command": command,
     });
     if let Some(probe) = root_probe {
         plan["root_probe"] = serde_json::json!(["/bin/sh", "-c", probe]);
     }
     Ok(plan.to_string())
+}
+
+/// `SANDBOX_051`, wenn das Profil beschreibbare Erweiterungen nennt
+/// (`mounts.extra_rw`, HUM-466).
+///
+/// Ablehnen statt über `/work` erreichbar machen: Jede Erweiterung bräuchte
+/// im Gast einen eigenen beschreibbaren Weg zum Host, einen dritten
+/// virtiofsd in eigenem Gefängnis mit eigenem Tag, eigenem Pin und eigener
+/// Zeile der Mounttabelle, oder einen Bind in den Projektordner, der
+/// dessen Prüfung (Masken, Schnappschuss, Zusammenfassung) unterliefe.
+/// Beides ist mehr Angriffsfläche als eine Zeile im Profil wert ist; der
+/// Projektordner bleibt der eine Ordner des Hosts, den der Gast ändert.
+/// Nur lesbar einhängen, wie es die Wurzel des Gasts sonst täte, hieße
+/// stillschweigend etwas anderes tun, als das Profil verlangt.
+fn refuse_writable_extensions(profile: &SandboxProfile) -> Result<(), Diagnostic> {
+    let Some(first) = profile.mounts.extra_rw.first() else {
+        return Ok(());
+    };
+    Err(Diagnostic::builder(SANDBOX_051, Severity::Blocking)
+        .why(format!(
+            "the sandbox profile lists {} under mounts.extra_rw, and the kernel level makes \
+             only the project at {} writable in the guest",
+            first.display(),
+            profile.mounts.work.dst.display()
+        ))
+        .fix(FixAction::ChangeSetting {
+            key: "sandbox.backend".to_owned(),
+            value: "auto".to_owned(),
+        })
+        .build())
 }
 
 /// `SANDBOX_011` mit `why`.
@@ -865,6 +921,7 @@ impl SandboxBackend for VmBackend {
                 .err()
                 .unwrap_or_else(|| setup_failed("no disposable sandbox".to_owned())));
         }
+        refuse_writable_extensions(profile)?;
         let policy = MountPolicy::from_paths(&self.paths);
         profile.validate_with(&policy)?;
         BwrapBackend::check_work_dir(profile, session)?;
@@ -1134,7 +1191,7 @@ impl VmBackend {
         );
         let env = profile.effective_env(session, None);
         let probe = options.guest_root_probe.command();
-        let plan_text = guest_plan(profile, session, &env, project.ino, probe)?;
+        let plan_text = guest_plan(profile, session, &env, project.ino, probe, &root.entries)?;
         write_files(layout, &root, &plan_text, unit)?;
         let channels = Channels::open(layout, options)?;
         let group = session_group(session);

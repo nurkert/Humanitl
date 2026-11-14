@@ -477,7 +477,11 @@ impl Harness {
         })
     }
 
-    fn session(&self, command: &str) -> crate::SessionContext {
+    fn session(
+        &self,
+        command: &str,
+        files: Vec<crate::agent::SandboxFile>,
+    ) -> crate::SessionContext {
         crate::SessionContext {
             session: humanitl_core::ids::SessionId::new(),
             work_src: self.project.clone(),
@@ -492,7 +496,7 @@ impl Harness {
                 std::ffi::OsString::from("-c"),
                 std::ffi::OsString::from(command),
             ],
-            files: Vec::new(),
+            files,
             agent_program: None,
         }
     }
@@ -506,8 +510,20 @@ impl Harness {
         crate::SandboxHandle,
         std::sync::mpsc::Receiver<crate::OutputChunk>,
     ) {
+        self.launch_with(command, Vec::new())
+    }
+
+    /// Wie [`Harness::launch`], mit Dateien des Adapters.
+    fn launch_with(
+        &self,
+        command: &str,
+        files: Vec<crate::agent::SandboxFile>,
+    ) -> (
+        crate::SandboxHandle,
+        std::sync::mpsc::Receiver<crate::OutputChunk>,
+    ) {
         use crate::SandboxBackend as _;
-        let (plan, output) = self.plan_with(command);
+        let (plan, output) = self.plan_with(command, files);
         let handle = self
             .backend
             .launch(&plan)
@@ -520,6 +536,7 @@ impl Harness {
     fn plan_with(
         &self,
         command: &str,
+        files: Vec<crate::agent::SandboxFile>,
     ) -> (
         crate::LaunchPlan,
         std::sync::mpsc::Receiver<crate::OutputChunk>,
@@ -530,7 +547,7 @@ impl Harness {
             std::path::Path::new("default.toml"),
         )
         .unwrap();
-        let session = self.session(command);
+        let session = self.session(command, files);
         let (sink, output) = std::sync::mpsc::channel();
         let options = crate::LaunchOptions {
             stdio: crate::StdioMode::Pty { cols: 80, rows: 24 },
@@ -557,7 +574,7 @@ impl Harness {
         std::sync::mpsc::Receiver<crate::OutputChunk>,
     ) {
         use crate::SandboxBackend as _;
-        let (plan, output) = self.plan_with(command);
+        let (plan, output) = self.plan_with(command, Vec::new());
         before_launch(&plan);
         let handle = self
             .backend
@@ -794,6 +811,97 @@ fn an_unplanned_mount_stays_sandbox_049_when_the_unit_is_gone_before_the_host_ch
         !harness.project.join("started").exists(),
         "the agent ran although the guest refused"
     );
+}
+
+/// Der Agent der tmpfs-Probe (HUM-466): schreibt nach `/tmp`, `/var/tmp`
+/// und in sein Heimatverzeichnis, liest die Datei seines Adapters darunter,
+/// kann sie nicht ändern, aber neben ihr schreiben, und zeigt Besitzer,
+/// Rechte und die Einhängungen dieser Orte.
+const TMPFS_AGENT: &str = r#"for place in /run /tmp /var/tmp "$HOME"; do
+  if echo x > "$place/w-466"; then echo "write:$place:ok"; else echo "write:$place:refused"; fi
+done
+echo "adapter:[$(cat "$HOME/.config/humanitl-466/agent.json")]"
+if (echo x > "$HOME/.config/humanitl-466/agent.json") 2>/dev/null; then echo "adapter-write:leak"; else echo "adapter-write:refused"; fi
+if echo x > "$HOME/.config/humanitl-466/beside"; then echo "beside:ok"; else echo "beside:refused"; fi
+if mkdir /run/agent-state; then echo "run-mkdir:ok"; else echo "run-mkdir:refused"; fi
+if (mkdir /run/humanitl/x) 2>/dev/null; then echo "run-humanitl:leak"; else echo "run-humanitl:refused"; fi
+echo "run-humanitl:[$(ls -A /run/humanitl | tr '\n' ' ')]"
+echo "owner:$(stat -c %u:%a /run /tmp /var/tmp "$HOME" "$HOME/.config" | tr '\n' ' ')"
+awk '{for (i = 7; i <= NF; i++) if ($i == "-") print "mnt:" $5 ":" $(i + 1)}' /proc/self/mountinfo
+echo "done-$((400+66))"
+"#;
+
+/// HUM-466: Unter der Kernel-Stufe hat der Agent dieselben beschreibbaren
+/// Orte wie unter bwrap: `/run`, `/tmp`, `/var/tmp` und sein Heimatverzeichnis sind
+/// tmpfs, die ihm gehören (0755), die Datei seines Adapters unter dem
+/// Heimatverzeichnis liegt nur lesbar obenauf, und `/run/humanitl` bleibt
+/// nur lesbar mit Shim, Gastplan und Modulen. Die Mounttabelle des Gasts
+/// passt zum Plan (`mounts_match` grün). Mutationsbeweis: Ohne das
+/// Einhängen im Shim (`guest_tmpfs::mount_all`) fehlen die Einträge,
+/// `mounts_match` ist rot, und der Agent startet nie.
+#[test]
+fn the_agent_writes_to_tmp_and_home_in_the_guest() {
+    use crate::SandboxBackend as _;
+    let test = "the_agent_writes_to_tmp_and_home_in_the_guest";
+    let Some(harness) = Harness::new(test) else {
+        return;
+    };
+    let adapter = crate::agent::SandboxFile::read_only(
+        "/home/agent/.config/humanitl-466/agent.json",
+        b"{\"k\":466}".to_vec(),
+    );
+    let (handle, output) = harness.launch_with(TMPFS_AGENT, vec![adapter]);
+    let results = harness.backend.isolation_check(&handle);
+    for result in &results {
+        assert!(
+            result.passed,
+            "{}: {} {:?}\nreport: {:?}",
+            result.check.as_str(),
+            result.evidence,
+            result.diagnostic,
+            handle.report().checks
+        );
+    }
+    let mut seen = Vec::new();
+    let done = wait_output(&output, &mut seen, "done-466", Duration::from_secs(60));
+    let shown = String::from_utf8_lossy(&seen).into_owned();
+    let ended = handle.wait_timeout(Duration::from_secs(30));
+    assert!(done, "{shown}");
+    assert!(shown.contains("run-mkdir:ok"), "{shown}");
+    assert!(shown.contains("run-humanitl:refused"), "{shown}");
+    assert!(
+        shown.contains("run-humanitl:[guest-plan.json humanitl-shim modules ]"),
+        "/run/humanitl keeps exactly the shim, the plan and the modules: {shown}"
+    );
+    assert!(shown.contains("mnt:/run/humanitl:virtiofs"), "{shown}");
+    for place in ["/run", "/tmp", "/var/tmp", "/home/agent"] {
+        assert!(
+            shown.contains(&format!("write:{place}:ok")),
+            "{place}: {shown}"
+        );
+    }
+    assert!(shown.contains("adapter:[{\"k\":466}]"), "{shown}");
+    assert!(shown.contains("adapter-write:refused"), "{shown}");
+    assert!(shown.contains("beside:ok"), "{shown}");
+    let uid = rustix::process::getuid().as_raw();
+    assert!(
+        shown.contains(&format!(
+            "owner:{uid}:755 {uid}:755 {uid}:755 {uid}:755 {uid}:755"
+        )),
+        "owner and mode of /run, /tmp, /var/tmp, $HOME and $HOME/.config: {shown}"
+    );
+    for point in ["/run", "/tmp", "/var/tmp", "/home/agent"] {
+        assert!(
+            shown.contains(&format!("mnt:{point}:tmpfs")),
+            "{point}: {shown}"
+        );
+    }
+    assert!(
+        shown.contains("mnt:/home/agent/.config/humanitl-466/agent.json:virtiofs"),
+        "{shown}"
+    );
+    let status = ended.expect("the session ends").expect("a status");
+    assert_eq!(status.code(), Some(0), "the agent's exit code: {shown}");
 }
 
 /// Mutationsbeweis: ein zusätzlicher Lauscher `<uds>_22` neben der Tür färbt

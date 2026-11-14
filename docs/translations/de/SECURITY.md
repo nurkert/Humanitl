@@ -2036,15 +2036,31 @@ lauscht).
   bevor er weitermacht. PID 1 ist nicht auslesbar, der Agent kann seinen Speicher also weder lesen
   noch schreiben. Nach der Modulsperre ist `/sys` ein leeres, nur lesbares tmpfs statt des sysfs
   des Gastkernels, `/dev/shm` ein tmpfs wie unter bubblewrap, und der Rechnername der des Profils
-  (`sandbox`). Die erwartete Mounttabelle hält alle drei.
+  (`sandbox`). Jedes andere tmpfs des Profils außerhalb von `/work` (`/tmp`, `/var/tmp`, das
+  Heimatverzeichnis des Agenten) ist im Gast ebenfalls ein tmpfs, ebenso `/run`, das bubblewrap
+  beschreibbar auf seiner eigenen Wurzel anlegt; der Shim hängt sie ein, bevor der Agent startet,
+  mit den Rechten 0755, dem Nutzer des Agenten gehörend, `nosuid` und `nodev` (HUM-466). Jedes
+  fasst höchstens die Vorgabe des Kerns, die Hälfte des Speichers des Gasts, weniger als unter
+  bubblewrap, wo die Vorgabe die Hälfte des Speichers des Hosts ist. Eine Datei des Adapters unter
+  dem Heimatverzeichnis liegt wie unter bubblewrap nur lesbar auf ihrem tmpfs, und `/run/humanitl`
+  (Shim, Gastplan, Module) bleibt nur lesbar über `/run`: Der Shim nimmt eine Kopie der
+  Einhängung in der nur lesbaren Wurzel, bevor das tmpfs sie verdeckt, und verschiebt die Kopie
+  wieder obenauf. Die erwartete Mounttabelle hält all das, und die Socket-Suche von
+  `single_socket` umfasst jedes tmpfs.
 
 ### Was anders ist als unter bubblewrap
 
 - **Die vertrauenswürdige Basis wächst** um den Emulator, den Gastkernel, die beiden
   Dateisystemdienste, das vsock-Gerät und den Dienstverwalter des Nutzers (K-30 bis K-33 in
   [`THREAT-MODEL.md`](THREAT-MODEL.md)).
-- **Die Wurzel des Gasts ist nur lesbar, auch zusätzliche beschreibbare Einhängungen.**
-  `mounts.extra_rw` ist im Gast nur lesbar eingehängt.
+- **Die Wurzel des Gasts ist nur lesbar; beschreibbare Erweiterungen werden abgelehnt.** Das
+  Projekt unter `/work`, die tmpfs des Profils und `/run` sind die einzigen beschreibbaren Orte im
+  Gast. Ein Profil mit `mounts.extra_rw` startet nicht (`SANDBOX_051`, HUM-466), statt den Ordner
+  stillschweigend nur lesbar zu bekommen: Eine beschreibbare Erweiterung wäre ein weiterer
+  beschreibbarer Weg zum Host, den nichts prüft. Der Rest der Wurzel, etwa `/etc` neben seinen
+  Binds, bleibt im Gast nur lesbar, wo das eigene Wurzel-tmpfs von bubblewrap beschreibbar ist;
+  das ist strenger, keine Lücke: Was dort geschrieben wird, erreicht unter keinem der beiden
+  Backends den Host und überdauert die Sitzung nicht.
 - **Noch keine Wegwerf-Sandbox.** `disposable` lehnt mit `SANDBOX_030` ab, bis HUM-446.
 - **Das Terminal reist als Strom** (K-29); ein Signal des Hosts erreicht keinen Prozess des Gasts,
   eine Unterbrechung ist ein Rahmen.

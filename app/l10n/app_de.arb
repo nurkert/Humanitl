@@ -1880,5 +1880,7 @@
   "doctorBackendCheckBubblewrap": "bubblewrap",
   "doctorBackendCheckKernel": "Gastkernel",
   "doctorBackendCheckVirtioFs": "virtiofs im Kernel",
-  "doctorBackendCheckModules": "Kernel-Module"
+  "doctorBackendCheckModules": "Kernel-Module",
+  "diagSANDBOX051Title": "Beschreibbare Erweiterung auf der Kernel-Stufe nicht möglich",
+  "diagSANDBOX051Why": "Das Sandbox-Profil nennt einen Ordner, den der Agent ändern darf, und auf der Kernel-Stufe ist in der micro-VM nur der Projektordner beschreibbar. Die Sitzung ist nicht gestartet, statt den Ordner stillschweigend nur lesbar zu zeigen."
 }
