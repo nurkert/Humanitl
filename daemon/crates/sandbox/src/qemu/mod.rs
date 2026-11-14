@@ -801,7 +801,7 @@ fn unit_line(
         &handover.display().to_string(),
         token,
         "--",
-        "/bin/sh",
+        lines::SCRIPT_SHELL,
         "-c",
         &script,
         "humanitl-vm",
@@ -962,7 +962,7 @@ impl SandboxBackend for VmBackend {
                 )
             })
             .unwrap_or_else(|_| {
-                let mut argv = vec![OsString::from("/bin/sh"), OsString::from("-c")];
+                let mut argv = vec![OsString::from(lines::SCRIPT_SHELL), OsString::from("-c")];
                 argv.push(OsString::from(
                     lines::script(&lines, &layout).unwrap_or_default(),
                 ));

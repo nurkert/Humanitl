@@ -103,6 +103,10 @@ pub(crate) const FILE_DAEMON_NOFILE: u32 = 65_536;
 /// Die CID des Gasts; jede Sitzung hat ihr eigenes Gerät, also genügt eine.
 pub(crate) const GUEST_CID: u32 = 3;
 
+/// Die Shell, die das Skript der Unit ausführt ([`script`]); die
+/// Host-Prüfung kennt sie als eines der Programme der Unit (HUM-468).
+pub(crate) const SCRIPT_SHELL: &str = "/bin/sh";
+
 /// Die Dateien im Laufzeitverzeichnis einer Sitzung.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Layout {

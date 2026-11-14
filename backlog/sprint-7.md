@@ -1225,6 +1225,40 @@ hält.
 ### Akzeptanzkriterien
 1. Ein unbekanntes Programm in der Unit beendet die Sitzung mit `SANDBOX_047`.
 
+### Stand nach der Umsetzung (2026-11-14)
+Die Host-Prüfung vergleicht `/proc/<pid>/exe` jedes Prozesses der Unit mit
+den Programmen, die das Skript startet: `/bin/sh` (`SCRIPT_SHELL`),
+bubblewrap, virtiofsd, vhost-device-vsock und QEMU, je unter dem
+eingestellten Pfad und unter seinem aufgelösten Ziel. Beides gilt, weil der
+Kernel für einen Prozess, der erst im Gefängnis startete, den Pfad im
+Gefängnis zeigt; ein Programm außerhalb von `/usr` bindet die Zeile unter
+dem eingestellten Pfad dorthin, auch wenn er auf dem Host ein Verweis ist
+(nachgemessen mit bwrap: `/proc/<pid>/exe` zeigt den Zielpfad des Binds).
+Ein anderes Programm, ein gelöschtes (` (deleted)`) oder ein unlesbares ist
+ein Fund, der Fund des fremden Programms an `single_socket` mit
+`SANDBOX_047`. Abweichung von der Spezifikation: Der Shim steht nicht auf der
+Liste. Er ersetzt sich mit `--fds-then-exec` durch die Shell, lange bevor der
+Gast berichtet; ein Shim, der zur Zeit der Prüfung noch läuft, ist eine
+Abweichung und wird deshalb gefunden. Tests: `every_process_of_the_unit_runs_one_of_its_programs`
+liest eine Nachbildung von `/proc` über denselben Weg wie die Prüfung
+(`read_process`, dann `judge`); `an_extra_sleep_in_the_unit_turns_the_host_check_red`
+startet über einen Testeingriff (`TestMachine::extra_process`) ein
+`sleep 600` neben der Maschine in der Unit. Mutationsbeweis: Ohne den
+Vergleich der Programme bestehen in diesem KVM-Test alle drei Garantien, die
+Sitzung wird zugelassen; mit ihm endet sie mit `SANDBOX_047`, und der Agent
+startet nie. Alle KVM-Tests bleiben grün, mit dem Gastkernel der CI und dem
+lokalen.
+
+Nicht umgesetzt, Kandidat für ein eigenes Issue: feste Anzahlen je Programm
+(genau so viele Shells, bwrap- und virtiofsd-Prozesse wie das Skript
+startet). Wie viele Prozesse eine Shell für `( … ) &` forkt und ob bwrap
+mit `--unshare-pid` einen eigenen Init behält, hängt von Shell und Fassung
+ab; eine feste Zahl wäre nicht robust. Die Anzahl des Emulators und des
+vsock-Geräts (genau einer) und je geprüftem Ordner genau ein virtiofsd
+prüft die Host-Prüfung schon.
+
+Aus dem Review (Codex, blocking): Die Prüfung las die PIDs der Unit nur einmal; ein Prozess, den ein übernommener Helfer kurz danach startet, blieb ungeprüft. Jetzt liest `settle` die cgroup nach, bis keine neue PID mehr auftaucht (höchstens fünf Runden, sonst ein Fund), Unit-Test mit Mutationsbeweis. Was nach der Zulassung startet, sieht die einmalige Prüfung nicht; das steht als Restrisiko in K-33. Kandidat: Programme der Unit über `ExecPaths=`/`NoExecPaths=` des Dienstverwalters erzwingen statt nur prüfen.
+
 ---
 
 ## HUM-469 · Kernel level: a descriptor limit for the virtiofsd processes

@@ -1,4 +1,4 @@
-//! Nur für die KVM-Tests (HUM-471): zwei Eingriffe in die Zeile der Maschine
+//! Nur für die KVM-Tests (HUM-471, HUM-468): drei Eingriffe in die Zeile der Maschine
 //! einer Sitzung des Adapters, je Faden gesetzt, damit parallele Tests
 //! einander nichts unterschieben. Die Endform kennt keinen davon.
 //!
@@ -13,6 +13,11 @@
 //!   Geräts, und der Test reicht jede Nachricht weiter. So kann ein Test die
 //!   Einrichtung des Geräts anhalten und den Wettlauf erzwingen, den HUM-471
 //!   gefunden hat.
+//! - **Ein zusätzlicher Prozess in der Unit** (HUM-468): Eine Shell startet
+//!   neben der Maschine einen Befehl wie `sleep 600` im Hintergrund und
+//!   ersetzt sich dann durch die Zeile der Maschine. Der Befehl läuft in der
+//!   cgroup der Unit, so wie ein Programm, das dort nicht hingehört; die
+//!   Host-Prüfung muss ihn finden.
 
 use std::cell::RefCell;
 use std::ffi::OsString;
@@ -30,6 +35,8 @@ pub(crate) struct TestMachine {
     /// Der Socket, mit dem der Emulator sich statt mit dem vsock-Gerät
     /// verbindet.
     pub(crate) vsock_relay: Option<PathBuf>,
+    /// Ein Befehl der Shell, der neben der Maschine in der Unit läuft.
+    pub(crate) extra_process: Option<String>,
 }
 
 thread_local! {
@@ -95,6 +102,15 @@ pub(crate) fn apply(line: &mut Vec<OsString>, layout: &Layout) {
         for (offset, word) in binds.into_iter().enumerate() {
             line.insert(program + offset, word);
         }
+    }
+    if let Some(command) = &machine.extra_process {
+        let shell: [OsString; 4] = [
+            super::lines::SCRIPT_SHELL.into(),
+            "-c".into(),
+            format!("{command} & exec \"$@\"").into(),
+            "humanitl-test".into(),
+        ];
+        line.splice(0..0, shell);
     }
 }
 

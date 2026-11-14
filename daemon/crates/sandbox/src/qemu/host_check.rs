@@ -4,6 +4,10 @@
 //! fälschen. Was ein Gast nicht fälschen kann, prüft der Daemon selbst, an
 //! den Prozessen der Unit:
 //!
+//! - jeder Prozess der Unit ist eines ihrer Programme (HUM-468): die Shell
+//!   des Skripts, bubblewrap, virtiofsd, das vsock-Gerät oder QEMU, erkannt
+//!   an `/proc/<pid>/exe`; ein anderes, ein gelöschtes oder ein unlesbares
+//!   Programm ist ein Fund;
 //! - jeder Prozess der Unit hat in seinem Netz-Namensraum nur `lo`;
 //! - kein Prozess hält `/dev/vhost-vsock`, `/dev/vhost-net`, `/dev/net/tun`
 //!   oder ein tap-Gerät;
@@ -27,7 +31,7 @@
 //! Jeder Fund nennt die Garantie, die er bricht; was sich nicht lesen lässt,
 //! ist ein Fund und nie ein Bestehen.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use humanitl_core::diagnostics::codes::SANDBOX_047;
 use humanitl_core::{Diagnostic, Severity};
@@ -132,10 +136,17 @@ pub(crate) struct Process {
     pub(crate) opened: Vec<(String, u64, u64)>,
 }
 
+/// Wie oft die Prüfung die Prozesse der Unit nachliest, bis keiner mehr
+/// dazukommt (HUM-468).
+const SETTLE_ROUNDS: usize = 5;
+
 /// Liest die Prozesse der Unit und das Laufzeitverzeichnis und prüft sie.
 pub(crate) fn run(stop: &UnitStop, resolved: &Resolved, door_port: u32) -> Vec<Finding> {
-    let processes: Vec<Process> = match unit_pids(stop) {
-        Ok(pids) if !pids.is_empty() => pids.into_iter().filter_map(read_process).collect(),
+    let mut processes: Vec<Process> = match unit_pids(stop) {
+        Ok(pids) if !pids.is_empty() => pids
+            .into_iter()
+            .filter_map(|pid| read_process(Path::new("/proc"), pid))
+            .collect(),
         Ok(_) => {
             return vec![finding(
                 IsolationCheck::NoNetworkInterface,
@@ -144,7 +155,23 @@ pub(crate) fn run(stop: &UnitStop, resolved: &Resolved, door_port: u32) -> Vec<F
         }
         Err(why) => return vec![finding(IsolationCheck::NoNetworkInterface, why)],
     };
+    let settled = match settle(
+        &mut processes,
+        || unit_pids(stop),
+        |pid| read_process(Path::new("/proc"), pid),
+    ) {
+        Ok(settled) => settled,
+        Err(why) => return vec![finding(IsolationCheck::NoNetworkInterface, why)],
+    };
     let mut findings = judge(&processes, resolved);
+    if !settled {
+        findings.push(finding(
+            IsolationCheck::SingleSocket,
+            format!(
+                "the unit kept starting processes while it was checked ({SETTLE_ROUNDS} rounds)"
+            ),
+        ));
+    }
     findings.extend(shares_held(&processes, resolved, &stop.shares));
     let disposable = stop
         .shares
@@ -152,6 +179,28 @@ pub(crate) fn run(stop: &UnitStop, resolved: &Resolved, door_port: u32) -> Vec<F
         .any(|share| share.jail_path == Path::new(super::lines::LAYER_SHARE));
     findings.extend(runtime_sockets(&stop.runtime, door_port, disposable));
     findings
+}
+
+/// Liest die PIDs nach, bis keine neue mehr auftaucht, und liest jede neue
+/// mit `read` dazu: Ein Prozess, der nach dem ersten Lesen der cgroup
+/// startet, entginge sonst der Prüfung der Programme. `false`, wenn nach
+/// [`SETTLE_ROUNDS`] Runden noch immer neue kamen.
+fn settle(
+    processes: &mut Vec<Process>,
+    mut list: impl FnMut() -> Result<Vec<u32>, String>,
+    mut read: impl FnMut(u32) -> Option<Process>,
+) -> Result<bool, String> {
+    for _ in 0..SETTLE_ROUNDS {
+        let new: Vec<u32> = list()?
+            .into_iter()
+            .filter(|pid| !processes.iter().any(|seen| seen.pid == *pid))
+            .collect();
+        if new.is_empty() {
+            return Ok(true);
+        }
+        processes.extend(new.into_iter().filter_map(&mut read));
+    }
+    Ok(false)
 }
 
 /// Die PIDs der Unit, aus ihrer cgroup und allen darunter.
@@ -206,10 +255,10 @@ fn unit_pids(stop: &UnitStop) -> Result<Vec<u32>, String> {
     Ok(pids)
 }
 
-/// Was `/proc` über einen Prozess sagt; `None` nur für einen Prozess, den
-/// es nicht mehr gibt.
-fn read_process(pid: u32) -> Option<Process> {
-    let proc = PathBuf::from(format!("/proc/{pid}"));
+/// Was `/proc` (unter `proc_root`, in den Tests eine Nachbildung) über
+/// einen Prozess sagt; `None` nur für einen Prozess, den es nicht mehr gibt.
+fn read_process(proc_root: &Path, pid: u32) -> Option<Process> {
+    let proc = proc_root.join(pid.to_string());
     let program = match std::fs::read_link(proc.join("exe")) {
         Ok(exe) => Some(exe.to_string_lossy().into_owned()),
         Err(_) if !proc.exists() => return None,
@@ -379,6 +428,54 @@ pub(crate) fn host_device(target: &str) -> bool {
         || target.contains("tun-file")
 }
 
+/// Die Programme, die das Skript der Unit startet (HUM-468), je unter dem
+/// Pfad, wie die Einstellung ihn nennt, und unter seinem aufgelösten Ziel.
+///
+/// `/proc/<pid>/exe` nennt für einen Prozess, den der Host gestartet hat,
+/// das aufgelöste Programm. Für einen Prozess, der erst in seinem Gefängnis
+/// startete, nennt es den Pfad im Gefängnis: Liegt das Programm außerhalb
+/// von `/usr`, bindet die Zeile es unter dem eingestellten Pfad dorthin
+/// ([`super::lines`]), und der Kernel zeigt diesen Pfad, auch wenn er auf
+/// dem Host ein Verweis ist. Darum gilt beides. Den Shim nennt die Liste
+/// nicht: Er ersetzt sich mit `--fds-then-exec` durch die Shell, lange bevor
+/// der Gast berichtet; ein Shim, der zur Zeit der Prüfung noch läuft, ist
+/// eine Abweichung.
+fn unit_programs(resolved: &Resolved) -> Vec<String> {
+    let configured = [
+        Path::new(super::lines::SCRIPT_SHELL),
+        &resolved.bubblewrap,
+        &resolved.file_daemon,
+        &resolved.vsock_device,
+        &resolved.emulator,
+    ];
+    let mut programs = Vec::new();
+    for path in configured {
+        programs.push(path.to_string_lossy().into_owned());
+        if let Ok(target) = std::fs::canonicalize(path) {
+            programs.push(target.to_string_lossy().into_owned());
+        }
+    }
+    programs
+}
+
+/// Ein Fund, wenn der Prozess ein anderes Programm ausführt als die der
+/// Unit. Ein gelöschtes Programm nennt der Kernel mit ` (deleted)` am Ende;
+/// es ist nicht mehr das geprüfte und deshalb ein Fund wie jedes fremde. Ein
+/// unlesbares Programm meldet [`judge`] selbst.
+fn foreign_program(process: &Process, programs: &[String]) -> Option<Finding> {
+    let program = process.program.as_ref()?;
+    (!programs.contains(program)).then(|| {
+        finding(
+            IsolationCheck::SingleSocket,
+            format!(
+                "process {} runs {program}, a program the unit does not start: {}",
+                process.pid,
+                process.args.join(" ")
+            ),
+        )
+    })
+}
+
 /// Die Prüfung über gelesene Prozesse; ohne `/proc`, damit sie testbar ist.
 pub(crate) fn judge(processes: &[Process], resolved: &Resolved) -> Vec<Finding> {
     // `/proc/<pid>/exe` nennt das aufgelöste Programm; ein Programm, das
@@ -393,11 +490,13 @@ pub(crate) fn judge(processes: &[Process], resolved: &Resolved) -> Vec<Finding> 
     };
     let emulator = canonical(&resolved.emulator);
     let device = canonical(&resolved.vsock_device);
+    let programs = unit_programs(resolved);
     let mut findings = Vec::new();
     let mut devices = 0;
     let mut emulators = 0;
     for process in processes {
         let pid = process.pid;
+        findings.extend(foreign_program(process, &programs));
         match &process.interfaces {
             Some(names) if names.iter().all(|name| name == "lo") => {}
             Some(names) => findings.push(finding(
@@ -600,6 +699,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
     use std::os::unix::net::UnixListener;
+    use std::path::PathBuf;
 
     use super::*;
 
@@ -627,11 +727,11 @@ mod tests {
         vec![
             process(
                 10,
-                "sh",
+                "/bin/sh",
                 &["/bin/sh", "-c", "x"],
                 &["/dev/null", "pipe:[1]"],
             ),
-            process(11, "bwrap", &["bwrap"], &["/dev/null"]),
+            process(11, "/usr/bin/bwrap", &["bwrap"], &["/dev/null"]),
             process(
                 12,
                 "/usr/bin/vhost-device-vsock",
@@ -696,7 +796,7 @@ mod tests {
 
     #[test]
     fn every_deviation_is_a_finding() {
-        for (name, mutate, check) in deviations() {
+        for (name, mutate, check) in deviations().into_iter().chain(foreign_programs()) {
             let mut processes = healthy();
             mutate(&mut processes);
             let found = judge(&processes, &resolved());
@@ -809,6 +909,161 @@ mod tests {
                 IsolationCheck::NoNetworkInterface,
             ),
         ]
+    }
+
+    /// HUM-468: Programme, die die Unit nicht startet.
+    fn foreign_programs() -> Vec<(&'static str, Mutation, IsolationCheck)> {
+        vec![
+            (
+                "an unknown program",
+                |p| {
+                    let sh = p[0].clone();
+                    p.push(Process {
+                        pid: 21,
+                        program: Some("/usr/bin/sleep".into()),
+                        args: vec!["sleep".into(), "600".into()],
+                        ..sh
+                    });
+                },
+                IsolationCheck::SingleSocket,
+            ),
+            (
+                "a deleted program",
+                |p| p[1].program = Some("/usr/bin/bwrap (deleted)".into()),
+                IsolationCheck::SingleSocket,
+            ),
+            (
+                "the shim still running",
+                |p| p[0].program = Some("/usr/libexec/humanitl/humanitl-shim".into()),
+                IsolationCheck::SingleSocket,
+            ),
+        ]
+    }
+
+    /// Eine Nachbildung von `/proc` mit einem Prozess je Eintrag: Programm
+    /// (`exe`, `None` ohne Verweis), Argumente, Schnittstellen und die Ziele
+    /// der Deskriptoren.
+    fn proc_fixture(root: &Path, pid: u32, program: Option<&str>, args: &[&str], fds: &[&str]) {
+        let dir = root.join(pid.to_string());
+        std::fs::create_dir_all(dir.join("net")).unwrap();
+        std::fs::create_dir_all(dir.join("fd")).unwrap();
+        if let Some(program) = program {
+            std::os::unix::fs::symlink(program, dir.join("exe")).unwrap();
+        }
+        let mut cmdline = Vec::new();
+        for arg in args {
+            cmdline.extend_from_slice(arg.as_bytes());
+            cmdline.push(0);
+        }
+        std::fs::write(dir.join("cmdline"), cmdline).unwrap();
+        std::fs::write(
+            dir.join("net/dev"),
+            "Inter-|   Receive\n face |bytes\n    lo: 0 0\n",
+        )
+        .unwrap();
+        for (fd, target) in fds.iter().enumerate() {
+            std::os::unix::fs::symlink(target, dir.join("fd").join(fd.to_string())).unwrap();
+        }
+    }
+
+    /// HUM-468 über eine Nachbildung von `/proc`: Die Programme der Unit
+    /// bestehen; ein zusätzlicher `sleep`, ein gelöschtes Programm und ein
+    /// unlesbares sind je ein Fund. Die Prozesse gehen den Weg, den die
+    /// Prüfung auf dem Host geht ([`read_process`], dann [`judge`]).
+    #[test]
+    fn every_process_of_the_unit_runs_one_of_its_programs() {
+        let root = tempfile::tempdir().unwrap();
+        let read = |pids: &[u32]| -> Vec<Process> {
+            pids.iter()
+                .filter_map(|pid| read_process(root.path(), *pid))
+                .collect()
+        };
+        for process in healthy() {
+            let args: Vec<&str> = process.args.iter().map(String::as_str).collect();
+            let fds: Vec<&str> = process
+                .fds
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(String::as_str)
+                .collect();
+            proc_fixture(
+                root.path(),
+                process.pid,
+                process.program.as_deref(),
+                &args,
+                &fds,
+            );
+        }
+        let unit = [10, 11, 12, 13];
+        let read_back = read(&unit);
+        // `read_dir` liefert die Deskriptoren in keiner festen Reihenfolge.
+        let sorted = |fds: &Option<Vec<String>>| {
+            let mut fds = fds.clone();
+            if let Some(fds) = fds.as_mut() {
+                fds.sort();
+            }
+            fds
+        };
+        assert_eq!(
+            read_back
+                .iter()
+                .map(|p| (p.pid, p.program.clone(), p.args.clone(), sorted(&p.fds)))
+                .collect::<Vec<_>>(),
+            healthy()
+                .iter()
+                .map(|p| (p.pid, p.program.clone(), p.args.clone(), sorted(&p.fds)))
+                .collect::<Vec<_>>(),
+            "the fixture reads back as the healthy unit"
+        );
+        assert_eq!(judge(&read_back, &resolved()), Vec::new());
+
+        // Ein Prozess, den es nicht mehr gibt, fällt still heraus.
+        assert_eq!(read(&[10, 11, 12, 13, 99]).len(), 4);
+
+        // Mutationsbeweis: ein zusätzlicher `sleep` in der Unit.
+        proc_fixture(
+            root.path(),
+            14,
+            Some("/usr/bin/sleep"),
+            &["sleep", "600"],
+            &[],
+        );
+        let found = judge(&read(&[10, 11, 12, 13, 14]), &resolved());
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].check, IsolationCheck::SingleSocket);
+        assert!(
+            found[0]
+                .what
+                .starts_with("process 14 runs /usr/bin/sleep, a program the unit does not start"),
+            "{found:?}"
+        );
+
+        // Ein gelöschtes Programm ist nicht mehr das geprüfte.
+        proc_fixture(
+            root.path(),
+            15,
+            Some("/usr/bin/vhost-device-vsock (deleted)"),
+            &["vhost-device-vsock"],
+            &[],
+        );
+        let found = judge(&read(&[10, 11, 12, 13, 15]), &resolved());
+        assert!(
+            found.iter().any(|f| f.check == IsolationCheck::SingleSocket
+                && f.what
+                    .contains("(deleted), a program the unit does not start")),
+            "{found:?}"
+        );
+
+        // Ohne lesbaren Verweis ist das Programm unbekannt, nie bestanden.
+        proc_fixture(root.path(), 16, None, &["sleep"], &[]);
+        let found = judge(&read(&[10, 11, 12, 13, 16]), &resolved());
+        assert!(
+            found
+                .iter()
+                .any(|f| f.what == "the program of process 16 is unreadable"),
+            "{found:?}"
+        );
     }
 
     /// HUM-446: Jeder geprüfte Ordner hat genau einen virtiofsd, der ihn
@@ -973,5 +1228,51 @@ mod tests {
             found.iter().any(|f| f.what.contains("is not a socket")),
             "{found:?}"
         );
+    }
+
+    /// Ein Prozess, der nach dem ersten Lesen der cgroup startet, wird
+    /// nachgelesen und geprüft; kommen immer neue, sagt `settle` es.
+    /// Mutationsbeweis: ohne das Nachlesen bleibt der späte `sleep` ungesehen.
+    #[test]
+    fn a_process_started_after_the_first_listing_is_still_checked() {
+        let mut processes = healthy();
+        let mut listings = vec![vec![10, 11, 12, 13, 99], vec![10, 11, 12, 13, 99]].into_iter();
+        let settled = settle(
+            &mut processes,
+            || Ok(listings.next().unwrap_or_default()),
+            |pid| {
+                Some(Process {
+                    pid,
+                    program: Some("/usr/bin/sleep".to_owned()),
+                    ..Process::default()
+                })
+            },
+        )
+        .unwrap();
+        assert!(settled);
+        assert!(processes.iter().any(|process| process.pid == 99));
+        let found = judge(&processes, &resolved());
+        assert!(
+            found.iter().any(|f| f.what.contains("/usr/bin/sleep")),
+            "{found:?}"
+        );
+
+        let mut processes = healthy();
+        let mut next = 100;
+        let settled = settle(
+            &mut processes,
+            || {
+                next += 1;
+                Ok(vec![next])
+            },
+            |pid| {
+                Some(Process {
+                    pid,
+                    ..Process::default()
+                })
+            },
+        )
+        .unwrap();
+        assert!(!settled, "a unit that keeps forking never settles");
     }
 }

@@ -489,6 +489,7 @@ impl Harness {
             super::test_machine::set(super::test_machine::TestMachine {
                 console: Some(console),
                 vsock_relay: None,
+                extra_process: None,
             });
         }
         Some(Self {
@@ -936,6 +937,7 @@ fn a_connect_while_the_vsock_device_starts_never_silences_it() {
     super::test_machine::set(super::test_machine::TestMachine {
         console,
         vsock_relay: Some(relay),
+        extra_process: None,
     });
     let (plan, output) = harness.plan_with("echo hum471-agent-ran", Vec::new(), None);
     let device = plan
@@ -1176,6 +1178,54 @@ fn an_extra_listener_beside_the_door_turns_the_host_check_red() {
     assert_eq!(
         single.diagnostic.as_ref().map(|d| d.code.as_str()),
         Some("SANDBOX_047")
+    );
+    assert!(
+        handle.wait_timeout(Duration::from_secs(15)).is_some(),
+        "the session was stopped"
+    );
+    assert!(
+        !harness.project.join("started").exists(),
+        "the agent ran although the host check failed"
+    );
+}
+
+/// HUM-468, Mutationsbeweis: Ein zusätzlicher `sleep` in der Unit, neben
+/// der Maschine gestartet, ist kein Programm der Unit. Die Host-Prüfung
+/// findet ihn an `/proc/<pid>/exe`, `single_socket` wird rot mit
+/// `SANDBOX_047`, die Sitzung endet, und der Agent startet nie. Ohne die
+/// Prüfung der Programme bestünde die Sitzung: Der `sleep` hält weder ein
+/// Netz noch ein Gerät.
+#[test]
+fn an_extra_sleep_in_the_unit_turns_the_host_check_red() {
+    use crate::SandboxBackend as _;
+    let test = "an_extra_sleep_in_the_unit_turns_the_host_check_red";
+    let Some(harness) = Harness::new(test) else {
+        return;
+    };
+    let console = console_wanted().then(|| harness.dir.path().join("console"));
+    super::test_machine::set(super::test_machine::TestMachine {
+        console,
+        vsock_relay: None,
+        extra_process: Some("sleep 600".to_owned()),
+    });
+    let (handle, _output) = harness.launch("touch /work/started; sleep 120");
+    let results = harness.backend.isolation_check(&handle);
+    let single = results
+        .iter()
+        .find(|r| r.check == crate::IsolationCheck::SingleSocket)
+        .unwrap();
+    assert!(!single.passed, "{results:?}");
+    assert!(
+        single
+            .evidence
+            .contains("a program the unit does not start: sleep 600"),
+        "{}",
+        single.evidence
+    );
+    assert_eq!(
+        single.diagnostic.as_ref().map(|d| d.code.as_str()),
+        Some("SANDBOX_047"),
+        "{results:?}"
     );
     assert!(
         handle.wait_timeout(Duration::from_secs(15)).is_some(),
