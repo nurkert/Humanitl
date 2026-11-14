@@ -2202,23 +2202,36 @@ listen).
   get `--rlimit-nofile`: systemd lowers `LimitNOFILE` to the service manager's own hard limit
   when that is smaller, and the unit starts with the smaller, still fixed limit, whereas a daemon
   asked for more than it inherited would exit and leave the guest without a root (and the start
-  with a report-less check instead of the cause). Both daemons run with `--cache never`: the
-  guest drops every entry as soon as nothing holds it and tells the daemon to forget it, so a walk
-  over the whole root leaves only the descriptors of what the guest still holds open (measured:
-  98 after a walk over 735,790 entries; before, a walk drove the root daemon to about 520,000,
-  HUM-445). Copying, reading, searching and `git` over 13,475 files and 300 program starts held at
-  most 131, so the limit leaves ample room, and it is an eighth of the hard limit the service
-  manager otherwise hands out, so the host memory a guest can pin through a daemon stays bounded.
-  The price is speed on metadata-heavy work: without the guest's cache such work took two to
-  sixteen times as long in that measurement (`ls -lR` over `/usr/share/doc` 33 s instead of 2 s).
-- **Shared mappings without the guest's page cache** (HUM-469). `--allow-mmap` keeps
-  `mmap(MAP_SHARED)` working on `/` and `/work` (rustc and cargo need it); the guest kernel must
-  be 6.6 or newer, and a kernel whose configuration names an older version is refused with
-  `SANDBOX_045`. A configuration without the usual version header starts, and `humanitl doctor`
-  says the version is unknown. Caveat on data coherency, not a security boundary: virtiofsd
-  advises this option only when the guest has the directory to itself. When the user edits a
-  file under the project on the host while the guest has it mapped shared, the mapping in the
-  guest can show stale pages. The guest sees nothing it was not given either way.
+  with a report-less check instead of the cause). The limit is an eighth of the hard limit the
+  service manager otherwise hands out, so the host memory a guest can pin through a daemon stays
+  bounded (before, a walk drove the root daemon to about 520,000, HUM-445).
+- **The guest's file cache is on and bounded** (HUM-476). Both daemons run with `--cache auto`.
+  The guest keeps every entry it has looked up until its memory runs short, and with it one
+  descriptor in the daemon; unbounded, a plain `ls -lR` over 81,000 entries reached the limit and
+  left the guest's root unusable with `ENFILE`. PID 1 in the guest therefore bounds the cache
+  itself: every 100 ms it reads the number of unused dentries and inodes
+  (`/proc/sys/fs/dentry-state`, `inode-state`), and above 32,768 it writes `2` to
+  `/proc/sys/vm/drop_caches`; the guest kernel drops what nobody uses and tells the daemons to
+  forget it, and they close the descriptors. What the guest holds (open files, working
+  directories, mapped libraries, directories that cached children keep alive) is not unused, stays
+  and counts against the limit as before; between two checks the cache can also grow past 32,768. PID 1 opens the
+  three files at boot, before the agent exists, and holds them alone (the agent's child closes
+  every inherited descriptor, PID 1 is not dumpable); the agent can make PID 1 trim more often,
+  which costs only its own speed. The bound is the guest's comfort, not a guarantee: the limit
+  above binds on the host whether it works or not. Measured (HUM-476, guest kernel of the CI,
+  512 MiB): a walk over the whole root (684,000 entries, each one looked at) without a single
+  `ENFILE`, at most 37,566 descriptors in the root daemon; every workload within twice the time
+  of the unbounded cache (`ls -lR` over `/usr/share/doc` 3.2 to 4.0 s, unbounded 2.2 s up to
+  `ENFILE`, with `--cache never` of HUM-469 28 s; `git add` over 13,475 files 11 s, 12 s, 29 s).
+- **Shared mappings** (HUM-469, HUM-476). Under `--cache auto` `mmap(MAP_SHARED)` on `/` and
+  `/work` goes through the guest's page cache (rustc and cargo need it). The daemons still get
+  `--allow-mmap`, which only acts under `never` and `metadata`, and the guest kernel must still be
+  6.6 or newer: a kernel whose configuration names an older version is refused with
+  `SANDBOX_045`, and a configuration without the usual version header starts while
+  `humanitl doctor` says the version is unknown. Caveat on data coherency, not a security
+  boundary: when the user edits a file under the project on the host while the guest has it
+  cached or mapped, the guest sees the change only after the one-second validity of `auto`, and a
+  shared mapping can show stale pages. The guest sees nothing it was not given either way.
 - **The project folder is the checked one.** The daemon opens and checks the folder, hands the
   descriptor to the unit and the `/work` daemon's jail binds exactly that descriptor
   (`--bind-fd`); a swap of the path after the check does not reach the guest (HUM-442 Q4). The

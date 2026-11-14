@@ -72,15 +72,18 @@ pub(crate) const LIFELINE_FD: i32 = 5;
 /// CHECK line" statt mit dem Grund (nachgestellt mit `LimitNOFILE=4096`). Nur
 /// über die Unit gilt dann die kleinere Grenze, fest und ohne Fehlstart.
 ///
-/// **Warum 65 536.** Mit `--cache never` hält virtiofsd nur noch die Inodes
-/// offen, die der Gast gerade festhält (offene Dateien und ihre
-/// Verzeichnisse, Arbeitsverzeichnisse, abgebildete Bibliotheken,
-/// inotify-Wachen), je eines mit einem Deskriptor und jede offene Datei mit
-/// einem zweiten. Gemessen (HUM-469, Wurzel mit dem `/usr` des Hosts): 98
-/// nach einem Walk über 735 790 Einträge, höchstens 131 beim Kopieren,
-/// Lesen, Durchsuchen und `git` über 13 475 Dateien und bei 300
-/// Programmstarts. 65 536 lässt auch einer Sitzung, die Tausende Dateien
-/// offen hält oder beobachtet, reichlich Luft. Zugleich ist es ein Achtel der 524 288,
+/// **Warum 65 536.** virtiofsd hält je Inode, den der Gast kennt, einen
+/// Deskriptor und je offene Datei einen zweiten. Der Gast kennt, was er
+/// festhält (offene Dateien und ihre Verzeichnisse, Arbeitsverzeichnisse,
+/// abgebildete Bibliotheken, inotify-Wachen), und was in seinem Cache liegt;
+/// den Cache leert PID 1 im Gast, sobald mehr als 32 768 Einträge unbenutzt
+/// sind (`guest_cache.rs` des Shims, HUM-476). Gemessen (HUM-476, Wurzel mit
+/// dem `/usr` des Hosts): höchstens 37 566 Deskriptoren (zwei Läufe: 36 588
+/// und 37 566) bei einem Walk über die Wurzel (`find / -xdev`, 684 000 bis
+/// 735 000 Einträge je nach Filter) und bei `ls -lR` über 81 000; mit
+/// `--cache never` waren es 98 bis 131 (HUM-469). Die Grenze lässt also neben
+/// dem Cache noch rund 28 000 Deskriptoren für Dateien, die eine Sitzung offen
+/// hält oder beobachtet. Zugleich ist es ein Achtel der 524 288,
 /// die der Dienstverwalter sonst als harte Grenze vergibt, ein Fünfzehntel der
 /// eigenen Vorgabe von virtiofsd und verschwindend gegen `fs.file-max`; der
 /// Kernel-Speicher, den ein Gast über einen Dienst binden kann, ist damit
@@ -295,27 +298,32 @@ fn bind_program(line: &mut Vec<OsString>, program: &Path) {
 }
 
 /// Die Optionen jedes virtiofsd: kein eigenes Sandboxing (das Gefängnis ist
-/// es), nur Fehler ins Protokoll, kein Cache, der Inodes hortet, und keine
+/// es), nur Fehler ins Protokoll, der Cache des Gasts an, und keine
 /// Ankündigung von Einhängepunkten, wenn er die Option kennt. Die Grenze der
 /// Deskriptoren setzt die Unit ([`FILE_DAEMON_NOFILE`]).
 ///
-/// `--cache never` (HUM-469): Der Gast bekommt jeden Eintrag mit der
-/// Gültigkeit null und verwirft ihn, sobald ihn niemand mehr hält; dann
-/// schickt er `FORGET`, und virtiofsd schließt den Deskriptor des Inodes. Mit
-/// der Vorgabe `auto` (eine Sekunde) bleiben die Einträge im Cache des Gasts,
-/// bis dessen Speicher knapp wird, und mit ihnen je ein Deskriptor im
-/// virtiofsd; so kam der Walk in HUM-445 auf rund 520 000. Die Daten gehen
-/// dann am Seitencache des Gasts vorbei; `--allow-mmap` erlaubt trotzdem
-/// geteilte Abbildungen (rustc und andere bilden Dateien mit `MAP_SHARED`
-/// ab), ab Gastkernel 6.6 (geprüft in `prerequisites`). Die Grenze davon:
-/// virtiofsd empfiehlt `--allow-mmap` nur bei alleinigem Zugriff auf das
-/// Verzeichnis. Ändert der Nutzer auf dem Host eine Datei unter `/work`,
-/// während der Gast sie geteilt abgebildet hat, kann die Abbildung im Gast
-/// veraltete Seiten zeigen. Das betrifft die Kohärenz der Daten, keine
+/// `--cache auto` (HUM-476): Einträge und Attribute gelten im Gast eine
+/// Sekunde, die Daten gehen durch seinen Seitencache. Der Gast behält jeden
+/// Eintrag, bis sein Speicher knapp wird, und mit ihm je einen Deskriptor im
+/// virtiofsd; so kam der Walk in HUM-445 auf rund 520 000, und ein `ls -lR`
+/// über 81 000 Einträge endete an der Grenze mit `ENFILE`. Deshalb begrenzt
+/// PID 1 im Gast den Cache selbst (`guest_cache.rs` des Shims): Über 32 768
+/// unbenutzten Einträgen lässt der Gastkernel sie fallen, schickt je Inode
+/// `FORGET`, und virtiofsd schließt den Deskriptor. virtiofsd 1.13 und 1.14
+/// kennen keine Option, die seine Inodes begrenzt, und
+/// `--inode-file-handles` hilft nicht: Ohne `CAP_DAC_READ_SEARCH` auf dem
+/// Host fällt virtiofsd auf Deskriptoren zurück. Gemessen (HUM-476, in
+/// `backlog/sprint-7.md`): höchstens das Doppelte der Zeit mit ungebremstem
+/// Cache, wo `--cache never` (HUM-469) bis zum Dreizehnfachen brauchte.
+///
+/// `--allow-mmap` wirkt nur unter `never` und `metadata` und bleibt, solange
+/// `prerequisites` die Option verlangt. Unter `auto` gehen geteilte
+/// Abbildungen (`MAP_SHARED`, rustc und andere) durch den Seitencache. Die
+/// Grenze davon: Ändert der Nutzer auf dem Host eine Datei unter `/work`,
+/// während der Gast sie im Cache oder abgebildet hat, sieht der Gast die
+/// Änderung erst nach der Gültigkeit von einer Sekunde, eine Abbildung
+/// womöglich veraltete Seiten. Das betrifft die Kohärenz der Daten, keine
 /// Grenze der Sandbox: Der Gast sieht nur, was ihm ohnehin freigegeben ist.
-/// Ohne die Option scheitern rustc und cargo im Gast. `--inode-file-handles`
-/// hilft hier nicht: Ohne `CAP_DAC_READ_SEARCH` auf dem Host fällt virtiofsd
-/// auf Deskriptoren zurück.
 fn file_daemon_tail(line: &mut Vec<OsString>, resolved: &Resolved) {
     push(
         line,
@@ -325,7 +333,7 @@ fn file_daemon_tail(line: &mut Vec<OsString>, resolved: &Resolved) {
             "--log-level",
             "error",
             "--cache",
-            "never",
+            "auto",
             "--allow-mmap",
         ],
     );
@@ -735,12 +743,12 @@ mod tests {
         ));
         assert!(has(&lines.root, &["--sandbox", "none"]));
         assert!(has(&lines.root, &["--no-announce-submounts"]));
-        // Beide virtiofsd: kein Cache, der Inodes hortet, geteilte
-        // Abbildungen trotzdem erlaubt; die Grenze der Deskriptoren kommt von
-        // der Unit, nie als `--rlimit-nofile`, das über einer kleineren
-        // geerbten Grenze den Start scheitern ließe (HUM-469).
+        // Beide virtiofsd: der Cache des Gasts an, begrenzt vom Shim im
+        // Gast (HUM-476); die Grenze der Deskriptoren kommt von der Unit,
+        // nie als `--rlimit-nofile`, das über einer kleineren geerbten Grenze
+        // den Start scheitern ließe (HUM-469).
         for line in [&lines.root, &lines.work] {
-            assert!(has(line, &["--cache", "never", "--allow-mmap"]), "{line:?}");
+            assert!(has(line, &["--cache", "auto", "--allow-mmap"]), "{line:?}");
             assert_eq!(count(line, "--cache"), 1, "{line:?}");
             assert!(
                 !words(line).iter().any(|w| w.starts_with("--rlimit-nofile")),
@@ -891,7 +899,7 @@ mod tests {
         let first_jail = script.find("bwrap").unwrap();
         assert!(lifeline < first_jail, "{script}");
         assert!(script.contains(
-            "--fd 3 --readonly --sandbox none --log-level error --cache never --allow-mmap \
+            "--fd 3 --readonly --sandbox none --log-level error --cache auto --allow-mmap \
              --no-announce-submounts 4<&- 5<&-"
         ));
         assert!(script.contains("3<&- 5<&-; kill -TERM $$"));

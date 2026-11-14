@@ -373,9 +373,12 @@ fn config_beside(image: &Path) -> Option<PathBuf> {
 
 /// Die älteste Fassung des Gastkernels, die geteilte Abbildungen einer
 /// Datei ohne Seitencache erlaubt (`FUSE_DIRECT_IO_ALLOW_MMAP`, Linux 6.6).
-/// Beide virtiofsd laufen mit `--cache never --allow-mmap` (HUM-469); ein
-/// älterer Gast verweigert jedes `mmap(MAP_SHARED)` auf `/` und `/work` mit
-/// `ENODEV`, und rustc, cargo und andere scheitern dann tief im Build.
+/// Unter `--cache never --allow-mmap` (HUM-469) verweigerte ein älterer Gast
+/// jedes `mmap(MAP_SHARED)` auf `/` und `/work` mit `ENODEV`, und rustc,
+/// cargo und andere scheiterten tief im Build. Seit HUM-476 laufen beide
+/// virtiofsd mit `--cache auto`, wo geteilte Abbildungen durch den
+/// Seitencache gehen; die Untergrenze bleibt, bis ein eigenes Issue sie mit
+/// `--allow-mmap` zusammen prüft und entfernt.
 const GUEST_KERNEL_FLOOR: (u32, u32) = (6, 6);
 
 /// Die Fassung aus dem Kopf einer Kernel-Konfiguration

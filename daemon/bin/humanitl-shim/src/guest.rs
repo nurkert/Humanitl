@@ -33,7 +33,10 @@
 //!    line of the report says what step 3 did
 //!    (`MODULES vsock=loaded,...,modules_disabled=1`); a failure of step 3 is
 //!    written there as `CHECK seccomp_applied fail modules:...` instead.
-//!    Without a report nothing starts.
+//!    Without a report nothing starts. Then the shim opens the files with
+//!    which PID 1 bounds the guest's file cache (`guest_cache.rs`, HUM-476);
+//!    the bound starts once PID 1 wears its own filter, and a failure is a
+//!    `CACHE off` line on the report, not a refusal.
 //! 5. Make the guest look like a bubblewrap sandbox (HUM-445): `/sys`
 //!    becomes an empty read-only tmpfs (bwrap mounts no sysfs, and the
 //!    module lock was the last step that read it), `/dev/shm` a tmpfs, every
@@ -88,6 +91,7 @@ use std::time::Duration;
 
 use crate::json::Parser;
 use crate::linux::envfd;
+use crate::linux::guest_cache;
 use crate::linux::guest_tmpfs::{self, Tmpfs};
 use crate::linux::modules::{self, Running};
 use crate::linux::mounts::{self, Pins};
@@ -498,6 +502,9 @@ pub struct Booted {
     /// The control stream of the terminals, the host's second connection
     /// (HUM-443).
     pub control: OwnedFd,
+    /// The bound of the file cache (HUM-476), when its files opened; PID 1
+    /// starts it once its own filter is on.
+    pub cache: Option<guest_cache::Bound>,
 }
 
 /// Steps 1 to 6 of the module documentation. `None` when one failed; then
@@ -558,6 +565,16 @@ pub fn boot(path: &Path) -> Option<Booted> {
             return None;
         }
     }
+    // After the `MODULES` line, which stays the first, and before the agent
+    // exists (HUM-476); a failure leaves the cache unbounded, which the
+    // daemon's limit still stops on the host.
+    let cache = match guest_cache::Bound::open() {
+        Ok(cache) => Some(cache),
+        Err(why) => {
+            report.line(&format!("CACHE off open:{why}"));
+            None
+        }
+    };
     if let Err(why) = like_bwrap(&plan) {
         report.check(Check::MountsMatch, false, &why);
         say(&format!("humanitl-shim: guest: {why}\n"));
@@ -594,6 +611,7 @@ pub fn boot(path: &Path) -> Option<Booted> {
         report,
         plan,
         control,
+        cache,
     })
 }
 

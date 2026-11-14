@@ -2018,25 +2018,40 @@ lauscht).
   bekommen kein `--rlimit-nofile`: systemd senkt `LimitNOFILE` auf die eigene harte Grenze des
   Dienstverwalters, wenn die kleiner ist, und die Unit startet mit der kleineren, ebenso festen
   Grenze; ein Dienst, der mehr verlangt, als er geerbt hat, endete dagegen und ließe den Gast ohne
-  Wurzel (und den Start mit einer Prüfung ohne Bericht statt mit dem Grund). Beide Dienste laufen
-  mit `--cache never`: Der Gast verwirft jeden Eintrag, sobald ihn nichts mehr hält, und lässt ihn
-  den Dienst vergessen, so dass ein Walk über die ganze Wurzel nur die Deskriptoren dessen übrig
-  lässt, was der Gast noch offen hält (gemessen: 98 nach einem Walk über 735 790 Einträge; vorher
-  trieb ein Walk den Wurzeldienst auf rund 520 000, HUM-445). Kopieren, Lesen, Durchsuchen und
-  `git` über 13 475 Dateien und 300 Programmstarts hielten höchstens 131, die Grenze lässt also
-  reichlich Luft, und sie ist ein Achtel der harten Grenze, die der Dienstverwalter sonst vergibt;
-  der Speicher des Hosts, den ein Gast über einen Dienst binden kann, bleibt so begrenzt. Der Preis
-  ist Tempo bei Arbeit mit vielen Metadaten: Ohne den Cache des Gasts dauerte sie in dieser Messung
-  zwei- bis sechzehnmal so lange (`ls -lR` über `/usr/share/doc` 33 s statt 2 s).
-- **Geteilte Abbildungen ohne den Seitencache des Gasts** (HUM-469). `--allow-mmap` hält
-  `mmap(MAP_SHARED)` auf `/` und `/work` am Laufen (rustc und cargo brauchen es); der Gastkernel
-  muss 6.6 oder neuer sein, und ein Kernel, dessen Konfiguration eine ältere Fassung nennt, wird
-  mit `SANDBOX_045` abgelehnt. Eine Konfiguration ohne den üblichen Kopf mit der Fassung startet,
+  Wurzel (und den Start mit einer Prüfung ohne Bericht statt mit dem Grund). Die Grenze ist ein
+  Achtel der harten Grenze, die der Dienstverwalter sonst vergibt; der Speicher des Hosts, den ein
+  Gast über einen Dienst binden kann, bleibt so begrenzt (vorher trieb ein Walk den Wurzeldienst
+  auf rund 520 000, HUM-445).
+- **Der Dateicache des Gasts ist an und begrenzt** (HUM-476). Beide Dienste laufen mit
+  `--cache auto`. Der Gast behält jeden Eintrag, den er nachgeschlagen hat, bis sein Speicher
+  knapp wird, und mit ihm einen Deskriptor im Dienst; unbegrenzt erreichte schon ein `ls -lR` über
+  81 000 Einträge die Grenze und machte die Wurzel des Gasts mit `ENFILE` unbrauchbar. Deshalb
+  begrenzt PID 1 im Gast den Cache selbst: Alle 100 ms liest es die Zahl der unbenutzten Dentries
+  und Inodes (`/proc/sys/fs/dentry-state`, `inode-state`), und über 32 768 schreibt es `2` nach
+  `/proc/sys/vm/drop_caches`; der Gastkernel verwirft, was niemand benutzt, und lässt es die
+  Dienste vergessen, die ihre Deskriptoren schließen. Was der Gast festhält (offene Dateien,
+  Arbeitsverzeichnisse, abgebildete Bibliotheken, Verzeichnisse, die gecachte Kinder am Leben
+  halten), ist nicht unbenutzt, bleibt und zählt wie bisher gegen die Grenze; zwischen zwei
+  Prüfungen kann der Cache auch über 32 768 wachsen.
+  PID 1 öffnet die drei Dateien beim Start, bevor es den Agenten gibt, und hält sie allein (das
+  Kind des Agenten schließt jeden geerbten Deskriptor, PID 1 ist nicht dumpable); der Agent kann
+  PID 1 nur öfter aufräumen lassen, was allein sein eigenes Tempo kostet. Die Begrenzung ist ein
+  Komfort des Gasts, keine Garantie: Die Grenze oben bindet auf dem Host, ob sie wirkt oder nicht.
+  Gemessen (HUM-476, Gastkernel der CI, 512 MiB): ein Walk über die ganze Wurzel (684 000
+  Einträge, jeder angesehen) ohne ein einziges `ENFILE`, höchstens 37 566 Deskriptoren im
+  Wurzeldienst; jede Last in höchstens der doppelten Zeit des unbegrenzten Cache (`ls -lR` über
+  `/usr/share/doc` 3,2 bis 4,0 s, unbegrenzt 2,2 s bis zum `ENFILE`, mit `--cache never` aus HUM-469
+  28 s; `git add` über 13 475 Dateien 11 s, 12 s, 29 s).
+- **Geteilte Abbildungen** (HUM-469, HUM-476). Unter `--cache auto` geht `mmap(MAP_SHARED)` auf
+  `/` und `/work` durch den Seitencache des Gasts (rustc und cargo brauchen es). Die Dienste
+  bekommen weiter `--allow-mmap`, das nur unter `never` und `metadata` wirkt, und der Gastkernel
+  muss weiter 6.6 oder neuer sein: Ein Kernel, dessen Konfiguration eine ältere Fassung nennt, wird
+  mit `SANDBOX_045` abgelehnt, eine Konfiguration ohne den üblichen Kopf mit der Fassung startet,
   und `humanitl doctor` nennt die Fassung unbekannt. Einschränkung der Datenkohärenz, keine Grenze
-  der Sandbox: virtiofsd empfiehlt die Option nur, wenn der Gast das Verzeichnis für sich hat.
-  Ändert der Nutzer auf dem Host eine Datei im Projekt, während der Gast sie geteilt abgebildet
-  hat, kann die Abbildung im Gast veraltete Seiten zeigen. Der Gast sieht so oder so nichts, was
-  ihm nicht freigegeben ist.
+  der Sandbox: Ändert der Nutzer auf dem Host eine Datei im Projekt, während der Gast sie im Cache
+  hat oder abgebildet hat, sieht der Gast die Änderung erst nach der Gültigkeit von einer Sekunde
+  unter `auto`, und eine geteilte Abbildung kann veraltete Seiten zeigen. Der Gast sieht so oder so
+  nichts, was ihm nicht freigegeben ist.
 - **Der Projektordner ist der geprüfte.** Der Daemon öffnet und prüft den Ordner, reicht den
   Deskriptor an die Unit, und das Gefängnis des Dienstes für `/work` bindet genau diesen
   Deskriptor (`--bind-fd`); ein Tausch des Pfades nach der Prüfung erreicht den Gast nicht

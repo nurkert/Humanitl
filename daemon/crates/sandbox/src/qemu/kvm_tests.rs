@@ -1352,13 +1352,15 @@ fn a_killed_daemon_ends_the_unit_within_five_seconds() {
     let _ = std::fs::remove_dir_all(std::path::Path::new(xdg).parent().unwrap());
 }
 
-/// Der Agent des Tests unten (HUM-469): ein Walk über die ganze Wurzel, dann
+/// Der Agent des Tests unten (HUM-469): ein Walk über die ganze Wurzel, der
+/// jeden Eintrag ansieht (`-size`), mit der Zahl der `ENFILE`-Meldungen
+/// (HUM-476), dann
 /// auf ein Wort vom Terminal das Zeichen an die Probe, und während die Probe
 /// die Wurzel ausschöpft, nur eingebaute Befehle der Shell und `/work`.
 /// Schläft an einer FIFO in `/tmp`, weil `sleep` ein Programm der Wurzel ist.
 const FD_AGENT: &str = r#"mkfifo /tmp/t469 && exec {t}<>/tmp/t469
 nap() { read -rt 0.2 -u "$t" _ || true; }
-echo "walked:$(find / -xdev 2>/dev/null | wc -l)"
+echo "walked:$(find / -xdev -size +0 2>/tmp/w469 | wc -l) enfile:$(grep -c 'Too many open files' /tmp/w469)"
 read -r line
 : > /work/go-469
 n=0; while [ ! -s /work/held-469 ] && [ $n -lt 900 ]; do nap; n=$((n+1)); done
@@ -1433,16 +1435,44 @@ fn descriptors(pid: i32) -> Option<usize> {
     Some(std::fs::read_dir(format!("/proc/{pid}/fd")).ok()?.count())
 }
 
-/// HUM-469: Ein Walk über die ganze Wurzel lässt den virtiofsd der Wurzel
-/// nicht wachsen (`--cache never`), und Root im Gast, der so viele Dateien
-/// der Wurzel offen hält, wie er kann, treibt ihn nicht über
+/// HUM-476: Der Walk des Agenten aus [`FD_AGENT`] über die Wurzel (lokal
+/// rund 700 000 Einträge) sah jeden Eintrag an und bekam kein einziges
+/// `ENFILE`, obwohl der Cache des Gasts an ist.
+fn walk_without_enfile(shown: &str) {
+    let walk = shown
+        .lines()
+        .find_map(|line| line.strip_prefix("walked:"))
+        .unwrap_or_else(|| panic!("no walked line: {shown}"));
+    let walk_count = |key: &str| {
+        walk.split(' ')
+            .find_map(|pair| pair.trim().strip_prefix(key))
+            .and_then(|value| value.trim().parse::<u32>().ok())
+    };
+    assert_eq!(
+        walk_count("enfile:"),
+        Some(0),
+        "the walk over the root met ENFILE: {walk}"
+    );
+    assert!(
+        walk.split(' ').next().and_then(|n| n.parse::<u32>().ok()) >= Some(100_000),
+        "the walk saw too few entries: {walk}"
+    );
+}
+
+/// HUM-469: Root im Gast, der so viele Dateien der Wurzel offen hält, wie er
+/// kann, treibt den virtiofsd der Wurzel nicht über
 /// [`super::lines::FILE_DAEMON_NOFILE`] Deskriptoren, gezählt in
 /// `/proc/<pid>/fd` auf dem Host. Der Gast bekommt darüber `ENFILE`, die
 /// Sitzung bleibt bedienbar (Terminal und `/work`), und nach der Freigabe
 /// geht die Wurzel wieder. Mutationsbeweis: ohne `LimitNOFILE` der Unit hält
-/// die Probe alle [`HOLD`] Dateien und der Dienst mehr als die Grenze; ohne `--cache never` hält er nach dem Walk Zehntausende.
-/// Eine geteilte Abbildung (`MAP_SHARED`) einer Datei der Wurzel geht
-/// trotzdem (`--allow-mmap`).
+/// die Probe alle [`HOLD`] Dateien und der Dienst mehr als die Grenze.
+///
+/// HUM-476: Der Cache des Gasts ist an (`--cache auto`), und PID 1 hält ihn
+/// begrenzt (`guest_cache.rs` des Shims, höchstens 32 768 unbenutzte
+/// Einträge). Der Walk endet ohne ein einziges `ENFILE`, und danach hält der
+/// Dienst höchstens drei Viertel der Grenze. Mutationsbeweis: ohne die
+/// Begrenzung endet schon der Walk mit `ENFILE`. Eine geteilte Abbildung
+/// (`MAP_SHARED`) einer Datei der Wurzel geht.
 #[test]
 fn a_guest_cannot_drive_the_root_file_daemon_over_its_descriptor_limit() {
     use crate::SandboxBackend as _;
@@ -1505,6 +1535,7 @@ fn a_guest_cannot_drive_the_root_file_daemon_over_its_descriptor_limit() {
             .join(", ")
     );
     assert!(shown.contains("done-469"), "{shown}");
+    walk_without_enfile(&shown);
     let probe_count = |key: &str| {
         shown
             .lines()
@@ -1531,12 +1562,14 @@ fn a_guest_cannot_drive_the_root_file_daemon_over_its_descriptor_limit() {
         most <= limit,
         "the root's virtiofsd held {most} descriptors, more than {limit}"
     );
+    // Mit dem begrenzten Cache bleibt nach dem Walk höchstens die Schwelle
+    // des Shims (32 768 unbenutzte Einträge) samt dem Zuwachs einer Runde.
     assert!(
-        after_walk < 4096,
+        after_walk < limit * 3 / 4,
         "a walk over the root left {after_walk} descriptors open in its virtiofsd"
     );
     assert!(
-        after_release < 4096,
+        after_release < limit * 3 / 4,
         "{after_release} descriptors stayed open after the probe let go"
     );
     assert!(shown.contains("work:ok"), "{shown}");
@@ -1546,9 +1579,68 @@ fn a_guest_cannot_drive_the_root_file_daemon_over_its_descriptor_limit() {
         .and_then(|count| count.trim().parse::<u32>().ok())
         .unwrap_or(0);
     assert!(usable > 0, "the root did not come back: {shown}");
-    // `--allow-mmap`: Eine geteilte Abbildung einer Datei der Wurzel geht
-    // trotz `--cache never`.
+    // Eine geteilte Abbildung einer Datei der Wurzel geht.
     assert!(shown.contains("mmap:ok"), "{shown}");
     let status = ended.expect("the session ends").expect("a status");
     assert_eq!(status.code(), Some(0), "the agent's exit code: {shown}");
+}
+
+/// Die Lasten der Messung unten (HUM-469, HUM-476), je mit Dauer, Status und
+/// der Zahl der `ENFILE`-Meldungen: kopieren, `git add`, `grep -r`, zweimal
+/// `git status`, `ls -lR` und zuletzt ein Walk über die ganze Wurzel.
+const MEASURED_AGENT: &str = r#"export LC_ALL=C
+git config --global safe.directory '*' 2>/dev/null
+b() { local n=$1; shift; local s=$EPOCHREALTIME; "$@" >/dev/null 2>/tmp/err-$n; local rc=$?; local e=$EPOCHREALTIME; echo "load:$n rc=$rc ms=$(( (${e/./}-${s/./})/1000 )) enfile=$(grep -c 'Too many open files' /tmp/err-$n)"; }
+cd /work
+b cp cp -r /usr/include /work/inc
+cd /work/inc && git init -q
+b git-add git add -A
+b grep grep -r zzqqnomatch .
+b git-status git status
+b git-status-again git status
+b ls-lR ls -lR /usr/share/doc
+b walk find / -xdev -size +0
+echo "dentry-state:$(tr '\t' ' ' < /proc/sys/fs/dentry-state)"
+echo measured-476
+"#;
+
+/// HUM-476, Messung, kein Gate: die Lasten aus [`MEASURED_AGENT`] im Gast
+/// und die meisten Deskriptoren, die der virtiofsd der Wurzel dabei hielt.
+/// Läuft von Hand, für den Vergleich der Cache-Einstellungen:
+/// `cargo test -p humanitl-sandbox --lib qemu::kvm_tests::the_workloads_of_hum_469_measured -- --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement (HUM-476), run by hand"]
+fn the_workloads_of_hum_469_measured() {
+    use crate::SandboxBackend as _;
+    let test = "the_workloads_of_hum_469_measured";
+    let Some(harness) = Harness::new(test) else {
+        return;
+    };
+    let (handle, output) = harness.launch(MEASURED_AGENT);
+    let results = harness.backend.isolation_check(&handle);
+    assert!(results.iter().all(|r| r.passed), "{results:?}");
+    let unit = handle.unit().unwrap().unit.service();
+    let pid = root_file_daemon(&unit).expect("the root's virtiofsd in the unit");
+    let mut seen = Vec::new();
+    let mut most = 0;
+    let deadline = Instant::now() + Duration::from_secs(1200);
+    while !String::from_utf8_lossy(&seen).contains("measured-476") && Instant::now() < deadline {
+        if let Some(count) = descriptors(pid) {
+            most = most.max(count);
+        }
+        if let Ok(chunk) = output.recv_timeout(Duration::from_millis(20)) {
+            seen.extend_from_slice(&chunk.bytes);
+        }
+    }
+    let shown = String::from_utf8_lossy(&seen).into_owned();
+    eprintln!(
+        "{test}: at most {most} descriptors in the root's virtiofsd\n{}",
+        shown
+            .lines()
+            .filter(|l| l.starts_with("load:") || l.starts_with("dentry-state:"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    assert!(shown.contains("measured-476"), "{shown}");
+    let _ = handle.wait_timeout(Duration::from_secs(30));
 }
