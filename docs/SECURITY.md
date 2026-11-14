@@ -2208,16 +2208,29 @@ listen).
   `/etc/passwd` says), and the shim proves the result from the kernel before it goes on. PID 1 is
   not dumpable, so the agent can neither read nor write its memory. After the module lock `/sys`
   is an empty read-only tmpfs instead of the guest kernel's sysfs, `/dev/shm` is a tmpfs as
-  under bubblewrap, and the host name is the profile's (`sandbox`). The expected mount table
-  holds all three.
+  under bubblewrap, and the host name is the profile's (`sandbox`). Every other tmpfs of the
+  profile outside `/work` (`/tmp`, `/var/tmp`, the agent's home) is a tmpfs in the guest as well,
+  and so is `/run`, which bubblewrap creates writable on its own root; the shim mounts them before
+  the agent starts, with mode 0755, owned by the agent's user, `nosuid` and `nodev` (HUM-466).
+  Each holds at most the kernel's default of half the guest's memory, less than under bubblewrap,
+  where the default is half the host's. A file of the agent's adapter under the home lies
+  read-only on top of its tmpfs as under bubblewrap, and `/run/humanitl` (shim, guest plan,
+  modules) stays read-only on top of `/run`: the shim takes a copy of the mount in the read-only
+  root before the tmpfs hides it and moves the copy back on top. The expected mount table holds
+  all of these, and the socket walk of `single_socket` covers every tmpfs.
 
 ### What is different from bubblewrap
 
 - **The trusted computing base grows** by the emulator, the guest kernel, the two file system
   daemons, the vsock device and the user's service manager (K-30 to K-33 in
   [`THREAT-MODEL.md`](THREAT-MODEL.md)).
-- **The guest root is read-only, extra writable mounts included.** `mounts.extra_rw` is mounted
-  read-only in the guest.
+- **The guest root is read-only; writable extensions are refused.** The project at `/work`, the
+  tmpfs of the profile and `/run` are the only writable places in the guest. A profile with
+  `mounts.extra_rw` does not start (`SANDBOX_051`, HUM-466) rather than getting the folder
+  read-only without a word: a writable extension would be another writable way to the host that
+  nothing reviews. The rest of the root, such as `/etc` beside its binds, stays read-only in the
+  guest, where bubblewrap's own root tmpfs is writable; that is stricter, not a gap: nothing
+  written there reaches the host or outlives the session under either backend.
 - **No disposable sandbox yet.** `disposable` refuses with `SANDBOX_030` until HUM-446.
 - **The terminal travels as a stream** (K-29); a signal of the host reaches no process of the
   guest, an interrupt is a frame.

@@ -129,13 +129,16 @@ fn the_guest_plan_names_the_door_the_pin_and_the_walk() {
     let profile = profile();
     let session = session(work.path());
     let env = profile.effective_env(&session, None);
-    let text = guest_plan(&profile, &session, &env, 4242, None).unwrap();
+    let text = guest_plan(&profile, &session, &env, 4242, None, &[]).unwrap();
     let plan: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(plan["door_port"], "5000");
     assert_eq!(plan["report_port"], "5001");
     assert_eq!(plan["work_tag"], "work");
     assert_eq!(plan["pins"]["pins"][0]["ino"], "4242");
-    assert_eq!(plan["socket_walk"], serde_json::json!(["/work", "/dev"]));
+    assert_eq!(
+        plan["socket_walk"],
+        serde_json::json!(["/work", "/dev", "/run"])
+    );
     assert_eq!(plan["command"], serde_json::json!(["/bin/bash", "-l"]));
     assert!(plan["shim"].get("HUMANITL_BRIDGES").is_none());
     assert!(plan["env"].get("HUMANITL_SESSION").is_some());
@@ -157,12 +160,98 @@ fn the_guest_plan_names_the_door_the_pin_and_the_walk() {
     assert_eq!(at("/sys")["mode"], "ro");
     assert_eq!(at("/dev/shm")["type"], "tmpfs");
     assert!(plan.get("root_probe").is_none());
-    let probed = guest_plan(&profile, &session, &env, 4242, Some("true")).unwrap();
+    let probed = guest_plan(&profile, &session, &env, 4242, Some("true"), &[]).unwrap();
     let probed: serde_json::Value = serde_json::from_str(&probed).unwrap();
     assert_eq!(
         probed["root_probe"],
         serde_json::json!(["/bin/sh", "-c", "true"])
     );
+}
+
+/// HUM-466: Jedes tmpfs des Profils außerhalb von `/work` steht im
+/// Gastplan, mit seiner Zeile der Mounttabelle und als Wurzel der
+/// Socket-Suche; die Datei des Adapters unter dem Heimatverzeichnis bleibt
+/// als nur lesbare Kopie obenauf, und `/dev/shm` hängt der Shim ohnehin ein.
+#[test]
+fn the_guest_plan_names_every_tmpfs_and_what_stays_on_top() {
+    let work = tempfile::tempdir().unwrap();
+    let profile = profile();
+    let session = session(work.path());
+    let present = BwrapBackend::present_under_work(&profile, work.path());
+    let root = guest_root(
+        &profile,
+        &session,
+        &present,
+        Path::new("/run/x/files"),
+        Path::new("/m"),
+        &[],
+    );
+    let env = profile.effective_env(&session, None);
+    let text = guest_plan(&profile, &session, &env, 4242, None, &root.entries).unwrap();
+    let plan: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        plan["tmpfs"],
+        serde_json::json!(["/run", "/tmp", "/var/tmp", "/home/agent"])
+    );
+    // `/run/humanitl` (Shim, Gastplan, Module) bleibt als eine nur lesbare
+    // Kopie über dem tmpfs von `/run`.
+    let mut keep: Vec<&str> = plan["tmpfs_keep"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| k.as_str().unwrap())
+        .collect();
+    keep.sort_unstable();
+    assert_eq!(
+        keep,
+        ["bind:/home/agent/.config/agent.json", "bind:/run/humanitl"]
+    );
+    assert_eq!(
+        plan["socket_walk"],
+        serde_json::json!(["/work", "/dev", "/run", "/tmp", "/var/tmp", "/home/agent"])
+    );
+    let mounts = plan["pins"]["mounts"].as_array().unwrap();
+    let at = |point: &str| -> Vec<&serde_json::Value> {
+        mounts.iter().filter(|m| m["point"] == point).collect()
+    };
+    for point in ["/run", "/tmp", "/var/tmp", "/home/agent", "/dev/shm"] {
+        let found = at(point);
+        assert_eq!(found.len(), 1, "{point}: {mounts:?}");
+        assert_eq!(found[0]["type"], "tmpfs", "{point}");
+        assert_eq!(found[0]["mode"], "rw", "{point}");
+        assert_eq!(found[0]["flags"], "nosuid,nodev", "{point}");
+    }
+    for point in ["/home/agent/.config/agent.json", "/run/humanitl"] {
+        let kept = at(point);
+        assert_eq!(kept.len(), 1, "{point}: {mounts:?}");
+        assert_eq!(kept[0]["type"], "virtiofs", "{point}");
+        assert_eq!(kept[0]["mode"], "ro", "{point}");
+    }
+    // Kein tmpfs unter `/work`: Die Masken dort trägt der virtiofsd des
+    // Projekts, nicht der Shim.
+    assert!(
+        !plan["tmpfs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p.as_str().unwrap().starts_with("/work")),
+        "{}",
+        plan["tmpfs"]
+    );
+}
+
+/// HUM-466: `mounts.extra_rw` wird unter der Kernel-Stufe abgelehnt, mit
+/// eigenem Code, nie stillschweigend nur lesbar eingehängt.
+#[test]
+fn a_writable_extension_is_refused_with_its_own_code() {
+    assert!(refuse_writable_extensions(&profile()).is_ok());
+    let text = include_str!("../../../../../profiles/sandbox/default.toml")
+        .replace("extra_rw = []", "extra_rw = [\"/srv/data\"]");
+    let profile = SandboxProfile::parse(&text, Path::new("default.toml")).unwrap();
+    let refused = refuse_writable_extensions(&profile).unwrap_err();
+    assert_eq!(refused.code.as_str(), "SANDBOX_051");
+    assert!(refused.why.contains("/srv/data"), "{}", refused.why);
+    assert!(refused.fix.is_some());
 }
 
 /// Die nur lesbaren Binds der Sitzung (das Testverzeichnis der

@@ -357,15 +357,18 @@ pub fn sockets() -> SocketWalk {
 /// socket file there cannot lead anywhere either, because a Unix socket is
 /// only reachable in the kernel that bound it, and the guest's kernel bound
 /// none of the host's. The guest plan therefore names the writable places
-/// (`socket_walk` in `guest.rs`), and the walk starts there. Each root counts
-/// at the depth of its own path, so the bounds mean the same as from `/`.
+/// (`socket_walk` in `guest.rs`), and the walk starts there. Depth counts
+/// from each root, not from `/` (HUM-466): a writable place deep in the tree
+/// (`/opt/agent/cache`) is read [`SOCKET_WALK_MAX_DEPTH`] levels down like
+/// `/` itself, instead of not at all. A bound that ends the walk stays in
+/// the evidence ([`SocketWalk::limit`]); it does not fail the check, because
+/// the project at `/work` routinely holds more than the bounds.
 #[must_use]
 pub fn sockets_under(roots: &[PathBuf]) -> SocketWalk {
     let mut walk = SocketWalk::default();
     let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
     for root in roots {
-        let depth = root.components().count().saturating_sub(1);
-        queue.push_back((root.clone(), depth));
+        queue.push_back((root.clone(), 0));
     }
 
     while let Some((dir, depth)) = queue.pop_front() {
@@ -507,6 +510,32 @@ mod tests {
         drop((first, second));
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_file(&beside);
+    }
+
+    /// HUM-466: depth counts from each root, so a root deep in the tree is
+    /// read [`SOCKET_WALK_MAX_DEPTH`] levels down, and below that the bound
+    /// is reported.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_walk_counts_depth_from_each_root() {
+        let base = std::env::temp_dir().join(format!("hum466-walk-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        // The root itself lies deeper than the bound counted from `/`.
+        let root = base.join("a/b/c/d");
+        let reached = root.join("x/y");
+        let beyond = reached.join("z");
+        fs::create_dir_all(&beyond).unwrap();
+        let near = reached.join("in.sock");
+        let far = beyond.join("out.sock");
+        let first = std::os::unix::net::UnixListener::bind(&near).unwrap();
+        let second = std::os::unix::net::UnixListener::bind(&far).unwrap();
+
+        let walk = sockets_under(std::slice::from_ref(&root));
+        assert_eq!(walk.sockets, [near.to_string_lossy().into_owned()]);
+        assert_eq!(walk.limit, Some("depth"), "the bound is evidence");
+
+        drop((first, second));
+        let _ = fs::remove_dir_all(&base);
     }
 
     /// The walk sees a socket in a place it reaches, keeps its bounds and

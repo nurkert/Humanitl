@@ -181,6 +181,7 @@ mod contract;
 mod envfd;
 mod exec;
 mod guest;
+mod guest_tmpfs;
 mod handover;
 pub(crate) mod identity;
 mod modules;

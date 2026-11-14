@@ -98,7 +98,8 @@ pub static AREAS: &[AreaInfo] = &[
                (HUM-357), 034-036 und 048 Wahl des Backends, Untergrenze der Isolation und \
                Zulassung (HUM-431, Bereich dafür bis 059 erweitert), 037-044 und 049 Podman \
                (Sprint 7), 045-047 die Kernel-Stufe (HUM-464), 050 Dienstverwalter des \
-               Nutzers (HUM-434)",
+               Nutzers (HUM-434), 051 beschreibbare Erweiterung unter der Kernel-Stufe \
+               (HUM-466)",
     },
     AreaInfo {
         area: "proxy",
@@ -1819,6 +1820,15 @@ registry! {
     DOCTOR_015 => "doctor", "Probe start of the kernel level failed", "#doctor_015",
         "`humanitl doctor --probe` started an empty session of the kernel level with the shim as init of the guest and `true` as the command, and either the micro VM did not start, it ended without the shim's report, or one of the three guarantees did not hold, from the guest's `CHECK` lines or from the host check of the VM monitor. A real session under this level would be refused the same way.",
         "The fix of the inner finding when it has one (a package, a setting of the kernel level); otherwise `OpenUrl` on this page.";
+    // HUM-466: writable places of the guest.
+    /// The sandbox profile names a writable extension (`mounts.extra_rw`),
+    /// and the kernel level has no way to make it writable in the guest: the
+    /// project at `/work` is the one folder of the host the guest may change.
+    /// Refused before anything starts, never mounted read-only in silence
+    /// (HUM-466).
+    SANDBOX_051 => "sandbox", "Writable extension not possible at the kernel level", "#sandbox_051",
+        "The sandbox profile lists folders under `mounts.extra_rw`, and the backend is the kernel level. Its guest gets the folders of the host through a read-only share of the root and one writable share for the project at `/work`; a writable extension would be another writable way to the host that nothing reviews. The start stops instead of mounting the folder read-only without saying so.",
+        "`ChangeSetting` on `sandbox.backend` = `auto` for a session that needs the folder writable; otherwise move the entry from `mounts.extra_rw` to `mounts.extra_ro` in the sandbox profile, or put the folder into the project.";
 }
 
 /// Sucht einen Code im Register.

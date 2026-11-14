@@ -174,13 +174,14 @@ print(data.decode("utf-8", "replace"))
 # complete (find exits 0 for every root). A walk that broke off or saw
 # nothing is red. The roots are the places a socket can be in the guest: the
 # writable ones and every mount point the plan leaves empty (/work, /dev with
-# /dev/shm, /tmp, /run, /home); the rest is the plan's read-only share of the
+# /dev/shm, /tmp, /var/tmp, /run, /home; /tmp, /var/tmp and the agent's home
+# are writable tmpfs since HUM-466); the rest is the plan's read-only share of the
 # host's files, in which the shim's single_socket and the host check allow
 # no socket. The walk does not cover that share: a walk over the whole host
 # /usr through virtiofs runs out of the file system daemon's descriptors
 # (measured 2026-11-14, ENFILE after some 520000), and the agent cannot read
 # every directory there either.
-ESC_SOCKET_ROOTS_KERNEL="/work /dev /tmp /run /home"
+ESC_SOCKET_ROOTS_KERNEL="/work /dev /tmp /var/tmp /run /home"
 esc_socket_walk_kernel() {
     esc_sw_plant=/dev/shm/humanitl-escape-control.sock
     python3 -c 'import os, stat, sys; os.mknod(sys.argv[1], stat.S_IFSOCK | 0o600)' "$esc_sw_plant" || {
@@ -238,6 +239,33 @@ probe no_host_env_leak sh -c 'env | grep -qE "^(XDG_RUNTIME_DIR|DBUS_SESSION_BUS
 probe         pid1_is_not_host_init sh -c 'grep -qxE "systemd|init" /proc/1/comm'
 expect_output hostname_sandbox '^sandbox$' sh -c 'cat /proc/sys/kernel/hostname'
 expect_output shm_is_tmpfs 'tmpfs' sh -c 'grep " /dev/shm " /proc/self/mountinfo'
+# HUM-466: the agent has the writable places it has under bwrap. In the guest
+# the root is a read-only share, and /run, /tmp, /var/tmp and the agent's home
+# are tmpfs mounts of the shim; without them every write there is EROFS.
+# /run/humanitl stays read-only on top of /run (proxy_socket_dir_is_not_host_kernel
+# checks what it holds).
+esc_writable_places() {
+    for esc_wp_dir in /run /tmp /var/tmp "$HOME"; do
+        esc_wp_file="$esc_wp_dir/.humanitl-escape-write"
+        echo 466 > "$esc_wp_file" && [ "$(cat "$esc_wp_file")" = 466 ] && rm -f "$esc_wp_file" || {
+            echo "cannot write into $esc_wp_dir"
+            return 1
+        }
+        grep -q " $esc_wp_dir [^ ]* [^-]*- tmpfs " /proc/self/mountinfo || {
+            echo "$esc_wp_dir is no tmpfs"
+            return 1
+        }
+    done
+    if mkdir /run/humanitl/.humanitl-escape-write 2> /dev/null; then
+        rmdir /run/humanitl/.humanitl-escape-write
+        echo "/run/humanitl is writable"
+        return 1
+    fi
+    echo "/run, /tmp, /var/tmp and $HOME are writable tmpfs, /run/humanitl is read-only"
+}
+if [ "$esc_level" = kernel ]; then
+    expect_ok writable_places_kernel esc_writable_places
+fi
 
 # --- the project directory, and the masks over it -----------------------------
 
