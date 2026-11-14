@@ -2001,7 +2001,9 @@ lauscht).
   er bekommt seinen Socket als Deskriptor. Der Emulator bindet `root/`, `work/` und `vsock/` nur
   lesbar, genug, um sich mit den drei vhost-user-Sockets zu verbinden; die Tür, den Übergabe-Socket
   und die Dateien des Gasts sieht er nie. Darüber hinaus hält er nur `/usr`, `/dev/kvm` und aus
-  `/boot` die eine Kernel-Datei; er hat keine Konsole, keinen Monitor, keine Anzeige.
+  `/boot` die eine Kernel-Datei; er hat keine Konsole, keinen Monitor, keine Anzeige. Eine
+  Wegwerf-Sitzung hat einen fünften Prozess, den Dateisystemdienst der Schicht, in einem
+  Gefängnis derselben Art mit eigenem `layer/` (unten).
 - **Die Wurzel des Gasts kommt aus demselben Plan wie unter bubblewrap.** Die Einhängungen des
   Profils, der Shim, CA-Zertifikat und Bundle, die Identitätsdateien und die Dateien des Adapters
   entstehen in einem Unterverzeichnis des Gefängnisses des Wurzeldienstes und werden nur lesbar
@@ -2057,11 +2059,37 @@ lauscht).
   Deskriptor (`--bind-fd`); ein Tausch des Pfades nach der Prüfung erreicht den Gast nicht
   (HUM-442 Q4). Die Masken des Profils unter `/work` liegen im Gefängnis über dieser Freigabe, der
   Gast sieht sie wie unter bubblewrap. Der Shim im Gast vergleicht den Inode von `/work` mit dem
-  Plan.
+  Plan, und die Host-Prüfung (`SANDBOX_047`) findet den geöffneten Ordner selbst beim Dienst, der
+  `/work` ausliefert: Einer seiner Deskriptoren nennt die Freigabe und trägt Gerät und Inode des
+  Plans (HUM-446). Diese Prüfung hält auch mit Root im Gast, der die Zeile des Shims fälschen
+  könnte. Gemessen: Mit einem Pfad statt `--bind-fd` wird ein nach dem Plan getauschter Ordner
+  mit `SANDBOX_042` abgelehnt.
 - **Nichts wird vererbt.** Die Unit ist kein Kind des Daemons. Ihr erster Prozess ist der Shim auf
   dem Host (`--fds-then-exec`): Er holt sich drei Deskriptoren über einen Übergabe-Socket der
   Sitzung, der eine Verbindung annimmt (den Socket des Wurzeldienstes, den Projektordner, das
-  Leseende der Lebensleine), und führt das feste Skript aus, das die vier Gefängnisse startet.
+  Leseende der Lebensleine; in einer Wegwerf-Sitzung als vierten die Schicht), und führt das
+  feste Skript aus, das die Gefängnisse startet.
+- **Die Wegwerf-Sandbox** (HUM-446, K-24, K-34). Mit `sandbox.mode = "disposable"` legt der Daemon
+  die obere Schicht wie unter bubblewrap im Arbeitsspeicher an, ein Verzeichnis mit `upper` und
+  `work`. Ein dritter Dateisystemdienst liefert es als geöffneten Deskriptor aus (`--bind-fd`),
+  beschreibbar, mit erweiterten Attributen (`--xattr`) und mit `CAP_DAC_OVERRIDE` nur im eigenen
+  Nutzer-Namensraum, denn das Overlay im Gast arbeitet als Root (sein Arbeitsverzeichnis hat die
+  Rechte 0000). Das Projekt ist doppelt nur lesbar: Sein Dienst läuft mit `--readonly`, und sein
+  Gefängnis bindet den geprüften Ordner nur lesbar (`--ro-bind-fd`), so dass auch ein Fehler in
+  `--readonly` nicht ins Projekt schreibt; die Unit nennt zudem nur die Schicht als beschreibbaren
+  Pfad, nicht das Projekt. Der Shim lädt das
+  Modul `overlay` vor der Modulsperre, hängt das Projekt nur lesbar ein, vergleicht dessen Inode
+  mit dem Plan, hängt die Schicht ein, baut das Overlay mit den Optionen des unprivilegierten
+  Overlays von bubblewrap (`userxattr`, `redirect_dir=nofollow`, kein `metacopy`, kein Index) und
+  setzt es allein auf `/work`; weder das Projekt noch die Schicht ist danach über einen Pfad
+  erreichbar. Root im Gast kann die Schicht trotzdem erneut einhängen und alles hineinschreiben,
+  also behandelt der Daemon jedes Byte darin als vom Angreifer geschrieben: Er liest die Schicht
+  erst, wenn jeder Prozess der Unit beendet ist, mit dem Scan der Wegwerf-Sandbox von bubblewrap
+  (kein Gerät, keine FIFO, kein Socket, kein setuid-Bit, kein fremdes Overlay-Attribut und kein
+  Verweis aus dem Projekt hinaus wird je übernommen), und der Scan lehnt jede Änderung auf, unter
+  oder über einer Maske des Profils ab, weil die Masken unter dieser Stufe in der unteren Schicht
+  liegen und eine an ihnen vorbei geschriebene Schicht keinen Hook und kein Geheimnis ins Projekt
+  tragen darf. Die Host-Prüfung findet die geöffnete Schicht bei ihrem Dienst wie das Projekt.
 - **Das Ende des Daemons beendet die Sitzung ohne den Gast.** Das Skript wartet auf die
   Lebensleine, deren Schreibende nur der Daemon hält; endet der Daemon, auch durch `SIGKILL`,
   endet das Skript, und der Dienstverwalter beendet jeden Prozess der Unit
@@ -2093,7 +2121,7 @@ lauscht).
 ### Was anders ist als unter bubblewrap
 
 - **Die vertrauenswürdige Basis wächst** um den Emulator, den Gastkernel, die beiden
-  Dateisystemdienste, das vsock-Gerät und den Dienstverwalter des Nutzers (K-30 bis K-33 in
+  Dateisystemdienste (drei in einer Wegwerf-Sitzung), das vsock-Gerät und den Dienstverwalter des Nutzers (K-30 bis K-33 in
   [`THREAT-MODEL.md`](THREAT-MODEL.md)).
 - **Die Wurzel des Gasts ist nur lesbar; beschreibbare Erweiterungen werden abgelehnt.** Das
   Projekt unter `/work`, die tmpfs des Profils und `/run` sind die einzigen beschreibbaren Orte im
@@ -2103,7 +2131,11 @@ lauscht).
   Binds, bleibt im Gast nur lesbar, wo das eigene Wurzel-tmpfs von bubblewrap beschreibbar ist;
   das ist strenger, keine Lücke: Was dort geschrieben wird, erreicht unter keinem der beiden
   Backends den Host und überdauert die Sitzung nicht.
-- **Noch keine Wegwerf-Sandbox.** `disposable` lehnt mit `SANDBOX_030` ab, bis HUM-446.
+- **Die Wegwerf-Sandbox braucht das Modul `overlay` des Gastkernels.** Fehlt es unter
+  `sandbox.qemu.modules`, lehnt `disposable` mit `SANDBOX_030` ab, und `auto` läuft mit
+  `SANDBOX_033` direkt. Im Gast darf der Agent in seiner eigenen Schicht über einen maskierten
+  Pfad des Projekts schreiben (die Maske liegt in der unteren Schicht, nicht obenauf wie unter
+  bubblewrap); der Scan übernimmt eine solche Änderung nie.
 - **Das Terminal reist als Strom** (K-29); ein Signal des Hosts erreicht keinen Prozess des Gasts,
   eine Unterbrechung ist ein Rahmen.
 

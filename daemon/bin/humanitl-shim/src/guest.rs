@@ -43,7 +43,9 @@
 //!    other tmpfs of the plan a tmpfs with what lies on top of it put back
 //!    (`tmpfs`, `tmpfs_keep`, HUM-466, `guest_tmpfs.rs`), and the host name
 //!    the plan's. Mount `/work` from the plan's tag
-//!    (`virtiofs`, `nosuid`, `nodev`).
+//!    (`virtiofs`, `nosuid`, `nodev`); in a disposable session (the plan's
+//!    `disposable`, HUM-446) an overlay of the read-only project and the
+//!    session's layer instead (`guest_overlay.rs`).
 //! 6. Set the shim's own variables and then the agent's environment, both
 //!    from the plan, with the rules of `--env-fd` (`envfd.rs`).
 //!
@@ -92,6 +94,7 @@ use std::time::Duration;
 use crate::json::Parser;
 use crate::linux::envfd;
 use crate::linux::guest_cache;
+use crate::linux::guest_overlay;
 use crate::linux::guest_tmpfs::{self, Tmpfs};
 use crate::linux::modules::{self, Running};
 use crate::linux::mounts::{self, Pins};
@@ -219,10 +222,12 @@ const PLAN_SHIM_VARS: [&str; 4] = [
 /// ```
 ///
 /// The escape suite's plans may add `"root_probe":["/bin/sh","-c","..."]`
-/// (HUM-445, see the module documentation).
+/// (HUM-445, see the module documentation). A disposable session adds
+/// `"disposable":{"layer_tag":"layer","lower_ino":"131"}` and names
+/// `overlay` under `modules` (HUM-446, `guest_overlay.rs`).
 ///
 /// Every key is required but `modules`, `shim`, `socket_walk`, `tmpfs`,
-/// `tmpfs_keep` and `root_probe`; the ports
+/// `tmpfs_keep`, `root_probe` and `disposable`; the ports
 /// are decimal strings. `socket_walk` names the roots of the socket walk of
 /// `single_socket`, absolute paths; absent means the whole file system, as
 /// under bwrap (HUM-444, `report::sockets_under`). `env` follows the rules of `--env-fd`, `pins` the shape of
@@ -266,10 +271,13 @@ pub struct Plan {
     pub gid: u32,
     /// The guest's host name, as bwrap's `--hostname` (HUM-445).
     pub hostname: String,
+    /// The overlay of a disposable session (HUM-446); `None` mounts the
+    /// project itself on `/work`.
+    pub disposable: Option<guest_overlay::Disposable>,
 }
 
 /// The keys a guest plan may have.
-const KEYS: [&str; 17] = [
+const KEYS: [&str; 18] = [
     "proxy_port",
     "door_port",
     "report_port",
@@ -287,6 +295,7 @@ const KEYS: [&str; 17] = [
     "uid",
     "gid",
     "hostname",
+    "disposable",
 ];
 
 /// A reason without spaces: it becomes evidence on a report line.
@@ -407,6 +416,7 @@ pub fn parse(text: &str) -> Result<Plan, String> {
     let uid = unprivileged_id("uid", &string("uid")?)?;
     let gid = unprivileged_id("gid", &string("gid")?)?;
     let hostname = checked_hostname(string("hostname")?)?;
+    let disposable = guest_overlay::parse(raw("disposable"), &modules)?;
     Ok(Plan {
         proxy_port,
         door_port,
@@ -424,6 +434,7 @@ pub fn parse(text: &str) -> Result<Plan, String> {
         uid,
         gid,
         hostname,
+        disposable,
     })
 }
 
@@ -587,15 +598,19 @@ pub fn boot(path: &Path) -> Option<Booted> {
         linger(&report);
         return None;
     }
-    if let Err(err) = mount(
-        &plan.work_tag,
-        WORK,
-        "virtiofs",
-        libc::MS_NOSUID | libc::MS_NODEV,
-    ) {
-        let evidence = format!("work-mount:{}:{err}", plan.work_tag);
+    if let Err(failure) = mount_work(&plan) {
+        // A step of the overlay that fails is a table that differs from the
+        // plan (`SANDBOX_049` at the daemon); a lower layer that is not the
+        // checked folder, or a project that does not mount, fails the pin as
+        // well (`SANDBOX_042`).
+        let (evidence, pin) = match failure {
+            guest_overlay::Failure::Pin(why) => (why, true),
+            guest_overlay::Failure::Mount(why) => (why, false),
+        };
         report.check(Check::MountsMatch, false, &evidence);
-        report.check(Check::MountsPinned, false, &evidence);
+        if pin {
+            report.check(Check::MountsPinned, false, &evidence);
+        }
         say(&format!("humanitl-shim: guest: {evidence}\n"));
         linger(&report);
         return None;
@@ -613,6 +628,26 @@ pub fn boot(path: &Path) -> Option<Booted> {
         control,
         cache,
     })
+}
+
+/// Mounts `/work`: the project from the plan's tag, or in a disposable
+/// session the overlay of `guest_overlay.rs` (HUM-446).
+///
+/// # Errors
+///
+/// The evidence, without spaces, and which check it fails. A project that
+/// does not mount fails both checks, as before HUM-446.
+fn mount_work(plan: &Plan) -> Result<(), guest_overlay::Failure> {
+    match &plan.disposable {
+        None => mount(
+            &plan.work_tag,
+            WORK,
+            "virtiofs",
+            libc::MS_NOSUID | libc::MS_NODEV,
+        )
+        .map_err(|err| guest_overlay::Failure::Pin(format!("work-mount:{}:{err}", plan.work_tag))),
+        Some(disposable) => guest_overlay::mount(WORK, &plan.work_tag, disposable),
+    }
 }
 
 /// Listens on the plan's report port and then tells the host so on the door
@@ -1021,6 +1056,30 @@ mod tests {
         "uid": "1000", "gid": "1000", "hostname": "sandbox",
         "command": ["/bin/bash", "-c", "echo hi"]
     }"#;
+
+    /// HUM-446: A disposable plan names the layer and the checked inode;
+    /// without `overlay` among its modules it is refused, and a direct plan
+    /// has none.
+    #[test]
+    fn a_disposable_plan_reads_and_needs_the_overlay_module() {
+        assert_eq!(parse(PLAN).unwrap().disposable, None);
+        let disposable = PLAN.replace(
+            r#""work_tag": "work","#,
+            r#""work_tag": "work", "disposable": {"layer_tag": "layer", "lower_ino": "131"},"#,
+        );
+        assert_eq!(
+            parse(&disposable).unwrap().disposable,
+            Some(guest_overlay::Disposable {
+                layer_tag: "layer".to_owned(),
+                lower_ino: 131,
+            })
+        );
+        let without = disposable.replace(r#""modules": ["overlay"],"#, "");
+        assert_eq!(
+            parse(&without).unwrap_err(),
+            "disposable:modules-without-overlay"
+        );
+    }
 
     #[test]
     fn the_documented_plan_reads() {

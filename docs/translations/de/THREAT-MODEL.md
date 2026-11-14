@@ -148,7 +148,7 @@ Fünf weitere Kanäle vervollständigen das Modell:
 | K-15 | das Zeitfenster zwischen `exec` und `SIGKILL` | b | hoch | Bericht sofort gelesen, `SIGKILL` ohne Schonfrist | open | - |
 | K-16 | Ausfall der Aufzeichnung | a, b, c | mittel | Ausfall an jeden Client einmal je Ursache gemeldet, Karten als „Wird nicht aufgezeichnet" markiert, erste Freigabe pausiert | declared | Health-Tests in `daemon/crates/recorder`, Golden-Test `states_recorder_failure` |
 | K-18 | die Tür für weitere Shells (`humanitl sandbox exec`) | b | hoch | unbenanntes Socket-Paar, das nur der Daemon und PID 1 halten; der Shim forkt die Shell von innen mit dem Filter des Agenten obendrauf, belegt durch ein verweigertes `AF_UNIX` und ein verweigertes `AF_VSOCK`; höchstens vier; stirbt mit der Sandbox; im Strom-Modus (K-29) ist die Anfrage ein Rahmen auf dem Steuerkanal, und der Shim öffnet das Pseudo-Terminal der Shell selbst, unter denselben Grenzen | mitigated | `daemon/crates/ipc/tests/terminal.rs` (HUM-299), `daemon/crates/ipc/tests/terminal_stream.rs` (HUM-443) |
-| K-24 | die Wegwerf-Sandbox: die obere Schicht und der Weg zurück ins Projekt (`humanitl sandbox apply`) | b | hoch | Projektordner nur lesbar als untere Schicht eines Overlays, obere Schicht im RAM unter dem Laufzeitverzeichnis des Daemons mit Größengrenze, `mounts.extra_rw` nur lesbar; übernommen nur auf Wahl eines Menschen, geprüft vor dem ersten Schreiben, nie durch einen oder als einen Symlink aus dem Projekt hinaus, kein Gerät, kein FIFO, kein Socket, kein setuid-Bit, kein Überschreiben einer Datei, die der Mensch seit dem Start geändert hat, außer diese Änderung ist einzeln bestätigt (`ApplyChanges.overwrite_ids` aus der App, HUM-351) oder jede ausgewählte Änderung ist es (`--overwrite`); ein Backend mit Container-Engine lehnt `disposable` ab (`SANDBOX_030`), weil sich seine untere Schicht nicht an den geprüften Ordner binden lässt, und `auto` läuft dort direkt (HUM-438) | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350); `daemon/crates/sandbox/src/podman/tests.rs`, `daemon/crates/sandbox/tests/escape_worktree.rs` (HUM-438) |
+| K-24 | die Wegwerf-Sandbox: die obere Schicht und der Weg zurück ins Projekt (`humanitl sandbox apply`) | b | hoch | Projektordner nur lesbar als untere Schicht eines Overlays, obere Schicht im RAM unter dem Laufzeitverzeichnis des Daemons mit Größengrenze, `mounts.extra_rw` nur lesbar; übernommen nur auf Wahl eines Menschen, geprüft vor dem ersten Schreiben, nie durch einen oder als einen Symlink aus dem Projekt hinaus, kein Gerät, kein FIFO, kein Socket, kein setuid-Bit, nichts auf, unter oder über einer Maske des Profils (HUM-446), kein Überschreiben einer Datei, die der Mensch seit dem Start geändert hat, außer diese Änderung ist einzeln bestätigt (`ApplyChanges.overwrite_ids` aus der App, HUM-351) oder jede ausgewählte Änderung ist es (`--overwrite`); ein Backend mit Container-Engine lehnt `disposable` ab (`SANDBOX_030`), weil sich seine untere Schicht nicht an den geprüften Ordner binden lässt, und `auto` läuft dort direkt (HUM-438); die Kernel-Stufe baut das Overlay im Gast über dem nur lesbaren Projekt und einer Schicht, die sie als Deskriptor bekommt, und der Daemon liest diese Schicht als vom Angreifer geschrieben (K-34, HUM-446) | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350); `daemon/crates/sandbox/src/podman/tests.rs`, `daemon/crates/sandbox/tests/escape_worktree.rs` (HUM-438) |
 | K-27 | die Container-Engine unter Podman (Podman, `conmon`, `crun`, der Container-Speicher des Nutzers, `containers.conf`) | b, d | hoch | in der gemeinsamen Stufe (`crun`) erst zugelassen, als die Escape-Suite gegen sie auf `main` grün war (HUM-448), die Kernel-Stufe (Backend `qemu`, ADR-0021) bis HUM-449 mit `SANDBOX_048` abgelehnt, `auto` nie Podman; jede Konfigurationsquelle, die der Daemon nicht schreibt, abgeschnitten; feste Flags ohne Schlüssel; die Umgebung nur über den versiegelten memfd; beendet über die Engine und die Lebensleine; Reste beim Start des Daemons entfernt (`SANDBOX_041`) | mitigated | ESC-1, ESC-2, ESC-5 (`escape-tests-podman`, HUM-435); `daemon/crates/sandbox/src/podman/` (HUM-433) |
 | K-28 | das Abbild als Wurzel der Sandbox unter Podman und das Ziehen (Herkunft, Digest, das Netz beim Ziehen) | b, d | hoch | mit Digest festgelegt, vor jedem Start geprüft, von keinem Start gezogen (`SANDBOX_043`); gezogen nur auf Wunsch, von der Engine direkt und nicht durch den Proxy, bei der Registry, die der Name nennt, und vorher gesagt; Zugangsdaten zur Registry nur aus der eigenen Datei des Adapters, der Engine als private Kopie gereicht, ein Credential-Helfer darin oder in einer Ergänzung zur `registries.conf` abgelehnt (HUM-456); Projekt, Tür, CA, Shim und Dateien der Sitzung vom Host, nie aus dem Abbild; Nutzer, Einstiegspunkt, Volumes und Gesundheitsprüfung des Abbilds aufgehoben, ein Abbild mit `HUMANITL_*` abgelehnt | open | ESC-2 `ca_is_the_hosts` (`HUMANITL_ESCAPE_IMAGE`); `daemon/crates/sandbox/src/podman/image.rs` (HUM-439) |
 | K-29 | der Steuerkanal der Terminals (der Strom-Modus: die Kernel-Stufe immer, bwrap, wenn ein Aufrufer ihn verlangt) | b | hoch | ein Strom-Socket, den nur der Daemon und PID 1 halten, geöffnet vor dem Filter des Agenten, der `AF_VSOCK` und `AF_UNIX` verweigert; im Gast öffnet ihn der Host als zweite Verbindung am einen lauschenden Port des Shims, der Gast öffnet keine; nur Terminal-Bytes und Steuerung, nie ein Byte an den Proxy oder von ihm; Rahmen von höchstens 16 KiB, übergroße Rahmen, unbekannte Arten und unbekannte Kennungen verwerfen beide Seiten, ohne den Strom zu beenden; sein Ende ist eine Lebensleine | mitigated | ESC-1 `socket_af_vsock` in `daemon/crates/ipc/tests/terminal_stream.rs`, Fuzz-Target `control_stream_reader` mit `daemon/crates/sandbox/tests/regressions/`, `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (HUM-443) |
@@ -156,6 +156,7 @@ Fünf weitere Kanäle vervollständigen das Modell:
 | K-31 | die vsock-Tür der Kernel-Stufe | b | hoch | ein vsock-Geräteprozess je Sitzung mit einem Gerät und eigener Gruppe, nie `--forward-cid`; auf dem Host genau ein Lauscher `<uds>_5000`, weitergereicht an den Proxy-Socket der Sitzung; jeder andere Port findet keinen Lauscher; die Host-Prüfung lehnt jeden weiteren Socket im Laufzeitverzeichnis und ein zweites Gerät ab | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`an_extra_listener_beside_the_door_turns_the_host_check_red`, HUM-444) |
 | K-32 | der Gastkernel (Root im Gast) | b | hoch | die Garantien werden auf dem Host getragen und gelten deshalb mit Root im Gast; das automatische Laden von Modulen aus, dann die vsock-Module des Plans geladen und das Laden gesperrt, bevor der Agent startet; die Wurzel des Gasts eine nur lesbare Freigabe ohne Laufzeitverzeichnis und ohne das `/proc` des Gefängnisses; beschreibbar nur `/work`, die tmpfs des Profils und `/run`, die der Shim im Gast als tmpfs einhängt, `/run/humanitl` nur lesbar darüber (HUM-466), `mounts.extra_rw` abgelehnt (`SANDBOX_051`) | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (HUM-465, HUM-444); Escape-Suite mit Root im Gast (HUM-445) |
 | K-33 | die vier Hilfsprozesse einer Sitzung (zwei Dateisystemdienste, das vsock-Gerät, der Emulator) und der erste Prozess der Unit | b, d | hoch | jeder in einem eigenen bubblewrap-Gefängnis mit allen Namensräumen getrennt und ohne Fähigkeit, nur `/usr` des Hosts, was er ausliefert, und sein eigenes Socket-Verzeichnis; der Wurzeldienst nur lesbar mit dem Socket als Deskriptor, der Dienst für `/work` auf dem geprüften Deskriptor mit den Masken des Profils; vom Daemon nichts geerbt außer drei Deskriptoren über eine Übergabe mit einer Verbindung; die Unit endet mit dem Daemon über die Lebensleine, auch bei `SIGKILL`, und mit der Unit des Daemons über `BindsTo`; jeder Dateisystemdienst höchstens 65 536 Deskriptoren (`LimitNOFILE` der Unit), so dass ein Gast Speicher des Hosts nicht unbegrenzt binden kann (HUM-469); der Dateicache des Gasts an (`--cache auto`) und von PID 1 im Gast geleert, sobald mehr als 32 768 Einträge unbenutzt sind (alle 100 ms geprüft), so dass ein Walk über die Wurzel keinen Dienst mehr erschöpft; was der Gast festhält, auch Verzeichnisse, die gecachte Kinder halten, zählt weiter gegen die Grenze (HUM-476) | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`a_killed_daemon_ends_the_unit_within_five_seconds`, HUM-444) |
+| K-34 | die geteilten Dateisysteme der Kernel-Stufe (virtiofs): die Wurzel des Gasts, der Projektordner unter `/work` und die Schicht einer Wegwerf-Sitzung | b | hoch | jeder geteilte Ordner wird vom Daemon geöffnet und geprüft und erreicht seinen Dateisystemdienst nur als dieser Deskriptor (`--bind-fd`), nie als Pfad; der Shim vergleicht den Inode von `/work` oder der unteren Schicht des Overlays mit dem Plan; die Host-Prüfung findet den geöffneten Ordner selbst bei dem einen Dienst, der ihn teilt, als Deskriptor, der die Freigabe nennt und Gerät und Inode des Plans trägt (`SANDBOX_047`), was Root im Gast nicht fälschen kann; in einer Wegwerf-Sitzung ist das Projekt doppelt nur lesbar (sein Dienst mit `--readonly`, sein Gefängnis bindet den geprüften Ordner mit `--ro-bind-fd`), die Schicht kommt über einen dritten Dienst, und der Daemon liest sie erst, wenn jeder Prozess der Unit beendet ist, mit dem Scan der Wegwerf-Sandbox von bubblewrap und zusätzlich der Ablehnung jeder Änderung auf, unter oder über einer Maske des Profils | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`a_folder_swapped_after_the_plan_stays_the_checked_folder`, `a_disposable_session_never_writes_to_the_project`), `daemon/crates/sandbox/src/qemu/host_check.rs`, `daemon/crates/sandbox/tests/escape_worktree.rs` (ESC-5 gegen `qemu`, HUM-446) |
 
 K-13 ist der offensichtliche Kanal und der einzige, der rundweg als geschlossen gilt. K-14 steht
 hier, damit Angreifer (d) in einer Zeile vorkommt. K-15 kam mit HUM-041: Die Prüfung, die die
@@ -773,6 +774,11 @@ Zeilen des Gasts fälschen; dann hält die Host-Prüfung.
 
 ### K-33 Die Hilfsprozesse einer Sitzung
 
+Eine Wegwerf-Sitzung hat einen Hilfsprozess mehr, den Dateisystemdienst der Schicht (K-34), in
+einem Gefängnis derselben Art; nur er bekommt `CAP_DAC_OVERRIDE`, in seinem eigenen
+Nutzer-Namensraum, über die Schicht und ein nur lesbares `/usr`, weil das Overlay im Gast als Root
+arbeitet.
+
 Eine Sitzung der Kernel-Stufe ist eine vorübergehende Unit des Nutzers mit fünf eigenen
 Prozessen: dem ersten Prozess der Unit (der Shim mit `--fds-then-exec`, dann ein festes
 `sh`-Skript), dem Dateisystemdienst der Wurzel des Gasts, dem Dateisystemdienst für `/work`, dem
@@ -808,6 +814,43 @@ Daemon kann solche Units starten (wie unter Podman, siehe Vertrauensgrenzen); ei
 Dateisystemdienst erreicht, was er ausliefert, die nur lesbare Wurzel des Gasts oder den
 Projektordner; Root im Gast kann die Deskriptoren eines Dienstes für die eigene Sitzung
 erschöpfen, nie über die Grenze hinaus.
+
+### K-34 Die geteilten Dateisysteme der Kernel-Stufe
+
+Der Gast erreicht Dateien des Hosts nur über virtiofs: die nur lesbare Wurzel des Gasts, den
+Projektordner unter `/work` und in einer Wegwerf-Sitzung die Schicht der Sitzung. Jede Freigabe ist
+ein Ordner, den der Daemon vor dem Start geöffnet und geprüft hat; sie erreicht ihren
+Dateisystemdienst als dieser Deskriptor (`--bind-fd` im Gefängnis des Dienstes), nie als Pfad, so
+dass ein nach der Prüfung getauschter Ordner den Gast nicht erreicht (HUM-442 Q4). Zwei Prüfungen
+folgen, eine auf jeder Seite. Der Shim vergleicht den Inode von `/work` (virtiofs behält die Inodes
+des Hosts, nicht seine Gerätenummern, Q5) mit dem Plan, in einer Wegwerf-Sitzung den Inode der
+unteren Schicht des Overlays; eine Abweichung ist `SANDBOX_042`. Root im Gast könnte diese Zeile
+fälschen, also sieht die Host-Prüfung zusätzlich beim Dienst nach, der `/work` teilt, und bei dem,
+der die Schicht teilt: genau einer je Freigabe, mit einem Deskriptor, der seine Freigabe nennt und
+Gerät und Inode des geöffneten Ordners trägt; ein Dienst, der den geprüften Ordner nur irgendwo
+unter seiner Freigabe hält, besteht nicht (`SANDBOX_047`). Gemessen (HUM-446): Mit einem Pfad statt
+`--bind-fd` wird ein nach dem Plan getauschter Ordner mit `SANDBOX_042` abgelehnt, und ein Plan,
+der einen anderen Inode erwartet, färbt die Host-Prüfung rot.
+
+*Eine Wegwerf-Sitzung.* Der Dienst des Projekts läuft mit `--readonly`, sein Gefängnis bindet den
+geprüften Ordner nur lesbar (`--ro-bind-fd`), und die Unit bekommt nur die Schicht als
+beschreibbaren Pfad, so dass weder der Gast noch ein
+übernommener Dienst ins Projekt schreibt. Der Shim lädt `overlay` vor der Modulsperre und baut
+`/work` als Overlay aus Projekt und Schicht mit den Optionen des unprivilegierten Overlays von
+bubblewrap. Root im Gast kann die Schicht erneut einhängen und alles hineinschreiben: Whiteouts,
+erweiterte Attribute, Rechte, harte und symbolische Verweise; Gerätedateien außer dem Whiteout
+`0:0` legt der Dienst der Schicht ohne `CAP_MKNOD` nicht an. Der Daemon liest die Schicht deshalb
+erst, wenn jeder Prozess der Unit beendet ist (`ensure_ended` fragt den Dienstverwalter), mit dem
+Scan der Wegwerf-Sandbox von bubblewrap (K-24), der nie ein Gerät, eine FIFO, einen Socket, ein
+setuid-Bit, ein fremdes Overlay-Attribut oder einen Verweis aus dem Projekt hinaus übernimmt. Unter
+bubblewrap liegen die Masken des Profils über dem Overlay; hier liegen sie in der unteren Schicht,
+und der Agent darf in seiner eigenen Schicht über einen maskierten Pfad schreiben. Der Scan lehnt
+jede Änderung auf, unter oder über einer Maske ab, so dass weder ein Hook noch ein Geheimnis über
+die Schicht ins Projekt kommt; was eine Maske verbirgt, sieht der Agent nie, auch Root im Gast
+nicht, weil die Maske im Gefängnis des Dienstes des Projekts liegt. *Restrisiko:* Ein Fehler in
+einem Dateisystemdienst erreicht, was er ausliefert, die Schicht samt den Rechten von
+`CAP_DAC_OVERRIDE` in seinem eigenen Namensraum; ein Fehler im Scan zeigte dem Menschen vom
+Angreifer geschriebene Bytes, der jede Übernahme weiter selbst entscheidet.
 
 ## Annahmen
 
@@ -907,6 +950,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-14 | K-32: die tmpfs des Profils (`/tmp`, `/var/tmp`, das Heimatverzeichnis des Agenten) und `/run` sind im Gast beschreibbare tmpfs, `/run/humanitl` nur lesbar darüber, eingehängt vom Shim, in der erwarteten Mounttabelle und in der Socket-Suche; `mounts.extra_rw` auf der Kernel-Stufe abgelehnt (`SANDBOX_051`) statt nur lesbar eingehängt | HUM-466 |
 | 2026-11-14 | K-33: jeder Dateisystemdienst der Kernel-Stufe hält höchstens 65 536 Deskriptoren (`LimitNOFILE` der Unit) und läuft mit `--cache never --allow-mmap` (Gastkernel 6.6 oder neuer, darunter `SANDBOX_045`); schließt den Befund aus HUM-445, in dem ein Walk über die Wurzel des Gasts den Wurzeldienst auf rund 520 000 Deskriptoren trieb | HUM-469 |
 | 2026-11-14 | K-33: die Dateisystemdienste laufen mit `--cache auto`; PID 1 im Gast verwirft unbenutzte Dentries und Inodes über 32 768, alle 100 ms geprüft (`vm.drop_caches=2`), so dass ein Walk über die ganze Wurzel nicht mehr mit `ENFILE` endet; `LimitNOFILE=65536` bleibt die Garantie | HUM-476 |
+| 2026-11-14 | K-34 neu: die geteilten Dateisysteme der Kernel-Stufe; die Host-Prüfung findet den geöffneten Projektordner (und die Schicht) bei dem Dienst, der ihn teilt; die Wegwerf-Sandbox der Kernel-Stufe, ein Overlay im Gast über dem nur lesbaren Projekt und einer Schicht aus einem dritten Dienst, gelesen erst nach dem Ende der Unit, jede Änderung auf, unter oder über einer Maske abgelehnt; K-24 und K-33 ziehen nach | HUM-446 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

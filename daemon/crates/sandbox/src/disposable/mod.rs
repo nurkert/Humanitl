@@ -82,7 +82,7 @@ pub use crate::disposable::layer::{
     probe_layer_dir, process_lives, require_tmpfs, start_ticks, sweep,
 };
 pub(crate) use crate::disposable::layer::{SEALED, chmod_nofollow, open_dir_forcing};
-pub use crate::disposable::scan::{ChangeSet, LayerChange, scan, scan_clone};
+pub use crate::disposable::scan::{ChangeSet, LayerChange, scan, scan_clone, scan_masked};
 pub use crate::disposable::text_diff::{DIFF_MAX_BYTES, DIFF_MAX_OUTPUT, unified};
 
 /// Ab dieser `bwrap`-Fassung gibt es `--overlay-src` und `--overlay`

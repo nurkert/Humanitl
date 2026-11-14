@@ -497,10 +497,10 @@ fn hooks_write_stays_in_sandbox() {
 /// ist der Fall rot: Dann braucht ESC-5 die echte Messung, nicht diese
 /// Verweigerung.
 ///
-/// Unter der Kernel-Stufe (HUM-445) ist der Fall dieselbe Prüfung der
-/// Verweigerung (`SANDBOX_030`), bis HUM-446 die Wegwerf-Schicht über
-/// virtiofs liefert; HUM-446 muss ihn dann in einen echten Wegwerf-Lauf
-/// gegen die Kernel-Stufe verwandeln.
+/// Unter der Kernel-Stufe ist der Fall seit HUM-446 ein echter Wegwerf-Lauf
+/// ([`kernel_disposable_run`]): Die Schicht kommt über einen eigenen
+/// Dateidienst in den Gast, der Shim hängt `/work` als Overlay ein, und das
+/// Projekt bleibt Byte für Byte, wie es war.
 #[test]
 fn a_disposable_sandbox_never_writes_to_the_project() {
     if requested_backend().is_none() {
@@ -515,6 +515,10 @@ fn a_disposable_sandbox_never_writes_to_the_project() {
     let Some(backend) = fx.backend() else {
         return;
     };
+    if backend.isolation() == IsolationLevel::Kernel {
+        kernel_disposable_run(&fx, &backend);
+        return;
+    }
     let layer = fx.work.parent().expect("parent").join("layer");
     let session = fx.context(&["sh", "-c", "echo pwned > /work/keep.txt"]);
     let options = LaunchOptions {
@@ -548,4 +552,183 @@ fn a_disposable_sandbox_never_writes_to_the_project() {
         "content\n",
         "the project changed"
     );
+}
+
+/// Der Agent des Wegwerf-Laufs unter der Kernel-Stufe: ändert, legt an,
+/// löscht, ersetzt ein Verzeichnis, legt einen Verweis nach draußen und ein
+/// setuid-Bit an und versucht, die Maske über `.env` zu überschreiben.
+const DISPOSABLE_AGENT: &str = "echo after > /work/keep.txt; echo new > /work/new.txt; \
+     rm /work/gone.txt; rm -r /work/dir; mkdir -p /work/dir; echo again > /work/dir/x; \
+     ln -s /etc/passwd /work/escape; chmod 4755 /work/new.txt 2>/dev/null; \
+     echo leaked > /work/.env 2>/dev/null; echo \"view:$(cat /work/keep.txt)\"";
+
+/// ESC-5 gegen die Kernel-Stufe (HUM-446): Die Wegwerf-Sitzung startet mit
+/// grüner Prüfung, der Agent sieht seine eigene Sicht, und das Projekt
+/// bleibt, wie es war. Erst wenn kein Prozess der Unit mehr lebt, liest der
+/// Scan die Schicht: Er zeigt jede Änderung, lehnt den Verweis nach draußen
+/// und die Maske ab, und die Übernahme schreibt den Rest ohne setuid-Bit.
+fn kernel_disposable_run(fx: &Fixture, backend: &Backend) {
+    use std::os::fd::AsFd as _;
+
+    fs::write(fx.work.join("gone.txt"), b"gone\n").expect("write");
+    fs::create_dir_all(fx.work.join("dir/sub")).expect("dir");
+    fs::write(fx.work.join("dir/sub/f"), b"f\n").expect("write");
+    fs::write(fx.work.join(".env"), b"SECRET=yes\n").expect("write");
+    let before = humanitl_sandbox::disposable::baseline(&fx.work).expect("baseline");
+    let profile = profile();
+    let project = fs::canonicalize(&fx.work).expect("project");
+    let layer = humanitl_sandbox::Layer::create_with(
+        &fx.paths.runtime_dir().path,
+        humanitl_sandbox::TmpfsCheck::Skip,
+    )
+    .expect("layer")
+    .with_masks(humanitl_sandbox::clone_masks(&profile, &project));
+    let (handle, output) = launch_disposable(fx, backend, &profile, &layer);
+    assert!(
+        output.contains("view:after"),
+        "the agent sees its own view: {output}"
+    );
+
+    let now = humanitl_sandbox::disposable::baseline(&fx.work).expect("after");
+    assert_eq!(now.entries(), before.entries(), "the project is untouched");
+    wait_ended(&handle);
+    let upper = humanitl_sandbox::worktree::open_root(&layer.upper()).expect("upper");
+    let lower = humanitl_sandbox::worktree::open_root(&fx.work).expect("lower");
+    let set = humanitl_sandbox::disposable::scan_masked(
+        upper.as_fd(),
+        lower.as_fd(),
+        &before,
+        layer.masks(),
+    );
+    let listed: Vec<(String, humanitl_sandbox::ChangeKind, bool)> = set
+        .changes
+        .iter()
+        .map(|change| {
+            (
+                change.rel.to_string_lossy().into_owned(),
+                change.kind,
+                change.refused.is_some(),
+            )
+        })
+        .collect();
+    for expected in [
+        ("keep.txt", humanitl_sandbox::ChangeKind::Modified, false),
+        ("new.txt", humanitl_sandbox::ChangeKind::Added, false),
+        ("gone.txt", humanitl_sandbox::ChangeKind::Removed, false),
+        ("dir/sub", humanitl_sandbox::ChangeKind::Removed, false),
+        ("dir/x", humanitl_sandbox::ChangeKind::Added, false),
+        ("escape", humanitl_sandbox::ChangeKind::SymlinkAdded, true),
+    ] {
+        assert!(
+            listed.contains(&(expected.0.to_owned(), expected.1, expected.2)),
+            "{expected:?} is missing from {listed:?}"
+        );
+    }
+    let ids: Vec<String> = set
+        .changes
+        .iter()
+        .filter(|change| change.refused.is_none())
+        .map(humanitl_sandbox::LayerChange::path_hash)
+        .collect();
+    assert!(
+        set.changes
+            .iter()
+            .all(|change| change.rel != Path::new(".env") || change.refused.is_some()),
+        "the masked .env is never applied: {listed:?}"
+    );
+    let chosen = humanitl_sandbox::disposable::select(&set, &ids).expect("select");
+    let report = humanitl_sandbox::disposable::apply(
+        upper.as_fd(),
+        lower.as_fd(),
+        &before,
+        &chosen,
+        &humanitl_sandbox::ApplyOptions::default(),
+    )
+    .expect("apply");
+    assert!(report.failed.is_none(), "{:?}", report.failed);
+    assert_eq!(
+        fs::read_to_string(fx.work.join("keep.txt")).expect("keep"),
+        "after\n"
+    );
+    assert!(!fx.work.join("gone.txt").exists());
+    assert!(fs::symlink_metadata(fx.work.join("escape")).is_err());
+    assert_eq!(
+        fs::read_to_string(fx.work.join(".env")).expect(".env"),
+        "SECRET=yes\n"
+    );
+    let mode = fs::metadata(fx.work.join("new.txt"))
+        .expect("new")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o7000, 0, "no setuid bit reaches the host");
+    let dir = layer.dir().to_path_buf();
+    layer.discard().map_err(|(_, err)| err).expect("discard");
+    assert!(!dir.exists(), "the layer is gone");
+}
+
+/// Plant und startet die Wegwerf-Sitzung der Kernel-Stufe mit Strom und
+/// Pseudoterminal, lässt den Agenten durch die Prüfung zu und wartet auf
+/// sein Ende; gibt das Handle und die Ausgabe zurück.
+fn launch_disposable(
+    fx: &Fixture,
+    backend: &Backend,
+    profile: &SandboxProfile,
+    layer: &humanitl_sandbox::Layer,
+) -> (SandboxHandle, String) {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let meta = fs::metadata(&fx.work).expect("project");
+    let session = fx.context(&["sh", "-c", DISPOSABLE_AGENT]);
+    let (sink, stream) = std::sync::mpsc::channel();
+    let options = LaunchOptions {
+        stdio: StdioMode::Pty {
+            cols: 120,
+            rows: 40,
+        },
+        terminal: TerminalTransport::Stream,
+        output_sink: Some(sink),
+        disposable: Some(humanitl_sandbox::DisposableLayer::Overlay(layer.dirs())),
+        expected_work_inode: Some((meta.dev(), meta.ino())),
+        ..LaunchOptions::default()
+    };
+    let request = PlanRequest::new(profile, &session, &options);
+    let plan = backend
+        .plan(&request)
+        .unwrap_or_else(|err| panic!("the plan fails: {}: {}", err.code, err.why));
+    drop(options);
+    let handle: SandboxHandle = backend
+        .launch(&plan)
+        .unwrap_or_else(|err| panic!("{} does not start: {}", backend.name(), err.why));
+    let failed: Vec<String> = backend
+        .isolation_check(&handle)
+        .into_iter()
+        .filter(|result| !result.passed)
+        .map(|result| format!("{}: {}", result.check.as_str(), result.evidence))
+        .collect();
+    assert!(failed.is_empty(), "the isolation check failed: {failed:?}");
+    handle
+        .wait_timeout(WAIT)
+        .expect("the sandbox ends within the timeout")
+        .unwrap_or_else(|err| panic!("the sandbox failed: {}", err.why));
+    let mut seen = Vec::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+        match stream.recv_timeout(left) {
+            Ok(chunk) => seen.extend_from_slice(&chunk.bytes),
+            Err(_) => break,
+        }
+    }
+    (handle, String::from_utf8_lossy(&seen).into_owned())
+}
+
+/// Wartet höchstens zehn Sekunden, bis kein Prozess der Sitzung mehr lebt,
+/// und verlangt es dann: Erst danach wird die Schicht gelesen.
+fn wait_ended(handle: &SandboxHandle) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while humanitl_sandbox::disposable::ensure_ended(handle, None).is_err()
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    humanitl_sandbox::disposable::ensure_ended(handle, None).expect("every process has ended");
 }

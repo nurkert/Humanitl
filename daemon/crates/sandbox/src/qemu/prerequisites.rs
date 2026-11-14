@@ -205,7 +205,7 @@ const BUBBLEWRAP: Program = Program {
     package: Package::Bubblewrap,
     questions: &[Question {
         args: &["--help"],
-        words: &["--bind-fd"],
+        words: &["--bind-fd", "--ro-bind-fd"],
     }],
 };
 
@@ -290,7 +290,7 @@ pub(crate) enum Prerequisite {
     FileDaemon,
     /// Das vsock-Gerät.
     VsockDevice,
-    /// bubblewrap mit `--bind-fd`.
+    /// bubblewrap mit `--bind-fd` und `--ro-bind-fd`.
     Bubblewrap,
     /// Das Kernel-Abbild.
     Kernel,
@@ -827,7 +827,10 @@ mod tests {
                 "vhost-device-vsock",
                 "printf '  --uds-path <UDS_PATH>\\n  --groups <GROUPS>\\n'\n",
             );
-            fixture.program("bwrap", "printf '    --bind-fd FD DEST\\n'\n");
+            fixture.program(
+                "bwrap",
+                "printf '    --bind-fd FD DEST\\n    --ro-bind-fd FD DEST\\n'\n",
+            );
             fixture
         }
 

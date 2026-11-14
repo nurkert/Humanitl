@@ -18,6 +18,9 @@
 //!    Laufzeitverzeichnis gar nicht im Gefängnis steht.
 //! 2. virtiofsd für `/work`: der geprüfte Projektordner als Deskriptor 4
 //!    (`--bind-fd`), darüber die Masken des Profils, die es im Projekt gibt.
+//!    In einer Wegwerf-Sitzung (HUM-446) nur lesbar (`--readonly`), und ein
+//!    dritter virtiofsd ([`layer_line`]) liefert die obere Schicht der
+//!    Sitzung als Deskriptor 6 aus; das Overlay daraus baut der Shim im Gast.
 //! 3. vhost-device-vsock, ein eigener Prozess je Sitzung mit eigener Gruppe
 //!    (Q9), `--uds-path` im Laufzeitverzeichnis, nie `--forward-cid`.
 //! 4. QEMU `-M microvm` ohne Konsole, Monitor, Anzeige und Netz, `-sandbox`
@@ -41,6 +44,10 @@ pub(crate) const GUEST_ROOT: &str = "/guest";
 /// Wo der Projektordner im Gefängnis des zweiten virtiofsd liegt.
 pub(crate) const WORK_SHARE: &str = "/share";
 
+/// Wo das Verzeichnis der Wegwerf-Schicht (mit `upper` und `work`) im
+/// Gefängnis des dritten virtiofsd liegt (HUM-446).
+pub(crate) const LAYER_SHARE: &str = "/layer";
+
 /// Die Deskriptoren, die der erste Prozess der Unit über die Übergabe
 /// bekommt (`humanitl-shim --fds-then-exec`), in dieser Reihenfolge ab 3.
 pub(crate) const ROOT_SOCKET_FD: i32 = 3;
@@ -48,6 +55,9 @@ pub(crate) const ROOT_SOCKET_FD: i32 = 3;
 pub(crate) const PROJECT_FD: i32 = 4;
 /// Siehe [`ROOT_SOCKET_FD`]: das Leseende der Lebensleine.
 pub(crate) const LIFELINE_FD: i32 = 5;
+/// Siehe [`ROOT_SOCKET_FD`]: das geöffnete und geprüfte Verzeichnis der
+/// Wegwerf-Schicht, nur in einer Wegwerf-Sitzung (HUM-446).
+pub(crate) const LAYER_FD: i32 = 6;
 
 /// Die feste Grenze der Deskriptoren jedes virtiofsd (HUM-469): `LimitNOFILE`
 /// der Unit, weich und hart, für jeden ihrer Prozesse.
@@ -103,7 +113,7 @@ pub(crate) struct Layout {
 impl Layout {
     /// Die Unterverzeichnisse der Sockets, je eins je Dienst; kein
     /// Gefängnis bindet das Laufzeitverzeichnis selbst.
-    pub(crate) const SOCKET_DIRS: [&'static str; 4] = ["root", "work", "vsock", "door"];
+    pub(crate) const SOCKET_DIRS: [&'static str; 5] = ["root", "work", "layer", "vsock", "door"];
 
     /// Das Verzeichnis des Sockets der Wurzel; der Emulator bindet es nur
     /// lesbar, kein Gefängnis zum Schreiben.
@@ -115,6 +125,12 @@ impl Layout {
     /// es beschreibbar.
     pub(crate) fn work_dir(&self) -> PathBuf {
         self.dir.join("work")
+    }
+
+    /// Das Verzeichnis des Sockets der Wegwerf-Schicht; nur deren virtiofsd
+    /// bindet es beschreibbar (HUM-446).
+    pub(crate) fn layer_dir(&self) -> PathBuf {
+        self.dir.join("layer")
     }
 
     /// Das Verzeichnis des vhost-user-Sockets des vsock-Geräts.
@@ -137,6 +153,11 @@ impl Layout {
     /// Der Socket des virtiofsd für `/work`.
     pub(crate) fn work_socket(&self) -> PathBuf {
         self.work_dir().join("work.sock")
+    }
+
+    /// Der Socket des virtiofsd der Wegwerf-Schicht (HUM-446).
+    pub(crate) fn layer_socket(&self) -> PathBuf {
+        self.layer_dir().join("layer.sock")
     }
 
     /// Der vhost-user-Socket des vsock-Geräts.
@@ -173,15 +194,20 @@ impl Layout {
 
     /// Die Sockets, die das Verzeichnis tragen muss, solange die Sitzung
     /// läuft, relativ zu ihm; die Host-Prüfung hält jeden weiteren für einen
-    /// Fund und jeden fehlenden auch.
-    pub(crate) fn declared_sockets(door_port: u32) -> Vec<String> {
-        vec![
+    /// Fund. Der Socket der Wegwerf-Schicht gehört nur zu einer
+    /// Wegwerf-Sitzung (`disposable`, HUM-446).
+    pub(crate) fn declared_sockets(door_port: u32, disposable: bool) -> Vec<String> {
+        let mut sockets = vec![
             "root/root.sock".to_owned(),
             "work/work.sock".to_owned(),
             "vsock/vsock.sock".to_owned(),
             "door/door".to_owned(),
             format!("door/door_{door_port}"),
-        ]
+        ];
+        if disposable {
+            sockets.push("layer/layer.sock".to_owned());
+        }
+        sockets
     }
 }
 
@@ -378,8 +404,22 @@ pub(crate) fn root_line(resolved: &Resolved, entries: &[RootEntry]) -> Vec<OsStr
     line
 }
 
+/// Macht die Zeile des Dienstes für `/work` nur lesbar: `--readonly` für
+/// virtiofsd und den Ordner mit `--ro-bind-fd` statt `--bind-fd` im
+/// Gefängnis, so dass auch ein Fehler in `--readonly` nicht ins Projekt
+/// schreibt (HUM-446).
+pub(crate) fn work_read_only(line: &mut Vec<OsString>) {
+    for word in line.iter_mut() {
+        if word == "--bind-fd" {
+            *word = OsString::from("--ro-bind-fd");
+        }
+    }
+    line.push(OsString::from("--readonly"));
+}
+
 /// Gefängnis 2: virtiofsd für `/work`, der Ordner als Deskriptor, die
-/// Masken darüber; `empty` ist eine leere Datei für die Masken.
+/// Masken darüber; `empty` ist eine leere Datei für die Masken. Ob er nur
+/// lesbar ausliefert, setzt der Plan ([`work_read_only`]).
 pub(crate) fn work_line(
     resolved: &Resolved,
     layout: &Layout,
@@ -412,6 +452,39 @@ pub(crate) fn work_line(
     line
 }
 
+/// Gefängnis 2b, nur in einer Wegwerf-Sitzung (HUM-446): virtiofsd für das
+/// Verzeichnis der Schicht der Sitzung, als Deskriptor [`LAYER_FD`]
+/// (`--bind-fd`) unter [`LAYER_SHARE`], beschreibbar, mit seinen beiden
+/// Unterverzeichnissen `upper` und `work`, die das Overlay im Gast auf
+/// demselben Einhängen braucht. Dieselben Optionen wie die anderen zwei,
+/// dazu `--xattr`: Das Overlay im Gast schreibt seine opaken Verzeichnisse
+/// als `user.overlay.opaque` (`userxattr`), wie unter bwrap, so dass der
+/// Scan des Daemons die Schicht in derselben Form liest. Alles darin ist vom
+/// Gast geschrieben und damit vom Angreifer (Root im Gast); der Daemon liest
+/// es erst nach dem Ende der Unit.
+pub(crate) fn layer_line(resolved: &Resolved, layout: &Layout) -> Vec<OsString> {
+    let mut line = jail(&resolved.bubblewrap);
+    // Das Overlay im Gast arbeitet als Root: Es legt sein Arbeitsverzeichnis
+    // mit den Rechten 0000 an und kopiert auch nur lesbare Dateien nach
+    // oben. Der Dienst bekommt dafür `CAP_DAC_OVERRIDE`, nur im
+    // Nutzer-Namensraum seines Gefängnisses und damit nur für die Dateien,
+    // die er dort sieht: die Schicht, deren Inhalt ohnehin der Gast schreibt,
+    // und ein nur lesbares `/usr`.
+    push(&mut line, &["--cap-add", "CAP_DAC_OVERRIDE"]);
+    bind_dir(&mut line, &layout.layer_dir(), true);
+    push(
+        &mut line,
+        &["--bind-fd", &LAYER_FD.to_string(), LAYER_SHARE],
+    );
+    bind_program(&mut line, &resolved.file_daemon);
+    line.push(resolved.file_daemon.as_os_str().to_owned());
+    push(&mut line, &["--shared-dir", LAYER_SHARE]);
+    push_path(&mut line, "--socket-path", &layout.layer_socket());
+    push(&mut line, &["--xattr"]);
+    file_daemon_tail(&mut line, resolved);
+    line
+}
+
 /// Gefängnis 3: das vsock-Gerät dieser einen Sitzung.
 pub(crate) fn device_line(resolved: &Resolved, layout: &Layout, group: &str) -> Vec<OsString> {
     let mut line = jail(&resolved.bubblewrap);
@@ -427,20 +500,25 @@ pub(crate) fn device_line(resolved: &Resolved, layout: &Layout, group: &str) -> 
 }
 
 /// Gefängnis 4: die Maschine. `init` ist der Shim im Gast, `plan` der
-/// Gastplan im Gast.
+/// Gastplan im Gast; `disposable` gibt ihr das dritte virtiofs-Gerät mit dem
+/// Tag `layer` (HUM-446).
 pub(crate) fn machine_line(
     resolved: &Resolved,
     layout: &Layout,
     machine: Machine,
     init: &Path,
     plan: &Path,
+    disposable: bool,
 ) -> Vec<OsString> {
     let mut line = jail(&resolved.bubblewrap);
-    // Nur die drei vhost-user-Sockets, nur lesbar (ein `connect` braucht
-    // keinen beschreibbaren Mount); die Tür und die Übergabe sieht der
-    // Emulator nicht.
+    // Nur die vhost-user-Sockets, nur lesbar (ein `connect` braucht keinen
+    // beschreibbaren Mount); die Tür und die Übergabe sieht der Emulator
+    // nicht.
     for dir in [layout.root_dir(), layout.work_dir(), layout.device_dir()] {
         bind_dir(&mut line, &dir, false);
+    }
+    if disposable {
+        bind_dir(&mut line, &layout.layer_dir(), false);
     }
     push(&mut line, &["--dev-bind", "/dev/kvm", "/dev/kvm"]);
     line.push(OsString::from("--ro-bind"));
@@ -489,7 +567,7 @@ pub(crate) fn machine_line(
             ),
         ],
     );
-    for (id, socket, device) in [
+    let mut devices = vec![
         (
             "fs0",
             layout.root_socket(),
@@ -500,12 +578,20 @@ pub(crate) fn machine_line(
             layout.work_socket(),
             "vhost-user-fs-pci,chardev=fs1,tag=work",
         ),
-        (
-            "vs",
-            layout.device_socket(),
-            "vhost-user-vsock-pci,chardev=vs",
-        ),
-    ] {
+    ];
+    if disposable {
+        devices.push((
+            "fs2",
+            layout.layer_socket(),
+            "vhost-user-fs-pci,chardev=fs2,tag=layer",
+        ));
+    }
+    devices.push((
+        "vs",
+        layout.device_socket(),
+        "vhost-user-vsock-pci,chardev=vs",
+    ));
+    for (id, socket, device) in devices {
         line.push(OsString::from("-chardev"));
         line.push(OsString::from(format!(
             "socket,id={id},path={}",
@@ -523,6 +609,9 @@ pub(crate) struct Lines {
     pub(crate) root: Vec<OsString>,
     /// virtiofsd für `/work`.
     pub(crate) work: Vec<OsString>,
+    /// virtiofsd der Wegwerf-Schicht, nur in einer Wegwerf-Sitzung
+    /// (HUM-446).
+    pub(crate) layer: Option<Vec<OsString>>,
     /// Das vsock-Gerät.
     pub(crate) device: Vec<OsString>,
     /// Die Maschine.
@@ -550,16 +639,18 @@ fn quoted(line: &[OsString]) -> Result<String, String> {
 }
 
 /// Das Skript des ersten Prozesses der Unit (POSIX `sh`), nach der Übergabe
-/// mit dem Socket der Wurzel auf 3, dem Projektordner auf 4 und dem Leseende
-/// der Lebensleine auf 5.
+/// mit dem Socket der Wurzel auf 3, dem Projektordner auf 4, dem Leseende
+/// der Lebensleine auf 5 und, in einer Wegwerf-Sitzung, dem Verzeichnis der
+/// Schicht auf 6.
 ///
-/// Es startet die vier Gefängnisse, jedes nur mit dem Deskriptor, den es
-/// braucht, die Maschine erst, wenn beide Sockets der Dienste da sind. Endet
+/// Es startet die Gefängnisse, jedes nur mit dem Deskriptor, den es
+/// braucht, die Maschine erst, wenn die Sockets der Dienste da sind. Endet
 /// eines davon, oder kommt auf der Lebensleine das Ende (der Daemon ist fort,
 /// oder er hat die Sitzung beendet), beendet das Skript sich selbst; mit dem
 /// ersten Prozess endet die Unit, und der Dienstverwalter beendet jeden
 /// übrigen Prozess (`KillMode=control-group`). Der Gast muss dafür nichts
-/// tun.
+/// tun. Ein nicht geöffneter Deskriptor 6 zu schließen ist in `sh` kein
+/// Fehler; das Skript schließt ihn deshalb in jeder Sitzung.
 ///
 /// # Errors
 ///
@@ -570,16 +661,27 @@ pub(crate) fn script(lines: &Lines, layout: &Layout) -> Result<String, String> {
     let work = quoted(&lines.work)?;
     let device = quoted(&lines.device)?;
     let machine = quoted(&lines.machine)?;
+    let (layer, layer_wait) = match &lines.layer {
+        Some(line) => (
+            format!(
+                "( {} {ROOT_SOCKET_FD}<&- {PROJECT_FD}<&- {LIFELINE_FD}<&-; kill -TERM $$ ) &\n",
+                quoted(line)?
+            ),
+            " || [ ! -S \"$r/layer/layer.sock\" ]",
+        ),
+        None => (String::new(), ""),
+    };
     Ok(format!(
         "set -u\n\
          r={dir}\n\
-         ( read -r _ <&{LIFELINE_FD}; kill -TERM $$ ) {ROOT_SOCKET_FD}<&- {PROJECT_FD}<&- &\n\
-         ( {root} {PROJECT_FD}<&- {LIFELINE_FD}<&-; kill -TERM $$ ) &\n\
-         ( {work} {ROOT_SOCKET_FD}<&- {LIFELINE_FD}<&-; kill -TERM $$ ) &\n\
-         exec {ROOT_SOCKET_FD}<&- {PROJECT_FD}<&-\n\
+         ( read -r _ <&{LIFELINE_FD}; kill -TERM $$ ) {ROOT_SOCKET_FD}<&- {PROJECT_FD}<&- {LAYER_FD}<&- &\n\
+         ( {root} {PROJECT_FD}<&- {LIFELINE_FD}<&- {LAYER_FD}<&-; kill -TERM $$ ) &\n\
+         ( {work} {ROOT_SOCKET_FD}<&- {LIFELINE_FD}<&- {LAYER_FD}<&-; kill -TERM $$ ) &\n\
+         {layer}\
+         exec {ROOT_SOCKET_FD}<&- {PROJECT_FD}<&- {LAYER_FD}<&-\n\
          ( {device} {LIFELINE_FD}<&-; kill -TERM $$ ) &\n\
          n=0\n\
-         while [ ! -S \"$r/work/work.sock\" ] || [ ! -S \"$r/vsock/vsock.sock\" ]; do\n\
+         while [ ! -S \"$r/work/work.sock\" ] || [ ! -S \"$r/vsock/vsock.sock\" ]{layer_wait}; do\n\
          \x20 n=$((n+1))\n\
          \x20 if [ \"$n\" -gt 500 ]; then echo 'humanitl: a helper of the kernel level did not open its socket' >&2; exit 70; fi\n\
          \x20 sleep 0.02\n\
@@ -642,6 +744,7 @@ mod tests {
                 ],
                 &layout.files().join("empty"),
             ),
+            layer: None,
             device: device_line(&resolved, &layout, "hum-abcd"),
             machine: machine_line(
                 &resolved,
@@ -652,8 +755,30 @@ mod tests {
                 },
                 Path::new("/usr/local/bin/humanitl-shim"),
                 Path::new("/run/humanitl/guest-plan.json"),
+                false,
             ),
         }
+    }
+
+    /// Die Zeilen einer Wegwerf-Sitzung (HUM-446).
+    fn disposable_lines() -> Lines {
+        let resolved = resolved();
+        let layout = layout();
+        let mut lines = lines();
+        work_read_only(&mut lines.work);
+        lines.layer = Some(layer_line(&resolved, &layout));
+        lines.machine = machine_line(
+            &resolved,
+            &layout,
+            Machine {
+                cpus: 2,
+                memory_mib: 1024,
+            },
+            Path::new("/usr/local/bin/humanitl-shim"),
+            Path::new("/run/humanitl/guest-plan.json"),
+            true,
+        );
+        lines
     }
 
     fn words(line: &[OsString]) -> Vec<String> {
@@ -677,12 +802,16 @@ mod tests {
     /// Die Verbotsliste der Spezifikation, für alle vier Zeilen.
     fn forbidden(lines: &Lines) -> Vec<String> {
         let mut found = Vec::new();
-        for (name, line) in [
+        let mut all = vec![
             ("root", &lines.root),
             ("work", &lines.work),
             ("device", &lines.device),
             ("machine", &lines.machine),
-        ] {
+        ];
+        if let Some(layer) = &lines.layer {
+            all.push(("layer", layer));
+        }
+        for (name, line) in all {
             let words = words(line);
             for (index, word) in words.iter().enumerate() {
                 let next = words.get(index + 1).map_or("", String::as_str);
@@ -900,11 +1029,12 @@ mod tests {
         assert!(lifeline < first_jail, "{script}");
         assert!(script.contains(
             "--fd 3 --readonly --sandbox none --log-level error --cache auto --allow-mmap \
-             --no-announce-submounts 4<&- 5<&-"
+             --no-announce-submounts 4<&- 5<&- 6<&-"
         ));
-        assert!(script.contains("3<&- 5<&-; kill -TERM $$"));
-        assert!(script.contains("exec 3<&- 4<&-\n"));
+        assert!(script.contains("3<&- 5<&- 6<&-; kill -TERM $$"));
+        assert!(script.contains("exec 3<&- 4<&- 6<&-\n"));
         assert!(script.contains("exec 5<&-\nwait\n"));
+        assert!(!script.contains("layer"), "{script}");
         let parsed: Vec<String> = shlex::split(&script.replace('\n', " ; ")).unwrap_or_default();
         assert!(!parsed.is_empty());
         // Ein Pfad mit einem Leerzeichen bleibt ein Wort.
@@ -912,6 +1042,77 @@ mod tests {
             dir: PathBuf::from("/run/user/1000/a b"),
         };
         assert!(script_with(&odd).contains("r='/run/user/1000/a b'"));
+    }
+
+    /// HUM-446: In einer Wegwerf-Sitzung liefert ein dritter virtiofsd die
+    /// Schicht als Deskriptor 6 aus, beschreibbar, mit `--xattr` und den
+    /// festen Optionen der anderen; der für `/work` nur lesbar; die Maschine
+    /// bekommt ein drittes virtiofs-Gerät `layer` und den Socket nur lesbar;
+    /// das Skript gibt Deskriptor 6 nur dem dritten Dienst und wartet auf
+    /// seinen Socket.
+    #[test]
+    fn a_disposable_session_serves_its_layer_by_descriptor() {
+        let lines = disposable_lines();
+        let layout = layout();
+        let layer = lines.layer.as_ref().unwrap();
+        assert!(has(
+            layer,
+            &[
+                "/usr/bin/bwrap",
+                "--unshare-all",
+                "--die-with-parent",
+                "--new-session"
+            ]
+        ));
+        assert!(has(layer, &["--cap-drop", "ALL"]));
+        assert!(has(layer, &["--bind-fd", "6", LAYER_SHARE]));
+        assert!(has(layer, &["--shared-dir", LAYER_SHARE, "--socket-path"]));
+        assert!(has(layer, &["--xattr"]));
+        assert!(has(layer, &["--sandbox", "none"]));
+        assert!(has(layer, &["--cache", "auto", "--allow-mmap"]));
+        assert!(has(layer, &["--no-announce-submounts"]));
+        assert!(!has(layer, &["--readonly"]));
+        assert!(
+            !words(layer)
+                .iter()
+                .any(|w| w.starts_with("--rlimit-nofile")),
+            "{layer:?}"
+        );
+        // Nur das Verzeichnis seines Sockets beschreibbar, nie das
+        // Laufzeitverzeichnis.
+        let binds: Vec<String> = words(layer)
+            .windows(2)
+            .filter(|pair| pair[0] == "--bind")
+            .map(|pair| pair[1].clone())
+            .collect();
+        assert_eq!(binds, [layout.layer_dir().to_string_lossy().into_owned()]);
+        assert!(has(&lines.work, &["--readonly"]));
+        // Auch das Gefängnis bindet den Ordner nur lesbar.
+        assert!(has(&lines.work, &["--ro-bind-fd", "4", WORK_SHARE]));
+        assert!(!has(&lines.work, &["--bind-fd"]));
+        assert!(has(
+            &lines.machine,
+            &["-device", "vhost-user-fs-pci,chardev=fs2,tag=layer"]
+        ));
+        assert!(has(
+            &lines.machine,
+            &[
+                "--ro-bind",
+                &layout.layer_dir().to_string_lossy(),
+                &layout.layer_dir().to_string_lossy()
+            ]
+        ));
+        assert_eq!(count(&lines.machine, "-device"), 4);
+        assert!(forbidden(&lines).is_empty(), "{:?}", forbidden(&lines));
+        let script = script(&lines, &layout).unwrap();
+        assert!(script.contains("--no-announce-submounts 3<&- 4<&- 5<&-; kill -TERM $$"));
+        assert!(script.contains("|| [ ! -S \"$r/layer/layer.sock\" ]; do"));
+        // Der Dienst der Schicht startet, bevor das Skript Deskriptor 6
+        // schließt; jeder andere bekommt ihn nicht.
+        let layer_at = script.find(LAYER_SHARE).unwrap();
+        let closed = script.find("exec 3<&- 4<&- 6<&-").unwrap();
+        assert!(layer_at < closed, "{script}");
+        assert_eq!(script.matches("6<&-").count(), 4, "{script}");
     }
 
     fn script_with(layout: &Layout) -> String {
