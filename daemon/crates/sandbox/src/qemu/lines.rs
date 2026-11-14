@@ -49,6 +49,44 @@ pub(crate) const PROJECT_FD: i32 = 4;
 /// Siehe [`ROOT_SOCKET_FD`]: das Leseende der Lebensleine.
 pub(crate) const LIFELINE_FD: i32 = 5;
 
+/// Die feste Grenze der Deskriptoren jedes virtiofsd (HUM-469): `LimitNOFILE`
+/// der Unit, weich und hart, für jeden ihrer Prozesse.
+///
+/// **Wie sie bindet.** Ohne `--rlimit-nofile` will virtiofsd seine weiche
+/// Grenze auf `min(1 000 000, nr_open)` heben; das scheitert an der harten
+/// Grenze der Unit, und er nimmt die harte (`src/limits.rs`, in 1.13.2 und
+/// 1.14.0 gleich, gemessen: höchstens 64 948 offen). Anheben könnte er sie nur
+/// mit `CAP_SYS_RESOURCE`, und die hat im Gefängnis kein Prozess. Von der
+/// Grenze behält virtiofsd einen kleinen Rest für sich und antwortet dem Gast
+/// darüber mit `ENFILE`, statt selbst zu scheitern: Der Dienst läuft weiter,
+/// und was der Gast freigibt, kann er wieder belegen. In HUM-445 waren es ohne
+/// diese Eigenschaft die 524 288 des Dienstverwalters.
+///
+/// **Warum nicht `--rlimit-nofile`.** Die Option setzt weich und hart auf N
+/// und beendet virtiofsd, wenn N über der geerbten harten Grenze liegt.
+/// systemd klemmt `LimitNOFILE` still auf die harte Grenze des
+/// Dienstverwalters (gemessen, systemd 262: verlangt 2 000 000, bekommen
+/// 524 288, die Unit startet). Hätte ein Dienstverwalter weniger als N, bekäme
+/// die Unit also weniger, und ein virtiofsd mit `--rlimit-nofile N` endete
+/// beim Start; der Gast fände keine Wurzel, und die Sitzung endete mit „no
+/// CHECK line" statt mit dem Grund (nachgestellt mit `LimitNOFILE=4096`). Nur
+/// über die Unit gilt dann die kleinere Grenze, fest und ohne Fehlstart.
+///
+/// **Warum 65 536.** Mit `--cache never` hält virtiofsd nur noch die Inodes
+/// offen, die der Gast gerade festhält (offene Dateien und ihre
+/// Verzeichnisse, Arbeitsverzeichnisse, abgebildete Bibliotheken,
+/// inotify-Wachen), je eines mit einem Deskriptor und jede offene Datei mit
+/// einem zweiten. Gemessen (HUM-469, Wurzel mit dem `/usr` des Hosts): 98
+/// nach einem Walk über 735 790 Einträge, höchstens 131 beim Kopieren,
+/// Lesen, Durchsuchen und `git` über 13 475 Dateien und bei 300
+/// Programmstarts. 65 536 lässt auch einer Sitzung, die Tausende Dateien
+/// offen hält oder beobachtet, reichlich Luft. Zugleich ist es ein Achtel der 524 288,
+/// die der Dienstverwalter sonst als harte Grenze vergibt, ein Fünfzehntel der
+/// eigenen Vorgabe von virtiofsd und verschwindend gegen `fs.file-max`; der
+/// Kernel-Speicher, den ein Gast über einen Dienst binden kann, ist damit
+/// fest begrenzt.
+pub(crate) const FILE_DAEMON_NOFILE: u32 = 65_536;
+
 /// Die CID des Gasts; jede Sitzung hat ihr eigenes Gerät, also genügt eine.
 pub(crate) const GUEST_CID: u32 = 3;
 
@@ -257,10 +295,40 @@ fn bind_program(line: &mut Vec<OsString>, program: &Path) {
 }
 
 /// Die Optionen jedes virtiofsd: kein eigenes Sandboxing (das Gefängnis ist
-/// es), nur Fehler ins Protokoll, und keine Ankündigung von
-/// Einhängepunkten, wenn er die Option kennt.
+/// es), nur Fehler ins Protokoll, kein Cache, der Inodes hortet, und keine
+/// Ankündigung von Einhängepunkten, wenn er die Option kennt. Die Grenze der
+/// Deskriptoren setzt die Unit ([`FILE_DAEMON_NOFILE`]).
+///
+/// `--cache never` (HUM-469): Der Gast bekommt jeden Eintrag mit der
+/// Gültigkeit null und verwirft ihn, sobald ihn niemand mehr hält; dann
+/// schickt er `FORGET`, und virtiofsd schließt den Deskriptor des Inodes. Mit
+/// der Vorgabe `auto` (eine Sekunde) bleiben die Einträge im Cache des Gasts,
+/// bis dessen Speicher knapp wird, und mit ihnen je ein Deskriptor im
+/// virtiofsd; so kam der Walk in HUM-445 auf rund 520 000. Die Daten gehen
+/// dann am Seitencache des Gasts vorbei; `--allow-mmap` erlaubt trotzdem
+/// geteilte Abbildungen (rustc und andere bilden Dateien mit `MAP_SHARED`
+/// ab), ab Gastkernel 6.6 (geprüft in `prerequisites`). Die Grenze davon:
+/// virtiofsd empfiehlt `--allow-mmap` nur bei alleinigem Zugriff auf das
+/// Verzeichnis. Ändert der Nutzer auf dem Host eine Datei unter `/work`,
+/// während der Gast sie geteilt abgebildet hat, kann die Abbildung im Gast
+/// veraltete Seiten zeigen. Das betrifft die Kohärenz der Daten, keine
+/// Grenze der Sandbox: Der Gast sieht nur, was ihm ohnehin freigegeben ist.
+/// Ohne die Option scheitern rustc und cargo im Gast. `--inode-file-handles`
+/// hilft hier nicht: Ohne `CAP_DAC_READ_SEARCH` auf dem Host fällt virtiofsd
+/// auf Deskriptoren zurück.
 fn file_daemon_tail(line: &mut Vec<OsString>, resolved: &Resolved) {
-    push(line, &["--sandbox", "none", "--log-level", "error"]);
+    push(
+        line,
+        &[
+            "--sandbox",
+            "none",
+            "--log-level",
+            "error",
+            "--cache",
+            "never",
+            "--allow-mmap",
+        ],
+    );
     if resolved.no_announce_submounts {
         push(line, &["--no-announce-submounts"]);
     }
@@ -667,6 +735,18 @@ mod tests {
         ));
         assert!(has(&lines.root, &["--sandbox", "none"]));
         assert!(has(&lines.root, &["--no-announce-submounts"]));
+        // Beide virtiofsd: kein Cache, der Inodes hortet, geteilte
+        // Abbildungen trotzdem erlaubt; die Grenze der Deskriptoren kommt von
+        // der Unit, nie als `--rlimit-nofile`, das über einer kleineren
+        // geerbten Grenze den Start scheitern ließe (HUM-469).
+        for line in [&lines.root, &lines.work] {
+            assert!(has(line, &["--cache", "never", "--allow-mmap"]), "{line:?}");
+            assert_eq!(count(line, "--cache"), 1, "{line:?}");
+            assert!(
+                !words(line).iter().any(|w| w.starts_with("--rlimit-nofile")),
+                "{line:?}"
+            );
+        }
         assert!(has(&lines.root, &["--ro-bind", "/usr", "/guest/usr"]));
         assert!(has(&lines.root, &["--symlink", "usr/bin", "/guest/bin"]));
         assert!(has(&lines.root, &["--tmpfs", "/guest/tmp"]));
@@ -811,7 +891,8 @@ mod tests {
         let first_jail = script.find("bwrap").unwrap();
         assert!(lifeline < first_jail, "{script}");
         assert!(script.contains(
-            "--fd 3 --readonly --sandbox none --log-level error --no-announce-submounts 4<&- 5<&-"
+            "--fd 3 --readonly --sandbox none --log-level error --cache never --allow-mmap \
+             --no-announce-submounts 4<&- 5<&-"
         ));
         assert!(script.contains("3<&- 5<&-; kill -TERM $$"));
         assert!(script.contains("exec 3<&- 4<&-\n"));

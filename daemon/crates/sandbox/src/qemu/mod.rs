@@ -674,6 +674,11 @@ fn unit_properties(runtime: &str, project: Option<&str>) -> Vec<String> {
         "TimeoutStopSec={}s",
         crate::KILL_GRACE.as_secs().max(1)
     ));
+    // Die Grenze der Deskriptoren der virtiofsd, weich und hart (HUM-469):
+    // Keiner der Prozesse der Unit kommt darüber. systemd klemmt sie auf die
+    // harte Grenze des Dienstverwalters, wenn die kleiner ist; dann gilt die
+    // kleinere, und die Unit startet trotzdem (`lines::FILE_DAEMON_NOFILE`).
+    properties.push(format!("LimitNOFILE={}", lines::FILE_DAEMON_NOFILE));
     // Unter `ProtectHome=read-only` bindet bwrap auch einen geerbten
     // Deskriptor nur lesbar; der Projektordner braucht seinen Pfad hier
     // (gemessen 2026-11-14, systemd 262).

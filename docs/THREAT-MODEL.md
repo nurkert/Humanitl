@@ -144,7 +144,7 @@ Five further channels complete the model:
 | K-30 | the virtual machine monitor of the kernel level (QEMU `microvm`) | b | high | not admitted until HUM-449 (`SANDBOX_048`); no network device, console, monitor or display; full `-sandbox`; in a bubblewrap jail without capabilities with `/dev/kvm` and the kernel file only; inside a hardened transient unit of the user with `PrivateNetwork`; the host checks its descriptors and its own command line after the start (`SANDBOX_047`) | open | `daemon/crates/sandbox/src/qemu/host_check.rs`, `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (HUM-444); escape suite with root in the guest (HUM-445) |
 | K-31 | the vsock door of the kernel level | b | high | one vsock device process per session with one device and its own group, never `--forward-cid`; on the host exactly one listener `<uds>_5000`, forwarded to the session's proxy socket; every other port finds no listener; the host check refuses any other socket in the runtime directory and a second device | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`an_extra_listener_beside_the_door_turns_the_host_check_red`, HUM-444) |
 | K-32 | the guest kernel (root in the guest) | b | high | the guarantees are carried on the host, so they hold with root in the guest; automatic module loading off, then the plan's vsock modules loaded and module loading locked before the agent; the guest root a read-only share without the runtime directory and without the jail's `/proc`; writable only `/work`, the profile's tmpfs and `/run`, which the shim mounts as tmpfs in the guest with `/run/humanitl` read-only on top (HUM-466), `mounts.extra_rw` refused (`SANDBOX_051`) | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (HUM-465, HUM-444); escape suite with root in the guest (HUM-445) |
-| K-33 | the four helper processes of a session (two file system daemons, the vsock device, the emulator) and the unit's first process | b, d | high | each in its own bubblewrap jail with every namespace unshared and no capability, only `/usr` of the host, what it serves and its own socket directory; the root daemon read-only with its socket as a descriptor, the `/work` daemon on the checked descriptor with the profile's masks; nothing inherited from the daemon but three descriptors over a one-connection handover; the unit ends with the daemon through the lifeline, also on `SIGKILL`, and with the daemon's unit through `BindsTo` | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`a_killed_daemon_ends_the_unit_within_five_seconds`, HUM-444) |
+| K-33 | the four helper processes of a session (two file system daemons, the vsock device, the emulator) and the unit's first process | b, d | high | each in its own bubblewrap jail with every namespace unshared and no capability, only `/usr` of the host, what it serves and its own socket directory; the root daemon read-only with its socket as a descriptor, the `/work` daemon on the checked descriptor with the profile's masks; nothing inherited from the daemon but three descriptors over a one-connection handover; the unit ends with the daemon through the lifeline, also on `SIGKILL`, and with the daemon's unit through `BindsTo`; each file system daemon at most 65,536 descriptors (`LimitNOFILE` of the unit) and `--cache never`, so a guest can neither pin host memory without bound nor exhaust the daemon for itself (HUM-469) | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`a_killed_daemon_ends_the_unit_within_five_seconds`, HUM-444) |
 
 K-13 is the obvious channel and the only one considered closed outright. K-14 is here so that
 attacker (d) appears in a row. K-15 came with HUM-041: the check that proves the guarantees runs
@@ -789,9 +789,20 @@ descriptors over a handover socket that accepts one connection with a one-time t
 daemon's listening socket, the checked project folder and the read end of the lifeline. When the
 daemon ends, by `SIGKILL` too, the script sees the end of the lifeline and ends, and the service
 manager ends every process of the unit within seconds, without the guest; a daemon that runs as a
-service also binds the unit to its own (`BindsTo`). *Residual risk:* a compromised daemon can
-start such units (as under Podman, see the trust boundaries); a flaw in a file system daemon reaches
-what it serves, the read-only guest root or the project folder.
+service also binds the unit to its own (`BindsTo`). A file system daemon keeps one descriptor per
+inode the guest has looked up and one more per open file, so a guest decides how many it holds: a
+walk over the guest root drove the root daemon to about 520,000 until it ran out and the guest saw
+`ENFILE` (found in HUM-445), and root in the guest could pin host kernel memory that way. That
+finding is closed (HUM-469): the unit carries `LimitNOFILE=65536`, soft and hard, for every
+process, which no jail can raise; past it the daemon answers the guest
+with `ENFILE` and keeps serving. With `--cache never` the guest forgets every entry nothing holds,
+so a walk leaves the count where it was (98 after 735,790 entries), and only files the guest
+keeps open count against the limit; the KVM test
+`a_guest_cannot_drive_the_root_file_daemon_over_its_descriptor_limit` holds the root open as root
+in the guest and counts the daemon's descriptors from the host. *Residual risk:* a compromised
+daemon can start such units (as under Podman, see the trust boundaries); a flaw in a file system
+daemon reaches what it serves, the read-only guest root or the project folder; root in the guest
+can exhaust a daemon's descriptors for its own session, never past the limit.
 
 ## Assumptions
 
@@ -896,6 +907,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-14 | K-30 to K-33 added: the monitor, the vsock door, the guest kernel and the helper processes of the kernel level; one hardened unit per session, four jails, the checked project folder by descriptor, a host check of the monitor (`SANDBOX_047`) before the agent is admitted, each jail binding only its own socket directory, the end of the daemon ends the unit; not admitted until HUM-449 | HUM-444 |
 | 2026-11-14 | K-30, K-31: when the guest has already refused, its diagnosis is shown and the host check's findings stand in the evidence, the session is refused either way; the host never gives up a pending `CONNECT` into the guest | HUM-470 |
 | 2026-11-14 | K-32: the profile's tmpfs (`/tmp`, `/var/tmp`, the agent's home) and `/run` are writable tmpfs in the guest, `/run/humanitl` read-only on top, mounted by the shim, in the expected mount table and in the socket walk; `mounts.extra_rw` refused at the kernel level (`SANDBOX_051`) instead of mounted read-only | HUM-466 |
+| 2026-11-14 | K-33: each file system daemon of the kernel level holds at most 65,536 descriptors (`LimitNOFILE` of the unit) and runs with `--cache never --allow-mmap` (guest kernel 6.6 or newer, `SANDBOX_045` below); closes the finding of HUM-445, where a walk over the guest root drove the root daemon to about 520,000 descriptors | HUM-469 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

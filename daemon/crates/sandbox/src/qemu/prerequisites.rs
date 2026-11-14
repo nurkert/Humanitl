@@ -168,7 +168,12 @@ const VIRTIO_FS_BUILT_IN: &str = "CONFIG_VIRTIO_FS=y";
 /// So viel einer Kernel-Konfiguration wird gelesen; Debians hat rund 300 KiB.
 const MAX_CONFIG_BYTES: u64 = 8 * 1024 * 1024;
 
-/// Der Dienst der Dateisysteme: nur lesbar ausliefern, Socket als Deskriptor.
+/// Der Dienst der Dateisysteme: nur lesbar ausliefern, Socket als Deskriptor,
+/// dazu der Cache, der keine Inodes hortet, und geteilte Abbildungen ohne ihn
+/// (HUM-469, [`super::lines::FILE_DAEMON_NOFILE`]). 1.13.2 (Debian trixie,
+/// CI) und 1.14.0 kennen alle vier; gefragt wird, damit eine Fassung
+/// ohne eine davon als fehlende Voraussetzung gemeldet wird und nicht erst
+/// beim Start der Sitzung scheitert.
 const FILE_DAEMON: Program = Program {
     name: "virtiofsd",
     key: Some("sandbox.qemu.virtiofsd"),
@@ -176,7 +181,7 @@ const FILE_DAEMON: Program = Program {
     package: Package::FileDaemon,
     questions: &[Question {
         args: &["--help"],
-        words: &["--readonly", "--fd"],
+        words: &["--readonly", "--fd", "--cache", "--allow-mmap"],
     }],
 };
 
@@ -321,7 +326,7 @@ fn each_on(
     };
     let kernel = kernel_readable(host, config, manager);
     let virtio_fs = match &kernel {
-        Ok(image) => virtio_fs_built_in(image).map(|()| VIRTIO_FS_BUILT_IN.to_owned()),
+        Ok(image) => virtio_fs_built_in(image),
         Err(missing) => Err(missing.clone()),
     };
     vec![
@@ -366,10 +371,45 @@ fn config_beside(image: &Path) -> Option<PathBuf> {
     Some(image.with_file_name(config))
 }
 
+/// Die älteste Fassung des Gastkernels, die geteilte Abbildungen einer
+/// Datei ohne Seitencache erlaubt (`FUSE_DIRECT_IO_ALLOW_MMAP`, Linux 6.6).
+/// Beide virtiofsd laufen mit `--cache never --allow-mmap` (HUM-469); ein
+/// älterer Gast verweigert jedes `mmap(MAP_SHARED)` auf `/` und `/work` mit
+/// `ENODEV`, und rustc, cargo und andere scheitern dann tief im Build.
+const GUEST_KERNEL_FLOOR: (u32, u32) = (6, 6);
+
+/// Die Fassung aus dem Kopf einer Kernel-Konfiguration
+/// (`# Linux/x86 6.12.115 Kernel Configuration`), als Haupt- und
+/// Nebennummer; keine, wenn der Kopf fehlt oder anders aussieht.
+fn config_release(text: &str) -> Option<(u32, u32)> {
+    let line = text.lines().take(16).find_map(|line| {
+        line.strip_prefix("# Linux/")?
+            .strip_suffix(" Kernel Configuration")
+    })?;
+    let version = line.split_once(' ')?.1;
+    let mut parts = version.split(['.', '-', '+']);
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    Some((major, minor))
+}
+
 /// Der Kernel hat virtiofs eingebaut: Seine Konfiguration neben dem Abbild
 /// trägt [`VIRTIO_FS_BUILT_IN`]. Ein Modul (`=m`), eine fehlende Zeile und
-/// eine Konfiguration, die sich nicht lesen lässt, sind ein Befund.
-fn virtio_fs_built_in(image: &Path) -> Result<(), Diagnostic> {
+/// eine Konfiguration, die sich nicht lesen lässt, sind ein Befund. Dazu die
+/// Fassung aus ihrem Kopf: Unter [`GUEST_KERNEL_FLOOR`] ist das ebenfalls
+/// ein Befund (HUM-469).
+///
+/// Eine bekannte zu alte Fassung lehnt den Start ab, statt nur zu warnen:
+/// Die Sicherheit hängt nicht daran, aber eine Sitzung, in der jedes geteilte
+/// `mmap` mit `ENODEV` scheitert, ist kaputt, ohne es zu sagen; die Ablehnung
+/// nennt den Grund und den Weg (ein neuerer Kernel in
+/// `sandbox.qemu.kernel`). Eine Konfiguration ohne den üblichen Kopf (jede
+/// von `make` erzeugte hat ihn) sagt die Fassung nicht; dann startet die
+/// Stufe, und der Beleg des Doctors nennt die unbekannte Fassung und die
+/// Untergrenze, denn ablehnen hieße einen Kernel verwerfen, der passen kann.
+///
+/// Der Beleg bei Erfolg: die Zeile der Konfiguration und die Fassung.
+fn virtio_fs_built_in(image: &Path) -> Result<String, Diagnostic> {
     let fix = || FixAction::ChangeSetting {
         key: "sandbox.qemu.kernel".to_owned(),
         value: String::new(),
@@ -407,7 +447,28 @@ fn virtio_fs_built_in(image: &Path) -> Result<(), Diagnostic> {
         }
     };
     if text.lines().any(|line| line.trim() == VIRTIO_FS_BUILT_IN) {
-        return Ok(());
+        let (floor_major, floor_minor) = GUEST_KERNEL_FLOOR;
+        return match config_release(&text) {
+            Some((major, minor)) if (major, minor) >= GUEST_KERNEL_FLOOR => {
+                Ok(format!("{VIRTIO_FS_BUILT_IN}, kernel {major}.{minor}"))
+            }
+            Some((major, minor)) => Err(missing(
+                &format!(
+                    "a guest kernel {floor_major}.{floor_minor} or newer, and {} says {major}.{minor}: \
+                     the file system daemons run without the guest's page cache, and an older \
+                     kernel refuses every shared mapping (mmap with MAP_SHARED, used by rustc \
+                     and others) on / and /work with ENODEV. Name a newer kernel in \
+                     sandbox.qemu.kernel",
+                    config.display()
+                ),
+                fix(),
+            )),
+            None => Ok(format!(
+                "{VIRTIO_FS_BUILT_IN}, kernel version unknown ({} has no version header); \
+                 shared mappings need {floor_major}.{floor_minor} or newer",
+                config.display()
+            )),
+        };
     }
     let found = text
         .lines()
@@ -757,7 +818,7 @@ mod tests {
             );
             fixture.program(
                 "virtiofsd",
-                "printf '      --readonly   Mark the file system read-only\\n      --fd <FD>    File descriptor\\n'\n",
+                "printf '      --readonly   Mark the file system read-only\\n      --fd <FD>    File descriptor\\n      --cache <CACHE>\\n      --allow-mmap\\n'\n",
             );
             fixture.program(
                 "vhost-device-vsock",
@@ -795,6 +856,64 @@ mod tests {
             Some(FixAction::CopyCommand(command)) => command.clone(),
             other => panic!("expected a command, got {other:?}"),
         }
+    }
+
+    /// Die Fassung des Gastkernels aus dem Kopf seiner Konfiguration
+    /// (HUM-469): 6.1 (Debian bookworm) wird mit der Untergrenze abgelehnt,
+    /// 6.12 (der Kernel der CI) und 7.3 gehen, und ohne Kopf startet die
+    /// Stufe mit der unbekannten Fassung im Beleg.
+    #[test]
+    fn a_guest_kernel_older_than_6_6_is_refused_by_its_config_header() {
+        let header = |version: &str| {
+            format!(
+                "#\n# Automatically generated file; DO NOT EDIT.\n\
+                 # Linux/x86 {version} Kernel Configuration\n#\nCONFIG_VIRTIO_FS=y\n"
+            )
+        };
+        assert_eq!(config_release(&header("6.12.115")), Some((6, 12)));
+        assert_eq!(config_release(&header("6.1.0-28-amd64")), Some((6, 1)));
+        assert_eq!(config_release(&header("6.6")), Some((6, 6)));
+        assert_eq!(config_release("CONFIG_VIRTIO_FS=y\n"), None);
+        assert_eq!(config_release(&header("six.12")), None);
+
+        let fixture = Fixture::complete();
+        let config = fixture.host.boot.join(format!("config-{RELEASE}"));
+        let virtio = |fixture: &Fixture| {
+            each_on(
+                &fixture.host,
+                &fixture.env,
+                &QemuConfig::default(),
+                PackageManager::Apt,
+            )
+            .into_iter()
+            .find(|(which, _)| *which == Prerequisite::VirtioFs)
+            .map(|(_, line)| line)
+            .unwrap()
+        };
+
+        std::fs::write(&config, header("6.1.0-28-amd64")).unwrap();
+        let err = fixture.finding(&QemuConfig::default());
+        assert!(err.why.contains("6.6 or newer"), "{}", err.why);
+        assert!(err.why.contains("says 6.1"), "{}", err.why);
+        assert!(err.why.contains("MAP_SHARED"), "{}", err.why);
+        assert!(virtio(&fixture).is_err());
+
+        for (version, shown) in [
+            ("6.12.115", "kernel 6.12"),
+            ("6.6.0", "kernel 6.6"),
+            ("7.3.4", "kernel 7.3"),
+        ] {
+            std::fs::write(&config, header(version)).unwrap();
+            fixture.check(&QemuConfig::default()).expect(version);
+            let line = virtio(&fixture).expect(version);
+            assert!(line.contains(shown), "{line}");
+        }
+
+        std::fs::write(&config, "CONFIG_VIRTIO_FS=y\n").unwrap();
+        fixture.check(&QemuConfig::default()).expect("no header");
+        let line = virtio(&fixture).unwrap();
+        assert!(line.contains("kernel version unknown"), "{line}");
+        assert!(line.contains("6.6 or newer"), "{line}");
     }
 
     #[test]
@@ -907,6 +1026,11 @@ mod tests {
                 "virtiofsd",
                 "printf '  --readonly\\n  --bind-fd\\n'\n",
                 "--fd",
+            ),
+            (
+                "virtiofsd",
+                "printf '  --readonly\\n  --fd <FD>\\n  --cache <CACHE>\\n'\n",
+                "--allow-mmap",
             ),
             ("bwrap", "printf '  --ro-bind-fd FD DEST\\n'\n", "--bind-fd"),
             (

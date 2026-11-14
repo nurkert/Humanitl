@@ -2185,6 +2185,31 @@ listen).
   directory never stands in the guest root. Mount points inside the share are not announced to the
   guest (`--no-announce-submounts` where the file system daemon knows it), and the shim's expected
   mount table holds exactly one virtiofs mount at `/` and one at `/work`.
+- **The file system daemons hold a fixed number of descriptors** (HUM-469). The unit carries
+  `LimitNOFILE=65536`, soft and hard, for every process of the session. A file system daemon
+  tries to raise its soft limit, fails at that hard limit and takes it; raising the hard limit
+  needs `CAP_SYS_RESOURCE`, which no jail has. Above the limit the daemon answers the guest with
+  `ENFILE` and keeps running, and what the guest releases it can take again. The daemons do not
+  get `--rlimit-nofile`: systemd lowers `LimitNOFILE` to the service manager's own hard limit
+  when that is smaller, and the unit starts with the smaller, still fixed limit, whereas a daemon
+  asked for more than it inherited would exit and leave the guest without a root (and the start
+  with a report-less check instead of the cause). Both daemons run with `--cache never`: the
+  guest drops every entry as soon as nothing holds it and tells the daemon to forget it, so a walk
+  over the whole root leaves only the descriptors of what the guest still holds open (measured:
+  98 after a walk over 735,790 entries; before, a walk drove the root daemon to about 520,000,
+  HUM-445). Copying, reading, searching and `git` over 13,475 files and 300 program starts held at
+  most 131, so the limit leaves ample room, and it is an eighth of the hard limit the service
+  manager otherwise hands out, so the host memory a guest can pin through a daemon stays bounded.
+  The price is speed on metadata-heavy work: without the guest's cache such work took two to
+  sixteen times as long in that measurement (`ls -lR` over `/usr/share/doc` 33 s instead of 2 s).
+- **Shared mappings without the guest's page cache** (HUM-469). `--allow-mmap` keeps
+  `mmap(MAP_SHARED)` working on `/` and `/work` (rustc and cargo need it); the guest kernel must
+  be 6.6 or newer, and a kernel whose configuration names an older version is refused with
+  `SANDBOX_045`. A configuration without the usual version header starts, and `humanitl doctor`
+  says the version is unknown. Caveat on data coherency, not a security boundary: virtiofsd
+  advises this option only when the guest has the directory to itself. When the user edits a
+  file under the project on the host while the guest has it mapped shared, the mapping in the
+  guest can show stale pages. The guest sees nothing it was not given either way.
 - **The project folder is the checked one.** The daemon opens and checks the folder, hands the
   descriptor to the unit and the `/work` daemon's jail binds exactly that descriptor
   (`--bind-fd`); a swap of the path after the check does not reach the guest (HUM-442 Q4). The
@@ -2238,8 +2263,8 @@ listen).
 ### Prerequisites
 
 `/dev/kvm` readable and writable, the emulator with `microvm` and `vhost-user-vsock-pci`, the file
-system daemon with `--readonly` and `--fd`, the vsock device with `--uds-path` and `--groups`,
-bubblewrap with `--bind-fd`, a readable kernel image with virtiofs built in
-(`CONFIG_VIRTIO_FS=y` in the configuration beside the image) and the module directory of that
-kernel. A missing prerequisite refuses the start with `SANDBOX_045`; the start never falls back to
+system daemon with `--readonly`, `--fd`, `--cache` and `--allow-mmap`, the vsock device with
+`--uds-path` and `--groups`, bubblewrap with `--bind-fd`, a readable kernel image with virtiofs
+built in (`CONFIG_VIRTIO_FS=y` in the configuration beside the image) of version 6.6 or newer
+and the module directory of that kernel. A missing prerequisite refuses the start with `SANDBOX_045`; the start never falls back to
 another backend. `humanitl doctor` shows one line per prerequisite.

@@ -523,7 +523,7 @@ impl Harness {
         std::sync::mpsc::Receiver<crate::OutputChunk>,
     ) {
         use crate::SandboxBackend as _;
-        let (plan, output) = self.plan_with(command, files);
+        let (plan, output) = self.plan_with(command, files, None);
         let handle = self
             .backend
             .launch(&plan)
@@ -532,11 +532,13 @@ impl Harness {
     }
 
     /// Der Plan einer Sitzung mit Terminal im Strom-Modus; die Ausgabe des
-    /// Agenten kommt über den Empfänger.
+    /// Agenten kommt über den Empfänger. `probe` ist die Probe, die der Shim
+    /// als Root im Gast startet (HUM-445).
     fn plan_with(
         &self,
         command: &str,
         files: Vec<crate::agent::SandboxFile>,
+        probe: Option<&str>,
     ) -> (
         crate::LaunchPlan,
         std::sync::mpsc::Receiver<crate::OutputChunk>,
@@ -554,6 +556,9 @@ impl Harness {
             terminal: crate::TerminalTransport::Stream,
             output_sink: Some(sink),
             report_timeout: Some(Duration::from_secs(60)),
+            guest_root_probe: probe.map_or_else(crate::GuestRootProbe::default, |probe| {
+                crate::GuestRootProbe::new(probe.to_owned())
+            }),
             ..crate::LaunchOptions::default()
         };
         let plan = self
@@ -561,6 +566,24 @@ impl Harness {
             .plan(&crate::PlanRequest::new(&profile, &session, &options))
             .unwrap_or_else(|d| panic!("plan: {}: {}", d.code, d.why));
         (plan, output)
+    }
+
+    /// Wie [`Harness::launch`], dazu `probe` als Root im Gast.
+    fn launch_probed(
+        &self,
+        command: &str,
+        probe: &str,
+    ) -> (
+        crate::SandboxHandle,
+        std::sync::mpsc::Receiver<crate::OutputChunk>,
+    ) {
+        use crate::SandboxBackend as _;
+        let (plan, output) = self.plan_with(command, Vec::new(), Some(probe));
+        let handle = self
+            .backend
+            .launch(&plan)
+            .unwrap_or_else(|d| panic!("launch: {}: {}", d.code, d.why));
+        (handle, output)
     }
 
     /// Wie [`Harness::launch`], aber der Plan geht erst an
@@ -574,7 +597,7 @@ impl Harness {
         std::sync::mpsc::Receiver<crate::OutputChunk>,
     ) {
         use crate::SandboxBackend as _;
-        let (plan, output) = self.plan_with(command, Vec::new());
+        let (plan, output) = self.plan_with(command, Vec::new(), None);
         before_launch(&plan);
         let handle = self
             .backend
@@ -1118,4 +1141,205 @@ fn a_killed_daemon_ends_the_unit_within_five_seconds() {
         let _ = std::fs::remove_dir(instance);
     }
     let _ = std::fs::remove_dir_all(std::path::Path::new(xdg).parent().unwrap());
+}
+
+/// Der Agent des Tests unten (HUM-469): ein Walk über die ganze Wurzel, dann
+/// auf ein Wort vom Terminal das Zeichen an die Probe, und während die Probe
+/// die Wurzel ausschöpft, nur eingebaute Befehle der Shell und `/work`.
+/// Schläft an einer FIFO in `/tmp`, weil `sleep` ein Programm der Wurzel ist.
+const FD_AGENT: &str = r#"mkfifo /tmp/t469 && exec {t}<>/tmp/t469
+nap() { read -rt 0.2 -u "$t" _ || true; }
+echo "walked:$(find / -xdev 2>/dev/null | wc -l)"
+read -r line
+: > /work/go-469
+n=0; while [ ! -s /work/held-469 ] && [ $n -lt 900 ]; do nap; n=$((n+1)); done
+IFS= read -r held < /work/held-469
+echo "probe:$held"
+echo alive > /work/alive-469 && echo "work:ok"
+: > /work/release-469
+n=0; while [ ! -e /work/released-469 ] && [ $n -lt 300 ]; do nap; n=$((n+1)); done
+echo "usable:$(ls /usr/bin | wc -l)"
+python3 -c 'import mmap; f = open("/usr/bin/bash", "rb"); m = mmap.mmap(f.fileno(), 0, mmap.MAP_SHARED, mmap.PROT_READ); print("mmap:" + ("ok" if m[:4] == b"\x7fELF" else "bad"))' 2>&1
+echo done-469
+"#;
+
+/// Die Probe des Tests unten, Root im Gast ohne Filter: hebt die eigene
+/// Grenze an und hält Dateien der Wurzel offen, bis sie [`HOLD`] hat oder
+/// 500 Mal hintereinander abgewiesen wird; dann meldet sie, wartet auf die
+/// Freigabe und schließt alles. Eine Pipe statt `<(…)`: Der Gast hat kein
+/// `/dev/fd`.
+const FD_PROBE: &str = r#"mkfifo /tmp/p469 && exec {t}<>/tmp/p469
+nap() { read -rt 0.2 -u "$t" _ || true; }
+ulimit -n 1048576 || ulimit -n 262144
+while [ ! -e /work/go-469 ]; do nap; done
+find /usr -xdev -type f 2>/dev/null | {
+  held=0; refused=0; streak=0; fds=()
+  while IFS= read -r f; do
+    if exec {fd}<"$f"; then
+      held=$((held+1)); streak=0; fds+=("$fd")
+    else
+      refused=$((refused+1)); streak=$((streak+1))
+      [ "$streak" -ge 500 ] && break
+    fi
+    [ "$held" -ge HOLD ] && break
+  done 2>/dev/null
+  echo "held=$held refused=$refused" > /work/held-469
+  while [ ! -e /work/release-469 ]; do nap; done
+  for fd in "${fds[@]}"; do exec {fd}<&-; done
+  : > /work/released-469
+}
+"#;
+
+/// So viele Dateien will die Probe offen halten: je Datei hält virtiofsd zwei
+/// Deskriptoren (Inode und offene Datei), zusammen also deutlich mehr als
+/// [`super::lines::FILE_DAEMON_NOFILE`].
+const HOLD: u32 = 40_000;
+
+/// Der virtiofsd der Wurzel in der Unit `unit`: der Prozess `virtiofsd`, der
+/// seinen Socket als Deskriptor bekommt (`--fd`).
+fn root_file_daemon(unit: &str) -> Option<i32> {
+    let output = std::process::Command::new("systemctl")
+        .args(["--user", "show", "--property=ControlGroup", "--value", unit])
+        .output()
+        .ok()?;
+    let group = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let procs = std::fs::read_to_string(
+        std::path::Path::new("/sys/fs/cgroup")
+            .join(group.trim_start_matches('/'))
+            .join("cgroup.procs"),
+    )
+    .ok()?;
+    procs
+        .lines()
+        .filter_map(|line| line.trim().parse::<i32>().ok())
+        .find(|pid| {
+            let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+            let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+            comm.trim() == "virtiofsd" && cmdline.split(|b| *b == 0).any(|word| word == b"--fd")
+        })
+}
+
+/// Die Zahl der offenen Deskriptoren des Prozesses `pid`, vom Host gezählt.
+fn descriptors(pid: i32) -> Option<usize> {
+    Some(std::fs::read_dir(format!("/proc/{pid}/fd")).ok()?.count())
+}
+
+/// HUM-469: Ein Walk über die ganze Wurzel lässt den virtiofsd der Wurzel
+/// nicht wachsen (`--cache never`), und Root im Gast, der so viele Dateien
+/// der Wurzel offen hält, wie er kann, treibt ihn nicht über
+/// [`super::lines::FILE_DAEMON_NOFILE`] Deskriptoren, gezählt in
+/// `/proc/<pid>/fd` auf dem Host. Der Gast bekommt darüber `ENFILE`, die
+/// Sitzung bleibt bedienbar (Terminal und `/work`), und nach der Freigabe
+/// geht die Wurzel wieder. Mutationsbeweis: ohne `LimitNOFILE` der Unit hält
+/// die Probe alle [`HOLD`] Dateien und der Dienst mehr als die Grenze; ohne `--cache never` hält er nach dem Walk Zehntausende.
+/// Eine geteilte Abbildung (`MAP_SHARED`) einer Datei der Wurzel geht
+/// trotzdem (`--allow-mmap`).
+#[test]
+fn a_guest_cannot_drive_the_root_file_daemon_over_its_descriptor_limit() {
+    use crate::SandboxBackend as _;
+    let test = "a_guest_cannot_drive_the_root_file_daemon_over_its_descriptor_limit";
+    let Some(harness) = Harness::new(test) else {
+        return;
+    };
+    let limit = usize::try_from(super::lines::FILE_DAEMON_NOFILE).unwrap();
+    // Die Probe läuft unter `/bin/sh -c`; ihr Skript braucht bash.
+    std::fs::write(
+        harness.project.join("probe-469.sh"),
+        FD_PROBE.replace("HOLD", &HOLD.to_string()),
+    )
+    .unwrap();
+    let (handle, output) = harness.launch_probed(FD_AGENT, "exec /bin/bash /work/probe-469.sh");
+    let results = harness.backend.isolation_check(&handle);
+    assert!(results.iter().all(|r| r.passed), "{results:?}");
+    let unit = handle.unit().unwrap().unit.service();
+    let pid = root_file_daemon(&unit).expect("the root's virtiofsd in the unit");
+    let mut seen = Vec::new();
+    // Der Walk ist fertig, wenn seine Zeile samt Zeilenende da ist.
+    let walked = |seen: &[u8]| {
+        String::from_utf8_lossy(seen)
+            .split_once("walked:")
+            .is_some_and(|(_, rest)| rest.contains('\n'))
+    };
+    // Lokal dauert der Walk über rund 735 000 Einträge Sekunden; ohne den
+    // Cache des Gasts geht jede Suche an den Dienst, und ein Runner der CI
+    // ist langsamer. Der Job kvm-tests hat keine eigene Frist (die Vorgabe
+    // von GitHub, 360 Minuten).
+    let deadline = Instant::now() + Duration::from_secs(300);
+    while !walked(&seen) && Instant::now() < deadline {
+        if let Ok(chunk) = output.recv_timeout(Duration::from_millis(200)) {
+            seen.extend_from_slice(&chunk.bytes);
+        }
+    }
+    assert!(walked(&seen), "{}", String::from_utf8_lossy(&seen));
+    let after_walk = descriptors(pid).expect("count the root's descriptors");
+    handle.write_input(b"go\r").unwrap();
+    let mut most = after_walk;
+    let deadline = Instant::now() + Duration::from_secs(240);
+    while !String::from_utf8_lossy(&seen).contains("done-469") && Instant::now() < deadline {
+        if let Some(count) = descriptors(pid) {
+            most = most.max(count);
+        }
+        if let Ok(chunk) = output.recv_timeout(Duration::from_millis(20)) {
+            seen.extend_from_slice(&chunk.bytes);
+        }
+    }
+    let after_release = descriptors(pid).unwrap_or(0);
+    let shown = String::from_utf8_lossy(&seen).into_owned();
+    let ended = handle.wait_timeout(Duration::from_secs(30));
+    eprintln!(
+        "{test}: after the walk {after_walk}, at most {most}, after the release \
+         {after_release} descriptors (limit {limit}); {}",
+        shown
+            .lines()
+            .filter(|l| l.starts_with("walked:") || l.starts_with("probe:"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    assert!(shown.contains("done-469"), "{shown}");
+    let probe_count = |key: &str| {
+        shown
+            .lines()
+            .find_map(|line| line.strip_prefix("probe:"))
+            .and_then(|line| {
+                line.split(' ')
+                    .find_map(|pair| pair.trim().strip_prefix(key))
+                    .and_then(|value| value.parse::<u32>().ok())
+            })
+            .unwrap_or_else(|| panic!("no {key} in the probe's line: {shown}"))
+    };
+    let (held, refused) = (probe_count("held="), probe_count("refused="));
+    assert!(
+        held < HOLD,
+        "the probe held all {HOLD} files of the root; the limit did not bind: {shown}"
+    );
+    // Die Probe hat wirklich viel gehalten und wurde dann abgewiesen: Die
+    // Grenze, nicht ein Fehler der Probe, hat sie aufgehalten.
+    assert!(
+        u64::from(held) * 4 >= u64::from(super::lines::FILE_DAEMON_NOFILE) && refused >= 500,
+        "the probe held {held} and was refused {refused} times: {shown}"
+    );
+    assert!(
+        most <= limit,
+        "the root's virtiofsd held {most} descriptors, more than {limit}"
+    );
+    assert!(
+        after_walk < 4096,
+        "a walk over the root left {after_walk} descriptors open in its virtiofsd"
+    );
+    assert!(
+        after_release < 4096,
+        "{after_release} descriptors stayed open after the probe let go"
+    );
+    assert!(shown.contains("work:ok"), "{shown}");
+    let usable = shown
+        .lines()
+        .find_map(|line| line.strip_prefix("usable:"))
+        .and_then(|count| count.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    assert!(usable > 0, "the root did not come back: {shown}");
+    // `--allow-mmap`: Eine geteilte Abbildung einer Datei der Wurzel geht
+    // trotz `--cache never`.
+    assert!(shown.contains("mmap:ok"), "{shown}");
+    let status = ended.expect("the session ends").expect("a status");
+    assert_eq!(status.code(), Some(0), "the agent's exit code: {shown}");
 }
