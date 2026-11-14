@@ -81,6 +81,16 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-472 | Website: das Modell als Angreifer (Lazarus, Microsoft Research), mit Quellen | S | — |
 | HUM-475 | Website: die deutschen Texte der Start- und der Sicherheitsseite sprachlich überarbeiten | S | HUM-472 |
 | HUM-476 | Kernel-Stufe: Dateicache im Gast wieder an, aber begrenzt | M | HUM-469 |
+| HUM-477 | Ereignisse der Sandbox (Isolationsprüfung, Vermerk der Tür) erreichen das Audit-Log | M | HUM-467 |
+| HUM-478 | Kernel-Stufe: die Tür pausiert nach einem Fehler von `accept` | S | HUM-467 |
+| HUM-479 | Kernel-Stufe: gemeinsame Obergrenze der Tür-Verbindungen mit fairer Teilung | S | HUM-467 |
+| HUM-480 | Kernel-Stufe: Programme der Unit erzwingen (`ExecPaths=`) und je Rolle zählen | M | HUM-468 |
+| HUM-481 | Kernel-Stufe: Masken auch im Gast über dem Overlay, `--xattrmap` für den Dienst der Schicht | M | HUM-446 |
+| HUM-482 | Wegwerf-Schicht: Masken bei Casefold, die obere Schicht mit Gerät und Inode festhalten | S | HUM-446 |
+| HUM-483 | Kernel-Stufe: auch gehaltene Inodes begrenzen, Test für die `/proc`-Deskriptoren von PID 1 | S | HUM-476 |
+| HUM-484 | Kernel-Stufe: `--allow-mmap` und die Untergrenze 6.6 des Gastkernels unter `--cache auto` prüfen | S | HUM-476 |
+| HUM-485 | Kernel-Stufe: Speicher- und Prozessgrenzen der Unit (`MemoryMax=`, `TasksMax=`) | S | HUM-444 |
+| HUM-486 | vhost-device-vsock: Fehler beim Start melden, ein stummes Gerät erkennen | S | HUM-471 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -1580,3 +1590,210 @@ entfernen. Ebenso: auch die Zahl der gehaltenen Inodes (`inode-state`
 erstes Feld) begrenzen, damit Verzeichnisketten nicht unbemerkt bleiben;
 ein Test, der die keep-Liste von PID 1 und das `drop` der drei
 `/proc`-Deskriptoren im Kind bewacht.
+
+---
+
+## HUM-477 · Sandbox events reach the audit log
+
+### Kontext
+Aus HUM-467. Der Vermerk der Tür (Verbindung über der Obergrenze) und das
+Ergebnis der Isolationsprüfung stehen nur in der Zulassung und in der
+evidence der Prüfung; aus dem Sandbox-Crate führt kein Weg ins Audit-Log
+(`bin/humanitld/src/audit_sink.rs` hört nur den Flow-Strom).
+
+### Spezifikation
+1. Ein Kanal vom Backend in den Ereignisstrom der Sitzung, über den das
+   Backend Ereignisse meldet; der Daemon schreibt sie ins Audit-Log.
+2. Erste Nutzer: der Vermerk der Tür (einmal je Sitzung) und das Ergebnis
+   der Host-Prüfung der Kernel-Stufe.
+
+### Tests
+- Integration: eine Sitzung, deren Gast die Obergrenze überschreitet, hat
+  genau einen Eintrag im Audit-Log.
+
+### Akzeptanzkriterien
+1. Der Vermerk der Tür steht im Audit-Log, nicht nur in der evidence.
+
+---
+
+## HUM-478 · Kernel level: the door pauses after an `accept` error
+
+### Kontext
+Aus dem Review von HUM-467. `serve_door` geht nach einem Fehler von
+`accept` sofort zurück zu `poll`; scheitert `accept` dauerhaft (etwa
+`EMFILE`), dreht der Faden ohne Pause.
+
+### Spezifikation
+1. Nach einem Fehler von `accept` eine kurze Pause (etwa 50 ms), die
+   Lebensleine bleibt dabei beachtet.
+
+### Tests
+- Unit: ein Lauscher, dessen `accept` scheitert, kostet keine volle CPU.
+
+### Akzeptanzkriterien
+1. Ein dauerhafter Fehler von `accept` lässt den Faden nicht drehen.
+
+---
+
+## HUM-479 · Kernel level: a shared cap on door connections, fairly divided
+
+### Kontext
+Aus HUM-467. Je Sitzung gilt eine Obergrenze von 64 Verbindungen; über alle
+Sitzungen gibt es keine. Ein gemeinsames Limit darf keinen Gast die Türen
+der anderen Sitzungen sperren lassen.
+
+### Spezifikation
+1. Ein gemeinsames Limit über alle Sitzungen mit einem garantierten Anteil
+   je Sitzung, oder eine begründete Entscheidung im Spec, dass die Grenze je
+   Sitzung genügt.
+
+### Akzeptanzkriterien
+1. Entscheidung mit Begründung; wenn gebaut, ein Test, dass eine volle
+   Sitzung die Tür einer anderen nicht sperrt.
+
+---
+
+## HUM-480 · Kernel level: enforce the programs of the unit and count them per role
+
+### Kontext
+Aus dem Review von HUM-468. Die Host-Prüfung kennt die Programme der Unit,
+aber sie läuft einmal vor der Zulassung; ein Prozess, den ein übernommener
+Helfer danach startet, bleibt ungesehen. Rollen sind nicht an Programme
+gebunden (ein zweites `bwrap` oder `sh` statt eines Helfers besteht).
+
+### Spezifikation
+1. Die Unit erzwingt ihre Programme über den Dienstverwalter
+   (`ExecPaths=` mit den kanonischen Pfaden aus `Resolved`, `NoExecPaths=/`),
+   soweit die Gefängnisse von bubblewrap das zulassen; messen.
+2. Die Host-Prüfung zählt je Rolle, wo es robust ist (Shell des Skripts
+   genau eine, `bwrap` je Helfer).
+3. `/bin/sh` als bash: prüfen, ob die Shell des Skripts ein festes Programm
+   sein muss.
+
+### Tests
+- KVM: ein Helfer, der ein fremdes Programm startet, scheitert am `exec`.
+
+### Akzeptanzkriterien
+1. Kein Prozess der Unit führt ein Programm außerhalb der Liste aus, auch
+   nach der Zulassung.
+
+---
+
+## HUM-481 · Kernel level: masks in the guest over the overlay, `--xattrmap` for the layer daemon
+
+### Kontext
+Aus HUM-446. Im Gast kann der Agent über einen maskierten Pfad in seiner
+eigenen Schicht schreiben; unter bwrap verweigert das die Maske selbst.
+Übernommen wird es nie (`scan_masked`), aber die Sicht des Agenten weicht ab.
+Der Dienst der Schicht nimmt jedes erweiterte Attribut an.
+
+### Spezifikation
+1. Der Shim legt die Masken des Profils über das Overlay, wie bwrap sie
+   über den Ordner legt.
+2. `--xattrmap` lässt den Dienst der Schicht nur `user.overlay.*` und die
+   nötigen Attribute annehmen.
+
+### Tests
+- KVM: ein Schreiben auf einen maskierten Pfad scheitert im Gast.
+
+### Akzeptanzkriterien
+1. Der Agent sieht im Gast dieselben Masken wie unter bwrap.
+
+---
+
+## HUM-482 · Disposable layer: masks under casefold, pin the upper layer
+
+### Kontext
+Aus dem Review von HUM-446. Der Vergleich der Masken unterscheidet Groß- und
+Kleinschreibung; auf einem Projektordner mit Casefold (ext4 `+F`) wäre
+`.GIT/hooks` dieselbe Maske. `Layer::open_upper` hält unter Linux Gerät und
+Inode der oberen Schicht nicht fest, ein vom Gast getauschtes `upper` endet
+als Lesefehler statt als `SANDBOX_031`.
+
+### Spezifikation
+1. Casefold-Ordner im Wegwerf-Modus verweigern oder die Masken falten.
+2. Die obere Schicht beim Anlegen mit Gerät und Inode festhalten und beim
+   Lesen vergleichen.
+
+### Akzeptanzkriterien
+1. Keine Maske lässt sich über die Schreibweise umgehen; ein getauschtes
+   `upper` heißt `SANDBOX_031`.
+
+---
+
+## HUM-483 · Kernel level: bound held inodes too, guard PID 1's `/proc` descriptors
+
+### Kontext
+Aus dem Review von HUM-476. Der Shim leert nur unbenutzte Einträge;
+Verzeichnisse, die gecachte Kinder halten, zählen nicht, eine Kette von
+Verzeichnissen kann einen Dienst weiter bis zur Grenze treiben. Kein Test
+bewacht, dass die drei `/proc`-Deskriptoren von PID 1 nicht ins Kind des
+Agenten gelangen.
+
+### Spezifikation
+1. Auch die Zahl der gehaltenen Inodes (`inode-state`, erstes Feld)
+   beobachten und darüber leeren, messen.
+2. Ein Test, der im Kind nach dem Start keinen der drei Deskriptoren
+   findet.
+
+### Akzeptanzkriterien
+1. Eine Verzeichniskette erreicht die Grenze nicht unbemerkt; der Test färbt
+   sich rot, wenn die keep-Liste oder das `drop` fehlt.
+
+---
+
+## HUM-484 · Kernel level: `--allow-mmap` and the 6.6 guest kernel floor under `--cache auto`
+
+### Kontext
+Aus HUM-476. `--allow-mmap` und die Untergrenze 6.6 des Gastkernels
+(`prerequisites.rs`) stammen aus der Zeit von `--cache never` und wirken
+unter `auto` womöglich nicht mehr.
+
+### Spezifikation
+1. Messen, ob beide unter `auto` noch nötig sind; wenn nicht, entfernen
+   und die Dokumentation anpassen.
+
+### Akzeptanzkriterien
+1. Jede der beiden Einstellungen ist begründet oder entfernt.
+
+---
+
+## HUM-485 · Kernel level: memory and task limits of the unit
+
+### Kontext
+Die Unit einer Sitzung der Kernel-Stufe begrenzt Deskriptoren
+(`LimitNOFILE`), aber weder Speicher noch Zahl der Prozesse; ein
+übernommener Helfer könnte Speicher oder PIDs des Rechners binden.
+
+### Spezifikation
+1. `MemoryMax=` (aus dem Speicher der Maschine plus einem festen Zuschlag
+   für die Helfer) und `TasksMax=` für die Unit, gemessen an einer normalen
+   Sitzung.
+
+### Tests
+- KVM: eine Sitzung läuft mit den Grenzen; ein Helfer über `TasksMax`
+  scheitert.
+
+### Akzeptanzkriterien
+1. Eine Sitzung bindet höchstens den festen Speicher und die feste Zahl
+   von Prozessen.
+
+---
+
+## HUM-486 · vhost-device-vsock: report the start-up bug, detect a silent device
+
+### Kontext
+Aus HUM-471. vhost-device-vsock 0.3.0 beendet seinen Event-Faden still,
+wenn ein `CONNECT` vor den Queues ankommt; der Prozess lebt weiter und
+antwortet nie. HUM-471 umgeht das, indem der Host erst nach der Meldung des
+Gasts verbindet.
+
+### Spezifikation
+1. Den Fehler upstream melden, mit der Reproduktion aus HUM-471 (ohne
+   Projektnamen oder interne Pfade).
+2. Prüfen, ob die Sitzung ein stummes Gerät eindeutig benennen kann (etwa
+   über eine Frist auf die Antwort der Tür), statt nur „no report".
+
+### Akzeptanzkriterien
+1. Bericht upstream verlinkt im Spec; ein stummes Gerät hat eine eigene
+   Aussage in der Diagnose oder eine begründete Entscheidung dagegen.
