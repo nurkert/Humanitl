@@ -592,44 +592,15 @@ fn wait_emulator(vm: &mut Vm, deadline: Instant) -> Option<ExitStatus> {
     }
 }
 
-/// Eine Verbindung zum Port des Shims über das vsock-Gerät: `CONNECT
-/// <port>`, dann `OK`. Antwortet der Gast noch nicht, wird es wiederholt.
-/// Die Antwort des Geräts wird Byte für Byte gelesen: Was danach kommt,
-/// gehört schon dem Shim.
+/// Eine Verbindung zum Berichts-Port, wie der Adapter sie öffnet
+/// ([`super::session::connect`]): Eine gestellte Anfrage wird nie
+/// aufgegeben (HUM-470).
 fn connect(
     device: &Path,
     deadline: Instant,
     ended: &mut dyn FnMut() -> bool,
 ) -> Option<UnixStream> {
-    while Instant::now() < deadline && !ended() {
-        let Ok(mut stream) = UnixStream::connect(device) else {
-            thread::sleep(Duration::from_millis(100));
-            continue;
-        };
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-        if stream
-            .write_all(format!("CONNECT {REPORT_PORT}\n").as_bytes())
-            .is_err()
-        {
-            thread::sleep(Duration::from_millis(100));
-            continue;
-        }
-        let mut first = Vec::new();
-        let mut byte = [0u8; 1];
-        while first.len() < 64 && stream.read(&mut byte).ok() == Some(1) {
-            if byte[0] == b'\n' {
-                break;
-            }
-            first.push(byte[0]);
-        }
-        if !first.starts_with(b"OK") {
-            thread::sleep(Duration::from_millis(100));
-            continue;
-        }
-        let _ = stream.set_read_timeout(None);
-        return Some(stream);
-    }
-    None
+    super::session::connect(device, REPORT_PORT, deadline, ended)
 }
 
 /// Jede Zeile des Berichts bis zum Ende.

@@ -1974,6 +1974,15 @@ beendet die Sitzung danach (K-15).
 Ein Gast, der ohne den Bericht des Shims endet, ist eine gescheiterte Prüfung mit eigenem Grund,
 nie ein Bestehen. Eine gescheiterte Host-Prüfung ist `SANDBOX_047`: Der Agent wird nicht zugelassen,
 und die Sitzung endet.
+Hat der Gast selbst schon abgelehnt (eine rote Zeile in seinem Bericht, oder gar kein Bericht),
+bleibt seine Diagnose die, die der Start zeigt, und die Funde des Hosts stehen im Befund: Der Shim
+hält dann an und schaltet den Gast ab, die Unit endet mit ihm, und eine Host-Prüfung, die eine Unit
+ohne cgroup oder ohne ihren Emulator findet, sieht die Folge dieser Ablehnung, nicht ihren Grund
+(HUM-470). Das Urteil hängt nie an dieser Reihenfolge, nur die angezeigte Ursache. Der Host öffnet
+jede Verbindung in den Gast einmal und wartet bis zur Frist der Sitzung auf ihre Antwort: Ein
+aufgegebenes `CONNECT` könnte der Gast später noch annehmen, und es nähme den Platz des Berichts ein
+(HUM-470, eine Vorsorge: Das vsock-Gerät sagt binnen Millisekunden ab, solange der Gast nicht
+lauscht).
 
 ### Wie eine Sitzung entsteht
 

@@ -730,7 +730,8 @@ den Übergabe-Socket oder die Dateien des Gasts), und in einer vorübergehenden 
 prüft der Daemon ihn vom Host aus: Seine Deskriptoren dürfen nur KVM, Ereignis- und
 Signal-Deskriptoren, `io_uring`, sein Speicher, `/dev/null`, Pipes und Sockets sein; seine eigene
 Startzeile darf keine Netzoption und keine Konsole tragen; ein Fund ist `SANDBOX_047` und beendet
-die Sitzung. Der Agent im Gast wartet an seinem Tor vor dem `exec` auf das `ADMIT` des Daemons,
+die Sitzung. Hat der Gast selbst schon abgelehnt, ist seine Diagnose die angezeigte, und die Funde
+des Hosts stehen im Befund; abgewiesen wird die Sitzung so oder so (HUM-470). Der Agent im Gast wartet an seinem Tor vor dem `exec` auf das `ADMIT` des Daemons,
 das erst nach den Zeilen des Gasts und dieser Host-Prüfung geht; ein Fund beendet die Sitzung also,
 bevor der Agent je läuft. *Restrisiko:* ein Fehler in KVM oder im Gerätecode des Emulators, der einen Gast Code im
 Emulator ausführen lässt; Gefängnis und Unit begrenzen dann, was dieser Code erreicht, und Netz hat
@@ -745,7 +746,9 @@ Unix-Socket `<uds>_P` im Laufzeitverzeichnis der Sitzung. Der Daemon bindet gena
 Socket, `<uds>_5000`, und reicht jede Verbindung an den Proxy-Socket der Sitzung weiter; für jeden
 anderen Port gibt es keinen Lauscher, und die Verbindung des Gasts läuft in ein Timeout (Q2).
 `--forward-cid` ist nie gesetzt. Die Seite des Hosts öffnet selbst zwei Verbindungen in den Gast
-(`CONNECT` am Berichts-Port des Shims): den Bericht und den Steuerkanal (K-29). Die Host-Prüfung
+(`CONNECT` am Berichts-Port des Shims): den Bericht und den Steuerkanal (K-29). Ein gestelltes
+`CONNECT` gibt sie nie auf, um neu zu fragen; der Gast, der genau zwei Verbindungen in ihrer
+Reihenfolge nimmt, kann so keine aufgegebene für den Bericht halten (HUM-470). Die Host-Prüfung
 lehnt jeden Socket im Laufzeitverzeichnis außer den erklärten ab, und mehr als einen
 vsock-Geräteprozess oder ein zweites Gerät. *Restrisiko:* ein Fehler im Prozess des vsock-Geräts;
 er läuft eingesperrt und ohne Netz wie die anderen Hilfsprozesse.
@@ -881,6 +884,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-13 | K-27 `mitigated`: die gemeinsame Stufe von Podman (`podman/crun`) zugelassen, nachdem `escape-tests-podman` (ESC-1, ESC-2, ESC-5) mit HUM-434, HUM-436, HUM-437 und HUM-438 auf `main` grün war; gewählt nur von einem Menschen, nie von `auto`; die Kernel-Stufe lehnt jeder Start bis HUM-449 mit `SANDBOX_048` ab | HUM-448 |
 | 2026-11-14 | K-29 neu: der Steuerkanal der Terminals, der Strom-Modus der Kernel-Stufe und von bwrap auf Verlangen; K-18 im Strom-Modus; weitere Shells belegen zusätzlich ein verweigertes `AF_VSOCK` | HUM-443 |
 | 2026-11-14 | K-30 bis K-33 neu: Monitor, vsock-Tür, Gastkernel und Hilfsprozesse der Kernel-Stufe; eine gehärtete Unit je Sitzung, vier Gefängnisse, der geprüfte Projektordner als Deskriptor, eine Host-Prüfung des Monitors (`SANDBOX_047`), bevor der Agent zugelassen wird, jedes Gefängnis bindet nur sein eigenes Socket-Verzeichnis, das Ende des Daemons beendet die Unit; nicht zugelassen bis HUM-449 | HUM-444 |
+| 2026-11-14 | K-30, K-31: Hat der Gast schon abgelehnt, wird seine Diagnose angezeigt, die Funde der Host-Prüfung stehen im Befund, abgewiesen wird die Sitzung so oder so; der Host gibt ein gestelltes `CONNECT` in den Gast nie auf | HUM-470 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in

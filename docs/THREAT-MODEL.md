@@ -736,6 +736,8 @@ transient unit of the user with
 After the start the daemon checks it from the host: its descriptors may only be KVM, event and
 signal descriptors, `io_uring`, its memory, `/dev/null`, pipes and sockets; its own command line
 may hold no network option and no console; a finding is `SANDBOX_047` and stops the session.
+When the guest has already refused on its own, its diagnosis is the one shown and the host's
+findings stand in the evidence; the session is refused either way (HUM-470).
 The agent in the guest waits at its exec gate for the daemon's `ADMIT`, sent only after the
 guest's lines and this host check passed, so a finding stops the session before the agent ever
 runs.
@@ -751,7 +753,9 @@ socket `<uds>_P` in the session's runtime directory. The daemon binds exactly on
 `<uds>_5000`, and forwards every connection to the session's proxy socket; for any other port
 there is no listener, and the guest's connection times out (Q2). `--forward-cid` is never set. The
 host side opens two connections into the guest itself (`CONNECT` on the shim's report port): the
-report and the control stream (K-29). The host check refuses any socket in the runtime directory
+report and the control stream (K-29). It never gives up a pending `CONNECT` to ask again, so the
+guest, which takes exactly two connections in their order, cannot take an abandoned one for the
+report (HUM-470). The host check refuses any socket in the runtime directory
 besides the declared ones, and more than one vsock device process or device. *Residual risk:* a
 flaw in the vsock device process; it runs jailed and without network like the other helpers.
 
@@ -890,6 +894,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-13 | K-27 `mitigated`: the plain level of Podman (`podman/crun`) admitted after `escape-tests-podman` (ESC-1, ESC-2, ESC-5) was green on `main` with HUM-434, HUM-436, HUM-437 and HUM-438; chosen only by a person, never by `auto`; the kernel level stays refused with `SANDBOX_048` until HUM-449 | HUM-448 |
 | 2026-11-14 | K-29 added: the control stream of the terminals, the stream mode of the kernel level and of bwrap on request; K-18 in the stream mode; further shells prove a refused `AF_VSOCK` as well | HUM-443 |
 | 2026-11-14 | K-30 to K-33 added: the monitor, the vsock door, the guest kernel and the helper processes of the kernel level; one hardened unit per session, four jails, the checked project folder by descriptor, a host check of the monitor (`SANDBOX_047`) before the agent is admitted, each jail binding only its own socket directory, the end of the daemon ends the unit; not admitted until HUM-449 | HUM-444 |
+| 2026-11-14 | K-30, K-31: when the guest has already refused, its diagnosis is shown and the host check's findings stand in the evidence, the session is refused either way; the host never gives up a pending `CONNECT` into the guest | HUM-470 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

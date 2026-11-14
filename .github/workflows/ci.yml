@@ -1096,8 +1096,13 @@ jobs:
           cargo test -p humanitl-sandbox --lib qemu::kvm_tests -- --test-threads=1 \
             2>&1 | tee "$RUNNER_TEMP/kvm-tests.txt" || status=$?
           # The job log needs admin rights; an annotation names each red test
-          # with the line of its assertion (HUM-133).
+          # with the line of its assertion (HUM-133), and one more carries
+          # its whole message: the shim's report, the emulator's status and
+          # the helpers' output of exactly this run (HUM-470).
           ../scripts/ci/test-report.sh "$RUNNER_TEMP/kvm-tests.txt"
+          if ((status != 0)); then
+            python3 ../scripts/ci/kvm-annotations.py "$RUNNER_TEMP/kvm-tests.txt" "kvm failure"
+          fi
           ((status == 0))
           # A filter that matches nothing would pass with zero tests; the
           # adapter's tests (HUM-444) add four to the five of HUM-465/443.
@@ -1118,17 +1123,7 @@ jobs:
           # One annotation per failed test with its whole output, the lines
           # joined: GitHub shows at most ten annotations per step, and the
           # last lines of the run are the passing tests after the failed one.
-          python3 - "$RUNNER_TEMP/kvm-console.txt" <<'PYTHON'
-          import re
-          import sys
-          text = open(sys.argv[1], errors="replace").read()
-          blocks = re.findall(r"^---- (\S+) stdout ----\n(.*?)(?=^---- |^failures:$)", text, re.S | re.M)
-          if not blocks:
-              blocks = [("tail", "\n".join(text.splitlines()[-80:]))]
-          for name, body in blocks[:9]:
-              body = body[-30000:].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-              print(f"::error title=kvm console {name}::{body}")
-          PYTHON
+          python3 ../scripts/ci/kvm-annotations.py "$RUNNER_TEMP/kvm-console.txt" "kvm console"
           exit 0
 
   escape-tests-qemu:

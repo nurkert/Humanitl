@@ -1039,22 +1039,44 @@ impl SandboxBackend for BwrapBackend {
     }
 }
 
+/// Der Anfang des Befunds einer Zeile, die der Host für einen fehlenden
+/// Bericht einsetzt (die Ersatzzeile der Kernel-Stufe).
+pub(crate) const NO_REPORT_REASON: &str = "no-report:";
+
 /// The three guarantees from the shim's report, for every backend whose shim
 /// writes the same five `CHECK` lines (HUM-323); see
 /// [`BwrapBackend::isolation_check`](SandboxBackend::isolation_check).
 pub(crate) fn isolation_from_report(handle: &SandboxHandle, timeout: Duration) -> Vec<CheckResult> {
+    let started = std::time::Instant::now();
     let report = handle.wait_for_report(timeout);
-    if report.checks.is_empty() {
-        let mut evidence = format!("no CHECK line from the shim within {timeout:?}");
-        if report.closed {
-            evidence.push_str("; the report pipe is closed");
-        }
-        if report.other_lines > 0 {
-            let _ = std::fmt::Write::write_fmt(
-                &mut evidence,
-                format_args!("; {} other line(s) ignored", report.other_lines),
-            );
-        }
+    let silent = if report.checks.is_empty() {
+        no_report_evidence(timeout, started.elapsed(), &report, handle.try_wait())
+    } else {
+        String::new()
+    };
+    results_of_report(&report, &silent)
+}
+
+/// Die drei Garantien aus einem gelesenen Bericht; `silent` ist der Befund,
+/// wenn er keine `CHECK`-Zeile hat ([`no_report_evidence`]).
+pub(crate) fn results_of_report(report: &ReportSnapshot, silent: &str) -> Vec<CheckResult> {
+    // Die Kernel-Stufe schreibt für einen Gast ohne Bericht selbst eine rote
+    // Zeile ([`NO_REPORT_REASON`]); sie ist kein Bericht des Shims, sondern
+    // sein Fehlen, und trägt deshalb dieselbe Diagnose wie gar keine Zeile
+    // (HUM-470), mit ihrem Grund.
+    let stand_ins: Vec<&str> = report
+        .checks
+        .iter()
+        .filter(|check| !check.ok && check.evidence.starts_with(NO_REPORT_REASON))
+        .map(|check| check.evidence.as_str())
+        .collect();
+    let only_stand_ins = !report.checks.is_empty() && stand_ins.len() == report.checks.len();
+    if report.checks.is_empty() || only_stand_ins {
+        let evidence = if only_stand_ins {
+            format!("no CHECK line from the shim: {}", stand_ins.join("; "))
+        } else {
+            silent.to_owned()
+        };
         return IsolationCheck::ALL
             .iter()
             .map(|&check| CheckResult {
@@ -1069,15 +1091,15 @@ pub(crate) fn isolation_from_report(handle: &SandboxHandle, timeout: Duration) -
             })
             .collect();
     }
-    let door = door_check(&report);
+    let door = door_check(report);
     let mut interfaces = check_from(
-        &report,
+        report,
         IsolationCheck::NoNetworkInterface,
         &[CHECK_NO_INTERFACES],
         SANDBOX_014,
     );
     let mut seccomp = check_from(
-        &report,
+        report,
         IsolationCheck::SeccompActive,
         &[CHECK_SECCOMP_APPLIED, CHECK_FAMILIES],
         SANDBOX_016,
@@ -1102,6 +1124,41 @@ pub(crate) fn isolation_from_report(handle: &SandboxHandle, timeout: Duration) -
         }
     }
     vec![interfaces, door, seccomp]
+}
+
+/// Der Befund, wenn der Bericht keine `CHECK`-Zeile hat: warum das Warten
+/// endete. Das Warten endet auch, wenn die Sandbox endet oder die Pipe
+/// zugeht, und dann wäre „within 60s" gelogen (HUM-470: In der CI stand es
+/// da, während die Unit längst fort war). Genannt werden dann die Zeit bis
+/// dahin und der Status des Endes.
+pub(crate) fn no_report_evidence(
+    timeout: Duration,
+    waited: Duration,
+    report: &ReportSnapshot,
+    ended: Option<ExitStatus>,
+) -> String {
+    let mut evidence = match ended {
+        Some(status) => format!(
+            "no CHECK line from the shim; the sandbox ended after {:.1}s of {timeout:?} \
+             ({status}) before its report",
+            waited.as_secs_f64()
+        ),
+        None if report.closed => format!(
+            "no CHECK line from the shim after {:.1}s of {timeout:?}",
+            waited.as_secs_f64()
+        ),
+        None => format!("no CHECK line from the shim within {timeout:?}"),
+    };
+    if report.closed {
+        evidence.push_str("; the report pipe is closed");
+    }
+    if report.other_lines > 0 {
+        let _ = std::fmt::Write::write_fmt(
+            &mut evidence,
+            format_args!("; {} other line(s) ignored", report.other_lines),
+        );
+    }
+    evidence
 }
 
 /// The door of a plan and the shim's terminal flags.
@@ -2130,6 +2187,47 @@ mod tests {
 
     use super::{BwrapBackend, MIN_BWRAP_VERSION, Version, is_userns_failure};
 
+    /// HUM-470: Endete das Warten auf den Bericht, weil die Sandbox endete,
+    /// sagt der Befund das, mit Zeit und Status, statt eine Frist zu nennen,
+    /// die nie ablief. Nur ein echtes Ablaufen nennt die Frist.
+    #[test]
+    fn a_missing_report_says_why_the_wait_ended() {
+        use std::os::unix::process::ExitStatusExt as _;
+        use std::time::Duration;
+
+        use super::{ReportSnapshot, no_report_evidence};
+
+        let timeout = Duration::from_secs(60);
+        let open = ReportSnapshot::default();
+        let ended = no_report_evidence(
+            timeout,
+            Duration::from_millis(3200),
+            &open,
+            Some(std::process::ExitStatus::from_raw(256)),
+        );
+        assert!(ended.starts_with("no CHECK line from the shim"), "{ended}");
+        assert!(
+            ended.contains("the sandbox ended after 3.2s of 60s (exit status: 1)"),
+            "{ended}"
+        );
+        assert!(!ended.contains("within"), "{ended}");
+
+        let closed = ReportSnapshot {
+            closed: true,
+            other_lines: 2,
+            ..ReportSnapshot::default()
+        };
+        let early = no_report_evidence(timeout, Duration::from_millis(500), &closed, None);
+        assert_eq!(
+            early,
+            "no CHECK line from the shim after 0.5s of 60s; the report pipe is closed; 2 other \
+             line(s) ignored"
+        );
+
+        let expired = no_report_evidence(timeout, timeout, &open, None);
+        assert_eq!(expired, "no CHECK line from the shim within 60s");
+    }
+
     /// HUM-433: Die Lebensleine geht zu, sobald der gestartete Prozess endet,
     /// auch wenn ein anderer Prozess die Ausgabe noch offen hält und die Leser
     /// deshalb noch warten. Unter einer Engine ist das der Shim im Container,
@@ -2214,7 +2312,8 @@ mod tests {
 
         let shared = Arc::new(Shared::default());
         // Ohne eine Zeile und mit geschlossener Pipe endet das Warten sofort;
-        // der Befund nennt trotzdem die Frist, mit der gewartet wurde.
+        // der Befund nennt die Frist, mit der gewartet wurde, und dass sie
+        // nicht ablief (HUM-470).
         shared.close_report();
         let handle = SandboxHandle::new(
             humanitl_core::ids::SandboxId::nil(),
@@ -2230,7 +2329,8 @@ mod tests {
         assert_eq!(results.len(), 3);
         for result in &results {
             assert!(!result.passed);
-            assert!(result.evidence.contains("within 300ms"), "{result:?}");
+            assert!(result.evidence.contains("of 300ms"), "{result:?}");
+            assert!(!result.evidence.contains("within"), "{result:?}");
         }
     }
 
