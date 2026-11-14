@@ -303,6 +303,7 @@ impl Shells {
                 &argv,
                 &envp,
                 &self.program,
+                None,
             );
         }
         live.push((request.id, pid));
@@ -597,6 +598,7 @@ pub(crate) fn child(
     argv: &[*const c_char],
     envp: &[*const c_char],
     program: &BpfProgram,
+    identity: Option<(u32, u32)>,
 ) -> ! {
     // SAFETY: prctl with PR_SET_PDEATHSIG only records a signal number.
     unsafe {
@@ -629,6 +631,14 @@ pub(crate) fn child(
         }
     }
     close_above_stderr();
+    // In a guest kernel the shell gives up root like the agent (HUM-445):
+    // before its filter, with nothing but raw system calls.
+    if let Some((uid, gid)) = identity
+        && (crate::linux::identity::drop_to(uid, gid).is_err()
+            || crate::linux::identity::keep_parent_death(parent).is_err())
+    {
+        fail(b"the shell could not give up root", EXIT_SETUP);
+    }
     // SAFETY: sigset_t is plain data; an all-zero value is what sigemptyset
     // produces, and sigprocmask reads it.
     unsafe {

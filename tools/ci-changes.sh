@@ -212,6 +212,7 @@ jobs=(
   "escape-tests=$(b "$rust")"
   "escape-tests-podman=$(b "$rust")"
   "kvm-tests=$(b "$rust")"
+  "escape-tests-qemu=$(b "$rust")"
   "e2e=$(b "$rust")"
   "e2e-xvfb=$(b "$code")"
   "e2e-agent=$(b "$rust")"

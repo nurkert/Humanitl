@@ -143,6 +143,10 @@ pub use crate::agent::{
     Reach, SandboxFile, SandboxLookup, SandboxView, files_inside_work, find_in_path,
 };
 pub use crate::agent_exit::{FirstOutput, did_not_start};
+/// Kernel und Module der Tests für die Kernel-Stufe (HUM-445).
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(any(test, feature = "unadmitted-backends"))]
+pub use crate::backend::with_test_guest_kernel;
 pub use crate::backend::{
     ADMITTED_BACKENDS, BWRAP_BACKEND, Backend, BackendChoice, LeftSandboxes, PODMAN_BACKEND,
     SEATBELT_BACKEND, VM_BACKEND, backend_name, choose_backend, runtime_fits_backend,
@@ -179,9 +183,10 @@ pub use crate::handle::{
     SandboxHandle, StatusSnapshot, Termination,
 };
 pub use crate::launcher::{
-    CheckResult, DisposableLayer, Door, IsolationCheck, IsolationLevel, LaunchOptions, LaunchPlan,
-    PlanPreview, PlanRequest, PolicyMode, PolicyOrigin, PolicyRow, PullCancel, PulledImage,
-    REPORT_TIMEOUT, ResourceLimits, SandboxBackend, StdioMode, TerminalTransport,
+    CheckResult, DisposableLayer, Door, GuestRootProbe, IsolationCheck, IsolationLevel,
+    LaunchOptions, LaunchPlan, PlanPreview, PlanRequest, PolicyMode, PolicyOrigin, PolicyRow,
+    PullCancel, PulledImage, REPORT_TIMEOUT, ResourceLimits, SandboxBackend, StdioMode,
+    TerminalTransport,
 };
 pub use crate::seatbelt::{
     PREVIEW_AGENT_PORT, PREVIEW_REPORT_FD, PREVIEW_SESSION_PORT, PREVIEW_STATUS_FD,

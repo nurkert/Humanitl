@@ -1267,10 +1267,14 @@ fn explicit_backend() -> Option<String> {
 /// kein Ergebnis (HUM-435, Akzeptanzkriterium 2).
 #[cfg(feature = "unadmitted-backends")]
 fn escape_service_with(fixture: &Fixture, name: &str) -> Option<SandboxService> {
+    let sandbox = humanitl_config::SandboxRef::default();
+    // Der Gastkernel der CI, wo er gesetzt ist (HUM-445).
+    #[cfg(target_arch = "x86_64")]
+    let sandbox = humanitl_sandbox::with_test_guest_kernel(&sandbox);
     let backend = humanitl_sandbox::Backend::detect_unadmitted(
         name,
         fixture.paths.clone(),
-        &humanitl_config::SandboxRef::default(),
+        &sandbox,
     )
     .unwrap_or_else(|diagnostic| {
         panic!(

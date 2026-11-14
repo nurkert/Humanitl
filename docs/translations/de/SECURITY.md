@@ -2019,6 +2019,15 @@ und die Sitzung endet.
   nur Tiefenverteidigung. Der Stopp einer Sitzung stoppt die Unit und entfernt ihr
   Laufzeitverzeichnis; was ein Absturz liegen lässt, wird beim nächsten Start des Daemons gestoppt
   und entfernt (`SANDBOX_041`).
+- **Von innen sieht der Gast aus wie eine bubblewrap-Sandbox** (HUM-445). PID 1 ist Root in
+  seinem eigenen Kernel; der Agent und jede weitere Shell sind es nicht. Vor dem Filter gibt jeder
+  jede Fähigkeit ab, die Begrenzungsmenge und die Umgebungsmenge eingeschlossen, setzt
+  `no_new_privs` und wird der Nutzer, den bubblewrap in seine Sandbox abbildet (der Nutzer des
+  Daemons, wie ihn das `/etc/passwd` des Gasts nennt); der Shim belegt das Ergebnis am Kernel,
+  bevor er weitermacht. PID 1 ist nicht auslesbar, der Agent kann seinen Speicher also weder lesen
+  noch schreiben. Nach der Modulsperre ist `/sys` ein leeres, nur lesbares tmpfs statt des sysfs
+  des Gastkernels, `/dev/shm` ein tmpfs wie unter bubblewrap, und der Rechnername der des Profils
+  (`sandbox`). Die erwartete Mounttabelle hält alle drei.
 
 ### Was anders ist als unter bubblewrap
 

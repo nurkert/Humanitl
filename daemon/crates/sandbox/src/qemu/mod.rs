@@ -232,13 +232,16 @@ fn masked_content(
 }
 
 /// Übersetzt die Zeilen von bwrap in die Wurzel des Gasts. `files` ist das
-/// Verzeichnis, in dem die Dateien des Gasts liegen werden.
+/// Verzeichnis, in dem die Dateien des Gasts liegen werden; `session_ro` sind
+/// die nur lesbaren Binds der Sitzung ([`crate::LaunchOptions::session_ro`],
+/// das Testverzeichnis der Escape-Suite), als geprüfte Quelle und Ziel.
 fn guest_root(
     profile: &SandboxProfile,
     session: &SessionContext,
     present: &BTreeSet<PathBuf>,
     files: &Path,
     modules: &Path,
+    session_ro: &[(PathBuf, PathBuf)],
 ) -> GuestRoot {
     let mut inputs = crate::bwrap_args::LaunchInputs::preview_with_agent_files(
         session.files.iter().map(|file| file.dst.clone()),
@@ -315,6 +318,7 @@ fn guest_root(
             PolicyMode::Denied | PolicyMode::Image => {}
         }
     }
+    add_session_binds(&mut root, session_ro);
     root.entries.push(RootEntry::Dir(PathBuf::from("/sys")));
     root.entries.push(RootEntry::Bind {
         source: modules.to_path_buf(),
@@ -338,14 +342,33 @@ fn guest_root(
     root
 }
 
+/// Die nur lesbaren Binds der Sitzung, wie unter bwrap hinter den
+/// Erweiterungen des Profils: Die Zeile der Vorschau kennt sie nicht, sie
+/// kommen aus dem Aufruf (HUM-445).
+fn add_session_binds(root: &mut GuestRoot, session_ro: &[(PathBuf, PathBuf)]) {
+    for (source, target) in session_ro {
+        root.entries.push(RootEntry::Bind {
+            source: source.clone(),
+            target: target.clone(),
+        });
+        root.policy.push(PolicyRow::new(
+            PolicyMode::ReadOnly,
+            Some(source.clone()),
+            target.clone(),
+            PolicyOrigin::Session,
+        ));
+    }
+}
+
 /// Der Gastplan (`guest.rs` des Shims).
 fn guest_plan(
     profile: &SandboxProfile,
     session: &SessionContext,
-    agent_env: &[(String, String)],
-    shim_env: &[(String, String)],
+    env: &[(String, String)],
     project_ino: u64,
+    root_probe: Option<&str>,
 ) -> Result<String, Diagnostic> {
+    let (agent_env, shim_env) = crate::shim_fds::split_env(env);
     let entry = |point: &str, fstype: &str, source: &str, mode: &str, flags: &str| {
         serde_json::json!({
             "point": point, "type": fstype, "source": source,
@@ -353,13 +376,16 @@ fn guest_plan(
         })
     };
     // Ohne Ankündigung von Einhängepunkten (`lines`) sieht der Gast unter
-    // `/` und `/work` je genau eine virtiofs-Einhängung.
+    // `/` und `/work` je genau eine virtiofs-Einhängung. Über `/sys` liegt
+    // nach der Modulsperre ein leeres, nur lesbares tmpfs statt des sysfs
+    // des Gastkerns, und `/dev/shm` ist ein tmpfs wie unter bwrap (HUM-445).
     let mounts = vec![
         entry("/", "virtiofs", "type", "ro", "*"),
         entry("/proc", "proc", "type", "*", "*"),
-        entry("/sys", "sysfs", "type", "*", "*"),
+        entry("/sys", "tmpfs", "type", "ro", "nosuid,nodev,noexec"),
         entry("/dev", "devtmpfs", "type", "*", "*"),
         entry("/dev/pts", "devpts", "type", "*", "*"),
+        entry("/dev/shm", "tmpfs", "type", "rw", "nosuid,nodev"),
         entry(
             &profile.mounts.work.dst.display().to_string(),
             "virtiofs",
@@ -391,14 +417,20 @@ fn guest_plan(
         .filter(|(key, _)| key.starts_with("HUMANITL_SECCOMP_"))
         .cloned()
         .collect();
-    Ok(serde_json::json!({
+    let mut plan = serde_json::json!({
+        // Der Agent im Gast ist kein Root (HUM-445): dieselbe Kennung, die
+        // bwrap ohne `--uid` in seine Sandbox abbildet und die das
+        // `/etc/passwd` des Gasts nennt.
+        "uid": rustix::process::getuid().as_raw().to_string(),
+        "gid": rustix::process::getgid().as_raw().to_string(),
+        "hostname": profile.sandbox.hostname,
         "proxy_port": profile.network.proxy_port.to_string(),
         "door_port": DOOR_PORT.to_string(),
         "report_port": REPORT_PORT.to_string(),
         "modules_dir": GUEST_MODULES,
         "work_tag": WORK_TAG,
         "shim": object(&shim),
-        "env": object(agent_env),
+        "env": object(&agent_env),
         "pins": {
             "pins": [{"path": profile.mounts.work.dst.display().to_string(), "dev": "*", "ino": project_ino.to_string()}],
             "mounts": mounts,
@@ -407,8 +439,11 @@ fn guest_plan(
         // lesbaren Wurzel führt kein Socket irgendwohin.
         "socket_walk": [profile.mounts.work.dst.display().to_string(), "/dev"],
         "command": command,
-    })
-    .to_string())
+    });
+    if let Some(probe) = root_probe {
+        plan["root_probe"] = serde_json::json!(["/bin/sh", "-c", probe]);
+    }
+    Ok(plan.to_string())
 }
 
 /// `SANDBOX_011` mit `why`.
@@ -744,7 +779,7 @@ impl SandboxBackend for VmBackend {
         let PlanRequest {
             profile,
             session,
-            options: _,
+            options,
         } = *request;
         let layout = session_layout(&self.paths, session).unwrap_or_else(|_| Layout {
             dir: PathBuf::from(format!(
@@ -758,6 +793,7 @@ impl SandboxBackend for VmBackend {
             &present,
             &layout.files(),
             &self.resolved.modules,
+            &options.session_ro,
         );
         let readonly = profile.effective_work_mode(session.work_mode) == WorkMode::Ro;
         let lines = session_lines(
@@ -860,7 +896,11 @@ impl SandboxBackend for VmBackend {
         ))?;
         let unit = unit_of(&units, session)?;
 
-        let PinnedMounts { work, .. } = pinned;
+        let PinnedMounts {
+            work,
+            session: session_ro,
+            ..
+        } = pinned;
         let present = BwrapBackend::present_under_work(profile, &work.proc_path());
         let writable = profile.effective_work_mode(session.work_mode) == WorkMode::Rw;
         let project = Project {
@@ -874,6 +914,10 @@ impl SandboxBackend for VmBackend {
             },
             unprotected: BwrapBackend::unprotected_under_work(profile, &present),
             work,
+            session_ro: session_ro
+                .iter()
+                .map(|(pin, target)| (pin.resolved().to_path_buf(), target.clone()))
+                .collect(),
         };
         let layout = session_layout(&self.paths, session)?;
         create_layout(&layout)?;
@@ -997,6 +1041,9 @@ struct Project {
     writable: Option<String>,
     /// Masken unter `/work`, die es im Projekt nicht gibt.
     unprotected: Vec<PathBuf>,
+    /// Die nur lesbaren Binds der Sitzung, geöffnet und geprüft, als
+    /// aufgelöster Pfad und Ziel; die Wurzel des Gasts bindet Pfade.
+    session_ro: Vec<(PathBuf, PathBuf)>,
 }
 
 /// Die Kanäle einer Sitzung auf der Seite des Daemons.
@@ -1101,10 +1148,11 @@ impl VmBackend {
             &present,
             &layout.files(),
             &self.resolved.modules,
+            &project.session_ro,
         );
         let env = profile.effective_env(session, None);
-        let (agent_env, shim_env) = crate::shim_fds::split_env(&env);
-        let plan_text = guest_plan(profile, session, &agent_env, &shim_env, project.ino)?;
+        let probe = options.guest_root_probe.command();
+        let plan_text = guest_plan(profile, session, &env, project.ino, probe)?;
         write_files(layout, &root, &plan_text, unit)?;
         let channels = Channels::open(layout, options)?;
         let group = session_group(session);
@@ -1189,6 +1237,29 @@ impl VmBackend {
             })),
         })
     }
+}
+
+/// Nur Escape-Suite und Tests (HUM-445): Kernel und Module des Gasts aus
+/// `HUMANITL_TEST_VM_KERNEL` und `HUMANITL_TEST_VM_MODULES`, wo sie gesetzt
+/// sind, sonst die der Gruppe. Der CI-Job installiert einen Gastkernel neben
+/// den des Runners, dessen Abbild nicht lesbar ist und virtiofs nur als
+/// Modul hat; die Tests der Kernel-Stufe lesen dieselben zwei Variablen.
+#[cfg(any(test, feature = "unadmitted-backends"))]
+#[must_use]
+pub fn with_test_guest_kernel(sandbox: &SandboxRef) -> SandboxRef {
+    let from_env = |name: &str| {
+        std::env::var_os(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let mut out = sandbox.clone();
+    if let Some(kernel) = from_env("HUMANITL_TEST_VM_KERNEL") {
+        out.qemu.kernel = Some(kernel);
+    }
+    if let Some(modules) = from_env("HUMANITL_TEST_VM_MODULES") {
+        out.qemu.modules = Some(modules);
+    }
+    out
 }
 
 /// Das Backend aus der Gruppe `sandbox` ([`VmBackend::detect`]).

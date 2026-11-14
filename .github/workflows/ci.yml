@@ -124,6 +124,7 @@ jobs:
       escape-tests: ${{ steps.areas.outputs.escape-tests }}
       escape-tests-podman: ${{ steps.areas.outputs.escape-tests-podman }}
       kvm-tests: ${{ steps.areas.outputs.kvm-tests }}
+      escape-tests-qemu: ${{ steps.areas.outputs.escape-tests-qemu }}
       e2e: ${{ steps.areas.outputs.e2e }}
       e2e-xvfb: ${{ steps.areas.outputs.e2e-xvfb }}
       e2e-agent: ${{ steps.areas.outputs.e2e-agent }}
@@ -212,6 +213,9 @@ jobs:
       - name: skip kvm-tests
         if: steps.areas.outputs.kvm-tests != 'true'
         run: echo "kvm-tests is skipped, the path rules found nothing it reads"
+      - name: skip escape-tests-qemu
+        if: steps.areas.outputs.escape-tests-qemu != 'true'
+        run: echo "escape-tests-qemu is skipped, the path rules found nothing it reads"
       - name: skip e2e
         if: steps.areas.outputs.e2e != 'true'
         run: echo "e2e is skipped, the path rules found nothing it reads"
@@ -1111,9 +1115,122 @@ jobs:
           cd daemon
           cargo test -p humanitl-sandbox --lib qemu::kvm_tests -- --test-threads=1 \
             > "$RUNNER_TEMP/kvm-console.txt" 2>&1
-          tail -n 80 "$RUNNER_TEMP/kvm-console.txt" \
-            | sed 's/%/%25/g; s/^/::error title=kvm console::/'
+          # One annotation per failed test with its whole output, the lines
+          # joined: GitHub shows at most ten annotations per step, and the
+          # last lines of the run are the passing tests after the failed one.
+          python3 - "$RUNNER_TEMP/kvm-console.txt" <<'PYTHON'
+          import re
+          import sys
+          text = open(sys.argv[1], errors="replace").read()
+          blocks = re.findall(r"^---- (\S+) stdout ----\n(.*?)(?=^---- |^failures:$)", text, re.S | re.M)
+          if not blocks:
+              blocks = [("tail", "\n".join(text.splitlines()[-80:]))]
+          for name, body in blocks[:9]:
+              body = body[-30000:].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::error title=kvm console {name}::{body}")
+          PYTHON
           exit 0
+
+  escape-tests-qemu:
+    name: escape-tests-qemu
+    needs: changes
+    if: needs.changes.outputs.escape-tests-qemu == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # The same suites as escape-tests, against the kernel level (HUM-445,
+    # ADR-0021), built on kvm-tests: the same KVM, service manager and
+    # pinned Debian packages. The level is not admitted (SANDBOX_048 until
+    # HUM-449); run.sh starts it through escape-launch, the one binary built
+    # with the feature unadmitted-backends. On top of the common suites:
+    # probes as root without a seccomp filter in the guest, against a second
+    # listening guest of another session, and the network namespaces of the
+    # session's unit seen from the host (tests/escape/kernel-proof.sh). No
+    # skipped probe (ESCAPE_NO_SKIP=1). A missing KVM is a failure twice
+    # over: the step that hands /dev/kvm over fails on its own, and run.sh
+    # records a backend that does not start as sandbox_not_started.
+    # HUMANITL_REQUIRE_KVM is not set here: only the tests of kvm-tests read
+    # it.
+    env:
+      HUMANITL_ESCAPE_BACKEND: qemu
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: escape-qemu
+      - name: Install the sandbox tooling
+        # bwrap jails the four helpers of a session and runs ESC-5's host
+        # side; socat and python3 serve the suites as in escape-tests.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat python3
+          ./scripts/ci/install-bwrap-overlay.sh
+      - name: Hand /dev/kvm to the runner user
+        # As in kvm-tests.
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+          if ! test -r /dev/kvm || ! test -w /dev/kvm; then
+            echo "::error title=escape escape-tests-qemu::/dev/kvm is not usable by the runner user; the kernel level cannot be measured (HUM-445 acceptance criterion 1)"
+            exit 1
+          fi
+      - name: Allow unprivileged user namespaces
+        # The AppArmor restriction of every bwrap job (HUM-002); Yama at 0 as
+        # in escape-tests-podman, so that the ptrace probes of ESC-1 measure
+        # the sandbox and not the runner.
+        run: |
+          set -euo pipefail
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          sudo sysctl -w kernel.yama.ptrace_scope=0
+      - name: A service manager of the runner user
+        # As in kvm-tests: every session is a transient unit of the user.
+        run: |
+          set -euo pipefail
+          sudo loginctl enable-linger "$USER"
+          uid="$(id -u)"
+          for _ in $(seq 100); do
+            [[ -S "/run/user/$uid/bus" ]] && break
+            sleep 0.1
+          done
+          {
+            echo "XDG_RUNTIME_DIR=/run/user/$uid"
+            echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus"
+          } >> "$GITHUB_ENV"
+          XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user show --property=Version --value
+      - name: Install the kernel level and a guest kernel
+        # As in kvm-tests; escape-launch and the ESC-5 tests read the guest
+        # kernel from the two variables (with_test_guest_kernel).
+        run: |
+          set -euo pipefail
+          ./scripts/ci/install-kernel-level.sh "$RUNNER_TEMP/guest-kernel"
+          {
+            echo "HUMANITL_TEST_VM_KERNEL=$RUNNER_TEMP/guest-kernel/vmlinuz"
+            echo "HUMANITL_TEST_VM_MODULES=$RUNNER_TEMP/guest-kernel/modules"
+          } >> "$GITHUB_ENV"
+      - name: Escape tests against the kernel level
+        run: ./tests/escape/run.sh
+      - name: Escape verdict
+        if: always()
+        # Acceptance criterion 1 of HUM-445: no skipped probe on the kernel
+        # level.
+        env:
+          ESCAPE_NO_SKIP: "1"
+        run: ./scripts/ci/escape-verdict.sh escape-tests-qemu
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: escape-qemu-junit
+          path: |
+            target/escape/*.xml
+            target/escape/results.txt
+            target/escape/*.log
+            target/escape/unit-netns.txt
+          if-no-files-found: ignore
 
   e2e:
     name: e2e
@@ -1536,6 +1653,7 @@ jobs:
       - escape-tests
       - escape-tests-podman
       - kvm-tests
+      - escape-tests-qemu
       - e2e
       - e2e-xvfb
       - e2e-agent

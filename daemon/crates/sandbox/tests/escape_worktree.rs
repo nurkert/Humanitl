@@ -39,8 +39,8 @@ use humanitl_core::ids::{SandboxId, SessionId};
 use humanitl_sandbox::summary::SessionSummary;
 use humanitl_sandbox::worktree::{SnapshotLimits, snapshot};
 use humanitl_sandbox::{
-    Backend, BwrapBackend, LaunchOptions, PLATFORM_BACKEND_NAME, PlanRequest, SandboxBackend,
-    SandboxHandle, SandboxProfile, SessionContext, StdioMode,
+    Backend, BwrapBackend, IsolationLevel, LaunchOptions, PLATFORM_BACKEND_NAME, PlanRequest,
+    SandboxBackend, SandboxHandle, SandboxProfile, SessionContext, StdioMode, TerminalTransport,
 };
 
 /// Die Zeile, an der `esc-5-filesystem.sh` einen übersprungenen Fall erkennt.
@@ -208,14 +208,17 @@ impl Fixture {
 /// will genau dieses geprüft haben (HUM-435, Akzeptanzkriterium 2).
 #[cfg(feature = "unadmitted-backends")]
 fn requested(name: &str, paths: &Paths) -> Backend {
-    Backend::detect_unadmitted(name, paths.clone(), &humanitl_config::SandboxRef::default())
-        .unwrap_or_else(|err| {
-            panic!(
-                "{ESCAPE_BACKEND_ENV}={name} asks for this backend, and it is not usable \
+    let sandbox = humanitl_config::SandboxRef::default();
+    // Der Gastkernel der CI, wo er gesetzt ist (HUM-445).
+    #[cfg(target_arch = "x86_64")]
+    let sandbox = humanitl_sandbox::with_test_guest_kernel(&sandbox);
+    Backend::detect_unadmitted(name, paths.clone(), &sandbox).unwrap_or_else(|err| {
+        panic!(
+            "{ESCAPE_BACKEND_ENV}={name} asks for this backend, and it is not usable \
                      here: {}",
-                err.why
-            )
-        })
+            err.why
+        )
+    })
 }
 
 /// Ohne das Feature gibt es die Umgehung nicht, und ein verlangtes Backend
@@ -238,19 +241,47 @@ fn profile() -> SandboxProfile {
 
 /// Startet den Befehl in der Sandbox und liefert Ausgabe und die Pfade, über
 /// denen in diesem Lauf kein `tmpfs` lag.
+///
+/// Die Kernel-Stufe (HUM-445) trägt die Ausgabe nur als Strom, und ihr
+/// Agent startet erst, wenn der Host ihn nach der Prüfung zulässt; dort
+/// kommt die Ausgabe über einen Empfänger, und die Prüfung läuft hier.
 fn run(fx: &Fixture, backend: &Backend, command: &[&str]) -> (String, Vec<PathBuf>) {
     let session = fx.context(command);
-    let options = LaunchOptions {
-        stdio: StdioMode::Capture,
-        ..LaunchOptions::default()
+    let kernel = backend.isolation() == IsolationLevel::Kernel;
+    let (sink, stream) = std::sync::mpsc::channel();
+    let options = if kernel {
+        LaunchOptions {
+            stdio: StdioMode::Pty {
+                cols: 120,
+                rows: 40,
+            },
+            terminal: TerminalTransport::Stream,
+            output_sink: Some(sink),
+            ..LaunchOptions::default()
+        }
+    } else {
+        LaunchOptions {
+            stdio: StdioMode::Capture,
+            ..LaunchOptions::default()
+        }
     };
     let plan = backend
         .plan(&PlanRequest::new(&profile(), &session, &options))
         .unwrap_or_else(|err| panic!("the plan fails: {}", err.why));
+    drop(options);
     let unprotected = plan.unprotected.clone();
     let handle: SandboxHandle = backend
         .launch(&plan)
         .unwrap_or_else(|err| panic!("{} does not start: {}", backend.name(), err.why));
+    if kernel {
+        let failed: Vec<String> = backend
+            .isolation_check(&handle)
+            .into_iter()
+            .filter(|result| !result.passed)
+            .map(|result| format!("{}: {}", result.check.as_str(), result.evidence))
+            .collect();
+        assert!(failed.is_empty(), "the isolation check failed: {failed:?}");
+    }
     handle
         .wait_timeout(WAIT)
         .expect("the sandbox ends within the timeout")
@@ -261,6 +292,19 @@ fn run(fx: &Fixture, backend: &Backend, command: &[&str]) -> (String, Vec<PathBu
                 err.why
             )
         });
+    if kernel {
+        drop(handle);
+        // Bis der Sender fällt, höchstens ein paar Sekunden.
+        let mut seen = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+            match stream.recv_timeout(left) {
+                Ok(chunk) => seen.extend_from_slice(&chunk.bytes),
+                Err(_) => break,
+            }
+        }
+        return (String::from_utf8_lossy(&seen).into_owned(), unprotected);
+    }
     let output = handle.output().expect("stdio was captured");
     (
         format!(
@@ -452,6 +496,11 @@ fn hooks_write_stays_in_sandbox() {
 /// HUM-292 P10 und P13). Kann das Backend eines Tages eine Wegwerf-Sandbox,
 /// ist der Fall rot: Dann braucht ESC-5 die echte Messung, nicht diese
 /// Verweigerung.
+///
+/// Unter der Kernel-Stufe (HUM-445) ist der Fall dieselbe Prüfung der
+/// Verweigerung (`SANDBOX_030`), bis HUM-446 die Wegwerf-Schicht über
+/// virtiofs liefert; HUM-446 muss ihn dann in einen echten Wegwerf-Lauf
+/// gegen die Kernel-Stufe verwandeln.
 #[test]
 fn a_disposable_sandbox_never_writes_to_the_project() {
     if requested_backend().is_none() {

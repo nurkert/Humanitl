@@ -29,6 +29,9 @@ const NEEDLES: [&str; 2] = ["detect_unadmitted", "unadmitted-backends"];
 /// einem Testaufruf.
 const IPC_FORWARD: &str = "unadmitted-backends = [\"humanitl-sandbox/unadmitted-backends\"]";
 
+/// Die eine Zeile, mit der Code dieser Crate hinter dem Feature steht.
+const GATE: &str = "#[cfg(any(test, feature = \"unadmitted-backends\"))]";
+
 fn daemon_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -76,10 +79,16 @@ fn offending(relative: &str, text: &str) -> Vec<String> {
             && trimmed.starts_with("#[cfg(any(test, feature = \"unadmitted-backends\"))]");
         // Ein Doku-Kommentar nennt die Namen, ohne sie zu benutzen.
         let comment = trimmed.starts_with("//");
+        // Genau diese Zeile in den Quellen dieser Crate schaltet nichts ein,
+        // sie sperrt das Folgende ohne das Feature weg (HUM-445: der
+        // Konstruktor von `GuestRootProbe`, der Kernel der Tests). Der Name
+        // `detect_unadmitted` darunter bleibt ein Fund außerhalb seiner
+        // Definition.
+        let gate = relative.starts_with("crates/sandbox/src/") && trimmed == GATE;
         // Im Manifest von `humanitl-ipc`: Kommentare und die Weiterleitung.
         let forward = relative == "crates/ipc/Cargo.toml"
             && (trimmed.starts_with('#') || trimmed == IPC_FORWARD);
-        if in_tests || definition || comment || forward {
+        if in_tests || definition || comment || forward || gate {
             continue;
         }
         if NEEDLES.iter().any(|needle| line.contains(needle)) {
@@ -147,6 +156,25 @@ fn the_check_names_a_daemon_that_switches_the_bypass_on() {
     assert_eq!(
         offending("crates/sandbox/src/backend.rs", ungated),
         ["crates/sandbox/src/backend.rs:1"]
+    );
+    // Die Sperre selbst ist in den Quellen dieser Crate kein Fund, jede
+    // andere Schreibweise und dieselbe Zeile anderswo schon; der Name der
+    // Umgehung darunter bleibt einer.
+    let gated_elsewhere = format!("{GATE}\npub fn new() {{}}\n");
+    assert!(offending("crates/sandbox/src/launcher.rs", &gated_elsewhere).is_empty());
+    assert_eq!(
+        offending("crates/ipc/src/sandbox.rs", &gated_elsewhere),
+        ["crates/ipc/src/sandbox.rs:1"]
+    );
+    let enabled = "#[cfg(not(feature = \"unadmitted-backends\"))]\nfn x() {}\n";
+    assert_eq!(
+        offending("crates/sandbox/src/launcher.rs", enabled),
+        ["crates/sandbox/src/launcher.rs:1"]
+    );
+    let gated_bypass = format!("{GATE}\npub fn detect_unadmitted() {{}}\n");
+    assert_eq!(
+        offending("crates/sandbox/src/launcher.rs", &gated_bypass),
+        ["crates/sandbox/src/launcher.rs:2"]
     );
     let test_module = "fn x() {}\n#[cfg(test)]\nmod tests {\n    fn t() { \
                        Backend::detect_unadmitted(\"podman\", p); }\n}\n";

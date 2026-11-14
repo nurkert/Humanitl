@@ -89,7 +89,7 @@ expect() {
 }
 
 heavy=(rust-check rust-test macos deps-lint proto-lint-and-gen flutter-analyze-test goldens
-  escape-tests escape-tests-podman kvm-tests e2e e2e-xvfb e2e-agent e2e-m4 e2e-m4-package
+  escape-tests escape-tests-podman kvm-tests escape-tests-qemu e2e e2e-xvfb e2e-agent e2e-m4 e2e-m4-package
   parity-check)
 all_false=("${heavy[@]/%/=false}")
 all_true=("${heavy[@]/%/=true}")
@@ -102,7 +102,7 @@ expect website_main --main --base "$base" website -- full=false "${all_false[@]}
 change backlog backlog/sprint-1.md '# Sprint 1, done' website/index.md '# x'
 expect backlog_main --main --base "$base" backlog -- full=false area-backlog=true rust-test=true \
   rust-check=false macos=false deps-lint=false proto-lint-and-gen=false flutter-analyze-test=false \
-  goldens=false escape-tests=false escape-tests-podman=false kvm-tests=false e2e=false \
+  goldens=false escape-tests=false escape-tests-podman=false kvm-tests=false escape-tests-qemu=false e2e=false \
   e2e-xvfb=false e2e-agent=false e2e-m4=false e2e-m4-package=false parity-check=false
 change backlog_root BACKLOG.md '# Plan'
 expect backlog_root_file --base "$base" backlog_root -- area-backlog=true rust-test=true goldens=false
@@ -115,7 +115,7 @@ change docs docs/CONFIG.md '# Config, new' README.md '# Humanitl, new'
 expect docs_main --main --base "$base" docs -- full=false area-docs=true \
   rust-test=true flutter-analyze-test=true deps-lint=true parity-check=true \
   rust-check=false macos=false goldens=false proto-lint-and-gen=false escape-tests=false \
-  escape-tests-podman=false kvm-tests=false e2e=false e2e-xvfb=false e2e-agent=false e2e-m4=false \
+  escape-tests-podman=false kvm-tests=false escape-tests-qemu=false e2e=false e2e-xvfb=false e2e-agent=false e2e-m4=false \
   e2e-m4-package=false
 
 # App ohne macOS-Bezug: auf dem Zweig kein macOS, auf main schon. Ein ARB-Text,
@@ -133,7 +133,7 @@ change app_runner app/macos/Runner/MainFlutterWindow.swift 'class W {}'
 expect app_mac_path --base "$base" app_runner -- macos=true
 change rust_plain daemon/crates/proxy/src/lib.rs 'pub fn plain() { }'
 expect rust_plain_branch --base "$base" rust_plain -- area-rust=true macos=false rust-check=true \
-  rust-test=true escape-tests=true escape-tests-podman=true kvm-tests=true e2e=true e2e-agent=true \
+  rust-test=true escape-tests=true escape-tests-podman=true kvm-tests=true escape-tests-qemu=true e2e=true e2e-agent=true \
   goldens=false
 expect rust_plain_main --main --base "$base" rust_plain -- macos=true
 change rust_mac daemon/crates/sandbox/src/lib.rs 'mod seat;'

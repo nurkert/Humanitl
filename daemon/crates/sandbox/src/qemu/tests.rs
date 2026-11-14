@@ -56,7 +56,7 @@ fn the_guest_root_comes_from_the_bwrap_plan() {
     let session = session(work.path());
     let present = BwrapBackend::present_under_work(&profile, work.path());
     let files = PathBuf::from("/run/x/files");
-    let root = guest_root(&profile, &session, &present, &files, Path::new("/m"));
+    let root = guest_root(&profile, &session, &present, &files, Path::new("/m"), &[]);
 
     let binds: Vec<(&Path, &Path)> = root
         .entries
@@ -129,8 +129,7 @@ fn the_guest_plan_names_the_door_the_pin_and_the_walk() {
     let profile = profile();
     let session = session(work.path());
     let env = profile.effective_env(&session, None);
-    let (agent, shim) = crate::shim_fds::split_env(&env);
-    let text = guest_plan(&profile, &session, &agent, &shim, 4242).unwrap();
+    let text = guest_plan(&profile, &session, &env, 4242, None).unwrap();
     let plan: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(plan["door_port"], "5000");
     assert_eq!(plan["report_port"], "5001");
@@ -143,6 +142,52 @@ fn the_guest_plan_names_the_door_the_pin_and_the_walk() {
     let mounts = plan["pins"]["mounts"].as_array().unwrap();
     let virtiofs = mounts.iter().filter(|m| m["type"] == "virtiofs").count();
     assert_eq!(virtiofs, 2, "only / and /work, no announced submount");
+    // HUM-445: wie unter bwrap ein unprivilegierter Agent, `/sys` leer,
+    // `/dev/shm` ein tmpfs, der Name des Profils; keine Probe ohne Filter.
+    assert_eq!(plan["uid"], rustix::process::getuid().as_raw().to_string());
+    assert_eq!(plan["gid"], rustix::process::getgid().as_raw().to_string());
+    assert_eq!(plan["hostname"], "sandbox");
+    let at = |point: &str| {
+        mounts
+            .iter()
+            .find(|m| m["point"] == point)
+            .unwrap_or_else(|| panic!("{point}: {mounts:?}"))
+    };
+    assert_eq!(at("/sys")["type"], "tmpfs");
+    assert_eq!(at("/sys")["mode"], "ro");
+    assert_eq!(at("/dev/shm")["type"], "tmpfs");
+    assert!(plan.get("root_probe").is_none());
+    let probed = guest_plan(&profile, &session, &env, 4242, Some("true")).unwrap();
+    let probed: serde_json::Value = serde_json::from_str(&probed).unwrap();
+    assert_eq!(
+        probed["root_probe"],
+        serde_json::json!(["/bin/sh", "-c", "true"])
+    );
+}
+
+/// Die nur lesbaren Binds der Sitzung (das Testverzeichnis der
+/// Escape-Suite) stehen in der Wurzel des Gasts, nur lesbar (HUM-445).
+#[test]
+fn the_session_binds_reach_the_guest_root() {
+    let work = tempfile::tempdir().unwrap();
+    let profile = profile();
+    let session = session(work.path());
+    let present = BwrapBackend::present_under_work(&profile, work.path());
+    let binds = [(PathBuf::from("/srv/tests"), PathBuf::from("/tests/escape"))];
+    let root = guest_root(
+        &profile,
+        &session,
+        &present,
+        Path::new("/run/x/files"),
+        Path::new("/m"),
+        &binds,
+    );
+    assert!(root.entries.contains(&RootEntry::Bind {
+        source: PathBuf::from("/srv/tests"),
+        target: PathBuf::from("/tests/escape"),
+    }));
+    assert!(root.policy.iter().any(|row| row.target == Path::new("/tests/escape")
+        && row.mode == PolicyMode::ReadOnly));
 }
 
 /// Die Eigenschaften der Unit sind die aus HUM-442 Q7, dazu die

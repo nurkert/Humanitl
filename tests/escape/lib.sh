@@ -27,6 +27,7 @@
 #   expect_empty NAME CMD...         pass when the output has no non-blank line
 #   skip NAME REASON...              record a case that this sprint cannot decide
 #   esc_find_sockets ROOT            the socket list ESC-2 measures; selftest.sh runs it too
+#   esc_seccomp_all PROC             `<pid>:<comm>=<mode>` of every process but kernel threads
 #
 # A command that is simply not installed exits 127. Every helper turns that into
 # `skip`, never into `pass`: "the tool is missing" must never read as "the
@@ -311,4 +312,50 @@ esc_find_sockets() {
            -o \( -path "$esc_find_root/dev/*" \
                  ! -path "$esc_find_root/dev/shm" ! -path "$esc_find_root/dev/shm/*" \) \) -prune \
         -o -xtype s -print 2>/dev/null
+}
+
+# esc_seccomp_all PROC — `<pid>:<comm>=<Seccomp mode>` for every process under
+# PROC (normally /proc), kernel threads left out; ESC-1 seccomp_every_process
+# wants every line to end in =2.
+#
+# A kernel thread runs no code of user space: no process can make it execute
+# anything, and it has no seccomp mode because it never enters the kernel
+# through a system call. bwrap never shows one, its PID namespace holds only
+# the sandbox; a guest kernel (the kernel level, HUM-445) shows all of its own.
+# They are recognised by PF_KTHREAD (0x00200000) in the flags, field 9 of
+# /proc/<pid>/stat, which only the kernel sets, never by the parent's PID: a
+# process of user space can be reparented, and a name proves nothing. The
+# fields are counted after the last ')', because the name in field 2 may hold
+# spaces and parentheses. A process whose files cannot be read is a line
+# `<pid>:<comm or ?>=unreadable`, which fails the case: it might be one
+# without a filter. Only a process that is gone (no /proc/<pid> any more) is
+# left out. selftest.sh runs this against a fixture tree.
+esc_seccomp_all() {
+    esc_sa_root="${1%/}"
+    for esc_sa_p in "$esc_sa_root"/[0-9]*; do
+        esc_sa_pid=${esc_sa_p#"$esc_sa_root"/}
+        if ! esc_sa_stat=$(cat "$esc_sa_p/stat" 2>/dev/null); then
+            [ -e "$esc_sa_p" ] && echo "$esc_sa_pid:?=unreadable"
+            continue
+        fi
+        # shellcheck disable=SC2086
+        set -- ${esc_sa_stat##*) }
+        esc_sa_flags=${7:-0}
+        case "$esc_sa_flags" in
+        "" | *[!0-9]*) esc_sa_flags=0 ;;
+        esac
+        if [ $((esc_sa_flags & 2097152)) -ne 0 ]; then
+            continue
+        fi
+        if ! esc_sa_comm=$(cat "$esc_sa_p/comm" 2>/dev/null); then
+            [ -e "$esc_sa_p" ] && echo "$esc_sa_pid:?=unreadable"
+            continue
+        fi
+        esc_sa_mode=$(sed -n "s/^Seccomp:[[:space:]]*//p" "$esc_sa_p/status" 2>/dev/null)
+        if [ -z "$esc_sa_mode" ]; then
+            [ -e "$esc_sa_p" ] && echo "$esc_sa_pid:$esc_sa_comm=unreadable"
+            continue
+        fi
+        echo "$esc_sa_pid:$esc_sa_comm=$esc_sa_mode"
+    done
 }

@@ -129,9 +129,9 @@ use humanitl_core::ids::SessionId;
 use humanitl_core::{Diagnostic, FixAction, Severity};
 use humanitl_sandbox::{
     BIND_FD_VERSION, BWRAP_BACKEND, Backend, BwrapBackend, EXIT_USAGE as SHIM_EXIT_USAGE,
-    LaunchOptions, LaunchPlan, MIN_BWRAP_VERSION, MountPolicy, PlanRequest, SHIM_PINS_FD,
-    SandboxBackend, SandboxHandle, SandboxProfile, SessionContext, StdioMode, Version,
-    with_image_root,
+    GuestRootProbe, IsolationLevel, LaunchOptions, LaunchPlan, MIN_BWRAP_VERSION, MountPolicy,
+    OutputChunk, PlanRequest, SHIM_PINS_FD, SandboxBackend, SandboxHandle, SandboxProfile,
+    SessionContext, StdioMode, TerminalTransport, Version, with_image_root,
 };
 
 /// Exit-Code, wenn die Kommandozeile des Starters selbst unbrauchbar ist.
@@ -183,7 +183,13 @@ options:
                         (SANDBOX_042) or show the checked folder (HUM-437)
   --test-unplanned-mount
                         add a tmpfs on /etc to the plan's line but not to the
-                        expected mount table; the start must refuse (SANDBOX_049)
+                        expected mount table; the start must refuse (SANDBOX_049).
+                        Under the kernel level the guest's table loses /dev/pts
+                        instead, which the guest mounts all the same
+  --test-guest-root-probe CMD
+                        kernel level only: the shim in the guest also runs
+                        /bin/sh -c CMD as root without a seccomp filter, next to
+                        the command (HUM-445)
   --print-argv          print the launch plan, one argument per line, and exit
   -h, --help            this text
 ";
@@ -360,22 +366,14 @@ fn run() -> Result<ExitCode, LaunchError> {
         stdio: StdioMode::Inherit,
         ..LaunchOptions::default()
     };
-    if let Some(tests_dir) = args.tests_dir.as_deref().map(absolute) {
-        if !take_tests_placeholder(&mut profile) {
-            return Err(unexpected_argv(format!(
-                "{}: mounts.extra_ro does not name {TESTS_DIR_DST}, so --tests-dir has nothing to point at",
-                args.profile.display()
-            )));
-        }
-        options
-            .session_ro
-            .push((tests_dir, PathBuf::from(TESTS_DIR_DST)));
-    }
+    let output = kernel_level_options(&args, &backend, &mut options)?;
+    bind_tests_dir(&args, &mut profile, &mut options)?;
     if let (false, Some(version)) = (args.print_argv, bwrap_version) {
         refuse_unclosed_descriptors(matches!(shim, Shim::Placeholder(_)), version)?;
     }
 
     let mut plan = backend.plan(&PlanRequest::new(&profile, &context, &options))?;
+    drop(options);
 
     if let Shim::Placeholder(path) = &shim {
         eprintln!(
@@ -404,11 +402,79 @@ fn run() -> Result<ExitCode, LaunchError> {
     } else {
         None
     };
-    let result = launch_and_wait(&backend, &plan, &shim);
+    let result = launch_and_wait(&backend, &plan, &shim, output);
     if let Some(swapped) = swapped {
         swapped.restore()?;
     }
     result
+}
+
+/// `--tests-dir`: das Verzeichnis des Arbeitsbaums statt des Platzhalters
+/// aus `mounts.extra_ro`, als nur lesbarer Bind der Sitzung.
+///
+/// # Errors
+///
+/// Ein Profil, das den Platzhalter nicht nennt.
+fn bind_tests_dir(
+    args: &Args,
+    profile: &mut SandboxProfile,
+    options: &mut LaunchOptions,
+) -> Result<(), LaunchError> {
+    let Some(tests_dir) = args.tests_dir.as_deref().map(absolute) else {
+        return Ok(());
+    };
+    if !take_tests_placeholder(profile) {
+        return Err(unexpected_argv(format!(
+            "{}: mounts.extra_ro does not name {TESTS_DIR_DST}, so --tests-dir has nothing to point at",
+            args.profile.display()
+        )));
+    }
+    options
+        .session_ro
+        .push((tests_dir, PathBuf::from(TESTS_DIR_DST)));
+    Ok(())
+}
+
+/// Was die Kernel-Stufe anders braucht (HUM-443, HUM-445): die Probe als
+/// Root ohne Filter, nur unter ihr, und die Ausgabe über einen Empfänger.
+///
+/// Die Kernel-Stufe trägt das Terminal nur als Strom: Kein Deskriptor
+/// überquert die Grenze der VM, und ohne Strom bliebe die Ausgabe des
+/// Befehls im Gast. Sie kommt über den Empfänger und geht auf die eigene
+/// Standardausgabe, damit das Protokoll des Laufs sie zeigt wie unter jedem
+/// anderen Backend. Der Plan hält seine eigene Kopie des Senders; der
+/// Aufrufer lässt die Optionen nach dem Plan fallen, damit der Faden der
+/// Ausgabe mit der Sandbox endet.
+///
+/// # Errors
+///
+/// `--test-guest-root-probe` unter einem Backend ohne Gast.
+fn kernel_level_options(
+    args: &Args,
+    backend: &Backend,
+    options: &mut LaunchOptions,
+) -> Result<Option<std::sync::mpsc::Receiver<OutputChunk>>, LaunchError> {
+    let kernel = backend.isolation() == IsolationLevel::Kernel;
+    if let Some(probe) = &args.test_guest_root_probe {
+        if !kernel {
+            return Err(usage(format!(
+                "--test-guest-root-probe needs the kernel level; {} has no guest",
+                backend.name()
+            )));
+        }
+        options.guest_root_probe = GuestRootProbe::new(probe.clone());
+    }
+    if !kernel {
+        return Ok(None);
+    }
+    let (sink, output) = std::sync::mpsc::channel();
+    options.stdio = StdioMode::Pty {
+        cols: 120,
+        rows: 40,
+    };
+    options.terminal = TerminalTransport::Stream;
+    options.output_sink = Some(sink);
+    Ok(Some(output))
 }
 
 /// Startet, prüft die Garantien und wartet.
@@ -416,12 +482,37 @@ fn launch_and_wait(
     backend: &Backend,
     plan: &LaunchPlan,
     shim: &Shim,
+    output: Option<std::sync::mpsc::Receiver<OutputChunk>>,
 ) -> Result<ExitCode, LaunchError> {
     let handle = backend.launch(plan)?;
+    if backend.name() != BWRAP_BACKEND {
+        // Die Kennung der Sitzung, damit das Harness die Prozesse ihrer Unit
+        // auf dem Host findet (HUM-445); unter bwrap ist sie fest.
+        eprintln!("escape-launch: session {}", plan.session.as_uuid().simple());
+    }
+    let relay = output.map(|output| {
+        std::thread::spawn(move || {
+            use std::io::Write as _;
+            let mut stdout = std::io::stdout();
+            for chunk in output {
+                let _ = stdout.write_all(&chunk.bytes);
+                let _ = stdout.flush();
+            }
+        })
+    });
     if matches!(shim, Shim::Real(_)) {
         enforce_isolation(backend, &handle)?;
     }
     let status = handle.wait()?;
+    // Der Sender gehört den Optionen des Plans; der Faden endet, wenn die
+    // Sandbox ihn fallen lässt. Gewartet wird nur kurz, damit eine hängende
+    // Ausgabe den Status nicht aufhält.
+    if let Some(relay) = relay {
+        let deadline = std::time::Instant::now() + REFUSALS_DRAIN;
+        while !relay.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
     if matches!(shim, Shim::Real(_)) {
         report_refusals(&handle);
     }
@@ -501,6 +592,9 @@ fn mirror(from: &Path, to: &Path, depth: u32) -> Result<(), LaunchError> {
 /// die erwartete Tabelle nicht kennt, wie es eine Konfigurationsquelle der
 /// Engine hinzufügen könnte.
 fn add_unplanned_mount(backend: &Backend, plan: &mut LaunchPlan) -> Result<(), LaunchError> {
+    if backend.isolation() == IsolationLevel::Kernel {
+        return drop_from_guest_table(plan);
+    }
     let (anchor, inserted): (&str, Vec<OsString>) = if backend.name() == BWRAP_BACKEND {
         (
             "--clearenv",
@@ -529,6 +623,38 @@ fn add_unplanned_mount(backend: &Backend, plan: &mut LaunchPlan) -> Result<(), L
     Ok(())
 }
 
+/// Was der Gast ohne den Plan einhängt: `/dev/pts`, das der Shim im Gast
+/// immer einhängt.
+const GUEST_UNPLANNED_POINT: &str = "/dev/pts";
+
+/// `--test-unplanned-mount` unter der Kernel-Stufe (HUM-445): Eine
+/// Einhängung in den Gast zu bringen, die der Shim nicht selbst macht, geht
+/// nur über ihn. Gleichwertig ist die umgekehrte Richtung: Die erwartete
+/// Tabelle im Gastplan verliert einen Eintrag, den der Gast trotzdem hat, und
+/// der Vergleich als Multimenge muss ihn als zu viel finden (`SANDBOX_049`).
+fn drop_from_guest_table(plan: &LaunchPlan) -> Result<(), LaunchError> {
+    let path = plan
+        .session_dir
+        .as_ref()
+        .map(|dir| dir.join("files").join("guest-plan.json"))
+        .ok_or_else(|| shape_changed("the session directory of the guest plan"))?;
+    let text = std::fs::read_to_string(&path).map_err(|err| placeholder_failed(&path, &err))?;
+    let mut guest: serde_json::Value =
+        serde_json::from_str(&text).map_err(|_| shape_changed("guest-plan.json"))?;
+    let mounts = guest
+        .pointer_mut("/pins/mounts")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or_else(|| shape_changed("pins.mounts in guest-plan.json"))?;
+    let before = mounts.len();
+    mounts.retain(|entry| entry["point"] != GUEST_UNPLANNED_POINT);
+    if mounts.len() + 1 != before {
+        return Err(shape_changed(GUEST_UNPLANNED_POINT));
+    }
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(FILE_MODE))
+        .and_then(|()| std::fs::write(&path, guest.to_string()))
+        .map_err(|err| placeholder_failed(&path, &err))
+}
+
 /// Das Backend aus `--backend`, ohne die Zulassung (HUM-435), und unter bwrap
 /// dessen Fassung, die der Starter selbst braucht
 /// (`refuse_unclosed_descriptors`). Geplant und gestartet wird danach über
@@ -544,6 +670,9 @@ fn chosen_backend(args: &Args, paths: Paths) -> Result<(Backend, Option<Version>
         .map_or_else(SandboxRef::default, |reference| {
             with_image_root(&SandboxRef::default(), reference)
         });
+    // Der Gastkernel der CI statt des nicht lesbaren des Runners (HUM-445).
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    let sandbox = humanitl_sandbox::with_test_guest_kernel(&sandbox);
     let backend = match Backend::detect_unadmitted(&args.backend, paths, &sandbox) {
         Ok(backend) => backend,
         // Die Vorschau braucht kein `bwrap`; der Start schon.
@@ -906,6 +1035,8 @@ struct Args {
     /// Eine Einhängung in die Zeile setzen, die nicht im Plan steht
     /// (HUM-437, ESC-2).
     test_unplanned_mount: bool,
+    /// Eine Probe als Root ohne Filter im Gast (HUM-445).
+    test_guest_root_probe: Option<String>,
     /// Der Befehl hinter `--`.
     command: Vec<OsString>,
 }
@@ -926,6 +1057,7 @@ impl Args {
         let mut print_argv = false;
         let mut test_swap_work = false;
         let mut test_unplanned_mount = false;
+        let mut test_guest_root_probe = None;
         let mut command = Vec::new();
 
         let mut rest = input.into_iter();
@@ -948,14 +1080,7 @@ impl Args {
                         .clone_into(&mut backend);
                 }
                 Some("--image") => {
-                    let reference = value(&mut rest, "--image")?;
-                    image = Some(
-                        reference
-                            .to_str()
-                            .filter(|reference| !reference.is_empty())
-                            .ok_or_else(|| usage("--image needs NAME@sha256:..."))?
-                            .to_owned(),
-                    );
+                    image = Some(text_value(&mut rest, "--image", "NAME@sha256:...")?);
                 }
                 Some("--tests-dir") => tests_dir = Some(value(&mut rest, "--tests-dir")?),
                 Some("--work") => work = Some(value(&mut rest, "--work")?),
@@ -966,6 +1091,13 @@ impl Args {
                 Some("--ca-cert") => ca_cert = Some(value(&mut rest, "--ca-cert")?),
                 Some("--ca-bundle") => ca_bundle = Some(value(&mut rest, "--ca-bundle")?),
                 Some("--shim") => shim = Some(value(&mut rest, "--shim")?),
+                Some("--test-guest-root-probe") => {
+                    test_guest_root_probe = Some(text_value(
+                        &mut rest,
+                        "--test-guest-root-probe",
+                        "a command line",
+                    )?);
+                }
                 _ => {
                     return Err(usage(format!(
                         "unknown argument {:?}",
@@ -1004,9 +1136,23 @@ impl Args {
             print_argv,
             test_swap_work,
             test_unplanned_mount,
+            test_guest_root_probe,
             command,
         }))
     }
+}
+
+/// Der Wert hinter einem Flag als Text, nicht leer.
+fn text_value(
+    rest: &mut impl Iterator<Item = OsString>,
+    flag: &str,
+    what: &str,
+) -> Result<String, LaunchError> {
+    value(rest, flag)?
+        .to_str()
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| usage(format!("{flag} needs {what}")))
 }
 
 /// Der Wert hinter einem Flag.

@@ -46,8 +46,13 @@ pub use crate::podman::with_image_root;
 use crate::podman::{PodmanBackend, SHARED_KERNEL_STAGE, static_lines as engine_static_lines};
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use crate::qemu::{self as vm, VmBackend};
+
 #[cfg(target_os = "macos")]
 use crate::seatbelt::SeatbeltBackend;
+/// Kernel und Module der Tests für die Kernel-Stufe (HUM-445).
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(any(test, feature = "unadmitted-backends"))]
+pub use vm::with_test_guest_kernel;
 
 /// Der Name von bwrap in `sandbox.backend`.
 pub const BWRAP_BACKEND: &str = "bwrap";

@@ -339,9 +339,15 @@ stop_escape_daemon() {
 # shellcheck source=tests/escape/mount-proof.sh
 . "$HERE/mount-proof.sh"
 
+# The kernel level with root in the guest (HUM-445): two guests of their own,
+# the processes of a session's unit seen from the host, and the hook of esc-2.
+# shellcheck source=tests/escape/kernel-proof.sh
+. "$HERE/kernel-proof.sh"
+
 # The order matters: the watcher asks the daemon, and the daemon may still ask
 # the stub until it has stopped.
 stop_escape_services() {
+    kernel_netns_watch_stop
     dns_watch_stop
     stop_escape_daemon
     dns_stub_stop
@@ -422,6 +428,11 @@ for n in 1 2 3; do
     if [ "$n" = 3 ]; then
         dns_watch_start
     fi
+    # The unit of the session, seen from the host, while ESC-1 runs (HUM-445).
+    if [ "$n" = 1 ] && [ "$ESCAPE_BACKEND" = qemu ]; then
+        : > "$OUT/$suite.log"
+        kernel_netns_watch_start "$OUT/$suite.log"
+    fi
     # Redirection, not `| tee`: a pipeline hands back the exit code of its last
     # element, and the one that matters here is the launcher's.
     set +e
@@ -433,7 +444,22 @@ for n in 1 2 3; do
     fi
     cat "$OUT/$suite.log"
     escape_collect "$suite" "$launch_code"
+    if [ "$ESCAPE_BACKEND" = qemu ]; then
+        case "$n" in
+        1)
+            kernel_netns_watch_stop
+            kernel_netns_case
+            ;;
+        2) kernel_hooks_case ;;
+        esac
+    fi
 done
+
+# The kernel level with root in the guest (HUM-445): the probes as root
+# without a filter, against a second guest of another session.
+if [ "$ESCAPE_BACKEND" = qemu ]; then
+    kernel_guest_cases
+fi
 
 # The host half of ESC-3 (HUM-115): the log of the recording name server,
 # read before ESC-4 and ESC-5 send anything more through the daemon.
