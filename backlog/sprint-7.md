@@ -56,7 +56,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-444 | QEMU-Adapter: Plan, Start in Gefängnissen, Ende, Host-Prüfung, doctor | L | HUM-443, HUM-464, HUM-434 |
 | HUM-445 | Escape-Suite der Kernel-Stufe: Proben mit Gast-Root, CI-Job mit KVM | M | HUM-444, HUM-435, HUM-437 |
 | HUM-446 | Kernel-Stufe: Projektordner und Wegwerf-Schicht über virtiofs | L | HUM-445, HUM-438 |
-| HUM-449 | Kernel-Stufe zulassen: `qemu` wird wählbar | S | HUM-445, HUM-446 |
+| HUM-449 | Kernel-Stufe zulassen: `qemu` wird wählbar | S | HUM-445, HUM-446, HUM-466 |
 | HUM-447 | Doku der Kernel-Stufe, Oberfläche schaltet `qemu` frei | S | HUM-449 |
 | HUM-451 | Integrationstest: ein Daemon, der die Shell-Tür nicht mehr liest, hält weder Lebensleine noch Agent auf | S | HUM-430 |
 | HUM-452 | Podman: ein Container, dessen Client ungeplant endet, wird sofort entfernt, nicht erst beim nächsten Stopp | S | HUM-433 |
@@ -72,6 +72,9 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-461 | RPM und AUR empfehlen Podman wie das .deb | S | HUM-441 |
 | HUM-462 | Website: Podman als wählbares Backend auf der Sicherheitsseite | S | HUM-441 |
 | HUM-463 | Deutsche Übersetzung von ADR-0020 und der deutsche ADR-Index | S | HUM-441 |
+| HUM-466 | Kernel-Stufe: beschreibbares `/tmp`, `$HOME` und `/run` im Gast | S | HUM-444 |
+| HUM-467 | Kernel-Stufe: Obergrenze der Verbindungen über die Tür je Sitzung | S | HUM-444 |
+| HUM-468 | Kernel-Stufe: Host-Prüfung kennt die Programme der Unit | S | HUM-444 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -1115,3 +1118,76 @@ führt sie nicht.
 
 ### Akzeptanzkriterien
 1. Die deutsche Fassung sagt dasselbe wie das Original, Stand HUM-441.
+
+---
+
+## HUM-466 · Kernel level: writable `/tmp`, `$HOME` and `/run` in the guest
+
+### Kontext
+Aus dem Review von HUM-444 (Kandidat). Die Wurzel des Gasts kommt nur lesbar
+über virtiofs; die Zeilen des Plans, die unter bwrap ein tmpfs sind (`/tmp`,
+`$HOME`, `/run`), werden im Gast zu leeren, nur lesbaren Verzeichnissen. Ein
+Agent, der in `/tmp` oder sein Home schreibt, scheitert. `mounts.extra_rw` ist
+im Gast ebenfalls nur lesbar.
+
+### Spezifikation
+1. Der Gastplan nennt die tmpfs-Zeilen; der Shim hängt sie im Gast als tmpfs
+   ein, vor dem Start des Agenten, mit Größe und Rechten wie unter bwrap.
+2. `socket_walk` des Gastplans umfasst diese Orte, damit `single_socket` sie
+   durchsucht.
+3. `mounts.extra_rw` unter der Kernel-Stufe: entweder über `/work` erreichbar
+   oder mit eigener Diagnose abgelehnt, nie stillschweigend nur lesbar.
+
+### Tests
+- KVM: der Agent schreibt nach `/tmp` und `$HOME`; die Mounttabelle des Gasts
+  passt zum Plan.
+- Mutationsbeweis: ohne das Einhängen färbt der Test rot.
+
+### Akzeptanzkriterien
+1. Ein Agent unter `qemu` hat dieselben beschreibbaren Orte wie unter bwrap.
+2. Vor HUM-449 gelandet.
+
+---
+
+## HUM-467 · Kernel level: a cap on door connections per session
+
+### Kontext
+Aus dem Review von HUM-444 (Kandidat). `serve_door` startet je Verbindung des
+Gasts zwei Fäden und hält vier Deskriptoren. Ein Gast mit Root kann beliebig
+viele Verbindungen öffnen und Fäden und Deskriptoren des Daemons erschöpfen,
+was auch andere Sitzungen trifft.
+
+### Spezifikation
+1. Eine feste Obergrenze gleichzeitiger Verbindungen je Sitzung (etwa 64);
+   darüber wird die neue Verbindung sofort geschlossen und einmal je Sitzung
+   ins Audit geschrieben.
+2. Optional ein gemeinsames Limit über alle Sitzungen.
+
+### Tests
+- Unit: die 65. Verbindung wird geschlossen, die übrigen arbeiten weiter.
+- Mutationsbeweis: ohne Grenze färbt der Test rot.
+
+### Akzeptanzkriterien
+1. Kein Gast kann die Fäden oder Deskriptoren des Daemons unbegrenzt binden.
+
+---
+
+## HUM-468 · Kernel level: the host check knows the programs of the unit
+
+### Kontext
+Aus dem Review von HUM-444 (Kandidat). Die Host-Prüfung prüft Netz, Geräte,
+Deskriptoren und Sockets, aber nicht, welche Programme in der Unit laufen. Ein
+unerwarteter Prozess fiele nur auf, wenn er ein Netzgerät oder ein Gerät
+hält.
+
+### Spezifikation
+1. Jeder Prozess der Unit ist eines von: `sh` des Skripts, `bwrap`, dem Shim,
+   den vier Helfern (kanonische Pfade aus `Resolved`); alles andere ist ein
+   Fund unter `SANDBOX_047`.
+
+### Tests
+- Unit über eine Fixture von `/proc`; KVM: grüne Sitzung bleibt grün.
+- Mutationsbeweis: ein zusätzlicher `sleep` in der Unit färbt die Prüfung rot.
+
+### Akzeptanzkriterien
+1. Ein unbekanntes Programm in der Unit beendet die Sitzung mit `SANDBOX_047`.
