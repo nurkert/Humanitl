@@ -507,6 +507,24 @@ impl Harness {
         std::sync::mpsc::Receiver<crate::OutputChunk>,
     ) {
         use crate::SandboxBackend as _;
+        let (plan, output) = self.plan_with(command);
+        let handle = self
+            .backend
+            .launch(&plan)
+            .unwrap_or_else(|d| panic!("launch: {}: {}", d.code, d.why));
+        (handle, output)
+    }
+
+    /// Der Plan einer Sitzung mit Terminal im Strom-Modus; die Ausgabe des
+    /// Agenten kommt über den Empfänger.
+    fn plan_with(
+        &self,
+        command: &str,
+    ) -> (
+        crate::LaunchPlan,
+        std::sync::mpsc::Receiver<crate::OutputChunk>,
+    ) {
+        use crate::SandboxBackend as _;
         let profile = crate::SandboxProfile::parse(
             include_str!("../../../../../profiles/sandbox/default.toml"),
             std::path::Path::new("default.toml"),
@@ -525,6 +543,22 @@ impl Harness {
             .backend
             .plan(&crate::PlanRequest::new(&profile, &session, &options))
             .unwrap_or_else(|d| panic!("plan: {}: {}", d.code, d.why));
+        (plan, output)
+    }
+
+    /// Wie [`Harness::launch`], aber der Plan geht erst an
+    /// `before_launch`, etwa um den Gastplan zu ändern.
+    fn launch_planned(
+        &self,
+        command: &str,
+        before_launch: impl FnOnce(&crate::LaunchPlan),
+    ) -> (
+        crate::SandboxHandle,
+        std::sync::mpsc::Receiver<crate::OutputChunk>,
+    ) {
+        use crate::SandboxBackend as _;
+        let (plan, output) = self.plan_with(command);
+        before_launch(&plan);
         let handle = self
             .backend
             .launch(&plan)
@@ -675,6 +709,91 @@ fn a_session_starts_through_the_adapter_with_a_green_host_check() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(!dir.exists(), "the runtime directory goes with the session");
+}
+
+/// HUM-470, `esc-2/unplanned_mount` in der CI: Der Shim lehnt an der
+/// Mounttabelle ab und schaltet den Gast ab. Der Test erzwingt die Reihenfolge,
+/// die in der CI zufällig kam: Die Host-Prüfung läuft erst, wenn die Unit
+/// schon fort ist. Die Diagnose des Starts bleibt `SANDBOX_049`, die Unit
+/// ohne cgroup steht nur im Befund, und der Agent lief nie. Mutationsbeweis:
+/// Überschreibt der Fund des Hosts die Diagnose des Gasts wieder
+/// (`host_check::merge`), zeigt der Start `SANDBOX_047`.
+#[test]
+fn an_unplanned_mount_stays_sandbox_049_when_the_unit_is_gone_before_the_host_check() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use crate::SandboxBackend as _;
+    let test = "an_unplanned_mount_stays_sandbox_049_when_the_unit_is_gone_before_the_host_check";
+    let Some(harness) = Harness::new(test) else {
+        return;
+    };
+    let (handle, _output) = harness.launch_planned("touch /work/started; sleep 120", |plan| {
+        // Wie `escape-launch --test-unplanned-mount` unter der Kernel-Stufe:
+        // Die erwartete Tabelle verliert `/dev/pts`, das der Gast trotzdem
+        // einhängt.
+        let path = plan
+            .session_dir
+            .as_ref()
+            .unwrap()
+            .join("files/guest-plan.json");
+        let mut guest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let mounts = guest
+            .pointer_mut("/pins/mounts")
+            .and_then(serde_json::Value::as_array_mut)
+            .unwrap();
+        let before = mounts.len();
+        mounts.retain(|entry| entry["point"] != "/dev/pts");
+        assert_eq!(mounts.len() + 1, before, "the guest table names /dev/pts");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&path, guest.to_string()).unwrap();
+    });
+    // Der Gast lehnt ab und schaltet sich ab; mit ihm endet die Unit.
+    assert!(
+        handle.wait_timeout(Duration::from_secs(60)).is_some(),
+        "the guest did not power off after its refusal"
+    );
+    // Die erzwungene Reihenfolge: Erst wenn auch der Dienstverwalter die
+    // Unit vergessen hat (keine cgroup mehr), prüft der Host. Das Ende von
+    // `systemd-run --wait` allein sagt das nicht sicher.
+    let stop = handle.unit().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let group = crate::user_unit::run_bounded(
+            stop.units.show_command(&stop.unit, "ControlGroup"),
+            Duration::from_secs(5),
+        )
+        .map_or_else(
+            |err| panic!("systemctl show: {err}"),
+            |output| String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        );
+        if group.is_empty() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the unit still has the cgroup {group} 10s after its end"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let results = harness.backend.isolation_check(&handle);
+    let first = results.iter().find(|result| !result.passed).unwrap();
+    assert_eq!(
+        first.diagnostic.as_ref().map(|d| d.code.as_str()),
+        Some("SANDBOX_049"),
+        "{results:?}"
+    );
+    assert!(results.iter().all(|result| !result.passed), "{results:?}");
+    assert!(
+        results
+            .iter()
+            .any(|result| result.evidence.contains("host: the unit")),
+        "the host check did not see the unit gone, the order was not forced: {results:?}"
+    );
+    assert!(
+        !harness.project.join("started").exists(),
+        "the agent ran although the guest refused"
+    );
 }
 
 /// Mutationsbeweis: ein zusätzlicher Lauscher `<uds>_22` neben der Tür färbt

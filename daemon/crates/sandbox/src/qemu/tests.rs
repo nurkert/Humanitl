@@ -334,3 +334,173 @@ fn only_a_service_of_the_users_manager_is_bound_to() {
         None
     );
 }
+
+/// Die Ergebnisse eines Berichts aus diesen Zeilen, wie der Daemon sie liest.
+fn results_of_lines(lines: &[&str]) -> Vec<CheckResult> {
+    let report = crate::handle::ReportSnapshot {
+        checks: lines
+            .iter()
+            .filter_map(|line| crate::bridge_env::parse_check_line(line))
+            .collect(),
+        ..crate::handle::ReportSnapshot::default()
+    };
+    crate::bwrap::results_of_report(&report, "no CHECK line from the shim within 60s")
+}
+
+/// Was die Host-Prüfung über eine Unit sagt, die schon fort ist.
+fn unit_gone() -> Vec<host_check::Finding> {
+    vec![host_check::Finding {
+        check: IsolationCheck::NoNetworkInterface,
+        what: "the unit humanitl-test-vm-470.service has ended or never started: systemctl \
+               names no cgroup for it"
+            .to_owned(),
+    }]
+}
+
+/// Die Diagnose, die ein Start zeigt: die der ersten roten Garantie, wie im
+/// Daemon (`first_failure`) und in escape-launch.
+fn shown_code(results: &[CheckResult]) -> Option<String> {
+    results
+        .iter()
+        .find(|result| !result.passed)
+        .and_then(|result| result.diagnostic.as_ref())
+        .map(|diagnostic| diagnostic.code.as_str().to_owned())
+}
+
+/// HUM-470, `esc-2/unplanned_mount` in der CI: Der Shim hält an der
+/// Mounttabelle an (`SANDBOX_049`) und schaltet den Gast ab; die Unit ist
+/// fort, bevor der Host nachsieht, und die Host-Prüfung findet keine cgroup.
+/// Die Diagnose des Starts bleibt die des Gasts, der Fund des Hosts steht im
+/// Befund, und jede Garantie bleibt rot. Mutationsbeweis: Überschreibt der
+/// Fund des Hosts wieder jede Diagnose mit `SANDBOX_047`, zeigt der Start
+/// `SANDBOX_047`.
+#[test]
+fn a_guest_refusal_keeps_its_diagnosis_when_the_unit_is_already_gone() {
+    let mut results = results_of_lines(&[
+        "MODULES vsock=loaded modules_disabled=1",
+        "CHECK mounts_match fail extra:/dev/pts:devpts",
+    ]);
+    assert_eq!(shown_code(&results).as_deref(), Some("SANDBOX_049"));
+    host_check::merge(&mut results, &unit_gone());
+    assert!(results.iter().all(|result| !result.passed), "{results:?}");
+    assert_eq!(
+        shown_code(&results).as_deref(),
+        Some("SANDBOX_049"),
+        "{results:?}"
+    );
+    let interfaces = &results[0];
+    assert_eq!(interfaces.check, IsolationCheck::NoNetworkInterface);
+    assert!(
+        interfaces
+            .evidence
+            .contains("host: the unit humanitl-test-vm-470.service has ended"),
+        "{}",
+        interfaces.evidence
+    );
+}
+
+/// HUM-470, Fall A der CI: Ohne Bericht bleibt `SANDBOX_013` mit dem Grund
+/// des fehlenden Berichts die Diagnose, auch wenn die Unit fort ist.
+#[test]
+fn a_missing_report_keeps_its_diagnosis_when_the_unit_is_already_gone() {
+    let mut results = results_of_lines(&[]);
+    host_check::merge(&mut results, &unit_gone());
+    assert!(results.iter().all(|result| !result.passed));
+    assert_eq!(shown_code(&results).as_deref(), Some("SANDBOX_013"));
+    assert!(
+        results[0].evidence.contains("host: the unit"),
+        "{results:?}"
+    );
+}
+
+/// HUM-470, Fall A über den Faden zum Gast: Kam keine Verbindung zustande,
+/// schreibt er [`session::NO_REPORT`] in die Pipe. Das ist das Fehlen des
+/// Berichts, kein Bericht, und die Diagnose ist `SANDBOX_013` mit seinem
+/// Grund, auch wenn die Unit schon fort ist. Mutationsbeweis: Ohne die
+/// Erkennung der Ersatzzeile zeigt der Start `SANDBOX_014`, weil
+/// `no_interfaces` fehlt.
+#[test]
+fn the_link_s_no_report_line_is_a_missing_report() {
+    let mut results = results_of_lines(&[session::NO_REPORT]);
+    host_check::merge(&mut results, &unit_gone());
+    assert!(results.iter().all(|result| !result.passed));
+    for result in &results {
+        assert_eq!(
+            result.diagnostic.as_ref().map(|d| d.code.as_str()),
+            Some("SANDBOX_013"),
+            "{results:?}"
+        );
+        assert!(
+            result
+                .evidence
+                .starts_with("no CHECK line from the shim: no-report:the_guest_ended"),
+            "{}",
+            result.evidence
+        );
+    }
+}
+
+/// Bestand der Bericht des Gasts, ist jeder Fund des Hosts `SANDBOX_047`,
+/// wie seit HUM-444; nur die Garantie mit dem Fund wird rot.
+#[test]
+fn a_host_finding_after_a_green_report_is_sandbox_047() {
+    let mut results = results_of_lines(&[
+        "CHECK bridge_listening ok 127.0.0.1:3128->vsock:2:5000",
+        "CHECK single_socket ok none",
+        "CHECK mounts_match ok 12",
+        "CHECK mounts_pinned ok work",
+        "CHECK no_interfaces ok lo",
+        "CHECK seccomp_applied ok filter",
+        "CHECK families ok socket(AF_VSOCK,SOCK_STREAM)=EPERM",
+    ]);
+    assert!(results.iter().all(|result| result.passed), "{results:?}");
+    host_check::merge(
+        &mut results,
+        &[host_check::Finding {
+            check: IsolationCheck::SingleSocket,
+            what: "an undeclared socket door/door_22".to_owned(),
+        }],
+    );
+    assert!(results[0].passed && results[2].passed, "{results:?}");
+    assert!(!results[1].passed);
+    assert_eq!(shown_code(&results).as_deref(), Some("SANDBOX_047"));
+    assert!(
+        results[1]
+            .evidence
+            .ends_with("; host: an undeclared socket door/door_22")
+    );
+}
+
+/// Hat der Gast eine Garantie bestanden, eine andere aber abgelehnt, und
+/// sieht der Host beim Abschalten an der bestandenen etwas, wird sie rot und
+/// trägt die Diagnose des Gasts: Die Ursache der Sitzung ist seine Ablehnung.
+#[test]
+fn a_host_finding_on_a_passed_guarantee_takes_the_guests_refusal() {
+    let mut results = results_of_lines(&[
+        "CHECK bridge_listening ok 127.0.0.1:3128->vsock:2:5000",
+        "CHECK single_socket ok none",
+        "CHECK mounts_match ok 12",
+        "CHECK mounts_pinned ok work",
+        "CHECK no_interfaces ok lo",
+        "CHECK seccomp_applied fail install:EINVAL",
+    ]);
+    assert!(results[0].passed);
+    host_check::merge(
+        &mut results,
+        &[host_check::Finding {
+            check: IsolationCheck::NoNetworkInterface,
+            what: "0 emulator processes in the unit, expected exactly one".to_owned(),
+        }],
+    );
+    assert!(!results[0].passed && results[1].passed && !results[2].passed);
+    assert_eq!(shown_code(&results).as_deref(), Some("SANDBOX_016"));
+    assert!(results[0].evidence.contains("host: 0 emulator processes"));
+    let why = &results[0].diagnostic.as_ref().unwrap().why;
+    assert!(
+        why.starts_with(
+            "no_network_interface: the host found 0 emulator processes in the unit, expected \
+             exactly one while the guest had refused seccomp_active: "
+        ),
+        "{why}"
+    );
+}

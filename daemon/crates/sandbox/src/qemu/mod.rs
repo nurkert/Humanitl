@@ -68,7 +68,7 @@ use std::time::{Duration, Instant};
 
 use humanitl_config::{Paths, QemuConfig, SandboxRef, WorkMode};
 use humanitl_core::diagnostics::codes::{
-    SANDBOX_006, SANDBOX_011, SANDBOX_012, SANDBOX_030, SANDBOX_041, SANDBOX_046, SANDBOX_047,
+    SANDBOX_006, SANDBOX_011, SANDBOX_012, SANDBOX_030, SANDBOX_041, SANDBOX_046,
 };
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
@@ -979,6 +979,9 @@ impl SandboxBackend for VmBackend {
     /// Der Agent im Gast wartet auf das Urteil (HUM-444): Erst wenn beide
     /// Prüfungen bestehen, geht `ADMIT` in den Gast; sonst `DENY`, und die
     /// Sitzung endet, ohne dass der Agent je lief.
+    ///
+    /// Hat der Gast selbst schon abgelehnt, bleibt seine Diagnose die der
+    /// Sitzung ([`host_check::merge`], HUM-470).
     fn isolation_check(&self, handle: &SandboxHandle) -> Vec<CheckResult> {
         let mut results = isolation_from_report(handle, handle.report_timeout());
         let Some(stop) = handle.unit() else {
@@ -1004,28 +1007,7 @@ impl SandboxBackend for VmBackend {
                     }),
             );
         }
-        for result in &mut results {
-            let own: Vec<&str> = findings
-                .iter()
-                .filter(|finding| finding.check == result.check)
-                .map(|finding| finding.what.as_str())
-                .collect();
-            if own.is_empty() {
-                continue;
-            }
-            let what = own.join("; ");
-            result.passed = false;
-            result.evidence = format!("{}; host: {what}", result.evidence);
-            result.diagnostic = Some(
-                Diagnostic::builder(SANDBOX_047, Severity::Blocking)
-                    .why(format!(
-                        "{}: the host check of the VM monitor failed: {what}; the agent was not \
-                         admitted and the session was stopped",
-                        result.check.as_str()
-                    ))
-                    .build(),
-            );
-        }
+        host_check::merge(&mut results, &findings);
         let _ = handle.kill();
         results
     }

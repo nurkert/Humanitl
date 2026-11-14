@@ -159,8 +159,8 @@ impl GuestLink {
             lifeline,
             admission,
         } = self;
-        let ended = || lifeline_closed(&lifeline, Duration::ZERO);
-        let Some(first) = connect(&device, report_port, deadline, &ended) else {
+        let mut ended = || lifeline_closed(&lifeline, Duration::ZERO);
+        let Some(first) = connect(&device, report_port, deadline, &mut ended) else {
             let _ = writeln!(report, "{NO_REPORT}");
             return;
         };
@@ -169,7 +169,7 @@ impl GuestLink {
         if let Ok(verdict) = first.try_clone() {
             admission.offer(verdict);
         }
-        let second = connect(&device, report_port, deadline, &ended);
+        let second = connect(&device, report_port, deadline, &mut ended);
         match second {
             Some(stream) => splice(UnixStream::from(control), stream),
             None => drop(control),
@@ -210,22 +210,33 @@ pub(crate) fn copy_report(stream: impl Read, mut pipe: impl Write) {
 }
 
 /// Eine Verbindung zum Port des Shims über das vsock-Gerät: `CONNECT
-/// <port>`, dann `OK`. Antwortet der Gast noch nicht, wird es wiederholt,
-/// bis zur Frist oder bis `ended` sagt, dass die Sitzung vorbei ist. Die
-/// Antwort des Geräts wird Byte für Byte gelesen: Was danach kommt, gehört
-/// schon dem Shim.
+/// <port>`, dann `OK`. Antwortet das Gerät mit etwas anderem oder schließt
+/// es die Verbindung (der Gast lauscht noch nicht), wird es wiederholt, bis
+/// zur Frist oder bis `ended` sagt, dass die Sitzung vorbei ist. Die Antwort
+/// des Geräts wird Byte für Byte gelesen: Was danach kommt, gehört schon dem
+/// Shim.
+///
+/// **Eine gestellte Anfrage wird nie aufgegeben (HUM-470).** Der Gast nimmt
+/// genau zwei Verbindungen in ihrer Reihenfolge (Bericht, Steuerkanal). Gäbe
+/// der Host eine Anfrage auf, deren Antwort noch unterwegs ist, und fragte
+/// neu, könnte der Gast die aufgegebene als Bericht nehmen, und der Bericht
+/// ginge ins Leere. Deshalb wartet jede Anfrage auf ihre Antwort, bis zur
+/// Frist der Sitzung oder ihrem Ende, und erst eine Absage des Geräts führt
+/// zu einer neuen. Gemessen (HUM-470, vhost-device-vsock 0.3.0): Lauscht der
+/// Gast noch nicht, sagt das Gerät binnen Millisekunden ab; die alte
+/// Lesefrist von fünf Sekunden lief dabei nie ab. Die Regel ist also eine
+/// Vorsorge, keine belegte Ursache der Fehlschläge in der CI.
 pub(crate) fn connect(
     device: &Path,
     port: u32,
     deadline: Instant,
-    ended: &dyn Fn() -> bool,
+    ended: &mut dyn FnMut() -> bool,
 ) -> Option<UnixStream> {
     while Instant::now() < deadline && !ended() {
         let Ok(mut stream) = UnixStream::connect(device) else {
             thread::sleep(TICK / 2);
             continue;
         };
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
         if stream
             .write_all(format!("CONNECT {port}\n").as_bytes())
             .is_err()
@@ -233,22 +244,71 @@ pub(crate) fn connect(
             thread::sleep(TICK / 2);
             continue;
         }
-        let mut first = Vec::new();
-        let mut byte = [0u8; 1];
-        while first.len() < 64 && stream.read(&mut byte).ok() == Some(1) {
-            if byte[0] == b'\n' {
-                break;
+        match answer(&mut stream, deadline, ended) {
+            Answer::Accepted => {
+                let _ = stream.set_read_timeout(None);
+                return Some(stream);
             }
-            first.push(byte[0]);
+            Answer::Refused => thread::sleep(TICK / 2),
+            Answer::Over => return None,
         }
-        if !first.starts_with(b"OK") {
-            thread::sleep(TICK / 2);
-            continue;
-        }
-        let _ = stream.set_read_timeout(None);
-        return Some(stream);
     }
     None
+}
+
+/// Was das Gerät auf ein `CONNECT` sagte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Answer {
+    /// `OK`: Der Gast hat die Verbindung angenommen.
+    Accepted,
+    /// Eine andere Zeile, oder das Gerät schloss die Verbindung: Der Gast
+    /// lauscht nicht, eine neue Anfrage ist nötig.
+    Refused,
+    /// Die Frist ist um oder die Sitzung zu Ende, bevor eine Antwort kam.
+    Over,
+}
+
+/// Die erste Zeile des Geräts, gelesen in Scheiben von [`TICK`], damit das
+/// Ende der Sitzung das Warten beendet; die Anfrage selbst bleibt dabei
+/// offen. Frist und Ende der Sitzung gelten vor jedem Lesen, ob Bytes kamen
+/// oder nicht, und noch einmal vor dem Annehmen: Ein `OK`, dessen Zeile erst
+/// nach der Frist vollständig ist, gilt nicht mehr.
+pub(crate) fn answer(
+    stream: &mut UnixStream,
+    deadline: Instant,
+    ended: &mut dyn FnMut() -> bool,
+) -> Answer {
+    let _ = stream.set_read_timeout(Some(TICK));
+    let mut first = Vec::new();
+    let mut byte = [0u8; 1];
+    let mut over = || Instant::now() >= deadline || ended();
+    while first.len() < 64 {
+        if over() {
+            return Answer::Over;
+        }
+        match stream.read(&mut byte) {
+            Ok(1) if byte[0] == b'\n' => break,
+            Ok(1) => first.push(byte[0]),
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) => {}
+            // Das Ende der Verbindung (`Ok(0)`) oder ein Fehler: Das Gerät
+            // hat abgesagt.
+            Ok(_) | Err(_) => return Answer::Refused,
+        }
+    }
+    if over() {
+        return Answer::Over;
+    }
+    if first.starts_with(b"OK") {
+        Answer::Accepted
+    } else {
+        Answer::Refused
+    }
 }
 
 /// Ein Leseende der Lebensleine mehr, für einen Faden des Daemons.
@@ -294,6 +354,156 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(3));
     }
 
+    /// Ein Gerät, das je Verbindung erst `CONNECT <port>` liest und dann
+    /// tut, was `reply` für die Nummer der Verbindung sagt: `Some((Wartezeit,
+    /// Antwort))` antwortet nach der Wartezeit, `None` schließt sofort.
+    /// Zurück kommt die Zahl der Verbindungen, die es sah.
+    fn fake_device(
+        path: &Path,
+        reply: impl Fn(usize) -> Option<(Duration, &'static [u8])> + Send + 'static,
+    ) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+        let listener = UnixListener::bind(path).unwrap();
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = std::sync::Arc::clone(&seen);
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { break };
+                let number = count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut line = String::new();
+                let _ = BufReader::new(stream.try_clone().unwrap()).read_line(&mut line);
+                assert!(line.starts_with("CONNECT 5001"), "{line:?}");
+                let mut stream = stream;
+                match reply(number) {
+                    Some((wait, bytes)) => {
+                        thread::sleep(wait);
+                        let _ = stream.write_all(bytes);
+                        // Offen halten, wie eine angenommene Verbindung.
+                        thread::spawn(move || {
+                            let mut sink = Vec::new();
+                            let _ = stream.read_to_end(&mut sink);
+                        });
+                    }
+                    None => drop(stream),
+                }
+            }
+        });
+        seen
+    }
+
+    /// HUM-470: Hält das Gerät ein `CONNECT` länger fest, als die alte
+    /// Lesefrist von fünf Sekunden erlaubte (der Treiber im Gast lief noch
+    /// nicht), wartet der Host auf genau diese Anfrage und stellt keine
+    /// zweite. Eine zweite, die der Gast später ebenfalls annähme, nähme ihm
+    /// die Reihenfolge von Bericht und Steuerkanal. Mutationsbeweis: mit der
+    /// alten Lesefrist von fünf Sekunden und neuer Anfrage danach sieht das
+    /// Gerät zwei Verbindungen.
+    #[test]
+    fn a_pending_connect_is_never_given_up_for_a_second() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = dir.path().join("door");
+        let seen = fake_device(&device, |_| {
+            Some((Duration::from_millis(6500), b"OK 1073741824\n".as_slice()))
+        });
+        let started = Instant::now();
+        let stream = connect(
+            &device,
+            5001,
+            Instant::now() + Duration::from_secs(30),
+            &mut || false,
+        );
+        assert!(stream.is_some(), "the guest's late OK was not taken");
+        assert!(started.elapsed() >= Duration::from_millis(6500));
+        assert_eq!(
+            seen.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the host gave up a pending CONNECT and asked again"
+        );
+    }
+
+    /// Eine Antwort, die über die Frist reicht (`OK` davor, das Zeilenende danach),
+    /// gilt nicht: Der Host kehrt ohne Verbindung zurück, statt sie verspätet
+    /// anzunehmen. Mutationsbeweis: Prüft `answer` Frist und Ende nur nach
+    /// einer abgelaufenen Lesefrist, nimmt er das späte `OK` an.
+    #[test]
+    fn an_answer_completed_after_the_deadline_is_not_taken() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = dir.path().join("door");
+        let listener = UnixListener::bind(&device).unwrap();
+        thread::spawn(move || {
+            let Ok((stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut line = String::new();
+            let _ = BufReader::new(stream.try_clone().unwrap()).read_line(&mut line);
+            let mut stream = stream;
+            // Ein Byte je 50 ms: nie eine Lesefrist von 200 ms, aber die
+            // Zeile wird erst nach der Frist fertig.
+            for byte in b"OK..............................\n" {
+                if stream.write_all(&[*byte]).is_err() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            let mut sink = Vec::new();
+            let _ = stream.read_to_end(&mut sink);
+        });
+        let started = Instant::now();
+        let stream = connect(
+            &device,
+            5001,
+            Instant::now() + Duration::from_millis(600),
+            &mut || false,
+        );
+        assert!(
+            stream.is_none(),
+            "an OK completed after the deadline was taken"
+        );
+        assert!(started.elapsed() < Duration::from_millis(1200));
+    }
+
+    /// Schließt das Gerät eine Anfrage (der Gast lauscht noch nicht), fragt
+    /// der Host neu; die Antwort der zweiten nimmt er.
+    #[test]
+    fn a_refused_connect_is_asked_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = dir.path().join("door");
+        let seen = fake_device(&device, |number| {
+            (number > 0).then_some((Duration::ZERO, b"OK 7\n".as_slice()))
+        });
+        let stream = connect(
+            &device,
+            5001,
+            Instant::now() + Duration::from_secs(10),
+            &mut || false,
+        );
+        assert!(stream.is_some());
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// Endet die Sitzung, während eine Anfrage noch offen ist, kehrt der
+    /// Host zurück, ohne Verbindung und ohne die Frist abzuwarten.
+    #[test]
+    fn a_pending_connect_ends_with_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = dir.path().join("door");
+        let _seen = fake_device(&device, |_| {
+            Some((Duration::from_secs(60), b"OK 1\n".as_slice()))
+        });
+        let started = Instant::now();
+        let mut polls = 0;
+        let stream = connect(
+            &device,
+            5001,
+            Instant::now() + Duration::from_secs(60),
+            &mut || {
+                polls += 1;
+                polls > 5
+            },
+        );
+        assert!(stream.is_none());
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
     /// Ohne Gast steht in der Berichts-Pipe [`NO_REPORT`], und der Faden
     /// endet mit der Lebensleine, nicht erst mit der Frist.
     #[test]
@@ -321,5 +531,6 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
         let check = crate::bridge_env::parse_check_line(NO_REPORT).unwrap();
         assert!(!check.ok);
+        assert!(check.evidence.starts_with(crate::bwrap::NO_REPORT_REASON));
     }
 }

@@ -22,7 +22,10 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::launcher::{IsolationCheck, UnitStop};
+use humanitl_core::diagnostics::codes::SANDBOX_047;
+use humanitl_core::{Diagnostic, Severity};
+
+use crate::launcher::{CheckResult, IsolationCheck, UnitStop};
 
 use super::lines::Layout;
 use super::prerequisites::Resolved;
@@ -40,6 +43,67 @@ fn finding(check: IsolationCheck, what: impl Into<String>) -> Finding {
     Finding {
         check,
         what: what.into(),
+    }
+}
+
+/// Trägt die Funde des Hosts in die Ergebnisse aus dem Bericht des Gasts
+/// ein. Jede Garantie mit einem Fund ist rot, und ihr Befund nennt ihn
+/// (`host: ...`).
+///
+/// **Welche Diagnose gilt (HUM-470).** Bestand der Bericht des Gasts, ist
+/// jeder Fund des Hosts `SANDBOX_047`. Hat der Gast selbst schon abgelehnt
+/// (eine rote Garantie aus seinem Bericht, oder gar kein Bericht), bleibt
+/// seine Diagnose die der Sitzung: Der Shim hält dann an, schaltet den Gast
+/// ab, und mit ihm endet die Unit, oft noch bevor der Host nachsieht. Was die
+/// Host-Prüfung dann findet, eine Unit ohne cgroup, ohne Prozess, ohne
+/// Emulator, ist die Folge dieser Ablehnung und nicht ihr Grund; mit
+/// `SANDBOX_047` hätte sie die wahre Ursache verdeckt (`esc-2/unplanned_mount`
+/// sah in der CI `SANDBOX_047` statt `SANDBOX_049`). Eine Garantie, die der
+/// Gast bestanden hatte und bei der der Host etwas fand, wird rot und trägt
+/// die erste Diagnose des Gasts, der Fund steht in ihrem Befund. Abgewiesen
+/// wird in jedem Fall: Nur die angezeigte Ursache hängt an der Reihenfolge,
+/// nie das Urteil.
+pub(crate) fn merge(results: &mut [CheckResult], findings: &[Finding]) {
+    let refused_by_guest = results
+        .iter()
+        .find(|result| !result.passed)
+        .and_then(|result| Some((result.check, result.diagnostic.clone()?)));
+    for result in results.iter_mut() {
+        let own: Vec<&str> = findings
+            .iter()
+            .filter(|finding| finding.check == result.check)
+            .map(|finding| finding.what.as_str())
+            .collect();
+        if own.is_empty() {
+            continue;
+        }
+        let what = own.join("; ");
+        result.evidence = format!("{}; host: {what}", result.evidence);
+        if !result.passed && result.diagnostic.is_some() {
+            continue;
+        }
+        result.passed = false;
+        result.diagnostic = Some(match &refused_by_guest {
+            // Die Diagnose einer anderen Garantie: Ihr Satz sagt, woher sie
+            // kommt, damit er an dieser Garantie richtig liest.
+            Some((origin, diagnostic)) => {
+                let mut borrowed = diagnostic.clone();
+                borrowed.why = format!(
+                    "{}: the host found {what} while the guest had refused {}: {}",
+                    result.check.as_str(),
+                    origin.as_str(),
+                    diagnostic.why
+                );
+                borrowed
+            }
+            None => Diagnostic::builder(SANDBOX_047, Severity::Blocking)
+                .why(format!(
+                    "{}: the host check of the VM monitor failed: {what}; the agent was not \
+                     admitted and the session was stopped",
+                    result.check.as_str()
+                ))
+                .build(),
+        });
     }
 }
 
@@ -83,6 +147,14 @@ fn unit_pids(stop: &UnitStop) -> Result<Vec<u32>, String> {
     )
     .map_err(|err| format!("systemctl did not name the unit's cgroup: {err}"))?;
     let group = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if output.status.success() && group.is_empty() {
+        // So antwortet systemd für eine Unit, die es nicht (mehr) kennt; mit
+        // `--collect` ist eine beendete Unit sofort vergessen (HUM-470).
+        return Err(format!(
+            "the unit {} has ended or never started: systemctl names no cgroup for it",
+            stop.unit.service()
+        ));
+    }
     if !output.status.success() || !group.starts_with('/') {
         return Err(format!(
             "systemctl named no cgroup for {} ({:?})",

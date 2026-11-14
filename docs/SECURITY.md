@@ -2150,6 +2150,15 @@ running even for a moment. This gate exists only in the guest; under bubblewrap 
 agent starts as before and a red check stops the session afterwards (K-15).
 A guest that ends without the shim's report is a failed check with its own reason, never a pass.
 A failed host check is `SANDBOX_047`: the agent is not admitted and the session is stopped.
+When the guest has already refused on its own (a red line in its report, or no report at all), its
+diagnosis stays the one the start shows, and the host's findings stand in the evidence: the shim
+then stops and powers the guest off, the unit ends with it, and a host check that finds a unit
+without a cgroup or without its emulator sees the consequence of that refusal, not its cause
+(HUM-470). The verdict never depends on this order; only the cause shown does. The host opens each
+connection into the guest once and waits for its answer until the session's deadline: a
+`CONNECT` it gave up could still be accepted by the guest later and take the place of the report
+(HUM-470, a precaution: the vsock device refuses within milliseconds while the guest does not
+listen).
 
 ### How a session is built
 
