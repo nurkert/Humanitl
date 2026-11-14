@@ -1151,3 +1151,87 @@
     opacity: 0;
   }
 }
+
+/* ---- Kasten: das Modell als Angreifer (HUM-472) ------------------------------------ */
+/* Ein kurzer Einschub vor dem Angriff, darum weniger Luft nach unten und keine Trennlinie
+   zur folgenden Sektion. */
+.hm-model {
+  padding-bottom: 0;
+}
+.hm-model + .hm-sec {
+  border-top: 0;
+}
+.hm-model__box {
+  display: grid;
+  gap: 1rem;
+  max-width: 62rem;
+  padding: clamp(1.4rem, 3.4vw, 2.6rem);
+}
+.hm-model__title {
+  font-size: clamp(1.35rem, 1.05rem + 1.2vw, 2rem);
+  line-height: 1.15;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  overflow-wrap: break-word;
+}
+.hm-model__claim {
+  color: var(--fg);
+  max-width: 50rem;
+}
+.hm-model__answer {
+  color: var(--fg-1);
+  max-width: 50rem;
+}
+.hm-model .fnref {
+  color: var(--hm-held-ink);
+  font-weight: 600;
+  text-decoration: none;
+  padding-inline: 0.1em;
+}
+.hm-model .fnref:hover {
+  color: var(--fg);
+}
+.hm-model__fn {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+  color: var(--fg-2);
+  font-size: 0.82rem;
+}
+.hm-model__fn:target {
+  color: var(--fg-1);
+}
+.hm-model__srcs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.2rem;
+}
+/* Wie die Quellmarken der Sicherheitsseite (.sec-src): Mono, klein, ein Dokumentzeichen davor. */
+.hm-model__src {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 1.5rem;
+  font: 500 0.72rem/1.3 var(--mono);
+  color: var(--fg-2);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.hm-model__src::before {
+  content: '';
+  flex: none;
+  width: 0.5rem;
+  height: 0.62rem;
+  border: 1px solid currentColor;
+  border-radius: 1px;
+  opacity: 0.7;
+}
+.hm-model__src:hover {
+  color: var(--fg);
+}
+/* Befehl und Datum nie mitten im Wort umbrechen; beide passen auch bei 320 px in eine Zeile. */
+.hm-model :not(pre) > code {
+  white-space: nowrap;
+}

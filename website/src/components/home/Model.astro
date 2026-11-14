@@ -1,0 +1,33 @@
+---
+// Der Kasten vor dem Angriff (HUM-472): ein manipuliertes Modell als Gegner, belegt mit dem
+// Paper von Microsoft, und was Humanitl dagegen tut. Die Fußnote nennt die Quellen.
+import Rich from '../security/Rich.astro';
+
+interface Props {
+  c: any;
+}
+const { c } = Astro.props;
+const fn = 'hm-model-fn';
+---
+
+<section class="hm-sec hm-model" id="modell" aria-labelledby="hm-model-title">
+  <div class="hm-wide">
+    <article class="hm-glass hm-model__box hm-rv" data-hm-reveal>
+      <h2 id="hm-model-title" class="hm-model__title">{c.title}</h2>
+      <Rich tag="p" class="hm-model__claim" text={c.claim} fnHref={`#${fn}`} fnLabel={c.fnLabel} />
+      <Rich tag="p" class="hm-model__answer" text={c.answer} fnHref={`#${fn}`} fnLabel={c.fnLabel} />
+      <footer class="hm-model__fn" id={fn}>
+        <p><span aria-hidden="true">¹ </span>{c.fn}</p>
+        <p class="hm-model__srcs">
+          {
+            c.src.map((ref: { label: string; href: string }) => (
+              <a class="hm-model__src" href={ref.href}>
+                {ref.label}
+              </a>
+            ))
+          }
+        </p>
+      </footer>
+    </article>
+  </div>
+</section>

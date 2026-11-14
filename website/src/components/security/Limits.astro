@@ -1,6 +1,7 @@
 ---
 // Kapitel 7: was offen bleibt. Diagramm L, die zwei offenen Datenwege, die drei Kanäle ohne
-// neuen Datenweg, die bekannten Grenzen und das Bedrohungsmodell in Kürze.
+// neuen Datenweg, die bekannten Grenzen, das manipulierte Modell als Gegner (HUM-472) und das
+// Bedrohungsmodell in Kürze.
 import Rich from './Rich.astro';
 import Src from './Src.astro';
 
@@ -172,6 +173,13 @@ const letters = ['a', 'b', 'c', 'd'];
         <p>{l.protected}</p>
       </div>
     </div>
+
+    <article class="sec-glass sec-open__card sec-model sec-rv" data-reveal aria-labelledby="sec-model-title">
+      <h3 id="sec-model-title" class="sec-h3">{l.model.title}</h3>
+      <Rich tag="p" text={l.model.text} />
+      <Rich tag="p" text={l.model.humanitl} />
+      <Src src={l.model.src} prefix={s.srcPrefix} />
+    </article>
 
     <details class="sec-glass sec-out">
       <summary>{l.outTitle}</summary>
