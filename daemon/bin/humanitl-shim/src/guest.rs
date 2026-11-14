@@ -23,8 +23,10 @@
 //! 3. Load the door's kernel modules and the plan's extra ones, then lock
 //!    module loading for good (`modules.rs`). The agent never runs on a
 //!    kernel that still loads modules.
-//! 4. Listen on the plan's report port and take exactly two connections from
-//!    the host, waiting at most [`REPORT_WAIT`] for both: the first becomes
+//! 4. Listen on the plan's report port, say so to the host with one line on
+//!    a connection of its own to the door ([`GUEST_READY`], HUM-471), and
+//!    take exactly two connections from the host, waiting at most
+//!    [`REPORT_WAIT`] for both: the first becomes
 //!    the report the bwrap mode gets as a descriptor, the second the control
 //!    stream of the terminals (`stream.rs`, HUM-443). One port, one
 //!    listener, closed after the second; the guest opens neither. The first
@@ -95,6 +97,12 @@ use crate::report::{Check, Report};
 
 /// How long the shim waits for the host to take the report.
 pub const REPORT_WAIT: Duration = Duration::from_secs(30);
+
+/// The line with which PID 1 tells the host on the door that it listens on
+/// the report port (HUM-471); the daemon takes it there and never hands it
+/// to the proxy. The same bytes as `GUEST_READY` in the sandbox crate's
+/// session module of the kernel level.
+pub const GUEST_READY: &[u8] = b"HUMANITL-GUEST-READY\n";
 
 /// How long PID 1 waits for the host's admission of the agent (HUM-444).
 pub const ADMISSION_WAIT: Duration = Duration::from_secs(120);
@@ -516,9 +524,11 @@ pub fn boot(path: &Path) -> Option<Booted> {
     };
     let modules = Running::open(&plan.modules_dir)
         .and_then(|mut kernel| modules::load_and_lock(&mut kernel, &plan.modules));
-    let (report, control) = match vsock::accept(plan.report_port, 2, REPORT_WAIT).map(|streams| {
-        let mut streams = streams.into_iter().map(vsock::Stream::into_fd);
-        (streams.next(), streams.next())
+    let (report, control) = match listen_and_say_ready(&plan).and_then(|listener| {
+        listener.accept(2, REPORT_WAIT).map(|streams| {
+            let mut streams = streams.into_iter().map(vsock::Stream::into_fd);
+            (streams.next(), streams.next())
+        })
     }) {
         Ok((Some(report), Some(control))) => (Report::from_fd(report), control),
         Ok(_) => {
@@ -585,6 +595,37 @@ pub fn boot(path: &Path) -> Option<Booted> {
         plan,
         control,
     })
+}
+
+/// Listens on the plan's report port and then tells the host so on the door
+/// ([`GUEST_READY`], HUM-471). The host asks for the report only after this
+/// line: a `CONNECT` that reaches the vsock device while the guest's driver
+/// is still setting it up (its memory known, its queues not yet ready)
+/// stops the device process for good (version 0.3.0), and nothing the
+/// host does can tell that moment from outside. A connection the guest
+/// itself makes can only exist once the queues run.
+fn listen_and_say_ready(plan: &Plan) -> io::Result<vsock::Listener> {
+    let listener = vsock::listen(plan.report_port, 2)?;
+    say_ready(plan.door_port).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!(
+                "the ready line on the door port {} failed: {err}",
+                plan.door_port
+            ),
+        )
+    })?;
+    Ok(listener)
+}
+
+/// Writes [`GUEST_READY`] on a connection of its own to the door and waits
+/// briefly until the host has read it and closed.
+fn say_ready(door_port: u32) -> io::Result<()> {
+    use std::io::Write as _;
+    let mut stream = vsock::connect(vsock::HOST_CID, door_port)?;
+    stream.write_all(GUEST_READY)?;
+    linger_fd(stream.into_fd().as_raw_fd());
+    Ok(())
 }
 
 /// Starts the plan's root probe (HUM-445), if it names one: a child of

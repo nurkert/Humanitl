@@ -19,6 +19,18 @@
 //! einen Bericht gab, steht in der Pipe [`NO_REPORT`]: eine gescheiterte
 //! Prüfung mit eigenem Grund, nie ein stilles Nichts.
 //!
+//! **Erst die Bereitschaft, dann `CONNECT` (HUM-471).** Der Daemon fragt am
+//! vsock-Gerät erst, wenn der Shim an der Tür gesagt hat, dass er lauscht
+//! ([`GUEST_READY`]). Ein `CONNECT`, das das Gerät erreicht, während der
+//! Treiber des Gasts es gerade einrichtet (der Speicher des Gasts ist
+//! bekannt, die Warteschlangen sind es noch nicht), hält vhost-device-vsock
+//! 0.3.0 für immer an: Sein Ereignisfaden scheitert an der noch nicht
+//! bereiten Warteschlange und endet, der Prozess lebt weiter, und kein
+//! späteres `CONNECT` bekommt je eine Antwort. Von außen ist dieser Moment
+//! nicht zu erkennen; eine Verbindung, die der Gast selbst öffnet, gibt es
+//! aber erst, wenn die Warteschlangen laufen. Bis zur Zeile reicht die Tür
+//! nichts an den Proxy weiter: Vor ihr läuft im Gast noch kein Agent.
+//!
 //! Jeder Faden endet mit der Sitzung: Er wartet zugleich auf das Leseende der
 //! Lebensleine, deren Schreibende der Zustand der Sandbox hält.
 
@@ -26,6 +38,7 @@ use std::io::{BufRead as _, BufReader, PipeWriter, Read, Write};
 use std::os::fd::{AsFd as _, OwnedFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -50,6 +63,88 @@ pub(crate) const SUN_PATH_MAX: usize = 108;
 /// Wie oft ein Faden nachsieht, ob die Lebensleine noch hält.
 const TICK: Duration = Duration::from_millis(200);
 
+/// Die Zeile, mit der der Shim im Gast an der Tür sagt, dass er am
+/// Berichts-Port lauscht (HUM-471); dieselben Bytes wie `GUEST_READY` in
+/// `humanitl-shim/src/guest.rs`.
+pub(crate) const GUEST_READY: &[u8] = b"HUMANITL-GUEST-READY\n";
+
+/// Wie lange die Tür vor der Bereitschaft auf die erste Zeile einer
+/// Verbindung wartet.
+const READY_LINE_WAIT: Duration = Duration::from_secs(1);
+
+/// Ob der Gast an der Tür bereit gemeldet hat; die Tür setzt es, der Faden
+/// zum Gast wartet darauf.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct GuestReady(Arc<(Mutex<bool>, Condvar)>);
+
+impl GuestReady {
+    /// Der Gast hat [`GUEST_READY`] geschrieben.
+    pub(crate) fn set(&self) {
+        let (ready, changed) = &*self.0;
+        *ready.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        changed.notify_all();
+    }
+
+    /// Ob der Gast schon bereit gemeldet hat.
+    pub(crate) fn is_set(&self) -> bool {
+        *self.0.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Wartet auf die Bereitschaft, bis zur Frist oder bis `ended` sagt, dass
+    /// die Sitzung vorbei ist; `true`, wenn sie kam.
+    pub(crate) fn wait(&self, deadline: Instant, ended: &mut dyn FnMut() -> bool) -> bool {
+        let (ready, changed) = &*self.0;
+        loop {
+            {
+                let set = ready.lock().unwrap_or_else(PoisonError::into_inner);
+                if *set {
+                    return true;
+                }
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    return false;
+                }
+                let (set, _) = changed
+                    .wait_timeout(set, left.min(TICK))
+                    .unwrap_or_else(PoisonError::into_inner);
+                if *set {
+                    return true;
+                }
+            }
+            if ended() {
+                return false;
+            }
+        }
+    }
+}
+
+/// Liest [`GUEST_READY`] Byte für Byte, solange sie dazu passen. Für die
+/// ganze Zeile gilt eine Frist von [`READY_LINE_WAIT`], damit ein Gast, der
+/// sie langsam tropfen lässt, die Tür nicht länger hält. Auf ein Ende danach
+/// wartet die Tür nicht: Über das vsock-Gerät kam es in den KVM-Tests nicht
+/// innerhalb der Frist an, und was nach der Zeile kommt, liest niemand.
+pub(crate) fn is_ready_line(stream: &mut UnixStream) -> bool {
+    let deadline = Instant::now() + READY_LINE_WAIT;
+    let mut seen = 0;
+    let mut byte = [0u8; 1];
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() || stream.set_read_timeout(Some(left)).is_err() {
+            return false;
+        }
+        match stream.read(&mut byte) {
+            Ok(1) if byte[0] == GUEST_READY[seen] => {
+                seen += 1;
+                if seen == GUEST_READY.len() {
+                    return true;
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            _ => return false,
+        }
+    }
+}
+
 /// Ob die Lebensleine zu ist: Ihr Schreibende ist fort, das Leseende
 /// meldet `POLLHUP` oder liest das Ende.
 pub(crate) fn lifeline_closed(lifeline: &OwnedFd, wait: Duration) -> bool {
@@ -71,8 +166,15 @@ pub(crate) fn lifeline_closed(lifeline: &OwnedFd, wait: Duration) -> bool {
 }
 
 /// Reicht jede Verbindung an `listener` an `proxy` weiter, bis die
-/// Lebensleine zugeht.
-pub(crate) fn serve_door(listener: &UnixListener, proxy: &Path, lifeline: &OwnedFd) {
+/// Lebensleine zugeht. Bis der Gast bereit gemeldet hat, nimmt die Tür nur
+/// diese eine Zeile ([`GUEST_READY`]) und setzt `ready`; jede andere
+/// Verbindung davor geht zu, ohne den Proxy zu erreichen.
+pub(crate) fn serve_door(
+    listener: &UnixListener,
+    proxy: &Path,
+    lifeline: &OwnedFd,
+    ready: &GuestReady,
+) {
     loop {
         let mut fds = [
             PollFd::new(listener, PollFlags::IN),
@@ -93,9 +195,15 @@ pub(crate) fn serve_door(listener: &UnixListener, proxy: &Path, lifeline: &Owned
         if fds[0].revents().is_empty() {
             continue;
         }
-        let Ok((guest, _)) = listener.accept() else {
+        let Ok((mut guest, _)) = listener.accept() else {
             continue;
         };
+        if !ready.is_set() {
+            if is_ready_line(&mut guest) {
+                ready.set();
+            }
+            continue;
+        }
         match UnixStream::connect(proxy) {
             Ok(upstream) => splice(guest, upstream),
             Err(_) => drop(guest),
@@ -136,8 +244,11 @@ pub(crate) struct GuestLink {
     pub(crate) control: OwnedFd,
     /// Ein Leseende der Lebensleine.
     pub(crate) lifeline: OwnedFd,
-    /// Wo die Verbindung des Berichts für das Urteil des Daemons hinkommt.
+    /// Wo die Verbindung des Berichts für das Urteil des Daemons hinkommt;
+    /// dort steht auch, wie weit der Weg zum Gast kam.
     pub(crate) admission: crate::launcher::Admission,
+    /// Die Bereitschaft des Gasts, die die Tür setzt.
+    pub(crate) ready: GuestReady,
 }
 
 impl GuestLink {
@@ -158,12 +269,40 @@ impl GuestLink {
             control,
             lifeline,
             admission,
+            ready,
         } = self;
+        let started = Instant::now();
+        let since = || format!("{:.1}s", started.elapsed().as_secs_f64());
         let mut ended = || lifeline_closed(&lifeline, Duration::ZERO);
+        admission.note_link("no ready line from the guest on the door yet".to_owned());
+        if !ready.wait(deadline, &mut ended) {
+            admission.note_link(if ended() {
+                format!(
+                    "the session ended after {} before the guest said ready on the door",
+                    since()
+                )
+            } else {
+                format!(
+                    "no ready line from the guest on the door within {}; its vsock modules or \
+                     its vsock device did not come up",
+                    since()
+                )
+            });
+            let _ = writeln!(report, "{NO_REPORT}");
+            return;
+        }
+        admission.note_link(format!(
+            "the guest said ready after {}; the report connection has no answer yet",
+            since()
+        ));
         let Some(first) = connect(&device, report_port, deadline, &mut ended) else {
             let _ = writeln!(report, "{NO_REPORT}");
             return;
         };
+        admission.note_link(format!(
+            "report connection open after {}; the control stream has no answer yet",
+            since()
+        ));
         // Auf der Verbindung des Berichts geht später das Urteil des Daemons
         // in den Gast (`ADMIT` oder `DENY`); ohne sie startet der Agent nie.
         if let Ok(verdict) = first.try_clone() {
@@ -171,7 +310,10 @@ impl GuestLink {
         }
         let second = connect(&device, report_port, deadline, &mut ended);
         match second {
-            Some(stream) => splice(UnixStream::from(control), stream),
+            Some(stream) => {
+                admission.note_link(format!("both connections open after {}", since()));
+                splice(UnixStream::from(control), stream);
+            }
             None => drop(control),
         }
         copy_report(first, report);
@@ -225,7 +367,9 @@ pub(crate) fn copy_report(stream: impl Read, mut pipe: impl Write) {
 /// zu einer neuen. Gemessen (HUM-470, vhost-device-vsock 0.3.0): Lauscht der
 /// Gast noch nicht, sagt das Gerät binnen Millisekunden ab; die alte
 /// Lesefrist von fünf Sekunden lief dabei nie ab. Die Regel ist also eine
-/// Vorsorge, keine belegte Ursache der Fehlschläge in der CI.
+/// Vorsorge, keine belegte Ursache der Fehlschläge in der CI; die Ursache
+/// war ein `CONNECT` vor der Bereitschaft des Geräts (HUM-471, Kopf dieses
+/// Moduls), und [`GuestLink`] fragt deshalb erst nach [`GUEST_READY`].
 pub(crate) fn connect(
     device: &Path,
     port: u32,
@@ -333,7 +477,32 @@ mod tests {
         let door_path = dir.path().join("door_5000");
         let door = UnixListener::bind(&door_path).unwrap();
         let (lifeline, read) = crate::shim_fds::Lifeline::new().unwrap();
-        let server = thread::spawn(move || serve_door(&door, &proxy_path, &read));
+        let ready = GuestReady::default();
+        let door_ready = ready.clone();
+        let server = thread::spawn(move || serve_door(&door, &proxy_path, &read, &door_ready));
+
+        // Vor der Bereitschaft erreicht keine Verbindung den Proxy; die
+        // Zeile des Shims setzt sie und geht selbst nicht weiter.
+        let mut early = UnixStream::connect(&door_path).unwrap();
+        early.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
+        let mut nothing = Vec::new();
+        // Die Tür schließt, ohne zu lesen, was noch ansteht: ein Ende oder ein
+        // Reset, nie eine Antwort.
+        let _ = early.read_to_end(&mut nothing);
+        assert!(nothing.is_empty());
+        assert!(!ready.is_set());
+        let mut knock = UnixStream::connect(&door_path).unwrap();
+        knock.write_all(GUEST_READY).unwrap();
+        // Wie der Shim: Nach der Zeile geht die Schreibseite zu.
+        knock.shutdown(std::net::Shutdown::Write).unwrap();
+        knock.read_to_end(&mut nothing).unwrap();
+        assert!(ready.is_set());
+        proxy.set_nonblocking(true).unwrap();
+        assert!(
+            proxy.accept().is_err(),
+            "a line before the ready one reached the proxy"
+        );
+        proxy.set_nonblocking(false).unwrap();
 
         let mut guest = UnixStream::connect(&door_path).unwrap();
         guest.write_all(b"ping").unwrap();
@@ -520,6 +689,7 @@ mod tests {
             control: shim,
             lifeline: read,
             admission: crate::launcher::Admission::default(),
+            ready: GuestReady::default(),
         };
         let started = Instant::now();
         link.start().unwrap();
@@ -532,5 +702,134 @@ mod tests {
         let check = crate::bridge_env::parse_check_line(NO_REPORT).unwrap();
         assert!(!check.ok);
         assert!(check.evidence.starts_with(crate::bwrap::NO_REPORT_REASON));
+    }
+
+    /// HUM-471: Vor der Bereitschaft des Gasts stellt der Faden zum Gast kein
+    /// einziges `CONNECT`; vhost-device-vsock 0.3.0 hält für immer an, wenn
+    /// eines eintrifft, während der Treiber des Gasts das Gerät einrichtet.
+    /// Erst die Bereitschaft öffnet beide Verbindungen, und der Stand steht
+    /// in der Zulassung. Mutationsbeweis: Ohne das Warten auf die
+    /// Bereitschaft (`ready.wait` in `GuestLink::run`) sieht das Gerät
+    /// Verbindungen, bevor der Gast bereit ist.
+    #[test]
+    fn no_connect_reaches_the_device_before_the_guest_is_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let device = dir.path().join("door");
+        let seen = fake_device(&device, |_| Some((Duration::ZERO, b"OK 9\n".as_slice())));
+        let (_reader, writer) = std::io::pipe().unwrap();
+        let (_daemon, shim) = crate::shell::stream_pair(80, 24).unwrap();
+        let (_lifeline, read) = crate::shim_fds::Lifeline::new().unwrap();
+        let admission = crate::launcher::Admission::default();
+        let ready = GuestReady::default();
+        let link = GuestLink {
+            device,
+            report_port: 5001,
+            deadline: Instant::now() + Duration::from_secs(30),
+            report: writer,
+            control: shim,
+            lifeline: read,
+            admission: admission.clone(),
+            ready: ready.clone(),
+        };
+        link.start().unwrap();
+        thread::sleep(Duration::from_millis(800));
+        assert_eq!(
+            seen.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the host asked the device before the guest was ready"
+        );
+        assert!(
+            admission.link().contains("no ready line"),
+            "{}",
+            admission.link()
+        );
+        ready.set();
+        let started = Instant::now();
+        while seen.load(std::sync::atomic::Ordering::SeqCst) < 2
+            && started.elapsed() < Duration::from_secs(5)
+        {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 2);
+        while !admission.link().contains("both connections open")
+            && started.elapsed() < Duration::from_secs(5)
+        {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            admission.link().contains("both connections open"),
+            "{}",
+            admission.link()
+        );
+    }
+
+    /// Ohne Bereitschaft endet der Faden mit der Lebensleine, schreibt
+    /// [`NO_REPORT`] und hält fest, dass die Sitzung vor der Zeile endete.
+    #[test]
+    fn without_the_ready_line_the_link_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut reader, writer) = std::io::pipe().unwrap();
+        let (_daemon, shim) = crate::shell::stream_pair(80, 24).unwrap();
+        let (lifeline, read) = crate::shim_fds::Lifeline::new().unwrap();
+        let admission = crate::launcher::Admission::default();
+        let link = GuestLink {
+            device: dir.path().join("door"),
+            report_port: 5001,
+            deadline: Instant::now() + Duration::from_secs(60),
+            report: writer,
+            control: shim,
+            lifeline: read,
+            admission: admission.clone(),
+            ready: GuestReady::default(),
+        };
+        link.start().unwrap();
+        thread::sleep(Duration::from_millis(300));
+        drop(lifeline);
+        let mut text = String::new();
+        reader.read_to_string(&mut text).unwrap();
+        assert_eq!(text, format!("{NO_REPORT}\n"));
+        assert!(
+            admission.link().starts_with("the session ended after "),
+            "{}",
+            admission.link()
+        );
+    }
+
+    /// Nur genau die Zeile setzt die Bereitschaft; eine andere, eine
+    /// kürzere oder eine stumme Verbindung nicht.
+    #[test]
+    fn only_the_exact_ready_line_counts() {
+        for (bytes, expected) in [
+            (GUEST_READY, true),
+            (b"HUMANITL-GUEST-READ".as_slice(), false),
+            (b"GET / HTTP/1.0\r\n".as_slice(), false),
+            (b"".as_slice(), false),
+        ] {
+            let (mut ours, mut theirs) = UnixStream::pair().unwrap();
+            theirs.write_all(bytes).unwrap();
+            drop(theirs);
+            assert_eq!(is_ready_line(&mut ours), expected, "{bytes:?}");
+        }
+    }
+
+    /// Die Frist gilt für die ganze Zeile, nicht je Byte: Ein Gast, der die
+    /// richtigen Bytes langsam schickt, hält die Tür nicht länger als
+    /// [`READY_LINE_WAIT`] und ein wenig.
+    #[test]
+    fn a_dripped_ready_line_runs_into_one_deadline() {
+        let (mut ours, mut theirs) = UnixStream::pair().unwrap();
+        let dripper = std::thread::spawn(move || {
+            for byte in GUEST_READY {
+                if theirs.write_all(&[*byte]).is_err() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        });
+        let started = Instant::now();
+        assert!(!is_ready_line(&mut ours));
+        assert!(started.elapsed() < READY_LINE_WAIT + Duration::from_millis(500));
+        drop(ours);
+        dripper.join().unwrap();
     }
 }

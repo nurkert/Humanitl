@@ -1299,6 +1299,40 @@ Gasts ist das nicht lesbar. Verwandt: `no CHECK bridge_listening` im
    mit einer Diagnose versehen, die sie im Lauf eindeutig nennt.
 2. Vor HUM-449 gelandet.
 
+### Stand nach der Umsetzung (2026-11-14)
+Ursache gefunden und behoben. vhost-device-vsock 0.3.0 hält für immer an,
+wenn ein `CONNECT` des Hosts eintrifft, nachdem QEMU dem Gerät den Speicher
+des Gasts gegeben hat (`SET_MEM_TABLE`), aber bevor dessen Warteschlangen
+bereit sind: `process_tx`/`process_rx` scheitern mit `IterateQueue`, der
+Fehler beendet den Ereignisfaden von vhost-user-backend 0.20, der Prozess
+lebt weiter, und kein späteres `CONNECT` bekommt eine Antwort. Das Fenster
+liegt im Start des Treibers im Gast (Laden von `vmw_vsock_virtio_transport`
+durch den Shim); der Host fragte alle 100 ms und traf es selten (lokal in 68
+Läufen nie, in der CI langsamer und öfter). Nachgewiesen mit einem
+vhost-user-Frontend in Python gegen das echte Gerät (CONNECT vor bereiten
+Warteschlangen: auch danach wird nichts mehr zugestellt; in umgekehrter
+Reihenfolge sofort) und mit dem KVM-Test unten. Derselbe Fehler erklärt
+vermutlich das `no CHECK bridge_listening` des `test_vm`-Pfads (Lauf
+43567140980); der Pfad wartet jetzt ebenso.
+
+Behoben: Der Shim lauscht am Berichts-Port und meldet dann mit einer festen
+Zeile auf einer eigenen Verbindung zur Tür, dass er bereit ist
+(`HUMANITL-GUEST-READY`); eine Verbindung des Gasts gibt es erst, wenn die
+Warteschlangen laufen. Der Host stellt sein erstes `CONNECT` erst danach.
+Bis zur Zeile reicht die Tür nichts an den Proxy. Fehlt der Bericht, nennt
+der Befund jetzt den Stand der Verbindung (`vsock link: …`), schon im
+gegateten Lauf. Die Rollen-Kennzeichnung per Hello-Zeile (Punkt 3) war nicht
+nötig: Die Reihenfolge war nicht die Ursache. Die Konsole des Gasts läuft im
+Adapterpfad mit `HUMANITL_TEST_VM_CONSOLE=1` mit (nur Tests, Schritt „Guest
+console after a failure").
+
+Tests: KVM `a_connect_while_the_vsock_device_starts_never_silences_it` hält
+die Einrichtung des Geräts mit einem Zwischenstück am vhost-user-Socket drei
+Sekunden an; Mutationsbeweis: ohne das Warten auf die Bereitschaft keine
+Verbindung, „vsock link: … the report connection has no answer yet".
+Offen: der Nachweis der zehn grünen Läufe von kvm-tests und
+escape-tests-qemu in der CI.
+
 ## HUM-472 · Website: the model as the attacker, with sources
 
 ### Kontext

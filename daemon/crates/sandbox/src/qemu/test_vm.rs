@@ -17,7 +17,8 @@
 //!   der Kernel-Datei, ohne Konsole, Monitor, Anzeige und Netz.
 //!
 //! Auf dem Host lauscht der Test selbst an `<uds>_<Tür-Port>` und spielt den
-//! Proxy; den Bericht des Shims holt er sich mit `CONNECT <Bericht-Port>` am
+//! Proxy; den Bericht des Shims holt er sich, sobald der Shim an der Tür
+//! bereit gemeldet hat (HUM-471), mit `CONNECT <Bericht-Port>` am
 //! vsock-Gerät (Q10), und mit einem zweiten `CONNECT` an denselben Port den
 //! Steuerkanal der Terminals (HUM-443), dessen Seite des Daemons
 //! [`crate::shell::ShellDoor`] im Strom-Modus liest wie unter bwrap. Eine gehärtete Unit des Nutzers baut erst der Adapter
@@ -374,7 +375,13 @@ pub(crate) fn run_with(spec: &Spec, scenario: impl FnOnce(&Session)) -> Result<O
     let deadline = started + RUN_TIMEOUT;
     let mut session = None;
     let mut reader = None;
-    if let Some(mut report) = connect(&device, deadline, &mut || vm.emulator_ended()) {
+    // Wie der Adapter: erst fragen, wenn der Shim an der Tür bereit gemeldet
+    // hat (HUM-471).
+    let ready = door.ready.wait(deadline, &mut || vm.emulator_ended());
+    if let Some(mut report) = ready
+        .then(|| connect(&device, deadline, &mut || vm.emulator_ended()))
+        .flatten()
+    {
         // Ohne Host-Prüfung, also gleich zugelassen (HUM-444): Der Shim
         // startet den Agenten erst nach diesem Urteil.
         let _ = report.write_all(b"ADMIT\n");
@@ -657,8 +664,13 @@ fn open_session(stream: UnixStream) -> Option<Session> {
 
 /// Der Lauscher an `<uds>_<Tür-Port>`: nimmt jede Anfrage an, merkt sich die
 /// erste Zeile und antwortet mit `door-ok-<n>`.
+///
+/// Die erste Verbindung, die genau die Bereitschaft des Shims trägt
+/// ([`super::session::GUEST_READY`]), nimmt die Tür wie der Adapter für sich
+/// und zählt sie nicht als Anfrage (HUM-471).
 struct Door {
     seen: Arc<Mutex<Vec<String>>>,
+    ready: super::session::GuestReady,
 }
 
 impl Door {
@@ -666,14 +678,24 @@ impl Door {
         let listener = UnixListener::bind(path).map_err(|err| format!("door: {err}"))?;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let record = Arc::clone(&seen);
+        let ready = super::session::GuestReady::default();
+        let set = ready.clone();
         thread::spawn(move || {
-            for (number, stream) in (1..).zip(listener.incoming()) {
-                let Ok(stream) = stream else { break };
+            let mut number = 0;
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                if !set.is_set() {
+                    if super::session::is_ready_line(&mut stream) {
+                        set.set();
+                    }
+                    continue;
+                }
+                number += 1;
                 let record = Arc::clone(&record);
                 thread::spawn(move || answer(stream, number, &record));
             }
         });
-        Ok(Self { seen })
+        Ok(Self { seen, ready })
     }
 
     fn requests(&self) -> Vec<String> {

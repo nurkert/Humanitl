@@ -755,8 +755,14 @@ there is no listener, and the guest's connection times out (Q2). `--forward-cid`
 host side opens two connections into the guest itself (`CONNECT` on the shim's report port): the
 report and the control stream (K-29). It never gives up a pending `CONNECT` to ask again, so the
 guest, which takes exactly two connections in their order, cannot take an abandoned one for the
-report (HUM-470). The host check refuses any socket in the runtime directory
-besides the declared ones, and more than one vsock device process or device. *Residual risk:* a
+report (HUM-470). It asks only after the shim has said on the door, with one fixed line
+on a connection of its own, that it listens (HUM-471): a `CONNECT` that reaches
+`vhost-device-vsock` 0.3.0 while the guest's driver is still setting the device up stops the
+device for good, and only a connection the guest makes itself proves that the device runs. Until
+that line the daemon hands no connection of the door to the proxy; the agent cannot run before it
+anyway, since it waits for the admission on the report connection. The host check refuses any
+socket in the runtime directory besides the declared ones, and more than one vsock device process
+or device. *Residual risk:* a
 flaw in the vsock device process; it runs jailed and without network like the other helpers.
 
 ### K-32 The guest kernel
@@ -908,6 +914,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-14 | K-30, K-31: when the guest has already refused, its diagnosis is shown and the host check's findings stand in the evidence, the session is refused either way; the host never gives up a pending `CONNECT` into the guest | HUM-470 |
 | 2026-11-14 | K-32: the profile's tmpfs (`/tmp`, `/var/tmp`, the agent's home) and `/run` are writable tmpfs in the guest, `/run/humanitl` read-only on top, mounted by the shim, in the expected mount table and in the socket walk; `mounts.extra_rw` refused at the kernel level (`SANDBOX_051`) instead of mounted read-only | HUM-466 |
 | 2026-11-14 | K-33: each file system daemon of the kernel level holds at most 65,536 descriptors (`LimitNOFILE` of the unit) and runs with `--cache never --allow-mmap` (guest kernel 6.6 or newer, `SANDBOX_045` below); closes the finding of HUM-445, where a walk over the guest root drove the root daemon to about 520,000 descriptors | HUM-469 |
+| 2026-11-14 | K-31: the host opens the report and control connections only after the shim's ready line on the door; until then the door forwards nothing to the proxy | HUM-471 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in
