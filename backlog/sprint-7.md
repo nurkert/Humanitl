@@ -56,7 +56,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-444 | QEMU-Adapter: Plan, Start in Gefängnissen, Ende, Host-Prüfung, doctor | L | HUM-443, HUM-464, HUM-434 |
 | HUM-445 | Escape-Suite der Kernel-Stufe: Proben mit Gast-Root, CI-Job mit KVM | M | HUM-444, HUM-435, HUM-437 |
 | HUM-446 | Kernel-Stufe: Projektordner und Wegwerf-Schicht über virtiofs | L | HUM-445, HUM-438 |
-| HUM-449 | Kernel-Stufe zulassen: `qemu` wird wählbar | S | HUM-445, HUM-446, HUM-466 |
+| HUM-449 | Kernel-Stufe zulassen: `qemu` wird wählbar | S | HUM-445, HUM-446, HUM-466, HUM-469 |
 | HUM-447 | Doku der Kernel-Stufe, Oberfläche schaltet `qemu` frei | S | HUM-449 |
 | HUM-451 | Integrationstest: ein Daemon, der die Shell-Tür nicht mehr liest, hält weder Lebensleine noch Agent auf | S | HUM-430 |
 | HUM-452 | Podman: ein Container, dessen Client ungeplant endet, wird sofort entfernt, nicht erst beim nächsten Stopp | S | HUM-433 |
@@ -75,6 +75,8 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-466 | Kernel-Stufe: beschreibbares `/tmp`, `$HOME` und `/run` im Gast | S | HUM-444 |
 | HUM-467 | Kernel-Stufe: Obergrenze der Verbindungen über die Tür je Sitzung | S | HUM-444 |
 | HUM-468 | Kernel-Stufe: Host-Prüfung kennt die Programme der Unit | S | HUM-444 |
+| HUM-469 | Kernel-Stufe: Grenze der Deskriptoren der virtiofsd-Prozesse | S | HUM-444 |
+| HUM-470 | Kernel-Stufe: zwei Flakes auf der CI (kvm-Test ohne CHECK, unplanned_mount mit Exit 3) | S | HUM-445 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -736,6 +738,7 @@ Die Kernel-Stufe ist erst zulässig, wenn die ganze Suite gegen sie grün ist un
 
 ### Fallstricke
 - Mit Root im Gast ist jede Datei der Schicht vom Angreifer geschrieben, auch Whiteouts und Rechte; der Scan bleibt so streng wie unter bwrap.
+- Bis zu diesem Issue prüft der ESC-5-Test `a_disposable_sandbox_never_writes_to_the_project` unter der Kernel-Stufe nur die Verweigerung (`SANDBOX_030`, HUM-445); dieses Issue macht daraus einen echten Wegwerf-Lauf.
 
 ## HUM-449 · Kernel-Stufe zulassen: `qemu` wird wählbar
 
@@ -1191,3 +1194,59 @@ hält.
 
 ### Akzeptanzkriterien
 1. Ein unbekanntes Programm in der Unit beendet die Sitzung mit `SANDBOX_047`.
+
+---
+
+## HUM-469 · Kernel level: a descriptor limit for the virtiofsd processes
+
+### Kontext
+Gefunden in HUM-445: Ein Walk über die Wurzel des Gasts ließ den virtiofsd der
+Wurzel rund 520 000 Deskriptoren öffnen (`No more file descriptors available
+to the guest (0 of 523678)`), danach `ENFILE` im Gast. Ein Gast mit Root kann
+so Kernel-Speicher des Hosts binden und die Wurzel für sich selbst
+unbrauchbar machen.
+
+### Spezifikation
+1. Die virtiofsd-Prozesse bekommen eine feste Grenze der Deskriptoren
+   (`--rlimit-nofile` oder `LimitNOFILE` der Unit), dazu eine Cache-Einstellung,
+   die Inodes nicht unbegrenzt offen hält, soweit virtiofsd 1.13 sie kennt.
+2. Erreicht der Gast die Grenze, bleibt die Sitzung bedienbar oder endet mit
+   einer Diagnose; der Host bleibt unberührt.
+
+### Tests
+- KVM: ein Walk über die ganze Wurzel im Gast; die Zahl der Deskriptoren des
+  virtiofsd bleibt unter der Grenze.
+- Mutationsbeweis: ohne Grenze steigt die Zahl darüber.
+
+### Akzeptanzkriterien
+1. Kein Gast kann einen virtiofsd über eine feste Zahl Deskriptoren treiben.
+2. Vor HUM-449 gelandet.
+
+## HUM-470 · Kernel level: two intermittent failures on CI
+
+### Kontext
+Gefunden beim Landen von HUM-445: Im CI-Lauf 43567140980 fiel
+`qemu::kvm_tests::the_shim_as_init_locks_modules_and_the_door_answers_after_the_filter`
+mit `no CHECK bridge_listening`, der Bericht des Shims enthielt also keine
+einzige Prüfzeile. Lokal ist der Test grün, auch mit dem Gastkernel der CI
+(6.12.115 cloud), und im nächsten Lauf (43571942098) war er auf demselben Stand
+grün. Ebenso `esc-2/unplanned_mount` im Job escape-tests-qemu: in den Läufen
+43567140980 und 43571942098 mit Exit 3 abgewiesen, aber nicht mit
+`SANDBOX_049`, im Lauf 43573771650 auf fast demselben Stand grün; die Meldung
+nennt seit HUM-445 die letzte Zeile von escape-launch. Ein Test der Kernel-Stufe, der nur manchmal rot ist, verdeckt einen
+echten Fehler genauso wie einer, der zufällig grün ist.
+
+### Spezifikation
+1. Ursache aus der Konsole des Gasts bestimmen (der Schritt „Guest console
+   after a failure" schreibt seit HUM-445 die ganze Ausgabe jedes gefallenen
+   Tests in eine Annotation): Zeitgrenze des Berichts, Start von virtiofsd
+   1.13, Last des Runners.
+2. Beheben, nicht wiederholen: kein Retry im Test oder in der CI.
+
+### Tests
+- Die Jobs kvm-tests und escape-tests-qemu zehnmal hintereinander auf demselben
+  Commit grün.
+
+### Akzeptanzkriterien
+1. Ursache benannt und behoben, oder als Eigenschaft des Runners begründet und
+   mit einer Diagnose versehen, die sie im Lauf eindeutig nennt.
