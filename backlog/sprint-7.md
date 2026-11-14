@@ -1193,6 +1193,16 @@ was auch andere Sitzungen trifft.
 ### Akzeptanzkriterien
 1. Kein Gast kann die Fäden oder Deskriptoren des Daemons unbegrenzt binden.
 
+### Stand nach der Umsetzung (2026-11-14)
+
+**Obergrenze.** `serve_door` (`qemu/session.rs`) zählt die weitergereichten Verbindungen einer Sitzung (`DoorSlots`, `MAX_DOOR_CONNECTIONS = 64`). Ein Platz (`DoorSlot`) lebt, bis beide Fäden von `splice_holding` ihre Deskriptoren geschlossen haben; erst dann nimmt die Tür wieder eine an. Eine Verbindung über der Grenze geht sofort zu, ungelesen und ohne Faden, und erreicht den Proxy nie. Je Sitzung bindet die Tür so höchstens 128 Fäden und 256 Deskriptoren. Vor der Bereitschaft bleibt alles wie in HUM-471: nur die Zeile, ohne Faden, nichts an den Proxy.
+
+**Wohin der Vermerk geht.** Aus dem Sandbox-Crate führt heute kein Weg ins Audit-Log: `humanitld/src/audit_sink.rs` hört nur den Flow-Strom und nennt `isolation.check` ausdrücklich als ohne Quelle, und die Warnungen des Plans (`LaunchPlan::warnings`) gehen nur beim Start in den Ereignisstrom. Der Vermerk landet deshalb einmal je Sitzung in der `Admission` der Sitzung (`note_door`, ein `OnceLock`), die der Faden zum Gast und die Host-Prüfung schon teilen und die jetzt auch die Tür bekommt, und `isolation_check` hängt ihn an den Beleg von `single_socket` jeder späteren Prüfung (`name_the_door`), so wie `name_the_link` den Stand des Wegs zum Gast. Am Ergebnis ändert er nichts: Die Verbindung erreichte nichts.
+
+**Tests und Mutationsbeweise.** `the_connection_above_the_cap_is_closed_and_the_others_keep_working`: 64 Verbindungen erreichen den Proxy, die 65. und 66. gehen sofort zu, ohne ihn zu erreichen, der Vermerk steht einmal, alle 64 tragen danach noch Daten in beide Richtungen, und nach dem Schließen einer kommt eine neue wieder durch. Ohne Grenze (`take` immer `Some`) bleibt die 65. offen und der Test färbt rot; ohne Freigabe des Platzes (`Drop` von `DoorSlot` leer) kommt die neue nie durch und der Test färbt rot.
+
+**Offen.** Punkt 2, ein gemeinsames Limit über alle Sitzungen, ist nicht gebaut: Ein solches Limit ließe einen Gast die Türen der anderen Sitzungen sperren und braucht eine Entscheidung, wie es verteilt wird. Kandidat: ein globales Limit mit fairer Teilung je Sitzung. Kandidat: Ereignisse der Sandbox (diesen Vermerk, die Isolationsprüfung) ins Audit-Log bringen, über einen Kanal vom Backend in den Ereignisstrom der Sitzung. Kandidat aus dem Review: `serve_door` dreht sich ohne Pause, wenn `accept` dauerhaft scheitert (etwa `EMFILE`); eine kurze Pause nach einem Fehler.
+
 ---
 
 ## HUM-468 · Kernel level: the host check knows the programs of the unit

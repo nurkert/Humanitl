@@ -2163,7 +2163,11 @@ the guest powers off without its report. Only a connection the guest makes itsel
 device runs. Until that line the daemon takes the door's connections for itself and hands none to
 the proxy; no agent can run before it, since the agent waits for the admission on the report
 connection. When the report is missing, the evidence names how far the way to the guest got (no
-ready line, or no answer to the report or the control connection). The host opens each
+ready line, or no answer to the report or the control connection). After the ready line the door
+keeps at most 64 connections to the proxy open per session (HUM-467); each binds two threads and
+four descriptors of the daemon. A connection above that is closed at once, without being read and
+without a thread, and the first one per session is noted in the evidence of `single_socket` in
+every later check; the guarantees do not change, since such a connection never reaches anything. The host opens each
 connection into the guest once and waits for its answer until the session's deadline: a
 `CONNECT` it gave up could still be accepted by the guest later and take the place of the report
 (HUM-470, a precaution: the vsock device refuses within milliseconds while the guest does not

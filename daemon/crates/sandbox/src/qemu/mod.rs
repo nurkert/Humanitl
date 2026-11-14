@@ -1099,6 +1099,7 @@ impl SandboxBackend for VmBackend {
                 .build());
         };
         let ready = pending.ready();
+        let admission = pending.link.admission.clone();
         let Pending {
             door,
             proxy,
@@ -1107,7 +1108,9 @@ impl SandboxBackend for VmBackend {
         } = *pending;
         let door_thread = std::thread::Builder::new()
             .name("vm-door".to_owned())
-            .spawn(move || session::serve_door(&door, &proxy, &door_lifeline, &ready));
+            .spawn(move || {
+                session::serve_door(&door, &proxy, &door_lifeline, &ready, &admission);
+            });
         if let Err(err) = door_thread.and_then(|_| link.start()) {
             remove();
             return Err(door_failed(format!(
@@ -1142,6 +1145,7 @@ impl SandboxBackend for VmBackend {
             return results;
         };
         name_the_link(&mut results, &stop.admission.link());
+        name_the_door(&mut results, stop.admission.door());
         let mut findings = host_check::run(stop, &self.resolved, DOOR_PORT);
         #[cfg(test)]
         test_machine::forgive(&mut findings);
@@ -1190,6 +1194,23 @@ fn name_the_link(results: &mut [CheckResult], link: &str) {
             diagnostic.why.push_str("; vsock link: ");
             diagnostic.why.push_str(link);
         }
+    }
+}
+
+/// Hat die Tür eine Verbindung über ihrer Obergrenze abgewiesen (HUM-467),
+/// steht das im Beleg der Prüfung des einen Sockets, jeder späteren Prüfung
+/// der Sitzung. Am Ergebnis ändert es nichts: Die Verbindung erreichte den
+/// Proxy nicht, und der Gast blieb in seinem einen Weg hinaus.
+fn name_the_door(results: &mut [CheckResult], door: Option<&str>) {
+    let Some(door) = door else {
+        return;
+    };
+    for result in results
+        .iter_mut()
+        .filter(|result| result.check == IsolationCheck::SingleSocket)
+    {
+        result.evidence.push_str("; door: ");
+        result.evidence.push_str(door);
     }
 }
 

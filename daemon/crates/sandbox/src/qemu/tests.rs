@@ -637,3 +637,36 @@ fn a_host_finding_on_a_passed_guarantee_takes_the_guests_refusal() {
         "{why}"
     );
 }
+
+/// Der Vermerk der Tür (HUM-467) steht nur im Beleg von `single_socket`,
+/// und ohne Vermerk bleibt jeder Beleg, wie er war; am Ergebnis ändert er
+/// nichts.
+#[test]
+fn the_door_note_stands_in_the_evidence_of_the_single_socket_only() {
+    let fresh = || {
+        IsolationCheck::ALL
+            .iter()
+            .map(|&check| CheckResult {
+                check,
+                passed: true,
+                evidence: "seen".to_owned(),
+                diagnostic: None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut results = fresh();
+    name_the_door(&mut results, None);
+    assert!(results.iter().all(|result| result.evidence == "seen"));
+
+    let mut results = fresh();
+    name_the_door(&mut results, Some("closed one above the cap"));
+    for result in &results {
+        assert!(result.passed);
+        let expected = if result.check == IsolationCheck::SingleSocket {
+            "seen; door: closed one above the cap"
+        } else {
+            "seen"
+        };
+        assert_eq!(result.evidence, expected, "{:?}", result.check);
+    }
+}

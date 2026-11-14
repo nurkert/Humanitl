@@ -1982,7 +1982,10 @@ ohne cgroup oder ohne ihren Emulator findet, sieht die Folge dieser Ablehnung, n
 jede Verbindung in den Gast einmal und wartet bis zur Frist der Sitzung auf ihre Antwort: Ein
 aufgegebenes `CONNECT` könnte der Gast später noch annehmen, und es nähme den Platz des Berichts ein
 (HUM-470, eine Vorsorge: Das vsock-Gerät sagt binnen Millisekunden ab, solange der Gast nicht
-lauscht).
+lauscht). Die Tür hält je Sitzung höchstens 64 Verbindungen zum Proxy offen (HUM-467); jede bindet
+zwei Fäden und vier Deskriptoren des Daemons. Eine Verbindung darüber geht sofort zu, ungelesen und
+ohne Faden, und die erste je Sitzung steht im Beleg von `single_socket` jeder späteren Prüfung; an
+den Garantien ändert das nichts, denn eine solche Verbindung erreicht nichts.
 
 ### Wie eine Sitzung entsteht
 
