@@ -87,10 +87,11 @@ fn spec(test: &str, command: &str) -> Option<(Spec, tempfile::TempDir)> {
 /// Alles, was ein Fehlschlag zeigen soll.
 fn shown(outcome: &Outcome) -> String {
     format!(
-        "report:\n  {}\ndoor:\n  {}\nemulator exit: {:?}\nhelpers:\n{}\nconsole:\n{}",
+        "report:\n  {}\ndoor:\n  {}\nemulator exit: {:?}\nterminal:\n{}\nhelpers:\n{}\nconsole:\n{}",
         outcome.report.join("\n  "),
         outcome.door.join("\n  "),
         outcome.exit,
+        String::from_utf8_lossy(&outcome.terminal),
         outcome.helpers,
         outcome
             .console
@@ -257,5 +258,128 @@ fn a_guest_without_its_vsock_modules_ends_as_a_failed_check() {
     assert!(
         outcome.exit.is_some(),
         "the guest did not power off\n{shown}"
+    );
+}
+
+/// Der Agent des Terminal-Tests: Er meldet sich, liest eine Zeile, nennt sie
+/// mit der Größe seines Terminals und endet auf die nächste.
+const TERMINAL_AGENT: &str = r#"
+test -t 0 && test -t 1 && echo TTY-OK
+echo READY
+read -r line
+echo "GOT $line SIZE $(stty size)"
+read -r _
+exit 0
+"#;
+
+/// HUM-443, Integration: Im Gast öffnet der Shim das Terminal, der Host
+/// verbindet sich über das vsock-Gerät mit dem einen Port des Shims, schickt
+/// Größe und Eingabe und liest die Ausgabe; eine weitere Shell öffnet sich
+/// über denselben Kanal und meldet ihren Exit-Code.
+#[test]
+fn the_host_drives_the_guests_terminal_and_a_second_shell_over_the_stream() {
+    let test = "the_host_drives_the_guests_terminal_and_a_second_shell_over_the_stream";
+    let Some((spec, _project)) = spec(test, TERMINAL_AGENT) else {
+        return;
+    };
+    let wait = std::time::Duration::from_secs(30);
+    let mut steps: Vec<String> = Vec::new();
+    let outcome = test_vm::run_with(&spec, |session| {
+        if !session.wait_for("READY", wait) {
+            steps.push(format!("no READY: {:?}", session.text()));
+            return;
+        }
+        session.door.agent_size(100, 30).expect("the size goes out");
+        session
+            .door
+            .agent_input(b"hello\n")
+            .expect("the input goes out");
+        if !session.wait_for("GOT hello SIZE 30 100", wait) {
+            steps.push(format!("no echo with the new size: {:?}", session.text()));
+        }
+        match session.door.open(
+            &[
+                "/bin/sh".to_owned(),
+                "-c".to_owned(),
+                "test -t 0 && echo SHELL-TTY; exit 3".to_owned(),
+            ],
+            80,
+            24,
+        ) {
+            Ok(shell) => {
+                let mut output = Vec::new();
+                let code = shell.pump(|bytes| output.extend_from_slice(bytes));
+                let output = String::from_utf8_lossy(&output).into_owned();
+                if code != 3 || !output.contains("SHELL-TTY") {
+                    steps.push(format!("the shell ended with {code}: {output:?}"));
+                }
+            }
+            Err(err) => steps.push(format!("no second shell: {}", err.why)),
+        }
+        session
+            .door
+            .agent_input(b"bye\n")
+            .expect("the input goes out");
+        let deadline = std::time::Instant::now() + wait;
+        while session.door.agent_exit().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        if session.door.agent_exit() != Some(0) {
+            steps.push(format!(
+                "the agent's exit over the stream: {:?}",
+                session.door.agent_exit()
+            ));
+        }
+    })
+    .unwrap_or_else(|why| panic!("the guest did not run: {why}"));
+    let shown = shown(&outcome);
+    assert!(steps.is_empty(), "{}\n{shown}", steps.join("\n"));
+    let terminal = String::from_utf8_lossy(&outcome.terminal);
+    assert!(
+        terminal.contains("TTY-OK"),
+        "the agent has a terminal\n{shown}"
+    );
+    let checks: Vec<_> = outcome
+        .report
+        .iter()
+        .filter_map(|line| parse_check_line(line))
+        .collect();
+    assert!(
+        checks.iter().all(|check| check.ok) && !checks.is_empty(),
+        "every check of the shim is green\n{shown}"
+    );
+    assert!(outcome.exit.is_some(), "the guest did not end\n{shown}");
+}
+
+/// HUM-443, Review: Das Ende des Steuerkanals ist die Lebensleine im Gast.
+/// Der Agent überhört `SIGTERM`; legt der Host den Strom auf, beendet der
+/// Shim nach der Frist alles und schaltet den Gast aus.
+#[test]
+fn the_guest_powers_off_when_the_host_hangs_up_the_stream() {
+    let test = "the_guest_powers_off_when_the_host_hangs_up_the_stream";
+    let agent = "trap '' TERM; echo READY; while :; do sleep 0.1; done";
+    let Some((spec, _project)) = spec(test, agent) else {
+        return;
+    };
+    let mut hung_up = None;
+    let outcome = test_vm::run_with(&spec, |session| {
+        if session.wait_for("READY", std::time::Duration::from_secs(30)) {
+            session.door.hang_up();
+            hung_up = Some(std::time::Instant::now());
+        }
+    })
+    .unwrap_or_else(|why| panic!("the guest did not run: {why}"));
+    let ended = std::time::Instant::now();
+    let shown = shown(&outcome);
+    let hung_up = hung_up.unwrap_or_else(|| panic!("the agent never started\n{shown}"));
+    assert!(
+        outcome.exit.is_some(),
+        "the guest did not power off\n{shown}"
+    );
+    // `KILL_GRACE`, das Nachreichen des Berichts und das Ausschalten.
+    let took = ended - hung_up;
+    assert!(
+        took < crate::KILL_GRACE + std::time::Duration::from_secs(15),
+        "the guest outlived its stream by {took:?}\n{shown}"
     );
 }

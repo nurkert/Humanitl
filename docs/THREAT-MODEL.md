@@ -136,10 +136,11 @@ Five further channels complete the model:
 | K-14 | audit file on the host | d | high | hash chain with HMAC, anchors in file and SQLite; mitigated only against an attacker without the HMAC key: not against a same-user process that has the key, not a cut behind the last anchor | declared | ESC-5 |
 | K-15 | the window between `exec` and `SIGKILL` | b | high | report read at once, `SIGKILL` without grace | open | - |
 | K-16 | recording outage | a, b, c | medium | outage reported to every client once per cause, cards marked "not recorded", first approval paused | declared | `daemon/crates/recorder` health tests, golden `states_recorder_failure` |
-| K-18 | the door for further shells (`humanitl sandbox exec`) | b | high | unnamed socket pair held only by the daemon and PID 1; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX`; at most four; dies with the sandbox | mitigated | `daemon/crates/ipc/tests/terminal.rs` (HUM-299) |
+| K-18 | the door for further shells (`humanitl sandbox exec`) | b | high | unnamed socket pair held only by the daemon and PID 1; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX` and a refused `AF_VSOCK`; at most four; dies with the sandbox; in the stream mode (K-29) the request is a frame on the control stream and the shim opens the shell's pseudo-terminal itself, under the same limits | mitigated | `daemon/crates/ipc/tests/terminal.rs` (HUM-299), `daemon/crates/ipc/tests/terminal_stream.rs` (HUM-443) |
 | K-24 | the disposable sandbox: the upper layer and the way back into the project (`humanitl sandbox apply`) | b | high | project folder read-only as the lower layer of an overlay, upper layer in RAM under the daemon's runtime directory with a size cap, `mounts.extra_rw` read-only; applied only on a human's choice, checked before the first write, never through or as a symlink out of the project, no device, FIFO, socket or setuid bit, no overwrite of a file the human changed since the start unless that change is confirmed one by one (`ApplyChanges.overwrite_ids` from the app, HUM-351) or every selected change is (`--overwrite`); a container-engine backend refuses `disposable` (`SANDBOX_030`) because its lower layer cannot be bound to the checked folder, and `auto` runs direct there (HUM-438) | mitigated | `daemon/crates/sandbox/src/disposable/tests.rs`, `daemon/crates/sandbox/tests/launcher.rs`, `daemon/crates/ipc/tests/sandbox_start.rs` (HUM-350); `daemon/crates/sandbox/src/podman/tests.rs`, `daemon/crates/sandbox/tests/escape_worktree.rs` (HUM-438) |
 | K-27 | the container engine under Podman (Podman, `conmon`, `crun`, the user's container storage, `containers.conf`) | b, d | high | admitted at the plain level (`crun`) only after the escape suite against it was green on `main` (HUM-448), the kernel level (backend `qemu`, ADR-0021) refused with `SANDBOX_048` until HUM-449, `auto` never Podman; every configuration source the daemon does not write cut off; fixed flags without keys; the environment only through the sealed memfd; ended through the engine and the lifeline; leftovers removed at daemon start (`SANDBOX_041`) | mitigated | ESC-1, ESC-2, ESC-5 (`escape-tests-podman`, HUM-435); `daemon/crates/sandbox/src/podman/` (HUM-433) |
 | K-28 | the image as the root of the sandbox under Podman, and pulling it (origin, digest, the network while pulling) | b, d | high | pinned by digest, checked before every start, never pulled by a start (`SANDBOX_043`); pulled only on request, by the engine directly and not through the proxy, from the registry the name names, said before it runs; registry credentials only from the adapter's own file, handed to the engine as a private copy, and a credential helper there or in a registry drop-in refused (HUM-456); project, door, CA, shim and session files from the host, never from the image; user, entry point, volumes and health check of the image overridden, an image setting `HUMANITL_*` refused | open | ESC-2 `ca_is_the_hosts` (`HUMANITL_ESCAPE_IMAGE`); `daemon/crates/sandbox/src/podman/image.rs` (HUM-439) |
+| K-29 | the control stream of the terminals (the stream mode: the kernel level always, bwrap when a caller asks for it) | b | high | one stream socket held only by the daemon and PID 1, opened before the agent's filter, which refuses `AF_VSOCK` and `AF_UNIX`; in a guest the host opens it as the second connection on the shim's one listening port, the guest never opens one; terminal bytes and control only, never a byte to or from the proxy; frames of at most 16 KiB, oversized frames, unknown kinds and unknown ids dropped by both ends without ending the stream; its end is a lifeline | mitigated | ESC-1 `socket_af_vsock` in `daemon/crates/ipc/tests/terminal_stream.rs`, fuzz target `control_stream_reader` with `daemon/crates/sandbox/tests/regressions/`, `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (HUM-443) |
 
 K-13 is the obvious channel and the only one considered closed outright. K-14 is here so that
 attacker (d) appears in a row. K-15 came with HUM-041: the check that proves the guarantees runs
@@ -409,6 +410,13 @@ shell runs no start files (`bash --norc --noprofile`, `sh` without `ENV`), so an
 planted does not run when it opens. Isolating further shells from the agent (a sub-user namespace
 with another UID, or `hidepid`) is a candidate for a later issue.
 
+*In the stream mode (HUM-443, K-29)* no descriptor crosses: the daemon sends an open frame with
+the command and the size on the control stream, the shim opens the shell's pseudo-terminal itself
+and forks the shell as above, and the shell's bytes, size, end and hang-up travel as frames of its
+id. The limits are the same: the agent's filter on top, proven by refused `AF_UNIX` and
+`AF_VSOCK` sockets, at most four, killed when the stream or the sandbox ends. A frame for an id
+the daemon did not open changes nothing on either side.
+
 The channels K-19 to K-23 exist only on macOS, where the sandbox is Seatbelt instead of bwrap
 ([ADR-0019](adr/0019-seatbelt-on-macos.md), [`SECURITY.md` section 12](SECURITY.md#12-macos-seatbelt-instead-of-bubblewrap)).
 
@@ -672,6 +680,43 @@ the daemon's file by device and inode), which runs under every backend and, with
 `HUMANITL_ESCAPE_IMAGE`, under an image; by the unit and live tests in
 `daemon/crates/sandbox/src/podman/` (another digest under the same name refused, nothing pulled).
 
+### K-29 The control stream of the terminals
+
+In a micro-VM no descriptor crosses the boundary: the daemon cannot hand the agent a
+pseudo-terminal, `SCM_RIGHTS` cannot carry the follower of a further shell (K-18), and no signal of
+the host reaches a process of the guest. In the stream mode (HUM-443) the shim opens every
+pseudo-terminal itself, and terminal bytes, sizes, further shells, exits, interrupts and
+heartbeats travel as frames over one stream socket (`daemon/bin/humanitl-shim/src/frame.rs`, the
+one file both ends compile). The kernel level always uses it; under bwrap a caller can ask for it,
+so that both modes face the same terminal tests. It is a second channel between sandbox and host
+next to the door, so attacker (b) would try four things. (1) *Use it as a way out.* It carries
+terminal bytes and control and nothing else; the bridge is the only way to the proxy, and the
+daemon never forwards a byte of the stream to the proxy or from it. Inside, only PID 1 holds the
+socket and the masters of the pseudo-terminals: the agent's child closes them before its filter,
+every further shell closes every descriptor above 2, all of them carry `CLOEXEC`, and PID 1 is not
+dumpable. In a guest the shim listens on exactly one vsock port and takes exactly two connections
+from the host, the report first and this stream second, then closes the listener; the guest never
+opens a connection for either. (2) *Open a vsock or Unix socket of its own.* The agent's filter
+refuses `AF_VSOCK` and `AF_UNIX` with `EPERM`, and so does the filter every further shell installs
+before `exec`, proven before the shell starts; ESC-1 checks it in the stream mode. (3) *Feed the
+daemon hostile frames* (root in a guest can write anything to the stream). Every frame has a
+nine-byte header with a length of at most 16 KiB; a longer frame is counted away without being
+kept, a frame of an unknown kind is skipped the same way, a frame of the wrong shape or of the
+other direction is dropped, and an answer for an id nobody opened changes nothing. The reader holds
+at most one frame. The fuzz target `control_stream_reader` runs this reader nightly, and its
+regression test fails when the length check is removed. (4) *Outlive the daemon.* The end of the
+stream is a lifeline: PID 1 sends `SIGTERM` to the agent, kills every further shell and, after the
+grace period, every process. PID 1 never writes to a terminal itself and sends the signal before
+any message, so a full terminal cannot hold it up; after the end it reads every terminal empty and
+keeps nothing. In a guest this is defence in depth; the host stops the VM itself (HUM-444).
+*Residual risk:* root in a guest can end or stall the stream. A guest that stops reading makes
+the daemon's next frame miss its deadline of ten seconds, and the daemon then shuts the stream:
+the session ends, no daemon thread waits longer. A daemon that stops reading stops the shim's
+reading of the terminals, not of the control frames. Input for a terminal whose process does not
+read is dropped once its queue holds 64 KiB, and output of a further shell whose reader stalls is
+dropped beyond 256 pieces on the daemon's side; both are counted, neither holds up another
+channel.
+
 ## Assumptions
 
 | ID | Assumption | How to check it | If it breaks |
@@ -771,6 +816,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-13 | Trust boundaries: under its hardened unit the daemon starts Podman as transient units `humanitl-*` of the user's service manager instead of loosening its hardening; a compromised daemon gains "start a transient user unit". K-27: the shim's descriptors through a one-connection handover socket instead of `--preserve-fds` | HUM-434 |
 | 2026-11-13 | K-28: registry credentials for a pull only from the adapter's own file, as a private copy under `--authfile`; credential helpers in that file or in a registry drop-in refused (`SANDBOX_043`) | HUM-456 |
 | 2026-11-13 | K-27 `mitigated`: the plain level of Podman (`podman/crun`) admitted after `escape-tests-podman` (ESC-1, ESC-2, ESC-5) was green on `main` with HUM-434, HUM-436, HUM-437 and HUM-438; chosen only by a person, never by `auto`; the kernel level stays refused with `SANDBOX_048` until HUM-449 | HUM-448 |
+| 2026-11-14 | K-29 added: the control stream of the terminals, the stream mode of the kernel level and of bwrap on request; K-18 in the stream mode; further shells prove a refused `AF_VSOCK` as well | HUM-443 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

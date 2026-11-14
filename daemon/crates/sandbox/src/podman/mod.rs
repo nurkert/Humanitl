@@ -454,7 +454,7 @@ impl PodmanBackend {
         if request.options.disposable.is_some() {
             return Err(disposable_unsupported());
         }
-        Ok(())
+        crate::launcher::refuse_stream("podman", request.options)
     }
 
     /// Die Wurzel einer Sitzung: das Abbild, mit der Kennung dieses
@@ -1556,7 +1556,7 @@ impl SandboxBackend for PodmanBackend {
         let env_fd = env_memfd(&agent_env)?;
         // Was der Shim nach dem Einhängen prüft (HUM-437, P13).
         let pins_fd = self.pins_memfd(profile, session, &pinned, &mounts, &dir)?;
-        let (shell_door, shim_door) = BwrapBackend::shell_door(options.stdio)?;
+        let (shell_door, shim_door) = BwrapBackend::shell_door(options)?;
         let mut inherit: Vec<OwnedFd> = vec![report_writer, lifeline_read, env_fd, pins_fd];
         inherit.extend(shim_door);
         debug_assert_eq!(inherit.len(), fds.planned());
@@ -1614,7 +1614,7 @@ impl SandboxBackend for PodmanBackend {
                 report: report_reader,
                 status: None,
                 output_sink: options.output_sink.clone(),
-                shells: shell_door.map(crate::shell::DoorSeed::Socket),
+                shells: shell_door,
                 detached: Some(Detached {
                     lifeline,
                     handover: Some(handover),

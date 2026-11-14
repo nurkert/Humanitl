@@ -11,16 +11,20 @@
 //! Before the steps of the bwrap mode run, the shim does in order:
 //!
 //! 1. Empty its environment; mount `proc`, `sysfs` and `devtmpfs` (the last
-//!    only when the kernel has not mounted it already); bring `lo` up, which
+//!    only when the kernel has not mounted it already) and `devpts` on
+//!    `/dev/pts`, where the shim opens the terminals (HUM-443); bring `lo` up, which
 //!    a fresh kernel leaves down and bwrap's `--unshare-net` brings up for
 //!    the shared kernel: the agent's door is `127.0.0.1`.
 //! 2. Read the guest plan ([`Plan`]), one JSON object in the read-only root.
 //! 3. Load the door's kernel modules and the plan's extra ones, then lock
 //!    module loading for good (`modules.rs`). The agent never runs on a
 //!    kernel that still loads modules.
-//! 4. Listen on the plan's report port and take exactly one connection from
-//!    the host, waiting at most [`REPORT_WAIT`]; it becomes the report the
-//!    bwrap mode gets as a descriptor. Its first line says what step 3 did
+//! 4. Listen on the plan's report port and take exactly two connections from
+//!    the host, waiting at most [`REPORT_WAIT`] for both: the first becomes
+//!    the report the bwrap mode gets as a descriptor, the second the control
+//!    stream of the terminals (`stream.rs`, HUM-443). One port, one
+//!    listener, closed after the second; the guest opens neither. The first
+//!    line of the report says what step 3 did
 //!    (`MODULES vsock=loaded,...,modules_disabled=1`); a failure of step 3 is
 //!    written there as `CHECK seccomp_applied fail modules:...` instead.
 //!    Without a report nothing starts.
@@ -102,7 +106,8 @@ pub struct Plan {
     pub proxy_port: u16,
     /// The vsock port of the host that leads to the proxy.
     pub door_port: u32,
-    /// The vsock port of the guest on which the host takes the report.
+    /// The vsock port of the guest on which the host takes the report and
+    /// then opens the control stream (HUM-443).
     pub report_port: u32,
     /// Where the modules of the guest kernel are, inside the guest.
     pub modules_dir: PathBuf,
@@ -260,12 +265,16 @@ pub fn parse(text: &str) -> Result<Plan, String> {
     })
 }
 
-/// Everything the guest mode prepared: the report and the plan.
+/// Everything the guest mode prepared: the report, the plan and the
+/// control stream.
 pub struct Booted {
-    /// The report, on the connection the host made.
+    /// The report, on the first connection the host made.
     pub report: Report,
     /// The plan.
     pub plan: Plan,
+    /// The control stream of the terminals, the host's second connection
+    /// (HUM-443).
+    pub control: OwnedFd,
 }
 
 /// Steps 1 to 6 of the module documentation. `None` when one failed; then
@@ -292,8 +301,15 @@ pub fn boot(path: &Path) -> Option<Booted> {
     };
     let modules = Running::open(&plan.modules_dir)
         .and_then(|mut kernel| modules::load_and_lock(&mut kernel, &plan.modules));
-    let report = match vsock::accept_one(plan.report_port, REPORT_WAIT) {
-        Ok(stream) => Report::from_fd(stream.into_fd()),
+    let (report, control) = match vsock::accept(plan.report_port, 2, REPORT_WAIT).map(|streams| {
+        let mut streams = streams.into_iter().map(vsock::Stream::into_fd);
+        (streams.next(), streams.next())
+    }) {
+        Ok((Some(report), Some(control))) => (Report::from_fd(report), control),
+        Ok(_) => {
+            say("humanitl-shim: guest: the host did not open both connections\n");
+            return None;
+        }
         Err(err) => {
             let modules = match &modules {
                 Ok(_) => String::new(),
@@ -343,7 +359,11 @@ pub fn boot(path: &Path) -> Option<Booted> {
     }
     // SAFETY: single-threaded (above).
     unsafe { envfd::apply(&plan.env, &SHIM_VARS) };
-    Some(Booted { report, plan })
+    Some(Booted {
+        report,
+        plan,
+        control,
+    })
 }
 
 /// The families the agent may use in a guest kernel: those of the shared
@@ -393,8 +413,8 @@ fn read_plan(path: &Path) -> Result<Plan, String> {
     parse(&text)
 }
 
-/// `proc`, `sysfs` and `devtmpfs`, each `nosuid` and `noexec`, the first two
-/// also `nodev`. `devtmpfs` only when the kernel has not mounted it already
+/// `proc`, `sysfs`, `devtmpfs` and `devpts`, each `nosuid` and `noexec`, the
+/// first two also `nodev`. `devtmpfs` only when the kernel has not mounted it already
 /// (`CONFIG_DEVTMPFS_MOUNT`); a second one on `/dev` would be one mount more
 /// than the plan says.
 fn mount_basics() -> Result<(), String> {
@@ -415,6 +435,20 @@ fn mount_basics() -> Result<(), String> {
         )
         .map_err(|err| format!("mount /dev: {err}"))?;
     }
+    // The terminals of the stream mode come from here (HUM-443); the
+    // kernel's `/dev/ptmx` finds the instance at `/dev/pts` beside it.
+    match fs::create_dir("/dev/pts") {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(err) => return Err(format!("mkdir /dev/pts: {err}")),
+    }
+    mount(
+        "devpts",
+        "/dev/pts",
+        "devpts",
+        libc::MS_NOSUID | libc::MS_NOEXEC,
+    )
+    .map_err(|err| format!("mount /dev/pts: {err}"))?;
     loopback_up().map_err(|err| format!("lo up: {err}"))
 }
 

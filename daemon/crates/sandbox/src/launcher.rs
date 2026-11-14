@@ -236,6 +236,48 @@ pub struct LaunchOptions {
     /// Quelle kommt aus dem Aufruf und darf unter dem Heimatverzeichnis
     /// liegen; das Heimatverzeichnis selbst und die geschützten Bäume nicht.
     pub session_ro: Vec<(PathBuf, PathBuf)>,
+    /// Wie das Terminal einer Sitzung am eigenen Pseudoterminal reist
+    /// ([`StdioMode::Pty`]); ohne Pseudoterminal ohne Bedeutung (HUM-443).
+    pub terminal: TerminalTransport,
+}
+
+/// Wie das Terminal des Agenten und jeder weiteren Shell zwischen Daemon und
+/// Sandbox reist (HUM-443).
+///
+/// Die Kernel-Stufe kennt nur den Strom: In einer VM überquert kein
+/// Deskriptor die Grenze. Unter bwrap gibt es ihn, damit beide Modi dieselben
+/// Terminal-Tests bestehen; ein Backend, das ihn nicht trägt, lehnt ihn ab,
+/// statt still den Deskriptor zu nehmen.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TerminalTransport {
+    /// Die Herrscherseite beim Daemon, die Untertanenseite als Deskriptor in
+    /// der Sandbox; weitere Shells über die Tür mit `SCM_RIGHTS` (HUM-299).
+    #[default]
+    Descriptor,
+    /// Die Pseudoterminals im Shim, Bytes und Steuerung als Rahmen auf einem
+    /// Strom-Socket (`--control-stream-fd`, [`crate::control_frame`]).
+    Stream,
+}
+
+/// Ein Backend, das den Strom-Modus nicht trägt, lehnt ihn ab (HUM-443),
+/// statt still den Deskriptor zu nehmen.
+///
+/// # Errors
+///
+/// `TERM_002`, wenn `options` den Strom an einem Pseudoterminal verlangt.
+pub(crate) fn refuse_stream(backend: &str, options: &LaunchOptions) -> Result<(), Diagnostic> {
+    if options.terminal == TerminalTransport::Stream && options.stdio.pty_size().is_some() {
+        return Err(Diagnostic::builder(
+            humanitl_core::diagnostics::codes::TERM_002,
+            humanitl_core::Severity::Blocking,
+        )
+        .why(format!(
+            "the backend {backend} carries the terminal only as a descriptor, and this start asks \
+             for the control stream"
+        ))
+        .build());
+    }
+    Ok(())
 }
 
 impl LaunchOptions {

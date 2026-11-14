@@ -83,6 +83,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "control_stream_reader"
+path = "fuzz_targets/control_stream_reader.rs"
+test = false
+doc = false
+bench = false
+
 # Wie cargo-fuzz es anlegt: Zeilentabellen genügen für einen lesbaren
 # Backtrace eines Funds.
 [profile.release]

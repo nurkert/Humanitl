@@ -457,6 +457,37 @@ nicht gesetztem `ENV`), sodass ein `~/.bashrc` oder `~/.profile`, das der Agent 
 Sandbox abgelegt hat, beim Öffnen nicht läuft; ein Befehl, den der Aufrufer nach `--` nennt,
 entscheidet das selbst.
 
+**Der Strom-Modus (HUM-443).** In einer micro-VM überquert kein Deskriptor die Grenze, also trägt
+die Kernel-Stufe die Terminals auf einem anderen Weg, und unter bwrap kann ein Aufrufer dasselbe
+verlangen (`TerminalTransport::Stream`), damit beide Modi dieselben Terminal-Tests bestehen. Der
+Shim öffnet dann das Pseudo-Terminal des Agenten und das jeder weiteren Shell selbst, und der
+Daemon spricht mit ihnen über einen Strom-Socket in Rahmen (`daemon/bin/humanitl-shim/src/frame.rs`,
+von beiden Seiten übersetzt): Terminal-Bytes je Kennung, Größen, Öffnen und Schließen einer Shell,
+Exit-Codes, Unterbrechungen und Lebenszeichen. Unter bwrap ist der Socket ein unbenanntes Paar,
+das der Launcher anlegt und als `--control-stream-fd` übergibt; im Gast öffnet ihn der Host mit
+`CONNECT` am vsock-Gerät als zweite Verbindung am einen lauschenden Port des Shims, nach dem
+Bericht, und der Gast öffnet keine. Die Zusagen der Tür gelten unverändert, und diese kommen dazu:
+
+- Der Strom trägt Terminal-Bytes und Steuerung, nie ein Byte an den Proxy oder von ihm; die Bridge
+  bleibt der einzige Weg nach draußen.
+- Nur PID 1 hält den Socket und die Herrscherseiten, alle mit `CLOEXEC`; das Kind des Agenten
+  schließt sie vor seinem Filter, jede weitere Shell schließt jeden Deskriptor über 2. Der Filter
+  des Agenten, und der, den jede weitere Shell vor `exec` setzt und belegt, verweigert `AF_VSOCK`
+  und `AF_UNIX` mit `EPERM`; ESC-1 prüft das im Strom-Modus.
+- Jeder Rahmen hat einen Kopf von neun Bytes (Art, Kennung, Länge) und höchstens 16 KiB Nutzlast.
+  Beide Seiten zählen einen längeren Rahmen weg, ohne ihn zu behalten, überspringen unbekannte
+  Arten, verwerfen Rahmen falscher Form oder Richtung und Antworten für Kennungen, die niemand
+  geöffnet hat; nichts davon beendet den Strom, und kein Leser hält mehr als einen Rahmen
+  (Fuzz-Target `control_stream_reader`).
+- Das Ende des Stroms beendet die Sandbox wie die Lebensleine. PID 1 schreibt nie in ein
+  Terminal und signalisiert vor jeder Meldung, also kann ein volles Terminal das Ende nicht
+  aufhalten; einen Rahmen, den der Shim nicht binnen zehn Sekunden nimmt, beantwortet der Daemon
+  mit dem Schließen des Stroms. Unterbrechungen kommen vom Shim (`SIGINT` an die
+  Vordergrundgruppe des Terminals), weil kein Signal des Hosts einen Gast erreicht.
+- Kein Kanal hält einen anderen auf: Eingaben für ein Terminal mit voller Schlange (64 KiB)
+  werden verworfen, Ausgaben einer weiteren Shell, deren Leser stockt, über 256 Stücke hinaus,
+  beides gezählt.
+
 ### Die Lebensleine und die Umgebung über Deskriptoren (HUM-430)
 
 Zwei Dinge, die bwrap mit Flags erledigt, brauchen einen Deskriptor, sobald ein Backend die
@@ -1602,6 +1633,7 @@ der Durchleitung oder an der Audit-Kette bekommt hier eine Zeile und in der Änd
 | 0.1.0 | Der erste Prozess der Session nimmt das Pseudo-Terminal des Daemons als steuerndes Terminal; `--new-session` bleibt. Der Befehl eines Aufrufers bekommt den Beitrag des Adapters und den eingerichteten Agenten im `PATH`, nie einen eigenen Bind (HUM-280). |
 | 0.1.0 | OpenCode fragt nicht mehr vor `webfetch` und `bash`; der Proxy ist die eine Stelle, die fragt. Sein `bash` wartet so lange wie eine angehaltene Anfrage (HUM-308). |
 | 0.1.x | Weitere Shells neben dem Agenten: Der Daemon bittet PID 1 über ein unbenanntes `SOCK_SEQPACKET`-Paar, das nur er und PID 1 halten; der Shim forkt die Shell von innen mit dem Filter des Agenten darüber, bewiesen durch ein verweigertes `AF_UNIX`; höchstens vier, sie enden mit ihrem Prozess oder der Sandbox (HUM-299). |
+| 0.1.x | Der Strom-Modus der Terminals: Der Shim öffnet die Pseudo-Terminals des Agenten und jeder weiteren Shell, und der Daemon spricht mit ihnen über einen Strom-Socket in Rahmen mit festen Höchstlängen; übergroße Rahmen, unbekannte Arten und unbekannte Kennungen werden verworfen; der Strom trägt kein Byte für den Proxy, der Filter des Agenten verweigert `AF_VSOCK` und `AF_UNIX`, und das Ende des Stroms beendet die Sandbox (HUM-443). |
 | 0.1.x | pi lädt die global installierte Erweiterung `pi-web-access` (`agent.pi.web_access`, Vorgabe `auto`, für Projekt-Profile gesperrt); ihre Anfragen gehen wie jede andere durch den Proxy (HUM-309). |
 | 0.1.x | Der Shim nimmt eine Lebensleine (`--lifeline-fd`, das Leseende einer Pipe, die nur der Daemon beschreibt; `POLLHUP` beendet die Sandbox wie bei `SIGTERM`) und die Umgebung des Agenten als versiegelten memfd (`--env-fd`, nie in `argv`); der Agent erbt keinen von beiden (HUM-430, [Abschnitt 4](#the-lifeline-and-the-environment-through-descriptors-hum-430)). |
 | 0.1.x | macOS: Seatbelt als Sandbox-Backend, ein erzeugtes SBPL-Profil pro Session, die drei Garantien neu formuliert und vom Shim gemessen; der Daemon als launchd-Agent; Socket und Token unter `~/Library/Application Support/Humanitl/run` (HUM-323, HUM-327, [Abschnitt 12](#12-macos-seatbelt-instead-of-bubblewrap)). |
