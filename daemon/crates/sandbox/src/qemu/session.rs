@@ -72,6 +72,16 @@ pub(crate) const SUN_PATH_MAX: usize = 108;
 /// Wie oft ein Faden nachsieht, ob die Lebensleine noch hält.
 const TICK: Duration = Duration::from_millis(200);
 
+/// Wie lange die Tür nach einem gescheiterten `accept` wartet, bevor sie es
+/// wieder versucht (HUM-478): Scheitert es dauerhaft, etwa mit `EMFILE`,
+/// meldet `poll` den Lauscher weiter als bereit, und ohne Pause drehte der
+/// Faden.
+const ACCEPT_PAUSE: Duration = Duration::from_millis(50);
+
+/// Wie oft `accept` an der Tür gescheitert ist; nur für den Test.
+#[cfg(test)]
+static ACCEPT_ERRORS: AtomicUsize = AtomicUsize::new(0);
+
 /// Die Zeile, mit der der Shim im Gast an der Tür sagt, dass er am
 /// Berichts-Port lauscht (HUM-471); dieselben Bytes wie `GUEST_READY` in
 /// `humanitl-shim/src/guest.rs`.
@@ -242,8 +252,17 @@ pub(crate) fn serve_door(
         if fds[0].revents().is_empty() {
             continue;
         }
-        let Ok((mut guest, _)) = listener.accept() else {
-            continue;
+        let mut guest = match listener.accept() {
+            Ok((guest, _)) => guest,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => {
+                #[cfg(test)]
+                ACCEPT_ERRORS.fetch_add(1, Ordering::Relaxed);
+                if lifeline_closed(lifeline, ACCEPT_PAUSE) {
+                    return;
+                }
+                continue;
+            }
         };
         if !ready.is_set() {
             if is_ready_line(&mut guest) {
@@ -537,6 +556,40 @@ mod tests {
     use std::io::Read as _;
 
     use super::*;
+
+    /// Ein Lauscher, dessen `accept` dauerhaft scheitert, lässt die Tür nicht
+    /// drehen (HUM-478): Ein Socket, der nie lauscht, meldet `poll` als
+    /// bereit, und `accept` scheitert mit `EINVAL`. In einer Sekunde bleibt
+    /// es bei rund zwanzig Versuchen; die Tür endet mit der Lebensleine.
+    /// Mutationsbeweis: ohne die Pause sind es Tausende.
+    #[test]
+    fn a_failing_accept_does_not_spin_the_door() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = rustix::net::socket(
+            rustix::net::AddressFamily::UNIX,
+            rustix::net::SocketType::STREAM,
+            None,
+        )
+        .unwrap();
+        let door = UnixListener::from(socket);
+        let proxy = dir.path().join("proxy.sock");
+        let (lifeline, read) = crate::shim_fds::Lifeline::new().unwrap();
+        let ready = GuestReady::default();
+        let admission = crate::launcher::Admission::default();
+        let before = ACCEPT_ERRORS.load(Ordering::Relaxed);
+        let server = thread::spawn(move || {
+            serve_door(&door, &proxy, &read, &ready, &admission);
+        });
+        thread::sleep(Duration::from_secs(1));
+        drop(lifeline);
+        server.join().unwrap();
+        let tries = ACCEPT_ERRORS.load(Ordering::Relaxed) - before;
+        assert!(tries >= 1, "accept was tried at all");
+        assert!(
+            tries < 60,
+            "the door spun: {tries} failed accepts in one second"
+        );
+    }
 
     /// Die Tür reicht an den Proxy weiter und endet mit der Lebensleine.
     #[test]

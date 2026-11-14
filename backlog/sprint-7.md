@@ -1633,6 +1633,16 @@ Aus dem Review von HUM-467. `serve_door` geht nach einem Fehler von
 ### Akzeptanzkriterien
 1. Ein dauerhafter Fehler von `accept` lässt den Faden nicht drehen.
 
+### Stand nach der Umsetzung (2026-11-14)
+`serve_door` wartet nach jedem Fehler von `accept` außer `Interrupted`
+`ACCEPT_PAUSE` (50 ms) auf die Lebensleine und endet, wenn sie zugeht.
+Test `a_failing_accept_does_not_spin_the_door`: Ein Socket, der nie lauscht,
+meldet `poll` als bereit, `accept` scheitert mit `EINVAL`; in einer Sekunde
+bleibt es bei rund zwanzig Versuchen (Grenze 60). Mutationsbeweis: ohne die
+Pause 214 804 gescheiterte Versuche in einer Sekunde, der Test wird rot.
+Kandidat aus dem Review: ein dauerhafter Fehler der Tür (etwa `EMFILE`)
+bleibt still; ihn in der Zulassung vermerken wie den Vermerk der Obergrenze.
+
 ---
 
 ## HUM-479 · Kernel level: a shared cap on door connections, fairly divided
