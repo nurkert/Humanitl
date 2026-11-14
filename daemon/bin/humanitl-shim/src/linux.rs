@@ -181,6 +181,7 @@ mod contract;
 mod envfd;
 mod exec;
 mod guest;
+mod guest_cache;
 mod guest_tmpfs;
 mod handover;
 pub(crate) mod identity;
@@ -296,6 +297,7 @@ fn run_guest(path: &Path) -> i32 {
         report,
         plan,
         control,
+        cache,
     }) = guest::boot(path)
     else {
         return EXIT_SETUP;
@@ -359,6 +361,7 @@ fn run_guest(path: &Path) -> i32 {
                 lifeline: None,
                 stream: Some(stream),
                 start,
+                cache,
             },
         ),
         Err(err) => refuse_setup(&report, &err),
@@ -510,6 +513,7 @@ fn run(args: Vec<OsString>) -> i32 {
                 lifeline,
                 stream,
                 start: AgentStart::Direct,
+                cache: None,
             },
         ),
         Err(err) => refuse_setup(&report, &err),
@@ -593,6 +597,8 @@ struct Inherited {
     /// descriptor that PID 1 keeps open past the report (HUM-465) and reads
     /// the host's verdict from (HUM-444); never the agent's.
     start: AgentStart,
+    /// The bound of a guest's file cache (HUM-476); never the agent's.
+    cache: Option<guest_cache::Bound>,
 }
 
 /// `--rules`: the effective rule table for this environment, one row per
@@ -796,6 +802,7 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, inherited: Inherited) -
         lifeline,
         stream,
         start,
+        cache,
     } = inherited;
     // SAFETY: getpid has no preconditions.
     let parent_pid = unsafe { libc::getpid() };
@@ -830,6 +837,7 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, inherited: Inherited) -
         start.descriptor().unwrap_or(-1),
     ]);
     keep.extend(stream.iter().flat_map(stream::Session::fds));
+    keep.extend(cache.iter().flat_map(guest_cache::Bound::fds));
     close_inherited(&keep);
     // The pair over which the child hands its listener to the parent
     // (HUM-138), made after the close above and right before the fork, so
@@ -866,6 +874,8 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, inherited: Inherited) -
         // agent never holds them.
         drop(control);
         drop(lifeline);
+        // The files of the cache bound are PID 1's alone (HUM-476).
+        drop(cache);
         // The stream's socket and the masters as well (HUM-443): not
         // dropped here, because the follower must stay open until `child`
         // has made it descriptors 0, 1 and 2; `close_inherited` there
@@ -917,6 +927,7 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, inherited: Inherited) -
             // Only a guest waits for the host's admission (HUM-444); bwrap
             // and the container engine start the agent as before.
             start,
+            cache,
         },
     )
 }
@@ -932,6 +943,8 @@ struct Waited {
     /// How the agent may start: in a guest only after the host's verdict
     /// on the report connection (HUM-444).
     start: AgentStart,
+    /// The bound of a guest's file cache (HUM-476).
+    cache: Option<guest_cache::Bound>,
 }
 
 /// The agent's two filters and the child's end of the channel to the parent.
@@ -1456,6 +1469,7 @@ fn parent(
         lifeline,
         mut stream,
         start,
+        cache,
     } = waited;
     // The parent holds the listener and the report descriptor while the agent
     // runs. Neither may be reachable from the agent through
@@ -1497,6 +1511,11 @@ fn parent(
         return EXIT_SETUP;
     }
     watch_refusals(&report, refusals);
+    // After the filter, which every thread started from here wears, and
+    // after the fork, which wants a process of one thread (HUM-476).
+    if let Some(cache) = cache {
+        cache.start(&report);
+    }
     for listener in bound {
         let bridge_name = listener.bridge().name.clone();
         let name = format!("bridge-{bridge_name}");

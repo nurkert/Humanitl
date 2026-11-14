@@ -1454,3 +1454,61 @@ Zulassung (HUM-449) zurückholen.
 1. Kein Gast treibt einen virtiofsd über die feste Grenze.
 2. Die Messwerte liegen höchstens beim Doppelten von `auto`.
 3. Vor HUM-449 gelandet.
+
+### Stand nach der Umsetzung (2026-11-14)
+Beide virtiofsd laufen mit `--cache auto`, und PID 1 im Gast hält den Cache
+begrenzt (`daemon/bin/humanitl-shim/src/guest_cache.rs`): Alle 100 ms liest es
+die unbenutzten Dentries und Inodes (`/proc/sys/fs/dentry-state` und
+`inode-state`, je das zweite Feld), und über 32 768 schreibt es `2` nach
+`/proc/sys/vm/drop_caches`. Der Gastkernel verwirft dann alles Unbenutzte,
+schickt je Inode `FORGET`, und virtiofsd schließt den Deskriptor. Die drei
+Dateien öffnet der Shim beim Start, bevor es den Agenten gibt, mit
+`O_CLOEXEC`; nur PID 1 hält sie (das Kind schließt jeden geerbten Deskriptor,
+PID 1 ist nicht dumpable), und der Faden startet erst nach dem Fork und nach
+dem Filter von PID 1. Der Bericht trägt `CACHE bound 32768` oder
+`CACHE off <Grund>`; kein Leser zählt die Zeile. `LimitNOFILE=65536` bleibt
+die Garantie, die Begrenzung ist Komfort des Gasts.
+
+Kandidaten: virtiofsd 1.14.0 (Debian) kennt keine Option, die Inodes
+begrenzt; `--inode-file-handles` fällt ohne `CAP_DAC_READ_SEARCH` auf
+Deskriptoren zurück. `vfs_cache_pressure=10000` (als Root im Gast gesetzt)
+wirkt nur bei knappem Speicher und änderte nichts: `ls -lR` endete mit
+`ENFILE`, danach startete kein Programm mehr. `--cache metadata` mit der
+Begrenzung maß wie `auto` (`ls -lR` 3,3 s, `git add` 11,3 s); `auto` bleibt,
+weil Änderungen des Nutzers unter `/work` nach einer Sekunde sichtbar werden.
+
+Messung mit `qemu::kvm_tests::the_workloads_of_hum_469_measured` (von Hand,
+`--ignored`), Gastkernel der CI, 512 MiB, 1 CPU, Wurzel mit dem `/usr` des
+Hosts; Sekunden, „max. FD" ist der Höchststand des Wurzeldienstes:
+
+| Last | `never` | `auto` | `auto` + Begrenzung (2 Läufe) |
+|---|---|---|---|
+| `cp -r /usr/include /work/inc` | 16,3 | 5,4 | 6,5 / 5,7 |
+| `git add -A` (13 475 Dateien) | 28,8 | 12,5 | 10,5 / 11,2 |
+| `grep -r` (mit `.git`) | 7,1 | 3,7 | 3,3 / 3,3 |
+| `git status` | 1,53 | 0,39 | 0,39 / 0,36 |
+| `git status`, zweiter Lauf | 1,42 | 0,28 | 0,25 / 0,23 |
+| `ls -lR /usr/share/doc` (81 000) | 28,4 | 2,2, `ENFILE` 2 467-mal | 4,0 / 3,2 |
+| `find / -xdev -size +0` | 67,0 | startet nicht (`ENFILE`) | 31,8 / 29,4 |
+| max. FD | 111 | 64 947 | 36 588 / 37 566 |
+
+Wo `auto` fertig wird, liegt die Begrenzung bei höchstens dem 1,2-Fachen
+(`cp -r`), sonst gleich oder schneller. Für `ls -lR` und den Walk gibt es
+keinen vollständigen Vergleich mit `auto`, das mit `ENFILE` abbricht oder gar
+nicht startet; dort steht die Begrenzung bei einem Siebtel bis der Hälfte der
+Zeit von `never` (gegen das abgebrochene `auto`: höchstens das 1,8-Fache).
+Die Begrenzung ist ein Auslöser alle 100 ms, keine Obergrenze: Verzeichnisse,
+die gecachte Kinder halten, zählen nicht als unbenutzt. KVM-Test aus HUM-469 erweitert: Der
+Walk sieht jeden Eintrag an (`-size +0`) und zählt `ENFILE`; mit der
+Begrenzung 684 687 Einträge, 0 `ENFILE`, nach dem Walk 18 897 Deskriptoren,
+die Probe als Root hält 30 074 Dateien und wird an der Grenze abgewiesen
+(höchstens 64 947). Mutationsbeweis: Schwelle `u64::MAX`, der Walk endet
+nach 62 524 Einträgen mit 60 `ENFILE`, der Test wird rot.
+
+Offen, als Kandidat für ein eigenes Issue: `--allow-mmap` und die
+Untergrenze 6.6 des Gastkernels (`prerequisites.rs`) stammen aus der Zeit von
+`--cache never` und wirken unter `auto` nicht mehr; beide zusammen prüfen und
+entfernen. Ebenso: auch die Zahl der gehaltenen Inodes (`inode-state`
+erstes Feld) begrenzen, damit Verzeichnisketten nicht unbemerkt bleiben;
+ein Test, der die keep-Liste von PID 1 und das `drop` der drei
+`/proc`-Deskriptoren im Kind bewacht.
