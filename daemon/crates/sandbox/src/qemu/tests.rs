@@ -280,7 +280,8 @@ fn the_session_binds_reach_the_guest_root() {
 }
 
 /// Die Eigenschaften der Unit sind die aus HUM-442 Q7, dazu die
-/// beschreibbaren Pfade; ein Pfad mit Leerraum wird abgelehnt.
+/// beschreibbaren Pfade und die Grenze der Deskriptoren (HUM-469); ein Pfad
+/// mit Leerraum wird abgelehnt.
 #[test]
 fn the_unit_carries_the_hardening_of_the_spike() {
     let properties = unit_properties("/run/user/1000/humanitl-vm-x/s", Some("/home/u/p"));
@@ -296,6 +297,7 @@ fn the_unit_carries_the_hardening_of_the_spike() {
         "RestrictRealtime=yes",
         "SystemCallArchitectures=native",
         "ReadWritePaths=/run/user/1000/humanitl-vm-x/s /home/u/p",
+        "LimitNOFILE=65536",
     ] {
         assert!(
             properties.iter().any(|p| p == wanted),

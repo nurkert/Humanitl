@@ -417,6 +417,22 @@ pub(crate) fn run_with(spec: &Spec, scenario: impl FnOnce(&Session)) -> Result<O
     })
 }
 
+/// Die Optionen der virtiofsd wie in der Endform (HUM-469, `lines.rs`). Die
+/// Grenze der Deskriptoren setzt dort die Unit; das Gerüst startet ohne Unit
+/// und setzt sie mit `--rlimit-nofile`, höchstens bis zur eigenen harten
+/// Grenze, über der virtiofsd nicht starten würde.
+fn file_daemon_limits() -> Vec<String> {
+    let hard = rustix::process::getrlimit(rustix::process::Resource::Nofile)
+        .maximum
+        .unwrap_or(u64::MAX);
+    let limit = hard.min(u64::from(super::lines::FILE_DAEMON_NOFILE));
+    ["--cache", "never", "--allow-mmap", "--rlimit-nofile"]
+        .iter()
+        .map(|word| (*word).to_owned())
+        .chain([limit.to_string()])
+        .collect()
+}
+
 /// Die Wurzel: der Socket entsteht hier und kommt als Deskriptor 3, das
 /// Laufzeitverzeichnis steht nicht im Gefängnis.
 fn start_root(vm: &mut Vm, spec: &Spec, plan: &Path) -> Result<(), String> {
@@ -444,6 +460,7 @@ fn start_root(vm: &mut Vm, spec: &Spec, plan: &Path) -> Result<(), String> {
         "--log-level",
         "error",
     ]);
+    root.args(file_daemon_limits());
     let placeholders = crate::inherit::inherit_renumbered(&mut root, &[listener.as_fd()])
         .map_err(|err| format!("root fd: {err}"))?;
     vm.spawn("root file daemon", root)?;
@@ -468,7 +485,8 @@ fn start_work(vm: &mut Vm, spec: &Spec) -> Result<(), String> {
     work.arg(&resolved.file_daemon)
         .args(["--shared-dir", "/share", "--socket-path"])
         .arg(vm.path("work.sock"))
-        .args(["--sandbox", "none", "--log-level", "error"]);
+        .args(["--sandbox", "none", "--log-level", "error"])
+        .args(file_daemon_limits());
     crate::inherit::inherit_in_child(&mut work, &[project.as_fd()])
         .map_err(|err| format!("project fd: {err}"))?;
     vm.spawn("work file daemon", work)

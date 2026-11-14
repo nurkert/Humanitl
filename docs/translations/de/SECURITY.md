@@ -2010,6 +2010,33 @@ lauscht).
   Gasts. Einhängepunkte in der Freigabe werden dem Gast nicht angekündigt
   (`--no-announce-submounts`, wo der Dateisystemdienst es kennt), und die erwartete Mounttabelle des
   Shims hat genau eine virtiofs-Einhängung an `/` und eine an `/work`.
+- **Die Dateisystemdienste halten eine feste Zahl Deskriptoren** (HUM-469). Die Unit trägt
+  `LimitNOFILE=65536`, weich und hart, für jeden Prozess der Sitzung. Ein Dateisystemdienst will
+  seine weiche Grenze anheben, scheitert an dieser harten und nimmt sie; die harte anzuheben
+  bräuchte `CAP_SYS_RESOURCE`, und die hat kein Gefängnis. Über der Grenze antwortet der Dienst dem
+  Gast mit `ENFILE` und läuft weiter, und was der Gast freigibt, kann er wieder belegen. Die Dienste
+  bekommen kein `--rlimit-nofile`: systemd senkt `LimitNOFILE` auf die eigene harte Grenze des
+  Dienstverwalters, wenn die kleiner ist, und die Unit startet mit der kleineren, ebenso festen
+  Grenze; ein Dienst, der mehr verlangt, als er geerbt hat, endete dagegen und ließe den Gast ohne
+  Wurzel (und den Start mit einer Prüfung ohne Bericht statt mit dem Grund). Beide Dienste laufen
+  mit `--cache never`: Der Gast verwirft jeden Eintrag, sobald ihn nichts mehr hält, und lässt ihn
+  den Dienst vergessen, so dass ein Walk über die ganze Wurzel nur die Deskriptoren dessen übrig
+  lässt, was der Gast noch offen hält (gemessen: 98 nach einem Walk über 735 790 Einträge; vorher
+  trieb ein Walk den Wurzeldienst auf rund 520 000, HUM-445). Kopieren, Lesen, Durchsuchen und
+  `git` über 13 475 Dateien und 300 Programmstarts hielten höchstens 131, die Grenze lässt also
+  reichlich Luft, und sie ist ein Achtel der harten Grenze, die der Dienstverwalter sonst vergibt;
+  der Speicher des Hosts, den ein Gast über einen Dienst binden kann, bleibt so begrenzt. Der Preis
+  ist Tempo bei Arbeit mit vielen Metadaten: Ohne den Cache des Gasts dauerte sie in dieser Messung
+  zwei- bis sechzehnmal so lange (`ls -lR` über `/usr/share/doc` 33 s statt 2 s).
+- **Geteilte Abbildungen ohne den Seitencache des Gasts** (HUM-469). `--allow-mmap` hält
+  `mmap(MAP_SHARED)` auf `/` und `/work` am Laufen (rustc und cargo brauchen es); der Gastkernel
+  muss 6.6 oder neuer sein, und ein Kernel, dessen Konfiguration eine ältere Fassung nennt, wird
+  mit `SANDBOX_045` abgelehnt. Eine Konfiguration ohne den üblichen Kopf mit der Fassung startet,
+  und `humanitl doctor` nennt die Fassung unbekannt. Einschränkung der Datenkohärenz, keine Grenze
+  der Sandbox: virtiofsd empfiehlt die Option nur, wenn der Gast das Verzeichnis für sich hat.
+  Ändert der Nutzer auf dem Host eine Datei im Projekt, während der Gast sie geteilt abgebildet
+  hat, kann die Abbildung im Gast veraltete Seiten zeigen. Der Gast sieht so oder so nichts, was
+  ihm nicht freigegeben ist.
 - **Der Projektordner ist der geprüfte.** Der Daemon öffnet und prüft den Ordner, reicht den
   Deskriptor an die Unit, und das Gefängnis des Dienstes für `/work` bindet genau diesen
   Deskriptor (`--bind-fd`); ein Tausch des Pfades nach der Prüfung erreicht den Gast nicht
@@ -2068,8 +2095,8 @@ lauscht).
 ### Voraussetzungen
 
 `/dev/kvm` les- und schreibbar, der Emulator mit `microvm` und `vhost-user-vsock-pci`, der
-Dateisystemdienst mit `--readonly` und `--fd`, das vsock-Gerät mit `--uds-path` und `--groups`,
-bubblewrap mit `--bind-fd`, ein lesbares Kernel-Abbild mit eingebautem virtiofs
-(`CONFIG_VIRTIO_FS=y` in der Konfiguration neben dem Abbild) und das Modulverzeichnis dieses
-Kernels. Fehlt eine Voraussetzung, lehnt der Start mit `SANDBOX_045` ab; er fällt nie auf ein
+Dateisystemdienst mit `--readonly`, `--fd`, `--cache` und `--allow-mmap`, das vsock-Gerät mit
+`--uds-path` und `--groups`, bubblewrap mit `--bind-fd`, ein lesbares Kernel-Abbild mit
+eingebautem virtiofs (`CONFIG_VIRTIO_FS=y` in der Konfiguration neben dem Abbild) in der Fassung
+6.6 oder neuer und das Modulverzeichnis dieses Kernels. Fehlt eine Voraussetzung, lehnt der Start mit `SANDBOX_045` ab; er fällt nie auf ein
 anderes Backend zurück. `humanitl doctor` zeigt je Voraussetzung eine Zeile.

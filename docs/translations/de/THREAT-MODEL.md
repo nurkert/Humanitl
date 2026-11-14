@@ -155,7 +155,7 @@ Fünf weitere Kanäle vervollständigen das Modell:
 | K-30 | der Monitor der virtuellen Maschine der Kernel-Stufe (QEMU `microvm`) | b | hoch | nicht zugelassen bis HUM-449 (`SANDBOX_048`); kein Netzgerät, keine Konsole, kein Monitor, keine Anzeige; volles `-sandbox`; in einem bubblewrap-Gefängnis ohne Fähigkeiten nur mit `/dev/kvm` und der Kernel-Datei; in einer gehärteten vorübergehenden Unit des Nutzers mit `PrivateNetwork`; der Host prüft nach dem Start seine Deskriptoren und seine eigene Startzeile (`SANDBOX_047`) | open | `daemon/crates/sandbox/src/qemu/host_check.rs`, `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (HUM-444); Escape-Suite mit Root im Gast (HUM-445) |
 | K-31 | die vsock-Tür der Kernel-Stufe | b | hoch | ein vsock-Geräteprozess je Sitzung mit einem Gerät und eigener Gruppe, nie `--forward-cid`; auf dem Host genau ein Lauscher `<uds>_5000`, weitergereicht an den Proxy-Socket der Sitzung; jeder andere Port findet keinen Lauscher; die Host-Prüfung lehnt jeden weiteren Socket im Laufzeitverzeichnis und ein zweites Gerät ab | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`an_extra_listener_beside_the_door_turns_the_host_check_red`, HUM-444) |
 | K-32 | der Gastkernel (Root im Gast) | b | hoch | die Garantien werden auf dem Host getragen und gelten deshalb mit Root im Gast; das automatische Laden von Modulen aus, dann die vsock-Module des Plans geladen und das Laden gesperrt, bevor der Agent startet; die Wurzel des Gasts eine nur lesbare Freigabe ohne Laufzeitverzeichnis und ohne das `/proc` des Gefängnisses; beschreibbar nur `/work`, die tmpfs des Profils und `/run`, die der Shim im Gast als tmpfs einhängt, `/run/humanitl` nur lesbar darüber (HUM-466), `mounts.extra_rw` abgelehnt (`SANDBOX_051`) | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (HUM-465, HUM-444); Escape-Suite mit Root im Gast (HUM-445) |
-| K-33 | die vier Hilfsprozesse einer Sitzung (zwei Dateisystemdienste, das vsock-Gerät, der Emulator) und der erste Prozess der Unit | b, d | hoch | jeder in einem eigenen bubblewrap-Gefängnis mit allen Namensräumen getrennt und ohne Fähigkeit, nur `/usr` des Hosts, was er ausliefert, und sein eigenes Socket-Verzeichnis; der Wurzeldienst nur lesbar mit dem Socket als Deskriptor, der Dienst für `/work` auf dem geprüften Deskriptor mit den Masken des Profils; vom Daemon nichts geerbt außer drei Deskriptoren über eine Übergabe mit einer Verbindung; die Unit endet mit dem Daemon über die Lebensleine, auch bei `SIGKILL`, und mit der Unit des Daemons über `BindsTo` | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`a_killed_daemon_ends_the_unit_within_five_seconds`, HUM-444) |
+| K-33 | die vier Hilfsprozesse einer Sitzung (zwei Dateisystemdienste, das vsock-Gerät, der Emulator) und der erste Prozess der Unit | b, d | hoch | jeder in einem eigenen bubblewrap-Gefängnis mit allen Namensräumen getrennt und ohne Fähigkeit, nur `/usr` des Hosts, was er ausliefert, und sein eigenes Socket-Verzeichnis; der Wurzeldienst nur lesbar mit dem Socket als Deskriptor, der Dienst für `/work` auf dem geprüften Deskriptor mit den Masken des Profils; vom Daemon nichts geerbt außer drei Deskriptoren über eine Übergabe mit einer Verbindung; die Unit endet mit dem Daemon über die Lebensleine, auch bei `SIGKILL`, und mit der Unit des Daemons über `BindsTo`; jeder Dateisystemdienst höchstens 65 536 Deskriptoren (`LimitNOFILE` der Unit) und `--cache never`, so dass ein Gast weder Speicher des Hosts unbegrenzt binden noch den Dienst für sich selbst erschöpfen kann (HUM-469) | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`a_killed_daemon_ends_the_unit_within_five_seconds`, HUM-444) |
 
 K-13 ist der offensichtliche Kanal und der einzige, der rundweg als geschlossen gilt. K-14 steht
 hier, damit Angreifer (d) in einer Zeile vorkommt. K-15 kam mit HUM-041: Die Prüfung, die die
@@ -786,9 +786,22 @@ einem Einmal-Zeichen annimmt: den lauschenden Socket des Wurzeldienstes, den gep
 Projektordner und das Leseende der Lebensleine. Endet der Daemon, auch durch `SIGKILL`, sieht das
 Skript das Ende der Lebensleine und endet, und der Dienstverwalter beendet binnen Sekunden jeden
 Prozess der Unit, ohne den Gast; ein Daemon, der als Dienst läuft, bindet die Unit zusätzlich an
-seine eigene (`BindsTo`). *Restrisiko:* Ein übernommener Daemon kann solche Units starten (wie unter
-Podman, siehe Vertrauensgrenzen); ein Fehler in einem Dateisystemdienst erreicht, was er ausliefert,
-die nur lesbare Wurzel des Gasts oder den Projektordner.
+seine eigene (`BindsTo`). Ein Dateisystemdienst hält je Inode, das der Gast nachgeschlagen hat,
+einen Deskriptor und je offene Datei einen weiteren, der Gast bestimmt also, wie viele er hält:
+Ein Walk über die Wurzel des Gasts trieb den Wurzeldienst auf rund 520 000, bis er erschöpft war
+und der Gast `ENFILE` sah (gefunden in HUM-445), und Root im Gast konnte so Kernel-Speicher des
+Hosts binden. Dieser Befund ist geschlossen (HUM-469): Die Unit trägt
+`LimitNOFILE=65536`, weich und hart, für jeden ihrer Prozesse, und kein Gefängnis kann das
+anheben; darüber antwortet der Dienst dem Gast mit `ENFILE` und liefert weiter aus. Mit
+`--cache never` vergisst der Gast jeden Eintrag, den nichts mehr hält, ein Walk lässt die Zahl
+also, wo sie war (98 nach 735 790 Einträgen), und nur Dateien, die der Gast offen hält, zählen
+gegen die Grenze; der KVM-Test
+`a_guest_cannot_drive_the_root_file_daemon_over_its_descriptor_limit` hält als Root im Gast die
+Wurzel offen und zählt die Deskriptoren des Dienstes vom Host aus. *Restrisiko:* Ein übernommener
+Daemon kann solche Units starten (wie unter Podman, siehe Vertrauensgrenzen); ein Fehler in einem
+Dateisystemdienst erreicht, was er ausliefert, die nur lesbare Wurzel des Gasts oder den
+Projektordner; Root im Gast kann die Deskriptoren eines Dienstes für die eigene Sitzung
+erschöpfen, nie über die Grenze hinaus.
 
 ## Annahmen
 
@@ -886,6 +899,7 @@ Gegen diese Angreifer gibt es keine Abwehr, und Humanitl behauptet das auch nich
 | 2026-11-14 | K-30 bis K-33 neu: Monitor, vsock-Tür, Gastkernel und Hilfsprozesse der Kernel-Stufe; eine gehärtete Unit je Sitzung, vier Gefängnisse, der geprüfte Projektordner als Deskriptor, eine Host-Prüfung des Monitors (`SANDBOX_047`), bevor der Agent zugelassen wird, jedes Gefängnis bindet nur sein eigenes Socket-Verzeichnis, das Ende des Daemons beendet die Unit; nicht zugelassen bis HUM-449 | HUM-444 |
 | 2026-11-14 | K-30, K-31: Hat der Gast schon abgelehnt, wird seine Diagnose angezeigt, die Funde der Host-Prüfung stehen im Befund, abgewiesen wird die Sitzung so oder so; der Host gibt ein gestelltes `CONNECT` in den Gast nie auf | HUM-470 |
 | 2026-11-14 | K-32: die tmpfs des Profils (`/tmp`, `/var/tmp`, das Heimatverzeichnis des Agenten) und `/run` sind im Gast beschreibbare tmpfs, `/run/humanitl` nur lesbar darüber, eingehängt vom Shim, in der erwarteten Mounttabelle und in der Socket-Suche; `mounts.extra_rw` auf der Kernel-Stufe abgelehnt (`SANDBOX_051`) statt nur lesbar eingehängt | HUM-466 |
+| 2026-11-14 | K-33: jeder Dateisystemdienst der Kernel-Stufe hält höchstens 65 536 Deskriptoren (`LimitNOFILE` der Unit) und läuft mit `--cache never --allow-mmap` (Gastkernel 6.6 oder neuer, darunter `SANDBOX_045`); schließt den Befund aus HUM-445, in dem ein Walk über die Wurzel des Gasts den Wurzeldienst auf rund 520 000 Deskriptoren trieb | HUM-469 |
 
 Jede sicherheitsrelevante Änderung am Shim, an der Mount-Erlaubnisliste, am Filter oder an der
 Durchleitung bekommt hier eine Zeile. Schwachstellen werden gemeldet, wie in
