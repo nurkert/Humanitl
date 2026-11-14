@@ -2948,3 +2948,20 @@
     font-size: 15px;
   }
 }
+
+/* Das manipulierte Modell als Gegner (HUM-472): eine Karte wie die offenen Datenwege, volle
+   Breite, Text auf Lesebreite. */
+.sec-model {
+  margin-top: 2rem;
+}
+.sec-model p {
+  max-width: 52rem;
+  color: var(--fg-1);
+}
+.sec-model .sec-h3 {
+  margin: 0;
+  color: var(--fg);
+}
+.sec-model p code {
+  white-space: nowrap;
+}

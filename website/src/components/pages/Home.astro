@@ -11,6 +11,7 @@ import '../../styles/home.css';
 import Attack from '../home/Attack.astro';
 import Daily from '../home/Daily.astro';
 import Maturity from '../home/Maturity.astro';
+import Model from '../home/Model.astro';
 import Open from '../home/Open.astro';
 import Support from '../home/Support.astro';
 import Why from '../home/Why.astro';
@@ -470,6 +471,7 @@ const workflowPoster = await getImage({ src: intercept, width: 1280, format: 'we
       </div>
     </section>
 
+    <Model c={h.model} />
     <Attack c={h.attack} href={`${security}#weg`} />
     <Why c={h.why} href={`${security}#pruefen`}>
         <figure class="term">

