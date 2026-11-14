@@ -79,11 +79,11 @@
 "daemon/crates/config/src/load.rs" = 3
 "daemon/crates/config/src/model.rs" = 24
 "daemon/crates/config/src/validate.rs" = 13
-"daemon/crates/config/tests/config_readers.rs" = 23
+"daemon/crates/config/tests/config_readers.rs" = 12
 "daemon/crates/config/tests/profiles.rs" = 1
 "daemon/crates/config/tests/project_scope.rs" = 8
 "daemon/crates/core-types/src/diagnostics/codes.rs" = 2
-"daemon/crates/sandbox/src/backend.rs" = 11
+"daemon/crates/sandbox/src/backend.rs" = 10
 "daemon/crates/sandbox/src/backend_list.rs" = 1
 "daemon/crates/sandbox/src/doctor/backends.rs" = 1
 "daemon/crates/sandbox/src/lib.rs" = 1

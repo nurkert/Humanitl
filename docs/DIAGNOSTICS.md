@@ -746,7 +746,7 @@ User service manager unreachable
 
 Kernel level prerequisite missing
 
-**Auslöser.** The kernel level starts a micro VM with a guest kernel of its own and needs on this host: `/dev/kvm` readable and writable for this user, the machine emulator with the machine type and vsock device it uses, the file system daemon with `--readonly` and `--fd`, the vsock device with `--uds-path` and `--groups`, bubblewrap with `--bind-fd`, a readable kernel image and the module directory of that kernel. The sentence names the first one that is missing; nothing starts, and no other backend takes over.
+**Auslöser.** The kernel level starts a micro VM with a guest kernel of its own and needs on this host: `/dev/kvm` readable and writable for this user, the machine emulator with the machine type and vsock device it uses, the file system daemon with `--readonly` and `--fd`, the vsock device with `--uds-path` and `--groups`, bubblewrap with `--bind-fd`, a readable kernel image with virtiofs built in (`CONFIG_VIRTIO_FS=y` in the configuration beside the image, `config-<release>` beside `vmlinuz-<release>`) and the module directory of that kernel. The sentence names the first one that is missing; nothing starts, and no other backend takes over.
 
 **Fix.** `CopyCommand` with the package that brings the missing piece (for `/dev/kvm` the command that adds this user to the group `kvm`), or `ChangeSetting` on the setting under `sandbox.qemu` that names the path.
 
@@ -1387,6 +1387,14 @@ Probe start of the sandbox backend failed
 **Auslöser.** `humanitl doctor --probe` started an empty sandbox with the shim and `true` under an admitted backend, and either the start failed or one of the three guarantees from the shim's five `CHECK` lines did not hold. A real session under this backend would be refused the same way.
 
 **Fix.** The fix of the inner finding when it has one (an install command, a setting); otherwise `OpenUrl` on this page.
+
+#### DOCTOR_015
+
+Probe start of the kernel level failed
+
+**Auslöser.** `humanitl doctor --probe` started an empty session of the kernel level with the shim as init of the guest and `true` as the command, and either the micro VM did not start, it ended without the shim's report, or one of the three guarantees did not hold, from the guest's `CHECK` lines or from the host check of the VM monitor. A real session under this level would be refused the same way.
+
+**Fix.** The fix of the inner finding when it has one (a package, a setting of the kernel level); otherwise `OpenUrl` on this page.
 
 ### Bereich cli
 

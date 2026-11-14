@@ -754,6 +754,11 @@ impl Shared {
         let _ = self.shells.set(door);
     }
 
+    /// Der Exit-Code des Agenten, wenn der Strom ihn meldete (HUM-443).
+    pub(crate) fn streamed_agent_exit(&self) -> Option<i32> {
+        self.stream().and_then(|door| door.agent_exit())
+    }
+
     /// Die Tür, wenn sie der Strom ist, der auch das Terminal des Agenten
     /// trägt (HUM-443).
     fn stream(&self) -> Option<&Arc<crate::shell::ShellDoor>> {
@@ -1226,6 +1231,28 @@ impl SandboxHandle {
                     self.signal(signal);
                 }
             }
+            // Die Unit endet über den Dienstverwalter; mit ihr endet
+            // `systemd-run`. Mit `SIGKILL` geht es auch an `systemd-run`,
+            // damit der wartende Faden seinen Status bekommt (HUM-444).
+            Teardown::Unit(stop) => {
+                stop.send(signal);
+                if signal == Signal::KILL {
+                    self.signal(signal);
+                }
+            }
+        }
+    }
+
+    /// Die Unit der Sitzung, wenn sie als Unit des Dienstverwalters läuft
+    /// (Kernel-Stufe, HUM-444).
+    #[cfg_attr(
+        not(all(target_os = "linux", target_arch = "x86_64")),
+        allow(dead_code, reason = "only the kernel level, Linux on x86-64, uses it")
+    )]
+    pub(crate) const fn unit(&self) -> Option<&crate::launcher::UnitStop> {
+        match &self.teardown {
+            Teardown::Unit(stop) => Some(stop),
+            Teardown::Process | Teardown::Container(_) => None,
         }
     }
 

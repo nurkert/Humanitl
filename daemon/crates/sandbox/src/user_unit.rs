@@ -242,20 +242,67 @@ impl UserUnits {
         args: &[OsString],
         env: &[(String, String)],
     ) -> Result<Vec<OsString>, String> {
-        let mut line: Vec<OsString> = vec![self.run.clone().into_os_string()];
-        let mut push = |arg: String| line.push(OsString::from(arg));
-        for flag in FIXED_FLAGS {
-            push((*flag).to_owned());
-        }
-        push(format!(
+        let mut flags: Vec<String> = FIXED_FLAGS.iter().map(|flag| (*flag).to_owned()).collect();
+        flags.push(format!(
             "--property=TimeoutStopSec={}s",
             crate::KILL_GRACE.as_secs()
         ));
         if let Lifetime::Bounded(limit) = lifetime {
-            push(format!(
+            flags.push(format!(
                 "--property=RuntimeMaxSec={}s",
                 limit.saturating_add(RUNTIME_SLACK).as_secs().max(1)
             ));
+        }
+        self.argv_with(&flags, unit, program, args, env)
+    }
+
+    /// Die Zeile einer Sitzung mit eigenen Eigenschaften (HUM-444): die
+    /// Flags aus [`SESSION_FLAGS`], `description`, dann jede Eigenschaft als
+    /// `--property=`, sonst wie [`Self::argv`].
+    ///
+    /// # Errors
+    ///
+    /// Wie [`Self::argv`], dazu eine Eigenschaft mit Zeilenumbruch.
+    #[cfg_attr(
+        not(all(target_os = "linux", target_arch = "x86_64")),
+        allow(dead_code, reason = "only the kernel level, Linux on x86-64, uses it")
+    )]
+    pub(crate) fn session_argv(
+        &self,
+        description: &str,
+        properties: &[String],
+        unit: &UnitName,
+        program: &Path,
+        args: &[OsString],
+        env: &[(String, String)],
+    ) -> Result<Vec<OsString>, String> {
+        let mut flags: Vec<String> = SESSION_FLAGS
+            .iter()
+            .map(|flag| (*flag).to_owned())
+            .collect();
+        flags.push(format!("--description={description}"));
+        for property in properties {
+            if property.contains(['\n', '\r', '\0']) {
+                return Err(format!("the property {property:?} has a line break"));
+            }
+            flags.push(format!("--property={property}"));
+        }
+        self.argv_with(&flags, unit, program, args, env)
+    }
+
+    /// [`Self::argv`] und [`Self::session_argv`] mit ihren Flags.
+    fn argv_with(
+        &self,
+        flags: &[String],
+        unit: &UnitName,
+        program: &Path,
+        args: &[OsString],
+        env: &[(String, String)],
+    ) -> Result<Vec<OsString>, String> {
+        let mut line: Vec<OsString> = vec![self.run.clone().into_os_string()];
+        let mut push = |arg: String| line.push(OsString::from(arg));
+        for flag in flags {
+            push(flag.clone());
         }
         push(format!("--unit={}", unit.service()));
         push("--".to_owned());
@@ -338,6 +385,36 @@ impl UserUnits {
         command
     }
 
+    /// `systemctl --user kill --signal=SIGKILL <unit>`: jedem Prozess der
+    /// Unit `SIGKILL` (HUM-444).
+    pub(crate) fn kill_command(&self, unit: &UnitName) -> Command {
+        let mut command = Command::new(&self.ctl);
+        command
+            .env_clear()
+            .envs(self.env.iter().map(|(key, value)| (key, value)))
+            .args(["--user", "kill", "--signal=SIGKILL", "--"])
+            .arg(unit.service());
+        command
+    }
+
+    /// `systemctl --user show --property=<property> --value <unit>`: ein Wert
+    /// der Unit, etwa ihre `ControlGroup` für die Host-Prüfung (HUM-444).
+    #[cfg_attr(
+        not(all(target_os = "linux", target_arch = "x86_64")),
+        allow(dead_code, reason = "only the kernel level, Linux on x86-64, uses it")
+    )]
+    pub(crate) fn show_command(&self, unit: &UnitName, property: &str) -> Command {
+        let mut command = Command::new(&self.ctl);
+        command
+            .env_clear()
+            .envs(self.env.iter().map(|(key, value)| (key, value)))
+            .args(["--user", "show"])
+            .arg(format!("--property={property}"))
+            .args(["--value", "--"])
+            .arg(unit.service());
+        command
+    }
+
     /// `systemctl --user show --property=Version --value`: Antwortet der
     /// Dienstverwalter, und in welcher Fassung ([`check_probe`]).
     pub(crate) fn probe_command(&self) -> Command {
@@ -363,6 +440,58 @@ const FIXED_FLAGS: &[&str] = &[
     "--property=KillMode=mixed",
     "--property=Delegate=yes",
 ];
+
+/// Die Flags jeder Sitzung der Kernel-Stufe (HUM-444): wie [`FIXED_FLAGS`]
+/// ohne `Delegate` und mit `KillMode=control-group`, damit jeder Prozess der
+/// Unit beim Stopp sofort `SIGTERM` bekommt.
+#[cfg_attr(
+    not(all(target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code, reason = "only the kernel level, Linux on x86-64, uses it")
+)]
+const SESSION_FLAGS: &[&str] = &[
+    "--user",
+    "--quiet",
+    "--collect",
+    "--pipe",
+    "--wait",
+    "--service-type=exec",
+    "--expand-environment=no",
+    "--property=KillMode=control-group",
+];
+
+/// Führt `command` mit leerer Eingabe aus und wartet höchstens `timeout`
+/// auf sein Ende; danach wird es beendet, und der Fehler heißt `TimedOut`.
+/// Für die kurzen Fragen an `systemctl`, deren Ausgabe klein ist.
+///
+/// # Errors
+///
+/// Der Fehler von `spawn`, oder `TimedOut`.
+pub(crate) fn run_bounded(
+    mut command: Command,
+    timeout: Duration,
+) -> std::io::Result<std::process::Output> {
+    use std::process::Stdio;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("no answer within {timeout:?}"),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
 
 /// Ob dieser Prozess den Client einer Engine über den Dienstverwalter
 /// starten muss: wenn er nicht im ersten Nutzer-Namensraum läuft, dessen

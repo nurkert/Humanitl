@@ -1615,10 +1615,7 @@ impl SandboxBackend for PodmanBackend {
                 status: None,
                 output_sink: options.output_sink.clone(),
                 shells: shell_door,
-                detached: Some(Detached {
-                    lifeline,
-                    handover: Some(handover),
-                }),
+                detached: Some(Detached::handing_over(lifeline, Some(handover))),
             })),
         })
     }

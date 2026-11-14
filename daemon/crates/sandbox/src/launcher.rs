@@ -513,8 +513,8 @@ pub enum Door {
         /// Der Port; `0` in der Vorschau, dort vergibt ihn erst der Start.
         port: u16,
     },
-    /// Ein vsock-Port des Gastes, auf dem Host ein Unix-Socket (geplant:
-    /// Kernel-Stufe, HUM-444).
+    /// Ein vsock-Port des Gastes, auf dem Host ein Unix-Socket (Kernel-Stufe,
+    /// HUM-444).
     VsockPort {
         /// Der Socket auf dem Host.
         host: PathBuf,
@@ -685,6 +685,120 @@ pub(crate) enum Teardown {
     /// erreicht ihn nicht. Beendet wird er über die Engine selbst, beim
     /// Namen ([`ContainerStop`]), und der Client endet mit ihm.
     Container(ContainerStop),
+    /// Die Sandbox ist eine vorübergehende Unit des Dienstverwalters des
+    /// Nutzers mit mehreren Prozessen (Kernel-Stufe, HUM-444). Beendet wird
+    /// sie über den Dienstverwalter, beim Namen ([`UnitStop`]); mit ihr endet
+    /// `systemd-run`, der gestartete Prozess.
+    #[cfg_attr(
+        not(all(target_os = "linux", target_arch = "x86_64")),
+        allow(dead_code, reason = "only the kernel level, Linux on x86-64, uses it")
+    )]
+    Unit(UnitStop),
+}
+
+/// Die Zulassung des Agenten durch den Host (HUM-444): Ein Backend, dessen
+/// Shim erst nach der Prüfung des Daemons startet, hinterlegt hier die
+/// Verbindung, auf der das Urteil geht. [`Admission::decide`] schickt es
+/// genau einmal und merkt es sich: Eine spätere Prüfung derselben Sitzung
+/// schickt nichts mehr, ihr Ergebnis gilt aber weiter. Ohne Urteil startet
+/// der Agent nie.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Admission(std::sync::Arc<Mutex<Verdict>>);
+
+/// Wo das Urteil einer Sitzung steht.
+#[derive(Debug, Default)]
+enum Verdict {
+    /// Noch keins, und noch keine Verbindung dafür.
+    #[default]
+    Open,
+    /// Die Verbindung, auf der es gehen wird.
+    Offered(std::os::unix::net::UnixStream),
+    /// `ADMIT` ist angekommen; der Agent läuft.
+    Admitted,
+    /// `DENY` ging, oder kein Urteil erreichte den Gast.
+    Refused,
+}
+
+impl PartialEq for Admission {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for Admission {}
+
+#[cfg_attr(
+    not(all(target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code, reason = "only the kernel level, Linux on x86-64, uses it")
+)]
+impl Admission {
+    /// Legt die Verbindung ab, auf der das Urteil geht.
+    pub(crate) fn offer(&self, stream: std::os::unix::net::UnixStream) {
+        let mut verdict = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if matches!(*verdict, Verdict::Open) {
+            *verdict = Verdict::Offered(stream);
+        }
+    }
+
+    /// Das Urteil dieser Prüfung. `true` heißt: Der Agent ist zugelassen,
+    /// jetzt (`ADMIT` ging hinaus) oder schon bei einer früheren Prüfung, und
+    /// diese Prüfung bestand. Beim ersten Urteil geht `ADMIT` oder `DENY` in
+    /// den Gast; ohne Verbindung, oder wenn das Schreiben scheitert, ist es
+    /// `false`, und der Agent startet nicht. Ein späteres `false` beendet
+    /// die Sitzung beim Aufrufer, schickt aber nichts mehr.
+    pub(crate) fn decide(&self, admit: bool) -> bool {
+        use std::io::Write as _;
+        let mut verdict = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        match std::mem::take(&mut *verdict) {
+            Verdict::Admitted => {
+                *verdict = Verdict::Admitted;
+                admit
+            }
+            Verdict::Refused | Verdict::Open => {
+                *verdict = Verdict::Refused;
+                false
+            }
+            Verdict::Offered(mut stream) => {
+                let line: &[u8] = if admit { b"ADMIT\n" } else { b"DENY\n" };
+                let sent = stream.write_all(line).is_ok();
+                if admit && sent {
+                    *verdict = Verdict::Admitted;
+                    true
+                } else {
+                    *verdict = Verdict::Refused;
+                    false
+                }
+            }
+        }
+    }
+}
+
+/// Wie der Dienstverwalter eine Unit einer Sitzung beendet (HUM-444).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnitStop {
+    /// `systemd-run` und `systemctl` mit ihrer Umgebung.
+    pub(crate) units: crate::user_unit::UserUnits,
+    /// Die Unit der Sitzung.
+    pub(crate) unit: crate::user_unit::UnitName,
+    /// Das Laufzeitverzeichnis der Sitzung; die Host-Prüfung liest es.
+    pub(crate) runtime: PathBuf,
+    /// Wohin das Urteil über den Agenten geht.
+    pub(crate) admission: Admission,
+}
+
+impl UnitStop {
+    /// `SIGTERM` stößt den Stopp der Unit an; `SIGKILL` schickt jedem ihrer
+    /// Prozesse `SIGKILL` und wartet auf den Stopp. Eine Unit, die es nicht
+    /// mehr gibt, nimmt der Dienstverwalter stumm hin.
+    pub(crate) fn send(&self, signal: rustix::process::Signal) {
+        let wait = std::time::Duration::from_secs(10);
+        if signal == rustix::process::Signal::KILL {
+            let _ = crate::user_unit::run_bounded(self.units.kill_command(&self.unit), wait);
+            let _ = crate::user_unit::run_bounded(self.units.stop_command(&self.unit, true), wait);
+        } else {
+            let _ = crate::user_unit::run_bounded(self.units.stop_command(&self.unit, false), wait);
+        }
+    }
 }
 
 /// Wie die Engine einen Container beim Namen beendet (HUM-433).
@@ -840,6 +954,27 @@ pub(crate) struct Detached {
     /// (HUM-434, [`crate::fd_handover`]). Mit ihm erbt das Programm keinen
     /// Deskriptor; ohne ihn gilt die Vererbung.
     pub(crate) handover: Option<crate::fd_handover::HandoverListener>,
+    /// Was ein Backend zwischen Plan und Start für sich selbst trägt (die
+    /// Kernel-Stufe: ihre Lauscher und Fäden, HUM-444); `None` sonst.
+    #[cfg_attr(
+        not(all(target_os = "linux", target_arch = "x86_64")),
+        allow(dead_code, reason = "only the kernel level, Linux on x86-64, uses it")
+    )]
+    pub(crate) backend_state: Option<Box<dyn std::any::Any + Send>>,
+}
+
+impl Detached {
+    /// Lebensleine und Übergabe, ohne eigenen Zustand des Backends.
+    pub(crate) fn handing_over(
+        lifeline: crate::shim_fds::Lifeline,
+        handover: Option<crate::fd_handover::HandoverListener>,
+    ) -> Self {
+        Self {
+            lifeline,
+            handover,
+            backend_state: None,
+        }
+    }
 }
 
 /// Die vollständige Kommandozeile samt allem, was der Start braucht.
@@ -956,6 +1091,21 @@ impl LaunchPlan {
             .is_some()
     }
 
+    /// Nimmt, was das Backend zwischen Plan und Start für sich trägt
+    /// ([`Detached::backend_state`]); der Rest bleibt für den Start.
+    #[cfg_attr(
+        not(all(target_os = "linux", target_arch = "x86_64")),
+        allow(dead_code, reason = "only the kernel level, Linux on x86-64, uses it")
+    )]
+    pub(crate) fn take_backend_state(&self) -> Option<Box<dyn std::any::Any + Send>> {
+        self.once
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_mut()
+            .and_then(|once| once.detached.as_mut())
+            .and_then(|detached| detached.backend_state.take())
+    }
+
     /// Nimmt, was der Start braucht; beim zweiten Mal `None`.
     pub(crate) fn take_once(&self) -> Option<LaunchOnce> {
         self.once
@@ -968,6 +1118,49 @@ impl LaunchPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// HUM-444: Das Urteil geht einmal; eine spätere bestandene Prüfung
+    /// bleibt zugelassen ohne zweites `ADMIT`, eine spätere gescheiterte
+    /// nicht. Ohne Verbindung gibt es keine Zulassung.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn the_admission_is_sent_once_and_remembered() {
+        use std::io::Read as _;
+        let (host, mut guest) = std::os::unix::net::UnixStream::pair().unwrap();
+        let admission = Admission::default();
+        admission.offer(host);
+        assert!(admission.decide(true));
+        assert!(
+            admission.decide(true),
+            "a second healthy check stays admitted"
+        );
+        assert!(
+            !admission.decide(false),
+            "a later failed check is not admitted"
+        );
+        drop(admission);
+        let mut seen = String::new();
+        guest.read_to_string(&mut seen).unwrap();
+        assert_eq!(seen, "ADMIT\n", "exactly one verdict reached the guest");
+
+        let (host, mut guest) = std::os::unix::net::UnixStream::pair().unwrap();
+        let refused = Admission::default();
+        refused.offer(host);
+        assert!(!refused.decide(false));
+        assert!(
+            !refused.decide(true),
+            "a refused agent is never admitted later"
+        );
+        drop(refused);
+        let mut seen = String::new();
+        guest.read_to_string(&mut seen).unwrap();
+        assert_eq!(seen, "DENY\n");
+
+        assert!(
+            !Admission::default().decide(true),
+            "no connection, no admission"
+        );
+    }
 
     /// Acceptance criterion 2 of HUM-430 on the launcher's side: with an
     /// inherited descriptor the program starts with no environment of its

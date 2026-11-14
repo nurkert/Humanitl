@@ -86,6 +86,13 @@
 //! arguments, is the guest mode (HUM-465): the shim is PID 1 of a guest
 //! kernel and takes everything else from the guest plan at `<path>`
 //! (`guest.rs`); as any other process it refuses with exit 125.
+//! `humanitl-shim --fds-then-exec <path> <token> -- <command> [args...]` is
+//! no sandbox at all (HUM-444): it is the first process of the kernel level's
+//! unit on the host, which inherits nothing from the daemon. It takes the
+//! descriptors of the handover at `<path>` with `<token>`, lays them on 3,
+//! 4, 5, ... (`handover.rs`) and executes the command with them; no bridge,
+//! no filter, no report. Any failure is exit 126 with a message on stderr,
+//! and the command never runs.
 //!
 //! **Environment** (set by the launcher with `--setenv` after `--clearenv`;
 //! none of it reaches the agent, the child removes the five variables before
@@ -217,6 +224,7 @@ const USAGE: &str = "usage: humanitl-shim --proxy-port <port> [--controlling-ter
                      \x20      -- <command> [args...]\n\
                      \x20      humanitl-shim --rules    print the seccomp rule table for this environment\n\
                      \x20      humanitl-shim --guest <plan>    PID 1 of a guest kernel (HUM-465)\n\
+                     \x20      humanitl-shim --fds-then-exec <path> <token> -- <command> [args...]\n\
                      environment: HUMANITL_BRIDGES, HUMANITL_SECCOMP_FAMILIES, HUMANITL_SECCOMP_TYPES,\n\
                      HUMANITL_SECCOMP_DENY, HUMANITL_REPORT_FD (see the crate documentation)\n";
 
@@ -248,7 +256,35 @@ pub(crate) fn main() {
         guest::power_off();
         std::process::exit(code);
     }
+    if let [flag, path, token, separator, command @ ..] = args.as_slice()
+        && flag == "--fds-then-exec"
+        && separator == "--"
+        && !command.is_empty()
+    {
+        std::process::exit(fds_then_exec(Path::new(path), token, command));
+    }
     std::process::exit(run(args));
+}
+
+/// `--fds-then-exec` (HUM-444): the handover's descriptors on 3, 4, 5, ...,
+/// then the command. Only an exit status comes back, and only on failure.
+fn fds_then_exec(path: &Path, token: &OsString, command: &[OsString]) -> i32 {
+    let Some(token) = token.to_str() else {
+        say("humanitl-shim: --fds-then-exec: the token is not text\n");
+        return EXIT_SETUP;
+    };
+    if let Err(why) = handover::receive(path, token).and_then(handover::place) {
+        say(&format!("humanitl-shim: --fds-then-exec: {why}\n"));
+        return EXIT_SETUP;
+    }
+    let err = exec(command);
+    say(&format!(
+        "humanitl-shim: --fds-then-exec: cannot execute {}: {err}\n",
+        command.first().map_or_else(String::new, |program| program
+            .to_string_lossy()
+            .into_owned())
+    ));
+    EXIT_EXEC
 }
 
 /// The guest mode (HUM-465): the steps of `guest.rs`, the mount table, then
@@ -283,14 +319,25 @@ fn run_guest(path: &Path) -> i32 {
         proxy_port: plan.proxy_port,
         command: plan.command,
         vsock_door: Some(plan.door_port),
+        socket_walk: plan.socket_walk,
         controlling_terminal: true,
         terminal_fd: stream.follower_fd(),
         ..Cli::default()
     };
     // A second descriptor on the report's connection: PID 1 drops the report
     // when the agent is gone, and the last lines must still reach the host
-    // before the guest powers off.
-    let linger = guest::keep(&report);
+    // before the guest powers off. On the same connection the host's verdict
+    // arrives (HUM-444); without the descriptor there is no gate, so nothing
+    // starts.
+    let (linger, start) = match guest_start(guest::keep(&report)) {
+        Ok(pair) => pair,
+        Err(why) => {
+            report.check(Check::SeccompApplied, false, &why);
+            say(&format!("humanitl-shim: guest: {why}\n"));
+            guest::linger(&report);
+            return EXIT_SETUP;
+        }
+    };
     let code = match prepare(&cli, &report) {
         Ok(prepared) => launch(
             prepared,
@@ -300,15 +347,46 @@ fn run_guest(path: &Path) -> i32 {
                 control: None,
                 lifeline: None,
                 stream: Some(stream),
-                linger: linger.as_ref().map(AsRawFd::as_raw_fd),
+                start,
             },
         ),
         Err(err) => refuse_setup(&report, &err),
     };
-    if let Some(fd) = linger.as_ref() {
-        guest::linger_fd(fd.as_raw_fd());
-    }
+    guest::linger_fd(linger.as_raw_fd());
     code
+}
+
+/// How the agent may start (HUM-444).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentStart {
+    /// As soon as PID 1 is ready: bwrap and the container engine.
+    Direct,
+    /// Only after the host's `ADMIT` on this descriptor, a copy of the
+    /// report connection that PID 1 also keeps past the report: a guest.
+    Admitted(RawFd),
+}
+
+impl AgentStart {
+    /// The descriptor PID 1 keeps besides the report, if any.
+    const fn descriptor(self) -> Option<RawFd> {
+        match self {
+            Self::Direct => None,
+            Self::Admitted(fd) => Some(fd),
+        }
+    }
+}
+
+/// The guest mode's start: it needs the copy of the report connection, on
+/// which the host's verdict arrives. Without it the agent must never start,
+/// so there is no fallback to [`AgentStart::Direct`].
+///
+/// # Errors
+///
+/// The evidence for the report when the copy could not be made.
+fn guest_start(copy: Option<OwnedFd>) -> Result<(OwnedFd, AgentStart), String> {
+    let copy = copy.ok_or_else(|| "admission:no-descriptor-for-the-hosts-verdict".to_owned())?;
+    let start = AgentStart::Admitted(copy.as_raw_fd());
+    Ok((copy, start))
 }
 
 fn run(args: Vec<OsString>) -> i32 {
@@ -420,7 +498,7 @@ fn run(args: Vec<OsString>) -> i32 {
                 control,
                 lifeline,
                 stream,
-                linger: None,
+                start: AgentStart::Direct,
             },
         ),
         Err(err) => refuse_setup(&report, &err),
@@ -500,9 +578,10 @@ struct Inherited {
     lifeline: Option<OwnedFd>,
     /// The stream mode (HUM-443): the socket and the agent's terminal.
     stream: Option<stream::Session>,
-    /// In the guest mode, a copy of the report's descriptor that PID 1 keeps
-    /// open past the report (HUM-465); never the agent's.
-    linger: Option<RawFd>,
+    /// How the agent starts; in the guest mode with a copy of the report's
+    /// descriptor that PID 1 keeps open past the report (HUM-465) and reads
+    /// the host's verdict from (HUM-444); never the agent's.
+    start: AgentStart,
 }
 
 /// `--rules`: the effective rule table for this environment, one row per
@@ -605,7 +684,7 @@ fn prepare(cli: &Cli, report: &Report) -> Result<Prepared, SetupError> {
         Err(err) => report.check(Check::NoInterfaces, false, &format!("unreadable:{err}")),
     }
 
-    check_single_socket(&bound, report);
+    check_single_socket(&bound, &cli.socket_walk, report);
 
     Ok(Prepared {
         policy,
@@ -630,8 +709,15 @@ fn prepare(cli: &Cli, report: &Report) -> Result<Prepared, SetupError> {
 /// The handover socket (HUM-434) gets no exemption: the daemon removes it
 /// before it sends the descriptors, and its directory is bound, not the
 /// socket, so after the handover it is simply gone.
-fn check_single_socket(bound: &[Bound], report: &Report) {
-    let walk = report::sockets();
+///
+/// In a guest kernel the walk starts at the plan's roots instead of `/`
+/// (`socket_walk`, HUM-444, `report::sockets_under`).
+fn check_single_socket(bound: &[Bound], roots: &[PathBuf], report: &Report) {
+    let walk = if roots.is_empty() {
+        report::sockets()
+    } else {
+        report::sockets_under(roots)
+    };
     let expected: Vec<String> = bound
         .iter()
         .filter_map(|listener| match listener.upstream() {
@@ -698,7 +784,7 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, inherited: Inherited) -
         control,
         lifeline,
         stream,
-        linger,
+        start,
     } = inherited;
     // SAFETY: getpid has no preconditions.
     let parent_pid = unsafe { libc::getpid() };
@@ -730,7 +816,7 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, inherited: Inherited) -
         gate_write.as_raw_fd(),
         control.as_ref().map_or(-1, AsRawFd::as_raw_fd),
         lifeline.as_ref().map_or(-1, AsRawFd::as_raw_fd),
-        linger.unwrap_or(-1),
+        start.descriptor().unwrap_or(-1),
     ]);
     keep.extend(stream.iter().flat_map(stream::Session::fds));
     close_inherited(&keep);
@@ -817,6 +903,9 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, inherited: Inherited) -
             shells,
             lifeline,
             stream,
+            // Only a guest waits for the host's admission (HUM-444); bwrap
+            // and the container engine start the agent as before.
+            start,
         },
     )
 }
@@ -829,6 +918,9 @@ struct Waited {
     lifeline: Option<OwnedFd>,
     /// The stream mode, when the daemon chose it (HUM-443).
     stream: Option<stream::Session>,
+    /// How the agent may start: in a guest only after the host's verdict
+    /// on the report connection (HUM-444).
+    start: AgentStart,
 }
 
 /// The agent's two filters and the child's end of the channel to the parent.
@@ -1339,6 +1431,7 @@ fn parent(
         shells,
         lifeline,
         mut stream,
+        start,
     } = waited;
     // The parent holds the listener and the report descriptor while the agent
     // runs. Neither may be reachable from the agent through
@@ -1405,6 +1498,19 @@ fn parent(
     // on a premise that is not proven: the flag is read back right here.
     if let Err(err) = check_undumpable() {
         return refuse_to_open(child, report, &format!("get:{err}"));
+    }
+    // In a guest the host decides as well (HUM-444): it reads the `CHECK`
+    // lines, all written by now, checks the machine from outside, and only
+    // its `ADMIT` opens the gate. Without it the agent never runs.
+    if let AgentStart::Admitted(fd) = start
+        && let Err(why) = guest::await_admission(fd, guest::ADMISSION_WAIT)
+    {
+        say(&format!(
+            "humanitl-shim: guest: the host did not admit the agent: {why}\n"
+        ));
+        drop(report);
+        kill_and_reap(child);
+        return EXIT_SETUP;
     }
     // The door for further shells is served from the loop below, under the
     // same premises as the gate: this process wears its filter and is not
@@ -1591,6 +1697,9 @@ struct Cli {
     /// agent's child makes it descriptors 0, 1 and 2 before anything else.
     /// Never set from the command line.
     terminal_fd: Option<RawFd>,
+    /// Where the socket walk starts in a guest (HUM-444); empty means `/`.
+    /// Never set from the command line.
+    socket_walk: Vec<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -1678,6 +1787,7 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
                     command,
                     vsock_door: None,
                     terminal_fd: None,
+                    socket_walk: Vec::new(),
                 });
             }
             Some("--help" | "-h") => return Err(CliError::Help),
@@ -1849,6 +1959,24 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+
+    /// HUM-444: a guest without the copy of the report connection never
+    /// starts its agent; with it the start waits for the host's verdict on
+    /// exactly that descriptor.
+    #[test]
+    fn a_guest_without_the_admission_descriptor_refuses() {
+        let err = guest_start(None).unwrap_err();
+        assert!(err.starts_with("admission:"), "{err}");
+        assert!(!err.contains(' '), "{err}");
+        let (read, _write) = std::io::pipe().unwrap();
+        let copy = OwnedFd::from(read);
+        let raw = copy.as_raw_fd();
+        let (kept, start) = guest_start(Some(copy)).unwrap();
+        assert_eq!(start, AgentStart::Admitted(raw));
+        assert_eq!(kept.as_raw_fd(), raw);
+        assert_eq!(start.descriptor(), Some(raw));
+        assert_eq!(AgentStart::Direct.descriptor(), None);
+    }
 
     fn args(list: &[&str]) -> impl Iterator<Item = OsString> {
         list.iter()

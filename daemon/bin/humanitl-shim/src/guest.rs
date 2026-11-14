@@ -10,7 +10,11 @@
 //!
 //! Before the steps of the bwrap mode run, the shim does in order:
 //!
-//! 1. Empty its environment; mount `proc`, `sysfs` and `devtmpfs` (the last
+//! 1. Empty its environment; mount `proc` and at once empty
+//!    `kernel.modprobe`, so that the guest kernel starts no helper to load a
+//!    module on its own (it would find the host's `modprobe` and modules in
+//!    the shared root when the release matches, HUM-444); then mount `sysfs`
+//!    and `devtmpfs` (the last
 //!    only when the kernel has not mounted it already) and `devpts` on
 //!    `/dev/pts`, where the shim opens the terminals (HUM-443); bring `lo` up, which
 //!    a fresh kernel leaves down and bwrap's `--unshare-net` brings up for
@@ -31,6 +35,12 @@
 //! 5. Mount `/work` from the plan's tag (`virtiofs`, `nosuid`, `nodev`).
 //! 6. Set the shim's own variables and then the agent's environment, both
 //!    from the plan, with the rules of `--env-fd` (`envfd.rs`).
+//!
+//! Before the agent's `exec`, PID 1 waits for the host's verdict on the
+//! report connection ([`await_admission`], HUM-444): the host reads every
+//! `CHECK` line, checks the machine from outside and answers `ADMIT` or
+//! `DENY`; only `ADMIT` opens the exec gate. bwrap and the container engine
+//! have no such wait.
 //!
 //! Then the mount table is compared with the plan as under `--pins-fd`
 //! (`mounts.rs`, with the guest forms `tag:<tag>:<ino>` and a pin on any
@@ -65,6 +75,80 @@ use crate::report::{Check, Report};
 /// How long the shim waits for the host to take the report.
 pub const REPORT_WAIT: Duration = Duration::from_secs(30);
 
+/// How long PID 1 waits for the host's admission of the agent (HUM-444).
+pub const ADMISSION_WAIT: Duration = Duration::from_secs(120);
+
+/// The host's admission on the report connection: one line, exactly this.
+pub const ADMIT: &[u8] = b"ADMIT";
+
+/// The longest answer the shim reads before it gives up.
+const MAX_ADMISSION_LINE: usize = 16;
+
+/// Waits on `fd`, the report connection the host opened, for the host's
+/// verdict on this guest (HUM-444). The host sends it after it has read the
+/// `CHECK` lines and checked the machine from outside; only `ADMIT` and a
+/// line break let the agent start. Anything else, the end of the
+/// connection, an error or no answer within `wait` refuses.
+///
+/// # Errors
+///
+/// The reason, without spaces, for the shim's stderr.
+pub fn await_admission(fd: RawFd, wait: Duration) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + wait;
+    let mut line = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err("no-admission:timeout".to_owned());
+        }
+        let millis = libc::c_int::try_from(left.as_millis()).unwrap_or(libc::c_int::MAX);
+        let mut poll = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one pollfd that outlives the call.
+        let ready = unsafe { libc::poll(&raw mut poll, 1, millis) };
+        if ready < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(fail("no-admission:poll", &err));
+        }
+        if ready == 0 {
+            continue;
+        }
+        let mut byte = [0u8; 1];
+        // SAFETY: a one-byte buffer that outlives the call.
+        let n = unsafe { libc::read(fd, byte.as_mut_ptr().cast(), 1) };
+        if n < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(fail("no-admission:read", &err));
+        }
+        if n == 0 {
+            return Err("no-admission:the-host-closed-the-report".to_owned());
+        }
+        if byte[0] == b'\n' {
+            return if line == ADMIT {
+                Ok(())
+            } else {
+                Err(format!(
+                    "refused:{}",
+                    String::from_utf8_lossy(&line).replace(' ', "_")
+                ))
+            };
+        }
+        line.push(byte[0]);
+        if line.len() > MAX_ADMISSION_LINE {
+            return Err("refused:overlong-answer".to_owned());
+        }
+    }
+}
+
 /// How long the shim waits, after its last line, for the host to close the
 /// report before it powers off.
 const LINGER: Duration = Duration::from_secs(2);
@@ -94,11 +178,14 @@ const PLAN_SHIM_VARS: [&str; 4] = [
 ///  "shim":{"HUMANITL_SECCOMP_DENY":"mount"},
 ///  "env":{"PATH":"/usr/bin:/bin"},
 ///  "pins":{"pins":[...],"mounts":[...]},
+///  "socket_walk":["/work","/dev/shm"],
 ///  "command":["/bin/bash","-l"]}
 /// ```
 ///
-/// Every key is required but `modules` and `shim`; the ports are decimal
-/// strings. `env` follows the rules of `--env-fd`, `pins` the shape of
+/// Every key is required but `modules`, `shim` and `socket_walk`; the ports
+/// are decimal strings. `socket_walk` names the roots of the socket walk of
+/// `single_socket`, absolute paths; absent means the whole file system, as
+/// under bwrap (HUM-444, `report::sockets_under`). `env` follows the rules of `--env-fd`, `pins` the shape of
 /// `--pins-fd` with the guest forms.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
@@ -121,12 +208,14 @@ pub struct Plan {
     pub env: Vec<(String, String)>,
     /// The expected mount table and pins.
     pub pins: Pins,
+    /// Where the socket walk starts; empty means `/` (HUM-444).
+    pub socket_walk: Vec<PathBuf>,
     /// The agent's command.
     pub command: Vec<OsString>,
 }
 
 /// The keys a guest plan may have.
-const KEYS: [&str; 10] = [
+const KEYS: [&str; 11] = [
     "proxy_port",
     "door_port",
     "report_port",
@@ -136,6 +225,7 @@ const KEYS: [&str; 10] = [
     "shim",
     "env",
     "pins",
+    "socket_walk",
     "command",
 ];
 
@@ -242,6 +332,21 @@ pub fn parse(text: &str) -> Result<Plan, String> {
     }
     let env = envfd::parse(required("env")?, &SHIM_VARS).map_err(|e| fail("env", &e))?;
     let pins = mounts::parse_guest_pins(required("pins")?).map_err(|e| fail("pins", &e))?;
+    let socket_walk: Vec<PathBuf> = match raw("socket_walk") {
+        None => Vec::new(),
+        Some(text) => Parser::new(text)
+            .string_array()
+            .map_err(|e| fail("socket_walk", &e))?
+            .into_iter()
+            .map(PathBuf::from)
+            .collect(),
+    };
+    if socket_walk
+        .iter()
+        .any(|root| !root.is_absolute() || root.as_os_str().is_empty())
+    {
+        return Err("socket_walk:not-absolute".to_owned());
+    }
     let command: Vec<OsString> = Parser::new(required("command")?)
         .string_array()
         .map_err(|e| fail("command", &e))?
@@ -261,6 +366,7 @@ pub fn parse(text: &str) -> Result<Plan, String> {
         shim_env,
         env,
         pins,
+        socket_walk,
         command,
     })
 }
@@ -420,6 +526,7 @@ fn read_plan(path: &Path) -> Result<Plan, String> {
 fn mount_basics() -> Result<(), String> {
     let quiet = libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC;
     mount("proc", "/proc", "proc", quiet).map_err(|err| format!("mount /proc: {err}"))?;
+    no_module_helper()?;
     mount("sysfs", "/sys", "sysfs", quiet).map_err(|err| format!("mount /sys: {err}"))?;
     let mountinfo =
         fs::read_to_string("/proc/self/mountinfo").map_err(|err| format!("mountinfo: {err}"))?;
@@ -450,6 +557,23 @@ fn mount_basics() -> Result<(), String> {
     )
     .map_err(|err| format!("mount /dev/pts: {err}"))?;
     loopback_up().map_err(|err| format!("lo up: {err}"))
+}
+
+/// Where the kernel names the helper it starts to load a module on demand.
+const MODPROBE: &str = "/proc/sys/kernel/modprobe";
+
+/// Empties `kernel.modprobe` and reads it back: with an empty path the
+/// kernel loads no module on demand (`request_module` gives up at once), so
+/// before the lock only the plan's modules load (HUM-444). A kernel that
+/// does not let it be emptied stops the boot.
+fn no_module_helper() -> Result<(), String> {
+    fs::write(MODPROBE, "\n").map_err(|err| format!("empty {MODPROBE}: {err}"))?;
+    let now = fs::read_to_string(MODPROBE).map_err(|err| format!("read {MODPROBE}: {err}"))?;
+    if now.trim().is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{MODPROBE} is still {:?}", now.trim()))
+    }
 }
 
 /// Sets `IFF_UP` on `lo`, the one interface a guest without a network
@@ -617,6 +741,65 @@ mod tests {
             .replace(r#""shim": {"HUMANITL_SECCOMP_DENY": "mount"},"#, "");
         let plan = parse(&bare).unwrap();
         assert!(plan.modules.is_empty() && plan.shim_env.is_empty());
+        assert!(plan.socket_walk.is_empty());
+        let walked = PLAN.replace(
+            r#""work_tag": "work","#,
+            r#""work_tag": "work", "socket_walk": ["/work", "/dev/shm"],"#,
+        );
+        assert_eq!(
+            parse(&walked).unwrap().socket_walk,
+            [PathBuf::from("/work"), PathBuf::from("/dev/shm")]
+        );
+        let relative = PLAN.replace(
+            r#""work_tag": "work","#,
+            r#""work_tag": "work", "socket_walk": ["work"],"#,
+        );
+        assert_eq!(
+            parse(&relative).unwrap_err(),
+            "socket_walk:not-absolute".to_owned()
+        );
+    }
+
+    /// HUM-444: only the host's exact `ADMIT` lets the agent start; a
+    /// refusal, the end of the connection, an overlong answer or silence do
+    /// not.
+    #[test]
+    fn only_the_hosts_admit_opens_the_gate() {
+        use std::io::Write as _;
+        use std::os::unix::net::UnixStream;
+        let ask = |send: Option<&[u8]>, wait: Duration| {
+            let (mut host, guest) = UnixStream::pair().unwrap();
+            if let Some(bytes) = send {
+                host.write_all(bytes).unwrap();
+            }
+            if send == Some(b"".as_slice()) {
+                drop(host);
+                return await_admission(guest.as_raw_fd(), wait);
+            }
+            let verdict = await_admission(guest.as_raw_fd(), wait);
+            drop(host);
+            verdict
+        };
+        let long = Duration::from_secs(5);
+        assert_eq!(ask(Some(b"ADMIT\n"), long), Ok(()));
+        assert!(
+            ask(Some(b"DENY\n"), long)
+                .unwrap_err()
+                .starts_with("refused:DENY")
+        );
+        assert!(ask(Some(b"ADMIT extra\n"), long).is_err());
+        assert!(ask(Some(b"admit\n"), long).is_err());
+        assert!(
+            ask(Some(&[b'A'; 64]), long)
+                .unwrap_err()
+                .contains("overlong")
+        );
+        assert!(ask(Some(b""), long).unwrap_err().contains("closed"));
+        assert!(
+            ask(None, Duration::from_millis(100))
+                .unwrap_err()
+                .contains("timeout")
+        );
     }
 
     /// Point 4 of the specification: the agent's filter in a guest refuses

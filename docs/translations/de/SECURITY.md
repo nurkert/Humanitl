@@ -1940,3 +1940,102 @@ untergeordnete IDs für `--userns=keep-id` (`SANDBOX_039`), die cgroup-Controlle
 und `cpu` delegiert (`SANDBOX_040`), kein erzwingendes SELinux (`SANDBOX_044`, ein Einhängen
 verlangte, das Projekt umzuetikettieren). Fehlt eine Voraussetzung, lehnt der Start mit ihrem Code
 ab; er fällt nie auf bubblewrap zurück.
+
+## 14. Linux: QEMU-micro-VM (Kernel-Stufe)
+
+**Noch nicht zugelassen.** Die Kernel-Stufe, das Backend `qemu` (ADR-0021), lässt den Agenten in
+einer micro-VM mit eigenem Gastkernel laufen. Sie steht nicht in der Liste der zugelassenen Stufen:
+Jeder Start mit `sandbox.backend = "qemu"` lehnt mit `SANDBOX_048` ab, bis HUM-449 landet, nachdem
+die Escape-Suite mit Root im Gast (HUM-445) auf `main` grün ist. `auto` wählt sie nie. Bis dahin
+erreichen den Adapter (`daemon/crates/sandbox/src/qemu/`, HUM-444) nur die Escape-Suite und die
+Tests, über eine Umgehung, die ausgelieferter Daemon und Kommandozeile nicht enthalten. Dieser
+Abschnitt sagt, was der Adapter tut, damit die Aussage prüfbar ist, bevor die Stufe angeboten wird.
+
+### Die drei Garantien in der micro-VM
+
+Die Garantien müssen mit Root im Gast gelten: Der Kernel des Agenten ist nicht der des Hosts, und
+wer im Gast Root wird, beherrscht diesen Kernel. Die Prüfungen im Gast sind deshalb
+Tiefenverteidigung; was jede Garantie trägt, liegt auf dem Host.
+
+| # | Garantie | Wie sie auf dem Host gilt | Geprüft durch |
+|---|---|---|---|
+| 1 | Kein Netzwerk-Interface | die Maschine hat kein Netzgerät (`-nic none`, kein `-netdev`); die Unit der Sitzung läuft mit `PrivateNetwork=yes`, jeder Hilfsprozess sieht nur `lo`; kein Prozess der Unit hält `/dev/net/tun`, `/dev/vhost-net` oder `/dev/vhost-vsock` | `no_interfaces` des Shims im Gast, und die Host-Prüfung: der Netz-Namensraum jedes Prozesses der Unit, die Deskriptoren jedes Prozesses, die Startzeile des laufenden Emulators |
+| 2 | Genau eine Tür | ein vsock-Geräteprozess je Sitzung (nie geteilt, HUM-442 Q9) mit einem Gerät, `--uds-path` im Laufzeitverzeichnis der Sitzung, nie `--forward-cid`; auf dem Host genau ein Lauscher `<uds>_5000`, den der Daemon an den Proxy-Socket der Sitzung weiterreicht; jeder andere Port des Hosts findet keinen Lauscher; die Wurzel des Gasts ist eine nur lesbare Freigabe ohne Laufzeitverzeichnis und ohne Socket des Hosts | `single_socket`, `bridge_listening`, `mounts_match` und `mounts_pinned` des Shims im Gast, und die Host-Prüfung: nur die erklärten Sockets im Laufzeitverzeichnis, genau ein vsock-Geräteprozess mit genau einem Gerät, die Deskriptoren des Emulators auf die des Plans begrenzt, ohne Konsole |
+| 3 | Keine neuen Türen | der Gastkernel lädt nur die Module des Plans und sperrt danach das Laden (`kernel.modules_disabled = 1`, das automatische Laden schon vorher aus); einer laufenden Maschine lässt sich kein Gerät hinzufügen (kein Monitor, kein QMP); der Emulator läuft unter seinem vollen `-sandbox` und in einem Gefängnis ohne Fähigkeiten | `seccomp_applied` und `families` des Shims im Gast; der Filter des Agenten verweigert `AF_VSOCK` und `AF_UNIX` |
+
+**Der Agent startet erst, wenn der Host ihn zulässt.** Im Gast schreibt PID 1 jede `CHECK`-Zeile
+und hält den Agenten dann an seinem Tor vor dem `exec`, bis der Daemon auf der Verbindung des
+Berichts antwortet, die der Host geöffnet hat. Der Daemon liest die Zeilen des Gasts, macht die
+Host-Prüfung und schickt `ADMIT` nur, wenn beide bestehen; sonst `DENY`, und er stoppt die Unit.
+Kommt binnen 120 Sekunden keine Antwort, lehnt der Shim selbst ab. Keine gescheiterte Prüfung, weder
+aus dem Gast noch vom Host, lässt also einen Agenten auch nur einen Augenblick laufen. Dieses Tor
+gibt es nur im Gast; unter bubblewrap und Podman startet der Agent wie bisher, und eine rote Prüfung
+beendet die Sitzung danach (K-15).
+Ein Gast, der ohne den Bericht des Shims endet, ist eine gescheiterte Prüfung mit eigenem Grund,
+nie ein Bestehen. Eine gescheiterte Host-Prüfung ist `SANDBOX_047`: Der Agent wird nicht zugelassen,
+und die Sitzung endet.
+
+### Wie eine Sitzung entsteht
+
+- **Eine gehärtete Unit je Sitzung.** Die Sitzung startet als vorübergehende Unit des
+  Dienstverwalters des Nutzers (`systemd-run --user`, HUM-434) mit den Eigenschaften aus HUM-442
+  Q7: `PrivateNetwork`, `PrivateUsers`, `NoNewPrivileges`, eine leere Menge an Fähigkeiten,
+  `ProtectSystem=strict`, `ProtectHome=read-only`, beschreibbar nur das Laufzeitverzeichnis der
+  Sitzung und der Projektordner, `RestrictAddressFamilies=AF_UNIX AF_NETLINK`, `LockPersonality`,
+  `RestrictRealtime`, nur native Systemaufrufe.
+- **Vier Prozesse, vier Gefängnisse.** Der Dateisystemdienst der Wurzel, der Dateisystemdienst für
+  `/work`, das vsock-Gerät und der Emulator laufen je in einem eigenen bubblewrap-Gefängnis mit
+  allen Namensräumen getrennt und ohne jede Fähigkeit. Kein Gefängnis bindet das
+  Laufzeitverzeichnis der Sitzung selbst: Jeder Socket liegt in einem eigenen Unterverzeichnis
+  (`root/`, `work/`, `vsock/`, `door/`), und jedes Gefängnis bindet nur, was es braucht. Der Dienst
+  für `/work` bindet `work/`, das vsock-Gerät `vsock/` und `door/`, der Wurzeldienst keines, denn
+  er bekommt seinen Socket als Deskriptor. Der Emulator bindet `root/`, `work/` und `vsock/` nur
+  lesbar, genug, um sich mit den drei vhost-user-Sockets zu verbinden; die Tür, den Übergabe-Socket
+  und die Dateien des Gasts sieht er nie. Darüber hinaus hält er nur `/usr`, `/dev/kvm` und aus
+  `/boot` die eine Kernel-Datei; er hat keine Konsole, keinen Monitor, keine Anzeige.
+- **Die Wurzel des Gasts kommt aus demselben Plan wie unter bubblewrap.** Die Einhängungen des
+  Profils, der Shim, CA-Zertifikat und Bundle, die Identitätsdateien und die Dateien des Adapters
+  entstehen in einem Unterverzeichnis des Gefängnisses des Wurzeldienstes und werden nur lesbar
+  geteilt; das eigene `/proc` des Gefängnisses liegt außerhalb davon. Der Wurzeldienst bekommt
+  seinen Socket als geerbten Deskriptor, das Laufzeitverzeichnis steht also nie in der Wurzel des
+  Gasts. Einhängepunkte in der Freigabe werden dem Gast nicht angekündigt
+  (`--no-announce-submounts`, wo der Dateisystemdienst es kennt), und die erwartete Mounttabelle des
+  Shims hat genau eine virtiofs-Einhängung an `/` und eine an `/work`.
+- **Der Projektordner ist der geprüfte.** Der Daemon öffnet und prüft den Ordner, reicht den
+  Deskriptor an die Unit, und das Gefängnis des Dienstes für `/work` bindet genau diesen
+  Deskriptor (`--bind-fd`); ein Tausch des Pfades nach der Prüfung erreicht den Gast nicht
+  (HUM-442 Q4). Die Masken des Profils unter `/work` liegen im Gefängnis über dieser Freigabe, der
+  Gast sieht sie wie unter bubblewrap. Der Shim im Gast vergleicht den Inode von `/work` mit dem
+  Plan.
+- **Nichts wird vererbt.** Die Unit ist kein Kind des Daemons. Ihr erster Prozess ist der Shim auf
+  dem Host (`--fds-then-exec`): Er holt sich drei Deskriptoren über einen Übergabe-Socket der
+  Sitzung, der eine Verbindung annimmt (den Socket des Wurzeldienstes, den Projektordner, das
+  Leseende der Lebensleine), und führt das feste Skript aus, das die vier Gefängnisse startet.
+- **Das Ende des Daemons beendet die Sitzung ohne den Gast.** Das Skript wartet auf die
+  Lebensleine, deren Schreibende nur der Daemon hält; endet der Daemon, auch durch `SIGKILL`,
+  endet das Skript, und der Dienstverwalter beendet jeden Prozess der Unit
+  (`KillMode=control-group`). Läuft der Daemon als Dienst, ist die Unit außerdem an ihn gebunden
+  (`BindsTo`). Root im Gast kann das Ende des Steuerkanals übergehen; diese Lebensleine im Gast ist
+  nur Tiefenverteidigung. Der Stopp einer Sitzung stoppt die Unit und entfernt ihr
+  Laufzeitverzeichnis; was ein Absturz liegen lässt, wird beim nächsten Start des Daemons gestoppt
+  und entfernt (`SANDBOX_041`).
+
+### Was anders ist als unter bubblewrap
+
+- **Die vertrauenswürdige Basis wächst** um den Emulator, den Gastkernel, die beiden
+  Dateisystemdienste, das vsock-Gerät und den Dienstverwalter des Nutzers (K-30 bis K-33 in
+  [`THREAT-MODEL.md`](THREAT-MODEL.md)).
+- **Die Wurzel des Gasts ist nur lesbar, auch zusätzliche beschreibbare Einhängungen.**
+  `mounts.extra_rw` ist im Gast nur lesbar eingehängt.
+- **Noch keine Wegwerf-Sandbox.** `disposable` lehnt mit `SANDBOX_030` ab, bis HUM-446.
+- **Das Terminal reist als Strom** (K-29); ein Signal des Hosts erreicht keinen Prozess des Gasts,
+  eine Unterbrechung ist ein Rahmen.
+
+### Voraussetzungen
+
+`/dev/kvm` les- und schreibbar, der Emulator mit `microvm` und `vhost-user-vsock-pci`, der
+Dateisystemdienst mit `--readonly` und `--fd`, das vsock-Gerät mit `--uds-path` und `--groups`,
+bubblewrap mit `--bind-fd`, ein lesbares Kernel-Abbild mit eingebautem virtiofs
+(`CONFIG_VIRTIO_FS=y` in der Konfiguration neben dem Abbild) und das Modulverzeichnis dieses
+Kernels. Fehlt eine Voraussetzung, lehnt der Start mit `SANDBOX_045` ab; er fällt nie auf ein
+anderes Backend zurück. `humanitl doctor` zeigt je Voraussetzung eine Zeile.

@@ -198,6 +198,30 @@ abstract final class DoctorBackendCheckId {
 
   /// Did the probe start pass?
   static const String probe = 'probe';
+
+  /// The kernel level (HUM-444): is `/dev/kvm` usable?
+  static const String kvm = 'kvm';
+
+  /// The kernel level: is the machine emulator there?
+  static const String emulator = 'emulator';
+
+  /// The kernel level: is the file system service of the guest there?
+  static const String fileDaemon = 'file_daemon';
+
+  /// The kernel level: is the vsock device of the door there?
+  static const String vsockDevice = 'vsock_device';
+
+  /// The kernel level: is bubblewrap there with `--bind-fd`?
+  static const String bubblewrap = 'bubblewrap';
+
+  /// The kernel level: is the guest kernel readable?
+  static const String kernel = 'kernel';
+
+  /// The kernel level: does the kernel have virtiofs built in?
+  static const String virtioFs = 'virtio_fs';
+
+  /// The kernel level: is the module directory of the kernel there?
+  static const String modules = 'modules';
 }
 
 /// The identifiers of the eleven checks, in the order the daemon reports them

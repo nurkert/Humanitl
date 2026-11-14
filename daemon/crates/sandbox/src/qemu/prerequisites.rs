@@ -9,6 +9,13 @@
 //! Gefragt wird mit leerer Umgebung, ohne Eingabe und mit Frist; gestartet
 //! wird nichts, was eine VM oder ein Gerät anlegt.
 //!
+//! Dazu kommt seit HUM-444 die Konfiguration des Kernels: Er muss virtiofs
+//! eingebaut haben (`CONFIG_VIRTIO_FS=y`), sonst bootet er ohne initramfs
+//! keine virtiofs-Wurzel (HUM-465, Ubuntus `linux-azure`). Gelesen wird die
+//! Datei neben dem Abbild (`config-<release>` neben `vmlinuz-<release>`,
+//! `config` neben `vmlinuz`); fehlt sie, ist das ein Befund mit Weg, kein
+//! Bestehen.
+//!
 //! Der erste fehlende Punkt wird `SANDBOX_045` mit dem Fehlenden in `why`
 //! und dem Paket, das es bringt, in `fix`. Die Befehle sind feste
 //! Zeichenketten je Paketverwalter ([`Package::install`]); kein Text vom
@@ -151,6 +158,16 @@ const EMULATOR: Program = Program {
     ],
 };
 
+/// Das Wort, an dem die Hilfe von virtiofsd zeigt, dass er die Ankündigung
+/// von Einhängepunkten abschalten kann (ab 1.11, HUM-444).
+const NO_ANNOUNCE_SUBMOUNTS: &str = "--no-announce-submounts";
+
+/// Die Zeile der Kernel-Konfiguration, ohne die die Stufe nicht startet.
+const VIRTIO_FS_BUILT_IN: &str = "CONFIG_VIRTIO_FS=y";
+
+/// So viel einer Kernel-Konfiguration wird gelesen; Debians hat rund 300 KiB.
+const MAX_CONFIG_BYTES: u64 = 8 * 1024 * 1024;
+
 /// Der Dienst der Dateisysteme: nur lesbar ausliefern, Socket als Deskriptor.
 const FILE_DAEMON: Program = Program {
     name: "virtiofsd",
@@ -197,13 +214,8 @@ pub(crate) fn missing_prerequisite(paths: &Paths, config: &QemuConfig) -> Option
 }
 
 /// Was die Prüfung gefunden hat: je Voraussetzung der Pfad, den ein Start
-/// benutzt. Bis HUM-444 liest das nur der Startweg der Tests
-/// (`test_vm.rs`).
-#[derive(Debug, Clone)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "read by the test launch until HUM-444")
-)]
+/// benutzt.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Resolved {
     /// Der Emulator.
     pub(crate) emulator: PathBuf,
@@ -217,6 +229,9 @@ pub(crate) struct Resolved {
     pub(crate) kernel: PathBuf,
     /// Das Verzeichnis seiner Module.
     pub(crate) modules: PathBuf,
+    /// Ob virtiofsd `--no-announce-submounts` kennt (HUM-444). Ohne die
+    /// Option kündigt eine Fassung vor 1.11 ohnehin nichts an.
+    pub(crate) no_announce_submounts: bool,
 }
 
 /// Jede Voraussetzung mit ihrem Pfad, oder die erste fehlende als
@@ -245,14 +260,168 @@ fn missing_on(
     let file_daemon = usable(&FILE_DAEMON, config.virtiofsd.as_deref())?;
     let vsock_device = usable(&VSOCK_DEVICE, config.vhost_device_vsock.as_deref())?;
     let bubblewrap = usable(&BUBBLEWRAP, None)?;
+    let kernel = kernel_readable(host, config, manager)?;
+    virtio_fs_built_in(&kernel)?;
     Ok(Resolved {
+        no_announce_submounts: help_text(&file_daemon, &["--help"])
+            .is_some_and(|help| names_word(&help, NO_ANNOUNCE_SUBMOUNTS)),
         emulator,
         file_daemon,
         vsock_device,
         bubblewrap,
-        kernel: kernel_readable(host, config, manager)?,
+        kernel,
         modules: modules_present(host, config, manager)?,
     })
+}
+
+/// Eine Voraussetzung der Kernel-Stufe als Zeile des Doctors (HUM-444).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Prerequisite {
+    /// `/dev/kvm`.
+    Kvm,
+    /// Der Emulator mit `microvm` und dem vsock-Gerät.
+    Emulator,
+    /// Der Dienst der Dateisysteme.
+    FileDaemon,
+    /// Das vsock-Gerät.
+    VsockDevice,
+    /// bubblewrap mit `--bind-fd`.
+    Bubblewrap,
+    /// Das Kernel-Abbild.
+    Kernel,
+    /// virtiofs im Kernel eingebaut.
+    VirtioFs,
+    /// Das Verzeichnis der Module.
+    Modules,
+}
+
+/// Jede Voraussetzung für sich, in der Reihenfolge der Prüfung, mit dem Beleg
+/// oder dem Befund; anders als [`resolve`] hört es beim ersten Fehlenden
+/// nicht auf. `env` liefert den `PATH`.
+pub(crate) fn each_prerequisite(
+    env: &Env,
+    config: &QemuConfig,
+) -> Vec<(Prerequisite, Result<String, Diagnostic>)> {
+    each_on(&Host::system(), env, config, PackageManager::detect())
+}
+
+/// [`each_prerequisite`] auf diesen Orten.
+fn each_on(
+    host: &Host,
+    env: &Env,
+    config: &QemuConfig,
+    manager: PackageManager,
+) -> Vec<(Prerequisite, Result<String, Diagnostic>)> {
+    let usable = |program: &Program, configured: Option<&Path>| {
+        let found = find(program, configured, env, host, manager)?;
+        for question in program.questions {
+            ask(program, &found, question, manager)?;
+        }
+        Ok::<_, Diagnostic>(found.display().to_string())
+    };
+    let kernel = kernel_readable(host, config, manager);
+    let virtio_fs = match &kernel {
+        Ok(image) => virtio_fs_built_in(image).map(|()| VIRTIO_FS_BUILT_IN.to_owned()),
+        Err(missing) => Err(missing.clone()),
+    };
+    vec![
+        (
+            Prerequisite::Kvm,
+            kvm_usable(host).map(|()| host.kvm.display().to_string()),
+        ),
+        (
+            Prerequisite::Emulator,
+            usable(&EMULATOR, config.qemu.as_deref()),
+        ),
+        (
+            Prerequisite::FileDaemon,
+            usable(&FILE_DAEMON, config.virtiofsd.as_deref()),
+        ),
+        (
+            Prerequisite::VsockDevice,
+            usable(&VSOCK_DEVICE, config.vhost_device_vsock.as_deref()),
+        ),
+        (Prerequisite::Bubblewrap, usable(&BUBBLEWRAP, None)),
+        (
+            Prerequisite::Kernel,
+            kernel.map(|image| image.display().to_string()),
+        ),
+        (Prerequisite::VirtioFs, virtio_fs),
+        (
+            Prerequisite::Modules,
+            modules_present(host, config, manager).map(|dir| dir.display().to_string()),
+        ),
+    ]
+}
+
+/// Die Konfiguration neben dem Abbild: `config-<rest>` neben
+/// `vmlinuz-<rest>`, `config` neben `vmlinuz`; sonst keine.
+fn config_beside(image: &Path) -> Option<PathBuf> {
+    let name = image.file_name()?.to_str()?;
+    let config = if name == "vmlinuz" {
+        "config".to_owned()
+    } else {
+        format!("config-{}", name.strip_prefix("vmlinuz-")?)
+    };
+    Some(image.with_file_name(config))
+}
+
+/// Der Kernel hat virtiofs eingebaut: Seine Konfiguration neben dem Abbild
+/// trägt [`VIRTIO_FS_BUILT_IN`]. Ein Modul (`=m`), eine fehlende Zeile und
+/// eine Konfiguration, die sich nicht lesen lässt, sind ein Befund.
+fn virtio_fs_built_in(image: &Path) -> Result<(), Diagnostic> {
+    let fix = || FixAction::ChangeSetting {
+        key: "sandbox.qemu.kernel".to_owned(),
+        value: String::new(),
+    };
+    let Some(config) = config_beside(image) else {
+        return Err(missing(
+            &format!(
+                "the configuration of the kernel {} to see that virtiofs is built in, and its \
+                name is neither vmlinuz nor vmlinuz-<release>, so there is no config beside \
+                it to read; name a kernel with its config-<release> beside it in \
+                sandbox.qemu.kernel",
+                image.display()
+            ),
+            fix(),
+        ));
+    };
+    let text = std::fs::File::open(&config).and_then(|file| {
+        let mut text = String::new();
+        file.take(MAX_CONFIG_BYTES).read_to_string(&mut text)?;
+        Ok(text)
+    });
+    let text = match text {
+        Ok(text) => text,
+        Err(err) => {
+            return Err(missing(
+                &format!(
+                    "the configuration of the kernel to see that virtiofs is built in, and {} \
+                    cannot be read ({err}); without it nothing says the guest can boot from \
+                    its root. Name a kernel with its configuration beside it in \
+                    sandbox.qemu.kernel",
+                    config.display()
+                ),
+                fix(),
+            ));
+        }
+    };
+    if text.lines().any(|line| line.trim() == VIRTIO_FS_BUILT_IN) {
+        return Ok(());
+    }
+    let found = text
+        .lines()
+        .find(|line| line.starts_with("CONFIG_VIRTIO_FS=") || line.contains("CONFIG_VIRTIO_FS "))
+        .map_or_else(|| "no CONFIG_VIRTIO_FS line".to_owned(), str::to_owned);
+    Err(missing(
+        &format!(
+            "a kernel with virtiofs built in ({VIRTIO_FS_BUILT_IN}), and {} says {found:?}; such \
+            a kernel boots no virtiofs root without an initramfs. Name another kernel in \
+            sandbox.qemu.kernel",
+            config.display()
+        ),
+        fix(),
+    ))
 }
 
 /// `SANDBOX_045` mit dem, was fehlt, und dem Weg dorthin.
@@ -567,6 +736,11 @@ mod tests {
             std::fs::write(&host.kvm, "").expect("kvm");
             std::fs::create_dir_all(&host.boot).expect("boot");
             std::fs::write(host.boot.join(format!("vmlinuz-{RELEASE}")), "k").expect("kernel");
+            std::fs::write(
+                host.boot.join(format!("config-{RELEASE}")),
+                "CONFIG_VIRTIOFS=x\nCONFIG_VIRTIO_FS=y\n",
+            )
+            .expect("config");
             std::fs::create_dir_all(host.modules_root.join(RELEASE)).expect("modules");
             std::fs::create_dir_all(&host.libexec).expect("libexec");
             let fixture = Self {
@@ -625,9 +799,67 @@ mod tests {
 
     #[test]
     fn a_complete_host_misses_nothing() {
-        Fixture::complete()
+        let fixture = Fixture::complete();
+        fixture
             .check(&QemuConfig::default())
             .expect("everything is there");
+        let lines = each_on(
+            &fixture.host,
+            &fixture.env,
+            &QemuConfig::default(),
+            PackageManager::Apt,
+        );
+        assert_eq!(lines.len(), 8);
+        assert!(lines.iter().all(|(_, line)| line.is_ok()), "{lines:?}");
+    }
+
+    /// HUM-444: virtiofs must be built in; a module, a missing line and a
+    /// configuration that cannot be read are each a finding with the key that
+    /// names another kernel, never a pass. Each doctor line stands alone.
+    #[test]
+    fn a_kernel_without_virtiofs_built_in_is_a_finding() {
+        let fixture = Fixture::complete();
+        let config = fixture.host.boot.join(format!("config-{RELEASE}"));
+        for (text, needle) in [
+            (Some("CONFIG_VIRTIO_FS=m\n"), "CONFIG_VIRTIO_FS=m"),
+            (Some("# CONFIG_VIRTIO_FS is not set\n"), "is not set"),
+            (Some("CONFIG_OTHER=y\n"), "no CONFIG_VIRTIO_FS line"),
+            (None, "cannot be read"),
+        ] {
+            match text {
+                Some(text) => std::fs::write(&config, text).unwrap(),
+                None => std::fs::remove_file(&config).unwrap(),
+            }
+            let err = fixture.finding(&QemuConfig::default());
+            assert!(err.why.contains(needle), "{needle}: {}", err.why);
+            assert!(matches!(
+                &err.fix,
+                Some(FixAction::ChangeSetting { key, .. }) if key == "sandbox.qemu.kernel"
+            ));
+            let lines = each_on(
+                &fixture.host,
+                &fixture.env,
+                &QemuConfig::default(),
+                PackageManager::Apt,
+            );
+            let failed: Vec<_> = lines
+                .iter()
+                .filter(|(_, line)| line.is_err())
+                .map(|(id, _)| *id)
+                .collect();
+            assert_eq!(failed, [Prerequisite::VirtioFs]);
+        }
+        // The configured image takes its configuration from beside itself.
+        let other = fixture.dir.path().join("vmlinuz");
+        std::fs::write(&other, "k").unwrap();
+        std::fs::write(fixture.dir.path().join("config"), "CONFIG_VIRTIO_FS=y\n").unwrap();
+        fixture
+            .check(&QemuConfig {
+                kernel: Some(other),
+                ..QemuConfig::default()
+            })
+            .expect("the configured kernel has virtiofs built in");
+        assert_eq!(config_beside(Path::new("/k/bzImage")), None);
     }
 
     /// Der erste fehlende Punkt wird genannt, mit dem Paket, das ihn bringt;
@@ -716,6 +948,11 @@ mod tests {
 
         let kernel = fixture.dir.path().join("vmlinuz-own");
         std::fs::write(&kernel, "k").expect("kernel");
+        std::fs::write(
+            fixture.dir.path().join("config-own"),
+            "CONFIG_VIRTIO_FS=y\n",
+        )
+        .expect("config");
         let modules = fixture.dir.path().join("own-modules");
         std::fs::create_dir_all(&modules).expect("modules");
         let unknown_release = Fixture {

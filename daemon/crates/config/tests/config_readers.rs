@@ -169,19 +169,20 @@ const REGISTER: &[(&str, &str)] = &[
     ("sandbox.podman.runtime", "effective"),
     ("sandbox.podman.start_timeout_secs", "effective"),
     ("sandbox.profile", "effective"),
-    // Die Gruppe der Kernel-Stufe legt HUM-464 an; der Adapter kommt mit
-    // HUM-444. Bis dahin liest nur die Prüfung der Voraussetzungen in der
-    // Liste der Backends die Pfade (`kernel`, `modules`, die Programme), und
-    // jeder Start lehnt die Stufe mit `SANDBOX_048` ab: Keiner der Werte
-    // wirkt auf eine Sitzung.
-    ("sandbox.qemu.cpus", "pending(HUM-444)"),
-    ("sandbox.qemu.kernel", "pending(HUM-444)"),
-    ("sandbox.qemu.memory_mib", "pending(HUM-444)"),
-    ("sandbox.qemu.modules", "pending(HUM-444)"),
-    ("sandbox.qemu.qemu", "pending(HUM-444)"),
-    ("sandbox.qemu.start_timeout_secs", "pending(HUM-444)"),
-    ("sandbox.qemu.vhost_device_vsock", "pending(HUM-444)"),
-    ("sandbox.qemu.virtiofsd", "pending(HUM-444)"),
+    // Die Gruppe der Kernel-Stufe legt HUM-464 an; der Adapter liest sie
+    // seit HUM-444: die Pfade und `kernel`, `modules` bei der Prüfung der
+    // Voraussetzungen vor jedem Start, `cpus` und `memory_mib` in der Zeile
+    // der Maschine, `start_timeout_secs` als Frist bis zum Bericht des Gasts.
+    // Gestartet wird die Stufe nur über die Umgehung der Escape-Suite, bis
+    // HUM-449 sie zulässt.
+    ("sandbox.qemu.cpus", "effective"),
+    ("sandbox.qemu.kernel", "effective"),
+    ("sandbox.qemu.memory_mib", "effective"),
+    ("sandbox.qemu.modules", "effective"),
+    ("sandbox.qemu.qemu", "effective"),
+    ("sandbox.qemu.start_timeout_secs", "effective"),
+    ("sandbox.qemu.vhost_device_vsock", "effective"),
+    ("sandbox.qemu.virtiofsd", "effective"),
     ("sandbox.work_dir", "effective"),
     ("sandbox.work_mode", "effective"),
     // Gelesen in `humanitl sandbox attach`, wenn `--detach-keys` fehlt
@@ -445,14 +446,6 @@ fn the_keys_without_a_reader_are_the_known_ones() {
         vec![
             "pseudonyms.max_response_bytes",
             "pseudonyms.translate_responses",
-            "sandbox.qemu.cpus",
-            "sandbox.qemu.kernel",
-            "sandbox.qemu.memory_mib",
-            "sandbox.qemu.modules",
-            "sandbox.qemu.qemu",
-            "sandbox.qemu.start_timeout_secs",
-            "sandbox.qemu.vhost_device_vsock",
-            "sandbox.qemu.virtiofsd",
         ]
     );
 }

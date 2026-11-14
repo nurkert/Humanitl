@@ -141,6 +141,10 @@ Five further channels complete the model:
 | K-27 | the container engine under Podman (Podman, `conmon`, `crun`, the user's container storage, `containers.conf`) | b, d | high | admitted at the plain level (`crun`) only after the escape suite against it was green on `main` (HUM-448), the kernel level (backend `qemu`, ADR-0021) refused with `SANDBOX_048` until HUM-449, `auto` never Podman; every configuration source the daemon does not write cut off; fixed flags without keys; the environment only through the sealed memfd; ended through the engine and the lifeline; leftovers removed at daemon start (`SANDBOX_041`) | mitigated | ESC-1, ESC-2, ESC-5 (`escape-tests-podman`, HUM-435); `daemon/crates/sandbox/src/podman/` (HUM-433) |
 | K-28 | the image as the root of the sandbox under Podman, and pulling it (origin, digest, the network while pulling) | b, d | high | pinned by digest, checked before every start, never pulled by a start (`SANDBOX_043`); pulled only on request, by the engine directly and not through the proxy, from the registry the name names, said before it runs; registry credentials only from the adapter's own file, handed to the engine as a private copy, and a credential helper there or in a registry drop-in refused (HUM-456); project, door, CA, shim and session files from the host, never from the image; user, entry point, volumes and health check of the image overridden, an image setting `HUMANITL_*` refused | open | ESC-2 `ca_is_the_hosts` (`HUMANITL_ESCAPE_IMAGE`); `daemon/crates/sandbox/src/podman/image.rs` (HUM-439) |
 | K-29 | the control stream of the terminals (the stream mode: the kernel level always, bwrap when a caller asks for it) | b | high | one stream socket held only by the daemon and PID 1, opened before the agent's filter, which refuses `AF_VSOCK` and `AF_UNIX`; in a guest the host opens it as the second connection on the shim's one listening port, the guest never opens one; terminal bytes and control only, never a byte to or from the proxy; frames of at most 16 KiB, oversized frames, unknown kinds and unknown ids dropped by both ends without ending the stream; its end is a lifeline | mitigated | ESC-1 `socket_af_vsock` in `daemon/crates/ipc/tests/terminal_stream.rs`, fuzz target `control_stream_reader` with `daemon/crates/sandbox/tests/regressions/`, `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (HUM-443) |
+| K-30 | the virtual machine monitor of the kernel level (QEMU `microvm`) | b | high | not admitted until HUM-449 (`SANDBOX_048`); no network device, console, monitor or display; full `-sandbox`; in a bubblewrap jail without capabilities with `/dev/kvm` and the kernel file only; inside a hardened transient unit of the user with `PrivateNetwork`; the host checks its descriptors and its own command line after the start (`SANDBOX_047`) | open | `daemon/crates/sandbox/src/qemu/host_check.rs`, `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (HUM-444); escape suite with root in the guest (HUM-445) |
+| K-31 | the vsock door of the kernel level | b | high | one vsock device process per session with one device and its own group, never `--forward-cid`; on the host exactly one listener `<uds>_5000`, forwarded to the session's proxy socket; every other port finds no listener; the host check refuses any other socket in the runtime directory and a second device | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`an_extra_listener_beside_the_door_turns_the_host_check_red`, HUM-444) |
+| K-32 | the guest kernel (root in the guest) | b | high | the guarantees are carried on the host, so they hold with root in the guest; automatic module loading off, then the plan's vsock modules loaded and module loading locked before the agent; the guest root a read-only share without the runtime directory and without the jail's `/proc` | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (HUM-465, HUM-444); escape suite with root in the guest (HUM-445) |
+| K-33 | the four helper processes of a session (two file system daemons, the vsock device, the emulator) and the unit's first process | b, d | high | each in its own bubblewrap jail with every namespace unshared and no capability, only `/usr` of the host, what it serves and its own socket directory; the root daemon read-only with its socket as a descriptor, the `/work` daemon on the checked descriptor with the profile's masks; nothing inherited from the daemon but three descriptors over a one-connection handover; the unit ends with the daemon through the lifeline, also on `SIGKILL`, and with the daemon's unit through `BindsTo` | open | `daemon/crates/sandbox/src/qemu/kvm_tests.rs` (`a_killed_daemon_ends_the_unit_within_five_seconds`, HUM-444) |
 
 K-13 is the obvious channel and the only one considered closed outright. K-14 is here so that
 attacker (d) appears in a row. K-15 came with HUM-041: the check that proves the guarantees runs
@@ -708,7 +712,7 @@ regression test fails when the length check is removed. (4) *Outlive the daemon.
 stream is a lifeline: PID 1 sends `SIGTERM` to the agent, kills every further shell and, after the
 grace period, every process. PID 1 never writes to a terminal itself and sends the signal before
 any message, so a full terminal cannot hold it up; after the end it reads every terminal empty and
-keeps nothing. In a guest this is defence in depth; the host stops the VM itself (HUM-444).
+keeps nothing. In a guest this is defence in depth; the host stops the VM itself (K-33, HUM-444).
 *Residual risk:* root in a guest can end or stall the stream. A guest that stops reading makes
 the daemon's next frame miss its deadline of ten seconds, and the daemon then shuts the stream:
 the session ends, no daemon thread waits longer. A daemon that stops reading stops the shim's
@@ -716,6 +720,69 @@ reading of the terminals, not of the control frames. Input for a terminal whose 
 read is dropped once its queue holds 64 KiB, and output of a further shell whose reader stalls is
 dropped beyond 256 pieces on the daemon's side; both are counted, neither holds up another
 channel.
+
+### K-30 The virtual machine monitor of the kernel level
+
+The kernel level (ADR-0021, HUM-444; not admitted until HUM-449) puts the agent in a QEMU micro-VM
+with a kernel of its own. The emulator is the code that stands between a guest that attacker (b)
+may own completely and the host. It gets no network device (`-nic none`, no `-netdev`), no
+console, monitor, display or QMP, and so no channel a guest could talk through except the three
+vhost-user sockets of its devices. It runs under its full `-sandbox` (no obsolete system calls, no
+privilege change, no `fork`/`exec`, no resource control), in a bubblewrap jail without capabilities
+that holds only `/usr`, `/dev/kvm`, the one kernel file and, read-only, the three directories of
+its vhost-user sockets (never the door, the handover socket or the guest's files), and in a
+transient unit of the user with
+`PrivateNetwork`, `PrivateUsers`, `NoNewPrivileges`, no capability and a read-only file system.
+After the start the daemon checks it from the host: its descriptors may only be KVM, event and
+signal descriptors, `io_uring`, its memory, `/dev/null`, pipes and sockets; its own command line
+may hold no network option and no console; a finding is `SANDBOX_047` and stops the session.
+The agent in the guest waits at its exec gate for the daemon's `ADMIT`, sent only after the
+guest's lines and this host check passed, so a finding stops the session before the agent ever
+runs.
+*Residual risk:* a flaw in KVM or in the emulator's device code that lets a guest execute code in
+the emulator; the jail and the unit then limit what that code reaches, and it still has no network.
+
+### K-31 The vsock door of the kernel level
+
+The only way from the guest to the host is vsock: one device per session, served by its own
+`vhost-device-vsock` process with its own group (two guests in one process could reach each other,
+HUM-442 Q9). A connection of the guest to CID 2 and port `P` becomes a connection to the Unix
+socket `<uds>_P` in the session's runtime directory. The daemon binds exactly one such socket,
+`<uds>_5000`, and forwards every connection to the session's proxy socket; for any other port
+there is no listener, and the guest's connection times out (Q2). `--forward-cid` is never set. The
+host side opens two connections into the guest itself (`CONNECT` on the shim's report port): the
+report and the control stream (K-29). The host check refuses any socket in the runtime directory
+besides the declared ones, and more than one vsock device process or device. *Residual risk:* a
+flaw in the vsock device process; it runs jailed and without network like the other helpers.
+
+### K-32 The guest kernel
+
+In the guest the agent may become root, and root controls the guest kernel. Nothing of the three
+guarantees rests on it: no network device exists, the door is decided on the host, and the
+emulator cannot gain a device after the start. Before the agent runs the shim, as PID 1, empties
+`kernel.modprobe` (no module loads on demand), loads exactly the plan's vsock modules and locks
+module loading (`kernel.modules_disabled`); the guest root is a read-only share that holds neither
+the runtime directory nor the jail's `/proc`. The shim's `CHECK` lines from the guest are defense in
+depth, and a guest that ends without them is a failed check. *Residual risk:* root in the guest can
+forge the guest's lines; the host check is what holds then.
+
+### K-33 The helper processes of a session
+
+A session of the kernel level is one transient unit of the user with five processes of its own:
+the unit's first process (the shim with `--fds-then-exec`, then a fixed `sh` script), the file
+system daemon of the guest root, the file system daemon of `/work`, the vsock device and the
+emulator. Each helper runs in its own bubblewrap jail with every namespace unshared and every
+capability dropped, sees only `/usr` of the host, what it serves and its own socket directory in
+the runtime directory (no jail binds the runtime directory itself), and the unit itself has no
+network, no capability and a read-only file system except the session's runtime directory and the
+project folder. The unit is no child of the daemon and inherits nothing from it but three
+descriptors over a handover socket that accepts one connection with a one-time token: the root
+daemon's listening socket, the checked project folder and the read end of the lifeline. When the
+daemon ends, by `SIGKILL` too, the script sees the end of the lifeline and ends, and the service
+manager ends every process of the unit within seconds, without the guest; a daemon that runs as a
+service also binds the unit to its own (`BindsTo`). *Residual risk:* a compromised daemon can
+start such units (as under Podman, see the trust boundaries); a flaw in a file system daemon reaches
+what it serves, the read-only guest root or the project folder.
 
 ## Assumptions
 
@@ -817,6 +884,7 @@ These attackers are not defended against, and Humanitl does not claim to:
 | 2026-11-13 | K-28: registry credentials for a pull only from the adapter's own file, as a private copy under `--authfile`; credential helpers in that file or in a registry drop-in refused (`SANDBOX_043`) | HUM-456 |
 | 2026-11-13 | K-27 `mitigated`: the plain level of Podman (`podman/crun`) admitted after `escape-tests-podman` (ESC-1, ESC-2, ESC-5) was green on `main` with HUM-434, HUM-436, HUM-437 and HUM-438; chosen only by a person, never by `auto`; the kernel level stays refused with `SANDBOX_048` until HUM-449 | HUM-448 |
 | 2026-11-14 | K-29 added: the control stream of the terminals, the stream mode of the kernel level and of bwrap on request; K-18 in the stream mode; further shells prove a refused `AF_VSOCK` as well | HUM-443 |
+| 2026-11-14 | K-30 to K-33 added: the monitor, the vsock door, the guest kernel and the helper processes of the kernel level; one hardened unit per session, four jails, the checked project folder by descriptor, a host check of the monitor (`SANDBOX_047`) before the agent is admitted, each jail binding only its own socket directory, the end of the daemon ends the unit; not admitted until HUM-449 | HUM-444 |
 
 Every security-relevant change to the shim, the mount allowlist, the filter or the passthrough gets
 a line here. Vulnerabilities are reported as described in

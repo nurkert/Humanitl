@@ -1027,7 +1027,9 @@ jobs:
     # helper processes each in a bubblewrap jail, no privileged container.
     # The tests live under cfg(test) in the sandbox crate (src/qemu/); without
     # KVM or the packages they skip, here HUMANITL_REQUIRE_KVM=1 makes that a
-    # failure. HUM-444 and HUM-445 build on this job.
+    # failure. Since HUM-444 the adapter's sessions run here too, each as a
+    # transient unit of the runner user's service manager; HUM-445 builds on
+    # this job.
     env:
       HUMANITL_REQUIRE_KVM: "1"
     steps:
@@ -1053,6 +1055,23 @@ jobs:
           if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
+      - name: A service manager of the runner user
+        # The adapter starts every session as a hardened transient unit of
+        # the user's service manager (HUM-444). A hosted runner has no login
+        # session; lingering gives the user a manager and a bus.
+        run: |
+          set -euo pipefail
+          sudo loginctl enable-linger "$USER"
+          uid="$(id -u)"
+          for _ in $(seq 100); do
+            [[ -S "/run/user/$uid/bus" ]] && break
+            sleep 0.1
+          done
+          {
+            echo "XDG_RUNTIME_DIR=/run/user/$uid"
+            echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus"
+          } >> "$GITHUB_ENV"
+          XDG_RUNTIME_DIR="/run/user/$uid" systemctl --user show --property=Version --value
       - name: Install the kernel level and a guest kernel
         # Pinned packages from Debian, see the script; the guest kernel goes
         # to the test through the two variables, not through /boot.
@@ -1072,12 +1091,13 @@ jobs:
           status=0
           cargo test -p humanitl-sandbox --lib qemu::kvm_tests -- --test-threads=1 \
             2>&1 | tee "$RUNNER_TEMP/kvm-tests.txt" || status=$?
-          # The job log needs admin rights; an annotation names each red test.
-          sed -n 's/^test \(.*\) \.\.\. FAILED$/::error title=kvm test::\1/p' \
-            "$RUNNER_TEMP/kvm-tests.txt"
+          # The job log needs admin rights; an annotation names each red test
+          # with the line of its assertion (HUM-133).
+          ../scripts/ci/test-report.sh "$RUNNER_TEMP/kvm-tests.txt"
           ((status == 0))
-          # A filter that matches nothing would pass with zero tests.
-          grep -Eq '^test result: ok\. ([2-9]|[1-9][0-9]+) passed' "$RUNNER_TEMP/kvm-tests.txt"
+          # A filter that matches nothing would pass with zero tests; the
+          # adapter's tests (HUM-444) add four to the five of HUM-465/443.
+          grep -Eq '^test result: ok\. ([9]|[1-9][0-9]+) passed' "$RUNNER_TEMP/kvm-tests.txt"
       - name: Guest console after a failure
         # Only for the search: the same tests once more with the guest's
         # console in a file (HUMANITL_TEST_VM_CONSOLE=1), never the gated run,

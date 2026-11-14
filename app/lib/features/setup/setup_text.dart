@@ -144,6 +144,14 @@ String doctorBackendCheckTitle(AppLocalizations l10n, String id) =>
         l10n.doctorBackendCheckSubordinateIds,
       DoctorBackendCheckId.selinux => l10n.doctorBackendCheckSelinux,
       DoctorBackendCheckId.probe => l10n.doctorBackendCheckProbe,
+      DoctorBackendCheckId.kvm => l10n.doctorBackendCheckKvm,
+      DoctorBackendCheckId.emulator => l10n.doctorBackendCheckEmulator,
+      DoctorBackendCheckId.fileDaemon => l10n.doctorBackendCheckFileDaemon,
+      DoctorBackendCheckId.vsockDevice => l10n.doctorBackendCheckVsockDevice,
+      DoctorBackendCheckId.bubblewrap => l10n.doctorBackendCheckBubblewrap,
+      DoctorBackendCheckId.kernel => l10n.doctorBackendCheckKernel,
+      DoctorBackendCheckId.virtioFs => l10n.doctorBackendCheckVirtioFs,
+      DoctorBackendCheckId.modules => l10n.doctorBackendCheckModules,
       _ => id,
     };
 

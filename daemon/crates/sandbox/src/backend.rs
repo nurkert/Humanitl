@@ -44,6 +44,8 @@ use crate::launcher::{
 };
 pub use crate::podman::with_image_root;
 use crate::podman::{PodmanBackend, SHARED_KERNEL_STAGE, static_lines as engine_static_lines};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use crate::qemu::{self as vm, VmBackend};
 #[cfg(target_os = "macos")]
 use crate::seatbelt::SeatbeltBackend;
 
@@ -58,8 +60,8 @@ pub const SEATBELT_BACKEND: &str = "seatbelt";
 pub const PODMAN_BACKEND: &str = "podman";
 
 /// Der Name des VM-Backends der Kernel-Stufe in `sandbox.backend` (HUM-464,
-/// ADR-0021), nur unter Linux auf x86-64. Bis HUM-444 prüft dieser Build nur
-/// seine Voraussetzungen; zugelassen wird es mit HUM-449.
+/// ADR-0021), nur unter Linux auf x86-64. Den Adapter gibt es seit HUM-444;
+/// zugelassen wird er mit HUM-449.
 pub const VM_BACKEND: &str = "qemu";
 
 /// Die Stufen, die ein Mensch wählen kann (HUM-431).
@@ -79,6 +81,8 @@ macro_rules! dispatch {
         match $self {
             Backend::Bwrap($backend) => $call,
             Backend::Podman($backend) => $call,
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            Backend::Vm($backend) => $call,
             #[cfg(target_os = "macos")]
             Backend::Seatbelt($backend) => $call,
         }
@@ -94,6 +98,11 @@ pub enum Backend {
     /// [`Backend::detect`] und [`Backend::fallback`], die die Zulassung
     /// prüfen, und über die Umgehung der Escape-Suite.
     Podman(PodmanBackend),
+    /// Das VM-Backend der Kernel-Stufe (HUM-444), nur unter Linux auf x86-64.
+    /// Bauen lässt es sich nur über die Umgehung der Escape-Suite
+    /// (`Backend::detect_unadmitted`), bis HUM-449 es zulässt.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    Vm(VmBackend),
     /// Seatbelt mit `sandbox-exec`, unter macOS (HUM-323).
     #[cfg(target_os = "macos")]
     Seatbelt(SeatbeltBackend),
@@ -284,6 +293,8 @@ impl Backend {
         match self {
             Self::Bwrap(backend) => backend.paths(),
             Self::Podman(backend) => backend.paths(),
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            Self::Vm(backend) => backend.paths(),
             #[cfg(target_os = "macos")]
             Self::Seatbelt(backend) => backend.paths(),
         }
@@ -375,9 +386,10 @@ pub(crate) fn detect_in_build(
     match name {
         BWRAP_BACKEND => BwrapBackend::detect(paths).map(Backend::Bwrap),
         PODMAN_BACKEND => PodmanBackend::detect(paths, &sandbox.podman).map(Backend::Podman),
-        // Bis HUM-444 gibt es keinen Adapter: zuerst, was dem Rechner fehlt,
-        // dann, dass der Adapter fehlt. Nie ein anderes Backend.
-        VM_BACKEND => Err(kernel_level_missing(&paths, sandbox).unwrap_or_else(vm_adapter_missing)),
+        // Fehlt eine Voraussetzung, startet nichts, und kein anderes Backend
+        // springt ein (HUM-444).
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        VM_BACKEND => vm::detect(paths, sandbox).map(Backend::Vm),
         #[cfg(target_os = "macos")]
         SEATBELT_BACKEND => SeatbeltBackend::detect(paths).map(Backend::Seatbelt),
         other => Err(not_in_build(other)),
@@ -397,30 +409,13 @@ pub(crate) fn detect_in_build(
 pub(crate) fn kernel_level_missing(paths: &Paths, sandbox: &SandboxRef) -> Option<Diagnostic> {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
-        crate::qemu::missing_prerequisite(paths, &sandbox.qemu)
+        vm::missing(paths, sandbox)
     }
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     {
         let _ = (paths, sandbox);
         Some(not_in_build(VM_BACKEND))
     }
-}
-
-/// `SANDBOX_034`: Der Rechner hätte alles für die Kernel-Stufe, aber dieser
-/// Build hat ihren Adapter noch nicht (HUM-444). Nur die Escape-Suite und die
-/// Tests kommen bis hierher; jeder andere Weg scheitert vorher an der
-/// Zulassung.
-fn vm_adapter_missing() -> Diagnostic {
-    Diagnostic::builder(SANDBOX_034, Severity::Blocking)
-        .why(format!(
-            "sandbox.backend = {VM_BACKEND:?}: every prerequisite of the kernel level is present, \
-             and this build checks only those; it cannot start the level yet"
-        ))
-        .fix(FixAction::ChangeSetting {
-            key: "sandbox.backend".to_owned(),
-            value: crate::AUTO_BACKEND.to_owned(),
-        })
-        .build()
 }
 
 /// Die Laufzeit, die ein Backend ohne Angabe hat: unter Podman `crun`.
@@ -445,6 +440,10 @@ pub(crate) fn runtime_of(name: &str, sandbox: &SandboxRef) -> Option<PodmanRunti
 #[derive(Debug, Default)]
 pub struct LeftSandboxes {
     found: crate::podman::Leftovers,
+    /// Sitzungen der Kernel-Stufe: Laufzeitverzeichnisse und ihre Units
+    /// (HUM-444).
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    vm: vm::Leftovers,
 }
 
 impl LeftSandboxes {
@@ -456,6 +455,8 @@ impl LeftSandboxes {
         if cfg!(target_os = "linux") {
             Self {
                 found: crate::podman::find_leftovers(paths, &sandbox.podman),
+                #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+                vm: vm::find_leftovers(paths),
             }
         } else {
             Self::default()
@@ -467,7 +468,14 @@ impl LeftSandboxes {
     /// Bestandsaufnahme selbst scheiterte.
     #[must_use]
     pub fn remove(self) -> Vec<Diagnostic> {
-        self.found.remove()
+        #[cfg_attr(
+            not(all(target_os = "linux", target_arch = "x86_64")),
+            allow(unused_mut)
+        )]
+        let mut removed = self.found.remove();
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        removed.extend(self.vm.remove());
+        removed
     }
 }
 
@@ -488,6 +496,10 @@ pub(crate) fn static_checks(
     paths: &Paths,
     sandbox: &SandboxRef,
 ) -> Vec<(crate::doctor::BackendCheckId, Result<String, Diagnostic>)> {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    if name == VM_BACKEND {
+        return vm::static_lines(paths, sandbox);
+    }
     engine_static_lines(name, paths, sandbox)
 }
 
@@ -888,9 +900,9 @@ mod tests {
     }
 
     /// Das VM-Backend der Kernel-Stufe scheitert vor HUM-449 auf jedem Weg in
-    /// den Start an der Zulassung. Nur die Umgehung kommt daran vorbei, und
-    /// sie endet bis HUM-444 an der Prüfung der Voraussetzungen oder daran,
-    /// dass der Adapter fehlt; gestartet wird nie etwas.
+    /// den Start an der Zulassung. Nur die Umgehung kommt daran vorbei; auf
+    /// diesem Rechner ohne `bwrap` endet sie an der Prüfung der
+    /// Voraussetzungen, und gestartet wird nie etwas.
     #[test]
     fn the_kernel_level_starts_on_no_path_before_its_admission() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -908,7 +920,7 @@ mod tests {
         }
         let err = Backend::detect_unadmitted(VM_BACKEND, paths, &kernel)
             .map(drop)
-            .expect_err("no adapter yet");
+            .expect_err("a prerequisite is missing");
         assert!(
             ["SANDBOX_045", "SANDBOX_034"].contains(&err.code.as_str()),
             "{}: {}",

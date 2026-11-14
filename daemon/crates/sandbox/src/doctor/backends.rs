@@ -36,7 +36,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use humanitl_config::{Paths, SandboxRef};
-use humanitl_core::diagnostics::codes::DOCTOR_014;
+use humanitl_core::diagnostics::codes::{DOCTOR_014, DOCTOR_015};
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
 use super::probe_cache::{ProbeCache, ProbeKey};
@@ -67,6 +67,22 @@ pub enum BackendCheckId {
     Selinux,
     /// Hat der Probestart bestanden?
     Probe,
+    /// Kernel-Stufe (HUM-444): Ist `/dev/kvm` nutzbar?
+    Kvm,
+    /// Kernel-Stufe: Gibt es den Emulator der Maschine mit ihrem Maschinentyp?
+    Emulator,
+    /// Kernel-Stufe: Gibt es den Dienst der Dateisysteme des Gasts?
+    FileDaemon,
+    /// Kernel-Stufe: Gibt es das vsock-Gerät der Tür?
+    VsockDevice,
+    /// Kernel-Stufe: Gibt es bubblewrap mit `--bind-fd`?
+    Bubblewrap,
+    /// Kernel-Stufe: Ist das Kernel-Abbild lesbar?
+    KernelImage,
+    /// Kernel-Stufe: Hat der Kernel virtiofs eingebaut?
+    VirtioFs,
+    /// Kernel-Stufe: Gibt es das Verzeichnis seiner Module?
+    KernelModules,
 }
 
 impl BackendCheckId {
@@ -80,6 +96,14 @@ impl BackendCheckId {
             Self::SubordinateIds => "subordinate_ids",
             Self::Selinux => "selinux",
             Self::Probe => "probe",
+            Self::Kvm => "kvm",
+            Self::Emulator => "emulator",
+            Self::FileDaemon => "file_daemon",
+            Self::VsockDevice => "vsock_device",
+            Self::Bubblewrap => "bubblewrap",
+            Self::KernelImage => "kernel",
+            Self::VirtioFs => "virtio_fs",
+            Self::KernelModules => "modules",
         }
     }
 }
@@ -290,19 +314,25 @@ fn probe_line(
     })
 }
 
-/// `DOCTOR_014`: Der Probestart ist gescheitert. Code und Grund des inneren
-/// Befunds stehen im `why`, sein Vorschlag wird übernommen.
-fn probe_failed(stage: &str, what: &str, inner: Option<&Diagnostic>) -> Diagnostic {
+/// `DOCTOR_014`: Der Probestart ist gescheitert; unter der Kernel-Stufe
+/// `DOCTOR_015` (HUM-444). Code und Grund des inneren Befunds stehen im
+/// `why`, sein Vorschlag wird übernommen.
+pub(crate) fn probe_failed(stage: &str, what: &str, inner: Option<&Diagnostic>) -> Diagnostic {
     let mut why = format!("the probe start of an empty sandbox under {stage} {what}");
     if let Some(inner) = inner {
         let _ = write!(why, "; {}: {}", inner.code, inner.why);
     }
-    Diagnostic::builder(DOCTOR_014, Severity::Blocking)
+    let (code, anchor) = if stage == crate::VM_BACKEND {
+        (DOCTOR_015, "#doctor_015")
+    } else {
+        (DOCTOR_014, "#doctor_014")
+    };
+    Diagnostic::builder(code, Severity::Blocking)
         .why(why)
         .fix(
             inner
                 .and_then(|inner| inner.fix.clone())
-                .unwrap_or_else(|| FixAction::OpenUrl(format!("{DIAGNOSTICS_URL}#doctor_014"))),
+                .unwrap_or_else(|| FixAction::OpenUrl(format!("{DIAGNOSTICS_URL}{anchor}"))),
         )
         .build()
 }
@@ -340,7 +370,10 @@ mod tests {
         for name in ["bwrap", "humanitl-shim"] {
             crate::test_support::write_program(
                 &bin.join(name),
-                &format!("#!/bin/sh\necho \"$@\" >> '{}'\nexit 0\n", calls.display()),
+                &format!(
+                    "#!/bin/sh\necho \"$0 $@\" >> '{}'\nexit 0\n",
+                    calls.display()
+                ),
             );
         }
         let paths = Paths::new(Env::from_pairs([
@@ -369,12 +402,41 @@ mod tests {
             );
         }
         assert!(group.get(BackendCheckId::Available).is_none());
-        assert!(
-            !calls.exists(),
-            "a process was started: {:?}",
-            std::fs::read_to_string(&calls)
-        );
+        // Seit HUM-444 hat die Kernel-Stufe je Voraussetzung eine Zeile; die
+        // Fähigkeiten eines Programms liest sie aus seiner Hilfe, wie die Liste
+        // der Backends (HUM-464). Eine Frage nach der Hilfe ist der einzige
+        // Aufruf, und gestartet wird nichts: kein Shim, keine Sandbox.
+        // Genau eine Frage, an genau dieses Programm; die übrigen Programme
+        // fehlen im `PATH` dieses Tests. Die Datei muss es geben: Ohne sie
+        // belegte das Fehlen jedes Aufrufs nichts über die Zeilen.
+        // Außerhalb von Linux auf x86-64 gibt es die Kernel-Stufe nicht; dort
+        // fragt der Doctor kein Programm, und die Datei entsteht nie.
+        if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            let calls = std::fs::read_to_string(&calls).expect("bwrap was asked for its help");
+            assert_eq!(
+                calls.lines().collect::<Vec<_>>(),
+                [format!("{} --help", bin.join("bwrap").display())],
+                "a process was started"
+            );
+            assert!(group.get(BackendCheckId::Bubblewrap).is_some());
+            assert!(group.get(BackendCheckId::Kvm).is_some());
+        } else {
+            assert!(!calls.exists(), "a process was started");
+        }
         assert!(!cache.path().exists(), "nothing was probed, nothing cached");
+    }
+
+    /// HUM-444: Ein gescheiterter Probestart der Kernel-Stufe ist
+    /// `DOCTOR_015`, jeder andere bleibt `DOCTOR_014`.
+    #[test]
+    fn a_failed_probe_of_the_kernel_level_is_its_own_code() {
+        let vm = super::probe_failed(crate::VM_BACKEND, "did not start", None);
+        assert_eq!(vm.code.as_str(), "DOCTOR_015");
+        assert!(
+            matches!(&vm.fix, Some(humanitl_core::FixAction::OpenUrl(url)) if url.ends_with("#doctor_015"))
+        );
+        let other = super::probe_failed("bwrap", "did not start", None);
+        assert_eq!(other.code.as_str(), "DOCTOR_014");
     }
 
     #[test]
@@ -386,6 +448,14 @@ mod tests {
             BackendCheckId::SubordinateIds,
             BackendCheckId::Selinux,
             BackendCheckId::Probe,
+            BackendCheckId::Kvm,
+            BackendCheckId::Emulator,
+            BackendCheckId::FileDaemon,
+            BackendCheckId::VsockDevice,
+            BackendCheckId::Bubblewrap,
+            BackendCheckId::KernelImage,
+            BackendCheckId::VirtioFs,
+            BackendCheckId::KernelModules,
         ];
         let names: std::collections::BTreeSet<&str> = ids.iter().map(|id| id.as_str()).collect();
         assert_eq!(names.len(), ids.len());

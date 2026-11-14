@@ -1798,7 +1798,7 @@ registry! {
     /// number), bubblewrap without `--bind-fd`, an unreadable kernel image or
     /// a missing module directory (HUM-464).
     SANDBOX_045 => "sandbox", "Kernel level prerequisite missing", "#sandbox_045",
-        "The kernel level starts a micro VM with a guest kernel of its own and needs on this host: `/dev/kvm` readable and writable for this user, the machine emulator with the machine type and vsock device it uses, the file system daemon with `--readonly` and `--fd`, the vsock device with `--uds-path` and `--groups`, bubblewrap with `--bind-fd`, a readable kernel image and the module directory of that kernel. The sentence names the first one that is missing; nothing starts, and no other backend takes over.",
+        "The kernel level starts a micro VM with a guest kernel of its own and needs on this host: `/dev/kvm` readable and writable for this user, the machine emulator with the machine type and vsock device it uses, the file system daemon with `--readonly` and `--fd`, the vsock device with `--uds-path` and `--groups`, bubblewrap with `--bind-fd`, a readable kernel image with virtiofs built in (`CONFIG_VIRTIO_FS=y` in the configuration beside the image, `config-<release>` beside `vmlinuz-<release>`) and the module directory of that kernel. The sentence names the first one that is missing; nothing starts, and no other backend takes over.",
         "`CopyCommand` with the package that brings the missing piece (for `/dev/kvm` the command that adds this user to the group `kvm`), or `ChangeSetting` on the setting under `sandbox.qemu` that names the path.";
     /// The door of the kernel level could not be set up: the vsock device of
     /// the session or the one listener the daemon opens behind it is missing
@@ -1812,6 +1812,13 @@ registry! {
     SANDBOX_047 => "sandbox", "Host check of the VM monitor failed", "#sandbox_047",
         "After the start the daemon checks the processes of the session from the host: each sees only `lo`, the monitor holds only the descriptors of the plan, and the runtime directory of the session holds only the declared sockets. One of these did not hold; the session was stopped.",
         "No automatic fix; the sentence names what was found. `ChangeSetting` on `sandbox.backend` = `auto` and report the sentence.";
+    /// The probe start of `humanitl doctor --probe` under the kernel level
+    /// failed: the micro VM did not start, ended without a report, or a
+    /// guarantee from the guest or from the host check did not hold
+    /// (HUM-444).
+    DOCTOR_015 => "doctor", "Probe start of the kernel level failed", "#doctor_015",
+        "`humanitl doctor --probe` started an empty session of the kernel level with the shim as init of the guest and `true` as the command, and either the micro VM did not start, it ended without the shim's report, or one of the three guarantees did not hold, from the guest's `CHECK` lines or from the host check of the VM monitor. A real session under this level would be refused the same way.",
+        "The fix of the inner finding when it has one (a package, a setting of the kernel level); otherwise `OpenUrl` on this page.";
 }
 
 /// Sucht einen Code im Register.
