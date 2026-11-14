@@ -2154,7 +2154,16 @@ When the guest has already refused on its own (a red line in its report, or no r
 diagnosis stays the one the start shows, and the host's findings stand in the evidence: the shim
 then stops and powers the guest off, the unit ends with it, and a host check that finds a unit
 without a cgroup or without its emulator sees the consequence of that refusal, not its cause
-(HUM-470). The verdict never depends on this order; only the cause shown does. The host opens each
+(HUM-470). The verdict never depends on this order; only the cause shown does. The host opens the
+two connections into the guest only after the shim has said on the door, with one fixed line on a
+connection of its own, that it listens on the report port (HUM-471). A `CONNECT` that reaches the
+vsock device while the guest's driver is still setting it up (the guest's memory known, its queues
+not yet ready) stops `vhost-device-vsock` 0.3.0 for good: no later connection gets an answer, and
+the guest powers off without its report. Only a connection the guest makes itself proves that the
+device runs. Until that line the daemon takes the door's connections for itself and hands none to
+the proxy; no agent can run before it, since the agent waits for the admission on the report
+connection. When the report is missing, the evidence names how far the way to the guest got (no
+ready line, or no answer to the report or the control connection). The host opens each
 connection into the guest once and waits for its answer until the session's deadline: a
 `CONNECT` it gave up could still be accepted by the guest later and take the place of the report
 (HUM-470, a precaution: the vsock device refuses within milliseconds while the guest does not

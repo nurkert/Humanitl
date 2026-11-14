@@ -9,13 +9,14 @@
 //!   names, once per connection of the agent ([`connect`]); the host side
 //!   hands it to the proxy;
 //! - the report and the control stream: the shim listens on a port of its
-//!   own and takes exactly two connections from the host, in this order
-//!   ([`accept`]): the first carries the report, the second the frames of
-//!   the terminals (HUM-443). The host asks for each with `CONNECT <port>`
-//!   at the vsock device (HUM-442, Q10) and opens the second only after the
-//!   device answered `OK` for the first, so the order is the host's. The
-//!   listener closes after the second; the guest itself never opens a way
-//!   out for either.
+//!   own ([`listen`]) and takes exactly two connections from the host, in
+//!   this order ([`Listener::accept`]): the first carries the report, the
+//!   second the frames of the terminals (HUM-443). The host asks for each
+//!   with `CONNECT <port>` at the vsock device (HUM-442, Q10) and opens the
+//!   second only after the device answered `OK` for the first, so the order
+//!   is the host's. The listener closes after the second; the guest itself
+//!   never opens a way out for either. The host asks only after the shim
+//!   said on the door that it listens (`guest.rs`, HUM-471).
 //!
 //! `std` has no vsock type, so this module wraps the descriptor itself; the
 //! calls are the same as for any stream socket.
@@ -138,28 +139,51 @@ pub fn connect(cid: u32, port: u32) -> io::Result<Stream> {
     }
 }
 
-/// Listens on `port` of this guest and takes exactly `count` connections,
-/// in the order they arrive, waiting at most `wait` for all of them; the
-/// listener is closed before this returns, so nobody can open one more.
-pub fn accept(port: u32, count: usize, wait: Duration) -> io::Result<Vec<Stream>> {
-    let listener = socket()?;
+/// A listening vsock socket of this guest.
+#[derive(Debug)]
+pub struct Listener {
+    fd: OwnedFd,
+    port: u32,
+}
+
+/// Listens on `port` of this guest, with room for `backlog` connections the
+/// shim has not taken yet.
+pub fn listen(port: u32, backlog: usize) -> io::Result<Listener> {
+    let fd = socket()?;
     let addr = address(libc::VMADDR_CID_ANY, port);
     // SAFETY: bind reads `addr_len()` bytes from a valid sockaddr_vm.
-    if unsafe { libc::bind(listener.as_raw_fd(), (&raw const addr).cast(), addr_len()) } != 0 {
+    if unsafe { libc::bind(fd.as_raw_fd(), (&raw const addr).cast(), addr_len()) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    let backlog = libc::c_int::try_from(count).unwrap_or(1);
+    let backlog = libc::c_int::try_from(backlog).unwrap_or(1);
     // SAFETY: listen takes a descriptor this function owns and a backlog.
-    if unsafe { libc::listen(listener.as_raw_fd(), backlog) } != 0 {
+    if unsafe { libc::listen(fd.as_raw_fd(), backlog) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    let deadline = std::time::Instant::now() + wait;
-    let mut taken = Vec::with_capacity(count);
-    while taken.len() < count {
-        taken.push(accept_next(&listener, port, deadline, wait)?);
+    Ok(Listener { fd, port })
+}
+
+impl Listener {
+    /// Takes exactly `count` connections, in the order they arrive, waiting
+    /// at most `wait` for all of them; the listener is closed before this
+    /// returns, so nobody can open one more. The error says how many were
+    /// taken before the wait ended.
+    pub fn accept(self, count: usize, wait: Duration) -> io::Result<Vec<Stream>> {
+        let deadline = std::time::Instant::now() + wait;
+        let mut taken = Vec::with_capacity(count);
+        while taken.len() < count {
+            match accept_next(&self.fd, self.port, deadline, wait) {
+                Ok(stream) => taken.push(stream),
+                Err(err) => {
+                    return Err(io::Error::new(
+                        err.kind(),
+                        format!("{err} (took {} of {count})", taken.len()),
+                    ));
+                }
+            }
+        }
+        Ok(taken)
     }
-    drop(listener);
-    Ok(taken)
 }
 
 /// Waits until `deadline` for the next connection on `listener` and takes it.

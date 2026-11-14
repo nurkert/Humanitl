@@ -737,7 +737,10 @@ pub(crate) enum Teardown {
 /// schickt nichts mehr, ihr Ergebnis gilt aber weiter. Ohne Urteil startet
 /// der Agent nie.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Admission(std::sync::Arc<Mutex<Verdict>>);
+pub(crate) struct Admission(
+    std::sync::Arc<Mutex<Verdict>>,
+    std::sync::Arc<Mutex<String>>,
+);
 
 /// Wo das Urteil einer Sitzung steht.
 #[derive(Debug, Default)]
@@ -772,6 +775,20 @@ impl Admission {
         if matches!(*verdict, Verdict::Open) {
             *verdict = Verdict::Offered(stream);
         }
+    }
+
+    /// Hält fest, wie weit der Weg zum Gast gekommen ist (HUM-471): Fehlt
+    /// der Bericht, nennt der Befund diesen Stand.
+    pub(crate) fn note_link(&self, what: String) {
+        *self.1.lock().unwrap_or_else(PoisonError::into_inner) = what;
+    }
+
+    /// Der zuletzt festgehaltene Stand des Wegs zum Gast; leer ohne einen.
+    pub(crate) fn link(&self) -> String {
+        self.1
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Das Urteil dieser Prüfung. `true` heißt: Der Agent ist zugelassen,

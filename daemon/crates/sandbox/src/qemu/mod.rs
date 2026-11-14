@@ -55,6 +55,8 @@ mod lines;
 mod prerequisites;
 mod session;
 #[cfg(test)]
+mod test_machine;
+#[cfg(test)]
 mod test_vm;
 mod tmpfs;
 
@@ -69,7 +71,8 @@ use std::time::{Duration, Instant};
 
 use humanitl_config::{Paths, QemuConfig, SandboxRef, WorkMode};
 use humanitl_core::diagnostics::codes::{
-    SANDBOX_006, SANDBOX_011, SANDBOX_012, SANDBOX_030, SANDBOX_041, SANDBOX_046, SANDBOX_051,
+    SANDBOX_006, SANDBOX_011, SANDBOX_012, SANDBOX_013, SANDBOX_030, SANDBOX_041, SANDBOX_046,
+    SANDBOX_051,
 };
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
@@ -686,6 +689,8 @@ fn unit_properties(runtime: &str, project: Option<&str>) -> Vec<String> {
         Some(project) => properties.push(format!("ReadWritePaths={runtime} {project}")),
         None => properties.push(format!("ReadWritePaths={runtime}")),
     }
+    #[cfg(test)]
+    properties.extend(test_machine::unit_property());
     if let Some(daemon) = daemon_unit() {
         properties.push(format!("BindsTo={daemon}"));
         properties.push(format!("After={daemon}"));
@@ -777,6 +782,13 @@ struct Pending {
     link: session::GuestLink,
 }
 
+impl Pending {
+    /// Die Bereitschaft des Gasts, die die Tür für den Faden zum Gast setzt.
+    fn ready(&self) -> session::GuestReady {
+        self.link.ready.clone()
+    }
+}
+
 /// Die vier Zeilen einer Sitzung.
 fn session_lines(
     resolved: &Resolved,
@@ -794,10 +806,13 @@ fn session_lines(
     #[cfg_attr(not(test), allow(unused_mut))]
     let mut machine = lines::machine_line(resolved, layout, machine, init, Path::new(GUEST_PLAN));
     #[cfg(test)]
-    machine.extend(
-        EXTRA_MACHINE_ARGS
-            .with_borrow(|extra| extra.iter().map(OsString::from).collect::<Vec<_>>()),
-    );
+    {
+        machine.extend(
+            EXTRA_MACHINE_ARGS
+                .with_borrow(|extra| extra.iter().map(OsString::from).collect::<Vec<_>>()),
+        );
+        test_machine::apply(&mut machine, layout);
+    }
     Lines {
         root: lines::root_line(resolved, &root.entries),
         work,
@@ -1007,6 +1022,7 @@ impl SandboxBackend for VmBackend {
                 .why("this plan of the kernel level was already started")
                 .build());
         };
+        let ready = pending.ready();
         let Pending {
             door,
             proxy,
@@ -1015,7 +1031,7 @@ impl SandboxBackend for VmBackend {
         } = *pending;
         let door_thread = std::thread::Builder::new()
             .name("vm-door".to_owned())
-            .spawn(move || session::serve_door(&door, &proxy, &door_lifeline));
+            .spawn(move || session::serve_door(&door, &proxy, &door_lifeline, &ready));
         if let Err(err) = door_thread.and_then(|_| link.start()) {
             remove();
             return Err(door_failed(format!(
@@ -1049,7 +1065,10 @@ impl SandboxBackend for VmBackend {
         let Some(stop) = handle.unit() else {
             return results;
         };
+        name_the_link(&mut results, &stop.admission.link());
         let mut findings = host_check::run(stop, &self.resolved, DOOR_PORT);
+        #[cfg(test)]
+        test_machine::forgive(&mut findings);
         let admit = findings.is_empty() && results.iter().all(|result| result.passed);
         if stop.admission.decide(admit) && admit {
             for result in &mut results {
@@ -1072,6 +1091,29 @@ impl SandboxBackend for VmBackend {
         host_check::merge(&mut results, &findings);
         let _ = handle.kill();
         results
+    }
+}
+
+/// Fehlt der Bericht des Gasts (`SANDBOX_013`), steht im Befund, wie weit
+/// der Weg zum Gast kam (HUM-471): keine Bereitschaft an der Tür, keine
+/// Antwort auf die Verbindung des Berichts oder auf die des Steuerkanals.
+/// So nennt schon der Lauf, der scheitert, die Stelle.
+fn name_the_link(results: &mut [CheckResult], link: &str) {
+    if link.is_empty() {
+        return;
+    }
+    for result in results.iter_mut().filter(|result| {
+        result
+            .diagnostic
+            .as_ref()
+            .is_some_and(|diagnostic| diagnostic.code == SANDBOX_013)
+    }) {
+        result.evidence.push_str("; vsock link: ");
+        result.evidence.push_str(link);
+        if let Some(diagnostic) = result.diagnostic.as_mut() {
+            diagnostic.why.push_str("; vsock link: ");
+            diagnostic.why.push_str(link);
+        }
     }
 }
 
@@ -1147,6 +1189,15 @@ impl Channels {
     }
 }
 
+/// Die Deskriptoren, die die Unit über die Übergabe bekommt, mit ihren
+/// Nummern ab [`lines::ROOT_SOCKET_FD`].
+fn numbered(fds: [&OwnedFd; 3]) -> Vec<(std::os::fd::RawFd, std::os::fd::RawFd)> {
+    fds.iter()
+        .zip(lines::ROOT_SOCKET_FD..)
+        .map(|(fd, target)| (fd.as_raw_fd(), target))
+        .collect()
+}
+
 /// Schreibt die Dateien des Gasts, den Gastplan und den Namen der Unit.
 fn write_files(
     layout: &Layout,
@@ -1219,11 +1270,7 @@ impl VmBackend {
             project.writable.as_deref(),
         )?;
         let project_fd = project.work.into_fd();
-        let fds = [&channels.root_socket, &project_fd, &channels.lifeline_read]
-            .iter()
-            .zip(lines::ROOT_SOCKET_FD..)
-            .map(|(fd, target)| (fd.as_raw_fd(), target))
-            .collect();
+        let fds = numbered([&channels.root_socket, &project_fd, &channels.lifeline_read]);
         let timeout = options
             .report_timeout
             .unwrap_or_else(|| self.start_timeout());
@@ -1236,6 +1283,7 @@ impl VmBackend {
             control: channels.guest_end,
             lifeline: channels.link_lifeline,
             admission: admission.clone(),
+            ready: session::GuestReady::default(),
         };
         let mut warnings = profile.unmask_diagnostics();
         warnings.extend(crate::worktree::resolution_diagnostic());

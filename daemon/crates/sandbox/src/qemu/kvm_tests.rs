@@ -10,7 +10,9 @@
 //! `HUMANITL_TEST_VM_MODULES`, sonst aus `/boot` und `/usr/lib/modules` des
 //! laufenden Kernels (dieselben Vorgaben wie `sandbox.qemu.kernel` und
 //! `sandbox.qemu.modules`). `HUMANITL_TEST_VM_CONSOLE=1` schreibt zur
-//! Fehlersuche die Ausgabe des Gasts mit; die Endform hat keine Konsole.
+//! Fehlersuche die Ausgabe des Gasts mit, im Startweg der Tests wie in den
+//! Sitzungen des Adapters (HUM-471, [`super::test_machine`]); die Endform
+//! hat keine Konsole.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -80,9 +82,15 @@ fn spec(test: &str, command: &str) -> Option<(Spec, tempfile::TempDir)> {
         project: project.path().to_path_buf(),
         command: vec!["/bin/bash".to_owned(), "-c".to_owned(), command.to_owned()],
         extra_modules: Vec::new(),
-        console: std::env::var_os("HUMANITL_TEST_VM_CONSOLE").is_some_and(|value| value == "1"),
+        console: console_wanted(),
     };
     Some((spec, project))
+}
+
+/// Ob die Konsole des Gasts mitläuft (`HUMANITL_TEST_VM_CONSOLE=1`), nur zur
+/// Fehlersuche; im gegateten Lauf der CI nie.
+fn console_wanted() -> bool {
+    std::env::var_os("HUMANITL_TEST_VM_CONSOLE").is_some_and(|value| value == "1")
 }
 
 /// Alles, was ein Fehlschlag zeigen soll.
@@ -403,8 +411,14 @@ struct Harness {
 #[cfg(test)]
 impl Drop for Harness {
     /// Das Verzeichnis dieses Daemons unter `/run/user/<uid>` geht mit,
-    /// wenn keine Sitzung mehr darin liegt.
+    /// wenn keine Sitzung mehr darin liegt. Scheitert der Test und lief die
+    /// Konsole mit (`HUMANITL_TEST_VM_CONSOLE=1`), steht die Ausgabe jedes
+    /// Gasts dieses Tests in seiner Meldung (HUM-471).
     fn drop(&mut self) {
+        super::test_machine::set(super::test_machine::TestMachine::default());
+        if std::thread::panicking() {
+            eprintln!("{}", self.consoles());
+        }
         let paths = humanitl_config::Paths::new(Env::from_pairs([(
             "XDG_RUNTIME_DIR",
             self.dir.path().join("xdg").to_string_lossy().into_owned(),
@@ -469,12 +483,40 @@ impl Harness {
         std::fs::write(project.join("pin"), "pin\n").unwrap();
         std::fs::write(project.join(".env"), "SECRET=yes\n").unwrap();
         std::fs::write(dir.path().join("ca.crt"), "ca\n").unwrap();
+        if console_wanted() {
+            let console = dir.path().join("console");
+            std::fs::create_dir_all(&console).unwrap();
+            super::test_machine::set(super::test_machine::TestMachine {
+                console: Some(console),
+                vsock_relay: None,
+            });
+        }
         Some(Self {
             dir,
             backend,
             project,
             proxy,
         })
+    }
+
+    /// Die Konsole jedes Gasts dieses Tests, oder warum es keine gibt.
+    fn consoles(&self) -> String {
+        let dir = self.dir.path().join("console");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return "console: (off; HUMANITL_TEST_VM_CONSOLE=1 records it)".to_owned();
+        };
+        let mut text = String::new();
+        for entry in entries.flatten() {
+            let content = std::fs::read_to_string(entry.path()).unwrap_or_default();
+            let _ = std::fmt::Write::write_fmt(
+                &mut text,
+                format_args!(
+                    "console of {}:\n{content}\n",
+                    entry.file_name().to_string_lossy()
+                ),
+            );
+        }
+        text
     }
 
     fn session(
@@ -749,6 +791,173 @@ fn a_session_starts_through_the_adapter_with_a_green_host_check() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(!dir.exists(), "the runtime directory goes with the session");
+}
+
+/// `VHOST_USER_SET_MEM_TABLE`: Danach kennt das vsock-Gerät den Speicher des
+/// Gasts, seine Warteschlangen aber noch nicht.
+const SET_MEM_TABLE: u32 = 5;
+
+/// Ein Zwischenstück zwischen Emulator und vsock-Gerät (HUM-471): nimmt die
+/// eine Verbindung des Emulators an `listener`, verbindet sich mit `device`
+/// und reicht jede vhost-user-Nachricht samt ihren Deskriptoren weiter, die
+/// Antworten des Geräts zurück. Nach der ersten `SET_MEM_TABLE` hält es alles
+/// Weitere `hold` lang an. In dieser Zeit kennt das Gerät den Speicher, aber
+/// keine bereite Warteschlange, genau der Moment, in dem ein `CONNECT` vom
+/// Host vhost-device-vsock 0.3.0 für immer anhält. Zurück kommt, ob es
+/// angehalten hat.
+fn vsock_relay(
+    listener: std::os::unix::net::UnixListener,
+    device: PathBuf,
+    hold: Duration,
+) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    use std::io::Read as _;
+    use std::mem::MaybeUninit;
+    use std::os::fd::AsFd as _;
+    use std::os::unix::net::UnixStream;
+
+    let paused = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = std::sync::Arc::clone(&paused);
+    std::thread::spawn(move || {
+        let Ok((emulator, _)) = listener.accept() else {
+            return;
+        };
+        let Ok(backend) = UnixStream::connect(&device) else {
+            return;
+        };
+        if let (Ok(mut from), Ok(mut to)) = (backend.try_clone(), emulator.try_clone()) {
+            std::thread::spawn(move || {
+                let _ = std::io::copy(&mut from, &mut to);
+            });
+        }
+        let mut paused_once = false;
+        loop {
+            // Der Kopf (Anfrage, Flags, Länge) mit den Deskriptoren, die an
+            // seinem ersten Byte hängen.
+            let mut header = [0u8; 12];
+            let mut got = 0;
+            let mut fds: Vec<std::os::fd::OwnedFd> = Vec::new();
+            while got < header.len() {
+                let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(8))];
+                let mut control = rustix::net::RecvAncillaryBuffer::new(&mut space);
+                let mut iov = [std::io::IoSliceMut::new(&mut header[got..])];
+                let Ok(message) = rustix::net::recvmsg(
+                    &emulator,
+                    &mut iov,
+                    &mut control,
+                    rustix::net::RecvFlags::CMSG_CLOEXEC,
+                ) else {
+                    return;
+                };
+                if message.bytes == 0 {
+                    return;
+                }
+                got += message.bytes;
+                for item in control.drain() {
+                    if let rustix::net::RecvAncillaryMessage::ScmRights(rights) = item {
+                        fds.extend(rights);
+                    }
+                }
+            }
+            let request = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
+            let size = u32::from_le_bytes([header[8], header[9], header[10], header[11]]);
+            let mut message = header.to_vec();
+            message.resize(12 + usize::try_from(size).unwrap(), 0);
+            if (&emulator).read_exact(&mut message[12..]).is_err() {
+                return;
+            }
+            let borrowed: Vec<_> = fds.iter().map(|fd| fd.as_fd()).collect();
+            let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(8))];
+            let mut control = rustix::net::SendAncillaryBuffer::new(&mut space);
+            if !borrowed.is_empty() {
+                assert!(control.push(rustix::net::SendAncillaryMessage::ScmRights(&borrowed)));
+            }
+            let mut sent = 0;
+            while sent < message.len() {
+                let Ok(n) = rustix::net::sendmsg(
+                    &backend,
+                    &[std::io::IoSlice::new(&message[sent..])],
+                    &mut control,
+                    rustix::net::SendFlags::NOSIGNAL,
+                ) else {
+                    return;
+                };
+                sent += n;
+                control = rustix::net::SendAncillaryBuffer::default();
+            }
+            if request == SET_MEM_TABLE && !paused_once {
+                paused_once = true;
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(hold);
+            }
+        }
+    });
+    paused
+}
+
+/// HUM-471: Der Wettlauf aus der CI, erzwungen. Ein Zwischenstück hält die
+/// Einrichtung des vsock-Geräts nach `SET_MEM_TABLE` drei Sekunden an, so
+/// dass jedes `CONNECT` des Hosts in dieser Zeit das Gerät für immer anhielte
+/// (vhost-device-vsock 0.3.0: sein Ereignisfaden scheitert an der noch nicht
+/// bereiten Warteschlange und endet). Der Host fragt erst nach der
+/// Bereitschaftszeile des Shims an der Tür, die der Gast erst schicken kann,
+/// wenn das Gerät läuft; die Sitzung startet, und die Prüfung ist grün.
+/// Mutationsbeweis: Wartet `GuestLink::run` nicht auf die Bereitschaft,
+/// fragt der Host während des Anhaltens, und der Gast bekommt keine
+/// Verbindung: „no CHECK line from the shim … vsock link: … the report
+/// connection has no answer yet".
+#[test]
+fn a_connect_while_the_vsock_device_starts_never_silences_it() {
+    use crate::SandboxBackend as _;
+    let test = "a_connect_while_the_vsock_device_starts_never_silences_it";
+    let Some(harness) = Harness::new(test) else {
+        return;
+    };
+    let relay_dir = harness.dir.path().join("relay");
+    std::fs::create_dir_all(&relay_dir).unwrap();
+    let relay = relay_dir.join("vu.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&relay).unwrap();
+    let console = console_wanted().then(|| harness.dir.path().join("console"));
+    super::test_machine::set(super::test_machine::TestMachine {
+        console,
+        vsock_relay: Some(relay),
+    });
+    let (plan, output) = harness.plan_with("echo hum471-agent-ran", Vec::new(), None);
+    let device = plan
+        .session_dir
+        .clone()
+        .unwrap()
+        .join("vsock")
+        .join("vsock.sock");
+    let held = vsock_relay(listener, device, Duration::from_secs(3));
+    let handle = harness
+        .backend
+        .launch(&plan)
+        .unwrap_or_else(|d| panic!("launch: {}: {}", d.code, d.why));
+    let results = harness.backend.isolation_check(&handle);
+    assert!(
+        held.load(std::sync::atomic::Ordering::SeqCst),
+        "the relay never saw SET_MEM_TABLE, so it forced nothing"
+    );
+    for result in &results {
+        assert!(
+            result.passed,
+            "{}: {}",
+            result.check.as_str(),
+            result.evidence
+        );
+    }
+    let mut seen = Vec::new();
+    assert!(
+        wait_output(
+            &output,
+            &mut seen,
+            "hum471-agent-ran",
+            Duration::from_secs(30)
+        ),
+        "{}",
+        String::from_utf8_lossy(&seen)
+    );
+    assert!(handle.wait_timeout(Duration::from_secs(30)).is_some());
 }
 
 /// HUM-470, `esc-2/unplanned_mount` in der CI: Der Shim lehnt an der
