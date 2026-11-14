@@ -56,7 +56,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-444 | QEMU-Adapter: Plan, Start in Gefängnissen, Ende, Host-Prüfung, doctor | L | HUM-443, HUM-464, HUM-434 |
 | HUM-445 | Escape-Suite der Kernel-Stufe: Proben mit Gast-Root, CI-Job mit KVM | M | HUM-444, HUM-435, HUM-437 |
 | HUM-446 | Kernel-Stufe: Projektordner und Wegwerf-Schicht über virtiofs | L | HUM-445, HUM-438 |
-| HUM-449 | Kernel-Stufe zulassen: `qemu` wird wählbar | S | HUM-445, HUM-446, HUM-466, HUM-469, HUM-470, HUM-471 |
+| HUM-449 | Kernel-Stufe zulassen: `qemu` wird wählbar | S | HUM-445, HUM-446, HUM-466, HUM-469, HUM-470, HUM-471, HUM-476 |
 | HUM-447 | Doku der Kernel-Stufe, Oberfläche schaltet `qemu` frei | S | HUM-449 |
 | HUM-451 | Integrationstest: ein Daemon, der die Shell-Tür nicht mehr liest, hält weder Lebensleine noch Agent auf | S | HUM-430 |
 | HUM-452 | Podman: ein Container, dessen Client ungeplant endet, wird sofort entfernt, nicht erst beim nächsten Stopp | S | HUM-433 |
@@ -80,6 +80,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-471 | Kernel-Stufe: Gast ohne Verbindung des Hosts (kvm-Test ohne CHECK), Konsole im Adapterpfad | M | HUM-470 |
 | HUM-472 | Website: das Modell als Angreifer (Lazarus, Microsoft Research), mit Quellen | S | — |
 | HUM-475 | Website: die deutschen Texte der Start- und der Sicherheitsseite sprachlich überarbeiten | S | HUM-472 |
+| HUM-476 | Kernel-Stufe: Dateicache im Gast wieder an, aber begrenzt | M | HUM-469 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -1383,3 +1384,39 @@ grammatikalisch. Viele Sätze lesen sich wie wörtlich aus dem Englischen
 1. Kein grammatikalischer Fehler mehr in den deutschen Texten beider Seiten.
 2. Jede Sicherheitsaussage gleich stark wie vorher, geprüft gegen
    `docs/SECURITY.md`.
+
+## HUM-476 · Kernel level: the guest's file cache back on, but bounded
+
+### Kontext
+Aus HUM-469. Damit die feste Grenze von 65 536 Deskriptoren für virtiofsd
+hält, laufen beide virtiofsd mit `--cache never`: Mit dem Standard-Cache
+behält der Gast je Inode einen Dentry, bis der Speicher knapp wird, und
+virtiofsd hält je Inode einen Deskriptor; ein einfaches `ls -lR` erreichte die
+Grenze (Lauf endete nach 71 470 Einträgen mit `ENFILE`). Der Preis, gemessen
+in HUM-469 (`--cache never` gegen `auto`): `cp -r /usr/include` 20 s gegen
+5 s, `git add` 27,6 s gegen 11 s, `grep -r` 3,3 s gegen 1,7 s, `git status`
+1,7 s gegen 0,3 s, `ls -lR /usr/share/doc` 33 s gegen 2 s. Entscheidung des
+Owners vom 2026-11-14: jetzt sicher landen, die Geschwindigkeit vor der
+Zulassung (HUM-449) zurückholen.
+
+### Spezifikation
+1. Der Cache des Gasts wird wieder eingeschaltet (`--cache auto` oder
+   `metadata`), aber die Zahl der Inodes, die der Gast hält, bleibt
+   begrenzt, deutlich unter der Grenze der Deskriptoren. Kandidaten, zu
+   messen: der Shim gibt im Gast Dentries und Inodes frei, sobald ihre Zahl
+   eine Schwelle überschreitet (`/proc/sys/fs/dentry-state`,
+   `vm.drop_caches=2`, `vfs_cache_pressure`), oder eine Option von virtiofsd
+   1.13, die geöffnete Inodes begrenzt.
+2. Die Grenze von 65 536 Deskriptoren bleibt, und der KVM-Test aus HUM-469
+   bleibt grün; ein Walk über die ganze Wurzel endet nicht mehr mit
+   `ENFILE`.
+
+### Tests
+- Dieselben Messungen wie in HUM-469, Ziel: höchstens das Doppelte der Zeit
+  mit `auto`.
+- KVM-Test aus HUM-469 grün, dazu ein Walk über die Wurzel ohne `ENFILE`.
+
+### Akzeptanzkriterien
+1. Kein Gast treibt einen virtiofsd über die feste Grenze.
+2. Die Messwerte liegen höchstens beim Doppelten von `auto`.
+3. Vor HUM-449 gelandet.
