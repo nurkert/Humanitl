@@ -31,6 +31,14 @@
 //! aber erst, wenn die Warteschlangen laufen. Bis zur Zeile reicht die Tür
 //! nichts an den Proxy weiter: Vor ihr läuft im Gast noch kein Agent.
 //!
+//! **Eine Obergrenze an der Tür (HUM-467).** Jede weitergereichte Verbindung
+//! bindet zwei Fäden und vier Deskriptoren des Daemons. Mehr als
+//! [`MAX_DOOR_CONNECTIONS`] hält die Tür je Sitzung nicht offen: Eine
+//! Verbindung darüber geht sofort zu, ohne den Proxy zu erreichen, und die
+//! erste davon hält die Zulassung der Sitzung fest
+//! ([`crate::launcher::Admission::note_door`]). Ein Gast mit Root kann so die
+//! Fäden und Deskriptoren des Daemons nicht unbegrenzt binden.
+//!
 //! Jeder Faden endet mit der Sitzung: Er wartet zugleich auf das Leseende der
 //! Lebensleine, deren Schreibende der Zustand der Sandbox hält.
 
@@ -38,6 +46,7 @@ use std::io::{BufRead as _, BufReader, PipeWriter, Read, Write};
 use std::os::fd::{AsFd as _, OwnedFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -71,6 +80,40 @@ pub(crate) const GUEST_READY: &[u8] = b"HUMANITL-GUEST-READY\n";
 /// Wie lange die Tür vor der Bereitschaft auf die erste Zeile einer
 /// Verbindung wartet.
 const READY_LINE_WAIT: Duration = Duration::from_secs(1);
+
+/// Wie viele Verbindungen die Tür einer Sitzung höchstens zugleich an den
+/// Proxy weiterreicht (HUM-467). Jede bindet zwei Fäden und vier
+/// Deskriptoren; 64 sind 128 Fäden und 256 Deskriptoren je Sitzung, genug
+/// für einen Agenten mit parallelen Anfragen.
+pub(crate) const MAX_DOOR_CONNECTIONS: usize = 64;
+
+/// Die offenen Verbindungen der Tür einer Sitzung.
+#[derive(Debug, Default)]
+struct DoorSlots(Arc<AtomicUsize>);
+
+impl DoorSlots {
+    /// Ein Platz für eine weitere Verbindung, oder `None`, wenn schon
+    /// [`MAX_DOOR_CONNECTIONS`] offen sind.
+    fn take(&self) -> Option<DoorSlot> {
+        self.0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |open| {
+                (open < MAX_DOOR_CONNECTIONS).then_some(open + 1)
+            })
+            .ok()
+            .map(|_| DoorSlot(Arc::clone(&self.0)))
+    }
+}
+
+/// Ein belegter Platz; er wird frei, wenn beide Fäden der Verbindung ihre
+/// Deskriptoren geschlossen haben.
+#[derive(Debug)]
+struct DoorSlot(Arc<AtomicUsize>);
+
+impl Drop for DoorSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 /// Ob der Gast an der Tür bereit gemeldet hat; die Tür setzt es, der Faden
 /// zum Gast wartet darauf.
@@ -168,13 +211,17 @@ pub(crate) fn lifeline_closed(lifeline: &OwnedFd, wait: Duration) -> bool {
 /// Reicht jede Verbindung an `listener` an `proxy` weiter, bis die
 /// Lebensleine zugeht. Bis der Gast bereit gemeldet hat, nimmt die Tür nur
 /// diese eine Zeile ([`GUEST_READY`]) und setzt `ready`; jede andere
-/// Verbindung davor geht zu, ohne den Proxy zu erreichen.
+/// Verbindung davor geht zu, ohne den Proxy zu erreichen. Danach hält sie
+/// höchstens [`MAX_DOOR_CONNECTIONS`] Verbindungen zugleich offen; die erste,
+/// die sie darüber abweist, hält `admission` fest.
 pub(crate) fn serve_door(
     listener: &UnixListener,
     proxy: &Path,
     lifeline: &OwnedFd,
     ready: &GuestReady,
+    admission: &crate::launcher::Admission,
 ) {
+    let slots = DoorSlots::default();
     loop {
         let mut fds = [
             PollFd::new(listener, PollFlags::IN),
@@ -204,8 +251,17 @@ pub(crate) fn serve_door(
             }
             continue;
         }
+        let Some(slot) = slots.take() else {
+            // Sofort zu, ohne zu lesen und ohne Faden.
+            drop(guest);
+            admission.note_door(format!(
+                "the door closed a guest connection above the cap of {MAX_DOOR_CONNECTIONS} \
+                 open connections; later ones are not noted"
+            ));
+            continue;
+        };
         match UnixStream::connect(proxy) {
-            Ok(upstream) => splice(guest, upstream),
+            Ok(upstream) => splice_holding(guest, upstream, slot),
             Err(_) => drop(guest),
         }
     }
@@ -214,20 +270,34 @@ pub(crate) fn serve_door(
 /// Kopiert in beide Richtungen, je auf einem eigenen Faden; endet eine
 /// Seite, geht die andere zum Schreiben zu.
 pub(crate) fn splice(a: UnixStream, b: UnixStream) {
+    splice_holding(a, b, ());
+}
+
+/// Wie [`splice`]; `hold` lebt, bis beide Fäden ihre Deskriptoren
+/// geschlossen haben (der Platz an der Tür, [`DoorSlot`]).
+fn splice_holding(a: UnixStream, b: UnixStream, hold: impl Send + Sync + 'static) {
     let (Ok(a_reader), Ok(b_reader)) = (a.try_clone(), b.try_clone()) else {
         return;
     };
-    let forward = move |mut from: UnixStream, mut to: UnixStream| {
+    let hold = Arc::new(hold);
+    let forward = move |mut from: UnixStream, mut to: UnixStream, hold: Arc<_>| {
         let _ = std::io::copy(&mut from, &mut to);
         let _ = to.shutdown(std::net::Shutdown::Write);
         let _ = from.shutdown(std::net::Shutdown::Read);
+        // Erst die Deskriptoren schließen, dann den Platz freigeben: Sonst
+        // könnte der Gast eine neue Verbindung öffnen, während dieser Faden
+        // seine zwei noch hält. Danach tut der Faden nichts mehr als enden.
+        drop(from);
+        drop(to);
+        drop(hold);
     };
+    let back = Arc::clone(&hold);
     let _ = thread::Builder::new()
         .name("vm-splice".to_owned())
-        .spawn(move || forward(a_reader, b));
+        .spawn(move || forward(a_reader, b, hold));
     let _ = thread::Builder::new()
         .name("vm-splice".to_owned())
-        .spawn(move || forward(b_reader, a));
+        .spawn(move || forward(b_reader, a, back));
 }
 
 /// Was der Faden zum Gast braucht.
@@ -479,7 +549,10 @@ mod tests {
         let (lifeline, read) = crate::shim_fds::Lifeline::new().unwrap();
         let ready = GuestReady::default();
         let door_ready = ready.clone();
-        let server = thread::spawn(move || serve_door(&door, &proxy_path, &read, &door_ready));
+        let admission = crate::launcher::Admission::default();
+        let server = thread::spawn(move || {
+            serve_door(&door, &proxy_path, &read, &door_ready, &admission);
+        });
 
         // Vor der Bereitschaft erreicht keine Verbindung den Proxy; die
         // Zeile des Shims setzt sie und geht selbst nicht weiter.
@@ -521,6 +594,96 @@ mod tests {
         let started = Instant::now();
         server.join().unwrap();
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    /// Die Tür hält höchstens [`MAX_DOOR_CONNECTIONS`] Verbindungen offen
+    /// (HUM-467): Die nächste geht sofort zu, ohne den Proxy zu erreichen,
+    /// und nur sie wird festgehalten; die offenen arbeiten weiter, und ein
+    /// frei gewordener Platz nimmt wieder eine an.
+    #[test]
+    fn the_connection_above_the_cap_is_closed_and_the_others_keep_working() {
+        let dir = tempfile::tempdir().unwrap();
+        let proxy_path = dir.path().join("proxy.sock");
+        let proxy = UnixListener::bind(&proxy_path).unwrap();
+        let door_path = dir.path().join("door_5000");
+        let door = UnixListener::bind(&door_path).unwrap();
+        let (lifeline, read) = crate::shim_fds::Lifeline::new().unwrap();
+        let ready = GuestReady::default();
+        ready.set();
+        let admission = crate::launcher::Admission::default();
+        let door_admission = admission.clone();
+        let server = thread::spawn(move || {
+            serve_door(&door, &proxy_path, &read, &ready, &door_admission);
+        });
+
+        let mut open = Vec::new();
+        for _ in 0..MAX_DOOR_CONNECTIONS {
+            let guest = UnixStream::connect(&door_path).unwrap();
+            let (upstream, _) = proxy.accept().unwrap();
+            open.push((guest, upstream));
+        }
+        assert_eq!(admission.door(), None);
+
+        for _ in 0..2 {
+            let mut over = UnixStream::connect(&door_path).unwrap();
+            over.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut byte = [0u8; 1];
+            // Ein Ende oder ein Reset; eine Zeitüberschreitung hieße, die Tür
+            // hielte die Verbindung offen.
+            match over.read(&mut byte) {
+                Ok(0) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::ConnectionReset => {}
+                other => panic!("the connection above the cap stayed open: {other:?}"),
+            }
+        }
+        proxy.set_nonblocking(true).unwrap();
+        assert!(
+            proxy.accept().is_err(),
+            "a connection above the cap reached the proxy"
+        );
+        proxy.set_nonblocking(false).unwrap();
+        let note = admission.door().unwrap();
+        assert!(note.contains("cap of 64"), "{note}");
+
+        for (index, (guest, upstream)) in open.iter_mut().enumerate() {
+            let ping = format!("ping {index}");
+            guest.write_all(ping.as_bytes()).unwrap();
+            let mut seen = vec![0u8; ping.len()];
+            upstream.read_exact(&mut seen).unwrap();
+            assert_eq!(seen, ping.as_bytes());
+            upstream.write_all(b"pong").unwrap();
+            let mut back = [0u8; 4];
+            guest.read_exact(&mut back).unwrap();
+            assert_eq!(&back, b"pong");
+        }
+
+        // Geht eine Verbindung zu, wird ihr Platz frei, sobald ihre beiden
+        // Fäden enden.
+        drop(open.pop());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        proxy.set_nonblocking(true).unwrap();
+        let again = loop {
+            let guest = UnixStream::connect(&door_path).unwrap();
+            let waited = Instant::now() + Duration::from_millis(200);
+            let accepted = loop {
+                match proxy.accept() {
+                    Ok((upstream, _)) => break Some(upstream),
+                    Err(_) if Instant::now() < waited => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break None,
+                }
+            };
+            if let Some(upstream) = accepted {
+                break (guest, upstream);
+            }
+            assert!(Instant::now() < deadline, "the freed place never came back");
+        };
+        drop(again);
+        assert!(admission.door().unwrap().contains("cap of 64"));
+
+        drop(lifeline);
+        server.join().unwrap();
     }
 
     /// Ein Gerät, das je Verbindung erst `CONNECT <port>` liest und dann

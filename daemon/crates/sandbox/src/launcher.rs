@@ -736,10 +736,14 @@ pub(crate) enum Teardown {
 /// genau einmal und merkt es sich: Eine spätere Prüfung derselben Sitzung
 /// schickt nichts mehr, ihr Ergebnis gilt aber weiter. Ohne Urteil startet
 /// der Agent nie.
+///
+/// Daneben steht hier, was die Tür der Sitzung einmal festhält (HUM-467):
+/// dass sie eine Verbindung über der Obergrenze abwies.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Admission(
     std::sync::Arc<Mutex<Verdict>>,
     std::sync::Arc<Mutex<String>>,
+    std::sync::Arc<std::sync::OnceLock<String>>,
 );
 
 /// Wo das Urteil einer Sitzung steht.
@@ -789,6 +793,17 @@ impl Admission {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// Hält einen Vorfall an der Tür fest, nur den ersten je Sitzung
+    /// (HUM-467); `true`, wenn es dieser war.
+    pub(crate) fn note_door(&self, what: String) -> bool {
+        self.2.set(what).is_ok()
+    }
+
+    /// Der festgehaltene Vorfall an der Tür, wenn es einen gab.
+    pub(crate) fn door(&self) -> Option<&str> {
+        self.2.get().map(String::as_str)
     }
 
     /// Das Urteil dieser Prüfung. `true` heißt: Der Agent ist zugelassen,
