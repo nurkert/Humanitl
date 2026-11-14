@@ -614,6 +614,15 @@ Definition of Done für jedes Issue: Tests auf der passenden Ebene, neue Fehlerp
    - **Mehr Agenten.** agent-sandbox unterstützt Claude Code und Codex voll als CLI, dazu weitere; wir unterstützen OpenCode und pi. Claude Code (über `ANTHROPIC_BASE_URL`) und Codex als Adapter nach HUM-037, siehe Punkte 8 und 9, mit Profil, Standardregeln, Env-Kit und je einem e2e-Lauf wie für OpenCode und pi.
    Quelle: Marktanalyse, die der Nutzer am 2026-11-14 in die Sitzung gegeben hat (Vergleich mit agent-sandbox, devsandbox und Claude Code). Vor der Umsetzung je Punkt die Angaben über die anderen Werkzeuge an deren Dokumentation prüfen und im Issue verlinken. Reihenfolge nach der Kernel-Stufe (Sprint 7); je Punkt ein Issue mit Spezifikation.
 
+21. **Firmen-Vorgaben aus einer Datei (Idee des Nutzers vom 2026-11-14, im Hinterkopf behalten).** Eine Firma legt eine Richtliniendatei ab, auf einem internen oder öffentlichen Webserver oder lokal, und trägt deren URI in den Einstellungen ein (oder lädt sie herunter und legt sie in einen festen Ordner). Die Datei nennt beliebig viele Einstellungen, auch nur eine, in zwei Arten:
+   - **Erzwungen.** Gilt immer, wird bei jeder Änderung der Datei dynamisch übernommen; in App und CLI ausgegraut mit der Begründung „von Vorgabe fixiert" und der Quelle. Beispiel: `sandbox.min_isolation = "kernel"`.
+   - **Vorgabe.** Ein Startwert, den der Nutzer überschreiben darf, wahlweise dauerhaft oder nur bis zur nächsten Sandbox.
+   Baut auf der Herkunftsanzeige und den Ebenen der Konfiguration auf (heute: eingebaute Defaults, globale Config, Profile, Umgebung, Kommandozeile; `sandbox.min_isolation` nimmt schon über alle Ebenen den strengsten Wert) und auf den drei Schichten der Agent-Setups (HUM-310: Vorgaben, eigene Änderungen, erzwungen). Format offen (TOML wie `config.toml` liegt nahe, JSON-Schema gibt es schon); vor dem Bau ein Design-Dokument. Offene Punkte für dieses Dokument:
+   - Echtheit der Datei: nur `https`, Signatur oder angeheftetes Zertifikat, sonst kann wer das Netz kontrolliert die Sicherheit abschalten statt einschalten. Erzwungene Werte dürfen nur strenger machen, wo „strenger" definiert ist; eine Vorgabe, die schwächt, ist höchstens ein Startwert.
+   - Abruf durch den Daemon auf dem Host, nie durch den Agenten; Verhalten ohne Netz (letzte gültige Fassung behalten, nie still auf „keine Vorgaben" fallen).
+   - Wer die URI selbst setzen und entfernen darf: Kann der Nutzer sie löschen, ist „erzwungen" nur eine Empfehlung. Für echte Durchsetzung muss die URI aus einer Ebene kommen, die der Nutzer nicht ändert (systemweite Datei unter `/etc` bzw. MDM-Profil unter macOS); sonst ehrlich als „Vorgabe des Teams" benennen.
+   - Audit-Eintrag, wenn sich die Vorgaben ändern oder der Nutzer eine Vorgabe überschreibt.
+
 ---
 
 ## 10. Risiken und Gegenmaßnahmen
