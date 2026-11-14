@@ -18,7 +18,9 @@
 //!
 //! Auf dem Host lauscht der Test selbst an `<uds>_<Tür-Port>` und spielt den
 //! Proxy; den Bericht des Shims holt er sich mit `CONNECT <Bericht-Port>` am
-//! vsock-Gerät (Q10). Eine gehärtete Unit des Nutzers baut erst der Adapter
+//! vsock-Gerät (Q10), und mit einem zweiten `CONNECT` an denselben Port den
+//! Steuerkanal der Terminals (HUM-443), dessen Seite des Daemons
+//! [`crate::shell::ShellDoor`] im Strom-Modus liest wie unter bwrap. Eine gehärtete Unit des Nutzers baut erst der Adapter
 //! (HUM-444); hier laufen die Prozesse als Kinder des Tests, und
 //! `--die-with-parent` nimmt sie mit, wenn der Test stirbt. Am Ende werden
 //! alle beendet und das Laufzeitverzeichnis entfernt ([`Vm`] beim Drop).
@@ -38,6 +40,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::prerequisites::Resolved;
+use crate::shell::ShellDoor;
 
 /// Wo der Shim, der Gastplan und die Module in der Wurzel des Gasts liegen.
 pub(crate) const GUEST_SHIM: &str = "/run/humanitl/humanitl-shim";
@@ -96,6 +99,47 @@ pub(crate) struct Outcome {
     pub(crate) console: Option<String>,
     /// Was die Hilfsprozesse auf stderr schrieben, zur Fehlersuche.
     pub(crate) helpers: String,
+    /// Was der Agent über den Steuerkanal in sein Terminal schrieb
+    /// (HUM-443).
+    pub(crate) terminal: Vec<u8>,
+}
+
+/// Der Steuerkanal eines laufenden Gasts, wie der Daemon ihn hält (HUM-443).
+pub(crate) struct Session {
+    /// Die Seite des Daemons am Strom.
+    pub(crate) door: Arc<ShellDoor>,
+    /// Was der Agent bisher in sein Terminal schrieb.
+    pub(crate) agent: Arc<Mutex<Vec<u8>>>,
+}
+
+impl Session {
+    /// Wartet höchstens `timeout`, bis die Ausgabe des Agenten `needle`
+    /// enthält.
+    pub(crate) fn wait_for(&self, needle: &str, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let text = self.text();
+            if text.contains(needle) {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Die Ausgabe des Agenten bisher, als Text.
+    pub(crate) fn text(&self) -> String {
+        String::from_utf8_lossy(
+            &self
+                .agent
+                .lock()
+                .map(|seen| seen.clone())
+                .unwrap_or_default(),
+        )
+        .into_owned()
+    }
 }
 
 /// Die laufenden Prozesse und das Laufzeitverzeichnis; beim Drop wird alles
@@ -256,6 +300,8 @@ fn guest_plan(spec: &Spec, project_ino: u64) -> serde_json::Value {
         mount("/proc", "proc", "type", "*", "*"),
         mount("/sys", "sysfs", "type", "*", "*"),
         mount("/dev", "devtmpfs", "type", "*", "*"),
+        // Die Terminals des Strom-Modus (HUM-443).
+        mount("/dev/pts", "devpts", "type", "*", "*"),
         mount(
             "/work",
             "virtiofs",
@@ -287,6 +333,12 @@ fn guest_plan(spec: &Spec, project_ino: u64) -> serde_json::Value {
 /// Startet den Gast, spielt Tür und Empfänger des Berichts und wartet auf
 /// sein Ende.
 pub(crate) fn run(spec: &Spec) -> Result<Outcome, String> {
+    run_with(spec, |_| {})
+}
+
+/// Wie [`run`]; `scenario` bekommt den Steuerkanal, sobald er steht, und
+/// treibt Terminal und Shells, während der Gast läuft.
+pub(crate) fn run_with(spec: &Spec, scenario: impl FnOnce(&Session)) -> Result<Outcome, String> {
     let mut vm = Vm {
         dir: runtime_dir()?,
         children: Vec::new(),
@@ -310,10 +362,24 @@ pub(crate) fn run(spec: &Spec) -> Result<Outcome, String> {
     start_machine(&mut vm, spec)?;
 
     // Der Bericht: so lange nachfragen, bis der Shim lauscht, dann bis zum
-    // Ende lesen; endet der Gast vorher, gibt es keinen.
+    // Ende lesen; endet der Gast vorher, gibt es keinen. Danach dieselbe
+    // Frage noch einmal: Die zweite Verbindung an denselben Port ist der
+    // Steuerkanal (HUM-443).
     let device = vm.path("door");
-    let mut report = read_report(&device, started + RUN_TIMEOUT, &mut || vm.emulator_ended());
-    let exit = wait_emulator(&mut vm, started + RUN_TIMEOUT);
+    let deadline = started + RUN_TIMEOUT;
+    let mut session = None;
+    let mut reader = None;
+    if let Some(report) = connect(&device, deadline, &mut || vm.emulator_ended()) {
+        reader = Some(thread::spawn(move || read_lines(report, deadline)));
+        session = connect(&device, deadline, &mut || vm.emulator_ended()).and_then(open_session);
+    }
+    if let Some(session) = &session {
+        scenario(session);
+    }
+    let exit = wait_emulator(&mut vm, deadline);
+    let mut report = reader
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
     if report.is_empty() {
         // Ohne Bericht ist nichts belegt: Das ist eine gescheiterte Prüfung,
         // nie ein stilles Nichts. So endet ein Gast, dessen vsock-Module
@@ -324,12 +390,22 @@ pub(crate) fn run(spec: &Spec) -> Result<Outcome, String> {
     let console = spec
         .console
         .then(|| std::fs::read_to_string(vm.path("console.log")).unwrap_or_default());
+    let terminal = session
+        .map(|session| {
+            session
+                .agent
+                .lock()
+                .map(|seen| seen.clone())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
     Ok(Outcome {
         report,
         door: door.requests(),
         exit,
         console,
         helpers,
+        terminal,
     })
 }
 
@@ -508,9 +584,15 @@ fn wait_emulator(vm: &mut Vm, deadline: Instant) -> Option<ExitStatus> {
     }
 }
 
-/// Holt den Bericht über das vsock-Gerät: `CONNECT <port>`, `OK`, dann jede
-/// Zeile bis zum Ende. Antwortet der Gast noch nicht, wird es wiederholt.
-fn read_report(device: &Path, deadline: Instant, ended: &mut dyn FnMut() -> bool) -> Vec<String> {
+/// Eine Verbindung zum Port des Shims über das vsock-Gerät: `CONNECT
+/// <port>`, dann `OK`. Antwortet der Gast noch nicht, wird es wiederholt.
+/// Die Antwort des Geräts wird Byte für Byte gelesen: Was danach kommt,
+/// gehört schon dem Shim.
+fn connect(
+    device: &Path,
+    deadline: Instant,
+    ended: &mut dyn FnMut() -> bool,
+) -> Option<UnixStream> {
     while Instant::now() < deadline && !ended() {
         let Ok(mut stream) = UnixStream::connect(device) else {
             thread::sleep(Duration::from_millis(100));
@@ -524,28 +606,56 @@ fn read_report(device: &Path, deadline: Instant, ended: &mut dyn FnMut() -> bool
             thread::sleep(Duration::from_millis(100));
             continue;
         }
-        let mut reader = BufReader::new(stream);
-        let mut first = String::new();
-        if reader.read_line(&mut first).is_err() || !first.starts_with("OK") {
+        let mut first = Vec::new();
+        let mut byte = [0u8; 1];
+        while first.len() < 64 && stream.read(&mut byte).ok() == Some(1) {
+            if byte[0] == b'\n' {
+                break;
+            }
+            first.push(byte[0]);
+        }
+        if !first.starts_with(b"OK") {
             thread::sleep(Duration::from_millis(100));
             continue;
         }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let _ = reader
-            .get_ref()
-            .set_read_timeout(Some(remaining.max(Duration::from_secs(1))));
-        let mut lines = Vec::new();
-        for line in reader.by_ref().lines() {
-            match line {
-                Ok(line) => lines.push(line),
-                Err(_) => break,
-            }
-        }
-        // Das Ende des Lesens schließt die Verbindung; der Shim wartet
-        // darauf, bevor er den Gast ausschaltet.
-        return lines;
+        let _ = stream.set_read_timeout(None);
+        return Some(stream);
     }
-    Vec::new()
+    None
+}
+
+/// Jede Zeile des Berichts bis zum Ende.
+fn read_lines(stream: UnixStream, deadline: Instant) -> Vec<String> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let _ = stream.set_read_timeout(Some(remaining.max(Duration::from_secs(1))));
+    let mut lines = Vec::new();
+    for line in BufReader::new(stream).lines() {
+        match line {
+            Ok(line) => lines.push(line),
+            Err(_) => break,
+        }
+    }
+    // Das Ende des Lesens schließt die Verbindung; der Shim wartet darauf,
+    // bevor er den Gast ausschaltet.
+    lines
+}
+
+/// Der Steuerkanal auf der Verbindung: die Seite des Daemons, wie unter
+/// bwrap, und als erster Rahmen die Größe des Terminals des Agenten.
+fn open_session(stream: UnixStream) -> Option<Session> {
+    let agent = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&agent);
+    let door = ShellDoor::start_stream(
+        OwnedFd::from(stream),
+        Box::new(move |bytes| {
+            if let Ok(mut seen) = seen.lock() {
+                seen.extend_from_slice(bytes);
+            }
+        }),
+    )
+    .ok()?;
+    door.agent_size(80, 24).ok()?;
+    Some(Session { door, agent })
 }
 
 /// Der Lauscher an `<uds>_<Tür-Port>`: nimmt jede Anfrage an, merkt sich die

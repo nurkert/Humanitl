@@ -754,6 +754,12 @@ impl Shared {
         let _ = self.shells.set(door);
     }
 
+    /// Die Tür, wenn sie der Strom ist, der auch das Terminal des Agenten
+    /// trägt (HUM-443).
+    fn stream(&self) -> Option<&Arc<crate::shell::ShellDoor>> {
+        self.shells.get().filter(|door| door.is_stream())
+    }
+
     /// Schickt ein Stück an den Zuhörer, falls einer da ist.
     ///
     /// Ungekürzt, anders als der Puffer: Wer mitliest, schreibt weiter, und
@@ -1101,6 +1107,14 @@ impl SandboxHandle {
         if self.try_wait().is_some() {
             return true;
         }
+        // Im Strom-Modus unterbricht der Shim selbst (HUM-443): In einer VM
+        // erreicht kein Signal des Hosts einen Prozess des Gasts.
+        if let Some(door) = self.shared.stream() {
+            if door.agent_interrupt().is_err() {
+                return false;
+            }
+            return self.shared.wait_exit(Some(grace)).is_some();
+        }
         let Some(child) = self.child_pid() else {
             return false;
         };
@@ -1341,6 +1355,22 @@ impl SandboxHandle {
         self.shared.pty.get()
     }
 
+    /// Ob das Terminal dieser Sandbox über den Steuerkanal als Strom reist
+    /// (HUM-443); dann gibt es keine Herrscherseite beim Daemon, und
+    /// [`SandboxHandle::write_input`], [`SandboxHandle::resize`] und
+    /// [`SandboxHandle::interrupt`] gehen als Rahmen an den Shim.
+    #[must_use]
+    pub fn terminal_streamed(&self) -> bool {
+        self.shared.stream().is_some()
+    }
+
+    /// Wann der Shim zuletzt über den Strom ein Lebenszeichen gab (HUM-443);
+    /// `None` ohne Strom oder vor dem ersten.
+    #[must_use]
+    pub fn last_heartbeat(&self) -> Option<Instant> {
+        self.shared.stream().and_then(|door| door.last_heartbeat())
+    }
+
     /// Öffnet eine weitere Shell in dieser Sandbox (HUM-299), neben dem
     /// Agenten und mit einem eigenen Pseudoterminal der Größe `cols` mal
     /// `rows`. Der Shim startet sie von innen; sie trägt dieselben Grenzen
@@ -1405,6 +1435,13 @@ impl SandboxHandle {
     /// Schreiben fehlschlägt — beendet der Agent sich, während der Mensch
     /// tippt, ist das `EIO`.
     pub fn write_input(&self, bytes: &[u8]) -> Result<(), Diagnostic> {
+        if let Some(door) = self.shared.stream() {
+            return door.agent_input(bytes).map_err(|err| {
+                terminal_gone(&format!(
+                    "cannot write to the terminal of the sandbox: {err}"
+                ))
+            });
+        }
         let master = self.pty_or_refuse("write to the terminal of")?;
         let mut rest = bytes;
         while !rest.is_empty() {
@@ -1444,6 +1481,15 @@ impl SandboxHandle {
     /// kein Fehler: Die Größe steht dann trotzdem, und der nächste Prozess
     /// liest sie.
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), Diagnostic> {
+        // Im Strom-Modus setzt der Shim die Größe; sein Kernel schickt das
+        // `SIGWINCH` an die Vordergrundgruppe (HUM-443).
+        if let Some(door) = self.shared.stream() {
+            return door.agent_size(cols, rows).map_err(|err| {
+                terminal_gone(&format!(
+                    "cannot set the terminal of the sandbox to {cols}x{rows}: {err}"
+                ))
+            });
+        }
         let master = self.pty_or_refuse("resize the terminal of")?;
         let size = Winsize {
             ws_row: rows,

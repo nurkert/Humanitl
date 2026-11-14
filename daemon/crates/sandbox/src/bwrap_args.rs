@@ -271,6 +271,13 @@ pub struct LaunchInputs {
     /// [`LaunchInputs::controlling_terminal`]. `None` renders nothing; that
     /// is the preview and every start without the daemon.
     pub control_fd: Option<RawFd>,
+    /// The shim's end of the daemon's control stream (HUM-443), rendered as
+    /// [`crate::bridge_env::SHIM_CONTROL_STREAM_FD`] with its number after
+    /// `--proxy-port`. Only for a start in the stream mode; then
+    /// [`LaunchInputs::control_fd`] and
+    /// [`LaunchInputs::controlling_terminal`] stay off. `None` renders
+    /// nothing.
+    pub control_stream_fd: Option<RawFd>,
     /// The upper layer and the overlay's work directory of a disposable
     /// sandbox (HUM-350). With them the project folder is the read-only lower
     /// layer of an overlay at `/work` (`--overlay-src LOWER --overlay UPPER
@@ -283,6 +290,23 @@ pub struct LaunchInputs {
     /// with its number after `--proxy-port`. `None` renders nothing; that is
     /// the preview, whose table the start computes from this very line.
     pub pins_fd: Option<RawFd>,
+}
+
+/// The shim's flags between `--proxy-port` and the command, in their fixed
+/// order.
+fn shim_flags(args: &mut Args, inputs: &LaunchInputs) {
+    if inputs.controlling_terminal {
+        args.flag(crate::bridge_env::SHIM_CONTROLLING_TERMINAL);
+    }
+    if let Some(fd) = inputs.control_fd {
+        args.pair(crate::bridge_env::SHIM_CONTROL_FD, fd.to_string());
+    }
+    if let Some(fd) = inputs.control_stream_fd {
+        args.pair(crate::bridge_env::SHIM_CONTROL_STREAM_FD, fd.to_string());
+    }
+    if let Some(fd) = inputs.pins_fd {
+        args.pair(crate::bridge_env::SHIM_PINS_FD, fd.to_string());
+    }
 }
 
 impl LaunchInputs {
@@ -309,6 +333,7 @@ impl LaunchInputs {
             agent_program: None,
             controlling_terminal: false,
             control_fd: None,
+            control_stream_fd: None,
             overlay: None,
             pins_fd: None,
         }
@@ -546,15 +571,7 @@ impl SandboxProfile {
         args.flag("--");
         args.push(&self.network.shim_dst);
         args.pair("--proxy-port", self.network.proxy_port.to_string());
-        if inputs.controlling_terminal {
-            args.flag(crate::bridge_env::SHIM_CONTROLLING_TERMINAL);
-        }
-        if let Some(fd) = inputs.control_fd {
-            args.pair(crate::bridge_env::SHIM_CONTROL_FD, fd.to_string());
-        }
-        if let Some(fd) = inputs.pins_fd {
-            args.pair(crate::bridge_env::SHIM_PINS_FD, fd.to_string());
-        }
+        shim_flags(&mut args, inputs);
         args.flag("--");
         for part in &ctx.command {
             args.push(part);
@@ -1099,6 +1116,7 @@ mod tests {
                 agent_program: None,
                 controlling_terminal: false,
                 control_fd: None,
+                control_stream_fd: None,
                 overlay: None,
                 pins_fd: None,
             },
@@ -1199,6 +1217,7 @@ mod tests {
                 agent_program: None,
                 controlling_terminal: false,
                 control_fd: None,
+                control_stream_fd: None,
                 overlay: None,
                 pins_fd: None,
             },

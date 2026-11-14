@@ -57,6 +57,7 @@ jobs:
           - rules_yaml
           - flow_filter
           - audit_verify
+          - control_stream_reader
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install the nightly toolchain
@@ -65,7 +66,7 @@ jobs:
           rustup run nightly rustc --version
       - name: Install cargo-fuzz
         run: cargo +nightly install cargo-fuzz --locked
-      # fuzz_targets_compile: alle sechs Targets bauen, bevor eines läuft. Ein
+      # fuzz_targets_compile: alle sieben Targets bauen, bevor eines läuft. Ein
       # Target, das nicht baut, fällt damit in jedem Matrix-Job auf, nicht nur
       # in seinem eigenen.
       - name: Build all fuzz targets

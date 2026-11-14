@@ -266,6 +266,16 @@ impl TerminalHub {
         self.inner.shell_id.as_deref()
     }
 
+    /// Ob dieses Terminal über den Steuerkanal als Strom reist (HUM-443)
+    /// statt über eine Herrscherseite beim Daemon.
+    #[must_use]
+    pub fn streamed(&self) -> bool {
+        match &self.inner.target {
+            Target::Agent(handle) => handle.terminal_streamed(),
+            Target::Shell(shell) => shell.streamed(),
+        }
+    }
+
     /// Ob der Daemon Hinweiszeilen in diesen Strom schreibt.
     #[must_use]
     pub fn notices(&self) -> bool {

@@ -1330,6 +1330,7 @@ impl SandboxBackend for SeatbeltBackend {
             session,
             options,
         } = *request;
+        crate::launcher::refuse_stream("sandbox-exec", options)?;
         let project = self.check(request)?;
         let work = Self::work_of(options, &project)?;
         let layout = self.create_layout(session)?;

@@ -2,8 +2,8 @@
 
 Der Daemon liest Bytes, die ein Angreifer kontrolliert: Anfragen eines
 möglicherweise unterwanderten Agenten, gepackte Bodies, Regel-Dateien aus
-fremder Hand, Filterausdrücke und ein Audit-Log, das jemand verändert haben
-könnte. Dieses Verzeichnis enthält je Eingang ein Fuzz-Target (HUM-056,
+fremder Hand, Filterausdrücke, ein Audit-Log, das jemand verändert haben
+könnte, und den Steuerkanal aus einer Sandbox, deren Gast Root haben kann. Dieses Verzeichnis enthält je Eingang ein Fuzz-Target (HUM-056,
 BACKLOG.md 4.4, ADR-001).
 
 ## Die Targets
@@ -16,6 +16,7 @@ BACKLOG.md 4.4, ADR-001).
 | `rules_yaml` | Bytes, als UTF-8 versucht | `parse_rules_for_session`, `serialize_rules`, `RuleSet::evaluate` | `crates/rules/tests/regressions/check.rs` |
 | `flow_filter` | Bytes, als UTF-8 versucht | `parse_filter` | `crates/recorder/tests/regressions/check.rs` |
 | `audit_verify` | Bytes als `audit.jsonl`; die ersten drei Bytes kippen zusätzlich ein Byte einer gültigen Kette | `AuditVerifier::verify_reader` | `crates/audit/tests/regressions/check.rs` |
+| `control_stream_reader` | Bytes, wie sie der Shim über den Steuerkanal schickt (HUM-443), am Stück und in Stücken | `Decoder` und `Message::parse` aus `bin/humanitl-shim/src/frame.rs`, dem Leser des Daemons (`humanitl_sandbox::control_frame`) | `crates/sandbox/tests/regressions/check.rs` |
 
 Jedes Target ist eine Zeile: Es bindet die Prüfung aus `check.rs` der Crate
 über `#[path]` ein. Die Regressionstests derselben Crate rufen dieselbe

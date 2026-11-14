@@ -23,6 +23,11 @@
 //! - **the door for further shells** (`--control-fd`, HUM-299): a request
 //!   is served when it arrives; when the daemon closes its end, every shell
 //!   still running is killed, because nobody is left to show it.
+//! - **the stream** (`--control-stream-fd` or the guest's connection,
+//!   HUM-443): the socket, every pseudo-terminal and the heartbeat
+//!   (`stream.rs`). Its end is a lifeline like the one above: the agent gets
+//!   `SIGTERM`, every further shell `SIGKILL`, and after [`KILL_GRACE`]
+//!   everything else.
 
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -31,6 +36,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Instant;
 
 use crate::linux::exec::Shells;
+use crate::linux::stream::Session;
 
 /// How long the agent has after the lifeline ends before everything is
 /// killed ([`super::contract::KILL_GRACE`]).
@@ -154,7 +160,7 @@ enum Swept {
 }
 
 /// Reaps every child that has ended, without waiting.
-fn sweep(child: libc::pid_t, shells: Option<&Shells>) -> Swept {
+fn sweep(child: libc::pid_t, shells: Option<&Shells>, mut stream: Option<&mut Session>) -> Swept {
     loop {
         let mut status: libc::c_int = 0;
         // SAFETY: waitpid on any child of this process with a valid status
@@ -171,6 +177,9 @@ fn sweep(child: libc::pid_t, shells: Option<&Shells>) -> Swept {
             // reaped and forgotten.
             if let Some(shells) = shells {
                 shells.reaped(waited, status);
+            }
+            if let Some(stream) = stream.as_deref_mut() {
+                stream.reaped(waited, status);
             }
             continue;
         }
@@ -204,12 +213,33 @@ fn kill_everything(child: libc::pid_t, shells: Option<&Shells>) {
     }
 }
 
+/// The daemon is gone (`what` says how it showed): `SIGTERM` to the agent,
+/// and the moment at which everything left gets `SIGKILL`.
+fn end_sandbox(child: libc::pid_t, what: &str) -> Instant {
+    // The signal first, the message after: should the message ever wait,
+    // the agent has its `SIGTERM` already (HUM-443).
+    // SAFETY: kill takes two integers.
+    unsafe {
+        libc::kill(child, libc::SIGTERM);
+    }
+    let deadline = Instant::now() + KILL_GRACE;
+    crate::linux::say(&format!(
+        "humanitl-shim: {what}; the daemon is gone, ending the sandbox\n"
+    ));
+    deadline
+}
+
 /// Waits for the agent while serving the lifeline and the door; returns the
 /// agent's exit code, or 128 + signal.
 ///
 /// Without a working wake-up pipe the loop still ends: it then polls with a
 /// short timeout instead of waiting for the byte.
-pub fn wait(child: libc::pid_t, shells: Option<&Shells>, lifeline: Option<OwnedFd>) -> i32 {
+pub fn wait(
+    child: libc::pid_t,
+    shells: Option<&Shells>,
+    lifeline: Option<OwnedFd>,
+    mut stream: Option<&mut Session>,
+) -> i32 {
     let wake = match install_wake() {
         Ok(wake) => Some(wake),
         Err(err) => {
@@ -222,9 +252,17 @@ pub fn wait(child: libc::pid_t, shells: Option<&Shells>, lifeline: Option<OwnedF
     let mut lifeline = lifeline;
     let mut door_open = shells.is_some();
     let mut deadline: Option<Instant> = None;
+    let mut stream_ended = false;
     loop {
-        match sweep(child, shells) {
-            Swept::Child(code) => return code,
+        match sweep(child, shells, stream.as_deref_mut()) {
+            Swept::Child(code) => {
+                // The agent's last bytes and its exit reach the daemon
+                // before this process ends.
+                if let Some(stream) = stream.as_deref_mut() {
+                    stream.finish(code);
+                }
+                return code;
+            }
             Swept::Lost => return EXIT_SETUP,
             Swept::Pending => {}
         }
@@ -251,6 +289,7 @@ pub fn wait(child: libc::pid_t, shells: Option<&Shells>, lifeline: Option<OwnedF
             };
             slot(shells.control_fd(), events)
         });
+        let stream_slots = stream.as_deref().map(|stream| stream.register(&mut fds));
         let timeout = match (deadline, &wake) {
             (Some(at), _) => {
                 let left = at.saturating_duration_since(Instant::now());
@@ -258,6 +297,11 @@ pub fn wait(child: libc::pid_t, shells: Option<&Shells>, lifeline: Option<OwnedF
             }
             (None, Some(_)) => -1,
             (None, None) => 100,
+        };
+        // The heartbeat is due at the latest then.
+        let timeout = match stream.as_deref().map(Session::timeout_ms) {
+            Some(beat) if beat >= 0 && (timeout < 0 || beat < timeout) => beat,
+            _ => timeout,
         };
         let count = libc::nfds_t::try_from(fds.len()).unwrap_or(0);
         // SAFETY: `fds` holds `count` initialised entries and outlives the
@@ -287,31 +331,41 @@ pub fn wait(child: libc::pid_t, shells: Option<&Shells>, lifeline: Option<OwnedF
                     && lifeline.as_ref().is_some_and(|fd| drain(fd.as_raw_fd())));
             if ended {
                 lifeline = None;
-                crate::linux::say(
-                    "humanitl-shim: the lifeline ended; the daemon is gone, ending the sandbox\n",
-                );
-                // SAFETY: kill takes two integers.
-                unsafe {
-                    libc::kill(child, libc::SIGTERM);
-                }
-                deadline = Some(Instant::now() + KILL_GRACE);
+                deadline = Some(end_sandbox(child, "the lifeline ended"));
             }
         }
-        let door = revents(door_slot);
+        if let (Some(stream), Some(slots)) = (stream.as_deref_mut(), stream_slots.as_ref()) {
+            stream.serve(&fds, slots);
+            if stream.closed() && !stream_ended {
+                // The daemon's end of the stream closed: the lifeline of the
+                // stream mode (HUM-443). Every further shell goes at once,
+                // the agent as on the end of `--lifeline-fd`.
+                stream_ended = true;
+                stream.kill_shells();
+                deadline = Some(end_sandbox(child, "the control stream ended"));
+            }
+        }
         if let Some(shells) = shells.filter(|_| door_open) {
-            if door & libc::POLLOUT != 0 {
-                shells.flush();
-            }
-            let readable = door & (libc::POLLIN | libc::POLLHUP | libc::POLLERR | libc::POLLNVAL);
-            let closed = readable != 0 && !shells.serve_one();
-            // A reply that cannot arrive leaves the daemon waiting for a
-            // shell it will never hear of again: end them all, door shut.
-            if closed || shells.broken() {
-                door_open = false;
-                shells.kill_all();
-            }
+            door_open = serve_door(shells, revents(door_slot));
         }
     }
+}
+
+/// Serves the door for further shells after `poll` said `door`; `false`
+/// once it is shut.
+fn serve_door(shells: &Shells, door: libc::c_short) -> bool {
+    if door & libc::POLLOUT != 0 {
+        shells.flush();
+    }
+    let readable = door & (libc::POLLIN | libc::POLLHUP | libc::POLLERR | libc::POLLNVAL);
+    let closed = readable != 0 && !shells.serve_one();
+    // A reply that cannot arrive leaves the daemon waiting for a shell it
+    // will never hear of again: end them all, door shut.
+    if closed || shells.broken() {
+        shells.kill_all();
+        return false;
+    }
+    true
 }
 
 /// Waits for `child` alone, blocking; for the paths that killed it before

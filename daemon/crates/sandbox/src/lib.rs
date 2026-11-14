@@ -110,6 +110,10 @@ pub mod bridge_env;
 pub mod bwrap;
 pub mod bwrap_args;
 mod bwrap_mounts;
+// Das Format des Steuerkanals als Strom (HUM-443): dieselbe Datei wie im
+// Shim, damit beide Enden nie auseinanderlaufen.
+#[path = "../../../bin/humanitl-shim/src/frame.rs"]
+pub mod control_frame;
 pub mod disposable;
 pub mod doctor;
 mod fd_handover;
@@ -177,7 +181,7 @@ pub use crate::handle::{
 pub use crate::launcher::{
     CheckResult, DisposableLayer, Door, IsolationCheck, IsolationLevel, LaunchOptions, LaunchPlan,
     PlanPreview, PlanRequest, PolicyMode, PolicyOrigin, PolicyRow, PullCancel, PulledImage,
-    REPORT_TIMEOUT, ResourceLimits, SandboxBackend, StdioMode,
+    REPORT_TIMEOUT, ResourceLimits, SandboxBackend, StdioMode, TerminalTransport,
 };
 pub use crate::seatbelt::{
     PREVIEW_AGENT_PORT, PREVIEW_REPORT_FD, PREVIEW_SESSION_PORT, PREVIEW_STATUS_FD,

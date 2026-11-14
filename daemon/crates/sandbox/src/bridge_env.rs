@@ -141,6 +141,18 @@ pub const SHIM_CONTROLLING_TERMINAL: &str = "--controlling-terminal";
 /// like [`SHIM_CONTROLLING_TERMINAL`]; in the shim only PID 1 keeps it.
 pub const SHIM_CONTROL_FD: &str = "--control-fd";
 
+/// The shim flag that names the daemon's control stream (HUM-443), followed
+/// by a descriptor number.
+///
+/// The descriptor is one end of a `SOCK_STREAM` pair whose other end only the
+/// daemon holds ([`crate::shell::ShellDoor`]). With it the shim opens the
+/// pseudo-terminals itself and carries terminal bytes, sizes, further
+/// shells, exits, interrupts and heartbeats as frames
+/// ([`crate::control_frame`]); its end is a lifeline. It replaces
+/// [`SHIM_CONTROL_FD`] and [`SHIM_CONTROLLING_TERMINAL`] for a start in the
+/// stream mode ([`crate::TerminalTransport::Stream`]).
+pub const SHIM_CONTROL_STREAM_FD: &str = "--control-stream-fd";
+
 /// The shim flag that names the daemon's lifeline (HUM-430), followed by a
 /// descriptor number.
 ///

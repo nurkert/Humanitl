@@ -21,6 +21,12 @@ mod json;
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 mod report;
 
+// The wire format of the control stream (HUM-443); the daemon includes the
+// same file and uses the encoders the shim never needs.
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+mod frame;
+
 #[cfg(target_os = "linux")]
 #[path = "linux.rs"]
 mod linux;

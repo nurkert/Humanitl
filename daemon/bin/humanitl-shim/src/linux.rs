@@ -17,16 +17,18 @@
 //! the filter refused, counted), `channel.rs` (how its listener reaches
 //! the parent), `exec.rs` (further shells the daemon asks for, HUM-299),
 //! `supervise.rs` (PID 1's one loop: children, lifeline, door, HUM-430),
-//! `envfd.rs` (the agent's environment through a descriptor, HUM-430) and,
+//! `envfd.rs` (the agent's environment through a descriptor, HUM-430),
+//! `stream.rs` and `frame.rs` (the terminals as frames on one stream
+//! socket, HUM-443) and,
 //! for the shim as PID 1 of a guest kernel, `guest.rs`, `modules.rs` and
 //! `vsock.rs` (HUM-465).
 //!
 //! # Launcher <-> shim contract (binding for HUM-011, HUM-012, HUM-013)
 //!
 //! **Command line.** `humanitl-shim --proxy-port <port> [--controlling-terminal]
-//! [--control-fd <n>] [--lifeline-fd <n>] [--env-fd <n>] [--stdio-fd <n>]
-//! [--pins-fd <n>] [--handover <path> --handover-token <hex>] -- <command>
-//! [args...]`,
+//! [--control-fd <n> | --control-stream-fd <n>] [--lifeline-fd <n>]
+//! [--env-fd <n>] [--stdio-fd <n>] [--pins-fd <n>]
+//! [--handover <path> --handover-token <hex>] -- <command> [args...]`,
 //! the tail of the bwrap argument vector from
 //! `humanitl_sandbox::SandboxProfile::to_bwrap_args`, where the shim itself
 //! is `/usr/local/bin/humanitl-shim` inside the sandbox. `--proxy-port` is
@@ -40,7 +42,18 @@
 //! over it the daemon asks for further shells next to the agent
 //! (`exec.rs`). Only PID 1 keeps it: the agent's child closes it before its
 //! filter, and a missing or unusable descriptor means no further shells,
-//! never a failed start. `--lifeline-fd` (HUM-430) names the inherited read
+//! never a failed start. `--control-stream-fd` (HUM-443) names an inherited
+//! `SOCK_STREAM` socket whose other end only the daemon holds: the stream
+//! mode. The shim then opens the agent's pseudo-terminal itself, hands its
+//! follower to the agent's child alone as descriptors 0, 1, 2 and controlling
+//! terminal (PID 1 keeps its own standard streams), waits briefly
+//! for the daemon's first frame (the terminal's size), and serves terminal
+//! bytes, sizes, further shells, exits, interrupts and heartbeats as frames
+//! on that socket (`stream.rs`, `frame.rs`); the end of the socket ends the
+//! sandbox like the lifeline. It excludes `--control-fd` and `--stdio-fd`,
+//! and a descriptor that is no stream socket refuses the start. In the guest
+//! mode the same channel is the host's second connection on the report port
+//! (`guest.rs`). `--lifeline-fd` (HUM-430) names the inherited read
 //! end of a pipe whose only write end the daemon holds; when it reports
 //! `POLLHUP`, PID 1 ends the sandbox as on `SIGTERM` (`supervise.rs`). A
 //! number that names no pipe refuses the start. `--env-fd` (HUM-430) names a
@@ -166,6 +179,7 @@ mod modules;
 mod mounts;
 mod refusals;
 mod seccomp;
+mod stream;
 mod supervise;
 pub(crate) mod vsock;
 
@@ -198,7 +212,7 @@ const EXIT_SETUP: i32 = 126;
 const EXIT_EXEC: i32 = 127;
 
 const USAGE: &str = "usage: humanitl-shim --proxy-port <port> [--controlling-terminal] [--control-fd <n>]\n\
-                     \x20      [--lifeline-fd <n>] [--env-fd <n>] [--stdio-fd <n>] [--pins-fd <n>]\n\
+                     \x20      [--control-stream-fd <n>] [--lifeline-fd <n>] [--env-fd <n>] [--stdio-fd <n>] [--pins-fd <n>]\n\
                      \x20      [--handover <path> --handover-token <hex>]\n\
                      \x20      -- <command> [args...]\n\
                      \x20      humanitl-shim --rules    print the seccomp rule table for this environment\n\
@@ -240,17 +254,37 @@ pub(crate) fn main() {
 /// The guest mode (HUM-465): the steps of `guest.rs`, the mount table, then
 /// the same launch as under bwrap, with the door over vsock.
 fn run_guest(path: &Path) -> i32 {
-    let Some(guest::Booted { report, plan }) = guest::boot(path) else {
+    let Some(guest::Booted {
+        report,
+        plan,
+        control,
+    }) = guest::boot(path)
+    else {
         return EXIT_SETUP;
     };
     if !mounts::verify_pins(&plan.pins, &report) {
         guest::linger(&report);
         return EXIT_SETUP;
     }
+    // The terminals over the host's second connection (HUM-443): in a guest
+    // the stream mode is the only one.
+    let stream = match stream::nonblocking(control.as_raw_fd())
+        .map_err(|err| format!("flags:{err}").replace(' ', "_"))
+        .and_then(|()| stream_session(control))
+    {
+        Ok(session) => session,
+        Err(why) => {
+            let code = refuse_setup(&report, &SetupError::control_stream(&why));
+            guest::linger(&report);
+            return code;
+        }
+    };
     let cli = Cli {
         proxy_port: plan.proxy_port,
         command: plan.command,
         vsock_door: Some(plan.door_port),
+        controlling_terminal: true,
+        terminal_fd: stream.follower_fd(),
         ..Cli::default()
     };
     // A second descriptor on the report's connection: PID 1 drops the report
@@ -265,6 +299,7 @@ fn run_guest(path: &Path) -> i32 {
             Inherited {
                 control: None,
                 lifeline: None,
+                stream: Some(stream),
                 linger: linger.as_ref().map(AsRawFd::as_raw_fd),
             },
         ),
@@ -277,7 +312,7 @@ fn run_guest(path: &Path) -> i32 {
 }
 
 fn run(args: Vec<OsString>) -> i32 {
-    let cli = match parse_cli(args.into_iter()) {
+    let mut cli = match parse_cli(args.into_iter()) {
         Ok(cli) => cli,
         Err(CliError::Help) => {
             let _ = io::stdout().lock().write_all(USAGE.as_bytes());
@@ -355,6 +390,22 @@ fn run(args: Vec<OsString>) -> i32 {
         return EXIT_SETUP;
     }
 
+    // The stream mode (HUM-443): the daemon's socket, the agent's terminal
+    // as the standard streams, the first size. Refused like the lifeline:
+    // without it the agent has no terminal and nobody notices the daemon's
+    // end.
+    let stream = match cli.control_stream_fd {
+        None => None,
+        Some(fd) => match stream::take_control(fd).and_then(stream_session) {
+            Ok(session) => {
+                cli.controlling_terminal = true;
+                cli.terminal_fd = session.follower_fd();
+                Some(session)
+            }
+            Err(why) => return refuse_setup(&report, &SetupError::control_stream(&why)),
+        },
+    };
+
     // The daemon's door for further shells (HUM-299). Taken before the
     // descriptors are closed in `launch`, and never a reason to refuse the
     // start: without it there are simply no further shells.
@@ -368,11 +419,34 @@ fn run(args: Vec<OsString>) -> i32 {
             Inherited {
                 control,
                 lifeline,
+                stream,
                 linger: None,
             },
         ),
         Err(err) => refuse_setup(&report, &err),
     }
+}
+
+/// The size the agent's terminal has until the daemon names one.
+const DEFAULT_SIZE: (u16, u16) = (80, 24);
+
+/// How long the shim waits for the daemon's first frame, the size of the
+/// agent's terminal, before the agent starts without it.
+const SIZE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The stream mode's session over `control` (HUM-443): opens the agent's
+/// pseudo-terminal and waits for the daemon's first size. The follower goes
+/// to the agent's child alone ([`Cli::terminal_fd`]); PID 1 keeps the
+/// standard streams it was started with and never writes to a terminal, so
+/// that a full terminal cannot hold up the lifeline. Still single-threaded.
+fn stream_session(control: OwnedFd) -> Result<stream::Session, String> {
+    let pty = stream::open_pty(DEFAULT_SIZE.0, DEFAULT_SIZE.1)
+        .map_err(|err| format!("pty:{err}").replace(' ', "_"))?;
+    stream::nonblocking(pty.master.as_raw_fd())
+        .map_err(|err| format!("pty-flags:{err}").replace(' ', "_"))?;
+    let mut session = stream::Session::new(control, pty, &SHIM_VARS);
+    session.await_size(SIZE_WAIT);
+    Ok(session)
 }
 
 /// A setup failure before the fork: the failed check line, the message, 126.
@@ -424,6 +498,8 @@ struct Inherited {
     control: Option<OwnedFd>,
     /// `--lifeline-fd` (HUM-430).
     lifeline: Option<OwnedFd>,
+    /// The stream mode (HUM-443): the socket and the agent's terminal.
+    stream: Option<stream::Session>,
     /// In the guest mode, a copy of the report's descriptor that PID 1 keeps
     /// open past the report (HUM-465); never the agent's.
     linger: Option<RawFd>,
@@ -621,6 +697,7 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, inherited: Inherited) -
     let Inherited {
         control,
         lifeline,
+        stream,
         linger,
     } = inherited;
     // SAFETY: getpid has no preconditions.
@@ -655,6 +732,7 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, inherited: Inherited) -
         lifeline.as_ref().map_or(-1, AsRawFd::as_raw_fd),
         linger.unwrap_or(-1),
     ]);
+    keep.extend(stream.iter().flat_map(stream::Session::fds));
     close_inherited(&keep);
     // The pair over which the child hands its listener to the parent
     // (HUM-138), made after the close above and right before the fork, so
@@ -691,6 +769,10 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, inherited: Inherited) -
         // agent never holds them.
         drop(control);
         drop(lifeline);
+        // The stream's socket and the masters as well (HUM-443): not
+        // dropped here, because the follower must stay open until `child`
+        // has made it descriptors 0, 1 and 2; `close_inherited` there
+        // closes all of them, and `child` never returns.
         child(
             parent_pid,
             &AgentFilter {
@@ -706,8 +788,13 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, inherited: Inherited) -
     }
     drop(gate_read);
     drop(child_end);
-    let shells =
-        control.map(|control| exec::Shells::new(control, prepared.agent_fallback, &SHIM_VARS));
+    let shells = control
+        .map(|control| exec::Shells::new(control, prepared.agent_fallback.clone(), &SHIM_VARS));
+    let stream = stream.map(|mut session| {
+        session.release_follower();
+        session.start(pid, prepared.agent_fallback);
+        session
+    });
     let tally = Tally::new(
         prepared
             .policy
@@ -726,7 +813,11 @@ fn launch(prepared: Prepared, report: Report, cli: &Cli, inherited: Inherited) -
             control: parent_end,
             tally: Arc::new(tally),
         },
-        Waited { shells, lifeline },
+        Waited {
+            shells,
+            lifeline,
+            stream,
+        },
     )
 }
 
@@ -736,6 +827,8 @@ struct Waited {
     shells: Option<exec::Shells>,
     /// The daemon's lifeline, when it gave one.
     lifeline: Option<OwnedFd>,
+    /// The stream mode, when the daemon chose it (HUM-443).
+    stream: Option<stream::Session>,
 }
 
 /// The agent's two filters and the child's end of the channel to the parent.
@@ -852,6 +945,16 @@ fn child(
         exit_now(EXIT_SETUP);
     }
 
+    // The stream mode's terminal (HUM-443) becomes this child's standard
+    // streams, and only this child's: PID 1 keeps its own.
+    if let Some(fd) = cli.terminal_fd {
+        for target in 0..3 {
+            // SAFETY: dup2 between two descriptor numbers this process owns.
+            if unsafe { libc::dup2(fd, target) } < 0 {
+                exit_now(EXIT_SETUP);
+            }
+        }
+    }
     let keep: Vec<c_int> = [report.fd(), Some(gate.as_raw_fd()), filter.control_fd()]
         .into_iter()
         .flatten()
@@ -1232,7 +1335,11 @@ fn parent(
     refusals: &Refusals,
     waited: Waited,
 ) -> i32 {
-    let Waited { shells, lifeline } = waited;
+    let Waited {
+        shells,
+        lifeline,
+        mut stream,
+    } = waited;
     // The parent holds the listener and the report descriptor while the agent
     // runs. Neither may be reachable from the agent through
     // `/proc/<pid>/fd` or `pidfd_getfd(2)`: with the listener it could answer
@@ -1303,11 +1410,14 @@ fn parent(
     // same premises as the gate: this process wears its filter and is not
     // dumpable, and every shell forked from here inherits both (HUM-299).
     drop(gate);
-    let code = supervise::wait(child, shells.as_ref(), lifeline);
+    let code = supervise::wait(child, shells.as_ref(), lifeline, stream.as_mut());
     if let Some(shells) = &shells {
         // The namespace ends with this process anyway; the shells go first
         // and on purpose, not as a side effect.
         shells.kill_all();
+    }
+    if let Some(stream) = &stream {
+        stream.kill_shells();
     }
     // The last word on the refusals: everything that changed since the last
     // periodic flush, once the agent can make no further attempt.
@@ -1459,6 +1569,8 @@ struct Cli {
     controlling_terminal: bool,
     /// `--control-fd` (HUM-299).
     control_fd: Option<RawFd>,
+    /// `--control-stream-fd` (HUM-443).
+    control_stream_fd: Option<RawFd>,
     /// `--lifeline-fd` (HUM-430).
     lifeline_fd: Option<RawFd>,
     /// `--env-fd` (HUM-430).
@@ -1475,6 +1587,10 @@ struct Cli {
     /// The guest mode's door (HUM-465): the bridge forwards to this vsock
     /// port of the host. Never set from the command line.
     vsock_door: Option<u32>,
+    /// The stream mode's follower of the agent's terminal (HUM-443): the
+    /// agent's child makes it descriptors 0, 1 and 2 before anything else.
+    /// Never set from the command line.
+    terminal_fd: Option<RawFd>,
 }
 
 #[derive(Debug)]
@@ -1487,6 +1603,8 @@ enum CliError {
     BadFd(&'static str, String),
     MissingValue(&'static str),
     UnknownOption(String),
+    /// A flag that the stream mode excludes (HUM-443).
+    Conflict(&'static str),
     Positional(String),
     MissingCommand,
 }
@@ -1503,6 +1621,7 @@ impl fmt::Display for CliError {
             }
             Self::MissingValue(flag) => write!(f, "{flag} needs a value"),
             Self::UnknownOption(arg) => write!(f, "unknown option {arg:?}"),
+            Self::Conflict(flag) => write!(f, "--control-stream-fd excludes {flag}"),
             Self::Positional(arg) => write!(f, "unexpected argument {arg:?} before --"),
             Self::MissingCommand => write!(f, "no command after --"),
         }
@@ -1513,6 +1632,7 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
     let mut proxy_port = None;
     let mut controlling_terminal = false;
     let mut control_fd = None;
+    let mut control_stream_fd = None;
     let mut lifeline_fd = None;
     let mut env_fd = None;
     let mut stdio_fd = None;
@@ -1534,10 +1654,21 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
                     (None, Some(_)) => return Err(CliError::MissingValue("--handover")),
                     _ => {}
                 }
+                // The stream mode brings its own terminal and its own door
+                // (HUM-443): a second of either is a launcher bug.
+                if control_stream_fd.is_some() {
+                    if control_fd.is_some() {
+                        return Err(CliError::Conflict("--control-fd"));
+                    }
+                    if stdio_fd.is_some() {
+                        return Err(CliError::Conflict("--stdio-fd"));
+                    }
+                }
                 return Ok(Cli {
                     proxy_port,
                     controlling_terminal,
                     control_fd,
+                    control_stream_fd,
                     lifeline_fd,
                     env_fd,
                     stdio_fd,
@@ -1546,12 +1677,16 @@ fn parse_cli(mut args: impl Iterator<Item = OsString>) -> Result<Cli, CliError> 
                     handover_token,
                     command,
                     vsock_door: None,
+                    terminal_fd: None,
                 });
             }
             Some("--help" | "-h") => return Err(CliError::Help),
             Some("--rules") => return Err(CliError::Rules),
             Some("--controlling-terminal") => controlling_terminal = true,
             Some("--control-fd") => control_fd = Some(fd_value(&mut args, "--control-fd")?),
+            Some("--control-stream-fd") => {
+                control_stream_fd = Some(fd_value(&mut args, "--control-stream-fd")?);
+            }
             Some("--lifeline-fd") => lifeline_fd = Some(fd_value(&mut args, "--lifeline-fd")?),
             Some("--env-fd") => env_fd = Some(fd_value(&mut args, "--env-fd")?),
             Some("--stdio-fd") => stdio_fd = Some(fd_value(&mut args, "--stdio-fd")?),
@@ -1638,6 +1773,17 @@ impl SetupError {
         }
     }
 
+    /// The stream mode could not be set up (HUM-443): no stream socket, or
+    /// no pseudo-terminal. Without it there is neither a terminal nor a
+    /// lifeline, so nothing starts.
+    fn control_stream(why: &str) -> Self {
+        Self {
+            area: "control-stream",
+            check: Check::SeccompApplied,
+            why: why.to_owned(),
+        }
+    }
+
     /// The descriptor of `--lifeline-fd` is no pipe (HUM-430).
     fn lifeline(why: &str) -> Self {
         Self {
@@ -1709,6 +1855,52 @@ mod tests {
             .map(OsString::from)
             .collect::<Vec<_>>()
             .into_iter()
+    }
+
+    /// The stream mode (HUM-443) brings its own terminal and door; a second
+    /// door or an inherited terminal next to it is a launcher bug.
+    #[test]
+    fn the_stream_mode_excludes_the_other_door_and_the_inherited_terminal() {
+        let cli = parse_cli(args(&[
+            "--proxy-port",
+            "3128",
+            "--control-stream-fd",
+            "9",
+            "--",
+            "sh",
+        ]))
+        .unwrap();
+        assert_eq!(cli.control_stream_fd, Some(9));
+        assert_eq!(cli.control_fd, None);
+        for other in ["--control-fd", "--stdio-fd"] {
+            let err = parse_cli(args(&[
+                "--proxy-port",
+                "3128",
+                "--control-stream-fd",
+                "9",
+                other,
+                "8",
+                "--",
+                "sh",
+            ]))
+            .err()
+            .unwrap();
+            assert!(
+                matches!(err, CliError::Conflict(flag) if flag == other),
+                "{err}"
+            );
+        }
+        assert!(matches!(
+            parse_cli(args(&[
+                "--proxy-port",
+                "3128",
+                "--control-stream-fd",
+                "2",
+                "--",
+                "sh"
+            ])),
+            Err(CliError::BadFd("--control-stream-fd", _))
+        ));
     }
 
     #[test]

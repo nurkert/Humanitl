@@ -769,20 +769,33 @@ impl BwrapBackend {
     /// end)`, like the controlling terminal only at the daemon's own
     /// pseudo-terminal: a sandbox that runs without the daemon has nobody to
     /// ask for a shell. The shim's end lies above the standard streams
-    /// (`inherit.rs`).
+    /// (`inherit.rs`). In the stream mode (HUM-443) it is a stream pair that
+    /// carries the agent's terminal as well, with the terminal's size as its
+    /// first frame.
     pub(crate) fn shell_door(
-        stdio: StdioMode,
-    ) -> Result<(Option<OwnedFd>, Option<OwnedFd>), Diagnostic> {
-        if stdio.pty_size().is_none() {
+        options: &crate::LaunchOptions,
+    ) -> Result<(Option<crate::shell::DoorSeed>, Option<OwnedFd>), Diagnostic> {
+        let Some((cols, rows)) = options.stdio.pty_size() else {
             return Ok((None, None));
-        }
-        let (daemon_end, shim_end) = crate::shell::pair().map_err(|err| {
+        };
+        let stream = options.terminal == crate::TerminalTransport::Stream;
+        let pair = if stream {
+            crate::shell::stream_pair(cols, rows)
+        } else {
+            crate::shell::pair()
+        };
+        let (daemon_end, shim_end) = pair.map_err(|err| {
             placeholder_diagnostic(format!("cannot create the door for further shells: {err}"))
         })?;
         let shim_end = above_stdio(shim_end).map_err(|err| {
             placeholder_diagnostic(format!("cannot place the door for further shells: {err}"))
         })?;
-        Ok((Some(daemon_end), Some(shim_end)))
+        let seed = if stream {
+            crate::shell::DoorSeed::Stream(daemon_end)
+        } else {
+            crate::shell::DoorSeed::Socket(daemon_end)
+        };
+        Ok((Some(seed), Some(shim_end)))
     }
 }
 
@@ -922,7 +935,7 @@ impl SandboxBackend for BwrapBackend {
 
         let (agent_fds, agent_files) = Self::agent_file_fds(session)?;
         let (work_dir, read_only, writable) = pinned.sources(self);
-        let (shell_door, shim_door) = Self::shell_door(options.stdio)?;
+        let door = ShimDoor::new(options.stdio, Self::shell_door(options)?);
 
         let inputs = LaunchInputs {
             masks: MaskFds::Each(masks.iter().map(AsRawFd::as_raw_fd).collect()),
@@ -940,11 +953,9 @@ impl SandboxBackend for BwrapBackend {
             extra_rw: writable,
             session_ro: pinned.session_sources(self),
             agent_program: pinned.agent.as_ref().map(|agent| self.source_fd(agent)),
-            // Only at the daemon's own pseudo-terminal (HUM-280). Inherited
-            // descriptors may be the user's terminal, and that one must never
-            // become a controlling terminal inside the sandbox (`TIOCSTI`).
-            controlling_terminal: options.stdio.pty_size().is_some(),
-            control_fd: shim_door.as_ref().map(AsRawFd::as_raw_fd),
+            controlling_terminal: door.controlling_terminal,
+            control_fd: door.control_fd,
+            control_stream_fd: door.control_stream_fd,
             overlay: options.overlay().cloned(),
             pins_fd: None,
         };
@@ -954,10 +965,9 @@ impl SandboxBackend for BwrapBackend {
         argv.extend(line.args);
 
         let mut inherit = vec![report_writer, status_writer, passwd, group, hosts];
-        inherit.extend(masks);
-        inherit.extend(agent_fds);
+        inherit.extend(masks.into_iter().chain(agent_fds));
         inherit.extend(pinned.into_fds());
-        inherit.extend(shim_door.into_iter().chain([pins]));
+        inherit.extend(door.shim_end.into_iter().chain([pins]));
         let fds = inherit
             .iter()
             .map(|fd| (fd.as_raw_fd(), fd.as_raw_fd()))
@@ -986,7 +996,7 @@ impl SandboxBackend for BwrapBackend {
                 report: report_reader,
                 status: Some(status_reader),
                 output_sink: options.output_sink.clone(),
-                shells: shell_door.map(crate::shell::DoorSeed::Socket),
+                shells: door.seed,
                 detached: None,
             })),
         })
@@ -1094,6 +1104,69 @@ pub(crate) fn isolation_from_report(handle: &SandboxHandle, timeout: Duration) -
     vec![interfaces, door, seccomp]
 }
 
+/// The door of a plan and the shim's terminal flags.
+struct ShimDoor {
+    /// The daemon's end, opened after the start.
+    seed: Option<crate::shell::DoorSeed>,
+    /// The shim's end, inherited.
+    shim_end: Option<OwnedFd>,
+    /// `--controlling-terminal`.
+    controlling_terminal: bool,
+    /// `--control-fd`.
+    control_fd: Option<RawFd>,
+    /// `--control-stream-fd`.
+    control_stream_fd: Option<RawFd>,
+}
+
+impl ShimDoor {
+    /// The controlling terminal only at the daemon's own pseudo-terminal
+    /// (HUM-280): inherited descriptors may be the user's terminal, and that
+    /// one must never become a controlling terminal inside the sandbox
+    /// (`TIOCSTI`). In the stream mode (HUM-443) the shim opens the terminal
+    /// and takes it as the controlling terminal itself, so only
+    /// `--control-stream-fd` is set.
+    fn new(
+        stdio: StdioMode,
+        (seed, shim_end): (Option<crate::shell::DoorSeed>, Option<OwnedFd>),
+    ) -> Self {
+        let fd = shim_end.as_ref().map(AsRawFd::as_raw_fd);
+        let stream = seed.as_ref().is_some_and(crate::shell::DoorSeed::is_stream);
+        Self {
+            seed,
+            shim_end,
+            controlling_terminal: stdio.pty_size().is_some() && !stream,
+            control_fd: fd.filter(|_| !stream),
+            control_stream_fd: fd.filter(|_| stream),
+        }
+    }
+}
+
+/// Opens the door after the start. A door that cannot open costs the further
+/// shells, never the session (HUM-299), except in the stream mode, where
+/// the door is the terminal as well: without its reader nobody would see the
+/// agent (HUM-443).
+fn open_door(
+    seed: crate::shell::DoorSeed,
+    shared: &Arc<Shared>,
+    handle: &SandboxHandle,
+) -> Result<(), Diagnostic> {
+    let stream = seed.is_stream();
+    let target = Arc::clone(shared);
+    match seed.open(Box::new(move |bytes| target.append_pty(bytes))) {
+        Ok(door) => shared.set_shells(door),
+        Err(err) if stream => {
+            handle.kill();
+            return Err(Diagnostic::builder(SANDBOX_012, Severity::Blocking)
+                .why(format!(
+                    "cannot start the reader of the control stream: {err}"
+                ))
+                .build());
+        }
+        Err(_) => {}
+    }
+    Ok(())
+}
+
 /// Starts a plan: the supervisor thread, the readers of report and status,
 /// and the wait for the first line or an early end. The same for every
 /// backend that starts one program with inherited descriptors (bwrap,
@@ -1119,7 +1192,13 @@ pub(crate) fn launch_plan(plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic
     let (lifeline, handover) = detached.map_or((None, None), |detached| {
         (Some(detached.lifeline), detached.handover)
     });
-    let stdio = plan.stdio;
+    // In the stream mode the shim holds the terminal (HUM-443): the program
+    // itself runs with its output collected, so that a message of bwrap
+    // still explains a failed start, and the terminal comes over the stream.
+    let stdio = match &shells {
+        Some(seed) if seed.is_stream() => StdioMode::Capture,
+        _ => plan.stdio,
+    };
     let renumbered = plan.renumbered;
     let report_timeout = plan.report_timeout;
     let id = SandboxId::new();
@@ -1184,13 +1263,10 @@ pub(crate) fn launch_plan(plan: &LaunchPlan) -> Result<SandboxHandle, Diagnostic
     })??;
     let handle = SandboxHandle::new(id, pid, plan.argv_line(), Arc::clone(&shared))
         .with_launch(plan.teardown.clone(), plan.report_timeout);
-    // The door opens after `bwrap` holds its end, and a door that cannot
-    // open costs the further shells, never the session (HUM-299).
-    // `SandboxHandle::open_shell` then says that there is no door.
-    if let Some(seed) = shells
-        && let Ok(door) = seed.open()
-    {
-        shared.set_shells(door);
+    // The door opens after `bwrap` holds its end ([`open_door`]);
+    // `SandboxHandle::open_shell` says it when there is none.
+    if let Some(seed) = shells {
+        open_door(seed, &shared, &handle)?;
     }
 
     // Ohne die Leser gäbe es weder Bericht noch Befund; dann lieber gar

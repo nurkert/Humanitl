@@ -6,6 +6,10 @@
 //! wie der Schreiber, ohne selbst schreiben zu können? Spielt ein Anhängender
 //! den Rückstand ab, und ist er gefiltert?
 //!
+//! Dieselbe Datei läuft zweimal (HUM-443, Akzeptanzkriterium 1): als eigenes
+//! Testbinary mit dem Terminal als Deskriptor, und als Modul von
+//! `terminal_stream.rs` mit dem Terminal im Strom-Modus ([`transport`]).
+//!
 //! Der Test braucht `bwrap`, einen Kernel mit unprivilegierten
 //! Nutzer-Namensräumen und den gebauten Shim neben dem Testbinary. Fehlt
 //! eines, sagt er es auf stderr und endet grün: „kein `bwrap` auf dieser
@@ -29,6 +33,19 @@ use humanitl_ipc::{SandboxService, TerminalHub, v1};
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::ReceiverStream;
+
+/// Wie das Terminal reist: der Deskriptor, wenn diese Datei ihr eigenes
+/// Testbinary ist, der Strom, wenn `terminal_stream.rs` sie als Modul
+/// `stream_cases` einbindet (HUM-443). Ein Backend, das ausdrücklich
+/// verlangt wird (ESC-5), läuft immer mit dem Deskriptor; der Strom gilt dem
+/// Backend des Systems.
+fn transport() -> humanitl_sandbox::TerminalTransport {
+    if module_path!().ends_with("::stream_cases") {
+        humanitl_sandbox::TerminalTransport::Stream
+    } else {
+        humanitl_sandbox::TerminalTransport::Descriptor
+    }
+}
 
 /// Das mitgelieferte Profil, damit die Kommandozeile dieselbe ist, die im
 /// Produkt startet.
@@ -134,7 +151,7 @@ impl Fixture {
         SandboxService::new(
             SessionResolver::for_config(self.paths.clone(), Config::default()),
             SessionId::new(),
-            SandboxPorts::none(),
+            SandboxPorts::none().with_terminal(transport()),
         )
     }
 
@@ -868,6 +885,15 @@ async fn a_resize_reaches_the_agent() {
     };
 
     with_session(service, async move {
+        // Der Weg, den diese Datei gewählt hat, ist der, den das Terminal
+        // nimmt (HUM-443): Sonst prüfte `terminal_stream.rs` zweimal den
+        // Deskriptor.
+        assert_eq!(
+            hub.streamed(),
+            transport() == humanitl_sandbox::TerminalTransport::Stream,
+            "the terminal travels the way {} chose",
+            module_path!()
+        );
         let mut writer = Client::attach(&hub, 100, 30, false);
         let mut seen = String::new();
         assert!(
@@ -1307,7 +1333,9 @@ async fn two_sessions_leave_nothing_behind() {
     let service = SandboxService::new(
         SessionResolver::for_config(fixture.paths.clone(), Config::default()),
         SessionId::new(),
-        SandboxPorts::none().with_notices(humanitl_ipc::HeldNotices::new(queue, registry)),
+        SandboxPorts::none()
+            .with_notices(humanitl_ipc::HeldNotices::new(queue, registry))
+            .with_terminal(transport()),
     );
 
     let mut open = Vec::new();
@@ -1612,6 +1640,14 @@ async fn exec_shell(
     let hub = service
         .terminal_for(&shell_open(&response.shell_id))
         .expect("a shell that was just opened has a terminal");
+    // Eine weitere Shell nimmt denselben Weg wie das Terminal des Agenten
+    // (HUM-443).
+    assert_eq!(
+        hub.streamed(),
+        transport() == humanitl_sandbox::TerminalTransport::Stream,
+        "the shell's terminal travels the way {} chose",
+        module_path!()
+    );
     Ok((response.shell_id, hub))
 }
 
@@ -2039,6 +2075,78 @@ async fn a_shell_id_holds_only_in_its_own_session() {
             assert_eq!(error.code.as_str(), "IPC_006", "{error}");
         }
         assert!(inner.terminal_for(&shell_open(&shell_id)).is_ok());
+    })
+    .await;
+}
+
+/// ESC-1 an diesem Terminal (HUM-443, Akzeptanzkriterium 2): Der Agent
+/// bekommt weder einen `AF_VSOCK`- noch einen `AF_UNIX`-Socket, auch nicht,
+/// wenn der Shim den Steuerkanal als Strom hält. Der Kanal liegt bei PID 1,
+/// vor dem Filter des Agenten geöffnet; der Agent selbst bleibt unter dem
+/// Filter, der beide Familien mit `EPERM` ablehnt.
+///
+/// Es läuft das Skript der Escape-Suite selbst, `tests/escape/esc-1-sockets.sh`
+/// mit seinem `lib.sh`, kopiert in den Projektordner; sein Ergebnis steht
+/// danach unter `results/esc-1.txt`. Geprüft werden die zwei Fälle dieses
+/// Issues, nicht die ganze Suite: Die läuft unter `--profile test` in
+/// `tests/escape/run.sh`, hier unter dem mitgelieferten Profil.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn esc_1_refuses_the_agent_vsock_and_unix_sockets() {
+    let fixture = Fixture::new();
+    if !usable(&fixture) {
+        return;
+    }
+    if !Path::new("/usr/bin/python3").is_file() {
+        refuse_under_ci(
+            "python3 is missing, and ESC-1 probes the sockets with it",
+            "apt-get install -y python3",
+        );
+        return;
+    }
+    let suite = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/escape");
+    let copy = fixture.work.join("escape");
+    std::fs::create_dir_all(&copy).expect("the escape directory");
+    for script in ["esc-1-sockets.sh", "lib.sh"] {
+        std::fs::copy(suite.join(script), copy.join(script))
+            .unwrap_or_else(|err| panic!("{script} is readable: {err}"));
+    }
+    let results = fixture.work.join("results/esc-1.txt");
+    let service = fixture.service();
+    let Some(_hub) = running_with(
+        &service,
+        fixture.start_command(&["/bin/sh", "/work/escape/esc-1-sockets.sh"]),
+    )
+    .await
+    else {
+        return;
+    };
+    with_session(service, async move {
+        let until = tokio::time::Instant::now() + Duration::from_secs(180);
+        let text = loop {
+            let text = std::fs::read_to_string(&results).unwrap_or_default();
+            if text.contains("SUITE-DONE esc-1") {
+                break text;
+            }
+            assert!(
+                tokio::time::Instant::now() < until,
+                "ESC-1 did not finish in {}: {text}",
+                module_path!()
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        };
+        for case in ["socket_af_vsock", "socket_af_unix"] {
+            let line = text
+                .lines()
+                .find(|line| line.starts_with(&format!("RESULT esc-1 {case} ")))
+                .unwrap_or_else(|| panic!("no {case} in {text}"));
+            assert!(
+                line.starts_with(&format!("RESULT esc-1 {case} pass ")) && line.contains("EPERM"),
+                "{} in {}: {line}",
+                case,
+                module_path!()
+            );
+        }
     })
     .await;
 }

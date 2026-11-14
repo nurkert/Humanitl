@@ -99,7 +99,8 @@ use humanitl_sandbox::{
     AdapterRegistry, AgentContext, AgentKey, Backend, CheckResult, DisposableLayer, IsolationCheck,
     KILL_GRACE, LaunchOptions, MountPolicy, PlanPreview, PlanRequest, PolicyMode, PolicyOrigin,
     PolicyRow, SANDBOX_SHELL, SandboxBackend, SandboxFile, SandboxHandle, SandboxProfile,
-    SessionContext, StdioMode, Termination, WorkDirSource, check_project_dir, shell_line,
+    SessionContext, StdioMode, TerminalTransport, Termination, WorkDirSource, check_project_dir,
+    shell_line,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -685,6 +686,8 @@ struct Inner {
     /// Das Backend, das Plan und Start nehmen, statt es auf dem System zu
     /// suchen ([`SandboxPorts::backend`]).
     backend: Option<Backend>,
+    /// Wie das Terminal reist ([`SandboxPorts::terminal`]).
+    terminal: TerminalTransport,
     /// Die Ziehen eines Abbilds, die gerade laufen, nach ihrer Kennung
     /// (HUM-457); `cancel_image_pull` bricht über sie ab.
     image_pulls: crate::image_pulls::ImagePulls,
@@ -733,6 +736,10 @@ pub struct SandboxPorts {
     /// lässt sich außerhalb der Suite gar nicht bauen
     /// (`humanitl_sandbox::UNADMITTED_BACKENDS_BUILT`).
     pub backend: Option<Backend>,
+    /// Wie das Terminal reist (HUM-443). Die Vorgabe ist der Deskriptor;
+    /// den Strom setzen die Terminal-Tests, damit beide Modi dieselben
+    /// Prüfungen bestehen, und die Kernel-Stufe kennt nur ihn.
+    pub terminal: TerminalTransport,
 }
 
 impl SandboxPorts {
@@ -786,6 +793,14 @@ impl SandboxPorts {
         self.backend = Some(backend);
         self
     }
+
+    /// Dieselben Anschlüsse mit diesem Weg des Terminals
+    /// ([`SandboxPorts::terminal`]).
+    #[must_use]
+    pub fn with_terminal(mut self, terminal: TerminalTransport) -> Self {
+        self.terminal = terminal;
+        self
+    }
 }
 
 impl SandboxService {
@@ -819,6 +834,7 @@ impl SandboxService {
                 llm_reach: LlmReach::default(),
                 disposable: Mutex::new(None),
                 backend: ports.backend,
+                terminal: ports.terminal,
                 image_pulls: crate::image_pulls::ImagePulls::default(),
             }),
         }
@@ -2823,6 +2839,7 @@ impl Inner {
             cols: DEFAULT_TERMINAL_SIZE.0,
             rows: DEFAULT_TERMINAL_SIZE.1,
         };
+        options.terminal = self.terminal;
         if let Some(pin) = &pinned {
             options.approved_work_dir = Some(pin.path.to_path_buf());
         }

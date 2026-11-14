@@ -559,7 +559,7 @@ fn received_fds(msg: &libc::msghdr) -> Vec<OwnedFd> {
 }
 
 /// A NUL-terminated array of pointers into `strings`.
-fn pointers(strings: &[CString]) -> Vec<*const c_char> {
+pub(crate) fn pointers(strings: &[CString]) -> Vec<*const c_char> {
     strings
         .iter()
         .map(|string| string.as_ptr())
@@ -589,8 +589,9 @@ fn fail(why: &[u8], code: c_int) -> ! {
 /// descriptor 2, the agent's filter proven, then the command. Never returns.
 ///
 /// Allocates nothing: the parent has other threads, and a lock one of them
-/// held at the fork stays held here for ever.
-fn child(
+/// held at the fork stays held here for ever. The stream mode starts its
+/// shells through the same function (`stream.rs`, HUM-443).
+pub(crate) fn child(
     parent: libc::pid_t,
     follower: RawFd,
     argv: &[*const c_char],
@@ -645,6 +646,12 @@ fn child(
     let stream = (libc::SOCK_STREAM | libc::SOCK_CLOEXEC).unsigned_abs();
     if seccomp::probe_socket(u64::from(unix), u64::from(stream)) != Err(libc::EPERM) {
         fail(b"the agent's filter does not refuse AF_UNIX", EXIT_SETUP);
+    }
+    // In a guest the parent's filter allows `AF_VSOCK` for the door instead
+    // (HUM-465); a shell that could open one would reach the host's device.
+    let vsock = libc::AF_VSOCK.unsigned_abs();
+    if seccomp::probe_socket(u64::from(vsock), u64::from(stream)) != Err(libc::EPERM) {
+        fail(b"the agent's filter does not refuse AF_VSOCK", EXIT_SETUP);
     }
     crate::linux::reset_signal_dispositions();
     // SAFETY: `argv` and `envp` are NUL-terminated arrays of pointers to

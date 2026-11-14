@@ -431,6 +431,35 @@ files (`bash --norc --noprofile -i`, or `sh -i` with `ENV` unset), so a `~/.bash
 `~/.profile` the agent planted in the sandbox's home does not run when it opens; a command the
 caller names after `--` decides that for itself.
 
+**The stream mode (HUM-443).** In a micro-VM no descriptor crosses the boundary, so the kernel
+level carries the terminals another way, and under bwrap a caller can ask for the same
+(`TerminalTransport::Stream`), so that both modes face the same terminal tests. The shim then opens
+the agent's pseudo-terminal and every further shell's itself, and the daemon talks to them over one
+stream socket in frames (`daemon/bin/humanitl-shim/src/frame.rs`, compiled by both ends): terminal
+bytes per id, sizes, open and close of a shell, exits, interrupts and heartbeats. Under bwrap the
+socket is an unnamed pair the launcher creates and passes as `--control-stream-fd`; in a guest the
+host opens it with `CONNECT` at the vsock device as the second connection on the shim's one
+listening port, after the report, and the guest never opens one. The claims of the door hold
+unchanged, and these are added:
+
+- The stream carries terminal bytes and control, never a byte to or from the proxy; the bridge
+  stays the only way out.
+- Only PID 1 holds the socket and the masters, all with `CLOEXEC`; the agent's child closes them
+  before its filter, every further shell closes every descriptor above 2. The agent's filter,
+  and the one every further shell installs and proves before `exec`, refuses `AF_VSOCK` and
+  `AF_UNIX` with `EPERM`; ESC-1 checks it in the stream mode.
+- Every frame has a nine-byte header (kind, id, length) and at most 16 KiB of payload. Both ends
+  count a longer frame away without keeping it, skip unknown kinds, drop frames of the wrong shape
+  or direction and answers for ids nobody opened; none of it ends the stream, and no reader holds
+  more than one frame (fuzz target `control_stream_reader`).
+- The end of the stream ends the sandbox like the lifeline. PID 1 never writes to a terminal
+  and signals before any message, so a full terminal cannot hold up the end; a frame the shim
+  does not take within ten seconds makes the daemon shut the stream. Interrupts come from the
+  shim (`SIGINT` to the foreground group of the terminal), because no signal of the host reaches
+  a guest.
+- No channel holds up another: input for a terminal whose queue is full (64 KiB) is dropped,
+  output of a further shell whose reader stalls is dropped beyond 256 pieces, both counted.
+
 ### The lifeline and the environment through descriptors (HUM-430)
 
 Two things bwrap does with flags need a descriptor once a backend starts the sandbox detached from
@@ -1730,6 +1759,7 @@ passthrough or the audit chain gets a line here and in the change history of
 | 0.1.0 | OpenCode no longer asks before `webfetch` and `bash`; the proxy is the one place that asks. Its `bash` waits as long as a held request (HUM-308). |
 | 0.1.0 | A `br` body with the large-window marker (outside RFC 7932) is not decoded but reported as a gap; five bytes of it made the decoder reserve 512 MiB, up to 1 GiB, outside the decompression budget (HUM-425). |
 | 0.1.x | Further shells next to the agent: the daemon asks PID 1 over an unnamed `SOCK_SEQPACKET` pair only it and PID 1 hold; the shim forks the shell from inside with the agent's filter on top, proven by a refused `AF_UNIX`; at most four, ending with their process or the sandbox (HUM-299). |
+| 0.1.x | The stream mode of the terminals: the shim opens the pseudo-terminals of the agent and of every further shell, and the daemon talks to them over one stream socket in frames with fixed maximum lengths, oversized frames, unknown kinds and unknown ids dropped; the stream carries no byte for the proxy, the agent's filter refuses `AF_VSOCK` and `AF_UNIX`, and the end of the stream ends the sandbox (HUM-443). |
 | 0.1.x | pi loads the globally installed extension `pi-web-access` (`agent.pi.web_access`, default `auto`, closed to project profiles); its requests go through the proxy like every other (HUM-309). |
 | 0.1.x | macOS: the disposable sandbox on an APFS clone, masks removed from the clone and denied in it, the real project sealed, the clone renamed before it is read, and a failed clone that is never silent: `auto` warns with `SANDBOX_033`, an explicit `disposable` refuses with `SANDBOX_030` (HUM-374, K-24). |
 | 0.1.x | Updates from inside the app: a daily check of GitHub (`update.check`, default on), manifests signed with Ed25519 and checked against a built-in key, size and SHA-256 checked while downloading, code signature and version checked before an atomic swap with restore; APT and dnf packages through `pkexec` and their package manager (HUM-382, [Updates](#updates-from-inside-the-app), K-25). |
