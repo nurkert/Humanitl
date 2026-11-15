@@ -17,6 +17,34 @@ section here and list their commits instead.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-15
+
+Fixes from a review of the whole tool, most of them in the kernel level. The
+protocol gains one field (`ImagePull.plan`), so this is a minor version.
+
+### Fixed
+
+- Kernel level: input over the terminal stream travels under credit and is
+  never dropped when the guest reads slowly; a shell whose open failed is
+  closed and its process group killed in the guest after a short grace;
+  window size changes and closes no longer wait on a busy stream.
+- `humanitl sandbox image pull` and the app pull the image for the backend
+  of the session (`--backend`, the project profile), not always the
+  configured one; the fix the CLI proposes repeats the reference and the
+  backend.
+- The host limits of a backend (CPUs, memory) are checked when that backend
+  starts, not when the configuration loads, so a setting meant for another
+  machine no longer breaks every start.
+- Setting fixes propose values without TOML quotes, in the form
+  `humanitl config set` takes.
+- `humanitl doctor` and the backend list answer within the app's deadline;
+  a backend still being checked says so (`DOCTOR_012`) instead of timing out.
+- A cached doctor probe no longer outlives a change of its inputs: another
+  kernel image, kernel config, module list, program or runtime directory
+  probes again.
+- The app keeps the backend section in place while the list for a newly
+  chosen backend loads, instead of collapsing it.
+
 ## [0.2.0] - 2026-11-15
 
 Two more sandbox backends on Linux, each chosen by a person and never by
