@@ -2685,6 +2685,23 @@ Aus dem Ultra-Review. `Config::validate` prüft `sandbox.podman.{memory_mib,cpus
 ### Akzeptanzkriterien
 1. Kein Wert eines nicht gewählten Backends macht die Konfiguration unladbar.
 
+### Stand nach der Umsetzung (2026-11-15)
+
+**Laden.** `Config::validate` prüft für `sandbox.podman` und die Gruppe der Kernel-Stufe nur noch die festen Untergrenzen (256 MiB, 1 CPU); `validate_on` und der Blick auf den Host beim Laden sind weg. Damit urteilen Daemon und CLI gleich, unabhängig von der CPU-Affinität des Prozesses.
+
+**Start.** Die Obergrenzen aus dem Host stehen in `humanitl_config::resources_within_host` mit dem nun öffentlichen `HostResources` (Wortlaut, Code `CONFIG_003` und Vorschlag `ChangeSetting` mit dem größten Wert des Hosts unverändert). Der Plan der Container-Engine und der Plan der Kernel-Stufe rufen sie als erstes, nur für gesetzte Werte; abgeleitete Werte liegen nie über dem Host. Die Container-Engine hält dafür die gesetzten Werte neben den abgeleiteten (`Settings::configured`) und liest den Host über `HostResources::probe` statt einer eigenen Kopie des Lesens von `/proc/meminfo`.
+
+**Tests.** config: Werte über jedem Host laden unter jedem Backend; `resources_within_host` nennt Schlüssel, Grund und Vorschlag. sandbox: Der Plan beider Backends lehnt Werte über diesem Host mit `CONFIG_003` ab, bevor er etwas prüft oder anlegt; gegen den Host geprüft wird nur, was gesetzt ist. ipc: Mit Werten über jedem Host in beiden Gruppen plant ein Start mit dem Backend des Systems ohne `CONFIG_003`; der Start mit der Engine (HUM-448) lehnt jetzt im Plan ab und läuft nie. Mutationsbeweise: die Obergrenzen wieder beim Laden machen den config- und den ipc-Test rot, ohne die Prüfung im Plan werden beide Plan-Tests rot.
+
+**Offen.** `humanitl doctor` warnt ohne `--probe` nicht vor einem Wert über diesem Host; mit `--probe` scheitert der Probestart des Backends mit dem Befund. Eine eigene Zeile im Doctor wäre ein neuer `BackendCheckId` samt Oberfläche, also ein eigenes Issue.
+
+Review: kein blocking oder major. Kandidaten, aufgenommen in die Folge-Issues:
+`humanitl doctor --probe` nimmt einen gespeicherten erfolgreichen Probestart,
+bevor der Plan die Werte gegen den Rechner prüft (gehört zum Schlüssel des
+Zwischenspeichers, HUM-506); die Backend-Liste meldet ein Backend als
+verfügbar, dessen Werte über dem Rechner liegen (gehört zur Liste, HUM-502);
+die Vorschau zeigt die zu großen Werte, abgelehnt wird erst der Plan.
+
 
 ---
 

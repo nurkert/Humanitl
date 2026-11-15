@@ -108,7 +108,7 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use humanitl_config::{Paths, PodmanConfig, PodmanRootfs, PodmanRuntime};
+use humanitl_config::{HostResources, Paths, PodmanConfig, PodmanRootfs, PodmanRuntime};
 use humanitl_core::diagnostics::codes::{
     CONFIG_003, SANDBOX_011, SANDBOX_012, SANDBOX_030, SANDBOX_037,
 };
@@ -160,6 +160,9 @@ const SECCOMP_PROFILE: &str = include_str!("seccomp.json");
 const REGISTRIES_CONF: &str =
     "unqualified-search-registries = []\ncredential-helpers = [\"containers-auth.json\"]\n";
 
+/// Die Gruppe des Adapters in der Konfiguration.
+const CONFIG_GROUP: &str = "sandbox.podman";
+
 /// Arbeitsspeicher, wenn der Host ihn nicht nennt, in MiB.
 const FALLBACK_MEMORY_MIB: u64 = 2048;
 
@@ -180,13 +183,17 @@ struct Settings {
     image: Option<String>,
     memory_mib: u64,
     cpus: u32,
+    /// `sandbox.podman.memory_mib` und `sandbox.podman.cpus`, wie gesetzt:
+    /// Nur sie prüft der Start gegen den Host ([`Settings::within_host`]).
+    configured: (Option<u64>, Option<u32>),
     pids: u64,
     start_timeout: Duration,
 }
 
 impl Settings {
     fn from_config(config: &PodmanConfig) -> Self {
-        Self::with_host(config, host_memory_mib(), host_cpus())
+        let host = HostResources::probe();
+        Self::with_host(config, host.memory_mib, host.cpus)
     }
 
     /// `memory_mib` leer: die Hälfte des Arbeitsspeichers des Hosts,
@@ -204,9 +211,25 @@ impl Settings {
             cpus: config
                 .cpus
                 .unwrap_or_else(|| cpus.map_or(1, |count| (count / 2).clamp(1, MAX_DERIVED_CPUS))),
+            configured: (config.memory_mib, config.cpus),
             pids: config.pids_limit,
             start_timeout: Duration::from_secs(config.start_timeout_secs),
         }
+    }
+
+    /// Ob die gesetzten Werte für Arbeitsspeicher und CPUs auf `host`
+    /// passen (HUM-501). Das Laden prüft nur die festen Untergrenzen, damit
+    /// ein Wert über diesem Rechner kein anderes Backend aufhält; der Start
+    /// dieses Backends lehnt ihn ab, mit demselben Befund, den früher das
+    /// Laden gab.
+    ///
+    /// # Errors
+    ///
+    /// `CONFIG_003` mit dem Schlüssel, dem Wert und dem größten Wert, den
+    /// dieser Host annimmt.
+    fn within_host(&self, host: HostResources) -> Result<(), Diagnostic> {
+        let (memory_mib, cpus) = self.configured;
+        humanitl_config::resources_within_host(CONFIG_GROUP, memory_mib, cpus, host)
     }
 
     fn limits(&self) -> ResourceLimits {
@@ -216,23 +239,6 @@ impl Settings {
             pids: u32::try_from(self.pids).ok(),
         }
     }
-}
-
-/// `MemTotal` des Hosts in MiB.
-fn host_memory_mib() -> Option<u64> {
-    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
-    let line = text
-        .lines()
-        .find_map(|line| line.strip_prefix("MemTotal:"))?;
-    let kib: u64 = line.trim().strip_suffix("kB")?.trim().parse().ok()?;
-    Some(kib / 1024)
-}
-
-/// Die CPUs, die dieser Prozess nutzen darf.
-fn host_cpus() -> Option<u32> {
-    std::thread::available_parallelism()
-        .ok()
-        .and_then(|count| u32::try_from(count.get()).ok())
 }
 
 /// Podman als Sandbox-Backend der gemeinsamen Stufe.
@@ -1495,13 +1501,16 @@ impl SandboxBackend for PodmanBackend {
     /// Was [`BwrapBackend`] für dieselbe Anfrage ablehnte (`SANDBOX_005`,
     /// `SANDBOX_006`, `SANDBOX_011`), dazu `SANDBOX_030` für eine
     /// Wegwerf-Sandbox, `SANDBOX_043` für ein Abbild, das nicht mit genau
-    /// seinem Digest vorliegt, und `SANDBOX_006` für einen Pfad mit Komma.
+    /// seinem Digest vorliegt, `SANDBOX_006` für einen Pfad mit Komma, und
+    /// `CONFIG_003` für Arbeitsspeicher oder CPUs über diesem Host
+    /// (HUM-501).
     fn plan(&self, request: &PlanRequest<'_>) -> Result<LaunchPlan, Diagnostic> {
         let PlanRequest {
             profile,
             session,
             options,
         } = *request;
+        self.settings.within_host(HostResources::probe())?;
         self.refuse_unsupported(request)?;
         let policy = MountPolicy::from_paths(&self.paths);
         profile.validate_with(&policy)?;

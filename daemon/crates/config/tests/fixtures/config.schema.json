@@ -787,7 +787,7 @@
           "properties": {
             "cpus": {
               "default": null,
-              "description": "Zahl der CPUs der Sandbox, mindestens 1 und höchstens die Zahl der CPUs, die der Daemon nutzen darf. Leer heißt: der Start leitet sie vom Host ab (die Hälfte seiner CPUs, mindestens 1, höchstens 4).",
+              "description": "Zahl der CPUs der Sandbox, mindestens 1 und höchstens die Zahl der CPUs, die der Daemon nutzen darf. Die Obergrenze prüft der Start dieses Backends (`CONFIG_003`), nicht das Laden. Leer heißt: der Start leitet sie vom Host ab (die Hälfte seiner CPUs, mindestens 1, höchstens 4).",
               "format": "uint32",
               "minimum": 0,
               "type": [
@@ -809,7 +809,7 @@
             },
             "memory_mib": {
               "default": null,
-              "description": "Arbeitsspeicher der Sandbox in MiB, mindestens 256 und höchstens der Arbeitsspeicher des Hosts. Leer heißt: der Start leitet ihn vom Host ab (die Hälfte seines Arbeitsspeichers, höchstens 4096), damit die Vorgabe auf jedem Rechner gilt.",
+              "description": "Arbeitsspeicher der Sandbox in MiB, mindestens 256 und höchstens der Arbeitsspeicher des Hosts. Die Obergrenze prüft der Start dieses Backends (`CONFIG_003`), nicht das Laden: Ein Wert über diesem Rechner hält kein anderes Backend auf. Leer heißt: der Start leitet ihn vom Host ab (die Hälfte seines Arbeitsspeichers, höchstens 4096), damit die Vorgabe auf jedem Rechner gilt.",
               "format": "uint64",
               "minimum": 0,
               "type": [
@@ -906,7 +906,7 @@
           "properties": {
             "cpus": {
               "default": null,
-              "description": "Zahl der virtuellen CPUs der Micro-VM, mindestens 1 und höchstens die Zahl der CPUs, die der Daemon nutzen darf. Leer heißt: der Start leitet sie vom Host ab (die Hälfte seiner CPUs, mindestens 1, höchstens 4).",
+              "description": "Zahl der virtuellen CPUs der Micro-VM, mindestens 1 und höchstens die Zahl der CPUs, die der Daemon nutzen darf. Die Obergrenze prüft der Start dieses Backends (`CONFIG_003`), nicht das Laden. Leer heißt: der Start leitet sie vom Host ab (die Hälfte seiner CPUs, mindestens 1, höchstens 4).",
               "format": "uint32",
               "minimum": 0,
               "type": [
@@ -928,7 +928,7 @@
             },
             "memory_mib": {
               "default": null,
-              "description": "Arbeitsspeicher der Micro-VM in MiB, mindestens 256 und höchstens der Arbeitsspeicher des Hosts. Leer heißt: der Start leitet ihn vom Host ab (die Hälfte seines Arbeitsspeichers, höchstens 4096).",
+              "description": "Arbeitsspeicher der Micro-VM in MiB, mindestens 256 und höchstens der Arbeitsspeicher des Hosts. Die Obergrenze prüft der Start dieses Backends (`CONFIG_003`), nicht das Laden: Ein Wert über diesem Rechner hält kein anderes Backend auf. Leer heißt: der Start leitet ihn vom Host ab (die Hälfte seines Arbeitsspeichers, höchstens 4096).",
               "format": "uint64",
               "minimum": 0,
               "type": [

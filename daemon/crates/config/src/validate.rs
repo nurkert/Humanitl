@@ -451,22 +451,23 @@ fn terminal_is_well_formed(terminal: &TerminalConfig) -> Result<(), Diagnostic> 
     Ok(())
 }
 
-/// Was der Host an Arbeitsspeicher und CPUs hat, für die Obergrenzen unter
-/// `sandbox.podman` (HUM-431).
+/// Was der Host an Arbeitsspeicher und CPUs hat, für die Obergrenzen der
+/// Ressourcen einer Sandbox (HUM-431).
 ///
 /// `None` heißt: nicht lesbar. Dann gibt es keine Obergrenze aus dem Host,
-/// und der Adapter lehnt beim Start ab, was Podman nicht durchsetzen kann.
+/// und der Adapter lehnt beim Start ab, was er nicht durchsetzen kann.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct HostResources {
+pub struct HostResources {
     /// `MemTotal` aus `/proc/meminfo`, in MiB.
-    pub(crate) memory_mib: Option<u64>,
+    pub memory_mib: Option<u64>,
     /// Die CPUs, die dieser Prozess nutzen darf.
-    pub(crate) cpus: Option<u32>,
+    pub cpus: Option<u32>,
 }
 
 impl HostResources {
     /// Liest beides vom laufenden System.
-    fn probe() -> Self {
+    #[must_use]
+    pub fn probe() -> Self {
         let memory_mib = std::fs::read_to_string("/proc/meminfo")
             .ok()
             .and_then(|text| mem_total_mib(&text));
@@ -491,13 +492,15 @@ const SHA256_HEX: usize = 64;
 
 /// Die Gruppe `sandbox.podman` (HUM-431).
 ///
-/// Jeder gesetzte Wert wird beim Laden gegen seine Grenzen geprüft, auch die
-/// aus dem Host, gleich welches Backend gewählt ist. Arbeitsspeicher und CPUs
-/// sind deshalb ohne Vorgabe: Leer leitet der Start sie vom Host ab, und eine
-/// feste Vorgabe könnte auf einem kleinen Rechner über dem Host liegen. Lässt
-/// sich der Host nicht lesen (kein `/proc/meminfo`), gibt es aus ihm keine
-/// Obergrenze; Podman gibt es dort ohnehin nicht.
-fn podman_is_well_formed(sandbox: &SandboxRef, host: HostResources) -> Result<(), Diagnostic> {
+/// Jeder gesetzte Wert wird beim Laden gegen seine festen Grenzen geprüft,
+/// gleich welches Backend gewählt ist. Die Obergrenzen aus dem Host für
+/// Arbeitsspeicher und CPUs prüft erst der Start dieses Backends
+/// ([`resources_within_host`], HUM-501): Eine Konfiguration von einem
+/// größeren Rechner oder ein Prozess mit weniger CPUs machte sonst jeden
+/// Befehl unbenutzbar, auch unter einem anderen Backend. Arbeitsspeicher und
+/// CPUs sind ohne Vorgabe: Leer leitet der Start sie vom Host ab, und eine
+/// feste Vorgabe könnte auf einem kleinen Rechner über dem Host liegen.
+fn podman_is_well_formed(sandbox: &SandboxRef) -> Result<(), Diagnostic> {
     let podman = &sandbox.podman;
     if let Some(program) = &podman.program
         && !program.is_absolute()
@@ -508,7 +511,7 @@ fn podman_is_well_formed(sandbox: &SandboxRef, host: HostResources) -> Result<()
             "an absolute path, or no value for the search in PATH",
         ));
     }
-    resources_are_well_formed("sandbox.podman", podman.memory_mib, podman.cpus, host)?;
+    resources_are_well_formed("sandbox.podman", podman.memory_mib, podman.cpus)?;
     at_least("sandbox.podman.pids_limit", podman.pids_limit, 64)?;
     between(
         "sandbox.podman.start_timeout_secs",
@@ -551,34 +554,66 @@ fn podman_is_well_formed(sandbox: &SandboxRef, host: HostResources) -> Result<()
     Ok(())
 }
 
+/// Der kleinste Arbeitsspeicher einer Sandbox, in MiB.
+const MIN_MEMORY_MIB: u64 = 256;
+
+/// Die kleinste Zahl der CPUs einer Sandbox.
+const MIN_CPUS: u64 = 1;
+
 /// Arbeitsspeicher und CPUs einer Sandbox unter `group` (die Gruppe der
-/// Container-Engine oder der Kernel-Stufe): Untergrenze fest, Obergrenze vom
-/// Host, wo er sie nennt.
+/// Container-Engine oder der Kernel-Stufe) beim Laden: nur die feste
+/// Untergrenze. Die Obergrenze aus dem Host prüft der Start
+/// ([`resources_within_host`]).
 fn resources_are_well_formed(
+    group: &str,
+    memory_mib: Option<u64>,
+    cpus: Option<u32>,
+) -> Result<(), Diagnostic> {
+    if let Some(memory_mib) = memory_mib {
+        at_least(&format!("{group}.memory_mib"), memory_mib, MIN_MEMORY_MIB)?;
+    }
+    if let Some(cpus) = cpus {
+        at_least(&format!("{group}.cpus"), u64::from(cpus), MIN_CPUS)?;
+    }
+    Ok(())
+}
+
+/// Arbeitsspeicher und CPUs, die unter `group` gesetzt sind, gegen die
+/// Obergrenzen aus `host` (HUM-501).
+///
+/// Das ruft der Start des Backends, das die Gruppe nutzt, nicht das Laden:
+/// Ein Wert über diesem Rechner hält nur dieses Backend an, nie die
+/// Konfiguration und nie ein anderes Backend. Was der Host nicht nennt
+/// (`None`), begrenzt nichts. Leere Werte leitet der Start selbst vom Host
+/// ab; sie liegen nie darüber und werden hier nicht geprüft.
+///
+/// # Errors
+///
+/// `CONFIG_003` für den ersten Wert über dem Host, mit dem größten Wert,
+/// den dieser Host annimmt, als Vorschlag.
+pub fn resources_within_host(
     group: &str,
     memory_mib: Option<u64>,
     cpus: Option<u32>,
     host: HostResources,
 ) -> Result<(), Diagnostic> {
-    if let Some(memory_mib) = memory_mib {
-        let key = format!("{group}.memory_mib");
-        at_least(&key, memory_mib, 256)?;
-        if let Some(max) = host.memory_mib {
-            within_host(&key, memory_mib, 256, max, "the memory of this host")?;
-        }
+    if let (Some(memory_mib), Some(max)) = (memory_mib, host.memory_mib) {
+        within_host(
+            &format!("{group}.memory_mib"),
+            memory_mib,
+            MIN_MEMORY_MIB,
+            max,
+            "the memory of this host",
+        )?;
     }
-    if let Some(cpus) = cpus {
-        let key = format!("{group}.cpus");
-        at_least(&key, u64::from(cpus), 1)?;
-        if let Some(max) = host.cpus {
-            within_host(
-                &key,
-                u64::from(cpus),
-                1,
-                u64::from(max),
-                "the CPUs this daemon may use",
-            )?;
-        }
+    if let (Some(cpus), Some(max)) = (cpus, host.cpus) {
+        within_host(
+            &format!("{group}.cpus"),
+            u64::from(cpus),
+            MIN_CPUS,
+            u64::from(max),
+            "the CPUs this daemon may use",
+        )?;
     }
     Ok(())
 }
@@ -588,18 +623,16 @@ const KERNEL_LEVEL: &str = "sandbox.qemu";
 
 /// Die Gruppe [`KERNEL_LEVEL`] der Kernel-Stufe (HUM-464).
 ///
-/// Wie die Gruppe der Container-Engine: geprüft beim Laden, gleich welches
-/// Backend gewählt ist, Arbeitsspeicher und CPUs ohne feste Vorgabe. Jeder
+/// Wie die Gruppe der Container-Engine: geprüft beim Laden gegen die festen
+/// Grenzen, gleich welches Backend gewählt ist, gegen den Host erst beim
+/// Start dieses Backends; Arbeitsspeicher und CPUs ohne feste Vorgabe. Jeder
 /// Pfad ist absolut oder leer; ein relativer hinge vom Arbeitsverzeichnis des
 /// Daemons ab. Ob es die Dateien gibt, sagt erst die Prüfung der
 /// Voraussetzungen (`SANDBOX_045`), denn eine Datei darf auf jedem Rechner
 /// gültig bleiben.
-fn kernel_level_is_well_formed(
-    sandbox: &SandboxRef,
-    host: HostResources,
-) -> Result<(), Diagnostic> {
+fn kernel_level_is_well_formed(sandbox: &SandboxRef) -> Result<(), Diagnostic> {
     let settings = &sandbox.qemu;
-    resources_are_well_formed(KERNEL_LEVEL, settings.memory_mib, settings.cpus, host)?;
+    resources_are_well_formed(KERNEL_LEVEL, settings.memory_mib, settings.cpus)?;
     between(
         &format!("{KERNEL_LEVEL}.start_timeout_secs"),
         settings.start_timeout_secs,
@@ -699,17 +732,15 @@ impl Config {
     /// nicht eine Liste. Wer alles sehen will, behebt den ersten und ruft
     /// erneut.
     ///
+    /// Nichts davon hängt vom Rechner ab: Die Obergrenzen aus dem Host für
+    /// Arbeitsspeicher und CPUs einer Sandbox prüft der Start des Backends,
+    /// das sie nutzt ([`resources_within_host`], HUM-501).
+    ///
     /// # Errors
     ///
     /// [`Diagnostic`] mit `CONFIG_003`, sobald ein Wert außerhalb seines
     /// Bereichs liegt oder zwei Werte einander widersprechen.
     pub fn validate(&self) -> Result<(), Diagnostic> {
-        self.validate_on(HostResources::probe())
-    }
-
-    /// [`Config::validate`] gegen einen gegebenen Host, damit die Obergrenzen
-    /// unter `sandbox.podman` ohne den Rechner des Tests prüfbar sind.
-    pub(crate) fn validate_on(&self, host: HostResources) -> Result<(), Diagnostic> {
         between("hold.timeout_secs", self.hold.timeout_secs, 1, DAY)?;
         limits_are_well_formed(&self.limits)?;
         recorder_is_well_formed(&self.recorder, &self.limits)?;
@@ -723,8 +754,8 @@ impl Config {
         llm_is_well_formed(&self.llm)?;
         findings_are_well_formed(&self.findings)?;
         sandbox_is_well_formed(&self.sandbox)?;
-        podman_is_well_formed(&self.sandbox, host)?;
-        kernel_level_is_well_formed(&self.sandbox, host)?;
+        podman_is_well_formed(&self.sandbox)?;
+        kernel_level_is_well_formed(&self.sandbox)?;
         terminal_is_well_formed(&self.terminal)?;
         agent_is_well_formed(&self.agent)
     }
@@ -1018,8 +1049,8 @@ mod tests {
         );
     }
 
-    /// Ein Host mit 4 GiB und zwei CPUs, damit die Obergrenzen unter
-    /// `sandbox.podman` nicht vom Rechner des Tests abhängen (HUM-431).
+    /// Ein Host mit 4 GiB und zwei CPUs, damit die Obergrenzen aus dem Host
+    /// nicht vom Rechner des Tests abhängen (HUM-431).
     const SMALL_HOST: super::HostResources = super::HostResources {
         memory_mib: Some(4096),
         cpus: Some(2),
@@ -1027,24 +1058,10 @@ mod tests {
 
     fn podman_why(config: &Config) -> String {
         let err = config
-            .validate_on(SMALL_HOST)
+            .validate()
             .expect_err("the podman setting is out of range");
         assert_eq!(err.code.as_str(), "CONFIG_003", "{}", err.why);
         err.why
-    }
-
-    #[test]
-    fn the_podman_defaults_are_valid_on_a_small_host() {
-        // Ohne Vorgabe für Arbeitsspeicher und CPUs gilt die Vorgabe auch auf
-        // einem Rechner mit 256 MiB und einer CPU.
-        let tiny = super::HostResources {
-            memory_mib: Some(256),
-            cpus: Some(1),
-        };
-        let mut config = Config::default();
-        config.validate_on(tiny).expect("defaults");
-        config.sandbox.backend = crate::SandboxBackendName::Podman;
-        config.validate_on(tiny).expect("defaults fit any host");
     }
 
     #[test]
@@ -1076,48 +1093,88 @@ mod tests {
         config.sandbox.podman.cpus = Some(1);
         config.sandbox.podman.pids_limit = 64;
         config.sandbox.podman.start_timeout_secs = 600;
-        config
-            .validate_on(SMALL_HOST)
-            .expect("the bounds are inside");
+        config.validate().expect("the bounds are inside");
     }
 
-    /// Die Obergrenzen aus dem Host gelten für jeden gesetzten Wert, gleich
-    /// welches Backend gewählt ist, und der Vorschlag ist der größte Wert,
-    /// den dieser Host annimmt.
+    /// Kein Wert über dem Host macht die Konfiguration unladbar, gleich
+    /// welches Backend gewählt ist (HUM-501): Arbeitsspeicher und CPUs über
+    /// jedem Rechner laden, für beide Gruppen. Mutationsbeweis: prüft das
+    /// Laden die Obergrenzen aus dem Host wieder, wird dieser Test rot.
     #[test]
-    fn podman_upper_bounds_come_from_the_host_whatever_the_backend() {
-        for backend in [
-            crate::SandboxBackendName::Auto,
-            crate::SandboxBackendName::Podman,
-        ] {
-            let mut config = Config::default();
+    fn resources_over_any_host_load_whatever_the_backend() {
+        // TOML trägt höchstens `i64::MAX`; das liegt über jedem Rechner.
+        let text = ["sandbox.podman", super::KERNEL_LEVEL]
+            .map(|group| {
+                format!(
+                    "[{group}]\nmemory_mib = {}\ncpus = {}\n",
+                    i64::MAX,
+                    u32::MAX
+                )
+            })
+            .concat();
+        for backend in crate::SandboxBackendName::ALL {
+            let mut config: Config = toml::from_str(&text).expect("the schema");
+            assert_eq!(config.sandbox.podman.cpus, Some(u32::MAX));
             config.sandbox.backend = backend;
-            config.sandbox.podman.memory_mib = Some(4097);
-            config.sandbox.podman.cpus = Some(3);
-            let err = config.validate_on(SMALL_HOST).expect_err("over the host");
-            assert!(err.why.contains("sandbox.podman.memory_mib"), "{}", err.why);
-            assert_eq!(
-                err.fix,
-                Some(FixAction::ChangeSetting {
-                    key: "sandbox.podman.memory_mib".to_owned(),
-                    value: "4096".to_owned(),
-                })
-            );
-            config.sandbox.podman.memory_mib = Some(4096);
-            assert!(podman_why(&config).contains("sandbox.podman.cpus"));
-            config.sandbox.podman.cpus = Some(2);
-            config.validate_on(SMALL_HOST).expect("exactly the host");
+            config
+                .validate()
+                .expect("the host bounds belong to the start of the backend");
         }
+    }
+
+    /// Die Obergrenzen aus dem Host, die der Start eines Backends prüft: der
+    /// erste Wert darüber mit seinem Schlüssel, und der Vorschlag ist der
+    /// größte Wert, den dieser Host annimmt (HUM-501).
+    #[test]
+    fn upper_bounds_come_from_the_host() {
+        let group = super::KERNEL_LEVEL;
+        let within = |memory, cpus| super::resources_within_host(group, memory, cpus, SMALL_HOST);
+        let err = within(Some(4097), Some(3)).expect_err("over the host");
+        assert_eq!(err.code.as_str(), "CONFIG_003");
+        assert!(
+            err.why.contains(&format!("{group}.memory_mib = 4097")),
+            "{}",
+            err.why
+        );
+        assert!(err.why.contains("the memory of this host"), "{}", err.why);
+        assert_eq!(
+            err.fix,
+            Some(FixAction::ChangeSetting {
+                key: format!("{group}.memory_mib"),
+                value: "4096".to_owned(),
+            })
+        );
+        let err = within(Some(4096), Some(3)).expect_err("too many CPUs");
+        assert!(
+            err.why.contains(&format!("{group}.cpus = 3")),
+            "{}",
+            err.why
+        );
+        assert!(
+            err.why.contains("the CPUs this daemon may use"),
+            "{}",
+            err.why
+        );
+        assert_eq!(
+            err.fix,
+            Some(FixAction::ChangeSetting {
+                key: format!("{group}.cpus"),
+                value: "2".to_owned(),
+            })
+        );
+        within(Some(4096), Some(2)).expect("exactly the host");
+        within(None, None).expect("derived values are never checked");
         // Ein Host, der sich nicht lesen lässt, setzt keine Obergrenze.
-        let mut config = Config::default();
-        config.sandbox.podman.memory_mib = Some(1 << 30);
-        config.sandbox.podman.cpus = Some(4096);
-        config
-            .validate_on(super::HostResources {
+        super::resources_within_host(
+            group,
+            Some(1 << 30),
+            Some(4096),
+            super::HostResources {
                 memory_mib: None,
                 cpus: None,
-            })
-            .expect("no bound without a readable host");
+            },
+        )
+        .expect("no bound without a readable host");
     }
 
     #[test]
@@ -1128,9 +1185,7 @@ mod tests {
         assert!(podman_why(&config).contains("sandbox.podman.image"));
         // Der Fix setzt die Wurzel des Rechners, ohne Anführungszeichen, so,
         // wie `humanitl config set` ihn nimmt (HUM-503).
-        let err = config
-            .validate_on(SMALL_HOST)
-            .expect_err("an image root without image");
+        let err = config.validate().expect_err("an image root without image");
         let Some(humanitl_core::diagnostics::FixAction::ChangeSetting { key, value }) = err.fix
         else {
             panic!("no ChangeSetting fix: {:?}", err.fix);
@@ -1169,24 +1224,23 @@ mod tests {
             config.sandbox.podman.image = Some(image.clone());
             match refused_for {
                 Some(word) => assert!(podman_why(&config).contains(word), "{image}"),
-                None => config.validate_on(SMALL_HOST).expect(&image),
+                None => config.validate().expect(&image),
             }
         }
     }
 
-    /// Die Gruppe der Kernel-Stufe hat dieselben Grenzen wie die der Engine,
-    /// gleich welches Backend gewählt ist, und nur absolute Pfade (HUM-464).
+    /// Die Gruppe der Kernel-Stufe hat dieselben festen Grenzen wie die der
+    /// Engine, gleich welches Backend gewählt ist, und nur absolute Pfade
+    /// (HUM-464). Die Obergrenzen aus dem Host prüft der Start (HUM-501).
     #[test]
     fn kernel_level_bounds_and_paths_hold_whatever_the_backend() {
         fn group(config: &mut Config) -> &mut crate::QemuConfig {
             &mut config.sandbox.qemu
         }
         type Case = (&'static str, fn(&mut Config));
-        let cases: [Case; 8] = [
+        let cases: [Case; 6] = [
             ("memory_mib", |c| group(c).memory_mib = Some(255)),
-            ("memory_mib", |c| group(c).memory_mib = Some(4097)),
             ("cpus", |c| group(c).cpus = Some(0)),
-            ("cpus", |c| group(c).cpus = Some(3)),
             ("start_timeout_secs", |c| group(c).start_timeout_secs = 601),
             ("kernel", |c| {
                 group(c).kernel = Some(PathBuf::from("vmlinuz"));
@@ -1212,14 +1266,12 @@ mod tests {
         }
         let mut config = Config::default();
         let settings = group(&mut config);
-        settings.memory_mib = Some(4096);
-        settings.cpus = Some(2);
+        settings.memory_mib = Some(256);
+        settings.cpus = Some(1);
         settings.start_timeout_secs = 1;
         settings.kernel = Some(PathBuf::from("/boot/vmlinuz"));
         settings.modules = Some(PathBuf::from("/usr/lib/modules/7"));
-        config
-            .validate_on(SMALL_HOST)
-            .expect("the bounds are inside");
+        config.validate().expect("the bounds are inside");
     }
 
     #[test]
@@ -1245,7 +1297,7 @@ mod tests {
             (profile, "sandbox.profile", "default"),
             (prefix, "terminal.detach_prefix", "ctrl-a"),
         ] {
-            let err = config.validate_on(SMALL_HOST).expect_err("out of range");
+            let err = config.validate().expect_err("out of range");
             let Some(humanitl_core::diagnostics::FixAction::ChangeSetting { key: got, value }) =
                 err.fix
             else {
