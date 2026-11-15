@@ -1788,6 +1788,107 @@ Die Unit einer Sitzung der Kernel-Stufe begrenzt Deskriptoren
 1. Eine Sitzung bindet höchstens den festen Speicher und die feste Zahl
    von Prozessen.
 
+### Stand nach der Umsetzung (2026-11-15)
+Die Unit trägt `MemoryMax`, `MemorySwapMax` und `TasksMax`
+(`daemon/crates/sandbox/src/qemu/limits.rs`).
+
+Gemessen an der cgroup echter Sitzungen (`memory.stat`, `pids.peak`; QEMU
+11.1, virtiofsd 1.14, Host-Kernel 7.3), mit dem neuen, von Hand laufenden
+KVM-Test `the_limits_of_hum_485_measured` (Lasten aus HUM-469/476, dazu acht
+parallele Leser über die Wurzel und zwei tmpfs des Gasts zu 85 % seines
+Speichers), den übrigen KVM-Tests und der Escape-Suite (11 Sitzungen,
+4096 MiB, 4 vCPU):
+- Speicher des Gasts: ein memfd, `shmem` der Unit bis zur Größe der
+  Maschine.
+- Helfer: `anon` höchstens 59 MiB, Kernel-Speicher höchstens 96 MiB (Walk,
+  4 vCPU, 4096 MiB); ein virtiofsd an seiner Grenze von 65 536 Deskriptoren
+  54 MiB Kernel-Speicher.
+- Seiten-Cache dessen, was virtiofsd liest: bis 6 GiB, zurückholbar.
+- Was die Unit auf ein tmpfs schreibt (Projektordner auf tmpfs, immer die
+  Schicht einer Wegwerf-Sitzung): `shmem`, nicht zurückholbar.
+- Tasks: 28 bis 34 neben den vCPU (32 direkt mit 4 vCPU, 38 Wegwerf mit
+  4 vCPU in der Escape-Suite); je Helfer zwei bubblewrap, sechs bis sieben
+  `sh`, je virtiofsd drei bis vier Fäden, vsock-Gerät vier, Emulator zwei
+  samt dem Kernel-Faden von KVM. Escape-Suite: `memory.peak` höchstens
+  355 MiB.
+
+Gewählt:
+- `MemoryMax` = Speicher der Maschine + 512 MiB (rund das Dreifache der
+  gemessenen 160 MiB der Helfer; deckt drei virtiofsd an der Grenze der
+  Deskriptoren) + Größe jedes tmpfs, auf das die Unit schreibt, je
+  Dateisystem einmal, + 64 MiB je Maske (Review, unten). Ohne diesen Anteil stürbe eine Wegwerf-Sitzung an ihrer
+  eigenen Schicht. Unter der Grenze ohne tmpfs-Anteil (4608 MiB bei
+  4096 MiB/4 vCPU, 1024 MiB bei 512 MiB/1 vCPU, für die Messung erzwungen)
+  liefen alle Lasten durch, `memory.peak` an der Grenze, kein Swap, kein
+  Abbruch; der Kernel holte den Seiten-Cache zurück.
+- `MemorySwapMax` = `MemoryMax`, nicht 0 und nicht offen: offen füllte ein
+  Helfer an der Grenze den Swap des Hosts; 0 machte den Speicher des Gasts
+  unauslagerbar, und auf einem kleinen Host verdrängte eine ruhende Sitzung
+  dann alles andere. Gleich der Vorgabe von Podman für `--memory`.
+- `TasksMax` = vCPU + 128 (fast das Vierfache des Gemessenen; Platz für den
+  Pool der Arbeitsfäden des Emulators, höchstens 64).
+- Fehlen dem Dienstverwalter des Nutzers die Controller `memory` und `pids`,
+  übergeht systemd die Grenzen still. Deshalb Ablehnung vor dem Start mit
+  `SANDBOX_052` (neu, Fix: der systemd-Eintrag, der delegiert), keine eigene
+  Zeile im Doctor; `humanitl doctor --probe` zeigt sie als inneren Befund.
+  systemd ab 254 delegiert `memory` und `pids` von sich aus.
+- Die Vorschau nennt `pids` (`TasksMax`); ihr Speicher bleibt der der
+  Maschine.
+
+Tests: `the_limits_follow_the_machine_and_the_writes_in_ram`,
+`only_a_tmpfs_counts_and_each_only_once`,
+`missing_controllers_refuse_the_start` (limits.rs), die Eigenschaften in
+`the_unit_carries_the_hardening_of_the_spike`; KVM: alle Tests grün mit den
+Grenzen, `a_process_in_the_unit_cannot_start_more_tasks_than_tasks_max`: ein
+Prozess in der Unit startet `sleep`, bis `fork` scheitert (105 bei
+`TasksMax` 129, `pids.peak` 129), und die cgroup trägt `memory.max`,
+`memory.swap.max` und `pids.max`. Mutationsbeweis: ohne `TasksMax` startet
+er alle 1000 (`pids.peak` 1030), der Test wird rot.
+
+Review (Codex, Antigravity, Sonnet):
+- Codex blocking 1, übernommen: Die tmpfs-Masken im Gefängnis des Dienstes
+  für `/work` (`.git/hooks`, `.vscode`, ...) waren ohne Größe und nicht in
+  `MemoryMax`; ein Gast konnte eine direkte Sitzung auf einem Projekt auf
+  der Platte darüber in den OOM tragen. Jetzt hat jedes tmpfs jedes
+  Gefängnisses `--size`: die Masken 64 MiB (`WORK_MASK_MIB`; Hooks,
+  Einstellungen, der Index einer IDE, ein kleines Werkzeug unter `.direnv`),
+  in `MemoryMax` je Maske eingerechnet, immer (Delta-Review von Codex: auch
+  bei nur lesbarem Projekt ist das tmpfs im Gefängnis beschreibbar, ein
+  übernommener Dienst könnte es füllen); die leeren tmpfs der nur lesbaren Wurzel 1 MiB (kein Gast schreibt
+  dorthin, der Dienst läuft mit `--readonly`). Die Schicht hat keine
+  tmpfs-Maske. bubblewrap braucht dafür `--size` (Voraussetzung,
+  `SANDBOX_045`; bwrap 0.13.1 lokal). KVM-Test
+  `a_write_beyond_a_mask_s_size_ends_with_enospc`: 80 MiB nach
+  `/work/.git/hooks` enden mit `ENOSPC` bei 67 108 864 Bytes.
+  Mutationsbeweis: ohne `--size` wird die Datei ganz geschrieben (83 886 080
+  Bytes), der Test wird rot.
+- Codex blocking 2, übernommen: `cgroup.controllers` des Dienstverwalters
+  nennt verfügbare, nicht bis zur Unit freigeschaltete Controller; ein
+  `DisableControllers=` auf einem Slice dazwischen ließe die Prüfung vor dem
+  Start bestehen. Jetzt vergleicht die Host-Prüfung `memory.max`,
+  `memory.swap.max` und `pids.max` der laufenden Unit mit dem Plan
+  (`UnitStop::limits`); eine fehlende Datei oder ein anderer Wert ist
+  `SANDBOX_052` an jeder Garantie, der Agent startet nie. `SANDBOX_052`
+  statt `SANDBOX_047`, weil Ursache und Fix dieselben sind wie vor dem
+  Start. Hat der Gast schon abgelehnt, bleibt seine Diagnose (HUM-470). Die
+  Prüfung vor dem Start bleibt als frühe, freundlichere Ablehnung. Tests
+  `the_unit_cgroup_must_carry_the_planned_limits` (cgroup-Nachbildung),
+  `unenforced_limits_refuse_every_green_guarantee_with_sandbox_052`, KVM
+  `a_unit_without_its_limits_is_refused_with_sandbox_052` (eine spätere
+  Eigenschaft `TasksMax=infinity`). Mutationsbeweise: Vergleich in
+  `judge_cgroup` aus, der Unit-Test wird rot; Vergleich in der Zulassung
+  aus, die Sitzung besteht und der KVM-Test wird rot.
+- Sonnet minor, übernommen: In den Dokumenten steht, dass `MemoryMax` um die
+  Größe eines tmpfs wächst, auf das der Nutzer das Projekt gelegt hat; der
+  Satz der unlesbaren `cgroup.controllers` nennt die vereinheitlichte
+  cgroup-v2-Hierarchie. `ControlGroup` des Dienstverwalters ist eine
+  Eigenschaft des Managers aus `org.freedesktop.systemd1(5)` ohne Vermerk
+  „Added in version", also älter als 252 und nicht leer für einen
+  Dienstverwalter des Nutzers; kein Rückfall nötig.
+- Kandidaten für eigene Issues, nicht übernommen: `MemoryHigh` unter
+  `MemoryMax` (früheres Zurückholen statt Abbruch), ramfs und hugetlbfs als
+  Ziel von Schreibvorgängen der Unit, ein Budget für schmutzige Seiten.
+
 ---
 
 ## HUM-486 · vhost-device-vsock: report the start-up bug, detect a silent device

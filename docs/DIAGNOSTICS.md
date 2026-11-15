@@ -746,7 +746,7 @@ User service manager unreachable
 
 Kernel level prerequisite missing
 
-**Auslöser.** The kernel level starts a micro VM with a guest kernel of its own and needs on this host: `/dev/kvm` readable and writable for this user, the machine emulator with the machine type and vsock device it uses, the file system daemon with `--readonly` and `--fd`, the vsock device with `--uds-path` and `--groups`, bubblewrap with `--bind-fd`, a readable kernel image with virtiofs built in (`CONFIG_VIRTIO_FS=y` in the configuration beside the image, `config-<release>` beside `vmlinuz-<release>`) and the module directory of that kernel. The sentence names the first one that is missing; nothing starts, and no other backend takes over.
+**Auslöser.** The kernel level starts a micro VM with a guest kernel of its own and needs on this host: `/dev/kvm` readable and writable for this user, the machine emulator with the machine type and vsock device it uses, the file system daemon with `--readonly` and `--fd`, the vsock device with `--uds-path` and `--groups`, bubblewrap with `--bind-fd` and `--size`, a readable kernel image with virtiofs built in (`CONFIG_VIRTIO_FS=y` in the configuration beside the image, `config-<release>` beside `vmlinuz-<release>`) and the module directory of that kernel. The sentence names the first one that is missing; nothing starts, and no other backend takes over.
 
 **Fix.** `CopyCommand` with the package that brings the missing piece (for `/dev/kvm` the command that adds this user to the group `kvm`), or `ChangeSetting` on the setting under `sandbox.qemu` that names the path.
 
@@ -773,6 +773,14 @@ Writable extension not possible at the kernel level
 **Auslöser.** The sandbox profile lists folders under `mounts.extra_rw`, and the backend is the kernel level. Its guest gets the folders of the host through a read-only share of the root and one writable share for the project at `/work`; a writable extension would be another writable way to the host that nothing reviews. The start stops instead of mounting the folder read-only without saying so.
 
 **Fix.** `ChangeSetting` on `sandbox.backend` = `auto` for a session that needs the folder writable; otherwise move the entry from `mounts.extra_rw` to `mounts.extra_ro` in the sandbox profile, or put the folder into the project.
+
+#### SANDBOX_052
+
+Kernel level limits cannot be enforced
+
+**Auslöser.** The unit of a kernel-level session binds at most a fixed amount of memory and a fixed number of processes and threads (`MemoryMax`, `MemorySwapMax`, `TasksMax`), and the cgroup v2 controllers `memory` and `pids` are not delegated to the user's service manager, its cgroup cannot be read, or the running unit's cgroup does not carry the planned `memory.max`, `memory.swap.max` and `pids.max` (a slice in between withholds a controller). systemd would ignore the limits without saying so; a session without its limits does not start, and the agent never runs.
+
+**Fix.** `CopyCommand` with the systemd drop-in that delegates `cpu`, `cpuset`, `io`, `memory` and `pids` to user sessions, then a new login.
 
 ### Bereich proxy
 

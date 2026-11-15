@@ -75,8 +75,9 @@ use crate::bwrap::Version;
 pub use crate::disposable::apply::{ApplyOptions, ApplyReport, apply, select};
 #[cfg(target_os = "macos")]
 pub use crate::disposable::clone::fd_path;
-#[cfg(all(test, target_os = "linux"))]
-use crate::disposable::layer::is_tmpfs;
+// Die Kernel-Stufe misst damit die tmpfs, auf die ihre Unit schreibt (HUM-485).
+#[cfg(all(target_os = "linux", any(test, target_arch = "x86_64")))]
+pub(crate) use crate::disposable::layer::is_tmpfs;
 pub use crate::disposable::layer::{
     Layer, SizeGuard, Swept, Usage, baseline, baseline_at, baseline_limits, ensure_ended,
     probe_layer_dir, process_lives, require_tmpfs, start_ticks, sweep,

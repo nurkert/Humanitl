@@ -52,6 +52,7 @@ mod disposable;
 mod host_check;
 #[cfg(test)]
 mod kvm_tests;
+mod limits;
 mod lines;
 mod prerequisites;
 mod session;
@@ -90,6 +91,7 @@ use crate::user_unit::{UnitName, UserUnits};
 use prerequisites::missing_prerequisite;
 use prerequisites::{Prerequisite, Resolved};
 
+use limits::UnitLimits;
 use lines::{Layout, Lines, Machine, RootEntry, WorkMask};
 
 /// Der vsock-Port des Hosts, der zum Proxy führt (die Tür).
@@ -702,8 +704,9 @@ fn user_service_of(path: &str, uid: u32) -> Option<String> {
 /// Die Eigenschaften der Unit (HUM-442 Q7). `writable` sind die Pfade, die
 /// die Unit außer dem Laufzeitverzeichnis beschreiben darf: der Projektordner
 /// in einer direkten Sitzung, das Verzeichnis der Schicht in einer
-/// Wegwerf-Sitzung (HUM-446), nie beide.
-fn unit_properties(runtime: &str, writable: &[&str]) -> Vec<String> {
+/// Wegwerf-Sitzung (HUM-446), nie beide. `limits` sind ihre Grenzen an
+/// Speicher und Tasks (HUM-485).
+fn unit_properties(runtime: &str, writable: &[&str], limits: UnitLimits) -> Vec<String> {
     let mut properties: Vec<String> = [
         "PrivateNetwork=yes",
         "PrivateUsers=yes",
@@ -728,6 +731,9 @@ fn unit_properties(runtime: &str, writable: &[&str]) -> Vec<String> {
     // harte Grenze des Dienstverwalters, wenn die kleiner ist; dann gilt die
     // kleinere, und die Unit startet trotzdem (`lines::FILE_DAEMON_NOFILE`).
     properties.push(format!("LimitNOFILE={}", lines::FILE_DAEMON_NOFILE));
+    // Speicher und Tasks der ganzen Unit (HUM-485): Ein Helfer bindet
+    // höchstens diesen festen Teil des Rechners (`limits`).
+    properties.extend(limits.properties());
     // Unter `ProtectHome=read-only` bindet bwrap auch einen geerbten
     // Deskriptor nur lesbar; der Projektordner braucht seinen Pfad hier
     // (gemessen 2026-11-14, systemd 262). Ein Projektordner, der hier fehlt,
@@ -737,7 +743,7 @@ fn unit_properties(runtime: &str, writable: &[&str]) -> Vec<String> {
     paths.extend_from_slice(writable);
     properties.push(format!("ReadWritePaths={}", paths.join(" ")));
     #[cfg(test)]
-    properties.extend(test_machine::unit_property());
+    properties.extend(test_machine::unit_properties());
     if let Some(daemon) = daemon_unit() {
         properties.push(format!("BindsTo={daemon}"));
         properties.push(format!("After={daemon}"));
@@ -792,6 +798,7 @@ fn unit_line(
     lines: &Lines,
     token: &str,
     writable: &[&str],
+    limits: UnitLimits,
 ) -> Result<Vec<OsString>, Diagnostic> {
     let runtime = property_path(&layout.dir)?;
     let script = lines::script(lines, layout).map_err(setup_failed)?;
@@ -812,7 +819,7 @@ fn unit_line(
     units
         .session_argv(
             UNIT_DESCRIPTION,
-            &unit_properties(&runtime, writable),
+            &unit_properties(&runtime, writable, limits),
             unit,
             &session.shim_src,
             &args,
@@ -931,10 +938,14 @@ impl SandboxBackend for VmBackend {
         );
         let readonly = profile.effective_work_mode(session.work_mode) == WorkMode::Ro;
         let disposable = options.overlay().is_some();
+        let machine = self.machine();
+        // Was die Unit auf tmpfs schreibt, kennt erst der Plan; die Vorschau
+        // nennt die Grenzen ohne diesen Teil.
+        let limits = UnitLimits::of(machine, 0);
         let lines = session_lines(
             &self.resolved,
             &layout,
-            self.machine(),
+            machine,
             &root,
             &profile.network.shim_dst,
             readonly,
@@ -959,6 +970,7 @@ impl SandboxBackend for VmBackend {
                     &lines,
                     PREVIEW_TOKEN,
                     writable,
+                    limits,
                 )
             })
             .unwrap_or_else(|_| {
@@ -968,7 +980,6 @@ impl SandboxBackend for VmBackend {
                 ));
                 argv
             });
-        let machine = self.machine();
         PlanPreview {
             argv,
             policy: root.policy,
@@ -983,7 +994,7 @@ impl SandboxBackend for VmBackend {
             limits: ResourceLimits {
                 memory_bytes: Some(machine.memory_mib.saturating_mul(1024 * 1024)),
                 cpu_millis: Some(machine.cpus.saturating_mul(1000)),
-                pids: None,
+                pids: u32::try_from(limits.tasks_max).ok(),
             },
         }
     }
@@ -1042,6 +1053,7 @@ impl SandboxBackend for VmBackend {
             units.probe_command(),
             Duration::from_secs(10),
         ))?;
+        limits::check_controllers(&units)?;
         let unit = unit_of(&units, session)?;
 
         let PinnedMounts {
@@ -1149,7 +1161,10 @@ impl SandboxBackend for VmBackend {
         let mut findings = host_check::run(stop, &self.resolved, DOOR_PORT);
         #[cfg(test)]
         test_machine::forgive(&mut findings);
-        let admit = findings.is_empty() && results.iter().all(|result| result.passed);
+        let unenforced = host_check::limits_unenforced(stop);
+        let admit = findings.is_empty()
+            && unenforced.is_none()
+            && results.iter().all(|result| result.passed);
         if stop.admission.decide(admit) && admit {
             for result in &mut results {
                 result.evidence.push_str("; host: checked; admitted");
@@ -1169,6 +1184,9 @@ impl SandboxBackend for VmBackend {
             );
         }
         host_check::merge(&mut results, &findings);
+        if let Some(diagnostic) = &unenforced {
+            host_check::merge_limits(&mut results, diagnostic);
+        }
         let _ = handle.kill();
         results
     }
@@ -1244,6 +1262,21 @@ impl Project {
             .map(String::as_str)
             .chain(self.layer.as_ref().map(disposable::PinnedLayer::property))
             .collect()
+    }
+
+    /// Die Grenzen der Unit für `machine` (HUM-485): dazu die tmpfs unter den
+    /// geöffneten Ordnern hinter [`Self::writable_paths`] und die Masken
+    /// `masks` unter `/work`, soweit der Gast in sie schreiben kann.
+    fn unit_limits(&self, machine: Machine, masks: &[WorkMask]) -> UnitLimits {
+        let writable: Vec<std::os::fd::BorrowedFd<'_>> = self
+            .writable
+            .is_some()
+            .then(|| self.work.fd())
+            .into_iter()
+            .chain(self.layer.as_ref().map(disposable::PinnedLayer::fd))
+            .collect();
+        let in_ram = limits::in_ram_mib(&writable).saturating_add(limits::work_masks_mib(masks));
+        UnitLimits::of(machine, in_ram)
     }
 
     /// Was die Host-Prüfung bei den Diensten der Dateien sucht: den
@@ -1424,10 +1457,12 @@ impl VmBackend {
         let disposable = project.layer.is_some();
         let channels = Channels::open(layout, options)?;
         let group = session_group(session);
+        let machine = self.machine();
+        let unit_limits = project.unit_limits(machine, &root.masks);
         let lines = session_lines(
             &self.resolved,
             layout,
-            self.machine(),
+            machine,
             &root,
             &profile.network.shim_dst,
             project.writable.is_none(),
@@ -1442,6 +1477,7 @@ impl VmBackend {
             &lines,
             channels.handover.token(),
             &project.writable_paths(),
+            unit_limits,
         )?;
         let shares = project.shares();
         let project_fd = project.work.into_fd();
@@ -1487,6 +1523,7 @@ impl VmBackend {
                 runtime: layout.dir.clone(),
                 admission,
                 shares,
+                limits: unit_limits.cgroup_values(),
             }),
             renumbered: false,
             program: units.run_program().to_path_buf(),

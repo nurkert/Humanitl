@@ -197,7 +197,9 @@ const VSOCK_DEVICE: Program = Program {
     }],
 };
 
-/// bubblewrap: der geprüfte Projektordner kommt als Deskriptor (HUM-437).
+/// bubblewrap: der geprüfte Projektordner kommt als Deskriptor (HUM-437),
+/// und jedes tmpfs eines Gefängnisses hat eine feste Größe (`--size`,
+/// HUM-485).
 const BUBBLEWRAP: Program = Program {
     name: "bwrap",
     key: None,
@@ -205,7 +207,7 @@ const BUBBLEWRAP: Program = Program {
     package: Package::Bubblewrap,
     questions: &[Question {
         args: &["--help"],
-        words: &["--bind-fd", "--ro-bind-fd"],
+        words: &["--bind-fd", "--ro-bind-fd", "--size"],
     }],
 };
 
@@ -290,7 +292,7 @@ pub(crate) enum Prerequisite {
     FileDaemon,
     /// Das vsock-Gerät.
     VsockDevice,
-    /// bubblewrap mit `--bind-fd` und `--ro-bind-fd`.
+    /// bubblewrap mit `--bind-fd`, `--ro-bind-fd` und `--size`.
     Bubblewrap,
     /// Das Kernel-Abbild.
     Kernel,
@@ -829,7 +831,7 @@ mod tests {
             );
             fixture.program(
                 "bwrap",
-                "printf '    --bind-fd FD DEST\\n    --ro-bind-fd FD DEST\\n'\n",
+                "printf '    --bind-fd FD DEST\\n    --ro-bind-fd FD DEST\\n    --size BYTES\\n'\n",
             );
             fixture
         }
@@ -1039,6 +1041,11 @@ mod tests {
                 "--allow-mmap",
             ),
             ("bwrap", "printf '  --ro-bind-fd FD DEST\\n'\n", "--bind-fd"),
+            (
+                "bwrap",
+                "printf '  --bind-fd FD DEST\\n  --ro-bind-fd FD DEST\\n'\n",
+                "--size",
+            ),
             (
                 "qemu-system-x86_64",
                 "printf 'microvm-legacy\\nname \"vhost-user-vsock-pci\"\\n'\n",
