@@ -622,6 +622,12 @@ Definition of Done für jedes Issue: Tests auf der passenden Ebene, neue Fehlerp
    - Abruf durch den Daemon auf dem Host, nie durch den Agenten; Verhalten ohne Netz (letzte gültige Fassung behalten, nie still auf „keine Vorgaben" fallen).
    - Wer die URI selbst setzen und entfernen darf: Kann der Nutzer sie löschen, ist „erzwungen" nur eine Empfehlung. Für echte Durchsetzung muss die URI aus einer Ebene kommen, die der Nutzer nicht ändert (systemweite Datei unter `/etc` bzw. MDM-Profil unter macOS); sonst ehrlich als „Vorgabe des Teams" benennen. Antwort des Nutzers vom 2026-11-14: Der Nutzer darf die Vorgabedatei selbst abschalten, aber nur nach erneuter Anmeldung (Passwort des Nutzers oder Ähnliches, etwa über polkit bzw. die Anmeldung des Systems), damit es niemand an einem ungesperrt liegenden Rechner kann; das Wie klärt das Design-Dokument.
    - Audit-Eintrag, wenn sich die Vorgaben ändern oder der Nutzer eine Vorgabe überschreibt.
+22. **Einen eigenen Proxy dahinter schalten (Idee des Nutzers vom 2026-11-15, im Hinterkopf behalten).** Humanitl übernimmt die Isolierung und eine erste Schicht, etwa nur Sperrregeln; was nicht gesperrt wird, reicht der Daemon an einen MITM-Proxy weiter, den der Nutzer selbst wählt, und dort fällt die Einzelfallentscheidung. Der Halt von Humanitl ist dann nur ein Vorfilter. Vor dem Bau ein Design-Dokument. Offene Punkte:
+   - TLS: Humanitl entschlüsselt und verschlüsselt zum zweiten Proxy neu (der braucht dann Vertrauen in die CA von Humanitl), oder reicht nicht gesperrte Verbindungen ungeöffnet durch (dann sieht Humanitl nur den Host).
+   - Welche Regeln in Humanitl bleiben: nur Sperren oder auch Freigaben; wie Halt, Fristen und die Frist des zweiten Proxys zusammenspielen.
+   - Audit und Aufzeichnung: was der zweite Proxy entschieden hat, kommt ins Audit von Humanitl.
+   - Zugangsdaten des zweiten Proxys als Verweis in den Schlüsselbund wie `llm.api_key_ref`.
+   - Die Verbindung zum zweiten Proxy baut der Daemon auf dem Host auf, nie die Sandbox; die drei Garantien bleiben unberührt.
 
 ---
 
