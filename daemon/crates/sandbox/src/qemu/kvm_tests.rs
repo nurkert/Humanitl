@@ -1662,8 +1662,12 @@ find /usr -xdev -type f 2>/dev/null | {
       [ "$streak" -ge 500 ] && break
     fi
     [ "$held" -ge HOLD ] && break
-  done 2>/dev/null
-  echo "held=$held refused=$refused" > /work/held-469
+  done 2>/tmp/probe-err-469
+  limited=0
+  while IFS= read -r e; do
+    case "$e" in *"Too many open files"*) limited=$((limited+1)) ;; esac
+  done < /tmp/probe-err-469
+  echo "held=$held refused=$refused limited=$limited" > /work/held-469
   while [ ! -e /work/release-469 ]; do nap; done
   for fd in "${fds[@]}"; do exec {fd}<&-; done
   : > /work/released-469
@@ -1674,6 +1678,64 @@ find /usr -xdev -type f 2>/dev/null | {
 /// Deskriptoren (Inode und offene Datei), zusammen also deutlich mehr als
 /// [`super::lines::FILE_DAEMON_NOFILE`].
 const HOLD: u32 = 40_000;
+
+/// Die Belege des Tests oben, dass die Grenze und nicht ein Fehler der Probe
+/// sie aufhielt (HUM-487): `shown` ist die Ausgabe des Agenten, `most` der
+/// Höchststand der Deskriptoren des Dienstes, `limit` die geplante Grenze und
+/// `daemon_limit` die, die der Kernel für den Dienst hielt.
+fn the_limit_stopped_the_probe(shown: &str, most: usize, limit: usize, daemon_limit: Option<u64>) {
+    let probe_count = |key: &str| {
+        shown
+            .lines()
+            .find_map(|line| line.strip_prefix("probe:"))
+            .and_then(|line| {
+                line.split(' ')
+                    .find_map(|pair| pair.trim().strip_prefix(key))
+                    .and_then(|value| value.parse::<u32>().ok())
+            })
+            .unwrap_or_else(|| panic!("no {key} in the probe's line: {shown}"))
+    };
+    let (held, refused, limited) = (
+        probe_count("held="),
+        probe_count("refused="),
+        probe_count("limited="),
+    );
+    assert!(
+        held < HOLD,
+        "the probe held all {HOLD} files of the root; the limit did not bind: {shown}"
+    );
+    // Die Probe hat wirklich viel gehalten und wurde dann abgewiesen, und
+    // zwar mit „Too many open files" (`ENFILE` vom Dienst), während der Dienst
+    // an seiner Grenze stand: Die Grenze, nicht ein Fehler der Probe, hat sie
+    // aufgehalten. Wie oft, hängt davon ab, wie viele Dateien `/usr` nach dem
+    // Erreichen der Grenze noch hergibt (bis zu 500 hintereinander, dann gibt
+    // die Probe auf); in der CI waren es einmal 487, weil die Liste vorher
+    // endete (HUM-487). Den Beleg tragen deshalb die Ursache der Abweisung,
+    // der Höchststand des Dienstes und seine Grenze in `/proc`, nicht die
+    // Zahl der Abweisungen.
+    assert!(
+        u64::from(held) * 4 >= u64::from(super::lines::FILE_DAEMON_NOFILE)
+            && limited >= 1
+            && most * 10 >= limit * 9,
+        "the probe held {held}, was refused {refused} times ({limited} for too many open \
+         files), the daemon at most {most} of {limit}: {shown}"
+    );
+    assert_eq!(
+        daemon_limit,
+        Some(u64::from(super::lines::FILE_DAEMON_NOFILE)),
+        "the root's virtiofsd runs without the limit of the unit"
+    );
+}
+
+/// Die weiche Grenze der offenen Dateien des Prozesses `pid`
+/// (`/proc/<pid>/limits`, Zeile „Max open files").
+fn open_file_limit(pid: i32) -> Option<u64> {
+    std::fs::read_to_string(format!("/proc/{pid}/limits"))
+        .ok()?
+        .lines()
+        .find_map(|line| line.strip_prefix("Max open files"))
+        .and_then(|rest| rest.split_whitespace().next()?.parse().ok())
+}
 
 /// Der virtiofsd der Wurzel in der Unit `unit`: der Prozess `virtiofsd`, der
 /// seinen Socket als Deskriptor bekommt (`--fd`).
@@ -1751,6 +1813,8 @@ fn a_guest_cannot_drive_the_root_file_daemon_over_its_descriptor_limit() {
     assert!(results.iter().all(|r| r.passed), "{results:?}");
     let unit = handle.unit().unwrap().unit.service();
     let pid = root_file_daemon(&unit).expect("the root's virtiofsd in the unit");
+    // Solange der Dienst lebt: seine Grenze, wie der Kernel sie hält.
+    let daemon_limit = open_file_limit(pid);
     let mut seen = Vec::new();
     // Der Walk ist fertig, wenn seine Zeile samt Zeilenende da ist.
     let walked = |seen: &[u8]| {
@@ -1795,28 +1859,7 @@ fn a_guest_cannot_drive_the_root_file_daemon_over_its_descriptor_limit() {
     );
     assert!(shown.contains("done-469"), "{shown}");
     walk_without_enfile(&shown);
-    let probe_count = |key: &str| {
-        shown
-            .lines()
-            .find_map(|line| line.strip_prefix("probe:"))
-            .and_then(|line| {
-                line.split(' ')
-                    .find_map(|pair| pair.trim().strip_prefix(key))
-                    .and_then(|value| value.parse::<u32>().ok())
-            })
-            .unwrap_or_else(|| panic!("no {key} in the probe's line: {shown}"))
-    };
-    let (held, refused) = (probe_count("held="), probe_count("refused="));
-    assert!(
-        held < HOLD,
-        "the probe held all {HOLD} files of the root; the limit did not bind: {shown}"
-    );
-    // Die Probe hat wirklich viel gehalten und wurde dann abgewiesen: Die
-    // Grenze, nicht ein Fehler der Probe, hat sie aufgehalten.
-    assert!(
-        u64::from(held) * 4 >= u64::from(super::lines::FILE_DAEMON_NOFILE) && refused >= 500,
-        "the probe held {held} and was refused {refused} times: {shown}"
-    );
+    the_limit_stopped_the_probe(&shown, most, limit, daemon_limit);
     assert!(
         most <= limit,
         "the root's virtiofsd held {most} descriptors, more than {limit}"
