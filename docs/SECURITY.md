@@ -2392,6 +2392,7 @@ system daemon with `--readonly`, `--fd` and `--cache`, the vsock device with
 built in (`CONFIG_VIRTIO_FS=y` in the configuration beside the image)
 and the module directory of that kernel. A missing prerequisite refuses the start with `SANDBOX_045`; the start never falls back to
 another backend. `humanitl doctor` names the first missing prerequisite in the line `available`
-of the kernel level, as `humanitl sandbox backends` does. The user's service manager
+of the kernel level, as `humanitl sandbox backends` does, and below it one line per
+prerequisite, so it says everything that is missing (HUM-488). The user's service manager
 needs the cgroup controllers `memory` and `pids` (systemd delegates them by default); without them
 a start is refused with `SANDBOX_052` (HUM-485), which `humanitl doctor --probe` shows as well.

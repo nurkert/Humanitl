@@ -92,6 +92,7 @@ Diagnose-Codes, hier nur geplant (registriert vom genannten Issue in `codes.rs` 
 | HUM-485 | Kernel-Stufe: Speicher- und Prozessgrenzen der Unit (`MemoryMax=`, `TasksMax=`) | S | HUM-444 |
 | HUM-486 | vhost-device-vsock: Fehler beim Start melden, ein stummes Gerät erkennen | S | HUM-471 |
 | HUM-487 | KVM-Test der Deskriptorgrenze: Schwelle der Abweisungen hängt nicht an der Länge von `/usr` | S | HUM-469 |
+| HUM-488 | doctor: eine Zeile je Voraussetzung auch für eine zugelassene Stufe, der etwas fehlt | S | HUM-449 |
 
 ## HUM-428 · Port neutral: `PlanRequest`, `LaunchOptions`, `IsolationLevel`, Enum `Backend` statt `PlatformBackend`
 
@@ -2249,4 +2250,38 @@ wenn der Dienst ohne Grenze zufällig hoch steht; jetzt zählt die Probe nur
 Abweisungen mit „Too many open files" (`limited=`), und der Test liest die
 weiche Grenze des Dienstes aus `/proc/<pid>/limits`. Mutationsbeweis unverändert über `held < HOLD` (ohne Grenze
 hält die Probe alle 40 000).
+
+---
+
+## HUM-488 · doctor: one line per prerequisite for an admitted level that lacks one
+
+### Kontext
+Aus HUM-449. Vor der Zulassung zeigte `humanitl doctor` für die Kernel-Stufe
+je Voraussetzung eine Zeile, ohne etwas zu starten. Seit der Zulassung sucht
+die Gruppe das Backend wie jeder Start (`available`), und diese Suche nennt
+nur die erste fehlende Voraussetzung (`SANDBOX_045`). Das Ziel der
+Kernel-Stufe verlangt, dass doctor alle Voraussetzungen prüft und sagt, was
+fehlt.
+
+### Spezifikation
+1. Scheitert die Suche einer zugelassenen Stufe, folgen der Zeile
+   `available` die Zeilen je Voraussetzung (`static_checks`), wie vor der
+   Zulassung; gestartet wird dabei nichts.
+
+### Tests
+- Unit: die zugelassene Kernel-Stufe ohne Emulator zeigt jede Voraussetzung
+  als eigene Zeile, den Emulator als Fehler. Mutationsbeweis: ohne die Zeilen
+  rot.
+
+### Akzeptanzkriterien
+1. `humanitl doctor` nennt für die Kernel-Stufe jede fehlende Voraussetzung,
+   nicht nur die erste.
+
+### Stand nach der Umsetzung (2026-11-15)
+`admitted_lines` hängt bei gescheiterter Suche `static_lines` an (dieselben
+Zeilen wie `unadmitted_lines`, jetzt eine gemeinsame Funktion). Gilt ebenso
+für Podman, dessen Gruppe dieselben Zeilen der Engine bekommt. Test
+`the_admitted_kernel_level_is_searched_like_a_start_and_probes_nothing_it_lacks`
+erweitert; Mutation (Zeilen weg) rot. SECURITY en+de nennen es; `docs/cli.md`
+zieht HUM-447 nach.
 
