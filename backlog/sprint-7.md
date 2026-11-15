@@ -1589,7 +1589,7 @@ Untergrenze 6.6 des Gastkernels (`prerequisites.rs`) stammen aus der Zeit von
 entfernen. Ebenso: auch die Zahl der gehaltenen Inodes (`inode-state`
 erstes Feld) begrenzen, damit Verzeichnisketten nicht unbemerkt bleiben;
 ein Test, der die keep-Liste von PID 1 und das `drop` der drei
-`/proc`-Deskriptoren im Kind bewacht.
+`/proc`-Deskriptoren im Kind bewacht (beides erledigt in HUM-483).
 
 ---
 
@@ -1749,6 +1749,116 @@ Agenten gelangen.
 ### Akzeptanzkriterien
 1. Eine Verzeichniskette erreicht die Grenze nicht unbemerkt; der Test färbt
    sich rot, wenn die keep-Liste oder das `drop` fehlt.
+
+### Stand nach der Umsetzung (2026-11-15)
+**Messung zuerst: Gewöhnliche Ketten deckt schon die Zählung der
+unbenutzten.** Der Gastkernel führt einen Dentry als unbenutzt, sobald er
+einmal ohne Referenz war (nach `mkdir` und jedem Nachschlagen), und zählt ihn
+weiter, wenn später ein Kind ihn hält; erst ein Leeren, das ihn in Benutzung
+antrifft, nimmt ihn aus der Zählung. Und ein Leeren gibt mit dem untersten
+Verzeichnis die ganze Kette frei. Gemessen mit dem Shim von HUM-476
+(Gastkernel der CI, 512 MiB): 80 000 Verzeichnisse als 200 Ketten von je 400,
+auf dem Host angelegt und im Gast mit `find` durchlaufen, höchstens 33 286
+Deskriptoren im Dienst für `/work`, kein `ENFILE`; dieselben im Gast mit
+`mkdir d; cd d` je Stufe angelegt und danach durchlaufen, höchstens 33 625.
+Nach dem Durchlauf von drei Ketten (1 200 Verzeichnisse) stieg das zweite Feld
+von `dentry-state` um 1 201.
+
+**Die Lücke** sind Verzeichnisse, die ein Leeren in Benutzung antraf und die
+danach losgelassen wurden: Ketten, deren unterstes Verzeichnis der Agent
+während eines Leerens hielt (Arbeitsverzeichnis, offener Deskriptor). Nach dem
+Loslassen zählt je Kette nur das unterste Verzeichnis, der Rest bleibt von
+seinen Kindern gehalten, bis 32 768 neue unbenutzte Einträge kommen. Gemessen:
+105 Ketten von je 400 (42 000) gehalten, ein Walk über die Wurzel, bis PID 1
+geleert hat, losgelassen: `dentry-state` 42 497 gehalten, 107 unbenutzt. Legt
+der Agent danach 42 000 weitere an, bekommt er mit dem Shim von HUM-476 nach
+64 924 Verzeichnissen `ENFILE`, der Dienst hält 64 948 Deskriptoren und gibt
+keinen mehr frei (dreimal von drei Läufen mit 1 GiB; mit 512 MiB leerte in
+einem von zwei Läufen der Gastkernel selbst unter Speicherdruck).
+
+**Umsetzung** (`daemon/bin/humanitl-shim/src/guest_cache.rs`): PID 1 liest
+zusätzlich das erste Feld von `inode-state`, die Inodes, die der Gast
+insgesamt hält, und leert auch, wenn es mehr als `HELD_LIMIT` (49 152, drei
+Viertel der Grenze) sind und mindestens `HELD_STEP` (8 192) mehr als direkt
+nach dem letzten Leeren, spätestens aber bei `HELD_CEIL` (57 344, die Grenze
+weniger einem Schritt); der Stand nach dem Leeren sinkt mit, wenn der Gast
+weniger hält. Der Schritt verhindert ein Leeren alle 100 ms, wenn der Gast
+viele Inodes hält, die kein Leeren freigibt (Dateien in einem tmpfs, offene
+Deskriptoren, Arbeitsverzeichnisse); die Schwelle bleibt über der der
+unbenutzten, damit der Arbeitsstand von `git status` gecacht bleibt. Die
+Entscheidung steckt in einem reinen `Trigger` mit vier Unit-Tests. Der Bericht
+trägt `CACHE bound 32768 49152`. Was der Gast in Benutzung hält, gibt auch der
+neue Auslöser nicht frei; ein Gast, der absichtlich so viele Inodes eines
+Dienstes hält wie dessen Grenze, bekommt `ENFILE`, `LimitNOFILE=65536` bleibt
+die Garantie.
+
+**Tests.** `qemu::kvm_tests::a_walk_over_deep_directory_chains_stays_below_the_descriptor_limit`
+(1 GiB, damit nicht der Speicherdruck des Gasts das Ergebnis verdeckt): die
+Lücke von oben, dann ein Walk über alle 84 000 Verzeichnisse; beide ohne
+`ENFILE`, höchstens 15/16 der Grenze im Dienst für `/work`. Gemessen mit dem
+neuen Auslöser: höchstens 42 506 bis 45 814 Deskriptoren (vier Läufe).
+Mutationsbeweis: ohne den Auslöser über die gehaltenen Inodes `ENFILE` nach
+64 924 Verzeichnissen, rot (drei von drei Läufen).
+`qemu::kvm_tests::the_agent_holds_none_of_pid_1s_cache_descriptors` (Startweg
+der Tests, ohne Unit): Der Agent zählt in `/proc/$$/fd` und im Kind
+(`ls -l /proc/self/fd`) die Ziele `dentry-state`, `inode-state`,
+`drop_caches`, zuerst, bevor er selbst etwas öffnet: 0. Danach eicht er beide
+Zählungen mit einer selbst geöffneten Datei auf einem Deskriptor, den die Shell
+frei wählt (`exec {cal}<…`), so dass kein geerbter überschrieben wird: je eins
+mehr. Der Bericht trägt
+`CACHE bound` und nach einer Sekunde kein `CACHE off`, PID 1 hat die Dateien
+also noch. Mutationsbeweise: ohne die drei in der keep-Liste von PID 1 schließt
+PID 1 sie vor dem Fork, der Faden meldet `CACHE off look:Illegal_seek` (die
+Nummer gehört inzwischen einem anderen Deskriptor), rot; ohne das `drop` im
+Kind, mit den drei in der keep-Liste des Kinds und ohne `CLOEXEC` hält der
+Agent alle drei, rot. Ohne nur das `drop` bleibt der Test grün: Der Schluss
+der geerbten Deskriptoren im Kind und `CLOEXEC` halten die Dateien jeder für
+sich vom Agenten fern, Absicht der Tiefe.
+
+Keine Einbuße: `the_workloads_of_hum_469_measured` mit dem neuen Auslöser
+(Gastkernel der CI, 512 MiB), Sekunden: `cp -r` 6,1, `git add -A` 11,2,
+`grep -r` 2,9, `git status` 0,32 und 0,21, `ls -lR` 2,9, Walk 23,5, jeweils
+ohne `ENFILE`, höchstens 37 901 Deskriptoren im Wurzeldienst; so wie mit dem
+Shim von HUM-476 (Tabelle dort). Die vollen KVM-Tests (22) laufen grün mit dem
+Gastkernel der CI und mit dem lokalen.
+
+**Review** (Codex, Sonnet). Übernommen:
+1. Major (Codex blocking, gegen Akzeptanzkriterium 1): Nach einem Leeren, das
+   viele gehaltene Inodes antraf, lag die nächste Schwelle bei Stand plus
+   Schritt, also womöglich über der Grenze (Stand 60 000, Schwelle 68 192);
+   eine danach gebaute Kette erreichte `ENFILE` zuerst. Jetzt höchstens
+   `HELD_CEIL` (57 344, zur Übersetzungszeit gegen `HELD_LIMIT` geprüft). Damit
+   ein Gast über der Decke, der seine Inodes in Benutzung hält, PID 1 nicht
+   jede Runde vergeblich leeren lässt, wartet ein Leeren für die gehaltenen
+   Inodes, wenn das letzte solche weniger als `HELD_STEP` freigab,
+   `HELD_COOLDOWN_LOOKS` Runden (10, eine Sekunde): Jedes Leeren wirft den
+   ganzen unbenutzten Cache weg, den der Gast dann neu liest; einmal je
+   Sekunde kostet ein Zehntel davon, und ein Gast, der mehr als 57 344 Inodes
+   in Benutzung hält, steht absichtlich an der Grenze, die auf dem Host
+   bindet. Die Zählung der unbenutzten leert unverändert sofort. Unit-Tests
+   `a_high_floor_still_trims_below_the_limit` und
+   `a_trim_that_frees_nothing_waits_before_the_next`; Mutationsbeweise: ohne
+   `.min(HELD_CEIL)` beide rot, ohne die Wartezeit der zweite rot.
+2. Major (Codex): Die Eichung öffnete Deskriptor 7, bevor gezählt wurde; wäre
+   7 ein geerbter Deskriptor von PID 1 gewesen, hätte `exec 7<` ihn
+   überschrieben. Zutreffend, und genau das geschah im Mutationslauf: Mit dem
+   alten Skript zählte der Agent zwei der drei Dateien, mit dem neuen alle
+   drei. Jetzt erst zählen, dann auf frei gewähltem Deskriptor eichen; die
+   Zählung im Kind ist mit geeicht (Sonnet, minor).
+3. Minor (Codex): Der Kettentest ließ die gehaltenen Ketten auch los, wenn
+   kein Leeren beobachtet war. Der Agent meldet jetzt
+   `trimmed-while-held:yes|no`, der Test verlangt `yes`.
+
+Nach dem Review (Gastkernel der CI): beide Tests dreimal grün, der Kettentest
+mit höchstens 42 129 Deskriptoren, jedes Mal `trimmed-while-held:yes`; ohne den
+Auslöser über die gehaltenen Inodes weiter `ENFILE` nach 64 924, rot.
+
+Nebenbefund, kein eigenes Issue nötig: Schlösse PID 1 die drei Dateien je
+vorzeitig, läse und schriebe der Faden unter derselben Nummer einen fremden
+Deskriptor (im Mutationslauf scheiterte erst das Lesen mit `ESPIPE`). Die
+keep-Liste und der neue Test bewachen genau das.
+
+Delta-Review (Codex, blocking, Sonnet minor): Die Wartesekunde nach einem Leeren, das wenig freigab, hielt auch dann still, wenn der Gast danach schnell neue Einträge baute; ein Walk von rund 7 000 Einträgen hätte `ENFILE` vor dem nächsten Leeren erreichen können. Jetzt endet die Wartezeit, sobald der Gast `HELD_STEP` (8 192) Inodes mehr hält, als das Leeren übrig ließ, oberhalb von `HELD_CEIL` (57 344) schon bei `HELD_REGROW` (512) mehr; ein Gast, dessen Zahl nicht wächst, bleibt bei einmal je Sekunde. Eine Zwischenfassung mit fester Obergrenze 63 488 ließ nur 2 048 Luft, weniger als ein Walk zwischen zwei Blicken anlegt (Codex, dritte Runde). Eine erste Fassung mit 1 024 hätte bei einem Walk Dutzende Male je Sekunde geleert (jeder Nachschlag wächst `nr_inodes`), der Kettentest sah dann kein Steigen und Fallen mehr. Der Kettentest erkennt das Leeren jetzt an unbenutzten Dentries über 3 000 und danach unter 500. Gemessen danach: zwei Kettenläufe grün, die Lasten aus HUM-469 unverändert (cp 5,3 s, git add 11,5 s, ls -lR 3,4 s, Walk 20,9 s, 0 `ENFILE`). Unit-Test `growth_during_the_cooldown_trims_at_once`, Mutationsbeweis: ohne die Klausel rot.
 
 ---
 

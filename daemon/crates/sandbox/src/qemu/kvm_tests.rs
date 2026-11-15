@@ -1844,6 +1844,296 @@ fn a_guest_cannot_drive_the_root_file_daemon_over_its_descriptor_limit() {
     assert_eq!(status.code(), Some(0), "the agent's exit code: {shown}");
 }
 
+/// Die Ketten des Tests unten (HUM-483): je [`CHAIN_DEPTH`] Verzeichnisse
+/// ineinander, erst so viele, die der Agent hält, dann noch einmal so
+/// viele. Zusammen mehr als [`super::lines::FILE_DAEMON_NOFILE`], die
+/// ersten allein mehr als die Hälfte.
+const CHAINS: usize = 105;
+
+/// Wie tief jede Kette reicht.
+const CHAIN_DEPTH: usize = 400;
+
+/// Legt die Ketten im Gast an, mit `mkdir d; cd d` je Stufe, wie ein
+/// Programm, das in seinen eigenen Baum hinabsteigt. Die ersten [`CHAINS`]
+/// hält es mit je einem Deskriptor auf dem untersten Verzeichnis, und
+/// solange es sie hält, sieht es Einträge der Wurzel an, bis PID 1 geleert
+/// hat: Das Leeren nimmt die gehaltenen Verzeichnisse aus der Zählung der
+/// unbenutzten, für immer. Dann lässt es sie los, und nur das
+/// unterste jeder Kette zählt wieder als unbenutzt; der Rest bleibt, von
+/// seinen Kindern gehalten. Danach legt es [`CHAINS`] weitere an. Meldet, wie
+/// viele Verzeichnisse es anlegte, den ersten Fehler und die Zähler des
+/// Gastkernels, als es die ersten losließ.
+const CHAIN_SCRIPT: &str = r#"import errno, os
+made, error, state, trimmed = 0, "none", "-", "-"
+
+def chain(name):
+    global made
+    os.chdir("/work/tree-483")
+    for _ in range(CHAIN_DEPTH):
+        os.mkdir(name)
+        os.chdir(name)
+        made += 1
+        name = "d"
+
+try:
+    os.mkdir("/work/tree-483")
+    held = []
+    for n in range(CHAINS):
+        chain("a%d" % n)
+        held.append(os.open(".", os.O_RDONLY | os.O_DIRECTORY))
+    os.chdir("/")
+    # Until the count of unused dentries has risen and fallen again: PID 1
+    # has trimmed while every chain was held.
+    risen, looked = False, 0
+    for top, dirs, files in os.walk("/usr"):
+        for entry in dirs + files:
+            os.lstat(os.path.join(top, entry))
+            looked += 1
+        unused = int(open("/proc/sys/fs/dentry-state").read().split()[1])
+        risen = risen or unused > 3000
+        if (risen and unused < 500) or looked >= 300000:
+            break
+    trimmed = "yes" if risen and unused < 500 else "no"
+    for fd in held:
+        os.close(fd)
+    with open("/proc/sys/fs/dentry-state") as d, open("/proc/sys/fs/inode-state") as i:
+        state = "dentries=%s inodes=%s" % (",".join(d.read().split()[:2]), ",".join(i.read().split()[:2]))
+    for n in range(CHAINS):
+        chain("b%d" % n)
+except OSError as err:
+    error = errno.errorcode.get(err.errno, str(err.errno))
+os.chdir("/")
+print("made:%d error:%s" % (made, error), flush=True)
+print("released:%s trimmed-while-held:%s" % (state, trimmed), flush=True)
+"#;
+
+/// Der Agent des Tests unten: die Ketten aus [`CHAIN_SCRIPT`], dann ein
+/// Walk darüber mit der Zahl der `ENFILE`-Meldungen; zuletzt wartet er auf
+/// ein Wort vom Terminal, damit der Host die Deskriptoren danach zählt.
+const CHAIN_AGENT: &str = r#"python3 /work/chains-483.py 2>&1
+echo "chains:$(find /work/tree-483 -type d 2>/tmp/e483 | wc -l) enfile:$(grep -c 'Too many open files' /tmp/e483)"
+read -r line
+echo done-483
+"#;
+
+/// Der virtiofsd für `/work` in der Unit `unit`: der Prozess `virtiofsd`,
+/// der [`super::lines::WORK_SHARE`] ausliefert.
+fn work_file_daemon(unit: &str) -> Option<i32> {
+    let procs = std::fs::read_to_string(unit_cgroup(unit)?.join("cgroup.procs")).ok()?;
+    let share = super::lines::WORK_SHARE.as_bytes();
+    procs
+        .lines()
+        .filter_map(|line| line.trim().parse::<i32>().ok())
+        .find(|pid| {
+            let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+            let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+            comm.trim() == "virtiofsd" && cmdline.split(|b| *b == 0).any(|word| word == share)
+        })
+}
+
+/// HUM-483: Ketten von Verzeichnissen, die ein Leeren antraf, während der
+/// Agent sie hielt, zählt der Gastkernel nach dem Loslassen nicht mehr als
+/// unbenutzt, nur das unterste Verzeichnis jeder Kette ([`CHAIN_SCRIPT`]).
+/// PID 1 liest deshalb auch, wie viele Inodes der Gast insgesamt hält
+/// (`guest_cache.rs` des Shims), und leert über 49 152, sobald es seit dem
+/// letzten Leeren 8 192 mehr sind. Die zweiten Ketten entstehen ohne
+/// `ENFILE`, der Walk danach sieht jedes Verzeichnis ohne `ENFILE`, und der
+/// virtiofsd für `/work` bleibt unter fünfzehn Sechzehnteln der Grenze,
+/// gezählt in `/proc/<pid>/fd` auf dem Host. Mutationsbeweis: ohne den
+/// Auslöser über die gehaltenen Inodes bekommt das Anlegen nach 64 924
+/// Verzeichnissen `ENFILE`, der Dienst hält 64 948 Deskriptoren und gibt
+/// keinen mehr frei, und schon der Walk danach scheitert.
+///
+/// Gewöhnliche Ketten deckt schon die Zählung der unbenutzten: Der
+/// Gastkernel zählt ein Verzeichnis als unbenutzt, sobald es einmal ohne
+/// Referenz war, auch wenn später ein Kind es hält, und ein Leeren gibt mit
+/// dem untersten Verzeichnis die ganze Kette frei. Gemessen (HUM-483): 80 000
+/// Verzeichnisse in Ketten ohne gehaltene, angelegt wie hier und danach
+/// durchlaufen, höchstens 33 625 Deskriptoren, ohne den neuen Auslöser.
+#[test]
+fn a_walk_over_deep_directory_chains_stays_below_the_descriptor_limit() {
+    use crate::SandboxBackend as _;
+    let test = "a_walk_over_deep_directory_chains_stays_below_the_descriptor_limit";
+    // Mehr Speicher als die Vorgabe, damit nicht der Gastkernel selbst unter
+    // Druck den Cache leert und so verdeckt, ob der Shim es tut.
+    let Some(harness) = Harness::with_machine(test, 1024, 1) else {
+        return;
+    };
+    let limit = usize::try_from(super::lines::FILE_DAEMON_NOFILE).unwrap();
+    std::fs::write(
+        harness.project.join("chains-483.py"),
+        CHAIN_SCRIPT
+            .replace("CHAINS", &CHAINS.to_string())
+            .replace("CHAIN_DEPTH", &CHAIN_DEPTH.to_string()),
+    )
+    .unwrap();
+    let (handle, output) = harness.launch(CHAIN_AGENT);
+    let results = harness.backend.isolation_check(&handle);
+    assert!(results.iter().all(|r| r.passed), "{results:?}");
+    let unit = handle.unit().unwrap().unit.service();
+    let pid = work_file_daemon(&unit).expect("the /work virtiofsd in the unit");
+    let mut seen = Vec::new();
+    let walked = |seen: &[u8]| {
+        String::from_utf8_lossy(seen)
+            .split_once("chains:")
+            .is_some_and(|(_, rest)| rest.contains('\n'))
+    };
+    let mut most = 0;
+    let deadline = Instant::now() + Duration::from_secs(300);
+    while !walked(&seen) && Instant::now() < deadline {
+        if let Some(count) = descriptors(pid) {
+            most = most.max(count);
+        }
+        if let Ok(chunk) = output.recv_timeout(Duration::from_millis(20)) {
+            seen.extend_from_slice(&chunk.bytes);
+        }
+    }
+    let after_walk = descriptors(pid).unwrap_or(0);
+    most = most.max(after_walk);
+    handle.write_input(b"go\r").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !String::from_utf8_lossy(&seen).contains("done-483") && Instant::now() < deadline {
+        if let Ok(chunk) = output.recv_timeout(Duration::from_millis(200)) {
+            seen.extend_from_slice(&chunk.bytes);
+        }
+    }
+    let shown = String::from_utf8_lossy(&seen).into_owned();
+    let ended = handle.wait_timeout(Duration::from_secs(30));
+    let walk = shown
+        .lines()
+        .find_map(|line| line.strip_prefix("chains:"))
+        .unwrap_or_else(|| panic!("no chains line: {shown}"));
+    let line_of = |key: &str| {
+        shown
+            .lines()
+            .find(|line| line.starts_with(key))
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
+    };
+    eprintln!(
+        "{test}: {}, {}, chains:{walk}; the /work virtiofsd held at most {most}, after the \
+         walk {after_walk} descriptors (limit {limit})",
+        line_of("made:"),
+        line_of("released:")
+    );
+    // PID 1 hat geleert, während der Agent die ersten Ketten hielt; sonst
+    // prüfte der Test die Lücke nicht, die der Auslöser schließt.
+    assert!(
+        line_of("released:").ends_with("trimmed-while-held:yes"),
+        "no trim while the chains were held: {shown}"
+    );
+    assert_eq!(
+        line_of("made:"),
+        format!("made:{} error:none", 2 * CHAINS * CHAIN_DEPTH),
+        "the chains did not come to be: {shown}"
+    );
+    let count = |index: usize, key: &str| {
+        walk.split(' ')
+            .nth(index)
+            .and_then(|pair| pair.trim().strip_prefix(key))
+            .and_then(|value| value.trim().parse::<usize>().ok())
+    };
+    assert_eq!(
+        count(1, "enfile:"),
+        Some(0),
+        "the walk over the chains met ENFILE: {walk}"
+    );
+    assert_eq!(
+        count(0, ""),
+        Some(2 * CHAINS * CHAIN_DEPTH + 1),
+        "the walk did not see every directory: {walk}"
+    );
+    // Die ersten Ketten (42 000) bleiben gehalten, bis die gehaltenen Inodes
+    // um den Schritt des Shims (8 192) über dem Stand nach dem letzten Leeren
+    // liegen; dazu der Zuwachs einer Runde.
+    assert!(
+        most < limit * 15 / 16,
+        "the /work virtiofsd held {most} descriptors (limit {limit})"
+    );
+    assert!(shown.contains("done-483"), "{shown}");
+    let status = ended.expect("the session ends").expect("a status");
+    assert_eq!(status.code(), Some(0), "the agent's exit code: {shown}");
+}
+
+/// Der Agent des Tests unten: zählt die Deskriptoren der Shell des Agenten
+/// und eines ihrer Kinder, die auf eine der drei Dateien der Begrenzung
+/// zeigen, zuerst, bevor er selbst etwas öffnet. Dann eicht er beide
+/// Zählungen mit einer selbst geöffneten Datei auf einem Deskriptor, den die
+/// Shell frei wählt (`{cal}`), so dass er keinen geerbten überschreibt; das
+/// Kind erbt ihn. Nach einer Sekunde zählt er noch einmal, als PID 1 längst
+/// mehrmals nachgesehen hat.
+const PROC_FD_AGENT: &str = r#"bound() { n=0; for f in /proc/$$/fd/*; do case "$(readlink "$f")" in */dentry-state|*/inode-state|*/drop_caches) n=$((n+1));; esac; done; echo $n; }
+child() { ls -l /proc/self/fd | grep -c -e dentry-state -e inode-state -e drop_caches; }
+echo "agent:$(bound) child:$(child)"
+exec {cal}</proc/sys/fs/dentry-state
+echo "calibration:$(bound) child-calibration:$(child)"
+exec {cal}<&-
+sleep 1
+echo "later:$(bound)"
+"#;
+
+/// HUM-483: Die drei `/proc`-Dateien der Begrenzung des Caches
+/// (`dentry-state`, `inode-state`, `drop_caches`) hält PID 1 allein: Der
+/// Agent und sein Kind halten keine davon, und PID 1 hat sie noch, denn
+/// sein Faden meldet `CACHE bound` und nie `CACHE off`, auch nachdem er
+/// während der Sekunde des Agenten zehnmal nachgesehen hat. Mutationsbeweis:
+/// ohne die drei in der keep-Liste von PID 1 schließt PID 1 sie vor dem
+/// Fork, der Faden meldet `CACHE off look:Illegal_seek` (die Nummer gehört
+/// inzwischen einem anderen Deskriptor), und die Ausgabe des Agenten fehlt.
+/// Ohne das `drop` im Kind, mit den drei in der keep-Liste des Kinds und
+/// ohne `CLOEXEC` hält der Agent sie, der Test wird rot. Jede der drei
+/// Sperren des Kinds allein hält sie vom Agenten fern, Absicht der Tiefe:
+/// ohne nur das `drop` bleibt der Test grün.
+#[test]
+fn the_agent_holds_none_of_pid_1s_cache_descriptors() {
+    let test = "the_agent_holds_none_of_pid_1s_cache_descriptors";
+    let Some((spec, _project)) = spec(test, PROC_FD_AGENT) else {
+        return;
+    };
+    let outcome = test_vm::run(&spec).unwrap_or_else(|why| panic!("the guest did not run: {why}"));
+    let shown = shown(&outcome);
+    let terminal = String::from_utf8_lossy(&outcome.terminal).into_owned();
+    let value = |key: &str| {
+        terminal
+            .split(|c: char| c.is_whitespace())
+            .find_map(|word| word.strip_prefix(key))
+            .and_then(|value| value.parse::<u32>().ok())
+            .unwrap_or_else(|| panic!("no {key} in the agent's output\n{shown}"))
+    };
+    // Die selbst geöffnete Datei zählt: Beide Zählungen treffen.
+    assert_eq!(
+        value("calibration:"),
+        value("agent:") + 1,
+        "the count misses a descriptor the agent opened itself\n{shown}"
+    );
+    assert_eq!(
+        value("child-calibration:"),
+        value("child:") + 1,
+        "the child's count misses a descriptor it inherited\n{shown}"
+    );
+    assert_eq!(value("agent:"), 0, "the agent holds PID 1's files\n{shown}");
+    assert_eq!(
+        value("child:"),
+        0,
+        "the agent's child holds PID 1's files\n{shown}"
+    );
+    assert_eq!(value("later:"), 0, "the agent holds PID 1's files\n{shown}");
+    let cache: Vec<&String> = outcome
+        .report
+        .iter()
+        .filter(|line| line.starts_with("CACHE "))
+        .collect();
+    assert!(
+        cache.iter().any(|line| line.starts_with("CACHE bound ")),
+        "PID 1 did not start bounding the cache\n{shown}"
+    );
+    assert!(
+        !cache.iter().any(|line| line.starts_with("CACHE off")),
+        "PID 1 lost the files of the bound\n{shown}"
+    );
+}
+
 /// Die geteilten Abbildungen des Tests unten (HUM-484), in Python, damit
 /// jeder Schritt genau `mmap(MAP_SHARED)` ist: eine Datei der Wurzel lesen,
 /// eine Datei unter `/work` beschreiben, und `SQLite` im WAL-Modus, das seinen

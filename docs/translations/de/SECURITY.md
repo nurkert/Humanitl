@@ -2064,19 +2064,31 @@ den Garantien ändert das nichts, denn eine solche Verbindung erreicht nichts.
   begrenzt PID 1 im Gast den Cache selbst: Alle 100 ms liest es die Zahl der unbenutzten Dentries
   und Inodes (`/proc/sys/fs/dentry-state`, `inode-state`), und über 32 768 schreibt es `2` nach
   `/proc/sys/vm/drop_caches`; der Gastkernel verwirft, was niemand benutzt, und lässt es die
-  Dienste vergessen, die ihre Deskriptoren schließen. Was der Gast festhält (offene Dateien,
-  Arbeitsverzeichnisse, abgebildete Bibliotheken, Verzeichnisse, die gecachte Kinder am Leben
-  halten), ist nicht unbenutzt, bleibt und zählt wie bisher gegen die Grenze; zwischen zwei
-  Prüfungen kann der Cache auch über 32 768 wachsen.
+  Dienste vergessen, die ihre Deskriptoren schließen; eine freigegebene Kette von Verzeichnissen
+  geht mit ihrem untersten Glied. Seit HUM-483 liest PID 1 auch, wie viele Inodes der Gast
+  insgesamt hält (`inode-state`, erstes Feld), und leert über 49 152, sobald es seit dem letzten
+  Leeren 8 192 mehr sind, spätestens bei 57 344 (ein Leeren dort, das weniger als 8 192 freigibt,
+  wiederholt es höchstens einmal je Sekunde, außer der Gast hält mehr, als es übrig ließ: unter 57 344 8 192 mehr, darüber 512 mehr): Der Kernel zählt ein Verzeichnis nicht mehr als unbenutzt, wenn ein
+  Leeren es in Benutzung antrifft, so dass eine Kette, die der Agent während eines Leerens hielt
+  und danach losließ, als ein Eintrag zählt und sonst bliebe, bis 32 768 neue unbenutzte kämen.
+  Was der Gast in Benutzung hält (offene Dateien, Arbeitsverzeichnisse, abgebildete Bibliotheken
+  und die Verzeichnisse darüber), gibt kein Leeren frei; es zählt wie bisher gegen die Grenze, und
+  zwischen zwei Prüfungen kann der Cache auch über beide Schwellen wachsen.
   PID 1 öffnet die drei Dateien beim Start, bevor es den Agenten gibt, und hält sie allein (das
-  Kind des Agenten schließt jeden geerbten Deskriptor, PID 1 ist nicht dumpable); der Agent kann
-  PID 1 nur öfter aufräumen lassen, was allein sein eigenes Tempo kostet. Die Begrenzung ist ein
+  Kind des Agenten verwirft sie und schließt jeden geerbten Deskriptor, PID 1 ist nicht dumpable;
+  KVM-Test `the_agent_holds_none_of_pid_1s_cache_descriptors`); der Agent kann PID 1 nur öfter
+  aufräumen lassen, was allein sein eigenes Tempo kostet. Die Begrenzung ist ein
   Komfort des Gasts, keine Garantie: Die Grenze oben bindet auf dem Host, ob sie wirkt oder nicht.
   Gemessen (HUM-476, Gastkernel der CI, 512 MiB): ein Walk über die ganze Wurzel (684 000
   Einträge, jeder angesehen) ohne ein einziges `ENFILE`, höchstens 37 566 Deskriptoren im
   Wurzeldienst; jede Last in höchstens der doppelten Zeit des unbegrenzten Cache (`ls -lR` über
   `/usr/share/doc` 3,2 bis 4,0 s, unbegrenzt 2,2 s bis zum `ENFILE`, mit `--cache never` aus HUM-469
   28 s; `git add` über 13 475 Dateien 11 s, 12 s, 29 s).
+  Gemessen (HUM-483, 1 GiB): 42 000 Verzeichnisse in Ketten, während eines Leerens gehalten und
+  dann losgelassen, 42 000 weitere danach und ein Walk über alle, ohne `ENFILE` und mit höchstens
+  45 814 Deskriptoren im Dienst für `/work`; mit der Zählung der unbenutzten allein bekam der Gast
+  nach 64 924 Verzeichnissen `ENFILE`, und der Dienst behielt 64 948 Deskriptoren und gab keinen
+  frei.
 - **Geteilte Abbildungen** (HUM-469, HUM-476, HUM-484). Unter `--cache auto` geht
   `mmap(MAP_SHARED)` auf `/` und `/work` durch den Seitencache des Gasts (SQLite im WAL-Modus,
   rustc und cargo brauchen es), auf jedem Gastkernel. Die Dienste laufen ohne `--allow-mmap`, und

@@ -2245,17 +2245,28 @@ listen).
   itself: every 100 ms it reads the number of unused dentries and inodes
   (`/proc/sys/fs/dentry-state`, `inode-state`), and above 32,768 it writes `2` to
   `/proc/sys/vm/drop_caches`; the guest kernel drops what nobody uses and tells the daemons to
-  forget it, and they close the descriptors. What the guest holds (open files, working
-  directories, mapped libraries, directories that cached children keep alive) is not unused, stays
-  and counts against the limit as before; between two checks the cache can also grow past 32,768. PID 1 opens the
-  three files at boot, before the agent exists, and holds them alone (the agent's child closes
-  every inherited descriptor, PID 1 is not dumpable); the agent can make PID 1 trim more often,
+  forget it, and they close the descriptors; a freed directory chain goes with its lowest member.
+  Since HUM-483 PID 1 also reads the inodes the guest holds in all (`inode-state`, first field)
+  and trims above 49,152 once they have grown by 8,192 since the last trim, at 57,344 at the
+  latest (a trim there that frees fewer than 8,192 is repeated at most once a second, unless the guest holds more than it left: 8,192 more below 57,344, 512 more above): the kernel stops
+  counting a directory as unused when a trim meets it in use, so a chain of directories that the
+  agent held during a trim and let go afterwards counts as one entry and would otherwise stay
+  until 32,768 new unused entries came. What the guest holds in use (open files, working
+  directories, mapped libraries, and the directories above them) no trim frees; it counts against
+  the limit as before, and between two checks the cache can also grow past both thresholds. PID 1
+  opens the three files at boot, before the agent exists, and holds them alone (the agent's child
+  drops them and closes every inherited descriptor, PID 1 is not dumpable; KVM test
+  `the_agent_holds_none_of_pid_1s_cache_descriptors`); the agent can make PID 1 trim more often,
   which costs only its own speed. The bound is the guest's comfort, not a guarantee: the limit
   above binds on the host whether it works or not. Measured (HUM-476, guest kernel of the CI,
   512 MiB): a walk over the whole root (684,000 entries, each one looked at) without a single
   `ENFILE`, at most 37,566 descriptors in the root daemon; every workload within twice the time
   of the unbounded cache (`ls -lR` over `/usr/share/doc` 3.2 to 4.0 s, unbounded 2.2 s up to
   `ENFILE`, with `--cache never` of HUM-469 28 s; `git add` over 13,475 files 11 s, 12 s, 29 s).
+  Measured (HUM-483, 1 GiB): 42,000 directories in chains held during a trim and then let go,
+  42,000 more after them and a walk over all, without `ENFILE` and at most 45,814 descriptors in
+  the `/work` daemon; with the unused count alone the guest got `ENFILE` after 64,924 directories,
+  and the daemon kept 64,948 descriptors and freed none.
 - **Shared mappings** (HUM-469, HUM-476, HUM-484). Under `--cache auto` `mmap(MAP_SHARED)` on `/`
   and `/work` goes through the guest's page cache (SQLite in WAL mode, rustc and cargo need it),
   on any guest kernel. The daemons run without `--allow-mmap` and no guest kernel version is

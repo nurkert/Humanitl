@@ -87,7 +87,9 @@ pub(crate) const LAYER_FD: i32 = 6;
 /// festhält (offene Dateien und ihre Verzeichnisse, Arbeitsverzeichnisse,
 /// abgebildete Bibliotheken, inotify-Wachen), und was in seinem Cache liegt;
 /// den Cache leert PID 1 im Gast, sobald mehr als 32 768 Einträge unbenutzt
-/// sind (`guest_cache.rs` des Shims, HUM-476). Gemessen (HUM-476, Wurzel mit
+/// sind (`guest_cache.rs` des Shims, HUM-476) oder er mehr als 49 152 Inodes
+/// hält und 8 192 mehr als nach dem letzten Leeren, spätestens bei 57 344
+/// (HUM-483). Gemessen (HUM-476, Wurzel mit
 /// dem `/usr` des Hosts): höchstens 37 566 Deskriptoren (zwei Läufe: 36 588
 /// und 37 566) bei einem Walk über die Wurzel (`find / -xdev`, 684 000 bis
 /// 735 000 Einträge je nach Filter) und bei `ls -lR` über 81 000; mit
@@ -371,7 +373,8 @@ fn bind_program(line: &mut Vec<OsString>, program: &Path) {
 /// virtiofsd; so kam der Walk in HUM-445 auf rund 520 000, und ein `ls -lR`
 /// über 81 000 Einträge endete an der Grenze mit `ENFILE`. Deshalb begrenzt
 /// PID 1 im Gast den Cache selbst (`guest_cache.rs` des Shims): Über 32 768
-/// unbenutzten Einträgen lässt der Gastkernel sie fallen, schickt je Inode
+/// unbenutzten Einträgen, oder über 49 152 gehaltenen Inodes (HUM-483),
+/// lässt der Gastkernel die unbenutzten fallen, schickt je Inode
 /// `FORGET`, und virtiofsd schließt den Deskriptor. virtiofsd 1.13 und 1.14
 /// kennen keine Option, die seine Inodes begrenzt, und
 /// `--inode-file-handles` hilft nicht: Ohne `CAP_DAC_READ_SEARCH` auf dem
