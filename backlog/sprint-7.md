@@ -2525,6 +2525,54 @@ Aus dem Ultra-Review. Scheitert `ask_stream` nach dem `O`-Rahmen (keine Antwort 
 ### Akzeptanzkriterien
 1. Keine Shell überlebt ihr gescheitertes Öffnen.
 
+### Stand nach der Umsetzung (2026-11-15)
+`ShellDoor::ask_stream` schickt nach jedem Fehler hinter dem `O` (keine
+Antwort in der Frist, Fehler beim Senden) ein `C` für dieselbe Kennung. Der
+Strom hält die Reihenfolge und der Shim arbeitet seine Rahmen der Reihe nach
+ab: Startet er die Shell für das `O` doch noch, legt das `C` sie gleich auf,
+ihr `E` folgt; hat er das `O` nie gestartet oder verworfen, ignoriert er das
+`C`. Das `C` geht vom Faden des Aufrufers hinaus, nicht vom Leser des Stroms
+als Antwort auf ein spätes `R`, denn der Leser darf nie auf Platz im Strom
+warten. Der Platz im Daemon: Steht die Kennung beim Aufgeben noch auf
+`Asked`, wird sie ausgetragen, ein spätes `R` findet sie nicht mehr und
+ändert nichts; kam das `R` knapp vor dem Aufgeben, wird sie `Orphaned`, und
+das `E` nach dem `C` gibt sie frei. Die Socket-Tür ohne Strom brauchte
+nichts: Dort fällt beim Scheitern die Herrscherseite des Terminals, und die
+spät gestartete Shell sieht das Auflegen. Die Frist der Antwort ist intern
+ein Parameter (`open_within`), damit der Test nicht fünf Sekunden wartet.
+Test: ein Shim, der erst nach der Frist mit `R` antwortet; das `C` für die
+Kennung kommt, kein Platz bleibt belegt, die nächste Shell öffnet.
+Mutationsbeweis: ohne das `C` rot. Kein eigener KVM-Test: ein echter Shim
+lässt sich nicht ehrlich verspäten; die KVM-Tests des Stroms bleiben grün.
+Review: Das `C` allein legte nur das Terminal auf, eine Shell, die `SIGHUP`
+überhört (`trap '' HUP`), lief weiter und hielt ihren Platz im Shim und,
+nach dem knappen `R`, den im Daemon. Seither merkt sich der Shim beim `C`
+einer weiteren Shell eine Frist (`HANGUP_GRACE`, 1 s: genug, damit eine
+Shell auf `SIGHUP` ihre Historie schreibt, kurz genug für den Platz) und
+schickt danach ihrer Prozessgruppe `SIGKILL` (die Shell ist nach `setsid`
+Führerin ihrer Gruppe); ihr Reap meldet das `E`. Die Frist läuft über die
+Zeitgrenze von `poll` in der Schleife von PID 1, nie über ein Warten; `kill`
+erlaubt der Filter von PID 1. Das gilt ebenso für das `C` aus
+`Shell::drop`, nie für den Kanal des Agenten. Der Fehlerpfad von `open`
+nutzt jetzt `release`, derselbe Übergang wie beim Fallen einer Shell. Tests
+dazu: im Shim eine echte Shell, die `SIGHUP` überhört; sie überlebt das
+Auflegen, ist nach der Frist mit `SIGKILL` beendet, ihr `E` geht hinaus, und
+danach öffnen wieder `MAX_SHELLS` Shells (Mutationsbeweis: ohne die
+Eskalation rot). Im Daemon der Übergang `Started`, `Orphaned`, `E` ohne
+Platz. Zweite Runde: Endet die Shell auf das Auflegen vor der Frist, nimmt
+ihr Reap die Prozessgruppe mit (`kill(-pid, SIGKILL)`), sonst lebte ein Kind
+ihrer Gruppe, das `SIGHUP` überhört, als Waise weiter. Sicher auch nach dem
+Reap: Linux gibt eine Prozessnummer erst frei, wenn kein Prozess sie mehr als
+Kennung, Gruppe oder Sitzung trägt (`__change_pid`); ohne Mitglied endet der
+Aufruf mit `ESRCH`. Der Test der Eskalation pollt jetzt mit
+`Session::timeout_ms` wie PID 1 und belegt so, dass die Frist die Schleife
+weckt (ohne die Frist in `timeout_ms` kommt das `SIGKILL` erst mit dem
+Lebenszeichen nach 5 s: rot); ein zweiter Test startet ein Kind in der
+Gruppe der Shell, das `SIGHUP` überhört, und prüft, dass es mit dem Reap der
+Shell verschwindet (ohne das Töten beim Reap: rot). Was eine Shell in eine
+eigene Prozessgruppe oder Sitzung schiebt, erreicht das `SIGKILL` nicht; es
+zählt aber nicht gegen `MAX_SHELLS` und endet mit der Sandbox.
+
 
 ---
 
