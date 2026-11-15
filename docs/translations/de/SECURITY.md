@@ -2226,7 +2226,8 @@ Dateisystemdienst mit `--readonly`, `--fd` und `--cache`, das vsock-Gerät mit
 eingebautem virtiofs (`CONFIG_VIRTIO_FS=y` in der Konfiguration neben dem Abbild) und das
 Modulverzeichnis dieses Kernels. Fehlt eine Voraussetzung, lehnt der Start mit `SANDBOX_045` ab; er fällt nie auf ein
 anderes Backend zurück. `humanitl doctor` nennt die erste fehlende Voraussetzung in der Zeile
-`available` der Kernel-Stufe, wie `humanitl sandbox backends`. Der Dienstverwalter
+`available` der Kernel-Stufe, wie `humanitl sandbox backends`, und darunter je Voraussetzung
+eine Zeile, sagt also alles, was fehlt (HUM-488). Der Dienstverwalter
 des Nutzers braucht die cgroup-Controller `memory` und `pids` (systemd delegiert sie von sich aus);
 ohne sie lehnt ein Start mit `SANDBOX_052` ab (HUM-485), was auch `humanitl doctor --probe`
 zeigt.

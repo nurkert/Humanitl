@@ -206,12 +206,7 @@ fn unadmitted_lines(
         format!("{stage} is not admitted yet"),
         refused.clone(),
     )];
-    checks.extend(static_checks(name, paths, sandbox).into_iter().map(
-        |(id, result)| match result {
-            Ok(evidence) => CheckOutcome::ok(id, evidence),
-            Err(missing) => CheckOutcome::fail(id, format!("missing: {}", missing.code), missing),
-        },
-    ));
+    checks.extend(static_lines(name, paths, sandbox));
     if matches!(mode, ProbeMode::Start { .. }) {
         checks.push(CheckOutcome::warn(
             BackendCheckId::Probe,
@@ -222,8 +217,24 @@ fn unadmitted_lines(
     checks
 }
 
+/// Je Voraussetzung einer Stufe eine Zeile, ohne etwas zu starten.
+fn static_lines(
+    name: &'static str,
+    paths: &Paths,
+    sandbox: &SandboxRef,
+) -> Vec<CheckOutcome<BackendCheckId>> {
+    static_checks(name, paths, sandbox)
+        .into_iter()
+        .map(|(id, result)| match result {
+            Ok(evidence) => CheckOutcome::ok(id, evidence),
+            Err(missing) => CheckOutcome::fail(id, format!("missing: {}", missing.code), missing),
+        })
+        .collect()
+}
+
 /// Die Zeilen einer zugelassenen Stufe: die Suche vor jedem Start und der
-/// Probestart, gespeichert oder auf Wunsch neu.
+/// Probestart, gespeichert oder auf Wunsch neu; scheitert die Suche, dazu je
+/// Voraussetzung eine Zeile.
 fn admitted_lines(
     name: &'static str,
     stage: &str,
@@ -253,6 +264,10 @@ fn admitted_lines(
                 format!("not usable: {}", missing.code),
                 missing.clone(),
             ));
+            // Die Suche nennt nur die erste fehlende Voraussetzung; doctor
+            // sagt alles, was fehlt, je Voraussetzung eine Zeile (HUM-488),
+            // wie vor der Zulassung.
+            checks.extend(static_lines(name, paths, sandbox));
             if matches!(mode, ProbeMode::Start { .. }) {
                 checks.push(CheckOutcome::unmeasured(
                     BackendCheckId::Probe,
@@ -422,6 +437,25 @@ mod tests {
         let probe = group.get(BackendCheckId::Probe).expect("probe");
         assert_eq!(probe.status(), CheckStatus::Warn, "{probe:?}");
         assert!(probe.evidence().contains(missing), "{probe:?}");
+        // Alles, was fehlt, je Voraussetzung eine Zeile (HUM-488), nicht nur
+        // die erste: jede Voraussetzung steht da, der fehlende Emulator als
+        // Fehler. Mutationsbeweis: ohne die Zeilen fehlt jede davon.
+        if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            for id in [
+                BackendCheckId::Kvm,
+                BackendCheckId::Emulator,
+                BackendCheckId::FileDaemon,
+                BackendCheckId::VsockDevice,
+                BackendCheckId::Bubblewrap,
+                BackendCheckId::KernelImage,
+                BackendCheckId::VirtioFs,
+                BackendCheckId::KernelModules,
+            ] {
+                assert!(group.get(id).is_some(), "{id:?}: {:?}", group.checks);
+            }
+            let emulator = group.get(BackendCheckId::Emulator).expect("emulator");
+            assert_eq!(emulator.status(), CheckStatus::Fail, "{emulator:?}");
+        }
         for line in &group.checks {
             assert_ne!(
                 line.diagnostic().map(|d| d.code.as_str()),
