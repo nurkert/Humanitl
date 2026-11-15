@@ -31,15 +31,18 @@ const DAY: u64 = 86_400;
 
 /// Ein Verstoß gegen einen Wertebereich.
 fn out_of_range(key: &str, found: &str, allowed: &str) -> Diagnostic {
-    let suggestion =
-        schema::field(key).map_or_else(|| "-".to_owned(), schema::Field::default_literal);
+    let field = schema::field(key);
+    let shown = field.map_or_else(|| "-".to_owned(), schema::Field::default_literal);
+    // Der Fix trägt den Wert, wie `humanitl config set` ihn nimmt: ohne
+    // Anführungszeichen (HUM-503).
+    let value = field.map_or_else(|| "-".to_owned(), schema::Field::default_value);
     Diagnostic::builder(CONFIG_003, Severity::Error)
         .why(format!(
-            "{key} = {found} is out of range; allowed is {allowed} (default {suggestion})"
+            "{key} = {found} is out of range; allowed is {allowed} (default {shown})"
         ))
         .fix(FixAction::ChangeSetting {
             key: key.to_owned(),
-            value: suggestion,
+            value,
         })
         .build()
 }
@@ -541,7 +544,7 @@ fn podman_is_well_formed(sandbox: &SandboxRef, host: HostResources) -> Result<()
             )
             .fix(FixAction::ChangeSetting {
                 key: "sandbox.podman.rootfs".to_owned(),
-                value: "\"host\"".to_owned(),
+                value: "host".to_owned(),
             })
             .build());
     }
@@ -1123,6 +1126,20 @@ mod tests {
         let mut config = Config::default();
         config.sandbox.podman.rootfs = crate::PodmanRootfs::Image;
         assert!(podman_why(&config).contains("sandbox.podman.image"));
+        // Der Fix setzt die Wurzel des Rechners, ohne Anführungszeichen, so,
+        // wie `humanitl config set` ihn nimmt (HUM-503).
+        let err = config
+            .validate_on(SMALL_HOST)
+            .expect_err("an image root without image");
+        let Some(humanitl_core::diagnostics::FixAction::ChangeSetting { key, value }) = err.fix
+        else {
+            panic!("no ChangeSetting fix: {:?}", err.fix);
+        };
+        assert!(key.ends_with(".rootfs"), "{key}");
+        assert_eq!(value, "host");
+        let field = crate::schema::field(&key).expect("a leaf");
+        let parsed = crate::value::parse_value(field, &value).expect("the fix parses");
+        crate::value::check_value(field, &parsed).expect("the fix is a valid value");
         for unsafe_name in [
             format!("docker.io/$(id)/x@sha256:{digest}"),
             format!("docker.io/x;id@sha256:{digest}"),
@@ -1210,5 +1227,34 @@ mod tests {
         let text = "MemTotal:       16318224 kB\nMemFree:  1 kB\n";
         assert_eq!(super::mem_total_mib(text), Some(15935));
         assert_eq!(super::mem_total_mib("MemFree: 1 kB\n"), None);
+    }
+
+    /// Jeder `ChangeSetting`-Fix setzt einen Wert, den `humanitl config set`
+    /// so annimmt, wie er dasteht (HUM-503), hier für einen ungültigen Namen
+    /// eines Sandbox-Profils; die Wurzel der Container-Engine prüft
+    /// `an_image_must_be_pinned_by_digest_and_is_required_for_rootfs_image`.
+    /// Mutationsbeweis: mit Anführungszeichen scheitert die Prüfung des
+    /// Werts.
+    #[test]
+    fn every_change_setting_fix_is_a_value_config_set_takes() {
+        let mut profile = Config::default();
+        profile.sandbox.profile = "a/b".to_owned();
+        let mut prefix = Config::default();
+        prefix.terminal.detach_prefix = "ctrl-ab".to_owned();
+        for (config, key, expected) in [
+            (profile, "sandbox.profile", "default"),
+            (prefix, "terminal.detach_prefix", "ctrl-a"),
+        ] {
+            let err = config.validate_on(SMALL_HOST).expect_err("out of range");
+            let Some(humanitl_core::diagnostics::FixAction::ChangeSetting { key: got, value }) =
+                err.fix
+            else {
+                panic!("{key}: no ChangeSetting fix: {:?}", err.fix);
+            };
+            assert_eq!((got.as_str(), value.as_str()), (key, expected));
+            let field = crate::schema::field(key).expect("a leaf");
+            let parsed = crate::value::parse_value(field, &value).expect("the fix parses");
+            crate::value::check_value(field, &parsed).expect("the fix is a valid value");
+        }
     }
 }

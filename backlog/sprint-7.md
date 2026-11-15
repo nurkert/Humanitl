@@ -2719,6 +2719,31 @@ Aus dem Ultra-Review. Der Fix für `rootfs = "image"` ohne `sandbox.podman.image
 ### Akzeptanzkriterien
 1. Jeder Fix-Vorschlag ergibt einen gültigen Wert.
 
+### Stand nach der Umsetzung (2026-11-15)
+Der Fix heißt jetzt `host` statt `"host"`. Das Review (Sonnet) fand
+denselben Fehler in den allgemeinen Fixen: `out_of_range` (`validate.rs`)
+und `bad_value` (`load.rs`) schlugen die Vorgabe als Zeile von
+`config.toml` vor, eine Zeichenkette also mit Anführungszeichen (etwa
+`sandbox.profile = "a/b"`, Fix `"default"`). Neu `Field::default_value`, die
+Vorgabe so, wie `humanitl config set` sie nimmt; der Text des Befunds zeigt
+weiter die Zeile. Tests `every_change_setting_fix_is_a_value_config_set_takes`
+(rootfs, Profilname) und `a_bad_value_proposes_the_default_as_config_set_takes_it`
+(unbekanntes Backend) wenden den Fix wie `config set` an (`parse_value`,
+`check_value`); Mutation mit der alten Darstellung: beide rot.
+Ebenso der Vorschlag für einen vertippten Schlüssel (`unknown_key`,
+`sandbox.backendd = "auto"` schlug `"auto"` vor); Test
+`a_misspelt_key_proposes_its_value_without_quotes`.
+
+Offen, aus der Delta-Runde von Codex, eine andere Klasse als die
+Anführungszeichen, als eigenes Issue: `ChangeSetting`-Fixe, deren Wert
+eine Anleitung ist (`remove NAME`, „an empty table, unless …", der
+Nameserver im Resolver), leere Werte als Eingabeaufforderung
+(`llm.api_key_ref`, `sandbox.work_dir`), verdoppelte Fristen über ihrer
+Obergrenze (`proxy/limits.rs`) und ein Fix für einen Schlüssel außerhalb des
+Schemas (`out_of_range` für `llm.servers.NAME.…`). Dafür braucht es eine
+eigene Art von Fix oder eine Begrenzung; das Kriterium „jeder Fix-Vorschlag
+ergibt einen gültigen Wert" gilt hier für die Anführungszeichen.
+
 
 ---
 

@@ -1038,9 +1038,15 @@ fn unknown_key(entry: &Entry, severity: Severity) -> Diagnostic {
     };
     let mut builder = Diagnostic::builder(CONFIG_002, severity).why(why);
     if let Some(near) = nearest(&entry.path) {
+        // Der Wert so, wie `humanitl config set` ihn nimmt: eine Zeichenkette
+        // ohne Anführungszeichen (HUM-503).
+        let value = entry
+            .value
+            .as_str()
+            .map_or_else(|| entry.value.to_string(), str::to_owned);
         builder = builder.fix(FixAction::ChangeSetting {
             key: near.to_owned(),
-            value: entry.value.to_string(),
+            value,
         });
     }
     builder.build()
@@ -1130,7 +1136,7 @@ fn bad_value(entry: &Entry, expected: &str, found: &str) -> Diagnostic {
         .fix(FixAction::ChangeSetting {
             key: entry.path.clone(),
             value: schema::field(&entry.path)
-                .map_or_else(|| "-".to_owned(), schema::Field::default_literal),
+                .map_or_else(|| "-".to_owned(), schema::Field::default_value),
         })
         .build()
 }
@@ -1373,5 +1379,45 @@ mod tests {
         assert_eq!(resolved.config.llm.endpoint, None);
         assert_eq!(resolved.origin("llm.endpoint"), Some(&Origin::Default));
         assert!(crate::llm_endpoint::set_aside(&resolved.diagnostics).is_some());
+    }
+
+    /// Ein Wert außerhalb der erlaubten Liste schlägt die Vorgabe vor, so,
+    /// wie `humanitl config set` sie nimmt: ohne Anführungszeichen
+    /// (HUM-503). Mutationsbeweis: mit `default_literal` steht `"auto"` da.
+    #[test]
+    fn a_bad_value_proposes_the_default_as_config_set_takes_it() {
+        let entry = super::Entry {
+            path: "sandbox.backend".to_owned(),
+            written_as: "sandbox.backend".to_owned(),
+            value: TomlValue::String("nonsense".to_owned()),
+            origin: Origin::Global,
+            via_alias: false,
+        };
+        let field = crate::schema::field("sandbox.backend").expect("a leaf");
+        let err = super::check_value(field, &entry).expect_err("not an allowed value");
+        let Some(FixAction::ChangeSetting { key, value }) = err.fix else {
+            panic!("no ChangeSetting fix: {:?}", err.fix);
+        };
+        assert_eq!((key.as_str(), value.as_str()), ("sandbox.backend", "auto"));
+        let parsed = crate::value::parse_value(field, &value).expect("the fix parses");
+        crate::value::check_value(field, &parsed).expect("the fix is an allowed value");
+    }
+
+    /// Ein vertippter Schlüssel schlägt den ähnlichsten mit dem Wert vor, wie
+    /// `humanitl config set` ihn nimmt (HUM-503).
+    #[test]
+    fn a_misspelt_key_proposes_its_value_without_quotes() {
+        let entry = super::Entry {
+            path: "sandbox.backendd".to_owned(),
+            written_as: "sandbox.backendd".to_owned(),
+            value: TomlValue::String("auto".to_owned()),
+            origin: Origin::Global,
+            via_alias: false,
+        };
+        let err = super::unknown_key(&entry, Severity::Error);
+        let Some(FixAction::ChangeSetting { key, value }) = err.fix else {
+            panic!("no ChangeSetting fix: {:?}", err.fix);
+        };
+        assert_eq!((key.as_str(), value.as_str()), ("sandbox.backend", "auto"));
     }
 }

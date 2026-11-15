@@ -64,6 +64,17 @@ pub struct Field {
 }
 
 impl Field {
+    /// Der Vorgabewert als Text für `humanitl config set`: eine Zeichenkette
+    /// ohne Anführungszeichen, `-` ohne Vorgabe (HUM-503). Diesen Wert setzt
+    /// ein `ChangeSetting`-Fix; [`Field::default_literal`] ist die Zeile in
+    /// `config.toml`.
+    #[must_use]
+    pub fn default_value(&self) -> String {
+        self.default
+            .as_ref()
+            .map_or_else(|| "-".to_owned(), crate::value::scalar)
+    }
+
     /// Der Vorgabewert als eine Zeile, wie er in `config.toml` stünde.
     #[must_use]
     pub fn default_literal(&self) -> String {
