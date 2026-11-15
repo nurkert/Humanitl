@@ -132,6 +132,15 @@ impl Default for BackendSearches {
 /// Liste für die Einstellung und die mit dem Backend einer Sitzung dieselbe
 /// Suche, und keine Variable der Sandbox liegt im Gedächtnis.
 pub(crate) fn search_key(name: &str, sandbox: &SandboxRef, paths: &Paths) -> String {
+    let read = searched_settings(sandbox);
+    format!("{name}\n{read:?}\n{paths:?}")
+}
+
+/// Die Teile der Gruppe `sandbox`, die eine Suche oder ein Start eines
+/// Backends liest: die Einstellungen der Backends. Profil, Ordner, Modus,
+/// Untergrenze, Wahl des Backends und die Umgebung der Sandbox stehen auf
+/// ihrem Vorgabewert.
+pub(crate) fn searched_settings(sandbox: &SandboxRef) -> SandboxRef {
     let blank = SandboxRef::default();
     let mut read = sandbox.clone();
     read.profile = blank.profile;
@@ -141,7 +150,31 @@ pub(crate) fn search_key(name: &str, sandbox: &SandboxRef, paths: &Paths) -> Str
     read.env = blank.env;
     read.backend = blank.backend;
     read.min_isolation = blank.min_isolation;
-    format!("{name}\n{read:?}\n{paths:?}")
+    read
+}
+
+/// Der Abdruck dieser Dateien als Text, eine Zeile je Datei: Pfad, und wenn
+/// es sie gibt, Gerät, Inode, Größe, `mtime` und `ctime` ([`Stamp`]). Gleich
+/// genau dann, wenn sich keine der Dateien geändert hat; der Schlüssel des
+/// gespeicherten Probestarts im Doctor (HUM-506).
+pub(crate) fn fingerprint(files: &[PathBuf]) -> String {
+    use std::fmt::Write as _;
+
+    let mut text = String::new();
+    for file in files {
+        let stamp = Stamp::of(file);
+        let _ = write!(text, "{}", stamp.path.display());
+        match stamp.meta {
+            Some(meta) => {
+                for value in meta {
+                    let _ = write!(text, " {value}");
+                }
+            }
+            None => text.push_str(" -"),
+        }
+        text.push('\n');
+    }
+    text
 }
 
 /// Jeder Ort im `PATH` von `env`, an dem ein Programm `name` liegen könnte,

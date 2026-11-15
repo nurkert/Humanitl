@@ -10,9 +10,11 @@
 //! - `admitted`: `ok`.
 //! - `available`: das Ergebnis von [`Backend::detect`], dem Weg jedes
 //!   Starts, samt Programm und Fassung.
-//! - `probe`: nur nach einem Probestart, auf Wunsch ([`ProbeMode::Start`])
-//!   oder aus dem Zwischenspeicher, solange keine Fassung sich geändert hat
-//!   ([`super::ProbeCache`]). `DOCTOR_014`, wenn er scheiterte.
+//! - `probe`: nur nach einem Probestart. Auf Wunsch ([`ProbeMode::Start`])
+//!   immer ein neuer; sonst aus dem Zwischenspeicher, solange sich keine
+//!   Eingabe des Probestarts geändert hat und die gesetzten Ressourcen auf
+//!   diesen Rechner passen ([`super::ProbeCache`], HUM-506). `DOCTOR_014`,
+//!   wenn er scheiterte.
 //!
 //! # Eine Stufe, die noch nicht zugelassen ist
 //!
@@ -36,7 +38,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use humanitl_config::{Paths, SandboxRef};
+use humanitl_config::{HostResources, Paths, SandboxRef};
 use humanitl_core::diagnostics::codes::{DOCTOR_014, DOCTOR_015};
 use humanitl_core::{Diagnostic, FixAction, Severity};
 
@@ -44,11 +46,13 @@ use super::probe_cache::{ProbeCache, ProbeKey};
 use super::probe_start::{ProbeOutcome, probe_start};
 use super::{CheckOutcome, DIAGNOSTICS_URL};
 use crate::backend::{
-    Backend, admitted, backend_name, resolve, runtime_of, search_files, stage as stage_name,
-    static_checks,
+    Backend, admitted, backend_name, beyond_host, resolve, runtime_of, search_files,
+    stage as stage_name, static_checks,
 };
 use crate::backend_list::LISTED_BACKENDS;
-use crate::backend_search::{BackendSearches, Ticket, Waited, pending_reason, search_key};
+use crate::backend_search::{
+    BackendSearches, Ticket, Waited, fingerprint, pending_reason, search_key, searched_settings,
+};
 
 /// Die Zeilen in der Gruppe eines Backends.
 ///
@@ -142,10 +146,11 @@ impl BackendGroup {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProbeMode {
     /// Keiner. Ein gelungener Probestart aus dem Zwischenspeicher steht
-    /// trotzdem da, solange keine Fassung sich geändert hat.
+    /// trotzdem da, solange sich keine seiner Eingaben geändert hat.
     Cached,
     /// Auf Wunsch: Probestart je zugelassenem, verfügbarem Backend, mit
-    /// diesem Shim ([`super::locate_shim`]).
+    /// diesem Shim ([`super::locate_shim`]). Immer ein neuer; der
+    /// Zwischenspeicher wird nur geschrieben, nie gelesen (HUM-506).
     Start {
         /// Der Shim auf dem Host.
         shim: PathBuf,
@@ -313,7 +318,9 @@ fn finish_group(
         Waited::Done(DoctorSearch::Unadmitted { refused, statics }) => {
             unadmitted_lines(&stage, refused, statics, mode)
         }
-        Waited::Done(DoctorSearch::Found(backend)) => found_lines(&stage, &backend, mode, cache),
+        Waited::Done(DoctorSearch::Found(backend)) => {
+            found_lines(name, &stage, sandbox, &backend, mode, cache)
+        }
         Waited::Done(DoctorSearch::Missing { missing, statics }) => {
             missing_lines(&stage, &missing, statics, mode)
         }
@@ -403,12 +410,14 @@ fn static_lines(
 /// Die Zeilen einer zugelassenen Stufe, deren Suche bestand: die Suche samt
 /// Programm und Fassung und der Probestart, gespeichert oder auf Wunsch neu.
 fn found_lines(
+    name: &'static str,
     stage: &str,
+    sandbox: &SandboxRef,
     backend: &Backend,
     mode: &ProbeMode,
     cache: &ProbeCache,
 ) -> Vec<CheckOutcome<BackendCheckId>> {
-    let key = probe_key(stage, backend);
+    let key = probe_key(name, stage, sandbox, backend);
     let mut checks = vec![
         CheckOutcome::ok(BackendCheckId::Admitted, format!("{stage} is admitted")),
         CheckOutcome::ok(
@@ -418,7 +427,7 @@ fn found_lines(
                 .to_owned(),
         ),
     ];
-    checks.extend(probe_line(backend, &key, mode, cache));
+    checks.extend(probe_line(name, sandbox, backend, &key, mode, cache));
     checks
 }
 
@@ -450,22 +459,24 @@ fn missing_lines(
     checks
 }
 
-/// Die Zeile des Probestarts: aus dem Zwischenspeicher, auf Wunsch aus
-/// einem neuen Start, sonst keine.
+/// Die Zeile des Probestarts: auf Wunsch aus einem neuen Start, sonst aus
+/// dem Zwischenspeicher oder keine.
+///
+/// Ein Probestart auf Wunsch liest den Zwischenspeicher nie (HUM-506): Wer
+/// `--probe` sagt, will wissen, ob das Backend jetzt startet, auch wenn sich
+/// eine Eingabe geändert hat, die kein Abdruck fängt.
 fn probe_line(
+    name: &'static str,
+    sandbox: &SandboxRef,
     backend: &Backend,
     key: &ProbeKey,
     mode: &ProbeMode,
     cache: &ProbeCache,
 ) -> Option<CheckOutcome<BackendCheckId>> {
-    if let Some(evidence) = cache.lookup(key) {
-        return Some(CheckOutcome::ok(
-            BackendCheckId::Probe,
-            format!("{evidence} (cached)"),
-        ));
-    }
     let ProbeMode::Start { shim } = mode else {
-        return None;
+        return cached_probe(name, sandbox, key, cache, HostResources::probe()).map(|evidence| {
+            CheckOutcome::ok(BackendCheckId::Probe, format!("{evidence} (cached)"))
+        });
     };
     Some(match probe_start(backend, shim) {
         ProbeOutcome::Passed(evidence) => {
@@ -522,15 +533,70 @@ pub(crate) fn probe_failed(stage: &str, what: &str, inner: Option<&Diagnostic>) 
         .build()
 }
 
+/// Der Beleg eines gespeicherten Probestarts mit genau diesem Schlüssel,
+/// wenn die gesetzten Ressourcen der Gruppe des Backends auf `host` passen.
+///
+/// Der Plan jedes Starts prüft sie gegen den Rechner, bevor er etwas startet
+/// (HUM-501). Ein Probestart, der bei mehr Speicher oder mehr CPUs bestand,
+/// etwa vor einem `taskset`, sagt über einen Start jetzt nichts; dann gilt
+/// kein Eintrag, und erst `--probe` sagt, woran es liegt.
+pub(crate) fn cached_probe(
+    name: &'static str,
+    sandbox: &SandboxRef,
+    key: &ProbeKey,
+    cache: &ProbeCache,
+    host: HostResources,
+) -> Option<String> {
+    if beyond_host(name, sandbox, host).is_some() {
+        return None;
+    }
+    cache.lookup(key)
+}
+
 /// Der Schlüssel des Zwischenspeichers für dieses Backend.
-fn probe_key(stage: &str, backend: &Backend) -> ProbeKey {
+fn probe_key(name: &'static str, stage: &str, sandbox: &SandboxRef, backend: &Backend) -> ProbeKey {
     ProbeKey {
         stage: stage.to_owned(),
         program: backend.program().display().to_string(),
         tool_version: backend.tool_version(),
+        inputs: probe_inputs(name, sandbox, backend.paths()),
         humanitl_version: env!("CARGO_PKG_VERSION").to_owned(),
         machine: super::probe_cache::machine_identity(),
     }
+}
+
+/// Der Abdruck der Eingaben eines Probestarts außer Programm und Fassung
+/// (HUM-506), als SHA-256 in Hex: die Einstellungen der Backends in der
+/// Gruppe `sandbox` (darunter die gesetzten Ressourcen, Gastkernel und
+/// Modulverzeichnis), die Pfade samt Umgebung, der temporäre Ordner und der
+/// Abdruck jeder Datei, von der die Suche des
+/// Backends abhängt ([`search_files`]). Unter der Kernel-Stufe sind das
+/// Emulator, Dateidienst, vsock-Gerät, bubblewrap, Kernel-Abbild samt
+/// Konfiguration, Modulverzeichnis und seine Listen; ein Update eines davon
+/// ändert Inode, Größe oder Zeit, und der gespeicherte Probestart gilt nicht
+/// mehr.
+///
+/// Gehasht, weil die Datei des Zwischenspeichers nur einen Vergleich
+/// braucht, und weil die Umgebung des Daemons Werte tragen kann, die nicht
+/// auf die Platte gehören.
+pub(crate) fn probe_inputs(name: &'static str, sandbox: &SandboxRef, paths: &Paths) -> String {
+    // Die Pfade samt der Umgebung des Daemons: Aus ihr folgen der
+    // Laufzeitordner, das Proxy-Verzeichnis und der `PATH`, mit denen ein
+    // Start plant; dazu der temporäre Ordner des Probestarts. Nur der Hash
+    // landet in der Datei, nie ein Wert daraus.
+    let text = format!(
+        "{:?}\n{paths:?}\n{}\n{}",
+        searched_settings(sandbox),
+        std::env::temp_dir().display(),
+        fingerprint(&search_files(name, sandbox, paths))
+    );
+    humanitl_core::http::sha256(text.as_bytes()).iter().fold(
+        String::with_capacity(64),
+        |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        },
+    )
 }
 
 #[cfg(test)]
@@ -733,6 +799,130 @@ mod tests {
             shim: dir.path().join("bin").join("humanitl-shim"),
         });
         assert!(count() > asked, "the probe searched again");
+    }
+
+    /// HUM-506: `--probe` startet immer neu, auch wenn ein gelungener
+    /// Probestart mit genau diesem Schlüssel gespeichert ist; ohne `--probe`
+    /// steht der gespeicherte da. Das Programm des Backends ist eine Attrappe,
+    /// die sofort mit 1 endet, ohne den Shim (eine zweite Attrappe, die es
+    /// gibt) je zu starten: Ein neuer Start ist so `fail` mit `SANDBOX_012`
+    /// („endete, ohne den Befehl zu starten"), ein gespeicherter `ok`.
+    ///
+    /// Mutationsbeweis: Sieht `probe_line` wieder vor der Frage nach dem
+    /// Modus im Zwischenspeicher nach, antwortet `--probe` mit „(cached)",
+    /// und dieser Test fällt. Nur unter Linux: Dort startet ein Probestart
+    /// das Programm des Backends.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_requested_probe_never_answers_from_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let program = bin.join("bwrap");
+        crate::test_support::write_program(&program, "#!/bin/sh\nexit 1\n");
+        let shim = bin.join("humanitl-shim");
+        crate::test_support::write_program(&shim, "#!/bin/sh\nexit 0\n");
+        let runtime = dir.path().join("run");
+        std::fs::create_dir_all(&runtime).unwrap();
+        let paths = Paths::new(Env::from_pairs([
+            ("HOME", dir.path().to_string_lossy().into_owned()),
+            ("PATH", bin.to_string_lossy().into_owned()),
+            ("XDG_RUNTIME_DIR", runtime.to_string_lossy().into_owned()),
+            (
+                "XDG_DATA_HOME",
+                dir.path().join("data").to_string_lossy().into_owned(),
+            ),
+        ]));
+        let sandbox = SandboxRef::default();
+        let backend = crate::Backend::from(crate::bwrap::BwrapBackend::unchecked(
+            &program,
+            crate::bwrap::MIN_BWRAP_VERSION,
+            paths,
+        ));
+        let name = crate::backend::BWRAP_BACKEND;
+        let key = super::probe_key(name, name, &sandbox, &backend);
+        if key.machine.is_empty() {
+            // Ohne Kennung des Rechners gilt kein Eintrag, auch kein
+            // gespeicherter; dieser Test hätte nichts zu unterscheiden.
+            eprintln!("skipped: this machine has no identity (machine_identity is empty)");
+            return;
+        }
+        let cache = ProbeCache::at(dir.path().join("doctor-probe.json"));
+        cache.store(&key, "passed").unwrap();
+        let line = |mode: &ProbeMode| {
+            super::probe_line(name, &sandbox, &backend, &key, mode, &cache).expect("a probe line")
+        };
+
+        let cached = line(&ProbeMode::Cached);
+        assert_eq!(cached.status(), CheckStatus::Ok, "{cached:?}");
+        assert_eq!(cached.evidence(), "passed (cached)");
+
+        // Wie der Start an der Attrappe scheitert, hängt von der Umgebung ab
+        // (ein Runner meldet einen fehlenden Bericht, ein Desktop
+        // `SANDBOX_012`); gezählt wird, dass er lief und nicht die
+        // gespeicherte Antwort gab.
+        let requested = line(&ProbeMode::Start { shim });
+        assert_eq!(requested.status(), CheckStatus::Fail, "{requested:?}");
+        assert!(!requested.evidence().contains("cached"), "{requested:?}");
+    }
+
+    /// HUM-506: Ein anderer Laufzeitordner, aus dem ein Start Proxy-Socket
+    /// und Shim-Ordner plant, ändert den Abdruck, auch wenn sonst alles
+    /// gleich ist. In der Datei steht davon nur der Hash.
+    ///
+    /// Mutationsbeweis: ohne die Pfade in `probe_inputs` bleibt der andere
+    /// Laufzeitordner unbemerkt.
+    #[test]
+    fn the_probe_inputs_follow_the_runtime_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = |runtime: &str| {
+            Paths::new(Env::from_pairs([
+                ("HOME", dir.path().to_string_lossy().into_owned()),
+                (
+                    "XDG_RUNTIME_DIR",
+                    dir.path().join(runtime).to_string_lossy().into_owned(),
+                ),
+            ]))
+        };
+        let sandbox = SandboxRef::default();
+        let name = crate::backend::BWRAP_BACKEND;
+        let first = super::probe_inputs(name, &sandbox, &paths("run-a"));
+        assert_eq!(first, super::probe_inputs(name, &sandbox, &paths("run-a")));
+        assert_ne!(first, super::probe_inputs(name, &sandbox, &paths("run-b")));
+        assert!(!first.contains("run-a"), "only a hash: {first}");
+    }
+
+    /// HUM-506: Der Abdruck der Eingaben ändert sich, wenn das Programm
+    /// eines Backends ersetzt wird oder neu im `PATH` auftaucht, auch bei
+    /// gleicher Fassung. Dass eine Einstellung ihn ändert, prüft der Test
+    /// des Adapters der Kernel-Stufe.
+    ///
+    /// Mutationsbeweis: ohne `fingerprint` in `probe_inputs` bleibt das
+    /// ersetzte Programm unbemerkt.
+    #[test]
+    fn the_probe_inputs_follow_the_program_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let paths = Paths::new(Env::from_pairs([
+            ("HOME", dir.path().to_string_lossy().into_owned()),
+            ("PATH", bin.to_string_lossy().into_owned()),
+        ]));
+        let sandbox = SandboxRef::default();
+        let name = crate::backend::BWRAP_BACKEND;
+        let inputs = |sandbox: &SandboxRef| super::probe_inputs(name, sandbox, &paths);
+
+        let absent = inputs(&sandbox);
+        let program = bin.join(name);
+        std::fs::write(&program, b"#!/bin/sh\n").unwrap();
+        let present = inputs(&sandbox);
+        assert_ne!(absent, present, "the program appeared");
+        assert_eq!(present, inputs(&sandbox), "nothing changed");
+
+        let replacement = bin.join("replacement");
+        std::fs::write(&replacement, b"#!/bin/sh\n# rebuilt\n").unwrap();
+        std::fs::rename(&replacement, &program).unwrap();
+        assert_ne!(present, inputs(&sandbox), "the program was replaced");
     }
 
     /// HUM-444: Ein gescheiterter Probestart der Kernel-Stufe ist

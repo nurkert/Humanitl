@@ -845,3 +845,154 @@ fn kernel_level_values_beyond_this_host_are_named_in_the_list() {
         entry.diagnostics[0]
     );
 }
+
+/// HUM-506: Der Abdruck der Eingaben des Probestarts ändert sich mit dem
+/// Gastkernel, seiner Konfiguration, dem Modulverzeichnis und jedem
+/// Programm der Kernel-Stufe, obwohl das Backend keine Fassung nennt. Ein
+/// gespeicherter Probestart überlebt so keine dieser Änderungen.
+///
+/// Mutationsbeweis: ohne den Abdruck der Dateien in
+/// `doctor::backends::probe_inputs` bleiben das neu geschriebene Kernel-
+/// Abbild, die geänderte Konfiguration und das ersetzte Programm unbemerkt;
+/// ohne die Einstellungen bleibt der andere Speicher unbemerkt; ohne
+/// `MODULE_LISTS` in `prerequisites::search_files` das neu geschriebene
+/// `modules.builtin`.
+#[test]
+fn the_probe_inputs_follow_kernel_modules_and_programs() {
+    use crate::doctor::backends::probe_inputs;
+
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let emulator = bin.join("emulator-hum506");
+    std::fs::write(&emulator, b"#!/bin/sh\n").unwrap();
+    let kernel = dir.path().join("vmlinuz-a");
+    std::fs::write(&kernel, b"kernel a").unwrap();
+    let other_kernel = dir.path().join("vmlinuz-b");
+    std::fs::write(&other_kernel, b"kernel b").unwrap();
+    let kernel_config = dir.path().join("config-a");
+    std::fs::write(&kernel_config, b"CONFIG_VIRTIO_FS=y\n").unwrap();
+    let modules = dir.path().join("modules");
+    std::fs::create_dir_all(&modules).unwrap();
+    let builtin = modules.join("modules.builtin");
+    std::fs::write(&builtin, b"kernel/fs/fuse/virtiofs.ko\n").unwrap();
+    let paths = Paths::new(humanitl_config::Env::from_pairs([
+        ("HOME", dir.path().to_string_lossy().into_owned()),
+        ("PATH", bin.to_string_lossy().into_owned()),
+    ]));
+    let sandbox = |kernel: &Path| SandboxRef {
+        qemu: QemuConfig {
+            qemu: Some(emulator.clone()),
+            kernel: Some(kernel.to_path_buf()),
+            modules: Some(modules.clone()),
+            ..QemuConfig::default()
+        },
+        ..SandboxRef::default()
+    };
+    let inputs = |sandbox: &SandboxRef| probe_inputs(crate::VM_BACKEND, sandbox, &paths);
+    let first = inputs(&sandbox(&kernel));
+    assert_eq!(first, inputs(&sandbox(&kernel)), "nothing changed");
+    assert_eq!(first.len(), 64, "{first}");
+
+    // Ein anderes Kernel-Abbild.
+    assert_ne!(first, inputs(&sandbox(&other_kernel)), "another kernel");
+    // Dasselbe Abbild, neu geschrieben, wie nach einem Update.
+    std::fs::write(&kernel, b"kernel a, rebuilt").unwrap();
+    let rebuilt = inputs(&sandbox(&kernel));
+    assert_ne!(first, rebuilt, "a rebuilt kernel");
+    // Seine Konfiguration daneben (`config_beside`).
+    assert!(
+        prerequisites::search_files(paths.env(), &sandbox(&kernel).qemu).contains(&kernel_config)
+    );
+    std::fs::write(&kernel_config, b"CONFIG_VIRTIO_FS=m, changed\n").unwrap();
+    assert_ne!(rebuilt, inputs(&sandbox(&kernel)), "another kernel config");
+    let before_builtin = inputs(&sandbox(&kernel));
+    // `modules.builtin` an Ort und Stelle neu geschrieben: dasselbe
+    // Verzeichnis, derselbe Inode, anderer Inhalt.
+    let ino = std::fs::metadata(&builtin).unwrap().ino();
+    std::fs::write(
+        &builtin,
+        b"kernel/fs/fuse/virtiofs.ko\nkernel/fs/overlayfs/overlay.ko\n",
+    )
+    .unwrap();
+    assert_eq!(std::fs::metadata(&builtin).unwrap().ino(), ino);
+    let before_modules = inputs(&sandbox(&kernel));
+    assert_ne!(
+        before_builtin, before_modules,
+        "modules.builtin rewritten in place"
+    );
+    // Ein anderes Modulverzeichnis.
+    let mut moved = sandbox(&kernel);
+    moved.qemu.modules = Some(dir.path().join("modules-b"));
+    assert_ne!(before_modules, inputs(&moved), "another modules directory");
+    // Ein ersetztes Programm: neue Datei, neuer Inode.
+    let replacement = bin.join("emulator-hum506.new");
+    std::fs::write(&replacement, b"#!/bin/sh\n# 10.1\n").unwrap();
+    std::fs::rename(&replacement, &emulator).unwrap();
+    let replaced = inputs(&sandbox(&kernel));
+    assert_ne!(before_modules, replaced, "a replaced emulator");
+    // Ein Programm, das neu im `PATH` auftaucht.
+    std::fs::write(bin.join("virtiofsd"), b"#!/bin/sh\n").unwrap();
+    let appeared = inputs(&sandbox(&kernel));
+    assert_ne!(replaced, appeared, "a file daemon appeared in PATH");
+    // Andere Ressourcen.
+    let mut bigger = sandbox(&kernel);
+    bigger.qemu.memory_mib = Some(4096);
+    assert_ne!(appeared, inputs(&bigger), "other resources");
+}
+
+/// HUM-506 und HUM-501: Liegen die gesetzten Ressourcen der Kernel-Stufe
+/// über diesem Rechner, gilt kein gespeicherter Probestart, auch einer mit
+/// genau diesem Schlüssel nicht; der Plan lehnte jeden Start ab.
+///
+/// Mutationsbeweis: ohne die Prüfung gegen den Rechner in
+/// `doctor::backends::cached_probe` fände der Doctor den Eintrag.
+#[test]
+fn a_cached_probe_does_not_count_with_resources_over_this_host() {
+    use crate::doctor::backends::cached_probe;
+    use crate::doctor::{ProbeCache, ProbeKey};
+
+    let dir = tempfile::tempdir().unwrap();
+    let cache = ProbeCache::at(dir.path().join("doctor-probe.json"));
+    let key = ProbeKey {
+        stage: crate::VM_BACKEND.to_owned(),
+        program: "/usr/bin/emulator".to_owned(),
+        tool_version: String::new(),
+        inputs: "inputs".to_owned(),
+        humanitl_version: "0.1.0".to_owned(),
+        machine: "machine-a".to_owned(),
+    };
+    cache.store(&key, "passed").unwrap();
+    let sandbox = SandboxRef {
+        qemu: QemuConfig {
+            memory_mib: Some(8192),
+            cpus: Some(4),
+            ..QemuConfig::default()
+        },
+        ..SandboxRef::default()
+    };
+    let large = HostResources {
+        memory_mib: Some(16_384),
+        cpus: Some(8),
+    };
+    assert_eq!(
+        cached_probe(crate::VM_BACKEND, &sandbox, &key, &cache, large).as_deref(),
+        Some("passed")
+    );
+    for small in [
+        HostResources {
+            memory_mib: Some(4096),
+            cpus: Some(8),
+        },
+        HostResources {
+            memory_mib: Some(16_384),
+            cpus: Some(2),
+        },
+    ] {
+        assert_eq!(
+            cached_probe(crate::VM_BACKEND, &sandbox, &key, &cache, small),
+            None,
+            "{small:?}"
+        );
+    }
+}

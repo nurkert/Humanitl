@@ -1,16 +1,20 @@
 //! Der Zwischenspeicher des Probestarts (HUM-436).
 //!
 //! Ein Probestart dauert Sekunden: Er startet eine Sandbox und wartet auf die
-//! fünf `CHECK`-Zeilen des Shims. Sein Ergebnis hängt an den Werkzeugen, die
-//! dabei liefen — dem Programm des Backends und seiner Fassung, und Humanitl
-//! selbst, das den Shim und den Plan mitbringt. Solange keine dieser Fassungen
-//! sich ändert, gilt ein gelungener Probestart weiter, und `humanitl doctor`
-//! zeigt ihn, ohne erneut etwas zu starten.
+//! fünf `CHECK`-Zeilen des Shims. Sein Ergebnis hängt an allem, was dabei
+//! lief oder gelesen wurde — dem Programm des Backends und seiner Fassung,
+//! unter der Kernel-Stufe auch Emulator, Dateidienst, vsock-Gerät, Gastkernel
+//! samt Konfiguration und Modulverzeichnis, den Einstellungen der Backends,
+//! und Humanitl selbst, das den Shim und den Plan mitbringt. Solange sich
+//! keine dieser Eingaben ändert, gilt ein gelungener Probestart weiter, und
+//! `humanitl doctor` ohne `--probe` zeigt ihn, ohne erneut etwas zu starten.
+//! `--probe` startet immer neu (HUM-506).
 //!
 //! # Was der Schlüssel enthält
 //!
-//! Stufe, Programm, Fassung des Programms, Fassung von Humanitl und die
-//! Kennung des Rechners, alle fünf in [`ProbeKey::id`]. Die Kennung des
+//! Stufe, Programm, Fassung des Programms, den Abdruck der Eingaben
+//! ([`ProbeKey::inputs`]), Fassung von Humanitl und die Kennung des
+//! Rechners, alle sechs in [`ProbeKey::id`]. Die Kennung des
 //! Rechners steht darin, weil ein Datenverzeichnis zwischen Rechnern
 //! synchronisiert sein kann: Ein Probestart gilt nur für die Maschine, auf
 //! der er lief ([`machine_identity`]). Ein Eintrag gilt nur bei genau gleichem Schlüssel; ein
@@ -46,6 +50,12 @@ pub struct ProbeKey {
     pub program: String,
     /// Die Fassung dieses Programms; leer, wo das Backend keine nennt.
     pub tool_version: String,
+    /// Der Abdruck der übrigen Eingaben des Probestarts (HUM-506): die
+    /// Einstellungen der Backends und je Datei, von der die Suche des
+    /// Backends abhängt, Pfad, Gerät, Inode, Größe, `mtime` und `ctime`, als
+    /// SHA-256 in Hex. Unter der Kernel-Stufe ersetzt er die Fassung, die
+    /// das Backend nicht nennt.
+    pub inputs: String,
     /// Die Fassung von Humanitl, die Shim und Plan mitbringt.
     pub humanitl_version: String,
     /// Die Kennung des Rechners ([`machine_identity`]).
@@ -53,13 +63,18 @@ pub struct ProbeKey {
 }
 
 impl ProbeKey {
-    /// Der Schlüssel als eine Zeile; gleich genau dann, wenn alle fünf Teile
-    /// gleich sind.
+    /// Der Schlüssel als eine Zeile; gleich genau dann, wenn alle sechs
+    /// Teile gleich sind.
     #[must_use]
     pub fn id(&self) -> String {
         format!(
-            "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
-            self.stage, self.program, self.tool_version, self.humanitl_version, self.machine
+            "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+            self.stage,
+            self.program,
+            self.tool_version,
+            self.inputs,
+            self.humanitl_version,
+            self.machine
         )
     }
 }
@@ -234,6 +249,7 @@ mod tests {
             stage: "engine/plain".to_owned(),
             program: "/usr/bin/engine".to_owned(),
             tool_version: tool.to_owned(),
+            inputs: "inputs-a".to_owned(),
             humanitl_version: "0.1.0".to_owned(),
             machine: "machine-a".to_owned(),
         }
@@ -271,6 +287,20 @@ mod tests {
         assert_eq!(cache.lookup(&other), None);
     }
 
+    /// HUM-506: Ein anderer Abdruck der Eingaben, etwa ein anderer
+    /// Gastkernel bei gleicher (leerer) Fassung, findet den Eintrag nicht.
+    ///
+    /// Mutationsbeweis: ohne `inputs` in [`ProbeKey::id`] fände er ihn.
+    #[test]
+    fn other_inputs_invalidate_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ProbeCache::at(dir.path().join("doctor-probe.json"));
+        let mut stored = key("");
+        cache.store(&stored, "passed").unwrap();
+        stored.inputs = "inputs-of-another-kernel".to_owned();
+        assert_eq!(cache.lookup(&stored), None);
+    }
+
     #[test]
     fn a_new_probe_of_a_stage_replaces_the_old_one_and_keeps_the_others() {
         let dir = tempfile::tempdir().unwrap();
@@ -279,6 +309,7 @@ mod tests {
             stage: "bwrap".to_owned(),
             program: "/usr/bin/bwrap".to_owned(),
             tool_version: "0.11.0".to_owned(),
+            inputs: "inputs-b".to_owned(),
             humanitl_version: "0.1.0".to_owned(),
             machine: "machine-a".to_owned(),
         };
