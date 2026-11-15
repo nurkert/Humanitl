@@ -11,6 +11,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:humanitl/core/domain/domain.dart';
 import 'package:humanitl/core/ipc/fake_daemon_client.dart';
+import 'package:humanitl/features/sandbox/providers/backend_choice.dart';
 import 'package:humanitl/features/sandbox/widgets/image_pull.dart';
 import 'package:humanitl_ui/humanitl_ui.dart';
 
@@ -108,6 +109,36 @@ void main() {
     );
     expect(find.textContaining('sha256:$digestHex'), findsWidgets);
   });
+
+  // Das Ziehen geht an das Backend, das der nächste Start verlangt (HUM-500):
+  // die Wahl der Sitzung, wie sie Schnappschuss und Start schicken. Ohne
+  // Wahl geht keine mit, und der Daemon nimmt die Einstellung.
+  // Mutationsbeweis: `pullImage` ohne `backend` lässt den ersten Fall rot.
+  for (final String? chosen in <String?>['container', null]) {
+    testWidgets('the pull carries the backend of the session ($chosen)', (
+      WidgetTester tester,
+    ) async {
+      final SandboxTestClient client = refused(missingImage());
+      // Der Schnappschuss mit der Wahl nennt, woran ein Start auf diesem
+      // Backend scheitert: das fehlende Abbild.
+      client.planBackendFindings[chosen] = <Diagnostic>[missingImage()];
+      await pumpSandbox(
+        tester,
+        client: client,
+        overrides: [sessionSandboxBackendProvider.overrideWithValue(chosen)],
+      );
+
+      await tester.ensureVisible(pull);
+      await tester.tap(pull);
+      await tester.pumpAndSettle();
+      await tester.tap(confirm);
+      await tester.pump();
+      await tester.pump();
+
+      expect(client.imagePulls, <String>[reference]);
+      expect(client.imagePullBackends, <String?>[chosen]);
+    });
+  }
 
   testWidgets('cancel pulls nothing', (WidgetTester tester) async {
     final SandboxTestClient client = refused(missingImage());

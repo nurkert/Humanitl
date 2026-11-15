@@ -495,7 +495,17 @@ abstract class DaemonClient {
   /// [pullId] makes the pull cancellable (HUM-457): a UUID the caller
   /// chooses, so it can call [cancelImagePull] before the daemon answered.
   /// Empty means not cancellable. A cancelled pull throws `SANDBOX_043`.
-  Future<PulledImage> pullImage({String reference = '', String pullId = ''});
+  ///
+  /// The request carries the plan of this app's snapshots (HUM-500), as
+  /// [sandboxBackends] does, with [backend] as the backend of the session:
+  /// the daemon pulls with the backend a start of this app would take, not
+  /// only the one of the setting. A daemon before 1.40 pulls with the
+  /// setting.
+  Future<PulledImage> pullImage({
+    String reference = '',
+    String pullId = '',
+    String? backend,
+  });
 
   /// `Sandbox(CancelImagePull)`: cancels the pull started with [pullId]
   /// (HUM-457). The daemon kills the process group of the pull and answers

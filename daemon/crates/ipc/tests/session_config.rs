@@ -1363,3 +1363,155 @@ async fn a_podman_runtime_wished_without_podman_refuses_the_start() {
         assert!(failed(&seen), "{seen:?}");
     }
 }
+
+#[cfg(target_os = "linux")]
+/// Was ein Ziehen eines Abbilds auf dem Strom antwortet, mit diesem Plan
+/// (HUM-500) oder ohne.
+async fn pull_events(
+    fixture: &Fixture,
+    plan: Option<v1::sandbox_request::Plan>,
+) -> Vec<v1::SandboxEvent> {
+    let mut stream = fixture.service.stream(v1::SandboxRequest {
+        op: Some(v1::sandbox_request::Op::ImagePull(
+            v1::sandbox_request::ImagePull {
+                reference: format!("docker.io/library/alpine@sha256:{}", "c".repeat(64)),
+                plan,
+                ..Default::default()
+            },
+        )),
+    });
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+    events
+}
+
+#[cfg(target_os = "linux")]
+/// Der Plan einer Sitzung in diesem Projekt mit diesem Backend, wie die App
+/// und `humanitl sandbox image pull --backend` ihn schicken.
+fn session_plan(fixture: &Fixture, backend: &str) -> v1::sandbox_request::Plan {
+    v1::sandbox_request::Plan {
+        work_dir: fixture.work.clone(),
+        backend: backend.to_owned(),
+        ..v1::sandbox_request::Plan::default()
+    }
+}
+
+/// Das Ziehen nimmt das Backend der Sitzung (HUM-500): Die Konfiguration
+/// sagt `auto`, die Sitzung wählt die Container-Engine, und das Ziehen geht
+/// an die Engine, deren Programm aus `config.toml` dieser Test nicht hat.
+/// Ihr Befund nennt dieses Programm; das Ziehen ohne Plan geht wie vorher an
+/// das Backend des Systems, und dessen Befund nennt es nicht. Ein Name, den
+/// das Schema nicht kennt, ist `CONFIG_003` wie beim Start, und eine
+/// Untergrenze aus dem Projekt gilt wie beim Start (`SANDBOX_035`).
+///
+/// Mutation proof: `image_pull` mit `pull_backend(None)` statt
+/// `request.plan` lässt die erste Zusicherung scheitern; das Ziehen mit der
+/// Wahl der Sitzung geht dann an das Backend des Systems.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_image_pull_takes_the_backend_of_the_session() {
+    let fixture = Fixture::live();
+    engine_absent(&fixture, "");
+    let absent = fixture
+        .config_home
+        .join("absent")
+        .join("engine")
+        .display()
+        .to_string();
+    let mentions_engine = |events: &[v1::SandboxEvent]| {
+        events.iter().any(|event| {
+            matches!(
+                &event.event,
+                Some(v1::sandbox_event::Event::Diagnostic(diagnostic))
+                    if diagnostic.why.contains(&absent)
+            )
+        })
+    };
+
+    let chosen = pull_events(&fixture, Some(session_plan(&fixture, ENGINE))).await;
+    assert_eq!(chosen.len(), 1, "{chosen:?}");
+    assert!(mentions_engine(&chosen), "{chosen:?}");
+    assert!(
+        !codes(&chosen).contains(&"SANDBOX_048".to_owned()),
+        "{chosen:?}"
+    );
+
+    // Ohne Plan, und mit einem Plan ohne Wahl: das Backend der Einstellung.
+    for plan in [None, Some(session_plan(&fixture, ""))] {
+        let setting = pull_events(&fixture, plan.clone()).await;
+        assert_eq!(setting.len(), 1, "{plan:?}: {setting:?}");
+        assert_eq!(codes(&setting).len(), 1, "{plan:?}: {setting:?}");
+        assert!(!mentions_engine(&setting), "{plan:?}: {setting:?}");
+    }
+
+    let unknown = pull_events(&fixture, Some(session_plan(&fixture, "nonsense"))).await;
+    assert_eq!(codes(&unknown), ["CONFIG_003"], "{unknown:?}");
+
+    fixture.project_profile("[config.sandbox]\nmin_isolation = \"kernel\"\n");
+    let below = pull_events(&fixture, Some(session_plan(&fixture, ENGINE))).await;
+    assert_eq!(codes(&below), ["SANDBOX_035"], "{below:?}");
+}
+
+/// Ein Sandbox-Profil, das sich nicht lesen lässt, hält das Ziehen auf wie
+/// den Start (HUM-500): Seine Anforderung an das Backend ist unbekannt, und
+/// das Ziehen nennt den Befund des Profils, statt mit irgendeinem Backend
+/// zu ziehen.
+///
+/// Mutation proof: `pull_backend` mit `ProfileRead::Tolerant` statt
+/// `ProfileRead::Strict` zieht mit der Engine, und die Zusicherung auf den
+/// Befund des Profils scheitert.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreadable_sandbox_profile_stops_the_pull() {
+    let fixture = Fixture::live();
+    let absent = fixture.config_home.join("absent").join("engine");
+    fixture.user_config(&format!(
+        "[sandbox]\nprofile = \"missing\"\n[sandbox.{ENGINE}]\nprogram = {:?}\n",
+        absent.display().to_string()
+    ));
+    let pulled = pull_events(&fixture, Some(session_plan(&fixture, ENGINE))).await;
+    assert_eq!(codes(&pulled), ["CONFIG_001"], "{pulled:?}");
+    assert!(
+        !pulled.iter().any(|event| matches!(
+            &event.event,
+            Some(v1::sandbox_event::Event::Diagnostic(diagnostic))
+                if diagnostic.why.contains(&absent.display().to_string())
+        )),
+        "the engine was asked: {pulled:?}"
+    );
+}
+
+/// Ein Sandbox-Profil, das ein anderes Backend verlangt als die Wahl der
+/// Sitzung, lehnt das Ziehen ab wie den Start (`SANDBOX_036`, HUM-500).
+///
+/// Mutation proof: `pull_backend` mit `AUTO_BACKEND` statt der Anforderung
+/// des Profils fragt die Engine, und die Zusicherung scheitert.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sandbox_profile_requiring_another_backend_refuses_the_pull() {
+    let fixture = Fixture::live();
+    let dir = fixture.config_home.join("humanitl/profiles/sandbox");
+    std::fs::create_dir_all(&dir).expect("the profile directory");
+    let shipped = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../profiles/sandbox/default.toml");
+    let text = std::fs::read_to_string(shipped).expect("the shipped profile");
+    assert!(text.contains("backend = \"auto\""), "{text}");
+    std::fs::write(
+        dir.join("pinned.toml"),
+        text.replacen(
+            "backend = \"auto\"",
+            &format!("backend = \"{}\"", humanitl_sandbox::PLATFORM_BACKEND_NAME),
+            1,
+        ),
+    )
+    .expect("pinned.toml");
+    let absent = fixture.config_home.join("absent").join("engine");
+    fixture.user_config(&format!(
+        "[sandbox]\nprofile = \"pinned\"\n[sandbox.{ENGINE}]\nprogram = {:?}\n",
+        absent.display().to_string()
+    ));
+    let pulled = pull_events(&fixture, Some(session_plan(&fixture, ENGINE))).await;
+    assert_eq!(codes(&pulled), ["SANDBOX_036"], "{pulled:?}");
+}

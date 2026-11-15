@@ -30,6 +30,12 @@ pub const IMAGE_MINOR: u32 = 36;
 /// Daemon zieht trotzdem; nur `Ctrl+C` hält ihn dann nicht auf.
 pub const CANCEL_MINOR: u32 = 37;
 
+/// Die erste Minor, die mit dem Backend der Sitzung zieht
+/// (`ImagePull.plan`, HUM-500). Ein älterer Daemon zöge mit seiner
+/// Einstellung; mit `--backend` oder `HUMANITL_SANDBOX__BACKEND` lehnt der
+/// Befehl ihn deshalb ab.
+pub const PLAN_MINOR: u32 = 40;
+
 /// Der Exit-Code nach `Ctrl+C`: `128 + SIGINT`, wie `humanitl run`.
 const EXIT_INTERRUPTED: u8 = 130;
 
@@ -48,6 +54,10 @@ pub const NETWORK_NOTE: &str = "Pulling downloads the image from the registry it
 /// ohne Bestätigung, und die Befunde des Daemons: `CONFIG_003`,
 /// `SANDBOX_034`, `SANDBOX_043`, `SANDBOX_048`.
 pub async fn pull(ctx: &Context, reference: Option<&str>, yes: bool) -> Result<u8, Failure> {
+    // Das Backend wie bei `humanitl run` (HUM-500): `--backend` vor der
+    // Umgebung, sonst entscheidet der Daemon mit seiner Konfiguration.
+    let resolved = ctx.config()?;
+    let backend = crate::cmd::run::session_backend(ctx.cli_pairs(), &resolved);
     let shown = reference.map_or_else(|| "the configured image".to_owned(), str::to_owned);
     eprintln!("{NETWORK_NOTE}");
     if !yes {
@@ -60,19 +70,7 @@ pub async fn pull(ctx: &Context, reference: Option<&str>, yes: bool) -> Result<u
         .map_err(|status| Failure::new(status_diagnostic(&status, "GetInfo")))?
         .into_inner();
     crate::cmd::daemon::check_proto(&info)?;
-    if info.proto_minor < IMAGE_MINOR {
-        return Err(Failure::new(
-            Diagnostic::builder(codes::CLI_004, Severity::Error)
-                .why(format!(
-                    "the daemon speaks contract 1.{}, and pulling an image needs 1.{IMAGE_MINOR}",
-                    info.proto_minor
-                ))
-                .fix(FixAction::CopyCommand(
-                    humanitl_core::diagnostics::RESTART_DAEMON_COMMAND.to_owned(),
-                ))
-                .build(),
-        ));
-    }
+    check_minor(info.proto_minor, backend.as_deref())?;
     // **Erst der Empfänger, dann das Ziehen.** Ein Strom, der vor dem
     // Senden steht, puffert ein `SIGINT`, das kommt, bevor `select!` zum
     // ersten Mal wartet; ohne ihn beendete der Kernel den Befehl, und das
@@ -85,10 +83,7 @@ pub async fn pull(ctx: &Context, reference: Option<&str>, yes: bool) -> Result<u
     } else {
         String::new()
     };
-    let request = v1::sandbox_request::ImagePull {
-        reference: reference.unwrap_or_default().to_owned(),
-        pull_id: pull_id.clone(),
-    };
+    let request = pull_request(reference, pull_id.clone(), backend);
     // Der Abbruch geht über eine zweite Anfrage auf demselben Kanal.
     let mut canceller = client.clone();
     let mut stream = client
@@ -149,6 +144,63 @@ pub async fn pull(ctx: &Context, reference: Option<&str>, yes: bool) -> Result<u
         println!("  id      {}", image.image_id);
     }
     Ok(EXIT_OK)
+}
+
+/// Ob der Daemon mit Vertrag 1.`minor` dieses Ziehen versteht: überhaupt
+/// (1.36) und, mit einem gewählten `backend`, mit dem Backend der Sitzung
+/// (1.40, HUM-500).
+///
+/// # Errors
+///
+/// `CLI_004` für einen Daemon, der zu alt ist.
+fn check_minor(minor: u32, backend: Option<&str>) -> Result<(), Failure> {
+    if minor < IMAGE_MINOR {
+        return Err(Failure::new(
+            Diagnostic::builder(codes::CLI_004, Severity::Error)
+                .why(format!(
+                    "the daemon speaks contract 1.{minor}, and pulling an image needs 1.{IMAGE_MINOR}"
+                ))
+                .fix(FixAction::CopyCommand(
+                    humanitl_core::diagnostics::RESTART_DAEMON_COMMAND.to_owned(),
+                ))
+                .build(),
+        ));
+    }
+    if let Some(backend) = backend
+        && minor < PLAN_MINOR
+    {
+        return Err(Failure::new(
+            Diagnostic::builder(codes::CLI_004, Severity::Error)
+                .why(format!(
+                    "the daemon speaks contract 1.{minor}, and pulling for the backend \
+                     {backend:?} needs 1.{PLAN_MINOR}; this daemon would pull with its own setting"
+                ))
+                .fix(FixAction::CopyCommand(
+                    humanitl_core::diagnostics::RESTART_DAEMON_COMMAND.to_owned(),
+                ))
+                .build(),
+        ));
+    }
+    Ok(())
+}
+
+/// Die Anfrage des Ziehens: mit dem Plan des Starts, für den gezogen wird
+/// (HUM-500). Der Plan trägt nur das Backend der Sitzung; leer heißt, der
+/// Daemon nimmt `sandbox.backend` seiner Konfiguration, misst aber wie beim
+/// Start auch das Sandbox-Profil und die Untergrenze.
+fn pull_request(
+    reference: Option<&str>,
+    pull_id: String,
+    backend: Option<String>,
+) -> v1::sandbox_request::ImagePull {
+    v1::sandbox_request::ImagePull {
+        reference: reference.unwrap_or_default().to_owned(),
+        pull_id,
+        plan: Some(v1::sandbox_request::Plan {
+            backend: backend.unwrap_or_default(),
+            ..v1::sandbox_request::Plan::default()
+        }),
+    }
 }
 
 /// Das nächste `SIGINT`. Ohne Handler wartet der Zweig für immer; dann gilt
@@ -290,6 +342,8 @@ fn confirm(ctx: &Context, question: &str) -> Result<(), Failure> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     use super::*;
 
     /// Der Satz vor dem Ziehen sagt, dass das Netz nicht durch den Proxy geht
@@ -298,5 +352,78 @@ mod tests {
     fn the_note_says_the_pull_bypasses_the_proxy() {
         assert!(NETWORK_NOTE.contains("directly"));
         assert!(NETWORK_NOTE.contains("not through the Humanitl proxy"));
+    }
+
+    /// Das Ziehen schickt das Backend, das `humanitl run` mit denselben
+    /// Flags und derselben Umgebung als `sandbox.backend` in
+    /// `cli_overrides` schickte (HUM-500): `--backend` am Befehl selbst, die
+    /// Variable `HUMANITL_SANDBOX__BACKEND`, ein Flag vor der Variable. Ohne
+    /// beides geht ein Plan ohne Wahl mit, und der Daemon nimmt seine
+    /// Einstellung.
+    ///
+    /// Mutation proof: `pull_request` ohne `backend` im Plan lässt die erste
+    /// Zusicherung scheitern.
+    #[test]
+    fn the_pull_sends_the_backend_a_start_would_send() {
+        use humanitl_config::{Env, ProfileSelection, resolve};
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let resolved = |extra: &[(&str, &str)]| {
+            let mut pairs = vec![
+                ("HOME".to_owned(), home.path().display().to_string()),
+                (
+                    "XDG_CONFIG_HOME".to_owned(),
+                    home.path().join("cfg").display().to_string(),
+                ),
+            ];
+            pairs.extend(
+                extra
+                    .iter()
+                    .map(|(key, value)| ((*key).to_owned(), (*value).to_owned())),
+            );
+            resolve(&ProfileSelection::any(), None, &Env::from_pairs(pairs), &[])
+                .expect("the client resolves")
+        };
+        let flags = |args: &[&str]| {
+            let matches = crate::cli::command()
+                .try_get_matches_from(
+                    ["humanitl", "sandbox", "image", "pull", "--yes"]
+                        .iter()
+                        .chain(args),
+                )
+                .expect("the command line parses");
+            crate::cli::config_pairs(&matches)
+        };
+        let sent = |args: &[&str], env: &[(&str, &str)]| {
+            let backend = crate::cmd::run::session_backend(flags(args), &resolved(env));
+            pull_request(None, String::new(), backend)
+                .plan
+                .expect("the pull carries a plan")
+                .backend
+        };
+        // Ein Name des Schemas, den jeder Build kennt; welcher, ist hier gleich.
+        let chosen = humanitl_sandbox::PLATFORM_BACKEND_NAME;
+
+        assert_eq!(sent(&["--backend", chosen], &[]), chosen);
+        assert_eq!(sent(&[], &[("HUMANITL_SANDBOX__BACKEND", chosen)]), chosen);
+        assert_eq!(
+            sent(
+                &["--backend", "auto"],
+                &[("HUMANITL_SANDBOX__BACKEND", chosen)]
+            ),
+            "auto"
+        );
+        assert_eq!(sent(&[], &[]), "");
+        // Ein Daemon vor 1.40 zöge mit seiner Einstellung: mit einer Wahl
+        // abgelehnt, ohne Wahl zieht er wie bisher.
+        let refused = check_minor(PLAN_MINOR - 1, Some(chosen)).expect_err("an older daemon");
+        assert_eq!(refused.diagnostic.code, codes::CLI_004);
+        assert!(check_minor(PLAN_MINOR - 1, None).is_ok());
+        assert!(check_minor(PLAN_MINOR, Some(chosen)).is_ok());
+        let request = pull_request(Some("r@sha256:x"), "id".to_owned(), None);
+        assert_eq!(
+            (request.reference.as_str(), request.pull_id.as_str()),
+            ("r@sha256:x", "id")
+        );
     }
 }

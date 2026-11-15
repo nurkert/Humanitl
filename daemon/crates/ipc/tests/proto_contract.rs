@@ -1067,6 +1067,8 @@ fn an_image_pull_keeps_its_shape() {
             &[
                 ("reference", 1, "string", None),
                 ("pull_id", 2, "string", None),
+                // HUM-500: der Plan des Starts, fuer den gezogen wird.
+                ("plan", 3, ".humanitl.v1.SandboxRequest.Plan", None),
             ]
         ),
         Ok(())

@@ -980,6 +980,7 @@ class GrpcDaemonClient implements DaemonClient {
   Future<PulledImage> pullImage({
     String reference = '',
     String pullId = '',
+    String? backend,
   }) async {
     // Kein Zeitlimit: Ein Ziehen dauert so lange, wie das Netz braucht; der
     // Daemon bricht es selbst nach einer halben Stunde ab (HUM-439), und der
@@ -990,7 +991,10 @@ class GrpcDaemonClient implements DaemonClient {
         pb.SandboxRequest()
           ..imagePull = (pb.SandboxRequest_ImagePull()
             ..reference = reference
-            ..pullId = pullId),
+            ..pullId = pullId
+            // Derselbe Plan wie für den Schnappschuss (HUM-500): Der Daemon
+            // zieht mit dem Backend eines Starts dieser App.
+            ..plan = _plan(null, null, backend: backend)),
         options: options,
       )) {
         switch (event.whichEvent()) {

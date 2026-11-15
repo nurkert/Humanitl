@@ -675,6 +675,8 @@ Pull an image into the local storage of the container engine, pinned by its dige
 
 Pulling uses the network directly: the container engine downloads the image from the registry its name names, not through the Humanitl proxy, without its rules and without the proxy variables of this shell. No start ever pulls; a start whose image is missing or holds another digest stops with `SANDBOX_043` and names this command. Says so and asks first.
 
+The pull goes to the backend a start would take: `--backend NAME` or `HUMANITL_SANDBOX__BACKEND` as with `humanitl run`, otherwise sandbox.backend of the daemon.
+
 Usage: humanitl sandbox image pull [OPTIONS] [REFERENCE]
 
 Arguments:

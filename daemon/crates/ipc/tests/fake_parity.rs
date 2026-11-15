@@ -840,6 +840,7 @@ async fn a_cancel_of_an_image_pull_answers_the_same_on_both_sides() {
             v1::sandbox_request::ImagePull {
                 reference: String::new(),
                 pull_id: "not-a-uuid".to_owned(),
+                plan: None,
             },
         )),
     };

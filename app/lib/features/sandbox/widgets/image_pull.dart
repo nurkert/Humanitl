@@ -18,6 +18,11 @@
 /// which names processes that still ran after the kill. A cancel that found
 /// no pull while this one goes on is sent again (it overtook the pull).
 /// A daemon before minor 37 cannot cancel, so the card offers no button there.
+///
+/// The pull goes to the backend the next start asks for (HUM-500): the card
+/// sends the backend of the session (`sessionSandboxBackendProvider`) as the
+/// snapshots and the start do, so a session that chose another backend than
+/// the setting pulls with that one.
 library;
 
 import 'dart:async';
@@ -32,6 +37,7 @@ import '../../../core/ipc/connection.dart';
 import '../../../core/ipc/daemon_client.dart';
 import '../../../core/ui/ui.dart';
 import '../../../l10n/l10n.dart';
+import '../providers/backend_choice.dart';
 
 /// The beginning of the daemon's fix on `SANDBOX_043`, before the reference.
 const String imagePullCommand = 'humanitl sandbox image pull ';
@@ -151,7 +157,11 @@ class _ImagePullActionState extends ConsumerState<ImagePullAction> {
     try {
       final PulledImage image = await ref
           .read(daemonClientProvider)
-          .pullImage(reference: widget.reference, pullId: pullId);
+          .pullImage(
+            reference: widget.reference,
+            pullId: pullId,
+            backend: ref.read(sessionSandboxBackendProvider),
+          );
       _pullReturned = true;
       if (!mounted) {
         return;

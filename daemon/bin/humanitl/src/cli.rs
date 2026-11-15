@@ -692,6 +692,10 @@ pub enum ImageCmd {
     /// shell. No start ever pulls; a start whose image is missing or holds
     /// another digest stops with `SANDBOX_043` and names this command. Says so
     /// and asks first.
+    ///
+    /// The pull goes to the backend a start would take: `--backend NAME` or
+    /// `HUMANITL_SANDBOX__BACKEND` as with `humanitl run`, otherwise
+    /// sandbox.backend of the daemon.
     Pull {
         /// NAME@sha256:<64 hex digits>, with the registry in the name
         /// (docker.io/library/debian@sha256:...). Without it the image from

@@ -2650,6 +2650,24 @@ Aus dem Ultra-Review. `Sandbox(ImagePull)` löst das Backend immer aus dem gespe
 ### Akzeptanzkriterien
 1. Der Knopf „Pull" und `humanitl sandbox image pull` treffen das Backend, das der Start verlangt.
 
+### Stand nach der Umsetzung (2026-11-15)
+`SandboxRequest.ImagePull` trägt ein neues Feld `Plan plan = 3`, wie
+`SandboxBackendsRequest.plan`; Vertrag 1.40. Mit Plan löst der Daemon das
+Backend des Ziehens über denselben Weg wie die Backend-Liste und den
+Schnappschuss auf (`Inner::plan_sandbox`: `Plan.backend`, Projekt-Profil,
+Untergrenze, Zulassung, Anforderung des Sandbox-Profils) und sucht es mit
+`Backend::detect`; ohne Plan bleibt es bei der gespeicherten Einstellung.
+Anders als die Liste ist das Ziehen streng mit dem Sandbox-Profil
+(`ProfileRead::Strict`): Ein Profil, das sich nicht lesen lässt, hält es mit
+seinem Befund auf (`CONFIG_001`) wie den Start, und ein Profil, das ein
+anderes Backend verlangt, lehnt es mit `SANDBOX_036` ab.
+Die App schickt den Plan ihrer Schnappschüsse mit
+`sessionSandboxBackendProvider`, die CLI das Backend, das `humanitl run` in
+`cli_overrides` schickte (`--backend` vor `HUMANITL_SANDBOX__BACKEND`), und
+lehnt einen Daemon vor 1.40 mit `CLI_004` ab, wenn ein Backend gewählt ist.
+Die CLI schickt keinen Projektordner mit; die Untergrenze eines Projekts gilt
+deshalb für den gespeicherten Ordner, nicht für das aktuelle Verzeichnis.
+
 
 ---
 
